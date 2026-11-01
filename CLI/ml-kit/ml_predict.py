@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.10"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.11"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -496,6 +496,7 @@ def load_data_file(
 
     raw_headers = df_raw.iloc[header_idx].values
     headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"col_{i}" for i, c in enumerate(raw_headers)]
+    auto_named = [not (pd.notna(c) and str(c).strip()) for c in raw_headers]   # header cell was blank
 
     # Handle unit row if provided
     if unit_row is not None and 1 <= unit_row <= total_rows:
@@ -509,16 +510,25 @@ def load_data_file(
                 combined_headers.append(h)
         headers = combined_headers
 
-    # De-duplicate headers (handles accidental duplicate column names in source files)
+    # De-duplicate headers (handles accidental duplicate column names in source files). A generated name can
+    # itself be taken (a, a, a_1), so the suffix grows until the name is unused.
+    used = set(headers)
     seen_headers: Dict[str, int] = {}
     unique_headers: List[str] = []
     for h in headers:
-        if h in seen_headers:
-            seen_headers[h] += 1
-            unique_headers.append(f"{h}_{seen_headers[h]}")
-        else:
+        if h not in seen_headers:
             seen_headers[h] = 0
             unique_headers.append(h)
+            continue
+        n = seen_headers[h]
+        while True:
+            n += 1
+            cand = f"{h}_{n}"
+            if cand not in used:
+                break
+        seen_headers[h] = n
+        used.add(cand)
+        unique_headers.append(cand)
     headers = unique_headers
 
     # Determine data start row
@@ -536,8 +546,12 @@ def load_data_file(
     df_data = df_raw.iloc[start_idx:].copy()
     df_data.columns = headers
 
-    # Clean rows/cols that are entirely NaN
-    df_data = df_data.dropna(how="all", axis=0).dropna(how="all", axis=1)
+    # Clean rows that are entirely NaN, and entirely empty columns without a header (col_<i>). A named empty
+    # column stays: training then says it has no values, prediction imputes it with a warning.
+    df_data = df_data.dropna(how="all", axis=0)
+    empty_auto = [h for h, auto in zip(headers, auto_named) if auto and df_data[h].isna().all()]
+    if empty_auto:
+        df_data = df_data.drop(columns=empty_auto)
     # 1-based row number in the source file for each data row (exact for .xlsx; CSV blank lines are skipped by the reader)
     source_rows = [int(i) + 1 for i in df_data.index]
     df_data = df_data.reset_index(drop=True)
@@ -558,10 +572,15 @@ def load_data_file(
 
 DATE_PARTS = ["year", "month", "day", "dayofweek", "hour"]
 _DATE_RE = re.compile(r"^\s*\d{4}[-/.]\d{1,2}[-/.]\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?)?\s*$")
+_DATE8_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
 
 
 def parse_datetime(series: pd.Series) -> pd.Series:
-    """Parses Excel datetimes and 'YYYY-MM-DD[ HH:MM[:SS]]' strings (also / and . separators)."""
+    """
+    The one date parser of training (--dtypes col:datetime, auto detection, datetime_stats) and prediction:
+    Excel datetimes, 'YYYY-MM-DD[ HH:MM[:SS]]' strings (also / and . separators) and 8-digit YYYYMMDD
+    (number or text, e.g. 20240103). Anything else is NaT.
+    """
     if pd.api.types.is_datetime64_any_dtype(series):
         return series
 
@@ -570,7 +589,15 @@ def parse_datetime(series: pd.Series) -> pd.Series:
             return pd.NaT
         if isinstance(v, (datetime, pd.Timestamp, np.datetime64)):
             return pd.Timestamp(v)
+        if isinstance(v, (float, np.floating)) and float(v).is_integer():
+            v = int(v)
         t = str(v).strip()
+        m8 = _DATE8_RE.match(t)
+        if m8:
+            try:
+                return pd.Timestamp(year=int(m8.group(1)), month=int(m8.group(2)), day=int(m8.group(3)))
+            except (ValueError, TypeError):
+                return pd.NaT
         if not _DATE_RE.match(t):
             return pd.NaT
         try:
@@ -1269,8 +1296,8 @@ def resolve_target_models(
     old = [it["target"] for it in model_items
            if not it["meta"].get("feature_schema") or not it["meta"].get("input_columns_required")]
     if old:   # beta: no fallback paths for models made by older versions
-        raise InputError(f"타겟 {old}의 모델은 ml-kit 2.9.1 이전에 학습했거나 모델 정보 파일(model_<타겟>.json)이 없습니다. "
-                         "같은 데이터로 다시 학습한 뒤 사용하십시오.")
+        raise InputError(f"타겟 {old}의 모델은 ml-kit 2.9.1보다 먼저 학습했거나 모델 정보 파일(model_<타겟>.json)이 없습니다. "
+                         "ml-kit 2.9.1 이상으로 같은 데이터를 다시 학습한 뒤 사용하십시오.")
 
     # Load Pipelines (warn on scikit-learn version mismatch between training and serving PCs)
     try:
@@ -1326,19 +1353,13 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
             return pd.DataFrame(obj)
         raise InputError("인라인 JSON은 객체 또는 객체 배열이어야 합니다.")
 
-    # key=val, key2=val2 format
+    # key=val, key2=val2 format. Values stay text like a cell read from a file: numeric inputs are converted
+    # later (prepare_features / coerce_numeric), so a category code such as '007' is not turned into 7.
     row_dict = {}
     for pair in clean_str.split(","):
         if "=" in pair:
             k, v = pair.split("=", 1)
-            k = k.strip()
-            v = v.strip()
-            # Try numeric parse
-            try:
-                v = float(v)
-            except Exception:
-                pass
-            row_dict[k] = v
+            row_dict[k.strip()] = v.strip()
     if not row_dict:
         raise InputError(f"유효한 인라인 입력 형식이 아닙니다 (JSON 또는 'k1=v1,k2=v2'): '{input_str}'")
     return pd.DataFrame([row_dict])
@@ -1470,6 +1491,7 @@ def compare_with_measured(meta: Dict[str, Any], target: str, version_dir: str, d
 
 
 LOW_CONFIDENCE_THRESHOLD = 0.6
+INLINE_SHOW_MAX = 5        # inline (-i) results with more records are saved to a file (truncated: true)
 
 
 def _predict_classification(
@@ -1521,7 +1543,7 @@ def _predict_classification(
             "positive_class": decision_threshold.get("positive_class"),
             "threshold": decision_threshold.get("threshold"),
         }
-    if is_inline and len(labels) <= 5:
+    if is_inline and len(labels) <= INLINE_SHOW_MAX:
         summary["predictions"] = labels.tolist()
         summary["probabilities"] = [
             {c: round(float(p), 4) for c, p in zip(classes, row)} for row in proba
@@ -1539,6 +1561,13 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         meta_path=args.meta,
         filter_targets=filter_targets
     )
+
+    # -o format is checked before any work: only CSV and Excel can be written and read back (R1)
+    if args.out:
+        out_ext = os.path.splitext(args.out)[1].lower()
+        if out_ext not in (".csv", ".xlsx", ".xls"):
+            raise InputError(f"결과 파일(-o)은 .csv 또는 .xlsx만 저장합니다: '{os.path.basename(args.out)}'. "
+                             f"[추천] {os.path.splitext(args.out)[0]}.csv")
 
     # 2. Resolve Input Data (Batch File or Inline Input)
     if args.input:
@@ -1662,10 +1691,10 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                                     f"피처 '{fname}' 하한 미달 외삽(Extrapolation) 감지: 학습 최소={f_min:.2f}, 입력 최소={c_min:.2f} (범위 대비 -{under_pct}% 미달 이탈, 범위 밖 {n_out}건)"
                                 )
 
-        X_input = X_model if schema else X_model.values
+        X_input = X_model
 
         # Execute Prediction
-        task = meta.get("task", "regression")  # models trained before 2.0.0 have no task -> regression
+        task = meta.get("task", "regression")
         estimator = pipe.named_steps.get("regressor") or pipe.named_steps.get("classifier") or pipe
         desc = meta.get("description", "")
 
@@ -1705,7 +1734,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             df_result[f"pred_lo_{target_name}"] = np.round(lo, 4)
             df_result[f"pred_hi_{target_name}"] = np.round(hi, 4)
             predictions_summary[target_name]["interval_level"] = interval["level"]
-        if is_inline and len(preds) <= 5:
+        if is_inline and len(preds) <= INLINE_SHOW_MAX:
             predictions_summary[target_name]["predictions"] = [round(float(p), 4) for p in preds]
             if lo is not None:
                 predictions_summary[target_name]["intervals"] = [
@@ -1729,7 +1758,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             df_result[f"map_방식_{target_name}"] = [m + (" [외삽]" if e else "") for m, e in zip(mc["method"], mc["extrapolated"])]
             predictions_summary[target_name]["map_check_keys"] = mc["keys"]
             predictions_summary[target_name]["map_check_outside_interval"] = int(outside.sum())
-            if is_inline and len(preds) <= 5:
+            if is_inline and len(preds) <= INLINE_SHOW_MAX:
                 predictions_summary[target_name]["map_check"] = [
                     {"value": round(float(v), 4) if np.isfinite(v) else None,
                      "diff": round(float(d), 4) if np.isfinite(d) else None,
@@ -1741,6 +1770,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                     f"(모델 예측과 실측 데이터가 많이 다름, 해당 조건의 가까운 실측 행 확인 필요)")
 
     # 4. Save Output if Requested or File-based
+    inline_truncated = is_inline and len(df_result) > INLINE_SHOW_MAX
     out_path = args.out
     saved_file = None
     if out_path:
@@ -1750,6 +1780,17 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         file_stem = os.path.splitext(os.path.basename(args.file))[0]
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         saved_file = os.path.join(file_dir, f"{file_stem}_pred_{ts}.csv")
+    elif inline_truncated:
+        # more inline records than the JSON shows: the full result goes to a file (next to the .json input,
+        # otherwise in the <data>_ml_data folder that holds the version folder)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        src = args.input.strip()
+        if src.lower().endswith(".json") and os.path.isfile(src):
+            saved_file = os.path.join(os.path.dirname(os.path.abspath(src)),
+                                      f"{os.path.splitext(os.path.basename(src))[0]}_pred_{ts}.csv")
+        else:
+            version_dir = os.path.dirname(os.path.abspath(model_items[0]["joblib_path"]))
+            saved_file = os.path.join(os.path.dirname(version_dir), f"inline_pred_{ts}.csv")
 
     if saved_file:
         warn_long_path(saved_file)
@@ -1823,7 +1864,10 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + ". "
         + ("Report each prediction together with its measured-data comparison (map_check: value, diff, method) in Korean as "
            "'실측 비교값'. " if any("map_check_keys" in p for p in predictions_summary.values()) else "")
-        + (f"Output saved to {os.path.basename(saved_file)}. " if saved_file else "Inline predictions returned. ")
+        + (f"Inline input has {len(df_result)} records, more than {INLINE_SHOW_MAX}: per-record predictions are not in "
+           f"the JSON (truncated). Give the user output_file ({os.path.basename(saved_file)}) for every record. "
+           if inline_truncated and saved_file else
+           f"Output saved to {os.path.basename(saved_file)}. " if saved_file else "Inline predictions returned. ")
         + "Next step: report inference results to user."
     )
 
@@ -1852,6 +1896,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         "preview": preview,
         "agent_directive": agent_directive
     }
+    if is_inline:   # R2: per-record values are in the JSON only up to INLINE_SHOW_MAX records
+        result["count"] = len(df_result)
+        result["truncated"] = bool(inline_truncated)
+        if inline_truncated:
+            result["shown"] = 0
     if map_notes:
         result["map_check_notes"] = list(dict.fromkeys(map_notes))
     if column_aliases:
@@ -1937,7 +1986,6 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
                              f"[후보] {', '.join(map(str, schema['categorical'][f][:20]))}")
         else:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
-    base = {**fixed, **filled}
     warnings: List[str] = []
     for f, v in fixed.items():
         if f not in numeric_in:
@@ -1947,8 +1995,10 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
             fv = float(v)
         except (TypeError, ValueError):
             raise InputError(f"고정 입력 '{f}'의 값 '{v}'이(가) 숫자가 아닙니다. -i에 '{f}=<숫자>'로 다시 지정하십시오.")
+        fixed[f] = fv
         if st and (fv < st["min"] or fv > st["max"]):
             warnings.append(f"고정 입력 '{f}'={_fmt(fv)}이(가) 학습 범위({_fmt(st['min'])}~{_fmt(st['max'])}) 밖이라 답을 믿기 어렵습니다")
+    base = {**fixed, **filled}
 
     lo, hi = float(stats[vary]["min"]), float(stats[vary]["max"])
     xs = np.linspace(lo, hi, FIND_STEPS + 1)

@@ -20,7 +20,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
-    setup_console, emit_json_response, dumps_json, run_cli, JsonArgumentParser,
+    setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path,
     read_text_file, load_json_file, resolve_column_names, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
@@ -245,7 +245,7 @@ def validate_and_sanitize_data(
                         elif c_type in ["str", "object"]:
                             df_clean[c_name] = df_clean[c_name].astype(str)
                         elif c_type in ["datetime", "date"]:
-                            df_clean[c_name] = pd.to_datetime(df_clean[c_name], errors="coerce")
+                            df_clean[c_name] = parse_datetime(df_clean[c_name])  # same parser as prediction
                     except Exception as e:
                         sys.stderr.write(f"[WARN] 타입 변환 실패 ({c_name} -> {c_type}): {e}\n")
 
@@ -288,7 +288,7 @@ def infer_feature_schema(
     """
     Decides how each feature enters the model, without LLM involvement:
     - numeric     : >= 90% of non-empty values parse as numbers (thousands separators allowed)
-    - datetime    : Excel dates or >= 90% 'YYYY-MM-DD[ HH:MM]' strings -> year/month/day/dayofweek/hour
+    - datetime    : Excel dates or >= 90% 'YYYY-MM-DD[ HH:MM]' strings (YYYYMMDD only with --dtypes col:datetime) -> year/month/day/dayofweek/hour
     - categorical : everything else (one-hot encoded). ID-like columns are rejected.
     --dtypes 'col:str' forces categorical, 'col:datetime' forces datetime, 'col:float' forces numeric.
     """
@@ -333,7 +333,7 @@ def infer_feature_schema(
         elif kind == "datetime":
             dt = parse_datetime(raw)
             if dt.notna().sum() == 0:
-                raise InputError(f"컬럼 '{col}'에서 날짜를 읽을 수 없습니다. 'YYYY-MM-DD' 형식인지 확인하십시오.")
+                raise InputError(f"컬럼 '{col}'에서 날짜를 읽을 수 없습니다. 'YYYY-MM-DD' 또는 'YYYYMMDD' 형식인지 확인하십시오.")
             parts = [pt for pt in DATE_PARTS if getattr(dt.dt, pt).nunique(dropna=True) > 1]
             dates[col] = parts or ["year"]
         else:
@@ -1121,7 +1121,22 @@ def bounded_correlation(
 
 
 def _q(v: str) -> str:
-    return '"' + str(v).replace('"', "'") + '"'
+    return '"' + str(v) + '"'
+
+
+def layout_flags(args: argparse.Namespace) -> str:
+    """' --header-row 4 --unit-row 5' when the data was read with a layout: a new file of the same layout needs it too."""
+    return "".join(f" {flag} {int(val)}" for flag, val in (
+        ("--header-row", getattr(args, "header_row", None)), ("--unit-row", getattr(args, "unit_row", None)),
+        ("--data-row", getattr(args, "data_row", None))) if val is not None)
+
+
+def predict_next_command(final_dir: str, args: argparse.Namespace, purpose: str) -> Dict[str, Any]:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return {"purpose": purpose,
+            "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\""
+                       + layout_flags(args),
+            "needs_input": True, "placeholder": "<새데이터.xlsx>"}
 
 
 def build_next_commands(
@@ -1133,7 +1148,9 @@ def build_next_commands(
     """
     Ready-to-run follow-up commands so a small LLM does not have to compose arguments:
     deployment/prediction when the goal is met, otherwise feature pruning and an interaction feature.
-    Long feature lists are written to <version>/next_features_*.txt and passed by path.
+    Long feature lists, and name lists with a double quote (cannot be quoted on the command line), are written to
+    <version>/next_features_*.txt (targets: next_targets.txt) and passed by path. A command whose --eval, --dtypes or
+    --positive-class text would need a double quote is left out.
     Every command has needs_input: commands with a placeholder (e.g. <새데이터.xlsx>) are True,
     carry the placeholder name, and are listed after the commands that can run as-is.
     """
@@ -1148,15 +1165,22 @@ def build_next_commands(
         base += ["--task", TASK_CLASSIFICATION]
         if positive_class is not None:
             base += ["--positive-class", _q(positive_class)]
-    base += ["-y", _q(",".join(target_names))]
+
+    def names_arg(names: List[str], fname: str, limit: int = 15) -> str:
+        if len(names) <= limit and not any('"' in n for n in names):
+            return _q(",".join(names))
+        with open(os.path.join(staging_dir, fname), "w", encoding="utf-8") as f:
+            f.write("\n".join(names) + "\n")
+        return _q(os.path.join(final_dir, fname))
 
     def features_arg(feats: List[str], tag: str) -> str:
-        if len(feats) <= 15:
-            return _q(",".join(feats))
-        fname = f"next_features_{tag}.txt"
-        with open(os.path.join(staging_dir, fname), "w", encoding="utf-8") as f:
-            f.write("\n".join(feats) + "\n")
-        return _q(os.path.join(final_dir, fname))
+        return names_arg(feats, f"next_features_{tag}.txt")
+
+    def quotable(*texts: Optional[str]) -> bool:
+        return not any(t is not None and '"' in str(t) for t in texts)
+
+    base += ["-y", names_arg(target_names, "next_targets.txt", limit=10 ** 6)]
+    retrain_ok = quotable(args.dtypes, positive_class)
 
     base_features = [f for f in feature_names if f not in created_features]
     cmds: List[Dict[str, Any]] = []
@@ -1167,18 +1191,14 @@ def build_next_commands(
             "command": f"python {_q(os.path.join(here, 'ml_report.py'))} -f {_q(raw_file)}",
             "needs_input": False,
         })
-        cmds.append({
-            "purpose": "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-            "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\"",
-            "needs_input": True,
-            "placeholder": "<새데이터.xlsx>",
-        })
+        cmds.append(predict_next_command(
+            final_dir, args, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
     keep_base = [f for f in base_features if f not in weak]
     keep_evals = [e for e in applied_evals if e.split("=", 1)[0].strip() not in weak]
-    if weak and keep_base:
+    if weak and keep_base and retrain_ok and quotable(*keep_evals):
         parts = base + ["-x", features_arg(keep_base, "pruned")]
         if keep_evals:
             parts += ["--eval", _q("; ".join(keep_evals))]
@@ -1191,7 +1211,7 @@ def build_next_commands(
         a, b = numeric_top[0], numeric_top[1]
         new_name = f"{strip_unit(a)}x{strip_unit(b)}"
         existing = set(feature_names) | {e.split("=", 1)[0].strip() for e in applied_evals}
-        if new_name not in existing:
+        if new_name not in existing and retrain_ok and quotable(*applied_evals, a, b):
             evals = applied_evals + [f"{new_name} = {a} * {b}"]
             parts = base + ["-x", features_arg(base_features, "all"), "--eval", _q("; ".join(evals)),
                             "--tag", _q("교차항_추가")]
@@ -1894,7 +1914,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     "positive_class": target_group[t]["positive_class"]}
                 for t in target_names
             }
-            next_commands = build_best_next_commands(raw_file, guard.final_dir, task)
+            next_commands = build_best_next_commands(raw_file, guard.final_dir, args, task)
         else:
             next_commands = build_next_commands(
                 args=args, raw_file=raw_file, task=task, positive_class=g0["positive_class"],
@@ -1936,8 +1956,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
             + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
                "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "") +
-            f"Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
-            f"A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
+            "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
+            "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
         )
 
         result = {
@@ -2000,15 +2020,15 @@ REPORT_PURPOSE = {  # 2.9.2: a regression report also makes the performance calc
 }
 
 
-def build_best_next_commands(raw_file: str, final_dir: str, task: str = TASK_REGRESSION) -> List[Dict[str, Any]]:
+def build_best_next_commands(raw_file: str, final_dir: str, args: argparse.Namespace,
+                             task: str = TASK_REGRESSION) -> List[Dict[str, Any]]:
+    """args carries the data layout (build_best_version fills it from the latest record of the task)."""
     here = os.path.dirname(os.path.abspath(__file__))
     return [
         {"purpose": REPORT_PURPOSE.get(task, REPORT_PURPOSE[TASK_CLASSIFICATION]),
          "command": f"python {_q(os.path.join(here, 'ml_report.py'))} -f {_q(raw_file)}",
          "needs_input": False},
-        {"purpose": "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-         "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\"",
-         "needs_input": True, "placeholder": "<새데이터.xlsx>"},
+        predict_next_command(final_dir, args, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
     ]
 
 
@@ -2339,6 +2359,7 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
         "best_by_task": best_by_task,
         "latest_version": rows[-1]["version"],
         "records": rows,
+        "verified": True,
         "agent_directive": "VERIFIED: History summary returned. Do not re-read history.jsonl for the same information.",
     }
 
