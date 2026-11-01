@@ -6,8 +6,14 @@
 메시지 팩 다시 만들기 (agent_scenarios.yaml을 고친 뒤):
     python grade_opencode.py --make-pack [--dir C:\\ml_beta\\agent]
 
+대화 내보내기: PowerShell에서 `opencode export <세션ID> | Out-File -Encoding utf8 chat.json`
+  (`> chat.json`으로 저장하면 PowerShell 5.1은 UTF-16으로 쓴다. 이 채점기는 UTF-8/UTF-16 모두 읽는다.)
+
 채점 기준은 agent_scenarios.yaml 한 곳에 있다. 사용자 메시지 앞의 "[ID]" 표시로 시나리오를 찾고,
-그 요청부터 다음 표시가 나오기 전까지의 명령·도구 결과·답변을 본다 (하나씩 보낸 대화와 한 번에 보낸 대화 모두).
+그 요청부터 다음 표시가 나오기 전까지의 명령·도구 결과·답변을 본다.
+답변 검사(answer_all, answer_any, answer_clean)는 최종 답변(그 요청의 마지막 도우미 메시지 글)만 본다.
+한 번에 보낸 대화(메시지 1개에 [ID] 여러 개)는 도구 실행 순서로 시나리오마다 나눠 채점하고 결과에 "참고"를 붙인다
+(시나리오마다 처음 맞는 명령부터 다음 시나리오의 명령 전까지. 명령으로 찾을 수 없는 시나리오는 대화 전체로 채점).
 
 판정 (도구로 확인, LLM 판단 없음):
   - 필요한 명령을 실행했는가 (commands), 도구 결과 JSON이 ok인가 (tool_ok)
@@ -19,6 +25,7 @@
 결과: 이 파일 옆에 grade_<라벨>_<시각>.md (요약 + 실패 상세 + 명령 기록)와 .xlsx (시나리오별 표).
 """
 import argparse
+import codecs
 import json
 import os
 import re
@@ -34,6 +41,9 @@ PACK_DIR = os.path.join(REPO, "docs", "opencode", "자동테스트")
 TAG = re.compile(r"\[([A-Z]\d+)\]")
 EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2460-\u24FF\u2190-\u21FF]")
 REPEAT = re.compile(r"(\S{1,10})(?:\s*\1){7,}")
+# python [옵션] <스크립트.py>: the script a python call runs (checked against no_adhoc_py.script_allow)
+PY_SCRIPT = re.compile(r"""(?<![\w.-])python(?:\.exe)?"?(?:\s+-(?:[XW]\s*\S+|[bBdEiIOPqsSuv]+))*\s+"""
+                       r"""("[^"]*\.py"|'[^']*\.py'|[^\s"']*\.py)(?=["'\s;|&)]|$)""", re.I)
 ENC_PREFIX = re.compile(r"^(\s*(\$env:\w+\s*=\s*[^;]+|\[Console\]::\w+\s*=\s*[^;]+);)+\s*")   # PowerShell encoding line from the global rules
 
 
@@ -47,20 +57,59 @@ def load_scenarios():
 
 # ------------------------------------------------------------------------------------------------
 # 대화 읽기
+class ExportError(Exception):
+    """The export file could not be read as JSON (wrong encoding, not an OpenCode export, ...)."""
+
+
+EXPORT_HINT = ("PowerShell에서 `opencode export <세션ID> | Out-File -Encoding utf8 chat.json`으로 다시 내보내세요.")
+
+
+def load_export(path):
+    """Reads an OpenCode export. PowerShell 5.1 `>` writes UTF-16LE with a BOM, Out-File -Encoding utf8 writes UTF-8 with a BOM."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        raise ExportError(f"대화 파일을 열 수 없습니다: {path} ({type(e).__name__}: {e})")
+    if raw.startswith(codecs.BOM_UTF8):
+        encodings = ["utf-8-sig"]
+    elif raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        encodings = ["utf-16"]
+    else:
+        encodings = ["utf-8", "utf-16"]
+    text, tried = None, []
+    for enc in encodings:
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            tried.append(enc)
+    if text is None:
+        raise ExportError(f"대화 파일의 인코딩을 알 수 없습니다 ({', '.join(tried)} 실패): {path}. {EXPORT_HINT}")
+    text = text.lstrip("\ufeff")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ExportError(f"대화 파일이 JSON이 아닙니다 ({e.msg}, {e.lineno}행): {path}. {EXPORT_HINT}")
+    if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+        raise ExportError(f"OpenCode 대화 내보내기 형식이 아닙니다 (messages 목록 없음): {path}. {EXPORT_HINT}")
+    return data
+
+
 def read_turns(path):
-    """Splits one export into turns: a user message with a [ID] tag plus everything after it up to the next tag."""
-    with open(path, encoding="utf-8-sig") as f:
-        data = json.load(f)
+    """Splits one export into turns: a user message with a [ID] tag plus everything after it up to the next tag.
+    Each text part keeps (assistant message number, tools seen before it) so the final answer and bulk splits can be found."""
+    data = load_export(path)
     turns, cur = [], None
-    for m in data.get("messages", []):
+    for mi, m in enumerate(data.get("messages", [])):
         info, parts = m.get("info", {}), m.get("parts", [])
         t = info.get("time", {})
         if info.get("role") == "user":
             text = "\n".join(p.get("text", "") for p in parts if p.get("type") == "text")
             tags = list(dict.fromkeys(TAG.findall(text)))
             if tags or cur is None:
-                cur = {"tags": tags, "user": [text], "tools": [], "texts": [], "start": t.get("created"), "end": t.get("created"),
-                       "file": os.path.basename(path)}
+                cur = {"tags": tags, "user": [text], "tools": [], "texts": [], "text_at": [],
+                       "start": t.get("created"), "end": t.get("created"), "file": os.path.basename(path)}
                 turns.append(cur)
             else:
                 cur["user"].append(text)               # follow-up without a tag (e.g. answering Gemma's question)
@@ -71,6 +120,7 @@ def read_turns(path):
         for p in parts:
             if p.get("type") == "text" and p.get("text", "").strip():
                 cur["texts"].append(p["text"])
+                cur["text_at"].append((mi, len(cur["tools"])))
             elif p.get("type") == "tool":
                 st = p.get("state", {})
                 inp = st.get("input", {}) or {}
@@ -79,6 +129,63 @@ def read_turns(path):
                                      "output": st.get("output") or st.get("error") or "",
                                      "exit": (st.get("metadata") or {}).get("exit")})
     return data.get("info", {}), turns
+
+
+def final_answer(turn):
+    """The final answer: the text parts of the last assistant message that has text, after its last tool call
+    (earlier progress notes are not graded)."""
+    if not turn["texts"]:
+        return ""
+    last = turn["text_at"][-1]
+    return "\n".join(t for t, at in zip(turn["texts"], turn["text_at"]) if at == last)
+
+
+def bash_commands(turn):
+    return [(i, ENC_PREFIX.sub("", t["command"])) for i, t in enumerate(turn["tools"]) if t["tool"] == "bash"]
+
+
+def locate(sc, cmds, start):
+    """Index of the first tool call at or after start that belongs to this scenario: one matching all its command regexes,
+    otherwise one matching any of them. None when the scenario has no command regexes or nothing matches."""
+    rxs = sc.get("commands") or []
+    if not rxs:
+        return None
+    for need in (all, any):
+        for i, c in cmds:
+            if i >= start and need(re.search(rx, c, re.I) for rx in rxs):
+                return i
+    return None
+
+
+def split_bulk(turn, by_id):
+    """Splits a turn that carries several [ID] tags (one bulk message) into one sub-turn per scenario by the order of tool calls:
+    a scenario owns the tools from its first matching command up to the next located scenario's first command.
+    Scenarios that cannot be located (no command regex or no match) get the whole turn, marked split=False."""
+    tags = [x for x in turn["tags"] if x in by_id]
+    cmds = bash_commands(turn)
+    starts, pos = {}, 0
+    for sid in tags:
+        i = locate(by_id[sid], cmds, pos)
+        if i is not None:
+            starts[sid] = i
+            pos = i + 1
+    located = [sid for sid in tags if sid in starts]
+    out = {}
+    for sid in tags:
+        sub = dict(turn, tags=[sid], bulk=True, shared=[x for x in turn["tags"] if x != sid])
+        if sid not in starts:
+            out[sid] = dict(sub, split=False)
+            continue
+        k = located.index(sid)
+        lo = starts[sid]
+        hi = starts[located[k + 1]] if k + 1 < len(located) else len(turn["tools"])
+        first = k == 0
+        idx = [j for j, (_, p) in enumerate(turn["text_at"]) if (lo < p <= hi) or (first and p <= lo)]
+        texts, text_at = [turn["texts"][j] for j in idx], [turn["text_at"][j] for j in idx]
+        if not texts and turn["texts"]:                 # no own text: the closing summary of the whole turn
+            texts, text_at = [final_answer(turn)], [(turn["text_at"][-1][0], len(turn["tools"]))]
+        out[sid] = dict(sub, split=True, tools=turn["tools"][lo:hi], texts=texts, text_at=text_at, start=None, end=None)
+    return out
 
 
 def last_json(output):
@@ -96,9 +203,8 @@ def last_json(output):
 # 채점
 def grade_turn(sc, turn, rules):
     """Returns a list of (check name, ok, detail) for one scenario on one turn."""
-    cmds = [ENC_PREFIX.sub("", t["command"]) for t in turn["tools"] if t["tool"] == "bash"]
-    answer = turn["texts"][-1] if turn["texts"] else ""
-    every = "\n".join(turn["texts"])
+    cmds = [c for _, c in bash_commands(turn)]
+    answer = final_answer(turn)
     out = []
     for rx in sc.get("commands", []):
         hit = any(re.search(rx, c, re.I) for c in cmds)
@@ -110,10 +216,10 @@ def grade_turn(sc, turn, rules):
         detail = "실행 없음" if not runs else "JSON 없음" if not payload else str(payload.get("agent_directive", ""))[:200]
         out.append(("도구 결과 ok", ok, "" if ok else detail))
     for rx in sc.get("answer_all", []):
-        hit = bool(re.search(rx, every, re.I))
+        hit = bool(re.search(rx, answer, re.I))
         out.append((f"답변: {rx}", hit, "" if hit else "답변에 없음"))
     if sc.get("answer_any"):
-        hit = any(re.search(rx, every, re.I) for rx in sc["answer_any"])
+        hit = any(re.search(rx, answer, re.I) for rx in sc["answer_any"])
         out.append(("답변: " + " 또는 ".join(sc["answer_any"]), hit, "" if hit else "답변에 없음"))
     for rx in sc.get("forbid", []):
         bad = [c for c in cmds if re.search(rx, c, re.I)]
@@ -126,16 +232,25 @@ def grade_turn(sc, turn, rules):
         bad = []
         if rule.get("command"):
             bad += [c for c in cmds if re.search(rule["command"], c, re.I | re.M)]
+        if rule.get("script_allow"):
+            bad += [c for c in cmds if any(not re.fullmatch(rule["script_allow"], m.group(1).strip("\"'"), re.I)
+                                           for m in PY_SCRIPT.finditer(c)) and c not in bad]
         if rule.get("read"):
             bad += [t["path"] for t in turn["tools"] if t["tool"] == "read" and re.search(rule["read"], t["path"], re.I)]
         if rule.get("write"):
             bad += [t["path"] for t in turn["tools"] if t["tool"] == "write" and re.search(rule["write"], t["path"], re.I)]
+        if rule.get("search"):                         # OpenCode grep/glob tools: pattern, path, include
+            for t in turn["tools"]:
+                if t["tool"] in ("grep", "glob"):
+                    what = " ".join(str(v) for v in t["input"].values())
+                    if re.search(rule["search"], what, re.I):
+                        bad.append(f"{t['tool']} {what}")
         if rule.get("max_repeat"):
             bad += [f"{n}회: {c}" for c, n in Counter(re.sub(r"\s+", " ", c).strip() for c in cmds).items() if n > rule["max_repeat"]]
         if rid == "answer_clean":
-            bad += [f"이모지 {m}" for m in set(EMOJI.findall(every))]
-            bad += ["file:/// 링크"] if "file:///" in every else []
-            bad += [f"반복 '{m.group(0)[:40]}'" for m in REPEAT.finditer(every) if re.search(r"[^\W\d_]", m.group(1))][:3]   # words, not table rules
+            bad += [f"이모지 {m}" for m in set(EMOJI.findall(answer))]
+            bad += ["file:/// 링크"] if "file:///" in answer else []
+            bad += [f"반복 '{m.group(0)[:40]}'" for m in REPEAT.finditer(answer) if re.search(r"[^\W\d_]", m.group(1))][:3]   # words, not table rules
         out.append((rule["title"], not bad, "; ".join(map(str, bad))[:300]))
     if not answer:
         out.append(("최종 답변 있음", False, "답변 문장이 없음"))
@@ -149,7 +264,7 @@ def judge(sc, turn, rubric, model):
     tools = "\n".join(f"$ {t['command'] or t['tool'] + ' ' + t['path']}\n{str(t['output'])[-1500:]}" for t in turn["tools"])[-6000:]
     prompt = ("너는 업무 도우미 AI의 답변을 채점하는 평가자다.\n"
               f"[채점 기준]\n{rubric}\n\n[사용자 요청]\n{chr(10).join(turn['user'])}\n\n"
-              f"[도우미가 실행한 명령과 결과]\n{tools or '(없음)'}\n\n[도우미의 최종 답변]\n{(turn['texts'] or [''])[-1][-3000:]}\n\n"
+              f"[도우미가 실행한 명령과 결과]\n{tools or '(없음)'}\n\n[도우미의 최종 답변]\n{final_answer(turn)[-3000:]}\n\n"
               "기준에 맞으면 5, 전혀 맞지 않으면 1이다. 아래 형식으로 두 줄만 쓴다.\n점수: <1~5>\n이유: <한 문장>\n")
     body = json.dumps({"model": model, "prompt": prompt, "max_tokens": 200, "temperature": 0}).encode("utf-8")
     req = urllib.request.Request(base + "/completions", data=body, headers={"Content-Type": "application/json"})
@@ -173,9 +288,12 @@ def grade(paths, label, use_judge, model):
         info, turns = read_turns(p)
         meta.append(f"{os.path.basename(p)} (모델 {info.get('model', {}).get('id', '?')}, OpenCode {info.get('version', '?')})")
         for t in turns:
-            for tag in t["tags"]:
-                if tag in by_id:
-                    found.setdefault(tag, []).append(t)
+            tags = [x for x in t["tags"] if x in by_id]
+            if len(tags) > 1:                            # bulk message: split by the order of tool calls
+                for tag, sub in split_bulk(t, by_id).items():
+                    found.setdefault(tag, []).append(sub)
+            elif tags:
+                found.setdefault(tags[0], []).append(dict(t, bulk=False, shared=[x for x in t["tags"] if x != tags[0]]))
     rows, detail = [], []
     for sid in order:
         sc = by_id[sid]
@@ -183,12 +301,14 @@ def grade(paths, label, use_judge, model):
             rows.append({"id": sid, "결과": "없음", "실패": "대화에 이 요청이 없음", "명령수": 0, "초": None, "보낸횟수": 0})
             continue
         turn = found[sid][-1]                            # graded on the last time the request was sent
-        shared = [x for x in turn["tags"] if x != sid]
         checks = grade_turn(sc, turn, rules)
         fails = [f"{n} ({d})" if d else n for n, ok, d in checks if not ok]
+        note = ""
+        if turn.get("bulk"):
+            note = "참고: 한 번에 보낸 요청, " + ("명령 순서로 나눠 채점" if turn.get("split") else "명령으로 나눌 수 없어 대화 전체로 채점")
         row = {"id": sid, "결과": "통과" if not fails else "실패", "실패": " | ".join(fails), "명령수": len(turn["tools"]),
                "초": round((turn["end"] - turn["start"]) / 1000) if turn["start"] and turn["end"] else None,
-               "보낸횟수": len(found[sid]), "같이 보낸 요청": ",".join(shared)}
+               "보낸횟수": len(found[sid]), "같이 보낸 요청": ",".join(turn.get("shared", [])), "참고": note}
         if use_judge:
             row["점수"], row["채점 이유"] = judge(sc, turn, sc.get("judge") or spec["default_judge"], model)
         rows.append(row)
@@ -196,26 +316,38 @@ def grade(paths, label, use_judge, model):
     return meta, rows, detail
 
 
+def safe_label(label):
+    """Keeps only characters that are safe in a Windows file name (same rule as run_all_tests.py)."""
+    return "".join(c for c in str(label) if c.isalnum() or c in "-_") or "PC"
+
+
 def write_report(label, meta, rows, detail):
+    label = safe_label(label)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = os.path.join(HERE, f"grade_{label}_{stamp}")
     graded = [r for r in rows if r["결과"] != "없음"]
     npass = sum(r["결과"] == "통과" for r in graded)
+    nbulk = sum(bool(r.get("참고")) for r in graded)
     scores = [r["점수"] for r in graded if isinstance(r.get("점수"), int)]
     lines = [f"# OpenCode 종합 테스트 채점 ({label})", "", f"- 채점 시각: {datetime.now():%Y-%m-%d %H:%M}"]
     lines += [f"- 대화 파일: {m}" for m in meta]
     lines += [f"- 결과: 채점 {len(graded)}건 중 통과 {npass}건 ({npass / max(len(graded), 1) * 100:.0f}%), 대화에 없음 {len(rows) - len(graded)}건"]
+    if nbulk:
+        lines.append(f"- 한 번에 보낸 요청 {nbulk}건은 결과에 '(참고)'를 붙였습니다. 요청이 한 대화 턴에 섞여 있어 "
+                     "명령 순서로 나눠 채점했으므로 하나씩 보낸 결과만큼 정확하지 않습니다.")
     if scores:
         lines.append(f"- 채점 LLM 평균 점수: {sum(scores) / len(scores):.2f} / 5 ({len(scores)}건, 참고용)")
     has_judge = any("점수" in r for r in rows)
     lines += ["", "| 요청 | 결과 | 명령 수 | 걸린 초 | 실패 항목 |" + (" 점수 |" if has_judge else ""),
               "|---|---|---|---|---|" + ("---|" if has_judge else "")]
     for r in rows:
-        lines.append(f"| {r['id']} | {r['결과']} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {r['실패'] or ''} |"
+        lines.append(f"| {r['id']} | {r['결과']}{'(참고)' if r.get('참고') else ''} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {r['실패'] or ''} |"
                      + (f" {r.get('점수') if r.get('점수') is not None else ''} |" if has_judge else ""))
     lines += ["", "## 요청별 기록", ""]
     for sid, sc, turn, checks in detail:
         lines += [f"### {sid}", "", "요청: " + " / ".join(u.strip() for u in turn["user"])[:400], ""]
+        if turn.get("bulk"):
+            lines += [next(r for r in rows if r["id"] == sid)["참고"], ""]
         for n, ok, d in checks:
             lines.append(f"- [{'OK' if ok else 'FAIL'}] {n}" + (f": {d}" if d and not ok else ""))
         lines += ["", "명령:"]
@@ -224,7 +356,7 @@ def write_report(label, meta, rows, detail):
             payload = last_json(t["output"]) if t["tool"] == "bash" else None
             res = f" -> {payload.get('status')} / {str(payload.get('agent_directive', ''))[:60]}" if payload else ""
             lines.append(f"- `{what[:300]}`{res}")
-        answer = (turn["texts"] or ["(답변 없음)"])[-1].strip()
+        answer = final_answer(turn).strip() or "(답변 없음)"
         lines += ["", "최종 답변:", "", "> " + answer[:1500].replace("\n", "\n> "), ""]
         row = next(r for r in rows if r["id"] == sid)
         if row.get("채점 이유"):
@@ -259,9 +391,13 @@ def make_pack(test_dir):
              f"1. 시험 폴더 `{d}`가 이미 있으면 탐색기에서 지웁니다 (이전 모델이 남아 있으면 버전 번호가 달라집니다).",
              "2. OpenCode에서 새 대화를 열고, 아래 묶음 파일의 메시지를 순서대로 붙여넣습니다.",
              "   - 하나씩: 메시지 1개를 보내고 답을 받은 뒤 다음 메시지를 보냅니다 (권장).",
-             "   - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때).",
+             "   - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때). "
+             "요청이 한 턴에 섞이므로 채점은 명령 순서로 나눈 참고 결과입니다.",
              "   - 묶음은 S -> A -> M -> P -> R -> X 순서입니다. P와 R은 A에서 만든 모델을 씁니다.",
-             "3. 끝나면 OpenCode에서 대화를 JSON으로 내보냅니다.",
+             "3. 끝나면 대화를 JSON으로 내보냅니다. PowerShell에서 (세션ID는 OpenCode 화면이나 `opencode session list`에서 확인):", "",
+             "```powershell", "opencode export <세션ID> | Out-File -Encoding utf8 chat.json", "```", "",
+             "   OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다. "
+             "`> chat.json`으로 저장한 파일(UTF-16)도 채점기가 읽습니다.",
              "4. `C:\\CLI-dev`에서 채점합니다:", "",
              "```powershell", "python grade_opencode.py --export \"<내보낸 대화.json>\" --label 회사PC", "```", "",
              "   여러 대화로 나눠 했으면 `--export a.json b.json`처럼 함께 넣습니다.",
@@ -299,7 +435,11 @@ def main():
         return 0
     if not args.export:
         ap.error("--export 또는 --make-pack 이 필요합니다")
-    meta, rows, detail = grade(args.export, args.label, args.judge, args.judge_model)
+    try:
+        meta, rows, detail = grade(args.export, args.label, args.judge, args.judge_model)
+    except ExportError as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        return 1
     report, npass, n = write_report(args.label, meta, rows, detail)
     print(f"[STATUS] 통과 {npass} / {n} -> {report}")
     return 0

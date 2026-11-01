@@ -391,3 +391,83 @@ def test_error_log_has_recoveries_cleanup_and_tool_log(runner, monkeypatch, tmp_
     assert "WM_CLOSE XLMAIN pid 20" in text
     assert "도구 오류 로그" in text and "명령: excel.py write" in text
     assert "이전 실행" not in text
+
+
+# ---------------------------------------------------------------------------
+# 에이전트 모드 계약 (--agent): stdout JSON 1줄, exit 0/1/2/130, verified, unverified_count
+# ---------------------------------------------------------------------------
+
+def _agent_main(runner, monkeypatch, capsys, tmp_path, argv, groups=None, **patch):
+    """Runs runner.main() in agent mode with every Windows step stubbed; returns (exit code, stdout lines)."""
+    monkeypatch.setattr(runner, "AGENT", True)
+    monkeypatch.setattr(sys, "argv", ["run_win_tests.py", "--agent", "--dir", str(tmp_path)] + argv)
+    pc = runner.pythoncom
+    monkeypatch.setattr(pc, "CoInitialize", lambda: None, raising=False)
+    monkeypatch.setattr(pc, "CoUninitialize", lambda: None, raising=False)
+    stubs = {"process_count": lambda img: 0, "untitled_documents": lambda: [], "setup_files": lambda ctx: None,
+             "open_user_windows": lambda ctx: None, "ensure_test_docs": lambda ctx: None,
+             "save_shots": lambda ctx: (str(tmp_path / "shots"), 0), "close_test_documents": lambda ctx: [],
+             "environment_lines": lambda ctx: ["(환경)"]}
+    stubs.update(patch)
+    for name, fn in stubs.items():
+        monkeypatch.setattr(runner, name, fn)
+    if groups is not None:
+        monkeypatch.setattr(runner, "GROUPS", groups)
+    runner.UNVERIFIED_SEEN.clear()
+    with pytest.raises(SystemExit) as ex:
+        runner.main()
+    return ex.value.code, capsys.readouterr().out.splitlines()
+
+
+def _passing_group(ctx):
+    ctx.results.append({"id": "A1", "title": "t", "status": "PASS"})
+
+
+def test_agent_help_and_bad_args_are_json(runner, monkeypatch, capsys, tmp_path):
+    code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, ["-h"])
+    assert code == 0 and len(out) == 1 and json.loads(out[0])["command"] == "help"
+    for bad in (["--only", "A,Z"], ["--nope"], ["--skip-out"]):                 # unknown group, unknown option, abbreviation
+        code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, bad)
+        payload = json.loads(out[0])
+        assert code == 2 and len(out) == 1 and payload["status"] == "error" and payload["agent_directive"].startswith("STOP_RETRY")
+
+
+def test_agent_summary_reports_unverified_count(runner, monkeypatch, capsys, tmp_path):
+    def group(ctx):
+        _passing_group(ctx)
+        runner.UNVERIFIED_SEEN.append({"command": "python excel.py write", "unverified": ["A1 값"]})
+    code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, ["--only", "A"], groups=[("A", group)])
+    payload = json.loads(out[0])
+    assert code == 0 and len(out) == 1 and payload["unverified_count"] == 1 and payload["failed"] == []
+    assert payload["agent_directive"].startswith("UNVERIFIED:") and "통과'로 보고하지" in payload["agent_directive"]
+    assert payload["verified"] is False and os.path.isfile(payload["report_file"])
+
+
+def test_agent_summary_clean_run_is_verified(runner, monkeypatch, capsys, tmp_path):
+    code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, ["--only", "a"], groups=[("A", _passing_group)])
+    payload = json.loads(out[0])
+    assert code == 0 and payload["unverified_count"] == 0 and payload["verified"] is True
+    assert payload["agent_directive"].startswith("VERIFIED:") and payload["summary"] == {"PASS": 1}
+
+
+def test_agent_finish_errors_and_interrupts_keep_contract(runner, monkeypatch, capsys, tmp_path):
+    def broken(ctx):
+        raise RuntimeError("PowerPoint 그림 저장 실패")
+    code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, [], groups=[("A", _passing_group)], save_shots=broken)
+    payload = json.loads(out[0])
+    assert code == 1 and len(out) == 1 and payload["error_type"] == "finish" and payload["agent_directive"].startswith("ERROR:")
+
+    def stop(ctx):
+        raise KeyboardInterrupt
+    code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, [], groups=[("A", _passing_group)], close_test_documents=stop)
+    assert code == 130 and len(out) == 1 and json.loads(out[0])["error_type"] == "interrupted"
+    code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, [], groups=[("A", stop)])
+    assert code == 130 and len(out) == 1 and json.loads(out[0])["error_type"] == "interrupted"
+
+
+def test_unknown_group_rejected_without_agent(runner, monkeypatch, capsys):
+    monkeypatch.setattr(runner, "AGENT", False)
+    monkeypatch.setattr(sys, "argv", ["run_win_tests.py", "--only", "Z"])
+    with pytest.raises(SystemExit) as ex:
+        runner.main()
+    assert ex.value.code == 2 and "Z" in capsys.readouterr().err

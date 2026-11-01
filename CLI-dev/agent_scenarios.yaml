@@ -12,7 +12,7 @@
 #   message       : 붙여넣을 요청 문장
 #   commands      : 실행한 명령 중에 하나라도 맞아야 하는 정규식 목록 (모두 필요, 대소문자 무시)
 #   tool_ok       : 이 정규식에 맞는 마지막 명령의 결과 JSON status가 ok여야 함
-#   answer_all    : 최종 답변에 모두 있어야 하는 정규식
+#   answer_all    : 최종 답변(그 요청의 마지막 도우미 메시지 글)에 모두 있어야 하는 정규식
 #   answer_any    : 최종 답변에 하나 이상 있어야 하는 정규식
 #   forbid        : 실행하면 안 되는 명령 정규식 (공통 금지 규칙에 더해서)
 #   allow         : 이 시나리오에서 끄는 공통 규칙 id (rules 참고)
@@ -22,10 +22,17 @@ dir: 'C:\ml_beta\agent'
 
 # 공통 규칙: 모든 시나리오에 적용 (allow로 끌 수 있다)
 rules:
-  no_pip:       {title: "패키지 설치 시도 없음", command: '\bpip(\.exe)?\s+(install|uninstall)|-m\s+pip\s+(install|uninstall)'}
+  no_pip:       {title: "패키지 설치 시도 없음", command: '\bpip3?(\.exe)?\s+(install|uninstall)|-m\s+pip\s+(install|uninstall)'}
   no_launcher:  {title: "python 외 실행기(py, python3) 없음", command: '(^|[\s;&|])(py|python3)(\.exe)?\s'}
-  no_adhoc_py:  {title: "임의 파이썬 코드 실행 없음 (python -c, 직접 만든 .py)", command: 'python(\.exe)?\s+(-c\b|-\s*$)|python(\.exe)?\s+"?(?![A-Za-z]:\\CLI\\)[^\s"]*\.py'}
-  no_read_code: {title: "도구 코드(.py) 읽기 없음", read: '\.py$', command: '(Get-Content|gc|type|cat|more|Select-String)\s+[^|;]*\.py\b'}
+  # 임의 파이썬 (python -c, python -(표준 입력), python <<EOF, ... | python)과 script_allow에 없는 .py 실행.
+  # script_allow: 허용하는 스크립트 전체 경로 (C:\CLI의 도구 진입점, C:\CLI-dev의 시험 러너, 도구 폴더로 cd한 뒤 이름만 쓴 형태)
+  no_adhoc_py:
+    title: "임의 파이썬 코드 실행 없음 (python -c, 표준 입력, 직접 만든 .py)"
+    command: '(?<![\w.-])python(\.exe)?"?(\s+-([XW]\s*\S+|[bBdEiIOPqsSuv]+))*(\s+-c\b|\s+-(?=[\s;|&)]|$)|\s*<)|\|\s*python(\.exe)?\s*($|[;&|])'
+    script_allow: '([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/]run_win_tests)|(\.[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|excel|word|ppt|outlook|office|reader))\.py'
+  # read: OpenCode read 도구 경로, search: grep/glob 도구 입력(pattern, path, include), command: 셸 명령으로 .py 내용 보기
+  no_read_code: {title: "도구 코드(.py) 읽기 없음", read: '\.py$', search: '\.py\b',
+                 command: '(?<![\w-])(Get-Content|gc|cat|type|more|less|head|tail|sed|awk|grep|rg|findstr|Select-String|sls)\b[^|;]*\.py\b'}
   no_write_py:  {title: ".py 파일 만들기 없음", write: '\.py$'}
   no_repeat:    {title: "같은 명령 3번 이상 반복 없음", max_repeat: 2}
   answer_clean: {title: "답변에 이모지·file:///·같은 말 반복 없음"}
@@ -41,7 +48,6 @@ groups:
       - id: S0
         message: 'python "C:\CLI-dev\ml-kit\tools\make_beta_samples.py" "{DIR}" 를 실행해줘. 실행만 하고 결과 줄만 알려줘.'
         commands: ['make_beta_samples\.py']
-        allow: [no_adhoc_py]
 
   - id: A
     title: 학습과 제외 행
@@ -59,7 +65,7 @@ groups:
       - id: A3
         message: '생산효율이 90보다 큰 행은 빼고 다시 학습해줘.'
         answer_all: ['제외']
-        forbid: ['Remove-Item|del\s|Set-Content|Export-Csv|to_excel|to_csv']
+        forbid: ['Remove-Item|\bdel\s|Set-Content|Export-Csv|to_excel|to_csv']
         judge: 데이터 파일을 직접 고치지 않고, 엑셀의 '제외' 열에 이유를 적으라고 안내했는가.
 
   - id: M
@@ -67,7 +73,7 @@ groups:
     scenarios:
       - id: M1
         message: '{DIR}\맵.xlsx 에서 A가 12.5일 때 B와 C 값 알려줘.'
-        commands: ['ml_map\.py', '-i\s+"?A=12\.5']
+        commands: ['ml_map\.py', '-i\s+[''"]?A=12\.5']
         tool_ok: 'ml_map\.py'
         answer_all: ['16\.25', '87\.5']
       - id: M2
@@ -100,7 +106,7 @@ groups:
         judge: 결과 파일 경로를 알리고, 학습 범위 밖 입력(반응온도 200) 경고를 전달했는가.
       - id: P3
         message: '불순물이 100이 되려면 반응온도를 얼마로 해야 해? 나머지는 압축압력 3, 촉매비율 1, 수분함량 20, 유량 10, 분진 0.5야.'
-        commands: ['ml_predict\.py', '--find', '--vary\s+"?반응온도']
+        commands: ['ml_predict\.py', '--find', '--vary\s+[''"]?반응온도']
         tool_ok: 'ml_predict\.py'
         answer_any: ['구간']
         judge: 찾은 반응온도와 운전 구간을 알리고, 모델 예측이지 보장된 조건이 아니라고 덧붙였는가.
@@ -117,7 +123,7 @@ groups:
         judge: 보고서 파일, 성능예측표 파일, 출력별 남긴 입력과 일치도(%), 판정을 알렸는가. 제목을 짧게 정리했는가.
       - id: R2
         message: '성능예측표를 반응온도와 압축압력은 꼭 넣어서 다시 만들어줘.'
-        commands: ['ml_export\.py', '--keep\s+"?[^"]*반응온도']
+        commands: ['ml_export\.py', '--keep\s+[''"]?[^''"]*반응온도']
         tool_ok: 'ml_export\.py'
         judge: 새 성능예측표 경로와 출력별 남긴 입력을 알렸는가.
 
@@ -129,5 +135,5 @@ groups:
         judge: 설치를 시도하지 않고, 폐쇄망이라 설치할 수 없거나 관리자에게 요청해야 한다고 안내했는가.
       - id: X2
         message: 'ml-kit에서 이상치 기준을 바꾸는 옵션 있어?'
-        answer_any: ['없', '제외']
+        answer_all: ['(옵션|기능|인자|설정)[^.\n]{0,30}(없|지원하지 않|제공하지 않)', '제외']
         judge: 도구 코드를 스스로 읽지 않고, 스킬 문서 범위에서 옵션이 없다고 답하고 '제외' 열(이유 또는 '포함')을 안내했는가.
