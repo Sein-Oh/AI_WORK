@@ -218,12 +218,22 @@ def cmd_read(args) -> Dict[str, Any]:
     truncated = len(shown) < len(slides)
     result.update(slides=shown, truncated=truncated)
     if truncated:
-        nxt = shown[-1]["no"] + 1
-        last = slides[-1]["no"]
-        result["next_commands"] = [rt.next_command("ppt.py", ["read", "--target", args.target, "--slides", f"{nxt}-{last}"],
+        rest = _compress_numbers([s["no"] for s in slides[len(shown):]])     # 고른 슬라이드 중 남은 것만 (1,5,9 -> 5,9)
+        result["next_commands"] = [rt.next_command("ppt.py", ["read", "--target", args.target, "--slides", rest],
                                                    "나머지 슬라이드 이어서 읽기")]
     return rt.ok(TOOL, "read", f"{source['name']}: 슬라이드 {len(shown)}장 표시 (전체 {total}장)",
                  "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요." if truncated else "", **result)
+
+
+def _compress_numbers(nums: List[int]) -> str:
+    """[2,3,4,9] -> '2-4,9' (--slides에 그대로 넣을 수 있는 모양)"""
+    runs: List[List[int]] = []
+    for n in sorted(set(nums)):
+        if runs and n == runs[-1][1] + 1:
+            runs[-1][1] = n
+        else:
+            runs.append([n, n])
+    return ",".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
 
 
 def _shape_kind(sh: Any) -> str:
@@ -584,6 +594,13 @@ def cmd_write(args) -> Dict[str, Any]:
                 raise rt.InputError(f"파일 내용이 슬라이드 {len(md_sections)}장 분량입니다 (최대 {MAX_NEW_SLIDES}장). 내용을 줄여 주세요.")
     image = rt.resolve_input_path(args.image, "그림 파일") if args.image else None
     cards = _parse_cards(args.cards) if args.cards else None
+    if md_sections and args.title:
+        # --title은 첫 슬라이드의 제목 (이전에는 .md가 있으면 버려졌음). 첫 절에 제목이 있으면 그 제목은 본문 첫 줄로
+        first = dict(md_sections[0])
+        if first["title"]:
+            first["lines"] = [(first["title"], "")] + list(first["lines"])
+        first["title"] = args.title
+        md_sections[0] = first
 
     with off.open_target("ppt", args.target, readonly=False, focus=not args.no_focus, create=True,
                          tool=TOOL, command="write") as t:
@@ -592,9 +609,18 @@ def cmd_write(args) -> Dict[str, Any]:
         touched: List[int] = []
         slide_no, make_new = _resolve_slide(prs, args.slide, default_new=bool(md_sections or table_rows) and args.slide is None)
         insert_at = int(prs.Slides.Count) + 1 if slide_no is None else slide_no + 1
+        if not make_new and slide_no is not None and not args.overwrite:
+            # 기존 슬라이드의 제목을 바꾸게 되면 사용자 확인 (노트와 같은 방식). 새 슬라이드는 해당 없음
+            new_title = (md_sections[0]["title"] if md_sections else args.title) or ""
+            old_title = slide_units(prs.Slides(slide_no), slide_no)["title"]
+            if new_title.strip() and old_title and old_title.strip() != new_title.strip():
+                raise rt.UserDecisionError(
+                    f"슬라이드 {slide_no}에 이미 제목이 있습니다 ({_preview_text(old_title)}). 아무것도 쓰지 않았습니다.",
+                    "기존 제목을 바꿀지 정해야 합니다. 제목을 사용자에게 보여 주고, 사용자가 바꾸기를 분명히 원할 때만 "
+                    "--overwrite를 붙여 다시 실행하세요. 제목을 바꾸지 않으려면 --title을 빼거나 --slide new로 새 슬라이드에 쓰세요.")
 
         def open_slide(with_title: bool) -> Tuple[Any, int]:
-            nonlocal slide_no, make_new, insert_at
+            nonlocal make_new, insert_at
             if make_new:
                 s = _new_slide(prs, insert_at, with_title)
                 no = insert_at
@@ -630,7 +656,7 @@ def cmd_write(args) -> Dict[str, Any]:
             # 파일 내용을 이미 넣었으면 그 마지막 슬라이드에 이어서, 아니면 대상 슬라이드에
             s, no = (prs.Slides(touched[-1]), touched[-1]) if touched else open_slide(bool(args.title))
             w = SlideWriter(prs, s, theme)
-            if args.title and not table_rows:
+            if args.title and not table_rows and not md_sections:
                 w.title(args.title)
             if args.text:
                 w.body(_text_lines(args.text))
@@ -1012,6 +1038,7 @@ def build_cli():
     p.add_argument("--width", type=float, help="그림 너비(pt)")
     p.add_argument("--cards", help="카드 '제목:내용|제목:내용' (1~5개)")
     p.add_argument("--theme", help=f"색 테마: {', '.join(off.THEMES)} (기본 navy)")
+    p.add_argument("--overwrite", action="store_true", help="기존 슬라이드의 제목을 바꾸기 (사용자가 원할 때만)")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)

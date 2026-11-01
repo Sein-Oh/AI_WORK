@@ -22,6 +22,18 @@ def col_let(n):
     return s
 
 
+_REF = re.compile(r"(?<![A-Za-z$])([A-Z]{1,3})(\d+)(?![\d(])")
+
+
+def shift_formula(formula, dr, dc):
+    """상대 참조(A1)를 dr행, dc열 옮긴 수식."""
+    return _REF.sub(lambda m: f"{col_let(col_num(m.group(1)) + dc)}{int(m.group(2)) + dr}", formula)
+
+
+def to_r1c1(formula, r, c):
+    return _REF.sub(lambda m: f"R[{int(m.group(2)) - r}]C[{col_num(m.group(1)) - c}]", formula)
+
+
 class Props:
     """임의 속성을 기록하는 객체 (Interior.Color, Font.Bold 등)."""
 
@@ -169,6 +181,20 @@ class FakeRange:
             self.ws.values[(r, c)] = f"<{v}>"
         self.ws.log.append(("Formula", self.Address, v))
 
+    @property
+    def FormulaR1C1(self):
+        """상대 참조(A1, $ 없음)를 R[행차]C[열차]로 바꾼 수식 (복사해도 같은 값)."""
+        r1, c1, r2, c2 = self.areas[0]
+
+        def f(r, c):
+            if (r, c) in self.ws.formulas:
+                return to_r1c1(self.ws.formulas[(r, c)], r, c)
+            v = self.ws.values.get((r, c))
+            return "" if v is None else v
+        if (r1, c1) == (r2, c2):
+            return f(r1, c1)
+        return tuple(tuple(f(r, c) for c in range(c1, c2 + 1)) for r in range(r1, r2 + 1))
+
     # --- 서식/조작 ---
     def __getattr__(self, name):
         if name in ("Interior", "Font", "Borders_"):
@@ -198,11 +224,18 @@ class FakeRange:
         r1, c1, r2, c2 = self.areas[0]
         dr, dc = dest.areas[0][0], dest.areas[0][1]
         vals = {(r, c): self.ws.values.get((r, c)) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)}
+        forms = {k: self.ws.formulas[k] for k in vals if k in self.ws.formulas}
         if cut:
             for k in vals:
                 self.ws.values.pop(k, None)
+                self.ws.formulas.pop(k, None)
         for (r, c), v in vals.items():
-            if v is not None:
+            if (r, c) in forms:
+                # Excel처럼 복사하면 상대 참조가 옮긴 만큼 바뀌고 값도 달라짐 (잘라내기는 수식 그대로)
+                f = forms[(r, c)] if cut else shift_formula(forms[(r, c)], dr - r1, dc - c1)
+                dest.ws.formulas[(dr + r - r1, dc + c - c1)] = f
+                dest.ws.values[(dr + r - r1, dc + c - c1)] = v if cut else f"<{f}>"
+            elif v is not None:
                 dest.ws.set(dr + r - r1, dc + c - c1, v)
 
     def Cut(self, Destination=None):

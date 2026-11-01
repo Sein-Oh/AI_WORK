@@ -127,7 +127,7 @@ def test_read_text_file_encodings(tmp_path):
     assert rt.read_text_file(str(p)) == "한글 테스트"
     p.write_bytes("한글 테스트".encode("utf-16"))
     assert rt.read_text_file(str(p)) == "한글 테스트"
-    p.write_bytes("﻿한글".encode("utf-8"))
+    p.write_bytes("\ufeff한글".encode("utf-8"))
     assert rt.read_text_file(str(p)) == "한글"
 
 

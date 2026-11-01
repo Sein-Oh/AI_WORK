@@ -422,11 +422,11 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
                                 "office.py transfer --probe로 이 PC에서 되는 방식을 확인하세요.")
     used = ", ".join(f"{off.APP_LABEL[k]}({v['method']})" for k, v in results.items())
     preview = f"차트 '{title}'를 넣었습니다: {used}" + (f" / 실패: {', '.join(failed)}" if failed else "")
+    if failed:   # R1: 일부 실패는 VERIFIED가 아님 (넣은 곳만 확인함)
+        unverified.append(f"{', '.join(off.APP_LABEL[k] for k in failed)}에는 넣지 못함 (failures). 넣은 곳은 그림을 다시 세어 확인")
     if unverified:
-        return rt.ok_unverified(TOOL, "transfer", preview, unverified + ([f"일부 실패: {', '.join(failed)} (failures)"] if failed else []), **payload)
-    directive = "VERIFIED: 넣은 그림을 다시 세어 확인했습니다." if not failed else \
-        "VERIFIED: 일부만 전달했습니다 (넣은 곳은 그림을 다시 세어 확인). failures 내용을 사용자에게 알리세요."
-    return rt.ok(TOOL, "transfer", preview, directive, verified=not failed, **payload)
+        return rt.ok_unverified(TOOL, "transfer", preview, unverified, **payload)
+    return rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 그림을 다시 세어 확인했습니다.", verified=True, **payload)
 
 
 def _excel_range_rows(args) -> Tuple[List[List[Any]], str]:
@@ -896,7 +896,10 @@ def cmd_undo(args) -> Dict[str, Any]:
             "되돌리지 않았습니다. message를 사용자에게 알리고, 사용자가 더 앞 지점으로 되돌리길 원하면 "
             "office.py undo --list를 보여 준 뒤 사용자가 고른 번호로 --pick을 붙여 실행하세요.")
     orig = snap.get("original_path", "")
-    created = float(snap.get("created_ts") or 0)
+    # 고른 지점보다 새 지점(같은 문서): 되돌리면 그 작업들도 사라지므로 함께 지움 (남기면 다음 undo가 앞으로 감)
+    newer = [s for s in snaps[:pick - 1] if _same_doc(s, snap)]
+    # 이 도구가 그 사이에 저장한 것(새 지점들)은 사용자 저장이 아님: 가장 새 지점 시각을 기준으로 비교
+    created = max([float(s.get("created_ts") or 0) for s in [snap] + newer])
     if orig and created and not args.overwrite and os.path.exists(orig) and os.path.getmtime(orig) > created + 120:
         changed = datetime.fromtimestamp(os.path.getmtime(orig)).strftime("%Y-%m-%d %H:%M")
         raise rt.UserDecisionError(
@@ -908,6 +911,8 @@ def cmd_undo(args) -> Dict[str, Any]:
     info = restore_snapshot(snap)
     problems = _verify_restored(snap)                       # R1: 스냅샷을 지우기 전에 비교
     off.delete_snapshot(snap["meta_file"])                 # 사용한 스냅샷은 소비 -> 다음 undo는 그 이전으로
+    for s in newer:                                        # 되돌려서 사라진 작업의 지점 (스냅샷·되돌릴 지점 없음 표시)
+        off.delete_snapshot(s["meta_file"])
     detail = info.pop("detail", "")
     preview = f"'{snap['name']}'을(를) '{snap.get('by') or '이전 작업'}' 이전 상태로 되돌렸습니다 ({info['restored_as']})"
     if detail:
@@ -916,9 +921,21 @@ def cmd_undo(args) -> Dict[str, Any]:
         "되돌리기 직전 상태는 pre_undo_backup에 보관했습니다. preview를 사용자에게 그대로 알리세요."
         if info.get("pre_undo_backup") else "preview를 사용자에게 그대로 알리세요.")
     fields = dict(restored=True, app=off.APP_LABEL[snap["app"]], name=snap["name"], original_path=snap.get("original_path", ""), **info)
+    if newer:
+        fields["removed_newer_points"] = len(newer)
     if problems:
         return rt.ok_unverified(TOOL, "undo", preview, problems, **fields)
     return rt.ok(TOOL, "undo", preview, directive, **fields)
+
+
+def _same_doc(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """같은 문서의 되돌리기 지점인지 (저장한 문서는 경로, 저장한 적 없는 문서는 이름으로)."""
+    if a.get("app") != b.get("app"):
+        return False
+    pa, pb = a.get("original_path", ""), b.get("original_path", "")
+    if pa or pb:
+        return os.path.normcase(os.path.abspath(pa)) == os.path.normcase(os.path.abspath(pb)) if pa and pb else False
+    return a.get("name") == b.get("name")
 
 
 def _verify_restored(snap: Dict[str, Any]) -> List[str]:

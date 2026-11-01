@@ -42,7 +42,7 @@ SUPPORTED = {
 }
 UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행"}
 PAGE_TYPES = ("pdf", "pptx")   # read --pages가 실제 쪽/슬라이드 번호인 형식 (그 밖은 항목 번호)
-PARSER_VERSION = 4          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님)
+PARSER_VERSION = 5          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta)
 MAX_SHEET_ROWS = 20000      # xlsx 시트당 최대 행 수
 MAX_FOLDER_FILES = 300      # 한 번에 새로 등록(파싱)할 최대 파일 수
 MAX_FOLDER_DEPTH = 3        # 폴더 기본 탐색 깊이
@@ -553,7 +553,19 @@ def _parse_pdf(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not b.units:
         meta["ocr_needed"] = True
         rt.log("WARN", "텍스트가 없는 PDF입니다 (스캔 이미지일 가능성). OCR이 필요합니다.")
+    else:
+        # 일부 쪽만 스캔된 PDF: 그 쪽은 검색되지 않으므로 0건이어도 '없다'고 단정하면 안 됨
+        have = {u.get("page") for u in b.units}
+        blank = [p for p in range(1, len(pages) + 1) if p not in have]
+        if blank:
+            meta["pages_without_text"] = blank
+            rt.log("WARN", f"글자가 없는 쪽 {len(blank)}개 (스캔 쪽일 가능성, OCR 필요): p.{_page_list(blank)}")
     return b.units, meta
+
+
+def _page_list(pages: List[int], limit: int = 10) -> str:
+    shown = ",".join(str(p) for p in pages[:limit])
+    return shown + (f" 외 {len(pages) - limit}쪽" if len(pages) > limit else "")
 
 
 # HWP 5.0 제어 문자: 1 WCHAR 짜리 문자 컨트롤. 나머지 1~31은 인라인/확장 컨트롤로 8 WCHAR(16바이트)를 차지합니다.
@@ -1318,34 +1330,6 @@ def _ensure_indexed(path: str, doc: Dict[str, Any], cache_file: str) -> None:
         pass
 
 
-_KIND_FROM_LOC = (("표", "table"), ("슬라이드", "slide"), ("헤더", "header"))  # 이전 캐시의 loc로 종류 추정
-
-
-def normalize_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """이전 파서 버전의 캐시도 같은 키로 검색되게 빈 키를 채웁니다 (loc에서 쪽/슬라이드 번호 추정)."""
-    for i, u in enumerate(doc.get("units") or [], 1):
-        loc = str(u.get("loc", ""))
-        u.setdefault("id", i)
-        if "kind" not in u:
-            kind = "row" if loc.endswith("행") else "paragraph"
-            for prefix, k in _KIND_FROM_LOC:
-                if loc.startswith(prefix):
-                    kind = k
-            u["kind"] = kind
-        if "page" not in u:
-            m = re.fullmatch(r"p\.(\d+)", loc)
-            s = re.fullmatch(r"슬라이드 (\d+)", loc)
-            u["page"] = int(m.group(1)) if m else (int(s.group(1)) if s else None)
-            u["page_source"] = "pdf" if m else ("slide" if s else None)
-        u.setdefault("page_source", None)
-        if "section" not in u:
-            u["section"] = [u["heading"]] if u.get("heading") else []
-        u.setdefault("number", None)
-        u.setdefault("heading", u["section"][-1] if u["section"] else "")
-        u.setdefault("text", "")
-    return doc
-
-
 def is_stale_doc(doc: Dict[str, Any], st: Optional[os.stat_result] = None) -> bool:
     """캐시가 이전 파서 버전이거나, 원본 파일이 캐시한 뒤 바뀌었으면 True (원본이 없으면 파서 버전만 봄)."""
     if doc.get("parser_version") != PARSER_VERSION:
@@ -1380,7 +1364,7 @@ def load_cached_only(path: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         doc = json.loads(rt.read_text_file(cache_file))
-        return normalize_doc(doc) if isinstance(doc, dict) and isinstance(doc.get("units"), list) else None
+        return doc if isinstance(doc, dict) and isinstance(doc.get("units"), list) else None
     except Exception:
         return None
 
@@ -1401,7 +1385,7 @@ def load_document_status(path: str, use_cache: bool = True, check_index: bool = 
                 rt.debug(f"캐시 사용: {os.path.basename(path)}")
                 if check_index:
                     _ensure_indexed(path, cached, cache_file)
-                return normalize_doc(cached), "cached"
+                return cached, "cached"
         except Exception:
             rt.log("WARN", f"캐시가 손상되어 다시 읽습니다: {os.path.basename(path)}")
     rt.log("PROGRESS", f"문서 읽는 중: {os.path.basename(path)}")
@@ -1414,6 +1398,7 @@ def load_document_status(path: str, use_cache: bool = True, check_index: bool = 
         _index_put(index, path, _index_entry(doc, cache_file))
         _save_index(index)
     except OSError as e:
+        doc["_cache_failed"] = True          # index가 '캐시에 저장 확인'이라고 하지 않게
         rt.log("WARN", f"캐시 저장 실패 (결과에는 영향 없음): {e}")
     return doc, ("updated" if had_cache else "new")
 
@@ -1674,6 +1659,12 @@ def cmd_read(args) -> Dict[str, Any]:
                               "unit_name": unit_name, "pages_total": _doc_pages(doc),
                               "pages_mode": "page" if by_page else "item",
                               "sections_total": _doc_sections(doc), "meta": doc.get("meta", {})}
+    meta = doc.get("meta") or {}
+    # 원본에서 읽지 않은 부분: 엑셀 시트당 행 상한, 글자 없는 쪽 (읽기 결과가 문서 전부가 아님을 알림)
+    src_cut = f"원본 시트의 {MAX_SHEET_ROWS}행을 넘는 부분은 읽지 않음" if meta.get("rows_truncated") else ""
+    blank_pages = meta.get("pages_without_text") or []
+    if blank_pages:
+        result["pages_without_text"] = blank_pages[:50]
 
     if args.save:
         ext = _save_ext(args.save)
@@ -1690,7 +1681,15 @@ def cmd_read(args) -> Dict[str, Any]:
             out = rt.write_text(out, units_to_markdown(name, selected, path))
         result.update(output_file=out, next_commands=_write_next_commands(out))
         preview = f"{name}: {len(selected)}개 {unit_name}을(를) 파일로 저장했습니다 ({out})"
-        return rt.ok(TOOL, "read", preview, "VERIFIED: 저장 완료. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.", **result)
+        # R1: 저장한 파일을 다시 열어 확인 (CSV는 행 수까지)
+        problems = [p for p in [rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None)] if p]
+        if src_cut:
+            result.update(truncated=True, truncated_reason=src_cut)
+            problems.append(src_cut + " (저장 파일에도 없음)")
+        if problems:
+            return rt.ok_unverified(TOOL, "read", preview, problems, **result)
+        return rt.ok(TOOL, "read", preview, "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                     verified=True, **result)
 
     if args.format == "summary":
         preview = (f"{name}: {doc['type']} 문서, {unit_name} {total}개, 쪽 {_doc_pages(doc) or '-'}, "
@@ -1706,18 +1705,37 @@ def cmd_read(args) -> Dict[str, Any]:
     budget = rt.DEFAULT_MAX_CHARS
     shown: List[Dict[str, Any]] = []
     used = 0
+    cut_units: List[int] = []
     for n, u in zip(numbers, selected):
         size = len(u["text"]) + len(u["loc"]) + len(section_text(u)) + 24
         if shown and used + size > budget:
             break
-        text, _ = rt.clamp_text(u["text"], budget)
-        shown.append(_unit_view(n, u, text))
+        text, cut = rt.clamp_text(u["text"], budget)
+        view = _unit_view(n, u, text)
+        if cut:              # 한 단위의 글이 상한보다 길어 뒤가 잘림 (이어 읽기로는 그 뒤를 볼 수 없음)
+            view["text_truncated"] = True
+            view["text_chars"] = len(u["text"])
+            cut_units.append(n)
+        shown.append(view)
         used += size
-    truncated = len(shown) < len(selected)
+    dropped = len(shown) < len(selected)
+    truncated = dropped or bool(cut_units) or bool(src_cut)
     result["units"] = shown
     result["truncated"] = truncated
     result["shown"] = len(shown)
-    if truncated:
+    reasons = []
+    if cut_units:
+        reasons.append(f"{unit_name} {','.join(map(str, cut_units))}의 글이 길어 앞 {budget}자만 표시 (전체는 --save 파일에 있음)")
+    if src_cut:
+        reasons.append(src_cut)
+    if blank_pages:
+        reasons.append(f"글자가 없는 쪽 {len(blank_pages)}개 (스캔 쪽일 수 있음, OCR 필요): p.{_page_list(blank_pages)}")
+    if reasons:
+        result["truncated_reason"] = reasons
+    save_cmd = rt.next_command("reader.py", ["read", "--file", path, "--save"], "전체 내용을 파일로 저장 (잘린 글 포함, 다른 문서에 넣을 때)")
+    if truncated and not dropped:
+        result["next_commands"] = [save_cmd]
+    if dropped:
         nxt_i = len(shown)
         nxt, last = numbers[nxt_i], numbers[-1]
         cut = selected[nxt_i]
@@ -1729,11 +1747,16 @@ def cmd_read(args) -> Dict[str, Any]:
             cont = ["--units", f"{nxt}-{last}"]
         result["next_commands"] = [
             rt.next_command("reader.py", ["read", "--file", path] + cont, f"나머지 {unit_name} 이어서 읽기"),
-            rt.next_command("reader.py", ["read", "--file", path, "--save"], "전체 내용을 파일로 저장 (다른 문서에 넣을 때)"),
+            save_cmd,
         ]
     preview = f"{name}: {unit_name} {len(shown)}개 표시 (전체 {total}개)" + (" - 길이 제한으로 일부만 표시" if truncated else "")
-    directive = ("VERIFIED: 읽기 완료. 일부만 표시되었으니 필요하면 next_commands로 이어서 읽으세요."
-                 if truncated else "VERIFIED: 읽기 완료. 내용을 인용할 때는 page, section, number로 근거(파일 p.N, 장절 (번호))를 함께 알리세요.")
+    if truncated:
+        directive = ("VERIFIED: 읽기 완료. 일부만 표시되었습니다" + (f" ({'; '.join(reasons)})" if reasons else "")
+                     + ". 사용자에게 알리고, 필요하면 next_commands로 이어서 읽거나 --save로 전체를 저장하세요.")
+    else:
+        directive = "VERIFIED: 읽기 완료. 내용을 인용할 때는 page, section, number로 근거(파일 p.N, 장절 (번호))를 함께 알리세요."
+        if reasons:
+            directive += " 주의: " + "; ".join(reasons) + ". 사용자에게 알리세요."
     return rt.ok(TOOL, "read", preview, directive, **result)
 
 
@@ -1792,6 +1815,13 @@ def cmd_index(args) -> Dict[str, Any]:
     preview = (f"문서 {len(files)}개: 새로 등록 {result['indexed']}, 다시 등록 {result['updated']}, "
                f"변경 없음 {result['unchanged']}, 실패 {result['failed']}"
                + (f", 남음 {res['remaining']} (--max-files {args.max_files})" if res["remaining"] else ""))
+    # R1: 새로 읽은 문서의 캐시 파일이 실제로 저장됐는지 확인 (캐시 저장 실패는 결과 JSON에만 보이지 않던 문제)
+    unsaved = [os.path.basename(d["file"]) for d in res["docs"]
+               if d.get("_cache_failed") or not os.path.isfile(_doc_cache_path(d["file"]))]
+    if unsaved:
+        result["cache_failed"] = unsaved[:MAX_LIST_ITEMS]
+        return rt.ok_unverified(TOOL, "index", preview,
+                                [f"캐시에 저장하지 못한 파일 {len(unsaved)}개 (다음 검색 때 다시 읽음): {', '.join(unsaved[:5])}"], **result)
     if res["remaining"]:
         directive = ("VERIFIED: 일부만 등록했습니다(캐시에 저장 확인). 남은 파일은 next_commands[0]을 그대로 실행해 이어서 등록하세요 "
                      "(문서를 바꾸지 않는 읽기 전용 작업). 실패한 파일은 failures를 사용자에게 알리세요.")
@@ -1965,6 +1995,11 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                 info["refreshed"] += 1
             except Exception as e:
                 rt.debug(f"다시 읽기 실패, 이전 캐시로 검색: {e}")
+        if doc.get("parser_version") != PARSER_VERSION:
+            # 이전 파서 형식의 캐시는 단위 키가 달라 검색하지 않음 (다시 등록하면 검색됨)
+            info["skipped"].append({"file": path, "reason": "이전 형식의 캐시인데 다시 읽지 못함 -> 다시 등록 필요"})
+            info["stale"].append(path)
+            continue
         if is_stale_doc(doc):
             doc["_stale"] = True
             info["stale"].append(path)
@@ -2053,6 +2088,12 @@ def cmd_search(args) -> Dict[str, Any]:
                           u["text"] if args.full else h["snippet"].replace("**", ""), ""]
             out = rt.write_text(out, "\n".join(lines))
         result.update(output_file=out, saved=len(saved))
+        if len(hits) > len(saved):
+            result.update(save_truncated=True,
+                          save_truncated_reason=f"검색 결과 {len(hits)}건 중 앞 {len(saved)}건만 저장 (저장 상한 {MAX_SAVE_HITS}건)")
+        save_problem = rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None)
+        if save_problem:
+            result["save_problem"] = save_problem
         nexts += _write_next_commands(out)
 
     view = []
@@ -2115,7 +2156,13 @@ def cmd_search(args) -> Dict[str, Any]:
     evid = " 각 결과의 근거는 evidence(파일 p.N, 장절 (번호))를 그대로 알리세요. page가 null이면 장절과 번호로 알립니다."
     if "output_file" in result:
         preview += f", 저장: {result['output_file']}"
-        directive = "VERIFIED: 검색과 저장 완료(저장 파일 확인)." + evid
+        directive = "VERIFIED: 검색과 저장 완료(저장 파일을 다시 열어 확인)." + evid
+        save_issues = [x for x in (result.get("save_truncated_reason"), result.get("save_problem")) if x]
+        if save_issues:
+            payload = rt.ok_unverified(TOOL, "search", preview, save_issues + (
+                ["검색하지 못한 부분이 있음: " + "; ".join(gaps)] if gaps else []), **result)
+            payload["agent_directive"] += evid
+            return payload
         if result.get("next_commands") and _write_next_commands(result["output_file"]):
             directive += " 다른 문서에 넣으려면 next_commands를 그대로 실행하세요."
     else:
@@ -2140,6 +2187,11 @@ def _search_gaps(docs: List[Dict[str, Any]], info: Dict[str, Any]) -> List[str]:
     ocr = [os.path.basename(d["file"]) for d in docs if (d.get("meta") or {}).get("ocr_needed")]
     if ocr:
         gaps.append(f"글자가 없는 PDF {len(ocr)}개 (스캔 이미지, OCR 필요): {', '.join(ocr[:5])}")
+    blank = [(os.path.basename(d["file"]), (d.get("meta") or {}).get("pages_without_text")) for d in docs
+             if (d.get("meta") or {}).get("pages_without_text") and not (d.get("meta") or {}).get("ocr_needed")]
+    if blank:
+        gaps.append(f"글자가 없는 쪽이 있는 PDF {len(blank)}개 (스캔 쪽일 수 있음, 그 쪽은 검색 안 됨, OCR 필요): "
+                    + ", ".join(f"{n} p.{_page_list(p, 5)}" for n, p in blank[:5]))
     cut = [os.path.basename(d["file"]) for d in docs if (d.get("meta") or {}).get("rows_truncated")]
     if cut:
         gaps.append(f"행이 많아 {MAX_SHEET_ROWS}행까지만 읽은 엑셀 {len(cut)}개: {', '.join(cut[:5])}")

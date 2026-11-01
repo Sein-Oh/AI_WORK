@@ -71,6 +71,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 저장한 적 없는 문서는 스냅샷 때의 문서 이름(`문서1`, `Book1`)으로 찾습니다(1.2.2, 시나리오 12). 이전에는 항상 새 문서로 열어 바뀐 문서가 그대로 남았습니다.
   - 스냅샷을 만들지 못한 쓰기(DRM, 50MB 초과)와 새로 만든 파일에 쓰기는 "되돌릴 지점 없음" 표식을 남깁니다. 직전 작업이 그렇다면 `undo`는 더 오래된 지점으로 넘어가지 않고 `needs_user_decision`(사용자가 `--list`에서 고른 `--pick N`만 실행).
   - 되돌리기 지점 뒤에 파일이 다시 저장되었으면(지점 2분 뒤 이후의 수정 시각) 그 사이 저장한 내용이 사라지므로 `needs_user_decision`. 사용자가 원하면 `--overwrite`.
+    `--pick N`으로 앞 지점을 고르면 그 사이 이 도구가 저장한 것은 사용자 저장으로 보지 않습니다(같은 문서의 가장 새 지점 시각과 비교).
+  - `--pick N`으로 되돌리면 같은 문서의 더 새 지점(스냅샷, 되돌릴 지점 없음 표식)도 함께 지웁니다(`removed_newer_points`). 남겨 두면 다음 `undo`가 되돌린 뒤의 상태로 앞으로 갔습니다(1.4.10).
   - 열린 문서를 닫은 뒤 파일 복사가 실패하면(백신·잠금) 원본을 다시 열고 `undo_failed` 오류에 `pre_undo_backup`을 줍니다.
 - **읽기는 아무것도 만들거나 저장하지 않습니다.** 없는 시트나 파일을 지정하면 `[추천]`과 함께 오류를 냅니다.
 - **추측해서 쓰지 않습니다.** 쓰기 위치가 확실하지 않으면 아무것도 바꾸지 않고 오류를 냅니다.
@@ -79,6 +81,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     - 예: `시트 'Sheet9'이(가) 없습니다 (있는 시트: Sheet1). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. 이름이 비슷한 기존 시트에 쓸지, 새 시트를 만들지 사용자에게 물어보세요. [후보] Sheet1`
   - 워드 `--anchor`가 여러 단락에 있으면 `[후보]`(번호와 단락 앞부분)로 오류. `--occurrence N`으로 고릅니다. 찾지 못하면 비슷한 문구를 안내합니다 (공백·대소문자 차이 등 확실할 때만 `[추천]`, `--pos replace`에서는 더 엄격).
   - `office.py transfer --to excel --sheet 이름`은 새 시트 이름입니다(transfer는 항상 새 시트에 받습니다). 이미 있으면 덮어쓰지 않고 비어 있는 이름을 `[추천]`, 덮어쓰기는 `--overwrite`.
+  - 쓰기 `--target`에 파일 이름만 주었는데 열린 문서도 파일도 아니면 새 파일을 만들지 않고 "찾을 수 없음"(열린 문서가 있으면 `[후보]`). 새 파일은 전체 경로를 줄 때만 만듭니다(1.4.10, 이전에는 현재 폴더에 만들어 거기에 씀).
 - **메일**: 기본은 작성 창만 띄웁니다. `--send`는 명시했을 때만 쓰고, 수신자 주소를 확인한 뒤 발송합니다.
 
 ### 파일과 폴더
@@ -97,6 +100,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### 오류 로그
 - 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 `<data 폴더>\logs\errors.txt`에 덧붙습니다. `C:\CLI`에 배치했다면 `C:\CLI\office-cli\data\logs\errors.txt`(`config.json`의 `data_dir`나 `OFFICE_CLI_DATA_DIR`를 바꿨으면 그 폴더 아래).
 - 항목: 시각, 도구 버전, Python, OS / 실행한 명령과 인자 / `error_type`과 message / 재시도 한도를 넘긴 복구 시도(`복구 시도:`) / 내부 오류(`ERROR:`)일 때만 traceback. 문서 본문은 기록하지 않습니다.
+- 내용 옵션의 값은 `<N자 생략>`으로 남깁니다: `--body --text --subject --to --cc --bcc --from --query --find --replace --value --values --formula --header --title --cards --anchor --search --new-name`(`office.py`의 `--from/--to`, `ppt.py`의 `--to`는 앱 이름·위치라 그대로). 경로와 그 밖의 인자는 그대로 남깁니다(1.4.10).
 - 성공, 사용자 중단(exit 130)은 기록하지 않습니다. 2MB를 넘으면 `errors.old.txt`로 넘기고 새로 시작합니다. 로그 경로는 stdout JSON에 넣지 않습니다(사람과 개발 에이전트의 사후 분석용).
 - 실기 테스트 러너의 `errors_<시각>.txt`는 테스트 한 번의 판정 근거를 모은 별도 파일이고, 그 실행 중에 쌓인 도구 오류 로그(`<테스트 폴더>\_data\logs\errors.txt`)도 끝에 함께 옮겨 담습니다.
 
@@ -105,14 +109,14 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### excel.py
 | 명령 | 주요 옵션 |
 |---|---|
-| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--max-rows`, `--save [경로.csv]`. `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`) |
+| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--max-rows`, `--save [경로.csv]`. `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지 |
 | `info` | 시트별 사용 범위와 차트. `--all`: 열린 통합문서 전체. `--detail`: 차트 종류·계열 수·위치와 데이터를 가리는 차트 경고 |
-| `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`, `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`, `--append`는 확인 없음). 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸, 1.4.6). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`)는 글자 그대로 씁니다 |
-| `replace` | `--find/--replace` 또는 `--map JSON`, `--whole`, `--all-sheets`, 서식 옵션. 수식 셀은 내용 보존 |
+| `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`, `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이나 수식(빈 글을 내는 수식 포함)이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`). `--append`도 쓸 칸을 확인하고, `--formula`/`--value`도 쓸 열 수만큼 가장 아래 행을 찾습니다. 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸, 1.4.6). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`)는 글자 그대로 씁니다 |
+| `replace` | `--find/--replace` 또는 `--map JSON`, `--whole`, `--all-sheets`, 서식 옵션. 수식 셀은 내용 보존. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. `--range '요약'!A1:D9`처럼 시트를 주면 그 시트에서 읽고 씀. `--all-sheets`와 시트 이름이 든 `--range`는 함께 쓸 수 없음 |
 | `style` | `--theme navy\|slate\|teal\|emerald`, `--bg`, `--color`, `--bold`, `--align`, `--number-format`, `--border`, `--highlight ">=100:pink"`(조건부 서식), `--clear` |
 | `export` | `--save 경로.csv\|.xlsx\|.pdf`, `--columns A,C,E` |
 | `sheet` | `--action list\|add\|rename\|copy\|delete\|select --name --new-name` |
-| `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border`. `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 값이 있는 칸이 둘 이상이면, `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열 |
+| `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border`. `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열 |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
@@ -128,15 +132,15 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `revisions` | 변경 내용 추적 목록: `no, type`(삽입/삭제/서식 변경 등), `author, date, page, text`, `track_changes`(추적 켜짐 여부). 100개씩 `--start`. 읽기만 합니다(수락·거부는 Word에서) |
 | `info` | 쪽/단어/글자 수, 표, 그림, 제목 목록. `--all`. `--detail`: 그림 크기(쪽 너비 대비)와 제목 수준, 쪽보다 넓은 그림 경고 |
 | `write` | `--text`(마크다운 자동 변환, 줄바꿈 `\n`), `--file (.md/.txt, .csv는 표)`, `--image`, `--width`, `--heading N`, `--title`, `--callout`, `--toc`, `--page-break`, `--anchor 글 --pos after\|before\|replace`, `--occurrence N`(앵커가 여러 단락에 있을 때), `--theme`. 앵커가 표 칸 안이면 `after`는 표 뒤에 넣고 `before`/`replace`는 거절(칸 안에 들어가지 않게). 문서가 표로 시작하면 `--pos start` 거절 |
-| `replace` | `--find/--replace`(빈 문자열은 삭제) 또는 `--map`, `--match-case`, `--whole-word`, `--bold`, `--color`, `--highlight`. 머리글/바닥글/글상자 포함 |
+| `replace` | `--find/--replace`(빈 문자열은 삭제) 또는 `--map`, `--match-case`, `--whole-word`, `--bold`, `--color`, `--highlight`. 머리글/바닥글/글상자 포함. 문구당 5,000곳 상한에 닿으면 남은 곳을 확인하지 못해 `UNVERIFIED:`(`limit_reached`). `--match-case`가 없으면 대소문자만 바꾸는 치환(`office` -> `Office`)도 확인됨. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY |
 | `export` | `--save 경로.pdf\|.docx`, `--page-number`(사본에만) |
 
 ### ppt.py
 | 명령 | 주요 옵션 |
 |---|---|
-| `read` | `--slides 1-3`, `--save` |
+| `read` | `--slides 1-3`, `--save`. 길어서 잘리면 고른 슬라이드 중 남은 번호로 이어 읽는 명령(`--slides 1,5,9` -> `5,9`) |
 | `info` | 슬라이드별 제목, 도형/표/그림 수. `--all`. `--detail [--slides 2-4]`: 도형별 위치·크기·글자 크기·목록 종류와 배치 경고(슬라이드 밖, 글자 넘침, 겹침) |
-| `write` | `--slide N\|new`, `--title`, `--text`(`-` 줄은 글머리표, `1.` 줄은 번호), `--file (.md: 제목마다 새 슬라이드, .csv: 표)`, `--image`, `--cards "제목:내용\|..."`, `--theme` |
+| `write` | `--slide N\|new`, `--title`, `--text`(`-` 줄은 글머리표, `1.` 줄은 번호), `--file (.md: 제목마다 새 슬라이드, .csv: 표)`, `--image`, `--cards "제목:내용\|..."`, `--theme`, `--overwrite`. `--title`과 `.md`를 함께 주면 `--title`이 첫 슬라이드 제목(첫 절의 제목은 본문 첫 줄). 기존 슬라이드에 이미 다른 제목이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`, 새 슬라이드는 해당 없음) |
 | `replace` | `--find/--replace` 또는 `--map`, `--slide`, 서식 옵션. 표와 그룹 도형 포함 |
 | `export` | `--save 경로.pdf\|.pptx`. PDF 기능이 없는 Office(2007 기본 설치 등)는 `.pptx`로 저장하라는 STOP_RETRY를 돌려줍니다 |
 | `slide` | `--action list\|add\|duplicate\|move\|delete\|clear --slide --to --layout`. `clear`는 `--slide` 또는 `--all-slides`가 필요 |
@@ -145,6 +149,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### outlook.py
 - 조회: `list [--folder --unread --limit]`, `search --query [--from --where all|subject|body]`, `read --id [--save-attach --save]`, `current`, `folders`
 - 작성: `new --to --subject --body [--cc --attach --body-file --send]`, `reply [--id --all --body]`, `forward [--id --to --body]`
+- `--attach`: 여러 개는 `;`로 구분(쉼표도 됨). 값 전체가 있는 파일이면 하나로 봅니다(`보고서,최종.pdf`). `--body`의 글자 `\n`만 줄바꿈으로 바꾸고(Windows 경로 안의 `\n`은 그대로), `--body-file` 내용은 그대로 씁니다.
+- `read --save`: 파일 이름에 쓸 수 없는 글자(`RE:`의 `:` 등)는 `_`로 바꾸고, 저장한 파일을 다시 읽어 확인합니다.
 - 첨부는 `data\_work\mail_attachments\`에 저장합니다. 같은 이름 첨부는 번호를 붙이고, 본문 삽입 이미지와 실행 파일 형식은 저장하지 않습니다.
 
 ### reader.py
@@ -154,7 +160,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 |---|---|
 | `index --folder 폴더 [--depth 3 \| --recursive] [--max-files 300]` | 폴더의 문서를 내용 출력 없이 캐시에 등록. 결과: `count`, `indexed`, `updated`, `unchanged`, `failed`, `failures`(20개까지), `remaining`, `truncated`, `skipped_types`(지원하지 않는 확장자별 개수) |
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음) |
-| `read --file 경로 [--pages 1-3 \| --units 57-120] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`) |
+| `read --file 경로 [--pages 1-3 \| --units 57-120] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`과 `--save` 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`(저장하면 `UNVERIFIED:`). 글자가 없는 PDF 쪽은 `pages_without_text`. `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지) |
 | `search --query "A AND B" \| "A OR B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌. 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`) |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
@@ -167,7 +173,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `--file` 없음: 캐시에 등록된 문서 전체만 검색합니다. 등록된 문서가 없으면 `error_type: not_indexed`(STOP_RETRY).
   원본이 바뀌었거나 이전 파서 형식인 캐시는 그 자리에서 다시 읽고(20개까지, `recovered`로 알림) 검색합니다. 다시 읽지 못한 캐시(원본 없음, 한도 초과)는
   옛 내용으로 검색하고 결과 항목에 `stale: true`, `stale_cache_count`와 `index --all` 명령. 원본이 지워진 문서는 `file_missing: true`.
-- 검색 범위가 불완전하면(등록하지 못한 파일, 읽지 못한 파일, 다시 읽지 못한 캐시, 글자 없는 스캔 PDF, 20,000행에서 자른 엑셀, 들어가지 않은 하위 폴더)
+- 이전 파서 형식의 캐시를 다시 읽지 못하면 검색하지 않고 `skipped`(다시 등록 필요)로 알립니다(1.4.10, 옛 캐시의 키를 채우던 보정 삭제).
+- 검색 범위가 불완전하면(등록하지 못한 파일, 읽지 못한 파일, 다시 읽지 못한 캐시, 글자 없는 스캔 PDF, 일부 쪽에 글자가 없는 PDF, 20,000행에서 자른 엑셀, 들어가지 않은 하위 폴더)
   `not_searched` 목록과 함께 `UNVERIFIED:`로 응답합니다. 0건이어도 "근거 없음"으로 단정하지 않게 하기 위해서입니다.
 - 검색어: `A AND B`, `A OR B`(대소문자 무관, AND가 먼저 묶임), `"설계 기준"`(따옴표는 구문, 검색어에 넣지 않음), 연산자 없이 이어진 단어는 한 구문.
   띄어쓰기, 줄바꿈, 기호(`# - . : / ( )` 등)는 무시하고 비교합니다: `SOI 1` = `SOI #1` = `SOI-1`, `설계기준` = `설계 기준`, PDF 줄바꿈으로 갈라진 글.
@@ -179,7 +186,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 결과 항목: `file`, `path`, `page`, `page_source`, `section`(목록), `section_text`(` > `로 이음), `number`, `loc`, `heading`, `evidence`, `snippet`, `--full`이면 `text`.
   공통: `total_matches`(= `count`), `matched`(= `shown`), `truncated`, `files_searched`, `output_file`, `next_commands`. 잘렸으면 `--save "근거.xlsx"`로 전체를 저장하는 명령을 줍니다.
 - `evidence` 형식: `규격서.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`. 쪽이 없으면 `loc`(예: `매출.xlsx 매출!12행`), Word 쪽을 쪽 나눔으로만 셌으면 `p.3(추정)`.
-- `--save`: `.xlsx`(머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정), `.csv`, `.md`(기본). 열: 파일, 쪽, 장절, 번호, 위치, 내용(문장/단락), 문맥. `.md`에는 항목마다 `근거:` 줄. 저장 파일에는 `--top`과 관계없이 전체(최대 5,000건)를 담습니다.
+- `--save`: `.xlsx`(머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정), `.csv`, `.md`(기본). 열: 파일, 쪽, 장절, 번호, 위치, 내용(문장/단락), 문맥. `.md`에는 항목마다 `근거:` 줄. 저장 파일에는 `--top`과 관계없이 전체(최대 5,000건)를 담습니다. 5,000건을 넘으면 `save_truncated`와 함께 `UNVERIFIED:`. 저장한 파일은 다시 열어 확인합니다(`save_problem`이 있으면 `UNVERIFIED:`).
+- `index`: 새로 읽은 문서의 캐시 파일이 실제로 저장됐는지 확인하고, 저장하지 못한 파일이 있으면 `cache_failed`와 함께 `UNVERIFIED:`.
 
 #### 캐시 형식 (모든 형식 공통, `PARSER_VERSION` 4)
 문서마다 `cache/docs/<해시>.json` = `{file, type, mtime, size, parser_version, parsed_at, meta, units}`, 색인 `cache/index.json`(경로별 형식, 단위 수, 쪽 수, 장절 수, 수정 시각, 크기, 파서 버전).

@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.9"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.10"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -192,6 +192,9 @@ def emit_json(payload: Dict[str, Any]) -> None:
 
 def ok(tool: str, command: str, preview: str, directive: str = "", **fields: Any) -> Dict[str, Any]:
     """성공 응답. directive를 생략하면 'VERIFIED: 완료' 문구를 씁니다."""
+    if fields.get("verified") is False:
+        # R1: 확인하지 못한 결과에 VERIFIED:를 붙이지 않음 (무엇을 확인하지 못했는지 ok_unverified로 적어야 함)
+        raise ValueError("ok()에 verified=False를 넘길 수 없습니다. 확인하지 못했으면 ok_unverified를 쓰세요.")
     payload: Dict[str, Any] = {"status": "ok", "tool": tool, "command": command, "preview": preview}
     payload.update(fields)
     if not directive:     # 읽기·조회 명령: 읽은 결과 자체가 확인
@@ -221,15 +224,56 @@ def _attach_recovered(payload: Dict[str, Any]) -> None:
         payload["recovered"] = list(RECOVERED)
 
 
-def ok_file(tool: str, command: str, preview: str, path: str, directive: str, **fields: Any) -> Dict[str, Any]:
-    """저장한 파일 결과 (R1): 파일이 있고 비어 있지 않으면 VERIFIED, 아니면 UNVERIFIED."""
+def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional[str]:
+    """저장한 파일을 형식에 맞게 다시 열어 봅니다 (R1). 문제가 없으면 None, 있으면 확인하지 못한 내용."""
     try:
         size = os.path.getsize(path)
     except OSError:
-        size = -1
-    if size > 0:
+        return "저장한 파일이 없음"
+    if size <= 0:
+        return "저장한 파일이 비어 있음 (0바이트)"
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext in (".xlsx", ".xlsm"):
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True)
+            try:
+                if not wb.sheetnames:
+                    return "저장한 엑셀 파일에 시트가 없음"
+            finally:
+                wb.close()
+        elif ext == ".docx":
+            import docx
+            docx.Document(path)
+        elif ext == ".pptx":
+            import pptx
+            pptx.Presentation(path)
+        elif ext in (".csv", ".tsv"):
+            rows = [r for r in read_csv_rows(path) if any(str(v).strip() for v in r)]
+            if expected_rows is not None and len(rows) != expected_rows:
+                return f"저장한 CSV의 행 수가 다름 (기대 {expected_rows}행, 읽은 {len(rows)}행)"
+        elif ext in (".md", ".txt", ".json"):
+            read_text_file(path)
+        elif ext == ".pdf":
+            with open(path, "rb") as f:
+                if not f.read(5).startswith(b"%PDF"):
+                    return "저장한 PDF 파일의 머리가 PDF 형식이 아님"
+        else:
+            return f"{ext or '확장자 없는'} 파일은 다시 열어 확인하는 방법이 없음 (크기 {size}바이트만 확인)"
+    except ImportError as e:
+        return f"다시 열어 볼 라이브러리가 없음 ({e.name or e})"
+    except Exception as e:
+        return f"저장한 파일을 다시 열지 못함 ({type(e).__name__}: {str(e)[:80]})"
+    return None
+
+
+def ok_file(tool: str, command: str, preview: str, path: str, directive: str,
+            expected_rows: Optional[int] = None, **fields: Any) -> Dict[str, Any]:
+    """저장한 파일 결과 (R1): 형식에 맞게 다시 열리면(CSV는 expected_rows를 주면 행 수까지) VERIFIED, 아니면 UNVERIFIED."""
+    problem = check_saved_file(path, expected_rows)
+    if problem is None:
         return ok(tool, command, preview, directive, verified=True, **fields)
-    return ok_unverified(tool, command, preview, ["저장한 파일이 없음" if size < 0 else "저장한 파일이 비어 있음 (0바이트)"], **fields)
+    return ok_unverified(tool, command, preview, [problem], **fields)
 
 
 def ok_unverified(tool: str, command: str, preview: str, unverified: List[str], **fields: Any) -> Dict[str, Any]:
@@ -312,6 +356,37 @@ def error_log_path() -> str:
     return os.path.join(get_data_dir(), "logs", "errors.txt")
 
 
+# 오류 로그에 값을 남기지 않는 옵션 (본문·받는 사람·검색어 등 문서 내용과 개인정보). 경로와 그 밖의 인자는 그대로 남깁니다.
+REDACT_OPTIONS = {"--body", "--text", "--subject", "--to", "--cc", "--bcc", "--from", "--query", "--find",
+                  "--replace", "--value", "--values", "--formula", "--header", "--title", "--cards", "--anchor",
+                  "--search", "--new-name"}
+# 도구마다 같은 이름이 내용이 아닌 옵션 (office.py transfer --from excel --to word, ppt.py slide --to 3)
+REDACT_KEEP = {"office": {"--from", "--to"}, "ppt": {"--to"}}
+
+
+_REDACTED = re.compile(r"^(?:--[\w-]+=)?<\d+자 생략>$")
+
+
+def redact_argv(argv: Sequence[Any], tool: str = "") -> List[str]:
+    """내용 옵션의 값을 '<N자 생략>'으로 바꿉니다 (AGENTS.md: 오류 로그에 본문·개인정보를 남기지 않음).
+    '--opt 값', '--opt=값', 값이 여러 개인 옵션(--formula a b)을 모두 처리합니다."""
+    hidden = REDACT_OPTIONS - REDACT_KEEP.get(tool, set())
+    out: List[str] = []
+    hiding = False
+    for a in [str(x) for x in argv]:
+        if a.startswith("--"):
+            opt, eq, val = a.partition("=")
+            hiding = opt in hidden and not eq
+            out.append(f"{opt}=<{len(val)}자 생략>" if eq and opt in hidden else a)
+            continue
+        if hiding and not (a.startswith("-") and len(a) == 2 and a[1].isalpha()):
+            out.append(f"<{len(a)}자 생략>")
+            continue
+        hiding = False
+        out.append(a)
+    return out
+
+
 def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str, Any], trace: str = "") -> None:
     """실패한 실행을 <데이터 폴더>/logs/errors.txt에 덧붙입니다 (사람과 개발 에이전트의 사후 분석용).
     기준 구현: archive/doc-classifier/_dc_runtime.py. 경로와 인자만 기록하고 문서 본문은 기록하지 않습니다.
@@ -328,7 +403,7 @@ def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str,
         if argv is None:
             argv = CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv[1:]
         script = f"{tool}.py" if tool else os.path.basename(sys.argv[0] or "")
-        args = " ".join([script] + [quote_arg(a) for a in argv]).strip()
+        args = " ".join([script] + [a if _REDACTED.match(a) else quote_arg(a) for a in redact_argv(argv, tool)]).strip()
         lines = [f"===== {_dt.datetime.now().isoformat(timespec='seconds')} | {TOOL_NAME} {VERSION} | "
                  f"Python {platform.python_version()} | {platform.platform()}",
                  f"명령: {args}",
