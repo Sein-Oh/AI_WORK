@@ -282,6 +282,9 @@ def grade_turn(sc, turn, rules):
     if sc.get("answer_any"):
         hit = any(re.search(rx, answer, re.I) for rx in sc["answer_any"])
         out.append(("답변: " + " 또는 ".join(sc["answer_any"]), hit, "" if hit else "답변에 없음"))
+    for rx in sc.get("answer_none", []):
+        bad = re.search(rx, answer, re.I | re.M)
+        out.append((f"답변에 없어야 함: {rx}", not bad, bad.group(0)[:100] if bad else ""))
     for rx in sc.get("forbid", []):
         bad = [c for c in cmds if re.search(rx, c, re.I)]
         out.append((f"금지 명령: {rx}", not bad, "; ".join(bad)[:300]))
@@ -312,7 +315,8 @@ def grade_turn(sc, turn, rules):
                         where, rx = [str(inp.get(k) or "") for k in ("path", "pattern")], rule.get("glob", rule["search"])
                     else:
                         where, rx = [str(inp.get(k) or "") for k in ("path", "include")], rule["search"]
-                        if re.search(r"\.md$", str(inp.get("include") or "").strip(), re.I):   # *.md, SKILL.md: documents only
+                        if (re.search(r"\.md$", str(inp.get("include") or "").strip(), re.I)   # *.md, SKILL.md: documents only
+                                and not re.search(r"\.py\b", str(inp.get("path") or ""), re.I)):  # unless path is a .py file
                             continue
                     if any(re.search(r"SKILL\.md$", w, re.I) for w in where):
                         continue

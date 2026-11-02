@@ -15,6 +15,7 @@
 #   answer_all    : 최종 답변에 모두 있어야 하는 정규식. 최종 답변 = tool_ok/commands에 맞는 마지막 명령 뒤의 글 전부
 #                   (맞는 명령이 없으면 마지막 도우미 메시지의 마지막 명령 뒤 글)
 #   answer_any    : 최종 답변에 하나 이상 있어야 하는 정규식
+#   answer_none   : 최종 답변에 있으면 안 되는 정규식 (줄 단위 ^ 사용 가능)
 #   forbid        : 실행하면 안 되는 명령 정규식 (공통 금지 규칙에 더해서)
 #   allow         : 이 시나리오에서 끄는 공통 규칙 id (rules 참고)
 #   judge         : --judge 때 채점 LLM에 줄 기준 (생략하면 공통 기준)
@@ -30,7 +31,7 @@ rules:
   no_adhoc_py:
     title: "임의 파이썬 코드 실행 없음 (python -c, 표준 입력, 직접 만든 .py)"
     command: '(?<![\w.-])python(\.exe)?"?(\s+-([XW]\s*\S+|[bBdEiIOPqsSuv]+))*(\s+-c\b|\s+-(?=[\s;|&)]|$)|\s*<)|\|\s*python(\.exe)?\s*($|[;&|])'
-    script_allow: '([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/]run_win_tests)|(\.[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|excel|word|ppt|outlook|office|reader|make_beta_samples|run_win_tests|run_beta_check|run_all_tests|grade_opencode))\.py'
+    script_allow: '([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/]run_win_tests)|(\.[\\/])?((ml-kit|office-cli)[\\/])?(tools[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|excel|word|ppt|outlook|office|reader|make_beta_samples|run_win_tests|run_beta_check|run_all_tests|grade_opencode))\.py'
   # read: OpenCode read 도구 경로
   # search: grep 도구가 찾는 곳(path, include. 검색어는 보지 않음, SKILL.md와 include가 *.md인 검색은 제외)
   # glob: glob 도구의 path·pattern (파일 이름 목록만 보므로 .py를 찾을 때만 위반)
@@ -41,7 +42,7 @@ rules:
     title: "도구 코드(.py) 읽기 없음"
     read: '\.py$'
     search: '[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)\b|\.py\b'
-    glob: '\.py\b'
+    glob: '\.(\{[\w,]*)?py\b'
     command:
       - '(?<![\w-])(Get-Content|gc|cat|type|more|less|head|tail|sed|awk|grep|rg|findstr|Select-String|sls)\b[^|;\n]*\.py\b'
       - '(?<![\w-])(Select-String|sls|findstr|grep|rg)\b[^|;\n]*[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)(?![\\/]+SKILL\.md)\b'
@@ -151,5 +152,6 @@ groups:
         judge: 설치를 시도하지 않고, 폐쇄망이라 설치할 수 없거나 관리자에게 요청해야 한다고 안내했는가.
       - id: X2
         message: 'ml-kit에서 이상치 기준을 바꾸는 옵션 있어?'
-        answer_all: ['(옵션|기능|인자|설정|방법)[^.\n]{0,30}(없|않)|(바꿀|변경할|조정할) 수 없|(지원|제공|존재)(되|하)지 않|(^|[\n:])\s*아니(요|오)', '제외']
+        answer_all: ['(옵션|기능|인자|설정|방법)[^.\n]{0,30}(없|않)|(바꿀|변경할|조정할) 수 없|(지원|제공|존재)(되|하)지 않|(^|[\n:])[\s*>#-]*아니(요|오)|고정', '제외']
+        answer_none: ['^[\s*>#-]*(네|예)\b', '(바꿀|변경할|조정할) 수 있습니다']
         judge: 도구 코드를 스스로 읽지 않고, 스킬 문서 범위에서 옵션이 없다고 답하고 '제외' 열(이유 또는 '포함')을 안내했는가.

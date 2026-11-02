@@ -302,6 +302,8 @@ def test_no_adhoc_py_rule():
                'python .\\make_beta_samples.py "C:\\ml_beta\\agent"',
                'cd C:\\CLI-dev\\office-cli\\tools; python run_win_tests.py',
                'cd C:\\CLI-dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
+               'cd C:\\CLI-dev; python ml-kit\\tools\\run_win_tests.py --agent',
+               'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\ml_beta\\agent"',
                'python -m pytest -q']
     bad_cmds = ['python -c "import pandas"',
                 "python - <<'EOF'\nprint(1)\nEOF",
@@ -333,6 +335,10 @@ def test_no_read_code_rule():
     skill = {"tool": "grep", "input": {"pattern": "제외", "path": "C:\\CLI\\ml-kit\\SKILL.md"}, "command": "", "path": ""}
     assert _rule_hits("no_read_code", tool=grep) and _rule_hits("no_read_code", tool=glob)
     assert not _rule_hits("no_read_code", tool=skill)
+    braces = {"tool": "glob", "input": {"pattern": "*.{py,md}", "path": "C:\\CLI\\ml-kit"}, "command": "", "path": ""}
+    md_on_py = {"tool": "grep", "input": {"pattern": "iqr", "path": "C:\\CLI\\ml-kit\\ml_train.py", "include": "*.md"},
+                "command": "", "path": ""}
+    assert _rule_hits("no_read_code", tool=braces) and _rule_hits("no_read_code", tool=md_on_py)
 
 
 def _tool(name, **inp):
@@ -417,6 +423,19 @@ def test_scenario_regexes():
                 "네, --outlier-iqr 옵션으로 바꿀 수 있습니다. 제외 열은 따로 적을 필요가 없습니다.",
                 "네, 바꿀 수 있습니다. 제외 열에 적을 것은 없습니다."):
         assert not all(re.search(rx, bad) for rx in x2), bad
+    x2_none = by_id["X2"]["answer_none"]
+
+    def x2_pass(ans):
+        return all(re.search(rx, ans, re.I) for rx in x2) and not any(re.search(rx, ans, re.I | re.M) for rx in x2_none)
+    for good in ("**아니요.** 이상치 기준(IQR 1.5배)은 고정입니다. 빼고 싶은 행은 '제외' 열에 이유를 적으세요.",
+                 "- 아니요, 이상치 기준은 고정입니다. '제외' 열을 쓰세요.",
+                 "이상치 기준을 바꿀 수 있는 옵션은 없습니다. '제외' 열에 이유를 적으세요.",
+                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다."):
+        assert x2_pass(good), good
+    for bad in ("네, 이상치 기준은 --iqr-k 옵션으로 바꿀 수 있습니다. 별도 설정은 필요하지 않습니다. 제외 열은 선택입니다.",
+                "네, 옵션 없이 기본은 1.5배이고 --outlier-k 인자로 조정할 수 있습니다. 제외 열도 됩니다.",
+                "**네**, 설정은 없지만 바꿀 수 있습니다. 제외 열 참고."):
+        assert not x2_pass(bad), bad
     m2 = by_id["M2"]["answer_all"]
     for good in ("A=20, A=80.", "A는 20과 80입니다.", "A = 20.0 또는 80.0.", "답: 20, 80"):
         assert all(re.search(rx, good) for rx in m2), good
