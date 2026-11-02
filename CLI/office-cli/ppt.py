@@ -206,7 +206,9 @@ def cmd_read(args) -> Dict[str, Any]:
             rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기"),
             rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"],
                             "슬라이드 내용을 엑셀 표로 옮기기")])
-        return rt.ok(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", **result)
+        return rt.ok_file(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", out,
+                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          **result)
     shown: List[Dict[str, Any]] = []
     used = 0
     for s in slides:
@@ -595,9 +597,9 @@ def cmd_write(args) -> Dict[str, Any]:
     image = rt.resolve_input_path(args.image, "그림 파일") if args.image else None
     cards = _parse_cards(args.cards) if args.cards else None
     if md_sections and args.title:
-        # --title은 첫 슬라이드의 제목 (이전에는 .md가 있으면 버려졌음). 첫 절에 제목이 있으면 그 제목은 본문 첫 줄로
+        # --title은 첫 슬라이드의 제목 (이전에는 .md가 있으면 버려졌음). 첫 절의 제목이 --title과 다르면 그 제목은 본문 첫 줄로
         first = dict(md_sections[0])
-        if first["title"]:
+        if first["title"] and first["title"].strip().casefold() != args.title.strip().casefold():
             first["lines"] = [(first["title"], "")] + list(first["lines"])
         first["title"] = args.title
         md_sections[0] = first
@@ -612,7 +614,14 @@ def cmd_write(args) -> Dict[str, Any]:
         if not make_new and slide_no is not None and not args.overwrite:
             # 기존 슬라이드의 제목을 바꾸게 되면 사용자 확인 (노트와 같은 방식). 새 슬라이드는 해당 없음
             new_title = (md_sections[0]["title"] if md_sections else args.title) or ""
-            old_title = slide_units(prs.Slides(slide_no), slide_no)["title"]
+            # 제목 개체틀의 글만 기존 제목 (slide_units의 title은 개체틀이 없으면 본문 첫 줄이라 제목으로 보면 안 됨)
+            title_shape = _title_shape(prs.Slides(slide_no))
+            old_title = ""
+            if title_shape is not None:
+                try:
+                    old_title = str(title_shape.TextFrame.TextRange.Text).strip()
+                except Exception:
+                    old_title = ""
             if new_title.strip() and old_title and old_title.strip() != new_title.strip():
                 raise rt.UserDecisionError(
                     f"슬라이드 {slide_no}에 이미 제목이 있습니다 ({_preview_text(old_title)}). 아무것도 쓰지 않았습니다.",

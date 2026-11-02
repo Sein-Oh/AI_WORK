@@ -42,7 +42,7 @@ SUPPORTED = {
 }
 UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행"}
 PAGE_TYPES = ("pdf", "pptx")   # read --pages가 실제 쪽/슬라이드 번호인 형식 (그 밖은 항목 번호)
-PARSER_VERSION = 5          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta)
+PARSER_VERSION = 6          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만)
 MAX_SHEET_ROWS = 20000      # xlsx 시트당 최대 행 수
 MAX_FOLDER_FILES = 300      # 한 번에 새로 등록(파싱)할 최대 파일 수
 MAX_FOLDER_DEPTH = 3        # 폴더 기본 탐색 깊이
@@ -499,6 +499,8 @@ def _parse_pdf(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         if doc.needs_pass:
             raise rt.InputError(f"암호가 걸린 PDF입니다: {os.path.basename(path)}")
         raw = [(_pdf_items(page, _pdf_tables(page)), float(page.rect.height), float(page.rect.width)) for page in doc]
+        # 스캔 쪽 후보: 머리글·쪽 번호를 빼기 전에도 글이 없고 그림이 있는 쪽 (빈 쪽·간지는 OCR 대상이 아님)
+        scanned = [pno for pno, page in enumerate(doc, 1) if not raw[pno - 1][0] and _page_has_images(page)]
         meta = {"pages": doc.page_count, "title": (doc.metadata or {}).get("title") or ""}
     finally:
         doc.close()
@@ -553,14 +555,18 @@ def _parse_pdf(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not b.units:
         meta["ocr_needed"] = True
         rt.log("WARN", "텍스트가 없는 PDF입니다 (스캔 이미지일 가능성). OCR이 필요합니다.")
-    else:
+    elif scanned:
         # 일부 쪽만 스캔된 PDF: 그 쪽은 검색되지 않으므로 0건이어도 '없다'고 단정하면 안 됨
-        have = {u.get("page") for u in b.units}
-        blank = [p for p in range(1, len(pages) + 1) if p not in have]
-        if blank:
-            meta["pages_without_text"] = blank
-            rt.log("WARN", f"글자가 없는 쪽 {len(blank)}개 (스캔 쪽일 가능성, OCR 필요): p.{_page_list(blank)}")
+        meta["pages_without_text"] = scanned
+        rt.log("WARN", f"글자 없이 그림만 있는 쪽 {len(scanned)}개 (스캔 쪽일 가능성, OCR 필요): p.{_page_list(scanned)}")
     return b.units, meta
+
+
+def _page_has_images(page: Any) -> bool:
+    try:
+        return bool(page.get_images())
+    except Exception:
+        return False
 
 
 def _page_list(pages: List[int], limit: int = 10) -> str:
@@ -1582,16 +1588,24 @@ def _save_ext(save: Any) -> str:
     return ext if ext in (".xlsx", ".csv", ".md") else ".md"
 
 
+XLSX_CELL_MAX = 32000      # 엑셀 셀 글자 상한(32767)보다 조금 작게
+
+
 def _xlsx_safe(value: Any) -> Any:
     if not isinstance(value, str):
         return value
     from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-    return ILLEGAL_CHARACTERS_RE.sub("", value)[:32000]
+    return ILLEGAL_CHARACTERS_RE.sub("", value)[:XLSX_CELL_MAX]
+
+
+def _xlsx_cut_text(rows: int) -> str:
+    return f"셀 글자 상한 {XLSX_CELL_MAX}자 초과: {rows}행 잘림 (.md로 저장하면 전체)"
 
 
 def write_xlsx_table(path: str, header: List[str], rows: List[List[Any]], widths: List[int],
-                     sheet: str = "결과") -> str:
-    """표를 xlsx로 저장합니다 (머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정). 저장 후 다시 열어 행 수를 확인합니다."""
+                     sheet: str = "결과") -> Tuple[str, int]:
+    """표를 xlsx로 저장합니다 (머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정). 저장 후 다시 열어 행 수를 확인합니다.
+    반환: (저장 경로, 셀 글자 상한에서 글이 잘린 행 수). 잘린 행이 있으면 호출하는 쪽이 UNVERIFIED로 알립니다."""
     try:
         import openpyxl
         from openpyxl.styles import Alignment, Font
@@ -1626,7 +1640,8 @@ def write_xlsx_table(path: str, header: List[str], rows: List[List[Any]], widths
         wb.close()
     if n != len(rows) + 1:
         raise RuntimeError(f"저장한 xlsx의 행 수가 다릅니다 (기대 {len(rows) + 1}, 실제 {n}): {out}")
-    return out
+    cut_rows = sum(1 for row in rows if any(isinstance(v, str) and len(v) > XLSX_CELL_MAX for v in row))
+    return out, cut_rows
 
 
 def _unit_view(n: int, u: Dict[str, Any], text: str) -> Dict[str, Any]:
@@ -1647,11 +1662,12 @@ def cmd_read(args) -> Dict[str, Any]:
     unit_name = UNIT_NAMES.get(doc["type"], "항목")
     # 쪽 정보가 있는 형식(docx/hwpx의 저장된 쪽 경계 포함)은 --pages가 실제 쪽: search의 근거 'p.12'를 그대로 읽을 수 있게
     by_page = doc["type"] in PAGE_TYPES or any(u.get("page") for u in units)
+    req_pages: Optional[set] = None
     if args.units:
         numbers = parse_pages(args.units, total) if total else []
     elif by_page and args.pages:
-        pages = set(parse_pages(args.pages, _doc_pages(doc) or 0)) if total else set()
-        numbers = [i for i, u in enumerate(units, 1) if u.get("page") in pages]
+        req_pages = set(parse_pages(args.pages, _doc_pages(doc) or 0)) if total else set()
+        numbers = [i for i, u in enumerate(units, 1) if u.get("page") in req_pages]
     else:
         numbers = parse_pages(args.pages, total) if total else []
     selected = [units[n - 1] for n in numbers]
@@ -1660,11 +1676,16 @@ def cmd_read(args) -> Dict[str, Any]:
                               "pages_mode": "page" if by_page else "item",
                               "sections_total": _doc_sections(doc), "meta": doc.get("meta", {})}
     meta = doc.get("meta") or {}
-    # 원본에서 읽지 않은 부분: 엑셀 시트당 행 상한, 글자 없는 쪽 (읽기 결과가 문서 전부가 아님을 알림)
-    src_cut = f"원본 시트의 {MAX_SHEET_ROWS}행을 넘는 부분은 읽지 않음" if meta.get("rows_truncated") else ""
-    blank_pages = meta.get("pages_without_text") or []
+    # 원본에서 읽지 않은 부분: 엑셀 시트당 행 상한 (읽기 결과도 저장 파일도 문서 전부가 아님)
+    src_cut = f"원본 시트의 {MAX_SHEET_ROWS}행을 넘는 부분은 읽지 않음 (읽기 상한, --save 파일에도 없음)" \
+        if meta.get("rows_truncated") else ""
+    # 글자 없이 그림만 있는 쪽 (스캔 쪽): 읽으려는 범위 안의 쪽만 알림. 잘림이 아니라 주의 사항이라 notes에
+    blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, bool(args.units))
+    notes: List[str] = []
     if blank_pages:
         result["pages_without_text"] = blank_pages[:50]
+        notes.append(f"글자 없이 그림만 있는 쪽 {len(blank_pages)}개 (스캔 쪽일 수 있음, OCR 필요): p.{_page_list(blank_pages)}")
+        result["notes"] = notes
 
     if args.save:
         ext = _save_ext(args.save)
@@ -1673,23 +1694,34 @@ def cmd_read(args) -> Dict[str, Any]:
         header = ["위치", "쪽", "장절", "번호", "제목", "내용"]
         rows = [[u["loc"], u.get("page") if u.get("page") is not None else "", section_text(u), u.get("number") or "",
                  u.get("heading", ""), u["text"]] for u in selected]
+        cut_cells = 0
         if ext == ".csv":
             out = rt.write_csv_rows(out, [header] + rows)
         elif ext == ".xlsx":
-            out = write_xlsx_table(out, header, rows, [14, 6, 40, 10, 30, 80], "내용")
+            out, cut_cells = write_xlsx_table(out, header, rows, [14, 6, 40, 10, 30, 80], "내용")
         else:
             out = rt.write_text(out, units_to_markdown(name, selected, path))
         result.update(output_file=out, next_commands=_write_next_commands(out))
         preview = f"{name}: {len(selected)}개 {unit_name}을(를) 파일로 저장했습니다 ({out})"
         # R1: 저장한 파일을 다시 열어 확인 (CSV는 행 수까지)
         problems = [p for p in [rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None)] if p]
+        reasons: List[str] = []
+        if cut_cells:
+            reasons.append(_xlsx_cut_text(cut_cells))
         if src_cut:
-            result.update(truncated=True, truncated_reason=src_cut)
-            problems.append(src_cut + " (저장 파일에도 없음)")
+            reasons.append(src_cut)
+        if reasons:
+            result.update(truncated=True, truncated_reason=reasons)
+        problems += reasons
         if problems:
-            return rt.ok_unverified(TOOL, "read", preview, problems, **result)
-        return rt.ok(TOOL, "read", preview, "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
-                     verified=True, **result)
+            payload = rt.ok_unverified(TOOL, "read", preview, problems, **result)
+            if notes:
+                payload["agent_directive"] += " 주의: " + "; ".join(notes) + "."
+            return payload
+        directive = "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요."
+        if notes:
+            directive += " 주의: " + "; ".join(notes) + ". 사용자에게 알리세요."
+        return rt.ok(TOOL, "read", preview, directive, verified=True, **result)
 
     if args.format == "summary":
         preview = (f"{name}: {doc['type']} 문서, {unit_name} {total}개, 쪽 {_doc_pages(doc) or '-'}, "
@@ -1699,7 +1731,8 @@ def cmd_read(args) -> Dict[str, Any]:
     if not selected:
         result.update(units=[], truncated=False, shown=0)
         return rt.ok(TOOL, "read", f"{name}: 글이 없습니다 (0건)",
-                     "VERIFIED: 0건. 이 문서에는 읽을 글이 없습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.", **result)
+                     "VERIFIED: 0건. 이 문서에는 읽을 글이 없습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요."
+                     + (" 주의: " + "; ".join(notes) + "." if notes else ""), **result)
 
     # 본문: 상한까지 담고, 넘으면 다음 구간 명령 제공
     budget = rt.DEFAULT_MAX_CHARS
@@ -1724,17 +1757,15 @@ def cmd_read(args) -> Dict[str, Any]:
     result["truncated"] = truncated
     result["shown"] = len(shown)
     reasons = []
+    stem = os.path.splitext(name)[0]
     if cut_units:
-        reasons.append(f"{unit_name} {','.join(map(str, cut_units))}의 글이 길어 앞 {budget}자만 표시 (전체는 --save 파일에 있음)")
+        reasons.append(f"{unit_name} {','.join(map(str, cut_units))}의 글이 길어 앞 {budget}자만 표시 "
+                       "(전체는 next_commands의 --save .md 파일에 있음)")
     if src_cut:
         reasons.append(src_cut)
-    if blank_pages:
-        reasons.append(f"글자가 없는 쪽 {len(blank_pages)}개 (스캔 쪽일 수 있음, OCR 필요): p.{_page_list(blank_pages)}")
     if reasons:
         result["truncated_reason"] = reasons
-    save_cmd = rt.next_command("reader.py", ["read", "--file", path, "--save"], "전체 내용을 파일로 저장 (잘린 글 포함, 다른 문서에 넣을 때)")
-    if truncated and not dropped:
-        result["next_commands"] = [save_cmd]
+    nexts: List[Dict[str, str]] = []
     if dropped:
         nxt_i = len(shown)
         nxt, last = numbers[nxt_i], numbers[-1]
@@ -1745,19 +1776,39 @@ def cmd_read(args) -> Dict[str, Any]:
             cont = ["--pages", f"{cut.get('page')}-{selected[-1].get('page')}"]
         else:                                    # 쪽 중간에서 잘림 -> 단위 번호로 이어 읽기
             cont = ["--units", f"{nxt}-{last}"]
-        result["next_commands"] = [
-            rt.next_command("reader.py", ["read", "--file", path] + cont, f"나머지 {unit_name} 이어서 읽기"),
-            save_cmd,
-        ]
-    preview = f"{name}: {unit_name} {len(shown)}개 표시 (전체 {total}개)" + (" - 길이 제한으로 일부만 표시" if truncated else "")
+        nexts.append(rt.next_command("reader.py", ["read", "--file", path] + cont, f"나머지 {unit_name} 이어서 읽기"))
+    if dropped or cut_units:
+        # 잘린 긴 글도 .md에는 전부 들어감 (.xlsx는 셀당 32000자 상한). 시트 행 상한으로 읽지 않은 부분은 저장해도 없음
+        nexts.append(rt.next_command("reader.py", ["read", "--file", path, "--save", f"{stem}_전체.md"],
+                                     "읽은 내용 전체를 .md 파일로 저장 (잘린 글 포함, 다른 문서에 넣을 때)"
+                                     + (f". 원본 시트의 {MAX_SHEET_ROWS}행을 넘는 부분은 저장 파일에도 없음" if src_cut else "")))
+    if nexts:
+        result["next_commands"] = nexts
+    preview = f"{name}: {unit_name} {len(shown)}개 표시 (전체 {total}개)" + (" - 일부만 표시" if truncated else "")
     if truncated:
-        directive = ("VERIFIED: 읽기 완료. 일부만 표시되었습니다" + (f" ({'; '.join(reasons)})" if reasons else "")
-                     + ". 사용자에게 알리고, 필요하면 next_commands로 이어서 읽거나 --save로 전체를 저장하세요.")
+        directive = "VERIFIED: 읽기 완료. 일부만 표시되었습니다 (" + "; ".join(reasons or ["길이 제한"]) + ")."
+        if nexts:
+            directive += " 사용자에게 알리고, 필요하면 next_commands로 이어서 읽거나 .md로 저장하세요."
+        else:
+            directive += " 더 읽거나 저장할 방법이 없습니다(읽기 상한). 사용자에게 그대로 알리세요."
     else:
         directive = "VERIFIED: 읽기 완료. 내용을 인용할 때는 page, section, number로 근거(파일 p.N, 장절 (번호))를 함께 알리세요."
-        if reasons:
-            directive += " 주의: " + "; ".join(reasons) + ". 사용자에게 알리세요."
+    if notes:
+        directive += " 주의: " + "; ".join(notes) + ". 사용자에게 알리세요."
     return rt.ok(TOOL, "read", preview, directive, **result)
+
+
+def _read_blank_pages(flagged: List[int], selected: List[Dict[str, Any]], req_pages: Optional[set],
+                      by_units: bool) -> List[int]:
+    """글자 없는 쪽 중 읽으려는 범위 안의 쪽. --pages면 그 쪽들, --units면 고른 단위의 첫 쪽~끝 쪽, 아니면 전부."""
+    if not flagged:
+        return []
+    if req_pages is not None:
+        return [p for p in flagged if p in req_pages]
+    if by_units:
+        got = [u["page"] for u in selected if u.get("page") is not None]
+        return [p for p in flagged if got and min(got) <= p <= max(got)]
+    return list(flagged)
 
 
 # ==============================================================================
@@ -1955,7 +2006,8 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """검색할 문서를 정합니다. --file이 있으면 그 파일/폴더의 미등록/변경 문서를 먼저 등록, 없으면 캐시 전체만.
     반환: (문서 목록, 정보: indexed_now, from_cache, skipped, remaining, stale, missing, skipped_types)"""
     info: Dict[str, Any] = {"indexed_now": [], "from_cache": 0, "skipped": [], "remaining": 0, "stale": [],
-                            "missing": 0, "skipped_types": {}, "folder": None, "excluded_dirs": [], "refreshed": 0}
+                            "missing": 0, "skipped_types": {}, "folder": None, "excluded_dirs": [], "refreshed": 0,
+                            "reindex": 0, "orphan": 0}
     docs: List[Dict[str, Any]] = []
     if args.file:
         raw = os.path.expandvars(os.path.expanduser(str(args.file).strip().strip('"')))
@@ -1980,25 +2032,39 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     index = load_index()
     if not index:
         raise _not_indexed_error()
+    tried = 0
     for path in sorted(index, key=lambda p: index[p].get("parsed_at", ""), reverse=True):
         doc = load_cached_only(path)
         if doc is None:
-            info["skipped"].append({"file": path, "reason": "캐시 파일이 없거나 손상됨 -> 다시 등록 필요"})
-            info["stale"].append(path)
+            # 검색하지 않은 문서는 skipped에만 (stale에 넣으면 '옛 내용으로 검색'으로 두 번 셈)
+            info["skipped"].append({"file": path, "reason": "캐시 파일이 없거나 손상됨 -> index --all로 다시 등록 필요"})
+            info["reindex"] += 1
             continue
         if not os.path.exists(path):
             doc["file_missing"] = True
             info["missing"] += 1
-        if is_stale_doc(doc) and not doc.get("file_missing") and info["refreshed"] < STALE_REFRESH_MAX:
+        attempted = False
+        if is_stale_doc(doc) and not doc.get("file_missing") and tried < STALE_REFRESH_MAX:
+            tried += 1
+            attempted = True
             try:
                 doc, _ = load_document_status(path)     # 원본이 바뀐 캐시는 그 자리에서 다시 읽음 (JIT 복구)
                 info["refreshed"] += 1
             except Exception as e:
                 rt.debug(f"다시 읽기 실패, 이전 캐시로 검색: {e}")
         if doc.get("parser_version") != PARSER_VERSION:
-            # 이전 파서 형식의 캐시는 단위 키가 달라 검색하지 않음 (다시 등록하면 검색됨)
-            info["skipped"].append({"file": path, "reason": "이전 형식의 캐시인데 다시 읽지 못함 -> 다시 등록 필요"})
-            info["stale"].append(path)
+            # 이전 파서 형식의 캐시는 단위 키가 달라 검색하지 않음 (skipped에만, stale은 '옛 내용으로 검색한 문서'만)
+            if doc.get("file_missing"):
+                reason = "이전 형식의 캐시인데 원본이 없어 다시 읽을 수 없음 -> clear --missing으로 정리"
+                info["orphan"] += 1
+            elif not attempted:
+                reason = (f"이전 형식의 캐시인데 검색 때 다시 읽는 상한 {STALE_REFRESH_MAX}개를 넘어 다시 읽지 않음 "
+                          "-> index --all로 다시 등록 필요")
+                info["reindex"] += 1
+            else:
+                reason = "이전 형식의 캐시인데 다시 읽지 못함 -> index --all로 다시 등록 필요"
+                info["reindex"] += 1
+            info["skipped"].append({"file": path, "reason": reason})
             continue
         if is_stale_doc(doc):
             doc["_stale"] = True
@@ -2066,6 +2132,7 @@ def cmd_search(args) -> Dict[str, Any]:
         save_arg = None if args.save is True else args.save
         out = rt.resolve_output_path(save_arg, stem, ext)
         saved = hits[:MAX_SAVE_HITS]
+        cut_cells = 0
         header = ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥"]
         rows = []
         for h in saved:
@@ -2077,7 +2144,7 @@ def cmd_search(args) -> Dict[str, Any]:
         if ext == ".csv":
             out = rt.write_csv_rows(out, [header] + rows)
         elif ext == ".xlsx":
-            out = write_xlsx_table(out, header, rows, [22, 6, 45, 10, 14, 60, 80], "검색결과")
+            out, cut_cells = write_xlsx_table(out, header, rows, [22, 6, 45, 10, 14, 60, 80], "검색결과")
         else:
             lines = [f"# 검색 결과: {args.query}", ""]
             for h in saved:
@@ -2092,6 +2159,8 @@ def cmd_search(args) -> Dict[str, Any]:
             result.update(save_truncated=True,
                           save_truncated_reason=f"검색 결과 {len(hits)}건 중 앞 {len(saved)}건만 저장 (저장 상한 {MAX_SAVE_HITS}건)")
         save_problem = rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None)
+        if not save_problem and cut_cells:
+            save_problem = _xlsx_cut_text(cut_cells)
         if save_problem:
             result["save_problem"] = save_problem
         nexts += _write_next_commands(out)
@@ -2112,9 +2181,13 @@ def cmd_search(args) -> Dict[str, Any]:
         view.append(item)
     result["matches"] = view
 
-    if info["stale"] and not args.file:
+    if (info["stale"] or info["reindex"]) and not args.file:
         nexts.append(rt.next_command("reader.py", ["index", "--all"],
-                                     f"바뀌었거나 이전 형식인 캐시 {len(info['stale'])}개 다시 등록 (읽기 전용)"))
+                                     f"원본이 바뀌었거나 다시 읽지 못한 캐시 {len(info['stale']) + info['reindex']}개 다시 등록 (읽기 전용)"))
+    if info["orphan"]:
+        # 원본이 없는 이전 형식 캐시는 index --all로도 다시 읽을 수 없음 (반복 안내를 막음). 원본 문서는 지우지 않음
+        nexts.append(rt.next_command("reader.py", ["clear", "--missing", "--dry-run"],
+                                     f"원본이 없는 캐시 정리 미리보기 (이전 형식 {info['orphan']}개 포함, 원본 문서는 그대로)"))
     if info["remaining"] and info["folder"]:
         nexts.append(rt.next_command("reader.py", ["index", "--folder", info["folder"], "--max-files", str(args.max_files)],
                                      f"아직 등록하지 못한 {info['remaining']}개 파일 등록 (읽기 전용)"))
@@ -2136,11 +2209,11 @@ def cmd_search(args) -> Dict[str, Any]:
         scope += f"(새로 등록 {len(info['indexed_now'])}개)"
     notes = ""
     if info["stale"] and not args.file:
-        notes += (f" 캐시 {len(info['stale'])}개는 원본이 바뀌었거나 이전 형식입니다. 최신 내용이 필요하면 "
+        notes += (f" 캐시 {len(info['stale'])}개는 원본이 바뀌기 전 내용입니다(결과의 stale 표시). 최신 내용이 필요하면 "
                   "next_commands의 index --all(읽기 전용)을 실행한 뒤 같은 검색을 1번 다시 하세요.")
     if info["indexed_now"]:
         notes += " 새로 등록한 파일(indexed_now)을 사용자에게 알리세요."
-    gaps = _search_gaps(docs, info)
+    gaps = _search_gaps(docs, info, pages, sec_filter)
     if gaps:
         result["not_searched"] = gaps
     if total == 0:
@@ -2175,22 +2248,51 @@ def cmd_search(args) -> Dict[str, Any]:
     return rt.ok(TOOL, "search", preview, directive + notes, **result)
 
 
-def _search_gaps(docs: List[Dict[str, Any]], info: Dict[str, Any]) -> List[str]:
-    """검색 범위에서 빠진 것: 결과가 없거나 적어도 '없다'고 단정하면 안 되는 이유들."""
+def _pages_in_filter(doc: Dict[str, Any], flagged: List[int], pages: Optional[set], sec_filter: str) -> List[int]:
+    """글자 없는 쪽 중 검색 조건(--pages, --section) 안에 드는 쪽. 장절은 그 쪽 바로 앞 글의 장절로 봅니다
+    (글이 없는 쪽에는 장절 정보가 없음)."""
+    out = [p for p in flagged if pages is None or p in pages]
+    if not sec_filter or not out:
+        return out
+    units = [u for u in doc.get("units") or [] if u.get("page") is not None]
+    keep = []
+    for p in out:
+        before = [u for u in units if u["page"] < p]
+        if before and sec_filter in re.sub(r"\s+", " ", section_text(before[-1])).lower():
+            keep.append(p)
+    return keep
+
+
+def _search_gaps(docs: List[Dict[str, Any]], info: Dict[str, Any], pages: Optional[set] = None,
+                 sec_filter: str = "") -> List[str]:
+    """검색 범위에서 빠진 것: 결과가 없거나 적어도 '없다'고 단정하면 안 되는 이유들.
+    다시 할 명령(index --all, clear --missing)을 문구에 넣어 UNVERIFIED directive만 보고도 알 수 있게 합니다."""
     gaps: List[str] = []
     if info["remaining"]:
         gaps.append(f"아직 등록하지 못한 파일 {info['remaining']}개 (next_commands의 index로 등록)")
     if info["skipped"]:
-        gaps.append(f"읽지 못한 파일 {len(info['skipped'])}개 (skipped)")
+        how = []
+        if info.get("reindex"):
+            how.append(f"{info['reindex']}개는 reader.py index --all로 다시 등록")
+        if info.get("orphan"):
+            how.append(f"{info['orphan']}개는 원본이 없어 다시 읽을 수 없음, reader.py clear --missing으로 정리")
+        gaps.append(f"읽지 못한 파일 {len(info['skipped'])}개 (skipped" + (": " + ", ".join(how) if how else "") + ")")
     if info["stale"]:
-        gaps.append(f"원본이 바뀐 뒤 다시 읽지 못한 캐시 {len(info['stale'])}개 (옛 내용으로 검색, 결과의 stale 표시)")
+        gaps.append(f"원본이 바뀐 뒤 다시 읽지 못한 캐시 {len(info['stale'])}개 (옛 내용으로 검색, 결과의 stale 표시, "
+                    "reader.py index --all로 다시 등록)")
     ocr = [os.path.basename(d["file"]) for d in docs if (d.get("meta") or {}).get("ocr_needed")]
     if ocr:
         gaps.append(f"글자가 없는 PDF {len(ocr)}개 (스캔 이미지, OCR 필요): {', '.join(ocr[:5])}")
-    blank = [(os.path.basename(d["file"]), (d.get("meta") or {}).get("pages_without_text")) for d in docs
-             if (d.get("meta") or {}).get("pages_without_text") and not (d.get("meta") or {}).get("ocr_needed")]
+    blank = []
+    for d in docs:
+        meta = d.get("meta") or {}
+        if meta.get("ocr_needed"):
+            continue
+        flagged = _pages_in_filter(d, meta.get("pages_without_text") or [], pages, sec_filter)
+        if flagged:
+            blank.append((os.path.basename(d["file"]), flagged))
     if blank:
-        gaps.append(f"글자가 없는 쪽이 있는 PDF {len(blank)}개 (스캔 쪽일 수 있음, 그 쪽은 검색 안 됨, OCR 필요): "
+        gaps.append(f"글자 없이 그림만 있는 쪽이 있는 PDF {len(blank)}개 (스캔 쪽일 수 있음, 그 쪽은 검색 안 됨, OCR 필요): "
                     + ", ".join(f"{n} p.{_page_list(p, 5)}" for n, p in blank[:5]))
     cut = [os.path.basename(d["file"]) for d in docs if (d.get("meta") or {}).get("rows_truncated")]
     if cut:

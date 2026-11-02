@@ -297,7 +297,9 @@ def cmd_read(args) -> Dict[str, Any]:
             rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기"),
             rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"],
                             "이 문서의 단락을 엑셀 표로 옮기기")])
-        return rt.ok(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", **result)
+        return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
+                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          **result)
     if filtered and not selected:
         result.update(paragraphs=[], truncated=False)
         return rt.ok(TOOL, "read", f"{name}: {selection}에 글이 있는 단락 없음 (count 0)",

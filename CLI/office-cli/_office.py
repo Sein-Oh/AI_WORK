@@ -700,17 +700,21 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             if hit is not None:
                 t = OfficeTarget(kind, hit["app"], hit["doc"], "open", readonly)
             else:
-                path = os.path.abspath(os.path.expandvars(target.strip('"')))
+                # 전체 경로인지는 %USERPROFILE%·~ 를 푼 뒤에 판단 (%USERPROFILE%\Desktop\새.xlsx도 전체 경로)
+                expanded = os.path.expanduser(os.path.expandvars(target.strip('"')))
+                is_abs = os.path.isabs(expanded)
+                path = os.path.abspath(expanded)
                 exists = os.path.isfile(path)
-                if not exists and not os.path.isabs(target) and os.path.isfile(os.path.join(rt.get_data_dir(), target)):
+                if not exists and not is_abs and os.path.isfile(os.path.join(rt.get_data_dir(), target)):
                     path, exists = os.path.join(rt.get_data_dir(), target), True
-                if not exists and (readonly or not create or not os.path.isabs(target.strip('"'))):
+                if not exists and (readonly or not create or not is_abs):
                     # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
                     names = [d["name"] for d in docs]
                     tail = "" if readonly or not create else " 새 파일은 사용자에게 전체 경로를 물어 --target으로 줄 때만 만듭니다."
                     err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
                                        extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
-                    if names and not err.candidates and "[추천]" not in str(err):
+                    # 파일 이름만 준 경우에만 열린 문서를 [후보]로 (전체 경로가 없는 것은 열린 문서 이름의 오타가 아님)
+                    if names and not is_abs and not err.candidates and "[추천]" not in str(err):
                         err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
                                            f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names)
                     raise err

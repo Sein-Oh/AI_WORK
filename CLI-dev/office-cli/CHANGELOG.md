@@ -2,6 +2,31 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.11] - 2026-11-02
+
+2차 점검에서 찾은 오류 수정 (1.4.10 회귀 포함). 회귀 테스트: `tests/test_review_v1411.py`.
+
+### 수정 (reader)
+- PDF 글자 없는 쪽(1.4.10 회귀): 머리글·쪽 번호를 뺀 뒤에 세어 빈 쪽·간지까지 "OCR 필요"로 알리고, 그 문서의 모든 검색이 `UNVERIFIED`가 되던 문제.
+  이제 빼기 전에도 글이 없고 그림이 있는 쪽만 `pages_without_text`(`PARSER_VERSION` 6). `search`는 `--pages`/`--section` 안의 쪽만 `not_searched`에 넣고, `read`는 읽으려는 범위 안의 쪽만 알립니다.
+- 이전 형식 캐시: 검색 때 다시 읽는 상한(20개)을 넘어 시도하지 않은 문서도 "다시 읽지 못함"으로 알리던 문제(이유를 나눔), `skipped`와 `stale`에 두 번 세어 "옛 내용으로 검색"이라고 잘못 알리던 문제(`skipped`에만),
+  원본이 없는 이전 형식 캐시에 `index --all`을 안내해 같은 안내가 반복되던 문제(`clear --missing --dry-run` 명령). 할 명령(`index --all`, `clear --missing`)을 `UNVERIFIED` directive 문구에도 넣습니다.
+- `read --save x.xlsx`, `search --save x.xlsx --full`: 셀당 32,000자에서 잘라 저장하고도 `VERIFIED`였던 문제. 잘린 행이 있으면 `UNVERIFIED`("셀 글자 상한 32000자 초과: N행 잘림 (.md로 저장하면 전체)"). 긴 글이 잘린 `read`의 저장 명령은 `.md`로.
+- `read`: `truncated_reason`이 저장할 때만 문자열이던 것을 늘 목록으로. 글자 없는 쪽 안내는 잘림이 아니므로 `notes`로. 엑셀 시트 행 상한에서만 잘렸으면 저장해도 그 뒤가 없으므로 `--save` 명령과 "전체 저장" 안내를 주지 않고 상한을 알립니다.
+
+### 수정 (PPT·엑셀·워드)
+- `ppt.py write --slide N --title`(1.4.10 회귀): 제목 개체틀이 없는 슬라이드의 본문 첫 줄을 기존 제목으로 보고 `needs_user_decision`을 내던 문제. 제목 개체틀의 글만 기존 제목으로 봅니다(개체틀이 없으면 확인 없음).
+- `ppt.py write --title 제목 --file 내용.md`: `.md` 첫 절의 제목이 `--title`과 같으면 본문 첫 줄에 같은 제목이 또 들어가던 문제(공백·대소문자 무시 비교).
+- `excel.py`/`word.py`/`ppt.py read --save`: 저장한 파일을 다시 열지 않고 `VERIFIED`였던 문제(R1). 엑셀 CSV는 빈 행을 뺀 행 수까지 비교, 확인하지 못하면 `UNVERIFIED`.
+- 닫힌 xlsx 읽기: 작은 범위(`A1:B2`)에도 시트 전체를 훑어 데이터 범위를 세던 것을 범위 생략·열/행 전체(`B:B`, `5:7`)일 때만, `Sheet!A1`의 시트로 바꾼 뒤에 셉니다.
+
+### 수정 (공통·outlook)
+- 오류 로그 가리기: 짧은 이름(`-q` = `--query`)과 줄여 쓴 이름(`--que`, `--bod=`)의 값이 그대로 남던 문제, `--map`(찾아 바꿀 JSON) 추가. 모든 파서가 줄여 쓴 옵션을 받지 않습니다(`allow_abbrev=False`).
+- `check_saved_file`: `.pptm`도 python-pptx로 다시 열어 확인(`.docm`은 python-docx가 열지 못해 그대로 `UNVERIFIED`).
+- 쓰기 `--target`(1.4.10 W8): `%USERPROFILE%\Desktop\새.xlsx`처럼 환경 변수·`~`가 든 전체 경로를 파일 이름으로 보고 거부하던 문제(푼 뒤에 판단). 없는 전체 경로에 열린 문서 전부를 `[후보]`로 주던 문제(파일 이름만 줄 때만 `[후보]`).
+- `outlook.py current --save`: 저장 확인 결과(`save_problem`)를 무시하고 늘 `VERIFIED`였던 문제(`read`와 같은 응답).
+- `outlook.py --attach`: 폴더 이름에 `;`가 든 경로는 하나일 때만 첨부되던 문제. 나눈 조각이 있는 파일이 아니면 뒤 조각을 이어 붙여 찾습니다.
+
 ## [1.4.10] - 2026-11-01
 
 전체 검토에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1410.py`.

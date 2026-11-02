@@ -446,7 +446,7 @@ def test_r1_long_unit_is_marked_truncated_with_save_command(tmp_path, capsys):
     code, out = _run(reader, capsys, "read", "--file", str(p), "--units", "1")
     assert code == 0 and out["truncated"] is True and out["units"][0]["text_truncated"] is True
     assert out["units"][0]["text_chars"] == 9000 and len(out["units"][0]["text"]) == rt.DEFAULT_MAX_CHARS
-    assert any(c["command"].endswith("--save") for c in out["next_commands"]) and "truncated_reason" in out
+    assert any("--save" in c["command"] and ".md" in c["command"] for c in out["next_commands"]) and "truncated_reason" in out
 
 
 def test_r2_partially_scanned_pdf_reports_pages_without_text(tmp_path, capsys):
@@ -454,16 +454,22 @@ def test_r2_partially_scanned_pdf_reports_pages_without_text(tmp_path, capsys):
     p = tmp_path / "부분스캔.pdf"
     doc = pymupdf.open()
     doc.new_page().insert_text((72, 72), "first page text", fontname="helv", fontsize=11)
-    doc.new_page()                                                        # 스캔 쪽(글자 없음)
+    doc.new_page().insert_image(pymupdf.Rect(72, 72, 200, 200), pixmap=_pixmap(pymupdf))   # 스캔 쪽(그림만, 1.4.11)
     doc.new_page().insert_text((72, 72), "third page text", fontname="helv", fontsize=11)
     doc.save(str(p))
     doc.close()
     code, out = _run(reader, capsys, "read", "--file", str(p))
     assert code == 0 and out["meta"]["pages_without_text"] == [2] and out["pages_without_text"] == [2]
-    assert "글자가 없는 쪽" in out["agent_directive"]
+    assert "그림만 있는 쪽" in out["agent_directive"]
     code, out = _run(reader, capsys, "search", "--query", "warranty", "--file", str(p))
     assert code == 0 and out["total_matches"] == 0 and out["agent_directive"].startswith("UNVERIFIED:")
-    assert any("글자가 없는 쪽" in g for g in out["not_searched"])
+    assert any("그림만 있는 쪽" in g for g in out["not_searched"])
+
+
+def _pixmap(pymupdf):
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 20, 20), False)
+    pix.clear_with(200)
+    return pix
 
 
 def test_r3_sheet_row_limit_and_save_hit_limit_are_reported(tmp_path, capsys, monkeypatch):
@@ -512,4 +518,4 @@ def test_r9_index_reports_cache_write_failure(tmp_path, capsys, monkeypatch):
 
 
 def test_r9_normalize_doc_compat_filler_is_removed():
-    assert not hasattr(reader, "normalize_doc") and reader.PARSER_VERSION == 5
+    assert not hasattr(reader, "normalize_doc") and reader.PARSER_VERSION == 6

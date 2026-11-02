@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.10"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.11"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -245,7 +245,7 @@ def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional
         elif ext == ".docx":
             import docx
             docx.Document(path)
-        elif ext == ".pptx":
+        elif ext in (".pptx", ".pptm"):        # python-pptx는 매크로 포함 pptm도 엶 (docm은 python-docx가 열지 못함)
             import pptx
             pptx.Presentation(path)
         elif ext in (".csv", ".tsv"):
@@ -359,25 +359,46 @@ def error_log_path() -> str:
 # 오류 로그에 값을 남기지 않는 옵션 (본문·받는 사람·검색어 등 문서 내용과 개인정보). 경로와 그 밖의 인자는 그대로 남깁니다.
 REDACT_OPTIONS = {"--body", "--text", "--subject", "--to", "--cc", "--bcc", "--from", "--query", "--find",
                   "--replace", "--value", "--values", "--formula", "--header", "--title", "--cards", "--anchor",
-                  "--search", "--new-name"}
+                  "--search", "--new-name", "--map"}
+# 위 옵션의 짧은 이름 (모든 office-cli 파서에서 모음, 테스트로 확인): reader/outlook -q = --query
+REDACT_SHORT = {"-q": "--query"}
 # 도구마다 같은 이름이 내용이 아닌 옵션 (office.py transfer --from excel --to word, ppt.py slide --to 3)
 REDACT_KEEP = {"office": {"--from", "--to"}, "ppt": {"--to"}}
 
 
-_REDACTED = re.compile(r"^(?:--[\w-]+=)?<\d+자 생략>$")
+_REDACTED = re.compile(r"^(?:-{1,2}[\w-]+=)?<\d+자 생략>$")
+
+
+def _hidden_option(opt: str, hidden: set) -> bool:
+    """내용 옵션이면 True. 줄여 쓴 이름(--que)도 내용 옵션의 앞부분이면 가립니다
+    (파서는 줄임을 받지 않지만, 그 인자 오류도 오류 로그에 남으므로)."""
+    if opt in hidden:
+        return True
+    return len(opt) >= 3 and any(h.startswith(opt) for h in hidden)
 
 
 def redact_argv(argv: Sequence[Any], tool: str = "") -> List[str]:
     """내용 옵션의 값을 '<N자 생략>'으로 바꿉니다 (AGENTS.md: 오류 로그에 본문·개인정보를 남기지 않음).
-    '--opt 값', '--opt=값', 값이 여러 개인 옵션(--formula a b)을 모두 처리합니다."""
+    '--opt 값', '--opt=값', '-q 값', '-q값', 줄여 쓴 '--que 값', 값이 여러 개인 옵션(--formula a b)을 모두 처리합니다."""
     hidden = REDACT_OPTIONS - REDACT_KEEP.get(tool, set())
+    shorts = {k for k, v in REDACT_SHORT.items() if v in hidden}
     out: List[str] = []
     hiding = False
     for a in [str(x) for x in argv]:
         if a.startswith("--"):
             opt, eq, val = a.partition("=")
-            hiding = opt in hidden and not eq
-            out.append(f"{opt}=<{len(val)}자 생략>" if eq and opt in hidden else a)
+            secret = _hidden_option(opt, hidden)
+            hiding = secret and not eq
+            out.append(f"{opt}=<{len(val)}자 생략>" if eq and secret else a)
+            continue
+        short = a[:2]
+        if a.startswith("-") and not a.startswith("--") and short in shorts:
+            hiding = len(a) == 2
+            if len(a) > 2:                        # -q값, -q=값 (붙여 쓴 값)
+                val = a[3:] if a[2] == "=" else a[2:]
+                out.append(f"{short}=<{len(val)}자 생략>")
+            else:
+                out.append(a)
             continue
         if hiding and not (a.startswith("-") and len(a) == 2 and a[1].isalpha()):
             out.append(f"<{len(a)}자 생략>")
@@ -459,6 +480,12 @@ class JsonArgumentParser(argparse.ArgumentParser):
     """인자 오류를 텍스트 대신 JSON(exit 2)으로 응답하는 ArgumentParser. 서브파서에도 그대로 상속됩니다."""
 
     tool_name = ""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # 줄여 쓴 옵션(--que = --query)을 받지 않음: 지어낸 옵션이 다른 옵션으로 해석되는 일과,
+        # 오류 로그에서 내용 옵션을 가리지 못하는 일을 막음 (서브파서도 이 클래스로 만들어짐)
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
 
     def parse_args(self, args=None, namespace=None):  # type: ignore[override]
         # 최상위 파서만 parse_args를 부릅니다 (서브파서는 parse_known_args). 오류 로그에 남길 실제 인자를 기억합니다.

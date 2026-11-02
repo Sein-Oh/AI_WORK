@@ -301,7 +301,8 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
             ws = wb[found]
         else:
             ws = wb[names[0]] if wb.active is None else wb.active
-        mr1, mc1, mr2, mc2 = _closed_bounds(ws)
+        # 데이터 범위(_closed_bounds, 크기 정보 없는 파일은 시트 전체를 훑음)는 범위를 생략했거나
+        # 열·행 전체(B:B, 5:7)일 때만, 그리고 Sheet!A1의 시트로 바꾼 뒤에 셉니다 (작은 범위 읽기마다 전체를 훑지 않게)
         if address:
             sh, cells = split_sheet(address)
             if sh:
@@ -309,11 +310,13 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
                 if found is None:
                     raise rt.not_found("시트", sh, names)
                 ws = wb[found]
-                mr1, mc1, mr2, mc2 = _closed_bounds(ws)
-            r1, c1, r2, c2 = parse_area(cells, mr2, mc2)
+            r1, c1, r2, c2 = parse_area(cells, None, None)
+            if r2 is None or c2 is None:
+                _, _, mr2, mc2 = _closed_bounds(ws)
+                r1, c1, r2, c2 = parse_area(cells, mr2, mc2)
         else:
             # 열린 문서의 UsedRange처럼 데이터가 시작하는 칸부터 (A1부터 읽으면 rows가 열린 문서와 달랐음)
-            r1, c1, r2, c2 = mr1, mc1, mr2, mc2
+            r1, c1, r2, c2 = _closed_bounds(ws)
         if r2 < r1 or c2 < c1:
             rows = []
         else:
@@ -379,7 +382,11 @@ def cmd_read(args) -> Dict[str, Any]:
         result.update(output_file=out, next_commands=[
             rt.next_command("word.py", ["write", "--file", out], "저장한 표를 열린 워드 문서에 넣기"),
             rt.next_command("ppt.py", ["write", "--file", out], "저장한 표를 열린 PPT에 넣기")])
-        return rt.ok(TOOL, "read", f"{sheet}!{full_addr} ({nrows}행 x {ncols}열)를 CSV로 저장: {out}", **result)
+        # R1: 저장한 CSV를 다시 읽어 행 수 비교 (check_saved_file은 빈 행을 빼고 세므로 기대값도 빈 행 제외)
+        filled = sum(1 for r in values if any(v is not None and str(v).strip() for v in r))
+        return rt.ok_file(TOOL, "read", f"{sheet}!{full_addr} ({nrows}행 x {ncols}열)를 CSV로 저장: {out}", out,
+                          "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          expected_rows=filled, **result)
 
     shown, truncated = rt.clamp_rows(values, args.max_rows)
     result.update(values=shown, truncated=truncated)

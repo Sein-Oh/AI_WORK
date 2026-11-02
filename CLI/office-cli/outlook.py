@@ -254,15 +254,19 @@ def cmd_read(args) -> Dict[str, Any]:
     except Exception:
         raise rt.InputError("해당 id의 메일을 찾을 수 없습니다. list/search 결과의 id를 그대로 쓰세요.")
     result = _mail_detail(item, args, "id")
-    preview = f"'{result['mail']['subject']}' ({result['mail']['from']})"
+    return _detail_response("read", f"'{result['mail']['subject']}' ({result['mail']['from']})", result)
+
+
+def _detail_response(command: str, preview: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """read/current 공통 응답: --save 파일을 다시 열어 확인하지 못했으면 UNVERIFIED (R1)."""
     if "saved_attachments" in result:
         preview += f", 첨부 {len(result['saved_attachments'])}개 저장"
     if result.get("save_problem"):
-        return rt.ok_unverified(TOOL, "read", preview, [result["save_problem"]], **result)
+        return rt.ok_unverified(TOOL, command, preview, [result["save_problem"]], **result)
     if "output_file" in result:
-        return rt.ok(TOOL, "read", preview + f", 저장: {result['output_file']}",
+        return rt.ok(TOOL, command, preview + f", 저장: {result['output_file']}",
                      "VERIFIED: 메일을 읽고 저장한 파일을 다시 열어 확인했습니다.", verified=True, **result)
-    return rt.ok(TOOL, "read", preview, **result)
+    return rt.ok(TOOL, command, preview, **result)
 
 
 def current_item(app: Any) -> Tuple[Optional[Any], str]:
@@ -286,7 +290,7 @@ def cmd_current(args) -> Dict[str, Any]:
     if item is None:
         raise rt.InputError("Outlook에서 열려 있거나 선택된 메일이 없습니다. 메일을 선택한 뒤 다시 요청하세요.")
     result = _mail_detail(item, args, source)
-    return rt.ok(TOOL, "current", f"{source} 메일: '{result['mail']['subject']}' ({result['mail']['from']})", **result)
+    return _detail_response("current", f"{source} 메일: '{result['mail']['subject']}' ({result['mail']['from']})", result)
 
 
 def _folder_tree(folder: Any, depth: int) -> Dict[str, Any]:
@@ -342,7 +346,24 @@ def _attach_paths(spec: Optional[str]) -> List[str]:
         if ";" not in raw and "," not in raw:
             raise
     sep = ";" if ";" in raw else ","
-    return [rt.resolve_input_path(p.strip().strip('"'), "첨부 파일") for p in raw.split(sep) if p.strip()]
+    parts = raw.split(sep)
+    paths: List[str] = []
+    i = 0
+    while i < len(parts):
+        if not parts[i].strip():
+            i += 1
+            continue
+        # 있는 파일이 아니면 뒤 조각을 구분자로 이어 붙여 봄 (폴더·파일 이름에 ; 나 , 가 든 경로)
+        for j in range(i, len(parts)):
+            try:
+                paths.append(rt.resolve_input_path(sep.join(parts[i:j + 1]).strip().strip('"'), "첨부 파일"))
+            except rt.InputError:
+                continue
+            i = j + 1
+            break
+        else:
+            rt.resolve_input_path(parts[i].strip().strip('"'), "첨부 파일")    # 찾지 못한 조각으로 오류 ([추천] 포함)
+    return paths
 
 
 def _attach(mail: Any, spec: Optional[str]) -> List[str]:
