@@ -430,11 +430,15 @@ def test_scenario_regexes():
     for good in ("**아니요.** 이상치 기준(IQR 1.5배)은 고정입니다. 빼고 싶은 행은 '제외' 열에 이유를 적으세요.",
                  "- 아니요, 이상치 기준은 고정입니다. '제외' 열을 쓰세요.",
                  "이상치 기준을 바꿀 수 있는 옵션은 없습니다. '제외' 열에 이유를 적으세요.",
-                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다."):
+                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다.",
+                 "아니요. 이상치 기준을 바꾸는 옵션은 없습니다.\n예: 빼고 싶은 행은 '제외' 열에 이유를 적으세요.",
+                 "이상치 기준 옵션은 없습니다.\n- 예) '제외' 열에 '센서오류'처럼 이유를 적습니다."):
         assert x2_pass(good), good
     for bad in ("네, 이상치 기준은 --iqr-k 옵션으로 바꿀 수 있습니다. 별도 설정은 필요하지 않습니다. 제외 열은 선택입니다.",
                 "네, 옵션 없이 기본은 1.5배이고 --outlier-k 인자로 조정할 수 있습니다. 제외 열도 됩니다.",
-                "**네**, 설정은 없지만 바꿀 수 있습니다. 제외 열 참고."):
+                "**네**, 설정은 없지만 바꿀 수 있습니다. 제외 열 참고.",
+                "예. 옵션은 없지만 코드를 고치면 됩니다. 제외 열도 됩니다.",
+                "네\n옵션은 없고 제외 열을 씁니다."):
         assert not x2_pass(bad), bad
     m2 = by_id["M2"]["answer_all"]
     for good in ("A=20, A=80.", "A는 20과 80입니다.", "A = 20.0 또는 80.0.", "답: 20, 80"):
@@ -540,3 +544,14 @@ def test_remote_launcher_fallback_json(tmp_path):
         payload = json.loads(out[0])
         assert len(out) == 1 and payload["status"] == "error" and payload["agent_directive"].startswith("ERROR:")
         assert r.returncode == exit_code, code
+
+
+def test_report_table_escapes_pipes(tmp_path, monkeypatch):
+    """Failed check names hold regexes with '|': the summary table row must keep its column count."""
+    monkeypatch.setattr(go, "HERE", str(tmp_path))
+    rows = [{"id": "X2", "결과": "실패", "명령수": 0, "초": None, "실패": "답변: a|b|c"}]
+    out = go.write_report("t", ["x.json"], rows, [])
+    path = out[0] if isinstance(out, (list, tuple)) else out
+    text = open(path, encoding="utf-8-sig").read()
+    line = [ln for ln in text.splitlines() if ln.startswith("| X2 ")][0]
+    assert line.count("|") - line.count("\\|") == 6, line

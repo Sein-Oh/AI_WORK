@@ -419,7 +419,7 @@ def write_report(label, meta, rows, detail):
     lines += ["", "| 요청 | 결과 | 명령 수 | 걸린 초 | 실패 항목 |" + (" 점수 |" if has_judge else ""),
               "|---|---|---|---|---|" + ("---|" if has_judge else "")]
     for r in rows:
-        lines.append(f"| {r['id']} | {r['결과']}{'(참고)' if r.get('참고') else ''} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {r['실패'] or ''} |"
+        lines.append(f"| {r['id']} | {r['결과']}{'(참고)' if r.get('참고') else ''} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {(r['실패'] or '').replace('|', chr(92) + '|')} |"
                      + (f" {r.get('점수') if r.get('점수') is not None else ''} |" if has_judge else ""))
     lines += ["", "## 요청별 기록", ""]
     for sid, sc, turn, checks in detail:
