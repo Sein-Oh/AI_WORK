@@ -22,6 +22,8 @@ class FakeFind:
     def Execute(self, FindText="", MatchCase=False, MatchWholeWord=False, MatchWildcards=False, **kw):
         assert MatchWildcards is False
         # 실제 Word처럼 ^를 특수 코드로 읽음: ^^는 글자 ^ 하나, 그 밖의 ^x는 이 가짜에서 지원하지 않음(오류)
+        if len(FindText) > 255:                          # 실제 Word: 검색어 255자 초과는 오류 5854
+            raise RuntimeError("(-2147352567, 'Microsoft Word', 'string parameter too long', 5854)")
         if "^" in FindText.replace("^^", ""):
             raise RuntimeError("Word Find: 지원하지 않는 ^ 코드")
         FindText = FindText.replace("^^", "^")

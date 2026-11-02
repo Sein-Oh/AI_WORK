@@ -42,7 +42,12 @@ WD_STYLE_LIST_BULLET = -49
 WD_STYLE_LIST_NUMBER = -50
 WD_HIGHLIGHT = {"yellow": 7, "green": 4, "turquoise": 3, "pink": 5, "blue": 2, "red": 6, "gray": 16, "grey": 16,
                 "노랑": 7, "초록": 4, "분홍": 5, "파랑": 2, "빨강": 6, "회색": 16, "none": 0}
-FIND_MAX = 255   # Word Find 검색어 길이 한도
+FIND_MAX = 255   # Word Find 검색어 길이 한도 (^를 ^^로 바꾼 뒤의 길이)
+
+
+def _find_len(text: str) -> int:
+    """Word Find에 넘기는 길이: _find가 ^를 ^^로 바꾸므로 그 길이로 셉니다."""
+    return len(str(text).replace("^", "^^"))
 
 
 def heading_style(level: int) -> int:
@@ -566,8 +571,8 @@ def _memo_rows(path: str) -> List[Tuple[str, str, Optional[int]]]:
 
 def _comment_range(doc: Any, anchor: str, occurrence: Optional[int]) -> Any:
     """메모를 달 범위: 기준 글이 든 단락을 고르고(여러 곳이면 [후보]) 그 안의 기준 글 자체."""
-    if len(anchor) > FIND_MAX:
-        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다. 앞부분 일부만 쓰세요.")
+    if _find_len(anchor) > FIND_MAX:
+        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앞부분 일부만 쓰세요.")
     para = _anchor_paragraph(doc, anchor, occurrence, "after")
     rng = doc.Range(int(para.Start), int(para.End))
     return rng if _find(rng, anchor) else para
@@ -921,8 +926,8 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
             doc.Range(end, end).InsertAfter("\r")
             end = doc.Content.End - 1
         return end, "문서 끝"
-    if len(anchor) > FIND_MAX:
-        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다. 앵커 단락의 앞부분 일부만 쓰세요.")
+    if _find_len(anchor) > FIND_MAX:
+        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앵커 단락의 앞부분 일부만 쓰세요.")
     para = _anchor_paragraph(doc, anchor, occurrence, pos)
     if _in_table(para):
         # 셀 단락의 End는 다음 셀의 시작이라 그대로 넣으면 옆 칸에 들어감: 표 바깥(표 뒤)에 넣습니다
@@ -1072,7 +1077,7 @@ def _load_map(args) -> Dict[str, str]:
         # 빈 글을 찾으면 모든 글자 사이에 바꿀 글이 끼어들 수 있음
         raise rt.InputError("찾을 글(--find 또는 --map의 키)이 비어 있어 바꾸지 않았습니다. 빈 곳에 글을 넣으려면 word.py write를 쓰세요 "
                             "(예: word.py write --text \"내용\" --anchor \"기준 글\" --pos after). 바꿀 글이 있으면 찾을 글을 정확히 지정하세요.")
-    long_keys = [k for k in mapping if len(k) > FIND_MAX]
+    long_keys = [k for k in mapping if _find_len(k) > FIND_MAX]
     if long_keys:
         raise rt.InputError(f"찾을 문구는 {FIND_MAX}자 이하여야 합니다: '{long_keys[0][:30]}...' 문장을 나눠서 지정하세요.")
     return mapping
@@ -1177,6 +1182,13 @@ def cmd_replace(args) -> Dict[str, Any]:
 def _count_text(doc: Any, text: str, match_case: bool, whole_word: bool, limit: int = 5000) -> int:
     """문서 전체(본문, 머리글/바닥글, 글상자 등)에서 글이 몇 곳 있는지 (다시 읽어 확인용)."""
     n = 0
+    if _find_len(text) > FIND_MAX:
+        # Word Find 한도(255자)를 넘는 글(긴 바꿀 글을 다시 셀 때): Word Find 대신 각 스토리 글에서 직접 셈
+        needle = text if match_case else text.lower()
+        for story in _stories(doc):
+            hay = str(story.Text) if match_case else str(story.Text).lower()
+            n += hay.count(needle)
+        return min(n, limit)
     for story in _stories(doc):
         rng = story.Duplicate
         while n < limit and _find(rng, text, match_case, whole_word):

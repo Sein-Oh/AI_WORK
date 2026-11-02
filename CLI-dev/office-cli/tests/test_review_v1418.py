@@ -66,3 +66,48 @@ def test_word_find_escapes_caret():
     rng.Find = F()
     word._find(rng, "감사합니다^^ 10^6")
     assert seen["text"] == "감사합니다^^^^ 10^^6"
+
+
+# 1.4.19 (10차 점검): Word Find 255자 한도는 ^를 ^^로 바꾼 길이로 세고, 긴 바꿀 글은 Word Find 없이 다시 셈 ------------
+
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+
+import _office as off  # noqa: E402
+from fake_office import make_win32com  # noqa: E402
+from fake_word import FakeWordDocument  # noqa: E402
+
+
+@pytest.fixture
+def wd(monkeypatch, tmp_path):
+    monkeypatch.setenv("OFFICE_CLI_DATA_DIR", str(tmp_path / "d"))
+    holder = {"doc": FakeWordDocument("제목\r본문 ^ 10^6 기호\r일정")}
+    fake, _ = make_win32com()
+    monkeypatch.setattr(off, "win32com", fake)
+    monkeypatch.setattr(off, "pythoncom", None)
+    monkeypatch.setattr(off, "list_open", lambda kind: [])
+    monkeypatch.setattr(off, "get_active", lambda kind: {"name": holder["doc"].Name, "path": holder["doc"].FullName,
+                                                         "app": object(), "doc": holder["doc"]})
+    return holder
+
+
+def _run_word(capsys, *argv):
+    with pytest.raises(SystemExit) as ei:
+        word.main(list(argv))
+    out = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(out) == 1, out
+    return ei.value.code, json.loads(out[0])
+
+
+def test_word_long_replacement_containing_find_is_verified(wd, capsys):
+    rep = "제목: " + "가" * 300
+    code, out = _run_word(capsys, "replace", "--find", "제목", "--replace", rep)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert wd["doc"].text.startswith(rep)
+
+
+def test_word_find_limit_counts_escaped_carets(wd, capsys):
+    code, out = _run_word(capsys, "replace", "--find", "^" * 200, "--replace", "x")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "255" in out["message"]
