@@ -1338,6 +1338,11 @@ class IndexReadError(rt.InputError):
     """색인 파일(index.json)이 있는데 읽지 못함 (다른 프로그램이 잡고 있음 등). 이때 색인을 덮어쓰지 않습니다."""
 
 
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def load_index() -> Dict[str, Dict[str, Any]]:
     """색인 {원본 경로: 정보}. Windows에서 대소문자만 다른 같은 파일(C:\\Docs, c:\\docs)은 최근 것 하나로 합칩니다.
     - 일시적인 잠금(백신, 공유 위반)은 retry_fs로 기다려 다시 읽고, 끝내 못 읽으면 IndexReadError
@@ -1347,14 +1352,16 @@ def load_index() -> Dict[str, Dict[str, Any]]:
     if not os.path.exists(p):
         return {}
     try:
-        raw = rt.retry_fs(lambda: rt.read_text_file(p))
+        blob = rt.retry_fs(lambda: _read_bytes(p))
     except FileNotFoundError:
         return {}
     except OSError as e:
         raise IndexReadError(f"색인 파일을 읽지 못했습니다 ({type(e).__name__}: 다른 프로그램이 사용 중일 수 있음). "
                              "색인은 바꾸지 않았습니다. 사용자에게 알리고, 잠시 뒤 다시 요청하게 하세요.")
     try:
-        data = json.loads(raw)
+        # 도구가 쓰는 색인은 UTF-8. 디코딩 실패도 손상으로 보고 다시 만듦 (read_text_file은 InputError를 내
+        # clear --all까지 모든 reader 명령이 실패했음)
+        data = json.loads(blob.decode("utf-8-sig"))
         if not isinstance(data, dict):
             raise ValueError("색인이 객체가 아님")
     except (ValueError, UnicodeDecodeError):
@@ -1843,9 +1850,15 @@ def cmd_read(args) -> Dict[str, Any]:
     # 글자 없이 그림만 있는 쪽 (스캔 쪽): 읽으려는 범위 안의 쪽만 알림. 잘림이 아니라 주의 사항이라 notes에
     blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, bool(args.units))
     notes: List[str] = []
-    # 모든 쪽이 스캔 이미지(도장·Bates 번호 같은 짧은 글만 있음): 읽은 글은 본문이 아님 -> UNVERIFIED로 알림
-    ocr_reason = ("스캔 이미지 PDF라 본문 글자 층이 없음 (읽은 글은 도장·쪽 번호 같은 짧은 글뿐, "
-                  "OCR(글자 인식)한 PDF가 있어야 본문을 읽을 수 있음)") if meta.get("ocr_needed") and selected else ""
+    # 모든 쪽이 스캔 이미지(도장·Bates 번호 같은 짧은 글만 있음)이거나 읽으려는 쪽이 모두 스캔 쪽: 읽은 글은 본문이 아님
+    # -> 저장해도 읽어도 UNVERIFIED (이전에는 --save와 스캔 쪽만 고른 --pages가 VERIFIED)
+    got = "읽은 글은 도장·쪽 번호 같은 짧은 글뿐" if selected else "읽은 글 없음"
+    ocr_reason = ""
+    if meta.get("ocr_needed"):
+        ocr_reason = f"스캔 이미지 PDF라 본문 글자 층이 없음 ({got}, OCR(글자 인식)한 PDF가 있어야 본문을 읽을 수 있음)"
+    elif blank_pages and set(blank_pages) == _read_pages(doc, selected, req_pages, bool(args.units)):
+        ocr_reason = (f"고른 쪽(p.{_page_list(blank_pages)})이 스캔 이미지라 본문 글자 층이 없음 "
+                      f"({got}, OCR(글자 인식)한 PDF가 있어야 본문을 읽을 수 있음)")
     if blank_pages:
         result["pages_without_text"] = blank_pages[:50]
         notes.append(f"글이 거의 없고 그림만 있는 쪽 {len(blank_pages)}개 (스캔 쪽일 수 있음, OCR 필요): p.{_page_list(blank_pages)}")
@@ -1865,7 +1878,9 @@ def cmd_read(args) -> Dict[str, Any]:
             out, cut_cells = write_xlsx_table(out, header, rows, [14, 6, 40, 10, 30, 80], "내용")
         else:
             out = rt.write_text(out, units_to_markdown(name, selected, path))
-        result.update(output_file=out, next_commands=_write_next_commands(out))
+        result["output_file"] = out
+        if selected and not ocr_reason:     # 0개 저장, 스캔 쪽의 도장·쪽 번호뿐: 다른 문서에 넣는 명령은 주지 않음
+            result["next_commands"] = _write_next_commands(out)
         preview = f"{name}: {len(selected)}개 {unit_name}을(를) 파일로 저장했습니다 ({out})"
         # R1: 저장한 파일을 다시 열어 확인 (CSV는 행 수까지)
         problems = [p for p in [rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None, delimiter=",")] if p]
@@ -1882,7 +1897,8 @@ def cmd_read(args) -> Dict[str, Any]:
             if notes:
                 payload["agent_directive"] += " 주의: " + "; ".join(notes) + "."
             return payload
-        directive = "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요."
+        directive = ("VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요."
+                     if selected else "VERIFIED: 0건. 저장할 글이 없어 빈 파일을 저장했습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.")
         if notes:
             directive += " 주의: " + "; ".join(notes) + ". 사용자에게 알리세요."
         return rt.ok(TOOL, "read", preview, directive, verified=True, **result)
@@ -1970,6 +1986,16 @@ def cmd_read(args) -> Dict[str, Any]:
     if notes:
         directive += " 주의: " + "; ".join(notes) + ". 사용자에게 알리세요."
     return rt.ok(TOOL, "read", preview, directive, **result)
+
+
+def _read_pages(doc: Dict[str, Any], selected: List[Dict[str, Any]], req_pages: Optional[set], by_units: bool) -> set:
+    """읽으려는 쪽: --pages면 그 쪽들, --units면 고른 단위의 첫 쪽~끝 쪽, 아니면 문서 전체 쪽."""
+    if req_pages is not None:
+        return set(req_pages)
+    if by_units:
+        got = [u["page"] for u in selected if u.get("page") is not None]
+        return set(range(min(got), max(got) + 1)) if got else set()
+    return set(range(1, int(_doc_pages(doc) or 0) + 1))
 
 
 def _read_blank_pages(flagged: List[int], selected: List[Dict[str, Any]], req_pages: Optional[set],
@@ -2533,7 +2559,10 @@ def cmd_search(args) -> Dict[str, Any]:
         if result.get("next_commands") and _write_next_commands(result["output_file"]):
             directive += " 다른 문서에 넣으려면 next_commands를 그대로 실행하세요."
     else:
-        directive = "VERIFIED: 검색 완료." + evid + " 전체 결과가 필요하면 --save \"근거.xlsx\"로 저장하세요."
+        directive = "VERIFIED: 검색 완료." + evid
+        if result["truncated"]:
+            # 저장 이름은 next_commands에만 (긴 단락이 있으면 .md, 아니면 .xlsx: directive에 이름을 박으면 서로 달랐음)
+            directive += " 일부만 표시했습니다. 전체 결과가 필요하면 next_commands의 저장 명령을 그대로 실행하세요."
     if gaps:
         payload = rt.ok_unverified(TOOL, "search", preview + ", 검색 범위 불완전",
                                    ["검색하지 못한 부분이 있어 결과가 전부가 아닐 수 있음: " + "; ".join(gaps)], **result)

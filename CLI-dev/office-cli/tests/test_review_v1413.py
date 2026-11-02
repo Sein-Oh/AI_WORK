@@ -196,7 +196,7 @@ def test_i1_transient_index_lock_is_retried_not_emptied(tmp_path, capsys, monkey
     folder = _docs(tmp_path)
     code, out = _run(reader, capsys, "index", "--folder", str(folder))
     assert code == 0 and len(_index_json()) == 3
-    real = rt.read_text_file
+    real = reader._read_bytes
     state = {"n": 0}
 
     def flaky(p):
@@ -204,7 +204,7 @@ def test_i1_transient_index_lock_is_retried_not_emptied(tmp_path, capsys, monkey
             state["n"] += 1
             raise PermissionError(13, "sharing violation", p)
         return real(p)
-    monkeypatch.setattr(rt, "read_text_file", flaky)
+    monkeypatch.setattr(reader, "_read_bytes", flaky)
     monkeypatch.setattr(time, "sleep", lambda s: None)
     new = folder / "new.txt"
     new.write_text("새 문서", encoding="utf-8")
@@ -216,13 +216,13 @@ def test_i1_unreadable_index_stops_without_overwriting(tmp_path, capsys, monkeyp
     folder = _docs(tmp_path)
     _run(reader, capsys, "index", "--folder", str(folder))
     before = _index_json()
-    real = rt.read_text_file
+    real = reader._read_bytes
 
     def locked(p):
         if p.endswith("index.json"):
             raise PermissionError(13, "sharing violation", p)
         return real(p)
-    monkeypatch.setattr(rt, "read_text_file", locked)
+    monkeypatch.setattr(reader, "_read_bytes", locked)
     monkeypatch.setattr(time, "sleep", lambda s: None)
     new = folder / "new.txt"
     new.write_text("새 문서", encoding="utf-8")

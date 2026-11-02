@@ -559,6 +559,8 @@ def _ppt_rows(args) -> Tuple[List[List[Any]], str]:
 
 
 def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
+    if args.sheet:
+        off.check_sheet_name(args.sheet)      # 잘못된 이름은 문서를 열기 전에 (만든 뒤 이름에서 실패하면 빈 시트가 남음)
     with off.open_target("excel", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer") as t:
         wb = t.doc
         names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]

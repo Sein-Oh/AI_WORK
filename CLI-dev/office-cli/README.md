@@ -64,6 +64,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     지우는 것은 문서를 바꾸지 않았을 때만입니다(1.4.13): 열린 문서는 바꾼 표시가 없고 저장 상태가 그대로일 때(원래 저장 안 된 문서는 입력 오류일 때만),
     도구가 열거나 만든 파일은 디스크 파일이 그대로일 때(오류나 저장 실패로 저장하지 않고 닫음). 그래서 쓰기 명령은 입력 확인(시트, 칸 주소, 수식, `--highlight` 등)을
     모두 마친 뒤에 문서를 바꿉니다(`excel write --new-sheet`도 쓰기 직전에 시트를 만듦).
+  - 바꾼 것 없이 성공한 실행(0곳 바꿈, `chart --action delete --all`에 차트 0개, 이미 있는 시트 `sheet add`, `sheet select`, 빈 슬라이드 `slide clear`)도
+    같은 기준으로 지점을 지웁니다(1.4.14, 이전에는 남아 다음 `undo`가 바뀐 것 없는 이 지점으로 되돌리고 `VERIFIED`로 답해 실제로 바꾼 작업이 그대로 남음).
+    문서를 바꾸는 명령은 `t.set_focus()`(바꾸지 않았으면 `changed=False`)나 `t.changed = True`로 표시합니다.
   - 오래된 지점 정리(5개 유지)는 명령이 문서를 바꾼 뒤에만 합니다. 거절된 실행은 옛 지점을 밀어내지 않습니다(1.4.13).
   - `office.py undo`로 되돌립니다. 결과 `restored_as`:
     | 경우 | `restored_as` | 동작 |
@@ -126,7 +129,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `replace` | `--find/--replace` 또는 `--map JSON`, `--whole`, `--all-sheets`, 서식 옵션. 수식 셀은 내용 보존. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. `--range '요약'!A1:D9`처럼 시트를 주면 그 시트에서 읽고 씀. `--all-sheets`와 시트 이름이 든 `--range`는 함께 쓸 수 없음 |
 | `style` | `--theme navy\|slate\|teal\|emerald`, `--bg`, `--color`, `--bold`, `--align`, `--number-format`, `--border`, `--highlight ">=100:pink"`(조건부 서식), `--clear` |
 | `export` | `--save 경로.csv\|.xlsx\|.pdf`, `--columns A,C,E` |
-| `sheet` | `--action list\|add\|rename\|copy\|delete\|select --name --new-name` |
+| `sheet` | `--action list\|add\|rename\|copy\|delete\|select --name --new-name`. 엑셀에서 쓸 수 없는 이름(`/ \ ? * [ ] :`, 31자 초과, 빈 이름, 앞뒤 `'`)은 아무것도 바꾸기 전에 STOP_RETRY와 `[추천]`(쓸 수 없는 글자를 `_`로 바꾸고 31자로 자른 이름, 있는 시트와 겹치면 번호, 1.4.14). `write --new-sheet`, `office.py transfer --sheet`도 같음. `copy`의 기본 이름은 `<시트 28자> 복사` |
 | `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border`. `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열 |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
@@ -136,6 +139,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 칸 주소는 엑셀 범위(1~1,048,576행, A~XFD열) 안이어야 합니다. `A0`, `0:3`, `XFE1`은 STOP_RETRY(1.4.12, 이전에는 닫힌 파일에서 그대로 읽음).
 - 닫힌 xlsx에서 범위를 직접 주면(`A1:C5`) 데이터 뒤의 빈 행까지 그 범위만큼 `rows`를 셉니다(열린 문서와 같음, 1.4.12). 범위를 생략하면 끝쪽 빈 행은 뺍니다.
   준 범위가 200만 칸을 넘으면(`A1:XFD1048576`) 데이터가 있는 끝까지만 읽고 `recovered`로 알리며, 그래도 넘으면 STOP_RETRY와 `[추천] --range`(1.4.13).
+  파일에 적힌 크기(`<dimension>`)가 서식만 있는 먼 칸(예: `Z300000`)까지라 그것으로도 넘으면 값을 훑어 실제로 값이 있는 끝을 찾습니다(1.4.14, 이전에는 STOP_RETRY).
 - 읽기 미리보기의 잘림 표시: 500자보다 긴 값은 "긴 값 N칸 잘림", 첫 행이 표시 상한(약 8,000자)을 넘어 뺀 칸은 "뒤쪽 N열 생략"으로 따로 알립니다(1.4.13).
 
 ### word.py
@@ -199,7 +203,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   PDF의 "글자 없는 쪽"(`pages_without_text`)은 그림이 쪽 면적의 40% 이상을 덮고, 머리글·쪽 번호를 뺀 뒤 남은 글이 40자보다 적은 쪽입니다
   (스캔 위에 찍은 도장, 한 쪽짜리 스캔의 Bates 번호처럼 짧은 글만 남은 쪽 포함, 1.4.13). 모든 쪽이 그런 쪽이면 `ocr_needed`.
   빈 쪽·간지(쪽마다 있는 작은 로고만 있는 쪽 포함)는 해당 없고, 그림 위에 보이지 않는 글자 층(OCR 결과)이 있는 쪽도 해당 없습니다.
-  `read`는 `ocr_needed` 문서나 고른 쪽이 스캔 쪽뿐이면 `UNVERIFIED`(스캔 이미지라 OCR 필요)로 답합니다(1.4.13, 이전에는 "읽을 글이 없습니다" `VERIFIED`). 글이 없는 쪽의 장절은 바로 앞 글의 장절로 봅니다.
+  `read`는 `ocr_needed` 문서나 고른 쪽이 스캔 쪽뿐이면 `UNVERIFIED`(스캔 이미지라 OCR 필요)로 답합니다(1.4.13, 이전에는 "읽을 글이 없습니다" `VERIFIED`).
+  `--save`도 같고, 도장·쪽 번호만 남은 스캔 쪽(`--pages 3`)도 고른 쪽이 모두 스캔 쪽이면 `UNVERIFIED`입니다. 그때와 0개 저장이면 다른 문서에 넣는 `next_commands`를 주지 않습니다(1.4.14).
+  글이 없는 쪽의 장절은 바로 앞 글의 장절로 봅니다.
 - 검색어: `A AND B`, `A OR B`(대소문자 무관, AND가 먼저 묶임), `"설계 기준"`(따옴표는 구문, 검색어에 넣지 않음), 연산자 없이 이어진 단어는 한 구문.
   띄어쓰기, 줄바꿈, 기호(`# - . : / ( )` 등)는 무시하고 비교합니다: `SOI 1` = `SOI #1` = `SOI-1`, `설계기준` = `설계 기준`, PDF 줄바꿈으로 갈라진 글.
   숫자 경계는 지킵니다: `SOI 1`은 `SOI #10`, `SOI 21`과 맞지 않고, `1.2`는 `11.2`, `3.1.2`와 맞지 않습니다.
@@ -209,7 +215,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 거르기: `--pages 3-7`(쪽 정보가 없는 단위는 빼고 `page_unknown_skipped`로 개수 보고), `--section "SCOPE"`(장절 경로 일부, 대소문자 무시).
 - 결과 항목: `file`, `path`, `page`, `page_source`, `section`(목록), `section_text`(` > `로 이음), `number`, `loc`, `heading`, `evidence`, `snippet`, `--full`이면 `text`.
   공통: `total_matches`(= `count`), `matched`(= `shown`), `truncated`, `files_searched`, `output_file`, `next_commands`. 잘렸으면 `--save "근거.xlsx"`로 전체를 저장하는 명령을 줍니다
-  (`--full`에서 엑셀 칸 상한 32,000자보다 긴 단락이 있으면 `--save "근거.md"`, 1.4.13).
+  (`--full`에서 엑셀 칸 상한 32,000자보다 긴 단락이 있으면 `--save "근거.md"`, 1.4.13). directive는 저장 이름을 적지 않고 `next_commands`의 저장 명령을 가리킵니다(1.4.14, 이전에는 늘 `근거.xlsx`라 `.md` 명령과 달랐음).
 - `evidence` 형식: `규격서.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`. 쪽이 없으면 `loc`(예: `매출.xlsx 매출!12행`), Word 쪽을 쪽 나눔으로만 셌으면 `p.3(추정)`.
 - `--save`: `.xlsx`(머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정), `.csv`, `.md`(기본). 열: 파일, 쪽, 장절, 번호, 위치, 내용(문장/단락), 문맥. `.md`에는 항목마다 `근거:` 줄. 저장 파일에는 `--top`과 관계없이 전체(최대 5,000건)를 담습니다. 5,000건을 넘으면 `save_truncated`와 함께 `UNVERIFIED:`. 저장한 파일은 다시 열어 확인합니다(`save_problem`이 있으면 `UNVERIFIED:`). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `save_problem`(`.md`는 전체).
 - `index`: 새로 읽은 문서의 캐시 파일이 실제로 저장됐는지 확인하고, 저장하지 못한 파일이 있으면 `cache_failed`와 함께 `UNVERIFIED:`.
@@ -217,6 +223,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 색인 읽기-고치기-쓰기는 `cache/index.lock`으로 한 실행씩만 합니다(1.4.12, 이전에는 두 `index`를 동시에 실행하면 항목이 사라짐). 최대 15초 기다리고(1.4.13, 잠근 쪽의 `retry_fs` 재시도보다 길게), 60초보다 오래된 잠금은 중단된 실행이 남긴 것으로 보고 고유 이름으로 옮긴 뒤 지웁니다(옮긴 것이 새 잠금이면 되돌림). 15초 안에 얻지 못하면 잠금 없이 진행합니다(위 확인이 빠진 항목을 채움).
 - 색인 파일을 읽지 못하면(공유 위반 등) `retry_fs`로 다시 읽고, 끝내 못 읽으면 색인을 바꾸지 않고 STOP_RETRY입니다(`read`는 문서를 읽고 색인 넣기만 건너뜀). 빈 색인으로 보고 덮어쓰지 않습니다.
   내용이 손상(JSON·인코딩 오류)되었을 때만 캐시 문서 파일(`cache/docs/*.json`)로 색인을 다시 만들고 `recovered`로 알립니다(1.4.13).
+  색인은 바이트로 읽어 UTF-8로 풀고, 풀리지 않는 내용도 손상으로 봅니다(1.4.14, 이전에는 입력 오류가 나 `clear --all`까지 모든 reader 명령이 실패).
 - `--top`은 50, `--context`는 500까지(넘으면 줄이고 `warnings`). `--full`의 JSON `text`는 2,000자까지(잘리면 `text_truncated`, `text_chars`, `truncated: true`, 저장 명령에 `--full`).
 - `--save .xlsx/.csv`의 문맥 칸: `--full`이면 단락 전체(`.xlsx`는 셀 상한 32,000자 확인), 아니면 3,000자까지이고 잘린 행 수를 `context_clamped`와 directive로 알립니다(1.4.12, 이전에는 `--full`을 무시하고 말없이 자름).
 

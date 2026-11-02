@@ -2,6 +2,30 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.14] - 2026-11-02
+
+5차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1414.py`.
+
+### 수정 (되돌리기 지점)
+- 바꾼 것 없이 성공한 쓰기(`excel replace` 0곳, `chart --action delete --all`에 차트 0개, 이미 있는 시트 `sheet add`, `sheet select`, 빈 슬라이드 `ppt slide clear`)가
+  되돌리기 지점을 남겨, 다음 `office.py undo`가 바뀐 것 없는 이 지점으로 되돌리고 `VERIFIED`로 답하던 문제(실제로 바꾼 작업은 그대로 남음).
+  성공한 실행에도 "바뀐 것 없음" 기준(도구가 연 파일은 디스크 파일 그대로, 열린 문서는 `t.changed` 없고 저장 상태 그대로)을 적용해 지점을 지웁니다.
+  `OfficeTarget.set_focus(..., changed=False)`로 바꾸지 않은 명령을 표시하고, 화면 이동 없이 바꾸던 `excel sheet --action delete`는 `t.changed`를 표시합니다.
+
+### 수정 (엑셀)
+- 쓸 수 없는 시트 이름(`/ \ ? * [ ] :`, 31자 초과, 빈 이름, 앞뒤 `'`): 시트를 만들거나 복사한 뒤 이름을 붙이다 실패해 빈 시트·복사본이 남던 문제
+  (`write --new-sheet`, `sheet add/rename/copy`, `office.py transfer --sheet`. `transfer`는 31자에서 말없이 자르던 것도).
+  아무것도 바꾸기 전에 STOP_RETRY와 `[추천]`(쓸 수 없는 글자를 `_`로 바꾸고 31자로 자른 이름, 있는 시트와 겹치면 번호)을 냅니다(`_office.check_sheet_name`).
+  `sheet copy`의 기본 이름은 31자를 넘지 않게 `<시트 28자> 복사`.
+- 닫힌 xlsx의 큰 범위 읽기: 파일에 적힌 크기가 서식만 있는 먼 칸(`Z300000`)까지면 데이터가 작아도 STOP_RETRY이던 문제. 그 크기로도 상한을 넘으면 값을 훑어 실제 끝까지 줄입니다.
+
+### 수정 (reader)
+- 스캔 PDF `read --save`: 모든 쪽이 스캔이면 `VERIFIED`와 빈 파일을 다른 문서에 넣는 `next_commands`를 주던 문제. `UNVERIFIED`(OCR 필요), 0개 저장이거나 스캔 쪽 글뿐이면 `next_commands` 없음.
+- `read --pages`로 도장·Bates 번호만 남은 스캔 쪽만 고르면 `VERIFIED`이던 문제. 고른 쪽이 모두 `pages_without_text`이면 읽기·저장 모두 `UNVERIFIED`.
+- 색인(`index.json`)이 UTF-8로 풀리지 않으면(1.4.13 회귀) `read_text_file`의 입력 오류가 그대로 나가 `clear --all`까지 모든 reader 명령이 실패하던 문제.
+  바이트로 읽어(`retry_fs`) UTF-8로 풀고, 풀리지 않으면 손상으로 보고 캐시 문서로 다시 만듭니다. `IndexReadError`는 끝내 읽지 못한 `OSError`일 때만.
+- `search` directive가 늘 `--save "근거.xlsx"`를 안내해 `next_commands`의 `.md` 저장 명령과 다르던 문제. 결과가 잘렸을 때만 `next_commands`의 저장 명령을 가리킵니다.
+
 ## [1.4.13] - 2026-11-02
 
 4차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1413.py`.

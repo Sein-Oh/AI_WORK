@@ -202,8 +202,8 @@ def test_write_session_takes_snapshot_first(tmp_path, fake_com):
     wb = FakeWorkbook(str(tmp_path / "보고.xlsm"))
     (tmp_path / "보고.xlsm").write_bytes(b"x")
     fake_com["active"]["excel"] = {"name": wb.Name, "path": wb.FullName, "app": FakeExcelApp(), "doc": wb}
-    with off.open_target("excel", readonly=False, tool="excel", command="write"):
-        pass
+    with off.open_target("excel", readonly=False, tool="excel", command="write") as t:
+        t.changed = True                     # 바꾼 실행만 지점을 남김 (1.4.14: 바꾼 것 없는 성공은 지점을 지움)
     snaps = off.list_snapshots("excel")
     assert len(snaps) == 1 and snaps[0]["snapshot_file"].endswith(".xlsm")
     assert snaps[0]["by"] == "excel write" and snaps[0]["original_path"] == wb.FullName
@@ -294,8 +294,8 @@ def test_write_session_without_snapshot_leaves_barrier(tmp_path, fake_com, monke
     (tmp_path / "보고.xlsx").write_bytes(b"x")
     fake_com["active"]["excel"] = {"name": wb.Name, "path": wb.FullName, "app": FakeExcelApp(), "doc": wb}
     monkeypatch.setattr(off, "SNAPSHOT_MAX_BYTES", 0)                    # 스냅샷 실패
-    with off.open_target("excel", readonly=False, tool="excel", command="write"):
-        pass
+    with off.open_target("excel", readonly=False, tool="excel", command="write") as t:
+        t.changed = True
     snaps = off.list_snapshots("excel")
     assert len(snaps) == 1 and snaps[0]["barrier"] is True and "스냅샷" in snaps[0]["reason"]
 

@@ -544,6 +544,7 @@ class OfficeTarget:
         if exact is not None:
             return sheets(exact)
         if create and not self.readonly:
+            check_sheet_name(name, names)       # 잘못된 이름은 시트를 만들기 전에 (만든 뒤 Name에서 실패하면 빈 시트가 남음)
             ws = sheets.Add(After=sheets(sheets.Count))
             ws.Name = name
             self.changed = True
@@ -552,13 +553,16 @@ class OfficeTarget:
             raise rt.not_found("시트", name, names)
         raise missing_sheet(name, names)
 
-    def set_focus(self, sheet: Any = None, slide: Optional[int] = None) -> None:
-        """쓰기 후 사용자 화면을 이동할 위치를 기록합니다 (세션 종료 시 적용)."""
+    def set_focus(self, sheet: Any = None, slide: Optional[int] = None, changed: bool = True) -> None:
+        """쓰기 후 사용자 화면을 이동할 위치를 기록합니다 (세션 종료 시 적용).
+        changed: 이 명령이 문서를 바꿨는지. 바꾼 것 없이 성공한 명령(차트 0개 삭제, 이미 있는 시트 add 등)은 False로 주어
+        이번 되돌리기 지점을 지우게 합니다. 문서를 바꾸는 명령은 set_focus를 부르거나 t.changed = True로 표시합니다."""
         if sheet is not None:
             self.focus_sheet = sheet
         if slide is not None:
             self.focus_slide = int(slide)
-        self.changed = True
+        if changed:
+            self.changed = True
 
     def apply_focus(self) -> None:
         if self.readonly or self.source not in ("active", "open"):
@@ -574,6 +578,39 @@ class OfficeTarget:
                 self.doc.Activate()
         except Exception as e:
             rt.debug(f"화면 이동 생략: {e}")
+
+
+SHEET_NAME_BAD = re.compile(r"[\\/?*\[\]:]")    # 엑셀 시트 이름에 쓸 수 없는 글자
+
+
+def check_sheet_name(name: Any, existing: Optional[List[str]] = None) -> None:
+    """엑셀 시트 이름 규칙(31자 이하, / \\ ? * [ ] : 없음, 빈 이름 아님, 앞뒤 ' 없음)을 문서를 바꾸기 전에 확인합니다.
+    어기면 InputError와 [추천](쓸 수 없는 글자를 _로 바꾸고 31자로 자른 이름, existing과 겹치지 않게).
+    이전에는 시트를 만든 뒤 Name에서 실패해 빈 시트가 남았음."""
+    text = "" if name is None else str(name)
+    if not text.strip():
+        raise rt.InputError("시트 이름이 비어 있습니다. 아무것도 바꾸지 않았습니다. 시트 이름을 지정하세요.")
+    problems = []
+    if SHEET_NAME_BAD.search(text):
+        problems.append("/ \\ ? * [ ] : 는 쓸 수 없음")
+    if len(text) > 31:
+        problems.append(f"31자까지 ({len(text)}자)")
+    if text.startswith("'") or text.endswith("'"):
+        problems.append("앞뒤에 ' 는 쓸 수 없음")
+    if not problems:
+        return
+    rec = SHEET_NAME_BAD.sub("_", text)[:31]
+    if rec.startswith("'"):
+        rec = "_" + rec[1:]
+    if rec.endswith("'"):
+        rec = rec[:-1] + "_"
+    base, k = rec, 2
+    while existing and rt.find_name(rec, existing) is not None:
+        tail = f" {k}"
+        rec = base[:31 - len(tail)] + tail
+        k += 1
+    raise rt.InputError(f"시트 이름 '{text}'은(는) 엑셀에서 쓸 수 없습니다 ({', '.join(problems)}). "
+                        f"아무것도 바꾸지 않았습니다. [추천] {rec}")
 
 
 def _new_instance(kind: str) -> Any:
@@ -780,24 +817,25 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
                 else:
                     point = os.path.splitext(data_file)[0] + ".json"
 
-        def unchanged(e: BaseException) -> bool:
+        def unchanged(e: Optional[BaseException]) -> bool:
             """이 실행이 문서를 바꾸지 않았는지 (그러면 이번 지점은 지움: 남기면 다음 undo가 바뀐 것 없는 이 지점으로
-            되돌려 실제로 바꾼 작업이 그대로 남음).
-            - 도구가 열거나 만든 파일(owns_doc): 저장하지 않고 닫으므로 디스크 파일이 그대로면 바뀐 것 없음
-            - 열린 문서: 바꾼 표시(t.changed)가 없고 저장 상태가 그대로일 때만. 원래 저장 안 된 문서는 입력 오류일 때만
-              (그 밖의 오류는 중간까지 바꿨는지 알 수 없어 지점을 남김)"""
+            되돌려 실제로 바꾼 작업이 그대로 남음). 오류로 멈춘 실행(e)과 바꾼 것 없이 성공한 실행(e None: 0곳 바꿈,
+            차트 0개 삭제, 이미 있는 시트 add 등) 모두 같은 기준.
+            - 도구가 열거나 만든 파일(owns_doc): 바뀐 것만 저장하므로 디스크 파일이 그대로면 바뀐 것 없음
+            - 열린 문서: 바꾼 표시(t.changed)가 없고 저장 상태가 그대로일 때만. 원래 저장 안 된 문서가 오류로 멈췄으면
+              입력 오류일 때만 (그 밖의 오류는 중간까지 바꿨는지 알 수 없어 지점을 남김)"""
             if owns_doc and disk_before is not None:
                 return _file_stamp(t.path) == disk_before
             if t.changed or is_saved(t.doc) != was_saved:
                 return False
-            return was_saved or isinstance(e, rt.InputError)
+            return e is None or was_saved or isinstance(e, rt.InputError)
 
         def drop_or_keep(e: Optional[BaseException]) -> None:
             if not point:
                 return
-            if e is not None and unchanged(e):
+            if unchanged(e):
                 delete_snapshot(point)
-                rt.debug("문서를 바꾸기 전에 멈춰 이번 되돌리기 지점을 지웠습니다.")
+                rt.debug("문서를 바꾸지 않아 이번 되돌리기 지점을 지웠습니다.")
             else:
                 rotate_point(point)
 

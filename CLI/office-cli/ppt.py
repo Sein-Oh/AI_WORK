@@ -1023,7 +1023,7 @@ def cmd_slide(args) -> Dict[str, Any]:
                     shapes(k).Delete()
                     removed += 1
             focus, msg = numbers[0], f"슬라이드 {', '.join(map(str, numbers))}의 요소 {removed}개를 지웠습니다"
-        t.set_focus(slide=focus)
+        t.set_focus(slide=focus, changed=a != "clear" or removed > 0)     # 빈 슬라이드 비우기는 바뀐 것 없음
         resolved = t.resolved()
         total = int(prs.Slides.Count)
         # R1: 슬라이드 수(추가·복제 +1, 삭제 -1), 옮긴 슬라이드 제목, 비운 슬라이드의 요소 수를 다시 읽어 확인

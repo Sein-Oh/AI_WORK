@@ -306,11 +306,31 @@ def _closed_bounds(ws: Any) -> Tuple[int, int, int, int]:
 CLOSED_MAX_CELLS = 2_000_000   # 닫힌 xlsx를 준 범위만큼 채워 읽을 때 칸 수 상한 (A1:XFD1048576 -> 메모리 부족 방지)
 
 
+def _last_value_cell(ws: Any, r1: int, c1: int, r2: int, c2: int) -> Tuple[int, int]:
+    """범위 안에서 값이 있는 마지막 행과 마지막 열 (값만 봄: 서식만 있는 칸은 빈 칸). 없으면 (r1, c1).
+    읽기 전용 openpyxl은 파일에 없는 빈 행을 같은 튜플로 주므로 한 번 빈 것으로 본 튜플은 다시 훑지 않습니다."""
+    last_r, last_c = r1, c1
+    seen_empty: List[Any] = []
+    for i, row in enumerate(ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True), start=r1):
+        if any(row is e for e in seen_empty):
+            continue
+        cols = [j for j, v in enumerate(row, start=c1) if v is not None and v != ""]
+        if not cols:
+            if len(seen_empty) < 4:
+                seen_empty.append(row)
+            continue
+        last_r, last_c = i, max(last_c, cols[-1])
+    return last_r, last_c
+
+
 def _clip_closed_range(ws: Any, address: str, r1: int, c1: int, r2: int, c2: int) -> Tuple[int, int]:
     """준 범위가 CLOSED_MAX_CELLS칸을 넘으면 데이터가 있는 끝(행·열)까지로 줄입니다 (빈 칸만 빠져 값은 같음).
-    줄여도 넘으면 입력 오류와 [추천] 범위를 냅니다. 줄인 (끝 행, 끝 열)을 돌려줍니다."""
+    파일에 적힌 크기(<dimension>)가 서식만 있는 먼 칸(Z300000 등)까지라 그것으로도 넘으면 값을 훑어 실제 끝을 찾습니다
+    (이전에는 기록된 크기만 보고 STOP_RETRY). 줄여도 넘으면 입력 오류와 [추천] 범위를 냅니다. 줄인 (끝 행, 끝 열)을 돌려줍니다."""
     _, _, mr2, mc2 = _closed_bounds(ws)
     nr2, nc2 = min(r2, max(mr2, r1)), min(c2, max(mc2, c1))
+    if (nr2 - r1 + 1) * (nc2 - c1 + 1) > CLOSED_MAX_CELLS:
+        nr2, nc2 = _last_value_cell(ws, r1, c1, nr2, nc2)
     width = nc2 - c1 + 1
     if (nr2 - r1 + 1) * width > CLOSED_MAX_CELLS:
         rec = addr(r1, c1, r1 + CLOSED_MAX_CELLS // width - 1, nc2)
@@ -588,6 +608,8 @@ def _write_sheet(t: Any, name: Optional[str], new: bool) -> Optional[Any]:
             raise rt.InputError("--new-sheet에는 새 시트 이름이 필요합니다. --sheet 이름 또는 --range '이름'!A1로 지정하세요.")
         names = [str(t.doc.Worksheets(i).Name) for i in range(1, t.doc.Worksheets.Count + 1)]
         existing = rt.find_name(name, names)
+        if existing is None:
+            off.check_sheet_name(name, names)        # 잘못된 이름(/ ? * [ ] : 31자 초과)은 무엇이든 바꾸기 전에
         if existing is not None:
             raise rt.InputError(f"시트 '{existing}'이(가) 이미 있어 새로 만들지 않았습니다. 기존 시트에 쓰려면 --new-sheet를 빼고, "
                                 "새 시트는 다른 이름을 지정하세요.")
@@ -1112,28 +1134,31 @@ def cmd_sheet(args) -> Dict[str, Any]:
                 ws = sheets(existing)
                 msg = f"시트 '{existing}'이(가) 이미 있어 그대로 사용합니다"
             else:
+                off.check_sheet_name(args.name, names)
                 ws = t.sheet(args.name, create=True)
                 msg = f"시트 '{args.name}'을(를) 추가했습니다"
-            t.set_focus(sheet=ws)
+            t.set_focus(sheet=ws, changed=not existing)     # 이미 있으면 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
         else:
             if existing is None:
                 raise rt.not_found("시트", args.name, names)
             ws = sheets(existing)
             if args.action == "select":
-                t.set_focus(sheet=ws)
+                t.set_focus(sheet=ws, changed=False)
                 msg = f"시트 '{existing}'을(를) 선택했습니다"
             elif args.action == "rename":
                 if not args.new_name:
                     raise rt.InputError("rename에는 --new-name이 필요합니다.")
                 if rt.find_name(args.new_name, names):
                     raise rt.InputError(f"'{args.new_name}' 이름의 시트가 이미 있습니다.")
+                off.check_sheet_name(args.new_name, names)
                 ws.Name = args.new_name
                 t.set_focus(sheet=ws)
                 msg = f"시트 '{existing}' -> '{args.new_name}'"
             elif args.action == "copy":
-                new_name = args.new_name or f"{existing} 복사"
+                new_name = args.new_name or f"{existing[:28]} 복사"     # 기본 이름도 31자 이내
                 if rt.find_name(new_name, names):
                     raise rt.InputError(f"'{new_name}' 이름의 시트가 이미 있습니다.")
+                off.check_sheet_name(new_name, names)      # 복사한 뒤 이름에서 실패하면 복사본이 남음
                 ws.Copy(After=sheets(sheets.Count))
                 copied = sheets(sheets.Count)
                 copied.Name = new_name
@@ -1145,6 +1170,7 @@ def cmd_sheet(args) -> Dict[str, Any]:
                 prev = t.app.DisplayAlerts
                 t.app.DisplayAlerts = False
                 try:
+                    t.changed = True
                     ws.Delete()
                 finally:
                     t.app.DisplayAlerts = prev
@@ -1153,7 +1179,7 @@ def cmd_sheet(args) -> Dict[str, Any]:
         resolved = t.resolved()
     # R1: 다시 읽은 시트 목록으로 결과 확인
     want = {"add": (existing or args.name, True), "rename": (args.new_name, True), "delete": (existing, False),
-            "copy": (args.new_name or f"{existing} 복사", True), "select": (existing, True)}[args.action]
+            "copy": (args.new_name or f"{(existing or '')[:28]} 복사", True), "select": (existing, True)}[args.action]
     if (rt.find_name(want[0], names) is not None) != want[1]:
         return rt.ok_unverified(TOOL, "sheet", msg, [f"다시 읽은 시트 목록에 '{want[0]}'이(가) " + ("없음" if want[1] else "남아 있음")],
                                 target_resolved=resolved, sheets=names)
@@ -1450,7 +1476,7 @@ def cmd_chart(args) -> Dict[str, Any]:
                 msg = f"차트 '{gone}'을(를) 삭제했습니다"
                 obj.Delete()
             left = [str(o.Name) for o in _chart_objects(ws)]            # R1: 차트 목록을 다시 읽음
-            t.set_focus(sheet=ws)
+            t.set_focus(sheet=ws, changed=not args.all or bool(n))      # 0개 삭제는 바뀐 것 없음
             resolved = t.resolved()
         if (args.all and left) or (not args.all and gone in left):
             return rt.ok_unverified(TOOL, "chart", msg, [f"다시 읽은 차트 목록에 남아 있음: {', '.join(left[:5])}"], target_resolved=resolved)
