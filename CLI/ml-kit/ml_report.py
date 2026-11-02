@@ -911,7 +911,7 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
         meta = load_json_file(os.path.join(vdir, f"model_{safe}.json"))
         oof_path = os.path.join(vdir, f"oof_{safe}.csv")
         if not os.path.isfile(oof_path):
-            raise InputError(f"교차검증 예측 파일이 없습니다: {oof_path}. ml-kit 2.2.0 이상으로 다시 학습한 버전만 보고서를 만들 수 있습니다.")
+            raise InputError(f"교차검증 예측 파일이 없습니다: {oof_path}. ml-kit 2.9.1 이상으로 같은 데이터를 다시 학습한 버전만 보고서를 만들 수 있습니다.")
         bench = leaderboard["targets"][t]
         targets.append({
             "name": t, "safe": safe, "task": record["task"], "meta": meta,
@@ -1113,7 +1113,6 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
                  key=lambda r: r["mean_val_score"], default=None)
 
     R = ReportDoc(f"{REPORT_TITLE}  |  {data_name}  |  {version}")
-    d = R.doc
     derived_rows, derived_names = derived_feature_rows(targets)
 
     # -- 제목 (표지 페이지 없이 첫 페이지에 바로 요약) ---------------------------------
@@ -1375,16 +1374,19 @@ def resolve_version_dir(args: argparse.Namespace) -> str:
     return os.path.join(root, best["version"])
 
 
-def make_export(version_dir: str, task: str, title: Optional[str]) -> Optional[Dict[str, Any]]:
+def make_export(version_dir: str, task: str, title: Optional[str], targets: Optional[List[str]] = None,
+                overwrite: bool = False) -> Optional[Dict[str, Any]]:
     """2.9.2: the report and the performance calculator (ml_export.py) are made as a set (regression versions only).
     Made BEFORE the Word report so the report can state the calculator's agreement with the model (2.9.4).
+    targets: the report's -t targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
     A failure never fails the report: {"note": ...}."""
     if task != "regression" or os.environ.get("ML_KIT_SKIP_EXPORT") == "1":
         return None
     try:
         import ml_export  # heavy (retraining); only when a report is made
-        return {"result": ml_export.execute_export(argparse.Namespace(model=version_dir, targets=None, keep=None,
-                                                                      inputs=None, title=title, save=None))}
+        return {"result": ml_export.execute_export(argparse.Namespace(
+            model=version_dir, targets=",".join(targets) if targets else None, keep=None, inputs=None, title=title,
+            save=None, overwrite=overwrite))}
     except Exception as e:
         note = f"성능예측표를 만들지 못했습니다 (보고서는 정상): {type(e).__name__}: {str(e)[:200]}"
         sys.stderr.write(f"[WARN] {note}\n")
@@ -1421,10 +1423,13 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
     result["export_verified"] = res["verified"]
     if res.get("unverified"):
         result["export_unverified"] = res["unverified"]
+    if res.get("warnings"):
+        result["export_warnings"] = res["warnings"]
     result["preview"] += f" | 성능예측표: {os.path.basename(res['output_file'])}"
     result["agent_directive"] += (" 성능예측표(엑셀 계산기) export_file도 함께 만들었습니다: 경로, 타겟별 남긴 입력(export.<타겟>.inputs), "
                                   "모델 대비 일치도(export.<타겟>.agreement.agreement_pct)를 알리세요."
-                                  + (" export_unverified 내용도 그대로 알리세요." if res.get("unverified") else ""))
+                                  + (" export_unverified 내용도 그대로 알리세요." if res.get("unverified") else "")
+                                  + (" export_warnings(성능예측표 주의 사항)도 그대로 알리세요." if res.get("warnings") else ""))
 
 
 def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
@@ -1438,7 +1443,8 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
         return execute_best_report(args, target_filter)
     vdir = resolve_version_dir(args)
     ctx = load_version(vdir, target_filter)
-    export = make_export(vdir, ctx["record"]["task"], getattr(args, "title", None))
+    export = make_export(vdir, ctx["record"]["task"], getattr(args, "title", None),
+                         [t["name"] for t in ctx["targets"]] if target_filter else None, overwrite=args.overwrite)
     result = build_report(ctx, parse_slots(args.slots), args.out, overwrite=args.overwrite, export=export)
     attach_export(result, export)
     return result
@@ -1449,6 +1455,14 @@ def _numbered_out(out: Optional[str], version: str, many: bool) -> Optional[str]
         return out
     stem, ext = os.path.splitext(out)
     return f"{stem}_{version}{ext or '.docx'}"
+
+
+def _layout_args(args: argparse.Namespace, records: List[Dict[str, Any]], task: str) -> argparse.Namespace:
+    """Data layout for the predict command: the -f options, else the latest training of the task (as --best uses)."""
+    import ml_train
+    layout = ml_train._latest_layout(records, task)
+    return argparse.Namespace(**{k: getattr(args, k, None) if getattr(args, k, None) is not None else layout.get(k)
+                                 for k in ("header_row", "unit_row", "data_row")})
 
 
 def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[str]]) -> Dict[str, Any]:
@@ -1470,7 +1484,9 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
             if not flt:
                 continue
         ctx = load_version(bv["version_dir"], flt)
-        ex = make_export(bv["version_dir"], bv["task"], getattr(args, "title", None)) if export is None else None
+        ex = (make_export(bv["version_dir"], bv["task"], getattr(args, "title", None),
+                          [t["name"] for t in ctx["targets"]] if flt else None, overwrite=args.overwrite)
+              if export is None else None)
         export = export or ex
         reports.append(build_report(ctx, slots, _numbered_out(args.out, bv["version"], len(versions) > 1),
                                     overwrite=args.overwrite, export=ex))
@@ -1478,6 +1494,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
         all_targets = [t for bv in versions for t in bv["targets"]]
         raise InputError(f"지정한 타겟 {target_filter}이(가) 최고 버전에 없습니다. [후보] {', '.join(all_targets[:10])}")
 
+    _, records = ml_train._ledger_for(os.path.abspath(args.file))
     result = dict(reports[0])
     result.update({
         "made_best": info["made_best"],
@@ -1490,7 +1507,8 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                     for r in reports],
         "next_commands": [
             {"purpose": f"새 데이터 예측 ({bv['task']}, <새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-             "command": f'python "{os.path.join(here, "ml_predict.py")}" -m "{bv["version_dir"]}" -f "<새데이터.xlsx>"',
+             "command": f'python "{os.path.join(here, "ml_predict.py")}" -m "{bv["version_dir"]}" -f "<새데이터.xlsx>"'
+                        + ml_train.layout_flags(_layout_args(args, records, bv["task"])),
              "needs_input": True, "placeholder": "<새데이터.xlsx>"} for bv in versions],
     })
     made = ("타겟별 최고 학습 조건으로 다시 학습한 " if info["made_best"] else "이미 최신인 ")
@@ -1525,7 +1543,7 @@ def main():
     parser.add_argument("--target", "-t", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
     parser.add_argument("--out", "-o", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="같은 이름의 보고서가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
+                        help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--slots", help="소견 덮어쓰기 JSON 파일 또는 문자열: summary, data, performance, features, lineage, "
                                         "correlation, operation, targets.{타겟}.{performance|features}")
     parser.add_argument("--file", "-f",

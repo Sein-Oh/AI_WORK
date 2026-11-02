@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
     load_data_file, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
-    EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -134,8 +134,8 @@ def _resolve_save(path: Optional[str], data_path: str) -> Optional[str]:
     return path
 
 
-def _write_book(path: str, sheets: Dict[str, pd.DataFrame]) -> Tuple[str, bool]:
-    path = avoid_overwrite(path, what="결과 파일")
+def _write_book(path: str, sheets: Dict[str, pd.DataFrame], overwrite: bool = False) -> Tuple[str, bool]:
+    path = avoid_overwrite(path, overwrite, what="결과 파일")
 
     def _w(p: str) -> None:
         with pd.ExcelWriter(p) as xw:
@@ -208,7 +208,7 @@ def execute_forward(args) -> Dict[str, Any]:
                              "agent_directive": "VERIFIED: 기준 열이 많아 보간값 없이 가까운 실측 행만 계산했습니다. "
                                                 "nearest_rows와 warnings를 사용자에게 알리세요."}, warnings)
 
-    t = Table(sub, keys, values, warnings)
+    t = MultiTable(sub, keys, values, warnings)   # each value column on its own non-empty rows
     data_range = {k: [round(float(t.lo[j]), 6), round(float(t.hi[j]), 6)] for j, k in enumerate(keys)}
 
     if points_df is not None:
@@ -229,7 +229,7 @@ def execute_forward(args) -> Dict[str, Any]:
                                                     for k, v in nr.items()}})
         save = _resolve_save(args.save, tab["path"]) or _default_save(os.path.dirname(os.path.abspath(args.points)),
                                                                      os.path.splitext(os.path.basename(args.points))[0])
-        real, ok = _write_book(save, {"결과": pd.DataFrame(out_rows), "가까운 실측": pd.DataFrame(near_rows)})
+        real, ok = _write_book(save, {"결과": pd.DataFrame(out_rows), "가까운 실측": pd.DataFrame(near_rows)}, args.overwrite)
         n_ext = sum(1 for r in out_rows if r.get("외삽") == "예")
         if bad.any():
             warnings.append(f"기준 값이 빈칸인 조회 {int(bad.sum())}건은 계산하지 않았습니다")
@@ -263,7 +263,7 @@ def execute_forward(args) -> Dict[str, Any]:
             "결과": pd.DataFrame([{**point["input"], **{f"보간_{c}": v for c, v in r["values"].items()},
                                   "방식": r["method"], "외삽": "예" if r["extrapolated"] else "", "근거": _basis_text(r["basis"])}]),
             "가까운 실측": pd.DataFrame([{("원본 행" if k == "row" else "거리" if k == "distance" else k): v
-                                       for k, v in nr.items()} for nr in near])})
+                                       for k, v in nr.items()} for nr in near])}, args.overwrite)
         res["output_file"], res["verified"] = real, ok
     res["agent_directive"] = (
         ("VERIFIED: " if res["verified"] else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. ")
@@ -373,7 +373,7 @@ def execute_reverse(args) -> Dict[str, Any]:
         real, ok = _write_book(save, {"답": pd.DataFrame([{vary: s[vary], f"확인_{goal_col}": s["check"], "외삽": "예" if s["extrapolated"] else "",
                                                         "방식": s["method"], "근거": _basis_text(s["basis"])} for s in solutions]),
                                       "가까운 실측": pd.DataFrame([{("원본 행" if k == "row" else "거리" if k == "distance" else k): v
-                                                               for k, v in nr.items()} for nr in near])})
+                                                               for k, v in nr.items()} for nr in near])}, args.overwrite)
         res["output_file"] = real
         if not ok:
             unverified.append("결과 파일 다시 읽기")
@@ -415,6 +415,8 @@ def main():
     parser.add_argument("--vary", help="반대 찾기에서 값을 찾을 기준 열 (예: 반응온도). 다른 기준은 -i로 고정")
     parser.add_argument("--points", help="여러 점 조회 파일 (.xlsx, .csv, 열 이름 = 기준 열). 결과는 엑셀 파일로 저장")
     parser.add_argument("--save", help="결과 엑셀 저장 경로 (.xlsx). 이름만 주면 데이터 파일 옆")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="--save 파일이 이미 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--header-row", type=int, help="데이터 머리글 행 번호 (생략 시 자동)")
     parser.add_argument("--unit-row", type=int, help="데이터 단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")

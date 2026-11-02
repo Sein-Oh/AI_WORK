@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.10"
+  version: "2.9.12"
   platform: windows
 ---
 
@@ -92,6 +92,8 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -i "<피처1>=<값>,<피
 ```powershell
 python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>"
 ```
+- 학습 때 `--header-row`/`--unit-row`를 줬으면 파일 예측에도 같은 옵션을 붙인다 (학습 결과 `next_commands`의 예측 명령에 들어 있음).
+- `-i`에 6건 이상을 넣으면 건별 값 대신 `output_file`(결과 파일)을 알린다 (`truncated: true`).
 - `<version_dir>`: 보고서를 만들었으면 보고서 결과의 `best_version_dir`, 아니면 마지막 학습 결과의 `version_dir`을 그대로 쓴다. 모르면 `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history`를 실행해 `<data_root>\<best_version>`을 쓴다.
 - 알릴 것: 한 건이면 `predictions_summary.<타겟>.predictions`, 회귀는 `intervals`(90% 범위)도. 파일이면 `output_file`.
 - 회귀는 `map_check`(실측 비교값: 학습 데이터에서 같은 조건을 찾은 값)의 `value`, `diff`(예측-비교값), `method`를 "실측 비교값"으로 함께 알린다.
@@ -125,7 +127,7 @@ python "C:\CLI\ml-kit\ml_report.py" -f "<데이터파일>" --title "<제목>"
 - 회귀와 분류 타겟이 섞여 있으면 보고서가 2개(`best_reports`)다.
 - 알릴 것: `report_file`, `export_file`(성능예측표)과 `export`의 타겟별 `inputs`(남긴 입력)·`agreement.agreement_pct`(모델 대비 일치도 %), `overall_verdict`(적합/조건부/부적합), `made_best`(true면 이번에 다시 학습함),
   `best_targets`의 타겟별 `source_version`(학습 조건 출처), `source_score`(그때 점수), `new_score`(이번 점수)를 짧게.
-- `export_note`나 `export_unverified`가 있으면 그대로 알린다 (보고서는 정상).
+- `export_note`, `export_unverified`, `export_warnings`가 있으면 그대로 알린다 (보고서는 정상).
 - 이후 예측(4단계)에는 결과의 `best_version_dir`을 쓴다.
 - 사용자가 보고서 문장을 직접 정해 주면, 파일 쓰기 도구로 `slots.json`(UTF-8)을 만들고 명령 끝에 `--slots "<그 경로>"`를 붙인다.
   형식: `{"summary": "<요약 문장>", "operation": "<운영 문장>"}`
@@ -153,7 +155,8 @@ python "C:\CLI\ml-kit\ml_export.py" -m "<best_version_dir>" --keep "<입력1>,<�
 ```
 - 입력을 줄이며 다시 학습하므로 몇 분 걸린다 (시간 제한 600000). 같은 이름 파일이 있으면 시각을 붙인 새 이름으로 저장된다.
 - 알릴 것: `output_file`, 타겟별 `inputs`(남긴 입력)와 `dropped`(뺀 입력), `val_r2`, `table_rows`.
-  사용자가 다른 입력 조합을 원하면 `candidates`를 표로 보여 주고, 고른 안의 `next_commands` 명령을 그대로 실행한다.
+  사용자가 다른 입력 조합을 원하면 `candidates`를 표로 보여 주고, 고른 안의 `command`를 그대로 실행한다.
+- 입력은 타겟마다 8개까지다. 더 많이 넣으면 `STOP_RETRY`와 `[추천]` 조합이 나온다.
 
 ## 결과 처리 (모든 단계 공통)
 

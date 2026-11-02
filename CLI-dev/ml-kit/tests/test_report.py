@@ -121,7 +121,7 @@ def test_data_dir_mode_picks_best_version_and_slots(regression_report):
 
 
 def test_report_requires_oof_files(regression_report, tmp_path):
-    """A version folder without oof_*.csv (trained before 2.2.0) gets a clear STOP_RETRY."""
+    """A version folder without oof_*.csv (retrain with 2.9.1 or later) gets a clear STOP_RETRY."""
     import shutil
     work, tr, _, _ = regression_report
     root = tmp_path / "copy_ml_data"
@@ -130,7 +130,7 @@ def test_report_requires_oof_files(regression_report, tmp_path):
     for f in vdir.glob("oof_*.csv"):
         f.unlink()
     payload = run_fail("ml_report.py", "-m", str(vdir))
-    assert "2.2.0" in payload["message"]
+    assert "2.9.1" in payload["message"] and payload["agent_directive"].startswith("STOP_RETRY")
 
 
 def test_derived_features_are_shown_with_formulas(tmp_path):
