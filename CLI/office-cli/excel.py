@@ -778,10 +778,16 @@ def _load_map(args) -> Dict[str, str]:
             raise rt.InputError(f"--map은 JSON 객체여야 합니다 (예: {{\"초안\": \"최종\"}}): {e}")
         if not isinstance(data, dict) or not data:
             raise rt.InputError("--map은 비어 있지 않은 JSON 객체여야 합니다.")
-        return {str(k): ("" if v is None else str(v)) for k, v in data.items()}
-    if args.find is None:
+        mapping = {str(k): ("" if v is None else str(v)) for k, v in data.items()}
+    elif args.find is not None:
+        mapping = {args.find: args.replace if args.replace is not None else args.find}
+    else:
         raise rt.InputError("--find 또는 --map을 지정하세요.")
-    return {args.find: args.replace if args.replace is not None else args.find}
+    if "" in mapping:
+        # 빈 글을 찾으면 str.replace가 모든 글자 사이에 바꿀 글을 끼워 넣어 값이 있는 칸을 모두 망가뜨림
+        raise rt.InputError("찾을 글(--find 또는 --map의 키)이 비어 있어 바꾸지 않았습니다. 빈 칸을 채우려면 excel.py write를 쓰세요 "
+                            "(예: excel.py write --range B2:B10 --value 0). 바꿀 글이 있으면 찾을 글을 정확히 지정하세요.")
+    return mapping
 
 
 def cmd_replace(args) -> Dict[str, Any]:

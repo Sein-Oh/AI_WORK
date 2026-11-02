@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.18**, **office-cli 1.4.16**
+- main 기준 도구 버전: **ml-kit 2.9.18**, **office-cli 1.4.17**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -24,6 +24,7 @@
 | office-cli 1.4.14 | 바꾼 것 없이 성공한 쓰기(0곳 바꿈, 차트 0개 삭제, 이미 있는 시트 add)는 되돌리기 지점을 남기지 않음(다음 `undo`가 실제로 바꾼 작업을 되돌림). 엑셀에서 쓸 수 없는 시트 이름(`/ \ ? * [ ] :`, 31자 초과)은 시트를 만들기 전에 STOP_RETRY와 `[추천]` 이름. 스캔 PDF를 `read --save`하거나 스캔 쪽만 고르면 `UNVERIFIED`. 깨진 색인 파일도 다시 만듦 |
 | office-cli 1.4.15 | 엑셀이 예약한 시트 이름 `History`(대소문자 무관)도 시트를 만들기 전에 STOP_RETRY와 `[추천] History_`. `transfer --sheet`의 `[추천]`이 받는 문서의 있는 시트와 겹치지 않음. 바꾼 것 없이 성공한 명령(같은 글로 바꾸는 `replace`, 같은 자리로 `slide move`, 숨긴 것 없는 `unhide`, 고정 없는 `unfreeze`, 빈 범위 `clear` 등)은 "0곳/0칸 바뀜" 또는 "바뀐 것 없음"으로 답하고 되돌리기 지점을 남기지 않음. 휘발성 수식(NOW 등)이 든 닫힌 파일도 바꾼 것이 없으면 다시 저장하지 않음. `ppt replace --find`만 주면 STOP_RETRY |
 | office-cli 1.4.16 | `ppt replace`로 대소문자만 다른 글을 통일하는 치환(`iphone` -> `iPhone`)을 실제로 바꿈. 새 파일로 `transfer --sheet Sheet1`처럼 기본 시트 이름을 주면 그 시트에 받음. `range unhide`와 `clear`(전체·서식)는 늘 바꾼 것으로 봄(되돌리기 지점을 잃지 않게) |
+| office-cli 1.4.17 | `excel`/`word`/`ppt replace`의 찾을 글이 빈 문자열이면 STOP_RETRY(빈 칸 채우기는 `write`). 기본 시트가 여럿인 새 파일로 `transfer --sheet Sheet1`도 그 시트에 받음. 대소문자만 다른 치환(`iphone` -> `iPhone`)에서 이미 바꿀 글인 곳은 바꾼 곳으로 세지 않음(`unchanged_same_text`) |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
 | ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `docs/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |

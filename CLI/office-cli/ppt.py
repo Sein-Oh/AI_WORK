@@ -730,21 +730,40 @@ def _load_map(args) -> Dict[str, str]:
             raise rt.InputError(f"--map은 JSON 객체여야 합니다 (예: {{\"진행중\": \"완료\"}}): {e}")
         if not isinstance(data, dict) or not data:
             raise rt.InputError("--map은 비어 있지 않은 JSON 객체여야 합니다.")
-        return {str(k): ("" if v is None else str(v)) for k, v in data.items()}
-    if args.find is None:
+        mapping = {str(k): ("" if v is None else str(v)) for k, v in data.items()}
+    elif args.find is not None:
+        mapping = {args.find: args.find if args.replace is None else args.replace}
+    else:
         raise rt.InputError("--find 또는 --map을 지정하세요.")
-    return {args.find: args.find if args.replace is None else args.replace}
+    if "" in mapping:
+        # 빈 글을 찾으면 모든 글자 사이에 바꿀 글이 끼어들어 글 상자를 모두 망가뜨림
+        raise rt.InputError("찾을 글(--find 또는 --map의 키)이 비어 있어 바꾸지 않았습니다. 빈 곳에 글을 넣으려면 ppt.py write를 쓰세요 "
+                            "(예: ppt.py write --slide 2 --text \"- 항목\"). 바꿀 글이 있으면 찾을 글을 정확히 지정하세요.")
+    return mapping
 
 
-def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[str, Any]) -> int:
-    """TextRange.Replace를 반복합니다. 바꾼 글 뒤부터 이어서 찾아 무한 반복을 막습니다."""
+def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[str, Any]) -> Tuple[int, int]:
+    """TextRange.Replace를 반복합니다. 바꾼 글 뒤부터 이어서 찾아 무한 반복을 막습니다.
+
+    (바꾼 곳 수, 찾았지만 이미 바꿀 글과 같아 그대로 둔 곳 수)를 돌려줍니다. 서식이 없으면 찾은 곳의 글이
+    바꿀 글과 글자 그대로 같은 곳(대소문자까지)은 바꾸지 않고 세기만 합니다
+    (예: --find iphone --replace iPhone에서 이미 'iPhone'인 곳. 이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음).
+    """
     text = str(tr.Text)
     if (find not in text) if match_case else (find.lower() not in text.lower()):
-        return 0
-    count = 0
+        return 0, 0
+    count = same = 0
     after = 0
-    while count < 1000:
-        found = tr.Replace(FindWhat=find, ReplaceWhat=rep, After=after, MatchCase=-1 if match_case else 0, WholeWords=0)
+    while count + same < 1000:
+        text = str(tr.Text)
+        idx = text.find(find, after) if match_case else text.lower().find(find.lower(), after)
+        if idx < 0:
+            break
+        if not fmt and text[idx:idx + len(find)] == rep:
+            same += 1                  # 이미 바꿀 글 그대로: 건드리지 않음
+            after = idx + len(find)
+            continue
+        found = tr.Replace(FindWhat=find, ReplaceWhat=rep, After=idx, MatchCase=-1 if match_case else 0, WholeWords=0)
         if found is None:
             break
         count += 1
@@ -761,7 +780,7 @@ def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[s
         after = int(found.Start) - 1 + len(rep)
         if after >= len(str(tr.Text)):
             break
-    return count
+    return count, same
 
 
 def cmd_replace(args) -> Dict[str, Any]:
@@ -793,15 +812,11 @@ def cmd_replace(args) -> Dict[str, Any]:
             for k in range(1, slide.Shapes.Count + 1):
                 for tr in iter_text_ranges(slide.Shapes(k)):
                     for find, rep in mapping.items():
-                        text = str(tr.Text) if find == rep and not fmt else ""
-                        # 바뀌는 것이 없음: 세기만 함 (바꾼 것으로 표시하지 않음). 대소문자만 다른 곳이 있으면
-                        # PowerPoint가 찾는 글 그대로 바꿔 쓰므로(대소문자 통일) 실제로 바꿈
-                        if find == rep and not fmt and (args.match_case or text.count(find) == text.lower().count(find.lower())):
-                            hits = text.count(find)
-                            if hits:
-                                same[find] = same.get(find, 0) + hits
-                            continue
-                        c = replace_in_range(tr, find, rep, args.match_case, fmt)
+                        # 찾은 곳마다 바꿀 글과 비교: 글자 그대로 같은 곳은 세기만 하고(바꾼 것으로 표시하지 않음),
+                        # 대소문자만 다른 곳은 PowerPoint가 바꿀 글 그대로 써 주므로(대소문자 통일) 실제로 바꿈
+                        c, hits = replace_in_range(tr, find, rep, args.match_case, fmt)
+                        if hits:
+                            same[find] = same.get(find, 0) + hits
                         if c:
                             counts[find] = counts.get(find, 0) + c
                             changed = True
@@ -816,7 +831,8 @@ def cmd_replace(args) -> Dict[str, Any]:
                 hay, needle = (text, find) if args.match_case else (text.lower(), find.lower())
                 if needle not in rep_text.lower() and needle in hay:
                     problems.append(f"'{find}'이(가) 슬라이드에 남아 있음")
-                elif rep_text and (rep_text if args.match_case else rep_text.lower()) not in hay:
+                elif rep_text and rep_text not in text:
+                    # 바꿀 글은 대소문자까지 그대로 있어야 함 (대소문자만 바꾸는 경우도 확인)
                     problems.append(f"'{rep_text}'을(를) 다시 읽은 슬라이드에서 찾지 못함")
             t.set_focus(slide=slides_changed[0])
         resolved = t.resolved()

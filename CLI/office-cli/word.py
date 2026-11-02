@@ -1067,6 +1067,10 @@ def _load_map(args) -> Dict[str, str]:
         mapping = {args.find: args.find if args.replace is None else args.replace}   # --replace "" 는 삭제
     else:
         raise rt.InputError("--find 또는 --map을 지정하세요.")
+    if "" in mapping:
+        # 빈 글을 찾으면 모든 글자 사이에 바꿀 글이 끼어들 수 있음
+        raise rt.InputError("찾을 글(--find 또는 --map의 키)이 비어 있어 바꾸지 않았습니다. 빈 곳에 글을 넣으려면 word.py write를 쓰세요 "
+                            "(예: word.py write --text \"내용\" --anchor \"기준 글\" --pos after). 바꿀 글이 있으면 찾을 글을 정확히 지정하세요.")
     long_keys = [k for k in mapping if len(k) > FIND_MAX]
     if long_keys:
         raise rt.InputError(f"찾을 문구는 {FIND_MAX}자 이하여야 합니다: '{long_keys[0][:30]}...' 문장을 나눠서 지정하세요.")
@@ -1104,7 +1108,13 @@ def cmd_replace(args) -> Dict[str, Any]:
                 n = 0
                 rng = story.Duplicate
                 while _find(rng, find, args.match_case, args.whole_word):
-                    if find != rep:
+                    if not formatting and str(rng.Text) == rep:
+                        # 찾은 글이 이미 바꿀 글 그대로 (예: --find iphone --replace iPhone에서 'iPhone'): 세기만 함
+                        # (이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음)
+                        same[find] = same.get(find, 0) + 1
+                        rng.Collapse(0)
+                        continue
+                    if str(rng.Text) != rep:
                         rng.Text = rep
                     if formatting:
                         if color is not None:
@@ -1135,7 +1145,8 @@ def cmd_replace(args) -> Dict[str, Any]:
                     left = _count_text(t.doc, find, args.match_case, args.whole_word)
                     if left:
                         problems.append(f"'{find}'이(가) {left}곳 남아 있음")
-                elif _count_text(t.doc, rep, args.match_case, args.whole_word) < n:
+                elif _count_text(t.doc, rep, True, args.whole_word) < n:
+                    # 바꾼 곳은 바꿀 글이 대소문자까지 그대로 있어야 함 (대소문자만 바꾸는 경우도 확인)
                     problems.append(f"'{rep}'이(가) 바꾼 수({n})보다 적음")
         if counts:
             t.set_focus()

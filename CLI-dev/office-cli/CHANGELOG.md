@@ -2,6 +2,22 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.17] - 2026-11-02
+
+8차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1417.py`.
+
+### 수정
+- `excel replace --find ""`(또는 `--map {"": "X"}`, 다른 키와 섞인 경우, `--all-sheets` 포함): 빈 글을 찾으면 값이 있는 모든 칸의 글자 사이에
+  바꿀 글이 끼어드는데 `VERIFIED`로 보고하던 문제. `word replace`/`ppt replace`도 같은 확인이 없었습니다. 셋 모두 찾을 글이 빈 문자열이면
+  아무것도 바꾸기 전에 STOP_RETRY와 `write` 안내(빈 칸 채우기는 `excel.py write --range B2:B10 --value 0`)를 냅니다. 공백만 있는 찾을 글은 그대로 허용합니다.
+- `office.py transfer --to excel`로 새 파일을 만들 때 기본 시트가 여럿이면(Office 2007/2010 기본 `Sheet1`~`Sheet3`, `SheetsInNewWorkbook`)
+  `--sheet Sheet1`이 '이미 있음'으로 멈춰 빈 새 파일만 남던 문제(1.4.16은 기본 시트가 1개일 때만 고침). 방금 만든 새 파일이면 기본 시트 수와 관계없이 그 빈 시트에 받습니다.
+- `ppt replace`/`word replace`에서 대소문자만 다른 치환(`--find iphone --replace iPhone`)이 이미 `iPhone`인 곳도 바꾼 곳으로 세어 `replaced` 2, `VERIFIED`,
+  바뀐 것 없는 되돌리기 지점을 남기던 문제. 또 `ppt replace --find iPhone --replace iPhone`이 `iPhone and IPHONE`에서 1곳만 바꾸고 2곳으로 세던 문제.
+  찾은 곳마다 글을 바꿀 글과 비교해 글자 그대로(대소문자까지) 같으면 건드리지 않고 `unchanged_same_text`로 세고, 실제로 바뀐 곳만 `replaced`로 셉니다
+  (서식 옵션이 있으면 지금처럼 모두 바꿈). `ppt.replace_in_range`는 (바꾼 수, 같은 수)를 돌려줍니다.
+- 다시 읽어 확인(R1): `ppt replace`/`word replace`는 바꿀 글이 대소문자까지 그대로 있는지 확인합니다(대소문자만 바꾸는 치환도 확인).
+
 ## [1.4.16] - 2026-11-02
 
 7차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1416.py`.
