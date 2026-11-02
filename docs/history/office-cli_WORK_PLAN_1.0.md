@@ -88,9 +88,9 @@ python word.py write --file "<output_file>"
 
 | 방식 | 동작 | 비고 |
 |---|---|---|
-| `export` | Excel `Chart.Export` PNG → 삽입 | PNG 첫 바이트를 검사해 암호화됐으면 즉시 다음 방식으로. **PPT 대상에는 쓰지 않음** (회사 DRM에서 PPT가 못 읽음) |
+| `export` | Excel `Chart.Export` PNG -> 삽입 | PNG 첫 바이트를 검사해 암호화됐으면 즉시 다음 방식으로. **PPT 대상에는 쓰지 않음** (회사 DRM에서 PPT가 못 읽음) |
 | `redraw` | COM으로 계열 데이터(숫자)만 읽고 matplotlib으로 PNG를 그려 삽입 | 클립보드·Office 파일 쓰기 없음. 원본 서식은 근사치 |
-| `relay` | Excel 차트 → Word에 그림으로 넣은 뒤 → PPT로 넘김 | 회사에서 Word는 받아들인 이력 반영 |
+| `relay` | Excel 차트 -> Word에 그림으로 넣은 뒤 -> PPT로 넘김 | 회사에서 Word는 받아들인 이력 반영 |
 
 - `office.py transfer --probe`: 세 방식을 실제로 시험해 대상 앱별로 동작하는 방식을 `config.json`에 저장합니다. 이후 자동 사용합니다.
 - 결과 JSON의 `method`에 실제 사용한 방식을 적습니다.
@@ -117,7 +117,7 @@ python word.py write --file "<output_file>"
 | 2 | `_runtime.py` + 계약 테스트 | 완료 (`tests/test_runtime.py`) |
 | 3 | `reader.py` (라이브러리 기반, Linux에서 실제 파일로 테스트) | 완료 (`tests/test_reader.py`). HWP 5.0은 실제 파일 검증 필요 |
 | 4 | `_office.py` (COM 세션, 스냅샷, 화면 이동 규칙) | 완료 (`tests/test_office_core.py`, 가짜 COM) |
-| 5 | `excel.py` → `word.py` → `ppt.py` (부록 A의 버그 함께 수정) | 완료 (`tests/test_excel.py`, `test_word.py`, `test_ppt.py`) |
+| 5 | `excel.py` -> `word.py` -> `ppt.py` (부록 A의 버그 함께 수정) | 완료 (`tests/test_excel.py`, `test_word.py`, `test_ppt.py`) |
 | 6 | `outlook.py`, `office.py` (transfer 3방식 + probe, undo) | 완료 (`tests/test_outlook.py`, `test_office_cmd.py`) |
 | 7 | SKILL.md, README, CHANGELOG 1.0.0, requirements.txt, run_win_tests 갱신, 기존 파일 삭제 | 완료. Windows 실기 검증 대기 |
 
@@ -192,7 +192,7 @@ Phase 1과 2는 버그 수정만 하고 구조 변경은 최소로 둡니다. �
 | # | 위치 | 문제 | 수정 방향 |
 |---|---|---|---|
 | 1 | `_com_guard.py:482, 722` | 파일 모드에서 `Dispatch("Excel/Word.Application")`가 **사용자가 이미 띄운 인스턴스에 붙은 뒤** `Visible=False`, `DisplayAlerts=False`를 실행합니다. 결과적으로 사용자 창이 숨겨지고, 마지막에 `Quit`이 호출될 수도 있습니다 | 백그라운드 작업은 `DispatchEx`로 전용 인스턴스를 만들고, 끝나면 그 인스턴스만 `Quit`합니다 |
-| 2 | `_cache.py:242-251` | Word 스냅샷이 ① 저장된 문서는 `doc.Save()`로 **사용자의 미저장 변경을 원본에 강제로 저장**하고 ② 저장 안 된 문서는 `SaveAs(캐시 경로)`로 **문서 경로 자체를 캐시 폴더로 바꿉니다**. 이 파일은 나중에 회전 정책으로 삭제됩니다 | `doc.Range().WordOpenXML`(또는 `doc.WordOpenXML`)을 Flat OPC `.xml`로 저장합니다. Word의 SaveCopy 대체 수단으로, 원본 경로를 바꾸지 않습니다 |
+| 2 | `_cache.py:242-251` | Word 스냅샷이 (1) 저장된 문서는 `doc.Save()`로 **사용자의 미저장 변경을 원본에 강제로 저장**하고 (2) 저장 안 된 문서는 `SaveAs(캐시 경로)`로 **문서 경로 자체를 캐시 폴더로 바꿉니다**. 이 파일은 나중에 회전 정책으로 삭제됩니다 | `doc.Range().WordOpenXML`(또는 `doc.WordOpenXML`)을 Flat OPC `.xml`로 저장합니다. Word의 SaveCopy 대체 수단으로, 원본 경로를 바꾸지 않습니다 |
 | 3 | `_com_guard.py:953` | 조건에 `snapshot and ... and file_exists`가 있어 **활성 PPT는 스냅샷을 찍지 않습니다**. undo가 동작하지 않습니다 | 조건에서 `file_exists`를 빼고 활성/파일 모드 모두 `SaveCopyAs`를 씁니다 |
 | 4 | `_com_guard.py:456-464, 507-513` | 시트명을 잘못 쓰면 **읽기 도구에서도 새 시트를 만들고**, 파일 모드에서는 그대로 저장합니다 | `create_sheet_if_missing` 인자를 추가합니다(쓰기 도구만 True). 대소문자를 구분하지 않고 비교합니다 |
 | 5 | `_com_guard.py:972-985` | PPT 파일 모드가 변경이 없어도 항상 `Save()`합니다. mtime이 바뀌어 캐시가 무효화됩니다. 새 파일은 `Save()`만 하고 지정 경로로 `SaveAs`하지 않습니다 | `Saved` 플래그를 확인하고, 새 파일은 `SaveAs(abs_path)`로 저장합니다 |
@@ -287,9 +287,9 @@ Phase 1과 2는 버그 수정만 하고 구조 변경은 최소로 둡니다. �
 - **ppt_inspect**: 슬라이드 제목을 `Shapes.Title`이 아니라 처음 발견한 텍스트로 잡습니다.
 
 ### 4.5 office_bridge
-- excel→excel이 `to_target`을 무시하고, 원본 범위(`range`)를 붙여넣을 위치로도 써서 **원본 위에 붙여넣습니다**.
+- excel->excel이 `to_target`을 무시하고, 원본 범위(`range`)를 붙여넣을 위치로도 써서 **원본 위에 붙여넣습니다**.
 - CLI의 `--copy-as` 기본값 "table"이 PPT/차트용 자동 기본값("picture")을 항상 덮어씁니다. 기본값을 None으로 바꿉니다.
-- ppt→word에서 bookmark 위치를 무시하고 항상 문서 끝에 붙여넣습니다.
+- ppt->word에서 bookmark 위치를 무시하고 항상 문서 끝에 붙여넣습니다.
 - 차트 이미지를 기본 500x300으로 넣어 원본 비율이 깨집니다.
 - Word/PPT 표를 셀 단위로 추출하는데, 병합 셀은 빈칸으로 처리됩니다.
 
@@ -347,7 +347,7 @@ Phase 1과 2는 버그 수정만 하고 구조 변경은 최소로 둡니다. �
 | Excel/Word/PPT 세션 | 약 90% 같은 코드 3벌(약 600줄) | `OfficeSession` 기반 클래스와 앱별 어댑터(문서 컬렉션 이름, 창 클래스, 저장 방식) |
 | 앱 탐색 | `find_all_native_*` 3벌, `_get_*_app_from_hwnd` 3벌 | `find_office_apps(app_kind)` 하나 |
 | 경로 해석 | `_config.resolve_data_path`와 별도 resolver 5개, `C:\cli_data\data` 하드코딩 3곳 | `resolve_input_path` / `resolve_output_path` 하나. 검색 순서를 일관되게 하고 하드코딩은 config로 옮김 |
-| 응답과 오류 | 모듈마다 error 응답 복사, `main`/`execute` 중복 | `@tool_entry` 데코레이터: 인자 파싱 → execute → 예외를 JSON으로 → 종료 코드 |
+| 응답과 오류 | 모듈마다 error 응답 복사, `main`/`execute` 중복 | `@tool_entry` 데코레이터: 인자 파싱 -> execute -> 예외를 JSON으로 -> 종료 코드 |
 | Range를 행렬로 변환 | 4곳 (모두 버그) | `range_to_matrix()` |
 | 테마 표 서식 | `excel_edit`와 `excel_fill`에 2벌 (로직 다름) | `excel_edit.apply_theme_to_table` 하나 |
 | 마크다운 표 파서, 출력 경로, 대상 파일 해석 | word/ppt에 똑같은 함수 3쌍 | `_office_utils`로 이동 |
@@ -405,7 +405,7 @@ Phase 1과 2는 버그 수정만 하고 구조 변경은 최소로 둡니다. �
    - HWP: FileHeader의 압축/암호화/배포용 플래그를 해석하고, 표와 셀 텍스트를 추출합니다. HWPX는 `<hp:p>` 단위로 읽습니다.
    - DOCX/PPTX: 머리글/바닥글, 각주, 노트, 콘텐츠 컨트롤을 추출하고 실제 슬라이드 순서를 반영합니다.
    - PDF: 페이지 수 상한을 두고, 스캔본은 OCR이 필요하다고 알리기만 하고 Word 대체 경로는 옵션으로 돌립니다.
-   - EML: charset 감지(엄격 디코딩 → cp949 → euc-kr → utf-8 순)를 고칩니다. 스레드는 `In-Reply-To`/`References` 헤더 기준으로 묶습니다.
+   - EML: charset 감지(엄격 디코딩 -> cp949 -> euc-kr -> utf-8 순)를 고칩니다. 스레드는 `In-Reply-To`/`References` 헤더 기준으로 묶습니다.
 5. **가시 위치 보정**: ppt_write의 Smart Stacking에 슬라이드 경계 검사, 16:9 너비 반영, 제목 placeholder 사용을 추가합니다.
 6. **관측성**: `OFFICE_CLI_DEBUG=1`일 때만 stderr에 디버그를 출력합니다. 지금은 항상 출력합니다. 도구별 실행 시간과 COM 호출 수를 JSON의 `meta` 필드에 넣습니다.
 7. **README 전면 재작성**
