@@ -19,6 +19,7 @@ The data file is never modified. Rows with text in the '제외' column (other th
 
 Shared runtime (data loading, column matching, CLI protocol) is imported from ml_predict.py.
 """
+import re
 import sys
 import os
 
@@ -26,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
     load_data_file, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
-    check_comma_numbers, kv_text, quote_arg, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    check_comma_numbers, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -219,8 +220,11 @@ def execute_forward(args) -> Dict[str, Any]:
         points_df = load_data_file(ppath)
         usable = [c for c in points_df.columns if strip_unit(str(c)) in {strip_unit(x) for x in columns}]
         if not usable:
+            # the data file read with the wrong header row (title row, two-level header): the same hint as -i
+            names = [str(c) for c in points_df.columns if not re.fullmatch(r"col_\d+", str(c))]
+            hint = header_layout_hint(df.attrs, names) if names else ""
             raise InputError(f"조회 파일 열 {list(points_df.columns)} 중 데이터에 있는 기준 열이 없습니다. "
-                             f"[사용 가능한 컬럼 목록]: {columns}")
+                             + (f"데이터 {hint}\n" if hint else "") + f"[사용 가능한 컬럼 목록]: {columns}")
         sample = {str(c): points_df[c].iloc[0] for c in usable}
         numeric, categorical = _split_keys(df, sample, columns)
         if categorical:

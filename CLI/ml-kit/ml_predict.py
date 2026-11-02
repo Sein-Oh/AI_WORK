@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.15"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.16"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -529,11 +529,17 @@ def load_data_file(
     # column ('반응온도(192.58)') and drop a data row, so it is refused (with the header + unit pair of the file).
     if unit_row is not None and 1 <= unit_row <= total_rows:
         unit_cells = _row_cells(df_raw, unit_row - 1)
-        if unit_row - 1 != header_idx and unit_cells and _numeric_share(unit_cells) >= 0.5:
+        if unit_row - 1 != header_idx and unit_cells and not _looks_like_unit_row(df_raw, unit_row - 1):
             pair = _header_unit_pair(df_raw)
-            hint = (f" 이 파일의 머리글은 {pair[0]}행, 단위는 {pair[1]}행으로 보입니다. "
-                    f"[추천] {layout_retry(pair[0], pair[1])}") if pair else ""
-            raise InputError(f"단위 행(--unit-row {unit_row})의 값이 대부분 숫자라({unit_cells[:4]}) 단위 행이 아니라 데이터 행입니다. "
+            if pair:
+                hint = f" 이 파일의 머리글은 {pair[0]}행, 단위는 {pair[1]}행으로 보입니다. [추천] {layout_retry(pair[0], pair[1])}"
+            elif unit_row - 1 > header_idx:   # the row is data: the header row in use without a unit row
+                hint = f" [추천] {layout_retry(header_idx + 1, None)}"
+            else:
+                hint = ""
+            why = ("값이 대부분 숫자라" if _numeric_share(unit_cells) >= 0.5
+                   else "단위가 있는 열의 바로 아래 행에 숫자가 아닌 글자 값이 있어")
+            raise InputError(f"단위 행(--unit-row {unit_row})은 {why}({unit_cells[:4]}) 단위 행이 아니라 데이터 행입니다. "
                              f"단위 행 번호를 고치거나 단위 행이 없으면 --unit-row를 빼십시오.{hint}")
         units = df_raw.iloc[unit_row - 1].values
         headers = [_with_unit(h, u) for h, u in zip(headers, units)]
@@ -595,7 +601,7 @@ def load_data_file(
         cells = _row_cells(df_raw, i)
         if cells and (i < start_idx or _numeric_share(cells) < 0.5):
             below = _row_cells(df_raw, i + 1) if i + 1 < total_rows else []
-            unit_next = i + 2 if below and _numeric_share(below) < 0.5 else None
+            unit_next = i + 2 if below and _looks_like_unit_row(df_raw, i + 1) else None
             joined = ([_with_unit(_cell_text(h), u) for h, u in zip(df_raw.iloc[i].values, df_raw.iloc[i + 1].values)
                        if _cell_text(h)] if unit_next else [])
             candidates.append([i + 1, cells, unit_next, joined])
@@ -624,12 +630,28 @@ def _row_cells(df_raw: pd.DataFrame, i: int) -> List[str]:
     return [t for t in (_cell_text(v) for v in df_raw.iloc[i].tolist()) if t]
 
 
+def _looks_like_unit_row(df_raw: pd.DataFrame, j: int) -> bool:
+    """Row j (0-based) is a unit row: mostly text, and every column with a unit ('°C'; '-' is a blank mark) holds a
+    number or a blank in the row below. A first data row of text values (categories, a text target) is not
+    ('B', 'kim', '중' over 'A', 'lee', '상'), nor is a row of numbers or a header row over a unit row."""
+    cells = _row_cells(df_raw, j)
+    if not cells or _numeric_share(cells) >= 0.5 or j + 1 >= len(df_raw):
+        return False
+    for u, d in zip(df_raw.iloc[j].values, df_raw.iloc[j + 1].values):
+        ut, dt = _cell_text(u), _cell_text(d)
+        if not ut or ut in _NA_PLACEHOLDERS or _numeric_share([ut]) == 1:
+            continue
+        if dt and dt not in _NA_PLACEHOLDERS and _numeric_share([dt]) < 1:
+            return False
+    return True
+
+
 def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
     """(header row, unit row), 1-based: the first two text rows (2+ cells) directly above a mostly numeric row."""
     n = min(HEADER_SCAN_ROWS, len(df_raw) - 2)
     for i in range(max(n, 0)):
         h, u, d = _row_cells(df_raw, i), _row_cells(df_raw, i + 1), _row_cells(df_raw, i + 2)
-        if (len(h) >= 2 and _numeric_share(h) < 0.5 and u and _numeric_share(u) < 0.5
+        if (len(h) >= 2 and _numeric_share(h) < 0.5 and u and _looks_like_unit_row(df_raw, i + 1)
                 and d and _numeric_share(d) >= 0.5):
             return i + 1, i + 2
     return None
@@ -1944,14 +1966,9 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
             if _first_row_numeric(auto, numeric):
                 cmd = _predict_command(args)
             else:
-                unit_row = int(auto.attrs.get("header_row", 1)) + 1
-                try:
-                    with_unit = load_data_file(args.file, unit_row=unit_row)
-                except Exception:
-                    with_unit = None
-                if (with_unit is not None and _inputs_present(needed, [str(c) for c in with_unit.columns])
-                        and _first_row_numeric(with_unit, numeric)):
-                    cmd = _predict_command(args, layout=f"--unit-row {unit_row}")
+                layout = _fit_unit_layout(args.file, needed, numeric, None, int(auto.attrs.get("header_row", 1)) + 1)
+                if layout:
+                    cmd = _predict_command(args, layout=layout)
         if cmd:
             return ("레이아웃 옵션(--header-row/--unit-row/--data-row)이 이 파일과 맞지 않습니다. "
                     f"이 파일의 머리글로 읽으면 모델 입력 열이 모두 있습니다. [추천] {cmd}")
@@ -1962,10 +1979,13 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
             where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
             if unit is None and not has_layout:
                 return f"{where}. [추천] --header-row {row}"
+            layout = f"--header-row {row}"
             if unit:
                 where += f", {unit}행은 단위 행입니다"
-            return f"{where}. [추천] " + _predict_command(args, layout=f"--header-row {row}"
-                                                         + (f" --unit-row {unit}" if unit else ""))
+                # a model trained without units needs the unit row skipped (--data-row), not joined to the names
+                layout = (_fit_unit_layout(args.file, needed, numeric, row, unit) if getattr(args, "file", None)
+                          else "") or f"{layout} --unit-row {unit}"
+            return f"{where}. [추천] " + _predict_command(args, layout=layout)
     return ""
 
 
@@ -1982,15 +2002,29 @@ def _unit_row_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], 
     if not _first_row_is_text(df_input, numeric):
         return ""
     unit_row = int(df_input.attrs.get("header_row", 1)) + 1
-    try:
-        with_unit = load_data_file(args.file, unit_row=unit_row)
-    except Exception:
-        return ""
-    if not (_inputs_present(needed, [str(c) for c in with_unit.columns]) and _first_row_numeric(with_unit, numeric)):
+    layout = _fit_unit_layout(args.file, needed, numeric, None, unit_row)
+    if not layout:
         return ""
     first = [str(df_input[c].iloc[0]) for c in df_input.columns[:6]]
     return (f"파일 {unit_row}행(첫 데이터 행)의 숫자 입력 칸이 숫자가 아니라 단위로 보입니다 ({first}). 그대로 예측하면 "
-            f"이 행을 빈 값으로 채워 예측합니다. [추천] {_predict_command(args, layout=f'--unit-row {unit_row}')}")
+            f"이 행을 빈 값으로 채워 예측합니다. [추천] {_predict_command(args, layout=layout)}")
+
+
+def _fit_unit_layout(path: str, needed: List[str], numeric: List[str], header_row: Optional[int],
+                     unit_row: int) -> str:
+    """Layout options that read a file with a unit row so that every model input is a column and the first data row
+    holds numbers: '--unit-row M' (a model trained with units, '반응온도(°C)'), else '--data-row M+1' (the unit row
+    skipped, unit-less names of a model trained without units), else ''. `header_row` (or None) is put in front."""
+    head = f"--header-row {header_row} " if header_row else ""
+    for opts, layout in (({"unit_row": unit_row}, f"--unit-row {unit_row}"),
+                         ({"data_row": unit_row + 1}, f"--data-row {unit_row + 1}")):
+        try:
+            df = load_data_file(path, header_row=header_row, **opts)
+        except Exception:
+            continue
+        if _inputs_present(needed, [str(c) for c in df.columns]) and _first_row_numeric(df, numeric):
+            return head + layout
+    return ""
 
 
 def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
