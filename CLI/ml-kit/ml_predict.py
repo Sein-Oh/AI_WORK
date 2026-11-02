@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.13"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.14"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -127,7 +127,8 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             "message": msg,
             "agent_directive": (
                 "STOP_RETRY: Argument or data schema validation failed. "
-                "If the message contains '[추천]', re-run ONCE with the suggested name; "
+                "If the message contains '[추천]', re-run ONCE with the suggested name, option or command "
+                "(a [추천] that starts with python is a full command: run it as given, once); "
                 "otherwise report the message to the user." + (f" {hint}" if hint else "")
             ),
         }
@@ -345,13 +346,14 @@ def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
 
 
 def resolve_column_names(names: List[str], columns: List[str], kind: str,
-                         head_rows: Optional[List[List[str]]] = None) -> Tuple[List[str], Dict[str, str]]:
+                         header_candidates: Optional[List[List[Any]]] = None) -> Tuple[List[str], Dict[str, str]]:
     """
     Resolves requested names against real columns. Exact match first, then a unique
     unit-less alias ('생산효율' -> '생산효율(%)'). A name with a different unit
-    ('반응온도(C)') is NOT auto-matched. Raises InputError with suggestions otherwise.
-    head_rows (df.attrs["head_rows"] of load_data_file): when the missing names are all in another top row
-    (two-level or merged header), the suggestion is that row: [추천] --header-row N.
+    ('반응온도(C)') is NOT auto-matched. Raises InputError with suggestions otherwise:
+    one similar column -> [추천] '<name>', several -> [후보] '<a>', '<b>'.
+    header_candidates (df.attrs["header_candidates"] of load_data_file): when the missing names are all in another
+    top row (two-level or merged header), the suggestion is that row: [추천] --header-row N.
     """
     col_list = [str(c) for c in columns]
     col_set = set(col_list)
@@ -370,7 +372,7 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
         else:
             missing.append(n)
     if missing:
-        row = find_header_row(head_rows, missing)
+        row = find_header_row(header_candidates, missing)
         if row is not None:
             raise InputError(
                 f"지정하신 {kind} 컬럼 {missing}을(를) 머리글에서 찾을 수 없습니다. 파일 {row}행에 이 이름들이 있습니다 "
@@ -378,7 +380,12 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
         hints = []
         for m in missing:
             s = suggest_columns(m, col_list)
-            hints.append(f"'{m}' -> [추천] {s}" if s else f"'{m}' -> 유사 컬럼 없음")
+            if len(s) == 1:
+                hints.append(f"'{m}' -> [추천] '{s[0]}'")
+            elif s:
+                hints.append(f"'{m}' -> [후보] {', '.join(repr(c) for c in s)}")
+            else:
+                hints.append(f"'{m}' -> 유사 컬럼 없음")
         raise InputError(
             f"지정하신 {kind} 컬럼 {missing}을(를) 데이터셋에서 찾을 수 없습니다. "
             f"{' / '.join(hints)}\n[사용 가능한 컬럼 목록]: {col_list}"
@@ -577,23 +584,45 @@ def load_data_file(
     source_rows = [int(i) + 1 for i in df_data.index]
     df_data = df_data.reset_index(drop=True)
     df_data.attrs["source_rows"] = source_rows
-    # first rows of the file as text, so a missing column name can be looked up there ([추천] --header-row N)
-    df_data.attrs["head_rows"] = [[str(v).strip() for v in df_raw.iloc[i].tolist() if pd.notna(v) and str(v).strip()]
-                                  for i in range(min(HEADER_SCAN_ROWS, total_rows))]
+    # top rows of the file that could be the real header, so a missing column name can be looked up there
+    # ([추천] --header-row N): not the header row in use, and only rows above the data or mostly text rows
+    # (a data row with a text value such as '압력' in a category column is not a header)
+    candidates = []
+    for i in range(min(HEADER_SCAN_ROWS, total_rows)):
+        if i == header_idx:
+            continue
+        cells = [str(v).strip() for v in df_raw.iloc[i].tolist() if pd.notna(v) and str(v).strip()]
+        if cells and (i < start_idx or _numeric_share(cells) < 0.5):
+            candidates.append([i + 1, cells])
+    df_data.attrs["header_candidates"] = candidates
+    df_data.attrs["header_row"] = header_idx + 1
     return df_data
 
 
+def _numeric_share(cells: List[str]) -> float:
+    n = 0
+    for c in cells:
+        try:
+            float(c.replace(",", ""))
+            n += 1
+        except ValueError:
+            pass
+    return n / len(cells) if cells else 0.0
+
+
 def names_in_cells(names: List[str], cells: List[str]) -> bool:
-    """True when every name is one of the cells, exactly or without its unit ('온도' ~ '온도(°C)')."""
-    keys = {_alias_key(c) for c in cells}
-    return bool(names) and all(n in cells or _alias_key(n) in keys for n in names)
+    """True when every name is one of the cells, exactly or by a unique unit-less alias written without a unit
+    ('온도' ~ '온도(°C)'), the same rule as resolve_column_names ('온도(C)' does not match '온도(°C)')."""
+    cell_set = set(cells)
+    alias = build_alias_map(cells)
+    return bool(names) and all(n in cell_set or (strip_unit(n) == n.strip() and _alias_key(n) in alias) for n in names)
 
 
-def find_header_row(head_rows: Optional[List[List[str]]], names: List[str]) -> Optional[int]:
-    """1-based row among the first HEADER_SCAN_ROWS rows that holds every name (a two-level / merged header)."""
-    for i, cells in enumerate(head_rows or []):
+def find_header_row(candidates: Optional[List[List[Any]]], names: List[str]) -> Optional[int]:
+    """1-based row (df.attrs["header_candidates"] of load_data_file) that holds every name (a two-level / merged header)."""
+    for row, cells in candidates or []:
         if names_in_cells(names, cells):
-            return i + 1
+            return int(row)
     return None
 
 
@@ -1173,7 +1202,8 @@ class MultiTable:
     Rows are dropped for an empty key, but a blank in one value column does not remove that row from the others:
     value columns with the same empty cells share one Table. A value column with too few values for a table is left
     out with a warning (error only when no column is left). Range (lo, hi, span) and rows (df, for nearest_rows) are
-    those of every row with valid keys; the other attributes come from the table of the first value column."""
+    those of the rows used by the kept tables (a row of a dropped column only is not data); the other attributes come
+    from the table of the first kept value column."""
 
     def __init__(self, df: pd.DataFrame, keys: List[str], values: List[str], warnings: List[str]):
         K = np.column_stack([coerce_numeric(df[c]).to_numpy(dtype=float) for c in keys])
@@ -1188,6 +1218,7 @@ class MultiTable:
             groups.setdefault(m.tobytes(), []).append(c)
             masks[m.tobytes()] = m
         self.tables: List[Tuple[List[str], "Table"]] = []
+        used = np.zeros(len(df), dtype=bool)
         last_error: Optional[InputError] = None
 
         def _add(msgs: List[str]) -> None:   # the same Table warning from several column groups is said once
@@ -1206,20 +1237,21 @@ class MultiTable:
                 tab = Table(df[masks[key]].reset_index(drop=True), keys, cols, msgs)
             except InputError as e:
                 if len(groups) == 1:
-                    raise
+                    raise InputError(f"구할 열 {', '.join(cols)}: {e}")
                 last_error = e
                 _add([f"{', '.join(cols)}: 값이 있는 행이 적어 계산하지 않았습니다 ({e})"])
                 continue
             _add(msgs)
             self.tables.append((cols, tab))
+            used |= masks[key]
         if not self.tables:
             raise last_error or InputError("계산할 수 있는 구할 열이 없습니다.")
         self.values = [c for c in values if any(c in cols for cols, _ in self.tables)]
         self.primary = self.tables[0][1]
         self.mode = "grid" if all(t.mode == "grid" for _, t in self.tables) else "scattered"
         if len(groups) > 1:
-            # range and rows of the whole key-valid frame (not only the rows of the first value column)
-            self.df, self.K = df, K[key_ok]
+            # range and rows of every row a kept table uses (not only the rows of the first value column)
+            self.df, self.K = df[used].reset_index(drop=True), K[key_ok][used]
             self.lo, self.hi = self.K.min(axis=0), self.K.max(axis=0)
             span = self.hi - self.lo
             self.span = np.where(span > 0, span, 1.0)
@@ -1237,9 +1269,16 @@ class MultiTable:
         parts = [(cols, t.at(x)) for cols, t in self.tables]
         vals = {c: v for _, r in parts for c, v in r["values"].items()}
         methods = list(dict.fromkeys(r["method"] for _, r in parts))
+        # out-of-range text per key: one text when every column group says the same, else per column group
         oor: Dict[str, str] = {}
-        for _, r in parts:
-            oor.update(r["out_of_range"])
+        for key in self.keys:
+            texts = [(cols, r["out_of_range"][key]) for cols, r in parts if key in r["out_of_range"]]
+            if not texts:
+                continue
+            if len({t for _, t in texts}) == 1 and len(texts) == len(parts):
+                oor[key] = texts[0][1]
+            else:
+                oor[key] = "; ".join(f"{', '.join(cols)}: {t}" for cols, t in texts)
         by_col = {c: r["basis"] for cols, r in parts for c in cols}
         return {"values": {c: vals[c] for c in self.values},
                 "method": methods[0] if len(methods) == 1 else "; ".join(f"{', '.join(c)}: {r['method']}" for c, r in parts),
@@ -1472,7 +1511,8 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
 
     # key=val, key2=val2 format. Values stay text like a cell read from a file: numeric inputs are converted
     # later (prepare_features / coerce_numeric), so a category code such as '007' is not turned into 7.
-    # A piece without '=' belongs to the previous value: '압력=500,000' is 500,000 (coerce_numeric strips the comma).
+    # A piece without '=' belongs to the previous value ('라인=A,B' is the text 'A,B'). A NUMERIC input written
+    # that way ('압력=500,000', '온도=180,190') is ambiguous: check_comma_numbers stops with [추천] instead.
     row_dict: Dict[str, str] = {}
     last_key: Optional[str] = None
     for pair in clean_str.split(","):
@@ -1486,7 +1526,38 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
             row_dict[last_key] = f"{row_dict[last_key]},{pair.strip()}"
     if not row_dict:
         raise InputError(f"유효한 인라인 입력 형식이 아닙니다 (JSON 또는 'k1=v1,k2=v2'): '{input_str}'")
-    return pd.DataFrame([row_dict])
+    df = pd.DataFrame([row_dict])
+    df.attrs["kv_pairs"] = dict(row_dict)     # 'k=v' text form (check_comma_numbers rebuilds it)
+    return df
+
+
+_THOUSANDS_RE = re.compile(r"[+-]?\d{1,3}(,\d{3})+(\.\d+)?")
+
+
+def check_comma_numbers(pairs: Optional[Dict[str, Any]], numeric: Callable[[str], bool], option: str,
+                        command_for: Callable[[Dict[str, str]], str]) -> None:
+    """'k=v' input (ml_predict -i/--find, ml_map -i/--find): a numeric value with a comma was split at the comma
+    and joined back, so '온도=180,190' could be 180190 or two values. Never accepted silently:
+    thousands grouping (1,000 / 180,190) -> STOP_RETRY [추천] <full command with the value written without commas>,
+    anything else (1,5) -> STOP_RETRY without a suggestion. Text values keep the joined text.
+    pairs: the given names and values (None for JSON input); numeric(name) -> the name is a numeric input."""
+    if not pairs:
+        return
+    bad = {k: str(v) for k, v in pairs.items() if isinstance(v, str) and "," in v and numeric(k)}
+    if not bad:
+        return
+    what = ", ".join(f"'{k}={v}'" for k, v in bad.items())
+    head = (f"{option}의 숫자 입력 {what}에 쉼표가 있습니다. 쉼표는 입력을 나누는 기호라 숫자 값 안에 쓰면 "
+            f"값 하나인지 여러 개인지 알 수 없습니다.")
+    if all(_THOUSANDS_RE.fullmatch(v.strip()) for v in bad.values()):
+        fixed = {k: (str(v).replace(",", "") if k in bad else str(v)) for k, v in pairs.items()}
+        raise InputError(f"{head} 천 단위 구분 기호로 보고 쉼표를 뺀 명령을 추천합니다 (값을 여러 개 주려던 것이면 "
+                         f"실행하지 말고 사용자에게 값을 물으십시오). [추천] {command_for(fixed)}")
+    raise InputError(f"{head} 숫자 하나를 쉼표 없이 쓰십시오 (소수점은 '.'). 사용자에게 값을 확인하십시오.")
+
+
+def kv_text(pairs: Dict[str, str]) -> str:
+    return ",".join(f"{k}={v}" for k, v in pairs.items())
 
 
 # ==============================================================================
@@ -1616,6 +1687,7 @@ def compare_with_measured(meta: Dict[str, Any], target: str, version_dir: str, d
 
 LOW_CONFIDENCE_THRESHOLD = 0.6
 INLINE_SHOW_MAX = 5        # inline (-i) results with more records are saved to a file (truncated: true)
+WARNINGS_SHOW_MAX = 20     # extrapolation warnings in the JSON (the total is extrapolation_warning_count)
 
 
 def _predict_classification(
@@ -1700,16 +1772,23 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
     return out
 
 
-def _predict_command(args: argparse.Namespace) -> str:
-    """The same file prediction command without --header-row/--unit-row/--data-row."""
-    parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(args.model)]
+def _predict_command(args: argparse.Namespace, layout: str = "", inline: Optional[str] = None) -> str:
+    """The same prediction command without --header-row/--unit-row/--data-row (plus `layout` flags when given),
+    or with -i <inline> instead of the input. Paths are absolute and quoted (a trailing backslash or a relative
+    path must not break the command on Windows)."""
+    parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(os.path.abspath(args.model))]
     if getattr(args, "meta", None):
-        parts += ["--meta", quote_arg(args.meta)]
+        parts += ["--meta", quote_arg(os.path.abspath(args.meta))]
     if getattr(args, "targets", None):
         parts += ["-y", quote_arg(args.targets)]
-    parts += ["-f", quote_arg(args.file)]
+    if inline is not None:
+        parts += ["-i", quote_arg(inline)]
+    else:
+        parts += ["-f", quote_arg(os.path.abspath(args.file))]
+    if layout:
+        parts.append(layout.strip())
     if getattr(args, "out", None):
-        parts += ["-o", quote_arg(args.out)]
+        parts += ["-o", quote_arg(os.path.abspath(args.out))]
     if getattr(args, "encoding", None):
         parts += ["--encoding", quote_arg(args.encoding)]
     if getattr(args, "overwrite", False):
@@ -1717,23 +1796,68 @@ def _predict_command(args: argparse.Namespace) -> str:
     return " ".join(parts)
 
 
+def _inputs_present(needed: List[str], columns: List[str]) -> bool:
+    """Every model input is a column, exactly or as a unique unit-less column (the align_input_columns rule)."""
+    cols = set(columns)
+    alias = build_alias_map(columns)
+    for f in needed:
+        src = f if f in cols else alias.get(_alias_key(f))
+        if src is None or (src != f and strip_unit(src) != src.strip()):
+            return False
+    return True
+
+
+def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
+    """The first data row holds numbers in the model's numeric inputs (a unit row read as data does not)."""
+    if df.empty:
+        return False
+    alias = build_alias_map([str(c) for c in df.columns])
+    vals = []
+    for f in numeric:
+        src = f if f in df.columns else alias.get(_alias_key(f))
+        if src is None:
+            return False
+        v = df[src].iloc[0]
+        if pd.notna(v) and str(v).strip():
+            vals.append(v)
+    return bool(vals) and coerce_numeric(pd.Series(vals, dtype=object)).notna().all()
+
+
 def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
                  missing: Optional[List[str]] = None) -> str:
     """Why a file misses the model columns, as ONE suggestion (the tool never switches the layout by itself):
-    - layout options given, and the file read WITHOUT them has every model input -> [추천] <the command without them>
+    - layout options given, and the file read WITHOUT them has every model input and numbers in the first data row
+      -> [추천] <the command without them>; a unit row read as data -> the command with --unit-row <header + 1>
     - the missing names are in another top row (two-level / merged header) -> [추천] --header-row N"""
     needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
+    numeric = [c for it in model_items for c in model_raw_inputs(it["meta"])
+               if c not in it["meta"]["feature_schema"].get("categorical", {})
+               and c not in it["meta"]["feature_schema"].get("datetime", {})]
+    numeric = list(dict.fromkeys(numeric))
     has_layout = any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row"))
     if has_layout and getattr(args, "file", None):
+        cmd = None
         try:
             auto = load_data_file(args.file)
         except Exception:
             auto = None
-        if auto is not None and names_in_cells(needed, [str(c) for c in auto.columns]):
+        if auto is not None and _inputs_present(needed, [str(c) for c in auto.columns]):
+            if _first_row_numeric(auto, numeric):
+                cmd = _predict_command(args)
+            else:
+                unit_row = int(auto.attrs.get("header_row", 1)) + 1
+                try:
+                    with_unit = load_data_file(args.file, unit_row=unit_row)
+                except Exception:
+                    with_unit = None
+                if (with_unit is not None and _inputs_present(needed, [str(c) for c in with_unit.columns])
+                        and _first_row_numeric(with_unit, numeric)):
+                    cmd = _predict_command(args, layout=f"--unit-row {unit_row}")
+        if cmd:
             return ("레이아웃 옵션(--header-row/--unit-row/--data-row)이 이 파일과 맞지 않습니다. "
-                    f"옵션 없이 읽으면 모델 입력 열이 모두 있습니다. [추천] {_predict_command(args)}")
+                    f"이 파일의 머리글로 읽으면 모델 입력 열이 모두 있습니다. [추천] {cmd}")
     if df_input is not None and missing:
-        row = find_header_row(df_input.attrs.get("head_rows"), missing)
+        row = find_header_row(df_input.attrs.get("header_candidates"), missing)
         if row is not None and row != getattr(args, "header_row", None):
             return f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글이나 병합된 머리글). [추천] --header-row {row}"
     return ""
@@ -1810,6 +1934,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         # Accept unit-less input column names, then replay derived features
         raw_needed = model_raw_inputs(meta)
         column_aliases.update(align_input_columns(df_input, list(dict.fromkeys(raw_needed + req_features)), derived_names))
+        if is_inline:
+            num_raw = {c for c in raw_needed if c not in meta["feature_schema"].get("categorical", {})
+                       and c not in meta["feature_schema"].get("datetime", {})}
+            check_comma_numbers(df_input.attrs.get("kv_pairs"), lambda k: column_aliases.get(k, k) in num_raw, "-i",
+                                lambda fixed: _predict_command(args, inline=kv_text(fixed)))
         missing_raw = [c for c in raw_needed if c not in df_input.columns]
         if missing_raw and any(c not in req_features for c in missing_raw):
             available_cols = [str(c) for c in df_input.columns]
@@ -2017,8 +2146,10 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
     # 5. Build Response
     drift_warnings = list(dict.fromkeys(drift_warnings))  # same feature is checked once per target
-    for w in drift_warnings:
+    for w in drift_warnings[:WARNINGS_SHOW_MAX]:
         sys.stderr.write(f"[WARN] Extrapolation detected: {w}\n")
+    if len(drift_warnings) > WARNINGS_SHOW_MAX:
+        sys.stderr.write(f"[WARN] Extrapolation detected: 외 {len(drift_warnings) - WARNINGS_SHOW_MAX}건\n")
 
     for w in low_conf_warnings:
         sys.stderr.write(f"[WARN] Low confidence: {w}\n")
@@ -2054,6 +2185,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 그대로 알리세요. ")
         + f"Prediction completed for {len(model_items)} target(s)"
         + (" with extrapolation warning (inputs outside training range; predictions may be unreliable)" if drift_warnings else "")
+        + (f" (extrapolation_warnings shows {WARNINGS_SHOW_MAX} of {len(drift_warnings)}; tell the user the total count)"
+           if len(drift_warnings) > WARNINGS_SHOW_MAX else "")
         + (" with low-confidence warning (class probability < 0.6 for some rows)" if low_conf_warnings else "")
         + (" with missing-input warning (empty or non-numeric inputs were imputed)" if missing_counts else "")
         + (" with unseen-category warning" if category_warnings else "")
@@ -2079,8 +2212,9 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         **({"unverified": unverified} if unverified else {}),
         "predictions_summary": predictions_summary,
         "drift_warning": bool(drift_warnings),
-        "drift_warnings": drift_warnings,
-        "extrapolation_warnings": drift_warnings,
+        "extrapolation_warnings": drift_warnings[:WARNINGS_SHOW_MAX],
+        "extrapolation_warning_count": len(drift_warnings),
+        "extrapolation_warnings_truncated": len(drift_warnings) > WARNINGS_SHOW_MAX,
         "low_confidence_warning": bool(low_conf_warnings),
         "low_confidence_warnings": low_conf_warnings,
         "missing_input_warning": bool(missing_counts),
@@ -2151,10 +2285,25 @@ def _model_curve(pipe: Any, meta: Dict[str, Any], base: Dict[str, Any], vary: st
     return np.asarray(pipe.predict(prepare_features(df, meta["feature_schema"])), dtype=float)
 
 
+def _find_command(args: argparse.Namespace, find: Optional[str] = None, inline: Optional[str] = None) -> str:
+    """The same --find command with a corrected --find or -i text (absolute, quoted paths)."""
+    parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(os.path.abspath(args.model))]
+    if getattr(args, "meta", None):
+        parts += ["--meta", quote_arg(os.path.abspath(args.meta))]
+    parts += ["--find", quote_arg(find if find is not None else args.find), "--vary", quote_arg(args.vary)]
+    i_text = inline if inline is not None else getattr(args, "input", None)
+    if i_text:
+        parts += ["-i", quote_arg(i_text)]
+    return " ".join(parts)
+
+
 def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
-    goal = parse_inline_input(args.find).iloc[0].to_dict()
+    goal_df = parse_inline_input(args.find)
+    goal = goal_df.iloc[0].to_dict()
     if len(goal) != 1:
         raise InputError("--find에는 목표 하나만 주십시오 (예: --find \"생산효율=50\").")
+    check_comma_numbers(goal_df.attrs.get("kv_pairs"), lambda k: True, "--find",
+                        lambda fixed: _find_command(args, find=kv_text(fixed)))
     (goal_name, goal_val), = goal.items()
     try:
         y0 = float(goal_val)
@@ -2173,9 +2322,14 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     vary = resolve_column_names([args.vary.strip()], raw_inputs, "바꿀 입력(--vary)")[0][0]
     if vary not in numeric_in or vary not in stats:
         raise InputError(f"'{vary}'은(는) 숫자 입력이 아니라 반대 찾기로 바꿀 수 없습니다. [후보] {', '.join(numeric_in)}")
-    given = parse_inline_input(args.input).iloc[0].to_dict() if args.input else {}
+    given_df = parse_inline_input(args.input) if args.input else None
+    given = given_df.iloc[0].to_dict() if given_df is not None else {}
     names, _ = resolve_column_names([str(k) for k in given], raw_inputs, "고정 입력(-i)") if given else ([], {})
     fixed = {n: given[k] for k, n in zip(given, names)}
+    resolved = dict(zip([str(k) for k in given], names))
+    if given_df is not None:
+        check_comma_numbers(given_df.attrs.get("kv_pairs"), lambda k: resolved.get(k) in numeric_in, "-i",
+                            lambda fx: _find_command(args, inline=kv_text(fx)))
     if vary in fixed:
         raise InputError(f"'{vary}'는 --vary로 찾는 입력이라 -i에 함께 줄 수 없습니다.")
 

@@ -48,7 +48,7 @@ def test_small_inputs_keep_training_range(tiny):
     res = run_tool("ml_predict.py", "-m", tiny["v"], "-i", "도핑농도=5e-6,온도=5")
     assert res["drift_warning"] is False                                      # 2.9.12: +500% warning on every predict
     out = run_tool("ml_predict.py", "-m", tiny["v"], "-i", "도핑농도=2e-5,온도=5")
-    assert out["drift_warning"] and "0.00" not in out["drift_warnings"][0]
+    assert out["drift_warning"] and "0.00" not in out["extrapolation_warnings"][0]
     f = run_tool("ml_predict.py", "-m", tiny["v"], "--find", "저항=6", "--vary", "도핑농도")
     lo, hi = f["training_range"]["도핑농도"]
     assert 0 < lo < hi and f["count"] >= 1                                    # 2.9.12: [0, 0] and count 0
@@ -198,7 +198,7 @@ def test_truncated_inline_has_full_result_file(tiny, tmp_path):
 def test_report_fmt_keeps_small_values():
     assert mr.fmt(0.123456) == "0.1235" and mr.fmt(1234.5) == "1,234.5000"
     assert mr.fmt(3.2e-6) == "3.200e-06"                                       # 2.9.12: 0.0000
-    assert mr.fmt(0.004567) == "0.004567" and mr.fmt(0.0) == "0.0000"
+    assert mr.fmt(0.004567) == "0.0046" and mr.fmt(0.0) == "0.0000"             # 2.9.14: no padding (was 0.004567)
     t = {"task": "regression", "oof": pd.DataFrame({"actual": [1e-6, 3e-6, 5e-6]}),
          "champ": {"champion_model": "Ridge", "val_r2": 0.95, "mae": 2.5e-7, "overfit_gap": 0.01}}
     text = mr.text_performance(t)

@@ -67,7 +67,7 @@ def test_predict_with_categories_dates_and_warnings(mixed):
     warn = run_tool("ml_predict.py", "-m", vdir, "-i", "일시=2027-01-01 10:00,라인=Z라인,반응온도=")
     assert warn["unseen_category_warning"] is True and "Z라인" in warn["unseen_category_warnings"][0]
     assert warn["missing_input_counts"] == {"반응온도(°C)": 1}
-    assert any("학습 기간" in w for w in warn["drift_warnings"])
+    assert any("학습 기간" in w for w in warn["extrapolation_warnings"])
 
 
 def test_predict_standalone_with_new_schema(mixed, tmp_path):

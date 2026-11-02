@@ -60,7 +60,7 @@ def test_dtypes_datetime_yyyymmdd_predicts_without_imputation(tmp_path):
     assert "일자" in meta["feature_schema"]["datetime"] and meta["datetime_stats"]["일자"]["min"].startswith("2024-01-01")
     res = run_tool("ml_predict.py", "-m", v, "-f", str(p), "-o", str(tmp_path / "pred.csv"))
     assert res["missing_input_warning"] is False                    # before 2.9.11 every date was imputed
-    assert not any("날짜" in w for w in res["drift_warnings"])
+    assert not any("날짜" in w for w in res["extrapolation_warnings"])
 
 
 # T2 ---------------------------------------------------------------------------------------------------------

@@ -94,6 +94,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>
 ```
 - 학습 때 `--header-row`/`--unit-row`를 줬으면 파일 예측에도 같은 옵션을 붙인다 (학습 결과 `next_commands`의 예측 명령에 들어 있음).
 - `-i`에 6건 이상을 넣으면 건별 값 대신 `output_file`(결과 파일)을 알린다 (`truncated: true`).
+- `-i`의 숫자 값에는 쉼표를 쓰지 않는다 (`압력=3000`, `3,000` 아님). 쉼표가 있으면 도구가 멈추고 `[추천]` 명령을 준다 (`--find`, `ml_map.py`도 같음).
 - `<version_dir>`: 보고서를 만들었으면 보고서 결과의 `best_version_dir`, 아니면 마지막 학습 결과의 `version_dir`을 그대로 쓴다. 모르면 `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history`를 실행해 `<data_root>\<best_version>`을 쓴다.
 - 알릴 것: 한 건이면 `predictions_summary.<타겟>.predictions`, 회귀는 `intervals`(90% 범위)도. 파일이면 `output_file`.
 - 회귀는 `map_check`(실측 비교값: 학습 데이터에서 같은 조건을 찾은 값)의 `value`, `diff`(예측-비교값), `method`를 "실측 비교값"으로 함께 알린다.
@@ -102,7 +103,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>
 
 | JSON 값 | 덧붙일 말 |
 |---|---|
-| `drift_warning` | 입력값이 학습 범위를 벗어나 예측을 참고용으로만 써야 함 (`extrapolation_warnings` 내용 전달) |
+| `drift_warning` | 입력값이 학습 범위를 벗어나 예측을 참고용으로만 써야 함 (`extrapolation_warnings` 내용 전달, 최대 20건이니 `extrapolation_warning_count` 전체 건수도) |
 | `unseen_category_warning` | 학습 때 없던 종류가 있음 (`unseen_category_warnings` 내용 전달) |
 | `missing_input_warning` | 빈 값이 있어 기준값으로 채움 (`missing_input_warnings` 내용 전달) |
 | `low_confidence_warning` | 분류 확신도가 낮은 건이 있음 (`low_confidence_warnings` 내용 전달) |

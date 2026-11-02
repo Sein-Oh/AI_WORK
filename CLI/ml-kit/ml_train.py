@@ -214,9 +214,9 @@ def validate_and_sanitize_data(
     """
     all_available = [str(c) for c in df.columns]
 
-    head_rows = df.attrs.get("head_rows")    # two-level / merged header -> [추천] --header-row N
-    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", head_rows=head_rows)
-    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", head_rows=head_rows)
+    header_candidates = df.attrs.get("header_candidates")    # two-level / merged header -> [추천] --header-row N
+    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", header_candidates=header_candidates)
+    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", header_candidates=header_candidates)
     feature_names = list(dict.fromkeys(feature_names))
     target_names = list(dict.fromkeys(target_names))
 
@@ -469,9 +469,10 @@ def duplicate_groups(X: pd.DataFrame, y: np.ndarray) -> Tuple[np.ndarray, int]:
     return groups.astype(int), int(len(y) - len(first))
 
 
-def duplicate_warning(target_name: str, n_dup: int, n_rows: int) -> str:
+def duplicate_warning(target_name: str, n_dup: int, n_rows: int, note: Optional[str] = None) -> str:
+    how = (f"{note}." if note else "같은 행이 학습과 검증에 나뉘어 점수가 부풀지 않도록 묶어서 검증했습니다.")
     return (f"타겟 '{target_name}': 입력과 타겟이 완전히 같은 중복 행이 {n_dup}개 있습니다 (전체 {n_rows}행). "
-            f"같은 행이 학습과 검증에 나뉘어 점수가 부풀지 않도록 묶어서 검증했습니다. 중복이 실수라면 데이터에서 지우십시오.")
+            f"{how} 중복이 실수라면 데이터에서 지우십시오.")
 
 
 def train_and_benchmark_models(
@@ -504,13 +505,22 @@ def train_and_benchmark_models(
     model_count = len(models)
     # Dynamic K-Fold split: adapts gracefully to small sample sizes (N < 25)
     groups, n_dup = duplicate_groups(X, y)
+    n_distinct = int(groups.max()) + 1
+    if n_distinct < 10:
+        raise InputError(f"타겟 '{target_name}': 입력+타겟이 다른 행이 {n_distinct}개뿐입니다 (전체 {len(y)}행, 나머지 "
+                         f"{n_dup}행은 완전히 같은 중복 행). 서로 다른 행이 10개 이상 필요합니다. 중복이 실수라면 데이터를 고치십시오.")
     n_splits = min(5, max(2, len(y) // 3))
     if n_dup:
         # identical rows (inputs + target) stay in one fold: a copy in the training folds would leak the answer
-        n_splits = max(2, min(n_splits, int(groups.max()) + 1))
+        n_splits = max(2, min(n_splits, n_distinct))
         kf = GroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     else:
         kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    splits = list(kf.split(X, y, groups if n_dup else None))
+    # small training folds (heavy duplication): the inner CV of ElasticNetCV must fit in every training fold
+    min_train = min(len(tr) for tr, _ in splits)
+    if min_train < 6:
+        models["ElasticNet"].set_params(cv=max(2, min(3, min_train // 2)))
 
     leaderboard = []
     model_oof_map = {}
@@ -520,7 +530,7 @@ def train_and_benchmark_models(
         train_r2_list = []
         params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(kf.split(X, y, groups if n_dup else None), 1):
+        for fold, (train_idx, val_idx) in enumerate(splits, 1):
             pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
@@ -595,6 +605,7 @@ def train_and_benchmark_models(
 
     if n_dup:
         champion_summary["duplicate_rows"] = n_dup
+        champion_summary["duplicate_grouped"] = True
     target_benchmark_res = {
         "target": target_name,
         "task": TASK_REGRESSION,
@@ -753,14 +764,31 @@ def train_and_benchmark_classifiers(
     models = get_classification_models(seed=seed, balanced=balanced, n_rows=len(y))
     model_count = len(models)
     groups, n_dup = duplicate_groups(X, y)
+    splits = None
+    grouped_note = None
     if n_dup:
         # identical rows (inputs + class) stay in one fold; folds need at least one distinct row of every class
         class_groups = pd.Series(groups).groupby(pd.Series(y)).nunique()
-        n_splits = max(2, min(5, int(class_groups.min())))
-        skf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    else:
+        single = [str(c) for c, n in class_groups.items() if n < 2]
+        if single:
+            grouped_note = (f"클래스 {single}의 행이 모두 같은 값(서로 다른 행 1개)이라 묶어서 검증할 수 없어 "
+                            f"일반 층화 교차검증을 했습니다. 이 클래스의 검증 점수는 부풀 수 있습니다")
+        else:
+            n_splits = max(2, min(5, int(class_groups.min())))
+            sgk = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+            splits = list(sgk.split(X, y, groups))
+            if any(len(np.unique(y[tr])) < len(classes) for tr, _ in splits):
+                splits = None
+                grouped_note = ("중복 행을 묶으면 어떤 학습 fold에 빠지는 클래스가 있어 일반 층화 교차검증을 했습니다. "
+                                "검증 점수는 부풀 수 있습니다")
+    if splits is None:
         n_splits = max(2, min(5, min(class_counts.values())))
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        splits = list(skf.split(X, y))
+    # small training folds: KNN cannot ask for more neighbours than a training fold has
+    min_train = min(len(tr) for tr, _ in splits)
+    if "KNeighbors" in models and min_train < 5:
+        models["KNeighbors"].set_params(n_neighbors=max(1, min_train))
 
     leaderboard = []
     model_oof_map: Dict[str, np.ndarray] = {}
@@ -772,7 +800,7 @@ def train_and_benchmark_classifiers(
         train_f1_list = []
         params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y, groups if n_dup else None), 1):
+        for fold, (train_idx, val_idx) in enumerate(splits, 1):
             pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
@@ -865,6 +893,9 @@ def train_and_benchmark_classifiers(
     }
     if n_dup:
         champion_summary["duplicate_rows"] = n_dup
+        champion_summary["duplicate_grouped"] = grouped_note is None
+        if grouped_note:
+            champion_summary["duplicate_note"] = grouped_note
     target_benchmark_res = {
         "target": target_name,
         "task": TASK_CLASSIFICATION,
@@ -1630,7 +1661,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
             if champion_info.get("duplicate_rows"):
                 train_warnings.append(duplicate_warning(target_name, champion_info["duplicate_rows"],
-                                                        t_bench["sample_count"]))
+                                                        t_bench["sample_count"], champion_info.get("duplicate_note")))
                 sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
             all_score, excl_pred = score_with_excluded(task, champion_pipe, champion_info, oof_df,
                                                        g["X"], y_full, plan["mask"])
@@ -2276,17 +2307,39 @@ def best_is_fresh(records: List[Dict[str, Any]], data_root: str, raw_file: str, 
         return None
     if not _version_intact(data_root, best):
         return None
-    fp_old = best.get("data_fingerprint") or {}
-    try:
-        fp_new = data_fingerprint(raw_file)
-    except OSError:
-        return None
-    same = (fp_old.get("sha256") == fp_new["sha256"]) if fp_old.get("sha256") else (
-        fp_old.get("size") == fp_new["size"] and fp_old.get("mtime") == fp_new["mtime"])
-    if not same:
+    if not _fingerprint_same(best, raw_file):
         sys.stderr.write(f"[INFO] 데이터 파일 내용이 {best.get('version')} 때와 달라 최고 버전을 다시 만듭니다 ({task})\n")
         return None
     return best
+
+
+def _fingerprint_same(rec: Dict[str, Any], raw_file: str) -> bool:
+    fp_old = rec.get("data_fingerprint") or {}
+    if not fp_old:
+        return False
+    try:
+        fp_new = data_fingerprint(raw_file)
+    except OSError:
+        return False
+    return (fp_old.get("sha256") == fp_new["sha256"]) if fp_old.get("sha256") else (
+        fp_old.get("size") == fp_new["size"] and fp_old.get("mtime") == fp_new["mtime"])
+
+
+def single_best_version(records: List[Dict[str, Any]], data_root: str, raw_file: str, task: str) -> Optional[Dict[str, Any]]:
+    """
+    The version that already holds the best of EVERY target of the task (one training run, or the latest best
+    version when later runs beat nothing), trained on the current data file content. Retraining its recipes on the
+    same data would give the same models, so the report uses it as is.
+    """
+    chosen = select_best_recipes(records, data_root, task)
+    versions = {c["selected_version"] for c in chosen.values()}
+    if len(versions) != 1:
+        return None
+    ver = versions.pop()
+    rec = next((r for _, r in reversed(_unique_records(records)) if str(r.get("version")) == ver), None)
+    if rec is None or not _fingerprint_same(rec, raw_file):
+        return None
+    return rec
 
 
 def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
@@ -2304,10 +2357,17 @@ def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
         rec = best_is_fresh(records, data_root, raw_file, task)
         if rec is not None:
             sys.stderr.write(f"[INFO] 최신 최고 버전 {rec['version']} ({task})을(를) 그대로 사용합니다\n")
+        else:
+            rec = single_best_version(records, data_root, raw_file, task)
+            if rec is not None:
+                sys.stderr.write(f"[INFO] {rec['version']}에 모든 타겟의 최고 점수가 있어 다시 학습하지 않고 그대로 사용합니다 ({task})\n")
+        if rec is not None:
             versions.append({"task": task, "version": rec["version"],
                              "version_dir": os.path.join(data_root, rec["version"]), "targets": rec.get("targets", []),
                              "mean_val_score": rec.get("mean_val_score"), "made": False})
-            for t, src in (rec.get("best_source") or {}).items():
+            sources = rec.get("best_source") if rec.get("best") else None
+            for t in rec.get("targets", []):
+                src = (sources or {}).get(t) or {"version": rec["version"], "score": _target_score(rec, t)}
                 best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
                                    "new_score": _target_score(rec, t)}
             continue

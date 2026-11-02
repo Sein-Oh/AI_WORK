@@ -802,8 +802,11 @@ def parse_inputs_spec(text: Optional[str], targets: List[str], all_inputs: Dict[
 SPEC_CHARS = ",;="     # separators of --inputs: a target or input name with one of them cannot be written there
 
 
-def spec_safe(choice: Dict[str, List[str]]) -> bool:
-    """True when every target and input name can be written in --inputs (no ',', ';' or '=' in a name)."""
+def spec_safe(choice: Dict[str, List[str]], single: bool = False) -> bool:
+    """True when every name written in --inputs can be written there: per target ('<타겟>=a,b;...') no ',', ';' or
+    '=' in a target or input name; one target ('a,b', no target name) only the input names, without ',' or '='."""
+    if single:
+        return not any(ch in name for v in choice.values() for name in v for ch in ",=")
     return not any(ch in name for t, v in choice.items() for name in [t] + list(v) for ch in SPEC_CHARS)
 
 
@@ -904,7 +907,7 @@ def execute_export(args) -> Dict[str, Any]:
         what = ", ".join(f"'{t}' {over_n[t]}개 -> {len(c['inputs'])}개 (검증 R² {c['val_r2']:.4f})" for t, c in over.items())
         head = (f"--inputs가 성능예측표 상한 {MAX_INPUTS}개를 넘습니다 (입력이 많으면 표와 수식이 엑셀 한도를 넘음). "
                 f"입력을 줄여 다시 학습한 안: {what}.")
-        if not spec_safe(choice):
+        if not spec_safe(choice, len(vinfo["targets"]) == 1):
             raise InputError(f"{head} 줄인 입력: {choice}. 타겟이나 입력 이름에 ',' ';' '='가 있어 --inputs로 쓸 수 없습니다. "
                              f"--inputs 없이 실행하면 입력을 자동으로 고릅니다 (--keep으로 꼭 넣을 입력 지정).")
         raise InputError(f"{head} [추천] {inputs_arg(choice, len(vinfo['targets']) == 1)}")
@@ -966,7 +969,7 @@ def execute_export(args) -> Dict[str, Any]:
         if len(x["inputs"]) > MAX_INPUTS:
             return None
         choice = {q["target"]: (x["inputs"] if q is p else q["cand"]["inputs"]) for q in plans}
-        if not spec_safe(choice):
+        if not spec_safe(choice, single):
             return None   # a name with ',', ';' or '=' cannot be written in --inputs: no command rather than a broken one
         return (f"python {quote_arg(os.path.join(here, 'ml_export.py'))} -m {quote_arg(vinfo['dir'])}"
                 + (f" -y {quote_arg(args.targets)}" if args.targets else "")

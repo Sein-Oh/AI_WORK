@@ -140,8 +140,9 @@ def worst_verdict(verdicts: List[str]) -> str:
 
 
 def fmt(v: Any, digits: int = 4) -> str:
-    """Numbers in the report: `digits` decimals, but small values keep `digits` significant digits
-    (same rule as round_pred in the JSON), so an MAE of 3e-06 is not shown as 0.0000."""
+    """Numbers in the report (cards, tables and text alike): `digits` decimals (0.0066 -> 0.0066, no padding
+    beyond the stored value); only a value that would show as 0 at `digits` decimals keeps `digits` significant
+    digits in exponent form, so an MAE of 3e-06 is not shown as 0.0000."""
     if v is None:
         return "-"
     if isinstance(v, (bool, np.bool_)):
@@ -152,10 +153,9 @@ def fmt(v: Any, digits: int = 4) -> str:
         if not np.isfinite(v):
             return "-"
         a = abs(float(v))
-        dec = digits if a == 0 else max(digits, digits - 1 - int(np.floor(np.log10(a))))
-        if 0 < a < 1e-4:
+        if a > 0 and round(a, digits) == 0:
             return f"{float(v):.{digits - 1}e}"
-        return f"{float(v):,.{dec}f}"
+        return f"{float(v):,.{digits}f}"
     return str(v)
 
 
@@ -1000,6 +1000,18 @@ def exclusion_line(t: Dict[str, Any], metric: str) -> str:
     return " | ".join(parts)
 
 
+def duplicate_line(t: Dict[str, Any]) -> str:
+    """'수율: 중복 행 12개 (전체 120행) ...' from the training result, '' when there were none."""
+    c = t["champ"]
+    n = c.get("duplicate_rows")
+    if not n:
+        return ""
+    total = t["bench"].get("sample_count")
+    how = (c.get("duplicate_note") or "") if c.get("duplicate_grouped") is False else \
+        "같은 행이 학습과 검증에 나뉘지 않도록 묶어서 검증함"
+    return f"{t['name']}: 중복 행 {int(n):,}개" + (f" (전체 {int(total):,}행)" if total else "") + f", {how}"
+
+
 def text_performance(t: Dict[str, Any]) -> str:
     c = t["champ"]
     if t["task"] == "regression":
@@ -1196,6 +1208,10 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     data_default = (f"{data_name}: {prof.get('rows_loaded', 0):,}행 x {prof.get('columns_loaded', 0)}열 (표 구조: {layout_txt}). "
                     f"학습 사용 {used}. 피처 결측 {prof.get('missing_imputed_cells', 0):,}칸은 학습 데이터 기준값으로 대치.")
     R.para(slot("data", data_default), size=9, space_after=4)
+    dup_lines = [duplicate_line(t) for t in targets if duplicate_line(t)]
+    if dup_lines:
+        R.para("중복 행 경고: 입력과 타겟이 완전히 같은 행이 있습니다. 중복이 실수라면 데이터에서 지우고 다시 학습하십시오.\n"
+               + "\n".join(dup_lines), size=9, color=C_INK, space_after=4)
     excl_lines = [f"{t['name']}: {exclusion_line(t, metric_label)}" for t in targets if exclusion_line(t, metric_label)]
     if excl_lines:
         R.para("학습 제외 행: 데이터의 '제외' 열에 글자가 있는 행(직접 표시)과, 값이 중앙값에서 크게 벗어난 행"

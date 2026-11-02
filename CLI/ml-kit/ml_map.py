@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
     load_data_file, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
-    EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    check_comma_numbers, kv_text, quote_arg, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -73,18 +73,41 @@ def data_columns(df: pd.DataFrame, exclude_col: Optional[str]) -> List[str]:
 # 3. Argument handling
 # ==============================================================================
 
-def _parse_pairs(text: str, what: str) -> Dict[str, Any]:
+def _parse_pairs(text: str, what: str) -> Tuple[Dict[str, Any], Optional[Dict[str, str]]]:
+    """Names and values of one 'k=v,...' row, plus the 'k=v' text form (None for JSON) for check_comma_numbers."""
     if not text:
-        return {}
+        return {}, None
     df = parse_inline_input(text)
     if len(df) != 1:
         raise InputError(f"{what}은(는) 한 줄('열=값,열=값')로 주십시오.")
-    return {str(k): v for k, v in df.iloc[0].to_dict().items()}
+    return {str(k): v for k, v in df.iloc[0].to_dict().items()}, df.attrs.get("kv_pairs")
 
 
-def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str]) -> Tuple[Dict[str, float], Dict[str, str]]:
+def _map_command(args, **change: Optional[str]) -> str:
+    """The same ml_map.py command with a corrected -i / --find text (absolute, quoted paths)."""
+    parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-f", quote_arg(os.path.abspath(args.file))]
+    for flag, key in (("--header-row", "header_row"), ("--unit-row", "unit_row"), ("--data-row", "data_row")):
+        if getattr(args, key, None) is not None:
+            parts += [flag, str(getattr(args, key))]
+    for flag, key in (("-i", "input"), ("-y", "targets"), ("--find", "find"), ("--vary", "vary")):
+        val = change.get(key, getattr(args, key, None))
+        if val:
+            parts += [flag, quote_arg(val)]
+    if getattr(args, "save", None):
+        parts += ["--save", quote_arg(args.save)]
+    if getattr(args, "overwrite", False):
+        parts.append("--overwrite")
+    return " ".join(parts)
+
+
+def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], args=None,
+                kv: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
     """Resolves -i names; numeric columns need numeric values, text columns become row filters."""
-    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", head_rows=df.attrs.get("head_rows"))
+    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", header_candidates=df.attrs.get("header_candidates"))
+    resolved = dict(zip(pairs, names))
+    if kv and args is not None:
+        check_comma_numbers(kv, lambda k: k in resolved and _is_numeric_col(df[resolved[k]]), "-i",
+                            lambda fixed: _map_command(args, input=kv_text(fixed)))
     numeric, categorical = {}, {}
     for given, col in zip(pairs, names):
         v = pairs[given]
@@ -109,9 +132,11 @@ def _filter(df: pd.DataFrame, categorical: Dict[str, str]) -> pd.DataFrame:
 
 
 def _value_columns(df: pd.DataFrame, args_y: Optional[str], columns: List[str], skip: List[str]) -> List[str]:
+    """Value columns, numeric judged on the whole table (df before the -i text filter): a column that is empty
+    in the filtered rows is still a value column and MultiTable leaves it out with a warning."""
     if args_y:
         names, _ = resolve_column_names([s.strip() for s in args_y.split(",") if s.strip()], columns, "구할 열(-y)",
-                                        head_rows=df.attrs.get("head_rows"))
+                                        header_candidates=df.attrs.get("header_candidates"))
         bad = [c for c in names if not _is_numeric_col(df[c])]
         if bad:
             raise InputError(f"구할 열 {bad}은(는) 숫자 열이 아닙니다.")
@@ -155,10 +180,16 @@ def _basis_text(basis: List[Dict[str, Any]]) -> str:
     return " + ".join(f"{b['row']}행 x {b['weight']:.4g}" for b in basis)
 
 
-def _basis_cells(r: Dict[str, Any]) -> Dict[str, str]:
-    """Excel '근거' cells: one column, or one per value column when the columns used different rows (MultiTable)."""
+def _basis_differs(r: Dict[str, Any]) -> bool:
     by_col = r.get("basis_by_column")
-    if by_col and len({_basis_text(b) for b in by_col.values()}) > 1:
+    return bool(by_col) and len({_basis_text(b) for b in by_col.values()}) > 1
+
+
+def _basis_cells(r: Dict[str, Any], per_column: bool) -> Dict[str, str]:
+    """Excel '근거' cells: one column, or one per value column (MultiTable) when any result of the run used
+    different rows per column (per_column is decided once per run, so a sheet never mixes the two layouts)."""
+    by_col = r.get("basis_by_column")
+    if per_column and by_col:
         return {f"근거_{c}": _basis_text(b) for c, b in by_col.items()}
     return {"근거": _basis_text(r["basis"])}
 
@@ -196,13 +227,15 @@ def execute_forward(args) -> Dict[str, Any]:
             raise InputError(f"조회 파일에는 숫자 기준 열만 넣어 주십시오 (글자 열: {list(categorical)}).")
         key_src = dict(zip(numeric, usable))
     else:
-        numeric, categorical = _split_keys(df, _parse_pairs(args.input, "-i"), columns)
+        pairs, kv = _parse_pairs(args.input, "-i")
+        numeric, categorical = _split_keys(df, pairs, columns, args, kv)
         key_src = {}
     if not numeric:
         raise InputError("숫자 기준 열이 하나 이상 필요합니다 (예: -i \"반응온도=232.5\").")
     keys = list(numeric)
     sub = _filter(df, categorical)
-    values = _value_columns(sub, args.targets, columns, skip=keys + list(categorical))
+    values = _value_columns(df, args.targets, columns, skip=keys + list(categorical))
+    asked = list(values)
     show = list(dict.fromkeys(keys + list(categorical) + values))
 
     if len(keys) > MAX_KEYS:
@@ -225,16 +258,21 @@ def execute_forward(args) -> Dict[str, Any]:
     if points_df is not None:
         X = np.column_stack([coerce_numeric(points_df[key_src[k]]).to_numpy(dtype=float) for k in keys])
         bad = ~np.isfinite(X).all(axis=1)
+        # numbers stay numbers in the result sheet (a CSV is read as text)
+        pcols = {str(c): (coerce_numeric(points_df[c]) if _is_numeric_col(points_df[c]) else points_df[c])
+                 for c in points_df.columns}
+        results = {i: t.at(x) for i, x in enumerate(X) if not bad[i]}
+        per_column = any(_basis_differs(r) for r in results.values())
         out_rows, near_rows = [], []
         for i, x in enumerate(X):
-            base = {str(c): _cell(points_df[c].iloc[i]) for c in points_df.columns}
+            base = {c: _cell(col.iloc[i]) for c, col in pcols.items()}
             if bad[i]:
                 out_rows.append({**base, "방식": "계산 불가 (기준 값 빈칸)"})
                 continue
-            r = t.at(x)
+            r = results[i]
             out_rows.append({**base, **{f"보간_{c}": v for c, v in r["values"].items()}, "방식": r["method"],
                              "외삽": "예" if r["extrapolated"] else "", "범위 밖": "; ".join(f"{k}: {v}" for k, v in r["out_of_range"].items()),
-                             **_basis_cells(r)})
+                             **_basis_cells(r, per_column)})
             for nr in nearest_rows(t.df, keys, x, t.span, show):
                 near_rows.append({"조회 번호": i + 1, **{("원본 행" if k == "row" else "거리" if k == "distance" else k): v
                                                     for k, v in nr.items()}})
@@ -258,7 +296,7 @@ def execute_forward(args) -> Dict[str, Any]:
     x = np.array([numeric[k] for k in keys])
     r = t.at(x)
     near = nearest_rows(t.df, keys, x, t.span, show)
-    unused = [c for c in columns if c not in keys + values + list(categorical) and _is_numeric_col(sub[c])]
+    unused = [c for c in columns if c not in keys + asked + list(categorical) and _is_numeric_col(df[c])]
     if t.mode == "scattered" and unused:
         warnings.append(f"흩어진 기록이라 기준으로 주지 않은 열 {unused[:5]}의 영향이 섞인 값입니다. 참고용으로 쓰십시오")
     point = {"input": {**{k: numeric[k] for k in keys}, **categorical}, **r}
@@ -272,7 +310,8 @@ def execute_forward(args) -> Dict[str, Any]:
     if args.save:
         real, ok = _write_book(_resolve_save(args.save, tab["path"]), {
             "결과": pd.DataFrame([{**point["input"], **{f"보간_{c}": v for c, v in r["values"].items()},
-                                  "방식": r["method"], "외삽": "예" if r["extrapolated"] else "", **_basis_cells(r)}]),
+                                  "방식": r["method"], "외삽": "예" if r["extrapolated"] else "",
+                                  **_basis_cells(r, _basis_differs(r))}]),
             "가까운 실측": pd.DataFrame([{("원본 행" if k == "row" else "거리" if k == "distance" else k): v
                                        for k, v in nr.items()} for nr in near])}, args.overwrite)
         res["output_file"], res["verified"] = real, ok
@@ -288,17 +327,19 @@ def execute_reverse(args) -> Dict[str, Any]:
     tab = load_table(args)
     df, columns = tab["df"], data_columns(tab["df"], tab["exclude_col"])
     warnings: List[str] = []
-    goal = _parse_pairs(args.find, "--find")
+    goal, goal_kv = _parse_pairs(args.find, "--find")
     if len(goal) != 1:
         raise InputError("--find에는 목표 하나만 주십시오 (예: --find \"생산효율=50\").")
+    check_comma_numbers(goal_kv, lambda k: True, "--find", lambda fixed: _map_command(args, find=kv_text(fixed)))
     (goal_name, goal_val), = goal.items()
-    goal_col = resolve_column_names([goal_name], columns, "목표(--find)", head_rows=df.attrs.get("head_rows"))[0][0]
+    goal_col = resolve_column_names([goal_name], columns, "목표(--find)", header_candidates=df.attrs.get("header_candidates"))[0][0]
     try:
         y0 = float(goal_val)
     except (TypeError, ValueError):
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
-    vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)", head_rows=df.attrs.get("head_rows"))[0][0]
-    numeric, categorical = _split_keys(df, _parse_pairs(args.input, "-i"), columns)
+    vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)", header_candidates=df.attrs.get("header_candidates"))[0][0]
+    pairs, kv = _parse_pairs(args.input, "-i")
+    numeric, categorical = _split_keys(df, pairs, columns, args, kv)
     if vary in numeric or vary in categorical:
         raise InputError(f"'{vary}'는 --vary로 찾는 열이라 -i에 함께 줄 수 없습니다.")
     if goal_col in numeric or goal_col in categorical or goal_col == vary:

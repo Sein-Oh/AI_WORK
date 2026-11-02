@@ -128,18 +128,19 @@ def test_report_f_reuses_then_rebuilds(three_runs):
     again = run_tool("ml_report.py", "-f", data)
     assert again["made_best"] is False and again["best_version"] == "v5"
 
-    run_tool("ml_train.py", "-f", data, "-x", "온도,속도", "-y", "두께")  # v6: new training -> stale best
+    # v6: a later training that beats nothing -> v5 still holds every best and is used as is (2.9.14)
+    run_tool("ml_train.py", "-f", data, "-x", "온도,속도", "-y", "두께")
     third = run_tool("ml_report.py", "-f", data)
-    assert third["made_best"] is True and third["best_version"] == "v7"
-    assert set(third["targets"]) == {Y1, Y2, Y3}
-    rec = ledger(data)[-1]
-    assert rec["version"] == "v7" and rec["best"] is True
+    assert third["made_best"] is False and third["best_version"] == "v5"
 
     # Changed data file content -> rebuilt even without a new training run
     df = pd.read_csv(data, encoding="utf-8-sig")
     pd.concat([df, df.iloc[:3]]).to_csv(data, index=False, encoding="utf-8-sig")
     fourth = run_tool("ml_report.py", "-f", data)
-    assert fourth["made_best"] is True and fourth["best_version"] == "v8"
+    assert fourth["made_best"] is True and fourth["best_version"] == "v7"
+    assert set(fourth["targets"]) == {Y1, Y2, Y3}
+    rec = ledger(data)[-1]
+    assert rec["version"] == "v7" and rec["best"] is True
 
 
 def test_mixed_tasks_two_best_versions(tmp_path):
@@ -147,7 +148,9 @@ def test_mixed_tasks_two_best_versions(tmp_path):
     run_tool("ml_train.py", "-f", data, "-x", "온도,압력", "-y", "수율")
     run_tool("ml_train.py", "-f", data, "-x", "온도,속도", "-y", "등급", "--task", "classification")
     rep = run_tool("ml_report.py", "-f", data)
-    assert rep["made_best"] is True and rep["report_count"] == 2
+    # each task has one training run that holds its best: used as is, no retraining (2.9.14)
+    assert rep["made_best"] is False and rep["report_count"] == 2
+    assert [b["version"] for b in rep["best_versions"]] == ["v1", "v2"]
     assert [r["task"] for r in rep["best_reports"]] == ["regression", "classification"]
     assert [b["task"] for b in rep["best_versions"]] == ["regression", "classification"]
     assert rep["best_targets"][LABEL]["task"] == "classification"
@@ -160,6 +163,11 @@ def test_mixed_tasks_two_best_versions(tmp_path):
 
     tr = run_tool("ml_train.py", "-f", data, "--best", "--task", "regression")
     assert [b["task"] for b in tr["best_versions"]] == ["regression"] and tr["targets"] == [Y1]
+
+    # bests in two different runs -> the report builds one best version first
+    run_tool("ml_train.py", "-f", data, "-x", "온도,압력", "-y", "두께")
+    built = run_tool("ml_report.py", "-f", data, "--task", "regression")
+    assert built["made_best"] is True and set(built["targets"]) == {Y1, Y3}
 
 
 def test_no_history_stops(tmp_path):
