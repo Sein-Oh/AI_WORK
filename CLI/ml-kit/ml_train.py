@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     read_text_file, load_json_file, resolve_column_names, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
-    strip_unit,
+    strip_unit, layout_warnings,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
 )
 
@@ -1648,7 +1648,11 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         target_champions = {}
         target_summaries = {}
         all_champion_scores = []
-        train_warnings: List[str] = []
+        # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader),
+        # totals / average rows (kept: the '제외' column is the user's decision)
+        train_warnings: List[str] = layout_warnings(df_raw, target_names)
+        for w in train_warnings:
+            sys.stderr.write(f"[WARN] {w}\n")
         benchmark_fn = train_and_benchmark_models if task == TASK_REGRESSION else train_and_benchmark_classifiers
 
         total_targets = len(target_names)
@@ -2046,7 +2050,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
             + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
                "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "")
-            + ("Tell the user every item of warnings (duplicate rows). " if train_warnings else "") +
+            + ("Tell the user every item of warnings (duplicate rows, repeated header rows, totals rows). " if train_warnings else "") +
             "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
             "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
         )

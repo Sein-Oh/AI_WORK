@@ -26,7 +26,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
-    load_data_file, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
+    load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
     check_comma_numbers, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
@@ -62,7 +62,11 @@ def load_table(args) -> Dict[str, Any]:
         mask = (text != "") & (text != INCLUDE_MARK)
         dropped = int(mask.sum())
         df = df[~mask]
+    notes = layout_warnings(df)     # repeated header rows (dropped by the loader), totals rows
+    for w in notes:
+        sys.stderr.write(f"[WARN] {w}\n")
     return {"path": path, "df": df.reset_index(drop=True), "exclude_col": excl, "excluded": dropped,
+            "layout_warnings": notes,
             "saved_at": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")}
 
 
@@ -202,6 +206,7 @@ def _basis_cells(r: Dict[str, Any], per_column: bool) -> Dict[str, str]:
 def _common(tab: Dict[str, Any], result: Dict[str, Any], warnings: List[str]) -> Dict[str, Any]:
     if tab["excluded"]:
         warnings.insert(0, f"'{tab['exclude_col']}' 열에 표시된 {tab['excluded']}행은 쓰지 않았습니다")
+    warnings[:0] = tab.get("layout_warnings") or []
     result.update({"data_file": tab["path"], "data_saved_at": tab["saved_at"]})
     if warnings:
         result["warnings"] = warnings

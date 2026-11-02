@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.17"
+  version: "2.9.18"
   platform: windows
 ---
 
@@ -69,7 +69,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 - 이상치는 도구가 자동으로 찾아 학습에서 뺀다. 옵션은 없다. 데이터의 `제외` 열은 도구가 읽는 표시용 열이다 (피처에 넣어도 도구가 뺀다).
   사용자가 행을 빼거나 넣고 싶다고 하면 데이터 파일을 직접 고치지 말고, 엑셀의 `제외` 열에 이유(뺄 때) 또는 `포함`(자동 제외를 막을 때)을 적으라고 안내한다.
 
-결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `recommendations`의 첫 문장. `warnings`(예: 중복 행)가 있으면 그대로.
+결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `recommendations`의 첫 문장. `warnings`(예: 중복 행, 반복된 머리글 행, 합계·평균 행)가 있으면 그대로.
 `exclusions`가 있으면 타겟별 학습 제외 행 수(직접 `manual`, 자동 `auto`), 제외 행 포함 검증 점수 `all_rows_score`, `excluded_rows_file`(뺀 행 목록)도 알린다.
 다음 단계를 위해 기억할 것: `version_dir`, `goal_met`, `next_commands`.
 

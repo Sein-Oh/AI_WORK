@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.17"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.18"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -429,8 +429,8 @@ def _read_csv_fast(file_path: str) -> pd.DataFrame:
     """
     Reads CSV with the fast C parser: encoding and delimiter are detected from the first
     64KB, then the whole file is parsed as strings (numeric conversion happens later in
-    coerce_numeric, identically for training and inference). Falls back to the slower
-    python parser only for malformed files.
+    coerce_numeric, identically for training and inference). Rows of different widths
+    (a title line above the table) are padded to the widest row.
     """
     try:
         with open(file_path, "rb") as f:
@@ -456,8 +456,13 @@ def _read_csv_fast(file_path: str) -> pd.DataFrame:
             last_err = e
             continue
         except pd.errors.ParserError:
+            # ragged rows: a title line narrower than the table ("Expected 1 fields in line 2, saw 4"). Every row is
+            # padded to the widest row (names=0..n-1), so header detection and [추천] --header-row work as for .xlsx.
             try:
-                return pd.read_csv(file_path, header=None, sep=sep, encoding=enc, dtype=str, engine="python")
+                with open(file_path, "r", encoding=enc, newline="") as f:
+                    width = max((len(r) for r in csv.reader(f, delimiter=sep)), default=1)
+                return pd.read_csv(file_path, header=None, names=list(range(width)), sep=sep, encoding=enc,
+                                   dtype=str, engine="python")
             except Exception as e:
                 last_err = e
                 continue
@@ -483,6 +488,24 @@ def load_data_file(
     Handles non-standard header, unit, and data row specifications.
     Includes Auto-Header Sniffing: skips blank/title top rows automatically if header_row is not explicit.
     """
+    df_raw = read_raw_table(file_path)
+    total_rows = len(df_raw)
+    if total_rows == 0:
+        raise InputError("입력 데이터 파일이 비어 있습니다.")
+
+    # Auto-Header Sniffing: If header_row is not specified or 1, skip leading empty rows
+    if header_row is not None and header_row > 1:
+        header_idx = header_row - 1
+    else:
+        header_idx = sniff_header_index(df_raw)
+
+    if header_idx >= total_rows:
+        raise InputError(f"유효한 헤더 행을 찾을 수 없습니다 (전체 행 수: {total_rows}).")
+    return _layout_frame(df_raw, header_idx, unit_row, data_row)
+
+
+def read_raw_table(file_path: str) -> pd.DataFrame:
+    """The sheet / CSV as read, without a header (cells as stored; CSV cells as text)."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"입력 데이터 파일을 찾을 수 없습니다: {file_path}")
 
@@ -501,26 +524,22 @@ def load_data_file(
         df_raw = _read_csv_fast(file_path)
     else:
         raise InputError(f"지원하지 않는 데이터 포맷입니다 ({ext}). .xlsx 또는 .csv 파일을 지정하십시오.")
+    return df_raw
 
+
+def sniff_header_index(df_raw: pd.DataFrame) -> int:
+    """0-based header row read without --header-row: the first row of 2+ filled cells with some text."""
+    for r_i in range(min(HEADER_SCAN_ROWS, len(df_raw))):
+        row_items = df_raw.iloc[r_i].dropna().tolist()
+        if len(row_items) >= 2 and any(isinstance(v, str) and str(v).strip() for v in row_items):
+            return r_i
+    return 0
+
+
+def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int],
+                  data_row: Optional[int]) -> pd.DataFrame:
+    """The data frame of load_data_file from the raw table and the 0-based header row."""
     total_rows = len(df_raw)
-    if total_rows == 0:
-        raise InputError("입력 데이터 파일이 비어 있습니다.")
-
-    # Auto-Header Sniffing: If header_row is not specified or 1, skip leading empty rows
-    if header_row is not None and header_row > 1:
-        header_idx = header_row - 1
-    else:
-        # Sniff first non-empty row containing at least 2 valid string/non-null cells
-        header_idx = 0
-        for r_i in range(min(HEADER_SCAN_ROWS, total_rows)):
-            row_items = df_raw.iloc[r_i].dropna().tolist()
-            if len(row_items) >= 2 and any(isinstance(v, str) and str(v).strip() for v in row_items):
-                header_idx = r_i
-                break
-
-    if header_idx >= total_rows:
-        raise InputError(f"유효한 헤더 행을 찾을 수 없습니다 (전체 행 수: {total_rows}).")
-
     raw_headers = df_raw.iloc[header_idx].values
     headers = [_cell_text(c) or f"col_{i}" for i, c in enumerate(raw_headers)]
     auto_named = [not _cell_text(c) for c in raw_headers]   # header cell was blank
@@ -545,6 +564,8 @@ def load_data_file(
                 why = f"머리글 행({header_idx + 1}행)보다 아래가 아니라"
             elif _numeric_share(unit_cells) >= 0.5:
                 why = f"값이 대부분 숫자라({unit_cells[:4]})"
+            elif any(_is_data_value(v) for v in df_raw.iloc[j].tolist() if not _blank_mark(_cell_text(v))):
+                why = f"숫자·날짜가 든 칸이 있는 데이터 행이라({unit_cells[:4]})"
             else:
                 why = f"단위 행 모양(머리글 이름 아래 짧은 단위, 그 열 아래 값은 대부분 숫자·날짜)이 아니라({unit_cells[:4]})"
             raise InputError(f"단위 행(--unit-row {unit_row})은 {why} 단위 행이 아닙니다. "
@@ -588,6 +609,11 @@ def load_data_file(
     # Clean rows that are entirely NaN, and entirely empty columns without a header (col_<i>). A named empty
     # column stays: training then says it has no values, prediction imputes it with a warning.
     df_data = df_data.dropna(how="all", axis=0)
+    # The header (and unit) row repeated inside the data (page breaks of an exported report) carries no values:
+    # dropped, with the row numbers in attrs (layout_warnings), so numeric columns stay numeric.
+    repeated = _repeated_header_rows(df_raw, df_data, header_idx, unit_row, start_idx)
+    if repeated:
+        df_data = df_data.drop(index=repeated)
     empty_auto = [h for h, auto in zip(headers, auto_named) if auto and df_data[h].isna().all()]
     if empty_auto:
         df_data = df_data.drop(columns=empty_auto)
@@ -614,7 +640,88 @@ def load_data_file(
     df_data.attrs["header_row"] = header_idx + 1
     df_data.attrs["unit_row"] = unit_row
     df_data.attrs["data_row"] = data_row
+    # read without layout options: is the row right below the header a unit row (predicted as data otherwise)?
+    df_data.attrs["unit_row_below"] = (header_idx + 2 if unit_row is None and data_row is None
+                                       and header_idx + 1 < total_rows and _looks_like_unit_row(df_raw, header_idx + 1, header_idx)
+                                       else None)
+    df_data.attrs["repeated_header_rows"] = [int(i) + 1 for i in repeated]
+    df_data.attrs["summary_rows"] = _summary_rows(df_data, source_rows)
     return df_data
+
+
+# A text cell that names a totals / average row (spaces removed, lower case)
+SUMMARY_WORDS = {"합계", "총계", "평균", "소계", "계", "총합", "total", "sum", "average", "avg", "mean", "subtotal",
+                 "grandtotal"}
+
+
+def _repeated_header_rows(df_raw: pd.DataFrame, df_data: pd.DataFrame, header_idx: int, unit_row: Optional[int],
+                          start_idx: int) -> List[Any]:
+    """Index labels (0-based raw rows) of df_data rows identical to the header row (2+ names), and of rows identical
+    to the unit row right after such a row (the --unit-row, or the row below the header skipped by --data-row)."""
+    head = [_cell_text(v) for v in df_raw.iloc[header_idx].tolist()]
+    filled = [k for k, t in enumerate(head) if t]
+    if len(filled) < 2 or df_data.empty:
+        return []
+    k0 = filled[0]
+    col = df_data.iloc[:, k0].astype("string").str.strip()
+    hits = col[(col == head[k0]).fillna(False).to_numpy(dtype=bool)].index
+    u = unit_row - 1 if unit_row is not None else (header_idx + 1 if header_idx + 1 < start_idx else None)
+    unit = [_cell_text(v) for v in df_raw.iloc[u].tolist()] if u is not None and 0 <= u < len(df_raw) else None
+    out: List[Any] = []
+    for i in hits:
+        if [_cell_text(v) for v in df_raw.iloc[i].tolist()] != head:
+            continue
+        out.append(i)
+        if unit and any(unit) and i + 1 in df_data.index and \
+                [_cell_text(v) for v in df_raw.iloc[i + 1].tolist()] == unit:
+            out.append(i + 1)
+    return out
+
+
+def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
+    """[source row, column, text] of rows that look like totals / averages: a cell 합계/평균/Total ... (SUMMARY_WORDS)
+    and a number in the same row. Not dropped (a data value decision): layout_warnings names them."""
+    if df.empty:
+        return []
+    out: Dict[int, List[Any]] = {}
+    for col in df.columns:
+        s = df[col]
+        if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_datetime64_any_dtype(s):
+            continue
+        txt = s.astype("string").str.replace(r"\s+", "", regex=True).str.lower()
+        for i in np.flatnonzero(txt.isin(SUMMARY_WORDS).fillna(False).to_numpy(dtype=bool)):
+            if i in out:
+                continue
+            others = [v for c, v in df.iloc[i].items() if c != col]
+            if any(_numeric_share([_cell_text(v)]) == 1 for v in others if _cell_text(v)):
+                out[int(i)] = [source_rows[i] if i < len(source_rows) else int(i) + 1, str(col), str(s.iloc[i]).strip()]
+    return [out[i] for i in sorted(out)]
+
+
+def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, training: bool = True) -> List[str]:
+    """Warnings about rows of the file that are not ordinary data rows (df.attrs of load_data_file):
+    repeated header rows (dropped) and totals / average rows (kept: the user decides with the '제외' column in
+    training and ml_map; prediction only notes them). A totals word in a target column counts only in the first
+    column (a class label '계' is not a totals row)."""
+    out: List[str] = []
+    rep = df.attrs.get("repeated_header_rows") or []
+    if rep:
+        out.append(f"{_row_list(rep)}행은 머리글(단위) 행과 같아(페이지마다 반복된 머리글) 데이터에서 뺐습니다")
+    first = str(df.columns[0]) if len(df.columns) else None
+    rows = [r for r in df.attrs.get("summary_rows") or []
+            if not targets or r[1] not in targets or r[1] == first]
+    if rows:
+        where = ", ".join(f"{r[0]}행 '{r[2]}'" for r in rows[:5]) + (f" 외 {len(rows) - 5}개" if len(rows) > 5 else "")
+        if training:
+            out.append(f"합계·평균 행으로 보이는 행이 있습니다 ({where}). 데이터 행이 아니면 데이터 파일의 '제외' 열에 "
+                       f"이유(예: 합계)를 적고 다시 실행하십시오")
+        else:
+            out.append(f"합계·평균 행으로 보이는 행이 있습니다 ({where}). 이 행의 예측값은 데이터 행의 예측이 아닙니다")
+    return out
+
+
+def _row_list(rows: List[int]) -> str:
+    return ", ".join(str(r) for r in rows[:10]) + (f" 외 {len(rows) - 10}개" if len(rows) > 10 else "")
 
 
 def _cell_text(v: Any) -> str:
@@ -659,7 +766,7 @@ def _looks_like_unit_row(df_raw: pd.DataFrame, j: int, header: Optional[int] = N
     """Row j (0-based) is the unit row of the header row `header` (default j - 1):
     - every filled cell ('-', 'N/A' are blank marks) sits under a filled header cell, and the header row is mostly text
       (a header under a title row of fewer cells is not a unit row);
-    - most filled cells are text, not numbers or dates;
+    - every filled cell is text: no number or date (a first data row with numbers in some cells is data);
     - most of those text columns hold a short unit, and data below: the majority of the next filled cells (up to
       UNIT_SCAN_CELLS) are numbers or dates, so one text value ('측정불가', 'NG', '<0.1', '12%') does not decide;
     - the next row with values in those columns is not text in all of them (a header over its unit row).
@@ -674,7 +781,7 @@ def _looks_like_unit_row(df_raw: pd.DataFrame, j: int, header: Optional[int] = N
     if not filled or not head_cells or _numeric_share(head_cells) >= 0.5 or any(not head[k] for k in filled):
         return False
     text = [k for k in filled if not _is_data_value(row[k])]
-    if len(text) * 2 <= len(filled):
+    if len(text) < len(filled):         # a number or a date: a data row ('측정불가, 측정불가, A, 61.66'), 2.9.18
         return False
     good = 0
     for k in text:
@@ -762,23 +869,35 @@ def _numeric_share(cells: List[str]) -> float:
     return n / len(cells) if cells else 0.0
 
 
-def names_in_cells(names: List[str], cells: List[str]) -> bool:
+def names_in_cells(names: List[str], cells: List[str], model_names: bool = False) -> bool:
     """True when every name is one of the cells, exactly or by a unique unit-less alias written without a unit
-    ('온도' ~ '온도(°C)'), the same rule as resolve_column_names ('온도(C)' does not match '온도(°C)')."""
+    ('온도' ~ '온도(°C)'), the same rule as resolve_column_names ('온도(C)' does not match '온도(°C)').
+    model_names (prediction, the align_input_columns rule): a model name with a unit also matches a cell without a
+    unit ('반응온도(°C)' ~ '반응온도')."""
     cell_set = set(cells)
     alias = build_alias_map(cells)
-    return bool(names) and all(n in cell_set or (strip_unit(n) == n.strip() and _alias_key(n) in alias) for n in names)
+
+    def _hit(n: str) -> bool:
+        if n in cell_set:
+            return True
+        src = alias.get(_alias_key(n))
+        if src is None:
+            return False
+        return strip_unit(n) == n.strip() or (model_names and strip_unit(src) == src.strip())
+    return bool(names) and all(_hit(n) for n in names)
 
 
-def find_header_layout(candidates: Optional[List[List[Any]]], names: List[str]) -> Optional[Tuple[int, Optional[int]]]:
+def find_header_layout(candidates: Optional[List[List[Any]]], names: List[str],
+                       model_names: bool = False) -> Optional[Tuple[int, Optional[int]]]:
     """(header row, unit row or None), 1-based, of the candidate row (df.attrs["header_candidates"] of load_data_file)
     that holds every name: as written ('온도'), or joined with the unit row below it ('온도(°C)' = '온도' + '°C',
-    names of a model trained with --unit-row). The unit row is given whenever the row below is one (text)."""
+    names of a model trained with --unit-row). The unit row is given whenever the row below is one (text).
+    model_names: model names with a unit also match header cells without one (names_in_cells)."""
     for cand in candidates or []:
         row, cells = cand[0], cand[1]
         unit_next = cand[2] if len(cand) > 2 else None
         joined = cand[3] if len(cand) > 3 else []
-        if names_in_cells(names, cells) or (joined and names_in_cells(names, joined)):
+        if names_in_cells(names, cells, model_names) or (joined and names_in_cells(names, joined)):
             return int(row), (int(unit_next) if unit_next else None)
     return None
 
@@ -1993,21 +2112,26 @@ def _inputs_present(needed: List[str], columns: List[str]) -> bool:
 
 def _first_row_text_share(df: pd.DataFrame, numeric: List[str]) -> Optional[float]:
     """Share of text (not a number, not a missing-value mark) among the filled numeric-input cells of the first data
-    row; None when the file has no rows, misses a numeric input or the row has no filled numeric input."""
+    row that has a filled numeric input (a row of blank inputs is skipped, up to FIRST_ROW_SCAN rows); None when the
+    file has no rows, misses a numeric input or no such row is found."""
     if df.empty:
         return None
     alias = build_alias_map([str(c) for c in df.columns])
-    vals = []
+    cols = []
     for f in numeric:
         src = f if f in df.columns else alias.get(_alias_key(f))
         if src is None:
             return None
-        v = df[src].iloc[0]
-        if pd.notna(v) and str(v).strip() and str(v).strip() not in _NA_PLACEHOLDERS:
-            vals.append(v)
-    if not vals:
-        return None
-    return float(coerce_numeric(pd.Series(vals, dtype=object)).isna().mean())
+        cols.append(src)
+    for i in range(min(FIRST_ROW_SCAN, len(df))):
+        vals = [v for v in (df[c].iloc[i] for c in cols)
+                if pd.notna(v) and str(v).strip() and str(v).strip() not in _NA_PLACEHOLDERS]
+        if vals:
+            return float(coerce_numeric(pd.Series(vals, dtype=object)).isna().mean())
+    return None
+
+
+FIRST_ROW_SCAN = 10
 
 
 def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
@@ -2036,17 +2160,18 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
         except Exception:
             auto = None
         if auto is not None and _inputs_present(needed, [str(c) for c in auto.columns]):
-            if _first_row_numeric(auto, numeric):
+            # the row below the header decides (_fit_unit_layout): a unit or notes row -> the options that skip it;
+            # else the first data row is data (numbers, or a measurement failure row with a number) -> no options
+            layout = _fit_unit_layout(args.file, needed, None, int(auto.attrs.get("header_row", 1)) + 1)
+            if layout:
+                cmd = _predict_command(args, layout=layout)
+            elif not auto.attrs.get("unit_row_below") and (_first_row_numeric(auto, numeric) or _row_has_data(auto, 0)):
                 cmd = _predict_command(args)
-            else:
-                layout = _fit_unit_layout(args.file, needed, numeric, None, int(auto.attrs.get("header_row", 1)) + 1)
-                if layout:
-                    cmd = _predict_command(args, layout=layout)
         if cmd:
             return ("레이아웃 옵션(--header-row/--unit-row/--data-row)이 이 파일과 맞지 않습니다. "
                     f"이 파일의 머리글로 읽으면 모델 입력 열이 모두 있습니다. [추천] {cmd}")
     if df_input is not None and missing:
-        found = find_header_layout(df_input.attrs.get("header_candidates"), missing)
+        found = find_header_layout(df_input.attrs.get("header_candidates"), missing, model_names=True)
         if found is not None and found[0] != getattr(args, "header_row", None):
             row, unit = found
             where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
@@ -2056,46 +2181,71 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
             if unit:
                 where += f", {unit}행은 단위 행입니다"
                 # a model trained without units needs the unit row skipped (--data-row), not joined to the names
-                layout = (_fit_unit_layout(args.file, needed, numeric, row, unit) if getattr(args, "file", None)
+                layout = (_fit_unit_layout(args.file, needed, row, unit) if getattr(args, "file", None)
                           else "") or f"{layout} --unit-row {unit}"
             return f"{where}. [추천] " + _predict_command(args, layout=layout)
     return ""
 
 
 def _unit_row_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: pd.DataFrame) -> str:
-    """A file read without layout options whose first data row is a unit row ('°C', 'bar' in the numeric inputs):
-    predicting it would impute every input. The same file read with --unit-row <header + 1> has every model input
-    and numbers in its first data row -> '[추천] <the command with --unit-row>', else ''."""
+    """A file read without layout options whose first data row is a unit row ('°C', 'bar'; _looks_like_unit_row on
+    the file, so a first data row of blank or '측정불가' inputs does not hide it) or a notes row: predicting it would
+    impute every input. The layout that skips it (_fit_unit_layout) -> '[추천] <the command with it>', else ''."""
     if any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row")) or df_input.empty:
         return ""
     needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
     numeric = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])
                                  if c not in it["meta"]["feature_schema"].get("categorical", {})
                                  and c not in it["meta"]["feature_schema"].get("datetime", {})))
-    if not _first_row_is_text(df_input, numeric):
+    if not df_input.attrs.get("unit_row_below") and not _first_row_is_text(df_input, numeric):
         return ""
     unit_row = int(df_input.attrs.get("header_row", 1)) + 1
-    layout = _fit_unit_layout(args.file, needed, numeric, None, unit_row)
+    layout = _fit_unit_layout(args.file, needed, None, unit_row)
     if not layout:
         return ""
     first = [str(df_input[c].iloc[0]) for c in df_input.columns[:6]]
-    return (f"파일 {unit_row}행(첫 데이터 행)의 숫자 입력 칸이 숫자가 아니라 단위로 보입니다 ({first}). 그대로 예측하면 "
+    return (f"파일 {unit_row}행(첫 데이터 행)이 데이터가 아니라 단위·메모 행으로 보입니다 ({first}). 그대로 예측하면 "
             f"이 행을 빈 값으로 채워 예측합니다. [추천] {_predict_command(args, layout=layout)}")
 
 
-def _fit_unit_layout(path: str, needed: List[str], numeric: List[str], header_row: Optional[int],
-                     unit_row: int) -> str:
-    """Layout options that read a file with a unit row so that every model input is a column and the first data row
-    holds numbers: '--unit-row M' (a model trained with units, '반응온도(°C)'), else '--data-row M+1' (the unit row
-    skipped, unit-less names of a model trained without units), else ''. `header_row` (or None) is put in front."""
+def _row_has_data(df: pd.DataFrame, i: int) -> bool:
+    """Row i of a data frame has a number or a date in some filled cell."""
+    return any(not _blank_mark(_cell_text(v)) and _is_data_value(v) for v in df.iloc[i].tolist())
+
+
+def _notes_row(df_raw: pd.DataFrame, j: int) -> bool:
+    """Row j (0-based) is a notes row: filled, no number or date, and some cell longer than a unit
+    ('비고: 2026년 1월 측정'). A row of short text ('측정불가', 'A') is not one."""
+    cells = [v for v in df_raw.iloc[j].tolist() if not _blank_mark(_cell_text(v))]
+    return bool(cells) and not any(_is_data_value(v) for v in cells) and any(not _unit_text(_cell_text(v)) for v in cells)
+
+
+def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], unit_row: int) -> str:
+    """Layout options for a file whose row `unit_row` (1-based, below the header) is not data: '--unit-row M'
+    (a unit row by _looks_like_unit_row, model trained with units '반응온도(°C)'), else '--data-row M+1' (the row
+    skipped: a unit row with the unit-less names of a model trained without units, or a notes row), else ''
+    (the row is data: numbers in some cells, '측정불가, 측정불가, A, 61.66'). Every model input must be a column.
+    `header_row` (or None) is put in front."""
     head = f"--header-row {header_row} " if header_row else ""
-    for opts, layout in (({"unit_row": unit_row}, f"--unit-row {unit_row}"),
-                         ({"data_row": unit_row + 1}, f"--data-row {unit_row + 1}")):
+    try:
+        raw = read_raw_table(path)
+    except Exception:
+        return ""
+    hdr = header_row - 1 if header_row and header_row > 1 else sniff_header_index(raw)
+    j = unit_row - 1
+    if not hdr < j < len(raw) - 1:
+        return ""
+    is_unit = _looks_like_unit_row(raw, j, hdr)
+    if not is_unit and not _notes_row(raw, j):
+        return ""
+    tries = ([({"unit_row": unit_row, "data_row": None}, f"--unit-row {unit_row}")] if is_unit else []) + \
+        [({"unit_row": None, "data_row": unit_row + 1}, f"--data-row {unit_row + 1}")]
+    for opts, layout in tries:
         try:
-            df = load_data_file(path, header_row=header_row, **opts)
+            df = _layout_frame(raw, hdr, **opts)
         except Exception:
             continue
-        if _inputs_present(needed, [str(c) for c in df.columns]) and _first_row_numeric(df, numeric):
+        if _inputs_present(needed, [str(c) for c in df.columns]):
             return head + layout
     return ""
 
@@ -2125,6 +2275,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                              f"[추천] {os.path.splitext(args.out)[0]}.csv")
 
     # 2. Resolve Input Data (Batch File or Inline Input)
+    file_warnings: List[str] = []
     if args.input:
         df_input = parse_inline_input(args.input)
         is_inline = True
@@ -2149,6 +2300,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         hint = _unit_row_hint(args, model_items, df_input)
         if hint:
             raise InputError(hint)
+        file_warnings = layout_warnings(df_input, training=False)   # repeated header rows, totals rows
     else:
         raise InputError("추론할 입력 데이터(--file 또는 --input)를 지정해야 합니다.")
 
@@ -2412,6 +2564,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         sys.stderr.write(f"[WARN] Missing input: {w}\n")
     for w in map_warnings:
         sys.stderr.write(f"[WARN] Map check: {w}\n")
+    for w in file_warnings:
+        sys.stderr.write(f"[WARN] {w}\n")
 
     def _brief(t: str) -> str:
         ps = predictions_summary[t]
@@ -2440,6 +2594,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + (" with unseen-category warning" if category_warnings else "")
         + (" with map-check warning (measured-data comparison outside the prediction interval)" if map_warnings else "")
         + ". "
+        + ("Tell the user every item of warnings (rows of the file that are not data rows). " if file_warnings else "")
         + ("Report each prediction together with its measured-data comparison (map_check: value, diff, method) in Korean as "
            "'실측 비교값'. " if any("map_check_keys" in p for p in predictions_summary.values()) else "")
         + (f"Inline input has {len(df_result)} records, more than {INLINE_SHOW_MAX}: per-record predictions are not in "
@@ -2472,6 +2627,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         "unseen_category_warnings": category_warnings,
         "map_check_warning": bool(map_warnings),
         "map_check_warnings": map_warnings,
+        **({"warnings": file_warnings} if file_warnings else {}),
         "preview": preview,
         "agent_directive": agent_directive
     }
