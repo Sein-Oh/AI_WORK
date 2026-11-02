@@ -2,6 +2,31 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.15] - 2026-11-02
+
+6차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1415.py`.
+
+### 수정 (엑셀 시트 이름)
+- 엑셀이 예약한 시트 이름 `History`(대소문자 무관): 시트를 만든 뒤 이름을 붙이다 실패해 빈 시트가 남던 문제(`sheet add/rename/copy`, `write --new-sheet`,
+  `office.py transfer --sheet`). 아무것도 바꾸기 전에 STOP_RETRY와 `[추천] History_`(있는 시트와 겹치면 번호)를 냅니다(`_office.check_sheet_name`).
+  가짜 Excel(`tests/fake_excel.py`, `fake_office.py`)도 실제 Excel처럼 쓸 수 없는 이름(`History` 포함)을 `Name`에서 COM 오류로 거절합니다.
+- `office.py transfer --sheet`: 받는 문서의 시트 이름을 모른 채 확인해, `[추천]` 이름이 이미 있는 시트와 겹치면 안내대로 1번 다시 실행해도 "이미 있음"으로 막히던 문제.
+  문서를 연 뒤 시트 이름을 알고 나서, 아무것도 바꾸기 전에 확인합니다. 새로 만들 파일(없는 전체 경로)은 파일을 만들기 전에 확인합니다.
+
+### 수정 (되돌리기 지점, 1.4.14 보완)
+- 도구가 연 닫힌 파일: 휘발성 수식(NOW, RAND 등)이 있으면 열기만 해도 저장 안 된 상태라, 바꾼 것 없이 성공한 실행도 사용자 파일을 다시 저장하고
+  바뀐 것 없는 되돌리기 지점을 남기던 문제. 명령이 바꾼 것(`t.changed`)이 있을 때만 저장합니다.
+- 바꾼 것 없이 성공했는데 바꾼 것으로 표시되어 지점을 남기던 명령(다음 `undo`가 바뀐 것 없는 이 지점으로 되돌림):
+  - `excel replace`/`word replace`/`ppt replace`에서 바꿀 글이 찾는 글과 같고(`--map {"A": "A"}` 포함) 서식이 없는 경우. "N곳 처리"로 보고하던 것을
+    0곳/0칸 바뀜(`changed_cells`/`replaced` 0, 찾은 수는 `unchanged_same_text`)으로 답합니다. `excel replace`의 서식 없는 수식 칸도 바꾼 칸으로 세지 않습니다.
+  - `ppt slide --action move`를 같은 자리로(`--slide 2 --to 2`), `ppt notes --overwrite`를 같은 노트로.
+  - `excel range`: 숨긴 것 없는 `unhide`, 이미 숨긴 `hide`, 병합 없는 `unmerge`, 이미 그 범위로 병합된 `merge`, 고정 없는 `unfreeze`, 같은 `width`/`height`,
+    사용 범위 밖(`Intersect(UsedRange)`)이거나 값이 없는(`--type contents`) `clear`, 같은 자리로 `copy`/`move`. COM 속성으로 확인하고 알 수 없으면 바꾼 것으로 봅니다.
+  바꾸지 않은 결과는 "바뀐 것 없음"(`unchanged: true`)으로 알립니다.
+
+### 수정 (PPT)
+- `ppt replace --find X`만 주면(바꿀 글·서식 없음) 아무것도 바꾸지 않아야 하는데 대소문자만 다른 글을 바꾸고 "N곳 처리"로 보고하던 문제. `excel`/`word replace`와 같게 STOP_RETRY.
+
 ## [1.4.14] - 2026-11-02
 
 5차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1414.py`.
@@ -566,6 +591,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - 워드: 열린 문서의 자동 번호 제목(`ListFormat.ListString`)이 `outline`/`--section`에 나오지 않음(닫힌 파일과 번호 체계 다름), 목차(TOC) 안의 앵커 후보 구별, 머리글 안 글상자 치환. (`replace --find`만 준 경우는 1.4.10)
 - reader: HWP(바이너리) 개요 번호, PDF `find_tables` 성능(선이 있는 쪽만), 색인 저장 일괄화, BOM 없는 UTF-16 판별.
 - transfer relay 실패 시 넣은 빈 단락 정리.
+- "바뀐 것 없음"을 싸게 판정할 수 없어 늘 바꾼 것으로 보는 명령(되돌리기 지점이 남음): `excel style`(같은 서식 다시 적용, 서식 없는 범위 `--clear`),
+  `range autofit/border/freeze`(같은 칸 다시 고정), 같은 값으로 `write --overwrite`. (1.4.15에서 replace·slide move·notes·range unhide/unmerge/unfreeze/clear 등은 처리)
 
 ### 확인 필요
 - Windows 실기 검증: 회사 PC(Office 16)에서 1.4.1 실기 러너 71/71 통과. 남은 것: 1.4.5 쓰기 변경(write 덮어쓰기 확인, transfer 글자 유지)의 실기 확인, 눈 확인 항목.

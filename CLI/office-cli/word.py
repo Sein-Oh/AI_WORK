@@ -1087,11 +1087,20 @@ def cmd_replace(args) -> Dict[str, Any]:
         raise rt.InputError("--replace(바꿀 글)나 서식 옵션(--bold, --color, --highlight 등)이 없어 바꿀 것이 없습니다. "
                             "사용자에게 무엇으로 바꿀지 확인하세요. 글을 지우려면 --replace \"\"를 씁니다.")
     counts: Dict[str, int] = {}
+    same: Dict[str, int] = {}          # 바꿀 글이 찾는 글과 같고 서식도 없어 바꾸지 않은 문구: 찾은 곳 수
     limit_hit = False
     with off.open_target("word", args.target, readonly=False, focus=not args.no_focus,
                          tool=TOOL, command="replace") as t:
+        for find, rep in mapping.items():
+            if find == rep and not formatting:
+                # 바뀌는 것이 없음: 세기만 함 (이전에는 'N곳 처리'로 보고하고 바꾼 것으로 표시해 되돌리기 지점이 남았음)
+                hits = _count_text(t.doc, find, args.match_case, args.whole_word)
+                if hits:
+                    same[find] = hits
         for story in _stories(t.doc):
             for find, rep in mapping.items():
+                if find == rep and not formatting:
+                    continue
                 n = 0
                 rng = story.Duplicate
                 while _find(rng, find, args.match_case, args.whole_word):
@@ -1133,6 +1142,13 @@ def cmd_replace(args) -> Dict[str, Any]:
         resolved = t.resolved()
     total = sum(counts.values())
     result = {"target_resolved": resolved, "replaced": total, "by_text": counts}
+    if same:
+        result["unchanged_same_text"] = same
+    if not total and same:
+        found = sum(same.values())
+        return rt.ok(TOOL, "replace", f"찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바꾼 곳이 없습니다 (0곳 바뀜)",
+                     f"VERIFIED: 바꾼 곳 0곳. 찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바뀐 것이 없습니다. "
+                     "다시 실행하지 말고 사용자에게 무엇으로 바꿀지 확인하세요.", **result)
     if not total:
         return rt.ok(TOOL, "replace", "일치하는 문구가 없습니다",
                      "VERIFIED: 일치하는 문구가 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)

@@ -154,11 +154,12 @@ def test_n2_default_copy_name_of_long_sheet_fits_31_chars(xl, capsys):
     assert len(_sheet_names(wb)[-1]) <= 31
 
 
-def test_n2_transfer_bad_sheet_name_checked_before_opening(monkeypatch):
+def test_n2_transfer_bad_sheet_name_checked_before_opening(monkeypatch, tmp_path):
+    # 새로 만들 파일은 열기(만들기) 전에 확인. 열린 문서는 시트 이름을 안 뒤에 확인 (1.4.15, test_review_v1415.py)
     def boom(*a, **k):
         raise AssertionError("문서를 열면 안 됨")
     monkeypatch.setattr(off, "open_target", boom)
-    args = types.SimpleNamespace(sheet="표/목록", to_target="active", overwrite=False)
+    args = types.SimpleNamespace(sheet="표/목록", to_target=str(tmp_path / "새.xlsx"), overwrite=False)
     with pytest.raises(rt.InputError) as ei:
         office._to_excel(args, [["a"]], "Word 표")
     assert "[추천] 표_목록" in str(ei.value)

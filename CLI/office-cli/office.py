@@ -558,12 +558,26 @@ def _ppt_rows(args) -> Tuple[List[List[Any]], str]:
     return rows, name
 
 
+def _new_file_target(target: Optional[str]) -> bool:
+    """--to-target이 아직 없는 파일의 전체 경로인지 (open_target이 새로 만들 파일). active·열린 문서 이름·있는 파일은 False."""
+    text = (target or "active").strip().strip('"')
+    if text.lower() == "active":
+        return False
+    expanded = os.path.expanduser(os.path.expandvars(text))
+    return os.path.isabs(expanded) and not os.path.exists(expanded)
+
+
 def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
-    if args.sheet:
-        off.check_sheet_name(args.sheet)      # 잘못된 이름은 문서를 열기 전에 (만든 뒤 이름에서 실패하면 빈 시트가 남음)
+    if args.sheet and _new_file_target(args.to_target):
+        # 새로 만들 파일: 잘못된 이름은 파일을 만들기 전에 (있는 시트가 없으므로 [추천]이 겹치지 않음)
+        off.check_sheet_name(args.sheet)
     with off.open_target("excel", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer") as t:
         wb = t.doc
         names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]
+        if args.sheet:
+            # 있는 시트 이름을 안 뒤에, 아무것도 바꾸기 전에 확인 ([추천]이 있는 시트와 겹치지 않게.
+            # 이전에는 시트 이름 없이 확인해 [추천]대로 다시 실행해도 '이미 있음'으로 막힐 수 있었음)
+            off.check_sheet_name(args.sheet, names)
         name = (args.sheet or sheet_base)[:31]
         k = 2
         while rt.find_name(name, names) and not args.sheet:

@@ -581,12 +581,14 @@ class OfficeTarget:
 
 
 SHEET_NAME_BAD = re.compile(r"[\\/?*\[\]:]")    # 엑셀 시트 이름에 쓸 수 없는 글자
+SHEET_NAME_RESERVED = ("history",)              # 엑셀이 예약한 시트 이름 (변경 내용 추적용, 대소문자 무관)
 
 
 def check_sheet_name(name: Any, existing: Optional[List[str]] = None) -> None:
-    """엑셀 시트 이름 규칙(31자 이하, / \\ ? * [ ] : 없음, 빈 이름 아님, 앞뒤 ' 없음)을 문서를 바꾸기 전에 확인합니다.
-    어기면 InputError와 [추천](쓸 수 없는 글자를 _로 바꾸고 31자로 자른 이름, existing과 겹치지 않게).
-    이전에는 시트를 만든 뒤 Name에서 실패해 빈 시트가 남았음."""
+    """엑셀 시트 이름 규칙(31자 이하, / \\ ? * [ ] : 없음, 빈 이름 아님, 앞뒤 ' 없음, 예약된 이름 History 아님)을
+    문서를 바꾸기 전에 확인합니다. 어기면 InputError와 [추천](쓸 수 없는 글자를 _로 바꾸고 31자로 자른 이름,
+    History는 History_, existing과 겹치지 않게). 이전에는 시트를 만든 뒤 Name에서 실패해 빈 시트가 남았음.
+    existing을 주지 않으면 [추천]이 있는 시트와 겹칠 수 있으므로 시트 이름을 아는 곳에서 부릅니다."""
     text = "" if name is None else str(name)
     if not text.strip():
         raise rt.InputError("시트 이름이 비어 있습니다. 아무것도 바꾸지 않았습니다. 시트 이름을 지정하세요.")
@@ -597,9 +599,14 @@ def check_sheet_name(name: Any, existing: Optional[List[str]] = None) -> None:
         problems.append(f"31자까지 ({len(text)}자)")
     if text.startswith("'") or text.endswith("'"):
         problems.append("앞뒤에 ' 는 쓸 수 없음")
+    reserved = text.lower() in SHEET_NAME_RESERVED
+    if reserved:
+        problems.append("엑셀이 예약한 이름 (대소문자 무관)")
     if not problems:
         return
     rec = SHEET_NAME_BAD.sub("_", text)[:31]
+    if reserved:
+        rec += "_"
     if rec.startswith("'"):
         rec = "_" + rec[1:]
     if rec.endswith("'"):
@@ -843,7 +850,9 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             yield t
             if not readonly and focus:
                 t.apply_focus()
-            if owns_doc and not readonly and not is_saved(t.doc):
+            # 바꾼 것(t.changed)이 있을 때만 저장: 휘발성 수식(NOW, RAND 등)이 있으면 열기만 해도 저장 안 된 상태라
+            # 바꾼 것 없이 성공한 실행이 사용자 파일을 다시 저장하고 바뀐 것 없는 되돌리기 지점을 남겼음
+            if owns_doc and not readonly and t.changed and not is_saved(t.doc):
                 rt.log("PROGRESS", "변경사항 저장 중")
                 t.doc.Save()
         except BaseException as e:

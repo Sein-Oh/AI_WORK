@@ -775,7 +775,12 @@ def cmd_replace(args) -> Dict[str, Any]:
         fmt["size"] = args.size
     if args.color:
         fmt["color"] = off.parse_color(args.color)
+    if not args.map and args.replace is None and not fmt:
+        # 바꿀 글도 서식도 없으면 아무것도 바뀌지 않는데 'N곳 처리'로 보고되던 문제 (excel/word replace와 같게)
+        raise rt.InputError("--replace(바꿀 글)나 서식 옵션(--bold, --color 등)이 없어 바꿀 것이 없습니다. "
+                            "사용자에게 무엇으로 바꿀지 확인하세요. 글을 지우려면 --replace \"\"를 씁니다.")
     counts: Dict[str, int] = {}
+    same: Dict[str, int] = {}          # 바꿀 글이 찾는 글과 같고 서식도 없어 바꾸지 않은 문구: 찾은 곳 수
     slides_changed: List[int] = []
     with off.open_target("ppt", args.target, readonly=False, focus=not args.no_focus, tool=TOOL, command="replace") as t:
         prs = t.doc
@@ -788,6 +793,12 @@ def cmd_replace(args) -> Dict[str, Any]:
             for k in range(1, slide.Shapes.Count + 1):
                 for tr in iter_text_ranges(slide.Shapes(k)):
                     for find, rep in mapping.items():
+                        if find == rep and not fmt:        # 바뀌는 것이 없음: 세기만 함 (바꾼 것으로 표시하지 않음)
+                            text = str(tr.Text)
+                            hits = text.count(find) if args.match_case else text.lower().count(find.lower())
+                            if hits:
+                                same[find] = same.get(find, 0) + hits
+                            continue
                         c = replace_in_range(tr, find, rep, args.match_case, fmt)
                         if c:
                             counts[find] = counts.get(find, 0) + c
@@ -809,6 +820,13 @@ def cmd_replace(args) -> Dict[str, Any]:
         resolved = t.resolved()
     total = sum(counts.values())
     result = {"target_resolved": resolved, "replaced": total, "by_text": counts, "slides": slides_changed}
+    if same:
+        result["unchanged_same_text"] = same
+    if not total and same:
+        found = sum(same.values())
+        return rt.ok(TOOL, "replace", f"찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바꾼 곳이 없습니다 (0곳 바뀜)",
+                     f"VERIFIED: 바꾼 곳 0곳. 찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바뀐 것이 없습니다. "
+                     "다시 실행하지 말고 사용자에게 무엇으로 바꿀지 확인하세요.", **result)
     if not total:
         return rt.ok(TOOL, "replace", "일치하는 문구가 없습니다",
                      "VERIFIED: 일치하는 문구가 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
@@ -891,15 +909,23 @@ def cmd_notes(args) -> Dict[str, Any]:
                 "기존 노트를 지울지 정해야 합니다. 노트를 사용자에게 보여 주고, 뒤에 덧붙이려면 --append, "
                 "사용자가 바꾸기를 분명히 원할 때만 --overwrite를 붙여 다시 실행하세요.")
         new = (before + "\n" + text).strip() if args.append and before else text
-        body.TextFrame.TextRange.Text = new.replace("\n", "\r")
-        t.set_focus(slide=args.slide)
+        same = new == before               # 같은 노트로 바꾸기(빈 노트 지우기 포함)는 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
+        if not same:
+            body.TextFrame.TextRange.Text = new.replace("\n", "\r")
+        t.set_focus(slide=args.slide, changed=not same)
         after = _notes_text(slide)
         resolved = t.resolved()
     fields = {"target_resolved": resolved, "slide": args.slide, "before": rt.clamp_text(before, 200)[0],
               "after": rt.clamp_text(after, 200)[0], "appended": bool(args.append)}
     preview = f"{resolved['name']} 슬라이드 {args.slide}: 노트를 " + ("덧붙였습니다" if args.append else ("지웠습니다" if not new else "바꿨습니다"))
+    if same:
+        fields["unchanged"] = True
+        preview = f"{resolved['name']} 슬라이드 {args.slide}: 노트가 이미 같아 바꾸지 않았습니다 (바뀐 것 없음)"
     if re.sub(r"\s+", "", after) != re.sub(r"\s+", "", new):
         return rt.ok_unverified(TOOL, "notes", preview, ["다시 읽은 노트가 쓴 내용과 다름"], **fields)
+    if same:
+        return rt.ok(TOOL, "notes", preview, "VERIFIED: 노트를 다시 읽어 이미 같은 내용임을 확인했습니다. 바꾼 것이 없으니 다시 실행하지 마세요.",
+                     verified=True, **fields)
     return rt.ok(TOOL, "notes", preview, "VERIFIED: 노트를 쓰고 다시 읽어 확인했습니다. 잘못 썼으면 office.py undo로 되돌릴 수 있습니다.",
                  verified=True, **fields)
 
@@ -1004,8 +1030,11 @@ def cmd_slide(args) -> Dict[str, Any]:
             n = need(args.slide)
             dest = need(args.to, "--to")
             moved_title = slide_units(prs.Slides(n), n)["title"]
-            prs.Slides(n).MoveTo(dest)
-            focus, msg = dest, f"슬라이드 {n}을(를) {dest}번 위치로 옮겼습니다"
+            if n == dest:          # 같은 자리로 옮기기는 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
+                focus, msg = dest, f"슬라이드 {n}은(는) 이미 {dest}번 위치라 옮기지 않았습니다 (바뀐 것 없음)"
+            else:
+                prs.Slides(n).MoveTo(dest)
+                focus, msg = dest, f"슬라이드 {n}을(를) {dest}번 위치로 옮겼습니다"
         elif a == "delete":
             n = need(args.slide)
             if count == 1:
@@ -1023,7 +1052,9 @@ def cmd_slide(args) -> Dict[str, Any]:
                     shapes(k).Delete()
                     removed += 1
             focus, msg = numbers[0], f"슬라이드 {', '.join(map(str, numbers))}의 요소 {removed}개를 지웠습니다"
-        t.set_focus(slide=focus, changed=a != "clear" or removed > 0)     # 빈 슬라이드 비우기는 바뀐 것 없음
+        # 빈 슬라이드 비우기, 같은 자리로 옮기기는 바뀐 것 없음
+        noop = (a == "clear" and removed == 0) or (a == "move" and n == dest)
+        t.set_focus(slide=focus, changed=not noop)
         resolved = t.resolved()
         total = int(prs.Slides.Count)
         # R1: 슬라이드 수(추가·복제 +1, 삭제 -1), 옮긴 슬라이드 제목, 비운 슬라이드의 요소 수를 다시 읽어 확인

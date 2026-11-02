@@ -794,7 +794,8 @@ def cmd_replace(args) -> Dict[str, Any]:
     if args.all_sheets and args.range and split_sheet(args.range)[0]:
         raise rt.InputError("--all-sheets와 시트 이름이 든 --range는 함께 쓸 수 없습니다 (같은 시트를 시트 수만큼 바꾸게 됨). "
                             "한 시트만 바꾸려면 --all-sheets를 빼고, 모든 시트를 바꾸려면 --range에서 시트 이름을 빼세요.")
-    replaced: List[str] = []
+    replaced: List[str] = []           # 실제로 바꾼 칸 (값이 바뀌었거나 서식을 적용)
+    same_cells = 0                     # 찾았지만 바꿀 글이 같아 바뀐 것이 없는 칸 (서식도 없음)
     skipped_formulas: List[str] = []
     written: List[Tuple[Any, int, int, Any, str]] = []        # (시트, 행, 열, 쓴 값, 주소): 다시 읽어 확인 (R1)
     with write_session(args, "replace") as t:
@@ -820,15 +821,25 @@ def cmd_replace(args) -> Dict[str, Any]:
                         cell_ref = f"{ws.Name}!{addr(r0 + i, c0 + j)}"
                         f = formulas[i][j]
                         cell = ws.Cells(r0 + i, c0 + j)
-                        if isinstance(f, str) and f.startswith("="):
-                            skipped_formulas.append(cell_ref)      # 수식은 보존, 서식만
+                        did = False
+                        is_formula = isinstance(f, str) and f.startswith("=")
+                        if is_formula:
+                            if new != s:
+                                skipped_formulas.append(cell_ref)      # 수식은 보존, 서식만
                         elif new != s:
                             val = xl_text(coerce(new) if not isinstance(v, str) else new)
                             cell.Value = val
                             written.append((ws, r0 + i, c0 + j, val, cell_ref))
+                            did = True
                         if fmt:
                             _apply_format(cell, fmt)
-                        replaced.append(cell_ref)
+                            did = True
+                        if did:
+                            replaced.append(cell_ref)
+                        elif not is_formula:
+                            # 찾는 글과 바꿀 글이 같고(--map {"A": "A"} 포함) 서식도 없으면 바뀐 것 없음:
+                            # 바꾼 칸으로 세지 않음 (이전에는 'N개 셀 처리'로 보고하고 되돌리기 지점을 남겼음)
+                            same_cells += 1
                 if replaced:
                     t.set_focus(sheet=ws)
         problems = [ref for ws, r, c, val, ref in written if not _same_cell(val, ws.Cells(r, c).Value)]
@@ -836,10 +847,21 @@ def cmd_replace(args) -> Dict[str, Any]:
     result = {"target_resolved": resolved, "changed_cells": len(replaced), "cells": replaced[:30]}
     if skipped_formulas:
         result["formula_cells_kept"] = skipped_formulas[:30]
+    if same_cells:
+        result["unchanged_same_text"] = same_cells
+    if not replaced and (same_cells or skipped_formulas):
+        what = []
+        if same_cells:
+            what.append(f"{same_cells}칸은 바꿀 글이 찾는 글과 같음")
+        if skipped_formulas:
+            what.append(f"수식 칸 {len(skipped_formulas)}개는 내용 유지")
+        return rt.ok(TOOL, "replace", f"찾은 칸은 있지만 바꾼 칸이 없습니다 ({', '.join(what)}, 0칸 바뀜)",
+                     f"VERIFIED: 바꾼 칸 0개 ({', '.join(what)}). 바뀐 것이 없으니 다시 실행하지 말고 사용자에게 알리세요.", **result)
     if not replaced:
         return rt.ok(TOOL, "replace", "일치하는 셀이 없습니다",
                      "VERIFIED: 일치하는 셀이 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
-    preview = f"{len(replaced)}개 셀 처리" + (f" (수식 셀 {len(skipped_formulas)}개는 내용 유지, 서식만 적용)" if skipped_formulas else "")
+    preview = f"{len(replaced)}개 셀 처리" + (f" (수식 셀 {len(skipped_formulas)}개는 내용 유지"
+                                             + (", 서식만 적용)" if fmt else ")") if skipped_formulas else "")
     if problems:
         return rt.ok_unverified(TOOL, "replace", preview, [f"다시 읽은 값이 다른 칸 {len(problems)}개: {', '.join(problems[:5])}"], **result)
     return rt.ok(TOOL, "replace", preview, "VERIFIED: 바꾼 칸을 다시 읽어 확인했습니다.", verified=True, **result)
@@ -1273,6 +1295,41 @@ def _short(v: Any, n: int = 15) -> str:
     return s if len(s) <= n else s[:n] + "..."
 
 
+def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
+    """range 명령이 바꿀 것이 없는지 COM 속성으로 싸게 확인합니다. 바꿀 것이 없으면 그 이유, 아니면(모르면) ""."""
+    try:
+        if a in ("hide", "unhide"):
+            target = rng.EntireRow if _axis(args) == "rows" else rng.EntireColumn
+            hidden = target.Hidden                     # 섞여 있으면 None
+            if hidden is not None and bool(hidden) == (a == "hide"):
+                return "이미 숨겨져 있음" if a == "hide" else "숨긴 행·열이 없음"
+        elif a == "unmerge":
+            if rng.MergeCells is False:                # 섞여 있으면 None
+                return "병합된 칸이 없음"
+        elif a == "merge":
+            if rng.MergeCells is True and str(rng.Cells(1, 1).MergeArea.Address) == str(rng.Address):
+                return "이미 이 범위로 병합되어 있음"
+        elif a == "unfreeze":
+            ws.Activate()
+            if not t.app.ActiveWindow.FreezePanes:
+                return "고정된 틀이 없음"
+        elif a in ("width", "height") and args.size is not None:
+            got = rng.ColumnWidth if a == "width" else rng.RowHeight     # 섞여 있으면 None
+            if got is not None and float(got) == float(args.size):
+                return f"이미 {'너비' if a == 'width' else '높이'}가 {args.size}"
+        elif a == "clear":
+            area = rng if rng is not None else ws.UsedRange
+            used = t.app.Intersect(area, ws.UsedRange)           # 값·서식이 있는 칸은 UsedRange 안에 있음
+            if used is None:
+                if args.type == "contents" or int(area.FormatConditions.Count) == 0:
+                    return "빈 범위 (사용 범위 밖)"
+            elif args.type == "contents" and "," not in str(used.Address) and not _filled_cells(ws, used):
+                return "값이 있는 칸이 없음"
+    except Exception as e:
+        rt.debug(f"바뀌는 것이 있는지 확인 생략: {e}")
+    return ""
+
+
 def cmd_range(args) -> Dict[str, Any]:
     a = args.action
     if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear") and not args.range:
@@ -1285,7 +1342,12 @@ def cmd_range(args) -> Dict[str, Any]:
         if rng is not None:
             ws = rng.Worksheet
         detail = ""
-        if a == "autofit":
+        # 이미 그 상태라 바뀌는 것이 없으면(숨긴 것 없는 unhide, 고정 없는 unfreeze, 병합 없는 unmerge, 빈 범위 clear 등)
+        # 바꾸지 않고 바뀐 것 없음으로 표시 (되돌리기 지점을 남기지 않음). 알 수 없으면 바꾼 것으로 봄
+        noop = _range_noop(t, ws, rng, a, args)
+        if noop:
+            detail = f"(바뀐 것 없음: {noop})"
+        elif a == "autofit":
             rng.Columns.AutoFit()
             if _axis(args) == "rows":
                 rng.Rows.AutoFit()
@@ -1359,12 +1421,16 @@ def cmd_range(args) -> Dict[str, Any]:
                     src_forms = None
             dr, dc = parse_cell(dcell.replace("$", "").split(":")[0])
             dest_block = (dws, dr, dc, dr + len(src_vals) - 1, dc + len(src_vals[0]) - 1)
-            if a == "copy":
-                rng.Copy(Destination=dest)
+            if str(dws.Name) == str(ws.Name) and (dr, dc) == (int(rng.Row), int(rng.Column)):
+                noop = "원본과 같은 자리"          # 같은 자리로 복사·이동은 바뀐 것 없음
+                detail = f"-> {dws.Name}!{dcell} (바뀐 것 없음: {noop})"
             else:
-                rng.Cut(Destination=dest)           # 겹쳐도 데이터 손실 없음, 수식 참조 갱신
+                if a == "copy":
+                    rng.Copy(Destination=dest)
+                else:
+                    rng.Cut(Destination=dest)           # 겹쳐도 데이터 손실 없음, 수식 참조 갱신
+                detail = f"-> {dws.Name}!{dcell}"
             ws = dws
-            detail = f"-> {dws.Name}!{dcell}"
         elif a == "border":
             _apply_border(rng if rng is not None else ws.UsedRange, args.weight, box=args.box)
             detail = args.weight + (" (외곽만)" if args.box else "")
@@ -1402,12 +1468,14 @@ def cmd_range(args) -> Dict[str, Any]:
                 problems.append("틀 고정 상태가 다름")
         except Exception as e:
             problems.append(f"결과를 다시 읽지 못함: {type(e).__name__}")
-        t.set_focus(sheet=ws)
+        t.set_focus(sheet=ws, changed=not noop)
         info = range_info(rng) if rng is not None else {"sheet": str(ws.Name)}
+        if noop:
+            info["unchanged"] = True
         resolved = t.resolved()
     where = f"{info['sheet']}!{info.get('range', '')}".rstrip("!")
     preview = f"{a} 완료: {where} {detail}".strip()
-    if a == "autofit" and not problems:
+    if a == "autofit" and not problems and not noop:
         problems = ["자동 맞춤 너비는 Excel이 정해 비교할 값이 없음 (적용만 함)"]
     if problems:
         return rt.ok_unverified(TOOL, "range", preview, problems, target_resolved=resolved, **info)
