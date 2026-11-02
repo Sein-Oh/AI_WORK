@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.16"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.17"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -525,21 +525,29 @@ def load_data_file(
     headers = [_cell_text(c) or f"col_{i}" for i, c in enumerate(raw_headers)]
     auto_named = [not _cell_text(c) for c in raw_headers]   # header cell was blank
 
-    # Handle unit row if provided. A unit row of numbers is a data row: reading it as units would rename every
-    # column ('반응온도(192.58)') and drop a data row, so it is refused (with the header + unit pair of the file).
-    if unit_row is not None and 1 <= unit_row <= total_rows:
-        unit_cells = _row_cells(df_raw, unit_row - 1)
-        if unit_row - 1 != header_idx and unit_cells and not _looks_like_unit_row(df_raw, unit_row - 1):
+    # Handle unit row if provided. A row that is not a unit row (numbers, text data, a blank row, the header itself or
+    # a row above it) would rename every column ('반응온도(192.58)') or turn the real unit row into data: refused, with
+    # the header + unit pair of the file when there is one, else the header row in use without --unit-row.
+    if unit_row is not None:
+        j = unit_row - 1
+        unit_cells = _row_cells(df_raw, j) if 0 <= j < total_rows else []
+        if j <= header_idx or not unit_cells or not _looks_like_unit_row(df_raw, j, header_idx):
             pair = _header_unit_pair(df_raw)
-            if pair:
+            if pair and pair != (header_idx + 1, unit_row):
                 hint = f" 이 파일의 머리글은 {pair[0]}행, 단위는 {pair[1]}행으로 보입니다. [추천] {layout_retry(pair[0], pair[1])}"
-            elif unit_row - 1 > header_idx:   # the row is data: the header row in use without a unit row
-                hint = f" [추천] {layout_retry(header_idx + 1, None)}"
+            elif header_idx < j < total_rows and _header_under_title(df_raw, header_idx, j):
+                hint = f" 이 파일의 머리글은 {unit_row}행으로 보입니다. [추천] {layout_retry(unit_row, None)}"
             else:
-                hint = ""
-            why = ("값이 대부분 숫자라" if _numeric_share(unit_cells) >= 0.5
-                   else "단위가 있는 열의 바로 아래 행에 숫자가 아닌 글자 값이 있어")
-            raise InputError(f"단위 행(--unit-row {unit_row})은 {why}({unit_cells[:4]}) 단위 행이 아니라 데이터 행입니다. "
+                hint = f" [추천] {layout_retry(header_idx + 1, None)}"
+            if not unit_cells:
+                why = "빈 행이라"
+            elif j <= header_idx:
+                why = f"머리글 행({header_idx + 1}행)보다 아래가 아니라"
+            elif _numeric_share(unit_cells) >= 0.5:
+                why = f"값이 대부분 숫자라({unit_cells[:4]})"
+            else:
+                why = f"단위 행 모양(머리글 이름 아래 짧은 단위, 그 열 아래 값은 대부분 숫자·날짜)이 아니라({unit_cells[:4]})"
+            raise InputError(f"단위 행(--unit-row {unit_row})은 {why} 단위 행이 아닙니다. "
                              f"단위 행 번호를 고치거나 단위 행이 없으면 --unit-row를 빼십시오.{hint}")
         units = df_raw.iloc[unit_row - 1].values
         headers = [_with_unit(h, u) for h, u in zip(headers, units)]
@@ -569,10 +577,7 @@ def load_data_file(
     if data_row is not None:
         start_idx = max(0, data_row - 1)
     else:
-        last_meta_idx = header_idx
-        if unit_row is not None and 1 <= unit_row <= total_rows:
-            last_meta_idx = max(header_idx, unit_row - 1)
-        start_idx = last_meta_idx + 1
+        start_idx = max(header_idx, unit_row - 1 if unit_row is not None else header_idx) + 1
 
     if start_idx >= total_rows:
         raise InputError(f"데이터 시작 행 ({start_idx + 1}) 이후에 유효한 데이터 행이 없습니다.")
@@ -630,29 +635,87 @@ def _row_cells(df_raw: pd.DataFrame, i: int) -> List[str]:
     return [t for t in (_cell_text(v) for v in df_raw.iloc[i].tolist()) if t]
 
 
-def _looks_like_unit_row(df_raw: pd.DataFrame, j: int) -> bool:
-    """Row j (0-based) is a unit row: mostly text, and every column with a unit ('°C'; '-' is a blank mark) holds a
-    number or a blank in the row below. A first data row of text values (categories, a text target) is not
-    ('B', 'kim', '중' over 'A', 'lee', '상'), nor is a row of numbers or a header row over a unit row."""
-    cells = _row_cells(df_raw, j)
-    if not cells or _numeric_share(cells) >= 0.5 or j + 1 >= len(df_raw):
+UNIT_SCAN_CELLS = 10      # filled cells below a unit that decide whether its column holds data (majority)
+
+
+def _blank_mark(t: str) -> bool:
+    return not t or t in _NA_PLACEHOLDERS
+
+
+def _is_data_value(v: Any) -> bool:
+    """A number or a date (a date cell, 'YYYY-MM-DD' text): what sits below a unit in a data column."""
+    if isinstance(v, (datetime, np.datetime64)):
+        return True
+    t = _cell_text(v)
+    return _numeric_share([t]) == 1 or bool(_DATE_RE.match(t))
+
+
+def _unit_text(t: str) -> bool:
+    """Short text that can be a unit ('°C', 'L/min', 'yyyy-mm-dd'); a note ('비고: 2026년 1월 측정') is not."""
+    return len(t) <= 12 and t.count(" ") <= 1
+
+
+def _looks_like_unit_row(df_raw: pd.DataFrame, j: int, header: Optional[int] = None) -> bool:
+    """Row j (0-based) is the unit row of the header row `header` (default j - 1):
+    - every filled cell ('-', 'N/A' are blank marks) sits under a filled header cell, and the header row is mostly text
+      (a header under a title row of fewer cells is not a unit row);
+    - most filled cells are text, not numbers or dates;
+    - most of those text columns hold a short unit, and data below: the majority of the next filled cells (up to
+      UNIT_SCAN_CELLS) are numbers or dates, so one text value ('측정불가', 'NG', '<0.1', '12%') does not decide;
+    - the next row with values in those columns is not text in all of them (a header over its unit row).
+    A first data row of text values (categories, a text target) is not a unit row, nor is a row of numbers."""
+    header = j - 1 if header is None else header
+    if header < 0 or j <= header or j + 1 >= len(df_raw):
         return False
-    for u, d in zip(df_raw.iloc[j].values, df_raw.iloc[j + 1].values):
-        ut, dt = _cell_text(u), _cell_text(d)
-        if not ut or ut in _NA_PLACEHOLDERS or _numeric_share([ut]) == 1:
+    head = [_cell_text(v) for v in df_raw.iloc[header].tolist()]
+    row = df_raw.iloc[j].tolist()
+    filled = [k for k, v in enumerate(row) if not _blank_mark(_cell_text(v))]
+    head_cells = [t for t in head if t]
+    if not filled or not head_cells or _numeric_share(head_cells) >= 0.5 or any(not head[k] for k in filled):
+        return False
+    text = [k for k in filled if not _is_data_value(row[k])]
+    if len(text) * 2 <= len(filled):
+        return False
+    good = 0
+    for k in text:
+        if not _unit_text(_cell_text(row[k])):
             continue
-        if dt and dt not in _NA_PLACEHOLDERS and _numeric_share([dt]) < 1:
-            return False
-    return True
+        below: List[bool] = []
+        for v in df_raw.iloc[j + 1:j + 1 + 50 * UNIT_SCAN_CELLS, k].tolist():   # bounded on a large sheet
+            if not _blank_mark(_cell_text(v)):
+                below.append(_is_data_value(v))
+                if len(below) >= UNIT_SCAN_CELLS:
+                    break
+        if below and sum(below) * 2 > len(below):
+            good += 1
+    if good * 2 <= len(text):
+        return False
+    for i in range(j + 1, len(df_raw)):
+        vals = [df_raw.iat[i, k] for k in text if not _blank_mark(_cell_text(df_raw.iat[i, k]))]
+        if vals:
+            return len(vals) < 2 or any(_is_data_value(v) for v in vals)
+    return False
+
+
+def _header_under_title(df_raw: pd.DataFrame, title: int, j: int) -> bool:
+    """Row j (0-based) is the real header under the row `title` read as the header: 2+ text names, more cells than
+    that row, and the next filled row is mostly numbers or dates (a title row '시험 기록, 작성자' over '온도, 압력, 수율')."""
+    cells, top = _row_cells(df_raw, j), _row_cells(df_raw, title)
+    if len(cells) < 2 or _numeric_share(cells) >= 0.5 or len(cells) <= len(top):
+        return False
+    for i in range(j + 1, len(df_raw)):
+        vals = [v for v in df_raw.iloc[i].tolist() if not _blank_mark(_cell_text(v))]
+        if vals:
+            return sum(_is_data_value(v) for v in vals) * 2 >= len(vals)
+    return False
 
 
 def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
-    """(header row, unit row), 1-based: the first two text rows (2+ cells) directly above a mostly numeric row."""
-    n = min(HEADER_SCAN_ROWS, len(df_raw) - 2)
-    for i in range(max(n, 0)):
-        h, u, d = _row_cells(df_raw, i), _row_cells(df_raw, i + 1), _row_cells(df_raw, i + 2)
-        if (len(h) >= 2 and _numeric_share(h) < 0.5 and u and _looks_like_unit_row(df_raw, i + 1)
-                and d and _numeric_share(d) >= 0.5):
+    """(header row, unit row), 1-based: the first row of 2+ text names whose next row is its unit row
+    (_looks_like_unit_row: units under the names, data below). A title row over the header is not such a pair."""
+    for i in range(max(min(HEADER_SCAN_ROWS, len(df_raw) - 1), 0)):
+        h = _row_cells(df_raw, i)
+        if len(h) >= 2 and _numeric_share(h) < 0.5 and _looks_like_unit_row(df_raw, i + 1, i):
             return i + 1, i + 2
     return None
 
@@ -1928,20 +1991,30 @@ def _inputs_present(needed: List[str], columns: List[str]) -> bool:
     return True
 
 
-def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
-    """The first data row holds numbers in the model's numeric inputs (a unit row read as data does not)."""
+def _first_row_text_share(df: pd.DataFrame, numeric: List[str]) -> Optional[float]:
+    """Share of text (not a number, not a missing-value mark) among the filled numeric-input cells of the first data
+    row; None when the file has no rows, misses a numeric input or the row has no filled numeric input."""
     if df.empty:
-        return False
+        return None
     alias = build_alias_map([str(c) for c in df.columns])
     vals = []
     for f in numeric:
         src = f if f in df.columns else alias.get(_alias_key(f))
         if src is None:
-            return False
+            return None
         v = df[src].iloc[0]
-        if pd.notna(v) and str(v).strip():
+        if pd.notna(v) and str(v).strip() and str(v).strip() not in _NA_PLACEHOLDERS:
             vals.append(v)
-    return bool(vals) and coerce_numeric(pd.Series(vals, dtype=object)).notna().all()
+    if not vals:
+        return None
+    return float(coerce_numeric(pd.Series(vals, dtype=object)).isna().mean())
+
+
+def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
+    """The first data row is data: at least half of its filled numeric inputs are numbers (one '측정불가' among
+    numbers is data; a unit row read as data, '°C' 'bar', is not). The complement of _first_row_is_text."""
+    share = _first_row_text_share(df, numeric)
+    return share is not None and share <= 0.5
 
 
 def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
@@ -2028,19 +2101,10 @@ def _fit_unit_layout(path: str, needed: List[str], numeric: List[str], header_ro
 
 
 def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
-    """Most filled numeric-input cells of the first data row are text that is not a missing-value mark (a unit row)."""
-    alias = build_alias_map([str(c) for c in df.columns])
-    vals = []
-    for f in numeric:
-        src = f if f in df.columns else alias.get(_alias_key(f))
-        if src is None:
-            continue
-        v = df[src].iloc[0]
-        if pd.notna(v) and str(v).strip() and str(v).strip() not in _NA_PLACEHOLDERS:
-            vals.append(v)
-    if not vals:
-        return False
-    return float(coerce_numeric(pd.Series(vals, dtype=object)).isna().mean()) >= 0.5
+    """Most filled numeric-input cells of the first data row are text that is not a missing-value mark (a unit row,
+    a notes row read as data)."""
+    share = _first_row_text_share(df, numeric)
+    return share is not None and share > 0.5
 
 
 def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
