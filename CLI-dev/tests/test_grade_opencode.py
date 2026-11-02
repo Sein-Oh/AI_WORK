@@ -560,3 +560,17 @@ def test_report_table_escapes_pipes(tmp_path, monkeypatch):
     text = open(path, encoding="utf-8-sig").read()
     line = [ln for ln in text.splitlines() if ln.startswith("| X2 ")][0]
     assert line.count("|") - line.count("\\|") == 6, line
+
+
+def test_x2_answer_corpus():
+    """X2 정답·오답 말뭉치(실제 답변 형태 66개): answer_all과 answer_none으로 모두 바르게 가려야 함."""
+    _, by_id, _ = go.load_scenarios()
+    sc = by_id["X2"]
+    with open(os.path.join(os.path.dirname(__file__), "x2_answers.json"), encoding="utf-8") as f:
+        corpus = json.load(f)
+
+    def passes(ans):
+        return (all(re.search(rx, ans, re.I) for rx in sc["answer_all"])
+                and not any(re.search(rx, ans, re.I | re.M) for rx in sc.get("answer_none", [])))
+    wrong = [a for a in corpus["good"] if not passes(a)] + [a for a in corpus["bad"] if passes(a)]
+    assert not wrong, wrong
