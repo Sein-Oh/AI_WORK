@@ -303,6 +303,23 @@ def _closed_bounds(ws: Any) -> Tuple[int, int, int, int]:
     return r1, c1, r2, c2
 
 
+CLOSED_MAX_CELLS = 2_000_000   # 닫힌 xlsx를 준 범위만큼 채워 읽을 때 칸 수 상한 (A1:XFD1048576 -> 메모리 부족 방지)
+
+
+def _clip_closed_range(ws: Any, address: str, r1: int, c1: int, r2: int, c2: int) -> Tuple[int, int]:
+    """준 범위가 CLOSED_MAX_CELLS칸을 넘으면 데이터가 있는 끝(행·열)까지로 줄입니다 (빈 칸만 빠져 값은 같음).
+    줄여도 넘으면 입력 오류와 [추천] 범위를 냅니다. 줄인 (끝 행, 끝 열)을 돌려줍니다."""
+    _, _, mr2, mc2 = _closed_bounds(ws)
+    nr2, nc2 = min(r2, max(mr2, r1)), min(c2, max(mc2, c1))
+    width = nc2 - c1 + 1
+    if (nr2 - r1 + 1) * width > CLOSED_MAX_CELLS:
+        rec = addr(r1, c1, r1 + CLOSED_MAX_CELLS // width - 1, nc2)
+        raise rt.InputError(f"범위 '{address}'가 너무 큽니다 (데이터가 있는 부분만도 {nr2 - r1 + 1}행 x {width}열, "
+                            f"한 번에 {CLOSED_MAX_CELLS:,}칸까지). 범위를 나눠 읽으세요. [추천] --range {rec}")
+    rt.note_recovered(f"범위 '{address}'가 {CLOSED_MAX_CELLS:,}칸을 넘음 -> 데이터가 있는 {addr(r1, c1, nr2, nc2)}까지만 읽음")
+    return nr2, nc2
+
+
 def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str]) -> Tuple[str, int, int, List[List[Any]], List[str]]:
     """닫힌 파일을 openpyxl로 읽습니다. (시트명, 시작행, 시작열, 값, 전체 시트명)"""
     import openpyxl
@@ -332,6 +349,8 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
         else:
             # 열린 문서의 UsedRange처럼 데이터가 시작하는 칸부터 (A1부터 읽으면 rows가 열린 문서와 달랐음)
             r1, c1, r2, c2 = _closed_bounds(ws)
+        if address and r2 >= r1 and c2 >= c1 and (r2 - r1 + 1) * (c2 - c1 + 1) > CLOSED_MAX_CELLS:
+            r2, c2 = _clip_closed_range(ws, address, r1, c1, r2, c2)
         if r2 < r1 or c2 < c1:
             rows = []
         else:
@@ -424,8 +443,8 @@ def cmd_read(args) -> Dict[str, Any]:
                           "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
                           expected_rows=filled, delimiter=",", **result)
 
-    shown, rows_cut, cells_cut = rt.clamp_rows(values, args.max_rows)
-    truncated = rows_cut or cells_cut > 0
+    shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows(values, args.max_rows)
+    truncated = rows_cut or cells_cut > 0 or cols_dropped > 0
     result.update(values=shown, truncated=truncated)
     nexts = []
     if rows_cut:
@@ -434,13 +453,18 @@ def cmd_read(args) -> Dict[str, Any]:
         rest = f"{sheet}!" if " " not in sheet else f"'{sheet}'!"
         rest += addr(next_r, c0, last_r, c0 + ncols - 1)
         nexts.append(rt.next_command("excel.py", ["read", "--target", args.target, "--range", rest], "나머지 행 이어서 읽기"))
+    reasons = []
     if cells_cut:
-        result["truncated_reason"] = f"{rt.MAX_CELL_CHARS}자보다 긴 값이나 표시 상한을 넘는 칸 {cells_cut}개는 잘라서 표시"
+        reasons.append(f"{rt.MAX_CELL_CHARS}자보다 긴 값 {cells_cut}개는 앞부분만 표시")
+    if cols_dropped:
+        reasons.append(f"첫 행이 표시 상한을 넘어 뒤쪽 {cols_dropped}열은 표시하지 않음")
+    if reasons:
+        result["truncated_reason"] = ", ".join(reasons)
     if truncated:
         nexts.append(save_cmd)
         result["next_commands"] = nexts
     preview = f"{sheet}!{full_addr}: {nrows}행 x {ncols}열" + (f" (앞 {len(shown)}행만 표시)" if rows_cut else "") + (
-        f" (긴 값 {cells_cut}칸 잘림)" if cells_cut else "")
+        f" (긴 값 {cells_cut}칸 잘림)" if cells_cut else "") + (f" (뒤쪽 {cols_dropped}열 생략)" if cols_dropped else "")
     return rt.ok(TOOL, "read", preview, "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽거나 CSV로 저장하세요."
                  if truncated else "", **result)
 
@@ -555,8 +579,10 @@ def _cell_empty(cell: Any) -> bool:
     return not (isinstance(f, str) and f != "")
 
 
-def _write_sheet(t: Any, name: Optional[str], new: bool) -> Any:
-    """쓸 시트. 없는 이름은 --new-sheet가 있을 때만 새로 만듭니다 (오타로 새 시트가 생기지 않도록)."""
+def _write_sheet(t: Any, name: Optional[str], new: bool) -> Optional[Any]:
+    """쓸 시트. 없는 이름은 --new-sheet가 있을 때만 새로 만듭니다 (오타로 새 시트가 생기지 않도록).
+    --new-sheet면 이름만 확인하고 None을 돌려줍니다: 시트는 모든 확인이 끝난 뒤 쓰기 직전에 만듭니다
+    (확인에서 멈추면 새 시트만 남고 되돌리기 지점은 지워져, 다시 실행하면 '이미 있음'으로 막히던 문제)."""
     if new:
         if not name:
             raise rt.InputError("--new-sheet에는 새 시트 이름이 필요합니다. --sheet 이름 또는 --range '이름'!A1로 지정하세요.")
@@ -565,7 +591,8 @@ def _write_sheet(t: Any, name: Optional[str], new: bool) -> Any:
         if existing is not None:
             raise rt.InputError(f"시트 '{existing}'이(가) 이미 있어 새로 만들지 않았습니다. 기존 시트에 쓰려면 --new-sheet를 빼고, "
                                 "새 시트는 다른 이름을 지정하세요.")
-    return t.sheet(name, create=new, allow_create=True)
+        return None
+    return t.sheet(name, allow_create=True)
 
 
 def cmd_write(args) -> Dict[str, Any]:
@@ -582,16 +609,17 @@ def cmd_write(args) -> Dict[str, Any]:
         if not table:
             raise rt.InputError(f"입력 파일에 데이터가 없습니다: {args.file}")
     header = [h.strip() for h in args.header.split(",")] if args.header else None
+    start = args.range or "A1"
+    sh, cells = split_sheet(start)
+    parts = cells.replace("$", "").split(":")
+    r1, c1 = parse_cell(parts[0])
+    r2c2 = parse_cell(parts[1]) if len(parts) > 1 else None
 
     with write_session(args, "write") as t:
-        start = args.range or "A1"
-        sh, cells = split_sheet(start)
-        ws = _write_sheet(t, sh or args.sheet, args.new_sheet)
-        parts = cells.replace("$", "").split(":")
-        r1, c1 = parse_cell(parts[0])
-        r2c2 = parse_cell(parts[1]) if len(parts) > 1 else None
+        # 시트·칸 확인과 쓸 내용 계획을 모두 마친 뒤에만 문서를 바꿈 (새 시트도 쓰기 직전에 만듦)
+        ws = _write_sheet(t, sh or args.sheet, args.new_sheet)   # --new-sheet면 None (아직 만들지 않음, 빈 시트로 봄)
 
-        if args.append:
+        if args.append and ws is not None:
             if table:
                 body_w = len(rect(table)[0])
             elif r2c2:
@@ -660,7 +688,7 @@ def cmd_write(args) -> Dict[str, Any]:
             ops.append((r1, c1, r1 + nrows - 1, c1 + ncols - 1, "values", tuple(tuple(xl_text(v) for v in r) for r in data)))
 
         # 2) never overwrite existing values without the user's consent (--append도 쓸 칸을 확인)
-        if not args.overwrite:
+        if not args.overwrite and ws is not None:
             filled = [fc for (a, b, c, d, _, _) in ops for fc in _filled_cells(ws, ws.Range(ws.Cells(a, b), ws.Cells(c, d)))]
             if filled:
                 raise rt.UserDecisionError(
@@ -669,7 +697,9 @@ def cmd_write(args) -> Dict[str, Any]:
                     "쓰지 않았습니다. 덮어쓸 칸을 사용자에게 보여 주고, 사용자가 덮어써도 된다고 하면 --overwrite를 붙여 다시 실행하세요. "
                     "아니면 비어 있는 다른 --range를 쓰거나 --append로 아래에 이어 쓰세요.")
 
-        # 3) write
+        # 3) write (새 시트는 여기서 처음 만듦)
+        if ws is None:
+            ws = t.sheet(sh or args.sheet, create=True, allow_create=True)
         written: List[str] = []
         with off.excel_batch(t.app):
             for a, b, c, d, kind, payload in ops:
@@ -747,9 +777,9 @@ def cmd_replace(args) -> Dict[str, Any]:
     written: List[Tuple[Any, int, int, Any, str]] = []        # (시트, 행, 열, 쓴 값, 주소): 다시 읽어 확인 (R1)
     with write_session(args, "replace") as t:
         sheets = [t.doc.Worksheets(i) for i in range(1, t.doc.Worksheets.Count + 1)] if args.all_sheets else [t.sheet(args.sheet)]
+        ranges = [target_range(t, ws, args.range) for ws in sheets]     # 주소·시트 확인을 바꾸기 전에 모두
         with off.excel_batch(t.app):
-            for ws in sheets:
-                rng = target_range(t, ws, args.range)
+            for rng in ranges:
                 ws = rng.Worksheet           # --range 'S2!A1'은 그 시트 (이전에는 읽기는 S2, 쓰기는 지금 시트)
                 values = off.range_to_matrix(rng.Value)
                 formulas = off.range_to_matrix(rng.Formula)
@@ -923,6 +953,8 @@ def cmd_style(args) -> Dict[str, Any]:
     theme = off.get_theme(args.theme)
     if not fmt and not theme and not args.highlight and not args.clear:
         raise rt.InputError("적용할 서식이 없습니다. --theme, --bg, --color, --bold, --number-format, --border, --highlight 등을 지정하세요.")
+    # 모든 입력 확인은 문서를 열기 전에 (서식을 지운 뒤 --highlight 오류로 멈추면 지운 서식이 되돌리기 지점 없이 남았음)
+    rule = _parse_highlight(args.highlight) if args.highlight else None
     with write_session(args, "style") as t:
         ws = t.sheet(args.sheet)
         rng = target_range(t, ws, args.range)
@@ -938,8 +970,8 @@ def cmd_style(args) -> Dict[str, Any]:
             if fmt:
                 _apply_format(rng, fmt)
                 applied["format"] = sorted(fmt)
-            if args.highlight:
-                op, val, color = _parse_highlight(args.highlight)
+            if rule is not None:
+                op, val, color = rule
                 if op == "contains":
                     top_left = str(rng.Cells(1, 1).Address).replace("$", "")
                     fc = rng.FormatConditions.Add(Type=2, Formula1=f'=ISNUMBER(SEARCH("{val}",{top_left}))')

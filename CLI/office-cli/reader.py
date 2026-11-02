@@ -44,8 +44,9 @@ SUPPORTED = {
 }
 UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행"}
 PAGE_TYPES = ("pdf", "pptx")   # read --pages가 실제 쪽/슬라이드 번호인 형식 (그 밖은 항목 번호)
-PARSER_VERSION = 7          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만)
-SCAN_IMAGE_COVER = 0.4      # 글자 없는 쪽을 스캔 쪽으로 보는 그림 면적 비율 (쪽 면적 대비)
+PARSER_VERSION = 8          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만, 8: 짧은 글(도장·Bates 번호)만 남은 스캔 쪽도, 보이지 않는 OCR 글자 층이 있는 쪽은 제외)
+SCAN_IMAGE_COVER = 0.4      # 스캔 쪽으로 보는 그림 면적 비율 (쪽 면적 대비)
+SCAN_TEXT_MAX = 40          # 그림이 덮는 쪽에 이보다 적은 글자(도장, Bates 번호)만 남으면 스캔 쪽
 MAX_SHEET_ROWS = 20000      # xlsx 시트당 최대 행 수
 MAX_FOLDER_FILES = 300      # 한 번에 새로 등록(파싱)할 최대 파일 수
 MAX_FOLDER_DEPTH = 3        # 폴더 기본 탐색 깊이
@@ -59,7 +60,7 @@ SAVE_CONTEXT_CHARS = 3000   # search --save의 '문맥' 칸 상한 (--full이면
 STALE_REFRESH_MAX = 20      # 검색 때 원본이 바뀐 캐시를 그 자리에서 다시 읽는 최대 문서 수
 HEADING_MAX_CHARS = 80      # 번호로 시작하는 짧은 줄만 제목 후보 (굵게/큰 글씨는 120)
 LEGACY_OFFICE = (".xls", ".doc", ".ppt")
-INDEX_LOCK_WAIT = 10.0      # 색인 잠금(index.lock)을 기다리는 최대 초 (동시 실행)
+INDEX_LOCK_WAIT = 15.0      # 색인 잠금(index.lock)을 기다리는 최대 초 (동시 실행). 잠근 쪽의 retry_fs 재시도(최대 약 10.5초)보다 길게
 INDEX_LOCK_STALE = 60.0     # 이보다 오래된 잠금 파일은 중단된 실행이 남긴 것으로 보고 지움
 
 
@@ -510,16 +511,20 @@ def _parse_pdf(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         raw = [(_pdf_items(page, _pdf_tables(page)), float(page.rect.height), float(page.rect.width)) for page in doc]
         # 그림이 쪽 면적의 큰 부분을 덮는지는 문서를 닫기 전에 셈 (작은 로고·도장은 스캔 쪽이 아님)
         image_cover = [_page_image_cover(page) for page in doc]
+        # 그림을 크게 덮은 쪽에 보이지 않는 글자 층(OCR 결과)이 있으면 이미 OCR한 쪽
+        ocr_layer = [cover >= SCAN_IMAGE_COVER and _page_has_ocr_layer(page) for cover, page in zip(image_cover, doc)]
         meta = {"pages": doc.page_count, "title": (doc.metadata or {}).get("title") or ""}
     finally:
         doc.close()
     removed = _drop_headers_footers([(items, h) for items, h, _ in raw])
     if removed:
         meta["header_footer_removed"] = removed
-    # 스캔 쪽 후보: 머리글·쪽 번호(스캔 위에 찍은 Bates 번호 포함)를 뺀 뒤 글이 없고, 그림이 쪽의 큰 부분을 덮는 쪽.
-    # 빈 쪽·간지(로고만 있는 쪽 포함)는 OCR 대상이 아님. 그림 위에 글자 층(OCR)이 있는 쪽은 글이 있으므로 제외.
+    # 스캔 쪽 후보: 그림이 쪽의 큰 부분을 덮고, 머리글·쪽 번호를 뺀 뒤 남은 글이 아주 적은 쪽
+    # (스캔 위에 찍은 'RECEIVED' 도장, 한 쪽짜리 스캔의 Bates 번호처럼 머리글로 뺄 수 없는 짧은 글은 남아도 스캔 쪽).
+    # 빈 쪽·간지(로고만 있는 쪽 포함)는 OCR 대상이 아님. 보이지 않는 글자 층(OCR 결과)이 있는 쪽은 이미 OCR한 쪽이라 제외.
     scanned = [pno for pno, (items, _, _) in enumerate(raw, 1)
-               if not items and image_cover[pno - 1] >= SCAN_IMAGE_COVER]
+               if image_cover[pno - 1] >= SCAN_IMAGE_COVER and not ocr_layer[pno - 1]
+               and _items_chars(items) < SCAN_TEXT_MAX]
     pages = [_order_items(items, w) for items, _, w in raw]
 
     sizes: Counter = Counter()
@@ -565,14 +570,33 @@ def _parse_pdf(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                 else:
                     buf.append(text)
             flush()
-    if not b.units:
+    if not b.units or (scanned and len(scanned) == len(raw)):
+        # 글이 없거나, 모든 쪽이 스캔 쪽(도장·Bates 번호 같은 짧은 글만 있음)
         meta["ocr_needed"] = True
-        rt.log("WARN", "텍스트가 없는 PDF입니다 (스캔 이미지일 가능성). OCR이 필요합니다.")
-    elif scanned:
+        rt.log("WARN", "본문 글자가 없는 PDF입니다 (스캔 이미지일 가능성). OCR이 필요합니다.")
+    if scanned and b.units:
         # 일부 쪽만 스캔된 PDF: 그 쪽은 검색되지 않으므로 0건이어도 '없다'고 단정하면 안 됨
         meta["pages_without_text"] = scanned
-        rt.log("WARN", f"글자 없이 그림만 있는 쪽 {len(scanned)}개 (스캔 쪽일 가능성, OCR 필요): p.{_page_list(scanned)}")
+        rt.log("WARN", f"글이 거의 없고 그림이 덮는 쪽 {len(scanned)}개 (스캔 쪽일 가능성, OCR 필요): p.{_page_list(scanned)}")
     return b.units, meta
+
+
+def _items_chars(items: List[Any]) -> int:
+    """쪽에 남은 글자 수 (머리글·쪽 번호를 뺀 뒤). 표가 있으면 글이 있는 쪽으로 봅니다."""
+    total = 0
+    for _, payload in items:
+        if isinstance(payload, dict):
+            return SCAN_TEXT_MAX
+        total += sum(len(re.sub(r"\s+", "", t)) for t, _, _ in payload)
+    return total
+
+
+def _page_has_ocr_layer(page: Any) -> bool:
+    """보이지 않는 글자(그리기 방식 3, OCR 프로그램이 그림 위에 얹는 글자 층)가 있는지."""
+    try:
+        return any(span.get("type") == 3 and span.get("chars") for span in page.get_texttrace())
+    except Exception:
+        return False
 
 
 def _page_image_cover(page: Any) -> float:
@@ -1310,28 +1334,87 @@ def _index_path() -> str:
     return os.path.join(rt.get_cache_dir(), "index.json")
 
 
+class IndexReadError(rt.InputError):
+    """색인 파일(index.json)이 있는데 읽지 못함 (다른 프로그램이 잡고 있음 등). 이때 색인을 덮어쓰지 않습니다."""
+
+
 def load_index() -> Dict[str, Dict[str, Any]]:
-    """색인 {원본 경로: 정보}. Windows에서 대소문자만 다른 같은 파일(C:\\Docs, c:\\docs)은 최근 것 하나로 합칩니다."""
+    """색인 {원본 경로: 정보}. Windows에서 대소문자만 다른 같은 파일(C:\\Docs, c:\\docs)은 최근 것 하나로 합칩니다.
+    - 일시적인 잠금(백신, 공유 위반)은 retry_fs로 기다려 다시 읽고, 끝내 못 읽으면 IndexReadError
+      (빈 색인으로 보고 저장하면 등록한 문서가 색인에서 모두 빠지던 문제)
+    - 내용이 손상(JSON/인코딩 오류)된 경우에만 캐시 문서들로 색인을 다시 만듭니다 (JIT 복구, recovered로 알림)"""
     p = _index_path()
     if not os.path.exists(p):
         return {}
     try:
-        data = json.loads(rt.read_text_file(p))
-    except Exception:
-        rt.log("WARN", "색인 파일이 손상되어 새로 만듭니다.")
+        raw = rt.retry_fs(lambda: rt.read_text_file(p))
+    except FileNotFoundError:
         return {}
-    if not isinstance(data, dict):
-        return {}
+    except OSError as e:
+        raise IndexReadError(f"색인 파일을 읽지 못했습니다 ({type(e).__name__}: 다른 프로그램이 사용 중일 수 있음). "
+                             "색인은 바꾸지 않았습니다. 사용자에게 알리고, 잠시 뒤 다시 요청하게 하세요.")
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("색인이 객체가 아님")
+    except (ValueError, UnicodeDecodeError):
+        return _rebuild_index()
     merged: Dict[str, Tuple[str, Dict[str, Any]]] = {}
     for path, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
         key = os.path.normcase(os.path.abspath(path))
         if key not in merged or str(entry.get("parsed_at", "")) > str(merged[key][1].get("parsed_at", "")):
             merged[key] = (path, entry)
     return {path: entry for path, entry in merged.values()}
 
 
+def _rebuild_index() -> Dict[str, Dict[str, Any]]:
+    """손상된 색인 대신 캐시 문서 파일(docs/*.json)로 색인을 다시 만들고 저장합니다 (index --all과 같은 정보).
+    저장에 실패해도 다시 만든 색인을 돌려줍니다 (다음 쓰기 때 저장)."""
+    cache_dir = os.path.join(rt.get_cache_dir(), "docs")
+    index: Dict[str, Dict[str, Any]] = {}
+    names = sorted(os.listdir(cache_dir)) if os.path.isdir(cache_dir) else []
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        cache_file = os.path.join(cache_dir, name)
+        try:
+            doc = json.loads(rt.read_text_file(cache_file))
+            path = doc.get("file")
+            if (isinstance(path, str) and isinstance(doc.get("units"), list)
+                    and os.path.basename(_doc_cache_path(path)) == name):
+                _index_put(index, path, _index_entry(doc, cache_file))
+        except Exception:
+            continue                       # 손상된 캐시 파일은 clear --all이 정리
+    try:
+        _save_index(index)
+    except OSError as e:
+        rt.log("WARN", f"다시 만든 색인을 저장하지 못했습니다 (다음 등록 때 저장): {e}")
+    rt.note_recovered(f"색인 파일 손상 -> 캐시 문서 {len(index)}개로 색인을 다시 만듦")
+    return index
+
+
 def _save_index(index: Dict[str, Dict[str, Any]]) -> None:
     rt.safe_write_text(_index_path(), json.dumps(index, ensure_ascii=False))
+
+
+def _remove_stale_lock(path: str) -> bool:
+    """오래된 잠금을 고유한 이름으로 옮긴 뒤 지웁니다. 두 실행이 동시에 오래된 잠금을 보고 지우면, 늦은 쪽이
+    먼저 지운 쪽이 새로 만든 잠금까지 지우던 경쟁을 막습니다: 옮긴 파일이 새 잠금이면 제자리로 돌려놓습니다."""
+    moved = f"{path}.stale.{os.getpid()}"
+    try:
+        os.replace(path, moved)
+    except OSError:
+        return False                       # 다른 실행이 먼저 옮김
+    try:
+        if time.time() - os.path.getmtime(moved) <= INDEX_LOCK_STALE and not os.path.exists(path):
+            os.replace(moved, path)        # 그 사이 다른 실행이 새로 만든 잠금이었음: 되돌려 놓음
+            return False
+        os.remove(moved)
+    except OSError:
+        pass
+    return True
 
 
 @contextlib.contextmanager
@@ -1355,8 +1438,7 @@ def _index_lock():
             break
         except (FileExistsError, PermissionError):       # Windows: 지우는 중인 파일은 PermissionError
             try:
-                if time.time() - os.path.getmtime(path) > INDEX_LOCK_STALE:
-                    os.remove(path)
+                if time.time() - os.path.getmtime(path) > INDEX_LOCK_STALE and _remove_stale_lock(path):
                     rt.log("WARN", f"{int(INDEX_LOCK_STALE)}초보다 오래된 색인 잠금(중단된 실행)을 지웠습니다.")
                     continue
             except OSError:
@@ -1376,7 +1458,8 @@ def _index_lock():
 
 
 def _index_update(change) -> Dict[str, Dict[str, Any]]:
-    """잠근 상태에서 색인을 읽고 change(index)로 고친 뒤 저장합니다. 고친 색인을 돌려줍니다."""
+    """잠근 상태에서 색인을 읽고 change(index)로 고친 뒤 저장합니다. 고친 색인을 돌려줍니다.
+    색인을 읽지 못하면(IndexReadError) 저장하지 않고 오류를 올립니다 (읽지 못한 색인 위에 덮어쓰지 않음)."""
     with _index_lock():
         index = load_index()
         change(index)
@@ -1475,10 +1558,15 @@ def load_document_status(path: str, use_cache: bool = True, check_index: bool = 
            "parser_version": PARSER_VERSION, "parsed_at": rt.timestamp(), "meta": meta, "units": units}
     try:
         rt.safe_write_text(cache_file, json.dumps(doc, ensure_ascii=False))
-        _index_update(lambda idx: _index_put(idx, path, _index_entry(doc, cache_file)))
     except OSError as e:
         doc["_cache_failed"] = True          # index가 '캐시에 저장 확인'이라고 하지 않게
         rt.log("WARN", f"캐시 저장 실패 (결과에는 영향 없음): {e}")
+        return doc, ("updated" if had_cache else "new")
+    try:
+        _index_update(lambda idx: _index_put(idx, path, _index_entry(doc, cache_file)))
+    except (OSError, IndexReadError) as e:
+        # 캐시는 저장됨: 색인은 다음 index(--all)가 캐시 파일로 채움. 읽지 못한 색인은 덮어쓰지 않음
+        rt.log("WARN", f"색인에 넣지 못했습니다 (결과에는 영향 없음, 색인은 그대로): {e}")
     return doc, ("updated" if had_cache else "new")
 
 
@@ -1755,9 +1843,12 @@ def cmd_read(args) -> Dict[str, Any]:
     # 글자 없이 그림만 있는 쪽 (스캔 쪽): 읽으려는 범위 안의 쪽만 알림. 잘림이 아니라 주의 사항이라 notes에
     blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, bool(args.units))
     notes: List[str] = []
+    # 모든 쪽이 스캔 이미지(도장·Bates 번호 같은 짧은 글만 있음): 읽은 글은 본문이 아님 -> UNVERIFIED로 알림
+    ocr_reason = ("스캔 이미지 PDF라 본문 글자 층이 없음 (읽은 글은 도장·쪽 번호 같은 짧은 글뿐, "
+                  "OCR(글자 인식)한 PDF가 있어야 본문을 읽을 수 있음)") if meta.get("ocr_needed") and selected else ""
     if blank_pages:
         result["pages_without_text"] = blank_pages[:50]
-        notes.append(f"글자 없이 그림만 있는 쪽 {len(blank_pages)}개 (스캔 쪽일 수 있음, OCR 필요): p.{_page_list(blank_pages)}")
+        notes.append(f"글이 거의 없고 그림만 있는 쪽 {len(blank_pages)}개 (스캔 쪽일 수 있음, OCR 필요): p.{_page_list(blank_pages)}")
         result["notes"] = notes
 
     if args.save:
@@ -1785,7 +1876,7 @@ def cmd_read(args) -> Dict[str, Any]:
             reasons.append(src_cut)
         if reasons:
             result.update(truncated=True, truncated_reason=reasons)
-        problems += reasons
+        problems += reasons + ([ocr_reason] if ocr_reason else [])
         if problems:
             payload = rt.ok_unverified(TOOL, "read", preview, problems, **result)
             if notes:
@@ -1798,9 +1889,17 @@ def cmd_read(args) -> Dict[str, Any]:
 
     if args.format == "summary":
         preview = (f"{name}: {doc['type']} 문서, {unit_name} {total}개, 쪽 {_doc_pages(doc) or '-'}, "
-                   f"장절 {_doc_sections(doc)}개, 글자 수 {sum(len(u['text']) for u in units)}")
+                   f"장절 {_doc_sections(doc)}개, 글자 수 {sum(len(u['text']) for u in units)}"
+                   + (" (스캔 이미지 PDF, 본문은 OCR 필요)" if meta.get("ocr_needed") else ""))
         return rt.ok(TOOL, "read", preview, **result)
 
+    if not selected and (meta.get("ocr_needed") or blank_pages):
+        # 스캔 이미지(쪽): '읽을 글이 없다'고 단정하지 않음 (글자 층이 없어 OCR 전에는 읽을 수 없음)
+        result.update(units=[], truncated=False, shown=0)
+        what = "스캔 이미지 PDF" if meta.get("ocr_needed") else f"고른 쪽(p.{_page_list(blank_pages)})이 스캔 이미지"
+        return rt.ok_unverified(TOOL, "read", f"{name}: {what}라 읽을 글자 층이 없습니다 (0건)",
+                                [f"{what}라 글자 층이 없어 내용을 읽지 못함 (OCR(글자 인식)한 PDF가 있어야 읽을 수 있음)"],
+                                **result)
     if not selected:
         result.update(units=[], truncated=False, shown=0)
         return rt.ok(TOOL, "read", f"{name}: 글이 없습니다 (0건)",
@@ -1866,6 +1965,8 @@ def cmd_read(args) -> Dict[str, Any]:
             directive += " 더 읽거나 저장할 방법이 없습니다(읽기 상한). 사용자에게 그대로 알리세요."
     else:
         directive = "VERIFIED: 읽기 완료. 내용을 인용할 때는 page, section, number로 근거(파일 p.N, 장절 (번호))를 함께 알리세요."
+    if ocr_reason:
+        return rt.ok_unverified(TOOL, "read", preview, [ocr_reason] + reasons, **result)
     if notes:
         directive += " 주의: " + "; ".join(notes) + ". 사용자에게 알리세요."
     return rt.ok(TOOL, "read", preview, directive, **result)
@@ -2379,8 +2480,14 @@ def cmd_search(args) -> Dict[str, Any]:
             cmd.append("--case-sensitive")
         if args.full:
             cmd.append("--full")
-        nexts.append(rt.next_command("reader.py", cmd + ["--save", "근거.xlsx"],
-                                     f"전체 {total}건을 엑셀 파일로 저장" + (" (단락 전체)" if args.full else "")))
+        # --full에서 엑셀 셀 상한(XLSX_CELL_MAX자)보다 긴 단락이 있으면 .xlsx는 반드시 잘림(UNVERIFIED): .md로
+        long_unit = args.full and any(len(h["unit"]["text"]) > XLSX_CELL_MAX for h in hits[:MAX_SAVE_HITS])
+        if long_unit:
+            nexts.append(rt.next_command("reader.py", cmd + ["--save", "근거.md"],
+                                         f"전체 {total}건을 .md 파일로 저장 (단락 전체, 엑셀 칸 상한 {XLSX_CELL_MAX}자보다 긴 단락이 있어 .md)"))
+        else:
+            nexts.append(rt.next_command("reader.py", cmd + ["--save", "근거.xlsx"],
+                                         f"전체 {total}건을 엑셀 파일로 저장" + (" (단락 전체)" if args.full else "")))
     if nexts:
         result["next_commands"] = nexts
 
@@ -2469,7 +2576,7 @@ def _search_gaps(docs: List[Dict[str, Any]], info: Dict[str, Any], pages: Option
                     "reader.py index --all로 다시 등록)")
     ocr = [os.path.basename(d["file"]) for d in docs if (d.get("meta") or {}).get("ocr_needed")]
     if ocr:
-        gaps.append(f"글자가 없는 PDF {len(ocr)}개 (스캔 이미지, OCR 필요): {', '.join(ocr[:5])}")
+        gaps.append(f"본문 글자가 없는 PDF {len(ocr)}개 (스캔 이미지, OCR 필요): {', '.join(ocr[:5])}")
     blank = []
     for d in docs:
         meta = d.get("meta") or {}
@@ -2479,7 +2586,7 @@ def _search_gaps(docs: List[Dict[str, Any]], info: Dict[str, Any], pages: Option
         if flagged:
             blank.append((os.path.basename(d["file"]), flagged))
     if blank:
-        gaps.append(f"글자 없이 그림만 있는 쪽이 있는 PDF {len(blank)}개 (스캔 쪽일 수 있음, 그 쪽은 검색 안 됨, OCR 필요): "
+        gaps.append(f"글이 거의 없고 그림만 있는 쪽이 있는 PDF {len(blank)}개 (스캔 쪽일 수 있음, 그 쪽은 검색 안 됨, OCR 필요): "
                     + ", ".join(f"{n} p.{_page_list(p, 5)}" for n, p in blank[:5]))
     cut = [os.path.basename(d["file"]) for d in docs if (d.get("meta") or {}).get("rows_truncated")]
     if cut:

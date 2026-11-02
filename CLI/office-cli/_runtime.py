@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.12"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.13"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -671,7 +671,13 @@ def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwr
     ext = ext if ext.startswith(".") else "." + ext
     if not path:
         cleanup_work_dir()
-        return os.path.join(get_work_dir(), f"{default_stem}_{timestamp()}{ext}")
+        auto = os.path.join(get_work_dir(), f"{default_stem}_{timestamp()}{ext}")
+        if os.path.exists(auto) and not overwrite:
+            # 같은 초에 같은 이름으로 저장하면 앞 결과를 덮어쓰던 문제: 번호를 붙인 새 이름으로
+            alt = _timestamped(auto)
+            note_recovered(f"{os.path.basename(auto)} 이미 있음 (같은 초에 저장) -> {os.path.basename(alt)}로 저장")
+            auto = alt
+        return auto
     raw = os.path.expandvars(os.path.expanduser(str(path).strip().strip('"')))
     base, cur_ext = os.path.splitext(raw)
     if cur_ext.lower() != ext.lower():
@@ -892,24 +898,25 @@ def clamp_cell(value: Any, max_chars: int = MAX_CELL_CHARS) -> Tuple[Any, bool]:
 
 
 def clamp_rows(rows: List[List[Any]], max_rows: int = DEFAULT_MAX_ROWS,
-               max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[List[List[Any]], bool, int]:
-    """행 수와 대략적인 글자 수 상한으로 표를 자릅니다. (잘린 표, 행이 잘렸는지, 글이 잘린 칸 수)
-    칸마다 MAX_CELL_CHARS에서 자르고, 첫 행도 글자 수 상한을 넘으면 넘는 칸부터 뺍니다 (첫 행이 아주 큰 표도 상한 안)."""
+               max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[List[List[Any]], bool, int, int]:
+    """행 수와 대략적인 글자 수 상한으로 표를 자릅니다. (잘린 표, 행이 잘렸는지, 글이 잘린 칸 수, 뺀 열 수)
+    칸마다 MAX_CELL_CHARS에서 자르고, 첫 행도 글자 수 상한을 넘으면 넘는 칸부터 뺍니다 (첫 행이 아주 큰 표도 상한 안).
+    '글이 잘린 칸'(긴 값)과 '뺀 열'(첫 행이 상한을 넘어 표시하지 않은 칸)은 따로 셉니다."""
     out: List[List[Any]] = []
     used = 0
     cells_cut = 0
     for row in rows:
         if len(out) >= max_rows:
-            return out, True, cells_cut
+            return out, True, cells_cut, 0
         cut_row = []
-        cut_here = 0
+        cut_flags = []
         for v in row:
             v, cut = clamp_cell(v)
-            cut_here += cut
+            cut_flags.append(cut)
             cut_row.append(v)
         size = sum(len(str(v)) + 1 for v in cut_row)
         if out and used + size > max_chars:
-            return out, True, cells_cut
+            return out, True, cells_cut, 0
         if not out and size > max_chars:          # 첫 행만으로 상한을 넘음: 들어가는 칸까지만
             keep, width = [], 0
             for v in cut_row:
@@ -917,13 +924,13 @@ def clamp_rows(rows: List[List[Any]], max_rows: int = DEFAULT_MAX_ROWS,
                 if keep and width > max_chars:
                     break
                 keep.append(v)
-            cells_cut += cut_here + len(cut_row) - len(keep)
+            cells_cut += sum(cut_flags[:len(keep)])
             out.append(keep)
-            return out, len(rows) > 1, cells_cut
-        cells_cut += cut_here
+            return out, len(rows) > 1, cells_cut, len(cut_row) - len(keep)
+        cells_cut += sum(cut_flags)
         out.append(cut_row)
         used += size
-    return out, False, cells_cut
+    return out, False, cells_cut, 0
 
 
 def clamp_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[str, bool]:

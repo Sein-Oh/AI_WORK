@@ -37,6 +37,7 @@ DEFAULT_FOLDERS = {"inbox": 6, "받은편지함": 6, "sent": 5, "보낸편지함
                    "deleted": 3, "지운편지함": 3, "outbox": 4, "보낼편지함": 4, "junk": 23, "정크메일": 23}
 BLOCKED_ATTACH = {".exe", ".bat", ".cmd", ".com", ".js", ".vbs", ".vbe", ".wsf", ".ps1", ".scr", ".msi", ".lnk",
                   ".hta", ".jar", ".reg", ".dll"}
+SAVE_FAILED = "저장 실패"     # skipped_attachments에서 정책상 건너뛴 것과 저장에 실패한 것을 구분하는 표시
 PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"
 
 
@@ -217,9 +218,13 @@ def _save_attachments(item: Any) -> Tuple[List[str], List[str]]:
             k += 1
         try:
             att.SaveAsFile(dest)
-            saved.append(dest)
         except Exception as e:
-            skipped.append(f"{name} (저장 실패: {e})")
+            skipped.append(f"{name} ({SAVE_FAILED}: {e})")
+            continue
+        if os.path.isfile(dest):                          # R1: 저장한 파일이 실제로 생겼는지 다시 확인
+            saved.append(dest)
+        else:
+            skipped.append(f"{name} ({SAVE_FAILED}: 저장 후 파일이 없음)")
     return saved, skipped
 
 
@@ -257,15 +262,31 @@ def cmd_read(args) -> Dict[str, Any]:
     return _detail_response("read", f"'{result['mail']['subject']}' ({result['mail']['from']})", result)
 
 
+def _attachment_problems(result: Dict[str, Any]) -> List[str]:
+    """--save-attach 결과 확인 (R1): 저장에 실패한 첨부와, 저장했다는데 다시 보니 없는 파일."""
+    failed = [s for s in result.get("skipped_attachments", []) if SAVE_FAILED in s]
+    gone = [os.path.basename(p) for p in result.get("saved_attachments", []) if not os.path.isfile(p)]
+    problems = []
+    if failed:
+        problems.append(f"첨부 {len(failed)}개를 저장하지 못함: {', '.join(failed[:5])}")
+    if gone:
+        problems.append(f"저장한 첨부를 다시 확인하니 없음: {', '.join(gone[:5])}")
+    return problems
+
+
 def _detail_response(command: str, preview: str, result: Dict[str, Any]) -> Dict[str, Any]:
-    """read/current 공통 응답: --save 파일을 다시 열어 확인하지 못했으면 UNVERIFIED (R1)."""
+    """read/current 공통 응답: --save 파일이나 --save-attach 첨부를 다시 확인하지 못했으면 UNVERIFIED (R1)."""
     if "saved_attachments" in result:
         preview += f", 첨부 {len(result['saved_attachments'])}개 저장"
-    if result.get("save_problem"):
-        return rt.ok_unverified(TOOL, command, preview, [result["save_problem"]], **result)
+    problems = ([result["save_problem"]] if result.get("save_problem") else []) + _attachment_problems(result)
+    if problems:
+        return rt.ok_unverified(TOOL, command, preview, problems, **result)
     if "output_file" in result:
         return rt.ok(TOOL, command, preview + f", 저장: {result['output_file']}",
                      "VERIFIED: 메일을 읽고 저장한 파일을 다시 열어 확인했습니다.", verified=True, **result)
+    if result.get("saved_attachments"):
+        return rt.ok(TOOL, command, preview, "VERIFIED: 메일을 읽고 저장한 첨부 파일이 있는지 다시 확인했습니다.",
+                     verified=True, **result)
     return rt.ok(TOOL, command, preview, **result)
 
 
@@ -366,9 +387,9 @@ def _attach_paths(spec: Optional[str]) -> List[str]:
     return paths
 
 
-def _attach(mail: Any, spec: Optional[str]) -> List[str]:
+def _attach(mail: Any, paths: List[str]) -> List[str]:
     names = []
-    for path in _attach_paths(spec):
+    for path in paths:
         mail.Attachments.Add(path)
         names.append(os.path.basename(path))
     return names
@@ -430,6 +451,9 @@ def _body_arg(args) -> str:
 
 
 def cmd_new(args) -> Dict[str, Any]:
+    # 본문 파일·첨부 파일 확인은 메일을 만들기 전에 (확인에서 멈추면 아무것도 만들지 않음)
+    body = _body_arg(args)
+    attach = _attach_paths(args.attach)
     app = get_outlook()
     mail = app.CreateItem(0)
     _load_signature(mail)
@@ -439,34 +463,35 @@ def cmd_new(args) -> Dict[str, Any]:
         mail.CC = args.cc
     if args.subject:
         mail.Subject = args.subject
-    body = _body_arg(args)
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))   # Body 대입은 서명을 지우므로 HTML로
-    return _finalize(mail, args.send, "new", _attach(mail, args.attach))
+    return _finalize(mail, args.send, "new", _attach(mail, attach))
 
 
 def cmd_reply(args) -> Dict[str, Any]:
+    body = _body_arg(args)
+    attach = _attach_paths(args.attach)
     app = get_outlook()
     original = _target_item(app, args)
     mail = original.ReplyAll() if args.all else original.Reply()
     _load_signature(mail)
-    body = _body_arg(args)
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))
-    return _finalize(mail, args.send, "reply", _attach(mail, args.attach))
+    return _finalize(mail, args.send, "reply", _attach(mail, attach))
 
 
 def cmd_forward(args) -> Dict[str, Any]:
+    body = _body_arg(args)
+    attach = _attach_paths(args.attach)
     app = get_outlook()
     original = _target_item(app, args)
     mail = original.Forward()
     _load_signature(mail)
     if args.to:
         mail.To = args.to
-    body = _body_arg(args)
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))
-    return _finalize(mail, args.send, "forward", _attach(mail, args.attach))
+    return _finalize(mail, args.send, "forward", _attach(mail, attach))
 
 
 # ==============================================================================

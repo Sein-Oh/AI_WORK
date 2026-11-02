@@ -182,7 +182,7 @@ def test_r2_ocr_text_layer_over_image_is_not_flagged(tmp_path, capsys):
     doc.save(str(path))
     code, out = _run(reader, capsys, "read", "--file", str(path))
     assert code == 0 and "pages_without_text" not in out["meta"] and not out["meta"].get("ocr_needed")
-    assert reader.PARSER_VERSION == 7
+    assert reader.PARSER_VERSION >= 7
 
 
 # ---------------------------------------------------------------------------
@@ -305,11 +305,12 @@ def test_d2_refused_write_leaves_no_undo_point(xl, capsys):
 
 def test_d3_clamp_rows_caps_cells_and_first_row():
     rows = [["가" * 30000 for _ in range(40)], [1, 2]]
-    shown, rows_cut, cells_cut = rt.clamp_rows(rows)
+    shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows(rows)
     assert sum(len(str(v)) for r in shown for v in r) <= rt.DEFAULT_MAX_CHARS + 100
-    assert rows_cut and cells_cut > 0
-    shown, rows_cut, cells_cut = rt.clamp_rows([["짧은 값", 1], ["둘", 2]])
-    assert shown == [["짧은 값", 1], ["둘", 2]] and not rows_cut and cells_cut == 0
+    assert rows_cut and cells_cut > 0 and cols_dropped > 0
+    assert cells_cut + cols_dropped == 40                 # 1.4.13 X3: 긴 값(보인 칸)과 뺀 열을 따로 셈
+    shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows([["짧은 값", 1], ["둘", 2]])
+    assert shown == [["짧은 값", 1], ["둘", 2]] and not rows_cut and cells_cut == 0 and cols_dropped == 0
 
 
 def test_d3_excel_read_and_search_cap_long_values(tmp_path, capsys):

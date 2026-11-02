@@ -15,7 +15,7 @@ import shutil
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import _runtime as rt
 
@@ -371,8 +371,10 @@ def doc_identity(path: str) -> Optional[str]:
         return None
 
 
-def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "") -> Optional[str]:
-    """쓰기 직전 문서 상태를 저장합니다. 원본 문서는 저장하거나 경로를 바꾸지 않습니다. 실패해도 작업은 계속합니다."""
+def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "", rotate: bool = True) -> Optional[str]:
+    """쓰기 직전 문서 상태를 저장합니다. 원본 문서는 저장하거나 경로를 바꾸지 않습니다. 실패해도 작업은 계속합니다.
+    rotate=False: 오래된 지점 정리(SNAPSHOT_KEEP개 유지)를 하지 않음. open_target은 명령이 실제로 바꾼 뒤에만
+    정리합니다 (쓰기 전에 멈춘 실행이 진짜 옛 지점을 밀어내지 않도록)."""
     try:
         name = str(doc.Name)
         full = str(getattr(doc, "FullName", "") or "")
@@ -402,7 +404,8 @@ def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "") -> Opt
                 "doc_created": doc_identity(path),
                 "untitled": not path}   # 저장한 적 없는 문서: undo가 열린 문서 중 같은 이름의 '저장 안 된' 문서를 찾아 되돌림
         rt.safe_write_text(base + ".json", json.dumps(meta, ensure_ascii=False))
-        _rotate_snapshots(kind, key)
+        if rotate:
+            _rotate_snapshots(kind, key)
         rt.debug(f"스냅샷 저장: {os.path.basename(data_file)}")
         return data_file
     except Exception as e:
@@ -410,7 +413,7 @@ def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "") -> Opt
         return None
 
 
-def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str = "") -> Optional[str]:
+def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str = "", rotate: bool = True) -> Optional[str]:
     """되돌릴 지점을 만들지 못한 쓰기를 기록합니다. undo가 이 작업을 건너뛰고 더 오래된 지점으로 되돌려
     그 사이 작업까지 사라지게 하지 않도록 합니다 (기록 실패는 무시). 만든 기록 파일(.json) 경로를 돌려줍니다."""
     try:
@@ -423,7 +426,8 @@ def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str 
         meta = {"app": kind, "name": name, "original_path": path, "barrier": True, "reason": reason,
                 "created_at": stamp, "created_ts": time.time(), "by": f"{tool} {command}".strip()}
         rt.safe_write_text(base + ".json", json.dumps(meta, ensure_ascii=False))
-        _rotate_snapshots(kind, key)
+        if rotate:
+            _rotate_snapshots(kind, key)
         return base + ".json"
     except Exception:
         return None
@@ -442,6 +446,15 @@ def _rotate_snapshots(kind: str, key: str) -> None:
     metas = sorted(glob.glob(os.path.join(_snapshot_dir(), f"{kind}_{key}_*.json")), reverse=True)  # 이름의 시각 순
     for old in metas[SNAPSHOT_KEEP:]:
         delete_snapshot(old)
+
+
+def rotate_point(meta_file: str) -> None:
+    """이 지점(.json)과 같은 문서의 지점을 최신 SNAPSHOT_KEEP개만 남기고 정리합니다 (실패는 무시)."""
+    try:
+        kind, key, _ = os.path.basename(meta_file).split("_", 2)
+        _rotate_snapshots(kind, key)
+    except Exception:
+        pass
 
 
 def list_snapshots(kind: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -672,6 +685,15 @@ def _create_file(kind: str, app: Any, path: str) -> Any:
     return doc
 
 
+def _file_stamp(path: str) -> Optional[Tuple[float, int]]:
+    """디스크 파일의 (수정 시각, 크기). 없거나 읽지 못하면 None."""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime, st.st_size)
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 @contextmanager
 def open_target(kind: str, target: str = "active", readonly: bool = True, snapshot: Optional[bool] = None,
                 focus: bool = True, create: bool = False, tool: str = "", command: str = "") -> Iterator[OfficeTarget]:
@@ -745,31 +767,51 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
 
         point: Optional[str] = None       # 이 실행이 만든 되돌리기 지점(.json)
         was_saved = is_saved(t.doc)
+        disk_before = _file_stamp(t.path) if owns_doc else None
         if snapshot and not readonly:
+            # 정리(rotate)는 명령이 바꾼 뒤에만: 쓰기 전에 멈춘 실행이 진짜 옛 지점을 밀어내지 않도록
             if t.source == "new":
-                point = save_barrier(kind, t.doc, "새로 만든 파일이라 되돌릴 이전 상태가 없음", tool, command)
+                point = save_barrier(kind, t.doc, "새로 만든 파일이라 되돌릴 이전 상태가 없음", tool, command, rotate=False)
             else:
-                data_file = save_snapshot(kind, t.doc, tool, command)
+                data_file = save_snapshot(kind, t.doc, tool, command, rotate=False)
                 if data_file is None:
-                    point = save_barrier(kind, t.doc, "되돌리기용 스냅샷을 만들지 못함 (DRM, 크기 초과 등)", tool, command)
+                    point = save_barrier(kind, t.doc, "되돌리기용 스냅샷을 만들지 못함 (DRM, 크기 초과 등)", tool, command,
+                                         rotate=False)
                 else:
                     point = os.path.splitext(data_file)[0] + ".json"
 
+        def unchanged(e: BaseException) -> bool:
+            """이 실행이 문서를 바꾸지 않았는지 (그러면 이번 지점은 지움: 남기면 다음 undo가 바뀐 것 없는 이 지점으로
+            되돌려 실제로 바꾼 작업이 그대로 남음).
+            - 도구가 열거나 만든 파일(owns_doc): 저장하지 않고 닫으므로 디스크 파일이 그대로면 바뀐 것 없음
+            - 열린 문서: 바꾼 표시(t.changed)가 없고 저장 상태가 그대로일 때만. 원래 저장 안 된 문서는 입력 오류일 때만
+              (그 밖의 오류는 중간까지 바꿨는지 알 수 없어 지점을 남김)"""
+            if owns_doc and disk_before is not None:
+                return _file_stamp(t.path) == disk_before
+            if t.changed or is_saved(t.doc) != was_saved:
+                return False
+            return was_saved or isinstance(e, rt.InputError)
+
+        def drop_or_keep(e: Optional[BaseException]) -> None:
+            if not point:
+                return
+            if e is not None and unchanged(e):
+                delete_snapshot(point)
+                rt.debug("문서를 바꾸기 전에 멈춰 이번 되돌리기 지점을 지웠습니다.")
+            else:
+                rotate_point(point)
+
         try:
             yield t
+            if not readonly and focus:
+                t.apply_focus()
+            if owns_doc and not readonly and not is_saved(t.doc):
+                rt.log("PROGRESS", "변경사항 저장 중")
+                t.doc.Save()
         except BaseException as e:
-            # 쓰기 전에 멈춘 실행(입력 오류, needs_user_decision 등)의 지점은 지움: 남기면 다음 undo가 바뀐 것 없는
-            # 이 지점으로 되돌려 실제로 바꾼 작업이 그대로 남음. 저장 상태가 그대로인 문서도 바뀐 것이 없음
-            if point and (isinstance(e, rt.InputError) or (was_saved and is_saved(t.doc))):
-                delete_snapshot(point)
-                rt.debug("쓰기 전에 멈춰 이번 되돌리기 지점을 지웠습니다.")
+            drop_or_keep(e)
             raise
-
-        if not readonly and focus:
-            t.apply_focus()
-        if owns_doc and not readonly and not is_saved(t.doc):
-            rt.log("PROGRESS", "변경사항 저장 중")
-            t.doc.Save()
+        drop_or_keep(None)
     finally:
         if owns_doc and t is not None:
             try:
