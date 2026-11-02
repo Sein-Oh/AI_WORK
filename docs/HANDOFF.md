@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.21**, **office-cli 1.4.19**
+- main 기준 도구 버전: **ml-kit 2.9.21**, **office-cli 1.4.20**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -27,6 +27,7 @@
 | office-cli 1.4.17 | `excel`/`word`/`ppt replace`의 찾을 글이 빈 문자열이면 STOP_RETRY(빈 칸 채우기는 `write`). 기본 시트가 여럿인 새 파일로 `transfer --sheet Sheet1`도 그 시트에 받음. 대소문자만 다른 치환(`iphone` -> `iPhone`)에서 이미 바꿀 글인 곳은 바꾼 곳으로 세지 않음(`unchanged_same_text`) |
 | office-cli 1.4.18 | 이모지 같은 BMP 밖 글자 뒤의 글도 `ppt replace`가 모두 바꿈. Word 찾기에서 `^`를 글자 그대로 찾음(`감사합니다^^`, `10^6`) |
 | office-cli 1.4.19 | Word 치환에서 바꿀 글이 255자를 넘어도 바꾼 뒤 확인이 오류로 끝나지 않음(Word 찾기 대신 직접 셈). 찾을 글·앵커 길이는 `^`를 2자로 셈 |
+| office-cli 1.4.20 | `transfer --to word,ppt`는 무엇이든 넣기 전에 받는 문서를 모두 확인: 한 앱만 열려 있으면 아무것도 바꾸지 않고 STOP_RETRY와 `[추천]`(열린 앱만 `--to word` 등, 그대로 1회 실행). 넣은 뒤 한 앱만 실패하면 `UNVERIFIED`(`succeeded`/`failed`, 다시 실행하지 않음). 열린 문서가 없을 때 안내는 `--to-target`/`--from-target`(없는 `--target`을 안내하지 않음). `excel chart`의 `next_commands`는 열린 앱만 `--to`에 넣음 |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
 | ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `docs/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |

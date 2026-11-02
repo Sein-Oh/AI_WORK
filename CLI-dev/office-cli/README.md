@@ -305,6 +305,17 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 
 회사 PC에서 처음 한 번 `python office.py transfer --probe`를 실행하면, 세 방식을 실제로 시험해 대상 앱별로 되는 순서를 `config.json`에 저장합니다.
 
+여러 앱에 보낼 때(`--to word,ppt`, 1.4.20):
+- 무엇이든 넣기 전에 앱마다 받는 문서(각 앱의 활성 문서 또는 `--to-target`)와 앱별 인자(`--anchor`, `--slide`)를 확인합니다.
+  못 찾은 문서가 있으면 아무것도 바꾸지 않고 STOP_RETRY(`error_type: target_not_open`)와 찾은 앱만으로 바꾼 같은 명령
+  `[추천] python ...office.py transfer ... --to word`를 냅니다. 에이전트는 그대로 1회 실행하고 못 넣은 앱을 사용자에게 알립니다.
+- `--to-target`은 `--to`의 모든 앱에 함께 쓰이므로 파일 경로를 줄 때는 `--to`에 앱 하나만 둡니다.
+  열린 문서가 없을 때 안내는 받는 쪽 `--to-target`, 보내는 쪽 `--from-target`입니다(transfer에는 `--target`이 없음).
+- 넣은 뒤 한 앱만 실패하면(늦게 드러난 대상 문제, COM 오류) 오류로 끝내지 않고 `UNVERIFIED`와 `succeeded`/`failed`/`failures`로 답합니다.
+  같은 명령을 다시 실행하면 넣은 앱에 또 들어가므로, 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 `--to <그 앱>`으로 실행합니다.
+  되돌리기 지점은 실제로 바뀐 문서에만 남습니다.
+- `excel chart`의 `next_commands`는 문서가 열린 받는 앱만 `--to`에 넣습니다(둘 다 열렸거나 둘 다 없으면 `word,ppt`).
+
 ## 5. 체이닝 예
 
 ```bat

@@ -238,7 +238,8 @@ def image_by_redraw(chart_obj: Any, stem: str) -> str:
 
 def insert_picture_word(target: str, image: str, anchor: Optional[str], occurrence: Optional[int] = None) -> Dict[str, Any]:
     import word
-    with off.open_target("word", target, readonly=False, create=True, tool=TOOL, command="transfer") as t:
+    with off.open_target("word", target, readonly=False, create=True, tool=TOOL, command="transfer",
+                         option="--to-target") as t:
         start, _ = word._insert_position(t.doc, anchor, "after" if anchor else "end", occurrence)
         before = _count_pictures(lambda: t.doc.InlineShapes.Count)
         w = word.Writer(t.doc, start, None)
@@ -262,7 +263,8 @@ def _ppt_slide(prs: Any, slide: Optional[str], title: str) -> Tuple[Any, int]:
 
 def insert_picture_ppt(target: str, image: str, slide: Optional[str], title: str) -> Dict[str, Any]:
     import ppt
-    with off.open_target("ppt", target, readonly=False, create=True, tool=TOOL, command="transfer") as t:
+    with off.open_target("ppt", target, readonly=False, create=True, tool=TOOL, command="transfer",
+                         option="--to-target") as t:
         s, no = _ppt_slide(t.doc, slide, title)
         before = _count_pictures(lambda: s.Shapes.Count)
         ppt.SlideWriter(t.doc, s, off.get_theme("navy")).image(image, None)
@@ -295,7 +297,8 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
     temp_app = temp_doc = None
     try:
         if to_word:
-            with off.open_target("word", to_word, readonly=False, create=True, tool=TOOL, command="transfer") as t:
+            with off.open_target("word", to_word, readonly=False, create=True, tool=TOOL, command="transfer",
+                                 option="--to-target") as t:
                 start, _ = word._insert_position(t.doc, anchor, "after" if anchor else "end", occurrence)
                 rng = t.doc.Range(start, start)
                 rng.InsertAfter("\r")
@@ -319,7 +322,8 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
         if to_ppt:
             import ppt
             time.sleep(0.3)
-            with off.open_target("ppt", to_ppt, readonly=False, create=True, tool=TOOL, command="transfer") as t:
+            with off.open_target("ppt", to_ppt, readonly=False, create=True, tool=TOOL, command="transfer",
+                                 option="--to-target") as t:
                 s, no = _ppt_slide(t.doc, slide, title)
                 w = ppt.SlideWriter(t.doc, s, off.get_theme("navy"))
                 top = w.next_top()
@@ -362,15 +366,118 @@ def method_order(kind: str, forced: Optional[str]) -> List[str]:
 # 4. transfer
 # ==============================================================================
 
+TO_TARGET_NOTE = " (--to-target은 --to의 모든 앱에 함께 쓰이므로 앱 하나에만 보낼 때 쓰세요)"
+
+
+def _probe_target(kind: str, target: Optional[str]) -> Tuple[bool, Any, str]:
+    """받는 문서를 바꾸지 않고 찾습니다: (찾음, 열린 문서 doc 또는 None(열 파일), 못 찾은 이유)."""
+    label = off.APP_LABEL[kind]
+    text = (target or "active").strip()
+    if text.lower() == "active":
+        try:
+            return True, off.get_active(kind)["doc"], ""
+        except rt.UserDecisionError:
+            return False, None, f"열려 있는 {label} 문서가 없음"
+    hit = off.match_open(kind, text)              # 이름이 같은 문서가 여럿이면 [후보] 오류 (아직 바꾼 것 없음)
+    if hit is not None:
+        return True, hit["doc"], ""
+    raw = text.strip('"')
+    expanded = os.path.expanduser(os.path.expandvars(raw))
+    if os.path.splitext(expanded)[1].lower() in off.EXTENSIONS[kind] and (
+            os.path.isabs(expanded) or os.path.isfile(expanded) or os.path.isfile(os.path.join(rt.get_data_dir(), raw))):
+        return True, None, ""                     # open_target이 열거나 새로 만들 파일
+    return False, None, f"--to-target '{raw}'은(는) 열린 {label} 문서도 {label} 파일도 아님"
+
+
+def _check_target_args(kind: str, doc: Any, args) -> None:
+    """앱별 인자(--anchor, --slide)를 무엇이든 넣기 전에 확인합니다. 입력 문제만 오류로 내고, 읽기 실패는 넣을 때로 미룹니다."""
+    try:
+        if kind == "word" and args.anchor:
+            import word
+            if word._find_len(args.anchor) > word.FIND_MAX:
+                raise rt.InputError(f"--anchor는 {word.FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앵커 단락의 앞부분 일부만 쓰세요.")
+            word._anchor_paragraph(doc, args.anchor, args.occurrence, "after")
+        elif kind == "ppt" and args.slide:
+            import ppt
+            ppt._resolve_slide(doc, args.slide, default_new=False)
+    except rt.InputError:
+        raise
+    except Exception as e:
+        rt.debug(f"{off.APP_LABEL[kind]} 인자 사전 확인 생략: {e}")
+
+
+def _with_option_value(argv: List[str], option: str, value: str) -> List[str]:
+    """argv에서 option의 값만 바꾼 목록 (--to word,ppt -> --to word)."""
+    out: List[str] = []
+    skip = False
+    for a in argv:
+        if skip:
+            out.append(value)
+            skip = False
+        elif a == option:
+            out.append(a)
+            skip = True
+        elif a.startswith(option + "="):
+            out.append(f"{option}={value}")
+        else:
+            out.append(a)
+    return out
+
+
+def _preflight_targets(args, targets: List[str]) -> None:
+    """여러 앱에 보낼 때(--to word,ppt) 무엇이든 넣기 전에 모든 받는 문서와 앱별 인자를 확인합니다.
+    이전에는 워드에 넣은 뒤 PowerPoint가 열려 있지 않으면 '실행하지 않았습니다' 오류로 끝나, 다시 실행하면 워드에 두 번 들어갔음.
+    못 찾은 문서가 있으면 아무것도 바꾸지 않고, 찾은 앱만으로 같은 명령을 [추천]합니다."""
+    if len(targets) < 2:
+        return                                    # 앱 하나: open_target이 바꾸기 전에 그 앱의 오류를 냄
+    found: List[str] = []
+    missing: Dict[str, str] = {}
+    for kind in targets:
+        hit, doc, reason = _probe_target(kind, args.to_target)
+        if not hit:
+            missing[kind] = reason
+            continue
+        found.append(kind)
+        if doc is not None:
+            _check_target_args(kind, doc, args)
+    if not missing:
+        return
+    labels = ", ".join(off.APP_LABEL[k] for k in missing)
+    reasons = "; ".join(missing.values())
+    if not found:
+        raise rt.UserDecisionError(
+            f"받는 문서를 찾지 못해 아무것도 바꾸지 않았습니다: {reasons}.",
+            f"실행하지 않았습니다. 사용자에게 {labels} 문서를 열어 달라고 한 뒤 같은 명령을 1번만 다시 실행하세요. "
+            "파일에 넣으려면 사용자에게 전체 경로를 물어 --to에 앱 하나와 --to-target \"<전체경로>\"로 실행하세요"
+            f"{TO_TARGET_NOTE}. 경로를 추측하지 마세요.")
+    done = ", ".join(off.APP_LABEL[k] for k in found)
+    explicit = (args.to_target or "active").strip().lower() != "active"
+    argv = list(rt.CURRENT_ARGV or [])
+    cmd = rt.next_command("office.py", _with_option_value(argv, "--to", ",".join(found)), "")["command"] if argv else ""
+    raise rt.InputError(
+        f"{reasons}. 아무것도 바꾸지 않았습니다. {done}에만 넣을 수 있습니다." + (f" [추천] {cmd}" if cmd else ""),
+        directive=(f"아무것도 바꾸지 않았습니다. message의 [추천] 명령을 글자 그대로 1번만 실행해 {done}에 넣고, "
+                   f"{labels}에는 넣지 못했다고 사용자에게 알리세요. {labels}에도 넣으려면 사용자에게 {labels} 문서를 "
+                   f"열어 달라고 한 뒤 --to {','.join(missing)}로 따로 실행하세요" + (TO_TARGET_NOTE if explicit else "") + "."),
+        error_type="target_not_open")
+
+
+def _partial_note(results: Dict[str, Any], failed: List[str]) -> str:
+    """R1: 일부 앱에만 넣었을 때 unverified 문구 (다시 실행하면 넣은 앱에 또 들어감)."""
+    done = ", ".join(off.APP_LABEL[k] for k in results)
+    return (f"{', '.join(off.APP_LABEL[k] for k in failed)}에는 넣지 못함 (failures). {done}에는 넣었으므로 같은 명령을 다시 실행하면 "
+            f"{done}에 한 번 더 들어감. 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 --to {','.join(failed)}로 실행")
+
 def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
     import excel
     unknown = [t for t in targets if t not in ("word", "ppt")]
     if unknown:
         raise rt.InputError("엑셀 차트는 word, ppt로만 보낼 수 있습니다.")
+    _preflight_targets(args, targets)
     results: Dict[str, Any] = {}
     errors: Dict[str, List[str]] = {}
     unverified: List[str] = []
-    with off.open_target("excel", args.from_target, readonly=True) as src:
+    with off.open_target("excel", args.from_target, readonly=True, option="--from-target") as src:
         ws, chart_obj = excel.find_chart(src, args.chart, args.sheet)
         title = excel._chart_title(chart_obj) or str(chart_obj.Name)
         stem = f"chart_{str(chart_obj.Name)}"[:40]
@@ -407,15 +514,23 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
                             unverified.append(f"{off.APP_LABEL[kind]}: {problem}")
                     pending.remove(kind)
                 except Exception as e:
-                    if isinstance(e, rt.InputError) and e.no_fallback:
-                        raise                           # 앵커/대상 문제는 다른 방식으로 바꿔도 같음
                     msg = rt.error_payload(e)["message"]
+                    if isinstance(e, rt.InputError) and e.no_fallback:
+                        # 앵커/대상 문제는 다른 방식으로 바꿔도 같음. 아직 아무 앱에도 넣지 않았으면 오류로 멈추고,
+                        # 이미 다른 앱에 넣었으면 이 앱만 실패로 남김 (오류로 끝내면 다시 실행할 때 넣은 앱에 또 들어감)
+                        if not results:
+                            raise
+                        rt.log("WARN", f"{off.APP_LABEL[kind]}로 전달 실패 ({method}): {msg}")
+                        tried.append(f"{method}: {msg}")
+                        pending.remove(kind)
+                        continue
                     rt.log("WARN", f"{off.APP_LABEL[kind]}로 전달 실패 ({method}): {msg} -> 다음 방식 시도")
                     tried.append(f"{method}: {msg}")
     failed = [k for k in targets if k not in results]
     payload = {"chart": title, "results": results}
     if failed:
         payload["failures"] = {k: errors.get(k, []) for k in failed}
+        payload.update(succeeded=list(results), failed=failed)
         if not results:
             raise rt.InputError(f"차트를 {', '.join(off.APP_LABEL[k] for k in failed)}에 넣지 못했습니다. "
                                 f"시도한 방식: {'; '.join(sum((errors.get(k, []) for k in failed), []))}. "
@@ -423,7 +538,7 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
     used = ", ".join(f"{off.APP_LABEL[k]}({v['method']})" for k, v in results.items())
     preview = f"차트 '{title}'를 넣었습니다: {used}" + (f" / 실패: {', '.join(failed)}" if failed else "")
     if failed:   # R1: 일부 실패는 VERIFIED가 아님 (넣은 곳만 확인함)
-        unverified.append(f"{', '.join(off.APP_LABEL[k] for k in failed)}에는 넣지 못함 (failures). 넣은 곳은 그림을 다시 세어 확인")
+        unverified.append(_partial_note(results, failed) + ". 넣은 곳은 그림을 다시 세어 확인")
     if unverified:
         return rt.ok_unverified(TOOL, "transfer", preview, unverified, **payload)
     return rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 그림을 다시 세어 확인했습니다.", verified=True, **payload)
@@ -435,7 +550,7 @@ def _excel_range_rows(args) -> Tuple[List[List[Any]], str]:
     if closed:
         sheet, _, _, matrix, _ = excel._read_matrix_closed(closed, args.sheet, args.range)
     else:
-        with off.open_target("excel", args.from_target, readonly=True) as t:
+        with off.open_target("excel", args.from_target, readonly=True, option="--from-target") as t:
             ws = t.sheet(args.sheet)
             rng = excel.target_range(t, ws, args.range)
             matrix = off.range_to_matrix(rng.Value)
@@ -449,36 +564,53 @@ def _excel_range_rows(args) -> Tuple[List[List[Any]], str]:
 def _excel_range_transfer(args, targets: List[str]) -> Dict[str, Any]:
     import ppt
     import word
+    if any(k not in ("word", "ppt") for k in targets):
+        raise rt.InputError("엑셀 범위는 word, ppt로 보낼 수 있습니다. 엑셀 안에서 옮기려면 excel.py range --action copy를 쓰세요.")
     rows, sheet = _excel_range_rows(args)
+    _preflight_targets(args, targets)
     results: Dict[str, Any] = {}
+    failures: Dict[str, str] = {}
     problems: List[str] = []
     first = next((str(v) for v in rows[0] if str(v).strip()), "")       # 다시 읽어 찾을 머리글 (R1)
     for kind in targets:
-        if kind == "word":
-            with off.open_target("word", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer") as t:
-                start, _ = word._insert_position(t.doc, args.anchor, "after" if args.anchor else "end", args.occurrence)
-                w = word.Writer(t.doc, start, off.get_theme(args.theme))
-                w.table(rows)
-                problems += [f"워드: {p}" for p in word._verify_inserted(t.doc, start, w.pos, [first])]
-                t.set_focus()
-                results["word"] = {"method": "table", "target_resolved": t.resolved()}
-        elif kind == "ppt":
-            with off.open_target("ppt", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer") as t:
-                header, body = rows[0], rows[1:] or [[""] * len(rows[0])]
-                slides = []
-                for k in range(0, len(body), ppt.TABLE_ROWS_PER_SLIDE):
-                    s, no = _ppt_slide(t.doc, args.slide if not slides else "new", "")
-                    ppt.SlideWriter(t.doc, s, off.get_theme(args.theme or "navy")).table([header] + body[k:k + ppt.TABLE_ROWS_PER_SLIDE])
-                    slides.append(no)
-                problems += [f"PPT: {p}" for p in ppt._verify_slides(t.doc, slides, [first])]
-                t.set_focus(slide=slides[-1])
-                results["ppt"] = {"method": "table", "slides": slides, "target_resolved": t.resolved()}
-        else:
-            raise rt.InputError("엑셀 범위는 word, ppt로 보낼 수 있습니다. 엑셀 안에서 옮기려면 excel.py range --action copy를 쓰세요.")
+        try:
+            if kind == "word":
+                with off.open_target("word", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer",
+                                     option="--to-target") as t:
+                    start, _ = word._insert_position(t.doc, args.anchor, "after" if args.anchor else "end", args.occurrence)
+                    w = word.Writer(t.doc, start, off.get_theme(args.theme))
+                    w.table(rows)
+                    problems += [f"워드: {p}" for p in word._verify_inserted(t.doc, start, w.pos, [first])]
+                    t.set_focus()
+                    results["word"] = {"method": "table", "target_resolved": t.resolved()}
+            else:
+                with off.open_target("ppt", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer",
+                                     option="--to-target") as t:
+                    header, body = rows[0], rows[1:] or [[""] * len(rows[0])]
+                    slides = []
+                    for k in range(0, len(body), ppt.TABLE_ROWS_PER_SLIDE):
+                        s, no = _ppt_slide(t.doc, args.slide if not slides else "new", "")
+                        ppt.SlideWriter(t.doc, s, off.get_theme(args.theme or "navy")).table([header] + body[k:k + ppt.TABLE_ROWS_PER_SLIDE])
+                        slides.append(no)
+                    problems += [f"PPT: {p}" for p in ppt._verify_slides(t.doc, slides, [first])]
+                    t.set_focus(slide=slides[-1])
+                    results["ppt"] = {"method": "table", "slides": slides, "target_resolved": t.resolved()}
+        except Exception as e:
+            if not results:
+                raise                                   # 아직 아무 앱에도 넣지 않음: 오류로 멈춤
+            # 이미 다른 앱에 넣음: 오류로 끝내면 다시 실행할 때 넣은 앱에 또 들어가므로 이 앱만 실패로 남김
+            failures[kind] = rt.error_payload(e)["message"]
+            rt.log("WARN", f"{off.APP_LABEL[kind]}로 전달 실패: {failures[kind]}")
     preview = f"{sheet}!{args.range} ({len(rows)}행)을 표로 넣었습니다: {', '.join(results)}"
+    fields: Dict[str, Any] = dict(rows=len(rows), results=results)
+    if failures:
+        failed = list(failures)
+        preview += f" / 실패: {', '.join(failed)}"
+        fields.update(failures=failures, succeeded=list(results), failed=failed)
+        problems.append(_partial_note(results, failed))
     if problems:
-        return rt.ok_unverified(TOOL, "transfer", preview, problems, rows=len(rows), results=results)
-    return rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 표를 다시 읽어 확인했습니다.", verified=True, rows=len(rows), results=results)
+        return rt.ok_unverified(TOOL, "transfer", preview, problems, **fields)
+    return rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 표를 다시 읽어 확인했습니다.", verified=True, **fields)
 
 
 def _word_rows(args) -> Tuple[List[List[Any]], str]:
@@ -491,7 +623,7 @@ def _word_rows(args) -> Tuple[List[List[Any]], str]:
             rows = [["번호", "구분", "상위 제목", "내용"]] + [[i, "표" if u["loc"].startswith("표") else "본문", u["heading"], u["text"]]
                                                          for i, u in enumerate(units, 1)]
             return rows, os.path.basename(closed)
-        with off.open_target("word", args.from_target, readonly=True) as t:
+        with off.open_target("word", args.from_target, readonly=True, option="--from-target") as t:
             units = word._com_units(t.doc)
             name = t.name
         rows = [["번호", "구분", "상위 제목", "내용"]] + [[i, f"제목{u['level']}" if u["level"] else "본문", u["heading"], u["text"]]
@@ -513,7 +645,7 @@ def _word_rows(args) -> Tuple[List[List[Any]], str]:
                     cells.append(c.text.strip())
             rows.append(cells)
         return rows, os.path.basename(closed)
-    with off.open_target("word", args.from_target, readonly=True) as t:
+    with off.open_target("word", args.from_target, readonly=True, option="--from-target") as t:
         if not 1 <= n <= t.doc.Tables.Count:
             raise rt.InputError(f"표 {n}번이 없습니다 (전체 {t.doc.Tables.Count}개).")
         grid: Dict[Tuple[int, int], str] = {}
@@ -534,11 +666,11 @@ def _ppt_rows(args) -> Tuple[List[List[Any]], str]:
             units, _ = reader.parse_pptx(closed)
             rows = [["슬라이드", "제목", "내용"]] + [[i, u["heading"], u["text"]] for i, u in enumerate(units, 1)]
             return rows, os.path.basename(closed)
-        with off.open_target("ppt", args.from_target, readonly=True) as t:
+        with off.open_target("ppt", args.from_target, readonly=True, option="--from-target") as t:
             us = [ppt.slide_units(t.doc.Slides(i), i) for i in range(1, t.doc.Slides.Count + 1)]
             name = t.name
         return [["슬라이드", "제목", "내용", "노트"]] + [[u["no"], u["title"], u["text"], u["notes"]] for u in us], name
-    with off.open_target("ppt", args.from_target, readonly=True) as t:
+    with off.open_target("ppt", args.from_target, readonly=True, option="--from-target") as t:
         prs = t.doc
         numbers = [int(args.slide)] if args.slide and str(args.slide).isdigit() else list(range(1, prs.Slides.Count + 1))
         tables = []
@@ -571,7 +703,8 @@ def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
     if args.sheet and _new_file_target(args.to_target):
         # 새로 만들 파일: 잘못된 이름은 파일을 만들기 전에 (있는 시트가 없으므로 [추천]이 겹치지 않음)
         off.check_sheet_name(args.sheet)
-    with off.open_target("excel", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer") as t:
+    with off.open_target("excel", args.to_target, readonly=False, create=True, tool=TOOL, command="transfer",
+                         option="--to-target") as t:
         wb = t.doc
         names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]
         if args.sheet:

@@ -2,6 +2,27 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.20] - 2026-11-02
+
+11차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1420.py`.
+
+### 수정
+- `office.py transfer --to word,ppt`(차트·범위): 워드에 먼저 넣은 뒤 PowerPoint가 열려 있지 않으면 `STOP_RETRY: 실행하지 않았습니다 ...
+  같은 명령에 --target ...`으로 끝나, 워드는 이미 바뀌었는데 다시 실행하면 워드에 두 번 들어가고 transfer에 없는 `--target`을 안내하던 문제.
+  `excel chart`의 `next_commands`가 늘 `--to word,ppt`라 워드만 열려 있으면 SKILL 순서대로 해도 생겼습니다.
+  - 넣기 전 확인: 받는 앱이 둘 이상이면 무엇이든 넣기 전에 앱마다 받는 문서(활성 문서 또는 `--to-target`)와 앱별 인자(`--anchor`, `--slide`)를
+    확인합니다. 못 찾은 문서가 있으면 아무것도 바꾸지 않고 STOP_RETRY(`error_type: target_not_open`)와 찾은 앱만으로 바꾼 같은 명령
+    `[추천] python ... --to word`를 냅니다. 하나도 못 찾으면 문서를 열어 달라고 하거나 `--to`에 앱 하나와 `--to-target`을 쓰라고 안내합니다
+    (`--to-target`은 모든 받는 앱에 함께 쓰임).
+  - 넣은 뒤 일부 실패(늦게 드러난 대상 문제, COM 오류 등): 이미 다른 앱에 넣었으면 오류로 끝내지 않고 `UNVERIFIED`와
+    `succeeded`/`failed`/`failures`로 답합니다(다시 실행하면 넣은 앱에 또 들어간다고 알림). 아무 앱에도 넣지 않았으면 지금처럼 오류.
+- transfer에서 열린 문서가 없을 때 안내가 이 명령에 없는 `--target` 대신 받는 쪽은 `--to-target`, 보내는 쪽은 `--from-target`을 말합니다
+  (`open_target(option=...)`, `_office.no_open_doc`).
+
+### 기능
+- `excel chart`의 `next_commands`는 문서가 열린 받는 앱만 `--to`에 넣습니다(워드만 열려 있으면 `--to word`). 둘 다 열렸거나 둘 다 없거나
+  확인하지 못하면 지금처럼 `--to word,ppt`(transfer가 넣기 전에 다시 확인).
+
 ## [1.4.19] - 2026-11-02
 
 10차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1418.py` (1.4.19 부분).

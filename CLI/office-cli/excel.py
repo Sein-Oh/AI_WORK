@@ -1490,6 +1490,17 @@ def cmd_range(args) -> Dict[str, Any]:
 # 9. chart
 # ==============================================================================
 
+def _open_receivers() -> List[str]:
+    """차트를 받을 앱 중 문서가 열린 앱 (next_commands의 --to). 둘 다 열렸거나 둘 다 없거나 확인하지 못하면 word,ppt
+    (열린 앱만 주면 열리지 않은 앱 때문에 transfer가 멈추지 않음. 확인하지 못해도 transfer가 넣기 전에 다시 확인함)."""
+    try:
+        found = [k for k in ("word", "ppt") if off.list_open(k)]
+    except Exception as e:
+        rt.debug(f"열린 워드/PPT 확인 생략: {e}")
+        found = []
+    return found or ["word", "ppt"]
+
+
 def _chart_objects(ws: Any) -> List[Any]:
     objs = ws.ChartObjects()
     return [objs.Item(i) for i in range(1, objs.Count + 1)]
@@ -1631,10 +1642,12 @@ def cmd_chart(args) -> Dict[str, Any]:
         resolved = t.resolved()
         tgt = t.path if t.source in ("file", "new") else args.target
     preview = f"차트 '{chart_name}' 생성 ({chart_type}, 데이터 {info['sheet']}!{info['range']})"
+    to = _open_receivers()
     fields = dict(target_resolved=resolved, chart_name=chart_name, chart_type=chart_type, data_range=info,
                   next_commands=[rt.next_command("office.py", ["transfer", "--from", "excel", "--from-target", tgt,
-                                                               "--chart", chart_name, "--to", "word,ppt"],
-                                                 "이 차트를 열린 워드와 PPT에 그림으로 넣기 (한쪽만이면 --to word 또는 --to ppt)")])
+                                                               "--chart", chart_name, "--to", ",".join(to)],
+                                                 f"이 차트를 열린 {'와 '.join(off.APP_LABEL[k] for k in to)}에 그림으로 넣기"
+                                                 + (" (한쪽만이면 --to word 또는 --to ppt)" if len(to) > 1 else ""))])
     if problems:
         return rt.ok_unverified(TOOL, "chart", preview, problems, **fields)
     return rt.ok(TOOL, "chart", preview, "VERIFIED: 차트를 다시 읽어 확인했습니다. 워드/PPT로 옮기려면 next_commands를 그대로 실행하세요.",

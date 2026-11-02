@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.19"
+  version: "1.4.20"
   platform: windows
 ---
 
@@ -55,7 +55,7 @@ metadata:
 3. 예) 사인 그래프를 워드에 넣기:
    1. `excel.py write --range A1:B101 --header "x,sin(x)" --formula "=(ROW()-2)*4*PI()/99" "=SIN(A2)"`
    2. `excel.py chart --range A1:B101 --type line --title "사인 2주기"`
-   3. 결과의 `next_commands[0]` 실행 (워드/PPT로 전달)
+   3. 결과의 `next_commands[0]` 실행 (워드/PPT로 전달. 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 줌)
 
 ## 3. 결과 처리 규칙 (반드시 따른다)
 

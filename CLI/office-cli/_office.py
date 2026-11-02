@@ -261,10 +261,15 @@ def get_active(kind: str) -> Dict[str, Any]:
         if doc is not None:
             full = str(getattr(doc, "FullName", "") or doc.Name)
             return {"name": str(doc.Name), "path": full if os.path.isabs(full) else "", "app": app, "doc": doc}
-    raise rt.UserDecisionError(
-        f"열려 있는 {APP_LABEL[kind]} 문서가 없습니다.",
+    raise no_open_doc(kind)
+
+
+def no_open_doc(kind: str, option: str = "--target", note: str = "") -> "rt.UserDecisionError":
+    """열린 문서가 없음. option: 이 명령에서 대상 문서를 주는 옵션 (office.py transfer는 --from-target/--to-target)."""
+    return rt.UserDecisionError(
+        f"열려 있는 {APP_LABEL[kind]} 문서가 없습니다.{note}",
         "실행하지 않았습니다. 사용자에게 문서를 열어 달라고 하거나 파일의 전체 경로를 물어, 같은 명령에 "
-        "--target \"<전체경로>\"를 붙여 1번만 실행하세요. 경로를 추측하지 마세요.")
+        f"{option} \"<전체경로>\"를 붙여 1번만 실행하세요. 경로를 추측하지 마세요.")
 
 
 def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
@@ -740,7 +745,8 @@ def _file_stamp(path: str) -> Optional[Tuple[float, int]]:
 
 @contextmanager
 def open_target(kind: str, target: str = "active", readonly: bool = True, snapshot: Optional[bool] = None,
-                focus: bool = True, create: bool = False, tool: str = "", command: str = "") -> Iterator[OfficeTarget]:
+                focus: bool = True, create: bool = False, tool: str = "", command: str = "",
+                option: str = "--target") -> Iterator[OfficeTarget]:
     """대상 문서를 열어 OfficeTarget을 넘겨줍니다.
 
     target: "active" | 열린 문서 이름 | 파일 경로
@@ -748,6 +754,7 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
     snapshot: 쓰기 전 스냅샷 (기본: 쓰기 세션이면 True)
     focus: 쓰기 후 고친 위치로 화면 이동 (--no-focus면 False)
     create: 파일이 없을 때 새로 만들지 (쓰기 세션 전용)
+    option: 오류 안내에 쓸 대상 옵션 이름 (기본 --target, office.py transfer는 --from-target/--to-target)
     """
     require_com()
     init_com()
@@ -761,7 +768,12 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
     t: Optional[OfficeTarget] = None
     try:
         if target.lower() == "active":
-            info = get_active(kind)
+            try:
+                info = get_active(kind)
+            except rt.UserDecisionError:
+                if option == "--target":
+                    raise
+                raise no_open_doc(kind, option) from None        # 이 명령에 없는 --target을 안내하지 않음
             t = OfficeTarget(kind, info["app"], info["doc"], "active", readonly)
         else:
             docs = list_open(kind)
@@ -779,7 +791,7 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
                 if not exists and (readonly or not create or not is_abs):
                     # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
                     names = [d["name"] for d in docs]
-                    tail = "" if readonly or not create else " 새 파일은 사용자에게 전체 경로를 물어 --target으로 줄 때만 만듭니다."
+                    tail = "" if readonly or not create else f" 새 파일은 사용자에게 전체 경로를 물어 {option}으로 줄 때만 만듭니다."
                     err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
                                        extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
                     # 파일 이름만 준 경우에만 열린 문서를 [후보]로 (전체 경로가 없는 것은 열린 문서 이름의 오타가 아님)
