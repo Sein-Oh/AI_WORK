@@ -1,4 +1,4 @@
-# ml-kit 2.1: 경량 AI 에이전트를 위한 자율 회귀·분류 머신러닝 툴킷 (Autonomous Regression / Classification ML Toolkit)
+# ml-kit: 경량 AI 에이전트를 위한 자율 회귀·분류 머신러닝 툴킷 (Autonomous Regression / Classification ML Toolkit)
 
 > **26B~30B 경량화 LLM(Glimmer-30B, OpenCode 등)에 최적화된 1-Turn 완결형 머신러닝 학습, 추론 및 기술 감사 엔진**  
 > 복잡한 다단계 판단이나 인간의 개입 없이, 단 1회의 선언적 CLI 명령으로 데이터 자동 정제, 방탄 파생변수 생성, 5대 회귀/분류 모델 경쟁 학습, 단일 진실 공급원(SSOT) 원장 누적, 초고속 서빙 추론, 그리고 Word(.docx) ML 결과 보고서 생성을 100% 자율 완결합니다.
