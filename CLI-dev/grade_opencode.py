@@ -23,6 +23,8 @@
   - 필요한 명령을 실행했는가 (commands), 도구 결과 JSON이 ok인가 (tool_ok)
   - 답변에 꼭 들어갈 값이 있는가 (answer_all, answer_any)
   - 공통 금지: 패키지 설치, py/python3, 임의 파이썬 코드, 도구 코드 읽기, .py 쓰기, 같은 명령 반복, 답변의 이모지·file:///·같은 말 반복
+  - answer_reference: true인 시나리오(X2처럼 자유 문장 답)는 답변 정규식 판정을 참고로만 보인다 ("통과(참고)"/"실패(참고)").
+    최종 판정은 --judge 점수나 사람이 답변을 읽고 정한다. 명령·금지 규칙 위반은 그대로 "실패".
 --judge: 사내 OpenAI 호환 API(completions)로 시나리오별 1~5점과 이유를 붙인다 (참고용, 통과 여부에는 넣지 않음).
   환경변수 JUDGE_BASE_URL (예: http://서버/v1), JUDGE_API_KEY(없으면 생략), --judge-model (기본 LLM42).
 
@@ -380,11 +382,14 @@ def grade(paths, label, use_judge, model):
             continue
         turn = found[sid][-1]                            # graded on the last time the request was sent
         checks = grade_turn(sc, turn, rules)
-        fails = [f"{n} ({d})" if d else n for n, ok, d in checks if not ok]
+        ref = bool(sc.get("answer_reference"))            # answer regexes are a reference verdict only (free-text answers)
+        hard = [f"{n} ({d})" if d else n for n, ok, d in checks if not ok and not (ref and is_answer_check(n))]
+        soft = [f"참고 {n} ({d})" if d else f"참고 {n}" for n, ok, d in checks if not ok and ref and is_answer_check(n)]
         note = ""
         if turn.get("bulk"):
             note = "참고: 한 번에 보낸 요청, " + ("명령 순서로 나눠 채점" if turn.get("split") else "명령으로 나눌 수 없어 대화 전체로 채점")
-        row = {"id": sid, "결과": "통과" if not fails else "실패", "실패": " | ".join(fails), "명령수": len(turn["tools"]),
+        result = "실패" if hard else (("실패(참고)" if soft else "통과(참고)") if ref else "통과")
+        row = {"id": sid, "결과": result, "실패": " | ".join(hard + soft), "명령수": len(turn["tools"]),
                "초": round((turn["end"] - turn["start"]) / 1000) if turn["start"] and turn["end"] else None,
                "보낸횟수": len(found[sid]), "같이 보낸 요청": ",".join(turn.get("shared", [])), "참고": note}
         if use_judge:
@@ -392,6 +397,11 @@ def grade(paths, label, use_judge, model):
         rows.append(row)
         detail.append((sid, sc, turn, checks))
     return meta, rows, detail
+
+
+def is_answer_check(name):
+    """answer_all/answer_any/answer_none checks: only these become reference verdicts in answer_reference scenarios."""
+    return name.startswith(("답변: ", "답변에 없어야 함: "))
 
 
 def safe_label(label):
@@ -404,8 +414,9 @@ def write_report(label, meta, rows, detail):
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = os.path.join(HERE, f"grade_{label}_{stamp}")
     graded = [r for r in rows if r["결과"] != "없음"]
-    npass = sum(r["결과"] == "통과" for r in graded)
+    npass = sum(r["결과"] in ("통과", "통과(참고)") for r in graded)
     nbulk = sum(bool(r.get("참고")) for r in graded)
+    refs = [r for r in graded if r["결과"].endswith("(참고)")]
     scores = [r["점수"] for r in graded if isinstance(r.get("점수"), int)]
     lines = [f"# OpenCode 종합 테스트 채점 ({label})", "", f"- 채점 시각: {datetime.now():%Y-%m-%d %H:%M}"]
     lines += [f"- 대화 파일: {m}" for m in meta]
@@ -413,21 +424,31 @@ def write_report(label, meta, rows, detail):
     if nbulk:
         lines.append(f"- 한 번에 보낸 요청 {nbulk}건은 결과에 '(참고)'를 붙였습니다. 요청이 한 대화 턴에 섞여 있어 "
                      "명령 순서로 나눠 채점했으므로 하나씩 보낸 결과만큼 정확하지 않습니다.")
+    if refs:
+        lines.append("- 답변 판정이 참고인 요청: " + ", ".join(
+            f"{r['id']} {r['결과']}" + (f" (채점 LLM {r['점수']}점)" if isinstance(r.get("점수"), int) else "") for r in refs)
+            + ". 자유 문장 답이라 정규식 판정은 참고이며 통과 수에는 정규식 판정대로 넣었습니다. "
+            "최종 판정은 --judge 점수나 사람이 아래 '최종 답변'을 읽고 정하세요 (명령·금지 규칙 위반은 그대로 실패).")
     if scores:
         lines.append(f"- 채점 LLM 평균 점수: {sum(scores) / len(scores):.2f} / 5 ({len(scores)}건, 참고용)")
     has_judge = any("점수" in r for r in rows)
     lines += ["", "| 요청 | 결과 | 명령 수 | 걸린 초 | 실패 항목 |" + (" 점수 |" if has_judge else ""),
               "|---|---|---|---|---|" + ("---|" if has_judge else "")]
     for r in rows:
-        lines.append(f"| {r['id']} | {r['결과']}{'(참고)' if r.get('참고') else ''} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {(r['실패'] or '').replace('|', chr(92) + '|')} |"
+        cell = r["결과"] + ("(참고)" if r.get("참고") and not r["결과"].endswith("(참고)") else "")
+        if r["결과"].endswith("(참고)") and isinstance(r.get("점수"), int):
+            cell += f" {r['점수']}점"
+        lines.append(f"| {r['id']} | {cell} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {(r['실패'] or '').replace('|', chr(92) + '|')} |"
                      + (f" {r.get('점수') if r.get('점수') is not None else ''} |" if has_judge else ""))
     lines += ["", "## 요청별 기록", ""]
     for sid, sc, turn, checks in detail:
         lines += [f"### {sid}", "", "요청: " + " / ".join(u.strip() for u in turn["user"])[:400], ""]
         if turn.get("bulk"):
             lines += [next(r for r in rows if r["id"] == sid)["참고"], ""]
+        ref = bool(sc.get("answer_reference"))
         for n, ok, d in checks:
-            lines.append(f"- [{'OK' if ok else 'FAIL'}] {n}" + (f": {d}" if d and not ok else ""))
+            tag = ("OK" if ok else "FAIL") + ("(참고)" if ref and is_answer_check(n) else "")
+            lines.append(f"- [{tag}] {n}" + (f": {d}" if d and not ok else ""))
         lines += ["", "명령:"]
         for t in turn["tools"]:
             what = ENC_PREFIX.sub("", t["command"]) or f"{t['tool']} {t['path']}".strip()

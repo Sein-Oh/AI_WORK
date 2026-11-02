@@ -126,7 +126,7 @@ def test_final_answer_is_last_assistant_message(tmp_path):
         ("계속", [{"type": "text", "text": "끝났습니다."}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     m1 = next(r for r in rows if r["id"] == "M1")
-    assert "답변: 16\\.25" in m1["실패"] and "이모지" not in m1["실패"]
+    assert "16\\.25" in m1["실패"] and "답변: " in m1["실패"] and "이모지" not in m1["실패"]
 
 
 def _export_bytes(tmp_path, data, enc, bom=b""):
@@ -562,15 +562,111 @@ def test_report_table_escapes_pipes(tmp_path, monkeypatch):
     assert line.count("|") - line.count("\\|") == 6, line
 
 
-def test_x2_answer_corpus():
-    """X2 정답·오답 말뭉치(실제 답변 형태 66개): answer_all과 answer_none으로 모두 바르게 가려야 함."""
-    _, by_id, _ = go.load_scenarios()
-    sc = by_id["X2"]
-    with open(os.path.join(os.path.dirname(__file__), "x2_answers.json"), encoding="utf-8") as f:
-        corpus = json.load(f)
+def _answer_pass(sc, ans):
+    """answer_all, answer_any and answer_none of one scenario on one answer (as grade_turn checks them)."""
+    return (all(re.search(rx, ans, re.I) for rx in sc.get("answer_all", []))
+            and (not sc.get("answer_any") or any(re.search(rx, ans, re.I) for rx in sc["answer_any"]))
+            and not any(re.search(rx, ans, re.I | re.M) for rx in sc.get("answer_none", [])))
 
-    def passes(ans):
-        return (all(re.search(rx, ans, re.I) for rx in sc["answer_all"])
-                and not any(re.search(rx, ans, re.I | re.M) for rx in sc.get("answer_none", [])))
-    wrong = [a for a in corpus["good"] if not passes(a)] + [a for a in corpus["bad"] if passes(a)]
+
+def _x2_corpus():
+    with open(os.path.join(os.path.dirname(__file__), "x2_answers.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_x2_answer_corpus():
+    """X2 정답·오답 말뭉치(good/bad, 실제 답변 형태 114개): answer_all과 answer_none으로 모두 바르게 가려야 함."""
+    sc = go.load_scenarios()[1]["X2"]
+    corpus = _x2_corpus()
+    assert len(corpus["good"]) + len(corpus["bad"]) >= 110
+    wrong = [a for a in corpus["good"] if not _answer_pass(sc, a)] + [a for a in corpus["bad"] if _answer_pass(sc, a)]
     assert not wrong, wrong
+
+
+def test_x2_holdout_is_reference_only():
+    """holdout 20개는 정규식을 맞출 때 보지 않은 답변이다 (8차: 14/20). 자유 문장은 정규식으로 다 가릴 수 없으므로
+    X2 답변 판정은 참고(answer_reference)다. 여기서는 정확도가 떨어지지 않는지만 본다 (holdout에 맞춰 고치지 말 것)."""
+    sc = go.load_scenarios()[1]["X2"]
+    hold = _x2_corpus()["holdout"]
+    right = sum(_answer_pass(sc, a) for a in hold["good"]) + sum(not _answer_pass(sc, a) for a in hold["bad"])
+    assert len(hold["good"]) == len(hold["bad"]) == 10
+    assert right >= 14, right
+    assert sc.get("answer_reference") is True
+
+
+def test_answer_reference_verdict(tmp_path, monkeypatch):
+    """answer_reference(X2): 답변 정규식 결과는 '통과(참고)'/'실패(참고)', 명령·금지 규칙 위반은 그대로 '실패'.
+    보고서에 최종 판정은 --judge나 사람이 정한다는 줄이 있고, --judge 점수가 있으면 결과 칸에 함께 보인다."""
+    monkeypatch.setattr(go, "HERE", str(tmp_path))
+    good = "이상치 기준을 바꾸는 옵션은 없습니다. '제외' 열에 이유를 적으세요."
+    bad = "네, --outlier-k 옵션으로 바꿀 수 있습니다. 제외 열도 됩니다."
+    for answer, tools, want in ((good, [], "통과(참고)"), (good, [_bash('python -c "print(1)"', {})], "실패"),
+                                (bad, [], "실패(참고)")):
+        path = _export(tmp_path, [("[X2] 옵션 있어?", tools + [{"type": "text", "text": answer}])])
+        meta, rows, detail = go.grade([path], "t", False, "LLM42")
+        x2 = next(r for r in rows if r["id"] == "X2")
+        assert x2["결과"] == want, (answer, x2)
+        if want == "실패":
+            assert "임의 파이썬" in x2["실패"] and "참고 답변" not in x2["실패"]
+        if want == "실패(참고)":
+            assert x2["실패"].startswith("참고 답변")
+    report, npass, n = go.write_report("t", meta, rows, detail)
+    text = open(report, encoding="utf-8").read()
+    assert "--judge" in text and "답변 판정이 참고인 요청: X2 실패" in text
+    assert "- [OK(참고)] 답변: 제외" in text and "- [FAIL(참고)] 답변에 없어야 함: --" in text
+    assert "- [OK] 임의 파이썬" in text
+    rows = [dict(r, 점수=2) if r["id"] == "X2" else r for r in rows]
+    report = go.write_report("t2", meta, rows, detail)[0]
+    text = open(report, encoding="utf-8").read()
+    assert [ln for ln in text.splitlines() if ln.startswith("| X2 ")][0].startswith("| X2 | 실패(참고) 2점 |")
+    rows = [dict(r, 결과="통과(참고)", 실패="") if r["id"] == "X2" else r for r in rows]
+    text = open(go.write_report("t3", meta, rows, detail)[0], encoding="utf-8").read()
+    assert "| X2 | 통과(참고) 2점 |" in text and "X2 통과(참고) (채점 LLM 2점)" in text
+
+
+def test_answer_variants_other_scenarios():
+    """P1/P2/P3/M1/M3/R1 답변 규칙: 도구 preview 그대로 전달한 답과 흔한 바꿔 쓰기는 통과, 값이 틀리거나 경고가 빠지면 실패."""
+    by_id = go.load_scenarios()[1]
+    cases = {
+        "P1": (["생산효율 76.33 (90% 범위 72.1~80.5), 실측 비교값 76.1",
+                "생산효율 76.33 (90% 범위 72.1~80.5), 측정 데이터 비교: 76.0",
+                "| 출력 | 예측 | 90% 범위 | 실측 비교값 |\n|---|---|---|---|\n| 생산효율 | 76.33 | 72~80 | 76.1 |",
+                "생산효율 76.3 / 소비전력 42.9 / 불순물 81.6 (실측값과 차이 0.2 이내)",
+                "[추론 완료] 소스: 인라인 | 타겟 예측 요약: [생산효율(76.33)] | 인라인 반환 | 실측 비교 경고 1건"],
+               ["생산효율 76.3, 소비전력 42.9, 불순물 81.6입니다."]),
+        "P2": (["[추론 완료] 소스: 새조건.xlsx | 타겟 예측 요약: [생산효율(75.96)] | 저장: 새조건_pred_x.csv | 외삽 경고 1건",
+                "저장: 새조건_pred_x.csv. 외삽 경고 1건: 반응온도 상한 초과(학습 최대 195, 입력 200).",
+                "결과는 새조건_pred_x.csv 에 있습니다. 1개 행은 반응온도가 학습 데이터 최댓값을 넘었습니다(외삽).",
+                "새조건_pred_x.csv로 저장했습니다. 반응온도 200은 학습 범위 밖이라 참고만 하세요.",
+                "새조건_pred_x.csv로 저장했습니다. 반응온도 200은 학습 구간을 벗어납니다."],
+               ["새조건_pred_x.csv로 저장했습니다. 평균 생산효율 75.96."]),
+        "P3": (["모델 기준 불순물=100이 되는 반응온도: 190 | 운전 구간(90% 오차 안): 188.84~191.45",
+                "반응온도 189.998. 90% 오차 범위 안의 운전 범위는 188.84~191.449입니다. 보장된 값은 아닙니다.",
+                "약 190°C입니다. 운전범위 188.8~191.4°C (모델 예측).",
+                "반응온도 약 190도, 구간 188.84~191.45",
+                "반응온도는 190.0°C, 운전 구간은 188.84~191.45°C입니다."],
+               ["반응온도는 190°C입니다."]),
+        "M1": (["격자 보간: B=16.25, C=87.5",
+                "A=12.5일 때 B는 16.25, C는 87.5입니다.",
+                "| 열 | 값 |\n|---|---|\n| B | 16.25 |\n| C | 87.50 |",
+                "B = 16.250, C = 87.500",
+                "**B**: `16.25`, **C**: `87.5`"],
+               ["보간 결과 B 116.25, C 187.5", "B는 16.25, C는 87.55입니다.", "B는 10, C는 90입니다."]),
+        "M3": (["격자 보간: B=1058.5 [외삽]",
+                "B는 1,058.5입니다 (외삽).",
+                "B = 1058.50 (범위 초과, 참고용)",
+                "B는 1058.5입니다. A가 데이터 범위(0~100)를 넘어서 끝 구간을 직선 연장한 추정값입니다.",
+                "B 1058.5 (extrapolated: A가 최대 100보다 3 큼)"],
+               ["B는 1058.5입니다.", "B는 11058.5입니다 (외삽).", "B는 1000입니다 (범위 밖)."]),
+        "R1": (["[보고서 완료] v1 / 타겟 3개 / 종합 판정 양호 / 저장: 공정_보고서.docx | 성능예측표: 공정_성능예측표.xlsx, 일치도 92%",
+                "보고서와 성능 예측표를 만들었습니다. 일치도 92%.",
+                "성능예측표(공정_성능예측표.xlsx)를 만들었고 생산효율 일치도는 95%입니다.",
+                "보고서: a.docx, 성능예측표: b.xlsx. 출력별 일치도 생산효율 92%, 불순물 88%.",
+                "보고서와 성능 예측표 생성 완료 (일치도 93%, 판정 양호)"],
+               ["보고서를 만들었습니다: 공정_보고서.docx", "성능예측표를 만들었습니다."]),
+    }
+    for sid, (goods, bads) in cases.items():
+        for a in goods:
+            assert _answer_pass(by_id[sid], a), (sid, a)
+        for a in bads:
+            assert not _answer_pass(by_id[sid], a), (sid, a)

@@ -68,9 +68,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     같은 기준으로 지점을 지웁니다(1.4.14, 이전에는 남아 다음 `undo`가 바뀐 것 없는 이 지점으로 되돌리고 `VERIFIED`로 답해 실제로 바꾼 작업이 그대로 남음).
     문서를 바꾸는 명령은 `t.set_focus()`(바꾸지 않았으면 `changed=False`)나 `t.changed = True`로 표시합니다.
     1.4.15부터 같은 글로 바꾸는 `replace`(`--map {"A": "A"}` 포함, 서식 없음), 같은 자리로 `slide move`·`range copy/move`, 같은 노트로 `notes --overwrite`,
-    이미 그 상태인 `range`(숨긴 것 없는 `unhide`, 이미 숨긴 `hide`, 병합 없는 `unmerge`, 고정 없는 `unfreeze`, 같은 `width`/`height`,
-    사용 범위 밖이거나 값이 없는 `clear`)도 바꾸지 않고 "0곳/0칸 바뀜" 또는 "바뀐 것 없음"(`unchanged: true`)으로 답하며 지점을 남기지 않습니다.
-    이미 그 상태인지는 COM 속성(`Hidden`, `MergeCells`, `FreezePanes`, `ColumnWidth`, `Intersect(UsedRange)` 등)으로 확인하고, 알 수 없으면 바꾼 것으로 봅니다.
+    이미 그 상태인 `range`(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 같은 `width`/`height`,
+    사용 범위 밖이거나 값이 없는 칸의 `clear --type contents`)도 바꾸지 않고 "0곳/0칸 바뀜" 또는 "바뀐 것 없음"(`unchanged: true`)으로 답하며 지점을 남기지 않습니다.
+    이미 그 상태인지는 COM 속성(`MergeCells`, `FreezePanes`, `ColumnWidth`, `Intersect(UsedRange)` 등)으로 확인하고, 알 수 없으면 바꾼 것으로 봅니다.
+    1.4.16부터 `hide`/`unhide`(일부만 숨긴 범위에서 `Hidden`이 섞임 대신 False일 수 있음)와 `clear` 전체·서식(사용 범위 밖 칸에도
+    데이터 유효성·메모가 있을 수 있음)은 확인하지 않고 늘 바꾼 것으로 봅니다(되돌리기 지점이 하나 더 남을 수 있음).
   - 도구가 연 닫힌 파일은 명령이 바꾼 것(`t.changed`)이 있을 때만 저장합니다(1.4.15). 휘발성 수식(NOW, RAND 등)이 든 파일은 열기만 해도
     저장 안 된 상태라, 이전에는 바꾼 것 없는 성공도 사용자 파일을 다시 저장하고 바뀐 것 없는 지점을 남겼습니다.
   - 오래된 지점 정리(5개 유지)는 명령이 문서를 바꾼 뒤에만 합니다. 거절된 실행은 옛 지점을 밀어내지 않습니다(1.4.13).
@@ -95,8 +97,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     - 예: `시트 'Sheet9'이(가) 없습니다 (있는 시트: Sheet1). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. 이름이 비슷한 기존 시트에 쓸지, 새 시트를 만들지 사용자에게 물어보세요. [후보] Sheet1`
     - `--new-sheet`가 있는 명령은 `excel write`뿐입니다. 그 밖의 명령(`replace`, `style`, `range`, `chart` 등)의 없는 시트는 읽기와 같은 "찾을 수 없음"(`[추천]`/`[후보]`)이고 `--new-sheet`를 안내하지 않습니다(1.4.12, 이전에는 그 명령에 없는 옵션을 붙이라고 안내).
   - 워드 `--anchor`가 여러 단락에 있으면 `[후보]`(번호와 단락 앞부분)로 오류. `--occurrence N`으로 고릅니다. 찾지 못하면 비슷한 문구를 안내합니다 (공백·대소문자 차이 등 확실할 때만 `[추천]`, `--pos replace`에서는 더 엄격).
-  - `office.py transfer --to excel --sheet 이름`은 새 시트 이름입니다(transfer는 항상 새 시트에 받습니다). 이미 있으면 덮어쓰지 않고 비어 있는 이름을 `[추천]`, 덮어쓰기는 `--overwrite`.
-    방금 만든 새 파일이면 기본 시트 이름(`Sheet1` 등, 기본 시트가 여럿이어도)은 그 빈 시트에 받습니다(1.4.17).
+  - `office.py transfer --to excel --sheet 이름`은 새 시트 이름입니다(transfer는 새 시트에 받습니다. 방금 만든 새 파일만 예외, 아래). 이미 있으면 덮어쓰지 않고 비어 있는 이름을 `[추천]`, 덮어쓰기는 `--overwrite`.
+    방금 만든 새 파일이면 기본 시트 이름(`Sheet1` 등)은 새 시트를 만들지 않고 그 빈 기본 시트에 받습니다(1.4.16은 기본 시트가 1개일 때만, 1.4.17부터 여럿이어도).
   - 쓰기 `--target`에 파일 이름만 주었는데 열린 문서도 파일도 아니면 새 파일을 만들지 않고 "찾을 수 없음"(열린 문서가 있으면 `[후보]`). 새 파일은 전체 경로를 줄 때만 만듭니다(1.4.10, 이전에는 현재 폴더에 만들어 거기에 씀).
     전체 경로인지는 `%USERPROFILE%`·`~`를 푼 뒤에 판단하고(`%USERPROFILE%\Desktop\새.xlsx`도 새로 만듦), 없는 전체 경로는 열린 문서를 `[후보]`로 주지 않습니다(1.4.11).
 - **메일**: 기본은 작성 창만 띄웁니다. `--send`는 명시했을 때만 쓰고, 수신자 주소를 확인한 뒤 발송합니다.
