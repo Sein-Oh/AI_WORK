@@ -1298,12 +1298,9 @@ def _short(v: Any, n: int = 15) -> str:
 def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
     """range 명령이 바꿀 것이 없는지 COM 속성으로 싸게 확인합니다. 바꿀 것이 없으면 그 이유, 아니면(모르면) ""."""
     try:
-        if a in ("hide", "unhide"):
-            target = rng.EntireRow if _axis(args) == "rows" else rng.EntireColumn
-            hidden = target.Hidden                     # 섞여 있으면 None
-            if hidden is not None and bool(hidden) == (a == "hide"):
-                return "이미 숨겨져 있음" if a == "hide" else "숨긴 행·열이 없음"
-        elif a == "unmerge":
+        # hide/unhide는 확인하지 않음: 일부만 숨긴 범위에서 Hidden이 섞임(None)이 아니라 False를 돌려줄 수 있어
+        # 실제 바뀌는 unhide를 건너뛸 위험이 있음 (바꾼 것으로 보면 되돌리기 지점이 하나 더 남을 뿐)
+        if a == "unmerge":
             if rng.MergeCells is False:                # 섞여 있으면 None
                 return "병합된 칸이 없음"
         elif a == "merge":
@@ -1320,8 +1317,9 @@ def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
         elif a == "clear":
             area = rng if rng is not None else ws.UsedRange
             used = t.app.Intersect(area, ws.UsedRange)           # 값·서식이 있는 칸은 UsedRange 안에 있음
+            # 서식·전체 지우기는 확인하지 않음: 사용 범위 밖 칸에도 데이터 유효성·메모가 있을 수 있음
             if used is None:
-                if args.type == "contents" or int(area.FormatConditions.Count) == 0:
+                if args.type == "contents":
                     return "빈 범위 (사용 범위 밖)"
             elif args.type == "contents" and "," not in str(used.Address) and not _filled_cells(ws, used):
                 return "값이 있는 칸이 없음"

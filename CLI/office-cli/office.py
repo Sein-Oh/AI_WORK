@@ -584,7 +584,10 @@ def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
             name = f"{sheet_base[:27]} {k}"
             k += 1
         existing = rt.find_name(name, names)
-        if existing is not None and not args.overwrite:
+        if existing is not None and t.source == "new" and len(names) == 1:
+            # 방금 만든 새 파일의 기본 시트(Sheet1 등)와 이름이 같음: 그 빈 시트에 받음 (막으면 빈 새 파일만 남음)
+            pass
+        elif existing is not None and not args.overwrite:
             # --sheet는 "새 시트 이름": 이미 있는 시트에 A1부터 덮어쓰지 않습니다
             free, k = name, 2
             while rt.find_name(free, names):

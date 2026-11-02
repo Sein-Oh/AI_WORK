@@ -793,9 +793,11 @@ def cmd_replace(args) -> Dict[str, Any]:
             for k in range(1, slide.Shapes.Count + 1):
                 for tr in iter_text_ranges(slide.Shapes(k)):
                     for find, rep in mapping.items():
-                        if find == rep and not fmt:        # 바뀌는 것이 없음: 세기만 함 (바꾼 것으로 표시하지 않음)
-                            text = str(tr.Text)
-                            hits = text.count(find) if args.match_case else text.lower().count(find.lower())
+                        text = str(tr.Text) if find == rep and not fmt else ""
+                        # 바뀌는 것이 없음: 세기만 함 (바꾼 것으로 표시하지 않음). 대소문자만 다른 곳이 있으면
+                        # PowerPoint가 찾는 글 그대로 바꿔 쓰므로(대소문자 통일) 실제로 바꿈
+                        if find == rep and not fmt and (args.match_case or text.count(find) == text.lower().count(find.lower())):
+                            hits = text.count(find)
                             if hits:
                                 same[find] = same.get(find, 0) + hits
                             continue

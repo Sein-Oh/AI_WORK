@@ -282,11 +282,8 @@ def test_p4_excel_replace_formula_cell_without_format_is_not_counted(xl, capsys)
 
 
 @pytest.mark.parametrize("argv", [
-    ["range", "--action", "unhide", "--range", "B:C"],
-    ["range", "--action", "unhide", "--range", "2:3"],
     ["range", "--action", "unmerge", "--range", "A1:B2"],
     ["range", "--action", "unfreeze"],
-    ["range", "--action", "clear", "--range", "D10:E12"],
     ["range", "--action", "clear", "--range", "A1:B2", "--type", "contents"],
     ["range", "--action", "move", "--range", "A5:B5", "--dest", "A5"],
 ])
