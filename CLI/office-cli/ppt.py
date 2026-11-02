@@ -763,7 +763,9 @@ def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[s
             same += 1                  # 이미 바꿀 글 그대로: 건드리지 않음
             after = idx + len(find)
             continue
-        found = tr.Replace(FindWhat=find, ReplaceWhat=rep, After=idx, MatchCase=-1 if match_case else 0, WholeWords=0)
+        # PowerPoint 위치는 UTF-16 단위: 앞에 BMP 밖 글자(이모지 등)가 있으면 파이썬 글자 위치와 다름
+        after_u16 = len(text[:idx].encode("utf-16-le")) // 2
+        found = tr.Replace(FindWhat=find, ReplaceWhat=rep, After=after_u16, MatchCase=-1 if match_case else 0, WholeWords=0)
         if found is None:
             break
         count += 1
@@ -777,7 +779,7 @@ def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[s
                 font.Size = fmt["size"]
             if "color" in fmt:
                 font.Color.RGB = fmt["color"]
-        after = int(found.Start) - 1 + len(rep)
+        after = idx + len(rep)            # 다음 찾기는 파이썬 글자 위치로 (PowerPoint 위치와 섞지 않음)
         if after >= len(str(tr.Text)):
             break
     return count, same

@@ -21,6 +21,10 @@ class FakeFind:
 
     def Execute(self, FindText="", MatchCase=False, MatchWholeWord=False, MatchWildcards=False, **kw):
         assert MatchWildcards is False
+        # 실제 Word처럼 ^를 특수 코드로 읽음: ^^는 글자 ^ 하나, 그 밖의 ^x는 이 가짜에서 지원하지 않음(오류)
+        if "^" in FindText.replace("^^", ""):
+            raise RuntimeError("Word Find: 지원하지 않는 ^ 코드")
+        FindText = FindText.replace("^^", "^")
         doc = self.rng.doc
         hay = doc.text if MatchCase else doc.text.lower()
         needle = FindText if MatchCase else FindText.lower()

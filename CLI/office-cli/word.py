@@ -807,7 +807,8 @@ def _find(rng: Any, text: str, match_case: bool = False, whole_word: bool = Fals
     """Find 옵션을 모두 명시합니다 (사용자가 마지막에 쓴 와일드카드 등 설정이 남아 오동작하는 것 방지)."""
     f = rng.Find
     f.ClearFormatting()
-    return bool(f.Execute(FindText=text, MatchCase=match_case, MatchWholeWord=whole_word, MatchWildcards=False,
+    # Word는 와일드카드가 꺼져 있어도 ^를 특수 코드로 읽음 (^^ -> ^, ^p 단락, ^6은 COM 오류): 글자 그대로 찾게 ^^로 바꿈
+    return bool(f.Execute(FindText=text.replace("^", "^^"), MatchCase=match_case, MatchWholeWord=whole_word, MatchWildcards=False,
                           MatchSoundsLike=False, MatchAllWordForms=False, Forward=True, Wrap=0, Format=False))
 
 
