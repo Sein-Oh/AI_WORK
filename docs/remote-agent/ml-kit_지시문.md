@@ -69,7 +69,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 - 이상치는 도구가 자동으로 찾아 학습에서 뺀다. 옵션은 없다. 데이터의 `제외` 열은 도구가 읽는 표시용 열이다 (피처에 넣어도 도구가 뺀다).
   사용자가 행을 빼거나 넣고 싶다고 하면 데이터 파일을 직접 고치지 말고, 엑셀의 `제외` 열에 이유(뺄 때) 또는 `포함`(자동 제외를 막을 때)을 적으라고 안내한다.
 
-결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `recommendations`의 첫 문장.
+결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `recommendations`의 첫 문장. `warnings`(예: 중복 행)가 있으면 그대로.
 `exclusions`가 있으면 타겟별 학습 제외 행 수(직접 `manual`, 자동 `auto`), 제외 행 포함 검증 점수 `all_rows_score`, `excluded_rows_file`(뺀 행 목록)도 알린다.
 다음 단계를 위해 기억할 것: `version_dir`, `goal_met`, `next_commands`.
 
@@ -143,7 +143,7 @@ python "C:\CLI\ml-kit\ml_map.py" -f "<데이터파일>" -i "<기준열>=<값>" -
 python "C:\CLI\ml-kit\ml_map.py" -f "<데이터파일>" --find "<목표열>=<목표값>" --vary "<찾을기준열>" -i "<고정열>=<값>"
 ```
 - 머리글이 1행이 아니면 2단계처럼 `--header-row`, `--unit-row`를 붙인다. 여러 점은 기준 열만 든 조회 파일로 `--points "<조회파일>"`.
-- 알릴 것: `preview`, `points[0].method`와 `basis`(쓴 원본 행과 비율), `nearest_rows`(가까운 실측 5행)를 표로.
+- 알릴 것: `preview`, `points[0].method`와 `basis`(쓴 원본 행과 비율, `basis_by_column`이 있으면 열마다), `nearest_rows`(가까운 실측 5행)를 표로.
   반대 찾기는 `solutions`를 모두(하나만 고르지 않음), 0건이면 `reachable`. `output_file`이 있으면 그 경로.
 - `extrapolated`가 true이거나 `warnings`가 있으면 그 내용을 반드시 함께 알린다 (범위 밖 외삽값, 흩어진 기록).
 
@@ -164,7 +164,7 @@ python "C:\CLI\ml-kit\ml_export.py" -m "<best_version_dir>" --keep "<입력1>,<�
 |---|---|
 | `VERIFIED:` | 성공. `preview`와 위에서 정한 값을 사용자에게 알리고 끝낸다. |
 | `UNVERIFIED:` | 실행은 됐지만 결과를 확인하지 못했다. 다시 실행하지 않는다. `unverified` 내용을 그대로 알린다. |
-| `STOP_RETRY:` 이고 `message`에 `[추천]`이 있다 | `[추천]` 뒤의 이름(또는 `--version v3` 같은 옵션 값)으로 바꿔 **1번만** 다시 실행한다. 또 실패하면 `message`를 그대로 알린다. |
+| `STOP_RETRY:` 이고 `message`에 `[추천]`이 있다 | `[추천]` 뒤의 이름(또는 `--header-row 2` 같은 옵션 값)으로 바꿔 **1번만** 다시 실행한다. `[추천]` 뒤가 `python`으로 시작하는 명령이면 그 명령을 그대로 실행한다. 또 실패하면 `message`를 그대로 알린다. |
 | `STOP_RETRY:` 이고 `message`에 `[후보]`가 있다 | 다시 실행하지 않는다. `[후보]`를 보여 주고 사용자가 고른 값으로 1번 실행한다. |
 | `STOP_RETRY:` 이고 `[추천]`, `[후보]`가 없다 | 다시 실행하지 않는다. `message`를 그대로 알린다. |
 | `ERROR:` | 다시 실행하지 않는다. `message`를 그대로 알린다. |

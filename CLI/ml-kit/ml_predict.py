@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.12"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.13"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -344,11 +344,14 @@ def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
     return hits[:n]
 
 
-def resolve_column_names(names: List[str], columns: List[str], kind: str) -> Tuple[List[str], Dict[str, str]]:
+def resolve_column_names(names: List[str], columns: List[str], kind: str,
+                         head_rows: Optional[List[List[str]]] = None) -> Tuple[List[str], Dict[str, str]]:
     """
     Resolves requested names against real columns. Exact match first, then a unique
     unit-less alias ('생산효율' -> '생산효율(%)'). A name with a different unit
     ('반응온도(C)') is NOT auto-matched. Raises InputError with suggestions otherwise.
+    head_rows (df.attrs["head_rows"] of load_data_file): when the missing names are all in another top row
+    (two-level or merged header), the suggestion is that row: [추천] --header-row N.
     """
     col_list = [str(c) for c in columns]
     col_set = set(col_list)
@@ -367,6 +370,11 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str) -> Tup
         else:
             missing.append(n)
     if missing:
+        row = find_header_row(head_rows, missing)
+        if row is not None:
+            raise InputError(
+                f"지정하신 {kind} 컬럼 {missing}을(를) 머리글에서 찾을 수 없습니다. 파일 {row}행에 이 이름들이 있습니다 "
+                f"(두 줄 머리글이나 병합된 머리글). [추천] --header-row {row}\n[지금 머리글 컬럼 목록]: {col_list}")
         hints = []
         for m in missing:
             s = suggest_columns(m, col_list)
@@ -455,6 +463,9 @@ def _read_csv_fast(file_path: str) -> pd.DataFrame:
     raise InputError(f"CSV 파일 로드 실패 (지원되는 인코딩 모두 시도 완료): {last_err}")
 
 
+HEADER_SCAN_ROWS = 15     # rows searched for the header (auto detection and the --header-row hint)
+
+
 def load_data_file(
     file_path: str,
     header_row: Optional[int] = None,
@@ -495,7 +506,7 @@ def load_data_file(
     else:
         # Sniff first non-empty row containing at least 2 valid string/non-null cells
         header_idx = 0
-        for r_i in range(min(15, total_rows)):
+        for r_i in range(min(HEADER_SCAN_ROWS, total_rows)):
             row_items = df_raw.iloc[r_i].dropna().tolist()
             if len(row_items) >= 2 and any(isinstance(v, str) and str(v).strip() for v in row_items):
                 header_idx = r_i
@@ -566,7 +577,24 @@ def load_data_file(
     source_rows = [int(i) + 1 for i in df_data.index]
     df_data = df_data.reset_index(drop=True)
     df_data.attrs["source_rows"] = source_rows
+    # first rows of the file as text, so a missing column name can be looked up there ([추천] --header-row N)
+    df_data.attrs["head_rows"] = [[str(v).strip() for v in df_raw.iloc[i].tolist() if pd.notna(v) and str(v).strip()]
+                                  for i in range(min(HEADER_SCAN_ROWS, total_rows))]
     return df_data
+
+
+def names_in_cells(names: List[str], cells: List[str]) -> bool:
+    """True when every name is one of the cells, exactly or without its unit ('온도' ~ '온도(°C)')."""
+    keys = {_alias_key(c) for c in cells}
+    return bool(names) and all(n in cells or _alias_key(n) in keys for n in names)
+
+
+def find_header_row(head_rows: Optional[List[List[str]]], names: List[str]) -> Optional[int]:
+    """1-based row among the first HEADER_SCAN_ROWS rows that holds every name (a two-level / merged header)."""
+    for i, cells in enumerate(head_rows or []):
+        if names_in_cells(names, cells):
+            return i + 1
+    return None
 
 
 # ==============================================================================
@@ -602,7 +630,7 @@ def parse_datetime(series: pd.Series) -> pd.Series:
         if isinstance(v, (float, np.floating)) and float(v).is_integer():
             v = int(v)
         t = str(v).strip()
-        m8 = _DATE8_RE.match(t)
+        m8 = _DATE8_RE.match(re.sub(r"\.0+$", "", t))     # '20240103.0' (text of a number cell) like 20240103
         if m8:
             try:
                 return pd.Timestamp(year=int(m8.group(1)), month=int(m8.group(2)), day=int(m8.group(3)))
@@ -1143,8 +1171,9 @@ class Table:
 class MultiTable:
     """Several value columns, each interpolated on its own non-empty rows (ml_map.py without -y).
     Rows are dropped for an empty key, but a blank in one value column does not remove that row from the others:
-    value columns with the same empty cells share one Table. Attributes other than at() come from the table of the
-    first value column (range, rows for nearest_rows)."""
+    value columns with the same empty cells share one Table. A value column with too few values for a table is left
+    out with a warning (error only when no column is left). Range (lo, hi, span) and rows (df, for nearest_rows) are
+    those of every row with valid keys; the other attributes come from the table of the first value column."""
 
     def __init__(self, df: pd.DataFrame, keys: List[str], values: List[str], warnings: List[str]):
         K = np.column_stack([coerce_numeric(df[c]).to_numpy(dtype=float) for c in keys])
@@ -1158,17 +1187,43 @@ class MultiTable:
             m = np.isfinite(coerce_numeric(df[c]).to_numpy(dtype=float))
             groups.setdefault(m.tobytes(), []).append(c)
             masks[m.tobytes()] = m
-        self.values = values
         self.tables: List[Tuple[List[str], "Table"]] = []
+        last_error: Optional[InputError] = None
+
+        def _add(msgs: List[str]) -> None:   # the same Table warning from several column groups is said once
+            for w in msgs:
+                if w not in warnings:
+                    warnings.append(w)
+
         for key, cols in groups.items():
             n_blank = int((~masks[key]).sum())
+            msgs: List[str] = []
             if n_blank and len(groups) == 1:
-                warnings.append(f"구할 열에 빈칸·글자가 있는 {n_blank}행은 쓰지 않았습니다")
+                msgs.append(f"구할 열에 빈칸·글자가 있는 {n_blank}행은 쓰지 않았습니다")
             elif n_blank:
-                warnings.append(f"{', '.join(cols)}: 빈칸·글자가 있는 {n_blank}행은 이 열 계산에서만 뺐습니다")
-            self.tables.append((cols, Table(df[masks[key]].reset_index(drop=True), keys, cols, warnings)))
+                msgs.append(f"{', '.join(cols)}: 빈칸·글자가 있는 {n_blank}행은 이 열 계산에서만 뺐습니다")
+            try:
+                tab = Table(df[masks[key]].reset_index(drop=True), keys, cols, msgs)
+            except InputError as e:
+                if len(groups) == 1:
+                    raise
+                last_error = e
+                _add([f"{', '.join(cols)}: 값이 있는 행이 적어 계산하지 않았습니다 ({e})"])
+                continue
+            _add(msgs)
+            self.tables.append((cols, tab))
+        if not self.tables:
+            raise last_error or InputError("계산할 수 있는 구할 열이 없습니다.")
+        self.values = [c for c in values if any(c in cols for cols, _ in self.tables)]
         self.primary = self.tables[0][1]
         self.mode = "grid" if all(t.mode == "grid" for _, t in self.tables) else "scattered"
+        if len(groups) > 1:
+            # range and rows of the whole key-valid frame (not only the rows of the first value column)
+            self.df, self.K = df, K[key_ok]
+            self.lo, self.hi = self.K.min(axis=0), self.K.max(axis=0)
+            span = self.hi - self.lo
+            self.span = np.where(span > 0, span, 1.0)
+            self.rows = self.df["__row"].to_numpy()
 
     def __getattr__(self, name: str) -> Any:
         primary = self.__dict__.get("primary")
@@ -1185,10 +1240,11 @@ class MultiTable:
         oor: Dict[str, str] = {}
         for _, r in parts:
             oor.update(r["out_of_range"])
+        by_col = {c: r["basis"] for cols, r in parts for c in cols}
         return {"values": {c: vals[c] for c in self.values},
                 "method": methods[0] if len(methods) == 1 else "; ".join(f"{', '.join(c)}: {r['method']}" for c, r in parts),
-                "basis": parts[0][1]["basis"], "extrapolated": any(r["extrapolated"] for _, r in parts),
-                "out_of_range": oor}
+                "basis": parts[0][1]["basis"], "basis_by_column": {c: by_col[c] for c in self.values},
+                "extrapolated": any(r["extrapolated"] for _, r in parts), "out_of_range": oor}
 
 
 def nearest_rows(df: pd.DataFrame, cols: List[str], target: np.ndarray, span: np.ndarray,
@@ -1416,11 +1472,18 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
 
     # key=val, key2=val2 format. Values stay text like a cell read from a file: numeric inputs are converted
     # later (prepare_features / coerce_numeric), so a category code such as '007' is not turned into 7.
-    row_dict = {}
+    # A piece without '=' belongs to the previous value: '압력=500,000' is 500,000 (coerce_numeric strips the comma).
+    row_dict: Dict[str, str] = {}
+    last_key: Optional[str] = None
     for pair in clean_str.split(","):
         if "=" in pair:
             k, v = pair.split("=", 1)
-            row_dict[k.strip()] = v.strip()
+            last_key = k.strip()
+            row_dict[last_key] = v.strip()
+        elif pair.strip():
+            if last_key is None:
+                raise InputError(f"입력 '{pair.strip()}' 앞에 '이름='이 없습니다. 'k1=v1,k2=v2' 형식으로 주십시오: '{input_str}'")
+            row_dict[last_key] = f"{row_dict[last_key]},{pair.strip()}"
     if not row_dict:
         raise InputError(f"유효한 인라인 입력 형식이 아닙니다 (JSON 또는 'k1=v1,k2=v2'): '{input_str}'")
     return pd.DataFrame([row_dict])
@@ -1613,6 +1676,69 @@ def _predict_classification(
     return summary
 
 
+def _fmt4(v: float) -> str:
+    """Input values in warnings: 4 significant digits, so 3e-06 is not shown as 0.00."""
+    return f"{float(v):.4g}"
+
+
+def _typo_hints(missing: List[str], available: List[str], model_names: List[str], is_inline: bool) -> List[str]:
+    """A missing model input and the given name that looks like a typo of it, worded the way the user fixes it:
+    "-i의 '온두' -> [추천] '온도'". Only given names that are not model inputs count as typos."""
+    where = "-i의" if is_inline else "입력 데이터 열"
+    known = set(model_names)
+    extra = [c for c in available if c not in known]
+    out = []
+    for m in missing:
+        cands = difflib.get_close_matches(m, extra, n=3, cutoff=0.5)
+        alias = build_alias_map(extra).get(_alias_key(m))
+        if alias and alias not in cands:
+            cands.insert(0, alias)
+        if len(cands) == 1:
+            out.append(f"{where} '{cands[0]}' -> [추천] '{m}' ('{cands[0]}'을(를) '{m}'(으)로 고쳐 다시 실행)")
+        elif cands:
+            out.append(f"'{m}'이(가) 없습니다. {where} [후보] {', '.join(cands)} 중 '{m}'(으)로 고칠 이름을 사용자에게 물으십시오")
+    return out
+
+
+def _predict_command(args: argparse.Namespace) -> str:
+    """The same file prediction command without --header-row/--unit-row/--data-row."""
+    parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(args.model)]
+    if getattr(args, "meta", None):
+        parts += ["--meta", quote_arg(args.meta)]
+    if getattr(args, "targets", None):
+        parts += ["-y", quote_arg(args.targets)]
+    parts += ["-f", quote_arg(args.file)]
+    if getattr(args, "out", None):
+        parts += ["-o", quote_arg(args.out)]
+    if getattr(args, "encoding", None):
+        parts += ["--encoding", quote_arg(args.encoding)]
+    if getattr(args, "overwrite", False):
+        parts.append("--overwrite")
+    return " ".join(parts)
+
+
+def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
+                 missing: Optional[List[str]] = None) -> str:
+    """Why a file misses the model columns, as ONE suggestion (the tool never switches the layout by itself):
+    - layout options given, and the file read WITHOUT them has every model input -> [추천] <the command without them>
+    - the missing names are in another top row (two-level / merged header) -> [추천] --header-row N"""
+    needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
+    has_layout = any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row"))
+    if has_layout and getattr(args, "file", None):
+        try:
+            auto = load_data_file(args.file)
+        except Exception:
+            auto = None
+        if auto is not None and names_in_cells(needed, [str(c) for c in auto.columns]):
+            return ("레이아웃 옵션(--header-row/--unit-row/--data-row)이 이 파일과 맞지 않습니다. "
+                    f"옵션 없이 읽으면 모델 입력 열이 모두 있습니다. [추천] {_predict_command(args)}")
+    if df_input is not None and missing:
+        row = find_header_row(df_input.attrs.get("head_rows"), missing)
+        if row is not None and row != getattr(args, "header_row", None):
+            return f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글이나 병합된 머리글). [추천] --header-row {row}"
+    return ""
+
+
 def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     """Orchestrates 1-Turn declarative inference."""
     # 1. Resolve Targets & Models
@@ -1636,12 +1762,19 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         is_inline = True
         source_desc = f"Inline Input ({len(df_input)} record(s))"
     elif args.file:
-        df_input = load_data_file(
-            file_path=args.file,
-            header_row=args.header_row,
-            unit_row=args.unit_row,
-            data_row=args.data_row
-        )
+        try:
+            df_input = load_data_file(
+                file_path=args.file,
+                header_row=args.header_row,
+                unit_row=args.unit_row,
+                data_row=args.data_row
+            )
+        except InputError as e:
+            # the layout options (often copied from training) do not fit this file: suggest the command without them
+            hint = _layout_hint(args, model_items)
+            if hint:
+                raise InputError(f"{e} {hint}")
+            raise
         is_inline = False
         source_desc = os.path.basename(args.file)
     else:
@@ -1680,21 +1813,24 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         missing_raw = [c for c in raw_needed if c not in df_input.columns]
         if missing_raw and any(c not in req_features for c in missing_raw):
             available_cols = [str(c) for c in df_input.columns]
+            hint = "" if is_inline else _layout_hint(args, model_items, df_input, missing_raw)
             raise InputError(
                 f"타겟 '{target_name}' 추론에 필요한 입력 '{', '.join(missing_raw)}'이(가) 입력 데이터에 없습니다 "
-                f"(파생변수 계산에 쓰는 원본 입력 포함). [입력 데이터 컬럼 목록]: {available_cols}")
+                f"(파생변수 계산에 쓰는 원본 입력 포함). [입력 데이터 컬럼 목록]: {available_cols}"
+                + (f" {hint}" if hint else ""))
         df_evaled = apply_inference_evals(df_input, derived_evals)
 
         # Check required features
         missing_feats = [f for f in req_features if f not in df_evaled.columns]
         if missing_feats:
             available_cols = [str(c) for c in df_evaled.columns]
-            hints = [f"'{m}' -> [추천] {suggest_columns(m, available_cols)}" for m in missing_feats
-                     if suggest_columns(m, available_cols)]
+            hint = "" if is_inline else _layout_hint(args, model_items, df_input, missing_feats)
+            if not hint:
+                hint = " / ".join(_typo_hints(missing_feats, available_cols, req_features + raw_needed, is_inline))
             raise InputError(
                 f"타겟 '{target_name}' 추론에 필요한 필수 피처 '{', '.join(missing_feats)}'이(가) 입력 데이터에 누락되었습니다. "
-                + (" / ".join(hints) + " " if hints else "")
-                + f"\n[입력 데이터 컬럼 목록]: {available_cols}"
+                + f"[입력 데이터 컬럼 목록]: {available_cols}"
+                + (f"\n{hint}" if hint else "")
             )
 
         schema = meta["feature_schema"]
@@ -1738,18 +1874,18 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                         if not col_series.empty:
                             c_min = float(col_series.min())
                             c_max = float(col_series.max())
-                            f_range = max(f_max - f_min, 1e-6)
+                            f_range = (f_max - f_min) if f_max > f_min else (abs(f_max) or 1.0)
                             n_out = int(((col_series > f_max) | (col_series < f_min)).sum())
 
                             if c_max > f_max:
                                 over_pct = round(float((c_max - f_max) / f_range * 100), 1)
                                 drift_warnings.append(
-                                    f"피처 '{fname}' 상한 초과 외삽(Extrapolation) 감지: 학습 최대={f_max:.2f}, 입력 최대={c_max:.2f} (범위 대비 +{over_pct}% 초과 이탈, 범위 밖 {n_out}건)"
+                                    f"피처 '{fname}' 상한 초과 외삽(Extrapolation) 감지: 학습 최대={_fmt4(f_max)}, 입력 최대={_fmt4(c_max)} (범위 대비 +{over_pct}% 초과 이탈, 범위 밖 {n_out}건)"
                                 )
                             if c_min < f_min:
                                 under_pct = round(float((f_min - c_min) / f_range * 100), 1)
                                 drift_warnings.append(
-                                    f"피처 '{fname}' 하한 미달 외삽(Extrapolation) 감지: 학습 최소={f_min:.2f}, 입력 최소={c_min:.2f} (범위 대비 -{under_pct}% 미달 이탈, 범위 밖 {n_out}건)"
+                                    f"피처 '{fname}' 하한 미달 외삽(Extrapolation) 감지: 학습 최소={_fmt4(f_min)}, 입력 최소={_fmt4(c_min)} (범위 대비 -{under_pct}% 미달 이탈, 범위 밖 {n_out}건)"
                                 )
 
         X_input = X_model
@@ -1962,6 +2098,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         result["truncated"] = bool(inline_truncated)
         if inline_truncated:
             result["shown"] = 0
+            if saved_file:
+                result["full_result_file"] = saved_file
     if map_notes:
         result["map_check_notes"] = list(dict.fromkeys(map_notes))
     if column_aliases:
@@ -2000,6 +2138,11 @@ def _spans(xs: np.ndarray, ok: np.ndarray, gap: float) -> List[List[float]]:
         else:
             out.append([float(x), float(x)])
     return out
+
+
+def _r6(v: float) -> float:
+    """6 decimals, but small values keep 6 significant digits (an input of 3e-06 must not become 0)."""
+    return round_pred(float(v), 6)
 
 
 def _model_curve(pipe: Any, meta: Dict[str, Any], base: Dict[str, Any], vary: str, xs: np.ndarray) -> np.ndarray:
@@ -2071,7 +2214,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     cross = np.array(_crossings(xs, ys, y0))
     for span in _spans(cross, np.ones(len(cross), dtype=bool), merge):
         mid = (span[0] + span[1]) / 2
-        answers.append({vary: round(mid, 6), **({"from": round(span[0], 6), "to": round(span[1], 6)} if span[1] > span[0] else {})})
+        answers.append({vary: _r6(mid), **({"from": _r6(span[0]), "to": _r6(span[1])} if span[1] > span[0] else {})})
     # verification: the curve must bracket the target right around every answer
     step = (hi - lo) / FIND_STEPS
     unverified = []
@@ -2091,7 +2234,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         for a, b in _spans(xs, (ys >= band[0]) & (ys <= band[1]), merge):
             if b - a < merge and not any(a <= ans[vary] <= b for ans in answers):
                 continue   # a sliver touching the band without crossing the target: step noise
-            windows.append({"from": round(a, 6), "to": round(b, 6)})
+            windows.append({"from": _r6(a), "to": _r6(b)})
     else:
         warnings.append("예측 오차 정보가 없는 모델이라 운전 구간을 계산하지 않았습니다")
 
@@ -2125,8 +2268,8 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
                 m_cross = np.array(_crossings(xs, mys, y0))
                 m_ans = _spans(m_cross, np.ones(len(m_cross), dtype=bool), merge)
                 measured = {"method": "학습 데이터 표 보간 (ml_map 방식)", "count": len(m_ans),
-                            "solutions": [round((a + b) / 2, 6) for a, b in m_ans],
-                            "reachable": {"min": round(float(np.nanmin(mys)), 6), "max": round(float(np.nanmax(mys)), 6)}}
+                            "solutions": [_r6((a + b) / 2) for a, b in m_ans],
+                            "reachable": {"min": _r6(np.nanmin(mys)), "max": _r6(np.nanmax(mys))}}
                 if tab.mode == "scattered" and len(m_ans) > 3:
                     warnings.append(f"실측 기준 답이 {len(m_ans)}개로 많습니다 (측정 잡음). 모델 답을 기준으로 보십시오")
             except InputError as e:
@@ -2149,10 +2292,10 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     res: Dict[str, Any] = {
         "status": "ok", "command": "find", "target": target, "find": {target: y0}, "vary": vary,
         "fixed": {k: (float(v) if isinstance(v, (int, float, np.floating)) else v) for k, v in fixed.items()},
-        "filled_defaults": {k: round(v, 6) for k, v in filled.items()},
-        "model": meta.get("champion_model"), "training_range": {vary: [round(lo, 6), round(hi, 6)]},
+        "filled_defaults": {k: _r6(v) for k, v in filled.items()},
+        "model": meta.get("champion_model"), "training_range": {vary: [_r6(lo), _r6(hi)]},
         "count": len(answers), "solutions": answers, "operating_windows": windows,
-        "reachable": {"min": round(reach[0], 6), "max": round(reach[1], 6), "within": f"{vary} {_fmt(lo)}~{_fmt(hi)}"},
+        "reachable": {"min": _r6(reach[0]), "max": _r6(reach[1]), "within": f"{vary} {_fmt(lo)}~{_fmt(hi)}"},
         "measured": measured, "nearest_rows": near, "verified": not unverified,
     }
     if filled:

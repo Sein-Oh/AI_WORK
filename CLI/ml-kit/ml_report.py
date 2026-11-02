@@ -140,6 +140,8 @@ def worst_verdict(verdicts: List[str]) -> str:
 
 
 def fmt(v: Any, digits: int = 4) -> str:
+    """Numbers in the report: `digits` decimals, but small values keep `digits` significant digits
+    (same rule as round_pred in the JSON), so an MAE of 3e-06 is not shown as 0.0000."""
     if v is None:
         return "-"
     if isinstance(v, (bool, np.bool_)):
@@ -149,7 +151,11 @@ def fmt(v: Any, digits: int = 4) -> str:
     if isinstance(v, (float, np.floating)):
         if not np.isfinite(v):
             return "-"
-        return f"{float(v):,.{digits}f}"
+        a = abs(float(v))
+        dec = digits if a == 0 else max(digits, digits - 1 - int(np.floor(np.log10(a))))
+        if 0 < a < 1e-4:
+            return f"{float(v):.{digits - 1}e}"
+        return f"{float(v):,.{dec}f}"
     return str(v)
 
 
@@ -999,8 +1005,8 @@ def text_performance(t: Dict[str, Any]) -> str:
     if t["task"] == "regression":
         std = float(t["oof"]["actual"].std()) or 1.0
         lines = [
-            f"챔피언 {c['champion_model']}의 검증 R²는 {c['val_r2']:.4f}, MAE는 {c['mae']:.4f}로 "
-            f"타겟 표준편차({std:.4f})의 {c['mae'] / std:.0%} 수준입니다.",
+            f"챔피언 {c['champion_model']}의 검증 R²는 {c['val_r2']:.4f}, MAE는 {fmt(c['mae'])}로 "
+            f"타겟 표준편차({fmt(std)})의 {c['mae'] / std:.0%} 수준입니다.",
         ]
         gap = c.get("overfit_gap", 0.0)
         lines.append(f"학습-검증 간극 {gap:.4f}: " + ("과적합 위험이 낮습니다." if gap <= 0.10 else
@@ -1140,7 +1146,7 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     rows = []
     for t in targets:
         c = t["champ"]
-        err = (f"MAE {c['mae']:.4f}" if task == "regression" else f"정확도 {c['accuracy']:.4f}")
+        err = (f"MAE {fmt(c['mae'])}" if task == "regression" else f"정확도 {c['accuracy']:.4f}")
         row = [t["name"], c["champion_model"], c.get("val_score")]
         if has_excl:
             row.append((t.get("excluded") or {}).get("all_rows_score", c.get("val_score")))
@@ -1274,9 +1280,9 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         if task == "regression":
             iv = c.get("prediction_interval") or {}
             half = (iv["residual_upper"] - iv["residual_lower"]) / 2 if iv else None
-            cards = [("검증 R²", f"{c['val_r2']:.4f}", c["champion_model"]), ("MAE", f"{c['mae']:.4f}", "평균 절대 오차"),
+            cards = [("검증 R²", f"{c['val_r2']:.4f}", c["champion_model"]), ("MAE", fmt(c['mae']), "평균 절대 오차"),
                      ("학습-검증 간극", f"{c.get('overfit_gap', 0):.4f}", "0.15 초과면 과적합 주의"),
-                     ("90% 예측 범위", f"±{half:.3f}" if half is not None else "-", "예측값 기준")]
+                     ("90% 예측 범위", f"±{fmt(half, 3)}" if half is not None else "-", "예측값 기준")]
             hdr = ["순위", "모델", "검증 R²", "학습 R²", "간극", "MAE"]
             body = [[e["rank"], e["model_name"], e["val_r2"], e["train_r2"], e["overfit_gap"], e["mae"]] for e in board[:3]]
         else:

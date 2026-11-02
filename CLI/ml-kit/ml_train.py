@@ -44,7 +44,7 @@ import pandas as pd
 import joblib
 
 import sklearn
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
@@ -214,8 +214,9 @@ def validate_and_sanitize_data(
     """
     all_available = [str(c) for c in df.columns]
 
-    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)")
-    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)")
+    head_rows = df.attrs.get("head_rows")    # two-level / merged header -> [추천] --header-row N
+    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", head_rows=head_rows)
+    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", head_rows=head_rows)
     feature_names = list(dict.fromkeys(feature_names))
     target_names = list(dict.fromkeys(target_names))
 
@@ -456,6 +457,23 @@ def get_regression_models(seed: int = 42, n_rows: int = 0) -> Dict[str, Any]:
 PREDICTION_INTERVAL_LEVEL = 0.90
 
 
+def duplicate_groups(X: pd.DataFrame, y: np.ndarray) -> Tuple[np.ndarray, int]:
+    """CV group per identical row (all inputs + target), and the number of extra copies (rows - distinct rows).
+    Groups are 0..g-1 in order of first appearance; with no duplicates every row is its own group (n_dup = 0)."""
+    frame = X.reset_index(drop=True).astype("object").copy()
+    frame["__y__"] = pd.Series(y).astype("object").to_numpy()
+    codes = pd.util.hash_pandas_object(frame.astype(str), index=False).to_numpy()
+    _, first, groups = np.unique(codes, return_index=True, return_inverse=True)
+    order = np.argsort(np.argsort(first))          # renumber by first appearance (stable fold assignment)
+    groups = order[groups]
+    return groups.astype(int), int(len(y) - len(first))
+
+
+def duplicate_warning(target_name: str, n_dup: int, n_rows: int) -> str:
+    return (f"타겟 '{target_name}': 입력과 타겟이 완전히 같은 중복 행이 {n_dup}개 있습니다 (전체 {n_rows}행). "
+            f"같은 행이 학습과 검증에 나뉘어 점수가 부풀지 않도록 묶어서 검증했습니다. 중복이 실수라면 데이터에서 지우십시오.")
+
+
 def train_and_benchmark_models(
     X: pd.DataFrame,
     y_series: pd.Series,
@@ -478,12 +496,21 @@ def train_and_benchmark_models(
 
     if len(y) < 10:
         raise InputError(f"타겟 '{target_name}'의 유효 학습 샘플 수가 너무 적습니다 ({len(y)}개). 최소 10개 이상 필요합니다.")
+    if np.unique(y).size <= 1:
+        raise InputError(f"타겟 '{target_name}' 값이 모두 같아({float(f'{y[0]:.12g}')}) 학습할 수 없습니다. "
+                         f"값이 변하는 타겟을 지정하십시오.")
 
     models = get_regression_models(seed=seed, n_rows=int(len(y) * 0.8))
     model_count = len(models)
     # Dynamic K-Fold split: adapts gracefully to small sample sizes (N < 25)
+    groups, n_dup = duplicate_groups(X, y)
     n_splits = min(5, max(2, len(y) // 3))
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    if n_dup:
+        # identical rows (inputs + target) stay in one fold: a copy in the training folds would leak the answer
+        n_splits = max(2, min(n_splits, int(groups.max()) + 1))
+        kf = GroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    else:
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
 
     leaderboard = []
     model_oof_map = {}
@@ -493,7 +520,7 @@ def train_and_benchmark_models(
         train_r2_list = []
         params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(kf.split(X, y), 1):
+        for fold, (train_idx, val_idx) in enumerate(kf.split(X, y, groups if n_dup else None), 1):
             pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
@@ -566,6 +593,8 @@ def train_and_benchmark_models(
         "feature_importances": feature_ranks
     }
 
+    if n_dup:
+        champion_summary["duplicate_rows"] = n_dup
     target_benchmark_res = {
         "target": target_name,
         "task": TASK_REGRESSION,
@@ -723,8 +752,15 @@ def train_and_benchmark_classifiers(
 
     models = get_classification_models(seed=seed, balanced=balanced, n_rows=len(y))
     model_count = len(models)
-    n_splits = max(2, min(5, min(class_counts.values())))
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    groups, n_dup = duplicate_groups(X, y)
+    if n_dup:
+        # identical rows (inputs + class) stay in one fold; folds need at least one distinct row of every class
+        class_groups = pd.Series(groups).groupby(pd.Series(y)).nunique()
+        n_splits = max(2, min(5, int(class_groups.min())))
+        skf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    else:
+        n_splits = max(2, min(5, min(class_counts.values())))
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
 
     leaderboard = []
     model_oof_map: Dict[str, np.ndarray] = {}
@@ -736,7 +772,7 @@ def train_and_benchmark_classifiers(
         train_f1_list = []
         params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y, groups if n_dup else None), 1):
             pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
@@ -827,6 +863,8 @@ def train_and_benchmark_classifiers(
         "weak_features": [f["feature"] for f in feature_ranks if f["pct"] <= 1.0],
         "feature_importances": feature_ranks
     }
+    if n_dup:
+        champion_summary["duplicate_rows"] = n_dup
     target_benchmark_res = {
         "target": target_name,
         "task": TASK_CLASSIFICATION,
@@ -1559,6 +1597,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         target_champions = {}
         target_summaries = {}
         all_champion_scores = []
+        train_warnings: List[str] = []
         benchmark_fn = train_and_benchmark_models if task == TASK_REGRESSION else train_and_benchmark_classifiers
 
         total_targets = len(target_names)
@@ -1589,6 +1628,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 **extra
             )
 
+            if champion_info.get("duplicate_rows"):
+                train_warnings.append(duplicate_warning(target_name, champion_info["duplicate_rows"],
+                                                        t_bench["sample_count"]))
+                sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
             all_score, excl_pred = score_with_excluded(task, champion_pipe, champion_info, oof_df,
                                                        g["X"], y_full, plan["mask"])
             excl_info: Dict[str, Any] = {
@@ -1759,13 +1802,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             for fname in list(g["schema"]["numeric"]) + source_numeric:
                 s = coerce_numeric(g["df"][fname])[used_rows].dropna()
                 if not s.empty:
-                    feat_stats[fname] = {
-                        "mean": round(float(s.mean()), 4),
-                        "std": round(float(s.std()), 4),
-                        "min": round(float(s.min()), 4),
-                        "max": round(float(s.max()), 4),
-                        "median": round(float(s.median()), 4)
-                    }
+                    # significant digits, not decimals: an input of 3e-06 must not be stored as 0
+                    feat_stats[fname] = {k: float(f"{float(v):.12g}") for k, v in (
+                        ("mean", s.mean()), ("std", s.std()), ("min", s.min()), ("max", s.max()), ("median", s.median()))}
 
             # Inference Metadata JSON with safe filename
             meta_json = {
@@ -1955,7 +1994,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             f"Champion models and leaderboard packaged into '{os.path.basename(final_version_dir)}'. "
             f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
             + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
-               "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "") +
+               "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "")
+            + ("Tell the user every item of warnings (duplicate rows). " if train_warnings else "") +
             "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
             "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
         )
@@ -1985,6 +2025,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     "new_score": target_champions[t]["info"]["val_score"]}
                 for t, src in best_info["best_source"].items()
             }
+        if train_warnings:
+            result["warnings"] = train_warnings
         if exclusion_summary:
             result["exclusions"] = exclusion_summary
             if excluded_rows_file:
@@ -2167,7 +2209,8 @@ def _tasks_to_build(records: List[Dict[str, Any]], task: Optional[str], ledger_p
 def best_summary(version_result: Dict[str, Any]) -> Dict[str, Any]:
     return {"task": version_result["task"], "version": version_result["version"],
             "version_dir": version_result["version_dir"], "targets": version_result["targets"],
-            "mean_val_score": version_result.get("mean_val_score"), "made": True}
+            "mean_val_score": version_result.get("mean_val_score"), "made": True,
+            **({"warnings": version_result["warnings"]} if version_result.get("warnings") else {})}
 
 
 def execute_make_best(args: argparse.Namespace) -> Dict[str, Any]:

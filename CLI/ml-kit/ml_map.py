@@ -84,7 +84,7 @@ def _parse_pairs(text: str, what: str) -> Dict[str, Any]:
 
 def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str]) -> Tuple[Dict[str, float], Dict[str, str]]:
     """Resolves -i names; numeric columns need numeric values, text columns become row filters."""
-    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)")
+    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", head_rows=df.attrs.get("head_rows"))
     numeric, categorical = {}, {}
     for given, col in zip(pairs, names):
         v = pairs[given]
@@ -110,7 +110,8 @@ def _filter(df: pd.DataFrame, categorical: Dict[str, str]) -> pd.DataFrame:
 
 def _value_columns(df: pd.DataFrame, args_y: Optional[str], columns: List[str], skip: List[str]) -> List[str]:
     if args_y:
-        names, _ = resolve_column_names([s.strip() for s in args_y.split(",") if s.strip()], columns, "구할 열(-y)")
+        names, _ = resolve_column_names([s.strip() for s in args_y.split(",") if s.strip()], columns, "구할 열(-y)",
+                                        head_rows=df.attrs.get("head_rows"))
         bad = [c for c in names if not _is_numeric_col(df[c])]
         if bad:
             raise InputError(f"구할 열 {bad}은(는) 숫자 열이 아닙니다.")
@@ -152,6 +153,14 @@ def _write_book(path: str, sheets: Dict[str, pd.DataFrame], overwrite: bool = Fa
 
 def _basis_text(basis: List[Dict[str, Any]]) -> str:
     return " + ".join(f"{b['row']}행 x {b['weight']:.4g}" for b in basis)
+
+
+def _basis_cells(r: Dict[str, Any]) -> Dict[str, str]:
+    """Excel '근거' cells: one column, or one per value column when the columns used different rows (MultiTable)."""
+    by_col = r.get("basis_by_column")
+    if by_col and len({_basis_text(b) for b in by_col.values()}) > 1:
+        return {f"근거_{c}": _basis_text(b) for c, b in by_col.items()}
+    return {"근거": _basis_text(r["basis"])}
 
 
 # ==============================================================================
@@ -209,6 +218,8 @@ def execute_forward(args) -> Dict[str, Any]:
                                                 "nearest_rows와 warnings를 사용자에게 알리세요."}, warnings)
 
     t = MultiTable(sub, keys, values, warnings)   # each value column on its own non-empty rows
+    values = t.values                             # a value column with too few values is left out (warned)
+    show = list(dict.fromkeys(keys + list(categorical) + values))
     data_range = {k: [round(float(t.lo[j]), 6), round(float(t.hi[j]), 6)] for j, k in enumerate(keys)}
 
     if points_df is not None:
@@ -223,7 +234,7 @@ def execute_forward(args) -> Dict[str, Any]:
             r = t.at(x)
             out_rows.append({**base, **{f"보간_{c}": v for c, v in r["values"].items()}, "방식": r["method"],
                              "외삽": "예" if r["extrapolated"] else "", "범위 밖": "; ".join(f"{k}: {v}" for k, v in r["out_of_range"].items()),
-                             "근거": _basis_text(r["basis"])})
+                             **_basis_cells(r)})
             for nr in nearest_rows(t.df, keys, x, t.span, show):
                 near_rows.append({"조회 번호": i + 1, **{("원본 행" if k == "row" else "거리" if k == "distance" else k): v
                                                     for k, v in nr.items()}})
@@ -261,7 +272,7 @@ def execute_forward(args) -> Dict[str, Any]:
     if args.save:
         real, ok = _write_book(_resolve_save(args.save, tab["path"]), {
             "결과": pd.DataFrame([{**point["input"], **{f"보간_{c}": v for c, v in r["values"].items()},
-                                  "방식": r["method"], "외삽": "예" if r["extrapolated"] else "", "근거": _basis_text(r["basis"])}]),
+                                  "방식": r["method"], "외삽": "예" if r["extrapolated"] else "", **_basis_cells(r)}]),
             "가까운 실측": pd.DataFrame([{("원본 행" if k == "row" else "거리" if k == "distance" else k): v
                                        for k, v in nr.items()} for nr in near])}, args.overwrite)
         res["output_file"], res["verified"] = real, ok
@@ -281,12 +292,12 @@ def execute_reverse(args) -> Dict[str, Any]:
     if len(goal) != 1:
         raise InputError("--find에는 목표 하나만 주십시오 (예: --find \"생산효율=50\").")
     (goal_name, goal_val), = goal.items()
-    goal_col = resolve_column_names([goal_name], columns, "목표(--find)")[0][0]
+    goal_col = resolve_column_names([goal_name], columns, "목표(--find)", head_rows=df.attrs.get("head_rows"))[0][0]
     try:
         y0 = float(goal_val)
     except (TypeError, ValueError):
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
-    vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)")[0][0]
+    vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)", head_rows=df.attrs.get("head_rows"))[0][0]
     numeric, categorical = _split_keys(df, _parse_pairs(args.input, "-i"), columns)
     if vary in numeric or vary in categorical:
         raise InputError(f"'{vary}'는 --vary로 찾는 열이라 -i에 함께 줄 수 없습니다.")

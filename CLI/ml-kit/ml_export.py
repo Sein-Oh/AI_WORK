@@ -799,6 +799,14 @@ def parse_inputs_spec(text: Optional[str], targets: List[str], all_inputs: Dict[
     return {t: got for t in targets if (got := _names_in(names, all_inputs[t], what))}
 
 
+SPEC_CHARS = ",;="     # separators of --inputs: a target or input name with one of them cannot be written there
+
+
+def spec_safe(choice: Dict[str, List[str]]) -> bool:
+    """True when every target and input name can be written in --inputs (no ',', ';' or '=' in a name)."""
+    return not any(ch in name for t, v in choice.items() for name in [t] + list(v) for ch in SPEC_CHARS)
+
+
 def inputs_arg(choice: Dict[str, List[str]], single: bool) -> str:
     if single:
         return ",".join(next(iter(choice.values())))
@@ -821,6 +829,8 @@ def execute_export(args) -> Dict[str, Any]:
         if auto:
             warnings.append(f"--inputs의 입력이 없는 타겟 {auto}은(는) 입력을 자동으로 골랐습니다")
     plans = []
+    over: Dict[str, Dict[str, Any]] = {}     # --inputs over MAX_INPUTS: target -> best candidate with <= MAX_INPUTS
+    over_n: Dict[str, int] = {}
     for target in vinfo["targets"]:
         inputs, evals = target_inputs[target]
         missing = [c for c in inputs + [target] if c not in data_all.columns]
@@ -853,16 +863,17 @@ def execute_export(args) -> Dict[str, Any]:
             if len(chosen_inputs) > MAX_INPUTS:
                 progress(f"'{target}': --inputs가 {len(chosen_inputs)}개라 {MAX_INPUTS}개 이하 추천 안을 찾는 중")
                 cands = search(data, target, chosen_inputs, keep, evals, inputs, stop_at=MAX_INPUTS)
-                best_small = recommend([c for c in cands if len(c["inputs"]) <= MAX_INPUTS])
-                rec = (",".join(best_small["inputs"]) if len(vinfo["targets"]) == 1
-                       else f"{target}=" + ",".join(best_small["inputs"]))
-                raise InputError(f"'{target}': --inputs가 {len(chosen_inputs)}개라 성능예측표 상한 {MAX_INPUTS}개를 넘습니다 "
-                                 f"(입력이 많으면 표와 수식이 엑셀 한도를 넘음). 입력을 줄여 다시 학습한 안 (검증 R² "
-                                 f"{best_small['val_r2']:.4f}): [추천] {rec}")
+                over[target] = recommend([c for c in cands if len(c["inputs"]) <= MAX_INPUTS])
+                over_n[target] = len(chosen_inputs)
+                continue          # every target over the limit is collected first: one [추천] for all of them
+            if over:
+                continue          # an error follows anyway: skip the slow work
             progress(f"'{target}': 입력 {len(chosen_inputs)}개로 학습 (최적화 없음)")
             cands = [fit_subset(data, target, chosen_inputs, evals, inputs)]
             cand, reason = cands[0], "지정한 입력 (--inputs)"
         else:
+            if over:
+                continue
             cands = search(data, target, usable, keep, evals, inputs)
             eligible = [c for c in cands if len(c["inputs"]) <= MAX_INPUTS]
             cand = recommend(eligible)
@@ -886,6 +897,17 @@ def execute_export(args) -> Dict[str, Any]:
                             f"보간 오차 {cand['interp_rmse']} (모델 RMSE {_sig(cand['rmse'])})")
         plans.append({"target": target, "cand": cand, "cands": cands, "table": cand["table"], "all_inputs": inputs,
                       "reason": reason, "keep": keep, "data": data})
+
+    if over:
+        # the suggestion keeps the --inputs of every other target, so running it does not change them
+        choice = {**spec, **{t: c["inputs"] for t, c in over.items()}}
+        what = ", ".join(f"'{t}' {over_n[t]}개 -> {len(c['inputs'])}개 (검증 R² {c['val_r2']:.4f})" for t, c in over.items())
+        head = (f"--inputs가 성능예측표 상한 {MAX_INPUTS}개를 넘습니다 (입력이 많으면 표와 수식이 엑셀 한도를 넘음). "
+                f"입력을 줄여 다시 학습한 안: {what}.")
+        if not spec_safe(choice):
+            raise InputError(f"{head} 줄인 입력: {choice}. 타겟이나 입력 이름에 ',' ';' '='가 있어 --inputs로 쓸 수 없습니다. "
+                             f"--inputs 없이 실행하면 입력을 자동으로 고릅니다 (--keep으로 꼭 넣을 입력 지정).")
+        raise InputError(f"{head} [추천] {inputs_arg(choice, len(vinfo['targets']) == 1)}")
 
     # retrained models and the candidate table next to the version (never inside the version files)
     exp_dir = os.path.join(vinfo["dir"], "export")
@@ -944,6 +966,8 @@ def execute_export(args) -> Dict[str, Any]:
         if len(x["inputs"]) > MAX_INPUTS:
             return None
         choice = {q["target"]: (x["inputs"] if q is p else q["cand"]["inputs"]) for q in plans}
+        if not spec_safe(choice):
+            return None   # a name with ',', ';' or '=' cannot be written in --inputs: no command rather than a broken one
         return (f"python {quote_arg(os.path.join(here, 'ml_export.py'))} -m {quote_arg(vinfo['dir'])}"
                 + (f" -y {quote_arg(args.targets)}" if args.targets else "")
                 + f" --inputs {quote_arg(inputs_arg(choice, single))} --title {quote_arg(title)}")
@@ -958,7 +982,8 @@ def execute_export(args) -> Dict[str, Any]:
             cands_out.append({"count": len(x["inputs"]), "inputs": x["inputs"], "val_r2": round(x["val_r2"], 4), "rmse": _sig(x["rmse"]),
                               "table_rows": x.get("rows"), "interp_rmse": x.get("interp_rmse"), "total_rmse": x.get("total_rmse"),
                               **({"command": cmd} if cmd else {}),
-                              **({"note": f"입력이 {MAX_INPUTS}개를 넘어 성능예측표로 만들 수 없음"} if len(x["inputs"]) > MAX_INPUTS else {})})
+                              **({"note": f"입력이 {MAX_INPUTS}개를 넘어 성능예측표로 만들 수 없음"} if len(x["inputs"]) > MAX_INPUTS else
+                                 {"note": "이름에 ',' ';' '='가 있어 --inputs 명령을 만들 수 없음"} if x is not c and not cmd else {})})
             if cmd:
                 next_commands.append({"purpose": f"'{p['target']}' 입력 {len(x['inputs'])}개 안으로 다시 만들기 (검증 R² {round(x['val_r2'], 4)}"
                                                  + (", 다른 타겟은 지금 입력 유지)" if not single else ")"),
