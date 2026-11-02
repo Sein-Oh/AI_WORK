@@ -106,7 +106,7 @@ groups:
         message: '{DIR}\맵.xlsx 에서 A가 103이면 B는 얼마야?'
         commands: ['ml_map\.py']
         answer_all: ['(?<![\d.,])1,?058\.50*(?!\d|\.\d)']
-        answer_any: ['외삽', '범위 밖', '범위를 벗어', '범위 ?초과', '넘어', 'extrapolat']
+        answer_any: ['외삽', '범위 밖', '범위를 벗어', '범위(를)? ?초과', '넘어서', '넘는', 'extrapolat']
         judge: 데이터 범위 밖이라 외삽값이라는 경고를 함께 알렸는가.
 
   - id: P
@@ -122,13 +122,13 @@ groups:
         message: '{DIR}\새조건.xlsx 의 조건들로 예측해줘.'
         commands: ['ml_predict\.py', '-f\s']
         tool_ok: 'ml_predict\.py'
-        answer_any: ['범위', '벗어', '참고', '외삽', '초과']
+        answer_any: ['범위 밖', '범위를 벗어', '벗어', '참고용', '외삽', '초과']
         judge: 결과 파일 경로를 알리고, 학습 범위 밖 입력(반응온도 200) 경고를 전달했는가.
       - id: P3
         message: '불순물이 100이 되려면 반응온도를 얼마로 해야 해? 나머지는 압축압력 3, 촉매비율 1, 수분함량 20, 유량 10, 분진 0.5야.'
         commands: ['ml_predict\.py', '--find', '--vary\s+[''"]?반응온도']
         tool_ok: 'ml_predict\.py'
-        answer_any: ['구간', '운전 ?범위']
+        answer_any: ['구간', '운전 ?범위', '운전 ?폭', '사이에서 운전', 'operating window']
         judge: 찾은 반응온도와 운전 구간을 알리고, 모델 예측이지 보장된 조건이 아니라고 덧붙였는가.
 
   - id: R
