@@ -425,7 +425,7 @@ def _passing_group(ctx):
 
 def test_agent_help_and_bad_args_are_json(runner, monkeypatch, capsys, tmp_path):
     code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, ["-h"])
-    assert code == 0 and len(out) == 1 and json.loads(out[0])["command"] == "help"
+    assert code == 0 and len(out) == 1 and json.loads(out[0])["command"] == "help" and json.loads(out[0])["verified"] is True
     for bad in (["--only", "A,Z"], ["--nope"], ["--skip-out"]):                 # unknown group, unknown option, abbreviation
         code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, bad)
         payload = json.loads(out[0])

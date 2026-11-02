@@ -28,3 +28,20 @@ def test_pytest_targets_and_packages():
     assert "tests" in rat.PYTEST_TARGETS and os.path.isdir(os.path.join(rat.HERE, "tests"))
     assert rat.IMPORTS["PyYAML"] == "yaml" and "PyYAML" in rat.PACKAGES
     assert set(rat.PACKAGES) == set(rat.IMPORTS)
+
+
+def test_unencodable_line_on_cp949_stdout_does_not_stop_reader(monkeypatch):
+    """With stdout redirected as cp949, a line with a character cp949 lacks must not stop the reader thread
+    (the child would block on a full pipe until the timeout): it is shown with '?' and every line is kept."""
+    import io
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="cp949", errors="strict", line_buffering=True))
+    child = "import sys\nprint('a \\u2022 b')\nfor i in range(20000): print('줄', i)\nprint('끝')\n"
+    t0 = time.time()
+    code, out, sec, stop = rat.run_capture([sys.executable, "-c", child], HERE, timeout=60, poll=0.2)
+    sys.stdout.flush()
+    shown = buf.getvalue().decode("cp949")
+    assert code == 0 and not stop and time.time() - t0 < 30
+    lines = out.splitlines()
+    assert lines[0] == "a \u2022 b" and lines[-1] == "끝" and len(lines) == 20002
+    assert shown.splitlines()[0] == "a ? b" and "끝" in shown

@@ -24,10 +24,11 @@ python "C:\CLI-dev\run_beta_check.py" --label 회사PC --agent 를 시간 제한
 3. 끝나면 대화를 JSON으로 내보냅니다. PowerShell에서 (세션ID는 OpenCode 화면이나 `opencode session list`에서 확인):
 
 ```powershell
-opencode export <세션ID> | Out-File -Encoding utf8 chat.json
+cmd /c "opencode export <세션ID> > chat.json"
 ```
 
-   OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다. `> chat.json`으로 저장한 파일(UTF-16)도 채점기가 읽습니다.
+   cmd의 `>`는 opencode가 쓴 UTF-8을 그대로 저장합니다. PowerShell의 `| Out-File`이나 `>`로 저장하면 한글이 깨지고 채점기가 [ERROR]로 멈춥니다.
+   OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다.
 4. `C:\CLI-dev`에서 채점합니다:
 
 ```powershell

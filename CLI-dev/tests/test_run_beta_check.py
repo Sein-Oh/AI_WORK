@@ -30,7 +30,7 @@ def _cli(*args):
 
 def test_agent_help_and_argument_errors_are_one_json_line():
     code, out = _cli("--agent", "-h")
-    assert code == 0 and len(out) == 1 and json.loads(out[0])["command"] == "help"
+    assert code == 0 and len(out) == 1 and json.loads(out[0])["command"] == "help" and json.loads(out[0])["verified"] is True
     for bad in (["--agent", "--only", "B,Z"], ["--agent", "--ag"], ["--agent", "--nope"]):
         code, out = _cli(*bad)
         payload = json.loads(out[0])

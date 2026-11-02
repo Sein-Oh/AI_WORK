@@ -97,12 +97,26 @@ def run_capture(args, cwd, timeout, poll=1.0):
     interrupted = False
     proc = subprocess.Popen(args, cwd=cwd, env=child_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
+    def echo(line):
+        """Shows one line; a character the console (e.g. cp949 redirected stdout) cannot encode becomes '?'.
+        A display error must not stop the reader, or the child blocks on a full pipe until the timeout."""
+        try:
+            print(line, flush=True)
+        except UnicodeEncodeError:
+            enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+            try:
+                print(line.encode(enc, errors="replace").decode(enc, errors="replace"), flush=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def pump():
         try:
             for raw in proc.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                print(line, flush=True)
                 lines.append(line)
+                echo(line)
         except Exception:
             pass
 

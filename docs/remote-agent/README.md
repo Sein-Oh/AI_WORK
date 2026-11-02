@@ -12,8 +12,9 @@
 | `office-cli` | Excel/Word/PPT 읽기·쓰기, 문서 등록과 근거 검색, 되돌리기 | `office-cli_지시문.md` 내용 전체 | `run.py` |
 
 - `run.py` 2행의 WinPython 경로(`C:\WPy64-313130\python\python.exe`)가 본인 PC와 다르면 고칩니다.
-- run.py는 결과 JSON 1줄을 UTF-8로 출력합니다. 도구가 결과 JSON을 내지 않으면 `"agent_directive": "ERROR: ..."` JSON과 종료 코드 1을 돌려줍니다.
-  (2026-11-01 이전에 올린 run.py는 cp949 콘솔에서 일부 문자로 실패할 수 있어 한 번 다시 올립니다.)
+- run.py는 결과 JSON 1줄을 원격 에이전트가 읽는 인코딩(파이썬이 판단한 표준 출력 인코딩, 보통 cp949 또는 UTF-8)으로 출력합니다.
+  그 인코딩에 없는 문자(글머리표, 긴 줄표 등)는 `?`로 바뀝니다. 도구가 결과 JSON을 내지 않으면 `"agent_directive": "ERROR: ..."` JSON과 종료 코드 1을 돌려줍니다.
+  (2026-11-02 이전에 올린 run.py는 항상 UTF-8로 출력해 한글이 깨질 수 있어 한 번 다시 올립니다.)
 - 첫 시험: `office-cli` 스킬로 "등록된 문서 목록 보여줘" -> `reader.py list` 결과가 나오면 연결된 것입니다 (파일을 바꾸지 않음).
 
 ## 확인할 것

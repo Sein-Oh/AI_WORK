@@ -3,8 +3,9 @@ PY = r"C:\WPy64-313130\python\python.exe"
 
 
 def emit(line, code):
-    # UTF-8 bytes: print() would fail on a cp949 pipe for characters such as U+2022, dashes or NBSP
-    sys.stdout.buffer.write((line + "\n").encode("utf-8", "replace"))
+    # bytes in the encoding the host reads this pipe with (cp949 or UTF-8); a character it cannot show
+    # (U+2022, dashes, NBSP on cp949) becomes '?' instead of failing like print() would
+    sys.stdout.buffer.write((line + "\n").encode(sys.stdout.encoding or "utf-8", "replace"))
     sys.stdout.buffer.flush()
     sys.exit(code)
 

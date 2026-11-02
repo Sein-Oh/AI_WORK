@@ -21,7 +21,7 @@
 | office-cli 1.4.11 | 문서 색인 형식이 바뀜(PARSER_VERSION 6): 처음 검색 때 도구가 `index --all`을 안내하면 그대로 실행 |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
-| 개발 도구 | 채점기가 PowerShell로 내보낸 UTF-16 대화도 읽음. 내보내기는 `opencode export <세션ID> \| Out-File -Encoding utf8 chat.json`. "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 러너 `--agent` 모드 JSON 계약, office 러너 `unverified_count` |
+| 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count` |
 | 원격 에이전트 | `docs/remote-agent/run.py`가 바뀜: 사용하는 팀원은 한 번 다시 올림 |
 
 ## 3. 회사 PC에서 할 일

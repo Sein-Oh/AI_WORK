@@ -27,13 +27,19 @@ def _bash(cmd, out):
                                                       "output": "[PROGRESS] ...\n" + json.dumps(out, ensure_ascii=False), "metadata": {"exit": 0}}}
 
 
-def _export(tmp_path, turns):
+def _with_messages(user):
+    """Puts the scenario's pack message after each [ID] tag, as a pasted message has it (the mojibake check compares them)."""
+    by_id = go.load_scenarios()[1]
+    return go.TAG.sub(lambda m: f"{m.group(0)} {by_id[m.group(1)]['message']}" if m.group(1) in by_id else m.group(0), user)
+
+
+def _export(tmp_path, turns, name="chat.json"):
     msgs, t = [], 1000
     for user, parts in turns:
-        msgs.append({"info": {"role": "user", "time": {"created": t}}, "parts": [{"type": "text", "text": user}]})
+        msgs.append({"info": {"role": "user", "time": {"created": t}}, "parts": [{"type": "text", "text": _with_messages(user)}]})
         msgs.append({"info": {"role": "assistant", "time": {"created": t + 1, "completed": t + 5000}}, "parts": parts})
         t += 10000
-    path = tmp_path / "chat.json"
+    path = tmp_path / name
     path.write_text(json.dumps({"info": {"model": {"id": "LLM42"}, "version": "1.18"}, "messages": msgs}, ensure_ascii=False), encoding="utf-8")
     return str(path)
 
@@ -145,7 +151,7 @@ def test_export_errors_are_clear(tmp_path, capsys, monkeypatch):
     with pytest.raises(go.ExportError, match="인코딩"):
         go.load_export(str(bad))
     bad.write_text("not json", encoding="utf-8")
-    with pytest.raises(go.ExportError, match="Out-File -Encoding utf8"):
+    with pytest.raises(go.ExportError, match=re.escape('cmd /c "opencode export <세션ID> > chat.json"')):
         go.load_export(str(bad))
     bad.write_text("[1, 2]", encoding="utf-8")
     with pytest.raises(go.ExportError, match="messages"):
@@ -153,6 +159,100 @@ def test_export_errors_are_clear(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["grade_opencode.py", "--export", str(bad)])
     assert go.main() == 1
     assert "[ERROR]" in capsys.readouterr().err
+
+
+def _garbled_export(tmp_path, garble, enc="utf-8", bom=codecs.BOM_UTF8):
+    """A pack export whose text went through garble (what PowerShell 5.1 does to opencode's UTF-8 output), saved as enc."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    clean = _export(tmp_path, [("[M1]", [_bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+                                         {"type": "text", "text": "B는 16.25, C는 87.5입니다."}])], name="clean.json")
+    raw = open(clean, encoding="utf-8").read()
+    path = tmp_path / f"garbled_{enc}.json"
+    path.write_bytes(bom + garble(raw.encode("utf-8")).encode(enc))
+    return clean, str(path)
+
+
+def test_mojibake_export_is_rejected(tmp_path, capsys, monkeypatch):
+    """`opencode export <ID> | Out-File -Encoding utf8 chat.json` and `> chat.json` on PowerShell 5.1 decode opencode's UTF-8
+    with the console code page (949): the JSON still parses, but the Korean is garbage. The grader stops with the right command."""
+    garbles = (lambda b: b.decode("cp949", "replace"),                          # Python-style replacement characters
+               lambda b: b.decode("cp949", "replace").replace("\ufffd", "?"),   # .NET-style '?'
+               lambda b: b.decode("latin-1"))                                    # no Hangul left at all
+    for garble in garbles:
+        for enc, bom in (("utf-8", codecs.BOM_UTF8), ("utf-16-le", codecs.BOM_UTF16_LE)):   # Out-File utf8 / PowerShell >
+            clean, bad = _garbled_export(tmp_path, garble, enc, bom)
+            with pytest.raises(go.ExportError, match="한글이 깨졌습니다") as ex:
+                go.grade([bad], "t", False, "LLM42")
+            assert 'cmd /c "opencode export <세션ID> > chat.json"' in str(ex.value)
+    monkeypatch.setattr(sys, "argv", ["grade_opencode.py", "--export", bad])
+    assert go.main() == 1
+    err = capsys.readouterr().err
+    assert "[ERROR]" in err and "cmd /c" in err
+    _, rows, _ = go.grade([clean], "t", False, "LLM42")                         # the same export saved with cmd /c is graded
+    assert next(r for r in rows if r["id"] == "M1")["결과"] == "통과"
+    utf16 = tmp_path / "clean_utf16.json"                                       # UTF-16 with a BOM is still read
+    utf16.write_bytes(codecs.BOM_UTF16_LE + open(clean, encoding="utf-8").read().encode("utf-16-le"))
+    _, rows, _ = go.grade([str(utf16)], "t", False, "LLM42")
+    assert next(r for r in rows if r["id"] == "M1")["결과"] == "통과"
+
+
+def test_bulk_lead_in_is_not_first_answer(tmp_path):
+    """A lead-in before the first tool call is not the first scenario's answer when the turn has a closing summary."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    path = _export(tmp_path, [("순서대로\n[M1] A=12.5\n[M3] A=103", [
+        {"type": "text", "text": "두 요청을 차례로 처리하겠습니다."},
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=103"', ok),
+        {"type": "text", "text": "M1: B 16.25, C 87.5 / M3: B 1058.5 (범위 밖 외삽값)"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["M1"]["결과"] == "통과", by["M1"]["실패"]
+    assert by["M3"]["결과"] == "통과", by["M3"]["실패"]
+
+
+def test_bulk_retry_belongs_to_its_scenario(tmp_path):
+    """A STOP_RETRY first try followed by the recommended retry (as SKILL.md prescribes) belongs to the retried scenario:
+    the previous scenario's tool_ok is not judged on it."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    stop = {"status": "error", "agent_directive": "STOP_RETRY: --vary가 필요합니다. [추천] --vary 반응온도"}
+    rest = '-i "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5"'
+    path = _export(tmp_path, [("[P2] 새조건\n[P3] 불순물 100", [
+        _bash('python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 -f "새조건.xlsx"', ok),
+        {"type": "text", "text": "P2: 반응온도 200은 학습 범위를 벗어납니다."},
+        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 --find "불순물=100" {rest}', stop),
+        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 --find "불순물=100" --vary 반응온도 {rest}', ok),
+        {"type": "text", "text": "P3: 반응온도 181, 운전 구간 175~188"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["P2"]["결과"] == "통과" and by["P2"]["명령수"] == 1, by["P2"]["실패"]
+    assert by["P3"]["결과"] == "통과" and by["P3"]["명령수"] == 2, by["P3"]["실패"]
+    # the previous scenario's own retry stays with it: M1 fails, M1 retry, then M2
+    m1 = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"'
+    path = _export(tmp_path, [("[M1] A=12.5\n[M2] D=64", [
+        _bash(m1, stop), _bash(m1, ok), {"type": "text", "text": "B 16.25, C 87.5"},
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" --find "D=64" --vary A', ok),
+        {"type": "text", "text": "A=20, A=80."}])], name="m.json")
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["M1"]["결과"] == "통과" and by["M1"]["명령수"] == 2 and by["M2"]["명령수"] == 1, by["M1"]["실패"]
+    assert by["M2"]["결과"] == "통과", by["M2"]["실패"]
+
+
+def test_single_request_answer_before_closing_tool(tmp_path):
+    """Answer text, one more tool, then "완료했습니다.": the answer after the scenario's own command is graded."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    path = _export(tmp_path, [("[M1] A=12.5", [
+        {"type": "text", "text": "맵 파일로 계산하겠습니다."},
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+        {"type": "text", "text": "B는 16.25, C는 87.5입니다."},
+        _bash('Get-Item "C:\\ml_beta\\agent\\맵.xlsx"', ok),
+        {"type": "text", "text": "완료했습니다."}])])
+    _, rows, detail = go.grade([path], "t", False, "LLM42")
+    m1 = next(r for r in rows if r["id"] == "M1")
+    assert m1["결과"] == "통과", m1["실패"]
+    turn = next(t for sid, _, t, _ in detail if sid == "M1")
+    assert go.final_answer(turn) == "완료했습니다."                               # without the scenario: after the last tool
+    assert go.final_answer(turn, go.load_scenarios()[1]["M1"]) == "B는 16.25, C는 87.5입니다.\n완료했습니다."
 
 
 def test_safe_label():
@@ -213,6 +313,49 @@ def test_no_read_code_rule():
     assert not _rule_hits("no_read_code", tool=skill)
 
 
+def _tool(name, **inp):
+    return {"tool": name, "input": inp, "command": "", "path": inp.get("filePath", "")}
+
+
+def test_no_read_code_rule_searches_without_py():
+    """Code searches that never spell ".py" still read the tool code; a search for the text "ml_train.py" elsewhere does not."""
+    for c in ('Select-String -Path "C:\\CLI\\ml-kit\\*" -Pattern outlier',
+              "findstr /s outlier C:\\CLI\\ml-kit\\*",
+              "Get-ChildItem C:\\CLI\\ml-kit -Recurse | Select-String outlier",
+              "gci C:/CLI/office-cli | Get-Content",
+              'rg iqr "C:\\CLI\\ml-kit"',
+              '[IO.File]::ReadAllText("C:\\CLI\\ml-kit\\ml_train.py")',
+              '[System.IO.File]::ReadAllLines("C:\\CLI\\office-cli\\excel.py")',
+              "python -m pydoc ml_train",
+              'python -m pydoc "C:\\CLI\\ml-kit\\ml_train.py"'):
+        assert _rule_hits("no_read_code", c), c
+    for c in ('python C:\\CLI\\ml-kit\\ml_train.py -f a.xlsx --header-row 3',
+              'python "C:\\CLI\\ml-kit\\ml_map.py" -f "C:\\data\\type a.xlsx" -i "A=1"',
+              "Get-Content C:\\CLI\\ml-kit\\SKILL.md",
+              'Select-String -Path "C:\\CLI\\ml-kit\\SKILL.md" -Pattern 제외',
+              "findstr 제외 C:\\CLI\\ml-kit\\SKILL.md",
+              "Get-ChildItem C:\\CLI\\ml-kit",
+              'Get-ChildItem "C:\\ml_beta\\agent" | Select-String x'):
+        assert not _rule_hits("no_read_code", c), c
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit"))
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="iqr", path="C:/CLI/office-cli", include="*"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="ml_train.py",
+                                                      path="C:\\Users\\me\\.config\\opencode\\skills"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="제외", path="C:\\CLI\\ml-kit", include="SKILL.md"))
+    assert not _rule_hits("no_read_code", tool=_tool("glob", pattern="**/SKILL.md", path="C:\\Users\\me\\.config\\opencode"))
+
+
+def test_no_write_py_covers_edit_and_patch():
+    assert _rule_hits("no_write_py", tool=_tool("write", filePath="C:\\temp\\x.py", content="print(1)"))
+    assert _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\CLI\\ml-kit\\ml_train.py", oldString="a", newString="b"))
+    assert _rule_hits("no_write_py", tool=_tool("multiedit", filePath="C:\\CLI\\ml-kit\\ml_map.py", edits=[]))
+    patch = "*** Begin Patch\n*** Update File: C:\\CLI\\ml-kit\\ml_map.py\n@@\n-a\n+b\n*** End Patch"
+    assert _rule_hits("no_write_py", tool=_tool("patch", patchText=patch))
+    assert not _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\ml_beta\\agent\\memo.md", oldString="a", newString="b"))
+    md = "*** Begin Patch\n*** Add File: C:\\temp\\notes.md\n+run ml_train.py\n*** End Patch"
+    assert not _rule_hits("no_write_py", tool=_tool("patch", patchText=md))
+
+
 def test_no_pip_rule():
     for c in ("pip install scipy", "pip3 install -U scikit-learn", "python -m pip install x", "pip.exe uninstall y"):
         assert _rule_hits("no_pip", c), c
@@ -232,6 +375,22 @@ def test_scenario_regexes():
     assert all(re.search(rx, "이상치 기준을 바꾸는 옵션은 없습니다. 엑셀의 '제외' 열에 이유를 적으세요.") for rx in x2)
     assert not all(re.search(rx, "없습니다.") for rx in x2)
     assert not all(re.search(rx, "그런 옵션은 없습니다.") for rx in x2)       # '제외' 열 안내가 빠짐
+    for good in ("이상치 기준을 바꾸는 옵션은 제공되지 않습니다. 빼고 싶은 행은 '제외' 열에 이유를 적으세요.",
+                 "이상치 기준 변경은 지원되지 않습니다. 대신 '제외' 열을 쓰면 됩니다.",
+                 "그런 옵션은 존재하지 않습니다. 엑셀의 제외 열에 이유를 적으세요.",
+                 "이상치 기준은 바꿀 수 없습니다. 특정 행을 빼려면 '제외' 열을 쓰세요.",
+                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다."):
+        assert all(re.search(rx, good) for rx in x2), good
+    for bad in ("네, --outlier 옵션으로 바꿀 수 있습니다. '제외' 열도 쓸 수 있습니다.",
+                "--iqr-k 인자로 이상치 기준을 조정할 수 있습니다. 제외 열과 함께 쓰세요."):
+        assert not all(re.search(rx, bad) for rx in x2), bad
+    m2 = by_id["M2"]["answer_all"]
+    for good in ("A=20, A=80.", "A는 20과 80입니다.", "A = 20.0 또는 80.0.", "답: 20, 80"):
+        assert all(re.search(rx, good) for rx in m2), good
+    for bad in ("A=200, A=80.", "A=20.5, A=80", "A=20, A=8.0"):
+        assert not all(re.search(rx, bad) for rx in m2), bad
+    lookahead = re.compile(r"\(\?!\[\\d\.\]\)")                                # (?![\d.]) rejects a sentence-ending period
+    assert not any(lookahead.search(rx) for s in by_id.values() for rx in s.get("answer_all", []) + s.get("answer_any", []))
 
 
 @needs_pack
@@ -288,8 +447,8 @@ def test_remote_agent_instructions_match_skill_files(tmp_path, monkeypatch):
             assert f.read() == g.read(), f"python docs/remote-agent/build.py 를 실행하세요 ({tool})"
 
 
-def _run_launcher(tmp_path, child_code):
-    """Runs docs/remote-agent/run.py with its WinPython path pointed at this Python and its stdout encoding forced to cp949."""
+def _run_launcher(tmp_path, child_code, encoding="cp949"):
+    """Runs docs/remote-agent/run.py with its WinPython path pointed at this Python and its stdout encoding forced to encoding."""
     import subprocess
     repo = os.path.dirname(os.path.dirname(HERE))
     with open(os.path.join(repo, "docs", "remote-agent", "run.py"), encoding="utf-8") as f:
@@ -300,17 +459,24 @@ def _run_launcher(tmp_path, child_code):
     launcher.write_text("\n".join(lines) + "\n", encoding="utf-8")
     child = tmp_path / "child.py"
     child.write_text(child_code, encoding="utf-8")
-    env = dict(os.environ, PYTHONIOENCODING="cp949")
+    env = dict(os.environ, PYTHONIOENCODING=encoding)
     return subprocess.run([sys.executable, str(launcher), str(child)], capture_output=True, env=env, timeout=60)
 
 
 @needs_remote
-def test_remote_launcher_writes_utf8_on_cp949_pipe(tmp_path):
-    text = chr(0x2022) + " a " + chr(0x2013) + " b" + chr(0xA0) + "c"     # not in cp949: print() on a cp949 pipe fails
-    r = _run_launcher(tmp_path, f"import json\nprint(json.dumps({{'status': 'ok', 'preview': {text!r}}}, ensure_ascii=False))\n")
+def test_remote_launcher_writes_in_pipe_encoding(tmp_path):
+    """The host may decode the launcher's stdout with the system code page (cp949): the bytes follow sys.stdout.encoding,
+    Korean stays readable and a character cp949 lacks becomes '?' instead of an error."""
+    odd = chr(0x2022) + " a " + chr(0x2013) + " b" + chr(0xA0) + "c"     # not in cp949: print() on a cp949 pipe fails
+    code = f"import json\nprint(json.dumps({{'status': 'ok', 'message': '한글 결과', 'preview': {odd!r}}}, ensure_ascii=False))\n"
+    r = _run_launcher(tmp_path, code)
     assert r.returncode == 0, r.stderr
+    out = r.stdout.decode("cp949").splitlines()
+    payload = json.loads(out[0])
+    assert len(out) == 1 and payload["message"] == "한글 결과" and payload["preview"] == "? a ? b?c"
+    r = _run_launcher(tmp_path, code, encoding="utf-8")
     out = r.stdout.decode("utf-8").splitlines()
-    assert len(out) == 1 and json.loads(out[0])["preview"] == text
+    assert r.returncode == 0 and len(out) == 1 and json.loads(out[0])["preview"] == odd
 
 
 @needs_remote
@@ -318,7 +484,7 @@ def test_remote_launcher_fallback_json(tmp_path):
     for code, exit_code in (("import sys\nsys.exit(0)\n", 1), ("print('Traceback: boom')\n", 1),
                             ("import sys\nsys.stderr.write('x')\nsys.exit(3)\n", 3)):
         r = _run_launcher(tmp_path, code)
-        out = r.stdout.decode("utf-8").splitlines()
+        out = r.stdout.decode("cp949").splitlines()
         payload = json.loads(out[0])
         assert len(out) == 1 and payload["status"] == "error" and payload["agent_directive"].startswith("ERROR:")
         assert r.returncode == exit_code, code
