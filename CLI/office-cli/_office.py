@@ -410,9 +410,9 @@ def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "") -> Opt
         return None
 
 
-def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str = "") -> None:
+def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str = "") -> Optional[str]:
     """되돌릴 지점을 만들지 못한 쓰기를 기록합니다. undo가 이 작업을 건너뛰고 더 오래된 지점으로 되돌려
-    그 사이 작업까지 사라지게 하지 않도록 합니다 (기록 실패는 무시)."""
+    그 사이 작업까지 사라지게 하지 않도록 합니다 (기록 실패는 무시). 만든 기록 파일(.json) 경로를 돌려줍니다."""
     try:
         name = str(doc.Name)
         full = str(getattr(doc, "FullName", "") or "")
@@ -424,8 +424,9 @@ def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str 
                 "created_at": stamp, "created_ts": time.time(), "by": f"{tool} {command}".strip()}
         rt.safe_write_text(base + ".json", json.dumps(meta, ensure_ascii=False))
         _rotate_snapshots(kind, key)
+        return base + ".json"
     except Exception:
-        pass
+        return None
 
 
 def delete_snapshot(meta_file: str) -> None:
@@ -512,9 +513,11 @@ class OfficeTarget:
         return info
 
     # --- Excel ---
-    def sheet(self, name: Optional[str] = None, create: bool = False) -> Any:
-        """시트를 찾습니다 (대소문자 무시). 없으면 쓰기 세션 + create=True일 때만 만들고, 아니면 [추천]과 함께 오류.
-        create는 사용자가 새 시트를 명시한 경우(--new-sheet, sheet add)에만 켭니다. 오타 난 이름으로 새 시트를 만들지 않도록."""
+    def sheet(self, name: Optional[str] = None, create: bool = False, allow_create: bool = False) -> Any:
+        """시트를 찾습니다 (대소문자 무시). 없으면 쓰기 세션 + create=True일 때만 만들고, 아니면 [추천]/[후보]와 함께 오류.
+        create는 사용자가 새 시트를 명시한 경우(--new-sheet, sheet add)에만 켭니다. 오타 난 이름으로 새 시트를 만들지 않도록.
+        allow_create: 이 명령에 --new-sheet가 있어 '새 시트를 만들지' 물을 수 있는 경우(excel write)만 True.
+        그 밖의 명령(replace, style, range, chart 등)은 없는 옵션을 안내하지 않고 '찾을 수 없음'([후보]/[추천])."""
         sheets = self.doc.Worksheets
         if not name:
             try:
@@ -532,7 +535,7 @@ class OfficeTarget:
             ws.Name = name
             self.changed = True
             return ws
-        if self.readonly:
+        if self.readonly or not allow_create:
             raise rt.not_found("시트", name, names)
         raise missing_sheet(name, names)
 
@@ -740,13 +743,27 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
                                         "아무것도 바꾸지 않았습니다. 그 파일을 닫은 뒤 다시 실행하거나, 이 PC의 Office에서 열어 둔 뒤 요청하세요.",
                                         no_fallback=True)
 
+        point: Optional[str] = None       # 이 실행이 만든 되돌리기 지점(.json)
+        was_saved = is_saved(t.doc)
         if snapshot and not readonly:
             if t.source == "new":
-                save_barrier(kind, t.doc, "새로 만든 파일이라 되돌릴 이전 상태가 없음", tool, command)
-            elif save_snapshot(kind, t.doc, tool, command) is None:
-                save_barrier(kind, t.doc, "되돌리기용 스냅샷을 만들지 못함 (DRM, 크기 초과 등)", tool, command)
+                point = save_barrier(kind, t.doc, "새로 만든 파일이라 되돌릴 이전 상태가 없음", tool, command)
+            else:
+                data_file = save_snapshot(kind, t.doc, tool, command)
+                if data_file is None:
+                    point = save_barrier(kind, t.doc, "되돌리기용 스냅샷을 만들지 못함 (DRM, 크기 초과 등)", tool, command)
+                else:
+                    point = os.path.splitext(data_file)[0] + ".json"
 
-        yield t
+        try:
+            yield t
+        except BaseException as e:
+            # 쓰기 전에 멈춘 실행(입력 오류, needs_user_decision 등)의 지점은 지움: 남기면 다음 undo가 바뀐 것 없는
+            # 이 지점으로 되돌려 실제로 바꾼 작업이 그대로 남음. 저장 상태가 그대로인 문서도 바뀐 것이 없음
+            if point and (isinstance(e, rt.InputError) or (was_saved and is_saved(t.doc))):
+                delete_snapshot(point)
+                rt.debug("쓰기 전에 멈춰 이번 되돌리기 지점을 지웠습니다.")
+            raise
 
         if not readonly and focus:
             t.apply_focus()

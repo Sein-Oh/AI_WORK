@@ -454,7 +454,7 @@ def test_r2_partially_scanned_pdf_reports_pages_without_text(tmp_path, capsys):
     p = tmp_path / "부분스캔.pdf"
     doc = pymupdf.open()
     doc.new_page().insert_text((72, 72), "first page text", fontname="helv", fontsize=11)
-    doc.new_page().insert_image(pymupdf.Rect(72, 72, 200, 200), pixmap=_pixmap(pymupdf))   # 스캔 쪽(그림만, 1.4.11)
+    doc.new_page().insert_image(pymupdf.Rect(40, 40, 560, 800), pixmap=_pixmap(pymupdf))   # 스캔 쪽(쪽을 덮는 그림만, 1.4.12)
     doc.new_page().insert_text((72, 72), "third page text", fontname="helv", fontsize=11)
     doc.save(str(p))
     doc.close()
@@ -495,7 +495,7 @@ def test_r8_reader_save_is_reopened(tmp_path, capsys, monkeypatch):
     p.write_text("첫 단락\n\n둘째 단락", encoding="utf-8")
     code, out = _run(reader, capsys, "read", "--file", str(p), "--save", str(tmp_path / "o.csv"))
     assert code == 0 and out["agent_directive"].startswith("VERIFIED: 저장한 파일을 다시 열어")
-    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None: "저장한 파일을 다시 열지 못함 (테스트)")
+    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None, delimiter=None: "저장한 파일을 다시 열지 못함 (테스트)")
     code, out = _run(reader, capsys, "read", "--file", str(p), "--save", str(tmp_path / "o2.md"))
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:")
     code, out = _run(reader, capsys, "search", "--query", "단락", "--file", str(p), "--save", str(tmp_path / "s.md"))
@@ -518,4 +518,4 @@ def test_r9_index_reports_cache_write_failure(tmp_path, capsys, monkeypatch):
 
 
 def test_r9_normalize_doc_compat_filler_is_removed():
-    assert not hasattr(reader, "normalize_doc") and reader.PARSER_VERSION == 6
+    assert not hasattr(reader, "normalize_doc") and reader.PARSER_VERSION >= 6

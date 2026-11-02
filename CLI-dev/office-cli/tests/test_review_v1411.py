@@ -56,7 +56,7 @@ def _pdf(path, pages):
         if kind == "text":
             page.insert_text((72, 200), f"body text on page {i}", fontname="helv", fontsize=11)
         if kind == "image":
-            page.insert_image(pymupdf.Rect(72, 72, 300, 300), pixmap=_pixmap(pymupdf))
+            page.insert_image(pymupdf.Rect(40, 40, 560, 800), pixmap=_pixmap(pymupdf))   # 쪽을 덮는 그림 (1.4.12)
     doc.save(str(path))
     doc.close()
 
@@ -205,7 +205,7 @@ def test_a4_current_save_problem_is_unverified(capsys, monkeypatch):
     monkeypatch.setattr(outlook, "current_item", lambda app: (_Item(), "열린 창"))
     code, out = _run(outlook, capsys, "current", "--save")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED: 메일을 읽고 저장한"), out
-    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None: "저장한 파일을 다시 열지 못함 (테스트)")
+    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None, delimiter=None: "저장한 파일을 다시 열지 못함 (테스트)")
     code, out = _run(outlook, capsys, "current", "--save")
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["save_problem"]
 
@@ -318,7 +318,7 @@ def test_b4_excel_read_save_counts_non_blank_rows(tmp_path, capsys, monkeypatch)
     wb.save(str(p))
     code, out = _run(excel, capsys, "read", "--target", str(p), "--save", str(tmp_path / "o.csv"))
     assert code == 0 and out["agent_directive"].startswith("VERIFIED: 저장한 CSV를 다시 열어"), out
-    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None: "저장한 파일을 다시 열지 못함 (테스트)")
+    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None, delimiter=None: "저장한 파일을 다시 열지 못함 (테스트)")
     code, out = _run(excel, capsys, "read", "--target", str(p), "--save", str(tmp_path / "o2.csv"))
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:")
 
@@ -337,7 +337,7 @@ def test_b4_word_and_ppt_read_save_is_reopened(tmp_path, capsys, monkeypatch):
     for module, target in ((word, d), (ppt, s)):
         code, out = _run(module, capsys, "read", "--target", str(target), "--save", str(tmp_path / f"{target.stem}.md"))
         assert code == 0 and out["agent_directive"].startswith("VERIFIED: 저장한 파일을 다시 열어"), out
-    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None: "저장한 파일을 다시 열지 못함 (테스트)")
+    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None, delimiter=None: "저장한 파일을 다시 열지 못함 (테스트)")
     for module, target in ((word, d), (ppt, s)):
         code, out = _run(module, capsys, "read", "--target", str(target), "--save", str(tmp_path / f"{target.stem}2.md"))
         assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out

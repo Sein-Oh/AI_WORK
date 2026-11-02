@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.13**, **office-cli 1.4.11**
+- main 기준 도구 버전: **ml-kit 2.9.13**, **office-cli 1.4.12**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -19,6 +19,7 @@
 |---|---|
 | office-cli 1.4.10 | `ok()`가 `verified=False`를 거부하고 저장 파일은 형식별로 다시 열어 확인. `excel replace`가 `--range`의 시트에 씀. 결과가 ""인 수식 칸도 덮어쓰기 확인. `ppt write --title`로 다른 제목을 바꾸려면 `--overwrite`. 파일 이름만 준 쓰기 대상은 새로 만들지 않음(전체 경로만). reader 잘림·글자 없는 PDF 쪽을 알림. 오류 로그에서 본문·받는 사람 등 내용 값은 `<N자 생략>` |
 | office-cli 1.4.11 | 문서 색인 형식이 바뀜(PARSER_VERSION 6): 처음 검색 때 도구가 `index --all`을 안내하면 그대로 실행 |
+| office-cli 1.4.12 | 문서 색인 형식이 다시 바뀜(PARSER_VERSION 7, PDF 스캔 쪽 판정): 처음 검색 때 도구가 `index --all`을 안내하면 그대로 실행. 동시에 실행한 `index`도 색인 항목을 잃지 않음 |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count` |

@@ -23,13 +23,14 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.11"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.12"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
 # 결과 길이 기본 상한 (경량 LLM 컨텍스트 보호)
 DEFAULT_MAX_ROWS = 200
 DEFAULT_MAX_CHARS = 8000
+MAX_CELL_CHARS = 500        # JSON에 담는 셀·찾은 값 하나의 글자 상한 (전체는 --save 파일)
 # 작업 폴더 파일 보관 기간 (일)
 WORK_RETENTION_DAYS = 7
 # 오류 로그가 이보다 커지면 errors.old.txt로 넘기고 새로 시작 (1세대만 보관)
@@ -224,8 +225,9 @@ def _attach_recovered(payload: Dict[str, Any]) -> None:
         payload["recovered"] = list(RECOVERED)
 
 
-def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional[str]:
-    """저장한 파일을 형식에 맞게 다시 열어 봅니다 (R1). 문제가 없으면 None, 있으면 확인하지 못한 내용."""
+def check_saved_file(path: str, expected_rows: Optional[int] = None, delimiter: Optional[str] = None) -> Optional[str]:
+    """저장한 파일을 형식에 맞게 다시 열어 봅니다 (R1). 문제가 없으면 None, 있으면 확인하지 못한 내용.
+    delimiter: 이 도구가 쓴 CSV는 ","를 줌 (구분자 추측은 '| ' 같은 칸 때문에 다른 구분자로 읽어 행 수가 틀릴 수 있음)."""
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -249,7 +251,7 @@ def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional
             import pptx
             pptx.Presentation(path)
         elif ext in (".csv", ".tsv"):
-            rows = [r for r in read_csv_rows(path) if any(str(v).strip() for v in r)]
+            rows = [r for r in read_csv_rows(path, delimiter) if any(str(v).strip() for v in r)]
             if expected_rows is not None and len(rows) != expected_rows:
                 return f"저장한 CSV의 행 수가 다름 (기대 {expected_rows}행, 읽은 {len(rows)}행)"
         elif ext in (".md", ".txt", ".json"):
@@ -268,9 +270,9 @@ def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional
 
 
 def ok_file(tool: str, command: str, preview: str, path: str, directive: str,
-            expected_rows: Optional[int] = None, **fields: Any) -> Dict[str, Any]:
+            expected_rows: Optional[int] = None, delimiter: Optional[str] = None, **fields: Any) -> Dict[str, Any]:
     """저장한 파일 결과 (R1): 형식에 맞게 다시 열리면(CSV는 expected_rows를 주면 행 수까지) VERIFIED, 아니면 UNVERIFIED."""
-    problem = check_saved_file(path, expected_rows)
+    problem = check_saved_file(path, expected_rows, delimiter)
     if problem is None:
         return ok(tool, command, preview, directive, verified=True, **fields)
     return ok_unverified(tool, command, preview, [problem], **fields)
@@ -724,9 +726,11 @@ def read_text_file(path: str) -> str:
     raise InputError(f"텍스트 파일 인코딩 인식 실패 (UTF-8/UTF-16/CP949 아님): {path}")
 
 
-def read_csv_rows(path: str) -> List[List[str]]:
-    """CSV/TSV를 2차원 문자열 리스트로 읽습니다 (구분자 자동 판별)."""
+def read_csv_rows(path: str, delimiter: Optional[str] = None) -> List[List[str]]:
+    """CSV/TSV를 2차원 문자열 리스트로 읽습니다 (delimiter를 주지 않으면 구분자 자동 판별)."""
     text = read_text_file(path)
+    if delimiter:
+        return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
     sample = text[:4096]
     delimiter = ","
     try:
@@ -880,20 +884,46 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
     return InputError(f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra}{tail}")
 
 
+def clamp_cell(value: Any, max_chars: int = MAX_CELL_CHARS) -> Tuple[Any, bool]:
+    """긴 글 값 하나를 상한으로 자릅니다 (숫자 등 글이 아닌 값은 그대로). (값, 잘렸는지 여부)"""
+    if isinstance(value, str) and len(value) > max_chars:
+        return value[:max_chars], True
+    return value, False
+
+
 def clamp_rows(rows: List[List[Any]], max_rows: int = DEFAULT_MAX_ROWS,
-               max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[List[List[Any]], bool]:
-    """행 수와 대략적인 글자 수 상한으로 표를 자릅니다. (잘린 표, 잘렸는지 여부)"""
+               max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[List[List[Any]], bool, int]:
+    """행 수와 대략적인 글자 수 상한으로 표를 자릅니다. (잘린 표, 행이 잘렸는지, 글이 잘린 칸 수)
+    칸마다 MAX_CELL_CHARS에서 자르고, 첫 행도 글자 수 상한을 넘으면 넘는 칸부터 뺍니다 (첫 행이 아주 큰 표도 상한 안)."""
     out: List[List[Any]] = []
     used = 0
+    cells_cut = 0
     for row in rows:
         if len(out) >= max_rows:
-            return out, True
-        size = sum(len(str(v)) + 1 for v in row)
+            return out, True, cells_cut
+        cut_row = []
+        cut_here = 0
+        for v in row:
+            v, cut = clamp_cell(v)
+            cut_here += cut
+            cut_row.append(v)
+        size = sum(len(str(v)) + 1 for v in cut_row)
         if out and used + size > max_chars:
-            return out, True
-        out.append(row)
+            return out, True, cells_cut
+        if not out and size > max_chars:          # 첫 행만으로 상한을 넘음: 들어가는 칸까지만
+            keep, width = [], 0
+            for v in cut_row:
+                width += len(str(v)) + 1
+                if keep and width > max_chars:
+                    break
+                keep.append(v)
+            cells_cut += cut_here + len(cut_row) - len(keep)
+            out.append(keep)
+            return out, len(rows) > 1, cells_cut
+        cells_cut += cut_here
+        out.append(cut_row)
         used += size
-    return out, False
+    return out, False, cells_cut
 
 
 def clamp_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[str, bool]:

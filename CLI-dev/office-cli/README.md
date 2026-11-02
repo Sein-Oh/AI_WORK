@@ -60,6 +60,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - **쓰기는 고친 시트/슬라이드로만 이동합니다.** `--no-focus`를 주면 이동하지 않습니다.
 - **쓰기 전 스냅샷을 자동으로 만듭니다**(문서별 5개 보관, 50MB 초과 문서는 생략). 같은 경로에 다른 문서를 새로 만들면 이전 문서의 스냅샷은 되돌리기 대상에서 빠집니다(파일 속 만든 시각으로 판별).
   - 원본 문서는 저장하거나 경로를 바꾸지 않습니다.
+  - 쓰기 전에 멈춘 실행(입력 오류, `needs_user_decision`)은 만든 되돌리기 지점을 지웁니다. 남기면 다음 `undo`가 바뀐 것 없는 그 지점으로 되돌려 실제로 바꾼 작업이 그대로 남았습니다(1.4.12).
   - `office.py undo`로 되돌립니다. 결과 `restored_as`:
     | 경우 | `restored_as` | 동작 |
     |---|---|---|
@@ -79,6 +80,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 엑셀 쓰기에서 없는 시트: 새로 만들지 않습니다. 표기만 다른 시트(`Sheet 1`과 `Sheet1`)가 있으면 `[추천]`. 그 밖에는 `error_type: "needs_user_decision"`으로 있는 시트 목록을 알리고, 비슷한 기존 시트(`Sheet2`와 `Sheet1`)가 있으면 그 이름만 `[후보]`에 넣습니다. 새 시트는 `--new-sheet`로만 만듭니다.
     - message와 `[후보]`에는 `--new-sheet`나 "만드세요" 같은 명령문을 넣지 않습니다. 경량 LLM이 그 문장을 따라 사용자에게 묻지 않고 새 시트를 만들었기 때문입니다(1.2.2, 시나리오 10). `--new-sheet`는 `agent_directive`에만 "사용자가 만들라고 답한 경우에만"이라는 조건과 함께 적습니다.
     - 예: `시트 'Sheet9'이(가) 없습니다 (있는 시트: Sheet1). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. 이름이 비슷한 기존 시트에 쓸지, 새 시트를 만들지 사용자에게 물어보세요. [후보] Sheet1`
+    - `--new-sheet`가 있는 명령은 `excel write`뿐입니다. 그 밖의 명령(`replace`, `style`, `range`, `chart` 등)의 없는 시트는 읽기와 같은 "찾을 수 없음"(`[추천]`/`[후보]`)이고 `--new-sheet`를 안내하지 않습니다(1.4.12, 이전에는 그 명령에 없는 옵션을 붙이라고 안내).
   - 워드 `--anchor`가 여러 단락에 있으면 `[후보]`(번호와 단락 앞부분)로 오류. `--occurrence N`으로 고릅니다. 찾지 못하면 비슷한 문구를 안내합니다 (공백·대소문자 차이 등 확실할 때만 `[추천]`, `--pos replace`에서는 더 엄격).
   - `office.py transfer --to excel --sheet 이름`은 새 시트 이름입니다(transfer는 항상 새 시트에 받습니다). 이미 있으면 덮어쓰지 않고 비어 있는 이름을 `[추천]`, 덮어쓰기는 `--overwrite`.
   - 쓰기 `--target`에 파일 이름만 주었는데 열린 문서도 파일도 아니면 새 파일을 만들지 않고 "찾을 수 없음"(열린 문서가 있으면 `[후보]`). 새 파일은 전체 경로를 줄 때만 만듭니다(1.4.10, 이전에는 현재 폴더에 만들어 거기에 씀).
@@ -97,6 +99,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 입력 파일은 절대경로 -> data 폴더 -> 작업 폴더 순서로 찾습니다. 없으면 비슷한 파일명을 `[추천]`으로 알려 줍니다.
 - 텍스트 입력은 UTF-8, UTF-16, CP949를 자동으로 판별합니다. CSV 출력은 기본 utf-8-sig입니다(Excel에서 한글 정상).
 - 결과가 길면 기본 200행 또는 약 8,000자에서 자르고 `truncated: true`와 이어 읽기 명령을 줍니다.
+  엑셀 칸 값과 찾은 값은 하나에 500자(`value_truncated`), 슬라이드 글·워드 단락·PPT 노트는 하나에 약 8,000자(`text_truncated`, `text_chars`)에서 자릅니다.
+  잘린 것이 있으면 `truncated: true`, `truncated_reason`과 `--save` 명령(저장 파일에는 전체, PPT 노트는 저장 명령이 없어 PowerPoint에서 확인)을 줍니다(1.4.12, 이전에는 첫 행·첫 슬라이드가 아무리 커도 그대로 넣음).
+- 도구가 쓴 CSV는 다시 읽을 때 `,`로 읽습니다(구분자 추측이 `| ` 같은 칸 때문에 `|`를 골라 행 수가 틀려 `UNVERIFIED`가 되던 문제, 1.4.12).
 
 ### 오류 로그
 - 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 `<data 폴더>\logs\errors.txt`에 덧붙습니다. `C:\CLI`에 배치했다면 `C:\CLI\office-cli\data\logs\errors.txt`(`config.json`의 `data_dir`나 `OFFICE_CLI_DATA_DIR`를 바꿨으면 그 폴더 아래).
@@ -124,6 +129,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
 - 첫 열이 숫자인 `line` 차트는 x축이 숫자 축이 되도록 `scatter_lines`로 그립니다(예: 사인 그래프).
 - `--at`을 생략하면 차트는 시트의 데이터(사용 범위) 오른쪽에 놓여 다른 데이터를 가리지 않습니다.
+- 칸 주소는 엑셀 범위(1~1,048,576행, A~XFD열) 안이어야 합니다. `A0`, `0:3`, `XFE1`은 STOP_RETRY(1.4.12, 이전에는 닫힌 파일에서 그대로 읽음).
+- 닫힌 xlsx에서 범위를 직접 주면(`A1:C5`) 데이터 뒤의 빈 행까지 그 범위만큼 `rows`를 셉니다(열린 문서와 같음, 1.4.12). 범위를 생략하면 끝쪽 빈 행은 뺍니다.
 
 ### word.py
 | 명령 | 주요 옵션 |
@@ -161,10 +168,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 명령 | 하는 일 |
 |---|---|
 | `index --folder 폴더 [--depth 3 \| --recursive] [--max-files 300]` | 폴더의 문서를 내용 출력 없이 캐시에 등록. 결과: `count`, `indexed`, `updated`, `unchanged`, `failed`, `failures`(20개까지), `remaining`, `truncated`, `skipped_types`(지원하지 않는 확장자별 개수) |
-| `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음) |
+| `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
 | `read --file 경로 [--pages 1-3 \| --units 57-120] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
 | `search --query "A AND B" \| "A OR B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
-| `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌. 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`) |
+| `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌. 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`) |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
 
 - 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 1.3.0에서 뺐습니다 (Outlook 통합 도구에서 별도로 다룰 예정).
@@ -177,10 +184,12 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   옛 내용으로 검색하고 결과 항목에 `stale: true`, `stale_cache_count`와 `index --all` 명령. 원본이 지워진 문서는 `file_missing: true`.
 - 이전 파서 형식의 캐시는 단위 키가 달라 다시 읽지 못하면 검색하지 않고 `skipped`로만 알립니다(`stale`에는 세지 않음). 이유는 셋입니다(1.4.11):
   검색 때 다시 읽는 상한 20개를 넘음 / 다시 읽기 실패 -> `index --all` 명령, 원본이 없어 다시 읽을 수 없음 -> `clear --missing --dry-run` 명령(`index --all`로는 다시 읽을 수 없어 같은 안내가 반복됨).
+  캐시 파일이 없거나 손상됐는데 원본도 없는 문서도 같습니다(`missing_file_count`에 세고 `clear --missing --dry-run`, 1.4.12).
   할 명령은 `not_searched`와 `UNVERIFIED:` directive 문구에도 넣습니다.
 - 검색 범위가 불완전하면(등록하지 못한 파일, 읽지 못한 파일, 다시 읽지 못한 캐시, 글자 없는 스캔 PDF, `--pages`/`--section` 안에 글자 없이 그림만 있는 쪽이 있는 PDF, 20,000행에서 자른 엑셀, 들어가지 않은 하위 폴더)
   `not_searched` 목록과 함께 `UNVERIFIED:`로 응답합니다. 0건이어도 "근거 없음"으로 단정하지 않게 하기 위해서입니다.
-  PDF의 "글자 없는 쪽"은 머리글·쪽 번호를 빼기 전에도 글이 없고 그림이 있는 쪽만입니다(빈 쪽·간지는 해당 없음, 1.4.11). 글이 없는 쪽의 장절은 바로 앞 글의 장절로 봅니다.
+  PDF의 "글자 없는 쪽"은 머리글·쪽 번호(스캔 위에 찍은 Bates 번호 포함)를 뺀 뒤 글이 없고, 그림이 쪽 면적의 40% 이상을 덮는 쪽입니다(1.4.12).
+  빈 쪽·간지(쪽마다 있는 작은 로고만 있는 쪽 포함)는 해당 없고, 그림 위에 OCR 글자 층이 있는 쪽은 글이 있으므로 해당 없습니다. 글이 없는 쪽의 장절은 바로 앞 글의 장절로 봅니다.
 - 검색어: `A AND B`, `A OR B`(대소문자 무관, AND가 먼저 묶임), `"설계 기준"`(따옴표는 구문, 검색어에 넣지 않음), 연산자 없이 이어진 단어는 한 구문.
   띄어쓰기, 줄바꿈, 기호(`# - . : / ( )` 등)는 무시하고 비교합니다: `SOI 1` = `SOI #1` = `SOI-1`, `설계기준` = `설계 기준`, PDF 줄바꿈으로 갈라진 글.
   숫자 경계는 지킵니다: `SOI 1`은 `SOI #10`, `SOI 21`과 맞지 않고, `1.2`는 `11.2`, `3.1.2`와 맞지 않습니다.
@@ -193,8 +202,12 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `evidence` 형식: `규격서.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`. 쪽이 없으면 `loc`(예: `매출.xlsx 매출!12행`), Word 쪽을 쪽 나눔으로만 셌으면 `p.3(추정)`.
 - `--save`: `.xlsx`(머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정), `.csv`, `.md`(기본). 열: 파일, 쪽, 장절, 번호, 위치, 내용(문장/단락), 문맥. `.md`에는 항목마다 `근거:` 줄. 저장 파일에는 `--top`과 관계없이 전체(최대 5,000건)를 담습니다. 5,000건을 넘으면 `save_truncated`와 함께 `UNVERIFIED:`. 저장한 파일은 다시 열어 확인합니다(`save_problem`이 있으면 `UNVERIFIED:`). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `save_problem`(`.md`는 전체).
 - `index`: 새로 읽은 문서의 캐시 파일이 실제로 저장됐는지 확인하고, 저장하지 못한 파일이 있으면 `cache_failed`와 함께 `UNVERIFIED:`.
+  끝에 색인을 다시 읽어 불러온 문서가 모두 있는지 확인하고, 빠진 것(동시에 실행한 다른 `index`가 덮어씀)은 다시 넣어 `recovered`로 알립니다. 다시 넣지 못하면 `index_missing`과 `UNVERIFIED:`.
+- 색인 읽기-고치기-쓰기는 `cache/index.lock`으로 한 실행씩만 합니다(1.4.12, 이전에는 두 `index`를 동시에 실행하면 항목이 사라짐). 최대 10초 기다리고, 60초보다 오래된 잠금은 중단된 실행이 남긴 것으로 보고 지웁니다. 10초 안에 얻지 못하면 잠금 없이 진행합니다(위 확인이 빠진 항목을 채움).
+- `--top`은 50, `--context`는 500까지(넘으면 줄이고 `warnings`). `--full`의 JSON `text`는 2,000자까지(잘리면 `text_truncated`, `text_chars`, `truncated: true`, 저장 명령에 `--full`).
+- `--save .xlsx/.csv`의 문맥 칸: `--full`이면 단락 전체(`.xlsx`는 셀 상한 32,000자 확인), 아니면 3,000자까지이고 잘린 행 수를 `context_clamped`와 directive로 알립니다(1.4.12, 이전에는 `--full`을 무시하고 말없이 자름).
 
-#### 캐시 형식 (모든 형식 공통, `PARSER_VERSION` 6)
+#### 캐시 형식 (모든 형식 공통, `PARSER_VERSION` 7)
 문서마다 `cache/docs/<해시>.json` = `{file, type, mtime, size, parser_version, parsed_at, meta, units}`, 색인 `cache/index.json`(경로별 형식, 단위 수, 쪽 수, 장절 수, 수정 시각, 크기, 파서 버전).
 
 | 단위 키 | 뜻 |
@@ -211,7 +224,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 표는 **행 단위**입니다. 첫 행이 머리글로 보이면(짧은 글, 숫자만 있는 칸 없음) 각 행을 `항목: 내전압 | 기준: 1.5 kV 1분 | 시험방법: KS C 1234`처럼 만들어, 기준 값을 검색하면 그 요구사항 행이 머리글과 함께 나옵니다.
   병합/빈 머리글 칸은 앞 칸 머리글을 이어 쓰고, 여러 줄 칸은 공백으로 잇습니다. 행의 `number`는 첫 칸이 번호(`1`, `1.2`, `REQ-001`)일 때. DOCX는 표 단위 대신 행 단위만 둡니다(같은 내용이 두 번 걸리지 않게).
   PDF는 pymupdf `find_tables()`로 선이 있는 표를 찾아 행 단위로 넣고, 표 영역의 글은 단락에서 뺍니다. 표를 못 찾으면 단락으로 처리합니다.
-- `PARSER_VERSION`이 다른(이전 형식) 캐시는 그대로 검색하지 않습니다(1.4.10에서 빈 키를 채우던 보정 삭제). 검색 때 원본에서 다시 읽고(20개까지), 다시 읽지 못하면 `skipped`로 알립니다(위 "검색과 캐시"). `read`, `index`로 다시 읽으면 새 형식으로 바뀝니다. 5: PDF 글자 없는 쪽 `meta.pages_without_text`, 6: 그 쪽을 그림이 있는 쪽으로 좁힘(1.4.11).
+- `PARSER_VERSION`이 다른(이전 형식) 캐시는 그대로 검색하지 않습니다(1.4.10에서 빈 키를 채우던 보정 삭제). 검색 때 원본에서 다시 읽고(20개까지), 다시 읽지 못하면 `skipped`로 알립니다(위 "검색과 캐시"). `read`, `index`로 다시 읽으면 새 형식으로 바뀝니다. 5: PDF 글자 없는 쪽 `meta.pages_without_text`, 6: 그 쪽을 그림이 있는 쪽으로 좁힘(1.4.11), 7: 머리글·쪽 번호를 뺀 뒤 글이 없고 그림이 쪽 면적의 40% 이상을 덮는 쪽(1.4.12).
 
 | 형식 | `page` / `page_source` | 장절 |
 |---|---|---|

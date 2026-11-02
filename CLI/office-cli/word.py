@@ -307,18 +307,35 @@ def cmd_read(args) -> Dict[str, Any]:
                      **result)
     shown: List[Dict[str, Any]] = []
     used = 0
+    text_cut = 0
     for u in selected:
         size = len(u["text"]) + 12
         if shown and used + size > rt.DEFAULT_MAX_CHARS:
             break
-        item = {"no": u["no"], "heading": u["heading"], "text": rt.clamp_text(u["text"], rt.DEFAULT_MAX_CHARS)[0]}
+        text, cut = rt.clamp_text(u["text"], rt.DEFAULT_MAX_CHARS)
+        item = {"no": u["no"], "heading": u["heading"], "text": text}
+        if cut:                                  # 아주 긴 단락: 앞부분만 (전체는 --save 파일)
+            item.update(text_truncated=True, text_chars=len(u["text"]))
+            text_cut += 1
         if args.pages and u.get("page") is not None:
             item["page"] = u["page"]
         shown.append(item)
         used += size
-    truncated = len(shown) < len(selected)
+    truncated = len(shown) < len(selected) or bool(text_cut)
     result.update(paragraphs=shown, truncated=truncated)
-    if truncated:
+    if text_cut:
+        result["truncated_reason"] = f"{rt.DEFAULT_MAX_CHARS}자보다 긴 단락 {text_cut}개는 앞부분만 표시 (text_truncated, 전체는 --save)"
+    if truncated and len(shown) == len(selected):
+        # 단락 글만 잘림: 이어 읽을 단락은 없고 저장 파일에 전체가 있음
+        save_args = ["read", "--target", args.target]
+        if args.section:
+            save_args += ["--section", args.section] + (["--occurrence", str(args.occurrence)] if args.occurrence else [])
+        elif args.pages:
+            save_args += ["--pages", args.pages]
+        elif args.paragraphs:
+            save_args += ["--paragraphs", args.paragraphs]
+        result["next_commands"] = [rt.next_command("word.py", save_args + ["--save"], "잘린 단락까지 전체를 md 파일로 저장")]
+    elif truncated:
         rest = selected[len(shown):]
         if not filtered:
             nxt = shown[-1]["no"] + 1

@@ -2,6 +2,31 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.12] - 2026-11-02
+
+3차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1412.py`.
+
+### 수정 (reader)
+- `index`를 동시에 두 번 실행하면(다른 폴더) 색인(`index.json`) 항목이 사라지던 문제. 색인 읽기-고치기-쓰기를 `cache/index.lock`으로 잠급니다
+  (O_CREAT|O_EXCL, 최대 10초 대기, 60초보다 오래된 잠금은 지움). `index`는 끝에 색인을 다시 읽어 빠진 문서를 다시 넣고(`recovered`) 확인한 뒤에만 `VERIFIED`,
+  다시 넣지 못하면 `index_missing`과 `UNVERIFIED`. `index --all`은 색인에 없는 캐시 파일 중 원본이 있는 문서도 다시 넣습니다(`readded_to_index`).
+- PDF 글자 없는 쪽: 스캔 쪽에 찍힌 쪽 번호(Bates)가 있으면 놓치고, 쪽마다 작은 로고가 있는 빈 쪽은 "OCR 필요"로 알리던 문제.
+  이제 머리글·쪽 번호를 뺀 뒤 글이 없고 그림이 쪽 면적의 40% 이상을 덮는 쪽만 `pages_without_text`(OCR 글자 층이 있는 쪽은 제외, `PARSER_VERSION` 7).
+- 캐시 파일이 없거나 손상됐는데 원본도 없는 문서: `index --all`을 안내해 같은 안내가 반복되던 문제. 원본 없음으로 세고(`missing_file_count`) `clear --missing --dry-run` 명령.
+- `search --save x.xlsx|x.csv --full`이 `--full`을 무시하고 문맥을 3,000자에서 말없이 자르던 문제. `--full`이면 단락 전체(`.xlsx`는 셀 상한 확인), 아니면 잘린 행 수를 `context_clamped`와 directive로 알립니다.
+  JSON `--full`의 `text`가 2,000자에서 잘려도 표시가 없던 문제(`text_truncated`, `text_chars`, `truncated: true`, 저장 명령에 `--full`).
+- `search --top`, `--context`에 상한이 없어 출력이 끝없이 커지던 문제. `--top` 50, `--context` 500까지(`warnings`, 더 많은 결과는 `--save`).
+- `clear --file/--folder`가 `~`를 풀지 않던 문제(`search`/`read`와 같게).
+
+### 수정 (엑셀·워드·PPT·공통)
+- 없는 시트: `--new-sheet`가 없는 명령(`excel replace/style/range/chart`)에도 "`--new-sheet`를 붙여 실행"을 안내해 인자 오류가 나던 문제. 그 명령들은 "찾을 수 없음"(`[후보]`/`[추천]`), `excel write`만 새 시트를 물음.
+- 되돌리기: 쓰기 전에 멈춘 실행(입력 오류, `needs_user_decision`)도 스냅샷을 남겨, 다음 `office.py undo`가 바뀐 것 없는 그 지점으로 되돌리던 문제. 그 실행이 만든 지점을 지웁니다.
+- 출력 크기: 엑셀 읽기의 첫 행, 찾은 칸 값, 슬라이드 글이 아무리 커도 그대로 들어가던 문제. 칸·찾은 값은 500자(`value_truncated`), 슬라이드 글은 약 8,000자(`text_truncated`)에서 자르고 `truncated: true`와 `--save` 명령.
+  워드 단락·PPT 노트가 약 8,000자에서 잘려도 `truncated: false`였던 문제(`text_truncated`, `truncated_reason`). `_runtime.clamp_rows`는 (표, 행 잘림, 잘린 칸 수)를 돌려줍니다.
+- 엑셀 칸 주소 `A0`, `0:3`, `A1048577`, `XFE1`을 받아 닫힌 파일에서 그대로 읽던 문제(STOP_RETRY).
+- 도구가 쓴 CSV를 다시 읽을 때 구분자를 추측해 `' | '` 같은 칸이 있으면 행 수가 틀려 `UNVERIFIED`가 되던 문제(`check_saved_file(..., delimiter=",")`).
+- 닫힌 xlsx에서 범위를 직접 준 읽기(`A1:C5`)가 데이터 뒤의 빈 행을 빼 `rows`가 열린 문서와 달랐던 문제(준 범위만큼 채움).
+
 ## [1.4.11] - 2026-11-02
 
 2차 점검에서 찾은 오류 수정 (1.4.10 회귀 포함). 회귀 테스트: `tests/test_review_v1411.py`.

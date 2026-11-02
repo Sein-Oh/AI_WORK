@@ -19,11 +19,13 @@
     python reader.py search --query "단가" --file "C:\\docs\\견적" --pages 3-7 --section "SCOPE"
     python reader.py list --name 규격
 """
+import contextlib
 import hashlib
 import json
 import os
 import re
 import sys
+import time
 import unicodedata
 import zipfile
 import zlib
@@ -42,16 +44,23 @@ SUPPORTED = {
 }
 UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행"}
 PAGE_TYPES = ("pdf", "pptx")   # read --pages가 실제 쪽/슬라이드 번호인 형식 (그 밖은 항목 번호)
-PARSER_VERSION = 6          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만)
+PARSER_VERSION = 7          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만)
+SCAN_IMAGE_COVER = 0.4      # 글자 없는 쪽을 스캔 쪽으로 보는 그림 면적 비율 (쪽 면적 대비)
 MAX_SHEET_ROWS = 20000      # xlsx 시트당 최대 행 수
 MAX_FOLDER_FILES = 300      # 한 번에 새로 등록(파싱)할 최대 파일 수
 MAX_FOLDER_DEPTH = 3        # 폴더 기본 탐색 깊이
 MAX_FOLDER_SCAN = 20000     # 폴더에서 살펴볼 최대 파일 수
 MAX_LIST_ITEMS = 20         # JSON에 담는 실패/새 등록 목록 상한
 MAX_SAVE_HITS = 5000        # --save 파일에 담는 최대 검색 결과 수
+MAX_SEARCH_TOP = 50         # search --top 상한 (더 많은 결과는 --save 파일로)
+MAX_SEARCH_CONTEXT = 500    # search --context(스니펫 앞뒤 글자 수) 상한
+SEARCH_JSON_FULL_CHARS = 2000   # search --full의 JSON 항목 text 상한 (전체는 --save)
+SAVE_CONTEXT_CHARS = 3000   # search --save의 '문맥' 칸 상한 (--full이면 단위 전체)
 STALE_REFRESH_MAX = 20      # 검색 때 원본이 바뀐 캐시를 그 자리에서 다시 읽는 최대 문서 수
 HEADING_MAX_CHARS = 80      # 번호로 시작하는 짧은 줄만 제목 후보 (굵게/큰 글씨는 120)
 LEGACY_OFFICE = (".xls", ".doc", ".ppt")
+INDEX_LOCK_WAIT = 10.0      # 색인 잠금(index.lock)을 기다리는 최대 초 (동시 실행)
+INDEX_LOCK_STALE = 60.0     # 이보다 오래된 잠금 파일은 중단된 실행이 남긴 것으로 보고 지움
 
 
 # ==============================================================================
@@ -499,14 +508,18 @@ def _parse_pdf(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         if doc.needs_pass:
             raise rt.InputError(f"암호가 걸린 PDF입니다: {os.path.basename(path)}")
         raw = [(_pdf_items(page, _pdf_tables(page)), float(page.rect.height), float(page.rect.width)) for page in doc]
-        # 스캔 쪽 후보: 머리글·쪽 번호를 빼기 전에도 글이 없고 그림이 있는 쪽 (빈 쪽·간지는 OCR 대상이 아님)
-        scanned = [pno for pno, page in enumerate(doc, 1) if not raw[pno - 1][0] and _page_has_images(page)]
+        # 그림이 쪽 면적의 큰 부분을 덮는지는 문서를 닫기 전에 셈 (작은 로고·도장은 스캔 쪽이 아님)
+        image_cover = [_page_image_cover(page) for page in doc]
         meta = {"pages": doc.page_count, "title": (doc.metadata or {}).get("title") or ""}
     finally:
         doc.close()
     removed = _drop_headers_footers([(items, h) for items, h, _ in raw])
     if removed:
         meta["header_footer_removed"] = removed
+    # 스캔 쪽 후보: 머리글·쪽 번호(스캔 위에 찍은 Bates 번호 포함)를 뺀 뒤 글이 없고, 그림이 쪽의 큰 부분을 덮는 쪽.
+    # 빈 쪽·간지(로고만 있는 쪽 포함)는 OCR 대상이 아님. 그림 위에 글자 층(OCR)이 있는 쪽은 글이 있으므로 제외.
+    scanned = [pno for pno, (items, _, _) in enumerate(raw, 1)
+               if not items and image_cover[pno - 1] >= SCAN_IMAGE_COVER]
     pages = [_order_items(items, w) for items, _, w in raw]
 
     sizes: Counter = Counter()
@@ -562,11 +575,24 @@ def _parse_pdf(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     return b.units, meta
 
 
-def _page_has_images(page: Any) -> bool:
+def _page_image_cover(page: Any) -> float:
+    """쪽 면적 중 그림이 덮는 비율 (0~1). 그림 면적의 합이라 겹친 그림은 두 번 셀 수 있어 1에서 자릅니다."""
     try:
-        return bool(page.get_images())
+        rect = page.rect
+        area = float(rect.width) * float(rect.height)
+        if area <= 0:
+            return 0.0
+        total = 0.0
+        for info in page.get_image_info():
+            x0, y0, x1, y1 = info.get("bbox") or (0, 0, 0, 0)
+            # 쪽 밖으로 나간 부분은 셈하지 않음
+            w = min(x1, rect.x1) - max(x0, rect.x0)
+            h = min(y1, rect.y1) - max(y0, rect.y0)
+            if w > 0 and h > 0:
+                total += w * h
+        return min(1.0, total / area)
     except Exception:
-        return False
+        return 0.0
 
 
 def _page_list(pages: List[int], limit: int = 10) -> str:
@@ -1308,6 +1334,56 @@ def _save_index(index: Dict[str, Dict[str, Any]]) -> None:
     rt.safe_write_text(_index_path(), json.dumps(index, ensure_ascii=False))
 
 
+@contextlib.contextmanager
+def _index_lock():
+    """색인 읽기-고치기-쓰기를 한 실행씩만 하게 잠급니다 (동시에 index를 두 번 실행하면 항목이 사라지던 문제).
+    잠금 파일을 O_CREAT|O_EXCL로 만들고(Windows·Linux 공통), 최대 INDEX_LOCK_WAIT초 기다립니다.
+    INDEX_LOCK_STALE초보다 오래된 잠금은 중단된 실행이 남긴 것으로 보고 지웁니다.
+    끝내 얻지 못하면 잠금 없이 진행하고 경고만 남깁니다 (index는 끝에 색인을 다시 읽어 빠진 항목을 채움)."""
+    path = os.path.join(rt.get_cache_dir(), "index.lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    deadline = time.monotonic() + INDEX_LOCK_WAIT
+    acquired = False
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, str(os.getpid()).encode("ascii"))
+            finally:
+                os.close(fd)
+            acquired = True
+            break
+        except (FileExistsError, PermissionError):       # Windows: 지우는 중인 파일은 PermissionError
+            try:
+                if time.time() - os.path.getmtime(path) > INDEX_LOCK_STALE:
+                    os.remove(path)
+                    rt.log("WARN", f"{int(INDEX_LOCK_STALE)}초보다 오래된 색인 잠금(중단된 실행)을 지웠습니다.")
+                    continue
+            except OSError:
+                pass
+        if time.monotonic() >= deadline:
+            rt.log("WARN", f"색인 잠금을 {int(INDEX_LOCK_WAIT)}초 안에 얻지 못해 잠금 없이 진행합니다.")
+            break
+        time.sleep(0.05)
+    try:
+        yield
+    finally:
+        if acquired:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def _index_update(change) -> Dict[str, Dict[str, Any]]:
+    """잠근 상태에서 색인을 읽고 change(index)로 고친 뒤 저장합니다. 고친 색인을 돌려줍니다."""
+    with _index_lock():
+        index = load_index()
+        change(index)
+        _save_index(index)
+    return index
+
+
 def _index_put(index: Dict[str, Dict[str, Any]], path: str, entry: Dict[str, Any]) -> None:
     key = os.path.normcase(path)
     for old in [k for k in index if os.path.normcase(k) == key]:
@@ -1329,8 +1405,7 @@ def _ensure_indexed(path: str, doc: Dict[str, Any], cache_file: str) -> None:
         entry = next((e for k, e in index.items() if os.path.normcase(k) == os.path.normcase(path)), None)
         if entry and all(entry.get(k) == doc.get(k) for k in ("mtime", "size", "parser_version")):
             return
-        _index_put(index, path, _index_entry(doc, cache_file))
-        _save_index(index)
+        _index_update(lambda idx: _index_put(idx, path, _index_entry(doc, cache_file)))
         rt.log("WARN", f"캐시는 있는데 색인에서 빠진 문서를 색인에 다시 넣었습니다: {os.path.basename(path)}")
     except Exception:
         pass
@@ -1400,9 +1475,7 @@ def load_document_status(path: str, use_cache: bool = True, check_index: bool = 
            "parser_version": PARSER_VERSION, "parsed_at": rt.timestamp(), "meta": meta, "units": units}
     try:
         rt.safe_write_text(cache_file, json.dumps(doc, ensure_ascii=False))
-        index = load_index()
-        _index_put(index, path, _index_entry(doc, cache_file))
-        _save_index(index)
+        _index_update(lambda idx: _index_put(idx, path, _index_entry(doc, cache_file)))
     except OSError as e:
         doc["_cache_failed"] = True          # index가 '캐시에 저장 확인'이라고 하지 않게
         rt.log("WARN", f"캐시 저장 실패 (결과에는 영향 없음): {e}")
@@ -1704,7 +1777,7 @@ def cmd_read(args) -> Dict[str, Any]:
         result.update(output_file=out, next_commands=_write_next_commands(out))
         preview = f"{name}: {len(selected)}개 {unit_name}을(를) 파일로 저장했습니다 ({out})"
         # R1: 저장한 파일을 다시 열어 확인 (CSV는 행 수까지)
-        problems = [p for p in [rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None)] if p]
+        problems = [p for p in [rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None, delimiter=",")] if p]
         reasons: List[str] = []
         if cut_cells:
             reasons.append(_xlsx_cut_text(cut_cells))
@@ -1821,6 +1894,7 @@ def cmd_index(args) -> Dict[str, Any]:
     skipped_types: Dict[str, int] = {}
     missing = 0
     target = ""
+    orphan_docs: List[str] = []
     if args.folder:
         target = _folder_arg(args.folder)
         depth = 50 if args.recursive else max(0, args.depth)
@@ -1834,7 +1908,18 @@ def cmd_index(args) -> Dict[str, Any]:
         files = [p for p in index if os.path.exists(p)]
         missing = len(index) - len(files)
         target = "(등록된 문서 전체)"
+        # 색인에서 빠진 캐시 파일(동시 실행, 색인 저장 전 중단)도 원본이 있으면 다시 넣음 (JIT 복구)
+        orphan_docs = _orphan_cache_files(index)
+        if orphan_docs:
+            files += orphan_docs
+            rt.log("WARN", f"색인에 없는 캐시 문서 {len(orphan_docs)}개를 찾아 다시 등록합니다.")
     res = _index_files(files, max(1, args.max_files))
+    readded = [d for d in res["docs"]
+               if os.path.normcase(d["file"]) in {os.path.normcase(p) for p in orphan_docs}] if orphan_docs else []
+    if readded:
+        rt.note_recovered(f"색인에서 빠진 캐시 문서 {len(readded)}개 -> 색인에 다시 넣음")
+    # 동시 실행 등으로 색인에서 빠진 문서를 다시 넣고 확인한 뒤에만 VERIFIED (JIT 복구)
+    lost = _repair_index(res["docs"])
     failures = [{"file": os.path.basename(f["file"]), "path": f["file"], "reason": f["reason"]} for f in res["failures"]]
     result: Dict[str, Any] = {
         "target": target, "count": len(files), "indexed": len(res["new"]), "updated": len(res["updated"]),
@@ -1846,6 +1931,8 @@ def cmd_index(args) -> Dict[str, Any]:
         result["skipped_types"] = skipped_types
     if missing:
         result["missing"] = missing
+    if readded:
+        result["readded_to_index"] = len(readded)
     nexts: List[Dict[str, str]] = []
     if res["remaining"]:
         same = ["index"] + (["--folder", target] if args.folder else ["--all"]) + ["--max-files", str(args.max_files)]
@@ -1869,6 +1956,11 @@ def cmd_index(args) -> Dict[str, Any]:
     # R1: 새로 읽은 문서의 캐시 파일이 실제로 저장됐는지 확인 (캐시 저장 실패는 결과 JSON에만 보이지 않던 문제)
     unsaved = [os.path.basename(d["file"]) for d in res["docs"]
                if d.get("_cache_failed") or not os.path.isfile(_doc_cache_path(d["file"]))]
+    if lost:
+        result["index_missing"] = lost[:MAX_LIST_ITEMS]
+        return rt.ok_unverified(TOOL, "index", preview,
+                                [f"색인에 넣지 못한 파일 {len(lost)}개 (검색에서 빠질 수 있음, 다시 index 실행): "
+                                 + ", ".join(lost[:5])], **result)
     if unsaved:
         result["cache_failed"] = unsaved[:MAX_LIST_ITEMS]
         return rt.ok_unverified(TOOL, "index", preview,
@@ -1880,6 +1972,55 @@ def cmd_index(args) -> Dict[str, Any]:
         directive = ("VERIFIED: 등록 완료(캐시에 저장 확인). 이제 reader.py search로 검색할 수 있습니다. "
                      "실패한 파일이 있으면 failures를 사용자에게 알리세요.")
     return rt.ok(TOOL, "index", preview, directive, **result)
+
+
+def _orphan_cache_files(index: Dict[str, Dict[str, Any]]) -> List[str]:
+    """색인에 없는 캐시 파일 중 원본이 아직 있는 문서의 경로 (index --all이 다시 넣을 대상)."""
+    cache_dir = os.path.join(rt.get_cache_dir(), "docs")
+    if not os.path.isdir(cache_dir):
+        return []
+    known = {os.path.basename(_doc_cache_path(p)) for p in index}
+    found: List[str] = []
+    for name in sorted(os.listdir(cache_dir)):
+        if not name.endswith(".json") or name in known:
+            continue
+        try:
+            path = json.loads(rt.read_text_file(os.path.join(cache_dir, name))).get("file")
+        except Exception:
+            continue                       # 손상된 캐시 파일은 clear --all이 정리
+        if (isinstance(path, str) and os.path.isfile(path) and os.path.basename(_doc_cache_path(path)) == name
+                and os.path.splitext(path)[1].lower() in SUPPORTED):
+            found.append(path)
+    return found
+
+
+def _repair_index(docs: List[Dict[str, Any]]) -> List[str]:
+    """불러온 문서가 색인에 모두 있는지 다시 읽어 확인하고, 빠진 것(다른 실행이 동시에 색인을 덮어씀)을 다시 넣습니다.
+    다시 넣은 뒤에도 빠진 파일 이름 목록을 돌려줍니다 (비면 확인 완료)."""
+    want = {os.path.normcase(os.path.abspath(d["file"])): d for d in docs
+            if not d.get("_cache_failed") and os.path.isfile(_doc_cache_path(d["file"]))}
+
+    def absent() -> List[Dict[str, Any]]:
+        have = {os.path.normcase(os.path.abspath(k)) for k in load_index()}
+        return [d for k, d in want.items() if k not in have]
+
+    lost = absent()
+    if not lost:
+        return []
+
+    def put(index: Dict[str, Dict[str, Any]]) -> None:
+        for d in lost:
+            _index_put(index, d["file"], _index_entry(d, _doc_cache_path(d["file"])))
+    try:
+        _index_update(put)
+    except OSError as e:
+        rt.log("WARN", f"색인 고치기 실패: {e}")
+    still = absent()
+    fixed = len(lost) - len(still)
+    if fixed:
+        rt.log("WARN", f"색인에서 빠진 문서 {fixed}개를 다시 넣었습니다 (동시 실행 등).")
+        rt.note_recovered(f"색인에서 빠진 문서 {fixed}개 -> 다시 넣음 (동시 실행 등)")
+    return [os.path.basename(d["file"]) for d in still]
 
 
 # ==============================================================================
@@ -2037,8 +2178,15 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         doc = load_cached_only(path)
         if doc is None:
             # 검색하지 않은 문서는 skipped에만 (stale에 넣으면 '옛 내용으로 검색'으로 두 번 셈)
-            info["skipped"].append({"file": path, "reason": "캐시 파일이 없거나 손상됨 -> index --all로 다시 등록 필요"})
-            info["reindex"] += 1
+            if not os.path.exists(path):
+                # 원본도 없으면 index --all로도 다시 읽을 수 없음 (같은 안내 반복을 막음)
+                info["skipped"].append({"file": path, "reason": "캐시 파일이 없거나 손상됐고 원본도 없어 다시 읽을 수 없음 "
+                                                                "-> clear --missing으로 정리"})
+                info["orphan"] += 1
+                info["missing"] += 1
+            else:
+                info["skipped"].append({"file": path, "reason": "캐시 파일이 없거나 손상됨 -> index --all로 다시 등록 필요"})
+                info["reindex"] += 1
             continue
         if not os.path.exists(path):
             doc["file_missing"] = True
@@ -2078,6 +2226,15 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
 def cmd_search(args) -> Dict[str, Any]:
     matcher = build_matcher(args.query, args.regex, args.case_sensitive)
+    clamp_warnings: List[str] = []
+    if args.top > MAX_SEARCH_TOP:
+        clamp_warnings.append(f"--top {args.top}은 상한 {MAX_SEARCH_TOP}으로 줄임 (전체 결과는 --save 파일로)")
+        args.top = MAX_SEARCH_TOP
+    if args.context > MAX_SEARCH_CONTEXT or args.context < 0:
+        clamp_warnings.append(f"--context {args.context}는 0~{MAX_SEARCH_CONTEXT}로 줄임 (단락 전체는 --full 또는 --save)")
+        args.context = min(MAX_SEARCH_CONTEXT, max(0, args.context))
+    for w in clamp_warnings:
+        rt.log("WARN", w)
     pages = page_set(args.pages)
     sec_filter = re.sub(r"\s+", " ", args.section).strip().lower() if args.section else ""
     docs, info = _search_targets(args)
@@ -2107,6 +2264,8 @@ def cmd_search(args) -> Dict[str, Any]:
     filters = {k: v for k, v in (("file", args.file), ("pages", args.pages), ("section", args.section)) if v}
     if filters:
         result["filters"] = filters
+    if clamp_warnings:
+        result["warnings"] = clamp_warnings
     if pages is not None and page_unknown:
         result["page_unknown_skipped"] = page_unknown
     if args.file:
@@ -2133,14 +2292,19 @@ def cmd_search(args) -> Dict[str, Any]:
         out = rt.resolve_output_path(save_arg, stem, ext)
         saved = hits[:MAX_SAVE_HITS]
         cut_cells = 0
+        clamped_context = 0
         header = ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥"]
         rows = []
         for h in saved:
             u = h["unit"]
+            if args.full:
+                context_text = u["text"]          # --full: 단위 전체 (xlsx는 셀 상한 32000자 확인이 따로 있음)
+            else:
+                context_text, cut = rt.clamp_text(u["text"], SAVE_CONTEXT_CHARS)
+                clamped_context += 1 if cut else 0
             rows.append([os.path.basename(h["doc"]["file"]), u.get("page") if u.get("page") is not None else "",
                          section_text(u), u.get("number") or "", u["loc"],
-                         match_sentence(u["text"], h["terms"], args.case_sensitive),
-                         rt.clamp_text(u["text"], 3000)[0]])
+                         match_sentence(u["text"], h["terms"], args.case_sensitive), context_text])
         if ext == ".csv":
             out = rt.write_csv_rows(out, [header] + rows)
         elif ext == ".xlsx":
@@ -2155,10 +2319,14 @@ def cmd_search(args) -> Dict[str, Any]:
                           u["text"] if args.full else h["snippet"].replace("**", ""), ""]
             out = rt.write_text(out, "\n".join(lines))
         result.update(output_file=out, saved=len(saved))
+        if clamped_context and ext in (".csv", ".xlsx"):
+            result["context_clamped"] = clamped_context
+            result["context_clamped_reason"] = (f"문맥 칸은 {SAVE_CONTEXT_CHARS}자까지 저장: {clamped_context}행 잘림 "
+                                                "(단락 전체는 --full을 붙여 저장)")
         if len(hits) > len(saved):
             result.update(save_truncated=True,
                           save_truncated_reason=f"검색 결과 {len(hits)}건 중 앞 {len(saved)}건만 저장 (저장 상한 {MAX_SAVE_HITS}건)")
-        save_problem = rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None)
+        save_problem = rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None, delimiter=",")
         if not save_problem and cut_cells:
             save_problem = _xlsx_cut_text(cut_cells)
         if save_problem:
@@ -2166,6 +2334,7 @@ def cmd_search(args) -> Dict[str, Any]:
         nexts += _write_next_commands(out)
 
     view = []
+    text_cut = 0
     for h in shown:
         u, doc = h["unit"], h["doc"]
         item = {"file": os.path.basename(doc["file"]), "path": doc["file"], "page": u.get("page"),
@@ -2173,13 +2342,21 @@ def cmd_search(args) -> Dict[str, Any]:
                 "section_text": section_text(u), "number": u.get("number"), "loc": u["loc"],
                 "heading": u.get("heading", ""), "evidence": evidence_text(doc["file"], u), "snippet": h["snippet"]}
         if args.full:
-            item["text"], _ = rt.clamp_text(u["text"], 2000)
+            item["text"], cut = rt.clamp_text(u["text"], SEARCH_JSON_FULL_CHARS)
+            if cut:
+                item["text_truncated"] = True     # 전체는 --save 파일 (--full이면 단위 전체 저장)
+                item["text_chars"] = len(u["text"])
+                text_cut += 1
         if doc.get("file_missing"):
             item["file_missing"] = True
         if doc.get("_stale"):
             item["stale"] = True             # 원본이 바뀌기 전 내용 (근거로 쓰기 전에 다시 등록 필요)
         view.append(item)
     result["matches"] = view
+    if text_cut:
+        result["truncated"] = True
+        result["truncated_reason"] = (f"--full 항목 {text_cut}개의 text를 {SEARCH_JSON_FULL_CHARS}자에서 자름 "
+                                      "(text_truncated 표시, 전체는 --save 파일)")
 
     if (info["stale"] or info["reindex"]) and not args.file:
         nexts.append(rt.next_command("reader.py", ["index", "--all"],
@@ -2187,7 +2364,7 @@ def cmd_search(args) -> Dict[str, Any]:
     if info["orphan"]:
         # 원본이 없는 이전 형식 캐시는 index --all로도 다시 읽을 수 없음 (반복 안내를 막음). 원본 문서는 지우지 않음
         nexts.append(rt.next_command("reader.py", ["clear", "--missing", "--dry-run"],
-                                     f"원본이 없는 캐시 정리 미리보기 (이전 형식 {info['orphan']}개 포함, 원본 문서는 그대로)"))
+                                     f"원본이 없는 캐시 정리 미리보기 (다시 읽을 수 없는 캐시 {info['orphan']}개 포함, 원본 문서는 그대로)"))
     if info["remaining"] and info["folder"]:
         nexts.append(rt.next_command("reader.py", ["index", "--folder", info["folder"], "--max-files", str(args.max_files)],
                                      f"아직 등록하지 못한 {info['remaining']}개 파일 등록 (읽기 전용)"))
@@ -2200,7 +2377,10 @@ def cmd_search(args) -> Dict[str, Any]:
             cmd.append("--regex")
         if args.case_sensitive:
             cmd.append("--case-sensitive")
-        nexts.append(rt.next_command("reader.py", cmd + ["--save", "근거.xlsx"], f"전체 {total}건을 엑셀 파일로 저장"))
+        if args.full:
+            cmd.append("--full")
+        nexts.append(rt.next_command("reader.py", cmd + ["--save", "근거.xlsx"],
+                                     f"전체 {total}건을 엑셀 파일로 저장" + (" (단락 전체)" if args.full else "")))
     if nexts:
         result["next_commands"] = nexts
 
@@ -2213,6 +2393,13 @@ def cmd_search(args) -> Dict[str, Any]:
                   "next_commands의 index --all(읽기 전용)을 실행한 뒤 같은 검색을 1번 다시 하세요.")
     if info["indexed_now"]:
         notes += " 새로 등록한 파일(indexed_now)을 사용자에게 알리세요."
+    if clamp_warnings:
+        notes += " 상한으로 줄인 옵션(warnings)을 사용자에게 알리세요."
+    if text_cut:
+        notes += (f" 일부 결과의 text가 {SEARCH_JSON_FULL_CHARS}자에서 잘렸습니다(text_truncated). 전체는 "
+                  + ("저장 파일(output_file)에 있습니다." if "output_file" in result else "next_commands의 --save로 저장하세요."))
+    if result.get("context_clamped"):
+        notes += f" 저장 파일의 {result['context_clamped_reason']}."
     gaps = _search_gaps(docs, info, pages, sec_filter)
     if gaps:
         result["not_searched"] = gaps
@@ -2370,8 +2557,9 @@ def cmd_clear(args) -> Dict[str, Any]:
     if args.all and any([args.file, args.name, args.folder, args.missing]):
         raise rt.InputError("--all은 다른 조건과 함께 쓸 수 없습니다.")
     index = load_index()
-    file_key = os.path.normcase(os.path.abspath(os.path.expandvars(str(args.file).strip().strip('"')))) if args.file else None
-    folder = os.path.abspath(os.path.expandvars(str(args.folder).strip().strip('"'))) if args.folder else None
+    file_key = (os.path.normcase(os.path.abspath(os.path.expandvars(os.path.expanduser(str(args.file).strip().strip('"')))))
+                if args.file else None)
+    folder = os.path.abspath(os.path.expandvars(os.path.expanduser(str(args.folder).strip().strip('"')))) if args.folder else None
     name = str(args.name or "").strip().lower()
     targets = []
     for path in index:
@@ -2412,6 +2600,7 @@ def cmd_clear(args) -> Dict[str, Any]:
                      "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.",
                      **result)
     failed: List[str] = []
+    removed: List[str] = []
     for p in targets:
         cf = _doc_cache_path(p)
         try:
@@ -2420,13 +2609,14 @@ def cmd_clear(args) -> Dict[str, Any]:
         except OSError as e:
             failed.append(f"{os.path.basename(p)}: {e}")
             continue
-        index.pop(p, None)
+        removed.append(p)
     for f in orphans:
         try:
             rt.retry_fs(lambda: os.remove(f))
         except OSError as e:
             failed.append(f"{os.path.basename(f)}: {e}")
-    _save_index(index)
+    # 잠근 상태에서 색인을 다시 읽어 지운 항목만 뺌 (그 사이 다른 실행이 넣은 항목을 지우지 않게)
+    _index_update(lambda idx: [idx.pop(p, None) for p in removed])
     # 다시 읽어 확인: 색인에서 빠졌고 캐시 파일도 없는지
     left = load_index()
     still = [p for p in targets if p in left or os.path.exists(_doc_cache_path(p))]

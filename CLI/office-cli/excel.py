@@ -63,12 +63,25 @@ def col_number(letters: str) -> int:
 _CELL_RE = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+)$")
 
 
+XL_MAX_ROW = 1048576
+XL_MAX_COL = 16384          # XFD
+
+
+def _check_row(row: int, ref: str) -> int:
+    if not 1 <= row <= XL_MAX_ROW:
+        raise rt.InputError(f"행 번호가 엑셀 범위(1~{XL_MAX_ROW}) 밖입니다: '{ref}' (예: A1, B12)")
+    return row
+
+
 def parse_cell(ref: str) -> Tuple[int, int]:
-    """'B12' -> (12, 2)"""
+    """'B12' -> (12, 2). 0행, 1048576행 초과, XFD(16384열) 초과는 InputError."""
     m = _CELL_RE.match(ref.strip())
     if not m:
         raise rt.InputError(f"셀 주소 형식이 아닙니다: '{ref}' (예: A1, B12)")
-    return int(m.group(2)), col_number(m.group(1))
+    col = col_number(m.group(1))
+    if col > XL_MAX_COL:
+        raise rt.InputError(f"열이 엑셀 범위(A~XFD) 밖입니다: '{ref}' (예: A1, B12)")
+    return _check_row(int(m.group(2)), ref), col
 
 
 def parse_area(cells: str, max_row: Optional[int], max_col: Optional[int]) -> Tuple[int, int, Optional[int], Optional[int]]:
@@ -77,9 +90,11 @@ def parse_area(cells: str, max_row: Optional[int], max_col: Optional[int]) -> Tu
     a, b = parts[0], parts[-1]
     if re.fullmatch(r"[A-Za-z]{1,3}", a) and re.fullmatch(r"[A-Za-z]{1,3}", b):
         ca, cb = sorted((col_number(a), col_number(b)))
+        if cb > XL_MAX_COL:
+            raise rt.InputError(f"열이 엑셀 범위(A~XFD) 밖입니다: '{cells}' (예: B:B, A1:C5)")
         return 1, ca, max_row, cb
     if a.isdigit() and b.isdigit():
-        ra, rb = sorted((int(a), int(b)))
+        ra, rb = sorted((_check_row(int(a), cells), _check_row(int(b), cells)))
         return ra, 1, rb, max_col
     r1, c1 = parse_cell(a)
     r2, c2 = parse_cell(b)
@@ -323,6 +338,9 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
             rows = [list(r) for r in ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True)]
             width = c2 - c1 + 1
             rows = [r + [None] * (width - len(r)) for r in rows]
+            if address:
+                # 읽기 전용 openpyxl은 데이터 끝 뒤의 빈 행을 주지 않음: 준 범위(A1:C5)만큼 채워 열린 문서와 같은 rows로
+                rows += [[None] * width for _ in range(r2 - r1 + 1 - len(rows))]
         if not address:   # 끝쪽 빈 행 제거
             while rows and all(v is None for v in rows[-1]):
                 rows.pop()
@@ -331,9 +349,10 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
         wb.close()
 
 
-def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50) -> Tuple[List[Dict[str, Any]], int]:
+def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50) -> Tuple[List[Dict[str, Any]], int, int]:
+    """찾은 칸 (앞 limit개), 전체 수, 값이 잘린 칸 수. 값은 칸마다 MAX_CELL_CHARS에서 자릅니다 (전체는 --save CSV)."""
     hits: List[Dict[str, Any]] = []
-    total = 0
+    total = cut_n = 0
     key = text.lower()
     for i, row in enumerate(matrix):
         for j, v in enumerate(row):
@@ -342,8 +361,13 @@ def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: 
             if key in str(out_value(v)).lower():
                 total += 1
                 if len(hits) < limit:
-                    hits.append({"cell": addr(r0 + i, c0 + j), "value": out_value(v)})
-    return hits, total
+                    value, cut = rt.clamp_cell(out_value(v))
+                    hit = {"cell": addr(r0 + i, c0 + j), "value": value}
+                    if cut:
+                        hit["value_truncated"] = True
+                        cut_n += 1
+                    hits.append(hit)
+    return hits, total, cut_n
 
 
 def cmd_read(args) -> Dict[str, Any]:
@@ -368,12 +392,24 @@ def cmd_read(args) -> Dict[str, Any]:
     full_addr = addr(r0, c0, r0 + max(nrows, 1) - 1, c0 + max(ncols, 1) - 1)
     result: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": full_addr, "rows": nrows, "cols": ncols}
 
+    save_cmd = rt.next_command("excel.py", ["read", "--target", args.target, "--range", full_addr, "--sheet", sheet, "--save"],
+                               "전체를 CSV로 저장 (잘린 값까지 전체)")
     if args.search:
-        hits, total = _search_matrix(matrix, r0, c0, args.search)
-        result.update(matches=hits, total_matches=total)
-        preview = f"'{args.search}': {sheet}!{full_addr}에서 {total}개 셀 일치"
-        return rt.ok(TOOL, "read", preview, "" if total else
-                     "VERIFIED: 일치하는 셀이 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
+        hits, total, cut_n = _search_matrix(matrix, r0, c0, args.search)
+        truncated = total > len(hits) or cut_n > 0
+        result.update(matches=hits, total_matches=total, truncated=truncated)
+        preview = f"'{args.search}': {sheet}!{full_addr}에서 {total}개 셀 일치" + (
+            f" (앞 {len(hits)}개 표시)" if total > len(hits) else "")
+        if not total:
+            return rt.ok(TOOL, "read", preview,
+                         "VERIFIED: 일치하는 셀이 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
+        if truncated:
+            reasons = ([f"찾은 칸 {total}개 중 앞 {len(hits)}개만 표시"] if total > len(hits) else []) + (
+                [f"{rt.MAX_CELL_CHARS}자보다 긴 값 {cut_n}개는 앞부분만 (value_truncated)"] if cut_n else [])
+            result.update(truncated_reason=", ".join(reasons), next_commands=[save_cmd])
+            return rt.ok(TOOL, "read", preview, "VERIFIED: 찾기 완료. 일부만 표시했습니다(truncated_reason). "
+                         "전체 값이 필요하면 next_commands[0]으로 CSV에 저장하세요.", **result)
+        return rt.ok(TOOL, "read", preview, "", **result)
 
     values = [[out_value(v) for v in row] for row in matrix]
     if args.save:
@@ -386,21 +422,26 @@ def cmd_read(args) -> Dict[str, Any]:
         filled = sum(1 for r in values if any(v is not None and str(v).strip() for v in r))
         return rt.ok_file(TOOL, "read", f"{sheet}!{full_addr} ({nrows}행 x {ncols}열)를 CSV로 저장: {out}", out,
                           "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
-                          expected_rows=filled, **result)
+                          expected_rows=filled, delimiter=",", **result)
 
-    shown, truncated = rt.clamp_rows(values, args.max_rows)
+    shown, rows_cut, cells_cut = rt.clamp_rows(values, args.max_rows)
+    truncated = rows_cut or cells_cut > 0
     result.update(values=shown, truncated=truncated)
-    if truncated:
+    nexts = []
+    if rows_cut:
         next_r = r0 + len(shown)
         last_r = r0 + nrows - 1
         rest = f"{sheet}!" if " " not in sheet else f"'{sheet}'!"
         rest += addr(next_r, c0, last_r, c0 + ncols - 1)
-        result["next_commands"] = [
-            rt.next_command("excel.py", ["read", "--target", args.target, "--range", rest], "나머지 행 이어서 읽기"),
-            rt.next_command("excel.py", ["read", "--target", args.target, "--range", f"{full_addr}", "--sheet", sheet, "--save"],
-                            "전체를 CSV로 저장 (다른 문서에 넣을 때)")]
-    preview = f"{sheet}!{full_addr}: {nrows}행 x {ncols}열" + (f" (앞 {len(shown)}행만 표시)" if truncated else "")
-    return rt.ok(TOOL, "read", preview, "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요."
+        nexts.append(rt.next_command("excel.py", ["read", "--target", args.target, "--range", rest], "나머지 행 이어서 읽기"))
+    if cells_cut:
+        result["truncated_reason"] = f"{rt.MAX_CELL_CHARS}자보다 긴 값이나 표시 상한을 넘는 칸 {cells_cut}개는 잘라서 표시"
+    if truncated:
+        nexts.append(save_cmd)
+        result["next_commands"] = nexts
+    preview = f"{sheet}!{full_addr}: {nrows}행 x {ncols}열" + (f" (앞 {len(shown)}행만 표시)" if rows_cut else "") + (
+        f" (긴 값 {cells_cut}칸 잘림)" if cells_cut else "")
+    return rt.ok(TOOL, "read", preview, "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽거나 CSV로 저장하세요."
                  if truncated else "", **result)
 
 
@@ -524,7 +565,7 @@ def _write_sheet(t: Any, name: Optional[str], new: bool) -> Any:
         if existing is not None:
             raise rt.InputError(f"시트 '{existing}'이(가) 이미 있어 새로 만들지 않았습니다. 기존 시트에 쓰려면 --new-sheet를 빼고, "
                                 "새 시트는 다른 이름을 지정하세요.")
-    return t.sheet(name, create=new)
+    return t.sheet(name, create=new, allow_create=True)
 
 
 def cmd_write(args) -> Dict[str, Any]:
@@ -958,7 +999,7 @@ def cmd_export(args) -> Dict[str, Any]:
         out = rt.resolve_output_path(args.save, sheet, ".csv")
         out = rt.write_csv_rows(out, [[out_value(v) for v in r] for r in matrix], args.encoding)
         return rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
-                          "VERIFIED: 저장한 파일을 확인했습니다.", output_file=out, rows=len(matrix))
+                          "VERIFIED: 저장한 파일을 확인했습니다.", delimiter=",", output_file=out, rows=len(matrix))
 
     with off.open_target("excel", args.target, readonly=True) as t:
         ws = t.sheet(args.sheet)
@@ -1012,7 +1053,8 @@ def cmd_export(args) -> Dict[str, Any]:
         info = range_info(rng)
         resolved = t.resolved()
     return rt.ok_file(TOOL, "export", f"{info['sheet']}!{info['range']}를 {detail}로 저장: {out}", out,
-                      "VERIFIED: 저장한 파일을 확인했습니다. 원본 통합문서는 그대로입니다.", target_resolved=resolved, output_file=out, **info)
+                      "VERIFIED: 저장한 파일을 확인했습니다. 원본 통합문서는 그대로입니다.", delimiter=",",
+                      target_resolved=resolved, output_file=out, **info)
 
 
 # ==============================================================================

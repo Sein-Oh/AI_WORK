@@ -211,18 +211,31 @@ def cmd_read(args) -> Dict[str, Any]:
                           **result)
     shown: List[Dict[str, Any]] = []
     used = 0
+    text_cut = 0
     for s in slides:
         size = len(s["text"]) + len(s["title"]) + 20
         if shown and used + size > rt.DEFAULT_MAX_CHARS:
             break
-        shown.append(s)
+        text, cut = rt.clamp_text(s["text"], rt.DEFAULT_MAX_CHARS)
+        item = dict(s, text=text, title=rt.clamp_text(s["title"], 500)[0])
+        if cut:                                   # 글이 아주 많은 슬라이드: 앞부분만 (전체는 --save 파일)
+            item.update(text_truncated=True, text_chars=len(s["text"]))
+            text_cut += 1
+        shown.append(item)
         used += size
-    truncated = len(shown) < len(slides)
+    truncated = len(shown) < len(slides) or bool(text_cut)
     result.update(slides=shown, truncated=truncated)
-    if truncated:
+    nexts: List[Dict[str, str]] = []
+    if len(shown) < len(slides):
         rest = _compress_numbers([s["no"] for s in slides[len(shown):]])     # 고른 슬라이드 중 남은 것만 (1,5,9 -> 5,9)
-        result["next_commands"] = [rt.next_command("ppt.py", ["read", "--target", args.target, "--slides", rest],
-                                                   "나머지 슬라이드 이어서 읽기")]
+        nexts.append(rt.next_command("ppt.py", ["read", "--target", args.target, "--slides", rest],
+                                     "나머지 슬라이드 이어서 읽기"))
+    if text_cut:
+        result["truncated_reason"] = f"글이 {rt.DEFAULT_MAX_CHARS}자보다 많은 슬라이드 {text_cut}장은 앞부분만 표시 (text_truncated, 전체는 --save)"
+        save = ["read", "--target", args.target] + (["--slides", args.slides] if args.slides else []) + ["--save"]
+        nexts.append(rt.next_command("ppt.py", save, "잘린 슬라이드까지 전체를 md 파일로 저장"))
+    if nexts:
+        result["next_commands"] = nexts
     return rt.ok(TOOL, "read", f"{source['name']}: 슬라이드 {len(shown)}장 표시 (전체 {total}장)",
                  "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요." if truncated else "", **result)
 
@@ -926,20 +939,34 @@ def _notes_read(args) -> Dict[str, Any]:
                      f"VERIFIED: 0건. {what}에 발표자 노트가 없습니다. 사용자에게 그대로 알리세요.", **result)
     shown: List[Dict[str, Any]] = []
     used = 0
+    text_cut = 0
     for it in items:
         size = len(it["notes"]) + len(it["title"]) + 20
         if shown and used + size > rt.DEFAULT_MAX_CHARS:
             break
-        shown.append(dict(it, notes=rt.clamp_text(it["notes"], rt.DEFAULT_MAX_CHARS)[0]))
+        text, cut = rt.clamp_text(it["notes"], rt.DEFAULT_MAX_CHARS)
+        item = dict(it, notes=text)
+        if cut:
+            item.update(text_truncated=True, text_chars=len(it["notes"]))
+            text_cut += 1
+        shown.append(item)
         used += size
-    truncated = len(shown) < len(items)
+    truncated = len(shown) < len(items) or bool(text_cut)
     result.update(notes=shown, truncated=truncated)
-    if truncated:
+    if text_cut:
+        result["truncated_reason"] = (f"{rt.DEFAULT_MAX_CHARS}자보다 긴 노트 {text_cut}개는 앞부분만 표시 (text_truncated). "
+                                      "전체는 PowerPoint에서 직접 확인")
+    if len(shown) < len(items):
         rest = ",".join(str(it["no"]) for it in items[len(shown):])      # 고른 슬라이드 중 남은 것만
         result["next_commands"] = [rt.next_command("ppt.py", ["notes", "--target", args.target, "--slides", rest],
                                                    "나머지 노트 이어서 읽기")]
+    directive = ""
+    if len(shown) < len(items):
+        directive = "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요."
+    if text_cut:
+        directive = (directive or "VERIFIED: 읽기 완료.") + " 노트가 잘린 슬라이드(text_truncated)는 truncated_reason을 사용자에게 알리세요."
     return rt.ok(TOOL, "notes", f"{resolved['name']}: 노트 있는 슬라이드 {len(shown)}장 표시 ({what} 중 {len(items)}장)",
-                 "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요." if truncated else "", **result)
+                 directive, **result)
 
 
 # ==============================================================================
