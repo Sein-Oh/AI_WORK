@@ -1,12 +1,13 @@
-"""office-cli 1.0 Windows 실기 테스트 러너
+"""office-cli Windows 실기 테스트 러너
 
-사용법 (CLI/office-cli 폴더에서 실행):
+사용법 (CLI-dev/office-cli 폴더에서 실행. 시험하는 도구는 옆 폴더 CLI/office-cli):
     python tools/run_win_tests.py                     # 전체 진행 (눈으로 확인할 항목은 y/n 질문)
     python tools/run_win_tests.py --only A,C          # 특정 그룹만
     python tools/run_win_tests.py --self-email me@company.com   # G3 실제 발송 테스트 포함
     python tools/run_win_tests.py --auto              # 질문 없이 자동 판정 항목만
     python tools/run_win_tests.py --dir D:\\office_test --skip-outlook
     python tools/run_win_tests.py --agent --skip-outlook   # 에이전트(OpenCode 스킬)용: 질문 없음, stdout은 JSON 1줄
+        (--agent: -h와 인자 오류도 JSON 1줄, 인자 오류 exit 2, Ctrl+C exit 130. 옵션 줄임말은 받지 않음)
 
 진행 방식:
     1) 테스트 폴더(기본 C:\\office_test)에 A/B 테스트 파일(xlsx, docx, pptx)을 새로 만듭니다.
@@ -41,7 +42,7 @@ import win_test_rules as rules   # noqa: E402  (판단 규칙: 끝내도 되는 
 PY = sys.executable
 CMD_TIMEOUT = 120
 RUN_ENV = {}   # 도구에 넘길 환경변수 (테스트 폴더 전용 캐시/데이터 폴더). main()에서 채움
-AGENT = "--agent" in sys.argv   # 에이전트 모드: 로그는 stderr, stdout은 마지막 JSON 1줄만
+AGENT = "--agent" in sys.argv   # 에이전트 모드: 로그는 stderr, stdout은 마지막 JSON 1줄만 (파서는 줄임말을 받지 않아 이 판정과 같음)
 
 # 오류 로그(errors_*.txt)용 기록: 모든 로그 줄과 도구 실행(명령, 종료 코드, stdout/stderr 전체)
 LOG_LINES = []
@@ -61,6 +62,29 @@ def emit_agent_json(payload, code):
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
     sys.stdout.flush()
     sys.exit(code)
+
+
+class RunnerParser(argparse.ArgumentParser):
+    """에이전트 모드에서도 계약을 지키는 인자 파서: -h와 인자 오류를 stdout JSON 1줄로 냅니다 (도움말 본문은 stderr).
+    줄임말(--ag 등)은 받지 않습니다 (allow_abbrev=False): 모듈 맨 위의 AGENT 판정과 어긋나지 않게."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, allow_abbrev=False, **kw)
+
+    def print_help(self, file=None):
+        if not AGENT:
+            return super().print_help(file)
+        text = self.format_help()
+        sys.stderr.write(text)
+        emit_agent_json({"status": "ok", "command": "help", "usage": text,
+                         "agent_directive": "VERIFIED: 도움말입니다. 사용자에게 필요한 옵션만 알리세요."}, 0)
+
+    def error(self, message):
+        if not AGENT:
+            super().error(message)
+        sys.stderr.write(f"[ERROR] {message}\n")
+        emit_agent_json({"status": "error", "error_type": "argument", "message": message,
+                         "agent_directive": "STOP_RETRY: 인자가 잘못되었습니다. 재시도하지 말고 message를 사용자에게 알리세요."}, 2)
 
 
 try:
@@ -1998,7 +2022,7 @@ def write_report(ctx):
     for r in ctx.results:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
     lines = [
-        f"office-cli 1.0 Windows 테스트 보고서 ({stamp})",
+        f"office-cli {tool_version()} Windows 테스트 보고서 ({stamp})",
         f"Python {sys.version.split()[0]} / 테스트 폴더 {ctx.dir}",
         "요약: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())),
         "",
@@ -2206,8 +2230,52 @@ GROUPS = [("A", test_A), ("B", test_B), ("C", test_C), ("D", test_D), ("E", test
           ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K)]
 
 
+def agent_summary(problems, counts, path, err_path, shots, closed, unverified):
+    """에이전트 모드 마지막 JSON. 도구가 UNVERIFIED로 답한 호출이 있거나 보고서를 다시 읽지 못하면 UNVERIFIED:로 시작."""
+    verified = bool(path) and os.path.isfile(path)
+    payload = {"status": "ok", "summary": counts, "failed": problems, "unverified_count": unverified,
+               "report_file": path, "error_log": err_path, "shots_dir": shots, "closed_documents": len(closed),
+               "verified": verified and not unverified}
+    tail = ("재실행하지 말고 summary, failed, unverified_count를 보고하고, "
+            "error_log 파일을 Claude에게 전달하라고 사용자에게 안내하세요.")
+    if not verified:
+        payload["agent_directive"] = f"UNVERIFIED: 테스트는 끝났지만 보고서 파일을 확인하지 못했습니다. {tail}"
+    elif unverified:
+        payload["agent_directive"] = (f"UNVERIFIED: 테스트 완료, 도구가 결과를 확인하지 못한 호출 {unverified}건"
+                                      f"(unverified_count), 문제 항목 {len(problems)}개. '통과'로 보고하지 마세요. {tail}")
+    elif problems:
+        payload["agent_directive"] = f"VERIFIED: 테스트 완료, 문제 항목 {len(problems)}개. {tail}"
+    else:
+        payload["agent_directive"] = "VERIFIED: 테스트 완료, 문제 항목 없음, UNVERIFIED 0건. summary를 사용자에게 보고하세요."
+    return payload
+
+
+def _stop(ctx, args, e):
+    """Ctrl+C: 중단 시점까지 오류 로그를 남기고 exit 130."""
+    log("[ERROR] 사용자가 중단했습니다 (Ctrl+C).")
+    err_path = _safe_error_log(ctx, e)
+    log(f" 오류 로그(중단 시점까지): {err_path}")
+    if args.agent:
+        emit_agent_json({"status": "error", "error_type": "interrupted", "message": "사용자가 중단함",
+                         "error_log": err_path, "agent_directive": "STOP_RETRY: 사용자가 중단했습니다. 재시도하지 마세요."}, 130)
+    sys.exit(130)
+
+
+def _fail(ctx, args, e, error_type, directive):
+    """러너 자체 오류: 오류 로그를 남기고 exit 1 (에이전트 모드는 JSON 1줄)."""
+    if not isinstance(e, SetupError):
+        log(f"[ERROR] 러너 오류: {describe_com_error(e)}")
+        log(traceback.format_exc())
+    err_path = _safe_error_log(ctx, e)
+    log(f" 오류 로그: {err_path}  <- 이 파일을 그대로 공유해 주세요.")
+    if args.agent:
+        emit_agent_json({"status": "error", "error_type": error_type, "message": str(e), "error_log": err_path,
+                         "agent_directive": directive}, 1)
+    sys.exit(1)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="office-cli 1.0 Windows 실기 테스트 러너")
+    parser = RunnerParser(description="office-cli Windows 실기 테스트 러너")
     parser.add_argument("--dir", default=r"C:\office_test", help="테스트 파일을 만들 폴더 (기본 C:\\office_test)")
     parser.add_argument("--only", help="실행할 그룹 (예: A,C,E)")
     parser.add_argument("--self-email", help="G3 실제 발송 테스트에 쓸 본인 메일 주소 (생략 시 G3 건너뜀)")
@@ -2220,16 +2288,23 @@ def main():
     args = parser.parse_args()
     if args.agent:
         args.auto = True
+    known = [g for g, _ in GROUPS]
+    if args.only:
+        selected = {g.strip().upper() for g in args.only.split(",") if g.strip()}
+        bad = sorted(selected - set(known))
+        if bad or not selected:
+            parser.error(f"알 수 없는 그룹: {', '.join(bad) or '(비어 있음)'} (가능: {','.join(known)})")
+    else:
+        selected = set(known)
+    if args.skip_outlook:
+        selected.discard("G")
 
     pythoncom.CoInitialize()
     global CTX
     ctx = CTX = Ctx(args)
-    selected = {g.strip().upper() for g in args.only.split(",")} if args.only else {g for g, _ in GROUPS}
-    if args.skip_outlook:
-        selected.discard("G")
 
     log("=" * 70)
-    log(" office-cli 1.0 Windows 테스트")
+    log(f" office-cli {tool_version()} Windows 테스트")
     log(f" 대상 그룹: {','.join(sorted(selected))} / 테스트 폴더: {ctx.dir}")
     log(" 실행 전 다른 Excel/Word/PowerPoint 문서는 저장 후 모두 닫아 주세요.")
     log(" 테스트 중에는 Office 창을 직접 조작하지 마세요 (질문 응답 제외).")
@@ -2259,59 +2334,44 @@ def main():
                     ctx.results.append({"id": g, "title": f"그룹 {g} 준비", "status": "ERROR", "detail": str(e),
                                         "trace": trace[-800:], "full_trace": trace, "calls": calls, "log": lines})
     except KeyboardInterrupt as e:
-        log("[ERROR] 사용자가 중단했습니다 (Ctrl+C).")
-        err_path = _safe_error_log(ctx, e)
-        log(f" 오류 로그(중단 시점까지): {err_path}")
-        if args.agent:
-            emit_agent_json({"status": "error", "error_type": "interrupted", "message": "사용자가 중단함",
-                             "error_log": err_path, "agent_directive": "STOP_RETRY: 사용자가 중단했습니다. 재시도하지 마세요."}, 130)
-        sys.exit(130)
+        _stop(ctx, args, e)
     except Exception as e:
         # 준비 단계 실패나 러너 자체 오류: 테스트를 계속할 수 없으므로 오류 로그만 남기고 끝냅니다.
-        if not isinstance(e, SetupError):
-            log(f"[ERROR] 러너 오류: {describe_com_error(e)}")
-            log(traceback.format_exc())
-        err_path = _safe_error_log(ctx, e)
-        log(f" 오류 로그: {err_path}  <- 이 파일을 그대로 공유해 주세요.")
-        if args.agent:
-            emit_agent_json({
-                "status": "error", "error_type": "setup", "message": str(e), "error_log": err_path,
-                "agent_directive": "STOP_RETRY: 테스트를 시작하지 못했습니다. 재시도하지 말고 message와 "
-                                   "error_log 경로를 사용자에게 그대로 알리세요."}, 1)
-        sys.exit(1)
+        _fail(ctx, args, e, "setup", "STOP_RETRY: 테스트를 시작하지 못했습니다. 재시도하지 말고 message와 "
+                                     "error_log 경로를 사용자에게 그대로 알리세요.")
 
-    shots, n_shots = save_shots(ctx)
-    path, counts = write_report(ctx)
-    err_path = _safe_error_log(ctx)
-    problems = [r["id"] for r in ctx.results if r["status"] in PROBLEM]
-    log("\n" + "=" * 70)
-    log(" 결과 요약: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-    for r in ctx.results:
-        if r["status"] not in ("PASS",):
-            log(f"   [{r['status']}] {r['id']} {r['title']} {r.get('detail', '')}")
-    log(f" 보고서: {path}")
-    log(f" 오류 로그: {err_path}" + ("  <- 문제 항목이 있습니다. 이 파일을 그대로 공유해 주세요." if problems else ""))
-    log(f" 확인용 그림 {n_shots}개: {shots} (슬라이드, 차트)")
-    closed = []
-    if args.keep_open:
-        log(" 테스트용 A 파일들은 열린 채로 남아 있습니다. 저장하지 않고 닫아도 됩니다.")
-    else:
-        import gc
-        gc.collect()
-        pythoncom.CoUninitialize()            # 러너가 쥔 COM 참조를 놓아야 Quit한 PowerPoint가 실제로 끝남
-        closed = close_test_documents(ctx)
-        log(f" 테스트 문서 {len(closed)}개를 저장하지 않고 닫았습니다: {', '.join(closed)}")
-        err_path = _safe_error_log(ctx)       # 종료 정리 기록까지 넣어 다시 씀 (같은 파일)
-    log("=" * 70)
-    if args.agent:
-        if problems:
-            directive = (f"VERIFIED: 테스트 완료, 문제 항목 {len(problems)}개. 재실행하지 말고 summary와 failed를 보고하고, "
-                         "error_log 파일을 Claude에게 전달하라고 사용자에게 안내하세요.")
+    try:
+        shots, n_shots = save_shots(ctx)
+        path, counts = write_report(ctx)
+        err_path = _safe_error_log(ctx)
+        problems = [r["id"] for r in ctx.results if r["status"] in PROBLEM]
+        log("\n" + "=" * 70)
+        log(" 결과 요약: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        for r in ctx.results:
+            if r["status"] not in ("PASS",):
+                log(f"   [{r['status']}] {r['id']} {r['title']} {r.get('detail', '')}")
+        log(f" UNVERIFIED 결과 {len(UNVERIFIED_SEEN)}건" + (" (도구가 결과를 확인하지 못한 호출, 보고서 끝 참고)" if UNVERIFIED_SEEN else ""))
+        log(f" 보고서: {path}")
+        log(f" 오류 로그: {err_path}" + ("  <- 문제 항목이 있습니다. 이 파일을 그대로 공유해 주세요." if problems else ""))
+        log(f" 확인용 그림 {n_shots}개: {shots} (슬라이드, 차트)")
+        closed = []
+        if args.keep_open:
+            log(" 테스트용 A 파일들은 열린 채로 남아 있습니다. 저장하지 않고 닫아도 됩니다.")
         else:
-            directive = "VERIFIED: 테스트 완료, 문제 항목 없음. summary를 사용자에게 보고하세요."
-        emit_agent_json({"status": "ok", "summary": counts, "failed": problems, "report_file": path,
-                         "error_log": err_path, "shots_dir": shots, "closed_documents": len(closed),
-                         "agent_directive": directive}, 0)
+            import gc
+            gc.collect()
+            pythoncom.CoUninitialize()            # 러너가 쥔 COM 참조를 놓아야 Quit한 PowerPoint가 실제로 끝남
+            closed = close_test_documents(ctx)
+            log(f" 테스트 문서 {len(closed)}개를 저장하지 않고 닫았습니다: {', '.join(closed)}")
+            err_path = _safe_error_log(ctx)       # 종료 정리 기록까지 넣어 다시 씀 (같은 파일)
+        log("=" * 70)
+    except KeyboardInterrupt as e:
+        _stop(ctx, args, e)
+    except Exception as e:
+        _fail(ctx, args, e, "finish", "ERROR: 테스트는 끝났지만 결과 정리(그림 저장, 보고서, 문서 닫기) 중 러너 오류가 났습니다. "
+                                      "재시도하지 말고 message와 error_log 경로를 사용자에게 그대로 알리세요.")
+    if args.agent:
+        emit_agent_json(agent_summary(problems, counts, path, err_path, shots, closed, len(UNVERIFIED_SEEN)), 0)
 
 
 def _safe_error_log(ctx, fatal=None):

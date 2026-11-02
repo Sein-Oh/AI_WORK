@@ -1,6 +1,6 @@
 """ml-kit Windows 실기 테스트 러너
 
-사용법 (CLI/ml-kit 폴더에서 실행):
+사용법 (CLI-dev/ml-kit 폴더에서 실행. 시험하는 도구는 옆 폴더 CLI/ml-kit):
     python tools/run_win_tests.py                 # 전체
     python tools/run_win_tests.py --only M1,M3    # 일부만
     python tools/run_win_tests.py --dir "D:\\ml 테스트"
@@ -18,7 +18,8 @@ Office는 DispatchEx 전용 인스턴스로만 쓰고 끝나면 닫습니다(사
     <테스트 폴더>/report_<시각>.txt               사람이 보는 요약
     tools/test_logs/testlog_<라벨>_<시각>.txt     AI 판독용 상세 로그 (환경, 통과 기준, 호출별 전체 JSON/stderr,
                                                   실패 시 관련 폴더 상태, 계약 위반, 전체 호출 기록)
-    AI에게 판단을 맡기려면 testlog 파일을 그대로 전달하거나 git으로 커밋/푸시하세요.
+    AI에게 판단을 맡기려면 testlog 파일을 그대로 전달하거나 GitHub 웹에서 docs/test_logs/에 업로드하세요
+    (git 명령으로 올리지 않음, .gitignore 처리).
     python tools/run_win_tests.py --label 집PC     # 로그 파일 이름에 붙일 라벨
 """
 import argparse
@@ -85,6 +86,29 @@ class Ctx:
 
 def log(msg):
     print(msg, flush=True)
+
+
+def decode_console(raw):
+    """콘솔 명령(chcp 등) 출력: Windows는 OEM/ANSI 코드 페이지(한국어 949), 그 밖은 로캘 인코딩."""
+    encodings = (("oem", "mbcs") if os.name == "nt" else ()) + (locale.getpreferredencoding(False), "utf-8")
+    for enc in encodings:
+        try:
+            return raw.decode(enc)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+TEST_IDS = tuple(EXPECT)                 # M1~M14 (항목별 통과 기준과 같은 목록)
+
+
+def parse_only(text):
+    """--only 값을 항목 집합으로. 없는 항목이 있으면 (None, 없는 항목 목록)."""
+    if not text:
+        return None, []
+    only = {x.strip().upper() for x in text.split(",") if x.strip()}
+    bad = sorted(only - set(TEST_IDS), key=lambda x: (len(x), x))
+    return (None, bad or ["(비어 있음)"]) if bad or not only else (only, [])
 
 
 def run_tool(script, *args, cwd=None, timeout=900, label=None):
@@ -522,7 +546,7 @@ def env_info(ctx):
                                        capture_output=True, text=True, encoding="utf-8").stdout.strip() or "?")
     dirty = _safe(lambda: len([x for x in subprocess.run(["git", "-C", ROOT, "status", "--porcelain", "."],
                                                          capture_output=True, text=True, encoding="utf-8").stdout.splitlines() if x]), "?")
-    codepage = _safe(lambda: subprocess.run("chcp", shell=True, capture_output=True).stdout.decode("ascii", "replace").strip())
+    codepage = _safe(lambda: decode_console(subprocess.run("chcp", shell=True, capture_output=True).stdout).strip())
     return [
         ("OS", f"{platform.platform()} ({platform.version()})"),
         ("Python", f"{sys.version.split()[0]} ({PY})"),
@@ -614,9 +638,11 @@ def main():
     parser.add_argument("--log-dir", default=os.path.join(DEV, "tools", "test_logs"),
                         help="AI 판독용 로그 폴더 (기본: tools/test_logs, GitHub 웹으로 docs/test_logs/에 업로드)")
     args = parser.parse_args()
+    only, bad = parse_only(args.only)
+    if bad:
+        parser.error(f"알 수 없는 항목: {', '.join(bad)} (가능: {','.join(TEST_IDS)})")
     pythoncom.CoInitialize()
     ctx = Ctx(args)
-    only = {x.strip().upper() for x in args.only.split(",")} if args.only else None
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     log("=" * 70)
     log(f" ml-kit Windows 테스트 / 테스트 폴더: {ctx.dir}")
@@ -646,7 +672,7 @@ def main():
             log(f"   [{r['status']}] {r['id']} {r['title']} {r.get('detail', '')}")
     log(f" 보고서: {path}")
     log(f" AI 판독용 로그: {testlog}")
-    log("   (이 파일을 Claude에게 전달하거나 git add/commit/push 하세요)")
+    log("   (이 파일을 Claude에게 전달하거나 GitHub 웹에서 docs/test_logs/에 업로드하세요)")
     log("=" * 70)
 
 

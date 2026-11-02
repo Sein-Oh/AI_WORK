@@ -43,3 +43,29 @@ def test_testlog_contains_criteria_calls_and_traceback(tmp_path):
     assert '"status": "error"' in text                                     # full stdout JSON
     assert "RuntimeError: Word COM 실패" in text and "Traceback" in text   # exception trace
     assert "[환경]" in text and "scikit-learn" in text and "[전체 호출 기록]" in text
+
+
+def test_only_rejects_unknown_ids(monkeypatch, capsys):
+    import pytest
+    rwt = _load_runner()
+    assert rwt.TEST_IDS == tuple(f"M{i}" for i in range(1, 15))
+    assert rwt.parse_only(None) == (None, [])
+    assert rwt.parse_only("m1, M4") == ({"M1", "M4"}, [])
+    assert rwt.parse_only("M1,M15,X") == (None, ["X", "M15"])
+    assert rwt.parse_only(",") == (None, ["(비어 있음)"])
+    monkeypatch.setattr(sys, "argv", ["run_win_tests.py", "--only", "M1,M99"])
+    with pytest.raises(SystemExit) as ex:
+        rwt.main()
+    assert ex.value.code == 2 and "M99" in capsys.readouterr().err
+
+
+def test_decode_console_reads_locale_text():
+    import locale
+    rwt = _load_runner()
+    assert rwt.decode_console(b"Active code page: 65001") == "Active code page: 65001"
+    text = "활성 코드 페이지: 949"
+    try:                                     # the console code page of this PC (Korean Windows: cp949)
+        raw = text.encode("oem" if os.name == "nt" else locale.getpreferredencoding(False))
+    except (LookupError, UnicodeEncodeError):
+        return
+    assert rwt.decode_console(raw) == text

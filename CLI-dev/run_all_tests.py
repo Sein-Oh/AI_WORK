@@ -12,9 +12,9 @@
 
 단계:
     diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 점검 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
-    pytest  각 도구의 오프라인 테스트 (python -m pytest)
-    ml      ml-kit 실기 테스트 (tools/run_win_tests.py, 질문 없음)
-    office  office-cli 실기 테스트 (tools/run_win_tests.py, 화면에 질문이 나오면 답하세요. --auto면 질문 없음)
+    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (개발 도구 테스트) (python -m pytest)
+    ml      ml-kit 실기 테스트 (tools/run_win_tests.py, 질문 없음, 10~20분)
+    office  office-cli 실기 테스트 (tools/run_win_tests.py, 화면에 질문이 나오면 답하세요. --auto면 질문 없음, 10~30분)
     끝에 각 도구의 오류 로그(<도구>/data/logs/errors.txt, 실제 사용 중 생긴 오류)도 함께 붙입니다.
 
 이 스크립트는 사람이 실행하는 테스트 도구입니다. 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다.
@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import zipfile
@@ -38,10 +39,10 @@ CLI_DIR = os.path.join(os.path.dirname(HERE), "CLI")               # 실행 파�
 TOOLS = ("ml-kit", "office-cli")
 STEPS = ("diag", "pytest", "ml", "office")
 PACKAGES = ("numpy", "pandas", "scikit-learn", "scipy", "joblib", "openpyxl", "python-docx", "python-pptx",
-            "matplotlib", "pymupdf", "olefile", "pywin32", "pytest")
+            "matplotlib", "pymupdf", "olefile", "pywin32", "pytest", "PyYAML")
 IMPORTS = {"numpy": "numpy", "pandas": "pandas", "scikit-learn": "sklearn", "scipy": "scipy", "joblib": "joblib",
            "openpyxl": "openpyxl", "python-docx": "docx", "python-pptx": "pptx", "matplotlib": "matplotlib",
-           "pymupdf": "fitz", "olefile": "olefile", "pywin32": "win32com.client", "pytest": "pytest"}
+           "pymupdf": "fitz", "olefile": "olefile", "pywin32": "win32com.client", "pytest": "pytest", "PyYAML": "yaml"}
 
 
 class Result:
@@ -68,26 +69,61 @@ def child_env():
     return dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
 
 
-def run_capture(args, cwd, timeout):
-    """하위 프로세스를 실행해 (종료코드, 출력 전체, 걸린 초, Ctrl+C 여부)를 돌려줍니다. 출력은 화면에도 그대로 보여 줍니다."""
+def kill_tree(proc):
+    """하위 프로세스와 그 자식까지 끝냅니다 (Windows: taskkill /T)."""
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+        else:
+            proc.kill()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        pass
+
+
+def run_capture(args, cwd, timeout, poll=1.0):
+    """하위 프로세스를 실행해 (종료코드, 출력 전체, 걸린 초, Ctrl+C 여부)를 돌려줍니다. 출력은 화면에도 그대로 보여 줍니다.
+    출력은 별도 스레드가 읽으므로, 아무것도 출력하지 않고 멈춘 프로세스도 timeout초가 지나면 끝냅니다."""
     start = time.time()
     lines = []
     interrupted = False
     proc = subprocess.Popen(args, cwd=cwd, env=child_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    def pump():
+        try:
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                print(line, flush=True)
+                lines.append(line)
+        except Exception:
+            pass
+
+    reader = threading.Thread(target=pump, daemon=True)
+    reader.start()
     try:
-        for raw in proc.stdout:
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            print(line, flush=True)
-            lines.append(line)
-            if time.time() - start > timeout:
-                proc.kill()
-                lines.append(f"[ERROR] 시간 초과 ({timeout}초)로 중단했습니다.")
+        while True:                                  # short waits: Ctrl+C is not seen during one long wait on Windows
+            try:
+                proc.wait(timeout=poll)
                 break
-        proc.wait()
+            except subprocess.TimeoutExpired:
+                if time.time() - start > timeout:
+                    kill_tree(proc)
+                    reader.join(5)
+                    lines.append(f"[ERROR] 시간 초과 ({timeout}초)로 중단했습니다.")
+                    break
     except KeyboardInterrupt:
         interrupted = True
-        proc.kill()
+        kill_tree(proc)
         lines.append("[ERROR] 사용자가 중단했습니다 (Ctrl+C).")
+    reader.join(5)
     return proc.returncode, "\n".join(lines), round(time.time() - start, 1), interrupted
 
 
@@ -260,8 +296,11 @@ def step_diag(res, args):
 # ---------------------------------------------------------------------------
 # 2. 오프라인 테스트
 # ---------------------------------------------------------------------------
+PYTEST_TARGETS = TOOLS + ("tests",)               # 도구별 오프라인 테스트 + CLI-dev/tests (채점기·점검 러너 등 개발 도구)
+
+
 def step_pytest(res, args):
-    for tool in TOOLS:
+    for tool in PYTEST_TARGETS:
         folder = os.path.join(HERE, tool)
         if not os.path.isdir(folder):
             continue

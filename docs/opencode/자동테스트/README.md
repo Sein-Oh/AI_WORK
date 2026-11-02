@@ -19,9 +19,15 @@ python "C:\CLI-dev\run_beta_check.py" --label 회사PC --agent 를 시간 제한
 1. 시험 폴더 `C:\ml_beta\agent`가 이미 있으면 탐색기에서 지웁니다 (이전 모델이 남아 있으면 버전 번호가 달라집니다).
 2. OpenCode에서 새 대화를 열고, 아래 묶음 파일의 메시지를 순서대로 붙여넣습니다.
    - 하나씩: 메시지 1개를 보내고 답을 받은 뒤 다음 메시지를 보냅니다 (권장).
-   - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때).
+   - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때). 요청이 한 턴에 섞이므로 채점은 명령 순서로 나눈 참고 결과입니다.
    - 묶음은 S -> A -> M -> P -> R -> X 순서입니다. P와 R은 A에서 만든 모델을 씁니다.
-3. 끝나면 OpenCode에서 대화를 JSON으로 내보냅니다.
+3. 끝나면 대화를 JSON으로 내보냅니다. PowerShell에서 (세션ID는 OpenCode 화면이나 `opencode session list`에서 확인):
+
+```powershell
+opencode export <세션ID> | Out-File -Encoding utf8 chat.json
+```
+
+   OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다. `> chat.json`으로 저장한 파일(UTF-16)도 채점기가 읽습니다.
 4. `C:\CLI-dev`에서 채점합니다:
 
 ```powershell

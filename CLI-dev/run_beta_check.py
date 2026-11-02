@@ -16,7 +16,8 @@ LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 �
   G  파생변수 원본 열 (2.9.1)
 
 결과: 이 파일 옆에 beta_check_<라벨>_<시각>.md (요약 + 실패 상세)와 .xlsx (항목별 표).
---agent: 진행 로그는 stderr, stdout에는 결과 JSON 1줄 (status, passed, failed, report_file, agent_directive).
+--agent: 진행 로그는 stderr, stdout에는 결과 JSON 1줄 (status, passed, failed, report_file, verified, agent_directive).
+  -h와 인자 오류도 JSON 1줄 (인자 오류 exit 2), Ctrl+C는 exit 130. 점검을 끝내면 실패 항목이 있어도 exit 0.
 """
 import argparse
 import hashlib
@@ -27,6 +28,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +37,36 @@ sys.path.insert(0, os.path.join(HERE, "ml-kit", "tools"))
 
 RESULTS = []          # {"group", "id", "title", "status" (PASS/FAIL/SKIP), "detail"}
 AGENT = False
+GROUPS = ("H", "B", "C", "D", "E", "F", "G")
+
+
+def emit(payload):
+    """Agent mode: the one stdout JSON line."""
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+class Parser(argparse.ArgumentParser):
+    """argparse that keeps the agent contract when --agent is given: -h and argument errors become one stdout JSON line."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, allow_abbrev=False, **kw)
+
+    def print_help(self, file=None):
+        if not AGENT:
+            return super().print_help(file)
+        text = self.format_help()
+        sys.stderr.write(text)
+        emit({"status": "ok", "command": "help", "usage": text,
+              "agent_directive": "VERIFIED: 도움말입니다. 사용자에게 필요한 옵션만 알리세요."})
+
+    def error(self, message):
+        if not AGENT:
+            super().error(message)
+        sys.stderr.write(f"[ERROR] {message}\n")
+        emit({"status": "error", "error_type": "argument", "message": message,
+              "agent_directive": "STOP_RETRY: 인자가 잘못되었습니다. 재시도하지 말고 message를 사용자에게 알리세요."})
+        sys.exit(2)
 
 
 def log(msg):
@@ -45,8 +77,15 @@ def run(script, *args, cwd, timeout=1800):
     """Runs one ml-kit tool; returns (exit code, last-line JSON or None, stderr tail)."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     t0 = time.time()
-    proc = subprocess.run([sys.executable, os.path.join(KIT, script), *[str(a) for a in args]], cwd=cwd,
-                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env)
+    try:
+        proc = subprocess.run([sys.executable, os.path.join(KIT, script), *[str(a) for a in args]], cwd=cwd,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        log(f"[ERROR] {script} 시간 초과 ({timeout}초)")
+        return "TIMEOUT", None, f"{timeout}초 안에 끝나지 않음", 0
+    except OSError as e:
+        log(f"[ERROR] {script} 실행 실패: {e}")
+        return "OSERROR", None, f"{type(e).__name__}: {e}", 0
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     try:
         payload = json.loads(lines[-1]) if lines else None
@@ -90,7 +129,7 @@ def group_b(work, st):
                           "-x", "반응온도,압축압력,촉매비율,수분함량,유량,분진", "-y", "생산효율,불순물,소비전력",
                           "--desc", "반응 공정 시험 기록으로 생산효율, 불순물, 소비전력을 예측한다", cwd=work)
     st["train"] = p or {}
-    safe("B", "B1", "학습 성공 (출력 3개, 보고서형 엑셀)", lambda: (code == 0 and p["status"] == "ok", f"exit {code} {err[-300:]}"))
+    safe("B", "B1", "학습 성공 (출력 3개, 보고서형 엑셀)", lambda: (code == 0 and bool(p) and p["status"] == "ok", f"exit {code} {err[-300:]}"))
     def b2():
         e = p["exclusions"]["생산효율(%)"]
         return (e["manual"] == 1 and e["auto"] >= 1 and e["forced_include"] == 1), e
@@ -172,7 +211,8 @@ def group_f(work, st):
     data = os.path.join(work, "공정_다중출력.xlsx")
     code, p, err, _ = run("ml_report.py", "-f", data, "--title", "반응 공정 성능 예측", cwd=work, timeout=3600)
     st["report"] = p or {}
-    safe("F", "F1", "보고서 + 성능예측표 생성", lambda: (code == 0 and p.get("report_file") and p.get("export_file"), f"exit {code} {err[-300:]}"))
+    safe("F", "F1", "보고서 + 성능예측표 생성", lambda: (code == 0 and bool(p) and bool(p.get("report_file") and p.get("export_file")),
+                                                     f"exit {code} {err[-300:]}"))
     if not (p or {}).get("export_file"):
         return
     root = os.path.dirname(p["report_file"])
@@ -230,7 +270,13 @@ def group_g(work):
 
 
 # ------------------------------------------------------------------------------------------------
+def safe_label(label):
+    """Keeps only characters that are safe in a Windows file name (same rule as run_all_tests.py)."""
+    return "".join(c for c in str(label) if c.isalnum() or c in "-_") or "PC"
+
+
 def write_report(label, work, started):
+    label = safe_label(label)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = os.path.join(HERE, f"beta_check_{label}_{stamp}")
     npass = sum(r["status"] == "PASS" for r in RESULTS)
@@ -259,50 +305,90 @@ def write_report(label, work, started):
     return base + ".md", npass, nfail, nskip
 
 
-def main():
+def run_groups(work, groups):
+    import make_beta_samples
+    try:
+        make_beta_samples.main(work)
+    except Exception as e:
+        check("-", "SAMPLES", "샘플 데이터 만들기 (make_beta_samples)", False, f"{type(e).__name__}: {e}")
+        return
+    st = {}
+    if "H" in groups:
+        group_h(work)
+    if groups & {"B", "D", "E"}:
+        group_b(work, st)
+    if "C" in groups:
+        group_c(work)
+    if "D" in groups:
+        group_d(work, st)
+    if "E" in groups:
+        group_e(work, st)
+    if "F" in groups:
+        group_f(work, st)
+    if "G" in groups:
+        group_g(work)
+
+
+def main(argv=None):
     global AGENT
-    ap = argparse.ArgumentParser(description="ml-kit 베타 기능 도구 점검")
+    argv = sys.argv[1:] if argv is None else argv
+    AGENT = "--agent" in argv                       # known before parsing so -h and argument errors keep the contract
+    if AGENT:
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+    ap = Parser(description="ml-kit 베타 기능 도구 점검")
     ap.add_argument("--dir", help="시험 폴더 (생략 시 C:\\ml_beta\\check_<시각> 또는 이 폴더 옆 check_<시각>)")
     ap.add_argument("--label", default="PC", help="결과 파일 이름에 붙일 라벨")
     ap.add_argument("--only", help="실행할 묶음 (쉼표: H,B,C,D,E,F,G)")
     ap.add_argument("--agent", action="store_true", help="에이전트용: 로그는 stderr, stdout은 결과 JSON 1줄")
-    args = ap.parse_args()
-    AGENT = args.agent
+    args = ap.parse_args(argv)
+    groups = {g for g in (args.only or ",".join(GROUPS)).upper().replace(" ", "").split(",") if g}
+    bad = sorted(groups - set(GROUPS))
+    if bad or not groups:
+        ap.error(f"알 수 없는 묶음: {', '.join(bad) or '(비어 있음)'} (가능: {','.join(GROUPS)})")
     started = datetime.now()
     base = r"C:\ml_beta" if os.name == "nt" else HERE
+    interrupted = False
     work = os.path.abspath(args.dir or os.path.join(base, f"check_{started:%Y%m%d_%H%M%S}"))
-    os.makedirs(work, exist_ok=True)
-    groups = set((args.only or "H,B,C,D,E,F,G").upper().replace(" ", "").split(","))
     try:
-        import make_beta_samples
-        make_beta_samples.main(work)
-        st = {}
-        if "H" in groups:
-            group_h(work)
-        if groups & {"B", "D", "E"}:
-            group_b(work, st)
-        if "C" in groups:
-            group_c(work)
-        if "D" in groups:
-            group_d(work, st)
-        if "E" in groups:
-            group_e(work, st)
-        if "F" in groups:
-            group_f(work, st)
-        if "G" in groups:
-            group_g(work)
+        os.makedirs(work, exist_ok=True)
+        run_groups(work, groups)
     except KeyboardInterrupt:
+        interrupted = True
         check("-", "STOP", "사용자 중단 (Ctrl+C)", False)
-    report, npass, nfail, nskip = write_report(args.label, work, started)
-    log(f"[STATUS] 통과 {npass}, 실패 {nfail}, 건너뜀 {nskip} -> {report}")
+    except Exception as e:                          # runner bug: still write the report and the one JSON line
+        check("-", "RUNNER", "점검 러너 오류", False, f"{type(e).__name__}: {e}\n{traceback.format_exc()[-1500:]}")
+    report, npass, nfail, nskip = None, 0, 0, 0
+    try:
+        report, npass, nfail, nskip = write_report(args.label, work, started)
+        log(f"[STATUS] 통과 {npass}, 실패 {nfail}, 건너뜀 {nskip} -> {report}")
+    except Exception as e:
+        nfail = sum(r["status"] == "FAIL" for r in RESULTS)
+        log(f"[ERROR] 결과 파일을 쓰지 못함: {type(e).__name__}: {e}")
+    verified = bool(report) and os.path.isfile(report)
     if AGENT:
         fails = [f"{r['id']} {r['title']}" for r in RESULTS if r["status"] == "FAIL"]
-        print(json.dumps({"status": "ok", "passed": npass, "failed": nfail, "skipped": nskip, "failed_items": fails[:20],
-                          "report_file": report,
-                          "agent_directive": ("VERIFIED: 점검을 끝냈습니다. passed, failed, skipped 수와 failed_items를 표로 알리고, "
-                                              "report_file 경로를 그대로 알리세요. 실패 원인을 추측하지 마세요.")},
-                         ensure_ascii=False))
-    return 0 if AGENT or not nfail else 1   # agent mode: the check itself finished -> exit 0, failures are in the JSON
+        if interrupted:
+            emit({"status": "error", "error_type": "interrupted", "message": "사용자가 중단함", "report_file": report,
+                  "passed": npass, "failed": nfail, "skipped": nskip,
+                  "agent_directive": "STOP_RETRY: 사용자가 중단했습니다. 재시도하지 마세요."})
+            return 130
+        payload = {"status": "ok", "passed": npass, "failed": nfail, "skipped": nskip, "failed_items": fails[:20],
+                   "report_file": report, "verified": verified}
+        if verified:
+            payload["agent_directive"] = ("VERIFIED: 점검을 끝냈습니다. passed, failed, skipped 수와 failed_items를 표로 알리고, "
+                                          "report_file 경로를 그대로 알리세요. 실패 원인을 추측하지 마세요.")
+        else:
+            payload["agent_directive"] = ("UNVERIFIED: 점검은 끝났지만 결과 파일을 쓰지 못했습니다. 재시도하지 말고 "
+                                          "passed, failed, skipped 수와 failed_items를 그대로 알리세요.")
+        emit(payload)
+        return 0                                    # the check itself finished: failures are in the JSON
+    if interrupted:
+        return 130
+    return 0 if not nfail else 1
 
 
 if __name__ == "__main__":
