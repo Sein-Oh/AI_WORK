@@ -449,7 +449,7 @@ python ml_predict.py \
 | `--title` | 성능예측표 계산기 맨 위 제목 (30자 안팎, 생략 시 학습 때 데이터 설명에서, 2.9.2) |
 | `--slots` | 소견 덮어쓰기 JSON (파일 또는 문자열) |
 | `--out`, `-o` | 저장 경로 (생략 시 데이터 폴더의 `ML결과보고서_<데이터>_<버전>.docx`). 이미 있으면 `<이름>_<시각>.docx`로 저장하고 `recovered`에 기록 |
-| `--overwrite` | 같은 이름의 보고서가 있으면 덮어쓰기 (사용자 확인 후에만) |
+| `--overwrite` | 같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (사용자 확인 후에만, 성능예측표에도 적용 2.9.12) |
 
 ```bat
 python ml_report.py -f sample.xlsx
@@ -525,6 +525,9 @@ python ml_map.py -f 공정.xlsx --points 조회.xlsx [--save 결과.xlsx]       
 - 결과 JSON: `mode`(grid/scattered), `points[].values/method/basis(원본 행, 비율)/extrapolated/out_of_range`, `nearest_rows`(5행, 원본 행·거리·값),
   `data_range`, `data_saved_at`(파일 마지막 저장 시각, 엑셀에서 저장하지 않은 변경은 반영 안 됨), `warnings`.
   반대 찾기: `solutions`, `count`, `reachable`, `fixed`. 답이 20개를 넘거나 `--save`면 결과 엑셀(`답`/`결과`, `가까운 실측` 시트), `output_file`.
+- 구할 열이 여러 개면 열마다 그 열에 값이 있는 행으로 따로 계산합니다. 한 열의 빈칸 때문에 다른 열 계산에서 행이 빠지지 않습니다 (2.9.12).
+  기준 열이 빈 행만 모든 계산에서 뺍니다.
+- `--save` 파일이 이미 있으면 시각을 붙인 새 이름으로 저장하고 `recovered`에 기록, `--overwrite`면 덮어씁니다 (2.9.12).
 - `--points` 파일은 기준 열(데이터와 같은 이름)만 넣습니다. 데이터에 없는 열(메모 등)은 그대로 결과에 붙습니다. 기본 저장: 조회 파일 옆 `<이름>_보간_<시각>.xlsx`.
 
 ## 6-C. 성능예측표 (`ml_export.py`, 2.9.0)
@@ -534,11 +537,19 @@ python ml_map.py -f 공정.xlsx --points 조회.xlsx [--save 결과.xlsx]       
 python ml_export.py -m 공정_ml_data\v3 --title "반응 공정 생산효율 예측"          :: 입력 최적화 -> 추천 조합으로 생성
 python ml_export.py -m 공정_ml_data\v3 --keep "반응온도,압축압력"                 :: 꼭 포함할 입력
 python ml_export.py -m 공정_ml_data\v3 --inputs "반응온도,소비전력,촉매비율"     :: 최적화 없이 이 조합
+python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉매비율;소비전력=반응온도"  :: 타겟마다 다른 조합
 ```
+- **입력은 타겟마다 최대 8개** (2.9.12): 꼭짓점 항이 2^입력 수라 9개부터 엑셀 열·메모리 한도를 넘습니다. 자동 최적화는 8개 이하 안 중에서 고르고
+  (`warnings`), `--inputs`에 9개 이상이면 줄여서 다시 학습한 8개 이하 안을 `STOP_RETRY` + `[추천]`으로 줍니다. `--keep`이 8개를 넘으면 `STOP_RETRY`.
+- `--keep`/`--inputs`의 이름은 그 입력이 있는 타겟에만 적용합니다 (최고 버전은 타겟마다 입력이 다를 수 있음). 어느 타겟에도 없는 이름만 오류.
+  `--inputs`의 입력이 하나도 없는 타겟은 자동으로 고르고 `warnings`로 알립니다. 타겟별 형식 `<타겟>=입력,입력;<타겟2>=입력`도 됩니다.
+- `--overwrite`: 같은 이름 파일을 덮어씀 (생략 시 시각을 붙인 새 이름, `recovered`).
 - 데이터: 버전 폴더의 `model_dataset.csv` (원본 데이터 불필요, `학습제외_<타겟>` 행은 뺌). 숫자 타겟만 (분류는 건너뜀). 글자·날짜 입력 모델은 `STOP_RETRY`.
 - **입력 최적화**: 원본 숫자 입력만 대상 (파생변수는 원본 입력이 모두 남을 때 모델 안에서 그대로 계산). 단계마다 `--keep`이 아닌 입력을 하나씩 빼고
   **다시 학습**해 검증 R²가 가장 덜 떨어지는 입력을 뺍니다 (기여도 순서가 아님: 함께 작용하는 입력은 혼자서는 기여도가 낮게 나옴).
   추천 = 최고 검증 R²에서 0.005 이내인 안 중 입력 수가 가장 적은 안. 후보마다 표 크기, 표 보간 오차, 예상 최종 오차 = √(RMSE² + 보간 오차²).
+  후보(`targets.<타겟>.candidates`)마다 그 안으로 다시 만드는 `command`가 있고, 다른 타겟은 지금 고른 입력을 그대로 씁니다 (2.9.12).
+  `next_commands`는 처음 8개만 담고 `next_commands_count`, `truncated`로 알립니다.
 - **표**: 축마다 min(41, 200,000^(1/입력 수))점, 학습 범위를 고른 간격으로. 격자 점마다 가장 가까운 학습 행까지 거리(입력 0~1).
 - **모델 대비 일치도 (2.9.4)**: 학습 범위 안 무작위 조건 2,000개에서 성능예측표 값과 모델 예측값을 비교. `agreement` =
   `agreement_pct`(100 - 평균 상대 차이), `p95_diff_pct`(95% 조건의 차이), `max_diff_pct`, `within_interval_pct`(차이가 모델 90% 범위 안인 비율),
@@ -548,7 +559,10 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "반응온도,소비전력,촉
 - **엑셀** (`성능예측표_<데이터>_<버전>.xlsx`, 보고서·history와 같은 `<데이터>_ml_data` 폴더): 시트 `계산기`(노란 입력 칸 -> 예측값, 90% 범위, 상태/판단), `일괄계산`(500행),
   `사용법`, `표_<타겟>`, `정확도`(후보 표), `정보`(원래 모델과 표 모델, 입력, 뺀 입력과 학습 범위, 파생변수, 생성일).
   수식은 INDEX/MATCH만: 축마다 MATCH로 위치(1~n-1로 제한)와 비율, 꼭짓점 2^k개의 비율 합 (범위 밖은 직선 연장 + "참고용 (학습 범위 밖)").
-  쓰인 꼭짓점의 실측 거리 가중합 > 0.15면 "참고용 (실측 없는 영역)".
+  쓰인 꼭짓점의 실측 거리 가중합이 기준(`uncovered_dist` = 0.15 + 0.5 × 표 칸 대각선 √k/(n-1))보다 크면 "참고용 (실측 없는 영역)".
+  격자 점 사이를 보간한 거리라 입력이 많아 표가 성기면 학습 행 위에서도 거리가 커지므로 칸 크기만큼 기준을 늘립니다 (2.9.12, 입력 6개면 0.35, 8개면 0.62).
+- **값 자리수 (2.9.12)**: 표에는 예측값을 유효숫자 12자리로 넣고(일치도도 저장한 값으로 계산), 예측값·90% 범위 표시 형식은 타겟 크기에 맞춰
+  유효숫자 약 4자리 (기본 `0.00`, 작은 타겟은 소수 자리를 늘리고 1e-5 아래는 `0.000E+00`). RMSE 등 결과 JSON 숫자도 유효숫자로 반올림.
 - **잠금과 숨김**: 모든 시트 보호(암호 없음), 노란 입력 칸만 수정 가능, 통합문서 구조 잠금. `표_<타겟>` 시트는 완전히 숨김(veryHidden, 2.9.3: "숨기기 취소" 목록에도 안 나옴). 그 밖의 시트와 수식은 볼 수 있음.
 - 산출물: `<버전>\export\model_<타겟>.joblib|json`(표를 만든 모델), `candidates.csv`. 원래 모델은 바꾸지 않음.
 - 확인: 다시 열어 시트·잠금·입력 칸·표 행 수, 같은 계산을 파이썬으로 재현해 보간과 비교. 엑셀이 설치된 Windows에서는 엑셀로 다시 계산해 비교
@@ -787,7 +801,8 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "반응온도,소비전력,촉
 `made_best`, `best_version_dir`(예측에 쓸 폴더), `best_versions`, `best_targets`(`--best`와 같은 형식), `report_count`,
 `best_reports`(`[{report_file, version, task, targets, overall_verdict, verdicts}]`, 회귀와 분류가 섞이면 2개), `next_commands`(최고 버전 예측 명령).
 회귀 보고서면 성능예측표 키도 추가됩니다 (2.9.2): `export_file`(성능예측표 경로), `export`(타겟별 `inputs`, `dropped`, `val_r2`, `table_rows`, `agreement`),
-`export_verified`(엑셀로 재계산 확인), `export_unverified`(확인하지 못한 것), 실패하면 `export_note`(보고서는 정상).
+`export_verified`(엑셀로 재계산 확인), `export_unverified`(확인하지 못한 것), `export_warnings`(성능예측표 주의 사항, 2.9.12), 실패하면 `export_note`(보고서는 정상).
+보고서 `-t`로 타겟을 고르면 성능예측표도 그 타겟만, `--overwrite`면 성능예측표도 덮어씁니다 (2.9.12).
 `agent_directive`에 `ml_predict.py -m <best_version_dir>`이 들어갑니다. 2.1 이전의 타겟별 키(`target`, `metrics`, `slots_filled`, `reports`, `target_count`)는 문서가 하나로 합쳐지면서 2.2.0에서 없어졌습니다.
 
 보고서 서식 템플릿 (2.3.1): python-docx의 `templates/default-docx-template` 폴더(XML 파일)를 먼저 쓰고, 없으면 `default.docx`를 씁니다.

@@ -513,8 +513,8 @@ def train_and_benchmark_models(
             "val_r2": round(val_r2, 4),
             "train_r2": round(avg_train_r2, 4),
             "overfit_gap": round(avg_train_r2 - val_r2, 4),
-            "mae": round(float(mean_absolute_error(y, oof_preds)), 4),
-            "rmse": round(float(root_mean_squared_error(y, oof_preds)), 4)
+            "mae": float(f"{float(mean_absolute_error(y, oof_preds)):.6g}"),
+            "rmse": float(f"{float(root_mean_squared_error(y, oof_preds)):.6g}")
         }
         if params:
             entry["params"] = params
@@ -536,8 +536,8 @@ def train_and_benchmark_models(
     alpha = (1 - PREDICTION_INTERVAL_LEVEL) / 2
     interval = {
         "level": PREDICTION_INTERVAL_LEVEL,
-        "residual_lower": round(float(np.quantile(residuals, alpha)), 6),
-        "residual_upper": round(float(np.quantile(residuals, 1 - alpha)), 6),
+        "residual_lower": float(f"{float(np.quantile(residuals, alpha)):.6g}"),   # significant digits: tiny targets
+        "residual_upper": float(f"{float(np.quantile(residuals, 1 - alpha)):.6g}"),
         "method": "champion OOF residual quantiles (constant width)",
     }
 

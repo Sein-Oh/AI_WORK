@@ -47,11 +47,21 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.11"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.12"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
 CURRENT_ARGV: Optional[List[str]] = None  # full command (script + args) for the error log; None = sys.argv
+
+
+def round_pred(v: Any, digits: int = 4) -> Any:
+    """예측·실측 비교값 반올림: 소수 4자리를 기본으로, 작은 값은 유효숫자 4자리까지 남김 (0.000005가 0이 되지 않게)."""
+    a = np.asarray(v, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mag = np.floor(np.log10(np.abs(a)))
+    dec = np.where(np.isfinite(mag), np.maximum(digits, digits - 1 - mag), digits).astype(int)
+    out = np.array([round(float(x), int(d)) if np.isfinite(x) else float(x) for x, d in zip(a.ravel(), dec.ravel())]).reshape(a.shape)
+    return float(out) if out.ndim == 0 else out
 
 def setup_console() -> None:
     """Forces UTF-8 on stdout/stderr (Windows consoles and pipes default to CP949)."""
@@ -1130,6 +1140,57 @@ class Table:
                 "basis": basis, "extrapolated": extrap, "out_of_range": oor}
 
 
+class MultiTable:
+    """Several value columns, each interpolated on its own non-empty rows (ml_map.py without -y).
+    Rows are dropped for an empty key, but a blank in one value column does not remove that row from the others:
+    value columns with the same empty cells share one Table. Attributes other than at() come from the table of the
+    first value column (range, rows for nearest_rows)."""
+
+    def __init__(self, df: pd.DataFrame, keys: List[str], values: List[str], warnings: List[str]):
+        K = np.column_stack([coerce_numeric(df[c]).to_numpy(dtype=float) for c in keys])
+        key_ok = np.isfinite(K).all(axis=1)
+        if (~key_ok).sum():
+            warnings.append(f"기준 열에 빈칸·글자가 있는 {int((~key_ok).sum())}행은 쓰지 않았습니다")
+        df = df[key_ok].reset_index(drop=True)
+        groups: Dict[bytes, List[str]] = {}
+        masks: Dict[bytes, np.ndarray] = {}
+        for c in values:
+            m = np.isfinite(coerce_numeric(df[c]).to_numpy(dtype=float))
+            groups.setdefault(m.tobytes(), []).append(c)
+            masks[m.tobytes()] = m
+        self.values = values
+        self.tables: List[Tuple[List[str], "Table"]] = []
+        for key, cols in groups.items():
+            n_blank = int((~masks[key]).sum())
+            if n_blank and len(groups) == 1:
+                warnings.append(f"구할 열에 빈칸·글자가 있는 {n_blank}행은 쓰지 않았습니다")
+            elif n_blank:
+                warnings.append(f"{', '.join(cols)}: 빈칸·글자가 있는 {n_blank}행은 이 열 계산에서만 뺐습니다")
+            self.tables.append((cols, Table(df[masks[key]].reset_index(drop=True), keys, cols, warnings)))
+        self.primary = self.tables[0][1]
+        self.mode = "grid" if all(t.mode == "grid" for _, t in self.tables) else "scattered"
+
+    def __getattr__(self, name: str) -> Any:
+        primary = self.__dict__.get("primary")
+        if primary is None:
+            raise AttributeError(name)
+        return getattr(primary, name)
+
+    def at(self, x: np.ndarray) -> Dict[str, Any]:
+        if len(self.tables) == 1:
+            return self.primary.at(x)
+        parts = [(cols, t.at(x)) for cols, t in self.tables]
+        vals = {c: v for _, r in parts for c, v in r["values"].items()}
+        methods = list(dict.fromkeys(r["method"] for _, r in parts))
+        oor: Dict[str, str] = {}
+        for _, r in parts:
+            oor.update(r["out_of_range"])
+        return {"values": {c: vals[c] for c in self.values},
+                "method": methods[0] if len(methods) == 1 else "; ".join(f"{', '.join(c)}: {r['method']}" for c, r in parts),
+                "basis": parts[0][1]["basis"], "extrapolated": any(r["extrapolated"] for _, r in parts),
+                "out_of_range": oor}
+
+
 def nearest_rows(df: pd.DataFrame, cols: List[str], target: np.ndarray, span: np.ndarray,
                  show: List[str], n: int = NEAREST_N) -> List[Dict[str, Any]]:
     X = np.column_stack([coerce_numeric(df[c]).to_numpy(dtype=float) for c in cols])
@@ -1712,7 +1773,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         preds = pipe.predict(X_input)
 
         pred_col_name = f"pred_{target_name}"
-        df_result[pred_col_name] = np.round(preds, 4)
+        df_result[pred_col_name] = round_pred(preds)
 
         # Record summary
         predictions_summary[target_name] = {
@@ -1720,9 +1781,9 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             "model": meta.get("champion_model", type(estimator).__name__),
             "description": desc,
             "features_used": req_features,
-            "mean_pred": round(float(np.mean(preds)), 4),
-            "min_pred": round(float(np.min(preds)), 4),
-            "max_pred": round(float(np.max(preds)), 4)
+            "mean_pred": round_pred(float(np.mean(preds))),
+            "min_pred": round_pred(float(np.min(preds))),
+            "max_pred": round_pred(float(np.max(preds)))
         }
 
         # Approximate prediction interval from the champion's out-of-fold residuals
@@ -1731,14 +1792,14 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         if interval:
             lo = preds + float(interval["residual_lower"])
             hi = preds + float(interval["residual_upper"])
-            df_result[f"pred_lo_{target_name}"] = np.round(lo, 4)
-            df_result[f"pred_hi_{target_name}"] = np.round(hi, 4)
+            df_result[f"pred_lo_{target_name}"] = round_pred(lo)
+            df_result[f"pred_hi_{target_name}"] = round_pred(hi)
             predictions_summary[target_name]["interval_level"] = interval["level"]
         if is_inline and len(preds) <= INLINE_SHOW_MAX:
-            predictions_summary[target_name]["predictions"] = [round(float(p), 4) for p in preds]
+            predictions_summary[target_name]["predictions"] = [round_pred(float(p)) for p in preds]
             if lo is not None:
                 predictions_summary[target_name]["intervals"] = [
-                    [round(float(l), 4), round(float(h), 4)] for l, h in zip(lo, hi)
+                    [round_pred(float(l)), round_pred(float(h))] for l, h in zip(lo, hi)
                 ]
 
         # Measured-data comparison (map check): same conditions looked up in the training rows
@@ -1753,15 +1814,15 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             diff = preds - vals
             outside = ((vals < lo) | (vals > hi)) if lo is not None else np.zeros(len(vals), dtype=bool)
             outside = outside & np.isfinite(vals) & np.array(mc["warnable"], dtype=bool)
-            df_result[f"map_{target_name}"] = np.round(vals, 4)
-            df_result[f"map_diff_{target_name}"] = np.round(diff, 4)
+            df_result[f"map_{target_name}"] = round_pred(vals)
+            df_result[f"map_diff_{target_name}"] = round_pred(diff)
             df_result[f"map_방식_{target_name}"] = [m + (" [외삽]" if e else "") for m, e in zip(mc["method"], mc["extrapolated"])]
             predictions_summary[target_name]["map_check_keys"] = mc["keys"]
             predictions_summary[target_name]["map_check_outside_interval"] = int(outside.sum())
             if is_inline and len(preds) <= INLINE_SHOW_MAX:
                 predictions_summary[target_name]["map_check"] = [
-                    {"value": round(float(v), 4) if np.isfinite(v) else None,
-                     "diff": round(float(d), 4) if np.isfinite(d) else None,
+                    {"value": round_pred(float(v)) if np.isfinite(v) else None,
+                     "diff": round_pred(float(d)) if np.isfinite(d) else None,
                      "method": m, "basis": b, "extrapolated": e, "outside_interval": bool(o)}
                     for v, d, m, b, e, o in zip(vals, diff, mc["method"], mc["basis"], mc["extrapolated"], outside)]
             if outside.any():
@@ -2020,7 +2081,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         chk = np.array([chk.min(), chk.max()])
         if not (chk[0] <= y0 <= chk[1]):
             unverified.append(f"{vary}={_fmt(a[vary])} 근처에서 목표값을 지나지 않음")
-        a["check"] = [round(float(c), 4) for c in chk]
+        a["check"] = [round_pred(float(c)) for c in chk]
 
     # operating windows: target inside the 90% prediction interval
     iv = meta.get("prediction_interval")

@@ -127,7 +127,7 @@ python "C:\CLI\ml-kit\ml_report.py" -f "<데이터파일>" --title "<제목>"
 - 회귀와 분류 타겟이 섞여 있으면 보고서가 2개(`best_reports`)다.
 - 알릴 것: `report_file`, `export_file`(성능예측표)과 `export`의 타겟별 `inputs`(남긴 입력)·`agreement.agreement_pct`(모델 대비 일치도 %), `overall_verdict`(적합/조건부/부적합), `made_best`(true면 이번에 다시 학습함),
   `best_targets`의 타겟별 `source_version`(학습 조건 출처), `source_score`(그때 점수), `new_score`(이번 점수)를 짧게.
-- `export_note`나 `export_unverified`가 있으면 그대로 알린다 (보고서는 정상).
+- `export_note`, `export_unverified`, `export_warnings`가 있으면 그대로 알린다 (보고서는 정상).
 - 이후 예측(4단계)에는 결과의 `best_version_dir`을 쓴다.
 - 사용자가 보고서 문장을 직접 정해 주면, 파일 쓰기 도구로 `slots.json`(UTF-8)을 만들고 명령 끝에 `--slots "<그 경로>"`를 붙인다.
   형식: `{"summary": "<요약 문장>", "operation": "<운영 문장>"}`
@@ -155,7 +155,8 @@ python "C:\CLI\ml-kit\ml_export.py" -m "<best_version_dir>" --keep "<입력1>,<�
 ```
 - 입력을 줄이며 다시 학습하므로 몇 분 걸린다 (시간 제한 600000). 같은 이름 파일이 있으면 시각을 붙인 새 이름으로 저장된다.
 - 알릴 것: `output_file`, 타겟별 `inputs`(남긴 입력)와 `dropped`(뺀 입력), `val_r2`, `table_rows`.
-  사용자가 다른 입력 조합을 원하면 `candidates`를 표로 보여 주고, 고른 안의 `next_commands` 명령을 그대로 실행한다.
+  사용자가 다른 입력 조합을 원하면 `candidates`를 표로 보여 주고, 고른 안의 `command`를 그대로 실행한다.
+- 입력은 타겟마다 8개까지다. 더 많이 넣으면 `STOP_RETRY`와 `[추천]` 조합이 나온다.
 
 ## 결과 처리 (모든 단계 공통)
 
