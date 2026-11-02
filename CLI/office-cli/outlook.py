@@ -184,10 +184,17 @@ def cmd_search(args) -> Dict[str, Any]:
     return rt.ok(TOOL, "search", f"{desc}: '{folder.Name}'에서 {len(mails)}통", **result)
 
 
+def _safe_name(text: str, limit: int, default: str = "메일") -> str:
+    """파일·폴더 이름에 쓸 수 없는 글자(\\ / : * ? \" < > |, 제어 문자)를 _로, 끝의 점·공백은 뺍니다.
+    (RE: 같은 제목이 NTFS 대체 스트림 이름이 되거나 저장에 실패하던 문제)"""
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", text or "")[:limit].strip().rstrip(". ")
+    return name or default
+
+
 def _save_attachments(item: Any) -> Tuple[List[str], List[str]]:
     saved: List[str] = []
     skipped: List[str] = []
-    subject = re.sub(r'[\\/:*?"<>|]+', "_", _text(getattr(item, "Subject", "메일")))[:40].strip() or "메일"
+    subject = _safe_name(_text(getattr(item, "Subject", "메일")), 40)
     folder = os.path.join(rt.get_work_dir(), "mail_attachments", f"{rt.timestamp()}_{subject}")
     for i in range(1, int(item.Attachments.Count) + 1):
         att = item.Attachments.Item(i)
@@ -223,9 +230,14 @@ def _mail_detail(item: Any, args, source: str) -> Dict[str, Any]:
     clipped, cut = rt.clamp_text(body, rt.DEFAULT_MAX_CHARS)
     result: Dict[str, Any] = {"mail": info, "body": clipped, "body_truncated": cut}
     if getattr(args, "save", None):
-        out = rt.resolve_output_path(None if args.save is True else args.save, "mail_" + info["subject"][:30], ".md")
+        out = rt.resolve_output_path(None if args.save is True else args.save, "mail_" + _safe_name(info["subject"], 30), ".md")
         md = (f"# {info['subject']}\n\n- 보낸사람: {info['from']}\n- 받는사람: {info['to']}\n- 날짜: {info['received']}\n\n{body}\n")
         result["output_file"] = rt.write_text(out, md)
+        problem = rt.check_saved_file(result["output_file"])
+        if problem is None and info["subject"] not in rt.read_text_file(result["output_file"]):
+            problem = "저장한 파일에 메일 제목이 없음"
+        if problem:
+            result["save_problem"] = problem
         result["next_commands"] = [rt.next_command("word.py", ["write", "--file", result["output_file"]], "메일 내용을 워드에 넣기")]
     if getattr(args, "save_attach", False) and info["attachments"]:
         saved, skipped = _save_attachments(item)
@@ -245,6 +257,11 @@ def cmd_read(args) -> Dict[str, Any]:
     preview = f"'{result['mail']['subject']}' ({result['mail']['from']})"
     if "saved_attachments" in result:
         preview += f", 첨부 {len(result['saved_attachments'])}개 저장"
+    if result.get("save_problem"):
+        return rt.ok_unverified(TOOL, "read", preview, [result["save_problem"]], **result)
+    if "output_file" in result:
+        return rt.ok(TOOL, "read", preview + f", 저장: {result['output_file']}",
+                     "VERIFIED: 메일을 읽고 저장한 파일을 다시 열어 확인했습니다.", verified=True, **result)
     return rt.ok(TOOL, "read", preview, **result)
 
 
@@ -299,7 +316,8 @@ def cmd_folders(args) -> Dict[str, Any]:
 # ==============================================================================
 
 def _html_prefix(text: str) -> str:
-    safe = text.replace("\\n", "\n").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+    # 줄바꿈 변환은 _body_arg(--body)에서만: 여기서 다시 바꾸면 --body-file의 C:\new\data 같은 경로가 깨짐
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
     return ("<div style='font-family: \"Malgun Gothic\", \"Segoe UI\", sans-serif; font-size: 10pt;'>"
             f"{safe}</div><br>")
 
@@ -312,10 +330,24 @@ def _prepend_html(html: str, prefix: str) -> str:
     return html[:m.end()] + prefix + html[m.end():] if m else prefix + (html or "")
 
 
+def _attach_paths(spec: Optional[str]) -> List[str]:
+    """--attach 값을 파일 경로 목록으로. 여러 개는 ; 로 구분 (쉼표도 됨).
+    값 전체가 있는 파일이면 하나로 봅니다 (쉼표가 든 파일 이름 '보고서,최종.pdf')."""
+    raw = (spec or "").strip().strip('"')
+    if not raw:
+        return []
+    try:
+        return [rt.resolve_input_path(raw, "첨부 파일")]
+    except rt.InputError:
+        if ";" not in raw and "," not in raw:
+            raise
+    sep = ";" if ";" in raw else ","
+    return [rt.resolve_input_path(p.strip().strip('"'), "첨부 파일") for p in raw.split(sep) if p.strip()]
+
+
 def _attach(mail: Any, spec: Optional[str]) -> List[str]:
     names = []
-    for part in [p.strip() for p in (spec or "").split(",") if p.strip()]:
-        path = rt.resolve_input_path(part, "첨부 파일")
+    for path in _attach_paths(spec):
         mail.Attachments.Add(path)
         names.append(os.path.basename(path))
     return names
@@ -373,7 +405,7 @@ def _target_item(app: Any, args) -> Any:
 def _body_arg(args) -> str:
     if args.body_file:
         return rt.read_text_file(rt.resolve_input_path(args.body_file, "본문 파일"))
-    return (args.body or "").replace("\\n", "\n")
+    return rt.unescape_newlines(args.body or "")      # Windows 경로 안의 \n(C:\new\data)은 그대로
 
 
 def cmd_new(args) -> Dict[str, Any]:
@@ -451,7 +483,7 @@ def build_cli():
             p.add_argument("--to", help="받는 사람 (여러 명은 ; 로 구분)")
         p.add_argument("--body", help="본문 (줄바꿈은 \\n)")
         p.add_argument("--body-file", help="본문 파일 (.txt/.md)")
-        p.add_argument("--attach", help="첨부 파일 (여러 개는 쉼표로 구분, 파일명만 쓰면 data 폴더)")
+        p.add_argument("--attach", help="첨부 파일 (여러 개는 ; 로 구분, 쉼표도 됨. 파일명만 쓰면 data 폴더)")
         p.add_argument("--send", action="store_true",
                        help="사용자가 발송을 명시적으로 요청한 경우에만. 수신자 확인 후 발송 (기본: 작성 창만 표시)")
 

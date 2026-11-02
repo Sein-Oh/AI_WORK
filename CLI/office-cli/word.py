@@ -160,14 +160,13 @@ def _spec_numbers(spec: str, total: int, option: str) -> List[int]:
 
 def _compress(nums: Sequence[int]) -> str:
     """[1,2,3,7] -> '1-3,7'"""
-    out: List[str] = []
+    runs: List[List[int]] = []          # [시작, 끝]
     for n in sorted(set(nums)):
-        if out and n == last + 1:
-            out[-1] = out[-1].split("-")[0] + f"-{n}"
+        if runs and n == runs[-1][1] + 1:
+            runs[-1][1] = n
         else:
-            out.append(str(n))
-        last = n
-    return ",".join(out)
+            runs.append([n, n])
+    return ",".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
 
 
 def _page_bounds(doc: Any, pages: List[int], total: int) -> Dict[int, Tuple[int, int]]:
@@ -1064,6 +1063,10 @@ def cmd_replace(args) -> Dict[str, Any]:
         if highlight is None:
             raise rt.not_found("형광펜 색", args.highlight, [k for k in WD_HIGHLIGHT if k.isascii()], vocab=True)
     formatting = any(x is not None for x in (color, highlight, args.bold, args.italic, args.size))
+    if not args.map and args.replace is None and not formatting:
+        # 바꿀 글도 서식도 없으면 아무것도 바뀌지 않는데 'N곳 처리'로 보고되던 문제
+        raise rt.InputError("--replace(바꿀 글)나 서식 옵션(--bold, --color, --highlight 등)이 없어 바꿀 것이 없습니다. "
+                            "사용자에게 무엇으로 바꿀지 확인하세요. 글을 지우려면 --replace \"\"를 씁니다.")
     counts: Dict[str, int] = {}
     limit_hit = False
     with off.open_target("word", args.target, readonly=False, focus=not args.no_focus,
@@ -1098,7 +1101,9 @@ def cmd_replace(args) -> Dict[str, Any]:
         if counts and not limit_hit:
             for find, n in counts.items():
                 rep = mapping[find]
-                if find not in rep:
+                # --match-case가 없으면 대소문자만 다른 바꿈(office -> Office)도 찾는 글이 '남은' 것으로 세지 않음
+                inside = (find in rep) if args.match_case else (find.casefold() in rep.casefold())
+                if not inside:
                     left = _count_text(t.doc, find, args.match_case, args.whole_word)
                     if left:
                         problems.append(f"'{find}'이(가) {left}곳 남아 있음")
@@ -1114,8 +1119,8 @@ def cmd_replace(args) -> Dict[str, Any]:
                      "VERIFIED: 일치하는 문구가 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
     if limit_hit:
         result["limit_reached"] = True
-        return rt.ok(TOOL, "replace", f"{total}곳 처리 (문구당 5000곳 상한 도달, 일부 남았을 수 있음)",
-                     "VERIFIED: 상한까지 처리했습니다. 남은 곳이 있을 수 있으니 사용자에게 알리세요.", **result)
+        return rt.ok_unverified(TOOL, "replace", f"{total}곳 처리 (문구당 5000곳 상한 도달, 일부 남았을 수 있음)",
+                                ["문구당 5000곳 상한에 도달해 남은 곳이 있는지 다시 찾아 확인하지 못함"], **result)
     preview = f"{total}곳 처리: " + ", ".join(f"'{k}' {v}곳" for k, v in counts.items())
     if problems:
         return rt.ok_unverified(TOOL, "replace", preview, problems, **result)

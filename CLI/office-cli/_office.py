@@ -704,15 +704,16 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
                 exists = os.path.isfile(path)
                 if not exists and not os.path.isabs(target) and os.path.isfile(os.path.join(rt.get_data_dir(), target)):
                     path, exists = os.path.join(rt.get_data_dir(), target), True
-                if not exists and (readonly or not create):
-                    raise rt.not_found(f"{APP_LABEL[kind]} 문서", target, [d["name"] for d in docs],
-                                       extra=" (열린 문서 이름도 아니고 파일도 없음)")
-                if not exists and not os.path.isabs(target.strip('"')):
-                    # 열린 문서 이름의 오타로 새 파일이 생기고 거기에 쓰는 것을 막음 (새 파일은 전체 경로일 때만 바로 만듦)
-                    similar = rt.suggest(os.path.basename(target), [d["name"] for d in docs])
-                    if similar:
-                        raise rt.ambiguous(f"'{target}'은(는) 열린 문서도 파일도 아닙니다. 이름이 비슷한 열린 문서가 있어 새 파일을 만들지 "
-                                           "않았습니다. 사용자에게 고르게 하고, 새 파일이 맞으면 전체 경로로 다시 실행하세요.", similar)
+                if not exists and (readonly or not create or not os.path.isabs(target.strip('"'))):
+                    # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
+                    names = [d["name"] for d in docs]
+                    tail = "" if readonly or not create else " 새 파일은 사용자에게 전체 경로를 물어 --target으로 줄 때만 만듭니다."
+                    err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
+                                       extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
+                    if names and not err.candidates and "[추천]" not in str(err):
+                        err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
+                                           f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names)
+                    raise err
                 ext = os.path.splitext(path)[1].lower()
                 if ext not in EXTENSIONS[kind]:
                     raise rt.InputError(f"{APP_LABEL[kind]} 파일 확장자가 아닙니다: {ext} (지원: {', '.join(EXTENSIONS[kind])})")

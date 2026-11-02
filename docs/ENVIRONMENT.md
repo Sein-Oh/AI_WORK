@@ -38,7 +38,7 @@
 | 도구 | 상태 | 비고 |
 |---|---|---|
 | `ml-kit` 학습/예측/보고서 | 추가 설치 없이 동작 | 동일 버전(pandas 3.0.5, scikit-learn 1.9.0, openpyxl 3.1.5, python-docx 1.2.0)으로 전체 테스트 통과 |
-| `office-cli` Office 자동화/문서 읽기 | 1.4.9, 회사 PC(Office 16) 실기 1.4.1에서 71/71 통과, 오프라인 테스트는 1.4.3까지 회사 PC 통과 | 열린 문서 작업은 pywin32 312 + Office 16.0. 닫힌 파일 읽기는 openpyxl / python-docx / python-pptx / pymupdf, HWP는 olefile 0.47, 차트 다시 그리기는 matplotlib. 오프라인 테스트는 이 버전으로 통과 |
+| `office-cli` Office 자동화/문서 읽기 | 1.4.10, 회사 PC(Office 16) 실기 1.4.1에서 71/71 통과, 오프라인 테스트는 1.4.3까지 회사 PC 통과 | 열린 문서 작업은 pywin32 312 + Office 16.0. 닫힌 파일 읽기는 openpyxl / python-docx / python-pptx / pymupdf, HWP는 olefile 0.47, 차트 다시 그리기는 matplotlib. 오프라인 테스트는 이 버전으로 통과 |
 
 ## 새 도구를 만들 때 규칙
 

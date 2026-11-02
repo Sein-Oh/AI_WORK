@@ -525,16 +525,15 @@ def _old_cache(src, text="옛날 단락 내용"):
     return path
 
 
-def test_old_cache_is_normalized_and_marked_stale_when_original_is_gone(tmp_path, isolated_dirs):
-    """parser_version 1 캐시(쪽/장절 키 없음)도 검색되고, 원본이 없어 다시 읽을 수 없으면 stale로 표시하고 UNVERIFIED."""
+def test_old_format_cache_is_skipped_and_reported_when_original_is_gone(tmp_path, isolated_dirs):
+    """이전 파서 형식 캐시(키가 다름)는 다시 읽지 못하면 검색하지 않고 not_searched에 알림 (1.4.10: 옛 캐시 보정 코드 삭제)."""
     src = tmp_path / "old.txt"
     _old_cache(src)
     os.remove(src)
     code, out = run("search", "--query", "검증")
-    assert code == 0 and out["total_matches"] == 2 and out["stale_cache_count"] == 1
-    assert out["matches"][0]["page"] == 3 and out["matches"][0]["page_source"] == "pdf"
-    assert out["matches"][1]["section"] == ["제목"] and out["matches"][1]["page"] == 2
-    assert out["matches"][0]["stale"] is True and out["agent_directive"].startswith("UNVERIFIED:")
+    assert code == 0 and out["total_matches"] == 0 and out["stale_cache_count"] == 1
+    assert out["skipped"][0]["reason"].startswith("이전 형식의 캐시")
+    assert out["agent_directive"].startswith("UNVERIFIED:") and any("index --all" in c["command"] for c in out["next_commands"])
     code, out = run("list")
     assert out["documents"][0]["stale"] is True and out["documents"][0]["missing"] is True
 

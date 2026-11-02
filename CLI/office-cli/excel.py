@@ -76,12 +76,15 @@ def parse_area(cells: str, max_row: Optional[int], max_col: Optional[int]) -> Tu
     parts = cells.replace("$", "").strip().split(":")
     a, b = parts[0], parts[-1]
     if re.fullmatch(r"[A-Za-z]{1,3}", a) and re.fullmatch(r"[A-Za-z]{1,3}", b):
-        return 1, col_number(a), max_row, col_number(b)
+        ca, cb = sorted((col_number(a), col_number(b)))
+        return 1, ca, max_row, cb
     if a.isdigit() and b.isdigit():
-        return int(a), 1, int(b), max_col
+        ra, rb = sorted((int(a), int(b)))
+        return ra, 1, rb, max_col
     r1, c1 = parse_cell(a)
     r2, c2 = parse_cell(b)
-    return r1, c1, r2, c2
+    # 거꾸로 준 범위(C5:A1)는 Excel처럼 A1:C5로 (이전에는 닫힌 파일에서 빈 결과)
+    return min(r1, r2), min(c1, c2), max(r1, r2), max(c1, c2)
 
 
 def split_sheet(address: str) -> Tuple[Optional[str], str]:
@@ -264,6 +267,27 @@ def range_info(rng: Any) -> Dict[str, Any]:
 # 3. read / info
 # ==============================================================================
 
+def _closed_bounds(ws: Any) -> Tuple[int, int, int, int]:
+    """닫힌 시트의 데이터 범위 (첫 행, 첫 열, 끝 행, 끝 열). 빈 시트는 (1, 1, 0, 0).
+    크기 정보(<dimension>)가 없는 파일(다른 프로그램이 만든 xlsx)은 칸을 훑어 실제 범위를 셉니다
+    (이전에는 B:B가 B:D로, 5:7이 끝 열 없이 읽혔음)."""
+    if ws.max_row is not None and ws.max_column is not None:
+        return int(ws.min_row), int(ws.min_column), int(ws.max_row), int(ws.max_column)
+    r1 = c1 = None
+    r2 = c2 = 0
+    for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        cols = [j for j, v in enumerate(row, start=1) if v is not None and v != ""]
+        if not cols:
+            continue
+        r1 = i if r1 is None else r1
+        r2 = i
+        c1 = cols[0] if c1 is None else min(c1, cols[0])
+        c2 = max(c2, cols[-1])
+    if r1 is None or c1 is None:
+        return 1, 1, 0, 0
+    return r1, c1, r2, c2
+
+
 def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str]) -> Tuple[str, int, int, List[List[Any]], List[str]]:
     """닫힌 파일을 openpyxl로 읽습니다. (시트명, 시작행, 시작열, 값, 전체 시트명)"""
     import openpyxl
@@ -277,6 +301,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
             ws = wb[found]
         else:
             ws = wb[names[0]] if wb.active is None else wb.active
+        mr1, mc1, mr2, mc2 = _closed_bounds(ws)
         if address:
             sh, cells = split_sheet(address)
             if sh:
@@ -284,17 +309,17 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
                 if found is None:
                     raise rt.not_found("시트", sh, names)
                 ws = wb[found]
-            r1, c1, r2, c2 = parse_area(cells, ws.max_row, ws.max_column)
+                mr1, mc1, mr2, mc2 = _closed_bounds(ws)
+            r1, c1, r2, c2 = parse_area(cells, mr2, mc2)
         else:
-            r1, c1 = 1, 1
-            r2, c2 = ws.max_row, ws.max_column
-        if r2 is None or c2 is None:
-            # 크기 정보(<dimension>)가 없는 파일(다른 프로그램이 만든 xlsx): 1x1로 읽으면 데이터를 잃으므로 끝까지 읽음
-            rows = [list(r) for r in ws.iter_rows(min_row=r1, min_col=c1, values_only=True)]
-            width = max((len(r) for r in rows), default=0)
-            rows = [r + [None] * (width - len(r)) for r in rows]
+            # 열린 문서의 UsedRange처럼 데이터가 시작하는 칸부터 (A1부터 읽으면 rows가 열린 문서와 달랐음)
+            r1, c1, r2, c2 = mr1, mc1, mr2, mc2
+        if r2 < r1 or c2 < c1:
+            rows = []
         else:
             rows = [list(r) for r in ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True)]
+            width = c2 - c1 + 1
+            rows = [r + [None] * (width - len(r)) for r in rows]
         if not address:   # 끝쪽 빈 행 제거
             while rows and all(v is None for v in rows[-1]):
                 rows.pop()
@@ -462,12 +487,24 @@ def _last_used_row(ws: Any, col: int) -> int:
     """해당 열 기준 마지막 사용 행 (없으면 0)."""
     try:
         cell = ws.Cells(ws.Rows.Count, col).End(-4162)   # xlUp
-        if cell.Row == 1 and ws.Cells(1, col).Value is None:
+        if cell.Row == 1 and _cell_empty(ws.Cells(1, col)):
             return 0
         return int(cell.Row)
     except Exception:
         used = ws.UsedRange
         return int(used.Row + used.Rows.Count - 1)
+
+
+def _cell_empty(cell: Any) -> bool:
+    """값도 수식도 없는 칸. 빈 글("")을 내는 수식(=IF(A1="","",...))은 값이 비어 보여도 빈 칸이 아님."""
+    v = cell.Value
+    if v is not None and str(v) != "":
+        return False
+    try:
+        f = cell.Formula
+    except Exception:
+        return True
+    return not (isinstance(f, str) and f != "")
 
 
 def _write_sheet(t: Any, name: Optional[str], new: bool) -> Any:
@@ -507,7 +544,16 @@ def cmd_write(args) -> Dict[str, Any]:
         r2c2 = parse_cell(parts[1]) if len(parts) > 1 else None
 
         if args.append:
-            width = max(len(header) if header else 0, len(rect(table)[0]) if table else 1)
+            if table:
+                body_w = len(rect(table)[0])
+            elif r2c2:
+                body_w = r2c2[1] - c1 + 1
+            elif args.formula:
+                body_w = len(args.formula)
+            else:
+                body_w = 1
+            # 수식·값도 쓸 열 수만큼 (이전에는 1열만 보고 다른 열의 데이터 위에 썼음)
+            width = max(len(header) if header else 0, body_w)
             # 쓸 열 전체에서 가장 아래 행 (한 열만 보면 그 열이 비어 있는 행에 다른 열 데이터를 덮어씀)
             last = max(_last_used_row(ws, c) for c in range(c1, c1 + width))
             if last >= r1:
@@ -565,8 +611,8 @@ def cmd_write(args) -> Dict[str, Any]:
             nrows, ncols = len(data), len(data[0])
             ops.append((r1, c1, r1 + nrows - 1, c1 + ncols - 1, "values", tuple(tuple(xl_text(v) for v in r) for r in data)))
 
-        # 2) never overwrite existing values without the user's consent (--append writes below the data)
-        if not args.overwrite and not args.append:
+        # 2) never overwrite existing values without the user's consent (--append도 쓸 칸을 확인)
+        if not args.overwrite:
             filled = [fc for (a, b, c, d, _, _) in ops for fc in _filled_cells(ws, ws.Range(ws.Cells(a, b), ws.Cells(c, d)))]
             if filled:
                 raise rt.UserDecisionError(
@@ -641,6 +687,13 @@ def _load_map(args) -> Dict[str, str]:
 def cmd_replace(args) -> Dict[str, Any]:
     mapping = _load_map(args)
     fmt = _format_spec(args)
+    if not args.map and args.replace is None and not fmt:
+        # 바꿀 글도 서식도 없으면 아무것도 바뀌지 않는데 'N개 셀 처리'로 보고되던 문제
+        raise rt.InputError("--replace(바꿀 글)나 서식 옵션(--bg, --color, --bold 등)이 없어 바꿀 것이 없습니다. "
+                            "사용자에게 무엇으로 바꿀지 확인하세요. 찾기만 하려면 excel.py read --search를 씁니다.")
+    if args.all_sheets and args.range and split_sheet(args.range)[0]:
+        raise rt.InputError("--all-sheets와 시트 이름이 든 --range는 함께 쓸 수 없습니다 (같은 시트를 시트 수만큼 바꾸게 됨). "
+                            "한 시트만 바꾸려면 --all-sheets를 빼고, 모든 시트를 바꾸려면 --range에서 시트 이름을 빼세요.")
     replaced: List[str] = []
     skipped_formulas: List[str] = []
     written: List[Tuple[Any, int, int, Any, str]] = []        # (시트, 행, 열, 쓴 값, 주소): 다시 읽어 확인 (R1)
@@ -649,6 +702,7 @@ def cmd_replace(args) -> Dict[str, Any]:
         with off.excel_batch(t.app):
             for ws in sheets:
                 rng = target_range(t, ws, args.range)
+                ws = rng.Worksheet           # --range 'S2!A1'은 그 시트 (이전에는 읽기는 S2, 쓰기는 지금 시트)
                 values = off.range_to_matrix(rng.Value)
                 formulas = off.range_to_matrix(rng.Formula)
                 r0, c0 = int(rng.Row), int(rng.Column)
@@ -1072,14 +1126,27 @@ def _is_number(text: str) -> bool:
 
 
 def _filled_cells(ws: Any, rng: Any) -> List[Tuple[str, Any]]:
-    """범위에서 값이 있는 칸 [(주소, 값)] (문서 순서)."""
+    """범위에서 값이나 수식이 있는 칸 [(주소, 값 또는 수식)] (문서 순서).
+    빈 글("")을 내는 수식도 칸을 채운 것으로 봅니다 (값만 보면 확인 없이 덮어썼음)."""
     r0, c0 = int(rng.Row), int(rng.Column)
+    try:
+        forms = off.range_to_matrix(rng.Formula)
+    except Exception:
+        forms = []
     out = []
     for i, row in enumerate(off.range_to_matrix(rng.Value)):
         for j, v in enumerate(row):
             if v is not None and str(v) != "":
                 out.append((addr(r0 + i, c0 + j), v))
+                continue
+            f = forms[i][j] if i < len(forms) and j < len(forms[i]) else None
+            if isinstance(f, str) and f != "":
+                out.append((addr(r0 + i, c0 + j), f))
     return out
+
+
+def _r1c1_text(v: Any) -> str:
+    return "" if v is None else str(v)
 
 
 def _axis(args) -> str:
@@ -1124,11 +1191,12 @@ def cmd_range(args) -> Dict[str, Any]:
                 rng.RowHeight = float(args.size)
         elif a in ("merge", "unmerge"):
             if a == "merge" and not args.overwrite:
-                filled = _filled_cells(ws, rng)
-                if len(filled) > 1:          # 병합하면 왼쪽 위 값만 남음
+                top_left = addr(int(rng.Row), int(rng.Column))
+                lost = [(c, v) for c, v in _filled_cells(ws, rng) if c != top_left]
+                if lost:          # 병합하면 왼쪽 위 칸만 남음 (왼쪽 위가 비고 다른 칸에 값 하나만 있어도 지워짐)
                     raise rt.UserDecisionError(
-                        f"병합하면 왼쪽 위 칸만 남고 값 {len(filled) - 1}개가 지워집니다: "
-                        + ", ".join(f"{c}={_short(v)}" for c, v in filled[1:6]) + (" ..." if len(filled) > 6 else ""),
+                        f"병합하면 왼쪽 위 칸({top_left})만 남고 값 {len(lost)}개가 지워집니다: "
+                        + ", ".join(f"{c}={_short(v)}" for c, v in lost[:5]) + (" ..." if len(lost) > 5 else ""),
                         "병합하지 않았습니다. 지워질 값을 사용자에게 보여 주고, 사용자가 지워도 된다고 하면 --overwrite를 붙여 다시 실행하세요.")
             prev = t.app.DisplayAlerts
             t.app.DisplayAlerts = False        # '왼쪽 위 값만 유지' 확인창 방지
@@ -1175,6 +1243,13 @@ def cmd_range(args) -> Dict[str, Any]:
                         "옮기지 않았습니다. 덮어쓸 칸을 사용자에게 보여 주고, 사용자가 덮어써도 된다고 하면 --overwrite를 붙여 "
                         "다시 실행하세요. 아니면 비어 있는 다른 --dest를 쓰세요.")
             src_vals = off.range_to_matrix(rng.Value)
+            src_forms = None
+            if a == "copy":
+                # 복사는 상대 참조 수식의 값이 달라지므로 R1C1 수식으로 비교 (=A1*2를 옮기면 =C1*2지만 R1C1은 같음)
+                try:
+                    src_forms = off.range_to_matrix(rng.FormulaR1C1)
+                except Exception:
+                    src_forms = None
             dr, dc = parse_cell(dcell.replace("$", "").split(":")[0])
             dest_block = (dws, dr, dc, dr + len(src_vals) - 1, dc + len(src_vals[0]) - 1)
             if a == "copy":
@@ -1191,9 +1266,15 @@ def cmd_range(args) -> Dict[str, Any]:
         try:
             if a in ("copy", "move"):
                 d, r1_, c1_, r2_, c2_ = dest_block
-                got = off.range_to_matrix(d.Range(d.Cells(r1_, c1_), d.Cells(r2_, c2_)).Value)
-                bad = [addr(r1_ + i, c1_ + j) for i, row in enumerate(src_vals) for j, v in enumerate(row)
-                       if not _same_cell(v, got[i][j] if i < len(got) and j < len(got[i]) else None)]
+                dest_rng = d.Range(d.Cells(r1_, c1_), d.Cells(r2_, c2_))
+                if src_forms is not None:
+                    got = off.range_to_matrix(dest_rng.FormulaR1C1)
+                    bad = [addr(r1_ + i, c1_ + j) for i, row in enumerate(src_forms) for j, v in enumerate(row)
+                           if _r1c1_text(v) != _r1c1_text(got[i][j] if i < len(got) and j < len(got[i]) else None)]
+                else:
+                    got = off.range_to_matrix(dest_rng.Value)
+                    bad = [addr(r1_ + i, c1_ + j) for i, row in enumerate(src_vals) for j, v in enumerate(row)
+                           if not _same_cell(v, got[i][j] if i < len(got) and j < len(got[i]) else None)]
                 if bad:
                     problems.append(f"대상에서 원본과 다른 칸 {len(bad)}개: {', '.join(bad[:5])}")
             elif a == "clear" and args.type != "formats":
@@ -1219,10 +1300,11 @@ def cmd_range(args) -> Dict[str, Any]:
         resolved = t.resolved()
     where = f"{info['sheet']}!{info.get('range', '')}".rstrip("!")
     preview = f"{a} 완료: {where} {detail}".strip()
+    if a == "autofit" and not problems:
+        problems = ["자동 맞춤 너비는 Excel이 정해 비교할 값이 없음 (적용만 함)"]
     if problems:
         return rt.ok_unverified(TOOL, "range", preview, problems, target_resolved=resolved, **info)
-    return rt.ok(TOOL, "range", preview, "VERIFIED: 결과를 다시 읽어 확인했습니다." if a != "autofit" else "VERIFIED: 열 너비 자동 맞춤을 적용했습니다.",
-                 verified=a != "autofit", target_resolved=resolved, **info)
+    return rt.ok(TOOL, "range", preview, "VERIFIED: 결과를 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved, **info)
 
 
 # ==============================================================================

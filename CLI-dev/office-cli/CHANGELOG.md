@@ -2,6 +2,47 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.10] - 2026-11-01
+
+전체 검토에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1410.py`.
+
+### 수정 (엑셀)
+- `excel replace --range '요약'!A1:D9`: 읽기는 `--range`의 시트, 쓰기는 지금 시트에 하고 `VERIFIED`였던 문제. 이제 범위의 시트에서 읽고 씁니다. `--all-sheets`와 시트 이름이 든 `--range`는 함께 쓸 수 없음(STOP_RETRY).
+- `excel replace --find X`만 주면(바꿀 글·서식 없음) 아무것도 바뀌지 않는데 "N개 셀 처리" `VERIFIED`였던 문제. 이제 STOP_RETRY(`word replace`도 같게).
+- `excel range --action merge`: 왼쪽 위가 비고 다른 칸 하나에만 값이 있으면 확인 없이 병합해 그 값이 지워지던 문제. 왼쪽 위 밖의 값이 하나라도 있으면 `needs_user_decision`.
+- 덮어쓰기 확인(`write`, `range copy/move`, `merge`): 빈 글("")을 내는 수식 칸을 빈 칸으로 보고 확인 없이 덮어쓰던 문제. 수식도 확인합니다(`--append`의 마지막 행 찾기도).
+- `excel write --append --formula/--value`: 첫 열만 보고 마지막 행을 정해 옆 열의 데이터를 덮어쓰던 문제. 범위의 열 수(또는 수식 개수)만큼 보고, `--append`에도 덮어쓰기 확인을 합니다.
+- `excel range --action copy`: 상대 참조 수식은 값이 달라져 늘 `UNVERIFIED`였던 문제. 수식(R1C1)으로 비교합니다.
+- `excel range --action autofit`: 확인하지 않고 `VERIFIED`(verified false)였던 것을 `UNVERIFIED`로.
+- 닫힌 xlsx·CSV 읽기를 열린 문서와 같게: 거꾸로 준 범위(`C5:A1`)가 빈 결과였던 문제, 크기 정보(`<dimension>`)가 없는 파일에서 `B:B`가 `B:D`로·`5:7`이 끝 열 없이 읽히던 문제(실제 데이터 범위를 셈), 범위를 생략하면 A1부터 읽어 `rows`가 열린 문서와 달랐던 문제(데이터가 시작하는 칸부터).
+
+### 수정 (워드·PPT)
+- `word replace`: 문구당 5,000곳 상한에 닿으면 확인 없이 `VERIFIED`였던 것을 `UNVERIFIED`로. `--match-case` 없이 대소문자만 바꾸면(`office` -> `Office`) `UNVERIFIED`로 나오던 문제.
+- `ppt.py write --slide new --title 제목 --file 내용.md`: `.md`가 있으면 `--title`이 버려지던 문제. 첫 슬라이드 제목으로 넣고 첫 절의 제목은 본문 첫 줄로.
+- `ppt.py write --slide N --title`: 기존 슬라이드의 다른 제목을 확인 없이 바꾸던 문제. `needs_user_decision`(노트와 같은 방식), 사용자가 원하면 새 인자 `--overwrite`. 새 슬라이드는 해당 없음.
+- `ppt.py read --slides 1,5,9`가 잘리면 이어 읽기 명령이 `2-9`였던 문제. 고른 슬라이드 중 남은 번호(`5,9`)로.
+
+### 수정 (공통·office·outlook)
+- `_runtime.ok()`가 `verified=False`를 받으면 내부 오류(ValueError). 확인하지 못한 결과는 `ok_unverified`로 무엇을 확인하지 못했는지 적습니다. `office.py transfer` 일부 실패도 `UNVERIFIED`로.
+- `_runtime.ok_file`: 크기만 보던 것을 형식별로 다시 열어 확인(xlsx openpyxl, docx python-docx, pptx python-pptx, CSV 행 수, md/txt 읽기, PDF 머리). 열지 못하면 `UNVERIFIED`.
+- 오류 로그(`errors.txt`)에 메일 본문·받는 사람·제목, `--text`, 검색어 등 내용 옵션 값이 그대로 남던 문제. `<N자 생략>`으로 남기고 경로와 그 밖의 인자는 그대로.
+- 쓰기 `--target`에 파일 이름만 주었는데 열린 문서도 파일도 아니면 현재 폴더에 새 파일을 만들던 문제. "찾을 수 없음"(열린 문서가 있으면 `[후보]`), 새 파일은 전체 경로일 때만.
+- `office.py undo --pick N`(N>1): 고른 지점만 지워 더 새 지점이 남아 다음 `undo`가 앞으로 가던 문제. 같은 문서의 더 새 지점도 지웁니다(`removed_newer_points`). 수정 시각 비교는 같은 문서의 가장 새 지점 기준(그 사이 도구 저장을 사용자 저장으로 보지 않음).
+- `outlook.py read --save`: 제목을 그대로 파일 이름에 써 `RE:`·`/`·`?` 등에서 실패하던 문제(첨부 저장과 같은 정리). 저장한 파일을 다시 읽어 확인.
+- `outlook.py --body`: `\n` 변환을 두 번 해 `--body-file`의 `C:\new\data`까지 깨던 문제. `--body`만 `unescape_newlines`(경로 보존), `--body-file`은 그대로.
+- `outlook.py --attach`: 쉼표로만 나눠 이름에 쉼표가 든 파일을 첨부하지 못하던 문제. 값 전체가 있는 파일이면 하나로, 여러 개는 `;`(쉼표도 됨).
+
+### 수정 (reader)
+- `read`: 한 단위가 약 8,000자보다 길어 잘려도 `truncated: false`였던 문제. `truncated: true`, 단위의 `text_truncated`·`text_chars`, `truncated_reason`, 항상 `--save` 명령(잘린 뒤쪽은 저장 파일에 있음).
+- 일부 쪽만 스캔된 PDF: 문서 전체에 글자가 없을 때만 알려 0건 검색이 `VERIFIED`였던 문제. 글자 없는 쪽을 `meta.pages_without_text`로 남기고 `search`의 `not_searched`와 `read` 결과에 알립니다(`PARSER_VERSION` 5, 기존 캐시는 다시 읽음).
+- 엑셀 시트 행 상한(20,000행)에서 자른 문서를 `read`/`read --save`가 그대로 `VERIFIED`로 알리던 문제(`truncated`, 저장은 `UNVERIFIED`). `search --save`가 5,000건에서 멈춰도 `VERIFIED`였던 문제(`save_truncated`, `UNVERIFIED`).
+- `read --save`, `search --save`: 저장한 파일을 다시 열어 확인(CSV는 행 수). 확인하지 못하면 `UNVERIFIED`.
+- `index`: 캐시 저장에 실패해도 "캐시에 저장 확인"이던 문제. 캐시 파일을 확인해 `cache_failed`와 `UNVERIFIED`.
+- 옛 캐시의 빈 키를 채우던 `normalize_doc` 삭제 (베타, 이전 형식 캐시는 `PARSER_VERSION`으로 다시 읽음). 다시 읽지 못한 이전 형식 캐시는 검색하지 않고 `skipped`로 알립니다.
+
+### 정리
+- pyflakes: `ppt.py`의 쓰지 않는 `nonlocal slide_no`, `word.py` `_compress`를 대입 전 참조 없이 다시 씀. 테스트의 BOM 글자를 `"\ufeff"`로.
+
 ## [1.4.9] - 2026-10-31
 
 ### 수정
@@ -411,7 +452,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 ### 1.4.0 점검에서 남긴 것
 - PowerPoint 닫힌 파일의 열기 암호, DRM 인증 창이 뜨는 문서: 백그라운드에서 멈출 수 있음 (감시 시간 초과 후 정리 필요).
 - 엑셀: 열린 문서의 열 전체 범위(`A:A`)를 사용 범위로 자르기 (닫힌 파일·CSV는 1.4.5), 조건부 강조 `포함:`의 상대참조(활성 셀 기준), 같은 이름 차트가 여러 시트에 있을 때 `[후보]`, `--map` 연쇄 치환, 보호된 시트 사전 확인, 잘못된 시트 이름 검사 전에 시트가 만들어지는 문제.
-- 워드: 열린 문서의 자동 번호 제목(`ListFormat.ListString`)이 `outline`/`--section`에 나오지 않음(닫힌 파일과 번호 체계 다름), 목차(TOC) 안의 앵커 후보 구별, 머리글 안 글상자 치환, `replace --find`만 준 경우.
+- 워드: 열린 문서의 자동 번호 제목(`ListFormat.ListString`)이 `outline`/`--section`에 나오지 않음(닫힌 파일과 번호 체계 다름), 목차(TOC) 안의 앵커 후보 구별, 머리글 안 글상자 치환. (`replace --find`만 준 경우는 1.4.10)
 - reader: HWP(바이너리) 개요 번호, PDF `find_tables` 성능(선이 있는 쪽만), 색인 저장 일괄화, BOM 없는 UTF-16 판별.
 - transfer relay 실패 시 넣은 빈 단락 정리.
 
