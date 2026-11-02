@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.18"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.19"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -418,11 +418,64 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
 _CSV_ENCODINGS = ["utf-8-sig", "cp949", "euc-kr", "latin1"]
 
 
-def _sniff_delimiter(sample: str) -> str:
+_CSV_DELIMITERS = ",;\t|"
+
+
+def _delimiter_score(lines: List[str], d: str) -> int:
+    """Lines of the most common width (2+ fields) when split by d: a table splits most lines evenly."""
     try:
-        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+        widths = [len(r) for r in csv.reader(lines, delimiter=d)]
     except csv.Error:
-        return ","
+        return 0
+    multi = [w for w in widths if w > 1]
+    return max(multi.count(w) for w in set(multi)) if multi else 0
+
+
+def _sniff_delimiter(sample: str) -> str:
+    """csv.Sniffer's delimiter, unless another one splits more lines into the table width: a short ';' file of
+    decimal-comma numbers ('163,1;2,19;A;61,66' under a title line) is sniffed as ','."""
+    try:
+        guess = csv.Sniffer().sniff(sample, delimiters=_CSV_DELIMITERS).delimiter
+    except csv.Error:
+        guess = ","
+    lines = [ln for ln in sample.splitlines() if ln.strip()][:50]
+    scores = {d: _delimiter_score(lines, d) for d in _CSV_DELIMITERS}
+    best = max(_CSV_DELIMITERS, key=lambda d: scores[d])
+    return best if scores[best] > scores.get(guess, 0) else guess
+
+
+_DECIMAL_COMMA_RE = re.compile(r"^\s*[-+]?\d+,\d+\s*$")
+_THOUSANDS_RE = re.compile(r"^\s*[-+]?\d{1,3}(,\d{3})+(\.\d+)?\s*$")
+
+
+def _decimal_commas(df: pd.DataFrame, sep: str) -> pd.DataFrame:
+    """A CSV not separated by commas (';', tab) whose numbers use a decimal comma ('175,6', European Excel): a comma
+    that cannot be a thousands separator ('175,6', '2,19') means every '<digits>,<digits>' cell is a decimal number,
+    read with a decimal point (df.attrs["decimal_comma"]: example and count, layout_warnings). Cells that could be
+    thousands too ('1,500') in the same file are ambiguous: InputError (a value would change by 1000x either way).
+    A comma CSV, or one without such cells, is unchanged (coerce_numeric strips thousands separators)."""
+    if sep == "," or df.empty:
+        return df
+    vals = pd.Series(df.to_numpy(dtype=object).ravel())
+    vals = vals[vals.map(lambda v: isinstance(v, str) and "," in v)].astype(str)
+    if vals.empty:
+        return df
+    dec = vals[vals.str.match(_DECIMAL_COMMA_RE)]
+    thousands = vals[vals.str.match(_THOUSANDS_RE)]
+    only_dec = dec[~dec.str.match(_THOUSANDS_RE)]
+    if only_dec.empty:
+        return df
+    if not thousands.empty:
+        raise InputError(
+            f"CSV(구분 기호 '{sep}')의 숫자에 소수점 쉼표('{only_dec.iloc[0].strip()}')와 천 단위로도 읽히는 쉼표"
+            f"('{thousands.iloc[0].strip()}')가 섞여 있어 값을 정할 수 없습니다 ('{thousands.iloc[0].strip()}'이 "
+            f"소수인지 천 단위인지에 따라 1000배 달라짐). Excel에서 숫자 형식을 소수점 '.'으로 바꿔 저장하거나 .xlsx로 저장한 뒤 "
+            f"다시 실행하십시오.")
+    out = df.apply(lambda c: c.map(lambda v: v.replace(",", ".") if isinstance(v, str) and _DECIMAL_COMMA_RE.match(v)
+                                   else v))
+    out.attrs["decimal_comma"] = [f"{only_dec.iloc[0].strip()} -> {only_dec.iloc[0].strip().replace(',', '.')}",
+                                  int(len(dec)), sep]
+    return out
 
 
 def _read_csv_fast(file_path: str) -> pd.DataFrame:
@@ -450,8 +503,9 @@ def _read_csv_fast(file_path: str) -> pd.DataFrame:
         if sample is None:
             continue
         sep = _sniff_delimiter("\n".join(sample.splitlines()[:50]))
+        df = None
         try:
-            return pd.read_csv(file_path, header=None, sep=sep, encoding=enc, dtype=str, low_memory=False)
+            df = pd.read_csv(file_path, header=None, sep=sep, encoding=enc, dtype=str, low_memory=False)
         except UnicodeDecodeError as e:
             last_err = e
             continue
@@ -461,8 +515,8 @@ def _read_csv_fast(file_path: str) -> pd.DataFrame:
             try:
                 with open(file_path, "r", encoding=enc, newline="") as f:
                     width = max((len(r) for r in csv.reader(f, delimiter=sep)), default=1)
-                return pd.read_csv(file_path, header=None, names=list(range(width)), sep=sep, encoding=enc,
-                                   dtype=str, engine="python")
+                df = pd.read_csv(file_path, header=None, names=list(range(width)), sep=sep, encoding=enc,
+                                 dtype=str, engine="python")
             except Exception as e:
                 last_err = e
                 continue
@@ -471,6 +525,7 @@ def _read_csv_fast(file_path: str) -> pd.DataFrame:
         except Exception as e:
             last_err = e
             continue
+        return _decimal_commas(df, sep)
     raise InputError(f"CSV 파일 로드 실패 (지원되는 인코딩 모두 시도 완료): {last_err}")
 
 
@@ -550,7 +605,8 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     if unit_row is not None:
         j = unit_row - 1
         unit_cells = _row_cells(df_raw, j) if 0 <= j < total_rows else []
-        if j <= header_idx or not unit_cells or not _looks_like_unit_row(df_raw, j, header_idx):
+        ok, reason = unit_row_verdict(df_raw, j, header_idx) if unit_cells and j > header_idx else (False, "")
+        if not ok:
             pair = _header_unit_pair(df_raw)
             if pair and pair != (header_idx + 1, unit_row):
                 hint = f" 이 파일의 머리글은 {pair[0]}행, 단위는 {pair[1]}행으로 보입니다. [추천] {layout_retry(pair[0], pair[1])}"
@@ -564,10 +620,8 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
                 why = f"머리글 행({header_idx + 1}행)보다 아래가 아니라"
             elif _numeric_share(unit_cells) >= 0.5:
                 why = f"값이 대부분 숫자라({unit_cells[:4]})"
-            elif any(_is_data_value(v) for v in df_raw.iloc[j].tolist() if not _blank_mark(_cell_text(v))):
-                why = f"숫자·날짜가 든 칸이 있는 데이터 행이라({unit_cells[:4]})"
             else:
-                why = f"단위 행 모양(머리글 이름 아래 짧은 단위, 그 열 아래 값은 대부분 숫자·날짜)이 아니라({unit_cells[:4]})"
+                why = f"{reason}({unit_cells[:4]})"
             raise InputError(f"단위 행(--unit-row {unit_row})은 {why} 단위 행이 아닙니다. "
                              f"단위 행 번호를 고치거나 단위 행이 없으면 --unit-row를 빼십시오.{hint}")
         units = df_raw.iloc[unit_row - 1].values
@@ -646,6 +700,7 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
                                        else None)
     df_data.attrs["repeated_header_rows"] = [int(i) + 1 for i in repeated]
     df_data.attrs["summary_rows"] = _summary_rows(df_data, source_rows)
+    df_data.attrs["decimal_comma"] = df_raw.attrs.get("decimal_comma")
     return df_data
 
 
@@ -678,21 +733,52 @@ def _repeated_header_rows(df_raw: pd.DataFrame, df_data: pd.DataFrame, header_id
     return out
 
 
+# Other words of an aggregation-method category ('집계' = 평균/최대/최소): a column holding them besides a totals word
+# names how each row was measured, not totals rows
+AGGREGATE_WORDS = {"최대", "최소", "최고", "최저", "중앙값", "중간값", "표준편차", "편차", "누적", "max", "min", "maximum",
+                   "minimum", "median", "std", "stdev"}
+SUMMARY_SHARE = 0.2       # totals words in this share of a column's filled cells (3+ cells) make it a category
+
+
+def exclude_mark(v: Any) -> str:
+    """A '제외' cell as text; 0 / FALSE (0-1 or TRUE/FALSE flags) mean "not marked", like an empty cell."""
+    if v is None or (not isinstance(v, str) and pd.isna(v)) or isinstance(v, (bool, np.bool_)) and not v:
+        return ""
+    t = str(v).strip()
+    if t.upper() == "FALSE":
+        return ""
+    try:
+        return "" if float(t) == 0 else t
+    except ValueError:
+        return t
+
+
 def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
     """[source row, column, text] of rows that look like totals / averages: a cell 합계/평균/Total ... (SUMMARY_WORDS)
-    and a number in the same row. Not dropped (a data value decision): layout_warnings names them."""
+    and a number in the same row. Not dropped (a data value decision): layout_warnings names them.
+    Not counted: rows the user marked in the '제외' column (a mark other than '포함'), the '제외' column itself (its text
+    is the reason), and columns where those words are values of a category: a majority of the filled cells, or
+    SUMMARY_SHARE of them (3+ cells), or next to other aggregation words ('집계' = 평균/최대/최소)."""
     if df.empty:
         return []
+    excl = next((c for c in df.columns if strip_unit(str(c)) == EXCLUDE_COL), None)
+    marked = (df[excl].map(exclude_mark).map(lambda t: bool(t) and t != INCLUDE_MARK).to_numpy(dtype=bool)
+              if excl is not None else np.zeros(len(df), dtype=bool))
     out: Dict[int, List[Any]] = {}
     for col in df.columns:
         s = df[col]
-        if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_datetime64_any_dtype(s):
+        if col == excl or pd.api.types.is_numeric_dtype(s) or pd.api.types.is_datetime64_any_dtype(s):
             continue
         txt = s.astype("string").str.replace(r"\s+", "", regex=True).str.lower()
-        for i in np.flatnonzero(txt.isin(SUMMARY_WORDS).fillna(False).to_numpy(dtype=bool)):
+        hit = txt.isin(SUMMARY_WORDS).fillna(False).to_numpy(dtype=bool)
+        n_hit, n_filled = int(hit.sum()), int((txt.fillna("") != "").sum())
+        if not n_hit or n_hit * 2 > n_filled or (n_hit >= 3 and n_hit >= SUMMARY_SHARE * n_filled) or \
+                txt[~hit].isin(AGGREGATE_WORDS).fillna(False).any():
+            continue
+        for i in np.flatnonzero(hit & ~marked):
             if i in out:
                 continue
-            others = [v for c, v in df.iloc[i].items() if c != col]
+            others = [v for c, v in df.iloc[i].items() if c != col and c != excl]
             if any(_numeric_share([_cell_text(v)]) == 1 for v in others if _cell_text(v)):
                 out[int(i)] = [source_rows[i] if i < len(source_rows) else int(i) + 1, str(col), str(s.iloc[i]).strip()]
     return [out[i] for i in sorted(out)]
@@ -704,6 +790,9 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
     training and ml_map; prediction only notes them). A totals word in a target column counts only in the first
     column (a class label '계' is not a totals row)."""
     out: List[str] = []
+    dec = df.attrs.get("decimal_comma")
+    if dec:
+        out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 쉼표를 소수점으로 읽었습니다 ({dec[1]}칸, 예: {dec[0]})")
     rep = df.attrs.get("repeated_header_rows") or []
     if rep:
         out.append(f"{_row_list(rep)}행은 머리글(단위) 행과 같아(페이지마다 반복된 머리글) 데이터에서 뺐습니다")
@@ -735,7 +824,7 @@ def _cell_text(v: Any) -> str:
 
 def _with_unit(header: str, unit: Any) -> str:
     u = _cell_text(unit)
-    return f"{header}({u})" if u and u not in ("-", "None", "nan") else header
+    return f"{header}({u})" if not _blank_mark(u) else header
 
 
 def _row_cells(df_raw: pd.DataFrame, i: int) -> List[str]:
@@ -745,8 +834,14 @@ def _row_cells(df_raw: pd.DataFrame, i: int) -> List[str]:
 UNIT_SCAN_CELLS = 10      # filled cells below a unit that decide whether its column holds data (majority)
 
 
+# Missing-value marks of measurement sheets: a blank cell for the layout judgment (unit row, first data row), never a
+# unit. Data values are not changed by this (coerce_numeric reads them as missing numbers anyway).
+MISSING_MARKS = set(_NA_PLACEHOLDERS) | {"측정불가", "측정 불가", "측정안됨", "결측", "없음", "해당없음", "NG", "N.G.", "ng",
+                                         "N.D.", "ND", "n.d.", "#N/A", "#VALUE!", "#DIV/0!"}
+
+
 def _blank_mark(t: str) -> bool:
-    return not t or t in _NA_PLACEHOLDERS
+    return not t or t in MISSING_MARKS
 
 
 def _is_data_value(v: Any) -> bool:
@@ -762,46 +857,124 @@ def _unit_text(t: str) -> bool:
     return len(t) <= 12 and t.count(" ") <= 1
 
 
-def _looks_like_unit_row(df_raw: pd.DataFrame, j: int, header: Optional[int] = None) -> bool:
-    """Row j (0-based) is the unit row of the header row `header` (default j - 1):
-    - every filled cell ('-', 'N/A' are blank marks) sits under a filled header cell, and the header row is mostly text
-      (a header under a title row of fewer cells is not a unit row);
-    - every filled cell is text: no number or date (a first data row with numbers in some cells is data);
-    - most of those text columns hold a short unit, and data below: the majority of the next filled cells (up to
-      UNIT_SCAN_CELLS) are numbers or dates, so one text value ('측정불가', 'NG', '<0.1', '12%') does not decide;
-    - the next row with values in those columns is not text in all of them (a header over its unit row).
-    A first data row of text values (categories, a text target) is not a unit row, nor is a row of numbers."""
+UNIT_SCAN_ROWS = 50 * UNIT_SCAN_CELLS    # rows below a unit row read for the judgment (bounded on a large sheet)
+
+
+def _number(v: Any) -> Optional[float]:
+    t = _cell_text(v)
+    if isinstance(v, (datetime, np.datetime64)) or not t or _numeric_share([t]) != 1:
+        return None
+    return float(t.replace(",", ""))
+
+
+def _below_block(df_raw: pd.DataFrame, j: int, skip: List[List[str]]) -> np.ndarray:
+    """Cells of the rows below row j (up to UNIT_SCAN_ROWS), without the rows equal to a row of `skip` (the header and
+    unit row repeated on page breaks): one read for every column of the judgment."""
+    block = df_raw.iloc[j + 1:j + 1 + UNIT_SCAN_ROWS].to_numpy(dtype=object)
+    if not len(block):
+        return block
+    keep = np.ones(len(block), dtype=bool)
+    for row in skip:
+        k0 = next((k for k, t in enumerate(row) if t), None)
+        if k0 is None or k0 >= block.shape[1]:
+            continue
+        for i in np.flatnonzero(np.fromiter((_cell_text(v) == row[k0] for v in block[:, k0]), dtype=bool,
+                                            count=len(block))):
+            if [_cell_text(x) for x in block[i]] == row:
+                keep[i] = False
+    return block[keep]
+
+
+def _column_below(block: np.ndarray, k: int) -> List[Any]:
+    """Filled cells of column k of _below_block (missing marks dropped)."""
+    if not len(block) or k >= block.shape[1]:
+        return []
+    return [v for v in block[:, k] if not _blank_mark(_cell_text(v))]
+
+
+def _unit_cell(v: Any, below: List[Any]) -> str:
+    """One filled cell of a candidate unit row against the filled cells of its column below:
+    'unit'  text that is not among the values below ('°C', a scale '1000' far outside the numbers below);
+    'data'  a number or date in the range of the values below, or text that is a value below (category 'A');
+    'blank' a missing-value mark ('측정불가', 'NG', '-') that is not a value below;
+    'note'  long text (not a unit, not a value below)."""
+    t = _cell_text(v)
+    texts = {_cell_text(b) for b in below if not _is_data_value(b)}
+    if not _is_data_value(v):
+        if t in texts:
+            return "data"
+        if _blank_mark(t):
+            return "blank"
+        return "unit" if _unit_text(t) else "note"
+    x = _number(v)
+    nums = [n for n in (_number(b) for b in below) if n is not None]
+    if x is None or not nums or x == 0:
+        return "data"              # a date, a number over a text column, a zero
+    lo, hi = min(nums), max(nums)
+    w = max(hi - lo, 0.5 * max(abs(lo), abs(hi)), 1e-9)
+    return "unit" if (x > hi + 3 * w or x < lo - 3 * w) else "data"     # a scale unit: 1000 over 1..5
+
+
+def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None) -> Tuple[bool, str]:
+    """(row j (0-based) is the unit row of the header row `header` (default j - 1), why not). Judged per cell, then
+    by the row (_unit_cell):
+    - no cell is data (a number or date in the range below, or a text value found below such as a category 'A'),
+      and some text cell is a unit; missing-value marks ('측정불가', 'NG') count as blank, so a first data row of
+      '측정불가, 측정불가, A' or '측정불가, 측정불가' is data, not units;
+    - every filled cell sits under a filled header cell, and the header row is mostly text (a header under a title row
+      of fewer cells is not a unit row); a column with no header and no numbers or dates below ('비고' over blank
+      cells) is not judged;
+    - most unit text cells sit over data: the majority of the next filled cells (up to UNIT_SCAN_CELLS) are numbers or
+      dates, so one text value below ('측정불가', '<0.1', '12%') does not decide;
+    - the next row with values in those columns is not text in all of them (a header over its unit row)."""
     header = j - 1 if header is None else header
     if header < 0 or j <= header or j + 1 >= len(df_raw):
-        return False
+        return False, "머리글 행 아래가 아니라"
     head = [_cell_text(v) for v in df_raw.iloc[header].tolist()]
-    row = df_raw.iloc[j].tolist()
-    filled = [k for k, v in enumerate(row) if not _blank_mark(_cell_text(v))]
     head_cells = [t for t in head if t]
-    if not filled or not head_cells or _numeric_share(head_cells) >= 0.5 or any(not head[k] for k in filled):
-        return False
-    text = [k for k in filled if not _is_data_value(row[k])]
-    if len(text) < len(filled):         # a number or a date: a data row ('측정불가, 측정불가, A, 61.66'), 2.9.18
-        return False
-    good = 0
-    for k in text:
-        if not _unit_text(_cell_text(row[k])):
+    if not head_cells or _numeric_share(head_cells) >= 0.5:
+        return False, "머리글 행이 글자 행이 아니라"
+    row = df_raw.iloc[j].tolist()
+    if all(_blank_mark(_cell_text(v)) for v in row):
+        return False, "빈 칸과 빈 값 표시(측정불가 등)뿐이라"
+    block = _below_block(df_raw, j, [head, [_cell_text(v) for v in row]])
+    kinds: Dict[int, str] = {}
+    for k, v in enumerate(row):
+        if not _cell_text(v):
             continue
-        below: List[bool] = []
-        for v in df_raw.iloc[j + 1:j + 1 + 50 * UNIT_SCAN_CELLS, k].tolist():   # bounded on a large sheet
-            if not _blank_mark(_cell_text(v)):
-                below.append(_is_data_value(v))
-                if len(below) >= UNIT_SCAN_CELLS:
-                    break
-        if below and sum(below) * 2 > len(below):
+        below = _column_below(block, k)
+        if k >= len(head) or not head[k]:
+            if _blank_mark(_cell_text(v)):
+                continue
+            if any(_is_data_value(b) for b in below[:UNIT_SCAN_CELLS * 5]):   # a name under a title row
+                return False, "이름 없는 머리글 칸 아래에 숫자·날짜가 든 열이 있어(제목 행 아래의 머리글)"
+            continue                                    # '비고' over a column without data: not judged
+        kinds[k] = _unit_cell(v, below)
+    if any(c == "data" for c in kinds.values()):
+        return False, "아래 데이터와 같은 값(그 열 범위 안의 숫자·날짜, 아래에도 있는 글자 값)이 든 데이터 행이라"
+    units = [k for k, c in kinds.items() if c == "unit" and not _is_data_value(row[k])]
+    text = [k for k, c in kinds.items() if c in ("unit", "note") and not _is_data_value(row[k])]
+    if not units:
+        return False, "단위로 볼 짧은 글자가 없어"
+    good = 0
+    for k in units:
+        below = _column_below(block, k)[:UNIT_SCAN_CELLS]
+        if below and sum(_is_data_value(b) for b in below) * 2 > len(below):
             good += 1
     if good * 2 <= len(text):
-        return False
+        return False, "단위 칸 아래 열의 값이 대부분 숫자·날짜가 아니라"
     for i in range(j + 1, len(df_raw)):
-        vals = [df_raw.iat[i, k] for k in text if not _blank_mark(_cell_text(df_raw.iat[i, k]))]
+        vals = [df_raw.iat[i, k] for k in units if not _blank_mark(_cell_text(df_raw.iat[i, k]))]
         if vals:
-            return len(vals) < 2 or any(_is_data_value(v) for v in vals)
-    return False
+            if len(vals) < 2 or any(_is_data_value(v) for v in vals):
+                return True, ""
+            return False, "바로 아래 행도 글자 행이라(단위 행 위의 머리글)"
+    return False, "아래에 데이터가 없어"
+
+
+def _looks_like_unit_row(df_raw: pd.DataFrame, j: int, header: Optional[int] = None) -> bool:
+    """Row j (0-based) is the unit row of the header row `header` (default j - 1): unit_row_verdict."""
+    return unit_row_verdict(df_raw, j, header)[0]
 
 
 def _header_under_title(df_raw: pd.DataFrame, title: int, j: int) -> bool:
@@ -2125,7 +2298,7 @@ def _first_row_text_share(df: pd.DataFrame, numeric: List[str]) -> Optional[floa
         cols.append(src)
     for i in range(min(FIRST_ROW_SCAN, len(df))):
         vals = [v for v in (df[c].iloc[i] for c in cols)
-                if pd.notna(v) and str(v).strip() and str(v).strip() not in _NA_PLACEHOLDERS]
+                if pd.notna(v) and not _blank_mark(str(v).strip())]
         if vals:
             return float(coerce_numeric(pd.Series(vals, dtype=object)).isna().mean())
     return None
@@ -2162,7 +2335,7 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
         if auto is not None and _inputs_present(needed, [str(c) for c in auto.columns]):
             # the row below the header decides (_fit_unit_layout): a unit or notes row -> the options that skip it;
             # else the first data row is data (numbers, or a measurement failure row with a number) -> no options
-            layout = _fit_unit_layout(args.file, needed, None, int(auto.attrs.get("header_row", 1)) + 1)
+            layout = _fit_unit_layout(args.file, needed, None, int(auto.attrs.get("header_row", 1)) + 1, numeric)
             if layout:
                 cmd = _predict_command(args, layout=layout)
             elif not auto.attrs.get("unit_row_below") and (_first_row_numeric(auto, numeric) or _row_has_data(auto, 0)):
@@ -2181,7 +2354,7 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
             if unit:
                 where += f", {unit}행은 단위 행입니다"
                 # a model trained without units needs the unit row skipped (--data-row), not joined to the names
-                layout = (_fit_unit_layout(args.file, needed, row, unit) if getattr(args, "file", None)
+                layout = (_fit_unit_layout(args.file, needed, row, unit, numeric) if getattr(args, "file", None)
                           else "") or f"{layout} --unit-row {unit}"
             return f"{where}. [추천] " + _predict_command(args, layout=layout)
     return ""
@@ -2200,7 +2373,7 @@ def _unit_row_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], 
     if not df_input.attrs.get("unit_row_below") and not _first_row_is_text(df_input, numeric):
         return ""
     unit_row = int(df_input.attrs.get("header_row", 1)) + 1
-    layout = _fit_unit_layout(args.file, needed, None, unit_row)
+    layout = _fit_unit_layout(args.file, needed, None, unit_row, numeric)
     if not layout:
         return ""
     first = [str(df_input[c].iloc[0]) for c in df_input.columns[:6]]
@@ -2220,12 +2393,31 @@ def _notes_row(df_raw: pd.DataFrame, j: int) -> bool:
     return bool(cells) and not any(_is_data_value(v) for v in cells) and any(not _unit_text(_cell_text(v)) for v in cells)
 
 
-def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], unit_row: int) -> str:
+_NUMBERISH_RE = re.compile(r"^[<>~]?\s*[-+]?\.?\d")     # '<0.1', '12%', '1.5e3': a measured value written as text
+
+
+def _text_input_row(df: pd.DataFrame, i: int, numeric: List[str]) -> bool:
+    """Row i of a data frame holds text in its numeric inputs: most filled cells (missing marks are blank) are text
+    that is not a number, a date or a value written as text ('<0.1', '12%'): a unit row the unit rule did not
+    accept ('kg/cm2 G'), or a row of labels."""
+    alias = build_alias_map([str(c) for c in df.columns])
+    vals = []
+    for f in numeric:
+        src = f if f in df.columns else alias.get(_alias_key(f))
+        if src is not None and i < len(df) and not _blank_mark(_cell_text(df[src].iloc[i])):
+            vals.append(df[src].iloc[i])
+    text = [v for v in vals if not _is_data_value(v) and not _NUMBERISH_RE.match(_cell_text(v))]
+    return bool(vals) and len(text) * 2 > len(vals)
+
+
+def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], unit_row: int,
+                     numeric: Optional[List[str]] = None) -> str:
     """Layout options for a file whose row `unit_row` (1-based, below the header) is not data: '--unit-row M'
     (a unit row by _looks_like_unit_row, model trained with units '반응온도(°C)'), else '--data-row M+1' (the row
-    skipped: a unit row with the unit-less names of a model trained without units, or a notes row), else ''
-    (the row is data: numbers in some cells, '측정불가, 측정불가, A, 61.66'). Every model input must be a column.
-    `header_row` (or None) is put in front."""
+    skipped: a unit row with the unit-less names of a model trained without units, a notes row, or a row of text in the
+    numeric inputs `numeric` (_text_input_row) over a first data row of numbers), else '' (the row is data: numbers in
+    some cells, '측정불가, 측정불가, A, 61.66', or only missing marks and categories). Every model input must be a
+    column. `header_row` (or None) is put in front."""
     head = f"--header-row {header_row} " if header_row else ""
     try:
         raw = read_raw_table(path)
@@ -2236,8 +2428,18 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
     if not hdr < j < len(raw) - 1:
         return ""
     is_unit = _looks_like_unit_row(raw, j, hdr)
+    check_first = False
     if not is_unit and not _notes_row(raw, j):
-        return ""
+        # 2.9.17 fallback: text in the numeric inputs of the row (a unit row the rule did not accept) -> skip it
+        # when the next row reads as data
+        try:
+            auto = _layout_frame(raw, hdr, None, None)
+        except Exception:
+            return ""
+        rows = auto.attrs.get("source_rows") or []
+        if not numeric or unit_row not in rows or not _text_input_row(auto, rows.index(unit_row), numeric):
+            return ""
+        check_first = True
     tries = ([({"unit_row": unit_row, "data_row": None}, f"--unit-row {unit_row}")] if is_unit else []) + \
         [({"unit_row": None, "data_row": unit_row + 1}, f"--data-row {unit_row + 1}")]
     for opts, layout in tries:
@@ -2245,7 +2447,8 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
             df = _layout_frame(raw, hdr, **opts)
         except Exception:
             continue
-        if _inputs_present(needed, [str(c) for c in df.columns]):
+        if _inputs_present(needed, [str(c) for c in df.columns]) and \
+                (not check_first or _first_row_numeric(df, numeric or [])):
             return head + layout
     return ""
 

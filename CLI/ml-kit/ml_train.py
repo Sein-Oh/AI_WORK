@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     read_text_file, load_json_file, resolve_column_names, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
-    strip_unit, layout_warnings,
+    strip_unit, layout_warnings, exclude_mark as _exclude_mark,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
 )
 
@@ -1374,19 +1374,6 @@ def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
             return np.zeros(len(x), dtype=bool), med
         flag = ok & ((x < q1 - 3 * iqr) | (x > q3 + 3 * iqr))
     return flag.to_numpy(dtype=bool), med
-
-
-def _exclude_mark(v: Any) -> str:
-    """A '제외' cell as text; 0 / FALSE (0-1 or TRUE/FALSE flags) mean "not marked", like an empty cell."""
-    if v is None or (not isinstance(v, str) and pd.isna(v)) or isinstance(v, (bool, np.bool_)) and not v:
-        return ""
-    t = str(v).strip()
-    if t.upper() == "FALSE":
-        return ""
-    try:
-        return "" if float(t) == 0 else t
-    except ValueError:
-        return t
 
 
 def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, schema: Dict[str, Any],
