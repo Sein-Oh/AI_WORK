@@ -65,7 +65,7 @@ from sklearn.base import clone
 
 # 5 Core Classification Algorithms (--task classification)
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
-from sklearn.linear_model import LogisticRegressionCV
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.neighbors import KNeighborsClassifier
 
 TASK_REGRESSION = "regression"
@@ -214,9 +214,9 @@ def validate_and_sanitize_data(
     """
     all_available = [str(c) for c in df.columns]
 
-    header_candidates = df.attrs.get("header_candidates")    # two-level / merged header -> [추천] --header-row N
-    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", header_candidates=header_candidates)
-    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", header_candidates=header_candidates)
+    layout = dict(df.attrs)    # two-level / merged header, title row -> [추천] --header-row N (+ unit row)
+    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", layout=layout)
+    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", layout=layout)
     feature_names = list(dict.fromkeys(feature_names))
     target_names = list(dict.fromkeys(target_names))
 
@@ -363,7 +363,8 @@ def build_pipeline(estimator: Any, schema: Dict[str, Any], step_name: str) -> Pi
     transformers = []
     if num_cols:
         transformers.append(("num", Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
+            # keep_empty_features: a sparse column can be all-empty in a small training fold (no zero-feature error)
+            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
             ("scaler", StandardScaler()),
         ]), num_cols))
     if cat_cols:
@@ -454,6 +455,33 @@ def get_regression_models(seed: int = 42, n_rows: int = 0) -> Dict[str, Any]:
     }
 
 
+def fit_safe_model(estimator: Any, y_train: np.ndarray) -> Any:
+    """
+    Fresh copy of a candidate model whose inner settings fit a (small) training set, so tiny data never ends in an
+    internal error: KNN asks for at most as many neighbours as there are rows, ElasticNetCV's inner CV needs
+    2+ rows per inner fold, LogisticRegressionCV's inner stratified CV needs every class in every inner fold
+    (smallest class 2 -> 2 inner folds, 1 -> plain LogisticRegression with the default C).
+    Settings are unchanged when the training set is large enough.
+    """
+    est = clone(estimator)
+    n = len(y_train)
+    if isinstance(est, KNeighborsClassifier):
+        if est.n_neighbors > n:
+            est.set_params(n_neighbors=max(1, n))
+    elif isinstance(est, ElasticNetCV):
+        cv = est.cv if isinstance(est.cv, int) else 5
+        if n < 2 * cv:
+            est.set_params(cv=max(2, min(cv, n // 2)))
+    elif isinstance(est, LogisticRegressionCV):
+        k = int(pd.Series(y_train).value_counts().min())
+        cv = est.cv if isinstance(est.cv, int) else 5
+        if k < 2:
+            est = LogisticRegression(max_iter=est.max_iter, class_weight=est.class_weight)
+        elif k < cv:
+            est.set_params(cv=StratifiedKFold(n_splits=max(2, k)))
+    return est
+
+
 PREDICTION_INTERVAL_LEVEL = 0.90
 
 
@@ -517,10 +545,6 @@ def train_and_benchmark_models(
     else:
         kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
     splits = list(kf.split(X, y, groups if n_dup else None))
-    # small training folds (heavy duplication): the inner CV of ElasticNetCV must fit in every training fold
-    min_train = min(len(tr) for tr, _ in splits)
-    if min_train < 6:
-        models["ElasticNet"].set_params(cv=max(2, min(3, min_train // 2)))
 
     leaderboard = []
     model_oof_map = {}
@@ -535,7 +559,7 @@ def train_and_benchmark_models(
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
             # Leakage-Free Pipeline: fitted ONLY on training fold
-            pipe = build_pipeline(clone(regressor), schema, "regressor")
+            pipe = build_pipeline(fit_safe_model(regressor, y[train_idx]), schema, "regressor")
             pipe.fit(X.iloc[train_idx], y[train_idx])
             train_r2_list.append(r2_score(y[train_idx], pipe.predict(X.iloc[train_idx])))
             oof_preds[val_idx] = pipe.predict(X.iloc[val_idx])
@@ -580,7 +604,7 @@ def train_and_benchmark_models(
 
     # Fit Champion Model on 100% of data
     log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(clone(models[champion_name]), schema, "regressor")
+    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "regressor")
     final_pipeline.fit(X, y)
 
     log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
@@ -785,10 +809,6 @@ def train_and_benchmark_classifiers(
         n_splits = max(2, min(5, min(class_counts.values())))
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
         splits = list(skf.split(X, y))
-    # small training folds: KNN cannot ask for more neighbours than a training fold has
-    min_train = min(len(tr) for tr, _ in splits)
-    if "KNeighbors" in models and min_train < 5:
-        models["KNeighbors"].set_params(n_neighbors=max(1, min_train))
 
     leaderboard = []
     model_oof_map: Dict[str, np.ndarray] = {}
@@ -804,7 +824,7 @@ def train_and_benchmark_classifiers(
             pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
-            pipe = build_pipeline(clone(clf), schema, "classifier")
+            pipe = build_pipeline(fit_safe_model(clf, y[train_idx]), schema, "classifier")
             pipe.fit(X.iloc[train_idx], y[train_idx])
             train_f1_list.append(f1_score(y[train_idx], pipe.predict(X.iloc[train_idx]), average="macro", zero_division=0))
             oof_pred[val_idx] = pipe.predict(X.iloc[val_idx])
@@ -864,7 +884,7 @@ def train_and_benchmark_classifiers(
     }
 
     log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(clone(models[champion_name]), schema, "classifier")
+    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "classifier")
     final_pipeline.fit(X, y)
 
     log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
@@ -2342,6 +2362,37 @@ def single_best_version(records: List[Dict[str, Any]], data_root: str, raw_file:
     return rec
 
 
+def task_best_version(records: List[Dict[str, Any]], data_root: str, task: str) -> Optional[Dict[str, Any]]:
+    """
+    The version to use for every target of a task (--history best_version, ml_report -d), chosen like the report's
+    reuse (ensure_best_versions) without the data file check:
+    1. the latest --best record when no other training of the task came after it and its folder is intact;
+    2. else the one version that holds the best score of every target (select_best_recipes);
+    3. else (bests split over versions) the version holding the most per-target bests (ties -> more of the task's
+       targets, then later), complete=False.
+    Returns {version, mean_val_score, targets, complete, missing} or None (no intact record of the task).
+    """
+    idx = next((i for i in range(len(records) - 1, -1, -1)
+                if records[i].get("best") and _record_task(records[i]) == task), None)
+    if (idx is not None and not any(_record_task(r) == task and not r.get("best") for r in records[idx + 1:])
+            and _version_intact(data_root, records[idx])):
+        rec = records[idx]
+        return {"version": rec["version"], "mean_val_score": rec.get("mean_val_score"),
+                "targets": list(rec.get("targets", [])), "complete": True, "missing": []}
+    chosen = select_best_recipes(records, data_root, task)
+    if not chosen:
+        return None
+    holders: Dict[str, List[str]] = {}
+    for t, c in chosen.items():
+        holders.setdefault(c["selected_version"], []).append(t)
+    latest = {str(r.get("version")): (i, r) for i, r in _unique_records(records)}
+    ver = max(holders, key=lambda v: (len(holders[v]), len(set(latest[v][1].get("targets", [])) & set(chosen)),
+                                      latest[v][0]))
+    rec = latest[ver][1]
+    return {"version": ver, "mean_val_score": rec.get("mean_val_score"), "targets": list(rec.get("targets", [])),
+            "complete": len(holders) == 1, "missing": [t for t in chosen if t not in holders[ver]]}
+
+
 def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
     """
     For ml_report.py -f: reuses each task's up-to-date best version, otherwise builds it (in-process).
@@ -2439,31 +2490,37 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
 
     out.write("=" * 125 + "\n\n")
 
-    # best_version: best record of the latest experiment (same task AND same targets as the latest run)
-    latest = rows[-1]
-    same = [x for x in rows if x["task"] == latest["task"] and sorted(x["targets"]) == sorted(latest["targets"])
-            and isinstance(x["mean_val_score"], (int, float))]
-    best = max(same, key=lambda x: x["mean_val_score"]) if same else None
-
-    # best_by_task: best record per task (across all target sets)
+    # best_version: the version the report would use for every target of the latest run's task (task_best_version)
     best_by_task: Dict[str, Dict[str, Any]] = {}
-    for x in rows:
-        if isinstance(x["mean_val_score"], (int, float)):
-            cur = best_by_task.get(x["task"])
-            if cur is None or x["mean_val_score"] > cur["mean_val_score"]:
-                best_by_task[x["task"]] = {"version": x["version"], "mean_val_score": x["mean_val_score"]}
+    for task in TASK_ORDER:
+        if any(x["task"] == task for x in rows):
+            info = task_best_version(records, data_root, task)
+            if info:
+                best_by_task[task] = {"version": info["version"], "version_dir": os.path.join(data_root, info["version"]),
+                                      "mean_val_score": info["mean_val_score"], "complete": info["complete"],
+                                      **({"missing_targets": info["missing"]} if info["missing"] else {})}
+    best = best_by_task.get(rows[-1]["task"])
+    note = None
+    split = [f"{t}: {b['version']}에 {b['missing_targets']}의 최고 모델이 없음" for t, b in best_by_task.items()
+             if not b["complete"]]
+    if split:
+        note = ("타겟별 최고 점수가 여러 버전에 나뉘어 있습니다 (" + "; ".join(split) + "). "
+                "모든 타겟의 최고 모델은 ml_report.py -f <데이터파일>이 한 버전으로 묶어 만듭니다.")
     return {
         "status": "ok",
         "data_root": data_root,
         "description": proj_desc,
         "record_count": len(rows),
         "best_version": best["version"] if best else None,
+        "best_version_dir": best["version_dir"] if best else None,
         "best_mean_val_score": best["mean_val_score"] if best else None,
         "best_by_task": best_by_task,
+        **({"best_version_note": note} if note else {}),
         "latest_version": rows[-1]["version"],
         "records": rows,
         "verified": True,
-        "agent_directive": "VERIFIED: History summary returned. Do not re-read history.jsonl for the same information.",
+        "agent_directive": ("VERIFIED: History summary returned. Do not re-read history.jsonl for the same information."
+                            + (f" 사용자에게 알리세요: {note}" if note else "")),
     }
 
 

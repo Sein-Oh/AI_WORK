@@ -103,7 +103,7 @@ def _map_command(args, **change: Optional[str]) -> str:
 def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], args=None,
                 kv: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
     """Resolves -i names; numeric columns need numeric values, text columns become row filters."""
-    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", header_candidates=df.attrs.get("header_candidates"))
+    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", layout=df.attrs)
     resolved = dict(zip(pairs, names))
     if kv and args is not None:
         check_comma_numbers(kv, lambda k: k in resolved and _is_numeric_col(df[resolved[k]]), "-i",
@@ -136,7 +136,7 @@ def _value_columns(df: pd.DataFrame, args_y: Optional[str], columns: List[str], 
     in the filtered rows is still a value column and MultiTable leaves it out with a warning."""
     if args_y:
         names, _ = resolve_column_names([s.strip() for s in args_y.split(",") if s.strip()], columns, "구할 열(-y)",
-                                        header_candidates=df.attrs.get("header_candidates"))
+                                        layout=df.attrs)
         bad = [c for c in names if not _is_numeric_col(df[c])]
         if bad:
             raise InputError(f"구할 열 {bad}은(는) 숫자 열이 아닙니다.")
@@ -296,7 +296,7 @@ def execute_forward(args) -> Dict[str, Any]:
     x = np.array([numeric[k] for k in keys])
     r = t.at(x)
     near = nearest_rows(t.df, keys, x, t.span, show)
-    unused = [c for c in columns if c not in keys + asked + list(categorical) and _is_numeric_col(df[c])]
+    unused = [c for c in columns if c not in keys + asked + list(categorical) and _is_numeric_col(sub[c])]
     if t.mode == "scattered" and unused:
         warnings.append(f"흩어진 기록이라 기준으로 주지 않은 열 {unused[:5]}의 영향이 섞인 값입니다. 참고용으로 쓰십시오")
     point = {"input": {**{k: numeric[k] for k in keys}, **categorical}, **r}
@@ -332,12 +332,12 @@ def execute_reverse(args) -> Dict[str, Any]:
         raise InputError("--find에는 목표 하나만 주십시오 (예: --find \"생산효율=50\").")
     check_comma_numbers(goal_kv, lambda k: True, "--find", lambda fixed: _map_command(args, find=kv_text(fixed)))
     (goal_name, goal_val), = goal.items()
-    goal_col = resolve_column_names([goal_name], columns, "목표(--find)", header_candidates=df.attrs.get("header_candidates"))[0][0]
+    goal_col = resolve_column_names([goal_name], columns, "목표(--find)", layout=df.attrs)[0][0]
     try:
         y0 = float(goal_val)
     except (TypeError, ValueError):
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
-    vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)", header_candidates=df.attrs.get("header_candidates"))[0][0]
+    vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)", layout=df.attrs)[0][0]
     pairs, kv = _parse_pairs(args.input, "-i")
     numeric, categorical = _split_keys(df, pairs, columns, args, kv)
     if vary in numeric or vary in categorical:

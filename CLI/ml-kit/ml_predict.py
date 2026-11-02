@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.14"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.15"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -346,14 +346,14 @@ def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
 
 
 def resolve_column_names(names: List[str], columns: List[str], kind: str,
-                         header_candidates: Optional[List[List[Any]]] = None) -> Tuple[List[str], Dict[str, str]]:
+                         layout: Optional[Dict[str, Any]] = None) -> Tuple[List[str], Dict[str, str]]:
     """
     Resolves requested names against real columns. Exact match first, then a unique
     unit-less alias ('생산효율' -> '생산효율(%)'). A name with a different unit
     ('반응온도(C)') is NOT auto-matched. Raises InputError with suggestions otherwise:
     one similar column -> [추천] '<name>', several -> [후보] '<a>', '<b>'.
-    header_candidates (df.attrs["header_candidates"] of load_data_file): when the missing names are all in another
-    top row (two-level or merged header), the suggestion is that row: [추천] --header-row N.
+    layout (df.attrs of load_data_file): when the missing names are all in another top row (two-level or merged
+    header, title row), the suggestion is that row (header_layout_hint), with its unit row when the row below it is one.
     """
     col_list = [str(c) for c in columns]
     col_set = set(col_list)
@@ -372,11 +372,10 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
         else:
             missing.append(n)
     if missing:
-        row = find_header_row(header_candidates, missing)
-        if row is not None:
-            raise InputError(
-                f"지정하신 {kind} 컬럼 {missing}을(를) 머리글에서 찾을 수 없습니다. 파일 {row}행에 이 이름들이 있습니다 "
-                f"(두 줄 머리글이나 병합된 머리글). [추천] --header-row {row}\n[지금 머리글 컬럼 목록]: {col_list}")
+        hint = header_layout_hint(layout, missing)
+        if hint:
+            raise InputError(f"지정하신 {kind} 컬럼 {missing}을(를) 머리글에서 찾을 수 없습니다. {hint}"
+                             f"\n[지금 머리글 컬럼 목록]: {col_list}")
         hints = []
         for m in missing:
             s = suggest_columns(m, col_list)
@@ -523,20 +522,21 @@ def load_data_file(
         raise InputError(f"유효한 헤더 행을 찾을 수 없습니다 (전체 행 수: {total_rows}).")
 
     raw_headers = df_raw.iloc[header_idx].values
-    headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"col_{i}" for i, c in enumerate(raw_headers)]
-    auto_named = [not (pd.notna(c) and str(c).strip()) for c in raw_headers]   # header cell was blank
+    headers = [_cell_text(c) or f"col_{i}" for i, c in enumerate(raw_headers)]
+    auto_named = [not _cell_text(c) for c in raw_headers]   # header cell was blank
 
-    # Handle unit row if provided
+    # Handle unit row if provided. A unit row of numbers is a data row: reading it as units would rename every
+    # column ('반응온도(192.58)') and drop a data row, so it is refused (with the header + unit pair of the file).
     if unit_row is not None and 1 <= unit_row <= total_rows:
+        unit_cells = _row_cells(df_raw, unit_row - 1)
+        if unit_row - 1 != header_idx and unit_cells and _numeric_share(unit_cells) >= 0.5:
+            pair = _header_unit_pair(df_raw)
+            hint = (f" 이 파일의 머리글은 {pair[0]}행, 단위는 {pair[1]}행으로 보입니다. "
+                    f"[추천] {layout_retry(pair[0], pair[1])}") if pair else ""
+            raise InputError(f"단위 행(--unit-row {unit_row})의 값이 대부분 숫자라({unit_cells[:4]}) 단위 행이 아니라 데이터 행입니다. "
+                             f"단위 행 번호를 고치거나 단위 행이 없으면 --unit-row를 빼십시오.{hint}")
         units = df_raw.iloc[unit_row - 1].values
-        combined_headers = []
-        for h, u in zip(headers, units):
-            u_str = str(u).strip() if pd.notna(u) else ""
-            if u_str and u_str not in ["-", "None", "nan"]:
-                combined_headers.append(f"{h}({u_str})")
-            else:
-                combined_headers.append(h)
-        headers = combined_headers
+        headers = [_with_unit(h, u) for h, u in zip(headers, units)]
 
     # De-duplicate headers (handles accidental duplicate column names in source files). A generated name can
     # itself be taken (a, a, a_1), so the suffix grows until the name is unused.
@@ -587,16 +587,83 @@ def load_data_file(
     # top rows of the file that could be the real header, so a missing column name can be looked up there
     # ([추천] --header-row N): not the header row in use, and only rows above the data or mostly text rows
     # (a data row with a text value such as '압력' in a category column is not a header)
+    # Each candidate: [row, cells, unit row below it or None, cells joined with that unit row ('반응온도(°C)')]
     candidates = []
     for i in range(min(HEADER_SCAN_ROWS, total_rows)):
         if i == header_idx:
             continue
-        cells = [str(v).strip() for v in df_raw.iloc[i].tolist() if pd.notna(v) and str(v).strip()]
+        cells = _row_cells(df_raw, i)
         if cells and (i < start_idx or _numeric_share(cells) < 0.5):
-            candidates.append([i + 1, cells])
+            below = _row_cells(df_raw, i + 1) if i + 1 < total_rows else []
+            unit_next = i + 2 if below and _numeric_share(below) < 0.5 else None
+            joined = ([_with_unit(_cell_text(h), u) for h, u in zip(df_raw.iloc[i].values, df_raw.iloc[i + 1].values)
+                       if _cell_text(h)] if unit_next else [])
+            candidates.append([i + 1, cells, unit_next, joined])
     df_data.attrs["header_candidates"] = candidates
     df_data.attrs["header_row"] = header_idx + 1
+    df_data.attrs["unit_row"] = unit_row
+    df_data.attrs["data_row"] = data_row
     return df_data
+
+
+def _cell_text(v: Any) -> str:
+    """Header / unit cell as text: blank -> '', a whole-number Excel cell (year 2023 read as 2023.0) -> '2023'."""
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return ""
+    if isinstance(v, (float, np.floating)) and float(v).is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
+def _with_unit(header: str, unit: Any) -> str:
+    u = _cell_text(unit)
+    return f"{header}({u})" if u and u not in ("-", "None", "nan") else header
+
+
+def _row_cells(df_raw: pd.DataFrame, i: int) -> List[str]:
+    return [t for t in (_cell_text(v) for v in df_raw.iloc[i].tolist()) if t]
+
+
+def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
+    """(header row, unit row), 1-based: the first two text rows (2+ cells) directly above a mostly numeric row."""
+    n = min(HEADER_SCAN_ROWS, len(df_raw) - 2)
+    for i in range(max(n, 0)):
+        h, u, d = _row_cells(df_raw, i), _row_cells(df_raw, i + 1), _row_cells(df_raw, i + 2)
+        if (len(h) >= 2 and _numeric_share(h) < 0.5 and u and _numeric_share(u) < 0.5
+                and d and _numeric_share(d) >= 0.5):
+            return i + 1, i + 2
+    return None
+
+
+LAYOUT_OPTS = {"--header-row": "header_row", "--unit-row": "unit_row", "--data-row": "data_row"}
+PATH_OPTS = ("-f", "--file", "-m", "--model", "--meta", "-o", "--out", "--save", "--points", "-d", "--data-dir")
+
+
+def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
+    """The [추천] for a new header (and unit) row: the running command with --header-row/--unit-row replaced and
+    --data-row dropped (several options change, so a full command, R8); option text when the running program is not
+    an ml-kit command (in-process use)."""
+    opts = f"--header-row {header_row}" + (f" --unit-row {unit_row}" if unit_row else "")
+    argv = CURRENT_ARGV if CURRENT_ARGV is not None else list(sys.argv)
+    script = os.path.basename(argv[0] or "") if argv else ""
+    if not (script.startswith("ml_") and script.endswith(".py")):
+        return opts
+    out: List[str] = []
+    i = 1
+    while i < len(argv):
+        a = str(argv[i])
+        key, has_eq = a.split("=", 1)[0], "=" in a
+        hit = [o for o in LAYOUT_OPTS if o == key or (key.startswith("--") and len(key) > 3 and o.startswith(key))]
+        if len(hit) == 1:
+            i += 1 if has_eq else 2
+            continue
+        if key in PATH_OPTS and not has_eq and i + 1 < len(argv):
+            out += [a, quote_arg(os.path.abspath(str(argv[i + 1]).rstrip("\\/") or str(argv[i + 1])))]
+            i += 2
+            continue
+        out.append(quote_arg(a))
+        i += 1
+    return " ".join([f"python {quote_arg(os.path.abspath(argv[0]))}"] + out + [opts])
 
 
 def _numeric_share(cells: List[str]) -> float:
@@ -618,12 +685,40 @@ def names_in_cells(names: List[str], cells: List[str]) -> bool:
     return bool(names) and all(n in cell_set or (strip_unit(n) == n.strip() and _alias_key(n) in alias) for n in names)
 
 
+def find_header_layout(candidates: Optional[List[List[Any]]], names: List[str]) -> Optional[Tuple[int, Optional[int]]]:
+    """(header row, unit row or None), 1-based, of the candidate row (df.attrs["header_candidates"] of load_data_file)
+    that holds every name: as written ('온도'), or joined with the unit row below it ('온도(°C)' = '온도' + '°C',
+    names of a model trained with --unit-row). The unit row is given whenever the row below is one (text)."""
+    for cand in candidates or []:
+        row, cells = cand[0], cand[1]
+        unit_next = cand[2] if len(cand) > 2 else None
+        joined = cand[3] if len(cand) > 3 else []
+        if names_in_cells(names, cells) or (joined and names_in_cells(names, joined)):
+            return int(row), (int(unit_next) if unit_next else None)
+    return None
+
+
 def find_header_row(candidates: Optional[List[List[Any]]], names: List[str]) -> Optional[int]:
     """1-based row (df.attrs["header_candidates"] of load_data_file) that holds every name (a two-level / merged header)."""
-    for row, cells in candidates or []:
-        if names_in_cells(names, cells):
-            return int(row)
-    return None
+    found = find_header_layout(candidates, names)
+    return found[0] if found else None
+
+
+def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> str:
+    """'파일 N행에 이 이름들이 있습니다 ... [추천] ...' for names found in another top row, else ''.
+    [추천] --header-row N alone when no unit row is involved; with a unit row below N, or when the run gave
+    --unit-row/--data-row (now wrong), the full command with the new --header-row/--unit-row (layout_retry)."""
+    layout = layout or {}
+    found = find_header_layout(layout.get("header_candidates"), names)
+    if not found:
+        return ""
+    row, unit = found
+    where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
+    if unit:
+        where += f", {unit}행은 단위 행입니다"
+    if unit is None and layout.get("unit_row") is None and layout.get("data_row") is None:
+        return f"{where}. [추천] --header-row {row}"
+    return f"{where}. [추천] {layout_retry(row, unit)}"
 
 
 # ==============================================================================
@@ -1753,12 +1848,16 @@ def _fmt4(v: float) -> str:
     return f"{float(v):.4g}"
 
 
+_LAYOUT_ARTEFACT_RE = re.compile(r"^.*\(\s*[-+]?(\d[\d,]*\.?\d*|\.\d+)([eE][-+]?\d+)?\s*\)$")
+
+
 def _typo_hints(missing: List[str], available: List[str], model_names: List[str], is_inline: bool) -> List[str]:
     """A missing model input and the given name that looks like a typo of it, worded the way the user fixes it:
     "-i의 '온두' -> [추천] '온도'". Only given names that are not model inputs count as typos."""
     where = "-i의" if is_inline else "입력 데이터 열"
     known = set(model_names)
-    extra = [c for c in available if c not in known]
+    # 'bar(3)' / '°C(192.58)': a unit row read as the header and a data row as units, not a name to rename
+    extra = [c for c in available if c not in known and not _LAYOUT_ARTEFACT_RE.match(str(c))]
     out = []
     for m in missing:
         cands = difflib.get_close_matches(m, extra, n=3, cutoff=0.5)
@@ -1857,10 +1956,57 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
             return ("레이아웃 옵션(--header-row/--unit-row/--data-row)이 이 파일과 맞지 않습니다. "
                     f"이 파일의 머리글로 읽으면 모델 입력 열이 모두 있습니다. [추천] {cmd}")
     if df_input is not None and missing:
-        row = find_header_row(df_input.attrs.get("header_candidates"), missing)
-        if row is not None and row != getattr(args, "header_row", None):
-            return f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글이나 병합된 머리글). [추천] --header-row {row}"
+        found = find_header_layout(df_input.attrs.get("header_candidates"), missing)
+        if found is not None and found[0] != getattr(args, "header_row", None):
+            row, unit = found
+            where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
+            if unit is None and not has_layout:
+                return f"{where}. [추천] --header-row {row}"
+            if unit:
+                where += f", {unit}행은 단위 행입니다"
+            return f"{where}. [추천] " + _predict_command(args, layout=f"--header-row {row}"
+                                                         + (f" --unit-row {unit}" if unit else ""))
     return ""
+
+
+def _unit_row_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: pd.DataFrame) -> str:
+    """A file read without layout options whose first data row is a unit row ('°C', 'bar' in the numeric inputs):
+    predicting it would impute every input. The same file read with --unit-row <header + 1> has every model input
+    and numbers in its first data row -> '[추천] <the command with --unit-row>', else ''."""
+    if any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row")) or df_input.empty:
+        return ""
+    needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
+    numeric = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])
+                                 if c not in it["meta"]["feature_schema"].get("categorical", {})
+                                 and c not in it["meta"]["feature_schema"].get("datetime", {})))
+    if not _first_row_is_text(df_input, numeric):
+        return ""
+    unit_row = int(df_input.attrs.get("header_row", 1)) + 1
+    try:
+        with_unit = load_data_file(args.file, unit_row=unit_row)
+    except Exception:
+        return ""
+    if not (_inputs_present(needed, [str(c) for c in with_unit.columns]) and _first_row_numeric(with_unit, numeric)):
+        return ""
+    first = [str(df_input[c].iloc[0]) for c in df_input.columns[:6]]
+    return (f"파일 {unit_row}행(첫 데이터 행)의 숫자 입력 칸이 숫자가 아니라 단위로 보입니다 ({first}). 그대로 예측하면 "
+            f"이 행을 빈 값으로 채워 예측합니다. [추천] {_predict_command(args, layout=f'--unit-row {unit_row}')}")
+
+
+def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
+    """Most filled numeric-input cells of the first data row are text that is not a missing-value mark (a unit row)."""
+    alias = build_alias_map([str(c) for c in df.columns])
+    vals = []
+    for f in numeric:
+        src = f if f in df.columns else alias.get(_alias_key(f))
+        if src is None:
+            continue
+        v = df[src].iloc[0]
+        if pd.notna(v) and str(v).strip() and str(v).strip() not in _NA_PLACEHOLDERS:
+            vals.append(v)
+    if not vals:
+        return False
+    return float(coerce_numeric(pd.Series(vals, dtype=object)).isna().mean()) >= 0.5
 
 
 def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
@@ -1895,12 +2041,16 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             )
         except InputError as e:
             # the layout options (often copied from training) do not fit this file: suggest the command without them
+            # (one [추천] only: this checked suggestion replaces the loader's own)
             hint = _layout_hint(args, model_items)
             if hint:
-                raise InputError(f"{e} {hint}")
+                raise InputError(f"{str(e).split('[추천]')[0].rstrip()} {hint}")
             raise
         is_inline = False
         source_desc = os.path.basename(args.file)
+        hint = _unit_row_hint(args, model_items, df_input)
+        if hint:
+            raise InputError(hint)
     else:
         raise InputError("추론할 입력 데이터(--file 또는 --input)를 지정해야 합니다.")
 

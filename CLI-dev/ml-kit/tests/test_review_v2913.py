@@ -198,7 +198,7 @@ def test_truncated_inline_has_full_result_file(tiny, tmp_path):
 def test_report_fmt_keeps_small_values():
     assert mr.fmt(0.123456) == "0.1235" and mr.fmt(1234.5) == "1,234.5000"
     assert mr.fmt(3.2e-6) == "3.200e-06"                                       # 2.9.12: 0.0000
-    assert mr.fmt(0.004567) == "0.0046" and mr.fmt(0.0) == "0.0000"             # 2.9.14: no padding (was 0.004567)
+    assert mr.fmt(0.004567) == "0.004567" and mr.fmt(0.0) == "0.0000"           # 2.9.15: 4 significant digits
     t = {"task": "regression", "oof": pd.DataFrame({"actual": [1e-6, 3e-6, 5e-6]}),
          "champ": {"champion_model": "Ridge", "val_r2": 0.95, "mae": 2.5e-7, "overfit_gap": 0.01}}
     text = mr.text_performance(t)

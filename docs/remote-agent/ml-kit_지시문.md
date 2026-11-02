@@ -95,7 +95,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>
 - 학습 때 `--header-row`/`--unit-row`를 줬으면 파일 예측에도 같은 옵션을 붙인다 (학습 결과 `next_commands`의 예측 명령에 들어 있음).
 - `-i`에 6건 이상을 넣으면 건별 값 대신 `output_file`(결과 파일)을 알린다 (`truncated: true`).
 - `-i`의 숫자 값에는 쉼표를 쓰지 않는다 (`압력=3000`, `3,000` 아님). 쉼표가 있으면 도구가 멈추고 `[추천]` 명령을 준다 (`--find`, `ml_map.py`도 같음).
-- `<version_dir>`: 보고서를 만들었으면 보고서 결과의 `best_version_dir`, 아니면 마지막 학습 결과의 `version_dir`을 그대로 쓴다. 모르면 `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history`를 실행해 `<data_root>\<best_version>`을 쓴다.
+- `<version_dir>`: 보고서를 만들었으면 보고서 결과의 `best_version_dir`, 아니면 마지막 학습 결과의 `version_dir`을 그대로 쓴다. 모르면 `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history`를 실행해 `best_version_dir`을 쓴다 (`best_version_note`가 있으면 그대로 알린다).
 - 알릴 것: 한 건이면 `predictions_summary.<타겟>.predictions`, 회귀는 `intervals`(90% 범위)도. 파일이면 `output_file`.
 - 회귀는 `map_check`(실측 비교값: 학습 데이터에서 같은 조건을 찾은 값)의 `value`, `diff`(예측-비교값), `method`를 "실측 비교값"으로 함께 알린다.
   `map_check_warning`이 true이면 `map_check_warnings`를 그대로 알린다. `map_check_notes`가 있으면 비교값을 못 낸 이유로 짧게 알린다.
@@ -128,7 +128,7 @@ python "C:\CLI\ml-kit\ml_report.py" -f "<데이터파일>" --title "<제목>"
 - 회귀와 분류 타겟이 섞여 있으면 보고서가 2개(`best_reports`)다.
 - 알릴 것: `report_file`, `export_file`(성능예측표)과 `export`의 타겟별 `inputs`(남긴 입력)·`agreement.agreement_pct`(모델 대비 일치도 %), `overall_verdict`(적합/조건부/부적합), `made_best`(true면 이번에 다시 학습함),
   `best_targets`의 타겟별 `source_version`(학습 조건 출처), `source_score`(그때 점수), `new_score`(이번 점수)를 짧게.
-- `export_note`, `export_unverified`, `export_warnings`가 있으면 그대로 알린다 (보고서는 정상).
+- `export_note`, `export_warnings`가 있으면 그대로 알린다 (보고서는 정상). 성능예측표를 다 확인하지 못하면(엑셀이 없는 PC) `UNVERIFIED:`이고 `unverified`를 그대로 알린다.
 - 이후 예측(4단계)에는 결과의 `best_version_dir`을 쓴다.
 - 사용자가 보고서 문장을 직접 정해 주면, 파일 쓰기 도구로 `slots.json`(UTF-8)을 만들고 명령 끝에 `--slots "<그 경로>"`를 붙인다.
   형식: `{"summary": "<요약 문장>", "operation": "<운영 문장>"}`

@@ -289,7 +289,7 @@ def test_points_basis_layout_once_and_numbers(grid_gap):
 
 def test_report_fmt_no_padding():
     assert mr.fmt(0.0066) == "0.0066"                                          # 2.9.13: 0.006600
-    assert mr.fmt(0.004567) == "0.0046" and mr.fmt(4e-5) == "4.000e-05" and mr.fmt(3.2e-6) == "3.200e-06"
+    assert mr.fmt(0.004567) == "0.004567" and mr.fmt(4e-5) == "0.00004" and mr.fmt(3.2e-6) == "3.200e-06"  # 2.9.15
     assert mr.fmt(1234.5) == "1,234.5000" and mr.fmt(0.0) == "0.0000"
 
 

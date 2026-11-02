@@ -140,9 +140,9 @@ def worst_verdict(verdicts: List[str]) -> str:
 
 
 def fmt(v: Any, digits: int = 4) -> str:
-    """Numbers in the report (cards, tables and text alike): `digits` decimals (0.0066 -> 0.0066, no padding
-    beyond the stored value); only a value that would show as 0 at `digits` decimals keeps `digits` significant
-    digits in exponent form, so an MAE of 3e-06 is not shown as 0.0000."""
+    """Numbers in the report (cards, tables and text alike): at least `digits` decimals, and enough decimals for
+    `digits` significant digits on a small value (0.00012345 -> 0.0001235); trailing zeros beyond `digits`
+    decimals are dropped (0.0066 -> 0.0066, not 0.006600). Only values below SMALL_EXP (1e-5) use exponent form (3.200e-06)."""
     if v is None:
         return "-"
     if isinstance(v, (bool, np.bool_)):
@@ -153,10 +153,20 @@ def fmt(v: Any, digits: int = 4) -> str:
         if not np.isfinite(v):
             return "-"
         a = abs(float(v))
-        if a > 0 and round(a, digits) == 0:
+        if a == 0:
+            return f"{0.0:.{digits}f}"
+        if a < SMALL_EXP:
             return f"{float(v):.{digits - 1}e}"
-        return f"{float(v):,.{digits}f}"
+        dec = max(digits, digits - 1 - int(np.floor(np.log10(a))))
+        text = f"{float(v):,.{dec}f}"
+        if dec > digits:
+            head, frac = text.split(".")
+            text = f"{head}.{frac[:digits]}{frac[digits:].rstrip('0')}"
+        return text
     return str(v)
+
+
+SMALL_EXP = 1e-5
 
 
 # ==============================================================================
@@ -1373,7 +1383,7 @@ def parse_slots(raw: Optional[str]) -> Dict[str, Any]:
 
 
 def resolve_version_dir(args: argparse.Namespace) -> str:
-    """-m <version_dir> wins; otherwise -d <data_root> with -v, or the best version of the latest experiment."""
+    """-m <version_dir> wins; otherwise -d <data_root> with -v, or the task's best version (ml_train.task_best_version)."""
     if args.model:
         return args.model
     if not args.data_dir:
@@ -1387,12 +1397,14 @@ def resolve_version_dir(args: argparse.Namespace) -> str:
     records = _read_jsonl(ledger)
     if not records:
         raise InputError(f"실험 원장이 비어 있습니다: {ledger}")
-    latest = records[-1]
-    same = [r for r in records if r.get("task", "regression") == latest.get("task", "regression")
-            and sorted(r.get("targets", [])) == sorted(latest.get("targets", []))
-            and isinstance(r.get("mean_val_score"), (int, float))]
-    best = max(same, key=lambda r: r["mean_val_score"]) if same else latest
-    sys.stderr.write(f"[INFO] 보고서 버전 자동 선택: {best['version']} (최근 학습과 같은 타겟 조합 중 최고 점수)\n")
+    import ml_train  # same choice as ml_train.py --history best_version
+    task = records[-1].get("task", "regression")
+    best = ml_train.task_best_version(records, root, task)
+    if best is None:
+        raise InputError(f"{task} 학습 기록 중 버전 폴더가 온전한 기록이 없습니다: {root}. 먼저 ml_train.py로 학습하십시오.")
+    how = ("모든 타겟의 최고 점수" if best["complete"]
+           else f"타겟별 최고가 여러 버전에 나뉘어 최고 타겟이 가장 많은 버전, {best['missing']}은(는) 다른 버전이 더 좋음")
+    sys.stderr.write(f"[INFO] 보고서 버전 자동 선택: {best['version']} ({how})\n")
     return os.path.join(root, best["version"])
 
 
@@ -1445,6 +1457,14 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
     result["export_verified"] = res["verified"]
     if res.get("unverified"):
         result["export_unverified"] = res["unverified"]
+        # R1: the result covers the workbook too, so an unverified workbook makes the whole result UNVERIFIED
+        result["verified"] = False
+        result["unverified"] = list(result.get("unverified") or []) + [f"성능예측표: {u}" for u in res["unverified"]]
+        if result["agent_directive"].startswith("VERIFIED: "):
+            result["agent_directive"] = (
+                "UNVERIFIED: 보고서(Word)는 다시 열어 확인했지만 성능예측표는 다 확인하지 못했습니다 ("
+                + "; ".join(res["unverified"]) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. "
+                + result["agent_directive"][len("VERIFIED: "):])
     if res.get("warnings"):
         result["export_warnings"] = res["warnings"]
     result["preview"] += f" | 성능예측표: {os.path.basename(res['output_file'])}"
@@ -1560,7 +1580,7 @@ def main():
     parser.add_argument("--model", "-m",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
     parser.add_argument("--data-dir", "-d", dest="data_dir",
-                        help="데이터 폴더 (<파일명>_ml_data). -v 생략 시 최근 학습과 같은 타겟 조합 중 최고 버전")
+                        help="데이터 폴더 (<파일명>_ml_data). -v 생략 시 모든 타겟의 최고가 있는 버전 (--history의 best_version)")
     parser.add_argument("--version", "-v", help="-d와 함께 쓸 버전 (예: v2 또는 2)")
     parser.add_argument("--target", "-t", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
     parser.add_argument("--out", "-o", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
