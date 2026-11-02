@@ -184,12 +184,15 @@ def test_european_thousands_dot(tmp_path):
     rows2 = [[int(t[i]), _euro(flow[i]), int(y[i])] for i in range(N)]
     df = mp.load_data_file(_csv(tmp_path / "d3b.csv", ["온도", "유량", "수율"], rows2))
     assert _num(df, "유량") == [round(v, 1) for v in flow]
-    # mixed with a US number or a dot-grouped number without a comma: refused, never 1.3468
-    for k, bad in enumerate(["1,346.8", "1.346"]):
-        rows3 = [list(r) for r in rows]
-        rows3[5][1] = bad
-        with pytest.raises(mp.InputError):
-            mp.load_data_file(_csv(tmp_path / f"d3x{k}.csv", ["온도", "유량", "수율"], rows3))
+    # mixed with a US number: refused, never 1.3468
+    rows3 = [list(r) for r in rows]
+    rows3[5][1] = "1,346.8"
+    with pytest.raises(mp.InputError):
+        mp.load_data_file(_csv(tmp_path / "d3x0.csv", ["온도", "유량", "수율"], rows3))
+    # a dot-grouped integer without a comma: 2.9.21 reads it as thousands too (1346, with a warning; test_review_v2921)
+    rows3[5][1] = "1.346"
+    df = mp.load_data_file(_csv(tmp_path / "d3x1.csv", ["온도", "유량", "수율"], rows3))
+    assert _num(df, "유량")[5] == 1346 and any("쉼표 없는" in w for w in mp.layout_warnings(df))
     _, res = run_raw("ml_train.py", "-f", _csv(tmp_path / "d3t.csv", ["온도", "유량", "수율"], rows),
                      "-x", "온도,유량", "-y", "수율")
     assert res["status"] == "ok" and any("천 단위" in w for w in res.get("warnings", [])), res

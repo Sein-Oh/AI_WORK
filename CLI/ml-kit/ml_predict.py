@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.20"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.21"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -450,6 +450,8 @@ _DECIMAL_COMMA_RE = re.compile(r"\s*[-+]?\d+,\d+\s*")                          #
 _CSV_THOUSANDS_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(,\d{3})+(\.\d+)?\s*")   # '1,500', '1,346.8' (never '0,149')
 _EURO_NUMBER_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(\.\d{3})+,\d+\s*")       # '1.346,8': thousands dot, decimal comma
 _DOT_THOUSANDS_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(\.\d{3})+\s*")          # '1.346': thousands dot or 3 decimals
+_DOT_GROUPED_RE = re.compile(r"\s*[-+]?\d{1,3}(\.\d{3})+\s*")                   # '1.300', '0.300': dot-grouped digits
+_DOT_DECIMAL_RE = re.compile(r"\s*[-+]?\d*\.\d+\s*")                            # '1.5', '0.300': a decimal point
 _DOT_COMMA_NUMBER_RE = re.compile(r"\s*[-+]?[\d.,]*\d[\d.,]*\s*")              # digits with '.' and ',' only
 
 
@@ -458,10 +460,12 @@ def _decimal_commas(df: pd.DataFrame, sep: str) -> pd.DataFrame:
     that cannot be a thousands separator ('175,6', '2,19', '0,149', '27,8448') means every '<digits>,<digits>' cell is
     a decimal number, read with a decimal point (df.attrs["decimal_comma"], layout_warnings). European numbers with a
     thousands dot ('1.346,8') are read as 1346.8 (with a warning) when every number cell with both '.' and ',' has that
-    form and no cell is a dot-grouped number without a comma ('1.346' = 1346 or 1.346). Refused (InputError, a value
-    would change by 1000x either way): cells that could be thousands too ('1,500') in the same file, or European
-    numbers mixed with other '.'/',' forms. A comma CSV, or one without such cells, is unchanged (coerce_numeric
-    strips thousands separators)."""
+    form. Dot-grouped integers without a comma ('1.300') in such a file are thousands too (1300, with a warning:
+    df.attrs["dot_thousands"]) when every one starts with 1-9, no cell of the file is another decimal-point number
+    ('1.5', '0.300') and every cell with a dot in their columns is such a number; otherwise refused (never 1.3). Refused
+    (InputError, a value would change by 1000x either way): cells that could be thousands too ('1,500') in the same
+    file, or European numbers mixed with other '.'/',' forms. A comma CSV, or one without such cells, is unchanged
+    (coerce_numeric strips thousands separators)."""
     if sep == "," or df.empty:
         return df
     cells = pd.Series(df.to_numpy(dtype=object).ravel())
@@ -484,18 +488,18 @@ def _decimal_commas(df: pd.DataFrame, sep: str) -> pd.DataFrame:
             f"소수인지 천 단위인지에 따라 1000배 달라짐).{tail}")
     if not euro.empty:
         odd = dotted[~dotted.str.fullmatch(_EURO_NUMBER_RE)]
-        if odd.empty:
-            text = cells[cells.map(lambda v: isinstance(v, str) and "," not in v and "." in v)].astype(str)
-            odd = text[text.str.fullmatch(_DOT_THOUSANDS_RE)]
         if not odd.empty:
             raise InputError(
                 f"CSV(구분 기호 '{sep}')의 숫자에 점(.)이 천 단위인 숫자('{euro.iloc[0].strip()}')와 다른 형식의 숫자"
                 f"('{odd.iloc[0].strip()}')가 섞여 있어 값을 정할 수 없습니다 (점이 천 단위인지 소수점인지에 따라 1000배 "
                 f"달라짐).{tail}")
+    grouped = _dot_grouped_integers(df, cells, sep, first, tail)
 
     def fix(v: Any) -> Any:
-        if not isinstance(v, str) or "," not in v:
+        if not isinstance(v, str):
             return v
+        if "," not in v:
+            return v.strip().replace(".", "") if grouped and _DOT_THOUSANDS_RE.fullmatch(v) else v
         if _EURO_NUMBER_RE.fullmatch(v):
             return v.strip().replace(".", "").replace(",", ".")
         return v.replace(",", ".") if _DECIMAL_COMMA_RE.fullmatch(v) else v
@@ -504,7 +508,36 @@ def _decimal_commas(df: pd.DataFrame, sep: str) -> pd.DataFrame:
     e0 = euro.iloc[0].strip() if not euro.empty else None
     out.attrs["decimal_comma"] = [f"{first} -> {fix(first)}", int(len(dec) + len(euro)), sep,
                                   f"{e0} -> {fix(e0)}" if e0 else None, int(len(euro))]
+    if grouped:
+        out.attrs["dot_thousands"] = [f"{grouped[0]} -> {fix(grouped[0])}", len(grouped), sep]
     return out
+
+
+def _dot_grouped_integers(df: pd.DataFrame, cells: pd.Series, sep: str, first: str, tail: str) -> List[str]:
+    """Dot-grouped integers ('1.300') of a decimal-comma CSV (_decimal_commas): read as thousands when nothing else in
+    the file uses a decimal point and their columns hold no other dotted cell. Returns them (stripped), or raises
+    InputError."""
+    text = cells[cells.map(lambda v: isinstance(v, str) and "," not in v and "." in v)].astype(str)
+    grouped = text[text.str.fullmatch(_DOT_GROUPED_RE)]
+    if grouped.empty:
+        return []
+    bad = grouped[~grouped.str.fullmatch(_DOT_THOUSANDS_RE)]
+    other = text[text.str.fullmatch(_DOT_DECIMAL_RE) & ~text.str.fullmatch(_DOT_GROUPED_RE)]
+    odd = bad.iloc[0] if not bad.empty else other.iloc[0] if not other.empty else None
+    if odd is None:       # a column of '1.300' cells: every cell with a dot is a thousands-dot number
+        number = (_DOT_THOUSANDS_RE, _EURO_NUMBER_RE)
+        for c in df.columns:
+            dots = [v.strip() for v in df[c].tolist() if isinstance(v, str) and "." in v]
+            if any(_DOT_THOUSANDS_RE.fullmatch(t) for t in dots):
+                odd = next((t for t in dots if not any(r.fullmatch(t) for r in number)), None)
+                if odd is not None:
+                    break
+    if odd is not None:
+        raise InputError(
+            f"CSV(구분 기호 '{sep}')의 숫자에 소수점 쉼표('{first}')와 점(.)으로 묶인 숫자('{grouped.iloc[0].strip()}')가 "
+            f"있고 다른 형식의 값('{odd.strip()}')이 섞여 있어 값을 정할 수 없습니다 ('{grouped.iloc[0].strip()}'이 천 단위인지 "
+            f"소수인지에 따라 1000배 달라짐).{tail}")
+    return [v.strip() for v in grouped.tolist()]
 
 
 def _read_csv_fast(file_path: str) -> pd.DataFrame:
@@ -739,6 +772,7 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     df_data.attrs["repeated_header_rows"] = [int(i) + 1 for i in repeated]
     df_data.attrs["summary_rows"] = _SharedList(_summary_rows(df_data, source_rows))
     df_data.attrs["decimal_comma"] = df_raw.attrs.get("decimal_comma")
+    df_data.attrs["dot_thousands"] = df_raw.attrs.get("dot_thousands")
     return df_data
 
 
@@ -800,10 +834,13 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
     """[source row, column, text] of rows that look like totals / averages: a cell 합계/소계/Total ... (TOTAL_WORDS) or
     평균/Mean (AVERAGE_WORDS) and a number in the same row. Not dropped (a data value decision): layout_warnings names
     them. Not counted: rows the user marked in the '제외' column (a mark other than '포함'), the '제외' column itself
-    (its text is the reason), and average words that are values of a category: next to other filled cells, a majority
-    of the column's filled cells or SUMMARY_SHARE of them (3+ cells), or next to other aggregation words
-    ('집계' = 평균/최대/최소). Totals words always count (a subtotal per shift or line is a large share of a column).
-    Reads the cells as one array: a Series of df would deep-copy df.attrs (source_rows) on every operation."""
+    (its text is the reason), and words that are values of a statistic label column: average words next to other
+    filled cells in a majority of the column's filled cells or SUMMARY_SHARE of them (3+ cells), in every row of the
+    column, or next to other aggregation words ('집계' = 합계/평균/최대/최소, 'Sum/Avg'); totals words of such a column
+    too. Totals words count otherwise (a subtotal per shift or line is a large share of a column). Values decide before words: a row whose number cells equal the
+    mean (average word) or the sum (totals word) of the data rows directly above it (back to the previous summary row
+    or the first row, _summary_by_value) always counts. Reads the cells as one array: a Series of df would deep-copy
+    df.attrs (source_rows) on every operation."""
     if df.empty:
         return []
     columns = list(df.columns)
@@ -813,6 +850,7 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
     marked = (np.array([bool(t) and t != INCLUDE_MARK for t in map(exclude_mark, arr[:, k_excl])], dtype=bool)
               if k_excl is not None else np.zeros(len(arr), dtype=bool))
     out: Dict[int, List[Any]] = {}
+    nums: List[Any] = []      # number matrix of the other columns, read once when a value check is needed
     for k, col in enumerate(columns):
         if k == k_excl or pd.api.types.is_numeric_dtype(kinds[k]) or pd.api.types.is_datetime64_any_dtype(kinds[k]):
             continue
@@ -824,21 +862,78 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
         keys = {int(i): _summary_key(cells[i]) for i in cand}
         hits = [i for i, t in keys.items() if t in TOTAL_WORDS]
         avg = [i for i, t in keys.items() if t in AVERAGE_WORDS]
-        if avg:
+        if not hits and not avg:
+            continue
+        aggregate = any(t in AGGREGATE_WORDS for t in keys.values())
+        category = aggregate
+        if avg and not category:
             n_avg = len(avg)
             n_filled = len(cells) - len(cand) + sum(
                 1 for i, t in keys.items() if t or not (isinstance(cells[i], str) or pd.isna(cells[i])))
             share = n_avg * 2 > n_filled or (n_avg >= 3 and n_avg >= SUMMARY_SHARE * n_filled)
-            category = (n_filled > n_avg and share) or any(t in AGGREGATE_WORDS for t in keys.values())
-            if not category:
-                hits = sorted(hits + avg)
-        for i in hits:
+            category = (n_filled > n_avg and share) or (n_avg == len(cells) and n_avg >= 2)
+        if aggregate or category:
+            if not nums:
+                nums.append(_number_matrix(arr, kinds, k_excl))
+            bound = TOTAL_WORDS | AVERAGE_WORDS | AGGREGATE_WORDS
+            is_bound = np.zeros(len(cells), dtype=bool)
+            is_bound[[i for i, t in keys.items() if t in bound]] = True
+            hits = [i for i in hits if _summary_by_value(nums[0], arr, k, i, is_bound, False)]
+            avg = [i for i in avg if _summary_by_value(nums[0], arr, k, i, is_bound, True)]
+        for i in sorted(hits + avg):
             if i in out or marked[i]:
                 continue
             others = [v for c, v in enumerate(arr[i]) if c != k and c != k_excl]
             if any(_numeric_share([_cell_text(v)]) == 1 for v in others if _cell_text(v)):
                 out[i] = [source_rows[i] if i < len(source_rows) else i + 1, str(col), str(cells[i]).strip()]
     return [out[i] for i in sorted(out)]
+
+
+def _number_matrix(arr: np.ndarray, kinds: List[Any], k_excl: Optional[int]) -> np.ndarray:
+    """Numbers of the cells (NaN: text, blank, date) for the value check of _summary_rows."""
+    out = np.full(arr.shape, np.nan)
+    for c in range(arr.shape[1]):
+        if c == k_excl or pd.api.types.is_datetime64_any_dtype(kinds[c]) or pd.api.types.is_bool_dtype(kinds[c]):
+            continue
+        try:
+            out[:, c] = pd.to_numeric(pd.Series(arr[:, c]), errors="coerce").to_numpy(dtype=float)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _summary_by_value(num: np.ndarray, arr: np.ndarray, k: int, i: int, is_bound: np.ndarray, mean: bool) -> bool:
+    """Row i (a totals / average word in column k) holds the sum / mean of the data rows directly above it: summary
+    rows right above it are skipped (a 평균 row below a 소계 row), then rows are taken up to the previous summary or
+    aggregation row of column k or the first row (2+ rows). Every number cell of row i must match within its
+    displayed precision (half a unit of its last decimal) or 1e-3 relative, and one column must vary in the block (a
+    constant lot or date column is its own mean)."""
+    j = i - 1
+    while j >= 0 and is_bound[j]:
+        j -= 1
+    end = j + 1
+    while j >= 0 and not is_bound[j]:
+        j -= 1
+    block = num[j + 1:end]
+    if len(block) < 2:
+        return False
+    compared = varied = False
+    for c in range(num.shape[1]):
+        v = num[i, c]
+        if c == k or np.isnan(v):
+            continue
+        col = block[:, c]
+        col = col[~np.isnan(col)]
+        if len(col) == 0:
+            continue
+        want = float(col.mean() if mean else col.sum())
+        text = str(arr[i, c]).strip()
+        dec = len(text.split(".")[1]) if "." in text and "e" not in text.lower() else 0
+        if abs(float(v) - want) > max(0.5 * 10.0 ** -dec, 1e-3 * abs(want)) + 1e-9:
+            return False
+        compared = True
+        varied = varied or len(col) >= 2 and float(col.max()) != float(col.min())
+    return compared and varied
 
 
 def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, training: bool = True) -> List[str]:
@@ -852,6 +947,10 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
         out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 쉼표를 소수점으로 읽었습니다 ({dec[1]}칸, 예: {dec[0]})")
         if dec[3]:
             out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 점(.)을 천 단위 구분 기호로 읽었습니다 ({dec[4]}칸, 예: {dec[3]})")
+    grouped = df.attrs.get("dot_thousands")
+    if grouped:
+        out.append(f"CSV(구분 기호 '{grouped[2]}')의 쉼표 없는 숫자 점(.)을 천 단위 구분 기호로 읽었습니다 "
+                   f"({grouped[1]}칸, 예: {grouped[0]})")
     rep = df.attrs.get("repeated_header_rows") or []
     if rep:
         out.append(f"{_row_list(rep)}행은 머리글(단위) 행과 같아(페이지마다 반복된 머리글) 데이터에서 뺐습니다")
