@@ -186,22 +186,32 @@ def bash_commands(turn):
 
 
 def locate(sc, cmds, start, prev=None):
-    """Index of the first tool call at or after start that belongs to this scenario: one matching all its command regexes,
-    otherwise one matching any of them. None when the scenario has no command regexes or nothing matches.
-    An earlier partial attempt (e.g. a STOP_RETRY first try, then the retry the tool recommended) belongs to this scenario
-    too: the start moves back to the earliest command at or after start that matches any of its regexes, but not past
-    a command that matches all regexes of the previous scenario (prev), which is that scenario's own (re)run."""
+    """(first, hit) for this scenario among the tool calls at or after start, or None when the scenario has no command
+    regexes or nothing matches. hit is the first call matching all its command regexes, otherwise any of them.
+    Calls that fully match the previous scenario's regexes (prev) are that scenario's own (re)runs: a hit that is not
+    such a call is preferred, and one that is counts only when nothing else matches.
+    first moves back from hit to an earlier partial attempt (e.g. a STOP_RETRY first try before the retry the tool
+    recommended), which belongs to this scenario too, but not past a call that fully matches prev.
+    The caller searches the next scenario after hit (not after first), so it never starts inside this scenario's retry."""
     rxs = sc.get("commands") or []
     if not rxs:
         return None
-    for need in (all, any):
-        for i, c in cmds:
-            if i >= start and need(re.search(rx, c, re.I) for rx in rxs):
-                floor = start
-                for j, d in cmds:
-                    if start <= j < i and prev and all(re.search(rx, d, re.I) for rx in prev):
-                        floor = j + 1
-                return next((j for j, d in cmds if floor <= j < i and any(re.search(rx, d, re.I) for rx in rxs)), i)
+
+    def full(regexes, c):
+        return bool(regexes) and all(re.search(rx, c, re.I) for rx in regexes)
+
+    for skip_prev in (True, False):
+        for need in (all, any):
+            hit = next((i for i, c in cmds if i >= start and need(re.search(rx, c, re.I) for rx in rxs)
+                        and not (skip_prev and full(prev, c))), None)
+            if hit is None:
+                continue
+            floor = start
+            for j, d in cmds:
+                if start <= j < hit and full(prev, d):
+                    floor = j + 1
+            first = next((j for j, d in cmds if floor <= j < hit and any(re.search(rx, d, re.I) for rx in rxs)), hit)
+            return first, hit
     return None
 
 
@@ -215,10 +225,10 @@ def split_bulk(turn, by_id):
     cmds = bash_commands(turn)
     starts, pos, prev = {}, 0, None
     for sid in tags:
-        i = locate(by_id[sid], cmds, pos, prev)
-        if i is not None:
-            starts[sid] = i
-            pos, prev = i + 1, by_id[sid].get("commands")
+        found = locate(by_id[sid], cmds, pos, prev)
+        if found is not None:
+            starts[sid] = found[0]
+            pos, prev = found[1] + 1, by_id[sid].get("commands")
     located = [sid for sid in tags if sid in starts]
     out = {}
     for sid in tags:
@@ -294,14 +304,19 @@ def grade_turn(sc, turn, rules):
                 if t["tool"] in WRITE_TOOLS:
                     paths = [t["path"]] if t["path"] else PATCH_FILE.findall(" ".join(str(v) for v in t["input"].values()))
                     bad += [p for p in paths if re.search(rule["write"], p.strip(), re.I)]
-        if rule.get("search"):                         # OpenCode grep/glob tools: where they look (path, include; glob's file pattern)
-            for t in turn["tools"]:
+        if rule.get("search"):                         # OpenCode grep: where it looks (path, include; not the search text)
+            for t in turn["tools"]:                    # glob only lists file names: its path/pattern must match rule["glob"]
                 if t["tool"] in ("grep", "glob"):
                     inp = t["input"]
-                    where = [str(inp.get(k) or "") for k in ("path", "include")] + ([str(inp.get("pattern") or "")] if t["tool"] == "glob" else [])
+                    if t["tool"] == "glob":
+                        where, rx = [str(inp.get(k) or "") for k in ("path", "pattern")], rule.get("glob", rule["search"])
+                    else:
+                        where, rx = [str(inp.get(k) or "") for k in ("path", "include")], rule["search"]
+                        if re.search(r"\.md$", str(inp.get("include") or "").strip(), re.I):   # *.md, SKILL.md: documents only
+                            continue
                     if any(re.search(r"SKILL\.md$", w, re.I) for w in where):
                         continue
-                    if any(re.search(rule["search"], w, re.I) for w in where):
+                    if any(re.search(rx, w, re.I) for w in where):
                         bad.append(f"{t['tool']} " + " ".join(f"{k}={v}" for k, v in inp.items()))
         if rule.get("max_repeat"):
             bad += [f"{n}회: {c}" for c, n in Counter(re.sub(r"\s+", " ", c).strip() for c in cmds).items() if n > rule["max_repeat"]]

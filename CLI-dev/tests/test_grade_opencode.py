@@ -238,6 +238,24 @@ def test_bulk_retry_belongs_to_its_scenario(tmp_path):
     assert by["M2"]["결과"] == "통과", by["M2"]["실패"]
 
 
+@pytest.mark.parametrize("first_try", ['--find "D=64"', '--find "D=64" --vary A'])
+def test_bulk_retry_in_middle_scenario(tmp_path, first_try):
+    """M1, M2 first try (STOP_RETRY: partial or fully matching M2), M2 retry, M3: the retry stays with M2 and M3 starts
+    at its own command (M3's only regex, ml_map.py, also matches M2's retry)."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    stop = {"status": "error", "agent_directive": "STOP_RETRY: --vary가 필요합니다. [추천] --vary A"}
+    mp = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" '
+    path = _export(tmp_path, [("순서대로\n[M1] A=12.5\n[M2] D=64\n[M3] A=103", [
+        _bash(mp + '-i "A=12.5" -y "B,C"', ok), {"type": "text", "text": "M1: B 16.25, C 87.5"},
+        _bash(mp + first_try, stop), _bash(mp + '--find "D=64" --vary A', ok), {"type": "text", "text": "M2: A 20, 80"},
+        _bash(mp + '-i "A=103" -y B', ok), {"type": "text", "text": "M3: B 1058.5 (범위 밖 외삽값)"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["M1"]["결과"] == "통과" and by["M1"]["명령수"] == 1, by["M1"]["실패"]
+    assert by["M2"]["결과"] == "통과" and by["M2"]["명령수"] == 2, by["M2"]["실패"]
+    assert by["M3"]["결과"] == "통과" and by["M3"]["명령수"] == 1, by["M3"]["실패"]
+
+
 def test_single_request_answer_before_closing_tool(tmp_path):
     """Answer text, one more tool, then "완료했습니다.": the answer after the scenario's own command is graded."""
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
@@ -280,6 +298,10 @@ def test_no_adhoc_py_rule():
                'C:\\WPy64-313130\\python\\python.exe "C:\\CLI\\ml-kit\\ml_map.py" -h',
                'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"',
                'python "C:\\CLI-dev\\run_beta_check.py" --agent',
+               'cd C:\\CLI-dev\\ml-kit\\tools; python make_beta_samples.py "C:\\ml_beta\\agent"',
+               'python .\\make_beta_samples.py "C:\\ml_beta\\agent"',
+               'cd C:\\CLI-dev\\office-cli\\tools; python run_win_tests.py',
+               'cd C:\\CLI-dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
                'python -m pytest -q']
     bad_cmds = ['python -c "import pandas"',
                 "python - <<'EOF'\nprint(1)\nEOF",
@@ -343,6 +365,14 @@ def test_no_read_code_rule_searches_without_py():
                                                       path="C:\\Users\\me\\.config\\opencode\\skills"))
     assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="제외", path="C:\\CLI\\ml-kit", include="SKILL.md"))
     assert not _rule_hits("no_read_code", tool=_tool("glob", pattern="**/SKILL.md", path="C:\\Users\\me\\.config\\opencode"))
+    # glob only lists file names: flagged only when it looks for .py; grep over documents (*.md) is not reading code
+    assert not _rule_hits("no_read_code", tool=_tool("glob", pattern="*", path="C:\\CLI\\ml-kit"))
+    assert not _rule_hits("no_read_code", tool=_tool("glob", pattern="**/*.md", path="C:/CLI/office-cli"))
+    assert _rule_hits("no_read_code", tool=_tool("glob", pattern="*.py", path="C:\\CLI\\ml-kit"))
+    assert _rule_hits("no_read_code", tool=_tool("glob", pattern="*", path="C:\\CLI\\ml-kit\\ml_train.py"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="*.md"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="SKILL.md"))
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="*.{py,md}"))
 
 
 def test_no_write_py_covers_edit_and_patch():
@@ -379,10 +409,13 @@ def test_scenario_regexes():
                  "이상치 기준 변경은 지원되지 않습니다. 대신 '제외' 열을 쓰면 됩니다.",
                  "그런 옵션은 존재하지 않습니다. 엑셀의 제외 열에 이유를 적으세요.",
                  "이상치 기준은 바꿀 수 없습니다. 특정 행을 빼려면 '제외' 열을 쓰세요.",
-                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다."):
+                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다.",
+                 "X2: 아니오. 이상치 기준은 고정입니다. 빼고 싶은 행은 '제외' 열에 이유를 적으세요."):
         assert all(re.search(rx, good) for rx in x2), good
     for bad in ("네, --outlier 옵션으로 바꿀 수 있습니다. '제외' 열도 쓸 수 있습니다.",
-                "--iqr-k 인자로 이상치 기준을 조정할 수 있습니다. 제외 열과 함께 쓰세요."):
+                "--iqr-k 인자로 이상치 기준을 조정할 수 있습니다. 제외 열과 함께 쓰세요.",
+                "네, --outlier-iqr 옵션으로 바꿀 수 있습니다. 제외 열은 따로 적을 필요가 없습니다.",
+                "네, 바꿀 수 있습니다. 제외 열에 적을 것은 없습니다."):
         assert not all(re.search(rx, bad) for rx in x2), bad
     m2 = by_id["M2"]["answer_all"]
     for good in ("A=20, A=80.", "A는 20과 80입니다.", "A = 20.0 또는 80.0.", "답: 20, 80"):

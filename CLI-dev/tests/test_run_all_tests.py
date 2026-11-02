@@ -45,3 +45,16 @@ def test_unencodable_line_on_cp949_stdout_does_not_stop_reader(monkeypatch):
     lines = out.splitlines()
     assert lines[0] == "a \u2022 b" and lines[-1] == "끝" and len(lines) == 20002
     assert shown.splitlines()[0] == "a ? b" and "끝" in shown
+
+
+def test_echo_and_say_do_not_raise_on_cp949_stdout(monkeypatch):
+    """The diag text and the closing summary (printed inside finally) go through echo(): a character cp949 lacks
+    (e.g. in a file name) becomes '?' instead of raising UnicodeEncodeError."""
+    import io
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="cp949", errors="strict", line_buffering=True))
+    rat.echo("요약\nppt: a \u2022 b")
+    rat.say("끝. C:\\temp\\r\u00e9sum\u00e9\u2022.txt")
+    sys.stdout.flush()
+    shown = buf.getvalue().decode("cp949")
+    assert "ppt: a ? b" in shown and "[STATUS] 끝." in shown

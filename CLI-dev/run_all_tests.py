@@ -61,8 +61,24 @@ class Result:
             f.write(f"<{name}>\n{text.rstrip()}\n\n")
 
 
+def echo(line):
+    """Shows text on the console; a character it cannot encode (e.g. cp949 redirected stdout) becomes '?'.
+    A display error must not stop the output reader (the child would block on a full pipe until the timeout)
+    or raise inside a finally block (the result file would miss its summary)."""
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            print(line.encode(enc, errors="replace").decode(enc, errors="replace"), flush=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def say(msg):
-    print(f"[STATUS] {msg}", flush=True)
+    echo(f"[STATUS] {msg}")
 
 
 def child_env():
@@ -96,20 +112,6 @@ def run_capture(args, cwd, timeout, poll=1.0):
     lines = []
     interrupted = False
     proc = subprocess.Popen(args, cwd=cwd, env=child_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-
-    def echo(line):
-        """Shows one line; a character the console (e.g. cp949 redirected stdout) cannot encode becomes '?'.
-        A display error must not stop the reader, or the child blocks on a full pipe until the timeout."""
-        try:
-            print(line, flush=True)
-        except UnicodeEncodeError:
-            enc = getattr(sys.stdout, "encoding", None) or "utf-8"
-            try:
-                print(line.encode(enc, errors="replace").decode(enc, errors="replace"), flush=True)
-            except Exception:
-                pass
-        except Exception:
-            pass
 
     def pump():
         try:
@@ -301,7 +303,7 @@ def step_diag(res, args):
         except Exception as e:
             lines.append(f"{fn.__name__} 오류: {type(e).__name__}: {e}")
     text = "\n".join(lines)
-    print(text, flush=True)
+    echo(text)
     res.section("환경 진단", text)
     broken = [x for x in lines if ("zip 형식=False" in x or "실패" in x or "Caption 있음=False" in x)]
     res.summary.append(f"diag: 이상 {len(broken)}건" + (f" ({broken[0][:80]} ...)" if broken else " (없음)"))
@@ -464,7 +466,7 @@ def main():
         attach_tool_error_logs(res)
         summary = "\n".join(res.summary) or "실행된 단계 없음"
         res.section("요약", summary)
-        print("\n" + "=" * 70 + "\n[STATUS] 요약\n" + summary + "\n" + "=" * 70, flush=True)
+        echo("\n" + "=" * 70 + "\n[STATUS] 요약\n" + summary + "\n" + "=" * 70)
         say(f"끝. 이 파일 하나를 Claude에게 전달하세요: {out}")
 
 

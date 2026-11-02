@@ -35,7 +35,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    - 사람용 실기 테스트 러너(`tools/run_win_tests.py`)는 계약 대상이 아니다. 단, 에이전트용 모드(`--agent` 등)는 계약을 지킨다.
 2. exit 0 = ok, 1 = error, 2 = 인자 오류, 130 = 중단.
    - 성공: `"status": "ok"`, `agent_directive`는 `VERIFIED:`(도구가 결과를 확인함) 또는 `UNVERIFIED:`(확인하지 못함, 재시도 없이 보고)로 시작.
-   - 실패: `"status": "error"`, `agent_directive`는 `STOP_RETRY:`(입력/데이터 문제. message에 `[추천]`이 있으면 그 값으로 1회만 재시도, `[후보]`면 사용자에게 선택 요청) 또는 `ERROR:`(내부 오류, 재시도 금지).
+   - 실패: `"status": "error"`, `agent_directive`는 `STOP_RETRY:`(입력/데이터 문제. message에 `[추천]`이 있으면 1회만 재시도(`python`으로 시작하는 전체 명령이면 그대로, 아니면 그 값으로 바꿔서), `[후보]`면 사용자에게 선택 요청) 또는 `ERROR:`(내부 오류, 재시도 금지).
    - 공통 키·문구·함수의 구현 규칙은 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)을 따른다.
 3. 모든 진입점은 공통 런타임의 `run_cli()` + `JsonArgumentParser`를 사용한다.
 4. CLI 인자·JSON 키는 바꿔도 된다 (베타, 호환 불필요). 바꾸면 SKILL.md·README.md·CHANGELOG.md와 테스트를 같은 커밋에서 함께 고친다.
@@ -69,7 +69,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    | 선택 라이브러리 없음 | 대체 경로가 있으면 사용, 없으면 해당 기능만 `STOP_RETRY:`로 설치 명령(`python -m pip install ...`) 안내 |
 2. 복구 한도: 재시도는 횟수와 시간 상한을 둔다. 무한 루프 금지. 한도를 넘으면 오류 JSON을 낸다.
 3. 복구 금지 (사용자 확인이 필요한 경우): 덮어쓰기, 삭제, 원본 수정, 후보가 둘 이상인 추측, 데이터 값을 바꾸는 보정.
-   이때는 `STOP_RETRY:` + message에 `[추천] <값>`(하나) 또는 `[후보] a, b`(여럿)를 넣는다. 덮어쓰기는 `--overwrite`가 있을 때만 한다 (R4).
+   이때는 `STOP_RETRY:` + message에 `[추천] <값>`(하나, 값 또는 전체 명령) 또는 `[후보] a, b`(여럿)를 넣는다. 덮어쓰기는 `--overwrite`가 있을 때만 한다 (R4).
 4. 복구는 숨기지 않는다.
    - stderr에 `[WARN] <무엇이 실패했고 어떻게 복구했는지>`.
    - stdout JSON에 `recovered` 배열 키를 추가한다 (예: `["잠김 -> report_20261028_101500.xlsx로 저장"]`). 복구가 없으면 생략.
