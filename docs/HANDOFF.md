@@ -12,7 +12,8 @@
   - `archive/`는 수정하지 않음
 - 배포 파일에 사용자 이름이 든 전체 경로를 넣지 않음 (성능예측표 등은 `<데이터>_ml_data\vN`처럼 끝부분만)
 - 실기 로그는 사용자가 GitHub 웹으로 `docs/test_logs/`에 올림 (git 명령으로는 올리지 않음, `.gitignore` 처리). 프로젝트 마무리 때 저장소 이력에서 정리 예정
-- 클라우드 테스트: 개발 도구 테스트 통과 (2026-11-03, 17차 점검). 전체 수는 회사 PC `run_all_tests.py`의 pytest 결과로 확인
+- 클라우드 점검: 17~25차 점검(검토 -> 수정 -> 재검사 반복) 완료 (2026-11-03). 마지막 차수의 회귀·높음 결함은 모두 수정, 경미·중간은 각 도구 CHANGELOG "남은 할 일"
+- 클라우드 테스트: 전체 pytest 1541 passed, 1 skipped (ml-kit 2.9.35, office-cli 1.4.32 기준). 2.9.36 결과는 PR 설명에. 회사 PC 수는 `run_all_tests.py`의 pytest 결과로 확인
 
 ## 2. 최근 바뀐 것 (클라우드 전체 점검 반영, 실기에서 볼 것)
 | 버전 | 내용 |
@@ -82,7 +83,8 @@
    - F2(보고서·성능예측표 같은 폴더)와 F7(엑셀 재계산)을 꼭 확인
 3. Gemma 종합 테스트: `docs/opencode/자동테스트/` 메시지를 보내고, 내보낸 대화를 `python C:\CLI-dev\grade_opencode.py --export chat.json --label 회사PC`로 채점
 4. 눈 확인: V1~V10. 집 PC에서 못 한 V8(파이썬 없는 PC에서 성능예측표 열기, 문서 보안 아래)이 핵심
-5. 결과 파일과 V 항목 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림
+5. 클라우드 점검 변경의 실기 확인: T1~T12 (실기테스트 문서 5장). 가짜 Office로만 시험한 Word 구분선·YAML 머리말, 글상자 읽기, 엑셀 수식 값, relay 순서와 되돌리기, Outlook 로그 가림, `--append` 수식, Gemma의 `[후보]` 처리(묻고 실행)
+6. 결과 파일과 V·T 항목 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림
 
 회사 PC에서만 확인할 수 있는 것: 문서 보안(DRM) 영향, Office 16 차트 전달 방식, Gemma의 요청 처리, 사내 API 채점(`--judge`).
 
