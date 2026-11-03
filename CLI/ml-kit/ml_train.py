@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     read_text_file, load_json_file, resolve_column_names, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
-    strip_unit, layout_warnings, exclude_mark as _exclude_mark,
+    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_warnings,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
 )
 
@@ -1931,6 +1931,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         for col, n_miss in X_all.isna().sum().items():
             raw_col = owner.get(col, col)
             feature_missing[raw_col] = max(feature_missing.get(raw_col, 0), int(n_miss))
+        train_warnings.extend(w for w in unparsed_number_warnings(df_raw, list(dict.fromkeys(owner.values())))
+                              if w not in train_warnings)
         data_profile = {
             "source_file": os.path.basename(raw_file),
             "rows_loaded": int(len(df_raw)),

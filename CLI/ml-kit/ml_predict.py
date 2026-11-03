@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.23"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.24"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -401,12 +401,34 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
 _NA_PLACEHOLDERS = ["-", "N/A", "n/a", "NA", "null", "NULL", "미측정", "None", "nan", "NaN", ""]
 
 
-_GROUPED_NUMBER_RE = re.compile(r"[+-]?\d{1,3}(,\d{3})+(\.\d+)?")
+_GROUPED_NUMBER_RE = re.compile(r"[+-]?[1-9]\d{0,2}(,\d{3})+(\.\d+)?")   # never '0,149'
 
 
 def _strip_thousands(text: str) -> str:
     """'1,500' -> '1500'. 천 단위 묶음이 아닌 쉼표('175,6', '1,2')는 그대로 둡니다."""
     return text.replace(",", "") if "," in text and _GROUPED_NUMBER_RE.fullmatch(text) else text
+
+
+def unparsed_number_warnings(df: pd.DataFrame, columns: List[str], limit: int = 5) -> List[str]:
+    """숫자 열(채운 칸의 절반 이상이 숫자)에서 숫자로 읽지 못한 글자 칸: 학습은 중앙값으로 채우므로 알립니다."""
+    out: List[str] = []
+    for c in columns:
+        if c not in df.columns or pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_datetime64_any_dtype(df[c]):
+            continue
+        s = df[c]
+        text = s.astype("object").map(lambda v: v.strip() if isinstance(v, str) else v)
+        filled = text.notna() & ~text.isin(_NA_PLACEHOLDERS)
+        parsed = coerce_numeric(s)
+        if filled.sum() == 0 or parsed[filled].notna().mean() < 0.5:
+            continue
+        bad = filled & parsed.isna()
+        if bad.any():
+            ex = ", ".join(repr(str(v)) for v in list(dict.fromkeys(text[bad].astype(str)))[:3])
+            out.append(f"숫자 열 '{c}'의 {int(bad.sum())}칸({ex})은 숫자로 읽지 못해 빈 값으로 보고 중앙값으로 채웠습니다. "
+                       "값을 고치거나 그 행을 '제외' 열에 표시하세요.")
+        if len(out) >= limit:
+            break
+    return out
 
 
 def coerce_numeric(series: pd.Series) -> pd.Series:
@@ -856,8 +878,10 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
         n_filled = len(cells) - len(cand) + sum(
             1 for i, t in keys.items() if t or not (isinstance(cells[i], str) or pd.isna(cells[i])))
         n_stat = sum(1 for t in keys.values() if t in TOTAL_WORDS or t in AGGREGATE_WORDS)
-        if n_stat >= 2 and n_filled * 2 >= len(cells) and any(
-                t in AGGREGATE_WORDS or t in AVERAGE_WORDS for t in keys.values()) and (
+        # 통계 이름 열은 집계·평균 글자가 합계 글자만큼 있어야 함 (합계/평균/최대/최소 묶음, Sum/Avg 번갈아).
+        # 병합된 일자 열의 일별 합계 + 맨 아래 최대/최소 한 묶음은 통계 이름 열이 아님
+        n_aggavg = sum(1 for t in keys.values() if t in AGGREGATE_WORDS or t in AVERAGE_WORDS)
+        if n_stat >= 2 and n_filled * 2 >= len(cells) and n_aggavg * 2 >= len(hits) and n_aggavg > 0 and (
                 n_stat * 2 >= n_filled or sum(1 for t in keys.values() if t in bound) >= n_filled):
             hits = []                 # a statistic label column: its totals words name how a row was measured
         if avg:
@@ -2161,7 +2185,7 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
     return df
 
 
-_KV_THOUSANDS_RE = re.compile(r"[+-]?\d{1,3}(,\d{3})+(\.\d+)?")      # 'k=v' input value (fullmatch)
+_KV_THOUSANDS_RE = re.compile(r"[+-]?[1-9]\d{0,2}(,\d{3})+(\.\d+)?")      # 'k=v' input value (fullmatch)
 
 
 def check_comma_numbers(pairs: Optional[Dict[str, Any]], numeric: Callable[[str], bool], option: str,

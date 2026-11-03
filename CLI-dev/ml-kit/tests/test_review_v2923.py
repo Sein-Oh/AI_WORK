@@ -54,3 +54,37 @@ def test_coerce_numeric_only_strips_thousands_groups():
     got = mp.coerce_numeric(s).tolist()
     assert got[0] == 1500 and got[1] == 1234567.5 and got[4] == 2000 and got[5] == -1000 and got[6] == 12
     assert pd.isna(got[2]) and pd.isna(got[3])
+
+
+# 2.9.24 (13차 점검) --------------------------------------------------------------------------------------------------
+import random  # noqa: E402
+
+from test_cli_smoke import run_raw  # noqa: E402
+
+
+def test_merged_date_totals_with_bottom_max_min_warned(tmp_path):
+    rows = [["일자", "교대", "온도", "생산량"]]
+    for d in range(1, 11):
+        rows += [[datetime(2026, 10, d), "주간", 150 + d, 300 + 2 * d], [None, "야간", 160 + d, 320 + 2 * d],
+                 ["합계", None, 310 + 2 * d, 620 + 4 * d]]
+    rows += [["평균", None, 160, 320], ["최대", None, 170, 340], ["최소", None, 151, 302]]
+    got = _summary(_write(str(tmp_path / "d4.xlsx"), rows, []))
+    assert sum(1 for _, w in got if w == "합계") == 10, got
+
+
+def test_zero_group_comma_is_not_thousands():
+    s = pd.Series(["0,149", "00,150", "-0,149", "1,500"], dtype="object")
+    got = mp.coerce_numeric(s).tolist()
+    assert pd.isna(got[0]) and pd.isna(got[1]) and pd.isna(got[2]) and got[3] == 1500
+
+
+def test_training_warns_unparsed_number_cells(tmp_path):
+    r = random.Random(1)
+    rows = [["온도", "압력", "수율"]]
+    for i in range(40):
+        t = 150 + i
+        rows.append([("175,6" if i in (3, 9, 20) else t), round(r.uniform(2, 4), 2), 0.5 * t + r.uniform(-1, 1)])
+    f = _write(str(tmp_path / "a.xlsx"), rows, [])
+    _, res = run_raw("ml_train.py", "-f", f, "-x", "온도,압력", "-y", "수율")
+    assert res["status"] == "ok", res
+    assert any("숫자 열 '온도'" in w and "175,6" in w for w in res.get("warnings", [])), res.get("warnings")
