@@ -13,7 +13,7 @@
 - 배포 파일에 사용자 이름이 든 전체 경로를 넣지 않음 (성능예측표 등은 `<데이터>_ml_data\vN`처럼 끝부분만)
 - 실기 로그는 사용자가 GitHub 웹으로 `docs/test_logs/`에 올림 (git 명령으로는 올리지 않음, `.gitignore` 처리). 프로젝트 마무리 때 저장소 이력에서 정리 예정
 - 클라우드 점검: 17~25차 점검(검토 -> 수정 -> 재검사 반복) 완료 (2026-11-03). 마지막 차수의 회귀·높음 결함은 모두 수정, 경미·중간은 각 도구 CHANGELOG "남은 할 일"
-- 클라우드 테스트: 전체 pytest 1541 passed, 1 skipped (ml-kit 2.9.35, office-cli 1.4.32 기준). 2.9.36 결과는 PR 설명에. 회사 PC 수는 `run_all_tests.py`의 pytest 결과로 확인
+- 클라우드 테스트: 전체 pytest 1549 passed, 1 skipped (ml-kit 2.9.36, office-cli 1.4.32 기준). 회사 PC 수는 `run_all_tests.py`의 pytest 결과로 확인
 
 ## 2. 최근 바뀐 것 (클라우드 전체 점검 반영, 실기에서 볼 것)
 | 버전 | 내용 |
