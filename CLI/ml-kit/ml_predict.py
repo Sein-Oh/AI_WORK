@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.28"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.29"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -344,20 +344,27 @@ def unit_of(name: str) -> str:
 
 
 def other_unit(given: str, name: str) -> bool:
-    """given and name are one quantity written with two different units ('압력(MPa)' / '압력(bar)'): renaming given to
-    name would read a MPa value as bar. '°C', '℃' and 'C' (the degree sign) and spaces count as the same unit; case
-    does not ('mg' / 'Mg')."""
+    """given and name both carry a unit and the units differ ('압력(MPa)' / '압력(bar)', also '압력(MPa)' /
+    '반응압력(bar)'): renaming given to name would read a MPa value as bar, whatever the names are. '°C', '℃' and 'C'
+    (the degree sign) and spaces count as the same unit; case does not ('mg' / 'Mg')."""
     def norm(u: str) -> str:
         return re.sub(r"\s+", "", u).replace("\u2103", "C").replace("\u00b0", "")
     ug, un = unit_of(given), unit_of(name)
-    return bool(ug and un) and _alias_key(given) == _alias_key(name) and norm(ug) != norm(un)
+    return bool(ug and un) and norm(ug) != norm(un)
 
 
 def unit_hint(given: str, name: str, where: str) -> str:
     """Why a different-unit name is not renamed to the column/model name (no [추천]: the value must be converted)."""
     ug, un = unit_of(given), unit_of(name)
+    same = "" if _alias_key(given) == _alias_key(name) else f" '{given}'이(가) '{name}'과(와) 같은 값이면"
     return (f"{where} '{given}'은(는) '{name}'과(와) 단위가 다릅니다 ({ug} / {un}). 이름만 바꾸면 {ug} 값이 {un} 값으로 "
-            f"쓰여 결과가 틀립니다. 값을 {un} 단위로 환산해 '{name}'(으)로 주십시오. 환산 값은 사용자에게 확인하십시오")
+            f"쓰여 결과가 틀립니다.{same} 값을 {un} 단위로 환산해 '{name}'(으)로 주십시오. 환산 값은 사용자에게 확인하십시오")
+
+
+def unit_marked(cands: List[str], name: str, quote: bool = False) -> List[str]:
+    """[후보] names (repr-quoted with quote), each candidate whose unit differs from name (other_unit) marked
+    "(단위 다름: 값 환산 필요)": picking it needs the value converted, not only the name changed."""
+    return [(repr(c) if quote else c) + ("(단위 다름: 값 환산 필요)" if other_unit(c, name) else "") for c in cands]
 
 
 def check_same_column(given: List[str], resolved: List[str], option: str,
@@ -426,7 +433,8 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
             elif len(s) == 1:
                 hints.append(f"'{m}' -> [추천] '{s[0]}'")
             elif s:
-                hints.append(f"'{m}' -> [후보] {', '.join(repr(c) for c in s)}")
+                shown = unit_marked(s, m, quote=True) if values else [repr(c) for c in s]
+                hints.append(f"'{m}' -> [후보] {', '.join(shown)}")
             else:
                 hints.append(f"'{m}' -> 유사 컬럼 없음")
         raise InputError(
@@ -1036,12 +1044,15 @@ def _number_matrix(arr: np.ndarray, kinds: List[Any], k_excl: Optional[int]) -> 
 LOOSE_WALK = 1000         # earlier summary rows read back for one loose row ('월합계' = sum of the '일합계' rows above)
 
 
-def _sum_mean_hits(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def _sum_mean_hits(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray,
+                   varies: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
     """Per row (2-D arrays, one row per candidate): the number cells equal to the sums of a block of rows (column
     sums, number counts, sums of absolute values) and the other number cells equal to the mean of the block (a
     totals row that averages 온도/압력/속도 and sums only 생산량), within the precision of _summary_by_value (half a
     unit of the last shown decimal or 1e-3 relative). A column counts only with 2+ numbers in the block, not all
-    zero: one row or a zero column is its own sum."""
+    zero: one row or a zero column is its own sum. varies (same shape, None: all True): the column is not constant
+    in the block; a mean cell counts only there, as in _summary_by_value (a constant setpoint column is the mean of
+    any block, also of a category row's)."""
     filled = ~np.isnan(rows)
     use = filled & (count >= 2) & (size > 0)
     with np.errstate(invalid="ignore"):
@@ -1049,13 +1060,17 @@ def _sum_mean_hits(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: 
         is_sum = use & (np.abs(rows - sums) <= np.maximum(dec, 1e-3 * np.abs(sums)) + 1e-9)
         mean = sums / np.where(count > 0, count, 1)
         is_mean = use & ~is_sum & (np.abs(rows - mean) <= np.maximum(dec, 1e-3 * np.abs(mean)) + 1e-9)
+    if varies is not None:
+        is_mean &= varies
     return is_sum.sum(axis=1), is_mean.sum(axis=1)
 
 
-def _sums_match(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray) -> np.ndarray:
+def _sums_match(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray,
+                varies: Optional[np.ndarray] = None) -> np.ndarray:
     """Per row: at least one number cell is a block sum (_sum_mean_hits) and the sums together with the cells equal
-    to the block mean (neutral: an averaged column) are at least half of the row's number cells."""
-    hit, n_mean = _sum_mean_hits(rows, sums, count, size)
+    to the mean of a column that varies in the block (neutral: an averaged column) are at least half of the row's
+    number cells."""
+    hit, n_mean = _sum_mean_hits(rows, sums, count, size, varies)
     return (hit >= 1) & ((hit + n_mean) * 2 >= (~np.isnan(rows)).sum(axis=1))
 
 
@@ -1099,10 +1114,23 @@ def _loose_by_value(num: np.ndarray, arr: np.ndarray, k: int, kind: Dict[int, st
     csum = np.vstack([zero, np.cumsum(np.where(filled, data, 0.0), axis=0)])
     cabs = np.vstack([zero, np.cumsum(np.where(filled, np.abs(data), 0.0), axis=0)])
     ccnt = np.vstack([zero, np.cumsum(filled, axis=0)])
+    # does a column vary in a block: sums of squares about one value of the column (exact 0 for a constant block)
+    first = data[filled.argmax(axis=0), np.arange(data.shape[1])] if len(data) else np.zeros(data.shape[1])
+    dev = np.where(filled, data - np.where(np.isnan(first), 0.0, first)[None, :], 0.0)
+    cdev = np.vstack([zero, np.cumsum(dev, axis=0)])
+    csq = np.vstack([zero, np.cumsum(dev * dev, axis=0)])
+    tiny = 1e-12 * csq[-1]
+
+    def varies(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        cnt = ccnt[b] - ccnt[a]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            m2 = (csq[b] - csq[a]) - (cdev[b] - cdev[a]) ** 2 / np.where(cnt > 0, cnt, 1)
+        return (cnt >= 2) & (m2 > tiny[None, :])
+
     rows = other[loose]
     s, e = starts[loose, 0], starts[loose, 1]
-    sure = (_sums_match(rows, csum[e] - csum[s], ccnt[e] - ccnt[s], cabs[e] - cabs[s])
-            | _sums_match(rows, csum[loose], ccnt[loose], cabs[loose]))
+    sure = (_sums_match(rows, csum[e] - csum[s], ccnt[e] - ccnt[s], cabs[e] - cabs[s], varies(s, e))
+            | _sums_match(rows, csum[loose], ccnt[loose], cabs[loose], varies(np.zeros_like(loose), loose)))
     if few:
         dcnt = ccnt[-1]
         with np.errstate(all="ignore"):
@@ -1133,8 +1161,11 @@ def _loose_by_value(num: np.ndarray, arr: np.ndarray, k: int, kind: Dict[int, st
             with np.errstate(invalid="ignore"):
                 if not (np.abs(other[i] - sums) <= np.maximum(0.5, 1e-3 * np.abs(sums)) + 1e-9).any():
                     continue          # no cell near a sum (the exact check below is slower)
+            with np.errstate(invalid="ignore"), warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                vary = (np.nanmax(blk, axis=0) != np.nanmin(blk, axis=0))[None, :]
             if _sums_match(other[i][None, :], np.where(f, blk, 0.0).sum(axis=0)[None, :], f.sum(axis=0)[None, :],
-                           np.where(f, np.abs(blk), 0.0).sum(axis=0)[None, :])[0]:
+                           np.where(f, np.abs(blk), 0.0).sum(axis=0)[None, :], vary)[0]:
                 out.add(i)
     return out
 
@@ -2683,7 +2714,7 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
         elif len(cands) == 1:
             out.append(f"{where} '{cands[0]}' -> [추천] '{m}' ('{cands[0]}'을(를) '{m}'(으)로 고쳐 다시 실행)")
         elif cands:
-            shown = [f"{c}(단위 다름: 값 환산 필요)" if other_unit(c, m) else c for c in cands]
+            shown = unit_marked(cands, m)
             out.append(f"'{m}'이(가) 없습니다. {where} [후보] {', '.join(shown)} 중 '{m}'(으)로 고칠 이름을 사용자에게 물으십시오")
     return out
 
@@ -3349,6 +3380,9 @@ def _find_command(args: argparse.Namespace, find: Optional[str] = None, inline: 
 
 def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     goal_df = parse_inline_input(args.find)
+    if len(goal_df) != 1:
+        # a JSON array of several objects: only the first would be used without a word (ml_map refuses it too)
+        raise InputError(f"--find은(는) 한 줄('열=값')로 주십시오 (지금 {len(goal_df)}줄).")
     goal = goal_df.iloc[0].to_dict()
     if len(goal) != 1:
         raise InputError("--find에는 목표 하나만 주십시오 (예: --find \"생산효율=50\").")
@@ -3360,8 +3394,11 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     except (TypeError, ValueError):
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
     items = resolve_target_models(target_path=args.model, meta_path=args.meta, filter_targets=[str(goal_name)])
-    item = items[0]
+    item = next((it for it in items if it["target"] == str(goal_name)), items[0])
     meta, pipe, target = item["meta"], item["pipeline"], item["target"]
+    if other_unit(str(goal_name), str(target)):
+        # '생산량(kg)=500' for the target '생산량(t)': 500 would be solved as 500 t (ml_map --find refuses it too)
+        raise InputError(unit_hint(str(goal_name), str(target), "목표(--find)"))
     if meta.get("task", "regression") != "regression":
         raise InputError(f"타겟 '{target}'은(는) 분류 모델입니다. 모델 반대 찾기는 숫자 타겟(회귀)만 됩니다.")
     schema = meta["feature_schema"]
@@ -3373,6 +3410,9 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     if vary not in numeric_in or vary not in stats:
         raise InputError(f"'{vary}'은(는) 숫자 입력이 아니라 반대 찾기로 바꿀 수 없습니다. [후보] {', '.join(numeric_in)}")
     given_df = parse_inline_input(args.input) if args.input else None
+    if given_df is not None and len(given_df) != 1:
+        raise InputError(f"-i은(는) 한 줄('열=값,열=값')로 주십시오 (지금 {len(given_df)}줄). 고정 입력이 여러 경우면 "
+                         f"경우마다 따로 실행하십시오.")
     given = given_df.iloc[0].to_dict() if given_df is not None else {}
     names, _ = (resolve_column_names([str(k) for k in given], raw_inputs, "고정 입력(-i)", values=True) if given
                 else ([], {}))
