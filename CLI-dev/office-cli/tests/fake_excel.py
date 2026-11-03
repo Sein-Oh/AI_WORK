@@ -76,6 +76,38 @@ class FakeFormatConditions:
         return len(self.items)
 
 
+class SheetNameRefused(Exception):
+    """실제 Excel이 시트 이름을 거절할 때의 COM 오류 (쓸 수 없는 글자, 31자 초과, 예약된 이름 History)."""
+
+
+def check_fake_sheet_name(name):
+    if re.search(r"[\[\]:*?/\\]", name) or len(name) > 31 or name.lower() == "history":
+        raise SheetNameRefused(-2146827284, "Exception occurred.", (0, "Microsoft Excel", "This name is reserved.", None, 0, 0), None)
+
+
+class FakeLines:
+    """EntireRow / EntireColumn: Hidden은 시트의 숨긴 행·열 집합으로 (일부만 숨기면 None, 실제 Excel처럼)."""
+
+    def __init__(self, ws, kind, keys):
+        object.__setattr__(self, "ws", ws)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "keys", keys)
+
+    @property
+    def Hidden(self):
+        hidden = self.ws.hidden[self.kind]
+        n = sum(1 for k in self.keys if k in hidden)
+        return True if n == len(self.keys) else (False if n == 0 else None)
+
+    def __setattr__(self, k, v):
+        if k == "Hidden":
+            for key in self.keys:
+                (self.ws.hidden[self.kind].add if v else self.ws.hidden[self.kind].discard)(key)
+            self.ws.log.append(("Hidden", self.kind, tuple(self.keys), v))
+        else:
+            object.__setattr__(self, k, v)
+
+
 class FakeRange:
     def __init__(self, ws, areas):
         self.ws = ws
@@ -259,6 +291,14 @@ class FakeRange:
     def MergeCells(self):
         return self.Address in self.ws.merged
 
+    @property
+    def EntireRow(self):
+        return FakeLines(self.ws, "rows", sorted({r for a in self.areas for r in range(a[0], a[2] + 1)}))
+
+    @property
+    def EntireColumn(self):
+        return FakeLines(self.ws, "cols", sorted({c for a in self.areas for c in range(a[1], a[3] + 1)}))
+
     def ClearFormats(self):
         self.ws.log.append(("ClearFormats", self.Address))
 
@@ -330,7 +370,8 @@ class FakeWorksheet:
     def __init__(self, app, wb, name):
         self.app = app
         self.wb = wb
-        self.Name = name
+        self._name = name
+        self.hidden = {"rows": set(), "cols": set()}
         self.values = {}
         self.prefixed = set()        # '를 붙여 글자로 쓴 칸
         self.formulas = {}
@@ -342,6 +383,15 @@ class FakeWorksheet:
         self.activated = 0
         self.Shapes = Count(0)
         self.Rows = Count(1048576)
+
+    @property
+    def Name(self):
+        return self._name
+
+    @Name.setter
+    def Name(self, v):
+        check_fake_sheet_name(v)          # 실제 Excel처럼 쓸 수 없는 이름은 COM 오류
+        self._name = v
 
     def set(self, r, c, v):
         if isinstance(v, str) and v.startswith("'"):      # Excel: 앞의 '는 "글자로 두기" 표시라 값에 남지 않음
@@ -356,6 +406,13 @@ class FakeWorksheet:
     def _parse(self, ref):
         areas = []
         for part in ref.replace("$", "").split(","):
+            whole = re.fullmatch(r"([A-Z]+):([A-Z]+)|(\d+):(\d+)", part.strip().upper())
+            if whole:                    # 열 전체(B:C) / 행 전체(2:3)
+                if whole.group(1):
+                    areas.append((1, col_num(whole.group(1)), 1048576, col_num(whole.group(2))))
+                else:
+                    areas.append((int(whole.group(3)), 1, int(whole.group(4)), 16384))
+                continue
             m = re.fullmatch(r"([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?", part.strip().upper())
             if not m:
                 raise Exception(f"bad address {ref}")
@@ -447,3 +504,26 @@ class FakeXlApp:
         self.Calculation = -4105
         self.Selection = Props()
         self.Selection.Address = "$A$1"
+        self.ActiveWindow = Props()
+        self.ActiveWindow.FreezePanes = False
+
+    def ConvertFormula(self, Formula, FromReferenceStyle, ToReferenceStyle=None, ToAbsolute=None, RelativeTo=None):
+        """A1(1) <-> R1C1(-4150). 상대 참조($ 없는 A1)만 RelativeTo 칸 기준 R[행차]C[열차]로 (실제 Excel처럼 255자 넘으면 오류)."""
+        if len(Formula) > 255:
+            raise Exception("ConvertFormula: 255자 초과")
+        r, c = RelativeTo.Row, RelativeTo.Column
+        if FromReferenceStyle == 1 and ToReferenceStyle == -4150:
+            return to_r1c1(Formula, r, c)
+        if FromReferenceStyle == -4150 and ToReferenceStyle == 1:
+            return re.sub(r"R\[(-?\d+)\]C\[(-?\d+)\]",
+                          lambda m: f"{col_let(c + int(m.group(2)))}{r + int(m.group(1))}", Formula)
+        return Formula
+
+    def Intersect(self, a, b):
+        """두 범위(첫 영역)의 겹치는 범위, 없으면 None (실제 Excel처럼)."""
+        ar1, ac1, ar2, ac2 = a.areas[0]
+        br1, bc1, br2, bc2 = b.areas[0]
+        r1, c1, r2, c2 = max(ar1, br1), max(ac1, bc1), min(ar2, br2), min(ac2, bc2)
+        if r1 > r2 or c1 > c2:
+            return None
+        return FakeRange(a.ws, [(r1, c1, r2, c2)])

@@ -200,10 +200,10 @@ def test_config_roundtrip(tmp_path, monkeypatch):
 
 def test_clamp_rows_and_text():
     rows = [[i, "x" * 10] for i in range(500)]
-    clipped, cut = rt.clamp_rows(rows, max_rows=50)
-    assert len(clipped) == 50 and cut
-    clipped, cut = rt.clamp_rows(rows[:5])
-    assert len(clipped) == 5 and not cut
+    clipped, cut, cells, dropped = rt.clamp_rows(rows, max_rows=50)
+    assert len(clipped) == 50 and cut and cells == 0 and dropped == 0
+    clipped, cut, cells, dropped = rt.clamp_rows(rows[:5])
+    assert len(clipped) == 5 and not cut and cells == 0 and dropped == 0
     text, cut = rt.clamp_text("가" * 10, max_chars=4)
     assert text == "가가가가" and cut
 

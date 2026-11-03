@@ -40,9 +40,20 @@ WD_STYLE_NORMAL = -1
 WD_STYLE_TITLE = -63
 WD_STYLE_LIST_BULLET = -49
 WD_STYLE_LIST_NUMBER = -50
+WD_BORDER_BOTTOM = -3
 WD_HIGHLIGHT = {"yellow": 7, "green": 4, "turquoise": 3, "pink": 5, "blue": 2, "red": 6, "gray": 16, "grey": 16,
                 "노랑": 7, "초록": 4, "분홍": 5, "파랑": 2, "빨강": 6, "회색": 16, "none": 0}
-FIND_MAX = 255   # Word Find 검색어 길이 한도
+FIND_MAX = 255   # Word Find 검색어 길이 한도 (^를 ^^로 바꾼 뒤의 길이)
+
+
+def _find_len(text: str) -> int:
+    """Word Find에 넘기는 길이: _find가 ^를 ^^로 바꾸므로 그 길이로 셉니다."""
+    return len(str(text).replace("^", "^^"))
+
+
+def _u16(text: str) -> int:
+    """Word Range 위치로 센 글 길이 (UTF-16 단위: BMP 밖 글자는 2)."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def heading_style(level: int) -> int:
@@ -297,7 +308,9 @@ def cmd_read(args) -> Dict[str, Any]:
             rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기"),
             rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"],
                             "이 문서의 단락을 엑셀 표로 옮기기")])
-        return rt.ok(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", **result)
+        return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
+                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          **result)
     if filtered and not selected:
         result.update(paragraphs=[], truncated=False)
         return rt.ok(TOOL, "read", f"{name}: {selection}에 글이 있는 단락 없음 (count 0)",
@@ -305,18 +318,35 @@ def cmd_read(args) -> Dict[str, Any]:
                      **result)
     shown: List[Dict[str, Any]] = []
     used = 0
+    text_cut = 0
     for u in selected:
         size = len(u["text"]) + 12
         if shown and used + size > rt.DEFAULT_MAX_CHARS:
             break
-        item = {"no": u["no"], "heading": u["heading"], "text": rt.clamp_text(u["text"], rt.DEFAULT_MAX_CHARS)[0]}
+        text, cut = rt.clamp_text(u["text"], rt.DEFAULT_MAX_CHARS)
+        item = {"no": u["no"], "heading": u["heading"], "text": text}
+        if cut:                                  # 아주 긴 단락: 앞부분만 (전체는 --save 파일)
+            item.update(text_truncated=True, text_chars=len(u["text"]))
+            text_cut += 1
         if args.pages and u.get("page") is not None:
             item["page"] = u["page"]
         shown.append(item)
         used += size
-    truncated = len(shown) < len(selected)
+    truncated = len(shown) < len(selected) or bool(text_cut)
     result.update(paragraphs=shown, truncated=truncated)
-    if truncated:
+    if text_cut:
+        result["truncated_reason"] = f"{rt.DEFAULT_MAX_CHARS}자보다 긴 단락 {text_cut}개는 앞부분만 표시 (text_truncated, 전체는 --save)"
+    if truncated and len(shown) == len(selected):
+        # 단락 글만 잘림: 이어 읽을 단락은 없고 저장 파일에 전체가 있음
+        save_args = ["read", "--target", args.target]
+        if args.section:
+            save_args += ["--section", args.section] + (["--occurrence", str(args.occurrence)] if args.occurrence else [])
+        elif args.pages:
+            save_args += ["--pages", args.pages]
+        elif args.paragraphs:
+            save_args += ["--paragraphs", args.paragraphs]
+        result["next_commands"] = [rt.next_command("word.py", save_args + ["--save"], "잘린 단락까지 전체를 md 파일로 저장")]
+    elif truncated:
         rest = selected[len(shown):]
         if not filtered:
             nxt = shown[-1]["no"] + 1
@@ -347,7 +377,10 @@ def cmd_info(args) -> Dict[str, Any]:
     if args.all:
         docs = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                 for d in off.list_open("word")]
-        return rt.ok(TOOL, "info", f"열린 문서 {len(docs)}개", documents=docs)
+        if not docs:
+            return rt.ok(TOOL, "info", "0건: 열린 문서가 없습니다",
+                         "VERIFIED: 0건. 열린 Word 문서가 없습니다. 사용자에게 그대로 알리세요.", documents=docs, count=0)
+        return rt.ok(TOOL, "info", f"열린 문서 {len(docs)}개", documents=docs, count=len(docs))
     with off.open_target("word", args.target, readonly=True) as t:
         doc = t.doc
         stats = {}
@@ -538,7 +571,8 @@ def _memo_rows(path: str) -> List[Tuple[str, str, Optional[int]]]:
         if not anchor or not memo:
             raise rt.InputError(f"메모 파일 {n}번째 줄에 기준 글 또는 메모 내용이 없습니다. 열: 기준 글, 메모 내용[, 몇 번째 단락].")
         if occ_raw and not occ_raw.isdigit():
-            raise rt.InputError(f"메모 파일 {n}번째 줄의 3번째 열(몇 번째 단락)은 숫자여야 합니다: '{occ_raw}'")
+            raise rt.InputError(f"메모 파일 {n}번째 줄의 3번째 열(몇 번째 단락)은 숫자여야 합니다: '{occ_raw}'",
+                                log_message=f"메모 파일 {n}번째 줄의 3번째 열(몇 번째 단락)은 숫자여야 합니다 (값 {rt.DOC_OMITTED}).")
         out.append((anchor, memo, int(occ_raw) if occ_raw else None))
     if not out:
         raise rt.InputError("메모 파일에 내용이 없습니다. 열: 기준 글, 메모 내용[, 몇 번째 단락].")
@@ -547,8 +581,8 @@ def _memo_rows(path: str) -> List[Tuple[str, str, Optional[int]]]:
 
 def _comment_range(doc: Any, anchor: str, occurrence: Optional[int]) -> Any:
     """메모를 달 범위: 기준 글이 든 단락을 고르고(여러 곳이면 [후보]) 그 안의 기준 글 자체."""
-    if len(anchor) > FIND_MAX:
-        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다. 앞부분 일부만 쓰세요.")
+    if _find_len(anchor) > FIND_MAX:
+        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앞부분 일부만 쓰세요.")
     para = _anchor_paragraph(doc, anchor, occurrence, "after")
     rng = doc.Range(int(para.Start), int(para.End))
     return rng if _find(rng, anchor) else para
@@ -575,11 +609,14 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
                 _comment_range(doc, anchor, occ)
             except rt.InputError as e:
                 msg = str(e).replace("[추천]", "추천:").replace("[후보]", "후보:")
-                problems.append(f"{n}번째 줄 '{_preview(anchor, 20)}': {msg}")
+                problems.append((n, f"{n}번째 줄 '{_preview(anchor, 20)}': {msg}"))
         if problems:
-            raise rt.InputError(f"메모 {len(rows)}개 중 {len(problems)}개의 기준 글을 정할 수 없어 하나도 달지 않았습니다. "
-                                "메모 파일의 기준 글을 고치거나 3번째 열에 몇 번째 단락인지 적은 뒤 다시 실행하세요. "
-                                + " / ".join(problems[:10]))
+            head = (f"메모 {len(rows)}개 중 {len(problems)}개의 기준 글을 정할 수 없어 하나도 달지 않았습니다. "
+                    "메모 파일의 기준 글을 고치거나 3번째 열에 몇 번째 단락인지 적은 뒤 다시 실행하세요. ")
+            # 오류 로그에는 줄 번호만 (기준 글은 메모 파일 내용, 후보는 문서 단락)
+            raise rt.InputError(head + " / ".join(p for _, p in problems[:10]),
+                                log_message=head + f"기준 글을 정할 수 없는 줄: {', '.join(str(n) for n, _ in problems[:10])} "
+                                                   f"(기준 글과 후보 {rt.DOC_OMITTED})")
     before = int(doc.Comments.Count)
     added = []
     for anchor, memo, occ in rows:
@@ -660,18 +697,21 @@ class Writer:
         self.pos = pos
         self.theme = theme or off.THEMES["navy"] | {"name": "navy"}
         self.created: List[str] = []
+        self.warnings: List[str] = []
+        self.problems: List[str] = []
 
     def _para(self, text: str, style: Optional[int] = None, bold_spans: Sequence[Tuple[int, int]] = ()) -> Any:
         r = self.doc.Range(self.pos, self.pos)
         r.InsertAfter(text + "\r")
-        para = self.doc.Range(r.Start, r.Start + len(text))
+        # Word 위치는 UTF-16 단위: BMP 밖 글자(이모지 등)는 2칸이라 파이썬 글자 위치를 그대로 쓰면 굵게가 밀림
+        para = self.doc.Range(r.Start, r.Start + _u16(text))
         try:
             para.Style = self.doc.Styles(style if style is not None else WD_STYLE_NORMAL)
         except Exception:
             pass
         para.Font.Bold = False
         for a, b in bold_spans:
-            self.doc.Range(r.Start + a, r.Start + b).Font.Bold = True
+            self.doc.Range(r.Start + _u16(text[:a]), r.Start + _u16(text[:b])).Font.Bold = True
         self.pos = r.End
         return para
 
@@ -680,7 +720,7 @@ class Writer:
         self._para(plain, style, spans)
 
     def heading(self, level: int, text: str) -> None:
-        self.text(text, heading_style(level))
+        self._para(rt.plain_heading(text), heading_style(level))   # 제목은 모든 수준이 ** __를 뺀 글 (굵기가 섞이지 않음)
         self.created.append(f"제목{level}")
 
     def items(self, items: List[str], numbered: bool) -> None:
@@ -762,6 +802,17 @@ class Writer:
         self.pos = toc.Range.End + 1
         self.created.append("목차")
 
+    def rule(self) -> None:
+        """마크다운 '---'(구분선): 아래 테두리만 있는 빈 단락 (페이지 나누기가 아님. 페이지 나누기는 --page-break)."""
+        para = self._para("")
+        try:
+            border = para.Paragraphs(1).Borders(WD_BORDER_BOTTOM)
+            border.LineStyle = 1                      # wdLineStyleSingle
+            border.LineWidth = 6                      # wdLineWidth075pt
+        except Exception as e:
+            self.problems.append(f"구분선의 아래 테두리를 넣지 못함: {type(e).__name__}")
+        self.created.append("구분선")
+
     def page_break(self) -> None:
         r = self.doc.Range(self.pos, self.pos)
         r.InsertBreak(7)                              # wdPageBreak
@@ -772,8 +823,11 @@ class Writer:
         for kind, payload in rt.parse_markdown_blocks(text):
             if kind == "heading":
                 self.heading(*payload)
-            elif kind == "paragraph":
-                self.text(payload)
+            elif kind in ("paragraph", "code"):
+                if kind == "code":
+                    self._para(payload, None, [])          # 코드 줄은 글자 그대로 (** __를 굵게로 읽지 않음)
+                else:
+                    self.text(payload)
                 if not self.created or not self.created[-1].startswith("본문"):
                     self.created.append("본문")
             elif kind in ("bullets", "numbered"):
@@ -781,14 +835,18 @@ class Writer:
             elif kind == "table":
                 self.table(payload)
             elif kind == "break":
-                self.page_break()
+                self.rule()
+            elif kind == "front_matter":
+                self.warnings.append(rt.front_matter_warning(payload))
+                rt.log("WARN", self.warnings[-1])
 
 
 def _find(rng: Any, text: str, match_case: bool = False, whole_word: bool = False) -> bool:
     """Find 옵션을 모두 명시합니다 (사용자가 마지막에 쓴 와일드카드 등 설정이 남아 오동작하는 것 방지)."""
     f = rng.Find
     f.ClearFormatting()
-    return bool(f.Execute(FindText=text, MatchCase=match_case, MatchWholeWord=whole_word, MatchWildcards=False,
+    # Word는 와일드카드가 꺼져 있어도 ^를 특수 코드로 읽음 (^^ -> ^, ^p 단락, ^6은 COM 오류): 글자 그대로 찾게 ^^로 바꿈
+    return bool(f.Execute(FindText=text.replace("^", "^^"), MatchCase=match_case, MatchWholeWord=whole_word, MatchWildcards=False,
                           MatchSoundsLike=False, MatchAllWordForms=False, Forward=True, Wrap=0, Format=False))
 
 
@@ -871,7 +929,8 @@ def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str
         elif similar:
             hint = f" 비슷한 문구: '{similar}' (뜻이 같은지 사용자에게 확인한 뒤에만 쓰세요)"
         raise rt.InputError(f"문서에서 '{anchor}'을(를) 찾을 수 없습니다. word.py read로 정확한 문구를 확인하세요." + hint,
-                            no_fallback=True)
+                            no_fallback=True,
+                            log_message=f"문서에서 '{anchor}'을(를) 찾을 수 없습니다." + (f" (비슷한 문구 {rt.DOC_OMITTED})" if hint else ""))
     if occurrence is not None:
         if not 1 <= occurrence <= len(hits):
             raise rt.InputError(f"--occurrence는 1~{len(hits)} 사이여야 합니다 ('{anchor}'이(가) 있는 단락 {len(hits)}개).",
@@ -901,8 +960,8 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
             doc.Range(end, end).InsertAfter("\r")
             end = doc.Content.End - 1
         return end, "문서 끝"
-    if len(anchor) > FIND_MAX:
-        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다. 앵커 단락의 앞부분 일부만 쓰세요.")
+    if _find_len(anchor) > FIND_MAX:
+        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앵커 단락의 앞부분 일부만 쓰세요.", no_fallback=True)
     para = _anchor_paragraph(doc, anchor, occurrence, pos)
     if _in_table(para):
         # 셀 단락의 End는 다음 셀의 시작이라 그대로 넣으면 옆 칸에 들어감: 표 바깥(표 뒤)에 넣습니다
@@ -966,7 +1025,7 @@ def cmd_write(args) -> Dict[str, Any]:
             elif args.heading:
                 w.heading(args.heading, content.strip())
             elif args.title:
-                w.text(content.strip(), WD_STYLE_TITLE)
+                w._para(rt.plain_heading(content.strip()), WD_STYLE_TITLE)
                 w.created.append("문서 제목")
             elif rt.looks_like_markdown(content):
                 w.markdown(content)
@@ -978,7 +1037,8 @@ def cmd_write(args) -> Dict[str, Any]:
             w.table(file_rows)
         if image:
             w.image(image, args.width)
-        problems = _verify_inserted(doc, start, w.pos, [c for c in (text, file_text) if c])
+        mode = "raw" if args.callout else ("bold" if args.heading or args.title else "auto")
+        problems = w.problems + _verify_inserted(doc, start, w.pos, [c for c in (text, file_text) if c], mode)
         t.set_focus()
         if t.source == "active" and not args.no_focus:
             try:
@@ -987,14 +1047,17 @@ def cmd_write(args) -> Dict[str, Any]:
                 pass
         resolved = t.resolved()
     preview = f"{resolved['name']}의 {where}에 넣었습니다: {', '.join(w.created)}"
+    extra: Dict[str, Any] = {"warnings": w.warnings} if w.warnings else {}
     if problems:
-        return rt.ok_unverified(TOOL, "write", preview, problems, target_resolved=resolved, inserted=w.created)
-    return rt.ok(TOOL, "write", preview, "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요.",
-                 verified=True, target_resolved=resolved, inserted=w.created)
+        return rt.ok_unverified(TOOL, "write", preview, problems, target_resolved=resolved, inserted=w.created, **extra)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+                 + (" 주의: warnings를 사용자에게 알리세요." if w.warnings else ""),
+                 verified=True, target_resolved=resolved, inserted=w.created, **extra)
 
 
-def _verify_inserted(doc: Any, start: int, end: int, contents: List[str]) -> List[str]:
-    """R1: 넣은 범위를 다시 읽어, 범위가 비어 있지 않고 넣은 글의 첫 줄이 들어 있는지 확인합니다 (마크다운 기호 제외)."""
+def _verify_inserted(doc: Any, start: int, end: int, contents: List[str], mode: str = "auto") -> List[str]:
+    """R1: 넣은 범위를 다시 읽어, 범위가 비어 있지 않고 넣은 글의 첫 글이 들어 있는지 확인합니다.
+    mode: 'auto'(마크다운이면 블록으로 해석, 아니면 줄마다 단락), 'bold'(--heading/--title: 굵게 표시만 뺌), 'raw'(--callout: 그대로)."""
     try:
         got = re.sub(r"[\s\x00-\x1f]+", "", str(doc.Range(start, end).Text))   # 표 칸 구분 기호도 무시
     except Exception as e:
@@ -1003,12 +1066,34 @@ def _verify_inserted(doc: Any, start: int, end: int, contents: List[str]) -> Lis
         return ["넣은 범위가 비어 있음"]
     problems = []
     for content in contents:
-        first = next((ln for ln in content.splitlines() if ln.strip()), "")
-        first = re.sub(r"^\s*(#+|[-*+]|\d+[.)]|>)\s*|\*\*|__|\|", "", first)
+        first = _first_inserted(content, mode)
         key = re.sub(r"\s+", "", first)[:20]
         if key and key not in got:
             problems.append(f"넣은 범위에서 '{first.strip()[:20]}'을(를) 찾지 못함")
     return problems
+
+
+def _first_inserted(content: str, mode: str) -> str:
+    """넣은 글의 첫 글 (Writer가 넣는 모양 그대로: 마크다운 블록은 해석한 글, 코드 줄과 표 칸은 글자 그대로)."""
+    if mode == "raw":
+        return content.strip()
+    if mode == "auto" and rt.looks_like_markdown(content):
+        for kind, payload in rt.parse_markdown_blocks(content):
+            if kind == "heading":
+                return rt.plain_heading(payload[1])
+            if kind == "paragraph":
+                return rt.split_bold(payload)[0]
+            if kind == "code":
+                return payload                      # 펜스 줄은 넣지 않고 코드는 글자 그대로
+            if kind in ("bullets", "numbered"):
+                return rt.split_bold(payload[0])[0]
+            if kind == "table":
+                return "".join(str(c) for c in payload[0])     # 칸은 그대로 넣음 ('\|'는 이미 글자 '|')
+        return ""                                   # 구분선(빈 단락)·머리말만 있음
+    if mode == "bold":
+        return rt.plain_heading(content.strip())
+    first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
+    return rt.split_bold(first)[0]
 
 
 # ==============================================================================
@@ -1048,9 +1133,16 @@ def _load_map(args) -> Dict[str, str]:
         mapping = {args.find: args.find if args.replace is None else args.replace}   # --replace "" 는 삭제
     else:
         raise rt.InputError("--find 또는 --map을 지정하세요.")
-    long_keys = [k for k in mapping if len(k) > FIND_MAX]
+    if "" in mapping:
+        # 빈 글을 찾으면 모든 글자 사이에 바꿀 글이 끼어들 수 있음
+        raise rt.InputError("찾을 글(--find 또는 --map의 키)이 비어 있어 바꾸지 않았습니다. 빈 곳에 글을 넣으려면 word.py write를 쓰세요 "
+                            "(예: word.py write --text \"내용\" --anchor \"기준 글\" --pos after). 바꿀 글이 있으면 찾을 글을 정확히 지정하세요.")
+    long_keys = [k for k in mapping if _find_len(k) > FIND_MAX]
     if long_keys:
-        raise rt.InputError(f"찾을 문구는 {FIND_MAX}자 이하여야 합니다: '{long_keys[0][:30]}...' 문장을 나눠서 지정하세요.")
+        # 찾을 문구의 앞부분을 보여 주지 않음 (오류 로그에 가린 값의 일부가 남았음). 몇 번째 문구인지와 길이만
+        first = list(mapping).index(long_keys[0]) + 1
+        raise rt.InputError(f"찾을 문구는 {FIND_MAX}자 이하여야 합니다 ({first}번째 찾을 문구가 {_find_len(long_keys[0])}자). "
+                            "문장을 나눠서 지정하세요.")
     return mapping
 
 
@@ -1068,15 +1160,30 @@ def cmd_replace(args) -> Dict[str, Any]:
         raise rt.InputError("--replace(바꿀 글)나 서식 옵션(--bold, --color, --highlight 등)이 없어 바꿀 것이 없습니다. "
                             "사용자에게 무엇으로 바꿀지 확인하세요. 글을 지우려면 --replace \"\"를 씁니다.")
     counts: Dict[str, int] = {}
+    same: Dict[str, int] = {}          # 바꿀 글이 찾는 글과 같고 서식도 없어 바꾸지 않은 문구: 찾은 곳 수
     limit_hit = False
     with off.open_target("word", args.target, readonly=False, focus=not args.no_focus,
                          tool=TOOL, command="replace") as t:
+        for find, rep in mapping.items():
+            if find == rep and not formatting:
+                # 바뀌는 것이 없음: 세기만 함 (이전에는 'N곳 처리'로 보고하고 바꾼 것으로 표시해 되돌리기 지점이 남았음)
+                hits = _count_text(t.doc, find, args.match_case, args.whole_word)
+                if hits:
+                    same[find] = hits
         for story in _stories(t.doc):
             for find, rep in mapping.items():
+                if find == rep and not formatting:
+                    continue
                 n = 0
                 rng = story.Duplicate
                 while _find(rng, find, args.match_case, args.whole_word):
-                    if find != rep:
+                    if not formatting and str(rng.Text) == rep:
+                        # 찾은 글이 이미 바꿀 글 그대로 (예: --find iphone --replace iPhone에서 'iPhone'): 세기만 함
+                        # (이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음)
+                        same[find] = same.get(find, 0) + 1
+                        rng.Collapse(0)
+                        continue
+                    if str(rng.Text) != rep:
                         rng.Text = rep
                     if formatting:
                         if color is not None:
@@ -1107,13 +1214,21 @@ def cmd_replace(args) -> Dict[str, Any]:
                     left = _count_text(t.doc, find, args.match_case, args.whole_word)
                     if left:
                         problems.append(f"'{find}'이(가) {left}곳 남아 있음")
-                elif _count_text(t.doc, rep, args.match_case, args.whole_word) < n:
+                elif _count_text(t.doc, rep, True, args.whole_word) < n:
+                    # 바꾼 곳은 바꿀 글이 대소문자까지 그대로 있어야 함 (대소문자만 바꾸는 경우도 확인)
                     problems.append(f"'{rep}'이(가) 바꾼 수({n})보다 적음")
         if counts:
             t.set_focus()
         resolved = t.resolved()
     total = sum(counts.values())
     result = {"target_resolved": resolved, "replaced": total, "by_text": counts}
+    if same:
+        result["unchanged_same_text"] = same
+    if not total and same:
+        found = sum(same.values())
+        return rt.ok(TOOL, "replace", f"찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바꾼 곳이 없습니다 (0곳 바뀜)",
+                     f"VERIFIED: 바꾼 곳 0곳. 찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바뀐 것이 없습니다. "
+                     "다시 실행하지 말고 사용자에게 무엇으로 바꿀지 확인하세요.", **result)
     if not total:
         return rt.ok(TOOL, "replace", "일치하는 문구가 없습니다",
                      "VERIFIED: 일치하는 문구가 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
@@ -1130,6 +1245,13 @@ def cmd_replace(args) -> Dict[str, Any]:
 def _count_text(doc: Any, text: str, match_case: bool, whole_word: bool, limit: int = 5000) -> int:
     """문서 전체(본문, 머리글/바닥글, 글상자 등)에서 글이 몇 곳 있는지 (다시 읽어 확인용)."""
     n = 0
+    if _find_len(text) > FIND_MAX:
+        # Word Find 한도(255자)를 넘는 글(긴 바꿀 글을 다시 셀 때): Word Find 대신 각 스토리 글에서 직접 셈
+        needle = text if match_case else text.lower()
+        for story in _stories(doc):
+            hay = str(story.Text) if match_case else str(story.Text).lower()
+            n += hay.count(needle)
+        return min(n, limit)
     for story in _stories(doc):
         rng = story.Duplicate
         while n < limit and _find(rng, text, match_case, whole_word):

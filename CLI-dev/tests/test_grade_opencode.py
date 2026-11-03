@@ -27,13 +27,19 @@ def _bash(cmd, out):
                                                       "output": "[PROGRESS] ...\n" + json.dumps(out, ensure_ascii=False), "metadata": {"exit": 0}}}
 
 
-def _export(tmp_path, turns):
+def _with_messages(user):
+    """Puts the scenario's pack message after each [ID] tag, as a pasted message has it (the mojibake check compares them)."""
+    by_id = go.load_scenarios()[1]
+    return go.TAG.sub(lambda m: f"{m.group(0)} {by_id[m.group(1)]['message']}" if m.group(1) in by_id else m.group(0), user)
+
+
+def _export(tmp_path, turns, name="chat.json"):
     msgs, t = [], 1000
     for user, parts in turns:
-        msgs.append({"info": {"role": "user", "time": {"created": t}}, "parts": [{"type": "text", "text": user}]})
+        msgs.append({"info": {"role": "user", "time": {"created": t}}, "parts": [{"type": "text", "text": _with_messages(user)}]})
         msgs.append({"info": {"role": "assistant", "time": {"created": t + 1, "completed": t + 5000}}, "parts": parts})
         t += 10000
-    path = tmp_path / "chat.json"
+    path = tmp_path / name
     path.write_text(json.dumps({"info": {"model": {"id": "LLM42"}, "version": "1.18"}, "messages": msgs}, ensure_ascii=False), encoding="utf-8")
     return str(path)
 
@@ -120,7 +126,7 @@ def test_final_answer_is_last_assistant_message(tmp_path):
         ("계속", [{"type": "text", "text": "끝났습니다."}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     m1 = next(r for r in rows if r["id"] == "M1")
-    assert "답변: 16\\.25" in m1["실패"] and "이모지" not in m1["실패"]
+    assert "16\\.25" in m1["실패"] and "답변: " in m1["실패"] and "이모지" not in m1["실패"]
 
 
 def _export_bytes(tmp_path, data, enc, bom=b""):
@@ -145,7 +151,7 @@ def test_export_errors_are_clear(tmp_path, capsys, monkeypatch):
     with pytest.raises(go.ExportError, match="인코딩"):
         go.load_export(str(bad))
     bad.write_text("not json", encoding="utf-8")
-    with pytest.raises(go.ExportError, match="Out-File -Encoding utf8"):
+    with pytest.raises(go.ExportError, match=re.escape('cmd /c "opencode export <세션ID> > chat.json"')):
         go.load_export(str(bad))
     bad.write_text("[1, 2]", encoding="utf-8")
     with pytest.raises(go.ExportError, match="messages"):
@@ -153,6 +159,118 @@ def test_export_errors_are_clear(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["grade_opencode.py", "--export", str(bad)])
     assert go.main() == 1
     assert "[ERROR]" in capsys.readouterr().err
+
+
+def _garbled_export(tmp_path, garble, enc="utf-8", bom=codecs.BOM_UTF8):
+    """A pack export whose text went through garble (what PowerShell 5.1 does to opencode's UTF-8 output), saved as enc."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    clean = _export(tmp_path, [("[M1]", [_bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+                                         {"type": "text", "text": "B는 16.25, C는 87.5입니다."}])], name="clean.json")
+    raw = open(clean, encoding="utf-8").read()
+    path = tmp_path / f"garbled_{enc}.json"
+    path.write_bytes(bom + garble(raw.encode("utf-8")).encode(enc))
+    return clean, str(path)
+
+
+def test_mojibake_export_is_rejected(tmp_path, capsys, monkeypatch):
+    """`opencode export <ID> | Out-File -Encoding utf8 chat.json` and `> chat.json` on PowerShell 5.1 decode opencode's UTF-8
+    with the console code page (949): the JSON still parses, but the Korean is garbage. The grader stops with the right command."""
+    garbles = (lambda b: b.decode("cp949", "replace"),                          # Python-style replacement characters
+               lambda b: b.decode("cp949", "replace").replace("\ufffd", "?"),   # .NET-style '?'
+               lambda b: b.decode("latin-1"))                                    # no Hangul left at all
+    for garble in garbles:
+        for enc, bom in (("utf-8", codecs.BOM_UTF8), ("utf-16-le", codecs.BOM_UTF16_LE)):   # Out-File utf8 / PowerShell >
+            clean, bad = _garbled_export(tmp_path, garble, enc, bom)
+            with pytest.raises(go.ExportError, match="한글이 깨졌습니다") as ex:
+                go.grade([bad], "t", False, "LLM42")
+            assert 'cmd /c "opencode export <세션ID> > chat.json"' in str(ex.value)
+    monkeypatch.setattr(sys, "argv", ["grade_opencode.py", "--export", bad])
+    assert go.main() == 1
+    err = capsys.readouterr().err
+    assert "[ERROR]" in err and "cmd /c" in err
+    _, rows, _ = go.grade([clean], "t", False, "LLM42")                         # the same export saved with cmd /c is graded
+    assert next(r for r in rows if r["id"] == "M1")["결과"] == "통과"
+    utf16 = tmp_path / "clean_utf16.json"                                       # UTF-16 with a BOM is still read
+    utf16.write_bytes(codecs.BOM_UTF16_LE + open(clean, encoding="utf-8").read().encode("utf-16-le"))
+    _, rows, _ = go.grade([str(utf16)], "t", False, "LLM42")
+    assert next(r for r in rows if r["id"] == "M1")["결과"] == "통과"
+
+
+def test_bulk_lead_in_is_not_first_answer(tmp_path):
+    """A lead-in before the first tool call is not the first scenario's answer when the turn has a closing summary."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    path = _export(tmp_path, [("순서대로\n[M1] A=12.5\n[M3] A=103", [
+        {"type": "text", "text": "두 요청을 차례로 처리하겠습니다."},
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=103"', ok),
+        {"type": "text", "text": "M1: B 16.25, C 87.5 / M3: B 1058.5 (범위 밖 외삽값)"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["M1"]["결과"] == "통과", by["M1"]["실패"]
+    assert by["M3"]["결과"] == "통과", by["M3"]["실패"]
+
+
+def test_bulk_retry_belongs_to_its_scenario(tmp_path):
+    """A STOP_RETRY first try followed by the recommended retry (as SKILL.md prescribes) belongs to the retried scenario:
+    the previous scenario's tool_ok is not judged on it."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    stop = {"status": "error", "agent_directive": "STOP_RETRY: --vary가 필요합니다. [추천] --vary 반응온도"}
+    rest = '-i "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5"'
+    path = _export(tmp_path, [("[P2] 새조건\n[P3] 불순물 100", [
+        _bash('python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 -f "새조건.xlsx"', ok),
+        {"type": "text", "text": "P2: 반응온도 200은 학습 범위를 벗어납니다."},
+        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 --find "불순물=100" {rest}', stop),
+        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 --find "불순물=100" --vary 반응온도 {rest}', ok),
+        {"type": "text", "text": "P3: 반응온도 181, 운전 구간 175~188"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["P2"]["결과"] == "통과" and by["P2"]["명령수"] == 1, by["P2"]["실패"]
+    assert by["P3"]["결과"] == "통과" and by["P3"]["명령수"] == 2, by["P3"]["실패"]
+    # the previous scenario's own retry stays with it: M1 fails, M1 retry, then M2
+    m1 = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"'
+    path = _export(tmp_path, [("[M1] A=12.5\n[M2] D=64", [
+        _bash(m1, stop), _bash(m1, ok), {"type": "text", "text": "B 16.25, C 87.5"},
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" --find "D=64" --vary A', ok),
+        {"type": "text", "text": "A=20, A=80."}])], name="m.json")
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["M1"]["결과"] == "통과" and by["M1"]["명령수"] == 2 and by["M2"]["명령수"] == 1, by["M1"]["실패"]
+    assert by["M2"]["결과"] == "통과", by["M2"]["실패"]
+
+
+@pytest.mark.parametrize("first_try", ['--find "D=64"', '--find "D=64" --vary A'])
+def test_bulk_retry_in_middle_scenario(tmp_path, first_try):
+    """M1, M2 first try (STOP_RETRY: partial or fully matching M2), M2 retry, M3: the retry stays with M2 and M3 starts
+    at its own command (M3's only regex, ml_map.py, also matches M2's retry)."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    stop = {"status": "error", "agent_directive": "STOP_RETRY: --vary가 필요합니다. [추천] --vary A"}
+    mp = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" '
+    path = _export(tmp_path, [("순서대로\n[M1] A=12.5\n[M2] D=64\n[M3] A=103", [
+        _bash(mp + '-i "A=12.5" -y "B,C"', ok), {"type": "text", "text": "M1: B 16.25, C 87.5"},
+        _bash(mp + first_try, stop), _bash(mp + '--find "D=64" --vary A', ok), {"type": "text", "text": "M2: A 20, 80"},
+        _bash(mp + '-i "A=103" -y B', ok), {"type": "text", "text": "M3: B 1058.5 (범위 밖 외삽값)"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    by = {r["id"]: r for r in rows}
+    assert by["M1"]["결과"] == "통과" and by["M1"]["명령수"] == 1, by["M1"]["실패"]
+    assert by["M2"]["결과"] == "통과" and by["M2"]["명령수"] == 2, by["M2"]["실패"]
+    assert by["M3"]["결과"] == "통과" and by["M3"]["명령수"] == 1, by["M3"]["실패"]
+
+
+def test_single_request_answer_before_closing_tool(tmp_path):
+    """Answer text, one more tool, then "완료했습니다.": the answer after the scenario's own command is graded."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    path = _export(tmp_path, [("[M1] A=12.5", [
+        {"type": "text", "text": "맵 파일로 계산하겠습니다."},
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+        {"type": "text", "text": "B는 16.25, C는 87.5입니다."},
+        _bash('Get-Item "C:\\ml_beta\\agent\\맵.xlsx"', ok),
+        {"type": "text", "text": "완료했습니다."}])])
+    _, rows, detail = go.grade([path], "t", False, "LLM42")
+    m1 = next(r for r in rows if r["id"] == "M1")
+    assert m1["결과"] == "통과", m1["실패"]
+    turn = next(t for sid, _, t, _ in detail if sid == "M1")
+    assert go.final_answer(turn) == "완료했습니다."                               # without the scenario: after the last tool
+    assert go.final_answer(turn, go.load_scenarios()[1]["M1"]) == "B는 16.25, C는 87.5입니다.\n완료했습니다."
 
 
 def test_safe_label():
@@ -180,6 +298,12 @@ def test_no_adhoc_py_rule():
                'C:\\WPy64-313130\\python\\python.exe "C:\\CLI\\ml-kit\\ml_map.py" -h',
                'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"',
                'python "C:\\CLI-dev\\run_beta_check.py" --agent',
+               'cd C:\\CLI-dev\\ml-kit\\tools; python make_beta_samples.py "C:\\ml_beta\\agent"',
+               'python .\\make_beta_samples.py "C:\\ml_beta\\agent"',
+               'cd C:\\CLI-dev\\office-cli\\tools; python run_win_tests.py',
+               'cd C:\\CLI-dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
+               'cd C:\\CLI-dev; python ml-kit\\tools\\run_win_tests.py --agent',
+               'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\ml_beta\\agent"',
                'python -m pytest -q']
     bad_cmds = ['python -c "import pandas"',
                 "python - <<'EOF'\nprint(1)\nEOF",
@@ -211,6 +335,61 @@ def test_no_read_code_rule():
     skill = {"tool": "grep", "input": {"pattern": "제외", "path": "C:\\CLI\\ml-kit\\SKILL.md"}, "command": "", "path": ""}
     assert _rule_hits("no_read_code", tool=grep) and _rule_hits("no_read_code", tool=glob)
     assert not _rule_hits("no_read_code", tool=skill)
+    braces = {"tool": "glob", "input": {"pattern": "*.{py,md}", "path": "C:\\CLI\\ml-kit"}, "command": "", "path": ""}
+    md_on_py = {"tool": "grep", "input": {"pattern": "iqr", "path": "C:\\CLI\\ml-kit\\ml_train.py", "include": "*.md"},
+                "command": "", "path": ""}
+    assert _rule_hits("no_read_code", tool=braces) and _rule_hits("no_read_code", tool=md_on_py)
+
+
+def _tool(name, **inp):
+    return {"tool": name, "input": inp, "command": "", "path": inp.get("filePath", "")}
+
+
+def test_no_read_code_rule_searches_without_py():
+    """Code searches that never spell ".py" still read the tool code; a search for the text "ml_train.py" elsewhere does not."""
+    for c in ('Select-String -Path "C:\\CLI\\ml-kit\\*" -Pattern outlier',
+              "findstr /s outlier C:\\CLI\\ml-kit\\*",
+              "Get-ChildItem C:\\CLI\\ml-kit -Recurse | Select-String outlier",
+              "gci C:/CLI/office-cli | Get-Content",
+              'rg iqr "C:\\CLI\\ml-kit"',
+              '[IO.File]::ReadAllText("C:\\CLI\\ml-kit\\ml_train.py")',
+              '[System.IO.File]::ReadAllLines("C:\\CLI\\office-cli\\excel.py")',
+              "python -m pydoc ml_train",
+              'python -m pydoc "C:\\CLI\\ml-kit\\ml_train.py"'):
+        assert _rule_hits("no_read_code", c), c
+    for c in ('python C:\\CLI\\ml-kit\\ml_train.py -f a.xlsx --header-row 3',
+              'python "C:\\CLI\\ml-kit\\ml_map.py" -f "C:\\data\\type a.xlsx" -i "A=1"',
+              "Get-Content C:\\CLI\\ml-kit\\SKILL.md",
+              'Select-String -Path "C:\\CLI\\ml-kit\\SKILL.md" -Pattern 제외',
+              "findstr 제외 C:\\CLI\\ml-kit\\SKILL.md",
+              "Get-ChildItem C:\\CLI\\ml-kit",
+              'Get-ChildItem "C:\\ml_beta\\agent" | Select-String x'):
+        assert not _rule_hits("no_read_code", c), c
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit"))
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="iqr", path="C:/CLI/office-cli", include="*"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="ml_train.py",
+                                                      path="C:\\Users\\me\\.config\\opencode\\skills"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="제외", path="C:\\CLI\\ml-kit", include="SKILL.md"))
+    assert not _rule_hits("no_read_code", tool=_tool("glob", pattern="**/SKILL.md", path="C:\\Users\\me\\.config\\opencode"))
+    # glob only lists file names: flagged only when it looks for .py; grep over documents (*.md) is not reading code
+    assert not _rule_hits("no_read_code", tool=_tool("glob", pattern="*", path="C:\\CLI\\ml-kit"))
+    assert not _rule_hits("no_read_code", tool=_tool("glob", pattern="**/*.md", path="C:/CLI/office-cli"))
+    assert _rule_hits("no_read_code", tool=_tool("glob", pattern="*.py", path="C:\\CLI\\ml-kit"))
+    assert _rule_hits("no_read_code", tool=_tool("glob", pattern="*", path="C:\\CLI\\ml-kit\\ml_train.py"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="*.md"))
+    assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="SKILL.md"))
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="*.{py,md}"))
+
+
+def test_no_write_py_covers_edit_and_patch():
+    assert _rule_hits("no_write_py", tool=_tool("write", filePath="C:\\temp\\x.py", content="print(1)"))
+    assert _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\CLI\\ml-kit\\ml_train.py", oldString="a", newString="b"))
+    assert _rule_hits("no_write_py", tool=_tool("multiedit", filePath="C:\\CLI\\ml-kit\\ml_map.py", edits=[]))
+    patch = "*** Begin Patch\n*** Update File: C:\\CLI\\ml-kit\\ml_map.py\n@@\n-a\n+b\n*** End Patch"
+    assert _rule_hits("no_write_py", tool=_tool("patch", patchText=patch))
+    assert not _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\ml_beta\\agent\\memo.md", oldString="a", newString="b"))
+    md = "*** Begin Patch\n*** Add File: C:\\temp\\notes.md\n+run ml_train.py\n*** End Patch"
+    assert not _rule_hits("no_write_py", tool=_tool("patch", patchText=md))
 
 
 def test_no_pip_rule():
@@ -232,6 +411,47 @@ def test_scenario_regexes():
     assert all(re.search(rx, "이상치 기준을 바꾸는 옵션은 없습니다. 엑셀의 '제외' 열에 이유를 적으세요.") for rx in x2)
     assert not all(re.search(rx, "없습니다.") for rx in x2)
     assert not all(re.search(rx, "그런 옵션은 없습니다.") for rx in x2)       # '제외' 열 안내가 빠짐
+    for good in ("이상치 기준을 바꾸는 옵션은 제공되지 않습니다. 빼고 싶은 행은 '제외' 열에 이유를 적으세요.",
+                 "이상치 기준 변경은 지원되지 않습니다. 대신 '제외' 열을 쓰면 됩니다.",
+                 "그런 옵션은 존재하지 않습니다. 엑셀의 제외 열에 이유를 적으세요.",
+                 "이상치 기준은 바꿀 수 없습니다. 특정 행을 빼려면 '제외' 열을 쓰세요.",
+                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다.",
+                 "X2: 아니오. 이상치 기준은 고정입니다. 빼고 싶은 행은 '제외' 열에 이유를 적으세요."):
+        assert all(re.search(rx, good) for rx in x2), good
+    for bad in ("네, --outlier 옵션으로 바꿀 수 있습니다. '제외' 열도 쓸 수 있습니다.",
+                "--iqr-k 인자로 이상치 기준을 조정할 수 있습니다. 제외 열과 함께 쓰세요.",
+                "네, --outlier-iqr 옵션으로 바꿀 수 있습니다. 제외 열은 따로 적을 필요가 없습니다.",
+                "네, 바꿀 수 있습니다. 제외 열에 적을 것은 없습니다."):
+        assert not all(re.search(rx, bad) for rx in x2), bad
+    x2_none = by_id["X2"]["answer_none"]
+
+    def x2_pass(ans):
+        return all(re.search(rx, ans, re.I) for rx in x2) and not any(re.search(rx, ans, re.I | re.M) for rx in x2_none)
+    for good in ("**아니요.** 이상치 기준(IQR 1.5배)은 고정입니다. 빼고 싶은 행은 '제외' 열에 이유를 적으세요.",
+                 "- 아니요, 이상치 기준은 고정입니다. '제외' 열을 쓰세요.",
+                 "이상치 기준을 바꿀 수 있는 옵션은 없습니다. '제외' 열에 이유를 적으세요.",
+                 "아니요, 없습니다. '제외' 열에 이유를 적으면 학습에서 빠집니다.",
+                 "아니요. 이상치 기준을 바꾸는 옵션은 없습니다.\n예: 빼고 싶은 행은 '제외' 열에 이유를 적으세요.",
+                 "이상치 기준 옵션은 없습니다.\n- 예) '제외' 열에 '센서오류'처럼 이유를 적습니다.",
+                 "네, 확인해 보니 이상치 기준을 바꾸는 옵션은 없습니다. 빼고 싶은 행은 '제외' 열에 이유를 적으면 됩니다.",
+                 "옵션은 없습니다. '제외' 열 값을 '포함'으로 바꾸면 됩니다."):
+        assert x2_pass(good), good
+    for bad in ("네, 이상치 기준은 --iqr-k 옵션으로 바꿀 수 있습니다. 별도 설정은 필요하지 않습니다. 제외 열은 선택입니다.",
+                "네, 옵션 없이 기본은 1.5배이고 --outlier-k 인자로 조정할 수 있습니다. 제외 열도 됩니다.",
+                "**네**, 설정은 없지만 바꿀 수 있습니다. 제외 열 참고.",
+                "예. 옵션은 없지만 코드를 고치면 됩니다. 제외 열도 됩니다.",
+                "네\n옵션은 없고 제외 열을 씁니다.",
+                "**네**, 이상치 기준은 설정 파일에서 고치면 되고 따로 옵션은 필요 없습니다. 제외 열도 됩니다.",
+                "**예**, 옵션은 없지만 코드를 고치면 됩니다. 제외 열도 됩니다.",
+                "**네.**\n옵션은 없지만 제외 열을 쓰세요."):
+        assert not x2_pass(bad), bad
+    m2 = by_id["M2"]["answer_all"]
+    for good in ("A=20, A=80.", "A는 20과 80입니다.", "A = 20.0 또는 80.0.", "답: 20, 80"):
+        assert all(re.search(rx, good) for rx in m2), good
+    for bad in ("A=200, A=80.", "A=20.5, A=80", "A=20, A=8.0"):
+        assert not all(re.search(rx, bad) for rx in m2), bad
+    lookahead = re.compile(r"\(\?!\[\\d\.\]\)")                                # (?![\d.]) rejects a sentence-ending period
+    assert not any(lookahead.search(rx) for s in by_id.values() for rx in s.get("answer_all", []) + s.get("answer_any", []))
 
 
 @needs_pack
@@ -288,8 +508,8 @@ def test_remote_agent_instructions_match_skill_files(tmp_path, monkeypatch):
             assert f.read() == g.read(), f"python docs/remote-agent/build.py 를 실행하세요 ({tool})"
 
 
-def _run_launcher(tmp_path, child_code):
-    """Runs docs/remote-agent/run.py with its WinPython path pointed at this Python and its stdout encoding forced to cp949."""
+def _run_launcher(tmp_path, child_code, encoding="cp949"):
+    """Runs docs/remote-agent/run.py with its WinPython path pointed at this Python and its stdout encoding forced to encoding."""
     import subprocess
     repo = os.path.dirname(os.path.dirname(HERE))
     with open(os.path.join(repo, "docs", "remote-agent", "run.py"), encoding="utf-8") as f:
@@ -300,17 +520,24 @@ def _run_launcher(tmp_path, child_code):
     launcher.write_text("\n".join(lines) + "\n", encoding="utf-8")
     child = tmp_path / "child.py"
     child.write_text(child_code, encoding="utf-8")
-    env = dict(os.environ, PYTHONIOENCODING="cp949")
+    env = dict(os.environ, PYTHONIOENCODING=encoding)
     return subprocess.run([sys.executable, str(launcher), str(child)], capture_output=True, env=env, timeout=60)
 
 
 @needs_remote
-def test_remote_launcher_writes_utf8_on_cp949_pipe(tmp_path):
-    text = chr(0x2022) + " a " + chr(0x2013) + " b" + chr(0xA0) + "c"     # not in cp949: print() on a cp949 pipe fails
-    r = _run_launcher(tmp_path, f"import json\nprint(json.dumps({{'status': 'ok', 'preview': {text!r}}}, ensure_ascii=False))\n")
+def test_remote_launcher_writes_in_pipe_encoding(tmp_path):
+    """The host may decode the launcher's stdout with the system code page (cp949): the bytes follow sys.stdout.encoding,
+    Korean stays readable and a character cp949 lacks becomes '?' instead of an error."""
+    odd = chr(0x2022) + " a " + chr(0x2013) + " b" + chr(0xA0) + "c"     # not in cp949: print() on a cp949 pipe fails
+    code = f"import json\nprint(json.dumps({{'status': 'ok', 'message': '한글 결과', 'preview': {odd!r}}}, ensure_ascii=False))\n"
+    r = _run_launcher(tmp_path, code)
     assert r.returncode == 0, r.stderr
+    out = r.stdout.decode("cp949").splitlines()
+    payload = json.loads(out[0])
+    assert len(out) == 1 and payload["message"] == "한글 결과" and payload["preview"] == "? a ? b?c"
+    r = _run_launcher(tmp_path, code, encoding="utf-8")
     out = r.stdout.decode("utf-8").splitlines()
-    assert len(out) == 1 and json.loads(out[0])["preview"] == text
+    assert r.returncode == 0 and len(out) == 1 and json.loads(out[0])["preview"] == odd
 
 
 @needs_remote
@@ -318,7 +545,132 @@ def test_remote_launcher_fallback_json(tmp_path):
     for code, exit_code in (("import sys\nsys.exit(0)\n", 1), ("print('Traceback: boom')\n", 1),
                             ("import sys\nsys.stderr.write('x')\nsys.exit(3)\n", 3)):
         r = _run_launcher(tmp_path, code)
-        out = r.stdout.decode("utf-8").splitlines()
+        out = r.stdout.decode("cp949").splitlines()
         payload = json.loads(out[0])
         assert len(out) == 1 and payload["status"] == "error" and payload["agent_directive"].startswith("ERROR:")
         assert r.returncode == exit_code, code
+
+
+def test_report_table_escapes_pipes(tmp_path, monkeypatch):
+    """Failed check names hold regexes with '|': the summary table row must keep its column count."""
+    monkeypatch.setattr(go, "HERE", str(tmp_path))
+    rows = [{"id": "X2", "결과": "실패", "명령수": 0, "초": None, "실패": "답변: a|b|c"}]
+    out = go.write_report("t", ["x.json"], rows, [])
+    path = out[0] if isinstance(out, (list, tuple)) else out
+    text = open(path, encoding="utf-8-sig").read()
+    line = [ln for ln in text.splitlines() if ln.startswith("| X2 ")][0]
+    assert line.count("|") - line.count("\\|") == 6, line
+
+
+def _answer_pass(sc, ans):
+    """answer_all, answer_any and answer_none of one scenario on one answer (as grade_turn checks them)."""
+    return (all(re.search(rx, ans, re.I) for rx in sc.get("answer_all", []))
+            and (not sc.get("answer_any") or any(re.search(rx, ans, re.I) for rx in sc["answer_any"]))
+            and not any(re.search(rx, ans, re.I | re.M) for rx in sc.get("answer_none", [])))
+
+
+def _x2_corpus():
+    with open(os.path.join(os.path.dirname(__file__), "x2_answers.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_x2_answer_corpus():
+    """X2 정답·오답 말뭉치(good/bad, 실제 답변 형태 114개): answer_all과 answer_none으로 모두 바르게 가려야 함."""
+    sc = go.load_scenarios()[1]["X2"]
+    corpus = _x2_corpus()
+    assert len(corpus["good"]) + len(corpus["bad"]) >= 110
+    wrong = [a for a in corpus["good"] if not _answer_pass(sc, a)] + [a for a in corpus["bad"] if _answer_pass(sc, a)]
+    assert not wrong, wrong
+
+
+def test_x2_holdout_is_reference_only():
+    """holdout 20개는 정규식을 맞출 때 보지 않은 답변이다 (8차: 14/20). 자유 문장은 정규식으로 다 가릴 수 없으므로
+    X2 답변 판정은 참고(answer_reference)다. 여기서는 정확도가 떨어지지 않는지만 본다 (holdout에 맞춰 고치지 말 것)."""
+    sc = go.load_scenarios()[1]["X2"]
+    hold = _x2_corpus()["holdout"]
+    right = sum(_answer_pass(sc, a) for a in hold["good"]) + sum(not _answer_pass(sc, a) for a in hold["bad"])
+    assert len(hold["good"]) == len(hold["bad"]) == 10
+    assert right >= 14, right
+    assert sc.get("answer_reference") is True
+
+
+def test_answer_reference_verdict(tmp_path, monkeypatch):
+    """answer_reference(X2): 답변 정규식 결과는 '통과(참고)'/'실패(참고)', 명령·금지 규칙 위반은 그대로 '실패'.
+    보고서에 최종 판정은 --judge나 사람이 정한다는 줄이 있고, --judge 점수가 있으면 결과 칸에 함께 보인다."""
+    monkeypatch.setattr(go, "HERE", str(tmp_path))
+    good = "이상치 기준을 바꾸는 옵션은 없습니다. '제외' 열에 이유를 적으세요."
+    bad = "네, --outlier-k 옵션으로 바꿀 수 있습니다. 제외 열도 됩니다."
+    for answer, tools, want in ((good, [], "통과(참고)"), (good, [_bash('python -c "print(1)"', {})], "실패"),
+                                (bad, [], "실패(참고)")):
+        path = _export(tmp_path, [("[X2] 옵션 있어?", tools + [{"type": "text", "text": answer}])])
+        meta, rows, detail = go.grade([path], "t", False, "LLM42")
+        x2 = next(r for r in rows if r["id"] == "X2")
+        assert x2["결과"] == want, (answer, x2)
+        if want == "실패":
+            assert "임의 파이썬" in x2["실패"] and "참고 답변" not in x2["실패"]
+        if want == "실패(참고)":
+            assert x2["실패"].startswith("참고 답변")
+    report, npass, n = go.write_report("t", meta, rows, detail)
+    text = open(report, encoding="utf-8").read()
+    assert "--judge" in text and "답변 판정이 참고인 요청: X2 실패" in text
+    assert "- [OK(참고)] 답변: 제외" in text and "- [FAIL(참고)] 답변에 없어야 함: --" in text
+    assert "- [OK] 임의 파이썬" in text
+    rows = [dict(r, 점수=2) if r["id"] == "X2" else r for r in rows]
+    report = go.write_report("t2", meta, rows, detail)[0]
+    text = open(report, encoding="utf-8").read()
+    assert [ln for ln in text.splitlines() if ln.startswith("| X2 ")][0].startswith("| X2 | 실패(참고) 2점 |")
+    rows = [dict(r, 결과="통과(참고)", 실패="") if r["id"] == "X2" else r for r in rows]
+    text = open(go.write_report("t3", meta, rows, detail)[0], encoding="utf-8").read()
+    assert "| X2 | 통과(참고) 2점 |" in text and "X2 통과(참고) (채점 LLM 2점)" in text
+
+
+def test_answer_variants_other_scenarios():
+    """P1/P2/P3/M1/M3/R1 답변 규칙: 도구 preview 그대로 전달한 답과 흔한 바꿔 쓰기는 통과, 값이 틀리거나 경고가 빠지면 실패."""
+    by_id = go.load_scenarios()[1]
+    cases = {
+        "P1": (["생산효율 76.33 (90% 범위 72.1~80.5), 실측 비교값 76.1",
+                "생산효율 76.33 (90% 범위 72.1~80.5), 측정 데이터 비교: 76.0",
+                "| 출력 | 예측 | 90% 범위 | 실측 비교값 |\n|---|---|---|---|\n| 생산효율 | 76.33 | 72~80 | 76.1 |",
+                "생산효율 76.3 / 소비전력 42.9 / 불순물 81.6 (실측값과 차이 0.2 이내)",
+                "[추론 완료] 소스: 인라인 | 타겟 예측 요약: [생산효율(76.33)] | 인라인 반환 | 실측 비교 경고 1건"],
+               ["생산효율 76.3, 소비전력 42.9, 불순물 81.6입니다."]),
+        "P2": (["[추론 완료] 소스: 새조건.xlsx | 타겟 예측 요약: [생산효율(75.96)] | 저장: 새조건_pred_x.csv | 외삽 경고 1건",
+                "저장: 새조건_pred_x.csv. 외삽 경고 1건: 반응온도 상한 초과(학습 최대 195, 입력 200).",
+                "결과는 새조건_pred_x.csv 에 있습니다. 1개 행은 반응온도가 학습 데이터 최댓값을 넘었습니다(외삽).",
+                "새조건_pred_x.csv로 저장했습니다. 반응온도 200은 학습 범위 밖이라 참고만 하세요.",
+                "새조건_pred_x.csv로 저장했습니다. 반응온도 200은 학습 구간을 벗어납니다."],
+               ["새조건_pred_x.csv로 저장했습니다. 평균 생산효율 75.96.",
+                "새조건_pred_x.csv로 저장했습니다. 생산효율 75.96 (90% 범위 72.1~80.5)."]),
+        "P3": (["모델 기준 불순물=100이 되는 반응온도: 190 | 운전 구간(90% 오차 안): 188.84~191.45",
+                "반응온도 189.998. 90% 오차 범위 안의 운전 범위는 188.84~191.449입니다. 보장된 값은 아닙니다.",
+                "약 190°C입니다. 운전범위 188.8~191.4°C (모델 예측).",
+                "반응온도 약 190도, 구간 188.84~191.45",
+                "반응온도는 190.0°C, 운전 구간은 188.84~191.45°C입니다.",
+                "반응온도 190°C, 허용 운전 폭 188.8~191.4°C",
+                "반응온도 190, operating window 188.8~191.4"],
+               ["반응온도는 190°C입니다."]),
+        "M1": (["격자 보간: B=16.25, C=87.5",
+                "A=12.5일 때 B는 16.25, C는 87.5입니다.",
+                "| 열 | 값 |\n|---|---|\n| B | 16.25 |\n| C | 87.50 |",
+                "B = 16.250, C = 87.500",
+                "**B**: `16.25`, **C**: `87.5`"],
+               ["보간 결과 B 116.25, C 187.5", "B는 16.25, C는 87.55입니다.", "B는 10, C는 90입니다."]),
+        "M3": (["격자 보간: B=1058.5 [외삽]",
+                "B는 1,058.5입니다 (외삽).",
+                "B = 1058.50 (범위 초과, 참고용)",
+                "B는 1058.5입니다. A가 데이터 범위(0~100)를 넘어서 끝 구간을 직선 연장한 추정값입니다.",
+                "B 1058.5 (extrapolated: A가 최대 100보다 3 큼)",
+                "B는 1058.5입니다. A가 데이터 범위를 초과합니다."],
+               ["B는 1058.5입니다.", "B는 11058.5입니다 (외삽).", "B는 1000입니다 (범위 밖)."]),
+        "R1": (["[보고서 완료] v1 / 타겟 3개 / 종합 판정 양호 / 저장: 공정_보고서.docx | 성능예측표: 공정_성능예측표.xlsx, 일치도 92%",
+                "보고서와 성능 예측표를 만들었습니다. 일치도 92%.",
+                "성능예측표(공정_성능예측표.xlsx)를 만들었고 생산효율 일치도는 95%입니다.",
+                "보고서: a.docx, 성능예측표: b.xlsx. 출력별 일치도 생산효율 92%, 불순물 88%.",
+                "보고서와 성능 예측표 생성 완료 (일치도 93%, 판정 양호)"],
+               ["보고서를 만들었습니다: 공정_보고서.docx", "성능예측표를 만들었습니다."]),
+    }
+    for sid, (goods, bads) in cases.items():
+        for a in goods:
+            assert _answer_pass(by_id[sid], a), (sid, a)
+        for a in bads:
+            assert not _answer_pass(by_id[sid], a), (sid, a)

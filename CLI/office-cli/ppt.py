@@ -42,6 +42,7 @@ PP_BULLET_UNNUMBERED = 1    # ppBulletUnnumbered (글머리표)
 PP_BULLET_NUMBERED = 2      # ppBulletNumbered (1. 2. 3.)
 MARGIN = 36.0
 GAP = 14.0
+MIN_BLOCK_HEIGHT = 80.0     # 카드·그림이 들어갈 최소 남은 높이 (모자라면 새 슬라이드)
 TABLE_ROWS_PER_SLIDE = 15
 MAX_NEW_SLIDES = 30
 
@@ -206,21 +207,36 @@ def cmd_read(args) -> Dict[str, Any]:
             rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기"),
             rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"],
                             "슬라이드 내용을 엑셀 표로 옮기기")])
-        return rt.ok(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", **result)
+        return rt.ok_file(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", out,
+                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          **result)
     shown: List[Dict[str, Any]] = []
     used = 0
+    text_cut = 0
     for s in slides:
         size = len(s["text"]) + len(s["title"]) + 20
         if shown and used + size > rt.DEFAULT_MAX_CHARS:
             break
-        shown.append(s)
+        text, cut = rt.clamp_text(s["text"], rt.DEFAULT_MAX_CHARS)
+        item = dict(s, text=text, title=rt.clamp_text(s["title"], 500)[0])
+        if cut:                                   # 글이 아주 많은 슬라이드: 앞부분만 (전체는 --save 파일)
+            item.update(text_truncated=True, text_chars=len(s["text"]))
+            text_cut += 1
+        shown.append(item)
         used += size
-    truncated = len(shown) < len(slides)
+    truncated = len(shown) < len(slides) or bool(text_cut)
     result.update(slides=shown, truncated=truncated)
-    if truncated:
+    nexts: List[Dict[str, str]] = []
+    if len(shown) < len(slides):
         rest = _compress_numbers([s["no"] for s in slides[len(shown):]])     # 고른 슬라이드 중 남은 것만 (1,5,9 -> 5,9)
-        result["next_commands"] = [rt.next_command("ppt.py", ["read", "--target", args.target, "--slides", rest],
-                                                   "나머지 슬라이드 이어서 읽기")]
+        nexts.append(rt.next_command("ppt.py", ["read", "--target", args.target, "--slides", rest],
+                                     "나머지 슬라이드 이어서 읽기"))
+    if text_cut:
+        result["truncated_reason"] = f"글이 {rt.DEFAULT_MAX_CHARS}자보다 많은 슬라이드 {text_cut}장은 앞부분만 표시 (text_truncated, 전체는 --save)"
+        save = ["read", "--target", args.target] + (["--slides", args.slides] if args.slides else []) + ["--save"]
+        nexts.append(rt.next_command("ppt.py", save, "잘린 슬라이드까지 전체를 md 파일로 저장"))
+    if nexts:
+        result["next_commands"] = nexts
     return rt.ok(TOOL, "read", f"{source['name']}: 슬라이드 {len(shown)}장 표시 (전체 {total}장)",
                  "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요." if truncated else "", **result)
 
@@ -321,7 +337,11 @@ def cmd_info(args) -> Dict[str, Any]:
     if args.all:
         items = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                  for d in off.list_open("ppt")]
-        return rt.ok(TOOL, "info", f"열린 프레젠테이션 {len(items)}개", presentations=items)
+        if not items:
+            return rt.ok(TOOL, "info", "0건: 열린 프레젠테이션이 없습니다",
+                         "VERIFIED: 0건. 열린 PowerPoint 프레젠테이션이 없습니다. 사용자에게 그대로 알리세요.",
+                         presentations=items, count=0)
+        return rt.ok(TOOL, "info", f"열린 프레젠테이션 {len(items)}개", presentations=items, count=len(items))
     with off.open_target("ppt", args.target, readonly=True) as t:
         prs = t.doc
         slides = []
@@ -374,6 +394,7 @@ class SlideWriter:
         self.W = float(prs.PageSetup.SlideWidth)
         self.H = float(prs.PageSetup.SlideHeight)
         self.created: List[str] = []
+        self.shapes: List[Any] = []          # 이번에 넣거나 채운 도형 (다시 읽어 슬라이드 안에 있는지 확인)
 
     def _empty_placeholder(self, sh: Any) -> bool:
         try:
@@ -407,6 +428,7 @@ class SlideWriter:
             tr.Font.Size = 28
             tr.Font.Bold = True
             tr.Font.Color.RGB = off.parse_color(self.theme["primary"])
+            self.shapes.append(box)
         self.created.append("제목")
 
     def _body_placeholder(self) -> Optional[Any]:
@@ -434,6 +456,7 @@ class SlideWriter:
             tr = shape.TextFrame.TextRange
             tr.Text = text
             tr.Font.Size = 18 if len(lines) <= 6 else 14
+            self.shapes.append(shape)
         tr = shape.TextFrame.TextRange
         for i, (_, kind) in enumerate(lines, 1):
             try:
@@ -451,6 +474,7 @@ class SlideWriter:
         top = self.next_top()
         height = min(self.H - MARGIN - top, 26.0 * nrows)
         shape = self.slide.Shapes.AddTable(nrows, ncols, MARGIN, top, self.W - 2 * MARGIN, max(height, 26.0))
+        self.shapes.append(shape)
         tbl = shape.Table
         size = 14 if nrows <= 8 else 11
         header_bg = off.parse_color(self.theme["header_bg"])
@@ -481,9 +505,11 @@ class SlideWriter:
         pic.Width = w0 * ratio
         pic.Height = h0 * ratio
         pic.Left = (self.W - float(pic.Width)) / 2
+        self.shapes.append(pic)
         self.created.append(f"그림 {os.path.basename(path)}")
 
     def cards(self, cards: List[Tuple[str, str]]) -> None:
+        """카드 높이는 80~220pt (남은 공간에 맞춤). 80pt도 남지 않으면 부르는 쪽이 새 슬라이드에 넣습니다."""
         n = len(cards)
         top = self.next_top()
         height = max(80.0, min(self.H - MARGIN - top, 220.0))
@@ -493,6 +519,7 @@ class SlideWriter:
         light = off.parse_color(self.theme["light"])
         for i, (head, desc) in enumerate(cards):
             box = self.slide.Shapes.AddShape(MSO_ROUNDED_RECT, MARGIN + i * (w + GAP), top, w, height)
+            self.shapes.append(box)
             box.Fill.ForeColor.RGB = light
             box.Line.ForeColor.RGB = primary
             box.Line.Weight = 1.5
@@ -512,21 +539,26 @@ def _new_slide(prs: Any, index: int, with_title: bool) -> Any:
 
 
 def _md_sections(text: str) -> List[Dict[str, Any]]:
-    """마크다운을 슬라이드 단위로 나눕니다: '#'/'##' 제목마다 새 슬라이드, 그 밖의 블록은 본문/표."""
+    """마크다운을 슬라이드 단위로 나눕니다: '#'/'##' 제목마다 새 슬라이드, 그 밖의 블록은 본문/표.
+    '---'(구분선)은 넣지 않고 슬라이드도 나누지 않음, 맨 앞 YAML 머리말도 넣지 않음 (cmd_write가 warnings에 남김)."""
     sections: List[Dict[str, Any]] = []
     cur: Optional[Dict[str, Any]] = None
     for kind, payload in rt.parse_markdown_blocks(text):
+        if kind in ("break", "front_matter"):
+            continue
         if kind == "heading" and payload[0] <= 2:
-            cur = {"title": payload[1], "lines": [], "tables": []}
+            cur = {"title": rt.plain_heading(payload[1]), "lines": [], "tables": []}
             sections.append(cur)
             continue
         if cur is None:
             cur = {"title": "", "lines": [], "tables": []}
             sections.append(cur)
         if kind == "heading":
-            cur["lines"].append((payload[1], ""))
+            cur["lines"].append((rt.plain_heading(payload[1]), ""))   # 3단계 이하 제목: 1·2단계 제목과 같은 규칙 (** __를 뺀 글)
         elif kind == "paragraph":
             cur["lines"].append((rt.split_bold(payload)[0], ""))
+        elif kind == "code":
+            cur["lines"].append((payload, ""))          # 코드 줄은 글자 그대로 (** __를 굵게로 읽지 않음)
         elif kind in ("bullets", "numbered"):
             list_kind = "numbered" if kind == "numbered" else "bullet"
             cur["lines"] += [(rt.split_bold(x)[0], list_kind) for x in payload]
@@ -536,14 +568,35 @@ def _md_sections(text: str) -> List[Dict[str, Any]]:
 
 
 def _text_lines(text: str) -> List[Tuple[str, str]]:
+    """--text: 줄마다 한 줄 (-, 1. 목록 기호와 ** __ 굵게 표시를 해석). 펜스(```, ~~~) 안의 코드 줄은 .md와 같이 글자 그대로."""
     lines = []
+    fence = ""
+    numbered_as_text = False
     for ln in rt.unescape_newlines(text).splitlines():
         s = ln.strip()
+        if fence:
+            if s.startswith(fence) and not s.lstrip(fence[0]):
+                fence = ""                          # 닫는 펜스 (닫지 않으면 끝까지 코드)
+            elif s:
+                lines.append((ln.rstrip(), ""))
+            continue
         if not s:
             continue
+        m = rt._FENCE.match(s)
+        if m:
+            fence = m.group(1)                      # 펜스 줄은 넣지 않음
+            continue
         m = re.match(r"^[-*+]\s+(.*)$", s)
-        n = None if m else re.match(r"^\d+[.)]\s+(.*)$", s)
-        body = m.group(1) if m else (n.group(1) if n else s)
+        n = None if m else rt.MD_NUMBERED.match(s)
+        if not n:
+            numbered_as_text = False
+        elif not numbered_as_text and not (lines and lines[-1][1] == "numbered"):
+            # 번호 목록의 첫 줄: 1이 아닌 번호로 시작하면 자동 번호가 1부터 다시 매기므로 이 목록은 번호를 글로 둔 줄로 넣음
+            numbered_as_text = int(n.group(1)) != 1
+        if n and numbered_as_text:
+            lines.append((rt.split_bold(s)[0], ""))
+            continue
+        body = m.group(1) if m else (s[n.end():] if n else s)
         lines.append((rt.split_bold(body)[0], "bullet" if m else ("numbered" if n else "")))
     return lines
 
@@ -570,9 +623,9 @@ def _resolve_slide(prs: Any, value: Optional[str], default_new: bool) -> Tuple[O
     try:
         n = int(value)
     except ValueError:
-        raise rt.InputError(f"--slide는 번호 또는 new여야 합니다: {value}")
+        raise rt.InputError(f"--slide는 번호 또는 new여야 합니다: {value}", no_fallback=True)
     if not 1 <= n <= count:
-        raise rt.InputError(f"슬라이드 {n}번이 없습니다 (전체 {count}장). 새 슬라이드는 --slide new")
+        raise rt.InputError(f"슬라이드 {n}번이 없습니다 (전체 {count}장). 새 슬라이드는 --slide new", no_fallback=True)
     return n, False
 
 
@@ -580,7 +633,10 @@ def cmd_write(args) -> Dict[str, Any]:
     if not any([args.title, args.text, args.file, args.image, args.cards]):
         raise rt.InputError("넣을 내용이 없습니다. --title, --text, --file, --image, --cards 중 하나 이상을 지정하세요.")
     theme = off.get_theme(args.theme or "navy")
+    if args.title:
+        args.title = rt.plain_heading(args.title)   # 슬라이드 제목은 .md 제목·word --title과 같은 규칙 (** __를 뺀 글)
     md_sections: List[Dict[str, Any]] = []
+    md_warnings: List[str] = []
     table_rows: Optional[List[List[str]]] = None
     if args.file:
         path = rt.resolve_input_path(args.file, "입력 파일")
@@ -589,15 +645,19 @@ def cmd_write(args) -> Dict[str, Any]:
             if not table_rows:
                 raise rt.InputError(f"입력 표 파일이 비어 있습니다: {args.file}")
         else:
-            md_sections = _md_sections(rt.read_text_file(path))
+            md_text = rt.read_text_file(path)
+            md_sections = _md_sections(md_text)
+            if rt.front_matter_lines(md_text):
+                md_warnings.append(rt.front_matter_warning(rt.front_matter_lines(md_text)))
+                rt.log("WARN", md_warnings[-1])
             if len(md_sections) > MAX_NEW_SLIDES:
                 raise rt.InputError(f"파일 내용이 슬라이드 {len(md_sections)}장 분량입니다 (최대 {MAX_NEW_SLIDES}장). 내용을 줄여 주세요.")
     image = rt.resolve_input_path(args.image, "그림 파일") if args.image else None
     cards = _parse_cards(args.cards) if args.cards else None
     if md_sections and args.title:
-        # --title은 첫 슬라이드의 제목 (이전에는 .md가 있으면 버려졌음). 첫 절에 제목이 있으면 그 제목은 본문 첫 줄로
+        # --title은 첫 슬라이드의 제목 (이전에는 .md가 있으면 버려졌음). 첫 절의 제목이 --title과 다르면 그 제목은 본문 첫 줄로
         first = dict(md_sections[0])
-        if first["title"]:
+        if first["title"] and first["title"].strip().casefold() != args.title.strip().casefold():
             first["lines"] = [(first["title"], "")] + list(first["lines"])
         first["title"] = args.title
         md_sections[0] = first
@@ -607,16 +667,26 @@ def cmd_write(args) -> Dict[str, Any]:
         prs = t.doc
         created: List[str] = []
         touched: List[int] = []
+        placed: List[Tuple[int, Any]] = []   # (슬라이드 번호, 이번에 넣은 도형)
+        warnings: List[str] = list(md_warnings)
         slide_no, make_new = _resolve_slide(prs, args.slide, default_new=bool(md_sections or table_rows) and args.slide is None)
         insert_at = int(prs.Slides.Count) + 1 if slide_no is None else slide_no + 1
         if not make_new and slide_no is not None and not args.overwrite:
             # 기존 슬라이드의 제목을 바꾸게 되면 사용자 확인 (노트와 같은 방식). 새 슬라이드는 해당 없음
             new_title = (md_sections[0]["title"] if md_sections else args.title) or ""
-            old_title = slide_units(prs.Slides(slide_no), slide_no)["title"]
+            # 제목 개체틀의 글만 기존 제목 (slide_units의 title은 개체틀이 없으면 본문 첫 줄이라 제목으로 보면 안 됨)
+            title_shape = _title_shape(prs.Slides(slide_no))
+            old_title = ""
+            if title_shape is not None:
+                try:
+                    old_title = str(title_shape.TextFrame.TextRange.Text).strip()
+                except Exception:
+                    old_title = ""
             if new_title.strip() and old_title and old_title.strip() != new_title.strip():
                 raise rt.UserDecisionError(
                     f"슬라이드 {slide_no}에 이미 제목이 있습니다 ({_preview_text(old_title)}). 아무것도 쓰지 않았습니다.",
-                    "기존 제목을 바꿀지 정해야 합니다. 제목을 사용자에게 보여 주고, 사용자가 바꾸기를 분명히 원할 때만 "
+                    log_message=f"슬라이드 {slide_no}에 이미 제목이 있습니다 (제목 {rt.DOC_OMITTED}). 아무것도 쓰지 않았습니다.",
+                    directive="기존 제목을 바꿀지 정해야 합니다. 제목을 사용자에게 보여 주고, 사용자가 바꾸기를 분명히 원할 때만 "
                     "--overwrite를 붙여 다시 실행하세요. 제목을 바꾸지 않으려면 --title을 빼거나 --slide new로 새 슬라이드에 쓰세요.")
 
         def open_slide(with_title: bool) -> Tuple[Any, int]:
@@ -642,6 +712,7 @@ def cmd_write(args) -> Dict[str, Any]:
                     w.body(sec["lines"])
                 for tb in sec["tables"]:
                     w.table(tb)
+                placed += [(no, x) for x in w.shapes]
                 created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         if table_rows:
             header, body_rows = table_rows[0], table_rows[1:] or [[""] * len(table_rows[0])]
@@ -651,6 +722,7 @@ def cmd_write(args) -> Dict[str, Any]:
                 if args.title:
                     w.title(args.title + (f" ({k // TABLE_ROWS_PER_SLIDE + 1})" if len(body_rows) > TABLE_ROWS_PER_SLIDE else ""))
                 w.table([header] + body_rows[k:k + TABLE_ROWS_PER_SLIDE])
+                placed += [(no, x) for x in w.shapes]
                 created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         if args.text or (args.title and not table_rows and not md_sections) or image or cards:
             # 파일 내용을 이미 넣었으면 그 마지막 슬라이드에 이어서, 아니면 대상 슬라이드에
@@ -660,36 +732,64 @@ def cmd_write(args) -> Dict[str, Any]:
                 w.title(args.title)
             if args.text:
                 w.body(_text_lines(args.text))
-            if cards:
-                w.cards(cards)
-            if image:
-                if w.space_left() < 80:              # 공간이 부족하면 다음 새 슬라이드에
+            for kind in (["cards"] if cards else []) + (["image"] if image else []):
+                if w.space_left() < MIN_BLOCK_HEIGHT:   # 공간이 부족하면 다음 새 슬라이드에 (슬라이드 밖으로 나가지 않게)
+                    placed += [(no, x) for x in w.shapes]
+                    created.append(f"슬라이드 {no}: " + ", ".join(w.created))
                     s, no = open_slide(False)
                     w = SlideWriter(prs, s, theme)
-                w.image(image, args.width)
+                    what = "카드" if kind == "cards" else "그림"
+                    warnings.append(f"앞 내용 아래에 공간이 부족해 {what}를 새 슬라이드 {no}에 넣었습니다.")
+                    rt.log("WARN", warnings[-1])
+                if kind == "cards":
+                    w.cards(cards)
+                else:
+                    w.image(image, args.width)
+            placed += [(no, x) for x in w.shapes]
             created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         expect = [args.title or ""] + [sec["title"] or "" for sec in md_sections] \
             + [sec["lines"][0][0] for sec in md_sections if sec["lines"]] \
             + ([_text_lines(args.text)[0][0]] if args.text and _text_lines(args.text) else []) \
             + ([str(table_rows[0][0])] if table_rows else []) + ([cards[0][0]] if cards else [])
-        problems = _verify_slides(prs, sorted(set(touched)), expect)
+        problems = _verify_slides(prs, sorted(set(touched)), expect) + _verify_inside(prs, placed)
         t.set_focus(slide=touched[-1])
         resolved = t.resolved()
+    extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
     if problems:
         return rt.ok_unverified(TOOL, "write", "; ".join(created), problems,
-                                target_resolved=resolved, slides_written=sorted(set(touched)))
+                                target_resolved=resolved, slides_written=sorted(set(touched)), **extra)
     return rt.ok(TOOL, "write", "; ".join(created), "VERIFIED: 쓴 슬라이드를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요.",
-                 verified=True, target_resolved=resolved, slides_written=sorted(set(touched)))
+                 verified=True, target_resolved=resolved, slides_written=sorted(set(touched)), **extra)
+
+
+def _verify_inside(prs: Any, placed: List[Tuple[int, Any]]) -> List[str]:
+    """R1: 이번에 넣은 도형을 다시 읽어 슬라이드 경계 안에 있는지 확인합니다 (밖으로 나간 도형은 보이지 않음)."""
+    try:
+        width, height = float(prs.PageSetup.SlideWidth), float(prs.PageSetup.SlideHeight)
+    except Exception as e:
+        return [f"슬라이드 크기를 읽지 못함: {type(e).__name__}"]
+    problems: List[str] = []
+    for no, sh in placed:
+        try:
+            box = {"left": float(sh.Left), "top": float(sh.Top), "width": float(sh.Width), "height": float(sh.Height)}
+        except Exception as e:
+            problems.append(f"슬라이드 {no}의 도형 위치를 다시 읽지 못함: {type(e).__name__}")
+            continue
+        if off.outside_area(box, width, height):
+            problems.append(f"슬라이드 {no}의 '{sh.Name}'이(가) 슬라이드 밖으로 나갑니다 "
+                            f"(위 {box['top']:.0f}, 높이 {box['height']:.0f}, 슬라이드 높이 {height:.0f})")
+    return problems
 
 
 def _verify_slides(prs: Any, slides: List[int], expect: List[str]) -> List[str]:
-    """R1: 쓴 슬라이드를 다시 읽어 제목·첫 줄·표 머리글·카드 제목이 들어 있는지 확인합니다 (공백 무시)."""
+    """R1: 쓴 슬라이드를 다시 읽어 제목·첫 줄·표 머리글·카드 제목이 들어 있는지 확인합니다 (공백 무시).
+    expect는 넣은 글 그대로(굵게 표시는 이미 뺀 글)이므로 ** __를 빼지 않습니다 (코드 줄·제목에는 글자로 남음)."""
     try:
         got = "".join(re.sub(r"\s+", "", slide_units(prs.Slides(n), n)["title"] + slide_units(prs.Slides(n), n)["text"])
                       for n in slides)
     except Exception as e:
         return [f"쓴 슬라이드를 다시 읽지 못함: {type(e).__name__}"]
-    missing = [x for x in expect if x and re.sub(r"\s+|\*\*|__", "", x)[:20] not in got]
+    missing = [x for x in expect if x and re.sub(r"\s+", "", x)[:20] not in got]
     return [f"다시 읽은 슬라이드에서 '{x[:20]}'을(를) 찾지 못함" for x in missing]
 
 
@@ -708,21 +808,42 @@ def _load_map(args) -> Dict[str, str]:
             raise rt.InputError(f"--map은 JSON 객체여야 합니다 (예: {{\"진행중\": \"완료\"}}): {e}")
         if not isinstance(data, dict) or not data:
             raise rt.InputError("--map은 비어 있지 않은 JSON 객체여야 합니다.")
-        return {str(k): ("" if v is None else str(v)) for k, v in data.items()}
-    if args.find is None:
+        mapping = {str(k): ("" if v is None else str(v)) for k, v in data.items()}
+    elif args.find is not None:
+        mapping = {args.find: args.find if args.replace is None else args.replace}
+    else:
         raise rt.InputError("--find 또는 --map을 지정하세요.")
-    return {args.find: args.find if args.replace is None else args.replace}
+    if "" in mapping:
+        # 빈 글을 찾으면 모든 글자 사이에 바꿀 글이 끼어들어 글 상자를 모두 망가뜨림
+        raise rt.InputError("찾을 글(--find 또는 --map의 키)이 비어 있어 바꾸지 않았습니다. 빈 곳에 글을 넣으려면 ppt.py write를 쓰세요 "
+                            "(예: ppt.py write --slide 2 --text \"- 항목\"). 바꿀 글이 있으면 찾을 글을 정확히 지정하세요.")
+    return mapping
 
 
-def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[str, Any]) -> int:
-    """TextRange.Replace를 반복합니다. 바꾼 글 뒤부터 이어서 찾아 무한 반복을 막습니다."""
+def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[str, Any]) -> Tuple[int, int]:
+    """TextRange.Replace를 반복합니다. 바꾼 글 뒤부터 이어서 찾아 무한 반복을 막습니다.
+
+    (바꾼 곳 수, 찾았지만 이미 바꿀 글과 같아 그대로 둔 곳 수)를 돌려줍니다. 서식이 없으면 찾은 곳의 글이
+    바꿀 글과 글자 그대로 같은 곳(대소문자까지)은 바꾸지 않고 세기만 합니다
+    (예: --find iphone --replace iPhone에서 이미 'iPhone'인 곳. 이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음).
+    """
     text = str(tr.Text)
     if (find not in text) if match_case else (find.lower() not in text.lower()):
-        return 0
-    count = 0
+        return 0, 0
+    count = same = 0
     after = 0
-    while count < 1000:
-        found = tr.Replace(FindWhat=find, ReplaceWhat=rep, After=after, MatchCase=-1 if match_case else 0, WholeWords=0)
+    while count + same < 1000:
+        text = str(tr.Text)
+        idx = text.find(find, after) if match_case else text.lower().find(find.lower(), after)
+        if idx < 0:
+            break
+        if not fmt and text[idx:idx + len(find)] == rep:
+            same += 1                  # 이미 바꿀 글 그대로: 건드리지 않음
+            after = idx + len(find)
+            continue
+        # PowerPoint 위치는 UTF-16 단위: 앞에 BMP 밖 글자(이모지 등)가 있으면 파이썬 글자 위치와 다름
+        after_u16 = len(text[:idx].encode("utf-16-le")) // 2
+        found = tr.Replace(FindWhat=find, ReplaceWhat=rep, After=after_u16, MatchCase=-1 if match_case else 0, WholeWords=0)
         if found is None:
             break
         count += 1
@@ -736,10 +857,10 @@ def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[s
                 font.Size = fmt["size"]
             if "color" in fmt:
                 font.Color.RGB = fmt["color"]
-        after = int(found.Start) - 1 + len(rep)
+        after = idx + len(rep)            # 다음 찾기는 파이썬 글자 위치로 (PowerPoint 위치와 섞지 않음)
         if after >= len(str(tr.Text)):
             break
-    return count
+    return count, same
 
 
 def cmd_replace(args) -> Dict[str, Any]:
@@ -753,7 +874,12 @@ def cmd_replace(args) -> Dict[str, Any]:
         fmt["size"] = args.size
     if args.color:
         fmt["color"] = off.parse_color(args.color)
+    if not args.map and args.replace is None and not fmt:
+        # 바꿀 글도 서식도 없으면 아무것도 바뀌지 않는데 'N곳 처리'로 보고되던 문제 (excel/word replace와 같게)
+        raise rt.InputError("--replace(바꿀 글)나 서식 옵션(--bold, --color 등)이 없어 바꿀 것이 없습니다. "
+                            "사용자에게 무엇으로 바꿀지 확인하세요. 글을 지우려면 --replace \"\"를 씁니다.")
     counts: Dict[str, int] = {}
+    same: Dict[str, int] = {}          # 바꿀 글이 찾는 글과 같고 서식도 없어 바꾸지 않은 문구: 찾은 곳 수
     slides_changed: List[int] = []
     with off.open_target("ppt", args.target, readonly=False, focus=not args.no_focus, tool=TOOL, command="replace") as t:
         prs = t.doc
@@ -766,7 +892,11 @@ def cmd_replace(args) -> Dict[str, Any]:
             for k in range(1, slide.Shapes.Count + 1):
                 for tr in iter_text_ranges(slide.Shapes(k)):
                     for find, rep in mapping.items():
-                        c = replace_in_range(tr, find, rep, args.match_case, fmt)
+                        # 찾은 곳마다 바꿀 글과 비교: 글자 그대로 같은 곳은 세기만 하고(바꾼 것으로 표시하지 않음),
+                        # 대소문자만 다른 곳은 PowerPoint가 바꿀 글 그대로 써 주므로(대소문자 통일) 실제로 바꿈
+                        c, hits = replace_in_range(tr, find, rep, args.match_case, fmt)
+                        if hits:
+                            same[find] = same.get(find, 0) + hits
                         if c:
                             counts[find] = counts.get(find, 0) + c
                             changed = True
@@ -781,12 +911,20 @@ def cmd_replace(args) -> Dict[str, Any]:
                 hay, needle = (text, find) if args.match_case else (text.lower(), find.lower())
                 if needle not in rep_text.lower() and needle in hay:
                     problems.append(f"'{find}'이(가) 슬라이드에 남아 있음")
-                elif rep_text and (rep_text if args.match_case else rep_text.lower()) not in hay:
+                elif rep_text and rep_text not in text:
+                    # 바꿀 글은 대소문자까지 그대로 있어야 함 (대소문자만 바꾸는 경우도 확인)
                     problems.append(f"'{rep_text}'을(를) 다시 읽은 슬라이드에서 찾지 못함")
             t.set_focus(slide=slides_changed[0])
         resolved = t.resolved()
     total = sum(counts.values())
     result = {"target_resolved": resolved, "replaced": total, "by_text": counts, "slides": slides_changed}
+    if same:
+        result["unchanged_same_text"] = same
+    if not total and same:
+        found = sum(same.values())
+        return rt.ok(TOOL, "replace", f"찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바꾼 곳이 없습니다 (0곳 바뀜)",
+                     f"VERIFIED: 바꾼 곳 0곳. 찾은 {found}곳은 바꿀 글이 찾는 글과 같아 바뀐 것이 없습니다. "
+                     "다시 실행하지 말고 사용자에게 무엇으로 바꿀지 확인하세요.", **result)
     if not total:
         return rt.ok(TOOL, "replace", "일치하는 문구가 없습니다",
                      "VERIFIED: 일치하는 문구가 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
@@ -866,18 +1004,27 @@ def cmd_notes(args) -> Dict[str, Any]:
         if before and not args.append and not args.overwrite:
             raise rt.UserDecisionError(
                 f"슬라이드 {args.slide}에 이미 노트가 있습니다 ({_preview_text(before)}). 기존 노트를 지우지 않았습니다.",
-                "기존 노트를 지울지 정해야 합니다. 노트를 사용자에게 보여 주고, 뒤에 덧붙이려면 --append, "
+                log_message=f"슬라이드 {args.slide}에 이미 노트가 있습니다 (노트 {rt.DOC_OMITTED}). 기존 노트를 지우지 않았습니다.",
+                directive="기존 노트를 지울지 정해야 합니다. 노트를 사용자에게 보여 주고, 뒤에 덧붙이려면 --append, "
                 "사용자가 바꾸기를 분명히 원할 때만 --overwrite를 붙여 다시 실행하세요.")
         new = (before + "\n" + text).strip() if args.append and before else text
-        body.TextFrame.TextRange.Text = new.replace("\n", "\r")
-        t.set_focus(slide=args.slide)
+        same = new == before               # 같은 노트로 바꾸기(빈 노트 지우기 포함)는 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
+        if not same:
+            body.TextFrame.TextRange.Text = new.replace("\n", "\r")
+        t.set_focus(slide=args.slide, changed=not same)
         after = _notes_text(slide)
         resolved = t.resolved()
     fields = {"target_resolved": resolved, "slide": args.slide, "before": rt.clamp_text(before, 200)[0],
               "after": rt.clamp_text(after, 200)[0], "appended": bool(args.append)}
     preview = f"{resolved['name']} 슬라이드 {args.slide}: 노트를 " + ("덧붙였습니다" if args.append else ("지웠습니다" if not new else "바꿨습니다"))
+    if same:
+        fields["unchanged"] = True
+        preview = f"{resolved['name']} 슬라이드 {args.slide}: 노트가 이미 같아 바꾸지 않았습니다 (바뀐 것 없음)"
     if re.sub(r"\s+", "", after) != re.sub(r"\s+", "", new):
         return rt.ok_unverified(TOOL, "notes", preview, ["다시 읽은 노트가 쓴 내용과 다름"], **fields)
+    if same:
+        return rt.ok(TOOL, "notes", preview, "VERIFIED: 노트를 다시 읽어 이미 같은 내용임을 확인했습니다. 바꾼 것이 없으니 다시 실행하지 마세요.",
+                     verified=True, **fields)
     return rt.ok(TOOL, "notes", preview, "VERIFIED: 노트를 쓰고 다시 읽어 확인했습니다. 잘못 썼으면 office.py undo로 되돌릴 수 있습니다.",
                  verified=True, **fields)
 
@@ -917,20 +1064,34 @@ def _notes_read(args) -> Dict[str, Any]:
                      f"VERIFIED: 0건. {what}에 발표자 노트가 없습니다. 사용자에게 그대로 알리세요.", **result)
     shown: List[Dict[str, Any]] = []
     used = 0
+    text_cut = 0
     for it in items:
         size = len(it["notes"]) + len(it["title"]) + 20
         if shown and used + size > rt.DEFAULT_MAX_CHARS:
             break
-        shown.append(dict(it, notes=rt.clamp_text(it["notes"], rt.DEFAULT_MAX_CHARS)[0]))
+        text, cut = rt.clamp_text(it["notes"], rt.DEFAULT_MAX_CHARS)
+        item = dict(it, notes=text)
+        if cut:
+            item.update(text_truncated=True, text_chars=len(it["notes"]))
+            text_cut += 1
+        shown.append(item)
         used += size
-    truncated = len(shown) < len(items)
+    truncated = len(shown) < len(items) or bool(text_cut)
     result.update(notes=shown, truncated=truncated)
-    if truncated:
+    if text_cut:
+        result["truncated_reason"] = (f"{rt.DEFAULT_MAX_CHARS}자보다 긴 노트 {text_cut}개는 앞부분만 표시 (text_truncated). "
+                                      "전체는 PowerPoint에서 직접 확인")
+    if len(shown) < len(items):
         rest = ",".join(str(it["no"]) for it in items[len(shown):])      # 고른 슬라이드 중 남은 것만
         result["next_commands"] = [rt.next_command("ppt.py", ["notes", "--target", args.target, "--slides", rest],
                                                    "나머지 노트 이어서 읽기")]
+    directive = ""
+    if len(shown) < len(items):
+        directive = "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요."
+    if text_cut:
+        directive = (directive or "VERIFIED: 읽기 완료.") + " 노트가 잘린 슬라이드(text_truncated)는 truncated_reason을 사용자에게 알리세요."
     return rt.ok(TOOL, "notes", f"{resolved['name']}: 노트 있는 슬라이드 {len(shown)}장 표시 ({what} 중 {len(items)}장)",
-                 "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽으세요." if truncated else "", **result)
+                 directive, **result)
 
 
 # ==============================================================================
@@ -944,7 +1105,11 @@ def cmd_slide(args) -> Dict[str, Any]:
             prs = t.doc
             items = [{"no": i, "title": slide_units(prs.Slides(i), i)["title"][:60]} for i in range(1, prs.Slides.Count + 1)]
             resolved = t.resolved()
-        return rt.ok(TOOL, "slide", f"슬라이드 {len(items)}장", target_resolved=resolved, slides=items)
+        if not items:      # R2 0건
+            return rt.ok(TOOL, "slide", "0건: 슬라이드가 없습니다",
+                         "VERIFIED: 0건. 이 프레젠테이션에는 슬라이드가 없습니다. 사용자에게 그대로 알리세요.",
+                         target_resolved=resolved, slides=[], count=0)
+        return rt.ok(TOOL, "slide", f"슬라이드 {len(items)}장", target_resolved=resolved, slides=items, count=len(items))
     with off.open_target("ppt", args.target, readonly=False, focus=not args.no_focus, tool=TOOL, command="slide") as t:
         prs = t.doc
         count = int(prs.Slides.Count)
@@ -968,8 +1133,11 @@ def cmd_slide(args) -> Dict[str, Any]:
             n = need(args.slide)
             dest = need(args.to, "--to")
             moved_title = slide_units(prs.Slides(n), n)["title"]
-            prs.Slides(n).MoveTo(dest)
-            focus, msg = dest, f"슬라이드 {n}을(를) {dest}번 위치로 옮겼습니다"
+            if n == dest:          # 같은 자리로 옮기기는 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
+                focus, msg = dest, f"슬라이드 {n}은(는) 이미 {dest}번 위치라 옮기지 않았습니다 (바뀐 것 없음)"
+            else:
+                prs.Slides(n).MoveTo(dest)
+                focus, msg = dest, f"슬라이드 {n}을(를) {dest}번 위치로 옮겼습니다"
         elif a == "delete":
             n = need(args.slide)
             if count == 1:
@@ -987,7 +1155,9 @@ def cmd_slide(args) -> Dict[str, Any]:
                     shapes(k).Delete()
                     removed += 1
             focus, msg = numbers[0], f"슬라이드 {', '.join(map(str, numbers))}의 요소 {removed}개를 지웠습니다"
-        t.set_focus(slide=focus)
+        # 빈 슬라이드 비우기, 같은 자리로 옮기기는 바뀐 것 없음
+        noop = (a == "clear" and removed == 0) or (a == "move" and n == dest)
+        t.set_focus(slide=focus, changed=not noop)
         resolved = t.resolved()
         total = int(prs.Slides.Count)
         # R1: 슬라이드 수(추가·복제 +1, 삭제 -1), 옮긴 슬라이드 제목, 비운 슬라이드의 요소 수를 다시 읽어 확인

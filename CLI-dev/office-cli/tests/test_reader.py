@@ -73,6 +73,21 @@ def make_xlsx(path):
     ws2 = wb.create_sheet("요약")
     ws2.append(["합계", "=SUM(매출!B2:B4)"])
     wb.save(path)
+    set_cached_value(path, "<v></v>", "<v>2000</v>")   # 엑셀에서 저장한 파일처럼 수식 칸에 계산된 값
+
+
+def set_cached_value(path, old, new):
+    """xlsx의 시트 XML에서 old를 new로 (openpyxl은 수식의 계산된 값을 쓰지 않음: 엑셀에서 저장한 파일 흉내).
+    엑셀은 저장할 때 workbook.xml의 fullCalcOnLoad 표시를 지우므로 그것도 지웁니다."""
+    with zipfile.ZipFile(path) as z:
+        parts = {n: z.read(n) for n in z.namelist()}
+    for n in parts:
+        if n.startswith("xl/worksheets/"):
+            parts[n] = parts[n].replace(old.encode(), new.encode())
+    parts["xl/workbook.xml"] = parts["xl/workbook.xml"].replace(b' fullCalcOnLoad="1"', b"")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, data in parts.items():
+            z.writestr(n, data)
 
 
 def make_pdf(path):
@@ -191,6 +206,7 @@ def test_xlsx_rows_skip_empty_and_numbers(samples):
     assert meta["sheets"] == ["매출", "요약"]
     assert [u["loc"] for u in units[:3]] == ["매출!1행", "매출!2행", "매출!4행"]
     assert units[2]["text"] == "부산\t800"
+    assert units[3]["text"] == "합계\t2000" and "uncomputed_formulas" not in meta   # 계산된 값이 있는 수식 칸
 
 
 def test_pdf_pages(samples):

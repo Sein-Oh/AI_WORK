@@ -115,7 +115,7 @@ def test_search_filter_has_single_prefix_and_grouping():
     f = outlook.build_search_filter("견적's", "김팀장", "all")
     assert f.startswith("@SQL=(") and f.count("@SQL=") == 1
     assert ") AND (" in f and "견적''s" in f
-    assert outlook.build_search_filter("a%b", None, "subject") == '@SQL=("urn:schemas:httpmail:subject" LIKE \'%ab%\')'
+    assert outlook.build_search_filter("a%b_c", None, "subject") == '@SQL=("urn:schemas:httpmail:subject" LIKE \'%a%b_c%\')'
     with pytest.raises(rt.InputError):
         outlook.build_search_filter(None, None, "all")
 

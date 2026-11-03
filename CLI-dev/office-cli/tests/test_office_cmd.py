@@ -189,7 +189,7 @@ def test_undo_closed_file_restores_backs_up_and_consumes(tmp_path, monkeypatch, 
     fake, _ = make_win32com()
     monkeypatch.setattr(off, "win32com", fake)
     monkeypatch.setattr(off, "pythoncom", None)
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
     orig = tmp_path / "a.xlsx"
     orig.write_bytes(b"current")
     off.save_snapshot("excel", FakeWorkbook(str(orig)), "excel", "write")      # 스냅샷 내용: snapshot-of-a.xlsx
@@ -370,7 +370,7 @@ def _undo_env(tmp_path, monkeypatch):
     fake, _ = make_win32com()
     monkeypatch.setattr(off, "win32com", fake)
     monkeypatch.setattr(off, "pythoncom", None)
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
     orig = tmp_path / "a.xlsx"
     orig.write_bytes(b"current")
     return orig

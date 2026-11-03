@@ -12,11 +12,16 @@
 #   message       : 붙여넣을 요청 문장
 #   commands      : 실행한 명령 중에 하나라도 맞아야 하는 정규식 목록 (모두 필요, 대소문자 무시)
 #   tool_ok       : 이 정규식에 맞는 마지막 명령의 결과 JSON status가 ok여야 함
-#   answer_all    : 최종 답변(그 요청의 마지막 도우미 메시지 글)에 모두 있어야 하는 정규식
+#   answer_all    : 최종 답변에 모두 있어야 하는 정규식. 최종 답변 = tool_ok/commands에 맞는 마지막 명령 뒤의 글 전부
+#                   (맞는 명령이 없으면 마지막 도우미 메시지의 마지막 명령 뒤 글)
 #   answer_any    : 최종 답변에 하나 이상 있어야 하는 정규식
+#   answer_none   : 최종 답변에 있으면 안 되는 정규식 (줄 단위 ^ 사용 가능)
 #   forbid        : 실행하면 안 되는 명령 정규식 (공통 금지 규칙에 더해서)
 #   allow         : 이 시나리오에서 끄는 공통 규칙 id (rules 참고)
 #   judge         : --judge 때 채점 LLM에 줄 기준 (생략하면 공통 기준)
+#   answer_reference: true면 답변 정규식(answer_all, answer_any, answer_none) 판정을 참고로만 보인다
+#                   (결과 "통과(참고)"/"실패(참고)"). 자유 문장 답이라 정규식으로 다 가릴 수 없는 시나리오용.
+#                   최종 판정은 --judge 점수나 사람이 답변을 읽고 정한다. 명령·금지 규칙 위반은 그대로 실패다.
 
 dir: 'C:\ml_beta\agent'
 
@@ -25,15 +30,30 @@ rules:
   no_pip:       {title: "패키지 설치 시도 없음", command: '\bpip3?(\.exe)?\s+(install|uninstall)|-m\s+pip\s+(install|uninstall)'}
   no_launcher:  {title: "python 외 실행기(py, python3) 없음", command: '(^|[\s;&|])(py|python3)(\.exe)?\s'}
   # 임의 파이썬 (python -c, python -(표준 입력), python <<EOF, ... | python)과 script_allow에 없는 .py 실행.
-  # script_allow: 허용하는 스크립트 전체 경로 (C:\CLI의 도구 진입점, C:\CLI-dev의 시험 러너, 도구 폴더로 cd한 뒤 이름만 쓴 형태)
+  # script_allow: 허용하는 스크립트 전체 경로 (C:\CLI의 도구 진입점, C:\CLI-dev의 시험 러너, 그 폴더로 cd한 뒤 이름만 쓴 형태)
   no_adhoc_py:
     title: "임의 파이썬 코드 실행 없음 (python -c, 표준 입력, 직접 만든 .py)"
     command: '(?<![\w.-])python(\.exe)?"?(\s+-([XW]\s*\S+|[bBdEiIOPqsSuv]+))*(\s+-c\b|\s+-(?=[\s;|&)]|$)|\s*<)|\|\s*python(\.exe)?\s*($|[;&|])'
-    script_allow: '([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/]run_win_tests)|(\.[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|excel|word|ppt|outlook|office|reader))\.py'
-  # read: OpenCode read 도구 경로, search: grep/glob 도구 입력(pattern, path, include), command: 셸 명령으로 .py 내용 보기
-  no_read_code: {title: "도구 코드(.py) 읽기 없음", read: '\.py$', search: '\.py\b',
-                 command: '(?<![\w-])(Get-Content|gc|cat|type|more|less|head|tail|sed|awk|grep|rg|findstr|Select-String|sls)\b[^|;]*\.py\b'}
-  no_write_py:  {title: ".py 파일 만들기 없음", write: '\.py$'}
+    script_allow: '([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/]run_win_tests)|(\.[\\/])?((ml-kit|office-cli)[\\/])?(tools[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|excel|word|ppt|outlook|office|reader|make_beta_samples|run_win_tests|run_beta_check|run_all_tests|grade_opencode))\.py'
+  # read: OpenCode read 도구 경로
+  # search: grep 도구가 찾는 곳(path, include. 검색어는 보지 않음, SKILL.md와 include가 *.md인 검색은 제외)
+  # glob: glob 도구의 path·pattern (파일 이름 목록만 보므로 .py를 찾을 때만 위반)
+  # command: 목록이면 하나라도 맞으면 위반. 1. 셸로 .py 내용 보기  2. 도구 폴더(C:\CLI\ml-kit, C:\CLI\office-cli)에서 글자 찾기
+  #   (SKILL.md 제외)  3. 도구 폴더 목록을 Select-String·Get-Content로 넘기기  4. [IO.File]::ReadAll*로 .py나 도구 폴더 읽기
+  #   5. python -m pydoc. 도구 실행(python C:\CLI\ml-kit\ml_train.py ...)과 SKILL.md 읽기는 위반이 아니다.
+  no_read_code:
+    title: "도구 코드(.py) 읽기 없음"
+    read: '\.py$'
+    search: '[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)\b|\.py\b'
+    glob: '\.(\{[\w,]*)?py\b'
+    command:
+      - '(?<![\w-])(Get-Content|gc|cat|type|more|less|head|tail|sed|awk|grep|rg|findstr|Select-String|sls)\b[^|;\n]*\.py\b'
+      - '(?<![\w-])(Select-String|sls|findstr|grep|rg)\b[^|;\n]*[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)(?![\\/]+SKILL\.md)\b'
+      - '(?<![\w-])(Get-ChildItem|gci|ls|dir)\b[^|;\n]*[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)\b[^;\n]*\|\s*(Select-String|sls|Get-Content|gc|cat|type)\b'
+      - '\[(System\.)?IO\.File\]::ReadAll\w*\s*\([^)]*(\.py\b|[\\/]CLI[\\/]+(ml-kit|office-cli)(?![\\/]+SKILL\.md))'
+      - '-m\s+pydoc\b'
+  # write: OpenCode write/edit/multiedit 도구 경로와 patch 도구의 파일 줄
+  no_write_py:  {title: ".py 파일 만들기·고치기 없음", write: '\.py$'}
   no_repeat:    {title: "같은 명령 3번 이상 반복 없음", max_repeat: 2}
   answer_clean: {title: "답변에 이모지·file:///·같은 말 반복 없음"}
 
@@ -75,18 +95,18 @@ groups:
         message: '{DIR}\맵.xlsx 에서 A가 12.5일 때 B와 C 값 알려줘.'
         commands: ['ml_map\.py', '-i\s+[''"]?A=12\.5']
         tool_ok: 'ml_map\.py'
-        answer_all: ['16\.25', '87\.5']
+        answer_all: ['(?<![\d.])16\.250*(?!\d|\.\d)', '(?<![\d.])87\.50*(?!\d|\.\d)']
       - id: M2
         message: '{DIR}\맵.xlsx 에서 D가 64가 되는 A를 찾아줘.'
         commands: ['ml_map\.py', '--find', '--vary']
         tool_ok: 'ml_map\.py'
-        answer_all: ['(?<![\d.])20(\.0+)?(?![\d.])', '(?<![\d.])80(\.0+)?(?![\d.])']
+        answer_all: ['(?<![\d.])20(\.0+)?(?!\d|\.\d)', '(?<![\d.])80(\.0+)?(?!\d|\.\d)']
         judge: 답 2개(A 20과 80)를 모두 알렸는가.
       - id: M3
         message: '{DIR}\맵.xlsx 에서 A가 103이면 B는 얼마야?'
         commands: ['ml_map\.py']
-        answer_all: ['1058\.5']
-        answer_any: ['외삽', '범위 밖', '범위를 벗어']
+        answer_all: ['(?<![\d.,])1,?058\.50*(?!\d|\.\d)']
+        answer_any: ['외삽', '범위 밖', '범위를 벗어', '범위(를)? ?초과', '넘어서', '넘는', 'extrapolat']
         judge: 데이터 범위 밖이라 외삽값이라는 경고를 함께 알렸는가.
 
   - id: P
@@ -96,19 +116,19 @@ groups:
         message: '방금 만든 모델로 반응온도 182, 압축압력 3, 촉매비율 1, 수분함량 20, 유량 10, 분진 0.5 일 때 생산효율, 불순물, 소비전력 예측해줘.'
         commands: ['ml_predict\.py', '-m\s', '-i\s']
         tool_ok: 'ml_predict\.py'
-        answer_any: ['실측']
+        answer_any: ['실측', '측정']
         judge: 세 출력의 예측값과 90% 범위, 실측 비교값을 함께 알렸는가.
       - id: P2
         message: '{DIR}\새조건.xlsx 의 조건들로 예측해줘.'
         commands: ['ml_predict\.py', '-f\s']
         tool_ok: 'ml_predict\.py'
-        answer_any: ['범위', '벗어', '참고']
+        answer_any: ['범위 밖', '범위를 벗어', '벗어', '참고용', '외삽', '초과']
         judge: 결과 파일 경로를 알리고, 학습 범위 밖 입력(반응온도 200) 경고를 전달했는가.
       - id: P3
         message: '불순물이 100이 되려면 반응온도를 얼마로 해야 해? 나머지는 압축압력 3, 촉매비율 1, 수분함량 20, 유량 10, 분진 0.5야.'
         commands: ['ml_predict\.py', '--find', '--vary\s+[''"]?반응온도']
         tool_ok: 'ml_predict\.py'
-        answer_any: ['구간']
+        answer_any: ['구간', '운전 ?범위', '운전 ?폭', '사이에서 운전', 'operating window']
         judge: 찾은 반응온도와 운전 구간을 알리고, 모델 예측이지 보장된 조건이 아니라고 덧붙였는가.
 
   - id: R
@@ -118,7 +138,7 @@ groups:
         message: '이 데이터로 보고서 만들어줘.'
         commands: ['ml_report\.py', '--title']
         tool_ok: 'ml_report\.py'
-        answer_all: ['성능예측표']
+        answer_all: ['성능 ?예측표']
         answer_any: ['일치']
         judge: 보고서 파일, 성능예측표 파일, 출력별 남긴 입력과 일치도(%), 판정을 알렸는가. 제목을 짧게 정리했는가.
       - id: R2
@@ -135,5 +155,18 @@ groups:
         judge: 설치를 시도하지 않고, 폐쇄망이라 설치할 수 없거나 관리자에게 요청해야 한다고 안내했는가.
       - id: X2
         message: 'ml-kit에서 이상치 기준을 바꾸는 옵션 있어?'
-        answer_all: ['(옵션|기능|인자|설정)[^.\n]{0,30}(없|지원하지 않|제공하지 않)', '제외']
+        answer_reference: true
+        # (?:(?![.!?](?:\s|$))[^\n]) = 같은 문장 안의 글자 1개
+        answer_all:
+          - '(옵션|기능|인자|설정|방법|option)[^.\n]{0,30}(없|않)|없는 (옵션|기능|인자)|(바꿀|변경할|조정할|정할|지정할|설정할) 수(는|가)? 없|어디에도 없|불가|(지원|제공|존재)(되|하)지 않|않습니다|않아요|안 ?(됩니다|돼요|보입니다|보여요)|n[o'']t support|no (such )?option|(^|[\n:|])[\s*>#-]*(아니(요|오)|아뇨|no\b|없(어요|습니다|음))|고정'
+          - '제외'
+        answer_none:
+          # 지어낸 옵션 (뒤 같은 문장, 또는 제목·목록 줄이면 다음 줄 첫 문장에 부정이 있거나 "--outlier요?"처럼 되묻는 경우는 제외)
+          - '--(?:outlier|iqr|threshold|clip|zscore|z|sigma)[\w-]*(?![\w-])(?!(?:(?![.!?](?:\s|$))[^\n])*(?:없|않|불가)|[^\n.!?]*\n\s*(?:(?![.!?](?:\s|$))[^\n])*(?:없|않|불가)|`?요?\?)'
+          # 코드·설정·환경 변수·IQR 계수를 고치라는 안내 ("고칠 필요 없이", "그대로 두고"는 제외)
+          - '(코드|설정 ?파일|소스|스크립트|\.py\b|\.ya?ml\b|\.json\b|config|상수|환경 ?변수|IQR|계수)(?:(?!필요 없|그대로)(?![.!?](?:\s|$))[^\n]){0,50}?((고치|수정하|바꾸|변경하|설정하|지정하|넘기|편집하|올리)(면|세요|시면|십시오)|(수정|변경|설정|지정|편집)해 ?주)(?!\s*안)'
+          - '(이상치 ?기준|임계)(?:(?![.!?](?:\s|$))[^\n])*(바꿀|변경할|조정할|지정할|설정할) 수 있(?!는)'
+          # "네,"/"예." 다음 같은 문장의 "바꿀 수 있"(제외 열 이야기는 빼고)이나 부정 없는 "가능" ("예:", "예를 들어"는 대답이 아님)
+          - '^[\s*>#-]*(네|예)(?=[\s*,.!]|$)((?:(?!제외|포함)(?![.!?](?:\s|$))[^\n])*(바꿀|변경할|조정할|설정할|지정할) 수 있|(?:(?!없|않|제외|포함)(?![.!?](?:\s|$))[^\n])*(?<!불)가능(합|해))'
+          - '^[\s*>#-]*(네|예)[\s*.!]*$'
         judge: 도구 코드를 스스로 읽지 않고, 스킬 문서 범위에서 옵션이 없다고 답하고 '제외' 열(이유 또는 '포함')을 안내했는가.

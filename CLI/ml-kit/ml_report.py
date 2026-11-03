@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
-    normalize_version, strip_unit, note_recovered, read_text_file, VERSION,
+    normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names, VERSION,
 )
 
 setup_console()
@@ -140,6 +140,9 @@ def worst_verdict(verdicts: List[str]) -> str:
 
 
 def fmt(v: Any, digits: int = 4) -> str:
+    """Numbers in the report (cards, tables and text alike): at least `digits` decimals, and enough decimals for
+    `digits` significant digits on a small value (0.00012345 -> 0.0001235); trailing zeros beyond `digits`
+    decimals are dropped (0.0066 -> 0.0066, not 0.006600). Only values below SMALL_EXP (1e-5) use exponent form (3.200e-06)."""
     if v is None:
         return "-"
     if isinstance(v, (bool, np.bool_)):
@@ -149,8 +152,21 @@ def fmt(v: Any, digits: int = 4) -> str:
     if isinstance(v, (float, np.floating)):
         if not np.isfinite(v):
             return "-"
-        return f"{float(v):,.{digits}f}"
+        a = abs(float(v))
+        if a == 0:
+            return f"{0.0:.{digits}f}"
+        if a < SMALL_EXP:
+            return f"{float(v):.{digits - 1}e}"
+        dec = max(digits, digits - 1 - int(np.floor(np.log10(a))))
+        text = f"{float(v):,.{dec}f}"
+        if dec > digits:
+            head, frac = text.split(".")
+            text = f"{head}.{frac[:digits]}{frac[digits:].rstrip('0')}"
+        return text
     return str(v)
+
+
+SMALL_EXP = 1e-5
 
 
 # ==============================================================================
@@ -889,13 +905,10 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
 
     names = list(record["targets"])
     if target_filter:
-        wanted, unknown = [], []
-        for f in target_filter:
-            hit = [t for t in names if t == f or strip_unit(t) == strip_unit(f)]
-            (wanted.extend(hit) if hit else unknown.append(f))
-        if unknown:
-            raise InputError(f"버전 '{version}'에 타겟 {unknown}이(가) 없습니다. [추천] {names}")
-        names = list(dict.fromkeys(wanted))
+        # like ml_predict -y: exact name, then a unique name without its unit ('수율' for '수율(1차)' and '수율(최종)'
+        # -> [후보]; an exact '수율(1차)' takes that one only)
+        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(--target)")[0])
+        names = [t for t in names if t in wanted]
 
     excluded_all = None
     p_ex = os.path.join(vdir, "excluded_rows.csv")
@@ -994,13 +1007,25 @@ def exclusion_line(t: Dict[str, Any], metric: str) -> str:
     return " | ".join(parts)
 
 
+def duplicate_line(t: Dict[str, Any]) -> str:
+    """'수율: 중복 행 12개 (전체 120행) ...' from the training result, '' when there were none."""
+    c = t["champ"]
+    n = c.get("duplicate_rows")
+    if not n:
+        return ""
+    total = t["bench"].get("sample_count")
+    how = (c.get("duplicate_note") or "") if c.get("duplicate_grouped") is False else \
+        "같은 행이 학습과 검증에 나뉘지 않도록 묶어서 검증함"
+    return f"{t['name']}: 중복 행 {int(n):,}개" + (f" (전체 {int(total):,}행)" if total else "") + f", {how}"
+
+
 def text_performance(t: Dict[str, Any]) -> str:
     c = t["champ"]
     if t["task"] == "regression":
         std = float(t["oof"]["actual"].std()) or 1.0
         lines = [
-            f"챔피언 {c['champion_model']}의 검증 R²는 {c['val_r2']:.4f}, MAE는 {c['mae']:.4f}로 "
-            f"타겟 표준편차({std:.4f})의 {c['mae'] / std:.0%} 수준입니다.",
+            f"챔피언 {c['champion_model']}의 검증 R²는 {c['val_r2']:.4f}, MAE는 {fmt(c['mae'])}로 "
+            f"타겟 표준편차({fmt(std)})의 {c['mae'] / std:.0%} 수준입니다.",
         ]
         gap = c.get("overfit_gap", 0.0)
         lines.append(f"학습-검증 간극 {gap:.4f}: " + ("과적합 위험이 낮습니다." if gap <= 0.10 else
@@ -1140,7 +1165,7 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     rows = []
     for t in targets:
         c = t["champ"]
-        err = (f"MAE {c['mae']:.4f}" if task == "regression" else f"정확도 {c['accuracy']:.4f}")
+        err = (f"MAE {fmt(c['mae'])}" if task == "regression" else f"정확도 {c['accuracy']:.4f}")
         row = [t["name"], c["champion_model"], c.get("val_score")]
         if has_excl:
             row.append((t.get("excluded") or {}).get("all_rows_score", c.get("val_score")))
@@ -1190,6 +1215,10 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     data_default = (f"{data_name}: {prof.get('rows_loaded', 0):,}행 x {prof.get('columns_loaded', 0)}열 (표 구조: {layout_txt}). "
                     f"학습 사용 {used}. 피처 결측 {prof.get('missing_imputed_cells', 0):,}칸은 학습 데이터 기준값으로 대치.")
     R.para(slot("data", data_default), size=9, space_after=4)
+    dup_lines = [duplicate_line(t) for t in targets if duplicate_line(t)]
+    if dup_lines:
+        R.para("중복 행 경고: 입력과 타겟이 완전히 같은 행이 있습니다. 중복이 실수라면 데이터에서 지우고 다시 학습하십시오.\n"
+               + "\n".join(dup_lines), size=9, color=C_INK, space_after=4)
     excl_lines = [f"{t['name']}: {exclusion_line(t, metric_label)}" for t in targets if exclusion_line(t, metric_label)]
     if excl_lines:
         R.para("학습 제외 행: 데이터의 '제외' 열에 글자가 있는 행(직접 표시)과, 값이 중앙값에서 크게 벗어난 행"
@@ -1274,9 +1303,9 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         if task == "regression":
             iv = c.get("prediction_interval") or {}
             half = (iv["residual_upper"] - iv["residual_lower"]) / 2 if iv else None
-            cards = [("검증 R²", f"{c['val_r2']:.4f}", c["champion_model"]), ("MAE", f"{c['mae']:.4f}", "평균 절대 오차"),
+            cards = [("검증 R²", f"{c['val_r2']:.4f}", c["champion_model"]), ("MAE", fmt(c['mae']), "평균 절대 오차"),
                      ("학습-검증 간극", f"{c.get('overfit_gap', 0):.4f}", "0.15 초과면 과적합 주의"),
-                     ("90% 예측 범위", f"±{half:.3f}" if half is not None else "-", "예측값 기준")]
+                     ("90% 예측 범위", f"±{fmt(half, 3)}" if half is not None else "-", "예측값 기준")]
             hdr = ["순위", "모델", "검증 R²", "학습 R²", "간극", "MAE"]
             body = [[e["rank"], e["model_name"], e["val_r2"], e["train_r2"], e["overfit_gap"], e["mae"]] for e in board[:3]]
         else:
@@ -1351,7 +1380,7 @@ def parse_slots(raw: Optional[str]) -> Dict[str, Any]:
 
 
 def resolve_version_dir(args: argparse.Namespace) -> str:
-    """-m <version_dir> wins; otherwise -d <data_root> with -v, or the best version of the latest experiment."""
+    """-m <version_dir> wins; otherwise -d <data_root> with -v, or the task's best version (ml_train.task_best_version)."""
     if args.model:
         return args.model
     if not args.data_dir:
@@ -1365,12 +1394,14 @@ def resolve_version_dir(args: argparse.Namespace) -> str:
     records = _read_jsonl(ledger)
     if not records:
         raise InputError(f"실험 원장이 비어 있습니다: {ledger}")
-    latest = records[-1]
-    same = [r for r in records if r.get("task", "regression") == latest.get("task", "regression")
-            and sorted(r.get("targets", [])) == sorted(latest.get("targets", []))
-            and isinstance(r.get("mean_val_score"), (int, float))]
-    best = max(same, key=lambda r: r["mean_val_score"]) if same else latest
-    sys.stderr.write(f"[INFO] 보고서 버전 자동 선택: {best['version']} (최근 학습과 같은 타겟 조합 중 최고 점수)\n")
+    import ml_train  # same choice as ml_train.py --history best_version
+    task = records[-1].get("task", "regression")
+    best = ml_train.task_best_version(records, root, task)
+    if best is None:
+        raise InputError(f"{task} 학습 기록 중 버전 폴더가 온전한 기록이 없습니다: {root}. 먼저 ml_train.py로 학습하십시오.")
+    how = ("모든 타겟의 최고 점수" if best["complete"]
+           else f"타겟별 최고가 여러 버전에 나뉘어 최고 타겟이 가장 많은 버전, {best['missing']}은(는) 다른 버전이 더 좋음")
+    sys.stderr.write(f"[INFO] 보고서 버전 자동 선택: {best['version']} ({how})\n")
     return os.path.join(root, best["version"])
 
 
@@ -1423,6 +1454,14 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
     result["export_verified"] = res["verified"]
     if res.get("unverified"):
         result["export_unverified"] = res["unverified"]
+        # R1: the result covers the workbook too, so an unverified workbook makes the whole result UNVERIFIED
+        result["verified"] = False
+        result["unverified"] = list(result.get("unverified") or []) + [f"성능예측표: {u}" for u in res["unverified"]]
+        if result["agent_directive"].startswith("VERIFIED: "):
+            result["agent_directive"] = (
+                "UNVERIFIED: 보고서(Word)는 다시 열어 확인했지만 성능예측표는 다 확인하지 못했습니다 ("
+                + "; ".join(res["unverified"]) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. "
+                + result["agent_directive"][len("VERIFIED: "):])
     if res.get("warnings"):
         result["export_warnings"] = res["warnings"]
     result["preview"] += f" | 성능예측표: {os.path.basename(res['output_file'])}"
@@ -1477,10 +1516,14 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
     versions = info["best_versions"]
     reports: List[Dict[str, Any]] = []
     export = None
+    picked = None
+    if target_filter:   # resolved once over the targets of all best versions ('수율' for two of them -> [후보])
+        all_names = list(dict.fromkeys(str(t) for bv in versions for t in bv["targets"]))
+        picked = resolve_column_names(target_filter, all_names, "타겟(--target)")[0]
     for bv in versions:
         flt = None
-        if target_filter:
-            flt = [f for f in target_filter if any(f == t or strip_unit(f) == strip_unit(t) for t in bv["targets"])]
+        if picked is not None:
+            flt = [t for t in dict.fromkeys(picked) if t in bv["targets"]]
             if not flt:
                 continue
         ctx = load_version(bv["version_dir"], flt)
@@ -1538,7 +1581,7 @@ def main():
     parser.add_argument("--model", "-m",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
     parser.add_argument("--data-dir", "-d", dest="data_dir",
-                        help="데이터 폴더 (<파일명>_ml_data). -v 생략 시 최근 학습과 같은 타겟 조합 중 최고 버전")
+                        help="데이터 폴더 (<파일명>_ml_data). -v 생략 시 모든 타겟의 최고가 있는 버전 (--history의 best_version)")
     parser.add_argument("--version", "-v", help="-d와 함께 쓸 버전 (예: v2 또는 2)")
     parser.add_argument("--target", "-t", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
     parser.add_argument("--out", "-o", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")

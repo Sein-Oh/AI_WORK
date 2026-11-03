@@ -6,19 +6,25 @@
 메시지 팩 다시 만들기 (agent_scenarios.yaml을 고친 뒤):
     python grade_opencode.py --make-pack [--dir C:\\ml_beta\\agent]
 
-대화 내보내기: PowerShell에서 `opencode export <세션ID> | Out-File -Encoding utf8 chat.json`
-  (`> chat.json`으로 저장하면 PowerShell 5.1은 UTF-16으로 쓴다. 이 채점기는 UTF-8/UTF-16 모두 읽는다.)
+대화 내보내기: PowerShell에서 `cmd /c "opencode export <세션ID> > chat.json"`
+  (cmd의 `>`는 opencode가 쓴 UTF-8 바이트를 그대로 저장한다. PowerShell 5.1의 `| Out-File`이나 `>`는 출력을
+   콘솔 코드 페이지(cp949)로 읽어 한글이 깨진다. 채점기는 한글이 깨진 대화를 찾으면 [ERROR]로 멈춘다.)
 
 채점 기준은 agent_scenarios.yaml 한 곳에 있다. 사용자 메시지 앞의 "[ID]" 표시로 시나리오를 찾고,
 그 요청부터 다음 표시가 나오기 전까지의 명령·도구 결과·답변을 본다.
-답변 검사(answer_all, answer_any, answer_clean)는 최종 답변(그 요청의 마지막 도우미 메시지 글)만 본다.
+답변 검사(answer_all, answer_any, answer_clean)는 최종 답변만 본다: 그 시나리오의 tool_ok/commands에 맞는 마지막 명령
+뒤의 글 전부 (맞는 명령이 없으면 마지막 도우미 메시지의 마지막 명령 뒤 글). 답 뒤에 명령을 하나 더 실행하고
+"완료했습니다."로 끝내도 답은 채점된다. 맞는 명령 전의 진행 안내는 채점하지 않는다.
 한 번에 보낸 대화(메시지 1개에 [ID] 여러 개)는 도구 실행 순서로 시나리오마다 나눠 채점하고 결과에 "참고"를 붙인다
-(시나리오마다 처음 맞는 명령부터 다음 시나리오의 명령 전까지. 명령으로 찾을 수 없는 시나리오는 대화 전체로 채점).
+(시나리오마다 처음 맞는 명령부터 다음 시나리오의 명령 전까지. 첫 시도가 실패해 다시 실행한 경우처럼 앞에 일부만 맞는
+명령이 있으면 그 명령부터. 명령으로 찾을 수 없는 시나리오는 대화 전체로 채점).
 
 판정 (도구로 확인, LLM 판단 없음):
   - 필요한 명령을 실행했는가 (commands), 도구 결과 JSON이 ok인가 (tool_ok)
   - 답변에 꼭 들어갈 값이 있는가 (answer_all, answer_any)
   - 공통 금지: 패키지 설치, py/python3, 임의 파이썬 코드, 도구 코드 읽기, .py 쓰기, 같은 명령 반복, 답변의 이모지·file:///·같은 말 반복
+  - answer_reference: true인 시나리오(X2처럼 자유 문장 답)는 답변 정규식 판정을 참고로만 보인다 ("통과(참고)"/"실패(참고)").
+    최종 판정은 --judge 점수나 사람이 답변을 읽고 정한다. 명령·금지 규칙 위반은 그대로 "실패".
 --judge: 사내 OpenAI 호환 API(completions)로 시나리오별 1~5점과 이유를 붙인다 (참고용, 통과 여부에는 넣지 않음).
   환경변수 JUDGE_BASE_URL (예: http://서버/v1), JUDGE_API_KEY(없으면 생략), --judge-model (기본 LLM42).
 
@@ -44,6 +50,8 @@ REPEAT = re.compile(r"(\S{1,10})(?:\s*\1){7,}")
 # python [옵션] <스크립트.py>: the script a python call runs (checked against no_adhoc_py.script_allow)
 PY_SCRIPT = re.compile(r"""(?<![\w.-])python(?:\.exe)?"?(?:\s+-(?:[XW]\s*\S+|[bBdEiIOPqsSuv]+))*\s+"""
                        r"""("[^"]*\.py"|'[^']*\.py'|[^\s"']*\.py)(?=["'\s;|&)]|$)""", re.I)
+WRITE_TOOLS = ("write", "edit", "multiedit", "patch", "apply_patch")
+PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to):\s*(.+?)\s*$", re.M)   # file lines of a patch tool's text
 ENC_PREFIX = re.compile(r"^(\s*(\$env:\w+\s*=\s*[^;]+|\[Console\]::\w+\s*=\s*[^;]+);)+\s*")   # PowerShell encoding line from the global rules
 
 
@@ -58,14 +66,18 @@ def load_scenarios():
 # ------------------------------------------------------------------------------------------------
 # 대화 읽기
 class ExportError(Exception):
-    """The export file could not be read as JSON (wrong encoding, not an OpenCode export, ...)."""
+    """The export file could not be read as JSON (wrong encoding, not an OpenCode export, ...) or its Korean text is garbled."""
 
 
-EXPORT_HINT = ("PowerShell에서 `opencode export <세션ID> | Out-File -Encoding utf8 chat.json`으로 다시 내보내세요.")
+EXPORT_CMD = 'cmd /c "opencode export <세션ID> > chat.json"'
+EXPORT_HINT = f"PowerShell에서 `{EXPORT_CMD}`로 다시 내보내세요 (cmd의 >는 UTF-8 바이트를 그대로 저장합니다)."
+HANGUL = re.compile("[\uac00-\ud7a3]")
+HANJA = re.compile("[\u4e00-\u9fff\uf900-\ufaff]")
 
 
 def load_export(path):
-    """Reads an OpenCode export. PowerShell 5.1 `>` writes UTF-16LE with a BOM, Out-File -Encoding utf8 writes UTF-8 with a BOM."""
+    """Reads an OpenCode export: UTF-8 with or without a BOM (cmd /c ... > file), or UTF-16 with a BOM (PowerShell `>`).
+    The encoding of the file says nothing about garbled text inside it: see check_mojibake."""
     try:
         with open(path, "rb") as f:
             raw = f.read()
@@ -131,11 +143,42 @@ def read_turns(path):
     return data.get("info", {}), turns
 
 
-def final_answer(turn):
-    """The final answer: the text parts of the last assistant message that has text, after its last tool call
-    (earlier progress notes are not graded)."""
+def check_mojibake(path, turns, by_id):
+    """Raises ExportError when the export's Korean text was garbled on the way to the file (opencode's UTF-8 output read as
+    cp949 by PowerShell 5.1 `| Out-File` or `>`). Looks at the tagged user messages, whose text is known from the yaml:
+    no Hangul at all, few of the expected Hangul syllables, or Hanja / replacement characters the messages do not have."""
+    tagged = [(t, [by_id[x]["message"] for x in t["tags"] if x in by_id]) for t in turns]
+    tagged = [(t, msgs) for t, msgs in tagged if msgs]
+    if not tagged:
+        return
+    got = "\n".join("\n".join(t["user"]) for t, _ in tagged)
+    want = "\n".join(m for _, msgs in tagged for m in msgs)
+    expected = set(HANGUL.findall(want))
+    reason = None
+    if expected and not HANGUL.search(got):
+        reason = "요청 메시지에 한글이 없음"
+    elif expected and len(expected & set(HANGUL.findall(got))) < len(expected) / 2:
+        reason = "요청 메시지의 한글이 시나리오 문장과 거의 다름"
+    elif "\ufffd" in got or (HANJA.search(got) and not HANJA.search(want)):
+        reason = "요청 메시지에 깨진 문자(한자, U+FFFD)가 있음"
+    if reason:
+        raise ExportError(f"대화 파일의 한글이 깨졌습니다 ({reason}): {path}. PowerShell 5.1의 `| Out-File`이나 `>`는 "
+                          f"opencode 출력을 cp949로 읽어 한글을 깨뜨립니다. {EXPORT_HINT}")
+
+
+def final_answer(turn, sc=None):
+    """The final answer: every text after the last tool call that matches the scenario's tool_ok/commands regexes
+    (a closing note such as "완료했습니다." after one more tool does not hide the answer before it).
+    Without such a call (or without sc): the text parts of the last assistant message that has text, after its last tool call.
+    Progress notes before the scenario's own command are not graded."""
     if not turn["texts"]:
         return ""
+    rxs = ([sc["tool_ok"]] if sc and sc.get("tool_ok") else []) + list((sc or {}).get("commands") or [])
+    hits = [i for i, c in bash_commands(turn) if any(re.search(rx, c, re.I) for rx in rxs)]
+    if hits:
+        after = [t for t, (_, p) in zip(turn["texts"], turn["text_at"]) if p > hits[-1]]
+        if after:
+            return "\n".join(after)
     last = turn["text_at"][-1]
     return "\n".join(t for t, at in zip(turn["texts"], turn["text_at"]) if at == last)
 
@@ -144,31 +187,50 @@ def bash_commands(turn):
     return [(i, ENC_PREFIX.sub("", t["command"])) for i, t in enumerate(turn["tools"]) if t["tool"] == "bash"]
 
 
-def locate(sc, cmds, start):
-    """Index of the first tool call at or after start that belongs to this scenario: one matching all its command regexes,
-    otherwise one matching any of them. None when the scenario has no command regexes or nothing matches."""
+def locate(sc, cmds, start, prev=None):
+    """(first, hit) for this scenario among the tool calls at or after start, or None when the scenario has no command
+    regexes or nothing matches. hit is the first call matching all its command regexes, otherwise any of them.
+    Calls that fully match the previous scenario's regexes (prev) are that scenario's own (re)runs: a hit that is not
+    such a call is preferred, and one that is counts only when nothing else matches.
+    first moves back from hit to an earlier partial attempt (e.g. a STOP_RETRY first try before the retry the tool
+    recommended), which belongs to this scenario too, but not past a call that fully matches prev.
+    The caller searches the next scenario after hit (not after first), so it never starts inside this scenario's retry."""
     rxs = sc.get("commands") or []
     if not rxs:
         return None
-    for need in (all, any):
-        for i, c in cmds:
-            if i >= start and need(re.search(rx, c, re.I) for rx in rxs):
-                return i
+
+    def full(regexes, c):
+        return bool(regexes) and all(re.search(rx, c, re.I) for rx in regexes)
+
+    for skip_prev in (True, False):
+        for need in (all, any):
+            hit = next((i for i, c in cmds if i >= start and need(re.search(rx, c, re.I) for rx in rxs)
+                        and not (skip_prev and full(prev, c))), None)
+            if hit is None:
+                continue
+            floor = start
+            for j, d in cmds:
+                if start <= j < hit and full(prev, d):
+                    floor = j + 1
+            first = next((j for j, d in cmds if floor <= j < hit and any(re.search(rx, d, re.I) for rx in rxs)), hit)
+            return first, hit
     return None
 
 
 def split_bulk(turn, by_id):
     """Splits a turn that carries several [ID] tags (one bulk message) into one sub-turn per scenario by the order of tool calls:
     a scenario owns the tools from its first matching command up to the next located scenario's first command.
+    Its answer is the text after its first command up to the next scenario's; with no such text, the closing summary of
+    the whole turn (so a lead-in before the first command is the first scenario's answer only when it is the turn's last text).
     Scenarios that cannot be located (no command regex or no match) get the whole turn, marked split=False."""
     tags = [x for x in turn["tags"] if x in by_id]
     cmds = bash_commands(turn)
-    starts, pos = {}, 0
+    starts, pos, prev = {}, 0, None
     for sid in tags:
-        i = locate(by_id[sid], cmds, pos)
-        if i is not None:
-            starts[sid] = i
-            pos = i + 1
+        found = locate(by_id[sid], cmds, pos, prev)
+        if found is not None:
+            starts[sid] = found[0]
+            pos, prev = found[1] + 1, by_id[sid].get("commands")
     located = [sid for sid in tags if sid in starts]
     out = {}
     for sid in tags:
@@ -179,11 +241,12 @@ def split_bulk(turn, by_id):
         k = located.index(sid)
         lo = starts[sid]
         hi = starts[located[k + 1]] if k + 1 < len(located) else len(turn["tools"])
-        first = k == 0
-        idx = [j for j, (_, p) in enumerate(turn["text_at"]) if (lo < p <= hi) or (first and p <= lo)]
+        idx = [j for j, (_, p) in enumerate(turn["text_at"]) if lo < p <= hi]
         texts, text_at = [turn["texts"][j] for j in idx], [turn["text_at"][j] for j in idx]
-        if not texts and turn["texts"]:                 # no own text: the closing summary of the whole turn
+        if not texts and turn["texts"]:                 # no own text: the closing summary of the whole turn (a lead-in
+                                                        # before the first command counts only when it is the turn's last text)
             texts, text_at = [final_answer(turn)], [(turn["text_at"][-1][0], len(turn["tools"]))]
+        text_at = [(m, p - lo) for m, p in text_at]     # tool positions relative to this sub-turn's tools
         out[sid] = dict(sub, split=True, tools=turn["tools"][lo:hi], texts=texts, text_at=text_at, start=None, end=None)
     return out
 
@@ -204,7 +267,7 @@ def last_json(output):
 def grade_turn(sc, turn, rules):
     """Returns a list of (check name, ok, detail) for one scenario on one turn."""
     cmds = [c for _, c in bash_commands(turn)]
-    answer = final_answer(turn)
+    answer = final_answer(turn, sc)
     out = []
     for rx in sc.get("commands", []):
         hit = any(re.search(rx, c, re.I) for c in cmds)
@@ -221,6 +284,9 @@ def grade_turn(sc, turn, rules):
     if sc.get("answer_any"):
         hit = any(re.search(rx, answer, re.I) for rx in sc["answer_any"])
         out.append(("답변: " + " 또는 ".join(sc["answer_any"]), hit, "" if hit else "답변에 없음"))
+    for rx in sc.get("answer_none", []):
+        bad = re.search(rx, answer, re.I | re.M)
+        out.append((f"답변에 없어야 함: {rx}", not bad, bad.group(0)[:100] if bad else ""))
     for rx in sc.get("forbid", []):
         bad = [c for c in cmds if re.search(rx, c, re.I)]
         out.append((f"금지 명령: {rx}", not bad, "; ".join(bad)[:300]))
@@ -230,21 +296,34 @@ def grade_turn(sc, turn, rules):
         if rid in allow:
             continue
         bad = []
-        if rule.get("command"):
-            bad += [c for c in cmds if re.search(rule["command"], c, re.I | re.M)]
+        if rule.get("command"):                        # one regex or a list of them (any match is a violation)
+            rx = rule["command"] if isinstance(rule["command"], str) else "|".join(f"(?:{r})" for r in rule["command"])
+            bad += [c for c in cmds if re.search(rx, c, re.I | re.M)]
         if rule.get("script_allow"):
             bad += [c for c in cmds if any(not re.fullmatch(rule["script_allow"], m.group(1).strip("\"'"), re.I)
                                            for m in PY_SCRIPT.finditer(c)) and c not in bad]
         if rule.get("read"):
             bad += [t["path"] for t in turn["tools"] if t["tool"] == "read" and re.search(rule["read"], t["path"], re.I)]
-        if rule.get("write"):
-            bad += [t["path"] for t in turn["tools"] if t["tool"] == "write" and re.search(rule["write"], t["path"], re.I)]
-        if rule.get("search"):                         # OpenCode grep/glob tools: pattern, path, include
+        if rule.get("write"):                          # OpenCode write/edit/multiedit tools (filePath) and patch (paths in the patch text)
             for t in turn["tools"]:
+                if t["tool"] in WRITE_TOOLS:
+                    paths = [t["path"]] if t["path"] else PATCH_FILE.findall(" ".join(str(v) for v in t["input"].values()))
+                    bad += [p for p in paths if re.search(rule["write"], p.strip(), re.I)]
+        if rule.get("search"):                         # OpenCode grep: where it looks (path, include; not the search text)
+            for t in turn["tools"]:                    # glob only lists file names: its path/pattern must match rule["glob"]
                 if t["tool"] in ("grep", "glob"):
-                    what = " ".join(str(v) for v in t["input"].values())
-                    if re.search(rule["search"], what, re.I):
-                        bad.append(f"{t['tool']} {what}")
+                    inp = t["input"]
+                    if t["tool"] == "glob":
+                        where, rx = [str(inp.get(k) or "") for k in ("path", "pattern")], rule.get("glob", rule["search"])
+                    else:
+                        where, rx = [str(inp.get(k) or "") for k in ("path", "include")], rule["search"]
+                        if (re.search(r"\.md$", str(inp.get("include") or "").strip(), re.I)   # *.md, SKILL.md: documents only
+                                and not re.search(r"\.py\b", str(inp.get("path") or ""), re.I)):  # unless path is a .py file
+                            continue
+                    if any(re.search(r"SKILL\.md$", w, re.I) for w in where):
+                        continue
+                    if any(re.search(rx, w, re.I) for w in where):
+                        bad.append(f"{t['tool']} " + " ".join(f"{k}={v}" for k, v in inp.items()))
         if rule.get("max_repeat"):
             bad += [f"{n}회: {c}" for c, n in Counter(re.sub(r"\s+", " ", c).strip() for c in cmds).items() if n > rule["max_repeat"]]
         if rid == "answer_clean":
@@ -264,7 +343,7 @@ def judge(sc, turn, rubric, model):
     tools = "\n".join(f"$ {t['command'] or t['tool'] + ' ' + t['path']}\n{str(t['output'])[-1500:]}" for t in turn["tools"])[-6000:]
     prompt = ("너는 업무 도우미 AI의 답변을 채점하는 평가자다.\n"
               f"[채점 기준]\n{rubric}\n\n[사용자 요청]\n{chr(10).join(turn['user'])}\n\n"
-              f"[도우미가 실행한 명령과 결과]\n{tools or '(없음)'}\n\n[도우미의 최종 답변]\n{final_answer(turn)[-3000:]}\n\n"
+              f"[도우미가 실행한 명령과 결과]\n{tools or '(없음)'}\n\n[도우미의 최종 답변]\n{final_answer(turn, sc)[-3000:]}\n\n"
               "기준에 맞으면 5, 전혀 맞지 않으면 1이다. 아래 형식으로 두 줄만 쓴다.\n점수: <1~5>\n이유: <한 문장>\n")
     body = json.dumps({"model": model, "prompt": prompt, "max_tokens": 200, "temperature": 0}).encode("utf-8")
     req = urllib.request.Request(base + "/completions", data=body, headers={"Content-Type": "application/json"})
@@ -286,6 +365,7 @@ def grade(paths, label, use_judge, model):
     found, meta = {}, []
     for p in paths:
         info, turns = read_turns(p)
+        check_mojibake(p, turns, by_id)
         meta.append(f"{os.path.basename(p)} (모델 {info.get('model', {}).get('id', '?')}, OpenCode {info.get('version', '?')})")
         for t in turns:
             tags = [x for x in t["tags"] if x in by_id]
@@ -302,11 +382,14 @@ def grade(paths, label, use_judge, model):
             continue
         turn = found[sid][-1]                            # graded on the last time the request was sent
         checks = grade_turn(sc, turn, rules)
-        fails = [f"{n} ({d})" if d else n for n, ok, d in checks if not ok]
+        ref = bool(sc.get("answer_reference"))            # answer regexes are a reference verdict only (free-text answers)
+        hard = [f"{n} ({d})" if d else n for n, ok, d in checks if not ok and not (ref and is_answer_check(n))]
+        soft = [f"참고 {n} ({d})" if d else f"참고 {n}" for n, ok, d in checks if not ok and ref and is_answer_check(n)]
         note = ""
         if turn.get("bulk"):
             note = "참고: 한 번에 보낸 요청, " + ("명령 순서로 나눠 채점" if turn.get("split") else "명령으로 나눌 수 없어 대화 전체로 채점")
-        row = {"id": sid, "결과": "통과" if not fails else "실패", "실패": " | ".join(fails), "명령수": len(turn["tools"]),
+        result = "실패" if hard else (("실패(참고)" if soft else "통과(참고)") if ref else "통과")
+        row = {"id": sid, "결과": result, "실패": " | ".join(hard + soft), "명령수": len(turn["tools"]),
                "초": round((turn["end"] - turn["start"]) / 1000) if turn["start"] and turn["end"] else None,
                "보낸횟수": len(found[sid]), "같이 보낸 요청": ",".join(turn.get("shared", [])), "참고": note}
         if use_judge:
@@ -314,6 +397,11 @@ def grade(paths, label, use_judge, model):
         rows.append(row)
         detail.append((sid, sc, turn, checks))
     return meta, rows, detail
+
+
+def is_answer_check(name):
+    """answer_all/answer_any/answer_none checks: only these become reference verdicts in answer_reference scenarios."""
+    return name.startswith(("답변: ", "답변에 없어야 함: "))
 
 
 def safe_label(label):
@@ -326,8 +414,9 @@ def write_report(label, meta, rows, detail):
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = os.path.join(HERE, f"grade_{label}_{stamp}")
     graded = [r for r in rows if r["결과"] != "없음"]
-    npass = sum(r["결과"] == "통과" for r in graded)
+    npass = sum(r["결과"] in ("통과", "통과(참고)") for r in graded)
     nbulk = sum(bool(r.get("참고")) for r in graded)
+    refs = [r for r in graded if r["결과"].endswith("(참고)")]
     scores = [r["점수"] for r in graded if isinstance(r.get("점수"), int)]
     lines = [f"# OpenCode 종합 테스트 채점 ({label})", "", f"- 채점 시각: {datetime.now():%Y-%m-%d %H:%M}"]
     lines += [f"- 대화 파일: {m}" for m in meta]
@@ -335,28 +424,38 @@ def write_report(label, meta, rows, detail):
     if nbulk:
         lines.append(f"- 한 번에 보낸 요청 {nbulk}건은 결과에 '(참고)'를 붙였습니다. 요청이 한 대화 턴에 섞여 있어 "
                      "명령 순서로 나눠 채점했으므로 하나씩 보낸 결과만큼 정확하지 않습니다.")
+    if refs:
+        lines.append("- 답변 판정이 참고인 요청: " + ", ".join(
+            f"{r['id']} {r['결과']}" + (f" (채점 LLM {r['점수']}점)" if isinstance(r.get("점수"), int) else "") for r in refs)
+            + ". 자유 문장 답이라 정규식 판정은 참고이며 통과 수에는 정규식 판정대로 넣었습니다. "
+            "최종 판정은 --judge 점수나 사람이 아래 '최종 답변'을 읽고 정하세요 (명령·금지 규칙 위반은 그대로 실패).")
     if scores:
         lines.append(f"- 채점 LLM 평균 점수: {sum(scores) / len(scores):.2f} / 5 ({len(scores)}건, 참고용)")
     has_judge = any("점수" in r for r in rows)
     lines += ["", "| 요청 | 결과 | 명령 수 | 걸린 초 | 실패 항목 |" + (" 점수 |" if has_judge else ""),
               "|---|---|---|---|---|" + ("---|" if has_judge else "")]
     for r in rows:
-        lines.append(f"| {r['id']} | {r['결과']}{'(참고)' if r.get('참고') else ''} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {r['실패'] or ''} |"
+        cell = r["결과"] + ("(참고)" if r.get("참고") and not r["결과"].endswith("(참고)") else "")
+        if r["결과"].endswith("(참고)") and isinstance(r.get("점수"), int):
+            cell += f" {r['점수']}점"
+        lines.append(f"| {r['id']} | {cell} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {(r['실패'] or '').replace('|', chr(92) + '|')} |"
                      + (f" {r.get('점수') if r.get('점수') is not None else ''} |" if has_judge else ""))
     lines += ["", "## 요청별 기록", ""]
     for sid, sc, turn, checks in detail:
         lines += [f"### {sid}", "", "요청: " + " / ".join(u.strip() for u in turn["user"])[:400], ""]
         if turn.get("bulk"):
             lines += [next(r for r in rows if r["id"] == sid)["참고"], ""]
+        ref = bool(sc.get("answer_reference"))
         for n, ok, d in checks:
-            lines.append(f"- [{'OK' if ok else 'FAIL'}] {n}" + (f": {d}" if d and not ok else ""))
+            tag = ("OK" if ok else "FAIL") + ("(참고)" if ref and is_answer_check(n) else "")
+            lines.append(f"- [{tag}] {n}" + (f": {d}" if d and not ok else ""))
         lines += ["", "명령:"]
         for t in turn["tools"]:
             what = ENC_PREFIX.sub("", t["command"]) or f"{t['tool']} {t['path']}".strip()
             payload = last_json(t["output"]) if t["tool"] == "bash" else None
             res = f" -> {payload.get('status')} / {str(payload.get('agent_directive', ''))[:60]}" if payload else ""
             lines.append(f"- `{what[:300]}`{res}")
-        answer = final_answer(turn).strip() or "(답변 없음)"
+        answer = final_answer(turn, sc).strip() or "(답변 없음)"
         lines += ["", "최종 답변:", "", "> " + answer[:1500].replace("\n", "\n> "), ""]
         row = next(r for r in rows if r["id"] == sid)
         if row.get("채점 이유"):
@@ -395,9 +494,10 @@ def make_pack(test_dir):
              "요청이 한 턴에 섞이므로 채점은 명령 순서로 나눈 참고 결과입니다.",
              "   - 묶음은 S -> A -> M -> P -> R -> X 순서입니다. P와 R은 A에서 만든 모델을 씁니다.",
              "3. 끝나면 대화를 JSON으로 내보냅니다. PowerShell에서 (세션ID는 OpenCode 화면이나 `opencode session list`에서 확인):", "",
-             "```powershell", "opencode export <세션ID> | Out-File -Encoding utf8 chat.json", "```", "",
-             "   OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다. "
-             "`> chat.json`으로 저장한 파일(UTF-16)도 채점기가 읽습니다.",
+             "```powershell", EXPORT_CMD, "```", "",
+             "   cmd의 `>`는 opencode가 쓴 UTF-8을 그대로 저장합니다. PowerShell의 `| Out-File`이나 `>`로 저장하면 "
+             "한글이 깨지고 채점기가 [ERROR]로 멈춥니다.",
+             "   OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다.",
              "4. `C:\\CLI-dev`에서 채점합니다:", "",
              "```powershell", "python grade_opencode.py --export \"<내보낸 대화.json>\" --label 회사PC", "```", "",
              "   여러 대화로 나눠 했으면 `--export a.json b.json`처럼 함께 넣습니다.",

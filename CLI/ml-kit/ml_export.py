@@ -21,7 +21,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
-    setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric, load_data_file,
+    setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
     VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs,
 )
@@ -300,8 +300,17 @@ def _nice_txt(v: float, span: float) -> str:
     return f"{float(v):.{min(dec, 6)}f}"
 
 
+def target_labels(targets: List[str]) -> Dict[str, str]:
+    """Each target's short name for headers, sheet names and notes: the name without unit ('수율' for '수율(%)'),
+    or the full name when another target has the same name without unit ('수율(1차)', '수율(최종)')."""
+    count: Dict[str, int] = {}
+    for t in targets:
+        count[strip_unit(t)] = count.get(strip_unit(t), 0) + 1
+    return {t: (str(t) if count[strip_unit(t)] > 1 else strip_unit(t)) for t in targets}
+
+
 def _sheet_name(prefix: str, name: str, used: set) -> str:
-    base = re.sub(r"[\\/\?\*\[\]:']", "_", f"{prefix}{strip_unit(name)}")[:28]
+    base = re.sub(r"[\\/\?\*\[\]:']", "_", f"{prefix}{name}")[:28]
     taken = {u.lower() for u in used}           # Excel compares sheet names without case
     out, i = base, 2
     while out.lower() in taken:
@@ -358,8 +367,9 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     batch = wb.create_sheet("일괄계산")
     howto = wb.create_sheet("사용법")
     used = {"계산기", "일괄계산", "사용법", "정확도", "정보"}
+    short = target_labels([p["target"] for p in plans])   # '수율(1차)' / '수율(최종)': full names, never '수율' twice
     for p in plans:
-        p["sheet"] = _sheet_name("표_", p["target"], used)
+        p["sheet"] = _sheet_name("표_", short[p["target"]], used)
         p["ws"] = wb.create_sheet(p["sheet"])
         p["ws"].sheet_state = "veryHidden"   # 2.9.3: the grid is not shown (not even in "unhide"); formulas still read it
     acc = wb.create_sheet("정확도")
@@ -386,7 +396,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         ws, tab, cand = p["ws"], p["table"], p["cand"]
         k, n = len(cand["inputs"]), tab["n"]
         heads = [_label(c)[0] + (f" ({_label(c)[1]})" if _label(c)[1] else "") for c in cand["inputs"]]
-        heads += [f"예측 {strip_unit(p['target'])}", "실측까지 거리"]
+        heads += [f"예측 {short[p['target']]}", "실측까지 거리"]
         for j, h in enumerate(heads, 1):
             style(ws.cell(row=1, column=j, value=h), bold=True, fill=HEAD, align="center")
         G = tab["grid"].to_numpy(dtype=float)
@@ -489,6 +499,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     for ti, p in enumerate(plans):
         row = r2 + 1 + ti
         name, unit = _label(p["target"])
+        name = name if short[p["target"]] == strip_unit(p["target"]) else short[p["target"]]
         own = [x_refs[c] for c in p["cand"]["inputs"]]
         pf, df_, nxt = interp_cells(calc, p, x_refs, row, helper_col)
         helper_col_end = nxt
@@ -508,7 +519,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
             calc.column_dimensions[_col(c)].width = 9
             calc.cell(row=row, column=c).font = Font(name=FONT, size=8, color="9CA3AF")
     note_row = r2 + len(plans) + 2
-    agree_lines = [f"- {_label(p['target'])[0]}: {agreement_text(p['table']['agreement'])}" for p in plans]
+    agree_lines = [f"- {short[p['target']]}: {agreement_text(p['table']['agreement'])}" for p in plans]
     calc.merge_cells(f"B{note_row}:F{note_row + 3 + len(plans)}")
     style(calc[f"B{note_row}"], size=9, color="374151", border=False)
     calc[f"B{note_row}"].alignment = Alignment(wrap_text=True, vertical="top")
@@ -535,7 +546,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         col += 1
     res_cols = []
     for p in plans:
-        tn = strip_unit(p["target"])
+        tn = short[p["target"]]
         for h in (f"예측 {tn}", f"{tn} 하한(90%)", f"{tn} 상한(90%)", f"{tn} 판단"):
             style(batch.cell(row=2, column=col, value=h), bold=True, fill=HEAD, align="center")
             batch.column_dimensions[_col(col)].width = 16
@@ -771,11 +782,13 @@ def _names_in(names: List[str], inputs: List[str], what: str) -> List[str]:
 
 
 def _check_known(names: List[str], all_inputs: Dict[str, List[str]], what: str) -> None:
-    """A name no target has is an input error (with the usual [추천] of resolve_column_names)."""
+    """A name no target has is an input error (with the [후보] of resolve_column_names; the other names of the same
+    option are never listed: '압룍' next to '압력' in --keep "압력,압룍")."""
     union = list(dict.fromkeys(c for ins in all_inputs.values() for c in ins))
     for nm in names:
         if not any(_names_in([nm], ins, what) for ins in all_inputs.values()):
-            resolve_column_names([nm], union, what)       # raises with a suggestion
+            # raises with a suggestion, never an input another given name already is ('압룍' next to '압력')
+            resolve_column_names([nm], union, what, exclude=known_columns([n for n in names if n != nm], union))
             raise InputError(f"{what} '{nm}'은(는) 어느 타겟의 입력도 아닙니다. [후보] {', '.join(union[:10])}")
 
 
@@ -797,6 +810,17 @@ def parse_inputs_spec(text: Optional[str], targets: List[str], all_inputs: Dict[
     names = [s.strip() for s in text.split(",") if s.strip()]
     _check_known(names, all_inputs, what)
     return {t: got for t in targets if (got := _names_in(names, all_inputs[t], what))}
+
+
+SPEC_CHARS = ",;="     # separators of --inputs: a target or input name with one of them cannot be written there
+
+
+def spec_safe(choice: Dict[str, List[str]], single: bool = False) -> bool:
+    """True when every name written in --inputs can be written there: per target ('<타겟>=a,b;...') no ',', ';' or
+    '=' in a target or input name; one target ('a,b', no target name) only the input names, without ',' or '='."""
+    if single:
+        return not any(ch in name for v in choice.values() for name in v for ch in ",=")
+    return not any(ch in name for t, v in choice.items() for name in [t] + list(v) for ch in SPEC_CHARS)
 
 
 def inputs_arg(choice: Dict[str, List[str]], single: bool) -> str:
@@ -821,6 +845,8 @@ def execute_export(args) -> Dict[str, Any]:
         if auto:
             warnings.append(f"--inputs의 입력이 없는 타겟 {auto}은(는) 입력을 자동으로 골랐습니다")
     plans = []
+    over: Dict[str, Dict[str, Any]] = {}     # --inputs over MAX_INPUTS: target -> best candidate with <= MAX_INPUTS
+    over_n: Dict[str, int] = {}
     for target in vinfo["targets"]:
         inputs, evals = target_inputs[target]
         missing = [c for c in inputs + [target] if c not in data_all.columns]
@@ -846,23 +872,28 @@ def execute_export(args) -> Dict[str, Any]:
         if target in spec:
             chosen_inputs = [c for c in spec[target] if c not in const]
             if not chosen_inputs:
-                raise InputError(f"'{target}': --inputs의 입력이 모두 값이 하나뿐이라 표를 만들 수 없습니다. [추천] {','.join(usable[:MAX_INPUTS])}")
+                # the user chose these inputs: another set is the user's choice too ([후보], never an automatic retry
+                # that would also drop the --inputs of the other targets)
+                raise InputError(f"'{target}': --inputs의 입력 {spec[target]}이(가) 모두 학습 데이터에서 값이 하나뿐이라 표를 "
+                                 f"만들 수 없습니다. 값이 변하는 입력: [후보] {', '.join(usable)}. 어느 입력으로 만들지 사용자에게 "
+                                 f"물으십시오 (--inputs 없이 실행하면 입력을 자동으로 고릅니다).")
             missing_keep = [k for k in keep if k not in chosen_inputs]
             if missing_keep:
                 raise InputError(f"--inputs에 --keep 입력 {missing_keep}이(가) 빠져 있습니다.")
             if len(chosen_inputs) > MAX_INPUTS:
                 progress(f"'{target}': --inputs가 {len(chosen_inputs)}개라 {MAX_INPUTS}개 이하 추천 안을 찾는 중")
                 cands = search(data, target, chosen_inputs, keep, evals, inputs, stop_at=MAX_INPUTS)
-                best_small = recommend([c for c in cands if len(c["inputs"]) <= MAX_INPUTS])
-                rec = (",".join(best_small["inputs"]) if len(vinfo["targets"]) == 1
-                       else f"{target}=" + ",".join(best_small["inputs"]))
-                raise InputError(f"'{target}': --inputs가 {len(chosen_inputs)}개라 성능예측표 상한 {MAX_INPUTS}개를 넘습니다 "
-                                 f"(입력이 많으면 표와 수식이 엑셀 한도를 넘음). 입력을 줄여 다시 학습한 안 (검증 R² "
-                                 f"{best_small['val_r2']:.4f}): [추천] {rec}")
+                over[target] = recommend([c for c in cands if len(c["inputs"]) <= MAX_INPUTS])
+                over_n[target] = len(chosen_inputs)
+                continue          # every target over the limit is collected first: one [추천] for all of them
+            if over:
+                continue          # an error follows anyway: skip the slow work
             progress(f"'{target}': 입력 {len(chosen_inputs)}개로 학습 (최적화 없음)")
             cands = [fit_subset(data, target, chosen_inputs, evals, inputs)]
             cand, reason = cands[0], "지정한 입력 (--inputs)"
         else:
+            if over:
+                continue
             cands = search(data, target, usable, keep, evals, inputs)
             eligible = [c for c in cands if len(c["inputs"]) <= MAX_INPUTS]
             cand = recommend(eligible)
@@ -886,6 +917,17 @@ def execute_export(args) -> Dict[str, Any]:
                             f"보간 오차 {cand['interp_rmse']} (모델 RMSE {_sig(cand['rmse'])})")
         plans.append({"target": target, "cand": cand, "cands": cands, "table": cand["table"], "all_inputs": inputs,
                       "reason": reason, "keep": keep, "data": data})
+
+    if over:
+        # the suggestion keeps the --inputs of every other target, so running it does not change them
+        choice = {**spec, **{t: c["inputs"] for t, c in over.items()}}
+        what = ", ".join(f"'{t}' {over_n[t]}개 -> {len(c['inputs'])}개 (검증 R² {c['val_r2']:.4f})" for t, c in over.items())
+        head = (f"--inputs가 성능예측표 상한 {MAX_INPUTS}개를 넘습니다 (입력이 많으면 표와 수식이 엑셀 한도를 넘음). "
+                f"입력을 줄여 다시 학습한 안: {what}.")
+        if not spec_safe(choice, len(vinfo["targets"]) == 1):
+            raise InputError(f"{head} 줄인 입력: {choice}. 타겟이나 입력 이름에 ',' ';' '='가 있어 --inputs로 쓸 수 없습니다. "
+                             f"--inputs 없이 실행하면 입력을 자동으로 고릅니다 (--keep으로 꼭 넣을 입력 지정).")
+        raise InputError(f"{head} [추천] {inputs_arg(choice, len(vinfo['targets']) == 1)}")
 
     # retrained models and the candidate table next to the version (never inside the version files)
     exp_dir = os.path.join(vinfo["dir"], "export")
@@ -944,6 +986,8 @@ def execute_export(args) -> Dict[str, Any]:
         if len(x["inputs"]) > MAX_INPUTS:
             return None
         choice = {q["target"]: (x["inputs"] if q is p else q["cand"]["inputs"]) for q in plans}
+        if not spec_safe(choice, single):
+            return None   # a name with ',', ';' or '=' cannot be written in --inputs: no command rather than a broken one
         return (f"python {quote_arg(os.path.join(here, 'ml_export.py'))} -m {quote_arg(vinfo['dir'])}"
                 + (f" -y {quote_arg(args.targets)}" if args.targets else "")
                 + f" --inputs {quote_arg(inputs_arg(choice, single))} --title {quote_arg(title)}")
@@ -958,7 +1002,8 @@ def execute_export(args) -> Dict[str, Any]:
             cands_out.append({"count": len(x["inputs"]), "inputs": x["inputs"], "val_r2": round(x["val_r2"], 4), "rmse": _sig(x["rmse"]),
                               "table_rows": x.get("rows"), "interp_rmse": x.get("interp_rmse"), "total_rmse": x.get("total_rmse"),
                               **({"command": cmd} if cmd else {}),
-                              **({"note": f"입력이 {MAX_INPUTS}개를 넘어 성능예측표로 만들 수 없음"} if len(x["inputs"]) > MAX_INPUTS else {})})
+                              **({"note": f"입력이 {MAX_INPUTS}개를 넘어 성능예측표로 만들 수 없음"} if len(x["inputs"]) > MAX_INPUTS else
+                                 {"note": "이름에 ',' ';' '='가 있어 --inputs 명령을 만들 수 없음"} if x is not c and not cmd else {})})
             if cmd:
                 next_commands.append({"purpose": f"'{p['target']}' 입력 {len(x['inputs'])}개 안으로 다시 만들기 (검증 R² {round(x['val_r2'], 4)}"
                                                  + (", 다른 타겟은 지금 입력 유지)" if not single else ")"),

@@ -67,7 +67,7 @@ def test_predict_with_categories_dates_and_warnings(mixed):
     warn = run_tool("ml_predict.py", "-m", vdir, "-i", "일시=2027-01-01 10:00,라인=Z라인,반응온도=")
     assert warn["unseen_category_warning"] is True and "Z라인" in warn["unseen_category_warnings"][0]
     assert warn["missing_input_counts"] == {"반응온도(°C)": 1}
-    assert any("학습 기간" in w for w in warn["drift_warnings"])
+    assert any("학습 기간" in w for w in warn["extrapolation_warnings"])
 
 
 def test_predict_standalone_with_new_schema(mixed, tmp_path):
@@ -161,7 +161,7 @@ def test_positive_class_validation(tmp_path):
     assert "이진 분류" in bad["message"]
     bad2 = run_fail("ml_train.py", "-f", data, "-x", "반응온도,촉매비율", "-y", "불량여부",
                     "--task", "classification", "--positive-class", "예")
-    assert "[추천]" in bad2["message"]
+    assert "[후보]" in bad2["message"] and "[추천]" not in bad2["message"]     # 2.9.32: [추천] ['...'] -> [후보]
 
 
 def test_run_lock_blocks_concurrent_training(tmp_path):

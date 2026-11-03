@@ -23,13 +23,14 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.10"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.32"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
 # 결과 길이 기본 상한 (경량 LLM 컨텍스트 보호)
 DEFAULT_MAX_ROWS = 200
 DEFAULT_MAX_CHARS = 8000
+MAX_CELL_CHARS = 500        # JSON에 담는 셀·찾은 값 하나의 글자 상한 (전체는 --save 파일)
 # 작업 폴더 파일 보관 기간 (일)
 WORK_RETENTION_DAYS = 7
 # 오류 로그가 이보다 커지면 errors.old.txt로 넘기고 새로 시작 (1세대만 보관)
@@ -77,14 +78,21 @@ def debug(message: str) -> None:
 # 2. 응답 계약
 # ==============================================================================
 
+# 오류 로그 message에서 문서에서 가져온 글(칸 값, 제목, 노트, 이름 목록 등)을 뺀 자리에 넣는 글
+DOC_OMITTED = "<문서 내용 생략>"
+
+
 class InputError(ValueError):
     """인자/대상/데이터 문제. 같은 인자로 재시도해도 소용없음 (STOP_RETRY).
-    candidates를 주면 '후보가 여러 개라 도구가 고를 수 없음'으로 응답합니다 (R8 [후보], 사용자가 고름)."""
+    candidates를 주면 '후보가 여러 개라 도구가 고를 수 없음'으로 응답합니다 (R8 [후보], 사용자가 고름).
+    log_message: 오류 로그에 남길 message (문서에서 가져온 글을 뺀 글). message에 문서 글을 넣는 곳은 반드시 줍니다.
+    없으면 message를 쓰고, 어느 쪽이든 write_error_log가 가린 인자 값과 LOG_CUT_MARKERS를 한 번 더 뺍니다."""
 
     def __init__(self, message: str = "", candidates: Optional[List[str]] = None, no_fallback: bool = False,
                  *, directive: Optional[str] = None, error_type: Optional[str] = None,
-                 fields: Optional[Dict[str, Any]] = None):
+                 fields: Optional[Dict[str, Any]] = None, log_message: Optional[str] = None):
         super().__init__(message)
+        self.log_message = log_message
         self.candidates = list(candidates or [])
         # 선택: STOP_RETRY: 뒤에 붙일 전용 안내, 전용 error_type, 응답에 더할 키 (예: next_commands)
         self.directive = directive
@@ -97,21 +105,29 @@ class InputError(ValueError):
 MAX_CANDIDATES = 10
 
 
-def ambiguous(message: str, candidates: Iterable[str]) -> InputError:
-    """후보가 둘 이상이라 고를 수 없음. message 끝에 '[후보] a, b, c'(최대 10개)를 붙입니다."""
+def _omitted_candidates(n: int) -> str:
+    return f" [후보 {n}개 생략]" if n else ""
+
+
+def ambiguous(message: str, candidates: Iterable[str], log_message: Optional[str] = None) -> InputError:
+    """후보가 둘 이상이라 고를 수 없음. message 끝에 '[후보] a, b, c'(최대 10개)를 붙입니다.
+    후보는 문서에서 가져온 글(제목, 단락, 시트·문서 이름)이라 오류 로그에는 개수만 남깁니다."""
     cands = [str(c) for c in candidates]
     shown = cands[:MAX_CANDIDATES]
     tail = f" [후보] {', '.join(shown)}" + (f" 외 {len(cands) - len(shown)}개" if len(cands) > len(shown) else "")
-    return InputError(message + tail, candidates=shown)
+    return InputError(message + tail, candidates=shown,
+                      log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
 
 
 class UserDecisionError(InputError):
     """도구가 대신 정하면 안 되는 일 (예: 없는 시트를 새로 만들지). 재시도하지 않고 사용자에게 묻게 합니다.
     message에는 사실만 적고, 할 일(directive)은 사용자 동의를 조건으로 적습니다. 경량 LLM이 message의 명령문을 그대로 따르기 때문."""
 
-    def __init__(self, message: str, directive: str, candidates: Optional[List[str]] = None):
+    def __init__(self, message: str, directive: str, candidates: Optional[List[str]] = None,
+                 log_message: Optional[str] = None):
         cands = [str(c) for c in (candidates or [])][:MAX_CANDIDATES]
-        super().__init__(message + (f" [후보] {', '.join(cands)}" if cands else ""), candidates=cands, no_fallback=True)
+        super().__init__(message + (f" [후보] {', '.join(cands)}" if cands else ""), candidates=cands, no_fallback=True,
+                         log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
         self.directive = directive
 
 
@@ -224,8 +240,9 @@ def _attach_recovered(payload: Dict[str, Any]) -> None:
         payload["recovered"] = list(RECOVERED)
 
 
-def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional[str]:
-    """저장한 파일을 형식에 맞게 다시 열어 봅니다 (R1). 문제가 없으면 None, 있으면 확인하지 못한 내용."""
+def check_saved_file(path: str, expected_rows: Optional[int] = None, delimiter: Optional[str] = None) -> Optional[str]:
+    """저장한 파일을 형식에 맞게 다시 열어 봅니다 (R1). 문제가 없으면 None, 있으면 확인하지 못한 내용.
+    delimiter: 이 도구가 쓴 CSV는 ","를 줌 (구분자 추측은 '| ' 같은 칸 때문에 다른 구분자로 읽어 행 수가 틀릴 수 있음)."""
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -245,11 +262,11 @@ def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional
         elif ext == ".docx":
             import docx
             docx.Document(path)
-        elif ext == ".pptx":
+        elif ext in (".pptx", ".pptm"):        # python-pptx는 매크로 포함 pptm도 엶 (docm은 python-docx가 열지 못함)
             import pptx
             pptx.Presentation(path)
         elif ext in (".csv", ".tsv"):
-            rows = [r for r in read_csv_rows(path) if any(str(v).strip() for v in r)]
+            rows = [r for r in read_csv_rows(path, delimiter) if any(str(v).strip() for v in r)]
             if expected_rows is not None and len(rows) != expected_rows:
                 return f"저장한 CSV의 행 수가 다름 (기대 {expected_rows}행, 읽은 {len(rows)}행)"
         elif ext in (".md", ".txt", ".json"):
@@ -268,9 +285,9 @@ def check_saved_file(path: str, expected_rows: Optional[int] = None) -> Optional
 
 
 def ok_file(tool: str, command: str, preview: str, path: str, directive: str,
-            expected_rows: Optional[int] = None, **fields: Any) -> Dict[str, Any]:
+            expected_rows: Optional[int] = None, delimiter: Optional[str] = None, **fields: Any) -> Dict[str, Any]:
     """저장한 파일 결과 (R1): 형식에 맞게 다시 열리면(CSV는 expected_rows를 주면 행 수까지) VERIFIED, 아니면 UNVERIFIED."""
-    problem = check_saved_file(path, expected_rows)
+    problem = check_saved_file(path, expected_rows, delimiter)
     if problem is None:
         return ok(tool, command, preview, directive, verified=True, **fields)
     return ok_unverified(tool, command, preview, [problem], **fields)
@@ -359,25 +376,48 @@ def error_log_path() -> str:
 # 오류 로그에 값을 남기지 않는 옵션 (본문·받는 사람·검색어 등 문서 내용과 개인정보). 경로와 그 밖의 인자는 그대로 남깁니다.
 REDACT_OPTIONS = {"--body", "--text", "--subject", "--to", "--cc", "--bcc", "--from", "--query", "--find",
                   "--replace", "--value", "--values", "--formula", "--header", "--title", "--cards", "--anchor",
-                  "--search", "--new-name"}
+                  "--search", "--new-name", "--map", "--section"}
+# 위 옵션의 짧은 이름 (모든 office-cli 파서에서 모음, 테스트로 확인): reader/outlook -q = --query
+REDACT_SHORT = {"-q": "--query"}
 # 도구마다 같은 이름이 내용이 아닌 옵션 (office.py transfer --from excel --to word, ppt.py slide --to 3)
 REDACT_KEEP = {"office": {"--from", "--to"}, "ppt": {"--to"}}
+# 도구마다 같은 이름이 내용인 옵션 (excel style --highlight '=완료:lightgreen'은 셀 값, word --highlight는 색 이름이라 남김)
+REDACT_EXTRA = {"excel": {"--highlight"}}
 
 
-_REDACTED = re.compile(r"^(?:--[\w-]+=)?<\d+자 생략>$")
+_REDACTED = re.compile(r"^(?:-{1,2}[\w-]+=)?<\d+자 생략>$")
+
+
+def _hidden_option(opt: str, hidden: set) -> bool:
+    """내용 옵션이면 True. 줄여 쓴 이름(--que)도 내용 옵션의 앞부분이면 가립니다
+    (파서는 줄임을 받지 않지만, 그 인자 오류도 오류 로그에 남으므로)."""
+    if opt in hidden:
+        return True
+    return len(opt) >= 3 and any(h.startswith(opt) for h in hidden)
 
 
 def redact_argv(argv: Sequence[Any], tool: str = "") -> List[str]:
     """내용 옵션의 값을 '<N자 생략>'으로 바꿉니다 (AGENTS.md: 오류 로그에 본문·개인정보를 남기지 않음).
-    '--opt 값', '--opt=값', 값이 여러 개인 옵션(--formula a b)을 모두 처리합니다."""
-    hidden = REDACT_OPTIONS - REDACT_KEEP.get(tool, set())
+    '--opt 값', '--opt=값', '-q 값', '-q값', 줄여 쓴 '--que 값', 값이 여러 개인 옵션(--formula a b)을 모두 처리합니다."""
+    hidden = (REDACT_OPTIONS | REDACT_EXTRA.get(tool, set())) - REDACT_KEEP.get(tool, set())
+    shorts = {k for k, v in REDACT_SHORT.items() if v in hidden}
     out: List[str] = []
     hiding = False
     for a in [str(x) for x in argv]:
         if a.startswith("--"):
             opt, eq, val = a.partition("=")
-            hiding = opt in hidden and not eq
-            out.append(f"{opt}=<{len(val)}자 생략>" if eq and opt in hidden else a)
+            secret = _hidden_option(opt, hidden)
+            hiding = secret and not eq
+            out.append(f"{opt}=<{len(val)}자 생략>" if eq and secret else a)
+            continue
+        short = a[:2]
+        if a.startswith("-") and not a.startswith("--") and short in shorts:
+            hiding = len(a) == 2
+            if len(a) > 2:                        # -q값, -q=값 (붙여 쓴 값)
+                val = a[3:] if a[2] == "=" else a[2:]
+                out.append(f"{short}=<{len(val)}자 생략>")
+            else:
+                out.append(a)
             continue
         if hiding and not (a.startswith("-") and len(a) == 2 and a[1].isalpha()):
             out.append(f"<{len(a)}자 생략>")
@@ -387,7 +427,102 @@ def redact_argv(argv: Sequence[Any], tool: str = "") -> List[str]:
     return out
 
 
-def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str, Any], trace: str = "") -> None:
+def hidden_values(argv: Sequence[Any], tool: str = "") -> List[str]:
+    """redact_argv가 가린 인자 값 (원래 글). redact_argv는 인자 하나에 결과 하나를 내므로 나란히 비교합니다."""
+    raw = [str(x) for x in argv]
+    values: List[str] = []
+    for a, r in zip(raw, redact_argv(raw, tool)):
+        if a == r:
+            continue
+        if _REDACTED.match(r) and "=" in r and r.index("=") < r.index("<"):
+            opt = r.partition("=")[0]
+            val = a[len(opt) + 1:] if a.startswith(opt + "=") else a[len(opt):]     # --opt=값, -q=값, -q값
+        else:
+            val = a
+        values.append(val)
+    return values
+
+
+# 오류 로그에서 잘라 내는 message 부분 (문서·통합 문서에서 가져온 후보 목록과 비슷한 글: 제목, 시트·차트 이름, 본문 일부).
+# 1차 방어는 오류를 만드는 곳의 log_message(InputError, UserDecisionError, ambiguous, not_found)이고, 이 표식은 빠뜨린 곳을 위한 대비입니다.
+# 이 표식부터 message 끝까지를 '<문서에서 가져온 후보·문구 N자 생략>'으로 바꿉니다. stdout JSON의 message는 그대로입니다.
+# 표식을 만드는 곳: ambiguous()·UserDecisionError의 '[후보]', not_found()의 '[추천]'·'사용 가능한 <종류>:'(종류에 공백 가능: '메일 폴더'),
+# word 앵커의 '비슷한 문구:', 대괄호를 뺀 '후보:'·'추천:'
+LOG_CUT_MARKERS = re.compile(r"\s*(?:\[후보\]|\[추천\]|후보:|추천:|비슷한 문구:|사용 가능한 [^:]{1,30}:)")
+# 가린 값이 이보다 길면 앞부분(이 길이 이상)만 남은 미리보기('긴 글...')도 가립니다
+LOG_PREFIX_MIN = 10
+# 이보다 짧은 가린 값(--value 1)은 따옴표로 둘러싸인 곳만 가립니다 ('Sheet1'의 1을 가리지 않게. 따옴표 없이 쓴 1~2자 값은 남음)
+LOG_SHORT_VALUE = 3
+_QUOTES = "'\"\u2018\u2019\u201c\u201d"
+
+
+def _hidden_spans(text: str, vals: Iterable[str]) -> List[Tuple[int, int]]:
+    """text에서 가린 값이 나온 구간. 긴 값은 LOG_PREFIX_MIN자 이상의 앞부분도, 짧은 값은 따옴표 안만."""
+    spans: List[Tuple[int, int]] = []
+    for v in vals:
+        if len(v) >= LOG_PREFIX_MIN:
+            head = v[:LOG_PREFIX_MIN]
+            i = text.find(head)
+            while i >= 0:
+                k = LOG_PREFIX_MIN
+                while k < len(v) and i + k < len(text) and text[i + k] == v[k]:
+                    k += 1
+                spans.append((i, i + k))
+                i = text.find(head, i + 1)
+        elif len(v) >= LOG_SHORT_VALUE:
+            spans += [(m.start(), m.end()) for m in re.finditer(re.escape(v), text)]
+        else:
+            spans += [(m.start(), m.end()) for m in re.finditer(re.escape(v), text)
+                      if m.start() > 0 and text[m.start() - 1] in _QUOTES and m.end() < len(text) and text[m.end()] in _QUOTES]
+    merged: List[Tuple[int, int]] = []
+    for x, y in sorted(spans):
+        if merged and x <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], y))
+        else:
+            merged.append((x, y))
+    return merged
+
+
+def mask_hidden_values(text: str, argv: Sequence[Any], tool: str = "") -> str:
+    """가린 인자 값을 text에서 redact_argv와 같은 '<N자 생략>'으로 바꿉니다. 오류 로그의 message와 traceback에 씁니다."""
+    vals = set()
+    for v in hidden_values(argv, tool):
+        vals.update(x for x in (v, v.strip(), unescape_newlines(v).strip()) if x)
+    out: List[str] = []
+    last = 0
+    for x, y in _hidden_spans(text, vals):      # 원래 글에서 구간을 한 번에 구함 (넣은 '<N자 생략>'을 다시 바꾸지 않게)
+        out += [text[last:x], f"<{y - x}자 생략>"]
+        last = y
+    return "".join(out) + text[last:]
+
+
+def log_message(message: Any, argv: Sequence[Any], tool: str = "") -> str:
+    """오류 로그에 남길 message: 가린 인자 값과 문서에서 가져온 후보·문구(LOG_CUT_MARKERS)를 뺀 글.
+    message에는 오류의 log_message(문서 글을 뺀 글)가 있으면 그것을 줍니다."""
+    try:
+        msg = mask_hidden_values("" if message is None else str(message), argv, tool)
+        m = LOG_CUT_MARKERS.search(msg)
+        if m:
+            msg = msg[:m.start()] + f" <문서에서 가져온 후보·문구 {len(msg) - m.start()}자 생략>"
+        return msg
+    except Exception:
+        return "<message 생략 (가리기 실패)>"
+
+
+def log_trace(trace: str, argv: Sequence[Any], tool: str = "") -> str:
+    """traceback의 가린 인자 값을 바꿉니다 (표식 자르기는 하지 않음: 코드 줄과 예외 종류는 남김)."""
+    try:
+        return mask_hidden_values(trace, argv, tool)
+    except Exception:
+        return "<traceback 생략 (가리기 실패)>"
+
+
+# 결과 dict(status: error)에 오류 로그용 message를 담는 키. run_cli가 stdout에 내기 전에 뺍니다.
+LOG_MESSAGE_KEY = "_log_message"
+
+
+def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str, Any], trace: str = "",
+                    log_msg: Optional[str] = None) -> None:
     """실패한 실행을 <데이터 폴더>/logs/errors.txt에 덧붙입니다 (사람과 개발 에이전트의 사후 분석용).
     기준 구현: archive/doc-classifier/_dc_runtime.py. 경로와 인자만 기록하고 문서 본문은 기록하지 않습니다.
     회전 실패와 기록 실패를 따로 감싸고, 어떤 오류도 삼킵니다 (stdout 1줄 JSON 계약을 깨면 안 됨)."""
@@ -407,15 +542,22 @@ def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str,
         lines = [f"===== {_dt.datetime.now().isoformat(timespec='seconds')} | {TOOL_NAME} {VERSION} | "
                  f"Python {platform.python_version()} | {platform.platform()}",
                  f"명령: {args}",
-                 f"결과: {payload.get('error_type')} | {payload.get('message')}"]
+                 f"결과: {payload.get('error_type')} | "
+                 f"{log_message(payload.get('message') if log_msg is None else log_msg, argv, tool)}"]
         if RECOVERY_ATTEMPTS:
             lines.append("복구 시도: " + "; ".join(RECOVERY_ATTEMPTS))
         if trace:
-            lines.append("traceback:\n" + trace.rstrip())
+            lines.append("traceback:\n" + log_trace(trace, argv, tool).rstrip())
         with open(path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n\n")
     except Exception:
         pass
+
+
+def _exc_log_message(exc: BaseException, payload: Dict[str, Any]) -> Optional[str]:
+    """예외의 log_message (문서 글을 뺀 글). 없으면 None (payload의 message를 씀)."""
+    lm = getattr(exc, "log_message", None)
+    return None if lm is None or payload.get("error_type") == "internal" else str(lm)
 
 
 def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> None:
@@ -439,11 +581,12 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
         payload = error_payload(e, tool, command)
         # traceback은 내부 오류(ERROR:)일 때만 남깁니다
         internal = str(payload.get("agent_directive", "")).startswith("ERROR:")
-        write_error_log(tool, None, payload, trace if internal else "")
+        write_error_log(tool, None, payload, trace if internal else "", log_msg=_exc_log_message(e, payload))
         emit_json(payload)
         sys.exit(1)
+    log_msg = result.pop(LOG_MESSAGE_KEY, None) if isinstance(result, dict) else None
     if result.get("status") != "ok":
-        write_error_log(tool, None, result)
+        write_error_log(tool, None, result, log_msg=log_msg)
     emit_json(result)
     sys.exit(0 if result.get("status") == "ok" else 1)
 
@@ -459,6 +602,12 @@ class JsonArgumentParser(argparse.ArgumentParser):
     """인자 오류를 텍스트 대신 JSON(exit 2)으로 응답하는 ArgumentParser. 서브파서에도 그대로 상속됩니다."""
 
     tool_name = ""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # 줄여 쓴 옵션(--que = --query)을 받지 않음: 지어낸 옵션이 다른 옵션으로 해석되는 일과,
+        # 오류 로그에서 내용 옵션을 가리지 못하는 일을 막음 (서브파서도 이 클래스로 만들어짐)
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
 
     def parse_args(self, args=None, namespace=None):  # type: ignore[override]
         # 최상위 파서만 parse_args를 부릅니다 (서브파서는 parse_known_args). 오류 로그에 남길 실제 인자를 기억합니다.
@@ -632,9 +781,26 @@ def resolve_input_path(path: str, kind: str = "입력 파일") -> str:
     raise not_found(kind, os.path.basename(raw), names, extra=f" (찾은 위치: {', '.join(candidates)})")
 
 
+_BAD_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
+
+
+def safe_filename(text: Any, limit: int = 0, default: str = "file") -> str:
+    """파일 이름에 쓸 수 없는 글자(\\ / : * ? \" < > |, 제어 문자)를 _로, 끝의 점·공백은 빼고,
+    Windows 예약 이름(CON, NUL, COM1 등)은 앞에 _를 붙입니다. limit>0이면 그 길이로 자릅니다.
+    (차트·시트 이름 '1/4분기 매출'이 기본 파일 이름이 되면 경로가 깨지던 문제)"""
+    name = _BAD_NAME_CHARS.sub("_", "" if text is None else str(text))
+    if limit > 0:
+        name = name[:limit]
+    name = name.strip().rstrip(". ")
+    if name.split(".")[0].strip().upper() in _RESERVED_NAMES:
+        name = "_" + name
+    return name or default
+
+
 def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwrite: bool = False) -> str:
     """출력 파일 경로를 정합니다.
-    - 생략하면 작업 폴더에 '<default_stem>_<시각><ext>'로 만듭니다.
+    - 생략하면 작업 폴더에 '<default_stem>_<시각><ext>'로 만듭니다 (default_stem의 쓸 수 없는 글자는 _로).
     - 파일명만 주면 data 폴더 아래에 만듭니다.
     - 확장자가 없거나 다르면 ext로 맞춥니다.
     - 그 파일이 이미 있으면 덮어쓰지 않고 시각을 붙인 새 이름으로 바꿉니다 (R4, recovered로 알림). overwrite=True면 그대로.
@@ -642,7 +808,14 @@ def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwr
     ext = ext if ext.startswith(".") else "." + ext
     if not path:
         cleanup_work_dir()
-        return os.path.join(get_work_dir(), f"{default_stem}_{timestamp()}{ext}")
+        # 기본 이름은 차트·시트·문서 이름에서 오므로 / ? : 같은 글자가 섞일 수 있음 -> 여기 한 곳에서 정리
+        auto = os.path.join(get_work_dir(), f"{safe_filename(default_stem, default='output')}_{timestamp()}{ext}")
+        if os.path.exists(auto) and not overwrite:
+            # 같은 초에 같은 이름으로 저장하면 앞 결과를 덮어쓰던 문제: 번호를 붙인 새 이름으로
+            alt = _timestamped(auto)
+            note_recovered(f"{os.path.basename(auto)} 이미 있음 (같은 초에 저장) -> {os.path.basename(alt)}로 저장")
+            auto = alt
+        return auto
     raw = os.path.expandvars(os.path.expanduser(str(path).strip().strip('"')))
     base, cur_ext = os.path.splitext(raw)
     if cur_ext.lower() != ext.lower():
@@ -697,9 +870,11 @@ def read_text_file(path: str) -> str:
     raise InputError(f"텍스트 파일 인코딩 인식 실패 (UTF-8/UTF-16/CP949 아님): {path}")
 
 
-def read_csv_rows(path: str) -> List[List[str]]:
-    """CSV/TSV를 2차원 문자열 리스트로 읽습니다 (구분자 자동 판별)."""
+def read_csv_rows(path: str, delimiter: Optional[str] = None) -> List[List[str]]:
+    """CSV/TSV를 2차원 문자열 리스트로 읽습니다 (delimiter를 주지 않으면 구분자 자동 판별)."""
     text = read_text_file(path)
+    if delimiter:
+        return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
     sample = text[:4096]
     delimiter = ","
     try:
@@ -708,6 +883,157 @@ def read_csv_rows(path: str) -> List[List[str]]:
         if "\t" in sample and "," not in sample:
             delimiter = "\t"
     return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+
+
+UNCOMPUTED_SHOW = 20       # 계산된 값이 없는 수식 칸을 결과에 담는 개수 상한
+_XLSX_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_XLSX_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_XLSX_F_TAG = re.compile(rb"<(?:\w+:)?f[\s>/]")
+_CELL_REF = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+)$")
+
+
+def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
+    m = _CELL_REF.match(ref or "")
+    if not m:
+        return None
+    col = 0
+    for ch in m.group(1).upper():
+        col = col * 26 + ord(ch) - 64
+    return int(m.group(2)), col
+
+
+def _full_calc_on_load(wb_root: Any) -> bool:
+    """workbook.xml의 <calcPr fullCalcOnLoad="1"|"true">: 엑셀이 열 때 모든 수식을 다시 계산하라는 표시.
+    xlsxwriter·openpyxl 같은 프로그램이 쓰며 파일의 <v>(예: 0)는 계산된 값이 아님. 엑셀은 저장할 때 이 표시를 지웁니다."""
+    calc = wb_root.find(_XLSX_MAIN + "calcPr")
+    return calc is not None and (calc.get("fullCalcOnLoad") or "").strip().lower() in ("1", "true")
+
+
+def xlsx_full_calc_on_load(path: str) -> bool:
+    """파일의 workbook.xml에 fullCalcOnLoad 표시가 있는지. 읽지 못하면 True (수식 칸 검사를 건너뛰지 않게)."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    try:
+        with zipfile.ZipFile(path) as z:
+            return _full_calc_on_load(ET.fromstring(z.read("xl/workbook.xml")))
+    except Exception:
+        return True
+
+
+def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
+                             area: Optional[Tuple[int, int, int, int]] = None,
+                             limit: int = UNCOMPUTED_SHOW) -> Dict[str, Any]:
+    """계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 한 번도 열지 않은 파일).
+    openpyxl data_only로 읽으면 이런 칸은 빈 칸(None)이라 값이 없는 것처럼 보입니다.
+    workbook.xml에 fullCalcOnLoad 표시가 있으면(xlsxwriter는 <v>0</v>을 씀) 모든 수식 칸을 계산되지 않은 칸으로 셉니다.
+    sheet: 이 시트만 (None이면 모든 시트), area: (시작 행, 시작 열, 끝 행, 끝 열) 안의 칸만 (끝 행 뒤는 해석하지 않음).
+    수식 태그(<f>)가 없는 시트는 XML을 해석하지 않습니다. 엑셀에서 저장한 파일은 값이 있어 0개입니다
+    (빈 글 결과(t="str")는 계산된 값).
+    반환: {"count": 전체 수, "cells": ["시트!A3", ...] (앞 limit개), "sheets": {시트: 수},
+    "bounds": [시작 행, 시작 열, 끝 행, 끝 열] (센 칸 전체를 감싸는 범위, 0개면 없음), "full_calc_on_load": True (표시가 있을 때만)}.
+    읽지 못하면(MemoryError 포함) {"count": 0, "unknown": True, "error": 예외 이름}: 확인하지 못한 것이라 호출하는 쪽은 UNVERIFIED."""
+    import posixpath
+    import zipfile
+    import xml.etree.ElementTree as ET
+    result: Dict[str, Any] = {"count": 0, "cells": [], "sheets": {}}
+    bounds: List[int] = []
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            wb = ET.fromstring(z.read("xl/workbook.xml"))
+            full = _full_calc_on_load(wb)
+            if full:
+                result["full_calc_on_load"] = True
+            rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+            targets = {r.get("Id"): r.get("Target") or "" for r in rels}
+            for sh in wb.iter(_XLSX_MAIN + "sheet"):
+                title = sh.get("name") or ""
+                if sheet is not None and title != sheet:
+                    continue
+                target = targets.get(sh.get(_XLSX_REL + "id"), "")
+                part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
+                if part not in names:
+                    continue
+                data = z.read(part)
+                if not _XLSX_F_TAG.search(data):
+                    continue
+                n = 0
+                q = f"'{title}'" if re.search(r"[\s!']", title) else title
+                for _, el in ET.iterparse(io.BytesIO(data), events=("end",)):
+                    if el.tag == _XLSX_MAIN + "row":
+                        r = el.get("r") or ""
+                        el.clear()
+                        if area is not None and r.isdigit() and int(r) >= area[2]:
+                            break                   # 행은 번호 순: 범위 끝 행 뒤는 해석하지 않음
+                        continue
+                    if el.tag != _XLSX_MAIN + "c":
+                        continue
+                    if el.find(_XLSX_MAIN + "f") is not None and (full or el.get("t") not in ("str", "inlineStr")):
+                        v = el.find(_XLSX_MAIN + "v")
+                        ref = el.get("r") or ""
+                        rc = _cell_rc(ref)
+                        inside = area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
+                        if (full or v is None or not (v.text or "")) and inside:
+                            n += 1
+                            if len(result["cells"]) < limit:
+                                result["cells"].append(f"{q}!{ref}")
+                            if rc is not None:
+                                bounds = [rc[0], rc[1], rc[0], rc[1]] if not bounds else [
+                                    min(bounds[0], rc[0]), min(bounds[1], rc[1]), max(bounds[2], rc[0]), max(bounds[3], rc[1])]
+                    el.clear()
+                if n:
+                    result["count"] += n
+                    result["sheets"][title] = n
+    except Exception as e:                      # MemoryError 포함: 확인하지 못함 (0개로 보면 VERIFIED가 되어 버림)
+        debug(f"수식 값 확인 실패: {type(e).__name__}")
+        return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": type(e).__name__}
+    if bounds:
+        result["bounds"] = bounds
+    return result
+
+
+def uncomputed_found(info: Optional[Dict[str, Any]]) -> bool:
+    """알려야 할 결과인지: 계산되지 않은 수식 칸이 있거나 확인하지 못함(unknown)."""
+    return bool(info) and bool(info.get("count") or info.get("unknown"))
+
+
+def uncomputed_note(info: Dict[str, Any]) -> str:
+    """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 10개)."""
+    if info.get("unknown"):
+        return (f"수식 계산 여부를 확인하지 못함 (파일의 시트 XML을 읽지 못함: {info.get('error') or '알 수 없음'}). "
+                "수식 칸이 있으면 빈 칸이나 계산되지 않은 값으로 읽혔을 수 있으니 사용자에게 그대로 알리세요")
+    cells = ", ".join(info["cells"][:10]) + (" 등" if info["count"] > 10 else "")
+    if info.get("full_calc_on_load"):
+        return (f"수식 칸 {info['count']}개({cells})는 파일이 '열 때 다시 계산'(fullCalcOnLoad)으로 저장되어 있어 파일에 적힌 값"
+                "(빈 칸이나 0)이 계산된 값이 아님 (엑셀에서 연 적 없이 프로그램이 만든 파일). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "
+                "다시 실행하도록 알리세요")
+    return (f"수식 칸 {info['count']}개({cells})는 계산된 값이 파일에 저장되어 있지 않아 빈 칸으로 읽힘 "
+            "(엑셀에서 연 적 없이 프로그램이 만든 파일이라 값이 계산된 적이 없음). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "
+            "다시 실행하도록 알리세요")
+
+
+def uncomputed_fields(info: Dict[str, Any]) -> Dict[str, Any]:
+    """결과 JSON 키: uncomputed_formulas(앞 UNCOMPUTED_SHOW개), uncomputed_count, 잘렸으면 uncomputed_truncated.
+    확인하지 못했으면 uncomputed_check: "unknown"만."""
+    if info.get("unknown"):
+        return {"uncomputed_check": "unknown"}
+    out: Dict[str, Any] = {"uncomputed_formulas": list(info["cells"]), "uncomputed_count": info["count"]}
+    if info["count"] > len(info["cells"]):
+        out["uncomputed_truncated"] = True
+    return out
+
+
+_PAYLOAD_BASE = ("status", "tool", "command", "preview", "verified", "unverified", "agent_directive", "recovered")
+
+
+def with_uncomputed(payload: Dict[str, Any], info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """R1: 계산된 값이 없는 수식 칸을 빈 칸으로 읽은 성공 응답은 VERIFIED가 아님 -> UNVERIFIED로 바꾸고 칸 목록을 붙입니다."""
+    if not uncomputed_found(info) or payload.get("status") != "ok":
+        return payload
+    fields = {k: v for k, v in payload.items() if k not in _PAYLOAD_BASE}
+    fields.update(uncomputed_fields(info))
+    return ok_unverified(payload["tool"], payload["command"], payload["preview"],
+                         [uncomputed_note(info)] + list(payload.get("unverified") or []), **fields)
 
 
 def _transient_fs_error(e: OSError) -> bool:
@@ -826,12 +1152,19 @@ def _same_name_key(s: Any) -> str:
     return re.sub(r"[\s_\-]+", "", str(s)).casefold()
 
 
-def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False) -> InputError:
+def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False,
+              display: Optional[Callable[[str], str]] = None, log_name: Optional[str] = None,
+              log_extra: Optional[str] = None) -> InputError:
     """'찾을 수 없음' InputError (R8).
     - 표기만 다른(대소문자·공백·_-) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
     - 부분·유사 일치는 뜻이 다를 수 있어(2024 -> 2024_1분기, 견적서.pdf -> 견적서_구버전.pdf) [후보]: 사용자가 고릅니다.
     - vocab=True(도구가 정한 옵션 값: 색 이름, 테마 등): 오타로 보이는 가까운 값 하나도 [추천] (사용자 데이터가 아니라 뜻이 바뀌지 않음).
-    - 비슷한 것도 없으면 사용 가능한 이름 일부."""
+    - 비슷한 것도 없으면 사용 가능한 이름 일부.
+    display: 비교는 name·candidates(끝 이름)로 하고 message에 보일 때만 바꾸는 함수 (예: 메일 폴더 끝 이름 -> 전체 경로.
+    전체 경로로 비교하면 같은 상위 경로 때문에 관계없는 폴더가 모두 비슷하게 나옴).
+    log_name: 오류 로그 message에 name 대신 쓸 글 (예: 메일 계정 이름을 뺀 경로).
+    log_extra: 오류 로그 message에 extra 대신 쓸 글 (extra에 계정 이름·문서 글이 들어갈 때 반드시 줌)."""
+    show = display or (lambda c: c)
     cands = [str(c) for c in candidates]
     key = _same_name_key(name)
     same = [c for c in cands if key and _same_name_key(c) == key]
@@ -839,34 +1172,65 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
         close = difflib.get_close_matches(key, [_same_name_key(c) for c in cands], n=2, cutoff=0.75)
         if len(close) == 1:
             same = [c for c in cands if _same_name_key(c) == close[0]][:1]
+    head = f"{kind} '{show(name)}'을(를) 찾을 수 없습니다.{extra}"
+    masked = log_name is not None or log_extra is not None
+    log_head = head if not masked else (f"{kind} '{name if log_name is None else log_name}'을(를) 찾을 수 없습니다."
+                                        f"{extra if log_extra is None else log_extra}")
+    # 오류 로그에는 후보 이름(시트·문서·제목·메일 폴더·파일 이름 목록)을 남기지 않음 (log_message)
     if len(same) == 1:
-        return InputError(f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra} 표기만 다른 이름이 있습니다. [추천] {same[0]}")
+        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {show(same[0])}",
+                          log_message=f"{log_head} 표기만 다른 이름이 있습니다. [추천 생략]")
     hints = same or suggest(name, cands)
     if hints:
-        return ambiguous(f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra} 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. "
-                         "사용자에게 고르게 하세요.", hints)
+        tail = " 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요."
+        return ambiguous(head + tail, [show(c) for c in hints], log_message=log_head + tail)
     if cands:
-        shown = ", ".join(cands[:15]) + (" ..." if len(cands) > 15 else "")
-        tail = f" 사용 가능한 {kind}: {shown}"
-    else:
-        tail = ""
-    return InputError(f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra}{tail}")
+        shown = ", ".join(show(c) for c in cands[:15]) + (" ..." if len(cands) > 15 else "")
+        return InputError(f"{head} 사용 가능한 {kind}: {shown}", log_message=f"{log_head} [사용 가능한 이름 {len(cands)}개 생략]")
+    return InputError(head, log_message=log_head if masked else None)
+
+
+def clamp_cell(value: Any, max_chars: int = MAX_CELL_CHARS) -> Tuple[Any, bool]:
+    """긴 글 값 하나를 상한으로 자릅니다 (숫자 등 글이 아닌 값은 그대로). (값, 잘렸는지 여부)"""
+    if isinstance(value, str) and len(value) > max_chars:
+        return value[:max_chars], True
+    return value, False
 
 
 def clamp_rows(rows: List[List[Any]], max_rows: int = DEFAULT_MAX_ROWS,
-               max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[List[List[Any]], bool]:
-    """행 수와 대략적인 글자 수 상한으로 표를 자릅니다. (잘린 표, 잘렸는지 여부)"""
+               max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[List[List[Any]], bool, int, int]:
+    """행 수와 대략적인 글자 수 상한으로 표를 자릅니다. (잘린 표, 행이 잘렸는지, 글이 잘린 칸 수, 뺀 열 수)
+    칸마다 MAX_CELL_CHARS에서 자르고, 첫 행도 글자 수 상한을 넘으면 넘는 칸부터 뺍니다 (첫 행이 아주 큰 표도 상한 안).
+    '글이 잘린 칸'(긴 값)과 '뺀 열'(첫 행이 상한을 넘어 표시하지 않은 칸)은 따로 셉니다."""
     out: List[List[Any]] = []
     used = 0
+    cells_cut = 0
     for row in rows:
         if len(out) >= max_rows:
-            return out, True
-        size = sum(len(str(v)) + 1 for v in row)
+            return out, True, cells_cut, 0
+        cut_row = []
+        cut_flags = []
+        for v in row:
+            v, cut = clamp_cell(v)
+            cut_flags.append(cut)
+            cut_row.append(v)
+        size = sum(len(str(v)) + 1 for v in cut_row)
         if out and used + size > max_chars:
-            return out, True
-        out.append(row)
+            return out, True, cells_cut, 0
+        if not out and size > max_chars:          # 첫 행만으로 상한을 넘음: 들어가는 칸까지만
+            keep, width = [], 0
+            for v in cut_row:
+                width += len(str(v)) + 1
+                if keep and width > max_chars:
+                    break
+                keep.append(v)
+            cells_cut += sum(cut_flags[:len(keep)])
+            out.append(keep)
+            return out, len(rows) > 1, cells_cut, len(cut_row) - len(keep)
+        cells_cut += sum(cut_flags)
+        out.append(cut_row)
         used += size
-    return out, False
+    return out, False, cells_cut, 0
 
 
 def clamp_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[str, bool]:
@@ -894,7 +1258,11 @@ def next_command(script: str, args: Sequence[Any], purpose: str) -> Dict[str, st
 # 6. 마크다운 블록 해석 (word.py / ppt.py 공통)
 # ==============================================================================
 
-_MD_BOLD = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
+# '__'는 CommonMark처럼 단어 안에서는 굵게 표시가 아님: 앞에 글자·숫자가 없을 때만 열고 뒤에 없을 때만 닫음
+# (report__2024__final.xlsx는 그대로, __init__ 메서드는 굵은 'init'). '**'는 단어 안에서도 굵게.
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*|(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)")
+# 번호 목록 기호: 1~3자리 숫자만 ('2026. 11. 3. 회의'의 연도는 목록 번호가 아님)
+MD_NUMBERED = re.compile(r"^\s*(\d{1,3})[.)]\s+")
 
 
 def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
@@ -916,25 +1284,68 @@ def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
     return "".join(plain), spans
 
 
+def plain_heading(text: str) -> str:
+    """제목·슬라이드 제목에 넣을 글: 굵게 표시(** __)를 뺀 글 (제목은 굵기가 섞인 글을 담지 않음. word·ppt 모든 수준 같은 규칙)."""
+    return split_bold(text)[0]
+
+
+_TABLE_PIPE = re.compile(r"(?<!\\)\|")
+_FENCE = re.compile(r"^(`{3,}(?!.*`)|~{3,})")    # 백틱 펜스의 정보 글에는 백틱이 없음 (```x```는 인라인 코드)
+
+
 def parse_markdown_table(lines: List[str]) -> List[List[str]]:
+    """'|'로 나눈 표 (앞에 역슬래시가 있는 '\\|'는 칸 안의 글자 '|'). 정렬 줄(머리글 다음 줄은 ':-', '-:' 등 '-' 하나부터, 그 밖은 '---' 이상)은 뺍니다."""
     rows: List[List[str]] = []
-    for ln in lines:
-        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-        if cells and all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
+    for no, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("|"):
+            s = s[1:]
+        if s.endswith("|") and not s.endswith("\\|"):
+            s = s[:-1]
+        cells = [c.strip().replace("\\|", "|") for c in _TABLE_PIPE.split(s)]
+        dash = r":?-+:?" if no == 1 else r":?-{3,}:?"   # 머리글 다음 줄은 '-' 하나부터 정렬 줄
+        if cells and any(cells) and all(re.fullmatch(dash, c) for c in cells if c):
             continue
         rows.append(cells)
     width = max((len(r) for r in rows), default=0)
     return [r + [""] * (width - len(r)) for r in rows]
 
 
+_YAML_LINE = re.compile(r"^(?:\s|-\s|-$|#|[^\s:#][^:]{0,60}:(?:\s|$))")
+
+
+def front_matter_lines(text: str) -> int:
+    """맨 앞 YAML 머리말(1번째 줄 '---', 그 뒤 'key: 값' 줄들, '---' 또는 '...' 줄로 닫힘)의 줄 수 (닫는 줄 포함). 없으면 0.
+    닫는 줄이 없거나 사이에 'key:' 모양이 아닌 줄이 있으면 머리말이 아님 (첫 줄 '---'는 구분선)."""
+    lines = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return 0
+    keys = 0
+    for i, ln in enumerate(lines[1:], 1):
+        s = ln.rstrip()
+        if s in ("---", "..."):
+            return i + 1 if keys else 0
+        if not s.strip():
+            continue
+        if not _YAML_LINE.match(s):
+            return 0
+        keys += bool(re.match(r"^[^\s:#-][^:]{0,60}:(?:\s|$)", s))
+    return 0
+
+
 def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
     """마크다운을 블록 목록으로 바꿉니다.
     ('heading', (레벨, 텍스트)), ('paragraph', 텍스트), ('bullets', [항목]), ('numbered', [항목]),
-    ('table', [[셀]]), ('break', None)  # '---' 구분선
+    ('table', [[셀]]), ('code', 줄), ('break', None)  # '---' 구분선(thematic break)
+    ('front_matter', 줄 수): 맨 앞 YAML 머리말. 넣지 않는 블록 (쓰는 쪽이 warnings에 남김)
     """
     blocks: List[Tuple[str, Any]] = []
     para: List[str] = []
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    skip = front_matter_lines(text)
+    if skip:
+        blocks.append(("front_matter", skip))
+        lines = lines[skip:]
 
     def flush() -> None:
         if para:
@@ -947,6 +1358,19 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
         if not s:
             flush()
             i += 1
+            continue
+        fence = _FENCE.match(s)
+        if fence:                                   # 코드 블록: 줄마다 단락 하나, 글자 그대로 (제목·목록으로 읽지 않음)
+            flush()
+            mark = fence.group(1)
+            i += 1
+            while i < len(lines):
+                ln = lines[i].rstrip()
+                i += 1
+                if ln.strip().startswith(mark[0] * len(mark)) and not ln.strip().lstrip(mark[0]):
+                    break                           # 닫는 펜스 (닫지 않으면 끝까지 코드)
+                if ln.strip():
+                    blocks.append(("code", ln))     # 굵게(** __) 등 마크다운 기호를 해석하지 않고 그대로
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", s)
         if m:
@@ -972,13 +1396,21 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
                 i += 1
             blocks.append(("bullets", items))
             continue
-        if re.match(r"^\d+[.)]\s+", s):
+        num = MD_NUMBERED.match(s)
+        if num:
             flush()
-            items = []
-            while i < len(lines) and re.match(r"^\s*\d+[.)]\s+", lines[i]):
-                items.append(re.sub(r"^\s*\d+[.)]\s+", "", lines[i]).strip())
+            run = []
+            while i < len(lines) and MD_NUMBERED.match(lines[i]):
+                run.append(lines[i].strip())
                 i += 1
-            blocks.append(("numbered", items))
+            first = int(num.group(1))
+            if blocks and blocks[-1][0] == "numbered" and first == len(blocks[-1][1]) + 1:
+                blocks[-1][1].extend(MD_NUMBERED.sub("", x).strip() for x in run)   # 빈 줄로 띄운 같은 목록의 다음 번호
+            elif first == 1:
+                blocks.append(("numbered", [MD_NUMBERED.sub("", x).strip() for x in run]))
+            else:
+                # 1이 아닌 번호로 시작하는 목록: 자동 번호는 1부터 다시 매기므로 사용자 번호를 글로 둔 단락으로 넣음
+                blocks += [("paragraph", x) for x in run]
             continue
         if re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", s):
             flush()
@@ -992,4 +1424,9 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
 
 
 def looks_like_markdown(text: str) -> bool:
-    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\|.*\|)", text) or "**" in text)
+    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d{1,3}[.)]\s|\|.*\||```|~~~)", text) or "**" in text
+                or front_matter_lines(text))
+
+
+def front_matter_warning(lines: int) -> str:
+    return f"맨 앞 YAML 머리말({lines}줄, '---'로 둘러싼 key: 값)은 문서 정보라 넣지 않았습니다."

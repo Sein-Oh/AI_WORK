@@ -531,9 +531,12 @@ def test_old_format_cache_is_skipped_and_reported_when_original_is_gone(tmp_path
     _old_cache(src)
     os.remove(src)
     code, out = run("search", "--query", "검증")
-    assert code == 0 and out["total_matches"] == 0 and out["stale_cache_count"] == 1
-    assert out["skipped"][0]["reason"].startswith("이전 형식의 캐시")
-    assert out["agent_directive"].startswith("UNVERIFIED:") and any("index --all" in c["command"] for c in out["next_commands"])
+    # 1.4.11: 검색하지 않은 문서는 stale(옛 내용으로 검색)에 세지 않고, 원본이 없으면 index --all이 아닌 clear --missing
+    assert code == 0 and out["total_matches"] == 0 and "stale_cache_count" not in out
+    assert out["skipped"][0]["reason"].startswith("이전 형식의 캐시") and "원본이 없어" in out["skipped"][0]["reason"]
+    assert out["agent_directive"].startswith("UNVERIFIED:") and "clear --missing" in out["agent_directive"]
+    assert any("clear --missing" in c["command"] for c in out["next_commands"])
+    assert not any("index --all" in c["command"] for c in out["next_commands"])
     code, out = run("list")
     assert out["documents"][0]["stale"] is True and out["documents"][0]["missing"] is True
 

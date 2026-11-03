@@ -25,7 +25,7 @@
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _office as off  # noqa: E402
@@ -37,6 +37,8 @@ DEFAULT_FOLDERS = {"inbox": 6, "받은편지함": 6, "sent": 5, "보낸편지함
                    "deleted": 3, "지운편지함": 3, "outbox": 4, "보낼편지함": 4, "junk": 23, "정크메일": 23}
 BLOCKED_ATTACH = {".exe", ".bat", ".cmd", ".com", ".js", ".vbs", ".vbe", ".wsf", ".ps1", ".scr", ".msi", ".lnk",
                   ".hta", ".jar", ".reg", ".dll"}
+SAVE_FAILED = "저장 실패"     # skipped_attachments에서 정책상 건너뛴 것과 저장에 실패한 것을 구분하는 표시
+MAX_LIMIT = 200          # list/search --limit 상한 (넘으면 줄이고 warnings로 알림)
 PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"
 
 
@@ -72,27 +74,37 @@ def resolve_folder(ns: Any, spec: Optional[str]) -> Any:
     if s.lower() in DEFAULT_FOLDERS:
         return ns.GetDefaultFolder(DEFAULT_FOLDERS[s.lower()])
     parts = [p.strip() for p in re.split(r"\\|>", s) if p.strip()]
+    given = list(parts)
     stores = {str(f.Name): f for f in ns.Folders}
     found_store = rt.find_name(parts[0], stores)
     alias = re.sub(r"\s+", "", parts[0]).lower()
+    aliases = {re.sub(r"\s+", "", k).lower(): k for k in DEFAULT_FOLDERS}
+    from_alias = not found_store and alias in aliases
     if found_store:
         cur = stores[found_store]
         parts = parts[1:]
-    elif alias in {re.sub(r"\s+", "", k).lower(): k for k in DEFAULT_FOLDERS}:
+    elif from_alias:
         # 'inbox\프로젝트', '받은편지함\프로젝트': 첫 부분이 기본 폴더 별칭이면 그 폴더에서 시작
-        key = {re.sub(r"\s+", "", k).lower(): k for k in DEFAULT_FOLDERS}[alias]
-        cur = ns.GetDefaultFolder(DEFAULT_FOLDERS[key])
+        cur = ns.GetDefaultFolder(DEFAULT_FOLDERS[aliases[alias]])
         parts = parts[1:]
     else:
         cur = ns.GetDefaultFolder(6).Parent          # 기본 계정의 최상위
     walked: List[str] = [str(cur.Name)]
+    # 최상위(메일 계정 이름, 보통 메일 주소)는 오류 로그에 남기지 않음 (기본 폴더에서 시작했으면 계정 이름이 아님)
+    log_root = walked[0] if from_alias else "<메일 계정>"
     for part in parts:
         subs = {str(f.Name): f for f in cur.Folders}
         name = rt.find_name(part, subs)
         if name is None:
-            # 후보도 전체 경로로 (일부만 주면 LLM이 상위 폴더 전체를 검색함)
-            raise rt.not_found("메일 폴더", "\\".join(walked + [part]), ["\\".join(walked + [n]) for n in subs],
-                               extra=f" (경로: {s})")
+            # 비교는 끝 이름끼리 (전체 경로끼리 비교하면 같은 상위 경로 때문에 관계없는 폴더가 모두 [후보]가 됨).
+            # 후보는 전체 경로로 보여 줌 (일부만 주면 LLM이 상위 폴더 전체를 검색함)
+            prefix = "\\".join(walked)
+            # 로그 쪽 경로: 계정 이름으로 시작한 --folder는 첫 부분을 '<메일 계정>'으로 가림 (log_name과 같은 규칙)
+            log_spec = "\\".join(["<메일 계정>"] + given[1:]) if found_store else s
+            raise rt.not_found("메일 폴더", part, list(subs), extra=f" (경로: {s})",
+                               display=lambda n: prefix + "\\" + n,
+                               log_name="\\".join([log_root] + walked[1:] + [part]),
+                               log_extra=f" (경로: {log_spec})")
         cur = subs[name]
         walked.append(name)
     return cur
@@ -118,17 +130,28 @@ def summary(item: Any) -> Dict[str, Any]:
             "unread": bool(getattr(item, "UnRead", False)), "attachments": attach}
 
 
-def _collect(items: Any, limit: int) -> List[Dict[str, Any]]:
+def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for item in items:
         if len(out) >= limit:
             break
         try:
-            if int(item.Class) == OL_MAIL:
+            if int(item.Class) == OL_MAIL and (keep is None or keep(item)):
                 out.append(summary(item))
         except Exception:
             continue
     return out
+
+
+def _check_limit(limit: int, warnings: List[str]) -> int:
+    if limit < 1:
+        raise rt.InputError(f"--limit은 1 이상이어야 합니다 (받은 값: {limit}).")
+    if limit > MAX_LIMIT:
+        msg = f"--limit {limit}은(는) 너무 많아 {MAX_LIMIT}통으로 줄였습니다"
+        rt.log("WARN", msg)
+        warnings.append(msg)
+        return MAX_LIMIT
+    return limit
 
 
 # ==============================================================================
@@ -142,14 +165,52 @@ def cmd_list(args) -> Dict[str, Any]:
     if args.unread:
         items = items.Restrict("[UnRead] = True")
     items.Sort("[ReceivedTime]", True)                 # 거른 뒤 정렬해야 순서가 보장됨
-    mails = _collect(items, args.limit)
+    warnings: List[str] = []
+    mails = _collect(items, _check_limit(args.limit, warnings))
+    extra = {"warnings": warnings} if warnings else {}
+    what = "안 읽은 메일" if args.unread else "메일"
+    if not mails:      # R2 0건
+        return rt.ok(TOOL, "list", f"0건: '{folder.Name}' 폴더에 {what}이 없습니다",
+                     f"VERIFIED: 0건. '{folder.Name}' 폴더에 {what}이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요.",
+                     folder=str(folder.Name), mails=[], count=0, **extra)
     return rt.ok(TOOL, "list", f"'{folder.Name}' 폴더 최근 메일 {len(mails)}통" + (" (안 읽은 메일)" if args.unread else ""),
-                 folder=str(folder.Name), mails=mails)
+                 folder=str(folder.Name), mails=mails, count=len(mails), **extra)
 
 
 def _dasl_like(fields: Sequence[str], value: str) -> str:
-    v = value.replace("'", "''").replace("%", "").replace("_", " ")
+    # 작은따옴표만 겹쳐 씁니다. % _는 그대로 둠: DASL 와일드카드지만 자기 자신과도 맞으므로 빠지는 메일이 없음
+    # (예전에는 _를 공백으로 바꾸고 %를 지워 '견적서_v2', '10% 할인'이 절대 맞지 않고 0건 VERIFIED가 나왔음)
+    v = value.replace("'", "''")
     return "(" + " OR ".join(f'"{f}" LIKE \'%{v}%\'' for f in fields) + ")"
+
+
+def _literal_keep(query: Optional[str], sender: Optional[str], where: str) -> Optional[Callable[[Any], bool]]:
+    """검색어에 % _가 있으면 DASL이 더 넓게 찾으므로, 글자 그대로 들어 있는 메일만 남깁니다 (대소문자 무시).
+    읽지 못한 칸은 맞는 것으로 봅니다 (빠뜨리는 것보다 하나 더 보여 주는 편이 안전)."""
+    def wild(s: Optional[str]) -> bool:
+        return bool(s) and ("%" in s or "_" in s)
+    if not (wild(query) or wild(sender)):
+        return None
+
+    def has(item: Any, attrs: Sequence[str], needle: str) -> bool:
+        n = needle.casefold()
+        for a in attrs:
+            try:
+                if n in _text(getattr(item, a)).casefold():
+                    return True
+            except Exception:
+                return True
+        return False
+
+    q_attrs = {"subject": ["Subject"], "body": ["Body"], "all": ["Subject", "Body"]}[where]
+
+    def keep(item: Any) -> bool:
+        if wild(query) and not has(item, q_attrs, query or ""):
+            return False
+        if wild(sender) and not has(item, ["SenderName", "SenderEmailAddress"], sender or ""):
+            return False
+        return True
+    return keep
 
 
 def build_search_filter(query: Optional[str], sender: Optional[str], where: str) -> str:
@@ -173,13 +234,16 @@ def cmd_search(args) -> Dict[str, Any]:
     flt = build_search_filter(args.query, args.sender, args.where)
     items = folder.Items.Restrict(flt)
     items.Sort("[ReceivedTime]", True)
-    mails = _collect(items, args.limit)
+    warnings: List[str] = []
+    mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where))
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'") if x)
-    result = {"folder": str(folder.Name), "mails": mails, "matched": len(mails)}
-    if not mails:
-        return rt.ok(TOOL, "search", f"{desc}: '{folder.Name}'에서 일치하는 메일 없음",
-                     "VERIFIED: 일치하는 메일이 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요. "
-                     "다른 폴더라면 --folder로 지정할 수 있습니다.", **result)
+    result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails), "count": len(mails)}
+    if warnings:
+        result["warnings"] = warnings
+    if not mails:      # R2 0건
+        return rt.ok(TOOL, "search", f"0건: {desc}: '{folder.Name}'에서 일치하는 메일 없음",
+                     f"VERIFIED: 0건. '{folder.Name}' 폴더에 {desc}에 맞는 메일이 없습니다. "
+                     "사용자에게 그대로 알리고 검색어나 조건을 바꿔 다시 실행하지 마세요.", **result)
     result["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", mails[0]["id"]], "첫 번째 메일 본문 읽기")]
     return rt.ok(TOOL, "search", f"{desc}: '{folder.Name}'에서 {len(mails)}통", **result)
 
@@ -187,8 +251,7 @@ def cmd_search(args) -> Dict[str, Any]:
 def _safe_name(text: str, limit: int, default: str = "메일") -> str:
     """파일·폴더 이름에 쓸 수 없는 글자(\\ / : * ? \" < > |, 제어 문자)를 _로, 끝의 점·공백은 뺍니다.
     (RE: 같은 제목이 NTFS 대체 스트림 이름이 되거나 저장에 실패하던 문제)"""
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", text or "")[:limit].strip().rstrip(". ")
-    return name or default
+    return rt.safe_filename(text, limit, default)
 
 
 def _save_attachments(item: Any) -> Tuple[List[str], List[str]]:
@@ -217,9 +280,13 @@ def _save_attachments(item: Any) -> Tuple[List[str], List[str]]:
             k += 1
         try:
             att.SaveAsFile(dest)
-            saved.append(dest)
         except Exception as e:
-            skipped.append(f"{name} (저장 실패: {e})")
+            skipped.append(f"{name} ({SAVE_FAILED}: {e})")
+            continue
+        if os.path.isfile(dest):                          # R1: 저장한 파일이 실제로 생겼는지 다시 확인
+            saved.append(dest)
+        else:
+            skipped.append(f"{name} ({SAVE_FAILED}: 저장 후 파일이 없음)")
     return saved, skipped
 
 
@@ -254,15 +321,35 @@ def cmd_read(args) -> Dict[str, Any]:
     except Exception:
         raise rt.InputError("해당 id의 메일을 찾을 수 없습니다. list/search 결과의 id를 그대로 쓰세요.")
     result = _mail_detail(item, args, "id")
-    preview = f"'{result['mail']['subject']}' ({result['mail']['from']})"
+    return _detail_response("read", f"'{result['mail']['subject']}' ({result['mail']['from']})", result)
+
+
+def _attachment_problems(result: Dict[str, Any]) -> List[str]:
+    """--save-attach 결과 확인 (R1): 저장에 실패한 첨부와, 저장했다는데 다시 보니 없는 파일."""
+    failed = [s for s in result.get("skipped_attachments", []) if SAVE_FAILED in s]
+    gone = [os.path.basename(p) for p in result.get("saved_attachments", []) if not os.path.isfile(p)]
+    problems = []
+    if failed:
+        problems.append(f"첨부 {len(failed)}개를 저장하지 못함: {', '.join(failed[:5])}")
+    if gone:
+        problems.append(f"저장한 첨부를 다시 확인하니 없음: {', '.join(gone[:5])}")
+    return problems
+
+
+def _detail_response(command: str, preview: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """read/current 공통 응답: --save 파일이나 --save-attach 첨부를 다시 확인하지 못했으면 UNVERIFIED (R1)."""
     if "saved_attachments" in result:
         preview += f", 첨부 {len(result['saved_attachments'])}개 저장"
-    if result.get("save_problem"):
-        return rt.ok_unverified(TOOL, "read", preview, [result["save_problem"]], **result)
+    problems = ([result["save_problem"]] if result.get("save_problem") else []) + _attachment_problems(result)
+    if problems:
+        return rt.ok_unverified(TOOL, command, preview, problems, **result)
     if "output_file" in result:
-        return rt.ok(TOOL, "read", preview + f", 저장: {result['output_file']}",
+        return rt.ok(TOOL, command, preview + f", 저장: {result['output_file']}",
                      "VERIFIED: 메일을 읽고 저장한 파일을 다시 열어 확인했습니다.", verified=True, **result)
-    return rt.ok(TOOL, "read", preview, **result)
+    if result.get("saved_attachments"):
+        return rt.ok(TOOL, command, preview, "VERIFIED: 메일을 읽고 저장한 첨부 파일이 있는지 다시 확인했습니다.",
+                     verified=True, **result)
+    return rt.ok(TOOL, command, preview, **result)
 
 
 def current_item(app: Any) -> Tuple[Optional[Any], str]:
@@ -286,7 +373,7 @@ def cmd_current(args) -> Dict[str, Any]:
     if item is None:
         raise rt.InputError("Outlook에서 열려 있거나 선택된 메일이 없습니다. 메일을 선택한 뒤 다시 요청하세요.")
     result = _mail_detail(item, args, source)
-    return rt.ok(TOOL, "current", f"{source} 메일: '{result['mail']['subject']}' ({result['mail']['from']})", **result)
+    return _detail_response("current", f"{source} 메일: '{result['mail']['subject']}' ({result['mail']['from']})", result)
 
 
 def _folder_tree(folder: Any, depth: int) -> Dict[str, Any]:
@@ -342,12 +429,29 @@ def _attach_paths(spec: Optional[str]) -> List[str]:
         if ";" not in raw and "," not in raw:
             raise
     sep = ";" if ";" in raw else ","
-    return [rt.resolve_input_path(p.strip().strip('"'), "첨부 파일") for p in raw.split(sep) if p.strip()]
+    parts = raw.split(sep)
+    paths: List[str] = []
+    i = 0
+    while i < len(parts):
+        if not parts[i].strip():
+            i += 1
+            continue
+        # 있는 파일이 아니면 뒤 조각을 구분자로 이어 붙여 봄 (폴더·파일 이름에 ; 나 , 가 든 경로)
+        for j in range(i, len(parts)):
+            try:
+                paths.append(rt.resolve_input_path(sep.join(parts[i:j + 1]).strip().strip('"'), "첨부 파일"))
+            except rt.InputError:
+                continue
+            i = j + 1
+            break
+        else:
+            rt.resolve_input_path(parts[i].strip().strip('"'), "첨부 파일")    # 찾지 못한 조각으로 오류 ([추천] 포함)
+    return paths
 
 
-def _attach(mail: Any, spec: Optional[str]) -> List[str]:
+def _attach(mail: Any, paths: List[str]) -> List[str]:
     names = []
-    for path in _attach_paths(spec):
+    for path in paths:
         mail.Attachments.Add(path)
         names.append(os.path.basename(path))
     return names
@@ -371,6 +475,7 @@ def _finalize(mail: Any, send: bool, command: str, attached: List[str]) -> Dict[
             extra["unresolved_recipients"] = unresolved
             return {"status": "error", "tool": TOOL, "command": command, "error_type": "input",
                     "message": f"수신자 주소를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다: {', '.join(unresolved)}",
+                    rt.LOG_MESSAGE_KEY: f"수신자 주소 {len(unresolved)}개를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다 (수신자 생략).",
                     "agent_directive": "STOP_RETRY: 발송하지 않았습니다. 사용자에게 수신자 주소 확인을 요청하세요.", **extra}
         mail.Send()
         extra["sent"] = True
@@ -409,6 +514,9 @@ def _body_arg(args) -> str:
 
 
 def cmd_new(args) -> Dict[str, Any]:
+    # 본문 파일·첨부 파일 확인은 메일을 만들기 전에 (확인에서 멈추면 아무것도 만들지 않음)
+    body = _body_arg(args)
+    attach = _attach_paths(args.attach)
     app = get_outlook()
     mail = app.CreateItem(0)
     _load_signature(mail)
@@ -418,34 +526,35 @@ def cmd_new(args) -> Dict[str, Any]:
         mail.CC = args.cc
     if args.subject:
         mail.Subject = args.subject
-    body = _body_arg(args)
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))   # Body 대입은 서명을 지우므로 HTML로
-    return _finalize(mail, args.send, "new", _attach(mail, args.attach))
+    return _finalize(mail, args.send, "new", _attach(mail, attach))
 
 
 def cmd_reply(args) -> Dict[str, Any]:
+    body = _body_arg(args)
+    attach = _attach_paths(args.attach)
     app = get_outlook()
     original = _target_item(app, args)
     mail = original.ReplyAll() if args.all else original.Reply()
     _load_signature(mail)
-    body = _body_arg(args)
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))
-    return _finalize(mail, args.send, "reply", _attach(mail, args.attach))
+    return _finalize(mail, args.send, "reply", _attach(mail, attach))
 
 
 def cmd_forward(args) -> Dict[str, Any]:
+    body = _body_arg(args)
+    attach = _attach_paths(args.attach)
     app = get_outlook()
     original = _target_item(app, args)
     mail = original.Forward()
     _load_signature(mail)
     if args.to:
         mail.To = args.to
-    body = _body_arg(args)
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))
-    return _finalize(mail, args.send, "forward", _attach(mail, args.attach))
+    return _finalize(mail, args.send, "forward", _attach(mail, attach))
 
 
 # ==============================================================================
@@ -459,14 +568,14 @@ def build_cli():
     p = sub.add_parser("list", help="최근 메일 목록")
     p.add_argument("--folder", help=folder_help)
     p.add_argument("--unread", action="store_true", help="안 읽은 메일만")
-    p.add_argument("--limit", "-n", type=int, default=10)
+    p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
 
     p = sub.add_parser("search", help="메일 검색")
     p.add_argument("--query", "-q", help="찾을 말")
     p.add_argument("--from", dest="sender", help="보낸사람 이름/주소 일부")
     p.add_argument("--where", choices=["all", "subject", "body"], default="all", help="검색 범위 (기본 제목+본문)")
     p.add_argument("--folder", help=folder_help)
-    p.add_argument("--limit", "-n", type=int, default=10)
+    p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
 
     for name, hlp in (("read", "메일 읽기 (--id)"), ("current", "지금 보고 있거나 선택한 메일 읽기")):
         p = sub.add_parser(name, help=hlp)

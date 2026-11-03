@@ -102,9 +102,10 @@ def test_train_unitless_names_and_eval_alias(trained):
 
 def test_train_column_typo_suggests(trained):
     _, data, _ = trained
-    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(C),소비전력(kW)", "-y", TARGET)
+    # 2.9.33: '반응온도(C)' is the same column (°C / C) and matches; a typo is a [후보] (never an automatic [추천])
+    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도x,소비전력(kW)", "-y", TARGET)
     assert payload["agent_directive"].startswith("STOP_RETRY")
-    assert "[추천]" in payload["message"] and "반응온도(°C)" in payload["message"]
+    assert "[후보]" in payload["message"] and "[추천]" not in payload["message"] and "반응온도(°C)" in payload["message"]
 
 
 def test_train_eval_leakage_blocked(trained):

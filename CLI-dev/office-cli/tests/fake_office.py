@@ -26,9 +26,19 @@ class FakeRange:
 class FakeSheet:
     def __init__(self, wb, name):
         self.wb = wb
-        self.Name = name
+        self._name = name
         self.UsedRange = object()
         self.activated = 0
+
+    @property
+    def Name(self):
+        return self._name
+
+    @Name.setter
+    def Name(self, v):
+        from fake_excel import check_fake_sheet_name
+        check_fake_sheet_name(v)          # 실제 Excel처럼 쓸 수 없는 이름(History 등)은 COM 오류
+        self._name = v
 
     def Activate(self):
         self.activated += 1

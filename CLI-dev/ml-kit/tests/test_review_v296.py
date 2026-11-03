@@ -50,7 +50,8 @@ def test_inputs_and_keep_drop_constant_with_hint(tmp_path):
     df.to_csv(p, index=False)
     v = run_tool("ml_train.py", "-f", str(p), "-x", "a,k", "-y", "y")["version_dir"]
     bad = run_fail("ml_export.py", "-m", v, "--inputs", "k")
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "[추천] a" in bad["message"]
+    # 2.9.33: [후보] (another input set is the user's choice), was "[추천] a"
+    assert bad["agent_directive"].startswith("STOP_RETRY") and "[후보] a" in bad["message"] and "[추천]" not in bad["message"]
     ok = run_tool("ml_export.py", "-m", v, "--keep", "k", "--save", str(tmp_path / "k.xlsx"))
     assert ok["targets"]["y"]["inputs"] == ["a"]
 

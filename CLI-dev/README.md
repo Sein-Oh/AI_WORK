@@ -37,7 +37,7 @@ python run_all_tests.py --only diag            :: 환경 진단만 (1분)
 |---|---|
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx`. `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
 | `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본 |
-| `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. 내보내기: `opencode export <세션ID> | Out-File -Encoding utf8 chat.json` (UTF-16 파일도 읽음) |
+| `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤) |
 
 진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
 
@@ -61,7 +61,7 @@ CLI-dev/<tool>/
 1. **stdout = 정확히 1줄 JSON.** 진행 로그·표·경고는 모두 stderr.
 2. 성공: exit 0, `"status": "ok"`, `agent_directive`가 `VERIFIED:`로 시작.
 3. 실패: exit 1(인자 오류 2, 중단 130), `"status": "error"`, `agent_directive`가
-   - `STOP_RETRY:` - 입력/데이터 문제. message에 `[추천]`이 있으면 그 값으로 1회만 재시도.
+   - `STOP_RETRY:` - 입력/데이터 문제. message에 `[추천]`이 있으면 1회만 재시도 (전체 명령이면 그대로, 아니면 그 값으로 바꿔서. R8).
    - `ERROR:` - 내부 오류. 재시도 금지.
 4. 에이전트가 판단할 일을 줄인다: 이름 자동 매칭, 기본값, 자동 상속, 오타 추천을 도구가 처리.
 5. 문자 규칙: 이모지·원문자·장식 기호 금지, 로그 태그는 `[INFO] [PROGRESS] [WARN] [ERROR] [STATUS]` ([`AGENTS.md`](../AGENTS.md) "문자 규칙").
@@ -146,7 +146,9 @@ CLI-dev/<tool>/
 - `--dry-run`: 검증까지 모두 하고 쓰기는 하지 않는다. 응답 `dry_run: true`, `planned: ["삭제: a.csv", "덮어쓰기: b.xlsx", "변경: Sheet1!A1:C10 (30셀)"]`,
   `next_commands[0]` = `--dry-run`을 뺀 같은 명령, directive `VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.`
 - 실제 실행은 수행한 파괴적 작업을 같은 형식의 `applied` 목록으로 보고한다.
-- `[추천] <값>`: 바로 다시 실행할 수 있는 값 **하나**만. LLM은 그 값으로 1회만 재시도한다.
+- `[추천] <값>`: 바로 다시 실행할 수 있는 값 **하나**만. 값은 바꿀 인자 값(이름, `--header-row 2` 등) 또는 `python`으로 시작하는 전체 명령이다.
+  LLM은 `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행하고, 아니면 그 값으로 바꿔 1회 재실행한다.
+  인자를 여러 개 고쳐야 하거나 다른 인자가 사라지기 쉬우면(예: 타겟별 `--inputs` 전체) 전체 명령을 준다.
 - `[후보] a, b, c`(최대 10개): 후보가 둘 이상이라 도구가 고를 수 없을 때. LLM은 재시도하지 않고 사용자에게 고르게 한다.
 
 ### R9. 테스트

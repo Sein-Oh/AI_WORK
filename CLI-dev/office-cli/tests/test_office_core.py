@@ -149,9 +149,13 @@ def test_sheet_lookup_rules(fake_com):
     with off.open_target("excel", readonly=False, snapshot=False) as t:
         assert t.sheet("신규", create=True).Name == "신규"
         with pytest.raises(rt.InputError) as ei:
-            t.sheet("신규2")                          # 쓰기 세션이어도 create 없이는 만들지 않음
+            t.sheet("신규2", allow_create=True)       # 쓰기 세션이어도 create 없이는 만들지 않음 (excel write)
         assert ei.value.candidates == ["신규"] and "--new-sheet" not in str(ei.value)   # 새 시트 여부는 사용자에게 (시나리오 10)
         assert isinstance(ei.value, rt.UserDecisionError) and "--new-sheet" in ei.value.directive
+        with pytest.raises(rt.InputError) as ei:
+            t.sheet("신규2")                          # --new-sheet가 없는 명령: 찾을 수 없음 [후보], 새 시트 안내 없음 (1.4.12)
+        assert ei.value.candidates == ["신규"] and not isinstance(ei.value, rt.UserDecisionError)
+        assert "--new-sheet" not in str(ei.value) and "--new-sheet" not in str(ei.value.directive or "")
 
 
 def test_read_session_never_moves_view_write_moves_to_changed_sheet(fake_com):
@@ -198,8 +202,8 @@ def test_write_session_takes_snapshot_first(tmp_path, fake_com):
     wb = FakeWorkbook(str(tmp_path / "보고.xlsm"))
     (tmp_path / "보고.xlsm").write_bytes(b"x")
     fake_com["active"]["excel"] = {"name": wb.Name, "path": wb.FullName, "app": FakeExcelApp(), "doc": wb}
-    with off.open_target("excel", readonly=False, tool="excel", command="write"):
-        pass
+    with off.open_target("excel", readonly=False, tool="excel", command="write") as t:
+        t.changed = True                     # 바꾼 실행만 지점을 남김 (1.4.14: 바꾼 것 없는 성공은 지점을 지움)
     snaps = off.list_snapshots("excel")
     assert len(snaps) == 1 and snaps[0]["snapshot_file"].endswith(".xlsm")
     assert snaps[0]["by"] == "excel write" and snaps[0]["original_path"] == wb.FullName
@@ -290,8 +294,8 @@ def test_write_session_without_snapshot_leaves_barrier(tmp_path, fake_com, monke
     (tmp_path / "보고.xlsx").write_bytes(b"x")
     fake_com["active"]["excel"] = {"name": wb.Name, "path": wb.FullName, "app": FakeExcelApp(), "doc": wb}
     monkeypatch.setattr(off, "SNAPSHOT_MAX_BYTES", 0)                    # 스냅샷 실패
-    with off.open_target("excel", readonly=False, tool="excel", command="write"):
-        pass
+    with off.open_target("excel", readonly=False, tool="excel", command="write") as t:
+        t.changed = True
     snaps = off.list_snapshots("excel")
     assert len(snaps) == 1 and snaps[0]["barrier"] is True and "스냅샷" in snaps[0]["reason"]
 
@@ -299,7 +303,7 @@ def test_write_session_without_snapshot_leaves_barrier(tmp_path, fake_com, monke
 def test_write_target_typo_of_open_document_does_not_create_new_file(tmp_path, fake_com, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "주간보고.docx", "path": "C:/x/주간보고.docx"}])
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
     with pytest.raises(rt.InputError) as ei:
         with off.open_target("word", "주간보고서.docx", readonly=False, create=True):
             pass

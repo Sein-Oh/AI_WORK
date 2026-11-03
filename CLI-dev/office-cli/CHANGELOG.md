@@ -2,6 +2,495 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.32] - 2026-11-03
+
+23차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1432.py`.
+
+### 수정
+- 닫힌 xlsx를 범위 없이 읽으면(`excel read`, `--search`, `--save`, `export --save .csv`, `office.py transfer --from excel`) 끝쪽의 값이 모두 None인
+  행을 잘라, 계산된 값이 없는 수식만 있는 합계 행(`=SUM`)이 빠지고 `VERIFIED`이던 문제. 수식만 있는 시트는 머리글만 나왔고, 크기 정보(`<dimension>`)가
+  없는 파일은 `_closed_bounds`가 끝쪽 수식 열도 잘랐음. 범위를 데이터로 정하는 곳(범위 생략, `B:B`·`5:7`, 200만 칸을 넘는 범위 줄이기
+  `_clip_closed_range`)에서 자르기 전에 시트 전체를 `xlsx_uncomputed_formulas`로 훑어(빈 칸 조건 없이) 그런 칸의 행·열을 남기고(`bounds`),
+  읽은 범위의 칸을 `UNVERIFIED:`와 `uncomputed_formulas`로 알립니다. 같은 읽기에서 훑은 결과는 `closed_uncomputed`가 다시 씁니다.
+  reader는 원래 시트 전체를 확인해 해당 없음(빈 행은 단위가 아님).
+- xlsxwriter가 쓴 파일: 수식 칸에 `<v>0</v>`을 쓰고 `workbook.xml`에 `<calcPr fullCalcOnLoad="1"/>`을 두어, 0을 값으로 `VERIFIED`이던 문제.
+  `fullCalcOnLoad`가 `"1"`/`"true"`이면 모든 수식 칸을 계산된 값이 없는 칸으로 봅니다(excel·transfer·reader 모두, 빈 칸이 없는 범위도 확인).
+  엑셀은 저장할 때 이 표시를 지우므로 엑셀에서 저장한 파일은 해당 없음(테스트의 "엑셀 저장 흉내" `set_cached_value`도 표시를 지움).
+  openpyxl도 이 표시를 쓰므로 안내 문구는 "열 때 다시 계산" 파일로 나옵니다. reader 파서 버전 10(캐시 다시 읽기).
+- 수식 칸 확인이 예외(MemoryError 포함)로 실패하면 0개로 보아 `VERIFIED`이던 문제. `{"unknown": true, "error": 예외 이름}`을 돌려주고
+  결과는 `UNVERIFIED: ... 수식 계산 여부를 확인하지 못함`과 `uncomputed_check: "unknown"`(reader는 `meta.uncomputed_formulas.unknown`).
+  범위를 주면 범위 끝 행 뒤는 해석하지 않고, 해석한 `<row>`는 지웁니다.
+
+### 문서
+- README: 범위를 데이터로 정할 때 수식 행·열을 남김, `fullCalcOnLoad`, 확인 못함(`uncomputed_check`).
+
+## [1.4.31] - 2026-11-03
+
+22차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1431.py`.
+
+### 수정
+- `office.py transfer --method relay --to ppt` (1.4.30 회귀): 슬라이드를 확인하려고 받는 PPT의 쓰기 세션(되돌리기 지점)을 임시 워드 단계보다
+  먼저 열어, 임시 워드 단계가 실패하면 저장 안 된 활성·열린 PPT에 바꾼 것 없는 되돌리기 지점이 남고 다음 `undo`가 그 지점을 먼저 골랐음.
+  열린 문서·활성 문서는 `resolve_target`으로 찾은 문서에서 `ppt._resolve_slide`로 확인만 하고, 쓰기 세션은 임시 워드 단계 뒤에 엽니다(1.4.29와 같음).
+  닫힌 파일은 열어서 확인합니다(멈추면 디스크 파일이 그대로라 지점은 지움). 새로 만들 파일은 슬라이드 0장으로 확인하고 만들지 않습니다
+  (이전에는 슬라이드 오류에도 빈 파일을 만들었음). 받는 문서, 앵커, 슬라이드 오류가 클립보드와 임시 워드보다 먼저 멈추는 것은 그대로입니다.
+- 닫힌 xlsx의 계산된 값이 없는 수식 칸: openpyxl `data_only`로 읽어 openpyxl 같은 프로그램이 쓰고 엑셀에서 연 적 없는 파일의 수식 칸이 빈 칸인데
+  `VERIFIED`이던 문제(`excel read`, `--search`, `--save`, `export --save .csv`, `office.py transfer --from excel --range`, `reader read/search`).
+  `_runtime.xlsx_uncomputed_formulas`가 시트 XML에서 값(`<v>`)이 비어 있는 수식 칸을 찾고(수식 태그가 없는 시트는 해석하지 않음, 빈 글 결과
+  `t="str"`는 계산된 값), 있으면 `UNVERIFIED:`와 `uncomputed_formulas`(20개까지), `uncomputed_count`, `uncomputed_truncated`로 알리고 엑셀에서
+  열어 저장한 뒤 다시 실행하라고 안내합니다. excel은 읽은 범위에 빈 칸이 있을 때만 그 범위를 확인합니다. reader는 `meta.uncomputed_formulas`에
+  남기고 search는 `not_searched`에 넣습니다. 범위 전체가 그런 칸이라 `transfer`가 '데이터 없음'으로 멈추면 이유를 message에 붙입니다.
+- docx 글상자(`w:txbxContent`): 글상자 글을 읽지 않아 `reader search`가 `VERIFIED` 0건이던 문제(닫힌 파일의 `word.py read`, `transfer --what text`도
+  같은 경로). 글상자가 든 단락·표 바로 뒤에 `글상자 N`(`글상자 N 단락 M`) 단위로 넣습니다. `mc:Fallback`(VML 사본) 안의 글상자는 빼서 두 번 세지 않고,
+  표 칸 글에서도 글상자 단락은 뺍니다(따로 단위). 단락 번호는 그대로라 글상자가 없는 문서의 단위는 같습니다. 파서 버전 9.
+- `office.py transfer --from word --what table` (닫힌 docx): python-docx `Document.tables`(본문 바로 아래 표만)로 표를 세어, 콘텐츠 컨트롤(`w:sdt`)
+  안에 표가 있으면 read 결과·COM과 다른 표를 `VERIFIED`로 옮기던 문제. read와 같은 `reader._body_blocks`로 셉니다. 닫힌 docx의 표 번호를 쓰는
+  다른 곳은 없음(ppt `--table`은 pptx 도형).
+- `word write` 굵게 위치: 파이썬 글자 수로 세어 앞에 이모지(BMP 밖 글자)가 있으면 굵게가 밀리던 문제. Word처럼 UTF-16 단위로 셉니다(`_u16`,
+  단락 범위 끝도 같음). word.py의 다른 Range 위치는 COM에서 받은 값이라 해당 없음.
+- `excel read --search`: `count`가 없고 0건 안내가 R2 모양이 아니던 문제. `count`(= `total_matches`), `shown`, `VERIFIED: 0건. ...`.
+- 마크다운 `---`(구분선): word가 페이지 나누기를 넣고, 맨 앞 YAML 머리말은 페이지 나누기 두 개와 `key: 값` 글로 들어가던 문제.
+  구분선은 아래 테두리만 있는 빈 단락(`구분선`), 맨 앞 YAML 머리말(`---` 1번째 줄, `key: 값` 줄, `---`/`...`로 닫힘)은 넣지 않고 `warnings`.
+  ppt `.md`도 머리말을 넣지 않고 `warnings`(구분선은 전처럼 넣지 않음). 페이지 나누기는 `word.py write --page-break`. 다시 읽기 확인은 넣은 첫 글
+  (구분선 빈 단락과 머리말은 건너뜀). 머리말만 있는 글도 마크다운으로 봅니다(`looks_like_markdown`).
+
+### 문서
+- README: 계산된 값이 없는 수식 칸, `read --search`의 `count`, 구분선과 YAML 머리말, word 굵게 위치, reader 글상자, 닫힌 docx 표 번호, relay 쓰기 세션 순서.
+- SKILL.md: 워드 쪽 나누기는 `--page-break`(`.md`의 `---`는 구분선), `warnings`도 알림.
+- 남은 할 일: excel read --search(R2 `count`·`shown`·`truncated`·`next_commands`)를 뺐습니다.
+
+## [1.4.30] - 2026-11-03
+
+21차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1430.py`.
+
+### 수정
+- `outlook.py --folder` (1.4.29 보완): 찾지 못한 폴더 오류의 `(경로: <--folder 원문>)`이 오류 로그에 그대로 남아, `계정\없는폴더`처럼
+  계정 이름으로 시작한 경로면 메일 주소가 로그 `결과:` 줄에 남던 문제. `not_found`에 `log_extra`(로그 쪽 extra)를 두고, 계정 이름으로
+  시작한 경로는 첫 부분을 `<메일 계정>`으로 바꿔 남깁니다(기본 폴더 별칭으로 시작한 경로는 그대로). stdout message는 그대로입니다.
+  - 1.4.29 가드 테스트(`test_guard_folder_log_has_no_mailbox_root`)가 계정 이름을 소문자로 넣고 대소문자를 구분해 확인해 실패할 수
+    없었음. 같은 대소문자로 넣어 확인합니다.
+  - 다른 `not_found(..., extra=...)` 호출(`resolve_input_path`의 찾은 위치, 문서 열기 안내, 색상, 차트의 시트, 워드 제목 안내)은
+    인자·경로이거나 사용자가 준 시트 이름이라 해당 없음.
+- `office.py transfer --method relay --to ppt`: `--slide`를 확인하기 전에 차트를 클립보드에 복사하고 임시 워드를 띄워, 2장짜리 PPT에
+  `--slide 9`면 사용자의 클립보드를 덮어쓴 뒤 오류로 끝나던 문제. 받는 PPT를 먼저 열고(열린 문서·활성 문서·파일 모두) 슬라이드를
+  확인한 뒤에 클립보드와 임시 워드를 씁니다. 받는 문서, 앵커, 슬라이드 오류는 모두 클립보드를 쓰기 전에 멈춥니다.
+- `office.py transfer --method relay --to-target ""`: 빈 대상을 '넣지 않음'으로 읽어 `KeyError('word')`를 STOP_RETRY로 내던 문제.
+  export·redraw처럼 활성 문서로 넣습니다.
+
+### 문서
+- README: outlook `--folder` 오류 로그의 경로, relay의 슬라이드 확인 순서와 빈 `--to-target`.
+
+## [1.4.29] - 2026-11-03
+
+20차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1429.py`.
+
+### 수정
+- `office.py transfer --chart`: 받는 문서 이름 오타(`[추천]`)에도 다음 방식(redraw, relay)을 시도해, relay가 사용자의 클립보드를 덮어쓰고
+  마지막 오류는 `[추천]`이 `; relay: ...` 앞에 묻힌 채 `--probe`를 안내하던 문제. 대상을 찾지 못한 오류는 다음 방식으로 넘어가지 않고
+  원래 오류 그대로 멈춥니다(`[추천]`이 message 끝).
+  - 구조: `_office.resolve_target`(open_target의 찾기 단계, 문서를 열지 않음)이 내는 오류(`[추천]`, `[후보]`, 사용 가능한 문서, 확장자,
+    열린 문서 없음)는 모두 `no_fallback`. `ppt._resolve_slide`의 슬라이드 번호 오류, `--anchor` 길이 오류도 `no_fallback`.
+  - `relay_chart`는 받는 문서를 먼저 찾고, 워드는 앵커 위치를 정한 뒤에 차트를 클립보드로 복사합니다.
+  - 다른 방식 전환 고리(`transfer --probe`, 범위 전달)는 방식마다 같은 대상을 다시 찾지 않거나 첫 오류에서 멈추므로 해당 없음.
+- 오류 로그 (transfer --chart): 모든 방식이 실패했을 때 `log_message`가 없는 내부 오류(RuntimeError, ValueError 등)의 글이 그대로 남던 문제.
+  `<방식>: <예외 종류>`만 남깁니다.
+- `outlook.py --folder`: 찾지 못한 폴더를 전체 경로끼리 비교해 같은 상위 경로(메일 계정) 때문에 관계없는 폴더가 모두 `[후보]`이던 문제.
+  끝 이름끼리 비교하고 보여 줄 때만 전체 경로로 바꿉니다(`not_found`의 `display`). 오류 로그에는 계정 이름(메일 주소) 대신 `<메일 계정>`
+  (`not_found`의 `log_name`).
+- 차트 다시 그리기(redraw): 제목·계열 이름·항목 이름의 `$...$`를 matplotlib 수식(mathtext)으로 읽어 깨진 그림을 `VERIFIED`로 넣거나
+  `ValueError`로 실패하던 문제. `text.parse_math`를 끈 설정 안에서 저장까지 그립니다(전역 설정은 그대로).
+- `reader search --file <파일 하나>`: 파서 내부 오류(`KeyError` 등)를 사유 글로 새 `InputError`를 만들어 `STOP_RETRY:` 입력 오류로 내고
+  traceback이 남지 않던 문제. 원래 예외를 그대로 다시 내어 내부 오류는 `ERROR:`와 traceback, `InputError`는 `log_message`를 지킵니다.
+  `index --file <파일 하나>`도 같습니다(이전에는 실패 1개로 `VERIFIED: 등록 완료`). 폴더의 실패 사유(`reason`)는 예외 종류와 함께
+  (`KeyError: 'heading'`, 이전에는 `'heading'`).
+
+### 개발 도구
+- `tools/run_win_tests.py`: pywin32 확인을 인자 해석보다 먼저 해 pywin32가 없으면 `--agent -h`도 exit 1, 인자 오류도 exit 1이던 문제.
+  인자를 먼저 해석합니다(`-h` exit 0, 인자 오류 exit 2, 그다음 pywin32가 없으면 exit 1).
+
+### 문서
+- README: transfer 차트 방식 전환이 멈추는 경우, outlook `--folder` 후보, reader `--file` 파일 하나의 오류, 러너 종료 코드.
+
+## [1.4.28] - 2026-11-03
+
+19차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1428.py`.
+
+### 수정
+- 오류 로그 message (1.4.27 보완): 가리기가 message의 표식(`[후보]`, `[추천]` 등)에만 기대어, 표식 없이 들어간 문서 글이 그대로 남던 문제.
+  `excel write`·`range --action merge|move|copy`의 덮어쓸 칸 `A1=<칸 값>`, `ppt write`의 기존 제목, `ppt notes`의 기존 노트,
+  없는 시트의 `(있는 시트: ...)`, `word comment --file`이 `[후보]`·`[추천]`을 `후보:`·`추천:`로 바꿔 남긴 메모 파일의 기준 글과 후보 단락,
+  종류에 공백이 있는 `사용 가능한 메일 폴더:`·`사용 가능한 열린 Word 문서:`·`사용 가능한 입력 파일:` 목록, `word replace`의 긴 찾을 문구 앞 30자
+  미리보기, 내부 오류 traceback의 가린 인자 값.
+  - 구조: `InputError`·`UserDecisionError`에 `log_message`(문서 글을 뺀 글)를 두고, 문서 글을 message에 넣는 곳마다 줍니다.
+    `ambiguous()`·`UserDecisionError`의 후보, `not_found()`의 `[추천]`·`사용 가능한 <종류>:` 목록은 자동으로 개수만 남깁니다(`[후보 N개 생략]`).
+    결과 dict로 내는 오류(`outlook send`의 확인 못 한 수신자)는 `_log_message` 키를 쓰고, `run_cli`가 stdout에 내기 전에 뺍니다.
+    `office.py transfer --chart`가 모든 방식에 실패한 오류의 `시도한 방식:` 목록도 각 오류의 `log_message`로 만듭니다.
+  - 표식 자르기는 대비로 남기고 `후보:`, `추천:`, 공백이 든 종류(`사용 가능한 [^:]{1,30}:`)를 더했습니다.
+  - 가린 값이 10자 이상이면 10자 이상의 앞부분(잘린 미리보기)도 가립니다. `word replace`의 긴 찾을 문구 오류는 앞부분 대신
+    몇 번째 문구인지와 길이를 알려 줍니다.
+  - traceback에도 같은 값 가리기를 합니다(표식 자르기는 하지 않음).
+  - stdout JSON의 message는 그대로이고, 가리기에 실패해도 로그 기록은 오류를 삼킵니다.
+- 짧은 가린 값: `--value 1`처럼 1~2자 값이 관계없는 글까지 가리던 문제(`Sheet<1자 생략>`). 3자 이상만 가리고, 1~2자 값은 따옴표 안에
+  있을 때만 가립니다. 따옴표 없이 message에 들어간 1~2자 값은 로그에 남을 수 있습니다(남는 위험).
+- `office.py undo`: 되돌릴 수 없는 작업(새로 만든 파일 등)만 있을 때 `needs_user_decision`이던 문제. 되돌릴 지점이 하나도 없으면
+  `VERIFIED: 0건.`(`count: 0`, `restored: false`)입니다. 더 앞에 되돌릴 수 있는 지점이 있으면 그대로 사용자에게 묻습니다.
+- `office.py undo --list`: 되돌릴 수 없는 작업이 20개 넘게 앞에 있으면 앞 20개만 보여 줘 되돌릴 수 있는 지점이 목록에서 빠지던 문제.
+  항목은 되돌릴 수 있는 지점 앞 20개와 그보다 최근의 되돌릴 수 없는 작업(최대 20개)이고, `count`·`shown`(지점)과 `truncated`(빠진 항목이
+  있음)가 항목과 맞습니다.
+
+### 문서
+- README 오류 로그 절: `log_message` 우선, 값 가리기 규칙(앞부분, 짧은 값), 표식 대비, traceback, 남는 것.
+- README `undo`: `--list` 항목 구성과 0건 결과.
+
+## [1.4.27] - 2026-11-03
+
+18차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1427.py`.
+
+### 수정
+- 제목 굵게 표시 (1.4.26 회귀): `ppt write --file .md`가 3단계 이하 제목에만 굵게 표시 빼기를 적용해 `### __init__ 메서드`는 `init 메서드`,
+  1·2단계 제목(슬라이드 제목)은 `**핵심** 요약`이 글자 그대로 들어가던 문제. word·ppt의 모든 수준 제목, 슬라이드 제목(`.md` 제목,
+  `--title`과 함께 줘서 본문 첫 줄로 옮긴 제목, `ppt write --title`)에 같은 규칙(`_runtime.plain_heading`: `**x**`, `__x__`는 표시를 뺀 글)을 씁니다.
+  제목은 굵기가 섞인 글을 담지 않으므로 굵게 구간은 본문에만 둡니다.
+- 단어 안의 `__` (`_runtime._MD_BOLD`): `report__2024__final.xlsx`가 `report2024final.xlsx`로 들어가던 문제. CommonMark처럼 `__`는 앞에 글자·숫자가
+  없을 때만 열고 뒤에 없을 때만 닫습니다(`파일__x__끝`은 그대로). `**`는 그대로(단어 안에서도 굵게). 양쪽이 단어 경계인 `__init__`은 CommonMark대로
+  굵은 `init`이고, 제목에서는 모든 수준에서 `init`입니다(코드 이름은 코드 블록(```)이나 `--callout`으로 넣으면 글자 그대로).
+- 번호 목록: `2026. 11. 3. 회의 결과`를 번호 목록으로 읽어 연도가 사라지던 문제(word·ppt). 목록 번호는 1~3자리 숫자만 봅니다(`_runtime.MD_NUMBERED`).
+  1이 아닌 번호로 시작하는 목록(`3. 셋`)은 Word·PowerPoint 자동 번호가 1부터 다시 매기므로, 번호를 글로 둔 일반 단락(줄)으로 넣습니다.
+  빈 줄로 띄운 `1. 가` / `2. 나`는 한 목록으로 이어 붙입니다. 다시 읽기 확인은 넣은 글 그대로(`3. 셋`)를 기대합니다.
+- 오류 로그 message: `excel style --highlight`의 `입력: <규칙>`, word 앵커의 `비슷한 문구: '<문서 글>'`, 장절 `[후보]`(문서 제목) 등
+  가린 인자 값과 문서에서 가져온 글이 message에 그대로 남던 문제. `write_error_log`가 `redact_argv`로 가린 값을 같은 `<N자 생략>`으로 바꾸고,
+  `LOG_CUT_MARKERS`(`[후보]`, `[추천]`, `비슷한 문구:`, `사용 가능한 <종류>:`)부터 끝까지를 `<문서에서 가져온 후보·문구 N자 생략>`으로 자릅니다.
+  stdout JSON의 message는 그대로이고, 가리기에 실패해도 로그 기록은 오류를 삼킵니다.
+- `office.py undo --list`: 되돌릴 수 없는 작업(새로 만든 파일 등)만 있으면 preview는 "지점 0개"인데 `count: 1`과 항목의 command를 실행하라는
+  안내이던 문제. `count`·`shown`은 되돌릴 수 있는 지점만 세고(되돌릴 수 없는 작업 수는 `barriers`), 0개면 `VERIFIED: 0건.` 안내입니다.
+- `reader clear`(실제 지우기): `applied`를 지우지 못한 캐시까지 넣어 만들고, `clear_done_*.csv`를 지우기 전에 쓰던 문제. `applied`는 지우고 다시 읽어도
+  없는 것만, CSV는 지운 뒤 `removed`(True/False) 열과 함께 씁니다.
+- 0건 결과 (R2): `ppt slide --action list`(슬라이드 0장), `outlook list`(`--unread` 포함, 0통), `outlook search`(0통)에 `count`가 없거나 directive가
+  0건을 말하지 않던 문제. `count`와 `VERIFIED: 0건. ...`을 줍니다(`outlook`의 `count`는 `--limit` 안에서 가져온 메일 수).
+
+### 문서
+- 남은 할 일: 1.4.26에서 고친 0건 항목(office windows, info --all, chart list, undo --list)과 이번에 고친 outlook list를 뺐습니다.
+
+## [1.4.26] - 2026-11-03
+
+17차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1426.py`.
+
+### 수정
+- `ppt write` 다시 읽기 (1.4.25 회귀): 기대 글에서만 `**`, `__`를 빼고 다시 읽은 글에서는 빼지 않아, 첫 본문 줄이 코드 줄
+  (`def __init__(self):`, `x**2`)이거나 제목에 `__`·`**`가 있으면(`## __init__ 설명`, `--title "__main__ 실행"`) 거짓 `UNVERIFIED`이던 문제.
+  기대 글은 넣은 글 그대로(굵게 표시는 이미 뺀 글)이므로 공백만 빼고 비교합니다.
+- `word write` 다시 읽기: `---`(구분선, YAML 머리말)로 시작하는 `.md`가 `'--'을 찾지 못함`으로 `UNVERIFIED`, 첫 표 행의 `\|`를
+  잘못 다루던 문제. 마크다운은 해석한 블록에서 넣은 첫 글을 고르고(구분선은 건너뜀, 코드 줄과 표 칸은 글자 그대로),
+  `--callout`은 넣은 글 그대로, `--heading`/`--title`은 굵게 표시만 빼고 비교합니다.
+- `ppt write --text`: 펜스(```` ``` ````, `~~~`) 줄을 글자 그대로 넣고 안의 `**`, `__`를 굵게 표시로 읽던 문제. `.md`와 같이 펜스 줄은 넣지 않고
+  안의 코드 줄은 글자 그대로 넣습니다(목록 기호·굵게 표시 해석 없음).
+- `ppt write --file .md`: 3단계 이하 제목(`### **핵심** 요약`)을 굵게 표시를 빼지 않고 넣어 `**`가 보이던 문제.
+- `excel write --file .md`(`load_table_file`): 따로 만든 `|` 해석이 파일의 모든 `|` 줄(두 번째 표, 코드 블록 안 줄)을 모으고 `|--|--|`
+  정렬 줄을 데이터 행으로 남기며 `\|`에서 칸을 나누던 문제. word·ppt와 같은 `_runtime.parse_markdown_blocks`로 첫 번째 표만 씁니다.
+- 0건 결과 (R2): `office.py windows`(열린 문서 0개), `office.py undo --list`(되돌릴 지점 0개), `excel/word/ppt info --all`(열린 문서 0개),
+  `excel chart --action list`(차트 0개)에 `count`가 없거나 directive가 0건을 말하지 않던 문제. `count`와 `VERIFIED: 0건. ...`을 줍니다.
+- `reader clear --dry-run`(과 실제 지우기): 대상이 20개를 넘으면 `planned`/`documents`를 잘라 `truncated: true`인데 전체 목록이 없던 문제 (R2).
+  `<데이터 폴더>/results/clear_plan_<시각>.csv`(실제 지우기는 `clear_done_...`)에 전체 목록을 쓰고 `full_result_file`로 줍니다.
+- 오류 로그: `--section`(word read, reader search: 문서 제목 글)과 `excel style --highlight`(`=완료:...` 셀 값)를 가리지 않던 문제.
+  값을 `<N자 생략>`으로 남깁니다(`word --highlight`는 색 이름이라 그대로).
+
+### 문서
+- README: 마크다운 블록 해석 범위를 `word write`의 `.md`·`--text`, `ppt write`의 `.md`로 고침(`ppt write --text`는 줄 단위, 펜스 안만 글자 그대로).
+
+## [1.4.25] - 2026-11-03
+
+16차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1424.py` (1.4.25 부분).
+
+### 수정
+- 마크다운 코드 블록 (1.4.24 회귀): 코드 줄을 보통 단락으로 넘겨 `**`, `__`를 굵게 표시로 읽어 `def __init__(self):`가 `def init(self):`(굵게),
+  `x**2`가 `x2`로 들어가고 VERIFIED이던 문제. 코드 줄은 새 블록 종류 `code`로 넘기고 Word·PowerPoint 모두 글자 그대로 넣습니다.
+- 줄 첫머리의 인라인 코드(```` ```x``` ````)를 코드 블록 시작으로 보아 문서 끝까지 코드가 되던 문제 (백틱 펜스의 정보 글에는 백틱이 없음).
+- `word write --file`: 코드 블록으로 시작하는 `.md`는 다시 읽기에서 펜스 줄(```)을 찾다가 UNVERIFIED가 될 수 있었음. 첫 코드 줄로 확인합니다.
+
+## [1.4.24] - 2026-11-03
+
+15차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1424.py`.
+
+### 수정
+- `find_chart` `[후보]`: 같은 이름 차트를 후보끼리만 세어, 제목으로 찾은 차트의 이름이 후보가 아닌 같은 시트 차트와 같으면
+  `시트!이름` 후보를 다시 줘도 둘로 찾아져 또 `[후보]`가 나오던 문제. 그 시트의 모든 차트로 세어 이름이 겹치면 `시트!#번호`를 줍니다
+  (후보마다 차트 하나로 찾아짐).
+- `reader`: FileHeader 스트림이 없는 OLE 파일(이름만 `.hwp`인 `.doc`/`.xls` 등)이 `ERROR:` 내부 오류("file not found")로 끝나던 문제.
+  STOP_RETRY "HWP 5.0 문서가 아닙니다"로 답하고, FileHeader를 읽다 난 OLE 오류는 손상된 파일로 봅니다.
+- `excel style --highlight`: 값의 `"`가 조건부 서식 수식(`Formula1`)을 깨뜨려 COM 오류가 나던 문제(`""`로 겹쳐 씀).
+  `포함:` 규칙은 SEARCH가 `~ ? *`를 와일드카드로 읽어 더 넓게 강조하던 것을 `~`를 붙여 글자 그대로 찾습니다.
+- `excel write --append --formula`: 쓸 행을 아래로 옮기고도 원래 행 기준 수식을 그대로 써, 상대 참조가 원래 행을 가리키고 `VERIFIED`이던 문제.
+  Excel `ConvertFormula`로 원래 첫 수식 칸 기준 R1C1로 바꾼 뒤 실제로 쓸 칸 기준 A1로 되돌려 씁니다(`$` 참조는 그대로).
+  바꾸지 못하면 아무것도 쓰지 않고 STOP_RETRY와 `[추천] --range`. 가짜 Excel(`tests/fake_excel.py`)에 `ConvertFormula`를 넣었습니다.
+- 마크다운 해석(`_runtime.parse_markdown_blocks`, word/ppt `write`): 펜스 코드 블록을 몰라 안의 `# 주석`이 제목 1, `- x`가 글머리표가 되고
+  펜스 줄이 본문에 들어가며 코드 줄이 한 단락으로 합쳐지던 문제. 펜스(백틱 3개 이상 또는 `~~~`) 안은 줄마다 단락 하나로 글자 그대로
+  (들여쓰기 유지, 빈 줄 생략), 펜스 줄은 넣지 않고, 닫지 않으면 끝까지 코드로 봅니다. `looks_like_markdown`도 펜스를 마크다운으로 봅니다.
+- 마크다운 표: 머리글 다음의 정렬 줄이 `-` 1~2개(`:-`, `-:`, GFM에서 맞는 형식)이면 데이터 행으로 남던 문제, 칸 안의 `\|`가 칸을 나누던 문제.
+  `\|`가 아닌 `|`에서만 나누고 `\|`는 글자 `|`로 바꿉니다.
+- `ppt write --cards`: 남은 공간을 보지 않아 긴 `--text` 아래에서 카드가 슬라이드 밖(위 518pt, 슬라이드 높이 540pt)에 놓이고 `VERIFIED`이던 문제.
+  카드·그림은 80pt도 남지 않으면 새 슬라이드에 넣고 `warnings`와 stderr `[WARN]`으로 알립니다. 다시 읽기에서 이번에 넣은 도형이
+  슬라이드 경계 밖이면 `UNVERIFIED`(`_verify_inside`).
+- `reader.parse_pages`(`read --pages/--units`, ppt `--slides`): 범위를 문서 크기로 줄이기 전에 다 돌아 `--units 1-999999999`가 멈추던 문제. 먼저 줄입니다.
+
+## [1.4.23] - 2026-11-03
+
+14차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1423.py`.
+
+### 수정
+- `outlook search`: DASL 필터를 만들 때 `_`를 공백으로 바꾸고 `%`를 지워 `견적서_v2`, `10% 할인` 같은 검색어가 절대 맞지 않고
+  `VERIFIED: 일치하는 메일이 없습니다`로 끝나던 문제. 작은따옴표만 겹쳐 쓰고 `%`, `_`는 그대로 둡니다(와일드카드지만 자기 자신과도 맞아
+  빠지는 메일이 없음). 그런 검색어는 제목·본문·보낸사람을 다시 읽어 글자 그대로 들어 있는 메일만 남깁니다(대소문자 무시).
+- `office.py transfer --chart`: 차트 그림 파일 이름 `chart_<차트 이름>`을 정리하지 않아, 제목 `1/4분기 매출`로 만든 차트(이름도 그 제목)는
+  없는 폴더 경로가 되어 export·redraw가 실패하던 문제. `_runtime.safe_filename`을 새로 두고 `resolve_output_path`가 기본 이름
+  (`default_stem`)을 늘 정리합니다(`\ / : * ? " < > |`, 제어 문자 -> `_`, 끝의 점·공백 제거, `CON`·`NUL`·`COM1` 같은 예약 이름 앞에 `_`).
+  시트 이름으로 만드는 기본 파일 이름(`excel read --save`, `excel export`)도 같습니다. `outlook._safe_name`도 이 함수를 씁니다.
+- `find_chart`: `시트!이름`을 첫 `!`에서만 나눠
+  - 시트 `A`와 `A!B`가 함께 있으면 `A!B`의 차트를 찾지 못했고(`'A!B'!차트`도 마찬가지),
+  - 다른 시트에 이름이 글자 그대로 `Sheet1!x`인 차트가 있으면 Sheet1의 `x`를 지우거나 Sheet1에 차트가 없으면 "먼저 만드세요"라고 하던 문제.
+  `'시트'!이름`(작은따옴표 안의 `''`는 `'`) 형식은 그 시트에서만 찾고, 따옴표 없는 형식은 `!` 자리마다 나눠 찾아지는 나눔만 씁니다.
+  글자 그대로의 차트 이름으로도 찾아 둘 다 찾아지면 `[후보]`. 시트·차트 이름에 `!`나 `'`가 있으면 `[후보]`는 `'시트'!이름` 형식입니다.
+  `--sheet`가 앞부분의 시트와 다르면 두 시트를 말하는 STOP_RETRY, 차트가 없다는 안내도 시트 이름을 말합니다.
+- `find_chart`: 한 시트에 이름이 같은 차트가 둘이면 `[후보]`가 하나로 합쳐져 첫 차트를 말없이 골랐던 문제. `[후보] 시트!#번호`를 내고
+  `#번호`(그 시트의 몇 번째 차트)를 받습니다. `chart --action delete`는 같은 이름 차트가 하나 줄었는지로 확인합니다(남은 같은 이름 때문에
+  `UNVERIFIED`가 되지 않게).
+- `reader`: 손상된 HWPX(XML 오류), HWP(압축 해제 오류, OLE 구조 오류)가 `ERROR:` 내부 오류와 traceback으로 끝나던 문제.
+  `load_document_status`에서 STOP_RETRY "손상된 파일이라 읽을 수 없습니다"로 바꿉니다(내부 오류로 기록하지 않음).
+- `office.py undo --pick 0`이 `args.pick or 1` 때문에 가장 최근 지점을 되돌리던 문제. 0 이하는 아무것도 바꾸지 않고 STOP_RETRY.
+- `outlook list/search --limit`에 상한이 없던 문제. 200을 넘으면 200통으로 줄이고 `warnings`, 0 이하는 STOP_RETRY.
+
+## [1.4.22] - 2026-11-03
+
+13차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1421.py` (1.4.22 부분).
+
+### 수정
+- `find_chart`: 차트 `[후보]`의 `시트!이름`을 `--sheet`와 함께 주면 찾지 못하던 문제(앞부분이 그 시트와 같으면 받음).
+- `find_chart`: 차트 이름에 `!`가 있으면(`매출 증가!`) `시트!이름` 후보를 다시 줘도 찾지 못하던 문제. 왼쪽부터 `!` 자리마다 나눠
+  앞부분이 있는 시트 이름이고 뒷부분이 비어 있지 않은 첫 경우를 씁니다.
+- SKILL.md 결과 처리 표: 문서 `[후보]`를 늘 `--target`으로 안내하던 문구를, message가 말한 옵션(`--target`, `--to-target`,
+  `--from-target`, `--name`)을 쓰라고 고침.
+
+## [1.4.21] - 2026-11-03
+
+12차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1421.py`.
+
+### 수정
+- 시트를 주지 않은 차트 찾기(`excel.find_chart`: `office.py transfer --chart`, `excel.py chart --action delete --name`)가 모든 시트에서
+  이름 또는 제목이 맞는 첫 차트를 골라, 다른 시트에 같은 이름/제목 차트('매출')가 있으면 엉뚱한 차트를 옮기거나(VERIFIED) 지우던 문제.
+  `excel chart`의 `next_commands`에 `--sheet`가 없어 SKILL 순서대로 해도 생겼고, 다른 차트의 제목이 이 차트의 이름과 같으면 가려졌습니다.
+  - 이름이 같은 차트를 제목이 같은 차트보다 우선합니다. 그래도 둘 이상이면 하나를 고르지 않고 STOP_RETRY와 `[후보] 시트!이름`을 냅니다.
+  - 차트 이름 자리에 `시트!이름`을 받습니다(앞부분이 있는 시트 이름일 때. `--sheet`와 같음).
+  - `excel chart`의 `next_commands`(transfer)에 `--sheet <차트가 있는 시트>`를 넣습니다.
+- 이름이 같은 열린 문서가 여럿일 때(`_office.match_open`) 안내가 늘 `--target`이던 문제. 그 명령의 옵션을 말합니다:
+  transfer 받는 쪽 `--to-target`, 보내는 쪽 `--from-target`, `office.py focus`는 `--name` (`match_open(option=...)`).
+
+## [1.4.20] - 2026-11-02
+
+11차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1420.py`.
+
+### 수정
+- `office.py transfer --to word,ppt`(차트·범위): 워드에 먼저 넣은 뒤 PowerPoint가 열려 있지 않으면 `STOP_RETRY: 실행하지 않았습니다 ...
+  같은 명령에 --target ...`으로 끝나, 워드는 이미 바뀌었는데 다시 실행하면 워드에 두 번 들어가고 transfer에 없는 `--target`을 안내하던 문제.
+  `excel chart`의 `next_commands`가 늘 `--to word,ppt`라 워드만 열려 있으면 SKILL 순서대로 해도 생겼습니다.
+  - 넣기 전 확인: 받는 앱이 둘 이상이면 무엇이든 넣기 전에 앱마다 받는 문서(활성 문서 또는 `--to-target`)와 앱별 인자(`--anchor`, `--slide`)를
+    확인합니다. 못 찾은 문서가 있으면 아무것도 바꾸지 않고 STOP_RETRY(`error_type: target_not_open`)와 찾은 앱만으로 바꾼 같은 명령
+    `[추천] python ... --to word`를 냅니다. 하나도 못 찾으면 문서를 열어 달라고 하거나 `--to`에 앱 하나와 `--to-target`을 쓰라고 안내합니다
+    (`--to-target`은 모든 받는 앱에 함께 쓰임).
+  - 넣은 뒤 일부 실패(늦게 드러난 대상 문제, COM 오류 등): 이미 다른 앱에 넣었으면 오류로 끝내지 않고 `UNVERIFIED`와
+    `succeeded`/`failed`/`failures`로 답합니다(다시 실행하면 넣은 앱에 또 들어간다고 알림). 아무 앱에도 넣지 않았으면 지금처럼 오류.
+- transfer에서 열린 문서가 없을 때 안내가 이 명령에 없는 `--target` 대신 받는 쪽은 `--to-target`, 보내는 쪽은 `--from-target`을 말합니다
+  (`open_target(option=...)`, `_office.no_open_doc`).
+
+### 기능
+- `excel chart`의 `next_commands`는 문서가 열린 받는 앱만 `--to`에 넣습니다(워드만 열려 있으면 `--to word`). 둘 다 열렸거나 둘 다 없거나
+  확인하지 못하면 지금처럼 `--to word,ppt`(transfer가 넣기 전에 다시 확인).
+
+## [1.4.19] - 2026-11-02
+
+10차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1418.py` (1.4.19 부분).
+
+### 수정
+- `word replace`: 바꿀 글이 찾을 글을 품고 255자를 넘으면, 바꾼 뒤 다시 세는 단계에서 Word 찾기가 오류 5854로 끝나 문서는 바뀌었는데
+  `ERROR:`로 보고하던 문제. 255자를 넘는 글은 Word 찾기 대신 각 스토리 글에서 직접 셉니다.
+- 찾을 글과 `--anchor`의 255자 한도를 1.4.18의 `^` -> `^^` 바꿈 뒤 길이로 셉니다 (`^`가 많은 글이 한도 안으로 보였다가 COM 오류가 나지 않게).
+  가짜 Word도 255자를 넘는 검색어를 오류로 거절합니다.
+
+## [1.4.18] - 2026-11-02
+
+9차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1418.py`.
+
+### 수정
+- `ppt replace`: 1.4.17에서 찾은 곳을 파이썬 글자 위치로 PowerPoint에 넘겼는데, PowerPoint는 UTF-16 단위로 세어
+  앞에 이모지(BMP 밖 글자)가 있으면 뒤쪽 일치를 건너뛰던 문제(다시 읽기에서 UNVERIFIED). PowerPoint에는 UTF-16 위치를 넘기고
+  다음 찾기는 파이썬 위치로만 이어 갑니다.
+- `word replace`/`--anchor`: Word 찾기는 와일드카드가 꺼져 있어도 `^`를 특수 코드로 읽어 `감사합니다^^`가 `감사합니다^`와 맞거나
+  `10^6`이 COM 오류가 되던 문제. 찾는 글의 `^`를 `^^`로 바꿔 글자 그대로 찾습니다. 가짜 Word(`tests/fake_word.py`)도 `^` 코드를 흉내 냅니다.
+
+## [1.4.17] - 2026-11-02
+
+8차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1417.py`.
+
+### 수정
+- `excel replace --find ""`(또는 `--map {"": "X"}`, 다른 키와 섞인 경우, `--all-sheets` 포함): 빈 글을 찾으면 값이 있는 모든 칸의 글자 사이에
+  바꿀 글이 끼어드는데 `VERIFIED`로 보고하던 문제. `word replace`/`ppt replace`도 같은 확인이 없었습니다. 셋 모두 찾을 글이 빈 문자열이면
+  아무것도 바꾸기 전에 STOP_RETRY와 `write` 안내(빈 칸 채우기는 `excel.py write --range B2:B10 --value 0`)를 냅니다. 공백만 있는 찾을 글은 그대로 허용합니다.
+- `office.py transfer --to excel`로 새 파일을 만들 때 기본 시트가 여럿이면(Office 2007/2010 기본 `Sheet1`~`Sheet3`, `SheetsInNewWorkbook`)
+  `--sheet Sheet1`이 '이미 있음'으로 멈춰 빈 새 파일만 남던 문제(1.4.16은 기본 시트가 1개일 때만 고침). 방금 만든 새 파일이면 기본 시트 수와 관계없이 그 빈 시트에 받습니다.
+- `ppt replace`/`word replace`에서 대소문자만 다른 치환(`--find iphone --replace iPhone`)이 이미 `iPhone`인 곳도 바꾼 곳으로 세어 `replaced` 2, `VERIFIED`,
+  바뀐 것 없는 되돌리기 지점을 남기던 문제. 또 `ppt replace --find iPhone --replace iPhone`이 `iPhone and IPHONE`에서 1곳만 바꾸고 2곳으로 세던 문제.
+  찾은 곳마다 글을 바꿀 글과 비교해 글자 그대로(대소문자까지) 같으면 건드리지 않고 `unchanged_same_text`로 세고, 실제로 바뀐 곳만 `replaced`로 셉니다
+  (서식 옵션이 있으면 지금처럼 모두 바꿈). `ppt.replace_in_range`는 (바꾼 수, 같은 수)를 돌려줍니다.
+- 다시 읽어 확인(R1): `ppt replace`/`word replace`는 바꿀 글이 대소문자까지 그대로 있는지 확인합니다(대소문자만 바꾸는 치환도 확인).
+
+## [1.4.16] - 2026-11-02
+
+7차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1416.py`.
+
+### 수정
+- `ppt replace --find A --replace A`(서식 없음, `--match-case` 없음): 대소문자만 다른 곳(`IPHONE`, `iphone`)이 있으면 PowerPoint가
+  찾는 글 그대로 바꿔 써 대소문자가 통일되는데, 1.4.15는 "바꿀 글이 찾는 글과 같다"며 바꾸지 않고 VERIFIED로 보고하던 문제.
+  대소문자가 모두 같을 때만 바뀐 것 없음으로 봅니다.
+- `office.py transfer --to excel`로 새 파일을 만들 때 `--sheet`가 새 통합 문서의 기본 시트 이름(`Sheet1` 등)과 같으면 '이미 있음'으로 멈춰
+  빈 새 파일만 남던 문제. 방금 만든 파일의 유일한 기본 시트에 받습니다.
+- `range hide`/`unhide`(일부만 숨긴 범위에서 `Hidden`이 섞임 대신 False일 수 있음)와 `range clear` 전체·서식(사용 범위 밖 칸에도 데이터 유효성·메모가
+  있을 수 있음)을 "바뀐 것 없음"으로 건너뛰면 실제 변경을 놓칠 수 있어, 이들은 늘 바꾼 것으로 봅니다(되돌리기 지점이 하나 더 남을 수 있음).
+  `clear --type contents`는 값이 있는 칸으로 계속 판단합니다.
+
+## [1.4.15] - 2026-11-02
+
+6차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1415.py`.
+
+### 수정 (엑셀 시트 이름)
+- 엑셀이 예약한 시트 이름 `History`(대소문자 무관): 시트를 만든 뒤 이름을 붙이다 실패해 빈 시트가 남던 문제(`sheet add/rename/copy`, `write --new-sheet`,
+  `office.py transfer --sheet`). 아무것도 바꾸기 전에 STOP_RETRY와 `[추천] History_`(있는 시트와 겹치면 번호)를 냅니다(`_office.check_sheet_name`).
+  가짜 Excel(`tests/fake_excel.py`, `fake_office.py`)도 실제 Excel처럼 쓸 수 없는 이름(`History` 포함)을 `Name`에서 COM 오류로 거절합니다.
+- `office.py transfer --sheet`: 받는 문서의 시트 이름을 모른 채 확인해, `[추천]` 이름이 이미 있는 시트와 겹치면 안내대로 1번 다시 실행해도 "이미 있음"으로 막히던 문제.
+  문서를 연 뒤 시트 이름을 알고 나서, 아무것도 바꾸기 전에 확인합니다. 새로 만들 파일(없는 전체 경로)은 파일을 만들기 전에 확인합니다.
+
+### 수정 (되돌리기 지점, 1.4.14 보완)
+- 도구가 연 닫힌 파일: 휘발성 수식(NOW, RAND 등)이 있으면 열기만 해도 저장 안 된 상태라, 바꾼 것 없이 성공한 실행도 사용자 파일을 다시 저장하고
+  바뀐 것 없는 되돌리기 지점을 남기던 문제. 명령이 바꾼 것(`t.changed`)이 있을 때만 저장합니다.
+- 바꾼 것 없이 성공했는데 바꾼 것으로 표시되어 지점을 남기던 명령(다음 `undo`가 바뀐 것 없는 이 지점으로 되돌림):
+  - `excel replace`/`word replace`/`ppt replace`에서 바꿀 글이 찾는 글과 같고(`--map {"A": "A"}` 포함) 서식이 없는 경우. "N곳 처리"로 보고하던 것을
+    0곳/0칸 바뀜(`changed_cells`/`replaced` 0, 찾은 수는 `unchanged_same_text`)으로 답합니다. `excel replace`의 서식 없는 수식 칸도 바꾼 칸으로 세지 않습니다.
+  - `ppt slide --action move`를 같은 자리로(`--slide 2 --to 2`), `ppt notes --overwrite`를 같은 노트로.
+  - `excel range`: 숨긴 것 없는 `unhide`, 이미 숨긴 `hide`, 병합 없는 `unmerge`, 이미 그 범위로 병합된 `merge`, 고정 없는 `unfreeze`, 같은 `width`/`height`,
+    사용 범위 밖(`Intersect(UsedRange)`)이거나 값이 없는(`--type contents`) `clear`, 같은 자리로 `copy`/`move`. COM 속성으로 확인하고 알 수 없으면 바꾼 것으로 봅니다.
+  바꾸지 않은 결과는 "바뀐 것 없음"(`unchanged: true`)으로 알립니다.
+
+### 수정 (PPT)
+- `ppt replace --find X`만 주면(바꿀 글·서식 없음) 아무것도 바꾸지 않아야 하는데 대소문자만 다른 글을 바꾸고 "N곳 처리"로 보고하던 문제. `excel`/`word replace`와 같게 STOP_RETRY.
+
+## [1.4.14] - 2026-11-02
+
+5차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1414.py`.
+
+### 수정 (되돌리기 지점)
+- 바꾼 것 없이 성공한 쓰기(`excel replace` 0곳, `chart --action delete --all`에 차트 0개, 이미 있는 시트 `sheet add`, `sheet select`, 빈 슬라이드 `ppt slide clear`)가
+  되돌리기 지점을 남겨, 다음 `office.py undo`가 바뀐 것 없는 이 지점으로 되돌리고 `VERIFIED`로 답하던 문제(실제로 바꾼 작업은 그대로 남음).
+  성공한 실행에도 "바뀐 것 없음" 기준(도구가 연 파일은 디스크 파일 그대로, 열린 문서는 `t.changed` 없고 저장 상태 그대로)을 적용해 지점을 지웁니다.
+  `OfficeTarget.set_focus(..., changed=False)`로 바꾸지 않은 명령을 표시하고, 화면 이동 없이 바꾸던 `excel sheet --action delete`는 `t.changed`를 표시합니다.
+
+### 수정 (엑셀)
+- 쓸 수 없는 시트 이름(`/ \ ? * [ ] :`, 31자 초과, 빈 이름, 앞뒤 `'`): 시트를 만들거나 복사한 뒤 이름을 붙이다 실패해 빈 시트·복사본이 남던 문제
+  (`write --new-sheet`, `sheet add/rename/copy`, `office.py transfer --sheet`. `transfer`는 31자에서 말없이 자르던 것도).
+  아무것도 바꾸기 전에 STOP_RETRY와 `[추천]`(쓸 수 없는 글자를 `_`로 바꾸고 31자로 자른 이름, 있는 시트와 겹치면 번호)을 냅니다(`_office.check_sheet_name`).
+  `sheet copy`의 기본 이름은 31자를 넘지 않게 `<시트 28자> 복사`.
+- 닫힌 xlsx의 큰 범위 읽기: 파일에 적힌 크기가 서식만 있는 먼 칸(`Z300000`)까지면 데이터가 작아도 STOP_RETRY이던 문제. 그 크기로도 상한을 넘으면 값을 훑어 실제 끝까지 줄입니다.
+
+### 수정 (reader)
+- 스캔 PDF `read --save`: 모든 쪽이 스캔이면 `VERIFIED`와 빈 파일을 다른 문서에 넣는 `next_commands`를 주던 문제. `UNVERIFIED`(OCR 필요), 0개 저장이거나 스캔 쪽 글뿐이면 `next_commands` 없음.
+- `read --pages`로 도장·Bates 번호만 남은 스캔 쪽만 고르면 `VERIFIED`이던 문제. 고른 쪽이 모두 `pages_without_text`이면 읽기·저장 모두 `UNVERIFIED`.
+- 색인(`index.json`)이 UTF-8로 풀리지 않으면(1.4.13 회귀) `read_text_file`의 입력 오류가 그대로 나가 `clear --all`까지 모든 reader 명령이 실패하던 문제.
+  바이트로 읽어(`retry_fs`) UTF-8로 풀고, 풀리지 않으면 손상으로 보고 캐시 문서로 다시 만듭니다. `IndexReadError`는 끝내 읽지 못한 `OSError`일 때만.
+- `search` directive가 늘 `--save "근거.xlsx"`를 안내해 `next_commands`의 `.md` 저장 명령과 다르던 문제. 결과가 잘렸을 때만 `next_commands`의 저장 명령을 가리킵니다.
+
+## [1.4.13] - 2026-11-02
+
+4차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1413.py`.
+
+### 수정 (되돌리기 지점, 1.4.12 정리 보완)
+- `excel write --new-sheet`: 시트를 먼저 만들고 수식·범위를 확인해, 입력 오류로 멈추면 새 시트만 남고 되돌리기 지점은 지워지던 문제
+  (안내대로 다시 실행하면 "이미 있음"으로 막힘). 칸 주소·수식 확인과 쓸 내용 계획을 모두 마친 뒤 쓰기 직전에 시트를 만듭니다.
+- `excel style --clear --highlight 잘못된값`: 서식을 지우고 테마를 적용한 뒤에 `--highlight`를 확인해, 지운 서식이 되돌리기 지점 없이 남던 문제.
+  `--highlight`는 문서를 열기 전에 확인합니다. 같은 점검으로 `excel replace --all-sheets`는 모든 시트의 범위를 바꾸기 전에 확인하고,
+  `outlook new/reply/forward`는 본문 파일·첨부 파일을 메일을 만들기 전에 확인합니다.
+- 이번 실행의 지점을 지우는 조건: 입력 오류이기만 하면 지우던 것을, 문서를 바꾸지 않았을 때만 지웁니다.
+  열린 문서는 바꾼 표시(`t.changed`)가 없고 저장 상태가 그대로일 때(원래 저장 안 된 문서는 입력 오류일 때만),
+  도구가 열거나 만든 파일은 디스크 파일이 그대로일 때(오류나 `Save()` 실패로 저장하지 않고 닫은 경우).
+- 오래된 지점 정리(문서별 5개)를 명령 실행 전에 해, 거절된 실행이 진짜 옛 지점 하나를 밀어내던 문제. 명령이 문서를 바꾼 뒤에만 정리합니다
+  (`save_snapshot`/`save_barrier`의 `rotate=False`, `rotate_point`).
+
+### 수정 (reader)
+- 색인(`index.json`)을 읽다 일시적 오류(공유 위반, 백신)가 나면 빈 색인으로 보고 그 위에 저장해 항목이 사라지던 문제(120개 -> 1개).
+  `retry_fs`로 다시 읽고, 끝내 못 읽으면 색인을 바꾸지 않고 STOP_RETRY(`index`, `search` 등. 파일 읽기는 계속하고 색인 넣기만 건너뜀).
+  내용이 손상(JSON·인코딩 오류)된 경우에만 캐시 문서 파일로 색인을 다시 만들고 `recovered`로 알립니다(이전에는 빈 색인에서 다시 시작).
+- PDF 스캔 쪽: 스캔 위에 찍은 도장("RECEIVED"), 한 쪽짜리 스캔의 Bates 번호(머리글 빼기는 2쪽 이상)처럼 짧은 글이 남은 쪽을 놓치던 문제.
+  그림이 쪽 면적의 40% 이상을 덮고 남은 글이 40자보다 적은 쪽을 `pages_without_text`로 표시합니다. 보이지 않는 글자 층(OCR 결과)이 있는 쪽은 제외,
+  모든 쪽이 스캔 쪽이면 `ocr_needed`(`PARSER_VERSION` 8).
+- 스캔 이미지 PDF의 `read`: "읽을 글이 없습니다 ... 다시 실행하지 마세요"(`VERIFIED`)로 답하던 문제. `ocr_needed`이거나 고른 쪽이 스캔 쪽뿐이면
+  `UNVERIFIED`(스캔 이미지라 글자 층이 없음, OCR 필요). Bates 번호만 읽힌 경우도 같습니다.
+- `search --full`의 저장 안내가 엑셀 칸 상한(32,000자)보다 긴 단락이 있어도 `--save 근거.xlsx`(반드시 `UNVERIFIED`)였던 문제. 그런 단락이 있으면 `근거.md`.
+- 오래된 색인 잠금 지우기의 경쟁: 두 실행이 함께 지우면 늦은 쪽이 먼저 쪽의 새 잠금을 지울 수 있던 문제. 고유 이름(`index.lock.stale.<pid>`)으로 옮긴 뒤 지우고,
+  옮긴 것이 새 잠금이면 되돌려 놓습니다. 잠금 대기를 15초로(잠근 쪽의 `retry_fs` 재시도 약 10.5초보다 길게).
+
+### 수정 (outlook·엑셀·공통)
+- `outlook read/current --save-attach`: 첨부 저장에 실패해도 `VERIFIED`였던 문제. 저장 실패가 있거나 저장한 파일이 없으면 `UNVERIFIED`(저장 뒤 파일이 있는지 다시 확인).
+- 닫힌 xlsx를 아주 큰 범위(`A1:XFD1048576`)로 읽으면 빈 칸을 채우다 메모리 부족(`ERROR`)이던 문제. 200만 칸을 넘으면 데이터가 있는 끝까지만 읽고 `recovered`로 알리며,
+  그래도 넘으면 STOP_RETRY와 `[추천] --range`.
+- 기본 저장 이름(`<이름>_<시각>`)이 같은 초에 겹치면 앞 결과를 말없이 덮어쓰던 문제. 번호를 붙인 새 이름(`_2`)으로 저장하고 `recovered`로 알립니다.
+- 엑셀 읽기 미리보기가 첫 행이 표시 상한을 넘어 뺀 열까지 "긴 값 N칸 잘림"으로 세던 문제. 긴 값과 뺀 열을 따로 알립니다("뒤쪽 N열 생략").
+  `_runtime.clamp_rows`는 (표, 행 잘림, 잘린 칸 수, 뺀 열 수)를 돌려줍니다.
+
+## [1.4.12] - 2026-11-02
+
+3차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1412.py`.
+
+### 수정 (reader)
+- `index`를 동시에 두 번 실행하면(다른 폴더) 색인(`index.json`) 항목이 사라지던 문제. 색인 읽기-고치기-쓰기를 `cache/index.lock`으로 잠급니다
+  (O_CREAT|O_EXCL, 최대 10초 대기, 60초보다 오래된 잠금은 지움). `index`는 끝에 색인을 다시 읽어 빠진 문서를 다시 넣고(`recovered`) 확인한 뒤에만 `VERIFIED`,
+  다시 넣지 못하면 `index_missing`과 `UNVERIFIED`. `index --all`은 색인에 없는 캐시 파일 중 원본이 있는 문서도 다시 넣습니다(`readded_to_index`).
+- PDF 글자 없는 쪽: 스캔 쪽에 찍힌 쪽 번호(Bates)가 있으면 놓치고, 쪽마다 작은 로고가 있는 빈 쪽은 "OCR 필요"로 알리던 문제.
+  이제 머리글·쪽 번호를 뺀 뒤 글이 없고 그림이 쪽 면적의 40% 이상을 덮는 쪽만 `pages_without_text`(OCR 글자 층이 있는 쪽은 제외, `PARSER_VERSION` 7).
+- 캐시 파일이 없거나 손상됐는데 원본도 없는 문서: `index --all`을 안내해 같은 안내가 반복되던 문제. 원본 없음으로 세고(`missing_file_count`) `clear --missing --dry-run` 명령.
+- `search --save x.xlsx|x.csv --full`이 `--full`을 무시하고 문맥을 3,000자에서 말없이 자르던 문제. `--full`이면 단락 전체(`.xlsx`는 셀 상한 확인), 아니면 잘린 행 수를 `context_clamped`와 directive로 알립니다.
+  JSON `--full`의 `text`가 2,000자에서 잘려도 표시가 없던 문제(`text_truncated`, `text_chars`, `truncated: true`, 저장 명령에 `--full`).
+- `search --top`, `--context`에 상한이 없어 출력이 끝없이 커지던 문제. `--top` 50, `--context` 500까지(`warnings`, 더 많은 결과는 `--save`).
+- `clear --file/--folder`가 `~`를 풀지 않던 문제(`search`/`read`와 같게).
+
+### 수정 (엑셀·워드·PPT·공통)
+- 없는 시트: `--new-sheet`가 없는 명령(`excel replace/style/range/chart`)에도 "`--new-sheet`를 붙여 실행"을 안내해 인자 오류가 나던 문제. 그 명령들은 "찾을 수 없음"(`[후보]`/`[추천]`), `excel write`만 새 시트를 물음.
+- 되돌리기: 쓰기 전에 멈춘 실행(입력 오류, `needs_user_decision`)도 스냅샷을 남겨, 다음 `office.py undo`가 바뀐 것 없는 그 지점으로 되돌리던 문제. 그 실행이 만든 지점을 지웁니다.
+- 출력 크기: 엑셀 읽기의 첫 행, 찾은 칸 값, 슬라이드 글이 아무리 커도 그대로 들어가던 문제. 칸·찾은 값은 500자(`value_truncated`), 슬라이드 글은 약 8,000자(`text_truncated`)에서 자르고 `truncated: true`와 `--save` 명령.
+  워드 단락·PPT 노트가 약 8,000자에서 잘려도 `truncated: false`였던 문제(`text_truncated`, `truncated_reason`). `_runtime.clamp_rows`는 (표, 행 잘림, 잘린 칸 수)를 돌려줍니다.
+- 엑셀 칸 주소 `A0`, `0:3`, `A1048577`, `XFE1`을 받아 닫힌 파일에서 그대로 읽던 문제(STOP_RETRY).
+- 도구가 쓴 CSV를 다시 읽을 때 구분자를 추측해 `' | '` 같은 칸이 있으면 행 수가 틀려 `UNVERIFIED`가 되던 문제(`check_saved_file(..., delimiter=",")`).
+- 닫힌 xlsx에서 범위를 직접 준 읽기(`A1:C5`)가 데이터 뒤의 빈 행을 빼 `rows`가 열린 문서와 달랐던 문제(준 범위만큼 채움).
+
+## [1.4.11] - 2026-11-02
+
+2차 점검에서 찾은 오류 수정 (1.4.10 회귀 포함). 회귀 테스트: `tests/test_review_v1411.py`.
+
+### 수정 (reader)
+- PDF 글자 없는 쪽(1.4.10 회귀): 머리글·쪽 번호를 뺀 뒤에 세어 빈 쪽·간지까지 "OCR 필요"로 알리고, 그 문서의 모든 검색이 `UNVERIFIED`가 되던 문제.
+  이제 빼기 전에도 글이 없고 그림이 있는 쪽만 `pages_without_text`(`PARSER_VERSION` 6). `search`는 `--pages`/`--section` 안의 쪽만 `not_searched`에 넣고, `read`는 읽으려는 범위 안의 쪽만 알립니다.
+- 이전 형식 캐시: 검색 때 다시 읽는 상한(20개)을 넘어 시도하지 않은 문서도 "다시 읽지 못함"으로 알리던 문제(이유를 나눔), `skipped`와 `stale`에 두 번 세어 "옛 내용으로 검색"이라고 잘못 알리던 문제(`skipped`에만),
+  원본이 없는 이전 형식 캐시에 `index --all`을 안내해 같은 안내가 반복되던 문제(`clear --missing --dry-run` 명령). 할 명령(`index --all`, `clear --missing`)을 `UNVERIFIED` directive 문구에도 넣습니다.
+- `read --save x.xlsx`, `search --save x.xlsx --full`: 셀당 32,000자에서 잘라 저장하고도 `VERIFIED`였던 문제. 잘린 행이 있으면 `UNVERIFIED`("셀 글자 상한 32000자 초과: N행 잘림 (.md로 저장하면 전체)"). 긴 글이 잘린 `read`의 저장 명령은 `.md`로.
+- `read`: `truncated_reason`이 저장할 때만 문자열이던 것을 늘 목록으로. 글자 없는 쪽 안내는 잘림이 아니므로 `notes`로. 엑셀 시트 행 상한에서만 잘렸으면 저장해도 그 뒤가 없으므로 `--save` 명령과 "전체 저장" 안내를 주지 않고 상한을 알립니다.
+
+### 수정 (PPT·엑셀·워드)
+- `ppt.py write --slide N --title`(1.4.10 회귀): 제목 개체틀이 없는 슬라이드의 본문 첫 줄을 기존 제목으로 보고 `needs_user_decision`을 내던 문제. 제목 개체틀의 글만 기존 제목으로 봅니다(개체틀이 없으면 확인 없음).
+- `ppt.py write --title 제목 --file 내용.md`: `.md` 첫 절의 제목이 `--title`과 같으면 본문 첫 줄에 같은 제목이 또 들어가던 문제(공백·대소문자 무시 비교).
+- `excel.py`/`word.py`/`ppt.py read --save`: 저장한 파일을 다시 열지 않고 `VERIFIED`였던 문제(R1). 엑셀 CSV는 빈 행을 뺀 행 수까지 비교, 확인하지 못하면 `UNVERIFIED`.
+- 닫힌 xlsx 읽기: 작은 범위(`A1:B2`)에도 시트 전체를 훑어 데이터 범위를 세던 것을 범위 생략·열/행 전체(`B:B`, `5:7`)일 때만, `Sheet!A1`의 시트로 바꾼 뒤에 셉니다.
+
+### 수정 (공통·outlook)
+- 오류 로그 가리기: 짧은 이름(`-q` = `--query`)과 줄여 쓴 이름(`--que`, `--bod=`)의 값이 그대로 남던 문제, `--map`(찾아 바꿀 JSON) 추가. 모든 파서가 줄여 쓴 옵션을 받지 않습니다(`allow_abbrev=False`).
+- `check_saved_file`: `.pptm`도 python-pptx로 다시 열어 확인(`.docm`은 python-docx가 열지 못해 그대로 `UNVERIFIED`).
+- 쓰기 `--target`(1.4.10 W8): `%USERPROFILE%\Desktop\새.xlsx`처럼 환경 변수·`~`가 든 전체 경로를 파일 이름으로 보고 거부하던 문제(푼 뒤에 판단). 없는 전체 경로에 열린 문서 전부를 `[후보]`로 주던 문제(파일 이름만 줄 때만 `[후보]`).
+- `outlook.py current --save`: 저장 확인 결과(`save_problem`)를 무시하고 늘 `VERIFIED`였던 문제(`read`와 같은 응답).
+- `outlook.py --attach`: 폴더 이름에 `;`가 든 경로는 하나일 때만 첨부되던 문제. 나눈 조각이 있는 파일이 아니면 뒤 조각을 이어 붙여 찾습니다.
+
 ## [1.4.10] - 2026-11-01
 
 전체 검토에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1410.py`.
@@ -451,10 +940,18 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 
 ### 1.4.0 점검에서 남긴 것
 - PowerPoint 닫힌 파일의 열기 암호, DRM 인증 창이 뜨는 문서: 백그라운드에서 멈출 수 있음 (감시 시간 초과 후 정리 필요).
-- 엑셀: 열린 문서의 열 전체 범위(`A:A`)를 사용 범위로 자르기 (닫힌 파일·CSV는 1.4.5), 조건부 강조 `포함:`의 상대참조(활성 셀 기준), 같은 이름 차트가 여러 시트에 있을 때 `[후보]`, `--map` 연쇄 치환, 보호된 시트 사전 확인, 잘못된 시트 이름 검사 전에 시트가 만들어지는 문제.
+- 엑셀: 열린 문서의 열 전체 범위(`A:A`)를 사용 범위로 자르기 (닫힌 파일·CSV는 1.4.5), 조건부 강조 `포함:`의 상대참조(활성 셀 기준), 같은 이름 차트가 여러 시트에 있을 때 `[후보]`, `--map` 연쇄 치환, 보호된 시트 사전 확인. (잘못된 입력 검사 전에 새 시트가 만들어지는 문제는 1.4.13)
 - 워드: 열린 문서의 자동 번호 제목(`ListFormat.ListString`)이 `outline`/`--section`에 나오지 않음(닫힌 파일과 번호 체계 다름), 목차(TOC) 안의 앵커 후보 구별, 머리글 안 글상자 치환. (`replace --find`만 준 경우는 1.4.10)
 - reader: HWP(바이너리) 개요 번호, PDF `find_tables` 성능(선이 있는 쪽만), 색인 저장 일괄화, BOM 없는 UTF-16 판별.
 - transfer relay 실패 시 넣은 빈 단락 정리.
+- "바뀐 것 없음"을 싸게 판정할 수 없어 늘 바꾼 것으로 보는 명령(되돌리기 지점이 남음): `excel style`(같은 서식 다시 적용, 서식 없는 범위 `--clear`),
+  `range autofit/border/freeze`(같은 칸 다시 고정), 같은 값으로 `write --overwrite`. (1.4.15에서 replace·slide move·notes·range unhide/unmerge/unfreeze/clear 등은 처리)
+
+### 23차 점검에서 남긴 것 (1.4.32)
+- L1 배열 수식: `ArrayFormula`(`<f t="array" ref="C1:C3">`)는 첫 칸에만 `<f>`가 있어 나머지 칸(C2:C3)은 계산된 값이 없어도 수식 칸으로 세지 않음.
+- L2 성능: 범위를 생략한 닫힌 xlsx 읽기는 수식이 있는 시트 XML 전체를 한 번 더 해석함(30만 행 시트에서 수 초). 열린 값 읽기와 함께 한 번에 훑기.
+- 24차 확인 검사 LOW-4: 데이터(A1:C10)와 멀리 떨어진 계산 안 된 수식 칸 하나(Z200000 등)가 있으면 범위 없는 읽기가 그 칸까지 빈 행을 채워 돌려주고, `-r A:Z`는 "범위가 너무 큽니다"와 그 수식 칸을 포함하지 않는 `[추천]` 범위를 냄 (안전하게 멈추지만 안내가 부정확).
+- 24차 확인 검사 LOW-5: reader 색인이 수식 칸 확인 실패(MemoryError 등)를 캐시에 저장해, 파일이 바뀌거나 캐시를 지울 때까지 같은 파일 읽기가 계속 UNVERIFIED("확인하지 못함")로 나옴. 확인 실패는 캐시하지 않기.
 
 ### 확인 필요
 - Windows 실기 검증: 회사 PC(Office 16)에서 1.4.1 실기 러너 71/71 통과. 남은 것: 1.4.5 쓰기 변경(write 덮어쓰기 확인, transfer 글자 유지)의 실기 확인, 눈 확인 항목.
@@ -470,8 +967,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] COM 내보내기(excel.py, word.py, ppt.py export)의 잠금 대비 `save_with_lock_fallback`. (1.4.0: 기존 출력 파일은 새 이름 저장 + `recovered` 완료)
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)
 - [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
-- [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위, outlook list, office windows, info --all, chart list, undo --list
-- [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel read --search(50), excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated`
+- [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위 (office windows·info --all·chart list·undo --list는 1.4.26, outlook list/search·ppt slide list는 1.4.27)
+- [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
 - [ ] next_commands: excel write의 차트 명령 자리표시 `--title 차트` 제거, word·ppt의 transfer 명령에 `--from-target`
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
 - [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`

@@ -57,7 +57,7 @@ class Parser(argparse.ArgumentParser):
             return super().print_help(file)
         text = self.format_help()
         sys.stderr.write(text)
-        emit({"status": "ok", "command": "help", "usage": text,
+        emit({"status": "ok", "command": "help", "verified": True, "usage": text,
               "agent_directive": "VERIFIED: 도움말입니다. 사용자에게 필요한 옵션만 알리세요."})
 
     def error(self, message):

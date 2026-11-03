@@ -15,7 +15,7 @@ import shutil
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import _runtime as rt
 
@@ -261,16 +261,23 @@ def get_active(kind: str) -> Dict[str, Any]:
         if doc is not None:
             full = str(getattr(doc, "FullName", "") or doc.Name)
             return {"name": str(doc.Name), "path": full if os.path.isabs(full) else "", "app": app, "doc": doc}
-    raise rt.UserDecisionError(
-        f"열려 있는 {APP_LABEL[kind]} 문서가 없습니다.",
+    raise no_open_doc(kind)
+
+
+def no_open_doc(kind: str, option: str = "--target", note: str = "") -> "rt.UserDecisionError":
+    """열린 문서가 없음. option: 이 명령에서 대상 문서를 주는 옵션 (office.py transfer는 --from-target/--to-target)."""
+    return rt.UserDecisionError(
+        f"열려 있는 {APP_LABEL[kind]} 문서가 없습니다.{note}",
         "실행하지 않았습니다. 사용자에게 문서를 열어 달라고 하거나 파일의 전체 경로를 물어, 같은 명령에 "
-        "--target \"<전체경로>\"를 붙여 1번만 실행하세요. 경로를 추측하지 마세요.")
+        f"{option} \"<전체경로>\"를 붙여 1번만 실행하세요. 경로를 추측하지 마세요.")
 
 
-def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = None,
+               option: str = "--target") -> Optional[Dict[str, Any]]:
     """열린 문서 중 이름/파일명/전체 경로가 target과 같은 것 (대소문자 무시).
     전체 경로가 같으면 그 문서. 이름만 같은 문서가 둘 이상이면(다른 폴더의 같은 파일명, 다른 Excel 창의 Book1 등)
-    하나를 고르지 않고 [후보](전체 경로)와 함께 오류를 냅니다."""
+    하나를 고르지 않고 [후보](전체 경로)와 함께 오류를 냅니다.
+    option: 이 명령에서 대상 문서를 주는 옵션 (office.py transfer는 --from-target/--to-target)."""
     docs = list_open(kind) if docs is None else docs
     t = target.strip().strip('"')
     t_low = t.lower()
@@ -284,7 +291,7 @@ def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = No
     if len(hits) > 1:
         raise rt.ambiguous(
             f"열린 {APP_LABEL[kind]} 문서 중 이름이 '{t}'인 문서가 {len(hits)}개입니다. "
-            "어느 문서인지 사용자에게 확인한 뒤 --target에 전체 경로를 지정하세요.",
+            f"어느 문서인지 사용자에게 확인한 뒤 {option}에 전체 경로를 지정하세요.",
             [d["path"] or f"{d['name']} (저장 안 됨)" for d in hits])
     return hits[0] if hits else None
 
@@ -305,9 +312,11 @@ def missing_sheet(name: str, names: List[str]) -> "rt.InputError":
     same = [n for n in names if _sheet_key(n) == key]
     if len(same) == 1:
         return rt.InputError(f"시트 '{name}'이(가) 없습니다. 표기(대소문자·공백·_-.)만 다른 기존 시트가 있습니다. [추천] {same[0]}",
-                             no_fallback=True)
+                             no_fallback=True, log_message=f"시트 '{name}'이(가) 없습니다. 표기만 다른 기존 시트가 있습니다. [추천 생략]")
     shown = ", ".join(names[:15]) + (" ..." if len(names) > 15 else "")
     similar = same or rt.suggest(name, names)
+    # 오류 로그에는 시트 이름 목록을 남기지 않음 (문서에서 가져온 이름)
+    log_msg = f"시트 '{name}'이(가) 없습니다 (있는 시트 {len(names)}개 이름 생략). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다."
     if similar:
         return rt.UserDecisionError(
             f"시트 '{name}'이(가) 없습니다 (있는 시트: {shown}). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. "
@@ -315,12 +324,12 @@ def missing_sheet(name: str, names: List[str]) -> "rt.InputError":
             "다시 실행하지 마세요. message를 사용자에게 그대로 보여 주고, [후보]의 기존 시트에 쓸지 "
             f"새 시트 '{name}'을(를) 만들지 물어보세요. 사용자가 기존 시트를 고르면 --sheet를 그 이름으로 바꿔 실행하고, "
             "사용자가 새 시트를 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.",
-            candidates=similar)
+            candidates=similar, log_message=log_msg)
     return rt.UserDecisionError(
         f"시트 '{name}'이(가) 없습니다 (있는 시트: {shown}). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. "
         "새 시트를 만들지 사용자에게 물어보세요.",
         f"다시 실행하지 마세요. message를 사용자에게 그대로 보여 주고, 새 시트 '{name}'을(를) 만들지 물어보세요. "
-        "사용자가 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.")
+        "사용자가 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.", log_message=log_msg)
 
 
 def shape_box(obj: Any) -> Dict[str, float]:
@@ -371,8 +380,10 @@ def doc_identity(path: str) -> Optional[str]:
         return None
 
 
-def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "") -> Optional[str]:
-    """쓰기 직전 문서 상태를 저장합니다. 원본 문서는 저장하거나 경로를 바꾸지 않습니다. 실패해도 작업은 계속합니다."""
+def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "", rotate: bool = True) -> Optional[str]:
+    """쓰기 직전 문서 상태를 저장합니다. 원본 문서는 저장하거나 경로를 바꾸지 않습니다. 실패해도 작업은 계속합니다.
+    rotate=False: 오래된 지점 정리(SNAPSHOT_KEEP개 유지)를 하지 않음. open_target은 명령이 실제로 바꾼 뒤에만
+    정리합니다 (쓰기 전에 멈춘 실행이 진짜 옛 지점을 밀어내지 않도록)."""
     try:
         name = str(doc.Name)
         full = str(getattr(doc, "FullName", "") or "")
@@ -402,7 +413,8 @@ def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "") -> Opt
                 "doc_created": doc_identity(path),
                 "untitled": not path}   # 저장한 적 없는 문서: undo가 열린 문서 중 같은 이름의 '저장 안 된' 문서를 찾아 되돌림
         rt.safe_write_text(base + ".json", json.dumps(meta, ensure_ascii=False))
-        _rotate_snapshots(kind, key)
+        if rotate:
+            _rotate_snapshots(kind, key)
         rt.debug(f"스냅샷 저장: {os.path.basename(data_file)}")
         return data_file
     except Exception as e:
@@ -410,9 +422,9 @@ def save_snapshot(kind: str, doc: Any, tool: str = "", command: str = "") -> Opt
         return None
 
 
-def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str = "") -> None:
+def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str = "", rotate: bool = True) -> Optional[str]:
     """되돌릴 지점을 만들지 못한 쓰기를 기록합니다. undo가 이 작업을 건너뛰고 더 오래된 지점으로 되돌려
-    그 사이 작업까지 사라지게 하지 않도록 합니다 (기록 실패는 무시)."""
+    그 사이 작업까지 사라지게 하지 않도록 합니다 (기록 실패는 무시). 만든 기록 파일(.json) 경로를 돌려줍니다."""
     try:
         name = str(doc.Name)
         full = str(getattr(doc, "FullName", "") or "")
@@ -423,9 +435,11 @@ def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str 
         meta = {"app": kind, "name": name, "original_path": path, "barrier": True, "reason": reason,
                 "created_at": stamp, "created_ts": time.time(), "by": f"{tool} {command}".strip()}
         rt.safe_write_text(base + ".json", json.dumps(meta, ensure_ascii=False))
-        _rotate_snapshots(kind, key)
+        if rotate:
+            _rotate_snapshots(kind, key)
+        return base + ".json"
     except Exception:
-        pass
+        return None
 
 
 def delete_snapshot(meta_file: str) -> None:
@@ -441,6 +455,15 @@ def _rotate_snapshots(kind: str, key: str) -> None:
     metas = sorted(glob.glob(os.path.join(_snapshot_dir(), f"{kind}_{key}_*.json")), reverse=True)  # 이름의 시각 순
     for old in metas[SNAPSHOT_KEEP:]:
         delete_snapshot(old)
+
+
+def rotate_point(meta_file: str) -> None:
+    """이 지점(.json)과 같은 문서의 지점을 최신 SNAPSHOT_KEEP개만 남기고 정리합니다 (실패는 무시)."""
+    try:
+        kind, key, _ = os.path.basename(meta_file).split("_", 2)
+        _rotate_snapshots(kind, key)
+    except Exception:
+        pass
 
 
 def list_snapshots(kind: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -512,9 +535,11 @@ class OfficeTarget:
         return info
 
     # --- Excel ---
-    def sheet(self, name: Optional[str] = None, create: bool = False) -> Any:
-        """시트를 찾습니다 (대소문자 무시). 없으면 쓰기 세션 + create=True일 때만 만들고, 아니면 [추천]과 함께 오류.
-        create는 사용자가 새 시트를 명시한 경우(--new-sheet, sheet add)에만 켭니다. 오타 난 이름으로 새 시트를 만들지 않도록."""
+    def sheet(self, name: Optional[str] = None, create: bool = False, allow_create: bool = False) -> Any:
+        """시트를 찾습니다 (대소문자 무시). 없으면 쓰기 세션 + create=True일 때만 만들고, 아니면 [추천]/[후보]와 함께 오류.
+        create는 사용자가 새 시트를 명시한 경우(--new-sheet, sheet add)에만 켭니다. 오타 난 이름으로 새 시트를 만들지 않도록.
+        allow_create: 이 명령에 --new-sheet가 있어 '새 시트를 만들지' 물을 수 있는 경우(excel write)만 True.
+        그 밖의 명령(replace, style, range, chart 등)은 없는 옵션을 안내하지 않고 '찾을 수 없음'([후보]/[추천])."""
         sheets = self.doc.Worksheets
         if not name:
             try:
@@ -528,21 +553,25 @@ class OfficeTarget:
         if exact is not None:
             return sheets(exact)
         if create and not self.readonly:
+            check_sheet_name(name, names)       # 잘못된 이름은 시트를 만들기 전에 (만든 뒤 Name에서 실패하면 빈 시트가 남음)
             ws = sheets.Add(After=sheets(sheets.Count))
             ws.Name = name
             self.changed = True
             return ws
-        if self.readonly:
+        if self.readonly or not allow_create:
             raise rt.not_found("시트", name, names)
         raise missing_sheet(name, names)
 
-    def set_focus(self, sheet: Any = None, slide: Optional[int] = None) -> None:
-        """쓰기 후 사용자 화면을 이동할 위치를 기록합니다 (세션 종료 시 적용)."""
+    def set_focus(self, sheet: Any = None, slide: Optional[int] = None, changed: bool = True) -> None:
+        """쓰기 후 사용자 화면을 이동할 위치를 기록합니다 (세션 종료 시 적용).
+        changed: 이 명령이 문서를 바꿨는지. 바꾼 것 없이 성공한 명령(차트 0개 삭제, 이미 있는 시트 add 등)은 False로 주어
+        이번 되돌리기 지점을 지우게 합니다. 문서를 바꾸는 명령은 set_focus를 부르거나 t.changed = True로 표시합니다."""
         if sheet is not None:
             self.focus_sheet = sheet
         if slide is not None:
             self.focus_slide = int(slide)
-        self.changed = True
+        if changed:
+            self.changed = True
 
     def apply_focus(self) -> None:
         if self.readonly or self.source not in ("active", "open"):
@@ -558,6 +587,46 @@ class OfficeTarget:
                 self.doc.Activate()
         except Exception as e:
             rt.debug(f"화면 이동 생략: {e}")
+
+
+SHEET_NAME_BAD = re.compile(r"[\\/?*\[\]:]")    # 엑셀 시트 이름에 쓸 수 없는 글자
+SHEET_NAME_RESERVED = ("history",)              # 엑셀이 예약한 시트 이름 (변경 내용 추적용, 대소문자 무관)
+
+
+def check_sheet_name(name: Any, existing: Optional[List[str]] = None) -> None:
+    """엑셀 시트 이름 규칙(31자 이하, / \\ ? * [ ] : 없음, 빈 이름 아님, 앞뒤 ' 없음, 예약된 이름 History 아님)을
+    문서를 바꾸기 전에 확인합니다. 어기면 InputError와 [추천](쓸 수 없는 글자를 _로 바꾸고 31자로 자른 이름,
+    History는 History_, existing과 겹치지 않게). 이전에는 시트를 만든 뒤 Name에서 실패해 빈 시트가 남았음.
+    existing을 주지 않으면 [추천]이 있는 시트와 겹칠 수 있으므로 시트 이름을 아는 곳에서 부릅니다."""
+    text = "" if name is None else str(name)
+    if not text.strip():
+        raise rt.InputError("시트 이름이 비어 있습니다. 아무것도 바꾸지 않았습니다. 시트 이름을 지정하세요.")
+    problems = []
+    if SHEET_NAME_BAD.search(text):
+        problems.append("/ \\ ? * [ ] : 는 쓸 수 없음")
+    if len(text) > 31:
+        problems.append(f"31자까지 ({len(text)}자)")
+    if text.startswith("'") or text.endswith("'"):
+        problems.append("앞뒤에 ' 는 쓸 수 없음")
+    reserved = text.lower() in SHEET_NAME_RESERVED
+    if reserved:
+        problems.append("엑셀이 예약한 이름 (대소문자 무관)")
+    if not problems:
+        return
+    rec = SHEET_NAME_BAD.sub("_", text)[:31]
+    if reserved:
+        rec += "_"
+    if rec.startswith("'"):
+        rec = "_" + rec[1:]
+    if rec.endswith("'"):
+        rec = rec[:-1] + "_"
+    base, k = rec, 2
+    while existing and rt.find_name(rec, existing) is not None:
+        tail = f" {k}"
+        rec = base[:31 - len(tail)] + tail
+        k += 1
+    raise rt.InputError(f"시트 이름 '{text}'은(는) 엑셀에서 쓸 수 없습니다 ({', '.join(problems)}). "
+                        f"아무것도 바꾸지 않았습니다. [추천] {rec}")
 
 
 def _new_instance(kind: str) -> Any:
@@ -669,9 +738,66 @@ def _create_file(kind: str, app: Any, path: str) -> Any:
     return doc
 
 
+def _file_stamp(path: str) -> Optional[Tuple[float, int]]:
+    """디스크 파일의 (수정 시각, 크기). 없거나 읽지 못하면 None."""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime, st.st_size)
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def resolve_target(kind: str, target: str = "active", readonly: bool = True, create: bool = False,
+                   option: str = "--target") -> Dict[str, Any]:
+    """대상 문서를 바꾸지 않고 찾습니다 (open_target의 찾기 단계, 앱을 띄우거나 파일을 열지 않음).
+    {"source": "active"|"open", "app", "doc"} 또는 {"source": "file", "path", "exists"}.
+    대상을 찾지 못한 오류(오타 [추천], [후보], 확장자 등)는 no_fallback: 방식을 바꿔도 같은 대상이라 transfer가 다음 방식으로
+    넘어가지 않고 원래 오류 그대로 멈춥니다 (클립보드를 쓰는 relay 등이 대상 오타로 실행되지 않게)."""
+    target = (target or "active").strip()
+    try:
+        if target.lower() == "active":
+            try:
+                info = get_active(kind)
+            except rt.UserDecisionError:
+                if option == "--target":
+                    raise
+                raise no_open_doc(kind, option) from None        # 이 명령에 없는 --target을 안내하지 않음
+            return {"source": "active", "app": info["app"], "doc": info["doc"]}
+        docs = list_open(kind)
+        hit = match_open(kind, target, docs, option)
+        if hit is not None:
+            return {"source": "open", "app": hit["app"], "doc": hit["doc"]}
+        # 전체 경로인지는 %USERPROFILE%·~ 를 푼 뒤에 판단 (%USERPROFILE%\Desktop\새.xlsx도 전체 경로)
+        expanded = os.path.expanduser(os.path.expandvars(target.strip('"')))
+        is_abs = os.path.isabs(expanded)
+        path = os.path.abspath(expanded)
+        exists = os.path.isfile(path)
+        if not exists and not is_abs and os.path.isfile(os.path.join(rt.get_data_dir(), target)):
+            path, exists = os.path.join(rt.get_data_dir(), target), True
+        if not exists and (readonly or not create or not is_abs):
+            # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
+            names = [d["name"] for d in docs]
+            tail = "" if readonly or not create else f" 새 파일은 사용자에게 전체 경로를 물어 {option}으로 줄 때만 만듭니다."
+            err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
+                               extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
+            # 파일 이름만 준 경우에만 열린 문서를 [후보]로 (전체 경로가 없는 것은 열린 문서 이름의 오타가 아님)
+            if names and not is_abs and not err.candidates and "[추천]" not in str(err):
+                err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
+                                   f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names)
+            raise err
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in EXTENSIONS[kind]:
+            raise rt.InputError(f"{APP_LABEL[kind]} 파일 확장자가 아닙니다: {ext} (지원: {', '.join(EXTENSIONS[kind])})")
+        return {"source": "file", "path": path, "exists": exists}
+    except rt.InputError as e:
+        e.no_fallback = True
+        raise
+
+
 @contextmanager
 def open_target(kind: str, target: str = "active", readonly: bool = True, snapshot: Optional[bool] = None,
-                focus: bool = True, create: bool = False, tool: str = "", command: str = "") -> Iterator[OfficeTarget]:
+                focus: bool = True, create: bool = False, tool: str = "", command: str = "",
+                option: str = "--target") -> Iterator[OfficeTarget]:
     """대상 문서를 열어 OfficeTarget을 넘겨줍니다.
 
     target: "active" | 열린 문서 이름 | 파일 경로
@@ -679,6 +805,7 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
     snapshot: 쓰기 전 스냅샷 (기본: 쓰기 세션이면 True)
     focus: 쓰기 후 고친 위치로 화면 이동 (--no-focus면 False)
     create: 파일이 없을 때 새로 만들지 (쓰기 세션 전용)
+    option: 오류 안내에 쓸 대상 옵션 이름 (기본 --target, office.py transfer는 --from-target/--to-target)
     """
     require_com()
     init_com()
@@ -691,64 +818,80 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
     restore_alerts = None
     t: Optional[OfficeTarget] = None
     try:
-        if target.lower() == "active":
-            info = get_active(kind)
-            t = OfficeTarget(kind, info["app"], info["doc"], "active", readonly)
+        found = resolve_target(kind, target, readonly, create, option)
+        if found["source"] in ("active", "open"):
+            t = OfficeTarget(kind, found["app"], found["doc"], found["source"], readonly)
         else:
-            docs = list_open(kind)
-            hit = match_open(kind, target, docs)
-            if hit is not None:
-                t = OfficeTarget(kind, hit["app"], hit["doc"], "open", readonly)
-            else:
-                path = os.path.abspath(os.path.expandvars(target.strip('"')))
-                exists = os.path.isfile(path)
-                if not exists and not os.path.isabs(target) and os.path.isfile(os.path.join(rt.get_data_dir(), target)):
-                    path, exists = os.path.join(rt.get_data_dir(), target), True
-                if not exists and (readonly or not create or not os.path.isabs(target.strip('"'))):
-                    # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
-                    names = [d["name"] for d in docs]
-                    tail = "" if readonly or not create else " 새 파일은 사용자에게 전체 경로를 물어 --target으로 줄 때만 만듭니다."
-                    err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
-                                       extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
-                    if names and not err.candidates and "[추천]" not in str(err):
-                        err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
-                                           f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names)
-                    raise err
-                ext = os.path.splitext(path)[1].lower()
-                if ext not in EXTENSIONS[kind]:
-                    raise rt.InputError(f"{APP_LABEL[kind]} 파일 확장자가 아닙니다: {ext} (지원: {', '.join(EXTENSIONS[kind])})")
-                ppt_was_running = _ppt_running() if kind == "ppt" else False
-                app = _new_instance(kind)
-                owns_app = kind != "ppt" or not ppt_was_running
-                if kind == "ppt":
-                    try:
-                        restore_alerts = app.DisplayAlerts
-                        app.DisplayAlerts = 1  # ppAlertsNone
-                    except Exception:
-                        restore_alerts = None
-                rt.log("PROGRESS", f"{APP_LABEL[kind]} 파일 {'여는' if exists else '만드는'} 중 (백그라운드): {os.path.basename(path)}")
-                doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
-                owns_doc = True
-                t = OfficeTarget(kind, app, doc, "file" if exists else "new", readonly)
-                if exists and not readonly and _opened_readonly(doc):
-                    # 다른 사람·프로그램이 열고 있어 읽기 전용으로 열림: 고친 내용을 저장할 수 없으므로 쓰기 전에 멈춤
-                    raise rt.InputError(f"'{os.path.basename(path)}'을(를) 다른 사용자나 프로그램이 열고 있어 읽기 전용으로만 열립니다. "
-                                        "아무것도 바꾸지 않았습니다. 그 파일을 닫은 뒤 다시 실행하거나, 이 PC의 Office에서 열어 둔 뒤 요청하세요.",
-                                        no_fallback=True)
+            path, exists = found["path"], found["exists"]
+            ppt_was_running = _ppt_running() if kind == "ppt" else False
+            app = _new_instance(kind)
+            owns_app = kind != "ppt" or not ppt_was_running
+            if kind == "ppt":
+                try:
+                    restore_alerts = app.DisplayAlerts
+                    app.DisplayAlerts = 1  # ppAlertsNone
+                except Exception:
+                    restore_alerts = None
+            rt.log("PROGRESS", f"{APP_LABEL[kind]} 파일 {'여는' if exists else '만드는'} 중 (백그라운드): {os.path.basename(path)}")
+            doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
+            owns_doc = True
+            t = OfficeTarget(kind, app, doc, "file" if exists else "new", readonly)
+            if exists and not readonly and _opened_readonly(doc):
+                # 다른 사람·프로그램이 열고 있어 읽기 전용으로 열림: 고친 내용을 저장할 수 없으므로 쓰기 전에 멈춤
+                raise rt.InputError(f"'{os.path.basename(path)}'을(를) 다른 사용자나 프로그램이 열고 있어 읽기 전용으로만 열립니다. "
+                                    "아무것도 바꾸지 않았습니다. 그 파일을 닫은 뒤 다시 실행하거나, 이 PC의 Office에서 열어 둔 뒤 요청하세요.",
+                                    no_fallback=True)
 
+        point: Optional[str] = None       # 이 실행이 만든 되돌리기 지점(.json)
+        was_saved = is_saved(t.doc)
+        disk_before = _file_stamp(t.path) if owns_doc else None
         if snapshot and not readonly:
+            # 정리(rotate)는 명령이 바꾼 뒤에만: 쓰기 전에 멈춘 실행이 진짜 옛 지점을 밀어내지 않도록
             if t.source == "new":
-                save_barrier(kind, t.doc, "새로 만든 파일이라 되돌릴 이전 상태가 없음", tool, command)
-            elif save_snapshot(kind, t.doc, tool, command) is None:
-                save_barrier(kind, t.doc, "되돌리기용 스냅샷을 만들지 못함 (DRM, 크기 초과 등)", tool, command)
+                point = save_barrier(kind, t.doc, "새로 만든 파일이라 되돌릴 이전 상태가 없음", tool, command, rotate=False)
+            else:
+                data_file = save_snapshot(kind, t.doc, tool, command, rotate=False)
+                if data_file is None:
+                    point = save_barrier(kind, t.doc, "되돌리기용 스냅샷을 만들지 못함 (DRM, 크기 초과 등)", tool, command,
+                                         rotate=False)
+                else:
+                    point = os.path.splitext(data_file)[0] + ".json"
 
-        yield t
+        def unchanged(e: Optional[BaseException]) -> bool:
+            """이 실행이 문서를 바꾸지 않았는지 (그러면 이번 지점은 지움: 남기면 다음 undo가 바뀐 것 없는 이 지점으로
+            되돌려 실제로 바꾼 작업이 그대로 남음). 오류로 멈춘 실행(e)과 바꾼 것 없이 성공한 실행(e None: 0곳 바꿈,
+            차트 0개 삭제, 이미 있는 시트 add 등) 모두 같은 기준.
+            - 도구가 열거나 만든 파일(owns_doc): 바뀐 것만 저장하므로 디스크 파일이 그대로면 바뀐 것 없음
+            - 열린 문서: 바꾼 표시(t.changed)가 없고 저장 상태가 그대로일 때만. 원래 저장 안 된 문서가 오류로 멈췄으면
+              입력 오류일 때만 (그 밖의 오류는 중간까지 바꿨는지 알 수 없어 지점을 남김)"""
+            if owns_doc and disk_before is not None:
+                return _file_stamp(t.path) == disk_before
+            if t.changed or is_saved(t.doc) != was_saved:
+                return False
+            return e is None or was_saved or isinstance(e, rt.InputError)
 
-        if not readonly and focus:
-            t.apply_focus()
-        if owns_doc and not readonly and not is_saved(t.doc):
-            rt.log("PROGRESS", "변경사항 저장 중")
-            t.doc.Save()
+        def drop_or_keep(e: Optional[BaseException]) -> None:
+            if not point:
+                return
+            if unchanged(e):
+                delete_snapshot(point)
+                rt.debug("문서를 바꾸지 않아 이번 되돌리기 지점을 지웠습니다.")
+            else:
+                rotate_point(point)
+
+        try:
+            yield t
+            if not readonly and focus:
+                t.apply_focus()
+            # 바꾼 것(t.changed)이 있을 때만 저장: 휘발성 수식(NOW, RAND 등)이 있으면 열기만 해도 저장 안 된 상태라
+            # 바꾼 것 없이 성공한 실행이 사용자 파일을 다시 저장하고 바뀐 것 없는 되돌리기 지점을 남겼음
+            if owns_doc and not readonly and t.changed and not is_saved(t.doc):
+                rt.log("PROGRESS", "변경사항 저장 중")
+                t.doc.Save()
+        except BaseException as e:
+            drop_or_keep(e)
+            raise
+        drop_or_keep(None)
     finally:
         if owns_doc and t is not None:
             try:

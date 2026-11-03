@@ -22,10 +22,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path,
-    read_text_file, load_json_file, resolve_column_names, coerce_numeric,
+    read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
-    strip_unit,
+    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
 )
 
@@ -44,7 +44,7 @@ import pandas as pd
 import joblib
 
 import sklearn
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
@@ -65,7 +65,7 @@ from sklearn.base import clone
 
 # 5 Core Classification Algorithms (--task classification)
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
-from sklearn.linear_model import LogisticRegressionCV
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.neighbors import KNeighborsClassifier
 
 TASK_REGRESSION = "regression"
@@ -214,8 +214,12 @@ def validate_and_sanitize_data(
     """
     all_available = [str(c) for c in df.columns]
 
-    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)")
-    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)")
+    layout = dict(df.attrs)    # two-level / merged header, title row -> [추천] --header-row N (+ unit row)
+    # -y first; a -x typo never suggests a target (nor a -y typo a feature): the other option's columns are excluded
+    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", layout=layout,
+                                                   exclude=known_columns(feature_names, all_available))
+    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", layout=layout,
+                                                     exclude=target_names)
     feature_names = list(dict.fromkeys(feature_names))
     target_names = list(dict.fromkeys(target_names))
 
@@ -362,7 +366,8 @@ def build_pipeline(estimator: Any, schema: Dict[str, Any], step_name: str) -> Pi
     transformers = []
     if num_cols:
         transformers.append(("num", Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
+            # keep_empty_features: a sparse column can be all-empty in a small training fold (no zero-feature error)
+            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
             ("scaler", StandardScaler()),
         ]), num_cols))
     if cat_cols:
@@ -453,7 +458,52 @@ def get_regression_models(seed: int = 42, n_rows: int = 0) -> Dict[str, Any]:
     }
 
 
+def fit_safe_model(estimator: Any, y_train: np.ndarray) -> Any:
+    """
+    Fresh copy of a candidate model whose inner settings fit a (small) training set, so tiny data never ends in an
+    internal error: KNN asks for at most as many neighbours as there are rows, ElasticNetCV's inner CV needs
+    2+ rows per inner fold, LogisticRegressionCV's inner stratified CV needs every class in every inner fold
+    (smallest class 2 -> 2 inner folds, 1 -> plain LogisticRegression with the default C).
+    Settings are unchanged when the training set is large enough.
+    """
+    est = clone(estimator)
+    n = len(y_train)
+    if isinstance(est, KNeighborsClassifier):
+        if est.n_neighbors > n:
+            est.set_params(n_neighbors=max(1, n))
+    elif isinstance(est, ElasticNetCV):
+        cv = est.cv if isinstance(est.cv, int) else 5
+        if n < 2 * cv:
+            est.set_params(cv=max(2, min(cv, n // 2)))
+    elif isinstance(est, LogisticRegressionCV):
+        k = int(pd.Series(y_train).value_counts().min())
+        cv = est.cv if isinstance(est.cv, int) else 5
+        if k < 2:
+            est = LogisticRegression(max_iter=est.max_iter, class_weight=est.class_weight)
+        elif k < cv:
+            est.set_params(cv=StratifiedKFold(n_splits=max(2, k)))
+    return est
+
+
 PREDICTION_INTERVAL_LEVEL = 0.90
+
+
+def duplicate_groups(X: pd.DataFrame, y: np.ndarray) -> Tuple[np.ndarray, int]:
+    """CV group per identical row (all inputs + target), and the number of extra copies (rows - distinct rows).
+    Groups are 0..g-1 in order of first appearance; with no duplicates every row is its own group (n_dup = 0)."""
+    frame = X.reset_index(drop=True).astype("object").copy()
+    frame["__y__"] = pd.Series(y).astype("object").to_numpy()
+    codes = pd.util.hash_pandas_object(frame.astype(str), index=False).to_numpy()
+    _, first, groups = np.unique(codes, return_index=True, return_inverse=True)
+    order = np.argsort(np.argsort(first))          # renumber by first appearance (stable fold assignment)
+    groups = order[groups]
+    return groups.astype(int), int(len(y) - len(first))
+
+
+def duplicate_warning(target_name: str, n_dup: int, n_rows: int, note: Optional[str] = None) -> str:
+    how = (f"{note}." if note else "같은 행이 학습과 검증에 나뉘어 점수가 부풀지 않도록 묶어서 검증했습니다.")
+    return (f"타겟 '{target_name}': 입력과 타겟이 완전히 같은 중복 행이 {n_dup}개 있습니다 (전체 {n_rows}행). "
+            f"{how} 중복이 실수라면 데이터에서 지우십시오.")
 
 
 def train_and_benchmark_models(
@@ -478,12 +528,26 @@ def train_and_benchmark_models(
 
     if len(y) < 10:
         raise InputError(f"타겟 '{target_name}'의 유효 학습 샘플 수가 너무 적습니다 ({len(y)}개). 최소 10개 이상 필요합니다.")
+    if np.unique(y).size <= 1:
+        raise InputError(f"타겟 '{target_name}' 값이 모두 같아({float(f'{y[0]:.12g}')}) 학습할 수 없습니다. "
+                         f"값이 변하는 타겟을 지정하십시오.")
 
     models = get_regression_models(seed=seed, n_rows=int(len(y) * 0.8))
     model_count = len(models)
     # Dynamic K-Fold split: adapts gracefully to small sample sizes (N < 25)
+    groups, n_dup = duplicate_groups(X, y)
+    n_distinct = int(groups.max()) + 1
+    if n_distinct < 10:
+        raise InputError(f"타겟 '{target_name}': 입력+타겟이 다른 행이 {n_distinct}개뿐입니다 (전체 {len(y)}행, 나머지 "
+                         f"{n_dup}행은 완전히 같은 중복 행). 서로 다른 행이 10개 이상 필요합니다. 중복이 실수라면 데이터를 고치십시오.")
     n_splits = min(5, max(2, len(y) // 3))
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    if n_dup:
+        # identical rows (inputs + target) stay in one fold: a copy in the training folds would leak the answer
+        n_splits = max(2, min(n_splits, n_distinct))
+        kf = GroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    else:
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    splits = list(kf.split(X, y, groups if n_dup else None))
 
     leaderboard = []
     model_oof_map = {}
@@ -493,12 +557,12 @@ def train_and_benchmark_models(
         train_r2_list = []
         params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(kf.split(X, y), 1):
+        for fold, (train_idx, val_idx) in enumerate(splits, 1):
             pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
             # Leakage-Free Pipeline: fitted ONLY on training fold
-            pipe = build_pipeline(clone(regressor), schema, "regressor")
+            pipe = build_pipeline(fit_safe_model(regressor, y[train_idx]), schema, "regressor")
             pipe.fit(X.iloc[train_idx], y[train_idx])
             train_r2_list.append(r2_score(y[train_idx], pipe.predict(X.iloc[train_idx])))
             oof_preds[val_idx] = pipe.predict(X.iloc[val_idx])
@@ -543,7 +607,7 @@ def train_and_benchmark_models(
 
     # Fit Champion Model on 100% of data
     log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(clone(models[champion_name]), schema, "regressor")
+    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "regressor")
     final_pipeline.fit(X, y)
 
     log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
@@ -566,6 +630,9 @@ def train_and_benchmark_models(
         "feature_importances": feature_ranks
     }
 
+    if n_dup:
+        champion_summary["duplicate_rows"] = n_dup
+        champion_summary["duplicate_grouped"] = True
     target_benchmark_res = {
         "target": target_name,
         "task": TASK_REGRESSION,
@@ -712,7 +779,8 @@ def train_and_benchmark_classifiers(
         if len(classes) != 2:
             raise InputError(f"--positive-class는 이진 분류(클래스 2개)에서만 사용할 수 있습니다. 타겟 '{target_name}' 클래스: {classes}")
         if positive_class not in classes:
-            raise InputError(f"--positive-class '{positive_class}'가 타겟 '{target_name}'의 클래스에 없습니다. [추천] {classes}")
+            raise InputError(f"--positive-class '{positive_class}'가 타겟 '{target_name}'의 클래스에 없습니다. "
+                             f"놓치면 안 되는 클래스를 사용자에게 물으십시오: [후보] {', '.join(str(c) for c in classes)}")
 
     min_ratio = min(class_counts.values()) / len(y)
     balanced = min_ratio < 0.20
@@ -723,8 +791,28 @@ def train_and_benchmark_classifiers(
 
     models = get_classification_models(seed=seed, balanced=balanced, n_rows=len(y))
     model_count = len(models)
-    n_splits = max(2, min(5, min(class_counts.values())))
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    groups, n_dup = duplicate_groups(X, y)
+    splits = None
+    grouped_note = None
+    if n_dup:
+        # identical rows (inputs + class) stay in one fold; folds need at least one distinct row of every class
+        class_groups = pd.Series(groups).groupby(pd.Series(y)).nunique()
+        single = [str(c) for c, n in class_groups.items() if n < 2]
+        if single:
+            grouped_note = (f"클래스 {single}의 행이 모두 같은 값(서로 다른 행 1개)이라 묶어서 검증할 수 없어 "
+                            f"일반 층화 교차검증을 했습니다. 이 클래스의 검증 점수는 부풀 수 있습니다")
+        else:
+            n_splits = max(2, min(5, int(class_groups.min())))
+            sgk = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+            splits = list(sgk.split(X, y, groups))
+            if any(len(np.unique(y[tr])) < len(classes) for tr, _ in splits):
+                splits = None
+                grouped_note = ("중복 행을 묶으면 어떤 학습 fold에 빠지는 클래스가 있어 일반 층화 교차검증을 했습니다. "
+                                "검증 점수는 부풀 수 있습니다")
+    if splits is None:
+        n_splits = max(2, min(5, min(class_counts.values())))
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        splits = list(skf.split(X, y))
 
     leaderboard = []
     model_oof_map: Dict[str, np.ndarray] = {}
@@ -736,11 +824,11 @@ def train_and_benchmark_classifiers(
         train_f1_list = []
         params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+        for fold, (train_idx, val_idx) in enumerate(splits, 1):
             pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
             log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
 
-            pipe = build_pipeline(clone(clf), schema, "classifier")
+            pipe = build_pipeline(fit_safe_model(clf, y[train_idx]), schema, "classifier")
             pipe.fit(X.iloc[train_idx], y[train_idx])
             train_f1_list.append(f1_score(y[train_idx], pipe.predict(X.iloc[train_idx]), average="macro", zero_division=0))
             oof_pred[val_idx] = pipe.predict(X.iloc[val_idx])
@@ -800,7 +888,7 @@ def train_and_benchmark_classifiers(
     }
 
     log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(clone(models[champion_name]), schema, "classifier")
+    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "classifier")
     final_pipeline.fit(X, y)
 
     log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
@@ -827,6 +915,11 @@ def train_and_benchmark_classifiers(
         "weak_features": [f["feature"] for f in feature_ranks if f["pct"] <= 1.0],
         "feature_importances": feature_ranks
     }
+    if n_dup:
+        champion_summary["duplicate_rows"] = n_dup
+        champion_summary["duplicate_grouped"] = grouped_note is None
+        if grouped_note:
+            champion_summary["duplicate_note"] = grouped_note
     target_benchmark_res = {
         "target": target_name,
         "task": TASK_CLASSIFICATION,
@@ -1287,19 +1380,6 @@ def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
     return flag.to_numpy(dtype=bool), med
 
 
-def _exclude_mark(v: Any) -> str:
-    """A '제외' cell as text; 0 / FALSE (0-1 or TRUE/FALSE flags) mean "not marked", like an empty cell."""
-    if v is None or (not isinstance(v, str) and pd.isna(v)) or isinstance(v, (bool, np.bool_)) and not v:
-        return ""
-    t = str(v).strip()
-    if t.upper() == "FALSE":
-        return ""
-    try:
-        return "" if float(t) == 0 else t
-    except ValueError:
-        return t
-
-
 def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, schema: Dict[str, Any],
                     created: List[str], task: str, target_name: str) -> Dict[str, Any]:
     """Rows to leave out of training for one target: the user's '제외' marks plus automatic outliers."""
@@ -1420,6 +1500,7 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
         )
     for col in feature_schema["numeric"]:
         df_clean[col] = X_all[col]
+    group_warnings = _decimal_comma_category_check(df_raw, feature_schema, feature_names, created_features, dtypes)
     # Columns the user must provide at prediction time: own raw features + sources of derived features (2.9.1)
     sources = eval_source_columns(applied_evals, [str(c) for c in df_raw.columns])
     raw_required = [f for f in feature_names if f not in created_features]
@@ -1430,7 +1511,62 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     return {"df": df_clean, "features": feature_names, "targets": target_names, "aliases": column_aliases,
             "raw_required": raw_required,
             "evals": applied_evals, "created": created_features, "schema": feature_schema, "X": X_all,
-            "dtypes": dtypes, "positive_class": group.get("positive_class")}
+            "dtypes": dtypes, "positive_class": group.get("positive_class"), "warnings": group_warnings}
+
+
+DECIMAL_COMMA_STOP_SHARE = 0.5     # a selected text feature with this share of '175,6' cells is refused
+
+
+def _decimal_comma_category_check(df_raw: pd.DataFrame, schema: Dict[str, Any], features: List[str],
+                                  created: List[str], dtypes: Optional[str]) -> List[str]:
+    """A categorical feature whose cells are numbers saved with a decimal comma ('175,6', '0,149' text) would train
+    as a high-cardinality category: refused (STOP_RETRY) when half of its filled cells or more are such texts,
+    a warning when the rest are numbers. Columns forced with --dtypes are the user's choice."""
+    forced = {p.split(":", 1)[0].strip() for p in str(dtypes or "").split(",") if ":" in p}
+    out: List[str] = []
+    for c in schema["categorical"]:
+        if c in created or c not in features or c in forced or c not in df_raw.columns:
+            continue
+        n, dc, num, ex = decimal_comma_text_share(df_raw[c])
+        if not dc:
+            continue
+        examples = ", ".join(repr(v) for v in ex)
+        if dc >= DECIMAL_COMMA_STOP_SHARE * n:
+            raise InputError(
+                f"피처 '{c}'의 채운 칸 {n}개 중 {dc}개({examples})가 소수점 쉼표로 쓴 숫자 글자라 숫자로 읽지 못해 "
+                f"종류(범주) 값으로 학습하게 됩니다. 엑셀에서 쉼표를 점(.)으로 바꾸거나(예: 175,6 -> 175.6) 숫자 칸으로 "
+                f"저장한 뒤 다시 실행하십시오. 숫자가 아닌 코드이면 --dtypes \"{c}:str\"를 붙이십시오.")
+        if dc + num >= 0.9 * n:
+            out.append(f"피처 '{c}'의 {dc}칸({examples})은 소수점 쉼표로 쓴 숫자 글자라 숫자로 읽지 못해 이 열을 "
+                       "종류(범주) 값으로 학습했습니다. 쉼표를 점(.)으로 고치면 숫자 피처로 학습합니다.")
+    return out
+
+
+UNPARSED_WARN_COLUMNS = 5          # columns named in the unparsed-number warning; the rest are counted
+
+
+def _numeric_input_columns(g: Dict[str, Any]) -> List[str]:
+    """Data columns the model reads as numbers: numeric raw features and --eval source columns (not the
+    categorical / datetime ones)."""
+    schema = g["schema"]
+    return [c for c in g["raw_required"] if c not in schema.get("categorical", {}) and c not in schema.get("datetime", {})]
+
+
+def _unparsed_number_warnings(bad: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Warnings of text cells in numeric inputs of the trained rows (median-imputed), one per column (rows of
+    every target together), the first UNPARSED_WARN_COLUMNS columns named and the rest counted."""
+    cols = [c for c, v in bad.items() if v["rows"]]
+    out = []
+    for c in cols[:UNPARSED_WARN_COLUMNS]:
+        ex = ", ".join(repr(v) for v in bad[c]["examples"][:3])
+        out.append(f"숫자 열 '{c}'의 {len(bad[c]['rows'])}칸({ex})은 숫자로 읽지 못해 빈 값으로 보고 중앙값으로 채웠습니다. "
+                   "값을 고치거나 그 행을 '제외' 열에 표시하세요.")
+    if len(cols) > UNPARSED_WARN_COLUMNS:
+        rest = cols[UNPARSED_WARN_COLUMNS:]
+        more = f" 외 {len(rest) - 10}개 열" if len(rest) > 10 else ""
+        out.append(f"숫자로 읽지 못해 중앙값으로 채운 칸이 있는 숫자 열이 {len(rest)}개 더 있습니다 "
+                   f"({', '.join(repr(c) for c in rest[:10])}{more}).")
+    return out
 
 
 def _merge_schemas(schemas: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1559,6 +1695,27 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         target_champions = {}
         target_summaries = {}
         all_champion_scores = []
+        # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader),
+        # totals / average rows (kept: the '제외' column is the user's decision)
+        train_warnings: List[str] = layout_warnings(df_raw, target_names)
+        for g in prepared:
+            train_warnings.extend(w for w in g["warnings"] if w not in train_warnings)
+        # numbers written with '%' ('64.4%' of an Excel CSV export) are read as 64.4: said, never silent; '%' cells
+        # next to plain numbers in one column stop (no scale is sure)
+        pct_cols = ([c for g in prepared for c in _numeric_input_columns(g)]
+                    + (target_names if task == TASK_REGRESSION else []))
+        # (on the rows training uses: a row the user marked in '제외' never stops the run)
+        marked = (df_raw[excl_col].map(_exclude_mark).map(lambda t: bool(t) and t != INCLUDE_MARK).to_numpy(dtype=bool)
+                  if excl_col else np.zeros(len(df_raw), dtype=bool))
+        check_percent_mix(df_raw[~marked], pct_cols)
+        train_warnings.extend(percent_warning(df_raw, pct_cols))
+        for w in train_warnings:
+            sys.stderr.write(f"[WARN] {w}\n")
+        # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the
+        # header (target empty), rows marked in '제외' or rows without a target
+        unparsed: Dict[str, Dict[str, Any]] = {}
+        unit_below = df_raw.attrs.get("unit_row_below")
+        unit_pos = [i for i, r in enumerate(source_rows) if r == unit_below] if unit_below else []
         benchmark_fn = train_and_benchmark_models if task == TASK_REGRESSION else train_and_benchmark_classifiers
 
         total_targets = len(target_names)
@@ -1578,6 +1735,14 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                                  f"(직접 표시 {int(plan['manual'].sum())}, 자동 이상치 {int(plan['auto'].sum())})\n")
             if plan["note"]:
                 sys.stderr.write(f"[WARN] 타겟 '{target_name}': {plan['note']}\n")
+            trained = np.array(y_full.notna(), dtype=bool) & ~np.asarray(plan["mask"], dtype=bool)
+            trained[unit_pos] = False
+            for c in _numeric_input_columns(g):
+                if c in df_raw.columns:
+                    pos, ex = unparsed_number_cells(df_raw[c], trained)
+                    entry = unparsed.setdefault(c, {"rows": set(), "examples": []})
+                    entry["rows"].update(pos)
+                    entry["examples"] += [v for v in ex if v not in entry["examples"]]
             t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
                 X=g["X"],
                 y_series=y_full.mask(plan["mask"]),
@@ -1589,6 +1754,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 **extra
             )
 
+            if champion_info.get("duplicate_rows"):
+                train_warnings.append(duplicate_warning(target_name, champion_info["duplicate_rows"],
+                                                        t_bench["sample_count"], champion_info.get("duplicate_note")))
+                sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
             all_score, excl_pred = score_with_excluded(task, champion_pipe, champion_info, oof_df,
                                                        g["X"], y_full, plan["mask"])
             excl_info: Dict[str, Any] = {
@@ -1759,13 +1928,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             for fname in list(g["schema"]["numeric"]) + source_numeric:
                 s = coerce_numeric(g["df"][fname])[used_rows].dropna()
                 if not s.empty:
-                    feat_stats[fname] = {
-                        "mean": round(float(s.mean()), 4),
-                        "std": round(float(s.std()), 4),
-                        "min": round(float(s.min()), 4),
-                        "max": round(float(s.max()), 4),
-                        "median": round(float(s.median()), 4)
-                    }
+                    # significant digits, not decimals: an input of 3e-06 must not be stored as 0
+                    feat_stats[fname] = {k: float(f"{float(v):.12g}") for k, v in (
+                        ("mean", s.mean()), ("std", s.std()), ("min", s.min()), ("max", s.max()), ("median", s.median()))}
 
             # Inference Metadata JSON with safe filename
             meta_json = {
@@ -1806,6 +1971,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 "feature_stats": feat_stats,
                 "datetime_stats": _datetime_stats(g, used_rows),
                 "feature_schema": g["schema"],
+                "decimal_comma": bool(df_raw.attrs.get("decimal_comma")),   # prediction CSVs are read the same way
                 "derived_evals": g["evals"],
                 "target_summary": target_summaries.get(target_name, {}),
                 "sklearn_version": sklearn.__version__,
@@ -1849,6 +2015,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         for col, n_miss in X_all.isna().sum().items():
             raw_col = owner.get(col, col)
             feature_missing[raw_col] = max(feature_missing.get(raw_col, 0), int(n_miss))
+        for w in _unparsed_number_warnings(unparsed):
+            train_warnings.append(w)
+            sys.stderr.write(f"[WARN] {w}\n")
         data_profile = {
             "source_file": os.path.basename(raw_file),
             "rows_loaded": int(len(df_raw)),
@@ -1955,7 +2124,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             f"Champion models and leaderboard packaged into '{os.path.basename(final_version_dir)}'. "
             f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
             + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
-               "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "") +
+               "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "")
+            + ("Tell the user every item of warnings (duplicate rows, repeated header rows, totals rows). " if train_warnings else "") +
             "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
             "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
         )
@@ -1985,6 +2155,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     "new_score": target_champions[t]["info"]["val_score"]}
                 for t, src in best_info["best_source"].items()
             }
+        if train_warnings:
+            result["warnings"] = train_warnings
         if exclusion_summary:
             result["exclusions"] = exclusion_summary
             if excluded_rows_file:
@@ -2159,7 +2331,9 @@ def _tasks_to_build(records: List[Dict[str, Any]], task: Optional[str], ledger_p
     present = [t for t in TASK_ORDER if any(_record_task(r) == t for r in records)]
     if task:
         if task not in present:
-            raise InputError(f"학습 이력에 {task} 기록이 없습니다. [추천] --task {present[0]}")
+            # the other task builds another best version than asked: the user decides ([후보], no automatic retry)
+            raise InputError(f"학습 이력에 {task} 기록이 없어 그 최고 버전을 만들 수 없습니다. 이력에 있는 학습: "
+                             f"[후보] --task {', --task '.join(present)}. 이 학습의 최고 버전을 만들지 사용자에게 물으십시오.")
         return [task]
     return present
 
@@ -2167,7 +2341,8 @@ def _tasks_to_build(records: List[Dict[str, Any]], task: Optional[str], ledger_p
 def best_summary(version_result: Dict[str, Any]) -> Dict[str, Any]:
     return {"task": version_result["task"], "version": version_result["version"],
             "version_dir": version_result["version_dir"], "targets": version_result["targets"],
-            "mean_val_score": version_result.get("mean_val_score"), "made": True}
+            "mean_val_score": version_result.get("mean_val_score"), "made": True,
+            **({"warnings": version_result["warnings"]} if version_result.get("warnings") else {})}
 
 
 def execute_make_best(args: argparse.Namespace) -> Dict[str, Any]:
@@ -2233,17 +2408,70 @@ def best_is_fresh(records: List[Dict[str, Any]], data_root: str, raw_file: str, 
         return None
     if not _version_intact(data_root, best):
         return None
-    fp_old = best.get("data_fingerprint") or {}
-    try:
-        fp_new = data_fingerprint(raw_file)
-    except OSError:
-        return None
-    same = (fp_old.get("sha256") == fp_new["sha256"]) if fp_old.get("sha256") else (
-        fp_old.get("size") == fp_new["size"] and fp_old.get("mtime") == fp_new["mtime"])
-    if not same:
+    if not _fingerprint_same(best, raw_file):
         sys.stderr.write(f"[INFO] 데이터 파일 내용이 {best.get('version')} 때와 달라 최고 버전을 다시 만듭니다 ({task})\n")
         return None
     return best
+
+
+def _fingerprint_same(rec: Dict[str, Any], raw_file: str) -> bool:
+    fp_old = rec.get("data_fingerprint") or {}
+    if not fp_old:
+        return False
+    try:
+        fp_new = data_fingerprint(raw_file)
+    except OSError:
+        return False
+    return (fp_old.get("sha256") == fp_new["sha256"]) if fp_old.get("sha256") else (
+        fp_old.get("size") == fp_new["size"] and fp_old.get("mtime") == fp_new["mtime"])
+
+
+def single_best_version(records: List[Dict[str, Any]], data_root: str, raw_file: str, task: str) -> Optional[Dict[str, Any]]:
+    """
+    The version that already holds the best of EVERY target of the task (one training run, or the latest best
+    version when later runs beat nothing), trained on the current data file content. Retraining its recipes on the
+    same data would give the same models, so the report uses it as is.
+    """
+    chosen = select_best_recipes(records, data_root, task)
+    versions = {c["selected_version"] for c in chosen.values()}
+    if len(versions) != 1:
+        return None
+    ver = versions.pop()
+    rec = next((r for _, r in reversed(_unique_records(records)) if str(r.get("version")) == ver), None)
+    if rec is None or not _fingerprint_same(rec, raw_file):
+        return None
+    return rec
+
+
+def task_best_version(records: List[Dict[str, Any]], data_root: str, task: str) -> Optional[Dict[str, Any]]:
+    """
+    The version to use for every target of a task (--history best_version, ml_report -d), chosen like the report's
+    reuse (ensure_best_versions) without the data file check:
+    1. the latest --best record when no other training of the task came after it and its folder is intact;
+    2. else the one version that holds the best score of every target (select_best_recipes);
+    3. else (bests split over versions) the version holding the most per-target bests (ties -> more of the task's
+       targets, then later), complete=False.
+    Returns {version, mean_val_score, targets, complete, missing} or None (no intact record of the task).
+    """
+    idx = next((i for i in range(len(records) - 1, -1, -1)
+                if records[i].get("best") and _record_task(records[i]) == task), None)
+    if (idx is not None and not any(_record_task(r) == task and not r.get("best") for r in records[idx + 1:])
+            and _version_intact(data_root, records[idx])):
+        rec = records[idx]
+        return {"version": rec["version"], "mean_val_score": rec.get("mean_val_score"),
+                "targets": list(rec.get("targets", [])), "complete": True, "missing": []}
+    chosen = select_best_recipes(records, data_root, task)
+    if not chosen:
+        return None
+    holders: Dict[str, List[str]] = {}
+    for t, c in chosen.items():
+        holders.setdefault(c["selected_version"], []).append(t)
+    latest = {str(r.get("version")): (i, r) for i, r in _unique_records(records)}
+    ver = max(holders, key=lambda v: (len(holders[v]), len(set(latest[v][1].get("targets", [])) & set(chosen)),
+                                      latest[v][0]))
+    rec = latest[ver][1]
+    return {"version": ver, "mean_val_score": rec.get("mean_val_score"), "targets": list(rec.get("targets", [])),
+            "complete": len(holders) == 1, "missing": [t for t in chosen if t not in holders[ver]]}
 
 
 def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
@@ -2261,10 +2489,17 @@ def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
         rec = best_is_fresh(records, data_root, raw_file, task)
         if rec is not None:
             sys.stderr.write(f"[INFO] 최신 최고 버전 {rec['version']} ({task})을(를) 그대로 사용합니다\n")
+        else:
+            rec = single_best_version(records, data_root, raw_file, task)
+            if rec is not None:
+                sys.stderr.write(f"[INFO] {rec['version']}에 모든 타겟의 최고 점수가 있어 다시 학습하지 않고 그대로 사용합니다 ({task})\n")
+        if rec is not None:
             versions.append({"task": task, "version": rec["version"],
                              "version_dir": os.path.join(data_root, rec["version"]), "targets": rec.get("targets", []),
                              "mean_val_score": rec.get("mean_val_score"), "made": False})
-            for t, src in (rec.get("best_source") or {}).items():
+            sources = rec.get("best_source") if rec.get("best") else None
+            for t in rec.get("targets", []):
+                src = (sources or {}).get(t) or {"version": rec["version"], "score": _target_score(rec, t)}
                 best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
                                    "new_score": _target_score(rec, t)}
             continue
@@ -2336,31 +2571,37 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
 
     out.write("=" * 125 + "\n\n")
 
-    # best_version: best record of the latest experiment (same task AND same targets as the latest run)
-    latest = rows[-1]
-    same = [x for x in rows if x["task"] == latest["task"] and sorted(x["targets"]) == sorted(latest["targets"])
-            and isinstance(x["mean_val_score"], (int, float))]
-    best = max(same, key=lambda x: x["mean_val_score"]) if same else None
-
-    # best_by_task: best record per task (across all target sets)
+    # best_version: the version the report would use for every target of the latest run's task (task_best_version)
     best_by_task: Dict[str, Dict[str, Any]] = {}
-    for x in rows:
-        if isinstance(x["mean_val_score"], (int, float)):
-            cur = best_by_task.get(x["task"])
-            if cur is None or x["mean_val_score"] > cur["mean_val_score"]:
-                best_by_task[x["task"]] = {"version": x["version"], "mean_val_score": x["mean_val_score"]}
+    for task in TASK_ORDER:
+        if any(x["task"] == task for x in rows):
+            info = task_best_version(records, data_root, task)
+            if info:
+                best_by_task[task] = {"version": info["version"], "version_dir": os.path.join(data_root, info["version"]),
+                                      "mean_val_score": info["mean_val_score"], "complete": info["complete"],
+                                      **({"missing_targets": info["missing"]} if info["missing"] else {})}
+    best = best_by_task.get(rows[-1]["task"])
+    note = None
+    split = [f"{t}: {b['version']}에 {b['missing_targets']}의 최고 모델이 없음" for t, b in best_by_task.items()
+             if not b["complete"]]
+    if split:
+        note = ("타겟별 최고 점수가 여러 버전에 나뉘어 있습니다 (" + "; ".join(split) + "). "
+                "모든 타겟의 최고 모델은 ml_report.py -f <데이터파일>이 한 버전으로 묶어 만듭니다.")
     return {
         "status": "ok",
         "data_root": data_root,
         "description": proj_desc,
         "record_count": len(rows),
         "best_version": best["version"] if best else None,
+        "best_version_dir": best["version_dir"] if best else None,
         "best_mean_val_score": best["mean_val_score"] if best else None,
         "best_by_task": best_by_task,
+        **({"best_version_note": note} if note else {}),
         "latest_version": rows[-1]["version"],
         "records": rows,
         "verified": True,
-        "agent_directive": "VERIFIED: History summary returned. Do not re-read history.jsonl for the same information.",
+        "agent_directive": ("VERIFIED: History summary returned. Do not re-read history.jsonl for the same information."
+                            + (f" 사용자에게 알리세요: {note}" if note else "")),
     }
 
 
