@@ -268,7 +268,7 @@ def test_i2_scanned_page_with_stamp_text_is_flagged(tmp_path, capsys):
     doc.save(str(path))
     code, out = _run(reader, capsys, "read", "--file", str(path))
     assert code == 0 and out["meta"]["pages_without_text"] == [3] and not out["meta"].get("ocr_needed"), out
-    assert reader.PARSER_VERSION == 8
+    assert reader.PARSER_VERSION >= 8
 
 
 def test_i2_i3_single_page_scan_with_bates_number_needs_ocr(tmp_path, capsys):

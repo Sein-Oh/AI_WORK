@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.30"
+  version: "1.4.31"
   platform: windows
 ---
 
@@ -31,7 +31,7 @@ metadata:
 | 엑셀 차트 | `excel.py chart --range A1:B101 --type line --title "제목"` (`--action list` / `--action delete --name 제목`) |
 | 엑셀 서식 | `excel.py style --range A1:E10 --theme navy` / `--bg yellow --bold` / `--highlight ">=100:pink"` |
 | 엑셀 기타 | `excel.py info`, `replace --find A --replace B`, `sheet --action add --name 이름`, `range --action merge --range A1:B1`, `export --save "결과.csv"` |
-| 워드 읽기 / 쓰기 | `word.py read [--save]` / `word.py write --file "내용.md"` / 한 줄이면 `--text "## 제목\n- 항목"` / `--image "그림.png"` (`--anchor 글 --pos after`, 여러 곳이면 `--occurrence N`) |
+| 워드 읽기 / 쓰기 | `word.py read [--save]` / `word.py write --file "내용.md"` / 한 줄이면 `--text "## 제목\n- 항목"` / `--image "그림.png"` (`--anchor 글 --pos after`, 여러 곳이면 `--occurrence N`). 쪽 나누기는 `word.py write --page-break` (.md의 `---`는 구분선) |
 | 워드 목차 / 범위 읽기 | `word.py outline` / `word.py read --section "1.1"` (장절, 하위 절 포함) / `--pages 3-5` / `--paragraphs 120-140` |
 | 워드 검토 메모 / 변경 추적 | `word.py comment` (목록) / `word.py comment --action add --anchor "문서의 글" --text "메모"` (여러 개는 `--file "메모.csv"`, 열: 기준 글, 메모 내용) / `word.py revisions` |
 | 워드 기타 | `word.py info`, `replace --find A --replace B [--bold]`, `export --save "보고서.pdf" [--page-number]` |
@@ -68,7 +68,7 @@ metadata:
 | `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸, 되돌리기 위험)이면 사용자에게 묻고, 사용자가 원할 때만 directive가 말한 옵션을 붙여 1번 실행한다. |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |
 
-- JSON에 `recovered`가 있으면 그 문장을 그대로 알린다.
+- JSON에 `recovered`가 있으면 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.
 - 문서 검색 결과는 항목마다 근거를 붙여 알린다: `evidence`(예: `규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`)를 그대로 쓴다. `page`가 null인 형식(엑셀, HWP 등)은 장절(`section_text`)과 번호(`number`), 위치(`loc`)로 알린다.
 - `search` 결과가 `UNVERIFIED:`이면 `not_searched`(검색하지 못한 부분)를 그대로 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서(캐시)만 찾는다. `--file`을 주면 그 파일/폴더의 새 문서를 먼저 등록한다(`indexed_now`를 사용자에게 알린다). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.

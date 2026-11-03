@@ -73,7 +73,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(office, "insert_picture_ppt",
                         lambda tgt, img, slide, title: holder["inserted"].append("ppt") or {"app": "PowerPoint"})
     monkeypatch.setattr(rt, "load_config", lambda: {"transfer_method": {"word": ["export"], "ppt": ["export"]}})
-    monkeypatch.setattr(office, "_excel_range_rows", lambda args: ([["항목", "값"], ["A", 1]], "Sheet1"))
+    monkeypatch.setattr(office, "_excel_range_rows", lambda args: ([["항목", "값"], ["A", 1]], "Sheet1", None))
     return holder
 
 

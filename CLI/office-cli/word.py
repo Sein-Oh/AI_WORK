@@ -40,6 +40,7 @@ WD_STYLE_NORMAL = -1
 WD_STYLE_TITLE = -63
 WD_STYLE_LIST_BULLET = -49
 WD_STYLE_LIST_NUMBER = -50
+WD_BORDER_BOTTOM = -3
 WD_HIGHLIGHT = {"yellow": 7, "green": 4, "turquoise": 3, "pink": 5, "blue": 2, "red": 6, "gray": 16, "grey": 16,
                 "노랑": 7, "초록": 4, "분홍": 5, "파랑": 2, "빨강": 6, "회색": 16, "none": 0}
 FIND_MAX = 255   # Word Find 검색어 길이 한도 (^를 ^^로 바꾼 뒤의 길이)
@@ -48,6 +49,11 @@ FIND_MAX = 255   # Word Find 검색어 길이 한도 (^를 ^^로 바꾼 뒤의 �
 def _find_len(text: str) -> int:
     """Word Find에 넘기는 길이: _find가 ^를 ^^로 바꾸므로 그 길이로 셉니다."""
     return len(str(text).replace("^", "^^"))
+
+
+def _u16(text: str) -> int:
+    """Word Range 위치로 센 글 길이 (UTF-16 단위: BMP 밖 글자는 2)."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def heading_style(level: int) -> int:
@@ -691,18 +697,21 @@ class Writer:
         self.pos = pos
         self.theme = theme or off.THEMES["navy"] | {"name": "navy"}
         self.created: List[str] = []
+        self.warnings: List[str] = []
+        self.problems: List[str] = []
 
     def _para(self, text: str, style: Optional[int] = None, bold_spans: Sequence[Tuple[int, int]] = ()) -> Any:
         r = self.doc.Range(self.pos, self.pos)
         r.InsertAfter(text + "\r")
-        para = self.doc.Range(r.Start, r.Start + len(text))
+        # Word 위치는 UTF-16 단위: BMP 밖 글자(이모지 등)는 2칸이라 파이썬 글자 위치를 그대로 쓰면 굵게가 밀림
+        para = self.doc.Range(r.Start, r.Start + _u16(text))
         try:
             para.Style = self.doc.Styles(style if style is not None else WD_STYLE_NORMAL)
         except Exception:
             pass
         para.Font.Bold = False
         for a, b in bold_spans:
-            self.doc.Range(r.Start + a, r.Start + b).Font.Bold = True
+            self.doc.Range(r.Start + _u16(text[:a]), r.Start + _u16(text[:b])).Font.Bold = True
         self.pos = r.End
         return para
 
@@ -793,6 +802,17 @@ class Writer:
         self.pos = toc.Range.End + 1
         self.created.append("목차")
 
+    def rule(self) -> None:
+        """마크다운 '---'(구분선): 아래 테두리만 있는 빈 단락 (페이지 나누기가 아님. 페이지 나누기는 --page-break)."""
+        para = self._para("")
+        try:
+            border = para.Paragraphs(1).Borders(WD_BORDER_BOTTOM)
+            border.LineStyle = 1                      # wdLineStyleSingle
+            border.LineWidth = 6                      # wdLineWidth075pt
+        except Exception as e:
+            self.problems.append(f"구분선의 아래 테두리를 넣지 못함: {type(e).__name__}")
+        self.created.append("구분선")
+
     def page_break(self) -> None:
         r = self.doc.Range(self.pos, self.pos)
         r.InsertBreak(7)                              # wdPageBreak
@@ -815,7 +835,10 @@ class Writer:
             elif kind == "table":
                 self.table(payload)
             elif kind == "break":
-                self.page_break()
+                self.rule()
+            elif kind == "front_matter":
+                self.warnings.append(rt.front_matter_warning(payload))
+                rt.log("WARN", self.warnings[-1])
 
 
 def _find(rng: Any, text: str, match_case: bool = False, whole_word: bool = False) -> bool:
@@ -1015,7 +1038,7 @@ def cmd_write(args) -> Dict[str, Any]:
         if image:
             w.image(image, args.width)
         mode = "raw" if args.callout else ("bold" if args.heading or args.title else "auto")
-        problems = _verify_inserted(doc, start, w.pos, [c for c in (text, file_text) if c], mode)
+        problems = w.problems + _verify_inserted(doc, start, w.pos, [c for c in (text, file_text) if c], mode)
         t.set_focus()
         if t.source == "active" and not args.no_focus:
             try:
@@ -1024,10 +1047,12 @@ def cmd_write(args) -> Dict[str, Any]:
                 pass
         resolved = t.resolved()
     preview = f"{resolved['name']}의 {where}에 넣었습니다: {', '.join(w.created)}"
+    extra: Dict[str, Any] = {"warnings": w.warnings} if w.warnings else {}
     if problems:
-        return rt.ok_unverified(TOOL, "write", preview, problems, target_resolved=resolved, inserted=w.created)
-    return rt.ok(TOOL, "write", preview, "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요.",
-                 verified=True, target_resolved=resolved, inserted=w.created)
+        return rt.ok_unverified(TOOL, "write", preview, problems, target_resolved=resolved, inserted=w.created, **extra)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+                 + (" 주의: warnings를 사용자에게 알리세요." if w.warnings else ""),
+                 verified=True, target_resolved=resolved, inserted=w.created, **extra)
 
 
 def _verify_inserted(doc: Any, start: int, end: int, contents: List[str], mode: str = "auto") -> List[str]:
@@ -1064,7 +1089,7 @@ def _first_inserted(content: str, mode: str) -> str:
                 return rt.split_bold(payload[0])[0]
             if kind == "table":
                 return "".join(str(c) for c in payload[0])     # 칸은 그대로 넣음 ('\|'는 이미 글자 '|')
-        return ""                                   # 구분선(페이지 나누기)만 있음
+        return ""                                   # 구분선(빈 단락)·머리말만 있음
     if mode == "bold":
         return rt.plain_heading(content.strip())
     first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")

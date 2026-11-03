@@ -384,6 +384,15 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
         wb.close()
 
 
+def closed_uncomputed(path: str, sheet: str, r0: int, c0: int, matrix: List[List[Any]]) -> Optional[Dict[str, Any]]:
+    """닫힌 xlsx에서 읽은 범위 안의 수식 칸 중 계산된 값이 없는 것 (빈 칸(None)이 있을 때만 확인). 없으면 None."""
+    if not path.lower().endswith((".xlsx", ".xlsm")) or not any(v is None for row in matrix for v in row):
+        return None
+    width = max((len(r) for r in matrix), default=0)
+    info = rt.xlsx_uncomputed_formulas(path, sheet, (r0, c0, r0 + len(matrix) - 1, c0 + max(width, 1) - 1))
+    return info if info["count"] else None
+
+
 def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50) -> Tuple[List[Dict[str, Any]], int, int]:
     """찾은 칸 (앞 limit개), 전체 수, 값이 잘린 칸 수. 값은 칸마다 MAX_CELL_CHARS에서 자릅니다 (전체는 --save CSV)."""
     hits: List[Dict[str, Any]] = []
@@ -406,6 +415,11 @@ def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: 
 
 
 def cmd_read(args) -> Dict[str, Any]:
+    found: Dict[str, Any] = {}
+    return rt.with_uncomputed(_read(args, found), found.get("uncomputed"))
+
+
+def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     csv_path = closed_csv(args.target)
     closed = None if csv_path else is_closed_xlsx(args.target)
     if csv_path:
@@ -414,6 +428,7 @@ def cmd_read(args) -> Dict[str, Any]:
         source = {"app": "Excel", "name": os.path.basename(csv_path), "path": csv_path, "source": "file(csv)"}
     elif closed:
         sheet, r0, c0, matrix, names = _read_matrix_closed(closed, args.sheet, args.range)
+        found["uncomputed"] = closed_uncomputed(closed, sheet, r0, c0, matrix)
         source = {"app": "Excel", "name": os.path.basename(closed), "path": closed, "source": "file(openpyxl)"}
     else:
         with off.open_target("excel", args.target, readonly=True) as t:
@@ -432,12 +447,13 @@ def cmd_read(args) -> Dict[str, Any]:
     if args.search:
         hits, total, cut_n = _search_matrix(matrix, r0, c0, args.search)
         truncated = total > len(hits) or cut_n > 0
-        result.update(matches=hits, total_matches=total, truncated=truncated)
+        result.update(matches=hits, total_matches=total, count=total, shown=len(hits), truncated=truncated)
         preview = f"'{args.search}': {sheet}!{full_addr}에서 {total}개 셀 일치" + (
             f" (앞 {len(hits)}개 표시)" if total > len(hits) else "")
         if not total:
-            return rt.ok(TOOL, "read", preview,
-                         "VERIFIED: 일치하는 셀이 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요.", **result)
+            return rt.ok(TOOL, "read", f"0건: {preview}",
+                         f"VERIFIED: 0건. {sheet}!{full_addr}에 '{args.search}'이(가) 들어간 칸이 없습니다. "
+                         "사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요.", **result)
         if truncated:
             reasons = ([f"찾은 칸 {total}개 중 앞 {len(hits)}개만 표시"] if total > len(hits) else []) + (
                 [f"{rt.MAX_CELL_CHARS}자보다 긴 값 {cut_n}개는 앞부분만 (value_truncated)"] if cut_n else [])
@@ -1106,8 +1122,10 @@ def cmd_export(args) -> Dict[str, Any]:
         sheet, r0, c0, matrix, _ = _read_matrix_closed(closed, args.sheet, args.range)
         out = rt.resolve_output_path(args.save, sheet, ".csv")
         out = rt.write_csv_rows(out, [[out_value(v) for v in r] for r in matrix], args.encoding)
-        return rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
-                          "VERIFIED: 저장한 파일을 확인했습니다.", delimiter=",", output_file=out, rows=len(matrix))
+        return rt.with_uncomputed(rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
+                                             "VERIFIED: 저장한 파일을 확인했습니다.", delimiter=",", output_file=out,
+                                             rows=len(matrix)),
+                                  closed_uncomputed(closed, sheet, r0, c0, matrix))
 
     with off.open_target("excel", args.target, readonly=True) as t:
         ws = t.sheet(args.sheet)

@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.32**, **office-cli 1.4.30**
+- main 기준 도구 버전: **ml-kit 2.9.32**, **office-cli 1.4.31**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -38,6 +38,7 @@
 | office-cli 1.4.28 | 오류 로그에 문서 글이 남지 않게 구조를 바꿈: 문서 글(칸 값, 제목, 노트, 시트·문서·파일·메일 폴더 이름 목록, 후보 단락)을 message에 넣는 오류는 그 글을 뺀 `log_message`를 주고, 표식 자르기(`사용 가능한 <공백 포함 종류>:`, `후보:`, `추천:` 추가)는 대비로 남김. 가린 값의 10자 이상 앞부분과 traceback도 가림, 1~2자 값은 따옴표 안만. `undo`는 되돌릴 수 없는 작업만 있으면 `VERIFIED: 0건.`, `undo --list`는 그런 작업이 20개 넘게 앞에 있어도 되돌릴 수 있는 지점을 보여 줌 |
 | office-cli 1.4.29 | `transfer --chart`는 받는 문서를 찾지 못하면(오타 `[추천]`, `[후보]`, 확장자) 다음 방식(redraw, relay)으로 넘어가지 않고 원래 오류 그대로 멈춤(`[추천]`이 message 끝, 클립보드를 덮어쓰지 않음). outlook 폴더 `[후보]`는 끝 이름끼리 비교(같은 메일 계정 때문에 관계없는 폴더가 후보가 되지 않음), 오류 로그에 메일 계정 이름을 남기지 않음. 차트 다시 그리기는 `$`를 수식으로 읽지 않음. `reader search/index --file <파일 하나>`의 내부 오류는 `ERROR:`. `run_win_tests.py --agent -h`는 pywin32 없이도 JSON exit 0 |
 | office-cli 1.4.30 | outlook `--folder` 오류의 `(경로: ...)`도 오류 로그에서는 계정 이름 자리를 `<메일 계정>`으로(`not_found`의 `log_extra`). `transfer --method relay --to ppt`는 받는 PPT의 `--slide`를 확인한 뒤에 클립보드·임시 워드를 씀(없는 슬라이드로 클립보드를 덮어쓰지 않음). relay `--to-target ""`는 활성 문서(`KeyError` 아님) |
+| office-cli 1.4.31 | relay `--to ppt`는 열린·활성 PPT의 `--slide`를 찾기만으로 확인하고 쓰기 세션(되돌리기 지점)은 임시 워드 단계 뒤에 엶(워드 단계가 실패해도 바꾼 것 없는 지점이 남지 않음). 닫힌 xlsx의 계산된 값이 없는 수식 칸(openpyxl이 쓰고 엑셀에서 연 적 없는 파일)은 excel read/export, transfer 범위, reader read/search에서 UNVERIFIED와 칸 목록(`uncomputed_formulas`). docx 글상자 글을 따로 단위로 읽음(두 벌 저장은 한 번). 닫힌 docx 표 번호는 콘텐츠 컨트롤 안의 표도 셈(read·COM과 같음). word 굵게 위치는 UTF-16 단위. excel read --search에 `count`와 `VERIFIED: 0건.`. 마크다운 `---`는 word에서 구분선(아래 테두리 빈 단락), 맨 앞 YAML 머리말은 넣지 않고 `warnings` |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
 | ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `docs/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |

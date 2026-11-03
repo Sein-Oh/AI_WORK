@@ -539,10 +539,13 @@ def _new_slide(prs: Any, index: int, with_title: bool) -> Any:
 
 
 def _md_sections(text: str) -> List[Dict[str, Any]]:
-    """마크다운을 슬라이드 단위로 나눕니다: '#'/'##' 제목마다 새 슬라이드, 그 밖의 블록은 본문/표."""
+    """마크다운을 슬라이드 단위로 나눕니다: '#'/'##' 제목마다 새 슬라이드, 그 밖의 블록은 본문/표.
+    '---'(구분선)은 넣지 않고 슬라이드도 나누지 않음, 맨 앞 YAML 머리말도 넣지 않음 (cmd_write가 warnings에 남김)."""
     sections: List[Dict[str, Any]] = []
     cur: Optional[Dict[str, Any]] = None
     for kind, payload in rt.parse_markdown_blocks(text):
+        if kind in ("break", "front_matter"):
+            continue
         if kind == "heading" and payload[0] <= 2:
             cur = {"title": rt.plain_heading(payload[1]), "lines": [], "tables": []}
             sections.append(cur)
@@ -633,6 +636,7 @@ def cmd_write(args) -> Dict[str, Any]:
     if args.title:
         args.title = rt.plain_heading(args.title)   # 슬라이드 제목은 .md 제목·word --title과 같은 규칙 (** __를 뺀 글)
     md_sections: List[Dict[str, Any]] = []
+    md_warnings: List[str] = []
     table_rows: Optional[List[List[str]]] = None
     if args.file:
         path = rt.resolve_input_path(args.file, "입력 파일")
@@ -641,7 +645,11 @@ def cmd_write(args) -> Dict[str, Any]:
             if not table_rows:
                 raise rt.InputError(f"입력 표 파일이 비어 있습니다: {args.file}")
         else:
-            md_sections = _md_sections(rt.read_text_file(path))
+            md_text = rt.read_text_file(path)
+            md_sections = _md_sections(md_text)
+            if rt.front_matter_lines(md_text):
+                md_warnings.append(rt.front_matter_warning(rt.front_matter_lines(md_text)))
+                rt.log("WARN", md_warnings[-1])
             if len(md_sections) > MAX_NEW_SLIDES:
                 raise rt.InputError(f"파일 내용이 슬라이드 {len(md_sections)}장 분량입니다 (최대 {MAX_NEW_SLIDES}장). 내용을 줄여 주세요.")
     image = rt.resolve_input_path(args.image, "그림 파일") if args.image else None
@@ -660,7 +668,7 @@ def cmd_write(args) -> Dict[str, Any]:
         created: List[str] = []
         touched: List[int] = []
         placed: List[Tuple[int, Any]] = []   # (슬라이드 번호, 이번에 넣은 도형)
-        warnings: List[str] = []
+        warnings: List[str] = list(md_warnings)
         slide_no, make_new = _resolve_slide(prs, args.slide, default_new=bool(md_sections or table_rows) and args.slide is None)
         insert_at = int(prs.Slides.Count) + 1 if slide_no is None else slide_no + 1
         if not make_new and slide_no is not None and not args.overwrite:

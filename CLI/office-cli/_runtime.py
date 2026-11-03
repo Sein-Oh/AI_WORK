@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.30"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.31"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -885,6 +885,105 @@ def read_csv_rows(path: str, delimiter: Optional[str] = None) -> List[List[str]]
     return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
 
 
+UNCOMPUTED_SHOW = 20       # 계산된 값이 없는 수식 칸을 결과에 담는 개수 상한
+_XLSX_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_XLSX_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_XLSX_F_TAG = re.compile(rb"<(?:\w+:)?f[\s>/]")
+_CELL_REF = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+)$")
+
+
+def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
+    m = _CELL_REF.match(ref or "")
+    if not m:
+        return None
+    col = 0
+    for ch in m.group(1).upper():
+        col = col * 26 + ord(ch) - 64
+    return int(m.group(2)), col
+
+
+def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
+                             area: Optional[Tuple[int, int, int, int]] = None,
+                             limit: int = UNCOMPUTED_SHOW) -> Dict[str, Any]:
+    """계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 한 번도 열지 않은 파일).
+    openpyxl data_only로 읽으면 이런 칸은 빈 칸(None)이라 값이 없는 것처럼 보입니다.
+    sheet: 이 시트만 (None이면 모든 시트), area: (시작 행, 시작 열, 끝 행, 끝 열) 안의 칸만.
+    수식 태그(<f>)가 없는 시트는 XML을 해석하지 않습니다. 엑셀에서 저장한 파일은 값이 있어 0개입니다
+    (빈 글 결과(t="str")는 계산된 값).
+    반환: {"count": 전체 수, "cells": ["시트!A3", ...] (앞 limit개), "sheets": {시트: 수}}. 읽지 못하면 0개."""
+    import posixpath
+    import zipfile
+    import xml.etree.ElementTree as ET
+    result: Dict[str, Any] = {"count": 0, "cells": [], "sheets": {}}
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            wb = ET.fromstring(z.read("xl/workbook.xml"))
+            rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+            targets = {r.get("Id"): r.get("Target") or "" for r in rels}
+            for sh in wb.iter(_XLSX_MAIN + "sheet"):
+                title = sh.get("name") or ""
+                if sheet is not None and title != sheet:
+                    continue
+                target = targets.get(sh.get(_XLSX_REL + "id"), "")
+                part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
+                if part not in names:
+                    continue
+                data = z.read(part)
+                if not _XLSX_F_TAG.search(data):
+                    continue
+                n = 0
+                q = f"'{title}'" if re.search(r"[\s!']", title) else title
+                for _, el in ET.iterparse(io.BytesIO(data), events=("end",)):
+                    if el.tag != _XLSX_MAIN + "c":
+                        continue
+                    if el.find(_XLSX_MAIN + "f") is not None and el.get("t") not in ("str", "inlineStr"):
+                        v = el.find(_XLSX_MAIN + "v")
+                        ref = el.get("r") or ""
+                        rc = _cell_rc(ref)
+                        inside = area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
+                        if (v is None or not (v.text or "")) and inside:
+                            n += 1
+                            if len(result["cells"]) < limit:
+                                result["cells"].append(f"{q}!{ref}")
+                    el.clear()
+                if n:
+                    result["count"] += n
+                    result["sheets"][title] = n
+    except Exception as e:                      # 확인용 보조 검사: 실패해도 읽기 결과는 그대로
+        debug(f"수식 값 확인 실패: {type(e).__name__}")
+    return result
+
+
+def uncomputed_note(info: Dict[str, Any]) -> str:
+    """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 10개)."""
+    cells = ", ".join(info["cells"][:10]) + (" 등" if info["count"] > 10 else "")
+    return (f"수식 칸 {info['count']}개({cells})는 계산된 값이 파일에 저장되어 있지 않아 빈 칸으로 읽힘 "
+            "(엑셀에서 연 적 없이 프로그램이 만든 파일이라 값이 계산된 적이 없음). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "
+            "다시 실행하도록 알리세요")
+
+
+def uncomputed_fields(info: Dict[str, Any]) -> Dict[str, Any]:
+    """결과 JSON 키: uncomputed_formulas(앞 UNCOMPUTED_SHOW개), uncomputed_count, 잘렸으면 uncomputed_truncated."""
+    out: Dict[str, Any] = {"uncomputed_formulas": list(info["cells"]), "uncomputed_count": info["count"]}
+    if info["count"] > len(info["cells"]):
+        out["uncomputed_truncated"] = True
+    return out
+
+
+_PAYLOAD_BASE = ("status", "tool", "command", "preview", "verified", "unverified", "agent_directive", "recovered")
+
+
+def with_uncomputed(payload: Dict[str, Any], info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """R1: 계산된 값이 없는 수식 칸을 빈 칸으로 읽은 성공 응답은 VERIFIED가 아님 -> UNVERIFIED로 바꾸고 칸 목록을 붙입니다."""
+    if not info or not info.get("count") or payload.get("status") != "ok":
+        return payload
+    fields = {k: v for k, v in payload.items() if k not in _PAYLOAD_BASE}
+    fields.update(uncomputed_fields(info))
+    return ok_unverified(payload["tool"], payload["command"], payload["preview"],
+                         [uncomputed_note(info)] + list(payload.get("unverified") or []), **fields)
+
+
 def _transient_fs_error(e: OSError) -> bool:
     """잠깐 기다리면 풀릴 수 있는 오류: 접근 거부, 공유 위반, 잠금 위반 (winerror 5/32/33)."""
     return isinstance(e, PermissionError) or getattr(e, "winerror", None) in (5, 32, 33)
@@ -1160,14 +1259,41 @@ def parse_markdown_table(lines: List[str]) -> List[List[str]]:
     return [r + [""] * (width - len(r)) for r in rows]
 
 
+_YAML_LINE = re.compile(r"^(?:\s|-\s|-$|#|[^\s:#][^:]{0,60}:(?:\s|$))")
+
+
+def front_matter_lines(text: str) -> int:
+    """맨 앞 YAML 머리말(1번째 줄 '---', 그 뒤 'key: 값' 줄들, '---' 또는 '...' 줄로 닫힘)의 줄 수 (닫는 줄 포함). 없으면 0.
+    닫는 줄이 없거나 사이에 'key:' 모양이 아닌 줄이 있으면 머리말이 아님 (첫 줄 '---'는 구분선)."""
+    lines = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return 0
+    keys = 0
+    for i, ln in enumerate(lines[1:], 1):
+        s = ln.rstrip()
+        if s in ("---", "..."):
+            return i + 1 if keys else 0
+        if not s.strip():
+            continue
+        if not _YAML_LINE.match(s):
+            return 0
+        keys += bool(re.match(r"^[^\s:#-][^:]{0,60}:(?:\s|$)", s))
+    return 0
+
+
 def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
     """마크다운을 블록 목록으로 바꿉니다.
     ('heading', (레벨, 텍스트)), ('paragraph', 텍스트), ('bullets', [항목]), ('numbered', [항목]),
-    ('table', [[셀]]), ('break', None)  # '---' 구분선
+    ('table', [[셀]]), ('code', 줄), ('break', None)  # '---' 구분선(thematic break)
+    ('front_matter', 줄 수): 맨 앞 YAML 머리말. 넣지 않는 블록 (쓰는 쪽이 warnings에 남김)
     """
     blocks: List[Tuple[str, Any]] = []
     para: List[str] = []
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    skip = front_matter_lines(text)
+    if skip:
+        blocks.append(("front_matter", skip))
+        lines = lines[skip:]
 
     def flush() -> None:
         if para:
@@ -1246,4 +1372,9 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
 
 
 def looks_like_markdown(text: str) -> bool:
-    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d{1,3}[.)]\s|\|.*\||```|~~~)", text) or "**" in text)
+    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d{1,3}[.)]\s|\|.*\||```|~~~)", text) or "**" in text
+                or front_matter_lines(text))
+
+
+def front_matter_warning(lines: int) -> str:
+    return f"맨 앞 YAML 머리말({lines}줄, '---'로 둘러싼 key: 값)은 문서 정보라 넣지 않았습니다."

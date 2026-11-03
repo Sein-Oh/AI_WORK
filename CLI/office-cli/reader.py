@@ -44,7 +44,7 @@ SUPPORTED = {
 }
 UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행"}
 PAGE_TYPES = ("pdf", "pptx")   # read --pages가 실제 쪽/슬라이드 번호인 형식 (그 밖은 항목 번호)
-PARSER_VERSION = 8          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만, 8: 짧은 글(도장·Bates 번호)만 남은 스캔 쪽도, 보이지 않는 OCR 글자 층이 있는 쪽은 제외)
+PARSER_VERSION = 9          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만, 8: 짧은 글(도장·Bates 번호)만 남은 스캔 쪽도, 보이지 않는 OCR 글자 층이 있는 쪽은 제외, 9: DOCX 글상자 글, XLSX 계산된 값이 없는 수식 칸 meta)
 SCAN_IMAGE_COVER = 0.4      # 스캔 쪽으로 보는 그림 면적 비율 (쪽 면적 대비)
 SCAN_TEXT_MAX = 40          # 그림이 덮는 쪽에 이보다 적은 글자(도장, Bates 번호)만 남으면 스캔 쪽
 MAX_SHEET_ROWS = 20000      # xlsx 시트당 최대 행 수
@@ -1111,6 +1111,48 @@ def _p_text(el: Any) -> str:
     return "".join(out)
 
 
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+
+
+def _textboxes(el: Any) -> List[Any]:
+    """요소 안의 글상자 내용(w:txbxContent), 문서 순서. Word 2010 이후 파일은 같은 글상자를 DrawingML(mc:Choice)과
+    VML(mc:Fallback) 두 벌로 저장하므로 mc:Fallback 안의 것은 뺍니다 (두 번 세지 않게). 글상자 안의 글상자도 각각 하나로
+    (_p_text가 안쪽 글상자 글을 빼므로 겹치지 않음)."""
+    out = []
+    for tb in el.iter(_W + "txbxContent"):
+        node = tb.getparent()
+        while node is not None and node is not el and node.tag != _MC_FALLBACK:
+            node = node.getparent()
+        if node is None or node.tag != _MC_FALLBACK:
+            out.append(tb)
+    return out
+
+
+def _textbox_lines(tb: Any) -> List[str]:
+    """글상자 하나의 글: 단락마다 한 줄, 표는 행마다 칸을 탭으로 이은 한 줄. 빈 줄은 뺍니다."""
+    lines = []
+    for block in _body_blocks(tb):
+        if _local(block.tag) == "p":
+            lines.append(_p_text(block).strip())
+        else:
+            for tr in block.iter(_W + "tr"):
+                lines.append("\t".join(" ".join(_p_text(p).strip() for p in tc.iter(_W + "p")).strip()
+                                       for tc in tr.iter(_W + "tc")).strip())
+    return [ln for ln in lines if ln]
+
+
+def _cell_paragraphs(tc: Any) -> List[Any]:
+    """표 칸의 단락 (글상자 안 단락은 빼고, 칸 안의 표 단락은 넣음): 글상자 글은 따로 단위로 둠 (두 벌 저장도 두 번 세지 않음)."""
+    def in_textbox(p: Any) -> bool:
+        node = p.getparent()
+        while node is not None and node is not tc:
+            if node.tag == _W + "txbxContent":
+                return True
+            node = node.getparent()
+        return False
+    return [p for p in tc.iter(_W + "p") if not in_textbox(p)]
+
+
 def _body_blocks(parent: Any):
     """본문의 단락(w:p)과 표(w:tbl)를 문서 순서로. 콘텐츠 컨트롤(w:sdt)과 customXml 안에 든 것도 꺼냅니다."""
     for child in parent.iterchildren():
@@ -1141,8 +1183,21 @@ def parse_docx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     numbering = _DocxNumbering(document)
     pages = _DocxPages(document.element.body)
     b = UnitBuilder()
-    para_no = table_no = 0
+    para_no = table_no = box_no = 0
     numbering_failed = False
+
+    def add_textboxes(el: Any, page: Optional[int]) -> None:
+        """본문 단락·표에 든 글상자 글을 그 뒤에 따로 단위로 (단락 번호는 그대로: 글상자가 없는 문서의 단위 번호가 같음)."""
+        nonlocal box_no
+        for tb in _textboxes(el):
+            lines = _textbox_lines(tb)
+            if not lines:
+                continue
+            box_no += 1
+            for j, line in enumerate(lines, 1):
+                loc = f"글상자 {box_no}" + (f" 단락 {j}" if len(lines) > 1 else "")
+                b.add("paragraph", loc, line, page, pages.mode)
+
     for child in _body_blocks(document.element.body):
         tag = _local(child.tag)
         if tag == "p":
@@ -1157,6 +1212,7 @@ def parse_docx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                         numbering.label(*num)
                 except Exception:
                     pass
+                add_textboxes(child, page)                 # 글상자만 있는 단락 (글상자 글은 단락 글에 없음)
                 continue
             para_no += 1
             loc = f"단락 {para_no}"
@@ -1176,8 +1232,9 @@ def parse_docx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                     text = f"{label} {text}"
             if is_title and not level:
                 b.add("heading", loc, text, page, pages.mode, None, section=[text[:120]])
-                continue
-            b.add_text(loc, text, page, pages.mode, style_level=level, list_family=list_family, list_depth=list_depth)
+            else:
+                b.add_text(loc, text, page, pages.mode, style_level=level, list_family=list_family, list_depth=list_depth)
+            add_textboxes(child, page)
         elif tag == "tbl":
             table_no += 1
             grid: List[List[str]] = []
@@ -1189,14 +1246,17 @@ def parse_docx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                 for cell in row.cells:
                     # 가로 병합 칸은 같은 칸이 반복되므로 빈 칸으로 (머리글은 앞 칸을 이어 씀)
                     cells.append("" if cell._tc is prev_tc else
-                                 "\n".join(_p_text(p) for p in cell._tc.iter(_W + "p")))
+                                 "\n".join(_p_text(p) for p in _cell_paragraphs(cell._tc)))
                     prev_tc = cell._tc
                 grid.append(cells)
             for r in table_rows(grid, row_pages):
                 b.add("row", f"표 {table_no} {r['row']}행", r["text"], r["key"], pages.mode, r["number"])
+            add_textboxes(child, next((p for p in row_pages if p), None))
     core = document.core_properties
     meta: Dict[str, Any] = {"title": core.title or "", "paragraphs": para_no, "tables": table_no,
                             "page_source": pages.mode}
+    if box_no:
+        meta["textboxes"] = box_no
     if pages.mode:
         meta["pages"] = max([u["page"] for u in b.units if u["page"]] or [1])
     return b.units, meta
@@ -1302,6 +1362,11 @@ def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if truncated:
         meta["rows_truncated"] = True
         rt.log("WARN", f"시트당 {MAX_SHEET_ROWS}행까지만 읽었습니다.")
+    # 계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 연 적 없는 파일): data_only로는 빈 칸이라 글이 없음
+    uncomputed = rt.xlsx_uncomputed_formulas(path)
+    if uncomputed["count"]:
+        meta["uncomputed_formulas"] = uncomputed
+        rt.log("WARN", f"계산된 값이 저장되지 않은 수식 칸 {uncomputed['count']}개 (빈 칸으로 읽음): {', '.join(uncomputed['cells'][:5])}")
     return b.units, meta
 
 
@@ -1901,6 +1966,11 @@ def cmd_read(args) -> Dict[str, Any]:
     # 원본에서 읽지 않은 부분: 엑셀 시트당 행 상한 (읽기 결과도 저장 파일도 문서 전부가 아님)
     src_cut = f"원본 시트의 {MAX_SHEET_ROWS}행을 넘는 부분은 읽지 않음 (읽기 상한, --save 파일에도 없음)" \
         if meta.get("rows_truncated") else ""
+    # 계산된 값이 없는 수식 칸: 빈 칸으로 읽혀 글에 없음 -> 읽기·저장 모두 UNVERIFIED (값이 계산된 적 없음)
+    uncomputed = meta.get("uncomputed_formulas") or None
+    formula_reason = rt.uncomputed_note(uncomputed) if uncomputed else ""
+    if uncomputed:
+        result.update(rt.uncomputed_fields(uncomputed))
     # 글자 없이 그림만 있는 쪽 (스캔 쪽): 읽으려는 범위 안의 쪽만 알림. 잘림이 아니라 주의 사항이라 notes에
     blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, bool(args.units))
     notes: List[str] = []
@@ -1945,7 +2015,7 @@ def cmd_read(args) -> Dict[str, Any]:
             reasons.append(src_cut)
         if reasons:
             result.update(truncated=True, truncated_reason=reasons)
-        problems += reasons + ([ocr_reason] if ocr_reason else [])
+        problems += reasons + ([ocr_reason] if ocr_reason else []) + ([formula_reason] if formula_reason else [])
         if problems:
             payload = rt.ok_unverified(TOOL, "read", preview, problems, **result)
             if notes:
@@ -1969,6 +2039,10 @@ def cmd_read(args) -> Dict[str, Any]:
         what = "스캔 이미지 PDF" if meta.get("ocr_needed") else f"고른 쪽(p.{_page_list(blank_pages)})이 스캔 이미지"
         return rt.ok_unverified(TOOL, "read", f"{name}: {what}라 읽을 글자 층이 없습니다 (0건)",
                                 [f"{what}라 글자 층이 없어 내용을 읽지 못함 (OCR(글자 인식)한 PDF가 있어야 읽을 수 있음)"],
+                                **result)
+    if not selected and formula_reason:
+        result.update(units=[], truncated=False, shown=0)
+        return rt.ok_unverified(TOOL, "read", f"{name}: 글이 없습니다 (0건, 계산된 값이 없는 수식 칸 있음)", [formula_reason],
                                 **result)
     if not selected:
         result.update(units=[], truncated=False, shown=0)
@@ -2035,8 +2109,8 @@ def cmd_read(args) -> Dict[str, Any]:
             directive += " 더 읽거나 저장할 방법이 없습니다(읽기 상한). 사용자에게 그대로 알리세요."
     else:
         directive = "VERIFIED: 읽기 완료. 내용을 인용할 때는 page, section, number로 근거(파일 p.N, 장절 (번호))를 함께 알리세요."
-    if ocr_reason:
-        return rt.ok_unverified(TOOL, "read", preview, [ocr_reason] + reasons, **result)
+    if ocr_reason or formula_reason:
+        return rt.ok_unverified(TOOL, "read", preview, [x for x in (ocr_reason, formula_reason) if x] + reasons, **result)
     if notes:
         directive += " 주의: " + "; ".join(notes) + ". 사용자에게 알리세요."
     return rt.ok(TOOL, "read", preview, directive, **result)
@@ -2676,6 +2750,12 @@ def _search_gaps(docs: List[Dict[str, Any]], info: Dict[str, Any], pages: Option
     cut = [os.path.basename(d["file"]) for d in docs if (d.get("meta") or {}).get("rows_truncated")]
     if cut:
         gaps.append(f"행이 많아 {MAX_SHEET_ROWS}행까지만 읽은 엑셀 {len(cut)}개: {', '.join(cut[:5])}")
+    uncomputed = [(os.path.basename(d["file"]), (d.get("meta") or {})["uncomputed_formulas"]) for d in docs
+                  if (d.get("meta") or {}).get("uncomputed_formulas")]
+    if uncomputed:
+        gaps.append(f"계산된 값이 저장되지 않은 수식 칸이 있는 엑셀 {len(uncomputed)}개 (그 칸은 빈 칸으로 읽혀 검색 안 됨, "
+                    "엑셀에서 연 적 없이 프로그램이 만든 파일. 엑셀에서 열어 저장한 뒤 reader.py index --all로 다시 등록): "
+                    + ", ".join(f"{n} {u['count']}칸({', '.join(u['cells'][:3])})" for n, u in uncomputed[:5]))
     if info["excluded_dirs"]:
         gaps.append(f"들어가지 않은 하위 폴더 {len(info['excluded_dirs'])}개 (깊이 제한 또는 '_'로 시작): "
                     + ", ".join(os.path.basename(d) for d in info["excluded_dirs"][:5]))

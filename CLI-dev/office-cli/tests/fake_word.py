@@ -118,6 +118,9 @@ class FakeParagraph:
     def __init__(self, rng):
         self.Range = rng
 
+    def Borders(self, which):
+        return Props(self.Range.doc.log, ("border", self.Range.Start, which))
+
 
 class FakeTable:
     def __init__(self, doc, rng):

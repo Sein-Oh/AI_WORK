@@ -2,6 +2,41 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.31] - 2026-11-03
+
+22차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1431.py`.
+
+### 수정
+- `office.py transfer --method relay --to ppt` (1.4.30 회귀): 슬라이드를 확인하려고 받는 PPT의 쓰기 세션(되돌리기 지점)을 임시 워드 단계보다
+  먼저 열어, 임시 워드 단계가 실패하면 저장 안 된 활성·열린 PPT에 바꾼 것 없는 되돌리기 지점이 남고 다음 `undo`가 그 지점을 먼저 골랐음.
+  열린 문서·활성 문서는 `resolve_target`으로 찾은 문서에서 `ppt._resolve_slide`로 확인만 하고, 쓰기 세션은 임시 워드 단계 뒤에 엽니다(1.4.29와 같음).
+  닫힌 파일은 열어서 확인합니다(멈추면 디스크 파일이 그대로라 지점은 지움). 새로 만들 파일은 슬라이드 0장으로 확인하고 만들지 않습니다
+  (이전에는 슬라이드 오류에도 빈 파일을 만들었음). 받는 문서, 앵커, 슬라이드 오류가 클립보드와 임시 워드보다 먼저 멈추는 것은 그대로입니다.
+- 닫힌 xlsx의 계산된 값이 없는 수식 칸: openpyxl `data_only`로 읽어 openpyxl 같은 프로그램이 쓰고 엑셀에서 연 적 없는 파일의 수식 칸이 빈 칸인데
+  `VERIFIED`이던 문제(`excel read`, `--search`, `--save`, `export --save .csv`, `office.py transfer --from excel --range`, `reader read/search`).
+  `_runtime.xlsx_uncomputed_formulas`가 시트 XML에서 값(`<v>`)이 비어 있는 수식 칸을 찾고(수식 태그가 없는 시트는 해석하지 않음, 빈 글 결과
+  `t="str"`는 계산된 값), 있으면 `UNVERIFIED:`와 `uncomputed_formulas`(20개까지), `uncomputed_count`, `uncomputed_truncated`로 알리고 엑셀에서
+  열어 저장한 뒤 다시 실행하라고 안내합니다. excel은 읽은 범위에 빈 칸이 있을 때만 그 범위를 확인합니다. reader는 `meta.uncomputed_formulas`에
+  남기고 search는 `not_searched`에 넣습니다. 범위 전체가 그런 칸이라 `transfer`가 '데이터 없음'으로 멈추면 이유를 message에 붙입니다.
+- docx 글상자(`w:txbxContent`): 글상자 글을 읽지 않아 `reader search`가 `VERIFIED` 0건이던 문제(닫힌 파일의 `word.py read`, `transfer --what text`도
+  같은 경로). 글상자가 든 단락·표 바로 뒤에 `글상자 N`(`글상자 N 단락 M`) 단위로 넣습니다. `mc:Fallback`(VML 사본) 안의 글상자는 빼서 두 번 세지 않고,
+  표 칸 글에서도 글상자 단락은 뺍니다(따로 단위). 단락 번호는 그대로라 글상자가 없는 문서의 단위는 같습니다. 파서 버전 9.
+- `office.py transfer --from word --what table` (닫힌 docx): python-docx `Document.tables`(본문 바로 아래 표만)로 표를 세어, 콘텐츠 컨트롤(`w:sdt`)
+  안에 표가 있으면 read 결과·COM과 다른 표를 `VERIFIED`로 옮기던 문제. read와 같은 `reader._body_blocks`로 셉니다. 닫힌 docx의 표 번호를 쓰는
+  다른 곳은 없음(ppt `--table`은 pptx 도형).
+- `word write` 굵게 위치: 파이썬 글자 수로 세어 앞에 이모지(BMP 밖 글자)가 있으면 굵게가 밀리던 문제. Word처럼 UTF-16 단위로 셉니다(`_u16`,
+  단락 범위 끝도 같음). word.py의 다른 Range 위치는 COM에서 받은 값이라 해당 없음.
+- `excel read --search`: `count`가 없고 0건 안내가 R2 모양이 아니던 문제. `count`(= `total_matches`), `shown`, `VERIFIED: 0건. ...`.
+- 마크다운 `---`(구분선): word가 페이지 나누기를 넣고, 맨 앞 YAML 머리말은 페이지 나누기 두 개와 `key: 값` 글로 들어가던 문제.
+  구분선은 아래 테두리만 있는 빈 단락(`구분선`), 맨 앞 YAML 머리말(`---` 1번째 줄, `key: 값` 줄, `---`/`...`로 닫힘)은 넣지 않고 `warnings`.
+  ppt `.md`도 머리말을 넣지 않고 `warnings`(구분선은 전처럼 넣지 않음). 페이지 나누기는 `word.py write --page-break`. 다시 읽기 확인은 넣은 첫 글
+  (구분선 빈 단락과 머리말은 건너뜀). 머리말만 있는 글도 마크다운으로 봅니다(`looks_like_markdown`).
+
+### 문서
+- README: 계산된 값이 없는 수식 칸, `read --search`의 `count`, 구분선과 YAML 머리말, word 굵게 위치, reader 글상자, 닫힌 docx 표 번호, relay 쓰기 세션 순서.
+- SKILL.md: 워드 쪽 나누기는 `--page-break`(`.md`의 `---`는 구분선), `warnings`도 알림.
+- 남은 할 일: excel read --search(R2 `count`·`shown`·`truncated`·`next_commands`)를 뺐습니다.
+
 ## [1.4.30] - 2026-11-03
 
 21차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1430.py`.
@@ -905,7 +940,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)
 - [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
 - [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위 (office windows·info --all·chart list·undo --list는 1.4.26, outlook list/search·ppt slide list는 1.4.27)
-- [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel read --search(50), excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated`
+- [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
 - [ ] next_commands: excel write의 차트 명령 자리표시 `--title 차트` 제거, word·ppt의 transfer 명령에 `--from-target`
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
 - [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`

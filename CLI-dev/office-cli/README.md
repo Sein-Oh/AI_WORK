@@ -161,6 +161,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   준 범위가 200만 칸을 넘으면(`A1:XFD1048576`) 데이터가 있는 끝까지만 읽고 `recovered`로 알리며, 그래도 넘으면 STOP_RETRY와 `[추천] --range`(1.4.13).
   파일에 적힌 크기(`<dimension>`)가 서식만 있는 먼 칸(예: `Z300000`)까지라 그것으로도 넘으면 값을 훑어 실제로 값이 있는 끝을 찾습니다(1.4.14, 이전에는 STOP_RETRY).
 - 읽기 미리보기의 잘림 표시: 500자보다 긴 값은 "긴 값 N칸 잘림", 첫 행이 표시 상한(약 8,000자)을 넘어 뺀 칸은 "뒤쪽 N열 생략"으로 따로 알립니다(1.4.13).
+- 닫힌 xlsx의 계산된 값이 없는 수식 칸(openpyxl 같은 프로그램이 쓰고 엑셀에서 한 번도 열지 않은 파일)은 값이 계산된 적이 없어 빈 칸으로 읽힙니다.
+  읽은 범위에 그런 칸이 있으면 `read`(`--search`, `--save` 포함), `export --save .csv`, `office.py transfer --from excel --range`가 `UNVERIFIED:`와
+  `uncomputed_formulas`(칸 주소 20개까지), `uncomputed_count`, 20개를 넘으면 `uncomputed_truncated: true`로 답하고 엑셀에서 파일을 열어 저장한 뒤
+  다시 실행하라고 알립니다(1.4.31, 이전에는 빈 값으로 `VERIFIED`). 빈 칸이 있을 때만 시트 XML의 수식 칸을 확인합니다(엑셀에서 저장한 파일은 해당 없음).
+- `read --search`: `count`(찾은 칸 전체 수, `total_matches`와 같음), `shown`, `truncated`. 0건이면 `VERIFIED: 0건.` 안내(1.4.31).
 
 ### word.py
 | 명령 | 주요 옵션 |
@@ -179,6 +184,14 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 `ppt write --text`는 마크다운 블록 해석 없이 줄마다 한 줄(`-`/`1.` 목록, `**` 굵게 표시 제거)이고, 펜스 안 코드 줄만 위와 같이 글자 그대로입니다(1.4.26).
 다시 읽기 확인은 넣은 첫 글(구분선은 건너뜀, 코드 줄·표 칸은 글자 그대로)로 비교합니다(1.4.26). 표의 정렬 줄은
 머리글 다음 줄이면 `-` 하나부터(`:-`, `-:`), 칸 안의 `\|`는 글자 `|`입니다.
+
+구분선과 YAML 머리말(1.4.31):
+- 줄 하나가 `---`(`***`, `___`)이면 구분선입니다. word는 아래 테두리만 있는 빈 단락을 넣고(`inserted`의 `구분선`), 페이지 나누기가 아닙니다
+  (1.4.30까지는 페이지 나누기). 페이지를 나누려면 `word.py write --page-break`를 따로 실행합니다. ppt `.md`는 구분선을 넣지 않고 슬라이드도
+  나누지 않습니다(슬라이드는 `#`·`##` 제목마다). `ppt write --text`의 `---` 줄은 글자 그대로 한 줄입니다.
+- 1번째 줄이 `---`이고 `key: 값` 줄들 뒤에 `---`(또는 `...`) 줄로 닫히면 YAML 머리말로 보고 넣지 않으며 `warnings`에 남깁니다(word `.md`·`--text`,
+  ppt `.md`). 닫는 줄이 없거나 사이에 `key:` 모양이 아닌 줄이 있으면 머리말이 아니고 첫 `---`는 구분선입니다.
+- word 굵게 위치는 Word처럼 UTF-16 단위로 셉니다(앞에 이모지 같은 BMP 밖 글자가 있어도 굵게가 밀리지 않음, 1.4.31).
 
 굵게 표시와 목록 번호(1.4.27):
 - 본문의 `**x**`, `__x__`는 굵은 x. `__`는 CommonMark처럼 앞에 글자·숫자가 없을 때만 열고 뒤에 없을 때만 닫습니다(`report__2024__final.xlsx`는 그대로,
@@ -235,6 +248,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 1.3.0에서 뺐습니다 (Outlook 통합 도구에서 별도로 다룰 예정).
 - `--max-files`는 이번 실행에서 **새로 읽는** 파일 수의 상한입니다. 이미 최신인 파일은 세지 않으므로 같은 명령을 다시 실행하면 남은 파일부터 이어서 등록합니다(`next_commands[0]`). 등록은 원본을 바꾸지 않는 읽기 전용 작업입니다.
 - DRM으로 암호화된 Office 파일은 라이브러리로 열 수 없으므로, `excel.py`/`word.py`/`ppt.py read --target 경로`로 Office에서 읽으라고 안내합니다.
+- DOCX 글상자(`w:txbxContent`)의 글은 그 글상자가 든 단락(표) 바로 뒤에 `글상자 N`(여러 단락이면 `글상자 N 단락 M`) 단위로 넣습니다. Word 2010 이후
+  파일은 같은 글상자를 DrawingML과 VML(`mc:Fallback`) 두 벌로 저장하므로 `mc:Fallback` 쪽은 읽지 않습니다(한 번만). 단락 번호(`단락 N`)는 글상자가
+  없는 문서와 같습니다. 닫힌 파일의 `word.py read`도 같습니다(1.4.31, 이전에는 글상자 글을 읽지 않아 검색이 `VERIFIED` 0건).
+- XLSX의 계산된 값이 없는 수식 칸(엑셀에서 연 적 없는 파일)은 `meta.uncomputed_formulas`에 남기고 `read`는 `UNVERIFIED:`(`uncomputed_formulas`),
+  `search`는 `not_searched`에 넣어 `UNVERIFIED:`입니다(1.4.31). 파서 버전 9(1.4.31)의 캐시는 이 두 가지를 반영해 다시 읽습니다.
 
 #### 검색과 캐시
 - `--file` 없음: 캐시에 등록된 문서 전체만 검색합니다. 등록된 문서가 없으면 `error_type: not_indexed`(STOP_RETRY).
@@ -341,13 +359,19 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 엑셀 범위 -> 워드/PPT | `--from excel --range A1:D10 --to word` | 네이티브 표 (값 전달, 클립보드 없음) |
 | 워드/PPT -> 엑셀 | `--from word --what text\|table [--table N] --to excel` | 새 시트에 표로 |
 
+닫힌 docx의 `--table N`은 `reader.py read`·Word(COM)와 같은 번호입니다: 콘텐츠 컨트롤(`w:sdt`)·customXml 안의 표도 문서 순서로 셉니다
+(1.4.31, 이전에는 본문 바로 아래 표만 세어 다른 표를 옮겼음). 글상자 안의 표는 세지 않습니다(Word `Tables`와 같음).
+
 차트 그림은 다음 순서로 자동 시도하고, 결과 JSON의 `method`에 실제로 쓴 방식을 적습니다.
 1. `export`: Excel의 `Chart.Export` PNG를 씁니다. **파일 앞부분이 PNG가 아니면(DRM 암호화) 건너뜁니다.**
 2. `redraw`: 차트의 계열 값을 COM으로 읽고 matplotlib으로 다시 그립니다. Python이 쓴 파일을 쓰고 클립보드는 쓰지 않습니다. 원본 서식은 근사치입니다.
    제목·계열 이름·항목 이름의 `$`는 글자 그대로 그립니다(수식으로 읽지 않음, 1.4.29).
 3. `relay`: 엑셀 -> 워드 -> PPT 클립보드 경유입니다. 받는 문서와 앵커를 찾은 뒤에 클립보드를 씁니다(1.4.29).
-   PPT로 보낼 때는 받는 PPT를 먼저 열어 `--slide`도 확인한 뒤에 클립보드에 복사하고 임시 워드를 띄웁니다(1.4.30, 이전에는
+   PPT로 보낼 때는 `--slide`도 확인한 뒤에 클립보드에 복사하고 임시 워드를 띄웁니다(1.4.30, 이전에는
    2장짜리에 `--slide 9`면 클립보드를 덮어쓴 뒤 오류). `--to-target ""`는 export·redraw처럼 활성 문서입니다(1.4.30, 이전에는 `KeyError`).
+   열린 PPT·활성 PPT는 찾기만 하고 슬라이드를 확인하며, 쓰기 세션(되돌리기 지점)은 임시 워드 단계 뒤에 엽니다. 닫힌 파일은 열어서 확인합니다
+   (멈추면 파일이 그대로라 지점은 지움), 새로 만들 파일은 슬라이드 0장으로 확인합니다(만들지 않음). 1.4.30은 쓰기 세션을 먼저 열어, 임시 워드
+   단계가 실패하면 저장 안 된 PPT에 바꾼 것 없는 되돌리기 지점이 남고 다음 `undo`가 그 지점을 먼저 골랐습니다(1.4.31).
 
 방식을 바꿔도 같은 문제(받는 문서를 찾지 못함: 오타 `[추천]`, `[후보]`, 확장자, 읽기 전용 / 앵커 / 슬라이드 번호)는 다음 방식으로 넘어가지 않고
 그 오류 그대로 멈춥니다. `[추천]`은 message 끝에 있고 `--probe` 안내를 붙이지 않습니다(1.4.29, 이전에는 다음 방식까지 시도해

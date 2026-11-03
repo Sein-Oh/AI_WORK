@@ -20,6 +20,7 @@ import contextlib
 import os
 import sys
 import time
+import types
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -298,6 +299,9 @@ def _picture_problem(before: Optional[int], after: Optional[int]) -> str:
     return "" if after > before else "넣은 뒤에도 그림 수가 늘지 않음"
 
 
+_EMPTY_DECK = types.SimpleNamespace(Slides=types.SimpleNamespace(Count=0))   # 새로 만들 PPT 파일 (슬라이드 확인용)
+
+
 def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], anchor: Optional[str],
                 slide: Optional[str], title: str, occurrence: Optional[int] = None) -> Dict[str, Dict[str, Any]]:
     """클립보드 경유: 엑셀 차트 -> 워드(대상 또는 임시 문서) -> PPT.
@@ -306,22 +310,36 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
     import word
     done: Dict[str, Dict[str, Any]] = {}
     # 받는 문서를 클립보드를 쓰기 전에 찾음: 대상 오타([추천]/[후보])로 사용자의 클립보드를 덮어쓰지 않음 (no_fallback 오류)
+    found: Dict[str, Dict[str, Any]] = {}
     for kind, target in (("word", to_word), ("ppt", to_ppt)):
         if target is not None:
-            off.resolve_target(kind, target, readonly=False, create=True, option="--to-target")
+            found[kind] = off.resolve_target(kind, target, readonly=False, create=True, option="--to-target")
 
     def copy_chart() -> None:
         chart_obj.CopyPicture(1, -4147)                  # xlScreen, xlPicture(메타파일)
         time.sleep(0.3)
 
     temp_app = temp_doc = None
+
+    def open_ppt() -> Any:
+        return stack.enter_context(off.open_target("ppt", to_ppt, readonly=False, create=True, tool=TOOL,
+                                                   command="transfer", option="--to-target"))
+
     with contextlib.ExitStack() as stack:
         pt: Any = None
         if to_ppt is not None:
-            # 받는 PPT를 먼저 열고 --slide를 확인: 없는 슬라이드 번호로 클립보드를 덮어쓰거나 임시 워드를 띄운 뒤 멈추지 않음
-            pt = stack.enter_context(off.open_target("ppt", to_ppt, readonly=False, create=True, tool=TOOL,
-                                                     command="transfer", option="--to-target"))
-            ppt._resolve_slide(pt.doc, slide, default_new=slide is None)
+            # --slide를 클립보드·임시 워드보다 먼저 확인 (없는 슬라이드 번호로 클립보드를 덮어쓰지 않음).
+            # 열린 문서·활성 문서는 찾기만 하고 쓰기 세션(되돌리기 지점)은 워드 단계 뒤에 엶: 워드 단계가 실패하면
+            # 바꾼 것 없는 지점이 남아 다음 undo가 그 지점을 먼저 골랐음 (저장 안 된 문서)
+            ppt_found = found["ppt"]
+            if ppt_found["source"] in ("active", "open"):
+                ppt._resolve_slide(ppt_found["doc"], slide, default_new=slide is None)
+            elif not ppt_found["exists"]:
+                ppt._resolve_slide(_EMPTY_DECK, slide, default_new=slide is None)    # 새로 만들 파일: 슬라이드 0장
+            else:
+                # 도구가 여는 파일: 열어야 슬라이드 수를 앎. 오류로 멈추면 디스크 파일이 그대로라 지점은 지워짐
+                pt = open_ppt()
+                ppt._resolve_slide(pt.doc, slide, default_new=slide is None)
         try:
             if to_word is not None:
                 with off.open_target("word", to_word, readonly=False, create=True, tool=TOOL, command="transfer",
@@ -335,11 +353,11 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
                     pasted = t.doc.Range(start, start + 1).InlineShapes
                     if pasted.Count == 0:
                         raise RuntimeError("워드에 붙여넣기 실패 (클립보드)")
-                    if pt is not None:
+                    if to_ppt is not None:
                         pasted.Item(1).Range.CopyAsPicture()
                     t.set_focus()
                     done["word"] = t.resolved()
-            elif pt is not None:
+            elif to_ppt is not None:
                 copy_chart()
                 temp_app = off.win32com.client.DispatchEx("Word.Application")
                 temp_app.Visible = False
@@ -348,7 +366,9 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
                 if temp_doc.InlineShapes.Count == 0:
                     raise RuntimeError("임시 워드 문서에 붙여넣기 실패 (클립보드)")
                 temp_doc.InlineShapes.Item(1).Range.CopyAsPicture()
-            if pt is not None:
+            if to_ppt is not None:
+                if pt is None:
+                    pt = open_ppt()
                 time.sleep(0.3)
                 s, no = _ppt_slide(pt.doc, slide, title)
                 w = ppt.SlideWriter(pt.doc, s, off.get_theme("navy"))
@@ -576,11 +596,14 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
     return rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 그림을 다시 세어 확인했습니다.", verified=True, **payload)
 
 
-def _excel_range_rows(args) -> Tuple[List[List[Any]], str]:
+def _excel_range_rows(args) -> Tuple[List[List[Any]], str, Optional[Dict[str, Any]]]:
+    """(행, 시트, 계산된 값이 없는 수식 칸 정보(닫힌 xlsx) 또는 None)"""
     import excel
     closed = excel.is_closed_xlsx(args.from_target)
+    uncomputed = None
     if closed:
-        sheet, _, _, matrix, _ = excel._read_matrix_closed(closed, args.sheet, args.range)
+        sheet, r0, c0, matrix, _ = excel._read_matrix_closed(closed, args.sheet, args.range)
+        uncomputed = excel.closed_uncomputed(closed, sheet, r0, c0, matrix)
     else:
         with off.open_target("excel", args.from_target, readonly=True, option="--from-target") as t:
             ws = t.sheet(args.sheet)
@@ -589,8 +612,12 @@ def _excel_range_rows(args) -> Tuple[List[List[Any]], str]:
             sheet = str(rng.Worksheet.Name)
     rows = [[excel.out_value(v) for v in r] for r in matrix]
     if not rows or not any(any(str(v).strip() for v in r) for r in rows):
-        raise rt.InputError(f"범위 {args.range}에 데이터가 없습니다.")
-    return rows, sheet
+        # 오류 로그에는 칸 주소(시트 이름)를 남기지 않음
+        raise rt.InputError(f"범위 {args.range}에 데이터가 없습니다."
+                            + (f" {rt.uncomputed_note(uncomputed)}." if uncomputed else ""),
+                            log_message=f"범위 {args.range}에 데이터가 없습니다."
+                            + (f" (계산된 값이 없는 수식 칸 {uncomputed['count']}개)" if uncomputed else ""))
+    return rows, sheet, uncomputed
 
 
 def _excel_range_transfer(args, targets: List[str]) -> Dict[str, Any]:
@@ -598,7 +625,7 @@ def _excel_range_transfer(args, targets: List[str]) -> Dict[str, Any]:
     import word
     if any(k not in ("word", "ppt") for k in targets):
         raise rt.InputError("엑셀 범위는 word, ppt로 보낼 수 있습니다. 엑셀 안에서 옮기려면 excel.py range --action copy를 쓰세요.")
-    rows, sheet = _excel_range_rows(args)
+    rows, sheet, uncomputed = _excel_range_rows(args)
     _preflight_targets(args, targets)
     results: Dict[str, Any] = {}
     failures: Dict[str, str] = {}
@@ -641,8 +668,9 @@ def _excel_range_transfer(args, targets: List[str]) -> Dict[str, Any]:
         fields.update(failures=failures, succeeded=list(results), failed=failed)
         problems.append(_partial_note(results, failed))
     if problems:
-        return rt.ok_unverified(TOOL, "transfer", preview, problems, **fields)
-    return rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 표를 다시 읽어 확인했습니다.", verified=True, **fields)
+        return rt.with_uncomputed(rt.ok_unverified(TOOL, "transfer", preview, problems, **fields), uncomputed)
+    return rt.with_uncomputed(rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 표를 다시 읽어 확인했습니다.", verified=True,
+                                    **fields), uncomputed)
 
 
 def _word_rows(args) -> Tuple[List[List[Any]], str]:
@@ -665,11 +693,16 @@ def _word_rows(args) -> Tuple[List[List[Any]], str]:
     closed = word._closed_docx(args.from_target)
     if closed:
         import docx
+        from docx.table import Table
+        import reader
         d = docx.Document(closed)
-        if not 1 <= n <= len(d.tables):
-            raise rt.InputError(f"표 {n}번이 없습니다 (전체 {len(d.tables)}개).")
+        # 표 번호는 read 결과·COM(Tables)과 같게: 콘텐츠 컨트롤(w:sdt)·customXml 안의 표도 문서 순서로 셈
+        # (python-docx의 Document.tables는 본문 바로 아래 표만 세어 다른 표를 옮겼음)
+        tables = [Table(el, d) for el in reader._body_blocks(d.element.body) if el.tag == reader._W + "tbl"]
+        if not 1 <= n <= len(tables):
+            raise rt.InputError(f"표 {n}번이 없습니다 (전체 {len(tables)}개).")
         rows = []
-        for row in d.tables[n - 1].rows:
+        for row in tables[n - 1].rows:
             seen, cells = set(), []
             for c in row.cells:
                 if id(c._tc) not in seen:
