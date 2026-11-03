@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.26"
+  version: "2.9.27"
   platform: windows
 ---
 
@@ -93,6 +93,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -i "<피처1>=<값>,<피
 python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>"
 ```
 - 학습 때 `--header-row`/`--unit-row`를 줬으면 파일 예측에도 같은 옵션을 붙인다 (학습 결과 `next_commands`의 예측 명령에 들어 있음).
+- `-i "k=v"`는 한 건이다. 여러 건은 JSON 배열(`-i "[{...},{...}]"`)이나 .json 파일로 준다 (같은 이름이 두 번이면 도구가 멈춘다).
 - `-i`에 6건 이상을 넣으면 건별 값 대신 `output_file`(결과 파일)을 알린다 (`truncated: true`).
 - `-i`의 숫자 값에는 쉼표를 쓰지 않는다 (`압력=3000`, `3,000` 아님). 쉼표가 있으면 도구가 멈추고 `[추천]` 명령을 준다 (`--find`, `ml_map.py`도 같음).
 - `<version_dir>`: 보고서를 만들었으면 보고서 결과의 `best_version_dir`, 아니면 마지막 학습 결과의 `version_dir`을 그대로 쓴다. 모르면 `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history`를 실행해 `best_version_dir`을 쓴다 (`best_version_note`가 있으면 그대로 알린다).

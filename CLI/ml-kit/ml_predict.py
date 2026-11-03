@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.26"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.27"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -801,8 +801,9 @@ AVERAGE_WORDS = {"평균", "average", "avg", "mean"}
 # Wording of the same rows in daily reports (2.9.25): '일계', '월계', '누계', '총 합계', '전체합계', '합계:', 'Total:',
 # '소계(A)', '주간계', '평균값', 'AVG.'. Exact words: TOTAL_WORDS, AVERAGE_WORDS and the period totals below.
 # Loose words ('...합계', short '...계' other than ordinary words, 'Total'/'Sum' as a separate word, '평균값'/'평균치')
-# are also values of a category ('A계'/'B계', '생산계', 'pH계'): _summary_rows counts them only when they look like
-# summary rows within the data of a column (2.9.26, LOOSE_MAX_TEXTS).
+# are also values of a category ('A계'/'B계', '생산계', 'pH계'): _summary_rows counts a loose totals word only when
+# the row's numbers are totals (_loose_by_value, 2.9.27), a loose average word when its rows are few between the data
+# (LOOSE_MAX_TEXTS).
 _TOTAL_PERIOD_WORDS = {"일계", "월계", "주계", "연계", "년계", "누계"}
 _GYE_NOT_TOTAL = ("단계", "설계", "경계", "관계", "세계", "시계", "기계", "회계", "체계", "한계", "업계", "생계", "통계",
                   "학계", "가계", "직계", "외계", "하계", "동계", "춘계", "추계", "도계", "력계", "량계", "압계", "류계",
@@ -810,7 +811,7 @@ _GYE_NOT_TOTAL = ("단계", "설계", "경계", "관계", "세계", "시계", "�
 _AVG_SUFFIXES = ("값", "치")     # '평균값', '평균치'; '평균온도' is a name, not an average row
 _SUMMARY_PAREN_RE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
 _TOTAL_EN = {"total", "sum", "subtotal", "grandtotal"}
-LOOSE_MAX_TEXTS = 2       # loose words count: at most this many texts, at most half of the filled cells, < half of rows
+LOOSE_MAX_TEXTS = 2       # few loose rows: at most this many texts, <= other filled cells + 1, < half of the rows
 
 
 @functools.lru_cache(maxsize=8192)
@@ -893,9 +894,11 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
     """[source row, column, text] of rows that look like totals / averages: a cell 합계/소계/Total ... (TOTAL_WORDS) or
     평균/Mean (AVERAGE_WORDS) and a number in the same row. Not dropped (a data value decision): layout_warnings names
     them. Not counted: rows the user marked in the '제외' column (a mark other than '포함'), the '제외' column itself
-    (its text is the reason), words of a statistic label column, and loose words (_word_kind '_loose': '총 합계',
-    '주간계', 'Grand Total', '평균값') of a column where they fill more than half of the filled cells, half of the
-    rows or more, or have more than LOOSE_MAX_TEXTS distinct texts (a category: 'A계'/'B계', '생산계'/'품질계', '레벨계'/'pH계'/'유량계'). Totals words always count (a subtotal per shift
+    (its text is the reason), words of a statistic label column, loose totals words (_word_kind 'total_loose':
+    '일합계', '총 합계', '주간계', 'Grand Total') whose row's numbers are not totals (_loose_by_value: a category
+    'A계'/'B계', '생산계'/'품질팀', 'pH계' among sensors) and loose average words ('평균값') of a column where they are
+    not few between the data (more than the other filled cells + 1, half of the rows or more, or more than
+    LOOSE_MAX_TEXTS distinct texts). Exact totals words always count (a subtotal per shift
     or line is a large share of a column), except in a statistic label column: filled in half of the rows or more,
     and totals and other aggregation words (AGGREGATE_WORDS, 2+ cells) make up half of its filled cells or more, or
     every filled cell is such a word or an average word ('집계' = 합계/평균/최대/최소, 'Sum/Avg'). Average words of a category column (next to other
@@ -928,11 +931,15 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
             1 for i in kind if _summary_key(cells[i]) or not (isinstance(cells[i], str) or pd.isna(cells[i])))
         loose = [i for i, t in kind.items() if t.endswith("_loose")]
         if loose:
-            # loose words of many rows or of 3+ texts ('A계'/'B계'/'C계', '생산계', 'pH계' in every row) are a category
-            keep = (len(loose) * 2 <= n_filled and len(loose) * 2 < len(cells)
-                    and len({_summary_key(cells[i]) for i in loose}) <= LOOSE_MAX_TEXTS)
+            # few loose rows of 1-2 texts between the data ('총 합계' below the data, '주간계'/'월간계'); many rows or
+            # 3+ texts ('A계'/'B계'/'C계', '생산계', 'pH계' in every row) are a category
+            few = (len(loose) <= max(1, n_filled - len(loose) + 1) and len(loose) * 2 < len(cells)
+                   and len({_summary_key(cells[i]) for i in loose}) <= LOOSE_MAX_TEXTS)
+            if not nums:
+                nums.append(_number_matrix(arr, kinds, k_excl))
+            sure = _loose_by_value(nums[0], arr, k, kind, few)
             for i in loose:
-                kind[i] = kind[i][:-len("_loose")] if keep else ""
+                kind[i] = kind[i][:-len("_loose")] if (i in sure if kind[i] == "total_loose" else few) else ""
         hits = [i for i, t in kind.items() if t == "total"]
         avg = [i for i, t in kind.items() if t == "avg"]
         if not hits and not avg:
@@ -980,6 +987,99 @@ def _number_matrix(arr: np.ndarray, kinds: List[Any], k_excl: Optional[int]) -> 
             out[:, c] = v
         except (TypeError, ValueError):
             continue
+    return out
+
+
+LOOSE_WALK = 1000         # earlier summary rows read back for one loose row ('월합계' = sum of the '일합계' rows above)
+
+
+def _sums_match(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray) -> np.ndarray:
+    """Per row (2-D arrays, one row per candidate): at least half of the row's number cells (min 1) equal the sums of a
+    block of rows (column sums, number counts, sums of absolute values), within the precision of _summary_by_value
+    (half a unit of the last shown decimal or 1e-3 relative). A column counts only with 2+ numbers in the block, not
+    all zero: one row or a zero column is its own sum."""
+    filled = ~np.isnan(rows)
+    use = filled & (count >= 2) & (size > 0)
+    with np.errstate(invalid="ignore"):
+        tol = np.maximum(0.5 * 10.0 ** -_shown_decimals(rows), 1e-3 * np.abs(sums)) + 1e-9
+        hit = (use & (np.abs(rows - sums) <= tol)).sum(axis=1)
+    return (hit >= 1) & (hit * 2 >= filled.sum(axis=1))
+
+
+def _shown_decimals(values: np.ndarray) -> np.ndarray:
+    """Decimals of numbers as shown (1.5 -> 1, 300.0 -> 0, up to 9); NaN -> 0."""
+    out = np.zeros(values.shape)
+    v = np.where(np.isnan(values), 0.0, np.abs(values))
+    open_ = np.ones(values.shape, dtype=bool)
+    for d in range(10):
+        x = v * 10.0 ** d
+        done = open_ & (np.abs(x - np.round(x)) <= 1e-6 * np.maximum(x, 1.0))
+        out[done] = d
+        open_ &= ~done
+    out[open_] = 9
+    return out
+
+
+def _loose_by_value(num: np.ndarray, arr: np.ndarray, k: int, kind: Dict[int, str], few: bool) -> set:
+    """Rows of loose totals words ('일합계', '총 합계', '주간계', 'Grand Total') in column k that are totals by their
+    numbers. Confirmed when at least half of the row's number cells (min 1) are (a) the sums of the data rows
+    directly above it (_block_starts), (b) the sums of the earlier summary rows of one text since the last row of its
+    own text ('월합계' = the '일합계' rows of the month), or (c) the sums of all data rows above it. When the loose
+    rows are few between the data (few: 1-2 texts, not more than the other filled cells + 1, under half of the
+    rows), a row whose numbers are far above the data of their columns (above max + max(range, max / 2) of 2+
+    numbers >= 0: '총 합계 999' below 300..302) also counts, and a row without such numbers counts. A category
+    ('생산계'/'품질팀', 'pH계' among sensors, 'A계'/'B계') holds numbers like its data rows, not their sums.
+    One pass of array operations for (a), (c) and the far check; (b) reads back at most LOOSE_WALK summary rows."""
+    loose = np.array(sorted(i for i, t in kind.items() if t == "total_loose"), dtype=int)
+    if not len(loose):
+        return set()
+    n = len(arr)
+    is_bound = np.zeros(n, dtype=bool)
+    is_bound[[i for i, t in kind.items() if t]] = True
+    starts = np.array(_block_starts(is_bound), dtype=int)
+    other = num.copy()
+    other[:, k] = np.nan
+    data = np.where(is_bound[:, None], np.nan, other)
+    filled = ~np.isnan(data)
+    zero = np.zeros((1, data.shape[1]))
+    csum = np.vstack([zero, np.cumsum(np.where(filled, data, 0.0), axis=0)])
+    cabs = np.vstack([zero, np.cumsum(np.where(filled, np.abs(data), 0.0), axis=0)])
+    ccnt = np.vstack([zero, np.cumsum(filled, axis=0)])
+    rows = other[loose]
+    s, e = starts[loose, 0], starts[loose, 1]
+    sure = (_sums_match(rows, csum[e] - csum[s], ccnt[e] - ccnt[s], cabs[e] - cabs[s])
+            | _sums_match(rows, csum[loose], ccnt[loose], cabs[loose]))
+    if few:
+        dcnt = ccnt[-1]
+        with np.errstate(all="ignore"):
+            dmax = np.max(np.where(filled, data, -np.inf), axis=0)
+            dmin = np.min(np.where(filled, data, np.inf), axis=0)
+            far = np.where((dcnt >= 2) & (dmin >= 0) & (dmax > 0), dmax + np.maximum(dmax - dmin, dmax / 2), np.nan)
+            judged = ~np.isnan(rows) & ~np.isnan(far)[None, :]
+            n_far = (judged & (rows > far[None, :])).sum(axis=1)
+        sure |= ~judged.any(axis=1) | ((n_far >= 1) & (n_far * 2 >= (~np.isnan(rows)).sum(axis=1)))
+    out = {int(i) for i in loose[sure]}
+    totals = sorted(i for i, t in kind.items() if t in ("total", "total_loose"))
+    keys = [_summary_key(arr[i, k]) for i in totals]
+    for p, i in enumerate(totals):
+        if i in out or kind[i] != "total_loose" or p == 0 or keys[p - 1] == keys[p]:
+            continue
+        picked = []
+        for q in range(p - 1, max(-1, p - 1 - LOOSE_WALK), -1):
+            if keys[q] == keys[p]:
+                break
+            if keys[q] == keys[p - 1]:
+                picked.append(totals[q])
+        if len(picked) >= 2:
+            blk = other[picked]
+            f = ~np.isnan(blk)
+            sums = np.where(f, blk, 0.0).sum(axis=0)
+            with np.errstate(invalid="ignore"):
+                if not (np.abs(other[i] - sums) <= np.maximum(0.5, 1e-3 * np.abs(sums)) + 1e-9).any():
+                    continue          # no cell near a sum (the exact check below is slower)
+            if _sums_match(other[i][None, :], np.where(f, blk, 0.0).sum(axis=0)[None, :], f.sum(axis=0)[None, :],
+                           np.where(f, np.abs(blk), 0.0).sum(axis=0)[None, :])[0]:
+                out.add(i)
     return out
 
 
@@ -2233,6 +2333,10 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
         if "=" in pair:
             k, v = pair.split("=", 1)
             last_key = k.strip()
+            if last_key in row_dict:
+                raise InputError(
+                    f"입력 '{input_str}'에 '{last_key}='가 두 번 있습니다. 'k1=v1,k2=v2' 입력은 한 행입니다. 여러 행은 "
+                    f"JSON 배열(-i \"[{{...}},{{...}}]\")이나 .json 파일 경로로 주십시오. 한 행이면 사용자에게 값을 확인하십시오.")
             row_dict[last_key] = v.strip()
         elif pair.strip():
             if last_key is None:
@@ -2240,6 +2344,16 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
             row_dict[last_key] = f"{row_dict[last_key]},{pair.strip()}"
     if not row_dict:
         raise InputError(f"유효한 인라인 입력 형식이 아닙니다 (JSON 또는 'k1=v1,k2=v2'): '{input_str}'")
+    # '온도' (unit-less, auto-matched to '온도(°C)') next to '온도(°C)': two values for one column
+    groups: Dict[str, List[str]] = {}
+    for key in row_dict:
+        groups.setdefault(_alias_key(key), []).append(key)
+    for same in groups.values():
+        if len(same) > 1 and any(strip_unit(key) == key for key in same):
+            raise InputError(
+                f"입력 이름 {', '.join(repr(key) for key in same)}은(는) 같은 컬럼을 가리킵니다 (단위 없는 이름은 단위 붙은 "
+                f"이름으로 자동 매칭). 값 하나만 주십시오. 사용자에게 어느 값인지 물으십시오: "
+                f"[후보] {', '.join(f'{key}={row_dict[key]}' for key in same)}")
     df = pd.DataFrame([row_dict])
     df.attrs["kv_pairs"] = dict(row_dict)     # 'k=v' text form (check_comma_numbers rebuilds it)
     return df

@@ -96,11 +96,15 @@ def test_exact_totals_words_unchanged_in_every_other_row(tmp_path, word):
 
 
 def test_loose_words_with_many_texts_are_a_category(tmp_path):
-    # three different loose totals texts in one column: a category, not summary rows
+    # three different loose totals texts in one column with numbers like the data rows: a category, not summary rows
     rows = [["일자", "온도", "생산량"]]
     for d, w in enumerate(["A합계", "B합계", "C합계"] * 4):
-        rows += [[f"10/{d + 1}", 150 + d, 300 + d], [f"10/{d + 1}b", 151 + d, 301 + d], [w, 301 + 2 * d, 601 + 2 * d]]
+        rows += [[f"10/{d + 1}", 150 + d, 300 + d], [f"10/{d + 1}b", 151 + d, 301 + d], [w, 152 + d, 302 + d]]
     assert _summary(tmp_path, "m.xlsx", rows) == []
+    # 2.9.27: the same texts holding the sums of the two rows above are totals rows (judged by the numbers)
+    for r in rows[3::3]:
+        r[1], r[2] = 2 * r[1] - 3, 2 * r[2] - 3
+    assert len(_summary(tmp_path, "m2.xlsx", rows)) == 12
 
 
 def test_word_kind_split():
