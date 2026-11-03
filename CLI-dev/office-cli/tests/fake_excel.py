@@ -507,6 +507,18 @@ class FakeXlApp:
         self.ActiveWindow = Props()
         self.ActiveWindow.FreezePanes = False
 
+    def ConvertFormula(self, Formula, FromReferenceStyle, ToReferenceStyle=None, ToAbsolute=None, RelativeTo=None):
+        """A1(1) <-> R1C1(-4150). 상대 참조($ 없는 A1)만 RelativeTo 칸 기준 R[행차]C[열차]로 (실제 Excel처럼 255자 넘으면 오류)."""
+        if len(Formula) > 255:
+            raise Exception("ConvertFormula: 255자 초과")
+        r, c = RelativeTo.Row, RelativeTo.Column
+        if FromReferenceStyle == 1 and ToReferenceStyle == -4150:
+            return to_r1c1(Formula, r, c)
+        if FromReferenceStyle == -4150 and ToReferenceStyle == 1:
+            return re.sub(r"R\[(-?\d+)\]C\[(-?\d+)\]",
+                          lambda m: f"{col_let(c + int(m.group(2)))}{r + int(m.group(1))}", Formula)
+        return Formula
+
     def Intersect(self, a, b):
         """두 범위(첫 영역)의 겹치는 범위, 없으면 None (실제 Excel처럼)."""
         ar1, ac1, ar2, ac2 = a.areas[0]

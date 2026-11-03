@@ -134,9 +134,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 |---|---|
 | `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--max-rows`, `--save [경로.csv]`(저장한 CSV를 다시 읽어 빈 행을 뺀 행 수 확인). `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지(시트를 훑는 것은 범위 생략·`B:B`·`5:7`일 때만) |
 | `info` | 시트별 사용 범위와 차트. `--all`: 열린 통합문서 전체. `--detail`: 차트 종류·계열 수·위치와 데이터를 가리는 차트 경고 |
-| `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`, `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이나 수식(빈 글을 내는 수식 포함)이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`). `--append`도 쓸 칸을 확인하고, `--formula`/`--value`도 쓸 열 수만큼 가장 아래 행을 찾습니다. 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸, 1.4.6). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`)는 글자 그대로 씁니다 |
+| `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`, `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략. `--formula`의 상대 참조는 실제로 쓴 행 기준으로 옮기고 `$` 참조는 그대로, 옮기지 못하면 쓰지 않고 STOP_RETRY, 1.4.24), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이나 수식(빈 글을 내는 수식 포함)이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`). `--append`도 쓸 칸을 확인하고, `--formula`/`--value`도 쓸 열 수만큼 가장 아래 행을 찾습니다. 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸, 1.4.6). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`)는 글자 그대로 씁니다 |
 | `replace` | `--find/--replace` 또는 `--map JSON`, `--whole`, `--all-sheets`, 서식 옵션. 수식 셀은 내용 보존. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 찾은 칸이 있어도 바꿀 글이 같고 서식이 없으면(수식 칸 포함) 바꾼 칸으로 세지 않음(`changed_cells` 0, `unchanged_same_text`, 1.4.15). `--range '요약'!A1:D9`처럼 시트를 주면 그 시트에서 읽고 씀. `--all-sheets`와 시트 이름이 든 `--range`는 함께 쓸 수 없음. 찾을 글이 빈 문자열(`--find ""`, `--map` 키 `""`)이면 STOP_RETRY(빈 칸 채우기는 `write`, 1.4.17) |
-| `style` | `--theme navy\|slate\|teal\|emerald`, `--bg`, `--color`, `--bold`, `--align`, `--number-format`, `--border`, `--highlight ">=100:pink"`(조건부 서식), `--clear` |
+| `style` | `--theme navy\|slate\|teal\|emerald`, `--bg`, `--color`, `--bold`, `--align`, `--number-format`, `--border`, `--highlight ">=100:pink"`(조건부 서식. 값의 `"`와 `포함:` 규칙의 `~ ? *`는 글자 그대로 찾음, 1.4.24), `--clear` |
 | `export` | `--save 경로.csv\|.xlsx\|.pdf`, `--columns A,C,E` |
 | `sheet` | `--action list\|add\|rename\|copy\|delete\|select --name --new-name`. 엑셀에서 쓸 수 없는 이름(`/ \ ? * [ ] :`, 31자 초과, 빈 이름, 앞뒤 `'`, 엑셀이 예약한 `History`(대소문자 무관, 1.4.15))은 아무것도 바꾸기 전에 STOP_RETRY와 `[추천]`(쓸 수 없는 글자를 `_`로 바꾸고 31자로 자른 이름, `History`는 `History_`, 있는 시트와 겹치면 번호, 1.4.14). `write --new-sheet`, `office.py transfer --sheet`도 같음(`transfer`는 받는 문서의 시트 이름을 안 뒤에 확인해 `[추천]`이 있는 시트와 겹치지 않음, 새로 만들 파일은 만들기 전에 확인, 1.4.15). `copy`의 기본 이름은 `<시트 28자> 복사` |
 | `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border`. `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열. 이미 그 상태면(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 값이 없는 범위의 `clear --type contents`, 같은 자리로 `copy`/`move` 등) 바꾸지 않고 "바뀐 것 없음"(`unchanged: true`, 1.4.15). `hide`/`unhide`와 `clear`(전체·서식)는 엑셀이 일부만 숨김·사용 범위 밖 유효성 검사를 알려 주지 않을 수 있어 늘 바꾼 것으로 봅니다(1.4.16) |
@@ -163,12 +163,16 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `replace` | `--find/--replace`(빈 문자열은 삭제) 또는 `--map`, `--match-case`, `--whole-word`, `--bold`, `--color`, `--highlight`. 머리글/바닥글/글상자 포함. 문구당 5,000곳 상한에 닿으면 남은 곳을 확인하지 못해 `UNVERIFIED:`(`limit_reached`). `--match-case`가 없으면 대소문자만 바꾸는 치환(`office` -> `Office`)도 확인됨. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 바꿀 글이 찾는 글과 같고 서식이 없으면 바꾸지 않고 `replaced` 0, 찾은 곳 수는 `unchanged_same_text`(1.4.15). 대소문자만 다른 치환(`iphone` -> `iPhone`)에서 이미 바꿀 글 그대로인 곳은 바꾸지 않고 `unchanged_same_text`로 셈(1.4.17). 찾을 글이 빈 문자열이면 STOP_RETRY(1.4.17) |
 | `export` | `--save 경로.pdf\|.docx`, `--page-number`(사본에만) |
 
+마크다운(`word write`/`ppt write`의 `.md`, `--text`) 해석(1.4.24): 펜스 코드 블록(백틱 3개 또는 `~~~`, 닫지 않으면 끝까지)은 줄마다 단락 하나로
+글자 그대로 넣고(들여쓰기 유지, 빈 줄 생략, 안의 `#`·`-`·`1.`을 제목·목록으로 읽지 않음, 펜스 줄은 넣지 않음). 표의 정렬 줄은
+머리글 다음 줄이면 `-` 하나부터(`:-`, `-:`), 칸 안의 `\|`는 글자 `|`입니다.
+
 ### ppt.py
 | 명령 | 주요 옵션 |
 |---|---|
 | `read` | `--slides 1-3`, `--save`(저장한 파일을 다시 열어 확인). 길어서 잘리면 고른 슬라이드 중 남은 번호로 이어 읽는 명령(`--slides 1,5,9` -> `5,9`) |
 | `info` | 슬라이드별 제목, 도형/표/그림 수. `--all`. `--detail [--slides 2-4]`: 도형별 위치·크기·글자 크기·목록 종류와 배치 경고(슬라이드 밖, 글자 넘침, 겹침) |
-| `write` | `--slide N\|new`, `--title`, `--text`(`-` 줄은 글머리표, `1.` 줄은 번호), `--file (.md: 제목마다 새 슬라이드, .csv: 표)`, `--image`, `--cards "제목:내용\|..."`, `--theme`, `--overwrite`. `--title`과 `.md`를 함께 주면 `--title`이 첫 슬라이드 제목(첫 절의 제목은 본문 첫 줄). 첫 절의 제목이 `--title`과 같으면(공백·대소문자 무시) 본문에 다시 넣지 않음. 기존 슬라이드의 제목 개체틀에 이미 다른 제목이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`, 새 슬라이드와 제목 개체틀이 없는 슬라이드는 해당 없음) |
+| `write` | `--slide N\|new`, `--title`, `--text`(`-` 줄은 글머리표, `1.` 줄은 번호), `--file (.md: 제목마다 새 슬라이드, .csv: 표)`, `--image`, `--cards "제목:내용\|..."`, `--theme`, `--overwrite`. 카드·그림은 앞 내용 아래에 80pt도 남지 않으면 새 슬라이드에 넣고 `warnings`로 알림, 이번에 넣은 도형이 슬라이드 밖으로 나가면 `UNVERIFIED:`(1.4.24). `--title`과 `.md`를 함께 주면 `--title`이 첫 슬라이드 제목(첫 절의 제목은 본문 첫 줄). 첫 절의 제목이 `--title`과 같으면(공백·대소문자 무시) 본문에 다시 넣지 않음. 기존 슬라이드의 제목 개체틀에 이미 다른 제목이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`, 새 슬라이드와 제목 개체틀이 없는 슬라이드는 해당 없음) |
 | `replace` | `--find/--replace` 또는 `--map`, `--slide`, 서식 옵션. 표와 그룹 도형 포함. `--replace`도 서식 옵션도 없으면 STOP_RETRY, 바꿀 글이 찾는 글과 같고 서식이 없으면 바꾸지 않고 `replaced` 0(`unchanged_same_text`, 1.4.15). 찾은 곳마다 비교해 이미 바꿀 글 그대로(대소문자까지)인 곳은 `unchanged_same_text`, 실제로 바뀐 곳만 `replaced`(1.4.17). 찾을 글이 빈 문자열이면 STOP_RETRY(1.4.17) |
 | `export` | `--save 경로.pdf\|.pptx`. PDF 기능이 없는 Office(2007 기본 설치 등)는 `.pptx`로 저장하라는 STOP_RETRY를 돌려줍니다 |
 | `slide` | `--action list\|add\|duplicate\|move\|delete\|clear --slide --to --layout`. `clear`는 `--slide` 또는 `--all-slides`가 필요. 같은 자리로 `move`(`--slide 2 --to 2`)는 바꾸지 않고 "바뀐 것 없음"(1.4.15) |
@@ -200,6 +204,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
 
 - 손상된 파일(깨진 XML, 압축 해제 실패, OLE 구조 오류)은 내부 오류가 아니라 STOP_RETRY "손상된 파일이라 읽을 수 없습니다"(1.4.23).
+  FileHeader가 없는 OLE 파일(이름만 `.hwp`인 `.doc`/`.xls` 등)은 STOP_RETRY "HWP 5.0 문서가 아닙니다"(1.4.24).
+- `--pages`/`--units`(ppt `--slides`)의 범위는 문서 크기로 먼저 줄입니다(`1-999999999`도 바로 끝남, 1.4.24).
 - 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 1.3.0에서 뺐습니다 (Outlook 통합 도구에서 별도로 다룰 예정).
 - `--max-files`는 이번 실행에서 **새로 읽는** 파일 수의 상한입니다. 이미 최신인 파일은 세지 않으므로 같은 명령을 다시 실행하면 남은 파일부터 이어서 등록합니다(`next_commands[0]`). 등록은 원본을 바꾸지 않는 읽기 전용 작업입니다.
 - DRM으로 암호화된 Office 파일은 라이브러리로 열 수 없으므로, `excel.py`/`word.py`/`ppt.py read --target 경로`로 Office에서 읽으라고 안내합니다.
@@ -332,6 +338,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 따옴표 없는 `시트!이름`은 `!` 자리마다 나눠 보고, 앞부분이 있는 시트이고 그 시트에서 찾아질 때만 씁니다. 글자 그대로를 차트 이름으로도 찾아
   (다른 시트의 차트 이름이 `Sheet1!x`일 수 있음) 둘 다 찾아지면 하나를 고르지 않고 `[후보]`를 냅니다.
 - 한 시트에 이름이 같은 차트가 여럿이면 `[후보] 시트!#번호`(그 시트의 몇 번째 차트). `#번호`(또는 번호)를 그대로 받습니다.
+  1.4.24부터 후보가 아닌 차트까지 그 시트의 모든 차트로 셉니다(제목으로 찾은 차트의 이름이 다른 차트와 같아도 후보마다 차트 하나).
 - `--sheet`가 `시트!이름`의 시트와 다르고 달리 찾은 차트가 없으면 두 시트를 말하는 STOP_RETRY. 차트가 없다는 안내는 어느 시트인지 말합니다.
 - 차트 그림 파일 이름(`chart_<차트 이름>`)의 `/` 같은 글자는 `_`로 바꿉니다(제목 `1/4분기 매출`로 만든 차트를 옮기지 못하던 문제).
 

@@ -259,6 +259,9 @@ def _fake_ole(monkeypatch, open_error=None, section=b"not zlib"):
             if open_error:
                 raise open_error
 
+        def exists(self, name):
+            return True
+
         def openstream(self, name):
             if name == "FileHeader":
                 return _Stream(b"\0" * 36 + (1).to_bytes(4, "little"))     # 압축된 본문

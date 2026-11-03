@@ -42,6 +42,7 @@ PP_BULLET_UNNUMBERED = 1    # ppBulletUnnumbered (글머리표)
 PP_BULLET_NUMBERED = 2      # ppBulletNumbered (1. 2. 3.)
 MARGIN = 36.0
 GAP = 14.0
+MIN_BLOCK_HEIGHT = 80.0     # 카드·그림이 들어갈 최소 남은 높이 (모자라면 새 슬라이드)
 TABLE_ROWS_PER_SLIDE = 15
 MAX_NEW_SLIDES = 30
 
@@ -389,6 +390,7 @@ class SlideWriter:
         self.W = float(prs.PageSetup.SlideWidth)
         self.H = float(prs.PageSetup.SlideHeight)
         self.created: List[str] = []
+        self.shapes: List[Any] = []          # 이번에 넣거나 채운 도형 (다시 읽어 슬라이드 안에 있는지 확인)
 
     def _empty_placeholder(self, sh: Any) -> bool:
         try:
@@ -422,6 +424,7 @@ class SlideWriter:
             tr.Font.Size = 28
             tr.Font.Bold = True
             tr.Font.Color.RGB = off.parse_color(self.theme["primary"])
+            self.shapes.append(box)
         self.created.append("제목")
 
     def _body_placeholder(self) -> Optional[Any]:
@@ -449,6 +452,7 @@ class SlideWriter:
             tr = shape.TextFrame.TextRange
             tr.Text = text
             tr.Font.Size = 18 if len(lines) <= 6 else 14
+            self.shapes.append(shape)
         tr = shape.TextFrame.TextRange
         for i, (_, kind) in enumerate(lines, 1):
             try:
@@ -466,6 +470,7 @@ class SlideWriter:
         top = self.next_top()
         height = min(self.H - MARGIN - top, 26.0 * nrows)
         shape = self.slide.Shapes.AddTable(nrows, ncols, MARGIN, top, self.W - 2 * MARGIN, max(height, 26.0))
+        self.shapes.append(shape)
         tbl = shape.Table
         size = 14 if nrows <= 8 else 11
         header_bg = off.parse_color(self.theme["header_bg"])
@@ -496,9 +501,11 @@ class SlideWriter:
         pic.Width = w0 * ratio
         pic.Height = h0 * ratio
         pic.Left = (self.W - float(pic.Width)) / 2
+        self.shapes.append(pic)
         self.created.append(f"그림 {os.path.basename(path)}")
 
     def cards(self, cards: List[Tuple[str, str]]) -> None:
+        """카드 높이는 80~220pt (남은 공간에 맞춤). 80pt도 남지 않으면 부르는 쪽이 새 슬라이드에 넣습니다."""
         n = len(cards)
         top = self.next_top()
         height = max(80.0, min(self.H - MARGIN - top, 220.0))
@@ -508,6 +515,7 @@ class SlideWriter:
         light = off.parse_color(self.theme["light"])
         for i, (head, desc) in enumerate(cards):
             box = self.slide.Shapes.AddShape(MSO_ROUNDED_RECT, MARGIN + i * (w + GAP), top, w, height)
+            self.shapes.append(box)
             box.Fill.ForeColor.RGB = light
             box.Line.ForeColor.RGB = primary
             box.Line.Weight = 1.5
@@ -622,6 +630,8 @@ def cmd_write(args) -> Dict[str, Any]:
         prs = t.doc
         created: List[str] = []
         touched: List[int] = []
+        placed: List[Tuple[int, Any]] = []   # (슬라이드 번호, 이번에 넣은 도형)
+        warnings: List[str] = []
         slide_no, make_new = _resolve_slide(prs, args.slide, default_new=bool(md_sections or table_rows) and args.slide is None)
         insert_at = int(prs.Slides.Count) + 1 if slide_no is None else slide_no + 1
         if not make_new and slide_no is not None and not args.overwrite:
@@ -664,6 +674,7 @@ def cmd_write(args) -> Dict[str, Any]:
                     w.body(sec["lines"])
                 for tb in sec["tables"]:
                     w.table(tb)
+                placed += [(no, x) for x in w.shapes]
                 created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         if table_rows:
             header, body_rows = table_rows[0], table_rows[1:] or [[""] * len(table_rows[0])]
@@ -673,6 +684,7 @@ def cmd_write(args) -> Dict[str, Any]:
                 if args.title:
                     w.title(args.title + (f" ({k // TABLE_ROWS_PER_SLIDE + 1})" if len(body_rows) > TABLE_ROWS_PER_SLIDE else ""))
                 w.table([header] + body_rows[k:k + TABLE_ROWS_PER_SLIDE])
+                placed += [(no, x) for x in w.shapes]
                 created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         if args.text or (args.title and not table_rows and not md_sections) or image or cards:
             # 파일 내용을 이미 넣었으면 그 마지막 슬라이드에 이어서, 아니면 대상 슬라이드에
@@ -682,26 +694,53 @@ def cmd_write(args) -> Dict[str, Any]:
                 w.title(args.title)
             if args.text:
                 w.body(_text_lines(args.text))
-            if cards:
-                w.cards(cards)
-            if image:
-                if w.space_left() < 80:              # 공간이 부족하면 다음 새 슬라이드에
+            for kind in (["cards"] if cards else []) + (["image"] if image else []):
+                if w.space_left() < MIN_BLOCK_HEIGHT:   # 공간이 부족하면 다음 새 슬라이드에 (슬라이드 밖으로 나가지 않게)
+                    placed += [(no, x) for x in w.shapes]
+                    created.append(f"슬라이드 {no}: " + ", ".join(w.created))
                     s, no = open_slide(False)
                     w = SlideWriter(prs, s, theme)
-                w.image(image, args.width)
+                    what = "카드" if kind == "cards" else "그림"
+                    warnings.append(f"앞 내용 아래에 공간이 부족해 {what}를 새 슬라이드 {no}에 넣었습니다.")
+                    rt.log("WARN", warnings[-1])
+                if kind == "cards":
+                    w.cards(cards)
+                else:
+                    w.image(image, args.width)
+            placed += [(no, x) for x in w.shapes]
             created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         expect = [args.title or ""] + [sec["title"] or "" for sec in md_sections] \
             + [sec["lines"][0][0] for sec in md_sections if sec["lines"]] \
             + ([_text_lines(args.text)[0][0]] if args.text and _text_lines(args.text) else []) \
             + ([str(table_rows[0][0])] if table_rows else []) + ([cards[0][0]] if cards else [])
-        problems = _verify_slides(prs, sorted(set(touched)), expect)
+        problems = _verify_slides(prs, sorted(set(touched)), expect) + _verify_inside(prs, placed)
         t.set_focus(slide=touched[-1])
         resolved = t.resolved()
+    extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
     if problems:
         return rt.ok_unverified(TOOL, "write", "; ".join(created), problems,
-                                target_resolved=resolved, slides_written=sorted(set(touched)))
+                                target_resolved=resolved, slides_written=sorted(set(touched)), **extra)
     return rt.ok(TOOL, "write", "; ".join(created), "VERIFIED: 쓴 슬라이드를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요.",
-                 verified=True, target_resolved=resolved, slides_written=sorted(set(touched)))
+                 verified=True, target_resolved=resolved, slides_written=sorted(set(touched)), **extra)
+
+
+def _verify_inside(prs: Any, placed: List[Tuple[int, Any]]) -> List[str]:
+    """R1: 이번에 넣은 도형을 다시 읽어 슬라이드 경계 안에 있는지 확인합니다 (밖으로 나간 도형은 보이지 않음)."""
+    try:
+        width, height = float(prs.PageSetup.SlideWidth), float(prs.PageSetup.SlideHeight)
+    except Exception as e:
+        return [f"슬라이드 크기를 읽지 못함: {type(e).__name__}"]
+    problems: List[str] = []
+    for no, sh in placed:
+        try:
+            box = {"left": float(sh.Left), "top": float(sh.Top), "width": float(sh.Width), "height": float(sh.Height)}
+        except Exception as e:
+            problems.append(f"슬라이드 {no}의 도형 위치를 다시 읽지 못함: {type(e).__name__}")
+            continue
+        if off.outside_area(box, width, height):
+            problems.append(f"슬라이드 {no}의 '{sh.Name}'이(가) 슬라이드 밖으로 나갑니다 "
+                            f"(위 {box['top']:.0f}, 높이 {box['height']:.0f}, 슬라이드 높이 {height:.0f})")
+    return problems
 
 
 def _verify_slides(prs: Any, slides: List[int], expect: List[str]) -> List[str]:

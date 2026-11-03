@@ -687,7 +687,15 @@ def parse_hwp(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     except (OSError, ValueError, IndexError) as e:      # olefile은 구조 손상을 OSError로 냄
         raise _DamagedFile(str(e)) from e
     try:
-        header = ole.openstream("FileHeader").read()
+        if not ole.exists("FileHeader"):                # 이름만 .hwp인 다른 OLE 문서(.doc, .xls 등)
+            raise rt.InputError(f"HWP 5.0 문서가 아닙니다 (FileHeader 없음): {os.path.basename(path)}. "
+                                "확장자가 실제 형식과 맞는지 확인하세요 (.doc, .xls 등을 이름만 바꾼 파일일 수 있음).")
+        try:
+            header = ole.openstream("FileHeader").read()
+        except (PermissionError, FileNotFoundError):
+            raise
+        except (OSError, ValueError, IndexError) as e:
+            raise _DamagedFile(str(e)) from e
         props = int.from_bytes(header[36:40], "little") if len(header) >= 40 else 0
         compressed = bool(props & 0x1)
         if props & 0x2:
@@ -1710,7 +1718,8 @@ def parse_pages(spec: Optional[str], total: int, option: str = "--pages") -> Lis
             raise rt.InputError(f"{option} 형식이 잘못되었습니다: '{spec}' (예: 3, 1-3, 1,4,6-8)")
         a = int(m.group(1))
         b = int(m.group(2) or a)
-        result += [n for n in range(min(a, b), max(a, b) + 1) if 1 <= n <= total]
+        lo, hi = max(1, min(a, b)), min(total, max(a, b))    # 먼저 줄임 (1-999999999를 다 돌지 않게)
+        result += range(lo, hi + 1)
     if not result:
         raise rt.InputError(f"{option} '{spec}'에 해당하는 항목이 없습니다 (전체 {total}개).")
     return sorted(set(result))

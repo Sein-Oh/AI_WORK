@@ -39,6 +39,7 @@ XL_LEGEND = {"bottom": -4107, "right": -4152, "top": -4160, "left": -4131}
 XL_ALIGN = {"left": -4131, "center": -4108, "right": -4152}
 XL_WEIGHT = {"hairline": 1, "thin": 2, "medium": -4138, "thick": 4}
 XL_OPERATOR = {">": 5, ">=": 7, "<": 6, "<=": 8, "=": 3, "<>": 4, "!=": 4}
+XL_A1, XL_R1C1 = 1, -4150    # ReferenceStyle (ConvertFormula)
 
 
 # ==============================================================================
@@ -617,6 +618,25 @@ def _write_sheet(t: Any, name: Optional[str], new: bool) -> Optional[Any]:
     return t.sheet(name, allow_create=True)
 
 
+def _rebase_formula(app: Any, ws: Any, formula: str, from_row: int, from_col: int, to_row: int, to_col: int) -> str:
+    """from 칸 기준으로 쓴 수식을 to 칸에 둘 때의 수식 (상대 참조만 옮기고 $ 참조는 그대로).
+    Excel ConvertFormula로 A1 -> R1C1(from 기준) -> A1(to 기준). 바꾸지 못하면 쓰지 않고 STOP_RETRY."""
+    try:
+        r1c1 = app.ConvertFormula(Formula=formula, FromReferenceStyle=XL_A1, ToReferenceStyle=XL_R1C1,
+                                  RelativeTo=ws.Cells(from_row, from_col))
+        out = app.ConvertFormula(Formula=r1c1, FromReferenceStyle=XL_R1C1, ToReferenceStyle=XL_A1,
+                                 RelativeTo=ws.Cells(to_row, to_col))
+        if not isinstance(out, str) or not out.startswith("="):
+            raise ValueError(repr(out))
+        return out
+    except Exception as e:
+        rt.debug(f"수식 변환 실패: {e}")
+        raise rt.InputError(
+            f"--append로 쓸 행이 {from_row}행에서 {to_row}행으로 옮겨졌는데 수식 {formula!r}의 상대 참조를 그 행 기준으로 바꾸지 못해 "
+            f"쓰지 않았습니다. --append를 빼고 {to_row}행 기준 수식과 --range로 다시 실행하세요. "
+            f"[추천] --range {addr(to_row, to_col)}")
+
+
 def cmd_write(args) -> Dict[str, Any]:
     sources = [x for x in (args.value is not None, args.values, args.file, args.formula) if x]
     if not sources:
@@ -640,6 +660,7 @@ def cmd_write(args) -> Dict[str, Any]:
     with write_session(args, "write") as t:
         # 시트·칸 확인과 쓸 내용 계획을 모두 마친 뒤에만 문서를 바꿈 (새 시트도 쓰기 직전에 만듦)
         ws = _write_sheet(t, sh or args.sheet, args.new_sheet)   # --new-sheet면 None (아직 만들지 않음, 빈 시트로 봄)
+        authored_row = r1 + (1 if header else 0)                 # 사용자가 준 수식이 가리키는 첫 수식 행 (--append 전)
 
         if args.append and ws is not None:
             if table:
@@ -694,6 +715,9 @@ def cmd_write(args) -> Dict[str, Any]:
             if r2 < r1:
                 raise rt.InputError("--range 범위가 헤더 행만 포함합니다. 데이터 행까지 포함하세요.")
             ncols = c2 - c1 + 1
+            if r1 != authored_row:
+                # --append로 수식 행이 옮겨짐: 상대 참조를 실제 행 기준으로 (그대로 쓰면 원래 행을 계속 가리켰음)
+                formulas = [_rebase_formula(t.app, ws, f, authored_row, c1 + j, r1, c1 + j) for j, f in enumerate(formulas)]
             if len(formulas) == 1:
                 ops.append((r1, c1, r2, c2, "formula", formulas[0]))          # 상대참조 자동 조정
             elif len(formulas) == ncols:
@@ -1024,10 +1048,12 @@ def cmd_style(args) -> Dict[str, Any]:
                 op, val, color = rule
                 if op == "contains":
                     top_left = str(rng.Cells(1, 1).Address).replace("$", "")
-                    fc = rng.FormatConditions.Add(Type=2, Formula1=f'=ISNUMBER(SEARCH("{val}",{top_left}))')
+                    # SEARCH는 ~ ? *를 와일드카드로 읽음: ~로 글자 그대로. 수식 글자 안의 "는 ""로
+                    lit = re.sub(r"([~?*])", r"~\1", val).replace('"', '""')
+                    fc = rng.FormatConditions.Add(Type=2, Formula1=f'=ISNUMBER(SEARCH("{lit}",{top_left}))')
                 else:
                     is_num = bool(re.fullmatch(r"[+-]?\d+(\.\d+)?", val))
-                    formula = val if is_num else f'="{val}"'
+                    formula = val if is_num else '="' + val.replace('"', '""') + '"'
                     fc = rng.FormatConditions.Add(Type=1, Operator=XL_OPERATOR[op], Formula1=f"={formula}" if is_num else formula)
                 fc.Interior.Color = color
                 applied["highlight"] = args.highlight
@@ -1544,12 +1570,17 @@ def _chart_by_index(ws: Any, key: str) -> List[Tuple[Any, Any, int]]:
 
 
 def _chart_labels(hits: List[Tuple[Any, Any, int]]) -> List[str]:
-    """[후보]에 줄 '시트!이름'. 한 시트에 이름이 같은 차트가 여럿이면 '시트!#번호',
+    """[후보]에 줄 '시트!이름'. 그 시트에 이름이 같은 차트가 하나라도 더 있으면(후보가 아닌 차트 포함) '시트!#번호',
     시트·차트 이름에 '!'나 작은따옴표가 있으면 모두 "'시트'!이름" (그대로 다시 주면 그 차트 하나로 찾아짐)."""
     count: Dict[Tuple[str, str], int] = {}
-    for ws, obj, _ in hits:
-        k = (str(ws.Name), str(obj.Name).strip().lower())
-        count[k] = count.get(k, 0) + 1
+    done: set = set()
+    for ws, _, _ in hits:
+        if str(ws.Name) in done:
+            continue
+        done.add(str(ws.Name))
+        for obj in _chart_objects(ws):                  # 후보만이 아니라 그 시트의 모든 차트로 셈
+            k = (str(ws.Name), str(obj.Name).strip().lower())
+            count[k] = count.get(k, 0) + 1
     parts = [(str(ws.Name), f"#{idx}" if count[(str(ws.Name), str(obj.Name).strip().lower())] > 1 else str(obj.Name))
              for ws, obj, idx in hits]
     quote = any("!" in w or "!" in c or "'" in w for w, c in parts)

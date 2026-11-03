@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.23"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.24"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -998,11 +998,22 @@ def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
     return "".join(plain), spans
 
 
+_TABLE_PIPE = re.compile(r"(?<!\\)\|")
+_FENCE = re.compile(r"^(`{3,}|~{3,})")
+
+
 def parse_markdown_table(lines: List[str]) -> List[List[str]]:
+    """'|'로 나눈 표 (앞에 역슬래시가 있는 '\\|'는 칸 안의 글자 '|'). 정렬 줄(머리글 다음 줄은 ':-', '-:' 등 '-' 하나부터, 그 밖은 '---' 이상)은 뺍니다."""
     rows: List[List[str]] = []
-    for ln in lines:
-        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-        if cells and all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
+    for no, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("|"):
+            s = s[1:]
+        if s.endswith("|") and not s.endswith("\\|"):
+            s = s[:-1]
+        cells = [c.strip().replace("\\|", "|") for c in _TABLE_PIPE.split(s)]
+        dash = r":?-+:?" if no == 1 else r":?-{3,}:?"   # 머리글 다음 줄은 '-' 하나부터 정렬 줄
+        if cells and any(cells) and all(re.fullmatch(dash, c) for c in cells if c):
             continue
         rows.append(cells)
     width = max((len(r) for r in rows), default=0)
@@ -1029,6 +1040,19 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
         if not s:
             flush()
             i += 1
+            continue
+        fence = _FENCE.match(s)
+        if fence:                                   # 코드 블록: 줄마다 단락 하나, 글자 그대로 (제목·목록으로 읽지 않음)
+            flush()
+            mark = fence.group(1)
+            i += 1
+            while i < len(lines):
+                ln = lines[i].rstrip()
+                i += 1
+                if ln.strip().startswith(mark[0] * len(mark)) and not ln.strip().lstrip(mark[0]):
+                    break                           # 닫는 펜스 (닫지 않으면 끝까지 코드)
+                if ln.strip():
+                    blocks.append(("paragraph", ln))
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", s)
         if m:
@@ -1074,4 +1098,4 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
 
 
 def looks_like_markdown(text: str) -> bool:
-    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\|.*\|)", text) or "**" in text)
+    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\|.*\||```|~~~)", text) or "**" in text)
