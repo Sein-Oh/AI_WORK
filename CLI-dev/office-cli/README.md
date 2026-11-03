@@ -107,7 +107,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 항목 | 기본 위치 | 바꾸는 방법 |
 |---|---|---|
 | data 폴더 (파일명만 쓴 입력/출력) | `<도구폴더>\data` | 환경변수 `OFFICE_CLI_DATA_DIR` 또는 `config.json`의 `data_dir` |
-| 작업 폴더 (`--save` 경로 생략 시 `<이름>_<시각>`, 같은 초에 겹치면 `_2`를 붙이고 `recovered`, 7일 후 자동 정리) | `data\_work` | - |
+| 작업 폴더 (`--save` 경로 생략 시 `<이름>_<시각>`, 같은 초에 겹치면 `_2`를 붙이고 `recovered`, 7일 후 자동 정리. 이름의 쓸 수 없는 글자 `\ / : * ? " < > \|`는 `_`, 1.4.23) | `data\_work` | - |
 | 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
 | 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` | - |
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
@@ -176,6 +176,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 
 ### outlook.py
 - 조회: `list [--folder --unread --limit]`, `search --query [--from --where all|subject|body]`, `read --id [--save-attach --save]`, `current`, `folders`
+- `--limit`은 1~200(기본 10). 200을 넘으면 200통으로 줄이고 `warnings`로 알립니다. 0 이하는 STOP_RETRY(1.4.23).
+- `search`: 검색어의 `%`, `_`는 글자 그대로 찾습니다. DASL `LIKE`에서는 와일드카드라 더 넓게 찾으므로, 그런 검색어는 제목·본문·보낸사람을
+  다시 읽어 글자 그대로 들어 있는 메일만 남깁니다(대소문자 무시, 읽지 못한 칸은 남김). 1.4.22까지는 `_`를 공백으로 바꾸고 `%`를 지워
+  `견적서_v2`, `10% 할인`이 0건이었습니다(1.4.23).
 - 작성: `new --to --subject --body [--cc --attach --body-file --send]`, `reply [--id --all --body]`, `forward [--id --to --body]`
 - `--attach`: 여러 개는 `;`로 구분(쉼표도 됨). 값 전체가 있는 파일이면 하나로 봅니다(`보고서,최종.pdf`). 나눈 조각이 있는 파일이 아니면 뒤 조각을 이어 붙여 봅니다(폴더 이름에 `;`가 든 경로 여러 개). `--body`의 글자 `\n`만 줄바꿈으로 바꾸고(Windows 경로 안의 `\n`은 그대로), `--body-file` 내용은 그대로 씁니다.
 - `read --save`, `current --save`: 파일 이름에 쓸 수 없는 글자(`RE:`의 `:` 등)는 `_`로 바꾸고, 저장한 파일을 다시 읽어 확인합니다(확인하지 못하면 `UNVERIFIED:`).
@@ -195,6 +199,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌. 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`) |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
 
+- 손상된 파일(깨진 XML, 압축 해제 실패, OLE 구조 오류)은 내부 오류가 아니라 STOP_RETRY "손상된 파일이라 읽을 수 없습니다"(1.4.23).
 - 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 1.3.0에서 뺐습니다 (Outlook 통합 도구에서 별도로 다룰 예정).
 - `--max-files`는 이번 실행에서 **새로 읽는** 파일 수의 상한입니다. 이미 최신인 파일은 세지 않으므로 같은 명령을 다시 실행하면 남은 파일부터 이어서 등록합니다(`next_commands[0]`). 등록은 원본을 바꾸지 않는 읽기 전용 작업입니다.
 - DRM으로 암호화된 Office 파일은 라이브러리로 열 수 없으므로, `excel.py`/`word.py`/`ppt.py read --target 경로`로 Office에서 읽으라고 안내합니다.
@@ -288,7 +293,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `windows`: 열린 Office 문서 목록과 실행 중인 Office 버전, PDF 내보내기 가능 여부(`office`). PDF 기능이 없는 Office에서는 `export --save *.pdf`가 시도 없이 바로 안내합니다
 - `focus --app excel|word|ppt [--name]`: 창을 앞으로 가져옵니다. 최대화 상태는 유지합니다.
 - `transfer`: 아래 4절 참고
-- `undo [--app] [--list] [--pick N] [--overwrite]`
+- `undo [--app] [--list] [--pick N] [--overwrite]`: `--pick`은 1 이상(0 이하는 STOP_RETRY, 1.4.23)
 
 ## 4. 앱 간 전달 (transfer)과 회사 DRM
 
@@ -322,6 +327,13 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 하나를 고르지 않고 STOP_RETRY와 `[후보] 시트!이름`을 냅니다. 사용자가 고른 `시트!이름`을 그대로 차트 이름으로 주면 됩니다
 (앞부분이 있는 시트 이름일 때 `--sheet`와 같음). 이름이 같은 열린 문서가 여럿일 때의 `[후보]` 안내도 그 명령의 옵션
 (`--to-target`/`--from-target`)을 말합니다.
+1.4.23부터:
+- `'시트'!이름`(작은따옴표 안의 `''`는 `'`)은 그 시트에서만 찾습니다. 시트·차트 이름에 `!`나 `'`가 있으면 `[후보]`가 이 형식입니다.
+- 따옴표 없는 `시트!이름`은 `!` 자리마다 나눠 보고, 앞부분이 있는 시트이고 그 시트에서 찾아질 때만 씁니다. 글자 그대로를 차트 이름으로도 찾아
+  (다른 시트의 차트 이름이 `Sheet1!x`일 수 있음) 둘 다 찾아지면 하나를 고르지 않고 `[후보]`를 냅니다.
+- 한 시트에 이름이 같은 차트가 여럿이면 `[후보] 시트!#번호`(그 시트의 몇 번째 차트). `#번호`(또는 번호)를 그대로 받습니다.
+- `--sheet`가 `시트!이름`의 시트와 다르고 달리 찾은 차트가 없으면 두 시트를 말하는 STOP_RETRY. 차트가 없다는 안내는 어느 시트인지 말합니다.
+- 차트 그림 파일 이름(`chart_<차트 이름>`)의 `/` 같은 글자는 `_`로 바꿉니다(제목 `1/4분기 매출`로 만든 차트를 옮기지 못하던 문제).
 
 ## 5. 체이닝 예
 

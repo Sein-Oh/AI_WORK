@@ -480,7 +480,7 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
     with off.open_target("excel", args.from_target, readonly=True, option="--from-target") as src:
         ws, chart_obj = excel.find_chart(src, args.chart, args.sheet)
         title = excel._chart_title(chart_obj) or str(chart_obj.Name)
-        stem = f"chart_{str(chart_obj.Name)}"[:40]
+        stem = rt.safe_filename(f"chart_{str(chart_obj.Name)}", 40, "chart")   # 차트 이름의 / ? : 등은 _로
         images: Dict[str, str] = {}
         pending = list(targets)
         attempt = 0
@@ -1020,6 +1020,9 @@ def restore_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def cmd_undo(args) -> Dict[str, Any]:
+    if args.pick is not None and args.pick < 1:
+        # --pick 0이 'or 1'에 걸려 가장 최근 지점을 되돌리던 문제
+        raise rt.InputError(f"--pick은 1 이상이어야 합니다 (받은 값: {args.pick}). office.py undo --list로 번호를 확인하세요.")
     kind = _app(args.app) if args.app else None
     snaps = off.list_snapshots(kind)
     if args.list:
@@ -1036,12 +1039,12 @@ def cmd_undo(args) -> Dict[str, Any]:
     if not snaps:
         return rt.ok(TOOL, "undo", "되돌릴 스냅샷이 없습니다",
                      "VERIFIED: 되돌릴 수 있는 작업이 없습니다. 사용자에게 알리세요.", restored=False)
-    pick = args.pick or 1
+    pick = args.pick if args.pick is not None else 1
     if not 1 <= pick <= len(snaps):
         raise rt.InputError(f"--pick은 1~{len(snaps)} 사이여야 합니다 (office.py undo --list로 확인).")
     snap = snaps[pick - 1]
     if snap.get("barrier"):
-        if args.pick:
+        if args.pick is not None:
             raise rt.InputError(f"{pick}번은 되돌릴 지점이 없는 작업입니다 ({snap.get('reason', '')}). office.py undo --list에서 다른 번호를 고르세요.")
         raise rt.UserDecisionError(
             f"직전 작업('{snap['name']}' {snap.get('by', '')})은 되돌릴 지점이 없습니다: {snap.get('reason', '')}. "

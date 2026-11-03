@@ -1513,56 +1513,134 @@ def _chart_title(obj: Any) -> str:
         return ""
 
 
+_QUOTED_CHART = re.compile(r"^'((?:[^']|'')+)'!(.+)$", re.S)
+_INDEX_KEY = re.compile(r"^#?(\d+)$")
+
+
+def _chart_matches(ws: Any, key: str) -> Tuple[List[Tuple[Any, Any, int]], List[Tuple[Any, Any, int]], List[str]]:
+    """시트 하나에서 이름이 같은 차트, 제목이 같은 차트, 보이는 이름 목록 (대소문자 무시). 항목은 (시트, 차트, 번호)."""
+    by_name: List[Tuple[Any, Any, int]] = []
+    by_title: List[Tuple[Any, Any, int]] = []
+    names: List[str] = []
+    k = key.strip().lower()
+    for idx, obj in enumerate(_chart_objects(ws), 1):
+        nm, title = str(obj.Name), _chart_title(obj)
+        names += [x for x in (nm, title) if x]
+        if nm.strip().lower() == k:
+            by_name.append((ws, obj, idx))
+        elif title and title.strip().lower() == k:
+            by_title.append((ws, obj, idx))
+    return by_name, by_title, names
+
+
+def _chart_by_index(ws: Any, key: str) -> List[Tuple[Any, Any, int]]:
+    """'3' 또는 '#3' = 그 시트의 3번째 차트."""
+    m = _INDEX_KEY.match(key.strip())
+    if not m:
+        return []
+    objs = _chart_objects(ws)
+    i = int(m.group(1))
+    return [(ws, objs[i - 1], i)] if 1 <= i <= len(objs) else []
+
+
+def _chart_labels(hits: List[Tuple[Any, Any, int]]) -> List[str]:
+    """[후보]에 줄 '시트!이름'. 한 시트에 이름이 같은 차트가 여럿이면 '시트!#번호',
+    시트·차트 이름에 '!'나 작은따옴표가 있으면 모두 "'시트'!이름" (그대로 다시 주면 그 차트 하나로 찾아짐)."""
+    count: Dict[Tuple[str, str], int] = {}
+    for ws, obj, _ in hits:
+        k = (str(ws.Name), str(obj.Name).strip().lower())
+        count[k] = count.get(k, 0) + 1
+    parts = [(str(ws.Name), f"#{idx}" if count[(str(ws.Name), str(obj.Name).strip().lower())] > 1 else str(obj.Name))
+             for ws, obj, idx in hits]
+    quote = any("!" in w or "!" in c or "'" in w for w, c in parts)
+    return [("'" + w.replace("'", "''") + "'" if quote else w) + "!" + c for w, c in parts]
+
+
 def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = None) -> Tuple[Any, Any]:
-    """차트 이름/제목(대소문자 무시) 또는 번호로 차트를 찾습니다. (시트, 차트개체)
-    시트를 생략하면 모든 시트에서 찾고, '시트!이름' 형식도 받습니다(앞부분이 있는 시트 이름일 때).
-    이름이 같은 차트를 제목이 같은 차트보다 우선하고, 그래도 둘 이상이면 하나를 고르지 않고 [후보](시트!이름) 오류를 냅니다
-    (다른 시트의 같은 이름/제목 차트를 첫 번째 것으로 골라 엉뚱한 차트를 옮기거나 지우지 않게)."""
+    """차트 이름/제목(대소문자 무시) 또는 번호('3', '#3')로 차트를 찾습니다. (시트, 차트개체)
+    시트를 생략하면 모든 시트에서 찾고, '시트!이름'과 "'시트'!이름"(작은따옴표 안의 ''는 ') 형식도 받습니다.
+    - 따옴표 형식은 그 시트에서만 찾습니다.
+    - 따옴표 없는 '시트!이름'은 '!' 자리마다 나눠 보고 앞부분이 있는 시트이고 그 시트에서 찾아질 때만 씁니다.
+      글자 그대로를 차트 이름으로도 찾아, 둘 다 찾아지면 하나를 고르지 않고 [후보] 오류를 냅니다.
+    이름이 같은 차트를 제목이 같은 차트보다 우선하고, 그래도 둘 이상이면(한 시트 안에서 이름이 같은 경우 포함)
+    하나를 고르지 않고 [후보] 오류를 냅니다 (엉뚱한 차트를 옮기거나 지우지 않게)."""
     wb = t.doc
-    if name is not None and "!" in str(name):
-        # '시트!이름': 왼쪽부터 '!' 자리마다 나눠 보고, 앞부분이 있는 시트 이름이고 뒷부분이 비어 있지 않은 첫 경우를 씀
-        # (차트 이름에 '!'가 들어 있어도 됨). --sheet가 같이 있으면 앞부분이 그 시트와 같을 때만
-        names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]
-        text = str(name)
-        for pos in [i for i, ch in enumerate(text) if ch == "!"]:
-            left, right = text[:pos].strip().strip("'"), text[pos + 1:].strip()
-            if not right or not any(n.lower() == left.lower() for n in names):
-                continue
-            if sheet and str(sheet).strip().strip("'").lower() != left.lower():
-                continue
-            sheet, name = left, right
-            break
-    sheets = [t.sheet(sheet)] if sheet else [wb.Worksheets(i) for i in range(1, wb.Worksheets.Count + 1)]
+    all_sheets = [wb.Worksheets(i) for i in range(1, wb.Worksheets.Count + 1)]
+    sheet_names = [str(ws.Name) for ws in all_sheets]
+    scope = [t.sheet(sheet)] if sheet else all_sheets
+    sheet_key = str(sheet).strip().strip("'").lower() if sheet else None
+    where = f"시트 '{scope[0].Name}'" if sheet else "통합 문서"
+    if name is None:
+        for ws in scope:
+            objs = _chart_objects(ws)
+            if objs:
+                return ws, objs[0]
+        raise rt.InputError(f"{where}에 차트가 없습니다. excel.py chart --range ... 로 먼저 만드세요.")
+
+    def sheet_by_name(n: str) -> Optional[Any]:
+        return next((ws for ws in all_sheets if str(ws.Name).lower() == n.lower()), None)
+
+    def mismatch(left: str) -> rt.InputError:
+        return rt.InputError(f"차트 '{name}'의 시트 '{left}'와 --sheet '{sheet}'가 다릅니다. 아무것도 바꾸지 않았습니다. "
+                             "--sheet를 빼거나 같은 시트로 맞추세요.")
+
+    text = str(name).strip()
+    by_name: List[Tuple[Any, Any, int]] = []
+    by_title: List[Tuple[Any, Any, int]] = []
+    by_index: List[Tuple[Any, Any, int]] = []
     all_names: List[str] = []
-    by_name: List[Tuple[Any, Any]] = []
-    by_title: List[Tuple[Any, Any]] = []
-    key = str(name).strip().lower() if name is not None else None
-    for ws in sheets:
-        for obj in _chart_objects(ws):
-            if key is None:
-                return ws, obj
-            nm, title = str(obj.Name), _chart_title(obj)
-            all_names += [x for x in (nm, title) if x]
-            if nm.strip().lower() == key:
-                by_name.append((ws, obj))
-            elif title and title.strip().lower() == key:
-                by_title.append((ws, obj))
-    hits = by_name or by_title
-    labels = list(dict.fromkeys(f"{ws.Name}!{obj.Name}" for ws, obj in hits))
-    if len(labels) > 1:
+    m = _QUOTED_CHART.match(text)
+    if m:
+        left, right = m.group(1).replace("''", "'"), m.group(2).strip()
+        ws = sheet_by_name(left)
+        if ws is None:
+            raise rt.not_found("시트", left, sheet_names)
+        if sheet_key and sheet_key != left.lower():
+            raise mismatch(left)
+        by_name, by_title, all_names = _chart_matches(ws, right)
+        by_index = _chart_by_index(ws, right)
+        where = f"시트 '{ws.Name}'"
+    else:
+        contradicted = ""
+        if "!" in text:
+            for pos in [i for i, ch in enumerate(text) if ch == "!"]:
+                left, right = text[:pos].strip().strip("'"), text[pos + 1:].strip()
+                ws = sheet_by_name(left)
+                if not right or ws is None:
+                    continue
+                if sheet_key and sheet_key != left.lower():
+                    contradicted = contradicted or str(ws.Name)
+                    continue
+                n_hits, t_hits, _ = _chart_matches(ws, right)       # 찾아지는 나눔만 씀
+                by_name += n_hits
+                by_title += t_hits
+                by_index += _chart_by_index(ws, right)
+        else:
+            by_index = _chart_by_index(scope[0], text)
+        for ws in scope:                                            # 글자 그대로를 차트 이름으로
+            n_hits, t_hits, names = _chart_matches(ws, text)
+            by_name += n_hits
+            by_title += t_hits
+            all_names += names
+        if not (by_name or by_title or by_index) and contradicted:
+            raise mismatch(contradicted)
+    seen: set = set()
+    hits = []
+    for h in (by_name or by_title or by_index):
+        k = (str(h[0].Name), h[2])
+        if k not in seen:
+            seen.add(k)
+            hits.append(h)
+    if len(hits) > 1:
+        labels = _chart_labels(hits)
         raise rt.ambiguous(
-            f"'{name}'에 해당하는 차트가 {len(labels)}개입니다 (이름 또는 제목이 같음). 하나를 고르지 않았고 아무것도 바꾸지 않았습니다. "
-            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보의 '시트!이름'을 그대로 주세요.", labels)
+            f"'{name}'에 해당하는 차트가 {len(hits)}개입니다 (이름 또는 제목이 같음). 하나를 고르지 않았고 아무것도 바꾸지 않았습니다. "
+            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보를 글자 그대로 주세요.", labels)
     if hits:
-        return hits[0]
-    if name is not None and str(name).isdigit():
-        ws = sheets[0]
-        objs = _chart_objects(ws)
-        if 1 <= int(name) <= len(objs):
-            return ws, objs[int(name) - 1]
+        return hits[0][0], hits[0][1]
     if not all_names:
-        raise rt.InputError("차트가 없습니다. excel.py chart --range ... 로 먼저 만드세요.")
-    raise rt.not_found("차트", str(name), sorted(set(all_names)))
+        raise rt.InputError(f"{where}에 차트가 없습니다. excel.py chart --range ... 로 먼저 만드세요.")
+    raise rt.not_found("차트", str(name), sorted(set(all_names)), extra=f" ({where})" if where != "통합 문서" else "")
 
 
 def cmd_chart(args) -> Dict[str, Any]:
@@ -1587,12 +1665,13 @@ def cmd_chart(args) -> Dict[str, Any]:
             else:
                 ws, obj = find_chart(t, args.name, args.sheet)
                 gone = str(obj.Name)
+                before = sum(1 for o in _chart_objects(ws) if str(o.Name) == gone)   # 같은 이름이 여럿일 수 있음
                 msg = f"차트 '{gone}'을(를) 삭제했습니다"
                 obj.Delete()
             left = [str(o.Name) for o in _chart_objects(ws)]            # R1: 차트 목록을 다시 읽음
             t.set_focus(sheet=ws, changed=not args.all or bool(n))      # 0개 삭제는 바뀐 것 없음
             resolved = t.resolved()
-        if (args.all and left) or (not args.all and gone in left):
+        if (args.all and left) or (not args.all and left.count(gone) >= before):
             return rt.ok_unverified(TOOL, "chart", msg, [f"다시 읽은 차트 목록에 남아 있음: {', '.join(left[:5])}"], target_resolved=resolved)
         return rt.ok(TOOL, "chart", msg, "VERIFIED: 차트 목록을 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved)
 

@@ -371,6 +371,22 @@ def _encrypted_hint(path: str) -> rt.InputError:
     )
 
 
+class _DamagedFile(Exception):
+    """파서가 만난 파일 구조 손상 (load_document_status가 InputError로 바꿈)."""
+
+
+# 파일 내용이 깨졌을 때 파서가 내는 예외: 내부 오류(ERROR:)가 아니라 입력 문제(STOP_RETRY)로 알림
+_DAMAGE_ERRORS: Tuple[type, ...] = (_DamagedFile, ET.ParseError, zlib.error, zipfile.BadZipFile, EOFError)
+_DAMAGE_NAMES = {"XMLSyntaxError", "PackageNotFoundError"}       # lxml / python-docx·pptx (import 없이 이름으로)
+
+
+def _damaged_error(path: str, e: BaseException) -> rt.InputError:
+    return rt.InputError(
+        f"손상된 파일이라 읽을 수 없습니다: {os.path.basename(path)} ({type(e).__name__}: {str(e)[:120]}). "
+        "같은 명령을 다시 실행하지 말고 사용자에게 알리세요. 원본을 다시 받거나 프로그램(한글/Office)에서 열어 다른 이름으로 저장하면 읽을 수 있습니다."
+    )
+
+
 def _pdf_tables(page) -> List[Dict[str, Any]]:
     """선으로 그린 표를 찾습니다 (pymupdf find_tables). 실패하거나 없으면 빈 목록 (단락으로만 처리)."""
     try:
@@ -664,7 +680,12 @@ def parse_hwp(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         raise rt.InputError("HWP를 읽으려면 olefile이 필요합니다 (python -m pip install olefile).")
     if not olefile.isOleFile(path):
         raise _encrypted_hint(path)
-    ole = olefile.OleFileIO(path)
+    try:
+        ole = olefile.OleFileIO(path)
+    except (PermissionError, FileNotFoundError):
+        raise
+    except (OSError, ValueError, IndexError) as e:      # olefile은 구조 손상을 OSError로 냄
+        raise _DamagedFile(str(e)) from e
     try:
         header = ole.openstream("FileHeader").read()
         props = int.from_bytes(header[36:40], "little") if len(header) >= 40 else 0
@@ -678,7 +699,12 @@ def parse_hwp(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         sections.sort(key=lambda d: int(re.sub(r"\D", "", d[1]) or 0))
         paragraphs: List[str] = []
         for sec in sections:
-            data = ole.openstream(sec).read()
+            try:
+                data = ole.openstream(sec).read()
+            except (PermissionError, FileNotFoundError):
+                raise
+            except (OSError, ValueError, IndexError) as e:
+                raise _DamagedFile(str(e)) from e
             if compressed:
                 data = zlib.decompress(data, -15)
             pos, size_total = 0, len(data)
@@ -1560,7 +1586,16 @@ def load_document_status(path: str, use_cache: bool = True, check_index: bool = 
         except Exception:
             rt.log("WARN", f"캐시가 손상되어 다시 읽습니다: {os.path.basename(path)}")
     rt.log("PROGRESS", f"문서 읽는 중: {os.path.basename(path)}")
-    units, meta = PARSERS[ftype](path)
+    try:
+        units, meta = PARSERS[ftype](path)
+    except rt.InputError:
+        raise
+    except _DAMAGE_ERRORS as e:
+        raise _damaged_error(path, e) from e
+    except Exception as e:
+        if type(e).__name__ in _DAMAGE_NAMES:
+            raise _damaged_error(path, e) from e
+        raise
     doc = {"file": path, "type": ftype, "mtime": st.st_mtime, "size": st.st_size,
            "parser_version": PARSER_VERSION, "parsed_at": rt.timestamp(), "meta": meta, "units": units}
     try:

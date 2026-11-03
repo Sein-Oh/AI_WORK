@@ -25,7 +25,7 @@
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _office as off  # noqa: E402
@@ -38,6 +38,7 @@ DEFAULT_FOLDERS = {"inbox": 6, "받은편지함": 6, "sent": 5, "보낸편지함
 BLOCKED_ATTACH = {".exe", ".bat", ".cmd", ".com", ".js", ".vbs", ".vbe", ".wsf", ".ps1", ".scr", ".msi", ".lnk",
                   ".hta", ".jar", ".reg", ".dll"}
 SAVE_FAILED = "저장 실패"     # skipped_attachments에서 정책상 건너뛴 것과 저장에 실패한 것을 구분하는 표시
+MAX_LIMIT = 200          # list/search --limit 상한 (넘으면 줄이고 warnings로 알림)
 PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"
 
 
@@ -119,17 +120,28 @@ def summary(item: Any) -> Dict[str, Any]:
             "unread": bool(getattr(item, "UnRead", False)), "attachments": attach}
 
 
-def _collect(items: Any, limit: int) -> List[Dict[str, Any]]:
+def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for item in items:
         if len(out) >= limit:
             break
         try:
-            if int(item.Class) == OL_MAIL:
+            if int(item.Class) == OL_MAIL and (keep is None or keep(item)):
                 out.append(summary(item))
         except Exception:
             continue
     return out
+
+
+def _check_limit(limit: int, warnings: List[str]) -> int:
+    if limit < 1:
+        raise rt.InputError(f"--limit은 1 이상이어야 합니다 (받은 값: {limit}).")
+    if limit > MAX_LIMIT:
+        msg = f"--limit {limit}은(는) 너무 많아 {MAX_LIMIT}통으로 줄였습니다"
+        rt.log("WARN", msg)
+        warnings.append(msg)
+        return MAX_LIMIT
+    return limit
 
 
 # ==============================================================================
@@ -143,14 +155,47 @@ def cmd_list(args) -> Dict[str, Any]:
     if args.unread:
         items = items.Restrict("[UnRead] = True")
     items.Sort("[ReceivedTime]", True)                 # 거른 뒤 정렬해야 순서가 보장됨
-    mails = _collect(items, args.limit)
+    warnings: List[str] = []
+    mails = _collect(items, _check_limit(args.limit, warnings))
+    extra = {"warnings": warnings} if warnings else {}
     return rt.ok(TOOL, "list", f"'{folder.Name}' 폴더 최근 메일 {len(mails)}통" + (" (안 읽은 메일)" if args.unread else ""),
-                 folder=str(folder.Name), mails=mails)
+                 folder=str(folder.Name), mails=mails, **extra)
 
 
 def _dasl_like(fields: Sequence[str], value: str) -> str:
-    v = value.replace("'", "''").replace("%", "").replace("_", " ")
+    # 작은따옴표만 겹쳐 씁니다. % _는 그대로 둠: DASL 와일드카드지만 자기 자신과도 맞으므로 빠지는 메일이 없음
+    # (예전에는 _를 공백으로 바꾸고 %를 지워 '견적서_v2', '10% 할인'이 절대 맞지 않고 0건 VERIFIED가 나왔음)
+    v = value.replace("'", "''")
     return "(" + " OR ".join(f'"{f}" LIKE \'%{v}%\'' for f in fields) + ")"
+
+
+def _literal_keep(query: Optional[str], sender: Optional[str], where: str) -> Optional[Callable[[Any], bool]]:
+    """검색어에 % _가 있으면 DASL이 더 넓게 찾으므로, 글자 그대로 들어 있는 메일만 남깁니다 (대소문자 무시).
+    읽지 못한 칸은 맞는 것으로 봅니다 (빠뜨리는 것보다 하나 더 보여 주는 편이 안전)."""
+    def wild(s: Optional[str]) -> bool:
+        return bool(s) and ("%" in s or "_" in s)
+    if not (wild(query) or wild(sender)):
+        return None
+
+    def has(item: Any, attrs: Sequence[str], needle: str) -> bool:
+        n = needle.casefold()
+        for a in attrs:
+            try:
+                if n in _text(getattr(item, a)).casefold():
+                    return True
+            except Exception:
+                return True
+        return False
+
+    q_attrs = {"subject": ["Subject"], "body": ["Body"], "all": ["Subject", "Body"]}[where]
+
+    def keep(item: Any) -> bool:
+        if wild(query) and not has(item, q_attrs, query or ""):
+            return False
+        if wild(sender) and not has(item, ["SenderName", "SenderEmailAddress"], sender or ""):
+            return False
+        return True
+    return keep
 
 
 def build_search_filter(query: Optional[str], sender: Optional[str], where: str) -> str:
@@ -174,9 +219,12 @@ def cmd_search(args) -> Dict[str, Any]:
     flt = build_search_filter(args.query, args.sender, args.where)
     items = folder.Items.Restrict(flt)
     items.Sort("[ReceivedTime]", True)
-    mails = _collect(items, args.limit)
+    warnings: List[str] = []
+    mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where))
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'") if x)
-    result = {"folder": str(folder.Name), "mails": mails, "matched": len(mails)}
+    result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails)}
+    if warnings:
+        result["warnings"] = warnings
     if not mails:
         return rt.ok(TOOL, "search", f"{desc}: '{folder.Name}'에서 일치하는 메일 없음",
                      "VERIFIED: 일치하는 메일이 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요. "
@@ -188,8 +236,7 @@ def cmd_search(args) -> Dict[str, Any]:
 def _safe_name(text: str, limit: int, default: str = "메일") -> str:
     """파일·폴더 이름에 쓸 수 없는 글자(\\ / : * ? \" < > |, 제어 문자)를 _로, 끝의 점·공백은 뺍니다.
     (RE: 같은 제목이 NTFS 대체 스트림 이름이 되거나 저장에 실패하던 문제)"""
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", text or "")[:limit].strip().rstrip(". ")
-    return name or default
+    return rt.safe_filename(text, limit, default)
 
 
 def _save_attachments(item: Any) -> Tuple[List[str], List[str]]:
@@ -505,14 +552,14 @@ def build_cli():
     p = sub.add_parser("list", help="최근 메일 목록")
     p.add_argument("--folder", help=folder_help)
     p.add_argument("--unread", action="store_true", help="안 읽은 메일만")
-    p.add_argument("--limit", "-n", type=int, default=10)
+    p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
 
     p = sub.add_parser("search", help="메일 검색")
     p.add_argument("--query", "-q", help="찾을 말")
     p.add_argument("--from", dest="sender", help="보낸사람 이름/주소 일부")
     p.add_argument("--where", choices=["all", "subject", "body"], default="all", help="검색 범위 (기본 제목+본문)")
     p.add_argument("--folder", help=folder_help)
-    p.add_argument("--limit", "-n", type=int, default=10)
+    p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
 
     for name, hlp in (("read", "메일 읽기 (--id)"), ("current", "지금 보고 있거나 선택한 메일 읽기")):
         p = sub.add_parser(name, help=hlp)

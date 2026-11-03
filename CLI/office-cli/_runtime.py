@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.22"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.23"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -661,9 +661,26 @@ def resolve_input_path(path: str, kind: str = "입력 파일") -> str:
     raise not_found(kind, os.path.basename(raw), names, extra=f" (찾은 위치: {', '.join(candidates)})")
 
 
+_BAD_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
+
+
+def safe_filename(text: Any, limit: int = 0, default: str = "file") -> str:
+    """파일 이름에 쓸 수 없는 글자(\\ / : * ? \" < > |, 제어 문자)를 _로, 끝의 점·공백은 빼고,
+    Windows 예약 이름(CON, NUL, COM1 등)은 앞에 _를 붙입니다. limit>0이면 그 길이로 자릅니다.
+    (차트·시트 이름 '1/4분기 매출'이 기본 파일 이름이 되면 경로가 깨지던 문제)"""
+    name = _BAD_NAME_CHARS.sub("_", "" if text is None else str(text))
+    if limit > 0:
+        name = name[:limit]
+    name = name.strip().rstrip(". ")
+    if name.split(".")[0].strip().upper() in _RESERVED_NAMES:
+        name = "_" + name
+    return name or default
+
+
 def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwrite: bool = False) -> str:
     """출력 파일 경로를 정합니다.
-    - 생략하면 작업 폴더에 '<default_stem>_<시각><ext>'로 만듭니다.
+    - 생략하면 작업 폴더에 '<default_stem>_<시각><ext>'로 만듭니다 (default_stem의 쓸 수 없는 글자는 _로).
     - 파일명만 주면 data 폴더 아래에 만듭니다.
     - 확장자가 없거나 다르면 ext로 맞춥니다.
     - 그 파일이 이미 있으면 덮어쓰지 않고 시각을 붙인 새 이름으로 바꿉니다 (R4, recovered로 알림). overwrite=True면 그대로.
@@ -671,7 +688,8 @@ def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwr
     ext = ext if ext.startswith(".") else "." + ext
     if not path:
         cleanup_work_dir()
-        auto = os.path.join(get_work_dir(), f"{default_stem}_{timestamp()}{ext}")
+        # 기본 이름은 차트·시트·문서 이름에서 오므로 / ? : 같은 글자가 섞일 수 있음 -> 여기 한 곳에서 정리
+        auto = os.path.join(get_work_dir(), f"{safe_filename(default_stem, default='output')}_{timestamp()}{ext}")
         if os.path.exists(auto) and not overwrite:
             # 같은 초에 같은 이름으로 저장하면 앞 결과를 덮어쓰던 문제: 번호를 붙인 새 이름으로
             alt = _timestamped(auto)
