@@ -115,3 +115,27 @@ def test_ambiguous_focus_names_name_option(monkeypatch, capsys):
     monkeypatch.setattr(off, "list_open", lambda kind: TWO_SAME)
     code, out = _run(office, capsys, "focus", "--app", "word", "--name", "a.docx")
     assert code == 1 and "--name에 전체 경로" in out["message"], out
+
+
+# 1.4.22 (13차 점검): '시트!이름'을 --sheet와 함께 줘도, 차트 이름에 '!'가 있어도 찾음 ----------------------------------
+
+def test_candidate_with_sheet_option_resolves(xl, capsys):
+    app, wb = xl
+    _fill(wb)
+    _run(excel, capsys, "chart", "--sheet", "Sheet1", "--range", "A1:B3", "--title", "매출", "--name", "Chart 1")
+    _run(excel, capsys, "chart", "--sheet", "Sheet1", "--range", "A1:B3", "--title", "매출", "--name", "Chart 2")
+    code, out = _run(excel, capsys, "chart", "--action", "delete", "--sheet", "Sheet1", "--name", "매출")
+    assert code == 1 and "Sheet1!Chart 1" in out["message"], out
+    code, out = _run(excel, capsys, "chart", "--action", "delete", "--sheet", "Sheet1", "--name", "Sheet1!Chart 1")
+    assert code == 0 and _names(wb)["Sheet1"] == ["Chart 2"], out
+
+
+def test_bang_in_chart_name_round_trips(xl, capsys):
+    app, wb = xl
+    _fill(wb)
+    _run(excel, capsys, "chart", "--sheet", "Sheet1", "--range", "A1:B3", "--title", "매출 증가!")
+    _run(excel, capsys, "chart", "--sheet", "요약", "--range", "A1:B3", "--title", "매출 증가!")
+    ws, obj = excel.find_chart(_T(wb), "요약!매출 증가!", None)
+    assert ws.Name == "요약" and obj.Name == "매출 증가!"
+    ws, obj = excel.find_chart(_T(wb), "Sheet1!매출 증가!", "Sheet1")
+    assert ws.Name == "Sheet1"

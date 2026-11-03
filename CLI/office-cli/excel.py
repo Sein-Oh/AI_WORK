@@ -1519,12 +1519,19 @@ def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = 
     이름이 같은 차트를 제목이 같은 차트보다 우선하고, 그래도 둘 이상이면 하나를 고르지 않고 [후보](시트!이름) 오류를 냅니다
     (다른 시트의 같은 이름/제목 차트를 첫 번째 것으로 골라 엉뚱한 차트를 옮기거나 지우지 않게)."""
     wb = t.doc
-    if name is not None and not sheet and "!" in str(name):
-        left, right = str(name).rsplit("!", 1)
-        left = left.strip().strip("'")
+    if name is not None and "!" in str(name):
+        # '시트!이름': 왼쪽부터 '!' 자리마다 나눠 보고, 앞부분이 있는 시트 이름이고 뒷부분이 비어 있지 않은 첫 경우를 씀
+        # (차트 이름에 '!'가 들어 있어도 됨). --sheet가 같이 있으면 앞부분이 그 시트와 같을 때만
         names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]
-        if right.strip() and any(n.lower() == left.lower() for n in names):
-            sheet, name = left, right.strip()
+        text = str(name)
+        for pos in [i for i, ch in enumerate(text) if ch == "!"]:
+            left, right = text[:pos].strip().strip("'"), text[pos + 1:].strip()
+            if not right or not any(n.lower() == left.lower() for n in names):
+                continue
+            if sheet and str(sheet).strip().strip("'").lower() != left.lower():
+                continue
+            sheet, name = left, right
+            break
     sheets = [t.sheet(sheet)] if sheet else [wb.Worksheets(i) for i in range(1, wb.Worksheets.Count + 1)]
     all_names: List[str] = []
     by_name: List[Tuple[Any, Any]] = []
