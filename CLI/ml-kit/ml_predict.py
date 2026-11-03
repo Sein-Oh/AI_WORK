@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.22"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.23"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -401,6 +401,14 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
 _NA_PLACEHOLDERS = ["-", "N/A", "n/a", "NA", "null", "NULL", "미측정", "None", "nan", "NaN", ""]
 
 
+_GROUPED_NUMBER_RE = re.compile(r"[+-]?\d{1,3}(,\d{3})+(\.\d+)?")
+
+
+def _strip_thousands(text: str) -> str:
+    """'1,500' -> '1500'. 천 단위 묶음이 아닌 쉼표('175,6', '1,2')는 그대로 둡니다."""
+    return text.replace(",", "") if "," in text and _GROUPED_NUMBER_RE.fullmatch(text) else text
+
+
 def coerce_numeric(series: pd.Series) -> pd.Series:
     """
     Converts a column to float regardless of its storage dtype (object in pandas 2,
@@ -410,7 +418,9 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
         return series
     s = series.astype("object").where(series.notna(), None)
-    s = s.map(lambda v: v.replace(",", "").strip() if isinstance(v, str) else v)
+    # 천 단위 쉼표만 지움 ('1,500', '1,234,567.5'). '175,6'처럼 쉼표 뒤가 3자리가 아니면 천 단위가 아니므로
+    # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (예전에는 1756으로 조용히 바뀜)
+    s = s.map(lambda v: _strip_thousands(v.strip()) if isinstance(v, str) else v)
     s = s.replace(_NA_PLACEHOLDERS, np.nan)
     return pd.to_numeric(s, errors="coerce").astype(float)
 
@@ -846,7 +856,8 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
         n_filled = len(cells) - len(cand) + sum(
             1 for i, t in keys.items() if t or not (isinstance(cells[i], str) or pd.isna(cells[i])))
         n_stat = sum(1 for t in keys.values() if t in TOTAL_WORDS or t in AGGREGATE_WORDS)
-        if n_stat >= 2 and n_filled * 2 >= len(cells) and (
+        if n_stat >= 2 and n_filled * 2 >= len(cells) and any(
+                t in AGGREGATE_WORDS or t in AVERAGE_WORDS for t in keys.values()) and (
                 n_stat * 2 >= n_filled or sum(1 for t in keys.values() if t in bound) >= n_filled):
             hits = []                 # a statistic label column: its totals words name how a row was measured
         if avg:
