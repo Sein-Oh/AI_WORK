@@ -77,24 +77,30 @@ def resolve_folder(ns: Any, spec: Optional[str]) -> Any:
     stores = {str(f.Name): f for f in ns.Folders}
     found_store = rt.find_name(parts[0], stores)
     alias = re.sub(r"\s+", "", parts[0]).lower()
+    aliases = {re.sub(r"\s+", "", k).lower(): k for k in DEFAULT_FOLDERS}
+    from_alias = not found_store and alias in aliases
     if found_store:
         cur = stores[found_store]
         parts = parts[1:]
-    elif alias in {re.sub(r"\s+", "", k).lower(): k for k in DEFAULT_FOLDERS}:
+    elif from_alias:
         # 'inbox\프로젝트', '받은편지함\프로젝트': 첫 부분이 기본 폴더 별칭이면 그 폴더에서 시작
-        key = {re.sub(r"\s+", "", k).lower(): k for k in DEFAULT_FOLDERS}[alias]
-        cur = ns.GetDefaultFolder(DEFAULT_FOLDERS[key])
+        cur = ns.GetDefaultFolder(DEFAULT_FOLDERS[aliases[alias]])
         parts = parts[1:]
     else:
         cur = ns.GetDefaultFolder(6).Parent          # 기본 계정의 최상위
     walked: List[str] = [str(cur.Name)]
+    # 최상위(메일 계정 이름, 보통 메일 주소)는 오류 로그에 남기지 않음 (기본 폴더에서 시작했으면 계정 이름이 아님)
+    log_root = walked[0] if from_alias else "<메일 계정>"
     for part in parts:
         subs = {str(f.Name): f for f in cur.Folders}
         name = rt.find_name(part, subs)
         if name is None:
-            # 후보도 전체 경로로 (일부만 주면 LLM이 상위 폴더 전체를 검색함)
-            raise rt.not_found("메일 폴더", "\\".join(walked + [part]), ["\\".join(walked + [n]) for n in subs],
-                               extra=f" (경로: {s})")
+            # 비교는 끝 이름끼리 (전체 경로끼리 비교하면 같은 상위 경로 때문에 관계없는 폴더가 모두 [후보]가 됨).
+            # 후보는 전체 경로로 보여 줌 (일부만 주면 LLM이 상위 폴더 전체를 검색함)
+            prefix = "\\".join(walked)
+            raise rt.not_found("메일 폴더", part, list(subs), extra=f" (경로: {s})",
+                               display=lambda n: prefix + "\\" + n,
+                               log_name="\\".join([log_root] + walked[1:] + [part]))
         cur = subs[name]
         walked.append(name)
     return cur

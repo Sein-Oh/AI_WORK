@@ -620,9 +620,9 @@ def _resolve_slide(prs: Any, value: Optional[str], default_new: bool) -> Tuple[O
     try:
         n = int(value)
     except ValueError:
-        raise rt.InputError(f"--slide는 번호 또는 new여야 합니다: {value}")
+        raise rt.InputError(f"--slide는 번호 또는 new여야 합니다: {value}", no_fallback=True)
     if not 1 <= n <= count:
-        raise rt.InputError(f"슬라이드 {n}번이 없습니다 (전체 {count}장). 새 슬라이드는 --slide new")
+        raise rt.InputError(f"슬라이드 {n}번이 없습니다 (전체 {count}장). 새 슬라이드는 --slide new", no_fallback=True)
     return n, False
 
 

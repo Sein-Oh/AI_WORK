@@ -747,6 +747,53 @@ def _file_stamp(path: str) -> Optional[Tuple[float, int]]:
         return None
 
 
+def resolve_target(kind: str, target: str = "active", readonly: bool = True, create: bool = False,
+                   option: str = "--target") -> Dict[str, Any]:
+    """대상 문서를 바꾸지 않고 찾습니다 (open_target의 찾기 단계, 앱을 띄우거나 파일을 열지 않음).
+    {"source": "active"|"open", "app", "doc"} 또는 {"source": "file", "path", "exists"}.
+    대상을 찾지 못한 오류(오타 [추천], [후보], 확장자 등)는 no_fallback: 방식을 바꿔도 같은 대상이라 transfer가 다음 방식으로
+    넘어가지 않고 원래 오류 그대로 멈춥니다 (클립보드를 쓰는 relay 등이 대상 오타로 실행되지 않게)."""
+    target = (target or "active").strip()
+    try:
+        if target.lower() == "active":
+            try:
+                info = get_active(kind)
+            except rt.UserDecisionError:
+                if option == "--target":
+                    raise
+                raise no_open_doc(kind, option) from None        # 이 명령에 없는 --target을 안내하지 않음
+            return {"source": "active", "app": info["app"], "doc": info["doc"]}
+        docs = list_open(kind)
+        hit = match_open(kind, target, docs, option)
+        if hit is not None:
+            return {"source": "open", "app": hit["app"], "doc": hit["doc"]}
+        # 전체 경로인지는 %USERPROFILE%·~ 를 푼 뒤에 판단 (%USERPROFILE%\Desktop\새.xlsx도 전체 경로)
+        expanded = os.path.expanduser(os.path.expandvars(target.strip('"')))
+        is_abs = os.path.isabs(expanded)
+        path = os.path.abspath(expanded)
+        exists = os.path.isfile(path)
+        if not exists and not is_abs and os.path.isfile(os.path.join(rt.get_data_dir(), target)):
+            path, exists = os.path.join(rt.get_data_dir(), target), True
+        if not exists and (readonly or not create or not is_abs):
+            # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
+            names = [d["name"] for d in docs]
+            tail = "" if readonly or not create else f" 새 파일은 사용자에게 전체 경로를 물어 {option}으로 줄 때만 만듭니다."
+            err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
+                               extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
+            # 파일 이름만 준 경우에만 열린 문서를 [후보]로 (전체 경로가 없는 것은 열린 문서 이름의 오타가 아님)
+            if names and not is_abs and not err.candidates and "[추천]" not in str(err):
+                err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
+                                   f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names)
+            raise err
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in EXTENSIONS[kind]:
+            raise rt.InputError(f"{APP_LABEL[kind]} 파일 확장자가 아닙니다: {ext} (지원: {', '.join(EXTENSIONS[kind])})")
+        return {"source": "file", "path": path, "exists": exists}
+    except rt.InputError as e:
+        e.no_fallback = True
+        raise
+
+
 @contextmanager
 def open_target(kind: str, target: str = "active", readonly: bool = True, snapshot: Optional[bool] = None,
                 focus: bool = True, create: bool = False, tool: str = "", command: str = "",
@@ -771,59 +818,29 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
     restore_alerts = None
     t: Optional[OfficeTarget] = None
     try:
-        if target.lower() == "active":
-            try:
-                info = get_active(kind)
-            except rt.UserDecisionError:
-                if option == "--target":
-                    raise
-                raise no_open_doc(kind, option) from None        # 이 명령에 없는 --target을 안내하지 않음
-            t = OfficeTarget(kind, info["app"], info["doc"], "active", readonly)
+        found = resolve_target(kind, target, readonly, create, option)
+        if found["source"] in ("active", "open"):
+            t = OfficeTarget(kind, found["app"], found["doc"], found["source"], readonly)
         else:
-            docs = list_open(kind)
-            hit = match_open(kind, target, docs, option)
-            if hit is not None:
-                t = OfficeTarget(kind, hit["app"], hit["doc"], "open", readonly)
-            else:
-                # 전체 경로인지는 %USERPROFILE%·~ 를 푼 뒤에 판단 (%USERPROFILE%\Desktop\새.xlsx도 전체 경로)
-                expanded = os.path.expanduser(os.path.expandvars(target.strip('"')))
-                is_abs = os.path.isabs(expanded)
-                path = os.path.abspath(expanded)
-                exists = os.path.isfile(path)
-                if not exists and not is_abs and os.path.isfile(os.path.join(rt.get_data_dir(), target)):
-                    path, exists = os.path.join(rt.get_data_dir(), target), True
-                if not exists and (readonly or not create or not is_abs):
-                    # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
-                    names = [d["name"] for d in docs]
-                    tail = "" if readonly or not create else f" 새 파일은 사용자에게 전체 경로를 물어 {option}으로 줄 때만 만듭니다."
-                    err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
-                                       extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
-                    # 파일 이름만 준 경우에만 열린 문서를 [후보]로 (전체 경로가 없는 것은 열린 문서 이름의 오타가 아님)
-                    if names and not is_abs and not err.candidates and "[추천]" not in str(err):
-                        err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
-                                           f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names)
-                    raise err
-                ext = os.path.splitext(path)[1].lower()
-                if ext not in EXTENSIONS[kind]:
-                    raise rt.InputError(f"{APP_LABEL[kind]} 파일 확장자가 아닙니다: {ext} (지원: {', '.join(EXTENSIONS[kind])})")
-                ppt_was_running = _ppt_running() if kind == "ppt" else False
-                app = _new_instance(kind)
-                owns_app = kind != "ppt" or not ppt_was_running
-                if kind == "ppt":
-                    try:
-                        restore_alerts = app.DisplayAlerts
-                        app.DisplayAlerts = 1  # ppAlertsNone
-                    except Exception:
-                        restore_alerts = None
-                rt.log("PROGRESS", f"{APP_LABEL[kind]} 파일 {'여는' if exists else '만드는'} 중 (백그라운드): {os.path.basename(path)}")
-                doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
-                owns_doc = True
-                t = OfficeTarget(kind, app, doc, "file" if exists else "new", readonly)
-                if exists and not readonly and _opened_readonly(doc):
-                    # 다른 사람·프로그램이 열고 있어 읽기 전용으로 열림: 고친 내용을 저장할 수 없으므로 쓰기 전에 멈춤
-                    raise rt.InputError(f"'{os.path.basename(path)}'을(를) 다른 사용자나 프로그램이 열고 있어 읽기 전용으로만 열립니다. "
-                                        "아무것도 바꾸지 않았습니다. 그 파일을 닫은 뒤 다시 실행하거나, 이 PC의 Office에서 열어 둔 뒤 요청하세요.",
-                                        no_fallback=True)
+            path, exists = found["path"], found["exists"]
+            ppt_was_running = _ppt_running() if kind == "ppt" else False
+            app = _new_instance(kind)
+            owns_app = kind != "ppt" or not ppt_was_running
+            if kind == "ppt":
+                try:
+                    restore_alerts = app.DisplayAlerts
+                    app.DisplayAlerts = 1  # ppAlertsNone
+                except Exception:
+                    restore_alerts = None
+            rt.log("PROGRESS", f"{APP_LABEL[kind]} 파일 {'여는' if exists else '만드는'} 중 (백그라운드): {os.path.basename(path)}")
+            doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
+            owns_doc = True
+            t = OfficeTarget(kind, app, doc, "file" if exists else "new", readonly)
+            if exists and not readonly and _opened_readonly(doc):
+                # 다른 사람·프로그램이 열고 있어 읽기 전용으로 열림: 고친 내용을 저장할 수 없으므로 쓰기 전에 멈춤
+                raise rt.InputError(f"'{os.path.basename(path)}'을(를) 다른 사용자나 프로그램이 열고 있어 읽기 전용으로만 열립니다. "
+                                    "아무것도 바꾸지 않았습니다. 그 파일을 닫은 뒤 다시 실행하거나, 이 PC의 Office에서 열어 둔 뒤 요청하세요.",
+                                    no_fallback=True)
 
         point: Optional[str] = None       # 이 실행이 만든 되돌리기 지점(.json)
         was_saved = is_saved(t.doc)

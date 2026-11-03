@@ -201,6 +201,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 
 ### outlook.py
 - 조회: `list [--folder --unread --limit]`, `search --query [--from --where all|subject|body]`, `read --id [--save-attach --save]`, `current`, `folders`
+- `--folder`의 폴더를 찾지 못하면 그 단계의 하위 폴더 이름(끝 이름)끼리 비교해 `[추천]`(표기만 다름)이나 `[후보]`를 주고, 보여 줄 때만
+  전체 경로(`계정\폴더\하위`)로 바꿉니다. 1.4.28까지는 전체 경로끼리 비교해 같은 계정 이름 때문에 관계없는 폴더가 모두 `[후보]`였습니다.
+  오류 로그에는 계정 이름(보통 메일 주소) 대신 `<메일 계정>`을 남깁니다(1.4.29).
 - `--limit`은 1~200(기본 10). 200을 넘으면 200통으로 줄이고 `warnings`로 알립니다. 0 이하는 STOP_RETRY(1.4.23).
 - `list`, `search`의 `count`는 `--limit` 안에서 가져온 메일 수입니다. 0통이면 `count: 0`과 `VERIFIED: 0건.` 안내(조건을 바꿔 다시 실행하지 않음, 1.4.27).
 - `search`: 검색어의 `%`, `_`는 글자 그대로 찾습니다. DASL `LIKE`에서는 와일드카드라 더 넓게 찾으므로, 그런 검색어는 제목·본문·보낸사람을
@@ -252,7 +255,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   띄어쓰기, 줄바꿈, 기호(`# - . : / ( )` 등)는 무시하고 비교합니다: `SOI 1` = `SOI #1` = `SOI-1`, `설계기준` = `설계 기준`, PDF 줄바꿈으로 갈라진 글.
   숫자 경계는 지킵니다: `SOI 1`은 `SOI #10`, `SOI 21`과 맞지 않고, `1.2`는 `11.2`, `3.1.2`와 맞지 않습니다.
   기호를 빼면 숫자만 남는 검색어(`#4`, `1.2`)는 기호까지 그대로 찾습니다. 더 복잡한 패턴은 `--regex`(예: `"SOI\s*#?\d"`). `--regex`의 빈 일치는 일치로 보지 않습니다.
-- `--file 파일`: 캐시가 없거나 낡았으면(수정 시각/크기/파서 버전) 먼저 읽어 등록하고, 최신이면 캐시를 씁니다. `--file 폴더`: 폴더(기본 3단계 하위)의 미등록/변경 문서를 `--max-files`까지 등록한 뒤 그 폴더 문서만 검색합니다.
+- `--file 파일`: 캐시가 없거나 낡았으면(수정 시각/크기/파서 버전) 먼저 읽어 등록하고, 최신이면 캐시를 씁니다. 그 파일을 읽지 못하면 `read`와 같은
+  오류입니다(입력 문제는 `STOP_RETRY:`, 파서 내부 오류는 `ERROR:`와 traceback, `index --file`도 같음, 1.4.29). 폴더의 실패한 파일은 `skipped`의
+  `reason`(내부 오류는 `KeyError: ...`처럼 예외 종류와 함께). `--file 폴더`: 폴더(기본 3단계 하위)의 미등록/변경 문서를 `--max-files`까지 등록한 뒤 그 폴더 문서만 검색합니다.
   결과에 `indexed_now`(새로 등록한 파일 이름, 20개까지), `indexed_now_count`, `from_cache`, 남은 파일이 있으면 `not_indexed_remaining`과 `index --folder` 명령.
 - 거르기: `--pages 3-7`(쪽 정보가 없는 단위는 빼고 `page_unknown_skipped`로 개수 보고), `--section "SCOPE"`(장절 경로 일부, 대소문자 무시).
 - 결과 항목: `file`, `path`, `page`, `page_source`, `section`(목록), `section_text`(` > `로 이음), `number`, `loc`, `heading`, `evidence`, `snippet`, `--full`이면 `text`.
@@ -338,7 +343,13 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 차트 그림은 다음 순서로 자동 시도하고, 결과 JSON의 `method`에 실제로 쓴 방식을 적습니다.
 1. `export`: Excel의 `Chart.Export` PNG를 씁니다. **파일 앞부분이 PNG가 아니면(DRM 암호화) 건너뜁니다.**
 2. `redraw`: 차트의 계열 값을 COM으로 읽고 matplotlib으로 다시 그립니다. Python이 쓴 파일을 쓰고 클립보드는 쓰지 않습니다. 원본 서식은 근사치입니다.
-3. `relay`: 엑셀 -> 워드 -> PPT 클립보드 경유입니다.
+   제목·계열 이름·항목 이름의 `$`는 글자 그대로 그립니다(수식으로 읽지 않음, 1.4.29).
+3. `relay`: 엑셀 -> 워드 -> PPT 클립보드 경유입니다. 받는 문서와 앵커를 찾은 뒤에 클립보드를 씁니다(1.4.29).
+
+방식을 바꿔도 같은 문제(받는 문서를 찾지 못함: 오타 `[추천]`, `[후보]`, 확장자, 읽기 전용 / 앵커 / 슬라이드 번호)는 다음 방식으로 넘어가지 않고
+그 오류 그대로 멈춥니다. `[추천]`은 message 끝에 있고 `--probe` 안내를 붙이지 않습니다(1.4.29, 이전에는 다음 방식까지 시도해
+relay가 사용자의 클립보드를 덮어쓰고 `[추천]`이 `; relay: ...` 앞에 묻혔음). 모든 방식이 실패한 오류의 오류 로그에는 내부 오류의 글 대신
+`<방식>: <예외 종류>`만 남깁니다.
 
 회사 PC에서 처음 한 번 `python office.py transfer --probe`를 실행하면, 세 방식을 실제로 시험해 대상 앱별로 되는 순서를 `config.json`에 저장합니다.
 
@@ -392,6 +403,7 @@ python word.py write --file "<결과의 output_file>"
 ```bat
 python -m pytest -q CLI-dev/office-cli          :: 오프라인 (가짜 COM + 실제 샘플 파일)
 python CLI-dev/office-cli/tools/run_win_tests.py  :: Windows + Office 실기 (자세한 내용: TEST_CHECKLIST.md)
+:: 러너는 인자를 먼저 해석한 뒤 pywin32를 확인합니다: --agent -h는 JSON exit 0, 인자 오류는 exit 2, pywin32가 없으면 exit 1 (1.4.29)
 ```
 - 실기 테스트는 테스트 폴더에 `report_*.txt`(요약)와 `errors_*.txt`(분석용 상세 로그)를 남깁니다. 문제가 있으면 `errors_*.txt`를 그대로 Claude에게 전달하세요.
   `errors_*.txt`에는 러너의 자동 복구(닫힌 A 문서 다시 열기), 창/프로세스 정리 기록(어떤 PID에 Quit/WM_CLOSE를 보냈고 무엇을 보호했는지), 도구 오류 로그가 함께 들어 있습니다.

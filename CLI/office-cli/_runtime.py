@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.28"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.29"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -1001,12 +1001,17 @@ def _same_name_key(s: Any) -> str:
     return re.sub(r"[\s_\-]+", "", str(s)).casefold()
 
 
-def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False) -> InputError:
+def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False,
+              display: Optional[Callable[[str], str]] = None, log_name: Optional[str] = None) -> InputError:
     """'찾을 수 없음' InputError (R8).
     - 표기만 다른(대소문자·공백·_-) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
     - 부분·유사 일치는 뜻이 다를 수 있어(2024 -> 2024_1분기, 견적서.pdf -> 견적서_구버전.pdf) [후보]: 사용자가 고릅니다.
     - vocab=True(도구가 정한 옵션 값: 색 이름, 테마 등): 오타로 보이는 가까운 값 하나도 [추천] (사용자 데이터가 아니라 뜻이 바뀌지 않음).
-    - 비슷한 것도 없으면 사용 가능한 이름 일부."""
+    - 비슷한 것도 없으면 사용 가능한 이름 일부.
+    display: 비교는 name·candidates(끝 이름)로 하고 message에 보일 때만 바꾸는 함수 (예: 메일 폴더 끝 이름 -> 전체 경로.
+    전체 경로로 비교하면 같은 상위 경로 때문에 관계없는 폴더가 모두 비슷하게 나옴).
+    log_name: 오류 로그 message에 name 대신 쓸 글 (예: 메일 계정 이름을 뺀 경로)."""
+    show = display or (lambda c: c)
     cands = [str(c) for c in candidates]
     key = _same_name_key(name)
     same = [c for c in cands if key and _same_name_key(c) == key]
@@ -1014,18 +1019,20 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
         close = difflib.get_close_matches(key, [_same_name_key(c) for c in cands], n=2, cutoff=0.75)
         if len(close) == 1:
             same = [c for c in cands if _same_name_key(c) == close[0]][:1]
-    head = f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra}"
+    head = f"{kind} '{show(name)}'을(를) 찾을 수 없습니다.{extra}"
+    log_head = head if log_name is None else f"{kind} '{log_name}'을(를) 찾을 수 없습니다.{extra}"
     # 오류 로그에는 후보 이름(시트·문서·제목·메일 폴더·파일 이름 목록)을 남기지 않음 (log_message)
     if len(same) == 1:
-        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {same[0]}",
-                          log_message=f"{head} 표기만 다른 이름이 있습니다. [추천 생략]")
+        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {show(same[0])}",
+                          log_message=f"{log_head} 표기만 다른 이름이 있습니다. [추천 생략]")
     hints = same or suggest(name, cands)
     if hints:
-        return ambiguous(f"{head} 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요.", hints)
+        tail = " 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요."
+        return ambiguous(head + tail, [show(c) for c in hints], log_message=log_head + tail)
     if cands:
-        shown = ", ".join(cands[:15]) + (" ..." if len(cands) > 15 else "")
-        return InputError(f"{head} 사용 가능한 {kind}: {shown}", log_message=f"{head} [사용 가능한 이름 {len(cands)}개 생략]")
-    return InputError(head)
+        shown = ", ".join(show(c) for c in cands[:15]) + (" ..." if len(cands) > 15 else "")
+        return InputError(f"{head} 사용 가능한 {kind}: {shown}", log_message=f"{log_head} [사용 가능한 이름 {len(cands)}개 생략]")
+    return InputError(head, log_message=None if log_name is None else log_head)
 
 
 def clamp_cell(value: Any, max_chars: int = MAX_CELL_CHARS) -> Tuple[Any, bool]:

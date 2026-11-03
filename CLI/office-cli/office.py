@@ -176,8 +176,15 @@ def render_chart(data: Dict[str, Any], path: str) -> str:
         raise RuntimeError("matplotlib이 없어 차트를 다시 그릴 수 없습니다")
     import logging
     logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
-    plt.rcParams["font.family"] = ["Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"]
-    plt.rcParams["axes.unicode_minus"] = False
+    # 제목·축·계열 이름의 $...$를 수식(mathtext)으로 읽지 않음: '$5 ~ $10'이 깨져 그려지거나 ValueError가 나던 문제.
+    # 눈금·범례 글은 저장할 때 만들어지므로 savefig까지 같은 설정 안에서 그림
+    style = {"font.family": ["Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"],
+             "axes.unicode_minus": False, "text.parse_math": False}
+    with plt.rc_context(style):
+        return _render_chart(plt, data, path)
+
+
+def _render_chart(plt: Any, data: Dict[str, Any], path: str) -> str:
     fig, ax = plt.subplots(figsize=(max(data["width"], 200) / 72, max(data["height"], 120) / 72), dpi=150)
     kind = data["type"]
     series = data["series"]
@@ -295,14 +302,22 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
     """클립보드 경유: 엑셀 차트 -> 워드(대상 또는 임시 문서) -> PPT."""
     import word
     done: Dict[str, Dict[str, Any]] = {}
-    chart_obj.CopyPicture(1, -4147)                      # xlScreen, xlPicture(메타파일)
-    time.sleep(0.3)
+    # 받는 문서를 클립보드를 쓰기 전에 찾음: 대상 오타([추천]/[후보])로 사용자의 클립보드를 덮어쓰지 않음 (no_fallback 오류)
+    for kind, target in (("word", to_word), ("ppt", to_ppt)):
+        if target:
+            off.resolve_target(kind, target, readonly=False, create=True, option="--to-target")
+
+    def copy_chart() -> None:
+        chart_obj.CopyPicture(1, -4147)                  # xlScreen, xlPicture(메타파일)
+        time.sleep(0.3)
+
     temp_app = temp_doc = None
     try:
         if to_word:
             with off.open_target("word", to_word, readonly=False, create=True, tool=TOOL, command="transfer",
                                  option="--to-target") as t:
                 start, _ = word._insert_position(t.doc, anchor, "after" if anchor else "end", occurrence)
+                copy_chart()                              # 앵커 문제는 클립보드를 쓰기 전에 오류
                 rng = t.doc.Range(start, start)
                 rng.InsertAfter("\r")
                 rng = t.doc.Range(start, start)
@@ -315,6 +330,7 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
                 t.set_focus()
                 done["word"] = t.resolved()
         elif to_ppt:
+            copy_chart()
             temp_app = off.win32com.client.DispatchEx("Word.Application")
             temp_app.Visible = False
             temp_doc = temp_app.Documents.Add(Visible=False)
@@ -520,6 +536,8 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
                 except Exception as e:
                     msg = rt.error_payload(e)["message"]
                     lm = getattr(e, "log_message", None)
+                    if lm is None and not isinstance(e, rt.InputError):
+                        lm = type(e).__name__             # 내부 오류 글(차트 제목 등 문서 글이 들어갈 수 있음)은 로그에 남기지 않음
                     errors_log.setdefault(kind, []).append(f"{method}: {msg if lm is None else lm}")   # 오류 로그용 (문서 글 뺀 글)
                     if isinstance(e, rt.InputError) and e.no_fallback:
                         # 앵커/대상 문제는 다른 방식으로 바꿔도 같음. 아직 아무 앱에도 넣지 않았으면 오류로 멈추고,

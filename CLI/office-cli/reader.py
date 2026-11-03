@@ -1668,7 +1668,8 @@ def _folder_arg(raw: str) -> str:
 
 def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
     """파일들을 캐시에 등록합니다. 새로 파싱하는 파일 수만 max_files로 제한합니다 (이미 최신인 파일은 세지 않음).
-    반환: docs(불러온 문서), new/updated/cached(파일 이름 목록), failures, remaining."""
+    반환: docs(불러온 문서), new/updated/cached(파일 이름 목록), failures, remaining.
+    failures 항목: file, reason, error(원래 예외. 파일 하나만 줬을 때 _raise_single_failure가 그대로 다시 냄, JSON에는 넣지 않음)."""
     out: Dict[str, Any] = {"docs": [], "new": [], "updated": [], "cached": [], "failures": [], "remaining": 0}
     parsed = 0
     index = load_index()
@@ -1677,7 +1678,7 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
         try:
             st = os.stat(path)
         except OSError as e:
-            out["failures"].append({"file": path, "reason": str(e)})
+            out["failures"].append({"file": path, "reason": rt.error_payload(e)["message"][:300], "error": e})
             continue
         key = os.path.normcase(os.path.abspath(path))
         entry = next((e for k, e in index.items() if os.path.normcase(k) == key), None)
@@ -1691,7 +1692,8 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
                 rt.log("PROGRESS", f"[{i}/{total}] 등록 중: {os.path.basename(path)}")
             doc, status = load_document_status(path, check_index=not fresh)
         except Exception as e:
-            out["failures"].append({"file": path, "reason": str(e)[:300]})
+            # 내부 오류는 'KeyError: ...'처럼 종류와 함께 (str(e)만 쓰면 "'heading'"만 남음)
+            out["failures"].append({"file": path, "reason": rt.error_payload(e)["message"][:300], "error": e})
             parsed += 0 if fresh else 1
             continue
         if status != "cached":
@@ -1699,6 +1701,14 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
         out["docs"].append(doc)
         out[status].append(path)
     return out
+
+
+def _raise_single_failure(res: Dict[str, Any]) -> None:
+    """--file로 파일 하나만 줬는데 읽지 못했으면 원래 예외를 그대로 다시 냅니다 (read와 같은 결과).
+    이전에는 사유 글로 InputError를 새로 만들어 내부 오류(파서 버그)도 STOP_RETRY 입력 오류가 되고 traceback이 남지 않았으며,
+    InputError의 log_message(문서 글을 뺀 글)도 잃었음. 내부 오류는 ERROR와 traceback, InputError는 그대로."""
+    if res["failures"]:
+        raise res["failures"][0]["error"]
 
 
 # ==============================================================================
@@ -2085,6 +2095,8 @@ def cmd_index(args) -> Dict[str, Any]:
             files += orphan_docs
             rt.log("WARN", f"색인에 없는 캐시 문서 {len(orphan_docs)}개를 찾아 다시 등록합니다.")
     res = _index_files(files, max(1, args.max_files))
+    if args.file:
+        _raise_single_failure(res)
     readded = [d for d in res["docs"]
                if os.path.normcase(d["file"]) in {os.path.normcase(p) for p in orphan_docs}] if orphan_docs else []
     if readded:
@@ -2332,8 +2344,8 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             file_type(path)
             files = [path]
         res = _index_files(files, max(1, args.max_files))
-        if len(files) == 1 and not info["folder"] and res["failures"]:
-            raise rt.InputError(res["failures"][0]["reason"])
+        if len(files) == 1 and not info["folder"]:
+            _raise_single_failure(res)
         docs = res["docs"]
         info["indexed_now"] = res["new"] + res["updated"]
         info["from_cache"] = len(res["cached"])

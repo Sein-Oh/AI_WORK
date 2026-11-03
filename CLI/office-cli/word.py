@@ -938,7 +938,7 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
             end = doc.Content.End - 1
         return end, "문서 끝"
     if _find_len(anchor) > FIND_MAX:
-        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앵커 단락의 앞부분 일부만 쓰세요.")
+        raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앵커 단락의 앞부분 일부만 쓰세요.", no_fallback=True)
     para = _anchor_paragraph(doc, anchor, occurrence, pos)
     if _in_table(para):
         # 셀 단락의 End는 다음 셀의 시작이라 그대로 넣으면 옆 칸에 들어감: 표 바깥(표 뒤)에 넣습니다

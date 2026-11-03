@@ -87,10 +87,18 @@ class RunnerParser(argparse.ArgumentParser):
                          "agent_directive": "STOP_RETRY: 인자가 잘못되었습니다. 재시도하지 말고 message를 사용자에게 알리세요."}, 2)
 
 
+# pywin32가 없다는 오류는 인자를 해석한 뒤에 냄 (main): -h는 exit 0, 인자 오류는 exit 2 (docstring의 계약)
 try:
     import pythoncom
     import win32com.client
 except ImportError:
+    pythoncom = win32com = None
+
+
+def require_pywin32():
+    """pywin32가 없으면 오류로 끝냅니다 (에이전트 모드는 JSON 1줄, exit 1)."""
+    if pythoncom is not None:
+        return
     if AGENT:
         emit_agent_json({"status": "error", "error_type": "dependency", "message": "pywin32가 필요합니다.",
                          "agent_directive": "STOP_RETRY: pywin32가 설치되어 있지 않습니다. "
@@ -2298,6 +2306,7 @@ def main():
         selected = set(known)
     if args.skip_outlook:
         selected.discard("G")
+    require_pywin32()
 
     pythoncom.CoInitialize()
     global CTX

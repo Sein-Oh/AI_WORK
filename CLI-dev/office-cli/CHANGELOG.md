@@ -2,6 +2,37 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.29] - 2026-11-03
+
+20차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1429.py`.
+
+### 수정
+- `office.py transfer --chart`: 받는 문서 이름 오타(`[추천]`)에도 다음 방식(redraw, relay)을 시도해, relay가 사용자의 클립보드를 덮어쓰고
+  마지막 오류는 `[추천]`이 `; relay: ...` 앞에 묻힌 채 `--probe`를 안내하던 문제. 대상을 찾지 못한 오류는 다음 방식으로 넘어가지 않고
+  원래 오류 그대로 멈춥니다(`[추천]`이 message 끝).
+  - 구조: `_office.resolve_target`(open_target의 찾기 단계, 문서를 열지 않음)이 내는 오류(`[추천]`, `[후보]`, 사용 가능한 문서, 확장자,
+    열린 문서 없음)는 모두 `no_fallback`. `ppt._resolve_slide`의 슬라이드 번호 오류, `--anchor` 길이 오류도 `no_fallback`.
+  - `relay_chart`는 받는 문서를 먼저 찾고, 워드는 앵커 위치를 정한 뒤에 차트를 클립보드로 복사합니다.
+  - 다른 방식 전환 고리(`transfer --probe`, 범위 전달)는 방식마다 같은 대상을 다시 찾지 않거나 첫 오류에서 멈추므로 해당 없음.
+- 오류 로그 (transfer --chart): 모든 방식이 실패했을 때 `log_message`가 없는 내부 오류(RuntimeError, ValueError 등)의 글이 그대로 남던 문제.
+  `<방식>: <예외 종류>`만 남깁니다.
+- `outlook.py --folder`: 찾지 못한 폴더를 전체 경로끼리 비교해 같은 상위 경로(메일 계정) 때문에 관계없는 폴더가 모두 `[후보]`이던 문제.
+  끝 이름끼리 비교하고 보여 줄 때만 전체 경로로 바꿉니다(`not_found`의 `display`). 오류 로그에는 계정 이름(메일 주소) 대신 `<메일 계정>`
+  (`not_found`의 `log_name`).
+- 차트 다시 그리기(redraw): 제목·계열 이름·항목 이름의 `$...$`를 matplotlib 수식(mathtext)으로 읽어 깨진 그림을 `VERIFIED`로 넣거나
+  `ValueError`로 실패하던 문제. `text.parse_math`를 끈 설정 안에서 저장까지 그립니다(전역 설정은 그대로).
+- `reader search --file <파일 하나>`: 파서 내부 오류(`KeyError` 등)를 사유 글로 새 `InputError`를 만들어 `STOP_RETRY:` 입력 오류로 내고
+  traceback이 남지 않던 문제. 원래 예외를 그대로 다시 내어 내부 오류는 `ERROR:`와 traceback, `InputError`는 `log_message`를 지킵니다.
+  `index --file <파일 하나>`도 같습니다(이전에는 실패 1개로 `VERIFIED: 등록 완료`). 폴더의 실패 사유(`reason`)는 예외 종류와 함께
+  (`KeyError: 'heading'`, 이전에는 `'heading'`).
+
+### 개발 도구
+- `tools/run_win_tests.py`: pywin32 확인을 인자 해석보다 먼저 해 pywin32가 없으면 `--agent -h`도 exit 1, 인자 오류도 exit 1이던 문제.
+  인자를 먼저 해석합니다(`-h` exit 0, 인자 오류 exit 2, 그다음 pywin32가 없으면 exit 1).
+
+### 문서
+- README: transfer 차트 방식 전환이 멈추는 경우, outlook `--folder` 후보, reader `--file` 파일 하나의 오류, 러너 종료 코드.
+
 ## [1.4.28] - 2026-11-03
 
 19차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1428.py`.
