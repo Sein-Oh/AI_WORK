@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     read_text_file, load_json_file, resolve_column_names, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
-    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_warnings,
+    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
 )
 
@@ -1496,6 +1496,7 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
         )
     for col in feature_schema["numeric"]:
         df_clean[col] = X_all[col]
+    group_warnings = _decimal_comma_category_check(df_raw, feature_schema, feature_names, created_features, dtypes)
     # Columns the user must provide at prediction time: own raw features + sources of derived features (2.9.1)
     sources = eval_source_columns(applied_evals, [str(c) for c in df_raw.columns])
     raw_required = [f for f in feature_names if f not in created_features]
@@ -1506,7 +1507,62 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     return {"df": df_clean, "features": feature_names, "targets": target_names, "aliases": column_aliases,
             "raw_required": raw_required,
             "evals": applied_evals, "created": created_features, "schema": feature_schema, "X": X_all,
-            "dtypes": dtypes, "positive_class": group.get("positive_class")}
+            "dtypes": dtypes, "positive_class": group.get("positive_class"), "warnings": group_warnings}
+
+
+DECIMAL_COMMA_STOP_SHARE = 0.5     # a selected text feature with this share of '175,6' cells is refused
+
+
+def _decimal_comma_category_check(df_raw: pd.DataFrame, schema: Dict[str, Any], features: List[str],
+                                  created: List[str], dtypes: Optional[str]) -> List[str]:
+    """A categorical feature whose cells are numbers saved with a decimal comma ('175,6', '0,149' text) would train
+    as a high-cardinality category: refused (STOP_RETRY) when half of its filled cells or more are such texts,
+    a warning when the rest are numbers. Columns forced with --dtypes are the user's choice."""
+    forced = {p.split(":", 1)[0].strip() for p in str(dtypes or "").split(",") if ":" in p}
+    out: List[str] = []
+    for c in schema["categorical"]:
+        if c in created or c not in features or c in forced or c not in df_raw.columns:
+            continue
+        n, dc, num, ex = decimal_comma_text_share(df_raw[c])
+        if not dc:
+            continue
+        examples = ", ".join(repr(v) for v in ex)
+        if dc >= DECIMAL_COMMA_STOP_SHARE * n:
+            raise InputError(
+                f"피처 '{c}'의 채운 칸 {n}개 중 {dc}개({examples})가 소수점 쉼표로 쓴 숫자 글자라 숫자로 읽지 못해 "
+                f"종류(범주) 값으로 학습하게 됩니다. 엑셀에서 쉼표를 점(.)으로 바꾸거나(예: 175,6 -> 175.6) 숫자 칸으로 "
+                f"저장한 뒤 다시 실행하십시오. 숫자가 아닌 코드이면 --dtypes \"{c}:str\"를 붙이십시오.")
+        if dc + num >= 0.9 * n:
+            out.append(f"피처 '{c}'의 {dc}칸({examples})은 소수점 쉼표로 쓴 숫자 글자라 숫자로 읽지 못해 이 열을 "
+                       "종류(범주) 값으로 학습했습니다. 쉼표를 점(.)으로 고치면 숫자 피처로 학습합니다.")
+    return out
+
+
+UNPARSED_WARN_COLUMNS = 5          # columns named in the unparsed-number warning; the rest are counted
+
+
+def _numeric_input_columns(g: Dict[str, Any]) -> List[str]:
+    """Data columns the model reads as numbers: numeric raw features and --eval source columns (not the
+    categorical / datetime ones)."""
+    schema = g["schema"]
+    return [c for c in g["raw_required"] if c not in schema.get("categorical", {}) and c not in schema.get("datetime", {})]
+
+
+def _unparsed_number_warnings(bad: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Warnings of text cells in numeric inputs of the trained rows (median-imputed), one per column (rows of
+    every target together), the first UNPARSED_WARN_COLUMNS columns named and the rest counted."""
+    cols = [c for c, v in bad.items() if v["rows"]]
+    out = []
+    for c in cols[:UNPARSED_WARN_COLUMNS]:
+        ex = ", ".join(repr(v) for v in bad[c]["examples"][:3])
+        out.append(f"숫자 열 '{c}'의 {len(bad[c]['rows'])}칸({ex})은 숫자로 읽지 못해 빈 값으로 보고 중앙값으로 채웠습니다. "
+                   "값을 고치거나 그 행을 '제외' 열에 표시하세요.")
+    if len(cols) > UNPARSED_WARN_COLUMNS:
+        rest = cols[UNPARSED_WARN_COLUMNS:]
+        more = f" 외 {len(rest) - 10}개 열" if len(rest) > 10 else ""
+        out.append(f"숫자로 읽지 못해 중앙값으로 채운 칸이 있는 숫자 열이 {len(rest)}개 더 있습니다 "
+                   f"({', '.join(repr(c) for c in rest[:10])}{more}).")
+    return out
 
 
 def _merge_schemas(schemas: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1638,8 +1694,15 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader),
         # totals / average rows (kept: the '제외' column is the user's decision)
         train_warnings: List[str] = layout_warnings(df_raw, target_names)
+        for g in prepared:
+            train_warnings.extend(w for w in g["warnings"] if w not in train_warnings)
         for w in train_warnings:
             sys.stderr.write(f"[WARN] {w}\n")
+        # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the
+        # header (target empty), rows marked in '제외' or rows without a target
+        unparsed: Dict[str, Dict[str, Any]] = {}
+        unit_below = df_raw.attrs.get("unit_row_below")
+        unit_pos = [i for i, r in enumerate(source_rows) if r == unit_below] if unit_below else []
         benchmark_fn = train_and_benchmark_models if task == TASK_REGRESSION else train_and_benchmark_classifiers
 
         total_targets = len(target_names)
@@ -1659,6 +1722,14 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                                  f"(직접 표시 {int(plan['manual'].sum())}, 자동 이상치 {int(plan['auto'].sum())})\n")
             if plan["note"]:
                 sys.stderr.write(f"[WARN] 타겟 '{target_name}': {plan['note']}\n")
+            trained = np.array(y_full.notna(), dtype=bool) & ~np.asarray(plan["mask"], dtype=bool)
+            trained[unit_pos] = False
+            for c in _numeric_input_columns(g):
+                if c in df_raw.columns:
+                    pos, ex = unparsed_number_cells(df_raw[c], trained)
+                    entry = unparsed.setdefault(c, {"rows": set(), "examples": []})
+                    entry["rows"].update(pos)
+                    entry["examples"] += [v for v in ex if v not in entry["examples"]]
             t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
                 X=g["X"],
                 y_series=y_full.mask(plan["mask"]),
@@ -1931,8 +2002,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         for col, n_miss in X_all.isna().sum().items():
             raw_col = owner.get(col, col)
             feature_missing[raw_col] = max(feature_missing.get(raw_col, 0), int(n_miss))
-        train_warnings.extend(w for w in unparsed_number_warnings(df_raw, list(dict.fromkeys(owner.values())))
-                              if w not in train_warnings)
+        for w in _unparsed_number_warnings(unparsed):
+            train_warnings.append(w)
+            sys.stderr.write(f"[WARN] {w}\n")
         data_profile = {
             "source_file": os.path.basename(raw_file),
             "rows_loaded": int(len(df_raw)),

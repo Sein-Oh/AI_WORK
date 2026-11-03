@@ -26,6 +26,7 @@ import json
 import time
 import shutil
 import difflib
+import functools
 import argparse
 import warnings
 from datetime import datetime
@@ -47,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.24"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.25"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -409,26 +410,34 @@ def _strip_thousands(text: str) -> str:
     return text.replace(",", "") if "," in text and _GROUPED_NUMBER_RE.fullmatch(text) else text
 
 
-def unparsed_number_warnings(df: pd.DataFrame, columns: List[str], limit: int = 5) -> List[str]:
-    """숫자 열(채운 칸의 절반 이상이 숫자)에서 숫자로 읽지 못한 글자 칸: 학습은 중앙값으로 채우므로 알립니다."""
-    out: List[str] = []
-    for c in columns:
-        if c not in df.columns or pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_datetime64_any_dtype(df[c]):
-            continue
-        s = df[c]
-        text = s.astype("object").map(lambda v: v.strip() if isinstance(v, str) else v)
-        filled = text.notna() & ~text.isin(_NA_PLACEHOLDERS)
-        parsed = coerce_numeric(s)
-        if filled.sum() == 0 or parsed[filled].notna().mean() < 0.5:
-            continue
-        bad = filled & parsed.isna()
-        if bad.any():
-            ex = ", ".join(repr(str(v)) for v in list(dict.fromkeys(text[bad].astype(str)))[:3])
-            out.append(f"숫자 열 '{c}'의 {int(bad.sum())}칸({ex})은 숫자로 읽지 못해 빈 값으로 보고 중앙값으로 채웠습니다. "
-                       "값을 고치거나 그 행을 '제외' 열에 표시하세요.")
-        if len(out) >= limit:
-            break
-    return out
+_DECIMAL_COMMA_TEXT_RE = re.compile(r"[+-]?\d+,\d+")
+
+
+def unparsed_number_cells(series: pd.Series, rows: Optional[np.ndarray] = None) -> Tuple[List[int], List[str]]:
+    """Positions and first texts of the filled cells (of rows, a boolean mask; all rows if None) that a numeric
+    model input cannot read (coerce_numeric -> NaN): training fills them with the median."""
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return [], []
+    text = series.astype("object").map(lambda v: v.strip() if isinstance(v, str) else v)
+    bad = (text.notna() & ~text.isin(_NA_PLACEHOLDERS) & coerce_numeric(series).isna()).to_numpy(dtype=bool)
+    if rows is not None:
+        bad = bad & np.asarray(rows, dtype=bool)
+    pos = np.flatnonzero(bad).tolist()
+    return pos, list(dict.fromkeys(str(text.iloc[i]) for i in pos))[:3]
+
+
+def decimal_comma_text_share(series: pd.Series) -> Tuple[int, int, int, List[str]]:
+    """(filled cells, decimal-comma texts '175,6' / '0,149' not read as numbers, cells read as numbers, examples)
+    of a column: a column of such texts is numbers saved with a decimal comma, not a category."""
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return 0, 0, 0, []
+    text = series.astype("object").map(lambda v: v.strip() if isinstance(v, str) else v)
+    filled = (text.notna() & ~text.isin(_NA_PLACEHOLDERS)).to_numpy(dtype=bool)
+    num = coerce_numeric(series).notna().to_numpy(dtype=bool) & filled
+    dc = np.array([isinstance(v, str) and bool(_DECIMAL_COMMA_TEXT_RE.fullmatch(v)) for v in text], dtype=bool)
+    dc = dc & filled & ~num
+    ex = list(dict.fromkeys(str(text.iloc[i]) for i in np.flatnonzero(dc)[:20]))[:3]
+    return int(filled.sum()), int(dc.sum()), int(num.sum()), ex
 
 
 def coerce_numeric(series: pd.Series) -> pd.Series:
@@ -789,6 +798,32 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
 # average words can also be values of a category ('집계' = 평균/최대) and are judged per column (_summary_rows).
 TOTAL_WORDS = {"합계", "총계", "소계", "계", "총합", "total", "sum", "subtotal", "grandtotal"}
 AVERAGE_WORDS = {"평균", "average", "avg", "mean"}
+# Wording of the same rows in daily reports (2.9.25): '일계', '월계', '누계', '총 합계', '전체합계', '합계:', 'Total:',
+# '소계(A)', '주간계', '평균값', 'AVG.'. Short words ending with '계' are totals unless they are ordinary words
+# ('설계', '단계', '온도계', '하계' ...).
+_TOTAL_PERIOD_WORDS = {"일계", "월계", "주계", "연계", "년계", "누계"}
+_GYE_NOT_TOTAL = ("단계", "설계", "경계", "관계", "세계", "시계", "기계", "회계", "체계", "한계", "업계", "생계", "통계",
+                  "학계", "가계", "직계", "외계", "하계", "동계", "춘계", "추계", "도계", "력계", "량계", "압계", "류계",
+                  "공계", "위계", "중계", "각계", "조계", "어계", "수계", "면계", "전계")
+_SUMMARY_PAREN_RE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+_TOTAL_EN_RE = re.compile(r"(?<![a-z])(total|sum|subtotal|grandtotal)(?![a-z])")
+
+
+@functools.lru_cache(maxsize=8192)
+def _word_kind(text: str) -> str:
+    """'total', 'avg', 'agg' (AGGREGATE_WORDS) or '' for a text cell of a totals / average / statistic row.
+    Spaces, parenthesized parts and a trailing ':' / '.' are ignored ('총 합계', '소계(A)', 'Total:', 'AVG.')."""
+    low = _SUMMARY_PAREN_RE.sub(" ", text.lower())
+    key = "".join(low.split()).rstrip(":.：")
+    if not key:
+        return ""
+    if (key in TOTAL_WORDS or key in _TOTAL_PERIOD_WORDS or key.endswith("합계")
+            or (len(key) <= 4 and key.endswith("계") and not key.endswith(_GYE_NOT_TOTAL))
+            or (len(key) <= 15 and _TOTAL_EN_RE.search(low))):
+        return "total"
+    if key in AVERAGE_WORDS or (key.startswith("평균") and len(key) <= 6):
+        return "avg"
+    return "agg" if key in AGGREGATE_WORDS else ""
 
 
 def _repeated_header_rows(df_raw: pd.DataFrame, df_data: pd.DataFrame, header_idx: int, unit_row: Optional[int],
@@ -839,6 +874,10 @@ def _summary_key(v: Any) -> str:
     return "".join(v.split()).lower() if isinstance(v, str) else ""
 
 
+def _summary_kind(v: Any) -> str:
+    return _word_kind(v.strip()) if isinstance(v, str) else ""
+
+
 def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
     """[source row, column, text] of rows that look like totals / averages: a cell 합계/소계/Total ... (TOTAL_WORDS) or
     평균/Mean (AVERAGE_WORDS) and a number in the same row. Not dropped (a data value decision): layout_warnings names
@@ -861,7 +900,6 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
               if k_excl is not None else np.zeros(len(arr), dtype=bool))
     out: Dict[int, List[Any]] = {}
     nums: List[Any] = []      # number matrix of the other columns, read once when a value check is needed
-    bound = TOTAL_WORDS | AVERAGE_WORDS | AGGREGATE_WORDS
     for k, col in enumerate(columns):
         if k == k_excl or pd.api.types.is_numeric_dtype(kinds[k]) or pd.api.types.is_datetime64_any_dtype(kinds[k]):
             continue
@@ -870,27 +908,27 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
             cand = np.flatnonzero(pd.isna(pd.to_numeric(cells, errors="coerce")))
         except (TypeError, ValueError):
             cand = np.arange(len(cells))
-        keys = {int(i): _summary_key(cells[i]) for i in cand}
-        hits = [i for i, t in keys.items() if t in TOTAL_WORDS]
-        avg = [i for i, t in keys.items() if t in AVERAGE_WORDS]
+        kind = {int(i): _summary_kind(cells[i]) for i in cand}
+        hits = [i for i, t in kind.items() if t == "total"]
+        avg = [i for i, t in kind.items() if t == "avg"]
         if not hits and not avg:
             continue
         n_filled = len(cells) - len(cand) + sum(
-            1 for i, t in keys.items() if t or not (isinstance(cells[i], str) or pd.isna(cells[i])))
-        n_stat = sum(1 for t in keys.values() if t in TOTAL_WORDS or t in AGGREGATE_WORDS)
+            1 for i in kind if _summary_key(cells[i]) or not (isinstance(cells[i], str) or pd.isna(cells[i])))
+        n_stat = sum(1 for t in kind.values() if t in ("total", "agg"))
         # 통계 이름 열은 집계·평균 글자가 합계 글자만큼 있어야 함 (합계/평균/최대/최소 묶음, Sum/Avg 번갈아).
         # 병합된 일자 열의 일별 합계 + 맨 아래 최대/최소 한 묶음은 통계 이름 열이 아님
-        n_aggavg = sum(1 for t in keys.values() if t in AGGREGATE_WORDS or t in AVERAGE_WORDS)
+        n_aggavg = sum(1 for t in kind.values() if t in ("agg", "avg"))
         if n_stat >= 2 and n_filled * 2 >= len(cells) and n_aggavg * 2 >= len(hits) and n_aggavg > 0 and (
-                n_stat * 2 >= n_filled or sum(1 for t in keys.values() if t in bound) >= n_filled):
+                n_stat * 2 >= n_filled or sum(1 for t in kind.values() if t) >= n_filled):
             hits = []                 # a statistic label column: its totals words name how a row was measured
         if avg:
             n_avg = len(avg)
             share = n_avg * 2 > n_filled or (n_avg >= 3 and n_avg >= SUMMARY_SHARE * n_filled)
-            aggregate = any(t in AGGREGATE_WORDS for t in keys.values())
+            aggregate = any(t == "agg" for t in kind.values())
             if aggregate or (n_filled > n_avg and share) or (n_avg == len(cells) and n_avg >= 2):
                 is_bound = np.zeros(len(cells), dtype=bool)
-                is_bound[[i for i, t in keys.items() if t in bound]] = True
+                is_bound[[i for i, t in kind.items() if t]] = True
                 starts = _block_starts(is_bound)
                 avg = [i for i in avg if starts[i][1] - starts[i][0] >= 2]   # 2+ data rows directly above
                 if avg and not nums:
