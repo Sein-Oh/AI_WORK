@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.25"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.26"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -799,31 +799,42 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
 TOTAL_WORDS = {"합계", "총계", "소계", "계", "총합", "total", "sum", "subtotal", "grandtotal"}
 AVERAGE_WORDS = {"평균", "average", "avg", "mean"}
 # Wording of the same rows in daily reports (2.9.25): '일계', '월계', '누계', '총 합계', '전체합계', '합계:', 'Total:',
-# '소계(A)', '주간계', '평균값', 'AVG.'. Short words ending with '계' are totals unless they are ordinary words
-# ('설계', '단계', '온도계', '하계' ...).
+# '소계(A)', '주간계', '평균값', 'AVG.'. Exact words: TOTAL_WORDS, AVERAGE_WORDS and the period totals below.
+# Loose words ('...합계', short '...계' other than ordinary words, 'Total'/'Sum' as a separate word, '평균값'/'평균치')
+# are also values of a category ('A계'/'B계', '생산계', 'pH계'): _summary_rows counts them only when they look like
+# summary rows within the data of a column (2.9.26, LOOSE_MAX_TEXTS).
 _TOTAL_PERIOD_WORDS = {"일계", "월계", "주계", "연계", "년계", "누계"}
 _GYE_NOT_TOTAL = ("단계", "설계", "경계", "관계", "세계", "시계", "기계", "회계", "체계", "한계", "업계", "생계", "통계",
                   "학계", "가계", "직계", "외계", "하계", "동계", "춘계", "추계", "도계", "력계", "량계", "압계", "류계",
                   "공계", "위계", "중계", "각계", "조계", "어계", "수계", "면계", "전계")
+_AVG_SUFFIXES = ("값", "치")     # '평균값', '평균치'; '평균온도' is a name, not an average row
 _SUMMARY_PAREN_RE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
-_TOTAL_EN_RE = re.compile(r"(?<![a-z])(total|sum|subtotal|grandtotal)(?![a-z])")
+_TOTAL_EN = {"total", "sum", "subtotal", "grandtotal"}
+LOOSE_MAX_TEXTS = 2       # loose words count: at most this many texts, at most half of the filled cells, < half of rows
 
 
 @functools.lru_cache(maxsize=8192)
 def _word_kind(text: str) -> str:
-    """'total', 'avg', 'agg' (AGGREGATE_WORDS) or '' for a text cell of a totals / average / statistic row.
-    Spaces, parenthesized parts and a trailing ':' / '.' are ignored ('총 합계', '소계(A)', 'Total:', 'AVG.')."""
+    """'total', 'avg', 'agg' (AGGREGATE_WORDS), 'total_loose', 'avg_loose' or '' for a text cell of a totals /
+    average / statistic row. Spaces, parenthesized parts and a trailing ':' / '.' are ignored ('총 합계', '소계(A)',
+    'Total:', 'AVG.'). 'total' / 'avg': an exact word; '_loose': a word that can also be a category value."""
     low = _SUMMARY_PAREN_RE.sub(" ", text.lower())
     key = "".join(low.split()).rstrip(":.：")
     if not key:
         return ""
-    if (key in TOTAL_WORDS or key in _TOTAL_PERIOD_WORDS or key.endswith("합계")
-            or (len(key) <= 4 and key.endswith("계") and not key.endswith(_GYE_NOT_TOTAL))
-            or (len(key) <= 15 and _TOTAL_EN_RE.search(low))):
+    if key in TOTAL_WORDS or key in _TOTAL_PERIOD_WORDS:
         return "total"
-    if key in AVERAGE_WORDS or (key.startswith("평균") and len(key) <= 6):
+    if key in AVERAGE_WORDS:
         return "avg"
-    return "agg" if key in AGGREGATE_WORDS else ""
+    if key in AGGREGATE_WORDS:
+        return "agg"
+    words = [w.strip(":.：") for w in low.split()]
+    if (key.endswith("합계") or (len(key) <= 4 and key.endswith("계") and not key.endswith(_GYE_NOT_TOTAL))
+            or (len(key) <= 15 and any(w in _TOTAL_EN for w in words))):
+        return "total_loose"
+    if len(key) == 3 and key.startswith("평균") and key.endswith(_AVG_SUFFIXES):
+        return "avg_loose"
+    return ""
 
 
 def _repeated_header_rows(df_raw: pd.DataFrame, df_data: pd.DataFrame, header_idx: int, unit_row: Optional[int],
@@ -882,7 +893,9 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
     """[source row, column, text] of rows that look like totals / averages: a cell 합계/소계/Total ... (TOTAL_WORDS) or
     평균/Mean (AVERAGE_WORDS) and a number in the same row. Not dropped (a data value decision): layout_warnings names
     them. Not counted: rows the user marked in the '제외' column (a mark other than '포함'), the '제외' column itself
-    (its text is the reason), and words of a statistic label column. Totals words always count (a subtotal per shift
+    (its text is the reason), words of a statistic label column, and loose words (_word_kind '_loose': '총 합계',
+    '주간계', 'Grand Total', '평균값') of a column where they fill more than half of the filled cells, half of the
+    rows or more, or have more than LOOSE_MAX_TEXTS distinct texts (a category: 'A계'/'B계', '생산계'/'품질계', '레벨계'/'pH계'/'유량계'). Totals words always count (a subtotal per shift
     or line is a large share of a column), except in a statistic label column: filled in half of the rows or more,
     and totals and other aggregation words (AGGREGATE_WORDS, 2+ cells) make up half of its filled cells or more, or
     every filled cell is such a word or an average word ('집계' = 합계/평균/최대/최소, 'Sum/Avg'). Average words of a category column (next to other
@@ -909,12 +922,21 @@ def _summary_rows(df: pd.DataFrame, source_rows: List[int]) -> List[List[Any]]:
         except (TypeError, ValueError):
             cand = np.arange(len(cells))
         kind = {int(i): _summary_kind(cells[i]) for i in cand}
+        if not any(kind.values()):
+            continue
+        n_filled = len(cells) - len(cand) + sum(
+            1 for i in kind if _summary_key(cells[i]) or not (isinstance(cells[i], str) or pd.isna(cells[i])))
+        loose = [i for i, t in kind.items() if t.endswith("_loose")]
+        if loose:
+            # loose words of many rows or of 3+ texts ('A계'/'B계'/'C계', '생산계', 'pH계' in every row) are a category
+            keep = (len(loose) * 2 <= n_filled and len(loose) * 2 < len(cells)
+                    and len({_summary_key(cells[i]) for i in loose}) <= LOOSE_MAX_TEXTS)
+            for i in loose:
+                kind[i] = kind[i][:-len("_loose")] if keep else ""
         hits = [i for i, t in kind.items() if t == "total"]
         avg = [i for i, t in kind.items() if t == "avg"]
         if not hits and not avg:
             continue
-        n_filled = len(cells) - len(cand) + sum(
-            1 for i in kind if _summary_key(cells[i]) or not (isinstance(cells[i], str) or pd.isna(cells[i])))
         n_stat = sum(1 for t in kind.values() if t in ("total", "agg"))
         # 통계 이름 열은 집계·평균 글자가 합계 글자만큼 있어야 함 (합계/평균/최대/최소 묶음, Sum/Avg 번갈아).
         # 병합된 일자 열의 일별 합계 + 맨 아래 최대/최소 한 묶음은 통계 이름 열이 아님
