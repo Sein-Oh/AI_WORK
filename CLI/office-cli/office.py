@@ -57,7 +57,10 @@ def cmd_windows(args) -> Dict[str, Any]:
         no_pdf = [k for k, c in caps.items() if c["pdf_export"] is False]
         if no_pdf:
             preview += f" (PDF 내보내기 불가: {', '.join(no_pdf)})"
-    return rt.ok(TOOL, "windows", preview, documents=docs, office=caps)
+    if not docs:
+        return rt.ok(TOOL, "windows", preview, "VERIFIED: 0건. 열린 Office 문서가 없습니다. 사용자에게 그대로 알리세요.",
+                     documents=docs, count=0, office=caps)
+    return rt.ok(TOOL, "windows", preview, documents=docs, count=len(docs), office=caps)
 
 
 def bring_to_front(hwnd: int) -> bool:
@@ -1033,6 +1036,10 @@ def cmd_undo(args) -> Dict[str, Any]:
                  | ({"undo_available": False, "reason": s.get("reason", "")} if s.get("barrier")
                     else {"command": rt.next_command("office.py", ["undo", "--pick", i] + app_arg, "")["command"]})
                  for i, s in enumerate(snaps[:20], 1)]
+        if not snaps:
+            return rt.ok(TOOL, "undo", "0건: 되돌릴 수 있는 지점이 없습니다",
+                         "VERIFIED: 0건. 되돌릴 수 있는 지점이 없습니다. 사용자에게 그대로 알리고 undo를 실행하지 마세요.",
+                         snapshots=[], count=0, shown=0, truncated=False)
         return rt.ok(TOOL, "undo", f"되돌릴 수 있는 지점 {sum(1 for s in snaps if not s.get('barrier'))}개",
                      "VERIFIED: 목록을 사용자에게 보여 주세요. 사용자가 고른 항목의 command를 글자 그대로 실행하세요 (번호만 바꿔 직접 만들지 않음).",
                      snapshots=items, count=len(snaps), shown=len(items), truncated=len(snaps) > len(items))

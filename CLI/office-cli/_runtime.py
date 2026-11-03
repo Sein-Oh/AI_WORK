@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.25"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.26"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -361,11 +361,13 @@ def error_log_path() -> str:
 # 오류 로그에 값을 남기지 않는 옵션 (본문·받는 사람·검색어 등 문서 내용과 개인정보). 경로와 그 밖의 인자는 그대로 남깁니다.
 REDACT_OPTIONS = {"--body", "--text", "--subject", "--to", "--cc", "--bcc", "--from", "--query", "--find",
                   "--replace", "--value", "--values", "--formula", "--header", "--title", "--cards", "--anchor",
-                  "--search", "--new-name", "--map"}
+                  "--search", "--new-name", "--map", "--section"}
 # 위 옵션의 짧은 이름 (모든 office-cli 파서에서 모음, 테스트로 확인): reader/outlook -q = --query
 REDACT_SHORT = {"-q": "--query"}
 # 도구마다 같은 이름이 내용이 아닌 옵션 (office.py transfer --from excel --to word, ppt.py slide --to 3)
 REDACT_KEEP = {"office": {"--from", "--to"}, "ppt": {"--to"}}
+# 도구마다 같은 이름이 내용인 옵션 (excel style --highlight '=완료:lightgreen'은 셀 값, word --highlight는 색 이름이라 남김)
+REDACT_EXTRA = {"excel": {"--highlight"}}
 
 
 _REDACTED = re.compile(r"^(?:-{1,2}[\w-]+=)?<\d+자 생략>$")
@@ -382,7 +384,7 @@ def _hidden_option(opt: str, hidden: set) -> bool:
 def redact_argv(argv: Sequence[Any], tool: str = "") -> List[str]:
     """내용 옵션의 값을 '<N자 생략>'으로 바꿉니다 (AGENTS.md: 오류 로그에 본문·개인정보를 남기지 않음).
     '--opt 값', '--opt=값', '-q 값', '-q값', 줄여 쓴 '--que 값', 값이 여러 개인 옵션(--formula a b)을 모두 처리합니다."""
-    hidden = REDACT_OPTIONS - REDACT_KEEP.get(tool, set())
+    hidden = (REDACT_OPTIONS | REDACT_EXTRA.get(tool, set())) - REDACT_KEEP.get(tool, set())
     shorts = {k for k, v in REDACT_SHORT.items() if v in hidden}
     out: List[str] = []
     hiding = False

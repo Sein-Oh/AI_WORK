@@ -2,6 +2,32 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.26] - 2026-11-03
+
+17차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1426.py`.
+
+### 수정
+- `ppt write` 다시 읽기 (1.4.25 회귀): 기대 글에서만 `**`, `__`를 빼고 다시 읽은 글에서는 빼지 않아, 첫 본문 줄이 코드 줄
+  (`def __init__(self):`, `x**2`)이거나 제목에 `__`·`**`가 있으면(`## __init__ 설명`, `--title "__main__ 실행"`) 거짓 `UNVERIFIED`이던 문제.
+  기대 글은 넣은 글 그대로(굵게 표시는 이미 뺀 글)이므로 공백만 빼고 비교합니다.
+- `word write` 다시 읽기: `---`(구분선, YAML 머리말)로 시작하는 `.md`가 `'--'을 찾지 못함`으로 `UNVERIFIED`, 첫 표 행의 `\|`를
+  잘못 다루던 문제. 마크다운은 해석한 블록에서 넣은 첫 글을 고르고(구분선은 건너뜀, 코드 줄과 표 칸은 글자 그대로),
+  `--callout`은 넣은 글 그대로, `--heading`/`--title`은 굵게 표시만 빼고 비교합니다.
+- `ppt write --text`: 펜스(```` ``` ````, `~~~`) 줄을 글자 그대로 넣고 안의 `**`, `__`를 굵게 표시로 읽던 문제. `.md`와 같이 펜스 줄은 넣지 않고
+  안의 코드 줄은 글자 그대로 넣습니다(목록 기호·굵게 표시 해석 없음).
+- `ppt write --file .md`: 3단계 이하 제목(`### **핵심** 요약`)을 굵게 표시를 빼지 않고 넣어 `**`가 보이던 문제.
+- `excel write --file .md`(`load_table_file`): 따로 만든 `|` 해석이 파일의 모든 `|` 줄(두 번째 표, 코드 블록 안 줄)을 모으고 `|--|--|`
+  정렬 줄을 데이터 행으로 남기며 `\|`에서 칸을 나누던 문제. word·ppt와 같은 `_runtime.parse_markdown_blocks`로 첫 번째 표만 씁니다.
+- 0건 결과 (R2): `office.py windows`(열린 문서 0개), `office.py undo --list`(되돌릴 지점 0개), `excel/word/ppt info --all`(열린 문서 0개),
+  `excel chart --action list`(차트 0개)에 `count`가 없거나 directive가 0건을 말하지 않던 문제. `count`와 `VERIFIED: 0건. ...`을 줍니다.
+- `reader clear --dry-run`(과 실제 지우기): 대상이 20개를 넘으면 `planned`/`documents`를 잘라 `truncated: true`인데 전체 목록이 없던 문제 (R2).
+  `<데이터 폴더>/results/clear_plan_<시각>.csv`(실제 지우기는 `clear_done_...`)에 전체 목록을 쓰고 `full_result_file`로 줍니다.
+- 오류 로그: `--section`(word read, reader search: 문서 제목 글)과 `excel style --highlight`(`=완료:...` 셀 값)를 가리지 않던 문제.
+  값을 `<N자 생략>`으로 남깁니다(`word --highlight`는 색 이름이라 그대로).
+
+### 문서
+- README: 마크다운 블록 해석 범위를 `word write`의 `.md`·`--text`, `ppt write`의 `.md`로 고침(`ppt write --text`는 줄 단위, 펜스 안만 글자 그대로).
+
 ## [1.4.25] - 2026-11-03
 
 16차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1424.py` (1.4.25 부분).

@@ -183,15 +183,10 @@ def load_table_file(path: str) -> List[List[Any]]:
     if ext in (".csv", ".tsv"):
         return [[coerce(c) for c in row] for row in rt.read_csv_rows(path)]
     text = rt.read_text_file(path)
-    table = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("|")]
+    # word/ppt와 같은 마크다운 해석: 첫 번째 표만 (코드 블록 안의 '|' 줄, 두 번째 표 제외), 정렬 줄 제외, '\|'는 칸 안의 글자 '|'
+    table = next((payload for kind, payload in rt.parse_markdown_blocks(text) if kind == "table"), None)
     if table:
-        rows = []
-        for ln in table:
-            cells = [c.strip() for c in ln.strip("|").split("|")]
-            if all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
-                continue
-            rows.append([coerce(c) for c in cells])
-        return rows
+        return [[coerce(c) for c in row] for row in table]
     return [[ln.rstrip()] for ln in text.splitlines() if ln.strip()]
 
 
@@ -551,7 +546,10 @@ def cmd_info(args) -> Dict[str, Any]:
     if args.all:
         books = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                  for d in off.list_open("excel")]
-        return rt.ok(TOOL, "info", f"열린 통합문서 {len(books)}개", workbooks=books)
+        if not books:
+            return rt.ok(TOOL, "info", "0건: 열린 통합문서가 없습니다",
+                         "VERIFIED: 0건. 열린 Excel 통합문서가 없습니다. 사용자에게 그대로 알리세요.", workbooks=books, count=0)
+        return rt.ok(TOOL, "info", f"열린 통합문서 {len(books)}개", workbooks=books, count=len(books))
     with off.open_target("excel", args.target, readonly=True) as t:
         wb = t.doc
         sheets = [_sheet_summary(wb.Worksheets(i), args.detail) for i in range(1, wb.Worksheets.Count + 1)]
@@ -1681,7 +1679,11 @@ def cmd_chart(args) -> Dict[str, Any]:
             charts = [{"sheet": str(wb.Worksheets(i).Name), "name": str(o.Name), "title": _chart_title(o)}
                       for i in range(1, wb.Worksheets.Count + 1) for o in _chart_objects(wb.Worksheets(i))]
             resolved = t.resolved()
-        return rt.ok(TOOL, "chart", f"차트 {len(charts)}개", target_resolved=resolved, charts=charts)
+        if not charts:
+            return rt.ok(TOOL, "chart", f"0건: {resolved['name']}에 차트가 없습니다",
+                         f"VERIFIED: 0건. {resolved['name']}에 차트가 없습니다. 사용자에게 그대로 알리세요.",
+                         target_resolved=resolved, charts=charts, count=0)
+        return rt.ok(TOOL, "chart", f"차트 {len(charts)}개", target_resolved=resolved, charts=charts, count=len(charts))
 
     if args.action == "delete":
         if not args.name and not args.all:

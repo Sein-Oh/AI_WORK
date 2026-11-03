@@ -337,7 +337,11 @@ def cmd_info(args) -> Dict[str, Any]:
     if args.all:
         items = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                  for d in off.list_open("ppt")]
-        return rt.ok(TOOL, "info", f"열린 프레젠테이션 {len(items)}개", presentations=items)
+        if not items:
+            return rt.ok(TOOL, "info", "0건: 열린 프레젠테이션이 없습니다",
+                         "VERIFIED: 0건. 열린 PowerPoint 프레젠테이션이 없습니다. 사용자에게 그대로 알리세요.",
+                         presentations=items, count=0)
+        return rt.ok(TOOL, "info", f"열린 프레젠테이션 {len(items)}개", presentations=items, count=len(items))
     with off.open_target("ppt", args.target, readonly=True) as t:
         prs = t.doc
         slides = []
@@ -547,7 +551,7 @@ def _md_sections(text: str) -> List[Dict[str, Any]]:
             cur = {"title": "", "lines": [], "tables": []}
             sections.append(cur)
         if kind == "heading":
-            cur["lines"].append((payload[1], ""))
+            cur["lines"].append((rt.split_bold(payload[1])[0], ""))   # 3단계 이하 제목도 본문 줄처럼 굵게 표시(** __)를 뺌
         elif kind == "paragraph":
             cur["lines"].append((rt.split_bold(payload)[0], ""))
         elif kind == "code":
@@ -561,10 +565,22 @@ def _md_sections(text: str) -> List[Dict[str, Any]]:
 
 
 def _text_lines(text: str) -> List[Tuple[str, str]]:
+    """--text: 줄마다 한 줄 (-, 1. 목록 기호와 ** __ 굵게 표시를 해석). 펜스(```, ~~~) 안의 코드 줄은 .md와 같이 글자 그대로."""
     lines = []
+    fence = ""
     for ln in rt.unescape_newlines(text).splitlines():
         s = ln.strip()
+        if fence:
+            if s.startswith(fence) and not s.lstrip(fence[0]):
+                fence = ""                          # 닫는 펜스 (닫지 않으면 끝까지 코드)
+            elif s:
+                lines.append((ln.rstrip(), ""))
+            continue
         if not s:
+            continue
+        m = rt._FENCE.match(s)
+        if m:
+            fence = m.group(1)                      # 펜스 줄은 넣지 않음
             continue
         m = re.match(r"^[-*+]\s+(.*)$", s)
         n = None if m else re.match(r"^\d+[.)]\s+(.*)$", s)
@@ -746,13 +762,14 @@ def _verify_inside(prs: Any, placed: List[Tuple[int, Any]]) -> List[str]:
 
 
 def _verify_slides(prs: Any, slides: List[int], expect: List[str]) -> List[str]:
-    """R1: 쓴 슬라이드를 다시 읽어 제목·첫 줄·표 머리글·카드 제목이 들어 있는지 확인합니다 (공백 무시)."""
+    """R1: 쓴 슬라이드를 다시 읽어 제목·첫 줄·표 머리글·카드 제목이 들어 있는지 확인합니다 (공백 무시).
+    expect는 넣은 글 그대로(굵게 표시는 이미 뺀 글)이므로 ** __를 빼지 않습니다 (코드 줄·제목에는 글자로 남음)."""
     try:
         got = "".join(re.sub(r"\s+", "", slide_units(prs.Slides(n), n)["title"] + slide_units(prs.Slides(n), n)["text"])
                       for n in slides)
     except Exception as e:
         return [f"쓴 슬라이드를 다시 읽지 못함: {type(e).__name__}"]
-    missing = [x for x in expect if x and re.sub(r"\s+|\*\*|__", "", x)[:20] not in got]
+    missing = [x for x in expect if x and re.sub(r"\s+", "", x)[:20] not in got]
     return [f"다시 읽은 슬라이드에서 '{x[:20]}'을(를) 찾지 못함" for x in missing]
 
 

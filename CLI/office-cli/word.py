@@ -371,7 +371,10 @@ def cmd_info(args) -> Dict[str, Any]:
     if args.all:
         docs = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                 for d in off.list_open("word")]
-        return rt.ok(TOOL, "info", f"열린 문서 {len(docs)}개", documents=docs)
+        if not docs:
+            return rt.ok(TOOL, "info", "0건: 열린 문서가 없습니다",
+                         "VERIFIED: 0건. 열린 Word 문서가 없습니다. 사용자에게 그대로 알리세요.", documents=docs, count=0)
+        return rt.ok(TOOL, "info", f"열린 문서 {len(docs)}개", documents=docs, count=len(docs))
     with off.open_target("word", args.target, readonly=True) as t:
         doc = t.doc
         stats = {}
@@ -1006,7 +1009,8 @@ def cmd_write(args) -> Dict[str, Any]:
             w.table(file_rows)
         if image:
             w.image(image, args.width)
-        problems = _verify_inserted(doc, start, w.pos, [c for c in (text, file_text) if c])
+        mode = "raw" if args.callout else ("bold" if args.heading or args.title else "auto")
+        problems = _verify_inserted(doc, start, w.pos, [c for c in (text, file_text) if c], mode)
         t.set_focus()
         if t.source == "active" and not args.no_focus:
             try:
@@ -1021,8 +1025,9 @@ def cmd_write(args) -> Dict[str, Any]:
                  verified=True, target_resolved=resolved, inserted=w.created)
 
 
-def _verify_inserted(doc: Any, start: int, end: int, contents: List[str]) -> List[str]:
-    """R1: 넣은 범위를 다시 읽어, 범위가 비어 있지 않고 넣은 글의 첫 줄이 들어 있는지 확인합니다 (마크다운 기호 제외)."""
+def _verify_inserted(doc: Any, start: int, end: int, contents: List[str], mode: str = "auto") -> List[str]:
+    """R1: 넣은 범위를 다시 읽어, 범위가 비어 있지 않고 넣은 글의 첫 글이 들어 있는지 확인합니다.
+    mode: 'auto'(마크다운이면 블록으로 해석, 아니면 줄마다 단락), 'bold'(--heading/--title: 굵게 표시만 뺌), 'raw'(--callout: 그대로)."""
     try:
         got = re.sub(r"[\s\x00-\x1f]+", "", str(doc.Range(start, end).Text))   # 표 칸 구분 기호도 무시
     except Exception as e:
@@ -1031,16 +1036,34 @@ def _verify_inserted(doc: Any, start: int, end: int, contents: List[str]) -> Lis
         return ["넣은 범위가 비어 있음"]
     problems = []
     for content in contents:
-        blocks = rt.parse_markdown_blocks(content) if rt.looks_like_markdown(content) else []
-        if blocks and blocks[0][0] == "code":
-            first = blocks[0][1]                    # 코드 블록으로 시작: 펜스 줄은 넣지 않고 코드는 글자 그대로
-        else:
-            first = next((ln for ln in content.splitlines() if ln.strip() and not rt._FENCE.match(ln.strip())), "")
-            first = re.sub(r"^\s*(#+|[-*+]|\d+[.)]|>)\s*|\*\*|__|\|", "", first)
+        first = _first_inserted(content, mode)
         key = re.sub(r"\s+", "", first)[:20]
         if key and key not in got:
             problems.append(f"넣은 범위에서 '{first.strip()[:20]}'을(를) 찾지 못함")
     return problems
+
+
+def _first_inserted(content: str, mode: str) -> str:
+    """넣은 글의 첫 글 (Writer가 넣는 모양 그대로: 마크다운 블록은 해석한 글, 코드 줄과 표 칸은 글자 그대로)."""
+    if mode == "raw":
+        return content.strip()
+    if mode == "auto" and rt.looks_like_markdown(content):
+        for kind, payload in rt.parse_markdown_blocks(content):
+            if kind == "heading":
+                return rt.split_bold(payload[1])[0]
+            if kind == "paragraph":
+                return rt.split_bold(payload)[0]
+            if kind == "code":
+                return payload                      # 펜스 줄은 넣지 않고 코드는 글자 그대로
+            if kind in ("bullets", "numbered"):
+                return rt.split_bold(payload[0])[0]
+            if kind == "table":
+                return "".join(str(c) for c in payload[0])     # 칸은 그대로 넣음 ('\|'는 이미 글자 '|')
+        return ""                                   # 구분선(페이지 나누기)만 있음
+    if mode == "bold":
+        return rt.split_bold(content.strip())[0]
+    first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
+    return rt.split_bold(first)[0]
 
 
 # ==============================================================================

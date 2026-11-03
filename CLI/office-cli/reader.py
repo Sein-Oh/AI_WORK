@@ -2768,6 +2768,11 @@ def cmd_clear(args) -> Dict[str, Any]:
                               "truncated": len(items) > MAX_LIST_ITEMS, "condition": cond}
     if orphans:
         result["orphan_cache_files"] = len(orphans)
+    if result["truncated"]:              # R2: 잘린 목록은 전체를 파일로 (미리보기에서 지울 대상을 모두 볼 수 있게)
+        out = os.path.join(rt.get_data_dir(), "results", f"clear_{'plan' if args.dry_run else 'done'}_{rt.timestamp()}.csv")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        result["full_result_file"] = rt.write_csv_rows(out, [["file", "path", "missing"]]
+                                                       + [[i["file"], i["path"], i["missing"]] for i in items])
     if not items and not orphans:
         return rt.ok(TOOL, "clear", f"0건: {cond}에 맞는 캐시 문서가 없습니다",
                      f"VERIFIED: 0건. {cond}에 맞는 캐시 문서가 없어 지운 것이 없습니다. 사용자에게 그대로 알리세요.", **result)
@@ -2777,7 +2782,8 @@ def cmd_clear(args) -> Dict[str, Any]:
         result.update(dry_run=True, planned=[f"캐시 삭제: {i['file']}" for i in items[:MAX_LIST_ITEMS]],
                       next_commands=[rt.next_command("reader.py", cmd, "미리 본 캐시를 실제로 지우기")])
         return rt.ok(TOOL, "clear", f"미리보기: 캐시 문서 {len(items)}개를 지울 예정 ({cond})",
-                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.",
+                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요."
+                     + (f" planned는 {len(items)}개 중 {MAX_LIST_ITEMS}개만 담았고 전체는 full_result_file에 있습니다." if result["truncated"] else ""),
                      **result)
     failed: List[str] = []
     removed: List[str] = []
