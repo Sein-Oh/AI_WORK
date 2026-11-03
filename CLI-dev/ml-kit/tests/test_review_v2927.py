@@ -174,8 +174,10 @@ def test_kv_repeated_name_refused():
 
 
 def test_kv_alias_and_full_name_refused():
+    # 2.9.28: refused where the names are matched to the model / data columns (check_same_column), not while parsing
+    # (a model can have both '온도' and '온도(°C)'; test_review_v2928)
     with pytest.raises(mp.InputError) as e:
-        mp.parse_inline_input("온도=180,온도(°C)=190")
+        mp.check_same_column(["온도", "온도(°C)"], ["온도(°C)", "온도(°C)"], "-i", {"온도": "180", "온도(°C)": "190"})
     assert "[후보] 온도=180, 온도(°C)=190" in str(e.value)
     # two different units are two columns; a plain row still parses
     assert list(mp.parse_inline_input("온도(°C)=180,온도(K)=453").columns) == ["온도(°C)", "온도(K)"]

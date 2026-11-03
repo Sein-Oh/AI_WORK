@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
-    check_comma_numbers, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    check_comma_numbers, check_same_column, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -110,7 +110,9 @@ def _map_command(args, **change: Optional[str]) -> str:
 def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], args=None,
                 kv: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
     """Resolves -i names; numeric columns need numeric values, text columns become row filters."""
-    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", layout=df.attrs)
+    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", layout=df.attrs, values=True)
+    check_same_column(list(pairs), names, "-i" if args is not None else "--points 조회 파일 열",
+                      pairs if args is not None else None)
     resolved = dict(zip(pairs, names))
     if kv and args is not None:
         check_comma_numbers(kv, lambda k: k in resolved and _is_numeric_col(df[resolved[k]]), "-i",
@@ -343,7 +345,7 @@ def execute_reverse(args) -> Dict[str, Any]:
         raise InputError("--find에는 목표 하나만 주십시오 (예: --find \"생산효율=50\").")
     check_comma_numbers(goal_kv, lambda k: True, "--find", lambda fixed: _map_command(args, find=kv_text(fixed)))
     (goal_name, goal_val), = goal.items()
-    goal_col = resolve_column_names([goal_name], columns, "목표(--find)", layout=df.attrs)[0][0]
+    goal_col = resolve_column_names([goal_name], columns, "목표(--find)", layout=df.attrs, values=True)[0][0]
     try:
         y0 = float(goal_val)
     except (TypeError, ValueError):

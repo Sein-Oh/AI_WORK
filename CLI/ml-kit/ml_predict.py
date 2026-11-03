@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.27"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.28"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -337,6 +337,45 @@ def build_alias_map(columns: List[str]) -> Dict[str, str]:
     return {k: v[0] for k, v in groups.items() if len(v) == 1 and k}
 
 
+def unit_of(name: str) -> str:
+    """'압력(bar)' -> 'bar', '반응온도 [°C]' -> '°C', '압력' -> ''."""
+    m = _UNIT_SUFFIX_RE.search(str(name))
+    return m.group(0).strip()[1:-1].strip() if m else ""
+
+
+def other_unit(given: str, name: str) -> bool:
+    """given and name are one quantity written with two different units ('압력(MPa)' / '압력(bar)'): renaming given to
+    name would read a MPa value as bar. '°C', '℃' and 'C' (the degree sign) and spaces count as the same unit; case
+    does not ('mg' / 'Mg')."""
+    def norm(u: str) -> str:
+        return re.sub(r"\s+", "", u).replace("\u2103", "C").replace("\u00b0", "")
+    ug, un = unit_of(given), unit_of(name)
+    return bool(ug and un) and _alias_key(given) == _alias_key(name) and norm(ug) != norm(un)
+
+
+def unit_hint(given: str, name: str, where: str) -> str:
+    """Why a different-unit name is not renamed to the column/model name (no [추천]: the value must be converted)."""
+    ug, un = unit_of(given), unit_of(name)
+    return (f"{where} '{given}'은(는) '{name}'과(와) 단위가 다릅니다 ({ug} / {un}). 이름만 바꾸면 {ug} 값이 {un} 값으로 "
+            f"쓰여 결과가 틀립니다. 값을 {un} 단위로 환산해 '{name}'(으)로 주십시오. 환산 값은 사용자에게 확인하십시오")
+
+
+def check_same_column(given: List[str], resolved: List[str], option: str,
+                      values: Optional[Dict[str, Any]] = None) -> None:
+    """Two given names that resolve to one column ('온도' auto-matched to '온도(°C)' next to '온도(°C)'): one would
+    silently win. STOP_RETRY with the given names (and values) as [후보]."""
+    groups: Dict[str, List[str]] = {}
+    for g, r in zip(given, resolved):
+        groups.setdefault(r, []).append(g)
+    for col, same in groups.items():
+        if len(same) > 1:
+            cands = [f"{g}={values[g]}" if values is not None and g in values else g for g in same]
+            raise InputError(
+                f"{option}의 이름 {', '.join(repr(g) for g in same)}은(는) 같은 열 '{col}'을(를) 가리킵니다 (단위 없는 "
+                f"이름은 단위 붙은 이름으로 자동 매칭). 값 하나만 주십시오. 사용자에게 어느 값인지 물으십시오: "
+                f"[후보] {', '.join(cands)}")
+
+
 def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
     alias_hit = build_alias_map(columns).get(_alias_key(name))
     hits = [alias_hit] if alias_hit else []
@@ -347,7 +386,7 @@ def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
 
 
 def resolve_column_names(names: List[str], columns: List[str], kind: str,
-                         layout: Optional[Dict[str, Any]] = None) -> Tuple[List[str], Dict[str, str]]:
+                         layout: Optional[Dict[str, Any]] = None, values: bool = False) -> Tuple[List[str], Dict[str, str]]:
     """
     Resolves requested names against real columns. Exact match first, then a unique
     unit-less alias ('생산효율' -> '생산효율(%)'). A name with a different unit
@@ -355,6 +394,8 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     one similar column -> [추천] '<name>', several -> [후보] '<a>', '<b>'.
     layout (df.attrs of load_data_file): when the missing names are all in another top row (two-level or merged
     header, title row), the suggestion is that row (header_layout_hint), with its unit row when the row below it is one.
+    values: the names carry values (-i '압력(MPa)=0.3'): a column of the same name with another unit ('압력(bar)') is not
+    suggested as a rename ([추천] would keep the MPa value under bar); the value must be converted (unit_hint).
     """
     col_list = [str(c) for c in columns]
     col_set = set(col_list)
@@ -380,7 +421,9 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
         hints = []
         for m in missing:
             s = suggest_columns(m, col_list)
-            if len(s) == 1:
+            if values and len(s) == 1 and other_unit(m, s[0]):
+                hints.append(unit_hint(m, s[0], kind))
+            elif len(s) == 1:
                 hints.append(f"'{m}' -> [추천] '{s[0]}'")
             elif s:
                 hints.append(f"'{m}' -> [후보] {', '.join(repr(c) for c in s)}")
@@ -993,17 +1036,27 @@ def _number_matrix(arr: np.ndarray, kinds: List[Any], k_excl: Optional[int]) -> 
 LOOSE_WALK = 1000         # earlier summary rows read back for one loose row ('월합계' = sum of the '일합계' rows above)
 
 
-def _sums_match(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray) -> np.ndarray:
-    """Per row (2-D arrays, one row per candidate): at least half of the row's number cells (min 1) equal the sums of a
-    block of rows (column sums, number counts, sums of absolute values), within the precision of _summary_by_value
-    (half a unit of the last shown decimal or 1e-3 relative). A column counts only with 2+ numbers in the block, not
-    all zero: one row or a zero column is its own sum."""
+def _sum_mean_hits(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Per row (2-D arrays, one row per candidate): the number cells equal to the sums of a block of rows (column
+    sums, number counts, sums of absolute values) and the other number cells equal to the mean of the block (a
+    totals row that averages 온도/압력/속도 and sums only 생산량), within the precision of _summary_by_value (half a
+    unit of the last shown decimal or 1e-3 relative). A column counts only with 2+ numbers in the block, not all
+    zero: one row or a zero column is its own sum."""
     filled = ~np.isnan(rows)
     use = filled & (count >= 2) & (size > 0)
     with np.errstate(invalid="ignore"):
-        tol = np.maximum(0.5 * 10.0 ** -_shown_decimals(rows), 1e-3 * np.abs(sums)) + 1e-9
-        hit = (use & (np.abs(rows - sums) <= tol)).sum(axis=1)
-    return (hit >= 1) & (hit * 2 >= filled.sum(axis=1))
+        dec = 0.5 * 10.0 ** -_shown_decimals(rows)
+        is_sum = use & (np.abs(rows - sums) <= np.maximum(dec, 1e-3 * np.abs(sums)) + 1e-9)
+        mean = sums / np.where(count > 0, count, 1)
+        is_mean = use & ~is_sum & (np.abs(rows - mean) <= np.maximum(dec, 1e-3 * np.abs(mean)) + 1e-9)
+    return is_sum.sum(axis=1), is_mean.sum(axis=1)
+
+
+def _sums_match(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray) -> np.ndarray:
+    """Per row: at least one number cell is a block sum (_sum_mean_hits) and the sums together with the cells equal
+    to the block mean (neutral: an averaged column) are at least half of the row's number cells."""
+    hit, n_mean = _sum_mean_hits(rows, sums, count, size)
+    return (hit >= 1) & ((hit + n_mean) * 2 >= (~np.isnan(rows)).sum(axis=1))
 
 
 def _shown_decimals(values: np.ndarray) -> np.ndarray:
@@ -1022,7 +1075,8 @@ def _shown_decimals(values: np.ndarray) -> np.ndarray:
 
 def _loose_by_value(num: np.ndarray, arr: np.ndarray, k: int, kind: Dict[int, str], few: bool) -> set:
     """Rows of loose totals words ('일합계', '총 합계', '주간계', 'Grand Total') in column k that are totals by their
-    numbers. Confirmed when at least half of the row's number cells (min 1) are (a) the sums of the data rows
+    numbers. Confirmed when at least one number cell and, together with the cells equal to the block mean (an
+    averaged column, neutral), at least half of the row's number cells are (a) the sums of the data rows
     directly above it (_block_starts), (b) the sums of the earlier summary rows of one text since the last row of its
     own text ('월합계' = the '일합계' rows of the month), or (c) the sums of all data rows above it. When the loose
     rows are few between the data (few: 1-2 texts, not more than the other filled cells + 1, under half of the
@@ -1057,6 +1111,8 @@ def _loose_by_value(num: np.ndarray, arr: np.ndarray, k: int, kind: Dict[int, st
             far = np.where((dcnt >= 2) & (dmin >= 0) & (dmax > 0), dmax + np.maximum(dmax - dmin, dmax / 2), np.nan)
             judged = ~np.isnan(rows) & ~np.isnan(far)[None, :]
             n_far = (judged & (rows > far[None, :])).sum(axis=1)
+        # no mean-neutral cells here (unlike _sums_match): without an exact sum, a category row with one large
+        # column and a value near a column mean would be taken for a totals row
         sure |= ~judged.any(axis=1) | ((n_far >= 1) & (n_far * 2 >= (~np.isnan(rows)).sum(axis=1)))
     out = {int(i) for i in loose[sure]}
     totals = sorted(i for i, t in kind.items() if t in ("total", "total_loose"))
@@ -2146,6 +2202,20 @@ def apply_inference_evals(df: pd.DataFrame, eval_expressions: List[str]) -> pd.D
     return df_out
 
 
+def check_inline_aliases(df: pd.DataFrame, required: List[str]) -> None:
+    """-i: '온도' next to '온도(°C)' when the model has '온도(°C)' but not '온도' (align_input_columns would match
+    '온도' to '온도(°C)'): one value would be silently dropped -> STOP_RETRY. A model with both '온도' and '온도(°C)'
+    takes both."""
+    req = set(required)
+    given = [str(c) for c in df.columns]
+    target = []
+    for c in given:
+        hit = [] if c in req or strip_unit(c) != c.strip() else [f for f in required if _alias_key(f) == _alias_key(c)]
+        target.append(hit[0] if len(hit) == 1 else c)
+    values = {str(k): v for k, v in df.iloc[0].to_dict().items()} if len(df) == 1 else None
+    check_same_column(given, target, "-i", values)
+
+
 def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str]) -> Dict[str, str]:
     """
     Renames input columns written without unit suffix to the trained full name
@@ -2297,6 +2367,19 @@ def resolve_target_models(
 # 5. Core Prediction Engine
 # ==============================================================================
 
+def _no_repeated_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """json object_pairs_hook for -i: a name given twice in one object ({"온도":180,"온도":190}) would silently keep
+    the last value (the same rule as 'k=v')."""
+    out: Dict[str, Any] = {}
+    for k, v in pairs:
+        if k in out:
+            vals = [f"{k}={json.dumps(x, ensure_ascii=False)}" for kk, x in pairs if kk == k]
+            raise InputError(f"입력 JSON의 한 객체에 '{k}'가 두 번 있습니다. 한 객체는 한 행입니다. 사용자에게 어느 값인지 "
+                             f"물으십시오: [후보] {', '.join(vals)}")
+        out[k] = v
+    return out
+
+
 def parse_inline_input(input_str: str) -> pd.DataFrame:
     """
     Parses inline input into a DataFrame:
@@ -2306,7 +2389,10 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
     """
     clean_str = input_str.strip()
     if clean_str.lower().endswith(".json") and os.path.isfile(clean_str):
-        obj = load_json_file(clean_str)
+        try:
+            obj = json.loads(read_text_file(clean_str), object_pairs_hook=_no_repeated_keys)
+        except json.JSONDecodeError as e:
+            raise InputError(f"JSON 파일 파싱 실패 ({clean_str}): {e}")
         if isinstance(obj, dict):
             return pd.DataFrame([obj])
         if isinstance(obj, list) and obj:
@@ -2314,7 +2400,9 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
         raise InputError(f"입력 JSON 파일은 객체 또는 객체 배열이어야 합니다: {clean_str}")
     if clean_str.startswith("{") or clean_str.startswith("["):
         try:
-            obj = json.loads(clean_str)
+            obj = json.loads(clean_str, object_pairs_hook=_no_repeated_keys)
+        except InputError:
+            raise
         except Exception as e:
             raise InputError(f"인라인 JSON 파싱 실패: {e}. Windows에서는 'k1=v1,k2=v2' 형식이나 .json 파일 경로를 권장합니다.")
         if isinstance(obj, dict):
@@ -2344,16 +2432,8 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
             row_dict[last_key] = f"{row_dict[last_key]},{pair.strip()}"
     if not row_dict:
         raise InputError(f"유효한 인라인 입력 형식이 아닙니다 (JSON 또는 'k1=v1,k2=v2'): '{input_str}'")
-    # '온도' (unit-less, auto-matched to '온도(°C)') next to '온도(°C)': two values for one column
-    groups: Dict[str, List[str]] = {}
-    for key in row_dict:
-        groups.setdefault(_alias_key(key), []).append(key)
-    for same in groups.values():
-        if len(same) > 1 and any(strip_unit(key) == key for key in same):
-            raise InputError(
-                f"입력 이름 {', '.join(repr(key) for key in same)}은(는) 같은 컬럼을 가리킵니다 (단위 없는 이름은 단위 붙은 "
-                f"이름으로 자동 매칭). 값 하나만 주십시오. 사용자에게 어느 값인지 물으십시오: "
-                f"[후보] {', '.join(f'{key}={row_dict[key]}' for key in same)}")
+    # '온도' next to '온도(°C)' (one column when the model / data has only '온도(°C)') is checked where the names are
+    # matched to the model inputs or data columns (check_same_column), not here: a model can have both.
     df = pd.DataFrame([row_dict])
     df.attrs["kv_pairs"] = dict(row_dict)     # 'k=v' text form (check_comma_numbers rebuilds it)
     return df
@@ -2597,10 +2677,14 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
         alias = build_alias_map(extra).get(_alias_key(m))
         if alias and alias not in cands:
             cands.insert(0, alias)
-        if len(cands) == 1:
+        if len(cands) == 1 and other_unit(cands[0], m):
+            # '압력(MPa)' for the model's '압력(bar)': a rename would read the MPa value as bar (no [추천])
+            out.append(unit_hint(cands[0], m, where))
+        elif len(cands) == 1:
             out.append(f"{where} '{cands[0]}' -> [추천] '{m}' ('{cands[0]}'을(를) '{m}'(으)로 고쳐 다시 실행)")
         elif cands:
-            out.append(f"'{m}'이(가) 없습니다. {where} [후보] {', '.join(cands)} 중 '{m}'(으)로 고칠 이름을 사용자에게 물으십시오")
+            shown = [f"{c}(단위 다름: 값 환산 필요)" if other_unit(c, m) else c for c in cands]
+            out.append(f"'{m}'이(가) 없습니다. {where} [후보] {', '.join(shown)} 중 '{m}'(으)로 고칠 이름을 사용자에게 물으십시오")
     return out
 
 
@@ -2893,6 +2977,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
         # Accept unit-less input column names, then replay derived features
         raw_needed = model_raw_inputs(meta)
+        if is_inline:
+            check_inline_aliases(df_input, list(dict.fromkeys(raw_needed + req_features)))
         column_aliases.update(align_input_columns(df_input, list(dict.fromkeys(raw_needed + req_features)), derived_names))
         if is_inline:
             num_raw = {c for c in raw_needed if c not in meta["feature_schema"].get("categorical", {})
@@ -3288,7 +3374,9 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         raise InputError(f"'{vary}'은(는) 숫자 입력이 아니라 반대 찾기로 바꿀 수 없습니다. [후보] {', '.join(numeric_in)}")
     given_df = parse_inline_input(args.input) if args.input else None
     given = given_df.iloc[0].to_dict() if given_df is not None else {}
-    names, _ = resolve_column_names([str(k) for k in given], raw_inputs, "고정 입력(-i)") if given else ([], {})
+    names, _ = (resolve_column_names([str(k) for k in given], raw_inputs, "고정 입력(-i)", values=True) if given
+                else ([], {}))
+    check_same_column([str(k) for k in given], names, "-i", {str(k): v for k, v in given.items()})
     fixed = {n: given[k] for k, n in zip(given, names)}
     resolved = dict(zip([str(k) for k in given], names))
     if given_df is not None:
