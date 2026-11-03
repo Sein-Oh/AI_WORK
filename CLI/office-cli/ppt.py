@@ -550,6 +550,8 @@ def _md_sections(text: str) -> List[Dict[str, Any]]:
             cur["lines"].append((payload[1], ""))
         elif kind == "paragraph":
             cur["lines"].append((rt.split_bold(payload)[0], ""))
+        elif kind == "code":
+            cur["lines"].append((payload, ""))          # 코드 줄은 글자 그대로 (** __를 굵게로 읽지 않음)
         elif kind in ("bullets", "numbered"):
             list_kind = "numbered" if kind == "numbered" else "bullet"
             cur["lines"] += [(rt.split_bold(x)[0], list_kind) for x in payload]

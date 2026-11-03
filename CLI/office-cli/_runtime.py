@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.24"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.25"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -999,7 +999,7 @@ def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
 
 
 _TABLE_PIPE = re.compile(r"(?<!\\)\|")
-_FENCE = re.compile(r"^(`{3,}|~{3,})")
+_FENCE = re.compile(r"^(`{3,}(?!.*`)|~{3,})")    # 백틱 펜스의 정보 글에는 백틱이 없음 (```x```는 인라인 코드)
 
 
 def parse_markdown_table(lines: List[str]) -> List[List[str]]:
@@ -1052,7 +1052,7 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
                 if ln.strip().startswith(mark[0] * len(mark)) and not ln.strip().lstrip(mark[0]):
                     break                           # 닫는 펜스 (닫지 않으면 끝까지 코드)
                 if ln.strip():
-                    blocks.append(("paragraph", ln))
+                    blocks.append(("code", ln))     # 굵게(** __) 등 마크다운 기호를 해석하지 않고 그대로
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", s)
         if m:

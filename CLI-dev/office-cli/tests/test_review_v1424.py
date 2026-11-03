@@ -133,10 +133,10 @@ def test_append_formula_conversion_failure_rejected(xl, capsys, monkeypatch):
 
 def test_markdown_fenced_code_block_verbatim():
     blocks = rt.parse_markdown_blocks("앞\n```python\n# 주석\n- x\n    들여쓴 줄\n\n1. y\n```\n# 제목")
-    assert blocks == [("paragraph", "앞"), ("paragraph", "# 주석"), ("paragraph", "- x"),
-                      ("paragraph", "    들여쓴 줄"), ("paragraph", "1. y"), ("heading", (1, "제목"))]
-    assert rt.parse_markdown_blocks("~~~\n## a\n~~~") == [("paragraph", "## a")]
-    assert rt.parse_markdown_blocks("```\n# 끝나지 않음") == [("paragraph", "# 끝나지 않음")]
+    assert blocks == [("paragraph", "앞"), ("code", "# 주석"), ("code", "- x"),
+                      ("code", "    들여쓴 줄"), ("code", "1. y"), ("heading", (1, "제목"))]   # 1.4.25: 코드 줄은 "code"
+    assert rt.parse_markdown_blocks("~~~\n## a\n~~~") == [("code", "## a")]
+    assert rt.parse_markdown_blocks("```\n# 끝나지 않음") == [("code", "# 끝나지 않음")]
 
 
 def test_markdown_table_short_alignment_and_escaped_pipe():
@@ -180,3 +180,51 @@ def test_parse_pages_huge_range_is_fast():
     with pytest.raises(rt.InputError):
         reader.parse_pages("999999990-999999999", 5)
     assert json.dumps(reader.parse_pages("0-2", 5)) == "[1, 2]"
+
+
+# 1.4.25 (16차 점검): 코드 블록 줄은 ** __를 굵게로 읽지 않고 그대로, 인라인 코드 ```x```는 펜스가 아님 ------------------
+
+import sys as _sys  # noqa: E402
+
+import _runtime as _rt  # noqa: E402
+import test_ppt as _tp  # noqa: E402
+import test_word as _tw  # noqa: E402
+import ppt as _ppt  # noqa: E402
+import word as _word  # noqa: E402
+
+wd = _tw.wd
+pp = _tp.pp
+_MD = "# 예제\n\n```python\ndef __init__(self):\n    return x**2 + y**2\n```\n"
+
+
+def test_code_block_kind_and_inline_fence():
+    blocks = _rt.parse_markdown_blocks(_MD)
+    assert ("code", "def __init__(self):") in blocks and ("code", "    return x**2 + y**2") in blocks
+    blocks = _rt.parse_markdown_blocks("```x``` 는 코드\n\n# 제목\n- 항목")
+    assert ("heading", (1, "제목")) in blocks and any(k == "bullets" for k, _ in blocks)
+
+
+def test_word_code_block_verbatim(wd, capsys, tmp_path):
+    p = tmp_path / "c.md"
+    p.write_text(_MD, encoding="utf-8")
+    code, out = _tw.run(capsys, "write", "--file", str(p))
+    txt = _tw.paras(wd["doc"])
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "def __init__(self):" in txt and "    return x**2 + y**2" in txt, txt
+
+
+def test_word_file_starting_with_code_block_verified(wd, capsys, tmp_path):
+    p = tmp_path / "c2.md"
+    p.write_text("```\nprint(a**2)\n```\n", encoding="utf-8")
+    code, out = _tw.run(capsys, "write", "--file", str(p))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+
+
+def test_ppt_code_block_verbatim(pp, capsys, tmp_path):
+    p = tmp_path / "c.md"
+    p.write_text(_MD, encoding="utf-8")
+    code, out = _tp.run(capsys, "write", "--file", str(p))
+    prs = pp["prs"]
+    s = prs.Slides(prs.Slides.Count)
+    texts = [sh.TextFrame.TextRange.Text for sh in _tp.live(s) if hasattr(sh, "TextFrame")]
+    assert code == 0 and any("__init__" in t and "x**2" in t for t in texts), texts

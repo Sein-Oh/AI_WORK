@@ -796,8 +796,11 @@ class Writer:
         for kind, payload in rt.parse_markdown_blocks(text):
             if kind == "heading":
                 self.heading(*payload)
-            elif kind == "paragraph":
-                self.text(payload)
+            elif kind in ("paragraph", "code"):
+                if kind == "code":
+                    self._para(payload, None, [])          # 코드 줄은 글자 그대로 (** __를 굵게로 읽지 않음)
+                else:
+                    self.text(payload)
                 if not self.created or not self.created[-1].startswith("본문"):
                     self.created.append("본문")
             elif kind in ("bullets", "numbered"):
@@ -1028,8 +1031,12 @@ def _verify_inserted(doc: Any, start: int, end: int, contents: List[str]) -> Lis
         return ["넣은 범위가 비어 있음"]
     problems = []
     for content in contents:
-        first = next((ln for ln in content.splitlines() if ln.strip()), "")
-        first = re.sub(r"^\s*(#+|[-*+]|\d+[.)]|>)\s*|\*\*|__|\|", "", first)
+        blocks = rt.parse_markdown_blocks(content) if rt.looks_like_markdown(content) else []
+        if blocks and blocks[0][0] == "code":
+            first = blocks[0][1]                    # 코드 블록으로 시작: 펜스 줄은 넣지 않고 코드는 글자 그대로
+        else:
+            first = next((ln for ln in content.splitlines() if ln.strip() and not rt._FENCE.match(ln.strip())), "")
+            first = re.sub(r"^\s*(#+|[-*+]|\d+[.)]|>)\s*|\*\*|__|\|", "", first)
         key = re.sub(r"\s+", "", first)[:20]
         if key and key not in got:
             problems.append(f"넣은 범위에서 '{first.strip()[:20]}'을(를) 찾지 못함")
