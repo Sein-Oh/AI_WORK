@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
-    normalize_version, strip_unit, note_recovered, read_text_file, VERSION,
+    normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names, VERSION,
 )
 
 setup_console()
@@ -905,13 +905,10 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
 
     names = list(record["targets"])
     if target_filter:
-        wanted, unknown = [], []
-        for f in target_filter:
-            hit = [t for t in names if t == f or strip_unit(t) == strip_unit(f)]
-            (wanted.extend(hit) if hit else unknown.append(f))
-        if unknown:
-            raise InputError(f"버전 '{version}'에 타겟 {unknown}이(가) 없습니다. [추천] {names}")
-        names = list(dict.fromkeys(wanted))
+        # like ml_predict -y: exact name, then a unique name without its unit ('수율' for '수율(1차)' and '수율(최종)'
+        # -> [후보]; an exact '수율(1차)' takes that one only)
+        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(--target)")[0])
+        names = [t for t in names if t in wanted]
 
     excluded_all = None
     p_ex = os.path.join(vdir, "excluded_rows.csv")
@@ -1519,10 +1516,14 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
     versions = info["best_versions"]
     reports: List[Dict[str, Any]] = []
     export = None
+    picked = None
+    if target_filter:   # resolved once over the targets of all best versions ('수율' for two of them -> [후보])
+        all_names = list(dict.fromkeys(str(t) for bv in versions for t in bv["targets"]))
+        picked = resolve_column_names(target_filter, all_names, "타겟(--target)")[0]
     for bv in versions:
         flt = None
-        if target_filter:
-            flt = [f for f in target_filter if any(f == t or strip_unit(f) == strip_unit(t) for t in bv["targets"])]
+        if picked is not None:
+            flt = [t for t in dict.fromkeys(picked) if t in bv["targets"]]
             if not flt:
                 continue
         ctx = load_version(bv["version_dir"], flt)

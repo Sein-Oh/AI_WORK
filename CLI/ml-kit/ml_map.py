@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
-    check_comma_numbers, check_same_column, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    check_comma_numbers, check_same_column, suggest_columns, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -128,6 +128,23 @@ def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], arg
         else:
             categorical[col] = str(v).strip()
     return numeric, categorical
+
+
+def _check_near_points(points_df: pd.DataFrame, usable: List[str], unused: List[str], layout: Dict[str, Any]) -> None:
+    """A numeric --points column that is no key but nearly matches a data column not used as a key ('반응 압력(bar)'
+    for '반응압력(bar)', '압력(MPa)' for '반응압력(bar)'): the result would look as if the pressure was used. The same
+    matcher and message as -i ([추천] / [후보] / unit_hint). Columns like no data column (memo, ID) pass through."""
+    near = [str(c) for c in points_df.columns
+            if c not in usable and not re.fullmatch(r"col_\d+", str(c)) and _is_numeric_col(points_df[c])
+            and suggest_columns(str(c), unused)]
+    if not near:
+        return
+    try:
+        resolve_column_names(near, unused, "조회 파일(--points)", layout=layout, values=True)
+    except InputError as e:
+        head, sep, tail = str(e).partition("\n")
+        raise InputError(f"{head} 이 열은 기준 열로 쓰이지 않아 결과가 그 값을 반영하지 않습니다. 조회 파일의 머리글을 데이터 "
+                         f"열 이름으로 고친 뒤 같은 명령을 다시 실행하십시오.{sep}{tail}")
 
 
 def _filter(df: pd.DataFrame, categorical: Dict[str, str]) -> pd.DataFrame:
@@ -239,6 +256,7 @@ def execute_forward(args) -> Dict[str, Any]:
         if categorical:
             raise InputError(f"조회 파일에는 숫자 기준 열만 넣어 주십시오 (글자 열: {list(categorical)}).")
         key_src = dict(zip(numeric, usable))
+        _check_near_points(points_df, usable, [c for c in columns if c not in numeric], df.attrs)
     else:
         pairs, kv = _parse_pairs(args.input, "-i")
         numeric, categorical = _split_keys(df, pairs, columns, args, kv)

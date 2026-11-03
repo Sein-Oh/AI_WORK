@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.29"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.30"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -384,8 +384,11 @@ def check_same_column(given: List[str], resolved: List[str], option: str,
 
 
 def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
-    alias_hit = build_alias_map(columns).get(_alias_key(name))
-    hits = [alias_hit] if alias_hit else []
+    """Similar columns: the columns of the same name without unit first (all of them: '수율' for '수율(1차)' and
+    '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns)."""
+    key = _alias_key(name)
+    hits = [str(c) for c in columns if key and _alias_key(c) == key]
+    n = max(n, len(hits))
     for c in difflib.get_close_matches(str(name), [str(c) for c in columns], n=n, cutoff=0.5):
         if c not in hits:
             hits.append(c)
@@ -403,6 +406,7 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     header, title row), the suggestion is that row (header_layout_hint), with its unit row when the row below it is one.
     values: the names carry values (-i '압력(MPa)=0.3'): a column of the same name with another unit ('압력(bar)') is not
     suggested as a rename ([추천] would keep the MPa value under bar); the value must be converted (unit_hint).
+    A column found for another given name is not suggested for a missing one (except the same name in another unit).
     """
     col_list = [str(c) for c in columns]
     col_set = set(col_list)
@@ -426,8 +430,11 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
             raise InputError(f"지정하신 {kind} 컬럼 {missing}을(를) 머리글에서 찾을 수 없습니다. {hint}"
                              f"\n[지금 머리글 컬럼 목록]: {col_list}")
         hints = []
+        taken = set(resolved)
         for m in missing:
-            s = suggest_columns(m, col_list)
+            # a column another given name already takes is no typo target ('습도' next to a given '속도'), unless it
+            # is the same name in another unit ('압력(MPa)' next to a given '압력(bar)': unit_hint)
+            s = suggest_columns(m, [c for c in col_list if c not in taken or _alias_key(c) == _alias_key(m)])
             if values and len(s) == 1 and other_unit(m, s[0]):
                 hints.append(unit_hint(m, s[0], kind))
             elif len(s) == 1:
@@ -1045,33 +1052,45 @@ LOOSE_WALK = 1000         # earlier summary rows read back for one loose row ('�
 
 
 def _sum_mean_hits(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray,
-                   varies: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
+                   varies: Optional[np.ndarray] = None,
+                   nz: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per row (2-D arrays, one row per candidate): the number cells equal to the sums of a block of rows (column
-    sums, number counts, sums of absolute values) and the other number cells equal to the mean of the block (a
-    totals row that averages 온도/압력/속도 and sums only 생산량), within the precision of _summary_by_value (half a
-    unit of the last shown decimal or 1e-3 relative). A column counts only with 2+ numbers in the block, not all
-    zero: one row or a zero column is its own sum. varies (same shape, None: all True): the column is not constant
-    in the block; a mean cell counts only there, as in _summary_by_value (a constant setpoint column is the mean of
-    any block, also of a category row's)."""
+    sums, number counts, sums of absolute values), the other number cells equal to the mean of the block (a
+    totals row that averages 온도/압력/속도 and sums only 생산량), and the cells equal to the value of a column
+    that is constant in the block (a setpoint, also an all-zero column: its own mean in any block, also in a
+    category row), within the precision of _summary_by_value (half a unit of the last shown decimal or 1e-3
+    relative). A sum or mean column counts only with 2+ numbers in the block, not all zero: one row or a zero
+    column is its own sum. varies (same shape, None: all True): the column is not constant in the block; a mean cell
+    counts only there. nz (same shape, None: no check): nonzero numbers of the column in the block; a sum cell
+    counts only with 2+ (a 0/1 flag with one 1 is its own sum, as a category row holds it; such a cell is no mean
+    cell either). Constant cells are counted only when varies and nz are given (the block reads (a)/(c) of
+    _loose_by_value; the read-back of earlier summary rows keeps them as misses)."""
     filled = ~np.isnan(rows)
     use = filled & (count >= 2) & (size > 0)
+    none = np.zeros(len(rows), dtype=int)
     with np.errstate(invalid="ignore"):
         dec = 0.5 * 10.0 ** -_shown_decimals(rows)
         is_sum = use & (np.abs(rows - sums) <= np.maximum(dec, 1e-3 * np.abs(sums)) + 1e-9)
         mean = sums / np.where(count > 0, count, 1)
-        is_mean = use & ~is_sum & (np.abs(rows - mean) <= np.maximum(dec, 1e-3 * np.abs(mean)) + 1e-9)
+        near_mean = filled & (count >= 2) & (np.abs(rows - mean) <= np.maximum(dec, 1e-3 * np.abs(mean)) + 1e-9)
+    is_mean = use & ~is_sum & near_mean
     if varies is not None:
         is_mean &= varies
-    return is_sum.sum(axis=1), is_mean.sum(axis=1)
+    # a constant column (also all zero) is its own mean: no evidence either way, left out of the count
+    n_const = (near_mean & ~varies).sum(axis=1) if varies is not None and nz is not None else none
+    if nz is not None:
+        is_sum &= nz >= 2
+    return is_sum.sum(axis=1), is_mean.sum(axis=1), n_const
 
 
 def _sums_match(rows: np.ndarray, sums: np.ndarray, count: np.ndarray, size: np.ndarray,
-                varies: Optional[np.ndarray] = None) -> np.ndarray:
+                varies: Optional[np.ndarray] = None, nz: Optional[np.ndarray] = None) -> np.ndarray:
     """Per row: at least one number cell is a block sum (_sum_mean_hits) and the sums together with the cells equal
     to the mean of a column that varies in the block (neutral: an averaged column) are at least half of the row's
-    number cells."""
-    hit, n_mean = _sum_mean_hits(rows, sums, count, size, varies)
-    return (hit >= 1) & ((hit + n_mean) * 2 >= (~np.isnan(rows)).sum(axis=1))
+    number cells. Cells equal to the value of a column constant in the block (a setpoint repeated in the totals row
+    '일합계 185 3.5 1080') are left out of the count: they say nothing about sum or category."""
+    hit, n_mean, n_const = _sum_mean_hits(rows, sums, count, size, varies, nz)
+    return (hit >= 1) & ((hit + n_mean) * 2 >= (~np.isnan(rows)).sum(axis=1) - n_const)
 
 
 def _shown_decimals(values: np.ndarray) -> np.ndarray:
@@ -1114,6 +1133,7 @@ def _loose_by_value(num: np.ndarray, arr: np.ndarray, k: int, kind: Dict[int, st
     csum = np.vstack([zero, np.cumsum(np.where(filled, data, 0.0), axis=0)])
     cabs = np.vstack([zero, np.cumsum(np.where(filled, np.abs(data), 0.0), axis=0)])
     ccnt = np.vstack([zero, np.cumsum(filled, axis=0)])
+    cnz = np.vstack([zero, np.cumsum(filled & (data != 0), axis=0)])
     # does a column vary in a block: sums of squares about one value of the column (exact 0 for a constant block)
     first = data[filled.argmax(axis=0), np.arange(data.shape[1])] if len(data) else np.zeros(data.shape[1])
     dev = np.where(filled, data - np.where(np.isnan(first), 0.0, first)[None, :], 0.0)
@@ -1129,8 +1149,9 @@ def _loose_by_value(num: np.ndarray, arr: np.ndarray, k: int, kind: Dict[int, st
 
     rows = other[loose]
     s, e = starts[loose, 0], starts[loose, 1]
-    sure = (_sums_match(rows, csum[e] - csum[s], ccnt[e] - ccnt[s], cabs[e] - cabs[s], varies(s, e))
-            | _sums_match(rows, csum[loose], ccnt[loose], cabs[loose], varies(np.zeros_like(loose), loose)))
+    sure = (_sums_match(rows, csum[e] - csum[s], ccnt[e] - ccnt[s], cabs[e] - cabs[s], varies(s, e), cnz[e] - cnz[s])
+            | _sums_match(rows, csum[loose], ccnt[loose], cabs[loose], varies(np.zeros_like(loose), loose),
+                          cnz[loose]))
     if few:
         dcnt = ccnt[-1]
         with np.errstate(all="ignore"):
@@ -2247,6 +2268,38 @@ def check_inline_aliases(df: pd.DataFrame, required: List[str]) -> None:
     check_same_column(given, target, "-i", values)
 
 
+def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) -> None:
+    """-i (k=v, JSON text or .json file): a key no model uses ('압력(MPa)=0.5' next to '압력(bar)=3', '습도=50') would
+    be dropped without a word -> STOP_RETRY. known: every name a model takes (inputs, features, derived names) after
+    the unit-less renames of align_input_columns; inputs: the model inputs shown. Matched like a missing input: a
+    model name of the same name without unit (given or not: '압력(MPa)' for '압력(bar)'), else a close spelling among
+    the model names not given (suggest_columns; '습도' is no typo of the given '속도'). One same-unit name -> [추천],
+    a different unit -> unit_hint, several -> [후보], none -> the model inputs. File input (-f) keeps its extra
+    columns (ID, memo)."""
+    given = [str(c) for c in df.columns]
+    known = list(dict.fromkeys(known))
+    unknown = [c for c in given if c not in set(known)]
+    if not unknown:
+        return
+    present = set(given)
+    hints = []
+    for c in unknown:
+        s = [f for f in known if _alias_key(f) == _alias_key(c)] or \
+            suggest_columns(c, [f for f in known if f not in present])
+        if len(s) == 1 and other_unit(c, s[0]):
+            hints.append(unit_hint(c, s[0], "-i의 입력") + (f". '{s[0]}' 값도 -i에 있습니다: 어느 값을 쓸지 사용자에게 물으십시오"
+                                                          if s[0] in present else ""))
+        elif len(s) == 1 and s[0] not in present:
+            hints.append(f"-i의 '{c}' -> [추천] '{s[0]}' ('{c}'을(를) '{s[0]}'(으)로 고쳐 다시 실행)")
+        elif s:
+            hints.append(f"-i의 '{c}'에 가까운 모델 입력: [후보] {', '.join(unit_marked(s, c))}. 어느 것인지 사용자에게 물으십시오")
+        else:
+            hints.append(f"-i의 '{c}'과(와) 비슷한 모델 입력이 없습니다")
+    ask = "" if all("[추천]" in h for h in hints) else " 모델 입력이 아닌 값을 빼고 예측할지 사용자에게 물으십시오."
+    raise InputError(f"-i의 {', '.join(repr(c) for c in unknown)}은(는) 모델 입력이 아니라 예측에 쓰이지 않습니다. "
+                     f"{' / '.join(hints)}.{ask}\n[모델 입력 목록]: {list(dict.fromkeys(inputs))}")
+
+
 def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str]) -> Dict[str, str]:
     """
     Renames input columns written without unit suffix to the trained full name
@@ -2276,12 +2329,17 @@ def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str
 def resolve_target_models(
     target_path: str,
     meta_path: Optional[str] = None,
-    filter_targets: Optional[List[str]] = None
+    filter_targets: Optional[List[str]] = None,
+    kind: str = "타겟(-y)",
+    values: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Resolves model and metadata pairs from a directory (v1/, v2/) or specific file.
     Returns a list of dicts:
     [{"target": "생산효율", "joblib_path": "...", "meta_path": "...", "meta": {...}, "pipeline": ...}]
+    filter_targets are resolved like column names (resolve_column_names: exact name first, then a unique name
+    without its unit; '수율' for '수율(1차)' and '수율(최종)' -> [후보], an exact '수율(1차)' takes that one only).
+    kind / values: passed to resolve_column_names (values: a goal value, a different unit needs converting).
     """
     abs_path = os.path.abspath(target_path)
     if not os.path.exists(abs_path):
@@ -2313,11 +2371,6 @@ def resolve_target_models(
                     sys.stderr.write(f"[WARN] 메타데이터 로드 실패 ({m_path}): {e}\n")
 
             display_target = meta_dict.get("target", target_name)
-            if filter_targets:
-                wanted = set(filter_targets) | {strip_unit(t) for t in filter_targets}
-                if not ({display_target, target_name, strip_unit(display_target)} & wanted):
-                    continue
-
             model_items.append({
                 "target": display_target,
                 "target_safe": target_name,
@@ -2362,6 +2415,18 @@ def resolve_target_models(
             "meta": meta_dict
         })
 
+    if filter_targets and model_items:
+        names = sorted(str(it["target"]) for it in model_items)
+        safe = {str(it.get("target_safe")): str(it["target"]) for it in model_items if it.get("target_safe")}
+        def same(f: str) -> str:
+            """the target written with the same unit spaced or spelled otherwise ('생산량( t )', '온도(℃)')"""
+            if f in names or f in safe:
+                return f if f in names else safe[f]
+            hit = [n for n in names if unit_of(f) and _alias_key(n) == _alias_key(f) and not other_unit(f, n)]
+            return hit[0] if len(hit) == 1 else f
+        given = [same(f) for f in filter_targets]
+        wanted = set(resolve_column_names(given, names, kind, values=values)[0])
+        model_items = [it for it in model_items if str(it["target"]) in wanted]
     if not model_items:
         raise InputError(f"조건에 일치하는 대상 모델을 찾을 수 없습니다 (filter={filter_targets})")
     old = [it["target"] for it in model_items
@@ -2989,6 +3054,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     map_warnings: List[str] = []
     map_notes: List[str] = []
     snapshot_cache: Dict[str, Any] = {}
+    known_names: List[str] = []       # every name a model takes (-i keys beyond these are refused)
+    known_inputs: List[str] = []
 
     # 3. Perform Inference per Target
     for item in model_items:
@@ -3008,6 +3075,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
         # Accept unit-less input column names, then replay derived features
         raw_needed = model_raw_inputs(meta)
+        known_names += raw_needed + req_features + derived_names
+        known_inputs += raw_needed
         if is_inline:
             check_inline_aliases(df_input, list(dict.fromkeys(raw_needed + req_features)))
         column_aliases.update(align_input_columns(df_input, list(dict.fromkeys(raw_needed + req_features)), derived_names))
@@ -3171,6 +3240,9 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                 map_warnings.append(
                     f"타겟 '{target_name}': 실측 비교값이 90% 예측 범위 밖인 건 {int(outside.sum())}건 "
                     f"(모델 예측과 실측 데이터가 많이 다름, 해당 조건의 가까운 실측 행 확인 필요)")
+
+    if is_inline:
+        check_inline_unknown(df_input, known_names, known_inputs)
 
     # 4. Save Output if Requested or File-based
     inline_truncated = is_inline and len(df_result) > INLINE_SHOW_MAX
@@ -3393,8 +3465,11 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         y0 = float(goal_val)
     except (TypeError, ValueError):
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
-    items = resolve_target_models(target_path=args.model, meta_path=args.meta, filter_targets=[str(goal_name)])
-    item = next((it for it in items if it["target"] == str(goal_name)), items[0])
+    # the goal is resolved like ml_map --find: exact name, then a unique name without its unit ('수율' for '수율(1차)'
+    # and '수율(최종)' -> [후보]); a different unit -> unit_hint
+    items = resolve_target_models(target_path=args.model, meta_path=args.meta, filter_targets=[str(goal_name)],
+                                  kind="목표(--find)", values=True)
+    item = items[0]
     meta, pipe, target = item["meta"], item["pipeline"], item["target"]
     if other_unit(str(goal_name), str(target)):
         # '생산량(kg)=500' for the target '생산량(t)': 500 would be solved as 500 t (ml_map --find refuses it too)
