@@ -2,6 +2,20 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.21] - 2026-11-03
+
+12차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1421.py`.
+
+### 수정
+- 시트를 주지 않은 차트 찾기(`excel.find_chart`: `office.py transfer --chart`, `excel.py chart --action delete --name`)가 모든 시트에서
+  이름 또는 제목이 맞는 첫 차트를 골라, 다른 시트에 같은 이름/제목 차트('매출')가 있으면 엉뚱한 차트를 옮기거나(VERIFIED) 지우던 문제.
+  `excel chart`의 `next_commands`에 `--sheet`가 없어 SKILL 순서대로 해도 생겼고, 다른 차트의 제목이 이 차트의 이름과 같으면 가려졌습니다.
+  - 이름이 같은 차트를 제목이 같은 차트보다 우선합니다. 그래도 둘 이상이면 하나를 고르지 않고 STOP_RETRY와 `[후보] 시트!이름`을 냅니다.
+  - 차트 이름 자리에 `시트!이름`을 받습니다(앞부분이 있는 시트 이름일 때. `--sheet`와 같음).
+  - `excel chart`의 `next_commands`(transfer)에 `--sheet <차트가 있는 시트>`를 넣습니다.
+- 이름이 같은 열린 문서가 여럿일 때(`_office.match_open`) 안내가 늘 `--target`이던 문제. 그 명령의 옵션을 말합니다:
+  transfer 받는 쪽 `--to-target`, 보내는 쪽 `--from-target`, `office.py focus`는 `--name` (`match_open(option=...)`).
+
 ## [1.4.20] - 2026-11-02
 
 11차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1420.py`.

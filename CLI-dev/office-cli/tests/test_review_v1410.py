@@ -340,7 +340,7 @@ def test_w6_transfer_partial_failure_is_unverified(monkeypatch, capsys, tmp_path
 
 def test_r5_undo_pick_removes_newer_points_of_same_document(tmp_path, monkeypatch, capsys):
     _com(monkeypatch)
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
     orig = tmp_path / "a.xlsx"
     other = tmp_path / "b.xlsx"
     orig.write_bytes(b"current")
@@ -366,7 +366,7 @@ def test_w8_bare_name_is_not_created_in_cwd(monkeypatch, tmp_path):
     _com(monkeypatch)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "보고.xlsx", "path": "C:\\docs\\보고.xlsx"}])
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
     with pytest.raises(rt.InputError) as ei:
         with off.open_target("excel", "새파일.xlsx", readonly=False, create=True):
             pass

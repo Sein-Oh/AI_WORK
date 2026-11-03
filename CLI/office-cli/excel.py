@@ -1514,16 +1514,40 @@ def _chart_title(obj: Any) -> str:
 
 
 def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = None) -> Tuple[Any, Any]:
-    """차트 이름/제목(대소문자 무시) 또는 번호로 차트를 찾습니다. 시트를 생략하면 모든 시트에서 찾습니다. (시트, 차트개체)"""
+    """차트 이름/제목(대소문자 무시) 또는 번호로 차트를 찾습니다. (시트, 차트개체)
+    시트를 생략하면 모든 시트에서 찾고, '시트!이름' 형식도 받습니다(앞부분이 있는 시트 이름일 때).
+    이름이 같은 차트를 제목이 같은 차트보다 우선하고, 그래도 둘 이상이면 하나를 고르지 않고 [후보](시트!이름) 오류를 냅니다
+    (다른 시트의 같은 이름/제목 차트를 첫 번째 것으로 골라 엉뚱한 차트를 옮기거나 지우지 않게)."""
     wb = t.doc
+    if name is not None and not sheet and "!" in str(name):
+        left, right = str(name).rsplit("!", 1)
+        left = left.strip().strip("'")
+        names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]
+        if right.strip() and any(n.lower() == left.lower() for n in names):
+            sheet, name = left, right.strip()
     sheets = [t.sheet(sheet)] if sheet else [wb.Worksheets(i) for i in range(1, wb.Worksheets.Count + 1)]
     all_names: List[str] = []
+    by_name: List[Tuple[Any, Any]] = []
+    by_title: List[Tuple[Any, Any]] = []
+    key = str(name).strip().lower() if name is not None else None
     for ws in sheets:
         for obj in _chart_objects(ws):
-            labels = [str(obj.Name), _chart_title(obj)]
-            all_names += [x for x in labels if x]
-            if name is None or any(x.strip().lower() == str(name).strip().lower() for x in labels if x):
+            if key is None:
                 return ws, obj
+            nm, title = str(obj.Name), _chart_title(obj)
+            all_names += [x for x in (nm, title) if x]
+            if nm.strip().lower() == key:
+                by_name.append((ws, obj))
+            elif title and title.strip().lower() == key:
+                by_title.append((ws, obj))
+    hits = by_name or by_title
+    labels = list(dict.fromkeys(f"{ws.Name}!{obj.Name}" for ws, obj in hits))
+    if len(labels) > 1:
+        raise rt.ambiguous(
+            f"'{name}'에 해당하는 차트가 {len(labels)}개입니다 (이름 또는 제목이 같음). 하나를 고르지 않았고 아무것도 바꾸지 않았습니다. "
+            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보의 '시트!이름'을 그대로 주세요.", labels)
+    if hits:
+        return hits[0]
     if name is not None and str(name).isdigit():
         ws = sheets[0]
         objs = _chart_objects(ws)
@@ -1645,7 +1669,8 @@ def cmd_chart(args) -> Dict[str, Any]:
     to = _open_receivers()
     fields = dict(target_resolved=resolved, chart_name=chart_name, chart_type=chart_type, data_range=info,
                   next_commands=[rt.next_command("office.py", ["transfer", "--from", "excel", "--from-target", tgt,
-                                                               "--chart", chart_name, "--to", ",".join(to)],
+                                                               "--sheet", str(ws.Name), "--chart", chart_name,
+                                                               "--to", ",".join(to)],
                                                  f"이 차트를 열린 {'와 '.join(off.APP_LABEL[k] for k in to)}에 그림으로 넣기"
                                                  + (" (한쪽만이면 --to word 또는 --to ppt)" if len(to) > 1 else ""))])
     if problems:

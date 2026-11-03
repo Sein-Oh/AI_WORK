@@ -272,10 +272,12 @@ def no_open_doc(kind: str, option: str = "--target", note: str = "") -> "rt.User
         f"{option} \"<전체경로>\"를 붙여 1번만 실행하세요. 경로를 추측하지 마세요.")
 
 
-def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = None,
+               option: str = "--target") -> Optional[Dict[str, Any]]:
     """열린 문서 중 이름/파일명/전체 경로가 target과 같은 것 (대소문자 무시).
     전체 경로가 같으면 그 문서. 이름만 같은 문서가 둘 이상이면(다른 폴더의 같은 파일명, 다른 Excel 창의 Book1 등)
-    하나를 고르지 않고 [후보](전체 경로)와 함께 오류를 냅니다."""
+    하나를 고르지 않고 [후보](전체 경로)와 함께 오류를 냅니다.
+    option: 이 명령에서 대상 문서를 주는 옵션 (office.py transfer는 --from-target/--to-target)."""
     docs = list_open(kind) if docs is None else docs
     t = target.strip().strip('"')
     t_low = t.lower()
@@ -289,7 +291,7 @@ def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = No
     if len(hits) > 1:
         raise rt.ambiguous(
             f"열린 {APP_LABEL[kind]} 문서 중 이름이 '{t}'인 문서가 {len(hits)}개입니다. "
-            "어느 문서인지 사용자에게 확인한 뒤 --target에 전체 경로를 지정하세요.",
+            f"어느 문서인지 사용자에게 확인한 뒤 {option}에 전체 경로를 지정하세요.",
             [d["path"] or f"{d['name']} (저장 안 됨)" for d in hits])
     return hits[0] if hits else None
 
@@ -777,7 +779,7 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             t = OfficeTarget(kind, info["app"], info["doc"], "active", readonly)
         else:
             docs = list_open(kind)
-            hit = match_open(kind, target, docs)
+            hit = match_open(kind, target, docs, option)
             if hit is not None:
                 t = OfficeTarget(kind, hit["app"], hit["doc"], "open", readonly)
             else:

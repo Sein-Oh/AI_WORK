@@ -376,7 +376,7 @@ def test_b6_expanded_absolute_path_can_be_created(monkeypatch, tmp_path):
     _com(monkeypatch)
     monkeypatch.setenv("OCLI_TEST_HOME", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
 
     def new_instance(kind):
         raise _Created()
@@ -391,7 +391,7 @@ def test_b7_missing_absolute_path_is_not_ambiguous(monkeypatch, tmp_path):
     _com(monkeypatch)
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "보고.xlsx", "path": "C:\\docs\\보고.xlsx"},
                                                         {"name": "예산.xlsx", "path": "C:\\docs\\예산.xlsx"}])
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
     with pytest.raises(rt.InputError) as ei:
         with off.open_target("excel", str(tmp_path / "없음.xlsx"), readonly=True):
             pass

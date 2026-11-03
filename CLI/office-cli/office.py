@@ -86,7 +86,7 @@ def cmd_focus(args) -> Dict[str, Any]:
     kind = _app(args.app)
     docs = off.list_open(kind)
     if args.name:
-        hit = off.match_open(kind, args.name, docs)
+        hit = off.match_open(kind, args.name, docs, option="--name")
         if hit is None:
             raise rt.not_found(f"열린 {off.APP_LABEL[kind]} 문서", args.name, [d["name"] for d in docs])
     else:
@@ -378,7 +378,7 @@ def _probe_target(kind: str, target: Optional[str]) -> Tuple[bool, Any, str]:
             return True, off.get_active(kind)["doc"], ""
         except rt.UserDecisionError:
             return False, None, f"열려 있는 {label} 문서가 없음"
-    hit = off.match_open(kind, text)              # 이름이 같은 문서가 여럿이면 [후보] 오류 (아직 바꾼 것 없음)
+    hit = off.match_open(kind, text, option="--to-target")  # 이름이 같은 문서가 여럿이면 [후보] 오류 (아직 바꾼 것 없음)
     if hit is not None:
         return True, hit["doc"], ""
     raw = text.strip('"')

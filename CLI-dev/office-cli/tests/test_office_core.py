@@ -303,7 +303,7 @@ def test_write_session_without_snapshot_leaves_barrier(tmp_path, fake_com, monke
 def test_write_target_typo_of_open_document_does_not_create_new_file(tmp_path, fake_com, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "주간보고.docx", "path": "C:/x/주간보고.docx"}])
-    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None: None)
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": None)
     with pytest.raises(rt.InputError) as ei:
         with off.open_target("word", "주간보고서.docx", readonly=False, create=True):
             pass
