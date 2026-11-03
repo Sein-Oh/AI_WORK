@@ -207,11 +207,19 @@ def _check_near_points(points_df: pd.DataFrame, skip: List[Any], unused: List[st
 
     def still_near(col: str, cand: str) -> bool:
         a, b = re.sub(r"\s+", "", col).lower(), re.sub(r"\s+", "", cand).lower()
+        whole = (a, b)
         for t in tnames:
             if t in a and t in b:
                 a, b = a.replace(t, ""), b.replace(t, "")
-        return (a, b) == (re.sub(r"\s+", "", col).lower(), re.sub(r"\s+", "", cand).lower()) or \
-            not (a or b) or bool(suggest_columns(a, [b], bare=False))
+        if (a, b) == whole:
+            return True
+        # 남은 부분은 기호·괄호를 빼고 비교 ('_상' / '(상)', '1' / '(1단)'은 같은 위치·단의 키 열)
+        a, b = re.sub(r"[\W_]", "", a), re.sub(r"[\W_]", "", b)
+        if not (a or b):
+            return True
+        if a and b and (a in b or b in a):
+            return True
+        return bool(a and b and suggest_columns(a, [b], bare=False))
 
     near = [str(c) for c in points_df.columns
             if c not in skip and not re.fullmatch(r"col_\d+", str(c)) and _is_numeric_col(points_df[c])
