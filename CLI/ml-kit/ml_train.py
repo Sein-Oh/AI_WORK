@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
-    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share,
+    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
 )
 
@@ -1700,6 +1700,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         train_warnings: List[str] = layout_warnings(df_raw, target_names)
         for g in prepared:
             train_warnings.extend(w for w in g["warnings"] if w not in train_warnings)
+        # numbers written with '%' ('64.4%' of an Excel CSV export) are read as 64.4: said, never silent
+        train_warnings.extend(percent_warning(df_raw, [c for g in prepared for c in _numeric_input_columns(g)]
+                                              + (target_names if task == TASK_REGRESSION else [])))
         for w in train_warnings:
             sys.stderr.write(f"[WARN] {w}\n")
         # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the
@@ -2322,7 +2325,9 @@ def _tasks_to_build(records: List[Dict[str, Any]], task: Optional[str], ledger_p
     present = [t for t in TASK_ORDER if any(_record_task(r) == t for r in records)]
     if task:
         if task not in present:
-            raise InputError(f"학습 이력에 {task} 기록이 없습니다. [추천] --task {present[0]}")
+            # the other task builds another best version than asked: the user decides ([후보], no automatic retry)
+            raise InputError(f"학습 이력에 {task} 기록이 없어 그 최고 버전을 만들 수 없습니다. 이력에 있는 학습: "
+                             f"[후보] --task {', --task '.join(present)}. 이 학습의 최고 버전을 만들지 사용자에게 물으십시오.")
         return [task]
     return present
 

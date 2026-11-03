@@ -92,9 +92,10 @@ def test_points_unitless_name_of_the_target_is_no_key(data):
 def test_inline_unitless_name_next_to_the_target_asks(data):
     proc, res = run_raw("ml_map.py", "-f", data["two"], "-i", "온도=180,수율=40", "-y", "수율(최종)")
     msg = _stop(res, proc)
-    assert "[추천]" not in msg and "[후보] '수율(1차)', '수율(최종)'" in msg, msg
+    # 2.9.33: the excluded '수율(최종)' (the -y column) is never a [후보] (was "[후보] '수율(1차)', '수율(최종)'")
+    assert "[추천]" not in msg and "[후보] '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
     msg = _resolve_error(["수율"], ["온도", "수율(1차)", "수율(최종)"], exclude=["수율(최종)"])
-    assert "[추천]" not in msg and "[후보] '수율(1차)', '수율(최종)'" in msg, msg
+    assert "[추천]" not in msg and "[후보] '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -105,21 +106,21 @@ ASK = [("속두", "속도"), ("습두", "습도"), ("온두", "온도"), ("도�
        ("생산랑", "생산량"), ("TempA", "TempB"), ("온도A", "온도B"), ("Heat", "Head"), ("T1", "X1"), ("O2", "T2"),
        ("Ti", "Tim"), ("Ti", "Time"), ("온도", "온도차"), ("설정온도", "온도"), ("반응온도", "온도(°C)"),
        ("수율(1차)", "수율(최종)"), ("생산량(kg)", "생산량(t)"), ("압력(MPa)", "반응압력(bar)")]
+# 2.9.33: sure_typo is gone; these were [추천] and are [후보] now ('반응온도(C)' / '반응온도(°C)' matches instead)
 SURE = [("압룍", "압력"), ("속돜", "속도"), ("온도x", "온도"), ("tmep", "temp"), ("압력", "반응압력"),
-        ("압력(bar)", "반응압력(bar)"), ("반응온도(C)", "반응온도(°C)"), ("Prssure", "Pressure"), ("수율( 1차)", "수율")]
+        ("압력(bar)", "반응압력(bar)"), ("Prssure", "Pressure"), ("수율( 1차)", "수율")]
 
 
 @pytest.mark.parametrize("a,b", ASK)
 def test_not_a_sure_typo(a, b):
-    assert not mp.sure_typo(a, b)
     msg = _resolve_error([a], [b, "zzz"])
     assert "[추천]" not in msg and "[후보]" in msg, msg
 
 
 @pytest.mark.parametrize("a,b", SURE)
 def test_sure_typo(a, b):
-    assert mp.sure_typo(a, b)
-    assert f"[추천] '{b}'" in _resolve_error([a], [b, "zzz"])
+    msg = _resolve_error([a], [b, "zzz"])
+    assert "[추천]" not in msg and f"[후보] '{b}'" in msg, msg
 
 
 def test_common_syllable_typo_cli_is_a_candidate(data):
@@ -127,7 +128,8 @@ def test_common_syllable_typo_cli_is_a_candidate(data):
     msg = _stop(res, proc)
     assert "[추천]" not in msg and "[후보] 습두" in msg, msg
     proc, res = run_raw("ml_predict.py", "-m", data["pm"], "-i", "온도=180,압력=3,속도=45,습돜=50")
-    assert "[추천] '습도'" in _stop(res, proc)
+    msg = _stop(res, proc)
+    assert "[추천]" not in msg and "[후보] 습돜" in msg, msg                 # 2.9.33: was [추천] '습도'
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -140,7 +142,7 @@ def test_train_x_typo_never_suggests_the_target(data):
     assert "[추천]" not in msg and "'생산량'" in msg, msg
     proc, res = run_raw("ml_train.py", "-f", data["two"], "-x", "온도,압력,수율", "-y", "수율(최종)")
     msg = _stop(res, proc)
-    assert "[추천]" not in msg and "[후보] '수율(1차)', '수율(최종)'" in msg, msg
+    assert "[추천]" not in msg and "[후보] '수율(1차)' (비슷한 '수율(최종)'" in msg, msg        # 2.9.33: no -y column
     # the reverse: a -y typo never suggests a feature
     proc, res = run_raw("ml_train.py", "-f", data["p"], "-x", "온도,압력", "-y", "압룍")
     msg = _stop(res, proc)
@@ -173,7 +175,7 @@ def test_eval_never_suggests_a_target():
     assert "[추천]" not in str(e.value) and "타겟" in str(e.value), str(e.value)
     with pytest.raises(mp.InputError) as e:
         mp.apply_eval_expressions(df, ["d = 온돜 * 2"], target_cols=["생산량"])
-    assert "[추천] 온도" in str(e.value), str(e.value)
+    assert "[후보] 온도" in str(e.value) and "[추천]" not in str(e.value), str(e.value)      # 2.9.33: [추천]
 
 
 def test_train_eval_typo_of_the_target(data):
@@ -188,7 +190,7 @@ def test_export_keep_typo_never_suggests_a_given_input():
     assert "[추천]" not in str(e.value), str(e.value)
     with pytest.raises(mp.InputError) as e:
         ml_export._check_known(["압룍"], {"t": ["압력(bar)", "온도"]}, "입력(--keep)")
-    assert "[추천] '압력(bar)'" in str(e.value), str(e.value)
+    assert "[후보] '압력(bar)'" in str(e.value), str(e.value)                  # 2.9.33: [추천]
 
 
 def test_known_columns():
@@ -221,6 +223,6 @@ def test_points_without_y_candidate_has_the_y_guidance(data):
 def test_unitless_name_against_unit_columns():
     msg = _resolve_error(["온두"], ["온도(°C)", "압력(bar)"])
     assert "[추천]" not in msg and "[후보] '온도(°C)'" in msg, msg           # 2.9.31: 유사 컬럼 없음
-    assert "[추천] '온도(°C)'" in _resolve_error(["온돜"], ["온도(°C)", "압력(bar)"])
+    assert "[후보] '온도(°C)'" in _resolve_error(["온돜"], ["온도(°C)", "압력(bar)"])       # 2.9.33: [추천]
     hint = mp._typo_hints(["온도(°C)"], ["온두"], ["온도(°C)"], True)
     assert len(hint) == 1 and "[후보] 온두" in hint[0], hint

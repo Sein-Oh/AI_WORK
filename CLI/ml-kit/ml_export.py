@@ -782,7 +782,8 @@ def _names_in(names: List[str], inputs: List[str], what: str) -> List[str]:
 
 
 def _check_known(names: List[str], all_inputs: Dict[str, List[str]], what: str) -> None:
-    """A name no target has is an input error (with the usual [추천] of resolve_column_names)."""
+    """A name no target has is an input error (with the [후보] of resolve_column_names; the other names of the same
+    option are never listed: '압룍' next to '압력' in --keep "압력,압룍")."""
     union = list(dict.fromkeys(c for ins in all_inputs.values() for c in ins))
     for nm in names:
         if not any(_names_in([nm], ins, what) for ins in all_inputs.values()):
@@ -871,7 +872,11 @@ def execute_export(args) -> Dict[str, Any]:
         if target in spec:
             chosen_inputs = [c for c in spec[target] if c not in const]
             if not chosen_inputs:
-                raise InputError(f"'{target}': --inputs의 입력이 모두 값이 하나뿐이라 표를 만들 수 없습니다. [추천] {','.join(usable[:MAX_INPUTS])}")
+                # the user chose these inputs: another set is the user's choice too ([후보], never an automatic retry
+                # that would also drop the --inputs of the other targets)
+                raise InputError(f"'{target}': --inputs의 입력 {spec[target]}이(가) 모두 학습 데이터에서 값이 하나뿐이라 표를 "
+                                 f"만들 수 없습니다. 값이 변하는 입력: [후보] {', '.join(usable)}. 어느 입력으로 만들지 사용자에게 "
+                                 f"물으십시오 (--inputs 없이 실행하면 입력을 자동으로 고릅니다).")
             missing_keep = [k for k in keep if k not in chosen_inputs]
             if missing_keep:
                 raise InputError(f"--inputs에 --keep 입력 {missing_keep}이(가) 빠져 있습니다.")

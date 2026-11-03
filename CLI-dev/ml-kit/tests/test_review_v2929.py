@@ -102,10 +102,13 @@ def test_other_unit_with_other_base_name_find(models):
 
 
 def test_same_unit_typo_still_suggested(models):
+    # 2.9.33: a close name of the same unit is a [후보] (was [추천]): no unit message, the user picks
     proc, res = run_raw("ml_predict.py", "-m", models["p4"], "-i", "압력(bar)=3,온도=180,속도=45")
-    assert "[추천] '반응압력(bar)'" in _stop(res, proc)
+    msg = _stop(res, proc)
+    assert "[후보]" in msg and "반응압력(bar)" in msg and "[추천]" not in msg and "단위가 다릅니다" not in msg, msg
     proc, res = run_raw("ml_map.py", "-f", models["p4_f"], "-i", "반응압룍(bar)=3", "-y", "생산량")
-    assert "[추천] '반응압력(bar)'" in _stop(res, proc)
+    msg = _stop(res, proc)
+    assert "[후보] '반응압력(bar)'" in msg and "[추천]" not in msg, msg
     # 2.9.31: the same unit spaced otherwise is the same name (resolve_column_names), no [추천] (was the test above)
     proc, res = run_raw("ml_map.py", "-f", models["p4_f"], "-i", "반응압력( bar)=3", "-y", "생산량")
     assert proc.returncode == 0 and res["keys"] == ["반응압력(bar)"], res

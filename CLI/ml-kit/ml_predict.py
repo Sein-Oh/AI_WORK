@@ -29,7 +29,6 @@ import difflib
 import functools
 import argparse
 import warnings
-import unicodedata
 from datetime import datetime
 from itertools import product
 from typing import Dict, Any, List, Optional, Tuple, Callable
@@ -49,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.32"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.33"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -106,6 +105,10 @@ def emit_json_response(payload: Dict[str, Any]) -> None:
 
 class InputError(ValueError):
     """User/agent input or data schema problem. Retrying with the same arguments will not help."""
+
+
+class ColumnNameError(InputError):
+    """A given column name matches no column (resolve_column_names): the message lists [후보] or no similar column."""
 
 
 # Exceptions caused by arguments, data schema or environment (not by a bug in the tool)
@@ -384,83 +387,20 @@ def check_same_column(given: List[str], resolved: List[str], option: str,
                 f"[후보] {', '.join(cands)}")
 
 
-def _osa(a: str, b: str) -> int:
-    """Optimal string alignment distance (insert, delete, change, swap of neighbours)."""
-    d = [[i + j if i * j == 0 else 0 for j in range(len(b) + 1)] for i in range(len(a) + 1)]
-    for i in range(1, len(a) + 1):
-        for j in range(1, len(b) + 1):
-            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
-            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
-                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
-    return d[-1][-1]
-
-
-def _common_syllable(ch: str) -> bool:
-    """A Hangul syllable of the 2350 common ones (KS X 1001: two bytes in EUC-KR, '두'; a rare one like '룍' is not)."""
-    if not "\uac00" <= ch <= "\ud7a3":
-        return False
-    try:
-        return len(ch.encode("euc-kr")) == 2
-    except UnicodeEncodeError:
-        return False
-
-
-def sure_typo(name: str, cand: str) -> bool:
-    """[추천] (an automatic retry) only for a sure typo of cand, compared without units: the same name, one keystroke
-    added, dropped or swapped ('온도x'/'온도', 'tmep'/'temp'), the given name at the end of the column ('압력'/'반응압력';
-    not '설정온도'/'온도'), or one
-    jamo changed into a rare syllable ('압룍'/'압력'). Not for another word ('습도'/'속도', '온도'/'농도', 'Temp'/'Time'),
-    another number ('T1'/'T2', '온도1'/'온도2'), a short ASCII name ('CO2'/'O2', 'O2'/'T2', 'Ti'/'Tim'), a name at the
-    front of the other ('온도'/'온도차', 'Ti'/'Time'), another unit or qualifier in brackets ('수율(1차)'/'수율(최종)',
-    '생산량(kg)'/'생산량(t)'; '°C'/'C' is the same unit), one letter for another ('TempA'/'TempB', 'Heat'/'Head'), nor one
-    syllable changed into another common one ('속두'/'속도', '강도'/'경도': the given syllable is a real one, maybe of
-    another word): those are [후보] (ask the user). name is the given name, cand the column or model name."""
-    if other_unit(name, cand):
-        return False                      # '수율(1차)'/'수율(최종)', '생산량(kg)'/'생산량(t)': another quantity or unit
-    a, b = _alias_key(name), _alias_key(cand)
-    if a == b:
-        return True
-    if re.sub(r"\D", "", a) != re.sub(r"\D", "", b):
-        return False
-    if a.isascii() and b.isascii() and max(len(a), len(b)) <= 3:
-        return False                      # 'T1'/'X1', 'Ti'/'Tim': case and spacing are alias-equal above
-    s, l = sorted((a, b), key=len)
-    if len(s) >= 2 and l.endswith(s):
-        # the head noun kept: '압력' for '반응압력' (not '온도'/'온도차', 'Ti'/'Time'); a given name longer than the
-        # column ('설정온도' for '온도') names a narrower quantity the data may not hold: [후보]
-        return s == a
-    if _osa(unicodedata.normalize("NFD", a), unicodedata.normalize("NFD", b)) > 1:
-        return False
-    if len(a) == len(b):
-        diff = [i for i in range(len(a)) if a[i] != b[i]]
-        if len(diff) == 1 and all(x[diff[0]].isascii() and x[diff[0]].isalpha() for x in (a, b)):
-            return False                  # one letter for another: 'TempA'/'TempB', '온도A'/'온도B', 'Heat'/'Head'
-        if len(diff) == 1 and "\uac00" <= b[diff[0]] <= "\ud7a3" and _common_syllable(a[diff[0]]):
-            return False                  # the given syllable is a common one: '속두'/'속도', '강도'/'경도'
-    return True
-
-
-def one_or_ask(name: str, cands: List[str], quote: bool = True) -> str:
-    """'[추천] <c>' for one candidate that is a sure typo of name, else '[후보] a, b' (the user picks)."""
-    shown = [repr(c) if quote else c for c in cands]
-    if len(cands) == 1 and sure_typo(name, cands[0]):
-        return f"[추천] {shown[0]}"
-    return f"[후보] {', '.join(shown)}"
-
-
 def _same_unit_name(given: str, column: str) -> bool:
-    """given is column written with spaces elsewhere ('수율( 1차)', '생산량 ( t )' for '수율(1차)', '생산량(t)'): the same
-    name without unit and the same unit when spaces are dropped. Only for names that carry a unit ('°C' / 'C' is
-    another spelling, not another spacing: [추천])."""
-    ug, uc = unit_of(given), unit_of(column)
-    return bool(ug and uc) and _alias_key(given) == _alias_key(column) and \
-        re.sub(r"\s+", "", ug) == re.sub(r"\s+", "", uc)
+    """given is column written otherwise ('수율( 1차)', '생산량 ( t )', '압력 [bar]', '온도(C)' / '온도(℃)' for '수율(1차)',
+    '생산량(t)', '압력(bar)', '온도(°C)'): the same name without unit (case and spaces aside) and the same unit when
+    spaces are dropped and '°C', '℃' and 'C' are one unit (other_unit). Only for names that both carry a unit; the case
+    of a unit counts ('mg' / 'Mg')."""
+    return bool(unit_of(given) and unit_of(column)) and _alias_key(given) == _alias_key(column) and \
+        not other_unit(given, column)
 
 
-def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
+def suggest_columns(name: str, columns: List[str], n: int = 3, bare: bool = True) -> List[str]:
     """Similar columns: the columns of the same name without unit first (all of them: '수율' for '수율(1차)' and
-    '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns). A name
-    given without unit is also compared with the column names without unit ('온두' / '온도(°C)')."""
+    '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns). bare: a name
+    given without unit is also compared with the column names without unit ('온두' / '온도(°C)'). Close spellings
+    are never a sure match: they are [후보] for the user, never [추천]."""
     key = _alias_key(name)
     cols = [str(c) for c in columns]
     hits = [c for c in cols if key and _alias_key(c) == key]
@@ -468,18 +408,19 @@ def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
     for c in difflib.get_close_matches(str(name), cols, n=n, cutoff=0.5):
         if c not in hits:
             hits.append(c)
-    if strip_unit(name) == str(name).strip():
-        bare: Dict[str, List[str]] = {}
+    if bare and strip_unit(name) == str(name).strip():
+        by_bare: Dict[str, List[str]] = {}
         for c in cols:
-            bare.setdefault(strip_unit(c), []).append(c)
-        for b in difflib.get_close_matches(str(name).strip(), list(bare), n=n, cutoff=0.5):
-            hits.extend(c for c in bare[b] if c not in hits)
+            by_bare.setdefault(strip_unit(c), []).append(c)
+        for b in difflib.get_close_matches(str(name).strip(), list(by_bare), n=n, cutoff=0.5):
+            hits.extend(c for c in by_bare[b] if c not in hits)
     return hits[:n]
 
 
 def _match_names(names: List[str], columns: List[str]) -> List[Optional[str]]:
-    """The column each name is (None when it is none): the exact name, the same name and unit spaced otherwise
-    ('수율( 1차)'), or a unique name written WITHOUT a unit ('생산효율' -> '생산효율(%)'; a different unit is a typo)."""
+    """The column each name is (None when it is none): the exact name, the same name and unit written otherwise
+    ('수율( 1차)', '온도(C)' for '온도(°C)': _same_unit_name), or a unique name written WITHOUT a unit
+    ('생산효율' -> '생산효율(%)'; a different unit is another column). Only these deterministic equivalences match."""
     col_list = [str(c) for c in columns]
     col_set = set(col_list)
     alias_map = build_alias_map(col_list)
@@ -507,18 +448,17 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                          layout: Optional[Dict[str, Any]] = None, values: bool = False,
                          exclude: Optional[List[str]] = None) -> Tuple[List[str], Dict[str, str]]:
     """
-    Resolves requested names against real columns. Exact match first, then a unique
-    unit-less alias ('생산효율' -> '생산효율(%)'). A name with a different unit
-    ('반응온도(C)') is NOT auto-matched. Raises InputError with suggestions otherwise:
-    one similar column -> [추천] '<name>', several -> [후보] '<a>', '<b>'.
+    Resolves requested names against real columns: the exact name, the same name and unit written otherwise
+    ('온도(C)' -> '온도(°C)') or a unique unit-less alias ('생산효율' -> '생산효율(%)'), each matched with an [INFO]
+    note. Anything else is no sure match and raises InputError with [후보] (the user picks, even one candidate):
+    a close spelling may be another quantity ('속도' / '가속도', '수율' / '함수율'), never an automatic [추천].
     layout (df.attrs of load_data_file): when the missing names are all in another top row (two-level or merged
     header, title row), the suggestion is that row (header_layout_hint), with its unit row when the row below it is one.
-    values: the names carry values (-i '압력(MPa)=0.3'): a column of the same name with another unit ('압력(bar)') is not
-    suggested as a rename ([추천] would keep the MPa value under bar); the value must be converted (unit_hint).
+    values: the names carry values (-i '압력(MPa)=0.3'): one column of the same name with another unit ('압력(bar)')
+    is no rename, the value must be converted (unit_hint).
     A column found for another given name is not suggested for a missing one (except the same name in another unit).
-    exclude: columns this option cannot take (ml_map -i next to -y / --find / --vary, -x next to -y): matched when
-    named, never suggested (a [추천] that makes the -y column a key would fail on the retry). When an excluded column is
-    as near as the others ('수율' for '수율(1차)' with '수율(최종)' excluded), no [추천]: [후보] for the user.
+    exclude: columns this command already uses elsewhere (ml_map -i next to -y / --find / --vary, -x next to -y,
+    the other names of ml_export --keep): matched when named, never listed as a candidate.
     """
     col_list = [str(c) for c in columns]
     resolved: List[str] = []
@@ -540,37 +480,28 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
         taken = set(resolved)
         banned = set(exclude or [])
         for m in missing:
-            # a column another given name already takes is no typo target ('습도' next to a given '속도'), unless it
+            # a column another given name already takes is no candidate ('습도' next to a given '속도'), unless it
             # is the same name in another unit ('압력(MPa)' next to a given '압력(bar)': unit_hint)
             free = [c for c in col_list if c not in taken or _alias_key(c) == _alias_key(m)]
             s = suggest_columns(m, [c for c in free if c not in banned])
             near_banned = [c for c in suggest_columns(m, free) if c in banned]
-            if near_banned:
-                # an excluded column (-y next to -x, --vary next to -i) is as near: '수율' for '수율(1차)' only because
-                # '수율(최종)' is the -y column is no sure match. Never [추천]; the columns of that name all as [후보]
-                same = [c for c in col_list if _alias_key(c) == _alias_key(m)]
-                if any(c in banned for c in same):
-                    s = same
-                shown = unit_marked(s, m, quote=True) if values else [repr(c) for c in s]
-                other = f"비슷한 {', '.join(repr(c) for c in near_banned)}은(는) 이 명령의 다른 옵션에 쓰인 열"
-                hints.append(f"'{m}' -> [후보] {', '.join(shown)} ({other}이라 이름을 사용자에게 확인)" if s else
-                             f"'{m}' -> {other}입니다. 이름을 사용자에게 확인하십시오")
-            elif values and len(s) == 1 and other_unit(m, s[0]):
+            used = (f" (비슷한 {', '.join(repr(c) for c in near_banned)}은(는) 이 명령에서 이미 다른 이름이나 옵션에 "
+                    f"쓰인 열)") if near_banned else ""
+            if values and not near_banned and len(s) == 1 and other_unit(m, s[0]):
                 hints.append(unit_hint(m, s[0], kind))
-            elif len(s) == 1 and sure_typo(m, s[0]):
-                hints.append(f"'{m}' -> [추천] '{s[0]}'")
-            elif len(s) == 1:
-                # another word or number ('습도' / '속도', 'T1' / 'T2'): the user decides, no automatic retry
-                hints.append(f"'{m}' -> [후보] {', '.join(unit_marked(s, m, quote=True) if values else [repr(s[0])])} "
-                             f"(이름이 다른 낱말일 수 있어 사용자에게 확인)")
             elif s:
                 shown = unit_marked(s, m, quote=True) if values else [repr(c) for c in s]
-                hints.append(f"'{m}' -> [후보] {', '.join(shown)}")
+                hints.append(f"'{m}' -> [후보] {', '.join(shown)}{used}")
+            elif near_banned:
+                hints.append(f"'{m}' -> 비슷한 열 {', '.join(repr(c) for c in near_banned)}은(는) 이 명령에서 이미 다른 "
+                             f"이름이나 옵션에 쓰인 열입니다")
             else:
                 hints.append(f"'{m}' -> 유사 컬럼 없음")
-        raise InputError(
+        ask = (" 비슷한 이름은 다른 양일 수 있으니 어느 열인지 사용자에게 물으십시오."
+               if any("[후보]" in h for h in hints) else "")
+        raise ColumnNameError(
             f"지정하신 {kind} 컬럼 {missing}을(를) 데이터셋에서 찾을 수 없습니다. "
-            f"{' / '.join(hints)}\n[사용 가능한 컬럼 목록]: {col_list}"
+            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {col_list}"
         )
     for short, full in applied.items():
         sys.stderr.write(f"[INFO] 컬럼명 자동 매칭: '{short}' -> '{full}'\n")
@@ -622,10 +553,43 @@ def decimal_comma_text_share(series: pd.Series) -> Tuple[int, int, int, List[str
     return int(filled.sum()), int(dc.sum()), int(num.sum()), ex
 
 
+_PERCENT_RE = re.compile(r"([+-]?(\d[\d,]*\.?\d*|\.\d+)([eE][-+]?\d+)?)\s*%")
+
+
+def _strip_percent(text: str) -> str:
+    """'64.4%' / '64.4 %' -> '64.4' (an Excel CSV export of percent cells); any other text unchanged."""
+    m = _PERCENT_RE.fullmatch(text)
+    return m.group(1) if m else text
+
+
+def percent_cells(series: pd.Series) -> Tuple[int, List[str]]:
+    """(cells written as a number with '%', first examples) of a column: coerce_numeric reads them as the number
+    without '%' (64.4, not 0.644). Training, prediction and ml_map warn with percent_warning."""
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return 0, []
+    hits = [v.strip() for v in series.astype("object") if isinstance(v, str) and _PERCENT_RE.fullmatch(v.strip())]
+    return len(hits), list(dict.fromkeys(hits))[:3]
+
+
+def percent_warning(df: pd.DataFrame, columns: List[str], where: str = "") -> List[str]:
+    """One warning per column of columns with numbers written with '%' (percent_cells)."""
+    out = []
+    for c in dict.fromkeys(columns):
+        if c not in df.columns:
+            continue
+        n, ex = percent_cells(df[c])
+        if n:
+            first = _strip_percent(ex[0])
+            out.append(f"{where}'{c}' 열의 {n}칸({', '.join(repr(v) for v in ex)})은 %를 떼고 숫자로 읽었습니다 "
+                       f"({ex[0]} -> {first}, 100으로 나누지 않음). 열의 단위가 %인지 확인하십시오.")
+    return out
+
+
 def coerce_numeric(series: pd.Series) -> pd.Series:
     """
     Converts a column to float regardless of its storage dtype (object in pandas 2,
-    'str' in pandas 3). Strips thousands separators and placeholder NaN strings.
+    'str' in pandas 3). Strips thousands separators, a trailing '%' ('64.4%' -> 64.4, the number as written:
+    the column name usually says (%) already; percent_cells tells the user) and placeholder NaN strings.
     Numeric and datetime columns are returned unchanged.
     """
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
@@ -633,7 +597,7 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
     s = series.astype("object").where(series.notna(), None)
     # 천 단위 쉼표만 지움 ('1,500', '1,234,567.5'). '175,6'처럼 쉼표 뒤가 3자리가 아니면 천 단위가 아니므로
     # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (예전에는 1756으로 조용히 바뀜)
-    s = s.map(lambda v: _strip_thousands(v.strip()) if isinstance(v, str) else v)
+    s = s.map(lambda v: _strip_thousands(_strip_percent(v.strip())) if isinstance(v, str) else v)
     s = s.replace(_NA_PLACEHOLDERS, np.nan)
     return pd.to_numeric(s, errors="coerce").astype(float)
 
@@ -1164,7 +1128,7 @@ def _number_matrix(arr: np.ndarray, kinds: List[Any], k_excl: Optional[int]) -> 
         try:
             col = pd.Series(arr[:, c])
             v = pd.to_numeric(col, errors="coerce").to_numpy(dtype=float)
-            if np.isnan(v).any() and col.map(lambda t: isinstance(t, str) and "," in t).any():
+            if np.isnan(v).any() and col.map(lambda t: isinstance(t, str) and ("," in t or "%" in t)).any():
                 v = coerce_numeric(col).to_numpy(dtype=float)
             out[:, c] = v
         except (TypeError, ValueError):
@@ -1438,7 +1402,7 @@ def _number(v: Any) -> Optional[float]:
     t = _cell_text(v)
     if isinstance(v, (datetime, np.datetime64)) or not t or _numeric_share([t]) != 1:
         return None
-    return float(t.replace(",", ""))
+    return float(_strip_percent(t.strip()).replace(",", ""))
 
 
 def _below_block(df_raw: pd.DataFrame, j: int, skip: List[List[str]]) -> np.ndarray:
@@ -1609,7 +1573,7 @@ def _numeric_share(cells: List[str]) -> float:
     n = 0
     for c in cells:
         try:
-            float(c.replace(",", ""))
+            float(_strip_percent(c.strip()).replace(",", ""))
             n += 1
         except ValueError:
             pass
@@ -1618,14 +1582,14 @@ def _numeric_share(cells: List[str]) -> float:
 
 def names_in_cells(names: List[str], cells: List[str], model_names: bool = False) -> bool:
     """True when every name is one of the cells, exactly or by a unique unit-less alias written without a unit
-    ('온도' ~ '온도(°C)'), the same rule as resolve_column_names ('온도(C)' does not match '온도(°C)').
+    ('온도' ~ '온도(°C)') or the same unit written otherwise ('온도(C)' ~ '온도(°C)'), the rule of resolve_column_names.
     model_names (prediction, the align_input_columns rule): a model name with a unit also matches a cell without a
     unit ('반응온도(°C)' ~ '반응온도')."""
     cell_set = set(cells)
     alias = build_alias_map(cells)
 
     def _hit(n: str) -> bool:
-        if n in cell_set:
+        if n in cell_set or sum(_same_unit_name(n, c) for c in cells) == 1:
             return True
         src = alias.get(_alias_key(n))
         if src is None:
@@ -1795,6 +1759,7 @@ SAFE_MATH: Dict[str, Any] = {
     "degrees": np.degrees,
 }
 
+_NUMBER_NAME_RE = re.compile(r"(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")    # a column name that reads as a number
 _NAME_BOUNDARY_L = r"(?<![가-힣a-zA-Z0-9_])"
 _NAME_BOUNDARY_R = r"(?![가-힣a-zA-Z0-9_])"
 
@@ -1817,7 +1782,7 @@ def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: 
                 hint = (f" -> [후보] {', '.join(s)} ({other}. 이름을 사용자에게 확인)" if s else
                         f" ({other}. 이름을 사용자에게 확인)")
             else:
-                hint = f" -> {one_or_ask(node.id, s, quote=False)}" if s else ""
+                hint = f" -> [후보] {', '.join(s)} (어느 열인지 사용자에게 확인)" if s else ""
             raise InputError(
                 f"수식의 식별자 '{node.id}'에 해당하는 컬럼이 없습니다"
                 + hint
@@ -1833,6 +1798,15 @@ def compile_formula(formula: str, columns: List[str]) -> Tuple[str, Dict[str, st
     Returns (tokenized_formula, token_to_column, canonical_formula_with_full_names).
     """
     col_list = [str(c) for c in columns]
+    # a column named like a number ('1', '2'): the number in the formula ('*2', also '2.5') would silently read that
+    # column (the same boundaries as the name replacement below)
+    for c in col_list:
+        if _NUMBER_NAME_RE.fullmatch(c.strip()) and \
+                re.search(_NAME_BOUNDARY_L + re.escape(c) + _NAME_BOUNDARY_R, formula):
+            raise InputError(
+                f"데이터에 숫자 이름의 열 '{c}'이(가) 있어 수식 '{formula}'의 숫자 {c.strip()}이(가) 숫자인지 그 열인지 알 수 "
+                f"없습니다 (수식은 열 이름을 따옴표나 괄호로 감싸 쓰는 방법이 없음). 사용자에게 알려 데이터의 열 '{c}' 이름을 "
+                f"글자가 든 이름(예: '열{c.strip()}')으로 바꾼 뒤 다시 실행하십시오.")
     token_to_col: Dict[str, str] = {}
     transformed = formula
     idx = 0
@@ -2407,8 +2381,8 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
     be dropped without a word -> STOP_RETRY. known: every name a model takes (inputs, features, derived names) after
     the unit-less renames of align_input_columns; inputs: the model inputs shown. Matched like a missing input: a
     model name of the same name without unit (given or not: '압력(MPa)' for '압력(bar)'), else a close spelling among
-    the model names not given (suggest_columns; '습도' is no typo of the given '속도'). One same-unit name -> [추천],
-    a different unit -> unit_hint, several -> [후보], none -> the model inputs. File input (-f) keeps its extra
+    the model names not given (suggest_columns; '습도' is no typo of the given '속도'). A different unit -> unit_hint,
+    else [후보] (even one: a close spelling may be another quantity), none -> the model inputs. File input (-f) keeps its extra
     columns (ID, memo)."""
     given = [str(c) for c in df.columns]
     known = list(dict.fromkeys(known))
@@ -2423,17 +2397,12 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
         if len(s) == 1 and other_unit(c, s[0]):
             hints.append(unit_hint(c, s[0], "-i의 입력") + (f". '{s[0]}' 값도 -i에 있습니다: 어느 값을 쓸지 사용자에게 물으십시오"
                                                           if s[0] in present else ""))
-        elif len(s) == 1 and s[0] not in present and sure_typo(c, s[0]) and \
-                not any(f in present for f in suggest_columns(c, known)):
-            # a given model input as near ('속돠' next to a given '속도') makes it no sure rename: [후보]
-            hints.append(f"-i의 '{c}' -> [추천] '{s[0]}' ('{c}'을(를) '{s[0]}'(으)로 고쳐 다시 실행)")
         elif s:
             hints.append(f"-i의 '{c}'에 가까운 모델 입력: [후보] {', '.join(unit_marked(s, c))}. 어느 것인지 사용자에게 물으십시오")
         else:
             hints.append(f"-i의 '{c}'과(와) 비슷한 모델 입력이 없습니다")
-    ask = "" if all("[추천]" in h for h in hints) else " 모델 입력이 아닌 값을 빼고 예측할지 사용자에게 물으십시오."
     raise InputError(f"-i의 {', '.join(repr(c) for c in unknown)}은(는) 모델 입력이 아니라 예측에 쓰이지 않습니다. "
-                     f"{' / '.join(hints)}.{ask}\n[모델 입력 목록]: {list(dict.fromkeys(inputs))}")
+                     f"{' / '.join(hints)}. 모델 입력이 아닌 값을 빼고 예측할지 사용자에게 물으십시오.\n[모델 입력 목록]: {list(dict.fromkeys(inputs))}")
 
 
 def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str]) -> Dict[str, str]:
@@ -2899,7 +2868,8 @@ _LAYOUT_ARTEFACT_RE = re.compile(r"^.*\(\s*[-+]?(\d[\d,]*\.?\d*|\.\d+)([eE][-+]?
 
 def _typo_hints(missing: List[str], available: List[str], model_names: List[str], is_inline: bool) -> List[str]:
     """A missing model input and the given name that looks like a typo of it, worded the way the user fixes it:
-    "-i의 '온두' -> [추천] '온도'". Only given names that are not model inputs count as typos."""
+    "'온도'이(가) 없습니다. -i의 [후보] 온두 ...": a close spelling may be another quantity, so the user decides
+    (never [추천]). Only given names that are not model inputs count as typos."""
     where = "-i의" if is_inline else "입력 데이터 열"
     known = set(model_names)
     # 'bar(3)' / '°C(192.58)': a unit row read as the header and a data row as units, not a name to rename
@@ -2915,7 +2885,7 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
         if alias and alias not in cands:
             cands.insert(0, alias)
         found[m] = cands
-    # one given name close to two or more missing inputs ('솔도' for '속도' and '습도'): one [후보], never two [추천]
+    # one given name close to two or more missing inputs ('솔도' for '속도' and '습도'): one [후보] for that name
     wanted: Dict[str, List[str]] = {}
     for m, cands in found.items():
         for c in cands:
@@ -2924,15 +2894,11 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
     for c, ms in shared.items():
         out.append(f"{where} '{c}'은(는) 여러 모델 입력과 비슷합니다. '{c}'을(를) 어느 이름으로 고칠지 사용자에게 물으십시오: "
                    f"[후보] {', '.join(unit_marked(ms, c))}")
-    given_inputs = [c for c in available if c in known]
     for m in missing:
         cands = [c for c in found[m] if c not in shared]
         if len(cands) == 1 and other_unit(cands[0], m):
             # '압력(MPa)' for the model's '압력(bar)': a rename would read the MPa value as bar (no [추천])
             out.append(unit_hint(cands[0], m, where))
-        elif len(cands) == 1 and sure_typo(cands[0], m) and not suggest_columns(cands[0], given_inputs):
-            # (a given name as near to an input already given is no sure rename to the missing one: [후보])
-            out.append(f"{where} '{cands[0]}' -> [추천] '{m}' ('{cands[0]}'을(를) '{m}'(으)로 고쳐 다시 실행)")
         elif cands:
             shown = unit_marked(cands, m)
             out.append(f"'{m}'이(가) 없습니다. {where} [후보] {', '.join(shown)} 중 '{m}'(으)로 고칠 이름을 사용자에게 물으십시오")
@@ -3211,6 +3177,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     snapshot_cache: Dict[str, Any] = {}
     known_names: List[str] = []       # every name a model takes (-i keys beyond these are refused)
     known_inputs: List[str] = []
+    numeric_inputs: List[str] = []    # numbers written with '%' in these are read without it (percent_warning)
 
     # 3. Perform Inference per Target
     for item in model_items:
@@ -3232,6 +3199,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         raw_needed = model_raw_inputs(meta)
         known_names += raw_needed + req_features + derived_names
         known_inputs += raw_needed
+        numeric_inputs += [c for c in raw_needed if c not in meta["feature_schema"].get("categorical", {})
+                           and c not in meta["feature_schema"].get("datetime", {})]
         if is_inline:
             check_inline_aliases(df_input, list(dict.fromkeys(raw_needed + req_features)))
         column_aliases.update(align_input_columns(df_input, list(dict.fromkeys(raw_needed + req_features)), derived_names))
@@ -3468,6 +3437,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         sys.stderr.write(f"[WARN] Missing input: {w}\n")
     for w in map_warnings:
         sys.stderr.write(f"[WARN] Map check: {w}\n")
+    file_warnings += [w for w in percent_warning(df_input, numeric_inputs) if w not in file_warnings]
     for w in file_warnings:
         sys.stderr.write(f"[WARN] {w}\n")
 
@@ -3498,7 +3468,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + (" with unseen-category warning" if category_warnings else "")
         + (" with map-check warning (measured-data comparison outside the prediction interval)" if map_warnings else "")
         + ". "
-        + ("Tell the user every item of warnings (rows of the file that are not data rows). " if file_warnings else "")
+        + ("Tell the user every item of warnings (rows of the file that are not data rows, numbers read without '%'). "
+           if file_warnings else "")
         + ("Report each prediction together with its measured-data comparison (map_check: value, diff, method) in Korean as "
            "'실측 비교값'. " if any("map_check_keys" in p for p in predictions_summary.values()) else "")
         + (f"Inline input has {len(df_result)} records, more than {INLINE_SHOW_MAX}: per-record predictions are not in "

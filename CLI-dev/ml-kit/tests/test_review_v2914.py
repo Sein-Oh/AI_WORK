@@ -84,21 +84,23 @@ def heads(tmp_path_factory):
 
 
 def test_header_hint_not_the_current_row(heads):
-    bad = run_fail("ml_train.py", "-f", heads["u"], "-x", "온도(C),압력", "-y", "y")
+    # 2.9.33: '온도(C)' is '온도(°C)' (the same unit) and matches; a typo '온도x' is a [후보] (was [추천] for '온도(C)')
+    bad = run_fail("ml_train.py", "-f", heads["u"], "-x", "온도x,압력", "-y", "y")
     assert "--header-row" not in bad["message"]                                 # 2.9.13: [추천] --header-row 1
-    assert "'온도(C)' -> [추천] '온도(°C)'" in bad["message"]
+    assert "'온도x' -> [후보] '온도(°C)'" in bad["message"]
     bad = run_fail("ml_train.py", "-f", heads["u2"], "-x", "온도", "-y", "y")
     assert "--header-row" not in bad["message"] and "[후보]" in bad["message"]
     bad = run_fail("ml_train.py", "-f", heads["u3"], "-x", "온도,압력", "-y", "y")   # '압력' is a data value
     assert "--header-row" not in bad["message"]                                 # 2.9.13: [추천] --header-row 3
-    bad = run_fail("ml_map.py", "-f", heads["u"], "-i", "온도(C)=0.5")
-    assert "--header-row" not in bad["message"] and "[추천] '온도(°C)'" in bad["message"]
+    bad = run_fail("ml_map.py", "-f", heads["u"], "-i", "온도x=0.5")
+    assert "--header-row" not in bad["message"] and "[후보] '온도(°C)'" in bad["message"]       # 2.9.33: 온도(C), [추천]
 
 
 def test_find_header_row_rules():
     cands = [[1, ["제목"]], [3, ["온도(°C)", "압력"]]]
     assert mp.find_header_row(cands, ["온도", "압력"]) == 3
-    assert mp.find_header_row(cands, ["온도(C)"]) is None                       # a different unit is not the same name
+    assert mp.find_header_row(cands, ["온도(K)"]) is None                       # a different unit is not the same name
+    assert mp.find_header_row(cands, ["온도(C)"]) == 3                          # 2.9.33: '°C' / 'C' is one unit (was None)
     assert mp.find_header_row([[2, ["온도(C)", "온도(K)"]]], ["온도"]) is None   # ambiguous alias
 
 

@@ -25,7 +25,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
-    setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
+    setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
+    percent_warning,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
@@ -139,11 +140,12 @@ _ASK_POINTS = (" -y가 없어 이 열이 기준 열인지 구할 열의 실측�
 
 def _ask_without_y(e: InputError, ask: bool) -> InputError:
     """Without -y every numeric column not used as a key is a value column, so a points column near one of them may be
-    its measured value: no [추천] (a rename could make it a key or leave nothing to compute), a [후보] for the user."""
-    if not ask:
+    its measured value: the user says which (the -y guidance). Only for an unknown column name (ColumnNameError of
+    resolve_column_names), never for another error (a key value that is no number, two names of one column)."""
+    if not ask or not isinstance(e, ColumnNameError):
         return e
-    head, sep, tail = str(e).replace("[추천]", "[후보]").partition("\n")
-    return InputError(f"{head}{_ASK_POINTS}{sep}{tail}")
+    head, sep, tail = str(e).partition("\n")
+    return ColumnNameError(f"{head}{_ASK_POINTS}{sep}{tail}")
 
 
 def _is_exact_key(name: str, cols: List[str]) -> bool:
@@ -183,23 +185,28 @@ def _points_keys(points_df: pd.DataFrame, keycols: List[str], targets: List[str]
 
 
 def _check_near_points(points_df: pd.DataFrame, skip: List[Any], unused: List[str], layout: Dict[str, Any],
-                       ask: bool = False, used: Optional[List[str]] = None) -> None:
+                       ask: bool = False, used: Optional[List[str]] = None, targets: Optional[List[str]] = None) -> None:
     """A numeric --points column that is no key but nearly matches a data column not used as a key ('반응 압력(bar)'
     for '반응압력(bar)', '압력(MPa)' for '반응압력(bar)'): the result would look as if the pressure was used. The same
-    matcher and message as -i ([추천] / [후보] / unit_hint). Columns like no data column (memo, ID) pass through.
-    unused never holds a -y target (a measured column '생산량_실측' is no typo of '생산량'); ask (no -y): [후보] only.
-    used (the keys and -y columns) are never suggested, and one as near as an unused column leaves [후보] only."""
+    message as -i ([후보] / unit_hint). Columns like no data column (memo, ID) pass through.
+    Near means the same name without unit or a close spelling of the whole name; the comparison of the names without
+    unit only builds the [후보] list (as the gate it stopped measured columns: '수율_실측' / '수율(1차)').
+    A column holding a -y target's name without unit ('수율_실측', '목표수율', '수율 실측' for -y '수율(최종)') is
+    that target's measured value or memo and passes through. unused never holds a -y target; ask (no -y): the -y
+    guidance. used (the keys and -y columns) are never listed."""
+    tnames = [_alias_key(strip_unit(t)) for t in (targets or [])]
     near = [str(c) for c in points_df.columns
             if c not in skip and not re.fullmatch(r"col_\d+", str(c)) and _is_numeric_col(points_df[c])
-            and suggest_columns(str(c), unused)]
+            and not any(t and t in re.sub(r"\s+", "", str(c)).lower() for t in tnames)
+            and suggest_columns(str(c), unused, bare=False)]
     if not near:
         return
     try:
         resolve_column_names(near, unused + [c for c in (used or []) if c not in unused], "조회 파일(--points)",
                              layout=layout, values=True, exclude=used)
-    except InputError as e:
+    except ColumnNameError as e:
         head, sep, tail = str(e).partition("\n")
-        raise _ask_without_y(InputError(
+        raise _ask_without_y(ColumnNameError(
             f"{head} 이 열은 기준 열로 쓰이지 않아 결과가 그 값을 반영하지 않습니다. 조회 파일의 머리글을 데이터 "
             f"열 이름으로 고친 뒤 같은 명령을 다시 실행하십시오.{sep}{tail}"), ask)
 
@@ -285,6 +292,14 @@ def _common(tab: Dict[str, Any], result: Dict[str, Any], warnings: List[str]) ->
     if tab["excluded"]:
         warnings.insert(0, f"'{tab['exclude_col']}' 열에 표시된 {tab['excluded']}행은 쓰지 않았습니다")
     warnings[:0] = tab.get("layout_warnings") or []
+    # numbers written with '%' ('64.4%') in the columns used are read as 64.4 (coerce_numeric): said, never silent
+    used = (list(result.get("keys") or []) + list(result.get("columns") or []) + [result.get("vary") or ""]
+            + list(result.get("find") or {}) + list(result.get("fixed") or {}))
+    pct = [w for w in percent_warning(tab["df"], used) if w not in warnings]
+    if pct:
+        warnings.extend(pct)
+        if "warnings" not in result.get("agent_directive", ""):
+            result["agent_directive"] = result.get("agent_directive", "") + " warnings도 함께 알리세요."
     result.update({"data_file": tab["path"], "data_saved_at": tab["saved_at"]})
     if warnings:
         result["warnings"] = warnings
@@ -324,7 +339,7 @@ def execute_forward(args) -> Dict[str, Any]:
             raise InputError(f"조회 파일에는 숫자 기준 열만 넣어 주십시오 (글자 열: {list(categorical)}).")
         key_src = dict(zip(numeric, usable))
         _check_near_points(points_df, usable + measured, [c for c in keycols if c not in numeric], df.attrs,
-                           ask=not args.targets, used=list(numeric) + targets)
+                           ask=not args.targets, used=list(numeric) + targets, targets=targets)
     else:
         numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=targets)
         key_src = {}

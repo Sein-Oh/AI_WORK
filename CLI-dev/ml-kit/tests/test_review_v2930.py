@@ -130,7 +130,7 @@ def test_points_near_name_refused(map_data):
     p = _points(tmp, "sp.csv", ["온도", "반응압룍(bar)"], [[180, 2.0], [180, 4.0]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1.xlsx"))
     msg = _stop(res, proc)
-    assert "[추천] '반응압력(bar)'" in msg and "반응압룍(bar)" in msg, msg
+    assert "[후보] '반응압력(bar)'" in msg and "반응압룍(bar)" in msg and "[추천]" not in msg, msg     # 2.9.33: [추천]
     # 2.9.31: '반응 압력(bar)' (the same name and unit spaced otherwise) is the key itself
     p = _points(tmp, "sp1.csv", ["온도", "반응 압력(bar)"], [[180, 2.0], [180, 4.0]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1b.xlsx"))
@@ -169,10 +169,10 @@ def test_inline_unknown_key_refused(models):
 
 
 def test_inline_typo_key_suggested(models):
-    # a typo of a model input that is not given: [추천] (also when all inputs are there through another name)
+    # a typo of a model input that is not given: [후보] (2.9.33, was [추천] '속도'; a close name may be another word)
     proc, res = run_raw("ml_predict.py", "-m", models["p1"], "-i", "압력=3,온도=180,속돜=45")
     msg = _stop(res, proc)
-    assert "[추천] '속도'" in msg, msg
+    assert "[후보] 속돜 중 '속도'" in msg and "[추천]" not in msg, msg
     # 2.9.32: '속두' (one common syllable for another) is [후보]
     proc, res = run_raw("ml_predict.py", "-m", models["p1"], "-i", "압력=3,온도=180,속두=45")
     msg = _stop(res, proc)

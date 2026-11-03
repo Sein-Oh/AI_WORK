@@ -187,7 +187,8 @@ def test_model_names_with_units_match_header_without_units():
     cells = ["반응온도", "압력", "라인", "수율"]
     assert mp.names_in_cells(["반응온도(°C)", "압력(bar)", "라인"], cells, model_names=True)
     assert not mp.names_in_cells(["반응온도(°C)"], cells)              # user names (-x): a unit is part of the name
-    assert not mp.names_in_cells(["온도(C)"], ["온도(°C)"], model_names=True)
+    assert not mp.names_in_cells(["온도(K)"], ["온도(°C)"], model_names=True)
+    assert mp.names_in_cells(["온도(C)"], ["온도(°C)"], model_names=True)  # 2.9.33: '°C' / 'C' is one unit (was False)
 
 
 def test_repeated_header_and_totals_rows(tmp_path):

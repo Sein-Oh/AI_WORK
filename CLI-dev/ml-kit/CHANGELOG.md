@@ -2,6 +2,83 @@
 
 이 문서는 2.0.0부터 관리합니다. 형식: 버전별 `구조 / 기능 / 호환` + 하단 `남은 할 일`.
 
+## [2.9.33] - 2026-11-03
+
+22차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v2933.py` (2.9.32에서 38개 중 33개 실패).
+
+### 설계 (이름 맞추기의 `[추천]`을 없앰)
+- 2.9.28~2.9.32의 다섯 차례 오타 판단(`sure_typo`) 수정은 매번 새 예외를 만들었습니다. 마지막은 끝 포함 규칙으로 `속도` -> `[추천] '가속도'`,
+  `수율` -> `[추천] '함수율(%)'`: 에이전트는 `[추천]`을 스스로 다시 실행하므로 값이 다른 양으로 말없이 들어갔습니다.
+- 새 규칙: 철자가 비슷한 열·피처·타겟 이름(`difflib`)은 후보가 하나여도 `[추천]`이 아닌 `[후보]`(사용자에게 물음)이고, 메시지에 "비슷한 이름은 다른
+  양일 수 있으니 어느 열인지 사용자에게 물으십시오"를 붙입니다. `resolve_column_names`(학습 `-x`/`-y`, 예측 `-y`/`--find`, `ml_map.py`의 모든 이름과
+  `--points`, `ml_export.py`, `ml_report.py --target`), 예측 `-i`의 모르는 이름(`check_inline_unknown`), 빠진 입력 열(`_typo_hints`), `--eval` 수식
+  이름(`_validate_eval_ast`)이 모두 같습니다.
+- 같은 열로 확실히 정해지는 이름은 묻지 않고 그대로 맞춥니다(`[INFO] 컬럼명 자동 매칭`): 정확한 이름, 단위 없이 쓴 고유한 이름, 단위를 뺀 이름
+  (대소문자·띄어쓰기 무시)과 단위(띄어쓰기, 괄호 모양 `[bar]`/`(bar)`, `°C`·`℃`·`C`)가 같은 이름. 새로 맞추는 것은 도 기호 표기(`온도(C)`, `온도(℃)`
+  -> `온도(°C)`, 이전에는 `[추천]`)뿐이고, 그런 열이 둘이면 `[후보]`. 단위의 대소문자(`mg`/`Mg`)는 다른 단위. 머리글 행 찾기(`names_in_cells`)도 같음.
+- 지운 것: `sure_typo`, `one_or_ask`, `_osa`, `_common_syllable`(자모, KS X 1001 완성형, 짧은 영문 규칙). `_same_unit_name`이 도 기호 표기까지 맡습니다.
+- 그대로: 다른 옵션이 쓰는 열(`exclude=`)은 후보가 아님, 단위가 다른 이름 하나는 값 환산 안내(`unit_hint`), 주어진 이름마다 묶은 `[후보]`.
+- 이름이 아닌 `[추천]`을 하나씩 확인: 다시 실행해 확인한 머리글·단위·데이터 행 명령, 쉼표를 뺀 `-i` 명령, `--version <다음>`, `-o <이름>.csv`,
+  8개를 넘는 `--inputs`의 줄인 안(다른 타겟의 `--inputs` 유지)은 그대로 `[추천]`. 아래 둘은 사용자가 뜻한 것과 달라 `[후보]`로 바꿈:
+  `ml_export.py --inputs`의 입력이 모두 값이 하나뿐일 때(L1), `ml_train.py --best --task`에 이력이 없는 학습(다른 학습의 최고 버전이 됨).
+
+### 수정
+- R1 (2.9.32 회귀): `ml_map.py --points`에서 `-y` 타겟과 단위를 뺀 이름이 같은 열이 있으면(`-y 수율(최종)` 옆 `수율(1차)`, `-y 생산량`도) 실측값·메모 열
+  `수율 실측`, `수율_실측`, `목표수율`, `수율목표`를 단위를 뺀 이름 비교로 `수율(1차)`와 "비슷한" 열로 보고 멈추던 문제. `_check_near_points`는
+  `-y` 타겟의 단위를 뺀 이름이 든 열을 실측값·메모 열로 통과시키고(2.9.31처럼), 비슷한 열 판단에는 단위를 뺀 이름 비교를 쓰지 않습니다
+  (`suggest_columns(..., bare=False)`; 그 비교는 `[후보]` 목록을 만들 때만).
+- R2 (2.9.32 회귀): `-y` 없는 `--points`의 "-y가 없어 ..." 안내가 숫자가 아닌 기준 값, 같은 열을 가리키는 두 이름 같은 다른 오류에도 붙던 문제.
+  `resolve_column_names`의 이름 오류(새 `ColumnNameError`, `InputError`의 하위 클래스)에만 붙입니다(`_ask_without_y`).
+- H1: 위 설계. `속도`/`가속도`, `수율`/`함수율(%)`은 `[후보]`.
+- H2: 숫자로 읽히는 이름의 열(`1`, `2`)이 있으면 `--eval` 수식의 숫자(`온도*2`, `2.5`)가 그 열로 바뀌어 말없이 다른 값을 계산하던 문제(`compile_formula`).
+  그 숫자가 수식에 있으면 `STOP_RETRY`(수식에는 열 이름을 감싸 쓰는 방법이 없어 열 이름을 바꾸라는 안내).
+- M1: `%`를 붙여 쓴 숫자(`64.4%`, Excel 백분율 칸을 CSV로 저장한 값)를 숫자로 읽지 못해 피처는 "ID/일련번호로 보입니다"나 범주, 타겟은 "숫자로 변환
+  가능한 값이 하나도 없습니다 ... --task classification"(틀린 안내)이던 문제. `coerce_numeric`(PART C, 학습·예측·표 보간 공통)이 끝의 `%`와 앞뒤 공백을
+  떼고 쓰인 그대로 읽습니다(64.4, 0.644가 아님). 열마다 `warnings`에 "'<열>' 열의 N칸('64.4%')은 %를 떼고 숫자로 읽었습니다 (64.4% -> 64.4, 100으로
+  나누지 않음)"(`percent_cells`, `percent_warning`): 학습(숫자 피처, `--eval` 원본 열, 회귀 타겟), 예측(숫자 입력, `warnings`), `ml_map.py`(쓴 열).
+  피처 종류·ID 판단 전에 숫자로 읽히고, 단위 행 판단(`_numeric_share`, `_number`)과 합계 행 값 비교(`_number_matrix`)도 같게 읽습니다.
+  읽을 수 없는 숫자 경고(`unparsed_number_cells`)에는 `%` 숫자가 더 이상 들지 않습니다.
+- L1: `ml_export.py --inputs`의 입력이 모두 값이 하나뿐이면 `[추천] <다른 입력 8개>`가 사용자의 선택과 다른 타겟의 `--inputs`를 바꾸던 문제.
+  `[후보] <값이 변하는 입력>`과 사용자에게 묻는 안내.
+- L2: 다른 옵션이 쓰는 열이 `[후보]`에 다시 들어가던 문제(같은 이름의 열이면 `s = same`으로 되살림). `exclude=`의 열은 `[후보]`에 넣지 않고,
+  안내 문구를 "이 명령에서 이미 다른 이름이나 옵션에 쓰인 열"로 고침(`ml_export.py --keep "압력,압룍"`처럼 같은 옵션의 다른 이름도 맞게).
+
+### 바꾼 기대값 (의도한 변경)
+- `test_cli_smoke.py::test_train_column_typo_suggests`: `반응온도(C)`는 이제 맞으므로 오타 `반응온도x`로 바꾸고 `[추천]` -> `[후보]`.
+- `test_export_v290.py`: `--keep 온도x`는 `[추천]` -> `[후보] '온도'`.
+- `test_layout_matrix_v2918.py::test_model_names_with_units_match_header_without_units`: `names_in_cells(["온도(C)"], ["온도(°C)"])`는
+  이제 참(같은 단위), 다른 단위 검사는 `온도(K)`.
+- `test_review_v296.py::test_inputs_and_keep_drop_constant_with_hint`: `[추천] a` -> `[후보] a` (L1).
+- `test_review_v2913.py::test_inline_typo_points_at_the_user_key`: `도핑농돜` -> `[후보]`.
+- `test_review_v2914.py::test_header_hint_not_the_current_row`: `온도(C)`는 맞으므로 오타 `온도x`로 바꾸고 `[추천]` -> `[후보]` (`ml_train.py`, `ml_map.py -i`);
+  `test_find_header_row_rules`: `온도(C)`는 `온도(°C)` 머리글 행을 찾음(이전에는 None), 다른 단위 검사는 `온도(K)`.
+- `test_review_v2929.py::test_same_unit_typo_still_suggested`: 예측 `-i 압력(bar)`(모델 `반응압력(bar)`)과 `ml_map.py -i 반응압룍(bar)`은 `[후보]`.
+- `test_review_v2930.py`: `test_points_near_name_refused`(`반응압룍(bar)`)와 `test_inline_typo_key_suggested`(`속돜`)는 `[후보]`.
+- `test_review_v2931.py`: `test_points_other_word_is_no_recommendation`(`속돜`), `test_inline_keys_never_suggest_the_value_column`(`압룍(bar)`),
+  `test_other_word_is_a_candidate`(`sure_typo` 검사 뺌), `test_typo_still_recommended`(6쌍 모두 `[후보]`; 맞는 `반응 온도`, `반응온도(C)`는
+  `test_typo_resolve_messages`로), `test_train_and_predict_other_word`(`습돜`), `test_one_name_for_two_inputs`(`속돜`), `test_eval_unknown_name_wording`
+  (`온돜`), `test_spaced_unit_is_exact`(`온도(C)`는 맞음).
+- `test_review_v2932.py`: `test_inline_unitless_name_next_to_the_target_asks`와 `test_train_x_typo_never_suggests_the_target`(`[후보]`에 `-y` 열
+  `수율(최종)`이 없음, L2), `test_not_a_sure_typo`/`test_sure_typo`(`sure_typo` 검사 뺌, `SURE` 8쌍은 `[후보]`, `반응온도(C)`는 맞으므로 뺌),
+  `test_common_syllable_typo_cli_is_a_candidate`(`습돜`), `test_eval_never_suggests_a_target`(`온돜`), `test_export_keep_typo_never_suggests_a_given_input`
+  (`압룍`), `test_unitless_name_against_unit_columns`(`온돜`).
+
+### 테스트
+- `test_review_v2933.py`: `sure_typo` 없음, 철자가 비슷한 9쌍 `[후보]`(`속도`/`가속도`, `수율`/`함수율(%)`, `속두`, `압룍`, `온도x`, `tmep`, `압력`/`반응압력(bar)`,
+  `생산량(kg)`/`생산량`, `온돜`), 같은 열 7쌍 자동 맞춤(`온도(C)`, `온도(℃)`, `TEMP(°C)`/`temp(℃)`, `압력 [bar]`, `수율( 1차)`, `반응 온도(C)`, `생산효율`),
+  단위 대소문자·같은 열 둘은 `[후보]`, 학습 `-x 속도`/`-y 수율`(데이터 `가속도`, `함수율(%)`), 학습 `-x 온도(C)`, `ml_map.py -i 압룍`, `--points` 실측값 열
+  4종 x `-y` 2종 통과와 가까운 이름 `솎도`의 `[후보]`, `-y` 없음 안내(숫자 아님·같은 열 둘에는 없음, 이름 오류에는 있음), 숫자 이름 열과 수식,
+  `%` 숫자(`coerce_numeric`, 학습 피처·타겟 경고, `%` 없는 같은 데이터와 같은 점수, 예측 경고와 같은 예측값, `ml_map.py` 경고),
+  `ml_export.py --inputs` 상수 입력 `[후보]`, `exclude=` 열이 `[후보]`에 없음과 `--keep` 안내, `--best --task` `[후보]`.
+- 이름 쌍 비교(새로 만든 96 x 74, 7030쌍의 `resolve_column_names`; 제조 열 이름 74개 + 오타·다른 표기 22개): 2.9.32 `[추천]` 24, `[후보]` 282,
+  자동 맞춤 6, 유사 없음 6718 -> 2.9.33 `[추천]` 0, `[후보]` 303, 자동 맞춤 9, 유사 없음 6718. `[추천]` -> `[후보]` 21쌍(`속도`/`가속도`, `속도`/`사출속도`,
+  `함량`/`수분함량`, `효율`/`생산효율(%)`, `강도`/`인장강도`, `전력`/`소비전력`, `압룍`/`압력(bar)`, `온도x`/`온도(°C)`, `tmep`/`Temp`, `생산량(kg)`/`생산량` 등),
+  `[추천]` -> 자동 맞춤 3쌍(`온도(C)`, `온도(℃)` -> `온도(°C)`, `반응온도(C)` -> `반응온도(°C)`). 이름 맞추기의 `[추천]`은 이제 없습니다(같은 열은 맞추고,
+  나머지는 묻기).
+- 이전 점검 입력 폴더(r8~r22, 1407개 파일) 불러오기 비교: 열, 행 수, 합계 행 결과가 바뀐 파일 없음. `%` 숫자를 읽게 된 파일 21개:
+  r22 `pct.csv`(`습도(%)`), `pct2.csv`(`수분(%)`), `pcty.csv`(`수율(최종)`)는 숫자 열이 됨(이전에는 글자), r8/r9/r14 `L12_pct_text.xlsx` 18개(같은
+  파일의 사본)는 `수율` 열의 `12%` 칸 하나를 12로 읽음(이전에는 빈 값).
+
 ## [2.9.32] - 2026-11-03
 
 21차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v2932.py` (2.9.31에서 42개 중 32개 실패).

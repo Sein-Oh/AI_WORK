@@ -173,7 +173,8 @@ def test_two_level_header_hint(tmp_path, layout):
 
 def test_inline_typo_points_at_the_user_key(tiny):
     bad = run_fail("ml_predict.py", "-m", tiny["v"], "-i", "도핑농돜=5e-6,온도=5")
-    assert "-i의 '도핑농돜' -> [추천] '도핑농도'" in bad["message"]            # 2.9.12: "'도핑농도' -> [추천] ['도핑농두']"
+    # 2.9.33: [후보] (was "-i의 '도핑농돜' -> [추천] '도핑농도'"; 2.9.12: "'도핑농도' -> [추천] ['도핑농두']")
+    assert "-i의 [후보] 도핑농돜 중 '도핑농도'" in bad["message"] and "[추천]" not in bad["message"], bad["message"]
     # 2.9.32: '도핑농두' (one common syllable for another) is [후보], the user picks
     bad = run_fail("ml_predict.py", "-m", tiny["v"], "-i", "도핑농두=5e-6,온도=5")
     assert "[추천]" not in bad["message"] and "-i의 [후보] 도핑농두 중 '도핑농도'" in bad["message"], bad["message"]
