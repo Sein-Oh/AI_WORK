@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path,
-    read_text_file, load_json_file, resolve_column_names, coerce_numeric,
+    read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share,
@@ -215,8 +215,11 @@ def validate_and_sanitize_data(
     all_available = [str(c) for c in df.columns]
 
     layout = dict(df.attrs)    # two-level / merged header, title row -> [추천] --header-row N (+ unit row)
-    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", layout=layout)
-    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", layout=layout)
+    # -y first; a -x typo never suggests a target (nor a -y typo a feature): the other option's columns are excluded
+    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", layout=layout,
+                                                   exclude=known_columns(feature_names, all_available))
+    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", layout=layout,
+                                                     exclude=target_names)
     feature_names = list(dict.fromkeys(feature_names))
     target_names = list(dict.fromkeys(target_names))
 
@@ -776,7 +779,8 @@ def train_and_benchmark_classifiers(
         if len(classes) != 2:
             raise InputError(f"--positive-class는 이진 분류(클래스 2개)에서만 사용할 수 있습니다. 타겟 '{target_name}' 클래스: {classes}")
         if positive_class not in classes:
-            raise InputError(f"--positive-class '{positive_class}'가 타겟 '{target_name}'의 클래스에 없습니다. [추천] {classes}")
+            raise InputError(f"--positive-class '{positive_class}'가 타겟 '{target_name}'의 클래스에 없습니다. "
+                             f"놓치면 안 되는 클래스를 사용자에게 물으십시오: [후보] {', '.join(str(c) for c in classes)}")
 
     min_ratio = min(class_counts.values()) / len(y)
     balanced = min_ratio < 0.20

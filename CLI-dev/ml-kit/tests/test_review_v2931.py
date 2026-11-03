@@ -103,11 +103,16 @@ def test_points_without_y_asks(data, col):
 
 def test_points_other_word_is_no_recommendation(data):
     # '습도2' next to the data column '습도': another number, [후보]; a sure typo keeps [추천] and its retry works
+    # (2.9.32: '속두' is one common syllable for another, [후보]; the rare-syllable typo '속돜' keeps [추천])
     pts = _points(data, "h2.csv", ["온도(°C)", "압력(bar)", "습도2"], [[180, 3, 1], [185, 3.5, 2]])
     proc, res = _map_points(data, pts, "-y", "생산량")
     msg = _stop(res, proc)
     assert "[추천]" not in msg and "[후보] '습도'" in msg, msg
     pts = _points(data, "sp.csv", ["온도(°C)", "압력 (bar)", "속두"], [[180, 3, 45], [185, 3.5, 46]])
+    proc, res = _map_points(data, pts, "-y", "생산량")
+    msg = _stop(res, proc)
+    assert "[추천]" not in msg and "[후보] '속도'" in msg, msg
+    pts = _points(data, "sp1.csv", ["온도(°C)", "압력 (bar)", "속돜"], [[180, 3, 45], [185, 3.5, 46]])
     proc, res = _map_points(data, pts, "-y", "생산량")
     assert "[추천] '속도'" in _stop(res, proc)
     pts = _points(data, "sp2.csv", ["온도(°C)", "압력 (bar)", "속도"], [[180, 3, 45], [185, 3.5, 46]])
@@ -130,8 +135,10 @@ def test_inline_keys_never_suggest_the_value_column(data):
 
 OTHER_WORDS = [("습도", "속도"), ("온도", "농도"), ("T1", "T2"), ("온도1", "온도2"), ("반응온도", "반응농도"),
                ("Temp", "Time"), ("CO2", "O2"), ("pH", "H"), ("Ax", "A")]
-TYPOS = [("속두", "속도"), ("압력(bar)", "반응압력(bar)"), ("반응 온도", "반응온도"), ("반응온도(C)", "반응온도(°C)"),
-         ("온도x", "온도"), ("도핑농두", "도핑농도"), ("tmep", "temp"), ("생산량(kg)", "생산량(t)")]
+# 2.9.32: '속두'/'속도' and '도핑농두'/'도핑농도' (one common syllable for another) and '생산량(kg)'/'생산량(t)' (another
+# unit) moved to [후보] (test_review_v2932.py); the rare-syllable typos '속돜' and '도핑농돜' keep [추천]
+TYPOS = [("속돜", "속도"), ("압력(bar)", "반응압력(bar)"), ("반응 온도", "반응온도"), ("반응온도(C)", "반응온도(°C)"),
+         ("온도x", "온도"), ("도핑농돜", "도핑농도"), ("tmep", "temp"), ("생산량(kg)", "생산량")]
 
 
 @pytest.mark.parametrize("a,b", OTHER_WORDS)
@@ -148,7 +155,7 @@ def test_typo_still_recommended(a, b):
 
 
 def test_typo_resolve_messages():
-    for a, b in (("속두", "속도"), ("압력(bar)", "반응압력(bar)"), ("반응온도(C)", "반응온도(°C)"), ("온도x", "온도")):
+    for a, b in (("속돜", "속도"), ("압력(bar)", "반응압력(bar)"), ("반응온도(C)", "반응온도(°C)"), ("온도x", "온도")):
         with pytest.raises(mp.InputError) as e:
             mp.resolve_column_names([a], [b, "생산량"], "피처(-x)")
         assert f"[추천] '{b}'" in str(e.value), str(e.value)
@@ -156,7 +163,10 @@ def test_typo_resolve_messages():
 
 def test_train_and_predict_other_word(data):
     proc, res = run_raw("ml_train.py", "-f", data["p"], "-x", "온도,압력,습두", "-y", "생산량")
-    assert "[추천] '습도'" in _stop(res, proc)                               # one jamo: a typo
+    msg = _stop(res, proc)                                    # 2.9.32: one common syllable for another, [후보]
+    assert "[추천]" not in msg and "[후보] '습도'" in msg, msg
+    proc, res = run_raw("ml_train.py", "-f", data["p"], "-x", "온도,압력,습돜", "-y", "생산량")
+    assert "[추천] '습도'" in _stop(res, proc)                               # a rare syllable: a typo
     proc, res = run_raw("ml_predict.py", "-m", data["two"], "-i", "온도=180,압력=2.5,농도=3")
     msg = _stop(res, proc)
     assert "[추천]" not in msg and "농도" in msg, msg
@@ -173,8 +183,9 @@ def test_one_name_for_two_inputs(data):
     assert "[추천]" not in msg and msg.count("[후보]") == 1 and "[후보] 속도, 습도" in msg, msg
     hints = mp._typo_hints(["속도", "습도"], ["온도(°C)", "솔도"], ["온도(°C)", "속도", "습도"], False)
     assert len(hints) == 1 and "[후보] 속도, 습도" in hints[0], hints
-    assert mp._typo_hints(["속도"], ["속두"], ["속도"], True) == \
-        ["-i의 '속두' -> [추천] '속도' ('속두'을(를) '속도'(으)로 고쳐 다시 실행)"]
+    assert mp._typo_hints(["속도"], ["속돜"], ["속도"], True) == \
+        ["-i의 '속돜' -> [추천] '속도' ('속돜'을(를) '속도'(으)로 고쳐 다시 실행)"]
+    assert "[후보] 속두" in mp._typo_hints(["속도"], ["속두"], ["속도"], True)[0]     # 2.9.32: [추천] -> [후보]
     assert "[추천]" not in mp._typo_hints(["속도"], ["습도"], ["속도"], True)[0]
 
 
@@ -191,7 +202,8 @@ def _formula_error(expr, cols):
 def test_eval_unknown_name_wording():
     msg = _formula_error("d = 수율 * 2", ["수율(1차)", "수율(최종)", "온도"])
     assert "[후보] 수율(1차), 수율(최종)" in msg and "['" not in msg.split("[사용 가능한")[0], msg
-    assert "-> [추천] 온도." in _formula_error("d = 온두 * 2", ["온도", "압력"])
+    assert "-> [후보] 온도." in _formula_error("d = 온두 * 2", ["온도", "압력"])     # 2.9.32: [추천] -> [후보]
+    assert "-> [추천] 온도." in _formula_error("d = 온돜 * 2", ["온도", "압력"])
     msg = _formula_error("d = T3 - T1", ["T1", "T2"])
     assert "[추천]" not in msg and "[후보] T2" in msg, msg
 

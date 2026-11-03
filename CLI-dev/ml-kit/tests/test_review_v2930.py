@@ -170,9 +170,13 @@ def test_inline_unknown_key_refused(models):
 
 def test_inline_typo_key_suggested(models):
     # a typo of a model input that is not given: [추천] (also when all inputs are there through another name)
-    proc, res = run_raw("ml_predict.py", "-m", models["p1"], "-i", "압력=3,온도=180,속두=45")
+    proc, res = run_raw("ml_predict.py", "-m", models["p1"], "-i", "압력=3,온도=180,속돜=45")
     msg = _stop(res, proc)
     assert "[추천] '속도'" in msg, msg
+    # 2.9.32: '속두' (one common syllable for another) is [후보]
+    proc, res = run_raw("ml_predict.py", "-m", models["p1"], "-i", "압력=3,온도=180,속두=45")
+    msg = _stop(res, proc)
+    assert "[추천]" not in msg and "[후보] 속두" in msg, msg
 
 
 def test_inline_exact_keys_ok_and_file_extra_columns_kept(models):

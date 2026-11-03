@@ -49,7 +49,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.31"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.32"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -395,23 +395,49 @@ def _osa(a: str, b: str) -> int:
     return d[-1][-1]
 
 
+def _common_syllable(ch: str) -> bool:
+    """A Hangul syllable of the 2350 common ones (KS X 1001: two bytes in EUC-KR, '두'; a rare one like '룍' is not)."""
+    if not "\uac00" <= ch <= "\ud7a3":
+        return False
+    try:
+        return len(ch.encode("euc-kr")) == 2
+    except UnicodeEncodeError:
+        return False
+
+
 def sure_typo(name: str, cand: str) -> bool:
-    """[추천] (an automatic retry) only for a typo of cand, compared without units: the same name, one keystroke
-    (one jamo / letter added, dropped, changed or swapped: '속두'/'속도'), or one name inside the other ('압력'/'반응압력').
-    Not for another word ('습도'/'속도', '온도'/'농도', 'Temp'/'Time') or another number ('T1'/'T2', '온도1'/'온도2'), nor
-    for short ASCII names of different length ('CO2'/'O2', 'pH'/'H', 'Ax'/'A'): those are [후보] (ask the user).
-    Real words one jamo apart ('강도'/'경도', '점도'/'정도') still pass: a known limit."""
+    """[추천] (an automatic retry) only for a sure typo of cand, compared without units: the same name, one keystroke
+    added, dropped or swapped ('온도x'/'온도', 'tmep'/'temp'), the given name at the end of the column ('압력'/'반응압력';
+    not '설정온도'/'온도'), or one
+    jamo changed into a rare syllable ('압룍'/'압력'). Not for another word ('습도'/'속도', '온도'/'농도', 'Temp'/'Time'),
+    another number ('T1'/'T2', '온도1'/'온도2'), a short ASCII name ('CO2'/'O2', 'O2'/'T2', 'Ti'/'Tim'), a name at the
+    front of the other ('온도'/'온도차', 'Ti'/'Time'), another unit or qualifier in brackets ('수율(1차)'/'수율(최종)',
+    '생산량(kg)'/'생산량(t)'; '°C'/'C' is the same unit), one letter for another ('TempA'/'TempB', 'Heat'/'Head'), nor one
+    syllable changed into another common one ('속두'/'속도', '강도'/'경도': the given syllable is a real one, maybe of
+    another word): those are [후보] (ask the user). name is the given name, cand the column or model name."""
+    if other_unit(name, cand):
+        return False                      # '수율(1차)'/'수율(최종)', '생산량(kg)'/'생산량(t)': another quantity or unit
     a, b = _alias_key(name), _alias_key(cand)
     if a == b:
         return True
     if re.sub(r"\D", "", a) != re.sub(r"\D", "", b):
         return False
-    if a.isascii() and b.isascii() and max(len(a), len(b)) <= 3 and len(a) != len(b):
-        return False
+    if a.isascii() and b.isascii() and max(len(a), len(b)) <= 3:
+        return False                      # 'T1'/'X1', 'Ti'/'Tim': case and spacing are alias-equal above
     s, l = sorted((a, b), key=len)
-    if len(s) >= 2 and s in l:
-        return True
-    return _osa(unicodedata.normalize("NFD", a), unicodedata.normalize("NFD", b)) <= 1
+    if len(s) >= 2 and l.endswith(s):
+        # the head noun kept: '압력' for '반응압력' (not '온도'/'온도차', 'Ti'/'Time'); a given name longer than the
+        # column ('설정온도' for '온도') names a narrower quantity the data may not hold: [후보]
+        return s == a
+    if _osa(unicodedata.normalize("NFD", a), unicodedata.normalize("NFD", b)) > 1:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        if len(diff) == 1 and all(x[diff[0]].isascii() and x[diff[0]].isalpha() for x in (a, b)):
+            return False                  # one letter for another: 'TempA'/'TempB', '온도A'/'온도B', 'Heat'/'Head'
+        if len(diff) == 1 and "\uac00" <= b[diff[0]] <= "\ud7a3" and _common_syllable(a[diff[0]]):
+            return False                  # the given syllable is a common one: '속두'/'속도', '강도'/'경도'
+    return True
 
 
 def one_or_ask(name: str, cands: List[str], quote: bool = True) -> str:
@@ -433,14 +459,48 @@ def _same_unit_name(given: str, column: str) -> bool:
 
 def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
     """Similar columns: the columns of the same name without unit first (all of them: '수율' for '수율(1차)' and
-    '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns)."""
+    '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns). A name
+    given without unit is also compared with the column names without unit ('온두' / '온도(°C)')."""
     key = _alias_key(name)
-    hits = [str(c) for c in columns if key and _alias_key(c) == key]
+    cols = [str(c) for c in columns]
+    hits = [c for c in cols if key and _alias_key(c) == key]
     n = max(n, len(hits))
-    for c in difflib.get_close_matches(str(name), [str(c) for c in columns], n=n, cutoff=0.5):
+    for c in difflib.get_close_matches(str(name), cols, n=n, cutoff=0.5):
         if c not in hits:
             hits.append(c)
+    if strip_unit(name) == str(name).strip():
+        bare: Dict[str, List[str]] = {}
+        for c in cols:
+            bare.setdefault(strip_unit(c), []).append(c)
+        for b in difflib.get_close_matches(str(name).strip(), list(bare), n=n, cutoff=0.5):
+            hits.extend(c for c in bare[b] if c not in hits)
     return hits[:n]
+
+
+def _match_names(names: List[str], columns: List[str]) -> List[Optional[str]]:
+    """The column each name is (None when it is none): the exact name, the same name and unit spaced otherwise
+    ('수율( 1차)'), or a unique name written WITHOUT a unit ('생산효율' -> '생산효율(%)'; a different unit is a typo)."""
+    col_list = [str(c) for c in columns]
+    col_set = set(col_list)
+    alias_map = build_alias_map(col_list)
+    out: List[Optional[str]] = []
+    for n in names:
+        same = [] if n in col_set else [c for c in col_list if _same_unit_name(n, c)]
+        if n in col_set:
+            out.append(n)
+        elif len(same) == 1:
+            out.append(same[0])
+        elif strip_unit(n) == n.strip() and _alias_key(n) in alias_map:
+            out.append(alias_map[_alias_key(n)])
+        else:
+            out.append(None)
+    return out
+
+
+def known_columns(names: List[str], columns: List[str]) -> List[str]:
+    """The columns the names match (resolve_column_names without errors or messages): the columns another option
+    takes, passed as exclude= when resolving this one (-x next to -y)."""
+    return [c for c in _match_names(names, columns) if c is not None]
 
 
 def resolve_column_names(names: List[str], columns: List[str], kind: str,
@@ -456,30 +516,21 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     values: the names carry values (-i '압력(MPa)=0.3'): a column of the same name with another unit ('압력(bar)') is not
     suggested as a rename ([추천] would keep the MPa value under bar); the value must be converted (unit_hint).
     A column found for another given name is not suggested for a missing one (except the same name in another unit).
-    exclude: columns this option cannot take (ml_map -i next to -y / --find / --vary): matched when named, never
-    suggested (a [추천] that makes the -y column a key would fail on the retry).
+    exclude: columns this option cannot take (ml_map -i next to -y / --find / --vary, -x next to -y): matched when
+    named, never suggested (a [추천] that makes the -y column a key would fail on the retry). When an excluded column is
+    as near as the others ('수율' for '수율(1차)' with '수율(최종)' excluded), no [추천]: [후보] for the user.
     """
     col_list = [str(c) for c in columns]
-    col_set = set(col_list)
-    alias_map = build_alias_map(col_list)
     resolved: List[str] = []
     applied: Dict[str, str] = {}
     missing: List[str] = []
-    for n in names:
-        same = [] if n in col_set else [c for c in col_list if _same_unit_name(n, c)]
-        if n in col_set:
-            resolved.append(n)
-        elif len(same) == 1:
-            # the same name and unit spaced otherwise ('수율( 1차)'): an exact name for -y, --target, -i and -x alike
-            resolved.append(same[0])
-            applied[n] = same[0]
-        elif strip_unit(n) == n.strip() and _alias_key(n) in alias_map:
-            # Only names written WITHOUT a unit are auto-matched; a different unit is a typo
-            full = alias_map[_alias_key(n)]
-            resolved.append(full)
-            applied[n] = full
-        else:
+    for n, hit in zip(names, _match_names(names, col_list)):
+        if hit is None:
             missing.append(n)
+            continue
+        resolved.append(hit)
+        if hit != n:
+            applied[n] = hit
     if missing:
         hint = header_layout_hint(layout, missing)
         if hint:
@@ -491,9 +542,20 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
         for m in missing:
             # a column another given name already takes is no typo target ('습도' next to a given '속도'), unless it
             # is the same name in another unit ('압력(MPa)' next to a given '압력(bar)': unit_hint)
-            s = suggest_columns(m, [c for c in col_list if c not in banned
-                                    and (c not in taken or _alias_key(c) == _alias_key(m))])
-            if values and len(s) == 1 and other_unit(m, s[0]):
+            free = [c for c in col_list if c not in taken or _alias_key(c) == _alias_key(m)]
+            s = suggest_columns(m, [c for c in free if c not in banned])
+            near_banned = [c for c in suggest_columns(m, free) if c in banned]
+            if near_banned:
+                # an excluded column (-y next to -x, --vary next to -i) is as near: '수율' for '수율(1차)' only because
+                # '수율(최종)' is the -y column is no sure match. Never [추천]; the columns of that name all as [후보]
+                same = [c for c in col_list if _alias_key(c) == _alias_key(m)]
+                if any(c in banned for c in same):
+                    s = same
+                shown = unit_marked(s, m, quote=True) if values else [repr(c) for c in s]
+                other = f"비슷한 {', '.join(repr(c) for c in near_banned)}은(는) 이 명령의 다른 옵션에 쓰인 열"
+                hints.append(f"'{m}' -> [후보] {', '.join(shown)} ({other}이라 이름을 사용자에게 확인)" if s else
+                             f"'{m}' -> {other}입니다. 이름을 사용자에게 확인하십시오")
+            elif values and len(s) == 1 and other_unit(m, s[0]):
                 hints.append(unit_hint(m, s[0], kind))
             elif len(s) == 1 and sure_typo(m, s[0]):
                 hints.append(f"'{m}' -> [추천] '{s[0]}'")
@@ -1737,18 +1799,28 @@ _NAME_BOUNDARY_L = r"(?<![가-힣a-zA-Z0-9_])"
 _NAME_BOUNDARY_R = r"(?![가-힣a-zA-Z0-9_])"
 
 
-def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: List[str]) -> None:
-    """Ensures AST contains only safe arithmetic nodes and declared identifiers."""
+def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: List[str],
+                       targets: Optional[set] = None) -> None:
+    """Ensures AST contains only safe arithmetic nodes and declared identifiers. An unknown name is never matched to
+    a target (a formula cannot read it): a target as near as the other columns leaves [후보] only."""
+    banned = set(targets or [])
     for node in ast.walk(formula_ast):
         if not isinstance(node, _ALLOWED_AST_NODES):
             raise InputError(f"보안 위반: 허용되지 않은 문법 노드 감지: {type(node).__name__}")
         if isinstance(node, ast.Call) and not (isinstance(node.func, ast.Name) and node.func.id in SAFE_MATH):
             raise InputError(f"허용되지 않은 함수 호출입니다. 사용 가능 함수: {sorted(k for k in SAFE_MATH if callable(SAFE_MATH[k]))}")
         if isinstance(node, ast.Name) and node.id not in allowed_identifiers:
-            s = suggest_columns(node.id, columns)
+            s = suggest_columns(node.id, [c for c in columns if c not in banned])
+            near_t = [c for c in suggest_columns(node.id, columns) if c in banned]
+            if near_t:
+                other = f"비슷한 {', '.join(near_t)}은(는) 타겟이라 수식에 쓸 수 없음"
+                hint = (f" -> [후보] {', '.join(s)} ({other}. 이름을 사용자에게 확인)" if s else
+                        f" ({other}. 이름을 사용자에게 확인)")
+            else:
+                hint = f" -> {one_or_ask(node.id, s, quote=False)}" if s else ""
             raise InputError(
                 f"수식의 식별자 '{node.id}'에 해당하는 컬럼이 없습니다"
-                + (f" -> {one_or_ask(node.id, s, quote=False)}" if s else "")
+                + hint
                 + f". 컬럼명은 데이터의 전체 이름(단위 포함) 또는 단위를 뺀 고유 이름으로 쓰십시오. [사용 가능한 컬럼 목록]: {columns}"
             )
 
@@ -1860,7 +1932,7 @@ def apply_eval_expressions(
             eval_env = dict(SAFE_MATH)
             for token, col in token_to_col.items():
                 eval_env[token] = coerce_numeric(df[col]).astype(float)
-            _validate_eval_ast(tree, set(eval_env.keys()), columns)
+            _validate_eval_ast(tree, set(eval_env.keys()), columns, target_set)
 
             with np.errstate(all="ignore"):
                 res_val = eval(compile(tree, "<eval>", "eval"), {"__builtins__": {}}, eval_env)
@@ -2351,7 +2423,9 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
         if len(s) == 1 and other_unit(c, s[0]):
             hints.append(unit_hint(c, s[0], "-i의 입력") + (f". '{s[0]}' 값도 -i에 있습니다: 어느 값을 쓸지 사용자에게 물으십시오"
                                                           if s[0] in present else ""))
-        elif len(s) == 1 and s[0] not in present and sure_typo(c, s[0]):
+        elif len(s) == 1 and s[0] not in present and sure_typo(c, s[0]) and \
+                not any(f in present for f in suggest_columns(c, known)):
+            # a given model input as near ('속돠' next to a given '속도') makes it no sure rename: [후보]
             hints.append(f"-i의 '{c}' -> [추천] '{s[0]}' ('{c}'을(를) '{s[0]}'(으)로 고쳐 다시 실행)")
         elif s:
             hints.append(f"-i의 '{c}'에 가까운 모델 입력: [후보] {', '.join(unit_marked(s, c))}. 어느 것인지 사용자에게 물으십시오")
@@ -2834,6 +2908,9 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
     found: Dict[str, List[str]] = {}
     for m in missing:
         cands = difflib.get_close_matches(m, extra, n=3, cutoff=0.5)
+        # a given name without unit next to a model name with one ('온두' / '온도(°C)'): compared without the unit
+        bare = [e for e in extra if strip_unit(e) == str(e).strip()]
+        cands += [c for c in difflib.get_close_matches(strip_unit(m), bare, n=3, cutoff=0.5) if c not in cands]
         alias = build_alias_map(extra).get(_alias_key(m))
         if alias and alias not in cands:
             cands.insert(0, alias)
@@ -2847,12 +2924,14 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
     for c, ms in shared.items():
         out.append(f"{where} '{c}'은(는) 여러 모델 입력과 비슷합니다. '{c}'을(를) 어느 이름으로 고칠지 사용자에게 물으십시오: "
                    f"[후보] {', '.join(unit_marked(ms, c))}")
+    given_inputs = [c for c in available if c in known]
     for m in missing:
         cands = [c for c in found[m] if c not in shared]
         if len(cands) == 1 and other_unit(cands[0], m):
             # '압력(MPa)' for the model's '압력(bar)': a rename would read the MPa value as bar (no [추천])
             out.append(unit_hint(cands[0], m, where))
-        elif len(cands) == 1 and sure_typo(cands[0], m):
+        elif len(cands) == 1 and sure_typo(cands[0], m) and not suggest_columns(cands[0], given_inputs):
+            # (a given name as near to an input already given is no sure rename to the missing one: [후보])
             out.append(f"{where} '{cands[0]}' -> [추천] '{m}' ('{cands[0]}'을(를) '{m}'(으)로 고쳐 다시 실행)")
         elif cands:
             shown = unit_marked(cands, m)
@@ -3557,16 +3636,18 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     stats = meta.get("feature_stats", {})
     numeric_in = [f for f in raw_inputs if f not in schema.get("categorical", {}) and f not in schema.get("datetime", {})]
 
-    vary = resolve_column_names([args.vary.strip()], raw_inputs, "바꿀 입력(--vary)")[0][0]
-    if vary not in numeric_in or vary not in stats:
-        raise InputError(f"'{vary}'은(는) 숫자 입력이 아니라 반대 찾기로 바꿀 수 없습니다. [후보] {', '.join(numeric_in)}")
     given_df = parse_inline_input(args.input) if args.input else None
     if given_df is not None and len(given_df) != 1:
         raise InputError(f"-i은(는) 한 줄('열=값,열=값')로 주십시오 (지금 {len(given_df)}줄). 고정 입력이 여러 경우면 "
                          f"경우마다 따로 실행하십시오.")
     given = given_df.iloc[0].to_dict() if given_df is not None else {}
-    names, _ = (resolve_column_names([str(k) for k in given], raw_inputs, "고정 입력(-i)", values=True) if given
-                else ([], {}))
+    # a --vary typo never suggests an input fixed by -i, an -i typo never the --vary input (a retry would stop)
+    vary = resolve_column_names([args.vary.strip()], raw_inputs, "바꿀 입력(--vary)",
+                                exclude=known_columns([str(k) for k in given], raw_inputs))[0][0]
+    if vary not in numeric_in or vary not in stats:
+        raise InputError(f"'{vary}'은(는) 숫자 입력이 아니라 반대 찾기로 바꿀 수 없습니다. [후보] {', '.join(numeric_in)}")
+    names, _ = (resolve_column_names([str(k) for k in given], raw_inputs, "고정 입력(-i)", values=True,
+                                     exclude=[vary]) if given else ([], {}))
     check_same_column([str(k) for k in given], names, "-i", {str(k): v for k, v in given.items()})
     fixed = {n: given[k] for k, n in zip(given, names)}
     resolved = dict(zip([str(k) for k in given], names))

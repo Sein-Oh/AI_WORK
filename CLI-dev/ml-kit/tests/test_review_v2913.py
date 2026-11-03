@@ -172,8 +172,11 @@ def test_two_level_header_hint(tmp_path, layout):
 # 7. typo in an inline key -----------------------------------------------------------------------------------
 
 def test_inline_typo_points_at_the_user_key(tiny):
+    bad = run_fail("ml_predict.py", "-m", tiny["v"], "-i", "도핑농돜=5e-6,온도=5")
+    assert "-i의 '도핑농돜' -> [추천] '도핑농도'" in bad["message"]            # 2.9.12: "'도핑농도' -> [추천] ['도핑농두']"
+    # 2.9.32: '도핑농두' (one common syllable for another) is [후보], the user picks
     bad = run_fail("ml_predict.py", "-m", tiny["v"], "-i", "도핑농두=5e-6,온도=5")
-    assert "-i의 '도핑농두' -> [추천] '도핑농도'" in bad["message"]            # 2.9.12: "'도핑농도' -> [추천] ['도핑농두']"
+    assert "[추천]" not in bad["message"] and "-i의 [후보] 도핑농두 중 '도핑농도'" in bad["message"], bad["message"]
 
 
 # 8. dates written as '20240103.0' ---------------------------------------------------------------------------

@@ -161,7 +161,7 @@ def test_positive_class_validation(tmp_path):
     assert "이진 분류" in bad["message"]
     bad2 = run_fail("ml_train.py", "-f", data, "-x", "반응온도,촉매비율", "-y", "불량여부",
                     "--task", "classification", "--positive-class", "예")
-    assert "[추천]" in bad2["message"]
+    assert "[후보]" in bad2["message"] and "[추천]" not in bad2["message"]     # 2.9.32: [추천] ['...'] -> [후보]
 
 
 def test_run_lock_blocks_concurrent_training(tmp_path):

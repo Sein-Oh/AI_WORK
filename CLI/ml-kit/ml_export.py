@@ -21,7 +21,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
-    setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric, load_data_file,
+    setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
     VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs,
 )
@@ -786,7 +786,8 @@ def _check_known(names: List[str], all_inputs: Dict[str, List[str]], what: str) 
     union = list(dict.fromkeys(c for ins in all_inputs.values() for c in ins))
     for nm in names:
         if not any(_names_in([nm], ins, what) for ins in all_inputs.values()):
-            resolve_column_names([nm], union, what)       # raises with a suggestion
+            # raises with a suggestion, never an input another given name already is ('압룍' next to '압력')
+            resolve_column_names([nm], union, what, exclude=known_columns([n for n in names if n != nm], union))
             raise InputError(f"{what} '{nm}'은(는) 어느 타겟의 입력도 아닙니다. [후보] {', '.join(union[:10])}")
 
 
