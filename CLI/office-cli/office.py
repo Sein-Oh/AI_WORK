@@ -616,7 +616,8 @@ def _excel_range_rows(args) -> Tuple[List[List[Any]], str, Optional[Dict[str, An
         raise rt.InputError(f"범위 {args.range}에 데이터가 없습니다."
                             + (f" {rt.uncomputed_note(uncomputed)}." if uncomputed else ""),
                             log_message=f"범위 {args.range}에 데이터가 없습니다."
-                            + (f" (계산된 값이 없는 수식 칸 {uncomputed['count']}개)" if uncomputed else ""))
+                            + ((" (수식 계산 여부 확인 못함)" if uncomputed.get("unknown") else
+                                f" (계산된 값이 없는 수식 칸 {uncomputed['count']}개)") if uncomputed else ""))
     return rows, sheet, uncomputed
 
 

@@ -44,7 +44,7 @@ SUPPORTED = {
 }
 UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행"}
 PAGE_TYPES = ("pdf", "pptx")   # read --pages가 실제 쪽/슬라이드 번호인 형식 (그 밖은 항목 번호)
-PARSER_VERSION = 9          # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만, 8: 짧은 글(도장·Bates 번호)만 남은 스캔 쪽도, 보이지 않는 OCR 글자 층이 있는 쪽은 제외, 9: DOCX 글상자 글, XLSX 계산된 값이 없는 수식 칸 meta)
+PARSER_VERSION = 10         # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만, 8: 짧은 글(도장·Bates 번호)만 남은 스캔 쪽도, 보이지 않는 OCR 글자 층이 있는 쪽은 제외, 9: DOCX 글상자 글, XLSX 계산된 값이 없는 수식 칸 meta, 10: fullCalcOnLoad 파일의 수식 칸·확인 못함도 meta)
 SCAN_IMAGE_COVER = 0.4      # 스캔 쪽으로 보는 그림 면적 비율 (쪽 면적 대비)
 SCAN_TEXT_MAX = 40          # 그림이 덮는 쪽에 이보다 적은 글자(도장, Bates 번호)만 남으면 스캔 쪽
 MAX_SHEET_ROWS = 20000      # xlsx 시트당 최대 행 수
@@ -1364,7 +1364,10 @@ def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         rt.log("WARN", f"시트당 {MAX_SHEET_ROWS}행까지만 읽었습니다.")
     # 계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 연 적 없는 파일): data_only로는 빈 칸이라 글이 없음
     uncomputed = rt.xlsx_uncomputed_formulas(path)
-    if uncomputed["count"]:
+    if uncomputed.get("unknown"):
+        meta["uncomputed_formulas"] = uncomputed
+        rt.log("WARN", f"수식 계산 여부를 확인하지 못함: {uncomputed.get('error')}")
+    elif uncomputed["count"]:
         meta["uncomputed_formulas"] = uncomputed
         rt.log("WARN", f"계산된 값이 저장되지 않은 수식 칸 {uncomputed['count']}개 (빈 칸으로 읽음): {', '.join(uncomputed['cells'][:5])}")
     return b.units, meta
@@ -2753,9 +2756,11 @@ def _search_gaps(docs: List[Dict[str, Any]], info: Dict[str, Any], pages: Option
     uncomputed = [(os.path.basename(d["file"]), (d.get("meta") or {})["uncomputed_formulas"]) for d in docs
                   if (d.get("meta") or {}).get("uncomputed_formulas")]
     if uncomputed:
-        gaps.append(f"계산된 값이 저장되지 않은 수식 칸이 있는 엑셀 {len(uncomputed)}개 (그 칸은 빈 칸으로 읽혀 검색 안 됨, "
+        gaps.append(f"계산된 값이 저장되지 않은 수식 칸이 있거나 확인하지 못한 엑셀 {len(uncomputed)}개 (그 칸은 빈 칸이나 계산되지 않은 값으로 "
+                    "읽혀 검색 결과를 믿을 수 없음, "
                     "엑셀에서 연 적 없이 프로그램이 만든 파일. 엑셀에서 열어 저장한 뒤 reader.py index --all로 다시 등록): "
-                    + ", ".join(f"{n} {u['count']}칸({', '.join(u['cells'][:3])})" for n, u in uncomputed[:5]))
+                    + ", ".join(f"{n} 확인 못함" if u.get("unknown") else f"{n} {u['count']}칸({', '.join(u['cells'][:3])})"
+                                for n, u in uncomputed[:5]))
     if info["excluded_dirs"]:
         gaps.append(f"들어가지 않은 하위 폴더 {len(info['excluded_dirs'])}개 (깊이 제한 또는 '_'로 시작): "
                     + ", ".join(os.path.basename(d) for d in info["excluded_dirs"][:5]))

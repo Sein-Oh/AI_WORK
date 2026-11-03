@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.31"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.32"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -902,23 +902,48 @@ def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
     return int(m.group(2)), col
 
 
+def _full_calc_on_load(wb_root: Any) -> bool:
+    """workbook.xml의 <calcPr fullCalcOnLoad="1"|"true">: 엑셀이 열 때 모든 수식을 다시 계산하라는 표시.
+    xlsxwriter·openpyxl 같은 프로그램이 쓰며 파일의 <v>(예: 0)는 계산된 값이 아님. 엑셀은 저장할 때 이 표시를 지웁니다."""
+    calc = wb_root.find(_XLSX_MAIN + "calcPr")
+    return calc is not None and (calc.get("fullCalcOnLoad") or "").strip().lower() in ("1", "true")
+
+
+def xlsx_full_calc_on_load(path: str) -> bool:
+    """파일의 workbook.xml에 fullCalcOnLoad 표시가 있는지. 읽지 못하면 True (수식 칸 검사를 건너뛰지 않게)."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    try:
+        with zipfile.ZipFile(path) as z:
+            return _full_calc_on_load(ET.fromstring(z.read("xl/workbook.xml")))
+    except Exception:
+        return True
+
+
 def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                              area: Optional[Tuple[int, int, int, int]] = None,
                              limit: int = UNCOMPUTED_SHOW) -> Dict[str, Any]:
     """계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 한 번도 열지 않은 파일).
     openpyxl data_only로 읽으면 이런 칸은 빈 칸(None)이라 값이 없는 것처럼 보입니다.
-    sheet: 이 시트만 (None이면 모든 시트), area: (시작 행, 시작 열, 끝 행, 끝 열) 안의 칸만.
+    workbook.xml에 fullCalcOnLoad 표시가 있으면(xlsxwriter는 <v>0</v>을 씀) 모든 수식 칸을 계산되지 않은 칸으로 셉니다.
+    sheet: 이 시트만 (None이면 모든 시트), area: (시작 행, 시작 열, 끝 행, 끝 열) 안의 칸만 (끝 행 뒤는 해석하지 않음).
     수식 태그(<f>)가 없는 시트는 XML을 해석하지 않습니다. 엑셀에서 저장한 파일은 값이 있어 0개입니다
     (빈 글 결과(t="str")는 계산된 값).
-    반환: {"count": 전체 수, "cells": ["시트!A3", ...] (앞 limit개), "sheets": {시트: 수}}. 읽지 못하면 0개."""
+    반환: {"count": 전체 수, "cells": ["시트!A3", ...] (앞 limit개), "sheets": {시트: 수},
+    "bounds": [시작 행, 시작 열, 끝 행, 끝 열] (센 칸 전체를 감싸는 범위, 0개면 없음), "full_calc_on_load": True (표시가 있을 때만)}.
+    읽지 못하면(MemoryError 포함) {"count": 0, "unknown": True, "error": 예외 이름}: 확인하지 못한 것이라 호출하는 쪽은 UNVERIFIED."""
     import posixpath
     import zipfile
     import xml.etree.ElementTree as ET
     result: Dict[str, Any] = {"count": 0, "cells": [], "sheets": {}}
+    bounds: List[int] = []
     try:
         with zipfile.ZipFile(path) as z:
             names = set(z.namelist())
             wb = ET.fromstring(z.read("xl/workbook.xml"))
+            full = _full_calc_on_load(wb)
+            if full:
+                result["full_calc_on_load"] = True
             rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
             targets = {r.get("Id"): r.get("Target") or "" for r in rels}
             for sh in wb.iter(_XLSX_MAIN + "sheet"):
@@ -935,36 +960,63 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                 n = 0
                 q = f"'{title}'" if re.search(r"[\s!']", title) else title
                 for _, el in ET.iterparse(io.BytesIO(data), events=("end",)):
+                    if el.tag == _XLSX_MAIN + "row":
+                        r = el.get("r") or ""
+                        el.clear()
+                        if area is not None and r.isdigit() and int(r) >= area[2]:
+                            break                   # 행은 번호 순: 범위 끝 행 뒤는 해석하지 않음
+                        continue
                     if el.tag != _XLSX_MAIN + "c":
                         continue
-                    if el.find(_XLSX_MAIN + "f") is not None and el.get("t") not in ("str", "inlineStr"):
+                    if el.find(_XLSX_MAIN + "f") is not None and (full or el.get("t") not in ("str", "inlineStr")):
                         v = el.find(_XLSX_MAIN + "v")
                         ref = el.get("r") or ""
                         rc = _cell_rc(ref)
                         inside = area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
-                        if (v is None or not (v.text or "")) and inside:
+                        if (full or v is None or not (v.text or "")) and inside:
                             n += 1
                             if len(result["cells"]) < limit:
                                 result["cells"].append(f"{q}!{ref}")
+                            if rc is not None:
+                                bounds = [rc[0], rc[1], rc[0], rc[1]] if not bounds else [
+                                    min(bounds[0], rc[0]), min(bounds[1], rc[1]), max(bounds[2], rc[0]), max(bounds[3], rc[1])]
                     el.clear()
                 if n:
                     result["count"] += n
                     result["sheets"][title] = n
-    except Exception as e:                      # 확인용 보조 검사: 실패해도 읽기 결과는 그대로
+    except Exception as e:                      # MemoryError 포함: 확인하지 못함 (0개로 보면 VERIFIED가 되어 버림)
         debug(f"수식 값 확인 실패: {type(e).__name__}")
+        return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": type(e).__name__}
+    if bounds:
+        result["bounds"] = bounds
     return result
+
+
+def uncomputed_found(info: Optional[Dict[str, Any]]) -> bool:
+    """알려야 할 결과인지: 계산되지 않은 수식 칸이 있거나 확인하지 못함(unknown)."""
+    return bool(info) and bool(info.get("count") or info.get("unknown"))
 
 
 def uncomputed_note(info: Dict[str, Any]) -> str:
     """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 10개)."""
+    if info.get("unknown"):
+        return (f"수식 계산 여부를 확인하지 못함 (파일의 시트 XML을 읽지 못함: {info.get('error') or '알 수 없음'}). "
+                "수식 칸이 있으면 빈 칸이나 계산되지 않은 값으로 읽혔을 수 있으니 사용자에게 그대로 알리세요")
     cells = ", ".join(info["cells"][:10]) + (" 등" if info["count"] > 10 else "")
+    if info.get("full_calc_on_load"):
+        return (f"수식 칸 {info['count']}개({cells})는 파일이 '열 때 다시 계산'(fullCalcOnLoad)으로 저장되어 있어 파일에 적힌 값"
+                "(빈 칸이나 0)이 계산된 값이 아님 (엑셀에서 연 적 없이 프로그램이 만든 파일). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "
+                "다시 실행하도록 알리세요")
     return (f"수식 칸 {info['count']}개({cells})는 계산된 값이 파일에 저장되어 있지 않아 빈 칸으로 읽힘 "
             "(엑셀에서 연 적 없이 프로그램이 만든 파일이라 값이 계산된 적이 없음). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "
             "다시 실행하도록 알리세요")
 
 
 def uncomputed_fields(info: Dict[str, Any]) -> Dict[str, Any]:
-    """결과 JSON 키: uncomputed_formulas(앞 UNCOMPUTED_SHOW개), uncomputed_count, 잘렸으면 uncomputed_truncated."""
+    """결과 JSON 키: uncomputed_formulas(앞 UNCOMPUTED_SHOW개), uncomputed_count, 잘렸으면 uncomputed_truncated.
+    확인하지 못했으면 uncomputed_check: "unknown"만."""
+    if info.get("unknown"):
+        return {"uncomputed_check": "unknown"}
     out: Dict[str, Any] = {"uncomputed_formulas": list(info["cells"]), "uncomputed_count": info["count"]}
     if info["count"] > len(info["cells"]):
         out["uncomputed_truncated"] = True
@@ -976,7 +1028,7 @@ _PAYLOAD_BASE = ("status", "tool", "command", "preview", "verified", "unverified
 
 def with_uncomputed(payload: Dict[str, Any], info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """R1: 계산된 값이 없는 수식 칸을 빈 칸으로 읽은 성공 응답은 VERIFIED가 아님 -> UNVERIFIED로 바꾸고 칸 목록을 붙입니다."""
-    if not info or not info.get("count") or payload.get("status") != "ok":
+    if not uncomputed_found(info) or payload.get("status") != "ok":
         return payload
     fields = {k: v for k, v in payload.items() if k not in _PAYLOAD_BASE}
     fields.update(uncomputed_fields(info))

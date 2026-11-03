@@ -2,6 +2,28 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.32] - 2026-11-03
+
+23차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1432.py`.
+
+### 수정
+- 닫힌 xlsx를 범위 없이 읽으면(`excel read`, `--search`, `--save`, `export --save .csv`, `office.py transfer --from excel`) 끝쪽의 값이 모두 None인
+  행을 잘라, 계산된 값이 없는 수식만 있는 합계 행(`=SUM`)이 빠지고 `VERIFIED`이던 문제. 수식만 있는 시트는 머리글만 나왔고, 크기 정보(`<dimension>`)가
+  없는 파일은 `_closed_bounds`가 끝쪽 수식 열도 잘랐음. 범위를 데이터로 정하는 곳(범위 생략, `B:B`·`5:7`, 200만 칸을 넘는 범위 줄이기
+  `_clip_closed_range`)에서 자르기 전에 시트 전체를 `xlsx_uncomputed_formulas`로 훑어(빈 칸 조건 없이) 그런 칸의 행·열을 남기고(`bounds`),
+  읽은 범위의 칸을 `UNVERIFIED:`와 `uncomputed_formulas`로 알립니다. 같은 읽기에서 훑은 결과는 `closed_uncomputed`가 다시 씁니다.
+  reader는 원래 시트 전체를 확인해 해당 없음(빈 행은 단위가 아님).
+- xlsxwriter가 쓴 파일: 수식 칸에 `<v>0</v>`을 쓰고 `workbook.xml`에 `<calcPr fullCalcOnLoad="1"/>`을 두어, 0을 값으로 `VERIFIED`이던 문제.
+  `fullCalcOnLoad`가 `"1"`/`"true"`이면 모든 수식 칸을 계산된 값이 없는 칸으로 봅니다(excel·transfer·reader 모두, 빈 칸이 없는 범위도 확인).
+  엑셀은 저장할 때 이 표시를 지우므로 엑셀에서 저장한 파일은 해당 없음(테스트의 "엑셀 저장 흉내" `set_cached_value`도 표시를 지움).
+  openpyxl도 이 표시를 쓰므로 안내 문구는 "열 때 다시 계산" 파일로 나옵니다. reader 파서 버전 10(캐시 다시 읽기).
+- 수식 칸 확인이 예외(MemoryError 포함)로 실패하면 0개로 보아 `VERIFIED`이던 문제. `{"unknown": true, "error": 예외 이름}`을 돌려주고
+  결과는 `UNVERIFIED: ... 수식 계산 여부를 확인하지 못함`과 `uncomputed_check: "unknown"`(reader는 `meta.uncomputed_formulas.unknown`).
+  범위를 주면 범위 끝 행 뒤는 해석하지 않고, 해석한 `<row>`는 지웁니다.
+
+### 문서
+- README: 범위를 데이터로 정할 때 수식 행·열을 남김, `fullCalcOnLoad`, 확인 못함(`uncomputed_check`).
+
 ## [1.4.31] - 2026-11-03
 
 22차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1431.py`.
@@ -924,6 +946,10 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - transfer relay 실패 시 넣은 빈 단락 정리.
 - "바뀐 것 없음"을 싸게 판정할 수 없어 늘 바꾼 것으로 보는 명령(되돌리기 지점이 남음): `excel style`(같은 서식 다시 적용, 서식 없는 범위 `--clear`),
   `range autofit/border/freeze`(같은 칸 다시 고정), 같은 값으로 `write --overwrite`. (1.4.15에서 replace·slide move·notes·range unhide/unmerge/unfreeze/clear 등은 처리)
+
+### 23차 점검에서 남긴 것 (1.4.32)
+- L1 배열 수식: `ArrayFormula`(`<f t="array" ref="C1:C3">`)는 첫 칸에만 `<f>`가 있어 나머지 칸(C2:C3)은 계산된 값이 없어도 수식 칸으로 세지 않음.
+- L2 성능: 범위를 생략한 닫힌 xlsx 읽기는 수식이 있는 시트 XML 전체를 한 번 더 해석함(30만 행 시트에서 수 초). 열린 값 읽기와 함께 한 번에 훑기.
 
 ### 확인 필요
 - Windows 실기 검증: 회사 PC(Office 16)에서 1.4.1 실기 러너 71/71 통과. 남은 것: 1.4.5 쓰기 변경(write 덮어쓰기 확인, transfer 글자 유지)의 실기 확인, 눈 확인 항목.
