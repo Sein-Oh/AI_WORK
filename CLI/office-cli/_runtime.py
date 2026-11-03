@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.29"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.30"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -1002,7 +1002,8 @@ def _same_name_key(s: Any) -> str:
 
 
 def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False,
-              display: Optional[Callable[[str], str]] = None, log_name: Optional[str] = None) -> InputError:
+              display: Optional[Callable[[str], str]] = None, log_name: Optional[str] = None,
+              log_extra: Optional[str] = None) -> InputError:
     """'찾을 수 없음' InputError (R8).
     - 표기만 다른(대소문자·공백·_-) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
     - 부분·유사 일치는 뜻이 다를 수 있어(2024 -> 2024_1분기, 견적서.pdf -> 견적서_구버전.pdf) [후보]: 사용자가 고릅니다.
@@ -1010,7 +1011,8 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
     - 비슷한 것도 없으면 사용 가능한 이름 일부.
     display: 비교는 name·candidates(끝 이름)로 하고 message에 보일 때만 바꾸는 함수 (예: 메일 폴더 끝 이름 -> 전체 경로.
     전체 경로로 비교하면 같은 상위 경로 때문에 관계없는 폴더가 모두 비슷하게 나옴).
-    log_name: 오류 로그 message에 name 대신 쓸 글 (예: 메일 계정 이름을 뺀 경로)."""
+    log_name: 오류 로그 message에 name 대신 쓸 글 (예: 메일 계정 이름을 뺀 경로).
+    log_extra: 오류 로그 message에 extra 대신 쓸 글 (extra에 계정 이름·문서 글이 들어갈 때 반드시 줌)."""
     show = display or (lambda c: c)
     cands = [str(c) for c in candidates]
     key = _same_name_key(name)
@@ -1020,7 +1022,9 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
         if len(close) == 1:
             same = [c for c in cands if _same_name_key(c) == close[0]][:1]
     head = f"{kind} '{show(name)}'을(를) 찾을 수 없습니다.{extra}"
-    log_head = head if log_name is None else f"{kind} '{log_name}'을(를) 찾을 수 없습니다.{extra}"
+    masked = log_name is not None or log_extra is not None
+    log_head = head if not masked else (f"{kind} '{name if log_name is None else log_name}'을(를) 찾을 수 없습니다."
+                                        f"{extra if log_extra is None else log_extra}")
     # 오류 로그에는 후보 이름(시트·문서·제목·메일 폴더·파일 이름 목록)을 남기지 않음 (log_message)
     if len(same) == 1:
         return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {show(same[0])}",
@@ -1032,7 +1036,7 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
     if cands:
         shown = ", ".join(show(c) for c in cands[:15]) + (" ..." if len(cands) > 15 else "")
         return InputError(f"{head} 사용 가능한 {kind}: {shown}", log_message=f"{log_head} [사용 가능한 이름 {len(cands)}개 생략]")
-    return InputError(head, log_message=None if log_name is None else log_head)
+    return InputError(head, log_message=log_head if masked else None)
 
 
 def clamp_cell(value: Any, max_chars: int = MAX_CELL_CHARS) -> Tuple[Any, bool]:

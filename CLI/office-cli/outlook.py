@@ -74,6 +74,7 @@ def resolve_folder(ns: Any, spec: Optional[str]) -> Any:
     if s.lower() in DEFAULT_FOLDERS:
         return ns.GetDefaultFolder(DEFAULT_FOLDERS[s.lower()])
     parts = [p.strip() for p in re.split(r"\\|>", s) if p.strip()]
+    given = list(parts)
     stores = {str(f.Name): f for f in ns.Folders}
     found_store = rt.find_name(parts[0], stores)
     alias = re.sub(r"\s+", "", parts[0]).lower()
@@ -98,9 +99,12 @@ def resolve_folder(ns: Any, spec: Optional[str]) -> Any:
             # 비교는 끝 이름끼리 (전체 경로끼리 비교하면 같은 상위 경로 때문에 관계없는 폴더가 모두 [후보]가 됨).
             # 후보는 전체 경로로 보여 줌 (일부만 주면 LLM이 상위 폴더 전체를 검색함)
             prefix = "\\".join(walked)
+            # 로그 쪽 경로: 계정 이름으로 시작한 --folder는 첫 부분을 '<메일 계정>'으로 가림 (log_name과 같은 규칙)
+            log_spec = "\\".join(["<메일 계정>"] + given[1:]) if found_store else s
             raise rt.not_found("메일 폴더", part, list(subs), extra=f" (경로: {s})",
                                display=lambda n: prefix + "\\" + n,
-                               log_name="\\".join([log_root] + walked[1:] + [part]))
+                               log_name="\\".join([log_root] + walked[1:] + [part]),
+                               log_extra=f" (경로: {log_spec})")
         cur = subs[name]
         walked.append(name)
     return cur

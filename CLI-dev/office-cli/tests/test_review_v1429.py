@@ -153,7 +153,7 @@ def test_folder_same_name_recommends_full_path(mail, capsys, monkeypatch):
     assert code == 1 and out["message"].endswith(f"[추천] {ROOT_MAIL}\\ZQX보관"), out
 
 
-@pytest.mark.parametrize("folder", ["프로젝트", "회의", "zqx_보관", f"{ROOT_MAIL.lower()}\\없음"])
+@pytest.mark.parametrize("folder", ["프로젝트", "회의", "zqx_보관", f"{ROOT_MAIL}\\없음"])
 def test_guard_folder_log_has_no_mailbox_root(mail, capsys, monkeypatch, isolated_dirs, folder):
     code, out = _main(outlook, capsys, monkeypatch, "list", "--folder", folder)
     assert code == 1 and ROOT_MAIL in out["message"], out

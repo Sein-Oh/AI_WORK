@@ -16,6 +16,7 @@
     relay   엑셀 -> 워드 -> PPT 클립보드 경유
     처음 한 번 `office.py transfer --probe`를 실행하면 이 PC에서 되는 방식을 시험해 저장합니다.
 """
+import contextlib
 import os
 import sys
 import time
@@ -299,12 +300,14 @@ def _picture_problem(before: Optional[int], after: Optional[int]) -> str:
 
 def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], anchor: Optional[str],
                 slide: Optional[str], title: str, occurrence: Optional[int] = None) -> Dict[str, Dict[str, Any]]:
-    """클립보드 경유: 엑셀 차트 -> 워드(대상 또는 임시 문서) -> PPT."""
+    """클립보드 경유: 엑셀 차트 -> 워드(대상 또는 임시 문서) -> PPT.
+    to_word/to_ppt: None이면 그 앱에 넣지 않음. 빈 글('')은 활성 문서 (export·redraw와 같음)."""
+    import ppt
     import word
     done: Dict[str, Dict[str, Any]] = {}
     # 받는 문서를 클립보드를 쓰기 전에 찾음: 대상 오타([추천]/[후보])로 사용자의 클립보드를 덮어쓰지 않음 (no_fallback 오류)
     for kind, target in (("word", to_word), ("ppt", to_ppt)):
-        if target:
+        if target is not None:
             off.resolve_target(kind, target, readonly=False, create=True, option="--to-target")
 
     def copy_chart() -> None:
@@ -312,39 +315,43 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
         time.sleep(0.3)
 
     temp_app = temp_doc = None
-    try:
-        if to_word:
-            with off.open_target("word", to_word, readonly=False, create=True, tool=TOOL, command="transfer",
-                                 option="--to-target") as t:
-                start, _ = word._insert_position(t.doc, anchor, "after" if anchor else "end", occurrence)
-                copy_chart()                              # 앵커 문제는 클립보드를 쓰기 전에 오류
-                rng = t.doc.Range(start, start)
-                rng.InsertAfter("\r")
-                rng = t.doc.Range(start, start)
-                rng.PasteSpecial(DataType=3)              # wdPasteMetafilePicture
-                pasted = t.doc.Range(start, start + 1).InlineShapes
-                if pasted.Count == 0:
-                    raise RuntimeError("워드에 붙여넣기 실패 (클립보드)")
-                if to_ppt:
-                    pasted.Item(1).Range.CopyAsPicture()
-                t.set_focus()
-                done["word"] = t.resolved()
-        elif to_ppt:
-            copy_chart()
-            temp_app = off.win32com.client.DispatchEx("Word.Application")
-            temp_app.Visible = False
-            temp_doc = temp_app.Documents.Add(Visible=False)
-            temp_doc.Range(0, 0).PasteSpecial(DataType=3)
-            if temp_doc.InlineShapes.Count == 0:
-                raise RuntimeError("임시 워드 문서에 붙여넣기 실패 (클립보드)")
-            temp_doc.InlineShapes.Item(1).Range.CopyAsPicture()
-        if to_ppt:
-            import ppt
-            time.sleep(0.3)
-            with off.open_target("ppt", to_ppt, readonly=False, create=True, tool=TOOL, command="transfer",
-                                 option="--to-target") as t:
-                s, no = _ppt_slide(t.doc, slide, title)
-                w = ppt.SlideWriter(t.doc, s, off.get_theme("navy"))
+    with contextlib.ExitStack() as stack:
+        pt: Any = None
+        if to_ppt is not None:
+            # 받는 PPT를 먼저 열고 --slide를 확인: 없는 슬라이드 번호로 클립보드를 덮어쓰거나 임시 워드를 띄운 뒤 멈추지 않음
+            pt = stack.enter_context(off.open_target("ppt", to_ppt, readonly=False, create=True, tool=TOOL,
+                                                     command="transfer", option="--to-target"))
+            ppt._resolve_slide(pt.doc, slide, default_new=slide is None)
+        try:
+            if to_word is not None:
+                with off.open_target("word", to_word, readonly=False, create=True, tool=TOOL, command="transfer",
+                                     option="--to-target") as t:
+                    start, _ = word._insert_position(t.doc, anchor, "after" if anchor else "end", occurrence)
+                    copy_chart()                              # 앵커 문제는 클립보드를 쓰기 전에 오류
+                    rng = t.doc.Range(start, start)
+                    rng.InsertAfter("\r")
+                    rng = t.doc.Range(start, start)
+                    rng.PasteSpecial(DataType=3)              # wdPasteMetafilePicture
+                    pasted = t.doc.Range(start, start + 1).InlineShapes
+                    if pasted.Count == 0:
+                        raise RuntimeError("워드에 붙여넣기 실패 (클립보드)")
+                    if pt is not None:
+                        pasted.Item(1).Range.CopyAsPicture()
+                    t.set_focus()
+                    done["word"] = t.resolved()
+            elif pt is not None:
+                copy_chart()
+                temp_app = off.win32com.client.DispatchEx("Word.Application")
+                temp_app.Visible = False
+                temp_doc = temp_app.Documents.Add(Visible=False)
+                temp_doc.Range(0, 0).PasteSpecial(DataType=3)
+                if temp_doc.InlineShapes.Count == 0:
+                    raise RuntimeError("임시 워드 문서에 붙여넣기 실패 (클립보드)")
+                temp_doc.InlineShapes.Item(1).Range.CopyAsPicture()
+            if pt is not None:
+                time.sleep(0.3)
+                s, no = _ppt_slide(pt.doc, slide, title)
+                w = ppt.SlideWriter(pt.doc, s, off.get_theme("navy"))
                 top = w.next_top()
                 shape_range = s.Shapes.Paste()
                 if shape_range.Count == 0:
@@ -356,19 +363,19 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
                 pic.Width = float(pic.Width) * ratio
                 pic.Left = (w.W - float(pic.Width)) / 2
                 pic.Top = top
-                t.set_focus(slide=no)
-                done["ppt"] = t.resolved()
-    finally:
-        if temp_doc is not None:
-            try:
-                temp_doc.Close(SaveChanges=0)
-            except Exception:
-                pass
-        if temp_app is not None:
-            try:
-                temp_app.Quit(SaveChanges=0)
-            except Exception:
-                pass
+                pt.set_focus(slide=no)
+                done["ppt"] = pt.resolved()
+        finally:
+            if temp_doc is not None:
+                try:
+                    temp_doc.Close(SaveChanges=0)
+                except Exception:
+                    pass
+            if temp_app is not None:
+                try:
+                    temp_app.Quit(SaveChanges=0)
+                except Exception:
+                    pass
     return done
 
 
