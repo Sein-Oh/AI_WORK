@@ -26,7 +26,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
-    percent_warning,
+    percent_warning, check_percent_mix, _strip_percent,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
@@ -109,9 +109,11 @@ def _map_command(args, **change: Optional[str]) -> str:
 
 
 def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], args=None,
-                kv: Optional[Dict[str, str]] = None, reserved: Optional[List[str]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
+                kv: Optional[Dict[str, str]] = None, reserved: Optional[List[str]] = None,
+                pct: Optional[List[str]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
     """Resolves -i names; numeric columns need numeric values, text columns become row filters. reserved (-y, the
-    --find goal, --vary) are never suggested as a key."""
+    --find goal, --vary) are never suggested as a key. A value written with '%' ('10%') is read without it as
+    coerce_numeric reads data cells (10, not 0.1); pct collects the percent_warning of such -i values."""
     names, _ = resolve_column_names(list(pairs), columns, "기준(-i)" if args is not None else "조회 파일(--points) 기준",
                                     layout=df.attrs, values=True, exclude=reserved)
     check_same_column(list(pairs), names, "-i" if args is not None else "--points 조회 파일 열",
@@ -124,10 +126,14 @@ def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], arg
     for given, col in zip(pairs, names):
         v = pairs[given]
         if _is_numeric_col(df[col]):
+            text = str(v).strip()
             try:
-                numeric[col] = float(v)
+                numeric[col] = float(_strip_percent(text))
             except (TypeError, ValueError):
                 raise InputError(f"기준 열 '{col}'은(는) 숫자 열인데 값 '{v}'이(가) 숫자가 아닙니다.")
+            if pct is not None and _strip_percent(text) != text:
+                pct.append(f"-i '{given}'의 값 '{text}'은(는) %를 떼고 숫자로 읽었습니다 ({text} -> {_strip_percent(text)}, "
+                           f"100으로 나누지 않음). 열의 단위가 %인지 확인하십시오.")
         else:
             categorical[col] = str(v).strip()
     return numeric, categorical
@@ -185,19 +191,18 @@ def _points_keys(points_df: pd.DataFrame, keycols: List[str], targets: List[str]
 
 
 def _check_near_points(points_df: pd.DataFrame, skip: List[Any], unused: List[str], layout: Dict[str, Any],
-                       ask: bool = False, used: Optional[List[str]] = None, targets: Optional[List[str]] = None) -> None:
+                       ask: bool = False, used: Optional[List[str]] = None) -> None:
     """A numeric --points column that is no key but nearly matches a data column not used as a key ('반응 압력(bar)'
     for '반응압력(bar)', '압력(MPa)' for '반응압력(bar)'): the result would look as if the pressure was used. The same
     message as -i ([후보] / unit_hint). Columns like no data column (memo, ID) pass through.
     Near means the same name without unit or a close spelling of the whole name; the comparison of the names without
     unit only builds the [후보] list (as the gate it stopped measured columns: '수율_실측' / '수율(1차)').
-    A column holding a -y target's name without unit ('수율_실측', '목표수율', '수율 실측' for -y '수율(최종)') is
-    that target's measured value or memo and passes through. unused never holds a -y target; ask (no -y): the -y
+    The check comes first for every column: a column holding a -y target's name ('수율_실측', '목표수율' for -y
+    '수율(최종)') passes through as a measured value or memo only when no unused column is near (a key column
+    '냉각수 온도(°C)' with -y '온도' is near '냉각수온도' and stops). unused never holds a -y target; ask (no -y): the -y
     guidance. used (the keys and -y columns) are never listed."""
-    tnames = [_alias_key(strip_unit(t)) for t in (targets or [])]
     near = [str(c) for c in points_df.columns
             if c not in skip and not re.fullmatch(r"col_\d+", str(c)) and _is_numeric_col(points_df[c])
-            and not any(t and t in re.sub(r"\s+", "", str(c)).lower() for t in tnames)
             and suggest_columns(str(c), unused, bare=False)]
     if not near:
         return
@@ -288,14 +293,16 @@ def _basis_cells(r: Dict[str, Any], per_column: bool) -> Dict[str, str]:
 # 4. Commands
 # ==============================================================================
 
-def _common(tab: Dict[str, Any], result: Dict[str, Any], warnings: List[str]) -> Dict[str, Any]:
+def _common(tab: Dict[str, Any], result: Dict[str, Any], warnings: List[str],
+            input_pct: Optional[List[str]] = None) -> Dict[str, Any]:
+    """input_pct: percent_warning of the -i values and the --points key columns (said like the data's)."""
     if tab["excluded"]:
         warnings.insert(0, f"'{tab['exclude_col']}' 열에 표시된 {tab['excluded']}행은 쓰지 않았습니다")
     warnings[:0] = tab.get("layout_warnings") or []
     # numbers written with '%' ('64.4%') in the columns used are read as 64.4 (coerce_numeric): said, never silent
     used = (list(result.get("keys") or []) + list(result.get("columns") or []) + [result.get("vary") or ""]
             + list(result.get("find") or {}) + list(result.get("fixed") or {}))
-    pct = [w for w in percent_warning(tab["df"], used) if w not in warnings]
+    pct = [w for w in percent_warning(tab["df"], used) + list(input_pct or []) if w not in warnings]
     if pct:
         warnings.extend(pct)
         if "warnings" not in result.get("agent_directive", ""):
@@ -330,6 +337,9 @@ def execute_forward(args) -> Dict[str, Any]:
             hint = header_layout_hint(df.attrs, names) if names else ""
             raise InputError(f"조회 파일 열 {list(points_df.columns)} 중 데이터에 있는 기준 열이 없습니다. "
                              + (f"데이터 {hint}\n" if hint else "") + f"[사용 가능한 컬럼 목록]: {columns}")
+        # '12%' next to '0.12' in one key column of the points file: no scale is sure (as in the data)
+        check_percent_mix(points_df, usable, "조회 파일 ")
+        input_pct = percent_warning(points_df, usable, "조회 파일 ")
         sample = {str(c): points_df[c].iloc[0] for c in usable}
         try:
             numeric, categorical = _split_keys(df, sample, keycols)
@@ -339,9 +349,10 @@ def execute_forward(args) -> Dict[str, Any]:
             raise InputError(f"조회 파일에는 숫자 기준 열만 넣어 주십시오 (글자 열: {list(categorical)}).")
         key_src = dict(zip(numeric, usable))
         _check_near_points(points_df, usable + measured, [c for c in keycols if c not in numeric], df.attrs,
-                           ask=not args.targets, used=list(numeric) + targets, targets=targets)
+                           ask=not args.targets, used=list(numeric) + targets)
     else:
-        numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=targets)
+        input_pct = []
+        numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=targets, pct=input_pct)
         key_src = {}
     if not numeric:
         raise InputError("숫자 기준 열이 하나 이상 필요합니다 (예: -i \"반응온도=232.5\").")
@@ -350,6 +361,7 @@ def execute_forward(args) -> Dict[str, Any]:
     values = _value_columns(df, args.targets, columns, skip=keys + list(categorical))
     asked = list(values)
     show = list(dict.fromkeys(keys + list(categorical) + values))
+    check_percent_mix(df, keys + values)    # '11.9%' next to '0.119' in a data column used: no scale is sure
 
     if len(keys) > MAX_KEYS:
         x = np.array([numeric[k] for k in keys])
@@ -361,7 +373,7 @@ def execute_forward(args) -> Dict[str, Any]:
                              "points": [], "nearest_rows": near, "count": 0, "verified": True,
                              "preview": f"기준 {len(keys)}개: 가까운 실측 {len(near)}행",
                              "agent_directive": "VERIFIED: 기준 열이 많아 보간값 없이 가까운 실측 행만 계산했습니다. "
-                                                "nearest_rows와 warnings를 사용자에게 알리세요."}, warnings)
+                                                "nearest_rows와 warnings를 사용자에게 알리세요."}, warnings, input_pct)
 
     t = MultiTable(sub, keys, values, warnings)   # each value column on its own non-empty rows
     values = t.values                             # a value column with too few values is left out (warned)
@@ -404,7 +416,7 @@ def execute_forward(args) -> Dict[str, Any]:
                                   + "output_file 경로와 외삽 건수(extrapolated_count), warnings를 사용자에게 알리세요.")
         if not ok:
             res["unverified"] = ["결과 파일 다시 읽기"]
-        return _common(tab, res, warnings)
+        return _common(tab, res, warnings, input_pct)
 
     x = np.array([numeric[k] for k in keys])
     r = t.at(x)
@@ -433,7 +445,7 @@ def execute_forward(args) -> Dict[str, Any]:
         + "preview의 값과 method, basis(사용한 원본 행과 비율)를 사용자에게 알리고, nearest_rows(가까운 실측 5행)를 표로 보여 주세요. "
         + ("extrapolated=true이므로 warnings의 범위 밖 내용을 반드시 함께 알리세요. " if r["extrapolated"] else "")
         + f"값은 데이터 파일의 마지막 저장 시각({tab['saved_at']}) 기준입니다.")
-    return _common(tab, res, warnings)
+    return _common(tab, res, warnings, input_pct)
 
 
 def execute_reverse(args) -> Dict[str, Any]:
@@ -455,7 +467,8 @@ def execute_reverse(args) -> Dict[str, Any]:
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
     vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)", layout=df.attrs,
                                 exclude=[goal_col] + known_columns(list(pairs), columns))[0][0]
-    numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=[goal_col, vary])
+    input_pct: List[str] = []
+    numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=[goal_col, vary], pct=input_pct)
     if vary in numeric or vary in categorical:
         raise InputError(f"'{vary}'는 --vary로 찾는 열이라 -i에 함께 줄 수 없습니다.")
     if goal_col in numeric or goal_col in categorical or goal_col == vary:
@@ -463,6 +476,7 @@ def execute_reverse(args) -> Dict[str, Any]:
     if not _is_numeric_col(df[vary]) or not _is_numeric_col(df[goal_col]):
         raise InputError("--vary 열과 목표 열은 숫자 열이어야 합니다.")
     keys = [vary] + list(numeric)
+    check_percent_mix(df, keys + [goal_col])
     if len(keys) > MAX_KEYS:
         raise InputError(f"기준 열은 --vary 포함 {MAX_KEYS}개까지입니다 (지금 {len(keys)}개).")
     sub = _filter(df, categorical)
@@ -566,7 +580,7 @@ def execute_reverse(args) -> Dict[str, Any]:
                                f"UNVERIFIED: 확인하지 못한 항목이 있습니다 ({'; '.join(unverified)}). 재시도하지 말고 그대로 알리세요. ")
                               + directive + ("warnings도 함께 알리세요. " if warnings else "")
                               + f"값은 데이터 파일의 마지막 저장 시각({tab['saved_at']}) 기준입니다.")
-    return _common(tab, res, warnings)
+    return _common(tab, res, warnings, input_pct)
 
 
 # ==============================================================================

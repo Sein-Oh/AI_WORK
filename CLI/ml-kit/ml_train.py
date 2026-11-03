@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
     load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
-    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning,
+    strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
 )
 
@@ -1700,9 +1700,12 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         train_warnings: List[str] = layout_warnings(df_raw, target_names)
         for g in prepared:
             train_warnings.extend(w for w in g["warnings"] if w not in train_warnings)
-        # numbers written with '%' ('64.4%' of an Excel CSV export) are read as 64.4: said, never silent
-        train_warnings.extend(percent_warning(df_raw, [c for g in prepared for c in _numeric_input_columns(g)]
-                                              + (target_names if task == TASK_REGRESSION else [])))
+        # numbers written with '%' ('64.4%' of an Excel CSV export) are read as 64.4: said, never silent; '%' cells
+        # next to plain numbers in one column stop (no scale is sure)
+        pct_cols = ([c for g in prepared for c in _numeric_input_columns(g)]
+                    + (target_names if task == TASK_REGRESSION else []))
+        check_percent_mix(df_raw, pct_cols)
+        train_warnings.extend(percent_warning(df_raw, pct_cols))
         for w in train_warnings:
             sys.stderr.write(f"[WARN] {w}\n")
         # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the

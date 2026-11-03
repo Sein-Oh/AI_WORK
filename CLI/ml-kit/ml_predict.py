@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.33"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.34"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -583,6 +583,29 @@ def percent_warning(df: pd.DataFrame, columns: List[str], where: str = "") -> Li
             out.append(f"{where}'{c}' 열의 {n}칸({', '.join(repr(v) for v in ex)})은 %를 떼고 숫자로 읽었습니다 "
                        f"({ex[0]} -> {first}, 100으로 나누지 않음). 열의 단위가 %인지 확인하십시오.")
     return out
+
+
+def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> None:
+    """STOP_RETRY when a column of columns holds numbers written with '%' ('11.9%') AND plain numbers ('0.119'):
+    coerce_numeric reads 11.9% as 11.9, so the two forms may differ by 100x and no rule tells which scale is meant.
+    The user makes the column one form. A column of '%' cells only is read as before (percent_warning)."""
+    for c in dict.fromkeys(columns):
+        if c not in df.columns:
+            continue
+        s = df[c]
+        if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_datetime64_any_dtype(s):
+            continue
+        obj = s.astype("object")
+        is_pct = obj.map(lambda v: isinstance(v, str) and bool(_PERCENT_RE.fullmatch(v.strip()))).to_numpy(dtype=bool)
+        is_num = coerce_numeric(s).notna().to_numpy(dtype=bool)
+        if is_pct.any() and (is_num & ~is_pct).any():
+            pct = str(obj.iloc[int(np.flatnonzero(is_pct)[0])]).strip()
+            plain = str(obj.iloc[int(np.flatnonzero(is_num & ~is_pct)[0])]).strip()
+            raise InputError(
+                f"{where}'{c}' 열에 %를 붙인 숫자 칸({pct!r})과 % 없는 숫자 칸({plain!r})이 섞여 있습니다. "
+                f"%를 붙인 값은 % 없이 읽으므로({pct} -> {_strip_percent(pct)}) 두 형식은 100배 차이가 날 수 있어 "
+                f"어느 배율인지 정할 수 없습니다. 사용자에게 알려 이 열을 모두 %를 붙인 값으로, 또는 모두 % 없는 숫자"
+                f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오.")
 
 
 def coerce_numeric(series: pd.Series) -> pd.Series:
@@ -1799,14 +1822,16 @@ def compile_formula(formula: str, columns: List[str]) -> Tuple[str, Dict[str, st
     """
     col_list = [str(c) for c in columns]
     # a column named like a number ('1', '2'): the number in the formula ('*2', also '2.5') would silently read that
-    # column (the same boundaries as the name replacement below)
+    # column (the same boundaries as the name replacement below). The name without unit counts too: '2' of '2(mm)'
+    # would be its alias
     for c in col_list:
-        if _NUMBER_NAME_RE.fullmatch(c.strip()) and \
-                re.search(_NAME_BOUNDARY_L + re.escape(c) + _NAME_BOUNDARY_R, formula):
-            raise InputError(
-                f"데이터에 숫자 이름의 열 '{c}'이(가) 있어 수식 '{formula}'의 숫자 {c.strip()}이(가) 숫자인지 그 열인지 알 수 "
-                f"없습니다 (수식은 열 이름을 따옴표나 괄호로 감싸 쓰는 방법이 없음). 사용자에게 알려 데이터의 열 '{c}' 이름을 "
-                f"글자가 든 이름(예: '열{c.strip()}')으로 바꾼 뒤 다시 실행하십시오.")
+        for num in dict.fromkeys([c.strip(), strip_unit(c)]):
+            if _NUMBER_NAME_RE.fullmatch(num) and \
+                    re.search(_NAME_BOUNDARY_L + re.escape(num) + _NAME_BOUNDARY_R, formula):
+                raise InputError(
+                    f"데이터에 숫자 이름의 열 '{c}'이(가) 있어 수식 '{formula}'의 숫자 {num}이(가) 숫자인지 그 열"
+                    f"인지 알 수 없습니다 (수식은 열 이름을 따옴표나 괄호로 감싸 쓰는 방법이 없음). 사용자에게 알려 데이터의 "
+                    f"열 '{c}' 이름을 글자가 든 이름(예: '열{c.strip()}')으로 바꾼 뒤 다시 실행하십시오.")
     token_to_col: Dict[str, str] = {}
     transformed = formula
     idx = 0
@@ -1815,7 +1840,8 @@ def compile_formula(formula: str, columns: List[str]) -> Tuple[str, Dict[str, st
     alias_map = build_alias_map(col_list)
     col_set = set(col_list)
     aliases = [(strip_unit(full), full) for key, full in alias_map.items()]
-    aliases = [(a, full) for a, full in aliases if a and a != full and a not in col_set and a not in SAFE_MATH]
+    aliases = [(a, full) for a, full in aliases if a and a != full and a not in col_set and a not in SAFE_MATH
+               and not _NUMBER_NAME_RE.fullmatch(a)]    # an alias that reads as a number is never a formula name
     candidates += sorted(aliases, key=lambda t: len(t[0]), reverse=True)
 
     for name, full in candidates:
@@ -3217,6 +3243,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                 f"타겟 '{target_name}' 추론에 필요한 입력 '{', '.join(missing_raw)}'이(가) 입력 데이터에 없습니다 "
                 f"(파생변수 계산에 쓰는 원본 입력 포함). [입력 데이터 컬럼 목록]: {available_cols}"
                 + (f" {hint}" if hint else ""))
+        # '11.9%' next to '0.119' in one numeric input: no scale is sure (the same check as training)
+        check_percent_mix(df_input, [c for c in numeric_inputs if c in df_input.columns], "입력 데이터 ")
         df_evaled = apply_inference_evals(df_input, derived_evals)
 
         # Check required features

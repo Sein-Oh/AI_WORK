@@ -161,6 +161,8 @@ def _run_with_one_retry(script, args):
     if first["status"] == "ok":
         return first, first
     assert first["agent_directive"].startswith("STOP_RETRY"), first
+    if "[추천]" not in first["message"]:
+        return first, first          # nothing to follow (2.9.34: L12's mixed '%' target asks the user)
     script2, args2 = _follow(script, args, first["message"])
     _, final = run_raw(script2, *args2)
     return first, final
@@ -252,9 +254,19 @@ def _expect(lid, with_units):
     return sorted(names), numeric
 
 
+def _mixed_percent_stops(final, lid):
+    """2.9.34: L12's target holds '12%' next to plain numbers: no scale is sure, STOP_RETRY (was read as 12)."""
+    if lid != "L12_pct_text":
+        return False
+    assert final["agent_directive"].startswith("STOP_RETRY:") and "%를 붙인 숫자 칸('12%')" in final["message"], final
+    return True
+
+
 @pytest.mark.parametrize("lid", list(LAYOUTS))
 def test_train_with_correct_options(matrix, lid):
     first, final = _result(matrix, ("a", lid))
+    if _mixed_percent_stops(final, lid):
+        return
     assert first is final, first.get("message")             # no [추천] detour with the right options
     names, numeric, used = _trained_layout(final)
     assert (names, numeric) == _expect(lid, True)
@@ -264,6 +276,8 @@ def test_train_with_correct_options(matrix, lid):
 @pytest.mark.parametrize("lid", list(LAYOUTS))
 def test_train_without_options(matrix, lid):
     first, final = _result(matrix, ("b", lid))
+    if _mixed_percent_stops(final, lid):
+        return
     names, numeric, used = _trained_layout(final)
     assert (names, numeric) in (_expect(lid, True), _expect(lid, False)), first.get("message")
     assert used == matrix["files"][lid][2]
