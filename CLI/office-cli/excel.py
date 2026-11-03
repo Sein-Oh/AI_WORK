@@ -735,11 +735,13 @@ def cmd_write(args) -> Dict[str, Any]:
         if not args.overwrite and ws is not None:
             filled = [fc for (a, b, c, d, _, _) in ops for fc in _filled_cells(ws, ws.Range(ws.Cells(a, b), ws.Cells(c, d)))]
             if filled:
+                area = addr(ops[0][0], ops[0][1], ops[-1][2], max(o[3] for o in ops))
+                head = f"{area}에 값이 있는 칸 {len(filled)}개가 덮어써집니다: "
                 raise rt.UserDecisionError(
-                    f"{ws.Name}!{addr(ops[0][0], ops[0][1], ops[-1][2], max(o[3] for o in ops))}에 값이 있는 칸 {len(filled)}개가 덮어써집니다: "
-                    + ", ".join(f"{c}={_short(v)}" for c, v in filled[:5]) + (" ..." if len(filled) > 5 else ""),
+                    f"{ws.Name}!" + head + _filled_preview(filled),
                     "쓰지 않았습니다. 덮어쓸 칸을 사용자에게 보여 주고, 사용자가 덮어써도 된다고 하면 --overwrite를 붙여 다시 실행하세요. "
-                    "아니면 비어 있는 다른 --range를 쓰거나 --append로 아래에 이어 쓰세요.")
+                    "아니면 비어 있는 다른 --range를 쓰거나 --append로 아래에 이어 쓰세요.",
+                    log_message=head + _filled_preview(filled, log=True))
 
         # 3) write (새 시트는 여기서 처음 만듦)
         if ws is None:
@@ -1325,6 +1327,14 @@ def _short(v: Any, n: int = 15) -> str:
     return s if len(s) <= n else s[:n] + "..."
 
 
+def _filled_preview(filled: List[Tuple[str, Any]], log: bool = False) -> str:
+    """덮어쓰거나 지워질 칸 미리보기 'A1=값, B1=값 ...' (최대 5칸). log=True면 오류 로그용: 칸 주소만 (값은 문서 내용)."""
+    more = " ..." if len(filled) > 5 else ""
+    if log:
+        return ", ".join(c for c, _ in filled[:5]) + more + f" (값 {rt.DOC_OMITTED})"
+    return ", ".join(f"{c}={_short(v)}" for c, v in filled[:5]) + more
+
+
 def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
     """range 명령이 바꿀 것이 없는지 COM 속성으로 싸게 확인합니다. 바꿀 것이 없으면 그 이유, 아니면(모르면) ""."""
     try:
@@ -1391,10 +1401,11 @@ def cmd_range(args) -> Dict[str, Any]:
                 top_left = addr(int(rng.Row), int(rng.Column))
                 lost = [(c, v) for c, v in _filled_cells(ws, rng) if c != top_left]
                 if lost:          # 병합하면 왼쪽 위 칸만 남음 (왼쪽 위가 비고 다른 칸에 값 하나만 있어도 지워짐)
+                    head = f"병합하면 왼쪽 위 칸({top_left})만 남고 값 {len(lost)}개가 지워집니다: "
                     raise rt.UserDecisionError(
-                        f"병합하면 왼쪽 위 칸({top_left})만 남고 값 {len(lost)}개가 지워집니다: "
-                        + ", ".join(f"{c}={_short(v)}" for c, v in lost[:5]) + (" ..." if len(lost) > 5 else ""),
-                        "병합하지 않았습니다. 지워질 값을 사용자에게 보여 주고, 사용자가 지워도 된다고 하면 --overwrite를 붙여 다시 실행하세요.")
+                        head + _filled_preview(lost),
+                        "병합하지 않았습니다. 지워질 값을 사용자에게 보여 주고, 사용자가 지워도 된다고 하면 --overwrite를 붙여 다시 실행하세요.",
+                        log_message=head + _filled_preview(lost, log=True))
             prev = t.app.DisplayAlerts
             t.app.DisplayAlerts = False        # '왼쪽 위 값만 유지' 확인창 방지
             try:
@@ -1434,11 +1445,12 @@ def cmd_range(args) -> Dict[str, Any]:
                 filled = [(c, v) for c, v in _filled_cells(dws, block)
                           if not (same_sheet and _inside(parse_cell(c), src))]   # 원본과 겹치는 칸은 옮겨지는 값
                 if filled:
+                    head = f"{addr(dr, dc, dr + nr - 1, dc + nc - 1)}에 값이 있는 칸 {len(filled)}개가 덮어써집니다: "
                     raise rt.UserDecisionError(
-                        f"대상 {dws.Name}!{addr(dr, dc, dr + nr - 1, dc + nc - 1)}에 값이 있는 칸 {len(filled)}개가 덮어써집니다: "
-                        + ", ".join(f"{c}={_short(v)}" for c, v in filled[:5]) + (" ..." if len(filled) > 5 else ""),
+                        f"대상 {dws.Name}!" + head + _filled_preview(filled),
                         "옮기지 않았습니다. 덮어쓸 칸을 사용자에게 보여 주고, 사용자가 덮어써도 된다고 하면 --overwrite를 붙여 "
-                        "다시 실행하세요. 아니면 비어 있는 다른 --dest를 쓰세요.")
+                        "다시 실행하세요. 아니면 비어 있는 다른 --dest를 쓰세요.",
+                        log_message="대상 " + head + _filled_preview(filled, log=True))
             src_vals = off.range_to_matrix(rng.Value)
             src_forms = None
             if a == "copy":

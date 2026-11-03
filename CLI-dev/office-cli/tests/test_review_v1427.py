@@ -180,7 +180,7 @@ def test_log_masks_anchor_and_cuts_similar_text(wd, capsys, isolated_dirs, monke
     assert code == 1 and "2026년 비밀계획" in out["message"] and "비슷한 문구: '2026년 계획입'" in out["message"], out
     log = _log_text(isolated_dirs)
     assert "비밀계획" not in log and "계획입" not in log and "<10자 생략>" in log, log
-    assert "문서에서 가져온 후보·문구" in log, log
+    assert "비슷한 문구 <문서 내용 생략>" in log, log            # 1.4.28: 오류가 문서 글을 뺀 log_message를 줌
 
 
 def test_log_masks_excel_highlight_rule(xl, capsys, isolated_dirs, monkeypatch):

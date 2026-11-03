@@ -479,6 +479,7 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
     _preflight_targets(args, targets)
     results: Dict[str, Any] = {}
     errors: Dict[str, List[str]] = {}
+    errors_log: Dict[str, List[str]] = {}
     unverified: List[str] = []
     with off.open_target("excel", args.from_target, readonly=True, option="--from-target") as src:
         ws, chart_obj = excel.find_chart(src, args.chart, args.sheet)
@@ -518,6 +519,8 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
                     pending.remove(kind)
                 except Exception as e:
                     msg = rt.error_payload(e)["message"]
+                    lm = getattr(e, "log_message", None)
+                    errors_log.setdefault(kind, []).append(f"{method}: {msg if lm is None else lm}")   # 오류 로그용 (문서 글 뺀 글)
                     if isinstance(e, rt.InputError) and e.no_fallback:
                         # 앵커/대상 문제는 다른 방식으로 바꿔도 같음. 아직 아무 앱에도 넣지 않았으면 오류로 멈추고,
                         # 이미 다른 앱에 넣었으면 이 앱만 실패로 남김 (오류로 끝내면 다시 실행할 때 넣은 앱에 또 들어감)
@@ -535,9 +538,10 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
         payload["failures"] = {k: errors.get(k, []) for k in failed}
         payload.update(succeeded=list(results), failed=failed)
         if not results:
-            raise rt.InputError(f"차트를 {', '.join(off.APP_LABEL[k] for k in failed)}에 넣지 못했습니다. "
-                                f"시도한 방식: {'; '.join(sum((errors.get(k, []) for k in failed), []))}. "
-                                "office.py transfer --probe로 이 PC에서 되는 방식을 확인하세요.")
+            head = f"차트를 {', '.join(off.APP_LABEL[k] for k in failed)}에 넣지 못했습니다. 시도한 방식: "
+            tail = ". office.py transfer --probe로 이 PC에서 되는 방식을 확인하세요."
+            raise rt.InputError(head + "; ".join(sum((errors.get(k, []) for k in failed), [])) + tail,
+                                log_message=head + "; ".join(sum((errors_log.get(k, []) for k in failed), [])) + tail)
     used = ", ".join(f"{off.APP_LABEL[k]}({v['method']})" for k, v in results.items())
     preview = f"차트 '{title}'를 넣었습니다: {used}" + (f" / 실패: {', '.join(failed)}" if failed else "")
     if failed:   # R1: 일부 실패는 VERIFIED가 아님 (넣은 곳만 확인함)
@@ -1031,11 +1035,16 @@ def cmd_undo(args) -> Dict[str, Any]:
     if args.list:
         # 번호는 --app 필터에 따라 달라지므로 그대로 실행할 명령(같은 --app 포함)을 항목마다 줍니다
         app_arg = ["--app", args.app] if args.app else []
+        # 보여 줄 항목: 되돌릴 수 있는 지점 앞 20개와, 그보다 앞(최근)에 있는 되돌릴 수 없는 작업 (최대 20개).
+        # 되돌릴 수 없는 작업이 20개 넘게 앞에 쌓여도 되돌릴 수 있는 지점이 목록에서 빠지지 않게 합니다.
+        picks = [i for i, s in enumerate(snaps, 1) if not s.get("barrier")][:20]
+        limit = picks[-1] if picks else len(snaps)
+        picks += [i for i, s in enumerate(snaps, 1) if s.get("barrier") and i <= limit][:20]
         items = [{"pick": i, "app": off.APP_LABEL[s["app"]], "name": s["name"], "created_at": s.get("created_at", "")[:15],
                   "by": s.get("by", "")}
                  | ({"undo_available": False, "reason": s.get("reason", "")} if s.get("barrier")
                     else {"command": rt.next_command("office.py", ["undo", "--pick", i] + app_arg, "")["command"]})
-                 for i, s in enumerate(snaps[:20], 1)]
+                 for i, s in ((i, snaps[i - 1]) for i in sorted(picks))]
         if not snaps:
             return rt.ok(TOOL, "undo", "0건: 되돌릴 수 있는 지점이 없습니다",
                          "VERIFIED: 0건. 되돌릴 수 있는 지점이 없습니다. 사용자에게 그대로 알리고 undo를 실행하지 마세요.",
@@ -1058,6 +1067,12 @@ def cmd_undo(args) -> Dict[str, Any]:
     if not 1 <= pick <= len(snaps):
         raise rt.InputError(f"--pick은 1~{len(snaps)} 사이여야 합니다 (office.py undo --list로 확인).")
     snap = snaps[pick - 1]
+    if snap.get("barrier") and args.pick is None and all(s.get("barrier") for s in snaps):
+        # 되돌릴 수 있는 지점이 하나도 없음: 사용자가 정할 것이 없으므로 0건 결과 (needs_user_decision이 아님)
+        return rt.ok(TOOL, "undo", f"0건: 되돌릴 수 있는 지점이 없습니다 (이전 상태가 없는 작업 {len(snaps)}개)",
+                     "VERIFIED: 0건. 되돌릴 수 있는 지점이 없습니다 (최근 작업은 되돌릴 이전 상태가 없음). "
+                     "사용자에게 그대로 알리고 undo를 다시 실행하지 마세요.",
+                     restored=False, count=0, barriers=len(snaps))
     if snap.get("barrier"):
         if args.pick is not None:
             raise rt.InputError(f"{pick}번은 되돌릴 지점이 없는 작업입니다 ({snap.get('reason', '')}). office.py undo --list에서 다른 번호를 고르세요.")

@@ -124,8 +124,17 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 항목: 시각, 도구 버전, Python, OS / 실행한 명령과 인자 / `error_type`과 message / 재시도 한도를 넘긴 복구 시도(`복구 시도:`) / 내부 오류(`ERROR:`)일 때만 traceback. 문서 본문은 기록하지 않습니다.
 - 내용 옵션의 값은 `<N자 생략>`으로 남깁니다: `--body --text --subject --to --cc --bcc --from --query --find --replace --value --values --formula --header --title --cards --anchor --search --new-name --map --section`, `excel.py`의 `--highlight`(셀 값이 들어감, 1.4.26)(`office.py`의 `--from/--to`, `ppt.py`의 `--to`는 앱 이름·위치, `word.py`의 `--highlight`는 색 이름이라 그대로). 경로와 그 밖의 인자는 그대로 남깁니다(1.4.10).
   짧은 이름(`-q` = `--query`, `-q값`)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다(1.4.11).
-  `결과:` 줄의 message에서도 가린 값을 같은 `<N자 생략>`으로 바꾸고, 문서에서 가져온 후보·문구는 표식(`_runtime.LOG_CUT_MARKERS`: `[후보]`, `[추천]`,
-  `비슷한 문구:`, `사용 가능한 <종류>:`)부터 끝까지 `<문서에서 가져온 후보·문구 N자 생략>`으로 자릅니다. stdout JSON의 message는 그대로입니다(1.4.27). 모든 파서는 줄여 쓴 옵션을 받지 않습니다(`allow_abbrev=False`, 인자 오류 exit 2).
+  `결과:` 줄의 message는 문서 글을 뺀 글입니다(stdout JSON의 message는 그대로, 1.4.27·1.4.28).
+  1. 문서에서 가져온 글(칸 값, 슬라이드 제목·노트, 시트·문서·파일·메일 폴더 이름 목록, 후보 단락·제목, 비슷한 문구, 메모 파일의 기준 글)을
+     message에 넣는 오류는 그 글을 뺀 `log_message`를 함께 만들고(`InputError`/`UserDecisionError`의 `log_message`, `ambiguous()`·`not_found()`는
+     후보를 개수만 남김, 결과 dict는 `_log_message` 키), 로그에는 그것을 씁니다. 뺀 자리는 `<문서 내용 생략>`, `[후보 N개 생략]` 등(1.4.28).
+  2. 그 위에 가린 인자 값을 같은 `<N자 생략>`으로 바꿉니다. 10자 이상인 값은 10자 이상의 앞부분(잘린 미리보기)도 가리고,
+     1~2자 값(`--value 1`)은 따옴표 안에 있을 때만 가립니다(`Sheet1`의 1을 가리지 않게. 따옴표 없이 쓴 1~2자 값은 로그에 남을 수 있음, 1.4.28).
+  3. 빠뜨린 곳을 위한 대비로 표식(`_runtime.LOG_CUT_MARKERS`: `[후보]`, `[추천]`, `후보:`, `추천:`, `비슷한 문구:`, `사용 가능한 <종류>:`(종류에 공백 가능))
+     부터 끝까지를 `<문서에서 가져온 후보·문구 N자 생략>`으로 자릅니다.
+  4. 내부 오류의 traceback도 가린 인자 값을 바꿉니다(표식 자르기는 하지 않음, 1.4.28). 가리기에 실패해도 로그 기록은 오류를 삼킵니다.
+  - 남는 것: 가리지 않는 인자로 준 이름(`--sheet`, `--target`, `--name` 등)과 경로·열린 문서 하나의 파일 이름, Office COM 오류 설명, 파서 예외 글(손상 파일)은 그대로 남습니다.
+  - 모든 파서는 줄여 쓴 옵션을 받지 않습니다(`allow_abbrev=False`, 인자 오류 exit 2).
 - 성공, 사용자 중단(exit 130)은 기록하지 않습니다. 2MB를 넘으면 `errors.old.txt`로 넘기고 새로 시작합니다. 로그 경로는 stdout JSON에 넣지 않습니다(사람과 개발 에이전트의 사후 분석용).
 - 실기 테스트 러너의 `errors_<시각>.txt`는 테스트 한 번의 판정 근거를 모은 별도 파일이고, 그 실행 중에 쌓인 도구 오류 로그(`<테스트 폴더>\_data\logs\errors.txt`)도 끝에 함께 옮겨 담습니다.
 
@@ -314,6 +323,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `transfer`: 아래 4절 참고
 - `undo [--app] [--list] [--pick N] [--overwrite]`: `--pick`은 1 이상(0 이하는 STOP_RETRY, 1.4.23).
   `--list`의 `count`·`shown`은 되돌릴 수 있는 지점(항목에 `command`가 있음)만 세고, 되돌릴 수 없는 작업 수는 `barriers`. 되돌릴 지점이 0개면 `VERIFIED: 0건.`(1.4.27)
+  `--list` 항목은 되돌릴 수 있는 지점 앞 20개와 그보다 최근의 되돌릴 수 없는 작업(최대 20개)이라, 되돌릴 수 없는 작업이 20개 넘게 앞에 쌓여도
+  되돌릴 수 있는 지점이 빠지지 않습니다(`truncated`는 빠진 항목이 있을 때 true). `--pick` 없는 `undo`는 되돌릴 수 있는 지점이 하나도 없으면
+  `VERIFIED: 0건.`(`count: 0`, `restored: false`), 직전 작업만 되돌릴 수 없고 더 앞 지점이 있으면 `needs_user_decision`입니다(1.4.28).
 
 ## 4. 앱 간 전달 (transfer)과 회사 DRM
 

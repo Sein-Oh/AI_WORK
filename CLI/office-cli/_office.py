@@ -312,9 +312,11 @@ def missing_sheet(name: str, names: List[str]) -> "rt.InputError":
     same = [n for n in names if _sheet_key(n) == key]
     if len(same) == 1:
         return rt.InputError(f"시트 '{name}'이(가) 없습니다. 표기(대소문자·공백·_-.)만 다른 기존 시트가 있습니다. [추천] {same[0]}",
-                             no_fallback=True)
+                             no_fallback=True, log_message=f"시트 '{name}'이(가) 없습니다. 표기만 다른 기존 시트가 있습니다. [추천 생략]")
     shown = ", ".join(names[:15]) + (" ..." if len(names) > 15 else "")
     similar = same or rt.suggest(name, names)
+    # 오류 로그에는 시트 이름 목록을 남기지 않음 (문서에서 가져온 이름)
+    log_msg = f"시트 '{name}'이(가) 없습니다 (있는 시트 {len(names)}개 이름 생략). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다."
     if similar:
         return rt.UserDecisionError(
             f"시트 '{name}'이(가) 없습니다 (있는 시트: {shown}). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. "
@@ -322,12 +324,12 @@ def missing_sheet(name: str, names: List[str]) -> "rt.InputError":
             "다시 실행하지 마세요. message를 사용자에게 그대로 보여 주고, [후보]의 기존 시트에 쓸지 "
             f"새 시트 '{name}'을(를) 만들지 물어보세요. 사용자가 기존 시트를 고르면 --sheet를 그 이름으로 바꿔 실행하고, "
             "사용자가 새 시트를 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.",
-            candidates=similar)
+            candidates=similar, log_message=log_msg)
     return rt.UserDecisionError(
         f"시트 '{name}'이(가) 없습니다 (있는 시트: {shown}). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. "
         "새 시트를 만들지 사용자에게 물어보세요.",
         f"다시 실행하지 마세요. message를 사용자에게 그대로 보여 주고, 새 시트 '{name}'을(를) 만들지 물어보세요. "
-        "사용자가 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.")
+        "사용자가 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.", log_message=log_msg)
 
 
 def shape_box(obj: Any) -> Dict[str, float]:

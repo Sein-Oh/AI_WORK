@@ -465,6 +465,7 @@ def _finalize(mail: Any, send: bool, command: str, attached: List[str]) -> Dict[
             extra["unresolved_recipients"] = unresolved
             return {"status": "error", "tool": TOOL, "command": command, "error_type": "input",
                     "message": f"수신자 주소를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다: {', '.join(unresolved)}",
+                    rt.LOG_MESSAGE_KEY: f"수신자 주소 {len(unresolved)}개를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다 (수신자 생략).",
                     "agent_directive": "STOP_RETRY: 발송하지 않았습니다. 사용자에게 수신자 주소 확인을 요청하세요.", **extra}
         mail.Send()
         extra["sent"] = True

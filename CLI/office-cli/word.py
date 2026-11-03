@@ -565,7 +565,8 @@ def _memo_rows(path: str) -> List[Tuple[str, str, Optional[int]]]:
         if not anchor or not memo:
             raise rt.InputError(f"메모 파일 {n}번째 줄에 기준 글 또는 메모 내용이 없습니다. 열: 기준 글, 메모 내용[, 몇 번째 단락].")
         if occ_raw and not occ_raw.isdigit():
-            raise rt.InputError(f"메모 파일 {n}번째 줄의 3번째 열(몇 번째 단락)은 숫자여야 합니다: '{occ_raw}'")
+            raise rt.InputError(f"메모 파일 {n}번째 줄의 3번째 열(몇 번째 단락)은 숫자여야 합니다: '{occ_raw}'",
+                                log_message=f"메모 파일 {n}번째 줄의 3번째 열(몇 번째 단락)은 숫자여야 합니다 (값 {rt.DOC_OMITTED}).")
         out.append((anchor, memo, int(occ_raw) if occ_raw else None))
     if not out:
         raise rt.InputError("메모 파일에 내용이 없습니다. 열: 기준 글, 메모 내용[, 몇 번째 단락].")
@@ -602,11 +603,14 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
                 _comment_range(doc, anchor, occ)
             except rt.InputError as e:
                 msg = str(e).replace("[추천]", "추천:").replace("[후보]", "후보:")
-                problems.append(f"{n}번째 줄 '{_preview(anchor, 20)}': {msg}")
+                problems.append((n, f"{n}번째 줄 '{_preview(anchor, 20)}': {msg}"))
         if problems:
-            raise rt.InputError(f"메모 {len(rows)}개 중 {len(problems)}개의 기준 글을 정할 수 없어 하나도 달지 않았습니다. "
-                                "메모 파일의 기준 글을 고치거나 3번째 열에 몇 번째 단락인지 적은 뒤 다시 실행하세요. "
-                                + " / ".join(problems[:10]))
+            head = (f"메모 {len(rows)}개 중 {len(problems)}개의 기준 글을 정할 수 없어 하나도 달지 않았습니다. "
+                    "메모 파일의 기준 글을 고치거나 3번째 열에 몇 번째 단락인지 적은 뒤 다시 실행하세요. ")
+            # 오류 로그에는 줄 번호만 (기준 글은 메모 파일 내용, 후보는 문서 단락)
+            raise rt.InputError(head + " / ".join(p for _, p in problems[:10]),
+                                log_message=head + f"기준 글을 정할 수 없는 줄: {', '.join(str(n) for n, _ in problems[:10])} "
+                                                   f"(기준 글과 후보 {rt.DOC_OMITTED})")
     before = int(doc.Comments.Count)
     added = []
     for anchor, memo, occ in rows:
@@ -902,7 +906,8 @@ def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str
         elif similar:
             hint = f" 비슷한 문구: '{similar}' (뜻이 같은지 사용자에게 확인한 뒤에만 쓰세요)"
         raise rt.InputError(f"문서에서 '{anchor}'을(를) 찾을 수 없습니다. word.py read로 정확한 문구를 확인하세요." + hint,
-                            no_fallback=True)
+                            no_fallback=True,
+                            log_message=f"문서에서 '{anchor}'을(를) 찾을 수 없습니다." + (f" (비슷한 문구 {rt.DOC_OMITTED})" if hint else ""))
     if occurrence is not None:
         if not 1 <= occurrence <= len(hits):
             raise rt.InputError(f"--occurrence는 1~{len(hits)} 사이여야 합니다 ('{anchor}'이(가) 있는 단락 {len(hits)}개).",
@@ -1109,7 +1114,10 @@ def _load_map(args) -> Dict[str, str]:
                             "(예: word.py write --text \"내용\" --anchor \"기준 글\" --pos after). 바꿀 글이 있으면 찾을 글을 정확히 지정하세요.")
     long_keys = [k for k in mapping if _find_len(k) > FIND_MAX]
     if long_keys:
-        raise rt.InputError(f"찾을 문구는 {FIND_MAX}자 이하여야 합니다: '{long_keys[0][:30]}...' 문장을 나눠서 지정하세요.")
+        # 찾을 문구의 앞부분을 보여 주지 않음 (오류 로그에 가린 값의 일부가 남았음). 몇 번째 문구인지와 길이만
+        first = list(mapping).index(long_keys[0]) + 1
+        raise rt.InputError(f"찾을 문구는 {FIND_MAX}자 이하여야 합니다 ({first}번째 찾을 문구가 {_find_len(long_keys[0])}자). "
+                            "문장을 나눠서 지정하세요.")
     return mapping
 
 

@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.27"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.28"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -78,14 +78,21 @@ def debug(message: str) -> None:
 # 2. 응답 계약
 # ==============================================================================
 
+# 오류 로그 message에서 문서에서 가져온 글(칸 값, 제목, 노트, 이름 목록 등)을 뺀 자리에 넣는 글
+DOC_OMITTED = "<문서 내용 생략>"
+
+
 class InputError(ValueError):
     """인자/대상/데이터 문제. 같은 인자로 재시도해도 소용없음 (STOP_RETRY).
-    candidates를 주면 '후보가 여러 개라 도구가 고를 수 없음'으로 응답합니다 (R8 [후보], 사용자가 고름)."""
+    candidates를 주면 '후보가 여러 개라 도구가 고를 수 없음'으로 응답합니다 (R8 [후보], 사용자가 고름).
+    log_message: 오류 로그에 남길 message (문서에서 가져온 글을 뺀 글). message에 문서 글을 넣는 곳은 반드시 줍니다.
+    없으면 message를 쓰고, 어느 쪽이든 write_error_log가 가린 인자 값과 LOG_CUT_MARKERS를 한 번 더 뺍니다."""
 
     def __init__(self, message: str = "", candidates: Optional[List[str]] = None, no_fallback: bool = False,
                  *, directive: Optional[str] = None, error_type: Optional[str] = None,
-                 fields: Optional[Dict[str, Any]] = None):
+                 fields: Optional[Dict[str, Any]] = None, log_message: Optional[str] = None):
         super().__init__(message)
+        self.log_message = log_message
         self.candidates = list(candidates or [])
         # 선택: STOP_RETRY: 뒤에 붙일 전용 안내, 전용 error_type, 응답에 더할 키 (예: next_commands)
         self.directive = directive
@@ -98,21 +105,29 @@ class InputError(ValueError):
 MAX_CANDIDATES = 10
 
 
-def ambiguous(message: str, candidates: Iterable[str]) -> InputError:
-    """후보가 둘 이상이라 고를 수 없음. message 끝에 '[후보] a, b, c'(최대 10개)를 붙입니다."""
+def _omitted_candidates(n: int) -> str:
+    return f" [후보 {n}개 생략]" if n else ""
+
+
+def ambiguous(message: str, candidates: Iterable[str], log_message: Optional[str] = None) -> InputError:
+    """후보가 둘 이상이라 고를 수 없음. message 끝에 '[후보] a, b, c'(최대 10개)를 붙입니다.
+    후보는 문서에서 가져온 글(제목, 단락, 시트·문서 이름)이라 오류 로그에는 개수만 남깁니다."""
     cands = [str(c) for c in candidates]
     shown = cands[:MAX_CANDIDATES]
     tail = f" [후보] {', '.join(shown)}" + (f" 외 {len(cands) - len(shown)}개" if len(cands) > len(shown) else "")
-    return InputError(message + tail, candidates=shown)
+    return InputError(message + tail, candidates=shown,
+                      log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
 
 
 class UserDecisionError(InputError):
     """도구가 대신 정하면 안 되는 일 (예: 없는 시트를 새로 만들지). 재시도하지 않고 사용자에게 묻게 합니다.
     message에는 사실만 적고, 할 일(directive)은 사용자 동의를 조건으로 적습니다. 경량 LLM이 message의 명령문을 그대로 따르기 때문."""
 
-    def __init__(self, message: str, directive: str, candidates: Optional[List[str]] = None):
+    def __init__(self, message: str, directive: str, candidates: Optional[List[str]] = None,
+                 log_message: Optional[str] = None):
         cands = [str(c) for c in (candidates or [])][:MAX_CANDIDATES]
-        super().__init__(message + (f" [후보] {', '.join(cands)}" if cands else ""), candidates=cands, no_fallback=True)
+        super().__init__(message + (f" [후보] {', '.join(cands)}" if cands else ""), candidates=cands, no_fallback=True,
+                         log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
         self.directive = directive
 
 
@@ -429,21 +444,63 @@ def hidden_values(argv: Sequence[Any], tool: str = "") -> List[str]:
 
 
 # 오류 로그에서 잘라 내는 message 부분 (문서·통합 문서에서 가져온 후보 목록과 비슷한 글: 제목, 시트·차트 이름, 본문 일부).
+# 1차 방어는 오류를 만드는 곳의 log_message(InputError, UserDecisionError, ambiguous, not_found)이고, 이 표식은 빠뜨린 곳을 위한 대비입니다.
 # 이 표식부터 message 끝까지를 '<문서에서 가져온 후보·문구 N자 생략>'으로 바꿉니다. stdout JSON의 message는 그대로입니다.
-# 표식을 만드는 곳: ambiguous()·UserDecisionError의 '[후보]', not_found()의 '[추천]'·'사용 가능한 <종류>:', word 앵커의 '비슷한 문구:'
-LOG_CUT_MARKERS = re.compile(r"\s*(?:\[후보\]|\[추천\]|비슷한 문구:|사용 가능한 [^\s:]{1,20}:)")
+# 표식을 만드는 곳: ambiguous()·UserDecisionError의 '[후보]', not_found()의 '[추천]'·'사용 가능한 <종류>:'(종류에 공백 가능: '메일 폴더'),
+# word 앵커의 '비슷한 문구:', 대괄호를 뺀 '후보:'·'추천:'
+LOG_CUT_MARKERS = re.compile(r"\s*(?:\[후보\]|\[추천\]|후보:|추천:|비슷한 문구:|사용 가능한 [^:]{1,30}:)")
+# 가린 값이 이보다 길면 앞부분(이 길이 이상)만 남은 미리보기('긴 글...')도 가립니다
+LOG_PREFIX_MIN = 10
+# 이보다 짧은 가린 값(--value 1)은 따옴표로 둘러싸인 곳만 가립니다 ('Sheet1'의 1을 가리지 않게. 따옴표 없이 쓴 1~2자 값은 남음)
+LOG_SHORT_VALUE = 3
+_QUOTES = "'\"\u2018\u2019\u201c\u201d"
+
+
+def _hidden_spans(text: str, vals: Iterable[str]) -> List[Tuple[int, int]]:
+    """text에서 가린 값이 나온 구간. 긴 값은 LOG_PREFIX_MIN자 이상의 앞부분도, 짧은 값은 따옴표 안만."""
+    spans: List[Tuple[int, int]] = []
+    for v in vals:
+        if len(v) >= LOG_PREFIX_MIN:
+            head = v[:LOG_PREFIX_MIN]
+            i = text.find(head)
+            while i >= 0:
+                k = LOG_PREFIX_MIN
+                while k < len(v) and i + k < len(text) and text[i + k] == v[k]:
+                    k += 1
+                spans.append((i, i + k))
+                i = text.find(head, i + 1)
+        elif len(v) >= LOG_SHORT_VALUE:
+            spans += [(m.start(), m.end()) for m in re.finditer(re.escape(v), text)]
+        else:
+            spans += [(m.start(), m.end()) for m in re.finditer(re.escape(v), text)
+                      if m.start() > 0 and text[m.start() - 1] in _QUOTES and m.end() < len(text) and text[m.end()] in _QUOTES]
+    merged: List[Tuple[int, int]] = []
+    for x, y in sorted(spans):
+        if merged and x <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], y))
+        else:
+            merged.append((x, y))
+    return merged
+
+
+def mask_hidden_values(text: str, argv: Sequence[Any], tool: str = "") -> str:
+    """가린 인자 값을 text에서 redact_argv와 같은 '<N자 생략>'으로 바꿉니다. 오류 로그의 message와 traceback에 씁니다."""
+    vals = set()
+    for v in hidden_values(argv, tool):
+        vals.update(x for x in (v, v.strip(), unescape_newlines(v).strip()) if x)
+    out: List[str] = []
+    last = 0
+    for x, y in _hidden_spans(text, vals):      # 원래 글에서 구간을 한 번에 구함 (넣은 '<N자 생략>'을 다시 바꾸지 않게)
+        out += [text[last:x], f"<{y - x}자 생략>"]
+        last = y
+    return "".join(out) + text[last:]
 
 
 def log_message(message: Any, argv: Sequence[Any], tool: str = "") -> str:
-    """오류 로그에 남길 message: 가린 인자 값(redact_argv와 같은 '<N자 생략>')과 문서에서 가져온 후보·문구(LOG_CUT_MARKERS)를 뺀 글."""
+    """오류 로그에 남길 message: 가린 인자 값과 문서에서 가져온 후보·문구(LOG_CUT_MARKERS)를 뺀 글.
+    message에는 오류의 log_message(문서 글을 뺀 글)가 있으면 그것을 줍니다."""
     try:
-        msg = "" if message is None else str(message)
-        vals = set()
-        for v in hidden_values(argv, tool):
-            vals.update(x for x in (v, v.strip(), unescape_newlines(v).strip()) if x)
-        if vals:      # 한 번에 바꿈 (긴 값 먼저. 이미 넣은 '<N자 생략>'을 짧은 값이 다시 바꾸지 않게)
-            pat = re.compile("|".join(re.escape(v) for v in sorted(vals, key=len, reverse=True)))
-            msg = pat.sub(lambda m: f"<{len(m.group(0))}자 생략>", msg)
+        msg = mask_hidden_values("" if message is None else str(message), argv, tool)
         m = LOG_CUT_MARKERS.search(msg)
         if m:
             msg = msg[:m.start()] + f" <문서에서 가져온 후보·문구 {len(msg) - m.start()}자 생략>"
@@ -452,7 +509,20 @@ def log_message(message: Any, argv: Sequence[Any], tool: str = "") -> str:
         return "<message 생략 (가리기 실패)>"
 
 
-def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str, Any], trace: str = "") -> None:
+def log_trace(trace: str, argv: Sequence[Any], tool: str = "") -> str:
+    """traceback의 가린 인자 값을 바꿉니다 (표식 자르기는 하지 않음: 코드 줄과 예외 종류는 남김)."""
+    try:
+        return mask_hidden_values(trace, argv, tool)
+    except Exception:
+        return "<traceback 생략 (가리기 실패)>"
+
+
+# 결과 dict(status: error)에 오류 로그용 message를 담는 키. run_cli가 stdout에 내기 전에 뺍니다.
+LOG_MESSAGE_KEY = "_log_message"
+
+
+def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str, Any], trace: str = "",
+                    log_msg: Optional[str] = None) -> None:
     """실패한 실행을 <데이터 폴더>/logs/errors.txt에 덧붙입니다 (사람과 개발 에이전트의 사후 분석용).
     기준 구현: archive/doc-classifier/_dc_runtime.py. 경로와 인자만 기록하고 문서 본문은 기록하지 않습니다.
     회전 실패와 기록 실패를 따로 감싸고, 어떤 오류도 삼킵니다 (stdout 1줄 JSON 계약을 깨면 안 됨)."""
@@ -472,15 +542,22 @@ def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str,
         lines = [f"===== {_dt.datetime.now().isoformat(timespec='seconds')} | {TOOL_NAME} {VERSION} | "
                  f"Python {platform.python_version()} | {platform.platform()}",
                  f"명령: {args}",
-                 f"결과: {payload.get('error_type')} | {log_message(payload.get('message'), argv, tool)}"]
+                 f"결과: {payload.get('error_type')} | "
+                 f"{log_message(payload.get('message') if log_msg is None else log_msg, argv, tool)}"]
         if RECOVERY_ATTEMPTS:
             lines.append("복구 시도: " + "; ".join(RECOVERY_ATTEMPTS))
         if trace:
-            lines.append("traceback:\n" + trace.rstrip())
+            lines.append("traceback:\n" + log_trace(trace, argv, tool).rstrip())
         with open(path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n\n")
     except Exception:
         pass
+
+
+def _exc_log_message(exc: BaseException, payload: Dict[str, Any]) -> Optional[str]:
+    """예외의 log_message (문서 글을 뺀 글). 없으면 None (payload의 message를 씀)."""
+    lm = getattr(exc, "log_message", None)
+    return None if lm is None or payload.get("error_type") == "internal" else str(lm)
 
 
 def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> None:
@@ -504,11 +581,12 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
         payload = error_payload(e, tool, command)
         # traceback은 내부 오류(ERROR:)일 때만 남깁니다
         internal = str(payload.get("agent_directive", "")).startswith("ERROR:")
-        write_error_log(tool, None, payload, trace if internal else "")
+        write_error_log(tool, None, payload, trace if internal else "", log_msg=_exc_log_message(e, payload))
         emit_json(payload)
         sys.exit(1)
+    log_msg = result.pop(LOG_MESSAGE_KEY, None) if isinstance(result, dict) else None
     if result.get("status") != "ok":
-        write_error_log(tool, None, result)
+        write_error_log(tool, None, result, log_msg=log_msg)
     emit_json(result)
     sys.exit(0 if result.get("status") == "ok" else 1)
 
@@ -936,18 +1014,18 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
         close = difflib.get_close_matches(key, [_same_name_key(c) for c in cands], n=2, cutoff=0.75)
         if len(close) == 1:
             same = [c for c in cands if _same_name_key(c) == close[0]][:1]
+    head = f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra}"
+    # 오류 로그에는 후보 이름(시트·문서·제목·메일 폴더·파일 이름 목록)을 남기지 않음 (log_message)
     if len(same) == 1:
-        return InputError(f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra} 표기만 다른 이름이 있습니다. [추천] {same[0]}")
+        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {same[0]}",
+                          log_message=f"{head} 표기만 다른 이름이 있습니다. [추천 생략]")
     hints = same or suggest(name, cands)
     if hints:
-        return ambiguous(f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra} 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. "
-                         "사용자에게 고르게 하세요.", hints)
+        return ambiguous(f"{head} 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요.", hints)
     if cands:
         shown = ", ".join(cands[:15]) + (" ..." if len(cands) > 15 else "")
-        tail = f" 사용 가능한 {kind}: {shown}"
-    else:
-        tail = ""
-    return InputError(f"{kind} '{name}'을(를) 찾을 수 없습니다.{extra}{tail}")
+        return InputError(f"{head} 사용 가능한 {kind}: {shown}", log_message=f"{head} [사용 가능한 이름 {len(cands)}개 생략]")
+    return InputError(head)
 
 
 def clamp_cell(value: Any, max_chars: int = MAX_CELL_CHARS) -> Tuple[Any, bool]:

@@ -677,7 +677,8 @@ def cmd_write(args) -> Dict[str, Any]:
             if new_title.strip() and old_title and old_title.strip() != new_title.strip():
                 raise rt.UserDecisionError(
                     f"슬라이드 {slide_no}에 이미 제목이 있습니다 ({_preview_text(old_title)}). 아무것도 쓰지 않았습니다.",
-                    "기존 제목을 바꿀지 정해야 합니다. 제목을 사용자에게 보여 주고, 사용자가 바꾸기를 분명히 원할 때만 "
+                    log_message=f"슬라이드 {slide_no}에 이미 제목이 있습니다 (제목 {rt.DOC_OMITTED}). 아무것도 쓰지 않았습니다.",
+                    directive="기존 제목을 바꿀지 정해야 합니다. 제목을 사용자에게 보여 주고, 사용자가 바꾸기를 분명히 원할 때만 "
                     "--overwrite를 붙여 다시 실행하세요. 제목을 바꾸지 않으려면 --title을 빼거나 --slide new로 새 슬라이드에 쓰세요.")
 
         def open_slide(with_title: bool) -> Tuple[Any, int]:
@@ -995,7 +996,8 @@ def cmd_notes(args) -> Dict[str, Any]:
         if before and not args.append and not args.overwrite:
             raise rt.UserDecisionError(
                 f"슬라이드 {args.slide}에 이미 노트가 있습니다 ({_preview_text(before)}). 기존 노트를 지우지 않았습니다.",
-                "기존 노트를 지울지 정해야 합니다. 노트를 사용자에게 보여 주고, 뒤에 덧붙이려면 --append, "
+                log_message=f"슬라이드 {args.slide}에 이미 노트가 있습니다 (노트 {rt.DOC_OMITTED}). 기존 노트를 지우지 않았습니다.",
+                directive="기존 노트를 지울지 정해야 합니다. 노트를 사용자에게 보여 주고, 뒤에 덧붙이려면 --append, "
                 "사용자가 바꾸기를 분명히 원할 때만 --overwrite를 붙여 다시 실행하세요.")
         new = (before + "\n" + text).strip() if args.append and before else text
         same = new == before               # 같은 노트로 바꾸기(빈 노트 지우기 포함)는 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
