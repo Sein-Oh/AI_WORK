@@ -104,8 +104,11 @@ def test_other_unit_with_other_base_name_find(models):
 def test_same_unit_typo_still_suggested(models):
     proc, res = run_raw("ml_predict.py", "-m", models["p4"], "-i", "압력(bar)=3,온도=180,속도=45")
     assert "[추천] '반응압력(bar)'" in _stop(res, proc)
-    proc, res = run_raw("ml_map.py", "-f", models["p4_f"], "-i", "반응압력( bar)=3", "-y", "생산량")
+    proc, res = run_raw("ml_map.py", "-f", models["p4_f"], "-i", "반응압룍(bar)=3", "-y", "생산량")
     assert "[추천] '반응압력(bar)'" in _stop(res, proc)
+    # 2.9.31: the same unit spaced otherwise is the same name (resolve_column_names), no [추천] (was the test above)
+    proc, res = run_raw("ml_map.py", "-f", models["p4_f"], "-i", "반응압력( bar)=3", "-y", "생산량")
+    assert proc.returncode == 0 and res["keys"] == ["반응압력(bar)"], res
 
 
 def test_other_unit_rule():

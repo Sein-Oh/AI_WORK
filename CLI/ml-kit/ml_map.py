@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
-    check_comma_numbers, check_same_column, suggest_columns, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    check_comma_numbers, check_same_column, suggest_columns, build_alias_map, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -108,9 +108,11 @@ def _map_command(args, **change: Optional[str]) -> str:
 
 
 def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], args=None,
-                kv: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
-    """Resolves -i names; numeric columns need numeric values, text columns become row filters."""
-    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)", layout=df.attrs, values=True)
+                kv: Optional[Dict[str, str]] = None, reserved: Optional[List[str]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
+    """Resolves -i names; numeric columns need numeric values, text columns become row filters. reserved (-y, the
+    --find goal, --vary) are never suggested as a key."""
+    names, _ = resolve_column_names(list(pairs), columns, "기준(-i)" if args is not None else "조회 파일(--points) 기준",
+                                    layout=df.attrs, values=True, exclude=reserved)
     check_same_column(list(pairs), names, "-i" if args is not None else "--points 조회 파일 열",
                       pairs if args is not None else None)
     resolved = dict(zip(pairs, names))
@@ -130,12 +132,56 @@ def _split_keys(df: pd.DataFrame, pairs: Dict[str, Any], columns: List[str], arg
     return numeric, categorical
 
 
-def _check_near_points(points_df: pd.DataFrame, usable: List[str], unused: List[str], layout: Dict[str, Any]) -> None:
+_ASK_POINTS = (" -y가 없어 이 열이 기준 열인지 구할 열의 실측값·메모인지 알 수 없어 사용자에게 물으십시오: 기준 열이면 조회 파일의 "
+               "머리글을 고르신 데이터 열 이름으로 고치고, 실측값·메모면 -y에 구할 열을 넣어 다시 실행하십시오 (그 열의 실측값 "
+               "열은 결과에 그대로 붙습니다).")
+
+
+def _ask_without_y(e: InputError, ask: bool) -> InputError:
+    """Without -y every numeric column not used as a key is a value column, so a points column near one of them may be
+    its measured value: no [추천] (a rename could make it a key or leave nothing to compute), a [후보] for the user."""
+    if not ask or "[추천]" not in str(e):
+        return e
+    head, sep, tail = str(e).replace("[추천]", "[후보]").partition("\n")
+    return InputError(f"{head}{_ASK_POINTS}{sep}{tail}")
+
+
+def _is_key_name(name: str, cols: List[str]) -> bool:
+    """name is a column of cols as -i matches it: the exact name, the same name and unit spaced otherwise, or a
+    unique name written without unit."""
+    if name in cols or sum(_same_unit_name(name, c) for c in cols) == 1:
+        return True
+    return strip_unit(name) == name.strip() and _alias_key(name) in build_alias_map(cols)
+
+
+def _points_keys(points_df: pd.DataFrame, keycols: List[str], targets: List[str]) -> Tuple[List[Any], List[Any]]:
+    """(key columns, measured columns) of a --points file. A column of the -y target's name ('생산량(실측)' for '생산량')
+    is a measured or memo column, never a key, unless it names a non-target column exactly. Other columns of a
+    data column's name without unit are keys (a different unit stops in _split_keys)."""
+    tkeys = {_alias_key(t) for t in targets}
+    bases = {strip_unit(x) for x in keycols}
+    usable, measured = [], []
+    for c in points_df.columns:
+        name = str(c)
+        if re.fullmatch(r"col_\d+", name):
+            continue
+        if _is_key_name(name, keycols):
+            usable.append(c)
+        elif _alias_key(name) in tkeys:
+            measured.append(c)
+        elif strip_unit(name) in bases:
+            usable.append(c)
+    return usable, measured
+
+
+def _check_near_points(points_df: pd.DataFrame, skip: List[Any], unused: List[str], layout: Dict[str, Any],
+                       ask: bool = False) -> None:
     """A numeric --points column that is no key but nearly matches a data column not used as a key ('반응 압력(bar)'
     for '반응압력(bar)', '압력(MPa)' for '반응압력(bar)'): the result would look as if the pressure was used. The same
-    matcher and message as -i ([추천] / [후보] / unit_hint). Columns like no data column (memo, ID) pass through."""
+    matcher and message as -i ([추천] / [후보] / unit_hint). Columns like no data column (memo, ID) pass through.
+    unused never holds a -y target (a measured column '생산량_실측' is no typo of '생산량'); ask (no -y): [후보] only."""
     near = [str(c) for c in points_df.columns
-            if c not in usable and not re.fullmatch(r"col_\d+", str(c)) and _is_numeric_col(points_df[c])
+            if c not in skip and not re.fullmatch(r"col_\d+", str(c)) and _is_numeric_col(points_df[c])
             and suggest_columns(str(c), unused)]
     if not near:
         return
@@ -143,8 +189,9 @@ def _check_near_points(points_df: pd.DataFrame, usable: List[str], unused: List[
         resolve_column_names(near, unused, "조회 파일(--points)", layout=layout, values=True)
     except InputError as e:
         head, sep, tail = str(e).partition("\n")
-        raise InputError(f"{head} 이 열은 기준 열로 쓰이지 않아 결과가 그 값을 반영하지 않습니다. 조회 파일의 머리글을 데이터 "
-                         f"열 이름으로 고친 뒤 같은 명령을 다시 실행하십시오.{sep}{tail}")
+        raise _ask_without_y(InputError(
+            f"{head} 이 열은 기준 열로 쓰이지 않아 결과가 그 값을 반영하지 않습니다. 조회 파일의 머리글을 데이터 "
+            f"열 이름으로 고친 뒤 같은 명령을 다시 실행하십시오.{sep}{tail}"), ask)
 
 
 def _filter(df: pd.DataFrame, categorical: Dict[str, str]) -> pd.DataFrame:
@@ -239,12 +286,16 @@ def execute_forward(args) -> Dict[str, Any]:
     df, columns = tab["df"], data_columns(tab["df"], tab["exclude_col"])
     warnings: List[str] = []
     points_df = None
+    # the -y columns: never a key, never suggested as one (a measured '생산량_실측' is no typo of '생산량')
+    targets = resolve_column_names([s.strip() for s in args.targets.split(",") if s.strip()], columns,
+                                   "구할 열(-y)", layout=df.attrs)[0] if args.targets else []
     if args.points:
         ppath = os.path.abspath(args.points)
         if not os.path.isfile(ppath):
             raise FileNotFoundError(f"조회 파일이 없습니다: {ppath}")
         points_df = load_data_file(ppath, decimal_comma=tab["decimal_comma"])
-        usable = [c for c in points_df.columns if strip_unit(str(c)) in {strip_unit(x) for x in columns}]
+        keycols = [c for c in columns if c not in targets]
+        usable, measured = _points_keys(points_df, keycols, targets)
         if not usable:
             # the data file read with the wrong header row (title row, two-level header): the same hint as -i
             names = [str(c) for c in points_df.columns if not re.fullmatch(r"col_\d+", str(c))]
@@ -252,14 +303,18 @@ def execute_forward(args) -> Dict[str, Any]:
             raise InputError(f"조회 파일 열 {list(points_df.columns)} 중 데이터에 있는 기준 열이 없습니다. "
                              + (f"데이터 {hint}\n" if hint else "") + f"[사용 가능한 컬럼 목록]: {columns}")
         sample = {str(c): points_df[c].iloc[0] for c in usable}
-        numeric, categorical = _split_keys(df, sample, columns)
+        try:
+            numeric, categorical = _split_keys(df, sample, keycols)
+        except InputError as e:
+            raise _ask_without_y(e, not args.targets)
         if categorical:
             raise InputError(f"조회 파일에는 숫자 기준 열만 넣어 주십시오 (글자 열: {list(categorical)}).")
         key_src = dict(zip(numeric, usable))
-        _check_near_points(points_df, usable, [c for c in columns if c not in numeric], df.attrs)
+        _check_near_points(points_df, usable + measured, [c for c in keycols if c not in numeric], df.attrs,
+                           ask=not args.targets)
     else:
         pairs, kv = _parse_pairs(args.input, "-i")
-        numeric, categorical = _split_keys(df, pairs, columns, args, kv)
+        numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=targets)
         key_src = {}
     if not numeric:
         raise InputError("숫자 기준 열이 하나 이상 필요합니다 (예: -i \"반응온도=232.5\").")
@@ -370,7 +425,7 @@ def execute_reverse(args) -> Dict[str, Any]:
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
     vary = resolve_column_names([args.vary.strip()], columns, "바꿀 기준(--vary)", layout=df.attrs)[0][0]
     pairs, kv = _parse_pairs(args.input, "-i")
-    numeric, categorical = _split_keys(df, pairs, columns, args, kv)
+    numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=[goal_col, vary])
     if vary in numeric or vary in categorical:
         raise InputError(f"'{vary}'는 --vary로 찾는 열이라 -i에 함께 줄 수 없습니다.")
     if goal_col in numeric or goal_col in categorical or goal_col == vary:

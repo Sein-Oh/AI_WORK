@@ -127,10 +127,14 @@ def _points(tmp, name, head, rows):
 
 def test_points_near_name_refused(map_data):
     tmp, data = map_data
-    p = _points(tmp, "sp.csv", ["온도", "반응 압력(bar)"], [[180, 2.0], [180, 4.0]])
+    p = _points(tmp, "sp.csv", ["온도", "반응압룍(bar)"], [[180, 2.0], [180, 4.0]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1.xlsx"))
     msg = _stop(res, proc)
-    assert "[추천] '반응압력(bar)'" in msg and "반응 압력(bar)" in msg, msg
+    assert "[추천] '반응압력(bar)'" in msg and "반응압룍(bar)" in msg, msg
+    # 2.9.31: '반응 압력(bar)' (the same name and unit spaced otherwise) is the key itself
+    p = _points(tmp, "sp1.csv", ["온도", "반응 압력(bar)"], [[180, 2.0], [180, 4.0]])
+    proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1b.xlsx"))
+    assert _ok(res, proc)["keys"] == ["온도", "반응압력(bar)"], res
     p = _points(tmp, "mpa.csv", ["온도", "압력(MPa)"], [[180, 0.3], [180, 0.4]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o2.xlsx"))
     msg = _stop(res, proc)

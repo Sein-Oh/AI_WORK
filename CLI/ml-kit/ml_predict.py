@@ -29,6 +29,7 @@ import difflib
 import functools
 import argparse
 import warnings
+import unicodedata
 from datetime import datetime
 from itertools import product
 from typing import Dict, Any, List, Optional, Tuple, Callable
@@ -48,7 +49,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.30"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.31"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -383,6 +384,53 @@ def check_same_column(given: List[str], resolved: List[str], option: str,
                 f"[후보] {', '.join(cands)}")
 
 
+def _osa(a: str, b: str) -> int:
+    """Optimal string alignment distance (insert, delete, change, swap of neighbours)."""
+    d = [[i + j if i * j == 0 else 0 for j in range(len(b) + 1)] for i in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[-1][-1]
+
+
+def sure_typo(name: str, cand: str) -> bool:
+    """[추천] (an automatic retry) only for a typo of cand, compared without units: the same name, one keystroke
+    (one jamo / letter added, dropped, changed or swapped: '속두'/'속도'), or one name inside the other ('압력'/'반응압력').
+    Not for another word ('습도'/'속도', '온도'/'농도', 'Temp'/'Time') or another number ('T1'/'T2', '온도1'/'온도2'), nor
+    for short ASCII names of different length ('CO2'/'O2', 'pH'/'H', 'Ax'/'A'): those are [후보] (ask the user).
+    Real words one jamo apart ('강도'/'경도', '점도'/'정도') still pass: a known limit."""
+    a, b = _alias_key(name), _alias_key(cand)
+    if a == b:
+        return True
+    if re.sub(r"\D", "", a) != re.sub(r"\D", "", b):
+        return False
+    if a.isascii() and b.isascii() and max(len(a), len(b)) <= 3 and len(a) != len(b):
+        return False
+    s, l = sorted((a, b), key=len)
+    if len(s) >= 2 and s in l:
+        return True
+    return _osa(unicodedata.normalize("NFD", a), unicodedata.normalize("NFD", b)) <= 1
+
+
+def one_or_ask(name: str, cands: List[str], quote: bool = True) -> str:
+    """'[추천] <c>' for one candidate that is a sure typo of name, else '[후보] a, b' (the user picks)."""
+    shown = [repr(c) if quote else c for c in cands]
+    if len(cands) == 1 and sure_typo(name, cands[0]):
+        return f"[추천] {shown[0]}"
+    return f"[후보] {', '.join(shown)}"
+
+
+def _same_unit_name(given: str, column: str) -> bool:
+    """given is column written with spaces elsewhere ('수율( 1차)', '생산량 ( t )' for '수율(1차)', '생산량(t)'): the same
+    name without unit and the same unit when spaces are dropped. Only for names that carry a unit ('°C' / 'C' is
+    another spelling, not another spacing: [추천])."""
+    ug, uc = unit_of(given), unit_of(column)
+    return bool(ug and uc) and _alias_key(given) == _alias_key(column) and \
+        re.sub(r"\s+", "", ug) == re.sub(r"\s+", "", uc)
+
+
 def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
     """Similar columns: the columns of the same name without unit first (all of them: '수율' for '수율(1차)' and
     '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns)."""
@@ -396,7 +444,8 @@ def suggest_columns(name: str, columns: List[str], n: int = 3) -> List[str]:
 
 
 def resolve_column_names(names: List[str], columns: List[str], kind: str,
-                         layout: Optional[Dict[str, Any]] = None, values: bool = False) -> Tuple[List[str], Dict[str, str]]:
+                         layout: Optional[Dict[str, Any]] = None, values: bool = False,
+                         exclude: Optional[List[str]] = None) -> Tuple[List[str], Dict[str, str]]:
     """
     Resolves requested names against real columns. Exact match first, then a unique
     unit-less alias ('생산효율' -> '생산효율(%)'). A name with a different unit
@@ -407,6 +456,8 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     values: the names carry values (-i '압력(MPa)=0.3'): a column of the same name with another unit ('압력(bar)') is not
     suggested as a rename ([추천] would keep the MPa value under bar); the value must be converted (unit_hint).
     A column found for another given name is not suggested for a missing one (except the same name in another unit).
+    exclude: columns this option cannot take (ml_map -i next to -y / --find / --vary): matched when named, never
+    suggested (a [추천] that makes the -y column a key would fail on the retry).
     """
     col_list = [str(c) for c in columns]
     col_set = set(col_list)
@@ -415,8 +466,13 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     applied: Dict[str, str] = {}
     missing: List[str] = []
     for n in names:
+        same = [] if n in col_set else [c for c in col_list if _same_unit_name(n, c)]
         if n in col_set:
             resolved.append(n)
+        elif len(same) == 1:
+            # the same name and unit spaced otherwise ('수율( 1차)'): an exact name for -y, --target, -i and -x alike
+            resolved.append(same[0])
+            applied[n] = same[0]
         elif strip_unit(n) == n.strip() and _alias_key(n) in alias_map:
             # Only names written WITHOUT a unit are auto-matched; a different unit is a typo
             full = alias_map[_alias_key(n)]
@@ -431,14 +487,20 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                              f"\n[지금 머리글 컬럼 목록]: {col_list}")
         hints = []
         taken = set(resolved)
+        banned = set(exclude or [])
         for m in missing:
             # a column another given name already takes is no typo target ('습도' next to a given '속도'), unless it
             # is the same name in another unit ('압력(MPa)' next to a given '압력(bar)': unit_hint)
-            s = suggest_columns(m, [c for c in col_list if c not in taken or _alias_key(c) == _alias_key(m)])
+            s = suggest_columns(m, [c for c in col_list if c not in banned
+                                    and (c not in taken or _alias_key(c) == _alias_key(m))])
             if values and len(s) == 1 and other_unit(m, s[0]):
                 hints.append(unit_hint(m, s[0], kind))
-            elif len(s) == 1:
+            elif len(s) == 1 and sure_typo(m, s[0]):
                 hints.append(f"'{m}' -> [추천] '{s[0]}'")
+            elif len(s) == 1:
+                # another word or number ('습도' / '속도', 'T1' / 'T2'): the user decides, no automatic retry
+                hints.append(f"'{m}' -> [후보] {', '.join(unit_marked(s, m, quote=True) if values else [repr(s[0])])} "
+                             f"(이름이 다른 낱말일 수 있어 사용자에게 확인)")
             elif s:
                 shown = unit_marked(s, m, quote=True) if values else [repr(c) for c in s]
                 hints.append(f"'{m}' -> [후보] {', '.join(shown)}")
@@ -1686,7 +1748,7 @@ def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: 
             s = suggest_columns(node.id, columns)
             raise InputError(
                 f"수식의 식별자 '{node.id}'에 해당하는 컬럼이 없습니다"
-                + (f" -> [추천] {s}" if s else "")
+                + (f" -> {one_or_ask(node.id, s, quote=False)}" if s else "")
                 + f". 컬럼명은 데이터의 전체 이름(단위 포함) 또는 단위를 뺀 고유 이름으로 쓰십시오. [사용 가능한 컬럼 목록]: {columns}"
             )
 
@@ -2289,7 +2351,7 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
         if len(s) == 1 and other_unit(c, s[0]):
             hints.append(unit_hint(c, s[0], "-i의 입력") + (f". '{s[0]}' 값도 -i에 있습니다: 어느 값을 쓸지 사용자에게 물으십시오"
                                                           if s[0] in present else ""))
-        elif len(s) == 1 and s[0] not in present:
+        elif len(s) == 1 and s[0] not in present and sure_typo(c, s[0]):
             hints.append(f"-i의 '{c}' -> [추천] '{s[0]}' ('{c}'을(를) '{s[0]}'(으)로 고쳐 다시 실행)")
         elif s:
             hints.append(f"-i의 '{c}'에 가까운 모델 입력: [후보] {', '.join(unit_marked(s, c))}. 어느 것인지 사용자에게 물으십시오")
@@ -2303,7 +2365,8 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
 def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str]) -> Dict[str, str]:
     """
     Renames input columns written without unit suffix to the trained full name
-    ('반응온도' -> '반응온도(°C)'), in place. Only unique, unambiguous matches are applied.
+    ('반응온도' -> '반응온도(°C)') or with the same unit spaced otherwise ('반응온도( °C)'), in place. Only unique,
+    unambiguous matches are applied.
     """
     applied: Dict[str, str] = {}
     present = set(str(c) for c in df.columns)
@@ -2313,7 +2376,11 @@ def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str
             continue
         key = re.sub(r"\s+", "", strip_unit(feat)).lower()
         src = input_alias.get(key)
-        if src is not None and src not in required and strip_unit(src) == src.strip():
+        if src is None or src in required or strip_unit(src) != src.strip():
+            # the same unit spaced otherwise ('반응압력( bar)' for '반응압력(bar)'): the same name (resolve_column_names)
+            same = [c for c in present if c not in required and _same_unit_name(c, feat)]
+            src = same[0] if len(same) == 1 else None
+        if src is not None:
             df.rename(columns={src: feat}, inplace=True)
             present.discard(src)
             present.add(feat)
@@ -2418,13 +2485,9 @@ def resolve_target_models(
     if filter_targets and model_items:
         names = sorted(str(it["target"]) for it in model_items)
         safe = {str(it.get("target_safe")): str(it["target"]) for it in model_items if it.get("target_safe")}
-        def same(f: str) -> str:
-            """the target written with the same unit spaced or spelled otherwise ('생산량( t )', '온도(℃)')"""
-            if f in names or f in safe:
-                return f if f in names else safe[f]
-            hit = [n for n in names if unit_of(f) and _alias_key(n) == _alias_key(f) and not other_unit(f, n)]
-            return hit[0] if len(hit) == 1 else f
-        given = [same(f) for f in filter_targets]
+        # a target given by its file-safe name; the same unit spaced otherwise ('생산량( t )') is matched by
+        # resolve_column_names like any column name
+        given = [safe[f] if f not in names and f in safe else f for f in filter_targets]
         wanted = set(resolve_column_names(given, names, kind, values=values)[0])
         model_items = [it for it in model_items if str(it["target"]) in wanted]
     if not model_items:
@@ -2768,15 +2831,28 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
     # 'bar(3)' / '°C(192.58)': a unit row read as the header and a data row as units, not a name to rename
     extra = [c for c in available if c not in known and not _LAYOUT_ARTEFACT_RE.match(str(c))]
     out = []
+    found: Dict[str, List[str]] = {}
     for m in missing:
         cands = difflib.get_close_matches(m, extra, n=3, cutoff=0.5)
         alias = build_alias_map(extra).get(_alias_key(m))
         if alias and alias not in cands:
             cands.insert(0, alias)
+        found[m] = cands
+    # one given name close to two or more missing inputs ('솔도' for '속도' and '습도'): one [후보], never two [추천]
+    wanted: Dict[str, List[str]] = {}
+    for m, cands in found.items():
+        for c in cands:
+            wanted.setdefault(c, []).append(m)
+    shared = {c: ms for c, ms in wanted.items() if len(ms) > 1}
+    for c, ms in shared.items():
+        out.append(f"{where} '{c}'은(는) 여러 모델 입력과 비슷합니다. '{c}'을(를) 어느 이름으로 고칠지 사용자에게 물으십시오: "
+                   f"[후보] {', '.join(unit_marked(ms, c))}")
+    for m in missing:
+        cands = [c for c in found[m] if c not in shared]
         if len(cands) == 1 and other_unit(cands[0], m):
             # '압력(MPa)' for the model's '압력(bar)': a rename would read the MPa value as bar (no [추천])
             out.append(unit_hint(cands[0], m, where))
-        elif len(cands) == 1:
+        elif len(cands) == 1 and sure_typo(cands[0], m):
             out.append(f"{where} '{cands[0]}' -> [추천] '{m}' ('{cands[0]}'을(를) '{m}'(으)로 고쳐 다시 실행)")
         elif cands:
             shown = unit_marked(cands, m)

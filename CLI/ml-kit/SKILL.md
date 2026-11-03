@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.30"
+  version: "2.9.31"
   platform: windows
 ---
 
@@ -147,6 +147,7 @@ python "C:\CLI\ml-kit\ml_map.py" -f "<데이터파일>" -i "<기준열>=<값>" -
 python "C:\CLI\ml-kit\ml_map.py" -f "<데이터파일>" --find "<목표열>=<목표값>" --vary "<찾을기준열>" -i "<고정열>=<값>"
 ```
 - 머리글이 1행이 아니면 2단계처럼 `--header-row`, `--unit-row`를 붙인다. 여러 점은 기준 열만 든 조회 파일로 `--points "<조회파일>"`.
+  조회 파일에 구할 열의 실측값 열(예: `생산량_실측`)이 있으면 `-y "<구할열>"`을 꼭 붙인다 (그 열은 결과에 그대로 붙는다).
 - 알릴 것: `preview`, `points[0].method`와 `basis`(쓴 원본 행과 비율, `basis_by_column`이 있으면 열마다), `nearest_rows`(가까운 실측 5행)를 표로.
   반대 찾기는 `solutions`를 모두(하나만 고르지 않음), 0건이면 `reachable`. `output_file`이 있으면 그 경로.
 - `extrapolated`가 true이거나 `warnings`가 있으면 그 내용을 반드시 함께 알린다 (범위 밖 외삽값, 흩어진 기록).

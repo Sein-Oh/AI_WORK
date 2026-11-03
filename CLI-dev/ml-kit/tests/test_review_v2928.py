@@ -159,10 +159,10 @@ def test_other_unit_no_rename_suggestion(models):
     assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:"), res
     assert "[추천]" not in res["message"] and "단위가 다릅니다" in res["message"], res["message"]
     assert "bar 단위로 환산" in res["message"], res["message"]
-    # a unit-less name is still matched; a spacing typo of the same unit still gets [추천]
+    # a unit-less name is still matched; the same unit spaced otherwise is the same name (2.9.31, was [추천])
     assert _pred(models["unit"], "온도=180,압력=3")[1]["status"] == "ok"
     proc, res = _pred(models["unit"], "온도(°C)=180,압력(bar )=3")
-    assert "[추천] '압력(bar)'" in res["message"], res["message"]
+    assert res["status"] == "ok", res
 
 
 def test_other_unit_ml_map_and_find(models):

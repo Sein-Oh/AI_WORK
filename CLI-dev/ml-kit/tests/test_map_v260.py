@@ -157,7 +157,7 @@ def test_points_file_saves_workbook(grid1, tmp_path):
 def test_errors_and_contract(grid1):
     assert run_tool("ml_map.py", *P(grid1, "-i", "a=10"))["keys"] == ["A"]                     # case only: matched
     miss = run_fail("ml_map.py", *P(grid1, "-i", "Ax=10"))
-    assert "[추천]" in miss["message"]
+    assert "[후보] 'A'" in miss["message"] and "[추천]" not in miss["message"]    # 2.9.31: short ASCII names of other length
     assert run_fail("ml_map.py", *P(grid1, "-i", "A=abc"))["error_type"] == "input"
     assert run_fail("ml_map.py", *P(grid1, "--find", "B=90", "--vary", "A", "-i", "A=3"))["error_type"] == "input"
     proc, payload = run_raw("ml_map.py", *P(grid1, "--find", "B=90"))                        # --vary missing

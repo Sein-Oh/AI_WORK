@@ -300,8 +300,17 @@ def _nice_txt(v: float, span: float) -> str:
     return f"{float(v):.{min(dec, 6)}f}"
 
 
+def target_labels(targets: List[str]) -> Dict[str, str]:
+    """Each target's short name for headers, sheet names and notes: the name without unit ('수율' for '수율(%)'),
+    or the full name when another target has the same name without unit ('수율(1차)', '수율(최종)')."""
+    count: Dict[str, int] = {}
+    for t in targets:
+        count[strip_unit(t)] = count.get(strip_unit(t), 0) + 1
+    return {t: (str(t) if count[strip_unit(t)] > 1 else strip_unit(t)) for t in targets}
+
+
 def _sheet_name(prefix: str, name: str, used: set) -> str:
-    base = re.sub(r"[\\/\?\*\[\]:']", "_", f"{prefix}{strip_unit(name)}")[:28]
+    base = re.sub(r"[\\/\?\*\[\]:']", "_", f"{prefix}{name}")[:28]
     taken = {u.lower() for u in used}           # Excel compares sheet names without case
     out, i = base, 2
     while out.lower() in taken:
@@ -358,8 +367,9 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     batch = wb.create_sheet("일괄계산")
     howto = wb.create_sheet("사용법")
     used = {"계산기", "일괄계산", "사용법", "정확도", "정보"}
+    short = target_labels([p["target"] for p in plans])   # '수율(1차)' / '수율(최종)': full names, never '수율' twice
     for p in plans:
-        p["sheet"] = _sheet_name("표_", p["target"], used)
+        p["sheet"] = _sheet_name("표_", short[p["target"]], used)
         p["ws"] = wb.create_sheet(p["sheet"])
         p["ws"].sheet_state = "veryHidden"   # 2.9.3: the grid is not shown (not even in "unhide"); formulas still read it
     acc = wb.create_sheet("정확도")
@@ -386,7 +396,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         ws, tab, cand = p["ws"], p["table"], p["cand"]
         k, n = len(cand["inputs"]), tab["n"]
         heads = [_label(c)[0] + (f" ({_label(c)[1]})" if _label(c)[1] else "") for c in cand["inputs"]]
-        heads += [f"예측 {strip_unit(p['target'])}", "실측까지 거리"]
+        heads += [f"예측 {short[p['target']]}", "실측까지 거리"]
         for j, h in enumerate(heads, 1):
             style(ws.cell(row=1, column=j, value=h), bold=True, fill=HEAD, align="center")
         G = tab["grid"].to_numpy(dtype=float)
@@ -489,6 +499,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     for ti, p in enumerate(plans):
         row = r2 + 1 + ti
         name, unit = _label(p["target"])
+        name = name if short[p["target"]] == strip_unit(p["target"]) else short[p["target"]]
         own = [x_refs[c] for c in p["cand"]["inputs"]]
         pf, df_, nxt = interp_cells(calc, p, x_refs, row, helper_col)
         helper_col_end = nxt
@@ -508,7 +519,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
             calc.column_dimensions[_col(c)].width = 9
             calc.cell(row=row, column=c).font = Font(name=FONT, size=8, color="9CA3AF")
     note_row = r2 + len(plans) + 2
-    agree_lines = [f"- {_label(p['target'])[0]}: {agreement_text(p['table']['agreement'])}" for p in plans]
+    agree_lines = [f"- {short[p['target']]}: {agreement_text(p['table']['agreement'])}" for p in plans]
     calc.merge_cells(f"B{note_row}:F{note_row + 3 + len(plans)}")
     style(calc[f"B{note_row}"], size=9, color="374151", border=False)
     calc[f"B{note_row}"].alignment = Alignment(wrap_text=True, vertical="top")
@@ -535,7 +546,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         col += 1
     res_cols = []
     for p in plans:
-        tn = strip_unit(p["target"])
+        tn = short[p["target"]]
         for h in (f"예측 {tn}", f"{tn} 하한(90%)", f"{tn} 상한(90%)", f"{tn} 판단"):
             style(batch.cell(row=2, column=col, value=h), bold=True, fill=HEAD, align="center")
             batch.column_dimensions[_col(col)].width = 16
