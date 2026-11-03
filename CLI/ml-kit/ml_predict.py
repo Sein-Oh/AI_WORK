@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.34"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.35"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1785,6 +1785,9 @@ SAFE_MATH: Dict[str, Any] = {
 _NUMBER_NAME_RE = re.compile(r"(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")    # a column name that reads as a number
 _NAME_BOUNDARY_L = r"(?<![가-힣a-zA-Z0-9_])"
 _NAME_BOUNDARY_R = r"(?![가-힣a-zA-Z0-9_])"
+_NUMBER_START_RE = re.compile(r"\.?\d")    # a name starting like a number ('2(mm)', '0.5(mm)', '2')
+_NUMBER_BOUNDARY_L = r"(?<![가-힣a-zA-Z0-9_.])"   # ... is never read inside a larger number ('0.5' / '5(mm)')
+_NUMBER_BOUNDARY_R = r"(?![가-힣a-zA-Z0-9_.])"    # ('2.5' / '2')
 
 
 def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: List[str],
@@ -1821,13 +1824,17 @@ def compile_formula(formula: str, columns: List[str]) -> Tuple[str, Dict[str, st
     Returns (tokenized_formula, token_to_column, canonical_formula_with_full_names).
     """
     col_list = [str(c) for c in columns]
-    # a column named like a number ('1', '2'): the number in the formula ('*2', also '2.5') would silently read that
-    # column (the same boundaries as the name replacement below). The name without unit counts too: '2' of '2(mm)'
-    # would be its alias
+    # a column named like a number ('1', '2'): the number in the formula ('*2') would silently read that column.
+    # The name without unit counts too: '2' of '2(mm)' would be its alias. A full name written with its unit
+    # ('2(mm)') is that column; a number inside a larger number ('2.5', '0.5') is no name (_NUMBER_BOUNDARY_*)
+    rest = formula
+    for c in sorted(col_list, key=len, reverse=True):
+        if _NUMBER_START_RE.match(c.strip()) and not _NUMBER_NAME_RE.fullmatch(c.strip()):
+            rest = re.sub(_NUMBER_BOUNDARY_L + re.escape(c.strip()) + _NAME_BOUNDARY_R, " ", rest)
     for c in col_list:
         for num in dict.fromkeys([c.strip(), strip_unit(c)]):
             if _NUMBER_NAME_RE.fullmatch(num) and \
-                    re.search(_NAME_BOUNDARY_L + re.escape(num) + _NAME_BOUNDARY_R, formula):
+                    re.search(_NUMBER_BOUNDARY_L + re.escape(num) + _NUMBER_BOUNDARY_R, rest):
                 raise InputError(
                     f"데이터에 숫자 이름의 열 '{c}'이(가) 있어 수식 '{formula}'의 숫자 {num}이(가) 숫자인지 그 열"
                     f"인지 알 수 없습니다 (수식은 열 이름을 따옴표나 괄호로 감싸 쓰는 방법이 없음). 사용자에게 알려 데이터의 "
@@ -1845,7 +1852,8 @@ def compile_formula(formula: str, columns: List[str]) -> Tuple[str, Dict[str, st
     candidates += sorted(aliases, key=lambda t: len(t[0]), reverse=True)
 
     for name, full in candidates:
-        pattern = _NAME_BOUNDARY_L + re.escape(name) + _NAME_BOUNDARY_R
+        pattern = (_NUMBER_BOUNDARY_L if _NUMBER_START_RE.match(name) else _NAME_BOUNDARY_L) + re.escape(name) \
+            + (_NUMBER_BOUNDARY_R if _NUMBER_NAME_RE.fullmatch(name) else _NAME_BOUNDARY_R)
         if re.search(pattern, transformed):
             token = next((t for t, c in token_to_col.items() if c == full), None)
             if token is None:

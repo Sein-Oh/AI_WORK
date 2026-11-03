@@ -1704,7 +1704,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # next to plain numbers in one column stop (no scale is sure)
         pct_cols = ([c for g in prepared for c in _numeric_input_columns(g)]
                     + (target_names if task == TASK_REGRESSION else []))
-        check_percent_mix(df_raw, pct_cols)
+        # (on the rows training uses: a row the user marked in '제외' never stops the run)
+        marked = (df_raw[excl_col].map(_exclude_mark).map(lambda t: bool(t) and t != INCLUDE_MARK).to_numpy(dtype=bool)
+                  if excl_col else np.zeros(len(df_raw), dtype=bool))
+        check_percent_mix(df_raw[~marked], pct_cols)
         train_warnings.extend(percent_warning(df_raw, pct_cols))
         for w in train_warnings:
             sys.stderr.write(f"[WARN] {w}\n")

@@ -191,7 +191,7 @@ def _points_keys(points_df: pd.DataFrame, keycols: List[str], targets: List[str]
 
 
 def _check_near_points(points_df: pd.DataFrame, skip: List[Any], unused: List[str], layout: Dict[str, Any],
-                       ask: bool = False, used: Optional[List[str]] = None) -> None:
+                       ask: bool = False, used: Optional[List[str]] = None, targets: Optional[List[str]] = None) -> None:
     """A numeric --points column that is no key but nearly matches a data column not used as a key ('반응 압력(bar)'
     for '반응압력(bar)', '압력(MPa)' for '반응압력(bar)'): the result would look as if the pressure was used. The same
     message as -i ([후보] / unit_hint). Columns like no data column (memo, ID) pass through.
@@ -199,11 +199,23 @@ def _check_near_points(points_df: pd.DataFrame, skip: List[Any], unused: List[st
     unit only builds the [후보] list (as the gate it stopped measured columns: '수율_실측' / '수율(1차)').
     The check comes first for every column: a column holding a -y target's name ('수율_실측', '목표수율' for -y
     '수율(최종)') passes through as a measured value or memo only when no unused column is near (a key column
-    '냉각수 온도(°C)' with -y '온도' is near '냉각수온도' and stops). unused never holds a -y target; ask (no -y): the -y
+    '냉각수 온도(°C)' with -y '온도' is near '냉각수온도' and stops). A column and a near column that both hold a -y
+    target's name without unit (targets) are compared without it: '수율_실측' / '함수율' share only '수율' and pass
+    ('_실측' / '함'), '함수율%' / '함수율' stay near ('함%' / '함'). unused never holds a -y target; ask (no -y): the -y
     guidance. used (the keys and -y columns) are never listed."""
+    tnames = [_alias_key(t) for t in (targets or []) if _alias_key(t)]
+
+    def still_near(col: str, cand: str) -> bool:
+        a, b = re.sub(r"\s+", "", col).lower(), re.sub(r"\s+", "", cand).lower()
+        for t in tnames:
+            if t in a and t in b:
+                a, b = a.replace(t, ""), b.replace(t, "")
+        return (a, b) == (re.sub(r"\s+", "", col).lower(), re.sub(r"\s+", "", cand).lower()) or \
+            not (a or b) or bool(suggest_columns(a, [b], bare=False))
+
     near = [str(c) for c in points_df.columns
             if c not in skip and not re.fullmatch(r"col_\d+", str(c)) and _is_numeric_col(points_df[c])
-            and suggest_columns(str(c), unused, bare=False)]
+            and any(still_near(str(c), u) for u in suggest_columns(str(c), unused, bare=False))]
     if not near:
         return
     try:
@@ -349,7 +361,7 @@ def execute_forward(args) -> Dict[str, Any]:
             raise InputError(f"조회 파일에는 숫자 기준 열만 넣어 주십시오 (글자 열: {list(categorical)}).")
         key_src = dict(zip(numeric, usable))
         _check_near_points(points_df, usable + measured, [c for c in keycols if c not in numeric], df.attrs,
-                           ask=not args.targets, used=list(numeric) + targets)
+                           ask=not args.targets, used=list(numeric) + targets, targets=targets)
     else:
         input_pct = []
         numeric, categorical = _split_keys(df, pairs, columns, args, kv, reserved=targets, pct=input_pct)

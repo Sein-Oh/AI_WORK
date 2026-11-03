@@ -183,8 +183,8 @@ def test_number_named_column_in_formula_stops(data):
     with pytest.raises(mp.InputError) as e:
         mp.compile_formula("온도*2", ["온도", "2", "수율"])
     assert "숫자 이름의 열 '2'" in str(e.value)
-    with pytest.raises(mp.InputError):
-        mp.compile_formula("온도*3 + 2.5", ["온도", "2"])             # 2.9.32: '2.5' became <column 2>.5
+    # 2.9.32: '2.5' became <column 2>.5; 2.9.33/2.9.34 stopped; 2.9.35: a number inside a larger number is no column
+    assert mp.compile_formula("온도*3 + 2.5", ["온도", "2"])[2] == "온도*3 + 2.5"
     # no collision: a formula without that number, or another number that holds its digit
     assert mp.compile_formula("온도*3 + 12", ["온도", "2"])[1] == {"__COL_TOKEN_0__": "온도"}
     proc, res = run_raw("ml_train.py", "-f", data["num"], "-x", "온도", "-y", "수율", "--eval", "x2=온도*2")
