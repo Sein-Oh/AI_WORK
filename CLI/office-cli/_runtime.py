@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.26"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.27"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
 
@@ -412,6 +412,46 @@ def redact_argv(argv: Sequence[Any], tool: str = "") -> List[str]:
     return out
 
 
+def hidden_values(argv: Sequence[Any], tool: str = "") -> List[str]:
+    """redact_argv가 가린 인자 값 (원래 글). redact_argv는 인자 하나에 결과 하나를 내므로 나란히 비교합니다."""
+    raw = [str(x) for x in argv]
+    values: List[str] = []
+    for a, r in zip(raw, redact_argv(raw, tool)):
+        if a == r:
+            continue
+        if _REDACTED.match(r) and "=" in r and r.index("=") < r.index("<"):
+            opt = r.partition("=")[0]
+            val = a[len(opt) + 1:] if a.startswith(opt + "=") else a[len(opt):]     # --opt=값, -q=값, -q값
+        else:
+            val = a
+        values.append(val)
+    return values
+
+
+# 오류 로그에서 잘라 내는 message 부분 (문서·통합 문서에서 가져온 후보 목록과 비슷한 글: 제목, 시트·차트 이름, 본문 일부).
+# 이 표식부터 message 끝까지를 '<문서에서 가져온 후보·문구 N자 생략>'으로 바꿉니다. stdout JSON의 message는 그대로입니다.
+# 표식을 만드는 곳: ambiguous()·UserDecisionError의 '[후보]', not_found()의 '[추천]'·'사용 가능한 <종류>:', word 앵커의 '비슷한 문구:'
+LOG_CUT_MARKERS = re.compile(r"\s*(?:\[후보\]|\[추천\]|비슷한 문구:|사용 가능한 [^\s:]{1,20}:)")
+
+
+def log_message(message: Any, argv: Sequence[Any], tool: str = "") -> str:
+    """오류 로그에 남길 message: 가린 인자 값(redact_argv와 같은 '<N자 생략>')과 문서에서 가져온 후보·문구(LOG_CUT_MARKERS)를 뺀 글."""
+    try:
+        msg = "" if message is None else str(message)
+        vals = set()
+        for v in hidden_values(argv, tool):
+            vals.update(x for x in (v, v.strip(), unescape_newlines(v).strip()) if x)
+        if vals:      # 한 번에 바꿈 (긴 값 먼저. 이미 넣은 '<N자 생략>'을 짧은 값이 다시 바꾸지 않게)
+            pat = re.compile("|".join(re.escape(v) for v in sorted(vals, key=len, reverse=True)))
+            msg = pat.sub(lambda m: f"<{len(m.group(0))}자 생략>", msg)
+        m = LOG_CUT_MARKERS.search(msg)
+        if m:
+            msg = msg[:m.start()] + f" <문서에서 가져온 후보·문구 {len(msg) - m.start()}자 생략>"
+        return msg
+    except Exception:
+        return "<message 생략 (가리기 실패)>"
+
+
 def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str, Any], trace: str = "") -> None:
     """실패한 실행을 <데이터 폴더>/logs/errors.txt에 덧붙입니다 (사람과 개발 에이전트의 사후 분석용).
     기준 구현: archive/doc-classifier/_dc_runtime.py. 경로와 인자만 기록하고 문서 본문은 기록하지 않습니다.
@@ -432,7 +472,7 @@ def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str,
         lines = [f"===== {_dt.datetime.now().isoformat(timespec='seconds')} | {TOOL_NAME} {VERSION} | "
                  f"Python {platform.python_version()} | {platform.platform()}",
                  f"명령: {args}",
-                 f"결과: {payload.get('error_type')} | {payload.get('message')}"]
+                 f"결과: {payload.get('error_type')} | {log_message(payload.get('message'), argv, tool)}"]
         if RECOVERY_ATTEMPTS:
             lines.append("복구 시도: " + "; ".join(RECOVERY_ATTEMPTS))
         if trace:
@@ -978,7 +1018,11 @@ def next_command(script: str, args: Sequence[Any], purpose: str) -> Dict[str, st
 # 6. 마크다운 블록 해석 (word.py / ppt.py 공통)
 # ==============================================================================
 
-_MD_BOLD = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
+# '__'는 CommonMark처럼 단어 안에서는 굵게 표시가 아님: 앞에 글자·숫자가 없을 때만 열고 뒤에 없을 때만 닫음
+# (report__2024__final.xlsx는 그대로, __init__ 메서드는 굵은 'init'). '**'는 단어 안에서도 굵게.
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*|(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)")
+# 번호 목록 기호: 1~3자리 숫자만 ('2026. 11. 3. 회의'의 연도는 목록 번호가 아님)
+MD_NUMBERED = re.compile(r"^\s*(\d{1,3})[.)]\s+")
 
 
 def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
@@ -998,6 +1042,11 @@ def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
         pos = m.end()
     plain.append(text[pos:])
     return "".join(plain), spans
+
+
+def plain_heading(text: str) -> str:
+    """제목·슬라이드 제목에 넣을 글: 굵게 표시(** __)를 뺀 글 (제목은 굵기가 섞인 글을 담지 않음. word·ppt 모든 수준 같은 규칙)."""
+    return split_bold(text)[0]
 
 
 _TABLE_PIPE = re.compile(r"(?<!\\)\|")
@@ -1080,13 +1129,21 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
                 i += 1
             blocks.append(("bullets", items))
             continue
-        if re.match(r"^\d+[.)]\s+", s):
+        num = MD_NUMBERED.match(s)
+        if num:
             flush()
-            items = []
-            while i < len(lines) and re.match(r"^\s*\d+[.)]\s+", lines[i]):
-                items.append(re.sub(r"^\s*\d+[.)]\s+", "", lines[i]).strip())
+            run = []
+            while i < len(lines) and MD_NUMBERED.match(lines[i]):
+                run.append(lines[i].strip())
                 i += 1
-            blocks.append(("numbered", items))
+            first = int(num.group(1))
+            if blocks and blocks[-1][0] == "numbered" and first == len(blocks[-1][1]) + 1:
+                blocks[-1][1].extend(MD_NUMBERED.sub("", x).strip() for x in run)   # 빈 줄로 띄운 같은 목록의 다음 번호
+            elif first == 1:
+                blocks.append(("numbered", [MD_NUMBERED.sub("", x).strip() for x in run]))
+            else:
+                # 1이 아닌 번호로 시작하는 목록: 자동 번호는 1부터 다시 매기므로 사용자 번호를 글로 둔 단락으로 넣음
+                blocks += [("paragraph", x) for x in run]
             continue
         if re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", s):
             flush()
@@ -1100,4 +1157,4 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
 
 
 def looks_like_markdown(text: str) -> bool:
-    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\|.*\||```|~~~)", text) or "**" in text)
+    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d{1,3}[.)]\s|\|.*\||```|~~~)", text) or "**" in text)

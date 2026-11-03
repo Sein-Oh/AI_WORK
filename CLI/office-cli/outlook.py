@@ -158,8 +158,13 @@ def cmd_list(args) -> Dict[str, Any]:
     warnings: List[str] = []
     mails = _collect(items, _check_limit(args.limit, warnings))
     extra = {"warnings": warnings} if warnings else {}
+    what = "안 읽은 메일" if args.unread else "메일"
+    if not mails:      # R2 0건
+        return rt.ok(TOOL, "list", f"0건: '{folder.Name}' 폴더에 {what}이 없습니다",
+                     f"VERIFIED: 0건. '{folder.Name}' 폴더에 {what}이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요.",
+                     folder=str(folder.Name), mails=[], count=0, **extra)
     return rt.ok(TOOL, "list", f"'{folder.Name}' 폴더 최근 메일 {len(mails)}통" + (" (안 읽은 메일)" if args.unread else ""),
-                 folder=str(folder.Name), mails=mails, **extra)
+                 folder=str(folder.Name), mails=mails, count=len(mails), **extra)
 
 
 def _dasl_like(fields: Sequence[str], value: str) -> str:
@@ -222,13 +227,13 @@ def cmd_search(args) -> Dict[str, Any]:
     warnings: List[str] = []
     mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where))
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'") if x)
-    result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails)}
+    result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails), "count": len(mails)}
     if warnings:
         result["warnings"] = warnings
-    if not mails:
-        return rt.ok(TOOL, "search", f"{desc}: '{folder.Name}'에서 일치하는 메일 없음",
-                     "VERIFIED: 일치하는 메일이 없습니다. 검색어를 임의로 바꿔 재시도하지 말고 사용자에게 알리세요. "
-                     "다른 폴더라면 --folder로 지정할 수 있습니다.", **result)
+    if not mails:      # R2 0건
+        return rt.ok(TOOL, "search", f"0건: {desc}: '{folder.Name}'에서 일치하는 메일 없음",
+                     f"VERIFIED: 0건. '{folder.Name}' 폴더에 {desc}에 맞는 메일이 없습니다. "
+                     "사용자에게 그대로 알리고 검색어나 조건을 바꿔 다시 실행하지 마세요.", **result)
     result["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", mails[0]["id"]], "첫 번째 메일 본문 읽기")]
     return rt.ok(TOOL, "search", f"{desc}: '{folder.Name}'에서 {len(mails)}통", **result)
 

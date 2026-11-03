@@ -2768,11 +2768,18 @@ def cmd_clear(args) -> Dict[str, Any]:
                               "truncated": len(items) > MAX_LIST_ITEMS, "condition": cond}
     if orphans:
         result["orphan_cache_files"] = len(orphans)
-    if result["truncated"]:              # R2: 잘린 목록은 전체를 파일로 (미리보기에서 지울 대상을 모두 볼 수 있게)
-        out = os.path.join(rt.get_data_dir(), "results", f"clear_{'plan' if args.dry_run else 'done'}_{rt.timestamp()}.csv")
+
+    def write_full_list(kind: str, removed_set: Optional[set] = None) -> None:
+        """R2: 잘린 목록은 전체를 파일로. 미리보기(plan)는 지울 대상, 실제 지우기(done)는 지운 뒤 removed 열(지웠는지)과 함께."""
+        out = os.path.join(rt.get_data_dir(), "results", f"clear_{kind}_{rt.timestamp()}.csv")
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        result["full_result_file"] = rt.write_csv_rows(out, [["file", "path", "missing"]]
-                                                       + [[i["file"], i["path"], i["missing"]] for i in items])
+        head = ["file", "path", "missing"] + (["removed"] if removed_set is not None else [])
+        rows = [[i["file"], i["path"], i["missing"]] + ([i["path"] in removed_set] if removed_set is not None else [])
+                for i in items]
+        result["full_result_file"] = rt.write_csv_rows(out, [head] + rows)
+
+    if result["truncated"] and args.dry_run:
+        write_full_list("plan")
     if not items and not orphans:
         return rt.ok(TOOL, "clear", f"0건: {cond}에 맞는 캐시 문서가 없습니다",
                      f"VERIFIED: 0건. {cond}에 맞는 캐시 문서가 없어 지운 것이 없습니다. 사용자에게 그대로 알리세요.", **result)
@@ -2806,7 +2813,11 @@ def cmd_clear(args) -> Dict[str, Any]:
     # 다시 읽어 확인: 색인에서 빠졌고 캐시 파일도 없는지
     left = load_index()
     still = [p for p in targets if p in left or os.path.exists(_doc_cache_path(p))]
-    result.update(applied=[f"캐시 삭제: {i['file']}" for i in items[:MAX_LIST_ITEMS]], remaining_in_cache=len(left))
+    done = set(removed) - set(still)                     # 지웠고 다시 읽어도 없는 것만 (applied·removed 열)
+    if result["truncated"]:
+        write_full_list("done", done)
+    result.update(applied=[f"캐시 삭제: {os.path.basename(p)}" for p in targets if p in done][:MAX_LIST_ITEMS],
+                  remaining_in_cache=len(left))
     preview = f"캐시 문서 {len(targets) - len(still)}개를 지웠습니다 ({cond}). 원본 문서는 그대로입니다. 남은 캐시 문서 {len(left)}개"
     if still or failed:
         result["failed"] = failed[:MAX_LIST_ITEMS]

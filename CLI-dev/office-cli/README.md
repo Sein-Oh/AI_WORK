@@ -123,7 +123,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 `<data 폴더>\logs\errors.txt`에 덧붙습니다. `C:\CLI`에 배치했다면 `C:\CLI\office-cli\data\logs\errors.txt`(`config.json`의 `data_dir`나 `OFFICE_CLI_DATA_DIR`를 바꿨으면 그 폴더 아래).
 - 항목: 시각, 도구 버전, Python, OS / 실행한 명령과 인자 / `error_type`과 message / 재시도 한도를 넘긴 복구 시도(`복구 시도:`) / 내부 오류(`ERROR:`)일 때만 traceback. 문서 본문은 기록하지 않습니다.
 - 내용 옵션의 값은 `<N자 생략>`으로 남깁니다: `--body --text --subject --to --cc --bcc --from --query --find --replace --value --values --formula --header --title --cards --anchor --search --new-name --map --section`, `excel.py`의 `--highlight`(셀 값이 들어감, 1.4.26)(`office.py`의 `--from/--to`, `ppt.py`의 `--to`는 앱 이름·위치, `word.py`의 `--highlight`는 색 이름이라 그대로). 경로와 그 밖의 인자는 그대로 남깁니다(1.4.10).
-  짧은 이름(`-q` = `--query`, `-q값`)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다(1.4.11). 모든 파서는 줄여 쓴 옵션을 받지 않습니다(`allow_abbrev=False`, 인자 오류 exit 2).
+  짧은 이름(`-q` = `--query`, `-q값`)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다(1.4.11).
+  `결과:` 줄의 message에서도 가린 값을 같은 `<N자 생략>`으로 바꾸고, 문서에서 가져온 후보·문구는 표식(`_runtime.LOG_CUT_MARKERS`: `[후보]`, `[추천]`,
+  `비슷한 문구:`, `사용 가능한 <종류>:`)부터 끝까지 `<문서에서 가져온 후보·문구 N자 생략>`으로 자릅니다. stdout JSON의 message는 그대로입니다(1.4.27). 모든 파서는 줄여 쓴 옵션을 받지 않습니다(`allow_abbrev=False`, 인자 오류 exit 2).
 - 성공, 사용자 중단(exit 130)은 기록하지 않습니다. 2MB를 넘으면 `errors.old.txt`로 넘기고 새로 시작합니다. 로그 경로는 stdout JSON에 넣지 않습니다(사람과 개발 에이전트의 사후 분석용).
 - 실기 테스트 러너의 `errors_<시각>.txt`는 테스트 한 번의 판정 근거를 모은 별도 파일이고, 그 실행 중에 쌓인 도구 오류 로그(`<테스트 폴더>\_data\logs\errors.txt`)도 끝에 함께 옮겨 담습니다.
 
@@ -166,8 +168,16 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 마크다운(`word write`의 `.md`·`--text`, `ppt write`의 `.md`) 해석(1.4.24, 코드 줄의 `**`·`__`를 굵게로 읽지 않음 1.4.25): 펜스 코드 블록(백틱 3개 또는 `~~~`, 닫지 않으면 끝까지)은 줄마다 단락 하나로
 글자 그대로 넣고(들여쓰기 유지, 빈 줄 생략, 안의 `#`·`-`·`1.`을 제목·목록으로 읽지 않음, 펜스 줄은 넣지 않음).
 `ppt write --text`는 마크다운 블록 해석 없이 줄마다 한 줄(`-`/`1.` 목록, `**` 굵게 표시 제거)이고, 펜스 안 코드 줄만 위와 같이 글자 그대로입니다(1.4.26).
-다시 읽기 확인은 넣은 첫 글(구분선은 건너뜀, 코드 줄·표 칸·PowerPoint 제목은 글자 그대로)로 비교합니다(1.4.26). 표의 정렬 줄은
+다시 읽기 확인은 넣은 첫 글(구분선은 건너뜀, 코드 줄·표 칸은 글자 그대로)로 비교합니다(1.4.26). 표의 정렬 줄은
 머리글 다음 줄이면 `-` 하나부터(`:-`, `-:`), 칸 안의 `\|`는 글자 `|`입니다.
+
+굵게 표시와 목록 번호(1.4.27):
+- 본문의 `**x**`, `__x__`는 굵은 x. `__`는 CommonMark처럼 앞에 글자·숫자가 없을 때만 열고 뒤에 없을 때만 닫습니다(`report__2024__final.xlsx`는 그대로,
+  `__init__ 메서드`는 굵은 `init`. 코드 이름은 코드 블록이나 `--callout`으로 넣으면 글자 그대로). `**`는 단어 안에서도 굵게입니다.
+- 제목(word 모든 수준, `--heading`, `--title`)과 PowerPoint 슬라이드 제목(`.md`의 `#`·`##`, `ppt write --title`, 3단계 이하 제목 줄)은 같은 규칙으로
+  굵게 표시를 뺀 글만 넣습니다(제목은 굵기가 섞인 글을 담지 않음).
+- 번호 목록 기호는 1~3자리 숫자(`1.`, `2)`)만 봅니다. `2026. 11. 3. 회의`는 본문입니다. 1이 아닌 번호로 시작하는 목록(`3. 셋`)은 자동 번호가 1부터
+  다시 매기므로 번호를 글로 둔 일반 단락(PowerPoint는 목록 기호 없는 줄)으로 넣습니다. 빈 줄로 띄운 `1.` / `2.`는 한 목록입니다.
 
 ### ppt.py
 | 명령 | 주요 옵션 |
@@ -177,12 +187,13 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `write` | `--slide N\|new`, `--title`, `--text`(`-` 줄은 글머리표, `1.` 줄은 번호, 펜스 안 코드 줄은 글자 그대로 1.4.26), `--file (.md: 제목마다 새 슬라이드, .csv: 표)`, `--image`, `--cards "제목:내용\|..."`, `--theme`, `--overwrite`. 카드·그림은 앞 내용 아래에 80pt도 남지 않으면 새 슬라이드에 넣고 `warnings`로 알림, 이번에 넣은 도형이 슬라이드 밖으로 나가면 `UNVERIFIED:`(1.4.24). `--title`과 `.md`를 함께 주면 `--title`이 첫 슬라이드 제목(첫 절의 제목은 본문 첫 줄). 첫 절의 제목이 `--title`과 같으면(공백·대소문자 무시) 본문에 다시 넣지 않음. 기존 슬라이드의 제목 개체틀에 이미 다른 제목이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`, 새 슬라이드와 제목 개체틀이 없는 슬라이드는 해당 없음) |
 | `replace` | `--find/--replace` 또는 `--map`, `--slide`, 서식 옵션. 표와 그룹 도형 포함. `--replace`도 서식 옵션도 없으면 STOP_RETRY, 바꿀 글이 찾는 글과 같고 서식이 없으면 바꾸지 않고 `replaced` 0(`unchanged_same_text`, 1.4.15). 찾은 곳마다 비교해 이미 바꿀 글 그대로(대소문자까지)인 곳은 `unchanged_same_text`, 실제로 바뀐 곳만 `replaced`(1.4.17). 찾을 글이 빈 문자열이면 STOP_RETRY(1.4.17) |
 | `export` | `--save 경로.pdf\|.pptx`. PDF 기능이 없는 Office(2007 기본 설치 등)는 `.pptx`로 저장하라는 STOP_RETRY를 돌려줍니다 |
-| `slide` | `--action list\|add\|duplicate\|move\|delete\|clear --slide --to --layout`. `clear`는 `--slide` 또는 `--all-slides`가 필요. 같은 자리로 `move`(`--slide 2 --to 2`)는 바꾸지 않고 "바뀐 것 없음"(1.4.15) |
+| `slide` | `--action list\|add\|duplicate\|move\|delete\|clear --slide --to --layout`. `clear`는 `--slide` 또는 `--all-slides`가 필요. 같은 자리로 `move`(`--slide 2 --to 2`)는 바꾸지 않고 "바뀐 것 없음"(1.4.15). `list`는 `count`, 0장이면 `VERIFIED: 0건.`(1.4.27) |
 | `notes` | 발표자 노트. 읽기: `--slides 1-3`(생략 시 전체, `--slide 3`도 됨), 노트가 있는 슬라이드만 `no, title, notes`. 쓰기: `--slide N --text 노트`(줄바꿈 `\n`) 또는 `--file 노트.md`. 기존 노트가 있으면 `--append`(뒤에 덧붙이기) 또는 `--overwrite`(바꾸기)가 필요하고, 둘 다 없으면 지우지 않고 `needs_user_decision`. 노트 본문 개체틀이 없으면 쓰지 않음. 쓴 뒤 다시 읽어 확인(`verified`, `before`, `after`). 이미 같은 노트면 쓰지 않고 `unchanged: true`(1.4.15) |
 
 ### outlook.py
 - 조회: `list [--folder --unread --limit]`, `search --query [--from --where all|subject|body]`, `read --id [--save-attach --save]`, `current`, `folders`
 - `--limit`은 1~200(기본 10). 200을 넘으면 200통으로 줄이고 `warnings`로 알립니다. 0 이하는 STOP_RETRY(1.4.23).
+- `list`, `search`의 `count`는 `--limit` 안에서 가져온 메일 수입니다. 0통이면 `count: 0`과 `VERIFIED: 0건.` 안내(조건을 바꿔 다시 실행하지 않음, 1.4.27).
 - `search`: 검색어의 `%`, `_`는 글자 그대로 찾습니다. DASL `LIKE`에서는 와일드카드라 더 넓게 찾으므로, 그런 검색어는 제목·본문·보낸사람을
   다시 읽어 글자 그대로 들어 있는 메일만 남깁니다(대소문자 무시, 읽지 못한 칸은 남김). 1.4.22까지는 `_`를 공백으로 바꾸고 `%`를 지워
   `견적서_v2`, `10% 할인`이 0건이었습니다(1.4.23).
@@ -202,7 +213,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
 | `read --file 경로 [--pages 1-3 \| --units 57-120] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
 | `search --query "A AND B" \| "A OR B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
-| `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV, 1.4.26). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`) |
+| `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV, 1.4.26). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`). `applied`와 완료 CSV(`clear_done_...`, 20개를 넘을 때)는 지운 뒤 만들고, CSV의 `removed` 열이 실제로 지웠는지(1.4.27) |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
 
 - 손상된 파일(깨진 XML, 압축 해제 실패, OLE 구조 오류)은 내부 오류가 아니라 STOP_RETRY "손상된 파일이라 읽을 수 없습니다"(1.4.23).
@@ -301,7 +312,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `windows`: 열린 Office 문서 목록과 실행 중인 Office 버전, PDF 내보내기 가능 여부(`office`). PDF 기능이 없는 Office에서는 `export --save *.pdf`가 시도 없이 바로 안내합니다
 - `focus --app excel|word|ppt [--name]`: 창을 앞으로 가져옵니다. 최대화 상태는 유지합니다.
 - `transfer`: 아래 4절 참고
-- `undo [--app] [--list] [--pick N] [--overwrite]`: `--pick`은 1 이상(0 이하는 STOP_RETRY, 1.4.23)
+- `undo [--app] [--list] [--pick N] [--overwrite]`: `--pick`은 1 이상(0 이하는 STOP_RETRY, 1.4.23).
+  `--list`의 `count`·`shown`은 되돌릴 수 있는 지점(항목에 `command`가 있음)만 세고, 되돌릴 수 없는 작업 수는 `barriers`. 되돌릴 지점이 0개면 `VERIFIED: 0건.`(1.4.27)
 
 ## 4. 앱 간 전달 (transfer)과 회사 DRM
 

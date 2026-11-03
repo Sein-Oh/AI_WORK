@@ -2,6 +2,35 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.27] - 2026-11-03
+
+18차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1427.py`.
+
+### 수정
+- 제목 굵게 표시 (1.4.26 회귀): `ppt write --file .md`가 3단계 이하 제목에만 굵게 표시 빼기를 적용해 `### __init__ 메서드`는 `init 메서드`,
+  1·2단계 제목(슬라이드 제목)은 `**핵심** 요약`이 글자 그대로 들어가던 문제. word·ppt의 모든 수준 제목, 슬라이드 제목(`.md` 제목,
+  `--title`과 함께 줘서 본문 첫 줄로 옮긴 제목, `ppt write --title`)에 같은 규칙(`_runtime.plain_heading`: `**x**`, `__x__`는 표시를 뺀 글)을 씁니다.
+  제목은 굵기가 섞인 글을 담지 않으므로 굵게 구간은 본문에만 둡니다.
+- 단어 안의 `__` (`_runtime._MD_BOLD`): `report__2024__final.xlsx`가 `report2024final.xlsx`로 들어가던 문제. CommonMark처럼 `__`는 앞에 글자·숫자가
+  없을 때만 열고 뒤에 없을 때만 닫습니다(`파일__x__끝`은 그대로). `**`는 그대로(단어 안에서도 굵게). 양쪽이 단어 경계인 `__init__`은 CommonMark대로
+  굵은 `init`이고, 제목에서는 모든 수준에서 `init`입니다(코드 이름은 코드 블록(```)이나 `--callout`으로 넣으면 글자 그대로).
+- 번호 목록: `2026. 11. 3. 회의 결과`를 번호 목록으로 읽어 연도가 사라지던 문제(word·ppt). 목록 번호는 1~3자리 숫자만 봅니다(`_runtime.MD_NUMBERED`).
+  1이 아닌 번호로 시작하는 목록(`3. 셋`)은 Word·PowerPoint 자동 번호가 1부터 다시 매기므로, 번호를 글로 둔 일반 단락(줄)으로 넣습니다.
+  빈 줄로 띄운 `1. 가` / `2. 나`는 한 목록으로 이어 붙입니다. 다시 읽기 확인은 넣은 글 그대로(`3. 셋`)를 기대합니다.
+- 오류 로그 message: `excel style --highlight`의 `입력: <규칙>`, word 앵커의 `비슷한 문구: '<문서 글>'`, 장절 `[후보]`(문서 제목) 등
+  가린 인자 값과 문서에서 가져온 글이 message에 그대로 남던 문제. `write_error_log`가 `redact_argv`로 가린 값을 같은 `<N자 생략>`으로 바꾸고,
+  `LOG_CUT_MARKERS`(`[후보]`, `[추천]`, `비슷한 문구:`, `사용 가능한 <종류>:`)부터 끝까지를 `<문서에서 가져온 후보·문구 N자 생략>`으로 자릅니다.
+  stdout JSON의 message는 그대로이고, 가리기에 실패해도 로그 기록은 오류를 삼킵니다.
+- `office.py undo --list`: 되돌릴 수 없는 작업(새로 만든 파일 등)만 있으면 preview는 "지점 0개"인데 `count: 1`과 항목의 command를 실행하라는
+  안내이던 문제. `count`·`shown`은 되돌릴 수 있는 지점만 세고(되돌릴 수 없는 작업 수는 `barriers`), 0개면 `VERIFIED: 0건.` 안내입니다.
+- `reader clear`(실제 지우기): `applied`를 지우지 못한 캐시까지 넣어 만들고, `clear_done_*.csv`를 지우기 전에 쓰던 문제. `applied`는 지우고 다시 읽어도
+  없는 것만, CSV는 지운 뒤 `removed`(True/False) 열과 함께 씁니다.
+- 0건 결과 (R2): `ppt slide --action list`(슬라이드 0장), `outlook list`(`--unread` 포함, 0통), `outlook search`(0통)에 `count`가 없거나 directive가
+  0건을 말하지 않던 문제. `count`와 `VERIFIED: 0건. ...`을 줍니다(`outlook`의 `count`는 `--limit` 안에서 가져온 메일 수).
+
+### 문서
+- 남은 할 일: 1.4.26에서 고친 0건 항목(office windows, info --all, chart list, undo --list)과 이번에 고친 outlook list를 뺐습니다.
+
 ## [1.4.26] - 2026-11-03
 
 17차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1426.py`.
@@ -792,7 +821,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] COM 내보내기(excel.py, word.py, ppt.py export)의 잠금 대비 `save_with_lock_fallback`. (1.4.0: 기존 출력 파일은 새 이름 저장 + `recovered` 완료)
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)
 - [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
-- [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위, outlook list, office windows, info --all, chart list, undo --list
+- [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위 (office windows·info --all·chart list·undo --list는 1.4.26, outlook list/search·ppt slide list는 1.4.27)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel read --search(50), excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated`
 - [ ] next_commands: excel write의 차트 명령 자리표시 `--title 차트` 제거, word·ppt의 transfer 명령에 `--from-target`
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`

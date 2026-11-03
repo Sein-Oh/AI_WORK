@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.28**, **office-cli 1.4.26**
+- main 기준 도구 버전: **ml-kit 2.9.28**, **office-cli 1.4.27**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -34,6 +34,7 @@
 | office-cli 1.4.24 | 차트 `[후보]`는 그 시트의 모든 차트로 이름이 겹치는지 보고 `#번호`로(후보마다 차트 하나). FileHeader 없는 OLE `.hwp`는 STOP_RETRY "HWP 5.0 문서가 아닙니다". `excel style --highlight` 값의 `"`·`~ ? *`를 글자 그대로. `excel write --append --formula`는 상대 참조를 실제 쓴 행 기준으로. 마크다운 펜스 코드 블록(백틱 3개)을 줄마다 글자 그대로, 표 정렬 줄 `:-`, 칸 글자 `\|`. `ppt write --cards`는 공간이 모자라면 새 슬라이드에, 슬라이드 밖 도형은 UNVERIFIED. reader `--units 1-999999999`가 멈추지 않음 |
 | office-cli 1.4.25 | `.md` 코드 블록 줄의 `__init__`, `x**2`를 굵게로 읽지 않고 그대로 넣음(Word·PowerPoint). 줄 첫머리 인라인 코드 ```` ```x``` ````는 코드 블록 시작이 아님. 코드 블록으로 시작하는 파일도 다시 읽기 확인 |
 | office-cli 1.4.26 | `ppt write`가 코드 줄·제목의 `__`·`**`(`def __init__`, `## __init__ 설명`)로 거짓 UNVERIFIED가 되지 않음. `word write`는 `---`로 시작하는 `.md`, 첫 표 행의 `\|`도 다시 읽기 확인. `ppt write --text`의 펜스 코드 줄은 글자 그대로, `###` 제목의 `**`는 굵게 표시로 뺌. `excel write --file .md`는 첫 번째 표만(코드 블록·두 번째 표 제외). 0건 결과(`office windows`, `undo --list`, `info --all`, `chart --action list`)는 count 0과 "0건". `reader clear --dry-run`이 20개를 넘으면 `full_result_file`. 오류 로그에서 `--section`, excel `--highlight` 값을 가림 |
+| office-cli 1.4.27 | 제목 굵게 표시 규칙을 word·ppt 모든 수준(슬라이드 제목, `--title` 포함)에서 하나로(`**x**`, `__x__`는 표시를 뺀 글). 단어 안의 `__`(`report__2024__final.xlsx`)는 그대로. `2026. 11. 3.`처럼 4자리 이상 숫자는 번호 목록이 아니고, 1이 아닌 번호로 시작하는 목록은 사용자 번호를 글로 둔 단락. 오류 로그 message에서 가린 인자 값과 문서에서 가져온 후보·문구를 뺌. `undo --list`(되돌릴 수 없는 작업만), `ppt slide --action list`(0장), `outlook list/search`(0통)는 `count`와 `VERIFIED: 0건`. `reader clear`의 `applied`·완료 CSV는 실제로 지운 것만(`removed` 열) |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
 | ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `docs/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |

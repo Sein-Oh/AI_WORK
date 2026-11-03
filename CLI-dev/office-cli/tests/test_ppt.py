@@ -77,7 +77,7 @@ def bullet(shape, i):
 
 def test_write_bullets_set_type_explicitly(pp, capsys):
     # Visible만 켜면 PowerPoint 2007 글상자는 번호 목록(Type=2)이 되므로 종류를 명시해야 함 (실기 F3)
-    code, out = run(capsys, "write", "--slide", "new", "--title", "목록", "--text", "- 안정성\\n2. 확장성\\n설명")
+    code, out = run(capsys, "write", "--slide", "new", "--title", "목록", "--text", "- 안정성\\n1. 확장성\\n설명")
     assert code == 0, out
     body = live(pp["prs"].Slides(4))[1]
     assert body.TextFrame.TextRange.Text == "안정성\r확장성\r설명"

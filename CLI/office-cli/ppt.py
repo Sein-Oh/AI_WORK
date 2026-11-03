@@ -544,14 +544,14 @@ def _md_sections(text: str) -> List[Dict[str, Any]]:
     cur: Optional[Dict[str, Any]] = None
     for kind, payload in rt.parse_markdown_blocks(text):
         if kind == "heading" and payload[0] <= 2:
-            cur = {"title": payload[1], "lines": [], "tables": []}
+            cur = {"title": rt.plain_heading(payload[1]), "lines": [], "tables": []}
             sections.append(cur)
             continue
         if cur is None:
             cur = {"title": "", "lines": [], "tables": []}
             sections.append(cur)
         if kind == "heading":
-            cur["lines"].append((rt.split_bold(payload[1])[0], ""))   # 3단계 이하 제목도 본문 줄처럼 굵게 표시(** __)를 뺌
+            cur["lines"].append((rt.plain_heading(payload[1]), ""))   # 3단계 이하 제목: 1·2단계 제목과 같은 규칙 (** __를 뺀 글)
         elif kind == "paragraph":
             cur["lines"].append((rt.split_bold(payload)[0], ""))
         elif kind == "code":
@@ -568,6 +568,7 @@ def _text_lines(text: str) -> List[Tuple[str, str]]:
     """--text: 줄마다 한 줄 (-, 1. 목록 기호와 ** __ 굵게 표시를 해석). 펜스(```, ~~~) 안의 코드 줄은 .md와 같이 글자 그대로."""
     lines = []
     fence = ""
+    numbered_as_text = False
     for ln in rt.unescape_newlines(text).splitlines():
         s = ln.strip()
         if fence:
@@ -583,8 +584,16 @@ def _text_lines(text: str) -> List[Tuple[str, str]]:
             fence = m.group(1)                      # 펜스 줄은 넣지 않음
             continue
         m = re.match(r"^[-*+]\s+(.*)$", s)
-        n = None if m else re.match(r"^\d+[.)]\s+(.*)$", s)
-        body = m.group(1) if m else (n.group(1) if n else s)
+        n = None if m else rt.MD_NUMBERED.match(s)
+        if not n:
+            numbered_as_text = False
+        elif not numbered_as_text and not (lines and lines[-1][1] == "numbered"):
+            # 번호 목록의 첫 줄: 1이 아닌 번호로 시작하면 자동 번호가 1부터 다시 매기므로 이 목록은 번호를 글로 둔 줄로 넣음
+            numbered_as_text = int(n.group(1)) != 1
+        if n and numbered_as_text:
+            lines.append((rt.split_bold(s)[0], ""))
+            continue
+        body = m.group(1) if m else (s[n.end():] if n else s)
         lines.append((rt.split_bold(body)[0], "bullet" if m else ("numbered" if n else "")))
     return lines
 
@@ -621,6 +630,8 @@ def cmd_write(args) -> Dict[str, Any]:
     if not any([args.title, args.text, args.file, args.image, args.cards]):
         raise rt.InputError("넣을 내용이 없습니다. --title, --text, --file, --image, --cards 중 하나 이상을 지정하세요.")
     theme = off.get_theme(args.theme or "navy")
+    if args.title:
+        args.title = rt.plain_heading(args.title)   # 슬라이드 제목은 .md 제목·word --title과 같은 규칙 (** __를 뺀 글)
     md_sections: List[Dict[str, Any]] = []
     table_rows: Optional[List[List[str]]] = None
     if args.file:
@@ -1084,7 +1095,11 @@ def cmd_slide(args) -> Dict[str, Any]:
             prs = t.doc
             items = [{"no": i, "title": slide_units(prs.Slides(i), i)["title"][:60]} for i in range(1, prs.Slides.Count + 1)]
             resolved = t.resolved()
-        return rt.ok(TOOL, "slide", f"슬라이드 {len(items)}장", target_resolved=resolved, slides=items)
+        if not items:      # R2 0건
+            return rt.ok(TOOL, "slide", "0건: 슬라이드가 없습니다",
+                         "VERIFIED: 0건. 이 프레젠테이션에는 슬라이드가 없습니다. 사용자에게 그대로 알리세요.",
+                         target_resolved=resolved, slides=[], count=0)
+        return rt.ok(TOOL, "slide", f"슬라이드 {len(items)}장", target_resolved=resolved, slides=items, count=len(items))
     with off.open_target("ppt", args.target, readonly=False, focus=not args.no_focus, tool=TOOL, command="slide") as t:
         prs = t.doc
         count = int(prs.Slides.Count)

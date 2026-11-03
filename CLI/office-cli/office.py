@@ -1040,9 +1040,17 @@ def cmd_undo(args) -> Dict[str, Any]:
             return rt.ok(TOOL, "undo", "0건: 되돌릴 수 있는 지점이 없습니다",
                          "VERIFIED: 0건. 되돌릴 수 있는 지점이 없습니다. 사용자에게 그대로 알리고 undo를 실행하지 마세요.",
                          snapshots=[], count=0, shown=0, truncated=False)
-        return rt.ok(TOOL, "undo", f"되돌릴 수 있는 지점 {sum(1 for s in snaps if not s.get('barrier'))}개",
+        # count·shown은 되돌릴 수 있는 지점(command가 있는 항목)만 셉니다 (preview와 같은 수. 되돌릴 수 없는 작업은 barriers)
+        undoable = sum(1 for s in snaps if not s.get("barrier"))
+        counts = {"count": undoable, "shown": sum(1 for it in items if "command" in it), "barriers": len(snaps) - undoable,
+                  "truncated": len(snaps) > len(items)}
+        if not undoable:
+            return rt.ok(TOOL, "undo", f"0건: 되돌릴 수 있는 지점이 없습니다 (이전 상태가 없는 작업 {len(snaps)}개)",
+                         "VERIFIED: 0건. 되돌릴 수 있는 지점이 없습니다 (목록의 작업은 되돌릴 이전 상태가 없음). "
+                         "사용자에게 그대로 알리고 undo를 실행하지 마세요.", snapshots=items, **counts)
+        return rt.ok(TOOL, "undo", f"되돌릴 수 있는 지점 {undoable}개",
                      "VERIFIED: 목록을 사용자에게 보여 주세요. 사용자가 고른 항목의 command를 글자 그대로 실행하세요 (번호만 바꿔 직접 만들지 않음).",
-                     snapshots=items, count=len(snaps), shown=len(items), truncated=len(snaps) > len(items))
+                     snapshots=items, **counts)
     if not snaps:
         return rt.ok(TOOL, "undo", "되돌릴 스냅샷이 없습니다",
                      "VERIFIED: 되돌릴 수 있는 작업이 없습니다. 사용자에게 알리세요.", restored=False)

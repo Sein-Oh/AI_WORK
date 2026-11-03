@@ -707,7 +707,7 @@ class Writer:
         self._para(plain, style, spans)
 
     def heading(self, level: int, text: str) -> None:
-        self.text(text, heading_style(level))
+        self._para(rt.plain_heading(text), heading_style(level))   # 제목은 모든 수준이 ** __를 뺀 글 (굵기가 섞이지 않음)
         self.created.append(f"제목{level}")
 
     def items(self, items: List[str], numbered: bool) -> None:
@@ -997,7 +997,7 @@ def cmd_write(args) -> Dict[str, Any]:
             elif args.heading:
                 w.heading(args.heading, content.strip())
             elif args.title:
-                w.text(content.strip(), WD_STYLE_TITLE)
+                w._para(rt.plain_heading(content.strip()), WD_STYLE_TITLE)
                 w.created.append("문서 제목")
             elif rt.looks_like_markdown(content):
                 w.markdown(content)
@@ -1050,7 +1050,7 @@ def _first_inserted(content: str, mode: str) -> str:
     if mode == "auto" and rt.looks_like_markdown(content):
         for kind, payload in rt.parse_markdown_blocks(content):
             if kind == "heading":
-                return rt.split_bold(payload[1])[0]
+                return rt.plain_heading(payload[1])
             if kind == "paragraph":
                 return rt.split_bold(payload)[0]
             if kind == "code":
@@ -1061,7 +1061,7 @@ def _first_inserted(content: str, mode: str) -> str:
                 return "".join(str(c) for c in payload[0])     # 칸은 그대로 넣음 ('\|'는 이미 글자 '|')
         return ""                                   # 구분선(페이지 나누기)만 있음
     if mode == "bold":
-        return rt.split_bold(content.strip())[0]
+        return rt.plain_heading(content.strip())
     first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
     return rt.split_bold(first)[0]
 
