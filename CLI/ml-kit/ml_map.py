@@ -53,6 +53,7 @@ def load_table(args) -> Dict[str, Any]:
     warn_long_path(path)
     df = load_data_file(path, header_row=args.header_row, unit_row=args.unit_row, data_row=args.data_row)
     rows = df.attrs.get("source_rows") or list(range(1, len(df) + 1))
+    decimal_comma = bool(df.attrs.get("decimal_comma"))     # --points CSVs are read the same way
     df = df.copy()
     df["__row"] = rows
     excl = next((c for c in df.columns if strip_unit(str(c)) == EXCLUDE_COL), None)
@@ -66,6 +67,7 @@ def load_table(args) -> Dict[str, Any]:
     for w in notes:
         sys.stderr.write(f"[WARN] {w}\n")
     return {"path": path, "df": df.reset_index(drop=True), "exclude_col": excl, "excluded": dropped,
+            "decimal_comma": decimal_comma,
             "layout_warnings": notes,
             "saved_at": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")}
 
@@ -222,7 +224,7 @@ def execute_forward(args) -> Dict[str, Any]:
         ppath = os.path.abspath(args.points)
         if not os.path.isfile(ppath):
             raise FileNotFoundError(f"조회 파일이 없습니다: {ppath}")
-        points_df = load_data_file(ppath)
+        points_df = load_data_file(ppath, decimal_comma=tab["decimal_comma"])
         usable = [c for c in points_df.columns if strip_unit(str(c)) in {strip_unit(x) for x in columns}]
         if not usable:
             # the data file read with the wrong header row (title row, two-level header): the same hint as -i

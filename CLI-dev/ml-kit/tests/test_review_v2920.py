@@ -189,10 +189,10 @@ def test_european_thousands_dot(tmp_path):
     rows3[5][1] = "1,346.8"
     with pytest.raises(mp.InputError):
         mp.load_data_file(_csv(tmp_path / "d3x0.csv", ["온도", "유량", "수율"], rows3))
-    # a dot-grouped integer without a comma: 2.9.21 reads it as thousands too (1346, with a warning; test_review_v2921)
+    # a dot-grouped integer without a comma: 1346 or 1.346 -> refused (2.9.21 read 1346; 2.9.22 test_review_v2922)
     rows3[5][1] = "1.346"
-    df = mp.load_data_file(_csv(tmp_path / "d3x1.csv", ["온도", "유량", "수율"], rows3))
-    assert _num(df, "유량")[5] == 1346 and any("쉼표 없는" in w for w in mp.layout_warnings(df))
+    with pytest.raises(mp.InputError):
+        mp.load_data_file(_csv(tmp_path / "d3x1.csv", ["온도", "유량", "수율"], rows3))
     _, res = run_raw("ml_train.py", "-f", _csv(tmp_path / "d3t.csv", ["온도", "유량", "수율"], rows),
                      "-x", "온도,유량", "-y", "수율")
     assert res["status"] == "ok" and any("천 단위" in w for w in res.get("warnings", [])), res

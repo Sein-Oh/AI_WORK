@@ -1887,6 +1887,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 "feature_stats": feat_stats,
                 "datetime_stats": _datetime_stats(g, used_rows),
                 "feature_schema": g["schema"],
+                "decimal_comma": bool(df_raw.attrs.get("decimal_comma")),   # prediction CSVs are read the same way
                 "derived_evals": g["evals"],
                 "target_summary": target_summaries.get(target_name, {}),
                 "sklearn_version": sklearn.__version__,

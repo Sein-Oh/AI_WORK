@@ -7,8 +7,8 @@
    the mean of the rows above it, or a 합계 row equal to their sum, is a summary row whatever its share.
 2. False warnings: a long-format statistic label column ('집계' = 합계/평균/최대/최소 SB, 'Sum/Avg' SC) warned every
    totals row, and a column of 평균 in every row (SA) warned every row.
-3. A ';' CSV with decimal commas ('175,5') read dot-grouped integers ('1.300') as 1.3 silently (E2): now 1300 with a
-   warning when consistent, otherwise refused.
+3. A ';' CSV with decimal commas ('175,5') read dot-grouped integers ('1.300') as 1.3 silently (E2): 2.9.21 read 1300
+   with a warning when consistent; 2.9.22 refuses them always (test_review_v2922).
 """
 import csv
 import os
@@ -92,12 +92,13 @@ def test_long_format_statistics_not_warned(tmp_path):
     assert _summary(_write(str(tmp_path / "sa.xlsx"), sa, []))[0] == []                # 2.9.20: every row
 
 
-def test_statistic_column_real_total_still_warned(tmp_path):
-    # a 집계 column whose 합계 row really is the sum of the rows above it
+def test_statistic_column_total_not_value_checked(tmp_path):
+    # a 집계 column (statistic words in half of its cells): 2.9.22 does not check totals by value any more (the 2.9.21
+    # sum check missed ratio columns); its 합계 rows are statistic labels, not warned
     rows = [["집계", "온도", "수율"], ["최대", 10.0, 5.0], ["측정", 11.5, 6.0], ["측정", 12.0, 7.5], ["측정", 13.0, 8.0],
             ["합계", 36.5, 21.5], ["최소", 9.0, 4.0]]
     got, _ = _summary(_write(str(tmp_path / "sbt.xlsx"), rows, []))
-    assert got == [(6, "합계")]
+    assert got == []                                                                    # 2.9.21: [(6, "합계")]
 
 
 def test_shift_report_trains_with_warning(tmp_path):
@@ -121,12 +122,10 @@ def _e2_rows():
     return rows
 
 
-def test_dot_grouped_integers_read_as_thousands(tmp_path):
-    df = mp.load_data_file(_csv(tmp_path / "e2.csv", _e2_rows()))
-    flow = mp.coerce_numeric(df["유량"]).tolist()
-    assert flow == [1300 + 7 * i for i in range(12)]                                   # 2.9.20: 1.3, 1.307, ...
-    assert mp.coerce_numeric(df["온도"]).tolist()[0] == 175.5
-    assert any("쉼표 없는" in w and "1.300 -> 1300" in w for w in mp.layout_warnings(df))
+def test_dot_grouped_integers_refused(tmp_path):
+    # 2.9.22: never guessed (2.9.20: 1.3, 1.307, ...; 2.9.21: 1300 with a warning)
+    with pytest.raises(mp.InputError, match="1.300"):
+        mp.load_data_file(_csv(tmp_path / "e2.csv", _e2_rows()))
 
 
 def test_dot_grouped_integers_ambiguous_refused(tmp_path):
@@ -150,6 +149,6 @@ def test_dot_grouped_integers_ambiguous_refused(tmp_path):
     assert res["status"] == "error" and res["agent_directive"].startswith("STOP_RETRY:"), res
 
 
-def test_dot_grouped_integers_train_warns(tmp_path):
+def test_dot_grouped_integers_train_refused(tmp_path):
     _, res = run_raw("ml_train.py", "-f", _csv(tmp_path / "e2t.csv", _e2_rows()), "-x", "온도,유량", "-y", "수율")
-    assert res["status"] == "ok" and any("쉼표 없는" in w for w in res.get("warnings", [])), res
+    assert res["status"] == "error" and res["agent_directive"].startswith("STOP_RETRY:"), res   # 2.9.21: ok
