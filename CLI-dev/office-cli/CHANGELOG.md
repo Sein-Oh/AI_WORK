@@ -6,6 +6,42 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.68] - 2026-11-04
+
+독립 검토(5차)에서 나온 reader 숫자 검색 경계 회귀와 `check` 안내 수정. 숫자 검색은 검토마다 경계 회귀가 나서 땜질에 더해 구조적 안전망을 둠.
+회귀 테스트(보고서 사례 전부)를 먼저 만들어 재현한 뒤 고침.
+
+### 기능
+- 숫자 안전망 (`reader.py search`, `excel.py check`의 항목 찾기): 정확히 일치한 곳이 0건이고 검색어에 숫자가 있으면 숫자 값만 같은 곳을 느슨하게 다시 찾음
+  (부호·단위 경계·붙여쓰기·기호 무시, 숫자 경계와 값은 지킴: `5`는 `15`·`5.5`와 다름, 숫자 사이 40자까지, 숫자가 없는 검색어는 정확히). 결과는 넓혀 찾기와 같은 형식
+  (`count: 0`, `candidates`, `match_mode: number`, 항목마다 `number_words`(검색어: 앞 부호·뒤 단위를 포함한 실제 글)), directive
+  `UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 N건 - 표기를 확인하세요 ...`. 경계 규칙이 너무 엄격해 맞는 표기를 놓쳐도 "0건 VERIFIED -> 규정 없음 단정"이 나지 않음:
+  숫자가 든 검색어의 0건 VERIFIED는 느슨한 검색도 0건일 때만. 순서는 number -> partial -> fuzzy. `check`는 number면 `판단필요`(숫자 값만 같은 곳에서 찾음).
+  회귀 테스트: `tests/test_reader.py` `test_number_safety_net_candidates`.
+
+### 수정
+- [치명] `±` 앞 글자 제한(`(?<![\w.])`) 때문에 `100±0.5 mm`, `Φ10±0.5mm`, `5V±5%`, `AC220V±10%`, `24VDC±10%`, `공차±0.1`, `R5±0.1`, `3 dB±1 dB`, `1000 ppm±2%`,
+  `정격 전압: 5V±5%`가 0건 VERIFIED였음. `±`(`+/-`, `+-`)는 앞 글자와 무관하게 맞음. 검색어 쪽도 `5V±5%`처럼 붙여 쓴 `±`를 부호로 읽음
+  (첫 숫자에 부호가 있으면 앞 경계는 부호 패턴이 봄). 글의 빼기 부호는 앞이 `[\dA-Za-z.]`가 아니면 부호(`온도-20℃`, `Ta=-20℃`), 부호 없는 숫자도 같은 규칙.
+- [높음] (a) `+10%`가 `±10%`에, `+5V`가 `±5V`에 맞았음: 부호 없는/`+` 숫자 앞에 `±`, `+/-`, `+-`(띄어쓰기 하나 포함)가 오면 아님. `-5`도 `+/-5`와 다름.
+  (b) `-20 ℃`가 `0 - 20 ℃`(범위)에 맞았음: 빼기 앞을 띄어쓰기 건너 보아 숫자 또는 숫자+단위(단위 글자 1~3개)면 범위의 대시라 부호가 아님
+  (`0 - 20 ℃`, `0 -20 ℃`, `5 V - 20 ℃`). 부호 없는 숫자는 그 대시 뒤에서 맞음(`20` = `10 -20`, `100 Hz` = `10 -100 Hz`(U+2212 빼기 포함)). `0 ~ -20℃`는 그대로 -20.
+- [중간] 끝 단위 뒤 경계가 같은 단위 표기까지 막았음(`5 V`가 `5 Vrms/Vp-p/Vpp/Vin/Vcc/Vmax`, `3 s`가 `3 sec`, `10 min`이 `10 mins/minutes`, `10 h`가 `10 hr/hrs`,
+  `30 dB`가 `30 dBA`, `1 bar`가 `1 barg`에 0건). 단위별 허용 꼬리(`_UNIT_TAILS`: V `rms p-p pp p pk peak in out o cc dd ee ss max min typ nom ac dc`, A는 같은 목록에서
+  `p o cc dd ee ss` 뺌, W `max min typ nom rms ac dc`, s `sec secs second seconds`, min `s ute utes`, h `r rs our ours`, dB `A`, 압력 `g a`)만 허용하고
+  다른 단위로 이어지면(`10 mm`, `10 MΩ`, `1 Ah`, `30 dBm`, `30 dBi`, `1 kgf`, `100 gf`, `1 Wh`, `5 mmH2O`) 아님. `test_number_search_boundaries`의 `2 s`/`2 sec`·`2 seconds`는 맞음으로 바꿈.
+- [중간] `excel.py check`의 UNVERIFIED 안내가 기본 문구("다시 실행하지 말고 그대로 알리세요")라 메모 미리보기 행동이 빠져 채점 O1(`CLI-dev/agent_scenarios.yaml`)과 어긋났음.
+  directive를 "사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자 확인 뒤에만 그 명령에서 --dry-run을 뺀 명령을 실행하세요.
+  같은 check는 다시 실행하지 마세요"로. O1 요청("판정은 값 칸에 메모로 달아줘")과 판정(미리보기 `--dry-run` 필수, 실제 달기 금지)이 이 흐름과 맞아 yaml·팩은 그대로.
+  규격서 등록이 남으면(`remaining`) 대조가 끝나지 않았으므로 `next_commands`는 같은 check 명령 하나뿐이고 directive는 "그대로 다시 실행해 이어서 대조"(CONTINUE 흐름,
+  "다시 실행하지 말고"와 부딪히지 않음). 회귀 테스트: `tests/test_excel_read.py` `test_check_remaining_specs_reruns_same_command`.
+- [낮음] `spec_norm`의 지수 상한이 3자리라 `1E999`, `1×10^999`가 1000자리 숫자로 바뀌어 조건(`999 Ω 이상` 포함)으로 읽혔음. 지수는 2자리까지 계산하고,
+  3자리 이상은 `(지수 범위 밖)`으로 바꿔 조건으로 읽지 않음(check `판단필요`).
+- [여유] 숫자 검색 표기 차이: `10 kΩ` = `10 kohm` = `10 kΩ`(U+2126), `100mm` = `100㎜`, `10 mA` = `10 ㎃`, `M6x1.0` = `M6×1.0`(숫자 사이 `x × *`), `Φ10` = `Ø10`(`Φ φ Ø ø`, U+2300),
+  `08:30` = `8:30`(`18:30`, `8:30:15`와 다름), 영문으로 시작하고 `-`·`_`로 이은 코드(`ABC-1234`)는 `XABC-1234`, `ABC-1234-5`, `ABC-12345`와 맞지 않음.
+- 회귀 테스트: `tests/test_reader.py` `test_number_search_boundaries_review5`(보고서 사례 전부, 93개), `test_spec_norm_exponent_over_two_digits_is_not_a_condition`.
+  5차 재현 자료 p1~p6(248쌍)을 1.4.67과 비교해 새로 0건이 된 것은 모두 다른 값·부호·단위(`±5V`의 `5V`, 범위 `0 - 20 ℃`의 `-20 ℃`, `5V±5%`의 `5V 5%`)뿐.
+
 ## [1.4.67] - 2026-11-04
 
 독립 검토(4차)에서 나온 office-cli 버그 수정과 `excel.py check`의 계약 변경. 회귀 테스트를 먼저 만들어 재현한 뒤 고침.

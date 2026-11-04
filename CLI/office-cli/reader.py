@@ -2579,11 +2579,34 @@ def strip_particles(term: str) -> str:
     return " ".join(_strip_word(w) for w in term.split())
 
 
+_DIAMETER = "\u03a6\u03c6\u00d8\u00f8\u2300"          # 지름 기호: Φ φ Ø ø U+2300 (Φ10 = Ø10)
+
+
 def _char(c: str) -> str:
-    """글자 하나의 정규식: 영문·숫자는 전각(ＰＣＢ, ５)도 맞게."""
+    """글자 하나의 정규식: 영문·숫자는 전각(ＰＣＢ, ５)도 맞게, 지름 기호는 서로 같게."""
     if c.isascii() and c.isalnum():
         return f"[{c}{chr(ord(c) + 0xFEE0)}]"
+    if c in _DIAMETER:
+        return f"[{_DIAMETER}]"
     return re.escape(c)
+
+
+_OHM_PREFIX = ("", "k", "K", "M", "G", "m")
+
+
+def _unit_alias(u: str) -> Optional[str]:
+    """단위 표기의 다른 글자 모음: kΩ = kohm = kΩ(U+2126), mm = ㎜, mA = ㎃. 다른 표기가 없으면 None."""
+    forms: List[str] = []
+    for end in ("\u03a9", "\u2126", "ohm", "옴"):
+        if u.endswith(end) and u[: -len(end)] in _OHM_PREFIX:
+            pre = u[: -len(end)]
+            forms = [pre + "\u03a9", pre + "\u2126", pre + "ohm"] + (["옴"] if not pre else [])
+            break
+    squares = [chr(c) for c in range(0x3380, 0x33E0) if unicodedata.normalize("NFKC", chr(c)) in forms + [u]]
+    if not forms and not squares:
+        return None
+    alts = [r"\s*".join(_char(x) for x in f) for f in sorted(set(forms + [u]), key=len, reverse=True)]
+    return "(?:" + "|".join(alts + [re.escape(x) for x in squares]) + ")"
 
 
 _NUM_TOKEN = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|[^\W\d_]|\S")
@@ -2594,15 +2617,45 @@ _SQUARE_UNIT = "[\u3380-\u33df\u2113]"
 
 
 _MINUS = "\\-\u2010\u2011\u2012\u2013\u2212"          # 글에서 빼기로 쓰는 글자 ('-', U+2010~2013, U+2212)
-# 부호 없는 숫자 앞: 빼기 부호가 붙은 음수('-20', ' -20'(U+2212), '~-20')는 아님. '1-20', 'A-20'의 대시는 부호가 아니라 맞음
-_NO_MINUS = rf"(?<![^\w.,][{_MINUS}])(?<!^[{_MINUS}])"
+# 빼기 앞이 '숫자(+단위) 띄어쓰기'면 범위의 대시 ('0 - 20 ℃', '10 -100 Hz', '5 V - 10 V'): 부호가 아님.
+# 파이썬 re의 뒤보기는 길이가 고정이라 길이마다 따로 둠 (단위 글자 1~3개, 띄어쓰기 1~3개)
+_UNIT_CH = "[A-Za-z%\u00b0\u2103\u03a9\u2126\u03bc\u00b5\u3380-\u33df\u2113]"
+_RANGE_BEFORE = [r"\d" + r"\s" * j for j in (1, 2, 3)] + [
+    r"\d" + r"\s" * s + _UNIT_CH * k + r"\s" * j for k in (1, 2, 3) for s in (0, 1) for j in (1, 2, 3)]
+_NOT_RANGE = "".join(f"(?<!{x})" for x in _RANGE_BEFORE)
+# 부호 없는 숫자 앞: 빼기 부호가 붙은 음수('-20', '온도-20', ' -20'(U+2212), '~-20')와 '±5', '+/-5'는 아님.
+# '1-20', 'A-20'(앞이 영문·숫자), '0 - 20'·'10 -20'(범위)의 대시는 부호가 아니라 맞음
+_NO_PM = r"(?<!±)(?<!±\s)(?<!\+/-)(?<!\+-)(?<!\+/-\s)(?<!\+-\s)"
+_NO_MINUS = (_NO_PM + rf"(?:(?<![{_MINUS}])|(?<=[\dA-Za-z.,][{_MINUS}])|"
+             + "|".join(f"(?<={x}[{_MINUS}])" for x in _RANGE_BEFORE) + ")")
 _UNSIGNED = r"(?<![\d.])" + _NO_MINUS
-_SIGN_PAT = {"-": rf"(?<![\w.])[{_MINUS}]\s?", "±": r"(?<![\w.])(?:±|\+\s*/\s*-|\+-)\s*", "+": _UNSIGNED + r"(?:\+\s?)?"}
-# 검색어의 숫자 앞 부호 (낱말 처음이거나 앞이 영문·숫자가 아닐 때만: 'A-20', '1-20'의 대시는 부호가 아님)
-_SIGN_BEFORE = re.compile(rf"(?:^|(?<=[^\w.]))(±|\+\s*/\s*-|\+-|[+{_MINUS}])\s?$")
-# 검색어 끝이 단위('10 m', '5 V', '100 W'): 글에서 단위 뒤에 영문·단위 글자가 이어지면 다른 단위 ('10 mm', '5 VA', '10 MΩ')
-_UNIT_END = (r"(?:(?=(?:ac|dc)(?![A-Za-z]))|"
-             r"(?![A-Za-z\uff21-\uff3a\uff41-\uff5a\u03a9\u2126\u03bc\u00b5\u00b0\u2103]))")
+# 글의 부호: 빼기는 앞이 영문·숫자·점이 아니고 범위의 대시도 아닐 때 ('온도-20', 'Ta=-20'은 부호, 'X-20', '0 - 20'은 아님).
+# ±(+/-, +-)는 앞 글자와 무관 ('100±0.5', '5V±5%', '공차±0.1')
+_SIGN_PAT = {"-": rf"(?<![\dA-Za-z.])(?<!\+)(?<!\+/){_NOT_RANGE}[{_MINUS}]\s?",
+             "±": r"(?:±|\+\s*/\s*-|\+-)\s*", "+": _UNSIGNED + r"(?:\+\s?)?"}
+# 검색어의 숫자 앞 부호: +·빼기는 낱말 처음이거나 앞이 영문·숫자가 아닐 때만 ('A-20', '1-20'의 대시는 부호가 아님),
+# ±는 어디서나 ('5V±5%')
+_SIGN_BEFORE = re.compile(rf"(?:(?:^|(?<=[^\dA-Za-z.]))([+{_MINUS}])|(±|\+\s*/\s*-|\+-))\s?$")
+# 끝 단위 뒤에 이어져도 같은 단위인 꼬리 ('5 Vrms', '3 sec', '10 hrs', '30 dBA', '1 barg'). 다른 단위로 이어지면
+# ('10 mm', '1 Ah', '30 dBm', '1 kgf') 아님. 키: _UNIT_TABLE의 단위(정확히) 또는 기준 단위
+_ELEC_TAIL = ("rms", "p-p", "pp", "pk", "peak", "max", "min", "typ", "nom", "ac", "dc", "in", "out")
+_UNIT_TAILS: Dict[str, Tuple[str, ...]] = {
+    "V": _ELEC_TAIL + ("p", "o", "cc", "dd", "ee", "ss"),
+    "A": _ELEC_TAIL,
+    "W": ("max", "min", "typ", "nom", "rms", "ac", "dc"),
+    "s": ("ec", "ecs", "econd", "econds"), "ms": ("ec", "ecs"), "us": ("ec", "ecs"), "μs": ("ec", "ecs"),
+    "ns": ("ec", "ecs"), "sec": ("s", "ond", "onds"), "min": ("s", "ute", "utes"), "h": ("r", "rs", "our", "ours"),
+    "hr": ("s",), "dB": ("A",), "Pa": ("g", "a"),
+}
+_UNIT_LETTER = "[A-Za-z\uff21-\uff3a\uff41-\uff5a\u03a9\u2126\u03bc\u00b5\u00b0\u2103]"
+
+
+def _unit_end(unit_key: Optional[str]) -> str:
+    """검색어 끝 단위 뒤 경계: 같은 단위 표기의 꼬리만 허용하고 다른 단위 글자가 이어지면 아님."""
+    base = _UNIT_TABLE[unit_key][0] if unit_key in _UNIT_TABLE else ""
+    tails = _UNIT_TAILS.get(unit_key or "") or _UNIT_TAILS.get(base) or ("ac", "dc")
+    alts = "|".join(re.escape(t) for t in sorted(tails, key=len, reverse=True))
+    return rf"(?:(?=(?:{alts})(?!{_UNIT_LETTER}))|(?!{_UNIT_LETTER}))"
 
 
 def _sign_of(text_before: str) -> Optional[str]:
@@ -2610,8 +2663,9 @@ def _sign_of(text_before: str) -> Optional[str]:
     m = _SIGN_BEFORE.search(text_before)
     if not m:
         return None
-    g = m.group(1)
-    return "+" if g == "+" else "-" if len(g) == 1 and g != "±" else "±"
+    if m.group(2):
+        return "±"
+    return "+" if m.group(1) == "+" else "-"
 
 
 def _number(tok: str) -> str:
@@ -2647,7 +2701,8 @@ def _single_pattern(term: str) -> str:
     (5V = 5 V = 5[V] = 5.0 V), °C = ℃.
     숫자 경계는 지킵니다: 'SOI 1'은 'SOI #10'이나 'SOI 21'과, '5V'는 '15V', '5.5V'와 맞지 않습니다.
     기호를 빼면 숫자만 남는 검색어('#4', '1.2')는 기호를 그대로 찾습니다 (모든 '4'와 맞지 않게)."""
-    orig = unicodedata.normalize("NFKC", term).split()             # 전각 -> 반각, ℃ -> °C
+    # 전각 -> 반각, ℃ -> °C. 숫자 사이 곱하기는 x로 ('M6×1.0' = 'M6x1.0': 글에서는 x·×·* 모두 맞음)
+    orig = re.sub(r"(?<=\d)\s*[\u00d7*]\s*(?=\d)", "x", unicodedata.normalize("NFKC", term)).split()
     stripped = [_strip_word(w) for w in orig]
     ro_cut = {sw for w, sw in zip(orig, stripped) if w.endswith("로") and sw == w[:-1]}   # ㄹ 받침 뒤 '로'를 뗀 낱말
     t = " ".join(stripped)
@@ -2658,6 +2713,11 @@ def _single_pattern(term: str) -> str:
         # 소수 한 자리 맨 숫자('2.1')는 장절 번호 경계(section_matches와 같음): '2.1.3'(하위 절)은 맞고 '2.10', '12.1'은 아님
         tail = r"(?!,?\d)" if re.fullmatch(r"\d+\.[1-9]", compact) else r"(?![.,]?\d)"
         return _UNSIGNED + _number(compact) + tail
+    tm = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", compact)
+    if tm and int(tm.group(1)) <= 24 and int(tm.group(2)) < 60:
+        # 시각: '08:30' = '8:30' = '8 : 30' ('18:30', '8:300', '8:30:15'(초가 있는 다른 시각)과는 다름)
+        sec = rf"\s*:\s*{tm.group(3)}" if tm.group(3) else r"(?!\s*:\s*\d)"
+        return rf"(?<![\d.:])0?{int(tm.group(1))}\s*:\s*{tm.group(2)}{sec}(?![.,]?\d)"
     dm = re.fullmatch(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\.?", compact)
     if dm and 1 <= int(dm.group(2)) <= 12 and 1 <= int(dm.group(3)) <= 31:
         # 날짜: '2026.11.04' = '2026.11.4' = '2026-11-04' = '2026/11/04' = '2026년 11월 4일'
@@ -2696,7 +2756,28 @@ def _single_pattern(term: str) -> str:
     prev = ""
     for wi, w in enumerate(words):
         parts: List[str] = []
+        skip = 0
         for ti, tok in enumerate(w):
+            if skip:
+                skip -= 1
+                continue
+            after_num = prev[:1].isdigit()
+            run = 0
+            while after_num and ti + run < len(w) and not w[ti + run][0].isdigit():
+                run += 1
+            alias = None
+            while run and not alias:                                    # 가장 긴 단위 표기부터 ('100mm이상'의 'mm')
+                alias = _unit_alias("".join(w[ti:ti + run]))
+                run -= 0 if alias else 1
+            if alias:
+                parts.append(alias)                                     # 숫자 뒤 단위: 'kΩ' = 'kohm', 'mm' = '㎜'
+                skip = run - 1
+                prev = w[ti + run - 1]
+                continue
+            if tok in ("x", "X") and after_num and ti + 1 < len(w) and w[ti + 1][0].isdigit():
+                parts.append("[xX\u00d7*]")                             # 숫자 사이 곱하기: 'M6x1.0' = 'M6×1.0'
+                prev = tok
+                continue
             if tok[0].isdigit():
                 sign = signs.get((wi, ti))
                 # 부호는 패턴에 넣음 ('-20 ℃'는 '20 ℃', '+20 ℃'와 다름). 부호 없는 숫자는 음수의 끝과 맞지 않게
@@ -2713,16 +2794,20 @@ def _single_pattern(term: str) -> str:
             piece += particle
         pieces.append(piece)
     body = _SEP.join(pieces)
-    if toks[0][0].isdigit():
-        body = r"(?<![\d.])" + body
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*[\-_][A-Za-z0-9\-_]*\d", compact):
+        # 영숫자 코드('ABC-1234'): 앞뒤로 영문·숫자가 이어진 다른 코드('XABC-1234', 'ABC-1234-5', 'ABC-12345')와 다름
+        body = r"(?<![A-Za-z0-9])" + body + r"(?![\-_]?[0-9])(?![A-Za-z])"
+    if toks[0][0].isdigit() and signs.get((0, 0)) in (None, "+"):
+        body = r"(?<![\d.])" + body                     # 부호('-', '±')가 있으면 앞 경계는 부호 패턴이 봄 ('100±0.5 mm')
     if toks[-1][0].isdigit():
         body += r"(?![.,]?\d)"
     else:
         last_num = max((i for i, x in enumerate(toks) if x[0].isdigit()), default=-1)
         tail = toks[last_num + 1:]
         unit = "".join(tail)
-        if last_num >= 0 and tail and (_unit_key(unit) or _unit_key("°" + unit)):
-            body += _UNIT_END                            # 끝이 단위: '10 m'가 '10 mm', '10 MΩ'과 맞지 않게
+        key = _unit_key(unit) or _unit_key("°" + unit)
+        if last_num >= 0 and tail and key:
+            body += _unit_end(key)                           # 끝이 단위: '10 m'가 '10 mm', '10 MΩ'과 맞지 않게
     return body
 
 
@@ -2877,10 +2962,71 @@ def _fuzzy_word(text: str, core: str) -> Optional[str]:
     return None
 
 
+def _loose_number_pattern(term: str) -> Optional["re.Pattern[str]"]:
+    """숫자 안전망: 검색어의 숫자 값만 차례로 찾는 느슨한 정규식 (부호·단위·붙여쓰기·기호 무시, 숫자 경계는 지킴:
+    '5'는 '15', '5.5'와 다름). 숫자 사이에는 40자까지 무엇이든 허용. 숫자가 없으면 None."""
+    t = unicodedata.normalize("NFKC", term)
+    if not re.search(r"\d", t):
+        return None
+    if re.search(r"\d[.:]\d+[.:\-/]\d", t):
+        nums = re.findall(r"\d+", t)                          # 날짜·시각: 마디마다 ('2026.11.04', '08:30')
+    else:
+        nums = re.findall(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?", t)
+    pieces = []
+    for n in nums[:8]:
+        whole, dot, frac = n.partition(".")
+        whole = whole.lstrip("0") if whole.replace(",", "").strip("0") else "0"
+        pieces.append(r"(?<![\d.])(?<!\d,)0*" + _number(whole + dot + frac) + r"(?![.,]?\d)")
+    return re.compile(r"[\s\S]{0,40}?".join(pieces), re.IGNORECASE)
+
+
+def number_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: List[List[str]], flags: int,
+                  ) -> List[Dict[str, Any]]:
+    """정확히 일치한 곳이 0건일 때의 숫자 안전망: 숫자가 든 검색어는 숫자 값만 같은 곳, 나머지 검색어는 정확히 일치.
+    숫자 경계 규칙이 너무 엄격해 맞는 표기를 놓쳐도 '0건(규정 없음)'으로 단정하지 않게 후보로 줌.
+    반환 [{doc, unit, terms(강조할 글), matched_terms, missing_terms, number_words}] (숫자가 든 검색어가 없으면 빈 목록)."""
+    loose = {t: _loose_number_pattern(t) for g in groups for t in g}
+    if not any(loose.values()):
+        return []
+    pats = {t: _term_pattern(t, flags) for g in groups for t in g}
+    words = {t: " ".join(w for w in t.split() if not re.search(r"\d", w)) for t in loose}
+    rows: List[Dict[str, Any]] = []
+    for doc, u in units:
+        text = unicodedata.normalize("NFC", u["text"])
+        for g in groups:
+            if not any(loose[t] for t in g):
+                continue
+            exact, nw, extra = [], {}, []
+            for term in g:
+                m = loose[term].search(text) if loose[term] else None
+                if m:
+                    # 실제 글: 앞의 부호(±, +/-, 빼기)와 뒤의 단위 글자까지 ('±0.5 mm', '-20℃')
+                    a = m.start()
+                    while a > 0 and m.start() - a < 4 and text[a - 1] in "±+/ " + _MINUS.replace("\\", ""):
+                        a -= 1
+                    tail = re.match(r"\s?(?:[%\u00b0\u2103]|[A-Za-z\u03a9\u2126\u03bc\u3380-\u33df]{1,6})?", text[m.end():])
+                    nw[term] = text[a:m.end() + len(tail.group(0))].strip()
+                    if words[term] and _term_pattern(words[term], flags).search(text):
+                        extra.append(words[term])            # 숫자 밖의 낱말도 든 곳을 앞으로 (점수)
+                elif not loose[term] and pats[term].search(text):
+                    exact.append(term)
+                else:
+                    break
+            else:
+                rows.append({"doc": doc, "unit": u, "matched_terms": exact, "missing_terms": [], "number_words": nw,
+                             "terms": exact + list(nw.values()) + extra})
+                break
+    return rows
+
+
 def widen_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: List[List[str]], flags: int,
                  ) -> Tuple[str, List[Dict[str, Any]]]:
-    """모든 검색어가 든 단위가 없을 때 넓혀 찾기. 순서: partial(검색어 절반 이상, 가장 많이 든 단위) -> fuzzy(한 글자 다른 낱말 허용,
-    모두 또는 절반 이상). 반환 (match_mode, [{doc, unit, terms(강조할 글), matched_terms, missing_terms, fuzzy_words}])."""
+    """모든 검색어가 든 단위가 없을 때 넓혀 찾기. 순서: number(숫자가 든 검색어면 숫자 값만 같은 곳, number_search) ->
+    partial(검색어 절반 이상, 가장 많이 든 단위) -> fuzzy(한 글자 다른 낱말 허용, 모두 또는 절반 이상).
+    반환 (match_mode, [{doc, unit, terms(강조할 글), matched_terms, missing_terms, fuzzy_words 또는 number_words}])."""
+    num_rows = number_search(units, groups, flags)
+    if num_rows:
+        return "number", num_rows
     pats = {t: _term_pattern(t, flags) for g in groups for t in g}
 
     def pick(rows: List[Tuple[int, Dict[str, Any]]], need_all: bool) -> List[Dict[str, Any]]:
@@ -3091,8 +3237,8 @@ def cmd_search(args) -> Dict[str, Any]:
     groups = [] if args.regex else parse_query(args.query)
     mode = "exact"
     if not hits and groups and pool:
-        # 0건: 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음. 정확 일치는 여전히 0건이라
-        # count 0, 넓혀 찾은 결과는 candidates와 UNVERIFIED로 알림 (근거로 쓰지 않게)
+        # 0건: 숫자가 든 검색어면 숫자 값만 같은 곳(안전망) -> 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음.
+        # 정확 일치는 여전히 0건이라 count 0, 넓혀 찾은 결과는 candidates와 UNVERIFIED로 알림 (근거로 쓰지 않게)
         mode, hits = widen_search(pool, groups, flags)
     for h in hits:
         h["score"] = hit_score(h["unit"], h["terms"], flags) if not args.regex else 0
@@ -3200,6 +3346,8 @@ def cmd_search(args) -> Dict[str, Any]:
             item["missing_terms"] = h["missing_terms"]
         if h.get("fuzzy_words"):
             item["fuzzy_words"] = h["fuzzy_words"]
+        if h.get("number_words"):
+            item["number_words"] = h["number_words"]
         if args.full:
             item["text"], cut = rt.clamp_text(u["text"], SEARCH_JSON_FULL_CHARS)
             if cut:
@@ -3277,15 +3425,19 @@ def cmd_search(args) -> Dict[str, Any]:
                      **result)
     if mode != "exact":
         # 정확히 일치한 곳은 0건: 넓혀 찾은 결과는 후보일 뿐이라 VERIFIED로 내지 않음 ("대기 전류"가 "대기 전력"에 맞던 문제)
-        what = "일부 검색어만 든 곳, 빠진 검색어는 missing_terms" if mode == "partial" else \
-            "한 글자 다른 낱말이 든 곳, 실제 낱말은 fuzzy_words"
-        preview = (f"'{args.query}': {scope}에서 정확히 일치한 곳 0건, 비슷한 곳 {total}건(candidates, match_mode {mode})"
+        what = {"partial": "일부 검색어만 든 곳, 빠진 검색어는 missing_terms",
+                "number": "숫자 값만 같은 곳(부호·단위 표기는 다를 수 있음), 실제 글은 number_words"}.get(
+                    mode, "한 글자 다른 낱말이 든 곳, 실제 낱말은 fuzzy_words")
+        kind = "숫자가 같은 곳" if mode == "number" else "비슷한 곳"
+        preview = (f"'{args.query}': {scope}에서 정확히 일치한 곳 0건, {kind} {total}건(candidates, match_mode {mode})"
                    + (f", 저장: {result['output_file']}" if "output_file" in result else ""))
-        payload = rt.ok_unverified(TOOL, "search", preview, [f"정확히 일치한 곳은 0건, 비슷한 곳 {total}건({what})"]
+        payload = rt.ok_unverified(TOOL, "search", preview, [f"정확히 일치한 곳은 0건, {kind} {total}건({what})"]
                                    + (["검색하지 못한 부분이 있음: " + "; ".join(gaps)] if gaps else []), **result)
-        payload["agent_directive"] = (f"UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 {total}건(match_mode {mode}: {what}) - "
-                                      "candidates를 근거로 쓰지 말고, 사용자에게 '정확히 일치한 곳은 없고 비슷한 곳이 있다'고 알린 뒤 "
-                                      "맞는지 확인을 받으세요."
+        head = (f"UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 {total}건 - 표기를 확인하세요 (match_mode number: {what}). "
+                if mode == "number" else
+                f"UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 {total}건(match_mode {mode}: {what}) - ")
+        payload["agent_directive"] = (head + "candidates를 근거로 쓰지 말고, 사용자에게 "
+                                      f"'정확히 일치한 곳은 없고 {kind}이 있다'고 알린 뒤 맞는지 확인을 받으세요."
                                       # stale 안내(index --all 뒤 1번 다시 검색)와 부딪히지 않게 그때는 '다시 실행 금지'를 빼고 안내를 따름
                                       + ("" if info["stale"] and not args.file else " 같은 검색을 다시 실행하지 마세요.")
                                       + notes)                # stale·indexed_now·clamp·text_cut 안내를 지우지 않음
@@ -3640,10 +3792,15 @@ def _num(text: str) -> float:
 _SUPER = "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079"       # 위첨자 0~9
 _SUPER_MAP = str.maketrans({**{ch: str(i) for i, ch in enumerate(_SUPER)}, "\u207a": "+", "\u207b": "-"})
 _MINUS_DASH = "\u2010\u2011\u2012\u2212"                    # 빼기로 쓰는 대시 (U+2013은 숫자 앞에서만)
+# 지수는 2자리까지 (1E99). 3자리 이상('1E999', '1×10^999')은 계산하지 않고 _EXP_BIG가 수치가 아닌 글로 바꿈 -> 조건 없음(판단필요)
 _EXP_10 = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*[\u00d7xX*\u00b7]\s*10\s*"
-                     rf"(?:\^\s*\(?([+-]?\d{{1,3}})\)?|\*\*\s*([+-]?\d{{1,3}})|([\u207a\u207b]?[{_SUPER}]{{1,3}}))")
-_EXP_10_BARE = re.compile(rf"(?<![\w.\u00d7*^])10(?:\s*\^\s*([+-]?\d{{1,3}})|([\u207a\u207b]?[{_SUPER}]{{1,3}}))")
-_EXP_E = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)[eE]([+-]?\d{1,3})(?![\w.])")
+                     rf"(?:\^\s*\(?([+-]?\d{{1,2}})(?!\d)\)?|\*\*\s*([+-]?\d{{1,2}})(?!\d)|"
+                     rf"([\u207a\u207b]?[{_SUPER}]{{1,2}})(?![{_SUPER}]))")
+_EXP_10_BARE = re.compile(rf"(?<![\w.\u00d7*^])10(?:\s*\^\s*([+-]?\d{{1,2}})(?!\d)|"
+                          rf"([\u207a\u207b]?[{_SUPER}]{{1,2}})(?![{_SUPER}]))")
+_EXP_E = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)[eE]([+-]?\d{1,2})(?![\w.])")
+_EXP_BIG = re.compile(rf"(?<![\w.])(?:\d+(?:\.\d+)?\s*[\u00d7xX*\u00b7]\s*)?10\s*(?:\^\s*\(?[+-]?\d{{3,}}\)?|\*\*\s*[+-]?\d{{3,}}|"
+                      rf"[\u207a\u207b]?[{_SUPER}]{{3,}})|(?<![\w.])\d+(?:\.\d+)?[eE][+-]?\d{{3,}}(?![\w.])")
 
 
 def _exp_value(mant: str, exp: str) -> str:
@@ -3656,10 +3813,12 @@ def _exp_value(mant: str, exp: str) -> str:
 
 def spec_norm(text: Any) -> str:
     """규격 글·칸 값의 수치 표기를 맞춤 (check 판정용). NFKC 전에 처리할 것:
-    지수 '1×10'+위첨자 9, '1×10^9', '1E9' -> 계산한 숫자 (NFKC가 위첨자를 '109'로 바꾸기 전에),
+    지수 '1×10'+위첨자 9, '1×10^9', '1E9' -> 계산한 숫자 (NFKC가 위첨자를 '109'로 바꾸기 전에, 지수 2자리까지:
+    '1E999'는 '(지수 범위 밖)'으로 바꿔 조건으로 읽지 않음),
     단위 뒤 위첨자 'mm²' -> 'mm^2' (묶음 단위로 보고 조건에 쓰지 않음),
     빼기 대시 U+2212·U+2010~2012, 숫자 바로 앞 U+2013(앞이 숫자·단위가 아닐 때) -> '-'."""
     t = str(text or "")
+    t = _EXP_BIG.sub("(지수 범위 밖)", t)
     t = _EXP_10.sub(lambda m: _exp_value(m.group(1), m.group(2) or m.group(3) or m.group(4)), t)
     t = _EXP_10_BARE.sub(lambda m: _exp_value("1", m.group(1) or m.group(2)), t)
     t = _EXP_E.sub(lambda m: _exp_value(m.group(1), m.group(2)), t)

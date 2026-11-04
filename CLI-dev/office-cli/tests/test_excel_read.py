@@ -1106,6 +1106,30 @@ def test_check_verdicts_memo_and_next_command(check_env, capsys):
     assert any("자동 판정(참고): 근거없음 (규격서에서 항목을 찾지 못함) - 읽은 조건: 없음 - 근거: 없음" in m for m in memo), memo
     cmd = out["next_commands"][0]["command"]
     assert "excel.py" in cmd and "comment" in cmd and "--dry-run" in cmd and out["memo_file"] in cmd
+    # 5차 검토(1.4.68): 안내에 메모 미리보기 행동(채점 O1: 미리보기 -> 사용자 확인 뒤 --dry-run을 뺀 명령)
+    d = out["agent_directive"]
+    assert "next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고" in d and "사용자 확인 뒤에만" in d and "--dry-run을 뺀" in d, d
+    assert "다시 실행하지 말고 사용자에게 그대로 알리세요" not in d and len(out["next_commands"]) == 1
+
+
+def test_check_remaining_specs_reruns_same_command(check_env, capsys, monkeypatch):
+    # 5차 검토(1.4.68): 규격서 등록이 남으면 같은 명령 다시 대조만 (메모 미리보기·'다시 실행하지 말고'와 부딪히지 않게)
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.0)])
+    real = reader.load_spec_docs
+
+    def partial(path, max_files=10):
+        docs, info = real(path)
+        info["remaining"] = 2
+        return docs, info
+    monkeypatch.setattr(reader, "load_spec_docs", partial)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec.parent))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert len(cmds) == 1 and " check " in cmds[0] and "--dry-run" not in cmds[0], cmds
+    d = out["agent_directive"]
+    assert "next_commands[0](같은 명령)을 그대로 다시 실행" in d and "다시 실행하지 말고" not in d, d
 
 
 def test_check_all_decided_is_still_unverified_and_save(check_env, capsys, tmp_path):

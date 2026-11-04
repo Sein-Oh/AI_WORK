@@ -2934,7 +2934,7 @@ NUMBER_SEARCH_CASES = [
     ("10 m", "10 min", False), ("10 m", "10 MΩ", False),
     ("5 V", "5 VA", False), ("5 V", "5 V", True), ("5 V", "5 Vdc", True), ("5 V", "5 V/m", True), ("5V", "5 VA", False),
     ("5 A", "5 Ah", False), ("5 A", "5 A", True), ("100 W", "100 Wh", False), ("100 W", "100 W", True),
-    ("2 s", "2 sec", False), ("2 s", "2 seconds", False), ("2 s", "2 s", True),
+    ("2 s", "2 sec", True), ("2 s", "2 seconds", True), ("2 s", "2 s", True),         # 같은 단위 꼬리 (1.4.68)
     # 기호 분기의 소수 경계
     ("1/2", "1/2.5", False), ("1/2", "1/2", True), ("1/2", "1/2인치", True), ("1/2", "1/20", False),
     # 맞아야 하는 것: 10% = 10.0 %, 0.5 = 0.500, 날짜 표기
@@ -2952,6 +2952,75 @@ NUMBER_SEARCH_CASES = [
 @pytest.mark.parametrize("query,text,want", NUMBER_SEARCH_CASES)
 def test_number_search_boundaries(query, text, want):
     assert (reader.build_matcher(query, False)(text) is not None) is want
+
+
+# 5차 검토 (1.4.68): 보고서 사례 전부. 정상 표기가 0건이 되던 것(±·부호 앞 글자, 같은 단위 꼬리)과 오일치
+NUMBER_SEARCH_CASES_5 = [
+    # [치명] ± 앞 글자 제한 없음 (+/-, +- 포함)
+    ("±0.5 mm", "100±0.5 mm", True), ("±0.5 mm", "Φ10±0.5mm", True), ("±5%", "5V±5%", True), ("±10%", "AC220V±10%", True),
+    ("±10%", "24VDC±10%", True), ("±0.1", "공차±0.1", True), ("±0.1", "R5±0.1", True), ("±1 dB", "3 dB±1 dB", True),
+    ("±2%", "1000 ppm±2%", True), ("정격 전압 5V ±5%", "정격 전압: 5V±5%", True), ("±0.1 mm", "치수 100±0.1 mm", True),
+    ("5 V ±5%", "5V±5%", True), ("220V ±10%", "AC 220V±10%", True), ("±5 %", "5 V±5 %", True), ("±10 %", "정격±10 %", True),
+    ("±0.5", "100+/-0.5", True), ("±0.5", "100+-0.5", True), ("5V±5%", "5V±5%", True), ("5V±5%", "5V 5%", False),
+    # 빼기 부호: 앞이 한글·=·: 이면 부호, 영문·숫자면 대시
+    ("-20℃", "온도-20℃", True), ("-20 ℃", "Ta=-20℃", True), ("-20", "온도:-20℃", True), ("-20", "X-20", False),
+    ("20", "온도-20℃", False), ("-5", "+/-5", False),
+    # [높음] (a) + 또는 부호 없는 숫자는 ±에 맞지 않음
+    ("+10%", "±10%", False), ("+5V", "±5V", False), ("+5 V", "±5 V 이내", False), ("5V", "±5V", False),
+    ("10%", "+/-10%", False), ("10%", "+- 10%", False), ("+5V", "5V", True), ("+5V", "+5V", True),
+    # [높음] (b) 숫자(+단위) 뒤 띄어쓴 대시는 범위 ('0 - 20 ℃'의 20은 -20이 아님)
+    ("-20 ℃", "0 - 20 ℃", False), ("-20 ℃", "0 \u2013 20 ℃", False), ("-20 ℃", "0 -20 ℃", False), ("-20", "10 - 20", False),
+    ("-5 V", "입력 0 -5 V", False), ("-3 dB", "1 - 3 dB", False), ("-20℃", "온도 0 ~ -20℃", True),
+    ("-20 ℃", "5 V - 20 ℃", False), ("20", "10 -20", True), ("100 Hz", "10 \u2212100 Hz", True), ("20", "10~-20", False),
+    # [중간] 같은 단위 꼬리는 허용, 다른 단위로 이어지면 아님
+    ("5 V", "5 Vrms", True), ("5 V", "5 Vp-p", True), ("5 V", "5 Vpp", True), ("5 V", "5 Vin", True), ("5 V", "5 Vcc", True),
+    ("5 V", "5 Vmax", True), ("5 V", "5 Vmin", True), ("5 V", "5 VAC", True), ("5V", "5 Vrms", True),
+    ("3 s", "3 sec", True), ("3 s", "3 secs", True), ("10 min", "10 mins", True), ("10 min", "10 minutes", True),
+    ("10 h", "10 hr", True), ("10 h", "10 hrs", True), ("30 dB", "30 dBA", True), ("1 bar", "1 barg", True),
+    ("1 MPa", "1 MPaG", True), ("5 V", "5 VA", False), ("10 m", "10 mm", False), ("10 m", "10 MΩ", False),
+    ("10 m", "10 min", False), ("1 A", "1 Ah", False), ("30 dB", "30 dBm", False), ("30 dB", "30 dBi", False),
+    ("1 kg", "1 kgf", False), ("100 g", "100 gf", False), ("1 W", "1 Wh", False), ("2 s", "2 sq", False),
+    # (여유) 표기 차이: 단위 글자, 곱하기, 지름, 시각, 영숫자 코드 경계
+    ("10 kΩ", "10 kohm", True), ("10 kΩ", "10 k\u2126", True), ("10 Ω", "10 ohm", True), ("100mm", "100㎜", True),
+    ("10 mA", "10 ㎃", True), ("100 ㎜", "100 mm", True), ("10 m", "10 ㎜", False),
+    ("M6x1.0", "M6×1.0", True), ("M6×1.0", "M6x1.0", True), ("M6x1.0", "M6 1.0", False), ("Φ10", "Ø10", True),
+    ("08:30", "8:30", True), ("8:30", "08:30", True), ("8:30", "18:30", False), ("08:30", "08 30", False),
+    ("ABC-1234", "ABC-1234", True), ("ABC-1234", "(ABC-1234)", True), ("ABC-1234", "XABC-1234", False),
+    ("ABC-1234", "ABC-1234-5", False), ("ABC-1234", "ABC-12345", False),
+]
+
+
+@pytest.mark.parametrize("query,text,want", NUMBER_SEARCH_CASES_5)
+def test_number_search_boundaries_review5(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want, (query, text)
+
+
+def test_number_safety_net_candidates(tmp_path, capsys):
+    # 5차 검토 S: 정확 일치 0건 + 검색어에 숫자 -> 숫자 값만 같은 곳을 candidates로 (0건 VERIFIED -> '규정 없음' 단정 방지)
+    p = tmp_path / "규격.txt"
+    p.write_text("정격 전압: DC 5V±5%\n\n외경: Φ10±0.5mm, 길이 100±0.5 mm\n\n보관 온도 -20℃\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "0.5 mm", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["match_mode"] == "number" and "matches" not in out, out
+    assert out["agent_directive"].startswith("UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 1건 - 표기를 확인하세요")
+    c = out["candidates"][0]
+    assert c["number_words"] == {"0.5 mm": "±0.5mm"} and c["matched_terms"] == [] and "외경" in c["snippet"], c
+    code, out = run_main(reader, capsys, "search", "--query", "20 ℃", "--file", str(p))   # 부호 없는 20은 -20과 다름
+    assert out["match_mode"] == "number" and out["candidates"][0]["number_words"] == {"20 ℃": "-20℃"}, out
+    code, out = run_main(reader, capsys, "search", "--query", "보관 AND 20", "--file", str(p))  # 숫자 없는 검색어는 정확히
+    assert out["match_mode"] == "number" and out["candidates"][0]["matched_terms"] == ["보관"], out
+    # 숫자 경계는 지킴: 느슨한 검색도 0건이면 그때만 0건 VERIFIED
+    code, out = run_main(reader, capsys, "search", "--query", "0.05 mm", "--file", str(p))
+    assert out["count"] == 0 and out["match_mode"] == "exact" and out["agent_directive"].startswith("VERIFIED: 0건"), out
+    code, out = run_main(reader, capsys, "search", "--query", "5V ±5%", "--file", str(p))  # 정확 일치는 그대로
+    assert out["count"] == 1 and out["match_mode"] == "exact", out
+
+
+@pytest.mark.parametrize("text", ["1E999 Ω 이상", "1×10^999 Ω 이상", "1×10\u2079\u2079\u2079 Ω 이상", "10^999 Ω 이상", "1E-120 A 이하"])
+def test_spec_norm_exponent_over_two_digits_is_not_a_condition(text):
+    # 5차 검토: 지수는 2자리까지 계산. 3자리 이상은 조건으로 읽지 않음 (check에서 판단필요)
+    n = reader.spec_norm(text)
+    assert "지수 범위 밖" in n and reader.spec_conditions(n) == [], n
+    assert reader.spec_norm("1E99 V")[:3] == "100" and reader.spec_norm("1×10^12 Ω") == "1000000000000 Ω"
 
 
 @pytest.mark.parametrize("query,text,want", [

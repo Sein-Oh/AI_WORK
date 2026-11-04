@@ -3986,7 +3986,8 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
             return out
         conds = same
     if mode != "exact":
-        out.update(verdict="판단필요", reason="검색어 일부만 맞음(partial)" if mode == "partial" else "한 글자 다른 낱말로 찾음(fuzzy)")
+        out.update(verdict="판단필요", reason={"partial": "검색어 일부만 맞음(partial)",
+                                              "number": "숫자 값만 같은 곳에서 찾음(number)"}.get(mode, "한 글자 다른 낱말로 찾음(fuzzy)"))
         if conds:
             out["condition"] = ", ".join(reader.cond_text(c) for c in conds[:3])
         return out
@@ -4088,12 +4089,18 @@ def cmd_check(args) -> Dict[str, Any]:
             fields["full_result_file"] = out
     elif len(results) > CHECK_SHOWN:
         fields["full_result_file"] = memo
-    nexts = [rt.next_command("excel.py", ["comment", "--target", args.target, "--action", "add", "--file", memo, "--dry-run"],
-                             "자동 판정(참고)·읽은 조건·근거를 값 칸 메모로 달기 미리보기 "
-                             "(사용자가 판정을 확인한 뒤 next_commands[0]의 --dry-run을 뺀 명령)")]
     if info.get("remaining"):
-        nexts.append(rt.next_command("excel.py", _check_command(args), f"규격서 {info['remaining']}개가 아직 등록되지 않아 다시 대조 (같은 명령)"))
+        # 규격서 등록이 남음: 대조가 끝나지 않았으니 메모 미리보기 대신 같은 명령(이어서 등록하고 다시 대조)만 줌 (CONTINUE와 같은 흐름)
+        nexts = [rt.next_command("excel.py", _check_command(args), f"규격서 {info['remaining']}개가 아직 등록되지 않아 다시 대조 (같은 명령)")]
         problems.append(f"규격 폴더의 문서 {info['remaining']}개를 아직 등록하지 못해 대조에 쓰지 않음")
+        action = ("대조가 끝나지 않았습니다: 사용자에게 지금까지의 결과를 알리고 next_commands[0](같은 명령)을 그대로 다시 실행해 "
+                  "남은 규격서를 등록하고 이어서 대조하세요. 메모는 대조를 마친 결과의 next_commands로 합니다.")
+    else:
+        nexts = [rt.next_command("excel.py", ["comment", "--target", args.target, "--action", "add", "--file", memo, "--dry-run"],
+                                 "자동 판정(참고)·읽은 조건·근거를 값 칸 메모로 달기 미리보기, 변경 없음 "
+                                 "(사용자가 판정을 확인한 뒤에만 이 명령에서 --dry-run을 뺀 명령)")]
+        action = ("사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자 확인 뒤에만 "
+                  "그 명령에서 --dry-run을 뺀 명령을 실행하세요. 같은 check는 다시 실행하지 마세요.")
     if info.get("skipped"):
         problems.append(f"읽지 못한 규격 문서 {len(info['skipped'])}개: " + ", ".join(os.path.basename(s["file"]) for s in info["skipped"][:5]))
     fields["next_commands"] = nexts
@@ -4107,7 +4114,10 @@ def cmd_check(args) -> Dict[str, Any]:
     problems.insert(0, CHECK_ADVISORY)
     if not_decided:
         problems.insert(1, f"판단필요 {not_decided}행(needs_review)은 도구가 판정하지 못함: 사용자가 근거를 보고 정해야 함")
-    return rt.ok_unverified(TOOL, "check", preview, problems, **fields)
+    payload = rt.ok_unverified(TOOL, "check", preview, problems, **fields)
+    # 기본 문구('다시 실행하지 말고 그대로 알리세요')는 메모 미리보기·이어서 대조와 부딪혀 이 명령의 행동으로 바꿈
+    payload["agent_directive"] = "UNVERIFIED: 실행했지만 확인하지 못했습니다: " + "; ".join(problems) + ". " + action
+    return payload
 
 
 CHECK_ADVISORY = ("자동 판정은 참고용입니다(규격 문장을 기계로 해석함). 행마다 읽은 조건(condition)과 근거 문장(spec_text)을 "

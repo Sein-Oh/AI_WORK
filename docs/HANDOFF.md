@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.63**, **office-cli 1.4.67**
+- main 기준 도구 버전: **ml-kit 2.9.63**, **office-cli 1.4.68**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -50,6 +50,7 @@
 | office-cli 1.4.52~1.4.61 | `transfer --method`·`search -c` 삭제, 여러 칸 한 번에 `excel.py write --cells`, 시트 보호 `sheet_protected`와 거부된 수식 `[추천]`(되돌림), reader 등록·검색 `CONTINUE:`(`OFFICE_CLI_TIME_LIMIT`), 규격 대조 `excel.py check`, 열기 감시 30초 `drm_or_dialog`, `reader.py diff`(판 비교), 메일 짧은 `id`(긴 값은 `entry_id`)·`thread`·`calendar --days`, `word.py fill --file` |
 | office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`CLI/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
 | office-cli 1.4.63 | 독립 검토 버그 수정: 2열 표 파일(칸값·메모·값 파일)의 셋째 열은 쓰기 전에 STOP_RETRY(큰따옴표 안내), `--cells` 따옴표·수식 나누기, `comment --append` 재실행 중복, 엑셀 쓰기 실패 후 되돌리기가 글자 상수(`007`, `1-2`)를 바꾸던 것, `check`가 같은 문장의 다른 항목 조건을 섞던 것과 칸 단위 없음은 `판단필요`, `word.py fill` 표 칸에 행·열 머리글 표시·문서 보호 확인, 열기 감시가 사용자 문서가 있는 Word·PowerPoint를 끝내지 않음 |
+| office-cli 1.4.68 | 5차 검토 수정: reader 숫자 검색 안전망(정확 일치 0건 + 숫자가 든 검색어면 숫자 값만 같은 곳을 `candidates`(`match_mode: number`, `number_words`)와 `UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 N건 - 표기를 확인하세요`로, 0건 VERIFIED는 이것도 0건일 때만), `±` 앞 글자 제한 제거(`100±0.5 mm`, `5V±5%`), 한글·`=`·`:` 뒤 빼기는 부호, 숫자 뒤 띄어쓴 대시는 범위, `+`·부호 없는 숫자는 `±`와 다름, 같은 단위 꼬리(`Vrms`, `sec`, `hrs`, `dBA`, `barg`), `kΩ`=`kohm`·`mm`=`㎜`·`M6x1.0`=`M6×1.0`·`Φ`=`Ø`·`08:30`=`8:30`·코드 경계, `spec_norm` 지수 2자리까지, `check` 안내에 메모 미리보기 행동(등록이 남으면 같은 명령 다시 대조만) |
 | office-cli 1.4.67 | 4차 검토 수정: `excel.py check` 결과는 늘 `UNVERIFIED:`(자동 판정은 참고용, 행마다 읽은 조건·근거를 보여 주고 사용자 확인 뒤 메모. 메모에 `자동 판정(참고)`·읽은 조건·근거), 해석 버그(유니코드 빼기, `±N 이내`, ohm 대소문자, 지수 표기, `dB(A)` 꼬리, 최대·최소·약·`~ 시`·단서·부정문, 단위 없는 수치·치수·소수점 쉼표, (c)는 한계 낱말이 있을 때만, `A에서 B로`), 말뭉치 261건. reader 숫자 검색: 부호(`-20 ℃` != `20 ℃`)·단위 끝 경계(`10 m` != `10 mm`)·기호 소수 경계, `10%` = `10.0 %`, 날짜 표기, 천 단위 쉼표 3자리. outlook 번호 잠금은 운영체제 잠금(`msvcrt.locking`/`fcntl.flock`)으로 바꿔 번호 중복 경합 제거 |
 | office-cli 1.4.66 | 3차 검토 수정: `excel.py check` 보수적 판정(합치는 규칙은 아래·위 한계 -> 범위, 기준 값 + `±N 단위`/`±N %`, 기준 값 + 품는 양쪽 범위 셋뿐, 그 밖에 조건이 둘 이상이면 `판단필요`, `사용 범위`·`동작 범위`는 별개 항목), 표준 판정 말뭉치 `tests/check_corpus.tsv`(132건), 숫자 검색어 `2.0`이 `2.5`에 맞던 회귀, 조사 `로`는 ㄹ 받침 뒤만, 전각 단위 글자(`㎜` 등), 메일 번호 잠금(쥔 동안 10초 상한, pid 확인), 숨은 Word 종료(문서 수 재시도, 자기 문서뿐이면 끔) |
 | office-cli 1.4.65 | 독립 검토 2차 재검토 수정: 메일 짧은 `id`는 번호 파일을 못 읽거나 깨져도 1부터 다시 매기지 않음(그 결과는 긴 EntryID, 잠금 파일·`outlook_ids.next`), `excel.py check`의 허용·변동 범위 절을 앞 항목 한계로, 숨은 Word는 남은 문서가 없을 때만 끝냄, 사용자가 띄운 PowerPoint의 DisplayAlerts는 바꾸지 않음, 셋째 열 오류에 `[추천]` 대신 "고친 줄", 숫자 검색어 `2.1` 장절 경계, 넓혀 찾은 검색 안내 유지·조사 `로`, office-mail `--send` 확인 순서 |
