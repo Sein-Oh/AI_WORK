@@ -186,7 +186,7 @@ def test_predict_out_is_not_overwritten(work):
 
     p2 = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--save", str(out), "--overwrite")
     assert os.path.normcase(p2["output_file"]) == os.path.normcase(str(out)) and "recovered" not in p2
-    assert out.read_text(encoding="cp949") != "사용자 결과\n"
+    assert out.read_bytes() != "사용자 결과\n".encode("cp949")
 
 
 def test_report_default_name_is_not_overwritten(work):

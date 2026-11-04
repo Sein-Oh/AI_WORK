@@ -25,10 +25,10 @@
    - **사용자 확인 없이 지우거나 덮어쓰지 않습니다**: 불완전한 `vN` 폴더는 지우지 않고 `[WARN]`과 `incomplete_versions`로 알린 뒤 그 번호를 건너뜁니다. 이미 있는 `--version`은 `--overwrite` 없이는 거부합니다.
      예측 결과·보고서 파일이 이미 있으면 시각을 붙인 새 이름으로 저장하고 JSON `recovered`에 적습니다 (덮어쓰기는 `--overwrite`).
 
-5. **터미널 및 인코딩 무결성 (Clean Terminal Principle & CP949/UTF-8 Dual Guard)**:
+5. **터미널 및 인코딩 무결성 (Clean Terminal Principle & UTF-8 BOM CSV)**:
    - Windows 콘솔의 폰트 폭 계산 오차, 줄바꿈 꼬임, 로그 오염, 인코딩 에러(`UnicodeEncodeError`)를 유발하는 유니코드 이모지(아이콘, 원문자 등)의 사용을 엄격히 금지하고 표준 텍스트 태그(`[INFO]`, `[PROGRESS]`, `[WARN]`, `[ERROR]`, `[STATUS]`)만을 사용합니다.
      진행 줄은 `[PROGRESS] 45% <내용>` 한 줄씩(줄 덮어쓰기 `\r`과 막대 `[===---]` 없음), `--history` 표의 머리는 `[STATUS]`.
-   - 한국어 Windows 환경에서 Excel 더블클릭 시 한글이 깨지지 않도록 모든 데이터 CSV는 `CP949`를 우선 적용하며, 특수문자 예외 발생 시 `utf-8-sig`로 자동 폴백합니다.
+   - 도구가 쓰는 CSV(예측 결과, `excluded_rows.csv`, `model_dataset.csv`)는 모두 BOM이 붙은 UTF-8(`utf-8-sig`)입니다. 한국어 Windows Excel이 더블클릭으로 바로 열고, 에이전트의 파일 읽기 도구가 다른 인코딩으로 오인하지 않습니다 (CP949 CSV를 깨진 글자로 읽은 에이전트가 제외 이유를 지어낸 사례). 도구가 읽을 때는 인코딩을 자동 판별합니다.
 
 ---
 
@@ -100,7 +100,7 @@ OpenCode는 `skills/<name>/SKILL.md` 를 찾으며 **폴더 이름이 스킬 이
     ├── next_features_*.txt    # next_commands용 피처 목록 (피처 15개 초과이거나 이름에 큰따옴표가 있을 때. 타겟은 next_targets.txt)
     ├── excluded_rows.csv      # 학습에서 뺀 행 (원본 행, 구분, 이유, 실제값, 예측값)
     ├── export/                # 성능예측표용으로 다시 학습한 모델과 후보 표. _fits/: 후보 학습 저장 (나눠서 진행)
-    └── model_dataset.csv      # 학습 당시 헤더 정제, 결측치 대치, 파생변수가 완료된 스냅샷 (CP949/UTF-8 호환)
+    └── model_dataset.csv      # 학습 당시 헤더 정제, 결측치 대치, 파생변수가 완료된 스냅샷 (UTF-8 BOM)
 ```
 
 ---
@@ -468,7 +468,10 @@ python ml_train.py -f sample.xlsx --best --task classification
 - 학습 범위(`feature_stats`, 예측 시 외삽 경고 기준)와 타겟 통계는 학습에 쓴 행으로만 계산합니다.
   `feature_stats`는 유효숫자 12자리로 저장합니다.
 - 산출물: `vX/excluded_rows.csv` (열: 타겟, 원본 행, 구분(직접 표시/자동 이상치), 이유, 실제값, 예측값). 원본 행은 엑셀 행 번호(CSV는 빈 줄을 뺀 줄 번호).
-- 결과 JSON: `exclusions` = `{타겟: {column, manual, auto, forced_include, auto_note, all_rows_score}}`, `excluded_rows_file`. 원장에는 `exclusions`, `model_<타겟>.json`에는 `excluded`, `leaderboard.json` 챔피언에는 `all_rows_score`.
+- 결과 JSON: `exclusions` = `{타겟: {column, manual, auto, forced_include, auto_note, all_rows_score}}`, `excluded_rows_file`,
+  `excluded_count`(뺀 행 수, 타겟별 합), `excluded_reasons`(이유별 행 수: `제외` 열의 글, 자동은 `자동 이상치: <열>`),
+  `excluded_preview`(앞 20행: `target`, `row`(원본 행), `kind`(`직접`/`자동`), `reason`, `value`(타겟 실제값)), `excluded_preview_truncated`.
+  에이전트는 CSV를 열지 않고 이 키만 읽습니다. 원장에는 `exclusions`, `model_<타겟>.json`에는 `excluded`, `leaderboard.json` 챔피언에는 `all_rows_score`.
   제외한 행이 없고 `포함` 표시도 없으면 이 키들은 생기지 않습니다.
 - 보고서: 요약 표에 "검증 R² (제외 행 포함)" 열, 데이터 장에 제외 규칙과 타겟별 행 수, 타겟 장에 한 줄, 실측 대비 예측 그림에 학습 제외 행을 주황색 X로 표시.
 
@@ -1153,7 +1156,7 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
 ## 12. 실무 트러블슈팅 및 FAQ (Engineering FAQ)
 
 ### Q1. 한국어 Windows Excel에서 CSV를 열었을 때 한글이 깨집니다.
-- **해결 완료**: Windows 환경의 Excel은 UTF-8이 아닌 ANSI(CP949)를 기본 표준으로 인식합니다. `ml-kit`의 모든 모듈(`ml_train.py`, `ml_predict.py`)은 CSV 출력 시 **`CP949`를 기본값으로 적용**하며, 규격 외 특수문자가 감지될 경우 자동으로 `utf-8-sig`로 변환하여 저장하므로 더블클릭 시 100% 한글이 정상 출력됩니다.
+- **해결 완료**: Windows 환경의 Excel은 UTF-8이 아닌 ANSI(CP949)를 기본 표준으로 인식합니다. `ml-kit`의 모든 모듈은 CSV를 **BOM이 붙은 UTF-8(`utf-8-sig`)** 로 저장합니다. Excel은 BOM을 보고 UTF-8로 열므로 더블클릭해도 한글이 정상 출력되고, 에이전트의 파일 읽기 도구도 같은 글자로 읽습니다.
 
 ### Q2. 엑셀 파일 상단에 제목과 결재란, 단위 행이 섞여 있어 데이터 로드가 깨집니다.
 - **해결 완료**: `--header-row`, `--unit-row`, `--data-row` 파라미터를 활용하십시오. 상단 빈 행은 내장 스니퍼가 자동 건너뛰며, 단위 행(`--unit-row`)을 지정하면 `반응온도(°C)`와 같이 컬럼명에 안전 결합됩니다.

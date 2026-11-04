@@ -1453,11 +1453,13 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
         [c for c in schema["numeric"] if c not in created and c in X.columns]
     auto = np.zeros(n, dtype=bool)
     reasons = [""] * n
+    auto_cols: List[List[str]] = [[] for _ in range(n)]
     for col in check_cols:
         series = y if col == target_name else X[col]
         flags, med = _outlier_flags(series.where(candidate))
         for i in np.flatnonzero(flags):
             auto[i] = True
+            auto_cols[i].append(strip_unit(col))
             val = pd.to_numeric(pd.Series([series.iloc[i]]), errors="coerce").iloc[0]
             reasons[i] += ("; " if reasons[i] else "") + f"{strip_unit(col)} {val:.6g} (중앙값 {med:.6g})"
 
@@ -1477,7 +1479,26 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
             if (in_cls & ~manual & ~auto).sum() < 2:
                 auto[in_cls] = False   # never remove a class from training
     return {"manual": manual, "auto": auto, "forced": forced, "mask": manual | auto,
-            "text": text, "reasons": reasons, "note": note, "checked_columns": check_cols}
+            "text": text, "reasons": reasons, "auto_cols": auto_cols, "note": note, "checked_columns": check_cols}
+
+
+EXCLUDED_PREVIEW_MAX = 20    # excluded rows listed in the training JSON; excluded_rows.csv holds all
+
+
+def excluded_preview_keys(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """JSON keys of the excluded rows: excluded_preview (first EXCLUDED_PREVIEW_MAX: target, row, kind 직접/자동,
+    reason, value = the target value), excluded_reasons (rows per reason: the '제외' text, or '자동 이상치: <columns>'),
+    excluded_count, excluded_preview_truncated."""
+    def _val(v: Any) -> Any:
+        return v if isinstance(v, (int, float, str)) and not (isinstance(v, float) and v != v) else str(v)
+    preview = [{"target": r["타겟"], "row": int(r["원본 행"]), "kind": "직접" if r["구분"] == "직접 표시" else
+                ("조건" if r["구분"] == "조건" else "자동"), "reason": r["이유"], "value": _val(r["실제값"])}
+               for r in rows[:EXCLUDED_PREVIEW_MAX]]
+    reasons: Dict[str, int] = {}
+    for r in rows:
+        reasons[r["_key"]] = reasons.get(r["_key"], 0) + 1
+    return {"excluded_count": len(rows), "excluded_preview": preview, "excluded_reasons": reasons,
+            "excluded_preview_truncated": len(rows) > EXCLUDED_PREVIEW_MAX}
 
 
 def score_with_excluded(task: str, pipe: Any, info: Dict[str, Any], oof_df: pd.DataFrame,
@@ -1839,6 +1860,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     "원본 행": source_rows[i] if i < len(source_rows) else i + 1,
                     "구분": "직접 표시" if plan["manual"][i] else "자동 이상치",
                     "이유": plan["text"][i] if plan["manual"][i] else plan["reasons"][i],
+                    "_key": (plan["text"][i] if plan["manual"][i]
+                             else "자동 이상치: " + ", ".join(plan["auto_cols"][i])),
                     "실제값": actual if task == TASK_CLASSIFICATION else round(float(actual), 6),
                     "예측값": (str(excl_pred[k]) if task == TASK_CLASSIFICATION else round(float(excl_pred[k]), 6)),
                 })
@@ -2060,7 +2083,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # 3-B. Rows left out of training (user marks + automatic outliers), for the user to review in Excel
         excluded_rows_file = None
         if excluded_rows_out:
-            ex_path = write_csv_excel_compatible(pd.DataFrame(excluded_rows_out), os.path.join(staging_dir, "excluded_rows.csv"))
+            ex_path = write_csv_excel_compatible(pd.DataFrame(excluded_rows_out).drop(columns="_key"),
+                                                 os.path.join(staging_dir, "excluded_rows.csv"))
             excluded_rows_file = os.path.join(guard.final_dir, os.path.basename(ex_path))
         exclusion_summary = {t: {k: v for k, v in e.items() if k != "mask"} for t, e in exclusions.items()
                              if e["manual"] or e["auto"] or e["forced_include"] or e["auto_note"]}
@@ -2198,7 +2222,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             f"Champion models and leaderboard packaged into '{os.path.basename(final_version_dir)}'. "
             f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
             + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
-               "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "")
+               "the score with excluded rows (검증 ... 제외 행 포함) from preview, the reasons from excluded_reasons (counts) "
+               "and excluded_preview (row, kind, reason, value) as given, and the excluded_rows_file path. Do not open that file "
+               "and do not guess other reasons. " if excl_brief else "")
             + ("Tell the user the most important inputs (중요 입력 in preview, top_features: share of all inputs). " if top_brief else "")
             + ("Tell the user every item of warnings (duplicate rows, repeated header rows, totals rows). " if train_warnings else "") +
             "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
@@ -2239,6 +2265,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             result["exclusions"] = exclusion_summary
             if excluded_rows_file:
                 result["excluded_rows_file"] = excluded_rows_file
+        if excluded_rows_out:   # the rows and reasons in the JSON: the LLM never needs to open the CSV
+            result.update(excluded_preview_keys(excluded_rows_out))
         if column_aliases:
             result["column_aliases"] = column_aliases
         if unverified:

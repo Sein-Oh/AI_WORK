@@ -8,6 +8,19 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.53] - 2026-11-04
+
+회사 PC 시험: 에이전트가 CP949로 저장된 `excluded_rows.csv`를 깨진 글자로 읽고 제외 이유를 지어냄. 회귀 테스트: `tests/test_train.py`
+`test_marks_auto_outliers_and_all_rows_score`, `test_multiclass_predict_batch_columns` (2.9.52에서 2개 모두 실패).
+
+### 바뀐 동작
+- 도구가 쓰는 CSV(예측 결과 `--save .csv`와 기본 `pred_*.csv`, `inline_pred_*.csv`, `excluded_rows.csv`, `model_dataset.csv`)를 CP949 대신
+  BOM이 붙은 UTF-8(`utf-8-sig`)로 저장합니다. Excel은 더블클릭으로 그대로 엽니다. 도구의 CSV 읽기는 인코딩을 자동 판별하므로 이전 파일도 읽습니다.
+- 학습 결과 JSON에 제외 행을 직접 담습니다 (제외 행이 있을 때만): `excluded_count`, `excluded_reasons`(이유별 행 수: `제외` 열의 글,
+  자동은 `자동 이상치: <열>`), `excluded_preview`(앞 20행: `target`, `row`, `kind` `직접`/`자동`, `reason`, `value`),
+  `excluded_preview_truncated`. `agent_directive`는 이 키를 그대로 알리고 CSV를 열지 말라고 합니다.
+- SKILL.md 2단계: `excluded_reasons`와 `excluded_preview`를 그대로 알리고 `excluded_rows_file`은 열지 않음.
+
 ## [2.9.52] - 2026-11-04
 
 사용자 결정: 쓰지 않는 옵션 정리 (베타, 별칭 없이 없앰). 회귀 테스트: `tests/test_contract.py` `test_old_option_names_are_argument_errors`

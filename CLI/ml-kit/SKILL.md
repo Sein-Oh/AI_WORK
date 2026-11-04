@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.52"
+  version: "2.9.53"
   platform: windows
 ---
 
@@ -72,7 +72,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
   사용자가 행을 빼거나 넣고 싶다고 하면 데이터 파일을 직접 고치지 말고, 엑셀의 `제외` 열에 이유(뺄 때) 또는 `포함`(자동 제외를 막을 때)을 적으라고 안내한다.
 
 결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `top_features`(타겟별 중요 입력과 비중, 합이 1), `recommendations`의 첫 문장. `warnings`(예: 중복 행, 반복된 머리글 행, 합계·평균 행)가 있으면 그대로.
-`exclusions`가 있으면 타겟별 학습 제외 행 수(직접 `manual`, 자동 `auto`), 제외 행 포함 검증 점수 `all_rows_score`, `excluded_rows_file`(뺀 행 목록)도 알린다.
+`exclusions`가 있으면 타겟별 학습 제외 행 수(직접 `manual`, 자동 `auto`), 제외 행 포함 검증 점수 `all_rows_score`, `excluded_reasons`(이유별 행 수)와 `excluded_preview`(행, 직접/자동, 이유, 값)를 그대로, `excluded_rows_file` 경로도 알린다. 그 파일은 열지 않는다.
 다음 단계를 위해 기억할 것: `version_dir`, `goal_met`, `next_commands`.
 
 ## 3단계: 성능 개선

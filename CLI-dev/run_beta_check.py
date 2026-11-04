@@ -136,7 +136,7 @@ def group_b(work, st):
     safe("B", "B2", "생산효율: 직접 제외 1, 자동 제외 1 이상, '포함' 1", b2)
     def b3():
         import pandas as pd
-        rows = pd.read_csv(p["excluded_rows_file"], encoding="cp949")
+        rows = pd.read_csv(p["excluded_rows_file"], encoding="utf-8-sig")
         manual = rows[rows["구분"] == "직접 표시"]
         return (int(manual["원본 행"].iloc[0]) == 105 and manual["이유"].iloc[0] == "센서오류"), manual.to_dict("records")
     safe("B", "B3", "excluded_rows.csv: '센서오류'가 엑셀 105행으로 기록", b3)
@@ -181,7 +181,7 @@ def group_d(work, st):
     def d2():
         _, p, _, _ = run("ml_predict.py", "-m", vdir, "-f", os.path.join(work, "새조건.xlsx"), cwd=work)
         import pandas as pd
-        out = pd.read_csv(p["output_file"], encoding="cp949")
+        out = pd.read_csv(p["output_file"], encoding="utf-8-sig")
         need = {"map_불순물(ppm)", "map_diff_불순물(ppm)", "map_방식_불순물(ppm)"}
         return (need <= set(out.columns) and p["drift_warning"]), sorted(out.columns)[:12]
     safe("D", "D2", "파일 예측에 map_ 열 3종 + 범위 밖 경고", d2)

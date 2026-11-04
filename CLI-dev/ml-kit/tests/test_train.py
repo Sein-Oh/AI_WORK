@@ -252,7 +252,8 @@ def test_multiclass_predict_batch_columns(multiclass):
     work, data, _ = multiclass
     out = work / "pred.csv"
     run_tool("ml_predict.py", "-m", str(work / "proc_ml_data" / "v1"), "-f", data, "--save", str(out))
-    df = pd.read_csv(out, encoding="cp949")
+    assert open(out, "rb").read(3) == b"\xef\xbb\xbf"                     # 2.9.53: UTF-8 BOM, not CP949
+    df = pd.read_csv(out, encoding="utf-8-sig")
     for col in ["pred_품질등급", "conf_품질등급", "proba_품질등급_A등급", "proba_품질등급_C등급"]:
         assert col in df.columns
     assert (df["pred_품질등급"] == df["품질등급"]).mean() > 0.6
@@ -518,7 +519,16 @@ def test_marks_auto_outliers_and_all_rows_score(tmp_path):
     assert "검증 R2(제외 행 포함)" in res["preview"] and "검증 R2=" in res["preview"]
     assert f.read_bytes() == before                                       # data file untouched
 
-    rows = pd.read_csv(res["excluded_rows_file"], encoding="cp949")
+    raw = open(res["excluded_rows_file"], "rb").read()
+    assert raw.startswith(b"\xef\xbb\xbf")                                # 2.9.53: UTF-8 BOM (Excel, LLM read it)
+    rows = pd.read_csv(res["excluded_rows_file"], encoding="utf-8-sig")
+    # 2.9.53: the JSON itself carries the rows and the reasons (the LLM never opens the CSV)
+    prev = {p["row"]: p for p in res["excluded_preview"]}
+    assert set(prev) == {7, 32, 52} and res["excluded_count"] == 3
+    assert prev[52]["kind"] == "직접" and prev[52]["reason"] == "센서오류" and prev[52]["target"] == "생산효율"
+    assert prev[7]["kind"] == "자동" and "생산효율" in prev[7]["reason"] and isinstance(prev[7]["value"], float)
+    assert res["excluded_reasons"] == {"센서오류": 1, "자동 이상치: 생산효율": 1, "자동 이상치: 반응온도": 1}
+    assert "excluded_preview" in res["agent_directive"]
     by_row = {int(r["원본 행"]): r for _, r in rows.iterrows()}
     assert set(by_row) == {7, 32, 52}                                     # Excel rows (header is row 1)
     assert by_row[52]["구분"] == "직접 표시" and by_row[52]["이유"] == "센서오류"
@@ -638,7 +648,7 @@ def test_source_column_is_recorded(capped):
     _, vdir = capped
     meta = json.load(open(os.path.join(vdir, "model_효율.json"), encoding="utf-8"))
     assert meta["input_columns_required"] == ["압력", "온도(°C)"] and "온도(°C)" in meta["feature_stats"]
-    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="cp949")
+    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="utf-8-sig")
     assert "온도(°C)" in snap.columns and "온도상한" in snap.columns
 
 

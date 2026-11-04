@@ -172,7 +172,7 @@ def test_inline_over_five_records_saved_to_file(coded):
     res = run_tool("ml_predict.py", "-m", coded["v"], "-i", str(js))
     assert res["truncated"] is True and res["count"] == 8 and res["output_file"]
     assert os.path.dirname(res["output_file"]) == str(coded["work"]) and res["verified"] is True
-    assert len(pd.read_csv(res["output_file"], encoding="cp949")) == 8
+    assert len(pd.read_csv(res["output_file"], encoding="utf-8-sig")) == 8
     one = run_tool("ml_predict.py", "-m", coded["v"], "-i", "a=1,b=1,코드=012")
     assert one["truncated"] is False and one["output_file"] is None
 
@@ -387,7 +387,7 @@ def mc_model(tmp_path_factory):
 
 def test_snapshot_has_rows_and_exclusions(mc_model):
     _, _, vdir = mc_model
-    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="cp949")
+    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="utf-8-sig")
     assert list(snap["원본행"][:3]) == [2, 3, 4]                       # Excel rows (header is row 1)
     assert snap.loc[snap["원본행"] == 12, "학습제외_생산효율"].item() == 1   # '센서오류' on data row 10 = Excel row 12
 
@@ -409,7 +409,7 @@ def test_file_prediction_columns_and_extrapolation(mc_model, tmp_path):
     new = tmp_path / "new.csv"
     pd.DataFrame({"반응온도": [180, 260, None], "압축압력": [3, 3, 3]}).to_csv(new, index=False)
     res = run_tool("ml_predict.py", "-m", vdir, "-f", str(new))
-    out = pd.read_csv(res["output_file"], encoding="cp949")
+    out = pd.read_csv(res["output_file"], encoding="utf-8-sig")
     assert {"map_생산효율", "map_diff_생산효율", "map_방식_생산효율"} <= set(out.columns)
     assert out["map_방식_생산효율"][1].endswith("[외삽]") and out["map_방식_생산효율"][2].startswith("계산 불가")
     assert out["map_diff_생산효율"][0] == pytest.approx(out["pred_생산효율"][0] - out["map_생산효율"][0], abs=1e-3)
@@ -421,9 +421,9 @@ def test_warning_when_measured_data_disagrees(mc_model, tmp_path):
     v2 = tmp_path / "v_tampered"
     shutil.copytree(vdir, v2)
     snap_path = v2 / "model_dataset.csv"
-    snap = pd.read_csv(snap_path, encoding="cp949")
+    snap = pd.read_csv(snap_path, encoding="utf-8-sig")
     snap["생산효율"] += 10                                                # measured data now 10 above the model
-    snap.to_csv(snap_path, index=False, encoding="cp949")
+    snap.to_csv(snap_path, index=False, encoding="utf-8-sig")
     res = run_tool("ml_predict.py", "-m", str(v2), "-i", "반응온도=180,압축압력=3")
     assert res["map_check_warning"] and "90% 예측 범위 밖" in res["map_check_warnings"][0]
     assert res["predictions_summary"]["생산효율"]["map_check"][0]["outside_interval"]
@@ -434,8 +434,8 @@ def test_old_snapshot_and_missing_snapshot(mc_model, tmp_path):
     _, _, vdir = mc_model
     old = tmp_path / "v_old"
     shutil.copytree(vdir, old)
-    snap = pd.read_csv(old / "model_dataset.csv", encoding="cp949").drop(columns=["원본행", "학습제외_생산효율"])
-    snap.to_csv(old / "model_dataset.csv", index=False, encoding="cp949")
+    snap = pd.read_csv(old / "model_dataset.csv", encoding="utf-8-sig").drop(columns=["원본행", "학습제외_생산효율"])
+    snap.to_csv(old / "model_dataset.csv", index=False, encoding="utf-8-sig")
     res = run_tool("ml_predict.py", "-m", str(old), "-i", "반응온도=180,압축압력=3")     # snapshot from before 2.7.0
     assert "map_check" not in res["predictions_summary"]["생산효율"] and "다시 학습" in res["map_check_notes"][0]
 
@@ -479,7 +479,7 @@ def _snapshot(version_dir, n=3000):
     df = pd.DataFrame(r.uniform(0, 1, (n, 4)), columns=list("abcd"))
     df["y"] = df.sum(axis=1)
     df["원본행"] = np.arange(2, n + 2)
-    df.to_csv(os.path.join(version_dir, "model_dataset.csv"), index=False, encoding="cp949")
+    df.to_csv(os.path.join(version_dir, "model_dataset.csv"), index=False, encoding="utf-8-sig")
     return df
 
 

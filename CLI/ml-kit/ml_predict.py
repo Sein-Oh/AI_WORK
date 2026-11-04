@@ -57,7 +57,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.52"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.53"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -2314,15 +2314,13 @@ def save_with_lock_fallback(path: str, writer: Callable[[str], None], what: str 
 
 def write_csv_excel_compatible(df: pd.DataFrame, path: str) -> str:
     """
-    Writes CSV that opens correctly by double-click in Korean Windows Excel:
-    CP949 by default, utf-8-sig fallback when characters are not representable.
+    Writes a CSV that people and LLM agents read: UTF-8 with BOM (utf-8-sig). Korean Windows Excel opens it by
+    double-click, and an agent's file reader does not mistake it for another encoding (a CP949 file was read as
+    garbled text by an agent, which then made up the content). Readers in this tool detect the encoding anyway.
     Returns the path actually written (may differ if the target was locked).
     """
     def _write(p: str) -> None:
-        try:
-            df.to_csv(p, index=False, encoding="cp949")
-        except (UnicodeEncodeError, LookupError):
-            df.to_csv(p, index=False, encoding="utf-8-sig")
+        df.to_csv(p, index=False, encoding="utf-8-sig")
 
     return save_with_lock_fallback(path, _write, what="CSV 파일")
 
