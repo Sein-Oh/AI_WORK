@@ -137,7 +137,7 @@
   - 전용 에이전트: 사내 에이전트 En-Genius에 스킬로 붙이는 패키지를 만들었으나 업데이트를 멈추고 `archive/engenius`에 보관 (2026-11-04).
     다시 쓸 때 원래 자리로 옮기고 zip을 새로 만듦 (archive/README.md). 도구 쪽 En-Genius 대응(임시 폴더 실행 시 고정 데이터 폴더)은 그대로 둠
   - ml-kit 웹 서버: 동료 수요(예측이면 성능예측표로 충분)와 IT 정책·문서 보안 확인 후
-  - `opencode run` 자동화: 사용 중. opencode CLI v2.2.5, 일반 권한 창 (관리자 창에서는 열린 문서를 못 봄), 기본 모델은 opencode.jsonc의 `model`.
+  - `opencode run` 자동화: 사용 중. opencode CLI v2.2.5, 일반 권한 창 (관리자 창에서는 열린 문서를 못 봄), 기본 모델은 `%USERPROFILE%\.config\opencode\opencode.jsonc`의 `model`.
     `run_all_tests.py --gemma`가 시나리오 14개를 한 세션에 보내고 `grade_opencode.py --runs`로 채점 (2026-11-04 회사 PC 12/14, R1·R2는 2.9.40에서 수정).
     이후 office-cli 묶음 O(S1 샘플, O1~O5)를 더해 자동 19개 + 수동 전용 O3(Outlook 메일). 회사 PC 오류 로그의 지어낸 office-cli 옵션은 공통 규칙 `no_fake_office`
 

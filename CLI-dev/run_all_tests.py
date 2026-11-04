@@ -855,7 +855,7 @@ def step_gemma(stage, args, ctx):
         if stop:
             break
         if not session:                                          # 첫 요청에서 세션이 안 생기면 나머지도 같음
-            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(opencode.jsonc의 model)과 접속을 확인하세요.")
+            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(%USERPROFILE%\\.config\\opencode\\opencode.jsonc의 model)과 접속을 확인하세요.")
             stage.details.append((f"{sid} opencode 오류 출력", _read(err_path) or "(없음)"))
             break
     stage.details.append(("opencode run 실행 기록", "\n".join(log)))
