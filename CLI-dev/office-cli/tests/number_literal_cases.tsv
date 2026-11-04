@@ -463,3 +463,39 @@ A 10	CA10	notA
 220 V	110/220 V	A
 85 %RH	85 ℃/85 %RH	A
 10 m	10 m-20 m	A
+# 10차 검토: 숫자 앞·단위 뒤 허용 목록 (1.4.73)
+500 V	1\uff0c500 V	notA
+5 V	1\uff0e5 V	notA
+5 V	1\u00b75 V	notA
+40 \u2103	\u25b340 \u2103	notA
+500 V	1\u2018500 V	notA
+500 V	1`500 V	notA
+500 V	1_500 V	notA
+500 V	1\u2032500 V	notA
+40 \u2103	\u25b240 \u2103	notA
+5 V	1:5 V	notA
+5 V	1\u00f75 V	notA
+5 V	1\5 V	notA
+60 Hz	1\60 Hz	notA
+5 A	\u00bd5 A	notA
+5 V	5 V\u3383	notA
+5 V	5 V\u33a3	notA
+16 V	15/16 V	notA
+100 V	10/100 V	notA
+5 V	정격 1\uff0c5 V 이하	notA
+40 \u2103	온도 \u25b340 \u2103	notA
+5 V	5 V\u2032	notA
+5 V	5 V(1)	notA
+5 V	5 V'	notA
+5 V	"5 V	notA
+5 V	전압=5 V	A
+25 \u2103	온도:25 \u2103	A
+5 V	(5 V)	A
+5 V	[5 V]	A
+5 V	정격5 V이하	A
+10 mm	5\uff5e10 mm	A
+10 mm	5\u301c10 mm	A
+5 V	5 V, 12 V	A
+5 V	출력 5 V.	A
+5 V	출력 5 V: 정격	A
+5 V	5 V; 12 V	A

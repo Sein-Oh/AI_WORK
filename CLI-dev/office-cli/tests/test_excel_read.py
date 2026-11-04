@@ -1107,9 +1107,9 @@ def test_check_verdicts_memo_and_next_command(check_env, capsys):
     assert any("자동 판정(참고): 근거없음 (규격서에서 항목을 찾지 못함) - 읽은 조건: 없음 - 근거: 없음" in m for m in memo), memo
     cmd = out["next_commands"][0]["command"]
     assert "excel.py" in cmd and "comment" in cmd and "--dry-run" in cmd and out["memo_file"] in cmd
-    # 5차 검토(1.4.68): 안내에 메모 미리보기 행동(채점 O1: 미리보기 -> 사용자 확인 뒤 --dry-run을 뺀 명령)
+    # 5차 검토(1.4.68): 안내에 메모 미리보기 행동(채점 O1: 미리보기 -> 사용자 확인 뒤 미리보기 결과의 confirm_commands, 1.4.73)
     d = out["agent_directive"]
-    assert "next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고" in d and "사용자 확인 뒤에만" in d and "--dry-run을 뺀" in d, d
+    assert "next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고" in d and "'예'라고 한 뒤에만" in d and "confirm_commands[0]" in d, d
     assert "다시 실행하지 말고 사용자에게 그대로 알리세요" not in d and len(out["next_commands"]) == 1
 
 

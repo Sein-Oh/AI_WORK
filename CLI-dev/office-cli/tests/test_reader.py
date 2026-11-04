@@ -1837,7 +1837,15 @@ def test_search_ignores_symbols_and_spacing_but_keeps_number_boundaries(query, t
 
 
 def test_snippet_highlights_symbol_insensitive_match():
-    assert "**SOI #1**" in reader.make_snippet("Activities for SOI #1 are listed", ["SOI 1"], 30)
+    assert "[[SOI #1]]" in reader.make_snippet("Activities for SOI #1 are listed", ["SOI 1"], 30)
+
+
+def test_snippet_marks_layer_b_differently():
+    # 10차 검토(1.4.73): 층 A 자리만 **, 숫자가 든 검색어의 층 B 자리(표기가 다른 곳)는 [[ ]], 숫자 없는 검색어는 **
+    s = reader.make_snippet("허용 1·5 V 전원", ["5 V", "전원"], 20)
+    assert "[[5 V]]" in s and "**전원**" in s and "**5 V**" not in s, s
+    s = reader.make_snippet("보관 -40 ℃, 동작 40 ℃", ["40 ℃"], 30)
+    assert "-[[40 ℃]]" in s and "동작 **40 ℃**" in s, s
 
 
 # ---------------------------------------------------------------------------
@@ -1851,7 +1859,7 @@ def test_clear_requires_target_and_dry_run_changes_nothing(tmp_path):
     assert code == 1 and "--dry-run" in out["message"]
     code, out = run_reader("clear", "--name", "규격", "--dry-run")
     assert code == 0 and out["dry_run"] is True and out["count"] == 1 and out["planned"] == ["캐시 삭제: a규격.txt"]
-    assert "clear --name 규격" in out["next_commands"][0]["command"] and "--dry-run" not in out["next_commands"][0]["command"]
+    assert "clear --name 규격" in out["confirm_commands"][0]["command"] and "--dry-run" not in out["confirm_commands"][0]["command"]
     assert len(reader.load_index()) == 2
 
 

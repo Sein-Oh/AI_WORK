@@ -4,7 +4,7 @@ description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.72"
+  version: "1.4.73"
   platform: windows
 ---
 
@@ -13,7 +13,7 @@ metadata:
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
 2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
-3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다.
+3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번.
 4. `--target`을 빼면 사용자가 보고 있는 통합문서다. 다른 열린 문서는 `--target "<이름>"`, 닫힌 파일은 `--target "<전체경로>"`.
 5. 표와 여러 줄 값은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .csv를 만들고 `--file "<그 경로>"`로 넘긴다. `$`가 든 값(수식 `=$A$1`)은 작은따옴표 `'...'`로 감싼다.
 6. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.

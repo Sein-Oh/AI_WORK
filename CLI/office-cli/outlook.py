@@ -14,8 +14,8 @@
     new      새 메일
     reply    답장 (--all: 전체 답장). 원본 대화 이력 유지. 보내지 않은 초안은 원본으로 쓰지 않음
     forward  전달
-    send     new/reply/forward가 저장한 초안(draft_id) 보내기. 결과의 next_commands[0]을 사용자가 확인한 뒤에만.
-             같은 초안은 한 번만 나감 (이미 보냈거나 지운 초안, 받은 메일은 보내지 않음).
+    send     new/reply/forward가 저장한 초안(draft_id) 보내기. 결과의 confirm_commands[0]을 사용자가 확인한 뒤에만.
+             이 도구가 만든 초안만, 한 번만 나감 (사용자가 쓰던 초안, 이미 보냈거나 지운 초안, 받은 메일은 보내지 않음).
              발송 전 수신자 주소를 확인하고, 확인되지 않으면 보내지 않고 작성 창을 띄웁니다.
 
 예:
@@ -39,6 +39,7 @@ import _runtime as rt  # noqa: E402
 
 TOOL = "outlook"
 OL_MAIL = 43
+OL_FOLDER_DRAFTS = 16      # 임시 보관함 (send는 여기 있는 초안만 보냄)
 DEFAULT_FOLDERS = {"inbox": 6, "받은편지함": 6, "sent": 5, "보낸편지함": 5, "drafts": 16, "임시보관함": 16,
                    "deleted": 3, "지운편지함": 3, "outbox": 4, "보낼편지함": 4, "junk": 23, "정크메일": 23}
 BLOCKED_ATTACH = {".exe", ".bat", ".cmd", ".com", ".js", ".vbs", ".vbe", ".wsf", ".ps1", ".scr", ".msi", ".lnk",
@@ -852,7 +853,8 @@ def _draft_id(eid: str, subject: str, warnings: List[str]) -> str:
 
 def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
               original: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """작성한 메일을 초안으로 저장하고 작성 창을 띄움. 보내지 않고, 이 초안(같은 항목)을 보내는 send 명령을 next_commands에.
+    """작성한 메일을 초안으로 저장하고 작성 창을 띄움. 보내지 않고, 이 초안(같은 항목)을 보내는 send 명령을 confirm_commands에
+    (사용자 확인 뒤에만, 1.4.73). 초안은 발송 원장(DRAFTS_FILE)에 '이 도구가 만든 초안'으로 기록.
     new/reply/forward에 --send가 없음 (1.4.72): 초안 창이 열린 채 같은 메일을 또 만들어 보내거나(중복 발송),
     --id 없는 두 번째 명령이 열린 초안을 원본으로 잡아 초안에 답장·전달하는 일(엉뚱한 대상)이 구조적으로 생기지 않게."""
     attached, attach_problems = attach
@@ -868,18 +870,25 @@ def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
         why = attach_problems + ([] if eid else ["초안을 임시 보관함에 저장하지 못해 보내는 명령을 만들지 못함"])
         return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄웠습니다: '{extra['subject']}'{note}",
                                 why + ["보내려면 사용자가 작성 창을 확인하고 직접 [보내기]를 누르라고 알리세요"], **extra)
+    problem = remember_draft(eid)
+    if problem:
+        # 이 도구가 만든 초안으로 기록하지 못하면 send가 거부하므로 보내는 명령을 주지 않음 (사용자가 작성 창에서 보냄)
+        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄웠습니다(초안 저장): '{extra['subject']}'{note}",
+                                [f"초안을 발송 원장에 기록하지 못해 보내는 명령을 만들지 못함 ({problem})",
+                                 "보내려면 사용자가 작성 창을 확인하고 직접 [보내기]를 누르라고 알리세요"], **extra)
     warnings: List[str] = []
     extra["draft_id"] = _draft_id(eid, extra["subject"], warnings)
     if warnings:
         extra["warnings"] = warnings
-    cmd = rt.next_command("outlook.py", ["send", "--id", extra["draft_id"]], "사용자가 확인한 뒤 이 초안을 보내기")
-    cmd["needs_user_confirm"] = True
-    extra["next_commands"] = [cmd]
+    # 발송은 next_commands가 아니라 confirm_commands로 (1.4.73): next_commands는 '그대로 실행'하는 다음 단계라
+    # 경량 LLM이 기계적으로 실행해도 메일이 나가지 않게, 사용자 '예' 뒤에만 실행하는 명령은 키를 나눔
+    extra["confirm_commands"] = [rt.next_command("outlook.py", ["send", "--id", extra["draft_id"]],
+                                                 "사용자가 받는 사람·제목을 보고 보내라고 한 뒤에만 이 초안을 보내기")]
     tell = " original(원본 메일의 제목·보낸사람)," if original is not None else ""
     return rt.ok(TOOL, command,
                  f"메일 작성 창을 띄웠습니다(초안 저장): '{extra['subject']}' -> {extra['to'] or '(받는 사람 미입력)'}{note}",
                  f"VERIFIED: 초안을 저장하고 작성 창의 받는 사람과 제목을 다시 읽었습니다. 아직 보내지 않았습니다. 받는 사람·제목,{tell} "
-                 "첨부를 사용자에게 보여 주고, 사용자가 보내라고 확인한 뒤에만 next_commands[0](send)을 1번 실행하세요. "
+                 "첨부를 사용자에게 보여 주고 보낼지 물으세요. 사용자가 '예'라고 한 뒤에만 confirm_commands[0](send)을 1번 실행하세요. "
                  "확인 전에는 대신 발송하지 마세요. 사용자가 작성 창에서 직접 보냈으면 실행하지 마세요. "
                  "이 명령을 다시 실행하지 마세요(초안이 하나 더 생김).",
                  verified=True, **extra)
@@ -888,19 +897,52 @@ def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
 SEND_REFUSED_DIRECTIVE = "발송하지 않았습니다. 같은 명령을 다시 실행하거나 메일을 새로 만들지 말고 message를 사용자에게 그대로 알리세요."
 
 
+def _send_refused(message: str) -> rt.InputError:
+    """send 거부: next_commands 없이 SEND_REFUSED_DIRECTIVE (목록을 다시 보고 다른 id로 보내는 길을 주지 않음, 1.4.73)."""
+    return rt.InputError(message, directive=SEND_REFUSED_DIRECTIVE)
+
+
+def _in_drafts_folder(ns: Any, mail: Any) -> bool:
+    """메일이 임시 보관함(기본 계정 또는 그 메일 저장소의 임시 보관함)에 있는지. 확인하지 못하면 False."""
+    try:
+        here = _text(mail.Parent.EntryID)
+    except Exception:
+        return False
+    if not here:
+        return False
+    for get in (lambda: ns.GetDefaultFolder(OL_FOLDER_DRAFTS), lambda: mail.Parent.Store.GetDefaultFolder(OL_FOLDER_DRAFTS)):
+        try:
+            if _text(get().EntryID) == here:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def cmd_send(args) -> Dict[str, Any]:
-    """new/reply/forward가 저장한 초안(같은 항목)을 보냄. 이미 보냈거나 지운 초안, 보낸·받은 메일은 보내지 않음:
-    한 초안은 한 번만 나감 (중복 발송 방지, 1.4.72)."""
+    """new/reply/forward가 저장한 초안(같은 항목)을 보냄. 거부(보내지 않음, 1.4.73):
+    이 도구가 만든 초안이 아님(발송 원장에 없음: 사용자가 쓰다 둔 초안), 이미 send로 보냄(원장), 임시 보관함에 없음(지운 초안),
+    이미 보냈거나 보낼 편지함에 넘긴 메일(Sent·Submitted), 받은 메일. 원장 기록은 잠금 아래 Send 전에: 동시에 실행한 두 send 중
+    하나만 나감."""
     ns = get_namespace(get_outlook())
-    eid = entry_id(args.id)
+    try:
+        eid = entry_id(args.id)
+    except rt.InputError:
+        raise _send_refused(f"--id {args.id}: 기억한 초안 번호가 아니라 보내지 않았습니다. 사용자에게 작성 창(임시 보관함)의 "
+                            "초안을 확인하고 직접 보내라고 알리세요.") from None
     try:
         mail = ns.GetItemFromID(eid)
     except Exception:
-        raise rt.InputError("초안을 찾을 수 없어 보내지 않았습니다(이미 보냈거나 지웠을 수 있음). "
-                            "사용자에게 보낸 편지함과 임시 보관함을 확인하라고 알리세요.", directive=SEND_REFUSED_DIRECTIVE)
-    if getattr(mail, "Sent", None) is not False or getattr(mail, "Class", OL_MAIL) != OL_MAIL:
-        raise rt.InputError("이 id는 보내지 않은 초안이 아니라 보내지 않았습니다(이미 보낸 메일이거나 받은 메일). "
-                            "사용자에게 보낸 편지함을 확인하라고 알리세요.", directive=SEND_REFUSED_DIRECTIVE)
+        raise _send_refused("초안을 찾을 수 없어 보내지 않았습니다(이미 보냈거나 지웠을 수 있음). "
+                            "사용자에게 보낸 편지함과 임시 보관함을 확인하라고 알리세요.") from None
+    if (getattr(mail, "Sent", None) is not False or getattr(mail, "Submitted", None) is not False
+            or getattr(mail, "Class", OL_MAIL) != OL_MAIL):
+        raise _send_refused("이 id는 보내지 않은 초안이 아니라 보내지 않았습니다(이미 보냈거나 보낼 편지함에 넘긴 메일, 또는 받은 메일). "
+                            "사용자에게 보낸 편지함과 보낼 편지함을 확인하라고 알리세요.")
+    if not _in_drafts_folder(ns, mail):
+        raise _send_refused("이 초안은 임시 보관함에 없어(지웠거나 다른 폴더로 옮김) 보내지 않았습니다. "
+                            "사용자에게 그 메일을 직접 확인하라고 알리세요.")
+    _draft_record(eid, claim=False)                  # 이 도구가 만든 초안인지, 이미 보냈는지 (작성 창을 띄우기 전에)
     extra: Dict[str, Any] = {"to": _text(getattr(mail, "To", "")), "subject": _text(getattr(mail, "Subject", "")),
                              "draft_id": str(args.id), "sent": False}
     unresolved = _unresolved(mail)
@@ -911,7 +953,12 @@ def cmd_send(args) -> Dict[str, Any]:
                 "message": f"수신자 주소를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다: {', '.join(unresolved)}",
                 rt.LOG_MESSAGE_KEY: f"수신자 주소 {len(unresolved)}개를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다 (수신자 생략).",
                 "agent_directive": "STOP_RETRY: 발송하지 않았습니다. 사용자에게 수신자 주소 확인을 요청하세요.", **extra}
-    mail.Send()
+    _draft_record(eid, claim=True)                   # 잠금 아래 다시 확인하고 '보냄'을 먼저 기록 (동시 실행·두 번 실행 방지)
+    try:
+        mail.Send()
+    except Exception as e:
+        raise _send_refused(f"Outlook이 발송을 거부했습니다({type(e).__name__}). 이 초안은 send로 다시 보내지 않습니다. "
+                            "사용자에게 작성 창과 보낸 편지함을 확인하고 필요하면 직접 [보내기]를 누르라고 알리세요.") from None
     extra["sent"] = True
     # R1: 발송은 Outlook이 처리하므로 실제로 나갔는지는 여기서 확인할 수 없음 (보낸 편지함 확인은 사용자 몫)
     return rt.ok_unverified(TOOL, "send", f"메일 발송을 Outlook에 맡겼습니다: '{extra['subject']}' -> {extra['to']}",
@@ -1207,6 +1254,95 @@ def remember_listing(mails: List[Dict[str, Any]], what: str) -> Optional[str]:
     return None
 
 
+# ------------------------------------------------------------------------------
+# 발송 원장 (1.4.73): new/reply/forward가 만든 초안의 EntryID와 send로 보낸 시각. send는 원장에 있고 아직 보내지 않은
+# 초안만 보냄 (사용자가 쓰다 둔 초안·이미 보낸 초안 거부). 번호 기억 파일과 같은 잠금(_IdsLock)으로 묶음.
+# 읽지 못하거나 깨졌으면 send는 보내지 않음(fail-closed). 새 초안을 기록할 때 깨진 원장은 옆에 옮기고 새로 시작.
+# ------------------------------------------------------------------------------
+
+DRAFTS_FILE = "outlook_drafts.json"
+
+
+def _load_drafts(deadline: Optional[float] = None) -> Dict[str, Any]:
+    path = _side_path(DRAFTS_FILE)
+    try:
+        text = rt.retry_fs(lambda: rt.read_text_file(path), deadline=deadline)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        raise _IdsUnreadable(f"읽지 못함 ({type(e).__name__})") from e
+    try:
+        data = json.loads(text)
+        if not isinstance(data, dict) or not all(isinstance(v, dict) for v in data.values()):
+            raise ValueError("drafts")
+    except Exception as e:
+        raise _IdsUnreadable(f"깨짐 ({type(e).__name__})") from e
+    return data
+
+
+def _prune_drafts(data: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:
+    """ID_KEEP_DAYS일보다 오래된 초안을 버리고 최근 ID_KEEP개만 (버린 초안은 send가 거부)."""
+    cut = (now - _dt.timedelta(days=ID_KEEP_DAYS)).isoformat(timespec="seconds")
+    kept = sorted(((k, v) for k, v in data.items() if str(v.get("t", "")) >= cut), key=lambda kv: str(kv[1].get("t", "")))
+    return dict(kept[-ID_KEEP:])
+
+
+def remember_draft(eid: str) -> Optional[str]:
+    """이 도구가 만든 초안으로 원장에 기록. 기록하지 못하면 까닭 (그 초안에는 send 명령을 주지 않음)."""
+    with _IdsLock() as lock:
+        if not lock.acquired:
+            return lock.why
+        try:
+            data = _load_drafts(lock.deadline)
+        except _IdsUnreadable as e:
+            if not str(e).startswith("깨짐"):
+                return f"발송 원장 {e}"
+            bak = _side_path(f"outlook_drafts.broken_{rt.timestamp()}.json")
+            try:
+                rt.retry_fs(lambda: os.replace(_side_path(DRAFTS_FILE), bak), deadline=lock.deadline)
+            except Exception as e2:
+                return f"깨진 발송 원장을 옮기지 못함 ({type(e2).__name__})"
+            rt.log("WARN", f"발송 원장이 깨져 {os.path.basename(bak)}로 옮기고 새로 시작했습니다 (이전 초안은 send로 보내지 않음)")
+            data = {}
+        now = _dt.datetime.now()
+        data = _prune_drafts(data, now)
+        data[eid] = {"t": now.isoformat(timespec="seconds"), "sent": ""}
+        try:
+            rt.safe_write_text(_side_path(DRAFTS_FILE), json.dumps(data, ensure_ascii=False), deadline=lock.deadline)
+        except Exception as e:
+            return f"발송 원장 저장 실패 ({type(e).__name__})"
+    return None
+
+
+def _draft_record(eid: str, claim: bool) -> None:
+    """send 전 원장 확인: 이 도구가 만든 초안이고 아직 보내지 않았는지. claim=True면 잠금 아래 '보냄'을 먼저 기록
+    (기록하지 못하면 보내지 않음). 아니면 _send_refused."""
+    with _IdsLock() as lock:
+        if not lock.acquired:
+            raise _send_refused(f"발송 원장을 확인하지 못해 보내지 않았습니다({lock.why}). 사용자에게 알리세요.")
+        try:
+            data = _load_drafts(lock.deadline)
+        except _IdsUnreadable as e:
+            raise _send_refused(f"발송 원장을 읽지 못해({e}) 보내지 않았습니다. 사용자에게 작성 창의 초안을 확인하고 "
+                                "직접 보내라고 알리세요.") from None
+        now = _dt.datetime.now()
+        data = _prune_drafts(data, now)
+        rec = data.get(eid)
+        if rec is None:
+            raise _send_refused("이 메일은 이 도구(new·reply·forward)가 최근에 만든 초안이 아니라 보내지 않았습니다. "
+                                "사용자가 쓰던 초안은 사용자가 작성 창에서 직접 보내라고 알리세요.")
+        if rec.get("sent"):
+            raise _send_refused(f"이 초안은 이미 send로 보냈습니다({rec['sent']}). 다시 보내지 않았습니다. "
+                                "사용자에게 보낸 편지함과 보낼 편지함을 확인하라고 알리세요.")
+        if not claim:
+            return
+        rec["sent"] = now.isoformat(timespec="seconds")
+        try:
+            rt.safe_write_text(_side_path(DRAFTS_FILE), json.dumps(data, ensure_ascii=False), deadline=lock.deadline)
+        except Exception as e:
+            raise _send_refused(f"발송 기록을 남기지 못해({type(e).__name__}) 보내지 않았습니다. 사용자에게 알리세요.") from None
+
+
 def _relist_commands() -> List[Dict[str, str]]:
     return [rt.next_command("outlook.py", ["list"], "메일 목록을 다시 보고 그 결과의 id 쓰기")]
 
@@ -1468,7 +1604,7 @@ def build_cli():
     p.add_argument("--id", help="전달할 메일 id (생략 시 지금 보고 있거나 선택한 메일)")
 
     p = sub.add_parser("send", help="new/reply/forward가 저장한 초안 보내기 (사용자가 확인한 뒤에만)")
-    p.add_argument("--id", required=True, help="new/reply/forward 결과의 draft_id (next_commands[0]을 그대로)")
+    p.add_argument("--id", required=True, help="new/reply/forward 결과의 draft_id (confirm_commands[0]을 그대로)")
     return parser
 
 

@@ -964,7 +964,7 @@ def test_fill_dry_run_changes_nothing(form_doc, capsys, tmp_path):
     code, out = run_word(capsys, "fill", "--file", f, "--dry-run")
     assert code == 0 and out["dry_run"] is True and doc.text == before and points == [], out
     assert any("덮어쓰기: 표2!R3C3" in p for p in out["planned"]) and any("{{업체명}} 2곳" in p for p in out["planned"])
-    cmd = out["next_commands"][0]["command"]
+    cmd = out["confirm_commands"][0]["command"]
     assert "--dry-run" not in cmd and "--overwrite" in cmd and " fill " in cmd
 
 

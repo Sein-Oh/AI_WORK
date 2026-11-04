@@ -1404,13 +1404,13 @@ def cmd_fill(args) -> Dict[str, Any]:
                 planned.append(f"채우기: {ref} (빈 칸 -> {_preview(v, 15)})")
         if args.dry_run:
             fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(places) + len(cells) - len(same),
-                                      "next_commands": [_fill_command(args, ["--overwrite"] if conflicts else [])],
+                                      "confirm_commands": [_fill_command(args, ["--overwrite"] if conflicts else [])],
                                       "target_resolved": t.resolved(), "truncated": len(planned) > 50}
             if conflicts:
                 fields["overwrite_cells"] = len(conflicts)
             return rt.ok(TOOL, "fill", f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개"
                          + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else ""),
-                         "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고(표 칸은 [행, 열] 글로 맞는 칸인지) 확인을 받은 뒤 next_commands[0]을 실행하세요.",
+                         "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고(표 칸은 [행, 열] 글로 맞는 칸인지) 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.",
                          **fields)
         if conflicts and not args.overwrite:
             refs = [f"표{k[0]}!R{k[1]}C{k[2]}" for k, _ in conflicts]

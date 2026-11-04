@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 본문
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.72"
+  version: "1.4.73"
   platform: windows
 ---
 
@@ -13,7 +13,7 @@ metadata:
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
 2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
-3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다.
+3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번.
 4. `--target`을 빼면 사용자가 보고 있는 문서다. 다른 열린 문서는 `--target "<이름>"`, 닫힌 파일은 `--target "<전체경로>"`.
 5. 여러 줄 글, 표, 큰따옴표가 든 값은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .md(.csv)를 만들고 `--file "<그 경로>"`로 넘긴다. .md의 코드는 ```로 감싼다.
 6. 문서 내용을 다른 문서로 옮길 때는 `--save`로 파일을 만들고 결과의 `output_file`을 `--file`로 넘긴다.
@@ -26,7 +26,7 @@ metadata:
 | 워드 목차(장절 목록) | `python "C:\CLI\office-cli\word.py" outline` |
 | 워드 쓰기 | `python "C:\CLI\office-cli\word.py" write --file "<내용.md>"` / 한 줄 `--text "## 제목\n- 항목"` / 그림 `--image "<그림.png>"` (위치 `--anchor <글> --pos after`, 여러 곳이면 `--occurrence N`) |
 | 워드 쪽 나누기 / 목차 / 요약 상자 | `python "C:\CLI\office-cli\word.py" write --page-break` (.md의 `---`는 구분선) / `--toc` / `--text "<요약>" --callout` |
-| 워드 양식 채우기 | `python "C:\CLI\office-cli\word.py" fill --file "<값.csv>" --dry-run` (열: 자리, 값. 자리는 `{{업체명}}` 또는 표 칸 `표2!R3C4`. 표 칸은 미리보기의 `[행, 열]` 글로 맞는 칸인지 확인 뒤 `--dry-run` 없이. 값이 있는 표 칸은 사용자가 원할 때만 `--overwrite`) |
+| 워드 양식 채우기 | `python "C:\CLI\office-cli\word.py" fill --file "<값.csv>" --dry-run` (열: 자리, 값. 자리는 `{{업체명}}` 또는 표 칸 `표2!R3C4`. 표 칸은 미리보기의 `[행, 열]` 글로 맞는 칸인지 확인 뒤 `confirm_commands[0]`. 값이 있는 표 칸은 사용자가 원할 때만 `--overwrite`) |
 | 워드 검토 메모 | 목록 `python "C:\CLI\office-cli\word.py" comment` / 넣기 `python "C:\CLI\office-cli\word.py" comment --action add --anchor "<문서의 글>" --text "<메모>"` (여러 개 `--file "<메모.csv>"`, 열: 기준 글, 메모 내용) |
 | 워드 변경 추적 | `python "C:\CLI\office-cli\word.py" revisions` |
 | 워드 바꾸기 | `python "C:\CLI\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (`--replace` 없음) |

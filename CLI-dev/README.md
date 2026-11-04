@@ -83,7 +83,9 @@ CLI-dev/<tool>/
 5. 문자 규칙: 이모지·원문자·장식 기호 금지, 로그 태그는 `[INFO] [PROGRESS] [WARN] [ERROR] [STATUS]` ([`AGENTS.md`](../AGENTS.md) "문자 규칙").
 6. 폐쇄망: 실행 중 네트워크 접근 금지. [표준 환경](../docs/ENVIRONMENT.md)에 있는 라이브러리만 사용 ([`docs/WINDOWS_OFFLINE.md`](../docs/WINDOWS_OFFLINE.md)).
 7. 공통 결과 키 (해당할 때만 넣음):
-   - `next_commands` - 이어서 그대로 실행할 전체 명령 목록.
+   - `next_commands` - 이어서 그대로 실행할 전체 명령 목록 (LLM이 묻지 않고 실행해도 안전한 것만).
+   - `confirm_commands` - 사용자에게 보여 주고 "예"를 받은 뒤에만 실행할 전체 명령 목록 (메일 발송, 미리보기 뒤 실제 변경).
+     경량 LLM이 `next_commands[0]`을 기계적으로 실행해도 메일이 나가거나 문서가 바뀌지 않게 키를 나눈다.
    - `truncated` - 결과를 상한에서 잘랐으면 `true`, 전체 결과 파일 경로를 함께 제공.
    - `recovered` - 도구가 실패를 즉시 복구해 결과가 달라진 일 (예: 잠긴 파일 -> 새 이름 저장). `warnings`와 구분.
 8. 실패한 실행(exit 1, 2)은 `<도구 데이터 폴더>/logs/errors.txt`에 자동 기록. 로그 경로는 stdout JSON에 넣지 않음.
@@ -160,7 +162,7 @@ CLI-dev/<tool>/
 
 ### R8. 미리보기와 후보 (`--dry-run`, `[추천]`, `[후보]`)
 - `--dry-run`: 검증까지 모두 하고 쓰기는 하지 않는다. 응답 `dry_run: true`, `planned: ["삭제: a.csv", "덮어쓰기: b.xlsx", "변경: Sheet1!A1:C10 (30셀)"]`,
-  `next_commands[0]` = `--dry-run`을 뺀 같은 명령, directive `VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.`
+  `confirm_commands[0]` = `--dry-run`을 뺀 같은 명령(`next_commands`에 넣지 않음), directive `VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.`
 - 실제 실행은 수행한 파괴적 작업을 같은 형식의 `applied` 목록으로 보고한다.
 - `[추천] <값>`: 바로 다시 실행할 수 있는 값 **하나**만. 값은 바꿀 인자 값(이름, `--header-row 2` 등) 또는 `python`으로 시작하는 전체 명령이다.
   LLM은 `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행하고, 아니면 그 값으로 바꿔 1회 재실행한다.

@@ -3043,6 +3043,13 @@ _LIT_SLASHES = "/\uff0f\u2215\u2044"
 # '/' 값 구분 (1.4.72): 양쪽이 '숫자+단위'('100 V/220 V', '85 ℃/85 %RH')이고 '/' 뒤 값이 1·10·100·1000(1·10^n)이 아닐 때만.
 # '/' 뒤 값이 1·10^n이면 '당'(비율: '0.1 mm/1000 mm', '2 ℃/1 min', '5 %/1000 h'). 앞이 숫자뿐이면 주파수·전압만
 # ('50/60 Hz', '10/50 kHz', '110/220 V'. '10/350 μs', '15/16 inch', '1.2/50 μs'는 서지 파형·분수)
+# 숫자 바로 앞에 붙어도 층 A인 여는 글자 (1.4.73 허용 목록): 괄호, 범위 물결(~, U+FF5E, U+301C), '='
+_LIT_OPEN_BEFORE = "([~\uff5e\u301c="
+# 단위 바로 뒤에 붙은 괄호 중 값의 뜻을 바꾸지 않는 것 (허용 목록): '5 V(DC)', '10 A(Max)', '3.3 V(Typ.)'
+_LIT_PAREN_OK = re.compile(r"[(\[](?:DC|AC|max\.?|min\.?|typ\.?|nom\.?|ref\.?|정격|최대|최소|이하|이상|미만|초과)[)\]]",
+                           re.IGNORECASE)
+# 단위 뒤에 붙여 쓴 범위 대시 뒤의 다른 값 ('10 m-20 m', '40 ℃\u201385 ℃'). '10 m-1'(지수)은 아님
+_LIT_RANGE_RIGHT = re.compile("[\\d.,]+[ \u00a0]?[A-Za-z%\u00b0\u2103\u2109\u03a9\u2126\u03bc\u00b5]")
 _LIT_SLASH_LEFT_UNIT = re.compile(r"(?<![\d.,])\d[\d.,]*[ \u00a0]?[^\s\d/\uff0f\u2215\u2044]{1,4}/$")
 _LIT_SLASH_LEFT_NUM = re.compile(r"(?<![\d.,])\d{2,}/$")
 _LIT_SLASH_NUM_UNITS = ("Hz", "kHz", "MHz", "GHz", "V", "kV", "mV")
@@ -3060,6 +3067,10 @@ def _lit_slash_left(text: str, s: int, q: str) -> bool:
     if _LIT_SLASH_LEFT_UNIT.search(head):
         return not _LIT_PER.fullmatch(num.group(0))
     unit = q[num.end():].strip(" \t\u00a0")
+    # 앞이 숫자뿐이면 분수('15/16 V', 분모 2·4·8·16·32·64)와 비율('10/100 V', 1·10^n)은 값 구분이 아님 (10차 검토)
+    value = num.group(0)
+    if _LIT_PER.fullmatch(value) or value in ("2", "4", "8", "16", "32", "64"):
+        return False
     return bool(_LIT_SLASH_LEFT_NUM.search(head)) and unit in _LIT_SLASH_NUM_UNITS
 
 
@@ -3067,6 +3078,16 @@ def _lit_slash_right(text: str, e: int) -> bool:
     """text[e]가 '/'일 때 그 뒤가 다른 값(부호·숫자+단위, 1·10^n 아님)인지 ('100 V/220 V', '+10 %/-5 %')."""
     m = _LIT_SLASH_RIGHT.match(text, e + 1)
     return bool(m) and not _LIT_PER.fullmatch(m.group(1))
+
+
+def _lit_space(c: str) -> bool:
+    """공백류 (띄어쓰기·탭·줄바꿈·붙는 공백·폭 없는 공백·전각 공백). 빈 글자(줄 시작·끝)는 아님."""
+    return bool(c) and (c.isspace() or c in _LIT_GLUED_SPACE)
+
+
+def _hangul(c: str) -> bool:
+    """한글 음절 (자모 U+3161 'ㅡ'는 대시로 쓰여 빠짐)."""
+    return bool(c) and "가" <= c <= "힣"
 
 
 def _latin(c: str) -> bool:
@@ -3117,9 +3138,11 @@ class _Literal:
                          and not _latin(text[s - 3:s - 2]))
                 slash = before == "/" and not last.isdecimal() and _lit_slash_left(text, s, q)
                 glued_range = before in "-\u2013" and _GLUED_RANGE_LEFT.search(text, max(0, s - 16), s - 1)
-                if (before.isdecimal() or before in ".,^" or (before in _LIT_SLASHES and not slash)
-                        or (before in _LIT_SIGNS and not glued_range) or (_latin(before) and not dc_ac)
-                        or before in _LIT_GLUED_BEFORE or (before in "'\u2019" and text[s - 2:s - 1].isdecimal())):
+                # 허용 목록 (1.4.73): 공백류, 줄 시작, 여는 괄호, 범위 물결, '=', ':'(앞이 숫자가 아닐 때), 한글, 'DC'/'AC',
+                # 값 구분 '/', 붙여 쓴 범위 대시만. 그 밖 글자(문장부호·기호·숫자·영문: '1，500 V', '1．5 V', '1·5 V',
+                # '△40 ℃', '1:5 V', '1÷5 V', '½5 A')는 층 B. 금지 목록은 검토마다 새 글자가 나왔음 (10차 검토)
+                if not (_lit_space(before) or before in _LIT_OPEN_BEFORE or _hangul(before) or dc_ac or slash
+                        or glued_range or (before == ":" and not text[s - 2:s - 1].isdecimal())):
                     return False                                   # 'DC5V'의 '5V', '50/60 Hz'의 '60 Hz'는 층 A
                 if before in _LIT_GLUED_SPACE and text[s - 2:s - 1] in _LIT_SIGNS:
                     return False                                   # '-\u00a040 ℃': 붙여 쓴 빼기와 같음
@@ -3157,6 +3180,15 @@ class _Literal:
             if after in _LIT_SLASHES:
                 # '100 V/220 V', '85 ℃/85 %RH'는 값 구분, '5 V/m', '0.1 mm/1000 mm', '10 V\uff0fm'은 단위·비율 (1.4.72)
                 return after == "/" and _lit_slash_right(text, e)
+            # 허용 목록 (1.4.73): 공백류, 줄 끝, 닫는 괄호, ',' '.'(뒤가 숫자·영문이 아닐 때), ';', ':'(뒤가 공백류·줄 끝),
+            # 범위 물결, 한글, 붙여 쓴 괄호의 허용 목록('(DC)', '(Max)', '(Typ.)'), 범위 대시('10 m-20 m').
+            # 그 밖 글자('5 V㎃', '5 VA', '5 V·s', '5 V′')는 층 B (10차 검토)
+            if not (_lit_space(after) or after in ")];~\uff5e\u301c" or _hangul(after)
+                    or (after in ",." and not (nxt.isdecimal() or _latin(nxt)))
+                    or (after == ":" and (not nxt or _lit_space(nxt)))
+                    or (after in "([" and _LIT_PAREN_OK.match(text, e))
+                    or (after in "-\u2013\u2212" and _LIT_RANGE_RIGHT.match(text, e + 1))):
+                return False
             if after in "-\u2212\u207b" and nxt.isdecimal() and not re.match(
                     "[\\d.,]+[ \u00a0]?[A-Za-z%\u00b0\u2103\u2109\u03a9\u2126\u03bc\u00b5]", text[e + 1:e + 12]):
                 return False                                       # '10 m-1': 단위의 지수 (범위 '10 m-20 m'은 아님)
@@ -3224,24 +3256,35 @@ SNIPPET_MIN_BEFORE = 15        # 스니펫에 늘 담는 일치 앞 글자 수 (
 SNIPPET_JOIN = " / "          # 검색어 자리가 멀어 창이 겹치지 않을 때 조각 사이 (1.4.72)
 
 
-def _highlight(text: str, start: int, end: int, pattern: Any, lit_spans: List[Tuple[int, int]]) -> str:
-    """text[start:end]에서 맞은 곳(정규화 매처·층 A 자리)을 **강조**."""
+def _highlight(text: str, start: int, end: int, patterns: Tuple[Any, Any], lit_spans: List[Tuple[int, int]]) -> str:
+    """text[start:end]에서 맞은 곳을 강조. 층 A 자리(숫자가 든 검색어의 글자 그대로 자리)와 숫자 없는 검색어는 **강조**,
+    숫자가 든 검색어의 층 B 자리(표기가 다른 곳, 정규화 매처만 찾음)는 [[강조]] (1.4.73)."""
     piece = text[start:end]
-    marks = [(m.start(), m.end()) for m in pattern.finditer(piece) if m.group(0)]
-    marks += [(a - start, b - start) for a, b in lit_spans if a >= start and b <= end]
-    merged: List[List[int]] = []
-    for a, b in sorted(marks):
+    plain, numeric = patterns
+    lits = [(a - start, b - start) for a, b in lit_spans if a >= start and b <= end]
+    marks = [(a, b, "A") for a, b in lits]
+    if plain is not None:
+        marks += [(m.start(), m.end(), "A") for m in plain.finditer(piece) if m.group(0)]
+    if numeric is not None:
+        marks += [(m.start(), m.end(), "B") for m in numeric.finditer(piece)
+                  if m.group(0) and not any(a < m.end() and m.start() < b for a, b in lits)]
+    merged: List[List[Any]] = []
+    for a, b, kind in sorted(marks):
         if merged and a <= merged[-1][1]:
             merged[-1][1] = max(merged[-1][1], b)
+            if kind == "A":
+                merged[-1][2] = "A"
         else:
-            merged.append([a, b])
-    for a, b in reversed(merged):
-        piece = piece[:a] + "**" + piece[a:b] + "**" + piece[b:]
+            merged.append([a, b, kind])
+    for a, b, kind in reversed(merged):
+        o, c = ("**", "**") if kind == "A" else ("[[", "]]")
+        piece = piece[:a] + o + piece[a:b] + c + piece[b:]
     return ("..." if start > 0 else "") + piece + ("..." if end < len(text) else "")
 
 
 def make_snippet(text: str, terms: List[str], context: int) -> str:
-    """검색어마다 일치 자리(숫자가 든 검색어는 층 A 자리 먼저)와 앞뒤 문맥. 앞은 최소 SNIPPET_MIN_BEFORE자. 맞은 곳은 **강조**.
+    """검색어마다 일치 자리(숫자가 든 검색어는 층 A 자리 먼저)와 앞뒤 문맥. 앞은 최소 SNIPPET_MIN_BEFORE자. 맞은 곳은 **강조**
+    (숫자가 든 검색어의 층 B 자리는 [[강조]]).
     AND 검색어들이 멀어 창이 겹치지 않으면 조각을 SNIPPET_JOIN으로 이음 ('...**온도**... / ...0 - **40 ℃**에서...')"""
     flags = re.IGNORECASE
     spans = sorted({sp for sp in (term_span(t, text, flags) for t in terms) if sp})
@@ -3255,9 +3298,11 @@ def make_snippet(text: str, terms: List[str], context: int) -> str:
             wins[-1][1] = max(wins[-1][1], b)
         else:
             wins.append([a, b])
-    pattern = re.compile("|".join(_term_pattern(t, 0).pattern for t in sorted(terms, key=len, reverse=True)), flags)
+    def joined(group: List[str]) -> Any:
+        return re.compile("|".join(_term_pattern(t, 0).pattern for t in sorted(group, key=len, reverse=True)), flags) if group else None
+    patterns = (joined([t for t in terms if not re.search(r"\d", t)]), joined([t for t in terms if re.search(r"\d", t)]))
     lit_spans = [(m.start(), m.end()) for lf in (literal_finder(t) for t in terms) if lf is not None for m in lf.finditer(text)]
-    return SNIPPET_JOIN.join(_highlight(text, a, b, pattern, lit_spans) for a, b in wins).replace("\n", " ")
+    return SNIPPET_JOIN.join(_highlight(text, a, b, patterns, lit_spans) for a, b in wins).replace("\n", " ")
 
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])\s+|\n+")
@@ -4140,9 +4185,9 @@ def cmd_clear(args) -> Dict[str, Any]:
         cmd = ["clear"] + [x for flag, val in (("--file", args.file), ("--name", args.name), ("--folder", args.folder))
                            if val for x in (flag, val)] + (["--missing"] if args.missing else []) + (["--all"] if args.all else [])
         result.update(dry_run=True, planned=[f"캐시 삭제: {i['file']}" for i in items[:MAX_LIST_ITEMS]],
-                      next_commands=[rt.next_command("reader.py", cmd, "미리 본 캐시를 실제로 지우기")])
+                      confirm_commands=[rt.next_command("reader.py", cmd, "미리 본 캐시를 실제로 지우기 (사용자 확인 뒤에만)")])
         return rt.ok(TOOL, "clear", f"미리보기: 캐시 문서 {len(items)}개를 지울 예정 ({cond})",
-                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요."
+                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요."
                      + (f" planned는 {len(items)}개 중 {MAX_LIST_ITEMS}개만 담았고 전체는 full_result_file에 있습니다." if result["truncated"] else ""),
                      **result)
     failed: List[str] = []

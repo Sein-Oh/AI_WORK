@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.72"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.73"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -735,6 +735,10 @@ _WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --t
                '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
 OTHER_COMMAND = {("office", "write"): "office.py에는 write가 없습니다. " + _WRITE_TEXT,
                  ("office", "transfer", "--text"): "transfer는 엑셀 차트·범위와 문서의 표를 옮기는 명령이라 글은 받지 않습니다. " + _WRITE_TEXT}
+# 1.4.72에서 없앤 outlook --send (1.4.73): 초안을 만든 뒤 사용자 확인을 받아 send로 보냄. {cmd} = --send를 뺀 같은 명령
+_NO_SEND = ("--send는 없습니다. 초안을 만든 뒤 사용자 확인을 받아 send를 실행합니다(결과의 confirm_commands). "
+            "[추천] {cmd}")
+OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply", "forward")})
 
 
 # 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
@@ -803,6 +807,9 @@ class JsonArgumentParser(argparse.ArgumentParser):
         for f in flags:
             other = OTHER_COMMAND.get((self.tool_name, cmd, f))
             if other:
+                if "{cmd}" in other:      # 그 옵션만 뺀 같은 전체 명령
+                    rest = [a for a in (CURRENT_ARGV or []) if a != f]
+                    other = other.replace("{cmd}", next_command(f"{self.tool_name}.py", rest, "")["command"])
                 return " " + other
         for f in flags:
             near = [o for o in OPTION_SYNONYMS.get(f, []) if o in opts] or difflib.get_close_matches(f, opts, n=1, cutoff=0.7)

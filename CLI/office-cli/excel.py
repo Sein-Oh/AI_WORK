@@ -1661,7 +1661,7 @@ def write_cells(args) -> Dict[str, Any]:
             todo.append((ws, r1, c1, r2, c2, kind, payload))
         if args.dry_run:
             fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(todo),
-                                      "next_commands": [_cells_command(args, ["--overwrite"] if conflicts else [])],
+                                      "confirm_commands": [_cells_command(args, ["--overwrite"] if conflicts else [])],
                                       "target_resolved": t.resolved()}
             if len(planned) > 50:
                 fields["truncated"] = True
@@ -1671,7 +1671,7 @@ def write_cells(args) -> Dict[str, Any]:
                 fields["unchanged"] = len(same)
             if warnings:
                 fields["warnings"] = warnings
-            directive = "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요."
+            directive = "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요."
             preview = f"미리보기: 칸 {len(todo)}개" + (f" (값이 있어 덮어쓸 칸 {len(conflicts)}개: "
                                                      + _filled_preview(conflicts) + ")" if conflicts else "")
             return rt.ok(TOOL, "write", preview, directive, **fields)
@@ -2943,11 +2943,11 @@ def range_lines(args) -> Dict[str, Any]:
                 preview = f"미리보기: {what}에는 값이 있는 칸이 없지만 {refs_note} (바꾸지 않음)"
             else:
                 preview = f"미리보기: {what}에는 값이 있는 칸이 없습니다. 지우면 {'아래 행이 올라' if axis == 'rows' else '오른쪽 열이 당겨'}옵니다 (바꾸지 않음)"
-            info["next_commands"] = [_lines_command(args, axis, n1, n2, overwrite=bool(filled or refs))]
+            info["confirm_commands"] = [_lines_command(args, axis, n1, n2, overwrite=bool(filled or refs))]
             resolved = t.resolved()
             return rt.ok(TOOL, "range", preview,
-                         "VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면 "
-                         "next_commands[0]을 그대로 실행하세요.", dry_run=True, target_resolved=resolved, **info)
+                         "VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
+                         "confirm_commands[0]을 그대로 실행하세요.", dry_run=True, target_resolved=resolved, **info)
         if (filled or refs) and not args.overwrite:
             head = f"{ws.Name}!{_lines_addr(axis, n1, n2)}({what})을(를) 지우면 "
             parts = [f"값이 있는 칸 {len(filled)}개가 함께 지워집니다: {cells_text} (값은 보이지 않음)"] if filled else []
@@ -3623,7 +3623,7 @@ def _memo_rows(path: str) -> List[Tuple[int, str, str]]:
 
 
 def _comment_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
-    """--dry-run을 뺀 같은 comment 명령 (next_commands)."""
+    """--dry-run을 뺀 같은 comment 명령 (confirm_commands: 사용자 확인 뒤에만)."""
     argv = ["comment", "--target", args.target, "--action", args.action]
     for flag, val in (("--sheet", args.sheet), ("--range", args.range), ("--file", args.file), ("--text", args.text)):
         if val is not None:
@@ -3764,16 +3764,16 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
     if args.dry_run:
         nexts = [_comment_command(args, ["--overwrite"]), _comment_command(args, ["--append"])] if taken and not mode \
             else [_comment_command(args)]
-        fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(plan), "next_commands": nexts,
+        fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(plan), "confirm_commands": nexts,
                                   "target_resolved": t.resolved()}
         if taken:
             fields["existing_notes"] = len(taken)
         if warnings:
             fields["warnings"] = warnings[:10]
-        directive = ("VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요."
+        directive = ("VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요."
                      if not (taken and not mode) else
-                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고, 이미 메모가 있는 칸을 바꿀지(next_commands[0]) "
-                     "덧붙일지(next_commands[1]) 사용자가 고르면 그 명령을 실행하세요.")
+                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고, 이미 메모가 있는 칸을 바꿀지(confirm_commands[0]) "
+                     "덧붙일지(confirm_commands[1]) 사용자가 고르면 그 명령을 실행하세요.")
         preview = f"미리보기: 메모 {len(plan)}개" + (f" (이미 메모가 있는 칸 {len(taken)}개: {taken_text})" if taken else "")
         return rt.ok(TOOL, "comment", preview, directive, **fields)
     if taken and not mode:
@@ -3851,8 +3851,8 @@ def _comment_delete(args, t: Any) -> Dict[str, Any]:
                      target_resolved=t.resolved(), count=0)
     if args.dry_run:
         return rt.ok(TOOL, "comment", f"미리보기: {where}의 메모 {len(notes)}개를 지웁니다 (바꾸지 않음)",
-                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.",
-                     dry_run=True, planned=planned[:50], count=len(notes), next_commands=[_comment_command(args)],
+                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.",
+                     dry_run=True, planned=planned[:50], count=len(notes), confirm_commands=[_comment_command(args)],
                      target_resolved=t.resolved())
     for _, _, note in notes:
         note.Delete()
@@ -4134,9 +4134,9 @@ def cmd_check(args) -> Dict[str, Any]:
     else:
         nexts = [rt.next_command("excel.py", ["comment", "--target", args.target, "--action", "add", "--file", memo, "--dry-run"],
                                  "자동 판정(참고)·읽은 조건·근거를 값 칸 메모로 달기 미리보기, 변경 없음 "
-                                 "(사용자가 판정을 확인한 뒤에만 이 명령에서 --dry-run을 뺀 명령)")]
-        action = ("사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자 확인 뒤에만 "
-                  "그 명령에서 --dry-run을 뺀 명령을 실행하세요. 같은 check는 다시 실행하지 마세요.")
+                                 "(실제로 다는 명령은 그 결과의 confirm_commands, 사용자 확인 뒤에만)")]
+        action = ("사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자가 '예'라고 한 뒤에만 "
+                  "그 결과의 confirm_commands[0]을 실행하세요. 같은 check는 다시 실행하지 마세요.")
     if late:
         problems.append(f"명령 시간 제한으로 {len(late)}행({late[0]}부터)은 대조하지 못함 (판단필요로 두고 메모에서 뺌)")
         if not info.get("remaining"):

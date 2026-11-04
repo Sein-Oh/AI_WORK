@@ -13,6 +13,16 @@ import outlook
 from office_helpers import error_log_text, run_fresh, run_main, run_outlook, SECRET
 
 
+class _DraftsFolder:
+    """임시 보관함 (send는 메일의 Parent.EntryID가 이 폴더인지 봄)."""
+    Name = "임시 보관함"
+    EntryID = "FOLDER-DRAFTS"
+
+
+DRAFTS = _DraftsFolder()
+DELETED = type("Deleted", (), {"Name": "지운 편지함", "EntryID": "FOLDER-DELETED"})()
+
+
 class Recip:
     def __init__(self, name, ok):
         self.Name = name
@@ -60,6 +70,8 @@ class Mail:
         self.Attachments = Attachments()
         self.sent = self.displayed = self.saved = False
         self.Sent = False
+        self.Submitted = False
+        self.Parent = DRAFTS
         self.EntryID = ""
         self.GetInspector = object()
 
@@ -375,6 +387,8 @@ class FakeDraft:
         self.GetInspector = object()
         self.Class = outlook.OL_MAIL
         self.Sent = False
+        self.Submitted = False
+        self.Parent = DRAFTS
         self.EntryID = ""
         self.displayed = False
         self.sent = 0
@@ -479,7 +493,7 @@ def ol_env(monkeypatch, tmp_path):
                 if d.EntryID == i and not (d.sent and state.get("sent_moves", True)):
                     return d
             raise RuntimeError("없음")
-        return type("NS", (), {"GetItemFromID": staticmethod(find)})()
+        return type("NS", (), {"GetItemFromID": staticmethod(find), "GetDefaultFolder": staticmethod(lambda n: DRAFTS)})()
     monkeypatch.setattr(outlook, "get_namespace", get_namespace)
     return state
 
@@ -568,9 +582,10 @@ def test_default_is_display_only(capsys, monkeypatch):
     mail = Mail([Recip("a@x.com", True)])
     code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "첫줄\\n둘째줄")
     assert code == 0 and mail.displayed and mail.saved and not mail.sent and out["sent"] is False
-    assert "대신 발송하지 마세요" in out["agent_directive"] and "next_commands[0](send)" in out["agent_directive"]
-    nxt = out["next_commands"][0]
-    assert nxt["needs_user_confirm"] is True and nxt["command"].endswith(f"send --id {out['draft_id']}"), out
+    assert "대신 발송하지 마세요" in out["agent_directive"] and "confirm_commands[0](send)" in out["agent_directive"]
+    # 1.4.73: 발송 명령은 next_commands(그대로 실행)가 아니라 confirm_commands(사용자 '예' 뒤에만)
+    assert "next_commands" not in out and "needs_user_confirm" not in json.dumps(out), out
+    assert out["confirm_commands"][0]["command"].endswith(f"send --id {out['draft_id']}"), out
     body_pos = mail.HTMLBody.index("첫줄<br>둘째줄")
     assert mail.HTMLBody.index("<body>") < body_pos < mail.HTMLBody.index("서명")     # 서명 위, body 안
 
@@ -585,7 +600,7 @@ def test_send_sends_saved_draft_once(ol_env, capsys):
     code, out = run_outlook(capsys, "new", "--to", "a@x.com", "--subject", "s")
     d = ol_env["app"].created[0]
     assert code == 0 and d.displayed and d.sent == 0 and out["draft_id"], out
-    cmd = out["next_commands"][0]["command"].split(" send ")[1].split()
+    cmd = out["confirm_commands"][0]["command"].split(" send ")[1].split()
     code, out = run_outlook(capsys, "send", *cmd)
     assert code == 0 and d.sent == 1 and out["sent"] is True and out["agent_directive"].startswith("UNVERIFIED:"), out
     # 같은 send를 다시 실행해도 (이미 보낸 초안) 다시 나가지 않음
@@ -606,10 +621,126 @@ def test_send_refuses_received_mail(ol_env, capsys):
 def test_unresolved_recipient_is_not_sent(capsys, monkeypatch):
     mail = Mail([Recip("오타주소", False)])
     mail.EntryID = "D-BAD"
-    monkeypatch.setattr(outlook, "get_namespace", lambda app: types.SimpleNamespace(GetItemFromID=lambda i: mail))
+    assert outlook.remember_draft("D-BAD") is None                  # 이 도구가 만든 초안
+    monkeypatch.setattr(outlook, "get_namespace",
+                        lambda app: types.SimpleNamespace(GetItemFromID=lambda i: mail, GetDefaultFolder=lambda n: DRAFTS))
     code, out = run(capsys, monkeypatch, mail, "send", "--id", "D-BAD")
     assert code == 1 and not mail.sent and mail.displayed
     assert out["unresolved_recipients"] == ["오타주소"] and out["agent_directive"].startswith("STOP_RETRY")
+    # 보내지 않았으니 원장에 '보냄'이 남지 않음: 주소를 고친 뒤 send 가능
+    mail.Recipients = Recips([Recip("a@x.com", True)])
+    code, out = run(capsys, monkeypatch, mail, "send", "--id", "D-BAD")
+    assert code == 0 and mail.sent, out
+
+
+def _new_draft(ol_env, capsys):
+    code, out = run_outlook(capsys, "new", "--to", "a@x.com", "--subject", "s")
+    assert code == 0, out
+    return ol_env["app"].created[-1], out["confirm_commands"][0]["command"].split(" send ")[1].split()
+
+
+def _refused(out, code):
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY: 발송하지 않았습니다"), out
+    assert "next_commands" not in out, out                          # 목록을 다시 보고 다른 id로 보내는 길을 주지 않음
+
+
+def test_send_refuses_outbox_submitted(ol_env, capsys):
+    # 10차 검토: Send() 뒤 보낼 편지함에 Submitted=True, Sent=False로 남고 같은 EntryID로 찾힘 (오프라인·캐시 모드)
+    d, cmd = _new_draft(ol_env, capsys)
+    ol_env["sent_moves"] = False
+
+    def send():
+        d.sent += 1
+        d.Submitted = True
+    d.Send = send
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 0 and d.sent == 1, out
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 1
+    d.Submitted = False                                              # Submitted를 못 읽어도 원장이 막음
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 1 and "이미 send로 보냈습니다" in out["message"], out
+
+
+def test_send_refuses_deleted_or_moved_draft(ol_env, capsys):
+    d, cmd = _new_draft(ol_env, capsys)
+    d.Parent = DELETED                                               # PST: 지운 편지함으로 옮겨도 EntryID 그대로
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 0 and "임시 보관함에 없어" in out["message"], out
+    d.Parent = type("F", (), {"Name": "?"})()                        # 폴더를 확인하지 못함 -> 보내지 않음
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 0
+
+
+def test_send_refuses_users_own_draft(ol_env, capsys):
+    # 10차 검토: 사용자가 쓰다 둔 초안(임시 보관함)을 목록 번호로 send -> 이 도구가 만든 초안이 아니라 거부
+    other = FakeDraft()
+    other.EntryID, other.Subject = "USER-DRAFT", "쓰다 만 메일"
+    ol_env["app"].created.append(other)
+    m = {"entry_id": "USER-DRAFT", "subject": "쓰다 만 메일", "from": "", "received": ""}
+    outlook.remember_listing([m], "list")
+    for ident in (str(m["id"]), "USER-DRAFT"):
+        code, out = run_outlook(capsys, "send", "--id", ident)
+        _refused(out, code)
+        assert other.sent == 0 and "만든 초안이 아니" in out["message"], out
+
+
+def test_send_bad_id_is_refused_without_relist(ol_env, capsys):
+    # 10차 검토: send의 번호 오류는 RELIST(목록 보고 다시 실행)가 아니라 발송 거부, next_commands 없음
+    for ident in ("999", "NO-SUCH-ENTRY"):
+        code, out = run_outlook(capsys, "send", "--id", ident)
+        _refused(out, code)
+
+
+def test_send_concurrent_only_one_goes(ol_env, capsys, monkeypatch):
+    # 10차 검토: 같은 초안을 동시에 send 두 번 -> 원장 잠금 아래 '보냄' 기록이 먼저라 하나만 나감
+    import threading
+    d, cmd = _new_draft(ol_env, capsys)
+    barrier = threading.Barrier(2)
+    orig = outlook._unresolved
+
+    def slow(m):
+        r = orig(m)
+        barrier.wait(5)
+        return r
+    monkeypatch.setattr(outlook, "_unresolved", slow)
+    res = []
+
+    def go():
+        try:
+            res.append(outlook.cmd_send(types.SimpleNamespace(id=cmd[1]))["status"])
+        except rt.InputError as e:
+            res.append(str(e)[:20])
+    ts = [threading.Thread(target=go) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert d.sent == 1 and res.count("ok") == 1, res
+
+
+def test_compose_send_flag_recommends_command_without_it(capsys, monkeypatch, isolated_dirs):
+    for argv in (["new", "--to", "a@x.com", "--subject", f"보고 {SECRET}", "--send"], ["reply", "--id", "3", "--send", "--body", "네"],
+                 ["forward", "--id", "3", "--to", "b@x.com", "--send"]):
+        monkeypatch.setattr(rt, "CURRENT_ARGV", None)
+        code, out = run(capsys, monkeypatch, Mail(), *argv)
+        assert code == 2 and "--send는 없습니다" in out["message"] and "사용자 확인" in out["message"], out
+        rec = out["message"].split("[추천] ")[1]
+        assert rec.startswith("python ") and "--send" not in rec and f" {argv[0]} " in rec, rec
+        if argv[0] == "new":
+            assert f'--subject "보고 {SECRET}"' in rec, rec
+    assert SECRET not in error_log_text(isolated_dirs)                # 제목 같은 내용 인자는 오류 로그에 남기지 않음
+
+
+def test_compose_without_ledger_gives_no_send_command(ol_env, capsys, monkeypatch):
+    # 발송 원장에 기록하지 못하면 send가 거부하므로 보내는 명령을 주지 않음 (사용자가 작성 창에서 보냄)
+    monkeypatch.setattr(outlook, "remember_draft", lambda eid: "테스트 실패")
+    code, out = run_outlook(capsys, "new", "--to", "a@x.com", "--subject", "s")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "confirm_commands" not in out, out
 
 
 def test_reply_without_id_refuses_open_draft(ol_env, capsys):

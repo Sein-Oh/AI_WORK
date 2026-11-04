@@ -575,7 +575,7 @@ def test_delete_dry_run_then_overwrite(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "B:B", "--dry-run")
     assert code == 0 and out["dry_run"] is True and out["filled_cells"] == 5, out
     assert out["filled_addresses"] == ["B1", "B2", "B3", "B4", "B5"] and "영업" not in json.dumps(out, ensure_ascii=False), out
-    assert "--overwrite" in out["next_commands"][0]["command"] and "--dry-run" not in out["next_commands"][0]["command"], out
+    assert "--overwrite" in out["confirm_commands"][0]["command"] and "--dry-run" not in out["confirm_commands"][0]["command"], out
     assert xl_table.values[(1, 2)] == "부서" and off.list_snapshots("excel") == []
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "B:B", "--overwrite")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
@@ -608,7 +608,7 @@ def test_delete_rows_referenced_by_formula_needs_decision(xl_table, capsys):
     _formula(xl_table, 3, 4, "=C2")                # 지울 행 안의 수식은 함께 사라짐
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3", "--overwrite", "--dry-run")
     assert code == 0 and out["broken_refs"] == 1 and out["broken_ref_cells"] == ["Sheet1!A7"], out
-    assert "#REF!" in out["preview"] and "--overwrite" in out["next_commands"][0]["command"], out
+    assert "#REF!" in out["preview"] and "--overwrite" in out["confirm_commands"][0]["command"], out
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3")
     assert code == 1 and out["error_type"] == "needs_user_decision", out
     assert "#REF!" in out["message"] and "Sheet1!A7" in out["message"] and "Sheet1!A8" not in out["message"], out
@@ -624,7 +624,7 @@ def test_delete_empty_rows_referenced_by_formula_needs_decision(xl_table, capsys
     assert code == 1 and out["error_type"] == "needs_user_decision" and "Sheet1!D2" in out["message"], out
     assert "값이 있는 칸" not in out["message"], out
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9", "--dry-run")
-    assert code == 0 and out["filled_cells"] == 0 and out["broken_refs"] == 1 and "--overwrite" in out["next_commands"][0]["command"]
+    assert code == 0 and out["filled_cells"] == 0 and out["broken_refs"] == 1 and "--overwrite" in out["confirm_commands"][0]["command"]
 
 
 def test_delete_cols_referenced_from_other_sheet(monkeypatch, capsys):
@@ -1513,11 +1513,11 @@ def test_comment_add_dry_run_changes_nothing(xl, capsys):
     assert code == 0 and out["dry_run"] is True and out["agent_directive"].startswith("VERIFIED: 미리보기")
     assert ws.notes[(2, 2)].text == "기존" and (3, 2) not in ws.notes and undo_points() == []
     assert any("B2" in p and "이미" in p for p in out["planned"]) and any("B3" in p for p in out["planned"])
-    cmds = [c["command"] for c in out["next_commands"]]
+    cmds = [c["command"] for c in out["confirm_commands"]]
     assert all("--dry-run" not in c for c in cmds)
     assert any("--overwrite" in c for c in cmds) and any("--append" in c for c in cmds)
     code, out = run_excel(capsys, "comment", "--range", "C9", "--text", "의견", "--dry-run")
-    assert out["next_commands"][0]["command"].endswith('--text 의견') or "--dry-run" not in out["next_commands"][0]["command"]
+    assert out["confirm_commands"][0]["command"].endswith('--text 의견') or "--dry-run" not in out["confirm_commands"][0]["command"]
     assert (9, 3) not in ws.notes
 
 
@@ -1532,7 +1532,7 @@ def test_comment_delete(xl, capsys):
     code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5", "--dry-run")
     assert code == 0 and out["dry_run"] is True and len(ws.notes) == 3 and undo_points() == []
     assert out["planned"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"]
-    assert "--dry-run" not in out["next_commands"][0]["command"]
+    assert "--dry-run" not in out["confirm_commands"][0]["command"]
     code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and list(ws.notes) == [(9, 9)]
     assert out["applied"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"] and len(undo_points()) == 1
@@ -1701,7 +1701,8 @@ def test_write_cells_dry_run(xl, capsys):
     assert code == 0 and out["dry_run"] is True and out["agent_directive"].startswith("VERIFIED: 미리보기"), out
     assert ws.values[(6, 3)] == "old" and (7, 3) not in ws.values and undo_points() == []
     assert any("덮어쓰기" in p and "C6" in p for p in out["planned"]) and any("C7" in p for p in out["planned"])
-    cmd = out["next_commands"][0]["command"]
+    assert "next_commands" not in out, out              # 1.4.73: 실제로 쓰는 명령은 사용자 확인 뒤에만 (confirm_commands)
+    cmd = out["confirm_commands"][0]["command"]
     assert "--dry-run" not in cmd and "--overwrite" in cmd and "--cells" in cmd
 
 

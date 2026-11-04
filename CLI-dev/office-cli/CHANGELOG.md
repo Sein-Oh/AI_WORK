@@ -6,6 +6,41 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.73] - 2026-11-04
+
+독립 검토(10차) 수정. 발송 안전과 숫자 검색 층 A 경계.
+
+### 기능
+- 사용자 확인이 필요한 명령은 `next_commands`가 아니라 새 키 `confirm_commands`로 줌 (발송 안전): 전역 지침 3장 6번 "next_commands는
+  글자 그대로 실행"을 경량 LLM이 기계적으로 따라도 메일이 나가거나 문서가 바뀌지 않게. `needs_user_confirm` 표시는 없앰.
+  대상: outlook `new`·`reply`·`forward`의 `send --id <draft_id>`, 미리보기(`--dry-run`) 뒤 실제 실행 명령 전부(excel `write`·`range`·`comment`,
+  word `fill`, reader `clear`). excel `check`의 `next_commands[0]`(메모 미리보기, 변경 없음)은 그대로, 그 미리보기 결과가 `confirm_commands`를 줌.
+  전역 지침(`CLI-dev/opencode/AGENTS.md` 3장 6번 예외, 4장, 5장), 네 스킬 규칙 3, `CLI-dev/README.md` 공통 키·R8, 실기 러너 G1·G3,
+  시나리오(`agent_scenarios.yaml` O1·O3·O5, `SCENARIOS.md` 13-1)를 함께 고침.
+- outlook `send` 발송 원장(`<데이터 폴더>/outlook_drafts.json`, 번호 기억 파일과 같은 잠금): `new`·`reply`·`forward`가 만든 초안의 EntryID를 기록하고,
+  `send`는 원장에 있고 아직 보내지 않은 초안만 보냄. 보내기 전에 잠금 아래 '보냄'을 먼저 기록. 원장을 읽지 못하면 보내지 않음(fail-closed),
+  기록하지 못한 초안에는 send 명령을 주지 않음(`UNVERIFIED:`, 사용자가 작성 창에서 보냄). 7일(번호 기억과 같음)이 지난 초안은 send로 보내지 않음.
+- 스니펫 강조: 층 A 자리(글자 그대로)와 숫자 없는 검색어는 `**`, 숫자가 든 검색어의 층 B 자리(표기가 다른 곳)는 `[[ ]]`.
+
+### 수정
+- [높음, 발송 안전] 전역 지침·office-mail 규칙 3의 "next_commands는 그대로 실행"이 send의 사용자 확인을 덮음: 위 `confirm_commands`.
+- [중간, 발송 안전] 같은 초안을 두 번 보낼 수 있던 것(동시 실행, 보낼 편지함의 `Submitted=True, Sent=False`): `Submitted`도 확인하고 원장 잠금.
+- [중간, 발송 안전] 지운 초안(PST에서 EntryID 그대로)과 사용자가 쓰다 둔 다른 초안도 send로 나가던 것: 메일의 폴더가 임시 보관함(기본 계정 또는
+  그 메일 저장소의 임시 보관함)이 아니거나 원장에 없는 초안이면 거부.
+- [중간] send의 id 해석 오류가 "목록을 다시 보고 다시 실행"(`next_commands` = 목록)을 주던 것: 발송 거부 안내(`STOP_RETRY: 발송하지 않았습니다`)만, `next_commands` 없음.
+- [낮음] 없앤 `--send`를 `new`·`reply`·`forward`에 주면 exit 2 + "--send는 없습니다. 초안을 만든 뒤 사용자 확인을 받아 send를 실행" + `[추천] <--send를 뺀 전체 명령>`.
+- [치명] 숫자 앞·단위 뒤의 글자를 금지 목록에서 허용 목록으로 (검토마다 새 글자가 나왔음): 숫자 앞은 공백류, 줄 시작, `(` `[` `~` U+FF5E U+301C `=`,
+  `:`(앞이 숫자면 아님: `1:5 V`), 한글, `DC`/`AC`, 값 구분 `/`, 붙여 쓴 범위 대시만 층 A. 단위 뒤는 공백류, 줄 끝, `)` `]` `;` `~` U+FF5E U+301C,
+  `,` `.`(뒤가 숫자·영문이 아닐 때), `:`(뒤가 공백류·줄 끝), 한글, 값 구분 `/`, `DC`/`AC`, 붙여 쓴 괄호 허용 목록(`(DC)` `(AC)` `(Max)` `(Min)` `(Typ.)` 등),
+  범위 대시(`10 m-20 m`)만 층 A. 그 밖 글자는 층 B: 10차 사례 `1`+U+FF0C+`500 V`, `1`+U+FF0E+`5 V`, `1·5 V`, `△40 ℃`, `▲40 ℃`, `1`+U+2018+`500 V`,
+  ``1`500 V``, `1_500 V`, `1′500 V`, `1:5 V`, `1÷5 V`, `1\5 V`, `½5 A`, `5 V`+U+3383.
+- [치명] 앞이 숫자뿐인 `/` 값 구분에서 분수(`15/16 V`, 분모 2·4·8·16·32·64)와 비율(`10/100 V`, 1·10^n)을 뺌. 위 사례 모두 `number_literal_cases.tsv`에 notA로.
+
+### 회사 PC 확인
+- 실기 러너 G1(`confirm_commands`, `next_commands` 없음), G3(두 번째 send 거부). 임시 보관함이 기본 계정이 아닌 계정(공유 사서함 답장 등)의 초안도
+  send가 보내는지(메일 저장소의 임시 보관함 비교).
+- 미리 저장한 초안은 사용자가 작성 창에서 보내거나 지우기 전까지 임시 보관함에 남음 (README outlook 절).
+
 ## [1.4.72] - 2026-11-04
 
 독립 검토(9차) 수정. search `VERIFIED`(층 A)의 뜻(글자 그대로 + 숫자·단위 낱말 경계, 문맥 의미는 스니펫으로)은 그대로.
