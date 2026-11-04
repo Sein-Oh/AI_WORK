@@ -544,6 +544,100 @@ def test_marks_auto_outliers_and_all_rows_score(tmp_path):
     assert hist[-1]["data_profile"]["rows_used"]["생산효율"] == N - 3
 
 
+# ---- --exclude-where: 조건으로 학습에서 뺄 행 (2.9.56, office-cli excel.py read --where와 같은 식) ----------------
+
+WHERE = "생산효율 > 112; 라인 = B | 라인 = C"
+
+
+def _where_frame():
+    df = _excl_frame(_excl_marks())
+    df["라인"] = ["A", "B"] * (N // 2)
+    df.loc[17, "라인"] = "C"            # matches the condition but is marked '포함' -> kept, with a warning
+    df.loc[50, "라인"] = "C"            # matches the condition and is marked '센서오류' -> the user's reason wins
+    df = df.rename(columns={"생산효율": "생산효율(%)"})
+    return df
+
+
+def _where_expected(df):
+    y = df["생산효율(%)"]
+    hit = ((y > 112) & (df["라인"] == "B")) | (df["라인"] == "C")
+    return hit & (df["제외"] == "")
+
+
+@pytest.fixture(scope="module")
+def where_run(tmp_path_factory):
+    work = tmp_path_factory.mktemp("where")
+    f = work / "d.xlsx"
+    df = _where_frame()
+    df.to_excel(f, index=False)
+    res = run_tool("ml_train.py", "-f", str(f), "-x", "반응온도,압축압력,촉매비율", "-y", "생산효율",
+                   "--exclude-where", WHERE)
+    return work, f, df, res
+
+
+def test_exclude_where_leaves_out_matching_rows(where_run):
+    _, f, df, res = where_run
+    want = _where_expected(df)
+    assert 0 < want.sum() < 60
+    ex = res["exclusions"]["생산효율(%)"]
+    assert ex["condition"] == int(want.sum()) and ex["manual"] == 1, ex
+    text = "조건: 생산효율(%) > 112; 라인 = B | 라인 = C"                    # column names resolved (unit added)
+    assert res["excluded_reasons"][text] == int(want.sum())
+    rows = {p["row"] for p in res["excluded_preview"] if p["kind"] == "조건"}
+    assert rows <= {i + 2 for i in np.flatnonzero(want.to_numpy())} and rows
+    assert any("포함" in w and "--exclude-where" in w for w in res["warnings"]), res.get("warnings")
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert hist[-1]["exclude_where"] == "생산효율(%) > 112; 라인 = B | 라인 = C"
+    snap = pd.read_csv(os.path.join(res["version_dir"], "model_dataset.csv"), encoding="utf-8-sig")
+    assert int(snap["학습제외_생산효율(%)"].sum()) == ex["manual"] + ex["auto"] + ex["condition"]
+
+
+def test_exclude_where_is_inherited_by_best(where_run):
+    _, f, _, res = where_run
+    best = run_tool("ml_train.py", "-f", str(f), "--best")
+    assert best["exclusions"]["생산효율(%)"]["condition"] == res["exclusions"]["생산효율(%)"]["condition"], best
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert hist[-1]["target_recipes"]["생산효율(%)"]["exclude_where"] == "생산효율(%) > 112; 라인 = B | 라인 = C"
+
+
+def test_exclude_where_in_retrain_commands(tmp_path):
+    args = argparse.Namespace(header_row=None, unit_row=None, data_row=None, dtypes=None)
+    cmds = mt.build_next_commands(
+        args=args, raw_file=str(tmp_path / "d.xlsx"), task=mt.TASK_REGRESSION, positive_class=None,
+        feature_names=["a", "b", "c"], created_features=[], applied_evals=[], target_names=["y"],
+        champion={"weak_features": ["c"], "top_features": [{"feature": "a"}, {"feature": "b"}]},
+        schema={"numeric": ["a", "b", "c"]}, mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"),
+        exclude_where="a > 1; 라인 = 'B|C'")
+    retrain = [c["command"] for c in cmds if "ml_train.py" in c["command"]]
+    assert retrain and all("--exclude-where \"a > 1; 라인 = 'B|C'\"" in c for c in retrain), retrain
+
+
+def test_exclude_where_errors(tmp_path):
+    f = tmp_path / "d.csv"
+    _where_frame().to_csv(f, index=False)
+    base = ["-f", str(f), "-x", "반응온도,압축압력,촉매비율", "-y", "생산효율"]
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "생산효율 > 0")             # every row
+    assert bad["agent_directive"].startswith("STOP_RETRY") and "1행만 남습니다" in bad["message"], bad   # the '포함' row
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "라인x = B")               # unknown column -> [후보]
+    assert "[후보]" in bad["message"] and "라인" in bad["message"], bad
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "라인 == B")               # fixable notation -> [추천] command
+    rec = bad["message"].split("[추천] ")[1]
+    assert rec.startswith("python ") and '--exclude-where "라인 = B"' in rec, rec
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "생산효율 >")              # unreadable
+    assert "--exclude-where" in bad["message"] and "형식" in bad["message"], bad
+
+
+def test_where_mask_rules():
+    df = pd.DataFrame({"a": ["1,500", "20", "", "x"], "b": ["Line A", "line a", "B", "A;B"],
+                       "d": ["2026-01-02", "2026-02-01", None, "2025-12-31"]})
+    g = mp.parse_where("a >= 20; b = line a | b ~ ';' | d < 2026-01-01")
+    assert mp.where_text(g) == "a >= 20; b = line a | b ~ ';' | d < 2026-01-01"
+    assert list(mp.where_mask(df, g)) == [True, True, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("d < 2026-01-01"))) == [False, False, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("a > 100"))) == [True, False, False, False]   # '1,500' is 1500
+    assert list(mp.where_mask(df, mp.parse_where("b != B"))) == [True, True, False, True]
+
+
 def test_no_exclude_column_still_finds_outliers_and_clean_data_has_no_key(tmp_path):
     f = tmp_path / "d.csv"
     _excl_frame().to_csv(f, index=False)

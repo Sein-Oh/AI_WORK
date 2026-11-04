@@ -372,6 +372,7 @@ python ml_train.py -f "공정.xlsx" -x "반응온도,촉매비율,수분함량" 
 | `--header-row` | - | 선택 | 컬럼명 헤더 행 번호 (1-based, 미지정 시 상단 빈 행 자동 건너뜀) |
 | `--unit-row` | - | 선택 | 단위 행 번호 (지정 시 컬럼명에 안전 결합: `반응온도(°C)`) |
 | `--data-row` | - | 선택 | 실제 데이터 시작 행 번호 (비표준 표 레이아웃 처리용) |
+| `--exclude-where` | - | 선택 | 학습에서 뺄 행의 조건 (아래 9) 참고). 예: `"생산효율 > 90; 라인 = B | 라인 = C"` |
 | `--dtypes` | - | 선택 | 데이터 타입 수동 오버라이드 (예: `일시:datetime,코드:str`). 형식은 `float`, `int`, `str`, `datetime`(`date`, `category` 등 같은 뜻의 말도 받음). 열 이름은 `-x`/`-y`처럼 맞춤(정확한 이름, 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`), 형식 오타는 `[추천] --dtypes "<고친 값>"`, `int`는 숫자 열(빈 칸을 0으로 채우지 않음) |
 | `--version` | `-v` | 선택 | 버전 폴더 수동 지정 (미지정 시 `v1`, `v2`, ... 자동 채번). 이미 있는 버전이면 `STOP_RETRY` + `[추천] --version v<다음>` |
 | `--overwrite` | - | 선택 | `--version` 폴더가 이미 있을 때 교체 (사용자 확인 후에만). 새 버전이 원장에 기록될 때까지 기존 폴더를 `.bak_vX`로 보관했다가 실패하면 되돌림. 원장(`history.jsonl`, `history.json`)의 그 버전 기록도 새 기록으로 바꿔 버전마다 기록 하나 |
@@ -448,8 +449,18 @@ python ml_train.py -f sample.xlsx --best --task classification
 
 ---
 
-### 9) 학습 제외 행: `제외` 열과 자동 이상치
-데이터 파일은 고치지 않습니다. 옵션도 없습니다. 타겟마다 아래 규칙으로 학습에서 뺄 행을 정합니다.
+### 9) 학습 제외 행: `제외` 열, `--exclude-where` 조건, 자동 이상치
+데이터 파일은 고치지 않습니다. 타겟마다 아래 규칙으로 학습에서 뺄 행을 정합니다.
+
+- **`--exclude-where "<조건>"`**: office-cli `excel.py read --where`와 같은 식. `<열> <연산자> <값>`을 `;`(그리고)와 `|`(또는, `;`가 먼저 묶임)로 잇고,
+  연산자는 `>= <= > < = != ~`(`~`는 포함), 값에 `;`나 `|`가 있으면 작은따옴표로 감쌉니다. 숫자는 숫자로(`1,500` = 1500), `YYYY-MM-DD`는 날짜로,
+  나머지는 앞뒤 공백을 뺀 글자로(대소문자 무시) 비교합니다. 열 이름은 `-x`/`-y`와 같이 맞춥니다(단위 없는 고유한 이름, 비슷한 이름은 `[후보]`).
+  `==`, `<>`, `AND`, `OR` 같은 뜻이 하나인 표기는 `[추천] <고친 식으로 바꾼 전체 명령>`, 읽을 수 없는 식은 형식 안내와 함께 `STOP_RETRY`.
+  - 조건에 맞는 행은 모든 타겟의 학습에서 빠지고, 이유는 `조건: <열 이름을 맞춘 식>`(`excluded_rows.csv`의 구분 `조건`, `excluded_preview`의 `kind` `조건`),
+    `exclusions.<타겟>.condition`(행 수)·`condition_text`, 원장 `exclude_where`. `제외` 열에 이유를 적은 행은 그 이유로(직접 표시) 셉니다.
+  - `제외` 열이 `포함`인 행은 조건에 맞아도 학습에 넣고 `warnings`에 그 행을 적습니다 (사용자가 행마다 적은 표시가 우선).
+  - 조건으로 빼서 학습 행이 10개 미만이 되면 `STOP_RETRY`(남는 행 수와 함께).
+  - 개선 `next_commands`의 재학습 명령과 `--best`(타겟별 학습 조건 `target_recipes.<타겟>.exclude_where`)가 같은 조건을 이어받습니다.
 
 | `제외` 열 값 (열 이름 고정, 단위 무시) | 처리 |
 |---|---|
@@ -471,7 +482,7 @@ python ml_train.py -f sample.xlsx --best --task classification
 
 - 학습 범위(`feature_stats`, 예측 시 외삽 경고 기준)와 타겟 통계는 학습에 쓴 행으로만 계산합니다.
   `feature_stats`는 유효숫자 12자리로 저장합니다.
-- 산출물: `vX/excluded_rows.csv` (열: 타겟, 원본 행, 구분(직접 표시/자동 이상치), 이유, 실제값, 예측값). 원본 행은 엑셀 행 번호(CSV는 빈 줄을 뺀 줄 번호).
+- 산출물: `vX/excluded_rows.csv` (열: 타겟, 원본 행, 구분(직접 표시/조건/자동 이상치), 이유, 실제값, 예측값). 원본 행은 엑셀 행 번호(CSV는 빈 줄을 뺀 줄 번호).
 - 결과 JSON: `exclusions` = `{타겟: {column, manual, auto, forced_include, auto_note, all_rows_score}}`, `excluded_rows_file`,
   `excluded_count`(뺀 행 수, 타겟별 합), `excluded_reasons`(이유별 행 수: `제외` 열의 글, 자동은 `자동 이상치: <열>`),
   `excluded_preview`(앞 20행: `target`, `row`(원본 행), `kind`(`직접`/`자동`), `reason`, `value`(타겟 실제값)), `excluded_preview_truncated`.

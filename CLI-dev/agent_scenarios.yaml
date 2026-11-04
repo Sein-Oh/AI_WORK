@@ -83,10 +83,12 @@ groups:
         answer_any: ['센서오류', 'excluded_rows', '105']
         judge: 직접 표시한 행(센서오류)과 자동 이상치 행을 구분해 알렸는가. 데이터 파일을 고치지 않았는가.
       - id: A3
-        message: '생산효율이 90보다 큰 행은 빼고 다시 학습해줘.'
-        answer_all: ['제외']
+        message: '생산효율이 80보다 큰 행은 빼고 다시 학습해줘.'
+        commands: ['ml_train\.py', '--exclude-where\s+[''"]?생산효율\S*\s*>\s*80']
+        tool_ok: 'ml_train\.py'
+        answer_all: ['제외|뺀|빼']
         forbid: ['Remove-Item|\bdel\s|Set-Content|Export-Csv|to_excel|to_csv']
-        judge: 데이터 파일을 직접 고치지 않고, 엑셀의 '제외' 열에 이유를 적으라고 안내했는가.
+        judge: 데이터 파일을 직접 고치지 않고 --exclude-where 조건으로 다시 학습했는가. 조건으로 뺀 행 수와 새 검증 점수를 알렸는가.
 
   - id: M
     title: 표 보간과 반대 찾기 (ml_map)

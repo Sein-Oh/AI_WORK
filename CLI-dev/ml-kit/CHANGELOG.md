@@ -8,6 +8,29 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.56] - 2026-11-04
+
+조건으로 학습에서 뺄 행 (`--exclude-where`). 회사 PC 시험 A3("생산효율이 90보다 큰 행은 빼고 다시 학습해줘")에서 에이전트가 할 수 있는 일이
+`제외` 열에 직접 적으라는 안내뿐이었음. 회귀 테스트: `tests/test_train.py` `test_exclude_where_*` 4개, `test_where_mask_rules`
+(2.9.55에서 5개 모두 실패: 옵션 없음).
+
+### 새 기능
+- `ml_train.py --exclude-where "<조건>"`: office-cli `excel.py read --where`와 같은 식 (`;` 그리고, `|` 또는(`;`가 먼저), 연산자 `>= <= > < = != ~`,
+  `;`·`|`가 든 값은 따옴표). 숫자는 숫자로(`1,500` = 1500), `YYYY-MM-DD`는 날짜로, 그 밖은 글자로(대소문자 무시) 비교. 데이터 파일은 바꾸지 않습니다.
+  - 열 이름은 `-x`/`-y`와 같이 맞춤(`resolve_column_names`: 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`). `==`, `<>`, `AND`, `OR`는
+    `[추천] <고친 식의 전체 명령>`, 읽을 수 없는 식은 형식 안내.
+  - 조건에 맞는 행은 모든 타겟의 학습에서 빠짐: `exclusions.<타겟>.condition`(행 수)·`condition_text`, 이유 `조건: <열 이름을 맞춘 식>`
+    (`excluded_rows.csv` 구분 `조건`, `excluded_preview`의 `kind` `조건`, `excluded_reasons`), preview `학습 제외 N행(직접 a, 조건 b, 자동 c)`.
+    `제외` 열에 이유를 적은 행은 직접 표시로 셈.
+  - `제외` 열이 `포함`인 행은 조건에 맞아도 학습에 넣고 `warnings`에 그 행을 적음. 조건에 맞는 행이 없으면 `warnings`에 알림.
+  - 조건으로 빼서 학습 행이 10개 미만이면 `STOP_RETRY`(남는 행 수).
+  - 원장 `exclude_where`(맞춘 식), 개선 `next_commands`의 재학습 명령과 `--best`(`target_recipes.<타겟>.exclude_where`)가 같은 조건을 이어받음.
+    `model_dataset.csv`의 `학습제외_<타겟>`에도 표시되어 예측의 실측 비교값이 그 행을 쓰지 않습니다.
+- 공통 런타임(PART C)에 조건 식 함수: `parse_where`, `resolve_where`, `where_mask`, `where_text` (예측의 조건 검색에도 씀).
+- 보고서: 학습 제외 행 줄에 조건 행 수와 식.
+- SKILL.md 2단계: 옵션 표에 한 줄, 행 빼기 안내를 `--exclude-where`(조건) / `제외` 열(특정 행)로. `agent_scenarios.yaml` A3를 이 옵션으로 채점
+  (샘플 데이터의 생산효율 최대가 84라 기준을 80으로), 메시지 팩(`docs/opencode/자동테스트`) 다시 만듦.
+
 ## [2.9.55] - 2026-11-04
 
 사용자가 정할 일을 도구가 고를 수 있는 명령으로 바꿔 줌. 회귀 테스트: `tests/test_contract.py`

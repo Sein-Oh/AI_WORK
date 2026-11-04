@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.55"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.56"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -681,6 +681,157 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     for short, full in applied.items():
         sys.stderr.write(f"[INFO] 컬럼명 자동 매칭: '{short}' -> '{full}'\n")
     return resolved, applied
+
+
+# ==============================================================================
+# C3-B. Row conditions: ml_train.py --exclude-where, ml_predict.py --where (constrained search)
+# ==============================================================================
+# The syntax of office-cli excel.py read --where: '<column> <op> <value>' joined by ';' (AND) and '|' (OR, ';' binds
+# first), operators >= <= != > < = ~ (~ = contains), a value with ; or | in single or double quotes.
+# Numbers compare as numbers ('1,500' is 1500), dates (YYYY-MM-DD) as dates, other values as trimmed text, case-insensitive.
+
+_WHERE_HEAD = re.compile(r"\s*([^;|]+?)\s*(>=|<=|!=|>|<|=|~)[ \t]*", re.S)
+_WHERE_FIXES = (("==", "="), ("=>", ">="), ("=<", "<="), ("<>", "!="), ("=!", "!="))   # one meaning only
+_WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
+_WHERE_OR = re.compile(r"\s+(?:or|OR|Or|또는)\s+|\s*\|\|\s*")
+_WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
+_WHERE_QUOTED = re.compile(r"(\"[^\"]*\"|'[^']*')")
+_WHERE_DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?")
+WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
+              "값에 ; | 가 있으면 작은따옴표로 감쌈. 예: 생산효율 > 90; 라인 = B | 라인 = C)")
+
+Cond = Tuple[str, str, str]
+
+
+def _where_parts(text: str) -> Optional[List[List[Cond]]]:
+    """'<col> <op> <value>' joined by ; and | -> OR groups [[cond, ...], ...]; ; | inside a quoted value do not split."""
+    groups: List[List[Cond]] = [[]]
+    pos, n = 0, len(text)
+    while pos < n:
+        if not text[pos:].strip():
+            break
+        m = _WHERE_HEAD.match(text, pos)
+        if not m or not m.group(1).strip():
+            return None
+        col, op = m.group(1).strip(), m.group(2)
+        pos = m.end()
+        q = text[pos] if pos < n and text[pos] in "\"'" else ""
+        close = re.compile(re.escape(q) + r"\s*(?=[;|]|$)").search(text, pos + 1) if q else None
+        if close:
+            val, pos = text[pos + 1:close.start()], close.end()
+        else:
+            nxt = re.search(r"[;|]", text[pos:])
+            stop = pos + nxt.start() if nxt else n
+            val, pos = text[pos:stop].strip(), stop
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+        if op in (">", "<", ">=", "<=", "~") and val == "":
+            return None
+        groups[-1].append((col, op, val))
+        if pos < n:
+            sep = text[pos]
+            pos += 1
+            if sep == "|":
+                if not groups[-1]:
+                    return None
+                groups.append([])
+    groups = [g for g in groups if g]
+    return groups or None
+
+
+def _where_value_text(v: str) -> str:
+    return f"'{v}'" if re.search(r"[;|]", v) or v != v.strip() else v
+
+
+def where_text(groups: List[List[Cond]]) -> str:
+    """The OR groups as one condition text (a value with ; or | in single quotes)."""
+    return " | ".join("; ".join(f"{c} {o} {_where_value_text(v)}" for c, o, v in g) for g in groups)
+
+
+def _outside_quotes(text: str, fn: Callable[[str], str]) -> str:
+    return "".join(part if i % 2 else fn(part) for i, part in enumerate(_WHERE_QUOTED.split(text)))
+
+
+def _where_retry(option: str, fixed: str) -> str:
+    """[추천] for a fixed condition: the running command with the option replaced (a full command, R8), else the text."""
+    cmd = command_text(drop={option: option.lstrip("-").replace("-", "_")})
+    return f"{cmd} {option} {quote_arg(fixed)}" if cmd else fixed
+
+
+def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
+    """Condition text -> OR groups [[(column, op, value), ...], ...] (every condition of a group must hold).
+    Notation with one meaning (==, =>, <>, AND, OR) -> STOP_RETRY [추천] the command with the fixed text."""
+    raw = str(text).strip()
+
+    def fix(part: str) -> str:
+        part = _WHERE_CONTAINS.sub(" ~ ", _WHERE_OR.sub(" | ", _WHERE_AND.sub("; ", part)))
+        for a, b in _WHERE_FIXES:
+            part = part.replace(a, b)
+        return part
+    fixed = _outside_quotes(raw, fix)
+    groups = _where_parts(fixed)
+    if groups is None:
+        raise InputError(f"{option} 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
+    if fixed != raw:
+        raise InputError(f"{option} 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;, 또는은 |). "
+                         f"형식: {WHERE_FORM}. [추천] {_where_retry(option, where_text(groups))}")
+    return groups
+
+
+def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "--where",
+                  layout: Optional[Dict[str, Any]] = None) -> List[List[Cond]]:
+    """Column names of the conditions resolved like -x / -y (resolve_column_names: exact, a unique name without its
+    unit, a similar name -> [후보])."""
+    names = list(dict.fromkeys(c for g in groups for c, _, _ in g))
+    resolved = resolve_column_names(names, columns, f"조건({option})의 열", layout=layout)[0]
+    rmap = dict(zip(names, resolved))
+    return [[(rmap[c], o, v) for c, o, v in g] for g in groups]
+
+
+def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
+    text = series.map(lambda v: "" if v is None or (isinstance(v, float) and v != v) else str(v).strip())
+    if op == "~":
+        return text.str.casefold().str.contains(val.strip().casefold(), regex=False).to_numpy(dtype=bool)
+    vnum = coerce_numeric(pd.Series([val])).iloc[0]
+    cmp = {"=": np.equal, "!=": np.not_equal, ">": np.greater, "<": np.less, ">=": np.greater_equal,
+           "<=": np.less_equal}[op]
+    if vnum == vnum and vnum is not None:
+        num = coerce_numeric(series).to_numpy(dtype=float)
+        ok = ~np.isnan(num)
+        out = np.zeros(len(series), dtype=bool)
+        out[ok] = cmp(num[ok], float(vnum))
+        if op in ("=", "!="):        # a text cell against a number: compared as text
+            tv = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
+            out[~ok] = tv[~ok] if op == "=" else ~tv[~ok]
+        return out
+    if _WHERE_DATE.fullmatch(val.strip()):
+        dt = parse_datetime(series)
+        vd = pd.Timestamp(val.strip())
+        ok = dt.notna().to_numpy(dtype=bool)
+        out = np.zeros(len(series), dtype=bool)
+        if len(val.strip()) == 10:
+            left = dt[ok].dt.normalize()
+        else:
+            left = dt[ok]
+        out[ok] = cmp(left.to_numpy(), np.datetime64(vd))
+        if op == "!=":
+            out[~ok] = True
+        return out
+    if op not in ("=", "!="):
+        return np.zeros(len(series), dtype=bool)   # a size comparison with a text value: no row
+    eq = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
+    return eq if op == "=" else ~eq
+
+
+def where_mask(df: pd.DataFrame, groups: List[List[Cond]]) -> np.ndarray:
+    """Rows of df that meet the condition (any OR group whose conditions all hold). Column names must be resolved."""
+    out = np.zeros(len(df), dtype=bool)
+    for g in groups:
+        hit = np.ones(len(df), dtype=bool)
+        for col, op, val in g:
+            hit &= _where_cond_mask(df[col], op, val)
+        out |= hit
+    return out
 
 
 # ==============================================================================
