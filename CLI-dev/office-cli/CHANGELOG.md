@@ -6,6 +6,15 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.52] - 2026-11-04
+
+쓰지 않는 옵션 정리 (사용자 결정). 회귀 테스트: `tests/test_office.py` `test_transfer_method_option_removed`,
+`tests/test_reader.py` `test_search_case_sensitive_option_removed` (1.4.51에서 2개 중 2개 실패).
+
+### 구조
+- `office.py transfer --method` 삭제. 차트 그림 방식은 자동 순서(`--probe`가 저장한 순서 먼저)만. 실기 러너 I24는 임시 `OFFICE_CLI_CONFIG`로 redraw를 먼저 시도.
+- `reader.py search --case-sensitive`/`-c` 삭제. 검색은 늘 대소문자를 무시.
+
 ## [1.4.51] - 2026-11-04
 
 `reader.py search` 재현율 (경량 LLM의 검색어가 규격서 글과 조금 달라도 근거를 찾게). 회귀 테스트: `tests/test_reader.py` "검색 재현율"

@@ -365,6 +365,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `search`는 `not_searched`에 넣어 `UNVERIFIED:`입니다. 파서 버전 9의 캐시는 이 두 가지를 반영해 다시 읽습니다.
 
 #### 검색과 캐시
+- 검색은 늘 대소문자를 무시합니다(`--regex` 포함). 대소문자를 가리는 옵션은 없습니다.
 - `--file` 없음: 캐시에 등록된 문서 전체만 검색합니다. 등록된 문서가 없으면 `error_type: not_indexed`(STOP_RETRY).
   원본이 바뀌었거나 이전 파서 형식인 캐시는 그 자리에서 다시 읽고(20개까지, `recovered`로 알림) 검색합니다. 원본이 바뀌었는데 다시 읽지 못한 캐시(한도 초과, 읽기 실패)는
   옛 내용으로 검색하고 결과 항목에 `stale: true`, `stale_cache_count`와 `index --all` 명령. 원본이 지워진 문서는 `file_missing: true`.
@@ -484,7 +485,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 닫힌 docx의 `--table N`은 `reader.py read`·Word(COM)와 같은 번호입니다: 콘텐츠 컨트롤(`w:sdt`)·customXml 안의 표도 문서 순서로 셉니다
 . 글상자 안의 표는 세지 않습니다(Word `Tables`와 같음).
 
-차트 그림은 다음 순서로 자동 시도하고, 결과 JSON의 `method`에 실제로 쓴 방식을 적습니다.
+차트 그림은 다음 순서로 자동 시도하고, 결과 JSON의 `method`에 실제로 쓴 방식을 적습니다. 방식을 고르는 인자는 없습니다:
+`office.py transfer --probe`가 이 PC에서 된 방식을 `config.json`(`transfer_method`)에 저장하면 그 방식부터 시도합니다.
 1. `export`: Excel의 `Chart.Export` PNG를 씁니다. **파일 앞부분이 PNG가 아니면(DRM 암호화) 건너뜁니다.**
 2. `redraw`: 차트의 계열 값을 COM으로 읽고 matplotlib으로 다시 그립니다. Python이 쓴 파일을 쓰고 클립보드는 쓰지 않습니다. 원본 서식은 근사치입니다.
    제목·계열 이름·항목 이름의 `$`는 글자 그대로 그립니다(수식으로 읽지 않음).

@@ -2352,7 +2352,6 @@ def _bad_regex(query: str, e: "re.error", args: Any = None) -> rt.InputError:
         for flag, val in (("--file", args.file), ("--pages", args.pages), ("--section", args.section)):
             if val:
                 cmd += [flag, val]
-        cmd += ["--case-sensitive"] if args.case_sensitive else []
         cmd += ["--full"] if args.full else []
         rec = rt.next_command("reader.py", cmd, "")["command"]
         tail = " 정규식 문법이 없는 글이라 글자 그대로 찾으면 됩니다(--regex 없이, 기호·띄어쓰기는 무시)."
@@ -2360,10 +2359,10 @@ def _bad_regex(query: str, e: "re.error", args: Any = None) -> rt.InputError:
     return rt.InputError(f"{head} 정규식을 고쳐 다시 실행하세요 (기호를 글자로 찾으려면 앞에 \\를 붙임).")
 
 
-def build_matcher(query: str, regex: bool, case_sensitive: bool, args: Any = None):
+def build_matcher(query: str, regex: bool, args: Any = None):
     """검색 조건을 함수로 만듭니다. 'A AND B', 'A OR B' 조합 지원 (AND가 OR보다 먼저 묶임).
-    반환: match_fn(text) -> 강조할 단어 목록 또는 None"""
-    flags = 0 if case_sensitive else re.IGNORECASE
+    반환: match_fn(text) -> 강조할 단어 목록 또는 None. 대소문자는 늘 무시."""
+    flags = re.IGNORECASE
     if regex:
         try:
             pat = re.compile(query, flags)
@@ -2559,8 +2558,8 @@ def _term_pattern(term: str, flags: int) -> "re.Pattern[str]":
     return _compiled(term, flags, tuple(synonyms_of(term)))
 
 
-def make_snippet(text: str, terms: List[str], context: int, case_sensitive: bool) -> str:
-    flags = 0 if case_sensitive else re.IGNORECASE
+def make_snippet(text: str, terms: List[str], context: int) -> str:
+    flags = re.IGNORECASE
     first = None
     for term in terms:
         m = _term_pattern(term, flags).search(text)
@@ -2578,9 +2577,9 @@ def make_snippet(text: str, terms: List[str], context: int, case_sensitive: bool
 _SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])\s+|\n+")
 
 
-def match_sentence(text: str, terms: List[str], case_sensitive: bool, limit: int = 1000) -> str:
+def match_sentence(text: str, terms: List[str], limit: int = 1000) -> str:
     """일치한 단어가 든 문장 (문장으로 못 나누면 단락 앞부분)."""
-    flags = 0 if case_sensitive else re.IGNORECASE
+    flags = re.IGNORECASE
     for sent in _SENT_SPLIT.split(text):
         if any(_term_pattern(t, flags).search(sent) for t in terms):
             return sent.strip()[:limit]
@@ -2796,8 +2795,8 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
 
 def cmd_search(args) -> Dict[str, Any]:
-    matcher = build_matcher(args.query, args.regex, args.case_sensitive, args)
-    flags = 0 if args.case_sensitive else re.IGNORECASE
+    matcher = build_matcher(args.query, args.regex, args)
+    flags = re.IGNORECASE
     clamp_warnings: List[str] = []
     if args.top > MAX_SEARCH_TOP:
         clamp_warnings.append(f"--top {args.top}은 상한 {MAX_SEARCH_TOP}으로 줄임 (전체 결과는 --save 파일로)")
@@ -2840,7 +2839,7 @@ def cmd_search(args) -> Dict[str, Any]:
             rt.note_recovered(f"검색어 {n_terms}개가 모두 든 곳이 없음 -> {how}으로 넓혀 찾음 ({len(hits)}건, match_mode {mode})")
     for h in hits:
         h["score"] = hit_score(h["unit"], h["terms"], flags) if not args.regex else 0
-        h["snippet"] = make_snippet(h["unit"]["text"], h["terms"], args.context, args.case_sensitive)
+        h["snippet"] = make_snippet(h["unit"]["text"], h["terms"], args.context)
     if not args.regex:
         hits.sort(key=lambda h: -h["score"])          # 좋은 결과부터 (같은 점수는 문서 순서)
     syn_used = {t: synonyms_of(t) for g in groups for t in g if synonyms_of(t)}
@@ -2895,7 +2894,7 @@ def cmd_search(args) -> Dict[str, Any]:
                 clamped_context += 1 if cut else 0
             rows.append([os.path.basename(h["doc"]["file"]), u.get("page") if u.get("page") is not None else "",
                          section_text(u), u.get("number") or "", u["loc"],
-                         match_sentence(u["text"], h["terms"], args.case_sensitive), context_text, h["score"]])
+                         match_sentence(u["text"], h["terms"]), context_text, h["score"]])
         if ext == ".csv":
             out = rt.write_csv_rows(out, [header] + rows)
         elif ext == ".xlsx":
@@ -2971,8 +2970,6 @@ def cmd_search(args) -> Dict[str, Any]:
                 cmd += [flag, val]
         if args.regex:
             cmd.append("--regex")
-        if args.case_sensitive:
-            cmd.append("--case-sensitive")
         if args.full:
             cmd.append("--full")
         # --full에서 엑셀 셀 상한(XLSX_CELL_MAX자)보다 긴 단락이 있으면 .xlsx는 반드시 잘림(UNVERIFIED): .md로
@@ -3296,7 +3293,6 @@ def build_cli():
     s.add_argument("--pages", "-p", help="쪽 번호로 거르기. 예: 3-7 (쪽 정보가 없는 단위는 제외)")
     s.add_argument("--section", help="장절 경로 일부로 거르기 (대소문자 무시)")
     s.add_argument("--regex", "-r", action="store_true", help="정규식으로 검색")
-    s.add_argument("--case-sensitive", "-c", action="store_true", help="대소문자 구분")
     s.add_argument("--top", "-n", type=int, default=10, help="표시할 최대 건수 (기본 10, --save 파일에는 전체)")
     s.add_argument("--context", "-C", type=int, default=80, help="스니펫 앞뒤 글자 수 (기본 80)")
     s.add_argument("--full", action="store_true", help="스니펫 대신 일치한 단락/페이지 전체")

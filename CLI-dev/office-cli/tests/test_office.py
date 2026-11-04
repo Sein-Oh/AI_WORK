@@ -389,6 +389,7 @@ def relay_env(chart_env, monkeypatch):
     monkeypatch.setattr(excel, "find_chart", lambda t, name, sheet=None: (None, chart))
     monkeypatch.setattr(word, "_insert_position", lambda doc, anchor, pos, occurrence=None: (0, "end"))
     monkeypatch.setattr(office, "relay_chart", _real_relay)
+    monkeypatch.setattr(office, "method_order", lambda kind: ["relay"])     # --probe가 relay만 된다고 저장한 PC
     monkeypatch.setattr(office.time, "sleep", lambda s: None)
     prs, wdoc = _prs(2), _WordDoc()
     log["prs"] = prs
@@ -506,9 +507,14 @@ def test_is_plain_png_detects_encrypted(tmp_path):
 
 def test_method_order_uses_probe_result(monkeypatch):
     monkeypatch.setattr(rt, "load_config", lambda: {"transfer_method": {"ppt": ["relay"]}})
-    assert office.method_order("ppt", None) == ["relay", "export", "redraw"]
-    assert office.method_order("word", None) == ["export", "redraw", "relay"]
-    assert office.method_order("ppt", "redraw") == ["redraw"]
+    assert office.method_order("ppt") == ["relay", "export", "redraw"]
+    assert office.method_order("word") == ["export", "redraw", "relay"]
+
+
+def test_transfer_method_option_removed(capsys):
+    """사용자 결정(1.4.52): --method 없음. 방식은 자동 순서(--probe가 저장한 순서)만."""
+    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "word", "--method", "relay")
+    assert code == 2 and "--method" in out["message"], out
 
 
 def test_chart_transfer_falls_back_from_encrypted_export_to_redraw(chart_env, capsys):
@@ -942,9 +948,10 @@ def test_relay_resolves_target_before_clipboard(chart_env, capsys, monkeypatch):
     import excel
     monkeypatch.setattr(excel, "find_chart", lambda t, name, sheet=None: (None, chart))
     monkeypatch.setattr(office, "relay_chart", _real_relay)
+    monkeypatch.setattr(office, "method_order", lambda kind: ["relay"])
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "ZQX_보고서.docx", "path": "", "app": None, "doc": None}])
     code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word",
-                           "--to-target", "zqx 보고서.docx", "--method", "relay")
+                           "--to-target", "zqx 보고서.docx")
     assert code == 1 and out["message"].endswith("[추천] ZQX_보고서.docx"), out
     assert copied == []                                   # 사용자의 클립보드를 덮어쓰지 않음
 
@@ -1025,7 +1032,7 @@ def test_guard_chart_internal_error_text_not_logged(chart_env, capsys, monkeypat
 
 @pytest.mark.parametrize("target", [None, "file"])
 def test_relay_ppt_bad_slide_before_clipboard(relay_env, capsys, tmp_path, target):
-    argv = ["transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "9", "--method", "relay"]
+    argv = ["transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "9"]
     if target == "file":
         p = tmp_path / "deck.pptx"
         p.write_bytes(b"x")
@@ -1036,7 +1043,7 @@ def test_relay_ppt_bad_slide_before_clipboard(relay_env, capsys, tmp_path, targe
 
 
 def test_relay_ppt_ok_after_slide_check(relay_env, capsys):
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "2", "--method", "relay")
+    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "2")
     assert code == 0 and out["results"]["ppt"]["method"] == "relay", out
     assert len(relay_env["copied"]) == 1 and relay_env["dispatch"] == ["Word.Application"]
     assert relay_env["prs"].Slides(2).Shapes.Count == 1 and relay_env["opened"] == [("ppt", "active")]
@@ -1050,7 +1057,7 @@ def test_relay_ppt_ok_after_slide_check(relay_env, capsys):
 @pytest.mark.parametrize("kind", ["word", "ppt"])
 def test_relay_empty_target_is_active(relay_env, capsys, kind):
     slide = ["--slide", "1"] if kind == "ppt" else []
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", kind, "--to-target", "", "--method", "relay",
+    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", kind, "--to-target", "",
                            *slide)
     assert code == 0 and out["results"][kind]["method"] == "relay", out["message"]
     assert "KeyError" not in json.dumps(out, ensure_ascii=False)

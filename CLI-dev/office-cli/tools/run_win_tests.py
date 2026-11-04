@@ -1652,11 +1652,19 @@ def test_I(ctx):
     def i24():
         doc = wd_doc("A.docx")
         n0 = com_retry(lambda: doc.InlineShapes.Count)
-        d, c, r, e = run_cli("office.py", "transfer", "--from", "excel", "--chart", "I 막대", "--to", "word", "--method", "redraw")
+        # --method가 없으므로(1.4.52) --probe가 redraw를 먼저 저장한 PC처럼 임시 설정 파일로 순서를 정함
+        cfg = ctx.path("_i24_config.json")
+        with open(cfg, "w", encoding="utf-8") as f:
+            json.dump({"transfer_method": {"word": ["redraw"]}}, f)
+        RUN_ENV["OFFICE_CLI_CONFIG"] = cfg
+        try:
+            d, c, r, e = run_cli("office.py", "transfer", "--from", "excel", "--chart", "I 막대", "--to", "word")
+        finally:
+            RUN_ENV.pop("OFFICE_CLI_CONFIG", None)
         n1 = com_retry(lambda: wd_doc("A.docx").InlineShapes.Count)
         method = (((d or {}).get("results") or {}).get("word") or {}).get("method")
         ok = ok_(d) and method == "redraw" and n1 == n0 + 1
-        record(ctx, "I24", "차트 전달 redraw 방식 강제 (DRM 대비 경로)", ok, f"방식={method}, 워드 그림 {n0}->{n1}", d, c, r, e)
+        record(ctx, "I24", "차트 전달 redraw 방식 (저장된 순서, DRM 대비 경로)", ok, f"방식={method}, 워드 그림 {n0}->{n1}", d, c, r, e)
 
     # --- 되돌리기 / 창 -----------------------------------------------------------
     def i25():

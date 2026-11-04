@@ -397,9 +397,8 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
     return done
 
 
-def method_order(kind: str, forced: Optional[str]) -> List[str]:
-    if forced and forced != "auto":
-        return [forced]
+def method_order(kind: str) -> List[str]:
+    """차트 전달 방식 순서: --probe가 저장한 순서(이 PC에서 된 방식 먼저), 없으면 기본 순서."""
     saved = rt.load_config().get("transfer_method", {}).get(kind)
     if isinstance(saved, list) and saved:
         return [m for m in saved if m in METHODS] + [m for m in METHODS if m not in saved]
@@ -539,7 +538,7 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
             attempt += 1
             # 대상마다 아직 시도하지 않은 다음 방식으로
             for kind in list(pending):
-                order = method_order(kind, args.method)
+                order = method_order(kind)
                 tried = errors.setdefault(kind, [])
                 remaining = [m for m in order if not any(e.startswith(m + ":") for e in tried)]
                 if not remaining:
@@ -1230,7 +1229,6 @@ def build_cli():
     p.add_argument("--slide", help="PPT 슬라이드: 받을 때 번호 또는 new(기본), 보낼 때 표를 찾을 슬라이드")
     p.add_argument("--anchor", help="워드에서 이 글이 있는 단락 뒤에 넣기 (기본: 문서 끝)")
     p.add_argument("--occurrence", type=int, help="--anchor가 여러 단락에 있을 때 몇 번째인지 (1부터, 오류의 [후보] 번호)")
-    p.add_argument("--method", choices=["auto"] + list(METHODS), default="auto", help="차트 그림 방식 (기본 auto)")
     p.add_argument("--theme", help=f"표 색: {', '.join(off.THEMES)}")
     p.add_argument("--probe", action="store_true", help="이 PC에서 되는 차트 전달 방식을 시험해 저장")
 

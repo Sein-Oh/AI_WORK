@@ -632,11 +632,11 @@ def test_old_office_format_is_redirected():
 
 
 def test_matcher_and_or_and_snippet():
-    m = reader.build_matcher("케이블카 AND 사파리 OR 단가", False, False)
+    m = reader.build_matcher("케이블카 AND 사파리 OR 단가", False)
     assert m("케이블카와 사파리") == ["케이블카", "사파리"]
     assert m("케이블카만") is None
     assert m("견적 단가") == ["단가"]
-    snip = reader.make_snippet("가" * 200 + "단가표" + "나" * 200, ["단가"], 10, False)
+    snip = reader.make_snippet("가" * 200 + "단가표" + "나" * 200, ["단가"], 10)
     assert snip.startswith("...") and "**단가**" in snip
 
 
@@ -1713,11 +1713,11 @@ def test_parse_query_quotes_case_insensitive_operators():
 
 
 def test_matcher_ignores_spacing_and_empty_regex():
-    m = reader.build_matcher("설계기준", False, False)
+    m = reader.build_matcher("설계기준", False)
     assert m("본 설계 기준에 따른다") == ["설계기준"] and m("설계기\n준") == ["설계기준"]
-    assert reader.build_matcher('"설계 기준"', False, False)("설계기준을 따른다")
-    assert reader.build_matcher("a*", True, False)("xyz") is None
-    assert "**설계 기준**" in reader.make_snippet("본 설계 기준에 따른다", ["설계기준"], 20, False)
+    assert reader.build_matcher('"설계 기준"', False)("설계기준을 따른다")
+    assert reader.build_matcher("a*", True)("xyz") is None
+    assert "**설계 기준**" in reader.make_snippet("본 설계 기준에 따른다", ["설계기준"], 20)
 
 
 def test_zero_hits_with_unindexed_files_is_unverified(tmp_path):
@@ -1811,11 +1811,11 @@ def test_numbering_helper_creates_part_when_template_has_none(tmp_path):
     ("C++", "C++ 코딩 규칙", True),
 ])
 def test_search_ignores_symbols_and_spacing_but_keeps_number_boundaries(query, text, hit):
-    assert (reader.build_matcher(query, False, False)(text) is not None) == hit
+    assert (reader.build_matcher(query, False)(text) is not None) == hit
 
 
 def test_snippet_highlights_symbol_insensitive_match():
-    assert "**SOI #1**" in reader.make_snippet("Activities for SOI #1 are listed", ["SOI 1"], 30, False)
+    assert "**SOI #1**" in reader.make_snippet("Activities for SOI #1 are listed", ["SOI 1"], 30)
 
 
 # ---------------------------------------------------------------------------
@@ -2380,11 +2380,11 @@ def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
 
 
 def test_search_particles_do_not_overstrip_short_words():
-    m = reader.build_matcher("높이", False, False)
+    m = reader.build_matcher("높이", False)
     assert m("높이 10 mm") and m("높은 온도") is None          # '높이'의 '이'는 조사가 아님 (남는 글이 1자)
-    assert reader.build_matcher("5V", False, False)("15V 전원") is None
-    assert reader.build_matcher("5V", False, False)("5.5 V 전원") is None
-    assert reader.build_matcher("5V", False, False)("5[V] 전원")
+    assert reader.build_matcher("5V", False)("15V 전원") is None
+    assert reader.build_matcher("5V", False)("5.5 V 전원") is None
+    assert reader.build_matcher("5V", False)("5[V] 전원")
 
 
 def test_search_ranks_best_hits_first_and_saves_score(tmp_path, capsys):
@@ -2416,3 +2416,11 @@ def test_search_bad_regex_recommends_literal_search(tmp_path, capsys, monkeypatc
     assert "전압 (5V" not in error_log_text(isolated_dirs)        # 검색어는 오류 로그에 남지 않음
     code, out = run_fresh(reader, capsys, monkeypatch, "search", "--query", r"\d+(V", "--file", str(p), "--regex")
     assert code == 1 and "[추천]" not in out["message"]          # 정규식을 쓰려던 것이 분명하면 글자 그대로 찾기를 권하지 않음
+
+
+def test_search_case_sensitive_option_removed(capsys):
+    """사용자 결정(1.4.52): search --case-sensitive/-c 없음. 대소문자는 늘 무시."""
+    for flag in ("--case-sensitive", "-c"):
+        code, out = run_main(reader, capsys, "search", "--query", "abc", flag)
+        assert code == 2 and out["status"] == "error", out
+    assert reader.build_matcher("ABC", False)("xx abc yy")
