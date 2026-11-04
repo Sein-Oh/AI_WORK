@@ -6,6 +6,17 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.60] - 2026-11-04
+
+Outlook 이어 하기 (C2). 회귀 테스트: `tests/test_outlook.py` "짧은 번호, 첨부 저장 뒤 읽기 명령, calendar, thread"(1.4.59에서 9개 중 9개 실패).
+
+### 기능
+- 짧은 번호: `list`/`search`/`thread` 결과의 `id`가 1, 2, 3 ...(긴 EntryID는 `entry_id`). 마지막 목록을 데이터 폴더(`outlook_last_list.json`)에 기억해
+  `--id 3`으로 읽기·첨부·답장·전달·대화. 긴 EntryID도 그대로 받음. `read`/`current`/`attachments`의 `mail.id`는 `mail.entry_id`로 바꿈(베타).
+- `attachments --save`: 저장한 문서마다 `reader.py read --file`(3개까지), 둘 이상이면 `reader.py index --folder` 명령을 `next_commands`로.
+- `outlook.py thread --id N`(읽기 전용): 같은 대화의 받은·보낸 메일을 오래된 순으로(20통, 본문 400자).
+- `outlook.py calendar [--days 7]`(읽기 전용): 오늘부터 N일의 일정(반복 일정 펼침, 50개).
+
 ## [1.4.59] - 2026-11-04
 
 두 판의 문서 비교 (B5). 회귀 테스트: `tests/test_reader.py` "reader.py diff"(1.4.58에서 5개 중 5개 실패, 명령 없음).

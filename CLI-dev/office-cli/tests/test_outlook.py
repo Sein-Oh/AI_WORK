@@ -3,6 +3,7 @@ import datetime
 import datetime as dt
 import json
 import os
+import re
 import types
 
 import pytest
@@ -615,7 +616,7 @@ def test_search_wildcard_query_keeps_only_literal_matches(monkeypatch, capsys):
     assert code == 0 and "견적서_v2" in folder.Items.filter
     assert [m["subject"] for m in out["mails"]] == ["견적서_v2 송부"]      # '_' 와일드카드로 더 찾은 메일은 뺌
     code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--where", "body")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["id3"]
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["id3"]
 
 
 def test_limit_upper_bound_and_zero(monkeypatch, capsys):
@@ -656,7 +657,7 @@ def test_outlook_count(capsys, monkeypatch, argv):
 
 def test_list_days_includes_today(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
     assert out["period"] == {"since": "2026-11-03", "until": "2026-11-04", "days": 2}, out
     assert "2026-11-03 ~ 2026-11-04" in out["preview"], out
     assert "[ReceivedTime] >= '2026-11-03 00:00'" in ol["log"], ol["log"]       # 지역 설정과 무관한 YYYY-MM-DD
@@ -664,18 +665,18 @@ def test_list_days_includes_today(ol, capsys):
 
 def test_list_days_one_is_today_only(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "1")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a"], out
 
 
 def test_list_since_with_unread(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--since", "2026-10-28", "--unread")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "c"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "c"], out
     assert out["period"]["days"] == 8 and ol["log"][0] == "[UnRead] = True", (out, ol["log"])
 
 
 def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
     flt = ol["log"][-1]
     assert flt.startswith("@SQL=") and flt.count("@SQL=") == 1 and "견적" in flt, flt
     assert '"urn:schemas:httpmail:datereceived" >= ' in flt and ") AND (" in flt, flt
@@ -686,7 +687,7 @@ def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
 
 def test_search_date_only_is_allowed(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--since", "2026-11-03")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
 
 
 def test_zero_result_states_period(ol, capsys):
@@ -700,11 +701,11 @@ def test_zero_result_states_period(ol, capsys):
 def test_restrict_refused_falls_back_and_filters(ol, capsys):
     ol["state"]["refuse"] = True
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
     assert out["agent_directive"].startswith("VERIFIED:") and out["recovered"], out
     rt.RECOVERED.clear()
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
     assert "datereceived" not in ol["log"][-1] and "견적" in ol["log"][-1], ol["log"]
     rt.RECOVERED.clear()
 
@@ -921,7 +922,7 @@ def test_list_attachments_with_index_size_inline(ol_env, capsys):
 def test_list_uses_selected_mail_without_id(ol_env, capsys):
     _attach_mail(ol_env, FakeAttachment("a.pdf"), entry="SEL")
     code, out = run_outlook(capsys, "attachments")
-    assert code == 0 and out["count"] == 1 and out["mail"]["id"] == "SEL"
+    assert code == 0 and out["count"] == 1 and out["mail"]["entry_id"] == "SEL"
     assert "attachments --id SEL --save" in out["next_commands"][0]["command"]    # 다음 명령은 id로 고정
 
 
@@ -1174,3 +1175,163 @@ def test_folder_path_extra_keeps_alias_path_in_log(mail, capsys, monkeypatch, is
     assert code == 1, out
     res = "\n".join(_result_lines(isolated_dirs))
     assert "(경로: inbox\\없음)" in res and ROOT_MAIL.lower() not in res.lower(), res
+
+
+# ---------------------------------------------------------------------------
+# 짧은 번호, 첨부 저장 뒤 읽기 명령, calendar, thread (C2, 1.4.60)
+# ---------------------------------------------------------------------------
+
+
+class _ThreadMail(_DatedMail):
+    def __init__(self, eid, subject, received, topic, body="본문"):
+        super().__init__(eid, subject, received)
+        self.ConversationTopic = topic
+        self.Body = body
+        self.Attachments = type("A", (), {"Count": 0})()
+
+
+class _Items:
+    def __init__(self, items, log=None, refuse=False):
+        self.items = list(items)
+        self.log = log if log is not None else []
+        self.refuse = refuse
+        self.IncludeRecurrences = False
+
+    def Restrict(self, flt):
+        self.log.append(flt)
+        if self.refuse:
+            raise Exception("조건 거부")
+        m = re.search(r"\[ConversationTopic\] = '(.*)'$", flt)
+        if m:
+            return _Items([i for i in self.items if i.ConversationTopic == m.group(1).replace("''", "'")], self.log)
+        return _Items(self.items, self.log)
+
+    def Sort(self, *a):
+        self.log.append(("Sort",) + a)
+
+    def __iter__(self):
+        return iter(self.items)
+
+
+@pytest.fixture
+def ol_short(monkeypatch):
+    mails = _mails()
+    by_id = {m.EntryID: m for m in mails}
+
+    class _Folder:
+        Name = "받은 편지함"
+
+        @property
+        def Items(self):
+            return _DatedItems(mails, [])
+
+    class _NS:
+        def GetItemFromID(self, eid):
+            if eid not in by_id:
+                raise RuntimeError("없음")
+            return by_id[eid]
+
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    monkeypatch.setattr(outlook, "resolve_folder", lambda ns, f: _Folder())
+    return by_id
+
+
+def test_list_gives_short_ids_and_read_accepts_them(ol_short, capsys):
+    code, out = run_outlook(capsys, "list", "--limit", "3")
+    assert code == 0 and [m["id"] for m in out["mails"]] == [1, 2, 3], out
+    second = out["mails"][1]
+    code, out2 = run_outlook(capsys, "read", "--id", "2")
+    assert code == 0 and out2["mail"]["entry_id"] == second["entry_id"] and out2["mail"]["subject"] == second["subject"]
+    code, out3 = run_outlook(capsys, "read", "--id", second["entry_id"])          # 긴 id도 그대로
+    assert code == 0 and out3["mail"]["subject"] == second["subject"]
+    code, bad = run_outlook(capsys, "read", "--id", "9")
+    assert code == 1 and "1~3번" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
+
+
+def test_search_next_command_uses_short_id(ol_short, capsys):
+    code, out = run_outlook(capsys, "search", "--query", "견적")
+    assert code == 0 and out["next_commands"][0]["command"].endswith("read --id 1"), out
+
+
+def test_short_id_without_listing_is_input_error(ol_short, capsys):
+    code, out = run_outlook(capsys, "read", "--id", "1")
+    assert code == 1 and "list나 search를 먼저" in out["message"], out
+
+
+def test_attachments_save_gives_reader_commands(ol_env, capsys, tmp_path):
+    _attach_mail(ol_env, FakeAttachment("규격.pdf"), FakeAttachment("시험표.xlsx"), FakeAttachment("사진.png"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save")
+    assert code == 0 and out["count"] == 3, out
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert any("reader.py" in c and " read --file " in c and "규격.pdf" in c for c in cmds)
+    assert any("reader.py" in c and " read --file " in c and "시험표.xlsx" in c for c in cmds)
+    assert not any("사진.png" in c for c in cmds)
+    assert any(" index --folder " in c for c in cmds)
+
+
+def test_calendar_lists_events_read_only(monkeypatch, capsys):
+    log = []
+
+    class _Ev:
+        def __init__(self, subject, start, hours=1, loc="3층 회의실"):
+            self.Subject, self.Start, self.End = subject, start, start + dt.timedelta(hours=hours)
+            self.AllDayEvent, self.Location, self.Organizer = False, loc, "김팀장"
+
+    evs = [_Ev("주간 회의", dt.datetime(2026, 11, 4, 10)), _Ev("설계 검토", dt.datetime(2026, 11, 6, 14))]
+
+    class _NS:
+        def GetDefaultFolder(self, n):
+            assert n == outlook.OL_FOLDER_CALENDAR
+            return type("F", (), {"Items": _Items(evs, log)})()
+
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and out["count"] == 2 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert out["events"][0] == {"subject": "주간 회의", "start": "2026-11-04 10:00", "end": "2026-11-04 11:00", "all_day": False,
+                                "location": "3층 회의실", "organizer": "김팀장"}
+    assert out["period"] == {"since": "2026-11-04", "until": "2026-11-10", "days": 7}
+    assert any("[Start] < '2026-11-11 00:00'" in x for x in log if isinstance(x, str))
+    code, out = run_outlook(capsys, "calendar", "--days", "0")
+    assert code == 1 and "[추천] 7" in out["message"]
+
+
+def test_calendar_empty_is_zero(monkeypatch, capsys):
+    class _NS:
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items([])})()
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "calendar")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_thread_collects_conversation_in_time_order(monkeypatch, capsys, refuse):
+    inbox = [_ThreadMail("i1", "견적 요청", dt.datetime(2026, 11, 1, 9), "견적 요청", "첫 메일"),
+             _ThreadMail("i2", "RE: 견적 요청", dt.datetime(2026, 11, 3, 9), "견적 요청", "셋째"),
+             _ThreadMail("x", "다른 일", dt.datetime(2026, 11, 2, 9), "다른 일")]
+    sent = [_ThreadMail("s1", "RE: 견적 요청", dt.datetime(2026, 11, 2, 9), "견적 요청", "둘째(보냄)")]
+    by_id = {m.EntryID: m for m in inbox + sent}
+
+    class _NS:
+        def GetItemFromID(self, eid):
+            return by_id[eid]
+
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(inbox if n == outlook.OL_FOLDER_INBOX else sent, refuse=refuse)})()
+
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "thread", "--id", "i2")
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["i1", "s1", "i2"], out
+    assert [m["id"] for m in out["mails"]] == [1, 2, 3] and out["mails"][1]["body"] == "둘째(보냄)"
+    assert bool(out.get("recovered")) is refuse
+    code, out2 = run_outlook(capsys, "read", "--id", "2")                     # thread 목록 번호로 읽기
+    assert code == 0 and out2["mail"]["entry_id"] == "s1"

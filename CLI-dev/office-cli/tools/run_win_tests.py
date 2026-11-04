@@ -1234,10 +1234,25 @@ def test_G(ctx):
         record(ctx, "G4", "받은편지함 최근 메일 목록", (data or {}).get("status") == "ok",
                f"{len((data or {}).get('mails', []))}통", data, code, raw, err)
 
+    def g5():
+        # 짧은 번호(list 결과 id 1)로 읽기, 같은 메일의 대화, 일정 7일 (모두 읽기 전용)
+        d_list = run_cli("outlook.py", "list", "--limit", "3")[0] or {}
+        mails = d_list.get("mails") or []
+        d_read = run_cli("outlook.py", "read", "--id", "1")[0] or {} if mails else {}
+        d_thread = run_cli("outlook.py", "thread", "--id", "1")[0] or {} if mails else {}
+        data, code, raw, err = run_cli("outlook.py", "calendar", "--days", "7")
+        same = (d_read.get("mail") or {}).get("entry_id") == (mails[0].get("entry_id") if mails else None)
+        ok = (not mails or (mails[0].get("id") == 1 and same and d_thread.get("status") == "ok")) \
+            and str((data or {}).get("agent_directive", "")).startswith("VERIFIED")
+        record(ctx, "G5", "짧은 번호로 읽기, 대화 묶음, 일정 7일 (읽기 전용)", ok,
+               f"목록 {len(mails)}통, 1번 읽기 같은 메일={same}, 대화 {d_thread.get('count')}통, 일정 {(data or {}).get('count')}개",
+               data, code, raw, err)
+
     run_test(ctx, "G1", "표시 전용", g1)
     run_test(ctx, "G2", "잘못된 수신자", g2)
     run_test(ctx, "G3", "실제 발송", g3)
     run_test(ctx, "G4", "메일 목록", g4)
+    run_test(ctx, "G5", "짧은 번호·대화·일정", g5)
 
 
 # ---------------------------------------------------------------------------

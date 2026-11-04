@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.59"
+  version: "1.4.60"
   platform: windows
 ---
 
@@ -53,8 +53,8 @@ metadata:
 | 두 판의 문서 비교 | `reader.py diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "차이.xlsx"]` (삭제·추가·변경, 숫자 변경 `number_changes`를 먼저, 항목마다 `old_evidence`·`new_evidence`를 붙여 알림) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |
-| 메일 읽기 | `outlook.py current`, `list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간: `--days 7`(오늘 포함) 또는 `--since 2026-11-01`, search도 같음), `search --query 말 [--from 이름] [--folder sent] [--where subject]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일), 폴더 목록 `outlook.py folders` |
-| 메일 첨부 내려받기 | 목록 `outlook.py attachments --id <id>` / 저장 `outlook.py attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더는 `--save "<전체경로 폴더>"`, 일부만 `--name 이름일부`). 결과의 `folder`와 파일 이름을 알린다 |
+| 메일 읽기 | `outlook.py current`, `list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간: `--days 7`(오늘 포함) 또는 `--since 2026-11-01`, search도 같음), `search --query 말 [--from 이름] [--folder sent] [--where subject]`, `read --id 3` (목록 결과의 `id` 번호, `--id`를 빼면 보고 있는 메일), 대화 전체 `thread --id 3`, 일정 `calendar --days 7`, 폴더 목록 `outlook.py folders` |
+| 메일 첨부 내려받기 | 목록 `outlook.py attachments --id <id>` / 저장 `outlook.py attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더는 `--save "<전체경로 폴더>"`, 일부만 `--name 이름일부`). 결과의 `folder`와 파일 이름을 알린다. 내용을 보려면 결과의 `next_commands`(reader.py read) |
 | 메일 쓰기 / 문서 첨부 | `outlook.py reply --body "내용" --attach "C:\전체경로\파일.pdf"`. `--attach`는 `new --to 주소 --subject 제목 --body 내용`, `forward --to 주소`에도 같다. 여러 파일은 `;`로 구분. 전체 답장 `reply --all`, 참조 `new --cc 주소`, 긴 본문은 `--body-file "본문.md"` |
 | 되돌리기 / 창 | `office.py undo` (목록 `--list`: 사용자가 고른 항목의 `command`를 그대로 실행), `office.py windows`, `office.py focus --app excel` |
 | 결과 배치 확인 | `ppt.py info --detail --slides N`, `excel.py info --detail`, `word.py info --detail` (`layout_warnings`가 0이 아니면 `warnings`를 알림) |

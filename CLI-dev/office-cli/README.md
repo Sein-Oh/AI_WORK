@@ -15,7 +15,7 @@ CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check
 ├── word.py      워드   read / info / outline / write / replace / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
-├── outlook.py   메일   list / search / read / current / folders / attachments / new / reply / forward
+├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / diff / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
 ├── _runtime.py  공통 런타임 (응답 계약, 경로, 입출력, 마크다운 해석)
@@ -338,7 +338,15 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   다시 확인합니다(내림차순이라 기간 밖 메일을 만나면 멈춤). Outlook이 날짜 조건을 거부하면 날짜 없는 필터로 거른 뒤 받은 시각으로 거르고
   `recovered`. `search`는 `--days`/`--since`만으로도 됩니다. 잘못된 날짜는 STOP_RETRY: 고칠 수 있는 표기(`2026/10/1`, `20261001`, `2026년 10월 1일`)와
   `--days 0`/`-7`은 `[추천]`, 없는 날짜·미래 날짜·읽을 수 없는 글은 `[추천]` 없이 예만.
-- 첨부: `attachments [--id] [--save [폴더]] [--name 이름일부] [--index 1,3]`
+- 첨부: `attachments [--id] [--save [폴더]] [--name 이름일부] [--index 1,3]`. 저장한 문서(reader가 읽는 형식: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)가 있으면
+  `next_commands`에 `reader.py read --file <저장한 파일>`(3개까지)과, 둘 이상이면 `reader.py index --folder <저장 폴더>`.
+- 짧은 번호: `list`·`search`·`thread` 결과의 메일마다 `id`(1, 2, 3 ...)와 `entry_id`(Outlook EntryID). 마지막 목록을 `<데이터 폴더>/outlook_last_list.json`에 기억해
+  `read`/`attachments`/`reply`/`forward`/`thread --id 3`이 그 목록의 3번째 메일을 엽니다. 긴 EntryID도 그대로 받습니다. 목록이 없거나 번호가 범위 밖이면 STOP_RETRY.
+  `read`/`current`의 `mail`과 `attachments`의 `mail`에는 `entry_id`.
+- `thread --id N`(읽기 전용): 그 메일의 대화 제목(`ConversationTopic`, 없으면 RE:/FW:를 뺀 제목)으로 받은 편지함과 보낸 편지함에서 같은 대화를 모아 오래된 순으로
+  최근 20통(`mails`: 요약과 본문 400자, `count`, `truncated`). Outlook이 조건을 거부하면 메일마다 비교(최근 2,000통, `recovered`). 결과도 짧은 번호로 기억.
+- `calendar [--days 7]`(읽기 전용): 기본 일정 폴더에서 오늘 0시부터 N일(1~92) 안에 걸친 일정을 반복 일정까지 펼쳐(`IncludeRecurrences`) 시작 순으로 50개까지
+  (`events`: `subject`, `start`, `end`(`YYYY-MM-DD HH:MM`), `all_day`, `location`, `organizer`, `period`, `truncated`). 0건이면 `VERIFIED: 0건`.
 - `--folder`의 폴더를 찾지 못하면 그 단계의 하위 폴더 이름(끝 이름)끼리 비교해 `[추천]`(표기만 다름)이나 `[후보]`를 주고, 보여 줄 때만
   전체 경로(`계정\폴더\하위`)로 바꿉니다(전체 경로끼리 비교하면 같은 계정 이름 때문에 관계없는 폴더가 모두 `[후보]`가 됨).
   오류 로그에는 계정 이름(보통 메일 주소) 대신 `<메일 계정>`을 남깁니다. message 끝의 `(경로: ...)`도 로그에서는

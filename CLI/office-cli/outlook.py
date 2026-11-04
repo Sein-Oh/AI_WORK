@@ -3,7 +3,9 @@
 조회 (화면은 그대로, 백그라운드):
     list     폴더의 최근 메일 목록 (--unread, --limit, 받은 날짜 --days N / --since YYYY-MM-DD)
     search   제목/본문/보낸사람 검색 (--days / --since 함께 가능)
-    read     메일 하나 읽기 (--id). 첨부가 있으면 이름과 내려받기 명령을 함께 줌
+    read     메일 하나 읽기 (--id: list/search 결과의 짧은 번호 또는 긴 id). 첨부가 있으면 이름과 내려받기 명령을 함께 줌
+    thread   같은 대화의 메일을 시간 순으로 (--id)
+    calendar 일정 (--days 7: 오늘부터 7일, 읽기만)
     current  지금 보고 있거나 선택한 메일 읽기
     folders  폴더 구조와 안 읽은 메일 수
     attachments  첨부 목록, --save 로 내려받기 (기본: %USERPROFILE%\\Downloads\\메일 첨부\\<시각>_<제목>)
@@ -24,6 +26,7 @@
     python outlook.py new --to "lead@company.com" --subject "주간 보고" --body "첨부합니다." --attach "보고서.pdf"
 """
 import datetime as _dt
+import json
 import os
 import re
 import sys
@@ -40,6 +43,7 @@ DEFAULT_FOLDERS = {"inbox": 6, "받은편지함": 6, "sent": 5, "보낸편지함
 BLOCKED_ATTACH = {".exe", ".bat", ".cmd", ".com", ".js", ".vbs", ".vbe", ".wsf", ".ps1", ".scr", ".msi", ".lnk",
                   ".hta", ".jar", ".reg", ".dll"}
 SAVE_FAILED = "저장 실패"     # attachments --save의 skipped에서 정책상 건너뛴 것과 저장에 실패한 것을 구분하는 표시
+READABLE_DOCS = {".pdf", ".hwp", ".hwpx", ".docx", ".docm", ".pptx", ".pptm", ".xlsx", ".xlsm", ".csv", ".txt", ".md"}   # reader.py가 읽는 첨부 (reader.SUPPORTED)
 MAX_LIMIT = 200          # list/search --limit 상한 (넘으면 줄이고 warnings로 알림)
 MAX_NAMES_SHOW = 20      # read/current의 attachment_names 상한
 MAX_ATTACH_SHOW = 50     # attachments 목록·saved·skipped 상한 (넘으면 truncated, 전체는 저장 폴더)
@@ -132,7 +136,7 @@ def summary(item: Any) -> Dict[str, Any]:
         attach = int(item.Attachments.Count)
     except Exception:
         attach = 0
-    return {"id": _text(getattr(item, "EntryID", "")), "subject": _text(getattr(item, "Subject", "")),
+    return {"entry_id": _text(getattr(item, "EntryID", "")), "subject": _text(getattr(item, "Subject", "")),
             "from": f"{sender} <{addr}>" if addr and "@" in addr else sender, "received": received,
             "unread": bool(getattr(item, "UnRead", False)), "attachments": attach}
 
@@ -281,6 +285,7 @@ def cmd_list(args) -> Dict[str, Any]:
     items.Sort("[ReceivedTime]", True)                 # 거른 뒤 정렬해야 순서가 보장됨
     warnings: List[str] = []
     mails = _collect(items, _check_limit(args.limit, warnings), since=start)
+    remember_listing(mails, "list")                    # 짧은 번호 1, 2, 3 ... (--id 3)
     extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
     what = "안 읽은 메일" if args.unread else "메일"
     when = ""
@@ -363,6 +368,7 @@ def cmd_search(args) -> Dict[str, Any]:
     items.Sort("[ReceivedTime]", True)
     warnings: List[str] = []
     mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where), since=start)
+    remember_listing(mails, "search")
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'",
                                   period and f"받은 날짜 {_period_text(period)}") if x)
     result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails), "count": len(mails)}
@@ -374,7 +380,7 @@ def cmd_search(args) -> Dict[str, Any]:
         return rt.ok(TOOL, "search", f"0건: {desc}: '{folder.Name}'에서 일치하는 메일 없음",
                      f"VERIFIED: 0건. '{folder.Name}' 폴더에 {desc}에 맞는 메일이 없습니다. "
                      "사용자에게 그대로 알리고 검색어나 조건을 바꿔 다시 실행하지 마세요.", **result)
-    result["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", mails[0]["id"]], "첫 번째 메일 본문 읽기")]
+    result["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", str(mails[0]["id"])], "첫 번째 메일 본문 읽기")]
     return rt.ok(TOOL, "search", f"{desc}: '{folder.Name}'에서 {len(mails)}통", **result)
 
 
@@ -454,11 +460,7 @@ def _mail_detail(item: Any, args, source: str) -> Dict[str, Any]:
 
 
 def cmd_read(args) -> Dict[str, Any]:
-    ns = get_namespace(get_outlook())
-    try:
-        item = ns.GetItemFromID(args.id)
-    except Exception:
-        raise rt.InputError("해당 id의 메일을 찾을 수 없습니다. list/search 결과의 id를 그대로 쓰세요.")
+    item = get_item(get_namespace(get_outlook()), args.id)
     result = _mail_detail(item, args, "id")
     return _detail_response("read", f"'{result['mail']['subject']}' ({result['mail']['from']})", result)
 
@@ -606,7 +608,7 @@ def cmd_attachments(args) -> Dict[str, Any]:
     item = _target_item(get_outlook(), args, "첨부를 볼 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.")
     subject = _text(getattr(item, "Subject", ""))
     infos = _attachment_infos(item)
-    base: Dict[str, Any] = {"mail": {"id": _text(getattr(item, "EntryID", "")), "subject": subject}}
+    base: Dict[str, Any] = {"mail": {"entry_id": _text(getattr(item, "EntryID", "")), "subject": subject}}
     if listing:
         shown = infos[:MAX_ATTACH_SHOW]
         base.update(attachments=[_public(a) for a in shown], count=len(infos), truncated=len(infos) > len(shown))
@@ -635,6 +637,14 @@ def cmd_attachments(args) -> Dict[str, Any]:
         return rt.ok(TOOL, "attachments", f"0건: '{subject}' 메일에 {why}",
                      f"VERIFIED: 0건. {why}. 사용자에게 그대로 알리고 다시 실행하지 마세요.", **base)
     tail = f" 건너뛴 첨부 {len(skipped)}개는 skipped의 이유와 함께 알리세요." if skipped else ""
+    docs = [x["path"] for x in saved if os.path.splitext(x["path"])[1].lower() in READABLE_DOCS]
+    if docs:
+        # 저장한 문서를 이어서 읽거나 등록하는 명령 (경량 LLM이 경로를 조합하지 않게)
+        nexts = [rt.next_command("reader.py", ["read", "--file", d], f"저장한 문서 읽기: {os.path.basename(d)}") for d in docs[:3]]
+        if len(docs) > 1:
+            nexts.append(rt.next_command("reader.py", ["index", "--folder", folder], f"저장한 문서 {len(docs)}개를 등록해 검색할 수 있게"))
+        base["next_commands"] = nexts
+        tail += " 문서 내용을 보려면 next_commands의 reader.py 명령을 쓰세요."
     return rt.ok(TOOL, "attachments", f"첨부 {len(saved)}개 저장: {folder} ({names})",
                  f"VERIFIED: 첨부 {len(saved)}개를 저장하고 파일이 있는지 다시 확인했습니다. "
                  f"사용자에게 저장 폴더(folder)와 파일 이름을 그대로 알리세요.{tail}", verified=True, **base)
@@ -842,10 +852,7 @@ def _load_signature(mail: Any) -> None:
 
 def _target_item(app: Any, args, missing: str = "답장/전달할 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.") -> Any:
     if args.id:
-        try:
-            return get_namespace(app).GetItemFromID(args.id)
-        except Exception:
-            raise rt.InputError("해당 id의 메일을 찾을 수 없습니다. list/search 결과의 id를 그대로 쓰세요.")
+        return get_item(get_namespace(app), args.id)
     item, _ = current_item(app)
     if item is None:
         raise rt.InputError(missing)
@@ -902,6 +909,175 @@ def cmd_forward(args) -> Dict[str, Any]:
     return _finalize(mail, args.send, "forward", _attach(mail, attach))
 
 
+# ------------------------------------------------------------------------------
+# 짧은 번호 (list/search 결과의 1, 2, 3 ...): 마지막 목록을 데이터 폴더에 기억해 --id 3으로 읽음 (긴 EntryID도 그대로 받음)
+# ------------------------------------------------------------------------------
+
+LISTING_FILE = "outlook_last_list.json"
+SHORT_ID_MAX = 9999
+
+
+def _listing_path() -> str:
+    return os.path.join(rt.get_data_dir(), LISTING_FILE)
+
+
+def remember_listing(mails: List[Dict[str, Any]], what: str) -> None:
+    """목록의 메일에 짧은 번호(id)를 붙이고 번호 -> EntryID를 저장합니다. 저장하지 못하면 번호 없이 EntryID만 (경고)."""
+    ids = [m["entry_id"] for m in mails]
+    try:
+        rt.safe_write_text(_listing_path(), json.dumps({"what": what, "created": rt.timestamp(), "ids": ids},
+                                                       ensure_ascii=False))
+        for n, m in enumerate(mails, 1):
+            m["id"] = n
+    except Exception as e:
+        rt.log("WARN", f"목록 번호를 저장하지 못해 긴 id를 씁니다: {type(e).__name__}")
+        for m in mails:
+            m["id"] = m["entry_id"]
+
+
+def entry_id(raw: Any) -> str:
+    """--id 값 -> EntryID. 짧은 번호(1~9999)는 마지막 list/search 목록에서 찾고, 그 밖은 EntryID 그대로."""
+    text = str(raw or "").strip()
+    if not re.fullmatch(r"\d{1,4}", text):
+        return text
+    n = int(text)
+    try:
+        data = json.loads(rt.read_text_file(_listing_path()))
+        ids = list(data.get("ids") or [])
+    except Exception:
+        ids = []
+    if not ids:
+        raise rt.InputError(f"--id {n}은(는) 목록 번호인데 기억한 메일 목록이 없습니다. outlook.py list나 search를 먼저 실행하고 "
+                            "그 결과의 id를 쓰세요.")
+    if not 1 <= n <= len(ids):
+        raise rt.InputError(f"--id {n}: 마지막 메일 목록에는 1~{len(ids)}번만 있습니다. 결과의 id를 그대로 쓰세요.")
+    return ids[n - 1]
+
+
+def get_item(ns: Any, raw: Any) -> Any:
+    eid = entry_id(raw)
+    try:
+        return ns.GetItemFromID(eid)
+    except Exception:
+        raise rt.InputError("해당 id의 메일을 찾을 수 없습니다(지워졌거나 옮겨졌을 수 있음). list/search를 다시 실행해 그 결과의 id를 쓰세요.")
+
+
+# ------------------------------------------------------------------------------
+# 일정 (calendar, 읽기 전용)
+# ------------------------------------------------------------------------------
+
+OL_FOLDER_CALENDAR = 9
+CALENDAR_MAX = 50
+
+
+def _when(v: Any) -> str:
+    try:
+        return v.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return _text(v)
+
+
+def cmd_calendar(args) -> Dict[str, Any]:
+    if args.days < 1 or args.days > 92:
+        raise rt.InputError(f"--days는 1~92입니다 (1 = 오늘, 7 = 오늘부터 7일). 받은 값: {args.days}. [추천] 7")
+    start = _dt.datetime.combine(_today(), _dt.time())
+    end = start + _dt.timedelta(days=args.days)
+    ns = get_namespace(get_outlook())
+    folder = ns.GetDefaultFolder(OL_FOLDER_CALENDAR)
+    items = folder.Items
+    items.Sort("[Start]")
+    items.IncludeRecurrences = True                     # 반복 일정을 날마다 펼침 (Sort 뒤, Restrict 전)
+    flt = f"[Start] < '{end.strftime('%Y-%m-%d %H:%M')}' AND [End] > '{start.strftime('%Y-%m-%d %H:%M')}'"
+    events: List[Dict[str, Any]] = []
+    more = False
+    for it in items.Restrict(flt):
+        if len(events) >= CALENDAR_MAX:
+            more = True
+            break
+        try:
+            s, e = it.Start, it.End
+            s_ = s.replace(tzinfo=None) if hasattr(s, "replace") else None
+            if s_ is not None and s_ >= end:
+                break
+            events.append({"subject": _text(getattr(it, "Subject", "")), "start": _when(s), "end": _when(e),
+                           "all_day": bool(getattr(it, "AllDayEvent", False)), "location": _text(getattr(it, "Location", "")),
+                           "organizer": _text(getattr(it, "Organizer", ""))})
+        except Exception:
+            continue
+    period = {"since": start.date().isoformat(), "until": (end - _dt.timedelta(days=1)).date().isoformat(), "days": args.days}
+    fields: Dict[str, Any] = {"period": period, "events": events, "count": len(events), "truncated": more}
+    when = f"{period['since']} ~ {period['until']} ({args.days}일)"
+    if not events:
+        return rt.ok(TOOL, "calendar", f"0건: {when} 일정 없음",
+                     f"VERIFIED: 0건. {when}에 일정이 없습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.", verified=True, **fields)
+    preview = f"{when} 일정 {len(events)}개" + (f" (앞 {CALENDAR_MAX}개만)" if more else "")
+    return rt.ok(TOOL, "calendar", preview, "VERIFIED: 일정을 읽었습니다(읽기만, 바꾸지 않음). 날짜·시각·제목·장소를 사용자에게 알리세요."
+                 + (" 더 있으면 --days를 줄여 나눠 보세요." if more else ""), verified=True, **fields)
+
+
+# ------------------------------------------------------------------------------
+# 대화 묶음 (thread, 읽기 전용): 같은 대화 제목의 메일을 받은 편지함과 보낸 편지함에서 시간 순으로
+# ------------------------------------------------------------------------------
+
+THREAD_MAX = 20
+THREAD_BODY_CHARS = 400
+OL_FOLDER_INBOX, OL_FOLDER_SENT = 6, 5
+
+
+def _thread_items(ns: Any, topic: str) -> List[Any]:
+    found: List[Any] = []
+    flt = "[ConversationTopic] = '" + topic.replace("'", "''") + "'"
+    for fid in (OL_FOLDER_INBOX, OL_FOLDER_SENT):
+        try:
+            items = ns.GetDefaultFolder(fid).Items
+        except Exception:
+            continue
+        try:
+            hits = list(items.Restrict(flt))
+        except Exception:                               # 조건을 거부하면 메일마다 대화 제목 비교 (최근 2,000통까지)
+            rt.note_recovered("Outlook이 대화 제목 조건을 거부해 메일마다 대화 제목을 비교했습니다")
+            hits = []
+            for k, it in enumerate(items):
+                if k >= 2000:
+                    break
+                try:
+                    if _text(it.ConversationTopic) == topic:
+                        hits.append(it)
+                except Exception:
+                    continue
+        found += [it for it in hits if getattr(it, "Class", OL_MAIL) == OL_MAIL]
+    return found
+
+
+def cmd_thread(args) -> Dict[str, Any]:
+    ns = get_namespace(get_outlook())
+    item = get_item(ns, args.id)
+    topic = _text(getattr(item, "ConversationTopic", "")) or re.sub(r"^\s*((re|fw|fwd|회신|전달)\s*:\s*)+", "",
+                                                                    _text(getattr(item, "Subject", "")), flags=re.I)
+    mails = _thread_items(ns, topic)
+    seen, uniq = set(), []
+    for m in mails:
+        k = _text(getattr(m, "EntryID", ""))
+        if k not in seen:
+            seen.add(k)
+            uniq.append(m)
+    if _text(getattr(item, "EntryID", "")) not in seen:
+        uniq.append(item)
+    uniq.sort(key=lambda m: _received(m) or _dt.datetime.min)
+    out = []
+    for m in uniq[-THREAD_MAX:]:
+        s = summary(m)
+        body, cut = rt.clamp_text(_text(getattr(m, "Body", "")).replace("\r\n", "\n").strip(), THREAD_BODY_CHARS)
+        s.update(body=body, body_truncated=cut)
+        out.append(s)
+    remember_listing(out, f"thread {topic[:40]}")
+    fields = {"topic": topic, "mails": out, "count": len(uniq), "shown": len(out), "truncated": len(uniq) > len(out)}
+    if len(out) > 0:
+        fields["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", str(out[-1]["id"])], "가장 최근 메일 본문 전체 읽기")]
+    return rt.ok(TOOL, "thread", f"대화 '{topic}' 메일 {len(uniq)}통 (오래된 순)" + (f", 최근 {len(out)}통만" if len(uniq) > len(out) else ""),
+                 "VERIFIED: 같은 대화의 메일을 읽었습니다(읽기만). 시간 순으로 누가 무엇을 보냈는지 요약해 알리세요.", verified=True, **fields)
+
+
 # ==============================================================================
 # 4. 진입점
 # ==============================================================================
@@ -931,7 +1107,7 @@ def build_cli():
     for name, hlp in (("read", "메일 읽기 (--id)"), ("current", "지금 보고 있거나 선택한 메일 읽기")):
         p = sub.add_parser(name, help=hlp)
         if name == "read":
-            p.add_argument("--id", required=True, help="list/search 결과의 id")
+            p.add_argument("--id", required=True, help="list/search 결과의 id (짧은 번호 3 또는 긴 id)")
         p.add_argument("--save", nargs="?", const=True, help="본문을 md 파일로 저장 (첨부 내려받기는 attachments --save)")
 
     p = sub.add_parser("attachments", help="첨부 목록, --save로 내려받기")
@@ -940,6 +1116,12 @@ def build_cli():
                    help=f"첨부 저장. 폴더 생략 시 다운로드\\{ATTACH_ROOT_NAME}\\<시각>_<제목>, 폴더는 전체 경로 (없으면 만듦)")
     p.add_argument("--name", action="append", help="저장할 첨부 이름 일부 (대소문자 무시, 여러 개는 ; 또는 옵션 반복)")
     p.add_argument("--index", action="append", help="저장할 첨부 번호 (목록의 index, 예: 1,3 또는 2-4)")
+
+    p = sub.add_parser("thread", help="같은 대화의 메일을 시간 순으로 (읽기만)")
+    p.add_argument("--id", required=True, help="대화 속 메일 하나의 id (list/search 결과의 짧은 번호 또는 긴 id)")
+
+    p = sub.add_parser("calendar", help="일정 (읽기만)")
+    p.add_argument("--days", type=int, default=7, help="오늘부터 N일 (기본 7, 1 = 오늘, 최대 92)")
 
     p = sub.add_parser("folders", help="폴더 구조")
     p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2)")
@@ -970,7 +1152,8 @@ def build_cli():
 
 
 HANDLERS = {"list": cmd_list, "search": cmd_search, "read": cmd_read, "current": cmd_current, "folders": cmd_folders,
-            "attachments": cmd_attachments, "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward}
+            "attachments": cmd_attachments, "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward,
+            "thread": cmd_thread, "calendar": cmd_calendar}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
