@@ -57,7 +57,7 @@ AI_WORK/
     │   └── tests/             # CLI 계약 + 회귀 테스트
     └── office-cli/
         ├── README.md / CHANGELOG.md / TEST_CHECKLIST.md / requirements.txt
-        ├── tools/             # run_win_tests.py, win_test_rules.py, office-cli-test/ (실기 테스트 스킬)
+        ├── tools/             # run_win_tests.py, win_test_rules.py, office-cli-test/ (실기 테스트 스킬), make_office_samples.py (Gemma 테스트 O 샘플)
         └── tests/             # 오프라인 테스트 (가짜 COM + 실제 샘플 파일)
 ```
 

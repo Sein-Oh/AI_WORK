@@ -301,19 +301,23 @@ def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc,
     (work / "old.txt").write_text("x", encoding="utf-8")
     code = rat.main(["--only", "gemma", "--label", "t", "--opencode", str(fake_oc), "--gemma-dir", str(work)])
     assert code == 1                                            # 가짜는 S0만 맞게 답함
-    order = rat._load_grader().load_scenarios()[2]
+    _, by_id, order = rat._load_grader().load_scenarios()
+    manual = [s for s in order if by_id[s].get("manual")]           # 사람이 준비해야 하는 요청 (O3, Outlook 메일)
     calls = _calls(fake_oc)
-    assert len(calls) == len(order)
+    assert manual and len(calls) == len(order) - len(manual)
+    assert not any(c[-1].startswith(f"[{s}]") for c in calls for s in manual)
     assert calls[0][:3] == ["run", "--format", "json"] and "--session" not in calls[0]
     assert all(c[c.index("--session") + 1] == "ses_fake1" for c in calls[1:])      # 같은 세션에 이어서
     assert calls[0][-1].startswith("[S0] ") and str(work) in calls[0][-1] and "{DIR}" not in calls[0][-1]
     assert not work.exists() and any(p.name.startswith("gemma_old_") for p in work.parent.iterdir())   # 지우지 않고 옮김
     runs = next(p for p in (iso / "work").iterdir() if p.name.startswith("gemma_runs_"))   # 시험 흔적은 모두 CLI-dev\work
-    assert {f"{s}.jsonl" for s in order} <= {p.name for p in runs.iterdir()}
+    assert {f"{s}.jsonl" for s in order if s not in manual} <= {p.name for p in runs.iterdir()}
     assert any(p.name.startswith("grade_t_") and p.suffix == ".md" for p in runs.iterdir())
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
     assert "Gemma 종합 테스트" in text and "ses_fake1" in text and "채점 결과" in text
     assert "[gemma] S0" not in text and "[gemma] A1" in text                     # S0 통과, A1 실패로 목록에
+    for s in manual:                                                             # 수동 전용은 실패가 아니라 건너뜀
+        assert text.count(f"[gemma] {s}: ") == 1 and f"[gemma] {s}: 수동 전용" in text
 
 
 @pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
