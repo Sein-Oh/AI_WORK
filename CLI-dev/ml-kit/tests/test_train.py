@@ -1094,3 +1094,41 @@ def test_train_dtypes_unitless_name_applies(tmp_path):
     assert "설비코드(번호)" in res["feature_types"]["categorical"], res["feature_types"]    # 2.9.46: ignored (numeric)
     err = run_fail("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:strr")
     assert err["agent_directive"].startswith("STOP_RETRY") and '[추천] --dtypes "설비코드:str"' in err["message"], err
+
+
+# ---- JSON 목록 상한 + truncated (R2, 2.9.49) ---------------------------------------------------------------------
+
+
+def test_history_records_capped(tmp_path):
+    root = tmp_path / "h_ml_data"
+    root.mkdir()
+    recs = [{"version": f"v{i}", "task": "regression", "mean_val_score": 0.5 + i / 100, "targets": ["y"]}
+            for i in range(1, 36)]
+    (root / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    res = mt.print_history_summary(str(root))                                     # 2.9.48: all 35 records
+    assert res["record_count"] == 35 and res["count"] == 35 and res["shown"] == mt.HISTORY_SHOWN
+    assert res["truncated"] is True and res["full_result_file"].endswith("history.json")
+    assert [r["version"] for r in res["records"]][-1] == "v35" and res["records"][0]["version"] == "v6"
+    assert res["latest_version"] == "v35"
+    (root / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs[:3]), encoding="utf-8")
+    res = mt.print_history_summary(str(root))
+    assert res["truncated"] is False and res["shown"] == 3 and "full_result_file" not in res
+
+
+def test_feature_types_capped():
+    ft = {"numeric": [f"x{i}" for i in range(40)], "categorical": ["c"], "datetime": {f"d{i}": ["year"] for i in range(35)}}
+    out, cut = mt.capped_feature_types(ft)
+    assert cut and len(out["numeric"]) == mt.FEATURE_TYPES_SHOWN and out["categorical"] == ["c"]
+    assert len(out["datetime"]) == mt.FEATURE_TYPES_SHOWN and isinstance(out["datetime"], dict)
+    assert mt.capped_feature_types({"numeric": ["a"], "categorical": [], "datetime": {}}) == (
+        {"numeric": ["a"], "categorical": [], "datetime": {}}, False)
+
+
+def test_message_column_list_capped():
+    cols = [f"열{i}" for i in range(100)]
+    assert mp.name_list(cols[:3]) == "['열0', '열1', '열2']"
+    text = mp.name_list(cols)
+    assert "열39" in text and "'열40'" not in text and "외 60개 (전체 100개)" in text
+    with pytest.raises(mp.ColumnNameError) as e:                                # 2.9.48: all 100 names
+        mp.resolve_column_names(["없는열zz"], cols, "피처(-x)")
+    assert "외 60개" in str(e.value)

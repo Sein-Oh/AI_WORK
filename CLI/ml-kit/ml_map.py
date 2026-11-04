@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
-    percent_warning, check_percent_mix, percent_mix, _strip_percent,
+    percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
@@ -361,7 +361,7 @@ def execute_forward(args) -> Dict[str, Any]:
             names = [str(c) for c in points_df.columns if not re.fullmatch(r"col_\d+", str(c))]
             hint = header_layout_hint(df.attrs, names) if names else ""
             raise InputError(f"조회 파일 열 {list(points_df.columns)} 중 데이터에 있는 기준 열이 없습니다. "
-                             + (f"데이터 {hint}\n" if hint else "") + f"[사용 가능한 컬럼 목록]: {columns}")
+                             + (f"데이터 {hint}\n" if hint else "") + f"[사용 가능한 컬럼 목록]: {name_list(columns)}")
         # '12%' next to '0.12' in one key column of the points file: no scale is sure (as in the data)
         check_percent_mix(points_df, usable, "조회 파일 ")
         input_pct = percent_warning(points_df, usable, "조회 파일 ")

@@ -2234,6 +2234,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
         )
 
+        shown_types, types_cut = capped_feature_types(history_record["feature_types"])
         result = {
             "status": "ok",
             "version": current_version,
@@ -2249,7 +2250,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "verified": not unverified,
             "recommendations": recommendations,
             "next_commands": next_commands,
-            "feature_types": history_record["feature_types"],
+            "feature_types": shown_types,
+            "truncated": types_cut,
             "top_features": top_features,
             "preview": preview,
             "agent_directive": agent_directive
@@ -2272,6 +2274,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             result["unverified"] = unverified
         if guard.incomplete_versions:
             result["incomplete_versions"] = guard.incomplete_versions
+        if types_cut:     # every input name is in the ledger record of this version
+            result["feature_count"] = len(feature_names)
+            result["full_result_file"] = os.path.join(data_root, "history.json")
         return result
 
     except BaseException:
@@ -2624,6 +2629,22 @@ def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
 # 9. CLI Interface & History Mode
 # ==============================================================================
 
+HISTORY_SHOWN = 30        # --history records in the JSON (the latest); history.json holds all (R2)
+FEATURE_TYPES_SHOWN = 30  # names per feature_types list in the training result; the ledger record holds all
+
+
+def capped_feature_types(ft: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    """feature_types of the training result with at most FEATURE_TYPES_SHOWN names per kind (R2)."""
+    out, cut = {}, False
+    for kind, names in ft.items():
+        items = list(names.items()) if isinstance(names, dict) else list(names)
+        if len(items) > FEATURE_TYPES_SHOWN:
+            cut = True
+            items = items[:FEATURE_TYPES_SHOWN]
+        out[kind] = dict(items) if isinstance(names, dict) else items
+    return out, cut
+
+
 def print_history_summary(data_root: str) -> Dict[str, Any]:
     """
     Prints a human-readable summary table of all experiments to stderr and returns
@@ -2634,7 +2655,8 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
     if not records:     # 0 records is a result, not an error (R2)
         return {
             "status": "ok", "verified": True, "no_history": True, "data_root": data_root,
-            "record_count": 0, "count": 0, "records": [], "best_version": None, "latest_version": None,
+            "record_count": 0, "count": 0, "shown": 0, "truncated": False, "records": [], "best_version": None,
+            "latest_version": None,
             "preview": "학습 기록 0건",
             "agent_directive": ("VERIFIED: 0건. 이 데이터 파일의 학습 기록(history.jsonl)이 없습니다. "
                                 "사용자에게 학습 기록이 없다고 그대로 알리세요."),
@@ -2697,20 +2719,27 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
     if split:
         note = ("타겟별 최고 점수가 여러 버전에 나뉘어 있습니다 (" + "; ".join(split) + "). "
                 "모든 타겟의 최고 모델은 ml_report.py -f <데이터파일>이 한 버전으로 묶어 만듭니다.")
+    shown = rows[-HISTORY_SHOWN:]
+    cut = len(shown) < len(rows)
     return {
         "status": "ok",
         "data_root": data_root,
         "description": proj_desc,
         "record_count": len(rows),
+        "count": len(rows),
+        "shown": len(shown),
+        "truncated": cut,
+        **({"full_result_file": os.path.join(data_root, "history.json")} if cut else {}),
         "best_version": best["version"] if best else None,
         "best_version_dir": best["version_dir"] if best else None,
         "best_mean_val_score": best["mean_val_score"] if best else None,
         "best_by_task": best_by_task,
         **({"best_version_note": note} if note else {}),
         "latest_version": rows[-1]["version"],
-        "records": rows,
+        "records": shown,
         "verified": True,
         "agent_directive": ("VERIFIED: History summary returned. Do not re-read history.jsonl for the same information."
+                            + (f" records에는 최근 {len(shown)}건만 있습니다 (전체 {len(rows)}건: full_result_file)." if cut else "")
                             + (f" 사용자에게 알리세요: {note}" if note else "")),
     }
 

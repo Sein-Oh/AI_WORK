@@ -382,7 +382,7 @@ python ml_train.py -f "공정.xlsx" -x "반응온도,촉매비율,수분함량" 
 | `--task` | - | 선택 | 학습 유형 `regression`(기본값) / `classification`. `--best`와 함께 쓰면 그 유형의 최고 버전만 |
 | `--positive-class` | - | 선택 | 이진 분류 양성 클래스. 지정 시 판정 기준 확률 자동 조정 |
 | `--seed` | - | 선택 | 교차검증 난수 시드 (기본값: 42) |
-| `--history` | - | 선택 | 누적 실험 원장 조회 (요약 표는 stderr, 버전별 요약 JSON은 stdout). `best_version`·`best_version_dir`: 가장 최근 학습의 작업 유형에서 보고서가 쓰는 것과 같은 규칙으로 고른 버전 (최고 버전 기록, 아니면 모든 타겟의 최고 점수가 있는 버전, 나뉘어 있으면 최고 타겟이 가장 많은 버전 + `best_version_note`). `best_by_task`는 유형별 같은 값 (`version`, `version_dir`, `mean_val_score`, `complete`, `missing_targets`, 2.9.15) 학습 기록이 없으면 `status: ok`, `record_count: 0`, `count: 0`, `records: []`, `no_history: true`, `VERIFIED: 0건. ...` (2.9.46, 이전에는 `status: no_history`) |
+| `--history` | - | 선택 | 누적 실험 원장 조회 (요약 표는 stderr, 버전별 요약 JSON은 stdout). `best_version`·`best_version_dir`: 가장 최근 학습의 작업 유형에서 보고서가 쓰는 것과 같은 규칙으로 고른 버전 (최고 버전 기록, 아니면 모든 타겟의 최고 점수가 있는 버전, 나뉘어 있으면 최고 타겟이 가장 많은 버전 + `best_version_note`). `best_by_task`는 유형별 같은 값 (`version`, `version_dir`, `mean_val_score`, `complete`, `missing_targets`, 2.9.15) 학습 기록이 없으면 `status: ok`, `record_count: 0`, `count: 0`, `records: []`, `no_history: true`, `VERIFIED: 0건. ...` (2.9.46, 이전에는 `status: no_history`). `records`는 최근 30건까지(`shown`, `count`, `truncated`, 잘렸으면 `full_result_file` = `history.json`, 2.9.49) |
 | `--best` | - | 선택 | 최고 버전 만들기 (2.4.0, 아래 8) 참고). `-f`만 필요. `-x`, `-y`, `--eval`, `--dtypes`, `--version`, `--positive-class`는 무시 |
 
 ### 7) 실행 예시
@@ -927,6 +927,9 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
   하나로 섞어 재고, 날짜 열의 연·월·요일 부분은 날짜 열 하나로 합칩니다. `--eval` 파생변수는 그 이름 그대로 한 입력입니다.
   계산에 실패했거나 모든 입력의 중요도가 0이면 그 타겟은 `[]`이고 `warnings`에 이유가 들어갑니다. `preview`에는 타겟마다 위 3개를
   `중요 입력: 온도 0.41, 압력 0.22, ...`로 적습니다 (타겟이 여럿이면 `중요 입력(<타겟>): ...`). `--best`의 결과는 모든 작업 유형의 타겟을 합칩니다.
+- `truncated` (2.9.49): 학습 결과의 `feature_types`는 종류마다 30개까지이고, 넘으면 `truncated: true`, `feature_count`(전체 입력 수),
+  `full_result_file`(`history.json`, 이 버전 기록의 `feature_types`에 전체). 오류 메시지의 열 목록(`[사용 가능한 컬럼 목록]`, `[모델 입력 목록]`)은
+  40개까지 적고 `외 N개 (전체 M개)`.
 - `recovered` (2.3.0, 모든 도구, 있을 때만): 결과가 달라진 자동 복구 목록. 예: `"예측 결과 파일 pred.csv 이미 있음 -> pred_20261028_101500.csv로 저장 (덮어쓰려면 --overwrite)"`,
   `"Word 보고서 a.docx 잠김(Excel/Word 등에서 열림) -> a_20261028_101500.docx로 저장"`. 실제 저장 경로는 `output_file`/`report_file`에 있습니다.
 

@@ -8,6 +8,18 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.49] - 2026-11-04
+
+저장소 지침 반영: 출력 양 제한(R2). 회귀 테스트: `tests/test_train.py` "JSON 목록 상한 + truncated" (2.9.48에서 3개 모두 실패).
+
+### 바뀐 동작
+- `ml_train.py --history`의 `records`는 최근 30건(`HISTORY_SHOWN`)까지. `count`(= `record_count`, 전체), `shown`, `truncated`, 잘렸으면
+  `full_result_file`(`<데이터>_ml_data/history.json`, 전체 기록)과 `agent_directive`에 "최근 N건만" 안내. 이전에는 기록 수만큼 모두.
+- 학습 결과의 `feature_types`는 종류(numeric, categorical, datetime)마다 30개(`FEATURE_TYPES_SHOWN`)까지. 넘으면 `truncated: true`, `feature_count`,
+  `full_result_file`(`history.json`). 학습 결과에 `truncated`가 늘 있습니다(안 잘렸으면 false). 원장 기록은 그대로 전체.
+- 오류 메시지의 열 목록(`[사용 가능한 컬럼 목록]`, `[모델 입력 목록]`, 보고서의 `[사용 가능한 버전]`)은 40개(`MESSAGE_LIST_MAX`)까지와 `외 N개 (전체 M개)`
+  (PART C `name_list`). 열이 500개인 표의 오류 한 번이 경량 LLM의 문맥을 채우지 않게.
+
 ## [2.9.48] - 2026-11-04
 
 저장소 지침 반영: 보고서 버전 없음의 `[추천]`. 회귀 테스트: `tests/test_contract.py` `test_report_unknown_version_*` 3개
@@ -1404,7 +1416,6 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
 - [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상
-- [ ] JSON 목록 상한 + `truncated`: `--history` records, feature_types/features_used, 오류 메시지 컬럼 목록
 - [ ] 로그 태그 정리: `[PROGRESS  5%] [===]` -> `[PROGRESS] 5% ...`(러너 M14 파서 확인), 이력 표 머리 `[STATUS]`, 러너 `[준비]` -> `[INFO]`
 - [ ] 인자 이름 통일: ml_report `--targets`(다른 도구와 같게), 저장 `--out` -> `--save` (베타라 별칭 없이 바꿈)
 - [ ] 테스트 보강: exit 130 롤백, 성공 경로 `VERIFIED:` 검사 확대, 빈 데이터 (덮어쓰기 차단은 2.3.0)

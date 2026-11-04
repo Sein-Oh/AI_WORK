@@ -57,7 +57,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.48"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.49"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -538,6 +538,18 @@ def _same_unit_name(given: str, column: str) -> bool:
         not other_unit(given, column)
 
 
+MESSAGE_LIST_MAX = 40     # names listed in one error message ('[사용 가능한 컬럼 목록]'); the rest are counted
+
+
+def name_list(names: List[Any], limit: int = MESSAGE_LIST_MAX) -> str:
+    """A name list for a message, at most limit names and '외 N개 (전체 M개)' (R2: a wide sheet of 500 columns must not
+    fill the LLM context with one error message)."""
+    names = list(names)
+    if len(names) <= limit:
+        return str(names)
+    return f"{names[:limit]} 외 {len(names) - limit}개 (전체 {len(names)}개)"
+
+
 def suggest_columns(name: str, columns: List[str], n: int = 3, bare: bool = True) -> List[str]:
     """Similar columns: the columns of the same name without unit first (all of them: '수율' for '수율(1차)' and
     '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns). bare: a name
@@ -643,7 +655,7 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                if any("[후보]" in h for h in hints) else "")
         raise ColumnNameError(
             f"지정하신 {kind} 컬럼 {missing}을(를) 데이터셋에서 찾을 수 없습니다. "
-            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {col_list}"
+            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {name_list(col_list)}"
         )
     for short, full in applied.items():
         sys.stderr.write(f"[INFO] 컬럼명 자동 매칭: '{short}' -> '{full}'\n")
@@ -2069,7 +2081,7 @@ def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: 
             raise InputError(
                 f"수식의 식별자 '{node.id}'에 해당하는 컬럼이 없습니다"
                 + hint
-                + f". 컬럼명은 데이터의 전체 이름(단위 포함) 또는 단위를 뺀 고유 이름으로 쓰십시오. [사용 가능한 컬럼 목록]: {columns}"
+                + f". 컬럼명은 데이터의 전체 이름(단위 포함) 또는 단위를 뺀 고유 이름으로 쓰십시오. [사용 가능한 컬럼 목록]: {name_list(columns)}"
             )
 
 
@@ -2699,7 +2711,7 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
         else:
             hints.append(f"-i의 '{c}'과(와) 비슷한 모델 입력이 없습니다")
     raise InputError(f"-i의 {', '.join(repr(c) for c in unknown)}은(는) 모델 입력이 아니라 예측에 쓰이지 않습니다. "
-                     f"{' / '.join(hints)}. 모델 입력이 아닌 값을 빼고 예측할지 사용자에게 물으십시오.\n[모델 입력 목록]: {list(dict.fromkeys(inputs))}")
+                     f"{' / '.join(hints)}. 모델 입력이 아닌 값을 빼고 예측할지 사용자에게 물으십시오.\n[모델 입력 목록]: {name_list(dict.fromkeys(inputs))}")
 
 
 def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str]) -> Dict[str, str]:

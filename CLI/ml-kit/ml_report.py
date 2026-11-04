@@ -27,7 +27,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
     normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names, VERSION,
-    command_text, quote_arg,
+    command_text, quote_arg, name_list,
 )
 
 setup_console()
@@ -926,7 +926,7 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
     records = _read_jsonl(ledger)
     rec = [r for r in records if r.get("version") == version]
     if not rec:
-        raise InputError(f"원장에 버전 '{version}' 기록이 없습니다. [사용 가능한 버전]: {[r.get('version') for r in records]}")
+        raise InputError(f"원장에 버전 '{version}' 기록이 없습니다. [사용 가능한 버전]: {name_list([r.get('version') for r in records])}")
     record = rec[-1]
     leaderboard = load_json_file(lb_path)
 
