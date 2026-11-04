@@ -384,11 +384,15 @@ KNN_MAX_ROWS = 50000
 
 
 def feature_importance_ranks(
-    pipe: Pipeline, X: pd.DataFrame, y: np.ndarray, schema: Dict[str, Any], seed: int, scoring: Optional[str]
+    pipe: Pipeline, X: pd.DataFrame, y: np.ndarray, schema: Dict[str, Any], seed: int, scoring: Optional[str],
+    notes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Permutation importance on at most PERMUTATION_MAX_ROWS rows (keeps large data fast),
-    aggregated back to user-facing columns (date parts are summed into their date column).
+    aggregated back to user-facing columns (date parts are summed into their date column; a categorical
+    column is permuted as a whole because one-hot encoding happens inside the pipeline).
+    notes (2.9.39): gets one line when the ranks carry no information (calculation failed or every
+    importance is 0), so the training result can give top_features [] with a reason.
     """
     Xs, ys = X, y
     if len(X) > PERMUTATION_MAX_ROWS:
@@ -397,16 +401,40 @@ def feature_importance_ranks(
     try:
         res = permutation_importance(pipe, Xs, ys, n_repeats=5, random_state=seed, scoring=scoring)
         raw = np.maximum(res.importances_mean, 0)
-    except Exception:
+        if notes is not None and not float(raw.sum()) > 0:
+            notes.append("모든 입력의 순열 중요도가 0입니다 (입력을 섞어도 점수가 떨어지지 않음)")
+    except Exception as e:
         raw = np.ones(X.shape[1])
+        if notes is not None:
+            notes.append(f"순열 중요도 계산 실패 ({type(e).__name__})")
 
     owner = input_column_owner(schema)
     agg: Dict[str, float] = {}
     for col, imp in zip(X.columns, raw):
         agg[owner.get(col, col)] = agg.get(owner.get(col, col), 0.0) + float(imp)
     total = sum(agg.values()) or 1.0
-    ranks = [{"feature": f, "importance": round(v, 4), "pct": round(v / total * 100, 1)} for f, v in agg.items()]
+    ranks = [{"feature": f, "importance": round(v, 4), "share": round(v / total, 4), "pct": round(v / total * 100, 1)}
+             for f, v in agg.items()]
     return sorted(ranks, key=lambda r: r["importance"], reverse=True)
+
+
+TOP_FEATURES_MAX = 5      # top_features entries per target in the training result (2.9.39)
+TOP_FEATURES_PREVIEW = 3  # of which the preview line shows this many
+
+
+def top_feature_shares(champion: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """
+    2.9.39: the best model's most important inputs for the training result JSON, from the same permutation
+    importances as leaderboard.json and the Word report (original column names, shares of the sum over all
+    inputs). Returns ([], reason) when the importances carry no information.
+    """
+    ranks = champion.get("feature_importances") or []
+    note = champion.get("importance_note")
+    if note or not ranks:
+        return [], note or "중요도 기록이 없습니다"
+    top = [{"feature": r["feature"], "importance": round(float(r.get("share", r["pct"] / 100)), 3)}
+           for r in ranks[:TOP_FEATURES_MAX]]
+    return top, None
 
 
 def _model_params(pipe: Pipeline) -> Dict[str, Any]:
@@ -611,7 +639,8 @@ def train_and_benchmark_models(
     final_pipeline.fit(X, y)
 
     log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
-    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring=None)
+    importance_notes: List[str] = []
+    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring=None, notes=importance_notes)
 
     champion_summary = {
         "task": TASK_REGRESSION,
@@ -629,6 +658,8 @@ def train_and_benchmark_models(
         "weak_features": [f["feature"] for f in feature_ranks if f["pct"] <= 1.0],
         "feature_importances": feature_ranks
     }
+    if importance_notes:
+        champion_summary["importance_note"] = importance_notes[0]
 
     if n_dup:
         champion_summary["duplicate_rows"] = n_dup
@@ -892,7 +923,8 @@ def train_and_benchmark_classifiers(
     final_pipeline.fit(X, y)
 
     log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
-    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring="f1_macro")
+    importance_notes: List[str] = []
+    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring="f1_macro", notes=importance_notes)
 
     champion_summary = {
         "task": TASK_CLASSIFICATION,
@@ -915,6 +947,8 @@ def train_and_benchmark_classifiers(
         "weak_features": [f["feature"] for f in feature_ranks if f["pct"] <= 1.0],
         "feature_importances": feature_ranks
     }
+    if importance_notes:
+        champion_summary["importance_note"] = importance_notes[0]
     if n_dup:
         champion_summary["duplicate_rows"] = n_dup
         champion_summary["duplicate_grouped"] = grouped_note is None
@@ -2102,6 +2136,18 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             sys.stderr.write(f"[WARN] 저장 확인 실패: {u}\n")
         log_progress(100, f"학습 및 산출물 패키징 완료: {current_version} ({os.path.basename(final_version_dir)}) [소요: {duration_sec}초]")
 
+        # 2.9.39: the most important inputs per target (users ask right after training)
+        top_features: Dict[str, List[Dict[str, Any]]] = {}
+        for t in target_names:
+            top_features[t], imp_note = top_feature_shares(target_champions[t]["info"])
+            if imp_note:
+                train_warnings.append(f"타겟 '{t}': 중요 입력(top_features)을 내지 못했습니다 ({imp_note}).")
+                sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
+        top_brief = " | ".join(
+            "중요 입력" + (f"({t})" if len(target_names) > 1 else "") + ": "
+            + ", ".join(f"{r['feature']} {r['importance']:.2f}" for r in top_features[t][:TOP_FEATURES_PREVIEW])
+            for t in target_names if top_features[t])
+
         # LLM Directive
         short = "R2" if task == TASK_REGRESSION else "Macro-F1"
         target_brief = ", ".join([f"{t}({target_champions[t]['info']['champion_model']}: 검증 {short}={target_champions[t]['info']['val_score']:.4f})" for t in target_names])
@@ -2114,6 +2160,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             f"[{current_version} 완료 / {task}] 타겟: [{target_brief}] | "
             + (f"{excl_brief} | " if excl_brief else "") +
             f"평균 {metric_label}={mean_val_score:.4f} (Delta: {delta_txt}) | "
+            + (f"{top_brief} | " if top_brief else "") +
             f"소요시간: {duration_sec}s | "
             f"산출물 저장: {final_version_dir}"
         )
@@ -2125,6 +2172,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
             + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
                "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "")
+            + ("Tell the user the most important inputs (중요 입력 in preview, top_features: share of all inputs). " if top_brief else "")
             + ("Tell the user every item of warnings (duplicate rows, repeated header rows, totals rows). " if train_warnings else "") +
             "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
             "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
@@ -2146,6 +2194,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "recommendations": recommendations,
             "next_commands": next_commands,
             "feature_types": history_record["feature_types"],
+            "top_features": top_features,
             "preview": preview,
             "agent_directive": agent_directive
         }
@@ -2364,8 +2413,10 @@ def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
     result = dict(built[0])
     summaries = [best_summary(b) for b in built]
     best_targets: Dict[str, Any] = {}
+    top_features: Dict[str, Any] = {}
     for b in built:
         best_targets.update(b.get("best_targets", {}))
+        top_features.update(b.get("top_features", {}))
     unverified = [u for b in built for u in b.get("unverified", [])]
     result.update({
         "made_best": True,
@@ -2373,6 +2424,7 @@ def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
         "best_version_dir": built[0]["version_dir"],
         "best_versions": summaries,
         "best_targets": best_targets,
+        "top_features": top_features,
         "verified": not unverified,
     })
     if unverified:
