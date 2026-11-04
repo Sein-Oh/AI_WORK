@@ -330,3 +330,32 @@ def test_map_unused_columns_use_the_filtered_rows(tmp_path):
     res = run_tool("ml_map.py", "-f", write_df(tmp_path / "g.csv", df), "-i", "라인=X,A=15", "-y", "Y1")
     unused = [w for w in res.get("warnings", []) if "기준으로 주지 않은 열" in w]
     assert unused and "'B'" in unused[0] and "Y3" not in unused[0]                # 2.9.14: Y3 (empty for X) listed
+
+
+# ---- 묻지 않은 값 열의 섞인 % (24차 확인 검사 LOW-3, 2.9.42) ------------------------------------------------------
+
+
+@pytest.fixture
+def pct_mixed_grid(tmp_path):
+    rows = [[t, w, round(0.2 * t - w, 2), (f"{w}%" if t == 150 else w / 100)] for t in (150, 170, 190) for w in (5, 10, 15)]
+    df = pd.DataFrame(rows, columns=["온도", "함수율", "수율", "메모율"])
+    return write_df(tmp_path / "g.csv", df)
+
+
+def test_map_without_y_skips_unasked_mixed_percent_column(pct_mixed_grid):
+    res = run_tool("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10")
+    assert res["columns"] == ["수율"], res
+    assert res["points"][0]["values"]["수율"] == pytest.approx(22.0)
+    assert any("['메모율']" in w and "섞여" in w for w in res["warnings"]), res
+
+
+def test_map_asked_mixed_percent_column_still_stops(pct_mixed_grid):
+    res = run_fail("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10", "-y", "메모율")
+    assert res["agent_directive"].startswith("STOP_RETRY") and "'메모율'" in res["message"], res
+    res = run_tool("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10", "-y", "수율")
+    assert not any("메모율" in w for w in res.get("warnings", [])), res
+
+
+def test_map_mixed_percent_key_column_still_stops(pct_mixed_grid):
+    res = run_fail("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,메모율=0.1")
+    assert "'메모율'" in res["message"], res

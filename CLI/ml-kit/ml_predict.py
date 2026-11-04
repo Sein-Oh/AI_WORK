@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.41"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.42"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -656,10 +656,9 @@ def percent_warning(df: pd.DataFrame, columns: List[str], where: str = "") -> Li
     return out
 
 
-def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> None:
-    """STOP_RETRY when a column of columns holds numbers written with '%' ('11.9%') AND plain numbers ('0.119'):
-    coerce_numeric reads 11.9% as 11.9, so the two forms may differ by 100x and no rule tells which scale is meant.
-    The user makes the column one form. A column of '%' cells only is read as before (percent_warning)."""
+def percent_mix(df: pd.DataFrame, columns: List[str]) -> List[Tuple[str, str, str]]:
+    """(column, a '%' cell, a plain number cell) of each column of columns holding both forms (check_percent_mix)."""
+    out = []
     for c in dict.fromkeys(columns):
         if c not in df.columns:
             continue
@@ -670,13 +669,21 @@ def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> 
         is_pct = obj.map(lambda v: isinstance(v, str) and bool(_PERCENT_RE.fullmatch(v.strip()))).to_numpy(dtype=bool)
         is_num = coerce_numeric(s).notna().to_numpy(dtype=bool)
         if is_pct.any() and (is_num & ~is_pct).any():
-            pct = str(obj.iloc[int(np.flatnonzero(is_pct)[0])]).strip()
-            plain = str(obj.iloc[int(np.flatnonzero(is_num & ~is_pct)[0])]).strip()
-            raise InputError(
-                f"{where}'{c}' 열에 %를 붙인 숫자 칸({pct!r})과 % 없는 숫자 칸({plain!r})이 섞여 있습니다. "
-                f"%를 붙인 값은 % 없이 읽으므로({pct} -> {_strip_percent(pct)}) 두 형식은 100배 차이가 날 수 있어 "
-                f"어느 배율인지 정할 수 없습니다. 사용자에게 알려 이 열을 모두 %를 붙인 값으로, 또는 모두 % 없는 숫자"
-                f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오 (.xlsx는 열 전체를 같은 셀 서식으로).")
+            out.append((c, str(obj.iloc[int(np.flatnonzero(is_pct)[0])]).strip(),
+                        str(obj.iloc[int(np.flatnonzero(is_num & ~is_pct)[0])]).strip()))
+    return out
+
+
+def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> None:
+    """STOP_RETRY when a column of columns holds numbers written with '%' ('11.9%') AND plain numbers ('0.119'):
+    coerce_numeric reads 11.9% as 11.9, so the two forms may differ by 100x and no rule tells which scale is meant.
+    The user makes the column one form. A column of '%' cells only is read as before (percent_warning)."""
+    for c, pct, plain in percent_mix(df, columns)[:1]:
+        raise InputError(
+            f"{where}'{c}' 열에 %를 붙인 숫자 칸({pct!r})과 % 없는 숫자 칸({plain!r})이 섞여 있습니다. "
+            f"%를 붙인 값은 % 없이 읽으므로({pct} -> {_strip_percent(pct)}) 두 형식은 100배 차이가 날 수 있어 "
+            f"어느 배율인지 정할 수 없습니다. 사용자에게 알려 이 열을 모두 %를 붙인 값으로, 또는 모두 % 없는 숫자"
+            f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오 (.xlsx는 열 전체를 같은 셀 서식으로).")
 
 
 def coerce_numeric(series: pd.Series) -> pd.Series:

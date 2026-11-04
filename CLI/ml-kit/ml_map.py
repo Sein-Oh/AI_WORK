@@ -26,7 +26,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
-    percent_warning, check_percent_mix, _strip_percent,
+    percent_warning, check_percent_mix, percent_mix, _strip_percent,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
@@ -380,8 +380,17 @@ def execute_forward(args) -> Dict[str, Any]:
     sub = _filter(df, categorical)
     values = _value_columns(df, args.targets, columns, skip=keys + list(categorical))
     asked = list(values)
+    # '11.9%' next to '0.119' in a data column used: no scale is sure. Without -y every numeric column is a value
+    # column: one nobody asked for is left out with a warning instead of stopping the lookup (LOW-3, 2.9.42)
+    check_percent_mix(df, keys + (values if args.targets else []))
+    if not args.targets:
+        mixed = [c for c, _, _ in percent_mix(df, values)]
+        if mixed and len(mixed) < len(values):
+            values = [c for c in values if c not in mixed]
+            warnings.append(f"값 열 {mixed}은(는) %를 붙인 숫자 칸과 % 없는 숫자 칸이 섞여 있어(100배 차이가 날 수 있음) "
+                            f"계산하지 않았습니다. 그 열이 필요하면 열을 한 가지 형식으로 고친 뒤 -y로 지정하십시오")
+        check_percent_mix(df, values)       # every value column mixed: nothing left to compute
     show = list(dict.fromkeys(keys + list(categorical) + values))
-    check_percent_mix(df, keys + values)    # '11.9%' next to '0.119' in a data column used: no scale is sure
 
     if len(keys) > MAX_KEYS:
         x = np.array([numeric[k] for k in keys])
