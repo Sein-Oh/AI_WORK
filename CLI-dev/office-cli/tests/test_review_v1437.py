@@ -7,8 +7,14 @@
 - B5 excel read --where (조건에 맞는 행만)
 """
 import argparse
+import datetime as dt
+import json
 import os
 import re
+
+import pytest
+
+import _runtime as rt
 
 import excel
 import office
@@ -102,3 +108,158 @@ def test_skill_mentions_new_and_existing_features():
                    "range --action freeze", "export --save", "--number-format", "--all-sheets",
                    "--type column|bar|line|pie|scatter|area", "--toc", "--callout", "--highlight yellow"):
         assert needle in text, needle
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# B1 outlook --days / --since
+# ---------------------------------------------------------------------------------------------------------------
+
+def _run(mod, capsys, *argv):
+    with pytest.raises(SystemExit) as ei:
+        mod.main(list(argv))
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(lines) == 1, lines
+    return ei.value.code, json.loads(lines[0])
+
+
+class _Mail:
+    Class = 43
+    SenderName = "홍길동"
+    SenderEmailAddress = "hong@example.com"
+    Body = "본문"
+
+    def __init__(self, eid, subject, received, unread=False):
+        self.EntryID = eid
+        self.Subject = subject
+        self.ReceivedTime = received
+        self.UnRead = unread
+
+
+class _Items:
+    """Restrict는 조건 글을 기록하고, 안 읽은 메일 조건만 실제로 거름 (날짜는 도구가 받은 시각으로 다시 거르는지 확인).
+    refuse: 날짜 조건을 거부하는 Outlook."""
+
+    def __init__(self, mails, log, refuse=False):
+        self.mails = list(mails)
+        self.log = log
+        self.refuse = refuse
+
+    def Restrict(self, flt):
+        self.log.append(flt)
+        if self.refuse and ("ReceivedTime" in flt or "datereceived" in flt):
+            raise Exception("Outlook: 조건을 해석할 수 없음")
+        keep = [m for m in self.mails if m.UnRead] if flt == "[UnRead] = True" else self.mails
+        return _Items(keep, self.log, self.refuse)
+
+    def Sort(self, *a):
+        self.mails.sort(key=lambda m: m.ReceivedTime, reverse=True)
+
+    def __iter__(self):
+        return iter(self.mails)
+
+
+TODAY = dt.date(2026, 11, 4)
+
+
+def _mails():
+    return [_Mail("c", "지난주 견적", dt.datetime(2026, 10, 28, 8, 0), unread=True),
+            _Mail("a", "오늘 견적", dt.datetime(2026, 11, 4, 9, 0), unread=True),
+            _Mail("d", "지난달 견적", dt.datetime(2026, 10, 1, 8, 0)),
+            _Mail("b", "어제 회의", dt.datetime(2026, 11, 3, 23, 59))]
+
+
+@pytest.fixture
+def ol(monkeypatch):
+    log = []
+    state = {"refuse": False, "mails": _mails()}
+
+    class _Folder:
+        Name = "받은 편지함"
+
+        @property
+        def Items(self):
+            return _Items(state["mails"], log, state["refuse"])
+
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: object())
+    monkeypatch.setattr(outlook, "resolve_folder", lambda ns, f: _Folder())
+    return {"log": log, "state": state}
+
+
+def test_list_days_includes_today(ol, capsys):
+    code, out = _run(outlook, capsys, "list", "--days", "2")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert out["period"] == {"since": "2026-11-03", "until": "2026-11-04", "days": 2}, out
+    assert "2026-11-03 ~ 2026-11-04" in out["preview"], out
+    assert "[ReceivedTime] >= '2026-11-03 00:00'" in ol["log"], ol["log"]       # 지역 설정과 무관한 YYYY-MM-DD
+
+
+def test_list_days_one_is_today_only(ol, capsys):
+    code, out = _run(outlook, capsys, "list", "--days", "1")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a"], out
+
+
+def test_list_since_with_unread(ol, capsys):
+    code, out = _run(outlook, capsys, "list", "--since", "2026-10-28", "--unread")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "c"], out
+    assert out["period"]["days"] == 8 and ol["log"][0] == "[UnRead] = True", (out, ol["log"])
+
+
+def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
+    code, out = _run(outlook, capsys, "search", "--query", "견적", "--days", "7")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
+    flt = ol["log"][-1]
+    assert flt.startswith("@SQL=") and flt.count("@SQL=") == 1 and "견적" in flt, flt
+    assert '"urn:schemas:httpmail:datereceived" >= ' in flt and ") AND (" in flt, flt
+    utc = dt.datetime(2026, 10, 29).astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+    assert f"'{utc}'" in flt, flt                                                 # DASL 날짜 비교는 UTC
+    assert out["period"]["since"] == "2026-10-29" and "2026-10-29" in out["preview"], out
+
+
+def test_search_date_only_is_allowed(ol, capsys):
+    code, out = _run(outlook, capsys, "search", "--since", "2026-11-03")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+
+
+def test_zero_result_states_period(ol, capsys):
+    ol["state"]["mails"] = [m for m in _mails() if m.EntryID in ("c", "d")]
+    for argv in (["list", "--days", "3"], ["search", "--query", "견적", "--days", "3"]):
+        code, out = _run(outlook, capsys, *argv)
+        assert code == 0 and out["count"] == 0 and out["mails"] == [], out
+        assert out["agent_directive"].startswith("VERIFIED: 0건") and "2026-11-02 ~ 2026-11-04" in out["agent_directive"], out
+
+
+def test_restrict_refused_falls_back_and_filters(ol, capsys):
+    ol["state"]["refuse"] = True
+    code, out = _run(outlook, capsys, "list", "--days", "2")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert out["agent_directive"].startswith("VERIFIED:") and out["recovered"], out
+    rt.RECOVERED.clear()
+    code, out = _run(outlook, capsys, "search", "--query", "견적", "--days", "7")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
+    assert "datereceived" not in ol["log"][-1] and "견적" in ol["log"][-1], ol["log"]
+    rt.RECOVERED.clear()
+
+
+@pytest.mark.parametrize("argv, rec", [
+    (["--since", "2026/10/01"], "[추천] 2026-10-01"),
+    (["--since", "20261001"], "[추천] 2026-10-01"),
+    (["--since", "2026년 10월 1일"], "[추천] 2026-10-01"),
+    (["--since", "2026-1-5"], "[추천] 2026-01-05"),
+    (["--days", "0"], "[추천] 1"),
+    (["--days", "-7"], "[추천] 7"),
+])
+def test_bad_date_recommends(ol, capsys, argv, rec):
+    for cmd in ("list", "search"):
+        code, out = _run(outlook, capsys, cmd, *argv)
+        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and out["message"].endswith(rec), out
+    assert not ol["log"], ol["log"]          # Outlook에 묻기 전에 멈춤
+
+
+@pytest.mark.parametrize("argv", [["--since", "2026-02-30"], ["--since", "지난주"], ["--since", "2026-12-01"],
+                                  ["--days", "3", "--since", "2026-11-01"]])
+def test_bad_date_without_guess(ol, capsys, argv):
+    code, out = _run(outlook, capsys, "list", *argv)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[추천]" not in out["message"], out
