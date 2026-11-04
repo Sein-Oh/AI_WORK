@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.38"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.39"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -614,7 +614,16 @@ COMMAND_ALIASES = {"excel": {"list": "info", "sheets": "info"}, "word": {"list":
                    "outlook": {"attachment": "attachments", "attach": "attachments", "download": "attachments"}}
 OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--target"], "--path": ["--file", "--target"],
                    "--text": ["--value", "--file"],  # 엑셀 write에 워드식 --text를 쓰면 --target(철자 비슷)이 아니라 --value
-                   "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"]}
+                   "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"],
+                   "--cell": ["--range"]}
+# 다른 파일의 명령이 맞는 경우 (회사 PC 오류 로그 2026-11-04): [추천]으로 값만 바꾸면 또 틀리므로 맞는 명령을 안내만 함
+_WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --text "내용", PPT는 ppt.py write --text "내용", '
+               '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
+OTHER_COMMAND = {("office", "write"): "office.py에는 write가 없습니다. " + _WRITE_TEXT,
+                 ("office", "transfer", "--text"): "transfer는 엑셀 차트·범위와 문서의 표를 옮기는 명령이라 글은 받지 않습니다. " + _WRITE_TEXT,
+                 ("reader", "read", "--section"): ('reader.py read는 장절을 고르지 않습니다. 파일에서 장절로 찾기는 '
+                                                   'reader.py search --file "파일" --section "장절" --query "검색어", '
+                                                   '열린 워드 문서의 장절 읽기는 word.py read --section "1.1"을 쓰세요.')}
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -653,6 +662,9 @@ class JsonArgumentParser(argparse.ArgumentParser):
                     subs = act.choices
         m = re.search(r"invalid choice: '([^']+)'", message)
         if m:
+            other = OTHER_COMMAND.get((self.tool_name, m.group(1).lower()))
+            if other:
+                return " " + other
             choices = list(subs) or re.findall(r"'([^']+)'", message.split("choose from", 1)[-1])
             alias = COMMAND_ALIASES.get(self.tool_name, {}).get(m.group(1).lower())
             best = alias or next(iter(difflib.get_close_matches(m.group(1), choices, n=1, cutoff=0.6)), None)
@@ -665,6 +677,10 @@ class JsonArgumentParser(argparse.ArgumentParser):
         opts = [o for a in (sub._actions if sub else []) for o in a.option_strings if o.startswith("--")]
         extra = m.group(1).split()
         flags = [x for x in extra if x.startswith("--")]
+        for f in flags:
+            other = OTHER_COMMAND.get((self.tool_name, cmd, f))
+            if other:
+                return " " + other
         for f in flags:
             near = [o for o in OPTION_SYNONYMS.get(f, []) if o in opts] or difflib.get_close_matches(f, opts, n=1, cutoff=0.7)
             if near:

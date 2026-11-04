@@ -391,6 +391,7 @@ def test_unescape_newlines_keeps_windows_paths():
     (["excel.py", "raed"], "[추천] read"),
     (["office.py", "undo", "--target", "excel"], "[추천] --app"),
     (["excel.py", "read", "--target", "C:\\a", "b.xlsx"], "큰따옴표"),
+    (["excel.py", "write", "--cell", "K1", "--value", "3"], "[추천] --range"),                      # 1.4.39
 ])
 def test_argument_errors_from_real_logs_get_a_hint(argv, want):
     tool_dir = os.path.dirname(rt.__file__)
@@ -400,6 +401,22 @@ def test_argument_errors_from_real_logs_get_a_hint(argv, want):
     assert proc.returncode == 2 and len(out) == 1
     payload = json.loads(out[0])
     assert want in payload["message"] and "[추천]" in payload["agent_directive"]
+
+
+@pytest.mark.parametrize("argv, want", [
+    (["office.py", "write", "--target", "보고서.docx", "--text", "요약"], 'word.py write --text'),
+    (["office.py", "transfer", "--to-target", "보고서.docx", "--text", "요약"], "글은 받지 않습니다"),
+    (["reader.py", "read", "--file", "a.hwp", "--section", "1.1"], 'reader.py search --file'),
+])
+def test_other_file_command_is_named_not_recommended(argv, want):
+    """1.4.39 (회사 PC 오류 로그): 다른 파일의 명령이 맞는 경우 [추천](값만 바꿔 1회 재시도)이 아니라 맞는 명령을 안내.
+    [추천]을 따라 옵션 이름만 바꾸면 또 틀림 (예: office.py transfer --text -> --theme)."""
+    tool_dir = os.path.dirname(rt.__file__)
+    proc = subprocess.run([sys.executable, os.path.join(tool_dir, argv[0]), *argv[1:]], capture_output=True, text=True,
+                          encoding="utf-8")
+    payload = json.loads([ln for ln in proc.stdout.splitlines() if ln.strip()][0])
+    assert proc.returncode == 2 and want in payload["message"]
+    assert "[추천]" not in payload["message"] and "[후보]" not in payload["message"]
 
 
 def test_ok_does_not_add_verified_for_the_caller():

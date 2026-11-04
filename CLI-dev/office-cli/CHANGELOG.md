@@ -6,6 +6,17 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.39] - 2026-11-04
+
+회사 PC 오류 로그(2026-10-29~11-04, 실제 사용)의 인자 오류를 현재 버전으로 다시 실행해, 안내가 맞지 않던 것을 고침.
+회귀 테스트: `tests/test_contract.py` (1.4.38에서 4개 실패).
+
+### 수정
+- 다른 파일의 명령이 맞는 경우 `[추천]`(옵션 이름만 바꿔 1회 재시도) 대신 맞는 명령을 안내 (`OTHER_COMMAND`):
+  `office.py write`(없는 명령, 전에는 `[후보] windows, focus, transfer, undo`), `office.py transfer --text`(전에는 옵션 목록만),
+  `reader.py read --section`(장절은 `reader.py search --section` 또는 열린 워드의 `word.py read --section`). 세 경우 모두 워드/PPT/엑셀 쓰기 명령을 그대로 적음.
+- `excel.py write --cell K1`에 `[추천] --range` (전에는 옵션 목록만).
+
 ## [1.4.38] - 2026-11-04
 
 회사 PC `opencode run` 기록(Gemma, "열려있는 엑셀 A2에 반가워 입력해줘")에서 찾은 세 가지.
