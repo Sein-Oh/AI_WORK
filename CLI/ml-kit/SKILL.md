@@ -84,7 +84,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 
 `needs_input`이 `true`인 명령에는 `<새데이터.xlsx>` 같은 자리표시자가 있다. 사용자가 준 실제 경로로 바꿔 실행하고, 경로를 모르면 먼저 묻는다.
 
-버전 비교·이력: `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history` -> `records`의 `version`, `mean_val_score`, `delta_score`, `tag`를 표로 알린다.
+버전 비교·이력: `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history` -> `records`의 `version`, `mean_val_score`, `delta_score`, `tag`를 표로 알린다 (`truncated`가 true이면 최근 30건만이라고 알리고 `full_result_file` 경로도).
 
 ## 4단계: 예측
 

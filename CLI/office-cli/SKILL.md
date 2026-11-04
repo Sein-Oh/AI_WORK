@@ -47,7 +47,7 @@ metadata:
 | 워드/PPT 내용을 엑셀로 | `office.py transfer --from word --what text --to excel` (`--what table --table 1`) |
 | 문서 등록 (PDF/HWP/Office) | 폴더: `reader.py index --folder "<폴더>"` / 파일 하나 읽기: `reader.py read --file "<파일>" [--pages 1-3] [--save]` |
 | 문서의 장절 읽기 (근거 포함) | `reader.py read --file "<파일>" --section "장절 일부" [--pages 3-7]` (장절 이름 일부, 대소문자 무시. 결과 `units[].evidence`가 근거) |
-| 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호·조사·단위 표기는 무시: `SOI 1` = `SOI #1`, `정격전압은 5V` = `정격 전압이 5.0 V`. 사용자가 패턴을 말하면 `--regex`. 동의어는 데이터 폴더의 `synonyms.txt`) |
+| 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호·조사·단위 표기는 무시: `SOI 1` = `SOI #1`, `정격전압은 5V` = `정격 전압이 5.0 V`. 사용자가 패턴을 말하면 `--regex`. 사용자가 동의어를 주면 `C:\CLI\office-cli\data\synonyms.txt`에 적는다: UTF-8, 한 줄에 한 묶음, 쉼표 구분, 있던 줄은 지우지 않음) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |
 | 메일 읽기 | `outlook.py current`, `list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간: `--days 7`(오늘 포함) 또는 `--since 2026-11-01`, search도 같음), `search --query 말 [--from 이름] [--folder sent] [--where subject]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일), 폴더 목록 `outlook.py folders` |
@@ -72,8 +72,8 @@ metadata:
 | `VERIFIED:` | 완료. `preview`를 사용자에게 알린다. 같은 명령을 다시 실행하거나 결과를 다시 읽지 않는다. |
 | `UNVERIFIED:` | 실행은 됐지만 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
 | `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]`를 보여 주고 사용자가 고르게 한 뒤, 고른 값으로 실행한다 (시트: `--sheet 이름`, 앵커·장절: `--occurrence 번호`, 문서: message가 말한 옵션(`--target`, `--to-target`, `--from-target`, `--name`)에 전체경로). 새 시트는 `excel.py write`에서만, 사용자가 원한다고 답한 경우에만 `--new-sheet`. |
-| `STOP_RETRY:` + message에 `[추천]` | 추천된 값으로 **1번만** 다시 실행한다. 또 실패하면 message를 그대로 알린다. |
-| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸, 되돌리기 위험)이면 사용자에게 묻고, 사용자가 원할 때만 directive가 말한 옵션을 붙여 1번 실행한다. |
+| `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그 명령을, 아니면 추천된 값으로 바꿔 **1번만** 다시 실행한다. 또 실패하면 message를 그대로 알린다. |
+| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸, 되돌리기 위험)이면 사용자에게 묻고, 사용자가 원할 때만 directive가 말한 옵션을 붙여 1번 실행한다. `install_command`가 있으면 그 명령을 알린다(직접 설치하지 않는다). |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |
 
 - `error_type`이 `elevated_process`(관리자 권한 실행이라 사용자가 연 문서가 안 보임)이면 다시 실행하지 않고 message를 그대로 알린다.
