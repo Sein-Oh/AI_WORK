@@ -341,7 +341,7 @@ def test_i5_stale_lock_removal_keeps_fresh_lock(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# O1: --save-attach에서 저장하지 못한 첨부가 있으면 VERIFIED가 아님
+# O1: 첨부 저장(1.4.34부터 attachments --save)에서 저장하지 못한 첨부가 있으면 VERIFIED가 아님
 # ---------------------------------------------------------------------------
 
 class _Att:
@@ -379,22 +379,23 @@ def _mail(atts):
                                  Attachments=_Atts(atts))
 
 
+# 1.4.34: read --save-attach 대신 attachments --save (폴더는 전체 경로)
 @pytest.mark.parametrize("att", [_Att("b.pdf", fail=True), _Att("c.pdf", vanish=True)])
-def test_o1_failed_attachment_save_is_unverified(monkeypatch, att):
+def test_o1_failed_attachment_save_is_unverified(monkeypatch, att, tmp_path):
     item = _mail([_Att("a.xlsx"), att])
     monkeypatch.setattr(outlook, "get_outlook", lambda: None)
     monkeypatch.setattr(outlook, "get_namespace", lambda app: types.SimpleNamespace(GetItemFromID=lambda i: item))
-    out = outlook.cmd_read(types.SimpleNamespace(id="X", save=None, save_attach=True))
+    out = outlook.cmd_attachments(types.SimpleNamespace(id="X", save=str(tmp_path / "첨부"), name=None, index=None))
     assert out["agent_directive"].startswith("UNVERIFIED:") and att.FileName in out["agent_directive"], out
-    assert len(out["saved_attachments"]) == 1
+    assert len(out["saved"]) == 1
 
 
-def test_o1_all_attachments_saved_is_verified(monkeypatch):
+def test_o1_all_attachments_saved_is_verified(monkeypatch, tmp_path):
     item = _mail([_Att("a.xlsx")])
     monkeypatch.setattr(outlook, "get_outlook", lambda: None)
     monkeypatch.setattr(outlook, "get_namespace", lambda app: types.SimpleNamespace(GetItemFromID=lambda i: item))
-    out = outlook.cmd_read(types.SimpleNamespace(id="X", save=None, save_attach=True))
-    assert out["agent_directive"].startswith("VERIFIED:") and len(out["saved_attachments"]) == 1
+    out = outlook.cmd_attachments(types.SimpleNamespace(id="X", save=str(tmp_path / "첨부"), name=None, index=None))
+    assert out["agent_directive"].startswith("VERIFIED:") and len(out["saved"]) == 1
 
 
 def test_outlook_new_checks_attachment_before_creating_mail(monkeypatch, tmp_path):

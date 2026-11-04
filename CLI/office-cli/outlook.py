@@ -3,9 +3,10 @@
 조회 (화면은 그대로, 백그라운드):
     list     폴더의 최근 메일 목록 (--unread, --limit)
     search   제목/본문/보낸사람 검색
-    read     메일 하나 읽기 (--id), 첨부 저장 (--save-attach)
+    read     메일 하나 읽기 (--id). 첨부가 있으면 이름과 내려받기 명령을 함께 줌
     current  지금 보고 있거나 선택한 메일 읽기
     folders  폴더 구조와 안 읽은 메일 수
+    attachments  첨부 목록, --save 로 내려받기 (기본: %USERPROFILE%\\Downloads\\메일 첨부\\<시각>_<제목>)
 
 작성 (기본: 작성 창만 띄우고 사용자가 직접 [보내기]):
     new      새 메일
@@ -18,7 +19,7 @@
 예:
     python outlook.py current
     python outlook.py search --query "견적" --from "김팀장" --limit 5
-    python outlook.py read --id "<id>" --save-attach
+    python outlook.py attachments --id "<id>" --save
     python outlook.py reply --body "확인했습니다."
     python outlook.py new --to "lead@company.com" --subject "주간 보고" --body "첨부합니다." --attach "보고서.pdf"
 """
@@ -37,8 +38,12 @@ DEFAULT_FOLDERS = {"inbox": 6, "받은편지함": 6, "sent": 5, "보낸편지함
                    "deleted": 3, "지운편지함": 3, "outbox": 4, "보낼편지함": 4, "junk": 23, "정크메일": 23}
 BLOCKED_ATTACH = {".exe", ".bat", ".cmd", ".com", ".js", ".vbs", ".vbe", ".wsf", ".ps1", ".scr", ".msi", ".lnk",
                   ".hta", ".jar", ".reg", ".dll"}
-SAVE_FAILED = "저장 실패"     # skipped_attachments에서 정책상 건너뛴 것과 저장에 실패한 것을 구분하는 표시
+SAVE_FAILED = "저장 실패"     # attachments --save의 skipped에서 정책상 건너뛴 것과 저장에 실패한 것을 구분하는 표시
 MAX_LIMIT = 200          # list/search --limit 상한 (넘으면 줄이고 warnings로 알림)
+MAX_NAMES_SHOW = 20      # read/current의 attachment_names 상한
+MAX_ATTACH_SHOW = 50     # attachments 목록·saved·skipped 상한 (넘으면 truncated, 전체는 저장 폴더)
+ATTACH_ROOT_NAME = "메일 첨부"   # 기본 저장 위치: <다운로드>\메일 첨부\<시각>_<제목 40자> (자동 정리하지 않음)
+DOWNLOADS_GUID = "{374DE290-123F-4565-9164-39C4925E467B}"     # 사용자 셸 폴더 레지스트리의 '다운로드'
 PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"
 
 
@@ -254,40 +259,41 @@ def _safe_name(text: str, limit: int, default: str = "메일") -> str:
     return rt.safe_filename(text, limit, default)
 
 
-def _save_attachments(item: Any) -> Tuple[List[str], List[str]]:
-    saved: List[str] = []
-    skipped: List[str] = []
-    subject = _safe_name(_text(getattr(item, "Subject", "메일")), 40)
-    folder = os.path.join(rt.get_work_dir(), "mail_attachments", f"{rt.timestamp()}_{subject}")
-    for i in range(1, int(item.Attachments.Count) + 1):
-        att = item.Attachments.Item(i)
-        name = _text(getattr(att, "FileName", "")) or f"첨부{i}"
+def _attachment_infos(item: Any) -> List[Dict[str, Any]]:
+    """메일의 첨부 목록: index(1부터), name, size(Outlook이 알려 주면 바이트), hidden_inline(본문 삽입 이미지), blocked(실행 파일 형식)."""
+    infos: List[Dict[str, Any]] = []
+    try:
+        atts = item.Attachments
+        total = int(atts.Count)
+    except Exception:
+        return infos
+    for i in range(1, total + 1):
         try:
-            if att.PropertyAccessor.GetProperty(PR_ATTACHMENT_HIDDEN):
-                skipped.append(f"{name} (본문 삽입 이미지)")
-                continue
+            att = atts.Item(i)
         except Exception:
-            pass
-        if os.path.splitext(name)[1].lower() in BLOCKED_ATTACH:
-            skipped.append(f"{name} (실행 파일 형식이라 저장 안 함)")
             continue
-        os.makedirs(folder, exist_ok=True)
-        base, ext = os.path.splitext(re.sub(r'[\\/:*?"<>|]+', "_", name))
-        dest = os.path.join(folder, base + ext)
-        k = 2
-        while os.path.exists(dest):                       # 같은 이름 첨부는 번호를 붙여 보존
-            dest = os.path.join(folder, f"{base} ({k}){ext}")
-            k += 1
+        name = _text(getattr(att, "FileName", "")) or _text(getattr(att, "DisplayName", "")) or f"첨부{i}"
         try:
-            att.SaveAsFile(dest)
-        except Exception as e:
-            skipped.append(f"{name} ({SAVE_FAILED}: {e})")
-            continue
-        if os.path.isfile(dest):                          # R1: 저장한 파일이 실제로 생겼는지 다시 확인
-            saved.append(dest)
-        else:
-            skipped.append(f"{name} ({SAVE_FAILED}: 저장 후 파일이 없음)")
-    return saved, skipped
+            size: Optional[int] = int(att.Size)
+        except Exception:
+            size = None
+        try:
+            hidden = bool(att.PropertyAccessor.GetProperty(PR_ATTACHMENT_HIDDEN))
+        except Exception:
+            hidden = False
+        infos.append({"index": i, "name": name, "size": size, "hidden_inline": hidden,
+                      "blocked": os.path.splitext(name)[1].lower() in BLOCKED_ATTACH, "_att": att})
+    return infos
+
+
+def _public(info: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in info.items() if not k.startswith("_")}
+
+
+def _mail_id_args(item: Any) -> List[str]:
+    """next_commands에 넣을 --id (보고 있는 메일도 id로 고정해 다음 명령이 다른 메일을 잡지 않게)."""
+    mid = _text(getattr(item, "EntryID", ""))
+    return ["--id", mid] if mid else []
 
 
 def _mail_detail(item: Any, args, source: str) -> Dict[str, Any]:
@@ -296,6 +302,7 @@ def _mail_detail(item: Any, args, source: str) -> Dict[str, Any]:
     body = _text(getattr(item, "Body", "")).replace("\r\n", "\n").strip()
     clipped, cut = rt.clamp_text(body, rt.DEFAULT_MAX_CHARS)
     result: Dict[str, Any] = {"mail": info, "body": clipped, "body_truncated": cut}
+    nexts: List[Dict[str, str]] = []
     if getattr(args, "save", None):
         out = rt.resolve_output_path(None if args.save is True else args.save, "mail_" + _safe_name(info["subject"], 30), ".md")
         md = (f"# {info['subject']}\n\n- 보낸사람: {info['from']}\n- 받는사람: {info['to']}\n- 날짜: {info['received']}\n\n{body}\n")
@@ -305,12 +312,19 @@ def _mail_detail(item: Any, args, source: str) -> Dict[str, Any]:
             problem = "저장한 파일에 메일 제목이 없음"
         if problem:
             result["save_problem"] = problem
-        result["next_commands"] = [rt.next_command("word.py", ["write", "--file", result["output_file"]], "메일 내용을 워드에 넣기")]
-    if getattr(args, "save_attach", False) and info["attachments"]:
-        saved, skipped = _save_attachments(item)
-        result["saved_attachments"] = saved
-        if skipped:
-            result["skipped_attachments"] = skipped
+        nexts.append(rt.next_command("word.py", ["write", "--file", result["output_file"]], "메일 내용을 워드에 넣기"))
+    if info["attachments"]:
+        atts = _attachment_infos(item)
+        names = [a["name"] for a in atts if not a["hidden_inline"]]
+        inline = len(atts) - len(names)
+        if inline:
+            result["inline_images"] = inline
+        if names:
+            result["attachment_names"] = names[:MAX_NAMES_SHOW]
+            result["attachment_names_truncated"] = len(names) > MAX_NAMES_SHOW
+            nexts.append(rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save"], "첨부 내려받기"))
+    if nexts:
+        result["next_commands"] = nexts
     return result
 
 
@@ -324,32 +338,181 @@ def cmd_read(args) -> Dict[str, Any]:
     return _detail_response("read", f"'{result['mail']['subject']}' ({result['mail']['from']})", result)
 
 
-def _attachment_problems(result: Dict[str, Any]) -> List[str]:
-    """--save-attach 결과 확인 (R1): 저장에 실패한 첨부와, 저장했다는데 다시 보니 없는 파일."""
-    failed = [s for s in result.get("skipped_attachments", []) if SAVE_FAILED in s]
-    gone = [os.path.basename(p) for p in result.get("saved_attachments", []) if not os.path.isfile(p)]
-    problems = []
-    if failed:
-        problems.append(f"첨부 {len(failed)}개를 저장하지 못함: {', '.join(failed[:5])}")
-    if gone:
-        problems.append(f"저장한 첨부를 다시 확인하니 없음: {', '.join(gone[:5])}")
-    return problems
-
-
 def _detail_response(command: str, preview: str, result: Dict[str, Any]) -> Dict[str, Any]:
-    """read/current 공통 응답: --save 파일이나 --save-attach 첨부를 다시 확인하지 못했으면 UNVERIFIED (R1)."""
-    if "saved_attachments" in result:
-        preview += f", 첨부 {len(result['saved_attachments'])}개 저장"
-    problems = ([result["save_problem"]] if result.get("save_problem") else []) + _attachment_problems(result)
-    if problems:
-        return rt.ok_unverified(TOOL, command, preview, problems, **result)
+    """read/current 공통 응답: --save 파일을 다시 확인하지 못했으면 UNVERIFIED (R1)."""
+    if result.get("attachment_names"):
+        n = len(result["attachment_names"])
+        preview += f", 첨부 {n}개" + (" 이상" if result["attachment_names_truncated"] else "")
+    if result.get("save_problem"):
+        return rt.ok_unverified(TOOL, command, preview, [result["save_problem"]], **result)
     if "output_file" in result:
         return rt.ok(TOOL, command, preview + f", 저장: {result['output_file']}",
                      "VERIFIED: 메일을 읽고 저장한 파일을 다시 열어 확인했습니다.", verified=True, **result)
-    if result.get("saved_attachments"):
-        return rt.ok(TOOL, command, preview, "VERIFIED: 메일을 읽고 저장한 첨부 파일이 있는지 다시 확인했습니다.",
-                     verified=True, **result)
     return rt.ok(TOOL, command, preview, **result)
+
+
+# ------------------------------------------------------------------------------
+# 첨부 내려받기 (attachments)
+# ------------------------------------------------------------------------------
+
+def _shell_downloads() -> Optional[str]:
+    """Windows가 아는 '다운로드' 폴더 (사용자가 D:\\ 등으로 옮겼을 수 있음). 읽지 못하면 None."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as key:
+            value = str(winreg.QueryValueEx(key, DOWNLOADS_GUID)[0])
+        path = os.path.expandvars(value)
+        return path if os.path.isabs(path) else None
+    except Exception:
+        return None
+
+
+def downloads_dir() -> str:
+    """첨부 기본 저장 위치의 뿌리: 사용자의 다운로드 폴더.
+    도구 data 폴더(7일 뒤 정리되는 _work, En-Genius 고정 폴더)와 관계없음."""
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return _shell_downloads() or os.path.join(home, "Downloads")
+
+
+def _save_folder(spec: Any, subject: str) -> str:
+    if spec is True:
+        return os.path.join(downloads_dir(), ATTACH_ROOT_NAME, f"{rt.timestamp()}_{_safe_name(subject, 40)}")
+    raw = os.path.expandvars(os.path.expanduser(str(spec).strip().strip('"')))
+    if not raw:
+        raise rt.InputError("--save 폴더가 비어 있습니다. 폴더를 빼고 --save만 쓰면 다운로드 폴더에 저장합니다.")
+    if not os.path.isabs(raw):
+        raise rt.InputError(f"--save 폴더는 전체 경로로 지정하세요 (받은 값: {raw}). 사용자에게 전체 경로를 물어보세요. "
+                            "폴더를 빼고 --save만 쓰면 다운로드 폴더에 저장합니다.")
+    raw = os.path.abspath(raw)
+    if os.path.isfile(raw):
+        raise rt.InputError(f"--save에는 폴더를 지정하세요. 같은 이름의 파일이 있습니다: {raw}")
+    return raw
+
+
+def _select(infos: List[Dict[str, Any]], names: Optional[Sequence[str]],
+            indexes: Optional[Sequence[str]]) -> Optional[List[Dict[str, Any]]]:
+    """--name(이름 일부, 대소문자 무시, ; 로 여러 개)과 --index(1,3 또는 2-4)로 고른 첨부. 둘 다 없으면 None (전부).
+    맞는 첨부가 없는 값이 하나라도 있으면 [후보](첨부 이름)로 멈춥니다 (추측해서 다른 첨부를 저장하지 않음)."""
+    parts = [p.strip() for n in (names or []) for p in str(n).split(";") if p.strip()]
+    idx = [p for spec in (indexes or []) for p in re.split(r"[,;\s]+", str(spec)) if p]
+    if not parts and not idx:
+        if names or indexes:
+            raise rt.InputError("--name/--index 값이 비어 있습니다. 첨부 이름 일부나 번호(1,3)를 주세요.")
+        return None
+    chosen: Dict[int, Dict[str, Any]] = {}
+    cands = [a["name"] for a in infos]
+    if not infos:
+        raise rt.InputError("이 메일에는 첨부가 없어 --name/--index로 고를 것이 없습니다.")
+    for part in parts:
+        hits = [a for a in infos if part.casefold() in a["name"].casefold()]
+        if not hits:
+            raise rt.ambiguous(f"--name '{part}'에 맞는 첨부가 없습니다. 사용자에게 첨부를 고르게 하세요.", cands,
+                               log_message="--name 값에 맞는 첨부가 없습니다.")
+        chosen.update((a["index"], a) for a in hits)
+    for token in idx:
+        m = re.fullmatch(r"(\d+)(?:-(\d+))?", token)
+        if not m:
+            raise rt.InputError(f"--index는 첨부 번호(1부터)를 쉼표로 구분해 주세요 (예: 1,3 또는 2-4). 받은 값: {token}")
+        lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+        hits = [a for a in infos if lo <= a["index"] <= hi]
+        if not hits:
+            raise rt.ambiguous(f"--index {token}에 해당하는 첨부가 없습니다 (첨부 {len(infos)}개, 번호는 1부터). "
+                               "사용자에게 첨부를 고르게 하세요.", cands,
+                               log_message=f"--index {token}에 해당하는 첨부가 없습니다 (첨부 {len(infos)}개).")
+        chosen.update((a["index"], a) for a in hits)
+    return [chosen[k] for k in sorted(chosen)]
+
+
+def _unique_dest(folder: str, name: str, index: int) -> str:
+    base, ext = os.path.splitext(name)
+    base = rt.safe_filename(base, 120, f"첨부{index}")
+    ext = rt.safe_filename(ext, 20, "") if ext else ""
+    dest = os.path.join(folder, base + ext)
+    k = 2
+    while os.path.exists(dest):                    # 덮어쓰지 않음: ' (2)'를 붙이고 recovered로 알림 (R4)
+        dest = os.path.join(folder, f"{base} ({k}){ext}")
+        k += 1
+    if k > 2:
+        rt.note_recovered(f"{base + ext} 이미 있음 -> 덮어쓰지 않고 {os.path.basename(dest)}로 저장")
+    return dest
+
+
+def _save_selected(infos: List[Dict[str, Any]], picked: Optional[List[Dict[str, Any]]], folder: str
+                   ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    """(저장한 첨부, 건너뛴 첨부, 확인하지 못한 내용).
+    실행 파일 형식은 늘 건너뛰고, 본문 삽입 이미지는 --name/--index로 직접 고른 경우에만 저장합니다."""
+    saved: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    problems: List[str] = []
+    for a in (infos if picked is None else picked):
+        if a["blocked"]:
+            skipped.append({"name": a["name"], "reason": "실행 파일 형식이라 저장 안 함"})
+            continue
+        if a["hidden_inline"] and picked is None:
+            skipped.append({"name": a["name"], "reason": "본문 삽입 이미지 (저장하려면 --name이나 --index로 고름)"})
+            continue
+        rt.retry_fs(lambda: os.makedirs(folder, exist_ok=True))
+        dest = _unique_dest(folder, a["name"], a["index"])
+        try:
+            a["_att"].SaveAsFile(dest)
+        except Exception as e:
+            skipped.append({"name": a["name"], "reason": f"{SAVE_FAILED}: {str(e)[:120]}"})
+            problems.append(f"{a['name']} {SAVE_FAILED}")
+            continue
+        # R1: 저장한 파일이 실제로 있는지, Outlook이 크기를 알려 준 첨부는 빈 파일이 아닌지 다시 확인.
+        # (Outlook의 Size에는 메일 속성 몫이 더해져 파일 크기보다 조금 큼. 같은 크기를 요구하면 정상 저장도 실패로 봄)
+        try:
+            got = os.path.getsize(dest)
+        except OSError:
+            problems.append(f"{a['name']}: 저장 후 다시 보니 파일이 없음 ({dest})")
+            continue
+        if a["size"] and got == 0:
+            problems.append(f"{a['name']}: 저장한 파일이 비어 있음 (Outlook 크기 {a['size']}바이트)")
+        saved.append({"name": a["name"], "path": dest, "size": got})
+    return saved, skipped, problems
+
+
+def cmd_attachments(args) -> Dict[str, Any]:
+    listing = args.save is None
+    if listing and (args.name or args.index):
+        raise rt.InputError("--name/--index는 --save와 함께 씁니다. 목록만 보려면 둘 다 빼세요. "
+                            "[추천] 같은 명령 끝에 --save를 붙이세요.")
+    item = _target_item(get_outlook(), args, "첨부를 볼 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.")
+    subject = _text(getattr(item, "Subject", ""))
+    infos = _attachment_infos(item)
+    base: Dict[str, Any] = {"mail": {"id": _text(getattr(item, "EntryID", "")), "subject": subject}}
+    if listing:
+        shown = infos[:MAX_ATTACH_SHOW]
+        base.update(attachments=[_public(a) for a in shown], count=len(infos), truncated=len(infos) > len(shown))
+        if not infos:      # R2 0건
+            return rt.ok(TOOL, "attachments", f"0건: '{subject}' 메일에 첨부 없음",
+                         "VERIFIED: 0건. 이 메일에는 첨부 없음. 사용자에게 그대로 알리고 다시 실행하지 마세요.", **base)
+        base["next_commands"] = [rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save"],
+                                                 "첨부 모두 내려받기 (다운로드 폴더)")]
+        inline = sum(1 for a in infos if a["hidden_inline"])
+        return rt.ok(TOOL, "attachments", f"'{subject}' 메일 첨부 {len(infos)}개"
+                     + (f" (본문 삽입 이미지 {inline}개 포함)" if inline else ""),
+                     "VERIFIED: 첨부 목록을 읽었습니다. 사용자에게 이름을 알리고, 내려받기를 원하면 next_commands[0]을 실행하세요. "
+                     "일부만 원하면 그 명령 끝에 --name \"이름 일부\"를 붙이세요.", **base)
+    folder = _save_folder(args.save, subject)
+    picked = _select(infos, args.name, args.index)
+    saved, skipped, problems = _save_selected(infos, picked, folder)
+    base.update(saved=[s["path"] for s in saved][:MAX_ATTACH_SHOW], count=len(saved),
+                folder=folder if saved else None, skipped=skipped[:MAX_ATTACH_SHOW],
+                truncated=len(saved) > MAX_ATTACH_SHOW or len(skipped) > MAX_ATTACH_SHOW)
+    names = ", ".join(s["name"] for s in saved[:10]) + (" ..." if len(saved) > 10 else "")
+    if problems:
+        return rt.ok_unverified(TOOL, "attachments", f"첨부 {len(saved)}개 저장: {folder}", problems, **base)
+    if not saved:      # R2 0건
+        why = "첨부 없음" if not infos else "저장할 첨부 없음 (건너뛴 첨부: " + ", ".join(
+            f"{s['name']} - {s['reason']}" for s in skipped[:5]) + ")"
+        return rt.ok(TOOL, "attachments", f"0건: '{subject}' 메일에 {why}",
+                     f"VERIFIED: 0건. {why}. 사용자에게 그대로 알리고 다시 실행하지 마세요.", **base)
+    tail = f" 건너뛴 첨부 {len(skipped)}개는 skipped의 이유와 함께 알리세요." if skipped else ""
+    return rt.ok(TOOL, "attachments", f"첨부 {len(saved)}개 저장: {folder} ({names})",
+                 f"VERIFIED: 첨부 {len(saved)}개를 저장하고 파일이 있는지 다시 확인했습니다. "
+                 f"사용자에게 저장 폴더(folder)와 파일 이름을 그대로 알리세요.{tail}", verified=True, **base)
 
 
 def current_item(app: Any) -> Tuple[Optional[Any], str]:
@@ -417,6 +580,31 @@ def _prepend_html(html: str, prefix: str) -> str:
     return html[:m.end()] + prefix + html[m.end():] if m else prefix + (html or "")
 
 
+def _attach_file(spec: str) -> str:
+    """--attach 조각 하나를 파일 경로로. 전체 경로가 아니면 data 폴더에서 찾습니다(파일 이름만 쓴 경우).
+    전체 경로인데 없으면 같은 폴더의 비슷한 파일을 [후보](전체 경로)로 멈춥니다. 메일은 아직 만들지 않은 때입니다."""
+    raw = os.path.expandvars(os.path.expanduser(str(spec).strip().strip('"')))
+    if not os.path.isabs(raw):
+        return rt.resolve_input_path(raw, "첨부 파일")
+    if os.path.isfile(raw):
+        return os.path.abspath(raw)
+    if os.path.isdir(raw):
+        raise rt.InputError(f"--attach에는 파일을 지정하세요. 폴더는 첨부할 수 없습니다: {raw}")
+    folder, name = os.path.split(os.path.abspath(raw))
+    if not os.path.isdir(folder):
+        raise rt.InputError(f"첨부 파일의 폴더가 없습니다: {folder}. 아무것도 만들지 않았습니다. "
+                            "사용자에게 파일의 전체 경로를 확인하세요.")
+    try:
+        files = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
+    except OSError:
+        files = []
+    close = rt.suggest(name, files, 5)
+    if close:
+        raise rt.ambiguous(f"첨부 파일 '{name}'이(가) 없습니다 (폴더: {folder}). 아무것도 만들지 않았습니다. "
+                           "같은 폴더의 비슷한 파일 중에서 사용자에게 고르게 하세요.", [os.path.join(folder, c) for c in close])
+    raise rt.InputError(f"첨부 파일이 없습니다: {raw}. 아무것도 만들지 않았습니다. 사용자에게 파일의 전체 경로를 확인하세요.")
+
+
 def _attach_paths(spec: Optional[str]) -> List[str]:
     """--attach 값을 파일 경로 목록으로. 여러 개는 ; 로 구분 (쉼표도 됨).
     값 전체가 있는 파일이면 하나로 봅니다 (쉼표가 든 파일 이름 '보고서,최종.pdf')."""
@@ -424,7 +612,7 @@ def _attach_paths(spec: Optional[str]) -> List[str]:
     if not raw:
         return []
     try:
-        return [rt.resolve_input_path(raw, "첨부 파일")]
+        return [_attach_file(raw)]
     except rt.InputError:
         if ";" not in raw and "," not in raw:
             raise
@@ -439,27 +627,59 @@ def _attach_paths(spec: Optional[str]) -> List[str]:
         # 있는 파일이 아니면 뒤 조각을 구분자로 이어 붙여 봄 (폴더·파일 이름에 ; 나 , 가 든 경로)
         for j in range(i, len(parts)):
             try:
-                paths.append(rt.resolve_input_path(sep.join(parts[i:j + 1]).strip().strip('"'), "첨부 파일"))
+                paths.append(_attach_file(sep.join(parts[i:j + 1])))
             except rt.InputError:
                 continue
             i = j + 1
             break
         else:
-            rt.resolve_input_path(parts[i].strip().strip('"'), "첨부 파일")    # 찾지 못한 조각으로 오류 ([추천] 포함)
+            _attach_file(parts[i])    # 찾지 못한 조각으로 오류 ([추천]/[후보] 포함)
     return paths
 
 
-def _attach(mail: Any, paths: List[str]) -> List[str]:
-    names = []
+def _attach(mail: Any, paths: List[str]) -> Tuple[List[str], List[str]]:
+    """파일을 붙이고 (붙인 이름, 확인하지 못한 내용). R1: Attachments.Count가 붙인 수만큼 늘었는지 다시 셉니다
+    (전달 메일은 원본 첨부가 이미 있으므로 늘어난 수로 비교)."""
+    names: List[str] = []
+    problems: List[str] = []
+    if not paths:
+        return names, problems
+    try:
+        before: Optional[int] = int(mail.Attachments.Count)
+    except Exception:
+        before = None
     for path in paths:
-        mail.Attachments.Add(path)
-        names.append(os.path.basename(path))
-    return names
+        try:
+            mail.Attachments.Add(path)
+            names.append(os.path.basename(path))
+        except Exception as e:
+            problems.append(f"{os.path.basename(path)} 첨부 실패 ({str(e)[:120]})")
+    try:
+        after: Optional[int] = int(mail.Attachments.Count)
+    except Exception:
+        after = None
+    if before is None or after is None:
+        problems.append("첨부 개수를 다시 읽지 못함")
+    elif after - before != len(names):
+        problems.append(f"첨부 {len(names)}개를 넣었는데 메일의 첨부는 {after - before}개 늘어남")
+    return names, problems
 
 
-def _finalize(mail: Any, send: bool, command: str, attached: List[str]) -> Dict[str, Any]:
+def _finalize(mail: Any, send: bool, command: str, attach: Tuple[List[str], List[str]]) -> Dict[str, Any]:
+    attached, attach_problems = attach
     extra = {"to": _text(getattr(mail, "To", "")), "subject": _text(getattr(mail, "Subject", "")),
              "attached": attached, "sent": False}
+    if attach_problems:
+        # 첨부를 확인하지 못했으면 발송하지 않음: 첨부가 빠진 메일이 나가면 되돌릴 수 없음
+        mail.Display()
+        what = "; ".join(attach_problems)
+        if send:
+            return {"status": "error", "tool": TOOL, "command": command, "error_type": "input",
+                    "message": f"첨부를 확인하지 못해 보내지 않고 작성 창을 띄웠습니다: {what}",
+                    "agent_directive": "STOP_RETRY: 발송하지 않았습니다. 사용자에게 작성 창의 첨부를 확인하고 직접 보내라고 알리세요.",
+                    "attach_problems": attach_problems, **extra}
+        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄웠습니다: '{extra['subject']}'",
+                                attach_problems + ["사용자에게 작성 창의 첨부를 확인하라고 알리세요"], **extra)
     if send:
         unresolved: List[str] = []
         try:
@@ -495,7 +715,7 @@ def _load_signature(mail: Any) -> None:
         pass
 
 
-def _target_item(app: Any, args) -> Any:
+def _target_item(app: Any, args, missing: str = "답장/전달할 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.") -> Any:
     if args.id:
         try:
             return get_namespace(app).GetItemFromID(args.id)
@@ -503,7 +723,7 @@ def _target_item(app: Any, args) -> Any:
             raise rt.InputError("해당 id의 메일을 찾을 수 없습니다. list/search 결과의 id를 그대로 쓰세요.")
     item, _ = current_item(app)
     if item is None:
-        raise rt.InputError("답장/전달할 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.")
+        raise rt.InputError(missing)
     return item
 
 
@@ -581,8 +801,14 @@ def build_cli():
         p = sub.add_parser(name, help=hlp)
         if name == "read":
             p.add_argument("--id", required=True, help="list/search 결과의 id")
-        p.add_argument("--save-attach", action="store_true", help="첨부를 작업 폴더에 저장 (실행 파일 형식 제외)")
-        p.add_argument("--save", nargs="?", const=True, help="본문을 md 파일로 저장")
+        p.add_argument("--save", nargs="?", const=True, help="본문을 md 파일로 저장 (첨부 내려받기는 attachments --save)")
+
+    p = sub.add_parser("attachments", help="첨부 목록, --save로 내려받기")
+    p.add_argument("--id", help="메일 id (생략 시 지금 보고 있거나 선택한 메일)")
+    p.add_argument("--save", nargs="?", const=True,
+                   help=f"첨부 저장. 폴더 생략 시 다운로드\\{ATTACH_ROOT_NAME}\\<시각>_<제목>, 폴더는 전체 경로 (없으면 만듦)")
+    p.add_argument("--name", action="append", help="저장할 첨부 이름 일부 (대소문자 무시, 여러 개는 ; 또는 옵션 반복)")
+    p.add_argument("--index", action="append", help="저장할 첨부 번호 (목록의 index, 예: 1,3 또는 2-4)")
 
     p = sub.add_parser("folders", help="폴더 구조")
     p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2)")
@@ -592,7 +818,7 @@ def build_cli():
             p.add_argument("--to", help="받는 사람 (여러 명은 ; 로 구분)")
         p.add_argument("--body", help="본문 (줄바꿈은 \\n)")
         p.add_argument("--body-file", help="본문 파일 (.txt/.md)")
-        p.add_argument("--attach", help="첨부 파일 (여러 개는 ; 로 구분, 쉼표도 됨. 파일명만 쓰면 data 폴더)")
+        p.add_argument("--attach", help="첨부 파일 전체 경로 (여러 개는 ; 로 구분, 쉼표도 됨. 파일명만 쓰면 data 폴더)")
         p.add_argument("--send", action="store_true",
                        help="사용자가 발송을 명시적으로 요청한 경우에만. 수신자 확인 후 발송 (기본: 작성 창만 표시)")
 
@@ -613,7 +839,7 @@ def build_cli():
 
 
 HANDLERS = {"list": cmd_list, "search": cmd_search, "read": cmd_read, "current": cmd_current, "folders": cmd_folders,
-            "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward}
+            "attachments": cmd_attachments, "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

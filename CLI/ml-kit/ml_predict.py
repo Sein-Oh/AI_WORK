@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.36"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.38"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -174,9 +174,20 @@ def record_recovery_attempt(msg: str) -> None:
 # by people and development agents. The path is never put in stdout JSON.
 # ------------------------------------------------------------------------------
 
+def engenius_home() -> Optional[str]:
+    """Fixed folder for tool data when the tool files themselves run from the En-Genius tray's temporary folder
+    (%TEMP%\\engenius-skill\\<id>, deleted after each run, so <tool folder>/data would not survive). The deployed skill
+    (docs/engenius) runs the tools in C:\\CLI instead and shares OpenCode's data folder (2.9.38)."""
+    if not os.environ.get("ENGENIUS_OUT") or "engenius-skill" not in TOOL_DIR.replace("\\", "/").lower().split("/"):
+        return None
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(home, "Documents", "En-Genius", "CLI-data", "ml-kit")
+
+
 def get_data_dir() -> str:
-    """Tool data folder: ML_KIT_DATA_DIR > <tool folder>/data (not created here)."""
-    return os.path.abspath(os.environ.get("ML_KIT_DATA_DIR") or os.path.join(TOOL_DIR, "data"))
+    """Tool data folder: ML_KIT_DATA_DIR > En-Genius fixed folder/data > <tool folder>/data (not created here)."""
+    return os.path.abspath(os.environ.get("ML_KIT_DATA_DIR")
+                           or os.path.join(engenius_home() or TOOL_DIR, "data"))
 
 
 def error_log_path() -> str:
