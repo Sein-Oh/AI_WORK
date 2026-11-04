@@ -3895,6 +3895,7 @@ def cmd_comment(args) -> Dict[str, Any]:
 CHECK_MAX_ROWS = 500           # 한 번에 대조하는 행 수 상한
 CHECK_SHOWN = 20               # JSON에 담는 결과 수
 CHECK_SPEC_CHARS = 120         # 결과의 규격 문장 글자 수
+CHECK_MEMO_SPEC = 60           # 칸 메모에 넣는 규격 문장 앞부분 글자 수
 VERDICTS = ("일치", "불일치", "근거없음", "판단필요")
 _UNIT_IN_ITEM = re.compile(r"\s*[\(\[]\s*[^\)\]]{1,8}\s*[\)\]]\s*$")
 
@@ -4061,10 +4062,9 @@ def cmd_check(args) -> Dict[str, Any]:
         results.append({"cell": cell, "item": str(item).strip()[:60], "value": out_value(value), **j})
     counts = {v: sum(1 for r in results if r["verdict"] == v) for v in VERDICTS}
     not_decided = counts["판단필요"]
-    # 메모 파일 (칸, 메모 = "판정 | 근거") -> excel.py comment --file로 칸 메모
-    memo_rows = [["칸", "메모"]] + [[r["cell"], f"{r['verdict']}" + (f" ({r['reason']})" if r["reason"] else "")
-                                     + (f" | {r['evidence']}: {r['spec_text']}" if r["evidence"] else " | 근거 없음")]
-                                    for r in results]
+    # 메모 파일 (칸, 메모) -> excel.py comment --file로 칸 메모. 판정은 규격 문장을 기계로 읽은 참고 판정이라
+    # 메모에 '자동 판정(참고)'과 읽은 조건·근거를 함께 적어 사람이 확인할 수 있게 함
+    memo_rows = [["칸", "메모"]] + [[r["cell"], check_memo(r)] for r in results]
     memo = rt.write_csv_rows(rt.resolve_output_path(None, f"check_memo_{sheet}", ".csv"), memo_rows)
     problems: List[str] = []
     memo_problem = rt.check_saved_file(memo, len(memo_rows), delimiter=",")
@@ -4089,27 +4089,40 @@ def cmd_check(args) -> Dict[str, Any]:
     elif len(results) > CHECK_SHOWN:
         fields["full_result_file"] = memo
     nexts = [rt.next_command("excel.py", ["comment", "--target", args.target, "--action", "add", "--file", memo, "--dry-run"],
-                             "판정과 근거를 값 칸의 메모로 달기 미리보기 (사용자 확인 뒤 next_commands[0]의 --dry-run을 뺀 명령)")]
+                             "자동 판정(참고)·읽은 조건·근거를 값 칸 메모로 달기 미리보기 "
+                             "(사용자가 판정을 확인한 뒤 next_commands[0]의 --dry-run을 뺀 명령)")]
     if info.get("remaining"):
         nexts.append(rt.next_command("excel.py", _check_command(args), f"규격서 {info['remaining']}개가 아직 등록되지 않아 다시 대조 (같은 명령)"))
         problems.append(f"규격 폴더의 문서 {info['remaining']}개를 아직 등록하지 못해 대조에 쓰지 않음")
     if info.get("skipped"):
         problems.append(f"읽지 못한 규격 문서 {len(info['skipped'])}개: " + ", ".join(os.path.basename(s["file"]) for s in info["skipped"][:5]))
     fields["next_commands"] = nexts
-    preview = (f"{len(results)}행 대조: 일치 {counts['일치']}, 불일치 {counts['불일치']}, 근거없음 {counts['근거없음']}, "
-               f"판단필요 {counts['판단필요']}")
+    preview = (f"{len(results)}행 대조(자동 판정, 참고용): 일치 {counts['일치']}, 불일치 {counts['불일치']}, "
+               f"근거없음 {counts['근거없음']}, 판단필요 {counts['판단필요']}")
     if not results:
         fields.pop("next_commands", None)
-        return rt.ok(TOOL, "check", "0건: 대조할 항목이 없습니다",
-                     f"VERIFIED: 0건. {args.range}의 항목 열({args.item_col})이 비어 있습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.",
-                     verified=True, **fields)
+        return rt.ok_unverified(TOOL, "check", "0건: 대조할 항목이 없습니다",
+                                [f"0건(찾은 항목 없음): {args.range}의 항목 열({args.item_col})이 비어 있음"], **fields)
+    # 판정은 자연어 규격 문장을 기계로 해석한 참고 판정 (해석은 휴리스틱): 늘 UNVERIFIED, 사용자 확인 뒤 메모
+    problems.insert(0, CHECK_ADVISORY)
     if not_decided:
-        problems.insert(0, f"판단필요 {not_decided}행(needs_review)은 도구가 판정하지 못함: 사용자가 근거를 보고 정해야 함")
-    if problems:
-        return rt.ok_unverified(TOOL, "check", preview, problems, **fields)
-    return rt.ok(TOOL, "check", preview,
-                 "VERIFIED: 모든 행을 판정했습니다. counts와 불일치 행을 근거(evidence)와 함께 사용자에게 알리고, 메모로 남기려면 "
-                 "next_commands[0](미리보기)을 실행하세요.", verified=True, **fields)
+        problems.insert(1, f"판단필요 {not_decided}행(needs_review)은 도구가 판정하지 못함: 사용자가 근거를 보고 정해야 함")
+    return rt.ok_unverified(TOOL, "check", preview, problems, **fields)
+
+
+CHECK_ADVISORY = ("자동 판정은 참고용입니다(규격 문장을 기계로 해석함). 행마다 읽은 조건(condition)과 근거 문장(spec_text)을 "
+                  "사용자에게 보여 주고 확인을 받은 뒤 메모를 다세요")
+
+
+def check_memo(r: Dict[str, Any]) -> str:
+    """check 한 행의 칸 메모: '자동 판정(참고): 불일치 - 읽은 조건: 3 A 이하 - 근거: 규격서.txt 3.2절: 소비 전류는 ...'."""
+    cond = r.get("condition") or "없음"
+    memo = f"자동 판정(참고): {r['verdict']}"
+    if r.get("reason") and r["reason"] != r.get("condition"):
+        memo += f" ({r['reason']})"
+    memo += f" - 읽은 조건: {cond}"
+    memo += f" - 근거: {r['evidence']}: {r['spec_text'][:CHECK_MEMO_SPEC]}" if r.get("evidence") else " - 근거: 없음"
+    return memo
 
 
 # ==============================================================================

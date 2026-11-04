@@ -1100,18 +1100,24 @@ def test_check_verdicts_memo_and_next_command(check_env, capsys):
     r0 = out["results"][0]
     assert "규격서.txt" in r0["evidence"] and "5 V" in r0["spec_text"] and len(r0["spec_text"]) <= 120
     memo = open(out["memo_file"], encoding="utf-8-sig").read().splitlines()
-    assert memo[0] == "칸,메모" and memo[1].startswith("시험!D2,일치") and " | 규격서.txt" in memo[1]
+    # 4차 검토(1.4.67): 메모에 '자동 판정(참고)'과 읽은 조건·근거 문장 앞부분을 함께 적어 사람이 확인
+    assert memo[0] == "칸,메모" and memo[1].startswith("시험!D2,자동 판정(참고): 일치 - 읽은 조건: 4.75~5.25 V - 근거: 규격서.txt"), memo[1]
+    assert "정격 전압은 5 V" in memo[1]
+    assert any("자동 판정(참고): 근거없음 (규격서에서 항목을 찾지 못함) - 읽은 조건: 없음 - 근거: 없음" in m for m in memo), memo
     cmd = out["next_commands"][0]["command"]
     assert "excel.py" in cmd and "comment" in cmd and "--dry-run" in cmd and out["memo_file"] in cmd
 
 
-def test_check_all_decided_is_verified_and_save(check_env, capsys, tmp_path):
+def test_check_all_decided_is_still_unverified_and_save(check_env, capsys, tmp_path):
+    # 4차 검토(1.4.67): 자연어 규격 해석은 휴리스틱이라 모든 행을 판정해도 VERIFIED가 아님 (참고 판정, 사용자 확인)
     spec, book = check_env
     _check_book(book, [("정격 전압", 5.0), ("소비 전류", "2 A")])
     save = tmp_path / "대조결과.xlsx"
     code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D3", "--item-col", "B",
                           "--value-col", "D", "--spec", str(spec), "--save", str(save))
-    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["verified"] is False, out
+    assert "자동 판정은 참고용" in out["agent_directive"] and "condition" in out["agent_directive"]
+    assert out["unverified"][0] == excel.CHECK_ADVISORY and out["not_decided"] == 0
     assert out["counts"]["일치"] == 2 and out["output_file"] == str(save)
     import openpyxl
     rows = list(openpyxl.load_workbook(save, read_only=True).active.iter_rows(values_only=True))
@@ -1211,7 +1217,8 @@ def test_check_empty_items_is_zero(check_env, capsys):
     _check_book(book, [])
     code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D5", "--item-col", "B",
                           "--value-col", "D", "--spec", str(spec))
-    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert "0건(찾은 항목 없음)" in out["agent_directive"] and "next_commands" not in out
 
 
 def test_check_bad_column_is_input_error(check_env, capsys):

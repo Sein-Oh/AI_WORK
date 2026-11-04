@@ -2351,7 +2351,7 @@ RECALL_TEXT = "\n\n".join([
 # (검색어, 찾아야 하는 단락 번호들, 기대 match_mode)
 RECALL_CASES = [
     ("정격전압은 5V", {1}, "exact"),          # 검색어의 조사, 5V = 5.0 V
-    ("작동 온도 AND 20°C", {2}, "exact"),     # °C = ℃
+    ("작동 온도 AND -20°C", {2}, "exact"),    # °C = ℃ (부호 없는 '20°C'는 음수 '-20℃'와 맞지 않음, 1.4.68)
     ("PCB 두께", {3}, "exact"),               # 전각 ＰＣＢ
     ("절연저항이 100MΩ", {4}, "exact"),       # 조사, 숫자와 단위 띄어쓰기
     ("접지-단자", {5}, "exact"),              # 대시 종류
@@ -2643,6 +2643,23 @@ SPEC_CORPUS = [
 ]
 
 
+@pytest.mark.parametrize("text,want", [
+    ("1×10\u2079 Ω", "1000000000 Ω"), ("1×10^9 Ω", "1000000000 Ω"), ("2.5x10^-3 A", "0.0025 A"), ("1E9 Ω", "1000000000 Ω"),
+    ("1.5e3 V", "1500 V"), ("10\u2076 Ω", "1000000 Ω"),
+    ("\u221220 ℃", "-20 °C"), ("\u201020", "-20"), ("온도 \u201320 ~ 60", "온도 -20 ~ 60"), ("10 \u2013 20 V", "10 \u2013 20 V"),
+    ("1.5 mm²", "1.5 mm^2"), ("체적 1×10¹² Ω·cm", "체적 1000000000000 Ω·cm"),
+])
+def test_spec_norm_exponent_dash_superscript(text, want):
+    # 4차 검토 C1·C4: NFKC가 위첨자 지수를 '109'로 바꾸기 전에 계산, 유니코드 빼기는 '-'
+    assert reader.spec_norm(text) == want
+
+
+def test_quantity_of_unicode_minus_and_ohm_case():
+    assert reader.quantity_of("\u221210 ℃")[0] == -10.0
+    assert reader.quantity_of("100 mOhm")[1][:2] == ("Ω", 1e-3) and reader.quantity_of("100 MOhm")[1][:2] == ("Ω", 1e6)
+    assert reader.quantity_of("100 mohm") is None                        # 밀리인지 메가인지 모름 -> 숫자로 읽지 않음
+
+
 def _cond_texts(text):
     out = []
     for c in reader.spec_conditions(text):
@@ -2897,6 +2914,43 @@ def test_search_section_number_excludes_2_10(tmp_path, capsys):
     ("1.5", "1.50㎜", True), ("2.5", "2.50㎝", True), ("0.5", "0.50㎏", True), ("1.5", "1.50㎖", True), ("0.5", "0.50㎃", True),
 ])
 def test_number_only_query_normalized(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want
+
+
+# 4차 검토 (1.4.67): 숫자 검색의 오일치가 exact VERIFIED였음 (부호·단위 경계·기호 소수 경계·천 단위 쉼표)
+NUMBER_SEARCH_CASES = [
+    # 검색어의 부호는 패턴에 넣고 앞쪽 경계를 지킴. 글의 U+2212·U+2010~2013 빼기도 '-'와 같음
+    ("-20 ℃", "보관 온도 20 ℃", False), ("-20 ℃", "+20 ℃", False), ("-20 ℃", "-20 ℃", True), ("-20 ℃", "\u221220 ℃", True),
+    ("-20 ℃", "-20.5 ℃", False), ("-20 ℃", "1-20 ℃", False),
+    ("-5 V", "5 V", False), ("-5 V", "+5 V", False), ("-5 V", "-5 V", True),
+    ("-20", "-20", True), ("-20", "\u221220", True), ("-20", "\u201320", True), ("-20", "-20~60", True), ("-20", "20", False),
+    ("-20", "1-20", False), ("-20", "A-20", False), ("-20", "-200", False), ("-20", "-20.5", False),
+    ("20 ℃", "-20 ℃", False), ("20 ℃", "\u221220 ℃", False), ("20 ℃", "+20 ℃", True), ("20", "1-20", True),
+    ("±5 %", "5 %", False), ("±5 %", "-5 %", False), ("±5 %", "± 5 %", True),
+    ("±5", "±5", True), ("±5", "±5.0", True), ("±5", "+/-5", True), ("±5", "±5.5", False), ("±5", "±50", False),
+    ("±5", "±0.5", False),
+    # 끝이 단위면 뒤에 영문·단위 글자가 이어지지 않아야 함 (Ω 등 비ASCII 포함)
+    ("10 m", "10 m", True), ("10 m", "10m", True), ("10 m", "10 mm", False), ("10 m", "10 mA", False), ("10 m", "10 ms", False),
+    ("10 m", "10 min", False), ("10 m", "10 MΩ", False),
+    ("5 V", "5 VA", False), ("5 V", "5 V", True), ("5 V", "5 Vdc", True), ("5 V", "5 V/m", True), ("5V", "5 VA", False),
+    ("5 A", "5 Ah", False), ("5 A", "5 A", True), ("100 W", "100 Wh", False), ("100 W", "100 W", True),
+    ("2 s", "2 sec", False), ("2 s", "2 seconds", False), ("2 s", "2 s", True),
+    # 기호 분기의 소수 경계
+    ("1/2", "1/2.5", False), ("1/2", "1/2", True), ("1/2", "1/2인치", True), ("1/2", "1/20", False),
+    # 맞아야 하는 것: 10% = 10.0 %, 0.5 = 0.500, 날짜 표기
+    ("10%", "10.0 %", True), ("10%", "10 %", True), ("10%", "110%", False), ("10%", "10.5%", False), ("10%", "100%", False),
+    ("0.5", "0.500", True), ("0.5", "0.5", True), ("0.5", "0.55", False), ("12.5", "12.500", True),
+    ("2026.11.04", "2026.11.4", True), ("2026.11.04", "2026-11-04", True), ("2026.11.04", "2026/11/04", True),
+    ("2026.11.04", "2026. 11. 04", True), ("2026.11.04", "2026년 11월 4일", True), ("2026.11.4", "2026.11.04", True),
+    ("2026.11.04", "2026.11.041", False), ("2026.11.04", "12026.11.04", False), ("2026.11.04", "2026.11.040", False),
+    # 천 단위 쉼표는 3자리 묶음일 때만
+    ("1,500", "1500", True), ("1,500", "1,500", True), ("1,500", "15,00", False), ("1,500", "2,1,500", False),
+    ("1,500", "1,5000", False), ("1500", "1,500 rpm", True), ("1,500,000", "1500000", True), ("1,500,000", "1,500,000", True),
+]
+
+
+@pytest.mark.parametrize("query,text,want", NUMBER_SEARCH_CASES)
+def test_number_search_boundaries(query, text, want):
     assert (reader.build_matcher(query, False)(text) is not None) is want
 
 

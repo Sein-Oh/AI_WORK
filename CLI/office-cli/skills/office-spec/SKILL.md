@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.66"
+  version: "1.4.67"
   platform: windows
 ---
 
@@ -33,7 +33,7 @@ metadata:
 
 - 검색은 띄어쓰기·기호·조사·단위 표기를 무시한다 (`SOI 1` = `SOI #1`, `정격전압은 5V` = `정격 전압이 5.0 V`). 사용자가 패턴을 말하면 `--regex`.
 - 사용자가 동의어를 주면 `C:\CLI\office-cli\data\synonyms.txt`에 적는다 (UTF-8, 한 줄에 한 묶음, 쉼표 구분, 있던 줄은 지우지 않음).
-- 규격 대조: `check` 한 번 -> `counts`와 불일치·`needs_review` 행을 근거와 함께 알림 (`needs_review`는 사용자가 정함: 조건이 여럿이라 도구가 판정하지 않은 행은 `reason`의 후보 조건을 그대로 보여 주고 직접 판정하지 않는다. `reason`이 `칸 단위 없음`이면 값 열 머리글에 단위(예: `값(mm)`)를 적어 달라고 알림) -> 사용자가 원하면 `next_commands[0]`(메모 미리보기) -> 확인 뒤 그 명령에서 `--dry-run`을 뺀 명령. 한 칸만 볼 때는 위 검색 명령에 `--section "<장절>"`.
+- 규격 대조: `check` 한 번 -> 판정은 참고용(늘 `UNVERIFIED:`)이다. `counts`와 불일치·`needs_review` 행을 행마다 `condition`(읽은 조건)·`spec_text`(근거 문장)·`evidence`와 함께 보여 주고 사용자 확인을 받는다 (`needs_review`는 사용자가 정함: `reason`의 후보 조건을 그대로 보여 주고 직접 판정하지 않는다. `reason`이 `칸 단위 없음`이면 값 열 머리글에 단위(예: `값(mm)`)를 적어 달라고 알림) -> 사용자가 원하면 `next_commands[0]`(메모 미리보기) -> 확인 뒤 그 명령에서 `--dry-run`을 뺀 명령. 한 칸만 볼 때는 위 검색 명령에 `--section "<장절>"`.
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:

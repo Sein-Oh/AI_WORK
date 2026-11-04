@@ -2593,6 +2593,27 @@ _NUM_TOKEN = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|[^\W\d_]|\S
 _SQUARE_UNIT = "[\u3380-\u33df\u2113]"
 
 
+_MINUS = "\\-\u2010\u2011\u2012\u2013\u2212"          # 글에서 빼기로 쓰는 글자 ('-', U+2010~2013, U+2212)
+# 부호 없는 숫자 앞: 빼기 부호가 붙은 음수('-20', ' -20'(U+2212), '~-20')는 아님. '1-20', 'A-20'의 대시는 부호가 아니라 맞음
+_NO_MINUS = rf"(?<![^\w.,][{_MINUS}])(?<!^[{_MINUS}])"
+_UNSIGNED = r"(?<![\d.])" + _NO_MINUS
+_SIGN_PAT = {"-": rf"(?<![\w.])[{_MINUS}]\s?", "±": r"(?<![\w.])(?:±|\+\s*/\s*-|\+-)\s*", "+": _UNSIGNED + r"(?:\+\s?)?"}
+# 검색어의 숫자 앞 부호 (낱말 처음이거나 앞이 영문·숫자가 아닐 때만: 'A-20', '1-20'의 대시는 부호가 아님)
+_SIGN_BEFORE = re.compile(rf"(?:^|(?<=[^\w.]))(±|\+\s*/\s*-|\+-|[+{_MINUS}])\s?$")
+# 검색어 끝이 단위('10 m', '5 V', '100 W'): 글에서 단위 뒤에 영문·단위 글자가 이어지면 다른 단위 ('10 mm', '5 VA', '10 MΩ')
+_UNIT_END = (r"(?:(?=(?:ac|dc)(?![A-Za-z]))|"
+             r"(?![A-Za-z\uff21-\uff3a\uff41-\uff5a\u03a9\u2126\u03bc\u00b5\u00b0\u2103]))")
+
+
+def _sign_of(text_before: str) -> Optional[str]:
+    """숫자 바로 앞 글에서 부호: '-', '±', '+' 또는 None."""
+    m = _SIGN_BEFORE.search(text_before)
+    if not m:
+        return None
+    g = m.group(1)
+    return "+" if g == "+" else "-" if len(g) == 1 and g != "±" else "±"
+
+
 def _number(tok: str) -> str:
     """숫자 하나: 천 단위 쉼표 무시(5000 = 5,000), 정수와 .0은 같음(5 = 5.0 = 5.00).
     글의 숫자가 수학적으로 같은 값일 때만 맞음: '2.0'은 '2', '2.00'과 맞고 '2.5', '2.05'와는 맞지 않음
@@ -2600,7 +2621,13 @@ def _number(tok: str) -> str:
     소수 끝 0: 소수 둘째 자리 이상(3.14 = 3.140)은 늘 무시, 소수 한 자리(2.1)는 글에서 단위가 붙을 때만
     (0.5 = '0.50 mm' = '0.50㎜'이지만 2.1 != '2.10 전압': 장절 번호 2.10은 2.1과 다름)."""
     whole, _, frac = tok.replace(",", "").partition(".")
-    body = ",?".join(_char(d) for d in whole) if len(whole) > 3 else "".join(_char(d) for d in whole)
+    body = "".join(_char(d) for d in whole)
+    if len(whole) > 3:
+        # 천 단위 쉼표는 3자리 묶음일 때만 ('1,500' = '1500', '15,00'·'2,1,500'은 아님)
+        head = len(whole) % 3 or 3
+        grouped = "".join(_char(d) for d in whole[:head]) + "".join(
+            "," + "".join(_char(d) for d in whole[i:i + 3]) for i in range(head, len(whole), 3))
+        body = rf"(?<!\d,)(?:{body}|{grouped})"
     sig = frac.rstrip("0")
     if len(sig) >= 2:
         return body + r"\." + "".join(_char(d) for d in sig) + "0*"
@@ -2608,7 +2635,8 @@ def _number(tok: str) -> str:
         unit = rf"(?=\s*[(\[]?\s*(?:{_UNIT_RE}|\u2103|{_SQUARE_UNIT}))"
         if frac != sig:                                 # 검색어가 끝 0을 적음('2.10'): 글의 '2.10', '2.100', 단위 붙은 '2.1 V'
             return body + r"\." + _char(sig) + rf"(?:0+|{unit})"
-        return body + r"\." + _char(sig) + rf"(?:0+{unit})?"
+        # '0.5'는 '0.500'(끝 0 둘 이상)이나 단위 붙은 '0.50 mm'와 맞고, 장절 번호일 수 있는 맨 '2.10'(끝 0 하나)과는 아님
+        return body + r"\." + _char(sig) + rf"(?:0{{2,}}|0+{unit})?"
     return body + r"(?:\.0+)?(?!\.0*[1-9])"
 
 
@@ -2629,27 +2657,50 @@ def _single_pattern(term: str) -> str:
         # 숫자 하나: 천 단위 쉼표·소수 끝 0과 무관 ('5,000' = '5000', '0.5' = '0.50'), 숫자 경계는 지킴 ('0.5'는 '10.5'와 다름)
         # 소수 한 자리 맨 숫자('2.1')는 장절 번호 경계(section_matches와 같음): '2.1.3'(하위 절)은 맞고 '2.10', '12.1'은 아님
         tail = r"(?!,?\d)" if re.fullmatch(r"\d+\.[1-9]", compact) else r"(?![.,]?\d)"
-        return r"(?<![\d.])" + _number(compact) + tail
+        return _UNSIGNED + _number(compact) + tail
+    dm = re.fullmatch(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\.?", compact)
+    if dm and 1 <= int(dm.group(2)) <= 12 and 1 <= int(dm.group(3)) <= 31:
+        # 날짜: '2026.11.04' = '2026.11.4' = '2026-11-04' = '2026/11/04' = '2026년 11월 4일'
+        y, mo, d = dm.group(1), str(int(dm.group(2))), str(int(dm.group(3)))
+        sep = r"\s*[.\-/]\s*"
+        return (rf"(?<![\d.]){y}(?:{sep}0?{mo}{sep}0?{d}|\s*년\s*0?{mo}\s*월\s*0?{d}\s*일)(?![.,]?\d)")
+    sm = re.fullmatch(rf"(±|\+/-|\+-|[+{_MINUS}])?(\d{{1,3}}(?:,\d{{3}})+(?:\.\d+)?|\d+(?:\.\d+)?)(%)?", compact)
+    if sm and (sm.group(1) or sm.group(3)):
+        # 부호·%가 붙은 숫자 하나: '-20'은 '20', '1-20', 'A-20'과 다름, '±5'는 '±5.5'와 다름, '10%' = '10.0 %'
+        sign = _sign_of(sm.group(1) or "")
+        head = _SIGN_PAT[sign] if sign else _UNSIGNED
+        return head + _number(sm.group(2)) + (r"\s*%" if sm.group(3) else r"(?![.,]?\d)")
     if not core or (core.isdigit() and core != compact):
         chars = compact or t
         body = r"\s*".join(_char(c) for c in chars)      # 기호까지 그대로 ('1.2'는 '12'와 다름)
         if chars[0].isdigit():
-            body = r"(?<![\d.])" + body                  # '1.2'가 '11.2', '3.1.2'의 끝과 맞지 않게
+            body = _UNSIGNED + body                       # '1.2'가 '11.2', '3.1.2'의 끝과 맞지 않게
         if chars[-1].isdigit():
-            body += r"(?!\d)"
+            body += r"(?![.,]?\d)"                       # '1/2'가 '1/2.5'와 맞지 않게
         return body
     # 낱말마다 글자 사이에 기호·띄어쓰기를 허용하고, 한글로 끝나는 낱말 뒤에는 글의 조사를 허용 ('절연저항이 100MΩ' = '절연 저항은 100 MΩ')
     raw_words = [w for w in t.split() if any(re.match(r"[^\W_]", x) for x in _NUM_TOKEN.findall(w))]
-    words = [[x for x in _NUM_TOKEN.findall(w) if re.match(r"[^\W_]", x)] for w in raw_words]
+    signs: Dict[Tuple[int, int], Optional[str]] = {}
+    words: List[List[str]] = []
+    for wi, w in enumerate(raw_words):
+        kept: List[str] = []
+        for m in _NUM_TOKEN.finditer(w):
+            if re.match(r"[^\W_]", m.group(0)):
+                if m.group(0)[0].isdigit():
+                    signs[(wi, len(kept))] = _sign_of(w[:m.start()])
+                kept.append(m.group(0))
+        words.append(kept)
     toks = [x for w in words for x in w]
     particle = "(?:" + "|".join(_PARTICLES) + ")?"
     pieces: List[str] = []
     prev = ""
     for wi, w in enumerate(words):
         parts: List[str] = []
-        for tok in w:
+        for ti, tok in enumerate(w):
             if tok[0].isdigit():
-                parts.append(_number(tok))
+                sign = signs.get((wi, ti))
+                # 부호는 패턴에 넣음 ('-20 ℃'는 '20 ℃', '+20 ℃'와 다름). 부호 없는 숫자는 음수의 끝과 맞지 않게
+                parts.append((_SIGN_PAT[sign] if sign else _NO_MINUS) + _number(tok))
             elif tok.upper() == "C" and prev[:1].isdigit():
                 parts.append(r"(?:\u2103|[Cc\uff23\uff43])")            # 숫자 뒤 C: 25°C = 25 ℃ = 25C
             else:
@@ -2666,6 +2717,12 @@ def _single_pattern(term: str) -> str:
         body = r"(?<![\d.])" + body
     if toks[-1][0].isdigit():
         body += r"(?![.,]?\d)"
+    else:
+        last_num = max((i for i, x in enumerate(toks) if x[0].isdigit()), default=-1)
+        tail = toks[last_num + 1:]
+        unit = "".join(tail)
+        if last_num >= 0 and tail and (_unit_key(unit) or _unit_key("°" + unit)):
+            body += _UNIT_END                            # 끝이 단위: '10 m'가 '10 mm', '10 MΩ'과 맞지 않게
     return body
 
 
@@ -3495,7 +3552,9 @@ for _base, _units in {
     "A": {"μA": 1e-6, "uA": 1e-6, "mA": 1e-3, "A": 1, "kA": 1e3},
     "W": {"mW": 1e-3, "W": 1, "kW": 1e3, "MW": 1e6},
     "VA": {"VA": 1, "kVA": 1e3, "MVA": 1e6},
-    "Ω": {"mΩ": 1e-3, "Ω": 1, "kΩ": 1e3, "MΩ": 1e6, "GΩ": 1e9, "ohm": 1, "kohm": 1e3, "Mohm": 1e6, "옴": 1},
+    "Ω": {"mΩ": 1e-3, "Ω": 1, "kΩ": 1e3, "MΩ": 1e6, "GΩ": 1e9, "옴": 1,
+          "ohm": 1, "Ohm": 1, "OHM": 1, "mOhm": 1e-3, "kohm": 1e3, "kOhm": 1e3, "Kohm": 1e3, "KOhm": 1e3,
+          "Mohm": 1e6, "MOhm": 1e6, "Gohm": 1e9, "GOhm": 1e9},
     "Hz": {"Hz": 1, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9},
     "°C": {"°C": 1, "도씨": 1},
     "%": {"%": 1},
@@ -3514,6 +3573,8 @@ for _base, _units in {
         _UNIT_TABLE[_u] = (_base, float(_s))
 _UNIT_CI: Dict[str, str] = {}
 for _u in _UNIT_TABLE:
+    if "ohm" in _u.lower():
+        continue                    # ohm 계열은 쓴 그대로만 (소문자 'mohm'은 밀리인지 메가인지 모름 -> 단위 모름)
     _UNIT_CI[_u.lower()] = "" if _u.lower() in _UNIT_CI else _u      # 대소문자만 다른 단위가 둘이면(mV, MV) 쓰지 않음
 
 
@@ -3530,11 +3591,15 @@ def _unit_key(u: Optional[str]) -> Optional[str]:
 
 
 _UNIT_ALT = "|".join(re.escape(u) for u in sorted(_UNIT_TABLE, key=len, reverse=True))
-# 단위 뒤에 영문이 이어지면 단위가 아님 (Vdc는 V로 봄: dc/ac는 허용). '초' 뒤 '과'는 '초과'
-_UNIT_RE = rf"(?:{_UNIT_ALT})(?:(?<=초)(?!과)|(?<!초))(?:(?=dc|ac|DC|AC)|(?![A-Za-z]))"
+# 단위 뒤에 영문이 이어지면 단위가 아님 (Vdc는 V로 봄: dc/ac는 허용). '초' 뒤 '과'는 '초과'.
+# 묶음 단위('Ω·cm', 'V/m', 'mm^2', 'mm2')도 그 단위가 아님 (모르는 단위 -> 조건으로 쓰지 않음)
+_UNIT_RE = (rf"(?:{_UNIT_ALT})(?:(?<=초)(?!과)|(?<!초))(?:(?=dc|ac|DC|AC)|(?![A-Za-z]))"
+            r"(?!\s*[\u00b7\u22c5*/]\s*[A-Za-z\u03a9\u03bc\u00b0])(?![\^\d])")
 _NUM_RE = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _Q = rf"(?P<{{n}}>{_NUM_RE})\s*(?P<{{u}}>{_UNIT_RE})?"          # 숫자와 (있으면) 단위
-_AD = r"(?:\s*(?:AC|DC|ac|dc|rms|RMS))?"
+# 단위 뒤 꼬리: 'V DC', 'V rms', 'dB(A)', 'mV(p-p)', 'V(DC)' (그 뒤의 이하·이상을 읽으려고)
+_AD = (r"(?:\s*(?:AC|DC|ac|dc|rms|RMS))?"
+       r"(?:\s*\(\s*(?:A|C|Z|AC|DC|ac|dc|rms|RMS|p-p|P-P|pp|pk|peak|0-p|o-p)\s*\))?")
 
 
 def _q(n: str, u: str) -> str:
@@ -3543,10 +3608,15 @@ def _q(n: str, u: str) -> str:
 
 # 순서가 우선순위 (앞 패턴이 차지한 글은 뒤 패턴이 다시 쓰지 않음)
 _COND_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [(k, re.compile(p, re.IGNORECASE)) for k, p in (
-    ("tol", rf"\(\s*(?P<a>{_NUM_RE})\s*(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%)?\s*\)\s*(?P<ua>{_UNIT_RE})"),
+    ("tolp", rf"\(\s*(?P<a>{_NUM_RE})\s*(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%)?\s*\)\s*(?P<ua>{_UNIT_RE})"),
     ("between", rf"(?:between|from)\s+{_q('a', 'ua')}{_AD}\s*(?:and|to|~)\s*{_q('b', 'ub')}"),
     ("tol", rf"{_q('a', 'ua')}{_AD}\s*\(?\s*(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%|{_UNIT_RE})?\s*\)?"),
-    ("range", rf"{_q('a', 'ua')}{_AD}\s*(?:~|\u223c|\u301c|\uff5e|\u2013|\u2014|to|에서|부터)\s*{_q('b', 'ub')}(?:\s*(?:까지|사이))?"),
+    # '±5 % 이내', '±0.1 mm 이하' -> -N~N (기준 값이 없는 대칭 한계)
+    ("pmrange", rf"(?:±|\+/-|\+-)\s*{_q('a', 'ua')}{_AD}\s*(?:을|를|이|가)?\s*"
+                rf"(?:이하|이내|max(?:imum)?\b|or\s+less|넘지\s*않|초과하지\s*않)"),
+    ("range", rf"{_q('a', 'ua')}{_AD}\s*(?:~|\u223c|\u301c|\uff5e|\u2013|\u2014|to)\s*{_q('b', 'ub')}(?:\s*(?:까지|사이))?"),
+    # 'A에서 B까지'는 범위, 'A에서 B로(를)'는 바뀌는 값('220 V에서 110 V로 강압')이라 범위가 아님
+    ("range", rf"{_q('a', 'ua')}{_AD}\s*(?:에서|부터)\s*(?>{_q('b', 'ub')})(?:\s*(?:까지|사이)|(?!\s*(?:으로|로|를|을)))"),
     ("range", rf"(?<![\w.-]){_q('a', 'ua')}\s*-\s*{_q('b', 'ub')}"),
     ("upper", rf"(?:최대|max(?:imum)?\.?|≤|<=|=<|not\s+(?:more|greater)\s+than|no\s+more\s+than|not\s+exceed(?:ing)?|"
               rf"up\s+to|less\s+than\s+or\s+equal\s+to|at\s+most)\s*[:=]?\s*{_q('a', 'ua')}"),
@@ -3567,9 +3637,42 @@ def _num(text: str) -> float:
     return float(text.replace(",", ""))
 
 
+_SUPER = "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079"       # 위첨자 0~9
+_SUPER_MAP = str.maketrans({**{ch: str(i) for i, ch in enumerate(_SUPER)}, "\u207a": "+", "\u207b": "-"})
+_MINUS_DASH = "\u2010\u2011\u2012\u2212"                    # 빼기로 쓰는 대시 (U+2013은 숫자 앞에서만)
+_EXP_10 = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*[\u00d7xX*\u00b7]\s*10\s*"
+                     rf"(?:\^\s*\(?([+-]?\d{{1,3}})\)?|\*\*\s*([+-]?\d{{1,3}})|([\u207a\u207b]?[{_SUPER}]{{1,3}}))")
+_EXP_10_BARE = re.compile(rf"(?<![\w.\u00d7*^])10(?:\s*\^\s*([+-]?\d{{1,3}})|([\u207a\u207b]?[{_SUPER}]{{1,3}}))")
+_EXP_E = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)[eE]([+-]?\d{1,3})(?![\w.])")
+
+
+def _exp_value(mant: str, exp: str) -> str:
+    """가수와 10의 지수 -> 지수 없는 숫자 글 ('1', '9' -> '1000000000')."""
+    import decimal
+    v = decimal.Decimal(mant) * (decimal.Decimal(10) ** int(exp.translate(_SUPER_MAP)))
+    out = format(v, "f")
+    return out.rstrip("0").rstrip(".") if "." in out else out
+
+
+def spec_norm(text: Any) -> str:
+    """규격 글·칸 값의 수치 표기를 맞춤 (check 판정용). NFKC 전에 처리할 것:
+    지수 '1×10'+위첨자 9, '1×10^9', '1E9' -> 계산한 숫자 (NFKC가 위첨자를 '109'로 바꾸기 전에),
+    단위 뒤 위첨자 'mm²' -> 'mm^2' (묶음 단위로 보고 조건에 쓰지 않음),
+    빼기 대시 U+2212·U+2010~2012, 숫자 바로 앞 U+2013(앞이 숫자·단위가 아닐 때) -> '-'."""
+    t = str(text or "")
+    t = _EXP_10.sub(lambda m: _exp_value(m.group(1), m.group(2) or m.group(3) or m.group(4)), t)
+    t = _EXP_10_BARE.sub(lambda m: _exp_value("1", m.group(1) or m.group(2)), t)
+    t = _EXP_E.sub(lambda m: _exp_value(m.group(1), m.group(2)), t)
+    t = re.sub(rf"(?<=[A-Za-z\u03a9\u2126\u03bc\u00b5])[{_SUPER}]+", lambda m: "^" + m.group(0).translate(_SUPER_MAP), t)
+    t = re.sub(f"[{_MINUS_DASH}]", "-", t)
+    t = re.sub(r"(?<![\dA-Za-z%\u00b0\u2103\u03a9\u2126\u03bc)\]])(?<![\dA-Za-z%\u00b0\u2103\u03a9\u2126\u03bc)\]]\s)"
+               r"\u2013(?=\s?\d)", "-", t)
+    return unicodedata.normalize("NFKC", t).replace("\u00b5", "μ")
+
+
 def unit_of(text: Any) -> Optional[Tuple[str, float, str]]:
     """'mA', '전류(mA)', '[V]', '5 V'의 단위 -> (기준 단위, 배율, 쓴 글자). 모르면 None."""
-    t = unicodedata.normalize("NFKC", str(text or "")).replace("\u00b5", "μ")
+    t = spec_norm(text)
     m = re.search(rf"[\(\[]\s*({_UNIT_ALT})\s*[\)\]]", t)
     if not m:
         m = re.search(rf"(?:^|[\s\d])({_UNIT_RE})\s*$", t.strip())
@@ -3585,7 +3688,7 @@ def quantity_of(value: Any) -> Optional[Tuple[float, Optional[Tuple[str, float, 
         return None
     if isinstance(value, (int, float)):
         return float(value), None
-    t = unicodedata.normalize("NFKC", str(value)).replace("\u00b5", "μ").strip()
+    t = spec_norm(value).strip()
     m = re.fullmatch(rf"({_NUM_RE})\s*({_UNIT_RE})?\s*", t)
     if not m:
         return None
@@ -3634,7 +3737,13 @@ def _cond(kind: str, m: "re.Match[str]") -> Optional[Dict[str, Any]]:
         if kind in ("range", "between"):
             b = val(gd["b"], ub or ua)
             c.update(lo=min(a, b), hi=max(a, b), kind="range")
-        elif kind == "tol":
+        elif kind == "pmrange":
+            c.update(lo=-abs(a), hi=abs(a), kind="range")
+        elif kind in ("tol", "tolp"):
+            if kind == "tol" and ua and not gd.get("ud"):
+                # '100 mm ±0.5': 공차에 단위가 없음 (mm인지 %인지 글만으로 확실하지 않음)
+                c["ambiguous"] = "단위 없는 공차"
+            c["kind"] = "tol"
             d = _num(gd["d"])
             ud = gd.get("ud")
             d = abs(a) * d / 100 if ud == "%" and base != "%" else val(gd["d"], ud) if ud else d * scale
@@ -3660,10 +3769,13 @@ _LIMIT_WORD = (r"(?:(?:허용|변동)\s*)?(?:범위|공차|오차|편차)|허용
 _LIMIT_PHRASE = re.compile(rf"(?:{_LIMIT_WORD})\s*(?:은|는|이|가|의|을|를|에서|내)?", re.IGNORECASE)
 
 
+_AC_DC = re.compile(r"(?<![A-Za-z])(?:AC|DC)(?![A-Za-z])", re.IGNORECASE)     # 'DC 24 V(허용 범위 DC 20.4 V ~ 26.4 V)'
+
+
 def _other_item_between(t: str, a: int, b: int) -> bool:
     """t[a:b](두 조건 사이)에 다른 항목 낱말이 있는지: 잇는 말과 문장 부호를 빼고 글자가 남으면 있음
     ('5 mm 이상, 길이 100 mm 이하'의 '길이')."""
-    gap = _COND_JOIN.sub("", _LIMIT_PHRASE.sub(" ", t[min(a, b):max(a, b)]))
+    gap = _COND_JOIN.sub("", _AC_DC.sub(" ", _LIMIT_PHRASE.sub(" ", t[min(a, b):max(a, b)])))
     return bool(re.search(r"[가-힣A-Za-z]", gap))
 
 
@@ -3672,10 +3784,12 @@ def spec_conditions(text: str) -> List[Dict[str, Any]]:
     여러 조건을 하나로 합치는 것은 확실한 규칙 셋뿐입니다 (보수적 판정: 나머지는 그대로 여러 개 -> check가 판단필요):
     (a) 같은 단위의 아래·위 한계가 하나씩: '4.75 V 이상 5.25 V 이하' -> 4.75~5.25 V
     (b) 기준 값 바로 뒤의 떨어진 공차 '±N 단위'·'±N %' (사이에 잇는 말·괄호·허용 오차 같은 한계 낱말만): '두께 3 mm, 공차 ±0.1 mm'
-    (c) 기준 값 바로 뒤의 양쪽 한계 범위(사이에 잇는 말·괄호·한계 낱말만)가 기준 값을 품음: '정격 5 V (4.75~5.25 V)'
+    (c) 기준 값 뒤의 양쪽 한계 범위가 기준 값을 품고, 범위 앞에 한계 낱말('허용 범위' 등)이 있거나 범위가 기준 값 바로 뒤
+        괄호 안에 그것만 있음: '정격 5 V, 허용 범위 4.75~5.25 V', '정격 5 V (4.75~5.25 V)'.
+        '5 V, 4~6 V에서 동작', '0~10 A까지 측정 가능'처럼 한계 낱말이 없거나 쓰임새가 이어지면 합치지 않음
     두 조건 사이에 다른 항목 낱말이 있으면('두께 5 mm 이상, 길이 100 mm 이하') 합치지 않습니다.
     한쪽 한계와 기준 값('5 V, 허용 범위 4.75 V 이상')은 합치지 않습니다."""
-    t = unicodedata.normalize("NFKC", text).replace("\u00b5", "μ")
+    t = spec_norm(text)
     taken: List[Tuple[int, int]] = []
     found: List[Tuple[int, int, Dict[str, Any]]] = []
     for kind, pat in _COND_PATTERNS:
@@ -3723,7 +3837,11 @@ def spec_conditions(text: str) -> List[Dict[str, Any]]:
                 out.append(joined(c, nxt, kind="tol", lo=v - d, hi=v + d, text=f"{c['text']} {nxt['text']}"))
                 i += 2
                 continue
-            if nxt["kind"] == "range" and nxt["base"] == c["base"] and nxt["lo"] != nxt["hi"] and cond_holds(nxt, v):
+            if nxt["kind"] == "range" and nxt["base"] == c["base"] and nxt["lo"] != nxt["hi"] and cond_holds(nxt, v) \
+                    and (_LIMIT_PHRASE.search(t[spans[id(c)][1]:spans[id(nxt)][0]])
+                         or (re.fullmatch(r"\s*\(\s*", t[spans[id(c)][1]:spans[id(nxt)][0]])
+                             and re.match(r"\s*\)", t[spans[id(nxt)][1]:]))) \
+                    and not _RANGE_USE.match(t, spans[id(nxt)][1]):
                 out.append(nxt)
                 i += 2
                 continue
@@ -3735,7 +3853,40 @@ def spec_conditions(text: str) -> List[Dict[str, Any]]:
         if key not in seen:
             seen.add(key)
             res.append(c)
+    why = _shape_doubt(t, [sp for sp in taken])
+    if why:
+        for c in res:
+            c.setdefault("ambiguous", why)
     return res
+
+
+# 범위 뒤에 이어지는 쓰임새('0~10 A까지 측정 가능', '18~36 V 입력 가능'): 허용 범위가 아니라 기능 설명
+_RANGE_USE = re.compile(r"\s*(?:까지|에서)?\s*(?:측정|입력|출력|표시|설정|조정|사용|동작|선택)", re.IGNORECASE)
+_BARE_NUM = re.compile(r"(?<![\w.,])(?<![A-Za-z]\s)[+-]?\d+(?:\.\d+)?(?![\d.,]*\d)")
+_NUM_FOLLOW = re.compile(r"\s*(?:[^\W\d_]|[%\u00b0])")      # 숫자 뒤에 낱말·단위·기호가 붙음 ('3종', '1분', '5%')
+_NUM_LABEL = re.compile(r"(?:표|그림|부록|별표|Table|Fig\.?|Figure|No\.?|Note)\s*$", re.IGNORECASE)
+_DIMENSIONS = re.compile(r"\d\s*(?:[A-Za-z]{1,3}\s*)?[\u00d7xX]\s*(?:[A-Za-z]{1,2}\s*)?\d")
+_DECIMAL_COMMA = re.compile(r"(?<![\d,])\d+,(?:\d{1,2}|\d{4,})(?!\d)")
+_ASYM_TOL = re.compile(r"\+\s*\d+(?:\.\d+)?\s*(?:[%A-Za-z\u03a9\u03bc]{1,3}\s*)?[/,]?\s*-\s*\d")
+
+
+def _shape_doubt(t: str, taken: List[Tuple[int, int]]) -> str:
+    """조건 글 모양 때문에 판정에 바로 쓰면 안 되는 이유 (없으면 ''): 치수 나열 '100×200 mm', 소수점 쉼표 '1,5 mm',
+    비대칭 공차 '+0.5/-0.2', 단위 있는 조건 곁의 단위 없는 수치 '4.75 5.0 5.25 V', '100 mm, ±0.5'."""
+    if _DIMENSIONS.search(t):
+        return "치수 나열(×)인 문장"
+    if _DECIMAL_COMMA.search(t):
+        return "소수점 쉼표('1,5')일 수 있는 수치"
+    if _ASYM_TOL.search(t):
+        return "비대칭 공차(+a/-b)인 문장"
+    if taken:
+        for m in _BARE_NUM.finditer(t):
+            s, e = m.span()
+            if any(a <= s < b for a, b in taken) or _NUM_FOLLOW.match(t, e) or _NUM_LABEL.search(t, 0, s) \
+                    or re.search(r"\(\s*$", t[:s]) and re.match(r"\s*\)", t[e:]):
+                continue                                 # 번호 '(1)', '표 2', 'Fig. 3'은 수치가 아님
+            return f"단위 없는 수치({m.group(0)})가 함께 있음"
+    return ""
 
 
 def cond_text(c: Dict[str, Any]) -> str:
@@ -3774,7 +3925,18 @@ _CLAUSE_END = re.compile(r"[,;]|\s(?:이며|이고|및|그리고)\s|(?<=[가-힣
 
 # 판정 조건으로 바로 쓰면 안 되는 문장: 불합격(거부) 기준, 값이 여럿('50/60 Hz')
 _REJECT_WORDS = re.compile(r"불합격|부적합|불량|reject|fail", re.IGNORECASE)
+# 부정문: '1 mA 이상이 되어서는 안 된다', '2 mm 미만이어서는 아니 된다' (조건을 뒤집어 읽어야 함)
+_NEGATION = re.compile(r"서는\s*(?:안|아니)\s*(?:된|되|됨|함)|아니\s*(?:된|되|됨)|안\s*된다")
 _MULTI_VALUE = re.compile(r"\d\s*/\s*\d")
+# 기준 값만 있을 때 한계인지 대략인지 정할 수 없는 낱말: '최소 두께 2 mm', '최대 전류 3 A', 'Typ. 5 V', '약 5 kg', '5 kg 내외'
+_HEDGE_WORDS = re.compile(r"최소|최대|최고|최저|상한|하한|내외|정도|가량|전후|대략|(?<![가-힣])약\s*[\d+-]"
+                          r"|(?<![A-Za-z])(?:max(?:imum)?|min(?:imum)?|typ(?:ical)?|approx(?:imately)?|about|upper|lower"
+                          r"|nominal|nom)(?![a-z])", re.IGNORECASE)
+# 상황마다 다른 조건: '대기 시 10 mA 이하, 동작 시 100 mA 이하', '85 ℃ 초과 시 동작'
+_WHEN_WORDS = re.compile(r"[가-힣]\s시(?:에는|에|의)?(?=[\s,)]|$)")
+# 단서 조항: '10 Ω 이하. 다만, 특별 3종은 100 Ω 이하', '5 mm 이상 (단, 끝부분은 10 mm 이하)'
+_PROVISO = re.compile(r"(?:^|[\s(\[])(?:다만|단)\s*[,:]|^\s*다만|(?<![A-Za-z])(?:however|except|provided\s+that)(?![a-z])",
+                      re.IGNORECASE)
 # 문장 나누기 (check용): 'Max. 3A', 'min. 100 MΩ'의 약어 점에서는 나누지 않음
 _COND_SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])(?<![Mm][Aa][Xx]\.)(?<![Mm][Ii][Nn]\.)(?<![Tt][Yy][Pp]\.)\s+|\n+")
 
@@ -3784,7 +3946,10 @@ def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], 
     (200자까지, '항목 절')를 먼저, 없으면 낱말이 든 절(앞쪽 절 경계부터 낱말까지). 같은 문장의 다른 항목 조건을 섞지 않으려고.
     조건에 'ambiguous'(판정에 바로 쓰면 안 되는 이유)나 'alt'(같은 문장 다른 항목의, 기준 값을 품는 범위)를 붙일 수 있습니다."""
     flags = re.IGNORECASE
-    for sent in _COND_SENT_SPLIT.split(text):
+    sents = _COND_SENT_SPLIT.split(text)
+    for si, raw in enumerate(sents):
+        # 빼기 대시(U+2212 등)를 '-'로 (글자 수가 같아 위치가 그대로): 다음 항목 찾기의 '[+-]?\d'가 맞게. 돌려주는 문장은 원문
+        sent = re.sub(f"[{_MINUS_DASH}]", "-", raw)
         ms = [m for t in terms for m in [_term_pattern(t, flags).search(sent)] if m]
         if not ms:
             continue
@@ -3810,16 +3975,24 @@ def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], 
                 alt = [r for r in rest if r["base"] == c["base"] and cond_holds(r, c["lo"])]
                 if alt:
                     c["alt"] = alt
+        cuts = [m.end() for m in _CLAUSE_END.finditer(sent[:start])]
+        pre = sent[cuts[-1] if cuts else 0:start]          # 낱말 앞 같은 절 ('최소 두께'를 '두께'로 찾았을 때 '최소')
         if not after:
-            cuts = [m.end() for m in _CLAUSE_END.finditer(sent[:start])]
-            clause = sent[cuts[-1] if cuts else 0:start]
+            clause = pre
             after = spec_conditions(clause)
+        nxt_sent = sents[si + 1] if si + 1 < len(sents) else ""
         why = ("불합격(거부) 기준을 말하는 문장" if _REJECT_WORDS.search(clause)
-               else "값이 여럿('/')인 문장" if _MULTI_VALUE.search(unicodedata.normalize("NFKC", clause)) else "")
+               else "부정문(~해서는 안 된다)" if _NEGATION.search(clause)
+               else "값이 여럿('/')인 문장" if _MULTI_VALUE.search(unicodedata.normalize("NFKC", clause))
+               else "상황마다 다른 조건('~ 시')" if _WHEN_WORDS.search(pre + clause)
+               else "단서 조항(다만·단)이 있는 문장" if _PROVISO.search(sent, start) or _PROVISO.match(nxt_sent)
+               else "한계인지 대략인지 정할 수 없는 기준 값(최대·최소·Typ·약 등)"
+               if after and all(c["kind"] == "plain" for c in after) and _HEDGE_WORDS.search(pre + " " + clause)
+               else "")
         if why:
             for c in after:
                 c["ambiguous"] = why
-        return after, sent.strip()
+        return after, raw.strip()
     return spec_conditions(text[:400]), text.strip()[:400]
 
 
@@ -3901,7 +4074,7 @@ def _diff_groups(doc: Dict[str, Any], sec_key: str) -> Dict[str, List[Dict[str, 
 
 def _quantities(text: str) -> List[Tuple[float, str, str]]:
     """글의 숫자(단위 있으면 함께): [(기준 단위 값, 기준 단위, 쓴 글)]. 단위가 없는 숫자는 쓴 그대로 비교."""
-    t = unicodedata.normalize("NFKC", text).replace("\u00b5", "μ")
+    t = spec_norm(text)
     out = []
     for m in re.finditer(rf"(?<![\w.])({_NUM_RE})\s*({_UNIT_RE})?", t):
         k = _unit_key(m.group(2))

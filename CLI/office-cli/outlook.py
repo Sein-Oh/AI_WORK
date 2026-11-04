@@ -940,7 +940,7 @@ def cmd_forward(args) -> Dict[str, Any]:
 # 같은 메일을 가리키거나 '없는 번호' 오류가 됩니다 (다른 메일을 가리키지 않음. 긴 EntryID도 그대로 받음).
 # 번호는 줄어들지 않습니다: 다음 번호를 작은 파일(NEXT_FILE)에도 따로 두고 둘 중 큰 값을 쓰며, 1부터 다시 매기지 않습니다.
 # 기억 파일을 끝내 읽지 못하거나 깨졌으면 번호를 새로 매기지 않고 그 결과는 EntryID만 씁니다 (깨진 파일은 백업).
-# 불러오기~저장은 잠금 파일(LOCK_FILE)로 묶어 동시에 실행한 두 목록이 같은 번호를 받지 않게 합니다.
+# 불러오기~저장은 잠금 파일(LOCK_FILE)의 운영체제 잠금으로 묶어 동시에 실행한 두 목록이 같은 번호를 받지 않게 합니다.
 # ------------------------------------------------------------------------------
 
 LISTING_FILE = "outlook_ids.json"
@@ -950,8 +950,6 @@ ID_KEEP = 500                # 기억하는 번호 수 (최근 것부터)
 ID_KEEP_DAYS = 7             # 이보다 오래 전에 받은 번호는 버림
 LOCK_WAIT = 5.0              # 잠금을 기다리는 시간 상한(초)
 LOCK_HOLD = 10.0             # 잠금을 쥔 동안 파일 작업 재시도에 쓰는 시간 상한(초): 이보다 오래 쥐지 않음
-LOCK_STALE = 30.0            # 만든 실행이 살아 있는지 모를 때, 이보다 오래된 잠금은 끝나지 못한 실행이 남긴 것으로 보고 지움
-LOCK_STALE_ALIVE = 120.0     # 만든 실행이 살아 있어도 이보다 오래된 잠금은 지움 (Windows가 프로세스 번호를 다시 쓴 경우)
 _SHORT_ID = re.compile(r"\d{1,9}")
 
 
@@ -1009,7 +1007,7 @@ def _backup_broken(reason: str, deadline: Optional[float] = None) -> None:
             raw = f.read().decode("utf-8", "replace")
         nums = [int(x) for x in re.findall(r'"next"\s*:\s*(\d{1,9})', raw)]
         nums += [int(x) + 1 for x in re.findall(r'"(\d{1,9})"\s*:', raw)]
-        nxt = max([_read_next_file()] + nums)
+        nxt = max([_read_next_file(deadline)] + nums)
         rt.safe_write_text(_side_path(NEXT_FILE), str(nxt), deadline=deadline)
         bak = os.path.join(rt.get_data_dir(), f"outlook_ids.broken_{rt.timestamp()}.json")
         rt.retry_fs(lambda: os.replace(path, bak), deadline=deadline)
@@ -1018,142 +1016,86 @@ def _backup_broken(reason: str, deadline: Optional[float] = None) -> None:
         rt.log("WARN", f"깨진 메일 번호 기억 파일을 옮기지 못했습니다: {type(e).__name__}")
 
 
-def _pid_alive(pid: int) -> Optional[bool]:
-    """프로세스가 살아 있는지: True/False, 알 수 없으면 None. Windows는 OpenProcess + GetExitCodeProcess."""
-    if pid <= 0:
-        return None
+def _try_os_lock(fd: int) -> bool:
+    """열린 잠금 파일에 운영체제 잠금을 겁니다(기다리지 않음). Windows는 msvcrt.locking(첫 1바이트), 그 밖은 fcntl.flock.
+    잠금은 프로세스가 끝나면(강제 종료 포함) 운영체제가 풉니다."""
     if os.name == "nt":
+        import msvcrt
         try:
-            import ctypes
-            from ctypes import wintypes
-            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            k32.OpenProcess.restype = wintypes.HANDLE
-            h = k32.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
-            if not h:
-                err = ctypes.get_last_error()
-                return False if err == 87 else True if err == 5 else None   # 87: 없는 프로세스, 5: 접근 거부(살아 있음)
-            try:
-                code = wintypes.DWORD()
-                if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
-                    return None
-                return code.value == 259                       # STILL_ACTIVE
-            finally:
-                k32.CloseHandle(h)
-        except Exception:
-            return None
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return True
     except OSError:
-        return None
-    return True
+        return False
+
+
+def _os_unlock(fd: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
 
 
 class _IdsLock:
-    """outlook_ids.lock을 O_EXCL로 만들어 잡습니다(내용: '<pid> <표식>'). LOCK_WAIT초 안에 못 잡으면 acquired=False이고
-    why에 까닭. 잡으면 deadline(지금 + LOCK_HOLD초)까지만 파일 작업을 재시도합니다.
-    남은 잠금은 만든 실행이 끝났으면(pid 확인) 바로, 살았는지 모르면 LOCK_STALE초, 살아 있어도 LOCK_STALE_ALIVE초가 지나면 지웁니다.
-    지울 때는 이름을 바꿔 가져온 뒤 내용이 확인한 것과 같은지 보고(그 사이 다른 실행이 새로 잡았으면 되돌려 놓음),
-    풀 때는 자기 표식일 때만 지웁니다."""
+    """outlook_ids.lock을 열어 운영체제 잠금을 겁니다. LOCK_WAIT초 안에 못 잡으면 acquired=False이고 why에 까닭.
+    잡으면 deadline(지금 + LOCK_HOLD초)까지만 파일 작업을 재시도합니다.
+    잠금 파일은 지우지 않고 남겨 둡니다(파일이 있다고 잠긴 것이 아님). 잠금을 쥔 실행이 끝나면 운영체제가 잠금을 풀어
+    남은 잠금을 치우는 판단(pid·나이)이 필요 없습니다. 예전 방식(O_EXCL + 남은 잠금 치우기)은 치우는 사이 경합으로
+    두 실행이 함께 잠금을 쥐어 번호가 겹쳤음 (4차 검토)."""
 
     def __init__(self) -> None:
         self.path = _side_path(LOCK_FILE)
         self.acquired = False
         self.deadline: Optional[float] = None
         self.why = ""
-        self.mine = f"{os.getpid()} {os.urandom(6).hex()}"
-
-    def _read(self, path: str) -> Optional[str]:
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                return f.read()
-        except OSError:
-            return None
-
-    def _holder(self) -> Tuple[Optional[str], Optional[int], Optional[bool], float]:
-        """(내용, pid, 살아 있는지, 나이 초). 잠금 파일이 없으면 내용 None."""
-        content = self._read(self.path)
-        try:
-            age = time.time() - os.path.getmtime(self.path)
-        except OSError:
-            return None, None, None, 0.0
-        m = re.match(r"\s*(\d+)", content or "")
-        pid = int(m.group(1)) if m else None
-        return content, pid, (_pid_alive(pid) if pid else None), age
-
-    def _stale(self, pid: Optional[int], alive: Optional[bool], age: float) -> str:
-        if alive is False:
-            return f"만든 실행(pid {pid})이 끝남"
-        if alive is None and age > LOCK_STALE:
-            return f"{age:.0f}초 지남(만든 실행 확인 불가)"
-        if age > LOCK_STALE_ALIVE:
-            return f"{age:.0f}초 지남"
-        return ""
-
-    def _take_stale(self, content: str) -> bool:
-        """남은 잠금을 치움: 이름을 바꿔 가져와 내용이 확인한 것과 같은지 봄. 다르면(그 사이 새 잠금) 되돌려 놓음."""
-        tmp = f"{self.path}.stale_{self.mine.replace(' ', '_')}"
-        try:
-            os.replace(self.path, tmp)
-        except OSError:
-            return False
-        got = self._read(tmp)
-        if got is not None and got != content:
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, got.encode("utf-8"))
-                os.close(fd)
-            except OSError:
-                pass
-            removed = False
-        else:
-            removed = True
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        return removed
+        self._fd: Optional[int] = None
 
     def __enter__(self) -> "_IdsLock":
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
         deadline = time.monotonic() + LOCK_WAIT
+        opened_err = ""
         while True:
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, self.mine.encode("utf-8"))
-                os.close(fd)
+            if self._fd is None:
+                try:
+                    os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                    self._fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o666)
+                except OSError as e:                       # 백신·탐색기가 잡고 있으면 짧게 기다려 다시
+                    opened_err = type(e).__name__
+            if self._fd is not None and _try_os_lock(self._fd):
                 self.acquired = True
                 self.deadline = time.monotonic() + LOCK_HOLD
                 return self
-            except OSError:
-                content, pid, alive, age = self._holder()
-                if content is not None:
-                    stale = self._stale(pid, alive, age)
-                    if stale and self._take_stale(content):
-                        rt.log("WARN", f"남은 메일 번호 잠금 파일({LOCK_FILE})을 지웠습니다: {stale}.")
-                        continue
             if time.monotonic() >= deadline:
-                content, pid, alive, age = self._holder()
-                if content is None:
-                    self.why = f"잠금 파일 {LOCK_FILE}을 만들지 못함"
-                elif alive:
-                    self.why = f"다른 실행(pid {pid})이 번호 파일을 쓰는 중"
-                else:
-                    limit = LOCK_STALE if alive is None else 0
-                    self.why = (f"잠금 파일 {LOCK_FILE}이 남아 있음({age:.0f}초 전에 생김"
-                                + (f", {limit:.0f}초가 지나면 다음 실행이 지움" if limit and age <= limit else "") + ")")
+                self.why = (f"잠금 파일 {LOCK_FILE}을 열지 못함 ({opened_err})" if self._fd is None
+                            else f"다른 실행이 번호 파일을 쓰는 중 ({LOCK_WAIT:.0f}초 기다림)")
+                self._close()
                 return self
             time.sleep(0.05)
 
-    def __exit__(self, *exc: Any) -> None:
-        if self.acquired and self._read(self.path) == self.mine:        # 자기 잠금일 때만 지움
+    def _close(self) -> None:
+        if self._fd is not None:
             try:
-                rt.retry_fs(lambda: os.remove(self.path), attempts=3, delay=0.1)
-            except Exception:
+                os.close(self._fd)
+            except OSError:
                 pass
+            self._fd = None
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.acquired and self._fd is not None:
+            _os_unlock(self._fd)
+        self.acquired = False
+        self._close()
 
 
 def _prune_ids(items: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:

@@ -1379,57 +1379,85 @@ def test_short_ids_concurrent_listings_get_distinct_numbers(monkeypatch):
             assert outlook.entry_id(str(m["id"])) == m["entry_id"]
 
 
-def test_short_ids_lock_timeout_and_stale_lock(monkeypatch):
+def test_short_ids_leftover_lock_file_does_not_block(monkeypatch):
+    # 잠금은 운영체제 잠금이라 남은 잠금 파일(내용·나이 무관)은 막지 않음. 잠금 파일은 지우지 않고 남김 (4차 검토)
     import time as _time
     data_dir = os.path.dirname(outlook._listing_path())
     os.makedirs(data_dir, exist_ok=True)
     lock = os.path.join(data_dir, outlook.LOCK_FILE)
-    open(lock, "w").close()                                            # 만든 실행을 알 수 없는 잠금
-    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.2)
-    a = _listing("A", 2)
-    w = outlook.remember_listing(a, "list")
-    assert "outlook_ids.lock이 남아 있음" in w and "30초가 지나면" in w and "다른 실행" not in w, w
-    assert [m["id"] for m in a] == ["A1", "A2"]
-    old = _time.time() - 3600
-    os.utime(lock, (old, old))                                         # 끝나지 못한 실행이 남긴 잠금
-    b = _listing("B", 2)
-    assert outlook.remember_listing(b, "list") is None and [m["id"] for m in b] == [1, 2]
-    assert not os.path.exists(lock)
-
-
-def test_short_ids_lock_of_dead_process_is_cleared_at_once(monkeypatch):
-    # 3차 검토: 잠금을 쥔 실행이 강제 종료되면 30초 동안 번호를 못 붙였음 -> 잠금의 pid가 끝났으면 바로 지움
-    import subprocess
-    import sys as _sys
-    p = subprocess.Popen([_sys.executable, "-c", "pass"])
-    p.wait()
-    data_dir = os.path.dirname(outlook._listing_path())
-    os.makedirs(data_dir, exist_ok=True)
-    lock = os.path.join(data_dir, outlook.LOCK_FILE)
     with open(lock, "w") as f:
-        f.write(f"{p.pid} dead")
-    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.5)
+        f.write("999999 old")
+    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.2)
+    t0 = _time.monotonic()
     a = _listing("A", 2)
     assert outlook.remember_listing(a, "list") is None and [m["id"] for m in a] == [1, 2]
-    assert not os.path.exists(lock)
+    assert _time.monotonic() - t0 < 1.0 and os.path.exists(lock)
 
 
-def test_short_ids_lock_of_live_process_is_kept(monkeypatch):
-    # 살아 있는 실행의 새 잠금은 지우지 않고, 경고에 그 실행을 적음. 풀 때 남의 잠금은 지우지 않음
-    data_dir = os.path.dirname(outlook._listing_path())
-    os.makedirs(data_dir, exist_ok=True)
-    lock = os.path.join(data_dir, outlook.LOCK_FILE)
-    with open(lock, "w") as f:
-        f.write(f"{os.getpid()} other")
-    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.2)
-    a = _listing("A", 2)
-    w = outlook.remember_listing(a, "list")
-    assert f"다른 실행(pid {os.getpid()})이 번호 파일을 쓰는 중" in w, w
-    assert open(lock).read() == f"{os.getpid()} other"
-    lk = outlook._IdsLock()
-    lk.acquired = True                                                 # 남의 잠금을 자기 것으로 착각해도 지우지 않음
-    lk.__exit__(None, None, None)
-    assert os.path.exists(lock)
+_HOLDER = r"""
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+import outlook
+lk = outlook._IdsLock().__enter__()
+print("locked" if lk.acquired else "failed", flush=True)
+time.sleep(60)
+"""
+
+
+def _lock_holder():
+    import subprocess
+    import sys as _sys
+    root = os.path.dirname(os.path.abspath(outlook.__file__))
+    p = subprocess.Popen([_sys.executable, "-c", _HOLDER, root], stdout=subprocess.PIPE, text=True, env=dict(os.environ))
+    assert p.stdout.readline().strip() == "locked"
+    return p
+
+
+def test_short_ids_lock_held_by_other_process_then_killed(monkeypatch):
+    # 다른 실행이 잠금을 쥔 동안은 기다리다 긴 EntryID로 (번호를 겹쳐 주지 않음). 그 실행이 강제 종료되면 운영체제가
+    # 잠금을 풀어 다음 실행이 바로 잡음 (pid 확인·나이로 치우기 없음)
+    p = _lock_holder()
+    try:
+        monkeypatch.setattr(outlook, "LOCK_WAIT", 0.3)
+        a = _listing("A", 2)
+        w = outlook.remember_listing(a, "list")
+        assert "다른 실행이 번호 파일을 쓰는 중" in w and [m["id"] for m in a] == ["A1", "A2"], w
+    finally:
+        p.kill()
+        p.wait()
+        p.stdout.close()
+    b = _listing("B", 2)
+    assert outlook.remember_listing(b, "list") is None and [m["id"] for m in b] == [1, 2]
+
+
+_RACER = r"""
+import json, os, sys, time
+sys.path.insert(0, sys.argv[1])
+import outlook
+tag, start = sys.argv[2], float(sys.argv[3])
+while time.time() < start:
+    pass
+mails = [{"entry_id": f"{tag}-{i}", "subject": "s"} for i in range(5)]
+w = outlook.remember_listing(mails, "t")
+print(json.dumps({"ids": [m["id"] for m in mails], "warn": w}))
+"""
+
+
+def test_short_ids_many_processes_never_share_numbers(tmp_path):
+    # 4차 검토: 남은 잠금 치우기 경합으로 두 실행이 함께 잠금을 쥐어 번호가 겹쳤음 (8프로세스 21회 중 2회)
+    import subprocess
+    import sys as _sys
+    import time as _time
+    root = os.path.dirname(os.path.abspath(outlook.__file__))
+    for r in range(4):
+        env = dict(os.environ, OFFICE_CLI_DATA_DIR=str(tmp_path / f"race{r}"))
+        start = _time.time() + 1.0
+        procs = [subprocess.Popen([_sys.executable, "-c", _RACER, root, f"p{i}", str(start)], stdout=subprocess.PIPE,
+                                  text=True, env=env) for i in range(8)]
+        outs = [json.loads(p.communicate(timeout=60)[0]) for p in procs]
+        ids = [i for o in outs for i in o["ids"] if isinstance(i, int)]
+        assert len(ids) == len(set(ids)), (r, outs)
+        assert all(o["warn"] is None for o in outs), outs
 
 
 def test_short_ids_lock_hold_time_is_bounded(monkeypatch):
@@ -1448,8 +1476,7 @@ def test_short_ids_lock_hold_time_is_bounded(monkeypatch):
     t0 = _time.monotonic()
     b = _listing("B", 2)
     assert "읽지 못함" in outlook.remember_listing(b, "list")
-    assert _time.monotonic() - t0 < outlook.LOCK_STALE / 10 and outlook.LOCK_HOLD < outlook.LOCK_STALE
-    assert outlook.LOCK_STALE > 10.0 + 5.0                             # 기본 LOCK_HOLD(10초)보다 넉넉히 김
+    assert _time.monotonic() - t0 < 3.0
 
 
 def test_retry_fs_deadline_stops_waiting():
