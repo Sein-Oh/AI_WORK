@@ -3,7 +3,7 @@
 지원: Range("A1:B2" / "A1:B2,A4:B4") / Range(cell, cell) / Cells(r, c), Value(읽기/쓰기, 스칼라 채우기),
 Formula(쓰기 시 상대참조 문자열 그대로 저장), HasFormula/HasArray/CurrentArray(배열 수식 arrays), Row/Column/Rows.Count/Columns.Count/Address, UsedRange,
 End(xlUp), 서식 속성 기록(Interior/Font/Borders/NumberFormat ...), ChartObjects, Cut/Copy/Merge,
-EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header).
+EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header), Worksheet.Sort(SortFields, SetRange, Apply).
 """
 import re
 
@@ -361,9 +361,12 @@ class FakeRange:
     def Sort(self, Key1=None, Order1=1, Key2=None, Order2=1, Key3=None, Order3=1, Header=2, MatchCase=False,
              Orientation=1, **kw):
         """Excel처럼 행 단위 정렬: 숫자 < 글자(대소문자 무시) < 논리값, 빈 칸은 오름·내림 모두 맨 뒤, 같은 값은 순서 유지."""
+        keys = [(k, o) for k, o in ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]
+        self.ws.log.append(("Sort", self.Address, Header, [(k.Column, o) for k, o in keys]))
+        self._sort_rows(keys, Header)
+
+    def _sort_rows(self, keys, Header):
         r1, c1, r2, c2 = self.areas[0]
-        self.ws.log.append(("Sort", self.Address, Header, [(k.Column, o) for k, o in
-                                                          ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]))
         start = r1 + 1 if Header == 1 else r1
         rows = [[self.ws.values.get((r, c)) for c in range(c1, c2 + 1)] for r in range(start, r2 + 1)]
 
@@ -373,7 +376,7 @@ class FakeRange:
             if isinstance(v, (int, float)):
                 return (0, float(v))
             return (1, str(v).casefold())
-        for key, order in reversed([(k, o) for k, o in ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]):
+        for key, order in reversed(keys):
             j = key.Column - c1
             blank = [r for r in rows if r[j] is None or r[j] == ""]
             full = sorted((r for r in rows if not (r[j] is None or r[j] == "")), key=lambda r: cls(r[j]), reverse=order == 2)
@@ -452,6 +455,41 @@ class FakeChartObjects:
         self.ws.charts.clear()
 
 
+class FakeSortFields:
+    def __init__(self):
+        self.fields = []
+
+    def Clear(self):
+        self.fields = []
+
+    def Add(self, Key=None, SortOn=0, Order=1, DataOption=0):
+        self.fields.append((Key, Order))
+
+    @property
+    def Count(self):
+        return len(self.fields)
+
+
+class FakeSort:
+    """Worksheet.Sort (엑셀 2007 이상): SortFields, SetRange, Header, Apply."""
+
+    def __init__(self, ws):
+        self.ws = ws
+        self.SortFields = FakeSortFields()
+        self.rng = None
+        self.Header = 2
+        self.MatchCase = False
+        self.Orientation = 1
+
+    def SetRange(self, rng):
+        self.rng = rng
+
+    def Apply(self):
+        keys = list(self.SortFields.fields)
+        self.ws.log.append(("SortApply", self.rng.Address, self.Header, [(k.Column, o) for k, o in keys]))
+        self.rng._sort_rows(keys, self.Header)
+
+
 class FakeWorksheet:
     def __init__(self, app, wb, name):
         self.app = app
@@ -470,6 +508,7 @@ class FakeWorksheet:
         self.activated = 0
         self.Shapes = Count(0)
         self.Rows = Count(1048576)
+        self.Sort = FakeSort(self)
 
     @property
     def Name(self):

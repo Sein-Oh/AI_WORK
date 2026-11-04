@@ -6,6 +6,19 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.46] - 2026-11-04
+
+1.4.37에서 남긴 것: range sort 기준 4개 이상. 회귀 테스트: `tests/test_excel_write.py` `test_sort_more_than_three_keys_uses_sort_fields`, `test_sort_too_many_keys`
+(1.4.45에서 2개 중 2개 실패).
+
+### 기능
+- `excel.py range --action sort --by "팀,부서,등급,지역,이름"`: 기준 4개부터 64개(엑셀 상한)까지 `Worksheet.Sort.SortFields`로 정렬
+  (기준마다 데이터 행의 열, 값으로 비교, `--desc` 그대로). 정렬한 뒤 `SortFields.Clear()`로 시트에 정렬 기준을 남기지 않음.
+  3개까지는 전처럼 Range.Sort. 확인(R1)은 같음(모든 기준의 순서). 전에는 4개부터 STOP_RETRY.
+
+### 테스트
+- 가짜 Excel(`tests/fake_excel.py`): `Worksheet.Sort`(`SortFields.Add/Clear`, `SetRange`, `Header`, `Apply`).
+
 ## [1.4.45] - 2026-11-04
 
 1.4.37에서 남긴 것: `read --where`의 또는(OR) 조건과 값 안의 `;`. 회귀 테스트: `tests/test_excel_read.py` `test_where_or*`, `test_where_quoted_value_with_separators`
@@ -1171,7 +1184,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - L2 성능: 범위를 생략한 닫힌 xlsx 읽기는 수식이 있는 시트 XML 전체를 한 번 더 해석함(30만 행 시트에서 수 초). 열린 값 읽기와 함께 한 번에 훑기.
 
 ### 1.4.37에서 남긴 것
-- range sort: 기준 4개 이상(Worksheet.Sort.SortFields), 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림.
+- range sort: 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림. (기준 4개 이상은 1.4.46)
 - 실기(회사 PC)에서 outlook `--days`/`--since`의 Restrict 날짜 형식 확인.
 
 ### 확인 필요

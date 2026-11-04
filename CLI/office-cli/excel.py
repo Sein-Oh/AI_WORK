@@ -2081,7 +2081,8 @@ def cmd_range(args) -> Dict[str, Any]:
 # ==============================================================================
 
 LINES_SCAN = 1000        # 넣기·지우기 확인용 기준 칸을 찾을 때 훑는 행(열은 200) 수
-SORT_MAX_KEYS = 3        # Range.Sort의 기준 열 상한 (Key1~Key3)
+SORT_RANGE_KEYS = 3      # Range.Sort가 받는 기준 수 (Key1~Key3). 넘으면 Worksheet.Sort.SortFields
+SORT_MAX_KEYS = 64       # 엑셀 정렬 기준 상한 (정렬 대화상자의 수준 64개)
 XL_ASC, XL_DESC = 1, 2
 XL_YES, XL_NO = 1, 2     # Range.Sort Header (xlGuess는 쓰지 않음: 도구가 정해 결과에 알림)
 
@@ -2491,8 +2492,30 @@ def _adjacent_filled(ws: Any, r1: int, r2: int, col: int) -> bool:
     return bool(_filled_cells(ws, ws.Range(ws.Cells(r1, col), ws.Cells(r2, col))))
 
 
+def _sort_fields(ws: Any, rng: Any, r1: int, c1: int, r2: int, order: List[Tuple[int, bool]], has_header: bool) -> None:
+    """기준 4개 이상: Worksheet.Sort.SortFields에 기준 열(데이터 행)을 차례로 넣고 Apply. 시트에 남는 정렬 기준은 지웁니다."""
+    srt = ws.Sort
+    srt.SortFields.Clear()
+    top = r1 + 1 if has_header else r1
+    for idx, desc in order:
+        col = ws.Range(ws.Cells(top, c1 + idx), ws.Cells(r2, c1 + idx))
+        srt.SortFields.Add(Key=col, SortOn=0, Order=XL_DESC if desc else XL_ASC, DataOption=0)   # xlSortOnValues, 보통 비교
+    srt.SetRange(rng)
+    srt.Header = XL_YES if has_header else XL_NO
+    srt.MatchCase = False
+    srt.Orientation = 1                     # xlTopToBottom (행 단위)
+    try:
+        srt.Apply()
+    finally:
+        try:
+            srt.SortFields.Clear()
+        except Exception:
+            pass
+
+
 def range_sort(args) -> Dict[str, Any]:
-    """range --action sort: --by 열(이름 또는 열 문자, 쉼표로 3개까지)로 정렬. 머리글 행은 도구가 정하고 결과에 알림."""
+    """range --action sort: --by 열(이름 또는 열 문자, 쉼표로 여럿)로 정렬. 머리글 행은 도구가 정하고 결과에 알림.
+    기준 3개까지는 Range.Sort, 4개부터는 Worksheet.Sort.SortFields(엑셀 2007 이상)."""
     if not args.range:
         raise rt.InputError("range sort에는 --range가 필요합니다 (예: --range A1:E100, 머리글 행 포함).")
     if not args.by:
@@ -2575,11 +2598,14 @@ def range_sort(args) -> Dict[str, Any]:
             resolved = t.resolved()
             return rt.ok(TOOL, "range", f"{where}: 이미 정렬되어 있어 바꾸지 않았습니다 ({len(data)}행)",
                          "VERIFIED: 정렬 순서를 다시 읽어 확인했고 바뀐 것이 없습니다.", target_resolved=resolved, **info)
-        kw: Dict[str, Any] = {}
-        for i, (idx, desc) in enumerate(order, start=1):
-            kw[f"Key{i}"] = ws.Cells(r1, c1 + idx)
-            kw[f"Order{i}"] = XL_DESC if desc else XL_ASC
-        rng.Sort(Header=XL_YES if has_header else XL_NO, MatchCase=False, Orientation=1, **kw)
+        if len(order) <= SORT_RANGE_KEYS:
+            kw: Dict[str, Any] = {}
+            for i, (idx, desc) in enumerate(order, start=1):
+                kw[f"Key{i}"] = ws.Cells(r1, c1 + idx)
+                kw[f"Order{i}"] = XL_DESC if desc else XL_ASC
+            rng.Sort(Header=XL_YES if has_header else XL_NO, MatchCase=False, Orientation=1, **kw)
+        else:
+            _sort_fields(ws, rng, r1, c1, r2, order, has_header)
         t.set_focus(sheet=ws)
         # R1: 다시 읽어 행 수·머리글·행 묶음이 그대로이고 기준 열이 정렬됐는지
         problems: List[str] = []
@@ -2992,7 +3018,7 @@ def build_cli():
     p.add_argument("--type", choices=["all", "contents", "formats"], default="all", help="clear 종류")
     p.add_argument("--weight", choices=list(XL_WEIGHT) + ["none"], default="thin", help="border 굵기")
     p.add_argument("--box", action="store_true", help="border: 외곽선만")
-    p.add_argument("--by", help="sort 기준 열: 머리글 이름 또는 열 문자, 여러 개는 쉼표 (예: \"부서,금액\", 3개까지)")
+    p.add_argument("--by", help="sort 기준 열: 머리글 이름 또는 열 문자, 여러 개는 쉼표 (예: \"부서,금액\", 64개까지)")
     p.add_argument("--desc", nargs="?", const="*",
                    help="sort 내림차순: 값 없이 쓰면 모든 기준, 기준 이름을 주면 그것만 (예: --desc \"금액\")")
     p.add_argument("--header", choices=["auto", "yes", "no"], default="auto",

@@ -239,7 +239,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     통합문서 전체가 200만 칸을 넘으면 넘는 시트는 훑지 않고 `warnings`로 알립니다. `--overwrite`로 지우면 preview에 `#REF!`가 된 수식 수.
   - 다른 쓰기처럼 되돌리기 지점을 남기고(`office.py undo`), 닫힌 파일은 엑셀로 열어 고칩니다.
   - 확인(R1): 사용 범위 끝 행(열)이 넣은·지운 수만큼 바뀌었는지, 옮겨진 칸 하나(수식이 아닌 값이 있는 첫 칸, `moved`)가 기대한 자리에 같은 값인지.
-- `range --action sort --range A1:E100 --by "<열>" [--desc] [--header auto|yes|no]`(1.4.37): 행 단위 정렬(Range.Sort, 기준 3개까지).
+- `range --action sort --range A1:E100 --by "<열>" [--desc] [--header auto|yes|no]`(1.4.37): 행 단위 정렬. 기준 3개까지는 Range.Sort, 4개부터 64개까지는 `Worksheet.Sort.SortFields`(엑셀 2007 이상, 정렬한 뒤 시트에 남는 정렬 기준은 지움, 1.4.46).
   - `--by`는 머리글 이름 또는 열 문자, 여러 기준은 쉼표(`--by "부서,금액"`). `--desc`만 쓰면 모든 기준이 내림차순, `--desc "금액"`이면 그 기준만.
   - 머리글: `--by`가 머리글 이름이면 첫 행이 머리글. 열 문자면 `--header auto`(기본)가 판단합니다: 첫 행 칸이 모두 글자이고, 굵게이거나 아래에 숫자·날짜가
     있는 열이 있으면 머리글. 결과 `header`, `header_decided_by`.

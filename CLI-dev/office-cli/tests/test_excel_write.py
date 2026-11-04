@@ -716,6 +716,33 @@ def test_sort_verify_catches_wrong_order(xl_table, capsys, monkeypatch):
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
 
 
+def _wide_table(ws):
+    rows = [("팀", "부서", "등급", "지역", "이름"),
+            ("A", "영업", 2, "서울", "다"), ("A", "영업", 1, "부산", "나"), ("A", "영업", 1, "서울", "라"),
+            ("B", "개발", 1, "서울", "가"), ("A", "영업", 1, "부산", "마")]
+    for i, row in enumerate(rows, start=1):
+        for j, v in enumerate(row, start=1):
+            ws.values[(i, j)] = v
+
+
+def test_sort_more_than_three_keys_uses_sort_fields(xl_table, capsys):
+    """1.4.46: 기준 4개 이상은 Worksheet.Sort.SortFields (전에는 3개까지만, 4개면 STOP_RETRY)."""
+    _wide_table(xl_table)
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:E6", "--by", "팀,부서,등급,지역,이름",
+                         "--desc", "지역")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and len(out["keys"]) == 5, out
+    assert _col(xl_table, 5, 1, 6) == ["이름", "라", "나", "마", "다", "가"], _col(xl_table, 5, 1, 6)
+    applied = [x for x in xl_table.log if x[0] == "SortApply"]
+    assert applied and applied[0][2] == excel.XL_YES and len(applied[0][3]) == 5, xl_table.log
+    assert xl_table.Sort.SortFields.Count == 0                                     # 시트에 정렬 기준을 남기지 않음
+    assert not [x for x in xl_table.log if x[0] == "Sort"]
+
+
+def test_sort_too_many_keys(xl_table, capsys):
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", ",".join(["금액"] * 65))
+    assert code == 1 and "64개" in out["message"], out
+
+
 # ---------------------------------------------------------------------------
 # --new-sheet가 없는 명령의 없는 시트는 '찾을 수 없음' ([후보]/[추천]), --new-sheet 안내 없음
 # ---------------------------------------------------------------------------
