@@ -9,7 +9,7 @@ python tools/run_win_tests.py --only H                  :: 일부 그룹만
 python tools/run_win_tests.py --skip-outlook --auto     :: Outlook 제외, 질문 없이 자동 판정 항목만
 python tools/run_win_tests.py --agent --skip-outlook    :: 에이전트용: --auto + 로그는 stderr, stdout은 결과 JSON 1줄
 ```
-- 테스트 파일(A/B .xlsx .docx .pptx)은 `C:\office_test`에 자동으로 만듭니다(`--dir`로 변경 가능).
+- 테스트 파일(A/B .xlsx .docx .pptx)은 `C:\CLI-dev\work\office`에 자동으로 만듭니다(`--dir`로 변경 가능).
 - 실행 전에 다른 Office 문서는 저장하고 닫아 주세요. 실행 중에는 Office 창을 직접 만지지 마세요.
 - 결과는 테스트 폴더에 두 파일로 저장됩니다.
   - `report_*.txt`: 항목별 판정 요약.

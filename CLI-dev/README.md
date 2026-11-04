@@ -32,14 +32,15 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
 - `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.yaml`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\CLI\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
-  시험 폴더(기본 `C:\ml_beta\agent`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\ml_beta\gemma_runs_<시각>`에 남깁니다.
+  시험 폴더(기본 `C:\CLI-dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\CLI-dev\work\gemma_runs_<시각>`에 남깁니다.
   첫 요청에서 세션이 안 생기면 나머지를 보내지 않고 FAIL. 요청 하나의 시간 상한 `--gemma-timeout`(기본 900초). 관리자 권한 창이면 UNVERIFIED에 경고.
 - `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP). 예전 `--auto`는 기본이 되어 없앴습니다.
 - Windows + pywin32가 아니면 `ml`, `office`는 ENV-SKIP (클라우드에서도 나머지는 그대로 돎).
 - 결과: `C:\CLI-dev\result_<라벨>_<시각>.md` 하나. 맨 위 요약 표(단계별 PASS/FAIL/SKIP, 시간, 비고)와 실패·건너뜀(ENV-SKIP)·UNVERIFIED 목록, 그 아래 단계별 상세
   (pytest 출력, 베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
-  베타 점검이 만든 `beta_check_*.md/.xlsx`는 내용을 결과 파일에 넣고 시험 폴더(`C:\ml_beta\check_<시각>`)로 옮기며, 점검이 일부러 낸 도구 오류는 그 폴더의 `_data`에 기록합니다(실제 오류 로그와 섞이지 않음).
+  베타 점검이 만든 `beta_check_*.md/.xlsx`는 내용을 결과 파일에 넣고 시험 폴더(`C:\CLI-dev\work\beta_<시각>`)로 옮기며, 점검이 일부러 낸 도구 오류는 그 폴더의 `_data`에 기록합니다(실제 오류 로그와 섞이지 않음).
 - 종료 코드: 0 = 실패 없음, 1 = FAIL인 단계가 있음, 130 = Ctrl+C. 결과 파일은 GitHub 웹에서 `docs/test_logs/`에 업로드합니다(회사 정보가 있어 프로젝트 마무리 때 이력에서 정리).
+- 시험 폴더는 모두 `C:\CLI-dev\work\` 아래입니다 (`beta_<시각>`, `office`, `ml 테스트`, `gemma`, `gemma_runs_<시각>`, 눈 확인용 `눈확인`). git에는 올리지 않으며, 반입 때 `C:\CLI-dev`를 통째로 지우면 함께 사라집니다.
 - 시작 전에 열린 Office 문서를 모두 저장하고 닫고, 점검 중에는 Office 창을 만지지 마세요. `run_all_tests.bat`를 더블클릭해도 같습니다(라벨 `PC`, 끝나면 창이 멈춰 요약을 보여 줌).
 
 ## 베타 기능 점검과 Gemma 종합 테스트

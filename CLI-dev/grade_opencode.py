@@ -5,7 +5,7 @@
     python grade_opencode.py --export <대화.json> [<대화2.json> ...] [--label 회사PC] [--judge]
     python grade_opencode.py --runs <기록 폴더> [--label 회사PC]   # run_all_tests.py --gemma가 남긴 opencode run 기록(<ID>.jsonl)
 메시지 팩 다시 만들기 (agent_scenarios.yaml을 고친 뒤):
-    python grade_opencode.py --make-pack [--dir C:\\ml_beta\\agent]
+    python grade_opencode.py --make-pack [--dir C:\\CLI-dev\\work\\gemma]
 
 대화 내보내기: PowerShell에서 `cmd /c "opencode export <세션ID> > chat.json"`
   (cmd의 `>`는 opencode가 쓴 UTF-8 바이트를 그대로 저장한다. PowerShell 5.1의 `| Out-File`이나 `>`는 출력을

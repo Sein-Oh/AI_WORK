@@ -6,7 +6,7 @@
 #   python grade_opencode.py --export <OpenCode에서 내보낸 대화.json> [--label 회사PC] [--judge]
 #
 # 각 메시지는 "[ID] " 로 시작한다. 채점기는 이 표시로 요청을 찾는다 (표시가 없는 사용자 메시지는 앞 요청에 이어진 대화로 본다).
-# {DIR} 는 메시지 팩을 만들 때 시험 폴더(기본 C:\ml_beta\agent)로 바뀐다.
+# {DIR} 는 메시지 팩을 만들 때 시험 폴더(기본 C:\CLI-dev\work\gemma)로 바뀐다. run_all_tests.py --gemma도 같은 폴더를 쓴다.
 #
 # 시나리오 항목
 #   message       : 붙여넣을 요청 문장
@@ -23,7 +23,7 @@
 #                   (결과 "통과(참고)"/"실패(참고)"). 자유 문장 답이라 정규식으로 다 가릴 수 없는 시나리오용.
 #                   최종 판정은 --judge 점수나 사람이 답변을 읽고 정한다. 명령·금지 규칙 위반은 그대로 실패다.
 
-dir: 'C:\ml_beta\agent'
+dir: 'C:\CLI-dev\work\gemma'
 
 # 공통 규칙: 모든 시나리오에 적용 (allow로 끌 수 있다)
 rules:

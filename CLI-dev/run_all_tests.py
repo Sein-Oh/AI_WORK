@@ -509,9 +509,13 @@ def parse_beta_report(text):
     return npass, fails, skips
 
 
+def work_root():
+    """모든 시험 폴더의 부모: 이 파일 옆 work (C:\\CLI-dev\\work). CLI-dev를 지우면 시험 흔적도 함께 사라집니다."""
+    return os.path.join(HERE, "work")
+
+
 def beta_work_dir(stamp):
-    base = r"C:\ml_beta" if os.name == "nt" else os.path.join(tempfile.gettempdir(), "ml_beta")
-    return os.path.join(base, f"check_{stamp}")
+    return os.path.join(work_root(), f"beta_{stamp}")
 
 
 def step_beta(stage, args, ctx):
@@ -643,7 +647,7 @@ def step_office(stage, args, ctx):
     else:
         code, out, sec, stop = run_capture(cmd, folder, args.timeout)
     stage.details.append((f"러너 화면 출력 (exit {code}, {sec}초)", f"$ {' '.join(cmd)}\n{out[-20000:]}"))
-    test_dir = args.office_dir or r"C:\office_test"
+    test_dir = args.office_dir or os.path.join(work_root(), "office")
     errs = _newer(os.path.join(test_dir, "errors_*.txt"), start)
     reps = _newer(os.path.join(test_dir, "report_*.txt"), start)
     if errs:
@@ -679,7 +683,7 @@ def step_ml(stage, args, ctx):
         _attach(stage, os.path.basename(logs[-1]), logs[-1])
     else:
         stage.fail(f"러너 로그 없음 (exit {code})")
-    test_dir = args.ml_dir or r"C:\ml_test\ml 테스트"
+    test_dir = args.ml_dir or os.path.join(work_root(), "ml 테스트")
     for p in _newer(os.path.join(test_dir, "report_*.txt"), start):
         _attach(stage, os.path.basename(p), p)
     if stop:
@@ -787,7 +791,7 @@ def step_gemma(stage, args, ctx):
     except Exception as e:                                       # PyYAML 없음 등
         stage.env_skip(f"시나리오를 읽지 못함 ({type(e).__name__}: {e})")
         return
-    test_dir = args.gemma_dir or spec["dir"]
+    test_dir = args.gemma_dir or os.path.join(work_root(), "gemma")
     if os.path.exists(test_dir):                                 # 이전 모델이 남으면 버전 번호가 달라짐: 지우지 않고 이름만 바꿈
         old = f"{test_dir}_old_{ctx['stamp']}"
         try:
@@ -796,7 +800,7 @@ def step_gemma(stage, args, ctx):
         except OSError as e:
             stage.fail(f"이전 시험 폴더를 옮기지 못함 ({test_dir}: {e}). 열린 파일을 닫고 다시 실행하세요.")
             return
-    runs = os.path.join(os.path.dirname(test_dir.rstrip("\\/")) or HERE, f"gemma_runs_{ctx['stamp']}")
+    runs = os.path.join(work_root(), f"gemma_runs_{ctx['stamp']}")
     os.makedirs(runs, exist_ok=True)
     if is_elevated():
         stage.unverified.append("관리자 권한 창에서 실행함: opencode가 열린 Office 문서를 못 볼 수 있음 (일반 PowerShell 권장)")
@@ -853,12 +857,12 @@ def main(argv=None):
     p.add_argument("--only", help="실행할 단계 (쉼표로): diag,pytest,beta,ml,office,gemma (기본: diag,pytest,beta,office)")
     p.add_argument("--gemma", action="store_true", help="기본 단계 끝에 Gemma 종합 테스트(opencode run)를 더함")
     p.add_argument("--opencode", help=r"opencode 실행 파일 (기본: PATH의 opencode, 없으면 C:\CLI\opencode.exe)")
-    p.add_argument("--gemma-dir", help=r"gemma 단계 시험 폴더 (기본: agent_scenarios.yaml의 dir, C:\ml_beta\agent)")
+    p.add_argument("--gemma-dir", help=r"gemma 단계 시험 폴더 (기본 C:\CLI-dev\work\gemma)")
     p.add_argument("--gemma-timeout", type=int, default=900, help="gemma 단계 요청 하나의 시간 상한(초, 기본 900)")
     p.add_argument("--ask", action="store_true", help="office 단계의 눈 확인 질문(y/n)에 답하면서 진행 (기본: 질문 없음)")
     p.add_argument("--outlook", action="store_true", help="office 단계에서 Outlook(G그룹)도 시험 (기본: 건너뜀)")
-    p.add_argument("--ml-dir", help=r"ml 단계 시험 폴더 (기본 C:\ml_test\ml 테스트)")
-    p.add_argument("--office-dir", help=r"office 단계 시험 폴더 (기본 C:\office_test)")
+    p.add_argument("--ml-dir", help=r"ml 단계 시험 폴더 (기본 C:\CLI-dev\work\ml 테스트)")
+    p.add_argument("--office-dir", help=r"office 단계 시험 폴더 (기본 C:\CLI-dev\work\office)")
     p.add_argument("--timeout", type=int, default=3600, help="단계별 시간 상한(초, 기본 3600)")
     args = p.parse_args(argv)
     chosen = [s.strip().lower() for s in (args.only or ",".join(DEFAULT_STAGES)).split(",") if s.strip()]

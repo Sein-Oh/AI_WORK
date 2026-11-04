@@ -308,7 +308,7 @@ def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc,
     assert all(c[c.index("--session") + 1] == "ses_fake1" for c in calls[1:])      # 같은 세션에 이어서
     assert calls[0][-1].startswith("[S0] ") and str(work) in calls[0][-1] and "{DIR}" not in calls[0][-1]
     assert not work.exists() and any(p.name.startswith("agent_old_") for p in work.parent.iterdir())   # 지우지 않고 옮김
-    runs = next(p for p in work.parent.iterdir() if p.name.startswith("gemma_runs_"))
+    runs = next(p for p in (iso / "work").iterdir() if p.name.startswith("gemma_runs_"))   # 시험 흔적은 모두 CLI-dev\work
     assert {f"{s}.jsonl" for s in order} <= {p.name for p in runs.iterdir()}
     assert any(p.name.startswith("grade_t_") and p.suffix == ".md" for p in runs.iterdir())
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
@@ -325,6 +325,20 @@ def test_gemma_stage_stops_when_opencode_gives_no_session(iso, fake_oc, monkeypa
     assert len(_calls(fake_oc)) == 1                            # 첫 요청에서 멈춤 (나머지 20개를 기다리지 않음)
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
     assert "opencode가 응답하지 않음" in text and "provider not found" in text
+
+
+def test_all_test_folders_default_under_cli_dev_work(iso):
+    """반입 때 C:\\CLI-dev를 통째로 지우면 시험 흔적도 사라지도록 기본 시험 폴더는 모두 CLI-dev\\work 아래."""
+    work = str(iso / "work")
+    assert rat.work_root() == work and rat.beta_work_dir("s").startswith(work)
+    import yaml
+    with open(os.path.join(os.path.dirname(HERE), "agent_scenarios.yaml"), encoding="utf-8") as f:
+        assert yaml.safe_load(f)["dir"] == "C:\\CLI-dev\\work\\gemma"
+    for rel in ("run_beta_check.py", os.path.join("office-cli", "tools", "run_win_tests.py"),
+                os.path.join("ml-kit", "tools", "run_win_tests.py"), "run_all_tests.py"):
+        with open(os.path.join(os.path.dirname(HERE), rel), encoding="utf-8") as f:
+            text = f.read()
+        assert not any(old in text for old in ("ml_beta", "ml_test", "office_test\"", "gemma_test")), rel
 
 
 def test_gemma_is_opt_in_and_env_skip_without_opencode(iso, monkeypatch, capsys):

@@ -81,7 +81,8 @@
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
-1. 준비: `C:\CLI`, `C:\CLI-dev`, OpenCode 스킬(`SKILL.md` 2개), 전역 지침(`docs/opencode/AGENTS.md`)을 새 파일로 바꾸고 OpenCode 다시 시작
+1. 준비: `C:\CLI\ml-kit`, `C:\CLI\office-cli`, `C:\CLI-dev`를 지우고 새로 붙여넣음(`C:\CLI\python`, `opencode.exe`는 둠).
+   시험 폴더는 모두 `C:\CLI-dev\work\` 아래라 함께 지워짐. OpenCode 스킬(`SKILL.md` 2개), 전역 지침(`docs/opencode/AGENTS.md`)을 새 파일로 바꾸고 OpenCode 다시 시작
 2. 자동 점검 (명령 하나, 질문 없음, 40~70분):
    ```powershell
    cd C:\CLI-dev
@@ -89,10 +90,10 @@
    ```
    - 환경 진단 -> pytest -> ml-kit 베타 점검(F7 엑셀 재계산 포함) -> office-cli 실기 러너 -> 도구 오류 로그. 결과는 `result_회사PC_<시각>.md` 하나
    - 맨 위 요약 표와 실패·ENV-SKIP·UNVERIFIED 목록을 봄. 베타 점검 F2(보고서·성능예측표 같은 폴더)와 F7을 꼭 확인
-3. Gemma 종합 테스트(선택): `docs/opencode/자동테스트/` 메시지를 보내고, 내보낸 대화를 `python C:\CLI-dev\grade_opencode.py --export chat.json --label 회사PC`로 채점
+3. Gemma 종합 테스트(선택): 2의 명령에 `--gemma` (일반 권한 창). 시나리오를 `opencode run`으로 보내고 채점해 같은 결과 파일에 넣음
 4. 눈 확인 10줄: 성능예측표(범위 밖 표시, 파이썬 없는 PC에서 문서 보안 아래 열기), Word `.md` 쓰기의 구분선, 엑셀 `read --formulas`·`--where`(날짜 칸),
    `range sort`·`insert`, relay 전달 실패 때 클립보드·되돌리기, Outlook `--days`(날짜 조건 형식, 1.4.37 남은 할 일)와 `attachments --save`
-5. `result_회사PC_<시각>.md`, (Gemma를 했으면) `grade_회사PC_<시각>.md`, 눈 확인 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림
+5. `result_회사PC_<시각>.md`, 눈 확인 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림
 
 회사 PC에서만 확인할 수 있는 것: 문서 보안(DRM) 영향, Office 16 차트 전달 방식, Gemma의 요청 처리, 사내 API 채점(`--judge`).
 
