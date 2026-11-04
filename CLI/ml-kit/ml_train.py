@@ -571,6 +571,50 @@ def duplicate_warning(target_name: str, n_dup: int, n_rows: int, note: Optional[
             f"{how} 중복이 실수라면 데이터에서 지우십시오.")
 
 
+# Candidate models of a target are saved one by one and the clock is checked before each: a single slow target is
+# split at the time limit too (R10; the check before a target cannot protect the first target of a run, and the time
+# of a target finished from saved candidates says little about the next one). <resume>.m<k>.joblib holds candidate k;
+# the same command run again reuses them.
+RUN_MODEL_SECONDS: List[float] = []
+
+
+def _candidate_path(resume: Optional[str], m_idx: int) -> Optional[str]:
+    return f"{resume}.m{m_idx}.joblib" if resume else None
+
+
+def _candidate_load(resume: Optional[str], m_idx: int) -> Optional[Tuple[Any, ...]]:
+    path = _candidate_path(resume, m_idx)
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        res = joblib.load(path)
+        if isinstance(res, tuple):
+            return res
+    except Exception:
+        pass
+    try:                                       # damaged saved candidate: drop it and train again (JIT: rebuilt)
+        os.remove(path)
+    except OSError:
+        pass
+    sys.stderr.write(f"[WARN] 저장된 중간 학습 결과 {os.path.basename(path)}를 읽지 못해 다시 학습합니다\n")
+    return None
+
+
+def _candidate_check(resume: Optional[str], target_name: str, done: int, total: int, what: str) -> None:
+    """Clock check before the next candidate (or the final fit) of a target: only after some candidate was trained in
+    this command (every run moves on: a candidate, or the final fit of a target whose candidates were all saved)."""
+    if resume and RUN_MODEL_SECONDS:
+        check_time(max(RUN_MODEL_SECONDS) * 1.2,
+                   f"학습: 타겟 '{target_name}' 후보 모델 {done}/{total}개 끝남, 저장됨 ({what} 전에 멈춤)")
+
+
+def _candidate_save(resume: Optional[str], m_idx: int, res: Tuple[Any, ...], seconds: float) -> None:
+    if not resume:
+        return
+    RUN_MODEL_SECONDS.append(seconds)
+    _resume_save(_candidate_path(resume, m_idx), res)
+
+
 def train_and_benchmark_models(
     X: pd.DataFrame,
     y_series: pd.Series,
@@ -578,7 +622,8 @@ def train_and_benchmark_models(
     schema: Dict[str, Any],
     seed: int = 42,
     log_offset: int = 20,
-    log_weight: int = 50
+    log_weight: int = 50,
+    resume: Optional[str] = None
 ) -> Tuple[Dict[str, Any], Any, Dict[str, Any]]:
     """
     Performs 5-Fold Leakage-Free Cross-Validation across the 5 models.
@@ -618,6 +663,13 @@ def train_and_benchmark_models(
     model_oof_map = {}
 
     for m_idx, (model_name, regressor) in enumerate(models.items()):
+        saved = _candidate_load(resume, m_idx)
+        if saved is not None and saved[0] == model_name:
+            model_oof_map[model_name] = saved[2]
+            leaderboard.append(saved[1])
+            continue
+        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'")
+        t_model = time.monotonic()
         oof_preds = np.zeros(len(y))
         train_r2_list = []
         params = {}
@@ -648,6 +700,7 @@ def train_and_benchmark_models(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_preds), time.monotonic() - t_model)
 
     # Sort leaderboard by val_r2 descending
     leaderboard.sort(key=lambda item: item["val_r2"], reverse=True)
@@ -671,6 +724,7 @@ def train_and_benchmark_models(
     }
 
     # Fit Champion Model on 100% of data
+    _candidate_check(resume, target_name, model_count, model_count, "1위 모델 전체 적합")
     log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
     final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "regressor")
     final_pipeline.fit(X, y)
@@ -813,7 +867,8 @@ def train_and_benchmark_classifiers(
     seed: int = 42,
     log_offset: int = 20,
     log_weight: int = 50,
-    positive_class: Optional[str] = None
+    positive_class: Optional[str] = None,
+    resume: Optional[str] = None
 ) -> Tuple[Dict[str, Any], Any, Dict[str, Any]]:
     """
     Stratified K-Fold competition of 5 classifiers. Champion = highest Out-of-Fold Macro-F1
@@ -887,6 +942,13 @@ def train_and_benchmark_classifiers(
     model_proba_map: Dict[str, np.ndarray] = {}
 
     for m_idx, (model_name, clf) in enumerate(models.items()):
+        saved = _candidate_load(resume, m_idx)
+        if saved is not None and saved[0] == model_name:
+            model_oof_map[model_name], model_proba_map[model_name] = saved[2], saved[3]
+            leaderboard.append(saved[1])
+            continue
+        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'")
+        t_model = time.monotonic()
         oof_pred = np.empty(len(y), dtype=object)
         oof_proba = np.zeros((len(y), len(classes)))
         train_f1_list = []
@@ -924,6 +986,7 @@ def train_and_benchmark_classifiers(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_pred, oof_proba), time.monotonic() - t_model)
 
     leaderboard.sort(key=lambda item: item["val_f1_macro"], reverse=True)
     for rank, entry in enumerate(leaderboard, 1):
@@ -955,6 +1018,7 @@ def train_and_benchmark_classifiers(
         for c in classes
     }
 
+    _candidate_check(resume, target_name, model_count, model_count, "1위 모델 전체 적합")
     log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
     final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "classifier")
     final_pipeline.fit(X, y)
@@ -1744,6 +1808,11 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
 # ------------------------------------------------------------------------------
 RESUME_DIR = ".resume_train"
 RESUME_MAX_AGE = 3 * 24 * 3600     # saved targets of runs never continued are removed after this many seconds
+BEST_RUN_FILE = "best_run.json"    # in RESUME_DIR: the best versions a split --best run already made ({task: version})
+
+# Seconds of every target trained in this command (all tasks of --best, ml_report -f retraining): the clock check
+# before a new target uses them, so the first target of the second task is checked too.
+RUN_FIT_SECONDS: List[float] = []
 
 
 def _resume_key(task: str, target: str, X: pd.DataFrame, y: pd.Series, schema: Dict[str, Any], seed: int,
@@ -1792,7 +1861,8 @@ def _resume_cleanup(resume_dir: str, used: List[str]) -> None:
     for name in os.listdir(resume_dir):
         p = os.path.join(resume_dir, name)
         try:
-            if p in used or now - os.path.getmtime(p) > RESUME_MAX_AGE:
+            # a finished target and its saved candidates (<key>.m<k>.joblib), or an old one
+            if p in used or p.rsplit(".m", 1)[0] + ".joblib" in used or now - os.path.getmtime(p) > RESUME_MAX_AGE:
                 os.remove(p)
         except OSError:
             pass
@@ -1913,7 +1983,6 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         total_targets = len(target_names)
         resume_dir = os.path.join(data_root, RESUME_DIR)
         resume_used: List[str] = []
-        fit_seconds: List[float] = []
         reused_targets: List[str] = []
         for t_idx, target_name in enumerate(target_names):
             g = target_group[target_name]
@@ -1957,8 +2026,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 reused_targets.append(target_name)
                 sys.stderr.write(f"[INFO] 타겟 '{target_name}': 이전 실행에서 저장한 학습 결과를 씀 (나눠서 진행)\n")
             else:
-                if fit_seconds:     # at least one new target per run: running again always moves on
-                    check_time(max(fit_seconds) * 1.2,
+                if RUN_FIT_SECONDS:     # at least one new target per run: running again always moves on
+                    check_time(max(RUN_FIT_SECONDS) * 1.2,
                                f"학습: 타겟 {t_idx}/{total_targets}개 끝남, 저장됨 ('{target_name}' 학습 전에 멈춤)")
                 t_fit = time.monotonic()
                 t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
@@ -1969,9 +2038,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     seed=args.seed,
                     log_offset=t_offset,
                     log_weight=t_weight,
+                    resume=r_path[:-len(".joblib")],
                     **extra
                 )
-                fit_seconds.append(time.monotonic() - t_fit)
+                RUN_FIT_SECONDS.append(time.monotonic() - t_fit)
                 if total_targets > 1:
                     _resume_save(r_path, (t_bench, champion_pipe, champion_info, oof_df))
             resume_used.append(r_path)
@@ -2607,23 +2677,82 @@ def best_summary(version_result: Dict[str, Any]) -> Dict[str, Any]:
             **({"warnings": version_result["warnings"]} if version_result.get("warnings") else {})}
 
 
+def _best_run_load(data_root: str, raw_file: str) -> Dict[str, str]:
+    """{task: version} of the best versions an earlier run of this --best command made before it stopped (CONTINUE)."""
+    path = os.path.join(data_root, RESUME_DIR, BEST_RUN_FILE)
+    try:
+        if time.time() - os.path.getmtime(path) > RESUME_MAX_AGE:
+            return {}
+        info = load_json_file(path)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(info, dict) or info.get("file") != os.path.normcase(raw_file):
+        return {}
+    return {str(k): str(v) for k, v in (info.get("done") or {}).items()}
+
+
+def _best_run_save(data_root: str, raw_file: str, done: Dict[str, str]) -> None:
+    path = os.path.join(data_root, RESUME_DIR, BEST_RUN_FILE)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        atomic_write_text(path, dumps_json({"file": os.path.normcase(raw_file), "done": done}))
+    except Exception as e:                     # not saved only means a continued run builds that task again
+        sys.stderr.write(f"[WARN] 나눠 진행 기록을 저장하지 못했습니다: {type(e).__name__}: {e}\n")
+
+
+def _best_run_clear(data_root: str) -> None:
+    resume_dir = os.path.join(data_root, RESUME_DIR)
+    try:
+        os.remove(os.path.join(resume_dir, BEST_RUN_FILE))
+        if not os.listdir(resume_dir):
+            os.rmdir(resume_dir)
+    except OSError:
+        pass
+
+
+def _best_record_summary(data_root: str, rec: Dict[str, Any], task: str) -> Dict[str, Any]:
+    """The --best result entry of a best version an earlier run of the same command made (not built again)."""
+    sources = rec.get("best_source") or {}
+    best_targets = {}
+    for t in rec.get("targets", []):
+        src = sources.get(t) or {"version": rec["version"], "score": _target_score(rec, t)}
+        best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
+                           "new_score": _target_score(rec, t)}
+    return {"task": task, "version": rec["version"], "version_dir": os.path.join(data_root, rec["version"]),
+            "targets": list(rec.get("targets", [])), "mean_val_score": rec.get("mean_val_score"),
+            "best_targets": best_targets, "reused_best": True}
+
+
 def execute_make_best(args: argparse.Namespace) -> Dict[str, Any]:
-    """ml_train.py --best: builds one best version per task (always retrains)."""
+    """ml_train.py --best: builds one best version per task (always retrains). A run split by the time limit (R10)
+    remembers the best versions it made (.resume_train/best_run.json); the same command run again keeps those that
+    are still fresh (best_is_fresh) and goes on with the next task, so no best version is made twice."""
     raw_file = os.path.abspath(args.file)
     if not os.path.exists(raw_file):
         raise FileNotFoundError(f"입력 파일이 존재하지 않습니다: {raw_file}")
     data_root, records = _ledger_for(raw_file)
     tasks = _tasks_to_build(records, getattr(args, "task", None), os.path.join(data_root, "history.jsonl"))
+    done = _best_run_load(data_root, raw_file) if len(tasks) > 1 else {}
     built = []
-    for task in tasks:
+    for i, task in enumerate(tasks):
+        rec = best_is_fresh(records, data_root, raw_file, task) if task in done else None
+        if rec is not None and str(rec.get("version")) == done[task]:
+            sys.stderr.write(f"[INFO] 이전 실행에서 만든 최고 버전 {rec['version']} ({task})을(를) 그대로 씁니다 (나눠서 진행)\n")
+            built.append(_best_record_summary(data_root, rec, task))
+            continue
         built.append(build_best_version(args, task, records))
         records = load_history_ledger(os.path.join(data_root, "history.jsonl"))
+        if i < len(tasks) - 1:
+            done[task] = str(built[-1]["version"])
+            _best_run_save(data_root, raw_file, done)
+    _best_run_clear(data_root)
     return combine_best_results(built)
 
 
 def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Result JSON of --best: the first version's training keys plus best_* keys covering every task."""
-    result = dict(built[0])
+    """Result JSON of --best: the first built version's training keys plus best_* keys covering every task (a best
+    version kept from an earlier run of a split command has only its summary)."""
+    result = dict(next((b for b in built if not b.get("reused_best")), built[0]))
     summaries = [best_summary(b) for b in built]
     best_targets: Dict[str, Any] = {}
     top_features: Dict[str, Any] = {}

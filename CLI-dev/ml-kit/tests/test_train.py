@@ -1285,7 +1285,7 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     root = tmp_path / "s_ml_data"
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 0.5 s after the reserve: one new target per run
     runs = []
-    for _ in range(6):
+    for _ in range(30):
         proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", SPLIT_Y, "--desc", "나눠 학습")
         assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
         runs.append(out)
@@ -1294,10 +1294,13 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
         # nothing is written twice: no version folder, no ledger record until the run that ends
         assert not (root / "history.jsonl").exists() and not (root / "v1").exists()
         assert "[WARN] 비정상 중단" not in proc.stderr
-    assert len(runs) == 3 and all(r.get("continue") for r in runs[:-1]), [r.get("progress") for r in runs]
+    progress = [r.get("progress") or "" for r in runs]
+    assert len(runs) >= 3 and all(r.get("continue") for r in runs[:-1]), progress
     first, last = runs[0], runs[-1]
     assert first["agent_directive"].startswith("CONTINUE:") and first["verified"] is False
-    assert "타겟 1/3개 끝남" in first["progress"] and "타겟 2/3개 끝남" in runs[1]["progress"]
+    # every target is split by candidate model (2.9.60) and the run stops before the next one
+    assert "후보 모델" in first["progress"] and "5개 끝남" in first["progress"], progress
+    assert any("'수분함량(%)'" in t for t in progress) and any("'촉매비율(wt%)'" in t for t in progress), progress
     cmd = first["next_commands"][0]
     assert cmd.startswith("python ") and "ml_train.py" in cmd and "--desc" in cmd
     assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
@@ -1309,6 +1312,56 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
 
 
+def _split_runs(monkeypatch, *argv, limit=12):
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 0.5 s after the reserve: one new step per run
+    runs = []
+    for _ in range(limit):
+        proc, out = run_raw("ml_train.py", *argv)
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    assert all(r.get("continue") for r in runs[:-1]) and not runs[-1].get("continue"), [r.get("progress") for r in runs]
+    return runs
+
+
+def test_single_target_is_split_by_candidate_model(tmp_path, monkeypatch):
+    """2.9.59: 타겟이 1개면 나눌 곳이 없어 오래 걸리면 JSON 없이 끊겼다. 이제 후보 모델마다 저장하고 멈춘다."""
+    ref = make_sample(str(tmp_path / "ref.csv"))
+    want = run_tool("ml_train.py", "-f", ref, "-x", SPLIT_X, "-y", "생산효율(%)")
+    data = make_sample(str(tmp_path / "one.csv"))
+    root = tmp_path / "one_ml_data"
+    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", "생산효율(%)")
+    assert len(runs) >= 3, [r.get("progress") for r in runs]
+    assert "후보 모델" in runs[0]["progress"] and "5개 끝남" in runs[0]["progress"], runs[0]["progress"]
+    assert any("1위 모델 전체 적합 전에 멈춤" in (r.get("progress") or "") for r in runs), [r.get("progress") for r in runs]
+    last = runs[-1]
+    assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
+    assert last["mean_val_score"] == pytest.approx(want["mean_val_score"], abs=1e-9)   # the same models as one run
+    assert not (root / ".resume_train").exists()
+
+
+def test_best_continue_skips_finished_task_and_checks_time(tmp_path, monkeypatch):
+    """2.9.59: --best를 CONTINUE로 나누면 이미 만든 회귀 최고 버전을 다시 만들어 원장에 중복되었고,
+    두 번째 작업 유형의 첫 타겟은 시간 확인 없이 학습했다."""
+    data = make_class_sample(str(tmp_path / "b.csv"))
+    root = tmp_path / "b_ml_data"
+    run_tool("ml_train.py", "-f", data, "-x", "촉매비율(wt%)", "-y", "수분함량(%),반응온도(°C)")
+    run_tool("ml_train.py", "-f", data, "-x", "반응온도(°C),촉매비율(wt%),수분함량(%)", "-y", "품질등급,불량여부",
+             "--task", "classification")
+    runs = _split_runs(monkeypatch, "-f", data, "--best", limit=40)
+    progress = [r.get("progress") or "" for r in runs]
+    # the first classification target waits for the clock too (it was trained without a check)
+    assert any("'품질등급' 후보 모델" in t or "'불량여부' 후보 모델" in t for t in progress), progress
+    hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
+    assert [h["version"] for h in hist] == ["v1", "v2", "v3", "v4"], [h["version"] for h in hist]
+    assert [mt._record_task(h) for h in hist if h.get("best")] == ["regression", "classification"]
+    last = runs[-1]
+    assert last["agent_directive"].startswith("VERIFIED") and last["made_best"] is True
+    assert [b["version"] for b in last["best_versions"]] == ["v3", "v4"], last["best_versions"]
+    assert not (root / ".resume_train").exists()
+
+
 def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):
     data = make_sample(str(tmp_path / "d.csv"))
     root = tmp_path / "d_ml_data"
@@ -1316,8 +1369,9 @@ def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):
     proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
     assert out.get("continue"), out
     saved = os.listdir(root / ".resume_train")
-    assert len(saved) == 1
-    (root / ".resume_train" / saved[0]).write_bytes(b"broken")
+    assert saved and all(".m" in n for n in saved), saved          # the first target's candidates (2.9.60)
+    for n in saved:
+        (root / ".resume_train" / n).write_bytes(b"broken")
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
     assert out["status"] == "ok" and out["version"] == "v1" and "resumed_targets" not in out, out

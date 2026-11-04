@@ -976,7 +976,7 @@ def test_report_best_retraining_continues(tmp_path, monkeypatch):
     run_tool("ml_train.py", "-f", data, "-x", "반응온도,압축압력", "-y", "수분함량")
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
     runs = []
-    for _ in range(6):
+    for _ in range(30):         # 2.9.61: split by candidate model too, more runs
         proc, out = run_raw("ml_report.py", "-f", data, "--save", str(tmp_path / "r.docx"))
         assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
         runs.append(out)

@@ -8,6 +8,24 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.61] - 2026-11-04
+
+학습 나눠 진행(R10) 버그 수정 (`ml_train.py`). 회귀 테스트는 수정 전 실패를 확인했습니다(단일 타겟은 새 동작).
+
+### 버그 수정
+- [중요] `--best`를 `CONTINUE`로 나눌 때, 회귀 최고 버전을 만든 뒤 분류 작업 유형에서 멈추면 다음 실행이 회귀 최고 버전을 다시 만들어 원장에
+  중복(v3, v5)되었음. 이제 만든 최고 버전을 `.resume_train/best_run.json`에 적고, 이어 실행 때 그 버전이 `best_is_fresh`면 건너뜀
+  (결과의 `best_versions`·`best_targets`에는 그대로 들어감). 다 끝나면 기록을 지움.
+- [중요] 타겟 학습 시간 기록(`fit_seconds`)이 `train_version` 호출마다 새로 시작해, 두 번째 작업 유형의 첫 타겟은 시간 확인 없이 학습했음.
+  이제 명령 단위(`RUN_FIT_SECONDS`)라 `--best`와 `ml_report.py -f`(최고 버전 다시 학습)도 같은 확인.
+  테스트: `test_train.py` `test_best_continue_skips_finished_task_and_checks_time`.
+
+### 기능 (검토 항목 7)
+- 타겟이 1개면 나눌 곳이 없어 100초를 넘으면 JSON 없이 끊길 수 있었음. 후보 모델(5개)마다 교차검증 결과를 `.resume_train/<키>.m<번호>.joblib`에
+  저장하고 다음 후보와 1위 모델 전체 적합 전에 `check_time`(가장 오래 걸린 후보 x 1.2). 같은 명령을 다시 실행하면 저장된 후보를 씀.
+  결과(점수, 모델)는 한 번에 학습한 것과 같음. 성능예측표(`ml_export.py`)의 후보 학습은 이 저장을 쓰지 않음(자체 `_fits`).
+  테스트: `test_single_target_is_split_by_candidate_model`. 기존 나눠 진행 테스트 2개는 실행 횟수 대신 진행 문구와 결과로 확인.
+
 ## [2.9.60] - 2026-11-04
 
 독립 검토에서 나온 예측 쪽 버그 수정 (`ml_predict.py`, 학습의 `--exclude-where` 포함). 회귀 테스트는 수정 전 실패를 확인했습니다.
