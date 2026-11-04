@@ -113,7 +113,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
 | 메일 첨부 (`outlook.py attachments --save`) | `<다운로드>\메일 첨부\<시각>_<제목>` (자동 정리 안 함, En-Genius 실행도 같음, 1.4.34) | `--save "<전체경로 폴더>"` |
 
-- En-Genius 스킬(`docs/engenius/office-cli.zip`)은 `C:\CLI\office-cli`의 도구를 실행하므로 OpenCode와 같은 `data`, `cache`, `config.json`을 씁니다.
+- En-Genius 스킬(보관: `archive/engenius`)은 `C:\CLI\office-cli`의 도구를 실행하므로 OpenCode와 같은 `data`, `cache`, `config.json`을 씁니다.
   도구 파일 자체가 트레이의 임시 폴더(`%TEMP%\engenius-skill\<id>`)에서 실행될 때만(실행마다 지워짐) 기본 위치를
   `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli\`로 바꿉니다 (1.4.33, 1.4.35부터 이 경우만). 환경변수가 있으면 그것이 먼저입니다.
 

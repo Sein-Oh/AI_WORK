@@ -17,13 +17,13 @@ AI_WORK/
 │   ├── HANDOFF.md             # 작업 인계 (다른 PC·새 대화에서 이어 하기)
 │   ├── WINDOWS_OFFLINE.md     # 폐쇄망 wheel 반입/설치 가이드 (모든 도구 공통)
 │   ├── history/               # 지난 설계·검토 기록 (1.0 설계, 1차 지침 준수 검토)
-│   ├── engenius/              # 사내 에이전트 En-Genius 스킬 zip·에이전트 XML·설치 안내 (CLI-dev/engenius/build.py로 생성)
 │   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode/              # 사내 PC OpenCode 전역 AGENTS.md와 스킬 배치 안내, 실기 테스트 안내
 │   │   ├── 자동테스트/        # Gemma 종합 테스트 메시지 팩 (CLI-dev/agent_scenarios.yaml에서 생성)
 │   │   └── 실기테스트_샘플/   # 정답을 아는 샘플 데이터 (CLI-dev/ml-kit/tools/make_beta_samples.py)
 │   └── test_logs/             # 사내 PC 실기 결과 (GitHub 웹으로 업로드, 프로젝트 마무리 때 이력에서 정리)
 ├── archive/                   # 보관 도구 (수정·테스트 대상 아님, archive/README.md)
+│   ├── engenius/              # 사내 에이전트 En-Genius 스킬 패키지 (업데이트 중지, 필요할 때 다시 꺼냄)
 │   └── doc-classifier/        # 폴더 파일 목록화/분류 0.9.2 (다른 개발자 담당으로 보관)
 ├── CLI/                       # 사내 PC C:\CLI로 그대로 복사. 실행 파일과 SKILL.md만
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
@@ -45,7 +45,7 @@ AI_WORK/
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
     ├── agent_scenarios.yaml   # Gemma 종합 테스트 요청과 채점 기준
-    ├── tests/                 # 채점기·메시지 팩·En-Genius 패키지 테스트
+    ├── tests/                 # 채점기·메시지 팩 테스트
     ├── ml-kit/
     │   ├── README.md          # 상세 설명서
     │   ├── CHANGELOG.md       # 변경 이력 + 남은 할 일
