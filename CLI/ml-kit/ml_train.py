@@ -28,7 +28,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
-    parse_where, resolve_where, where_text, where_mask,
+    parse_where, resolve_where, where_text, where_mask, check_time, Unfinished, VERSION,
 )
 
 setup_console()
@@ -1122,8 +1122,9 @@ class TransactionGuard:
             except Exception as e:
                 sys.stderr.write(f"[WARN] 이전 버전 백업 폴더 정리 실패 (다음 학습 때 다시 안내): {e}\n")
 
-    def rollback(self) -> None:
-        """Undoes a run that was not finalized: staging folder, committed folder and parked backup."""
+    def rollback(self, quiet: bool = False) -> None:
+        """Undoes a run that was not finalized: staging folder, committed folder and parked backup.
+        quiet: a run stopped at the time limit (Unfinished, R10) is not an abnormal stop (no [WARN])."""
         if self.is_finalized:
             return
         try:
@@ -1134,7 +1135,8 @@ class TransactionGuard:
                 sys.stderr.write(f"[WARN] 비정상 중단: 기존 {self.version_str} 폴더를 되돌렸습니다\n")
             if self.tmp_dir and os.path.exists(self.tmp_dir):
                 remove_tree(self.tmp_dir)
-            sys.stderr.write(f"[WARN] 비정상 중단: 임시 스테이징 폴더 롤백 완료 ({self.tmp_dir})\n")
+            if not quiet:
+                sys.stderr.write(f"[WARN] 비정상 중단: 임시 스테이징 폴더 롤백 완료 ({self.tmp_dir})\n")
         except Exception:
             pass
 
@@ -1733,6 +1735,74 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
     return train_version(args, task, [group])
 
 
+# ------------------------------------------------------------------------------
+# Split execution (R10): the agent's command tool stops a command at 120 s. Every target whose 5-model competition
+# finished is saved in <data_root>/.resume_train/<key>.joblib (key = the exact training input: data, schema, task,
+# seed, tool and scikit-learn versions). Before the next target the clock is checked (check_time); a run that would
+# pass the limit stops with CONTINUE, leaving no version folder and no ledger record. The same command run again
+# reuses the saved targets and goes on; the version folder and history.jsonl are written once, by the run that ends.
+# ------------------------------------------------------------------------------
+RESUME_DIR = ".resume_train"
+RESUME_MAX_AGE = 3 * 24 * 3600     # saved targets of runs never continued are removed after this many seconds
+
+
+def _resume_key(task: str, target: str, X: pd.DataFrame, y: pd.Series, schema: Dict[str, Any], seed: int,
+                extra: Dict[str, Any]) -> str:
+    import hashlib
+    h = hashlib.sha1()
+    for part in (VERSION, sklearn.__version__, task, target, dumps_json(schema), seed, dumps_json(extra)):
+        h.update(str(part).encode("utf-8") + b"\x1e")
+    h.update(pd.util.hash_pandas_object(X, index=False).values.tobytes())
+    h.update(pd.util.hash_pandas_object(y.astype(object), index=False).values.tobytes())
+    return h.hexdigest()[:32]
+
+
+def _resume_load(path: str) -> Optional[Tuple[Any, Any, Any, Any]]:
+    if not os.path.isfile(path):
+        return None
+    try:
+        res = joblib.load(path)
+        if isinstance(res, tuple) and len(res) == 4:
+            return res
+    except Exception:
+        pass
+    try:                                       # damaged saved target: drop it and train again (JIT: rebuilt)
+        os.remove(path)
+    except OSError:
+        pass
+    sys.stderr.write(f"[WARN] 저장된 중간 학습 결과 {os.path.basename(path)}를 읽지 못해 다시 학습합니다\n")
+    return None
+
+
+def _resume_save(path: str, res: Tuple[Any, Any, Any, Any]) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        joblib.dump(res, tmp)
+        retry_fs(lambda: os.replace(tmp, path))
+    except Exception as e:                     # not saved only means a later run trains this target again
+        sys.stderr.write(f"[WARN] 중간 학습 결과를 저장하지 못했습니다 (나눠 진행하면 다시 학습): {type(e).__name__}: {e}\n")
+
+
+def _resume_cleanup(resume_dir: str, used: List[str]) -> None:
+    """Removes the saved targets of this (finished) run and those older than RESUME_MAX_AGE."""
+    if not os.path.isdir(resume_dir):
+        return
+    now = time.time()
+    for name in os.listdir(resume_dir):
+        p = os.path.join(resume_dir, name)
+        try:
+            if p in used or now - os.path.getmtime(p) > RESUME_MAX_AGE:
+                os.remove(p)
+        except OSError:
+            pass
+    try:
+        if not os.listdir(resume_dir):
+            os.rmdir(resume_dir)
+    except OSError:
+        pass
+
+
 def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]],
                   best_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
@@ -1841,6 +1911,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         benchmark_fn = train_and_benchmark_models if task == TASK_REGRESSION else train_and_benchmark_classifiers
 
         total_targets = len(target_names)
+        resume_dir = os.path.join(data_root, RESUME_DIR)
+        resume_used: List[str] = []
+        fit_seconds: List[float] = []
+        reused_targets: List[str] = []
         for t_idx, target_name in enumerate(target_names):
             g = target_group[target_name]
             t_offset = 25 + int(55 * t_idx / total_targets)
@@ -1874,16 +1948,33 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     entry = unparsed.setdefault(c, {"rows": set(), "examples": []})
                     entry["rows"].update(pos)
                     entry["examples"] += [v for v in ex if v not in entry["examples"]]
-            t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
-                X=g["X"],
-                y_series=y_full.mask(plan["mask"]),
-                target_name=target_name,
-                schema=g["schema"],
-                seed=args.seed,
-                log_offset=t_offset,
-                log_weight=t_weight,
-                **extra
-            )
+            y_train = y_full.mask(plan["mask"])
+            r_path = os.path.join(resume_dir, _resume_key(task, target_name, g["X"], y_train, g["schema"], args.seed,
+                                                          extra) + ".joblib")
+            cached = _resume_load(r_path)
+            if cached is not None:
+                t_bench, champion_pipe, champion_info, oof_df = cached
+                reused_targets.append(target_name)
+                sys.stderr.write(f"[INFO] 타겟 '{target_name}': 이전 실행에서 저장한 학습 결과를 씀 (나눠서 진행)\n")
+            else:
+                if fit_seconds:     # at least one new target per run: running again always moves on
+                    check_time(max(fit_seconds) * 1.2,
+                               f"학습: 타겟 {t_idx}/{total_targets}개 끝남, 저장됨 ('{target_name}' 학습 전에 멈춤)")
+                t_fit = time.monotonic()
+                t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
+                    X=g["X"],
+                    y_series=y_train,
+                    target_name=target_name,
+                    schema=g["schema"],
+                    seed=args.seed,
+                    log_offset=t_offset,
+                    log_weight=t_weight,
+                    **extra
+                )
+                fit_seconds.append(time.monotonic() - t_fit)
+                if total_targets > 1:
+                    _resume_save(r_path, (t_bench, champion_pipe, champion_info, oof_df))
+            resume_used.append(r_path)
 
             if champion_info.get("duplicate_rows"):
                 train_warnings.append(duplicate_warning(target_name, champion_info["duplicate_rows"],
@@ -2240,6 +2331,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # The ledger never names a version folder that does not exist (a failed commit leaves no record).
         final_version_dir = guard.commit()
         append_history_ledger(ledger_path, history_record, on_recorded=guard.finalize)
+        _resume_cleanup(resume_dir, resume_used)
         unverified = verify_version_dir(final_version_dir, target_names, ledger_path, current_version)
         for u in unverified:
             sys.stderr.write(f"[WARN] 저장 확인 실패: {u}\n")
@@ -2326,6 +2418,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 result["excluded_rows_file"] = excluded_rows_file
         if excluded_rows_out:   # the rows and reasons in the JSON: the LLM never needs to open the CSV
             result.update(excluded_preview_keys(excluded_rows_out))
+        if reused_targets:   # trained by earlier runs of the same command (split execution, R10)
+            result["resumed_targets"] = reused_targets
         if column_aliases:
             result["column_aliases"] = column_aliases
         if unverified:
@@ -2337,9 +2431,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             result["full_result_file"] = os.path.join(data_root, "history.json")
         return result
 
-    except BaseException:
-        # Includes KeyboardInterrupt (Ctrl+C) so the staging folder never leaks
-        guard.rollback()
+    except BaseException as exc:
+        # Includes KeyboardInterrupt (Ctrl+C) so the staging folder never leaks. A stop at the time limit (Unfinished)
+        # leaves no version folder and no ledger record: the finished targets wait in .resume_train for the next run.
+        guard.rollback(quiet=isinstance(exc, Unfinished))
         raise
     finally:
         run_lock.release()

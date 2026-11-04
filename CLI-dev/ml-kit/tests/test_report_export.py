@@ -965,3 +965,26 @@ def test_time_limit_setting(monkeypatch):
     monkeypatch.setattr(mp, "RUN_START", mp.time.monotonic() - 5)
     with pytest.raises(mp.Unfinished):
         mp.check_time(0, "x")
+
+
+def test_report_best_retraining_continues(tmp_path, monkeypatch):
+    """2.9.57: the best-version retraining of ml_report.py -f is split like training (CONTINUE, same command)."""
+    pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    data = make_sample(str(tmp_path / "p.csv"))
+    run_tool("ml_train.py", "-f", data, "-x", "반응온도,소비전력,촉매비율", "-y", "생산효율")
+    run_tool("ml_train.py", "-f", data, "-x", "반응온도,압축압력", "-y", "수분함량")
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    runs = []
+    for _ in range(6):
+        proc, out = run_raw("ml_report.py", "-f", data, "--save", str(tmp_path / "r.docx"))
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    assert len(runs) >= 2 and runs[0]["agent_directive"].startswith("CONTINUE:"), runs[0]
+    assert "ml_report.py" in runs[0]["next_commands"][0]
+    last = runs[-1]
+    assert last["made_best"] is True and os.path.isfile(last["report_file"]), last
+    hist = [json.loads(ln) for ln in open(tmp_path / "p_ml_data" / "history.jsonl", encoding="utf-8")]
+    assert [h["version"] for h in hist] == ["v1", "v2", "v3"] and hist[-1].get("best") is True    # written once

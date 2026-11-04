@@ -1235,3 +1235,55 @@ def test_message_column_list_capped():
     with pytest.raises(mp.ColumnNameError) as e:                                # 2.9.48: all 100 names
         mp.resolve_column_names(["없는열zz"], cols, "피처(-x)")
     assert "외 60개" in str(e.value)
+
+
+# ---- 학습도 나눠서 진행 (R10, 2.9.57): 끝낸 타겟은 .resume_train에 저장, 같은 명령을 다시 실행하면 이어서 ----------------
+
+SPLIT_X = "반응온도(°C),소비전력(kW),압축압력(bar)"
+SPLIT_Y = "생산효율(%),수분함량(%),촉매비율(wt%)"
+
+
+def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, monkeypatch):
+    ref = make_sample(str(tmp_path / "ref.csv"))
+    want = run_tool("ml_train.py", "-f", ref, "-x", SPLIT_X, "-y", SPLIT_Y)         # no limit: one run
+    data = make_sample(str(tmp_path / "s.csv"))
+    root = tmp_path / "s_ml_data"
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 0.5 s after the reserve: one new target per run
+    runs = []
+    for _ in range(6):
+        proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", SPLIT_Y, "--desc", "나눠 학습")
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+        # nothing is written twice: no version folder, no ledger record until the run that ends
+        assert not (root / "history.jsonl").exists() and not (root / "v1").exists()
+        assert "[WARN] 비정상 중단" not in proc.stderr
+    assert len(runs) == 3 and all(r.get("continue") for r in runs[:-1]), [r.get("progress") for r in runs]
+    first, last = runs[0], runs[-1]
+    assert first["agent_directive"].startswith("CONTINUE:") and first["verified"] is False
+    assert "타겟 1/3개 끝남" in first["progress"] and "타겟 2/3개 끝남" in runs[1]["progress"]
+    cmd = first["next_commands"][0]
+    assert cmd.startswith("python ") and "ml_train.py" in cmd and "--desc" in cmd
+    assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
+    assert last["resumed_targets"] == ["생산효율(%)", "수분함량(%)"]
+    assert last["mean_val_score"] == pytest.approx(want["mean_val_score"], abs=1e-9)   # the same models as one run
+    hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
+    assert [h["version"] for h in hist] == ["v1"]
+    assert not (root / ".resume_train").exists()                                       # cleaned after the commit
+    assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
+
+
+def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):
+    data = make_sample(str(tmp_path / "d.csv"))
+    root = tmp_path / "d_ml_data"
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
+    assert out.get("continue"), out
+    saved = os.listdir(root / ".resume_train")
+    assert len(saved) == 1
+    (root / ".resume_train" / saved[0]).write_bytes(b"broken")
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
+    assert out["status"] == "ok" and out["version"] == "v1" and "resumed_targets" not in out, out
+    assert "다시 학습" in proc.stderr

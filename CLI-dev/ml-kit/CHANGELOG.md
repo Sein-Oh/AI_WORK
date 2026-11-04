@@ -8,6 +8,26 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.57] - 2026-11-04
+
+학습도 나눠서 진행 (CLI-dev/README.md R10 `CONTINUE:`). 회사 PC Gemma 시험 R1, R2처럼 타겟이 여러 개인 학습은 120초를 넘겨 결과 JSON 없이
+끊기고 에이전트가 같은 명령을 처음부터 반복했음. 회귀 테스트: `tests/test_train.py`
+`test_training_stops_at_time_limit_and_the_same_command_continues`, `test_damaged_saved_target_is_trained_again`,
+`tests/test_report_export.py` `test_report_best_retraining_continues` (2.9.56에서 3개 모두 실패: 시간 제한을 보지 않음).
+
+### 바뀐 동작
+- `ml_train.py`(일반 학습, `--best`)와 `ml_report.py -f`의 최고 버전 다시 학습: 타겟이 2개 이상이면 5개 모델 경쟁을 마친 타겟마다
+  `<데이터>_ml_data/.resume_train/<키>.joblib`에 저장하고, 다음 타겟을 학습하기 전에 시계를 봅니다
+  (`check_time`, 이번 실행에서 가장 오래 걸린 타겟 시간 x 1.2). 제한(`ML_KIT_TIME_LIMIT`, 기본 100초, 여유 30초)을 넘을 것 같으면
+  `status: ok`, `continue: true`, `progress`("학습: 타겟 1/3개 끝남, 저장됨 ..."), `next_commands: [같은 명령]`, `CONTINUE:` directive.
+- 같은 명령을 다시 실행하면 저장된 타겟을 다시 쓰고(`[INFO]`) 다음 타겟부터 학습합니다. 끝난 실행의 결과에 `resumed_targets`(앞 실행이 학습한 타겟).
+  키는 학습 입력 그 자체(학습 행과 값, 스키마, 작업 유형, 시드, 양성 클래스, 도구·scikit-learn 버전)의 해시라, 데이터나 조건이 바뀌면 다시 학습합니다.
+- 멈춘 실행은 스테이징 폴더를 지우고 버전 폴더와 원장 기록을 남기지 않습니다. 버전 번호와 `history.jsonl`은 끝나는 실행이 한 번만 씁니다
+  (원자적 커밋은 그대로). 멈춤은 비정상 중단이 아니므로 `[WARN] 비정상 중단` 대신 `[STATUS]`만. 오류 로그에도 남기지 않습니다.
+- 커밋 뒤 이번 실행이 쓴 저장 파일과 3일 넘은 저장 파일을 지웁니다. 손상된 저장 파일은 버리고 다시 학습합니다(`[WARN]`, JIT).
+- 실행마다 새 타겟을 최소 1개 학습하므로 반복하면 반드시 끝납니다. 타겟이 1개면 나눌 단계가 없어 저장하지 않습니다.
+- SKILL.md 규칙 6: "학습, 보고서, 성능예측표는 오래 걸리면 도구가 나눠서 진행한다".
+
 ## [2.9.56] - 2026-11-04
 
 조건으로 학습에서 뺄 행 (`--exclude-where`). 회사 PC 시험 A3("생산효율이 90보다 큰 행은 빼고 다시 학습해줘")에서 에이전트가 할 수 있는 일이
