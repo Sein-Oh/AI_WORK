@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.48"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.49"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -664,10 +664,7 @@ OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--targ
 _WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --text "내용", PPT는 ppt.py write --text "내용", '
                '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
 OTHER_COMMAND = {("office", "write"): "office.py에는 write가 없습니다. " + _WRITE_TEXT,
-                 ("office", "transfer", "--text"): "transfer는 엑셀 차트·범위와 문서의 표를 옮기는 명령이라 글은 받지 않습니다. " + _WRITE_TEXT,
-                 ("reader", "read", "--section"): ('reader.py read는 장절을 고르지 않습니다. 파일에서 장절로 찾기는 '
-                                                   'reader.py search --file "파일" --section "장절" --query "검색어", '
-                                                   '열린 워드 문서의 장절 읽기는 word.py read --section "1.1"을 쓰세요.')}
+                 ("office", "transfer", "--text"): "transfer는 엑셀 차트·범위와 문서의 표를 옮기는 명령이라 글은 받지 않습니다. " + _WRITE_TEXT}
 
 
 class JsonArgumentParser(argparse.ArgumentParser):

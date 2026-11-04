@@ -2259,3 +2259,55 @@ def test_folder_search_failure_reason_names_error_type(one_file, capsys, monkeyp
     code, out = run_fresh(reader, capsys, monkeypatch, "search", "-q", "hello", "--file", str(one_file.parent))
     assert code == 0, out
     assert [s["reason"] for s in out["skipped"]] == ["KeyError: 'heading'"], out
+
+
+# ---------------------------------------------------------------------------
+# read --section: 장절 경로 일부가 맞는 단위만 읽기 (search --section과 같은 규칙, 1.4.49)
+# ---------------------------------------------------------------------------
+
+
+def test_read_section_reads_only_matching_units_with_evidence(tmp_path, capsys):
+    p = tmp_path / "spec.pdf"
+    english_pdf(p)
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "1.1.  SCOPE")   # 대소문자·공백 무시
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert out["section_filter"] == "1.1.  SCOPE" and out["count"] == len(out["units"]) >= 2
+    assert all("1.1. Scope" in u["section"] for u in out["units"])
+    data = [u for u in out["units"] if u["text"].startswith("Data body")][0]
+    assert data["page"] == 1 and data["evidence"] == "spec.pdf p.1, 1. SCOPE > 1.1. Scope > 1.1.1. Data"
+    assert out["units_total"] > out["count"]
+    # --pages와 함께: 두 조건을 모두 만족하는 단위만
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "scope", "--pages", "2")
+    assert code == 0 and out["units"] and all(u["page"] == 2 and "1. SCOPE" in u["section"] for u in out["units"])
+    assert not any(u["text"].startswith("Requirement") for u in out["units"])
+
+
+def test_read_section_not_found_gives_candidates_not_logged(tmp_path, capsys, monkeypatch, isolated_dirs):
+    from office_helpers import assert_not_logged
+    p = tmp_path / "spec.pdf"
+    make_text_pdf(p, [[("1. ZQX SCOPE", 16, True), ("Scope body.", 10, False), ("2. PURPOSE", 16, True),
+                       ("Purpose body.", 10, False)]], font="helv")
+    code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "zqx scop")
+    assert code == 0 and out["units"], out           # 부분 일치는 그대로 읽힘
+    code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "ZQX SCOPEE")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[후보]" in out["message"]
+    assert "1. ZQX SCOPE" in out["candidates"]
+    assert_not_logged(out, isolated_dirs, marker="1. ZQX SCOPE")   # 장절 이름(문서 글)은 오류 로그에 남지 않음
+    # 비슷한 장절이 없으면 문서의 장절 일부를 [후보]로
+    code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "warranty")
+    assert code == 1 and "[후보]" in out["message"] and set(out["candidates"]) == {"1. ZQX SCOPE", "2. PURPOSE"}
+
+
+def test_read_section_continuation_and_save_keep_section(tmp_path, capsys, monkeypatch):
+    p = tmp_path / "spec.pdf"
+    english_pdf(p)
+    monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 60)
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "1. SCOPE")
+    assert code == 0 and out["truncated"] is True and out["next_commands"]
+    assert all('--section "1. SCOPE"' in c["command"] for c in out["next_commands"]), out["next_commands"]
+    monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 8000)
+    save = tmp_path / "근거.csv"
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "purpose", "--save", str(save))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:")
+    body = open(out["output_file"], encoding="utf-8-sig").read()
+    assert "Purpose body" in body and "Data body" not in body and "Requirement" not in body

@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.48"
+  version: "1.4.49"
   platform: windows
 ---
 
@@ -45,6 +45,7 @@ metadata:
 | 엑셀 범위를 워드/PPT 표로 | `office.py transfer --from excel --range A1:D10 --to word` |
 | 워드/PPT 내용을 엑셀로 | `office.py transfer --from word --what text --to excel` (`--what table --table 1`) |
 | 문서 등록 (PDF/HWP/Office) | 폴더: `reader.py index --folder "<폴더>"` / 파일 하나 읽기: `reader.py read --file "<파일>" [--pages 1-3] [--save]` |
+| 문서의 장절 읽기 (근거 포함) | `reader.py read --file "<파일>" --section "장절 일부" [--pages 3-7]` (장절 이름 일부, 대소문자 무시. 결과 `units[].evidence`가 근거) |
 | 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호는 무시: `SOI 1` = `SOI #1`. 사용자가 패턴을 말하면 `--regex`) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |

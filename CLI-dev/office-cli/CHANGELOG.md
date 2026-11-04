@@ -6,6 +6,19 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.49] - 2026-11-04
+
+규격 대조 흐름(엑셀 칸 내용 -> 등록된 규격서의 장절 근거). 회귀 테스트: `tests/test_reader.py` "read --section" (1.4.48에서 3개 중 3개 실패).
+
+### 기능
+- `reader.py read --file 파일 --section "장절 일부"`: 장절 경로에 그 글이 든 단위만 읽음(`search --section`과 같은 규칙, 공통 함수 `section_key`·`section_matches`).
+  `--pages`/`--units`와 함께 쓰면 두 조건을 모두 만족하는 단위. 결과 `section_filter`, 단위마다 `evidence`(search와 같은 근거 문구).
+  읽기 상한·잘림·`--save`는 그대로이고, 이어 읽기와 전체 저장 명령에 `--section`(과 고른 범위)이 붙음.
+  맞는 단위가 없으면 STOP_RETRY + `[후보]`(`suggest`로 찾은 비슷한 장절 이름, 없으면 문서의 장절 이름. `ambiguous`라 오류 로그에는 개수만).
+  장절 정보가 없는 문서는 `--pages`로 읽으라는 STOP_RETRY. 스캔 PDF는 전처럼 OCR 안내(`UNVERIFIED:`).
+  전에는 `search --regex --query "." --section ... --full`(10건 상한)뿐이었음.
+- 1.4.39의 "reader.py read는 장절을 고르지 않습니다" 인자 오류 안내(`OTHER_COMMAND`)를 뺌.
+
 ## [1.4.48] - 2026-11-04
 
 저장소 지침 반영(next_commands). 회귀 테스트: `tests/test_excel_write.py`(쓰기 뒤 차트 명령), `tests/test_word.py`·`tests/test_ppt.py`(닫힌 파일 읽기 `--save`)

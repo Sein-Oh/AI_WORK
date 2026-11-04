@@ -1837,6 +1837,16 @@ def section_text(unit: Dict[str, Any]) -> str:
     return " > ".join(unit.get("section") or [])
 
 
+def section_key(spec: Optional[str]) -> str:
+    """--section 값을 비교용으로: 공백을 하나로, 소문자 (read/search 공통)."""
+    return re.sub(r"\s+", " ", spec or "").strip().lower()
+
+
+def section_matches(unit: Dict[str, Any], key: str) -> bool:
+    """장절 경로(section_text)에 --section 값이 들어 있는지 (대소문자·공백 무시). key는 section_key 결과."""
+    return key in re.sub(r"\s+", " ", section_text(unit)).lower()
+
+
 def where_text(unit: Dict[str, Any]) -> str:
     """근거의 위치 부분: PDF/저장된 Word 쪽은 'p.N', 쪽 나눔만 센 Word 쪽은 'p.N(추정)', 그 밖은 loc."""
     page, src = unit.get("page"), unit.get("page_source")
@@ -1948,6 +1958,25 @@ def _unit_view(n: int, u: Dict[str, Any], text: str) -> Dict[str, Any]:
             "number": u.get("number"), "heading": u.get("heading", ""), "text": text}
 
 
+def _section_not_found(spec: str, units: List[Dict[str, Any]], pages: Optional[str]) -> rt.InputError:
+    """--section에 맞는 단위가 없음: 가까운 장절 이름(없으면 문서의 장절 일부)을 [후보]로 (R8).
+    장절 이름은 문서 글이라 오류 로그에는 개수만 남김 (rt.ambiguous)."""
+    names: List[str] = []
+    for u in units:
+        for t in u.get("section") or []:
+            if t and t not in names:
+                names.append(t)
+    where = f" (--pages {pages} 안)" if pages else ""
+    head = f"장절 '{spec}'에 맞는 내용이 없습니다{where}."
+    if not names:
+        return rt.InputError(head + " 이 문서에는 장절 정보가 없습니다. --section 없이 --pages로 읽으세요.")
+    near = rt.suggest(spec, names, n=5)
+    if near:
+        tail = " 비슷한 장절이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요."
+        return rt.ambiguous(head + tail, near)
+    return rt.ambiguous(head + " 비슷한 장절이 없습니다. 이 문서의 장절 중에서 사용자에게 고르게 하세요.", names)
+
+
 # ==============================================================================
 # 5. 명령: read
 # ==============================================================================
@@ -1969,11 +1998,21 @@ def cmd_read(args) -> Dict[str, Any]:
         numbers = [i for i, u in enumerate(units, 1) if u.get("page") in req_pages]
     else:
         numbers = parse_pages(args.pages, total) if total else []
+    sec_key = section_key(args.section)
+    if sec_key and not (doc.get("meta") or {}).get("ocr_needed"):     # 스캔 PDF는 아래 OCR 안내로
+        matched = [n for n in numbers if section_matches(units[n - 1], sec_key)]
+        if not matched:
+            pool = [units[n - 1] for n in numbers] if (args.pages or args.units) else units
+            raise _section_not_found(args.section, pool if any(u.get("section") for u in pool) else units,
+                                     args.pages or args.units)
+        numbers = matched
     selected = [units[n - 1] for n in numbers]
     result: Dict[str, Any] = {"file": path, "type": doc["type"], "units_total": total, "count": len(selected),
                               "unit_name": unit_name, "pages_total": _doc_pages(doc),
                               "pages_mode": "page" if by_page else "item",
                               "sections_total": _doc_sections(doc), "meta": doc.get("meta", {})}
+    if args.section:
+        result["section_filter"] = args.section
     meta = doc.get("meta") or {}
     # 원본에서 읽지 않은 부분: 엑셀 시트당 행 상한 (읽기 결과도 저장 파일도 문서 전부가 아님)
     src_cut = f"원본 시트의 {MAX_SHEET_ROWS}행을 넘는 부분은 읽지 않음 (읽기 상한, --save 파일에도 없음)" \
@@ -1984,7 +2023,8 @@ def cmd_read(args) -> Dict[str, Any]:
     if uncomputed:
         result.update(rt.uncomputed_fields(uncomputed))
     # 글자 없이 그림만 있는 쪽 (스캔 쪽): 읽으려는 범위 안의 쪽만 알림. 잘림이 아니라 주의 사항이라 notes에
-    blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, bool(args.units))
+    by_range = bool(args.units) or bool(sec_key)      # --section: 고른 단위의 첫 쪽~끝 쪽만
+    blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, by_range)
     notes: List[str] = []
     # 모든 쪽이 스캔 이미지(도장·Bates 번호 같은 짧은 글만 있음)이거나 읽으려는 쪽이 모두 스캔 쪽: 읽은 글은 본문이 아님
     # -> 저장해도 읽어도 UNVERIFIED (이전에는 --save와 스캔 쪽만 고른 --pages가 VERIFIED)
@@ -1992,7 +2032,7 @@ def cmd_read(args) -> Dict[str, Any]:
     ocr_reason = ""
     if meta.get("ocr_needed"):
         ocr_reason = f"스캔 이미지 PDF라 본문 글자 층이 없음 ({got}, OCR(글자 인식)한 PDF가 있어야 본문을 읽을 수 있음)"
-    elif blank_pages and set(blank_pages) == _read_pages(doc, selected, req_pages, bool(args.units)):
+    elif blank_pages and set(blank_pages) == _read_pages(doc, selected, req_pages, by_range):
         ocr_reason = (f"고른 쪽(p.{_page_list(blank_pages)})이 스캔 이미지라 본문 글자 층이 없음 "
                       f"({got}, OCR(글자 인식)한 PDF가 있어야 본문을 읽을 수 있음)")
     if blank_pages:
@@ -2073,6 +2113,8 @@ def cmd_read(args) -> Dict[str, Any]:
             break
         text, cut = rt.clamp_text(u["text"], budget)
         view = _unit_view(n, u, text)
+        if sec_key:          # 장절로 골라 읽기(규격 대조): 검토 메모에 그대로 쓸 근거 문구
+            view["evidence"] = evidence_text(path, u)
         if cut:              # 한 단위의 글이 상한보다 길어 뒤가 잘림 (이어 읽기로는 그 뒤를 볼 수 없음)
             view["text_truncated"] = True
             view["text_chars"] = len(u["text"])
@@ -2094,6 +2136,9 @@ def cmd_read(args) -> Dict[str, Any]:
     if reasons:
         result["truncated_reason"] = reasons
     nexts: List[Dict[str, str]] = []
+    sec_args = ["--section", args.section] if sec_key else []
+    # 저장 명령은 고른 범위를 그대로 (--section 읽기에서 문서 전체를 저장하지 않게)
+    range_args = (["--units", args.units] if args.units else ["--pages", args.pages] if args.pages else []) if sec_key else []
     if dropped:
         nxt_i = len(shown)
         nxt, last = numbers[nxt_i], numbers[-1]
@@ -2104,15 +2149,18 @@ def cmd_read(args) -> Dict[str, Any]:
             cont = ["--pages", f"{cut.get('page')}-{selected[-1].get('page')}"]
         else:                                    # 쪽 중간에서 잘림 -> 단위 번호로 이어 읽기
             cont = ["--units", f"{nxt}-{last}"]
-        nexts.append(rt.next_command("reader.py", ["read", "--file", path] + cont, f"나머지 {unit_name} 이어서 읽기"))
+        nexts.append(rt.next_command("reader.py", ["read", "--file", path] + cont + sec_args, f"나머지 {unit_name} 이어서 읽기"))
     if dropped or cut_units:
         # 잘린 긴 글도 .md에는 전부 들어감 (.xlsx는 셀당 32000자 상한). 시트 행 상한으로 읽지 않은 부분은 저장해도 없음
-        nexts.append(rt.next_command("reader.py", ["read", "--file", path, "--save", f"{stem}_전체.md"],
+        nexts.append(rt.next_command("reader.py", ["read", "--file", path] + range_args + sec_args
+                                     + ["--save", f"{stem}_전체.md"],
                                      "읽은 내용 전체를 .md 파일로 저장 (잘린 글 포함, 다른 문서에 넣을 때)"
                                      + (f". 원본 시트의 {MAX_SHEET_ROWS}행을 넘는 부분은 저장 파일에도 없음" if src_cut else "")))
     if nexts:
         result["next_commands"] = nexts
-    preview = f"{name}: {unit_name} {len(shown)}개 표시 (전체 {total}개)" + (" - 일부만 표시" if truncated else "")
+    preview = (f"{name}: {unit_name} {len(shown)}개 표시 (전체 {total}개"
+               + (f", 장절 '{args.section}'에 맞는 {len(selected)}개" if sec_key else "") + ")"
+               + (" - 일부만 표시" if truncated else ""))
     if truncated:
         directive = "VERIFIED: 읽기 완료. 일부만 표시되었습니다 (" + "; ".join(reasons or ["길이 제한"]) + ")."
         if nexts:
@@ -2121,6 +2169,8 @@ def cmd_read(args) -> Dict[str, Any]:
             directive += " 더 읽거나 저장할 방법이 없습니다(읽기 상한). 사용자에게 그대로 알리세요."
     else:
         directive = "VERIFIED: 읽기 완료. 내용을 인용할 때는 page, section, number로 근거(파일 p.N, 장절 (번호))를 함께 알리세요."
+    if sec_key:
+        directive += " 근거는 units의 evidence를 그대로 쓰세요."
     if ocr_reason or formula_reason:
         return rt.ok_unverified(TOOL, "read", preview, [x for x in (ocr_reason, formula_reason) if x] + reasons, **result)
     if notes:
@@ -2507,13 +2557,13 @@ def cmd_search(args) -> Dict[str, Any]:
     for w in clamp_warnings:
         rt.log("WARN", w)
     pages = page_set(args.pages)
-    sec_filter = re.sub(r"\s+", " ", args.section).strip().lower() if args.section else ""
+    sec_filter = section_key(args.section)
     docs, info = _search_targets(args)
     hits: List[Dict[str, Any]] = []
     page_unknown = 0
     for doc in docs:
         for u in doc["units"]:
-            if sec_filter and sec_filter not in re.sub(r"\s+", " ", section_text(u)).lower():
+            if sec_filter and not section_matches(u, sec_filter):
                 continue
             if pages is not None:
                 if u.get("page") is None:
@@ -2725,7 +2775,7 @@ def _pages_in_filter(doc: Dict[str, Any], flagged: List[int], pages: Optional[se
     keep = []
     for p in out:
         before = [u for u in units if u["page"] < p]
-        if before and sec_filter in re.sub(r"\s+", " ", section_text(before[-1])).lower():
+        if before and section_matches(before[-1], sec_filter):
             keep.append(p)
     return keep
 
@@ -2946,6 +2996,7 @@ def build_cli():
     p.add_argument("--file", "-f", required=True, help="문서 경로 (파일명만 쓰면 data 폴더에서 찾음)")
     p.add_argument("--pages", "-p", help="PDF 쪽/PPT 슬라이드 번호 (그 외 형식은 항목 번호). 예: 3, 1-3, 1,4")
     p.add_argument("--units", help="항목(단위) 번호로 고르기. 예: 57-120 (이어 읽기 명령이 씀)")
+    p.add_argument("--section", help="장절 경로 일부가 맞는 단위만 읽기 (대소문자 무시, search --section과 같음)")
     p.add_argument("--format", choices=["text", "summary"], default="text", help="text: 본문, summary: 요약 정보만")
     p.add_argument("--save", nargs="?", const=True, help="결과를 파일로 저장 (.md 기본, .csv/.xlsx 가능). 경로 생략 시 작업 폴더")
 

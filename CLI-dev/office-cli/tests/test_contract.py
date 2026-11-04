@@ -406,7 +406,6 @@ def test_argument_errors_from_real_logs_get_a_hint(argv, want):
 @pytest.mark.parametrize("argv, want", [
     (["office.py", "write", "--target", "보고서.docx", "--text", "요약"], 'word.py write --text'),
     (["office.py", "transfer", "--to-target", "보고서.docx", "--text", "요약"], "글은 받지 않습니다"),
-    (["reader.py", "read", "--file", "a.hwp", "--section", "1.1"], 'reader.py search --file'),
 ])
 def test_other_file_command_is_named_not_recommended(argv, want):
     """1.4.39 (회사 PC 오류 로그): 다른 파일의 명령이 맞는 경우 [추천](값만 바꿔 1회 재시도)이 아니라 맞는 명령을 안내.
