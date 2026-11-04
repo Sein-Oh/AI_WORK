@@ -6,6 +6,21 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.63] - 2026-11-04
+
+독립 검토에서 나온 버그 수정. 회귀 테스트는 항목마다 고치기 전 코드에서 실패를 확인함.
+
+### 수정
+- 2열 표 파일의 셋째 열 (`excel.py write --cells 칸값.csv`, `excel.py comment --file`, `word.py fill --file`): 값의 쉼표가 열을 나누면
+  (`C7,1,500`, `B5,규격 3.1과 다름, 재확인 필요`) 둘째 열만 쓰고 `VERIFIED`였음. 셋째 열 이후에 글이 있으면 아무것도 쓰기 전에 STOP_RETRY:
+  줄 번호와 "값을 큰따옴표로 감싸세요", 한 줄이면 고친 줄(`C7,"1,500"`)을 `[추천]`(오류 로그에는 줄 번호만). 공통 함수 `_runtime.check_two_columns`.
+  회귀 테스트: `test_excel_write.py` `test_write_cells_file_third_column_*`, `test_comment_file_third_column_*`, `test_word.py` `test_fill_third_column_*`.
+- `write --cells` 항목 나누기: 닫히지 않은 따옴표가 뒤 항목을 삼킴(`C6='007; C7=5` -> 한 항목). 따옴표 묶음은 같은 따옴표로 닫히고 바로 뒤가
+  `;`/끝일 때만 인정, 아니면 따옴표 없는 값으로 나눔(`'007`은 엑셀 글자 표시로 글자 007). `=`로 시작하는 값은 큰따옴표·괄호 안의 `;`를 나누지 않음
+  (`=IF(A1="a;b",1,2)`, `=SUM(A1;A2)`는 엑셀이 받지 않으면 `,`로 고친 `[추천]`까지). 회귀 테스트: `test_write_cells_quote_must_close_*`, `test_write_cells_formula_keeps_*`.
+- `excel.py comment --append` 재실행: 같은 메모가 두 번 붙음. 기존 메모 끝 줄이 붙일 메모와 같거나 기존 메모가 새 메모와 같으면 그 칸은 그대로
+  (`unchanged`, 모두 그대로면 되돌리기 지점 없음). 회귀 테스트: `test_comment_append_rerun_does_not_duplicate`.
+
 ## [1.4.62] - 2026-11-04
 
 작업별 스킬로 나누기 (C3). 통합 `SKILL.md`(16KB, 명령 표 한 줄 300~600자)에서 Gemma 26B가 옵션을 잘못 기억하던 문제.

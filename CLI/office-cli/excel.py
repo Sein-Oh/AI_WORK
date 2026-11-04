@@ -1404,23 +1404,57 @@ CELLS_SHOWN = 30                # 결과 JSON에 담는 칸 목록 상한
 _CELLS_VALUE_HEADER = ("값", "value", "내용", "입력값")
 
 
+def _value_end(text: str, i: int, seps: str) -> int:
+    """text[i:]가 '칸=값' 항목의 값일 때 값이 끝나는 자리 (다음 구분자 또는 글 끝).
+    1. 값이 따옴표로 시작하고 같은 따옴표로 닫힌 뒤 바로(공백만 두고) 구분자나 글 끝이 오면 그 묶음 안의 구분자는 나누지 않음 ('a;b').
+       닫히지 않은 따옴표('007은 엑셀의 글자 표시)는 묶음이 아님: 뒤 항목을 삼키지 않음.
+    2. 값이 =로 시작(수식)하면 큰따옴표와 괄호 안의 구분자는 나누지 않음 (=IF(A1="a;b",1,2), =SUM(A1;A2)).
+       따옴표·괄호가 끝까지 닫히지 않으면 수식이 아닌 것처럼 다음 구분자에서 나눔.
+    3. 그 밖에는 다음 구분자."""
+    n = len(text)
+    j = i
+    while j < n and text[j] in " \t":
+        j += 1
+    plain = next((k for k in range(i, n) if text[k] in seps), n)
+    if j < n and text[j] in "'\"":
+        q = text[j]
+        k = text.find(q, j + 1)
+        while k != -1:
+            m = k + 1
+            while m < n and text[m] in " \t":
+                m += 1
+            if m == n or text[m] in seps:
+                return m
+            k = text.find(q, k + 1)
+        return plain
+    if j < n and text[j] == "=":
+        depth, quoted = 0, False
+        for k in range(j + 1, n):
+            ch = text[k]
+            if ch == '"':
+                quoted = not quoted
+            elif quoted:
+                continue
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth = max(0, depth - 1)
+            elif ch in seps and depth == 0:
+                return k
+        return n if depth == 0 and not quoted else plain
+    return plain
+
+
 def _split_outside_quotes(text: str, seps: str) -> List[str]:
-    """seps의 글자로 나눕니다. 작은·큰따옴표 안의 글자는 나누지 않습니다 ('a;b')."""
-    parts, buf, quote = [], [], ""
-    for ch in text:
-        if quote:
-            buf.append(ch)
-            if ch == quote:
-                quote = ""
-        elif ch in "'\"" and not "".join(buf).split("=", 1)[-1].strip() and "=" in "".join(buf):
-            quote = ch                         # 값의 맨 앞 따옴표만 묶음 ('요약'!C3의 시트 따옴표는 그대로)
-            buf.append(ch)
-        elif ch in seps:
-            parts.append("".join(buf))
-            buf = []
-        else:
-            buf.append(ch)
-    parts.append("".join(buf))
+    """'칸=값' 항목들을 seps의 글자로 나눕니다. 값 안에서 나누지 않는 경우는 _value_end.
+    칸 쪽('요약'!C3의 시트 따옴표)은 묶음으로 보지 않음."""
+    parts: List[str] = []
+    i, n = 0, len(text)
+    while i <= n:
+        eq = next((k for k in range(i, n) if text[k] == "=" or text[k] in seps), n)
+        end = _value_end(text, eq + 1, seps) if eq < n and text[eq] == "=" else eq
+        parts.append(text[i:end])
+        i = end + 1
     return parts
 
 
@@ -1440,10 +1474,12 @@ def _cells_items(spec: str) -> Tuple[List[Tuple[str, str, str]], bool]:
     """--cells 값 -> [(어디(오류 표시용), 칸, 값)], 파일인지. 글: 'C6=ft; 계산기!C11=20' (; 또는 줄바꿈),
     파일(.csv/.tsv/.md/.txt): 열 칸, 값 (첫 행이 칸/값 머리글이면 건너뜀). 값은 글자 그대로 받고 쓸 때 숫자·수식을 가립니다."""
     if _is_cells_file(spec):
-        rows = load_table_file(rt.resolve_input_path(spec.strip().strip('"'), "칸값 파일", exts=TABLE_FILE_EXTS), raw=True)
+        path = rt.resolve_input_path(spec.strip().strip('"'), "칸값 파일", exts=TABLE_FILE_EXTS)
+        rows = load_table_file(path, raw=True)
         start = 1
         if rows and str(rows[0][0] if rows[0] else "").strip().lower() in _MEMO_HEADER:
             rows, start = rows[1:], 2
+        rt.check_two_columns(path, rows, start, "칸값 파일", "칸, 값", "쓰지 않았습니다")
         items = [(f"{n}번째 줄", str(r[0] if r else "").strip(), "" if len(r) < 2 or r[1] is None else str(r[1]))
                  for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
         return items, True
@@ -3501,6 +3537,18 @@ def _same_note(a: str, b: str) -> bool:
     return re.sub(r"\s+", " ", a).strip() == re.sub(r"\s+", " ", b).strip()
 
 
+def _note_has(old: str, memo: str, mode: str) -> bool:
+    """이미 그 메모가 달려 있어 바꿀 것이 없는지: 기존 메모가 새 메모와 같거나, --append인데 기존 메모의 끝 줄들이 새 메모와 같음
+    (같은 명령을 다시 실행해도 같은 메모가 두 번 붙지 않게)."""
+    if _same_note(old, memo):
+        return True
+    if mode != "append":
+        return False
+    want = [ln for ln in memo.split("\n") if ln.strip()]
+    have = [ln for ln in old.split("\n") if ln.strip()]
+    return bool(want) and len(have) >= len(want) and all(_same_note(a, b) for a, b in zip(have[-len(want):], want))
+
+
 def _sheet_notes(ws: Any, box: Optional[Tuple[int, int, int, int]] = None) -> List[Tuple[int, int, Any]]:
     """시트의 메모 [(행, 열, Comment)] (행, 열 순서). box(r1, c1, r2, c2)를 주면 그 안만.
     칸마다 Range.Comment를 묻지 않고 Worksheet.Comments를 훑음 (큰 범위도 메모 수만큼)."""
@@ -3526,6 +3574,7 @@ def _memo_rows(path: str) -> List[Tuple[int, str, str]]:
     start = 1
     if rows and str(rows[0][0] if rows[0] else "").strip().lower() in _MEMO_HEADER:
         rows, start = rows[1:], 2
+    rt.check_two_columns(path, rows, start, "메모 파일", "칸, 메모", "달지 않았습니다")
     return [(n, str(r[0] if r else "").strip(), str(r[1] if len(r) > 1 and r[1] is not None else "").strip())
             for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
 
@@ -3650,13 +3699,17 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
     for ws in {id(p[0]): p[0] for p in plan}.values():
         check_protection(ws, [], "objects")              # 보호된 시트에서 메모(개체) 편집이 막혀 있으면 달기 전에
     existing = [(ws, r, c, ws.Cells(r, c).Comment) for ws, r, c, _ in plan]
-    taken = [(ws, r, c, n) for ws, r, c, n in existing if n is not None]
-    old = {(str(ws.Name), r, c): _note_text(n) for ws, r, c, n in taken}
+    old = {(str(ws.Name), r, c): _note_text(n) for ws, r, c, n in existing if n is not None}
     mode = "overwrite" if args.overwrite else "append" if args.append else ""
+    same = {(str(ws.Name), r, c) for ws, r, c, memo in plan
+            if (str(ws.Name), r, c) in old and _note_has(old[(str(ws.Name), r, c)], memo, mode)}
+    taken = [(ws, r, c, n) for ws, r, c, n in existing if n is not None and (str(ws.Name), r, c) not in same]
     planned = []
     for ws, r, c, _ in plan:
         ref = f"{ws.Name}!{addr(r, c)}"
-        if (str(ws.Name), r, c) not in old:
+        if (str(ws.Name), r, c) in same:
+            planned.append(f"그대로(같은 메모가 이미 있음): {ref}")
+        elif (str(ws.Name), r, c) not in old:
             planned.append(f"메모 추가: {ref}")
         elif mode:
             planned.append(f"메모 {'바꾸기' if mode == 'overwrite' else '덧붙이기'}: {ref}")
@@ -3688,10 +3741,12 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
             "--overwrite, 기존 메모 아래에 덧붙이기는 --append를 붙여 다시 실행하세요 (미리 보려면 --dry-run).",
             log_message=head + ", ".join(taken_refs[:5]) + (" ..." if len(taken) > 5 else "") + f" (메모 {rt.DOC_OMITTED})")
     expected: Dict[Tuple[str, int, int], str] = {}
-    done = 0
+    done = at = 0
     try:
-        for ws, r, c, memo in plan:
+        for at, (ws, r, c, memo) in enumerate(plan):
             key = (str(ws.Name), r, c)
+            if key in same:
+                continue
             cell = ws.Cells(r, c)
             if key in old:
                 want = memo if mode == "overwrite" else (old[key] + "\n" + memo if old[key] else memo)
@@ -3704,7 +3759,7 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
             t.changed = True
     except Exception as e:
         rt.debug(f"메모 달기 실패: {e}")
-        ref = f"{plan[done][0].Name}!{addr(plan[done][1], plan[done][2])}"
+        ref = f"{plan[at][0].Name}!{addr(plan[at][1], plan[at][2])}"
         raise rt.InputError(f"{ref}에 메모를 달지 못했습니다 (시트 보호, 편집 중인 칸 등, {type(e).__name__}). "
                             + (f"앞의 {done}개는 달렸습니다(office.py undo로 되돌릴 수 있음). " if done else "")
                             + "시트 보호를 풀거나 칸 편집을 끝낸 뒤 다시 실행하세요.", no_fallback=True)
@@ -3717,12 +3772,17 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
                 problems.append(f"{sheet}!{addr(r, c)}의 메모가 쓴 내용과 다름")
         except Exception as e:
             problems.append(f"{sheet}!{addr(r, c)}의 메모를 다시 읽지 못함 ({type(e).__name__})")
-    t.set_focus(sheet=plan[0][0])
+    t.set_focus(sheet=plan[0][0], changed=bool(expected))     # 모두 그대로면 되돌리기 지점을 남기지 않음
     resolved = t.resolved()
-    fields = {"target_resolved": resolved, "applied": planned[:50], "count": len(plan)}
+    fields = {"target_resolved": resolved, "applied": [p for p in planned if not p.startswith("그대로")][:50],
+              "count": len(plan) - len(same)}
+    if same:
+        fields["unchanged"] = len(same)
     if warnings:
         fields["warnings"] = warnings[:10]
-    preview = f"메모 {len(plan)}개를 달았습니다" + (f" (기존 메모 {'바꿈' if mode == 'overwrite' else '덧붙임'} {len(taken)}개)" if taken else "")
+    preview = f"메모 {len(plan) - len(same)}개를 달았습니다" \
+        + (f" (기존 메모 {'바꿈' if mode == 'overwrite' else '덧붙임'} {len(taken)}개)" if taken else "") \
+        + (f" (같은 메모가 이미 있는 {len(same)}칸은 그대로)" if same else "")
     if problems:
         return rt.ok_unverified(TOOL, "comment", preview, problems[:10], **fields)
     return rt.ok(TOOL, "comment", preview,

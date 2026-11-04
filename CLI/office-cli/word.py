@@ -1293,6 +1293,7 @@ def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
     start = 1
     if rows and str(rows[0][0] if rows[0] else "").strip().lower() in _FILL_HEADER:
         rows, start = rows[1:], 2
+    rt.check_two_columns(path, rows, start, "값 파일", "자리, 값", "채우지 않았습니다")
     return [(n, str(r[0] if r else "").strip(), "" if len(r) < 2 or r[1] is None else str(r[1]))
             for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
 

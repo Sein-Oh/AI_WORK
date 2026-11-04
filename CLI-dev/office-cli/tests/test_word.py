@@ -978,6 +978,16 @@ def test_fill_bad_rows_and_missing_places_change_nothing(form_doc, capsys, tmp_p
     assert "표 9번이 없습니다" in out["message"] and "표2!R4C2" in out["message"] and doc.text == before
 
 
+def test_fill_third_column_stops_before_filling(form_doc, capsys, tmp_path):
+    # 값의 쉼표가 열을 나눔: {{업체명}},서울시 강남구, 101호 -> 앞부분만 채우고 VERIFIED였음 (1.4.63)
+    doc, points = form_doc
+    before = doc.text
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "자리,값\n{{업체명}},서울시 강남구, 101호\n표2!R2C3,1,500\n"))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "2, 3번째 줄" in out["message"] and "큰따옴표" in out["message"] and '{{업체명}},"서울시 강남구, 101호"' in out["message"]
+    assert doc.text == before and doc.grid_tables[1].grid[1][2] == "" and points == []
+
+
 def test_fill_same_value_cell_is_unchanged(form_doc, capsys, tmp_path):
     doc, points = form_doc
     code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "표2!R3C3,2.1 A\n"))

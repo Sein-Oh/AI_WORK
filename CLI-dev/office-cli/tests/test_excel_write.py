@@ -1855,3 +1855,75 @@ def test_rejected_formula_log_has_no_formula(xl, capsys):
     assert code == 1
     log = _tool_log_text()
     assert "VLOOKUPX" not in log and "수식" in log
+
+
+# ---------------------------------------------------------------------------
+# 독립 검토 (1.4.63): 칸값·메모 파일의 셋째 열, --cells 따옴표·수식 나누기, --append 재실행
+# ---------------------------------------------------------------------------
+
+
+def test_write_cells_file_third_column_stops_before_writing(xl, capsys, tmp_path):
+    # 값의 쉼표가 열을 나눔: C7,1,500 -> 1만 쓰고 VERIFIED였음
+    _, wb = xl
+    f = tmp_path / "칸값.csv"
+    f.write_text("칸,값\nC6,ft\nC7,1,500\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--cells", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "3번째 줄" in out["message"] and "큰따옴표" in out["message"]
+    assert '[추천] C7,"1,500"' in out["message"]
+    assert ws_of(wb).values == {} and undo_points() == []
+    assert "1,500" not in _tool_log_text()                               # 고친 줄(값)은 로그에 남기지 않음
+    f.write_text("칸,값\nC6,ft\nC7,\"1,500\"\nC8,x,\n", encoding="utf-8")   # 따옴표로 감싸거나 뒤 빈 칸은 그대로
+    code, out = run_excel(capsys, "write", "--cells", str(f))
+    assert code == 0 and ws_of(wb).values[(7, 3)] == 1500 and ws_of(wb).values[(8, 3)] == "x", out
+
+
+def test_comment_file_third_column_stops_before_adding(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "메모.csv"
+    f.write_text("칸,메모\nB5,규격 3.1과 다름, 재확인 필요\nB6,좋음\nB7,a,b\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--action", "add", "--file", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "2, 4번째 줄" in out["message"] and "큰따옴표" in out["message"]
+    assert 'B5,"규격 3.1과 다름, 재확인 필요"' in out["message"]
+    assert ws_of(wb).notes == {} and undo_points() == []
+
+
+@pytest.mark.parametrize("cells,want", [
+    ("C6='007; C7=5", {(6, 3): "007", (7, 3): 5}),                            # 닫히지 않은 따옴표가 뒤 항목을 삼키지 않음
+    ("C6='it's'; C7=1", {(6, 3): "it's", (7, 3): 1}),
+    ("C6='a;b'; C7=2", {(6, 3): "a;b", (7, 3): 2}),
+    ("'요약'!C3=5; C4=6", {(4, 3): 6}),
+])
+def test_write_cells_quote_must_close_before_separator(xl, capsys, cells, want):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", cells)
+    assert code == 0 and out["verified"] is True, out
+    assert ws_of(wb).values == want
+    if "007" in cells:
+        assert (6, 3) in ws_of(wb).prefixed                               # Excel 글자 표시 '는 그대로 (앞자리 0 유지)
+
+
+def test_write_cells_formula_keeps_separators_in_quotes_and_parens(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "write", "--cells", 'C6==IF(A1="a;b",1,2); C7=3')
+    assert code == 0 and ws.formulas[(6, 3)] == '=IF(A1="a;b",1,2)' and ws.values[(7, 3)] == 3, out
+    ws.reject_formula = lambda f: ";" in f
+    code, out = run_excel(capsys, "write", "--cells", "C8==SUM(A1;A2)")
+    assert code == 1 and "[추천] python" in out["message"], out                # 수식을 쪼개지 않고 ';' -> ',' 추천까지
+    assert "C8==SUM(A1,A2)" in out["message"].split("[추천]")[1]
+    assert (8, 3) not in ws.formulas
+
+
+def test_comment_append_rerun_does_not_duplicate(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    _note(ws, 5, 2, "기존 메모")
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "덧붙임", "--append")
+    assert code == 0 and ws.notes[(5, 2)].text == "기존 메모\n덧붙임" and len(undo_points()) == 1
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "덧붙임", "--append")
+    assert code == 0 and ws.notes[(5, 2)].text == "기존 메모\n덧붙임", out          # 두 번 붙지 않음
+    assert out["unchanged"] == 1 and out["count"] == 0 and out["applied"] == [] and len(undo_points()) == 1
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "기존 메모\\n덧붙임")
+    assert code == 0 and out["unchanged"] == 1, out                               # 같은 메모는 결정 없이 그대로

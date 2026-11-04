@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.62"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.63"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1025,19 +1025,54 @@ def read_text_file(path: str) -> str:
     raise InputError(f"텍스트 파일 인코딩 인식 실패 (UTF-8/UTF-16/CP949 아님): {path}")
 
 
+def _sniff_delimiter(text: str) -> str:
+    sample = text[:4096]
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return "\t" if "\t" in sample and "," not in sample else ","
+
+
 def read_csv_rows(path: str, delimiter: Optional[str] = None) -> List[List[str]]:
     """CSV/TSV를 2차원 문자열 리스트로 읽습니다 (delimiter를 주지 않으면 구분자 자동 판별)."""
     text = read_text_file(path)
-    if delimiter:
-        return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
-    sample = text[:4096]
-    delimiter = ","
+    return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter or _sniff_delimiter(text))]
+
+
+def check_two_columns(path: str, rows: Sequence[Sequence[Any]], start: int, what: str, cols: str, done: str) -> None:
+    """2열 표 파일(칸, 값 / 칸, 메모 / 자리, 값)에서 셋째 열 이후에 비지 않은 칸이 있으면 InputError (쓰기 전에).
+    값의 쉼표(구분자)가 열을 나눈 경우라 둘째 열만 쓰면 값 뒷부분이 사라짐 (예: C7,1,500 -> 1).
+    rows는 머리글을 뺀 행, start는 rows[0]의 파일 줄 번호. 고친 줄은 둘째 열 이후를 구분자로 다시 이어 큰따옴표로 감쌈.
+    오류 로그에는 줄 번호만 (값은 문서 내용)."""
+    def cell(v: Any) -> str:
+        return "" if v is None else str(v)
+    bad = [(n, list(r)) for n, r in enumerate(rows, start) if any(cell(v).strip() for v in list(r)[2:])]
+    if not bad:
+        return
+    ext = os.path.splitext(path)[1].lower()
+    lines = ", ".join(str(n) for n, _ in bad[:10]) + (" ..." if len(bad) > 10 else "")
+    head = f"{what}의 {lines}번째 줄에 열이 3개 이상이라 아무것도 {done}. 열은 {cols} 두 개입니다."
+    if ext not in (".csv", ".tsv"):
+        raise InputError(head + " 값에 | 가 있으면 \\| 로 쓰고 파일을 저장한 뒤 다시 실행하세요.", log_message=head)
     try:
-        delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
-    except csv.Error:
-        if "\t" in sample and "," not in sample:
-            delimiter = "\t"
-    return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+        delim = _sniff_delimiter(read_text_file(path))
+    except Exception:
+        delim = "\t" if ext == ".tsv" else ","
+    shown = "쉼표" if delim == "," else "탭" if delim == "\t" else f"'{delim}'"
+
+    def fixed(r: List[Any]) -> str:
+        vals = [cell(v) for v in r]
+        while len(vals) > 2 and not vals[-1].strip():
+            vals.pop()
+        buf = io.StringIO()
+        csv.writer(buf, delimiter=delim, quoting=csv.QUOTE_MINIMAL, lineterminator="").writerow([vals[0], delim.join(vals[1:])])
+        return buf.getvalue()
+    hint = f" 값에 {shown}가 있으면 값을 큰따옴표로 감싸세요. 그 줄을 고쳐 파일을 저장한 뒤 다시 실행하세요."
+    if len(bad) == 1:
+        tail = f" [추천] {fixed(bad[0][1])}"
+    else:
+        tail = " 고친 줄: " + " / ".join(f"{n}번째 줄 {fixed(r)}" for n, r in bad[:5])
+    raise InputError(head + hint + tail, log_message=head + hint + f" (고친 줄 {DOC_OMITTED})")
 
 
 UNCOMPUTED_POSITIONS = 100_000   # positions=True일 때 담는 칸 위치 수 상한 (넘으면 멀리 떨어진 칸을 가려내지 않음)
