@@ -207,23 +207,21 @@ def layout(tmp_path_factory):
     return {"work": work, "res": res, "new": new}
 
 
-def test_training_layout_on_plain_file_suggests_command_without_it(layout):
+def test_training_layout_on_plain_file_is_recovered(layout):
     cmd = [c for c in layout["res"]["next_commands"] if "ml_predict.py" in c["command"]][0]["command"]
-    cmd = cmd.replace("<새데이터.xlsx>", str(layout["new"]))
-    argv = shlex.split(cmd)[2:]                                                 # drop 'python <script>'
-    bad = run_fail("ml_predict.py", *argv)
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "[추천] python" in bad["message"]
-    rec = bad["message"].split("[추천] ")[1]
-    assert "--header-row" not in rec and "--unit-row" not in rec
-    ok = run_tool("ml_predict.py", *shlex.split(rec)[2:])                       # the suggestion works as given
-    assert ok["sample_count"] == 2
-    # a longer plain file: the layout reads a data row as the header -> model columns missing, same suggestion
+    assert "--header-row" not in cmd and "--unit-row" not in cmd                # 2.9.53: the training layout options
+    argv = shlex.split(cmd.replace("<새데이터.xlsx>", str(layout["new"])))[2:]   # drop 'python <script>'
+    assert run_tool("ml_predict.py", *argv)["sample_count"] == 2
+    # the training options copied by hand: read with the file's own header row (JIT), said in recovered
+    ok = run_tool("ml_predict.py", *argv, "--header-row", "2", "--unit-row", "3")   # 2.9.53: STOP_RETRY [추천]
+    assert ok["sample_count"] == 2 and ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 1행으로 읽음"], ok
+    assert ok["agent_directive"].startswith("VERIFIED")
+    # a longer plain file: the layout reads a data row as the header -> model columns missing, same recovery
     longer = layout["work"] / "longer.csv"
     pd.DataFrame({"a": np.arange(8.0), "b": np.arange(8.0)}).to_csv(longer, index=False)
-    bad = run_fail("ml_predict.py", *[str(longer) if x == str(layout["new"]) else x for x in argv])
-    rec = bad["message"].split("[추천] ")[1]
-    assert rec.startswith("python") and "--header-row" not in rec
-    assert run_tool("ml_predict.py", *shlex.split(rec)[2:])["sample_count"] == 8
+    ok = run_tool("ml_predict.py", *[str(longer) if x == str(layout["new"]) else x for x in argv],
+                  "--header-row", "2", "--unit-row", "3")
+    assert ok["sample_count"] == 8 and "머리글 1행" in ok["recovered"][0]
 
 
 def test_two_level_header_hint(tmp_path, layout):
@@ -241,8 +239,21 @@ def test_two_level_header_hint(tmp_path, layout):
     bad = run_fail("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "수율")
     assert "[추천] --header-row 2" in bad["message"]                              # 2.9.12: no hint
     v = run_tool("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "수율", "--header-row", "2")["version_dir"]
-    bad = run_fail("ml_predict.py", "-m", v, "-f", str(p))
-    assert "[추천] --header-row 2" in bad["message"]
+    ok = run_tool("ml_predict.py", "-m", v, "-f", str(p))                       # 2.9.53: [추천] --header-row 2
+    assert ok["sample_count"] == 30 and ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 2행으로 읽음"], ok
+
+
+def test_several_header_rows_with_every_input_stop_with_candidates(tmp_path):
+    rows = [["온도", "압력", "수율"]]
+    r = np.random.default_rng(9)
+    for _ in range(30):
+        t, pr = float(r.uniform(100, 200)), float(r.uniform(10, 90))
+        rows.append([t, pr, 0.2 * t + 0.1 * pr])
+    v = run_tool("ml_train.py", "-f", write_book(tmp_path / "t.xlsx", rows), "-x", "온도,압력", "-y", "수율")["version_dir"]
+    p = write_book(tmp_path / "two.xlsx", [["시험 기록", "작성자 홍"], ["온도", "압력"], ["비고"], ["온도", "압력"],
+                                       [150, 30], [160, 31]])
+    bad = run_fail("ml_predict.py", "-m", v, "-f", p)
+    assert "[후보] --header-row" in bad["message"] and "recovered" not in bad, bad      # the tool does not guess
 
 
 @pytest.fixture(scope="module")
@@ -297,12 +308,12 @@ def unit_layout(tmp_path_factory):
     return {"path": str(path), "v": v}
 
 
-def test_layout_hint_keeps_the_unit_row(unit_layout):
-    bad = run_fail("ml_predict.py", "-m", unit_layout["v"], "-f", unit_layout["path"], "--header-row", "2", "--unit-row", "4")
-    rec = bad["message"].split("[추천] ")[1].strip()
-    assert rec.startswith("python") and "--unit-row 4" in rec                   # 2.9.13: no --unit-row (unit row as data)
-    ok = run_tool("ml_predict.py", *shlex.split(rec)[2:])
-    assert ok["sample_count"] == 40 and not ok["missing_input_warning"]
+def test_layout_recovery_keeps_the_unit_row(unit_layout):
+    ok = run_tool("ml_predict.py", "-m", unit_layout["v"], "-f", unit_layout["path"], "--header-row", "2", "--unit-row", "4")
+    assert ok["sample_count"] == 40 and not ok["missing_input_warning"]          # 2.9.53: STOP_RETRY [추천]
+    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 3행으로 읽음, 단위 4행"], ok
+    same = run_tool("ml_predict.py", "-m", unit_layout["v"], "-f", unit_layout["path"], "--header-row", "3", "--unit-row", "4")
+    assert "recovered" not in same                                               # options that fit are kept
 
 
 def test_predict_command_absolute_quoted_paths():
@@ -379,11 +390,9 @@ def test_predict_finds_model_names_with_units_in_a_header_unit_pair(unit_book, t
     ws.append([185, 3.2])
     p = tmp_path / "t2c.xlsx"
     wb.save(p)
-    bad = run_fail("ml_predict.py", "-m", unit_book["v"], "-f", str(p))
-    script, args = recommended_command(bad["message"])                                          # 2.9.14: no layout hint
-    assert args[-4:] == ["--header-row", "2", "--unit-row", "3"]
-    ok = run_tool(script, *args)
+    ok = run_tool("ml_predict.py", "-m", unit_book["v"], "-f", str(p))           # 2.9.53: [추천] --header-row 2 --unit-row 3
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
+    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 2행으로 읽음, 단위 3행"], ok
 
 
 def test_typo_hints_skip_layout_artefacts():
@@ -401,11 +410,9 @@ def test_predict_plain_template_on_a_unit_row_file(unit_book, tmp_path):
     ws.append([185, 3.2])
     p = tmp_path / "u2.xlsx"
     wb.save(p)
-    bad = run_fail("ml_predict.py", "-m", unit_book["v"], "-f", str(p))           # 2.9.14: VERIFIED, unit row imputed
-    script, args = recommended_command(bad["message"])
-    assert args[-2:] == ["--unit-row", "2"]
-    ok = run_tool(script, *args)
+    ok = run_tool("ml_predict.py", "-m", unit_book["v"], "-f", str(p))           # 2.9.14: unit row imputed; 2.9.53: [추천]
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
+    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 1행으로 읽음, 단위 2행"], ok
 
 
 def test_placeholder_first_row_is_not_a_unit_row(unit_book, tmp_path):
@@ -465,21 +472,17 @@ def plain_model(tmp_path_factory):
 
 def test_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
     p = write_book(tmp_path / "u2.xlsx", [["반응온도", "압력"], ["°C", "bar"], [180, 3], [185, 3.2]])
-    bad = run_fail("ml_predict.py", "-m", plain_model, "-f", p)      # 2.9.15: VERIFIED, unit row imputed
-    script, args = recommended_command(bad["message"])
-    assert args[-2:] == ["--data-row", "3"] and "--unit-row" not in args
-    ok = run_tool(script, *args)
+    ok = run_tool("ml_predict.py", "-m", plain_model, "-f", p)      # 2.9.15: unit row imputed; 2.9.53: [추천] --data-row 3
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
+    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 1행으로 읽음, 데이터 3행부터"], ok
 
 
 def test_title_and_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
     p = write_book(tmp_path / "t2c.xlsx", [["새 조건", "작성 2026-11-02"], ["반응온도", "압력"], ["°C", "bar"],
                                       [180, 3], [185, 3.2]])
-    bad = run_fail("ml_predict.py", "-m", plain_model, "-f", p)
-    script, args = recommended_command(bad["message"])                           # 2.9.15: --unit-row 3 -> '반응온도(°C)' missing
-    assert args[-4:] == ["--header-row", "2", "--data-row", "4"]
-    ok = run_tool(script, *args)
+    ok = run_tool("ml_predict.py", "-m", plain_model, "-f", p)       # 2.9.53: [추천] --header-row 2 --data-row 4
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
+    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 2행으로 읽음, 데이터 4행부터"], ok
 
 
 # ---- 열 이름: 빈 열, 중복 머리글, 연도 숫자 머리글 --------------------------------------------------------

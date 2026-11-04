@@ -1463,14 +1463,6 @@ def _numbered_out(out: Optional[str], version: str, many: bool) -> Optional[str]
     return f"{stem}_{version}{ext or '.docx'}"
 
 
-def _layout_args(args: argparse.Namespace, records: List[Dict[str, Any]], task: str) -> argparse.Namespace:
-    """Data layout for the predict command: the -f options, else the latest training of the task (as --best uses)."""
-    import ml_train
-    layout = ml_train._latest_layout(records, task)
-    return argparse.Namespace(**{k: getattr(args, k, None) if getattr(args, k, None) is not None else layout.get(k)
-                                 for k in ("header_row", "unit_row", "data_row")})
-
-
 def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[str]]) -> Dict[str, Any]:
     """
     -f <data file>: one report per task covering EVERY target of that task. The best version (each target
@@ -1504,7 +1496,6 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
         all_targets = [t for bv in versions for t in bv["targets"]]
         raise InputError(f"지정한 타겟 {target_filter}이(가) 최고 버전에 없습니다. [후보] {', '.join(all_targets[:10])}")
 
-    _, records = ml_train._ledger_for(os.path.abspath(args.file))
     result = dict(reports[0])
     result.update({
         "made_best": info["made_best"],
@@ -1517,8 +1508,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                     for r in reports],
         "next_commands": [
             {"purpose": f"새 데이터 예측 ({bv['task']}, <새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-             "command": f'python "{os.path.join(here, "ml_predict.py")}" -m "{bv["version_dir"]}" -f "<새데이터.xlsx>"'
-                        + ml_train.layout_flags(_layout_args(args, records, bv["task"])),
+             "command": f'python "{os.path.join(here, "ml_predict.py")}" -m "{bv["version_dir"]}" -f "<새데이터.xlsx>"',
              "needs_input": True, "placeholder": "<새데이터.xlsx>"} for bv in versions],
     })
     made = ("타겟별 최고 학습 조건으로 다시 학습한 " if info["made_best"] else "이미 최신인 ")

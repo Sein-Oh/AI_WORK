@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.53"
+  version: "2.9.54"
   platform: windows
 ---
 
@@ -97,7 +97,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -i "<피처1>=<값>,<피
 python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>"
 ```
 결과를 엑셀로 받고 싶다고 하면: `python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>" --save "<전체경로.xlsx>"`
-- 학습 때 `--header-row`/`--unit-row`를 줬으면 파일 예측에도 같은 옵션을 붙인다 (학습 결과 `next_commands`의 예측 명령에 들어 있음).
+- 파일 예측에는 `--header-row`/`--unit-row`를 붙이지 않는다 (도구가 파일마다 머리글을 찾는다).
 - `-i`에는 모델 입력만 넣는다. 모델 입력이 아닌 이름(`습도`, 다른 단위 `압력(MPa)`)이 있으면 도구가 멈춘다 (`[후보]`나 목록을 사용자에게 보여 주고 묻는다).
 - `-i "k=v"`는 한 건이다. 여러 건은 JSON 배열(`-i "[{...},{...}]"`)이나 .json 파일로 준다 (같은 이름이 두 번이면 도구가 멈춘다).
 - `-i`에 6건 이상을 넣으면 건별 값 대신 `output_file`(결과 파일)을 알린다 (`truncated: true`).

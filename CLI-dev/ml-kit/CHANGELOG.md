@@ -8,6 +8,28 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.54] - 2026-11-04
+
+예측 파일의 레이아웃이 학습 파일과 다를 때 도구가 그 자리에서 고쳐 읽음 (AGENTS.md JIT 자가복구). 회귀 테스트:
+`tests/test_loading_layout.py` `test_training_layout_on_plain_file_is_recovered`, `test_two_level_header_hint`,
+`test_several_header_rows_with_every_input_stop_with_candidates`, `test_layout_recovery_keeps_the_unit_row`,
+`test_predict_finds_model_names_with_units_in_a_header_unit_pair`, `test_predict_plain_template_on_a_unit_row_file`,
+`test_unit_row_file_for_a_unitless_model`, `test_title_and_unit_row_file_for_a_unitless_model`, `tests/test_train.py`
+`test_predict_next_commands_have_no_layout` (2.9.53에서 9개 모두 실패: STOP_RETRY [추천], 예측 명령에 레이아웃 옵션).
+
+### 바뀐 동작
+- `ml_predict.py -f`: 레이아웃이 파일과 맞지 않을 때 모델 입력이 모두 든 레이아웃이 **하나로 정해지면** 그 레이아웃으로 다시 읽고 `status: ok`,
+  `recovered: ["레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음"]`(단위 행이면 `, 단위 M행`, 건너뛴 행이 있으면 `, 데이터 K행부터`).
+  이전에는 `STOP_RETRY` + `[추천] <고친 전체 명령>`이었습니다. 대상 (판단 규칙은 이전 `[추천]`과 같음, `_layout_fix`):
+  - 준 레이아웃 옵션(학습 때 옵션을 붙인 경우)으로는 데이터가 없거나 모델 열이 없고, 옵션 없이 읽으면 모델 열이 모두 있음.
+  - 모델 입력이 모두 든 머리글이 위쪽의 다른 한 행에 있음 (두 줄 머리글, 병합된 머리글, 제목 행).
+  - 옵션 없이 읽은 첫 데이터 행이 단위·메모 행 (단위가 든 모델은 `--unit-row`, 단위 없는 모델은 `--data-row`로 건너뜀).
+  모델 입력이 모두 든 행이 둘 이상이면 고르지 않고 `STOP_RETRY` + `[후보] --header-row 2, --header-row 4`(사용자에게 물음).
+  준 옵션으로 모델 열이 모두 읽히면 옵션을 그대로 씁니다(복구 없음). 모델 입력의 일부만 다른 행에 있으면 이전처럼 `[추천]`.
+- 학습 결과와 `--best`, 보고서 결과의 예측 명령(`next_commands`)에서 `--header-row/--unit-row/--data-row`를 뺐습니다. 새 파일은 구조가
+  다를 수 있고, 도구가 파일마다 머리글을 찾습니다. SKILL.md 4단계의 "학습 때 옵션을 예측에도 붙인다"를 "붙이지 않는다"로.
+- 내부: `ml_train.layout_flags`, `ml_report._layout_args`와 그 테스트를 없앰. `_unit_row_hint`는 `_layout_fix`에 합침.
+
 ## [2.9.53] - 2026-11-04
 
 회사 PC 시험: 에이전트가 CP949로 저장된 `excluded_rows.csv`를 깨진 글자로 읽고 제외 이유를 지어냄. 회귀 테스트: `tests/test_train.py`

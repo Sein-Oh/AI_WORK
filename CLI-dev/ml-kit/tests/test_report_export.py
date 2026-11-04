@@ -227,15 +227,6 @@ def test_report_fmt_significant_digits():
     assert mr.fmt(0.0009876) == "0.0009876" and mr.fmt(0.001234) == "0.001234"
 
 
-def test_report_predict_command_layout_from_history():
-    import ml_report as mr
-    recs = [{"task": "regression", "data_profile": {"layout": {"header_row": 2, "unit_row": 3, "data_row": None}}}]
-    ns = mr._layout_args(argparse.Namespace(header_row=None, unit_row=None, data_row=None), recs, "regression")
-    assert mt.layout_flags(ns) == " --header-row 2 --unit-row 3"
-    ns = mr._layout_args(argparse.Namespace(header_row=5, unit_row=None, data_row=None), recs, "regression")
-    assert mt.layout_flags(ns) == " --header-row 5 --unit-row 3"
-
-
 def test_report_reuses_single_best_version(tmp_path):
     pytest.importorskip("docx")
     pytest.importorskip("matplotlib")

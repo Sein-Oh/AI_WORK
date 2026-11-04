@@ -712,16 +712,16 @@ def test_next_commands_flag_placeholders_and_put_runnable_first(sample_model, tm
     assert not any("성능예측표" in c["purpose"] for c in payload["next_commands"])   # 분류는 성능예측표 없음
 
 
-def test_predict_next_commands_carry_layout(tmp_path):
+def test_predict_next_commands_have_no_layout(tmp_path):
     args = argparse.Namespace(header_row=3, unit_row=4, data_row=None, dtypes=None)
     cmds = mt.build_next_commands(
         args=args, raw_file=str(tmp_path / "d.xlsx"), task=mt.TASK_REGRESSION, positive_class=None,
         feature_names=["a"], created_features=[], applied_evals=[], target_names=["y"], champion={}, schema={"numeric": ["a"]},
         mean_score=0.99, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"))
     pred = [c for c in cmds if "ml_predict.py" in c["command"]][0]
-    assert pred["command"].endswith("--header-row 3 --unit-row 4")
+    assert pred["command"].endswith('-f "<새데이터.xlsx>"')                     # 2.9.53: --header-row 3 --unit-row 4
     best = mt.build_best_next_commands(str(tmp_path / "d.xlsx"), str(tmp_path / "v2"), args)
-    assert best[1]["command"].endswith("--header-row 3 --unit-row 4")
+    assert best[1]["command"].endswith('-f "<새데이터.xlsx>"') and "--unit-row" not in best[1]["command"]
 
 
 def test_quoted_names_go_through_files(tmp_path):

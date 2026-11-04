@@ -107,14 +107,14 @@ th { background: var(--soft); font-weight: 700; }
 <button id="menu" type="button">목차 열기/닫기</button>
 <nav id="side">
   <div class="brand">ml-kit 사용 가이드</div>
-  <div class="ver">베타 | ml-kit 2.9.53 | Gemma 기준</div>
+  <div class="ver">베타 | ml-kit 2.9.54 | Gemma 기준</div>
   <input id="tocq" type="search" placeholder="목차에서 찾기 (예: 차트)">
   <div id="toc"></div>
 </nav>
 <main>
 <header class="top">
   <h1>ml-kit 사용 가이드</h1>
-  <p>엑셀 데이터로 예측 모델을 만들고, 새 조건의 결과를 예측하고, 보고서를 만드는 방법 | 베타테스트용 | ml-kit 2.9.53</p>
+  <p>엑셀 데이터로 예측 모델을 만들고, 새 조건의 결과를 예측하고, 보고서를 만드는 방법 | 베타테스트용 | ml-kit 2.9.54</p>
 </header>
 
 <p class="lead">ml-kit은 엑셀이나 CSV로 모아 둔 과거 데이터에서 <b>규칙을 스스로 배워</b>, 새로운 조건에서 결과가 어떻게 될지 <b>예측</b>하는 도구입니다.
@@ -343,7 +343,7 @@ th { background: var(--soft); font-weight: 700; }
   <div class="res"><p>새 파일과 같은 폴더에 <code>다음주_생산계획_pred_&lt;시각&gt;.csv</code>가 만들어집니다. 원래 열 옆에 예측 열이 붙어 있습니다.</p></div>
   <p class="req">결과는 C:\업무\예측결과.xlsx 엑셀로 저장해줘</p>
   <div class="res"><p>말한 경로에 엑셀 파일로 저장합니다. 같은 이름 파일이 있으면 시각을 붙인 새 이름으로 저장하고 알려 줍니다.</p></div>
-  <div class="tip"><p>새 파일에는 학습 때 쓴 피처 열이 같은 이름으로 있어야 합니다. 타겟 열은 없어도 됩니다.</p></div>
+  <div class="tip"><p>새 파일에는 학습 때 쓴 피처 열이 같은 이름으로 있어야 합니다. 타겟 열은 없어도 됩니다. 머리글 위치나 단위 행이 학습 파일과 달라도 도구가 머리글을 찾아 읽고, 그렇게 고쳐 읽었으면 결과에 "머리글 N행으로 읽음"이라고 알려 줍니다. 항목 이름이 든 행이 여러 개라 정할 수 없으면 어느 행인지 묻습니다.</p></div>
 </div>
 
 <h3 id="p-cols">6.3 예측 결과 열 읽는 법</h3>

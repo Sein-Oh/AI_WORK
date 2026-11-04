@@ -1276,18 +1276,12 @@ def _q(v: str) -> str:
     return '"' + str(v) + '"'
 
 
-def layout_flags(args: argparse.Namespace) -> str:
-    """' --header-row 4 --unit-row 5' when the data was read with a layout: a new file of the same layout needs it too."""
-    return "".join(f" {flag} {int(val)}" for flag, val in (
-        ("--header-row", getattr(args, "header_row", None)), ("--unit-row", getattr(args, "unit_row", None)),
-        ("--data-row", getattr(args, "data_row", None))) if val is not None)
-
-
-def predict_next_command(final_dir: str, args: argparse.Namespace, purpose: str) -> Dict[str, Any]:
+def predict_next_command(final_dir: str, purpose: str) -> Dict[str, Any]:
+    """The prediction command for a new file, without layout options: ml_predict.py finds the header of each file
+    (a layout that does not fit the new file is recovered in place, so copying the training layout is not needed)."""
     here = os.path.dirname(os.path.abspath(__file__))
     return {"purpose": purpose,
-            "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\""
-                       + layout_flags(args),
+            "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\"",
             "needs_input": True, "placeholder": "<새데이터.xlsx>"}
 
 
@@ -1344,7 +1338,7 @@ def build_next_commands(
             "needs_input": False,
         })
         cmds.append(predict_next_command(
-            final_dir, args, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
+            final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
@@ -2308,7 +2302,7 @@ def build_best_next_commands(raw_file: str, final_dir: str, args: argparse.Names
         {"purpose": REPORT_PURPOSE.get(task, REPORT_PURPOSE[TASK_CLASSIFICATION]),
          "command": f"python {_q(os.path.join(here, 'ml_report.py'))} -f {_q(raw_file)}",
          "needs_input": False},
-        predict_next_command(final_dir, args, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
+        predict_next_command(final_dir, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
     ]
 
 

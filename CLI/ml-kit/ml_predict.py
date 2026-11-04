@@ -57,7 +57,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.53"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.54"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -3253,71 +3253,149 @@ def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share <= 0.5
 
 
-def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
-                 missing: Optional[List[str]] = None) -> str:
-    """Why a file misses the model columns, as ONE suggestion (the tool never switches the layout by itself):
-    - layout options given, and the file read WITHOUT them has every model input and numbers in the first data row
-      -> [추천] <the command without them>; a unit row read as data -> the command with --unit-row <header + 1>
-    - the missing names are in another top row (two-level / merged header) -> [추천] --header-row N"""
+def _model_inputs(model_items: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
+    """(every raw model input, the numeric ones) over all target models."""
     needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
-    numeric = [c for it in model_items for c in model_raw_inputs(it["meta"])
-               if c not in it["meta"]["feature_schema"].get("categorical", {})
-               and c not in it["meta"]["feature_schema"].get("datetime", {})]
-    numeric = list(dict.fromkeys(numeric))
-    has_layout = any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row"))
-    if has_layout and getattr(args, "file", None):
-        cmd = None
+    numeric = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])
+                                 if c not in it["meta"]["feature_schema"].get("categorical", {})
+                                 and c not in it["meta"]["feature_schema"].get("datetime", {})))
+    return needed, numeric
+
+
+def _has_layout(args: argparse.Namespace) -> bool:
+    return any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row"))
+
+
+def _layout_fix(args: argparse.Namespace, model_items: List[Dict[str, Any]],
+                df_input: Optional[pd.DataFrame] = None) -> Tuple[Optional[str], List[int]]:
+    """The layout of a prediction file whose layout options (often copied from training) or automatic reading miss
+    the model columns, when exactly ONE layout reads every model input: (layout option text, '' = no options, []).
+    (None, rows) when several top rows hold every model input (the tool cannot pick), (None, []) when none does.
+    - layout options given, and the file read WITHOUT them has every model input and data in the first data row
+      -> no options; a unit or notes row right below that header -> the options that skip it (_fit_unit_layout)
+    - the model inputs are all in ONE other top row (two-level / merged header, title rows) -> --header-row N
+      (with the unit row below it when there is one)
+    - read without options, the first data row is a unit or notes row -> the options that skip it"""
+    needed, numeric = _model_inputs(model_items)
+    has_layout = _has_layout(args)
+    read_ok = df_input is not None and _inputs_present(needed, [str(c) for c in df_input.columns])
+    if has_layout and not read_ok:      # options that read the file with every model input are kept as given
         try:
             auto = load_data_file(args.file)
         except Exception:
             auto = None
         if auto is not None and _inputs_present(needed, [str(c) for c in auto.columns]):
-            # the row below the header decides (_fit_unit_layout): a unit or notes row -> the options that skip it;
-            # else the first data row is data (numbers, or a measurement failure row with a number) -> no options
             layout = _fit_unit_layout(args.file, needed, None, int(auto.attrs.get("header_row", 1)) + 1, numeric)
             if layout:
-                cmd = _predict_command(args, layout=layout)
-            elif not auto.attrs.get("unit_row_below") and (_first_row_numeric(auto, numeric) or _row_has_data(auto, 0)):
-                cmd = _predict_command(args)
-        if cmd:
-            return ("레이아웃 옵션(--header-row/--unit-row/--data-row)이 이 파일과 맞지 않습니다. "
-                    f"이 파일의 머리글로 읽으면 모델 입력 열이 모두 있습니다. [추천] {cmd}")
+                return layout, []
+            if not auto.attrs.get("unit_row_below") and (_first_row_numeric(auto, numeric) or _row_has_data(auto, 0)):
+                return "", []
+    if df_input is None:
+        return None, []
+    if not read_ok:
+        cands = df_input.attrs.get("header_candidates") or []
+        hits = [c for c in cands if find_header_layout([c], needed, model_names=True) is not None]
+        rows = sorted({int(c[0]) for c in hits})
+        if len(rows) > 1:
+            return None, rows
+        if len(rows) == 1 and rows[0] != getattr(args, "header_row", None):
+            row, unit = find_header_layout(hits, needed, model_names=True)
+            layout = f"--header-row {row}"
+            if unit:
+                # a model trained without units needs the unit row skipped (--data-row), not joined to the names
+                layout = _fit_unit_layout(args.file, needed, row, unit, numeric) or f"{layout} --unit-row {unit}"
+            return layout, []
+        return None, []
+    if not has_layout and not df_input.empty and (df_input.attrs.get("unit_row_below")
+                                                  or _first_row_is_text(df_input, numeric)):
+        layout = _fit_unit_layout(args.file, needed, None, int(df_input.attrs.get("header_row", 1)) + 1, numeric)
+        if layout:
+            return layout, []
+    return None, []
+
+
+_LAYOUT_OPT_RE = re.compile(r"--(header-row|unit-row|data-row) (\d+)")
+
+
+def _apply_layout(args: argparse.Namespace, layout: str) -> None:
+    """Sets args.header_row / unit_row / data_row to the option text of _layout_fix (absent = None)."""
+    vals: Dict[str, Optional[int]] = {"header_row": None, "unit_row": None, "data_row": None}
+    for flag, v in _LAYOUT_OPT_RE.findall(layout):
+        vals[flag.replace("-", "_")] = int(v)
+    for k, v in vals.items():
+        setattr(args, k, v)
+
+
+def _layout_note(df: pd.DataFrame) -> str:
+    """'레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음' (+ unit row / first data row) for the recovered list."""
+    text = f"레이아웃 옵션이 이 파일과 달라 머리글 {df.attrs.get('header_row', 1)}행으로 읽음"
+    if df.attrs.get("unit_row"):
+        text += f", 단위 {df.attrs['unit_row']}행"
+    if df.attrs.get("data_row"):
+        text += f", 데이터 {df.attrs['data_row']}행부터"
+    return text
+
+
+def _layout_candidates_text(rows: List[int]) -> str:
+    return (f"모델 입력 열이 모두 들어 있는 행이 파일에 여러 개 있습니다 ({', '.join(map(str, rows))}행). 어느 행이 머리글인지 "
+            f"사용자에게 물으십시오. [후보] " + ", ".join(f"--header-row {r}" for r in rows[:10]))
+
+
+def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
+                 missing: Optional[List[str]] = None) -> str:
+    """Why a file still misses some model columns after _load_prediction_file (no single layout reads every model
+    input): [후보] rows when several rows hold every input; the missing names in another top row -> [추천] that
+    layout (only some inputs there, so the tool does not switch by itself)."""
+    _, rows = _layout_fix(args, model_items, df_input)
+    if rows:
+        return _layout_candidates_text(rows)
     if df_input is not None and missing:
+        needed, numeric = _model_inputs(model_items)
         found = find_header_layout(df_input.attrs.get("header_candidates"), missing, model_names=True)
         if found is not None and found[0] != getattr(args, "header_row", None):
             row, unit = found
             where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
-            if unit is None and not has_layout:
+            if unit is None and not _has_layout(args):
                 return f"{where}. [추천] --header-row {row}"
             layout = f"--header-row {row}"
             if unit:
                 where += f", {unit}행은 단위 행입니다"
-                # a model trained without units needs the unit row skipped (--data-row), not joined to the names
                 layout = (_fit_unit_layout(args.file, needed, row, unit, numeric) if getattr(args, "file", None)
                           else "") or f"{layout} --unit-row {unit}"
             return f"{where}. [추천] " + _predict_command(args, layout=layout)
     return ""
 
 
-def _unit_row_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: pd.DataFrame) -> str:
-    """A file read without layout options whose first data row is a unit row ('°C', 'bar'; _looks_like_unit_row on
-    the file, so a first data row of blank or '측정불가' inputs does not hide it) or a notes row: predicting it would
-    impute every input. The layout that skips it (_fit_unit_layout) -> '[추천] <the command with it>', else ''."""
-    if any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row")) or df_input.empty:
-        return ""
-    needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
-    numeric = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])
-                                 if c not in it["meta"]["feature_schema"].get("categorical", {})
-                                 and c not in it["meta"]["feature_schema"].get("datetime", {})))
-    if not df_input.attrs.get("unit_row_below") and not _first_row_is_text(df_input, numeric):
-        return ""
-    unit_row = int(df_input.attrs.get("header_row", 1)) + 1
-    layout = _fit_unit_layout(args.file, needed, None, unit_row, numeric)
-    if not layout:
-        return ""
-    first = [str(df_input[c].iloc[0]) for c in df_input.columns[:6]]
-    return (f"파일 {unit_row}행(첫 데이터 행)이 데이터가 아니라 단위·메모 행으로 보입니다 ({first}). 그대로 예측하면 "
-            f"이 행을 빈 값으로 채워 예측합니다. [추천] {_predict_command(args, layout=layout)}")
+def _load_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Reads the prediction file. A layout that does not fit the file (training layout options on another file, a
+    header in another row, a unit row read as data) is recovered in place (JIT, AGENTS.md) when exactly one layout
+    reads every model input: recovered '레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음'. Several candidate rows
+    stop with [후보]; no layout that fits stops with the loader's / the column check's message."""
+    decimal_comma = any(bool(it["meta"].get("decimal_comma")) for it in model_items)
+
+    def _read() -> pd.DataFrame:
+        return load_data_file(file_path=args.file, header_row=args.header_row, unit_row=args.unit_row,
+                              data_row=args.data_row, decimal_comma=decimal_comma)
+    try:
+        df = _read()
+    except InputError as e:
+        layout, rows = _layout_fix(args, model_items)
+        if layout is None:
+            if rows:
+                raise InputError(f"{str(e).split('[추천]')[0].rstrip()} {_layout_candidates_text(rows)}")
+            raise
+        _apply_layout(args, layout)
+        df = _read()
+        note_recovered(_layout_note(df))
+        return df
+    layout, rows = _layout_fix(args, model_items, df)
+    if rows:
+        raise InputError(_layout_candidates_text(rows))
+    if layout is not None:
+        _apply_layout(args, layout)
+        df = _read()
+        note_recovered(_layout_note(df))
+    return df
 
 
 def _row_has_data(df: pd.DataFrame, i: int) -> bool:
@@ -3422,26 +3500,9 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         is_inline = True
         source_desc = f"Inline Input ({len(df_input)} record(s))"
     elif args.file:
-        try:
-            df_input = load_data_file(
-                file_path=args.file,
-                header_row=args.header_row,
-                unit_row=args.unit_row,
-                data_row=args.data_row,
-                decimal_comma=any(bool(it["meta"].get("decimal_comma")) for it in model_items)
-            )
-        except InputError as e:
-            # the layout options (often copied from training) do not fit this file: suggest the command without them
-            # (one [추천] only: this checked suggestion replaces the loader's own)
-            hint = _layout_hint(args, model_items)
-            if hint:
-                raise InputError(f"{str(e).split('[추천]')[0].rstrip()} {hint}")
-            raise
+        df_input = _load_prediction_file(args, model_items)
         is_inline = False
         source_desc = os.path.basename(args.file)
-        hint = _unit_row_hint(args, model_items, df_input)
-        if hint:
-            raise InputError(hint)
         file_warnings = layout_warnings(df_input, training=False)   # repeated header rows, totals rows
     else:
         raise InputError("추론할 입력 데이터(--file 또는 --input)를 지정해야 합니다.")
