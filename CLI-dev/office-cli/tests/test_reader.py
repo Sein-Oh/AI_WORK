@@ -2351,10 +2351,11 @@ RECALL_TEXT = "\n\n".join([
 
 # (검색어, 찾아야 하는 단락 번호들, 기대 match_mode)
 RECALL_CASES = [
-    ("정격전압은 5V", {1}, "exact"),          # 검색어의 조사, 5V = 5.0 V
-    ("작동 온도 AND -20°C", {2}, "exact"),    # °C = ℃ (부호 없는 '20°C'는 음수 '-20℃'와 맞지 않음, 1.4.68)
-    ("PCB 두께", {3}, "exact"),               # 전각 ＰＣＢ
-    ("절연저항이 100MΩ", {4}, "exact"),       # 조사, 숫자와 단위 띄어쓰기
+    # 숫자가 든 검색어가 표기가 다른 곳(조사, 5V = 5.0 V, °C = ℃)에서만 맞으면 exact_mixed (층 B, 1.4.70)
+    ("정격전압은 5V", {1}, "exact_mixed"),    # 검색어의 조사, 5V = 5.0 V
+    ("작동 온도 AND -20°C", {2}, "exact_mixed"),  # °C = ℃ (부호 없는 '20°C'는 음수 '-20℃'와 맞지 않음, 1.4.68)
+    ("PCB 두께", {3}, "exact"),               # 전각 ＰＣＢ (숫자 없는 검색어는 그대로)
+    ("절연저항이 100MΩ", {4}, "exact_mixed"),  # 조사, 숫자와 단위 띄어쓰기
     ("접지-단자", {5}, "exact"),              # 대시 종류
     ("정격 전압 AND 절연", {1, 4}, "partial"),  # 둘 다 든 단락 없음 -> 하나씩 든 단락
     ("케이불 피복", {7}, "fuzzy"),            # 오타 한 글자 (한글 4음절 이상, 첫·끝 음절 같음)
@@ -2384,7 +2385,11 @@ def test_search_recall_variants(tmp_path, capsys, query, want, mode):
     code, out = run_main(reader, capsys, "search", "--query", query, "--file", str(p), "--full")
     assert code == 0 and _hit_numbers(out) == want, (query, out.get("matches"))
     assert out["match_mode"] == mode
-    if mode != "exact":
+    if mode == "exact_mixed":
+        # 표기가 다른 곳만: 결과에 넣되 literal false + UNVERIFIED (글자 그대로 0건)
+        assert out["count"] == len(want) and out["literal_count"] == 0 and all(m["literal"] is False for m in out["matches"])
+        assert out["agent_directive"].startswith(f"UNVERIFIED: 글자 그대로 일치 0건, 표기가 다른 곳 {len(want)}건"), out
+    elif mode != "exact":
         # 넓혀 찾은 결과는 정확 일치 0건 + candidates + UNVERIFIED (근거로 쓰지 않게)
         assert out["count"] == 0 and out["total_matches"] == 0 and out["candidate_count"] == len(want) and "matches" not in out
         assert out["agent_directive"].startswith("UNVERIFIED: 정확히 일치한 곳은 0건") and mode in out["agent_directive"]
@@ -3158,3 +3163,97 @@ def test_diff_save_md_warns_xlsx(tmp_path, capsys):
     code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--save", str(tmp_path / "차이.md"))
     assert code == 0 and out["output_file"].endswith(".xlsx"), out
     assert any(".md" in w and ".xlsx" in w for w in out["warnings"]) and "warnings" in out["agent_directive"], out
+
+
+# 7차 검토 (1.4.70): 숫자가 든 검색어의 두 층 판정. 층 A(literal: 글자 그대로 + 엄격한 경계)만 VERIFIED,
+# 층 B(정규화 매처만 찾은 곳: 띄어쓰기·단위 별칭·부호 판정)는 결과에 넣되 literal false + UNVERIFIED (exact_mixed)
+def _layer(query, text):
+    g = reader.build_matcher(query, False)(text)
+    if g is not None:
+        return "A" if reader.literal_hit(text, g) else "B"
+    return "N" if reader.number_search([({}, {"text": text})], reader.parse_query(query), re.IGNORECASE) else "-"
+
+
+def _unescape(x):
+    return re.sub(r"\\u([0-9a-f]{4})", lambda m: chr(int(m.group(1), 16)), x).replace("\\t", "\t").replace("\\n", "\n")
+
+
+def _load_literal_cases():
+    out = []
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "number_literal_cases.tsv")
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or "\t" not in line:
+                continue
+            q, t, want = line.rstrip("\n").split("\t")
+            out.append((_unescape(q), _unescape(t), want))
+    return out
+
+
+LITERAL_CASES = _load_literal_cases()
+
+
+@pytest.mark.parametrize("query,text,want", LITERAL_CASES)
+def test_number_literal_layer_review7(query, text, want):
+    got = _layer(query, text)
+    assert (got == "A") is (want == "A"), (query, text, got)
+
+
+def test_number_literal_layer_counts():
+    # 6·7차 검토 오일치 쌍 전부(notA)가 표에 있고, 기본 표기(A)는 모두 층 A
+    assert sum(1 for c in LITERAL_CASES if c[2] == "notA") >= 250 and sum(1 for c in LITERAL_CASES if c[2] == "A") >= 20
+
+
+@pytest.mark.parametrize("query,text,want", [
+    # 층 B로 찾음 (표기가 다름): 결과에는 들지만 VERIFIED가 아님
+    ("5 V", "5 Vdc", "B"), ("25 \u2103", "25\u00b0C", "B"), ("-40 \u2103", "\u221240\u2103", "B"),
+    ("1,500 rpm", "1500 rpm", "B"), ("10 uA", "10 \u03bcA", "B"), ("SOI 1", "SOI-1", "B"),
+    ("정격 전압 5 V", "정격 전압은 5V", "B"),
+    # 모두 대문자 단위는 층 B에서 대소문자를 가리지 않음 ('10 MM', '10UF', '20MA'가 후보로만 나오던 회귀)
+    ("10 MM", "10 mm", "B"), ("10 MM", "10 \u339c", "B"), ("10UF", "10 uF", "B"), ("10UF", "10 \u03bcF", "B"),
+    ("20MA", "20 mA", "B"), ("20MA", "20 MA", "A"),
+    # 소문자·섞인 단위의 접두 대소문자는 그대로 가림
+    ("10 mA", "10 MA", "N"), ("10 M\u03a9", "10 m\u03a9", "N"), ("10 mW", "10 MW", "N"),
+    # 7차 검토에서 exact VERIFIED였던 전각 빼기·탭 너머 빼기: 이제 층 B(UNVERIFIED)로만
+    ("40 \u2103", "보관 \uff0d40 \u2103", "B"), ("-40 \u2103", "동작 온도\t-\t40 \u2103", "B"),
+])
+def test_number_layer_b_and_caps_units(query, text, want):
+    assert _layer(query, text) == want, (query, text)
+
+
+def test_search_exact_mixed_output(tmp_path, capsys):
+    p = tmp_path / "규격.txt"
+    p.write_text("정격 5 Vdc 공급\n\n입력 -5 V\n\n보조 전원 5V 공급\n\n출력 5 V 이하\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "5 V", "--file", str(p), "--save", str(tmp_path / "근거.csv"))
+    assert code == 0 and out["match_mode"] == "exact_mixed" and out["count"] == 3 and out["literal_count"] == 2, out
+    # 층 A를 먼저, 항목마다 literal. 부호가 다른 '-5 V'는 결과에 없음
+    assert [m["literal"] for m in out["matches"]] == [True, True, False], out["matches"]
+    assert "정격" in out["matches"][2]["snippet"] and all("-5" not in m["snippet"] for m in out["matches"])
+    d = out["agent_directive"]
+    assert d.startswith("UNVERIFIED: 글자 그대로 일치 2건, 표기가 다른 곳 1건(literal: false, 부호·단위를 확인하세요)"), d
+    assert "literal: true인 결과만 근거로" in d and "evidence" in d and out["verified"] is False, d
+    rows = open(out["output_file"], encoding="utf-8-sig").read().splitlines()
+    assert rows[0].endswith(",점수,표기") and rows[-1].endswith(",표기 다름"), rows
+    # 층 A만이면 그대로 exact VERIFIED, literal_count = count
+    code, out = run_main(reader, capsys, "search", "--query", "출력 5 V", "--file", str(p))
+    assert out["match_mode"] == "exact" and out["count"] == out["literal_count"] == 1, out
+    assert out["matches"][0]["literal"] is True and out["agent_directive"].startswith("VERIFIED:"), out
+    # 숫자 없는 검색어는 literal 키 없이 지금 그대로
+    code, out = run_main(reader, capsys, "search", "--query", "공급", "--file", str(p))
+    assert out["match_mode"] == "exact" and "literal" not in out["matches"][0] and out["literal_count"] == 2, out
+
+
+def test_number_safety_net_checks_time_every_unit(monkeypatch):
+    # 7차 검토 [보통]: 시간 상한을 50단위마다 확인해 큰 단위(1MB)가 이어지면 상한을 크게 넘음 -> 단위마다 확인
+    monkeypatch.setattr(reader, "NUMBER_SEARCH_SECONDS", -1.0)
+    st = {}
+    units = [({}, {"text": "값 1 2 3"}) for _ in range(10)]
+    reader.number_search(units, reader.parse_query("1 2 3 9"), re.IGNORECASE, st)
+    assert st == {"cut": True, "checked": 0}, st
+
+
+@pytest.mark.parametrize("text,want", [("정격 1,5 V", []), ("정격 1,2345 V", []), ("정격 10,20 mm", []),
+                                       ("정격 1,500 V", [1500.0]), ("정격 5 V, 10 A", [5.0, 10.0])])
+def test_spec_number_comma_needs_three_digits(text, want):
+    # 7차 검토 [경미]: 쉼표 뒤가 3자리 묶음이 아니면 수치로 보지 않음 ('1,5'가 1이나 5로 읽히지 않게)
+    assert [c["lo"] for c in reader.spec_conditions(text)] == want

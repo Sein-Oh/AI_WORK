@@ -2500,13 +2500,24 @@ def build_matcher(query: str, regex: bool, args: Any = None):
         raise rt.InputError("검색어가 비어 있습니다.")
 
     pats = [[_term_pattern(t, flags) for t in g] for g in groups]
+    lits = [[literal_finder(t) for t in g] for g in groups]
 
     def match_terms(text: str):
+        # 숫자가 든 검색어는 정규화 매처(층 B) 또는 글자 그대로(층 A)로 맞음. 층 A로 다 맞은 묶음을 먼저 고름 (literal_hit)
         t = unicodedata.normalize("NFC", text)
-        for g, ps in zip(groups, pats):
-            if all(p.search(t) for p in ps):
-                return g
-        return None
+        first = None
+        for g, ps, ls in zip(groups, pats, lits):
+            literal = True
+            for p, lf in zip(ps, ls):
+                lit = lf.search(t) is not None if lf is not None else False
+                if not lit and not p.search(t):
+                    break
+                literal = literal and (lf is None or lit)
+            else:
+                if literal:
+                    return g
+                first = first or g
+        return first
     return match_terms
 
 
@@ -2606,11 +2617,14 @@ def _unit_alias(u: str) -> Optional[str]:
             pre = u[: -len(end)]
             forms = [pre + "\u03a9", pre + "\u2126", pre + "ohm"] + (["옴"] if not pre else [])
             break
-    squares = [chr(c) for c in range(0x3380, 0x33E0) if unicodedata.normalize("NFKC", chr(c)) in forms + [u]]
+    caps = _caps_unit(u)                       # 모두 대문자('MM', 'MW')는 대소문자를 가리지 않음 (1.4.70)
+    squares = [chr(c) for c in range(0x3380, 0x33E0)
+               if unicodedata.normalize("NFKC", chr(c)) in forms + [u]
+               or (caps and unicodedata.normalize("NFKC", chr(c)).upper() == u)]
     if not forms and not squares:
         return None
     # 첫 글자가 단위 접두(m, M, μ 등)면 대소문자를 가림: 'mohm'(밀리로 봄)은 'MΩ'과 다름
-    alts = [r"\s*".join((_prefix_char(x, f) if i == 0 else None) or _char(x) for i, x in enumerate(f))
+    alts = [r"\s*".join((_prefix_char(x, f) if i == 0 and not caps else None) or _char(x) for i, x in enumerate(f))
             for f in sorted(set(forms + [u]), key=len, reverse=True)]
     return "(?:" + "|".join(alts + [re.escape(x) for x in squares]) + ")"
 
@@ -2765,6 +2779,11 @@ def _prefix_char(c: str, unit: str) -> Optional[str]:
     return None
 
 
+def _caps_unit(unit: str) -> bool:
+    """검색어 숫자 뒤 단위를 영문 대문자로만 썼는지 ('MM', 'UF', 'MA': 대소문자를 뜻으로 쓰지 않은 표기로 봄)."""
+    return len(unit) >= 2 and unit.isascii() and unit.isalpha() and unit.isupper()
+
+
 def _unit_letters(w: List[str], ti: int) -> str:
     """낱말 토큰 w의 ti부터 이어진 영문·그리스 글자 (숫자 뒤 단위 글자: '10mHz이상' -> 'mHz')."""
     out = ""
@@ -2896,6 +2915,9 @@ def _single_pattern(term: str) -> str:
                 # ('-20 ℃'는 '20 ℃', '+20 ℃', '1-20 ℃'와 다름: _SignChecked)
                 head = _SIGN_HEAD.get(cls, "") if not parts and not pieces else ""
                 parts.append(head + _mark(cls) + _number(tok))
+            elif after_num and _caps_unit(_unit_letters(w, ti)):
+                # 모두 대문자로 쓴 단위('10 MM', '10UF', '20MA')는 접두 대소문자를 가리지 않음 (층 B 후보, 1.4.70)
+                parts.append(f"[{_MICRO}Uu]" if tok == "U" else _char(tok))
             elif after_num and _prefix_char(tok, _unit_letters(w, ti)):
                 parts.append(_prefix_char(tok, _unit_letters(w, ti)))  # 단위 접두 대소문자: '10 mHz' != '10 MHz'
             elif tok.upper() == "C" and prev[:1].isdigit():
@@ -2982,6 +3004,130 @@ def _term_pattern(term: str, flags: int) -> "re.Pattern[str]":
     """검색어(와 동의어)를 글 안에서 찾는 정규식 (_single_pattern 규칙)."""
     term = unicodedata.normalize("NFC", term)
     return _compiled(term, flags, tuple(synonyms_of(term)))
+
+
+# --- 숫자가 든 검색어의 두 층 판정 (1.4.70) ---
+# 층 A(literal): 검색어 글자열이 글에 그대로 있고 엄격한 경계를 만족 (띄어쓰기·탭 여러 칸 = 한 칸, 숫자와 단위 사이 띄어쓰기 0~1칸 차이,
+# ± 뒤 띄어쓰기만 허용. 대소문자·전각/반각·부호 글자는 그대로). 층 B: 위 정규화 매처(_single_pattern)만 찾은 곳.
+# 정규화 규칙을 더 늘리지 않고, 층 B는 결과에 넣되 VERIFIED로 내지 않음 (부호·대시·단위 표기 오일치가 검토마다 새로 나왔음)
+_LIT_SP = "[ \t\u00a0]"
+_LIT_SIGNS = "-+\u00b1\u2213\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe63\uff0d\uff0b\u02d7\u207a\u207b"
+_LIT_SUPER = "\u00b2\u00b3\u00b9" + "".join(chr(c) for c in range(0x2070, 0x20a0))
+_LIT_LETTER_AFTER = "\u03a9\u2126\u03bc\u00b5\u00b0\u2103\u2109"     # 단위 끝 뒤에 붙으면 다른 단위인 글자 (영문 밖)
+_LIT_SIGN_WORD = re.compile(r"(?:영하|마이너스|minus|negative)" + _LIT_SP + r"*$", re.IGNORECASE)
+_LIT_PAREN_SIGN = re.compile(r"\(\s*[" + re.escape(_LIT_SIGNS) + r"]\s*\)" + _LIT_SP + r"*$")
+# 부호 없는 검색어 숫자 앞을 띄어쓰기·'/' 건너 보면 ±·+ ('± 5 V', '+ 20', '+ / - 5 V', '+/-  10 %').
+# 빼기 하나만 띄어 쓴 것('0 - 5 V', 표 빈 칸 '-\t40')은 허용
+_LIT_PM_GAP = re.compile(r"[+\u00b1\u2213\uff0b][ \t\u00a0/]*(?:[" + re.escape(_LIT_SIGNS) + r"])?[ \t\u00a0/]*$")
+# 빼기로 시작하는 검색어 앞에 띄어 쓴 다른 값(숫자+단위)이나 'to'가 있으면 범위 대시인지 부호인지 애매
+_LIT_RANGE_LEFT = re.compile(r"(?:\d(?:" + _LIT_SP + r"?[^\s\d]{1,4})?|(?<![A-Za-z])to)" + _LIT_SP + r"+$", re.IGNORECASE)
+# 단위 끝 뒤의 뜻이 다른 꼬리: '(rms)', '(g)', '(A)', ' rms', ' p-p', ' peak', ' pk', ' abs', ' g'(게이지)
+_LIT_TAIL = re.compile(_LIT_SP + r"*\([A-Za-z]|" + _LIT_SP + r"+(?:rms|p-p|pp|peak|pk|abs|g)(?![A-Za-z])", re.IGNORECASE)
+
+
+def _latin(c: str) -> bool:
+    return bool(c) and (("a" <= c.lower() <= "z") or "\uff21" <= c <= "\uff3a" or "\uff41" <= c <= "\uff5a")
+
+
+def _unit_start(c: str) -> bool:
+    """숫자 바로 뒤에 오면 단위의 시작으로 보는 글자 (그 사이 띄어쓰기 0~1칸 차이는 층 A)."""
+    return c.isalpha() or c in "%\u00b0\u2103\u2109\u2126\u03a9\u00b5\u03bc\u2113" or "\u3380" <= c <= "\u33df"
+
+
+class _Literal:
+    """층 A 찾기: 검색어 글자열(띄어쓰기만 느슨하게) + 앞뒤 엄격한 경계. search(text)는 경계를 만족한 첫 일치(없으면 None)."""
+
+    def __init__(self, terms: List[str]):
+        self.items = []
+        for t in terms:
+            toks = re.findall(r"[ \t\u00a0\u3000]+|.", t.strip(), re.S)
+            out: List[str] = []
+            prev = ""
+            for k, tok in enumerate(toks):
+                if tok[0] in " \t\u00a0\u3000":
+                    nxt = toks[k + 1][0] if k + 1 < len(toks) else ""
+                    loose = (prev.isdecimal() and _unit_start(nxt)) or prev in "\u00b1\u2213" or nxt in "\u00b1\u2213"
+                    out.append(_LIT_SP + ("*" if loose else "+"))
+                else:
+                    # 숫자와 단위 사이, ± 앞뒤는 띄어쓰기 0~1칸 차이 허용 ('5V' = '5 V', '5V ±5%' = '5V±5%')
+                    if prev not in ("", " ") and ((prev.isdecimal() and _unit_start(tok)) or tok in "\u00b1\u2213"
+                                                  or (prev in "\u00b1\u2213" and tok.isdecimal())):
+                        out.append(_LIT_SP + "*")
+                    out.append(re.escape(tok))
+                prev = tok[-1] if tok[0] not in " \t\u00a0\u3000" else " "
+            if out:
+                self.items.append((re.compile("".join(out)), t.strip()))
+
+    @staticmethod
+    def _ok(text: str, s: int, e: int, q: str) -> bool:
+        first, last = q[0], q[-1]
+        before = text[s - 1] if s else ""
+        if before:
+            if first.isdecimal():
+                if before.isdecimal() or before in ".,/^" or before in _LIT_SIGNS or _latin(before):
+                    return False
+                if _LIT_SIGN_WORD.search(text[max(0, s - 20):s]) or _LIT_PAREN_SIGN.search(text[max(0, s - 12):s]):
+                    return False                                   # '영하 40 ℃', '(-)5 V'
+                if _LIT_PM_GAP.search(text[max(0, s - 24):s]):
+                    return False                                   # '±  0.5 mm', '+ / - 5 V', '+ 20' (띄어 쓴 ±·+)
+            elif first in _LIT_SIGNS:
+                # 검색어의 부호 앞: 다른 부호·영문은 아님, 숫자는 ±에만 ('100±0.5 mm'), '/'·','는 허용 ('+5 V/-5 V')
+                if before in _LIT_SIGNS or before in ".^" or _latin(before) or (before.isdecimal() and first not in "\u00b1\u2213"):
+                    return False
+                if first not in "+\u00b1\u2213\uff0b" and (_LIT_RANGE_LEFT.search(text[max(0, s - 24):s])
+                                                           or _LIT_PM_GAP.search(text[max(0, s - 24):s])):
+                    return False                                   # '25 -40 ℃', '+0.2 mm -0.1 mm', '25 to -40', '+/-5'
+            elif _latin(first) and (before.isdecimal() or _latin(before)):
+                return False
+        after = text[e] if e < len(text) else ""
+        if not after:
+            return True
+        nxt = text[e + 1] if e + 1 < len(text) else ""
+        if last.isdecimal():
+            if _latin(first) and after in "-_" and nxt.isalnum():
+                return False                                       # 영숫자 코드 'ABC-1234'는 'ABC-1234-5'와 다름
+            return not (after.isdecimal() or (after in ".," and nxt.isdecimal()) or _latin(after)
+                        or after in "^/*%" or after in _LIT_SUPER)
+        if _unit_start(last):
+            if after.isdecimal() or _latin(after) or after in _LIT_LETTER_AFTER or after in "^/" or after in _LIT_SUPER:
+                return False
+            if after == "%" and last != "%":
+                return False
+            if after in "-·." and _latin(nxt):
+                return False                                       # '10 N·m', '5 kgf-cm'
+            return not _LIT_TAIL.match(text, e)
+        return True
+
+    def search(self, text: str) -> Optional["re.Match[str]"]:
+        for pat, q in self.items:
+            pos = 0
+            while True:
+                m = pat.search(text, pos)
+                if m is None:
+                    break
+                if self._ok(text, m.start(), m.end(), q):
+                    return m
+                pos = m.start() + 1
+        return None
+
+
+@functools.lru_cache(maxsize=512)
+def _literal_compiled(term: str, syn: Tuple[str, ...]) -> Optional[_Literal]:
+    if not re.search(r"\d", term):
+        return None
+    return _Literal([term] + list(syn))
+
+
+def literal_finder(term: str) -> Optional[_Literal]:
+    """숫자가 든 검색어의 층 A 찾기 객체 (숫자가 없는 검색어는 None: 지금 동작 그대로)."""
+    term = unicodedata.normalize("NFC", term)
+    return _literal_compiled(term, tuple(synonyms_of(term)))
+
+
+def literal_hit(text: str, terms: List[str]) -> bool:
+    """맞은 검색어 묶음의 숫자가 든 검색어가 모두 글에 글자 그대로 있는지 (층 A). 숫자가 든 검색어가 없으면 True."""
+    t = unicodedata.normalize("NFC", text)
+    return all(f.search(t) is not None for f in (literal_finder(x) for x in terms) if f is not None)
 
 
 def make_snippet(text: str, terms: List[str], context: int) -> str:
@@ -3175,7 +3321,7 @@ def number_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: Li
     sign_chars = "\u00b1+/ \t" + _DASHES
     deadline = time.monotonic() + NUMBER_SEARCH_SECONDS
     for i, (doc, u) in enumerate(units):
-        if i % 50 == 49 and time.monotonic() > deadline:
+        if time.monotonic() > deadline:              # 단위마다 확인 (큰 단위 50개를 몰아 보면 상한을 크게 넘었음, 1.4.70)
             if status is not None:
                 status["cut"] = True
                 status["checked"] = i
@@ -3426,9 +3572,12 @@ def cmd_search(args) -> Dict[str, Any]:
             terms = matcher(u["text"])
             if terms is None:
                 continue
-            hits.append({"doc": doc, "unit": u, "terms": terms, "matched_terms": list(terms)})
+            hits.append({"doc": doc, "unit": u, "terms": terms, "matched_terms": list(terms),
+                         "literal": True if args.regex else literal_hit(u["text"], terms)})
     groups = [] if args.regex else parse_query(args.query)
-    mode = "exact"
+    has_num = any(literal_finder(t) for g in groups for t in g)       # 숫자가 든 검색어: 결과마다 literal(층 A) 표시
+    # 층 B(표기가 다른 일치)가 섞이면 exact_mixed: 결과에 함께 넣되 VERIFIED로 내지 않음
+    mode = "exact_mixed" if any(not h["literal"] for h in hits) else "exact"
     net_status: Dict[str, Any] = {}
     if not hits and groups and pool:
         # 0건: 숫자가 든 검색어면 숫자 값만 같은 곳(안전망) -> 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음.
@@ -3438,16 +3587,20 @@ def cmd_search(args) -> Dict[str, Any]:
         h["score"] = hit_score(h["unit"], h["terms"], flags) if not args.regex else 0
         h["snippet"] = make_snippet(h["unit"]["text"], h["terms"], args.context)
     if not args.regex:
-        hits.sort(key=lambda h: -h["score"])          # 좋은 결과부터 (같은 점수는 문서 순서)
+        # 글자 그대로 일치(층 A)를 먼저, 그 안에서 좋은 결과부터 (같은 점수는 문서 순서)
+        hits.sort(key=lambda h: (not h.get("literal", True), -h["score"]))
     syn_used = {t: synonyms_of(t) for g in groups for t in g if synonyms_of(t)}
 
     total = len(hits)
     shown = hits[: max(0, args.top)]
-    exact_total = total if mode == "exact" else 0       # 넓혀 찾은 결과는 일치 건수에 넣지 않음
+    exact_like = mode in ("exact", "exact_mixed")
+    exact_total = total if exact_like else 0       # 넓혀 찾은 결과는 일치 건수에 넣지 않음
+    literal_total = sum(1 for h in hits if h.get("literal", True)) if exact_like else 0
     result: Dict[str, Any] = {"query": args.query, "files_searched": len(docs), "total_matches": exact_total,
-                              "count": exact_total, "matched": len(shown) if mode == "exact" else 0, "shown": len(shown),
+                              "count": exact_total, "literal_count": literal_total,
+                              "matched": len(shown) if exact_like else 0, "shown": len(shown),
                               "truncated": total > len(shown), "match_mode": mode}
-    if mode != "exact":
+    if not exact_like:
         result["candidate_count"] = total
     if syn_used:
         result["synonyms_used"] = syn_used
@@ -3488,6 +3641,9 @@ def cmd_search(args) -> Dict[str, Any]:
         cut_cells = 0
         clamped_context = 0
         header = ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥", "점수"]
+        mixed_save = mode == "exact_mixed"
+        if mixed_save:
+            header.append("표기")                     # 글자 그대로(층 A) / 표기 다름(층 B, 부호·단위 확인)
         rows = []
         for h in saved:
             u = h["unit"]
@@ -3498,17 +3654,19 @@ def cmd_search(args) -> Dict[str, Any]:
                 clamped_context += 1 if cut else 0
             rows.append([os.path.basename(h["doc"]["file"]), u.get("page") if u.get("page") is not None else "",
                          section_text(u), u.get("number") or "", u["loc"],
-                         match_sentence(u["text"], h["terms"]), context_text, h["score"]])
+                         match_sentence(u["text"], h["terms"]), context_text, h["score"]]
+                        + (["글자 그대로" if h["literal"] else "표기 다름"] if mixed_save else []))
         if ext == ".csv":
             out = rt.write_csv_rows(out, [header] + rows)
         elif ext == ".xlsx":
-            out, cut_cells = write_xlsx_table(out, header, rows, [22, 6, 45, 10, 14, 60, 80, 6], "검색결과")
+            out, cut_cells = write_xlsx_table(out, header, rows, [22, 6, 45, 10, 14, 60, 80, 6] + [12] * mixed_save, "검색결과")
         else:
             lines = [f"# 검색 결과: {args.query}", ""]
             for h in saved:
                 u = h["unit"]
                 sec = section_text(u)
-                lines += [f"## {os.path.basename(h['doc']['file'])} > {u['loc']}" + (f" ({sec})" if sec else ""), "",
+                lines += [f"## {os.path.basename(h['doc']['file'])} > {u['loc']}" + (f" ({sec})" if sec else "")
+                          + (" [표기 다름: 부호·단위 확인]" if mixed_save and not h["literal"] else ""), "",
                           f"근거: {evidence_text(h['doc']['file'], u)}", "",
                           u["text"] if args.full else h["snippet"].replace("**", ""), ""]
             out = rt.write_text(out, "\n".join(lines))
@@ -3542,6 +3700,8 @@ def cmd_search(args) -> Dict[str, Any]:
             item["fuzzy_words"] = h["fuzzy_words"]
         if h.get("number_words"):
             item["number_words"] = h["number_words"]
+        if has_num and exact_like:
+            item["literal"] = h["literal"]        # False: 표기가 다른 곳(띄어쓰기·단위 별칭·부호 판정으로 찾음)
         if args.full:
             item["text"], cut = rt.clamp_text(u["text"], SEARCH_JSON_FULL_CHARS)
             if cut:
@@ -3553,7 +3713,7 @@ def cmd_search(args) -> Dict[str, Any]:
         if doc.get("_stale"):
             item["stale"] = True             # 원본이 바뀌기 전 내용 (근거로 쓰기 전에 다시 등록 필요)
         view.append(item)
-    result["matches" if mode == "exact" else "candidates"] = view
+    result["matches" if exact_like else "candidates"] = view
     if text_cut:
         result["truncated"] = True
         result["truncated_reason"] = (f"--full 항목 {text_cut}개의 text를 {SEARCH_JSON_FULL_CHARS}자에서 자름 "
@@ -3621,7 +3781,7 @@ def cmd_search(args) -> Dict[str, Any]:
         return rt.ok(TOOL, "search", preview,
                      "VERIFIED: 0건. 조건에 맞는 항목이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요." + notes,
                      **result)
-    if mode != "exact":
+    if not exact_like:
         # 정확히 일치한 곳은 0건: 넓혀 찾은 결과는 후보일 뿐이라 VERIFIED로 내지 않음 ("대기 전류"가 "대기 전력"에 맞던 문제)
         what = {"partial": "일부 검색어만 든 곳, 빠진 검색어는 missing_terms",
                 "number": "숫자 값만 같은 곳(부호·단위 표기는 다를 수 있음), 실제 글은 number_words"}.get(
@@ -3641,13 +3801,18 @@ def cmd_search(args) -> Dict[str, Any]:
                                       + notes)                # stale·indexed_now·clamp·text_cut 안내를 지우지 않음
         return payload
     preview = f"'{args.query}': {scope}에서 {total}건 일치" + (f" (상위 {len(shown)}건 표시)" if total > len(shown) else "")
+    # 층 B가 섞임: 글자 그대로가 아닌 일치는 부호·단위 표기가 다를 수 있어 VERIFIED로 내지 않음 (1.4.70)
+    mixed = ([f"글자 그대로 일치 {literal_total}건, 표기가 다른 곳 {total - literal_total}건(literal: false, 부호·단위를 확인하세요)"]
+             if mode == "exact_mixed" else [])
+    if mixed:
+        preview += f" (글자 그대로 {literal_total}건, 표기가 다른 곳 {total - literal_total}건)"
     evid = " 각 결과의 근거는 evidence(파일 p.N, 장절 (번호))를 그대로 알리세요. page가 null이면 장절과 번호로 알립니다."
     if "output_file" in result:
         preview += f", 저장: {result['output_file']}"
         directive = "VERIFIED: 검색과 저장 완료(저장 파일을 다시 열어 확인)." + evid
         save_issues = [x for x in (result.get("save_truncated_reason"), result.get("save_problem")) if x]
         if save_issues:
-            payload = rt.ok_unverified(TOOL, "search", preview, save_issues + (
+            payload = rt.ok_unverified(TOOL, "search", preview, mixed + save_issues + (
                 ["검색하지 못한 부분이 있음: " + "; ".join(gaps)] if gaps else []), **result)
             payload["agent_directive"] += evid
             return payload
@@ -3660,8 +3825,16 @@ def cmd_search(args) -> Dict[str, Any]:
             directive += " 일부만 표시했습니다. 전체 결과가 필요하면 next_commands의 저장 명령을 그대로 실행하세요."
     if gaps:
         payload = rt.ok_unverified(TOOL, "search", preview + ", 검색 범위 불완전",
-                                   ["검색하지 못한 부분이 있어 결과가 전부가 아닐 수 있음: " + "; ".join(gaps)], **result)
+                                   mixed + ["검색하지 못한 부분이 있어 결과가 전부가 아닐 수 있음: " + "; ".join(gaps)], **result)
         payload["agent_directive"] += evid
+        return payload
+    if mixed:
+        payload = rt.ok_unverified(TOOL, "search", preview, mixed, **result)
+        payload["agent_directive"] = (
+            "UNVERIFIED: " + mixed[0] + ". literal: true인 결과만 근거로 쓰고, literal: false인 결과는 사용자에게 실제 글(snippet)을 "
+            "보여 주고 맞는지 확인을 받으세요."
+            + ("" if info["stale"] and not args.file else " 같은 검색을 다시 실행하지 마세요.")
+            + " " + directive.split(". ", 1)[1] + notes)        # 근거(evidence)·저장·일부 표시 안내는 그대로
         return payload
     return rt.ok(TOOL, "search", preview, directive + notes, **result)
 
@@ -3947,7 +4120,8 @@ _UNIT_RE = (rf"(?:{_UNIT_ALT})(?:(?<=초)(?!과)|(?<!초))(?:(?=dc|ac|DC|AC)|(?!
             r"(?!\s*[\u00b7\u22c5*/]\s*[A-Za-z\u03a9\u03bc\u00b0])(?![\^\d])")
 # 숫자는 다른 숫자의 가운데서 시작하지 않고 구분자 없이 30자를 넘으면 수치가 아님 (시리얼 번호 등): 긴 숫자열에서
 # 모든 자리를 시작점으로 다시 읽어 시간이 제곱으로 늘던 문제 (1.4.69)
-_NUM_RE = r"[+-]?(?<!\d)(?:\d{1,3}(?:,\d{3})+|\d{1,30})(?!\d)(?:\.\d{1,30}(?!\d))?"
+# 쉼표 뒤가 3자리 묶음이 아니면('1,2345', '1,5', '10,20') 수치로 보지 않음 (1.4.70)
+_NUM_RE = r"[+-]?(?<!\d)(?<!\d,)(?:\d{1,3}(?:,\d{3})+|\d{1,30})(?![\d])(?!,\d)(?:\.\d{1,30}(?!\d))?"
 _Q = rf"(?P<{{n}}>{_NUM_RE})\s*(?P<{{u}}>{_UNIT_RE})?"          # 숫자와 (있으면) 단위
 # 단위 뒤 꼬리: 'V DC', 'V rms', 'dB(A)', 'mV(p-p)', 'V(DC)' (그 뒤의 이하·이상을 읽으려고)
 _AD = (r"(?:\s*(?:AC|DC|ac|dc|rms|RMS))?"
@@ -4361,7 +4535,8 @@ def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], 
 
 def find_item(docs: List[Dict[str, Any]], query: str, sec_key: str = "") -> Tuple[str, List[Dict[str, Any]]]:
     """등록 문서에서 항목 글을 찾습니다 (search와 같은 규칙: 띄어쓰기·조사·단위 표기 무시, 동의어, 0건이면 partial -> fuzzy).
-    반환 (match_mode, 점수 순 결과 [{doc, unit, terms, score}]). 0건이면 ('exact', [])."""
+    반환 (match_mode, 결과 [{doc, unit, terms, score, literal}]): 글자 그대로 일치(literal, 층 A)를 먼저, 그 안에서 점수 순.
+    숫자가 든 항목 글이 표기가 다른 곳(층 B)에서만 맞으면 literal False (match_mode는 그대로 'exact'). 0건이면 ('exact', [])."""
     flags = re.IGNORECASE
     matcher = build_matcher(query, False)
     hits: List[Dict[str, Any]] = []
@@ -4373,7 +4548,7 @@ def find_item(docs: List[Dict[str, Any]], query: str, sec_key: str = "") -> Tupl
             pool.append((doc, u))
             terms = matcher(u["text"])
             if terms is not None:
-                hits.append({"doc": doc, "unit": u, "terms": terms})
+                hits.append({"doc": doc, "unit": u, "terms": terms, "literal": literal_hit(u["text"], terms)})
     mode = "exact"
     status: Dict[str, Any] = {}
     if not hits and pool:
@@ -4382,7 +4557,7 @@ def find_item(docs: List[Dict[str, Any]], query: str, sec_key: str = "") -> Tupl
             mode = "number"           # 숫자 안전망이 시간 상한으로 끝까지 보지 못함: check는 '근거없음'이 아니라 판단필요
     for h in hits:
         h["score"] = hit_score(h["unit"], h["terms"], flags)
-    hits.sort(key=lambda h: -h["score"])
+    hits.sort(key=lambda h: (not h.get("literal", True), -h["score"]))
     return mode, hits
 
 

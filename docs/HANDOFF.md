@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.64**, **office-cli 1.4.69**
+- main 기준 도구 버전: **ml-kit 2.9.64**, **office-cli 1.4.70**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -50,6 +50,7 @@
 | office-cli 1.4.52~1.4.61 | `transfer --method`·`search -c` 삭제, 여러 칸 한 번에 `excel.py write --cells`, 시트 보호 `sheet_protected`와 거부된 수식 `[추천]`(되돌림), reader 등록·검색 `CONTINUE:`(`OFFICE_CLI_TIME_LIMIT`), 규격 대조 `excel.py check`, 열기 감시 30초 `drm_or_dialog`, `reader.py diff`(판 비교), 메일 짧은 `id`(긴 값은 `entry_id`)·`thread`·`calendar --days`, `word.py fill --file` |
 | office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`CLI/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
 | office-cli 1.4.63 | 독립 검토 버그 수정: 2열 표 파일(칸값·메모·값 파일)의 셋째 열은 쓰기 전에 STOP_RETRY(큰따옴표 안내), `--cells` 따옴표·수식 나누기, `comment --append` 재실행 중복, 엑셀 쓰기 실패 후 되돌리기가 글자 상수(`007`, `1-2`)를 바꾸던 것, `check`가 같은 문장의 다른 항목 조건을 섞던 것과 칸 단위 없음은 `판단필요`, `word.py fill` 표 칸에 행·열 머리글 표시·문서 보호 확인, 열기 감시가 사용자 문서가 있는 Word·PowerPoint를 끝내지 않음 |
+| office-cli 1.4.70 | 7차 검토 수정: reader 숫자가 든 검색어는 두 층 판정. 글자 그대로 일치(층 A: 띄어쓰기·탭 여러 칸 = 한 칸, 숫자와 단위·± 앞뒤 띄어쓰기 0~1칸 차이만 허용, 엄격한 앞뒤 경계)만 `exact` VERIFIED, 정규화 매처만 찾은 곳(층 B)은 결과에 넣되 `literal: false` + `match_mode: exact_mixed` + `UNVERIFIED:`(`literal_count` 새 키). check는 층 B로 찾은 항목의 reason에 표시. 층 B에서 모두 대문자 단위(`10 MM`, `10UF`, `20MA`)는 대소문자 무관. 숫자 안전망 시간 상한은 단위마다 확인, check 시간 제한으로 대조하지 못한 행은 `대조하지 못함`(match_mode null, 메모 제외) + 남은 범위 check 명령(`--header-row` 새 인자), 규격 수치의 쉼표 뒤가 3자리가 아니면 수치 아님 |
 | office-cli 1.4.69 | 6차 검토 수정: reader 숫자 정확 일치는 보수적으로(숫자 앞 부호가 분명히 같을 때만 exact, 글의 숫자 앞(띄어쓰기·`/` 건너)이 `-`·`±`·`+/-`·`+ / -`·`+`인데 검색어와 다르거나 범위인지 부호인지 애매하면 숫자 안전망 후보, 범위 대시는 양옆을 띄운 `0 - 20`만), 숫자 안전망 선형 탐색(지수 백트래킹 제거, 20초 상한), 숫자 아닌 낱말도 같은 단위에 있어야 후보, 단위 접두 대소문자(`mHz`/`MHz`, `mohm`=mΩ, μ=u), `Vp-p`·`Vrms`·`barg`·`dBA`·지수·`φ`는 exact 아님, `spec_conditions` 긴 숫자열 제곱 시간 제거, `check` 시간 제한 전 남은 행은 판단필요 |
 | office-cli 1.4.68 | 5차 검토 수정: reader 숫자 검색 안전망(정확 일치 0건 + 숫자가 든 검색어면 숫자 값만 같은 곳을 `candidates`(`match_mode: number`, `number_words`)와 `UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 N건 - 표기를 확인하세요`로, 0건 VERIFIED는 이것도 0건일 때만), `±` 앞 글자 제한 제거(`100±0.5 mm`, `5V±5%`), 한글·`=`·`:` 뒤 빼기는 부호, 숫자 뒤 띄어쓴 대시는 범위, `+`·부호 없는 숫자는 `±`와 다름, 같은 단위 꼬리(`Vrms`, `sec`, `hrs`, `dBA`, `barg`), `kΩ`=`kohm`·`mm`=`㎜`·`M6x1.0`=`M6×1.0`·`Φ`=`Ø`·`08:30`=`8:30`·코드 경계, `spec_norm` 지수 2자리까지, `check` 안내에 메모 미리보기 행동(등록이 남으면 같은 명령 다시 대조만) |
 | office-cli 1.4.67 | 4차 검토 수정: `excel.py check` 결과는 늘 `UNVERIFIED:`(자동 판정은 참고용, 행마다 읽은 조건·근거를 보여 주고 사용자 확인 뒤 메모. 메모에 `자동 판정(참고)`·읽은 조건·근거), 해석 버그(유니코드 빼기, `±N 이내`, ohm 대소문자, 지수 표기, `dB(A)` 꼬리, 최대·최소·약·`~ 시`·단서·부정문, 단위 없는 수치·치수·소수점 쉼표, (c)는 한계 낱말이 있을 때만, `A에서 B로`), 말뭉치 261건. reader 숫자 검색: 부호(`-20 ℃` != `20 ℃`)·단위 끝 경계(`10 m` != `10 mm`)·기호 소수 경계, `10%` = `10.0 %`, 날짜 표기, 천 단위 쉼표 3자리. outlook 번호 잠금은 운영체제 잠금(`msvcrt.locking`/`fcntl.flock`)으로 바꿔 번호 중복 경합 제거 |

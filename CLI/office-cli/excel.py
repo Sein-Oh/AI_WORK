@@ -3919,6 +3919,10 @@ def _check_rows(args, cols: List[int]) -> Tuple[str, int, List[List[Any]], Optio
         raise rt.InputError(f"한 번에 {CHECK_MAX_ROWS}행까지 대조합니다 (받은 {r2 - r1 + 1}행). --range를 나눠 실행하세요.")
     c_lo, c_hi = min(cols), max(cols)
     top = r1 - 1 if r1 > 1 else r1
+    if getattr(args, "header_row", None):
+        if not 1 <= args.header_row < r1:
+            raise rt.InputError(f"--header-row는 --range의 첫 행({r1})보다 위의 행 번호로 적습니다. 받은 값: {args.header_row}")
+        top = args.header_row
     address = addr(top, c_lo, r2, c_hi)
     sheet_arg = sh or args.sheet
     closed = is_closed_xlsx(args.target)
@@ -3939,13 +3943,25 @@ def _check_rows(args, cols: List[int]) -> Tuple[str, int, List[List[Any]], Optio
     matrix = [list(r) + [None] * (width - len(r)) for r in matrix]
     pick = lambda row: [row[c - c_lo] for c in cols]  # noqa: E731
     header = pick(matrix[0]) if top < r1 and matrix else None
-    body = [pick(r) for r in (matrix[1:] if top < r1 else matrix)]
+    body = [pick(r) for r in (matrix[r1 - top:] if top < r1 else matrix)]
     body += [[None] * len(cols)] * max(0, (r2 - r1 + 1) - len(body))
     return sheet, r1, body, header, resolved
 
 
 def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit_hint: Any) -> Dict[str, Any]:
-    """한 행 판정: {verdict, reason, evidence, spec_text, condition, match_mode}."""
+    """한 행 판정: {verdict, reason, evidence, spec_text, condition, match_mode}.
+    숫자가 든 항목 글을 표기가 다른 곳(층 B, literal False)에서만 찾았으면 reason에 표시하고 match_mode는 exact_mixed."""
+    out = _judge_row_core(docs, item, value, sec, unit_hint)
+    if out.pop("_literal", True) is False:
+        out["reason"] = (out["reason"] + " / " if out["reason"] else "") + LAYER_B_NOTE
+        out["match_mode"] = "exact_mixed"
+    return out
+
+
+LAYER_B_NOTE = "표기가 다른 곳에서 찾음 (항목 글이 글자 그대로는 없음: 부호·단위 확인)"
+
+
+def _judge_row_core(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit_hint: Any) -> Dict[str, Any]:
     import reader
     out: Dict[str, Any] = {"verdict": "근거없음", "reason": "", "evidence": "", "spec_text": "", "match_mode": "exact"}
     query = _UNIT_IN_ITEM.sub("", item).strip() or item
@@ -3959,7 +3975,8 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
         out["reason"] = "규격서에서 항목을 찾지 못함" + (f" (장절 '{sec}' 안)" if sec else "")
         return out
     best = hits[0]
-    top = [h for h in hits if h["score"] == best["score"]][:5]
+    out["_literal"] = best.get("literal", True) if mode == "exact" else True
+    top = [h for h in hits if h["score"] == best["score"] and h.get("literal", True) == best.get("literal", True)][:5]
     conds: List[Dict[str, Any]] = []
     sentences: List[str] = []
     for h in top:
@@ -4036,7 +4053,8 @@ def cond_same(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
 def _check_command(args, extra: Sequence[str] = ()) -> List[str]:
     argv = ["check", "--target", args.target, "--range", args.range, "--item-col", args.item_col,
             "--value-col", args.value_col, "--spec", args.spec]
-    for flag, val in (("--section-col", args.section_col), ("--section", args.section), ("--sheet", args.sheet)):
+    for flag, val in (("--section-col", args.section_col), ("--section", args.section), ("--sheet", args.sheet),
+                      ("--header-row", str(args.header_row) if getattr(args, "header_row", None) else None)):
         if val:
             argv += [flag, val]
     return argv + list(extra)
@@ -4057,7 +4075,8 @@ def cmd_check(args) -> Dict[str, Any]:
     unit_hint = header[1] if header else None
     sheet_ref = sheet if re.fullmatch(r"[\w가-힣]+", sheet) else f"'{sheet}'"
     results: List[Dict[str, Any]] = []
-    late: List[str] = []              # 시간 상한으로 대조하지 못한 칸 (판단필요)
+    late: List[str] = []              # 시간 상한으로 대조하지 못한 칸 (판단필요, 메모 없음)
+    late_row = 0                      # 대조하지 못한 첫 행 번호
     for i, row in enumerate(body):
         item, value = row[0], row[1]
         if item is None or str(item).strip() == "":
@@ -4066,8 +4085,9 @@ def cmd_check(args) -> Dict[str, Any]:
         if late or (results and rt.time_up()):
             # 명령 시간 제한 전에 결과를 내려고 남은 행은 대조하지 않음 (대조는 저장할 중간 결과가 없어 CONTINUE가 아님)
             late.append(f"{sheet_ref}!{addr(r1 + i, value_c)}")
-            j = {"verdict": "판단필요", "reason": "명령 시간 제한으로 대조하지 못함 (--range를 나눠 다시 실행)",
-                 "evidence": "", "spec_text": "", "match_mode": "exact"}
+            late_row = late_row or r1 + i
+            j = {"verdict": "판단필요", "reason": "대조하지 못함 (명령 시간 제한)", "evidence": "", "spec_text": "",
+                 "match_mode": None}
         else:
             j = _judge_row(docs, str(item).strip(), value, sec, unit_hint)
         cell = f"{sheet_ref}!{addr(r1 + i, value_c)}"
@@ -4076,7 +4096,8 @@ def cmd_check(args) -> Dict[str, Any]:
     not_decided = counts["판단필요"]
     # 메모 파일 (칸, 메모) -> excel.py comment --file로 칸 메모. 판정은 규격 문장을 기계로 읽은 참고 판정이라
     # 메모에 '자동 판정(참고)'과 읽은 조건·근거를 함께 적어 사람이 확인할 수 있게 함
-    memo_rows = [["칸", "메모"]] + [[r["cell"], check_memo(r)] for r in results]
+    # 대조하지 못한 행(late)은 메모에 넣지 않음 (판정이 없는 칸에 '자동 판정' 메모가 달리지 않게)
+    memo_rows = [["칸", "메모"]] + [[r["cell"], check_memo(r)] for r in results if r["cell"] not in late]
     memo = rt.write_csv_rows(rt.resolve_output_path(None, f"check_memo_{sheet}", ".csv"), memo_rows)
     problems: List[str] = []
     memo_problem = rt.check_saved_file(memo, len(memo_rows), delimiter=",")
@@ -4113,8 +4134,19 @@ def cmd_check(args) -> Dict[str, Any]:
         action = ("사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자 확인 뒤에만 "
                   "그 명령에서 --dry-run을 뺀 명령을 실행하세요. 같은 check는 다시 실행하지 마세요.")
     if late:
-        problems.append(f"명령 시간 제한으로 {len(late)}행({late[0]}부터)은 대조하지 못해 판단필요로 둠")
-        action += f" 대조하지 못한 {len(late)}행은 사용자에게 알리고, 그 행을 더 작은 --range로 다시 대조할지 사용자에게 물으세요."
+        problems.append(f"명령 시간 제한으로 {len(late)}행({late[0]}부터)은 대조하지 못함 (판단필요로 두고 메모에서 뺌)")
+        if not info.get("remaining"):
+            # 남은 행만 대조하는 전체 명령 (머리글 행은 원래 범위 위 행으로 고정)
+            _, cells = split_sheet(args.range)
+            _, c1, r2, c2 = parse_area(cells, None, None)
+            rest = ((args.range.rsplit("!", 1)[0] + "!") if "!" in args.range else "") + \
+                addr(late_row, c1 or min(cols), r2, c2 or max(cols))
+            head_row = getattr(args, "header_row", None) or (r1 - 1 if r1 > 1 else None)
+            rest_args = type(args)(**{**vars(args), "range": rest, "header_row": head_row})
+            nexts.append(rt.next_command("excel.py", _check_command(rest_args),
+                                         f"대조하지 못한 {len(late)}행({rest})만 다시 대조 (읽기 전용)"))
+            action += (f" 대조하지 못한 {len(late)}행은 사용자에게 알리고, 사용자에게 확인을 받은 뒤 "
+                       f"next_commands[{len(nexts) - 1}]을 그대로 실행하세요.")
     if info.get("skipped"):
         problems.append(f"읽지 못한 규격 문서 {len(info['skipped'])}개: " + ", ".join(os.path.basename(s["file"]) for s in info["skipped"][:5]))
     fields["next_commands"] = nexts
@@ -4294,6 +4326,7 @@ def build_cli():
     p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
     p.add_argument("--spec", required=True, help="규격서 파일 또는 폴더 (등록 안 된 문서는 먼저 등록)")
     p.add_argument("--section", help="모든 행을 이 장절 안에서만 찾음 (예: 3.2)")
+    p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행)")
     p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
     return parser
 

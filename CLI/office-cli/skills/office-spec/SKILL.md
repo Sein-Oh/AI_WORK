@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.69"
+  version: "1.4.70"
   platform: windows
 ---
 
@@ -31,14 +31,15 @@ metadata:
 | 캐시 지우기 (원본은 그대로) | `python "C:\CLI\office-cli\reader.py" clear --name <이름일부> --dry-run` (`--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 목록을 보여 주고 확인받은 뒤 `next_commands[0]`) |
 | 되돌리기 (메모) | `python "C:\CLI\office-cli\office.py" undo` |
 
-- 검색은 띄어쓰기·기호·조사·단위 표기를 무시한다 (`SOI 1` = `SOI #1`, `정격전압은 5V` = `정격 전압이 5.0 V`). 사용자가 패턴을 말하면 `--regex`.
+- 검색은 띄어쓰기·기호·조사·단위 표기를 무시한다 (`SOI 1` = `SOI #1`). 사용자가 패턴을 말하면 `--regex`.
 - 사용자가 동의어를 주면 `C:\CLI\office-cli\data\synonyms.txt`에 적는다 (UTF-8, 한 줄에 한 묶음, 쉼표 구분, 있던 줄은 지우지 않음).
-- 규격 대조: `check` 한 번 -> 판정은 참고용(늘 `UNVERIFIED:`)이다. `counts`와 불일치·`needs_review` 행을 행마다 `condition`(읽은 조건)·`spec_text`(근거 문장)·`evidence`와 함께 보여 주고 사용자 확인을 받는다 (`needs_review`는 사용자가 정함: `reason`의 후보 조건을 그대로 보여 주고 직접 판정하지 않는다. `reason`이 `칸 단위 없음`이면 값 열 머리글에 단위(예: `값(mm)`)를 적어 달라고 알림) -> 사용자가 원하면 `next_commands[0]`(메모 미리보기) -> 확인 뒤 그 명령에서 `--dry-run`을 뺀 명령. 한 칸만 볼 때는 위 검색 명령에 `--section "<장절>"`.
+- 규격 대조: `check` 한 번 -> 판정은 참고용(늘 `UNVERIFIED:`)이다. `counts`와 불일치·`needs_review` 행을 행마다 `condition`(읽은 조건)·`spec_text`(근거 문장)·`evidence`와 함께 보여 주고 사용자 확인을 받는다 (`needs_review`는 사용자가 정함: `reason`의 후보 조건을 그대로 보여 주고 직접 판정하지 않는다. `reason`이 `칸 단위 없음`이면 값 열 머리글에 단위(예: `값(mm)`)를 적어 달라고 알림) -> 사용자가 원하면 `next_commands[0]`(메모 미리보기) -> 확인 뒤 그 명령에서 `--dry-run`을 뺀 명령. `대조하지 못함` 행은 사용자 확인 뒤 directive의 `next_commands[N]`(남은 행). 한 칸만 볼 때는 위 검색 명령에 `--section "<장절>"`.
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - 근거는 항목마다 `evidence`(예: `규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`)를 그대로 쓴다. `page`가 null(엑셀, HWP 등)이면 장절 `section_text`, 번호 `number`, 위치 `loc`로 알린다.
 - `match_mode`가 `number`(숫자 값만 같은 곳, 실제 글 `number_words`), `partial`(일부 검색어만), `fuzzy`(한 글자 다른 낱말)이면 `count: 0`이고 결과는 `candidates`다. 근거로 쓰지 말고 "정확히 일치한 곳은 없고 비슷한 곳이 있다"고 알려 사용자에게 확인받는다. 부호·대시가 다른 숫자(`40 ℃`와 `-40 ℃`)도 `number`다.
+- `match_mode`가 `exact_mixed`이면 `matches`의 `literal: false`(표기가 다른 곳, 부호·단위가 다를 수 있음)는 근거로 확정하지 말고 `snippet`을 보여 주고 확인받는다.
 - `search`가 `UNVERIFIED:`이면 `not_searched`를 그대로 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서만 찾는다. `--file`을 주면 새 문서를 먼저 등록한다(`indexed_now`를 알림). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - `diff`는 숫자 변경 `number_changes`를 먼저, 삭제·추가·변경 항목마다 `old_evidence`·`new_evidence`를 붙여 알린다.

@@ -3,6 +3,7 @@ import datetime as dt
 import json
 import os
 import re
+import shlex
 import types
 import zipfile
 
@@ -1142,9 +1143,21 @@ def test_check_time_limit_marks_rest_needs_review(check_env, capsys, monkeypatch
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
     got = [(r["cell"], r["verdict"]) for r in out["results"]]
     assert got[0] == ("시험!D2", "일치") and got[1:] == [("시험!D3", "판단필요"), ("시험!D4", "판단필요")], got
-    assert out["results"][1]["reason"].startswith("명령 시간 제한으로 대조하지 못함"), out["results"][1]
+    # 7차 검토 (1.4.70): 대조하지 못한 행은 reason '대조하지 못함', match_mode null, 메모에서 빼고 남은 범위의 전체 check 명령
+    r1 = out["results"][1]
+    assert r1["reason"].startswith("대조하지 못함") and r1["match_mode"] is None, r1
+    memo = open(out["memo_file"], encoding="utf-8-sig").read().splitlines()
+    assert len(memo) == 2 and memo[1].startswith("시험!D2,"), memo
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert len(cmds) == 2 and "comment" in cmds[0] and " check " in cmds[1], cmds
+    assert "--range B3:D4" in cmds[1] and "--header-row 1" in cmds[1] and "--item-col B" in cmds[1], cmds[1]
     d = out["agent_directive"]
-    assert "명령 시간 제한으로 2행(시험!D3부터)은 대조하지 못해 판단필요로 둠" in d and "다시 대조할지 사용자에게 물으세요" in d, d
+    assert "명령 시간 제한으로 2행(시험!D3부터)은 대조하지 못함" in d and "확인을 받은 뒤 next_commands[1]을 그대로 실행" in d, d
+    # 남은 범위 명령: 머리글(값 열 단위)은 원래 범위 위 행에서 읽음
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: False)
+    code, out = run_excel(capsys, *shlex.split(cmds[1], posix=True)[2:])
+    assert code == 0 and [r["cell"] for r in out["results"]] == ["시험!D3", "시험!D4"], out
+    assert all(r["reason"] != "대조하지 못함 (명령 시간 제한)" for r in out["results"]), out
 
 
 def test_check_long_serial_number_is_fast(tmp_path):
@@ -1277,3 +1290,14 @@ def test_check_bad_column_is_input_error(check_env, capsys):
     code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "항목",
                           "--value-col", "D", "--spec", str(spec))
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+
+
+def test_check_layer_b_item_marks_reason(tmp_path):
+    # 7차 검토 (1.4.70): 숫자가 든 항목 글을 표기가 다른 곳(층 B)에서만 찾으면 reason에 표시, match_mode exact_mixed
+    p = tmp_path / "s.txt"
+    p.write_text("SOI-1 전압은 5 V 이하\n\nSOI 2 전압은 3 V 이하\n", encoding="utf-8")
+    docs = [{"file": str(p), "units": reader.parse_txt(str(p))[0]}]
+    r = excel._judge_row(docs, "SOI 1 전압", "4", "", "값(V)")
+    assert r["verdict"] == "일치" and r["match_mode"] == "exact_mixed" and excel.LAYER_B_NOTE in r["reason"], r
+    r = excel._judge_row(docs, "SOI 2 전압", "4", "", "값(V)")       # 글자 그대로(층 A)는 그대로
+    assert r["verdict"] == "불일치" and r["match_mode"] == "exact" and excel.LAYER_B_NOTE not in r["reason"], r
