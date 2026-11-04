@@ -184,6 +184,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     엑셀에서 저장한 파일은 해당 없습니다.
   - 수식 칸 확인 자체가 실패하면(파일 손상, MemoryError 등) 0개로 보지 않고 `uncomputed_check: "unknown"`과
     `UNVERIFIED: ... 수식 계산 여부를 확인하지 못함`으로 답합니다(1.4.32, 이전에는 `VERIFIED`). reader는 `meta.uncomputed_formulas.unknown`.
+    reader 캐시에 남은 확인 실패는 결과로 다시 쓰지 않고, 캐시를 쓸 때(`read`, 색인 검색) 원본을 다시 확인해 확인되면 캐시도 고칩니다(1.4.42,
+    이전에는 일시적 실패(MemoryError 등)가 파일이 바뀌거나 캐시를 지울 때까지 계속 `UNVERIFIED:`).
 - `read --search`: `count`(찾은 칸 전체 수, `total_matches`와 같음), `shown`, `truncated`. 0건이면 `VERIFIED: 0건.` 안내(1.4.31).
 - `read --formulas`(1.4.36): 값은 그대로 두고, 읽은 범위의 수식 칸만 `formulas`에 더합니다.
   - 항목: `{"cell": "B5", "formula": "=SUM(B2:B4)", "value": 600}`. 읽기는 한 시트라 `cell`에 시트 이름을 붙이지 않습니다(시트는 `sheet`).

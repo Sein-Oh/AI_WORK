@@ -6,6 +6,15 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.42] - 2026-11-04
+
+24차 확인 검사 LOW-5. 회귀 테스트: `tests/test_reader.py` `test_check_failure_*` (1.4.41에서 2개 중 2개 실패).
+
+### 수정
+- reader: 닫힌 xlsx의 수식 칸 확인 실패(MemoryError 등, `meta.uncomputed_formulas.unknown`)를 캐시에서 그대로 다시 쓰던 것을, 캐시를 쓸 때마다
+  (`read`, 색인 검색) 원본을 다시 확인하도록. 확인되면 meta와 캐시 파일을 고치고(`[INFO]`), 다시 실패하면 그대로 `UNVERIFIED:`.
+  전에는 파일이 바뀌거나 캐시를 지울 때까지 같은 파일 읽기가 계속 "확인하지 못함"이었음.
+
 ## [1.4.41] - 2026-11-04
 
 1.4.37에서 남긴 것: range delete가 다른 칸의 수식이 `#REF!`가 되는 것을 미리 알리지 않음.
@@ -1128,7 +1137,6 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - L1 배열 수식: `ArrayFormula`(`<f t="array" ref="C1:C3">`)는 첫 칸에만 `<f>`가 있어 나머지 칸(C2:C3)은 계산된 값이 없어도 수식 칸으로 세지 않음.
 - L2 성능: 범위를 생략한 닫힌 xlsx 읽기는 수식이 있는 시트 XML 전체를 한 번 더 해석함(30만 행 시트에서 수 초). 열린 값 읽기와 함께 한 번에 훑기.
 - 24차 확인 검사 LOW-4: 데이터(A1:C10)와 멀리 떨어진 계산 안 된 수식 칸 하나(Z200000 등)가 있으면 범위 없는 읽기가 그 칸까지 빈 행을 채워 돌려주고, `-r A:Z`는 "범위가 너무 큽니다"와 그 수식 칸을 포함하지 않는 `[추천]` 범위를 냄 (안전하게 멈추지만 안내가 부정확).
-- 24차 확인 검사 LOW-5: reader 색인이 수식 칸 확인 실패(MemoryError 등)를 캐시에 저장해, 파일이 바뀌거나 캐시를 지울 때까지 같은 파일 읽기가 계속 UNVERIFIED("확인하지 못함")로 나옴. 확인 실패는 캐시하지 않기.
 
 ### 1.4.37에서 남긴 것
 - range sort: 기준 4개 이상(Worksheet.Sort.SortFields), 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림.

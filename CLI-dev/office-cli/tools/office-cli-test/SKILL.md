@@ -4,7 +4,7 @@ description: office-cli 도구의 Windows 실기 테스트(실제 Excel/Word/Pow
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.41"
+  version: "1.4.42"
   platform: windows
 ---
 

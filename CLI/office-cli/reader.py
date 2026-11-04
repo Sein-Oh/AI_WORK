@@ -1364,11 +1364,10 @@ def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         rt.log("WARN", f"시트당 {MAX_SHEET_ROWS}행까지만 읽었습니다.")
     # 계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 연 적 없는 파일): data_only로는 빈 칸이라 글이 없음
     uncomputed = rt.xlsx_uncomputed_formulas(path)
+    _uncomputed_from_check(meta, uncomputed)           # 확인 실패도 남김: 캐시를 쓸 때 recheck_uncomputed가 다시 확인
     if uncomputed.get("unknown"):
-        meta["uncomputed_formulas"] = uncomputed
         rt.log("WARN", f"수식 계산 여부를 확인하지 못함: {uncomputed.get('error')}")
     elif uncomputed["count"]:
-        meta["uncomputed_formulas"] = uncomputed
         rt.log("WARN", f"계산된 값이 저장되지 않은 수식 칸 {uncomputed['count']}개 (빈 칸으로 읽음): {', '.join(uncomputed['cells'][:5])}")
     return b.units, meta
 
@@ -1642,6 +1641,34 @@ def load_cached_only(path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _uncomputed_from_check(meta: Dict[str, Any], uncomputed: Dict[str, Any]) -> None:
+    """xlsx_uncomputed_formulas 결과를 문서 meta에 (계산되지 않은 칸이 있거나 확인하지 못했을 때만)."""
+    meta.pop("uncomputed_formulas", None)
+    if uncomputed.get("unknown") or uncomputed["count"]:
+        meta["uncomputed_formulas"] = uncomputed
+
+
+def recheck_uncomputed(doc: Dict[str, Any], cache_file: Optional[str] = None) -> Dict[str, Any]:
+    """캐시의 '수식 칸 확인 실패'(MemoryError 등 일시적 실패)는 결과로 믿지 않고 캐시를 쓸 때마다 다시 확인합니다.
+    확인되면 meta를 고치고 캐시 파일도 고쳐 씁니다(실패는 무시). 다시 실패하면 그대로 (UNVERIFIED 유지)."""
+    meta = doc.get("meta") or {}
+    info = meta.get("uncomputed_formulas")
+    path = doc.get("file", "")
+    if not (isinstance(info, dict) and info.get("unknown")) or doc.get("type") != "xlsx" or not os.path.isfile(path):
+        return doc
+    again = rt.xlsx_uncomputed_formulas(path)
+    if again.get("unknown"):
+        return doc
+    _uncomputed_from_check(meta, again)
+    doc["meta"] = meta
+    rt.log("INFO", f"전에 확인하지 못한 수식 칸을 다시 확인했습니다: {os.path.basename(path)}")
+    try:
+        rt.safe_write_text(cache_file or _doc_cache_path(path), json.dumps(doc, ensure_ascii=False))
+    except OSError as e:
+        rt.debug(f"캐시 고쳐 쓰기 실패 (결과에는 영향 없음): {e}")
+    return doc
+
+
 def load_document_status(path: str, use_cache: bool = True, check_index: bool = True) -> Tuple[Dict[str, Any], str]:
     """파일을 캐시에서 불러오거나(수정 시각/크기/파서 버전이 같으면) 파싱해 캐시와 색인에 등록합니다.
     반환: (문서, 상태) 상태는 'cached'(캐시 사용), 'new'(처음 등록), 'updated'(바뀌어서 다시 등록)."""
@@ -1658,7 +1685,7 @@ def load_document_status(path: str, use_cache: bool = True, check_index: bool = 
                 rt.debug(f"캐시 사용: {os.path.basename(path)}")
                 if check_index:
                     _ensure_indexed(path, cached, cache_file)
-                return cached, "cached"
+                return recheck_uncomputed(cached, cache_file), "cached"
         except Exception:
             rt.log("WARN", f"캐시가 손상되어 다시 읽습니다: {os.path.basename(path)}")
     rt.log("PROGRESS", f"문서 읽는 중: {os.path.basename(path)}")
@@ -2451,6 +2478,8 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         if not os.path.exists(path):
             doc["file_missing"] = True
             info["missing"] += 1
+        elif not is_stale_doc(doc):
+            doc = recheck_uncomputed(doc)
         attempted = False
         if is_stale_doc(doc) and not doc.get("file_missing") and tried < STALE_REFRESH_MAX:
             tried += 1

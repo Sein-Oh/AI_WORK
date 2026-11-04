@@ -1297,6 +1297,33 @@ def test_ole_without_fileheader_is_input_error(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
+def test_check_failure_is_not_reused_from_cache(tmp_path, capsys, monkeypatch):
+    """24차 LOW-5 (1.4.42): 수식 칸 확인 실패(MemoryError 등)를 캐시에서 그대로 다시 쓰지 않음."""
+    c = formula_xlsx(tmp_path / "c.xlsx", cached=True)
+    real = rt.xlsx_uncomputed_formulas
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas",
+                        lambda *a, **k: {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"})
+    code, out = run_main(reader, capsys, "read", "--file", c)
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", real)          # 일시적 실패가 지나감 (파일은 그대로)
+    code, out = run_main(reader, capsys, "read", "--file", c)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    cached = reader.load_cached_only(os.path.abspath(c))
+    assert "uncomputed_formulas" not in cached["meta"]                  # 캐시 파일도 고쳐 씀
+
+
+def test_check_failure_rechecked_in_index_search(tmp_path, capsys, monkeypatch):
+    c = formula_xlsx(tmp_path / "c.xlsx", cached=True)
+    real = rt.xlsx_uncomputed_formulas
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas",
+                        lambda *a, **k: {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"})
+    code, out = run_main(reader, capsys, "index", "--file", c)
+    assert code == 0, out
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", real)
+    code, out = run_main(reader, capsys, "search", "--query", "없는글자ZQX")       # 색인(캐시)만 검색
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED: 0건."), out
+
+
 def test_reader_read_and_search(tmp_path, capsys):
     p = formula_xlsx(tmp_path / "f.xlsx")
     code, out = run_main(reader, capsys, "read", "--file", p)
