@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.40"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.41"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -651,7 +651,8 @@ def percent_warning(df: pd.DataFrame, columns: List[str], where: str = "") -> Li
         if n:
             first = _strip_percent(ex[0])
             out.append(f"{where}'{c}' 열의 {n}칸({', '.join(repr(v) for v in ex)})은 %를 떼고 숫자로 읽었습니다 "
-                       f"({ex[0]} -> {first}, 100으로 나누지 않음). 열의 단위가 %인지 확인하십시오.")
+                       f"({ex[0]} -> {first}, 100으로 나누지 않음. .xlsx의 백분율 서식 칸도 화면에 보이는 숫자로 읽음). "
+                       f"열의 단위가 %인지 확인하십시오.")
     return out
 
 
@@ -675,7 +676,7 @@ def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> 
                 f"{where}'{c}' 열에 %를 붙인 숫자 칸({pct!r})과 % 없는 숫자 칸({plain!r})이 섞여 있습니다. "
                 f"%를 붙인 값은 % 없이 읽으므로({pct} -> {_strip_percent(pct)}) 두 형식은 100배 차이가 날 수 있어 "
                 f"어느 배율인지 정할 수 없습니다. 사용자에게 알려 이 열을 모두 %를 붙인 값으로, 또는 모두 % 없는 숫자"
-                f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오.")
+                f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오 (.xlsx는 열 전체를 같은 셀 서식으로).")
 
 
 def coerce_numeric(series: pd.Series) -> pd.Series:
@@ -889,6 +890,7 @@ def read_raw_table(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
     if ext in [".xlsx", ".xlsm"]:
         try:
             df_raw = pd.read_excel(file_path, header=None)
+            df_raw = _excel_percent_cells(file_path, df_raw)
         except ImportError:
             raise InputError("openpyxl 패키지가 설치되어 있지 않아 .xlsx를 읽을 수 없습니다. `python -m pip install openpyxl`로 설치하십시오.")
         except PermissionError:
@@ -900,6 +902,64 @@ def read_raw_table(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
     else:
         raise InputError(f"지원하지 않는 데이터 포맷입니다 ({ext}). .xlsx 또는 .csv 파일을 지정하십시오.")
     return df_raw
+
+
+_FORMAT_LITERAL_RE = re.compile(r'"[^"]*"|\\.|\[[^\]]*\]')   # quoted text, escaped character, [color] / [>=100]
+
+
+def _percent_format(fmt: Any) -> bool:
+    """An Excel number format that shows the value x100 with '%' ('0%', '0.0%', '#,##0.00%'); a '%' in quoted text
+    or escaped ('0.0"%"', '0.0\\%') is a literal sign that does not scale the value."""
+    return isinstance(fmt, str) and "%" in _FORMAT_LITERAL_RE.sub("", fmt)
+
+
+def _percent_text(v: float) -> str:
+    """0.119 (an Excel percent cell) -> '11.9%': the number Excel shows (15 significant digits, Excel's precision),
+    as a CSV export writes it, so coerce_numeric, percent_warning and check_percent_mix treat both files alike."""
+    return f"{float(v) * 100:.15g}%"
+
+
+def _excel_percent_cells(file_path: str, df_raw: pd.DataFrame) -> pd.DataFrame:
+    """The number cells of the first sheet (the one pd.read_excel read) with a percent number format, written as the
+    text Excel shows ('11.9%' for 0.119, M1 2.9.41): read_excel gives the stored fraction, a CSV export of the same
+    sheet gives '11.9%' (read as 11.9), so the same data would differ by 100x between the two file formats.
+    Sheets without a percent format in their styles are returned unchanged (one cheap style check, no second read)."""
+    from openpyxl import load_workbook
+    from openpyxl.styles.numbers import BUILTIN_FORMATS
+
+    wb = load_workbook(file_path, read_only=True, data_only=True, keep_links=False)
+    try:
+        try:   # style table check: no percent format anywhere -> nothing to do
+            fmts = [BUILTIN_FORMATS.get(st.numFmtId) if st.numFmtId < 164 else wb._number_formats[st.numFmtId - 164]
+                    for st in wb._cell_styles]
+            if not any(_percent_format(f) for f in fmts):
+                return df_raw
+        except Exception:
+            pass
+        ws = wb.worksheets[0]
+        if getattr(ws, "reset_dimensions", None):
+            ws.reset_dimensions()
+        hits: Dict[int, Dict[int, str]] = {}
+        ncols, nrows = df_raw.shape[1], len(df_raw)
+        for r, row in enumerate(ws.rows):
+            if r >= nrows:
+                break
+            for c, cell in enumerate(row[:ncols]):
+                v = cell.value
+                if (cell.data_type == "n" and isinstance(v, (int, float)) and not isinstance(v, bool)
+                        and _percent_format(cell.number_format)):
+                    hits.setdefault(c, {})[r] = _percent_text(v)
+    finally:
+        wb.close()
+    if not hits:
+        return df_raw
+    out = df_raw.copy()
+    for c, cells in hits.items():
+        col = out.iloc[:, c].astype(object)
+        for r, text in cells.items():
+            col.iat[r] = text
+        out[out.columns[c]] = col
+    return out
 
 
 def sniff_header_index(df_raw: pd.DataFrame) -> int:

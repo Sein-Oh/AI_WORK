@@ -502,3 +502,96 @@ def test_train_mixed_percent_in_included_row_stops(near_name_files):
     path = data_file(near_name_files, "excl_in.csv", rows[0], rows[1:])
     proc, res = run_raw("ml_train.py", "-f", path, "-x", "온도,함수율", "-y", "수율")
     assert "'함수율'" in stop_msg(res, proc)
+
+
+# ---- .xlsx 백분율 서식 칸 (23차 점검 M1, 2.9.41) ----------------------------------------------------------------
+# Excel은 11.9%를 0.119로 저장하고 화면에 11.9%로 보인다. 같은 표를 CSV로 저장하면 '11.9%'(11.9로 읽음)이므로
+# .xlsx도 화면에 보이는 숫자(11.9)로 읽어 두 저장 형식이 같은 값이 되어야 한다.
+
+
+def _pct_book(path, head, rows, pct_cols, fmt="0.0%", skip=()):
+    """rows의 pct_cols 열 값('11.9')을 Excel 백분율(0.119 + 서식)로 쓴 .xlsx. skip 행 번호는 서식 없는 일반 숫자."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(head)
+    for i, row in enumerate(rows):
+        ws.append([float(str(v).rstrip("%")) / 100 if j in pct_cols and i not in skip else
+                   (float(v) if j in pct_cols else v) for j, v in enumerate(row)])
+        for j in pct_cols:
+            if i not in skip:
+                ws.cell(row=i + 2, column=j + 1).number_format = fmt
+    wb.save(path)
+    return str(path)
+
+
+@pytest.fixture(scope="module")
+def pct_book(name_files):
+    rows = pd.read_csv(name_files["pct"], dtype=str).values.tolist()
+    head = ["온도(°C)", "압력(bar)", "습도(%)", "수율(%)"]
+    path = _pct_book(os.path.join(str(name_files["tmp"]), "pctbook.xlsx"), head,
+                     [[float(r[0]), float(r[1]), r[2], r[3]] for r in rows], (2, 3), fmt="0.00%")
+    return {"xlsx": path, "csv": name_files["pct"], "tmp": name_files["tmp"]}
+
+
+def test_percent_format_unit():
+    assert mp._percent_format("0.0%") and mp._percent_format("#,##0.00 %") and mp._percent_format("[Red]0%")
+    assert not mp._percent_format('0.0"%"') and not mp._percent_format("0.0\\%") and not mp._percent_format("General")
+    assert mp._percent_text(0.119) == "11.9%" and mp._percent_text(0.5549999999999999) == "55.5%"
+    assert mp._percent_text(1) == "100%"
+
+
+def test_excel_percent_format_read_as_shown(tmp_path):
+    p = _pct_book(str(tmp_path / "p.xlsx"), ["온도", "수율", "표시만"],
+                  [[150, "11.9", 11.9], [160, "55.5", 55.5], [170, "100", 100]], (1,))
+    import openpyxl
+    wb = openpyxl.load_workbook(p)
+    for r in range(2, 5):
+        wb.active.cell(row=r, column=3).number_format = '0.0"%"'    # 따옴표 안의 %는 글자일 뿐 (값 그대로)
+    wb.save(p)
+    df = mp.load_data_file(p)
+    assert mp.coerce_numeric(df["수율"]).tolist() == [11.9, 55.5, 100.0]
+    assert mp.coerce_numeric(df["표시만"]).tolist() == [11.9, 55.5, 100.0]
+    w = mp.percent_warning(df, ["수율", "표시만"])
+    assert len(w) == 1 and "'수율' 열의 3칸" in w[0] and "백분율 서식" in w[0], w
+
+
+def test_excel_percent_training_matches_csv(pct_book):
+    common = ["-x", "온도,압력,습도(%)", "-y", "수율(%)", "--seed", "1"]
+    proc, a = run_raw("ml_train.py", "-f", pct_book["csv"], *common)
+    a = ok_res(a, proc)
+    proc, b = run_raw("ml_train.py", "-f", pct_book["xlsx"], *common)
+    b = ok_res(b, proc)
+    assert a["mean_val_score"] == b["mean_val_score"]
+    w = " ".join(b.get("warnings", []))
+    assert "'습도(%)' 열의 60칸" in w and "'수율(%)' 열의 60칸" in w, w
+    # 예측 입력 파일(.xlsx 백분율 서식)과 CSV('55.5%')도 같은 값
+    model = os.path.join(str(pct_book["tmp"]), "pctbook_ml_data", "v1")
+    nx = _pct_book(os.path.join(str(pct_book["tmp"]), "new_pct.xlsx"), ["온도", "압력", "습도"],
+                   [[180, 3, "55.5"], [170, 2, "40"]], (2,))
+    nc = data_file(pct_book, "new_pct.csv", ["온도", "압력", "습도"], [[180, 3, "55.5%"], [170, 2, "40%"]])
+    proc, px = run_raw("ml_predict.py", "-m", model, "-f", nx)
+    px = ok_res(px, proc)
+    proc, pc = run_raw("ml_predict.py", "-m", model, "-f", nc)
+    pc = ok_res(pc, proc)
+    assert px["predictions_summary"] == pc["predictions_summary"]
+
+
+def test_excel_percent_mixed_with_plain_stops(tmp_path):
+    rows = [[150 + i, str(5 + i % 7), 40 - i] for i in range(30)]
+    p = _pct_book(str(tmp_path / "mix.xlsx"), ["온도", "함수율", "수율"], rows, (1,), skip=(3,))
+    proc, res = run_raw("ml_train.py", "-f", p, "-x", "온도,함수율", "-y", "수율")
+    msg = stop_msg(res, proc)
+    assert "'함수율'" in msg and "셀 서식" in msg, msg
+
+
+def test_excel_percent_map_matches_csv(tmp_path):
+    grid = [[t, w, round(0.2 * t - w, 2)] for t in (150, 170, 190) for w in (5, 10, 15)]
+    px = _pct_book(str(tmp_path / "g.xlsx"), ["온도", "함수율", "수율"], [[t, str(w), y] for t, w, y in grid], (1,))
+    pc = write_rows(str(tmp_path / "g.csv"), [["온도", "함수율", "수율"]] + [[t, f"{w}%", y] for t, w, y in grid], [])
+    proc, a = run_raw("ml_map.py", "-f", px, "-i", "온도=160,함수율=10", "-y", "수율")
+    a = ok_res(a, proc)
+    proc, b = run_raw("ml_map.py", "-f", pc, "-i", "온도=160,함수율=10", "-y", "수율")
+    b = ok_res(b, proc)
+    assert a["points"][0]["values"] == b["points"][0]["values"]
+    assert a["points"][0]["values"]["수율"] == pytest.approx(0.2 * 160 - 10)
