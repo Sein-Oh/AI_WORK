@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.40**, **office-cli 1.4.39**
+- main 기준 도구 버전: **ml-kit 2.9.51**, **office-cli 1.4.51**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -45,6 +45,8 @@
 | office-cli 1.4.34 | 새 명령 `outlook.py attachments`: 첨부 목록(`index`, `name`, `size`, `hidden_inline`), `--save [전체 경로 폴더]`로 내려받기(기본 `%USERPROFILE%\Downloads\메일 첨부\<시각>_<제목>`, 자동 정리 안 함), `--name 일부`/`--index 1,3`으로 고르기(맞는 것이 없으면 `[후보]`), 같은 이름은 ` (2)`와 `recovered`. `read/current --save-attach` 없앰(대신 `attachment_names`와 `next_commands` "첨부 내려받기"). `new/reply/forward --attach`는 없는 전체 경로 파일이면 메일을 만들기 전에 같은 폴더의 비슷한 파일 `[후보]`, 붙인 뒤 `Attachments.Count`로 확인(못 하면 UNVERIFIED, `--send`면 보내지 않음) |
 | office-cli 1.4.35 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\office-cli`를 실행: OpenCode와 같은 data, cache, config.json을 씀 (1.4.33의 고정 폴더는 도구가 트레이 임시 폴더에서 돌 때만) |
 | office-cli 1.4.36 | `excel.py read --formulas`: 읽은 범위의 수식 칸 목록(`formulas`: `cell`, `formula`, `value`, 배열 수식은 `array`·`array_range`), `formula_count`, 200개 상한(`formulas_truncated`, 전체는 `full_result_file` CSV). 열린 문서는 Formula2(없으면 Formula)를 범위 한 번에, 닫힌 xlsx는 openpyxl. SKILL.md가 바뀌어 En-Genius 스킬 zip을 다시 가져와야 함 |
+| office-cli 1.4.40~1.4.48 | 관리자 권한 실행이면 "열린 문서 없음" 대신 권한 안내(`elevated_process`), `range delete` 전 `#REF!`가 될 수식 칸 알림, reader 캐시의 확인 실패 다시 확인, 배열 수식 범위 전체를 수식 칸으로, 멀리 떨어진 계산 안 된 수식 칸 처리, `read --where`의 또는(`\|`)과 따옴표 값, 정렬 기준 4개 이상, 라이브러리 없음은 `missing_library`, next_commands 다듬기 |
+| office-cli 1.4.49~1.4.51 | 규격서 대조 작업: `reader.py read --section`(캐시 문서 장절 읽기), `excel.py comment`(칸 메모 목록·달기·지우기, CSV로 여러 개), `reader.py search` 재현율(조사·단위 표기·전각 허용, 0건이면 부분/오타 일치로 넓힘 `match_mode`, 점수 순위, `data\synonyms.txt` 동의어) |
 | office-cli 1.4.39 | 실제 사용 오류 로그 반영: `office.py write`, `office.py transfer --text`, `reader.py read --section`에 맞는 명령(워드/PPT/엑셀 write, reader search --section) 안내, `excel.py write --cell`에 `[추천] --range` |
 | office-cli 1.4.38 | `opencode run` 기록에서: 엑셀 `write`의 `--text`에 `[추천] --value`(전에는 `--target`), 표 파일 못 찾음 후보에 표 파일만, SKILL.md에 칸 하나 쓰기(`--value`) 줄 |
 | office-cli 1.4.37 | SKILL.md에 빠졌던 기존 기능(메일 list/folders·search --folder/--where·reply --all·new --cc·--body-file, PPT slide add/duplicate/delete/move, 엑셀 sheet/range/export/style/replace --all-sheets·차트 종류, 워드 --toc/--callout·replace --highlight)을 넣고 SKILL.md의 명령·옵션이 argparse에 있는지 테스트로 대조. 새 기능: `outlook.py list|search --days N|--since YYYY-MM-DD`(period), `excel.py range --action insert|delete`(값이 있으면 needs_user_decision, `--dry-run`, `--overwrite`), `range --action sort --by "부서,금액" [--desc]`, `read --where "금액 >= 100; 부서 = 영업"`(`row_numbers`) |
@@ -76,6 +78,7 @@
 | ml-kit 2.9.36 | 2.9.35 회귀 수정: `ml_map.py --points`에서 위치·단이 다른 키 열(`온도_1`과 데이터 `온도(1)`, `온도_상`과 `온도(상)`, `압력1`과 `압력(1단)`)을 말없이 빼고 `VERIFIED`로 내던 문제. `-y` 이름을 뺀 나머지를 기호 없이 비교하고 한쪽이 다른 쪽을 포함해도 비슷한 열로 보아 `[후보]`로 멈춤 |
 | ml-kit 2.9.37 | En-Genius 스킬로 실행하면 데이터 폴더(오류 로그)를 `<사용자>\Documents\En-Genius\CLI-data\ml-kit\data`에 둠. `ML_KIT_DATA_DIR`가 있으면 그것이 먼저. 모델·보고서는 지금처럼 데이터 파일 옆 |
 | ml-kit 2.9.38 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\ml-kit`를 실행: OpenCode와 같은 데이터 폴더 |
+| ml-kit 2.9.41~2.9.51 | .xlsx 백분율 서식 칸을 화면 값(11.9)으로 읽음(재학습 필요), `ml_map` 묻지 않은 열의 % 섞임은 빼고 계산, CSV 소수점 쉼표를 열마다 판단, `-i`의 `온도`+`온도(C)` 안내, 라이브러리 없음 `missing_library`, `--history` 0건 ok와 `--overwrite` 원장 중복 제거, `--dtypes` 이름 맞추기, 없는 버전 `[추천]`/`[후보]`, 목록 상한 `truncated`, 로그 태그 `[PROGRESS] 45%`, 인자 이름 `--save`(예측·보고서), 보고서 `--targets/-y` |
 | ml-kit 2.9.40 | 회사 PC Gemma 시험 R1·R2가 opencode 명령 시간 제한(120초)에 끊김 -> 성능예측표 후보 학습을 저장하며 100초 전에 `CONTINUE:`로 멈추고 같은 명령으로 이어서 (R10). SKILL·전역 지침에 `CONTINUE:` 행동, 채점기는 CONTINUE 뒤 재실행을 반복으로 세지 않음 |
 | ml-kit 2.9.39 | 학습 결과에 타겟별 중요 입력 `top_features`(최고 모델의 순열 중요도 비중, 최대 5개, 원래 열 이름)와 preview의 "중요 입력". SKILL.md에 버전 비교(`--history`), 파일 예측 엑셀 저장(`--out`), 파생변수(`--eval`), 예측 범위·확률 열 추가. SKILL.md 옵션이 argparse에 있는지 검사하는 테스트 |
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
