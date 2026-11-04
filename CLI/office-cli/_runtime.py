@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.55"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.56"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -621,12 +621,75 @@ def _exc_log_message(exc: BaseException, payload: Dict[str, Any]) -> Optional[st
     return None if lm is None or payload.get("error_type") == "internal" else str(lm)
 
 
+# ------------------------------------------------------------------------------
+# R10. 긴 작업은 나눠서 진행 (CONTINUE:). 에이전트의 명령 실행 도구는 120초에 명령을 끊고, 끊기면 결과 JSON이 없어
+# LLM이 같은 명령을 반복함. 오래 걸리는 반복(문서 등록 등)은 한 단계를 끝낼 때마다 결과를 저장하고, 다음 단계 전에
+# 시계를 봄(check_time). 제한을 넘을 것 같으면 Unfinished로 멈추고 run_cli가 CONTINUE 결과를 냄(같은 명령 = 이어서).
+# 이름과 키는 ml-kit(ml_predict.py PART C)과 같음.
+# ------------------------------------------------------------------------------
+TIME_LIMIT_ENV = "OFFICE_CLI_TIME_LIMIT"     # 명령 하나의 초. 0 = 제한 없음 (사람이 돌리는 러너와 테스트)
+DEFAULT_TIME_LIMIT = 100.0                   # OpenCode 120초보다 짧게 (JSON과 저장할 여유)
+TIME_RESERVE = 30.0                          # 마지막 단계 뒤(검색, 결과 저장)에 남겨 둘 시간
+RUN_START = time.monotonic()                 # run_cli가 명령마다 다시 잼
+
+
+def time_limit() -> float:
+    raw = os.environ.get(TIME_LIMIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TIME_LIMIT
+    try:
+        v = float(raw)
+    except ValueError:
+        return DEFAULT_TIME_LIMIT
+    return float("inf") if v <= 0 else v
+
+
+class Unfinished(BaseException):
+    """시간 제한 때문에 긴 작업을 멈춤 (끝낸 부분은 저장됨). 중간의 'except Exception'이 삼키지 않도록 BaseException.
+    run_cli가 status ok, continue: true, 같은 명령의 next_commands로 바꿉니다."""
+
+    def __init__(self, progress: str):
+        super().__init__(progress)
+        self.progress = progress
+
+
+def check_time(next_step_seconds: float, progress: str) -> None:
+    """다음 느린 단계(예상 next_step_seconds초)가 제한에서 TIME_RESERVE를 뺀 시각을 넘을 것 같으면 Unfinished.
+    부르는 쪽은 끝낸 단계를 모두 저장해 두어야 합니다 (다음 실행이 다시 씀). 실행마다 최소 한 단계는 한 뒤에 부릅니다."""
+    limit = time_limit()
+    if limit == float("inf"):
+        return
+    if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
+        raise Unfinished(progress)
+
+
+def unfinished_payload(exc: "Unfinished", tool: str, command: str) -> Dict[str, Any]:
+    argv = list(CURRENT_ARGV or [])
+    nexts = [next_command(f"{tool}.py", argv, "같은 명령으로 이어서 진행 (끝낸 부분은 저장됨, 묻지 않고 그대로 실행)")] if argv else []
+    payload: Dict[str, Any] = {
+        "status": "ok", "tool": tool, "command": command, "preview": f"진행 중: {exc.progress}",
+        "verified": False, "continue": True, "progress": exc.progress, "next_commands": nexts,
+        "agent_directive": ("CONTINUE: 아직 끝나지 않았습니다. 명령 시간 제한 때문에 나눠서 진행하며, 지금까지 한 일은 저장되어 있습니다. "
+                            + ("next_commands[0]의 command를" if nexts else "방금 실행한 명령을")
+                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). 끝나면 VERIFIED 결과가 나옵니다."),
+    }
+    _attach_recovered(payload)
+    return payload
+
+
 def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> None:
     """도구 본문을 실행하고, 어떤 경우에도 stdout 1줄 JSON과 종료 코드(0/1/130)를 보장합니다.
-    실패(exit 1)는 <데이터 폴더>/logs/errors.txt에 자동 기록합니다 (사용자 중단 130과 성공은 기록하지 않음)."""
+    실패(exit 1)는 <데이터 폴더>/logs/errors.txt에 자동 기록합니다 (사용자 중단 130과 성공은 기록하지 않음).
+    시간 제한으로 멈춘 긴 작업(Unfinished)은 CONTINUE 결과(exit 0, 오류 로그 없음, R10)."""
+    global RUN_START
+    RUN_START = time.monotonic()
     setup_console()
     try:
         result = execute()
+    except Unfinished as u:
+        log("STATUS", f"시간 제한으로 여기서 멈춤 (저장됨, 같은 명령으로 이어서): {u.progress}")
+        emit_json(unfinished_payload(u, tool, command))
+        sys.exit(0)
     except KeyboardInterrupt as e:
         log("ERROR", "실행 중단 (KeyboardInterrupt)")
         emit_json(error_payload(e, tool, command))

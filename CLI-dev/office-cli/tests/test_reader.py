@@ -2424,3 +2424,60 @@ def test_search_case_sensitive_option_removed(capsys):
         code, out = run_main(reader, capsys, "search", "--query", "abc", flag)
         assert code == 2 and out["status"] == "error", out
     assert reader.build_matcher("ABC", False)("xx abc yy")
+
+
+# ---------------------------------------------------------------------------
+# R10 CONTINUE: 긴 문서 등록은 시간 제한 전에 멈추고 같은 명령으로 이어서 (1.4.56)
+# ---------------------------------------------------------------------------
+
+
+def _txt_folder(tmp_path, n=3):
+    folder = tmp_path / "규격"
+    folder.mkdir()
+    for i in range(n):
+        (folder / f"doc{i}.txt").write_text(f"정격 전압 {i} V 문서 {i}\n", encoding="utf-8")
+    return folder
+
+
+def _shell_args(cmd):
+    import shlex
+    parts = shlex.split(cmd, posix=False)
+    return [p[1:-1] if len(p) > 1 and p[0] == p[-1] == '"' else p for p in parts[2:]]
+
+
+@pytest.mark.parametrize("command", ["index", "search"])
+def test_long_registration_continues_with_same_command(tmp_path, capsys, monkeypatch, command):
+    folder = _txt_folder(tmp_path)
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)      # 첫 파일 뒤로는 늘 시간 초과
+    argv = ["index", "--folder", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
+    seen = []
+    for _ in range(5):
+        code, out = run_main(reader, capsys, *argv)
+        assert code == 0 and out["status"] == "ok", out
+        seen.append(out["agent_directive"].split(":")[0])
+        if not out.get("continue"):
+            break
+        assert out["verified"] is False and out["agent_directive"].startswith("CONTINUE:") and out["progress"], out
+        nxt = out["next_commands"][0]["command"]
+        assert nxt.startswith("python ") and _shell_args(nxt) == argv, nxt
+    assert seen == ["CONTINUE", "CONTINUE", "VERIFIED"], seen          # 실행마다 새 파일 1개, 세 번째에 끝
+    assert len(reader.load_index()) == 3
+    if command == "search":
+        assert out["count"] >= 3, out
+
+
+def test_time_limit_env(monkeypatch):
+    monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "0")
+    assert rt.time_limit() == float("inf")
+    monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "")
+    assert rt.time_limit() == rt.DEFAULT_TIME_LIMIT == 100.0
+    monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "45")
+    assert rt.time_limit() == 45.0
+
+
+def test_continue_is_not_logged(tmp_path, capsys, monkeypatch, isolated_dirs):
+    folder = _txt_folder(tmp_path, 2)
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert out.get("continue") is True
+    assert not error_log_text(isolated_dirs)

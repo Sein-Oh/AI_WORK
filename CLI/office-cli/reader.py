@@ -1748,6 +1748,7 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
     failures 항목: file, reason, error(원래 예외. 파일 하나만 줬을 때 _raise_single_failure가 그대로 다시 냄, JSON에는 넣지 않음)."""
     out: Dict[str, Any] = {"docs": [], "new": [], "updated": [], "cached": [], "failures": [], "remaining": 0}
     parsed = 0
+    spent = 0.0                                  # 이번 실행에서 새로 읽는 데 쓴 초 (다음 파일 예상 시간)
     index = load_index()
     total = len(files)
     for i, path in enumerate(files, 1):
@@ -1763,6 +1764,11 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
         if not fresh and parsed >= max_files:
             out["remaining"] += 1
             continue
+        if not fresh and parsed:
+            # R10: 새 파일을 읽기 전에 시계를 봄 (이번 실행에서 하나는 읽은 뒤에만: 반복하면 반드시 끝남).
+            # 읽은 파일은 캐시에 저장되어 같은 명령을 다시 실행하면 건너뜀
+            rt.check_time(spent / parsed, f"문서 {total}개 중 {i - 1}개 확인, 이번에 새로 등록 {parsed}개 (남은 파일은 같은 명령으로 이어서)")
+        t0 = time.monotonic()
         try:
             if not fresh:
                 rt.log("PROGRESS", f"[{i}/{total}] 등록 중: {os.path.basename(path)}")
@@ -1771,9 +1777,11 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
             # 내부 오류는 'KeyError: ...'처럼 종류와 함께 (str(e)만 쓰면 "'heading'"만 남음)
             out["failures"].append({"file": path, "reason": rt.error_payload(e)["message"][:300], "error": e})
             parsed += 0 if fresh else 1
+            spent += 0 if fresh else time.monotonic() - t0
             continue
         if status != "cached":
             parsed += 1
+            spent += time.monotonic() - t0
         out["docs"].append(doc)
         out[status].append(path)
     return out
@@ -2763,6 +2771,9 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             doc = recheck_uncomputed(doc)
         attempted = False
         if is_stale_doc(doc) and not doc.get("file_missing") and tried < STALE_REFRESH_MAX:
+            if tried:
+                # R10: 다시 읽은 캐시는 저장되어 같은 명령을 다시 실행하면 그대로 씀
+                rt.check_time(0.0, f"원본이 바뀐 캐시 {tried}개를 다시 읽음 (남은 캐시는 같은 명령으로 이어서)")
             tried += 1
             attempted = True
             try:

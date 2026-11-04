@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.55"
+  version: "1.4.56"
   platform: windows
 ---
 
@@ -13,7 +13,7 @@ metadata:
 ## 꼭 지킬 규칙
 1. 도구 위치는 `C:\CLI\office-cli`이다. 모든 명령은 `python "C:\CLI\office-cli\<파일>.py" <명령> ...` 형식이다 (예: `python "C:\CLI\office-cli\excel.py" read`).
 2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
-3. 명령은 **1번만** 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]` 줄은 무시한다.
+3. 명령은 **1번만** 실행한다 (예외: 결과가 `CONTINUE:`이면 아래 표대로 다시 실행). 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]` 줄은 무시한다.
 4. 아래 표의 명령과 옵션만 쓴다. 옵션을 지어내지 않는다.
 5. 대상 문서: `--target`을 생략하면 사용자가 보고 있는 문서(active)다. 다른 열린 문서는 `--target "<이름>"`, 닫힌 파일은 `--target "<전체경로>"`.
 6. 표, 여러 줄 글, 큰따옴표가 든 값은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 파일(.csv, .md)을 만든 뒤 `--file "<그 경로>"`로 넘긴다. .md의 코드는 ```로 감싸면 줄마다 그대로 들어간다.
@@ -72,6 +72,7 @@ metadata:
 |---|---|
 | `VERIFIED:` | 완료. `preview`를 사용자에게 알린다. 같은 명령을 다시 실행하거나 결과를 다시 읽지 않는다. |
 | `UNVERIFIED:` | 실행은 됐지만 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
+| `CONTINUE:` | 아직 끝나지 않았다 (시간 제한 때문에 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands[0].command`를 그대로 다시 실행한다. `VERIFIED:`나 `UNVERIFIED:`가 나올 때까지 반복한다 (최대 10번, 그래도 `CONTINUE:`이면 `progress`를 알리고 멈춤). |
 | `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]`를 보여 주고 사용자가 고르게 한 뒤, 고른 값으로 실행한다 (시트: `--sheet 이름`, 앵커·장절: `--occurrence 번호`, 문서: message가 말한 옵션(`--target`, `--to-target`, `--from-target`, `--name`)에 전체경로). 새 시트는 `excel.py write`에서만, 사용자가 원한다고 답한 경우에만 `--new-sheet`. |
 | `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그 명령을, 아니면 추천된 값으로 바꿔 **1번만** 다시 실행한다. 또 실패하면 message를 그대로 알린다. |
 | `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸, 되돌리기 위험)이면 사용자에게 묻고, 사용자가 원할 때만 directive가 말한 옵션을 붙여 1번 실행한다. `install_command`가 있으면 그 명령을 알린다(직접 설치하지 않는다). |

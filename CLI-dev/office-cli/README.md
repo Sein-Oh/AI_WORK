@@ -44,6 +44,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - `STOP_RETRY:` 입력이나 대상 문제. `[추천]`이 있으면 그 값으로 1회만 다시 시도
   - `STOP_RETRY:` + `[후보]`(`error_type: "ambiguous"`, `candidates` 목록): 후보가 둘 이상이라 도구가 고르지 않음. 사용자가 고른 값으로 다시 실행
   - `ERROR:` 내부 오류
+  - `CONTINUE:` 긴 작업을 명령 시간 제한(에이전트 실행 도구 120초) 전에 멈춤 (R10). `status: ok`, `verified: false`, `continue: true`, `progress`,
+    `next_commands[0]` = 같은 명령. 끝낸 부분은 저장되어 있어 같은 명령을 다시 실행하면 이어서 진행합니다(실행마다 최소 한 단계는 함). 오류 로그에 남기지 않음.
+    제한은 `OFFICE_CLI_TIME_LIMIT`(초, 기본 100, `0`이면 없음)에서 여유 30초를 뺀 시각. 실기 러너와 테스트는 `0`.
+    해당 작업: `reader.py index`와 `search --file 폴더`의 문서 등록(새 파일을 읽기 전마다), `search`의 바뀐 캐시 다시 읽기.
 - 필요한 라이브러리가 없으면(openpyxl, python-docx, python-pptx, pymupdf, olefile) `STOP_RETRY:`와 `error_type: "missing_library"`, `missing_package`,
   `install_command`(`python -m pip install <패키지>`). LLM은 직접 설치하지 않고 설치 명령을 사용자에게 전달합니다(R5 `require_lib`). pywin32는 그대로 `input`.
 - 공통 키: `status`, `tool`, `command`, `preview`, `agent_directive`. 오류 시 `error_type`, `message`가 추가됩니다. COM 오류는 `hresult`도 들어갑니다.
@@ -366,6 +370,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   FileHeader가 없는 OLE 파일(이름만 `.hwp`인 `.doc`/`.xls` 등)은 STOP_RETRY "HWP 5.0 문서가 아닙니다".
 - `--pages`/`--units`(ppt `--slides`)의 범위는 문서 크기로 먼저 줄입니다(`1-999999999`도 바로 끝남).
 - 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 지원하지 않습니다.
+- 문서가 많아 등록이 오래 걸리면 시간 제한(약 70초) 전에 `CONTINUE:`로 멈춥니다(R10, 위 출력 계약). 읽은 문서는 캐시에 저장되어 같은 명령을 다시 실행하면 건너뜁니다.
 - `--max-files`는 이번 실행에서 **새로 읽는** 파일 수의 상한입니다. 이미 최신인 파일은 세지 않으므로 같은 명령을 다시 실행하면 남은 파일부터 이어서 등록합니다(`next_commands[0]`). 등록은 원본을 바꾸지 않는 읽기 전용 작업입니다.
 - DRM으로 암호화된 Office 파일은 라이브러리로 열 수 없으므로, `excel.py`/`word.py`/`ppt.py read --target 경로`로 Office에서 읽으라고 안내합니다.
 - DOCX 글상자(`w:txbxContent`)의 글은 그 글상자가 든 단락(표) 바로 뒤에 `글상자 N`(여러 단락이면 `글상자 N 단락 M`) 단위로 넣습니다. Word 2010 이후

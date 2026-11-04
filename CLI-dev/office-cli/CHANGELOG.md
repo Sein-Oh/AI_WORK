@@ -6,6 +6,19 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.56] - 2026-11-04
+
+긴 작업 나눠서 진행 (B2, 공통 계약 R10, ml-kit과 같은 이름·키). 회사 PC Gemma 시험에서 명령이 120초에 끊기면 결과 JSON이 없어
+LLM이 같은 명령을 반복함. 회귀 테스트: `tests/test_reader.py` "R10 CONTINUE" (1.4.55에서 4개 중 4개 실패).
+
+### 기능
+- `_runtime.py`: `OFFICE_CLI_TIME_LIMIT`(초, 기본 100, 0 = 없음), `TIME_RESERVE` 30초, `check_time`, `Unfinished`(BaseException),
+  `run_cli`가 `status: ok`, `verified: false`, `continue: true`, `progress`, `next_commands`(같은 명령 하나), `CONTINUE:` directive를 냄(exit 0, 오류 로그 없음).
+  `next_commands` 항목은 office-cli 모양(`{purpose, command}`).
+- `reader.py index`, `search --file 폴더`: 새 파일을 읽기 전마다 시계를 봄(이번 실행에서 한 파일은 읽은 뒤에만, 읽은 파일은 캐시에 저장돼 다시 실행하면 건너뜀).
+  `search`(캐시만)의 바뀐 캐시 다시 읽기도 같음.
+- SKILL.md: 결과 처리 표에 `CONTINUE:` 줄, 규칙 3에 예외. 테스트(conftest)와 실기 러너는 `OFFICE_CLI_TIME_LIMIT=0`.
+
 ## [1.4.55] - 2026-11-04
 
 보호된 시트와 엑셀이 받지 않는 수식 (A6). 회귀 테스트: `tests/test_excel_write.py` "시트 보호 사전 확인과 엑셀이 받지 않는 수식"

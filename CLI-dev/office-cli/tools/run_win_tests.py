@@ -527,7 +527,8 @@ def isolate_tool_dirs(ctx):
     shutil.rmtree(cache, ignore_errors=True)
     os.makedirs(cache, exist_ok=True)
     os.makedirs(data, exist_ok=True)
-    RUN_ENV.update(OFFICE_CLI_CACHE_DIR=cache, OFFICE_CLI_DATA_DIR=data)
+    RUN_ENV.update(OFFICE_CLI_CACHE_DIR=cache, OFFICE_CLI_DATA_DIR=data,
+                   OFFICE_CLI_TIME_LIMIT="0")   # R10: 사람이 돌리는 러너는 시간 제한 없음 (CONTINUE로 나누지 않음)
     try:   # 이전 실행의 도구 오류 기록은 빼고 이번 실행분만 errors_*.txt에 옮겨 담음
         TOOL_LOG_OFFSET[0] = os.path.getsize(os.path.join(data, "logs", "errors.txt"))
     except OSError:
