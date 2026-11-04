@@ -3428,12 +3428,25 @@ def _cond(kind: str, m: "re.Match[str]") -> Optional[Dict[str, Any]]:
     return c
 
 
+# 조건 사이를 잇는 말 (이것만 있으면 같은 항목): '5 mm 이상이며 10 mm 이하', '5 mm 이상, 10 mm 이하'
+_COND_JOIN = re.compile(r"이고|이며|이면서|이되|및|그리고|또한|and|or|또는|[\s,;:()\[\]~-]", re.IGNORECASE)
+
+
+def _other_item_between(t: str, a: int, b: int) -> bool:
+    """t[a:b](두 조건 사이)에 다른 항목 낱말이 있는지: 잇는 말과 문장 부호를 빼고 글자가 남으면 있음
+    ('5 mm 이상, 길이 100 mm 이하'의 '길이')."""
+    gap = _COND_JOIN.sub("", t[min(a, b):max(a, b)])
+    return bool(re.search(r"[가-힣A-Za-z]", gap))
+
+
 def spec_conditions(text: str) -> List[Dict[str, Any]]:
     """규격 글의 수치 조건 목록 (글 순서). 단위가 있는 수치만 (규격 번호 'KS C 1234', 장절 '3.2'는 빼려고).
-    '4.75 V 이상 5.25 V 이하'처럼 같은 단위의 아래·위 한계가 하나씩이면 범위 하나로 합칩니다."""
+    '4.75 V 이상 5.25 V 이하'처럼 같은 단위의 아래·위 한계가 하나씩이면 범위 하나로 합칩니다.
+    두 조건 사이에 다른 항목 낱말이 있으면('두께 5 mm 이상, 길이 100 mm 이하') 합치지 않고, 기준 값(plain)도 지우지 않습니다."""
     t = unicodedata.normalize("NFKC", text).replace("\u00b5", "μ")
     taken: List[Tuple[int, int]] = []
     found: List[Tuple[int, Dict[str, Any]]] = []
+    spans_found: List[Tuple[int, int, Dict[str, Any]]] = []
     for kind, pat in _COND_PATTERNS:
         for m in pat.finditer(t):
             s, e = m.span()
@@ -3444,18 +3457,29 @@ def spec_conditions(text: str) -> List[Dict[str, Any]]:
                 continue
             taken.append((s, e))
             found.append((s, c))
-    conds = [c for _, c in sorted(found, key=lambda x: x[0])]
+            spans_found.append((s, e, c))
+    spans = {id(c): (s, e) for s, e, c in spans_found}
+    found.sort(key=lambda x: x[0])
+    conds = [c for _, c in found]
+
+    def apart(x: Dict[str, Any], y: Dict[str, Any]) -> bool:
+        (xs, xe), (ys, ye) = spans[id(x)], spans[id(y)]
+        return _other_item_between(t, xe, ys) if xs <= ys else _other_item_between(t, ye, xs)
     lows = [c for c in conds if c["kind"] == "lower"]
     highs = [c for c in conds if c["kind"] == "upper"]
-    if len(lows) == 1 and len(highs) == 1 and lows[0]["base"] == highs[0]["base"] and lows[0]["lo"] <= highs[0]["hi"]:
+    if len(lows) == 1 and len(highs) == 1 and lows[0]["base"] == highs[0]["base"] and lows[0]["lo"] <= highs[0]["hi"] \
+            and not apart(lows[0], highs[0]):
         lo, hi = lows[0], highs[0]
         merged = dict(lo, kind="range", hi=hi["hi"], hi_strict=hi["hi_strict"], text=f"{lo['text']} ~ {hi['text']}")
+        spans[id(merged)] = (min(spans[id(lo)][0], spans[id(hi)][0]), max(spans[id(lo)][1], spans[id(hi)][1]))
         conds = [merged] + [c for c in conds if c is not lo and c is not hi]
-    # '정격 5 V (4.75~5.25 V)': 기준 값(plain)이 하나뿐인 범위·한계 안에 있으면 그 범위로 판정 (후보 하나)
+    # '정격 5 V (4.75~5.25 V)': 기준 값(plain)이 하나뿐인 범위·한계 안에 있으면 그 범위로 판정 (후보 하나).
+    # 사이에 다른 항목 낱말이 있으면('외경 3 mm, 폭 5 mm 이하') 다른 항목의 값이라 지우지 않음
     bounded = [c for c in conds if c["kind"] != "plain"]
     if len(bounded) == 1:
         b = bounded[0]
-        conds = [c for c in conds if not (c["kind"] == "plain" and c["base"] == b["base"] and cond_holds(b, c["lo"]))]
+        conds = [c for c in conds if not (c["kind"] == "plain" and c["base"] == b["base"] and cond_holds(b, c["lo"])
+                                          and not apart(c, b))]
     out, seen = [], set()
     for c in conds:
         key = (c["base"], c["lo"], c["hi"], c["lo_strict"], c["hi_strict"])
@@ -3486,16 +3510,33 @@ def cond_holds(c: Dict[str, Any], v: float) -> bool:
     return True
 
 
+# 다음 항목이 시작하는 자리: 절 경계(쉼표, ;, 이며, 및 ...) 뒤에 낱말(+조사)이 오고 바로 수치가 이어짐
+# ('두께 5 mm 이상, 길이 100 mm 이하'의 ', 길이 '). 최대·최소 같은 조건 낱말은 새 항목이 아님
+_NEXT_ITEM = re.compile(
+    r"(?:[,;]|\s(?:이며|이고|이면서|및|그리고|또한)|(?<=[가-힣])(?:이며|이고|이면서))\s*"
+    r"(?!(?:최대|최소|약|max|min|단|또는|or|and)\b)(?!(?:최대|최소|약)\s)"
+    r"[가-힣A-Za-z][가-힣A-Za-z0-9 ]{0,30}?(?:은|는|이|가|을|를|의|:)?\s*(?=[+-]?\d|최대|최소|max|min|≤|≥|<|>)",
+    re.IGNORECASE)
+_CLAUSE_END = re.compile(r"[,;]|\s(?:이며|이고|및|그리고)\s|(?<=[가-힣])(?:이며|이고)\s")
+
+
 def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], str]:
-    """찾은 낱말 가까이의 수치 조건과 그 문장. 낱말이 든 문장에서 낱말 뒤(200자까지)를 먼저, 없으면 문장 전체."""
+    """찾은 낱말 가까이의 수치 조건과 그 문장. 낱말이 든 문장에서 낱말부터 다음 항목 낱말(절 경계 뒤 낱말 + 수치) 직전까지
+    (200자까지)를 먼저, 없으면 낱말이 든 절(앞쪽 절 경계부터 낱말까지). 같은 문장의 다른 항목 조건을 섞지 않으려고."""
     flags = re.IGNORECASE
     for sent in _SENT_SPLIT.split(text):
         ms = [m for t in terms for m in [_term_pattern(t, flags).search(sent)] if m]
         if not ms:
             continue
         start = min(m.start() for m in ms)
-        after = spec_conditions(sent[start:start + 200])
-        return (after or spec_conditions(sent)), sent.strip()
+        end_term = max(m.end() for m in ms if m.start() == start)
+        window = sent[start:start + 200]
+        nxt = _NEXT_ITEM.search(window, end_term - start)
+        after = spec_conditions(window[:nxt.start()] if nxt else window)
+        if not after:
+            cuts = [m.end() for m in _CLAUSE_END.finditer(sent[:start])]
+            after = spec_conditions(sent[cuts[-1] if cuts else 0:start])
+        return after, sent.strip()
     return spec_conditions(text[:400]), text.strip()[:400]
 
 

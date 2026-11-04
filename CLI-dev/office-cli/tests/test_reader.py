@@ -2548,6 +2548,37 @@ def test_quantity_and_unit_of():
     assert reader.unit_of("항목") is None
 
 
+@pytest.mark.parametrize("text,expected", [
+    # 한 문장의 다른 항목 조건을 합치거나 지우지 않음 (1.4.63 독립 검토)
+    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", ["5 mm 이상", "100 mm 이하"]),
+    ("외경 3 mm, 폭 5 mm 이하로 한다.", ["3 mm", "5 mm 이하"]),
+    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", ["2 m 이상", "10 mm 이하"]),
+    # 같은 항목의 한계는 그대로 합침
+    ("두께는 5 mm 이상이며 10 mm 이하", ["5~10 mm"]),
+    ("두께 5 mm 이상, 10 mm 이하", ["5~10 mm"]),
+])
+def test_spec_conditions_do_not_mix_items(text, expected):
+    assert _cond_texts(text) == expected
+
+
+@pytest.mark.parametrize("text,term,expected", [
+    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", "두께", ["5 mm 이상"]),
+    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", "길이", ["100 mm 이하"]),
+    ("외경 3 mm, 폭 5 mm 이하로 한다.", "외경", ["3 mm"]),
+    ("외경 3 mm, 폭 5 mm 이하로 한다.", "폭", ["5 mm 이하"]),
+    ("길이 3 mm, 두께 5 mm 이하로 한다.", "길이", ["3 mm"]),
+    ("정격 전압 220 V, 허용 전류 10 A 이하", "정격 전압", ["220 V"]),
+    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", "케이블 길이", ["2 m 이상"]),
+    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", "외경", ["10 mm 이하"]),
+    ("두께는 5 mm 이상이어야 한다. 폭은 100 mm 이하.", "두께", ["5 mm 이상"]),
+    ("대기 전력은 0.5 W 이하, 1 W 이하(시험 모드)로 한다.", "대기 전력", ["0.5 W 이하", "1 W 이하"]),
+    ("소비 전류는 최대 3 A, 최소 1 A로 한다.", "소비 전류", ["1~3 A"]),      # 최대·최소는 새 항목이 아님
+])
+def test_near_conditions_stop_at_next_item(text, term, expected):
+    cs, _ = reader.near_conditions(text, [term])
+    assert [reader.cond_text(c) for c in cs] == expected
+
+
 def test_cond_holds_bounds():
     c = reader.spec_conditions("3 A 미만")[0]
     assert reader.cond_holds(c, 2.99) and not reader.cond_holds(c, 3.0)

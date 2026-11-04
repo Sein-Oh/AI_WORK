@@ -24,6 +24,13 @@
   되돌린 것으로 보아 되돌리기 지점까지 지웠음. 수식 칸(`HasFormula`)만 수식 글, 상수 칸은 `Value2`(글자는 앞에 `'`)로 저장·복원하고, 복원 뒤 다시 읽어
   비교해 다르면 그 칸을 message에 적고 되돌리기 지점을 남김. 가짜 Excel에 `typing`(대입한 글자를 Excel처럼 해석), `Value2`, `PrefixCharacter`.
   회귀 테스트: `test_rejected_formula_rollback_keeps_text_constants`, `test_rejected_formula_rollback_mismatch_keeps_undo_point`.
+- `excel.py check` 규격 조건이 같은 문장의 다른 항목 조건을 섞음: `두께 5 mm 이상, 길이 100 mm 이하로 한다.` -> 두께 `5~100 mm`,
+  `외경 3 mm, 폭 5 mm 이하로 한다.` -> 외경 `5 mm 이하`인데 `VERIFIED`. `reader.near_conditions`는 낱말부터 다음 항목(절 경계 뒤 낱말 + 수치) 직전까지만,
+  없으면 낱말이 든 절에서 찾음. `reader.spec_conditions`는 두 조건 사이에 다른 항목 낱말이 있으면 한계를 합치지 않고 기준 값(plain)도 지우지 않음.
+  기존 규격 문장 33가지(B1)는 그대로. 회귀 테스트: `test_reader.py` `test_spec_conditions_do_not_mix_items`, `test_near_conditions_stop_at_next_item`,
+  `test_excel_read.py` `test_check_does_not_mix_items_of_one_sentence`.
+- `excel.py check` 칸·머리글·항목에 단위가 없으면 규격 단위로 추정해 판정하던 것을 `판단필요`(`칸 단위 없음 (규격은 cm): 값 열 머리글에 단위를 적으세요`)로.
+  머리글 단위가 규격과 같은 종류면 접두어를 맞춰 판정(그대로). 회귀 테스트: `test_check_cell_without_unit_is_not_guessed`.
 
 ## [1.4.62] - 2026-11-04
 

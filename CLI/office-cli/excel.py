@@ -3989,10 +3989,12 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
     if qty is None:
         out.update(verdict="판단필요", reason="칸 값이 숫자가 아님")
         return out
-    v = qty[0] * (cell_unit[1] if cell_unit else c["scale"])        # 단위 없는 칸은 규격에 쓴 단위로 봄
-    ok_ = reader.cond_holds(c, v)
-    out.update(verdict="일치" if ok_ else "불일치",
-               reason=f"{out['condition']}" + ("" if cell_unit else f" (칸 단위 없음: {c['unit']}로 봄)"))
+    if not cell_unit:
+        # 칸 값·값 열 머리글·항목에 단위가 없으면 규격 단위로 추정하지 않음 (30이 mm인지 cm인지 모름)
+        out.update(verdict="판단필요", reason=f"칸 단위 없음 (규격은 {c['unit']}): 값 열 머리글에 단위를 적으세요 (예: 값({c['unit']}))")
+        return out
+    ok_ = reader.cond_holds(c, qty[0] * cell_unit[1])
+    out.update(verdict="일치" if ok_ else "불일치", reason=out["condition"])
     return out
 
 

@@ -33,7 +33,7 @@ metadata:
 
 - 검색은 띄어쓰기·기호·조사·단위 표기를 무시한다 (`SOI 1` = `SOI #1`, `정격전압은 5V` = `정격 전압이 5.0 V`). 사용자가 패턴을 말하면 `--regex`.
 - 사용자가 동의어를 주면 `C:\CLI\office-cli\data\synonyms.txt`에 적는다 (UTF-8, 한 줄에 한 묶음, 쉼표 구분, 있던 줄은 지우지 않음).
-- 규격 대조: `check` 한 번 -> `counts`와 불일치·`needs_review` 행을 근거와 함께 알림 (`needs_review`는 사용자가 정함) -> 사용자가 원하면 `next_commands[0]`(메모 미리보기) -> 확인 뒤 그 명령에서 `--dry-run`을 뺀 명령. 한 칸만 볼 때는 위 검색 명령에 `--section "<장절>"`.
+- 규격 대조: `check` 한 번 -> `counts`와 불일치·`needs_review` 행을 근거와 함께 알림 (`needs_review`는 사용자가 정함. `reason`이 `칸 단위 없음`이면 값 열 머리글에 단위(예: `값(mm)`)를 적어 달라고 알림) -> 사용자가 원하면 `next_commands[0]`(메모 미리보기) -> 확인 뒤 그 명령에서 `--dry-run`을 뺀 명령. 한 칸만 볼 때는 위 검색 명령에 `--section "<장절>"`.
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:

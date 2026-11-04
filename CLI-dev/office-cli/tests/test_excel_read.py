@@ -1127,6 +1127,36 @@ def test_check_section_column_limits_search(check_env, capsys, tmp_path):
     assert code == 0 and out["results"][0]["verdict"] == "일치", out
 
 
+def test_check_does_not_mix_items_of_one_sentence(check_env, capsys):
+    # 같은 문장의 다른 항목 조건을 섞어 VERIFIED였음: 두께 '5~100 mm', 외경 '5 mm 이하' (1.4.63)
+    spec, book = check_env
+    spec.write_text("3. 치수\n두께 5 mm 이상, 길이 100 mm 이하로 한다.\n외경 3 mm, 폭 5 mm 이하로 한다.\n", encoding="utf-8")
+    _check_book(book, [("두께", 150), ("외경", 4), ("폭", 4)], header=("항목", "비고", "값(mm)"))
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    got = {r["item"]: (r["verdict"], r.get("condition")) for r in out["results"]}
+    assert got == {"두께": ("일치", "5 mm 이상"), "외경": ("불일치", "3 mm"), "폭": ("일치", "5 mm 이하")}, out
+
+
+@pytest.mark.parametrize("header,value,verdict", [
+    (("항목", "비고", "값"), 30, "판단필요"),              # 칸·머리글에 단위 없음: 규격 단위(cm)로 추정하지 않음
+    (("항목", "비고", "값(mm)"), 30, "일치"),              # 머리글 단위로 바꿔 비교 (30 mm <= 5 cm)
+    (("항목", "비고", "값(mm)"), 60, "불일치"),
+    (("항목", "비고", "값"), "30 mm", "일치"),             # 칸 값의 단위
+    (("항목", "비고", "값(cm)"), 4, "일치"),               # 규격과 같은 단위의 머리글
+])
+def test_check_cell_without_unit_is_not_guessed(check_env, capsys, header, value, verdict):
+    spec, book = check_env
+    spec.write_text("두께는 5 cm 이하로 한다.\n", encoding="utf-8")
+    _check_book(book, [("두께", value)], header=header)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    r = out["results"][0]
+    assert r["verdict"] == verdict, out
+    if verdict == "판단필요":
+        assert "칸 단위 없음" in r["reason"] and "머리글" in r["reason"] and out["agent_directive"].startswith("UNVERIFIED:")
+
+
 def test_check_empty_items_is_zero(check_env, capsys):
     spec, book = check_env
     _check_book(book, [])
