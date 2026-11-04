@@ -115,6 +115,22 @@ def test_train_history_mode_is_json(trained):
     assert payload["record_count"] >= 1 and payload["records"][0]["version"] == "v1"
 
 
+def test_history_without_records_is_ok_zero(tmp_path):
+    # R2 (2.9.46): 0 records is a result (2.9.45: "status": "no_history", no verified key)
+    proc, res = run_raw("ml_train.py", "-f", str(tmp_path / "새데이터.csv"), "--history")
+    assert proc.returncode == 0 and res["status"] == "ok" and res["verified"] is True, res
+    assert res["record_count"] == 0 and res["count"] == 0 and res["records"] == [] and res["no_history"] is True, res
+    assert res["agent_directive"].startswith("VERIFIED: 0건") and "next_commands" not in res, res
+
+
+def test_blank_rows_only_input_says_zero_rows(tmp_path):
+    p = tmp_path / "blank.csv"
+    p.write_text("온도,압력,수율\n,,\n,,\n", encoding="utf-8-sig")
+    for script, args in (("ml_train.py", ["-x", "온도,압력", "-y", "수율"]), ("ml_map.py", ["-i", "온도=1"])):
+        res = run_fail(script, "-f", str(p), *args)
+        assert "데이터가 0행" in res["message"] and res["agent_directive"].startswith("STOP_RETRY"), res
+
+
 def test_bad_cli_args_emit_json():
     proc, payload = run_raw("ml_train.py", "--no-such-option")
     assert proc.returncode == 2 and payload["status"] == "error"

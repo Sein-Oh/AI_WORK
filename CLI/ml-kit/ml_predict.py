@@ -57,7 +57,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.45"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.46"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1169,6 +1169,9 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     # Clean rows that are entirely NaN, and entirely empty columns without a header (col_<i>). A named empty
     # column stays: training then says it has no values, prediction imputes it with a warning.
     df_data = df_data.dropna(how="all", axis=0)
+    if df_data.empty:   # only blank rows below the header: say so (the later messages blamed the columns)
+        raise InputError(f"머리글({header_idx + 1}행) 아래의 {total_rows - start_idx}행이 모두 빈 행이라 데이터가 0행입니다. "
+                         f"데이터가 채워진 파일인지, 머리글·데이터 시작 행(--header-row, --data-row)이 맞는지 확인하십시오.")
     # The header (and unit) row repeated inside the data (page breaks of an exported report) carries no values:
     # dropped, with the row numbers in attrs (layout_warnings), so numeric columns stay numeric.
     repeated = _repeated_header_rows(df_raw, df_data, header_idx, unit_row, start_idx)

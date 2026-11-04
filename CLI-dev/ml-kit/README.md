@@ -377,12 +377,12 @@ python ml_train.py -f "공정.xlsx" -x "반응온도,촉매비율,수분함량" 
 | `--data-row` | - | 선택 | 실제 데이터 시작 행 번호 (비표준 표 레이아웃 처리용) |
 | `--dtypes` | - | 선택 | 데이터 타입 수동 오버라이드 (예: `일시:datetime,코드:str`) |
 | `--version` | `-v` | 선택 | 버전 폴더 수동 지정 (미지정 시 `v1`, `v2`, ... 자동 채번). 이미 있는 버전이면 `STOP_RETRY` + `[추천] --version v<다음>` |
-| `--overwrite` | - | 선택 | `--version` 폴더가 이미 있을 때 교체 (사용자 확인 후에만). 새 버전이 원장에 기록될 때까지 기존 폴더를 `.bak_vX`로 보관했다가 실패하면 되돌림 |
+| `--overwrite` | - | 선택 | `--version` 폴더가 이미 있을 때 교체 (사용자 확인 후에만). 새 버전이 원장에 기록될 때까지 기존 폴더를 `.bak_vX`로 보관했다가 실패하면 되돌림. 원장(`history.jsonl`, `history.json`)의 그 버전 기록도 새 기록으로 바꿔 버전마다 기록 하나 (2.9.46, 이전에는 옛 기록이 남아 같은 버전이 둘) |
 | `--encoding` | - | 선택 | 산출물 CSV 저장 인코딩 (기본값: Windows Excel 호환 `cp949`) |
 | `--task` | - | 선택 | 학습 유형 `regression`(기본값) / `classification`. `--best`와 함께 쓰면 그 유형의 최고 버전만 |
 | `--positive-class` | - | 선택 | 이진 분류 양성 클래스. 지정 시 판정 기준 확률 자동 조정 |
 | `--seed` | - | 선택 | 교차검증 난수 시드 (기본값: 42) |
-| `--history` | - | 선택 | 누적 실험 원장 조회 (요약 표는 stderr, 버전별 요약 JSON은 stdout). `best_version`·`best_version_dir`: 가장 최근 학습의 작업 유형에서 보고서가 쓰는 것과 같은 규칙으로 고른 버전 (최고 버전 기록, 아니면 모든 타겟의 최고 점수가 있는 버전, 나뉘어 있으면 최고 타겟이 가장 많은 버전 + `best_version_note`). `best_by_task`는 유형별 같은 값 (`version`, `version_dir`, `mean_val_score`, `complete`, `missing_targets`, 2.9.15) |
+| `--history` | - | 선택 | 누적 실험 원장 조회 (요약 표는 stderr, 버전별 요약 JSON은 stdout). `best_version`·`best_version_dir`: 가장 최근 학습의 작업 유형에서 보고서가 쓰는 것과 같은 규칙으로 고른 버전 (최고 버전 기록, 아니면 모든 타겟의 최고 점수가 있는 버전, 나뉘어 있으면 최고 타겟이 가장 많은 버전 + `best_version_note`). `best_by_task`는 유형별 같은 값 (`version`, `version_dir`, `mean_val_score`, `complete`, `missing_targets`, 2.9.15) 학습 기록이 없으면 `status: ok`, `record_count: 0`, `count: 0`, `records: []`, `no_history: true`, `VERIFIED: 0건. ...` (2.9.46, 이전에는 `status: no_history`) |
 | `--best` | - | 선택 | 최고 버전 만들기 (2.4.0, 아래 8) 참고). `-f`만 필요. `-x`, `-y`, `--eval`, `--dtypes`, `--version`, `--positive-class`는 무시 |
 
 ### 7) 실행 예시

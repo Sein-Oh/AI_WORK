@@ -1150,9 +1150,18 @@ def append_history_ledger(ledger_path: str, record: Dict[str, Any],
     data_root = os.path.dirname(ledger_path)
     os.makedirs(data_root, exist_ok=True)
 
-    # 1. Append to history.jsonl (streaming ledger)
-    with open(ledger_path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(dumps_json(record) + "\n")
+    # 1. Append to history.jsonl (streaming ledger). A version replaced with --overwrite keeps one record: the old
+    # record of that version is removed (the ledger is rewritten atomically), so the report's best version and the
+    # is_best / delta comparisons never see the replaced folder's scores (2.9.46).
+    ver = record.get("version")
+    existing = load_history_ledger(ledger_path) if ver else []
+    if any(r.get("version") == ver for r in existing):
+        kept = [r for r in existing if r.get("version") != ver]
+        atomic_write_text(ledger_path, "".join(dumps_json(r) + "\n" for r in kept + [record]))
+        sys.stderr.write(f"[INFO] 원장(history.jsonl)의 {ver} 기록을 이번 기록으로 교체했습니다 (--overwrite)\n")
+    else:
+        with open(ledger_path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(dumps_json(record) + "\n")
     if on_recorded:
         on_recorded()
 
@@ -1850,7 +1859,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
         # Check Previous History (same task only) for Delta
         log_progress(85, f"이전 이력 대조 및 성능 변화(Delta {metric_label}) 산출 중...")
-        history_records = load_history_ledger(ledger_path)
+        # the record of a version replaced with --overwrite is no earlier run to compare with
+        history_records = [h for h in load_history_ledger(ledger_path) if h.get("version") != current_version]
 
         # Resolve project description: explicit arg takes precedence, otherwise inherit from previous version
         project_desc = (getattr(args, "description", None) or "").strip()
@@ -2580,11 +2590,13 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
     """
     ledger_path = os.path.join(data_root, "history.jsonl")
     records = load_history_ledger(ledger_path)
-    if not records:
+    if not records:     # 0 records is a result, not an error (R2)
         return {
-            "status": "no_history",
-            "message": f"실험 원장이 존재하지 않습니다: {ledger_path}",
-            "agent_directive": "VERIFIED: No experiments yet. Next step: run baseline training (v1).",
+            "status": "ok", "verified": True, "no_history": True, "data_root": data_root,
+            "record_count": 0, "count": 0, "records": [], "best_version": None, "latest_version": None,
+            "preview": "학습 기록 0건",
+            "agent_directive": ("VERIFIED: 0건. 이 데이터 파일의 학습 기록(history.jsonl)이 없습니다. "
+                                "사용자에게 학습 기록이 없다고 그대로 알리세요."),
         }
 
     proj_desc = records[-1].get("description", "")
