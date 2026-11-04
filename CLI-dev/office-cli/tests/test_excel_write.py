@@ -13,7 +13,7 @@ import excel
 import office
 from fake_excel import FakeExcelWorkbook, FakeXlApp, SheetNameRefused
 from fake_office import make_win32com
-from office_helpers import EMPTY_FIND, run_excel, run_main, sheet_names, undo_points, ws_of
+from office_helpers import EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
 
 
 def _no_create_imperative(out):
@@ -586,6 +586,62 @@ def test_delete_empty_rows_needs_no_overwrite(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9")
     assert code == 0 and out["filled_cells"] == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     assert _col(xl_table, 1) == ["이름", "가", "나", "다", "라"]
+
+
+# 지울 칸을 참조하는 다른 칸의 수식 (#REF!가 됨, 1.4.41)
+
+
+def _formula(ws, r, c, f, v=0):
+    ws.formulas[(r, c)] = f
+    ws.values[(r, c)] = v
+
+
+def test_formula_refs_parses_a1_references():
+    refs = excel.formula_refs("=SUM($B$2:B5)+'내 시트'!C3+요약!A:A+Sheet1!4:6+\"A9\"+LOG10(2)+[책.xlsx]Sheet1!A1")
+    assert refs == [(None, 2, 2, 5, 2), ("내 시트", 3, 3, 3, 3), ("요약", 1, 1, 1048576, 1), ("Sheet1", 4, 1, 6, 16384)], refs
+
+
+def test_delete_rows_referenced_by_formula_needs_decision(xl_table, capsys):
+    _formula(xl_table, 7, 1, "=C3*2")              # 지울 3행만 참조 -> #REF!
+    _formula(xl_table, 8, 1, "=SUM(C2:C5)")        # 범위 일부만 지움 -> 범위가 줄 뿐
+    _formula(xl_table, 3, 4, "=C2")                # 지울 행 안의 수식은 함께 사라짐
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3", "--overwrite", "--dry-run")
+    assert code == 0 and out["broken_refs"] == 1 and out["broken_ref_cells"] == ["Sheet1!A7"], out
+    assert "#REF!" in out["preview"] and "--overwrite" in out["next_commands"][0]["command"], out
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3")
+    assert code == 1 and out["error_type"] == "needs_user_decision", out
+    assert "#REF!" in out["message"] and "Sheet1!A7" in out["message"] and "Sheet1!A8" not in out["message"], out
+    assert "C3*2" not in out["message"] and "C3*2" not in _tool_log_text()          # 수식 글은 보이지 않음
+    assert xl_table.values[(3, 1)] == "나"                                          # 바꾸지 않음
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3", "--overwrite")
+    assert code == 0 and out["broken_refs"] == 1 and "#REF!" in out["preview"], out
+
+
+def test_delete_empty_rows_referenced_by_formula_needs_decision(xl_table, capsys):
+    _formula(xl_table, 2, 4, "=A9")
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9")
+    assert code == 1 and out["error_type"] == "needs_user_decision" and "Sheet1!D2" in out["message"], out
+    assert "값이 있는 칸" not in out["message"], out
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9", "--dry-run")
+    assert code == 0 and out["filled_cells"] == 0 and out["broken_refs"] == 1 and "--overwrite" in out["next_commands"][0]["command"]
+
+
+def test_delete_cols_referenced_from_other_sheet(monkeypatch, capsys):
+    app = FakeXlApp()
+    wb = FakeExcelWorkbook(app, "보고.xlsx", sheets=("Sheet1", "요약"))
+    stub_com(monkeypatch)
+    set_active(monkeypatch, app, wb)
+    ws, other = wb.Worksheets("Sheet1"), wb.Worksheets("요약")
+    _formula(other, 1, 1, "=sheet1!B2")             # 시트 이름은 대소문자 무시
+    _formula(other, 2, 1, "=B2")                   # 요약 시트 자기 칸
+    _formula(other, 3, 1, "=SUM(Sheet1!A:C)")      # 열 범위 일부
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "B", "--dry-run")
+    assert code == 0 and out["broken_ref_cells"] == ["요약!A1"], out
+
+
+def test_delete_without_references_unchanged(xl_table, capsys):
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9")
+    assert code == 0 and out["broken_refs"] == 0 and out["broken_ref_cells"] == [], out
 
 
 def test_cell_range_needs_axis(xl_table, capsys):

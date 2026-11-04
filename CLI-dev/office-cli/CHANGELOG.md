@@ -6,6 +6,17 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.41] - 2026-11-04
+
+1.4.37에서 남긴 것: range delete가 다른 칸의 수식이 `#REF!`가 되는 것을 미리 알리지 않음.
+회귀 테스트: `tests/test_excel_write.py` "지울 칸을 참조하는 다른 칸의 수식" (1.4.40에서 5개 중 5개 실패).
+
+### 수정
+- `excel.py range --action delete`: 다른 칸의 수식이 지울 행·열 안에만 있는 칸이나 범위를 참조하면(지우면 `#REF!`) 지우지 않고
+  `needs_user_decision`. 지울 행·열이 비어 있어도 같음. message에 수식 칸 수와 위치(`시트!주소` 5개까지), 수식 글은 넣지 않음(오류 로그도).
+- 결과 `broken_refs`, `broken_ref_cells`(20개까지)는 `--dry-run`과 실행 결과 모두에. `--dry-run`의 preview와 `next_commands[0]`(`--overwrite` 포함)도.
+- 같은 통합문서의 다른 시트 수식(`Sheet1!B2`, `'내 시트'!C3`)도 봄. 범위 일부만 지워지는 참조, 다른 통합문서, 이름 정의·`INDIRECT`는 세지 않음.
+
 ## [1.4.40] - 2026-11-04
 
 회사 PC에서 관리자 권한 PowerShell로 띄운 OpenCode가 사용자가 연 문서를 보지 못하고 "열려 있는 ... 문서가 없습니다"라고 답한 문제.
@@ -1120,7 +1131,6 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - 24차 확인 검사 LOW-5: reader 색인이 수식 칸 확인 실패(MemoryError 등)를 캐시에 저장해, 파일이 바뀌거나 캐시를 지울 때까지 같은 파일 읽기가 계속 UNVERIFIED("확인하지 못함")로 나옴. 확인 실패는 캐시하지 않기.
 
 ### 1.4.37에서 남긴 것
-- range delete: 다른 칸의 수식이 지운 칸을 참조하면 `#REF!`가 되는데 미리 알리지 않음 (지울 칸의 값·수식만 셈).
 - range sort: 기준 4개 이상(Worksheet.Sort.SortFields), 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림.
 - read --where: OR 조건, 값 안의 `;`. 실기(회사 PC)에서 outlook `--days`/`--since`의 Restrict 날짜 형식 확인.
 

@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.40"
+  version: "1.4.41"
   platform: windows
 ---
 
@@ -33,7 +33,7 @@ metadata:
 | 엑셀 서식 | `excel.py style --range A1:E10 --theme navy` / `--bg yellow --bold` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin` |
 | 엑셀 기타 | `excel.py info`, `replace --find A --replace B [--all-sheets]`, `sheet --action add|rename|copy|delete --name A [--new-name B]`, `export --save "결과.csv|.xlsx|.pdf" [--range A1:D20]` |
 | 엑셀 범위 | `excel.py range --action freeze|unfreeze|hide|unhide|width|height|autofit|clear|copy|move|merge|border --range A1:D10 [--dest B2] [--size 20]` |
-| 엑셀 행·열 넣기 / 지우기 / 정렬 | `excel.py range --action insert|delete --range 5:7` (열은 `--range B:C`, 지울 때 먼저 `--dry-run`) / `excel.py range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
+| 엑셀 행·열 넣기 / 지우기 / 정렬 | `excel.py range --action insert|delete --range 5:7` (열은 `--range B:C`, 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸을 알림) / `excel.py range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
 | 워드 읽기 / 쓰기 | `word.py read [--save]` / `word.py write --file "내용.md"` / 한 줄이면 `--text "## 제목\n- 항목"` / `--image "그림.png"` (`--anchor 글 --pos after`, 여러 곳이면 `--occurrence N`). 쪽 나누기는 `word.py write --page-break` (.md의 `---`는 구분선). 목차 `word.py write --toc`, 요약 상자 `word.py write --text "요약" --callout` |
 | 워드 목차 / 범위 읽기 | `word.py outline` / `word.py read --section "1.1"` (장절, 하위 절 포함) / `--pages 3-5` / `--paragraphs 120-140` |
 | 워드 검토 메모 / 변경 추적 | `word.py comment` (목록) / `word.py comment --action add --anchor "문서의 글" --text "메모"` (여러 개는 `--file "메모.csv"`, 열: 기준 글, 메모 내용) / `word.py revisions` |

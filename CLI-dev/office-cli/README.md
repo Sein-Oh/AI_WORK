@@ -222,6 +222,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - `delete`: 지울 행·열에 값이나 수식이 있는 칸이 있으면 지우지 않고 `needs_user_decision`(칸 수와 주소 5개까지, 값은 stdout과 오류 로그 어디에도
     보이지 않음). 사용자가 원하면 `--overwrite`. `--dry-run`은 바꾸지 않고 칸 수(`filled_cells`), 주소 20개(`filled_addresses`)와
     실행 명령(`next_commands[0]`, 값이 있으면 `--overwrite` 포함)을 줍니다(되돌리기 지점도 남기지 않음).
+  - `delete`는 다른 칸의 수식이 지울 행·열 안에만 있는 칸이나 범위를 참조하면(지우면 `#REF!`) 값이 없는 행·열이어도 `needs_user_decision`(1.4.41).
+    결과 `broken_refs`(수), `broken_ref_cells`(`시트!주소` 20개까지, 넘으면 `broken_ref_cells_truncated`), message에는 5개까지. 수식 글은 보이지 않습니다.
+    같은 통합문서의 다른 시트에서 이 시트를 이름으로 참조하는 수식도 봅니다(시트 이름 대소문자 무시). 범위 일부만 지우면(`SUM(C2:C5)`에서 3행) 범위가
+    줄어들 뿐이라 세지 않고, 지울 행·열 안의 수식, 따옴표 글, 다른 통합문서 참조, 이름 정의·`INDIRECT` 같은 간접 참조는 세지 않습니다.
+    통합문서 전체가 200만 칸을 넘으면 넘는 시트는 훑지 않고 `warnings`로 알립니다. `--overwrite`로 지우면 preview에 `#REF!`가 된 수식 수.
   - 다른 쓰기처럼 되돌리기 지점을 남기고(`office.py undo`), 닫힌 파일은 엑셀로 열어 고칩니다.
   - 확인(R1): 사용 범위 끝 행(열)이 넣은·지운 수만큼 바뀌었는지, 옮겨진 칸 하나(수식이 아닌 값이 있는 첫 칸, `moved`)가 기대한 자리에 같은 값인지.
 - `range --action sort --range A1:E100 --by "<열>" [--desc] [--header auto|yes|no]`(1.4.37): 행 단위 정렬(Range.Sort, 기준 3개까지).

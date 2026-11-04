@@ -2048,6 +2048,90 @@ def _lines_command(args, axis: str, a: int, b: int, overwrite: bool) -> Dict[str
     return rt.next_command("excel.py", argv, f"{_lines_text(axis, a, b)} {what} 실행" + (" (값이 있는 칸도 지움)" if overwrite else ""))
 
 
+REF_SCAN_CELLS = 2_000_000   # 지울 칸을 참조하는 수식을 찾을 때 훑는 칸 수 상한 (통합문서 전체)
+REF_SHOW = 20                # 결과에 담는 #REF! 될 수식 칸 주소 수
+
+_FORMULA_STRING = re.compile(r'"(?:[^"]|"")*"')
+_FORMULA_REF = re.compile(
+    r"(?:'((?:[^']|'')+)'!|([^\s'!(),;:=+\-*/&^<>{}\"\[\]]+)!)?"          # 시트 이름 (따옴표 있거나 없거나)
+    r"(?<![A-Za-z0-9_.$])"
+    r"(?:\$?([A-Z]{1,3})\$?(\d+)(?::\$?([A-Z]{1,3})\$?(\d+))?"            # A1, A1:B5
+    r"|\$?([A-Z]{1,3}):\$?([A-Z]{1,3})"                                    # A:C
+    r"|\$?(\d+):\$?(\d+))"                                                # 5:7
+    r"(?![A-Za-z0-9_(!])")
+
+
+def formula_refs(formula: str) -> List[Tuple[Optional[str], int, int, int, int]]:
+    """수식의 A1 참조 [(시트 이름 또는 None, 행1, 열1, 행2, 열2)]. 따옴표 글은 빼고, 다른 통합문서([책]) 참조와
+    이름 정의·INDIRECT 같은 간접 참조는 셀 수 없어 넣지 않습니다. 행·열 전체 참조는 시트 끝까지."""
+    text = _FORMULA_STRING.sub('""', formula)
+    out: List[Tuple[Optional[str], int, int, int, int]] = []
+    for m in _FORMULA_REF.finditer(text):
+        sheet = m.group(1).replace("''", "'") if m.group(1) else m.group(2)
+        if (sheet and ("[" in sheet or "]" in sheet)) or (m.start() > 0 and text[m.start() - 1] == "]"):
+            continue                          # 다른 통합문서 ([책.xlsx]Sheet1!A1)
+        if m.group(3):
+            r1, c1 = int(m.group(4)), col_number(m.group(3))
+            r2, c2 = (int(m.group(6)), col_number(m.group(5))) if m.group(5) else (r1, c1)
+        elif m.group(7):
+            r1, r2, c1, c2 = 1, 1048576, col_number(m.group(7)), col_number(m.group(8))
+        else:
+            r1, r2, c1, c2 = int(m.group(9)), int(m.group(10)), 1, 16384
+        r1, r2 = sorted((r1, r2))
+        c1, c2 = sorted((c1, c2))
+        if r1 < 1 or r2 > 1048576 or c1 < 1 or c2 > 16384:
+            continue
+        out.append((sheet, r1, c1, r2, c2))
+    return out
+
+
+def broken_refs(wb: Any, ws: Any, axis: str, n1: int, n2: int) -> Tuple[List[str], List[str]]:
+    """행·열을 지우면 #REF!가 될 수식 칸 (다른 칸의 수식이 지울 행·열 안에만 있는 칸이나 범위를 참조).
+    범위 일부만 지워지면 범위가 줄어들 뿐 #REF!가 되지 않아 세지 않습니다. 지울 행·열 안의 수식 칸은 함께 사라져 빼고,
+    같은 통합문서의 다른 시트에서 이 시트를 이름으로 참조하는 수식도 봅니다.
+    반환: (["시트!주소", ...] 문서 순서, 훑지 못한 시트 이름). 수식 글은 돌려주지 않습니다(문서 내용)."""
+    target = str(ws.Name)
+    tkey = target.casefold()
+    hits: List[str] = []
+    skipped: List[str] = []
+    budget = REF_SCAN_CELLS
+    try:
+        sheets = [wb.Worksheets(i) for i in range(1, int(wb.Worksheets.Count) + 1)]
+    except Exception:
+        sheets = [ws]
+    for sh in sheets:
+        name = str(sh.Name)
+        same = name.casefold() == tkey
+        try:
+            used = sh.UsedRange
+            r0, c0 = int(used.Row), int(used.Column)
+            cells = int(used.Rows.Count) * int(used.Columns.Count)
+            if cells > budget:
+                skipped.append(name)
+                continue
+            budget -= cells
+            forms = off.range_to_matrix(used.Formula)
+        except Exception:
+            skipped.append(name)
+            continue
+        for i, row in enumerate(forms):
+            r = r0 + i
+            for j, f in enumerate(row):
+                if not (isinstance(f, str) and f.startswith("=")):
+                    continue
+                c = c0 + j
+                if same and (n1 <= (r if axis == "rows" else c) <= n2):
+                    continue                  # 지울 행·열 안의 수식은 함께 사라짐
+                for sheet, ra, ca, rb, cb in formula_refs(f):
+                    if (sheet.casefold() if sheet else name.casefold()) != tkey:
+                        continue
+                    lo, hi = (ra, rb) if axis == "rows" else (ca, cb)
+                    if n1 <= lo and hi <= n2:
+                        hits.append(f"{name}!{addr(r, c)}")
+                        break
+    return hits, skipped
+
+
 def range_lines(args) -> Dict[str, Any]:
     """range --action insert|delete: 행·열 넣기·지우기. 지울 행·열에 값이 있으면 --overwrite가 있어야 지움 (값은 보이지 않음)."""
     a = args.action
@@ -2065,9 +2149,21 @@ def range_lines(args) -> Dict[str, Any]:
             if used is not None:
                 filled = _filled_cells(ws, used)
         cells_text = ", ".join(c for c, _ in filled[:5]) + (" ..." if len(filled) > 5 else "")
+        refs: List[str] = []
+        ref_skipped: List[str] = []
+        if a == "delete":
+            refs, ref_skipped = broken_refs(t.doc, ws, axis, n1, n2)
+        refs_text = ", ".join(refs[:5]) + (" ..." if len(refs) > 5 else "")
+        refs_note = f"다른 칸의 수식 {len(refs)}개가 지울 칸을 참조해 #REF! 오류가 됩니다: {refs_text}" if refs else ""
         info: Dict[str, Any] = {"sheet": str(ws.Name), "range": _lines_addr(axis, n1, n2), "axis": axis, "count": n}
         if a == "delete":
             info["filled_cells"] = len(filled)
+            info["broken_refs"] = len(refs)
+            info["broken_ref_cells"] = refs[:REF_SHOW]
+            if len(refs) > REF_SHOW:
+                info["broken_ref_cells_truncated"] = True
+            if ref_skipped:
+                info["warnings"] = [f"칸이 너무 많아 지울 칸을 참조하는 수식을 확인하지 못한 시트: {', '.join(ref_skipped[:10])}"]
         if args.dry_run:
             # 바꾸지 않음: 되돌리기 지점도 남지 않음 (t.changed 없음)
             info["filled_addresses"] = [c for c, _ in filled[:20]]
@@ -2075,21 +2171,30 @@ def range_lines(args) -> Dict[str, Any]:
                 shift = "아래 행이" if axis == "rows" else "오른쪽 열이"
                 preview = f"미리보기: {what} 앞에 {n}{'행' if axis == 'rows' else '열'}을 넣으면 {shift} {n}칸씩 밀립니다 (바꾸지 않음)"
             elif filled:
-                preview = f"미리보기: {what}을(를) 지우면 값이 있는 칸 {len(filled)}개가 함께 지워집니다: {cells_text} (바꾸지 않음)"
+                preview = f"미리보기: {what}을(를) 지우면 값이 있는 칸 {len(filled)}개가 함께 지워집니다: {cells_text}"
+                preview += (f". {refs_note}" if refs else "") + " (바꾸지 않음)"
+            elif refs:
+                preview = f"미리보기: {what}에는 값이 있는 칸이 없지만 {refs_note} (바꾸지 않음)"
             else:
                 preview = f"미리보기: {what}에는 값이 있는 칸이 없습니다. 지우면 {'아래 행이 올라' if axis == 'rows' else '오른쪽 열이 당겨'}옵니다 (바꾸지 않음)"
-            info["next_commands"] = [_lines_command(args, axis, n1, n2, overwrite=bool(filled))]
+            info["next_commands"] = [_lines_command(args, axis, n1, n2, overwrite=bool(filled or refs))]
             resolved = t.resolved()
             return rt.ok(TOOL, "range", preview,
                          "VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면 "
                          "next_commands[0]을 그대로 실행하세요.", dry_run=True, target_resolved=resolved, **info)
-        if filled and not args.overwrite:
-            head = f"{ws.Name}!{_lines_addr(axis, n1, n2)}({what})을(를) 지우면 값이 있는 칸 {len(filled)}개가 함께 지워집니다: "
+        if (filled or refs) and not args.overwrite:
+            head = f"{ws.Name}!{_lines_addr(axis, n1, n2)}({what})을(를) 지우면 "
+            parts = [f"값이 있는 칸 {len(filled)}개가 함께 지워집니다: {cells_text} (값은 보이지 않음)"] if filled else []
+            log_parts = [f"값이 있는 칸 {len(filled)}개 ({cells_text})"] if filled else []
+            if refs:
+                parts.append(refs_note)
+                log_parts.append(f"#REF! 될 수식 칸 {len(refs)}개 ({refs_text})")
             raise rt.UserDecisionError(
-                head + cells_text + " (값은 보이지 않음)",
-                "지우지 않았습니다. 지워질 칸 수와 위치를 사용자에게 알리고, 사용자가 지워도 된다고 하면 --overwrite를 붙여 다시 "
-                "실행하세요 (미리 보려면 --dry-run).",
-                log_message=f"{_lines_addr(axis, n1, n2)}({what}) 지우기: 값이 있는 칸 {len(filled)}개 ({cells_text})")
+                head + ". ".join(parts),
+                "지우지 않았습니다. " + ("지워질 칸 수와 위치" if filled else "") + (", " if filled and refs else "")
+                + ("#REF! 오류가 될 수식 칸 수와 위치" if refs else "") + "를 사용자에게 알리고, 사용자가 지워도 된다고 하면 "
+                "--overwrite를 붙여 다시 실행하세요 (미리 보려면 --dry-run).",
+                log_message=f"{_lines_addr(axis, n1, n2)}({what}) 지우기: " + ", ".join(log_parts))
         # 확인 기준: 옮겨질 칸 하나 (넣기는 넣는 자리부터, 지우기는 지운 자리 뒤부터)
         ref = _ref_cell(ws, axis, n1 if a == "insert" else n2 + 1, box) if box is not None else None
         if a == "insert":
@@ -2134,6 +2239,8 @@ def range_lines(args) -> Dict[str, Any]:
         preview = f"{info['sheet']}!{what} 앞에 {n}{'행' if axis == 'rows' else '열'} 넣음 ({'아래 행' if axis == 'rows' else '오른쪽 열'}은 {n}칸씩 밀림)"
     else:
         preview = f"{info['sheet']}!{what} 지움" + (f" (값이 있던 칸 {len(filled)}개 포함)" if filled else "")
+        if refs:
+            preview += f". 수식 {len(refs)}개가 #REF! 오류가 됨: {refs_text}"
     if problems:
         return rt.ok_unverified(TOOL, "range", preview, problems, target_resolved=resolved, **info)
     return rt.ok(TOOL, "range", preview, "VERIFIED: 사용 범위와 옮겨진 칸을 다시 읽어 확인했습니다. 잘못이면 office.py undo로 되돌립니다.",
