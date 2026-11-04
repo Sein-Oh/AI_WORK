@@ -25,7 +25,7 @@ SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신할 때 
 ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: WinPython의 `python` 폴더)에 두고,
 PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시 시작합니다. 그 전까지는 전역 AGENTS.md 3장 3번대로 SKILL.md를 직접 읽게 됩니다.
 
-- 도구 오류 로그는 `C:\CLI\<도구>\data\logs\errors.txt`에 쌓이고, `python C:\CLI-dev\run_all_tests.py --only diag`가 결과 파일에 붙여 줍니다.
+- 도구 오류 로그는 `C:\CLI\<도구>\data\logs\errors.txt`에 쌓이고, `python C:\CLI-dev\run_all_tests.py`가 결과 파일 끝에 붙여 줍니다 (오류 로그만 빨리 모으려면 `--only diag`, 1분). 실기 절차는 [`실기테스트.md`](실기테스트.md).
 - 이전처럼 스킬 폴더에 도구 전체를 복사해 두었다면 그 폴더는 SKILL.md만 남기고 `C:\CLI`만 쓰세요. 두 곳에 도구가 있으면 어느 쪽이 쓰였는지 헷갈립니다.
 
 ## 2. 전역 지침 (AGENTS.md)

@@ -1261,7 +1261,7 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - 이전 이력 문서(ROADMAP 등)를 정리하고 이 CHANGELOG로 일원화. `requirements-dev.txt`, `install_offline.bat` 삭제.
 
 ## 남은 할 일
-- [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트_2026-10-30.md` 4단계 V8). 엑셀 재계산은 회사 PC 통과 (2.9.4)
+- [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트.md` 4장 눈 확인 2번). 엑셀 재계산은 회사 PC 통과 (2.9.4)
 - [ ] `-x` 생략 시 피처 자동 선택 (ID/일련번호 배제 규칙)
 - [ ] 무거운 import 지연 로딩 (`--history` 응답 속도)
 - [ ] 260자 넘는 긴 경로
