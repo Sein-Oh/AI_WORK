@@ -6,6 +6,20 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.51] - 2026-11-04
+
+`reader.py search` 재현율 (경량 LLM의 검색어가 규격서 글과 조금 달라도 근거를 찾게). 회귀 테스트: `tests/test_reader.py` "검색 재현율"
+(1.4.50에서 12개 중 11개 실패). 재현율 시험(단락 7개, 검색어 8개, 기대 일치 10건): 1.4.50 2건 -> 1.4.51 10건.
+
+### 기능
+- 검색어마다 도구가 정규식을 만듦(`_single_pattern`): 검색어 끝 조사를 떼고 글의 조사를 허용, 전각 영문·숫자, `5V` = `5 V` = `5[V]` = `5.0 V`,
+  `5000` = `5,000`, `°C` = `℃`. 숫자 경계(`15V`, `5.5V`)와 기존 규칙(`SOI 1` = `SOI #1`, `#4`, `1.2`)은 그대로.
+- 0건이면 넓혀 찾기: `partial`(검색어 절반 이상, 가장 많이 든 단위) -> `fuzzy`(한 글자 다른 낱말, 영문 4자·한글 3음절 이상, 숫자 없는 검색어).
+  `match_mode`, 항목의 `matched_terms`·`missing_terms`·`fuzzy_words`, `recovered`, directive에 "정확히 일치한 근거가 아님".
+- 결과를 점수 순으로(`score`, 저장 파일 `점수` 열): 맞은 검색어 수, 나온 횟수, 검색어끼리 가까움, 장절 제목.
+- 동의어 파일 `<데이터 폴더>/synonyms.txt`(한 줄에 한 묶음, 쉼표 구분). 결과 `synonyms_used`.
+- `--regex` 오류: 몇 번째 글자와 이유. 정규식 문법이 없는 글이면 `--regex` 없이 찾는 전체 명령을 `[추천]`(오류 로그에는 검색어를 남기지 않음).
+
 ## [1.4.50] - 2026-11-04
 
 규격 대조 흐름(판단 결과를 엑셀 칸 메모로). 회귀 테스트: `tests/test_excel_write.py` "comment" (1.4.49에서 9개 중 9개 실패, 명령 없음).

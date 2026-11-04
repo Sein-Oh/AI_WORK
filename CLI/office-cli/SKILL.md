@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.50"
+  version: "1.4.51"
   platform: windows
 ---
 
@@ -47,7 +47,7 @@ metadata:
 | 워드/PPT 내용을 엑셀로 | `office.py transfer --from word --what text --to excel` (`--what table --table 1`) |
 | 문서 등록 (PDF/HWP/Office) | 폴더: `reader.py index --folder "<폴더>"` / 파일 하나 읽기: `reader.py read --file "<파일>" [--pages 1-3] [--save]` |
 | 문서의 장절 읽기 (근거 포함) | `reader.py read --file "<파일>" --section "장절 일부" [--pages 3-7]` (장절 이름 일부, 대소문자 무시. 결과 `units[].evidence`가 근거) |
-| 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호는 무시: `SOI 1` = `SOI #1`. 사용자가 패턴을 말하면 `--regex`) |
+| 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호·조사·단위 표기는 무시: `SOI 1` = `SOI #1`, `정격전압은 5V` = `정격 전압이 5.0 V`. 사용자가 패턴을 말하면 `--regex`. 동의어는 데이터 폴더의 `synonyms.txt`) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |
 | 메일 읽기 | `outlook.py current`, `list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간: `--days 7`(오늘 포함) 또는 `--since 2026-11-01`, search도 같음), `search --query 말 [--from 이름] [--folder sent] [--where subject]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일), 폴더 목록 `outlook.py folders` |
@@ -79,6 +79,7 @@ metadata:
 - `error_type`이 `elevated_process`(관리자 권한 실행이라 사용자가 연 문서가 안 보임)이면 다시 실행하지 않고 message를 그대로 알린다.
 - JSON에 `recovered`가 있으면 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.
 - 문서 검색 결과는 항목마다 근거를 붙여 알린다: `evidence`(예: `규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`)를 그대로 쓴다. `page`가 null인 형식(엑셀, HWP 등)은 장절(`section_text`)과 번호(`number`), 위치(`loc`)로 알린다.
+- `search` 결과의 `match_mode`가 `partial`(일부 검색어만 맞음)이나 `fuzzy`(한 글자 다른 낱말)이면 정확히 일치한 근거가 아니라고 알린다.
 - `search` 결과가 `UNVERIFIED:`이면 `not_searched`(검색하지 못한 부분)를 그대로 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서(캐시)만 찾는다. `--file`을 주면 그 파일/폴더의 새 문서를 먼저 등록한다(`indexed_now`를 사용자에게 알린다). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - 메일은 기본으로 작성 창만 띄운다. `--send`는 사용자가 **발송을 분명히 요청한 경우에만** 붙인다.

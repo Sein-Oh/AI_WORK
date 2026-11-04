@@ -20,6 +20,7 @@
     python reader.py list --name 규격
 """
 import contextlib
+import functools
 import hashlib
 import json
 import os
@@ -2346,7 +2347,25 @@ def _repair_index(docs: List[Dict[str, Any]]) -> List[str]:
 # 7. 명령: search (캐시 기준)
 # ==============================================================================
 
-def build_matcher(query: str, regex: bool, case_sensitive: bool):
+def _bad_regex(query: str, e: "re.error", args: Any = None) -> rt.InputError:
+    """--regex의 정규식 오류 (STOP_RETRY). 정규식 문법(\\d, .*, [..], |, (?..) 등)이 없는 글이면 글자 그대로 찾는 전체 명령을 [추천]."""
+    pos = f"{e.pos + 1}번째 글자, " if getattr(e, "pos", None) is not None else ""
+    head = f"--regex의 정규식이 잘못되었습니다 ({pos}{e.msg})."
+    literal = not re.search(r"\\.|\.[*+?]|\[[^\]]*\]|\(\?|\||\{\d", query)
+    if literal and args is not None:
+        cmd = ["search", "--query", query]
+        for flag, val in (("--file", args.file), ("--pages", args.pages), ("--section", args.section)):
+            if val:
+                cmd += [flag, val]
+        cmd += ["--case-sensitive"] if args.case_sensitive else []
+        cmd += ["--full"] if args.full else []
+        rec = rt.next_command("reader.py", cmd, "")["command"]
+        tail = " 정규식 문법이 없는 글이라 글자 그대로 찾으면 됩니다(--regex 없이, 기호·띄어쓰기는 무시)."
+        return rt.InputError(f"{head}{tail} [추천] {rec}", log_message=f"{head}{tail} [추천 명령 생략: 검색어 {rt.DOC_OMITTED}]")
+    return rt.InputError(f"{head} 정규식을 고쳐 다시 실행하세요 (기호를 글자로 찾으려면 앞에 \\를 붙임).")
+
+
+def build_matcher(query: str, regex: bool, case_sensitive: bool, args: Any = None):
     """검색 조건을 함수로 만듭니다. 'A AND B', 'A OR B' 조합 지원 (AND가 OR보다 먼저 묶임).
     반환: match_fn(text) -> 강조할 단어 목록 또는 None"""
     flags = 0 if case_sensitive else re.IGNORECASE
@@ -2354,7 +2373,7 @@ def build_matcher(query: str, regex: bool, case_sensitive: bool):
         try:
             pat = re.compile(query, flags)
         except re.error as e:
-            raise rt.InputError(f"정규식 오류: {e}")
+            raise _bad_regex(query, e, args)
 
         def match_regex(text: str):
             m = next((m for m in pat.finditer(text) if m.group(0)), None)   # 빈 일치('a*')는 일치로 보지 않음
@@ -2365,7 +2384,7 @@ def build_matcher(query: str, regex: bool, case_sensitive: bool):
     if not groups:
         raise rt.InputError("검색어가 비어 있습니다.")
 
-    pats = [[_term_pattern(unicodedata.normalize("NFC", t), flags) for t in g] for g in groups]
+    pats = [[_term_pattern(t, flags) for t in g] for g in groups]
 
     def match_terms(text: str):
         t = unicodedata.normalize("NFC", text)
@@ -2402,26 +2421,147 @@ def parse_query(query: str) -> List[List[str]]:
     return [g for g in groups if g]
 
 
-_SEP = r"[\W_]*"          # 글자 사이에 끼어도 되는 것: 띄어쓰기, 줄바꿈, 기호(# - . : / ( ) 등)
+_SEP = r"[\W_]*"          # 글자 사이에 끼어도 되는 것: 띄어쓰기, 줄바꿈, 기호(# - . : / ( ) 등, 대시 종류 모두)
+
+# 검색어 낱말 끝의 조사·어미: 떼고 찾음 (글에서는 낱말 뒤에 무엇이 와도 맞음). 긴 것부터.
+# 떼고 남는 글이 2자 이상일 때만 ('높이', '단가', '회의'는 그대로). '도'·'만'은 낱말 끝 글자인 경우가 많아('정확도') 떼지 않음.
+_PARTICLES = ("에서의", "에서는", "으로는", "으로서", "으로써", "이어야", "에서", "으로", "에는", "에게", "까지", "부터",
+              "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "및")
+_HANGUL = re.compile(r"[\uac00-\ud7a3]")
+
+
+def _strip_word(word: str) -> str:
+    if not _HANGUL.search(word):
+        return word
+    for p in _PARTICLES:
+        if word.endswith(p) and len(word) - len(p) >= 2 and _HANGUL.match(word[len(word) - len(p) - 1]):
+            return word[: -len(p)]
+    return word
+
+
+def strip_particles(term: str) -> str:
+    """'정격전압은 5V' -> '정격전압 5V' (낱말마다 끝의 조사를 뗌)."""
+    return " ".join(_strip_word(w) for w in term.split())
+
+
+def _char(c: str) -> str:
+    """글자 하나의 정규식: 영문·숫자는 전각(ＰＣＢ, ５)도 맞게."""
+    if c.isascii() and c.isalnum():
+        return f"[{c}{chr(ord(c) + 0xFEE0)}]"
+    return re.escape(c)
+
+
+_NUM_TOKEN = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|[^\W\d_]|\S")
+
+
+def _number(tok: str) -> str:
+    """숫자 하나: 천 단위 쉼표 무시(5000 = 5,000), 정수와 .0은 같음(5 = 5.0 = 5.00)."""
+    whole, _, frac = tok.replace(",", "").partition(".")
+    body = ",?".join(_char(d) for d in whole) if len(whole) > 3 else "".join(_char(d) for d in whole)
+    if frac.strip("0"):
+        return body + r"\." + "".join(_char(d) for d in frac.rstrip("0")) + "0*"
+    return body + r"(?:\.0+)?"
+
+
+def _single_pattern(term: str) -> str:
+    """검색어 하나의 정규식 글. 띄어쓰기·줄바꿈·기호가 달라도 찾습니다:
+    'SOI 1' = 'SOI #1' = 'SOI-1' = 'SOI1', '설계기준' = '설계 기준', PDF 줄바꿈으로 갈라진 글.
+    검색어 끝의 조사는 떼고('정격전압은' = '정격 전압이'), 전각 영문·숫자도 맞고, 숫자 뒤 단위는 띄어쓰기·괄호와 무관
+    (5V = 5 V = 5[V] = 5.0 V), °C = ℃.
+    숫자 경계는 지킵니다: 'SOI 1'은 'SOI #10'이나 'SOI 21'과, '5V'는 '15V', '5.5V'와 맞지 않습니다.
+    기호를 빼면 숫자만 남는 검색어('#4', '1.2')는 기호를 그대로 찾습니다 (모든 '4'와 맞지 않게)."""
+    t = strip_particles(unicodedata.normalize("NFKC", term))       # 전각 -> 반각, ℃ -> °C
+    compact = re.sub(r"\s+", "", t)
+    core = re.sub(r"[\W_]+", "", compact)
+    if not core or (core.isdigit() and core != compact):
+        chars = compact or t
+        body = r"\s*".join(_char(c) for c in chars)      # 기호까지 그대로 ('1.2'는 '12'와 다름)
+        if chars[0].isdigit():
+            body = r"(?<![\d.])" + body                  # '1.2'가 '11.2', '3.1.2'의 끝과 맞지 않게
+        if chars[-1].isdigit():
+            body += r"(?!\d)"
+        return body
+    # 낱말마다 글자 사이에 기호·띄어쓰기를 허용하고, 한글로 끝나는 낱말 뒤에는 글의 조사를 허용 ('절연저항이 100MΩ' = '절연 저항은 100 MΩ')
+    words = [[x for x in _NUM_TOKEN.findall(w) if re.match(r"[^\W_]", x)] for w in t.split()]
+    words = [w for w in words if w]
+    toks = [x for w in words for x in w]
+    particle = "(?:" + "|".join(_PARTICLES) + ")?"
+    pieces: List[str] = []
+    prev = ""
+    for wi, w in enumerate(words):
+        parts: List[str] = []
+        for tok in w:
+            if tok[0].isdigit():
+                parts.append(_number(tok))
+            elif tok.upper() == "C" and prev[:1].isdigit():
+                parts.append(r"(?:\u2103|[Cc\uff23\uff43])")            # 숫자 뒤 C: 25°C = 25 ℃ = 25C
+            else:
+                parts.append(_char(tok))
+            prev = tok
+        piece = _SEP.join(parts)
+        if wi < len(words) - 1 and _HANGUL.match(w[-1]):
+            piece += particle
+        pieces.append(piece)
+    body = _SEP.join(pieces)
+    if toks[0][0].isdigit():
+        body = r"(?<![\d.])" + body
+    if toks[-1][0].isdigit():
+        body += r"(?![.,]?\d)"
+    return body
+
+
+# --- 동의어 파일 (<데이터 폴더>/synonyms.txt: 한 줄에 한 묶음, 쉼표로 구분) ---
+_SYN_CACHE: Dict[str, Any] = {"key": None, "groups": []}
+
+
+def _syn_key(term: str) -> str:
+    return re.sub(r"[\W_]+", "", strip_particles(unicodedata.normalize("NFKC", term))).lower()
+
+
+def synonym_groups() -> List[List[str]]:
+    """동의어 묶음. 파일이 없거나 읽지 못하면 빈 목록 (검색은 그대로)."""
+    path = os.path.join(rt.get_data_dir(), "synonyms.txt")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    key = (path, st.st_mtime_ns, st.st_size)
+    if _SYN_CACHE["key"] != key:
+        groups: List[List[str]] = []
+        try:
+            for line in rt.read_text_file(path).splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                words = [w.strip() for w in line.split(",") if _syn_key(w)]
+                if len(words) > 1:
+                    groups.append(words)
+        except Exception as e:
+            rt.log("WARN", f"동의어 파일을 읽지 못해 쓰지 않음: {type(e).__name__}")
+        _SYN_CACHE.update(key=key, groups=groups)
+    return _SYN_CACHE["groups"]
+
+
+def synonyms_of(term: str) -> List[str]:
+    """검색어와 같은 묶음의 다른 말 (검색어 자신은 빼고)."""
+    k = _syn_key(term)
+    out: List[str] = []
+    for g in synonym_groups():
+        if any(_syn_key(w) == k for w in g):
+            out += [w for w in g if _syn_key(w) != k and w not in out]
+    return out
+
+
+@functools.lru_cache(maxsize=512)
+def _compiled(term: str, flags: int, syn: Tuple[str, ...]) -> "re.Pattern[str]":
+    alts = [_single_pattern(t) for t in (term,) + syn]
+    return re.compile("|".join(f"(?:{a})" for a in alts), flags)
 
 
 def _term_pattern(term: str, flags: int) -> "re.Pattern[str]":
-    """검색어를 글 안에서 찾는 정규식. 띄어쓰기·줄바꿈·기호가 달라도 찾습니다:
-    'SOI 1' = 'SOI #1' = 'SOI-1' = 'SOI1', '설계기준' = '설계 기준', PDF 줄바꿈으로 갈라진 글.
-    숫자 경계는 지킵니다: 'SOI 1'은 'SOI #10'이나 'SOI 21'과 맞지 않습니다.
-    기호를 빼면 숫자만 남는 검색어('#4')는 기호를 그대로 찾습니다 (모든 '4'와 맞지 않게)."""
-    compact = re.sub(r"\s+", "", term)
-    core = re.sub(r"[\W_]+", "", compact)
-    if not core or (core.isdigit() and core != compact):
-        chars, sep = compact or term, r"\s*"      # 기호까지 그대로 ('1.2'는 '12'와 다름)
-    else:
-        chars, sep = core, _SEP
-    body = sep.join(re.escape(c) for c in chars)
-    if chars[0].isdigit():
-        body = r"(?<![\d.])" + body              # '1.2'가 '11.2', '3.1.2'의 끝과 맞지 않게
-    if chars[-1].isdigit():
-        body += r"(?!\d)"
-    return re.compile(body, flags)
+    """검색어(와 동의어)를 글 안에서 찾는 정규식 (_single_pattern 규칙)."""
+    term = unicodedata.normalize("NFC", term)
+    return _compiled(term, flags, tuple(synonyms_of(term)))
 
 
 def make_snippet(text: str, terms: List[str], context: int, case_sensitive: bool) -> str:
@@ -2450,6 +2590,121 @@ def match_sentence(text: str, terms: List[str], case_sensitive: bool, limit: int
         if any(_term_pattern(t, flags).search(sent) for t in terms):
             return sent.strip()[:limit]
     return text.strip()[:limit]
+
+
+# --- 검색 넓히기 (0건일 때: 일부 검색어 -> 유사 낱말)와 순위 ---
+
+FUZZY_MIN_LATIN = 4      # 유사 일치(한 글자 다름)로 찾는 검색어의 최소 글자 수 (영문·숫자)
+FUZZY_MIN_HANGUL = 3     # 한글은 음절 수
+
+
+def _edit1(a: str, b: str) -> bool:
+    """두 글이 한 글자만 다른지 (바꿈·넣음·뺌 하나, 같으면 False)."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    s, l = (a, b) if len(a) < len(b) else (b, a)
+    i = 0
+    while i < len(s) and s[i] == l[i]:
+        i += 1
+    return s[i:] == l[i + 1:]
+
+
+def _fuzzy_core(term: str) -> Optional[str]:
+    """유사 일치로 찾을 수 있는 검색어면 비교용 글 (기호·띄어쓰기·조사 뺌, 소문자), 아니면 None."""
+    core = _syn_key(term)
+    if not core or any(ch.isdigit() for ch in core):
+        return None                       # 숫자가 든 검색어(규격 번호, 값)는 한 글자 달라도 다른 것
+    hangul = len(_HANGUL.findall(core))
+    if hangul:
+        return core if hangul >= FUZZY_MIN_HANGUL else None
+    return core if len(core) >= FUZZY_MIN_LATIN else None
+
+
+def _fuzzy_word(text: str, core: str) -> Optional[str]:
+    """글에서 core와 한 글자만 다른 낱말(또는 이어진 두 낱말, 뒤 조사는 무시)."""
+    words = re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text))
+    cands = words + [a + b for a, b in zip(words, words[1:])]
+    n = len(core)
+    for w in cands:
+        low = w.lower()
+        for k in (n, n - 1, n + 1):
+            if 0 < k <= len(low) and _edit1(core, low[:k]):
+                return w[:k]
+    return None
+
+
+def widen_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: List[List[str]], flags: int,
+                 ) -> Tuple[str, List[Dict[str, Any]]]:
+    """모든 검색어가 든 단위가 없을 때 넓혀 찾기. 순서: partial(검색어 절반 이상, 가장 많이 든 단위) -> fuzzy(한 글자 다른 낱말 허용,
+    모두 또는 절반 이상). 반환 (match_mode, [{doc, unit, terms(강조할 글), matched_terms, missing_terms, fuzzy_words}])."""
+    pats = {t: _term_pattern(t, flags) for g in groups for t in g}
+
+    def pick(rows: List[Tuple[int, Dict[str, Any]]], need_all: bool) -> List[Dict[str, Any]]:
+        if need_all:
+            return [r for n, r in rows if n == 0]
+        best = max((len(r["matched_terms"]) for _, r in rows), default=0)
+        return [r for _, r in rows if len(r["matched_terms"]) == best]
+
+    def scan(fuzzy: bool) -> List[Tuple[int, Dict[str, Any]]]:
+        rows = []
+        for doc, u in units:
+            text = unicodedata.normalize("NFC", u["text"])
+            best_row: Optional[Tuple[int, Dict[str, Any]]] = None
+            for g in groups:
+                found, fw = [], {}
+                for term in g:
+                    if pats[term].search(text):
+                        found.append(term)
+                    elif fuzzy and _fuzzy_core(term):
+                        w = _fuzzy_word(text, _fuzzy_core(term))
+                        if w:
+                            found.append(term)
+                            fw[term] = w
+                missing = [x for x in g if x not in found]
+                if not found or (missing and (len(g) < 2 or len(found) * 2 < len(g))):
+                    continue
+                row = {"doc": doc, "unit": u, "matched_terms": found, "missing_terms": missing, "fuzzy_words": fw,
+                       "terms": [fw.get(x, x) for x in found]}
+                if best_row is None or (len(missing), -len(found)) < (best_row[0], -len(best_row[1]["matched_terms"])):
+                    best_row = (len(missing), row)
+            if best_row:
+                rows.append(best_row)
+        return rows
+
+    partial = [r for r in scan(False)]
+    if partial:
+        return "partial", pick(partial, False)
+    fuzzy = [r for r in scan(True) if r[1]["fuzzy_words"]]
+    if fuzzy:
+        whole = pick(fuzzy, True)
+        return "fuzzy", whole or pick(fuzzy, False)
+    return "exact", []
+
+
+def hit_score(unit: Dict[str, Any], terms: List[str], flags: int) -> int:
+    """순위 점수: 맞은 검색어 수(10점씩) + 나온 횟수(검색어마다 5번까지) + 검색어끼리 가까움(3점) + 장절 제목에 있음(3점)."""
+    text = unit["text"]
+    score = 10 * len(terms)
+    firsts = []
+    for t in terms:
+        p = _term_pattern(t, flags)
+        ms = []
+        for m in p.finditer(text):
+            ms.append(m.start())
+            if len(ms) >= 5:
+                break
+        score += len(ms)
+        if ms:
+            firsts.append(ms[0])
+    if len(firsts) >= 2:
+        span = max(firsts) - min(firsts)
+        score += 3 if span <= 50 else 1 if span <= 200 else 0
+    sec = section_text(unit)
+    if sec and any(_term_pattern(t, flags).search(sec) for t in terms):
+        score += 3
+    return score
 
 
 def _not_indexed_error() -> rt.InputError:
@@ -2546,7 +2801,8 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
 
 def cmd_search(args) -> Dict[str, Any]:
-    matcher = build_matcher(args.query, args.regex, args.case_sensitive)
+    matcher = build_matcher(args.query, args.regex, args.case_sensitive, args)
+    flags = 0 if args.case_sensitive else re.IGNORECASE
     clamp_warnings: List[str] = []
     if args.top > MAX_SEARCH_TOP:
         clamp_warnings.append(f"--top {args.top}은 상한 {MAX_SEARCH_TOP}으로 줄임 (전체 결과는 --save 파일로)")
@@ -2561,6 +2817,7 @@ def cmd_search(args) -> Dict[str, Any]:
     docs, info = _search_targets(args)
     hits: List[Dict[str, Any]] = []
     page_unknown = 0
+    pool: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []      # 조건(--pages, --section) 안의 단위 (넓혀 찾기용)
     for doc in docs:
         for u in doc["units"]:
             if sec_filter and not section_matches(u, sec_filter):
@@ -2571,17 +2828,35 @@ def cmd_search(args) -> Dict[str, Any]:
                     continue
                 if u["page"] not in pages:
                     continue
+            pool.append((doc, u))
             terms = matcher(u["text"])
             if terms is None:
                 continue
-            hits.append({"doc": doc, "unit": u, "terms": terms,
-                         "snippet": make_snippet(u["text"], terms, args.context, args.case_sensitive)})
+            hits.append({"doc": doc, "unit": u, "terms": terms, "matched_terms": list(terms)})
+    groups = [] if args.regex else parse_query(args.query)
+    mode = "exact"
+    if not hits and groups and pool:
+        # 0건: 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음 (넓혔다는 사실은 recovered와 match_mode로 알림)
+        mode, hits = widen_search(pool, groups, flags)
+        if hits:
+            n_terms = max(len(g) for g in groups)
+            how = ("검색어 일부(절반 이상)만 든 단락" if mode == "partial"
+                   else "한 글자 다른 낱말(오타·표기 차이)을 허용한 단락")
+            rt.note_recovered(f"검색어 {n_terms}개가 모두 든 곳이 없음 -> {how}으로 넓혀 찾음 ({len(hits)}건, match_mode {mode})")
+    for h in hits:
+        h["score"] = hit_score(h["unit"], h["terms"], flags) if not args.regex else 0
+        h["snippet"] = make_snippet(h["unit"]["text"], h["terms"], args.context, args.case_sensitive)
+    if not args.regex:
+        hits.sort(key=lambda h: -h["score"])          # 좋은 결과부터 (같은 점수는 문서 순서)
+    syn_used = {t: synonyms_of(t) for g in groups for t in g if synonyms_of(t)}
 
     total = len(hits)
     shown = hits[: max(0, args.top)]
     result: Dict[str, Any] = {"query": args.query, "files_searched": len(docs), "total_matches": total,
                               "count": total, "matched": len(shown), "shown": len(shown),
-                              "truncated": total > len(shown)}
+                              "truncated": total > len(shown), "match_mode": mode}
+    if syn_used:
+        result["synonyms_used"] = syn_used
     filters = {k: v for k, v in (("file", args.file), ("pages", args.pages), ("section", args.section)) if v}
     if filters:
         result["filters"] = filters
@@ -2614,7 +2889,7 @@ def cmd_search(args) -> Dict[str, Any]:
         saved = hits[:MAX_SAVE_HITS]
         cut_cells = 0
         clamped_context = 0
-        header = ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥"]
+        header = ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥", "점수"]
         rows = []
         for h in saved:
             u = h["unit"]
@@ -2625,11 +2900,11 @@ def cmd_search(args) -> Dict[str, Any]:
                 clamped_context += 1 if cut else 0
             rows.append([os.path.basename(h["doc"]["file"]), u.get("page") if u.get("page") is not None else "",
                          section_text(u), u.get("number") or "", u["loc"],
-                         match_sentence(u["text"], h["terms"], args.case_sensitive), context_text])
+                         match_sentence(u["text"], h["terms"], args.case_sensitive), context_text, h["score"]])
         if ext == ".csv":
             out = rt.write_csv_rows(out, [header] + rows)
         elif ext == ".xlsx":
-            out, cut_cells = write_xlsx_table(out, header, rows, [22, 6, 45, 10, 14, 60, 80], "검색결과")
+            out, cut_cells = write_xlsx_table(out, header, rows, [22, 6, 45, 10, 14, 60, 80, 6], "검색결과")
         else:
             lines = [f"# 검색 결과: {args.query}", ""]
             for h in saved:
@@ -2661,7 +2936,12 @@ def cmd_search(args) -> Dict[str, Any]:
         item = {"file": os.path.basename(doc["file"]), "path": doc["file"], "page": u.get("page"),
                 "page_source": u.get("page_source"), "section": u.get("section") or [],
                 "section_text": section_text(u), "number": u.get("number"), "loc": u["loc"],
-                "heading": u.get("heading", ""), "evidence": evidence_text(doc["file"], u), "snippet": h["snippet"]}
+                "heading": u.get("heading", ""), "evidence": evidence_text(doc["file"], u), "snippet": h["snippet"],
+                "score": h["score"], "matched_terms": h["matched_terms"]}
+        if h.get("missing_terms"):
+            item["missing_terms"] = h["missing_terms"]
+        if h.get("fuzzy_words"):
+            item["fuzzy_words"] = h["fuzzy_words"]
         if args.full:
             item["text"], cut = rt.clamp_text(u["text"], SEARCH_JSON_FULL_CHARS)
             if cut:
@@ -2741,6 +3021,12 @@ def cmd_search(args) -> Dict[str, Any]:
                      **result)
     preview = f"'{args.query}': {scope}에서 {total}건 일치" + (f" (상위 {len(shown)}건 표시)" if total > len(shown) else "")
     evid = " 각 결과의 근거는 evidence(파일 p.N, 장절 (번호))를 그대로 알리세요. page가 null이면 장절과 번호로 알립니다."
+    if mode != "exact":
+        what = "일부 검색어만 든 결과, 빠진 검색어는 missing_terms" if mode == "partial" else \
+            "한 글자 다른 낱말로 찾은 결과, 실제 낱말은 fuzzy_words"
+        preview += f" - 검색어가 모두 든 곳이 없어 넓혀 찾음(match_mode {mode})"
+        evid = (f" 주의: 검색어가 모두 든 곳이 없어 넓혀 찾았습니다(match_mode {mode}: {what}). "
+                "정확히 일치한 근거가 아니라고 사용자에게 알리세요." + evid)
     if "output_file" in result:
         preview += f", 저장: {result['output_file']}"
         directive = "VERIFIED: 검색과 저장 완료(저장 파일을 다시 열어 확인)." + evid

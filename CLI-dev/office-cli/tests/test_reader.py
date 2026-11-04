@@ -1618,7 +1618,7 @@ def test_search_save_xlsx_columns_and_md_evidence(docs, tmp_path):
     wb = openpyxl.load_workbook(out["output_file"])
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
-    assert list(rows[0]) == ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥"]
+    assert list(rows[0]) == ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥", "점수"]
     assert ws["A1"].font.bold and ws["F2"].alignment.wrap_text
     docx_row = [r for r in rows if r[0] == "규격.docx"][0]
     assert docx_row[1] == 2 and docx_row[2] == "요구사항 > 가. 검증기술" and docx_row[4] == "표 1 2행"
@@ -2311,3 +2311,108 @@ def test_read_section_continuation_and_save_keep_section(tmp_path, capsys, monke
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:")
     body = open(out["output_file"], encoding="utf-8-sig").read()
     assert "Purpose body" in body and "Data body" not in body and "Requirement" not in body
+
+
+# ---------------------------------------------------------------------------
+# 검색 재현율: 조사·숫자와 단위·전각·대시, 일부·유사 일치로 넓히기, 순위, 동의어 (1.4.51)
+# ---------------------------------------------------------------------------
+
+RECALL_TEXT = "\n\n".join([
+    "정격 전압은 5.0 V 이하로 한다.",                   # 1
+    "작동 온도 범위는 -20℃ ~ 60℃이다.",                # 2
+    "ＰＣＢ 두께는 1.6 mm로 한다.",                     # 3 전각 영문
+    "절연 저항은 100 MΩ 이상이어야 한다.",              # 4
+    "접지\u2013단자는 외함에 연결한다.",                 # 5 en dash
+    "rated voltage shall not exceed 220 V.",           # 6
+    "케이블 피복의 난연성은 KS C 3341에 따른다.",       # 7
+])
+
+# (검색어, 찾아야 하는 단락 번호들, 기대 match_mode)
+RECALL_CASES = [
+    ("정격전압은 5V", {1}, "exact"),          # 검색어의 조사, 5V = 5.0 V
+    ("작동 온도 AND 20°C", {2}, "exact"),     # °C = ℃
+    ("PCB 두께", {3}, "exact"),               # 전각 ＰＣＢ
+    ("절연저항이 100MΩ", {4}, "exact"),       # 조사, 숫자와 단위 띄어쓰기
+    ("접지-단자", {5}, "exact"),              # 대시 종류
+    ("정격 전압 AND 절연", {1, 4}, "partial"),  # 둘 다 든 단락 없음 -> 하나씩 든 단락
+    ("난연셩", {7}, "fuzzy"),                 # 오타 한 글자
+]
+
+
+def _recall_file(tmp_path):
+    p = tmp_path / "규격_재현율.txt"
+    p.write_text(RECALL_TEXT, encoding="utf-8")
+    return p
+
+
+def _hit_numbers(out):
+    paras = RECALL_TEXT.split("\n\n")
+    got = set()
+    for m in out.get("matches", []):
+        text = m.get("text") or m.get("snippet", "")
+        for i, para in enumerate(paras, 1):
+            if para[:6] in text.replace("**", ""):
+                got.add(i)
+    return got
+
+
+@pytest.mark.parametrize("query,want,mode", RECALL_CASES)
+def test_search_recall_variants(tmp_path, capsys, query, want, mode):
+    p = _recall_file(tmp_path)
+    code, out = run_main(reader, capsys, "search", "--query", query, "--file", str(p), "--full")
+    assert code == 0 and _hit_numbers(out) == want, (query, out.get("matches"))
+    assert out["match_mode"] == mode
+    if mode != "exact":
+        assert out["recovered"] and "넓혀" in out["recovered"][0]
+        assert out["agent_directive"].startswith("VERIFIED:") and mode in out["agent_directive"]
+        assert all(m["matched_terms"] for m in out["matches"])
+
+
+def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
+    p = _recall_file(tmp_path)
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
+    assert {tuple(m["missing_terms"]) for m in out["matches"]} == {("절연",), ("정격 전압",)}
+    code, out = run_main(reader, capsys, "search", "--query", "난연셩", "--file", str(p))
+    assert out["matches"][0]["fuzzy_words"] == {"난연셩": "난연성"} and "**난연성**" in out["matches"][0]["snippet"]
+    # 짧은 검색어(한글 2음절)는 유사 일치로 넓히지 않음: 0건 그대로
+    code, out = run_main(reader, capsys, "search", "--query", "난얀", "--file", str(p))
+    assert out["count"] == 0 and out["match_mode"] == "exact" and "recovered" not in out
+
+
+def test_search_particles_do_not_overstrip_short_words():
+    m = reader.build_matcher("높이", False, False)
+    assert m("높이 10 mm") and m("높은 온도") is None          # '높이'의 '이'는 조사가 아님 (남는 글이 1자)
+    assert reader.build_matcher("5V", False, False)("15V 전원") is None
+    assert reader.build_matcher("5V", False, False)("5.5 V 전원") is None
+    assert reader.build_matcher("5V", False, False)("5[V] 전원")
+
+
+def test_search_ranks_best_hits_first_and_saves_score(tmp_path, capsys):
+    p = tmp_path / "순위.txt"
+    p.write_text("\n\n".join(["전압 언급 하나.", "다른 문단.", "전압 시험: 전압을 올리며 전압 강하를 본다. 전압 기록.",
+                              "전압 한 번."]), encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "전압", "--file", str(p), "--top", "1",
+                         "--save", str(tmp_path / "근거.csv"))
+    assert out["matches"][0]["snippet"].startswith("**전압** 시험") or "전압 시험" in out["matches"][0]["snippet"]
+    assert out["matches"][0]["score"] >= max(1, out["matches"][0]["score"])
+    rows = open(out["output_file"], encoding="utf-8-sig").read().splitlines()
+    assert rows[0].endswith(",점수") and "전압 시험" in rows[1]
+
+
+def test_search_synonym_file(tmp_path, capsys, isolated_dirs):
+    p = _recall_file(tmp_path)
+    (isolated_dirs["data"] / "synonyms.txt").write_text("# 동의어\n정격 전압, rated voltage\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "rated voltage", "--file", str(p), "--full")
+    assert code == 0 and _hit_numbers(out) == {1, 6} and out["match_mode"] == "exact"
+    assert out["synonyms_used"] == {"rated voltage": ["정격 전압"]}
+
+
+def test_search_bad_regex_recommends_literal_search(tmp_path, capsys, monkeypatch, isolated_dirs):
+    p = _recall_file(tmp_path)
+    code, out = run_fresh(reader, capsys, monkeypatch, "search", "--query", "전압 (5V", "--file", str(p), "--regex")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "정규식" in out["message"]
+    rec = out["message"].split("[추천] ", 1)[1]
+    assert rec.startswith("python ") and "--regex" not in rec and "search" in rec
+    assert "전압 (5V" not in error_log_text(isolated_dirs)        # 검색어는 오류 로그에 남지 않음
+    code, out = run_fresh(reader, capsys, monkeypatch, "search", "--query", r"\d+(V", "--file", str(p), "--regex")
+    assert code == 1 and "[추천]" not in out["message"]          # 정규식을 쓰려던 것이 분명하면 글자 그대로 찾기를 권하지 않음
