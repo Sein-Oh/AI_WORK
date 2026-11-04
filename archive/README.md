@@ -8,4 +8,5 @@
 
 | 도구 | 보관일 | 마지막 버전 | 사유 |
 |---|---|---|---|
+| [`engenius/`](engenius/) | 2026-11-04 | office-cli 1.4.36, ml-kit 2.9.38 기준 | 사내 에이전트 En-Genius 스킬 패키지. 업데이트를 멈추고 보관 (필요할 때 다시 꺼냄). `build/`(빌드 스크립트·도구별 run.py, 원래 `CLI-dev/engenius`), `package/`(zip·에이전트 XML·설치 안내, 원래 `docs/engenius`), `test_engenius.py`(원래 `CLI-dev/tests`). 다시 쓰려면 원래 자리로 옮기고 `python CLI-dev/engenius/build.py`로 zip을 새로 만든 뒤 테스트 |
 | [`doc-classifier/`](doc-classifier/) | 2026-10-28 | 0.9.2 | 다른 개발자가 따로 개발하기로 함. 0.9.3 작업(PR #12, 병합 안 함)은 브랜치를 지웠고, 닫힌 PR #12 화면에서 변경 내용을 볼 수 있음 |

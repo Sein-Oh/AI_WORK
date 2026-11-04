@@ -113,7 +113,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
 | 메일 첨부 (`outlook.py attachments --save`) | `<다운로드>\메일 첨부\<시각>_<제목>` (자동 정리 안 함, En-Genius 실행도 같음, 1.4.34) | `--save "<전체경로 폴더>"` |
 
-- En-Genius 스킬(`docs/engenius/office-cli.zip`)은 `C:\CLI\office-cli`의 도구를 실행하므로 OpenCode와 같은 `data`, `cache`, `config.json`을 씁니다.
+- En-Genius 스킬(보관: `archive/engenius`)은 `C:\CLI\office-cli`의 도구를 실행하므로 OpenCode와 같은 `data`, `cache`, `config.json`을 씁니다.
   도구 파일 자체가 트레이의 임시 폴더(`%TEMP%\engenius-skill\<id>`)에서 실행될 때만(실행마다 지워짐) 기본 위치를
   `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli\`로 바꿉니다 (1.4.33, 1.4.35부터 이 경우만). 환경변수가 있으면 그것이 먼저입니다.
 
@@ -148,14 +148,14 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### excel.py
 | 명령 | 주요 옵션 |
 |---|---|
-| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--max-rows`, `--save [경로.csv]`(저장한 CSV를 다시 읽어 빈 행을 뺀 행 수 확인). `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지(시트를 훑는 것은 범위 생략·`B:B`·`5:7`일 때만) |
+| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--formulas`(수식 칸 목록, 아래), `--where "금액 >= 100; 부서 = 영업"`(조건에 맞는 행만, 아래), `--max-rows`, `--save [경로.csv]`(저장한 CSV를 다시 읽어 빈 행을 뺀 행 수 확인). `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지(시트를 훑는 것은 범위 생략·`B:B`·`5:7`일 때만) |
 | `info` | 시트별 사용 범위와 차트. `--all`: 열린 통합문서 전체. `--detail`: 차트 종류·계열 수·위치와 데이터를 가리는 차트 경고 |
 | `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`(`.md`는 word·ppt와 같은 마크다운 해석으로 첫 번째 표만: 코드 블록 안 `|` 줄과 두 번째 표는 빼고 정렬 줄 `|--|`는 빼며 `\|`는 칸 글자 `|`. 표가 없으면 한 줄 = 한 행, 1.4.26), `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략. `--formula`의 상대 참조는 실제로 쓴 행 기준으로 옮기고 `$` 참조는 그대로, 옮기지 못하면 쓰지 않고 STOP_RETRY, 1.4.24), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이나 수식(빈 글을 내는 수식 포함)이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`). `--append`도 쓸 칸을 확인하고, `--formula`/`--value`도 쓸 열 수만큼 가장 아래 행을 찾습니다. 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸, 1.4.6). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`)는 글자 그대로 씁니다 |
 | `replace` | `--find/--replace` 또는 `--map JSON`, `--whole`, `--all-sheets`, 서식 옵션. 수식 셀은 내용 보존. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 찾은 칸이 있어도 바꿀 글이 같고 서식이 없으면(수식 칸 포함) 바꾼 칸으로 세지 않음(`changed_cells` 0, `unchanged_same_text`, 1.4.15). `--range '요약'!A1:D9`처럼 시트를 주면 그 시트에서 읽고 씀. `--all-sheets`와 시트 이름이 든 `--range`는 함께 쓸 수 없음. 찾을 글이 빈 문자열(`--find ""`, `--map` 키 `""`)이면 STOP_RETRY(빈 칸 채우기는 `write`, 1.4.17) |
 | `style` | `--theme navy\|slate\|teal\|emerald`, `--bg`, `--color`, `--bold`, `--align`, `--number-format`, `--border`, `--highlight ">=100:pink"`(조건부 서식. 값의 `"`와 `포함:` 규칙의 `~ ? *`는 글자 그대로 찾음, 1.4.24), `--clear` |
 | `export` | `--save 경로.csv\|.xlsx\|.pdf`, `--columns A,C,E` |
 | `sheet` | `--action list\|add\|rename\|copy\|delete\|select --name --new-name`. 엑셀에서 쓸 수 없는 이름(`/ \ ? * [ ] :`, 31자 초과, 빈 이름, 앞뒤 `'`, 엑셀이 예약한 `History`(대소문자 무관, 1.4.15))은 아무것도 바꾸기 전에 STOP_RETRY와 `[추천]`(쓸 수 없는 글자를 `_`로 바꾸고 31자로 자른 이름, `History`는 `History_`, 있는 시트와 겹치면 번호, 1.4.14). `write --new-sheet`, `office.py transfer --sheet`도 같음(`transfer`는 받는 문서의 시트 이름을 안 뒤에 확인해 `[추천]`이 있는 시트와 겹치지 않음, 새로 만들 파일은 만들기 전에 확인, 1.4.15). `copy`의 기본 이름은 `<시트 28자> 복사` |
-| `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border`. `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열. 이미 그 상태면(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 값이 없는 범위의 `clear --type contents`, 같은 자리로 `copy`/`move` 등) 바꾸지 않고 "바뀐 것 없음"(`unchanged: true`, 1.4.15). `hide`/`unhide`와 `clear`(전체·서식)는 엑셀이 일부만 숨김·사용 범위 밖 유효성 검사를 알려 주지 않을 수 있어 늘 바꾼 것으로 봅니다(1.4.16) |
+| `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border\|insert\|delete\|sort`(insert/delete/sort는 아래, 1.4.37). `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열. 이미 그 상태면(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 값이 없는 범위의 `clear --type contents`, 같은 자리로 `copy`/`move` 등) 바꾸지 않고 "바뀐 것 없음"(`unchanged: true`, 1.4.15). `hide`/`unhide`와 `clear`(전체·서식)는 엑셀이 일부만 숨김·사용 범위 밖 유효성 검사를 알려 주지 않을 수 있어 늘 바꾼 것으로 봅니다(1.4.16) |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
@@ -179,6 +179,53 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 수식 칸 확인 자체가 실패하면(파일 손상, MemoryError 등) 0개로 보지 않고 `uncomputed_check: "unknown"`과
     `UNVERIFIED: ... 수식 계산 여부를 확인하지 못함`으로 답합니다(1.4.32, 이전에는 `VERIFIED`). reader는 `meta.uncomputed_formulas.unknown`.
 - `read --search`: `count`(찾은 칸 전체 수, `total_matches`와 같음), `shown`, `truncated`. 0건이면 `VERIFIED: 0건.` 안내(1.4.31).
+- `read --formulas`(1.4.36): 값은 그대로 두고, 읽은 범위의 수식 칸만 `formulas`에 더합니다.
+  - 항목: `{"cell": "B5", "formula": "=SUM(B2:B4)", "value": 600}`. 읽기는 한 시트라 `cell`에 시트 이름을 붙이지 않습니다(시트는 `sheet`).
+    배열 수식은 배열마다 한 번(배열 안에서 처음 만난 칸, 보통 왼쪽 위) `"array": true`, `"array_range": "C1:C3"`. 닫힌 파일의 데이터 표(What-If)는
+    `=TABLE(행 입력,열 입력)`과 `data_table: true`. 500자보다 긴 수식·값은 앞부분만(`value_truncated`).
+  - `formula_count`(전체 수), `formulas_truncated`. 200개를 넘으면 앞 200개만 담고 전체 목록 CSV(`cell, formula, value, array`)를
+    `<데이터 폴더>\results\excel_formulas_<시트>_<시각>.csv`에 써 `full_result_file`로 줍니다(R2). `--save`와 함께면 저장한 값 CSV 옆
+    `<이름>_formulas.csv`에 늘 전체 목록을 쓰고(`full_result_file`) 다시 읽어 행 수를 확인합니다(R1, 맞지 않으면 `UNVERIFIED:`).
+  - 수식이 없으면 `formula_count: 0`, `formulas: []`와 "수식 0개: ...에는 수식이 없습니다" 안내. CSV는 수식을 저장하지 않아 늘 0개(오류 아님).
+  - 열린 문서(COM): 범위의 `HasFormula`가 False면 수식을 읽지 않습니다. 수식 글은 범위 전체를 한 번에 읽습니다: `Formula2`(엑셀 365, 동적 배열을
+    그대로)가 없거나 오류면 `Formula`(영어 함수 이름, A1 주소). 2차원 결과에서 상수는 값, 수식은 `=`로 시작하는 글이라 칸마다 부르지 않고,
+    값도 같은 글인 칸(`'=`로 둔 글자 상수일 수 있음)만 `HasFormula`로 확인합니다. 배열 수식은 범위의 `HasArray`가 False가 아닐 때만 칸마다
+    확인합니다(2,000칸까지, 넘으면 `warnings`).
+  - 닫힌 xlsx/xlsm: 값을 읽은 뒤 같은 범위만 openpyxl `data_only=False`(읽기 전용)로 한 번 더 읽습니다. 수식 칸은 openpyxl이 수식으로 읽은 칸
+    (`data_type` `f`: `=`로 시작하는 글, `ArrayFormula`, `DataTableFormula`)만이라 `=`로 시작하는 글자 상수는 빠집니다. 공유 수식은 openpyxl이
+    칸마다 펼칩니다. `value`는 파일에 저장된 계산된 값이고, 계산되지 않은 수식 칸은 `null`이며 계산되지 않은 수식 안내(`UNVERIFIED:`,
+    `uncomputed_formulas`, 1.4.31/1.4.32)는 그대로입니다. 배열 수식의 왼쪽 위 칸이 읽은 범위 밖이면 그 배열은 값만 나옵니다(파일에 수식이 왼쪽 위에만 있음).
+  - Office 없이 수식을 읽을 수 없는 닫힌 파일(.xls, .xlsb, zip이 아닌 xlsx)은 Office(pywin32)가 없으면 `STOP_RETRY:`로 엑셀에서 연 뒤 다시
+    실행하라고 알립니다. Office가 있으면 다른 읽기처럼 엑셀로 열어 읽습니다.
+  - `--search`와 함께면 수식 글에서도 찾고(대소문자 무시), 찾은 수식 칸에 `formula`를 붙입니다.
+  - 확인(R1)은 다른 읽기와 같습니다: 읽은 결과가 확인이라 `VERIFIED:`. 수식 글은 문서 내용이라 오류 로그에 남기지 않습니다(수식 읽기 실패는 예외 종류만).
+- `read --where "<열> <연산자> <값>; ..."`(1.4.37): 읽은 범위의 첫 행을 머리글로 보고, 조건에 모두 맞는(AND) 행만 돌려줍니다. 열린 문서, 닫힌 xlsx, CSV 모두.
+  - 열은 머리글 이름(대소문자·공백·`_-` 무시) 또는 열 문자(`B`). 이름을 찾지 못하면 머리글 이름 `[후보]`(오류 로그에는 남기지 않음).
+  - 연산자 `>= <= > < = != ~`(`~`는 포함). 숫자 칸과 숫자 값은 숫자로(`1,000`도 숫자), 날짜 칸은 `YYYY-MM-DD`(시각 포함 가능) 값과 날짜로,
+    그 밖은 앞뒤 공백을 뺀 글자로 대소문자 없이 비교합니다. 크기 비교인데 칸이 숫자가 아니면(빈 칸, 글자) 맞지 않습니다. `금액 = `은 빈 칸.
+    값의 앞뒤 따옴표는 뺍니다. 조건 안에는 `;`를 쓸 수 없습니다.
+  - 결과: `values`(첫 행은 머리글, 다음은 맞는 행), `row_numbers`(`values`와 같은 순서의 시트 행 번호, 첫 값은 머리글 행), `count`(맞는 행 수),
+    `data_rows`(머리글 밖 행 수), `where`. 0건이면 `count: 0`, `values`는 머리글만, `VERIFIED: 0건.`(R2).
+  - 잘림과 `--save`는 `read`와 같습니다: `--max-rows`를 넘으면 `truncated`와 `--where`가 든 저장 명령(`next_commands`), `--save`는 머리글과 맞는 행만 CSV
+    (행 번호 열은 넣지 않음)로 쓰고 다시 읽어 확인.
+  - 고칠 수 있는 표기(`==`, `=>`, `=<`, `<>`, `AND`, `&&`, `contains`, `포함`)는 STOP_RETRY와 고친 식 `[추천]`. 읽을 수 없는 식은 형식과 예를 알리고
+    `[추천]` 없이 STOP_RETRY. `--search`, `--formulas`와 함께 쓸 수 없습니다.
+- `range --action insert|delete --range 5:7|B:C`(1.4.37): 행·열 넣기·지우기. `5`, `B`처럼 하나도 됩니다. `A5:C7` 같은 칸 범위는 행인지 열인지
+  `--axis rows|cols`가 필요합니다(없으면 `[후보]`).
+  - `insert`: 범위 앞에 같은 수만큼 넣고 아래(오른쪽)는 밀립니다.
+  - `delete`: 지울 행·열에 값이나 수식이 있는 칸이 있으면 지우지 않고 `needs_user_decision`(칸 수와 주소 5개까지, 값은 stdout과 오류 로그 어디에도
+    보이지 않음). 사용자가 원하면 `--overwrite`. `--dry-run`은 바꾸지 않고 칸 수(`filled_cells`), 주소 20개(`filled_addresses`)와
+    실행 명령(`next_commands[0]`, 값이 있으면 `--overwrite` 포함)을 줍니다(되돌리기 지점도 남기지 않음).
+  - 다른 쓰기처럼 되돌리기 지점을 남기고(`office.py undo`), 닫힌 파일은 엑셀로 열어 고칩니다.
+  - 확인(R1): 사용 범위 끝 행(열)이 넣은·지운 수만큼 바뀌었는지, 옮겨진 칸 하나(수식이 아닌 값이 있는 첫 칸, `moved`)가 기대한 자리에 같은 값인지.
+- `range --action sort --range A1:E100 --by "<열>" [--desc] [--header auto|yes|no]`(1.4.37): 행 단위 정렬(Range.Sort, 기준 3개까지).
+  - `--by`는 머리글 이름 또는 열 문자, 여러 기준은 쉼표(`--by "부서,금액"`). `--desc`만 쓰면 모든 기준이 내림차순, `--desc "금액"`이면 그 기준만.
+  - 머리글: `--by`가 머리글 이름이면 첫 행이 머리글. 열 문자면 `--header auto`(기본)가 판단합니다: 첫 행 칸이 모두 글자이고, 굵게이거나 아래에 숫자·날짜가
+    있는 열이 있으면 머리글. 결과 `header`, `header_decided_by`.
+  - 열 전체(`A:E`)는 사용 범위까지만. 병합된 칸이 있으면 STOP_RETRY. 범위 바로 옆 열의 같은 행에 값이 있으면(표를 가로지름) 정렬하지 않고
+    `needs_user_decision`과 표 전체 범위. 이미 정렬되어 있으면 바꾸지 않음(`unchanged: true`, 되돌리기 지점 없음).
+  - 확인(R1): 다시 읽어 행 수, 머리글 행, 행 묶음(정렬 전과 같은 행들)과 기준 순서(숫자 < 글자 < 논리값, 빈 칸은 맨 뒤, 글자는 대소문자 무시)를 봅니다.
+    엑셀 비교 규칙과 달라 순서를 확인하지 못하면 `UNVERIFIED:`.
 
 ### word.py
 | 명령 | 주요 옵션 |
@@ -226,7 +273,13 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `notes` | 발표자 노트. 읽기: `--slides 1-3`(생략 시 전체, `--slide 3`도 됨), 노트가 있는 슬라이드만 `no, title, notes`. 쓰기: `--slide N --text 노트`(줄바꿈 `\n`) 또는 `--file 노트.md`. 기존 노트가 있으면 `--append`(뒤에 덧붙이기) 또는 `--overwrite`(바꾸기)가 필요하고, 둘 다 없으면 지우지 않고 `needs_user_decision`. 노트 본문 개체틀이 없으면 쓰지 않음. 쓴 뒤 다시 읽어 확인(`verified`, `before`, `after`). 이미 같은 노트면 쓰지 않고 `unchanged: true`(1.4.15) |
 
 ### outlook.py
-- 조회: `list [--folder --unread --limit]`, `search --query [--from --where all|subject|body]`, `read --id [--save]`, `current [--save]`, `folders`
+- 조회: `list [--folder --unread --limit --days --since]`, `search --query [--from --where all|subject|body --days --since]`, `read --id [--save]`, `current [--save]`, `folders`
+- 받은 날짜(1.4.37): `--days N`은 오늘 포함 최근 N일(1 = 오늘), `--since YYYY-MM-DD`는 그 날짜 0시부터. 함께 쓰면 STOP_RETRY. 결과에 `period`
+  (`since`, `until`, `days`)와 preview의 기간. `list`는 Jet `[ReceivedTime] >= 'YYYY-MM-DD HH:MM'`(현지 시각, 월/일 순서가 지역 설정에 따라
+  뒤바뀌지 않는 형식), `search`는 DASL `urn:schemas:httpmail:datereceived`(UTC로 바꾼 시각)를 같은 `@SQL=`에 AND로 붙이고, 받은 시각을 메일마다
+  다시 확인합니다(내림차순이라 기간 밖 메일을 만나면 멈춤). Outlook이 날짜 조건을 거부하면 날짜 없는 필터로 거른 뒤 받은 시각으로 거르고
+  `recovered`. `search`는 `--days`/`--since`만으로도 됩니다. 잘못된 날짜는 STOP_RETRY: 고칠 수 있는 표기(`2026/10/1`, `20261001`, `2026년 10월 1일`)와
+  `--days 0`/`-7`은 `[추천]`, 없는 날짜·미래 날짜·읽을 수 없는 글은 `[추천]` 없이 예만.
 - 첨부: `attachments [--id] [--save [폴더]] [--name 이름일부] [--index 1,3]` (1.4.34)
 - `--folder`의 폴더를 찾지 못하면 그 단계의 하위 폴더 이름(끝 이름)끼리 비교해 `[추천]`(표기만 다름)이나 `[후보]`를 주고, 보여 줄 때만
   전체 경로(`계정\폴더\하위`)로 바꿉니다. 1.4.28까지는 전체 경로끼리 비교해 같은 계정 이름 때문에 관계없는 폴더가 모두 `[후보]`였습니다.

@@ -1,8 +1,8 @@
 """outlook.py - 아웃룩 메일
 
 조회 (화면은 그대로, 백그라운드):
-    list     폴더의 최근 메일 목록 (--unread, --limit)
-    search   제목/본문/보낸사람 검색
+    list     폴더의 최근 메일 목록 (--unread, --limit, 받은 날짜 --days N / --since YYYY-MM-DD)
+    search   제목/본문/보낸사람 검색 (--days / --since 함께 가능)
     read     메일 하나 읽기 (--id). 첨부가 있으면 이름과 내려받기 명령을 함께 줌
     current  지금 보고 있거나 선택한 메일 읽기
     folders  폴더 구조와 안 읽은 메일 수
@@ -23,6 +23,7 @@
     python outlook.py reply --body "확인했습니다."
     python outlook.py new --to "lead@company.com" --subject "주간 보고" --body "첨부합니다." --attach "보고서.pdf"
 """
+import datetime as _dt
 import os
 import re
 import sys
@@ -135,17 +136,120 @@ def summary(item: Any) -> Dict[str, Any]:
             "unread": bool(getattr(item, "UnRead", False)), "attachments": attach}
 
 
-def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = None) -> List[Dict[str, Any]]:
+def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = None,
+             since: Optional[_dt.datetime] = None) -> List[Dict[str, Any]]:
+    """since: 받은 시각이 이보다 이른 메일은 뺍니다 (Restrict 날짜 조건을 다시 확인. 받은 시각 내림차순이라 처음 만나면 멈춤)."""
     out: List[Dict[str, Any]] = []
     for item in items:
         if len(out) >= limit:
             break
         try:
+            if since is not None:
+                got = _received(item)
+                if got is not None and got < since:
+                    break
             if int(item.Class) == OL_MAIL and (keep is None or keep(item)):
                 out.append(summary(item))
         except Exception:
             continue
     return out
+
+
+# ------------------------------------------------------------------------------
+# 받은 날짜 범위 (--days / --since)
+# ------------------------------------------------------------------------------
+
+def _received(item: Any) -> Optional[_dt.datetime]:
+    """메일의 받은 시각 (현지 시각, tzinfo 없음). 읽지 못하면 None (그 메일은 남김: 빠뜨리는 것보다 안전).
+    pywin32는 현지 시각에 tzinfo를 붙여 주므로 tzinfo만 떼어 냅니다."""
+    try:
+        v = item.ReceivedTime
+    except Exception:
+        return None
+    if isinstance(v, _dt.datetime):
+        return v.replace(tzinfo=None)
+    try:
+        return _dt.datetime.fromisoformat(str(v).strip()).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+# 고쳐서 [추천]할 수 있는 날짜 표기: 2026/11/1, 2026.11.01, 20261101, 2026년 11월 1일
+_DATE_PARTS = re.compile(r"^\s*(\d{4})\s*[-./년]?\s*(\d{1,2})\s*[-./월]?\s*(\d{1,2})\s*일?\s*$")
+
+
+def _today() -> _dt.date:
+    return _dt.date.today()
+
+
+def date_period(days: Optional[int], since: Optional[str]) -> Optional[Dict[str, Any]]:
+    """--days N(오늘 포함 최근 N일) 또는 --since YYYY-MM-DD -> {'since': 날짜, 'until': 오늘, 'days': 일수}. 둘 다 없으면 None."""
+    if days is None and since is None:
+        return None
+    today = _today()
+    if days is not None and since is not None:
+        raise rt.InputError("--days와 --since는 함께 쓸 수 없습니다. 최근 N일이면 --days N, 특정 날짜부터면 --since YYYY-MM-DD "
+                            "하나만 쓰세요.")
+    if days is not None:
+        if days < 1:
+            rec = 1 if days == 0 else -days
+            raise rt.InputError(f"--days는 1 이상이어야 합니다 (1 = 오늘, 7 = 오늘 포함 최근 7일). 받은 값: {days}. [추천] {rec}")
+        start = today - _dt.timedelta(days=days - 1)
+    else:
+        raw = str(since).strip()
+        start = None
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            try:
+                start = _dt.date.fromisoformat(raw)
+            except ValueError:
+                start = None
+        if start is None:
+            m = _DATE_PARTS.match(raw)
+            fixed = None
+            if m:
+                try:
+                    fixed = _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                except ValueError:
+                    fixed = None
+            # 고칠 수 있는 표기만 [추천] (없는 날짜·알 수 없는 글은 도구가 날짜를 지어내지 않음)
+            tail = f" [추천] {fixed.isoformat()}" if fixed else f" (예: {today.isoformat()})"
+            raise rt.InputError(f"--since 날짜 '{raw}'을(를) 읽을 수 없습니다. YYYY-MM-DD 형식으로 쓰세요.{tail}")
+        if start > today:
+            raise rt.InputError(f"--since {start.isoformat()}은(는) 오늘({today.isoformat()})보다 뒤입니다. "
+                                "오늘이나 그 전 날짜를 쓰세요.")
+    return {"since": start.isoformat(), "until": today.isoformat(), "days": (today - start).days + 1}
+
+
+def _period_start(period: Dict[str, Any]) -> _dt.datetime:
+    return _dt.datetime.combine(_dt.date.fromisoformat(period["since"]), _dt.time())
+
+
+def _period_text(period: Dict[str, Any]) -> str:
+    return f"{period['since']} ~ {period['until']} ({period['days']}일)"
+
+
+def jet_date_filter(start: _dt.datetime) -> str:
+    """Restrict용 Jet 조건 (현지 시각). 날짜는 YYYY-MM-DD HH:MM: 지역 설정의 월·일 순서와 관계없이 같은 날로 읽히는 형식
+    (MM/DD/YYYY는 일/월 순서 지역에서 뒤바뀔 수 있음)."""
+    return f"[ReceivedTime] >= '{start.strftime('%Y-%m-%d %H:%M')}'"
+
+
+def dasl_date_clause(start: _dt.datetime) -> str:
+    """@SQL(DASL) 조건: DASL 날짜 비교는 UTC라 현지 자정을 UTC로 바꿔 넣습니다.
+    Outlook이 현지 시각으로 읽더라도 한국처럼 UTC보다 빠른 지역에서는 더 이른 시각이 되어 빠지는 메일이 없고,
+    더 들어온 메일은 _collect가 받은 시각으로 다시 거릅니다."""
+    utc = start.astimezone(_dt.timezone.utc)
+    return f"\"urn:schemas:httpmail:datereceived\" >= '{utc.strftime('%Y-%m-%d %H:%M')}'"
+
+
+def _restrict_dated(items: Any, flt: str, fallback: Optional[str], what: str) -> Any:
+    """날짜 조건이 든 Restrict. Outlook이 날짜 조건을 거부하면 날짜 조건 없는 필터(fallback, None이면 거르지 않음)로
+    다시 거르고 _collect가 받은 시각을 메일마다 확인합니다 (JIT 복구, recovered)."""
+    try:
+        return items.Restrict(flt)
+    except Exception as e:
+        rt.note_recovered(f"Outlook이 {what} 날짜 조건을 거부해({type(e).__name__}) 받은 시각을 메일마다 확인했습니다")
+        return items.Restrict(fallback) if fallback else items
 
 
 def _check_limit(limit: int, warnings: List[str]) -> int:
@@ -164,21 +268,29 @@ def _check_limit(limit: int, warnings: List[str]) -> int:
 # ==============================================================================
 
 def cmd_list(args) -> Dict[str, Any]:
+    period = date_period(args.days, args.since)        # 날짜 오류는 Outlook에 연결하기 전에
+    start = _period_start(period) if period else None
     ns = get_namespace(get_outlook())
     folder = resolve_folder(ns, args.folder)
     items = folder.Items
     if args.unread:
         items = items.Restrict("[UnRead] = True")
+    if start is not None:
+        items = _restrict_dated(items, jet_date_filter(start), None, "list")
     items.Sort("[ReceivedTime]", True)                 # 거른 뒤 정렬해야 순서가 보장됨
     warnings: List[str] = []
-    mails = _collect(items, _check_limit(args.limit, warnings))
-    extra = {"warnings": warnings} if warnings else {}
+    mails = _collect(items, _check_limit(args.limit, warnings), since=start)
+    extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
     what = "안 읽은 메일" if args.unread else "메일"
+    when = ""
+    if period:
+        extra["period"] = period
+        when = f" (받은 날짜 {_period_text(period)})"
     if not mails:      # R2 0건
-        return rt.ok(TOOL, "list", f"0건: '{folder.Name}' 폴더에 {what}이 없습니다",
-                     f"VERIFIED: 0건. '{folder.Name}' 폴더에 {what}이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요.",
-                     folder=str(folder.Name), mails=[], count=0, **extra)
-    return rt.ok(TOOL, "list", f"'{folder.Name}' 폴더 최근 메일 {len(mails)}통" + (" (안 읽은 메일)" if args.unread else ""),
+        return rt.ok(TOOL, "list", f"0건: '{folder.Name}' 폴더에 {what}이 없습니다{when}",
+                     f"VERIFIED: 0건. '{folder.Name}' 폴더에 {what}이 없습니다{when}. 사용자에게 그대로 알리고 조건을 바꿔 "
+                     "다시 실행하지 마세요.", folder=str(folder.Name), mails=[], count=0, **extra)
+    return rt.ok(TOOL, "list", f"'{folder.Name}' 폴더 최근 메일 {len(mails)}통" + (" (안 읽은 메일)" if args.unread else "") + when,
                  folder=str(folder.Name), mails=mails, count=len(mails), **extra)
 
 
@@ -218,8 +330,9 @@ def _literal_keep(query: Optional[str], sender: Optional[str], where: str) -> Op
     return keep
 
 
-def build_search_filter(query: Optional[str], sender: Optional[str], where: str) -> str:
-    """DASL 필터: @SQL= 접두어는 한 번만, 조건마다 괄호로 묶어 AND로 연결."""
+def build_search_filter(query: Optional[str], sender: Optional[str], where: str,
+                        since: Optional[_dt.datetime] = None) -> str:
+    """DASL 필터: @SQL= 접두어는 한 번만, 조건마다 괄호로 묶어 AND로 연결. since: 받은 시각 하한 (현지 시각)."""
     clauses = []
     if query:
         fields = {"subject": ["urn:schemas:httpmail:subject"],
@@ -228,21 +341,32 @@ def build_search_filter(query: Optional[str], sender: Optional[str], where: str)
         clauses.append(_dasl_like(fields, query))
     if sender:
         clauses.append(_dasl_like(["urn:schemas:httpmail:fromname", "urn:schemas:httpmail:fromemail"], sender))
+    if since is not None:
+        clauses.append("(" + dasl_date_clause(since) + ")")
     if not clauses:
-        raise rt.InputError("--query 또는 --from 중 하나는 지정하세요.")
+        raise rt.InputError("--query, --from, --days, --since 중 하나는 지정하세요.")
     return "@SQL=" + " AND ".join(clauses)
 
 
 def cmd_search(args) -> Dict[str, Any]:
+    period = date_period(args.days, args.since)        # 날짜·인자 오류는 Outlook에 연결하기 전에
+    start = _period_start(period) if period else None
+    flt = build_search_filter(args.query, args.sender, args.where, start)
     ns = get_namespace(get_outlook())
     folder = resolve_folder(ns, args.folder)
-    flt = build_search_filter(args.query, args.sender, args.where)
-    items = folder.Items.Restrict(flt)
+    if start is not None:
+        plain = build_search_filter(args.query, args.sender, args.where) if (args.query or args.sender) else None
+        items = _restrict_dated(folder.Items, flt, plain, "search")
+    else:
+        items = folder.Items.Restrict(flt)
     items.Sort("[ReceivedTime]", True)
     warnings: List[str] = []
-    mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where))
-    desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'") if x)
+    mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where), since=start)
+    desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'",
+                                  period and f"받은 날짜 {_period_text(period)}") if x)
     result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails), "count": len(mails)}
+    if period:
+        result["period"] = period
     if warnings:
         result["warnings"] = warnings
     if not mails:      # R2 0건
@@ -785,10 +909,15 @@ def build_cli():
     parser, sub = rt.build_parser(TOOL, "아웃룩 메일")
     folder_help = "폴더: inbox(기본), sent, drafts, deleted, junk 또는 '계정\\폴더\\하위폴더'"
 
+    def dated(p):
+        p.add_argument("--days", type=int, help="오늘 포함 최근 N일에 받은 메일만 (1 = 오늘)")
+        p.add_argument("--since", help="이 날짜(YYYY-MM-DD)부터 받은 메일만 (--days와 함께 쓰지 않음)")
+
     p = sub.add_parser("list", help="최근 메일 목록")
     p.add_argument("--folder", help=folder_help)
     p.add_argument("--unread", action="store_true", help="안 읽은 메일만")
     p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
+    dated(p)
 
     p = sub.add_parser("search", help="메일 검색")
     p.add_argument("--query", "-q", help="찾을 말")
@@ -796,6 +925,7 @@ def build_cli():
     p.add_argument("--where", choices=["all", "subject", "body"], default="all", help="검색 범위 (기본 제목+본문)")
     p.add_argument("--folder", help=folder_help)
     p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
+    dated(p)
 
     for name, hlp in (("read", "메일 읽기 (--id)"), ("current", "지금 보고 있거나 선택한 메일 읽기")):
         p = sub.add_parser(name, help=hlp)

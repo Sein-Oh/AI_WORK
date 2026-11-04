@@ -838,8 +838,8 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
         "rmse": 12.7714,
         "residual_skew": 1.4090,
         "top_features": [
-          {"feature": "소비전력(kW)", "importance": 1.3773, "pct": 69.5},
-          {"feature": "반응온도(°C)", "importance": 0.5745, "pct": 29.0}
+          {"feature": "소비전력(kW)", "importance": 1.3773, "share": 0.6951, "pct": 69.5},
+          {"feature": "반응온도(°C)", "importance": 0.5745, "share": 0.2899, "pct": 29.0}
         ]
       },
       "leaderboard": [
@@ -896,13 +896,21 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
     "사전 목표 성능(검증 R2 >= 0.90)을 달성하여 배포 승인 준비가 완료되었습니다.",
     "기여도가 1% 미만인 피처 ['유입유속(m/s)', '수분함량(%)']을(를) 배제하여 노이즈를 감소시키십시오."
   ],
-  "preview": "[v1 완료] 타겟: [생산효율(%)(ExtraTrees: 검증 R2=0.9645)] | 평균 검증 R2=0.9645 (Delta: base) | 소요시간: 3.45s",
+  "top_features": {"생산효율(%)": [{"feature": "소비전력(kW)", "importance": 0.695}, {"feature": "반응온도(°C)", "importance": 0.29}]},
+  "preview": "[v1 완료] 타겟: [생산효율(%)(ExtraTrees: 검증 R2=0.9645)] | 평균 검증 R2=0.9645 (Delta: base) | 중요 입력: 소비전력(kW) 0.70, 반응온도(°C) 0.29 | 소요시간: 3.45s",
   "agent_directive": "VERIFIED: v1 competitive training completed. Champion models and leaderboard packaged into 'v1'. Mean 검증 R2=0.9645. Next step: proceed to inference or next iteration."
 }
 ```
 - `verified` (2.3.0): 커밋 후 버전 폴더를 다시 읽어(leaderboard.json, model_dataset.csv, 모델 joblib 다시 load, 메타 version/target, 원장 마지막 기록) 확인했으면 `true`.
   확인하지 못한 것이 있으면 `false`, `unverified`에 사유 목록, `agent_directive`는 `UNVERIFIED:`로 시작합니다 (재시도하지 말고 그대로 보고).
 - `incomplete_versions` (2.3.0, 있을 때만): 지우지 않고 건너뛴 불완전한 버전 폴더 이름 목록.
+- `top_features` (2.9.39): 타겟별 중요 입력 `{"<타겟>": [{"feature": <열 이름>, "importance": <비중>}, ...]}`, 큰 순서로 최대 5개.
+  값은 최고 모델(챔피언)을 전체 데이터에 맞춘 뒤 잰 순열 중요도(`leaderboard.json`의 `feature_importances`, Word 보고서 2장과 같은 값)를
+  **모든 입력의 합이 1이 되게 나눈 비중**(소수 셋째 자리)입니다. 5개만 보이므로 목록의 합은 1보다 작을 수 있습니다.
+  순열 중요도는 모델 종류와 관계없이 같은 방법이라 선형 모델(Ridge, ElasticNet)도 값이 있습니다. 글자 입력(라인)은 원-핫 열이 아니라 원래 열
+  하나로 섞어 재고, 날짜 열의 연·월·요일 부분은 날짜 열 하나로 합칩니다. `--eval` 파생변수는 그 이름 그대로 한 입력입니다.
+  계산에 실패했거나 모든 입력의 중요도가 0이면 그 타겟은 `[]`이고 `warnings`에 이유가 들어갑니다. `preview`에는 타겟마다 위 3개를
+  `중요 입력: 온도 0.41, 압력 0.22, ...`로 적습니다 (타겟이 여럿이면 `중요 입력(<타겟>): ...`). `--best`의 결과는 모든 작업 유형의 타겟을 합칩니다.
 - `recovered` (2.3.0, 모든 도구, 있을 때만): 결과가 달라진 자동 복구 목록. 예: `"예측 결과 파일 pred.csv 이미 있음 -> pred_20261028_101500.csv로 저장 (덮어쓰려면 --overwrite)"`,
   `"Word 보고서 a.docx 잠김(Excel/Word 등에서 열림) -> a_20261028_101500.docx로 저장"`. 실제 저장 경로는 `output_file`/`report_file`에 있습니다.
 
@@ -1040,7 +1048,7 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
 ### 4) 오류 로그 (`data\logs\errors.txt`, 2.3.1)
 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 도구 폴더의 `data\logs\errors.txt`에 덧붙습니다.
 `C:\CLI\ml-kit`에 배포했다면 `C:\CLI\ml-kit\data\logs\errors.txt`입니다. 환경변수 `ML_KIT_DATA_DIR`로 데이터 폴더를 바꿀 수 있습니다.
-En-Genius 스킬(`docs/engenius/ml-kit.zip`)은 `C:\CLI\ml-kit`의 도구를 실행하므로 OpenCode와 같은 데이터 폴더를 씁니다. 도구 파일 자체가 트레이의 임시 폴더(`%TEMP%\engenius-skill\<id>`)에서 실행될 때만 `%USERPROFILE%\Documents\En-Genius\CLI-data\ml-kit\data`를 씁니다 (2.9.37, 2.9.38부터 이 경우만, `ML_KIT_DATA_DIR`가 먼저).
+En-Genius 스킬(보관: `archive/engenius`)은 `C:\CLI\ml-kit`의 도구를 실행하므로 OpenCode와 같은 데이터 폴더를 씁니다. 도구 파일 자체가 트레이의 임시 폴더(`%TEMP%\engenius-skill\<id>`)에서 실행될 때만 `%USERPROFILE%\Documents\En-Genius\CLI-data\ml-kit\data`를 씁니다 (2.9.37, 2.9.38부터 이 경우만, `ML_KIT_DATA_DIR`가 먼저).
 - 기록: 시각, ml-kit 버전, Python 버전, OS, 실행한 명령(스크립트와 인자), 오류 종류와 메시지,
   자동 복구가 한도를 넘겨 실패한 경우 `복구 시도:`, 내부 오류(`ERROR:`)일 때만 traceback.
   데이터 내용은 기록하지 않고 경로와 인자만 남깁니다.

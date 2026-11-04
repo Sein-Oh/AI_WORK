@@ -13,7 +13,7 @@ report_*.docx
 # Archives (code lives in ml_kit/ as plain files)
 *.7z
 *.zip
-!docs/engenius/*.zip
+!archive/engenius/package/*.zip
 
 # OS / editor
 .DS_Store

@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.38"
+  version: "2.9.39"
   platform: windows
 ---
 
@@ -29,6 +29,7 @@ metadata:
 |---|---|
 | "모델 만들어줘", "예측 모델 학습" | 2단계 학습 |
 | "성능 올려봐", "다시 해봐" | 3단계 개선 |
+| "버전별로 비교해줘", "지금까지 학습 이력" | 3단계 끝의 이력 명령 |
 | "이 조건이면 얼마야?", "새 데이터 예측" | 4단계 예측 |
 | 모델을 만든 뒤 "생산효율이 50이 되려면 온도는?" (목표값이 되는 조건) | 4-B단계 모델 반대 찾기 |
 | "보고서 만들어줘" | 5단계 보고서 |
@@ -61,6 +62,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 | 엑셀 위쪽에 제목/단위 행이 있다 (예: 4행이 머리글, 5행이 단위) | `--header-row 4 --unit-row 5` |
 | 분류에서 놓치면 안 되는 값이 있다 (예: 불량) | `--positive-class 불량` |
 | 숫자로 된 코드(101, 102)를 종류로 다뤄야 한다 | `--dtypes "설비코드:str"` |
+| 사용자가 계산한 입력(비율, 차이)을 원한다 | `--eval "<이름> = <식>; <이름2> = <식2>"` (예: `--eval "온도압력비 = 온도 / 압력"`). 숫자로 읽히는 열 이름(`2`, `2(mm)`)이 식에 있으면 도구가 멈춘다 |
 | 피처가 10개 이상이다 | 파일 쓰기 도구로 한 줄에 피처 하나씩 쓴 `features.txt`(UTF-8)를 데이터 파일 옆에 만들고 `-x "<그 경로>"` |
 | 숫자 타겟과 등급 타겟이 섞여 있다 | 회귀 타겟끼리 1번, 분류 타겟끼리 `--task classification`으로 1번 (모두 2번) |
 
@@ -69,7 +71,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 - 이상치는 도구가 자동으로 찾아 학습에서 뺀다. 옵션은 없다. 데이터의 `제외` 열은 도구가 읽는 표시용 열이다 (피처에 넣어도 도구가 뺀다).
   사용자가 행을 빼거나 넣고 싶다고 하면 데이터 파일을 직접 고치지 말고, 엑셀의 `제외` 열에 이유(뺄 때) 또는 `포함`(자동 제외를 막을 때)을 적으라고 안내한다.
 
-결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `recommendations`의 첫 문장. `warnings`(예: 중복 행, 반복된 머리글 행, 합계·평균 행)가 있으면 그대로.
+결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `top_features`(타겟별 중요 입력과 비중, 합이 1), `recommendations`의 첫 문장. `warnings`(예: 중복 행, 반복된 머리글 행, 합계·평균 행)가 있으면 그대로.
 `exclusions`가 있으면 타겟별 학습 제외 행 수(직접 `manual`, 자동 `auto`), 제외 행 포함 검증 점수 `all_rows_score`, `excluded_rows_file`(뺀 행 목록)도 알린다.
 다음 단계를 위해 기억할 것: `version_dir`, `goal_met`, `next_commands`.
 
@@ -82,6 +84,8 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 
 `needs_input`이 `true`인 명령에는 `<새데이터.xlsx>` 같은 자리표시자가 있다. 사용자가 준 실제 경로로 바꿔 실행하고, 경로를 모르면 먼저 묻는다.
 
+버전 비교·이력: `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history` -> `records`의 `version`, `mean_val_score`, `delta_score`, `tag`를 표로 알린다.
+
 ## 4단계: 예측
 
 한 건:
@@ -92,13 +96,15 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -i "<피처1>=<값>,<피
 ```powershell
 python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>"
 ```
+결과를 엑셀로 받고 싶다고 하면: `python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>" --out "<전체경로.xlsx>"`
 - 학습 때 `--header-row`/`--unit-row`를 줬으면 파일 예측에도 같은 옵션을 붙인다 (학습 결과 `next_commands`의 예측 명령에 들어 있음).
 - `-i`에는 모델 입력만 넣는다. 모델 입력이 아닌 이름(`습도`, 다른 단위 `압력(MPa)`)이 있으면 도구가 멈춘다 (`[후보]`나 목록을 사용자에게 보여 주고 묻는다).
 - `-i "k=v"`는 한 건이다. 여러 건은 JSON 배열(`-i "[{...},{...}]"`)이나 .json 파일로 준다 (같은 이름이 두 번이면 도구가 멈춘다).
 - `-i`에 6건 이상을 넣으면 건별 값 대신 `output_file`(결과 파일)을 알린다 (`truncated: true`).
 - `-i`의 숫자 값에는 쉼표를 쓰지 않는다 (`압력=3000`, `3,000` 아님). 쉼표가 있으면 도구가 멈추고 `[추천]` 명령을 준다 (`--find`, `ml_map.py`도 같음).
 - `<version_dir>`: 보고서를 만들었으면 보고서 결과의 `best_version_dir`, 아니면 마지막 학습 결과의 `version_dir`을 그대로 쓴다. 모르면 `python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" --history`를 실행해 `best_version_dir`을 쓴다 (`best_version_note`가 있으면 그대로 알린다).
-- 알릴 것: 한 건이면 `predictions_summary.<타겟>.predictions`, 회귀는 `intervals`(90% 범위)도. 파일이면 `output_file`.
+- 알릴 것: 한 건이면 `predictions_summary.<타겟>.predictions`, 회귀는 `intervals`(90% 예측 범위), 분류는 `probabilities`(종류별 확률)도. 파일이면 `output_file`
+  (열 `pred_<타겟>`, 회귀 `pred_lo_<타겟>`/`pred_hi_<타겟>` = 90% 예측 범위, 분류 `proba_<타겟>_<종류>` = 확률).
 - 회귀는 `map_check`(실측 비교값: 학습 데이터에서 같은 조건을 찾은 값)의 `value`, `diff`(예측-비교값), `method`를 "실측 비교값"으로 함께 알린다.
   `map_check_warning`이 true이면 `map_check_warnings`를 그대로 알린다. `map_check_notes`가 있으면 비교값을 못 낸 이유로 짧게 알린다.
 - 아래 값이 `true`이면 옆의 문장을 덧붙인다:

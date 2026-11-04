@@ -1,7 +1,7 @@
 """excel.py - 엑셀 작업
 
 명령:
-    read     내용 읽기 (범위, 검색, --save로 CSV 저장)
+    read     내용 읽기 (범위, 검색, --save로 CSV 저장, --formulas로 수식 칸 목록)
     info     통합문서 요약 (시트, 사용 범위, 차트, 선택 영역). --all: 열린 통합문서 전체 목록
     write    값/표/수식 쓰기 (--value, --values, --file, --formula, --header, --append)
     replace  찾아 바꾸기 (수식 셀은 보존)
@@ -20,6 +20,7 @@
     python excel.py write --file "결과.csv" --sheet "검색결과" --new-sheet
     python excel.py read --range A1:D20
 """
+import datetime as _dt
 import json
 import os
 import re
@@ -430,20 +431,27 @@ def closed_uncomputed(path: str, sheet: str, r0: int, c0: int, matrix: List[List
     return info if rt.uncomputed_found(info) else None
 
 
-def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50) -> Tuple[List[Dict[str, Any]], int, int]:
-    """찾은 칸 (앞 limit개), 전체 수, 값이 잘린 칸 수. 값은 칸마다 MAX_CELL_CHARS에서 자릅니다 (전체는 --save CSV)."""
+def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50,
+                   formulas: Optional[Dict[Tuple[int, int], str]] = None) -> Tuple[List[Dict[str, Any]], int, int]:
+    """찾은 칸 (앞 limit개), 전체 수, 값이 잘린 칸 수. 값은 칸마다 MAX_CELL_CHARS에서 자릅니다 (전체는 --save CSV).
+    formulas((행 위치, 열 위치) -> 수식, --formulas)를 주면 수식 글에서도 찾고 수식 칸은 formula를 붙입니다."""
     hits: List[Dict[str, Any]] = []
     total = cut_n = 0
     key = text.lower()
+    formulas = formulas or {}
     for i, row in enumerate(matrix):
         for j, v in enumerate(row):
-            if v is None:
+            f = formulas.get((i, j))
+            if v is None and f is None:
                 continue
-            if key in str(out_value(v)).lower():
+            if key in str(out_value(v)).lower() or (f is not None and key in f.lower()):
                 total += 1
                 if len(hits) < limit:
                     value, cut = rt.clamp_cell(out_value(v))
                     hit = {"cell": addr(r0 + i, c0 + j), "value": value}
+                    if f is not None:
+                        hit["formula"], f_cut = rt.clamp_cell(f)
+                        cut = cut or f_cut
                     if cut:
                         hit["value_truncated"] = True
                         cut_n += 1
@@ -451,21 +459,233 @@ def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: 
     return hits, total, cut_n
 
 
+# --- read --formulas (1.4.36): 수식 칸 목록 ---------------------------------------------------------------
+
+FORMULA_SHOW = 200          # JSON formulas에 담는 수식 칸 수 (넘으면 formulas_truncated, 전체는 full_result_file CSV)
+ARRAY_CHECK_MAX = 2000      # 열린 문서에서 배열 수식인지 칸마다 확인하는 수식 칸 수 상한 (COM 호출 수 제한)
+
+
+def _formula_value(v: Any) -> Any:
+    """수식 칸의 값: 계산된 값이 없으면(닫힌 파일의 계산되지 않은 수식) null."""
+    return None if v is None else out_value(v)
+
+
+def _closed_formulas(path: str, sheet: str, r0: int, c0: int, matrix: List[List[Any]]) -> List[Dict[str, Any]]:
+    """닫힌 xlsx/xlsm에서 읽은 범위의 수식 칸 (openpyxl data_only=False로 그 범위만 한 번 더 읽음).
+    값은 이미 읽은 계산된 값(data_only, 없으면 null). 공유 수식은 openpyxl이 칸마다 펼쳐 줍니다.
+    배열 수식은 파일에 왼쪽 위 칸에만 있어 그 칸에 한 번(array, array_range). 수식 칸은 data_type 'f'만
+    ('=로 시작하는 글자 상수는 수식이 아님)."""
+    nrows = len(matrix)
+    ncols = max((len(r) for r in matrix), default=0)
+    if not nrows or not ncols:
+        return []
+    import openpyxl
+    from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
+    out: List[Dict[str, Any]] = []
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    try:
+        ws = wb[sheet]
+        for i, row in enumerate(ws.iter_rows(min_row=r0, max_row=r0 + nrows - 1, min_col=c0, max_col=c0 + ncols - 1)):
+            for j, cell in enumerate(row):
+                v = cell.value
+                extra: Dict[str, Any] = {}
+                if isinstance(v, ArrayFormula):
+                    text = str(v.text or "")
+                    extra = {"array": True, "array_range": str(v.ref or "")}
+                elif isinstance(v, DataTableFormula):     # 데이터 표(What-If): 엑셀 화면의 {=TABLE(행 입력, 열 입력)}
+                    text = f"=TABLE({v.r1 or ''},{v.r2 or ''})"
+                    extra = {"array": True, "array_range": str(v.ref or ""), "data_table": True}
+                elif isinstance(v, str) and v.startswith("=") and getattr(cell, "data_type", None) == "f":
+                    text = v
+                else:
+                    continue
+                if not text.startswith("="):
+                    text = "=" + text
+                raw = matrix[i][j] if i < len(matrix) and j < len(matrix[i]) else None
+                out.append({"cell": addr(r0 + i, c0 + j), "formula": text, "value": _formula_value(raw), **extra})
+    finally:
+        wb.close()
+    return out
+
+
+def _com_formulas(rng: Any, matrix: List[List[Any]], warnings: List[str]) -> List[Dict[str, Any]]:
+    """열린 문서(COM)의 수식 칸. HasFormula가 False(수식 없음)면 수식을 읽지 않습니다.
+    수식 글은 범위 전체를 한 번에: Formula2(동적 배열을 그대로, 엑셀 365)가 없으면 Formula (영어 함수 이름, A1 주소).
+    2차원 결과에서 상수는 값, 수식은 '='로 시작하는 글이라 칸마다 부르지 않습니다. 다만 값도 같은 글('=로 시작하는
+    글자 상수일 수 있음)이면 그 칸만 HasFormula로 확인합니다. 배열 수식은 범위의 HasArray가 False가 아닐 때만
+    칸마다 확인해(ARRAY_CHECK_MAX개까지) 배열마다 한 번(배열 안에서 처음 만난 칸, 보통 왼쪽 위) 넣습니다."""
+    try:
+        has = rng.HasFormula            # True(모두) / False(없음) / None(섞임)
+    except Exception:
+        has = None
+    if has is False:
+        return []
+    try:
+        raw = rng.Formula2
+    except Exception:
+        raw = rng.Formula
+    fm = off.range_to_matrix(raw)
+    r0, c0 = int(rng.Row), int(rng.Column)
+    ws = rng.Worksheet
+    cands = [(i, j, f) for i, row in enumerate(fm) for j, f in enumerate(row) if isinstance(f, str) and f.startswith("=")]
+    if not cands:
+        return []
+    try:
+        arrays = rng.HasArray           # False면 배열 수식 없음 (칸마다 확인하지 않음)
+    except Exception:
+        arrays = None
+    out: List[Dict[str, Any]] = []
+    seen_arrays = set()
+    checked = 0
+    for i, j, f in cands:
+        v = matrix[i][j] if i < len(matrix) and j < len(matrix[i]) else None
+        cell = None
+        if isinstance(v, str) and v == f:
+            cell = ws.Cells(r0 + i, c0 + j)
+            if not cell.HasFormula:
+                continue
+        entry: Dict[str, Any] = {"cell": addr(r0 + i, c0 + j), "formula": f, "value": _formula_value(v)}
+        if arrays is not False:
+            if checked < ARRAY_CHECK_MAX:
+                checked += 1
+                cell = cell or ws.Cells(r0 + i, c0 + j)
+                if cell.HasArray:
+                    area = str(cell.CurrentArray.Address).replace("$", "")
+                    if area in seen_arrays:
+                        continue
+                    seen_arrays.add(area)
+                    entry.update(array=True, array_range=area)
+            elif checked == ARRAY_CHECK_MAX:
+                checked += 1
+                warnings.append(f"배열 수식인지는 앞 {ARRAY_CHECK_MAX}개 수식 칸만 확인함 (그 뒤 배열 수식은 칸마다 나올 수 있음)")
+        out.append(entry)
+    return out
+
+
+def _formula_csv(path: str, entries: List[Dict[str, Any]]) -> str:
+    rows = [["cell", "formula", "value", "array"]] + [
+        [e["cell"], e["formula"], "" if e["value"] is None else e["value"], e.get("array_range", "") if e.get("array") else ""]
+        for e in entries]
+    return rt.write_csv_rows(path, rows)
+
+
+_DEFAULT_DIRECTIVE = "VERIFIED: 작업이 완료되었습니다."
+
+
+def _with_formulas(payload: Dict[str, Any], info: Dict[str, Any]) -> Dict[str, Any]:
+    """read 결과에 수식 칸 목록을 붙입니다 (--formulas). formulas(앞 FORMULA_SHOW개), formula_count, formulas_truncated.
+    잘렸거나 --save면 전체 목록 CSV(full_result_file)를 쓰고, --save면 다시 읽어 행 수를 확인합니다 (R1)."""
+    if payload.get("status") != "ok":
+        return payload
+    entries: List[Dict[str, Any]] = info["entries"]
+    n = len(entries)
+    shown = []
+    for e in entries[:FORMULA_SHOW]:
+        e = dict(e)
+        e["formula"], f_cut = rt.clamp_cell(e["formula"])
+        e["value"], v_cut = rt.clamp_cell(e["value"])
+        if f_cut or v_cut:
+            e["value_truncated"] = True
+        shown.append(e)
+    fields = {k: v for k, v in payload.items() if k not in rt._PAYLOAD_BASE}
+    fields.update(formulas=shown, formula_count=n, formulas_truncated=n > FORMULA_SHOW)
+    if info.get("warnings"):
+        fields["warnings"] = list(fields.get("warnings") or []) + info["warnings"]
+    problems: List[str] = []
+    full = None
+    if n and payload.get("output_file"):      # --save: 저장한 값 CSV 옆에 전체 수식 목록
+        base = os.path.splitext(payload["output_file"])[0]
+        full = _formula_csv(rt.resolve_output_path(base + "_formulas.csv", "formulas", ".csv"), entries)
+        problem = rt.check_saved_file(full, expected_rows=n + 1, delimiter=",")
+        if problem:
+            problems.append(f"수식 목록 CSV: {problem}")
+    elif n > FORMULA_SHOW:
+        out = os.path.join(rt.get_data_dir(), "results",
+                           f"excel_formulas_{rt.safe_filename(payload.get('sheet'), 40)}_{rt.timestamp()}.csv")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        full = _formula_csv(out, entries)
+    if full:
+        fields["full_result_file"] = full
+    where = f"{payload.get('sheet')}!{payload.get('range')}"
+    if info.get("csv"):
+        sentence = "수식 0개: CSV 파일은 수식을 저장하지 않아 값만 있습니다. 사용자에게 그대로 알리세요."
+        preview_tail = " / 수식 없음 (CSV)"
+    elif not n:
+        sentence = f"수식 0개: {where}에는 수식이 없습니다(값만 있음). 사용자에게 그대로 알리세요."
+        preview_tail = " / 수식 없음"
+    else:
+        sentence = f"수식 칸 {n}개는 formulas(cell, formula, value)에 있습니다."
+        if n > FORMULA_SHOW:
+            sentence += f" 앞 {FORMULA_SHOW}개만 담았고 전체는 full_result_file에 있습니다."
+        elif full:
+            sentence += " 전체 수식 목록은 full_result_file에도 저장했습니다."
+        preview_tail = f" / 수식 {n}개"
+    preview = str(payload.get("preview", "")) + preview_tail
+    if payload.get("verified") is False or problems:
+        return rt.ok_unverified(payload["tool"], payload["command"], preview,
+                                list(payload.get("unverified") or []) + problems, **fields)
+    directive = str(payload.get("agent_directive", ""))
+    if directive.startswith(_DEFAULT_DIRECTIVE):
+        directive = "VERIFIED: 읽기 완료. " + sentence + " 같은 명령을 다시 실행하거나 결과를 다시 조회하지 마세요."
+    else:
+        directive = directive + " " + sentence
+    return rt.ok(payload["tool"], payload["command"], preview, directive, **fields)
+
+
+def _no_formula_reader(target: str) -> Optional[str]:
+    """Office(COM) 없이 --formulas를 읽을 수 없는 닫힌 파일(.xls, .xlsb, zip이 아닌 xlsx 등)이면 그 경로, 아니면 None."""
+    if off.win32com is not None or not target or target.strip().lower() == "active":
+        return None
+    raw = os.path.abspath(os.path.expandvars(target.strip().strip('"')))
+    if os.path.isfile(raw) and os.path.splitext(raw)[1].lower() in off.EXTENSIONS["excel"]:
+        return raw
+    return None
+
+
 def cmd_read(args) -> Dict[str, Any]:
     found: Dict[str, Any] = {}
-    return rt.with_uncomputed(_read(args, found), found.get("uncomputed"))
+    payload = _read(args, found)
+    if args.formulas:
+        payload = _with_formulas(payload, found["formulas"])
+    return rt.with_uncomputed(payload, found.get("uncomputed"))
+
+
+def _read_formulas(fn: Any, *a: Any) -> List[Dict[str, Any]]:
+    """수식 읽기 실패는 내부 오류로: 예외 글에 수식이 섞여 오류 로그에 남지 않게 예외 종류만 남기고 앞 예외도 잇지 않습니다."""
+    try:
+        return fn(*a)
+    except rt.InputError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"수식 읽기 실패 ({type(e).__name__})") from None
 
 
 def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     csv_path = closed_csv(args.target)
     closed = None if csv_path else is_closed_xlsx(args.target)
+    finfo: Dict[str, Any] = {"entries": [], "warnings": []}
+    found["formulas"] = finfo
+    conds = None
+    if args.where is not None:          # 식 오류는 문서를 읽기 전에
+        if args.search or args.formulas:
+            raise rt.InputError("--where는 --search, --formulas와 함께 쓸 수 없습니다. 하나만 쓰세요.")
+        conds = parse_where(args.where)
+    if args.formulas and not csv_path and not closed:
+        no_reader = _no_formula_reader(args.target)
+        if no_reader:
+            raise rt.InputError(f"'{os.path.basename(no_reader)}'의 수식은 Office 없이 읽을 수 없습니다 "
+                                "(Office 없이 수식을 읽는 것은 .xlsx/.xlsm만). 엑셀에서 이 파일을 연 뒤 같은 명령을 다시 실행하세요 "
+                                "(열린 문서는 엑셀에서 수식을 읽음).")
     if csv_path:
         # CSV도 같은 명령으로 (행 수 세기, 머리글 확인): 이전에는 확장자 오류가 나 LLM이 pandas 코드를 직접 짰음
         sheet, r0, c0, matrix, names = _read_matrix_csv(csv_path, args.range)
         source = {"app": "Excel", "name": os.path.basename(csv_path), "path": csv_path, "source": "file(csv)"}
+        finfo["csv"] = True
     elif closed:
         sheet, r0, c0, matrix, names = _read_matrix_closed(closed, args.sheet, args.range)
         found["uncomputed"] = closed_uncomputed(closed, sheet, r0, c0, matrix)
+        if args.formulas:
+            finfo["entries"] = _read_formulas(_closed_formulas, closed, sheet, r0, c0, matrix)
         source = {"app": "Excel", "name": os.path.basename(closed), "path": closed, "source": "file(openpyxl)"}
     else:
         with off.open_target("excel", args.target, readonly=True) as t:
@@ -473,16 +693,27 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
             rng = target_range(t, ws, args.range)
             matrix = off.range_to_matrix(rng.Value)
             sheet, r0, c0 = str(rng.Worksheet.Name), int(rng.Row), int(rng.Column)
+            if args.formulas:
+                finfo["entries"] = _read_formulas(_com_formulas, rng, matrix, finfo["warnings"])
             source = t.resolved()
     nrows = len(matrix)
     ncols = max((len(r) for r in matrix), default=0)
     full_addr = addr(r0, c0, r0 + max(nrows, 1) - 1, c0 + max(ncols, 1) - 1)
     result: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": full_addr, "rows": nrows, "cols": ncols}
 
-    save_cmd = rt.next_command("excel.py", ["read", "--target", args.target, "--range", full_addr, "--sheet", sheet, "--save"],
+    save_cmd = rt.next_command("excel.py", ["read", "--target", args.target, "--range", full_addr, "--sheet", sheet, "--save"]
+                               + (["--formulas"] if args.formulas else []) + (["--where", args.where] if conds else []),
                                "전체를 CSV로 저장 (잘린 값까지 전체)")
+    if conds is not None:
+        return _read_where(args, conds, matrix, sheet, r0, c0, full_addr, result, save_cmd)
     if args.search:
-        hits, total, cut_n = _search_matrix(matrix, r0, c0, args.search)
+        fmap = None
+        if args.formulas:     # 수식 글에서도 찾기 (수식 칸 위치 -> 수식)
+            fmap = {}
+            for e in finfo["entries"]:
+                rr, cc = parse_cell(e["cell"])
+                fmap[(rr - r0, cc - c0)] = e["formula"]
+        hits, total, cut_n = _search_matrix(matrix, r0, c0, args.search, formulas=fmap)
         truncated = total > len(hits) or cut_n > 0
         result.update(matches=hits, total_matches=total, count=total, shown=len(hits), truncated=truncated)
         preview = f"'{args.search}': {sheet}!{full_addr}에서 {total}개 셀 일치" + (
@@ -536,6 +767,132 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
         f" (긴 값 {cells_cut}칸 잘림)" if cells_cut else "") + (f" (뒤쪽 {cols_dropped}열 생략)" if cols_dropped else "")
     return rt.ok(TOOL, "read", preview, "VERIFIED: 읽기 완료. 일부만 표시되었으면 next_commands로 이어서 읽거나 CSV로 저장하세요."
                  if truncated else "", **result)
+
+
+# --- read --where: 조건에 맞는 행만 ---
+
+_WHERE_RE = re.compile(r"^\s*(.+?)\s*(>=|<=|!=|>|<|=|~)\s*(.*?)\s*$", re.S)
+# 고쳐서 [추천]할 수 있는 표기 (뜻이 하나뿐인 것만)
+_WHERE_FIXES = (("==", "="), ("=>", ">="), ("=<", "<="), ("<>", "!="), ("=!", "!="))
+_WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
+_WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
+_WHERE_NUM = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
+WHERE_FORM = "'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 여러 조건은 ; 로, 모두 맞는 행. 예: 금액 >= 100; 부서 = 영업)"
+
+
+def _where_parts(text: str) -> Optional[List[Tuple[str, str, str]]]:
+    conds = []
+    for part in [p for p in text.split(";") if p.strip()]:
+        m = _WHERE_RE.match(part)
+        if not m or not m.group(1).strip():
+            return None
+        col, op, val = m.group(1).strip(), m.group(2), m.group(3).strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        if op in (">", "<", ">=", "<=", "~") and val == "":
+            return None
+        conds.append((col, op, val))
+    return conds or None
+
+
+def parse_where(text: str) -> List[Tuple[str, str, str]]:
+    """--where '<열> <연산자> <값>; ...' -> [(열, 연산자, 값)]. 고칠 수 있는 표기(==, =>, <>, AND)는 [추천]으로 고친 식."""
+    raw = str(text).strip()
+    fixed = _WHERE_CONTAINS.sub(" ~ ", _WHERE_AND.sub("; ", raw))
+    for a, b in _WHERE_FIXES:
+        fixed = fixed.replace(a, b)
+    conds = _where_parts(fixed)
+    if conds is None:
+        raise rt.InputError(f"--where 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
+    if fixed != raw:
+        raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;). 형식: {WHERE_FORM}. "
+                            f"[추천] {'; '.join(f'{c} {o} {v}' for c, o, v in conds)}")
+    return conds
+
+
+def _where_num(v: Any) -> Optional[float]:
+    if isinstance(v, bool):
+        return None
+    if _is_num(v):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip().replace(",", "")
+        if _WHERE_NUM.match(s):
+            return float(s)
+    return None
+
+
+def _where_text(v: Any) -> str:
+    return "" if v is None else str(out_value(v)).strip()
+
+
+def _where_match(cell: Any, op: str, val: str) -> bool:
+    """숫자끼리는 숫자로, 날짜 칸은 YYYY-MM-DD 값과 날짜로, 그 밖은 앞뒤 공백을 뺀 글자로(대소문자 무시) 비교. ~는 포함."""
+    if op == "~":
+        return val.strip().casefold() in _where_text(cell).casefold()
+    cn, vn = _where_num(cell), _where_num(val)
+    a: Any
+    b: Any
+    if cn is not None and vn is not None:
+        a, b = cn, vn
+    elif _is_date(cell) and cell is not None and re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?", val.strip()):
+        try:
+            vd = _dt.datetime.fromisoformat(val.strip())
+        except ValueError:
+            return False
+        cd = cell if isinstance(cell, _dt.datetime) else _dt.datetime(cell.year, cell.month, cell.day)
+        cd = cd.replace(tzinfo=None)
+        if len(val.strip()) == 10:      # 날짜만 주면 날짜끼리
+            a, b = cd.date(), vd.date()
+        else:
+            a, b = cd, vd
+    elif vn is not None and op not in ("=", "!="):
+        return False                    # 크기 비교인데 칸이 숫자가 아님 (빈 칸, 글자)
+    else:
+        a, b = _where_text(cell).casefold(), val.strip().casefold()
+    return {"=": a == b, "!=": a != b, ">": a > b, "<": a < b, ">=": a >= b, "<=": a <= b}[op]
+
+
+def _read_where(args, conds: List[Tuple[str, str, str]], matrix: List[List[Any]], sheet: str, r0: int, c0: int,
+                full_addr: str, result: Dict[str, Any], save_cmd: Dict[str, str]) -> Dict[str, Any]:
+    """첫 행을 머리글로 보고 조건에 모두 맞는 행만 돌려줍니다. values[0]은 머리글, row_numbers는 values와 같은 순서의 시트 행 번호."""
+    ncols = max((len(r) for r in matrix), default=0)
+    header = matrix[0] if matrix else []
+    cols = [(resolve_column(col, header if matrix else None, c0, ncols, "조건 열")[0], op, val) for col, op, val in conds]
+    hits = [i for i in range(1, len(matrix))
+            if all(_where_match(matrix[i][j] if j < len(matrix[i]) else None, op, val) for j, op, val in cols)]
+    values = [[out_value(v) for v in matrix[i]] for i in [0] + hits] if matrix else []
+    numbers = [r0 + i for i in [0] + hits] if matrix else []
+    cond_text = "; ".join(f"{c} {o} {v}" for c, o, v in conds)
+    result.update(where=cond_text, header_row=r0, count=len(hits), data_rows=max(len(matrix) - 1, 0))
+    where = f"{sheet}!{full_addr}"
+    if not hits:      # R2 0건
+        return rt.ok(TOOL, "read", f"0건: {where}에 조건({cond_text})에 맞는 행이 없습니다",
+                     f"VERIFIED: 0건. {where}에 조건({cond_text})에 맞는 행이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 "
+                     "실행하지 마세요.", values=values, row_numbers=numbers, truncated=False, **result)
+    if args.save:
+        out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}_조건", ".csv")
+        out = rt.write_csv_rows(out, values)
+        result.update(output_file=out, next_commands=[
+            rt.next_command("word.py", ["write", "--file", out], "저장한 표를 열린 워드 문서에 넣기"),
+            rt.next_command("ppt.py", ["write", "--file", out], "저장한 표를 열린 PPT에 넣기")])
+        filled = sum(1 for r in values if any(v is not None and str(v).strip() for v in r))
+        return rt.ok_file(TOOL, "read", f"{where}에서 조건({cond_text})에 맞는 {len(hits)}행을 머리글과 함께 CSV로 저장: {out}", out,
+                          "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          expected_rows=filled, delimiter=",", **result)
+    shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows(values, args.max_rows)
+    truncated = rows_cut or cells_cut > 0 or cols_dropped > 0
+    result.update(values=shown, row_numbers=numbers[:len(shown)], truncated=truncated)
+    reasons = ([f"맞는 행 {len(hits)}개 중 앞 {len(shown) - 1}개만 표시"] if rows_cut else []) + (
+        [f"{rt.MAX_CELL_CHARS}자보다 긴 값 {cells_cut}개는 앞부분만 표시"] if cells_cut else []) + (
+        [f"첫 행이 표시 상한을 넘어 뒤쪽 {cols_dropped}열은 표시하지 않음"] if cols_dropped else [])
+    preview = f"{where}: 조건({cond_text})에 맞는 행 {len(hits)}개 (데이터 {len(matrix) - 1}행 중)" + (
+        f" (앞 {len(shown) - 1}개만 표시)" if rows_cut else "")
+    if truncated:
+        result.update(truncated_reason=", ".join(reasons), next_commands=[save_cmd])
+        return rt.ok(TOOL, "read", preview, "VERIFIED: 거르기 완료. 일부만 표시했습니다(truncated_reason). 전체가 필요하면 "
+                     "next_commands[0]으로 CSV에 저장하세요.", **result)
+    return rt.ok(TOOL, "read", preview, "", **result)
 
 
 XL_CHART_NAMES = {51: "column", 57: "bar", 4: "line", 65: "line_markers", 5: "pie", 1: "area",
@@ -1425,6 +1782,12 @@ def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
 
 def cmd_range(args) -> Dict[str, Any]:
     a = args.action
+    if a in ("insert", "delete"):
+        return range_lines(args)
+    if args.dry_run:
+        raise rt.InputError(f"--dry-run은 range --action insert/delete에만 씁니다 (받은 동작: {a}).")
+    if a == "sort":
+        return range_sort(args)
     if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear") and not args.range:
         raise rt.InputError(f"range {a}에는 --range가 필요합니다." + (
             " 시트 전체를 지우려면 사용자에게 확인한 뒤 excel.py info로 사용 범위를 보고 그 범위를 --range로 지정하세요."
@@ -1575,6 +1938,429 @@ def cmd_range(args) -> Dict[str, Any]:
     if problems:
         return rt.ok_unverified(TOOL, "range", preview, problems, target_resolved=resolved, **info)
     return rt.ok(TOOL, "range", preview, "VERIFIED: 결과를 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved, **info)
+
+
+# ==============================================================================
+# 8b. range insert/delete (행·열 넣기·지우기), sort (정렬)
+# ==============================================================================
+
+LINES_SCAN = 1000        # 넣기·지우기 확인용 기준 칸을 찾을 때 훑는 행(열은 200) 수
+SORT_MAX_KEYS = 3        # Range.Sort의 기준 열 상한 (Key1~Key3)
+XL_ASC, XL_DESC = 1, 2
+XL_YES, XL_NO = 1, 2     # Range.Sort Header (xlGuess는 쓰지 않음: 도구가 정해 결과에 알림)
+
+
+def _lines_spec(args) -> Tuple[Optional[str], str, int, int]:
+    """--range를 (시트, 'rows'|'cols', 시작, 끝)으로. '5:7'·'5'는 행, 'B:C'·'B'는 열.
+    A5:C7 같은 칸 범위는 --axis가 있어야 함 (없으면 [후보]: 행 3개인지 열 3개인지 도구가 정할 수 없음)."""
+    if not args.range:
+        raise rt.InputError(f"range {args.action}에는 --range가 필요합니다 (행은 --range 5:7, 열은 --range B:C).")
+    sheet, cells = split_sheet(args.range)
+    c = cells.replace("$", "").replace(" ", "").upper()
+    m_rows = re.fullmatch(r"(\d+)(?::(\d+))?", c)
+    m_cols = re.fullmatch(r"([A-Z]{1,3})(?::([A-Z]{1,3}))?", c)
+    if m_rows:
+        a, b = sorted((_check_row(int(m_rows.group(1)), cells), _check_row(int(m_rows.group(2) or m_rows.group(1)), cells)))
+        given = "rows"
+    elif m_cols:
+        a, b = sorted((col_number(m_cols.group(1)), col_number(m_cols.group(2) or m_cols.group(1))))
+        if b > XL_MAX_COL:
+            raise rt.InputError(f"열이 엑셀 범위(A~XFD) 밖입니다: '{cells}' (예: B:C)")
+        given = "cols"
+    else:
+        r1, c1, r2, c2 = parse_area(c, None, None)
+        if args.axis == "rows":
+            return sheet, "rows", r1, r2
+        if args.axis == "cols":
+            return sheet, "cols", c1, c2
+        raise rt.ambiguous(f"--range {cells}이(가) 행인지 열인지 정할 수 없습니다. 행이면 --range {r1}:{r2}, "
+                           f"열이면 --range {col_letter(c1)}:{col_letter(c2)}로 쓰거나 --axis를 붙이세요.",
+                           [f"--axis rows ({r1}~{r2}행)", f"--axis cols ({col_letter(c1)}~{col_letter(c2)}열)"])
+    if args.axis and args.axis != given:
+        raise rt.InputError(f"--range {cells}은(는) {'행' if given == 'rows' else '열'} 주소인데 --axis {args.axis}를 주었습니다. "
+                            f"--axis를 빼고 다시 실행하세요. [추천] {given}")
+    return sheet, given, a, b
+
+
+def _lines_text(axis: str, a: int, b: int) -> str:
+    if axis == "rows":
+        return f"{a}행" if a == b else f"{a}~{b}행"
+    return f"{col_letter(a)}열" if a == b else f"{col_letter(a)}~{col_letter(b)}열"
+
+
+def _lines_addr(axis: str, a: int, b: int) -> str:
+    return f"{a}:{b}" if axis == "rows" else f"{col_letter(a)}:{col_letter(b)}"
+
+
+def _used_box(ws: Any) -> Optional[Tuple[int, int, int, int]]:
+    """사용 범위 (r1, c1, r2, c2). 빈 시트(A1 하나뿐이고 비었음)는 None."""
+    used = ws.UsedRange
+    r1, c1 = int(used.Row), int(used.Column)
+    r2, c2 = r1 + int(used.Rows.Count) - 1, c1 + int(used.Columns.Count) - 1
+    if (r1, c1, r2, c2) == (1, 1, 1, 1) and not _filled_cells(ws, ws.Cells(1, 1)):
+        return None
+    return r1, c1, r2, c2
+
+
+def _first_constant(ws: Any, r1: int, c1: int, r2: int, c2: int) -> Optional[Tuple[int, int, Any]]:
+    """범위에서 수식이 아닌 값이 있는 첫 칸 (행, 열, 값). 수식 칸은 옮기면 값이 바뀔 수 있어(=ROW()) 기준으로 쓰지 않음."""
+    if r1 > r2 or c1 > c2:
+        return None
+    rng = ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2))
+    vals = off.range_to_matrix(rng.Value)
+    try:
+        forms = off.range_to_matrix(rng.Formula)
+    except Exception:
+        forms = []
+    for i, row in enumerate(vals):
+        for j, v in enumerate(row):
+            if v is None or str(v) == "":
+                continue
+            f = forms[i][j] if i < len(forms) and j < len(forms[i]) else None
+            if isinstance(f, str) and f.startswith("="):
+                continue
+            return r1 + i, c1 + j, v
+    return None
+
+
+def _ref_cell(ws: Any, axis: str, start: int, box: Tuple[int, int, int, int]) -> Optional[Tuple[int, int, Any]]:
+    """start행(열)부터 사용 범위 끝까지에서 확인 기준 칸 (앞쪽 LINES_SCAN행 / 200열만 훑음)."""
+    ur1, uc1, ur2, uc2 = box
+    if axis == "rows":
+        s = max(start, ur1)
+        return _first_constant(ws, s, uc1, min(ur2, s + LINES_SCAN - 1), uc2)
+    s = max(start, uc1)
+    return _first_constant(ws, ur1, s, min(ur2, ur1 + LINES_SCAN - 1), min(uc2, s + 199))
+
+
+def _lines_command(args, axis: str, a: int, b: int, overwrite: bool) -> Dict[str, str]:
+    argv = ["range", "--target", args.target, "--action", args.action, "--range", args.range]
+    if args.sheet:
+        argv += ["--sheet", args.sheet]
+    if args.axis:
+        argv += ["--axis", args.axis]
+    if overwrite:
+        argv.append("--overwrite")
+    what = "넣기" if args.action == "insert" else "지우기"
+    return rt.next_command("excel.py", argv, f"{_lines_text(axis, a, b)} {what} 실행" + (" (값이 있는 칸도 지움)" if overwrite else ""))
+
+
+def range_lines(args) -> Dict[str, Any]:
+    """range --action insert|delete: 행·열 넣기·지우기. 지울 행·열에 값이 있으면 --overwrite가 있어야 지움 (값은 보이지 않음)."""
+    a = args.action
+    sheet, axis, n1, n2 = _lines_spec(args)
+    n = n2 - n1 + 1
+    what = _lines_text(axis, n1, n2)
+    with write_session(args, "range") as t:
+        ws = t.sheet(sheet) if sheet else t.sheet(args.sheet)
+        block = ws.Range(_lines_addr(axis, n1, n2))
+        lines = block.EntireRow if axis == "rows" else block.EntireColumn
+        box = _used_box(ws)
+        filled: List[Tuple[str, Any]] = []
+        if a == "delete" and box is not None:
+            used = t.app.Intersect(block, ws.UsedRange)
+            if used is not None:
+                filled = _filled_cells(ws, used)
+        cells_text = ", ".join(c for c, _ in filled[:5]) + (" ..." if len(filled) > 5 else "")
+        info: Dict[str, Any] = {"sheet": str(ws.Name), "range": _lines_addr(axis, n1, n2), "axis": axis, "count": n}
+        if a == "delete":
+            info["filled_cells"] = len(filled)
+        if args.dry_run:
+            # 바꾸지 않음: 되돌리기 지점도 남지 않음 (t.changed 없음)
+            info["filled_addresses"] = [c for c, _ in filled[:20]]
+            if a == "insert":
+                shift = "아래 행이" if axis == "rows" else "오른쪽 열이"
+                preview = f"미리보기: {what} 앞에 {n}{'행' if axis == 'rows' else '열'}을 넣으면 {shift} {n}칸씩 밀립니다 (바꾸지 않음)"
+            elif filled:
+                preview = f"미리보기: {what}을(를) 지우면 값이 있는 칸 {len(filled)}개가 함께 지워집니다: {cells_text} (바꾸지 않음)"
+            else:
+                preview = f"미리보기: {what}에는 값이 있는 칸이 없습니다. 지우면 {'아래 행이 올라' if axis == 'rows' else '오른쪽 열이 당겨'}옵니다 (바꾸지 않음)"
+            info["next_commands"] = [_lines_command(args, axis, n1, n2, overwrite=bool(filled))]
+            resolved = t.resolved()
+            return rt.ok(TOOL, "range", preview,
+                         "VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면 "
+                         "next_commands[0]을 그대로 실행하세요.", dry_run=True, target_resolved=resolved, **info)
+        if filled and not args.overwrite:
+            head = f"{ws.Name}!{_lines_addr(axis, n1, n2)}({what})을(를) 지우면 값이 있는 칸 {len(filled)}개가 함께 지워집니다: "
+            raise rt.UserDecisionError(
+                head + cells_text + " (값은 보이지 않음)",
+                "지우지 않았습니다. 지워질 칸 수와 위치를 사용자에게 알리고, 사용자가 지워도 된다고 하면 --overwrite를 붙여 다시 "
+                "실행하세요 (미리 보려면 --dry-run).",
+                log_message=f"{_lines_addr(axis, n1, n2)}({what}) 지우기: 값이 있는 칸 {len(filled)}개 ({cells_text})")
+        # 확인 기준: 옮겨질 칸 하나 (넣기는 넣는 자리부터, 지우기는 지운 자리 뒤부터)
+        ref = _ref_cell(ws, axis, n1 if a == "insert" else n2 + 1, box) if box is not None else None
+        if a == "insert":
+            lines.Insert()
+        else:
+            lines.Delete()
+        t.set_focus(sheet=ws)
+        # R1: 사용 범위 끝과 옮겨진 칸을 다시 읽어 확인
+        problems: List[str] = []
+        moved: Optional[Dict[str, str]] = None
+        try:
+            after = _used_box(ws)
+            idx = 2 if axis == "rows" else 3
+            if box is not None:
+                last = box[idx]
+                if a == "insert":
+                    want = last + n if last >= n1 else last
+                    got = after[idx] if after else 0
+                    if got != want:
+                        problems.append(f"사용 범위 끝이 {got}{'행' if axis == 'rows' else '열'} (기대 {want})")
+                else:
+                    got = after[idx] if after else 0
+                    if last > n2 and got != last - n:
+                        problems.append(f"사용 범위 끝이 {got}{'행' if axis == 'rows' else '열'} (기대 {last - n})")
+                    elif last <= n2 and got >= n1:
+                        left = _filled_cells(ws, ws.Range(_lines_addr(axis, n1, n2)))
+                        if left:
+                            problems.append(f"지운 자리에 값이 남은 칸 {len(left)}개")
+            if ref is not None:
+                rr, rc, v = ref
+                d = n if a == "insert" else -n
+                nr, nc = (rr + d, rc) if axis == "rows" else (rr, rc + d)
+                moved = {"from": addr(rr, rc), "to": addr(nr, nc)}
+                if not _same_cell(v, ws.Cells(nr, nc).Value):
+                    problems.append(f"{addr(rr, rc)}의 값이 {addr(nr, nc)}로 옮겨지지 않음")
+        except Exception as e:
+            problems.append(f"결과를 다시 읽지 못함: {type(e).__name__}")
+        if moved:
+            info["moved"] = moved
+        resolved = t.resolved()
+    if a == "insert":
+        preview = f"{info['sheet']}!{what} 앞에 {n}{'행' if axis == 'rows' else '열'} 넣음 ({'아래 행' if axis == 'rows' else '오른쪽 열'}은 {n}칸씩 밀림)"
+    else:
+        preview = f"{info['sheet']}!{what} 지움" + (f" (값이 있던 칸 {len(filled)}개 포함)" if filled else "")
+    if problems:
+        return rt.ok_unverified(TOOL, "range", preview, problems, target_resolved=resolved, **info)
+    return rt.ok(TOOL, "range", preview, "VERIFIED: 사용 범위와 옮겨진 칸을 다시 읽어 확인했습니다. 잘못이면 office.py undo로 되돌립니다.",
+                 verified=True, target_resolved=resolved, **info)
+
+
+# --- 정렬과 --where가 함께 쓰는 열 찾기 ---
+
+_LETTERS = re.compile(r"^[A-Za-z]{1,3}$")
+
+
+def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, what: str = "열") -> Tuple[int, bool]:
+    """--by/--where의 열 -> (범위 안 열 위치 0부터, 머리글 이름으로 찾았는지).
+    머리글(header)이 있으면 이름(대소문자·공백·_- 무시)을 먼저 찾고, 없으면 열 문자(B, AA). 찾지 못하면 [후보] 머리글 이름."""
+    k = str(key).strip()
+    names = [("" if v is None else str(out_value(v))).strip() for v in (header or [])]
+    if header is not None:
+        exact = [i for i, nm in enumerate(names) if nm and nm.casefold() == k.casefold()]
+        if not exact:
+            nk = rt._same_name_key(k)
+            exact = [i for i, nm in enumerate(names) if nm and rt._same_name_key(nm) == nk]
+        if len(exact) == 1:
+            return exact[0], True
+        if len(exact) > 1:
+            raise rt.ambiguous(f"머리글에 '{k}' 열이 여러 개입니다. 열 문자로 고르세요.",
+                               [f"{col_letter(c0 + i)} ({names[i]})" for i in exact],
+                               log_message=f"머리글에 같은 이름의 {what}이 {len(exact)}개")
+    if _LETTERS.match(k):
+        idx = col_number(k) - c0
+        if 0 <= idx < ncols:
+            return idx, False
+        raise rt.InputError(f"{what} {k.upper()}은(는) 범위({col_letter(c0)}~{col_letter(c0 + ncols - 1)}열) 밖입니다.")
+    shown = [nm for nm in names if nm]
+    if header is None or not shown:
+        raise rt.InputError(f"{what} '{k}'을(를) 찾을 수 없습니다. 머리글 행이 없으면 열 문자(예: B)를 쓰세요.")
+    raise rt.ambiguous(f"{what} '{k}'을(를) 머리글에서 찾을 수 없습니다. 머리글 이름이나 열 문자(예: B)를 쓰세요.", shown,
+                       log_message=f"{what} 이름을 머리글에서 찾을 수 없음")
+
+
+def _is_num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_date(v: Any) -> bool:
+    return isinstance(v, (_dt.datetime, _dt.date)) or (hasattr(v, "year") and hasattr(v, "isoformat"))
+
+
+def _looks_header(matrix: List[List[Any]], first_bold: bool) -> bool:
+    """첫 행이 머리글인지 (--header auto, --by가 열 문자일 때): 첫 행 칸이 모두 글자이고,
+    굵게이거나 아래 행에 숫자·날짜가 있는 열이 있으면 머리글."""
+    if len(matrix) < 2:
+        return False
+    first = matrix[0]
+    if not first or any(not isinstance(v, str) or not v.strip() for v in first):
+        return False
+    if first_bold:
+        return True
+    for j in range(len(first)):
+        if any(j < len(r) and (_is_num(r[j]) or _is_date(r[j]) or isinstance(r[j], bool)) for r in matrix[1:]):
+            return True
+    return False
+
+
+def _date_num(v: Any) -> float:
+    d = v if isinstance(v, _dt.datetime) else _dt.datetime(v.year, v.month, v.day)
+    d = d.replace(tzinfo=None)
+    return (d - _dt.datetime(1899, 12, 30)).total_seconds() / 86400.0
+
+
+def _sort_class(v: Any) -> Optional[Tuple[int, Any]]:
+    """Excel 정렬 순서 (오름차순): 숫자·날짜 < 글자(대소문자 무시) < 논리값. 빈 칸은 None (오름·내림 모두 맨 뒤)."""
+    if v is None or (isinstance(v, str) and v == ""):
+        return None
+    if isinstance(v, bool):
+        return (2, v)
+    if _is_num(v):
+        return (0, float(v))
+    if _is_date(v):
+        try:
+            return (0, _date_num(v))
+        except Exception:
+            return (3, str(v))
+    if isinstance(v, str):
+        return (1, re.sub(r"[-']", "", v).casefold())       # Excel은 하이픈·작은따옴표를 무시하고 비교
+    return (3, str(v))
+
+
+def _sort_violation(rows: List[List[Any]], keys: List[Tuple[int, bool]]) -> Optional[int]:
+    """정렬 순서가 맞지 않는 첫 행 위치 (0부터, 다음 행과 비교). 모두 맞으면 None."""
+    for i in range(len(rows) - 1):
+        for k, desc in keys:
+            a = _sort_class(rows[i][k] if k < len(rows[i]) else None)
+            b = _sort_class(rows[i + 1][k] if k < len(rows[i + 1]) else None)
+            if a is None and b is None:
+                continue
+            if a is None:                  # 빈 칸 뒤에 값
+                return i
+            if b is None:
+                break
+            if a == b:
+                continue
+            if (a < b) != (not desc):
+                return i
+            break
+    return None
+
+
+def _row_key(row: List[Any]) -> str:
+    return json.dumps([out_value(v) for v in row], ensure_ascii=False, default=str)
+
+
+def _adjacent_filled(ws: Any, r1: int, r2: int, col: int) -> bool:
+    if col < 1 or col > XL_MAX_COL:
+        return False
+    return bool(_filled_cells(ws, ws.Range(ws.Cells(r1, col), ws.Cells(r2, col))))
+
+
+def range_sort(args) -> Dict[str, Any]:
+    """range --action sort: --by 열(이름 또는 열 문자, 쉼표로 3개까지)로 정렬. 머리글 행은 도구가 정하고 결과에 알림."""
+    if not args.range:
+        raise rt.InputError("range sort에는 --range가 필요합니다 (예: --range A1:E100, 머리글 행 포함).")
+    if not args.by:
+        raise rt.InputError("range sort에는 --by가 필요합니다 (열 이름 또는 열 문자, 예: --by \"금액\", --by \"부서,금액\").")
+    keys = [k.strip() for k in str(args.by).split(",") if k.strip()]
+    if not keys:
+        raise rt.InputError("--by가 비어 있습니다 (예: --by \"금액\").")
+    if len(keys) > SORT_MAX_KEYS:
+        raise rt.InputError(f"정렬 기준(--by)은 {SORT_MAX_KEYS}개까지입니다 (받은 값: {len(keys)}개).")
+    with write_session(args, "range") as t:
+        ws = t.sheet(args.sheet)
+        rng = target_range(t, ws, args.range)
+        ws = rng.Worksheet
+        if "," in str(rng.Address):
+            raise rt.InputError("정렬 범위는 한 영역이어야 합니다 (예: A1:E100).")
+        used = t.app.Intersect(rng, ws.UsedRange)        # 열 전체(A:E)는 사용 범위까지만
+        if used is None:
+            raise rt.InputError(f"{args.range}에 정렬할 값이 없습니다 (사용 범위 밖).")
+        rng = used
+        r1, c1 = int(rng.Row), int(rng.Column)
+        nr, nc = int(rng.Rows.Count), int(rng.Columns.Count)
+        r2, c2 = r1 + nr - 1, c1 + nc - 1
+        where = f"{ws.Name}!{addr(r1, c1, r2, c2)}"
+        if rng.MergeCells is not False:        # 병합 칸이 있으면 True(전부) 또는 None(일부)
+            raise rt.InputError(f"{where}에 병합된 칸이 있어 정렬할 수 없습니다. 병합을 풀어도 되는지 사용자에게 묻고, 원하면 "
+                                f"excel.py range --action unmerge --range {addr(r1, c1, r2, c2)} 뒤에 다시 정렬하세요.")
+        # 표를 가로지르는 범위: 바로 옆 열의 같은 행에 값이 있으면 정렬한 열만 행이 바뀌어 표가 어긋남
+        lo, hi = c1, c2
+        while lo > 1 and hi - lo < 200 and _adjacent_filled(ws, r1, r2, lo - 1):
+            lo -= 1
+        while hi < XL_MAX_COL and hi - lo < 200 and _adjacent_filled(ws, r1, r2, hi + 1):
+            hi += 1
+        if (lo, hi) != (c1, c2):
+            full = addr(r1, lo, r2, hi)
+            raise rt.UserDecisionError(
+                f"정렬 범위 {where} 옆 열({col_letter(lo)}~{col_letter(hi)}열)에도 같은 행의 값이 있습니다. 이 범위만 정렬하면 "
+                f"표의 행이 어긋납니다. 표 전체는 {full}입니다.",
+                f"정렬하지 않았습니다. 사용자에게 표 전체({full})를 정렬할지 묻고, 원하면 --range {full}로 다시 실행하세요.")
+        matrix = off.range_to_matrix(rng.Value)
+        first = matrix[0] if matrix else []
+        header_given = args.header
+        header_row = None if header_given == "no" else first
+        cols: List[Tuple[int, bool]] = []
+        by_name = False
+        for k in keys:
+            idx, named = resolve_column(k, header_row, c1, nc, "정렬 기준 열")
+            by_name = by_name or named
+            cols.append((idx, named))
+        if header_given == "yes" or by_name:
+            has_header = True
+            header_how = "--header yes" if header_given == "yes" else "--by가 머리글 이름"
+        elif header_given == "no":
+            has_header, header_how = False, "--header no"
+        else:
+            try:
+                bold = ws.Range(ws.Cells(r1, c1), ws.Cells(r1, c2)).Font.Bold is True
+            except Exception:
+                bold = False
+            has_header = _looks_header(matrix, bold)
+            header_how = "자동 판단 (" + ("첫 행이 글자 머리글" if has_header else "첫 행도 데이터") + ")"
+        # --desc: 없으면 모두 오름차순, 값 없이 주면 모두 내림차순, 이름을 주면 그 기준만 내림차순
+        desc_keys: Optional[set] = None
+        if args.desc is not None and args.desc != "*":
+            desc_keys = set()
+            for d in [x.strip() for x in str(args.desc).split(",") if x.strip()]:
+                hit = [i for i, k in enumerate(keys) if rt._same_name_key(k) == rt._same_name_key(d)]
+                if not hit:
+                    raise rt.ambiguous(f"--desc '{d}'이(가) --by에 없습니다. --by에 쓴 기준 중에서 고르세요.", keys,
+                                       log_message="--desc 기준이 --by에 없음")
+                desc_keys.update(hit)
+        order = [(idx, args.desc == "*" or (desc_keys is not None and i in desc_keys)) for i, (idx, _) in enumerate(cols)]
+        data = matrix[1:] if has_header else matrix
+        info: Dict[str, Any] = {"sheet": str(ws.Name), "range": addr(r1, c1, r2, c2), "rows": len(data), "header": has_header,
+                                "header_decided_by": header_how,
+                                "keys": [{"column": col_letter(c1 + idx), "name": str(out_value(first[idx])) if has_header else None,
+                                          "order": "desc" if desc else "asc"} for idx, desc in order]}
+        if len(data) < 2 or _sort_violation(data, order) is None:
+            t.set_focus(sheet=ws, changed=False)        # 이미 정렬됨: 바꾸지 않음 (되돌리기 지점을 남기지 않음)
+            info["unchanged"] = True
+            resolved = t.resolved()
+            return rt.ok(TOOL, "range", f"{where}: 이미 정렬되어 있어 바꾸지 않았습니다 ({len(data)}행)",
+                         "VERIFIED: 정렬 순서를 다시 읽어 확인했고 바뀐 것이 없습니다.", target_resolved=resolved, **info)
+        kw: Dict[str, Any] = {}
+        for i, (idx, desc) in enumerate(order, start=1):
+            kw[f"Key{i}"] = ws.Cells(r1, c1 + idx)
+            kw[f"Order{i}"] = XL_DESC if desc else XL_ASC
+        rng.Sort(Header=XL_YES if has_header else XL_NO, MatchCase=False, Orientation=1, **kw)
+        t.set_focus(sheet=ws)
+        # R1: 다시 읽어 행 수·머리글·행 묶음이 그대로이고 기준 열이 정렬됐는지
+        problems: List[str] = []
+        try:
+            got = off.range_to_matrix(ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2)).Value)
+            got_data = got[1:] if has_header else got
+            if len(got) != len(matrix):
+                problems.append(f"행 수가 {len(got)} (정렬 전 {len(matrix)})")
+            elif has_header and _row_key(got[0]) != _row_key(first):
+                problems.append("머리글 행이 바뀜")
+            elif sorted(map(_row_key, got_data)) != sorted(map(_row_key, data)):
+                problems.append("정렬 전과 행 내용이 다름 (행 번호를 쓰는 수식 등)")
+            bad = _sort_violation(got_data, order)
+            if bad is not None:
+                problems.append(f"{r1 + (1 if has_header else 0) + bad}행 근처의 순서가 기준과 다름 (Excel 비교 규칙 차이일 수 있음)")
+        except Exception as e:
+            problems.append(f"결과를 다시 읽지 못함: {type(e).__name__}")
+        resolved = t.resolved()
+    keys_text = ", ".join(f"{k['name'] or k['column']} {'내림차순' if k['order'] == 'desc' else '오름차순'}" for k in info["keys"])
+    preview = f"{where} 정렬: {keys_text} ({len(data)}행, 머리글 {'있음' if has_header else '없음'}: {header_how})"
+    if problems:
+        return rt.ok_unverified(TOOL, "range", preview, problems, target_resolved=resolved, **info)
+    return rt.ok(TOOL, "range", preview, "VERIFIED: 다시 읽어 정렬 순서와 행 수를 확인했습니다. 잘못이면 office.py undo로 되돌립니다.",
+                 verified=True, target_resolved=resolved, **info)
 
 
 # ==============================================================================
@@ -1895,6 +2681,9 @@ def build_cli():
     p.add_argument("--search", help="이 글자가 들어간 셀 찾기")
     p.add_argument("--max-rows", type=int, default=rt.DEFAULT_MAX_ROWS, help=f"표시할 최대 행 수 (기본 {rt.DEFAULT_MAX_ROWS})")
     p.add_argument("--save", nargs="?", const=True, help="CSV로 저장 (경로 생략 시 작업 폴더)")
+    p.add_argument("--formulas", action="store_true",
+                   help="수식 칸 목록도 함께 (formulas: cell, formula, value). --search는 수식 글에서도 찾음")
+    p.add_argument("--where", help="조건에 맞는 행만 (첫 행은 머리글): '금액 >= 100; 부서 = 영업'. 연산자 >= <= > < = != ~(포함)")
 
     p = sub.add_parser("info", help="통합문서 요약")
     common(p)
@@ -1951,16 +2740,24 @@ def build_cli():
     common(p, write=True)
     p.add_argument("--action", "-a", required=True,
                    choices=["autofit", "width", "height", "merge", "unmerge", "freeze", "unfreeze",
-                            "hide", "unhide", "clear", "copy", "move", "border"])
-    p.add_argument("--range", "-r", help="대상 범위 (freeze는 기준 셀, 기본 A2)")
+                            "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort"])
+    p.add_argument("--range", "-r", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
     p.add_argument("--dest", help="copy/move 목적지 (예: B2, 'Sheet2'!A1)")
     p.add_argument("--size", type=float, help="width/height 값")
-    p.add_argument("--axis", choices=["rows", "cols"], help="hide/unhide/autofit 대상 (생략: '5:7'처럼 행 주소면 rows, 아니면 cols)")
+    p.add_argument("--axis", choices=["rows", "cols"],
+                   help="hide/unhide/autofit/insert/delete 대상 (생략: '5:7'처럼 행 주소면 rows. insert/delete에 A5:C7을 주면 필요)")
     p.add_argument("--type", choices=["all", "contents", "formats"], default="all", help="clear 종류")
     p.add_argument("--weight", choices=list(XL_WEIGHT) + ["none"], default="thin", help="border 굵기")
     p.add_argument("--box", action="store_true", help="border: 외곽선만")
+    p.add_argument("--by", help="sort 기준 열: 머리글 이름 또는 열 문자, 여러 개는 쉼표 (예: \"부서,금액\", 3개까지)")
+    p.add_argument("--desc", nargs="?", const="*",
+                   help="sort 내림차순: 값 없이 쓰면 모든 기준, 기준 이름을 주면 그것만 (예: --desc \"금액\")")
+    p.add_argument("--header", choices=["auto", "yes", "no"], default="auto",
+                   help="sort: 첫 행이 머리글인지 (기본 auto: --by가 머리글 이름이면 yes, 열 문자면 도구가 판단)")
+    p.add_argument("--dry-run", action="store_true", help="insert/delete: 바꾸지 않고 넣거나 지울 행·열과 값이 있는 칸 수만 보기")
     p.add_argument("--overwrite", action="store_true",
-                   help="merge: 왼쪽 위 밖의 값을 지우고 병합 / copy·move: 값이 있는 대상 칸을 덮어쓰기 (사용자가 원할 때만)")
+                   help="merge: 왼쪽 위 밖의 값을 지우고 병합 / copy·move: 값이 있는 대상 칸을 덮어쓰기 / "
+                        "delete: 값이 있는 행·열도 지우기 (사용자가 원할 때만)")
 
     p = sub.add_parser("chart", help="차트")
     common(p, write=True)

@@ -14,10 +14,8 @@ spec = importlib.util.spec_from_file_location("grade_opencode", os.path.join(os.
 go = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(go)
 
-REMOTE = os.path.join(os.path.dirname(os.path.dirname(HERE)), "docs", "remote-agent")
 # C:\CLI-dev is copied to the PC without docs/: tests of files under docs/ run only in the repository
 needs_pack = pytest.mark.skipif(not os.path.isdir(go.PACK_DIR), reason="docs/opencode/자동테스트 없음 (저장소에서만)")
-needs_remote = pytest.mark.skipif(not os.path.isdir(REMOTE), reason="docs/remote-agent 없음 (저장소에서만)")
 
 ENC = "$env:PYTHONIOENCODING='utf-8'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; "
 
@@ -492,63 +490,6 @@ def test_judge_uses_completions_api(tmp_path, monkeypatch):
     m1 = next(r for r in rows if r["id"] == "M1")
     assert (m1["점수"], m1["채점 이유"]) == (4, "값은 맞지만 경고가 빠짐")
     assert seen["path"] == "/v1/completions" and seen["body"]["model"] == "LLM42" and "B 16.25" in seen["body"]["prompt"]
-
-
-@needs_remote
-def test_remote_agent_instructions_match_skill_files(tmp_path, monkeypatch):
-    """docs/remote-agent/<tool>_지시문.md는 SKILL.md에서 만든 것: SKILL.md를 고치면 build.py를 다시 실행."""
-    repo = os.path.dirname(os.path.dirname(HERE))
-    spec_ = importlib.util.spec_from_file_location("build", os.path.join(repo, "docs", "remote-agent", "build.py"))
-    build = importlib.util.module_from_spec(spec_)
-    spec_.loader.exec_module(build)
-    monkeypatch.setattr(build, "OUT", str(tmp_path))
-    for tool in ("ml-kit", "office-cli"):
-        with open(os.path.join(repo, "docs", "remote-agent", f"{tool}_지시문.md"), encoding="utf-8") as f, \
-                open(build.convert(tool), encoding="utf-8") as g:
-            assert f.read() == g.read(), f"python docs/remote-agent/build.py 를 실행하세요 ({tool})"
-
-
-def _run_launcher(tmp_path, child_code, encoding="cp949"):
-    """Runs docs/remote-agent/run.py with its WinPython path pointed at this Python and its stdout encoding forced to encoding."""
-    import subprocess
-    repo = os.path.dirname(os.path.dirname(HERE))
-    with open(os.path.join(repo, "docs", "remote-agent", "run.py"), encoding="utf-8") as f:
-        lines = f.read().splitlines()
-    assert lines[1].startswith("PY = r")                         # README: "run.py 2행의 WinPython 경로"
-    lines[1] = f"PY = {sys.executable!r}"
-    launcher = tmp_path / "run.py"
-    launcher.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    child = tmp_path / "child.py"
-    child.write_text(child_code, encoding="utf-8")
-    env = dict(os.environ, PYTHONIOENCODING=encoding)
-    return subprocess.run([sys.executable, str(launcher), str(child)], capture_output=True, env=env, timeout=60)
-
-
-@needs_remote
-def test_remote_launcher_writes_in_pipe_encoding(tmp_path):
-    """The host may decode the launcher's stdout with the system code page (cp949): the bytes follow sys.stdout.encoding,
-    Korean stays readable and a character cp949 lacks becomes '?' instead of an error."""
-    odd = chr(0x2022) + " a " + chr(0x2013) + " b" + chr(0xA0) + "c"     # not in cp949: print() on a cp949 pipe fails
-    code = f"import json\nprint(json.dumps({{'status': 'ok', 'message': '한글 결과', 'preview': {odd!r}}}, ensure_ascii=False))\n"
-    r = _run_launcher(tmp_path, code)
-    assert r.returncode == 0, r.stderr
-    out = r.stdout.decode("cp949").splitlines()
-    payload = json.loads(out[0])
-    assert len(out) == 1 and payload["message"] == "한글 결과" and payload["preview"] == "? a ? b?c"
-    r = _run_launcher(tmp_path, code, encoding="utf-8")
-    out = r.stdout.decode("utf-8").splitlines()
-    assert r.returncode == 0 and len(out) == 1 and json.loads(out[0])["preview"] == odd
-
-
-@needs_remote
-def test_remote_launcher_fallback_json(tmp_path):
-    for code, exit_code in (("import sys\nsys.exit(0)\n", 1), ("print('Traceback: boom')\n", 1),
-                            ("import sys\nsys.stderr.write('x')\nsys.exit(3)\n", 3)):
-        r = _run_launcher(tmp_path, code)
-        out = r.stdout.decode("cp949").splitlines()
-        payload = json.loads(out[0])
-        assert len(out) == 1 and payload["status"] == "error" and payload["agent_directive"].startswith("ERROR:")
-        assert r.returncode == exit_code, code
 
 
 def test_report_table_escapes_pipes(tmp_path, monkeypatch):
