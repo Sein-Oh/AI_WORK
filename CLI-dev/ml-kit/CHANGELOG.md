@@ -8,6 +8,18 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.47] - 2026-11-04
+
+저장소 지침 반영: `--dtypes` 이름 맞추기. 회귀 테스트: `tests/test_train.py` "--dtypes 이름과 형식 확인" (2.9.46에서 2개 모두 실패).
+
+### 수정
+- `--dtypes`의 열 이름이 정확히 같을 때만 적용하고, 다른 이름(`설비코드` / 열 `설비코드(번호)`)과 모르는 형식(`strr`)은 말없이 무시하던 문제.
+  새 `resolve_dtypes`가 열 이름을 `-x`/`-y`와 같은 규칙(`resolve_column_names`: 정확한 이름, 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`)으로 맞추고,
+  형식을 확인합니다: 형식 오타는 `[추천] --dtypes "<고친 전체 값>"`, 비슷한 형식이 없으면 쓸 수 있는 형식(float, int, str, datetime) 안내,
+  `:`가 없으면 형식 없음 안내. 원장의 `dtypes`에는 맞춘 전체 이름과 표준 형식이 남습니다.
+- `int` 형식이 빈 칸을 0으로 채우던 것(`fillna(0)`)을 없앰: 숫자 열로 읽고 빈 칸은 다른 숫자 열처럼 중앙값으로 채웁니다.
+- 지침의 "`[추천]`"은 이름에는 쓰지 않았습니다: 비슷한 이름은 다른 양일 수 있어 `[후보]`(2.9.33 규칙). `[추천]`은 형식 오타에만.
+
 ## [2.9.46] - 2026-11-04
 
 저장소 지침 반영: 빈 결과(R2)와 원장. 회귀 테스트: `tests/test_contract.py` `test_history_without_records_is_ok_zero`,
@@ -1380,7 +1392,6 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
 - [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상
-- [ ] `--dtypes` 컬럼명을 resolve_column_names로 매칭 + `[추천]`, int 변환의 fillna(0) 제거 또는 경고(ml_train.py:237-242)
 - [ ] 예측 `--targets` 불일치(ml_predict.py:904), 보고서 버전 없음(ml_report.py:772)에 `[추천] <후보>`
 - [ ] JSON 목록 상한 + `truncated`: `--history` records, feature_types/features_used, 오류 메시지 컬럼 목록
 - [ ] 로그 태그 정리: `[PROGRESS  5%] [===]` -> `[PROGRESS] 5% ...`(러너 M14 파서 확인), 이력 표 머리 `[STATUS]`, 러너 `[준비]` -> `[INFO]`

@@ -1063,3 +1063,34 @@ def test_importance_failure_is_noted():
                                               notes=notes)
     assert len(ranks) == 2 and notes and "실패" in notes[0]
     assert abs(sum(r["share"] for r in ranks) - 1.0) < 1e-6
+
+
+# ---- --dtypes 이름과 형식 확인 (저장소 지침 반영, 2.9.47) --------------------------------------------------------
+
+
+def test_resolve_dtypes_names_and_types():
+    cols = ["일시", "설비코드(번호)", "온도(°C)", "수율"]
+    assert mt.resolve_dtypes("설비코드:str, 온도:float", cols) == "설비코드(번호):str,온도(°C):float"
+    assert mt.resolve_dtypes("일시:date,수율:int64", cols) == "일시:datetime,수율:int"
+    assert mt.resolve_dtypes(None, cols) is None and mt.resolve_dtypes(" ", cols) is None
+    with pytest.raises(mp.InputError) as e:
+        mt.resolve_dtypes("설비코드:strr,일시:datetime", cols)
+    assert '[추천] --dtypes "설비코드:str,일시:datetime"' in str(e.value)
+    with pytest.raises(mp.InputError) as e:
+        mt.resolve_dtypes("설비코드:텍스트", cols)
+    assert "[추천]" not in str(e.value) and "float, int, str, datetime" in str(e.value)
+    with pytest.raises(mp.InputError) as e:
+        mt.resolve_dtypes("설비코드", cols)
+    assert "형식이 없습니다" in str(e.value)
+    with pytest.raises(mp.ColumnNameError) as e:
+        mt.resolve_dtypes("설비코두:str", cols)                    # a close spelling is asked, never auto-picked
+    assert "[후보]" in str(e.value) and "설비코드(번호)" in str(e.value)
+
+
+def test_train_dtypes_unitless_name_applies(tmp_path):
+    rows = [["설비코드(번호)", "온도", "수율"]] + [[1000 + i % 4, 150 + i, 0.3 * (150 + i) + (i % 4)] for i in range(40)]
+    data = write_rows(str(tmp_path / "d.csv"), rows, [])
+    res = run_tool("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:str")
+    assert "설비코드(번호)" in res["feature_types"]["categorical"], res["feature_types"]    # 2.9.46: ignored (numeric)
+    err = run_fail("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:strr")
+    assert err["agent_directive"].startswith("STOP_RETRY") and '[추천] --dtypes "설비코드:str"' in err["message"], err

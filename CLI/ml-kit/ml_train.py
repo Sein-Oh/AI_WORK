@@ -200,6 +200,45 @@ def load_data_file(
 # 4. Fail-Fast Validation & Type Sanitization
 # ==============================================================================
 
+# --dtypes type words -> the canonical word stored in the ledger and read by infer_feature_schema
+DTYPE_WORDS = {"float": "float", "float64": "float", "num": "float", "int": "int", "int64": "int",
+               "str": "str", "object": "str", "category": "str", "cat": "str", "datetime": "datetime", "date": "datetime"}
+
+
+def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """--dtypes 'col:type,...' with every column name resolved like -x / -y (resolve_column_names: exact name, a unique
+    name without its unit, else [후보]) and every type checked (a misspelt type -> [추천] the corrected --dtypes).
+    Returns the canonical 'full column name:type' list (2.9.47; before, an unknown name or type was silently ignored)."""
+    if not dtypes_arg or not str(dtypes_arg).strip():
+        return None
+    pairs: List[Tuple[str, str]] = []
+    for raw in str(dtypes_arg).split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        if ":" not in raw:
+            raise InputError(f"--dtypes의 '{raw}'에 형식이 없습니다. '<열>:<형식>'으로 쓰십시오 "
+                             f"(형식: float, int, str, datetime. 예: --dtypes \"일시:datetime,설비코드:str\").")
+        name, kind = (x.strip() for x in raw.split(":", 1))
+        pairs.append((name, kind))
+    bad = [(n, k) for n, k in pairs if k.lower() not in DTYPE_WORDS]
+    if bad:
+        import difflib
+        fixed, sure = [], True
+        for n, k in pairs:
+            if k.lower() in DTYPE_WORDS:
+                fixed.append(f"{n}:{k}")
+                continue
+            close = difflib.get_close_matches(k.lower(), list(DTYPE_WORDS), n=1, cutoff=0.6)
+            sure = sure and bool(close)
+            fixed.append(f"{n}:{DTYPE_WORDS[close[0]]}" if close else f"{n}:{k}")
+        rec = f" [추천] --dtypes \"{','.join(fixed)}\"" if sure else ""
+        raise InputError(f"--dtypes의 형식 {[k for _, k in bad]}을(를) 알 수 없습니다. 쓸 수 있는 형식: float, int, str, datetime.{rec}")
+    names, _ = resolve_column_names([n for n, _ in pairs], columns, "--dtypes 열", layout=layout)
+    out = dict(zip(names, (DTYPE_WORDS[k.lower()] for _, k in pairs)))
+    return ",".join(f"{c}:{k}" for c, k in out.items())
+
+
 def validate_and_sanitize_data(
     df: pd.DataFrame,
     feature_names: List[str],
@@ -250,7 +289,8 @@ def validate_and_sanitize_data(
                         if c_type in ["float", "float64"]:
                             df_clean[c_name] = coerce_numeric(df_clean[c_name]).astype(float)
                         elif c_type in ["int", "int64"]:
-                            df_clean[c_name] = coerce_numeric(df_clean[c_name]).fillna(0).astype(int)
+                            # a number column (blank cells stay blank and are imputed like any number: never 0)
+                            df_clean[c_name] = coerce_numeric(df_clean[c_name]).astype(float)
                         elif c_type in ["str", "object"]:
                             df_clean[c_name] = df_clean[c_name].astype(str)
                         elif c_type in ["datetime", "date"]:
@@ -1508,7 +1548,8 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
         raise InputError("학습에 투입할 독립변수 목록(-x, --features)이 지정되지 않았거나 파일이 비어 있습니다.")
     if not target_names:
         raise InputError("예측할 종속변수 목록(-y, --targets)이 지정되지 않았거나 파일이 비어 있습니다.")
-    dtypes = group.get("dtypes")
+    # --dtypes names resolved like -x / -y, types checked (the canonical list is what the ledger keeps)
+    dtypes = resolve_dtypes(group.get("dtypes"), [str(c) for c in df_raw.columns], dict(df_raw.attrs))
 
     # Fail-Fast Validation & Type Sanitization
     log_progress(10, "컬럼 유효성 검증 및 타입 정제 중...")
