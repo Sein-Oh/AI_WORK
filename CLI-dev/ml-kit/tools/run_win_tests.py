@@ -349,7 +349,7 @@ def test_all(ctx, only):
         xl = Office("Excel.Application")
         try:
             wb = xl.app.Workbooks.Open(out, ReadOnly=False)            # 결과 CSV를 Excel이 잠금
-            d, c, o, e = run_tool("ml_predict.py", "-m", vd, "-f", s["xlsx"], *xlsx_layout, "--out", out, "--overwrite")
+            d, c, o, e = run_tool("ml_predict.py", "-m", vd, "-f", s["xlsx"], *xlsx_layout, "--save", out, "--overwrite")
             wb.Close(SaveChanges=False)
         finally:
             xl.quit()

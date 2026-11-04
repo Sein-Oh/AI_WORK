@@ -439,7 +439,7 @@ def test_inline_exact_keys_ok_and_file_extra_columns_kept(target_models):
     ok_res(res, proc)
     f = write_rows(os.path.join(str(target_models["tmp"]), "in_extra.csv"),
                [["번호", "온도(°C)", "압력(bar)", "속도", "습도"], [1, 180, 3, 45, 50], [2, 182, 3.1, 46, 51]], [])
-    proc, res = run_raw("ml_predict.py", "-m", target_models["p1"], "-f", f, "-o", str(target_models["tmp"] / "in_extra_out.csv"))
+    proc, res = run_raw("ml_predict.py", "-m", target_models["p1"], "-f", f, "--save", str(target_models["tmp"] / "in_extra_out.csv"))
     ok_res(res, proc)
 
 
@@ -455,7 +455,7 @@ def test_find_and_map_inline_unknown_key_refused(target_models):
 
 def test_one_name_for_two_inputs(humid_data):
     f = write_rows(os.path.join(str(humid_data["tmp"]), "sol.csv"), [["온도(°C)", "압력(bar)", "솔도"], [180, 3, 45]], [])
-    proc, res = run_raw("ml_predict.py", "-m", humid_data["pm"], "-f", f, "-o", str(humid_data["tmp"] / "sol_out.csv"))
+    proc, res = run_raw("ml_predict.py", "-m", humid_data["pm"], "-f", f, "--save", str(humid_data["tmp"] / "sol_out.csv"))
     msg = stop_msg(res, proc)
     assert "[추천]" not in msg and msg.count("[후보]") == 1 and "[후보] 속도, 습도" in msg, msg
     hints = mp._typo_hints(["속도", "습도"], ["온도(°C)", "솔도"], ["온도(°C)", "속도", "습도"], False)

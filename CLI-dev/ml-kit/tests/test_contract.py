@@ -165,7 +165,7 @@ def test_predict_extrapolation_flag(trained):
 def test_predict_batch(trained):
     work, data, _ = trained
     out = work / "pred.csv"
-    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-f", data, "-o", str(out))
+    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-f", data, "--save", str(out))
     assert out.is_file() and payload["total_rows"] == 120
 
 
@@ -204,7 +204,7 @@ def test_report_without_docx_returns_json(trained):
 def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
-    payload = run_tool("ml_report.py", "-d", str(work / "sample_ml_data"), "-t", TARGET, "-o", str(out))
+    payload = run_tool("ml_report.py", "-d", str(work / "sample_ml_data"), "-y", TARGET, "--save", str(out))
     assert out.is_file() and payload["best_version"]
 
 
@@ -215,8 +215,8 @@ def test_report_version_without_v_and_jsonl_only(trained):
     root = work / "sample_ml_data"
     (root / "history.json").rename(root / "history.json.bak")
     try:
-        payload = run_tool("ml_report.py", "-d", str(root), "-t", "생산효율", "-v", "1",
-                           "-o", str(work / "r_v1.docx"))
+        payload = run_tool("ml_report.py", "-d", str(root), "-y", "생산효율", "-v", "1",
+                           "--save", str(work / "r_v1.docx"))
         assert payload["best_version"] == "v1"
     finally:
         (root / "history.json.bak").rename(root / "history.json")
@@ -545,3 +545,23 @@ def test_stderr_uses_only_shared_log_tags(trained, tmp_path):
     prog = [ln for ln in proc.stderr.splitlines() if ln.startswith("[PROGRESS]")]
     assert prog and all(re.match(r"\[PROGRESS\] \d{1,3}% \S", ln) for ln in prog), prog[:3]
     assert "[STATUS] 실험 이력" in hist.stderr
+
+
+# ---- 인자 이름 통일 (AGENTS.md ACI 설계 권장 5, 2.9.51): 저장은 --save, 타겟은 --targets/-y. 옛 이름은 받지 않음 (베타) ----
+
+
+@pytest.mark.parametrize("script,args", [
+    ("ml_predict.py", ["-m", "x", "-i", "a=1", "--out", "p.csv"]), ("ml_predict.py", ["-m", "x", "-i", "a=1", "-o", "p.csv"]),
+    ("ml_report.py", ["-m", "x", "--out", "r.docx"]), ("ml_report.py", ["-m", "x", "-o", "r.docx"]),
+    ("ml_report.py", ["-m", "x", "-t", "y"])])        # '--target' is argparse's abbreviation of --targets (same meaning)
+def test_old_option_names_are_argument_errors(data_dir, script, args):
+    proc, res = run_raw(script, *args)
+    assert proc.returncode == 2 and res["status"] == "error", res              # 2.9.50: accepted
+
+
+@needs_docx
+def test_report_targets_and_save(trained):
+    work, _, _ = trained
+    out = work / "r_targets.docx"
+    payload = run_tool("ml_report.py", "-d", str(work / "sample_ml_data"), "--targets", TARGET, "--save", str(out))
+    assert out.is_file() and payload["report_file"] == str(out), payload

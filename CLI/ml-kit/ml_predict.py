@@ -57,7 +57,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.50"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.51"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1824,7 +1824,7 @@ def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
 
 
 LAYOUT_OPTS = {"--header-row": "header_row", "--unit-row": "unit_row", "--data-row": "data_row"}
-PATH_OPTS = ("-f", "--file", "-m", "--model", "--meta", "-o", "--out", "--save", "--points", "-d", "--data-dir")
+PATH_OPTS = ("-f", "--file", "-m", "--model", "--meta", "--save", "--points", "-d", "--data-dir")
 
 
 def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
@@ -3229,8 +3229,8 @@ def _predict_command(args: argparse.Namespace, layout: str = "", inline: Optiona
         parts += ["-f", quote_arg(os.path.abspath(args.file))]
     if layout:
         parts.append(layout.strip())
-    if getattr(args, "out", None):
-        parts += ["-o", quote_arg(os.path.abspath(args.out))]
+    if getattr(args, "save", None):
+        parts += ["--save", quote_arg(os.path.abspath(args.save))]
     if getattr(args, "encoding", None):
         parts += ["--encoding", quote_arg(args.encoding)]
     if getattr(args, "overwrite", False):
@@ -3436,12 +3436,12 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         filter_targets=filter_targets
     )
 
-    # -o format is checked before any work: only CSV and Excel can be written and read back (R1)
-    if args.out:
-        out_ext = os.path.splitext(args.out)[1].lower()
+    # --save format is checked before any work: only CSV and Excel can be written and read back (R1)
+    if args.save:
+        out_ext = os.path.splitext(args.save)[1].lower()
         if out_ext not in (".csv", ".xlsx", ".xls"):
-            raise InputError(f"결과 파일(-o)은 .csv 또는 .xlsx만 저장합니다: '{os.path.basename(args.out)}'. "
-                             f"[추천] {os.path.splitext(args.out)[0]}.csv")
+            raise InputError(f"결과 파일(--save)은 .csv 또는 .xlsx만 저장합니다: '{os.path.basename(args.save)}'. "
+                             f"[추천] {os.path.splitext(args.save)[0]}.csv")
 
     # 2. Resolve Input Data (Batch File or Inline Input)
     file_warnings: List[str] = []
@@ -3681,7 +3681,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
     # 4. Save Output if Requested or File-based
     inline_truncated = is_inline and len(df_result) > INLINE_SHOW_MAX
-    out_path = args.out
+    out_path = args.save
     saved_file = None
     if out_path:
         saved_file = os.path.abspath(out_path)
@@ -4115,7 +4115,7 @@ def main():
         help="단일/인라인 추론용 입력 데이터 ('k1=v1,k2=v2' 형식, JSON 문자열, 또는 .json 파일 경로)"
     )
     parser.add_argument(
-        "--out", "-o",
+        "--save",
         help="예측 결과 저장 파일 경로 (.csv, .xlsx, 생략 시 원본 파일 위치에 pred_*.csv 자동 생성)"
     )
     parser.add_argument("--header-row", type=int, help="컬럼명 헤더 행 번호 (1-based, 미지정 시 상단 빈 행 자동 건너뜀)")
@@ -4123,7 +4123,7 @@ def main():
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
     parser.add_argument("--encoding", help="결과 CSV 저장 인코딩 (기본값: Windows Excel 최적화 cp949)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="--out 파일이 이미 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
+                        help="--save 파일이 이미 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--find", help="모델 반대 찾기 목표 ('생산효율=50', 숫자 타겟). --vary와 함께")
     parser.add_argument("--vary", help="반대 찾기에서 값을 찾을 숫자 입력 (예: 반응온도). 나머지 입력은 -i로 고정, 생략하면 학습 중앙값")
 
@@ -4132,8 +4132,8 @@ def main():
     if args.find or args.vary:
         if not (args.find and args.vary):
             parser.error("모델 반대 찾기는 --find와 --vary를 함께 주어야 합니다.")
-        if args.file or args.targets or args.out:
-            parser.error("반대 찾기(--find)에는 -f, -y, -o를 쓰지 않습니다.")
+        if args.file or args.targets or args.save:
+            parser.error("반대 찾기(--find)에는 -f, -y, --save를 쓰지 않습니다.")
         run_cli(lambda: execute_find(args), hint="Check the target name and the input names in SKILL.md.")
         return
     if not args.file and not args.input:

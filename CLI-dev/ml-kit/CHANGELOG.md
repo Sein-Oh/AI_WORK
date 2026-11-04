@@ -8,6 +8,19 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.51] - 2026-11-04
+
+저장소 지침 반영: 인자 이름 통일 (AGENTS.md ACI 설계 권장 5, 베타라 별칭 없이 바꿈). 회귀 테스트: `tests/test_contract.py`
+`test_old_option_names_are_argument_errors`, `test_report_targets_and_save` (2.9.50에서 6개 중 5개 실패), `tests/test_skill_docs.py`.
+
+### 바뀐 인자 (옛 이름은 인자 오류, exit 2)
+- 결과 저장: `ml_predict.py --out`/`-o`, `ml_report.py --out`/`-o` -> `--save` (`ml_map.py`, `ml_export.py`와 같음, office-cli도 `--save`).
+  예측의 확장자 오류 문구도 "결과 파일(--save)", `[추천] <이름>.csv`는 `--save`의 값입니다.
+- 보고서 타겟: `ml_report.py --target`/`-t` -> `--targets`/`-y` (학습·예측·성능예측표·표 보간과 같음). `--target`은 argparse가 `--targets`의
+  줄임으로 받습니다(같은 뜻, 따로 만든 별칭 아님).
+- SKILL.md(예측 엑셀 저장 `--save`), README 옵션 표·예시, 테스트, 실기 러너(`tools/run_win_tests.py` M5)를 함께 고침.
+  `agent_scenarios.yaml`과 `docs/opencode`에는 바뀐 옵션을 쓰는 곳이 없습니다.
+
 ## [2.9.50] - 2026-11-04
 
 저장소 지침 반영: 로그 태그. 회귀 테스트: `tests/test_contract.py` `test_stderr_uses_only_shared_log_tags` (2.9.49에서 실패).
@@ -1426,5 +1439,4 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
 - [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상
-- [ ] 인자 이름 통일: ml_report `--targets`(다른 도구와 같게), 저장 `--out` -> `--save` (베타라 별칭 없이 바꿈)
 - [ ] 테스트 보강: exit 130 롤백, 성공 경로 `VERIFIED:` 검사 확대, 빈 데이터 (덮어쓰기 차단은 2.3.0)

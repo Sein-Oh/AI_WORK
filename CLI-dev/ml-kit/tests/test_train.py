@@ -141,7 +141,7 @@ def test_xlsx_layout_multi_target_and_excel_dates(tmp_path):
     assert "측정일" in payload["feature_types"]["datetime"]
     out = tmp_path / "pred.xlsx"
     pred = run_tool("ml_predict.py", "-m", payload["version_dir"], "-f", str(p),
-                    "--header-row", "3", "--unit-row", "4", "-o", str(out))
+                    "--header-row", "3", "--unit-row", "4", "--save", str(out))
     assert set(pred["targets_predicted"]) == {"생산효율(%)", "인장강도(MPa)"}
     df = pd.read_excel(out)
     assert {"pred_생산효율(%)", "pred_lo_생산효율(%)", "pred_hi_인장강도(MPa)"} <= set(df.columns)
@@ -251,7 +251,7 @@ def test_multiclass_predict_batch_columns(multiclass):
     import pandas as pd
     work, data, _ = multiclass
     out = work / "pred.csv"
-    run_tool("ml_predict.py", "-m", str(work / "proc_ml_data" / "v1"), "-f", data, "-o", str(out))
+    run_tool("ml_predict.py", "-m", str(work / "proc_ml_data" / "v1"), "-f", data, "--save", str(out))
     df = pd.read_csv(out, encoding="cp949")
     for col in ["pred_품질등급", "conf_품질등급", "proba_품질등급_A등급", "proba_품질등급_C등급"]:
         assert col in df.columns
@@ -306,7 +306,7 @@ def test_report_supports_classification(multiclass):
     pytest.importorskip("docx")
     pytest.importorskip("matplotlib")
     work, _, _ = multiclass
-    payload = run_tool("ml_report.py", "-d", str(work / "proc_ml_data"), "-t", "품질등급", "-v", "v1")
+    payload = run_tool("ml_report.py", "-d", str(work / "proc_ml_data"), "-y", "품질등급", "-v", "v1")
     assert payload["task"] == "classification" and payload["targets"] == ["품질등급"]
 
 
@@ -747,7 +747,7 @@ def test_history_best_version_covers_every_target(tmp_path):
     hist = run_tool("ml_train.py", "-f", data, "--history")
     assert hist["best_version"] == "v1" and hist["best_version_dir"] == v1["version_dir"]   # 2.9.14: v2
     assert hist["best_by_task"]["regression"]["complete"] is True and "best_version_note" not in hist
-    rep = run_tool("ml_report.py", "-d", os.path.dirname(v1["version_dir"]), "-o", str(tmp_path / "r.docx"))
+    rep = run_tool("ml_report.py", "-d", os.path.dirname(v1["version_dir"]), "--save", str(tmp_path / "r.docx"))
     assert rep["version"] == "v1"                                                  # 2.9.14: v2
 
 

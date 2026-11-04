@@ -934,7 +934,7 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
     if target_filter:
         # like ml_predict -y: exact name, then a unique name without its unit ('수율' for '수율(1차)' and '수율(최종)'
         # -> [후보]; an exact '수율(1차)' takes that one only)
-        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(--target)")[0])
+        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(-y)")[0])
         names = [t for t in names if t in wanted]
 
     excluded_all = None
@@ -1436,7 +1436,7 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
                 overwrite: bool = False) -> Optional[Dict[str, Any]]:
     """2.9.2: the report and the performance calculator (ml_export.py) are made as a set (regression versions only).
     Made BEFORE the Word report so the report can state the calculator's agreement with the model (2.9.4).
-    targets: the report's -t targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
+    targets: the report's -y targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
     A failure never fails the report: {"note": ...}."""
     if task != "regression" or os.environ.get("ML_KIT_SKIP_EXPORT") == "1":
         return None
@@ -1503,15 +1503,15 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
         if err is not None:
             raise MissingLibraryError(pkg, "보고서(Word)")
     target_filter = None
-    if args.target and args.target.strip().lower() != "all":
-        target_filter = [t.strip() for t in args.target.split(",") if t.strip()]
+    if args.targets and args.targets.strip().lower() != "all":
+        target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
     if getattr(args, "file", None) and not args.model and not args.data_dir:
         return execute_best_report(args, target_filter)
     vdir = resolve_version_dir(args)
     ctx = load_version(vdir, target_filter)
     export = make_export(vdir, ctx["record"]["task"], getattr(args, "title", None),
                          [t["name"] for t in ctx["targets"]] if target_filter else None, overwrite=args.overwrite)
-    result = build_report(ctx, parse_slots(args.slots), args.out, overwrite=args.overwrite, export=export)
+    result = build_report(ctx, parse_slots(args.slots), args.save, overwrite=args.overwrite, export=export)
     attach_export(result, export)
     return result
 
@@ -1546,7 +1546,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
     picked = None
     if target_filter:   # resolved once over the targets of all best versions ('수율' for two of them -> [후보])
         all_names = list(dict.fromkeys(str(t) for bv in versions for t in bv["targets"]))
-        picked = resolve_column_names(target_filter, all_names, "타겟(--target)")[0]
+        picked = resolve_column_names(target_filter, all_names, "타겟(-y)")[0]
     for bv in versions:
         flt = None
         if picked is not None:
@@ -1558,7 +1558,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                           [t["name"] for t in ctx["targets"]] if flt else None, overwrite=args.overwrite)
               if export is None else None)
         export = export or ex
-        reports.append(build_report(ctx, slots, _numbered_out(args.out, bv["version"], len(versions) > 1),
+        reports.append(build_report(ctx, slots, _numbered_out(args.save, bv["version"], len(versions) > 1),
                                     overwrite=args.overwrite, export=ex))
     if not reports:
         all_targets = [t for bv in versions for t in bv["targets"]]
@@ -1610,8 +1610,8 @@ def main():
     parser.add_argument("--data-dir", "-d", dest="data_dir",
                         help="데이터 폴더 (<파일명>_ml_data). -v 생략 시 모든 타겟의 최고가 있는 버전 (--history의 best_version)")
     parser.add_argument("--version", "-v", help="-d와 함께 쓸 버전 (예: v2 또는 2)")
-    parser.add_argument("--target", "-t", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
-    parser.add_argument("--out", "-o", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
+    parser.add_argument("--targets", "-y", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
+    parser.add_argument("--save", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--slots", help="소견 덮어쓰기 JSON 파일 또는 문자열: summary, data, performance, features, lineage, "

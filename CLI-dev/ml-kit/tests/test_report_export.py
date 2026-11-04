@@ -71,7 +71,7 @@ def regression_report(tmp_path_factory):
                                  "targets": {"생산효율(%)": {"features": "슬롯 피처 소견"}}}, ensure_ascii=False),
                      encoding="utf-8")
     out = work / "report.docx"
-    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "--slots", str(slots), "-o", str(out))
+    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "--slots", str(slots), "--save", str(out))
     return work, tr, payload, out
 
 
@@ -146,7 +146,7 @@ def test_data_dir_mode_picks_best_version_and_slots(regression_report):
     best = max(recs, key=lambda r: r["mean_val_score"])["version"]
     slots = json.dumps({"performance": "직접 쓴 성능 소견", "operation": "직접 쓴 운영 소견"}, ensure_ascii=False)
     out = work / "slots.docx"
-    payload = run_tool("ml_report.py", "-d", root, "--slots", slots, "-o", str(out))
+    payload = run_tool("ml_report.py", "-d", root, "--slots", slots, "--save", str(out))
     assert payload["best_version"] == payload["version"] == best
     text = _all_text(docx.Document(str(out)))
     assert "직접 쓴 성능 소견" in text and "직접 쓴 운영 소견" in text
@@ -172,7 +172,7 @@ def test_derived_features_are_shown_with_formulas(tmp_path):
     data = make_sample(str(tmp_path / "d.csv"))
     tr = run_tool("ml_train.py", "-f", data, "-x", "반응온도,압축압력,촉매비율,수분함량", "-y", "생산효율",
                   "--eval", "온도x수분 = 반응온도 * 수분함량; 촉매제곱 = 촉매비율 ** 2; 압력비 = 압축압력 / 촉매비율")
-    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "-o", str(tmp_path / "r.docx"))
+    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "--save", str(tmp_path / "r.docx"))
     text = _all_text(docx.Document(payload["report_file"]))
     assert "온도x수분 = 반응온도(°C) × 수분함량(%)" in text
     assert "촉매제곱 = 촉매비율(wt%)²" in text and "압력비 = 압축압력(bar) ÷ 촉매비율(wt%)" in text
@@ -202,7 +202,7 @@ def test_report_docx_follows_schema_for_word_2007(tmp_path):
     data = tmp_path / "d.csv"
     make_sample(str(data))
     tr = run_tool("ml_train.py", "-f", str(data), "-x", "반응온도,촉매비율,수분함량", "-y", "생산효율")
-    rep = run_tool("ml_report.py", "-d", tr["data_root"], "--out", str(tmp_path / "r.docx"))
+    rep = run_tool("ml_report.py", "-d", tr["data_root"], "--save", str(tmp_path / "r.docx"))
     body = docx.Document(rep["report_file"]).element.body
 
     assert not list(body.iter(qn("w:start"))) and not list(body.iter(qn("w:end")))   # Word 2010+ names
@@ -392,7 +392,7 @@ def test_report_succeeds_with_damaged_templates(tmp_path):
     bad = make_damaged_default(tmp_path / "default.docx")
     out = tmp_path / "report.docx"
     proc = subprocess.run(
-        [sys.executable, "-c", RUNNER, KIT, bad, str(tmp_path / "없는폴더"), "-m", tr["version_dir"], "-o", str(out)],
+        [sys.executable, "-c", RUNNER, KIT, bad, str(tmp_path / "없는폴더"), "-m", tr["version_dir"], "--save", str(out)],
         capture_output=True, text=True, encoding="utf-8", timeout=600,
     )
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]

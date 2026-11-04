@@ -178,13 +178,13 @@ def test_predict_out_is_not_overwritten(work):
     vd = work["first"]["version_dir"]
     out = work["dir"] / "pred.csv"
     out.write_text("사용자 결과\n", encoding="cp949")
-    p = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--out", str(out))
+    p = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--save", str(out))
     assert os.path.normcase(p["output_file"]) != os.path.normcase(str(out))
     assert os.path.basename(p["output_file"]).startswith("pred_") and os.path.exists(p["output_file"])
     assert out.read_text(encoding="cp949") == "사용자 결과\n"
     assert any("pred.csv 이미 있음" in x for x in p["recovered"])
 
-    p2 = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--out", str(out), "--overwrite")
+    p2 = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--save", str(out), "--overwrite")
     assert os.path.normcase(p2["output_file"]) == os.path.normcase(str(out)) and "recovered" not in p2
     assert out.read_text(encoding="cp949") != "사용자 결과\n"
 

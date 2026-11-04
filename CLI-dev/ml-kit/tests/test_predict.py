@@ -161,7 +161,7 @@ def test_prediction_with_named_empty_column_imputes(coded, tmp_path):
     df["b"] = ""
     p = tmp_path / "blank_b.csv"
     df.to_csv(p, index=False)
-    res = run_tool("ml_predict.py", "-m", coded["v"], "-f", str(p), "-o", str(tmp_path / "out.csv"))
+    res = run_tool("ml_predict.py", "-m", coded["v"], "-f", str(p), "--save", str(tmp_path / "out.csv"))
     assert res["missing_input_warning"] is True and res["missing_input_counts"]["b"] == 10
 
 
@@ -193,7 +193,7 @@ def test_truncated_inline_has_full_result_file(tiny, tmp_path):
 
 
 def test_out_extension_checked_first(coded, tmp_path):
-    bad = run_fail("ml_predict.py", "-m", coded["v"], "-f", coded["file"], "-o", str(tmp_path / "r.txt"))
+    bad = run_fail("ml_predict.py", "-m", coded["v"], "-f", coded["file"], "--save", str(tmp_path / "r.txt"))
     assert bad["agent_directive"].startswith("STOP_RETRY") and "[추천]" in bad["message"]
     assert bad["message"].rstrip().endswith("r.csv") and not (tmp_path / "r.txt").exists()
 
