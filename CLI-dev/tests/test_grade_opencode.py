@@ -715,7 +715,12 @@ OFFICE_CASES = {
            [([(CHECK, OK), (MEMO + " --dry-run", OK), (MEMO, OK), O1_ANSWER], "금지 명령"),        # 확인 없이 실제로 담
             ([(CHECK, OK), (MEMO, OK), O1_ANSWER], "--dry-run"),                                   # 미리보기 없이 바로 담
             ([(CHECK, OK), "불일치 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "--dry-run"),   # 메모 미리보기 없음
-            ([(f'{RD} search --query "정격 전압" --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER], "check")]),
+            ([(f'{RD} search --query "정격 전압" --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER], "check"),
+            # 회귀: ;로 이은 다른 명령의 --dry-run을 보고 실제 달기를 놓침
+            ([(CHECK, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O1_ANSWER], "금지 명령"),
+            # 회귀: 메모 글(--text) 안의 "--dry-run" 글자를 옵션으로 봄
+            ([(CHECK, OK), (f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --range C5 --text "불일치 (--dry-run 아님)"', OK),
+              O1_ANSWER], "금지 명령")]),
     "O2": ([[(f'{EX} write --target "{G}\\단위표.xlsx" --cells "C6=ft; C7=℃"', OK), "C6에 ft, C7에 ℃를 넣었습니다."],
             [(f"{EX} write -t '{G}\\단위표.xlsx' --cells 'C6 = ft;C7 = ℃'", OK), "C6, C7에 썼습니다."]],
            [([(f'{EX} write --target "{G}\\단위표.xlsx" --cell C6 --text ft', ARG_ERR),
@@ -738,13 +743,21 @@ OFFICE_CASES = {
               (f'{WD} write --target "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정"', OK), "덧붙였습니다."], "없는 명령"),
             ([(f'{OF} transfer --from word --to word --text "다음 주 계획: 시험 장비 교정"', ARG_ERR), "추가하지 못했습니다."], "없는 명령"),
             ([(f'{WD} write --target "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정" --pos replace', OK), "넣었습니다."],
-             "금지 명령")]),
+             "금지 명령"),
+            # 회귀: 앵커 뒤에 넣기는 문서 중간 (요청은 문서 끝)
+            ([(f'{WD} write --target "{G}\\주간보고.docx" --anchor "주간 보고" --pos after --text "다음 주 계획: 시험 장비 교정"', OK),
+              "덧붙였습니다."], "금지 명령"),
+            # 문서 자체를 --file로 줌 (--target이 아님)
+            ([(f'{WD} write --file "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정"', OK), "덧붙였습니다."], "word")]),
     "O5": ([[(f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv" --dry-run', OK),
              (f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv"', OK), "업체명 한빛전자, 시험일 2026-11-04를 채웠습니다."]],
            [([(f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv" --dry-run', OK), "미리보기입니다. 채울까요?"], "fill"),
             ([(f'{WD} replace --target "{G}\\성적서양식.docx" --find "{{{{업체명}}}}" --replace 한빛전자', OK), "채웠습니다."], "fill"),
             ([(f'{WD} fill --target "{G}\\성적서양식.docx" --text "업체명=한빛전자"', ARG_ERR),
-              (f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv"', OK), "한빛전자로 채웠습니다."], "금지 명령")]),
+              (f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv"', OK), "한빛전자로 채웠습니다."], "금지 명령"),
+            # 회귀: 다른 문서를 채우고 값 파일 이름에 양식 이름이 들어 있음
+            ([(f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv" --dry-run', OK),
+              (f'{WD} fill --target "{G}\\다른.docx" --file "{G}\\성적서양식.docx_values.csv"', OK), "한빛전자로 채웠습니다."], "fill")]),
 }
 
 
@@ -770,6 +783,13 @@ def test_office_scenarios_pass_and_fail(tmp_path):
         for rec, why in bads:
             row = _office_run(tmp_path, sid, rec)
             assert row["결과"] == "실패" and why in row["실패"], (sid, rec, row["실패"])
+
+
+def test_command_segments_split_outside_quotes():
+    assert go.command_segments('a --cells "C6=ft; C7=x"; b --dry-run && c | d') == [
+        'a --cells "C6=ft; C7=x"', "b --dry-run", "c", "d"]
+    assert go.command_segments("a --cells 'C6 = ft;C7 = x'") == ["a --cells 'C6 = ft;C7 = x'"]
+    assert go.cmd_hit(r"comment\b(?![^\n]*--dry-run)", "comment --add; other --dry-run")
 
 
 def test_office_scenarios_judge_by_command_not_skill_name():

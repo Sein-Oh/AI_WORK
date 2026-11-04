@@ -233,6 +233,20 @@ def final_answer(turn, sc=None):
     return "\n".join(t for t, at in zip(turn["texts"], turn["text_at"]) if at == last)
 
 
+_SEGMENT = re.compile(r"""(?:"[^"\n]*"?|'[^'\n]*'?|[^;&|\n"'])+""")
+
+
+def command_segments(cmd):
+    """One shell line -> the commands joined by ; && || | or newlines (separators inside quotes are kept:
+    --cells "C6=ft; C7=ft" stays one command). Scenario commands/forbid regexes are matched per command, so a
+    lookahead such as (?![^\n]*--dry-run) does not see another command's --dry-run."""
+    return [m.group(0).strip() for m in _SEGMENT.finditer(str(cmd)) if m.group(0).strip()] or [str(cmd)]
+
+
+def cmd_hit(rx, cmd):
+    return any(re.search(rx, seg, re.I) for seg in command_segments(cmd))
+
+
 def bash_commands(turn):
     return [(i, ENC_PREFIX.sub("", t["command"])) for i, t in enumerate(turn["tools"]) if t["tool"] == "bash"]
 
@@ -336,7 +350,7 @@ def grade_turn(sc, turn, rules):
     answer = final_answer(turn, sc)
     out = []
     for rx in sc.get("commands", []):
-        hit = any(re.search(rx, c, re.I) for c in cmds)
+        hit = any(cmd_hit(rx, c) for c in cmds)
         out.append((f"명령: {rx}", hit, "" if hit else "맞는 명령 없음"))
     if sc.get("tool_ok"):
         runs = [t for t in turn["tools"] if t["tool"] == "bash" and re.search(sc["tool_ok"], t["command"], re.I)]
@@ -354,7 +368,7 @@ def grade_turn(sc, turn, rules):
         bad = re.search(rx, answer, re.I | re.M)
         out.append((f"답변에 없어야 함: {rx}", not bad, bad.group(0)[:100] if bad else ""))
     for rx in sc.get("forbid", []):
-        bad = [c for c in cmds if re.search(rx, c, re.I)]
+        bad = [c for c in cmds if cmd_hit(rx, c)]
         out.append((f"금지 명령: {rx}", not bad, "; ".join(bad)[:300]))
 
     allow = set(sc.get("allow", []))

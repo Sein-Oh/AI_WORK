@@ -30,6 +30,12 @@
   `excel.py check`의 `판단필요`는 그대로. office-spec 스킬과 전역 지침 `CLI-dev/opencode/AGENTS.md`의 match_mode 문구를 맞춤.
   회귀 테스트: `tests/test_reader.py` `test_search_fuzzy_daegi_current_is_not_power`, `test_fuzzy_never_matches_different_korean_terms`.
 
+### 개발 도구
+- Gemma 종합 테스트 채점(`CLI-dev/grade_opencode.py`, `agent_scenarios.yaml` 묶음 O): 채점기가 `;`·`&&`·`||`·`|`로 이은 명령을 나눠(따옴표 안은 그대로)
+  `commands`·`forbid`를 명령마다 봄 (O1 금지 규칙 `(?![^\n]*--dry-run)`이 이어 붙인 다른 명령의 `--dry-run`을 보고 실제 메모 달기를 놓치던 문제).
+  O1: 메모 글(`--text`) 안의 "--dry-run" 글자는 옵션으로 보지 않음(따옴표 밖만). O4: `--anchor`(문서 중간 삽입) 금지, 문서는 `--target`으로.
+  O5: 채운 문서가 `--target`의 성적서양식.docx여야 함(값 파일 이름에 든 양식 이름으로 통과하던 문제). 회귀 사례: `CLI-dev/tests/test_grade_opencode.py`.
+
 ## [1.4.62] - 2026-11-04
 
 작업별 스킬로 나누기 (C3). 통합 `SKILL.md`(16KB, 명령 표 한 줄 300~600자)에서 Gemma 26B가 옵션을 잘못 기억하던 문제.
