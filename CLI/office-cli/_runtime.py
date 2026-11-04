@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.42"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.43"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -961,6 +961,24 @@ def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
     return int(m.group(2)), col
 
 
+def _col_letters(n: int) -> str:
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def _array_box(ref: str) -> Optional[Tuple[int, int, int, int]]:
+    """배열 수식의 ref("C1:C3" 또는 "C1") -> (행1, 열1, 행2, 열2). 읽지 못하면 None."""
+    parts = ref.split(":")
+    a = _cell_rc(parts[0])
+    b = _cell_rc(parts[-1])
+    if a is None or b is None or len(parts) > 2:
+        return None
+    return min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])
+
+
 def _full_calc_on_load(wb_root: Any) -> bool:
     """workbook.xml의 <calcPr fullCalcOnLoad="1"|"true">: 엑셀이 열 때 모든 수식을 다시 계산하라는 표시.
     xlsxwriter·openpyxl 같은 프로그램이 쓰며 파일의 <v>(예: 0)는 계산된 값이 아님. 엑셀은 저장할 때 이 표시를 지웁니다."""
@@ -1018,6 +1036,20 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                     continue
                 n = 0
                 q = f"'{title}'" if re.search(r"[\s!']", title) else title
+                arrays: List[List[Any]] = []        # 배열 수식 [r1, c1, r2, c2, 왼쪽 위 (행, 열), 만난 다른 칸 set]
+
+                def count(rc: Optional[Tuple[int, int]], ref: str) -> None:
+                    nonlocal n, bounds
+                    n += 1
+                    if len(result["cells"]) < limit:
+                        result["cells"].append(f"{q}!{ref}")
+                    if rc is not None:
+                        bounds = [rc[0], rc[1], rc[0], rc[1]] if not bounds else [
+                            min(bounds[0], rc[0]), min(bounds[1], rc[1]), max(bounds[2], rc[0]), max(bounds[3], rc[1])]
+
+                def in_area(rc: Optional[Tuple[int, int]]) -> bool:
+                    return area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
+
                 for _, el in ET.iterparse(io.BytesIO(data), events=("end",)):
                     if el.tag == _XLSX_MAIN + "row":
                         r = el.get("r") or ""
@@ -1027,19 +1059,52 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                         continue
                     if el.tag != _XLSX_MAIN + "c":
                         continue
-                    if el.find(_XLSX_MAIN + "f") is not None and (full or el.get("t") not in ("str", "inlineStr")):
-                        v = el.find(_XLSX_MAIN + "v")
-                        ref = el.get("r") or ""
-                        rc = _cell_rc(ref)
-                        inside = area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
-                        if (full or v is None or not (v.text or "")) and inside:
-                            n += 1
-                            if len(result["cells"]) < limit:
-                                result["cells"].append(f"{q}!{ref}")
-                            if rc is not None:
-                                bounds = [rc[0], rc[1], rc[0], rc[1]] if not bounds else [
-                                    min(bounds[0], rc[0]), min(bounds[1], rc[1]), max(bounds[2], rc[0]), max(bounds[3], rc[1])]
+                    f = el.find(_XLSX_MAIN + "f")
+                    v = el.find(_XLSX_MAIN + "v")
+                    ref = el.get("r") or ""
+                    rc = _cell_rc(ref)
+                    if f is not None and f.get("t") == "array" and rc is not None:
+                        box = _array_box(f.get("ref") or "")
+                        if box is not None and box != (rc[0], rc[1], rc[0], rc[1]):
+                            arrays.append([box[0], box[1], box[2], box[3], rc, set()])
+                    if f is not None and (full or el.get("t") not in ("str", "inlineStr")):
+                        if (full or v is None or not (v.text or "")) and in_area(rc):
+                            count(rc, ref)
+                    elif f is None and rc is not None and arrays:
+                        # 배열 수식의 다른 칸: 파일에는 <f> 없이 값만 있음 (계산된 값이 없으면 수식 칸으로 셈, 23차 L1)
+                        for a in arrays:
+                            if a[0] <= rc[0] <= a[2] and a[1] <= rc[1] <= a[3]:
+                                a[5].add(rc)
+                                computed = el.get("t") in ("str", "inlineStr") or (v is not None and (v.text or ""))
+                                if (full or not computed) and in_area(rc):
+                                    count(rc, ref)
+                                break
                     el.clear()
+                # 배열 수식의 다른 칸 중 파일에 아예 없는 칸 (openpyxl은 왼쪽 위 칸만 씀): 계산된 값이 없는 수식 칸
+                for r1, c1, r2, c2, anchor, seen in arrays:
+                    if area is not None:
+                        r1, c1, r2, c2 = max(r1, area[0]), max(c1, area[1]), min(r2, area[2]), min(c2, area[3])
+                    if r1 > r2 or c1 > c2:
+                        continue
+                    seen_in = sum(1 for x in seen if r1 <= x[0] <= r2 and c1 <= x[1] <= c2)
+                    anchor_in = 1 if (r1 <= anchor[0] <= r2 and c1 <= anchor[1] <= c2) else 0
+                    missing = (r2 - r1 + 1) * (c2 - c1 + 1) - seen_in - anchor_in
+                    if missing <= 0:
+                        continue
+                    shown = 0
+                    for rr in range(r1, r2 + 1):
+                        if shown >= missing or len(result["cells"]) >= limit:
+                            break
+                        for cc in range(c1, c2 + 1):
+                            if (rr, cc) in seen or (rr, cc) == anchor:
+                                continue
+                            if shown >= missing or len(result["cells"]) >= limit:
+                                break
+                            result["cells"].append(f"{q}!{_col_letters(cc)}{rr}")
+                            shown += 1
+                    n += missing
+                    bounds = [r1, c1, r2, c2] if not bounds else [
+                        min(bounds[0], r1), min(bounds[1], c1), max(bounds[2], r2), max(bounds[3], c2)]
                 if n:
                     result["count"] += n
                     result["sheets"][title] = n

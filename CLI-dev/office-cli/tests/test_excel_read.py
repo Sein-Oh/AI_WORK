@@ -15,7 +15,7 @@ import office
 import reader
 from fake_excel import FakeExcelWorkbook, FakeRange, FakeXlApp
 from fake_office import make_win32com
-from office_helpers import error_log_text, formula_xlsx, run_excel, run_main, TABLE, ws_of
+from office_helpers import error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
 
 
 def _strip_dimension(src, dst):
@@ -618,6 +618,40 @@ def test_detect_helper(tmp_path):
     fields = rt.uncomputed_fields(info)
     assert fields["uncomputed_count"] == 25 and fields["uncomputed_truncated"] is True
     assert rt.xlsx_uncomputed_formulas(formula_xlsx(tmp_path / "c.xlsx", cached=True))["count"] == 0
+
+
+def _array_xlsx(path, cached_anchor=False):
+    """A1:A3 값, C1:C3 배열 수식 (openpyxl은 왼쪽 위 C1만 파일에 씀, fullCalcOnLoad 표시)."""
+    import openpyxl
+    from openpyxl.worksheet.formula import ArrayFormula
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "배열"
+    for r in range(1, 4):
+        ws.cell(r, 1, r)
+    ws["C1"] = ArrayFormula("C1:C3", "=A1:A3*2")
+    wb.save(path)
+    if cached_anchor:                              # 왼쪽 위만 값이 있고 표시도 없음: C2, C3은 값이 없음
+        set_cached_value(str(path), "<v></v>", "<v>2</v>")
+    return str(path)
+
+
+def test_array_formula_counts_every_cell(tmp_path, capsys):
+    """23차 L1 (1.4.43): 배열 수식은 ref 범위의 모든 칸이 수식 칸."""
+    info = rt.xlsx_uncomputed_formulas(_array_xlsx(tmp_path / "a.xlsx"))
+    assert info["count"] == 3 and info["cells"] == ["배열!C1", "배열!C2", "배열!C3"] and info["bounds"] == [1, 3, 3, 3], info
+    p = _array_xlsx(tmp_path / "b.xlsx", cached_anchor=True)
+    info = rt.xlsx_uncomputed_formulas(p)
+    assert info["count"] == 2 and info["cells"] == ["배열!C2", "배열!C3"], info
+    assert rt.xlsx_uncomputed_formulas(p, area=(1, 1, 2, 3))["count"] == 1         # 범위 안의 C2만
+    assert rt.xlsx_uncomputed_formulas(p, area=(1, 1, 3, 2))["count"] == 0         # C열 밖
+    code, out = run_main(excel, capsys, "read", "--target", p)
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["uncomputed_count"] == 2, out
+
+
+def test_array_formula_with_values_is_computed(tmp_path):
+    p = tmp_path / "m.xlsx"
+    assert rt.xlsx_uncomputed_formulas(_mixed_xlsx(p))["count"] == 0               # 엑셀 저장: 다른 칸에 값이 있음
 
 
 def test_excel_read_closed_is_unverified(tmp_path, capsys):

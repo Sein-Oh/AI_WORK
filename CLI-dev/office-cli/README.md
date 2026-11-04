@@ -182,6 +182,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - `xl/workbook.xml`의 `<calcPr fullCalcOnLoad="1">`(또는 `"true"`)은 "열 때 모두 다시 계산" 표시입니다. xlsxwriter(`<v>0</v>`을 씀)·openpyxl 같은
     프로그램이 쓰며, 그 파일의 수식 칸은 값이 있어도(0 등) 모두 계산된 값이 없는 칸으로 봅니다(1.4.32). 엑셀은 저장할 때 이 표시를 지우므로
     엑셀에서 저장한 파일은 해당 없습니다.
+  - 배열 수식(`<f t="array" ref="C1:C3">`)은 파일에 왼쪽 위 칸에만 `<f>`가 있지만 `ref` 범위의 모든 칸을 수식 칸으로 셉니다(1.4.43). 다른 칸에
+    계산된 값이 없거나(openpyxl은 왼쪽 위 칸만 씀) `fullCalcOnLoad`이면 계산된 값이 없는 칸입니다(전에는 왼쪽 위 칸만 셈).
   - 수식 칸 확인 자체가 실패하면(파일 손상, MemoryError 등) 0개로 보지 않고 `uncomputed_check: "unknown"`과
     `UNVERIFIED: ... 수식 계산 여부를 확인하지 못함`으로 답합니다(1.4.32, 이전에는 `VERIFIED`). reader는 `meta.uncomputed_formulas.unknown`.
     reader 캐시에 남은 확인 실패는 결과로 다시 쓰지 않고, 캐시를 쓸 때(`read`, 색인 검색) 원본을 다시 확인해 확인되면 캐시도 고칩니다(1.4.42,
