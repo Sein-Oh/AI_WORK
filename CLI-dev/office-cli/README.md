@@ -148,7 +148,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### excel.py
 | 명령 | 주요 옵션 |
 |---|---|
-| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--max-rows`, `--save [경로.csv]`(저장한 CSV를 다시 읽어 빈 행을 뺀 행 수 확인). `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지(시트를 훑는 것은 범위 생략·`B:B`·`5:7`일 때만) |
+| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--formulas`(수식 칸 목록, 아래), `--max-rows`, `--save [경로.csv]`(저장한 CSV를 다시 읽어 빈 행을 뺀 행 수 확인). `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지(시트를 훑는 것은 범위 생략·`B:B`·`5:7`일 때만) |
 | `info` | 시트별 사용 범위와 차트. `--all`: 열린 통합문서 전체. `--detail`: 차트 종류·계열 수·위치와 데이터를 가리는 차트 경고 |
 | `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`(`.md`는 word·ppt와 같은 마크다운 해석으로 첫 번째 표만: 코드 블록 안 `|` 줄과 두 번째 표는 빼고 정렬 줄 `|--|`는 빼며 `\|`는 칸 글자 `|`. 표가 없으면 한 줄 = 한 행, 1.4.26), `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략. `--formula`의 상대 참조는 실제로 쓴 행 기준으로 옮기고 `$` 참조는 그대로, 옮기지 못하면 쓰지 않고 STOP_RETRY, 1.4.24), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이나 수식(빈 글을 내는 수식 포함)이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`). `--append`도 쓸 칸을 확인하고, `--formula`/`--value`도 쓸 열 수만큼 가장 아래 행을 찾습니다. 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸, 1.4.6). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`)는 글자 그대로 씁니다 |
 | `replace` | `--find/--replace` 또는 `--map JSON`, `--whole`, `--all-sheets`, 서식 옵션. 수식 셀은 내용 보존. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 찾은 칸이 있어도 바꿀 글이 같고 서식이 없으면(수식 칸 포함) 바꾼 칸으로 세지 않음(`changed_cells` 0, `unchanged_same_text`, 1.4.15). `--range '요약'!A1:D9`처럼 시트를 주면 그 시트에서 읽고 씀. `--all-sheets`와 시트 이름이 든 `--range`는 함께 쓸 수 없음. 찾을 글이 빈 문자열(`--find ""`, `--map` 키 `""`)이면 STOP_RETRY(빈 칸 채우기는 `write`, 1.4.17) |
@@ -179,6 +179,26 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 수식 칸 확인 자체가 실패하면(파일 손상, MemoryError 등) 0개로 보지 않고 `uncomputed_check: "unknown"`과
     `UNVERIFIED: ... 수식 계산 여부를 확인하지 못함`으로 답합니다(1.4.32, 이전에는 `VERIFIED`). reader는 `meta.uncomputed_formulas.unknown`.
 - `read --search`: `count`(찾은 칸 전체 수, `total_matches`와 같음), `shown`, `truncated`. 0건이면 `VERIFIED: 0건.` 안내(1.4.31).
+- `read --formulas`(1.4.36): 값은 그대로 두고, 읽은 범위의 수식 칸만 `formulas`에 더합니다.
+  - 항목: `{"cell": "B5", "formula": "=SUM(B2:B4)", "value": 600}`. 읽기는 한 시트라 `cell`에 시트 이름을 붙이지 않습니다(시트는 `sheet`).
+    배열 수식은 배열마다 한 번(배열 안에서 처음 만난 칸, 보통 왼쪽 위) `"array": true`, `"array_range": "C1:C3"`. 닫힌 파일의 데이터 표(What-If)는
+    `=TABLE(행 입력,열 입력)`과 `data_table: true`. 500자보다 긴 수식·값은 앞부분만(`value_truncated`).
+  - `formula_count`(전체 수), `formulas_truncated`. 200개를 넘으면 앞 200개만 담고 전체 목록 CSV(`cell, formula, value, array`)를
+    `<데이터 폴더>\results\excel_formulas_<시트>_<시각>.csv`에 써 `full_result_file`로 줍니다(R2). `--save`와 함께면 저장한 값 CSV 옆
+    `<이름>_formulas.csv`에 늘 전체 목록을 쓰고(`full_result_file`) 다시 읽어 행 수를 확인합니다(R1, 맞지 않으면 `UNVERIFIED:`).
+  - 수식이 없으면 `formula_count: 0`, `formulas: []`와 "수식 0개: ...에는 수식이 없습니다" 안내. CSV는 수식을 저장하지 않아 늘 0개(오류 아님).
+  - 열린 문서(COM): 범위의 `HasFormula`가 False면 수식을 읽지 않습니다. 수식 글은 범위 전체를 한 번에 읽습니다: `Formula2`(엑셀 365, 동적 배열을
+    그대로)가 없거나 오류면 `Formula`(영어 함수 이름, A1 주소). 2차원 결과에서 상수는 값, 수식은 `=`로 시작하는 글이라 칸마다 부르지 않고,
+    값도 같은 글인 칸(`'=`로 둔 글자 상수일 수 있음)만 `HasFormula`로 확인합니다. 배열 수식은 범위의 `HasArray`가 False가 아닐 때만 칸마다
+    확인합니다(2,000칸까지, 넘으면 `warnings`).
+  - 닫힌 xlsx/xlsm: 값을 읽은 뒤 같은 범위만 openpyxl `data_only=False`(읽기 전용)로 한 번 더 읽습니다. 수식 칸은 openpyxl이 수식으로 읽은 칸
+    (`data_type` `f`: `=`로 시작하는 글, `ArrayFormula`, `DataTableFormula`)만이라 `=`로 시작하는 글자 상수는 빠집니다. 공유 수식은 openpyxl이
+    칸마다 펼칩니다. `value`는 파일에 저장된 계산된 값이고, 계산되지 않은 수식 칸은 `null`이며 계산되지 않은 수식 안내(`UNVERIFIED:`,
+    `uncomputed_formulas`, 1.4.31/1.4.32)는 그대로입니다. 배열 수식의 왼쪽 위 칸이 읽은 범위 밖이면 그 배열은 값만 나옵니다(파일에 수식이 왼쪽 위에만 있음).
+  - Office 없이 수식을 읽을 수 없는 닫힌 파일(.xls, .xlsb, zip이 아닌 xlsx)은 Office(pywin32)가 없으면 `STOP_RETRY:`로 엑셀에서 연 뒤 다시
+    실행하라고 알립니다. Office가 있으면 다른 읽기처럼 엑셀로 열어 읽습니다.
+  - `--search`와 함께면 수식 글에서도 찾고(대소문자 무시), 찾은 수식 칸에 `formula`를 붙입니다.
+  - 확인(R1)은 다른 읽기와 같습니다: 읽은 결과가 확인이라 `VERIFIED:`. 수식 글은 문서 내용이라 오류 로그에 남기지 않습니다(수식 읽기 실패는 예외 종류만).
 
 ### word.py
 | 명령 | 주요 옵션 |

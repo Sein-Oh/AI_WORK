@@ -1,7 +1,7 @@
 """excel.py - 엑셀 작업
 
 명령:
-    read     내용 읽기 (범위, 검색, --save로 CSV 저장)
+    read     내용 읽기 (범위, 검색, --save로 CSV 저장, --formulas로 수식 칸 목록)
     info     통합문서 요약 (시트, 사용 범위, 차트, 선택 영역). --all: 열린 통합문서 전체 목록
     write    값/표/수식 쓰기 (--value, --values, --file, --formula, --header, --append)
     replace  찾아 바꾸기 (수식 셀은 보존)
@@ -430,20 +430,27 @@ def closed_uncomputed(path: str, sheet: str, r0: int, c0: int, matrix: List[List
     return info if rt.uncomputed_found(info) else None
 
 
-def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50) -> Tuple[List[Dict[str, Any]], int, int]:
-    """찾은 칸 (앞 limit개), 전체 수, 값이 잘린 칸 수. 값은 칸마다 MAX_CELL_CHARS에서 자릅니다 (전체는 --save CSV)."""
+def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50,
+                   formulas: Optional[Dict[Tuple[int, int], str]] = None) -> Tuple[List[Dict[str, Any]], int, int]:
+    """찾은 칸 (앞 limit개), 전체 수, 값이 잘린 칸 수. 값은 칸마다 MAX_CELL_CHARS에서 자릅니다 (전체는 --save CSV).
+    formulas((행 위치, 열 위치) -> 수식, --formulas)를 주면 수식 글에서도 찾고 수식 칸은 formula를 붙입니다."""
     hits: List[Dict[str, Any]] = []
     total = cut_n = 0
     key = text.lower()
+    formulas = formulas or {}
     for i, row in enumerate(matrix):
         for j, v in enumerate(row):
-            if v is None:
+            f = formulas.get((i, j))
+            if v is None and f is None:
                 continue
-            if key in str(out_value(v)).lower():
+            if key in str(out_value(v)).lower() or (f is not None and key in f.lower()):
                 total += 1
                 if len(hits) < limit:
                     value, cut = rt.clamp_cell(out_value(v))
                     hit = {"cell": addr(r0 + i, c0 + j), "value": value}
+                    if f is not None:
+                        hit["formula"], f_cut = rt.clamp_cell(f)
+                        cut = cut or f_cut
                     if cut:
                         hit["value_truncated"] = True
                         cut_n += 1
@@ -451,21 +458,228 @@ def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: 
     return hits, total, cut_n
 
 
+# --- read --formulas (1.4.36): 수식 칸 목록 ---------------------------------------------------------------
+
+FORMULA_SHOW = 200          # JSON formulas에 담는 수식 칸 수 (넘으면 formulas_truncated, 전체는 full_result_file CSV)
+ARRAY_CHECK_MAX = 2000      # 열린 문서에서 배열 수식인지 칸마다 확인하는 수식 칸 수 상한 (COM 호출 수 제한)
+
+
+def _formula_value(v: Any) -> Any:
+    """수식 칸의 값: 계산된 값이 없으면(닫힌 파일의 계산되지 않은 수식) null."""
+    return None if v is None else out_value(v)
+
+
+def _closed_formulas(path: str, sheet: str, r0: int, c0: int, matrix: List[List[Any]]) -> List[Dict[str, Any]]:
+    """닫힌 xlsx/xlsm에서 읽은 범위의 수식 칸 (openpyxl data_only=False로 그 범위만 한 번 더 읽음).
+    값은 이미 읽은 계산된 값(data_only, 없으면 null). 공유 수식은 openpyxl이 칸마다 펼쳐 줍니다.
+    배열 수식은 파일에 왼쪽 위 칸에만 있어 그 칸에 한 번(array, array_range). 수식 칸은 data_type 'f'만
+    ('=로 시작하는 글자 상수는 수식이 아님)."""
+    nrows = len(matrix)
+    ncols = max((len(r) for r in matrix), default=0)
+    if not nrows or not ncols:
+        return []
+    import openpyxl
+    from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
+    out: List[Dict[str, Any]] = []
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    try:
+        ws = wb[sheet]
+        for i, row in enumerate(ws.iter_rows(min_row=r0, max_row=r0 + nrows - 1, min_col=c0, max_col=c0 + ncols - 1)):
+            for j, cell in enumerate(row):
+                v = cell.value
+                extra: Dict[str, Any] = {}
+                if isinstance(v, ArrayFormula):
+                    text = str(v.text or "")
+                    extra = {"array": True, "array_range": str(v.ref or "")}
+                elif isinstance(v, DataTableFormula):     # 데이터 표(What-If): 엑셀 화면의 {=TABLE(행 입력, 열 입력)}
+                    text = f"=TABLE({v.r1 or ''},{v.r2 or ''})"
+                    extra = {"array": True, "array_range": str(v.ref or ""), "data_table": True}
+                elif isinstance(v, str) and v.startswith("=") and getattr(cell, "data_type", None) == "f":
+                    text = v
+                else:
+                    continue
+                if not text.startswith("="):
+                    text = "=" + text
+                raw = matrix[i][j] if i < len(matrix) and j < len(matrix[i]) else None
+                out.append({"cell": addr(r0 + i, c0 + j), "formula": text, "value": _formula_value(raw), **extra})
+    finally:
+        wb.close()
+    return out
+
+
+def _com_formulas(rng: Any, matrix: List[List[Any]], warnings: List[str]) -> List[Dict[str, Any]]:
+    """열린 문서(COM)의 수식 칸. HasFormula가 False(수식 없음)면 수식을 읽지 않습니다.
+    수식 글은 범위 전체를 한 번에: Formula2(동적 배열을 그대로, 엑셀 365)가 없으면 Formula (영어 함수 이름, A1 주소).
+    2차원 결과에서 상수는 값, 수식은 '='로 시작하는 글이라 칸마다 부르지 않습니다. 다만 값도 같은 글('=로 시작하는
+    글자 상수일 수 있음)이면 그 칸만 HasFormula로 확인합니다. 배열 수식은 범위의 HasArray가 False가 아닐 때만
+    칸마다 확인해(ARRAY_CHECK_MAX개까지) 배열마다 한 번(배열 안에서 처음 만난 칸, 보통 왼쪽 위) 넣습니다."""
+    try:
+        has = rng.HasFormula            # True(모두) / False(없음) / None(섞임)
+    except Exception:
+        has = None
+    if has is False:
+        return []
+    try:
+        raw = rng.Formula2
+    except Exception:
+        raw = rng.Formula
+    fm = off.range_to_matrix(raw)
+    r0, c0 = int(rng.Row), int(rng.Column)
+    ws = rng.Worksheet
+    cands = [(i, j, f) for i, row in enumerate(fm) for j, f in enumerate(row) if isinstance(f, str) and f.startswith("=")]
+    if not cands:
+        return []
+    try:
+        arrays = rng.HasArray           # False면 배열 수식 없음 (칸마다 확인하지 않음)
+    except Exception:
+        arrays = None
+    out: List[Dict[str, Any]] = []
+    seen_arrays = set()
+    checked = 0
+    for i, j, f in cands:
+        v = matrix[i][j] if i < len(matrix) and j < len(matrix[i]) else None
+        cell = None
+        if isinstance(v, str) and v == f:
+            cell = ws.Cells(r0 + i, c0 + j)
+            if not cell.HasFormula:
+                continue
+        entry: Dict[str, Any] = {"cell": addr(r0 + i, c0 + j), "formula": f, "value": _formula_value(v)}
+        if arrays is not False:
+            if checked < ARRAY_CHECK_MAX:
+                checked += 1
+                cell = cell or ws.Cells(r0 + i, c0 + j)
+                if cell.HasArray:
+                    area = str(cell.CurrentArray.Address).replace("$", "")
+                    if area in seen_arrays:
+                        continue
+                    seen_arrays.add(area)
+                    entry.update(array=True, array_range=area)
+            elif checked == ARRAY_CHECK_MAX:
+                checked += 1
+                warnings.append(f"배열 수식인지는 앞 {ARRAY_CHECK_MAX}개 수식 칸만 확인함 (그 뒤 배열 수식은 칸마다 나올 수 있음)")
+        out.append(entry)
+    return out
+
+
+def _formula_csv(path: str, entries: List[Dict[str, Any]]) -> str:
+    rows = [["cell", "formula", "value", "array"]] + [
+        [e["cell"], e["formula"], "" if e["value"] is None else e["value"], e.get("array_range", "") if e.get("array") else ""]
+        for e in entries]
+    return rt.write_csv_rows(path, rows)
+
+
+_DEFAULT_DIRECTIVE = "VERIFIED: 작업이 완료되었습니다."
+
+
+def _with_formulas(payload: Dict[str, Any], info: Dict[str, Any]) -> Dict[str, Any]:
+    """read 결과에 수식 칸 목록을 붙입니다 (--formulas). formulas(앞 FORMULA_SHOW개), formula_count, formulas_truncated.
+    잘렸거나 --save면 전체 목록 CSV(full_result_file)를 쓰고, --save면 다시 읽어 행 수를 확인합니다 (R1)."""
+    if payload.get("status") != "ok":
+        return payload
+    entries: List[Dict[str, Any]] = info["entries"]
+    n = len(entries)
+    shown = []
+    for e in entries[:FORMULA_SHOW]:
+        e = dict(e)
+        e["formula"], f_cut = rt.clamp_cell(e["formula"])
+        e["value"], v_cut = rt.clamp_cell(e["value"])
+        if f_cut or v_cut:
+            e["value_truncated"] = True
+        shown.append(e)
+    fields = {k: v for k, v in payload.items() if k not in rt._PAYLOAD_BASE}
+    fields.update(formulas=shown, formula_count=n, formulas_truncated=n > FORMULA_SHOW)
+    if info.get("warnings"):
+        fields["warnings"] = list(fields.get("warnings") or []) + info["warnings"]
+    problems: List[str] = []
+    full = None
+    if n and payload.get("output_file"):      # --save: 저장한 값 CSV 옆에 전체 수식 목록
+        base = os.path.splitext(payload["output_file"])[0]
+        full = _formula_csv(rt.resolve_output_path(base + "_formulas.csv", "formulas", ".csv"), entries)
+        problem = rt.check_saved_file(full, expected_rows=n + 1, delimiter=",")
+        if problem:
+            problems.append(f"수식 목록 CSV: {problem}")
+    elif n > FORMULA_SHOW:
+        out = os.path.join(rt.get_data_dir(), "results",
+                           f"excel_formulas_{rt.safe_filename(payload.get('sheet'), 40)}_{rt.timestamp()}.csv")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        full = _formula_csv(out, entries)
+    if full:
+        fields["full_result_file"] = full
+    where = f"{payload.get('sheet')}!{payload.get('range')}"
+    if info.get("csv"):
+        sentence = "수식 0개: CSV 파일은 수식을 저장하지 않아 값만 있습니다. 사용자에게 그대로 알리세요."
+        preview_tail = " / 수식 없음 (CSV)"
+    elif not n:
+        sentence = f"수식 0개: {where}에는 수식이 없습니다(값만 있음). 사용자에게 그대로 알리세요."
+        preview_tail = " / 수식 없음"
+    else:
+        sentence = f"수식 칸 {n}개는 formulas(cell, formula, value)에 있습니다."
+        if n > FORMULA_SHOW:
+            sentence += f" 앞 {FORMULA_SHOW}개만 담았고 전체는 full_result_file에 있습니다."
+        elif full:
+            sentence += " 전체 수식 목록은 full_result_file에도 저장했습니다."
+        preview_tail = f" / 수식 {n}개"
+    preview = str(payload.get("preview", "")) + preview_tail
+    if payload.get("verified") is False or problems:
+        return rt.ok_unverified(payload["tool"], payload["command"], preview,
+                                list(payload.get("unverified") or []) + problems, **fields)
+    directive = str(payload.get("agent_directive", ""))
+    if directive.startswith(_DEFAULT_DIRECTIVE):
+        directive = "VERIFIED: 읽기 완료. " + sentence + " 같은 명령을 다시 실행하거나 결과를 다시 조회하지 마세요."
+    else:
+        directive = directive + " " + sentence
+    return rt.ok(payload["tool"], payload["command"], preview, directive, **fields)
+
+
+def _no_formula_reader(target: str) -> Optional[str]:
+    """Office(COM) 없이 --formulas를 읽을 수 없는 닫힌 파일(.xls, .xlsb, zip이 아닌 xlsx 등)이면 그 경로, 아니면 None."""
+    if off.win32com is not None or not target or target.strip().lower() == "active":
+        return None
+    raw = os.path.abspath(os.path.expandvars(target.strip().strip('"')))
+    if os.path.isfile(raw) and os.path.splitext(raw)[1].lower() in off.EXTENSIONS["excel"]:
+        return raw
+    return None
+
+
 def cmd_read(args) -> Dict[str, Any]:
     found: Dict[str, Any] = {}
-    return rt.with_uncomputed(_read(args, found), found.get("uncomputed"))
+    payload = _read(args, found)
+    if args.formulas:
+        payload = _with_formulas(payload, found["formulas"])
+    return rt.with_uncomputed(payload, found.get("uncomputed"))
+
+
+def _read_formulas(fn: Any, *a: Any) -> List[Dict[str, Any]]:
+    """수식 읽기 실패는 내부 오류로: 예외 글에 수식이 섞여 오류 로그에 남지 않게 예외 종류만 남기고 앞 예외도 잇지 않습니다."""
+    try:
+        return fn(*a)
+    except rt.InputError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"수식 읽기 실패 ({type(e).__name__})") from None
 
 
 def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     csv_path = closed_csv(args.target)
     closed = None if csv_path else is_closed_xlsx(args.target)
+    finfo: Dict[str, Any] = {"entries": [], "warnings": []}
+    found["formulas"] = finfo
+    if args.formulas and not csv_path and not closed:
+        no_reader = _no_formula_reader(args.target)
+        if no_reader:
+            raise rt.InputError(f"'{os.path.basename(no_reader)}'의 수식은 Office 없이 읽을 수 없습니다 "
+                                "(Office 없이 수식을 읽는 것은 .xlsx/.xlsm만). 엑셀에서 이 파일을 연 뒤 같은 명령을 다시 실행하세요 "
+                                "(열린 문서는 엑셀에서 수식을 읽음).")
     if csv_path:
         # CSV도 같은 명령으로 (행 수 세기, 머리글 확인): 이전에는 확장자 오류가 나 LLM이 pandas 코드를 직접 짰음
         sheet, r0, c0, matrix, names = _read_matrix_csv(csv_path, args.range)
         source = {"app": "Excel", "name": os.path.basename(csv_path), "path": csv_path, "source": "file(csv)"}
+        finfo["csv"] = True
     elif closed:
         sheet, r0, c0, matrix, names = _read_matrix_closed(closed, args.sheet, args.range)
         found["uncomputed"] = closed_uncomputed(closed, sheet, r0, c0, matrix)
+        if args.formulas:
+            finfo["entries"] = _read_formulas(_closed_formulas, closed, sheet, r0, c0, matrix)
         source = {"app": "Excel", "name": os.path.basename(closed), "path": closed, "source": "file(openpyxl)"}
     else:
         with off.open_target("excel", args.target, readonly=True) as t:
@@ -473,16 +687,24 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
             rng = target_range(t, ws, args.range)
             matrix = off.range_to_matrix(rng.Value)
             sheet, r0, c0 = str(rng.Worksheet.Name), int(rng.Row), int(rng.Column)
+            if args.formulas:
+                finfo["entries"] = _read_formulas(_com_formulas, rng, matrix, finfo["warnings"])
             source = t.resolved()
     nrows = len(matrix)
     ncols = max((len(r) for r in matrix), default=0)
     full_addr = addr(r0, c0, r0 + max(nrows, 1) - 1, c0 + max(ncols, 1) - 1)
     result: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": full_addr, "rows": nrows, "cols": ncols}
 
-    save_cmd = rt.next_command("excel.py", ["read", "--target", args.target, "--range", full_addr, "--sheet", sheet, "--save"],
-                               "전체를 CSV로 저장 (잘린 값까지 전체)")
+    save_cmd = rt.next_command("excel.py", ["read", "--target", args.target, "--range", full_addr, "--sheet", sheet, "--save"]
+                               + (["--formulas"] if args.formulas else []), "전체를 CSV로 저장 (잘린 값까지 전체)")
     if args.search:
-        hits, total, cut_n = _search_matrix(matrix, r0, c0, args.search)
+        fmap = None
+        if args.formulas:     # 수식 글에서도 찾기 (수식 칸 위치 -> 수식)
+            fmap = {}
+            for e in finfo["entries"]:
+                rr, cc = parse_cell(e["cell"])
+                fmap[(rr - r0, cc - c0)] = e["formula"]
+        hits, total, cut_n = _search_matrix(matrix, r0, c0, args.search, formulas=fmap)
         truncated = total > len(hits) or cut_n > 0
         result.update(matches=hits, total_matches=total, count=total, shown=len(hits), truncated=truncated)
         preview = f"'{args.search}': {sheet}!{full_addr}에서 {total}개 셀 일치" + (
@@ -1895,6 +2117,8 @@ def build_cli():
     p.add_argument("--search", help="이 글자가 들어간 셀 찾기")
     p.add_argument("--max-rows", type=int, default=rt.DEFAULT_MAX_ROWS, help=f"표시할 최대 행 수 (기본 {rt.DEFAULT_MAX_ROWS})")
     p.add_argument("--save", nargs="?", const=True, help="CSV로 저장 (경로 생략 시 작업 폴더)")
+    p.add_argument("--formulas", action="store_true",
+                   help="수식 칸 목록도 함께 (formulas: cell, formula, value). --search는 수식 글에서도 찾음")
 
     p = sub.add_parser("info", help="통합문서 요약")
     common(p)

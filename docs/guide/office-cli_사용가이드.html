@@ -107,14 +107,14 @@ th { background: var(--soft); font-weight: 700; }
 <button id="menu" type="button">목차 열기/닫기</button>
 <nav id="side">
   <div class="brand">office-cli 사용 가이드</div>
-  <div class="ver">베타 | office-cli 1.4.35 | Gemma 기준</div>
+  <div class="ver">베타 | office-cli 1.4.36 | Gemma 기준</div>
   <input id="tocq" type="search" placeholder="목차에서 찾기 (예: 차트)">
   <div id="toc"></div>
 </nav>
 <main>
 <header class="top">
   <h1>office-cli 사용 가이드</h1>
-  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.35</p>
+  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.36</p>
 </header>
 
 <p class="lead">office-cli는 에이전트가 Office 문서를 직접 읽고 고칠 수 있게 해 주는 도구입니다. 채팅에 <b>하고 싶은 일을 평소 말투로</b> 쓰면 에이전트가 알맞은 도구를 골라 실행하고 결과를 알려 줍니다.
@@ -193,6 +193,12 @@ th { background: var(--soft); font-weight: 700; }
   <h4>특정 글자가 어디 있는지 찾기</h4>
   <p class="req">열린 엑셀에서 "미입고"가 들어간 칸 찾아줘</p>
   <div class="res"><p>그 글자가 든 칸의 주소(예: <code>Sheet1!D14</code>)와 값을 알려 줍니다.</p></div>
+</div>
+<div class="case">
+  <h4>수식 보기</h4>
+  <p class="when">이럴 때: 값이 어떤 수식으로 계산됐는지 확인하고 싶을 때</p>
+  <p class="req">열린 엑셀 A1:F30의 수식 보여줘</p>
+  <div class="res"><p>수식이 든 칸마다 주소, 수식(예: <code>=SUM(B2:B4)</code>), 계산된 값을 알려 줍니다. 수식이 없으면 없다고 알려 줍니다. 닫힌 xlsx 파일도 엑셀 없이 읽습니다.</p></div>
 </div>
 <div class="case">
   <h4>CSV 파일 읽기, 행 수 세기</h4>

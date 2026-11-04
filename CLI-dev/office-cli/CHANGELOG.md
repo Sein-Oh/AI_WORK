@@ -2,6 +2,30 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.36] - 2026-11-04
+
+엑셀 수식 읽기. 회귀 테스트: `tests/test_review_v1436.py` (1.4.35에서 18개 중 17개 실패, 통과한 1개는 `--formulas` 없는 읽기가 그대로인지).
+
+### 기능
+- `excel.py read --formulas`: 값은 그대로 두고 읽은 범위의 수식 칸 목록을 더합니다. `formulas`(`cell`, `formula`, `value`, 배열 수식은
+  `array`, `array_range`), `formula_count`, `formulas_truncated`. 200개를 넘으면 앞 200개만 담고 전체 목록 CSV를 `full_result_file`로 줍니다.
+  `--save`와 함께면 값 CSV 옆 `<이름>_formulas.csv`에 전체 목록을 쓰고 다시 읽어 행 수를 확인합니다.
+  수식이 없으면 `formula_count: 0`과 "수식 0개: ...에는 수식이 없습니다" 안내. CSV는 늘 0개(수식을 저장하지 않음).
+- 열린 문서: `HasFormula`가 False면 수식을 읽지 않고, 수식 글은 범위 전체를 한 번에 `Formula2`(없으면 `Formula`, 영어 함수 이름 A1 주소)로 읽습니다.
+  값과 같은 글인 칸(`'=` 글자 상수일 수 있음)만 `HasFormula`로, 배열 수식은 범위의 `HasArray`가 False가 아닐 때만 칸마다 확인합니다(2,000칸까지).
+- 닫힌 xlsx/xlsm: 같은 범위만 openpyxl `data_only=False`로 다시 읽습니다(보통·공유·배열 수식, 데이터 표). 값은 저장된 계산된 값이고
+  계산되지 않은 수식은 `null`(계산되지 않은 수식 `UNVERIFIED:` 안내는 1.4.31/1.4.32 그대로).
+- Office 없이 수식을 읽을 수 없는 닫힌 파일(.xls 등)은 Office(pywin32)가 없으면 `STOP_RETRY:`(엑셀에서 연 뒤 다시 실행). Office가 있으면 엑셀로 열어 읽습니다.
+- `--search`와 함께면 수식 글에서도 찾고 찾은 수식 칸에 `formula`를 붙입니다.
+- 수식 읽기 실패는 예외 종류만 남기는 내부 오류(`ERROR:`)라 수식 글이 오류 로그에 남지 않습니다.
+
+### 문서
+- SKILL.md 엑셀 읽기 줄에 `--formulas`(수식 보기). **SKILL.md 본문이 바뀌었으므로 En-Genius 스킬 zip(`docs/engenius/office-cli.zip`)을 다시 가져와야 합니다.**
+- README excel 절, 사용 가이드 2.1 "수식 보기".
+
+### 테스트
+- 가짜 Excel(`tests/fake_excel.py`): `HasFormula`, `HasArray`, `CurrentArray`(배열 수식 `arrays`), 범위 `Formula` 읽기 기록.
+
 ## [1.4.35] - 2026-11-04
 
 En-Genius 스킬 배포 구조 변경에 맞춤. 회귀 테스트: `tests/test_review_v1433.py` (고침).

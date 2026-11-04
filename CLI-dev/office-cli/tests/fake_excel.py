@@ -1,7 +1,7 @@
 """메모리 셀 격자로 동작하는 가짜 Excel (excel.py 명령 로직 테스트용).
 
 지원: Range("A1:B2" / "A1:B2,A4:B4") / Range(cell, cell) / Cells(r, c), Value(읽기/쓰기, 스칼라 채우기),
-Formula(쓰기 시 상대참조 문자열 그대로 저장), Row/Column/Rows.Count/Columns.Count/Address, UsedRange,
+Formula(쓰기 시 상대참조 문자열 그대로 저장), HasFormula/HasArray/CurrentArray(배열 수식 arrays), Row/Column/Rows.Count/Columns.Count/Address, UsedRange,
 End(xlUp), 서식 속성 기록(Interior/Font/Borders/NumberFormat ...), ChartObjects, Cut/Copy/Merge.
 """
 import re
@@ -197,7 +197,36 @@ class FakeRange:
                 self.ws.set(r, c, v)
 
     @property
+    def HasFormula(self):
+        """실제 Excel처럼: 모두 수식이면 True, 하나도 없으면 False, 섞이면 None."""
+        keys = list(self.cells())
+        n = sum(1 for k in keys if k in self.ws.formulas)
+        self.ws.log.append(("HasFormula", self.Address))
+        return True if n == len(keys) else (False if n == 0 else None)
+
+    def _array_of(self, r, c):
+        for a in self.ws.arrays:
+            if a[0] <= r <= a[2] and a[1] <= c <= a[3]:
+                return a
+        return None
+
+    @property
+    def HasArray(self):
+        keys = list(self.cells())
+        n = sum(1 for k in keys if self._array_of(*k))
+        self.ws.log.append(("HasArray", self.Address))
+        return True if n == len(keys) else (False if n == 0 else None)
+
+    @property
+    def CurrentArray(self):
+        a = self._array_of(self.Row, self.Column)
+        if a is None:
+            raise Exception("not an array")
+        return FakeRange(self.ws, [a])
+
+    @property
     def Formula(self):
+        self.ws.log.append(("FormulaRead", self.Address))
         r1, c1, r2, c2 = self.areas[0]
 
         def f(r, c):
@@ -375,6 +404,7 @@ class FakeWorksheet:
         self.values = {}
         self.prefixed = set()        # '를 붙여 글자로 쓴 칸
         self.formulas = {}
+        self.arrays = []             # 배열 수식 범위 [(r1, c1, r2, c2)] (칸마다 formulas에 같은 수식)
         self.styles = {}
         self.merged = set()
         self.fcs = {}
