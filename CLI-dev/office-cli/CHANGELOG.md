@@ -45,6 +45,9 @@
   `commands`·`forbid`를 명령마다 봄 (O1 금지 규칙 `(?![^\n]*--dry-run)`이 이어 붙인 다른 명령의 `--dry-run`을 보고 실제 메모 달기를 놓치던 문제).
   O1: 메모 글(`--text`) 안의 "--dry-run" 글자는 옵션으로 보지 않음(따옴표 밖만). O4: `--anchor`(문서 중간 삽입) 금지, 문서는 `--target`으로.
   O5: 채운 문서가 `--target`의 성적서양식.docx여야 함(값 파일 이름에 든 양식 이름으로 통과하던 문제). 회귀 사례: `CLI-dev/tests/test_grade_opencode.py`.
+- `CLI-dev/apply_skills.py`: 옛 `skills\office-cli`가 링크·정션이면 링크만 지우고 가리키던 폴더는 그대로 둠(보관도 하지 않음, 안내에 대상 경로).
+  전에는 링크를 따라 복사한 뒤 지우다 실패하고 "OpenCode를 닫고 다시 실행"이라고 잘못 안내함. 잠김(PermissionError)이 아닌 실패는 다른 안내.
+  회귀 테스트: `CLI-dev/tests/test_apply_skills.py` `test_old_office_cli_skill_link_removes_only_link`.
 
 ## [1.4.62] - 2026-11-04
 

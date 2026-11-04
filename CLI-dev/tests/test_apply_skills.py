@@ -89,6 +89,27 @@ def test_old_office_cli_skill_is_backed_up_and_removed(monkeypatch, tmp_path, ca
         assert (cfg / "skills" / name / "SKILL.md").is_file()
 
 
+def test_old_office_cli_skill_link_removes_only_link(monkeypatch, tmp_path, capsys):
+    """옛 skills\\office-cli가 링크(정션)이면 링크만 지우고 가리키는 폴더(사용자 것일 수 있음)는 그대로."""
+    dev, cfg = _iso(monkeypatch, tmp_path)
+    aps.main(["--config-dir", str(cfg)])
+    real = tmp_path / "내 스킬 원본"
+    real.mkdir()
+    (real / "SKILL.md").write_text("---\nname: office-cli\n---\n원본", encoding="utf-8")
+    link = cfg / "skills" / "office-cli"
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        import pytest
+        pytest.skip("이 환경에서는 링크를 만들 수 없음")
+    capsys.readouterr()
+    assert aps.main(["--config-dir", str(cfg)]) == 0
+    out = capsys.readouterr().out
+    assert not os.path.lexists(link) and (real / "SKILL.md").is_file(), out
+    assert "링크만 지움" in out and str(real) in out
+    assert not list((dev / "work").glob("skill_backup_*/skills/office-cli"))
+
+
 def test_missing_source_is_error(monkeypatch, tmp_path, capsys):
     dev, cfg = _iso(monkeypatch, tmp_path)
     os.remove(dev / "opencode" / "AGENTS.md")
