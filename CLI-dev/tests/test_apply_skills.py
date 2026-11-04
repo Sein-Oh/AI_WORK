@@ -57,7 +57,8 @@ def test_changed_file_is_backed_up_and_check_fails_before_apply(monkeypatch, tmp
     capsys.readouterr()
     assert aps.main(["--config-dir", str(cfg), "--check"]) == 1
     out = capsys.readouterr().out
-    assert "office-cli 스킬: 다름 (1.0.0 -> " in out and "ml_train.py" in out    # 남은 도구 파일도 알림
+    assert "office-cli 스킬: 다름 (1.0.0 -> " in out
+    assert "ml_train.py" not in out                     # 스킬 폴더의 .py는 알리지 않음 (사용자 결정)
     assert aps.main(["--config-dir", str(cfg), "--test"]) == 0
     kept = list((dev / "work").glob("skill_backup_*/skills/office-cli/SKILL.md"))
     assert len(kept) == 1 and "옛 내용" in kept[0].read_text(encoding="utf-8")

@@ -12,7 +12,7 @@ r"""OpenCode 스킬과 전역 지침 적용 (사람이 실행하는 개발 도�
     C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md -> skills\office-cli-test\SKILL.md (--test일 때만)
 설정 폴더가 다르면 --config-dir. 끝나면 OpenCode를 다시 시작해야 새 지침이 적용됩니다.
 
-함께 알려 주는 것: 스킬 폴더에 남은 예전 도구 파일(.py), rg.exe(ripgrep)가 PATH에 있는지.
+함께 알려 주는 것: rg.exe(ripgrep)가 PATH에 있는지.
 이 스크립트는 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다. exit 0 = 완료(또는 --check에서 모두 같음), 1 = 원본 없음 또는 다름.
 """
 import argparse
@@ -64,16 +64,6 @@ def compare(config_dir, include_test=False):
         state = "원본 없음" if a is None else "새 파일" if b is None else "같음" if a == b else "다름"
         out.append((name, src, dst, state))
     return out
-
-
-def leftovers(config_dir):
-    """스킬 폴더에 남은 예전 도구 파일 (.py). 두 곳에 도구가 있으면 어느 쪽이 쓰였는지 헷갈림."""
-    found = []
-    for tool in ("ml-kit", "office-cli"):
-        folder = os.path.join(config_dir, "skills", tool)
-        for root, _, files in os.walk(folder):
-            found += [os.path.join(root, f) for f in files if f.lower().endswith(".py")]
-    return found
 
 
 def label(name, src, dst, state):
@@ -135,8 +125,6 @@ def main(argv=None):
         code = 1 if missing else 0
         if not missing:
             print("[STATUS] 끝. OpenCode(TUI, Desktop)를 모두 닫고 다시 시작하세요.")
-    for path in leftovers(cfg):
-        print(f"[WARN] 스킬 폴더에 예전 도구 파일이 있습니다 (도구는 C:\\CLI만 쓰므로 지우세요): {path}")
     if not shutil.which("rg"):
         print("[WARN] rg(ripgrep)가 PATH에 없습니다. OpenCode가 스킬을 못 불러올 수 있습니다 (docs/opencode/README.md 1장).")
     return code
