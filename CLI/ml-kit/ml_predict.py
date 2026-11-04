@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.57"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.58"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -4336,6 +4336,488 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 # ==============================================================================
+# 5-C. What-if analysis: --sweep (one input over a range) and --maximize / --minimize (constrained search)
+# ==============================================================================
+#
+# Both use the regression models of the version folder, the fixed inputs of -i and the training medians for the
+# numeric inputs not given (reported, like --find). The search stays inside the training range of the inputs it
+# varies (no extrapolation: tree models are flat outside it); the sweep may leave it, and every such point is marked.
+
+SWEEP_DEFAULT_POINTS = 21       # --sweep "<input>" or "<input>=a:b" without a step
+SWEEP_MAX_POINTS = 500          # more points -> STOP_RETRY with [추천] a larger step
+SWEEP_SHOWN = 25                # points in the JSON (evenly picked, ends kept); the table holds all
+SWEEP_RANGE_TOL = 0.005         # a point this share of the training span outside it still counts as inside
+SEARCH_MAX_VARY = 6
+SEARCH_GRID_BUDGET = 20000      # model evaluations of the grid stage
+SEARCH_REFINE_ROUNDS = 3        # coordinate search rounds after the grid (more than 3 inputs)
+SEARCH_LINE_POINTS = 41
+SEARCH_SOLUTIONS = 5
+SEARCH_DISTINCT = 0.1           # solutions closer than this (inputs scaled to the training range) are one answer
+TREND_FLAT = 0.01               # steps smaller than this share of the predicted span count as flat
+
+
+def _regression_items(args: argparse.Namespace, names: Optional[List[str]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """The regression target models of -m (filtered by names when given) and the classification targets left out."""
+    items = resolve_target_models(target_path=args.model, filter_targets=names)
+    reg = [it for it in items if it["meta"].get("task", "regression") == "regression"]
+    skipped = [str(it["target"]) for it in items if it not in reg]
+    if not reg:
+        raise InputError(f"조건별 예측(--sweep)과 조건 찾기(--maximize/--minimize)는 숫자 타겟(회귀) 모델만 씁니다. "
+                         f"이 폴더의 타겟 {skipped}은(는) 분류 모델입니다.")
+    return reg, skipped
+
+
+def _model_input_info(items: List[Dict[str, Any]]) -> Tuple[List[str], List[str], Dict[str, List[Any]], Dict[str, Dict[str, Any]]]:
+    """(raw inputs, numeric raw inputs, categorical inputs -> known values, numeric stats) over the models."""
+    raw: List[str] = []
+    cats: Dict[str, List[Any]] = {}
+    dates: set = set()
+    stats: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        meta = it["meta"]
+        schema = meta.get("feature_schema") or {}
+        raw += model_raw_inputs(meta)
+        for c, known in (schema.get("categorical") or {}).items():
+            cats.setdefault(c, list(known))
+        dates |= set(schema.get("datetime") or {})
+        for c, st in (meta.get("feature_stats") or {}).items():
+            stats.setdefault(c, st)
+    raw = list(dict.fromkeys(raw))
+    numeric = [c for c in raw if c not in cats and c not in dates]
+    return raw, numeric, cats, stats
+
+
+def _whatif_command(args: argparse.Namespace, inline: str) -> Optional[str]:
+    cmd = command_text(drop={"-i": "input", "--input": "input"})
+    return f"{cmd} -i {quote_arg(inline)}" if cmd else None
+
+
+def _base_inputs(args: argparse.Namespace, items: List[Dict[str, Any]], vary: List[str]) -> Dict[str, Any]:
+    """The fixed inputs (-i, one record) and the training medians of the numeric inputs not given (not the varied ones).
+    A missing text / date input stops (STOP_RETRY [후보]): no value of it is neutral."""
+    raw, numeric, cats, stats = _model_input_info(items)
+    given_df = parse_inline_input(args.input) if getattr(args, "input", None) else None
+    if given_df is not None and len(given_df) != 1:
+        raise InputError(f"-i은(는) 한 줄('열=값,열=값')로 주십시오 (지금 {len(given_df)}줄). 고정 입력이 여러 경우면 경우마다 따로 실행하십시오.")
+    given = given_df.iloc[0].to_dict() if given_df is not None else {}
+    names, _ = (resolve_column_names([str(k) for k in given], raw, "고정 입력(-i)", values=True, exclude=vary)
+                if given else ([], {}))
+    check_same_column([str(k) for k in given], names, "-i", {str(k): v for k, v in given.items()})
+    fixed = {n: given[k] for k, n in zip(given, names)}
+    resolved = dict(zip([str(k) for k in given], names))
+    if given_df is not None:
+        check_comma_numbers(given_df.attrs.get("kv_pairs"), lambda k: resolved.get(k) in numeric, "-i",
+                            lambda fx: _whatif_command(args, kv_text(fx)))
+    both = [v for v in vary if v in fixed]
+    if both:
+        raise InputError(f"{both}은(는) 바꿔 보는 입력이라 -i에 함께 줄 수 없습니다. -i에서 빼십시오.")
+    warnings: List[str] = []
+    for f in list(fixed):
+        if f not in numeric:
+            continue
+        try:
+            fixed[f] = float(fixed[f])
+        except (TypeError, ValueError):
+            raise InputError(f"고정 입력 '{f}'의 값 '{fixed[f]}'이(가) 숫자가 아닙니다. -i에 '{f}=<숫자>'로 다시 지정하십시오.")
+        st = stats.get(f)
+        if st and (fixed[f] < st["min"] or fixed[f] > st["max"]):
+            warnings.append(f"고정 입력 '{f}'={_fmt(fixed[f])}이(가) 학습 범위({_fmt(st['min'])}~{_fmt(st['max'])}) 밖이라 "
+                            f"예측을 믿기 어렵습니다 (외삽)")
+    filled: Dict[str, float] = {}
+    for f in raw:
+        if f in vary or f in fixed:
+            continue
+        if f in numeric and f in stats:
+            filled[f] = float(stats[f]["median"])
+        elif f in cats:
+            raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오. "
+                             f"[후보] {', '.join(map(str, cats[f][:20]))}")
+        else:
+            raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
+    if filled:
+        warnings.insert(0, "주지 않은 입력은 학습 데이터 중앙값으로 고정했습니다: "
+                        + ", ".join(f"{k}={_fmt(v)}" for k, v in filled.items()))
+    return {"base": {**fixed, **filled}, "fixed": fixed, "filled": filled, "warnings": warnings,
+            "raw": raw, "numeric": numeric, "stats": stats}
+
+
+def _predict_rows(item: Dict[str, Any], rows: pd.DataFrame) -> np.ndarray:
+    meta = item["meta"]
+    df = apply_inference_evals(rows.copy(), meta.get("derived_evals", []))
+    return np.asarray(item["pipeline"].predict(prepare_features(df, meta["feature_schema"])), dtype=float)
+
+
+def _vary_names(args: argparse.Namespace, text: str, numeric: List[str], stats: Dict[str, Any], option: str) -> List[str]:
+    given = [v.strip() for v in str(text).split(",") if v.strip()]
+    if not given:
+        raise InputError(f"{option}에 바꿔 볼 숫자 입력을 주십시오. [후보] {', '.join(numeric[:10])}")
+    names = resolve_column_names(given, numeric, f"바꿔 볼 입력({option})")[0]
+    bad = [n for n in names if n not in stats]
+    if bad:
+        raise InputError(f"{bad}의 학습 범위가 모델 정보에 없어 바꿔 볼 수 없습니다. [후보] {', '.join([c for c in numeric if c in stats][:10])}")
+    if len(set(names)) != len(names):
+        raise InputError(f"{option}에 같은 입력이 두 번 있습니다: {given}")
+    return names
+
+
+def _sweep_values(args: argparse.Namespace, name: str, given: str, spec: Optional[str], lo: float, hi: float) -> np.ndarray:
+    """'a:b:step' (both ends included), 'a:b' (SWEEP_DEFAULT_POINTS points), nothing (the training range)."""
+    if spec is None or not spec.strip():
+        return np.linspace(lo, hi, SWEEP_DEFAULT_POINTS)
+    parts = [p.strip() for p in spec.split(":")]
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        raise InputError(f"--sweep '{args.sweep}'을(를) 읽을 수 없습니다. 형식: '<입력>=<시작>:<끝>:<간격>' "
+                         f"(예: {strip_unit(name)}={_fmt(lo)}:{_fmt(hi)}:{_fmt((hi - lo) / 10 or 1)}), 숫자에 쉼표 없이")
+    if len(nums) not in (2, 3) or nums[0] == nums[1] or (len(nums) == 3 and nums[2] <= 0):
+        raise InputError(f"--sweep '{args.sweep}': 시작과 끝이 다르고 간격은 0보다 커야 합니다. 형식: '<입력>=<시작>:<끝>:<간격>'")
+    a, b = nums[0], nums[1]
+    if len(nums) == 2:
+        return np.linspace(a, b, SWEEP_DEFAULT_POINTS)
+    step = nums[2] if b > a else -nums[2]
+    n = int(np.floor((b - a) / step + 1e-9)) + 1
+    if n > SWEEP_MAX_POINTS:
+        new_step = abs(b - a) / (SWEEP_MAX_POINTS - 1)
+        nice = float(f"{new_step:.2g}")
+        while nice < new_step:          # rounded up: the new step never makes too many points
+            nice = float(f"{nice * 1.1:.2g}")
+        new_step = nice
+        cmd = command_text(drop={"--sweep": "sweep"})
+        fixed = f"{given}={_fmt(a)}:{_fmt(b)}:{_fmt(new_step)}"
+        rec = f"{cmd} --sweep {quote_arg(fixed)}" if cmd else fixed
+        raise InputError(f"--sweep의 점이 {n}개로 많습니다 (최대 {SWEEP_MAX_POINTS}개). 간격을 넓히십시오. [추천] {rec}")
+    xs = a + step * np.arange(n)
+    if abs(xs[-1] - b) > 1e-9 * max(1.0, abs(b)):
+        xs = np.append(xs, b)       # the end is always a point
+    return xs
+
+
+def _trend(xs: np.ndarray, ys: np.ndarray, vary: str, target: str) -> Dict[str, Any]:
+    span = float(np.ptp(ys)) if len(ys) else 0.0
+    imax, imin = int(np.argmax(ys)), int(np.argmin(ys))
+    out: Dict[str, Any] = {"max": {vary: _r6(xs[imax]), "value": _r6(ys[imax])},
+                           "min": {vary: _r6(xs[imin]), "value": _r6(ys[imin])},
+                           "start": _r6(ys[0]), "end": _r6(ys[-1])}
+    tol = TREND_FLAT * span
+    d = np.diff(ys)
+    up, down = int((d > tol).sum()), int((d < -tol).sum())
+    v, t = strip_unit(vary), strip_unit(target)
+    if span <= 1e-12 * max(1.0, float(np.max(np.abs(ys)))):
+        out["direction"], text = "flat", f"{v}를 바꿔도 {t} 예측이 거의 변하지 않음"
+    elif down == 0:
+        out["direction"], text = "increasing", f"{v}가 커질수록 {t}이(가) 커짐 ({_fmt(ys[0])} -> {_fmt(ys[-1])})"
+    elif up == 0:
+        out["direction"], text = "decreasing", f"{v}가 커질수록 {t}이(가) 작아짐 ({_fmt(ys[0])} -> {_fmt(ys[-1])})"
+    elif 0 < imax < len(ys) - 1 and ys[imax] - max(ys[0], ys[-1]) > 5 * tol:
+        out["direction"], text = "peak", f"{v} {_fmt(xs[imax])}에서 {t}이(가) 가장 큼 ({_fmt(ys[imax])})"
+    elif 0 < imin < len(ys) - 1 and min(ys[0], ys[-1]) - ys[imin] > 5 * tol:
+        out["direction"], text = "valley", f"{v} {_fmt(xs[imin])}에서 {t}이(가) 가장 작음 ({_fmt(ys[imin])})"
+    else:
+        out["direction"], text = "mixed", (f"{v}에 따라 {t}이(가) 오르내림 (최대 {_fmt(ys[imax])} @ {_fmt(xs[imax])}, "
+                                           f"최소 {_fmt(ys[imin])} @ {_fmt(xs[imin])})")
+    out["text"] = text
+    return out
+
+
+def _sweep_chart(path: str, xs: np.ndarray, vary: str, curves: Dict[str, Dict[str, Any]], lo: float, hi: float) -> Optional[str]:
+    """Line chart PNG (one panel per target, 90% band, training range shaded). None when matplotlib is missing."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+    except ImportError:
+        return None
+    have = {f.name for f in font_manager.fontManager.ttflist}
+    font = next((f for f in ("Malgun Gothic", "NanumGothic", "AppleGothic", "Noto Sans CJK KR") if f in have), None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rc = {"axes.unicode_minus": False}
+        if font:
+            rc["font.family"] = font
+        with matplotlib.rc_context(rc):
+            n = len(curves)
+            fig, axes = plt.subplots(n, 1, figsize=(6.4, 2.6 * n + 0.4), squeeze=False)
+            for ax, (t, c) in zip(axes[:, 0], curves.items()):
+                if c.get("lo") is not None:
+                    ax.fill_between(xs, c["lo"], c["hi"], color="#93C5FD", alpha=0.45, linewidth=0, label="90% 범위")
+                ax.plot(xs, c["y"], color="#1E3A8A", linewidth=1.8, marker="o", markersize=2.5, label="예측")
+                ax.axvspan(lo, hi, color="#E5E7EB", alpha=0.5, zorder=0, label="학습 범위")
+                ax.set_ylabel(t)
+                ax.grid(True, linewidth=0.4, alpha=0.6)
+            axes[-1, 0].set_xlabel(vary)
+            axes[0, 0].legend(loc="best", fontsize=8)
+            fig.tight_layout()
+            fig.savefig(path, dpi=120)
+            plt.close(fig)
+    return path
+
+
+def _version_dir_of(items: List[Dict[str, Any]]) -> str:
+    return os.path.dirname(os.path.abspath(items[0]["joblib_path"]))
+
+
+def _save_table(args: argparse.Namespace, df: pd.DataFrame, default_name: str, what: str) -> Tuple[str, List[str]]:
+    """Writes the result table (--save .xlsx/.csv, else <data folder>/<default_name>.xlsx) and reads it back (R1)."""
+    if getattr(args, "save", None):
+        path = os.path.abspath(args.save)
+        if os.path.splitext(path)[1].lower() not in (".xlsx", ".csv"):
+            raise InputError(f"결과 파일(--save)은 .xlsx 또는 .csv만 저장합니다: '{os.path.basename(path)}'. "
+                             f"[추천] {os.path.splitext(args.save)[0]}.xlsx")
+    else:
+        path = os.path.join(os.path.dirname(_version_dir_of_args(args)), default_name + ".xlsx")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    path = avoid_overwrite(path, getattr(args, "overwrite", False), what=what)
+    if path.lower().endswith(".csv"):
+        path = write_csv_excel_compatible(df, path)
+    else:
+        path = save_with_lock_fallback(path, lambda p: df.to_excel(p, index=False), what=what)
+    unverified: List[str] = []
+    try:
+        back = load_data_file(path, header_row=1)
+        if len(back) != len(df):
+            unverified.append(f"저장한 표를 다시 읽으니 {len(back)}행 (기대 {len(df)}행)")
+    except Exception as e:
+        unverified.append(f"저장한 표를 다시 읽지 못함: {type(e).__name__}: {e}")
+    return path, unverified
+
+
+def _version_dir_of_args(args: argparse.Namespace) -> str:
+    p = os.path.abspath(args.model)
+    return p if os.path.isdir(p) else os.path.dirname(p)
+
+
+def _pick_evenly(n: int, k: int) -> List[int]:
+    if n <= k:
+        return list(range(n))
+    return sorted(set(int(round(i)) for i in np.linspace(0, n - 1, k)))
+
+
+def execute_sweep(args: argparse.Namespace) -> Dict[str, Any]:
+    raw_spec = str(args.sweep)
+    m = re.fullmatch(r"\s*([^=]+?)\s*(?:=(.*))?", raw_spec, re.S)
+    if not m or not m.group(1).strip():
+        raise InputError(f"--sweep '{raw_spec}'을(를) 읽을 수 없습니다. 형식: '<입력>=<시작>:<끝>:<간격>' (예: 반응온도=170:200:5)")
+    filt = [t.strip() for t in args.targets.split(",") if t.strip()] if args.targets else None
+    items, skipped = _regression_items(args, filt)
+    raw, numeric, _, stats = _model_input_info(items)
+    vary = _vary_names(args, m.group(1), numeric, stats, "--sweep")
+    if len(vary) != 1:
+        raise InputError("--sweep에는 입력 하나만 주십시오 (예: --sweep \"반응온도=170:200:5\"). 여러 입력을 함께 바꾸는 최적 조건 찾기는 --maximize/--minimize입니다.")
+    vary_name = vary[0]
+    info = _base_inputs(args, items, vary)
+    st = stats[vary_name]
+    lo, hi = float(st["min"]), float(st["max"])
+    xs = _sweep_values(args, vary_name, m.group(1).strip(), m.group(2), lo, hi)
+    rows = pd.DataFrame({**{k: [v] * len(xs) for k, v in info["base"].items()}, vary_name: xs})
+    tol = SWEEP_RANGE_TOL * (hi - lo)       # 170 for a training minimum of 170.03 is not an extrapolation
+    in_range = (xs >= lo - tol - 1e-12) & (xs <= hi + tol + 1e-12)
+    table = pd.DataFrame({vary_name: [_r6(x) for x in xs]})
+    curves: Dict[str, Dict[str, Any]] = {}
+    trend: Dict[str, Any] = {}
+    for it in items:
+        t = str(it["target"])
+        ys = _predict_rows(it, rows)
+        iv = it["meta"].get("prediction_interval")
+        c: Dict[str, Any] = {"y": ys, "lo": None, "hi": None}
+        table[f"pred_{t}"] = [round_pred(float(v)) for v in ys]
+        if iv:
+            c["lo"], c["hi"] = ys + float(iv["residual_lower"]), ys + float(iv["residual_upper"])
+            table[f"pred_lo_{t}"] = [round_pred(float(v)) for v in c["lo"]]
+            table[f"pred_hi_{t}"] = [round_pred(float(v)) for v in c["hi"]]
+        curves[t] = c
+        trend[t] = _trend(xs, ys, vary_name, t)
+    table["학습범위"] = np.where(in_range, "안", "밖(외삽)")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out, unverified = _save_table(args, table, f"sweep_{sanitize_filename(strip_unit(vary_name))}_{stamp}", "조건별 예측 표")
+    chart = None
+    try:
+        chart = _sweep_chart(os.path.splitext(out)[0] + ".png", xs, vary_name, curves, lo, hi)
+        if chart and not (os.path.isfile(chart) and os.path.getsize(chart) > 0):
+            unverified.append("그래프 PNG를 저장했지만 다시 확인하지 못함")
+    except Exception as e:                 # the table is the result; the chart is an extra
+        unverified.append(f"그래프를 그리지 못함: {type(e).__name__}: {str(e)[:120]}")
+        chart = None
+    warnings_out = list(info["warnings"])
+    n_out = int((~in_range).sum())
+    if n_out:
+        warnings_out.append(f"{vary_name}의 {n_out}점이 학습 범위({_fmt(lo)}~{_fmt(hi)}) 밖입니다 (표의 '학습범위' 열 '밖(외삽)', "
+                            f"points의 in_range false): 그 점의 예측은 참고용입니다. 트리 모델은 범위 밖에서 값이 거의 변하지 않습니다")
+    if chart is None and not any("그래프" in u for u in unverified):
+        warnings_out.append("matplotlib이 없어 그래프는 만들지 않았습니다 (표는 정상). 설치: python -m pip install matplotlib")
+    if skipped:
+        warnings_out.append(f"분류 타겟 {skipped}은(는) 조건별 예측에서 뺐습니다 (숫자 타겟만)")
+    pick = _pick_evenly(len(xs), SWEEP_SHOWN)
+    points = []
+    for i in pick:
+        p: Dict[str, Any] = {vary_name: _r6(xs[i]), "in_range": bool(in_range[i])}
+        for t, c in curves.items():
+            p[t] = round_pred(float(c["y"][i]))
+            if c["lo"] is not None:
+                p[f"{t}_90%"] = [round_pred(float(c["lo"][i])), round_pred(float(c["hi"][i]))]
+        points.append(p)
+    truncated = len(pick) < len(xs)
+    res: Dict[str, Any] = {
+        "status": "ok", "command": "sweep", "vary": vary_name, "targets": list(curves),
+        "fixed": {k: (float(v) if isinstance(v, (int, float, np.floating)) else v) for k, v in info["fixed"].items()},
+        "filled_defaults": {k: _r6(v) for k, v in info["filled"].items()},
+        "training_range": {vary_name: [_r6(lo), _r6(hi)]},
+        "count": len(xs), "shown": len(points), "truncated": truncated, "points": points,
+        "out_of_range_points": n_out, "trend": trend, "output_file": out, "verified": not unverified,
+    }
+    if chart:
+        res["chart_file"] = chart
+    if truncated:
+        res["full_result_file"] = out
+    if warnings_out:
+        res["warnings"] = warnings_out
+    if unverified:
+        res["unverified"] = unverified
+    res["preview"] = (f"{vary_name} {_fmt(xs[0])}~{_fmt(xs[-1])} ({len(xs)}점) 조건별 예측 | "
+                      + " | ".join(tr["text"] for tr in trend.values()) + f" | 표: {os.path.basename(out)}")
+    res["agent_directive"] = (
+        ("VERIFIED: 표를 다시 읽어 확인했습니다. " if not unverified else
+         f"UNVERIFIED: 확인하지 못한 것이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 그대로 알리세요. ")
+        + "trend의 타겟별 text(경향)와 points(조건별 예측값" + (", 90% 범위" if any(c["lo"] is not None for c in curves.values()) else "")
+        + "), output_file(엑셀 표)" + (", chart_file(그래프)" if chart else "") + " 경로를 알리세요. "
+        + (f"points는 전체 {len(xs)}점 중 고르게 고른 {len(points)}점이고 전체는 output_file에 있습니다. " if truncated else "")
+        + ("in_range가 false인 점은 학습 범위 밖(외삽)이라 참고용이라고 알리세요. " if n_out else "")
+        + ("warnings도 반드시 알리세요. " if warnings_out else "")
+        + "모델 예측이지 실측이 아니라는 점을 덧붙이세요.")
+    return res
+
+
+def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
+    goal_text = args.maximize if args.maximize else args.minimize
+    sense = 1.0 if args.maximize else -1.0
+    option = "--maximize" if args.maximize else "--minimize"
+    items, skipped = _regression_items(args)
+    names = [str(it["target"]) for it in items]
+    goal = resolve_column_names([str(goal_text).strip()], names, f"목표({option})")[0][0]
+    raw, numeric, _, stats = _model_input_info(items)
+    if not args.vary:
+        raise InputError(f"{option}에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다. [후보] {', '.join(numeric[:10])}")
+    vary = _vary_names(args, args.vary, numeric, stats, "--vary")
+    if len(vary) > SEARCH_MAX_VARY:
+        raise InputError(f"--vary 입력은 {SEARCH_MAX_VARY}개까지입니다 (지금 {len(vary)}개). 영향이 큰 입력만 고르도록 사용자에게 물으십시오.")
+    info = _base_inputs(args, items, vary)
+    conds = None
+    if args.where:
+        conds = resolve_where(parse_where(args.where, "--where"), names + raw, "--where")
+    lows = np.array([float(stats[v]["min"]) for v in vary])
+    highs = np.array([float(stats[v]["max"]) for v in vary])
+    spans = np.maximum(highs - lows, 1e-12)
+    evals = {"n": 0}
+
+    def evaluate(points: np.ndarray) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+        rows = pd.DataFrame({**{k: [v] * len(points) for k, v in info["base"].items()},
+                             **{v: points[:, j] for j, v in enumerate(vary)}})
+        frame = rows.copy()
+        for it in items:
+            frame[str(it["target"])] = _predict_rows(it, rows)
+        evals["n"] += len(points)
+        ok = where_mask(frame, conds) if conds else np.ones(len(points), dtype=bool)
+        return frame, ok, sense * frame[goal].to_numpy(dtype=float)
+
+    k = len(vary)
+    per = max(int(np.floor(SEARCH_GRID_BUDGET ** (1.0 / k))), 3)
+    per = min(per, 2001)
+    axes = [np.linspace(lows[j], highs[j], per) for j in range(k)]
+    grid = np.array(np.meshgrid(*axes, indexing="ij")).reshape(k, -1).T
+    frame, ok, score = evaluate(grid)
+    frames = [frame.assign(_ok=ok, _score=score)]
+    method = f"격자 탐색 (입력마다 {per}점, {len(grid)}개 조합)"
+    if k > 1 and ok.any():
+        # coordinate search from the best feasible grid point: one input at a time over its whole training range
+        best = grid[int(np.argmax(np.where(ok, score, -np.inf)))].copy()
+        for _ in range(SEARCH_REFINE_ROUNDS):
+            moved = False
+            for j in range(k):
+                line = np.repeat(best[None, :], SEARCH_LINE_POINTS, axis=0)
+                line[:, j] = np.linspace(lows[j], highs[j], SEARCH_LINE_POINTS)
+                f2, ok2, s2 = evaluate(line)
+                frames.append(f2.assign(_ok=ok2, _score=s2))
+                if ok2.any():
+                    i = int(np.argmax(np.where(ok2, s2, -np.inf)))
+                    cur = np.where(ok2, s2, -np.inf)[int(np.argmin(np.abs(line[:, j] - best[j])))]
+                    if s2[i] > cur + 1e-12 and not np.isclose(line[i, j], best[j]):
+                        best = line[i].copy()
+                        moved = True
+            if not moved:
+                break
+        method += f" + 좌표 탐색 ({SEARCH_REFINE_ROUNDS}회까지, 입력마다 {SEARCH_LINE_POINTS}점)"
+    allf = pd.concat(frames, ignore_index=True)
+    feas = allf[allf["_ok"]].sort_values("_score", ascending=False, kind="stable")
+    chosen: List[int] = []
+    pts = feas[vary].to_numpy(dtype=float)
+    for i in range(len(feas)):
+        if all(np.max(np.abs(pts[i] - pts[c]) / spans) > SEARCH_DISTINCT for c in chosen):
+            chosen.append(i)
+        if len(chosen) >= SEARCH_SOLUTIONS:
+            break
+    goal_item = next(it for it in items if str(it["target"]) == goal)
+    iv = goal_item["meta"].get("prediction_interval")
+    solutions = []
+    for c in chosen:
+        r = feas.iloc[c]
+        sol: Dict[str, Any] = {"inputs": {v: _r6(r[v]) for v in vary},
+                               "predictions": {t: round_pred(float(r[t])) for t in names}}
+        if iv:
+            sol["interval_90"] = {goal: [round_pred(float(r[goal]) + float(iv["residual_lower"])),
+                                         round_pred(float(r[goal]) + float(iv["residual_upper"]))]}
+        solutions.append(sol)
+    warnings_out = list(info["warnings"])
+    if skipped:
+        warnings_out.append(f"분류 타겟 {skipped}은(는) 조건 찾기에서 뺐습니다 (숫자 타겟만)")
+    best_free = allf.iloc[int(np.argmax(allf["_score"].to_numpy()))]
+    near: List[Dict[str, Any]] = []
+    data = _load_snapshot(_version_dir_of(items), {})
+    if data is not None and solutions and all(c in data.columns for c in [SNAPSHOT_ROW_COL] + vary):
+        data = data.copy()
+        data["__row"] = coerce_numeric(data[SNAPSHOT_ROW_COL]).fillna(-1).astype(int)
+        keys = vary + [c for c in info["numeric"] if c not in vary and c in data.columns and c in info["base"]]
+        target_pt = np.array([solutions[0]["inputs"][v] for v in vary] + [float(info["base"][c]) for c in keys[len(vary):]])
+        span_k = np.array([max(float(stats[c]["max"]) - float(stats[c]["min"]), 1e-12) for c in keys])
+        show = list(dict.fromkeys(keys + [t for t in names if t in data.columns]))
+        near = nearest_rows(data, keys, target_pt, span_k, show)
+    count = len(solutions)
+    where_txt = where_text(conds) if conds else ""
+    word = "최대" if sense > 0 else "최소"
+    res: Dict[str, Any] = {
+        "status": "ok", "command": "maximize" if sense > 0 else "minimize", "goal": goal, "vary": vary,
+        "where": where_txt or None,
+        "fixed": {k2: (float(v) if isinstance(v, (int, float, np.floating)) else v) for k2, v in info["fixed"].items()},
+        "filled_defaults": {k2: _r6(v) for k2, v in info["filled"].items()},
+        "training_range": {v: [_r6(lows[j]), _r6(highs[j])] for j, v in enumerate(vary)},
+        "method": method, "evaluations": evals["n"], "feasible_count": int(len(feas)),
+        "count": count, "solutions": solutions, "nearest_rows": near, "verified": True,
+    }
+    if not count:
+        res["best_without_where"] = {"inputs": {v: _r6(best_free[v]) for v in vary},
+                                     "predictions": {t: round_pred(float(best_free[t])) for t in names}}
+    if warnings_out:
+        res["warnings"] = warnings_out
+    cond_txt = f" ({where_txt})" if where_txt else ""
+    if count:
+        s0 = solutions[0]
+        res["preview"] = (f"{goal} {word} 조건{cond_txt}: " + ", ".join(f"{v}={_fmt(x)}" for v, x in s0["inputs"].items())
+                          + f" -> {goal} {_fmt(s0['predictions'][goal])} | 답 {count}개 | 학습 범위 안에서만 찾음")
+        res["agent_directive"] = (
+            "VERIFIED: 찾은 조합을 모델로 다시 예측해 조건을 확인했습니다. solutions(답 모두, 첫 번째가 가장 좋음)의 inputs와 predictions, "
+            "nearest_rows(가까운 실측 행)를 알리세요. 학습 범위 안에서 모델이 예측한 조건이지 보장된 조건이 아니라는 점을 덧붙이세요."
+            + (" warnings도 반드시 알리세요." if warnings_out else ""))
+    else:
+        res["preview"] = (f"{goal} {word} 조건{cond_txt}: 0건 (학습 범위 안에서 조건을 만족하는 조합 없음) | "
+                          f"조건 없이 {word}: {_fmt(best_free[goal])}")
+        res["agent_directive"] = (
+            f"VERIFIED: 0건. 학습 범위 안에서 조건({where_txt})을 만족하는 조합을 찾지 못했습니다. 사용자에게 그대로 알리고 "
+            "best_without_where(조건 없이 가장 좋은 조합)를 함께 알리세요. 조건을 바꿔 다시 실행하지 마세요."
+            + (" warnings도 반드시 알리세요." if warnings_out else ""))
+    return res
+
+
+# ==============================================================================
 # 6. CLI Entry Point
 # ==============================================================================
 
@@ -4371,10 +4853,35 @@ def main():
     parser.add_argument("--overwrite", action="store_true",
                         help="--save 파일이 이미 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--find", help="모델 반대 찾기 목표 ('생산효율=50', 숫자 타겟). --vary와 함께")
-    parser.add_argument("--vary", help="반대 찾기에서 값을 찾을 숫자 입력 (예: 반응온도). 나머지 입력은 -i로 고정, 생략하면 학습 중앙값")
+    parser.add_argument("--vary", help="반대 찾기에서 값을 찾을 숫자 입력 (예: 반응온도). 나머지 입력은 -i로 고정, 생략하면 학습 중앙값. "
+                                       "--maximize/--minimize에서는 바꿔 볼 입력 목록 (쉼표 구분, 6개까지)")
+    parser.add_argument("--sweep", help="조건별 예측: 입력 하나를 바꿔 가며 예측 ('반응온도=170:200:5' = 시작:끝:간격, "
+                                        "'반응온도' = 학습 범위). 나머지 입력은 -i, 생략하면 학습 중앙값. 표(엑셀)와 그래프 저장")
+    parser.add_argument("--maximize", help="조건 찾기: 이 숫자 타겟이 가장 커지는 --vary 입력 조합 (학습 범위 안)")
+    parser.add_argument("--minimize", help="조건 찾기: 이 숫자 타겟이 가장 작아지는 --vary 입력 조합 (학습 범위 안)")
+    parser.add_argument("--where", help="조건 찾기의 제약 (예: '불순물 <= 100; 반응온도 < 190'. ;는 그리고, |는 또는)")
 
     args = parser.parse_args()
 
+    search = args.maximize or args.minimize
+    if args.where and not search:
+        parser.error("--where는 --maximize 또는 --minimize와 함께 씁니다.")
+    if args.maximize and args.minimize:
+        parser.error("--maximize와 --minimize는 하나만 주십시오.")
+    if args.sweep:
+        if args.find or search or args.file:
+            parser.error("조건별 예측(--sweep)에는 --find, --maximize, --minimize, -f를 함께 쓰지 않습니다.")
+        if args.vary:
+            parser.error("--sweep에는 바꿀 입력을 --sweep 값에 씁니다 (예: --sweep \"반응온도=170:200:5\"). --vary를 빼십시오.")
+        run_cli(lambda: execute_sweep(args), hint="Check the input name and the range of --sweep in SKILL.md.")
+        return
+    if search:
+        if args.find or args.file or args.targets:
+            parser.error("조건 찾기(--maximize/--minimize)에는 --find, -f, -y를 함께 쓰지 않습니다.")
+        if not args.vary:
+            parser.error("조건 찾기(--maximize/--minimize)에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다.")
+        run_cli(lambda: execute_search(args), hint="Check the target, --vary and --where names in SKILL.md.")
+        return
     if args.find or args.vary:
         if not (args.find and args.vary):
             parser.error("모델 반대 찾기는 --find와 --vary를 함께 주어야 합니다.")

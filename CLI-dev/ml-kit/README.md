@@ -532,6 +532,25 @@ python ml_predict.py -m v3 --find "생산효율=105" --vary 반응온도 -i "압
 - 확인: 답 구간 주변을 다시 예측해 목표값을 지나는지 확인하면 `VERIFIED`. 0건이면 `reachable`(학습 범위에서 가능한 예측 최소~최대).
 - 답·운전 구간·`training_range`·`reachable`·`filled_defaults`는 소수 6자리, 작은 값은 유효숫자 6자리 (1e-6 크기 입력이 0이 되지 않게).
 
+### 1-C) 조건별 예측 (`--sweep`)과 조건 찾기 (`--maximize`, `--minimize`)
+회귀(숫자) 타겟 모델만 씁니다(분류 타겟은 빼고 `warnings`). 고정 입력은 `-i`(한 건), 말하지 않은 숫자 입력은 학습 중앙값(`filled_defaults`, `warnings` 첫 줄),
+말하지 않은 글자·날짜 입력은 `STOP_RETRY`(`[후보]` 학습 범주). 고정 입력이 학습 범위 밖이면 외삽 경고.
+
+- **`--sweep "<입력>=<시작>:<끝>:<간격>"`**: 입력 하나를 바꿔 가며 모든 회귀 타겟(또는 `-y`)을 예측합니다. `<시작>:<끝>`만 주면 21점, `<입력>`만 주면
+  학습 범위 21점. 점은 500개까지(넘으면 `STOP_RETRY` + `[추천] <간격을 넓힌 전체 명령>`).
+  - 표: 데이터 폴더(`<데이터>_ml_data`)의 `sweep_<입력>_<시각>.xlsx`(`--save`로 .xlsx/.csv 지정 가능). 열 `pred_<타겟>`, `pred_lo_/pred_hi_<타겟>`(90% 예측 범위),
+    `학습범위`(`안` / `밖(외삽)`). 다시 읽어 행 수를 확인합니다(R1). 그래프: 표와 같은 이름의 `.png`(타겟마다 한 칸, 90% 띠, 학습 범위 음영). matplotlib이 없으면 표만.
+  - JSON: `points`(25점까지 고르게, 양 끝 포함. 넘으면 `truncated: true`, `full_result_file` = 표), 점마다 `in_range`와 `<타겟>_90%`,
+    `trend`(타겟마다 `direction` = increasing / decreasing / peak / valley / flat / mixed, `max`, `min`, `start`, `end`, `text` 한국어 한 줄),
+    `out_of_range_points`(학습 범위 밖 점 수, 범위의 0.5% 안은 안으로 봄), `output_file`, `chart_file`.
+- **`--maximize|--minimize "<타겟>" --vary "<입력1>,<입력2>" [--where "<제약>"]`**: 바꿀 입력(6개까지)을 **학습 범위 안에서만** 움직여 찾습니다.
+  격자 탐색(모델 평가 약 2만 번: 입력 1개 2001점, 2개 141점, 3개 27점 ...) 뒤 입력이 2개 이상이면 가장 좋은 점에서 좌표 탐색(입력마다 41점, 3회까지).
+  `--where`는 `ml_train.py --exclude-where`와 같은 식으로 타겟 예측값과 입력에 걸 수 있습니다(`불순물 <= 100; 반응온도 < 190`).
+  - JSON: `solutions`(5개까지, 좋은 순, 서로 학습 범위의 10% 넘게 다른 조합만. `inputs`, 모든 타겟의 `predictions`, 목표 타겟의 `interval_90`),
+    `count`, `feasible_count`(제약을 만족한 평가 점 수), `method`, `evaluations`, `nearest_rows`(첫 답에 가까운 학습 행 5개),
+    0건이면 `VERIFIED: 0건` directive와 `best_without_where`(제약 없이 가장 좋은 조합).
+  - `--where`만 주거나, `--sweep`과 `--find`/`--maximize`를 함께 주면 인자 오류.
+
 ### 1) 핵심 안전장치 및 기능
 - **회귀/분류 자동 분기**: 모델 메타데이터의 `task`로 분기합니다. 분류 모델은 `pred_<타겟>`(라벨), `proba_<타겟>_<클래스>`(클래스별 확률), `conf_<타겟>`(최대 확률) 컬럼을 만들고, 확신도 0.6 미만 예측이 있으면 `low_confidence_warning: true`를 반환합니다.
 - `-i "k=v"`에서 `=`가 없는 조각은 앞 값에 쉼표로 붙입니다 (글자 입력 `라인=A,B`는 글자 `A,B`). 맨 앞 조각에 `=`가 없으면 `STOP_RETRY`.

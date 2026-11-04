@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.57"
+  version: "2.9.58"
   platform: windows
 ---
 
@@ -32,6 +32,7 @@ metadata:
 | "버전별로 비교해줘", "지금까지 학습 이력" | 3단계 끝의 이력 명령 |
 | "이 조건이면 얼마야?", "새 데이터 예측" | 4단계 예측 |
 | 모델을 만든 뒤 "생산효율이 50이 되려면 온도는?" (목표값이 되는 조건) | 4-B단계 모델 반대 찾기 |
+| "온도를 170~200으로 바꾸면 어떻게 돼?", "불순물 100 이하에서 생산효율 최대 조건" | 4-C단계 조건별 예측·조건 찾기 |
 | "보고서 만들어줘" | 5단계 보고서 |
 | "성능예측표", "엑셀 계산기로 만들어줘" | 5단계 보고서 (성능예측표가 함께 만들어짐). 입력을 바꿔 다시 만들 때만 7단계 |
 | 모델 없이 "데이터(표)에서 ~일 때 값", "보간", "맵핑", "표에서 ~가 50이 되는 온도는?" | 6단계 표 보간·반대 찾기 |
@@ -127,6 +128,20 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" --find "<타겟>=<목표
 - `--find`와 `-i`는 한 건만 준다 (JSON 배열이 여러 건이면 도구가 멈춘다). 여러 경우는 경우마다 따로 실행한다.
 - 알릴 것: `solutions`(답 모두, 하나만 고르지 않음), `operating_windows`(목표가 예측 오차 안에 드는 운전 구간), `measured`(학습 데이터 기준 답),
   `nearest_rows`(가까운 실측 5행). 0건이면 `reachable`. `warnings`는 반드시 함께. 모델이 예측한 조건이지 보장된 조건이 아니라고 덧붙인다.
+
+## 4-C단계: 조건별 예측 (what-if)과 최적 조건 찾기
+
+입력 하나를 바꿔 가며 예측 (`<시작>:<끝>:<간격>`, 범위를 말하지 않으면 `=` 뒤를 빼서 학습 범위):
+```powershell
+python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" --sweep "<바꿀입력>=<시작>:<끝>:<간격>" -i "<고정입력1>=<값>,<고정입력2>=<값>"
+```
+제약 안에서 타겟을 가장 크게(`--maximize`) 또는 작게(`--minimize`) 하는 입력 조합 (학습 범위 안에서만, `--where`는 없으면 뺀다):
+```powershell
+python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" --maximize "<타겟>" --where "<타겟2> <= <값>" --vary "<바꿀입력1>,<바꿀입력2>" -i "<고정입력>=<값>"
+```
+- `-i`에는 사용자가 말한 고정 입력만. 말하지 않은 숫자 입력은 학습 중앙값으로 채운다(`warnings`에 있음).
+- 조건별 예측 알릴 것: `trend`의 타겟별 `text`, `points`(조건별 예측값과 90% 범위), `output_file`(엑셀 표), `chart_file`(그래프). `in_range`가 false인 점은 학습 범위 밖(참고용).
+- 조건 찾기 알릴 것: `solutions`(모두, 첫 번째가 가장 좋음)의 `inputs`와 `predictions`, `nearest_rows`. 0건이면 `best_without_where`. 모델 예측이지 보장된 조건이 아니라고 덧붙인다.
 
 ## 5단계: ML 결과 보고서 (Word)와 성능예측표 (엑셀)
 

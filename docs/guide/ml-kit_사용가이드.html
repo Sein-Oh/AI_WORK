@@ -107,14 +107,14 @@ th { background: var(--soft); font-weight: 700; }
 <button id="menu" type="button">목차 열기/닫기</button>
 <nav id="side">
   <div class="brand">ml-kit 사용 가이드</div>
-  <div class="ver">베타 | ml-kit 2.9.57 | Gemma 기준</div>
+  <div class="ver">베타 | ml-kit 2.9.58 | Gemma 기준</div>
   <input id="tocq" type="search" placeholder="목차에서 찾기 (예: 차트)">
   <div id="toc"></div>
 </nav>
 <main>
 <header class="top">
   <h1>ml-kit 사용 가이드</h1>
-  <p>엑셀 데이터로 예측 모델을 만들고, 새 조건의 결과를 예측하고, 보고서를 만드는 방법 | 베타테스트용 | ml-kit 2.9.57</p>
+  <p>엑셀 데이터로 예측 모델을 만들고, 새 조건의 결과를 예측하고, 보고서를 만드는 방법 | 베타테스트용 | ml-kit 2.9.58</p>
 </header>
 
 <p class="lead">ml-kit은 엑셀이나 CSV로 모아 둔 과거 데이터에서 <b>규칙을 스스로 배워</b>, 새로운 조건에서 결과가 어떻게 될지 <b>예측</b>하는 도구입니다.
@@ -408,6 +408,16 @@ th { background: var(--soft); font-weight: 700; }
   <div class="warn"><p>모델이 예측한 조건이지 보장된 조건이 아닙니다. 실제 공정 적용 전에는 시험으로 확인하세요.</p></div>
 </div>
 <p>모델 없이 표만 있을 때의 반대 찾기는 8.3절을 보세요.</p>
+
+<h3 id="p-whatif">6.5-B 조건을 바꿔 가며 보기와 최적 조건 찾기</h3>
+<div class="case">
+  <p class="req">반응온도를 170에서 200까지 5씩 바꾸면 생산효율과 불순물이 어떻게 변해? 압축압력은 3이야</p>
+  <div class="res"><p>조건별 예측값과 90% 범위를 표(엑셀)와 그래프(PNG)로 데이터 폴더에 저장하고, "반응온도가 커질수록 생산효율이 커짐", "반응온도 185에서 불순물이 가장 작음"처럼 경향을 알려 줍니다. 학습 범위 밖 조건은 "외삽"으로 표시합니다.</p></div>
+</div>
+<div class="case">
+  <p class="req">불순물 100 이하에서 생산효율이 가장 높은 반응온도와 압축압력 찾아줘</p>
+  <div class="res"><p>학습 데이터 범위 안에서 조합을 찾아 좋은 순으로 몇 개 알려 주고, 가장 가까운 실제 측정 행도 함께 보여 줍니다. 조건을 만족하는 조합이 없으면 그렇게 알리고 조건 없이 가장 좋은 조합을 보여 줍니다. 모델 예측이므로 실제 시험으로 확인하세요.</p></div>
+</div>
 
 <h3 id="p-warn">6.6 예측할 때 나오는 경고</h3>
 <table>

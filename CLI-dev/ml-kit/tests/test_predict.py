@@ -514,3 +514,84 @@ def test_idw_comparison_converts_snapshot_once_and_keeps_values(tmp_path, monkey
     near = np.argsort(d, kind="stable")[:5]
     w = 1 / d[near]
     assert abs(out["values"][0] - float((w / w.sum()) @ df["y"].to_numpy()[near])) < 1e-9
+
+
+# ---- 조건별 예측(--sweep)과 조건 찾기(--maximize/--minimize) (2.9.58) ------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def whatif(tmp_path_factory):
+    work = tmp_path_factory.mktemp("whatif")
+    r = np.random.default_rng(11)
+    n = 300
+    t = r.uniform(170, 200, n)
+    t[:2] = 170, 200                     # the training range is exactly 170~200
+    pr = r.uniform(2, 4, n)
+    c = r.uniform(0.5, 1.5, n)
+    eff = 0.5 * t + 5 * pr + 2 * c + r.normal(0, 0.3, n)
+    imp = 0.2 * (t - 185) ** 2 + 10 * pr + 30 + r.normal(0, 0.5, n)
+    data = write_df(work / "w.csv", pd.DataFrame({"반응온도": t, "압축압력": pr, "촉매비율": c, "생산효율": eff, "불순물": imp}))
+    v = run_tool("ml_train.py", "-f", data, "-x", "반응온도,압축압력,촉매비율", "-y", "생산효율,불순물")["version_dir"]
+    return {"v": v, "work": work}
+
+
+def test_sweep_table_chart_trend(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도=170:200:5", "-i", "압축압력=3,촉매비율=1")
+    assert res["command"] == "sweep" and res["count"] == 7 and res["truncated"] is False and len(res["points"]) == 7
+    assert [p["반응온도"] for p in res["points"]] == [170, 175, 180, 185, 190, 195, 200]
+    assert res["trend"]["생산효율"]["direction"] == "increasing", res["trend"]
+    assert res["trend"]["불순물"]["direction"] == "valley" and abs(res["trend"]["불순물"]["min"]["반응온도"] - 185) <= 5
+    assert "생산효율_90%" in res["points"][0] and res["out_of_range_points"] == 0 and res["filled_defaults"] == {}
+    assert res["output_file"].endswith(".xlsx") and os.path.dirname(res["output_file"]) == os.path.dirname(whatif["v"])
+    tab = pd.read_excel(res["output_file"])
+    assert len(tab) == 7 and {"pred_생산효율", "pred_lo_생산효율", "pred_hi_불순물", "학습범위"} <= set(tab.columns)
+    assert os.path.getsize(res["chart_file"]) > 0 and res["chart_file"].endswith(".png")
+    assert res["agent_directive"].startswith("VERIFIED") and "trend" in res["agent_directive"]
+
+
+def test_sweep_marks_extrapolation_and_fills_medians(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도=160:210:10", "-y", "생산효율")
+    assert res["targets"] == ["생산효율"] and res["out_of_range_points"] == 2
+    assert [p["in_range"] for p in res["points"]] == [False, True, True, True, True, False]
+    assert any("외삽" in w for w in res["warnings"]) and "중앙값" in res["warnings"][0]
+    assert set(res["filled_defaults"]) == {"압축압력", "촉매비율"}
+
+
+def test_sweep_caps_points(whatif):
+    bad = run_fail("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도=170:200:0.01", "-i", "압축압력=3,촉매비율=1")
+    rec = bad["message"].split("[추천] ")[1]
+    assert rec.startswith("python ") and "--sweep" in rec
+    res = run_tool("ml_predict.py", *shlex.split(rec)[2:])
+    assert 25 < res["count"] <= 500 and res["truncated"] is True and res["shown"] == len(res["points"]) == 25
+    assert res["full_result_file"] == res["output_file"] and len(pd.read_excel(res["output_file"])) == res["count"]
+    assert res["points"][0]["반응온도"] == 170 and res["points"][-1]["반응온도"] == 200
+
+
+def test_maximize_with_constraint(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--maximize", "생산효율", "--where", "불순물 <= 80",
+                   "--vary", "반응온도,압축압력", "-i", "촉매비율=1")
+    assert res["command"] == "maximize" and res["count"] >= 1 and res["where"] == "불순물 <= 80"
+    best = res["solutions"][0]
+    assert best["predictions"]["불순물"] <= 80 and best["inputs"]["압축압력"] > 3.5, best
+    assert 185 < best["inputs"]["반응온도"] < 197, best
+    assert all(170 <= s["inputs"]["반응온도"] <= 200 and 2 <= s["inputs"]["압축압력"] <= 4 for s in res["solutions"])
+    effs = [s["predictions"]["생산효율"] for s in res["solutions"]]
+    assert effs == sorted(effs, reverse=True) and len(res["nearest_rows"]) == 5
+    assert "interval_90" in best and res["agent_directive"].startswith("VERIFIED")
+
+
+def test_minimize_impossible_constraint_is_zero(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--minimize", "불순물", "--where", "생산효율 > 1000",
+                   "--vary", "반응온도", "-i", "압축압력=3,촉매비율=1")
+    assert res["count"] == 0 and res["solutions"] == [] and "best_without_where" in res
+    assert res["agent_directive"].startswith("VERIFIED: 0건")
+    assert abs(res["best_without_where"]["inputs"]["반응온도"] - 185) <= 3
+
+
+def test_whatif_argument_rules(whatif):
+    proc, res = run_raw("ml_predict.py", "-m", whatif["v"], "--where", "불순물 <= 80", "-i", "반응온도=180")
+    assert proc.returncode == 2, res
+    proc, res = run_raw("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도", "--find", "생산효율=100", "--vary", "반응온도")
+    assert proc.returncode == 2, res
+    bad = run_fail("ml_predict.py", "-m", whatif["v"], "--maximize", "생산효율", "--vary", "반응온도", "--where", "불순물 == 80")
+    assert '--where "불순물 = 80"' in bad["message"].split("[추천] ")[1]

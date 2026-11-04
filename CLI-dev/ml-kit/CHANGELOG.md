@@ -8,6 +8,25 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.58] - 2026-11-04
+
+조건별 예측(what-if)과 제약 안의 최적 조건 찾기. 이전에는 조건을 바꿔 보려면 에이전트가 `-i` JSON 배열을 직접 만들고 결과를 비교해야 했고,
+"불순물 100 이하에서 생산효율 최대" 같은 요청은 방법이 없었음. 회귀 테스트: `tests/test_predict.py` `test_sweep_*` 3개,
+`test_maximize_with_constraint`, `test_minimize_impossible_constraint_is_zero`, `test_whatif_argument_rules` (2.9.57에서 6개 모두 실패).
+
+### 새 기능 (`ml_predict.py`, 회귀 타겟만, 단독 배포 그대로)
+- `--sweep "<입력>=<시작>:<끝>:<간격>" [-i "<고정 입력>"] [-y <타겟>] [--save <표>]`: 입력 하나를 바꿔 가며 예측.
+  `<시작>:<끝>`만 주면 21점, `<입력>`만 주면 학습 범위 21점, 500점까지(넘으면 `[추천] <간격을 넓힌 전체 명령>`).
+  - 표(xlsx, 데이터 폴더의 `sweep_<입력>_<시각>.xlsx`)와 그래프(같은 이름 `.png`, 90% 띠, 학습 범위 음영. matplotlib이 없으면 표만과 경고).
+  - JSON `points`(25점까지 고르게, 넘으면 `truncated`, `full_result_file`), 점마다 `in_range`, `<타겟>_90%`; `trend`(타겟마다 `direction`
+    increasing/decreasing/peak/valley/flat/mixed, `max`, `min`, `text`); `out_of_range_points`와 외삽 경고.
+- `--maximize|--minimize "<타겟>" --vary "<입력1>,<입력2>" [--where "<제약>"] [-i "<고정 입력>"]`: 학습 범위 안에서만 격자 탐색(약 2만 번 평가)과
+  좌표 탐색. `--where`는 `--exclude-where`와 같은 식으로 타겟 예측값·입력에 겁니다. `solutions`(5개까지, 좋은 순, 서로 다른 조합,
+  `inputs`, `predictions`, `interval_90`), `feasible_count`, `nearest_rows`(첫 답에 가까운 학습 행 5개). 0건이면 `VERIFIED: 0건`과 `best_without_where`.
+- 말하지 않은 숫자 입력은 `--find`처럼 학습 중앙값(`filled_defaults`, `warnings`), 글자·날짜 입력은 `[후보]`로 멈춤.
+- 인자 규칙: `--where`는 `--maximize`/`--minimize`와만, `--sweep`은 `--find`·`--maximize`·`-f`·`--vary`와 함께 쓰지 않음 (인자 오류).
+- SKILL.md 4-C단계 (명령 2개와 알릴 것), 1단계 표에 한 줄.
+
 ## [2.9.57] - 2026-11-04
 
 학습도 나눠서 진행 (CLI-dev/README.md R10 `CONTINUE:`). 회사 PC Gemma 시험 R1, R2처럼 타겟이 여러 개인 학습은 120초를 넘겨 결과 JSON 없이
