@@ -29,8 +29,8 @@ CLI/*/data/
 CLI/*/cache/
 CLI/office-cli/config.json
 
-# Windows 통합 테스트 결과 (CLI-dev/run_all_tests.py)
-CLI-dev/test_result_*.txt
+# 실기 자동 점검 결과 (CLI-dev/run_all_tests.py)
+CLI-dev/result_*.md
 
 # 실기 테스트 로그: 사용자가 GitHub 웹으로 docs/test_logs/에 직접 올림 (git 명령으로는 올리지 않음). 프로젝트 마무리 때 이력에서 정리
 docs/test_logs/

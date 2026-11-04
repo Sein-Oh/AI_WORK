@@ -14,28 +14,34 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
 (소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<tool>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다.
 
-## Windows 통합 테스트 (`run_all_tests.py`)
+## 실기 자동 점검 (`run_all_tests.py`)
 
-`C:\CLI`(도구)와 `C:\CLI-dev`(이 폴더)를 나란히 둔 PC에서 진단과 테스트를 한 번에 돌리고 결과를 **파일 1개**로 모읍니다. 사람이 실행하는 도구입니다.
+`C:\CLI`(도구)와 `C:\CLI-dev`(이 폴더)를 나란히 둔 PC에서 자동 점검을 **명령 하나**로 돌리고 결과를 **파일 하나**로 모읍니다. 사람이 실행하는 도구입니다.
+회사 PC 실기 절차 전체(준비, Gemma, 눈 확인, 올릴 파일)는 [`docs/opencode/실기테스트.md`](../docs/opencode/실기테스트.md).
 
 ```bat
 cd /d C:\CLI-dev
-python run_all_tests.py --label 회사PC          :: 전부 (office-cli 눈 확인 질문에 답해야 함)
-python run_all_tests.py --label 회사PC --auto   :: 질문 없이 (자리 비울 때)
-python run_all_tests.py --only diag            :: 환경 진단만 (1분)
+python run_all_tests.py --label 회사PC            :: 자동 점검 전부 (질문 없음, 자리 비워도 됨)
+python run_all_tests.py --label 회사PC --outlook  :: office 러너에 Outlook(G그룹)도
+python run_all_tests.py --only diag              :: 환경 진단과 도구 오류 로그만 (1분)
 ```
 
-- 단계: `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `CLI-dev\tests`의 개발 도구 테스트)
-  -> `ml`(ml-kit 실기) -> `office`(office-cli 실기, Outlook은 `--outlook`일 때만). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)도 붙입니다.
-- 결과: `C:\CLI-dev\test_result_<라벨>_<시각>.txt`. 단계마다 바로 기록하므로 중간에 멈추거나 Ctrl+C로 끊어도 남습니다. 이 파일 하나를 그대로 GitHub 웹에서 `docs/test_logs/`에 업로드하세요. 회사 정보와 PC 경로가 들어 있으므로 프로젝트 마무리 때 저장소 이력에서 정리합니다.
-- 시작 전에 열린 Office 문서를 모두 저장하고 닫고, 실기 테스트 중에는 Office 창을 만지지 마세요.
-- `run_all_tests.bat`를 더블클릭해도 같습니다(전부 실행, 끝나면 창이 멈춰 요약을 보여 줌). 화면 끝과 결과 파일 끝에 단계별 요약이 나옵니다.
+- 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `CLI-dev\tests`)
+  -> `beta`(`run_beta_check.py --agent`, F7 엑셀 재계산 포함) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
+  `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
+- `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP). 예전 `--auto`는 기본이 되어 없앴습니다.
+- Windows + pywin32가 아니면 `ml`, `office`는 ENV-SKIP (클라우드에서도 나머지는 그대로 돎).
+- 결과: `C:\CLI-dev\result_<라벨>_<시각>.md` 하나. 맨 위 요약 표(단계별 PASS/FAIL/SKIP, 시간, 비고)와 실패·건너뜀(ENV-SKIP)·UNVERIFIED 목록, 그 아래 단계별 상세
+  (pytest 출력, 베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
+  베타 점검이 만든 `beta_check_*.md/.xlsx`는 내용을 결과 파일에 넣고 시험 폴더(`C:\ml_beta\check_<시각>`)로 옮기며, 점검이 일부러 낸 도구 오류는 그 폴더의 `_data`에 기록합니다(실제 오류 로그와 섞이지 않음).
+- 종료 코드: 0 = 실패 없음, 1 = FAIL인 단계가 있음, 130 = Ctrl+C. 결과 파일은 GitHub 웹에서 `docs/test_logs/`에 업로드합니다(회사 정보가 있어 프로젝트 마무리 때 이력에서 정리).
+- 시작 전에 열린 Office 문서를 모두 저장하고 닫고, 점검 중에는 Office 창을 만지지 마세요. `run_all_tests.bat`를 더블클릭해도 같습니다(라벨 `PC`, 끝나면 창이 멈춰 요약을 보여 줌).
 
 ## 베타 기능 점검과 Gemma 종합 테스트
 
 | 파일 | 하는 일 |
 |---|---|
-| `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx`. `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
+| `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
 | `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본 |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤) |
 
