@@ -5,12 +5,12 @@
     python tools/run_win_tests.py --only A,C          # 특정 그룹만
     python tools/run_win_tests.py --self-email me@company.com   # G3 실제 발송 테스트 포함
     python tools/run_win_tests.py --auto              # 질문 없이 자동 판정 항목만
-    python tools/run_win_tests.py --dir D:\\office_test --skip-outlook
+    python tools/run_win_tests.py --dir D:\\시험\\office --skip-outlook
     python tools/run_win_tests.py --agent --skip-outlook   # 에이전트(OpenCode 스킬)용: 질문 없음, stdout은 JSON 1줄
         (--agent: -h와 인자 오류도 JSON 1줄, 인자 오류 exit 2, Ctrl+C exit 130. 옵션 줄임말은 받지 않음)
 
 진행 방식:
-    1) 테스트 폴더(기본 C:\\office_test)에 A/B 테스트 파일(xlsx, docx, pptx)을 새로 만듭니다.
+    1) 테스트 폴더(기본 C:\\CLI-dev\\work\\office)에 A/B 테스트 파일(xlsx, docx, pptx)을 새로 만듭니다.
     2) A.xlsx, A.docx, A.pptx를 더블클릭한 것처럼 화면에 엽니다.
     3) 체크리스트 순서대로 도구를 실행하고, COM으로 결과(셀 값, 파일 수정 시각, 슬라이드 수 등)를 자동 검증합니다.
     4) 화면 깜빡임처럼 눈으로만 확인 가능한 항목은 y/n으로 묻습니다.
@@ -2284,7 +2284,8 @@ def _fail(ctx, args, e, error_type, directive):
 
 def main():
     parser = RunnerParser(description="office-cli Windows 실기 테스트 러너")
-    parser.add_argument("--dir", default=r"C:\office_test", help="테스트 파일을 만들 폴더 (기본 C:\\office_test)")
+    parser.add_argument("--dir", default=os.path.join(os.path.dirname(DEV), "work", "office"),
+                        help="테스트 파일을 만들 폴더 (기본 C:\\CLI-dev\\work\\office)")
     parser.add_argument("--only", help="실행할 그룹 (예: A,C,E)")
     parser.add_argument("--self-email", help="G3 실제 발송 테스트에 쓸 본인 메일 주소 (생략 시 G3 건너뜀)")
     parser.add_argument("--skip-outlook", action="store_true", help="G 그룹(Outlook) 건너뜀")

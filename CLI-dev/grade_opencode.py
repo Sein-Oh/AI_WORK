@@ -5,7 +5,7 @@
     python grade_opencode.py --export <대화.json> [<대화2.json> ...] [--label 회사PC] [--judge]
     python grade_opencode.py --runs <기록 폴더> [--label 회사PC]   # run_all_tests.py --gemma가 남긴 opencode run 기록(<ID>.jsonl)
 메시지 팩 다시 만들기 (agent_scenarios.yaml을 고친 뒤):
-    python grade_opencode.py --make-pack [--dir C:\\ml_beta\\agent]
+    python grade_opencode.py --make-pack [--dir C:\\CLI-dev\\work\\gemma]
 
 대화 내보내기: PowerShell에서 `cmd /c "opencode export <세션ID> > chat.json"`
   (cmd의 `>`는 opencode가 쓴 UTF-8 바이트를 그대로 저장한다. PowerShell 5.1의 `| Out-File`이나 `>`는 출력을
@@ -312,6 +312,22 @@ def last_json(output):
 
 # ------------------------------------------------------------------------------------------------
 # 채점
+def continued_runs(turn):
+    """Commands run again because the previous run of the same command answered CONTINUE (continue: true, R10):
+    the tool asked for that rerun, so it is not a repeat."""
+    out, last = [], {}
+    for t in turn["tools"]:
+        if t["tool"] != "bash":
+            continue
+        cmd = ENC_PREFIX.sub("", t["command"])
+        key = re.sub(r"\s+", " ", cmd).strip()
+        if last.get(key):
+            out.append(cmd)
+        payload = last_json(t["output"])
+        last[key] = bool(payload and payload.get("continue"))
+    return out
+
+
 def grade_turn(sc, turn, rules):
     """Returns a list of (check name, ok, detail) for one scenario on one turn."""
     cmds = [c for _, c in bash_commands(turn)]
@@ -372,8 +388,12 @@ def grade_turn(sc, turn, rules):
                         continue
                     if any(re.search(rx, w, re.I) for w in where):
                         bad.append(f"{t['tool']} " + " ".join(f"{k}={v}" for k, v in inp.items()))
-        if rule.get("max_repeat"):
-            bad += [f"{n}회: {c}" for c, n in Counter(re.sub(r"\s+", " ", c).strip() for c in cmds).items() if n > rule["max_repeat"]]
+        if rule.get("max_repeat"):                     # a run right after a CONTINUE result is the tool's own request (R10)
+            asked = continued_runs(turn)
+            counts = Counter(re.sub(r"\s+", " ", c).strip() for c in cmds)
+            for c in asked:
+                counts[re.sub(r"\s+", " ", c).strip()] -= 1
+            bad += [f"{n}회: {c}" for c, n in counts.items() if n > rule["max_repeat"]]
         if rid == "answer_clean":
             bad += [f"이모지 {m}" for m in set(EMOJI.findall(answer))]
             bad += ["file:/// 링크"] if "file:///" in answer else []

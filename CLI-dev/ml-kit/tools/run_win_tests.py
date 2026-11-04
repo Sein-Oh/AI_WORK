@@ -632,12 +632,13 @@ def write_testlog(ctx, log_dir, label, stamp, fatal=None):
 
 def main():
     parser = argparse.ArgumentParser(description="ml-kit Windows 실기 테스트 러너")
-    parser.add_argument("--dir", default=r"C:\ml_test\ml 테스트", help="테스트 폴더 (없는 경로나 빈 폴더. 러너가 만든 폴더만 실행 때마다 비우고 새로 만듦, 한글/공백 경로 권장)")
+    parser.add_argument("--dir", default=os.path.join(os.path.dirname(DEV), "work", "ml 테스트"), help="테스트 폴더 (없는 경로나 빈 폴더. 러너가 만든 폴더만 실행 때마다 비우고 새로 만듦, 한글/공백 경로 권장)")
     parser.add_argument("--only", help="실행할 항목 (예: M1,M4). M1이 만든 모델을 쓰는 항목은 M1도 함께 지정")
     parser.add_argument("--label", default="PC", help="로그 파일 이름에 붙일 PC 라벨 (예: 집PC, 회사PC)")
     parser.add_argument("--log-dir", default=os.path.join(DEV, "tools", "test_logs"),
                         help="AI 판독용 로그 폴더 (기본: tools/test_logs, GitHub 웹으로 docs/test_logs/에 업로드)")
     args = parser.parse_args()
+    os.environ["ML_KIT_TIME_LIMIT"] = "0"     # 사람이 돌리는 실기 러너: 명령 시간 제한(에이전트용 100초) 끔
     only, bad = parse_only(args.only)
     if bad:
         parser.error(f"알 수 없는 항목: {', '.join(bad)} (가능: {','.join(TEST_IDS)})")

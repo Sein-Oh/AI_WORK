@@ -32,14 +32,15 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
 - `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.yaml`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\CLI\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
-  시험 폴더(기본 `C:\ml_beta\agent`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\ml_beta\gemma_runs_<시각>`에 남깁니다.
+  시험 폴더(기본 `C:\CLI-dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\CLI-dev\work\gemma_runs_<시각>`에 남깁니다.
   첫 요청에서 세션이 안 생기면 나머지를 보내지 않고 FAIL. 요청 하나의 시간 상한 `--gemma-timeout`(기본 900초). 관리자 권한 창이면 UNVERIFIED에 경고.
 - `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP). 예전 `--auto`는 기본이 되어 없앴습니다.
 - Windows + pywin32가 아니면 `ml`, `office`는 ENV-SKIP (클라우드에서도 나머지는 그대로 돎).
 - 결과: `C:\CLI-dev\result_<라벨>_<시각>.md` 하나. 맨 위 요약 표(단계별 PASS/FAIL/SKIP, 시간, 비고)와 실패·건너뜀(ENV-SKIP)·UNVERIFIED 목록, 그 아래 단계별 상세
   (pytest 출력, 베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
-  베타 점검이 만든 `beta_check_*.md/.xlsx`는 내용을 결과 파일에 넣고 시험 폴더(`C:\ml_beta\check_<시각>`)로 옮기며, 점검이 일부러 낸 도구 오류는 그 폴더의 `_data`에 기록합니다(실제 오류 로그와 섞이지 않음).
+  베타 점검이 만든 `beta_check_*.md/.xlsx`는 내용을 결과 파일에 넣고 시험 폴더(`C:\CLI-dev\work\beta_<시각>`)로 옮기며, 점검이 일부러 낸 도구 오류는 그 폴더의 `_data`에 기록합니다(실제 오류 로그와 섞이지 않음).
 - 종료 코드: 0 = 실패 없음, 1 = FAIL인 단계가 있음, 130 = Ctrl+C. 결과 파일은 GitHub 웹에서 `docs/test_logs/`에 업로드합니다(회사 정보가 있어 프로젝트 마무리 때 이력에서 정리).
+- 시험 폴더는 모두 `C:\CLI-dev\work\` 아래입니다 (`beta_<시각>`, `office`, `ml 테스트`, `gemma`, `gemma_runs_<시각>`, 눈 확인용 `눈확인`). git에는 올리지 않으며, 반입 때 `C:\CLI-dev`를 통째로 지우면 함께 사라집니다.
 - 시작 전에 열린 Office 문서를 모두 저장하고 닫고, 점검 중에는 Office 창을 만지지 마세요. `run_all_tests.bat`를 더블클릭해도 같습니다(라벨 `PC`, 끝나면 창이 멈춰 요약을 보여 줌).
 
 ## 베타 기능 점검과 Gemma 종합 테스트
@@ -48,6 +49,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 |---|---|
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
 | `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본 |
+| `apply_skills.py` | `C:\CLI`의 `SKILL.md` 2개와 `opencode/AGENTS.md`(전역 지침 원본)를 OpenCode 설정 폴더(`%USERPROFILE%\.config\opencode`)로 복사. 바뀐 것만 복사하고 덮어쓰는 파일은 `work\skill_backup_<시각>`에 보관. `--check`(확인만, 다르면 exit 1), `--test`(office-cli-test 보조 스킬도), `--config-dir`. 스킬 폴더에 남은 예전 `.py`와 rg(ripgrep) 없음도 알림. `run_all_tests.py`의 diag가 같은지 확인해 다르면 FAIL |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
 진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
@@ -70,7 +72,8 @@ CLI-dev/<tool>/
 ## 모든 도구가 지키는 ACI 공통 계약
 
 1. **stdout = 정확히 1줄 JSON.** 진행 로그·표·경고는 모두 stderr.
-2. 성공: exit 0, `"status": "ok"`, `agent_directive`가 `VERIFIED:`로 시작.
+2. 성공: exit 0, `"status": "ok"`, `agent_directive`가 `VERIFIED:`(확인함) 또는 `UNVERIFIED:`(확인 못 함, R1)로 시작.
+   긴 작업이 시간 제한 전에 멈추면 `CONTINUE:` + `"continue": true`, 같은 명령을 다시 실행하면 이어서 진행 (R10).
 3. 실패: exit 1(인자 오류 2, 중단 130), `"status": "error"`, `agent_directive`가
    - `STOP_RETRY:` - 입력/데이터 문제. message에 `[추천]`이 있으면 1회만 재시도 (전체 명령이면 그대로, 아니면 그 값으로 바꿔서. R8).
    - `ERROR:` - 내부 오류. 재시도 금지.
@@ -166,3 +169,14 @@ CLI-dev/<tool>/
 각 도구는 위 규칙마다 회귀 테스트를 둔다: `verified`/`UNVERIFIED:`, 0건 응답, `truncated` 키, `recovered`(잠금 모의),
 `retry_fs`의 재시도 대상 구분, `remove_tree`의 사용자 경로 거부, `missing_library` 응답, errors.txt(exit 1/2 기록, 130 미기록, 회전),
 `-h` stdout 1줄, `--dry-run`이 파일을 바꾸지 않음.
+
+### R10. 긴 작업은 나눠서 진행 (`CONTINUE:`)
+- 에이전트의 명령 실행 도구는 명령을 시간 제한(OpenCode 120초)에 끊는다. 끊기면 결과 JSON이 없어 LLM이 같은 명령을 반복한다 (2026-11-04 회사 PC Gemma 시험 R1, R2).
+- 오래 걸리는 단계(재학습 등)는 끝낸 결과를 디스크에 저장하고, 다음 단계 전에 시계를 본다 (`check_time`). 제한(`ML_KIT_TIME_LIMIT`, 기본 100초)에서 여유 30초를 뺀 시각을 넘을 것 같으면
+  `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [같은 명령]`,
+  `agent_directive` = `CONTINUE: ...`(exit 0)을 낸다. 오류 로그에는 남기지 않는다.
+- 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행한다. 실행마다 새 단계를 최소 1개는 하므로 반복하면 반드시 끝난다.
+- LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 (최대 10번).
+- 사람이 돌리는 점검 러너(`run_beta_check.py`, 실기 러너)와 테스트는 `ML_KIT_TIME_LIMIT=0`(제한 없음).
+- 현재 ml-kit만 해당 (`ml_export.py`의 입력 고르기, 그것을 부르는 `ml_report.py`). 새 도구에 긴 작업이 생기면 같은 이름·같은 키로 구현한다.
+

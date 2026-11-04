@@ -23,13 +23,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
-    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs,
+    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, retry_fs,
 )
 import ml_train as mt  # noqa: E402  same training competition as ml_train.py
 
 setup_console()
 
 import itertools  # noqa: E402
+import time  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 from datetime import datetime  # noqa: E402
@@ -145,9 +146,69 @@ def evals_for(subset: List[str], evals: List[str], raw: List[str]) -> List[str]:
 # 2. Training a subset (same competition as ml_train.py)
 # ==============================================================================
 
+# 2.9.40: every retrained candidate is saved in <version>/export/_fits (key = data, target, inputs, formulas, seed,
+# versions). A command stopped at the time limit (check_time) or killed by the agent's 120 s limit continues where it
+# stopped when it is run again, and a later export with other --keep reuses the same candidates.
+FIT_CACHE: Optional[str] = None
+_FIT_SECONDS: List[float] = []
+_FIT_STATS = {"reused": 0, "trained": 0}
+
+
+def _fit_key(data: pd.DataFrame, target: str, subset: List[str], kept: List[str], seed: int) -> str:
+    import hashlib
+    import sklearn
+    h = hashlib.sha1()
+    for part in (VERSION, sklearn.__version__, target, "\x1f".join(subset), "\x1f".join(kept), seed):
+        h.update(str(part).encode("utf-8") + b"\x1e")
+    h.update(pd.util.hash_pandas_object(data[list(subset) + [target]], index=False).values.tobytes())
+    return h.hexdigest()[:32]
+
+
+def _cached_fit(key: str) -> Optional[Dict[str, Any]]:
+    if not FIT_CACHE:
+        return None
+    path = os.path.join(FIT_CACHE, key + ".joblib")
+    if not os.path.isfile(path):
+        return None
+    try:
+        res = joblib.load(path)
+        if isinstance(res, dict) and "pipe" in res and "val_r2" in res:
+            return res
+    except Exception:
+        pass
+    try:                                      # damaged cache entry: drop it and train again (JIT: cache rebuilt)
+        os.remove(path)
+    except OSError:
+        pass
+    return None
+
+
+def _save_fit(key: str, res: Dict[str, Any]) -> None:
+    if not FIT_CACHE:
+        return
+    try:
+        os.makedirs(FIT_CACHE, exist_ok=True)
+        path = os.path.join(FIT_CACHE, key + ".joblib")
+        tmp = path + ".tmp"
+        joblib.dump(res, tmp)
+        retry_fs(lambda: os.replace(tmp, path))
+    except Exception as e:                    # no cache only means a slower next run
+        sys.stderr.write(f"[WARN] 학습 결과를 저장하지 못했습니다 (다음 실행이 느려질 뿐): {type(e).__name__}: {e}\n")
+
+
 def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[str], raw: List[str],
                seed: int = 42) -> Dict[str, Any]:
     kept = evals_for(subset, evals, raw)
+    key = _fit_key(data, target, subset, kept, seed)
+    hit = _cached_fit(key)
+    if hit is not None:
+        _FIT_STATS["reused"] += 1
+        return hit
+    done = _FIT_STATS["reused"] + _FIT_STATS["trained"]
+    if _FIT_STATS["trained"]:                 # at least one new candidate per run: running again always moves on
+        check_time(max(_FIT_SECONDS, default=0.0) * 1.2,
+                   f"성능예측표 입력 고르기: 후보 {done}개 학습 저장됨 ('{strip_unit(target)}' 입력 {len(subset)}개 시험 전에 멈춤)")
+    t0 = time.monotonic()
     df = data[subset].apply(coerce_numeric)
     if kept:
         df = apply_inference_evals(df, kept)
@@ -161,9 +222,13 @@ def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[s
                                                          target_name=target, schema=schema, seed=seed)
     finally:
         mt.log_progress = quiet
-    return {"inputs": list(subset), "evals": kept, "schema": schema, "pipe": pipe,
-            "val_r2": float(info["val_r2"]), "rmse": float(info["rmse"]), "model": info["champion_model"],
-            "interval": info.get("prediction_interval")}
+    res = {"inputs": list(subset), "evals": kept, "schema": schema, "pipe": pipe,
+           "val_r2": float(info["val_r2"]), "rmse": float(info["rmse"]), "model": info["champion_model"],
+           "interval": info.get("prediction_interval")}
+    _FIT_SECONDS.append(time.monotonic() - t0)
+    _FIT_STATS["trained"] += 1
+    _save_fit(key, res)
+    return dict(res)
 
 
 def search(data: pd.DataFrame, target: str, inputs: List[str], keep: List[str], evals: List[str],
@@ -830,7 +895,9 @@ def inputs_arg(choice: Dict[str, List[str]], single: bool) -> str:
 
 
 def execute_export(args) -> Dict[str, Any]:
+    global FIT_CACHE
     vinfo = load_version(args.model, args.targets)
+    FIT_CACHE = os.path.join(vinfo["dir"], "export", "_fits")
     data_all = vinfo["data"]
     warnings: List[str] = []
     if vinfo["skipped"]:
@@ -918,6 +985,7 @@ def execute_export(args) -> Dict[str, Any]:
         plans.append({"target": target, "cand": cand, "cands": cands, "table": cand["table"], "all_inputs": inputs,
                       "reason": reason, "keep": keep, "data": data})
 
+    progress(f"후보 학습: 새로 {_FIT_STATS['trained']}개, 저장된 것 재사용 {_FIT_STATS['reused']}개")
     if over:
         # the suggestion keeps the --inputs of every other target, so running it does not change them
         choice = {**spec, **{t: c["inputs"] for t, c in over.items()}}

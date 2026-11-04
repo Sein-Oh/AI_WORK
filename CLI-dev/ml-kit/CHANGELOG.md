@@ -8,6 +8,28 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.40] - 2026-11-04
+
+회사 PC `run_all_tests.py --gemma`(Gemma, opencode CLI 2.2.5)에서 R1(보고서)과 R2(성능예측표)가 결과 JSON 없이 끝남:
+OpenCode의 명령 실행 도구가 명령을 120초에 끊고(Gemma가 SKILL.md의 시간 제한 600000을 주지 않음), 이 PC에서 성능예측표의
+입력 고르기(후보마다 다시 학습)는 2~8분 걸림. Gemma는 같은 명령을 4번 반복했고 매번 처음부터 다시 학습해 끝나지 못함.
+회귀 테스트: `tests/test_report_export.py` "명령 시간 제한" (2.9.39에서 시간 제한 시험 실패).
+
+### 기능
+- 긴 작업 나눠서 진행 (CLI-dev/README.md R10): `ml_export.py`의 후보 학습을 하나씩 `<버전>/export/_fits/`에 저장하고(데이터, 타겟,
+  입력, 파생 수식, seed, ml-kit·scikit-learn 버전이 같을 때만 다시 씀), 다음 학습 전에 시계를 봄. 명령 시간 제한(`ML_KIT_TIME_LIMIT`,
+  기본 100초, 0 = 없음)에서 여유 30초를 넘길 것 같으면 멈추고 `status: ok`, `verified: false`, `continue: true`, `progress`,
+  `next_commands`(같은 명령), `agent_directive` `CONTINUE: ...`(exit 0, 오류 로그 없음). 같은 명령을 다시 실행하면 저장된 후보를 쓰고
+  이어서 학습. 실행마다 새 후보를 최소 1개 학습하므로 반복하면 반드시 끝남. `ml_report.py`가 부르는 성능예측표도 같음
+  (`Unfinished`는 BaseException이라 보고서의 "성능예측표 실패는 note" 처리에 삼켜지지 않음).
+- 저장된 후보는 다른 `--keep`으로 다시 만들 때도 같은 입력 조합이면 다시 씀 (R2처럼 보고서 뒤 성능예측표 다시 만들기가 빨라짐).
+- 손상된 저장 파일은 지우고 다시 학습 (JIT). 저장 실패는 `[WARN]`만 (다음 실행이 느려질 뿐).
+- 사람이 돌리는 `run_beta_check.py`, `tools/run_win_tests.py`와 테스트는 `ML_KIT_TIME_LIMIT=0`.
+
+### 문서
+- SKILL.md: `CONTINUE:` 행동(사용자에게 묻지 말고 `next_commands`를 그대로 다시 실행, 최대 10번), 규칙 3·6에 예외 표시.
+  전역 지침(`CLI-dev/opencode/AGENTS.md`) 4장 표에도 같은 줄. 채점기(`grade_opencode.py`)는 CONTINUE 뒤의 같은 명령을 반복 위반으로 세지 않음.
+
 ## [2.9.39] - 2026-11-04
 
 학습 직후 "어떤 변수가 제일 중요해?"에 바로 답하도록 중요 입력을 결과 JSON에 넣고, 쓰이던 기능을 SKILL.md에 적음.

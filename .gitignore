@@ -43,3 +43,6 @@ CLI-dev/beta_check_*.md
 CLI-dev/beta_check_*.xlsx
 CLI-dev/grade_*.md
 CLI-dev/grade_*.xlsx
+
+# 실기 점검 시험 폴더 (run_all_tests.py, run_beta_check.py, 실기 러너, 눈 확인)
+CLI-dev/work/

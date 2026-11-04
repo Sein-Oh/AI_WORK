@@ -7,14 +7,19 @@
 |---|---|
 | OS | Windows 11 (폐쇄망) |
 | Python | **WinPython** 배포판, Python 3.13.13 |
-| 실행 방식 | WinPython의 `python.exe`를 시스템 환경변수 `PATH`에 추가하여 `python` 명령으로 호출 |
+| 위치 | `C:\CLI\python` (WinPython의 `python` 폴더만 옮긴 것, `rg.exe` 포함. 2026-11-04) |
+| 실행 방식 | 시스템 환경변수 `PATH`에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 등록하여 `python` 명령으로 호출 |
 | 에이전트 LLM | 26B~30B 경량 모델 (스킬로 도구 호출) |
 
 ## WinPython 사용 시 유의점
 
 - 명령은 항상 **`python`** 으로 호출합니다. WinPython은 `py` 런처를 등록하지 않으므로 `py`, `python3`는 쓰지 않습니다.
 - 패키지 설치도 `python -m pip install ...` 형식으로 해야 PATH에 잡힌 WinPython에 설치됩니다 (`pip` 단독 호출 금지).
-- 설치 위치 확인: `python -c "import sys; print(sys.executable)"` 가 WinPython 폴더를 가리켜야 합니다.
+- 설치 위치 확인: `python -c "import sys; print(sys.executable)"` 가 `C:\CLI\python\python.exe`를 가리켜야 합니다.
+- WinPython 배포판에서 `python` 폴더만 `C:\CLI\python`으로 옮겨 씁니다. 바깥의 실행기(Jupyter, IDLE 바로가기), `scripts`, `settings` 폴더는
+  도구에 필요 없습니다. 옮긴 뒤 `python\Scripts`의 `pip.exe` 같은 실행 파일은 예전 경로를 품고 있어 직접 실행하면 안 될 수 있으니
+  항상 `python -m pip`, `python -m pytest`로 씁니다.
+- 반입 때 `C:\CLI\ml-kit`, `C:\CLI\office-cli`만 지우고 새로 붙여넣습니다. `C:\CLI\python`은 지우지 않습니다 (`docs/opencode/실기테스트.md` 1장).
 - WinPython은 포터블 배포판이라 다른 PC로 폴더째 복사해도 같은 환경이 됩니다. 학습 PC와 예측 PC의 라이브러리 버전을 맞추기 쉬우므로, 가능하면 같은 WinPython 폴더를 그대로 복사해 쓰는 것을 권장합니다.
 
 ## 설치된 주요 라이브러리

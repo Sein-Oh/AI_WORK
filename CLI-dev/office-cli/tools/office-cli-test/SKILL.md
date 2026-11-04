@@ -26,7 +26,7 @@ PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOE
 | 기본 (Outlook 제외) | `python "C:\CLI-dev\office-cli\tools\run_win_tests.py" --agent --skip-outlook` |
 | 일부 그룹만 (예: A, C) | `python "C:\CLI-dev\office-cli\tools\run_win_tests.py" --agent --skip-outlook --only A,C` |
 | Outlook 포함 (사용자가 요청한 경우만) | `python "C:\CLI-dev\office-cli\tools\run_win_tests.py" --agent` |
-| 테스트 폴더 지정 | 위 명령 끝에 `--dir "D:\office_test"` |
+| 테스트 폴더 지정 | 위 명령 끝에 `--dir "D:\시험\office"` (기본 `C:\CLI-dev\work\office`) |
 
 - `--self-email` 은 실제 메일을 보낸다. 사용자가 주소를 주며 **발송 테스트를 분명히 요청한 경우에만** 붙인다.
 - 그룹: A 창 유지, B 읽기 전용, C 되돌리기, D 내보내기, E 엑셀 편집, F PPT, G Outlook, H 연계, I 기능 확대, J 배치 점검, K 검토 기능(목차·메모·변경 추적·노트).

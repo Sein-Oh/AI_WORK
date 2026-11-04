@@ -340,19 +340,19 @@ def main(argv=None):
             except Exception:
                 pass
     ap = Parser(description="ml-kit 베타 기능 도구 점검")
-    ap.add_argument("--dir", help="시험 폴더 (생략 시 C:\\ml_beta\\check_<시각> 또는 이 폴더 옆 check_<시각>)")
+    ap.add_argument("--dir", help="시험 폴더 (생략 시 이 폴더 옆 work\\beta_<시각>)")
     ap.add_argument("--label", default="PC", help="결과 파일 이름에 붙일 라벨")
     ap.add_argument("--only", help="실행할 묶음 (쉼표: H,B,C,D,E,F,G)")
     ap.add_argument("--agent", action="store_true", help="에이전트용: 로그는 stderr, stdout은 결과 JSON 1줄")
     args = ap.parse_args(argv)
+    os.environ["ML_KIT_TIME_LIMIT"] = "0"     # 사람이 돌리는 점검: ml-kit 명령 시간 제한(에이전트용 100초) 끔
     groups = {g for g in (args.only or ",".join(GROUPS)).upper().replace(" ", "").split(",") if g}
     bad = sorted(groups - set(GROUPS))
     if bad or not groups:
         ap.error(f"알 수 없는 묶음: {', '.join(bad) or '(비어 있음)'} (가능: {','.join(GROUPS)})")
     started = datetime.now()
-    base = r"C:\ml_beta" if os.name == "nt" else HERE
     interrupted = False
-    work = os.path.abspath(args.dir or os.path.join(base, f"check_{started:%Y%m%d_%H%M%S}"))
+    work = os.path.abspath(args.dir or os.path.join(HERE, "work", f"beta_{started:%Y%m%d_%H%M%S}"))
     try:
         os.makedirs(work, exist_ok=True)
         run_groups(work, groups)

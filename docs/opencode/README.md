@@ -17,12 +17,13 @@ OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md�
 | `skills\office-cli\` | `C:\CLI\office-cli\SKILL.md` |
 | `skills\office-cli-test\` | `C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md` (실기 테스트를 맡길 때만) |
 
-SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신할 때 위 3개 파일도 같이 덮어씁니다.
+SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신한 뒤 `C:\CLI-dev`에서 `python apply_skills.py`로 복사합니다
+(전역 지침까지 바뀐 것만 복사, `--test`면 office-cli-test도, `--check`는 확인만). 그 뒤 OpenCode를 다시 시작합니다.
 폴더 이름은 표와 같아야 합니다 (SKILL.md 맨 위 `name`과 같은 이름).
 
 **ripgrep(rg.exe)이 필요합니다.** OpenCode는 스킬을 불러올 때 ripgrep을 쓰고, 없으면 인터넷에서 받으려 합니다.
 폐쇄망에서는 받지 못해 스킬 불러오기가 `ripgrep execution failed`로 실패합니다(2026-10-29 실기: 대화 6개 모두).
-ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: WinPython의 `python` 폴더)에 두고,
+ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: `C:\CLI\python`)에 두고,
 PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시 시작합니다. 그 전까지는 전역 AGENTS.md 3장 3번대로 SKILL.md를 직접 읽게 됩니다.
 
 - 도구 오류 로그는 `C:\CLI\<도구>\data\logs\errors.txt`에 쌓이고, `python C:\CLI-dev\run_all_tests.py`가 결과 파일 끝에 붙여 줍니다 (오류 로그만 빨리 모으려면 `--only diag`, 1분). 실기 절차는 [`실기테스트.md`](실기테스트.md).
@@ -30,7 +31,8 @@ PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시
 
 ## 2. 전역 지침 (AGENTS.md)
 
-1. 이 폴더의 `AGENTS.md`를 `C:\Users\<사용자이름>\.config\opencode\AGENTS.md`로 복사합니다.
+1. `CLI-dev/opencode/AGENTS.md`(PC에서는 `C:\CLI-dev\opencode\AGENTS.md`)를 `%USERPROFILE%\.config\opencode\AGENTS.md`로 복사합니다.
+   `python apply_skills.py`가 스킬과 함께 복사합니다. 원본은 CLI-dev에 둡니다 (반입 때 `C:\CLI-dev`가 함께 가므로).
 2. 고쳐 쓸 곳은 없습니다. 도구 경로는 `C:\CLI` 기준으로 적혀 있습니다.
 
 이미 넣어 두신 내용은 아래처럼 반영했습니다.

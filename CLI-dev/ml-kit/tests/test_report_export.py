@@ -934,3 +934,59 @@ def test_sheet_names_unique_without_case():
     a = mx._sheet_name("표_", "Temp", used)
     b = mx._sheet_name("표_", "TEMP", used)
     assert a.lower() != b.lower()
+
+
+# ---- 명령 시간 제한 (2.9.40): 나눠서 진행 ---------------------------------------------------------------------------
+# OpenCode는 명령을 120초에 끊는다 (회사 PC Gemma 시험 R1, R2: 보고서와 성능예측표가 결과 JSON 없이 끊김).
+# 성능예측표의 입력 고르기는 후보 학습을 하나씩 저장하고, 시간 제한(ML_KIT_TIME_LIMIT, 기본 100초)에 닿기 전에
+# CONTINUE 결과로 멈춘다. 같은 명령을 다시 실행하면 저장된 후보를 쓰고 이어서 학습한다.
+
+
+def test_export_stops_at_time_limit_and_the_same_command_continues(tmp_path, monkeypatch):
+    path = _calc_data(tmp_path)
+    tr = run_tool("ml_train.py", "-f", str(path), "-x", "온도,압력,잡음", "-y", "효율")
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 여유 30초를 빼면 0.5초: 실행마다 후보 1개만 학습
+    runs = []
+    for _ in range(10):
+        proc, out = run_raw("ml_export.py", "-m", tr["version_dir"])
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    first, last = runs[0], runs[-1]
+    assert len(runs) >= 3 and all(r.get("continue") for r in runs[:-1])
+    assert first["agent_directive"].startswith("CONTINUE:") and first["verified"] is False and "1개 학습 저장됨" in first["progress"]
+    cmd = first["next_commands"][0]
+    assert cmd.startswith("python ") and "ml_export.py" in cmd and os.path.abspath(tr["version_dir"]) in cmd
+    assert not last.get("continue") and last["agent_directive"].startswith(("VERIFIED", "UNVERIFIED")) and last["output_file"]
+    assert len(os.listdir(os.path.join(tr["version_dir"], "export", "_fits"))) >= len(runs)   # 후보마다 저장
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    proc, again = run_raw("ml_export.py", "-m", tr["version_dir"])
+    assert "새로 0개" in proc.stderr                              # 모든 후보를 저장된 것으로
+    assert again["targets"]["효율"]["inputs"] == last["targets"]["효율"]["inputs"]
+
+
+def test_unfinished_passes_through_the_reports_optional_workbook(monkeypatch, with_export):
+    """보고서는 성능예측표 실패를 note로 넘기지만(보고서는 성공), 시간 제한 멈춤은 삼키지 않고 CONTINUE로 끝낸다."""
+    import ml_export
+    import ml_predict as mp
+    import ml_report
+
+    def stop(args):
+        raise mp.Unfinished("후보 2개 학습 저장됨")
+    monkeypatch.setattr(ml_export, "execute_export", stop)
+    with pytest.raises(mp.Unfinished):
+        ml_report.make_export("v", "regression", None)
+
+
+def test_time_limit_setting(monkeypatch):
+    import ml_predict as mp
+    for raw, want in (("", mp.DEFAULT_TIME_LIMIT), ("abc", mp.DEFAULT_TIME_LIMIT), ("0", float("inf")), ("250", 250.0)):
+        monkeypatch.setenv("ML_KIT_TIME_LIMIT", raw)
+        assert mp.time_limit() == want
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    mp.check_time(10 ** 6, "x")                                   # 제한 없음: 멈추지 않음
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "31")
+    monkeypatch.setattr(mp, "RUN_START", mp.time.monotonic() - 5)
+    with pytest.raises(mp.Unfinished):
+        mp.check_time(0, "x")
