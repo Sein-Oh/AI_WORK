@@ -543,6 +543,24 @@ def test_data_row_given_as_unit_row_is_refused(tmp_path):
     assert rec.startswith("python ") and "--unit-row" not in rec, rec
 
 
+@pytest.mark.parametrize("units", [
+    ["세", "백만원", "cm", None], ["억원", "백만원", "km", None], ["킬로", "km", "킬로", None],
+    ["기가바이트", "Mbps", "초", None], ["개수", "EA", "센티", None], ["점", "퍼센트포인트", "마리", None],
+    ["킬로", None, None, None], ["명", "건", "대", "배"],
+])
+def test_named_unit_row_with_korean_units_is_read(tmp_path, units):
+    """4차 검토(2.9.63 회귀): --unit-row로 준 정상 한글 단위 행(세/백만원/cm, 억원, 킬로/km, 기가바이트/Mbps, 개수/EA, 초/센티,
+    점/퍼센트포인트, 킬로 한 칸)을 낱말 목록에 없다고 거부했다. 아래 열이 숫자이고 짧은 낱말이면 단위다 (경고도 없음)."""
+    f = _unit_rows_file(tmp_path, units)
+    raw = mp.read_raw_table(f)
+    ok, why = mp.unit_row_verdict(raw, 1, 0, given=True)
+    assert ok, why
+    df = mp.load_data_file(f, unit_row=2)
+    assert len(df) == 40 and not [w for w in mp.layout_warnings(df) if "단위로 읽음" in w]
+    named = [c for c in df.columns if "(" in str(c)]
+    assert len(named) == sum(u is not None for u in units), list(df.columns)
+
+
 def test_some_odd_words_in_unit_row_are_read_with_a_warning(tmp_path):
     """단위 행의 일부 칸만 단위가 아닌 한글 낱말이면 받아들이되 warnings로 알린다."""
     f = _unit_rows_file(tmp_path, ["도씨", "점검중", "시간", "킬로그램"])

@@ -714,9 +714,10 @@ def test_where_thousands_and_code_columns():
 @pytest.mark.parametrize("cells,code", [
     (["05", "10", "15", "20", "05"], False),          # 3차 검토: 두 자리 숫자 열 ('05' 하나)
     (["5", "10", "15", "20"], False),
-    (["01", "02", "03", "10", "11"], True),           # (b) 앞자리 0 칸이 절반 이상
+    (["01", "02", "03", "10", "11"], False),          # 4차 검토: 앞자리 0 칸이 많아도 숫자 열 (월 01~12)
     (["007", "7", "12", "13", "14", "15"], True),     # (a) 같은 숫자의 0 없는 표기
-    (["001", "050", "120", "100"], True),             # (c) 3자리 이상 고정폭 코드
+    (["001", "050", "120", "100"], True),             # (b) 3자리 이상 고정폭 코드
+    (["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], False),
     (["05", "10", "측정불가", "", None, "20"], False),  # 빈 값 표시는 세지 않음
 ])
 def test_code_column_judgment(cells, code):
@@ -748,6 +749,19 @@ def test_where_on_code_column_warns_other_notation(tmp_path):
     proc = subprocess.run([sys.executable] + shlex.split(cmd)[1:], capture_output=True, text=True, encoding="utf-8")
     again = json.loads(proc.stdout)
     assert again["exclusions"]["수율"]["condition"] == 12 and not any("'01'" in x for x in again.get("warnings", []))
+
+
+def test_where_on_zero_padded_month_column_compares_numbers(tmp_path):
+    """4차 검토: 월 '01'~'12' 열을 앞자리 0 칸이 절반 이상이라 코드 열로 보아 '월 = 1'이 0행이었다 (학습은 숫자로 읽음).
+    학습에서 숫자로 읽는 열은 = / != 도 숫자 비교."""
+    months = [f"{i:02d}" for i in range(1, 13)] * 2
+    df = pd.DataFrame({"월": months, "y": np.arange(24.0)})
+    raw = mp.load_data_file(write_df(tmp_path / "mon.csv", df))
+    assert not mp.is_code_column(raw["월"])
+    for cond, want in (("월 = 1", 2), ("월 = 01", 2), ("월 != 1", 22), ("월 > 6", 12)):
+        g = mp.parse_where(cond)
+        assert int(mp.where_mask(raw, g).sum()) == want, cond
+        assert mp.where_notation_variants(raw, g) == []
 
 
 def test_where_on_two_digit_number_column_compares_numbers(tmp_path):
@@ -1399,8 +1413,8 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
 
 
-def _split_runs(monkeypatch, *argv, limit=12):
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 0.5 s after the reserve: one new step per run
+def _split_runs(monkeypatch, *argv, limit=12, seconds="30.5"):
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", seconds)        # 0.5 s after the reserve: one new step per run
     runs = []
     for _ in range(limit):
         proc, out = run_raw("ml_train.py", *argv)
@@ -1494,6 +1508,8 @@ def test_resume_saved_nowhere_stops_with_stop_retry(tmp_path, monkeypatch):
     assert proc.returncode == 1 and out["status"] == "error", out
     assert out["agent_directive"].startswith("STOP_RETRY") and "저장하지 못해" in out["message"], out
     assert "쓰기 권한" in out["message"] and "[WARN] 중간 저장 실패" in proc.stderr
+    # 4차 검토: the directive points at the save problem, not the training hint (column names, --eval)
+    assert "--eval" not in out["agent_directive"] and "쓰기 권한" in out["agent_directive"], out["agent_directive"]
     assert time.monotonic() - t0 < 60
     assert not (root / "history.jsonl").exists()
 
@@ -1532,6 +1548,44 @@ def test_resume_save_checks_the_file(tmp_path, monkeypatch):
     mp.check_time(1000.0, "제한 없음")                                 # no limit: goes on to the end
 
 
+def test_resume_find_newest_and_old_fallbacks_swept(tmp_path, monkeypatch):
+    """4차 검토: (a) 같은 이름이 여러 위치에 있으면 가장 최근 것을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지운다
+    (best_run.json 같은 고정 이름). (b) 실행 시작 때 대체 폴더 전체에서 보관 기한(3일)이 지난 항목을 지운다."""
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(mp, "_RECOVERED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    primary = str(tmp_path / "rt")
+    places = mp.resume_places(primary)
+    for i, d in enumerate(places[:2]):
+        os.makedirs(d)
+        with open(os.path.join(d, "best_run.json"), "w", encoding="utf-8") as f:
+            f.write(str(i))
+    old = time.time() - 100
+    os.utime(os.path.join(places[0], "best_run.json"), (old, old))
+    assert mp.resume_find(primary, "best_run.json") == os.path.join(places[1], "best_run.json")
+    os.utime(os.path.join(places[1], "best_run.json"), (old - 100, old - 100))
+    assert mp.resume_find(primary, "best_run.json") == os.path.join(places[0], "best_run.json")
+    mp._RESUME_PLACE[os.path.normcase(places[0])] = 1         # the original folder failed earlier in this command
+    path = mp.resume_save(primary, "best_run.json", lambda tmp: open(tmp, "w", encoding="utf-8").write("new"), "기록")
+    assert path == os.path.join(places[1], "best_run.json")
+    assert not os.path.exists(os.path.join(places[0], "best_run.json"))     # the older copy is not read again
+    assert mp.resume_find(primary, "best_run.json") == path
+    # (b) sweep: an old saved step of another data file in both fallback roots goes, a recent one stays
+    stale = [os.path.join(tmp_path / "data", mp.RESUME_FALLBACK_DIR, "aaaaaaaaaaaa", "x.m0.joblib"),
+             os.path.join(tmp_path / "temp", mp.TEMP_RESUME_DIR, "bbbbbbbbbbbb", "y.joblib")]
+    for f in stale:
+        os.makedirs(os.path.dirname(f))
+        open(f, "wb").write(b"1")
+        t = time.time() - mp.RESUME_MAX_AGE - 60
+        os.utime(f, (t, t))
+    mp.resume_sweep_old()
+    assert not any(os.path.exists(os.path.dirname(f)) for f in stale)
+    assert not os.path.exists(tmp_path / "temp" / mp.TEMP_RESUME_DIR)      # left empty -> removed
+    assert os.path.isfile(path)                                              # recent: kept
+
+
 def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
     """후보를 모두 재사용한 타겟의 1위 전체 적합·순열 중요도 앞에도 시간 확인 (이 실행에서 다른 단계를 했을 때만)."""
     r = np.random.default_rng(3)
@@ -1544,13 +1598,116 @@ def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)   # saves 5 candidates
+    assert sorted(os.listdir(tmp_path / "rt")) == [f"k.m{i}.joblib" for i in range(5)]   # fit saved only at a stop
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
-    mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)   # first step: goes on
+    with pytest.raises(mp.Unfinished) as e:                   # first step (the fit) goes on, then stops (4차 검토)
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "순열 중요도 0/2열" in e.value.progress, e.value.progress
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [5.0])        # another target was trained in this command
+    with pytest.raises(mp.Unfinished) as e:                   # the saved fit is reused: no stop before it
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "순열 중요도 0/2열" in e.value.progress, e.value.progress
+    os.remove(mp.resume_find(str(tmp_path / "rt"), "k.fit.joblib"))
     with pytest.raises(mp.Unfinished) as e:
         mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "1위 모델 전체 적합 전에 멈춤" in e.value.progress and "5/5개" in e.value.progress
+
+
+def _wide_frame(n=60, p=24, seed=11):
+    r = np.random.default_rng(seed)
+    X = pd.DataFrame({f"x{i}": r.uniform(0, 1, n) for i in range(p)})
+    y = pd.Series(5 * X.x0 + 3 * X.x1 - 2 * X.x2 + X.x3 + r.normal(0, 0.05, n))
+    cols = list(X.columns)
+    return X, y, {"numeric": cols, "categorical": {}, "datetime": {}, "input_columns": cols}
+
+
+@pytest.mark.parametrize("task", ["regression", "classification"])
+def test_wide_target_last_step_is_split_and_matches_one_run(tmp_path, monkeypatch, task):
+    """4차 검토: 열이 많으면 마지막 단계(1위 모델 전체 적합 + 순열 중요도)가 120초를 넘어 JSON 없이 끊겼고, 다시 실행해도
+    같은 단계를 반복했다. 이제 전체 적합을 저장하고 순열 중요도를 열 묶음으로 나눠 저장하며 CONTINUE: 실행마다 최소 한 단계
+    (중요도는 열의 1/5 이상)를 하므로 유한 횟수에 끝나고, 결과(리더보드·모델·중요도)는 한 번에 학습한 것과 같다."""
+    X, y, schema = _wide_frame()
+    if task == "classification":
+        y = pd.Series(np.where(y > y.median(), "A", "B"))
+        fn = mt.train_and_benchmark_classifiers
+    else:
+        fn = mt.train_and_benchmark_models
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    want = fn(X=X, y_series=y, target_name="y", schema=schema)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")          # every check after a step stops (in-process clock)
+    resume = str(tmp_path / "rt" / "k")
+    progress = []
+    for _ in range(40):
+        monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])      # a new run of the same command
+        monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
+        try:
+            got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+            break
+        except mp.Unfinished as e:
+            progress.append(e.progress)
+    else:
+        pytest.fail(f"끝나지 않음: {progress[-3:]}")
+    imp_stops = [t for t in progress if "순열 중요도" in t]
+    assert len(progress) <= 5 + 1 + mt.IMPORTANCE_MAX_RUNS, progress
+    assert imp_stops and "0/24열" in imp_stops[0], progress
+    assert len({t for t in imp_stops}) == len(imp_stops), imp_stops                 # every run moves on
+    assert got[0]["leaderboard"] == want[0]["leaderboard"]
+    assert got[2]["feature_importances"] == want[2]["feature_importances"]          # even the importances
+    assert np.array_equal(got[1].predict(X), want[1].predict(X))
+
+
+def test_wide_data_command_split_runs_end_like_one_run(tmp_path, monkeypatch):
+    """4차 검토 재현(명령 단위): 열이 많은 데이터를 작은 ML_KIT_TIME_LIMIT로 학습하면 실행마다 제한 안에 1줄 JSON(CONTINUE)을 내고
+    유한 횟수에 끝나며, 리더보드·중요도는 한 번에 학습한 것과 같다."""
+    X, y, _ = _wide_frame(n=60, p=20)
+    df = X.round(5).assign(y=y.round(5))
+    cols = ",".join(X.columns)
+    ref = write_df(tmp_path / "ref.csv", df)
+    want = run_tool("ml_train.py", "-f", ref, "-x", cols, "-y", "y")
+    data = write_df(tmp_path / "w.csv", df)
+    t0 = time.monotonic()
+    runs = _split_runs(monkeypatch, "-f", data, "-x", cols, "-y", "y", limit=5 + 1 + mt.IMPORTANCE_MAX_RUNS + 1,
+                       seconds="30.01")                     # 0.01 s after the reserve: every step stops
+    progress = [r.get("progress") or "" for r in runs]
+    assert any("순열 중요도" in t for t in progress), progress
+    assert time.monotonic() - t0 < 60 * len(runs)
+    last = runs[-1]
+    assert last["agent_directive"].startswith("VERIFIED") and last["top_features"] == want["top_features"], last
+    board = [json.load(open(os.path.join(r["version_dir"], "leaderboard.json"), encoding="utf-8")) for r in (want, last)]
+    for b in board:
+        b.pop("timestamp", None)
+    assert board[0] == board[1]
+    assert not (tmp_path / "w_ml_data" / ".resume_train").exists()
+
+
+def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
+    """4차 검토 (d): 1위 모델 전체 적합 전 시간 확인은 이번 실행 후보 시간만이 아니라 저장된 후보별 실측 시간(재사용 포함)의
+    최대값으로 추정한다. (b) 순열 중요도는 예측 1회 시간으로 추정해 예산 안이면 한 번에 끝낸다."""
+    import joblib
+    X, y, schema = _wide_frame(p=4)
+    resume = str(tmp_path / "rt" / "k")
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    slow = tmp_path / "rt" / "k.m1.joblib"
+    saved = joblib.load(slow)
+    assert isinstance(saved[-1], float)                       # the measured time is saved with the candidate
+    joblib.dump(saved[:-1] + (1000.0,), slow)                 # a slow candidate of an earlier run
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [0.01])      # a fast step done in this run
+    with pytest.raises(mp.Unfinished) as e:
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "1위 모델 전체 적합 전에 멈춤" in e.value.progress
+    joblib.dump(saved[:-1] + (0.01,), slow)
+    res = mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert len(res[2]["feature_importances"]) == 4             # fit and the whole importance in this run
 
 
 def test_best_run_record_is_removed_after_an_error(tmp_path, monkeypatch):

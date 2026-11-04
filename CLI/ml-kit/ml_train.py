@@ -29,7 +29,8 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
     parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
-    check_time, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
+    check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
+    RESUME_MAX_AGE,
 )
 
 setup_console()
@@ -56,9 +57,8 @@ try:  # R5: a missing library answers with 1 JSON line (missing_library + instal
     from sklearn.metrics import (
         r2_score, mean_absolute_error, root_mean_squared_error,
         f1_score, accuracy_score, balanced_accuracy_score, roc_auc_score,
-        confusion_matrix, classification_report, make_scorer,
+        confusion_matrix, classification_report, make_scorer, get_scorer,
     )
-    from sklearn.inspection import permutation_importance
     from sklearn.exceptions import ConvergenceWarning
 
     # 5 Core Regression Algorithms
@@ -421,9 +421,72 @@ PERMUTATION_MAX_ROWS = 5000
 KNN_MAX_ROWS = 50000
 
 
+PERMUTATION_REPEATS = 5
+IMPORTANCE_MAX_RUNS = 5    # a split permutation importance takes at most this many runs (each run >= 1/5 of the columns)
+
+
+def _importance_path(resume: Optional[str]) -> Optional[str]:
+    return f"{resume}.imp.joblib" if resume else None
+
+
+def _permutation_means(pipe: Pipeline, Xs: pd.DataFrame, ys: np.ndarray, seed: int, scoring: Optional[str],
+                       resume: Optional[str], target_name: str, champion_name: str,
+                       before_stop: Callable[[], None]) -> np.ndarray:
+    """
+    Mean drop of the score when one input column is shuffled (PERMUTATION_REPEATS times), per column of Xs.
+    Each column has its own random stream (seed, column index), so the result does not depend on how the work is
+    split between runs. Split execution (R10): before each column the clock is checked with the measured time of one
+    prediction x PERMUTATION_REPEATS; the finished columns are saved in <resume>.imp.joblib and the run stops with
+    CONTINUE. A run does at least 1/IMPORTANCE_MAX_RUNS of the columns, unless it already did another step (a candidate,
+    the final fit), so running again always moves on and ends. The estimate grows with the measured column times.
+    """
+    scorer = get_scorer(scoring) if scoring else (lambda est, X_, y_: est.score(X_, y_))
+    n_cols = Xs.shape[1]
+    path = _importance_path(resume)
+    done: Dict[int, float] = {}
+    saved_at = path and resume_find(os.path.dirname(path), os.path.basename(path))
+    if saved_at:
+        try:
+            st = joblib.load(saved_at)
+            if st.get("champion") == champion_name and st.get("columns") == list(map(str, Xs.columns)):
+                done = {int(k): float(v) for k, v in st["done"].items()}
+        except Exception:
+            sys.stderr.write(f"[WARN] 저장된 순열 중요도 {os.path.basename(saved_at)}를 읽지 못해 다시 계산합니다\n")
+    t0 = time.monotonic()
+    base = float(scorer(pipe, Xs, ys))
+    col_seconds = max(time.monotonic() - t0, 1e-3) * PERMUTATION_REPEATS * 1.2
+    todo = [j for j in range(n_cols) if j not in done]
+    if todo and resume:
+        sys.stderr.write(f"[INFO] 타겟 '{target_name}': 순열 중요도 남은 열 {len(todo)}/{n_cols}개, "
+                         f"예상 {col_seconds * len(todo):.0f}초 (예측 1회 {col_seconds / PERMUTATION_REPEATS / 1.2:.2f}초)\n")
+    min_chunk = -(-n_cols // IMPORTANCE_MAX_RUNS)
+    new_cols = 0
+    other_step = bool(RUN_MODEL_SECONDS or RUN_FIT_SECONDS)    # this run already moved on (a candidate, the fit)
+    Xw = Xs.copy()
+    for j in todo:
+        if resume and (other_step or new_cols >= min_chunk) and time_would_pass(col_seconds):
+            before_stop()
+            _resume_save(path, {"champion": champion_name, "columns": list(map(str, Xs.columns)), "done": done})
+            check_time(col_seconds, f"학습: 타겟 '{target_name}' 순열 중요도 {len(done)}/{n_cols}열 끝남, 저장됨 "
+                                    f"(나머지 열 전에 멈춤)")
+        t_col = time.monotonic()
+        orig = Xs.iloc[:, j]
+        rng = np.random.default_rng([seed, j])
+        scores = []
+        for _ in range(PERMUTATION_REPEATS):
+            Xw.isetitem(j, orig.take(rng.permutation(len(orig))).set_axis(Xw.index))
+            scores.append(float(scorer(pipe, Xw, ys)))
+        Xw.isetitem(j, orig)
+        done[j] = base - float(np.mean(scores))
+        new_cols += 1
+        col_seconds = max(col_seconds, (time.monotonic() - t_col) * 1.2)   # measured columns: a busy PC is slower
+    return np.array([done[j] for j in range(n_cols)], dtype=float)
+
+
 def feature_importance_ranks(
     pipe: Pipeline, X: pd.DataFrame, y: np.ndarray, schema: Dict[str, Any], seed: int, scoring: Optional[str],
-    notes: Optional[List[str]] = None,
+    notes: Optional[List[str]] = None, resume: Optional[str] = None, target_name: str = "", champion_name: str = "",
+    before_stop: Callable[[], None] = lambda: None,
 ) -> List[Dict[str, Any]]:
     """
     Permutation importance on at most PERMUTATION_MAX_ROWS rows (keeps large data fast),
@@ -431,16 +494,19 @@ def feature_importance_ranks(
     column is permuted as a whole because one-hot encoding happens inside the pipeline).
     notes: gets one line when the ranks carry no information (calculation failed or every
     importance is 0), so the training result can give top_features [] with a reason.
+    resume: split execution of a long calculation (_permutation_means); before_stop saves what the caller must keep.
     """
     Xs, ys = X, y
     if len(X) > PERMUTATION_MAX_ROWS:
         idx = np.random.default_rng(seed).choice(len(X), PERMUTATION_MAX_ROWS, replace=False)
         Xs, ys = X.iloc[idx], y[idx]
     try:
-        res = permutation_importance(pipe, Xs, ys, n_repeats=5, random_state=seed, scoring=scoring)
-        raw = np.maximum(res.importances_mean, 0)
+        raw = np.maximum(_permutation_means(pipe, Xs, ys, seed, scoring, resume, target_name, champion_name,
+                                            before_stop), 0)
         if notes is not None and not float(raw.sum()) > 0:
             notes.append("모든 입력의 순열 중요도가 0입니다 (입력을 섞어도 점수가 떨어지지 않음)")
+    except InputError:                         # a finished step saved nowhere at a stop (check_time: STOP_RETRY)
+        raise
     except Exception as e:
         raw = np.ones(X.shape[1])
         if notes is not None:
@@ -472,6 +538,9 @@ def top_feature_shares(champion: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], 
         return [], note or "중요도 기록이 없습니다"
     top = [{"feature": r["feature"], "importance": round(float(r.get("share", r["pct"] / 100)), 3)}
            for r in ranks[:TOP_FEATURES_MAX]]
+    extra = round(sum(t["importance"] for t in top) - 1.0, 3)
+    if extra > 0:                 # rounding (0.64 + 0.344 + 0.017): the shares never add up to more than 1
+        top[0]["importance"] = round(top[0]["importance"] - extra, 3)
     return top, None
 
 
@@ -603,21 +672,72 @@ def _candidate_load(resume: Optional[str], m_idx: int) -> Optional[Tuple[Any, ..
     return None
 
 
-def _candidate_check(resume: Optional[str], target_name: str, done: int, total: int, what: str) -> None:
-    """Clock check before the next candidate (or the final fit and importance) of a target, also the first candidate
-    after the data was read and the final fit of a target whose candidates were all reused: only after some step was
-    done in this command (a candidate or a target), so every run moves on and never stops without a new saved step
-    (R10). A step saved nowhere makes check_time stop with STOP_RETRY instead, so '저장됨' is true when it stops."""
+def _candidate_check(resume: Optional[str], target_name: str, done: int, total: int, what: str,
+                     known: List[float]) -> None:
+    """Clock check before the next candidate (or the final fit) of a target, also the first candidate after the data
+    was read and the final fit of a target whose candidates were all reused: only after some step was done in this
+    command (a candidate, a final fit or a target), so every run moves on and never stops without a new saved step
+    (R10). The next step is estimated by the longest measured candidate: of this command and the saved candidates of
+    this target (known, reused ones included). A step saved nowhere makes check_time stop with STOP_RETRY instead,
+    so '저장됨' is true when it stops."""
     if resume and (RUN_MODEL_SECONDS or RUN_FIT_SECONDS):
-        check_time(max(RUN_MODEL_SECONDS or RUN_FIT_SECONDS) * 1.2,
+        seconds = RUN_MODEL_SECONDS + known
+        check_time(max(seconds or RUN_FIT_SECONDS) * 1.2,
                    f"학습: 타겟 '{target_name}' 후보 모델 {done}/{total}개 끝남, 저장됨 ({what} 전에 멈춤)")
 
 
 def _candidate_save(resume: Optional[str], m_idx: int, res: Tuple[Any, ...], seconds: float) -> None:
+    """res + (seconds,): the measured time is kept with the candidate for the clock checks of later runs."""
     if not resume:
         return
     RUN_MODEL_SECONDS.append(seconds)
-    _resume_save(_candidate_path(resume, m_idx), res)
+    _resume_save(_candidate_path(resume, m_idx), res + (seconds,))
+
+
+def _final_fit_and_importance(estimator: Any, champion_name: str, step_name: str, X: pd.DataFrame, y: np.ndarray,
+                              schema: Dict[str, Any], seed: int, scoring: Optional[str], resume: Optional[str],
+                              target_name: str, model_count: int, known: List[float], log_offset: int,
+                              log_weight: int) -> Tuple[Any, List[Dict[str, Any]], List[str]]:
+    """
+    The last step of a target: the best model fitted on all rows, then its permutation importance. Split execution
+    (R10): the fit is checked against the clock like a candidate, and when the importance must stop at the time limit
+    the fitted model is saved first (<resume>.fit.joblib) with the finished importance columns, so the next run of the
+    same command neither fits again nor repeats the finished columns (the same model as one run).
+    """
+    fit_path = f"{resume}.fit.joblib" if resume else None
+    saved = None
+    at = fit_path and resume_find(os.path.dirname(fit_path), os.path.basename(fit_path))
+    if at:
+        try:
+            saved = joblib.load(at)
+            if not (isinstance(saved, tuple) and len(saved) == 3 and saved[0] == champion_name):
+                saved = None
+        except Exception:
+            saved = None
+            sys.stderr.write(f"[WARN] 저장된 1위 모델 적합 결과 {os.path.basename(at)}를 읽지 못해 다시 적합합니다\n")
+    fresh = saved is None
+    if fresh:
+        _candidate_check(resume, target_name, model_count, model_count, "1위 모델 전체 적합", known)
+        log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
+        t_fit = time.monotonic()
+        final_pipeline = build_pipeline(fit_safe_model(estimator, y), schema, step_name)
+        final_pipeline.fit(X, y)
+        fit_seconds = time.monotonic() - t_fit
+        if resume:
+            RUN_MODEL_SECONDS.append(fit_seconds)   # a step done in this command
+    else:
+        final_pipeline, fit_seconds = saved[1], saved[2]
+        sys.stderr.write(f"[INFO] 타겟 '{target_name}': 이전 실행에서 저장한 1위 모델 전체 적합을 씀 (나눠서 진행)\n")
+
+    def save_fit() -> None:
+        if fresh and resume:
+            _resume_save(fit_path, (champion_name, final_pipeline, fit_seconds))
+
+    log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
+    notes: List[str] = []
+    ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring=scoring, notes=notes, resume=resume,
+                                     target_name=target_name, champion_name=champion_name, before_stop=save_fit)
+    return final_pipeline, ranks, notes
 
 
 def train_and_benchmark_models(
@@ -667,13 +787,15 @@ def train_and_benchmark_models(
     leaderboard = []
     model_oof_map = {}
 
+    known: List[float] = []                   # measured seconds of this target's candidates (saved ones included)
     for m_idx, (model_name, regressor) in enumerate(models.items()):
         saved = _candidate_load(resume, m_idx)
-        if saved is not None and saved[0] == model_name:
+        if saved is not None and saved[0] == model_name and len(saved) == 4:
             model_oof_map[model_name] = saved[2]
             leaderboard.append(saved[1])
+            known.append(float(saved[3]))
             continue
-        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'")
+        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'", known)
         t_model = time.monotonic()
         oof_preds = np.zeros(len(y))
         train_r2_list = []
@@ -705,7 +827,8 @@ def train_and_benchmark_models(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
-        _candidate_save(resume, m_idx, (model_name, entry, oof_preds), time.monotonic() - t_model)
+        known.append(time.monotonic() - t_model)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_preds), known[-1])
 
     # Sort leaderboard by val_r2 descending
     leaderboard.sort(key=lambda item: item["val_r2"], reverse=True)
@@ -728,15 +851,10 @@ def train_and_benchmark_models(
         "method": "champion OOF residual quantiles (constant width)",
     }
 
-    # Fit Champion Model on 100% of data
-    _candidate_check(resume, target_name, model_count, model_count, "1위 모델 전체 적합")
-    log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "regressor")
-    final_pipeline.fit(X, y)
-
-    log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
-    importance_notes: List[str] = []
-    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring=None, notes=importance_notes)
+    # Fit Champion Model on 100% of data, then its permutation importance (split at the time limit)
+    final_pipeline, feature_ranks, importance_notes = _final_fit_and_importance(
+        models[champion_name], champion_name, "regressor", X, y, schema, seed, None, resume, target_name,
+        model_count, known, log_offset, log_weight)
 
     champion_summary = {
         "task": TASK_REGRESSION,
@@ -946,13 +1064,15 @@ def train_and_benchmark_classifiers(
     model_oof_map: Dict[str, np.ndarray] = {}
     model_proba_map: Dict[str, np.ndarray] = {}
 
+    known: List[float] = []                   # measured seconds of this target's candidates (saved ones included)
     for m_idx, (model_name, clf) in enumerate(models.items()):
         saved = _candidate_load(resume, m_idx)
-        if saved is not None and saved[0] == model_name:
+        if saved is not None and saved[0] == model_name and len(saved) == 5:
             model_oof_map[model_name], model_proba_map[model_name] = saved[2], saved[3]
             leaderboard.append(saved[1])
+            known.append(float(saved[4]))
             continue
-        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'")
+        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'", known)
         t_model = time.monotonic()
         oof_pred = np.empty(len(y), dtype=object)
         oof_proba = np.zeros((len(y), len(classes)))
@@ -991,7 +1111,8 @@ def train_and_benchmark_classifiers(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
-        _candidate_save(resume, m_idx, (model_name, entry, oof_pred, oof_proba), time.monotonic() - t_model)
+        known.append(time.monotonic() - t_model)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_pred, oof_proba), known[-1])
 
     leaderboard.sort(key=lambda item: item["val_f1_macro"], reverse=True)
     for rank, entry in enumerate(leaderboard, 1):
@@ -1023,14 +1144,9 @@ def train_and_benchmark_classifiers(
         for c in classes
     }
 
-    _candidate_check(resume, target_name, model_count, model_count, "1위 모델 전체 적합")
-    log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "classifier")
-    final_pipeline.fit(X, y)
-
-    log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
-    importance_notes: List[str] = []
-    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring="f1_macro", notes=importance_notes)
+    final_pipeline, feature_ranks, importance_notes = _final_fit_and_importance(
+        models[champion_name], champion_name, "classifier", X, y, schema, seed, "f1_macro", resume, target_name,
+        model_count, known, log_offset, log_weight)
 
     champion_summary = {
         "task": TASK_CLASSIFICATION,
@@ -1828,7 +1944,6 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
 # reuses the saved targets and goes on; the version folder and history.jsonl are written once, by the run that ends.
 # ------------------------------------------------------------------------------
 RESUME_DIR = ".resume_train"
-RESUME_MAX_AGE = 3 * 24 * 3600     # saved targets of runs never continued are removed after this many seconds
 BEST_RUN_FILE = "best_run.json"    # in RESUME_DIR: the best versions a split --best run already made ({task: version})
 
 # Seconds of every target trained in this command (all tasks of --best, ml_report -f retraining): the clock check

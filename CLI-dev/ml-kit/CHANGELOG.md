@@ -8,6 +8,31 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.64] - 2026-11-04
+
+4차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 학습의 마지막 단계(1위 모델 전체 적합 + 순열 중요도)가 열이 많으면(5000행 x 200~300열) 120초를 넘어 JSON 없이 끊기고, 다시 실행해도
+  같은 단계를 반복했음. 이제 순열 중요도를 직접 계산하며(열마다 난수 (시드, 열 번호), 예측 5번) 전체 적합 뒤 예측 1번의 시간을 재어 열마다 시계를
+  보고, 넘을 것 같으면 전체 적합 모델(`<키>.fit.joblib`)과 끝낸 열(`<키>.imp.joblib`)을 저장하고 `CONTINUE`(`progress`: `순열 중요도 k/N열 끝남`).
+  실행마다 열의 1/5 이상(`IMPORTANCE_MAX_RUNS` 5)을 하므로 유한 횟수에 끝나고, 나눠 계산한 결과(리더보드·모델·중요도)는 한 번에 학습한 것과 같음.
+  후보 저장 파일에 실측 시간을 함께 남겨 다음 후보·전체 적합 전 추정은 저장된 후보 시간(재사용 포함)의 최대값을 씀(후보를 모두 재사용한 실행 포함).
+  `sklearn.inspection.permutation_importance` 대신 `_permutation_means`(같은 방법: 기준 점수 - 열을 섞은 점수의 평균, 회귀 R2·분류 Macro-F1).
+  공통 `time_would_pass`(PART C). 결과 JSON `top_features`의 비중은 반올림해도 합이 1을 넘지 않게 맞춤(가장 큰 값에서 뺌). 테스트: `test_train.py` `test_wide_target_last_step_is_split_and_matches_one_run`(회귀·분류),
+  `test_last_step_estimate_uses_saved_candidate_times`, `test_full_fit_after_reused_candidates_is_checked`(갱신).
+- [높음, 2.9.63 회귀] `--unit-row`로 준 정상 한글 단위 행(`세/백만원/cm`, `억원`, `킬로/km`, `기가바이트/Mbps`, `개수/EA`, `초/센티`,
+  `점/퍼센트포인트`, `킬로` 한 칸)을 낱말 목록에 없다고 거부했음. 이제 사용자가 준 행의 짧은 한글 낱말(공백 없는 6자 이하, 아래 열이 대부분 숫자)은
+  단위이고, 거부는 상태·결측 표시 낱말(`점검중`, `센서고장`, `정지` 등)이 글자 칸의 절반 이상일 때만(아래 열의 값과 같은 칸이 든 행은 전처럼 데이터 행).
+  경고도 그런 낱말이 있을 때만. 단위 목록 보강(세, 살, 억원, 만원, 백만원, 천원, 원, 킬로, 센티, 미리, 바이트~기가바이트, 개수, 마리, 명, 점,
+  퍼센트포인트, 배, 대, 건). 테스트: `test_loading_layout.py` `test_named_unit_row_with_korean_units_is_read`; `점검중,센서고장,정지` 거부는 그대로.
+- [중간] 코드 열 규칙 (b)(앞자리 0 칸 50% 이상)가 월 `01`~`12`를 코드 열로 보아 `--exclude-where "월 = 1"`이 0행(학습은 숫자 1로 읽음). (b)를 없앰:
+  코드 열은 (a) `007`과 `7`처럼 같은 수를 다르게 적었거나 (b) 모든 칸이 3자리 이상 같은 자릿수 코드일 때만. `ml_map`도 같은 함수.
+  테스트: `test_train.py` `test_where_on_zero_padded_month_column_compares_numbers`, `test_code_column_judgment`(기대값 정리).
+- [낮음] 중간 저장: `resume_find`가 여러 위치 중 가장 최근 파일을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지움(`best_run.json` 고정 이름).
+  명령 시작 때 대체 폴더 전체에서 3일 넘은 항목을 지움(`resume_sweep_old`). 저장 실패 `STOP_RETRY`의 directive가 "열 이름과 --eval 식" 대신
+  쓰기 권한·디스크·경로 길이를 안내. 테스트: `test_resume_find_newest_and_old_fallbacks_swept`, `test_resume_saved_nowhere_stops_with_stop_retry`(보강).
+
 ## [2.9.63] - 2026-11-04
 
 3차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.

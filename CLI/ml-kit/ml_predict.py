@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.63"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.64"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -166,6 +166,7 @@ class Unfinished(BaseException):
 # (the same command would train it again forever) and does not go past the limit either: it stops with STOP_RETRY.
 RESUME_FALLBACK_DIR = "resume"
 TEMP_RESUME_DIR = "ml-kit-resume"
+RESUME_MAX_AGE = 3 * 24 * 3600             # saved steps of runs never continued are removed after this many seconds
 SAVE_FAILED: List[str] = []                # finished steps no place could hold in this command
 _RESUME_PLACE: Dict[str, int] = {}         # original folder -> index of the place that worked in this command
 
@@ -185,12 +186,50 @@ def _place_label(places: List[str], i: int) -> str:
 
 
 def resume_find(primary: str, name: str) -> Optional[str]:
-    """The saved step `name` of `primary` in the original folder or a fallback place (None when not saved)."""
+    """The saved step `name` of `primary` in the original folder or a fallback place (None when not saved). When it
+    is in several places (a file saved again elsewhere after the original folder became blocked), the newest one."""
+    found = []
     for d in resume_places(primary):
         path = os.path.join(d, name)
-        if os.path.isfile(path):
-            return path
-    return None
+        try:
+            if os.path.isfile(path):
+                found.append((os.path.getmtime(path), path))
+        except OSError:
+            pass
+    return max(found)[1] if found else None
+
+
+def resume_sweep_old() -> None:
+    """At the start of a command: removes the saved steps older than RESUME_MAX_AGE in every fallback folder
+    (<tool data folder>/resume/<hash>, %TEMP%/ml-kit-resume/<hash>), also those of data files never trained again,
+    and the folders left empty. Only these tool folders; never raises."""
+    temp = os.environ.get("TEMP") or os.environ.get("TMP") or __import__("tempfile").gettempdir()
+    now = time.time()
+    for root in (os.path.join(get_data_dir(), RESUME_FALLBACK_DIR), os.path.join(temp, TEMP_RESUME_DIR)):
+        try:
+            subs = [os.path.join(root, n) for n in os.listdir(root)]
+        except OSError:
+            continue
+        for sub in subs:
+            try:
+                if not os.path.isdir(sub):
+                    continue
+                for name in os.listdir(sub):
+                    p = os.path.join(sub, name)
+                    try:
+                        if os.path.isfile(p) and now - os.path.getmtime(p) > RESUME_MAX_AGE:
+                            os.remove(p)
+                    except OSError:
+                        pass
+                if not os.listdir(sub):
+                    os.rmdir(sub)
+            except OSError:
+                pass
+        try:
+            if not os.listdir(root):
+                os.rmdir(root)
+        except OSError:
+            pass
 
 
 def resume_save(primary: str, name: str, write: Callable[[str], Any], what: str) -> Optional[str]:
@@ -218,6 +257,11 @@ def resume_save(primary: str, name: str, write: Callable[[str], Any], what: str)
             _RESUME_PLACE[key] = i
             if i > 0:
                 note_recovered(f"중간 저장 실패 ({os.path.basename(places[0])}) -> 대체 위치 {_place_label(places, i)}에 저장")
+                for d in places[:i]:          # an older copy left in a place that worked before is not read again
+                    try:
+                        os.remove(os.path.join(d, name))
+                    except OSError:
+                        pass
             return path
         errors.append(f"{_place_label(places, i)}: {err or '저장한 파일을 찾지 못함'}")
     _RESUME_PLACE[key] = len(places)          # no place works: the next steps of this command do not try again
@@ -250,10 +294,15 @@ def resume_clear(primary: str, drop: Callable[[str, str], bool], fallback_only: 
                 pass
 
 
+SAVE_FAILED_HINT = "확인할 것: 데이터 폴더와 임시 폴더(%TEMP%)의 쓰기 권한, 디스크 남은 공간, 경로 길이(260자). 명령 인자는 고치지 마세요."
+
+
 def save_failed_error() -> InputError:
-    return InputError(
+    err = InputError(
         "중간 결과를 저장하지 못해 나눠서 진행할 수 없습니다 (시간 제한 전에 멈춤): " + SAVE_FAILED[0]
         + ". 데이터 폴더와 임시 폴더(%TEMP%)의 쓰기 권한, 디스크 남은 공간, 경로 길이(260자)를 확인한 뒤 같은 명령을 다시 실행하십시오.")
+    err.hint = SAVE_FAILED_HINT           # error_payload: this hint, not the command's own (column names, --eval)
+    return err
 
 
 def save_failed_warning() -> Optional[str]:
@@ -264,14 +313,20 @@ def save_failed_warning() -> Optional[str]:
             f"(데이터 폴더와 임시 폴더의 쓰기 권한·디스크 공간을 확인하십시오)")
 
 
+def time_would_pass(next_step_seconds: float) -> bool:
+    """True when the next slow step (estimated next_step_seconds) would end past the time limit minus TIME_RESERVE
+    (check_time would stop). Lets a caller save its partial work only when it is about to stop."""
+    limit = time_limit()
+    if limit == float("inf"):
+        return False
+    return time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE
+
+
 def check_time(next_step_seconds: float, progress: str) -> None:
     """Raises Unfinished when the next slow step (estimated next_step_seconds) would end past the time limit
     minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run); when a
     step could not be saved anywhere (SAVE_FAILED) it raises the STOP_RETRY error instead."""
-    limit = time_limit()
-    if limit == float("inf"):
-        return
-    if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
+    if time_would_pass(next_step_seconds):
         if SAVE_FAILED:
             raise save_failed_error()
         raise Unfinished(progress)
@@ -378,6 +433,7 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
                 "사용자가 그렇게 하라고 하면 next_commands[0].command를 글자 그대로 1번 실행하세요."),
         }
     if isinstance(exc, _STOP_RETRY_ERRORS):
+        hint = getattr(exc, "hint", None) or hint
         return {
             "status": "error",
             "error_type": "input",
@@ -493,6 +549,7 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     SAVE_FAILED.clear()
     _RESUME_PLACE.clear()
     try:
+        resume_sweep_old()
         result = execute()
     except Unfinished as u:
         sys.stderr.write(f"[STATUS] 시간 제한으로 여기서 멈춤 (저장됨, 같은 명령으로 이어서): {u.progress}\n")
@@ -971,8 +1028,6 @@ def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "-
 
 _CODE_RE = re.compile(r"\s*[-+]?0\d")     # a code with a leading zero ('007', '01'), never '0.5'
 
-
-CODE_ZERO_SHARE = 0.5                     # a column is a code column when this share of its cells has a leading zero
 _FIXED_CODE_RE = re.compile(r"\d{3,}")    # a fixed-width code ('001' ~ '120'); two digits ('05', '10') read as numbers
 
 
@@ -980,9 +1035,9 @@ def is_code_column(series: pd.Series) -> bool:
     """A category / code column, matched as exact text ('007' is not '7', not a number to interpolate) by
     --where / --exclude-where and ml_map keys. Only when some cell has a leading zero ('007') and
     (a) the same number is also written without it ('007' and '7'), or
-    (b) at least CODE_ZERO_SHARE of the filled cells have a leading zero ('01' ~ '12'), or
-    (c) every filled cell is a code of the same width of 3 or more digits ('001' ~ '120').
-    '05, 10, 15, 20' is a number column. A number or date column (Excel cells) is never one; missing-value marks
+    (b) every filled cell is a code of the same width of 3 or more digits ('001' ~ '120').
+    Otherwise the column is read as numbers, as training reads it: months '01' ~ '12' and '05, 10, 15, 20' are
+    number columns ('월 = 1' meets '01'). A number or date column (Excel cells) is never one; missing-value marks
     and blank cells do not count."""
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
         return False
@@ -992,8 +1047,6 @@ def is_code_column(series: pd.Series) -> bool:
     zero = [isinstance(v, str) and _CODE_RE.match(v) is not None for v in filled]
     if not any(zero):
         return False
-    if sum(zero) >= CODE_ZERO_SHARE * len(filled):
-        return True
     if all(isinstance(v, str) and _FIXED_CODE_RE.fullmatch(v) for v in filled) and len({len(v) for v in filled}) == 1:
         return True
     nums = coerce_numeric(pd.Series(filled, dtype=object))
@@ -2071,7 +2124,7 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
     odd = df.attrs.get("odd_unit_names") or []
     if odd:
         out.append(f"{df.attrs.get('unit_row')}행을 단위로 읽음: {', '.join(odd[:5])}{' 등' if len(odd) > 5 else ''}. "
-                   f"단위가 아닌 낱말이 있습니다. 데이터 행이면 --unit-row를 빼세요")
+                   f"상태·결측 표시로 보이는 낱말이 있습니다. 데이터 행이면 --unit-row를 빼세요")
     rep = df.attrs.get("repeated_header_rows") or []
     if rep:
         out.append(f"{_row_list(rep)}행은 머리글(단위) 행과 같아(페이지마다 반복된 머리글) 데이터에서 뺐습니다")
@@ -2141,9 +2194,10 @@ _KOREAN_UNITS = {"개", "회", "초", "분", "시간", "일", "주", "월", "년
                  "대", "도", "배", "번", "개월", "퍼센트", "미터", "그램", "리터", "톤", "와트", "볼트", "암페어"}
 
 
-# Korean unit words of a unit row the user named (--unit-row). Other Hangul words there ('점검중', '센서고장') are read
-# as units only while they are fewer than half of the row's text cells (with a warning); half or more -> not a unit row.
-# The tool's own guess (no --unit-row) knows only _KOREAN_UNITS.
+# Korean unit words of a unit row the user named (--unit-row): never a state word (_odd_unit_word). Any other short
+# Hangul word there is a unit too ('마리', '킬로'); only state words ('점검중', '센서고장', '정지': a data row of a
+# measurement sheet) make the row suspect: half or more of its text cells -> not a unit row, fewer -> read with a
+# warning. The tool's own guess (no --unit-row) knows only _KOREAN_UNITS.
 _KOREAN_UNIT_WORDS = _KOREAN_UNITS | {
     "도씨", "섭씨", "화씨", "켈빈", "킬로그램", "밀리그램", "그램", "톤", "킬로톤", "기압", "바", "밀리바", "파스칼", "킬로파스칼",
     "메가파스칼", "헥토파스칼", "미터", "킬로미터", "센티미터", "밀리미터", "마이크로미터", "마이크론", "나노미터", "인치", "피트",
@@ -2152,7 +2206,15 @@ _KOREAN_UNIT_WORDS = _KOREAN_UNITS | {
     "퍼센트", "프로", "퍼밀", "피피엠", "와트", "킬로와트", "메가와트", "킬로와트시", "볼트", "킬로볼트", "암페어", "밀리암페어",
     "옴", "헤르츠", "킬로헤르츠", "데시벨", "뉴턴", "줄", "킬로줄", "칼로리", "킬로칼로리", "마력", "알피엠", "노트", "룩스",
     "도", "라디안", "주기", "사이클", "건", "차", "호", "층", "동", "칸", "달러", "엔", "유로", "위안",
+    "세", "살", "억원", "만원", "백만원", "천원", "원", "킬로", "센티", "미리", "바이트", "킬로바이트", "메가바이트",
+    "기가바이트", "테라바이트", "개수", "마리", "점", "퍼센트포인트", "배", "대",
 }
+
+# State and status words of a measurement sheet's data cells (a machine state, a missing reading): a row of them is a
+# data row, not units. Also any Hangul word ending in '중' ('측정중', '가동중') or holding one of _STATE_PARTS.
+_STATE_WORDS = {"정지", "가동", "운전", "대기", "정상", "이상", "불량", "양품", "미가동", "휴무", "휴지", "오류", "에러",
+                "누락", "미입력", "미측정", "고장", "점검", "보류", "완료", "합격", "불합격", "판정", "확인", "재측정"}
+_STATE_PARTS = ("고장", "정지", "불량", "오류", "에러", "누락", "점검", "측정", "이상", "교체", "수리", "정비")
 
 
 def _hangul_word(t: str) -> bool:
@@ -2161,8 +2223,11 @@ def _hangul_word(t: str) -> bool:
 
 
 def _odd_unit_word(t: str) -> bool:
-    """A Hangul word that is no known unit ('점검중', '센서고장'; '도씨', '기압' are units)."""
-    return _hangul_word(t) and t.strip() not in _KOREAN_UNIT_WORDS
+    """A state word in a unit row ('점검중', '센서고장', '정지'; '도씨', '마리', '킬로' are units): the row may be data."""
+    t = t.strip()
+    if not _hangul_word(t) or t in _KOREAN_UNIT_WORDS:
+        return False
+    return t in _STATE_WORDS or (len(t) > 1 and t.endswith("중")) or any(w in t for w in _STATE_PARTS)
 
 
 KOREAN_UNIT_MAX = 6      # a Hangul word of a unit row the user named (--unit-row): at most this many letters, no space
@@ -2284,7 +2349,7 @@ def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None,
         return False, "단위로 볼 짧은 글자가 없어"
     odd = [_cell_text(row[k]) for k in units if _odd_unit_word(_cell_text(row[k]))]
     if odd and len(odd) * 2 >= len(text):
-        return False, "단위가 아닌 한글 낱말이 글자 칸의 절반 이상이라"
+        return False, "상태·결측 표시로 보이는 한글 낱말(점검중, 고장, 정지 등)이 글자 칸의 절반 이상이라"
     good = 0
     for k in units:
         below = _column_below(block, k)[:UNIT_SCAN_CELLS]
