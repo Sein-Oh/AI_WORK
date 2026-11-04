@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.63"
+  version: "1.4.64"
   platform: windows
 ---
 
@@ -22,7 +22,7 @@ metadata:
 |---|---|
 | 폴더 등록 | `python "C:\CLI\office-cli\reader.py" index --folder "<폴더>"` |
 | 파일 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` |
-| 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (이름 일부, 대소문자 무시. `units[].evidence`가 근거) |
+| 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |
 | 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A AND B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` |
 | 두 판 비교 | `python "C:\CLI\office-cli\reader.py" diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "<차이.xlsx>"]` |
 | 엑셀 표를 규격서와 대조 | `python "C:\CLI\office-cli\excel.py" check --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "<대조결과.xlsx>"]` |
@@ -38,8 +38,10 @@ metadata:
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - 근거는 항목마다 `evidence`(예: `규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`)를 그대로 쓴다. `page`가 null(엑셀, HWP 등)이면 장절 `section_text`, 번호 `number`, 위치 `loc`로 알린다.
-- `match_mode`가 `partial`(일부 검색어만)이나 `fuzzy`(한 글자 다른 낱말)이면 정확히 일치한 근거가 아니라고 알린다.
+- `match_mode`가 `partial`(일부 검색어만)이나 `fuzzy`(한 글자 다른 낱말)이면 `count: 0`이고 결과는 `candidates`다. 근거로 쓰지 말고 "정확히 일치한 곳은 없고 비슷한 곳이 있다"고 알려 사용자에게 확인받는다.
 - `search`가 `UNVERIFIED:`이면 `not_searched`를 그대로 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서만 찾는다. `--file`을 주면 새 문서를 먼저 등록한다(`indexed_now`를 알림). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - `diff`는 숫자 변경 `number_changes`를 먼저, 삭제·추가·변경 항목마다 `old_evidence`·`new_evidence`를 붙여 알린다.
 - `truncated`이면 `full_result_file`을 알린다. `recovered`와 `warnings`는 그대로 알린다.
+- `--save` 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- 메모의 `--overwrite`(있던 메모 바꾸기)는 사용자가 요청했을 때만 붙인다.

@@ -355,13 +355,19 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `--days 0`/`-7`은 `[추천]`, 없는 날짜·미래 날짜·읽을 수 없는 글은 `[추천]` 없이 예만.
 - 첨부: `attachments [--id] [--save [폴더]] [--name 이름일부] [--index 1,3]`. 저장한 문서(reader가 읽는 형식: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)가 있으면
   `next_commands`에 `reader.py read --file <저장한 파일>`(3개까지)과, 둘 이상이면 `reader.py index --folder <저장 폴더>`.
-- 짧은 번호: `list`·`search`·`thread` 결과의 메일마다 `id`(1, 2, 3 ...)와 `entry_id`(Outlook EntryID). 마지막 목록을 `<데이터 폴더>/outlook_last_list.json`에 기억해
-  `read`/`attachments`/`reply`/`forward`/`thread --id 3`이 그 목록의 3번째 메일을 엽니다. 긴 EntryID도 그대로 받습니다. 목록이 없거나 번호가 범위 밖이면 STOP_RETRY.
+- 짧은 번호: `list`·`search`·`thread` 결과의 메일마다 `id`와 `entry_id`(Outlook EntryID). 번호는 목록마다 1부터 다시 매기지 않고 이어서 늘어나며(첫 목록 1~10,
+  다음 목록 11~20 ...), 이미 번호가 있는 메일은 같은 번호를 다시 씁니다. 번호 -> EntryID·제목·보낸사람·받은 시각을 최근 500개(7일)까지
+  `<데이터 폴더>/outlook_ids.json`에 기억하므로, 옛 목록의 번호도 같은 메일을 가리키거나 "없는 번호" 오류입니다(다른 메일을 가리키지 않음).
+  9999를 넘으면 1부터 다시 매기고 기억한 번호를 모두 버립니다. 없는·만료된 번호는 STOP_RETRY + `next_commands`(list). 긴 EntryID도 그대로 받습니다.
+- `reply`/`forward` 결과의 `original`(고른 원본 메일의 subject·from·received)과 `attachments` 결과의 `mail`(같은 키 + entry_id)은 preview에도 들어가며,
+  directive가 사용자에게 어느 메일인지 알리게 합니다(특히 `--send`).
   `read`/`current`의 `mail`과 `attachments`의 `mail`에는 `entry_id`.
 - `thread --id N`(읽기 전용): 그 메일의 대화 제목(`ConversationTopic`, 없으면 RE:/FW:를 뺀 제목)으로 받은 편지함과 보낸 편지함에서 같은 대화를 모아 오래된 순으로
-  최근 20통(`mails`: 요약과 본문 400자, `count`, `truncated`). Outlook이 조건을 거부하면 메일마다 비교(최근 2,000통, `recovered`). 결과도 짧은 번호로 기억.
+  최근 20통(`mails`: 요약과 본문 400자, `count`, `truncated`). Outlook이 조건을 거부하면 메일마다 비교(폴더마다 2,000통, `recovered`, 상한에 닿으면 빠진 메일이 있을 수 있어 `UNVERIFIED:`). 결과도 짧은 번호로 기억.
 - `calendar [--days 7]`(읽기 전용): 기본 일정 폴더에서 오늘 0시부터 N일(1~92) 안에 걸친 일정을 반복 일정까지 펼쳐(`IncludeRecurrences`) 시작 순으로 50개까지
   (`events`: `subject`, `start`, `end`(`YYYY-MM-DD HH:MM`), `all_day`, `location`, `organizer`, `period`, `truncated`). 0건이면 `VERIFIED: 0건`.
+  Outlook이 기간 조건을 거부하면 일정마다 시각을 비교합니다(`recovered`, 5,000개 상한에 닿으면 `UNVERIFIED:`). 읽지 못한 일정이 있으면 0건이어도
+  `UNVERIFIED:`(`unread_events`).
 - `--folder`의 폴더를 찾지 못하면 그 단계의 하위 폴더 이름(끝 이름)끼리 비교해 `[추천]`(표기만 다름)이나 `[후보]`를 주고, 보여 줄 때만
   전체 경로(`계정\폴더\하위`)로 바꿉니다(전체 경로끼리 비교하면 같은 계정 이름 때문에 관계없는 폴더가 모두 `[후보]`가 됨).
   오류 로그에는 계정 이름(보통 메일 주소) 대신 `<메일 계정>`을 남깁니다. message 끝의 `(경로: ...)`도 로그에서는
@@ -404,8 +410,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 |---|---|
 | `index --folder 폴더 [--depth 3 \| --recursive] [--max-files 300]` | 폴더의 문서를 내용 출력 없이 캐시에 등록. 결과: `count`, `indexed`, `updated`, `unchanged`, `failed`, `failures`(20개까지), `remaining`, `truncated`, `skipped_types`(지원하지 않는 확장자별 개수) |
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
-| `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`과 같은 규칙: 공백을 하나로 보고 대소문자 무시, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
-| `diff --file 이전판 --file2 새판 [--section "3"] [--save 차이.xlsx\|.csv]` | 두 판 비교. 아래 "diff" |
+| `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`·`diff`·`excel.py check`와 같은 규칙: 공백을 하나로 보고 대소문자 무시, 장절 번호로 보이는 값(`2.1`, `3`, `A.1`)은 번호 경계를 지켜 `2.1`이 `2.1`·`2.1.3`(하위 절)에는 맞고 `2.10`·`12.1`에는 맞지 않음, 제목 글자는 부분 일치, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
+| `diff --file 이전판 --file2 새판 [--section "3"] [--save 차이.xlsx\|.csv]` | 두 판 비교. 아래 "diff". `--save`가 그 밖의 확장자(`.md` 등)면 `.xlsx`로 저장하고 `warnings`로 알림 |
 | `search --query "A AND B" \| "A OR B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`). `applied`와 완료 CSV(`clear_done_...`, 20개를 넘을 때)는 지운 뒤 만들고, CSV의 `removed` 열이 실제로 지웠는지 |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
@@ -415,6 +421,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `--pages`/`--units`(ppt `--slides`)의 범위는 문서 크기로 먼저 줄입니다(`1-999999999`도 바로 끝남).
 - 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 지원하지 않습니다.
 - 문서가 많아 등록이 오래 걸리면 시간 제한(약 70초) 전에 `CONTINUE:`로 멈춥니다(R10, 위 출력 계약). 읽은 문서는 캐시에 저장되어 같은 명령을 다시 실행하면 건너뜁니다.
+- 읽지 못한 파일은 `<캐시 폴더>/index_failures.json`에 (경로, 수정 시각, 크기, 파서 버전, 사유)로 기록해, 파일이 그대로면 다음 실행(폴더 등록, `index --all`,
+  검색 때 원본이 바뀐 캐시 다시 읽기)에서 다시 읽지 않고 `failures`(검색은 `skipped`, 바뀐 캐시는 `refresh_failures`)에 "이전 실행에서 읽지 못함"으로 보고합니다.
+  실패하는 느린 파일 때문에 `CONTINUE:`가 끝나지 않던 문제. 파일이 바뀌면 다시 읽고, `index --file`·`search --file`로 그 파일 하나만 주면 바로 다시 시도합니다.
+  `clear --all`은 이 기록도 지웁니다. `progress`의 "새로 등록 N개"는 실제로 등록한 수, 실패는 "읽지 못함 N개"로 따로 셉니다.
 - `--max-files`는 이번 실행에서 **새로 읽는** 파일 수의 상한입니다. 이미 최신인 파일은 세지 않으므로 같은 명령을 다시 실행하면 남은 파일부터 이어서 등록합니다(`next_commands[0]`). 등록은 원본을 바꾸지 않는 읽기 전용 작업입니다.
 - DRM으로 암호화된 Office 파일은 라이브러리로 열 수 없으므로, `excel.py`/`word.py`/`ppt.py read --target 경로`로 Office에서 읽으라고 안내합니다.
 - DOCX 글상자(`w:txbxContent`)의 글은 그 글상자가 든 단락(표) 바로 뒤에 `글상자 N`(여러 단락이면 `글상자 N 단락 M`) 단위로 넣습니다. Word 2010 이후
@@ -422,6 +432,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   없는 문서와 같습니다. 닫힌 파일의 `word.py read`도 같습니다.
 - XLSX의 계산된 값이 없는 수식 칸(엑셀에서 연 적 없는 파일)은 `meta.uncomputed_formulas`에 남기고 `read`는 `UNVERIFIED:`(`uncomputed_formulas`),
   `search`는 `not_searched`에 넣어 `UNVERIFIED:`입니다. 파서 버전 9의 캐시는 이 두 가지를 반영해 다시 읽습니다.
+  캐시에 남은 "수식 칸 확인 실패"는 쓸 때마다 다시 확인하되, 한 실행에서 3개 문서까지·시간 제한 여유 안에서만 합니다(넘으면 그대로 `UNVERIFIED:`, 다음 실행에서 다시).
 
 #### diff (두 판 비교)
 - 두 문서를 읽어(캐시에 등록) 장절 경로가 같은 묶음끼리 짝짓고, 경로가 다르면 마지막 제목(번호 뺌)이 비슷하거나 한쪽이 다른 쪽을 품을 때(`표시` / `표시 방법`) 짝짓습니다.
@@ -454,13 +465,18 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   숫자 경계는 지킵니다: `SOI 1`은 `SOI #10`, `SOI 21`과 맞지 않고, `1.2`는 `11.2`, `3.1.2`와 맞지 않습니다.
   기호를 빼면 숫자만 남는 검색어(`#4`, `1.2`)는 기호까지 그대로 찾습니다. 더 복잡한 패턴은 `--regex`(예: `"SOI\s*#?\d"`). `--regex`의 빈 일치는 일치로 보지 않습니다.
   `--regex`의 정규식이 잘못되면 STOP_RETRY(몇 번째 글자, 이유). 정규식 문법(`\d`, `.*`, `[..]`, `|`, `(?`, `{n`)이 없는 글(`전압 (5V`)이면 `--regex` 없이 같은 조건으로 찾는 전체 명령을 `[추천]`(오류 로그에는 명령 생략).
-- 검색어 표기 차이 (검색어마다 정규식을 도구가 만듦): 검색어 낱말 끝의 조사(`은 는 이 가 을 를 의 에 에서 으로 로 와 과 및 에는 에서의` 등, 떼고 2자 이상 남을 때만:
-  `높이`, `단가`는 그대로)는 떼고, 글에서는 낱말 뒤의 조사를 허용합니다(`절연저항이 100MΩ` = `절연 저항은 100 MΩ`). 전각 영문·숫자(`ＰＣＢ`)도 맞고,
-  숫자는 `5` = `5.0` = `5.00`, `5000` = `5,000`, 숫자와 단위 사이 띄어쓰기·괄호 무관(`5V` = `5 V` = `5[V]`, `5V`는 `15V`, `5.5V`와 맞지 않음), `°C` = `℃`. 대시 종류(하이픈, en dash, em dash, 전각 하이픈)는 기호라 무시.
+- 검색어 표기 차이 (검색어마다 정규식을 도구가 만듦): 검색어 낱말 끝의 조사(`은 는 이 가 을 를 의 에 에서 으로 와 과 및 에는 에서의` 등, 떼고 2자 이상 남을 때만:
+  `높이`, `단가`는 그대로. 받침에 따라 붙는 조사는 받침이 맞을 때만(`이 은 을 과`는 받침 뒤, `가 는 를 와`는 받침 없는 글자 뒤: `와이파이`, `역효과`는 그대로),
+  `로`는 떼지 않음(`회로`))는 떼고, 글에서는 낱말 뒤의 조사를 허용합니다(`절연저항이 100MΩ` = `절연 저항은 100 MΩ`). 전각 영문·숫자(`ＰＣＢ`)도 맞고,
+  숫자는 `5` = `5.0` = `5.00`, `5000` = `5,000`(숫자만 든 검색어 `5,000`, `0.5` = `0.50`도, `0.5`는 `10.5`·`0.55`와 맞지 않음), 숫자와 단위 사이 띄어쓰기·괄호 무관(`5V` = `5 V` = `5[V]`, `5V`는 `15V`, `5.5V`와 맞지 않음), `°C` = `℃`. 대시 종류(하이픈, en dash, em dash, 전각 하이픈)는 기호라 무시.
 - 0건 넓혀 찾기 (`--regex`가 아닐 때): 모든 검색어가 든 단위가 없으면 (1) `partial`: 검색어가 둘 이상인 묶음에서 절반 이상이 든 단위 중 가장 많이 든 것,
-  (2) `fuzzy`: 한 글자(바꿈·넣음·뺌) 다른 낱말을 허용(영문 4자, 한글 3음절 이상이고 숫자가 없는 검색어만, 뒤 조사 무시, 이어진 두 낱말도 봄), 모두 맞는 것이 없으면 절반 이상.
-  결과에 `match_mode`(`exact`/`partial`/`fuzzy`), 항목마다 `matched_terms`, `missing_terms`, `fuzzy_words`(검색어: 실제 낱말), `recovered`("... 넓혀 찾음"),
-  directive는 `VERIFIED:`이지만 "정확히 일치한 근거가 아니라고 알리세요". 그래도 없으면 전처럼 0건(`match_mode: exact`).
+  (2) `fuzzy`: 한 글자(바꿈·넣음·뺌) 다른 낱말을 허용(영문 4자 이상, 숫자가 없는 검색어만, 뒤 조사 무시, 이어진 두 낱말도 봄), 모두 맞는 것이 없으면 절반 이상.
+  한글은 4음절 이상이고 첫·끝 음절이 같으며, 바뀐 음절은 자모 하나만 다를 때만(`정격 젼압` -> `정격 전압`, `케이불` -> `케이블`). 전압/전류, 대기 전류/대기 전력,
+  최대/최소, 상한/하한은 서로 맞지 않습니다.
+  넓혀 찾은 결과는 정확 일치가 아니므로 `count`/`total_matches`는 0, 결과 목록은 `matches` 대신 `candidates`, `candidate_count`(비슷한 곳 수), `match_mode`(`partial`/`fuzzy`),
+  항목마다 `matched_terms`(글자 그대로 맞은 검색어만), `missing_terms`, `fuzzy_words`(검색어: 실제 낱말). directive는
+  `UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 N건 ... candidates를 근거로 쓰지 말고 사용자에게 확인`. 그래도 없으면 전처럼 0건(`match_mode: exact`, `VERIFIED: 0건`).
+  `excel.py check`는 같은 찾기에서 partial·fuzzy이면 `판단필요`입니다.
 - 순위: 결과는 점수 순(같으면 문서 순서). 점수 = 맞은 검색어 수 x 10 + 나온 횟수(검색어마다 5번까지) + 검색어끼리 50자 안 3점(200자 안 1점) + 장절 제목에 검색어 3점.
   항목의 `score`, `--save` 파일의 마지막 열 `점수`(저장 파일도 점수 순). `--regex`는 점수 0, 문서 순서.
 - 동의어: `<데이터 폴더>/synonyms.txt`(기본 `C:\CLI\office-cli\data\synonyms.txt`, UTF-8 또는 CP949, `#`은 설명 줄)에 한 줄에 한 묶음을 쉼표로 적으면

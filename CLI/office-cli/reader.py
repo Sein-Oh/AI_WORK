@@ -1630,13 +1630,34 @@ def _uncomputed_from_check(meta: Dict[str, Any], uncomputed: Dict[str, Any]) -> 
         meta["uncomputed_formulas"] = uncomputed
 
 
+RECHECK_MAX = 3                  # 한 실행에서 수식 칸을 다시 확인하는 문서 수 상한 (큰 엑셀이 많으면 검색 한 번이 시간 제한을 넘던 문제)
+_RECHECK_RUN: Dict[str, Any] = {"run": None, "done": 0}
+
+
+def _recheck_allowed() -> bool:
+    """이번 실행에서 수식 칸 다시 확인을 더 해도 되는지 (상한 RECHECK_MAX, 시간 제한에서 여유를 뺀 시각 전)."""
+    if _RECHECK_RUN["run"] != rt.RUN_START:              # 실행마다 새로 셈 (테스트처럼 한 프로세스에서 여러 번 실행해도)
+        _RECHECK_RUN.update(run=rt.RUN_START, done=0)
+    if _RECHECK_RUN["done"] >= RECHECK_MAX:
+        return False
+    limit = rt.time_limit()
+    if limit != float("inf") and time.monotonic() - rt.RUN_START > limit - rt.TIME_RESERVE:
+        return False
+    _RECHECK_RUN["done"] += 1
+    return True
+
+
 def recheck_uncomputed(doc: Dict[str, Any], cache_file: Optional[str] = None) -> Dict[str, Any]:
     """캐시의 '수식 칸 확인 실패'(MemoryError 등 일시적 실패)는 결과로 믿지 않고 캐시를 쓸 때마다 다시 확인합니다.
-    확인되면 meta를 고치고 캐시 파일도 고쳐 씁니다(실패는 무시). 다시 실패하면 그대로 (UNVERIFIED 유지)."""
+    확인되면 meta를 고치고 캐시 파일도 고쳐 씁니다(실패는 무시). 다시 실패하면 그대로 (UNVERIFIED 유지).
+    한 실행에서 RECHECK_MAX개까지, 시간 제한 여유 안에서만 (넘으면 확인하지 않은 채 UNVERIFIED 유지, 다음 실행에서 다시)."""
     meta = doc.get("meta") or {}
     info = meta.get("uncomputed_formulas")
     path = doc.get("file", "")
     if not (isinstance(info, dict) and info.get("unknown")) or doc.get("type") != "xlsx" or not os.path.isfile(path):
+        return doc
+    if not _recheck_allowed():
+        rt.debug(f"수식 칸 다시 확인 상한/시간 초과로 건너뜀: {os.path.basename(path)}")
         return doc
     again = rt.xlsx_uncomputed_formulas(path)
     if again.get("unknown"):
@@ -1743,12 +1764,76 @@ def _folder_arg(raw: str) -> str:
     return folder
 
 
-def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
+# 읽지 못한 파일 기록 {정규화한 경로: {mtime, size, parser_version, reason}}. 같은 파일(수정 시각·크기·파서 버전이 같음)은
+# 다음 실행에서 다시 읽지 않고 failures로만 보고합니다. 실패하는 느린 파일을 매 실행 다시 읽어 CONTINUE가 끝나지 않던 문제 (R10).
+FAILED_FILE = "index_failures.json"
+
+
+def _failed_path() -> str:
+    return os.path.join(rt.get_cache_dir(), FAILED_FILE)
+
+
+def load_failed() -> Dict[str, Dict[str, Any]]:
+    try:
+        data = json.loads(rt.read_text_file(_failed_path()))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}                            # 없거나 손상: 빈 기록 (다음 실패 때 새로 씀)
+
+
+def _save_failed(data: Dict[str, Dict[str, Any]]) -> None:
+    try:
+        rt.safe_write_text(_failed_path(), json.dumps(data, ensure_ascii=False))
+    except Exception as e:
+        rt.log("WARN", f"읽지 못한 파일 기록을 저장하지 못했습니다: {type(e).__name__}")
+
+
+def known_failure(path: str, st: Optional[os.stat_result] = None) -> Optional[str]:
+    """이 파일이 지금 모습 그대로 전에 읽기에 실패했으면 그 사유, 아니면 None."""
+    rec = load_failed().get(os.path.normcase(os.path.abspath(path)))
+    if not isinstance(rec, dict):
+        return None
+    try:
+        st = st or os.stat(path)
+    except OSError:
+        return None
+    if (rec.get("mtime") == st.st_mtime and rec.get("size") == st.st_size
+            and rec.get("parser_version") == PARSER_VERSION):
+        return str(rec.get("reason") or "읽기 실패")
+    return None
+
+
+def record_failure(path: str, reason: str) -> None:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    data = load_failed()
+    data[os.path.normcase(os.path.abspath(path))] = {"mtime": st.st_mtime, "size": st.st_size,
+                                                     "parser_version": PARSER_VERSION, "reason": reason[:300]}
+    _save_failed(data)
+
+
+def clear_failure(path: str) -> None:
+    key = os.path.normcase(os.path.abspath(path))
+    data = load_failed()
+    if key in data:
+        del data[key]
+        _save_failed(data)
+
+
+KNOWN_FAILURE_NOTE = "이전 실행에서 읽지 못함 (파일이 바뀌면 다시 시도. 바로 다시 해 보려면 index --file로 이 파일 하나만): "
+
+
+def _index_files(files: List[str], max_files: int, retry_failed: bool = False) -> Dict[str, Any]:
     """파일들을 캐시에 등록합니다. 새로 파싱하는 파일 수만 max_files로 제한합니다 (이미 최신인 파일은 세지 않음).
+    전에 읽지 못한 파일(그대로인 것)은 retry_failed가 아니면 다시 읽지 않고 failures에만 넣습니다.
     반환: docs(불러온 문서), new/updated/cached(파일 이름 목록), failures, remaining.
     failures 항목: file, reason, error(원래 예외. 파일 하나만 줬을 때 _raise_single_failure가 그대로 다시 냄, JSON에는 넣지 않음)."""
     out: Dict[str, Any] = {"docs": [], "new": [], "updated": [], "cached": [], "failures": [], "remaining": 0}
-    parsed = 0
+    parsed = 0                                   # 이번 실행에서 새로 읽어 본 파일 수 (실패 포함)
+    registered = 0                               # 그중 등록에 성공한 수
+    failed_now = 0
     spent = 0.0                                  # 이번 실행에서 새로 읽는 데 쓴 초 (다음 파일 예상 시간)
     index = load_index()
     total = len(files)
@@ -1762,13 +1847,20 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
         entry = next((e for k, e in index.items() if os.path.normcase(k) == key), None)
         fresh = bool(entry and entry.get("parser_version") == PARSER_VERSION
                      and entry.get("mtime") == st.st_mtime and entry.get("size") == st.st_size)
+        if not fresh and not retry_failed:
+            known = known_failure(path, st)
+            if known is not None:
+                out["failures"].append({"file": path, "reason": (KNOWN_FAILURE_NOTE + known)[:300],
+                                        "error": rt.InputError(known)})
+                continue
         if not fresh and parsed >= max_files:
             out["remaining"] += 1
             continue
         if not fresh and parsed:
             # R10: 새 파일을 읽기 전에 시계를 봄 (이번 실행에서 하나는 읽은 뒤에만: 반복하면 반드시 끝남).
-            # 읽은 파일은 캐시에 저장되어 같은 명령을 다시 실행하면 건너뜀
-            rt.check_time(spent / parsed, f"문서 {total}개 중 {i - 1}개 확인, 이번에 새로 등록 {parsed}개 (남은 파일은 같은 명령으로 이어서)")
+            # 읽은 파일은 캐시에, 실패한 파일은 실패 기록에 저장되어 같은 명령을 다시 실행하면 건너뜀
+            rt.check_time(spent / parsed, f"문서 {total}개 중 {i - 1}개 확인, 이번에 새로 등록 {registered}개"
+                          + (f", 읽지 못함 {failed_now}개" if failed_now else "") + " (남은 파일은 같은 명령으로 이어서)")
         t0 = time.monotonic()
         try:
             if not fresh:
@@ -1776,13 +1868,19 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
             doc, status = load_document_status(path, check_index=not fresh)
         except Exception as e:
             # 내부 오류는 'KeyError: ...'처럼 종류와 함께 (str(e)만 쓰면 "'heading'"만 남음)
-            out["failures"].append({"file": path, "reason": rt.error_payload(e)["message"][:300], "error": e})
-            parsed += 0 if fresh else 1
-            spent += 0 if fresh else time.monotonic() - t0
+            reason = rt.error_payload(e)["message"][:300]
+            out["failures"].append({"file": path, "reason": reason, "error": e})
+            if not fresh:
+                parsed += 1
+                failed_now += 1
+                spent += time.monotonic() - t0
+                record_failure(path, reason)
             continue
         if status != "cached":
             parsed += 1
+            registered += 1
             spent += time.monotonic() - t0
+            clear_failure(path)
         out["docs"].append(doc)
         out[status].append(path)
     return out
@@ -1847,9 +1945,22 @@ def section_key(spec: Optional[str]) -> str:
     return re.sub(r"\s+", " ", spec or "").strip().lower()
 
 
+_SECTION_NUMBER = re.compile(r"(?:[a-z]\.)?\d+(?:\.\d+)*\.?")
+
+
+def _section_number_pattern(key: str) -> "re.Pattern[str]":
+    """장절 번호 '2.1'은 번호 경계를 지킴: 2.1, 2.1.3(하위 절), 제2.1절은 맞고 2.10, 12.1, 1.2.1은 맞지 않음."""
+    num = re.escape(key.rstrip("."))
+    return re.compile(rf"(?:(?<![\w.])|(?<=제)){num}(?!\d)")
+
+
 def section_matches(unit: Dict[str, Any], key: str) -> bool:
-    """장절 경로(section_text)에 --section 값이 들어 있는지 (대소문자·공백 무시). key는 section_key 결과."""
-    return key in re.sub(r"\s+", " ", section_text(unit)).lower()
+    """장절 경로(section_text)에 --section 값이 들어 있는지 (대소문자·공백 무시). key는 section_key 결과.
+    장절 번호로 보이는 값(2.1, 3, A.1)은 번호 경계를 지키고 하위 절을 포함, 제목 글자는 부분 일치."""
+    text = re.sub(r"\s+", " ", section_text(unit)).lower()
+    if _SECTION_NUMBER.fullmatch(key):
+        return bool(_section_number_pattern(key).search(text))
+    return key in text
 
 
 def where_text(unit: Dict[str, Any]) -> str:
@@ -2235,7 +2346,7 @@ def cmd_index(args) -> Dict[str, Any]:
         if orphan_docs:
             files += orphan_docs
             rt.log("WARN", f"색인에 없는 캐시 문서 {len(orphan_docs)}개를 찾아 다시 등록합니다.")
-    res = _index_files(files, max(1, args.max_files))
+    res = _index_files(files, max(1, args.max_files), retry_failed=bool(args.file))
     if args.file:
         _raise_single_failure(res)
     readded = [d for d in res["docs"]
@@ -2428,9 +2539,18 @@ _SEP = r"[\W_]*"          # 글자 사이에 끼어도 되는 것: 띄어쓰기,
 
 # 검색어 낱말 끝의 조사·어미: 떼고 찾음 (글에서는 낱말 뒤에 무엇이 와도 맞음). 긴 것부터.
 # 떼고 남는 글이 2자 이상일 때만 ('높이', '단가', '회의'는 그대로). '도'·'만'은 낱말 끝 글자인 경우가 많아('정확도') 떼지 않음.
+# '로'는 낱말 끝 글자인 경우가 많아('회로', '경로') 떼지 않음('으로'는 뗌).
 _PARTICLES = ("에서의", "에서는", "으로는", "으로서", "으로써", "이어야", "에서", "으로", "에는", "에게", "까지", "부터",
-              "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "및")
+              "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "및")
+# 받침에 따라 붙는 조사: 앞 글자의 받침이 맞을 때만 뗌 ('와이파이', '역효과'의 끝 글자는 조사가 아님)
+_AFTER_FINAL = {"이", "은", "을", "과", "이며", "이고", "이다", "이어야", "과의"}       # 받침 있는 글자 뒤
+_AFTER_OPEN = {"가", "는", "를", "와", "와의"}                                      # 받침 없는 글자 뒤
 _HANGUL = re.compile(r"[\uac00-\ud7a3]")
+
+
+def _has_final(ch: str) -> bool:
+    """한글 음절에 받침이 있는지."""
+    return (ord(ch) - 0xAC00) % 28 != 0
 
 
 def _strip_word(word: str) -> str:
@@ -2438,6 +2558,9 @@ def _strip_word(word: str) -> str:
         return word
     for p in _PARTICLES:
         if word.endswith(p) and len(word) - len(p) >= 2 and _HANGUL.match(word[len(word) - len(p) - 1]):
+            before = word[len(word) - len(p) - 1]
+            if (p in _AFTER_FINAL and not _has_final(before)) or (p in _AFTER_OPEN and _has_final(before)):
+                continue
             return word[: -len(p)]
     return word
 
@@ -2476,6 +2599,9 @@ def _single_pattern(term: str) -> str:
     t = strip_particles(unicodedata.normalize("NFKC", term))       # 전각 -> 반각, ℃ -> °C
     compact = re.sub(r"\s+", "", t)
     core = re.sub(r"[\W_]+", "", compact)
+    if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+", compact):
+        # 숫자 하나: 천 단위 쉼표·소수 끝 0과 무관 ('5,000' = '5000', '0.5' = '0.50'), 숫자 경계는 지킴 ('0.5'는 '10.5'와 다름)
+        return r"(?<![\d.])" + _number(compact) + r"(?![.,]?\d)"
     if not core or (core.isdigit() and core != compact):
         chars = compact or t
         body = r"\s*".join(_char(c) for c in chars)      # 기호까지 그대로 ('1.2'는 '12'와 다름)
@@ -2598,7 +2724,7 @@ def match_sentence(text: str, terms: List[str], limit: int = 1000) -> str:
 # --- 검색 넓히기 (0건일 때: 일부 검색어 -> 유사 낱말)와 순위 ---
 
 FUZZY_MIN_LATIN = 4      # 유사 일치(한 글자 다름)로 찾는 검색어의 최소 글자 수 (영문·숫자)
-FUZZY_MIN_HANGUL = 3     # 한글은 음절 수
+FUZZY_MIN_HANGUL = 4     # 한글은 음절 수. 첫·끝 음절이 같을 때만 (전압/전류, 대기 전류/대기 전력, 최대/최소가 서로 맞지 않게)
 
 
 def _edit1(a: str, b: str) -> bool:
@@ -2625,15 +2751,41 @@ def _fuzzy_core(term: str) -> Optional[str]:
     return core if len(core) >= FUZZY_MIN_LATIN else None
 
 
+def _jamo(ch: str) -> Optional[Tuple[int, int, int]]:
+    """한글 음절 -> (초성, 중성, 종성) 번호, 음절이 아니면 None."""
+    code = ord(ch) - 0xAC00
+    if not 0 <= code < 11172:
+        return None
+    return code // 588, (code % 588) // 28, code % 28
+
+
+def _korean_typo(a: str, b: str) -> bool:
+    """같은 길이의 두 글에서 다른 글자가 한글 음절이면 자모 하나만 다를 때만 오타로 봄 (젼압/전압, 케이불/케이블).
+    음절이 통째로 다르면(대/소, 류/력, 상/하) 다른 말이라 맞추지 않음."""
+    for x, y in zip(a, b):
+        if x != y:
+            jx, jy = _jamo(x), _jamo(y)
+            if jx is None or jy is None:
+                return True
+            return sum(p != q for p, q in zip(jx, jy)) == 1
+    return True
+
+
 def _fuzzy_word(text: str, core: str) -> Optional[str]:
-    """글에서 core와 한 글자만 다른 낱말(또는 이어진 두 낱말, 뒤 조사는 무시)."""
+    """글에서 core와 한 글자만 다른 낱말(또는 이어진 두 낱말, 뒤 조사는 무시).
+    한글이 든 검색어는 첫 글자와 끝 글자가 같고, 바뀐 음절은 자모 하나만 달라야 함: 한 음절 차이로 뜻이 반대·다른 말
+    (전류/전력, 최대/최소, 상한/하한)이 맞지 않게."""
     words = re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text))
     cands = words + [a + b for a, b in zip(words, words[1:])]
     n = len(core)
+    hangul = bool(_HANGUL.search(core))
     for w in cands:
         low = w.lower()
         for k in (n, n - 1, n + 1):
             if 0 < k <= len(low) and _edit1(core, low[:k]):
+                if hangul and (low[0] != core[0] or low[k - 1] != core[-1]
+                               or (k == n and not _korean_typo(core, low[:k]))):
+                    continue
                 return w[:k]
     return None
 
@@ -2647,8 +2799,8 @@ def widen_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: Lis
     def pick(rows: List[Tuple[int, Dict[str, Any]]], need_all: bool) -> List[Dict[str, Any]]:
         if need_all:
             return [r for n, r in rows if n == 0]
-        best = max((len(r["matched_terms"]) for _, r in rows), default=0)
-        return [r for _, r in rows if len(r["matched_terms"]) == best]
+        best = max((r["_found"] for _, r in rows), default=0)
+        return [r for _, r in rows if r["_found"] == best]
 
     def scan(fuzzy: bool) -> List[Tuple[int, Dict[str, Any]]]:
         rows = []
@@ -2668,9 +2820,10 @@ def widen_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: Lis
                 missing = [x for x in g if x not in found]
                 if not found or (missing and (len(g) < 2 or len(found) * 2 < len(g))):
                     continue
-                row = {"doc": doc, "unit": u, "matched_terms": found, "missing_terms": missing, "fuzzy_words": fw,
-                       "terms": [fw.get(x, x) for x in found]}
-                if best_row is None or (len(missing), -len(found)) < (best_row[0], -len(best_row[1]["matched_terms"])):
+                # matched_terms는 글자 그대로 맞은 검색어만 (비슷한 낱말로 찾은 검색어는 fuzzy_words에만)
+                row = {"doc": doc, "unit": u, "matched_terms": [x for x in found if x not in fw], "missing_terms": missing,
+                       "fuzzy_words": fw, "terms": [fw.get(x, x) for x in found], "_found": len(found)}
+                if best_row is None or (len(missing), -len(found)) < (best_row[0], -best_row[1]["_found"]):
                     best_row = (len(missing), row)
             if best_row:
                 rows.append(best_row)
@@ -2725,7 +2878,7 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     반환: (문서 목록, 정보: indexed_now, from_cache, skipped, remaining, stale, missing, skipped_types)"""
     info: Dict[str, Any] = {"indexed_now": [], "from_cache": 0, "skipped": [], "remaining": 0, "stale": [],
                             "missing": 0, "skipped_types": {}, "folder": None, "excluded_dirs": [], "refreshed": 0,
-                            "reindex": 0, "orphan": 0}
+                            "reindex": 0, "orphan": 0, "refresh_failed": []}
     docs: List[Dict[str, Any]] = []
     if args.file:
         raw = os.path.expandvars(os.path.expanduser(str(args.file).strip().strip('"')))
@@ -2737,7 +2890,7 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             path = rt.resolve_input_path(raw, "검색할 파일")
             file_type(path)
             files = [path]
-        res = _index_files(files, max(1, args.max_files))
+        res = _index_files(files, max(1, args.max_files), retry_failed=len(files) == 1 and not info["folder"])
         if len(files) == 1 and not info["folder"]:
             _raise_single_failure(res)
         docs = res["docs"]
@@ -2771,17 +2924,26 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         elif not is_stale_doc(doc):
             doc = recheck_uncomputed(doc)
         attempted = False
-        if is_stale_doc(doc) and not doc.get("file_missing") and tried < STALE_REFRESH_MAX:
+        known = known_failure(path) if is_stale_doc(doc) and not doc.get("file_missing") else None
+        if known is not None:
+            # 전에 다시 읽지 못한 원본(그대로임)은 매 실행 다시 읽지 않음 (실패하는 느린 파일 때문에 CONTINUE가 끝나지 않던 문제)
+            attempted = True
+            info["refresh_failed"].append({"file": path, "reason": (KNOWN_FAILURE_NOTE + known)[:300]})
+        elif is_stale_doc(doc) and not doc.get("file_missing") and tried < STALE_REFRESH_MAX:
             if tried:
-                # R10: 다시 읽은 캐시는 저장되어 같은 명령을 다시 실행하면 그대로 씀
-                rt.check_time(0.0, f"원본이 바뀐 캐시 {tried}개를 다시 읽음 (남은 캐시는 같은 명령으로 이어서)")
+                # R10: 다시 읽은 캐시는 저장되고, 실패한 원본은 실패 기록에 남아 같은 명령을 다시 실행하면 건너뜀
+                rt.check_time(0.0, f"원본이 바뀐 캐시 {tried}개 중 {info['refreshed']}개를 다시 읽음 (남은 캐시는 같은 명령으로 이어서)")
             tried += 1
             attempted = True
             try:
                 doc, _ = load_document_status(path)     # 원본이 바뀐 캐시는 그 자리에서 다시 읽음 (JIT 복구)
                 info["refreshed"] += 1
+                clear_failure(path)
             except Exception as e:
-                rt.debug(f"다시 읽기 실패, 이전 캐시로 검색: {e}")
+                reason = rt.error_payload(e)["message"][:300]
+                rt.debug(f"다시 읽기 실패, 이전 캐시로 검색: {reason}")
+                record_failure(path, reason)
+                info["refresh_failed"].append({"file": path, "reason": reason})
         if doc.get("parser_version") != PARSER_VERSION:
             # 이전 파서 형식의 캐시는 단위 키가 달라 검색하지 않음 (skipped에만, stale은 '옛 내용으로 검색한 문서'만)
             if doc.get("file_missing"):
@@ -2842,13 +3004,9 @@ def cmd_search(args) -> Dict[str, Any]:
     groups = [] if args.regex else parse_query(args.query)
     mode = "exact"
     if not hits and groups and pool:
-        # 0건: 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음 (넓혔다는 사실은 recovered와 match_mode로 알림)
+        # 0건: 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음. 정확 일치는 여전히 0건이라
+        # count 0, 넓혀 찾은 결과는 candidates와 UNVERIFIED로 알림 (근거로 쓰지 않게)
         mode, hits = widen_search(pool, groups, flags)
-        if hits:
-            n_terms = max(len(g) for g in groups)
-            how = ("검색어 일부(절반 이상)만 든 단락" if mode == "partial"
-                   else "한 글자 다른 낱말(오타·표기 차이)을 허용한 단락")
-            rt.note_recovered(f"검색어 {n_terms}개가 모두 든 곳이 없음 -> {how}으로 넓혀 찾음 ({len(hits)}건, match_mode {mode})")
     for h in hits:
         h["score"] = hit_score(h["unit"], h["terms"], flags) if not args.regex else 0
         h["snippet"] = make_snippet(h["unit"]["text"], h["terms"], args.context)
@@ -2858,9 +3016,12 @@ def cmd_search(args) -> Dict[str, Any]:
 
     total = len(hits)
     shown = hits[: max(0, args.top)]
-    result: Dict[str, Any] = {"query": args.query, "files_searched": len(docs), "total_matches": total,
-                              "count": total, "matched": len(shown), "shown": len(shown),
+    exact_total = total if mode == "exact" else 0       # 넓혀 찾은 결과는 일치 건수에 넣지 않음
+    result: Dict[str, Any] = {"query": args.query, "files_searched": len(docs), "total_matches": exact_total,
+                              "count": exact_total, "matched": len(shown) if mode == "exact" else 0, "shown": len(shown),
                               "truncated": total > len(shown), "match_mode": mode}
+    if mode != "exact":
+        result["candidate_count"] = total
     if syn_used:
         result["synonyms_used"] = syn_used
     filters = {k: v for k, v in (("file", args.file), ("pages", args.pages), ("section", args.section)) if v}
@@ -2883,6 +3044,10 @@ def cmd_search(args) -> Dict[str, Any]:
                              for s in info["skipped"][:MAX_LIST_ITEMS]]
     if info["stale"]:
         result["stale_cache_count"] = len(info["stale"])
+    if info["refresh_failed"]:
+        # 원본이 바뀐 캐시를 다시 읽지 못한 파일 (실패 기록에 남겨 다음 실행에서 다시 읽지 않음)
+        result["refresh_failures"] = [{"file": os.path.basename(f["file"]), "path": f["file"], "reason": f["reason"]}
+                                      for f in info["refresh_failed"][:MAX_LIST_ITEMS]]
     if info["missing"]:
         result["missing_file_count"] = info["missing"]
 
@@ -2959,7 +3124,7 @@ def cmd_search(args) -> Dict[str, Any]:
         if doc.get("_stale"):
             item["stale"] = True             # 원본이 바뀌기 전 내용 (근거로 쓰기 전에 다시 등록 필요)
         view.append(item)
-    result["matches"] = view
+    result["matches" if mode == "exact" else "candidates"] = view
     if text_cut:
         result["truncated"] = True
         result["truncated_reason"] = (f"--full 항목 {text_cut}개의 text를 {SEARCH_JSON_FULL_CHARS}자에서 자름 "
@@ -3023,14 +3188,20 @@ def cmd_search(args) -> Dict[str, Any]:
         return rt.ok(TOOL, "search", preview,
                      "VERIFIED: 0건. 조건에 맞는 항목이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요." + notes,
                      **result)
+    if mode != "exact":
+        # 정확히 일치한 곳은 0건: 넓혀 찾은 결과는 후보일 뿐이라 VERIFIED로 내지 않음 ("대기 전류"가 "대기 전력"에 맞던 문제)
+        what = "일부 검색어만 든 곳, 빠진 검색어는 missing_terms" if mode == "partial" else \
+            "한 글자 다른 낱말이 든 곳, 실제 낱말은 fuzzy_words"
+        preview = (f"'{args.query}': {scope}에서 정확히 일치한 곳 0건, 비슷한 곳 {total}건(candidates, match_mode {mode})"
+                   + (f", 저장: {result['output_file']}" if "output_file" in result else ""))
+        payload = rt.ok_unverified(TOOL, "search", preview, [f"정확히 일치한 곳은 0건, 비슷한 곳 {total}건({what})"]
+                                   + (["검색하지 못한 부분이 있음: " + "; ".join(gaps)] if gaps else []), **result)
+        payload["agent_directive"] = (f"UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 {total}건(match_mode {mode}: {what}) - "
+                                      "candidates를 근거로 쓰지 말고, 사용자에게 '정확히 일치한 곳은 없고 비슷한 곳이 있다'고 알린 뒤 "
+                                      "맞는지 확인을 받으세요. 같은 검색을 다시 실행하지 마세요.")
+        return payload
     preview = f"'{args.query}': {scope}에서 {total}건 일치" + (f" (상위 {len(shown)}건 표시)" if total > len(shown) else "")
     evid = " 각 결과의 근거는 evidence(파일 p.N, 장절 (번호))를 그대로 알리세요. page가 null이면 장절과 번호로 알립니다."
-    if mode != "exact":
-        what = "일부 검색어만 든 결과, 빠진 검색어는 missing_terms" if mode == "partial" else \
-            "한 글자 다른 낱말로 찾은 결과, 실제 낱말은 fuzzy_words"
-        preview += f" - 검색어가 모두 든 곳이 없어 넓혀 찾음(match_mode {mode})"
-        evid = (f" 주의: 검색어가 모두 든 곳이 없어 넓혀 찾았습니다(match_mode {mode}: {what}). "
-                "정확히 일치한 근거가 아니라고 사용자에게 알리세요." + evid)
     if "output_file" in result:
         preview += f", 저장: {result['output_file']}"
         directive = "VERIFIED: 검색과 저장 완료(저장 파일을 다시 열어 확인)." + evid
@@ -3256,6 +3427,11 @@ def cmd_clear(args) -> Dict[str, Any]:
             rt.retry_fs(lambda: os.remove(f))
         except OSError as e:
             failed.append(f"{os.path.basename(f)}: {e}")
+    if args.all and os.path.exists(_failed_path()):       # 읽지 못한 파일 기록도 비움 (다음 등록 때 모두 다시 시도)
+        try:
+            rt.retry_fs(lambda: os.remove(_failed_path()))
+        except OSError as e:
+            failed.append(f"{FAILED_FILE}: {e}")
     # 잠근 상태에서 색인을 다시 읽어 지운 항목만 뺌 (그 사이 다른 실행이 넣은 항목을 지우지 않게)
     _index_update(lambda idx: [idx.pop(p, None) for p in removed])
     # 다시 읽어 확인: 색인에서 빠졌고 캐시 파일도 없는지
@@ -3745,8 +3921,11 @@ def cmd_diff(args) -> Dict[str, Any]:
         header = ["구분", "숫자 변경", "요약", "이전 근거", "이전 글", "새 근거", "새 글"]
         rows = [[c["kind"], ", ".join(c["number_changes"]), c["summary"], c["old_evidence"], c["old_text"],
                  c["new_evidence"], c["new_text"]] for c in changes]
-        ext = ".xlsx" if not args.save else (os.path.splitext(str(args.save))[1].lower() or ".xlsx")
-        ext = ext if ext in (".xlsx", ".csv") else ".xlsx"
+        asked = "" if not args.save else os.path.splitext(str(args.save).strip().strip('"'))[1].lower()
+        ext = asked if asked in (".xlsx", ".csv") else ".xlsx"
+        if asked and asked != ext:
+            # 말없이 .xlsx로 바꾸던 문제: 바꾼 사실을 warnings로 알림
+            result.setdefault("warnings", []).append(f"diff는 .xlsx와 .csv로만 저장합니다: --save의 {asked} 대신 .xlsx로 저장")
         if args.save:
             out = rt.resolve_output_path(args.save, "diff", ext)
         else:
@@ -3777,7 +3956,8 @@ def cmd_diff(args) -> Dict[str, Any]:
         return rt.ok_unverified(TOOL, "diff", preview, problems, **result)
     return rt.ok(TOOL, "diff", preview,
                  "VERIFIED: 두 문서를 비교했습니다. 숫자가 바뀐 곳(numeric, number_changes)을 먼저, 항목마다 이전·새 근거(old_evidence, new_evidence)와 "
-                 "함께 사용자에게 알리세요" + (". 전체 목록은 full_result_file" if result["truncated"] else "") + ".", verified=True, **result)
+                 "함께 사용자에게 알리세요" + (". 전체 목록은 full_result_file" if result["truncated"] else "")
+                 + (". warnings도 그대로 알리세요" if result.get("warnings") else "") + ".", verified=True, **result)
 
 
 # ==============================================================================

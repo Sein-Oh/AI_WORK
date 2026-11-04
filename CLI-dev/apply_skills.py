@@ -72,9 +72,22 @@ def compare(config_dir, include_test=False):
         out.append((name, src, dst, state))
     for name, rel in OBSOLETE:
         dst = os.path.join(config_dir, rel)
-        if os.path.exists(dst):
+        if os.path.lexists(dst):                       # 대상이 없어진 링크도 지울 것
             out.append((name, None, dst, "지울 것"))
     return out
+
+
+def _is_link(path):
+    """심볼릭 링크나 Windows 정션(mklink /J)인지. 링크면 링크만 지우고 가리키는 폴더는 건드리지 않습니다."""
+    isjunction = getattr(os.path, "isjunction", None)          # Python 3.12+
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+
+def _remove_link(path):
+    try:
+        os.unlink(path)
+    except (IsADirectoryError, PermissionError):
+        os.rmdir(path)                                  # Windows 디렉터리 링크·정션은 rmdir로 링크만 지움 (대상 내용은 그대로)
 
 
 def label(name, src, dst, state):
@@ -100,19 +113,26 @@ def apply(config_dir, include_test=False, now=None):
             continue
         if state == "지울 것":
             keep = os.path.join(backup, os.path.relpath(dst, config_dir))
-            err = ""
+            err, done = "", " -> 보관 후 지움"
             try:
-                if os.path.isdir(dst):
+                if _is_link(dst):
+                    # 링크·정션: 링크만 지움 (가리키는 폴더는 사용자의 것일 수 있어 지우지도 보관하지도 않음)
+                    target = os.path.realpath(dst)
+                    _remove_link(dst)
+                    done = f" -> 링크만 지움 (가리키던 폴더 {target}는 그대로)"
+                elif os.path.isdir(dst):
                     shutil.copytree(dst, keep, dirs_exist_ok=True)
                     shutil.rmtree(dst)
                 else:
                     os.makedirs(os.path.dirname(keep), exist_ok=True)
                     shutil.copy2(dst, keep)
                     os.remove(dst)
-            except OSError as e:                        # OpenCode가 파일을 잡고 있으면: 닫고 다시 실행
+            except PermissionError as e:                # OpenCode가 파일을 잡고 있으면: 닫고 다시 실행
                 err = f" ({type(e).__name__}: {e}. OpenCode를 닫고 다시 실행)"
-            ok = not os.path.exists(dst)
-            lines.append(f"[{'OK' if ok else 'FAIL'}] {name}: {dst}" + (" -> 보관 후 지움" if ok else " -> 지우지 못함" + err))
+            except OSError as e:
+                err = f" ({type(e).__name__}: {e}. 이 폴더를 직접 지우거나 옮긴 뒤 다시 실행)"
+            ok = not os.path.lexists(dst)
+            lines.append(f"[{'OK' if ok else 'FAIL'}] {name}: {dst}" + (done if ok else " -> 지우지 못함" + err))
             missing += 0 if ok else 1
             continue
         if state == "다름":

@@ -6,6 +6,49 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.64] - 2026-11-04
+
+독립 검토(2차)에서 나온 버그 수정. 각 항목은 회귀 테스트로 먼저 재현한 뒤 고침.
+
+### 수정
+- [치명] outlook 짧은 `id`: 마지막 목록 하나만 기억해 `search` 뒤 `thread`(또는 다른 `list`)를 하면 같은 `--id 3`이 다른 메일을 가리켰고,
+  `reply/forward --id 3 --send`가 엉뚱한 메일로 나갈 수 있었음. 번호를 목록마다 1부터 다시 매기지 않고 이어서 늘어나게 주고(이미 번호가 있는 메일은 같은 번호),
+  번호 -> EntryID·제목·보낸사람·받은 시각을 최근 500개(7일)까지 `<데이터 폴더>/outlook_ids.json`(옛 `outlook_last_list.json` 대신)에 기억. 옛 번호는 같은 메일이거나
+  "없는 번호" STOP_RETRY(+ `next_commands` list). 9999를 넘으면 1부터 다시 매기며 기억한 번호를 모두 버림.
+  `reply`/`forward` 결과에 `original`(subject·from·received), `attachments`의 `mail`에 from·received를 더하고 preview·directive가 어느 메일인지 알리게 함.
+  회귀 테스트: `tests/test_outlook.py` `test_short_ids_never_point_to_another_mail_after_new_listing` 외 3개.
+- office-mail 스킬: `reply`·`forward` 행에 `--id 3`, `--send`는 사용자가 받는 사람·원본 메일을 확인한 뒤에만.
+- 스킬 4개에 옛 통합 SKILL의 안전 규칙 보충: 새 파일은 사용자가 준 전체 경로로만, 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알림,
+  office-spec의 메모 `--overwrite`는 사용자가 요청했을 때만 (각 6KB 이하).
+- [치명] reader 등록·검색: 읽기에 실패하는 느린 파일이 있으면 매 실행 같은 파일을 다시 읽고 다음 파일 앞에서 `CONTINUE:`가 나 끝나지 않았음
+  (`_index_files`, 검색 때 원본이 바뀐 캐시 다시 읽기). 실패를 (경로, 수정 시각, 크기, 파서 버전)으로 `<캐시 폴더>/index_failures.json`에 기록해 다음 실행에서
+  건너뛰고 `failures`/`skipped`/새 키 `refresh_failures`로 보고. 파일 하나만 주면 바로 다시 시도, `clear --all`은 기록도 지움. `progress`의 등록 수는 실제 등록 수.
+  회귀 테스트: `tests/test_reader.py` `test_failing_file_is_remembered_so_continue_ends`(R10 실행마다 새 단계 1개), `test_stale_refresh_failure_is_remembered`.
+- [중요] `--section "2.1"`이 `2.10`, `12.1`에도 맞던 문제 (`section_matches`, read/search/diff/excel check 공통). 장절 번호로 보이는 값은 번호 경계를 지키고
+  하위 절(`2.1.3`)과 `제2장`은 포함, 제목 글자는 지금처럼 부분 일치. 회귀 테스트: `tests/test_reader.py` `test_section_number_keeps_boundaries`.
+- [중요] `search` 넓혀 찾기: "대기 전류"가 "대기 전력"에 `VERIFIED` count 2로 맞았음. 한글 fuzzy는 4음절 이상, 첫·끝 음절이 같고 바뀐 음절은 자모 하나만 다를 때만
+  (전압/전류, 최대/최소, 상한/하한이 서로 맞지 않음). 넓혀 찾은 결과는 `count: 0`·`total_matches: 0`, 목록은 `candidates`(`matches` 아님)와 `candidate_count`,
+  directive `UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 N건 ...`(옛 `recovered` "넓혀 찾음"은 없앰). `matched_terms`는 글자 그대로 맞은 검색어만.
+  `excel.py check`의 `판단필요`는 그대로. office-spec 스킬과 전역 지침 `CLI-dev/opencode/AGENTS.md`의 match_mode 문구를 맞춤.
+  회귀 테스트: `tests/test_reader.py` `test_search_fuzzy_daegi_current_is_not_power`, `test_fuzzy_never_matches_different_korean_terms`.
+- 경미: 숫자만 든 검색어 정규화(`5,000` = `5000`, `0.5` = `0.50`, 숫자 경계는 지킴). 검색어 낱말 끝 조사는 받침이 맞을 때만 떼고 `로`는 떼지 않음
+  (`와이파이` -> `와이파`, `보호회로` -> `보호회`로 떼던 문제). 캐시의 수식 칸 다시 확인(`recheck_uncomputed`)은 한 실행에 3개·시간 여유 안에서만.
+  `diff --save x.md`가 말없이 `.xlsx`로 저장하던 것을 `warnings`로 알림. 회귀 테스트: `tests/test_reader.py` `test_number_only_query_normalized`,
+  `test_word_final_syllable_is_not_particle`, `test_recheck_uncomputed_is_capped_per_run`, `test_diff_save_md_warns_xlsx`.
+- 경미(outlook): `calendar`에서 Outlook이 기간 조건을 거부하면 일정마다 시각을 비교(`recovered`, 5,000개 상한), 읽지 못한 일정이 있으면 0건이어도
+  `UNVERIFIED:`(`unread_events`, 예외를 삼켜 0건 VERIFIED이던 문제). `thread` 대체 경로가 폴더마다 2,000통 상한에 닿으면 `UNVERIFIED:`.
+  회귀 테스트: `tests/test_outlook.py` `test_calendar_restrict_refused_compares_each_event`, `test_calendar_unreadable_events_are_not_verified_zero`,
+  `test_thread_fallback_scan_limit_is_unverified`.
+
+### 개발 도구
+- Gemma 종합 테스트 채점(`CLI-dev/grade_opencode.py`, `agent_scenarios.yaml` 묶음 O): 채점기가 `;`·`&&`·`||`·`|`로 이은 명령을 나눠(따옴표 안은 그대로)
+  `commands`·`forbid`를 명령마다 봄 (O1 금지 규칙 `(?![^\n]*--dry-run)`이 이어 붙인 다른 명령의 `--dry-run`을 보고 실제 메모 달기를 놓치던 문제).
+  O1: 메모 글(`--text`) 안의 "--dry-run" 글자는 옵션으로 보지 않음(따옴표 밖만). O4: `--anchor`(문서 중간 삽입) 금지, 문서는 `--target`으로.
+  O5: 채운 문서가 `--target`의 성적서양식.docx여야 함(값 파일 이름에 든 양식 이름으로 통과하던 문제). 회귀 사례: `CLI-dev/tests/test_grade_opencode.py`.
+- `CLI-dev/apply_skills.py`: 옛 `skills\office-cli`가 링크·정션이면 링크만 지우고 가리키던 폴더는 그대로 둠(보관도 하지 않음, 안내에 대상 경로).
+  전에는 링크를 따라 복사한 뒤 지우다 실패하고 "OpenCode를 닫고 다시 실행"이라고 잘못 안내함. 잠김(PermissionError)이 아닌 실패는 다른 안내.
+  회귀 테스트: `CLI-dev/tests/test_apply_skills.py` `test_old_office_cli_skill_link_removes_only_link`.
+
 ## [1.4.63] - 2026-11-04
 
 독립 검토에서 나온 버그 수정. 회귀 테스트는 항목마다 고치기 전 코드에서 실패를 확인함.

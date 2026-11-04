@@ -1324,6 +1324,27 @@ def test_check_failure_rechecked_in_index_search(tmp_path, capsys, monkeypatch):
     assert code == 0 and out["agent_directive"].startswith("VERIFIED: 0건."), out
 
 
+def test_recheck_uncomputed_is_capped_per_run(tmp_path, capsys, monkeypatch):
+    # 회귀: 확인 실패가 남은 큰 엑셀이 많으면 검색 한 번에 모두 다시 확인해 시간 제한을 넘음
+    files = [formula_xlsx(tmp_path / f"c{i}.xlsx", cached=True) for i in range(reader.RECHECK_MAX + 2)]
+    calls = []
+
+    def failing(*a, **k):
+        calls.append(1)
+        return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"}
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", failing)
+    for f in files:
+        run_main(reader, capsys, "index", "--file", f)
+    calls.clear()
+    code, out = run_main(reader, capsys, "search", "--query", "없는글자ZQX")
+    assert code == 0 and len(calls) == reader.RECHECK_MAX, calls
+    assert out["agent_directive"].startswith("UNVERIFIED:"), out          # 확인하지 못한 문서는 그대로 UNVERIFIED
+    calls.clear()
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)       # 시간 여유가 없으면 다시 확인하지 않음
+    run_main(reader, capsys, "search", "--query", "없는글자ZQX")
+    assert calls == []
+
+
 def test_reader_read_and_search(tmp_path, capsys):
     p = formula_xlsx(tmp_path / "f.xlsx")
     code, out = run_main(reader, capsys, "read", "--file", p)
@@ -1911,8 +1932,8 @@ def test_index_repairs_entries_lost_to_another_run(tmp_path, capsys, monkeypatch
         (tmp_path / f"d{i}.txt").write_text(f"내용 {i}", encoding="utf-8")
     real = reader._index_files
 
-    def racing(files, max_files):
-        res = real(files, max_files)
+    def racing(files, max_files, **kw):
+        res = real(files, max_files, **kw)
         # 다른 실행이 옛 색인으로 덮어쓴 상황: 방금 넣은 항목 하나가 사라짐
         index = reader.load_index()
         index.pop(sorted(index)[0])
@@ -2335,7 +2356,7 @@ RECALL_CASES = [
     ("절연저항이 100MΩ", {4}, "exact"),       # 조사, 숫자와 단위 띄어쓰기
     ("접지-단자", {5}, "exact"),              # 대시 종류
     ("정격 전압 AND 절연", {1, 4}, "partial"),  # 둘 다 든 단락 없음 -> 하나씩 든 단락
-    ("난연셩", {7}, "fuzzy"),                 # 오타 한 글자
+    ("케이불 피복", {7}, "fuzzy"),            # 오타 한 글자 (한글 4음절 이상, 첫·끝 음절 같음)
 ]
 
 
@@ -2348,7 +2369,7 @@ def _recall_file(tmp_path):
 def _hit_numbers(out):
     paras = RECALL_TEXT.split("\n\n")
     got = set()
-    for m in out.get("matches", []):
+    for m in out.get("matches", []) + out.get("candidates", []):
         text = m.get("text") or m.get("snippet", "")
         for i, para in enumerate(paras, 1):
             if para[:6] in text.replace("**", ""):
@@ -2363,20 +2384,39 @@ def test_search_recall_variants(tmp_path, capsys, query, want, mode):
     assert code == 0 and _hit_numbers(out) == want, (query, out.get("matches"))
     assert out["match_mode"] == mode
     if mode != "exact":
-        assert out["recovered"] and "넓혀" in out["recovered"][0]
-        assert out["agent_directive"].startswith("VERIFIED:") and mode in out["agent_directive"]
-        assert all(m["matched_terms"] for m in out["matches"])
+        # 넓혀 찾은 결과는 정확 일치 0건 + candidates + UNVERIFIED (근거로 쓰지 않게)
+        assert out["count"] == 0 and out["total_matches"] == 0 and out["candidate_count"] == len(want) and "matches" not in out
+        assert out["agent_directive"].startswith("UNVERIFIED: 정확히 일치한 곳은 0건") and mode in out["agent_directive"]
+        assert "recovered" not in out
 
 
 def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
     p = _recall_file(tmp_path)
     code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
-    assert {tuple(m["missing_terms"]) for m in out["matches"]} == {("절연",), ("정격 전압",)}
+    assert {tuple(m["missing_terms"]) for m in out["candidates"]} == {("절연",), ("정격 전압",)}
+    assert {tuple(m["matched_terms"]) for m in out["candidates"]} == {("정격 전압",), ("절연",)}
+    code, out = run_main(reader, capsys, "search", "--query", "케이불 피복", "--file", str(p))
+    c = out["candidates"][0]
+    assert c["fuzzy_words"] == {"케이불 피복": "케이블피복"} and c["matched_terms"] == [], c   # 실제로 맞은 낱말만
+    # 짧은 검색어(한글 3음절 이하)는 유사 일치로 넓히지 않음: 0건 그대로
     code, out = run_main(reader, capsys, "search", "--query", "난연셩", "--file", str(p))
-    assert out["matches"][0]["fuzzy_words"] == {"난연셩": "난연성"} and "**난연성**" in out["matches"][0]["snippet"]
-    # 짧은 검색어(한글 2음절)는 유사 일치로 넓히지 않음: 0건 그대로
-    code, out = run_main(reader, capsys, "search", "--query", "난얀", "--file", str(p))
     assert out["count"] == 0 and out["match_mode"] == "exact" and "recovered" not in out
+
+
+@pytest.mark.parametrize("query,word", [("전압", "전류"), ("전류", "전력"), ("최대", "최소"), ("상한", "하한"),
+                                        ("대기 전류", "대기 전력"), ("최대 전류", "최소 전류"), ("정격 전압", "정격 전류"),
+                                        ("상한 온도", "하한 온도")])
+def test_fuzzy_never_matches_different_korean_terms(query, word):
+    core = reader._fuzzy_core(query)
+    assert core is None or reader._fuzzy_word(f"이 장치의 {word}는 5 이하", core) is None, (query, word)
+
+
+def test_search_fuzzy_daegi_current_is_not_power(tmp_path, capsys):
+    # 회귀: "대기 전류"가 "대기 전력"에 VERIFIED count 2로 맞음
+    p = tmp_path / "규격.md"
+    p.write_text("대기 전력은 0.5 W 이하로 한다.\n\n대기 전력 측정 방법은 부록 A.\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "대기 전류", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["match_mode"] == "exact" and out["agent_directive"].startswith("VERIFIED: 0건"), out
 
 
 def test_search_particles_do_not_overstrip_short_words():
@@ -2464,6 +2504,77 @@ def test_long_registration_continues_with_same_command(tmp_path, capsys, monkeyp
     assert len(reader.load_index()) == 3
     if command == "search":
         assert out["count"] >= 3, out
+
+
+@pytest.mark.parametrize("command", ["index", "search"])
+def test_failing_file_is_remembered_so_continue_ends(tmp_path, capsys, monkeypatch, command):
+    # 회귀: 실패하는 느린 파일이 앞에 있으면 매 실행 같은 파일을 다시 읽고 다음 파일 앞에서 CONTINUE (끝나지 않음)
+    folder = _txt_folder(tmp_path)
+    (folder / "a_bad.txt").write_text("깨진 파일", encoding="utf-8")
+    orig = reader.load_document_status
+    calls = []
+
+    def fake(path, *a, **k):
+        calls.append(os.path.basename(path))
+        if "a_bad" in path:
+            raise ValueError("손상된 파일")
+        return orig(path, *a, **k)
+    monkeypatch.setattr(reader, "load_document_status", fake)
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)      # 첫 파일 뒤로는 늘 시간 초과
+    argv = ["index", "--folder", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
+    seen, progress = [], []
+    for _ in range(6):
+        code, out = run_main(reader, capsys, *argv)
+        assert code == 0, out
+        seen.append(out["agent_directive"].split(":")[0])
+        if not out.get("continue"):
+            break
+        progress.append(out["progress"])
+    assert seen[:3] == ["CONTINUE"] * 3 and seen[3] in ("VERIFIED", "UNVERIFIED"), seen   # 실행마다 새 파일 1개 (실패도 한 단계), 네 번째에 끝
+    assert calls.count("a_bad.txt") == 1, calls                         # 실패한 파일은 한 번만 읽음
+    assert "새로 등록 0개, 읽지 못함 1개" in progress[0], progress
+    fails = out["failures"] if command == "index" else out["skipped"]
+    assert [f["file"] for f in fails] == ["a_bad.txt"] and "이전 실행에서 읽지 못함" in fails[0]["reason"], out
+    assert len(reader.load_index()) == 3
+    # 파일이 바뀌면 다시 읽음, 하나만 주면 바로 다시 시도
+    (folder / "a_bad.txt").write_text("고친 파일 정격 전압", encoding="utf-8")
+    monkeypatch.setattr(reader, "load_document_status", orig)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0 and out["failed"] == 0 and out["indexed"] == 1 and not reader.load_failed(), out
+
+
+def test_single_file_retries_known_failure(tmp_path, capsys, monkeypatch):
+    f = tmp_path / "bad.txt"
+    f.write_text("x", encoding="utf-8")
+    reader.record_failure(str(f), "손상")
+    code, out = run_main(reader, capsys, "index", "--file", str(f))
+    assert code == 0 and out["indexed"] == 1 and not reader.load_failed(), out
+
+
+def test_stale_refresh_failure_is_remembered(tmp_path, capsys, monkeypatch):
+    # 회귀: 원본이 바뀐 캐시를 다시 읽다 실패하는 파일을 매 검색마다 다시 읽음
+    folder = _txt_folder(tmp_path, 2)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0 and out["indexed"] == 2
+    for i in range(2):
+        p = folder / f"doc{i}.txt"
+        p.write_text(f"정격 전압 바뀐 {i}\n", encoding="utf-8")
+        os.utime(p, (1, 2_000_000_000 + i))
+    orig = reader.load_document_status
+    calls = []
+
+    def fake(path, *a, **k):
+        calls.append(os.path.basename(path))
+        if "doc0" in path:
+            raise ValueError("손상된 파일")
+        return orig(path, *a, **k)
+    monkeypatch.setattr(reader, "load_document_status", fake)
+    for _ in range(2):
+        code, out = run_main(reader, capsys, "search", "--query", "정격 전압")
+        assert code == 0, out
+    assert calls.count("doc0.txt") == 1, calls
+    assert [f["file"] for f in out["refresh_failures"]] == ["doc0.txt"], out
+    assert "이전 실행에서 읽지 못함" in out["refresh_failures"][0]["reason"]
 
 
 def test_time_limit_env(monkeypatch):
@@ -2694,3 +2805,58 @@ def test_number_changes_words():
     assert reader.number_changes("정격 5V, 3 A", "정격 5.0 V, 3 A") == []
     assert reader.number_changes("5 V", "5.5 V") == ["5 V에서 5.5 V로"]
     assert reader.number_changes("5 V", "5 V, 2 A") == ["숫자 추가: 2 A"]
+
+
+# ---------------------------------------------------------------------------
+# --section 장절 번호 경계 (1.4.64)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sec,key,want", [
+    (["2. 전기", "2.1 정격"], "2.1", True),
+    (["2. 전기", "2.1 정격", "2.1.3 전압"], "2.1", True),          # 하위 절 포함
+    (["2. 전기", "2.10 기타"], "2.1", False),                      # 회귀: 2.10에도 맞았음
+    (["12. 부록", "12.1 표"], "2.1", False),                       # 회귀: 12.1에도 맞았음
+    (["1. 개요", "1.2.1 범위"], "2.1", False),
+    (["2.1. 정격"], "2.1.", True),
+    (["제2장 전기"], "2", True),
+    (["12. 부록"], "2", False),
+    (["A.1 부록 표"], "A.1", True),
+    (["1. SCOPE", "1.1. Scope"], "Scope", True),                   # 제목 글자는 부분 일치
+    (["3.2 정격 전압"], "정격", True),
+])
+def test_section_number_keeps_boundaries(sec, key, want):
+    assert reader.section_matches({"section": sec}, reader.section_key(key)) is want
+
+
+def test_search_section_number_excludes_2_10(tmp_path, capsys):
+    f = tmp_path / "규격.md"
+    f.write_text("# 2. 전기\n\n## 2.1 정격\n\n정격 전압 5 V\n\n## 2.10 기타\n\n정격 전압 12 V\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--file", str(f), "--section", "2.1")
+    assert code == 0 and out["count"] == 1 and "5 V" in json.dumps(out["matches"][0], ensure_ascii=False), out
+
+
+# ---------------------------------------------------------------------------
+# 숫자만 든 검색어, 낱말 끝 조사 (1.4.64)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query,text,want", [
+    ("5,000", "5000 rpm", True), ("5000", "5,000 rpm", True), ("0.5", "0.50 mm", True), ("0.50", "0.5 mm", True),
+    ("0.5", "10.5 mm", False), ("0.5", "0.55 mm", False), ("1.2", "11.2", False), ("1.2", "3.1.2절", False),
+    ("1.2", "12", False), ("5,000", "15,000", False),
+])
+def test_number_only_query_normalized(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want
+
+
+def test_word_final_syllable_is_not_particle():
+    assert reader.strip_particles("와이파이 보호회로 역효과") == "와이파이 보호회로 역효과"
+    assert reader.strip_particles("정격전압이 전류가 저항은 시험을 케이블의 전압으로") == "정격전압 전류 저항 시험 케이블 전압"
+    assert reader.build_matcher("와이파이", False)("와이파 모듈") is None
+
+
+def test_diff_save_md_warns_xlsx(tmp_path, capsys):
+    # 회귀: diff --save x.md가 말없이 .xlsx로 저장됨
+    old, new = _two_versions(tmp_path)
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--save", str(tmp_path / "차이.md"))
+    assert code == 0 and out["output_file"].endswith(".xlsx"), out
+    assert any(".md" in w and ".xlsx" in w for w in out["warnings"]) and "warnings" in out["agent_directive"], out

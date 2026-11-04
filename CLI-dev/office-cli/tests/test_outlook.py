@@ -1248,7 +1248,61 @@ def test_list_gives_short_ids_and_read_accepts_them(ol_short, capsys):
     code, out3 = run_outlook(capsys, "read", "--id", second["entry_id"])          # 긴 id도 그대로
     assert code == 0 and out3["mail"]["subject"] == second["subject"]
     code, bad = run_outlook(capsys, "read", "--id", "9")
-    assert code == 1 and "1~3번" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
+    assert code == 1 and "없는 번호" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
+    assert " list" in bad["next_commands"][0]["command"]
+
+
+def _listing(prefix, n):
+    return [{"entry_id": f"{prefix}{i}", "subject": f"{prefix} 제목 {i}", "from": "홍길동", "received": "2026-11-04T09:00:00"}
+            for i in range(1, n + 1)]
+
+
+def test_short_ids_never_point_to_another_mail_after_new_listing():
+    # 회귀: 목록마다 1부터 다시 매겨 search 뒤 thread를 하면 같은 '--id 3'이 다른 메일이 됨 (reply --send가 엉뚱한 메일로)
+    search = _listing("S", 5)
+    outlook.remember_listing(search, "search")
+    assert [m["id"] for m in search] == [1, 2, 3, 4, 5]
+    thread = _listing("T", 4) + [{"entry_id": "S3", "subject": "S 제목 3"}]
+    outlook.remember_listing(thread, "thread")
+    assert [m["id"] for m in thread] == [6, 7, 8, 9, 3]               # 새 번호는 이어서, 이미 본 메일은 같은 번호
+    assert outlook.entry_id("3") == "S3" and outlook.entry_id("7") == "T2" and outlook.entry_id("1") == "S1"
+
+
+def test_short_id_dropped_or_wrapped_is_missing_not_other_mail(monkeypatch):
+    monkeypatch.setattr(outlook, "ID_KEEP", 4)
+    outlook.remember_listing(_listing("A", 3), "list")                   # 1~3
+    outlook.remember_listing(_listing("B", 3), "list")                   # 4~6, 기억은 최근 4개(3~6)
+    with pytest.raises(rt.InputError) as e:
+        outlook.entry_id("1")
+    assert "없는 번호" in str(e.value) and e.value.fields["next_commands"]
+    assert outlook.entry_id("6") == "B3"
+    monkeypatch.setattr(outlook, "SHORT_ID_MAX", 8)
+    c = _listing("C", 3)
+    outlook.remember_listing(c, "list")                                   # 7~9는 상한을 넘음 -> 1부터 다시, 옛 번호는 모두 버림
+    assert [m["id"] for m in c] == [1, 2, 3] and outlook.entry_id("1") == "C1"
+    for old in ("4", "6"):
+        with pytest.raises(rt.InputError):
+            outlook.entry_id(old)
+
+
+def test_short_id_older_than_keep_days_is_missing(monkeypatch):
+    outlook.remember_listing(_listing("A", 2), "list")
+    path = outlook._listing_path()
+    data = json.loads(open(path, encoding="utf-8").read())
+    data["items"]["1"]["t"] = "2026-01-01T00:00:00"
+    open(path, "w", encoding="utf-8").write(json.dumps(data))
+    with pytest.raises(rt.InputError):
+        outlook.entry_id("1")
+    assert outlook.entry_id("2") == "A2"
+
+
+@pytest.mark.parametrize("cmd", [["reply", "--send"], ["forward", "--to", "b@corp.com", "--send"], ["reply"]])
+def test_reply_forward_report_original_mail(ol_env, capsys, cmd):
+    m = _attach_mail(ol_env, subject="견적 회신 요청")
+    code, out = run_outlook(capsys, cmd[0], "--id", "M1", *cmd[1:])
+    assert code == 0 and out["original"]["subject"] == "견적 회신 요청" and "lead@corp.com" in out["original"]["from"], out
+    assert "견적 회신 요청" in out["preview"] and "original" in out["agent_directive"]
+    assert m.drafts
 
 
 def test_search_next_command_uses_short_id(ol_short, capsys):
@@ -1298,6 +1352,64 @@ def test_calendar_lists_events_read_only(monkeypatch, capsys):
     assert any("[Start] < '2026-11-11 00:00'" in x for x in log if isinstance(x, str))
     code, out = run_outlook(capsys, "calendar", "--days", "0")
     assert code == 1 and "[추천] 7" in out["message"]
+
+
+def _calendar_env(monkeypatch, evs, refuse=False):
+    class _NS:
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(evs, refuse=refuse)})()
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+
+
+class _CalEv:
+    def __init__(self, subject, start, hours=1):
+        self.Subject, self.Start, self.End = subject, start, start + dt.timedelta(hours=hours)
+        self.AllDayEvent, self.Location, self.Organizer = False, "", ""
+
+
+class _BrokenEv:
+    @property
+    def Start(self):
+        raise RuntimeError("COM 오류")
+
+
+def test_calendar_restrict_refused_compares_each_event(monkeypatch, capsys):
+    # 회귀: Outlook이 기간 조건을 거부하면 오류로 끝남 -> 일정마다 시각 비교 (recovered)
+    evs = [_CalEv("지난 회의", dt.datetime(2026, 11, 1, 9)), _CalEv("주간 회의", dt.datetime(2026, 11, 4, 10)),
+           _CalEv("다음달", dt.datetime(2026, 12, 20, 10))]
+    _calendar_env(monkeypatch, evs, refuse=True)
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and [e["subject"] for e in out["events"]] == ["주간 회의"] and out["recovered"], out
+
+
+def test_calendar_unreadable_events_are_not_verified_zero(monkeypatch, capsys):
+    # 회귀: 일정 항목 예외를 삼키고 0건 VERIFIED
+    _calendar_env(monkeypatch, [_BrokenEv(), _BrokenEv()])
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert out["unread_events"] == 2
+
+
+def test_thread_fallback_scan_limit_is_unverified(monkeypatch, capsys):
+    monkeypatch.setattr(outlook, "THREAD_SCAN_MAX", 2)
+    inbox = [_ThreadMail(f"x{i}", "다른 일", dt.datetime(2026, 11, 2, 9), "다른 일") for i in range(3)]
+    inbox.append(_ThreadMail("i1", "견적 요청", dt.datetime(2026, 11, 1, 9), "견적 요청", "첫 메일"))
+    by_id = {m.EntryID: m for m in inbox}
+
+    class _NS:
+        def GetItemFromID(self, eid):
+            return by_id[eid]
+
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(inbox if n == outlook.OL_FOLDER_INBOX else [], refuse=True)})()
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "thread", "--id", "i1")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "받은 편지함" in out["agent_directive"], out
 
 
 def test_calendar_empty_is_zero(monkeypatch, capsys):

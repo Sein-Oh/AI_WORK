@@ -54,7 +54,7 @@
 - JSON에 `recovered`가 있으면 (예: 파일이 열려 있어 새 이름으로 저장) 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.
 - `error_type`이 `missing_library`이면 `install_command`를 사용자에게 전달만 하고 직접 실행하지 않는다.
 - `error_type`이 `elevated_process`이면 다시 실행하지 않는다. 관리자 권한 창에서 실행 중이라 사용자가 연 문서가 안 보이니, 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행하라고 알린다.
-- 문서 검색 결과의 `match_mode`가 `partial`이나 `fuzzy`이면 정확히 일치한 근거가 아니라고 함께 알린다.
+- 문서 검색 결과의 `match_mode`가 `partial`이나 `fuzzy`이면 정확히 일치한 곳은 0건(`count: 0`)이고 `candidates`는 비슷한 곳일 뿐이다. 근거로 쓰지 말고 사용자에게 확인받는다.
 - `truncated`가 true이면 결과 일부만 받은 것이다. 전체 결과 파일 경로(`full_result_file` 또는 `output_file`)를 알리거나, 이어 보기가 필요하면 `next_commands`를 쓴다.
 - `error_type`이 `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. 사용자에게 알리고, 사용자가 보호를 푼 뒤 같은 명령을 1번 다시 실행하거나 사용자가 고른 `[후보]` 칸에 쓴다.
 - `error_type`이 `drm_or_dialog`이면 사용자에게 그 문서를 직접 열어 두라고 알리고, 열었다고 하면 `next_commands[0]`을 1번 실행한다.

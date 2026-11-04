@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 본문
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.63"
+  version: "1.4.64"
   platform: windows
 ---
 
@@ -47,5 +47,5 @@ metadata:
 - transfer는 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 준다.
 - `info --detail`의 `layout_warnings`가 있으면 `warnings`를 알린다. `drm_or_dialog`이면 사용자가 문서를 직접 열었다고 할 때 `next_commands[0]` 1번.
 - 슬라이드 삭제, `slide --action clear --all-slides`, `--overwrite`(기존 노트·슬라이드 제목·표 칸 덮어쓰기)는 사용자가 요청했을 때만.
-- `replace`의 `--find`는 비우지 않는다. 새 파일은 사용자가 준 전체 경로로만 만든다.
+- `replace`의 `--find`는 비우지 않는다. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 잘못 고쳤으면 위 표의 되돌리기 명령으로 되돌린다. 저장한 적 없는 문서도 되돌린다.
