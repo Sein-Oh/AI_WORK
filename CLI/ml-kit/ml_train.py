@@ -226,7 +226,7 @@ def leakage_error(overlap: List[str], features: List[str], targets: List[str]) -
         if feats_wo:
             cands.append({"purpose": f"{names}을(를) 입력(-x)에서 빼고 타겟으로만 예측하기",
                           "command": f"{cmd} -x {_q(','.join(feats_wo))} -y {_q(','.join(targets))}"})
-    msg = (f"[DATA LEAKAGE DETECTED] {names}이(가) 입력(-x)과 타겟(-y)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
+    msg = (f"타겟 누수: {names}이(가) 입력(-x)과 타겟(-y)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
            f"어느 쪽에서 뺄지 사용자에게 물으십시오.")
     if cands:
         msg += " [후보] " + " / ".join(f"{i + 1}) {c['command']}" for i, c in enumerate(cands))
@@ -2361,25 +2361,22 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         preview = (
             f"[{current_version} 완료 / {task}] 타겟: [{target_brief}] | "
             + (f"{excl_brief} | " if excl_brief else "") +
-            f"평균 {metric_label}={mean_val_score:.4f} (Delta: {delta_txt}) | "
+            f"평균 {metric_label}={mean_val_score:.4f} (변화: {delta_txt}) | "
             + (f"{top_brief} | " if top_brief else "") +
-            f"소요시간: {duration_sec}s | "
-            f"산출물 저장: {final_version_dir}"
+            f"소요 {duration_sec}초 | "
+            f"저장: {final_version_dir}"
         )
         agent_directive = (
             (f"UNVERIFIED: {current_version} 학습은 끝났지만 저장 결과를 확인하지 못했습니다 ({'; '.join(unverified)}). "
-             f"재시도하지 말고 이 내용을 사용자에게 그대로 알리세요. " if unverified else "VERIFIED: ")
-            + f"{current_version} competitive training completed. "
-            f"Champion models and leaderboard packaged into '{os.path.basename(final_version_dir)}'. "
-            f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
-            + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
-               "the score with excluded rows (검증 ... 제외 행 포함) from preview, the reasons from excluded_reasons (counts) "
-               "and excluded_preview (row, kind, reason, value) as given, and the excluded_rows_file path. Do not open that file "
-               "and do not guess other reasons. " if excl_brief else "")
-            + ("Tell the user the most important inputs (중요 입력 in preview, top_features: share of all inputs). " if top_brief else "")
-            + ("Tell the user every item of warnings (duplicate rows, repeated header rows, totals rows). " if train_warnings else "") +
-            "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
-            "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
+             f"다시 실행하지 말고 unverified를 그대로 알리세요. " if unverified else "VERIFIED: ")
+            + f"{current_version} 학습을 마쳤습니다 ({task}, 평균 {metric_label}={mean_val_score:.4f}). "
+            + ("학습에서 뺀 행이 있습니다. preview의 제외 행 수와 '제외 행 포함' 점수, excluded_reasons(이유별 행 수), "
+               "excluded_preview(행, 직접/자동, 이유, 값)를 그대로, excluded_rows_file 경로도 알리세요. "
+               "그 파일은 열지 말고 다른 이유를 짐작하지 마세요. " if excl_brief else "")
+            + ("preview의 중요 입력(top_features, 전체 입력 대비 비중)을 알리세요. " if top_brief else "")
+            + ("warnings(중복 행, 반복된 머리글 행, 합계 행 등)를 빠짐없이 알리세요. " if train_warnings else "") +
+            "다음: 사용자가 원하면 next_commands[0]을 실행하거나 예측으로 넘어갑니다. "
+            "needs_input=true인 명령의 자리표시자는 사용자가 준 경로로 바꾸고, 모르면 먼저 물으세요."
         )
 
         shown_types, types_cut = capped_feature_types(history_record["feature_types"])
@@ -2651,7 +2648,7 @@ def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
     result["preview"] = f"[최고 버전 완료] {vers} | 타겟별 출처 -> 이번 점수: {brief}"
     multi = (f" 작업 유형이 {len(built)}가지라 최고 버전도 {len(built)}개입니다 (best_versions). 보고서도 {len(built)}개가 됩니다."
              if len(built) > 1 else "")
-    head = (f"UNVERIFIED: 저장 결과를 확인하지 못했습니다 ({'; '.join(unverified)}). 재시도하지 말고 사용자에게 알리세요. "
+    head = (f"UNVERIFIED: 저장 결과를 확인하지 못했습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. "
             if unverified else "VERIFIED: ")
     result["agent_directive"] = (
         head + f"타겟별 최고 학습 조건으로 모든 타겟을 다시 학습해 {vers}을(를) 만들었습니다.{multi} "
@@ -2893,7 +2890,7 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
         "latest_version": rows[-1]["version"],
         "records": shown,
         "verified": True,
-        "agent_directive": ("VERIFIED: History summary returned. Do not re-read history.jsonl for the same information."
+        "agent_directive": ("VERIFIED: 학습 이력입니다. history.jsonl을 다시 읽지 마세요."
                             + (f" records에는 최근 {len(shown)}건만 있습니다 (전체 {len(rows)}건: full_result_file)." if cut else "")
                             + (f" 사용자에게 알리세요: {note}" if note else "")),
     }
@@ -2901,7 +2898,7 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
 
 def main():
     parser = JsonArgumentParser(
-        description="Autonomous Regression / Classification ML Engine with 5-Model Competitive Benchmark & Version Lineage"
+        description="회귀/분류 모델 학습 (5개 모델 경쟁, 버전 관리)"
     )
     parser.add_argument("--file", "-f", help="입력 데이터 파일 경로 (.xlsx, .csv)")
     parser.add_argument("--features", "-x", help="독립변수(피처) 목록 (쉼표 구분 문자열 또는 파일 경로: .txt, .json, .csv)")
@@ -2944,7 +2941,7 @@ def main():
             sys.stderr.write(f"[WARN] --best는 이력의 학습 조건을 쓰므로 {ignored}을(를) 무시합니다\n")
             args.features = args.targets = args.eval = args.version = args.positive_class = args.dtypes = None
             args.exclude_where = None
-        run_cli(lambda: execute_make_best(args), hint="Train at least once with ml_train.py before --best.")
+        run_cli(lambda: execute_make_best(args), hint="확인할 것: --best 전에 ml_train.py로 1번 이상 학습했는지.")
         return
 
     if args.history:
@@ -2959,7 +2956,7 @@ def main():
     if not args.file or not args.targets or not args.features:
         parser.error("--file, --features(-x), --targets(-y)는 모델 학습에 필수적인 인자입니다.")
 
-    run_cli(lambda: execute_ml_train(args), hint="Check column names or formula syntax.")
+    run_cli(lambda: execute_ml_train(args), hint="확인할 것: 열 이름과 --eval 식.")
 
 
 if __name__ == "__main__":

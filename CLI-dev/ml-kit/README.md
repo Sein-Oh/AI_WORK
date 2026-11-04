@@ -205,8 +205,8 @@ python ml_train.py -f "공정.xlsx" -x "반응온도,촉매비율,수분함량" 
 - **동적 연쇄 정의 지원**: 세미콜론(`;`)으로 구분하여 앞서 정의한 파생변수를 즉시 다음 수식의 인자로 참조 가능:
   `--eval "온도압력비 = 반응온도 / (압축압력 + 1e-6); 로그비 = log1p(온도압력비)"`
 - **컬럼명 표기**: 전체 이름(`반응온도(°C)`) 또는 단위를 뺀 이름(`반응온도`) 모두 허용합니다. 단위를 뺀 이름이 하나의 컬럼에만 해당할 때 자동 매칭되며, 원장/메타데이터에는 항상 전체 이름으로 저장되어 추론 시 그대로 재현됩니다.
-- **타겟 누수 차단**: 수식에 타겟(-y) 컬럼이 포함되면 `[DATA LEAKAGE DETECTED]` 오류로 즉시 중단합니다.
-  같은 열을 `-x`와 `-y`에 함께 주면 `[DATA LEAKAGE DETECTED]` + `[후보] 1) <그 열을 -y에서 뺀 전체 명령> / 2) <-x에서 뺀 전체 명령>`
+- **타겟 누수 차단**: 수식에 타겟(-y) 컬럼이 포함되면 `타겟 누수:`로 시작하는 오류로 즉시 중단합니다.
+  같은 열을 `-x`와 `-y`에 함께 주면 `타겟 누수:` + `[후보] 1) <그 열을 -y에서 뺀 전체 명령> / 2) <-x에서 뺀 전체 명령>`
   (다른 옵션 유지, 같은 명령이 `next_commands`에도). 어느 쪽인지는 사용자가 고릅니다. `-y`가 그 열뿐이면 2)만.
 - **숫자 이름의 열**: 데이터에 숫자로 읽히는 이름의 열(`1`, `2`)이 있고 수식에 그 숫자가 있으면(`온도*2`) `STOP_RETRY`입니다. 수식에는 열 이름을 따옴표나 괄호로 감싸 쓰는 방법이 없어, 숫자가 그 열로 바뀌면 말없이 다른 값이 계산되기 때문입니다. 단위를 뺀 이름이 숫자로 읽히는 열(`2(mm)`, `0.5(mm)`)도 같고, 그 이름(`2`)은 수식 이름으로 맞추지 않습니다. 열 이름을 글자가 든 이름으로 바꿉니다. 단위까지 쓴 전체 이름(`0.5(mm)*2(mm)`, `온도+2(mm)`)은 그 열이고, 더 긴 숫자 안의 숫자(`2(mm)` 열과 `온도*2.5`, `5(mm)` 열과 `온도*0.5`)는 그 열이 아닌 숫자입니다.
 
@@ -657,7 +657,7 @@ python ml_predict.py \
       "predictions": [58.5032]
     }
   },
-  "agent_directive": "VERIFIED: Inline prediction completed."
+  "agent_directive": "VERIFIED: 타겟 1개를 예측했습니다. 다음: 예측 결과를 사용자에게 알리세요."
 }
 ```
 
@@ -936,12 +936,12 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
     "기여도가 1% 미만인 피처 ['유입유속(m/s)', '수분함량(%)']을(를) 배제하여 노이즈를 감소시키십시오."
   ],
   "top_features": {"생산효율(%)": [{"feature": "소비전력(kW)", "importance": 0.695}, {"feature": "반응온도(°C)", "importance": 0.29}]},
-  "preview": "[v1 완료] 타겟: [생산효율(%)(ExtraTrees: 검증 R2=0.9645)] | 평균 검증 R2=0.9645 (Delta: base) | 중요 입력: 소비전력(kW) 0.70, 반응온도(°C) 0.29 | 소요시간: 3.45s",
-  "agent_directive": "VERIFIED: v1 competitive training completed. Champion models and leaderboard packaged into 'v1'. Mean 검증 R2=0.9645. Next step: proceed to inference or next iteration."
+  "preview": "[v1 완료 / regression] 타겟: [생산효율(%)(ExtraTrees: 검증 R2=0.9645)] | 평균 검증 R2=0.9645 (변화: base) | 중요 입력: 소비전력(kW) 0.70, 반응온도(°C) 0.29 | 소요 3.45초 | 저장: C:\\path\\sample_ml_data\\v1",
+  "agent_directive": "VERIFIED: v1 학습을 마쳤습니다 (regression, 평균 검증 R2=0.9645). preview의 중요 입력(top_features, 전체 입력 대비 비중)을 알리세요. 다음: 사용자가 원하면 next_commands[0]을 실행하거나 예측으로 넘어갑니다. ..."
 }
 ```
 - `verified`: 커밋 후 버전 폴더를 다시 읽어(leaderboard.json, model_dataset.csv, 모델 joblib 다시 load, 메타 version/target, 원장 마지막 기록) 확인했으면 `true`.
-  확인하지 못한 것이 있으면 `false`, `unverified`에 사유 목록, `agent_directive`는 `UNVERIFIED:`로 시작합니다 (재시도하지 말고 그대로 보고).
+  확인하지 못한 것이 있으면 `false`, `unverified`에 사유 목록, `agent_directive`는 `UNVERIFIED:`로 시작합니다 ("다시 실행하지 말고 unverified를 그대로 알리세요.").
 - `incomplete_versions` (있을 때만): 지우지 않고 건너뛴 불완전한 버전 폴더 이름 목록.
 - `top_features`: 타겟별 중요 입력 `{"<타겟>": [{"feature": <열 이름>, "importance": <비중>}, ...]}`, 큰 순서로 최대 5개.
   값은 최고 모델(챔피언)을 전체 데이터에 맞춘 뒤 잰 순열 중요도(`leaderboard.json`의 `feature_importances`, Word 보고서 2장과 같은 값)를
@@ -965,7 +965,7 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
 {
   "status": "error",
   "message": "타겟 컬럼 '목표수율'이 입력 파일의 유효 컬럼 목록에 존재하지 않습니다.",
-  "agent_directive": "STOP_RETRY: Argument or data schema validation failed. Inspect message and do not retry blindly."
+  "agent_directive": "STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 그 값으로 바꿔 1번만 다시 실행하세요 ([추천] 뒤가 python으로 시작하면 전체 명령이니 그대로 1번 실행). 없으면 message를 그대로 알리세요."
 }
 ```
 
@@ -975,7 +975,7 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
 ```json
 {
   "status": "ok",
-  "source": "Inline Input (1 record(s))",
+  "source": "직접 입력 1건",
   "total_rows": 1,
   "targets_predicted": ["생산효율(%)"],
   "output_file": null,
@@ -990,7 +990,7 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
   },
   "drift_warning": false,
   "extrapolation_warnings": [],
-  "agent_directive": "VERIFIED: Prediction completed for 1 target(s). Inline predictions returned. Next step: report inference results to user."
+  "agent_directive": "VERIFIED: 타겟 1개를 예측했습니다. 다음: 예측 결과를 사용자에게 알리세요."
 }
 ```
 입력 키를 단위 없이(`반응온도=240`) 주면 학습 컬럼명으로 자동 매칭되고 `column_aliases`에 매칭 내역이 포함됩니다.
@@ -1013,7 +1013,7 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
   },
   "drift_warning": false,
   "low_confidence_warning": false,
-  "agent_directive": "VERIFIED: Prediction completed for 1 target(s). Inline predictions returned. Next step: report inference results to user."
+  "agent_directive": "VERIFIED: 타겟 1개를 예측했습니다. 다음: 예측 결과를 사용자에게 알리세요."
 }
 ```
 
@@ -1034,23 +1034,23 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
   },
   "drift_warning": false,
   "extrapolation_warnings": [],
-  "agent_directive": "VERIFIED: Prediction completed for 1 target(s). Output saved to new_batch_pred_20261027_011000.csv. Next step: report inference results to user."
+  "agent_directive": "VERIFIED: 타겟 1개를 예측했습니다. 결과 파일: new_batch_pred_20261027_011000.csv. 다음: 예측 결과를 사용자에게 알리세요."
 }
 ```
 
-#### [외삽(Extrapolation) 위험 감지 시]
+#### [학습 범위 밖 입력 (외삽) 경고]
 입력 피처의 수치가 학습 당시 관측된 동적 한계선(`[min, max]`)을 초과할 경우 경고 플래그와 상세 내역이 반환됩니다:
 ```json
 {
   "status": "ok",
   "drift_warning": true,
   "extrapolation_warnings": [
-    "피처 '반응온도(°C)' 상한 초과 외삽(Extrapolation) 감지: 학습 최대=280.00, 입력 최대=320.00 (범위 대비 +50.0% 초과 이탈, 범위 밖 3건)"
+    "입력 '반응온도(°C)' 학습 범위 초과: 학습 최대=280.00, 입력 최대=320.00 (범위의 +50.0%, 범위 밖 3건)"
   ],
   "extrapolation_warning_count": 1,
   "extrapolation_warnings_truncated": false,
   "predictions_summary": { ... },
-  "agent_directive": "VERIFIED: Prediction completed for 1 target(s) with extrapolation warning (inputs outside training range; predictions may be unreliable). ..."
+  "agent_directive": "VERIFIED: 타겟 1개를 예측했습니다. 학습 범위 밖 입력이 있어 예측은 참고용입니다 (extrapolation_warnings). ... 위 경고를 함께 알리세요."
 }
 ```
 
@@ -1070,7 +1070,7 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
   "table_count": 11,
   "slots_used": [],
   "preview": "[보고서 완료] v3 / 타겟 2개 / 종합 판정 적합 / 저장: ML결과보고서_sample_v3.docx",
-  "agent_directive": "VERIFIED: ML result report for v3 (2 target(s)) saved to 'ML결과보고서_sample_v3.docx'. Overall verdict=적합. Next step: report the file path to the user."
+  "agent_directive": "VERIFIED: v3 ML 결과 보고서(타겟 2개)를 'ML결과보고서_sample_v3.docx'에 저장했습니다. 종합 판정 적합. report_file 경로를 사용자에게 알리세요."
 }
 ```
 `best_version`은 문서에 사용한 버전입니다 (`version`과 같음). `verified`는 저장한 Word 파일을 다시 열어 버전 표기와 표 수를 확인했는지, 아니면 `unverified`에 이유가 있고 `agent_directive`가 `UNVERIFIED:`입니다.

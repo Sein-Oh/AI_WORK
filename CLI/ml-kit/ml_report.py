@@ -1352,8 +1352,8 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         **({"unverified": unverified} if unverified else {}),
         "preview": f"[보고서 완료] {version} / 타겟 {len(targets)}개 / 종합 판정 {overall} / 저장: {os.path.basename(saved)}",
         "agent_directive": (("VERIFIED: " if not unverified else "UNVERIFIED: 보고서 확인 실패 (" + "; ".join(unverified)
-                             + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ") + f"ML result report for {version} ({len(targets)} target(s)) saved to "
-                            f"'{os.path.basename(saved)}'. Overall verdict={overall}. Next step: report the file path to the user."),
+                             + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ") + f"{version} ML 결과 보고서(타겟 {len(targets)}개)를 "
+                            f"'{os.path.basename(saved)}'에 저장했습니다. 종합 판정 {overall}. report_file 경로를 사용자에게 알리세요."),
     }
 
 
@@ -1530,7 +1530,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
     result["agent_directive"] = (
         ("VERIFIED: " if not bad else "UNVERIFIED: 보고서 확인 실패 (" + "; ".join(bad) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + f"{made}최고 버전 {vers}으로 ML 결과 보고서 {len(reports)}개를 저장했습니다 ({files}).{multi} "
-        f"report_file 링크, overall_verdict, best_targets의 타겟별 출처 버전과 점수를 사용자에게 알리세요. "
+        f"report_file 경로, overall_verdict, best_targets의 타겟별 출처 버전과 점수를 사용자에게 알리세요. "
         f"이후 예측에는 best_version_dir을 쓰세요 ({predict})."
     )
     attach_export(result, export)
@@ -1538,7 +1538,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
 
 
 def main():
-    parser = JsonArgumentParser(description="ML 결과 보고서 (Word) generator (-f: every target in one report per task)")
+    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (-f: 작업 유형마다 모든 타겟을 보고서 1개로)")
     parser.add_argument("--model", "-m",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
     parser.add_argument("--targets", "-y", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
@@ -1558,7 +1558,7 @@ def main():
     args = parser.parse_args()
     if not args.model and not args.file:
         parser.error("-f <데이터파일> 또는 -m <version_dir> 중 하나를 지정해야 합니다.")
-    run_cli(lambda: execute_report(args), hint="Check the version folder path (version_dir from the training result).")
+    run_cli(lambda: execute_report(args), hint="확인할 것: 버전 폴더 경로 (학습 결과의 version_dir).")
 
 
 if __name__ == "__main__":

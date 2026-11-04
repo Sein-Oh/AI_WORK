@@ -446,7 +446,8 @@ def execute_forward(args) -> Dict[str, Any]:
         res = {"status": "ok", "mode": t.mode, "keys": keys, "columns": values, "count": len(out_rows),
                "extrapolated_count": n_ext, "output_file": real, "data_range": data_range, "verified": ok,
                "preview": f"조회 {len(out_rows)}건 보간 ({'격자' if t.mode == 'grid' else '흩어진 기록'}), 외삽 {n_ext}건 -> {real}"}
-        res["agent_directive"] = (("VERIFIED: " if ok else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. ")
+        res["agent_directive"] = (("VERIFIED: " if ok else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. "
+                                   "다시 실행하지 말고 unverified를 그대로 알리세요. ")
                                   + "output_file 경로와 외삽 건수(extrapolated_count), warnings를 사용자에게 알리세요.")
         if not ok:
             res["unverified"] = ["결과 파일 다시 읽기"]
@@ -475,7 +476,7 @@ def execute_forward(args) -> Dict[str, Any]:
                                        for k, v in nr.items()} for nr in near])}, args.overwrite)
         res["output_file"], res["verified"] = real, ok
     res["agent_directive"] = (
-        ("VERIFIED: " if res["verified"] else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. ")
+        ("VERIFIED: " if res["verified"] else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. 다시 실행하지 말고 그대로 알리세요. ")
         + "preview의 값과 method, basis(사용한 원본 행과 비율)를 사용자에게 알리고, nearest_rows(가까운 실측 5행)를 표로 보여 주세요. "
         + ("extrapolated=true이므로 warnings의 범위 밖 내용을 반드시 함께 알리세요. " if r["extrapolated"] else "")
         + f"값은 데이터 파일의 마지막 저장 시각({tab['saved_at']}) 기준입니다.")
@@ -611,7 +612,7 @@ def execute_reverse(args) -> Dict[str, Any]:
         directive = ("답을 모두 알리세요(하나만 고르지 않음). 답마다 method와 basis(원본 행과 비율)를 함께 알리고, "
                      "nearest_rows(가까운 실측 5행)를 표로 보여 주세요. ")
     res["agent_directive"] = (("VERIFIED: 찾은 답을 보간식에 다시 넣어 목표값이 나오는지 확인했습니다. " if not unverified else
-                               f"UNVERIFIED: 확인하지 못한 항목이 있습니다 ({'; '.join(unverified)}). 재시도하지 말고 그대로 알리세요. ")
+                               f"UNVERIFIED: 확인하지 못한 항목이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
                               + directive + ("warnings도 함께 알리세요. " if warnings else "")
                               + f"값은 데이터 파일의 마지막 저장 시각({tab['saved_at']}) 기준입니다.")
     return _common(tab, res, warnings, input_pct)

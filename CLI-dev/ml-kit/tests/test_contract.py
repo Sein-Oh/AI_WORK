@@ -82,7 +82,7 @@ def test_train_column_typo_suggests(trained):
 def test_train_eval_leakage_blocked(trained):
     _, data, _ = trained
     payload = run_fail("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--eval", "누수 = 생산효율 * 2")
-    assert "LEAKAGE" in payload["message"]
+    assert "타겟 누수" in payload["message"]
 
 
 def test_train_eval_rejects_code(trained):
@@ -195,7 +195,7 @@ def test_train_target_in_features_offers_both_commands(trained):
     _, data, _ = trained
     payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
                        "-y", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
-    assert "[DATA LEAKAGE DETECTED]" in payload["message"] and "[후보] 1) python" in payload["message"]
+    assert "타겟 누수:" in payload["message"] and "[후보] 1) python" in payload["message"]
     import shlex
     one, two = (shlex.split(c["command"]) for c in payload["next_commands"])
     assert one[one.index("-y") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("-x") + 1]
@@ -283,7 +283,7 @@ def test_help_is_stderr_text_and_one_json_line(script, data_dir):
 
 def test_stop_retry_directive_mentions_full_command():
     d = mp.error_payload(mp.InputError("x [추천] python a.py"))["agent_directive"]
-    assert "full command" in d and "run it as given, once" in d
+    assert "전체 명령" in d and "그대로 1번 실행" in d
 
 
 # ---- 오류 로그 <데이터 폴더>/logs/errors.txt (AGENTS.md 오류 로그 저장, CLI-dev/README.md R6) ----

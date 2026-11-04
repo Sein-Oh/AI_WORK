@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.58"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.59"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -245,7 +245,7 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             "status": "error",
             "error_type": "interrupted",
             "message": "사용자 또는 상위 프로세스에 의해 실행이 중단되었습니다. 임시 산출물은 롤백되었습니다.",
-            "agent_directive": "STOP_RETRY: Execution was interrupted. Ask the user before running again.",
+            "agent_directive": "STOP_RETRY: 실행이 중단되었습니다. 다시 실행하기 전에 사용자에게 물으세요.",
         }
     if isinstance(exc, ImportError) and not isinstance(exc, MissingLibraryError):
         exc = missing_library_error(exc, "이 기능")
@@ -277,17 +277,16 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             **{k: v for k, v in getattr(exc, "extra", {}).items()
                if k not in ("status", "message", "agent_directive", "error_type")},
             "agent_directive": (
-                "STOP_RETRY: Argument or data schema validation failed. "
-                "If the message contains '[추천]', re-run ONCE with the suggested name, option or command "
-                "(a [추천] that starts with python is a full command: run it as given, once); "
-                "otherwise report the message to the user." + (f" {hint}" if hint else "")
+                "STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 그 값으로 바꿔 1번만 다시 실행하세요 "
+                "([추천] 뒤가 python으로 시작하면 전체 명령이니 그대로 1번 실행). 없으면 message를 그대로 알리세요."
+                + (f" {hint}" if hint else "")
             ),
         }
     return {
         "status": "error",
         "error_type": "internal",
         "message": f"{type(exc).__name__}: {msg}",
-        "agent_directive": "ERROR: Unexpected internal failure. Do not retry; report the message to the user.",
+        "agent_directive": "ERROR: 도구 내부 오류입니다. 다시 실행하지 말고 message를 그대로 알리세요.",
     }
 
 
@@ -421,7 +420,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             "status": "error",
             "error_type": "input",
             "message": f"CLI 인자 오류: {message}",
-            "agent_directive": "STOP_RETRY: Invalid CLI arguments. Check the option names in SKILL.md and report to the user.",
+            "agent_directive": "STOP_RETRY: 명령 인자가 잘못되었습니다. 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준).",
         }
         write_error_log(payload)
         emit_json_response(payload)
@@ -2358,8 +2357,8 @@ def apply_eval_expressions(
             leaked = [c for c in token_to_col.values() if c in target_set]
             if leaked:
                 raise InputError(
-                    f"[DATA LEAKAGE DETECTED] 파생변수 '{new_col}' 수식에 타겟 변수 {leaked}이(가) 포함되어 있습니다. "
-                    f"타겟 변수는 독립변수 및 파생변수 생성에 절대 투입될 수 없습니다."
+                    f"타겟 누수: 파생변수 '{new_col}' 수식에 타겟 {leaked}이(가) 들어 있습니다. "
+                    f"타겟은 입력이나 파생변수 수식에 쓸 수 없습니다."
                 )
 
             try:
@@ -3016,7 +3015,7 @@ def resolve_target_models(
             item["pipeline"] = joblib.load(item["joblib_path"])
         except Exception as e:
             raise InputError(
-                f"Joblib 모델 로드 실패 ({item['joblib_path']}): {e}. "
+                f"모델 파일을 읽지 못했습니다 ({item['joblib_path']}): {e}. "
                 f"학습 PC와 scikit-learn 버전(학습={sk_train or '미기록'}, 현재={sk_now})이 다르면 동일 버전으로 맞추십시오."
             )
 
@@ -3715,7 +3714,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     if args.input:
         df_input = parse_inline_input(args.input)
         is_inline = True
-        source_desc = f"Inline Input ({len(df_input)} record(s))"
+        source_desc = f"직접 입력 {len(df_input)}건"
     elif args.file:
         df_input = _load_prediction_file(args, model_items)
         is_inline = False
@@ -3843,12 +3842,12 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                             if c_max > f_max:
                                 over_pct = round(float((c_max - f_max) / f_range * 100), 1)
                                 drift_warnings.append(
-                                    f"피처 '{fname}' 상한 초과 외삽(Extrapolation) 감지: 학습 최대={_fmt4(f_max)}, 입력 최대={_fmt4(c_max)} (범위 대비 +{over_pct}% 초과 이탈, 범위 밖 {n_out}건)"
+                                    f"입력 '{fname}' 학습 범위 초과: 학습 최대={_fmt4(f_max)}, 입력 최대={_fmt4(c_max)} (범위의 +{over_pct}%, 범위 밖 {n_out}건)"
                                 )
                             if c_min < f_min:
                                 under_pct = round(float((f_min - c_min) / f_range * 100), 1)
                                 drift_warnings.append(
-                                    f"피처 '{fname}' 하한 미달 외삽(Extrapolation) 감지: 학습 최소={_fmt4(f_min)}, 입력 최소={_fmt4(c_min)} (범위 대비 -{under_pct}% 미달 이탈, 범위 밖 {n_out}건)"
+                                    f"입력 '{fname}' 학습 범위 미달: 학습 최소={_fmt4(f_min)}, 입력 최소={_fmt4(c_min)} (범위의 -{under_pct}%, 범위 밖 {n_out}건)"
                                 )
 
         X_input = X_model
@@ -3984,23 +3983,23 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     # 5. Build Response
     drift_warnings = list(dict.fromkeys(drift_warnings))  # same feature is checked once per target
     for w in drift_warnings[:WARNINGS_SHOW_MAX]:
-        sys.stderr.write(f"[WARN] Extrapolation detected: {w}\n")
+        sys.stderr.write(f"[WARN] 학습 범위 밖: {w}\n")
     if len(drift_warnings) > WARNINGS_SHOW_MAX:
-        sys.stderr.write(f"[WARN] Extrapolation detected: 외 {len(drift_warnings) - WARNINGS_SHOW_MAX}건\n")
+        sys.stderr.write(f"[WARN] 학습 범위 밖: 외 {len(drift_warnings) - WARNINGS_SHOW_MAX}건\n")
 
     for w in low_conf_warnings:
-        sys.stderr.write(f"[WARN] Low confidence: {w}\n")
+        sys.stderr.write(f"[WARN] 낮은 확신도: {w}\n")
     category_warnings = list(dict.fromkeys(category_warnings))
     for w in category_warnings:
-        sys.stderr.write(f"[WARN] Unseen category: {w}\n")
+        sys.stderr.write(f"[WARN] 학습 때 없던 종류: {w}\n")
     missing_warnings = [
         f"피처 '{c}': 빈 값 또는 숫자로 읽을 수 없는 값 {n}건 -> 학습 데이터 기준값(중앙값/결측 범주)으로 대치됨"
         for c, n in missing_counts.items()
     ]
     for w in missing_warnings:
-        sys.stderr.write(f"[WARN] Missing input: {w}\n")
+        sys.stderr.write(f"[WARN] 빈 입력: {w}\n")
     for w in map_warnings:
-        sys.stderr.write(f"[WARN] Map check: {w}\n")
+        sys.stderr.write(f"[WARN] 실측 비교: {w}\n")
     file_warnings += [w for w in percent_warning(df_input, numeric_inputs) if w not in file_warnings]
     for w in file_warnings:
         sys.stderr.write(f"[WARN] {w}\n")
@@ -4013,8 +4012,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
     targets_brief = ", ".join(_brief(t) for t in predictions_summary)
     preview = (
-        f"[추론 완료] 소스: {source_desc} | 타겟 예측 요약: [{targets_brief}] | "
-        f"{'저장: ' + os.path.basename(saved_file) if saved_file else '인라인 반환'}"
+        f"[예측 완료] 입력: {source_desc} | 예측 요약: [{targets_brief}]"
+        + (f" | 저장: {os.path.basename(saved_file)}" if saved_file else "")
         + (f" | 외삽 경고 {len(drift_warnings)}건" if drift_warnings else "")
         + (f" | 저확신 경고 {len(low_conf_warnings)}건" if low_conf_warnings else "")
         + (f" | 결측 대치 {sum(missing_counts.values())}건" if missing_counts else "")
@@ -4022,25 +4021,24 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + (f" | 실측 비교 경고 {len(map_warnings)}건" if map_warnings else "")
     )
     agent_directive = (
-        ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 그대로 알리세요. ")
-        + f"Prediction completed for {len(model_items)} target(s)"
-        + (" with extrapolation warning (inputs outside training range; predictions may be unreliable)" if drift_warnings else "")
-        + (f" (extrapolation_warnings shows {WARNINGS_SHOW_MAX} of {len(drift_warnings)}; tell the user the total count)"
+        ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
+        + f"타겟 {len(model_items)}개를 예측했습니다. "
+        + ("학습 범위 밖 입력이 있어 예측은 참고용입니다 (extrapolation_warnings). " if drift_warnings else "")
+        + (f"extrapolation_warnings에는 {len(drift_warnings)}건 중 {WARNINGS_SHOW_MAX}건만 있으니 전체 건수도 알리세요. "
            if len(drift_warnings) > WARNINGS_SHOW_MAX else "")
-        + (" with low-confidence warning (class probability < 0.6 for some rows)" if low_conf_warnings else "")
-        + (" with missing-input warning (empty or non-numeric inputs were imputed)" if missing_counts else "")
-        + (" with unseen-category warning" if category_warnings else "")
-        + (" with map-check warning (measured-data comparison outside the prediction interval)" if map_warnings else "")
-        + ". "
-        + ("Tell the user every item of warnings (rows of the file that are not data rows, numbers read without '%'). "
-           if file_warnings else "")
-        + ("Report each prediction together with its measured-data comparison (map_check: value, diff, method) in Korean as "
-           "'실측 비교값'. " if any("map_check_keys" in p for p in predictions_summary.values()) else "")
-        + (f"Inline input has {len(df_result)} records, more than {INLINE_SHOW_MAX}: per-record predictions are not in "
-           f"the JSON (truncated). Give the user output_file ({os.path.basename(saved_file)}) for every record. "
+        + ("분류 확신도가 낮은 행이 있습니다 (low_confidence_warnings, 확률 0.6 미만). " if low_conf_warnings else "")
+        + ("빈 값이나 숫자가 아닌 입력을 학습 기준값으로 채웠습니다 (missing_input_warnings). " if missing_counts else "")
+        + ("학습 때 없던 종류가 있습니다 (unseen_category_warnings). " if category_warnings else "")
+        + ("실측 비교값이 예측 범위 밖입니다 (map_check_warnings). " if map_warnings else "")
+        + ("warnings(데이터가 아닌 행, '%' 없이 읽은 숫자)를 빠짐없이 알리세요. " if file_warnings else "")
+        + ("예측값마다 실측 비교값(map_check의 value, diff, method)을 '실측 비교값'으로 함께 알리세요. "
+           if any("map_check_keys" in p for p in predictions_summary.values()) else "")
+        + (f"직접 입력이 {len(df_result)}건으로 {INLINE_SHOW_MAX}건보다 많아 건별 예측은 JSON에 없습니다 (truncated). "
+           f"전체 결과는 output_file({os.path.basename(saved_file)})로 알리세요. "
            if inline_truncated and saved_file else
-           f"Output saved to {os.path.basename(saved_file)}. " if saved_file else "Inline predictions returned. ")
-        + "Next step: report inference results to user."
+           f"결과 파일: {os.path.basename(saved_file)}. " if saved_file else "")
+        + ("위 경고를 함께 알리세요." if (drift_warnings or low_conf_warnings or missing_counts or category_warnings or map_warnings)
+           else "다음: 예측 결과를 사용자에게 알리세요.")
     )
 
     result = {
@@ -4327,7 +4325,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         res["preview"] += " | 실측 기준: " + (", ".join(_fmt(v) for v in measured["solutions"]) or "없음")
     res["agent_directive"] = (
         ("VERIFIED: 찾은 답 근처를 다시 예측해 목표값을 지나는지 확인했습니다. " if not unverified else
-         f"UNVERIFIED: 확인하지 못한 답이 있습니다 ({'; '.join(unverified)}). 재시도하지 말고 그대로 알리세요. ")
+         f"UNVERIFIED: 확인하지 못한 답이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + ("답을 모두 알리세요(하나만 고르지 않음). " if answers else "찾은 값 없음(count 0): reachable(가능한 예측 범위)을 알리세요. ")
         + "operating_windows(목표가 90% 예측 오차 안에 드는 운전 구간), measured(학습 데이터 기준 답), "
         + "nearest_rows(가까운 실측 5행)를 함께 알리세요. 모델이 예측한 조건이지 보장된 조건이 아니라는 점을 덧붙이세요."
@@ -4678,7 +4676,7 @@ def execute_sweep(args: argparse.Namespace) -> Dict[str, Any]:
                       + " | ".join(tr["text"] for tr in trend.values()) + f" | 표: {os.path.basename(out)}")
     res["agent_directive"] = (
         ("VERIFIED: 표를 다시 읽어 확인했습니다. " if not unverified else
-         f"UNVERIFIED: 확인하지 못한 것이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 그대로 알리세요. ")
+         f"UNVERIFIED: 확인하지 못한 것이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + "trend의 타겟별 text(경향)와 points(조건별 예측값" + (", 90% 범위" if any(c["lo"] is not None for c in curves.values()) else "")
         + "), output_file(엑셀 표)" + (", chart_file(그래프)" if chart else "") + " 경로를 알리세요. "
         + (f"points는 전체 {len(xs)}점 중 고르게 고른 {len(points)}점이고 전체는 output_file에 있습니다. " if truncated else "")
@@ -4825,7 +4823,7 @@ def main():
     setup_console()
     check_core_libraries("예측")
     parser = JsonArgumentParser(
-        description="Zero-Office Ultra-Fast Standalone ML Inference Engine (Folder or Specific Files)"
+        description="학습한 모델로 예측 (한 건, 파일, 반대 찾기, 조건별 예측, 조건 찾기)"
     )
     parser.add_argument(
         "--model", "-m", required=True,
@@ -4873,26 +4871,26 @@ def main():
             parser.error("조건별 예측(--sweep)에는 --find, --maximize, --minimize, -f를 함께 쓰지 않습니다.")
         if args.vary:
             parser.error("--sweep에는 바꿀 입력을 --sweep 값에 씁니다 (예: --sweep \"반응온도=170:200:5\"). --vary를 빼십시오.")
-        run_cli(lambda: execute_sweep(args), hint="Check the input name and the range of --sweep in SKILL.md.")
+        run_cli(lambda: execute_sweep(args), hint="확인할 것: 입력 이름과 --sweep 범위.")
         return
     if search:
         if args.find or args.file or args.targets:
             parser.error("조건 찾기(--maximize/--minimize)에는 --find, -f, -y를 함께 쓰지 않습니다.")
         if not args.vary:
             parser.error("조건 찾기(--maximize/--minimize)에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다.")
-        run_cli(lambda: execute_search(args), hint="Check the target, --vary and --where names in SKILL.md.")
+        run_cli(lambda: execute_search(args), hint="확인할 것: 타겟, --vary, --where의 이름.")
         return
     if args.find or args.vary:
         if not (args.find and args.vary):
             parser.error("모델 반대 찾기는 --find와 --vary를 함께 주어야 합니다.")
         if args.file or args.targets or args.save:
             parser.error("반대 찾기(--find)에는 -f, -y, --save를 쓰지 않습니다.")
-        run_cli(lambda: execute_find(args), hint="Check the target name and the input names in SKILL.md.")
+        run_cli(lambda: execute_find(args), hint="확인할 것: 타겟 이름과 입력 이름.")
         return
     if not args.file and not args.input:
         parser.error("추론을 수행하려면 --file (배치 파일) 또는 --input (인라인 데이터) 중 하나를 지정해야 합니다.")
 
-    run_cli(lambda: execute_predict(args), hint="Check model path or feature names.")
+    run_cli(lambda: execute_predict(args), hint="확인할 것: 모델 폴더 경로와 입력 이름.")
 
 
 if __name__ == "__main__":

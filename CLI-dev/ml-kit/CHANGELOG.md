@@ -8,6 +8,36 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.59] - 2026-11-04
+
+결과 문구를 짧은 한국어로 통일 (동작 변경 없음). 소비자인 경량 LLM(Gemma 26B)이 사용자에게 한국어로 전달하는데 `agent_directive`·`message`·
+`preview`·경고에 영어와 한국어가 섞여 있었음. 첫 단어(`VERIFIED:` `UNVERIFIED:` `CONTINUE:` `STOP_RETRY:` `ERROR:`), `[추천]`/`[후보]` 표지,
+JSON 키, `error_type` 값, 열·모델·옵션 이름은 그대로.
+
+### 바뀐 대표 문구 (전 -> 후)
+- 학습: `VERIFIED: v1 competitive training completed. Champion models and leaderboard packaged into 'v1'. Task=regression, Mean 검증 R2=0.9486. Next step: ...`
+  -> `VERIFIED: v1 학습을 마쳤습니다 (regression, 평균 검증 R2=0.9486). ... 다음: 사용자가 원하면 next_commands[0]을 실행하거나 예측으로 넘어갑니다. ...`
+- 학습 preview: `(Delta: +0.0123)`, `소요시간: 8.61s`, `산출물 저장:` -> `(변화: +0.0123)`, `소요 8.61초`, `저장:`
+- 이력: `VERIFIED: History summary returned. Do not re-read history.jsonl ...` -> `VERIFIED: 학습 이력입니다. history.jsonl을 다시 읽지 마세요.`
+- 예측: `VERIFIED: Prediction completed for 3 target(s) with extrapolation warning (...). Output saved to x.csv. Next step: report inference results to user.`
+  -> `VERIFIED: 타겟 3개를 예측했습니다. 학습 범위 밖 입력이 있어 예측은 참고용입니다 (extrapolation_warnings). 결과 파일: x.csv. 위 경고를 함께 알리세요.`
+  (저확신, 빈 입력, 학습 때 없던 종류, 실측 비교 경고, 잘린 직접 입력도 같은 식의 한국어 문장)
+- 예측 preview·`source`: `[추론 완료] 소스: Inline Input (1 record(s)) | 타겟 예측 요약: [...] | 인라인 반환` -> `[예측 완료] 입력: 직접 입력 1건 | 예측 요약: [...]`
+- 외삽 경고: `피처 'X' 상한 초과 외삽(Extrapolation) 감지: ... (범위 대비 +50.0% 초과 이탈, 범위 밖 3건)` -> `입력 'X' 학습 범위 초과: ... (범위의 +50.0%, 범위 밖 3건)`
+- 보고서: `ML result report for v1 (1 target(s)) saved to '...'. Overall verdict=적합. Next step: report the file path to the user.`
+  -> `v1 ML 결과 보고서(타겟 1개)를 '...'에 저장했습니다. 종합 판정 적합. report_file 경로를 사용자에게 알리세요.` (`report_file 링크` -> `경로`)
+- 입력 오류: `STOP_RETRY: Argument or data schema validation failed. If the message contains '[추천]', re-run ONCE ...`
+  -> `STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 그 값으로 바꿔 1번만 다시 실행하세요 (... 전체 명령이니 그대로 1번 실행). 없으면 message를 그대로 알리세요.`
+  뒤에 붙는 안내(`Check column names or formula syntax.` 등) -> `확인할 것: 열 이름과 --eval 식.` 등.
+- 인자 오류: `STOP_RETRY: Invalid CLI arguments. Check the option names in SKILL.md ...` -> `STOP_RETRY: 명령 인자가 잘못되었습니다. 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준).`
+- 중단: `STOP_RETRY: Execution was interrupted. Ask the user before running again.` -> `STOP_RETRY: 실행이 중단되었습니다. 다시 실행하기 전에 사용자에게 물으세요.`
+- 내부 오류: `ERROR: Unexpected internal failure. Do not retry; ...` -> `ERROR: 도구 내부 오류입니다. 다시 실행하지 말고 message를 그대로 알리세요.`
+- 누수: `[DATA LEAKAGE DETECTED] ...` -> `타겟 누수: ...`
+- `UNVERIFIED:` 끝맺음을 `다시 실행하지 말고 unverified를 그대로 알리세요.`로 통일 (`재시도하지 말고 ...` 혼용 제거).
+- 모델 읽기 실패 `Joblib 모델 로드 실패` -> `모델 파일을 읽지 못했습니다`, `-h` 설명 문구, 예측 stderr `[WARN]` 머리말도 한국어.
+
+테스트: `test_contract.py`의 누수·`[추천]` 전체 명령 문구 기대값을 새 문구로.
+
 ## [2.9.58] - 2026-11-04
 
 조건별 예측(what-if)과 제약 안의 최적 조건 찾기. 이전에는 조건을 바꿔 보려면 에이전트가 `-i` JSON 배열을 직접 만들고 결과를 비교해야 했고,

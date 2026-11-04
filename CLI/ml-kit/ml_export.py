@@ -1099,7 +1099,7 @@ def execute_export(args) -> Dict[str, Any]:
     if unverified:
         res["unverified"] = unverified
     res["agent_directive"] = (
-        ("VERIFIED: " if not unverified else "UNVERIFIED: " + "; ".join(unverified) + ". 재시도하지 말고 그대로 알리세요. ")
+        ("VERIFIED: " if not unverified else "UNVERIFIED: 성능예측표 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + "output_file 경로, 타겟별 입력(inputs)과 뺀 입력(dropped), 검증 R², 모델 대비 일치도(agreement.agreement_pct, p95_diff_pct)를 알리세요. "
         + "다른 입력 조합을 원하면 targets.<타겟>.candidates를 보여 주고, 사용자가 고른 안의 command를 그대로 실행하세요"
         + (f" (next_commands는 {SHOW_COMMANDS}개만 담았습니다. 모든 안의 명령은 candidates[].command)." if len(next_commands) > SHOW_COMMANDS else ".")
@@ -1120,7 +1120,7 @@ def main():
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     args = parser.parse_args()
-    run_cli(lambda: execute_export(args), hint="Check the version folder and input names in SKILL.md.")
+    run_cli(lambda: execute_export(args), hint="확인할 것: 버전 폴더 경로와 입력 이름.")
 
 
 if __name__ == "__main__":
