@@ -1289,3 +1289,31 @@ def test_closed_bounds_only_when_needed(tmp_path, monkeypatch):
 def test_parse_cell_rejects_out_of_range(ref):
     with pytest.raises(rt.InputError):
         excel.parse_cell(ref)
+
+
+# ---------------------------------------------------------------------------
+# Gemma 실행 기록(1.4.38): 칸 하나 쓰기에 워드식 --text, 표 파일 못 찾음
+# ---------------------------------------------------------------------------
+
+def test_text_option_on_excel_write_recommends_value(capsys):
+    # 철자가 비슷한 --target이 아니라 같은 뜻의 --value를 추천 (그대로 따르면 바로 성공해야 함)
+    code, out = run_excel(capsys, "write", "--range", "A2", "--text", "반가워")
+    assert code == 2 and out["error_type"] == "input"
+    assert "[추천] --value" in out["message"] and "--target" not in out["message"]
+
+
+def test_value_writes_single_cell(capsys, xl):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--range", "A2", "--value", "반가워")
+    assert code == 0 and out["status"] == "ok", out
+    assert ws_of(wb).Range("A2").Value == "반가워"
+
+
+def test_missing_table_file_lists_only_table_files(capsys, xl, isolated_dirs):
+    for name in ("excel_results.csv", "메모.md", "chart_export.png", "보고서.pdf"):
+        (isolated_dirs["data"] / name).write_text("x", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--range", "A2", "--file", "temp_val.csv")
+    assert code == 1 and out["status"] == "error"
+    msg = out["message"]
+    assert "excel_results.csv" in msg and "메모.md" in msg
+    assert "chart_export.png" not in msg and "보고서.pdf" not in msg

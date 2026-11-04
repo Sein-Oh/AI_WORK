@@ -178,6 +178,9 @@ def rect(rows: List[List[Any]]) -> List[List[Any]]:
     return [list(r) + [None] * (width - len(r)) for r in rows]
 
 
+TABLE_FILE_EXTS = (".csv", ".tsv", ".md", ".txt")  # load_table_file이 읽는 표 파일 (못 찾을 때 후보 목록도 이것만)
+
+
 def load_table_file(path: str) -> List[List[Any]]:
     """CSV/TSV, 마크다운 표(.md의 첫 번째 표), 일반 텍스트(한 줄 = 한 행)를 표로 읽습니다."""
     ext = os.path.splitext(path)[1].lower()
@@ -1055,7 +1058,7 @@ def cmd_write(args) -> Dict[str, Any]:
     if args.values:
         table = parse_values_arg(args.values)
     elif args.file:
-        table = load_table_file(rt.resolve_input_path(args.file, "입력 표 파일"))
+        table = load_table_file(rt.resolve_input_path(args.file, "입력 표 파일", exts=TABLE_FILE_EXTS))
         if not table:
             raise rt.InputError(f"입력 파일에 데이터가 없습니다: {args.file}")
     header = [h.strip() for h in args.header.split(",")] if args.header else None
