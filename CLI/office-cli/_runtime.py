@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.37"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.38"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -613,6 +613,7 @@ COMMAND_ALIASES = {"excel": {"list": "info", "sheets": "info"}, "word": {"list":
                    "ppt": {"list": "info"}, "office": {"list": "windows", "redo": "undo"},
                    "outlook": {"attachment": "attachments", "attach": "attachments", "download": "attachments"}}
 OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--target"], "--path": ["--file", "--target"],
+                   "--text": ["--value", "--file"],  # 엑셀 write에 워드식 --text를 쓰면 --target(철자 비슷)이 아니라 --value
                    "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"]}
 
 
@@ -779,9 +780,11 @@ def timestamp() -> str:
     return _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def resolve_input_path(path: str, kind: str = "입력 파일") -> str:
+def resolve_input_path(path: str, kind: str = "입력 파일", exts: Optional[Iterable[str]] = None) -> str:
     """입력 파일 경로를 찾습니다. 순서: 절대경로/현재 폴더 -> data 폴더 -> 작업 폴더.
-    없으면 data 폴더의 비슷한 파일명을 [추천]으로 붙여 InputError를 냅니다."""
+    없으면 data 폴더의 비슷한 파일명을 [추천]으로 붙여 InputError를 냅니다.
+    exts(소문자 확장자, 예: (".csv", ".md"))를 주면 후보 목록에 그 확장자 파일만 보입니다
+    (표 파일을 못 찾았는데 그림·문서 파일 이름까지 나열하던 문제)."""
     if not path:
         raise InputError(f"{kind} 경로가 비어 있습니다.")
     raw = os.path.expandvars(os.path.expanduser(str(path).strip().strip('"')))
@@ -794,7 +797,8 @@ def resolve_input_path(path: str, kind: str = "입력 파일") -> str:
     names: List[str] = []
     for folder in (get_data_dir(), get_work_dir()):
         try:
-            names += [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
+            names += [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))
+                      and (exts is None or os.path.splitext(n)[1].lower() in exts)]
         except OSError:
             pass
     raise not_found(kind, os.path.basename(raw), names, extra=f" (찾은 위치: {', '.join(candidates)})")

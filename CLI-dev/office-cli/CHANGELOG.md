@@ -2,6 +2,25 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## 테스트 정리
+
+- `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
+
+## [1.4.38] - 2026-11-04
+
+회사 PC `opencode run` 기록(Gemma, "열려있는 엑셀 A2에 반가워 입력해줘")에서 찾은 세 가지.
+회귀 테스트: `tests/test_excel_write.py` "Gemma 실행 기록(1.4.38)" (1.4.37에서 3개 중 2개 실패).
+
+### 수정
+- 인자 오류 추천: `excel.py write`에 워드/PPT 옵션 `--text`를 쓰면 철자가 비슷한 `[추천] --target`(따르면 또 실패)을 주던 것을
+  같은 뜻의 `[추천] --value`로 (`OPTION_SYNONYMS`).
+- 입력 표 파일을 못 찾았을 때 "사용 가능한 입력 표 파일"에 그림·PDF·문서 등 모든 파일을 나열하던 것을 표 파일(`.csv .tsv .md .txt`)만
+  (`resolve_input_path(..., exts=)`). 관계없는 파일 이름이 LLM 응답에 섞이지 않음.
+
+### 문서
+- SKILL.md 명령 표에 "엑셀 칸에 값 하나 쓰기" `excel.py write --range A2 --value "반가워"` 줄 추가 (없어서 Gemma가 `--text`를 쓰고
+  CSV 파일로 돌아가다 머리글 줄까지 쓰려 함).
+
 ## [1.4.37] - 2026-11-04
 
 SKILL.md에 없던 기존 기능을 넣고(경량 LLM은 SKILL.md에 없는 기능을 "지원하지 않음"으로 답함) 빠진 기능 넷을 더함.

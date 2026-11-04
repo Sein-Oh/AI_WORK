@@ -18,7 +18,7 @@ AI_WORK/
 │   ├── WINDOWS_OFFLINE.md     # 폐쇄망 wheel 반입/설치 가이드 (모든 도구 공통)
 │   ├── history/               # 지난 설계·검토 기록 (1.0 설계, 1차 지침 준수 검토)
 │   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
-│   ├── opencode/              # 사내 PC OpenCode 전역 AGENTS.md와 스킬 배치 안내, 실기 테스트 안내
+│   ├── opencode/              # 사내 PC OpenCode 전역 AGENTS.md와 스킬 배치 안내, 실기테스트.md (회사 PC 실기 절차 한 장)
 │   │   ├── 자동테스트/        # Gemma 종합 테스트 메시지 팩 (CLI-dev/agent_scenarios.yaml에서 생성)
 │   │   └── 실기테스트_샘플/   # 정답을 아는 샘플 데이터 (CLI-dev/ml-kit/tools/make_beta_samples.py)
 │   └── test_logs/             # 사내 PC 실기 결과 (GitHub 웹으로 업로드, 프로젝트 마무리 때 이력에서 정리)
@@ -41,11 +41,11 @@ AI_WORK/
 │       └── _runtime.py / _office.py   # 공통 모듈
 └── CLI-dev/                   # 개발·실기 테스트용 (필요할 때만 C:\CLI-dev로, C:\CLI와 나란히)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
-    ├── run_all_tests.py / .bat   # Windows 통합 테스트 (옆 폴더 CLI의 도구를 시험)
+    ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기 -> result_<라벨>_<시각>.md 하나)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
     ├── agent_scenarios.yaml   # Gemma 종합 테스트 요청과 채점 기준
-    ├── tests/                 # 채점기·메시지 팩 테스트
+    ├── tests/                 # 채점기·메시지 팩·점검 러너 테스트
     ├── ml-kit/
     │   ├── README.md          # 상세 설명서
     │   ├── CHANGELOG.md       # 변경 이력 + 남은 할 일

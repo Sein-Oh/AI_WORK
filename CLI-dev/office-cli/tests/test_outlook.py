@@ -1,11 +1,15 @@
-"""outlook.py 테스트: 검색 필터, 발송 정책(기본 표시/명시 발송/수신자 확인), 첨부 저장 규칙, 폴더 해석."""
+"""outlook.py: list/search(필터·기간), read/current, attachments, new/reply/forward(발송 정책·첨부), 폴더 해석."""
+import datetime
+import datetime as dt
 import json
 import os
+import types
 
 import pytest
 
 import _runtime as rt
 import outlook
+from office_helpers import error_log_text, run_fresh, run_main, run_outlook, SECRET
 
 
 class Recip:
@@ -80,6 +84,454 @@ def run(capsys, monkeypatch, mail, *argv):
     return ei.value.code, json.loads(lines[0])
 
 
+class Att:
+    def __init__(self, name, hidden=False, fail=False):
+        self.FileName = name
+        self.hidden = hidden
+        self.fail = fail
+        self.PropertyAccessor = self
+
+    def GetProperty(self, tag):
+        return self.hidden
+
+    def SaveAsFile(self, path):
+        if self.fail:
+            raise OSError("잠김")
+        open(path, "w").close()
+
+
+class Folder:
+    def __init__(self, name, subs=()):
+        self.Name = name
+        self.Folders = list(subs)
+        self.Parent = None
+
+
+class NS:
+    def __init__(self):
+        proj = Folder("프로젝트", [Folder("2026")])
+        self.inbox = Folder("받은 편지함", [proj])
+        self.root = Folder("me@company.com", [self.inbox])
+        self.inbox.Parent = self.root
+        self.Folders = [self.root]
+
+    def GetDefaultFolder(self, n):
+        return self.inbox
+
+
+class _DraftMail:
+    def __init__(self):
+        self.To = ""
+        self.Subject = ""
+        self.HTMLBody = "<html><body><p>서명</p></body></html>"
+        self.Attachments = type("A", (), {"added": [], "Add": lambda s, p: s.added.append(p), "Count": 0})()
+        self.GetInspector = object()
+        self.displayed = False
+
+    def Display(self):
+        self.displayed = True
+
+
+def _outlook_create(monkeypatch, capsys, mail, *argv):
+    monkeypatch.setattr(outlook, "get_outlook", lambda: type("App", (), {"CreateItem": lambda s, k: mail})())
+    return run_main(outlook, capsys, *argv)
+
+
+class _Item:
+    Subject = "회의 안내"
+    Body = "본문"
+    To = "a"
+    CC = ""
+    SenderName = "김"
+    SenderEmailAddress = ""
+    EntryID = "1"
+    UnRead = False
+    Attachments = type("A", (), {"Count": 0})()
+
+
+class _Att:
+    def __init__(self, name, fail=False, vanish=False):
+        self.FileName = name
+        self.fail = fail
+        self.vanish = vanish
+        self.PropertyAccessor = self
+
+    def GetProperty(self, tag):
+        return False
+
+    def SaveAsFile(self, path):
+        if self.fail:
+            raise OSError("잠김")
+        if not self.vanish:                                  # 백신이 바로 지운 경우: 오류 없이 파일이 없음
+            open(path, "w").close()
+
+
+class _Atts:
+    def __init__(self, items):
+        self.items = items
+
+    @property
+    def Count(self):
+        return len(self.items)
+
+    def Item(self, i):
+        return self.items[i - 1]
+
+
+def _mail(atts):
+    return types.SimpleNamespace(Subject="견적", Body="본문", SenderName="a", SenderEmailAddress="a@x", To="", CC="",
+                                 ReceivedTime=datetime.datetime(2026, 1, 1), EntryID="X", UnRead=False,
+                                 Attachments=_Atts(atts))
+
+
+class _NoAtts:
+    Count = 0
+
+
+class _SearchItem:
+    Class = 43
+
+    def __init__(self, i, subject, body="", sender="김팀장"):
+        self.EntryID = f"id{i}"
+        self.Subject = subject
+        self.Body = body
+        self.SenderName = sender
+        self.SenderEmailAddress = "kim@x.com"
+        self.ReceivedTime = "2026-11-01"
+        self.UnRead = False
+        self.Attachments = _NoAtts()
+
+
+class _ListItems(list):
+    def Restrict(self, flt):
+        self.filter = flt
+        return self                    # DASL 와일드카드처럼 넓게 돌려줌 (걸러내기는 도구가)
+
+    def Sort(self, *a):
+        pass
+
+
+class _ListFolder:
+    Name = "받은 편지함"
+
+    def __init__(self, items):
+        self.Items = items
+
+
+def _outlook_items(monkeypatch, items):
+    folder = _ListFolder(_ListItems(items))
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda app: object())
+    monkeypatch.setattr(outlook, "resolve_folder", lambda ns, name: folder)
+    return folder
+
+
+class _OneMail:
+    Class = 43
+    EntryID = "id1"
+    Subject = "견적 요청"
+    SenderName = "홍길동"
+    SenderEmailAddress = "hong@example.com"
+    ReceivedTime = "2026-11-03 10:00"
+    UnRead = True
+    Body = "본문"
+
+
+class _MailItems:
+    def __init__(self, mails):
+        self.mails = list(mails)
+        self.filters = []
+
+    def Restrict(self, flt):
+        self.filters.append(flt)
+        return self
+
+    def Sort(self, *a):
+        pass
+
+    def __iter__(self):
+        return iter(self.mails)
+
+
+class _MailFolder:
+    Name = "받은 편지함"
+
+    def __init__(self, mails):
+        self.Items = _MailItems(mails)
+
+
+def _outlook_mails(monkeypatch, mails):
+    folder = _MailFolder(mails)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: object())
+    monkeypatch.setattr(outlook, "resolve_folder", lambda ns, f: folder)
+    return folder
+
+
+ROOT_MAIL = "ZQMhong@corp.com"           # 메일 계정 이름 (보통 메일 주소)
+
+
+class _F:
+    def __init__(self, name, subs=()):
+        self.Name = name
+        self.Folders = list(subs)
+        self.Parent = None
+        for f in self.Folders:
+            f.Parent = self
+
+
+class _NS:
+    def __init__(self):
+        self.root = _F(ROOT_MAIL, [_F("ZQX받은편지함"), _F("ZQX프로젝트A", [_F("ZQX회의록")]), _F("ZQX보관")])
+        self.Folders = [self.root]
+
+    def GetDefaultFolder(self, n):
+        return self.root.Folders[0]
+
+    def Logon(self, *a):
+        pass
+
+
+@pytest.fixture
+def mail(monkeypatch):
+    app = type("A", (), {"GetNamespace": lambda self, k: _NS()})()
+    monkeypatch.setattr(outlook, "get_outlook", lambda: app)
+
+
+def _result_lines(d):
+    return [ln for ln in error_log_text(d).splitlines() if ln.startswith("결과:")]
+
+
+class FakeAttachment:
+    def __init__(self, name, size=100, hidden=False, fail=False, vanish=False):
+        self.FileName = name
+        self.Size = size
+        self.hidden = hidden
+        self.fail = fail
+        self.vanish = vanish
+        self.PropertyAccessor = self
+        self.saved_to = []
+
+    def GetProperty(self, tag):
+        assert tag == outlook.PR_ATTACHMENT_HIDDEN
+        return self.hidden
+
+    def SaveAsFile(self, path):
+        if self.fail:
+            raise OSError("잠김")
+        self.saved_to.append(path)
+        if not self.vanish:                                  # vanish: 백신이 바로 지운 경우 (오류 없이 파일이 없음)
+            with open(path, "wb") as f:
+                f.write(b"data-" + self.FileName.encode("utf-8"))
+
+
+class FakeAttachments:
+    def __init__(self, items=(), grow=True):
+        self.items = list(items)
+        self.added = []
+        self.grow = grow
+
+    @property
+    def Count(self):
+        return len(self.items)
+
+    def Item(self, i):
+        return self.items[i - 1]
+
+    def Add(self, path):
+        self.added.append(path)
+        if self.grow:                                        # grow=False: Outlook이 조용히 붙이지 못한 경우
+            self.items.append(FakeAttachment(os.path.basename(path)))
+
+
+class FakeRecipients:
+    Count = 1
+
+    def ResolveAll(self):
+        return True
+
+
+class FakeDraft:
+    def __init__(self, atts=(), grow=True):
+        self.To = ""
+        self.Subject = ""
+        self.HTMLBody = "<html><body><p>서명</p></body></html>"
+        self.Attachments = FakeAttachments(atts, grow)
+        self.Recipients = FakeRecipients()
+        self.GetInspector = object()
+        self.displayed = self.sent = False
+
+    def Display(self):
+        self.displayed = True
+
+    def Send(self):
+        self.sent = True
+
+
+class FakeMail:
+    def __init__(self, atts=(), subject="RE: 견적/회신", entry="M1", grow=True):
+        self.EntryID = entry
+        self.Subject = subject
+        self.Body = "본문입니다"
+        self.SenderName = "김팀장"
+        self.SenderEmailAddress = "lead@corp.com"
+        self.To = "me@corp.com"
+        self.CC = ""
+        self.UnRead = False
+        self.Class = outlook.OL_MAIL
+        self.ReceivedTime = datetime.datetime(2026, 11, 4, 9, 0)
+        self.Attachments = FakeAttachments(atts)
+        self.grow = grow
+        self.drafts = []
+
+    def _draft(self, atts=()):
+        d = FakeDraft(atts, self.grow)
+        self.drafts.append(d)
+        return d
+
+    def Reply(self):
+        return self._draft()
+
+    def ReplyAll(self):
+        return self._draft()
+
+    def Forward(self):                                       # 전달은 원본 첨부를 가지고 시작
+        return self._draft([FakeAttachment(a.FileName) for a in self.Attachments.items])
+
+
+class FakeSelection:
+    def __init__(self, item):
+        self.item = item
+        self.Count = 1 if item is not None else 0
+
+    def Item(self, i):
+        return self.item
+
+
+class FakeOutlookApp:
+    def __init__(self, mail=None, grow=True):
+        self.mail = mail
+        self.created = []
+        self.grow = grow
+
+    def ActiveInspector(self):
+        return None
+
+    def ActiveExplorer(self):
+        return type("E", (), {"Selection": FakeSelection(self.mail)})()
+
+    def CreateItem(self, kind):
+        d = FakeDraft(grow=self.grow)
+        self.created.append(d)
+        return d
+
+
+@pytest.fixture
+def ol_env(monkeypatch, tmp_path):
+    """Outlook 대역과 사용자 폴더(USERPROFILE). 다운로드 폴더 레지스트리는 읽지 않음."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(outlook, "_shell_downloads", lambda: None)
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(rt, "CURRENT_ARGV", None)
+    state = {"home": home, "app": FakeOutlookApp(), "calls": []}
+
+    def get_outlook():
+        state["calls"].append("get_outlook")
+        return state["app"]
+    monkeypatch.setattr(outlook, "get_outlook", get_outlook)
+
+    def get_namespace(app):
+        def find(i):
+            if state["app"].mail is not None and i == state["app"].mail.EntryID:
+                return state["app"].mail
+            raise RuntimeError("없음")
+        return type("NS", (), {"GetItemFromID": staticmethod(find)})()
+    monkeypatch.setattr(outlook, "get_namespace", get_namespace)
+    return state
+
+
+def _attach_mail(ol_env, *atts, **kw):
+    ol_env["app"].mail = FakeMail(atts, **kw)
+    return ol_env["app"].mail
+
+
+def _default_root(ol_env):
+    return os.path.join(str(ol_env["home"]), "Downloads", "메일 첨부")
+
+
+class _DatedMail:
+    Class = 43
+    SenderName = "홍길동"
+    SenderEmailAddress = "hong@example.com"
+    Body = "본문"
+
+    def __init__(self, eid, subject, received, unread=False):
+        self.EntryID = eid
+        self.Subject = subject
+        self.ReceivedTime = received
+        self.UnRead = unread
+
+
+class _DatedItems:
+    """Restrict는 조건 글을 기록하고, 안 읽은 메일 조건만 실제로 거름 (날짜는 도구가 받은 시각으로 다시 거르는지 확인).
+    refuse: 날짜 조건을 거부하는 Outlook."""
+
+    def __init__(self, mails, log, refuse=False):
+        self.mails = list(mails)
+        self.log = log
+        self.refuse = refuse
+
+    def Restrict(self, flt):
+        self.log.append(flt)
+        if self.refuse and ("ReceivedTime" in flt or "datereceived" in flt):
+            raise Exception("Outlook: 조건을 해석할 수 없음")
+        keep = [m for m in self.mails if m.UnRead] if flt == "[UnRead] = True" else self.mails
+        return _DatedItems(keep, self.log, self.refuse)
+
+    def Sort(self, *a):
+        self.mails.sort(key=lambda m: m.ReceivedTime, reverse=True)
+
+    def __iter__(self):
+        return iter(self.mails)
+
+
+TODAY = dt.date(2026, 11, 4)
+
+
+def _mails():
+    return [_DatedMail("c", "지난주 견적", dt.datetime(2026, 10, 28, 8, 0), unread=True),
+            _DatedMail("a", "오늘 견적", dt.datetime(2026, 11, 4, 9, 0), unread=True),
+            _DatedMail("d", "지난달 견적", dt.datetime(2026, 10, 1, 8, 0)),
+            _DatedMail("b", "어제 회의", dt.datetime(2026, 11, 3, 23, 59))]
+
+
+@pytest.fixture
+def ol(monkeypatch):
+    log = []
+    state = {"refuse": False, "mails": _mails()}
+
+    class _Folder:
+        Name = "받은 편지함"
+
+        @property
+        def Items(self):
+            return _DatedItems(state["mails"], log, state["refuse"])
+
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: object())
+    monkeypatch.setattr(outlook, "resolve_folder", lambda ns, f: _Folder())
+    return {"log": log, "state": state}
+
+
+# ---------------------------------------------------------------------------
+# 검색 필터, 발송 정책(기본 표시, 명시 발송, 수신자 확인), 첨부 저장 규칙, 폴더 해석
+# ---------------------------------------------------------------------------
+
+
 def test_default_is_display_only(capsys, monkeypatch):
     mail = Mail([Recip("a@x.com", True)])
     code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "첫줄\\n둘째줄")
@@ -121,22 +573,6 @@ def test_search_filter_has_single_prefix_and_grouping():
         outlook.build_search_filter(None, None, "all")
 
 
-class Att:
-    def __init__(self, name, hidden=False, fail=False):
-        self.FileName = name
-        self.hidden = hidden
-        self.fail = fail
-        self.PropertyAccessor = self
-
-    def GetProperty(self, tag):
-        return self.hidden
-
-    def SaveAsFile(self, path):
-        if self.fail:
-            raise OSError("잠김")
-        open(path, "w").close()
-
-
 def test_save_attachments_rules(tmp_path):
     item = Mail()
     item.Subject = "견적/회신"
@@ -150,25 +586,6 @@ def test_save_attachments_rules(tmp_path):
     assert any("b.pdf" in s and "실패" in s for s in reasons) and problems == ["b.pdf 저장 실패"]
 
 
-class Folder:
-    def __init__(self, name, subs=()):
-        self.Name = name
-        self.Folders = list(subs)
-        self.Parent = None
-
-
-class NS:
-    def __init__(self):
-        proj = Folder("프로젝트", [Folder("2026")])
-        self.inbox = Folder("받은 편지함", [proj])
-        self.root = Folder("me@company.com", [self.inbox])
-        self.inbox.Parent = self.root
-        self.Folders = [self.root]
-
-    def GetDefaultFolder(self, n):
-        return self.inbox
-
-
 def test_resolve_folder_paths_and_suggestion():
     ns = NS()
     assert outlook.resolve_folder(ns, None) is ns.inbox
@@ -178,3 +595,582 @@ def test_resolve_folder_paths_and_suggestion():
         outlook.resolve_folder(ns, "받은 편지함\\프로젝")
     assert "[후보] 받은 편지함\\프로젝트" in str(ei.value) and "[추천]" not in str(ei.value)   # 후보도 전체 경로
     assert outlook.resolve_folder(ns, "inbox\\프로젝트").Name == "프로젝트"                   # 기본 폴더 별칭으로 시작
+
+
+# ---------------------------------------------------------------------------
+# outlook 검색
+# ---------------------------------------------------------------------------
+
+
+def test_dasl_keeps_underscore_and_percent():
+    f = outlook.build_search_filter("견적서_v2", None, "subject")
+    assert "LIKE '%견적서_v2%'" in f
+    f = outlook.build_search_filter("10% 할인", "o'neil", "all")
+    assert "LIKE '%10% 할인%'" in f and "o''neil" in f
+
+
+def test_search_wildcard_query_keeps_only_literal_matches(monkeypatch, capsys):
+    folder = _outlook_items(monkeypatch, [_SearchItem(1, "견적서_v2 송부"), _SearchItem(2, "견적서-v2 송부"), _SearchItem(3, "회의", body="10% 할인 안내")])
+    code, out = run_main(outlook, capsys, "search", "--query", "견적서_v2")
+    assert code == 0 and "견적서_v2" in folder.Items.filter
+    assert [m["subject"] for m in out["mails"]] == ["견적서_v2 송부"]      # '_' 와일드카드로 더 찾은 메일은 뺌
+    code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--where", "body")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["id3"]
+
+
+def test_limit_upper_bound_and_zero(monkeypatch, capsys):
+    _outlook_items(monkeypatch, [_SearchItem(i, f"메일 {i}") for i in range(250)])
+    code, out = run_main(outlook, capsys, "list", "--limit", "1000")
+    assert code == 0 and len(out["mails"]) == outlook.MAX_LIMIT and out["warnings"]
+    code, out = run_main(outlook, capsys, "search", "--query", "메일", "--limit", "1000")
+    assert code == 0 and len(out["mails"]) == outlook.MAX_LIMIT and out["warnings"]
+    code, out = run_main(outlook, capsys, "list", "--limit", "0")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY")
+
+
+# ---------------------------------------------------------------------------
+# 0건
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("argv", [["list"], ["list", "--unread"], ["search", "--query", "견적"]])
+def test_outlook_zero(capsys, monkeypatch, argv):
+    _outlook_mails(monkeypatch, [])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 0 and out["count"] == 0 and out["mails"] == [], out
+    assert out["agent_directive"].startswith("VERIFIED: 0건"), out
+    assert "--folder" not in out["agent_directive"], out
+
+
+@pytest.mark.parametrize("argv", [["list"], ["search", "--query", "견적"]])
+def test_outlook_count(capsys, monkeypatch, argv):
+    _outlook_mails(monkeypatch, [_OneMail()])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 0 and out["count"] == 1 and out["mails"][0]["subject"] == "견적 요청", out
+
+
+# ---------------------------------------------------------------------------
+# outlook --days / --since
+# ---------------------------------------------------------------------------
+
+
+def test_list_days_includes_today(ol, capsys):
+    code, out = run_main(outlook, capsys, "list", "--days", "2")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert out["period"] == {"since": "2026-11-03", "until": "2026-11-04", "days": 2}, out
+    assert "2026-11-03 ~ 2026-11-04" in out["preview"], out
+    assert "[ReceivedTime] >= '2026-11-03 00:00'" in ol["log"], ol["log"]       # 지역 설정과 무관한 YYYY-MM-DD
+
+
+def test_list_days_one_is_today_only(ol, capsys):
+    code, out = run_main(outlook, capsys, "list", "--days", "1")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a"], out
+
+
+def test_list_since_with_unread(ol, capsys):
+    code, out = run_main(outlook, capsys, "list", "--since", "2026-10-28", "--unread")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "c"], out
+    assert out["period"]["days"] == 8 and ol["log"][0] == "[UnRead] = True", (out, ol["log"])
+
+
+def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
+    code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
+    flt = ol["log"][-1]
+    assert flt.startswith("@SQL=") and flt.count("@SQL=") == 1 and "견적" in flt, flt
+    assert '"urn:schemas:httpmail:datereceived" >= ' in flt and ") AND (" in flt, flt
+    utc = dt.datetime(2026, 10, 29).astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+    assert f"'{utc}'" in flt, flt                                                 # DASL 날짜 비교는 UTC
+    assert out["period"]["since"] == "2026-10-29" and "2026-10-29" in out["preview"], out
+
+
+def test_search_date_only_is_allowed(ol, capsys):
+    code, out = run_main(outlook, capsys, "search", "--since", "2026-11-03")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+
+
+def test_zero_result_states_period(ol, capsys):
+    ol["state"]["mails"] = [m for m in _mails() if m.EntryID in ("c", "d")]
+    for argv in (["list", "--days", "3"], ["search", "--query", "견적", "--days", "3"]):
+        code, out = run_main(outlook, capsys, *argv)
+        assert code == 0 and out["count"] == 0 and out["mails"] == [], out
+        assert out["agent_directive"].startswith("VERIFIED: 0건") and "2026-11-02 ~ 2026-11-04" in out["agent_directive"], out
+
+
+def test_restrict_refused_falls_back_and_filters(ol, capsys):
+    ol["state"]["refuse"] = True
+    code, out = run_main(outlook, capsys, "list", "--days", "2")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert out["agent_directive"].startswith("VERIFIED:") and out["recovered"], out
+    rt.RECOVERED.clear()
+    code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
+    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
+    assert "datereceived" not in ol["log"][-1] and "견적" in ol["log"][-1], ol["log"]
+    rt.RECOVERED.clear()
+
+
+@pytest.mark.parametrize("argv, rec", [
+    (["--since", "2026/10/01"], "[추천] 2026-10-01"),
+    (["--since", "20261001"], "[추천] 2026-10-01"),
+    (["--since", "2026년 10월 1일"], "[추천] 2026-10-01"),
+    (["--since", "2026-1-5"], "[추천] 2026-01-05"),
+    (["--days", "0"], "[추천] 1"),
+    (["--days", "-7"], "[추천] 7"),
+])
+def test_bad_date_recommends(ol, capsys, argv, rec):
+    for cmd in ("list", "search"):
+        code, out = run_main(outlook, capsys, cmd, *argv)
+        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and out["message"].endswith(rec), out
+    assert not ol["log"], ol["log"]          # Outlook에 묻기 전에 멈춤
+
+
+@pytest.mark.parametrize("argv", [["--since", "2026-02-30"], ["--since", "지난주"], ["--since", "2026-12-01"],
+                                  ["--days", "3", "--since", "2026-11-01"]])
+def test_bad_date_without_guess(ol, capsys, argv):
+    code, out = run_main(outlook, capsys, "list", *argv)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[추천]" not in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# outlook current --save 확인, 폴더 이름에 ; 가 든 첨부 여러 개
+# ---------------------------------------------------------------------------
+
+
+def test_current_save_problem_is_unverified(capsys, monkeypatch):
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "current_item", lambda app: (_Item(), "열린 창"))
+    code, out = run_main(outlook, capsys, "current", "--save")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED: 메일을 읽고 저장한"), out
+    monkeypatch.setattr(rt, "check_saved_file", lambda path, rows=None, delimiter=None: "저장한 파일을 다시 열지 못함 (테스트)")
+    code, out = run_main(outlook, capsys, "current", "--save")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["save_problem"]
+
+
+def test_attach_paths_in_folder_with_semicolon(tmp_path):
+    folder = tmp_path / "자료;2026"
+    folder.mkdir()
+    a, b = folder / "a.pdf", tmp_path / "b.pdf"
+    a.write_bytes(b"1")
+    b.write_bytes(b"2")
+    assert outlook._attach_paths(f"{a};{b}") == [str(a), str(b)]
+    assert outlook._attach_paths(f"{b};{a}") == [str(b), str(a)]
+    with pytest.raises(rt.InputError):
+        outlook._attach_paths(f"{a};{tmp_path / '없는.pdf'}")
+
+
+# ---------------------------------------------------------------------------
+# outlook 폴더 [후보]는 끝 이름으로 비교, 메일 계정 이름은 로그에 남기지 않음
+# ---------------------------------------------------------------------------
+
+
+def test_folder_candidates_match_leaf_names(mail, capsys, monkeypatch, isolated_dirs):
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", "프로젝트")
+    assert code == 1 and out["candidates"] == [f"{ROOT_MAIL}\\ZQX프로젝트A"], out
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", "회의")    # 비슷한 끝 이름 없음: [후보] 아님
+    assert code == 1 and "candidates" not in out and "사용 가능한 메일 폴더" in out["message"], out
+    assert f"{ROOT_MAIL}\\ZQX보관" in out["message"]
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", "zqx프로젝트a\\회의")
+    assert code == 1 and out["candidates"] == [f"{ROOT_MAIL}\\ZQX프로젝트A\\ZQX회의록"], out
+
+
+def test_folder_same_name_recommends_full_path(mail, capsys, monkeypatch):
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", "zqx_보관")
+    assert code == 1 and out["message"].endswith(f"[추천] {ROOT_MAIL}\\ZQX보관"), out
+
+
+@pytest.mark.parametrize("folder", ["프로젝트", "회의", "zqx_보관", f"{ROOT_MAIL}\\없음"])
+def test_guard_folder_log_has_no_mailbox_root(mail, capsys, monkeypatch, isolated_dirs, folder):
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", folder)
+    assert code == 1 and ROOT_MAIL in out["message"], out
+    log = error_log_text(isolated_dirs)
+    assert log and ROOT_MAIL not in log.replace(f"--folder {folder}", "") and SECRET not in log, log
+    assert "<메일 계정>" in log
+
+
+# ---------------------------------------------------------------------------
+# read / current
+# ---------------------------------------------------------------------------
+
+
+def test_read_shows_attachment_names_and_download_command(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("견적서.pdf"), FakeAttachment("image001.png", hidden=True))
+    code, out = run_outlook(capsys, "read", "--id", "M1")
+    assert code == 0 and out["attachment_names"] == ["견적서.pdf"] and out["attachment_names_truncated"] is False
+    assert out["inline_images"] == 1
+    assert [c["purpose"] for c in out["next_commands"]] == ["첨부 내려받기"]
+    assert out["next_commands"][0]["command"].endswith("attachments --id M1 --save")
+    assert "saved_attachments" not in out and not os.path.exists(_default_root(ol_env))   # 읽기만으로 저장하지 않음
+
+
+def test_read_save_puts_word_command_first(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"))
+    code, out = run_outlook(capsys, "read", "--id", "M1", "--save")
+    assert code == 0 and [c["purpose"] for c in out["next_commands"]] == ["메일 내용을 워드에 넣기", "첨부 내려받기"]
+
+
+def test_current_caps_attachment_names(ol_env, capsys):
+    _attach_mail(ol_env, *[FakeAttachment(f"f{i:02d}.pdf") for i in range(25)], entry="SEL")
+    code, out = run_outlook(capsys, "current")
+    assert code == 0 and len(out["attachment_names"]) == 20 and out["attachment_names_truncated"] is True
+    assert "attachments --id SEL --save" in out["next_commands"][0]["command"]
+
+
+def test_read_without_attachments_has_no_download(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("image001.png", hidden=True))
+    code, out = run_outlook(capsys, "read", "--id", "M1")
+    assert code == 0 and "attachment_names" not in out and "next_commands" not in out
+
+
+def test_save_attach_option_is_gone(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"))
+    code, out = run_outlook(capsys, "read", "--id", "M1", "--save-attach")
+    assert code == 2 and out["agent_directive"].startswith("STOP_RETRY:")
+
+
+# ---------------------------------------------------------------------------
+# 메일 저장 이름 정리·저장 확인, 본문 파일의 Windows 경로, 첨부 이름의 쉼표·세미콜론
+# ---------------------------------------------------------------------------
+
+
+def test_saved_mail_name_is_sanitized_and_verified(isolated_dirs):
+    item = type("M", (), {"Subject": 'RE: 견적/회신? "최종"', "Body": "본문입니다", "To": "a", "CC": "",
+                          "SenderName": "김", "SenderEmailAddress": "", "EntryID": "1", "UnRead": False,
+                          "Attachments": type("A", (), {"Count": 0})()})()
+    args = type("Args", (), {"save": True})()
+    res = outlook._mail_detail(item, args, "id")
+    name = os.path.basename(res["output_file"])
+    assert not any(ch in name for ch in ':/?"') and name.startswith("mail_RE_ 견적_회신_")
+    assert os.path.isfile(res["output_file"]) and "save_problem" not in res
+    assert outlook._safe_name("...", 10) == "메일"
+
+
+def test_body_file_keeps_windows_paths(monkeypatch, capsys, tmp_path):
+    body = tmp_path / "본문.txt"
+    body.write_text("자료 위치: C:\\new\\data\\n폴더", encoding="utf-8")
+    mail = _DraftMail()
+    code, out = _outlook_create(monkeypatch, capsys, mail, "new", "--body-file", str(body))
+    assert code == 0 and "C:\\new\\data\\n폴더" in mail.HTMLBody
+    mail = _DraftMail()
+    code, out = _outlook_create(monkeypatch, capsys, mail, "new", "--body", "경로 C:\\new\\data.xlsx\\n다음 줄")
+    assert "C:\\new\\data.xlsx<br>다음 줄" in mail.HTMLBody
+
+
+def test_attach_name_with_comma_and_semicolon_list(monkeypatch, capsys):
+    data = rt.get_data_dir()
+    for n in ("보고서,최종.pdf", "a.pdf", "b.pdf"):
+        open(os.path.join(data, n), "w").close()
+    mail = _DraftMail()
+    code, out = _outlook_create(monkeypatch, capsys, mail, "new", "--attach", "보고서,최종.pdf")
+    assert code == 0 and out["attached"] == ["보고서,최종.pdf"]
+    mail = _DraftMail()
+    code, out = _outlook_create(monkeypatch, capsys, mail, "new", "--attach", "a.pdf;b.pdf")
+    assert code == 0 and out["attached"] == ["a.pdf", "b.pdf"]
+
+
+# ---------------------------------------------------------------------------
+# 첨부 저장(1.4.34부터 attachments --save)에서 저장하지 못한 첨부가 있으면 VERIFIED가 아님
+# ---------------------------------------------------------------------------
+
+
+# 1.4.34: read --save-attach 대신 attachments --save (폴더는 전체 경로)
+@pytest.mark.parametrize("att", [_Att("b.pdf", fail=True), _Att("c.pdf", vanish=True)])
+def test_failed_attachment_save_is_unverified(monkeypatch, att, tmp_path):
+    item = _mail([_Att("a.xlsx"), att])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: None)
+    monkeypatch.setattr(outlook, "get_namespace", lambda app: types.SimpleNamespace(GetItemFromID=lambda i: item))
+    out = outlook.cmd_attachments(types.SimpleNamespace(id="X", save=str(tmp_path / "첨부"), name=None, index=None))
+    assert out["agent_directive"].startswith("UNVERIFIED:") and att.FileName in out["agent_directive"], out
+    assert len(out["saved"]) == 1
+
+
+def test_all_attachments_saved_is_verified(monkeypatch, tmp_path):
+    item = _mail([_Att("a.xlsx")])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: None)
+    monkeypatch.setattr(outlook, "get_namespace", lambda app: types.SimpleNamespace(GetItemFromID=lambda i: item))
+    out = outlook.cmd_attachments(types.SimpleNamespace(id="X", save=str(tmp_path / "첨부"), name=None, index=None))
+    assert out["agent_directive"].startswith("VERIFIED:") and len(out["saved"]) == 1
+
+
+def test_outlook_new_checks_attachment_before_creating_mail(monkeypatch, tmp_path):
+    created = []
+    monkeypatch.setattr(outlook, "get_outlook", lambda: types.SimpleNamespace(CreateItem=lambda k: created.append(k)))
+    args = types.SimpleNamespace(to="a@x", cc=None, subject="s", body="b", body_file=None,
+                                 attach=str(tmp_path / "없는파일.pdf"), send=False)
+    with pytest.raises(rt.InputError):
+        outlook.cmd_new(args)
+    assert created == []
+
+
+# ---------------------------------------------------------------------------
+# attachments: 목록
+# ---------------------------------------------------------------------------
+
+
+def test_list_attachments_with_index_size_inline(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("견적서.pdf", 2048), FakeAttachment("image001.png", 500, hidden=True), FakeAttachment("setup.exe", 10))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["count"] == 3
+    assert out["attachments"][0] == {"index": 1, "name": "견적서.pdf", "size": 2048, "hidden_inline": False,
+                                     "blocked": False}
+    assert out["attachments"][1]["hidden_inline"] is True and out["attachments"][2]["blocked"] is True
+    assert out["truncated"] is False and "saved" not in out
+    assert out["next_commands"][0]["command"].endswith("attachments --id M1 --save")
+    assert not os.path.exists(_default_root(ol_env))                     # 목록만: 아무것도 저장하지 않음
+
+
+def test_list_uses_selected_mail_without_id(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"), entry="SEL")
+    code, out = run_outlook(capsys, "attachments")
+    assert code == 0 and out["count"] == 1 and out["mail"]["id"] == "SEL"
+    assert "attachments --id SEL --save" in out["next_commands"][0]["command"]    # 다음 명령은 id로 고정
+
+
+def test_zero_attachments_is_explicit(ol_env, capsys):
+    _attach_mail(ol_env)
+    code, out = run_outlook(capsys, "attachments", "--id", "M1")
+    assert code == 0 and out["count"] == 0 and out["attachments"] == []
+    assert out["agent_directive"].startswith("VERIFIED: 0건.") and "첨부 없음" in out["agent_directive"]
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save")
+    assert code == 0 and out["count"] == 0 and out["saved"] == [] and out["folder"] is None
+    assert "첨부 없음" in out["agent_directive"] and not os.path.exists(_default_root(ol_env))
+
+
+def test_no_mail_selected_is_stop_retry(ol_env, capsys):
+    code, out = run_outlook(capsys, "attachments")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--id" in out["message"]
+
+
+def test_name_without_save_is_refused(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--name", "a")
+    assert code == 1 and "--save" in out["message"]
+
+
+# ---------------------------------------------------------------------------
+# attachments --save
+# ---------------------------------------------------------------------------
+
+
+def test_save_all_to_downloads_skips_blocked_and_inline(ol_env, capsys):
+    m = _attach_mail(ol_env, FakeAttachment("견적서.pdf", 2048), FakeAttachment("image001.png", 500, hidden=True), FakeAttachment("setup.exe", 10),
+                     FakeAttachment("단가표.xlsx", 4096))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    folder = out["folder"]
+    assert os.path.dirname(folder) == _default_root(ol_env)
+    assert os.path.basename(folder).endswith("_RE_ 견적_회신")          # rt.safe_filename(제목)
+    assert [os.path.basename(p) for p in out["saved"]] == ["견적서.pdf", "단가표.xlsx"] and out["count"] == 2
+    assert all(os.path.isfile(p) and os.path.dirname(p) == folder for p in out["saved"])
+    reasons = {s["name"]: s["reason"] for s in out["skipped"]}
+    assert "실행 파일" in reasons["setup.exe"] and "본문 삽입" in reasons["image001.png"]
+    assert folder in out["preview"] and "folder" in out["agent_directive"]
+    assert m.Attachments.items[2].saved_to == []                       # 실행 파일은 저장 시도도 하지 않음
+    assert "recovered" not in out
+
+
+def test_save_to_user_folder_creates_it(ol_env, capsys, tmp_path):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"))
+    target = tmp_path / "내 폴더" / "첨부"
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(target))
+    assert code == 0 and out["folder"] == str(target) and os.path.isfile(target / "a.pdf")
+
+
+def test_relative_folder_is_refused(ol_env, capsys, tmp_path, monkeypatch):
+    m = _attach_mail(ol_env, FakeAttachment("a.pdf"))
+    monkeypatch.chdir(tmp_path)
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", "첨부")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "전체 경로" in out["message"]
+    assert m.Attachments.items[0].saved_to == [] and not (tmp_path / "첨부").exists()
+
+
+@pytest.mark.parametrize("argv, expected", [
+    (["--name", "견적"], ["견적서.pdf"]),
+    (["--name", "PDF"], ["견적서.pdf", "보고서.pdf"]),                     # 대소문자 무시
+    (["--name", "단가;보고"], ["단가표.xlsx", "보고서.pdf"]),
+    (["--name", "단가", "--name", "견적"], ["견적서.pdf", "단가표.xlsx"]),   # 옵션 반복, 저장은 첨부 순서
+    (["--index", "1,3"], ["견적서.pdf", "보고서.pdf"]),
+    (["--index", "2-3"], ["단가표.xlsx", "보고서.pdf"]),
+    (["--index", "2", "--name", "견적"], ["견적서.pdf", "단가표.xlsx"]),
+])
+def test_select_by_name_or_index(ol_env, capsys, tmp_path, argv, expected):
+    _attach_mail(ol_env, FakeAttachment("견적서.pdf"), FakeAttachment("단가표.xlsx"), FakeAttachment("보고서.pdf"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "out"), *argv)
+    assert code == 0 and [os.path.basename(p) for p in out["saved"]] == expected, out
+    assert sorted(os.listdir(tmp_path / "out")) == sorted(expected)
+
+
+@pytest.mark.parametrize("argv", [["--name", "계약"], ["--name", "견적;계약"], ["--index", "9"], ["--index", "0"]])
+def test_selector_without_match_gives_candidates(ol_env, capsys, tmp_path, argv):
+    m = _attach_mail(ol_env, FakeAttachment("견적서.pdf"), FakeAttachment("단가표.xlsx"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "out"), *argv)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "[후보] 견적서.pdf, 단가표.xlsx" in out["message"]
+    assert all(a.saved_to == [] for a in m.Attachments.items) and not (tmp_path / "out").exists()
+
+
+def test_bad_index_text_is_stop_retry(ol_env, capsys, tmp_path):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "o"), "--index", "첫째")
+    assert code == 1 and "--index" in out["message"]
+
+
+def test_inline_saved_only_when_selected_blocked_never(ol_env, capsys, tmp_path):
+    _attach_mail(ol_env, FakeAttachment("image001.png", hidden=True), FakeAttachment("run.bat"), FakeAttachment("a.pdf"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "o"), "--name", "image001;run.bat")
+    assert code == 0 and [os.path.basename(p) for p in out["saved"]] == ["image001.png"]
+    assert [s["name"] for s in out["skipped"]] == ["run.bat"] and "실행 파일" in out["skipped"][0]["reason"]
+
+
+def test_only_blocked_and_inline_is_zero_with_reasons(ol_env, capsys):
+    _attach_mail(ol_env, FakeAttachment("image001.png", hidden=True), FakeAttachment("run.bat"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save")
+    assert code == 0 and out["count"] == 0 and out["folder"] is None
+    assert out["agent_directive"].startswith("VERIFIED: 0건.") and "run.bat" in out["agent_directive"]
+    assert not os.path.exists(_default_root(ol_env))
+
+
+def test_existing_file_is_not_overwritten(ol_env, capsys, tmp_path):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"), FakeAttachment("a.pdf"))
+    target = tmp_path / "o"
+    target.mkdir()
+    (target / "a.pdf").write_bytes(b"old")
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(target))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:")
+    assert [os.path.basename(p) for p in out["saved"]] == ["a (2).pdf", "a (3).pdf"]
+    assert (target / "a.pdf").read_bytes() == b"old"
+    assert any("a (2).pdf" in r for r in out["recovered"]) and any("a (3).pdf" in r for r in out["recovered"])
+
+
+def test_unsafe_attachment_name_is_sanitized(ol_env, capsys, tmp_path):
+    _attach_mail(ol_env, FakeAttachment('보고:최종?.pdf'))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "o"))
+    assert code == 0 and os.path.basename(out["saved"][0]) == "보고_최종_.pdf"
+
+
+@pytest.mark.parametrize("att, word", [(FakeAttachment("b.pdf", vanish=True), "파일이 없음"), (FakeAttachment("b.pdf", fail=True), "저장 실패")])
+def test_missing_after_save_is_unverified(ol_env, capsys, tmp_path, att, word):
+    _attach_mail(ol_env, FakeAttachment("a.pdf"), att)
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "o"))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert "b.pdf" in out["agent_directive"] and word in out["agent_directive"]
+    assert [os.path.basename(p) for p in out["saved"]] == ["a.pdf"]
+
+
+def test_empty_file_for_sized_attachment_is_unverified(ol_env, capsys, tmp_path, monkeypatch):
+    att = FakeAttachment("a.pdf", size=5000)
+    att.SaveAsFile = lambda path: open(path, "wb").close()
+    _attach_mail(ol_env, att)
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "o"))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "비어 있음" in out["agent_directive"]
+
+
+def test_engenius_data_dir_does_not_move_downloads_default(ol_env, capsys, monkeypatch):
+    # 도구가 트레이 임시 폴더에서 돌 때처럼 data 폴더가 En-Genius 고정 폴더인 경우 (1.4.35부터 그 경우만)
+    home = os.path.join(str(ol_env["home"]), "Documents", "En-Genius", "CLI-data", "office-cli")
+    monkeypatch.setattr(rt, "_tool_home", lambda: home)
+    monkeypatch.delenv("OFFICE_CLI_DATA_DIR", raising=False)
+    assert rt.get_data_dir() == os.path.join(home, "data")
+    _attach_mail(ol_env, FakeAttachment("a.pdf"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save")
+    assert code == 0 and os.path.dirname(out["folder"]) == _default_root(ol_env)
+    assert not out["folder"].startswith(os.path.join(str(ol_env["home"]), "Documents"))
+    assert "_work" not in out["folder"]
+
+
+def test_download_alias_recommends_attachments(ol_env, capsys):
+    code, out = run_outlook(capsys, "download", "--id", "M1")
+    assert code == 2 and out["message"].endswith("[추천] attachments")
+
+
+# ---------------------------------------------------------------------------
+# new / reply / forward --attach
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("extra", [[], ["--all"]])
+def test_reply_attaches_files(ol_env, capsys, tmp_path, extra):
+    m = _attach_mail(ol_env, FakeAttachment("원본.pdf"))
+    f1, f2 = tmp_path / "결과 보고.pdf", tmp_path / "표.xlsx"
+    f1.write_bytes(b"1")
+    f2.write_bytes(b"2")
+    code, out = run_outlook(capsys, "reply", "--id", "M1", "--body", "확인했습니다.", "--attach", f"{f1};{f2}", *extra)
+    d = m.drafts[0]
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert d.Attachments.added == [str(f1), str(f2)] and d.Attachments.Count == 2 and d.displayed and not d.sent
+    assert out["attached"] == ["결과 보고.pdf", "표.xlsx"]
+
+
+def test_forward_keeps_original_and_adds(ol_env, capsys, tmp_path):
+    m = _attach_mail(ol_env, FakeAttachment("원본1.pdf"), FakeAttachment("원본2.pdf"))
+    f = tmp_path / "추가.docx"
+    f.write_bytes(b"1")
+    code, out = run_outlook(capsys, "forward", "--id", "M1", "--to", "b@corp.com", "--attach", str(f))
+    d = m.drafts[0]
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert [a.FileName for a in d.Attachments.items] == ["원본1.pdf", "원본2.pdf", "추가.docx"]
+    assert out["attached"] == ["추가.docx"]
+
+
+def test_new_attaches_several(ol_env, capsys, tmp_path):
+    files = [tmp_path / n for n in ("a.pdf", "b.pdf")]
+    for f in files:
+        f.write_bytes(b"1")
+    code, out = run_outlook(capsys, "new", "--to", "a@corp.com", "--subject", "s", "--attach", ";".join(map(str, files)))
+    d = ol_env["app"].created[0]
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and d.Attachments.Count == 2
+
+
+@pytest.mark.parametrize("cmd", [["new", "--to", "a@corp.com"], ["reply", "--id", "M1"], ["forward", "--id", "M1"]])
+def test_missing_attach_stops_before_draft(ol_env, capsys, tmp_path, cmd):
+    m = _attach_mail(ol_env, FakeAttachment("원본.pdf"))
+    (tmp_path / "보고서_최종.pdf").write_bytes(b"1")
+    (tmp_path / "관계없음.txt").write_bytes(b"1")
+    code, out = run_outlook(capsys, *cmd, "--attach", str(tmp_path / "보고서.pdf"))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert f"[후보] {tmp_path / '보고서_최종.pdf'}" in out["message"] and "관계없음" not in out["message"]
+    assert ol_env["calls"] == [] and m.drafts == [] and ol_env["app"].created == []      # Outlook에 연결하기 전에 멈춤
+
+
+def test_missing_attach_in_list_stops_and_names_piece(ol_env, capsys, tmp_path):
+    ok = tmp_path / "a.pdf"
+    ok.write_bytes(b"1")
+    code, out = run_outlook(capsys, "new", "--to", "a@corp.com", "--attach", f"{ok};{tmp_path / 'zzz.pdf'}")
+    assert code == 1 and "zzz.pdf" in out["message"] and ol_env["calls"] == []
+
+
+def test_missing_attach_folder_stops(ol_env, capsys, tmp_path):
+    code, out = run_outlook(capsys, "new", "--to", "a@corp.com", "--attach", str(tmp_path / "없는 폴더" / "a.pdf"))
+    assert code == 1 and "폴더가 없습니다" in out["message"] and ol_env["calls"] == []
+
+
+def test_attach_count_not_grown_is_unverified_and_not_sent(ol_env, capsys, tmp_path):
+    f = tmp_path / "a.pdf"
+    f.write_bytes(b"1")
+    m = _attach_mail(ol_env, grow=False)
+    code, out = run_outlook(capsys, "reply", "--id", "M1", "--attach", str(f))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and m.drafts[0].displayed
+    code, out = run_outlook(capsys, "reply", "--id", "M1", "--attach", str(f), "--send")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:")
+    assert m.drafts[1].displayed and not m.drafts[1].sent                     # 첨부가 빠진 메일을 보내지 않음
+
+
+# ---------------------------------------------------------------------------
+# 경로(extra)의 메일 계정 이름도 로그에 남기지 않음
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("root", [ROOT_MAIL, ROOT_MAIL.lower()])
+def test_folder_path_extra_masks_account_in_log(mail, capsys, monkeypatch, isolated_dirs, root):
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", f"{root}\\없음")
+    assert code == 1 and f"(경로: {root}\\없음)" in out["message"], out      # 사용자에게는 준 경로 그대로
+    res = "\n".join(_result_lines(isolated_dirs))
+    assert res and ROOT_MAIL.lower() not in res.lower(), res
+    assert "(경로: <메일 계정>\\없음)" in res, res
+
+
+def test_folder_path_extra_keeps_alias_path_in_log(mail, capsys, monkeypatch, isolated_dirs):
+    # 기본 폴더 별칭으로 시작한 경로는 계정 이름이 아니므로 그대로 남김
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", "inbox\\없음")
+    assert code == 1, out
+    res = "\n".join(_result_lines(isolated_dirs))
+    assert "(경로: inbox\\없음)" in res and ROOT_MAIL.lower() not in res.lower(), res

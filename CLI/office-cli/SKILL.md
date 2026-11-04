@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.37"
+  version: "1.4.38"
   platform: windows
 ---
 
@@ -26,6 +26,7 @@ metadata:
 | 할 일 | 명령 |
 |---|---|
 | 엑셀·CSV 읽기 / 행 수 / 셀 찾기 | `excel.py read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (결과 `rows`가 행 수). 수식 보기는 `--formulas` (결과 `formulas`). 조건에 맞는 행만: `excel.py read --where "금액 >= 100; 부서 = 영업"` (첫 행은 머리글, 연산자 `>= <= > < = != ~`(포함), 결과 `row_numbers`) |
+| 엑셀 칸에 값 하나 쓰기 | `excel.py write --range A2 --value "반가워"` (범위를 주면 범위 전체에 같은 값) |
 | 엑셀에 표 쓰기 | `excel.py write --range A1 --file "표.csv"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트는 `--sheet 이름 --new-sheet`) |
 | 엑셀에 수식 쓰기 | `excel.py write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
 | 엑셀 차트 | `excel.py chart --range A1:B101 --type line --title "제목"` (`--type column|bar|line|pie|scatter|area`, `--action list` / `--action delete --name 제목`) |

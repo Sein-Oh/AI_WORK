@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.39**, **office-cli 1.4.37**
+- main 기준 도구 버전: **ml-kit 2.9.39**, **office-cli 1.4.38**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -45,6 +45,7 @@
 | office-cli 1.4.34 | 새 명령 `outlook.py attachments`: 첨부 목록(`index`, `name`, `size`, `hidden_inline`), `--save [전체 경로 폴더]`로 내려받기(기본 `%USERPROFILE%\Downloads\메일 첨부\<시각>_<제목>`, 자동 정리 안 함), `--name 일부`/`--index 1,3`으로 고르기(맞는 것이 없으면 `[후보]`), 같은 이름은 ` (2)`와 `recovered`. `read/current --save-attach` 없앰(대신 `attachment_names`와 `next_commands` "첨부 내려받기"). `new/reply/forward --attach`는 없는 전체 경로 파일이면 메일을 만들기 전에 같은 폴더의 비슷한 파일 `[후보]`, 붙인 뒤 `Attachments.Count`로 확인(못 하면 UNVERIFIED, `--send`면 보내지 않음) |
 | office-cli 1.4.35 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\office-cli`를 실행: OpenCode와 같은 data, cache, config.json을 씀 (1.4.33의 고정 폴더는 도구가 트레이 임시 폴더에서 돌 때만) |
 | office-cli 1.4.36 | `excel.py read --formulas`: 읽은 범위의 수식 칸 목록(`formulas`: `cell`, `formula`, `value`, 배열 수식은 `array`·`array_range`), `formula_count`, 200개 상한(`formulas_truncated`, 전체는 `full_result_file` CSV). 열린 문서는 Formula2(없으면 Formula)를 범위 한 번에, 닫힌 xlsx는 openpyxl. SKILL.md가 바뀌어 En-Genius 스킬 zip을 다시 가져와야 함 |
+| office-cli 1.4.38 | `opencode run` 기록에서: 엑셀 `write`의 `--text`에 `[추천] --value`(전에는 `--target`), 표 파일 못 찾음 후보에 표 파일만, SKILL.md에 칸 하나 쓰기(`--value`) 줄 |
 | office-cli 1.4.37 | SKILL.md에 빠졌던 기존 기능(메일 list/folders·search --folder/--where·reply --all·new --cc·--body-file, PPT slide add/duplicate/delete/move, 엑셀 sheet/range/export/style/replace --all-sheets·차트 종류, 워드 --toc/--callout·replace --highlight)을 넣고 SKILL.md의 명령·옵션이 argparse에 있는지 테스트로 대조. 새 기능: `outlook.py list|search --days N|--since YYYY-MM-DD`(period), `excel.py range --action insert|delete`(값이 있으면 needs_user_decision, `--dry-run`, `--overwrite`), `range --action sort --by "부서,금액" [--desc]`, `read --where "금액 >= 100; 부서 = 영업"`(`row_numbers`) |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
@@ -78,20 +79,20 @@
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
 
 ## 3. 회사 PC에서 할 일
-상세: `docs/opencode/실기테스트_2026-10-30.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma 종합 테스트 -> 4. 눈으로 확인).
+상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
 1. 준비: `C:\CLI`, `C:\CLI-dev`, OpenCode 스킬(`SKILL.md` 2개), 전역 지침(`docs/opencode/AGENTS.md`)을 새 파일로 바꾸고 OpenCode 다시 시작
-2. 자동 점검:
+2. 자동 점검 (명령 하나, 질문 없음, 40~70분):
    ```powershell
    cd C:\CLI-dev
-   python run_beta_check.py --label 회사PC
-   python run_all_tests.py --label 회사PC --only diag,pytest
+   python run_all_tests.py --label 회사PC
    ```
-   - F2(보고서·성능예측표 같은 폴더)와 F7(엑셀 재계산)을 꼭 확인
-3. Gemma 종합 테스트: `docs/opencode/자동테스트/` 메시지를 보내고, 내보낸 대화를 `python C:\CLI-dev\grade_opencode.py --export chat.json --label 회사PC`로 채점
-4. 눈 확인: V1~V10. 집 PC에서 못 한 V8(파이썬 없는 PC에서 성능예측표 열기, 문서 보안 아래)이 핵심
-5. 클라우드 점검 변경의 실기 확인: T1~T12 (실기테스트 문서 5장). 가짜 Office로만 시험한 Word 구분선·YAML 머리말, 글상자 읽기, 엑셀 수식 값, relay 순서와 되돌리기, Outlook 로그 가림, `--append` 수식, Gemma의 `[후보]` 처리(묻고 실행)
-6. 결과 파일과 V·T 항목 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림
+   - 환경 진단 -> pytest -> ml-kit 베타 점검(F7 엑셀 재계산 포함) -> office-cli 실기 러너 -> 도구 오류 로그. 결과는 `result_회사PC_<시각>.md` 하나
+   - 맨 위 요약 표와 실패·ENV-SKIP·UNVERIFIED 목록을 봄. 베타 점검 F2(보고서·성능예측표 같은 폴더)와 F7을 꼭 확인
+3. Gemma 종합 테스트(선택): `docs/opencode/자동테스트/` 메시지를 보내고, 내보낸 대화를 `python C:\CLI-dev\grade_opencode.py --export chat.json --label 회사PC`로 채점
+4. 눈 확인 10줄: 성능예측표(범위 밖 표시, 파이썬 없는 PC에서 문서 보안 아래 열기), Word `.md` 쓰기의 구분선, 엑셀 `read --formulas`·`--where`(날짜 칸),
+   `range sort`·`insert`, relay 전달 실패 때 클립보드·되돌리기, Outlook `--days`(날짜 조건 형식, 1.4.37 남은 할 일)와 `attachments --save`
+5. `result_회사PC_<시각>.md`, (Gemma를 했으면) `grade_회사PC_<시각>.md`, 눈 확인 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림
 
 회사 PC에서만 확인할 수 있는 것: 문서 보안(DRM) 영향, Office 16 차트 전달 방식, Gemma의 요청 처리, 사내 API 채점(`--judge`).
 
@@ -108,14 +109,14 @@
   - 전용 에이전트: 사내 에이전트 En-Genius에 스킬로 붙이는 패키지를 만들었으나 업데이트를 멈추고 `archive/engenius`에 보관 (2026-11-04).
     다시 쓸 때 원래 자리로 옮기고 zip을 새로 만듦 (archive/README.md). 도구 쪽 En-Genius 대응(임시 폴더 실행 시 고정 데이터 폴더)은 그대로 둠
   - ml-kit 웹 서버: 동료 수요(예측이면 성능예측표로 충분)와 IT 정책·문서 보안 확인 후
-  - `opencode run "<요청>"`으로 Gemma 종합 테스트 자동화: 회사 PC OpenCode(Desktop)에서 `opencode --version`, `opencode run "안녕"`이 되는지 먼저 확인
+  - `opencode run` 자동화: opencode CLI v2.2.5를 일반 권한 창에서 실행하면 동작 (관리자 창에서는 열린 문서를 못 봄). 기본 모델은 opencode.jsonc의 `model`, 이어 묻기 `-c`, 기록 `--format json`. Gemma 단계 자동 채점은 검토 중
 
 ## 6. 붙여넣을 첫 메시지
 ```text
 AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md를 읽고 지금 상태를 파악해.
 지금은 회사 PC(Windows 11, WinPython 3.13.13, Office 16, 문서 보안)에서 실기 테스트를 하려고 해.
-1. HANDOFF.md 3장대로 준비와 자동 점검(run_beta_check.py, run_all_tests.py)을 같이 진행해 줘. 명령은 python만 쓰고, 실행 전에 무엇을 할지 짧게 알려 줘.
-2. 끝나면 결과 파일을 읽고 실패·ENV-SKIP·"UNVERIFIED 결과"를 표로 정리해 줘. 원인 추정과 고칠 곳(파일:줄)도.
+1. HANDOFF.md 3장대로 준비를 같이 하고, 자동 점검 `python run_all_tests.py --label 회사PC`(C:\CLI-dev에서) 한 번을 실행해 줘. 명령은 python만 쓰고, 실행 전에 무엇을 할지 짧게 알려 줘.
+2. 끝나면 결과 파일 result_회사PC_<시각>.md 맨 위의 요약 표와 실패·ENV-SKIP·UNVERIFIED 목록을 표로 정리해 줘. 원인 추정과 고칠 곳(파일:줄)도.
 3. 고칠 것은 바로 고치지 말고 계획을 먼저 보여 줘.
 답변은 한국어로, 이모지 없이.
 ```

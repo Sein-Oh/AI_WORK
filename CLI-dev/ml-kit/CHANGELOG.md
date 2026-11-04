@@ -2,6 +2,12 @@
 
 이 문서는 2.0.0부터 관리합니다. 형식: 버전별 `구조 / 기능 / 호환` + 하단 `남은 할 일`.
 
+> 테스트 파일 정리 (2026-11-04, 도구 동작 변경 없음): 차수별 테스트 파일(`test_review_v29xx.py`, `test_layout_matrix_v29xx.py`,
+> `test_features_v21.py` 등 46개)을 기능별 12개(`test_contract`, `test_safety`, `test_train`, `test_predict`, `test_names`, `test_map`,
+> `test_report_export`, `test_loading_layout`, `test_loading_totals`, `test_loading_numbers`, `test_layout_matrix`, `test_skill_docs`)로
+> 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
+> 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
+
 ## [2.9.39] - 2026-11-04
 
 학습 직후 "어떤 변수가 제일 중요해?"에 바로 답하도록 중요 입력을 결과 JSON에 넣고, 쓰이던 기능을 SKILL.md에 적음.
@@ -1261,7 +1267,7 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - 이전 이력 문서(ROADMAP 등)를 정리하고 이 CHANGELOG로 일원화. `requirements-dev.txt`, `install_offline.bat` 삭제.
 
 ## 남은 할 일
-- [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트_2026-10-30.md` 4단계 V8). 엑셀 재계산은 회사 PC 통과 (2.9.4)
+- [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트.md` 4장 눈 확인 2번). 엑셀 재계산은 회사 PC 통과 (2.9.4)
 - [ ] `-x` 생략 시 피처 자동 선택 (ID/일련번호 배제 규칙)
 - [ ] 무거운 import 지연 로딩 (`--history` 응답 속도)
 - [ ] 260자 넘는 긴 경로

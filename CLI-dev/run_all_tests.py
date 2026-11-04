@@ -1,30 +1,35 @@
-"""CLI 도구 통합 테스트 (Windows 실기용, 사람이 실행)
+"""CLI 도구 실기 점검 (Windows 회사 PC용, 사람이 실행)
 
 사용법 (C:\\CLI-dev에서. 시험할 도구는 옆 폴더 C:\\CLI의 ml-kit, office-cli):
-    python run_all_tests.py                      # 환경 진단 + 오프라인 테스트 + 실기 테스트 전부
-    python run_all_tests.py --auto               # office-cli 눈 확인 질문 없이 (자리 비울 때)
-    python run_all_tests.py --only diag,pytest   # 일부 단계만 (diag, pytest, ml, office)
-    python run_all_tests.py --label 회사PC --outlook
+    python run_all_tests.py --label 회사PC             # 자동 점검 전부 (질문 없음, 자리 비워도 됨)
+    python run_all_tests.py --label 회사PC --outlook   # office 단계에 Outlook(G그룹)도
+    python run_all_tests.py --label 회사PC --ask       # office 단계의 눈 확인 질문(y/n)에 답하면서
+    python run_all_tests.py --only diag                # 일부 단계만 (diag, pytest, beta, ml, office)
 
-결과는 이 파일 옆의 test_result_<라벨>_<시각>.txt 한 개에 모두 모입니다.
-    - 단계가 끝날 때마다 바로 기록하므로, 중간에 멈추거나 Ctrl+C로 끊어도 그때까지의 내용이 남습니다.
-    - 이 파일 하나를 그대로 Claude에게 전달하세요 (편집하지 마세요).
+단계 (이 순서로 실행. --only로 고르면 고른 단계만 같은 순서로):
+    diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
+    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (python -m pytest)
+    beta    ml-kit 베타 점검 (run_beta_check.py, F7 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
+    ml      ml-kit 실기 러너 (ml-kit/tools/run_win_tests.py, 10~20분). 기본 단계가 아니며 --only에 넣을 때만
+    office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
+    기본은 diag, pytest, beta, office. Windows + pywin32가 아니면 ml, office는 ENV-SKIP.
+    끝에 각 도구의 오류 로그(<도구>/data/logs/errors.txt, 실제 사용 중 생긴 오류)를 늘 붙입니다.
 
-단계:
-    diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 점검 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
-    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (개발 도구 테스트) (python -m pytest)
-    ml      ml-kit 실기 테스트 (tools/run_win_tests.py, 질문 없음, 10~20분)
-    office  office-cli 실기 테스트 (tools/run_win_tests.py, 화면에 질문이 나오면 답하세요. --auto면 질문 없음, 10~30분)
-    끝에 각 도구의 오류 로그(<도구>/data/logs/errors.txt, 실제 사용 중 생긴 오류)도 함께 붙입니다.
+결과는 이 파일 옆의 result_<라벨>_<시각>.md 한 개입니다.
+    - 맨 위에 단계별 PASS/FAIL/SKIP 표와 실패, 건너뜀(ENV-SKIP), UNVERIFIED 목록이 있고, 그 아래 단계별 상세, 맨 끝에 도구 오류 로그.
+    - 단계가 끝날 때마다 파일을 다시 쓰므로, 중간에 멈추거나 Ctrl+C로 끊어도 그때까지의 내용이 남습니다.
+    - 이 파일 하나를 그대로 올리세요 (편집하지 마세요).
 
 이 스크립트는 사람이 실행하는 테스트 도구입니다. 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다.
 """
 import argparse
 import datetime as dt
 import glob
+import json
 import locale
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -37,28 +42,134 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))                 # CLI-dev (테스트, 러너)
 CLI_DIR = os.path.join(os.path.dirname(HERE), "CLI")               # 실행 파일 (CLI-dev 옆의 CLI)
 TOOLS = ("ml-kit", "office-cli")
-STEPS = ("diag", "pytest", "ml", "office")
+STAGES = ("diag", "pytest", "beta", "ml", "office")               # 실행 순서
+DEFAULT_STAGES = ("diag", "pytest", "beta", "office")
+TITLES = {"diag": "환경 진단", "pytest": "오프라인 테스트 (pytest)", "beta": "ml-kit 베타 점검 (run_beta_check)",
+          "ml": "ml-kit 실기 러너", "office": "office-cli 실기 러너 (실제 Office)"}
 PACKAGES = ("numpy", "pandas", "scikit-learn", "scipy", "joblib", "openpyxl", "python-docx", "python-pptx",
             "matplotlib", "pymupdf", "olefile", "pywin32", "pytest", "PyYAML")
 IMPORTS = {"numpy": "numpy", "pandas": "pandas", "scikit-learn": "sklearn", "scipy": "scipy", "joblib": "joblib",
            "openpyxl": "openpyxl", "python-docx": "docx", "python-pptx": "pptx", "matplotlib": "matplotlib",
            "pymupdf": "fitz", "olefile": "olefile", "pywin32": "win32com.client", "pytest": "pytest", "PyYAML": "yaml"}
+LIST_CAP = 30                                                      # 요약 목록 상한 (넘으면 "외 N건", 전체는 상세에)
 
 
-class Result:
-    """결과 파일. 섹션마다 바로 덧붙여 저장합니다."""
+# ---------------------------------------------------------------------------
+# 결과 파일
+# ---------------------------------------------------------------------------
+class Stage:
+    """한 단계의 결과. status: 대기 / PASS / FAIL / ENV-SKIP / 중단."""
 
-    def __init__(self, path):
-        self.path = path
-        self.summary = []          # 단계별 한 줄 요약 (화면과 파일 끝에 출력)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(f"# CLI 통합 테스트 결과 (생성 {dt.datetime.now():%Y-%m-%d %H:%M:%S})\n")
-            f.write("# 이 파일 전체를 그대로 Claude에게 전달하세요. 편집하지 마세요.\n")
-            f.write("# 단계별 요약은 파일 맨 끝 <요약>에 있습니다.\n\n")
+    def __init__(self, key):
+        self.key, self.title = key, TITLES[key]
+        self.status = "대기"
+        self.passed = self.failed = self.skipped = 0
+        self.seconds = None
+        self.note = ""
+        self.failures, self.skips, self.unverified = [], [], []
+        self.details = []                                        # (제목, 본문)
 
-    def section(self, name, text):
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(f"<{name}>\n{text.rstrip()}\n\n")
+    def env_skip(self, why):
+        self.status, self.note = "ENV-SKIP", why
+        self.skips.append(f"단계 전체: {why}")
+
+    def fail(self, what):
+        self.failed += 1
+        self.failures.append(what)
+
+    def finish(self):
+        if self.status == "대기":
+            self.status = "FAIL" if self.failed else "PASS"
+
+
+def _fence(text):
+    return "```text\n" + (text.rstrip() or "(없음)") + "\n```"
+
+
+def _cell(text):
+    return str(text).replace("|", "/").replace("\n", " ")
+
+
+def _capped(items):
+    shown = [f"- {x}" for x in items[:LIST_CAP]]
+    if len(items) > LIST_CAP:
+        shown.append(f"- ... 외 {len(items) - LIST_CAP}건 (아래 상세)")
+    return shown or ["- 없음"]
+
+
+def tool_versions():
+    out = []
+    for tool in TOOLS:
+        ver = "?"
+        skill = os.path.join(CLI_DIR, tool, "SKILL.md")
+        try:
+            for line in open(skill, encoding="utf-8"):
+                if line.strip().startswith("version:"):
+                    ver = line.split(":", 1)[1].strip().strip('"')
+                    break
+        except OSError:
+            ver = "없음"
+        out.append(f"{tool} {ver}")
+    return ", ".join(out)
+
+
+class Report:
+    """결과 파일 하나 (markdown). 단계가 끝날 때마다 통째로 다시 씁니다 (요약 표가 맨 위에 있어야 하므로)."""
+
+    def __init__(self, path, label, stages):
+        self.path, self.label = path, label
+        self.started = dt.datetime.now()
+        self.ended = None
+        self.stages = [Stage(s) for s in stages]
+        self.logs = []                                           # 도구 오류 로그 (제목, 본문)
+        self.log_note = "아직 모으지 않음"
+        self.interrupted = False
+        self.write()
+
+    def render(self):
+        L = [f"# CLI 실기 점검 결과: {self.label}", "",
+             f"- 시작 {self.started:%Y-%m-%d %H:%M:%S}, "
+             + (f"끝 {self.ended:%H:%M:%S}" if self.ended else "진행 중 (끝나지 않았으면 마지막으로 기록된 단계까지)"),
+             f"- 도구: {tool_versions()} / Python {sys.version.split()[0]} / {platform.platform()}",
+             "- 이 파일 하나를 그대로 올리세요. 편집하지 마세요."]
+        if self.interrupted:
+            L.append("- 사용자가 중단했습니다 (Ctrl+C). 아래는 그때까지의 결과입니다.")
+        L += ["", "## 요약", "", "| 단계 | 결과 | PASS | FAIL | SKIP | 시간(초) | 비고 |", "|---|---|---|---|---|---|---|"]
+        for i, s in enumerate(self.stages, 1):
+            nums = ("-", "-", "-") if s.status == "대기" else (s.passed, s.failed, s.skipped)
+            L.append(f"| {i}. {s.title} | {s.status} | {nums[0]} | {nums[1]} | {nums[2]} | "
+                     f"{'-' if s.seconds is None else s.seconds} | {_cell(s.note)} |")
+        L.append(f"| 도구 오류 로그 | - | - | - | - | - | {_cell(self.log_note)} |")
+        fails = [f"[{s.key}] {x}" for s in self.stages for x in s.failures]
+        skips = [f"[{s.key}] {x}" for s in self.stages for x in s.skips]
+        unver = [f"[{s.key}] {x}" for s in self.stages for x in s.unverified]
+        L += ["", f"### 실패 {len(fails)}건", ""] + _capped(fails)
+        L += ["", f"### 건너뜀 (ENV-SKIP, SKIP) {len(skips)}건", ""] + _capped(skips)
+        L += ["", f"### UNVERIFIED (도구가 결과를 확인하지 못한 호출) {len(unver)}건", ""] + _capped(unver)
+        for i, s in enumerate(self.stages, 1):
+            L += ["", f"## {i}. {s.title}: {s.status}"]
+            if s.note:
+                L += ["", s.note]
+            for title, text in s.details:
+                L += ["", f"### {title}", "", _fence(text)]
+        L += ["", "## 도구 오류 로그 (<도구>/data/logs/errors.txt)", "", self.log_note]
+        for title, text in self.logs:
+            L += ["", f"### {title}", "", _fence(text)]
+        return "\n".join(L) + "\n"
+
+    def write(self):
+        try:
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(self.render())
+        except Exception as e:                                   # 결과 파일 문제로 점검을 멈추지 않음
+            echo(f"[WARN] 결과 파일을 쓰지 못했습니다: {type(e).__name__}: {e}")
+
+    def summary_lines(self):
+        lines = [f"{s.key:<7} {s.status:<8} PASS {s.passed} / FAIL {s.failed} / SKIP {s.skipped}"
+                 + (f"  {s.note}" if s.note else "") for s in self.stages]
+        lines.append(f"오류 로그: {self.log_note}")
+        lines += [f"  [FAIL] {s.key}: {x}" for s in self.stages for x in s.failures[:10]]
+        return lines
 
 
 def echo(line):
@@ -81,8 +192,8 @@ def say(msg):
     echo(f"[STATUS] {msg}")
 
 
-def child_env():
-    return dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+def child_env(extra=None):
+    return dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1", **(extra or {}))
 
 
 def kill_tree(proc):
@@ -105,13 +216,13 @@ def kill_tree(proc):
         pass
 
 
-def run_capture(args, cwd, timeout, poll=1.0):
+def run_capture(args, cwd, timeout, poll=1.0, env_extra=None):
     """하위 프로세스를 실행해 (종료코드, 출력 전체, 걸린 초, Ctrl+C 여부)를 돌려줍니다. 출력은 화면에도 그대로 보여 줍니다.
     출력은 별도 스레드가 읽으므로, 아무것도 출력하지 않고 멈춘 프로세스도 timeout초가 지나면 끝냅니다."""
     start = time.time()
     lines = []
     interrupted = False
-    proc = subprocess.Popen(args, cwd=cwd, env=child_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(args, cwd=cwd, env=child_env(env_extra), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     def pump():
         try:
@@ -271,204 +382,391 @@ def diag_system(lines):
         lines.append(f"pip list 실패: {e}")
 
 
-def step_diag(res, args):
+def _broken(line):
+    return "zip 형식=False" in line or "실패" in line or "Caption 있음=False" in line
+
+
+def step_diag(stage, args, ctx):
     lines = [
         f"OS: {platform.platform()} ({platform.version()})",
         f"Python: {sys.version.split()[0]} ({sys.executable})",
         f"인코딩: 파일시스템 {sys.getfilesystemencoding()}, 기본 {locale.getpreferredencoding(False)}",
-        f"CLI 폴더: {CLI_DIR} (도구: {', '.join(t for t in TOOLS if os.path.isdir(os.path.join(CLI_DIR, t)))}), 테스트 폴더: {HERE}",
+        f"CLI 폴더: {CLI_DIR} (도구: {tool_versions()}), 테스트 폴더: {HERE}",
         "",
         "[라이브러리 버전 / import]",
     ]
     for dist in PACKAGES:
         try:
             __import__(IMPORTS[dist])
-            ok = "import 정상"
+            lines.append(f"  {dist} {_version(dist)} - import 정상")
+            stage.passed += 1
         except Exception as e:
-            ok = f"import 실패: {type(e).__name__}: {e}"
-        lines.append(f"  {dist} {_version(dist)} - {ok}")
-    for tool in TOOLS:
-        skill = os.path.join(CLI_DIR, tool, "SKILL.md")
-        ver = "?"
-        if os.path.exists(skill):
-            for line in open(skill, encoding="utf-8"):
-                if line.strip().startswith("version:"):
-                    ver = line.split(":", 1)[1].strip().strip('"')
-                    break
-        lines.append(f"  도구 {tool} {ver}")
+            lines.append(f"  {dist} {_version(dist)} - import 실패: {type(e).__name__}: {e}")
+            if dist == "pywin32" and os.name != "nt":
+                stage.skipped += 1
+                stage.skips.append("pywin32: Windows 전용")
+            else:
+                stage.fail(f"{dist} import 실패: {type(e).__name__}: {e}"[:200])
     lines += ["", "[문서 보안(DRM) 영향 점검]"]
-    for fn in (diag_docx, diag_pptx, diag_new_files, diag_system):
+    for fn, what in ((diag_docx, "python-docx 기본 템플릿"), (diag_pptx, "python-pptx 기본 템플릿"),
+                     (diag_new_files, "새로 쓴 파일 다시 읽기 (문서 보안)"), (diag_system, None)):
+        n0 = len(lines)
         try:
             fn(lines)
         except Exception as e:
             lines.append(f"{fn.__name__} 오류: {type(e).__name__}: {e}")
+            if what is None:
+                continue
+        if what is None:                                        # Office 버전, 프로세스, pip list: 참고 정보
+            continue
+        broken = [x for x in lines[n0:] if _broken(x) or " 오류: " in x]
+        if broken:
+            stage.fail(f"{what}: {broken[0][:200]}")
+        else:
+            stage.passed += 1
     text = "\n".join(lines)
     echo(text)
-    res.section("환경 진단", text)
-    broken = [x for x in lines if ("zip 형식=False" in x or "실패" in x or "Caption 있음=False" in x)]
-    res.summary.append(f"diag: 이상 {len(broken)}건" + (f" ({broken[0][:80]} ...)" if broken else " (없음)"))
+    stage.details.append(("진단 내용", text))
 
 
 # ---------------------------------------------------------------------------
 # 2. 오프라인 테스트
 # ---------------------------------------------------------------------------
 PYTEST_TARGETS = TOOLS + ("tests",)               # 도구별 오프라인 테스트 + CLI-dev/tests (채점기·점검 러너 등 개발 도구)
+_PYTEST_COUNT = re.compile(r"(\d+) (passed|failed|skipped|errors?|xfailed|xpassed|deselected)\b")
 
 
-def step_pytest(res, args):
+def parse_pytest(out):
+    """pytest -q -rfEs 출력에서 (통과, 실패, 건너뜀, 실패 줄, 건너뜀 줄)."""
+    counts = {}
+    for line in reversed(out.splitlines()):
+        found = _PYTEST_COUNT.findall(line)
+        if found and (" in " in line or line.strip().startswith("=")):
+            for n, kind in found:
+                counts[kind.rstrip("s") if kind.startswith("error") else kind] = int(n)
+            break
+    fails = [x.strip() for x in out.splitlines() if x.startswith(("FAILED ", "ERROR "))]
+    skips = [x.strip() for x in out.splitlines() if x.startswith("SKIPPED ")]
+    return (counts.get("passed", 0) + counts.get("xfailed", 0),
+            counts.get("failed", 0) + counts.get("error", 0) + counts.get("xpassed", 0),
+            counts.get("skipped", 0), fails, skips)
+
+
+def step_pytest(stage, args, ctx):
     for tool in PYTEST_TARGETS:
         folder = os.path.join(HERE, tool)
         if not os.path.isdir(folder):
             continue
         say(f"{tool} 오프라인 테스트 시작 (몇 분 걸릴 수 있습니다)")
-        code, out, sec, stop = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfE"],
+        code, out, sec, stop = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfEs"],
                                            folder, args.timeout)
-        res.section(f"pytest_{tool}", f"cwd={folder} exit={code} {sec}초\n{out}")
-        tail = [x for x in out.splitlines() if x.strip()]
-        res.summary.append(f"pytest {tool}: exit={code}, {tail[-1].strip('= ') if tail else '출력 없음'}")
+        npass, nfail, nskip, fails, skips = parse_pytest(out)
+        stage.passed += npass
+        stage.skipped += nskip
+        stage.failures += [f"{tool}: {x[:200]}" for x in fails]
+        stage.failed += max(nfail, len(fails))
+        if code not in (0, None) and not nfail and not fails:
+            stage.fail(f"{tool}: pytest exit {code} (실패 항목 없이 끝남, 상세 참고)")
+        stage.skips += [f"{tool}: {x[:200]}" for x in skips]
+        stage.details.append((f"pytest {tool} (exit {code}, {sec}초)", f"cwd={folder}\n{out}"))
         if stop:
             raise KeyboardInterrupt
 
 
 # ---------------------------------------------------------------------------
-# 3. 실기 테스트
+# 3. ml-kit 베타 점검 (run_beta_check.py)
 # ---------------------------------------------------------------------------
+BETA_SCRIPT = os.path.join(HERE, "run_beta_check.py")
+_BETA_DETAIL = re.compile(r"^- (\S+) (.*) \[(FAIL|SKIP)\]: (.*)$")
+_BETA_ROW = re.compile(r"^\| (\S+) \| (\S+) \| (.*) \| (PASS|FAIL|SKIP) \|$")
+
+
+def _last_json(out):
+    for line in reversed(out.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return None
+
+
+def parse_beta_report(text):
+    """beta_check_*.md에서 (통과, 실패 목록, 건너뜀 목록). 실패·건너뜀은 상세 줄(판정 근거)을 씁니다."""
+    rows = [m.groups() for m in map(_BETA_ROW.match, text.splitlines()) if m]
+    detail = {m.group(1): m.group(4) for m in map(_BETA_DETAIL.match, text.splitlines()) if m}
+    npass = sum(r[3] == "PASS" for r in rows)
+    fails = [f"{r[1]} {r[2]}" + (f": {detail[r[1]][:150]}" if detail.get(r[1]) else "") for r in rows if r[3] == "FAIL"]
+    skips = [f"{r[1]} {r[2]}" + (f": {detail[r[1]][:150]}" if detail.get(r[1]) else "") for r in rows if r[3] == "SKIP"]
+    return npass, fails, skips
+
+
+def beta_work_dir(stamp):
+    base = r"C:\ml_beta" if os.name == "nt" else os.path.join(tempfile.gettempdir(), "ml_beta")
+    return os.path.join(base, f"check_{stamp}")
+
+
+def step_beta(stage, args, ctx):
+    work = beta_work_dir(ctx["stamp"])
+    data_dir = os.path.join(work, "_data")                       # 점검이 일부러 낸 오류가 실제 오류 로그에 섞이지 않게
+    cmd = [sys.executable, BETA_SCRIPT, "--agent", "--label", ctx["label"], "--dir", work]
+    say("ml-kit 베타 점검 시작 (5~15분, 질문 없음). 엑셀 창이 잠깐 열릴 수 있습니다.")
+    code, out, sec, stop = run_capture(cmd, HERE, args.timeout, env_extra={"ML_KIT_DATA_DIR": data_dir})
+    payload = _last_json(out) or {}
+    report = payload.get("report_file")
+    stage.details.append((f"run_beta_check.py 화면 출력 (exit {code}, {sec}초)", f"$ {' '.join(cmd)}\n{out[-20000:]}"))
+    if report and os.path.isfile(report):
+        with open(report, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        npass, fails, skips = parse_beta_report(text)
+        stage.passed += npass
+        stage.failed += len(fails)
+        stage.failures += fails
+        stage.skipped += len(skips)
+        stage.skips += skips
+        stage.details.insert(0, ("점검 결과 (beta_check 보고서)", text))
+        for p in (report, report[:-3] + ".xlsx"):                # 결과 파일은 이 파일 하나: 점검 보고서는 시험 폴더로 옮김
+            try:
+                if os.path.isfile(p) and os.path.isdir(work):
+                    shutil.move(p, os.path.join(work, os.path.basename(p)))
+            except Exception:
+                pass
+    else:
+        stage.fail(f"점검 보고서 없음 (exit {code}, JSON {str(payload)[:150] or '없음'})")
+    tables = sorted(glob.glob(os.path.join(work, "*_ml_data", "성능예측표_*.xlsx")))
+    stage.note = f"시험 폴더 {work}" + (f", 성능예측표 {tables[-1]}" if tables else "")
+    tool_log = os.path.join(data_dir, "logs", "errors.txt")
+    if os.path.isfile(tool_log):
+        _attach(stage, "점검 중 생긴 ml-kit 오류 로그 (일부러 낸 오류 포함)", tool_log)
+    if stop:
+        raise KeyboardInterrupt
+
+
+# ---------------------------------------------------------------------------
+# 4. 실기 러너 (Windows + 실제 Office)
+# ---------------------------------------------------------------------------
+def windows_ready():
+    """실기 러너를 돌릴 수 있는지: (가능 여부, 안 되는 이유)."""
+    if os.name != "nt":
+        return False, "Windows가 아님 (실제 Office가 필요한 단계)"
+    try:
+        __import__("win32com.client")
+    except Exception:
+        return False, "pywin32 없음 (python -m pip install pywin32)"
+    return True, ""
+
+
 def _newer(pattern, since):
     files = [p for p in glob.glob(pattern) if os.path.getmtime(p) >= since - 1]
     return sorted(files, key=os.path.getmtime)
 
 
-def _grep(path, prefix):
-    """파일에서 prefix로 시작하는 첫 줄."""
-    try:
-        for line in open(path, encoding="utf-8", errors="replace"):
-            if line.strip().startswith(prefix):
-                return line.strip()
-    except Exception:
-        pass
-    return f"{prefix} (못 찾음)"
-
-
-def _attach(res, name, path):
+def _attach(stage, name, path):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            res.section(name, f"파일: {path}\n{f.read()}")
+            stage.details.append((name, f"파일: {path}\n{f.read()}"))
     except Exception as e:
-        res.section(name, f"파일 {path} 읽기 실패: {e}")
+        stage.details.append((name, f"파일 {path} 읽기 실패: {e}"))
 
 
-def step_ml(res, args):
-    folder = os.path.join(HERE, "ml-kit")
-    start = time.time()
-    cmd = [sys.executable, os.path.join("tools", "run_win_tests.py"), "--label", args.label]
-    if args.ml_dir:
-        cmd += ["--dir", args.ml_dir]
-    say("ml-kit 실기 테스트 시작 (10~20분, 질문 없음). Office 창을 만지지 마세요.")
-    code, out, sec, stop = run_capture(cmd, folder, args.timeout)
-    res.section("ml-kit 실기 테스트 화면 출력", f"$ {' '.join(cmd)}\nexit={code} {sec}초\n{out[-20000:]}")
-    logs = _newer(os.path.join(folder, "tools", "test_logs", "testlog_*.txt"), start)
-    for p in logs:
-        _attach(res, os.path.basename(p), p)
-    res.summary.append(f"ml-kit 실기: exit={code}, " + (_grep(logs[-1], "결과:") if logs else "로그 파일 없음"))
-    test_dir = args.ml_dir or r"C:\ml_test\ml 테스트"
-    for p in _newer(os.path.join(test_dir, "report_*.txt"), start):
-        _attach(res, os.path.basename(p), p)
-    tool_log = os.path.join(test_dir, "_data", "logs", "errors.txt")
-    if os.path.exists(tool_log) and os.path.getmtime(tool_log) >= start - 1:
-        _attach(res, "ml-kit 실기 중 도구 오류 로그 (일부러 낸 오류 포함)", tool_log)
-    if stop:
-        raise KeyboardInterrupt
+def parse_counts(text, prefix="결과:"):
+    """'결과: ENV-SKIP=2, PASS=69' 줄을 {상태: 수}로."""
+    for line in text.splitlines():
+        if line.strip().startswith(prefix):
+            return {k: int(v) for k, v in re.findall(r"([A-Z][A-Z-]*)=(\d+)", line)}
+    return {}
 
 
-def step_office(res, args):
+def _add_counts(stage, counts):
+    stage.passed += counts.get("PASS", 0)
+    stage.skipped += counts.get("ENV-SKIP", 0) + counts.get("MANUAL-SKIP", 0) + counts.get("SKIP", 0)
+    return counts.get("FAIL", 0) + counts.get("ERROR", 0)
+
+
+def parse_office_logs(stage, errors_text, report_text):
+    """office-cli 러너의 errors_*.txt(요약)와 report_*.txt(UNVERIFIED 목록)를 단계 결과에 넣습니다."""
+    nbad = _add_counts(stage, parse_counts(errors_text))
+    problems, skipped = [], []
+    for line in errors_text.splitlines():
+        s = line.strip()
+        if s.startswith("문제 항목:") and "없음" != s.split(":", 1)[1].strip():
+            problems = [x.strip() for x in s.split(":", 1)[1].split(", ") if x.strip()]
+        elif s.startswith("건너뜀:"):
+            skipped = [x.strip() for x in re.split(r"\), (?=[A-Z]+\d*\()", s.split(":", 1)[1]) if x.strip()]
+    stage.failures += problems
+    stage.failed += max(nbad, len(problems))
+    stage.skips += [x if x.endswith(")") else x + ")" for x in skipped]
+    lines = report_text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("UNVERIFIED 결과"):
+            cur = None
+            for x in lines[i + 1:]:
+                if x.startswith("        unverified:") and cur:
+                    stage.unverified.append(f"{cur[:150]} -> {x.split(':', 1)[1].strip()[:200]}")
+                    cur = None
+                elif x.startswith("    ") and x.strip():
+                    cur = x.strip()
+            break
+
+
+def step_office(stage, args, ctx):
+    ok, why = windows_ready()
+    if not ok:
+        stage.env_skip(why)
+        return
     folder = os.path.join(HERE, "office-cli")
     start = time.time()
     cmd = [sys.executable, os.path.join("tools", "run_win_tests.py")]
     if not args.outlook:
         cmd.append("--skip-outlook")
-    if args.auto:
+    if not args.ask:
         cmd.append("--auto")
     if args.office_dir:
         cmd += ["--dir", args.office_dir]
-    say("office-cli 실기 테스트 시작 (10~30분). 질문이 나오면 답하세요. 그 밖에는 Office 창을 만지지 마세요.")
-    t0 = time.time()
-    code, stop = None, False
-    try:
-        code = subprocess.call(cmd, cwd=folder, env=child_env())     # 질문에 답할 수 있게 화면을 그대로 씀
-    except KeyboardInterrupt:
-        code, stop = 130, True
-    res.section("office-cli 실기 테스트 실행", f"$ {' '.join(cmd)}\nexit={code} {round(time.time() - t0, 1)}초"
-                + (" (Ctrl+C로 중단)" if stop else ""))
+    say("office-cli 실기 러너 시작 (10~30분). Office 창을 만지지 마세요."
+        + (" 질문이 나오면 답하세요." if args.ask else " 질문 없이 진행합니다."))
+    if args.ask:                                                # 질문에 답할 수 있게 화면을 그대로 씀
+        t0, stop = time.time(), False
+        try:
+            code = subprocess.call(cmd, cwd=folder, env=child_env())
+        except KeyboardInterrupt:
+            code, stop = 130, True
+        out, sec = "(화면 출력은 기록하지 않음: --ask)", round(time.time() - t0, 1)
+    else:
+        code, out, sec, stop = run_capture(cmd, folder, args.timeout)
+    stage.details.append((f"러너 화면 출력 (exit {code}, {sec}초)", f"$ {' '.join(cmd)}\n{out[-20000:]}"))
     test_dir = args.office_dir or r"C:\office_test"
     errs = _newer(os.path.join(test_dir, "errors_*.txt"), start)
-    for pat in ("errors_*.txt", "report_*.txt"):
-        for p in _newer(os.path.join(test_dir, pat), start):
-            _attach(res, os.path.basename(p), p)
-    res.summary.append(f"office-cli 실기: exit={code}, " + (
-        f"{_grep(errs[-1], '결과:')} / {_grep(errs[-1], '문제 항목:')}" if errs else "로그 파일 없음"))
+    reps = _newer(os.path.join(test_dir, "report_*.txt"), start)
+    if errs:
+        read = lambda p: open(p, encoding="utf-8", errors="replace").read()
+        parse_office_logs(stage, read(errs[-1]), read(reps[-1]) if reps else "")
+        for p in errs[-1:] + reps[-1:]:
+            _attach(stage, os.path.basename(p), p)
+    else:
+        stage.fail(f"러너 결과 파일 없음 (exit {code}, {test_dir}\\errors_*.txt)")
     if stop:
         raise KeyboardInterrupt
 
 
-def attach_tool_error_logs(res):
-    """실제 사용 중 생긴 도구 오류 로그 (<도구>/data/logs/errors.txt). 실기 테스트용 로그와 별개입니다."""
-    found = False
-    for tool, env in (("ml-kit", "ML_KIT_DATA_DIR"), ("office-cli", "OFFICE_CLI_DATA_DIR")):
-        data = os.environ.get(env) or os.path.join(CLI_DIR, tool, "data")
-        for name in ("errors.old.txt", "errors.txt"):
-            p = os.path.join(data, "logs", name)
-            if os.path.exists(p):
-                found = True
-                _attach(res, f"{tool} 도구 오류 로그 {name}", p)
-    if not found:
-        res.section("도구 오류 로그", "없음 (<도구>/data/logs/errors.txt 파일이 없습니다)")
+def step_ml(stage, args, ctx):
+    ok, why = windows_ready()
+    if not ok:
+        stage.env_skip(why)
+        return
+    folder = os.path.join(HERE, "ml-kit")
+    start = time.time()
+    cmd = [sys.executable, os.path.join("tools", "run_win_tests.py"), "--label", ctx["label"]]
+    if args.ml_dir:
+        cmd += ["--dir", args.ml_dir]
+    say("ml-kit 실기 러너 시작 (10~20분, 질문 없음). Office 창을 만지지 마세요.")
+    code, out, sec, stop = run_capture(cmd, folder, args.timeout)
+    stage.details.append((f"러너 화면 출력 (exit {code}, {sec}초)", f"$ {' '.join(cmd)}\n{out[-20000:]}"))
+    logs = _newer(os.path.join(folder, "tools", "test_logs", "testlog_*.txt"), start)
+    if logs:
+        text = open(logs[-1], encoding="utf-8", errors="replace").read()
+        _add_counts(stage, parse_counts(text))
+        for m in re.finditer(r"^  (FAIL|ERROR)\s+(\S+)\s+\S+s\s+(.*)$", text, re.M):
+            stage.fail(f"{m.group(2)} {m.group(3)} ({m.group(1)})")
+        _attach(stage, os.path.basename(logs[-1]), logs[-1])
+    else:
+        stage.fail(f"러너 로그 없음 (exit {code})")
+    test_dir = args.ml_dir or r"C:\ml_test\ml 테스트"
+    for p in _newer(os.path.join(test_dir, "report_*.txt"), start):
+        _attach(stage, os.path.basename(p), p)
+    if stop:
+        raise KeyboardInterrupt
 
 
 # ---------------------------------------------------------------------------
-def main():
-    p = argparse.ArgumentParser(description="CLI 도구 통합 테스트 (결과는 파일 1개)")
-    p.add_argument("--only", help="실행할 단계 (쉼표로): diag,pytest,ml,office (기본: 전부)")
+# 도구 오류 로그 (실제 사용 중 생긴 오류. 실기 러너가 일부러 낸 오류는 각 단계 상세에)
+# ---------------------------------------------------------------------------
+def attach_tool_error_logs(rep):
+    found = []
+    for tool, env in (("ml-kit", "ML_KIT_DATA_DIR"), ("office-cli", "OFFICE_CLI_DATA_DIR")):
+        data = os.environ.get(env) or os.path.join(CLI_DIR, tool, "data")
+        n = 0
+        for name in ("errors.old.txt", "errors.txt"):
+            p = os.path.join(data, "logs", name)
+            if not os.path.exists(p):
+                continue
+            try:
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except Exception as e:
+                text = f"읽기 실패: {e}"
+            n += sum(1 for x in text.splitlines() if x.startswith("===== "))
+            rep.logs.append((f"{tool} {name}", f"파일: {p}\n{text}"))
+        found.append(f"{tool} {n}건")
+    rep.log_note = ", ".join(found) + (" (파일 없음)" if not rep.logs else "")
+
+
+# ---------------------------------------------------------------------------
+RUNNERS = {"diag": step_diag, "pytest": step_pytest, "beta": step_beta, "ml": step_ml, "office": step_office}
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description="CLI 도구 실기 점검 (결과는 파일 1개: result_<라벨>_<시각>.md)")
     p.add_argument("--label", default="PC", help="결과 파일 이름에 붙일 PC 라벨 (예: 회사PC)")
-    p.add_argument("--auto", action="store_true", help="office-cli 눈 확인 질문 없이 자동 판정 항목만")
-    p.add_argument("--outlook", action="store_true", help="office-cli Outlook(G그룹)도 시험 (기본: 건너뜀)")
-    p.add_argument("--ml-dir", help=r"ml-kit 실기 테스트 폴더 (기본 C:\ml_test\ml 테스트)")
-    p.add_argument("--office-dir", help=r"office-cli 실기 테스트 폴더 (기본 C:\office_test)")
+    p.add_argument("--only", help="실행할 단계 (쉼표로): diag,pytest,beta,ml,office (기본: diag,pytest,beta,office)")
+    p.add_argument("--ask", action="store_true", help="office 단계의 눈 확인 질문(y/n)에 답하면서 진행 (기본: 질문 없음)")
+    p.add_argument("--outlook", action="store_true", help="office 단계에서 Outlook(G그룹)도 시험 (기본: 건너뜀)")
+    p.add_argument("--ml-dir", help=r"ml 단계 시험 폴더 (기본 C:\ml_test\ml 테스트)")
+    p.add_argument("--office-dir", help=r"office 단계 시험 폴더 (기본 C:\office_test)")
     p.add_argument("--timeout", type=int, default=3600, help="단계별 시간 상한(초, 기본 3600)")
-    args = p.parse_args()
-    steps = [s.strip() for s in (args.only or ",".join(STEPS)).split(",") if s.strip()]
-    bad = [s for s in steps if s not in STEPS]
-    if bad:
-        p.error(f"알 수 없는 단계: {', '.join(bad)} (가능: {', '.join(STEPS)})")
+    args = p.parse_args(argv)
+    chosen = [s.strip().lower() for s in (args.only or ",".join(DEFAULT_STAGES)).split(",") if s.strip()]
+    bad = [s for s in chosen if s not in STAGES]
+    if bad or not chosen:
+        p.error(f"알 수 없는 단계: {', '.join(bad) or '(비어 있음)'} (가능: {', '.join(STAGES)})")
+    stages = [s for s in STAGES if s in chosen]                  # 늘 같은 순서
 
     label = "".join(c for c in args.label if c.isalnum() or c in "-_") or "PC"
-    out = os.path.join(HERE, f"test_result_{label}_{dt.datetime.now():%Y%m%d_%H%M%S}.txt")
-    res = Result(out)
+    stamp = f"{dt.datetime.now():%Y%m%d_%H%M%S}"
+    out = os.path.join(HERE, f"result_{label}_{stamp}.md")
+    rep = Report(out, label, stages)
+    ctx = {"label": label, "stamp": stamp}
     say(f"결과 파일: {out}")
-    if any(s in steps for s in ("ml", "office")):
-        print("[STATUS] 실기 테스트 중 Excel/Word/PowerPoint 창이 열리고 닫힙니다. "
-              "열린 Office 문서는 모두 저장하고 닫은 뒤 시작하세요.", flush=True)
-    runners = {"diag": step_diag, "pytest": step_pytest, "ml": step_ml, "office": step_office}
+    say("단계: " + " -> ".join(stages) + " -> 도구 오류 로그")
+    if any(s in stages for s in ("beta", "ml", "office")):
+        say("점검 중 Excel/Word/PowerPoint 창이 열리고 닫힙니다. 열린 Office 문서는 모두 저장하고 닫은 뒤 시작하세요.")
+    code = 0
     try:
-        for s in steps:
+        for stage in rep.stages:
             t0 = time.time()
+            say(f"{stage.key} 단계 시작: {stage.title}")
             try:
-                runners[s](res, args)
+                RUNNERS[stage.key](stage, args, ctx)
             except KeyboardInterrupt:
+                stage.status = "중단"
                 raise
             except Exception:
-                res.section(f"{s} 단계 오류", traceback.format_exc())
-                say(f"{s} 단계에서 오류가 났습니다. 다음 단계로 넘어갑니다.")
-            say(f"{s} 단계 끝 ({round(time.time() - t0)}초)")
+                stage.fail(f"단계 오류 (러너 문제): {traceback.format_exc().strip().splitlines()[-1][:200]}")
+                stage.details.append(("단계 오류", traceback.format_exc()))
+                say(f"{stage.key} 단계에서 오류가 났습니다. 다음 단계로 넘어갑니다.")
+            finally:
+                stage.seconds = round(time.time() - t0)
+                stage.finish()
+                rep.write()
+            say(f"{stage.key} 단계 끝: {stage.status} ({stage.seconds}초)")
     except KeyboardInterrupt:
-        res.section("중단", "사용자가 중단했습니다 (Ctrl+C). 위는 그때까지의 결과입니다.")
+        rep.interrupted = True
+        code = 130
         say("중단했습니다.")
     finally:
-        attach_tool_error_logs(res)
-        summary = "\n".join(res.summary) or "실행된 단계 없음"
-        res.section("요약", summary)
-        echo("\n" + "=" * 70 + "\n[STATUS] 요약\n" + summary + "\n" + "=" * 70)
-        say(f"끝. 이 파일 하나를 Claude에게 전달하세요: {out}")
+        try:
+            attach_tool_error_logs(rep)
+        except Exception as e:
+            rep.log_note = f"모으기 실패: {type(e).__name__}: {e}"
+        rep.ended = dt.datetime.now()
+        rep.write()
+        echo("\n" + "=" * 70 + "\n[STATUS] 요약\n" + "\n".join(rep.summary_lines()) + "\n" + "=" * 70)
+        say(f"끝. 이 파일 하나를 올리세요: {out}")
+    if code:
+        return code
+    return 1 if any(s.status == "FAIL" for s in rep.stages) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

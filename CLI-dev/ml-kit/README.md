@@ -60,7 +60,10 @@ CLI-dev/ml-kit/             # 개발·실기 테스트용 (사내 PC C:\CLI-dev\
 ├── README.md               # [본 문서] 툴킷 종합 안내서, 완전 CLI 레퍼런스
 ├── CHANGELOG.md            # 변경 이력 + 남은 할 일 (2.0.0부터 관리)
 ├── requirements.txt        # 런타임 의존성
-├── tests/                  # CLI 계약 + 회귀 테스트 (도구는 ../../CLI/ml-kit에서 불러옴)
+├── tests/                  # CLI 계약 + 회귀 테스트 (도구는 ../../CLI/ml-kit에서 불러옴), 기능별 파일:
+│                           #   contract(1줄 JSON·exit·오류 로그), safety(덮어쓰기 금지·러너), train, predict,
+│                           #   names(열 이름·단위·[후보]), map, report_export, loading_layout/totals/numbers(데이터 읽기),
+│                           #   layout_matrix(머리글·단위 행 매트릭스), skill_docs. 공용: mlkit_helpers.py, conftest.py
 └── tools/run_win_tests.py  # Windows 실기 테스트 (실제 Excel/Word, 파일 잠금, cmd/PowerShell, 배포 폴더)
                             #   --dir은 없는 경로나 빈 폴더 (러너가 만든 폴더만 다시 비움)
                             #   결과: 테스트 폴더 report_*.txt(요약) + tools/test_logs/testlog_<라벨>_<시각>.txt(AI 판독용 상세 로그)
@@ -281,7 +284,7 @@ python ml_train.py -f "공정.xlsx" -x "반응온도,촉매비율,수분함량" 
   경고하지 않습니다 (2.9.28은 설정값 열을 평균 칸으로 세어, 0/1 열이 우연히 위 두 행의 합이면 경고).
   알려진 거짓 경고 (그대로 둠): 작은 정수 열(`불량수` 0~2)의 값 하나가 우연히 위 두 행의 합(`2` = `1` + `1`)이고 나머지가 일정한 설정값이면 범주 행
   (`A계`)도 합계 행으로 경고합니다. 합계 행을 놓치면 그 행이 학습에 들어가 더 나쁘므로 경고 하나가 더 나오는 쪽을 택했습니다 (2.9.31,
-  `test_review_v2931.py`가 이 동작을 고정). `평균값`/`평균치`는 적을 때만 평균 글자로 봅니다.
+  `tests/test_loading_totals.py`의 `test_known_false_warning_small_integer_sum`이 이 동작을 고정). `평균값`/`평균치`는 적을 때만 평균 글자로 봅니다.
   2.9.26은 글자 수로만 판단해 일자 병합 일일 보고서의 `일합계` + `월합계`/`총 합계`(일합계가 일자 수보다 많음), 빈 열의 `총 합계` 1개를 경고하지 않았고,
   2.9.25는 범주 열의 모든 행을 경고했습니다. `Total`/`Sum`은 띄어 쓴 낱말일 때만(`SUM-01`, `Lot-Sum`,
   `sum_a`, `Total_Loss`는 이름), `평균온도`처럼 `평균` 뒤에 이름이 붙은 말은 평균 글자가 아닙니다 (2.9.26).
