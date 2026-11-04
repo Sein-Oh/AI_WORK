@@ -699,7 +699,7 @@ def _word_rows(args) -> Tuple[List[List[Any]], str]:
     n = args.table or 1
     closed = word._closed_docx(args.from_target)
     if closed:
-        import docx
+        docx = rt.require_lib("docx", "python-docx", "Office 없이 닫힌 워드 파일의 표 읽기")
         from docx.table import Table
         import reader
         d = docx.Document(closed)

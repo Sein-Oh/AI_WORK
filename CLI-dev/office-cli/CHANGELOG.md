@@ -6,6 +6,17 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.47] - 2026-11-04
+
+저장소 지침 반영(R5): `require_lib()`. 회귀 테스트: `tests/test_contract.py` "R5 require_lib" (1.4.46에서 5개 중 5개 실패, 1개는 함수 없음).
+
+### 수정
+- `_runtime.require_lib(module, pip_name, feature)`와 `MissingLibraryError`: 라이브러리가 없으면 `STOP_RETRY:`, `error_type: "missing_library"`,
+  `missing_package`, `install_command: "python -m pip install <패키지>"`, directive "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요."
+- 적용: reader의 DOCX(python-docx)·PPTX(python-pptx)·XLSX(openpyxl)·PDF(pymupdf)·HWP(olefile) 읽기와 xlsx 저장, excel.py 닫힌 xlsx 읽기와 수식 읽기
+  (전에는 `import` 실패가 `ERROR:` 내부 오류), office.py transfer의 닫힌 워드 표 읽기. 전에는 reader는 `input` 오류 글에 설치 명령만 있었음.
+- pywin32(`require_com`)는 Office 없이 읽는 다른 명령 안내가 있어 그대로 둠.
+
 ## [1.4.46] - 2026-11-04
 
 1.4.37에서 남긴 것: range sort 기준 4개 이상. 회귀 테스트: `tests/test_excel_write.py` `test_sort_more_than_three_keys_uses_sort_fields`, `test_sort_too_many_keys`
@@ -1196,7 +1207,6 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 ### 저장소 지침 반영 (AGENTS.md, 2026-10-28)
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현. 우선순위 순.
 - [ ] `recovered` 나머지: transfer 방식 대체, 오래된 스냅샷 정리 (잠금·기존 파일 새 이름 저장, 낡은 캐시는 1.4.0)
-- [ ] `require_lib()`: openpyxl(excel.py:215, reader.py:382), python-docx(reader.py:291, office.py:465), python-pptx(reader.py:329,346) 실패 시 STOP_RETRY + `python -m pip install ...` (회귀 테스트)
 - [ ] `remove_tree` 추가, `os.remove`(_office.py:314, _runtime.py:311, word.py:593)에 적용. (1.4.0: undo 복원 복사는 `retry_fs`, retry_fs는 일시적 오류만 재시도 완료)
 - [ ] COM 내보내기(excel.py, word.py, ppt.py export)의 잠금 대비 `save_with_lock_fallback`. (1.4.0: 기존 출력 파일은 새 이름 저장 + `recovered` 완료)
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)

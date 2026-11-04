@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.46"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.47"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -166,6 +166,24 @@ def is_elevated() -> bool:
 def elevation_hint() -> str:
     """'열린 문서가 없음'을 알릴 때 붙일 안내. 관리자 권한으로 실행 중이면 ELEVATED_HINT, 아니면 빈 글."""
     return ELEVATED_HINT if is_elevated() else ""
+
+
+class MissingLibraryError(InputError):
+    """필요한 파이썬 라이브러리가 설치되어 있지 않음 (R5). LLM은 직접 설치하지 않고 install_command를 사용자에게 전달합니다."""
+
+    def __init__(self, pip_name: str, feature: str):
+        super().__init__(f"{feature}에 필요한 {pip_name}이(가) 설치되어 있지 않습니다. 설치 명령: python -m pip install {pip_name}")
+        self.pip_name = pip_name
+        self.feature = feature
+
+
+def require_lib(module: str, pip_name: str, feature: str) -> Any:
+    """module을 불러옵니다. 없으면 MissingLibraryError (STOP_RETRY, missing_library, install_command)."""
+    import importlib
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        raise MissingLibraryError(pip_name, feature) from None
 
 
 class OfficeBusyError(RuntimeError):
@@ -370,6 +388,12 @@ def _error_payload(exc: BaseException, tool: str = "", command: str = "") -> Dic
         return base
 
     msg = str(exc) or type(exc).__name__
+    if isinstance(exc, MissingLibraryError):
+        base.update(error_type="missing_library", message=msg, missing_package=exc.pip_name,
+                    install_command=f"python -m pip install {exc.pip_name}",
+                    agent_directive=f"STOP_RETRY: {exc.feature}에 필요한 {exc.pip_name}이(가) 설치되어 있지 않습니다. "
+                                    "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요.")
+        return base
     if isinstance(exc, UserDecisionError):
         base.update(error_type=exc.error_type or "needs_user_decision", message=msg, agent_directive=f"STOP_RETRY: {exc.directive}")
         if exc.candidates:

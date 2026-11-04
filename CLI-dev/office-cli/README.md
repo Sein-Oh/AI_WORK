@@ -44,6 +44,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - `STOP_RETRY:` 입력이나 대상 문제. `[추천]`이 있으면 그 값으로 1회만 다시 시도
   - `STOP_RETRY:` + `[후보]`(`error_type: "ambiguous"`, `candidates` 목록): 후보가 둘 이상이라 도구가 고르지 않음. 사용자가 고른 값으로 다시 실행
   - `ERROR:` 내부 오류
+- 필요한 라이브러리가 없으면(openpyxl, python-docx, python-pptx, pymupdf, olefile) `STOP_RETRY:`와 `error_type: "missing_library"`, `missing_package`,
+  `install_command`(`python -m pip install <패키지>`). LLM은 직접 설치하지 않고 설치 명령을 사용자에게 전달합니다(R5 `require_lib`, 1.4.47). pywin32는 그대로 `input`.
 - 공통 키: `status`, `tool`, `command`, `preview`, `agent_directive`. 오류 시 `error_type`, `message`가 추가됩니다. COM 오류는 `hresult`도 들어갑니다.
 - `target_resolved`: 실제로 작업한 문서(앱, 이름, 경로, 시트/슬라이드)
 - `next_commands`: 이어서 실행할 명령 `[{purpose, command}]`. 완성된 형태라 그대로 실행하면 됩니다.

@@ -1077,3 +1077,50 @@ def test_engenius_error_log_lands_in_fixed_folder(tmp_path):
     assert proc.returncode == 2
     log = tmp_path / "home" / "Documents" / "En-Genius" / "CLI-data" / "office-cli" / "data" / "logs" / "errors.txt"
     assert log.is_file() and "--bogus" in log.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# R5 require_lib (1.4.47): 라이브러리가 없으면 missing_library + install_command, 직접 설치하지 않게
+# ---------------------------------------------------------------------------
+
+
+def _check_missing(out, package):
+    assert out["status"] == "error" and out["error_type"] == "missing_library", out
+    assert out["missing_package"] == package and out["install_command"] == f"python -m pip install {package}", out
+    assert out["agent_directive"].startswith("STOP_RETRY:") and "직접 설치하지 마세요" in out["agent_directive"], out
+
+
+def test_require_lib_ok_and_missing(monkeypatch):
+    assert rt.require_lib("json", "json", "시험") is json
+    monkeypatch.setitem(sys.modules, "openpyxl", None)
+    with pytest.raises(rt.MissingLibraryError) as ei:
+        rt.require_lib("openpyxl", "openpyxl", "XLSX 읽기")
+    assert isinstance(ei.value, rt.InputError)
+
+
+@pytest.mark.parametrize("module,package,make", [
+    ("docx", "python-docx", "docx"), ("openpyxl", "openpyxl", "xlsx"), ("pptx", "python-pptx", "pptx")])
+def test_reader_missing_library(tmp_path, capsys, monkeypatch, module, package, make):
+    import openpyxl
+    from sample_docs import new_docx, new_pptx
+    path = tmp_path / f"a.{make}"
+    if make == "docx":
+        new_docx().save(str(path))
+    elif make == "pptx":
+        new_pptx().save(str(path))
+    else:
+        openpyxl.Workbook().save(str(path))
+    monkeypatch.setitem(sys.modules, module, None)
+    code, out = run_main(reader, capsys, "read", "--file", str(path))
+    assert code == 1
+    _check_missing(out, package)
+
+
+def test_excel_closed_read_missing_openpyxl(tmp_path, capsys, monkeypatch):
+    import openpyxl
+    path = tmp_path / "a.xlsx"
+    openpyxl.Workbook().save(str(path))
+    monkeypatch.setitem(sys.modules, "openpyxl", None)
+    code, out = run_main(excel, capsys, "read", "--target", str(path))
+    assert code == 1
+    _check_missing(out, "openpyxl")

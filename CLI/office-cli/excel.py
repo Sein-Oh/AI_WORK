@@ -413,7 +413,7 @@ def _clip_closed_range(path: str, ws: Any, address: str, r1: int, c1: int, r2: i
 
 def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str]) -> Tuple[str, int, int, List[List[Any]], List[str]]:
     """닫힌 파일을 openpyxl로 읽습니다. (시트명, 시작행, 시작열, 값, 전체 시트명)"""
-    import openpyxl
+    openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
     _SHEET_SCANS.clear()      # 이번 읽기에서 훑은 것만 closed_uncomputed가 다시 씀
     _FAR.clear()
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -533,7 +533,7 @@ def _closed_formulas(path: str, sheet: str, r0: int, c0: int, matrix: List[List[
     ncols = max((len(r) for r in matrix), default=0)
     if not nrows or not ncols:
         return []
-    import openpyxl
+    openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일의 수식 읽기")
     from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
     out: List[Dict[str, Any]] = []
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)

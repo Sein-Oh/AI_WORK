@@ -496,10 +496,7 @@ def _drop_headers_footers(pages: List[Tuple[List[Any], float]]) -> int:
 
 def _import_pymupdf():
     """pymupdf를 불러오고, 라이브러리 안내/경고가 stdout(1줄 JSON 자리)에 나오지 않게 stderr로 돌립니다."""
-    try:
-        import pymupdf
-    except ImportError:
-        raise rt.InputError("PDF를 읽으려면 pymupdf가 필요합니다 (python -m pip install pymupdf).")
+    pymupdf = rt.require_lib("pymupdf", "pymupdf", "PDF 읽기")
     for fn, kwargs in (("set_messages", {"stream": sys.stderr}), ("set_log", {"stream": sys.stderr}),
                        ("no_recommend_layout", {})):
         try:
@@ -674,10 +671,7 @@ def _hwp_para_text(rec: bytes) -> str:
 
 
 def parse_hwp(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    try:
-        import olefile
-    except ImportError:
-        raise rt.InputError("HWP를 읽으려면 olefile이 필요합니다 (python -m pip install olefile).")
+    olefile = rt.require_lib("olefile", "olefile", "HWP 읽기")
     if not olefile.isOleFile(path):
         raise _encrypted_hint(path)
     try:
@@ -1170,12 +1164,9 @@ def _body_blocks(parent: Any):
 def parse_docx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not zipfile.is_zipfile(path):
         raise _encrypted_hint(path)
-    try:
-        import docx
-        from docx.table import Table
-        from docx.text.paragraph import Paragraph
-    except ImportError:
-        raise rt.InputError("DOCX를 읽으려면 python-docx가 필요합니다 (python -m pip install python-docx).")
+    docx = rt.require_lib("docx", "python-docx", "DOCX 읽기")
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
     try:
         document = docx.Document(path)
     except Exception:
@@ -1284,10 +1275,7 @@ def parse_pptx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """슬라이드 하나 = 단위 하나 (ppt.py/office.py가 슬라이드 번호로 씀). 장절 = [슬라이드 제목]."""
     if not zipfile.is_zipfile(path):
         raise _encrypted_hint(path)
-    try:
-        import pptx
-    except ImportError:
-        raise rt.InputError("PPTX를 읽으려면 python-pptx가 필요합니다 (python -m pip install python-pptx).")
+    pptx = rt.require_lib("pptx", "python-pptx", "PPTX 읽기")
     try:
         prs = pptx.Presentation(path)
     except Exception:
@@ -1330,10 +1318,7 @@ def _cell_str(v: Any) -> str:
 def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not zipfile.is_zipfile(path):
         raise _encrypted_hint(path)
-    try:
-        import openpyxl
-    except ImportError:
-        raise rt.InputError("XLSX를 읽으려면 openpyxl이 필요합니다 (python -m pip install openpyxl).")
+    openpyxl = rt.require_lib("openpyxl", "openpyxl", "XLSX 읽기")
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     except Exception:
@@ -1923,11 +1908,8 @@ def write_xlsx_table(path: str, header: List[str], rows: List[List[Any]], widths
                      sheet: str = "결과") -> Tuple[str, int]:
     """표를 xlsx로 저장합니다 (머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정). 저장 후 다시 열어 행 수를 확인합니다.
     반환: (저장 경로, 셀 글자 상한에서 글이 잘린 행 수). 잘린 행이 있으면 호출하는 쪽이 UNVERIFIED로 알립니다."""
-    try:
-        import openpyxl
-        from openpyxl.styles import Alignment, Font
-    except ImportError:
-        raise rt.InputError("xlsx로 저장하려면 openpyxl이 필요합니다 (python -m pip install openpyxl). .csv나 .md로 저장할 수도 있습니다.")
+    openpyxl = rt.require_lib("openpyxl", "openpyxl", "xlsx로 저장(.csv나 .md로도 저장할 수 있음)")
+    from openpyxl.styles import Alignment, Font
 
     def _write(p: str) -> None:
         wb = openpyxl.Workbook()
