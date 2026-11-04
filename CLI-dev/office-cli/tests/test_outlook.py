@@ -1354,6 +1354,64 @@ def test_calendar_lists_events_read_only(monkeypatch, capsys):
     assert code == 1 and "[추천] 7" in out["message"]
 
 
+def _calendar_env(monkeypatch, evs, refuse=False):
+    class _NS:
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(evs, refuse=refuse)})()
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+
+
+class _CalEv:
+    def __init__(self, subject, start, hours=1):
+        self.Subject, self.Start, self.End = subject, start, start + dt.timedelta(hours=hours)
+        self.AllDayEvent, self.Location, self.Organizer = False, "", ""
+
+
+class _BrokenEv:
+    @property
+    def Start(self):
+        raise RuntimeError("COM 오류")
+
+
+def test_calendar_restrict_refused_compares_each_event(monkeypatch, capsys):
+    # 회귀: Outlook이 기간 조건을 거부하면 오류로 끝남 -> 일정마다 시각 비교 (recovered)
+    evs = [_CalEv("지난 회의", dt.datetime(2026, 11, 1, 9)), _CalEv("주간 회의", dt.datetime(2026, 11, 4, 10)),
+           _CalEv("다음달", dt.datetime(2026, 12, 20, 10))]
+    _calendar_env(monkeypatch, evs, refuse=True)
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and [e["subject"] for e in out["events"]] == ["주간 회의"] and out["recovered"], out
+
+
+def test_calendar_unreadable_events_are_not_verified_zero(monkeypatch, capsys):
+    # 회귀: 일정 항목 예외를 삼키고 0건 VERIFIED
+    _calendar_env(monkeypatch, [_BrokenEv(), _BrokenEv()])
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert out["unread_events"] == 2
+
+
+def test_thread_fallback_scan_limit_is_unverified(monkeypatch, capsys):
+    monkeypatch.setattr(outlook, "THREAD_SCAN_MAX", 2)
+    inbox = [_ThreadMail(f"x{i}", "다른 일", dt.datetime(2026, 11, 2, 9), "다른 일") for i in range(3)]
+    inbox.append(_ThreadMail("i1", "견적 요청", dt.datetime(2026, 11, 1, 9), "견적 요청", "첫 메일"))
+    by_id = {m.EntryID: m for m in inbox}
+
+    class _NS:
+        def GetItemFromID(self, eid):
+            return by_id[eid]
+
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(inbox if n == outlook.OL_FOLDER_INBOX else [], refuse=True)})()
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "thread", "--id", "i1")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "받은 편지함" in out["agent_directive"], out
+
+
 def test_calendar_empty_is_zero(monkeypatch, capsys):
     class _NS:
         def GetDefaultFolder(self, n):

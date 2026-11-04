@@ -1035,6 +1035,7 @@ def get_item(ns: Any, raw: Any) -> Any:
 
 OL_FOLDER_CALENDAR = 9
 CALENDAR_MAX = 50
+CALENDAR_SCAN_MAX = 5000      # Outlook이 기간 조건을 거부했을 때 일정을 하나씩 비교하는 상한
 
 
 def _when(v: Any) -> str:
@@ -1057,23 +1058,46 @@ def cmd_calendar(args) -> Dict[str, Any]:
     flt = f"[Start] < '{end.strftime('%Y-%m-%d %H:%M')}' AND [End] > '{start.strftime('%Y-%m-%d %H:%M')}'"
     events: List[Dict[str, Any]] = []
     more = False
-    for it in items.Restrict(flt):
+    bad = 0                                             # 읽지 못한 일정 수 (있으면 0건이어도 VERIFIED로 단정하지 않음)
+    problems: List[str] = []
+    scanned = 0
+    try:
+        source, filtered = items.Restrict(flt), True
+    except Exception as e:
+        # 기간 조건 거부(JIT 복구): 시작 시각 순으로 하나씩 비교 (반복 일정이 끝없이 펼쳐질 수 있어 상한)
+        rt.note_recovered(f"Outlook이 일정 기간 조건을 거부해({type(e).__name__}) 일정마다 시각을 비교했습니다")
+        source, filtered = items, False
+    for it in source:
         if len(events) >= CALENDAR_MAX:
             more = True
+            break
+        scanned += 1
+        if not filtered and scanned > CALENDAR_SCAN_MAX:
+            problems.append(f"기간 조건 없이 일정 {CALENDAR_SCAN_MAX}개까지만 비교함 (빠진 일정이 있을 수 있음)")
             break
         try:
             s, e = it.Start, it.End
             s_ = s.replace(tzinfo=None) if hasattr(s, "replace") else None
             if s_ is not None and s_ >= end:
                 break
+            if not filtered:
+                e_ = e.replace(tzinfo=None) if hasattr(e, "replace") else None
+                if e_ is not None and e_ <= start:
+                    continue
             events.append({"subject": _text(getattr(it, "Subject", "")), "start": _when(s), "end": _when(e),
                            "all_day": bool(getattr(it, "AllDayEvent", False)), "location": _text(getattr(it, "Location", "")),
                            "organizer": _text(getattr(it, "Organizer", ""))})
         except Exception:
+            bad += 1
             continue
+    if bad:
+        problems.append(f"일정 {bad}개를 읽지 못함 (빠진 일정이 있을 수 있음)")
     period = {"since": start.date().isoformat(), "until": (end - _dt.timedelta(days=1)).date().isoformat(), "days": args.days}
     fields: Dict[str, Any] = {"period": period, "events": events, "count": len(events), "truncated": more}
     when = f"{period['since']} ~ {period['until']} ({args.days}일)"
+    if problems:
+        fields["unread_events"] = bad
+        return rt.ok_unverified(TOOL, "calendar", f"{when} 일정 {len(events)}개 (일부 확인 못 함)", problems, **fields)
     if not events:
         return rt.ok(TOOL, "calendar", f"0건: {when} 일정 없음",
                      f"VERIFIED: 0건. {when}에 일정이 없습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.", verified=True, **fields)
@@ -1091,7 +1115,12 @@ THREAD_BODY_CHARS = 400
 OL_FOLDER_INBOX, OL_FOLDER_SENT = 6, 5
 
 
-def _thread_items(ns: Any, topic: str) -> List[Any]:
+THREAD_SCAN_MAX = 2000        # 대화 제목 조건을 거부했을 때 폴더마다 비교하는 메일 수 상한
+
+
+def _thread_items(ns: Any, topic: str, limited: Optional[List[int]] = None) -> List[Any]:
+    """limited: 상한에 닿아 다 비교하지 못한 폴더 번호를 담음 (그 폴더의 오래된 메일은 빠질 수 있음)."""
+    limited = limited if limited is not None else []
     found: List[Any] = []
     flt = "[ConversationTopic] = '" + topic.replace("'", "''") + "'"
     for fid in (OL_FOLDER_INBOX, OL_FOLDER_SENT):
@@ -1105,7 +1134,8 @@ def _thread_items(ns: Any, topic: str) -> List[Any]:
             rt.note_recovered("Outlook이 대화 제목 조건을 거부해 메일마다 대화 제목을 비교했습니다")
             hits = []
             for k, it in enumerate(items):
-                if k >= 2000:
+                if k >= THREAD_SCAN_MAX:
+                    limited.append(fid)
                     break
                 try:
                     if _text(it.ConversationTopic) == topic:
@@ -1121,7 +1151,8 @@ def cmd_thread(args) -> Dict[str, Any]:
     item = get_item(ns, args.id)
     topic = _text(getattr(item, "ConversationTopic", "")) or re.sub(r"^\s*((re|fw|fwd|회신|전달)\s*:\s*)+", "",
                                                                     _text(getattr(item, "Subject", "")), flags=re.I)
-    mails = _thread_items(ns, topic)
+    limited: List[int] = []
+    mails = _thread_items(ns, topic, limited)
     seen, uniq = set(), []
     for m in mails:
         k = _text(getattr(m, "EntryID", ""))
@@ -1141,6 +1172,10 @@ def cmd_thread(args) -> Dict[str, Any]:
     fields = {"topic": topic, "mails": out, "count": len(uniq), "shown": len(out), "truncated": len(uniq) > len(out)}
     if len(out) > 0:
         fields["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", str(out[-1]["id"])], "가장 최근 메일 본문 전체 읽기")]
+    if limited:
+        names = ", ".join("받은 편지함" if f == OL_FOLDER_INBOX else "보낸 편지함" for f in limited)
+        return rt.ok_unverified(TOOL, "thread", f"대화 '{topic}' 메일 {len(uniq)}통 (일부 폴더는 최근 {THREAD_SCAN_MAX}통만 비교)",
+                                [f"{names}에서 최근 {THREAD_SCAN_MAX}통까지만 비교해 더 오래된 같은 대화 메일은 빠졌을 수 있음"], **fields)
     return rt.ok(TOOL, "thread", f"대화 '{topic}' 메일 {len(uniq)}통 (오래된 순)" + (f", 최근 {len(out)}통만" if len(uniq) > len(out) else ""),
                  "VERIFIED: 같은 대화의 메일을 읽었습니다(읽기만). 시간 순으로 누가 무엇을 보냈는지 요약해 알리세요.", verified=True, **fields)
 

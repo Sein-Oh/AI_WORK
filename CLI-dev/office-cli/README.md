@@ -354,9 +354,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   directive가 사용자에게 어느 메일인지 알리게 합니다(특히 `--send`).
   `read`/`current`의 `mail`과 `attachments`의 `mail`에는 `entry_id`.
 - `thread --id N`(읽기 전용): 그 메일의 대화 제목(`ConversationTopic`, 없으면 RE:/FW:를 뺀 제목)으로 받은 편지함과 보낸 편지함에서 같은 대화를 모아 오래된 순으로
-  최근 20통(`mails`: 요약과 본문 400자, `count`, `truncated`). Outlook이 조건을 거부하면 메일마다 비교(최근 2,000통, `recovered`). 결과도 짧은 번호로 기억.
+  최근 20통(`mails`: 요약과 본문 400자, `count`, `truncated`). Outlook이 조건을 거부하면 메일마다 비교(폴더마다 2,000통, `recovered`, 상한에 닿으면 빠진 메일이 있을 수 있어 `UNVERIFIED:`). 결과도 짧은 번호로 기억.
 - `calendar [--days 7]`(읽기 전용): 기본 일정 폴더에서 오늘 0시부터 N일(1~92) 안에 걸친 일정을 반복 일정까지 펼쳐(`IncludeRecurrences`) 시작 순으로 50개까지
   (`events`: `subject`, `start`, `end`(`YYYY-MM-DD HH:MM`), `all_day`, `location`, `organizer`, `period`, `truncated`). 0건이면 `VERIFIED: 0건`.
+  Outlook이 기간 조건을 거부하면 일정마다 시각을 비교합니다(`recovered`, 5,000개 상한에 닿으면 `UNVERIFIED:`). 읽지 못한 일정이 있으면 0건이어도
+  `UNVERIFIED:`(`unread_events`).
 - `--folder`의 폴더를 찾지 못하면 그 단계의 하위 폴더 이름(끝 이름)끼리 비교해 `[추천]`(표기만 다름)이나 `[후보]`를 주고, 보여 줄 때만
   전체 경로(`계정\폴더\하위`)로 바꿉니다(전체 경로끼리 비교하면 같은 계정 이름 때문에 관계없는 폴더가 모두 `[후보]`가 됨).
   오류 로그에는 계정 이름(보통 메일 주소) 대신 `<메일 계정>`을 남깁니다. message 끝의 `(경로: ...)`도 로그에서는

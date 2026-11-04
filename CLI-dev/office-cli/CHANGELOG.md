@@ -35,6 +35,10 @@
   (`와이파이` -> `와이파`, `보호회로` -> `보호회`로 떼던 문제). 캐시의 수식 칸 다시 확인(`recheck_uncomputed`)은 한 실행에 3개·시간 여유 안에서만.
   `diff --save x.md`가 말없이 `.xlsx`로 저장하던 것을 `warnings`로 알림. 회귀 테스트: `tests/test_reader.py` `test_number_only_query_normalized`,
   `test_word_final_syllable_is_not_particle`, `test_recheck_uncomputed_is_capped_per_run`, `test_diff_save_md_warns_xlsx`.
+- 경미(outlook): `calendar`에서 Outlook이 기간 조건을 거부하면 일정마다 시각을 비교(`recovered`, 5,000개 상한), 읽지 못한 일정이 있으면 0건이어도
+  `UNVERIFIED:`(`unread_events`, 예외를 삼켜 0건 VERIFIED이던 문제). `thread` 대체 경로가 폴더마다 2,000통 상한에 닿으면 `UNVERIFIED:`.
+  회귀 테스트: `tests/test_outlook.py` `test_calendar_restrict_refused_compares_each_event`, `test_calendar_unreadable_events_are_not_verified_zero`,
+  `test_thread_fallback_scan_limit_is_unverified`.
 
 ### 개발 도구
 - Gemma 종합 테스트 채점(`CLI-dev/grade_opencode.py`, `agent_scenarios.yaml` 묶음 O): 채점기가 `;`·`&&`·`||`·`|`로 이은 명령을 나눠(따옴표 안은 그대로)
