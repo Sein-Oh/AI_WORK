@@ -6,6 +6,37 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.65] - 2026-11-04
+
+독립 검토(2차 재검토)에서 나온 office-cli 버그 수정. 각 항목은 회귀 테스트로 먼저 재현한 뒤 고침.
+
+### 수정
+- [치명] outlook 짧은 `id` 재사용: 번호 기억 파일을 읽지 못하면(잠김·손상) `{"next": 1}`로 덮어써 번호를 1부터 다시 매겨 옛 `--id 3`이 다른 메일을 가리켰고,
+  동시에 실행한 두 목록이 같은 번호를 받았음. 이제 읽기는 `retry_fs`로 재시도하고, 파일이 있는데 끝내 못 읽거나 깨졌으면 번호를 새로 매기지 않고 그 결과는
+  `id` = 긴 EntryID + `warnings`, 짧은 번호 해석은 STOP_RETRY "목록을 다시 보세요"(+ `next_commands` list). 깨진 파일은 `outlook_ids.broken_<시각>.json`으로 옮겨 보존.
+  다음 번호를 작은 파일 `outlook_ids.next`에도 두고 큰 값을 써서 줄어들지 않음. 9999에서 1로 돌아가던 것도 없앰(번호는 9자리까지).
+  불러오기~저장은 잠금 파일 `outlook_ids.lock`(O_EXCL, 5초 대기 상한, 30초 넘은 잠금은 지움)으로 묶음, 못 잡으면 긴 EntryID + 경고.
+  회귀 테스트: `tests/test_outlook.py` `test_short_ids_corrupt_file_never_restarts_numbering`, `test_short_ids_read_failure_keeps_file_and_numbering`,
+  `test_short_ids_concurrent_listings_get_distinct_numbers`, `test_short_ids_corrupt_file_and_next_file_keeps_largest`, `test_short_ids_lock_timeout_and_stale_lock`.
+- [치명] `excel.py check` 회귀(1.4.63): "정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다."에서 조건이 `5 V`만 남아 5.1 V를 불일치 VERIFIED.
+  허용·변동·범위·공차·오차·편차로 시작하는 절은 새 항목이 아니라 앞 항목의 한계로 봄(`_NEXT_ITEM`, 기준 값 지우기의 항목 낱말 판정). `허용 전류`처럼 뒤에 다른 낱말이
+  오면 새 항목. 안전장치: 잘라 낸 쪽에 기준 값만 남고 같은 문장 뒤에 같은 단위의 범위가 그 값을 품으면, 칸 값이 기준 값과 다르지만 그 범위 안일 때 `판단필요`.
+  회귀 테스트: `tests/test_reader.py` `test_near_conditions_stop_at_next_item`(6개 추가), `test_near_conditions_plain_with_later_range_is_marked`,
+  `tests/test_excel_read.py` `test_check_limit_clause_belongs_to_item`.
+- [높음] 닫힌 Word 파일 작업 뒤 숨은 Word를 `Quit(SaveChanges=0)`로 무조건 끝내 사용자가 그 인스턴스에서 연 문서의 변경을 버렸음. 자기 문서를 닫은 뒤
+  `Documents.Count == 0`일 때만 끝내고(PowerPoint와 같음), 남겨 두면 stderr `[INFO]`. 회귀 테스트: `tests/test_office.py` `test_word_hidden_instance_quits_only_when_no_documents_left`.
+- [중간] 열기 감시: 사용자가 이미 띄운 PowerPoint의 `DisplayAlerts`를 바꾼 채 `_abandon`(os._exit)하면 되돌리지 못했음. 이미 떠 있던 PowerPoint는 바꾸지 않음.
+  끄지 않고 둔 프로세스(`POWERPNT.EXE PID N` 또는 "이미 떠 있던 것")를 message에 적음. 회귀 테스트: `tests/test_office.py` `test_open_watchdog_leaves_running_ppt_alerts`.
+- [중간] 2열 표 파일 셋째 열 오류의 `[추천] C7,"1,500"`이 인자 값처럼 읽혔음. `[추천]`을 쓰지 않고 "고친 줄: 3번째 줄 C7,"1,500"" (한 줄이어도).
+  회귀 테스트: `tests/test_excel_write.py` `test_write_cells_file_third_column_stops_before_writing`.
+- [중간] 숫자 검색어: `2.1`이 `2.10 전압`에 맞고 `2.1.3`에는 안 맞았음. 소수 한 자리 맨 숫자는 장절 번호 경계(`section_matches`와 같음: `2.1.3`은 맞고 `2.10`, `12.1`은 아님),
+  소수 끝 0은 소수 둘째 자리 이상이거나 글에서 단위가 붙을 때만 무시(`0.5` = `0.50 mm`, `0.5` != `0.50 이다`). 회귀 테스트: `test_number_only_query_normalized`(8개 추가).
+- [낮음] 넓혀 찾은 검색의 directive가 stale·indexed_now·상한·text 잘림 안내를 지웠음 -> 덧붙임(stale이면 "다시 실행하지 마세요"를 빼고 그 안내를 따름).
+  조사 `로`: ㄹ 받침 뒤는 뗌(`케이블로` -> `케이블`), 받침 없는 글자 뒤는 원래 낱말과 뗀 낱말을 둘 다 찾음(`서버로`, `보호회로`는 그대로 유지).
+  회귀 테스트: `tests/test_reader.py` `test_search_widened_directive_keeps_notes`, `test_particle_ro`.
+- office-mail 스킬: 규칙 4를 사실에 맞춤(옛 번호는 같은 메일이거나 "없는 번호", 긴 EntryID `id`도 그대로), `--send` 순서(먼저 `--send` 없이 또는 `read --id N` ->
+  `original`·받는 사람을 사용자에게 확인 -> 확인 뒤에만 `--send`).
+
 ## [1.4.64] - 2026-11-04
 
 독립 검토(2차)에서 나온 버그 수정. 각 항목은 회귀 테스트로 먼저 재현한 뒤 고침.

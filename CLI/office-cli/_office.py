@@ -745,7 +745,8 @@ def _user_windows(kind: str, pid: int) -> Optional[bool]:
         return None
 
 
-def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float, killed: bool = True) -> rt.InputError:
+def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float, killed: bool = True,
+                         pid: Optional[int] = None) -> rt.InputError:
     name = os.path.basename(path)
 
     def same(a: str) -> bool:
@@ -759,7 +760,8 @@ def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float, killed:
                              "사용자가 문서를 Office에서 직접 열어 둔 뒤 같은 작업을 열린 문서로 실행")] if new_argv else []
     what = (f"백그라운드 {APP_LABEL[kind]}만 끝냈습니다 (사용자의 다른 창은 그대로)" if killed else
             f"{APP_LABEL[kind]}에 사용자가 연 문서가 있을 수 있어 {APP_LABEL[kind]}을(를) 끝내지 않았습니다 "
-            "(열기 창이 떠 있으면 사용자가 닫으면 됨)")
+            f"(그대로 둔 프로세스: {IMAGE_NAME[kind]}" + (f" PID {pid}" if pid else ", 이미 떠 있던 것") +
+            ". 열기 창이 떠 있으면 사용자가 닫으면 됨)")
     return rt.InputError(
         f"'{name}'이(가) {waited:g}초 안에 열리지 않아 {what}. "
         "문서 보안 인증 창 등으로 열리지 않음. 사용자가 문서를 직접 열어 두면 열린 문서로 읽음. "
@@ -805,7 +807,8 @@ class _OpenWatch:
             if self.fired:
                 return
         if self.path:
-            _abandon(_drm_or_dialog_error(self.kind, self.path, self.tool, self.timeout, killed=False), self.kind, self.tool)
+            _abandon(_drm_or_dialog_error(self.kind, self.path, self.tool, self.timeout, killed=False, pid=self.pid),
+                     self.kind, self.tool)
 
     def __enter__(self) -> "_OpenWatch":
         if self._timer is not None:
@@ -996,7 +999,8 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             before = _office_pids(kind) if timeout and kind != "excel" and not ppt_was_running else set()
             app = _new_instance(kind)
             owns_app = kind != "ppt" or not ppt_was_running
-            if kind == "ppt":
+            if kind == "ppt" and owns_app:
+                # 사용자가 이미 띄운 PowerPoint의 DisplayAlerts는 바꾸지 않음 (열기 감시가 도구를 끝내면 되돌릴 수 없음)
                 try:
                     restore_alerts = app.DisplayAlerts
                     app.DisplayAlerts = 1  # ppAlertsNone
@@ -1083,16 +1087,31 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             except Exception:
                 pass
         if app is not None:
-            if restore_alerts is not None and not owns_app:
+            quit_ = False
+            if owns_app:
+                # Word·PowerPoint: 자기 문서를 닫은 뒤 남은 문서가 없을 때만 끝냄 (사용자가 그 숨은 인스턴스에서 연 문서의
+                # 변경을 버리지 않게). Excel은 도구 전용 새 인스턴스라 늘 끝냄
+                try:
+                    if kind == "excel":
+                        quit_ = True
+                    else:
+                        left = int(app.Documents.Count if kind == "word" else app.Presentations.Count)
+                        quit_ = left == 0
+                        if not quit_:
+                            rt.log("INFO", f"{APP_LABEL[kind]}에 다른 문서 {left}개가 열려 있어 {APP_LABEL[kind]}을(를) 끝내지 않고 "
+                                           "그대로 둡니다.")
+                except Exception:
+                    quit_ = False
+            if restore_alerts is not None and not quit_:
                 try:
                     app.DisplayAlerts = restore_alerts
                 except Exception:
                     pass
-            if owns_app:
+            if quit_:
                 try:
                     if kind == "word":
-                        app.Quit(SaveChanges=0)
-                    elif kind == "excel" or app.Presentations.Count == 0:
+                        app.Quit(SaveChanges=0)      # 남은 문서가 없음을 확인한 뒤라 버릴 변경이 없음
+                    else:
                         app.Quit()
                 except Exception:
                     pass

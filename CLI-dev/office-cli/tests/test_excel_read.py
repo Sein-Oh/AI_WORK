@@ -1138,6 +1138,24 @@ def test_check_does_not_mix_items_of_one_sentence(check_env, capsys):
     assert got == {"두께": ("일치", "5 mm 이상"), "외경": ("불일치", "3 mm"), "폭": ("일치", "5 mm 이하")}, out
 
 
+@pytest.mark.parametrize("sentence,value,verdict", [
+    ("정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다.", 5.1, "일치"),     # 1.4.64 회귀: '5 V'만 남아 불일치
+    ("정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다.", 5.3, "불일치"),
+    ("정격 전압 5 V, 허용 범위 4.75~5.25 V", 5.1, "일치"),
+    ("정격 전압: 5 V (허용 범위: 4.75 V ~ 5.25 V)", 5.1, "일치"),
+    ("정격 전압 5 V, 시험 전압 4.75~5.25 V", 5.1, "판단필요"),       # 안전장치: 기준 값과 다르지만 같은 문장의 범위 안
+    ("정격 전압 5 V, 시험 전압 4.75~5.25 V", 5.0, "일치"),
+    ("정격 전압 5 V, 시험 전압 4.75~5.25 V", 6.0, "불일치"),
+])
+def test_check_limit_clause_belongs_to_item(check_env, capsys, sentence, value, verdict):
+    spec, book = check_env
+    spec.write_text(sentence + "\n", encoding="utf-8")
+    _check_book(book, [("정격 전압", value)])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    assert code == 0 and out["results"][0]["verdict"] == verdict, out
+
+
 @pytest.mark.parametrize("header,value,verdict", [
     (("항목", "비고", "값"), 30, "판단필요"),              # 칸·머리글에 단위 없음: 규격 단위(cm)로 추정하지 않음
     (("항목", "비고", "값(mm)"), 30, "일치"),              # 머리글 단위로 바꿔 비교 (30 mm <= 5 cm)

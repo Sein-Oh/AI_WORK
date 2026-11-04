@@ -1268,7 +1268,7 @@ def test_short_ids_never_point_to_another_mail_after_new_listing():
     assert outlook.entry_id("3") == "S3" and outlook.entry_id("7") == "T2" and outlook.entry_id("1") == "S1"
 
 
-def test_short_id_dropped_or_wrapped_is_missing_not_other_mail(monkeypatch):
+def test_short_id_dropped_is_missing_not_other_mail(monkeypatch):
     monkeypatch.setattr(outlook, "ID_KEEP", 4)
     outlook.remember_listing(_listing("A", 3), "list")                   # 1~3
     outlook.remember_listing(_listing("B", 3), "list")                   # 4~6, 기억은 최근 4개(3~6)
@@ -1276,13 +1276,124 @@ def test_short_id_dropped_or_wrapped_is_missing_not_other_mail(monkeypatch):
         outlook.entry_id("1")
     assert "없는 번호" in str(e.value) and e.value.fields["next_commands"]
     assert outlook.entry_id("6") == "B3"
-    monkeypatch.setattr(outlook, "SHORT_ID_MAX", 8)
     c = _listing("C", 3)
-    outlook.remember_listing(c, "list")                                   # 7~9는 상한을 넘음 -> 1부터 다시, 옛 번호는 모두 버림
-    assert [m["id"] for m in c] == [1, 2, 3] and outlook.entry_id("1") == "C1"
-    for old in ("4", "6"):
-        with pytest.raises(rt.InputError):
-            outlook.entry_id(old)
+    outlook.remember_listing(c, "list")                                   # 1부터 다시 매기지 않음
+    assert [m["id"] for m in c] == [7, 8, 9] and outlook.entry_id("7") == "C1"
+
+
+def _assert_old_ids_safe(old):
+    """옛 번호(old: 번호 -> entry_id)는 같은 메일이거나 '없는 번호' 오류 (다른 메일을 가리키면 안 됨)."""
+    for n, eid in old.items():
+        try:
+            assert outlook.entry_id(str(n)) == eid, n
+        except rt.InputError:
+            pass
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+
+
+def test_short_ids_corrupt_file_never_restarts_numbering(no_wait):
+    # 회귀: 기억 파일이 깨지면 {"next": 1}로 덮어써 번호를 1부터 다시 매김 -> 옛 --id 3이 다른 메일
+    a = _listing("A", 5)
+    outlook.remember_listing(a, "list")
+    old = {m["id"]: m["entry_id"] for m in a}
+    path = outlook._listing_path()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('{"next": 6, "items": {"3": {"entry_id": "A3"')          # 쓰다 끊긴 파일
+    with pytest.raises(rt.InputError) as e:
+        outlook.entry_id("3")                                          # 깨진 파일로는 번호를 풀지 않음
+    assert "목록을 다시 보세요" in str(e.value) and e.value.fields["next_commands"]
+    b = _listing("B", 5)
+    warn = outlook.remember_listing(b, "search")
+    assert warn and [m["id"] for m in b] == [m["entry_id"] for m in b]   # 이번 결과는 긴 EntryID만
+    data_dir = os.path.dirname(path)
+    assert any(n.startswith("outlook_ids.broken_") for n in os.listdir(data_dir))   # 깨진 파일은 백업
+    c = _listing("C", 5)
+    outlook.remember_listing(c, "list")
+    assert min(m["id"] for m in c) > max(old)                          # 번호는 이어서 (1부터 다시 아님)
+    _assert_old_ids_safe(old)
+
+
+def test_short_ids_corrupt_file_and_next_file_keeps_largest(no_wait):
+    outlook.remember_listing(_listing("A", 4), "list")
+    path = outlook._listing_path()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("{bad")
+    with open(os.path.join(os.path.dirname(path), outlook.NEXT_FILE), "w", encoding="utf-8") as f:
+        f.write("40")
+    outlook.remember_listing(_listing("B", 2), "list")
+    c = _listing("C", 2)
+    outlook.remember_listing(c, "list")
+    assert [m["id"] for m in c] == [40, 41]
+
+
+def test_short_ids_read_failure_keeps_file_and_numbering(no_wait, monkeypatch):
+    a = _listing("A", 5)
+    outlook.remember_listing(a, "list")
+    old = {m["id"]: m["entry_id"] for m in a}
+    path = outlook._listing_path()
+    before = open(path, encoding="utf-8").read()
+    orig = rt.read_text_file
+
+    def locked(p):
+        if os.path.abspath(p) == os.path.abspath(path):
+            raise PermissionError(13, "sharing violation", p)
+        return orig(p)
+    monkeypatch.setattr(rt, "read_text_file", locked)
+    b = _listing("B", 5)
+    assert outlook.remember_listing(b, "list")
+    assert [m["id"] for m in b] == [m["entry_id"] for m in b]
+    with pytest.raises(rt.InputError) as e:
+        outlook.entry_id("3")
+    assert "목록을 다시 보세요" in str(e.value)
+    assert open(path, encoding="utf-8").read() == before                # 읽지 못한 파일은 건드리지 않음
+    monkeypatch.setattr(rt, "read_text_file", orig)
+    _assert_old_ids_safe(old)
+    assert outlook.entry_id("3") == "A3"
+
+
+def test_short_ids_concurrent_listings_get_distinct_numbers(monkeypatch):
+    # 회귀: 동시에 실행한 두 목록이 같은 번호를 받음 (잠금 없이 불러오기~저장)
+    import threading
+    import time as _time
+    orig = outlook._load_ids
+
+    def slow():
+        d = orig()
+        _time.sleep(0.2)
+        return d
+    monkeypatch.setattr(outlook, "_load_ids", slow)
+    lists = {t: _listing(t, 5) for t in ("X", "Y")}
+    ts = [threading.Thread(target=outlook.remember_listing, args=(lists[t], t)) for t in lists]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    ids = [m["id"] for t in lists for m in lists[t]]
+    assert sorted(ids) == list(range(1, 11)), ids
+    for t in lists:
+        for m in lists[t]:
+            assert outlook.entry_id(str(m["id"])) == m["entry_id"]
+
+
+def test_short_ids_lock_timeout_and_stale_lock(monkeypatch):
+    import time as _time
+    data_dir = os.path.dirname(outlook._listing_path())
+    os.makedirs(data_dir, exist_ok=True)
+    lock = os.path.join(data_dir, outlook.LOCK_FILE)
+    open(lock, "w").close()
+    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.2)
+    a = _listing("A", 2)
+    assert "다른 실행" in outlook.remember_listing(a, "list")
+    assert [m["id"] for m in a] == ["A1", "A2"]
+    old = _time.time() - 3600
+    os.utime(lock, (old, old))                                         # 끝나지 못한 실행이 남긴 잠금
+    b = _listing("B", 2)
+    assert outlook.remember_listing(b, "list") is None and [m["id"] for m in b] == [1, 2]
+    assert not os.path.exists(lock)
 
 
 def test_short_id_older_than_keep_days_is_missing(monkeypatch):

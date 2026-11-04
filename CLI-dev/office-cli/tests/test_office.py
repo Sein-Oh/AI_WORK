@@ -2060,6 +2060,69 @@ def test_open_watchdog_kills_only_without_user_documents(hung_doc_open, monkeypa
         assert "끝내지 않았습니다" in msg and "OFFICE_CLI_OPEN_TIMEOUT" in msg
 
 
+class _HiddenWordApp:
+    """도구가 띄운 숨은 Word. user_docs: 그 인스턴스에서 사용자가 연 문서 수."""
+
+    def __init__(self, user_docs):
+        self.docs = [FakeWordDoc(f"C:\\u\\사용자{i}.docx", saved=False) for i in range(user_docs)]
+        self.quit_calls = []
+        app = self
+
+        class _Docs:
+            @property
+            def Count(self):
+                return len(app.docs)
+        self.Documents = _Docs()
+
+    def Quit(self, **k):
+        self.quit_calls.append(k)
+
+
+@pytest.mark.parametrize("user_docs,quits", [(0, True), (1, False)])
+def test_word_hidden_instance_quits_only_when_no_documents_left(fake_com, monkeypatch, tmp_path, capsys, user_docs, quits):
+    # 회귀: 정상 종료 때 Quit(SaveChanges=0)을 무조건 불러 사용자가 그 숨은 Word에서 연 문서의 변경을 버림
+    app = _HiddenWordApp(user_docs)
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: app)
+
+    def opened(kind, a, path, readonly):
+        d = FakeWordDoc(path)
+        a.docs.append(d)
+        d.Close = lambda SaveChanges=None: a.docs.remove(d)
+        return d
+    monkeypatch.setattr(off, "_open_file", opened)
+    path = tmp_path / "a.docx"
+    path.write_bytes(b"PK")
+    with off.open_target("word", str(path), readonly=True):
+        pass
+    assert bool(app.quit_calls) is quits
+    err = capsys.readouterr().err
+    assert ("[INFO]" in err and "끝내지 않고" in err) is (not quits)
+
+
+def test_open_watchdog_leaves_running_ppt_alerts(hung_doc_open, monkeypatch):
+    # 회귀: 사용자가 띄운 PowerPoint의 DisplayAlerts를 바꾼 채 _abandon(os._exit) -> 되돌리지 않았음
+    tmp_path, rec = hung_doc_open
+    sets = []
+
+    class _Watched(FakePptApp):
+        def __setattr__(self, key, value):
+            if key == "DisplayAlerts" and hasattr(self, "DisplayAlerts"):
+                sets.append(value)
+            super().__setattr__(key, value)
+    app = _Watched()
+    monkeypatch.setattr(off, "_new_instance", lambda kind: app)
+    monkeypatch.setattr(off, "_ppt_running", lambda: True)
+    monkeypatch.setattr(off, "_instance_pid", lambda k, a, before: None)
+    path = tmp_path / "보안.pptx"
+    path.write_bytes(b"x")
+    with pytest.raises(Exception):
+        with off.open_target("ppt", str(path), readonly=True, tool="ppt"):
+            pass
+    assert sets == [] and app.DisplayAlerts == 2 and not app.quit_called      # 바꾸지 않음 (abandon이면 되돌릴 수 없음)
+    assert "POWERPNT.EXE" in rec["abandoned"][0] and "이미 떠 있던" in rec["abandoned"][0]
+
+
 def test_open_watchdog_abandon_emits_one_json_line(monkeypatch, capsys, isolated_dirs):
     exits = []
     monkeypatch.setattr(os, "_exit", lambda code: exits.append(code))

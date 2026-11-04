@@ -3993,7 +3993,14 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
         # 칸 값·값 열 머리글·항목에 단위가 없으면 규격 단위로 추정하지 않음 (30이 mm인지 cm인지 모름)
         out.update(verdict="판단필요", reason=f"칸 단위 없음 (규격은 {c['unit']}): 값 열 머리글에 단위를 적으세요 (예: 값({c['unit']}))")
         return out
-    ok_ = reader.cond_holds(c, qty[0] * cell_unit[1])
+    v = qty[0] * cell_unit[1]
+    ok_ = reader.cond_holds(c, v)
+    alt = [a for a in c.get("alt") or [] if reader.cond_holds(a, v)]
+    if not ok_ and alt:
+        # 기준 값과 다르지만 같은 문장의 같은 단위 범위 안: 그 범위가 이 항목의 허용 범위일 수 있어 단정하지 않음
+        out.update(verdict="판단필요", reason=f"기준 값 {out['condition']}와 다르지만 같은 문장의 범위 {reader.cond_text(alt[0])} 안",
+                   condition=f"{out['condition']}, {reader.cond_text(alt[0])}")
+        return out
     out.update(verdict="일치" if ok_ else "불일치", reason=out["condition"])
     return out
 

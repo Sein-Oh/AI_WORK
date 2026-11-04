@@ -1870,7 +1870,7 @@ def test_write_cells_file_third_column_stops_before_writing(xl, capsys, tmp_path
     code, out = run_excel(capsys, "write", "--cells", str(f))
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
     assert "3번째 줄" in out["message"] and "큰따옴표" in out["message"]
-    assert '[추천] C7,"1,500"' in out["message"]
+    assert '고친 줄: 3번째 줄 C7,"1,500"' in out["message"] and "[추천]" not in out["message"]   # 인자 값으로 읽히지 않게
     assert ws_of(wb).values == {} and undo_points() == []
     assert "1,500" not in _tool_log_text()                               # 고친 줄(값)은 로그에 남기지 않음
     f.write_text("칸,값\nC6,ft\nC7,\"1,500\"\nC8,x,\n", encoding="utf-8")   # 따옴표로 감싸거나 뒤 빈 칸은 그대로

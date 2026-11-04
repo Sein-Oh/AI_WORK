@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.64"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.65"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1068,10 +1068,8 @@ def check_two_columns(path: str, rows: Sequence[Sequence[Any]], start: int, what
         csv.writer(buf, delimiter=delim, quoting=csv.QUOTE_MINIMAL, lineterminator="").writerow([vals[0], delim.join(vals[1:])])
         return buf.getvalue()
     hint = f" 값에 {shown}가 있으면 값을 큰따옴표로 감싸세요. 그 줄을 고쳐 파일을 저장한 뒤 다시 실행하세요."
-    if len(bad) == 1:
-        tail = f" [추천] {fixed(bad[0][1])}"
-    else:
-        tail = " 고친 줄: " + " / ".join(f"{n}번째 줄 {fixed(r)}" for n, r in bad[:5])
+    # [추천]은 쓰지 않음: '[추천] C7,"1,500"'을 경량 LLM이 인자 값으로 읽어 명령에 넣었음 (고친 줄은 파일 내용)
+    tail = " 고친 줄: " + " / ".join(f"{n}번째 줄 {fixed(r)}" for n, r in bad[:5])
     raise InputError(head + hint + tail, log_message=head + hint + f" (고친 줄 {DOC_OMITTED})")
 
 

@@ -2403,6 +2403,14 @@ def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
     assert out["count"] == 0 and out["match_mode"] == "exact" and "recovered" not in out
 
 
+def test_search_widened_directive_keeps_notes(tmp_path, capsys):
+    # 회귀: 넓혀 찾은 결과의 directive가 indexed_now·stale·clamp·text_cut 안내를 덮어씀
+    p = _recall_file(tmp_path)
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
+    assert out["match_mode"] != "exact" and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert "indexed_now" in out["agent_directive"] and "다시 실행하지 마세요" in out["agent_directive"]
+
+
 @pytest.mark.parametrize("query,word", [("전압", "전류"), ("전류", "전력"), ("최대", "최소"), ("상한", "하한"),
                                         ("대기 전류", "대기 전력"), ("최대 전류", "최소 전류"), ("정격 전압", "정격 전류"),
                                         ("상한 온도", "하한 온도")])
@@ -2684,10 +2692,25 @@ def test_spec_conditions_do_not_mix_items(text, expected):
     ("두께는 5 mm 이상이어야 한다. 폭은 100 mm 이하.", "두께", ["5 mm 이상"]),
     ("대기 전력은 0.5 W 이하, 1 W 이하(시험 모드)로 한다.", "대기 전력", ["0.5 W 이하", "1 W 이하"]),
     ("소비 전류는 최대 3 A, 최소 1 A로 한다.", "소비 전류", ["1~3 A"]),      # 최대·최소는 새 항목이 아님
+    # 허용·변동 범위로 시작하는 절은 새 항목이 아니라 앞 항목의 한계 (1.4.64 회귀: 기준 값 '5 V'만 남아 5.1 V가 불일치)
+    ("정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다.", "정격 전압", ["4.75~5.25 V"]),
+    ("정격 전압 5 V, 허용 범위 4.75~5.25 V", "정격 전압", ["4.75~5.25 V"]),
+    ("정격 전압은 5 V로 하고, 허용 범위는 4.75~5.25 V로 한다.", "정격 전압", ["4.75~5.25 V"]),
+    ("출력 전압은 12 V이며, 변동 범위는 11.5 V 이상 12.5 V 이하", "출력 전압", ["11.5~12.5 V"]),
+    ("회전수 1,500 rpm, 허용 범위 1,400 rpm 이상", "회전수", ["1400 rpm 이상"]),
+    ("정격 전압: 5 V (허용 범위: 4.75 V ~ 5.25 V)", "정격 전압", ["4.75~5.25 V"]),
 ])
 def test_near_conditions_stop_at_next_item(text, term, expected):
     cs, _ = reader.near_conditions(text, [term])
     assert [reader.cond_text(c) for c in cs] == expected
+
+
+def test_near_conditions_plain_with_later_range_is_marked():
+    # 안전장치: 잘라 낸 쪽에 기준 값만 남고 같은 문장 뒤에 같은 단위의 범위가 그 값을 품으면 alt로 표시 (불일치 단정 금지)
+    cs, _ = reader.near_conditions("외경 3 mm, 폭 2~5 mm로 한다.", ["외경"])
+    assert [reader.cond_text(c) for c in cs] == ["3 mm"] and [reader.cond_text(a) for a in cs[0]["alt"]] == ["2~5 mm"]
+    cs, _ = reader.near_conditions("외경 3 mm, 폭 5 mm 이하로 한다.", ["외경"])       # 한쪽 한계는 다른 항목으로 봄
+    assert "alt" not in cs[0]
 
 
 def test_cond_holds_bounds():
@@ -2843,9 +2866,24 @@ def test_search_section_number_excludes_2_10(tmp_path, capsys):
     ("5,000", "5000 rpm", True), ("5000", "5,000 rpm", True), ("0.5", "0.50 mm", True), ("0.50", "0.5 mm", True),
     ("0.5", "10.5 mm", False), ("0.5", "0.55 mm", False), ("1.2", "11.2", False), ("1.2", "3.1.2절", False),
     ("1.2", "12", False), ("5,000", "15,000", False),
+    # 소수 한 자리 맨 숫자는 장절 번호 경계, 끝 0은 단위가 붙을 때만 (1.4.65)
+    ("2.1", "2.10 전압", False), ("2.1", "2.1.3 세부", True), ("2.1", "12.1 전압", False), ("0.5", "0.50 이다", False),
+    ("3.14", "3.140 이다", True), ("2.1 전압", "2.10 전압", False), ("1.5 mm", "1.50 mm", True), ("1.5", "1.50 mm", True),
 ])
 def test_number_only_query_normalized(query, text, want):
     assert (reader.build_matcher(query, False)(text) is not None) is want
+
+
+@pytest.mark.parametrize("query,text,want", [
+    ("케이블로", "케이블 연결", True),          # ㄹ 받침 뒤 '로'는 조사
+    ("서버로", "서버 설정", True),              # 받침 없는 글자 뒤 '로': 원래 낱말과 뗀 낱말 둘 다
+    ("서버로", "서버로 전송", True),
+    ("보호회로", "보호회로 시험", True),        # 낱말 끝 '로'도 그대로 맞음
+    ("보호회로 시험", "보호회로의 시험", True),
+])
+def test_particle_ro(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want
+    assert reader.strip_particles("케이블로 보호회로") == "케이블 보호회로"
 
 
 def test_word_final_syllable_is_not_particle():

@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -285,7 +286,9 @@ def cmd_list(args) -> Dict[str, Any]:
     items.Sort("[ReceivedTime]", True)                 # 거른 뒤 정렬해야 순서가 보장됨
     warnings: List[str] = []
     mails = _collect(items, _check_limit(args.limit, warnings), since=start)
-    remember_listing(mails, "list")                    # 짧은 번호 1, 2, 3 ... (--id 3)
+    id_warn = remember_listing(mails, "list")          # 짧은 번호 (이어서 늘어남, --id 3)
+    if id_warn:
+        warnings.append(id_warn)
     extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
     what = "안 읽은 메일" if args.unread else "메일"
     when = ""
@@ -368,7 +371,9 @@ def cmd_search(args) -> Dict[str, Any]:
     items.Sort("[ReceivedTime]", True)
     warnings: List[str] = []
     mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where), since=start)
-    remember_listing(mails, "search")
+    id_warn = remember_listing(mails, "search")
+    if id_warn:
+        warnings.append(id_warn)
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'",
                                   period and f"받은 날짜 {_period_text(period)}") if x)
     result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails), "count": len(mails)}
@@ -933,26 +938,119 @@ def cmd_forward(args) -> Dict[str, Any]:
 # 짧은 번호 (list/search/thread 결과의 id): 목록마다 1부터 다시 매기지 않고 계속 늘어나는 번호를 줍니다.
 # 번호 -> EntryID·제목·보낸사람을 최근 ID_KEEP개(ID_KEEP_DAYS일)까지 데이터 폴더에 기억해, 옛 목록의 번호도
 # 같은 메일을 가리키거나 '없는 번호' 오류가 됩니다 (다른 메일을 가리키지 않음. 긴 EntryID도 그대로 받음).
+# 번호는 줄어들지 않습니다: 다음 번호를 작은 파일(NEXT_FILE)에도 따로 두고 둘 중 큰 값을 쓰며, 1부터 다시 매기지 않습니다.
+# 기억 파일을 끝내 읽지 못하거나 깨졌으면 번호를 새로 매기지 않고 그 결과는 EntryID만 씁니다 (깨진 파일은 백업).
+# 불러오기~저장은 잠금 파일(LOCK_FILE)로 묶어 동시에 실행한 두 목록이 같은 번호를 받지 않게 합니다.
 # ------------------------------------------------------------------------------
 
 LISTING_FILE = "outlook_ids.json"
-SHORT_ID_MAX = 9999          # 짧은 번호 상한 (넘으면 1부터 다시, 이때 기억한 번호는 모두 버림 -> 옛 번호는 '없는 번호')
+NEXT_FILE = "outlook_ids.next"   # 다음 번호만 (기억 파일이 깨져도 번호가 줄지 않게)
+LOCK_FILE = "outlook_ids.lock"
 ID_KEEP = 500                # 기억하는 번호 수 (최근 것부터)
 ID_KEEP_DAYS = 7             # 이보다 오래 전에 받은 번호는 버림
+LOCK_WAIT = 5.0              # 잠금을 기다리는 시간 상한(초)
+LOCK_STALE = 30.0            # 이보다 오래된 잠금 파일은 끝나지 못한 실행이 남긴 것으로 보고 지움
+_SHORT_ID = re.compile(r"\d{1,9}")
+
+
+class _IdsUnreadable(Exception):
+    """기억 파일이 있는데 읽지 못함(잠김) 또는 깨짐. 번호를 새로 매기지 않음."""
 
 
 def _listing_path() -> str:
     return os.path.join(rt.get_data_dir(), LISTING_FILE)
 
 
-def _load_ids() -> Dict[str, Any]:
+def _side_path(name: str) -> str:
+    return os.path.join(rt.get_data_dir(), name)
+
+
+def _read_next_file() -> int:
     try:
-        data = json.loads(rt.read_text_file(_listing_path()))
-        if isinstance(data, dict) and isinstance(data.get("items"), dict):
-            return {"next": int(data.get("next") or 1), "items": data["items"]}
+        return max(1, int(rt.retry_fs(lambda: rt.read_text_file(_side_path(NEXT_FILE))).strip()))
     except Exception:
-        pass
-    return {"next": 1, "items": {}}
+        return 1
+
+
+def _load_ids() -> Dict[str, Any]:
+    """기억 파일 -> {"next", "items"}. 파일이 없으면 빈 목록(번호는 NEXT_FILE에서 이어서).
+    있는데 읽지 못하거나 깨졌으면 _IdsUnreadable (빈 목록으로 대신하지 않음: 번호가 1부터 다시 매겨짐)."""
+    path = _listing_path()
+    floor = _read_next_file()
+    try:
+        text = rt.retry_fs(lambda: rt.read_text_file(path))
+    except FileNotFoundError:
+        return {"next": floor, "items": {}}
+    except Exception as e:
+        raise _IdsUnreadable(f"읽지 못함 ({type(e).__name__})") from e
+    try:
+        data = json.loads(text)
+        items = data["items"]
+        if not isinstance(items, dict):
+            raise ValueError("items")
+        nxt = int(data.get("next") or 1)
+    except Exception as e:
+        raise _IdsUnreadable(f"깨짐 ({type(e).__name__})") from e
+    top = max((int(k) for k in items if str(k).isdigit()), default=0)
+    return {"next": max(nxt, floor, top + 1), "items": items}
+
+
+def _backup_broken(reason: str) -> None:
+    """깨진 기억 파일을 옆에 옮겨 두고(지우지 않음), 그 안에 보이는 가장 큰 번호로 NEXT_FILE을 올립니다.
+    읽지 못한 경우(잠김)는 건드리지 않습니다."""
+    if not reason.startswith("깨짐"):
+        return
+    path = _listing_path()
+    try:
+        with open(path, "rb") as f:
+            raw = f.read().decode("utf-8", "replace")
+        nums = [int(x) for x in re.findall(r'"next"\s*:\s*(\d{1,9})', raw)]
+        nums += [int(x) + 1 for x in re.findall(r'"(\d{1,9})"\s*:', raw)]
+        nxt = max([_read_next_file()] + nums)
+        rt.safe_write_text(_side_path(NEXT_FILE), str(nxt))
+        bak = os.path.join(rt.get_data_dir(), f"outlook_ids.broken_{rt.timestamp()}.json")
+        rt.retry_fs(lambda: os.replace(path, bak))
+        rt.log("WARN", f"메일 번호 기억 파일이 깨져 {os.path.basename(bak)}로 옮겼습니다. 다음 목록부터 {nxt}번부터 매깁니다.")
+    except Exception as e:
+        rt.log("WARN", f"깨진 메일 번호 기억 파일을 옮기지 못했습니다: {type(e).__name__}")
+
+
+class _IdsLock:
+    """outlook_ids.lock을 O_EXCL로 만들어 잡습니다. LOCK_WAIT초 안에 못 잡으면 acquired=False.
+    LOCK_STALE초보다 오래된 잠금은 끝나지 못한 실행이 남긴 것으로 보고 지웁니다."""
+
+    def __init__(self) -> None:
+        self.path = _side_path(LOCK_FILE)
+        self.acquired = False
+
+    def __enter__(self) -> "_IdsLock":
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        deadline = time.monotonic() + LOCK_WAIT
+        while True:
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                self.acquired = True
+                return self
+            except OSError:
+                try:
+                    if time.time() - os.path.getmtime(self.path) > LOCK_STALE:
+                        os.remove(self.path)
+                        rt.log("WARN", "오래된 메일 번호 잠금 파일을 지웠습니다.")
+                        continue
+                except OSError:
+                    pass
+            if time.monotonic() >= deadline:
+                return self
+            time.sleep(0.05)
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.acquired:
+            try:
+                rt.retry_fs(lambda: os.remove(self.path), attempts=3, delay=0.1)
+            except Exception:
+                pass
 
 
 def _prune_ids(items: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:
@@ -963,36 +1061,48 @@ def _prune_ids(items: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:
     return {k: kept[k] for k in order[-ID_KEEP:]}
 
 
-def remember_listing(mails: List[Dict[str, Any]], what: str) -> None:
+def remember_listing(mails: List[Dict[str, Any]], what: str) -> Optional[str]:
     """목록의 메일에 짧은 번호(id)를 붙이고 번호 -> EntryID를 기억합니다. 이미 번호가 있는 메일은 같은 번호를 씁니다.
-    저장하지 못하면 번호 없이 EntryID만 (경고)."""
-    now = _dt.datetime.now()
-    data = _load_ids()
-    items = _prune_ids(data["items"], now)
-    nxt = data["next"]
-    by_eid = {v.get("entry_id"): k for k, v in items.items()}
-    fresh = sum(1 for m in mails if m["entry_id"] not in by_eid)
-    if nxt + fresh - 1 > SHORT_ID_MAX:       # 상한: 1부터 다시. 옛 번호를 모두 버려 다른 메일을 가리키지 않게 함
-        items, by_eid, nxt = {}, {}, 1
-    stamp = now.isoformat(timespec="seconds")
-    numbers: List[int] = []
-    for m in mails:
-        key = by_eid.get(m["entry_id"])
-        if key is None:
-            key = str(nxt)
-            nxt += 1
-            by_eid[m["entry_id"]] = key
-        items[key] = {"entry_id": m["entry_id"], "subject": m.get("subject", ""), "from": m.get("from", ""),
-                      "received": m.get("received", ""), "t": stamp, "what": what[:60]}
-        numbers.append(int(key))
-    try:
-        rt.safe_write_text(_listing_path(), json.dumps({"next": nxt, "items": _prune_ids(items, now)}, ensure_ascii=False))
-        for n, m in zip(numbers, mails):
-            m["id"] = n
-    except Exception as e:
-        rt.log("WARN", f"목록 번호를 저장하지 못해 긴 id를 씁니다: {type(e).__name__}")
+    번호를 붙이지 못하면(잠금 시간 초과, 기억 파일을 읽지 못함·깨짐, 저장 실패) id = EntryID로 두고 경고 문구를 돌려줍니다."""
+    def long_ids(why: str) -> str:
+        msg = f"짧은 번호를 붙이지 못해 id에 긴 EntryID를 넣었습니다({why}). id를 글자 그대로 쓰세요."
+        rt.log("WARN", msg)
         for m in mails:
             m["id"] = m["entry_id"]
+        return msg
+    if not mails:
+        return None
+    with _IdsLock() as lock:
+        if not lock.acquired:
+            return long_ids("다른 실행이 번호 파일을 쓰는 중")
+        try:
+            data = _load_ids()
+        except _IdsUnreadable as e:
+            _backup_broken(str(e))
+            return long_ids(f"번호 기억 파일 {e}")
+        now = _dt.datetime.now()
+        items = _prune_ids(data["items"], now)
+        nxt = data["next"]
+        by_eid = {v.get("entry_id"): k for k, v in items.items()}
+        stamp = now.isoformat(timespec="seconds")
+        numbers: List[int] = []
+        for m in mails:
+            key = by_eid.get(m["entry_id"])
+            if key is None:
+                key = str(nxt)
+                nxt += 1
+                by_eid[m["entry_id"]] = key
+            items[key] = {"entry_id": m["entry_id"], "subject": m.get("subject", ""), "from": m.get("from", ""),
+                          "received": m.get("received", ""), "t": stamp, "what": what[:60]}
+            numbers.append(int(key))
+        try:
+            rt.safe_write_text(_side_path(NEXT_FILE), str(nxt))       # 다음 번호 먼저 (기억 파일이 깨져도 줄지 않게)
+            rt.safe_write_text(_listing_path(), json.dumps({"next": nxt, "items": _prune_ids(items, now)}, ensure_ascii=False))
+        except Exception as e:
+            return long_ids(f"저장 실패 {type(e).__name__}")
+    for n, m in zip(numbers, mails):
+        m["id"] = n
+    return None
 
 
 def _relist_commands() -> List[Dict[str, str]]:
@@ -1004,12 +1114,16 @@ RELIST_DIRECTIVE = ("같은 id로 재시도하지 마세요. next_commands[0]으
 
 
 def entry_id(raw: Any) -> str:
-    """--id 값 -> EntryID. 짧은 번호(1~9999)는 기억한 목록에서 찾고, 그 밖은 EntryID 그대로."""
+    """--id 값 -> EntryID. 짧은 번호(숫자 9자리까지)는 기억한 목록에서 찾고, 그 밖은 EntryID 그대로."""
     text = str(raw or "").strip()
-    if not re.fullmatch(r"\d{1,4}", text):
+    if not _SHORT_ID.fullmatch(text):
         return text
     n = int(text)
-    items = _prune_ids(_load_ids()["items"], _dt.datetime.now())
+    try:
+        items = _prune_ids(_load_ids()["items"], _dt.datetime.now())
+    except _IdsUnreadable as e:
+        raise rt.InputError(f"--id {n}: 메일 번호 기억 파일을 쓸 수 없습니다({e}). 목록을 다시 보세요. 새 목록의 id를 그대로 쓰세요.",
+                            directive=RELIST_DIRECTIVE, fields={"next_commands": _relist_commands()})
     if not items:
         raise rt.InputError(f"--id {n}은(는) 목록 번호인데 기억한 메일 목록이 없습니다. outlook.py list나 search를 먼저 실행하고 "
                             "그 결과의 id를 쓰세요.", directive=RELIST_DIRECTIVE, fields={"next_commands": _relist_commands()})
@@ -1168,8 +1282,10 @@ def cmd_thread(args) -> Dict[str, Any]:
         body, cut = rt.clamp_text(_text(getattr(m, "Body", "")).replace("\r\n", "\n").strip(), THREAD_BODY_CHARS)
         s.update(body=body, body_truncated=cut)
         out.append(s)
-    remember_listing(out, f"thread {topic[:40]}")
+    id_warn = remember_listing(out, f"thread {topic[:40]}")
     fields = {"topic": topic, "mails": out, "count": len(uniq), "shown": len(out), "truncated": len(uniq) > len(out)}
+    if id_warn:
+        fields["warnings"] = [id_warn]
     if len(out) > 0:
         fields["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", str(out[-1]["id"])], "가장 최근 메일 본문 전체 읽기")]
     if limited:

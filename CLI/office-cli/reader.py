@@ -2539,13 +2539,19 @@ _SEP = r"[\W_]*"          # 글자 사이에 끼어도 되는 것: 띄어쓰기,
 
 # 검색어 낱말 끝의 조사·어미: 떼고 찾음 (글에서는 낱말 뒤에 무엇이 와도 맞음). 긴 것부터.
 # 떼고 남는 글이 2자 이상일 때만 ('높이', '단가', '회의'는 그대로). '도'·'만'은 낱말 끝 글자인 경우가 많아('정확도') 떼지 않음.
-# '로'는 낱말 끝 글자인 경우가 많아('회로', '경로') 떼지 않음('으로'는 뗌).
+# '로'는 ㄹ 받침 뒤에서만 뗌('케이블로' -> '케이블'). 받침 없는 글자 뒤의 '로'는 낱말 끝 글자인 경우가 많아('보호회로', '도로')
+# 떼지 않고, 검색 정규식에서 원래 낱말과 뗀 낱말을 둘 다 찾음(_open_ro). '으로'는 뗌.
 _PARTICLES = ("에서의", "에서는", "으로는", "으로서", "으로써", "이어야", "에서", "으로", "에는", "에게", "까지", "부터",
-              "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "및")
+              "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "및", "로")
 # 받침에 따라 붙는 조사: 앞 글자의 받침이 맞을 때만 뗌 ('와이파이', '역효과'의 끝 글자는 조사가 아님)
 _AFTER_FINAL = {"이", "은", "을", "과", "이며", "이고", "이다", "이어야", "과의"}       # 받침 있는 글자 뒤
 _AFTER_OPEN = {"가", "는", "를", "와", "와의"}                                      # 받침 없는 글자 뒤
 _HANGUL = re.compile(r"[\uac00-\ud7a3]")
+_RIEUL = 8                                     # 종성 번호 ㄹ
+
+
+def _final(ch: str) -> int:
+    return (ord(ch) - 0xAC00) % 28
 
 
 def _has_final(ch: str) -> bool:
@@ -2561,8 +2567,15 @@ def _strip_word(word: str) -> str:
             before = word[len(word) - len(p) - 1]
             if (p in _AFTER_FINAL and not _has_final(before)) or (p in _AFTER_OPEN and _has_final(before)):
                 continue
+            if p == "로" and _final(before) != _RIEUL:
+                continue                       # 받침 없는 글자 뒤 '로'는 낱말 끝일 수 있음 ('보호회로')
             return word[: -len(p)]
     return word
+
+
+def _open_ro(word: str) -> bool:
+    """받침 없는 글자 뒤 '로'로 끝나는 낱말(3자 이상): 조사('서버로')인지 낱말 끝('보호회로')인지 사전 없이 알 수 없음."""
+    return len(word) >= 3 and word.endswith("로") and bool(_HANGUL.match(word[-2])) and not _has_final(word[-2])
 
 
 def strip_particles(term: str) -> str:
@@ -2581,11 +2594,16 @@ _NUM_TOKEN = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|[^\W\d_]|\S
 
 
 def _number(tok: str) -> str:
-    """숫자 하나: 천 단위 쉼표 무시(5000 = 5,000), 정수와 .0은 같음(5 = 5.0 = 5.00)."""
+    """숫자 하나: 천 단위 쉼표 무시(5000 = 5,000), 정수와 .0은 같음(5 = 5.0 = 5.00).
+    소수 끝 0: 소수 둘째 자리 이상(3.14 = 3.140)은 늘 무시, 소수 한 자리(2.1)는 글에서 단위가 붙을 때만
+    (0.5 = '0.50 mm'이지만 2.1 != '2.10 전압': 장절 번호 2.10은 2.1과 다름)."""
     whole, _, frac = tok.replace(",", "").partition(".")
     body = ",?".join(_char(d) for d in whole) if len(whole) > 3 else "".join(_char(d) for d in whole)
-    if frac.strip("0"):
-        return body + r"\." + "".join(_char(d) for d in frac.rstrip("0")) + "0*"
+    sig = frac.rstrip("0")
+    if len(sig) >= 2:
+        return body + r"\." + "".join(_char(d) for d in sig) + "0*"
+    if sig:
+        return body + r"\." + _char(sig) + rf"(?:0+(?=\s*[(\[]?\s*(?:{_UNIT_RE}|\u2103)))?"
     return body + r"(?:\.0+)?"
 
 
@@ -2601,7 +2619,9 @@ def _single_pattern(term: str) -> str:
     core = re.sub(r"[\W_]+", "", compact)
     if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+", compact):
         # 숫자 하나: 천 단위 쉼표·소수 끝 0과 무관 ('5,000' = '5000', '0.5' = '0.50'), 숫자 경계는 지킴 ('0.5'는 '10.5'와 다름)
-        return r"(?<![\d.])" + _number(compact) + r"(?![.,]?\d)"
+        # 소수 한 자리 맨 숫자('2.1')는 장절 번호 경계(section_matches와 같음): '2.1.3'(하위 절)은 맞고 '2.10', '12.1'은 아님
+        tail = r"(?!,?\d)" if re.fullmatch(r"\d+\.\d", compact) else r"(?![.,]?\d)"
+        return r"(?<![\d.])" + _number(compact) + tail
     if not core or (core.isdigit() and core != compact):
         chars = compact or t
         body = r"\s*".join(_char(c) for c in chars)      # 기호까지 그대로 ('1.2'는 '12'와 다름)
@@ -2611,8 +2631,8 @@ def _single_pattern(term: str) -> str:
             body += r"(?!\d)"
         return body
     # 낱말마다 글자 사이에 기호·띄어쓰기를 허용하고, 한글로 끝나는 낱말 뒤에는 글의 조사를 허용 ('절연저항이 100MΩ' = '절연 저항은 100 MΩ')
-    words = [[x for x in _NUM_TOKEN.findall(w) if re.match(r"[^\W_]", x)] for w in t.split()]
-    words = [w for w in words if w]
+    raw_words = [w for w in t.split() if any(re.match(r"[^\W_]", x) for x in _NUM_TOKEN.findall(w))]
+    words = [[x for x in _NUM_TOKEN.findall(w) if re.match(r"[^\W_]", x)] for w in raw_words]
     toks = [x for w in words for x in w]
     particle = "(?:" + "|".join(_PARTICLES) + ")?"
     pieces: List[str] = []
@@ -2628,6 +2648,8 @@ def _single_pattern(term: str) -> str:
                 parts.append(_char(tok))
             prev = tok
         piece = _SEP.join(parts)
+        if _open_ro(raw_words[wi]) and len(parts) >= 3:
+            piece = f"(?:{piece}|{_SEP.join(parts[:-1])})"            # '서버로' = '서버로' 또는 '서버'
         if wi < len(words) - 1 and _HANGUL.match(w[-1]):
             piece += particle
         pieces.append(piece)
@@ -3198,7 +3220,10 @@ def cmd_search(args) -> Dict[str, Any]:
                                    + (["검색하지 못한 부분이 있음: " + "; ".join(gaps)] if gaps else []), **result)
         payload["agent_directive"] = (f"UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 {total}건(match_mode {mode}: {what}) - "
                                       "candidates를 근거로 쓰지 말고, 사용자에게 '정확히 일치한 곳은 없고 비슷한 곳이 있다'고 알린 뒤 "
-                                      "맞는지 확인을 받으세요. 같은 검색을 다시 실행하지 마세요.")
+                                      "맞는지 확인을 받으세요."
+                                      # stale 안내(index --all 뒤 1번 다시 검색)와 부딪히지 않게 그때는 '다시 실행 금지'를 빼고 안내를 따름
+                                      + ("" if info["stale"] and not args.file else " 같은 검색을 다시 실행하지 마세요.")
+                                      + notes)                # stale·indexed_now·clamp·text_cut 안내를 지우지 않음
         return payload
     preview = f"'{args.query}': {scope}에서 {total}건 일치" + (f" (상위 {len(shown)}건 표시)" if total > len(shown) else "")
     evid = " 각 결과의 근거는 evidence(파일 p.N, 장절 (번호))를 그대로 알리세요. page가 null이면 장절과 번호로 알립니다."
@@ -3605,13 +3630,18 @@ def _cond(kind: str, m: "re.Match[str]") -> Optional[Dict[str, Any]]:
 
 
 # 조건 사이를 잇는 말 (이것만 있으면 같은 항목): '5 mm 이상이며 10 mm 이하', '5 mm 이상, 10 mm 이하'
-_COND_JOIN = re.compile(r"이고|이며|이면서|이되|및|그리고|또한|and|or|또는|[\s,;:()\[\]~-]", re.IGNORECASE)
+_COND_JOIN = re.compile(r"(?:으로|로)\s*(?:하고|하며|하되)|이고|이며|이면서|이되|및|그리고|또한|and|or|또는|[\s,;:()\[\]~-]", re.IGNORECASE)
+# 앞 항목의 한계를 말하는 낱말 (새 항목이 아님): '정격 전압 5 V, 허용 범위 4.75~5.25 V', '변동 범위는 ...'
+# '허용 전류 10 A 이하'처럼 허용·변동 뒤에 다른 낱말이 오면 새 항목
+_LIMIT_WORD = (r"(?:(?:허용|변동|사용|동작)\s*)?(?:범위|공차|오차|편차)|허용\s*(?:차|치|값)|변동\s*폭"
+               r"|(?:허용|변동)(?!\s*[가-힣A-Za-z])|tolerance|range|deviation")
+_LIMIT_PHRASE = re.compile(rf"(?:{_LIMIT_WORD})\s*(?:은|는|이|가|의|을|를|에서|내)?", re.IGNORECASE)
 
 
 def _other_item_between(t: str, a: int, b: int) -> bool:
     """t[a:b](두 조건 사이)에 다른 항목 낱말이 있는지: 잇는 말과 문장 부호를 빼고 글자가 남으면 있음
     ('5 mm 이상, 길이 100 mm 이하'의 '길이')."""
-    gap = _COND_JOIN.sub("", t[min(a, b):max(a, b)])
+    gap = _COND_JOIN.sub("", _LIMIT_PHRASE.sub(" ", t[min(a, b):max(a, b)]))
     return bool(re.search(r"[가-힣A-Za-z]", gap))
 
 
@@ -3691,6 +3721,7 @@ def cond_holds(c: Dict[str, Any], v: float) -> bool:
 _NEXT_ITEM = re.compile(
     r"(?:[,;]|\s(?:이며|이고|이면서|및|그리고|또한)|(?<=[가-힣])(?:이며|이고|이면서))\s*"
     r"(?!(?:최대|최소|약|max|min|단|또는|or|and)\b)(?!(?:최대|최소|약)\s)"
+    rf"(?!(?:{_LIMIT_WORD}))"
     r"[가-힣A-Za-z][가-힣A-Za-z0-9 ]{0,30}?(?:은|는|이|가|을|를|의|:)?\s*(?=[+-]?\d|최대|최소|max|min|≤|≥|<|>)",
     re.IGNORECASE)
 _CLAUSE_END = re.compile(r"[,;]|\s(?:이며|이고|및|그리고)\s|(?<=[가-힣])(?:이며|이고)\s")
@@ -3709,6 +3740,15 @@ def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], 
         window = sent[start:start + 200]
         nxt = _NEXT_ITEM.search(window, end_term - start)
         after = spec_conditions(window[:nxt.start()] if nxt else window)
+        if nxt and after and all(c["kind"] == "plain" for c in after):
+            # 안전장치: 잘라 낸 쪽에 기준 값만 남았는데 같은 문장 뒤쪽에 같은 단위의 범위(아래·위 한계 둘 다)가 있고
+            # 그 범위가 기준 값을 품으면 그 범위가 이 항목의 허용 범위일 수 있음 -> 기준 값만으로 불일치라 단정하지 않게 표시
+            rest = [c for c in spec_conditions(window[nxt.start():])
+                    if c["lo"] is not None and c["hi"] is not None and c["lo"] != c["hi"]]
+            for c in after:
+                alt = [r for r in rest if r["base"] == c["base"] and cond_holds(r, c["lo"])]
+                if alt:
+                    c["alt"] = alt
         if not after:
             cuts = [m.end() for m in _CLAUSE_END.finditer(sent[:start])]
             after = spec_conditions(sent[cuts[-1] if cuts else 0:start])
