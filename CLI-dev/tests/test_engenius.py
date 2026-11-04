@@ -227,3 +227,17 @@ def test_wrapper_errors_are_one_json_line(unpacked, tmp_path, tool, args, needle
     code, res = run(unpacked, tool, args, tmp_path)
     assert code == 2 and res["status"] == "error" and res["agent_directive"].startswith("STOP_RETRY:")
     assert needle in res["message"], res
+
+
+def test_agent_xml_is_current_and_well_formed():
+    import xml.etree.ElementTree as ET
+    with open(build.AGENT_XML, encoding="utf-8") as f:
+        text = f.read()
+    assert text == build.agent_xml(), "docs/engenius 에이전트 XML이 최신이 아닙니다: python CLI-dev/engenius/build.py"
+    root = ET.fromstring(text.encode("utf-8"))
+    assert root.tag == "EnGeniusAgent" and root.get("format") == "1"
+    assert root.findtext("Name") == build.AGENT_NAME and len(root.findtext("Prompt")) <= 8000   # 역할 프롬프트 상한
+    assert root.find("Servers") is not None and len(root.find("Servers")) == 0               # 내장 도구 서버 없음
+    assert [t.get("name") for t in root.find("Tools")] == ["run_skill_script"]               # 빈 Tools는 400
+    assert root.find("Skill") is None and root.find("Provider") is None
+    text.encode("cp949")

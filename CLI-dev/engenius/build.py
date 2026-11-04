@@ -1,4 +1,4 @@
-r"""En-Genius 스킬 가져오기용 zip(docs/engenius/<tool>.zip)을 만듭니다.
+r"""En-Genius 스킬 가져오기용 zip(docs/engenius/<tool>.zip)과 에이전트 XML(docs/engenius/오피스ML.xml)을 만듭니다.
 
 zip 구성: <tool>/SKILL.md (En-Genius용으로 바꾼 지시문) + <tool>/run.py (CLI-dev/engenius/<tool>/run.py, 도구마다 따로).
 도구 코드는 넣지 않는다: run.py가 사용자 PC의 C:\CLI\<tool>을 실행한다 (OpenCode와 같은 폴더). run.py의 SKILL_HASH에
@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import zipfile
+from xml.sax.saxutils import escape
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -148,6 +149,30 @@ def zip_bytes(tool):
     return buf.getvalue()
 
 
+AGENT_NAME = "오피스ML"
+AGENT_XML = os.path.join(OUT, f"{AGENT_NAME}.xml")
+AGENT_DESC = "office-cli, ml-kit 스킬로 Excel/Word/PPT/Outlook 작업과 표 데이터 예측 모델 작업을 하는 도우미 (사용자 PC에서 실행)"
+
+
+def agent_xml():
+    """En-Genius 에이전트 XML(format 1, docs/agent-xml.md): 이름, 설명, 역할 프롬프트(에이전트_프롬프트.md), 도구 제한.
+    도구 서버는 고르지 않고(빈 Servers = 내장 Office·Outlook 도구 없음), 도구 제한은 run_skill_script 하나.
+    스킬은 넣지 않는다: XML의 Skill은 지시문 사본만이라 run.py가 빠진다 -> zip으로 가져온 스킬을 설정 창에서 붙인다.
+    LLM(Provider)도 넣지 않는다: 회사마다 이름이 달라 가져온 뒤 설정 창에서 고른다."""
+    with open(os.path.join(OUT, "에이전트_프롬프트.md"), encoding="utf-8") as f:
+        prompt = f.read().split("\n", 2)[2].strip()        # 첫 줄(붙여 넣기 안내 제목)과 빈 줄을 뺀 본문
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<EnGeniusAgent format="1" exported-at="2026-11-04T00:00:00+09:00">\n'
+            f"  <Name>{escape(AGENT_NAME)}</Name>\n"
+            f"  <Description>{escape(AGENT_DESC)}</Description>\n"
+            f"  <Prompt>{escape(prompt)}</Prompt>\n"
+            "  <Servers/>\n"
+            "  <Tools>\n"
+            '    <Tool name="run_skill_script"/>\n'
+            "  </Tools>\n"
+            "</EnGeniusAgent>\n")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     for tool in TOOLS:
@@ -156,6 +181,9 @@ def main():
         with open(path, "wb") as f:
             f.write(data)
         print(f"[INFO] {path} ({len(data):,} bytes)", file=sys.stderr)
+    with open(AGENT_XML, "w", encoding="utf-8", newline="\n") as f:
+        f.write(agent_xml())
+    print(f"[INFO] {AGENT_XML}", file=sys.stderr)
 
 
 if __name__ == "__main__":
