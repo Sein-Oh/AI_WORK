@@ -3279,7 +3279,7 @@ def cmd_clear(args) -> Dict[str, Any]:
 # 8-1. 규격 대조 도우미 (excel.py check가 씀): 항목 찾기, 규격 글의 수치 조건, 값 판정
 # ==============================================================================
 
-# 단위: 쓴 글자 -> (기준 단위, 배율). NFKC 뒤의 글자로 적음 (℃ -> °C, Ω는 그대로, µ -> μ)
+# 단위: 쓴 글자 -> (기준 단위, 배율). NFKC 뒤의 글자로 적음 (℃ -> °C, Ω는 그대로, 마이크로 기호(U+00B5) -> μ)
 _UNIT_TABLE: Dict[str, Tuple[str, float]] = {}
 for _base, _units in {
     "V": {"μV": 1e-6, "uV": 1e-6, "mV": 1e-3, "V": 1, "kV": 1e3, "MV": 1e6},
@@ -3337,7 +3337,7 @@ _COND_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [(k, re.compile(p, re.IGNO
     ("tol", rf"\(\s*(?P<a>{_NUM_RE})\s*(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%)?\s*\)\s*(?P<ua>{_UNIT_RE})"),
     ("between", rf"(?:between|from)\s+{_q('a', 'ua')}{_AD}\s*(?:and|to|~)\s*{_q('b', 'ub')}"),
     ("tol", rf"{_q('a', 'ua')}{_AD}\s*\(?\s*(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%|{_UNIT_RE})?\s*\)?"),
-    ("range", rf"{_q('a', 'ua')}{_AD}\s*(?:~|∼|〜|～|–|—|to|에서|부터)\s*{_q('b', 'ub')}(?:\s*(?:까지|사이))?"),
+    ("range", rf"{_q('a', 'ua')}{_AD}\s*(?:~|\u223c|\u301c|\uff5e|\u2013|\u2014|to|에서|부터)\s*{_q('b', 'ub')}(?:\s*(?:까지|사이))?"),
     ("range", rf"(?<![\w.-]){_q('a', 'ua')}\s*-\s*{_q('b', 'ub')}"),
     ("upper", rf"(?:최대|max(?:imum)?\.?|≤|<=|=<|not\s+(?:more|greater)\s+than|no\s+more\s+than|not\s+exceed(?:ing)?|"
               rf"up\s+to|less\s+than\s+or\s+equal\s+to|at\s+most)\s*[:=]?\s*{_q('a', 'ua')}"),
@@ -3359,7 +3359,7 @@ def _num(text: str) -> float:
 
 def unit_of(text: Any) -> Optional[Tuple[str, float, str]]:
     """'mA', '전류(mA)', '[V]', '5 V'의 단위 -> (기준 단위, 배율, 쓴 글자). 모르면 None."""
-    t = unicodedata.normalize("NFKC", str(text or "")).replace("µ", "μ")
+    t = unicodedata.normalize("NFKC", str(text or "")).replace("\u00b5", "μ")
     m = re.search(rf"[\(\[]\s*({_UNIT_ALT})\s*[\)\]]", t)
     if not m:
         m = re.search(rf"(?:^|[\s\d])({_UNIT_RE})\s*$", t.strip())
@@ -3375,7 +3375,7 @@ def quantity_of(value: Any) -> Optional[Tuple[float, Optional[Tuple[str, float, 
         return None
     if isinstance(value, (int, float)):
         return float(value), None
-    t = unicodedata.normalize("NFKC", str(value)).replace("µ", "μ").strip()
+    t = unicodedata.normalize("NFKC", str(value)).replace("\u00b5", "μ").strip()
     m = re.fullmatch(rf"({_NUM_RE})\s*({_UNIT_RE})?\s*", t)
     if not m:
         return None
@@ -3431,7 +3431,7 @@ def _cond(kind: str, m: "re.Match[str]") -> Optional[Dict[str, Any]]:
 def spec_conditions(text: str) -> List[Dict[str, Any]]:
     """규격 글의 수치 조건 목록 (글 순서). 단위가 있는 수치만 (규격 번호 'KS C 1234', 장절 '3.2'는 빼려고).
     '4.75 V 이상 5.25 V 이하'처럼 같은 단위의 아래·위 한계가 하나씩이면 범위 하나로 합칩니다."""
-    t = unicodedata.normalize("NFKC", text).replace("µ", "μ")
+    t = unicodedata.normalize("NFKC", text).replace("\u00b5", "μ")
     taken: List[Tuple[int, int]] = []
     found: List[Tuple[int, Dict[str, Any]]] = []
     for kind, pat in _COND_PATTERNS:
@@ -3577,7 +3577,7 @@ def _diff_groups(doc: Dict[str, Any], sec_key: str) -> Dict[str, List[Dict[str, 
 
 def _quantities(text: str) -> List[Tuple[float, str, str]]:
     """글의 숫자(단위 있으면 함께): [(기준 단위 값, 기준 단위, 쓴 글)]. 단위가 없는 숫자는 쓴 그대로 비교."""
-    t = unicodedata.normalize("NFKC", text).replace("µ", "μ")
+    t = unicodedata.normalize("NFKC", text).replace("\u00b5", "μ")
     out = []
     for m in re.finditer(rf"(?<![\w.])({_NUM_RE})\s*({_UNIT_RE})?", t):
         k = _unit_key(m.group(2))

@@ -254,7 +254,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 규격서: `--spec` 파일 또는 폴더. 등록되지 않았거나 바뀐 문서는 먼저 등록합니다(`reader.py search --file`과 같음, 오래 걸리면 R10 `CONTINUE:`).
   - 찾기: 항목 글로 `reader.py search`와 같은 규칙(띄어쓰기·조사·단위 표기 무시, 동의어 파일, 0건이면 partial -> fuzzy)으로 찾고 점수가 가장 높은 단위를 근거로 씁니다. 항목 끝의 `(V)`, `[mA]`는 검색어에서 빼고 단위로 씁니다.
   - 수치 조건: 근거 단위에서 찾은 낱말이 든 문장의 낱말 뒤 200자(없으면 문장 전체)에서 단위가 있는 수치만 읽습니다(규격 번호 `KS C 1234`, 장절 `3.2`는 빼려고).
-    `X ± d`(`±5%`, `(5±0.5) V`), `a ~ b`(`~ ～ – to 에서 까지`, `between a and b`, `from a to b`, `10-20 mA`), 위 한계(`이하 이내 max 최대 ≤ not exceed 넘지 않`, `미만 < less than`은 그 값 제외),
+    `X ± d`(`±5%`, `(5±0.5) V`), `a ~ b`(`~`, 전각 물결, 대시, `to`, `에서`, `까지`, `between a and b`, `from a to b`, `10-20 mA`), 위 한계(`이하 이내 max 최대 ≤ not exceed 넘지 않`, `미만 < less than`은 그 값 제외),
     아래 한계(`이상 min 최소 ≥ at least`, `초과 > more than`은 제외), 그냥 값(`DC 24 V`). `4.75 V 이상 5.25 V 이하`는 범위 하나로, 범위 안의 기준 값(`정격 5 V (4.75~5.25 V)`)은 빼고 범위로 봅니다.
     단위는 같은 종류면 접두어를 맞춥니다(mV, V, kV / mA, A / Ω, kΩ, MΩ / Hz / °C, ℃ / % / mm, m / ms, s, 분 / g, kg / N / Pa, MPa, bar / rpm / dB / F).
   - 판정(`verdict`): `일치` / `불일치` / `근거없음`(규격서에서 항목을 찾지 못함) / `판단필요`(찾기가 partial·fuzzy, 수치 후보가 둘 이상, 칸과 규격의 단위 종류가 다름,
