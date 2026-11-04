@@ -100,7 +100,8 @@
 - 프로젝트 마무리 때 `docs/test_logs/` 등 로그 이력 정리 (저장소를 다시 만드는 방식)
 - 도구 개발을 마친 뒤 다시 판단하기로 한 검토 (2026-11-01, 지금은 하지 않음):
   - MCP 전환: CLI 유지. 다시 본다면 CLI를 하위 프로세스로 부르는 얇은 MCP 층부터
-  - 전용 에이전트(직접 만든 도구 호출 루프): 회사 Gemma로 OpenCode와 같은 시나리오를 비교한 뒤 결정
+  - 전용 에이전트: 사내 에이전트 En-Genius에 스킬로 붙이기로 결정 (2026-11-04). 패키지와 순서는 `docs/engenius/README.md`
+    (zip 가져오기, 사용자 PC의 En-Genius® MCP가 `run.py`로 실행, 실기 확인 E1~E7). 모델 3종(Gemma4 26B, BEAM 1.0, Nemotron 3 Ultra) 비교 예정
   - ml-kit 웹 서버: 동료 수요(예측이면 성능예측표로 충분)와 IT 정책·문서 보안 확인 후
   - `opencode run "<요청>"`으로 Gemma 종합 테스트 자동화: 회사 PC OpenCode(Desktop)에서 `opencode --version`, `opencode run "안녕"`이 되는지 먼저 확인
 
