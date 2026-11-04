@@ -219,6 +219,59 @@ def test_tab_line_list_with_three_decimals_refused(tmp_path):
         mp.load_data_file(write_csv(tmp_path / "d1.csv", rows, sep="\t"))
 
 
+# ---- 소수점 쉼표 판단은 열마다 (9차 점검 CSV-4, 2.9.43) -------------------------------------------------------------
+# 글자 열의 '1,2'(라인 목록)는 숫자가 아니므로 다른 열의 천 단위 '1,000'이나 점 숫자 '2.125'를 거부할 근거가 아니다.
+# 점 소수('61.5')가 있는 파일은 '.'이 소수점이라 쉼표 칸을 소수점으로 읽지 않는다.
+
+
+def _line_rows(lines, extra):
+    rows = [["라인", "유량", "두께", "수율"]]
+    for i in range(30):
+        rows.append([lines[i % len(lines)], f"{1 + i % 3},{100 + 10 * i:03d}", ["2.125", "1.375", "1.500"][i % 3], extra(i)])
+    return rows
+
+
+def test_text_line_list_column_is_no_decimal_comma(tmp_path):
+    rows = _line_rows(["1,2", "A", "1,2,3", "B", "전체"], lambda i: 80 + i % 7)
+    df = mp.load_data_file(write_csv(tmp_path / "t1.csv", rows, sep="\t"))     # 2.9.42: STOP_RETRY ('1,100')
+    assert df["라인"].tolist()[:3] == ["1,2", "A", "1,2,3"]
+    assert _num(df, "유량")[:2] == [1100.0, 2110.0] and _num(df, "두께")[:2] == [2.125, 1.375]
+    assert not any("소수점" in w for w in mp.layout_warnings(df))
+
+
+def test_dot_decimal_file_reads_thousands_and_dots(tmp_path):
+    rows = _line_rows(["1,2", "3,4", "1"], lambda i: f"{80 + i % 7}.5")          # '1,2' looks numeric, '81.5' decides
+    path = write_csv(tmp_path / "t2.csv", rows, sep="\t")
+    df = mp.load_data_file(path)                                                  # 2.9.42: STOP_RETRY
+    assert df["라인"].tolist()[:3] == ["1,2", "3,4", "1"]
+    assert _num(df, "유량")[:2] == [1100.0, 2110.0] and _num(df, "두께")[:2] == [2.125, 1.375]
+    assert _num(df, "수율")[:2] == [80.5, 81.5]
+    # the '1,2' column itself is still asked about (numbers or codes?), the other columns are no longer refused
+    proc, res = run_raw("ml_train.py", "-f", path, "-x", "라인,유량,두께", "-y", "수율", "--seed", "1")
+    assert "'라인'" in stop_msg(res, proc) and '--dtypes "라인:str"' in res["message"]
+    proc, res = run_raw("ml_train.py", "-f", path, "-x", "라인,유량,두께", "-y", "수율", "--seed", "1",
+                        "--dtypes", "라인:str")
+    res = ok_res(res, proc)
+    assert "라인" in res["feature_types"]["categorical"], res["feature_types"]
+    proc, res = run_raw("ml_train.py", "-f", path, "-x", "유량,두께", "-y", "수율", "--seed", "1")
+    ok_res(res, proc)
+
+
+def test_decimal_comma_file_without_dot_evidence_still_refused(tmp_path):
+    rows = _line_rows(["1,2", "3,4", "1"], lambda i: 80 + i % 7)
+    with pytest.raises(mp.InputError):                                            # '1,100' is 1.1 or 1100
+        mp.load_data_file(write_csv(tmp_path / "t3.csv", rows, sep="\t"))
+
+
+def test_decimal_comma_column_in_dot_decimal_file_not_converted(tmp_path):
+    rows = [["온도", "수율"]] + [[f"{170 + i},5", f"{60 + i}.25"] for i in range(30)]
+    path = write_csv(tmp_path / "t4.csv", rows, sep=";")
+    df = mp.load_data_file(path)
+    assert df["온도"].iloc[0] == "170,5" and _num(df, "수율")[0] == 60.25         # 2.9.42: 170.5 (two conventions)
+    proc, res = run_raw("ml_train.py", "-f", path, "-x", "온도", "-y", "수율")
+    assert "'온도'" in stop_msg(res, proc)
+
+
 def _euro_rows(n=24, seed=8):
     r = np.random.default_rng(seed)
     rows = [["온도", "유량", "수율"]]

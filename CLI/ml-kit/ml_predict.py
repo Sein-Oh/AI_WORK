@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.42"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.43"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -741,29 +741,66 @@ _DOT_THOUSANDS_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(\.\d{3})+\s*")          # 
 _DOT_COMMA_NUMBER_RE = re.compile(r"\s*[-+]?[\d.,]*\d[\d.,]*\s*")              # digits with '.' and ',' only
 
 
+_PLAIN_DOT_RE = re.compile(r"\s*[-+]?\d+\.\d+\s*")                              # '61.5', '0.300', '1.300'
+
+
+def _comma_columns(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Number cells of each column of a CSV read as text (_decimal_commas): decimal-comma cells ('175,6', '1,2'),
+    thousands-comma cells ('1,500'), European numbers ('1.346,8') and other dotted comma numbers, dot-grouped numbers
+    without a comma ('1.300', '2.125'), plain decimal-point numbers that cannot be a thousands group ('61.5', '0.300').
+    text: most filled cells are not numbers (a line-list / note column whose '1,2' is no number)."""
+    out = []
+    for j in df.columns:
+        col = df[j]
+        vals = col[col.map(lambda v: isinstance(v, str) and v.strip() != "")].astype(str)
+        vals = vals[~vals.str.strip().isin(_NA_PLACEHOLDERS)]
+        commas = vals[vals.str.contains(",", regex=False)]
+        dec = commas[commas.str.fullmatch(_DECIMAL_COMMA_RE)]
+        dotted = commas[commas.str.contains(".", regex=False) & commas.str.fullmatch(_DOT_COMMA_NUMBER_RE)]
+        nocomma = vals[~vals.str.contains(",", regex=False) & vals.str.contains(".", regex=False)]
+        grouped = nocomma[nocomma.str.fullmatch(_DOT_THOUSANDS_RE)]
+        plain = nocomma[nocomma.str.fullmatch(_PLAIN_DOT_RE)]
+        numberish = int(vals.str.fullmatch(_DOT_COMMA_NUMBER_RE).sum())
+        out.append({"dec": dec, "only_dec": dec[~dec.str.fullmatch(_CSV_THOUSANDS_RE)],
+                    "thousands": commas[commas.str.fullmatch(_CSV_THOUSANDS_RE)],
+                    "euro": dotted[dotted.str.fullmatch(_EURO_NUMBER_RE)], "dotted": dotted,
+                    "grouped": grouped, "plain": plain[~plain.str.fullmatch(_DOT_THOUSANDS_RE)],
+                    "text": len(vals) > 0 and numberish * 2 < len(vals)})
+    return out
+
+
 def _decimal_commas(df: pd.DataFrame, sep: str, trained: bool = False) -> pd.DataFrame:
     """A CSV not separated by commas (';', tab) whose numbers use a decimal comma ('175,6', European Excel): a comma
-    that cannot be a thousands separator ('175,6', '2,19', '0,149', '27,8448') means every '<digits>,<digits>' cell is
-    a decimal number, read with a decimal point (df.attrs["decimal_comma"], layout_warnings). European numbers with a
+    that cannot be a thousands separator ('175,6', '2,19', '0,149', '27,8448') means the '<digits>,<digits>' cells are
+    decimal numbers, read with a decimal point (df.attrs["decimal_comma"], layout_warnings). European numbers with a
     thousands dot ('1.346,8') are read as 1346.8 (with a warning) when every number cell with both '.' and ',' has that
-    form. Refused (InputError, a value would change by 1000x either way): cells that could be thousands too ('1,500'),
-    dot-grouped numbers without a comma ('1.300', '2.125': 1300 or 1.3), or European numbers mixed with other '.'/','
-    forms in the same file. trained: the model (or the ml_map data file) was read with decimal commas, so this file is
-    read the same way whatever its delimiter (a one-column file is sniffed as ','), and refused when it has no
+    form. Judged per column (2.9.43): a mostly-text column (a line list '1,2' among '1,2,3' / 'A') is no evidence and
+    is never changed, and a file with a plain decimal-point column ('61.5') uses '.' as its decimal point, so no
+    column is read with decimal commas there (a '175,6' column stays text: training stops on it as before).
+    Refused (InputError, a value would change by 1000x either way) in a decimal-comma file: cells that could be
+    thousands too ('1,500'), dot-grouped numbers without a comma ('1.300', '2.125': 1300 or 1.3), or European numbers
+    mixed with other '.'/',' forms. trained: the model (or the ml_map data file) was read with decimal commas, so this
+    file is read the same way whatever its delimiter (a one-column file is sniffed as ','), and refused when it has no
     decimal-comma cell but a '1.300' or '1,500' (read differently from the training file). A comma CSV, or one
     without such cells, is unchanged (coerce_numeric strips thousands separators)."""
     if df.empty or (sep == "," and not trained):
         return df
-    cells = pd.Series(df.to_numpy(dtype=object).ravel())
-    vals = cells[cells.map(lambda v: isinstance(v, str) and "," in v)].astype(str)
-    dec = vals[vals.str.fullmatch(_DECIMAL_COMMA_RE)]
-    thousands = vals[vals.str.fullmatch(_CSV_THOUSANDS_RE)]
-    only_dec = dec[~dec.str.fullmatch(_CSV_THOUSANDS_RE)]
-    dotted = vals[vals.str.contains(".", regex=False) & vals.str.fullmatch(_DOT_COMMA_NUMBER_RE)]
-    euro = dotted[dotted.str.fullmatch(_EURO_NUMBER_RE)]
-    confirmed = not (only_dec.empty and euro.empty)
-    if not confirmed and not trained:
+    cols = _comma_columns(df)
+    num = [c for c in cols if not c["text"]]               # text columns: never evidence, never changed
+    for c in num:
+        c["dc"] = not (c["only_dec"].empty and c["euro"].empty)
+    confirmed = any(c["dc"] for c in num)
+    # a plain decimal-point number ('61.5') in a column without decimal commas: '.' is this file's decimal point
+    dot_file = any(not c["dc"] and not c["plain"].empty and c["grouped"].empty for c in num)
+    if not trained and (not confirmed or dot_file):
         return df
+
+    def cat(key: str) -> pd.Series:
+        parts = [c[key] for c in num if not c[key].empty]
+        return pd.concat(parts) if parts else pd.Series([], dtype=object)
+
+    only_dec, euro, dec, thousands, dotted, grouped = (cat(k) for k in ("only_dec", "euro", "dec", "thousands",
+                                                                        "dotted", "grouped"))
     first = (only_dec if not only_dec.empty else euro).iloc[0].strip() if confirmed else None
     why = (f"소수점 쉼표('{first}')" if confirmed else "소수점 쉼표(학습 파일이 소수점 쉼표 형식)")
     tail = (" 파일 하나에는 한 가지 숫자 형식만 쓰십시오: Excel에서 숫자 형식을 소수점 '.'으로 바꿔 저장하거나 "
@@ -780,8 +817,6 @@ def _decimal_commas(df: pd.DataFrame, sep: str, trained: bool = False) -> pd.Dat
                 f"CSV(구분 기호 '{sep}')의 숫자에 점(.)이 천 단위인 숫자('{euro.iloc[0].strip()}')와 다른 형식의 숫자"
                 f"('{odd.iloc[0].strip()}')가 섞여 있어 값을 정할 수 없습니다 (점이 천 단위인지 소수점인지에 따라 1000배 "
                 f"달라짐).{tail}")
-    text = cells[cells.map(lambda v: isinstance(v, str) and "," not in v and "." in v)].astype(str)
-    grouped = text[text.str.fullmatch(_DOT_THOUSANDS_RE)]
     if not grouped.empty:
         g0 = grouped.iloc[0].strip()
         raise InputError(
@@ -797,7 +832,10 @@ def _decimal_commas(df: pd.DataFrame, sep: str, trained: bool = False) -> pd.Dat
             return v.strip().replace(".", "").replace(",", ".")
         return v.replace(",", ".") if _DECIMAL_COMMA_RE.fullmatch(v) else v
 
-    out = df.apply(lambda c: c.map(fix))
+    out = df.copy()
+    for j, c in zip(df.columns, cols):
+        if not c["text"]:
+            out[j] = df[j].map(fix)
     e0 = euro.iloc[0].strip() if not euro.empty else None
     out.attrs["decimal_comma"] = [f"{first} -> {fix(first)}", int(len(dec) + len(euro)), sep,
                                   f"{e0} -> {fix(e0)}" if e0 else None, int(len(euro))]
