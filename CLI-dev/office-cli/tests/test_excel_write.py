@@ -75,6 +75,7 @@ def test_write_sine_header_and_column_formulas(xl, capsys):
     assert ("Formula", "$B$2:$B$101", "=SIN(A2)") in ws.log
     assert app.ScreenUpdating is True and app.Calculation == -4105       # 대량 쓰기 설정 복원
     assert "chart" in out["next_commands"][0]["command"]
+    assert "--title" not in out["next_commands"][0]["command"]        # 자리표시 제목 '차트'를 그대로 쓰지 않게 (1.4.48)
     assert out["target_resolved"]["sheet"] == "Sheet1"
 
 

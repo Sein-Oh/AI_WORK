@@ -259,6 +259,13 @@ def _find_section(units: List[Dict[str, Any]], query: str, occurrence: Optional[
     return units[i:j]
 
 
+def _from_target(args: Any, source: Dict[str, Any]) -> List[str]:
+    """transfer 다음 명령의 --from-target: 보고 있는 문서(active)가 아니면 읽은 문서 (전체 경로가 있으면 그것)."""
+    if (args.target or "active").strip().lower() == "active":
+        return []
+    return ["--from-target", source.get("path") or args.target]
+
+
 def cmd_read(args) -> Dict[str, Any]:
     if sum(1 for x in (args.pages, args.paragraphs, args.section) if x) > 1:
         raise rt.InputError("--pages, --paragraphs, --section 중 하나만 지정하세요.")
@@ -306,7 +313,8 @@ def cmd_read(args) -> Dict[str, Any]:
         out = rt.write_text(out, reader.units_to_markdown(name, save_units))
         result.update(output_file=out, next_commands=[
             rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기"),
-            rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"],
+            rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"]
+                            + _from_target(args, source),
                             "이 문서의 단락을 엑셀 표로 옮기기")])
         return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",

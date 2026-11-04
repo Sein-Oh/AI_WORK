@@ -6,6 +6,17 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.48] - 2026-11-04
+
+저장소 지침 반영(next_commands). 회귀 테스트: `tests/test_excel_write.py`(쓰기 뒤 차트 명령), `tests/test_word.py`·`tests/test_ppt.py`(닫힌 파일 읽기 `--save`)
+(1.4.47에서 3개 중 3개 실패).
+
+### 수정
+- `excel.py write`(`--file`, `--formula`) 뒤 차트 명령에서 자리표시 `--title 차트`를 뺌(LLM이 그대로 실행해 제목이 '차트'인 차트가 생김).
+  purpose에 "제목은 --title \"제목\"을 붙임".
+- `word.py read --save`, `ppt.py read --save`의 "엑셀 표로 옮기기" transfer 명령: `--target`으로 다른 문서(열린 문서 이름, 닫힌 파일)를 읽었으면
+  `--from-target`(전체 경로가 있으면 그것)을 붙임. 전에는 보고 있는 문서에서 옮겼음.
+
 ## [1.4.47] - 2026-11-04
 
 저장소 지침 반영(R5): `require_lib()`. 회귀 테스트: `tests/test_contract.py` "R5 require_lib" (1.4.46에서 5개 중 5개 실패, 1개는 함수 없음).
@@ -1213,6 +1224,5 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (excel range delete·insert는 1.4.37) (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
 - [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위 (office windows·info --all·chart list·undo --list는 1.4.26, outlook list/search·ppt slide list는 1.4.27)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
-- [ ] next_commands: excel write의 차트 명령 자리표시 `--title 차트` 제거, word·ppt의 transfer 명령에 `--from-target`
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
 - [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`

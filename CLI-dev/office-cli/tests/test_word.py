@@ -383,6 +383,9 @@ def test_read_closed_docx_with_python_docx(tmp_path, capsys, monkeypatch):
     assert code == 0 and [x["text"] for x in out["paragraphs"]] == ["배경", "본문입니다"]
     assert out["paragraphs"][1]["heading"] == "배경"
     assert not any(c[0] == "DispatchEx" for c in calls)
+    code, out = run_word(capsys, "read", "--target", str(p), "--save", str(tmp_path / "o.md"))   # 1.4.48: 읽은 문서에서 옮기기
+    transfer = [c["command"] for c in out["next_commands"] if "transfer" in c["command"]][0]
+    assert "--from-target" in transfer and str(p) in transfer, transfer
 
 
 def test_highlight_color_suggestion(wd, capsys):

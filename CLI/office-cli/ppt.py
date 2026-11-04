@@ -180,6 +180,13 @@ def _closed_pptx(target: str) -> Optional[str]:
     return raw
 
 
+def _from_target(args: Any, source: Dict[str, Any]) -> List[str]:
+    """transfer 다음 명령의 --from-target: 보고 있는 문서(active)가 아니면 읽은 문서 (전체 경로가 있으면 그것)."""
+    if (args.target or "active").strip().lower() == "active":
+        return []
+    return ["--from-target", source.get("path") or args.target]
+
+
 def cmd_read(args) -> Dict[str, Any]:
     import reader
     closed = _closed_pptx(args.target)
@@ -205,7 +212,8 @@ def cmd_read(args) -> Dict[str, Any]:
         out = rt.write_text(out, reader.units_to_markdown(source["name"], units))
         result.update(output_file=out, next_commands=[
             rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기"),
-            rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"],
+            rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"]
+                            + _from_target(args, source),
                             "슬라이드 내용을 엑셀 표로 옮기기")])
         return rt.ok_file(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", out,
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",

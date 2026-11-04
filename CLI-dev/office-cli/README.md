@@ -496,6 +496,7 @@ relay가 사용자의 클립보드를 덮어쓰고 `[추천]`이 `; relay: ...` 
   `[추천] python ...office.py transfer ... --to word`를 냅니다. 에이전트는 그대로 1회 실행하고 못 넣은 앱을 사용자에게 알립니다.
 - `--to-target`은 `--to`의 모든 앱에 함께 쓰이므로 파일 경로를 줄 때는 `--to`에 앱 하나만 둡니다.
   열린 문서가 없을 때 안내는 받는 쪽 `--to-target`, 보내는 쪽 `--from-target`입니다(transfer에는 `--target`이 없음).
+- `word.py read --save`/`ppt.py read --save`의 `next_commands` transfer 명령은 `--target`으로 다른 문서를 읽었으면 그 문서를 `--from-target`(전체 경로가 있으면 그것)으로 줍니다(1.4.48, 전에는 보고 있는 문서에서 옮김).
 - 넣은 뒤 한 앱만 실패하면(늦게 드러난 대상 문제, COM 오류) 오류로 끝내지 않고 `UNVERIFIED`와 `succeeded`/`failed`/`failures`로 답합니다.
   같은 명령을 다시 실행하면 넣은 앱에 또 들어가므로, 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 `--to <그 앱>`으로 실행합니다.
   되돌리기 지점은 실제로 바뀐 문서에만 남습니다.

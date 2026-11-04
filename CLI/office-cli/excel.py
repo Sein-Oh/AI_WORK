@@ -1324,8 +1324,8 @@ def cmd_write(args) -> Dict[str, Any]:
               "rows": last[0] - first[0] + 1, "cols": last[1] - first[1] + 1}
     if table is not None or args.formula:
         result["next_commands"] = [rt.next_command("excel.py", ["chart", "--target", tgt, "--range", f"{sheet_ref}!{full}",
-                                                                "--type", "line", "--title", "차트"],
-                                                   "방금 쓴 범위로 차트 만들기 (--type, --title은 원하는 값으로)")]
+                                                                "--type", "line"],
+                                                   "방금 쓴 범위로 차트 만들기 (제목은 --title \"제목\"을 붙임, --type은 원하는 종류로)")]
     preview = f"{sheet_name}!{full}에 썼습니다 ({result['rows']}행 x {result['cols']}열)"
     if problems:
         return rt.ok_unverified(TOOL, "write", preview, problems, **result)
