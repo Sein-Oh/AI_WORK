@@ -3,7 +3,7 @@
 사용법 (CLI-dev/office-cli 폴더에서 실행. 시험하는 도구는 옆 폴더 CLI/office-cli):
     python tools/run_win_tests.py                     # 전체 진행 (눈으로 확인할 항목은 y/n 질문)
     python tools/run_win_tests.py --only A,C          # 특정 그룹만
-    python tools/run_win_tests.py --self-email me@company.com   # G3 실제 발송 테스트 포함
+    python tools/run_win_tests.py --self-email me@company.com   # G3 실제 발송 테스트 포함 (초안 send 1번)
     python tools/run_win_tests.py --auto              # 질문 없이 자동 판정 항목만
     python tools/run_win_tests.py --dir D:\\시험\\office --skip-outlook
     python tools/run_win_tests.py --agent --skip-outlook   # 에이전트(OpenCode 스킬)용: 질문 없음, stdout은 JSON 1줄
@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -527,7 +528,8 @@ def isolate_tool_dirs(ctx):
     shutil.rmtree(cache, ignore_errors=True)
     os.makedirs(cache, exist_ok=True)
     os.makedirs(data, exist_ok=True)
-    RUN_ENV.update(OFFICE_CLI_CACHE_DIR=cache, OFFICE_CLI_DATA_DIR=data)
+    RUN_ENV.update(OFFICE_CLI_CACHE_DIR=cache, OFFICE_CLI_DATA_DIR=data,
+                   OFFICE_CLI_TIME_LIMIT="0")   # R10: 사람이 돌리는 러너는 시간 제한 없음 (CONTINUE로 나누지 않음)
     try:   # 이전 실행의 도구 오류 기록은 빼고 이번 실행분만 errors_*.txt에 옮겨 담음
         TOOL_LOG_OFFSET[0] = os.path.getsize(os.path.join(data, "logs", "errors.txt"))
     except OSError:
@@ -1067,12 +1069,92 @@ def test_E(ctx):
         ok = (data or {}).get("status") == "ok" and color == 0x5D361B
         record(ctx, "E6", "테마 적용 (머리글 색)", ok, f"B2 배경색={color:#x}", data, code, raw, err)
 
+    def e7():
+        activate_xl("A.xlsx", "E_TEST")
+        # 칸 메모: 달기 -> 같은 칸 다시 달기(확인 요청) -> 덧붙이기 -> 목록 -> 지우기 (Office 2007+ 이전 방식 메모)
+        d_add = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "검토 의견")[0] or {}
+        d_ask = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "둘째 의견")[0] or {}
+        d_app = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "둘째 의견", "--append")[0] or {}
+        note = com_retry(lambda: e_ws().Range("D1").Comment)
+        text = com_retry(lambda: str(note.Text()).replace("\r", "\n")) if note is not None else None
+        d_list = run_cli("excel.py", "comment", "--range", "A1:E5")[0] or {}
+        data, code, raw, err = run_cli("excel.py", "comment", "--action", "delete", "--range", "D1")
+        gone = com_retry(lambda: e_ws().Range("D1").Comment) is None
+        ok = (str(d_add.get("agent_directive", "")).startswith("VERIFIED:") and d_ask.get("error_type") == "needs_user_decision"
+              and str(d_app.get("agent_directive", "")).startswith("VERIFIED:") and text == "검토 의견\n둘째 의견"
+              and [i.get("cell") for i in d_list.get("items", [])] == ["D1"]
+              and (data or {}).get("status") == "ok" and gone)
+        record(ctx, "E7", "칸 메모 달기·덧붙이기·목록·지우기 (다시 읽어 확인)", ok,
+               f"달기={d_add.get('status')}, 확인 요청={d_ask.get('error_type')}, 메모={text!r}, "
+               f"목록={[i.get('cell') for i in d_list.get('items', [])]}, 지운 뒤 없음={gone}", data, code, raw, err)
+
+    def e8():
+        activate_xl("A.xlsx", "E_TEST")
+        # 흩어진 칸 여러 개 한 번에: 빈 칸 쓰기 -> 값이 있는 칸은 한 번에 확인 요청 -> --overwrite 한 번
+        d1 = run_cli("excel.py", "write", "--cells", "H6=ft; H7=℃; H8==LEN(H6)")[0] or {}
+        d_ask = run_cli("excel.py", "write", "--cells", "H6=m; H7=K; H9=새 값")[0] or {}
+        h9_kept = com_retry(lambda: e_ws().Range("H9").Value) is None
+        data, code, raw, err = run_cli("excel.py", "write", "--cells", "H6=m; H7=K; H9=새 값", "--overwrite")
+        vals = com_retry(lambda: [e_ws().Range(c).Value for c in ("H6", "H7", "H8", "H9")])
+        ok = (str(d1.get("agent_directive", "")).startswith("VERIFIED:") and d_ask.get("error_type") == "needs_user_decision"
+              and h9_kept and str((data or {}).get("agent_directive", "")).startswith("VERIFIED:")
+              and vals[:2] == ["m", "K"] and vals[2] == 1 and vals[3] == "새 값")
+        record(ctx, "E8", "write --cells: 흩어진 칸 한 번에, 덮어쓰기 확인 한 번 (다시 읽어 확인)", ok,
+               f"첫 쓰기={d1.get('status')}, 확인 요청={d_ask.get('error_type')}, H9 그대로={h9_kept}, H6:H9={vals}",
+               data, code, raw, err)
+
+    def e9():
+        activate_xl("A.xlsx", "E_TEST")
+        # 보호된 시트: 잠긴 칸 쓰기는 sheet_protected, 잠기지 않은 칸은 씀 / 엑셀이 받지 않는 수식(;)은 [추천]과 함께 멈추고 먼저 쓴 칸은 되돌림
+        ws = e_ws()
+        com_retry(lambda: setattr(ws.Range("J2"), "Locked", False))
+        com_retry(lambda: ws.Protect(Password="", Contents=True))
+        try:
+            d_lock = run_cli("excel.py", "write", "--cells", "J1=x; J2=y")[0] or {}
+            d_free = run_cli("excel.py", "write", "--cells", "J2=y")[0] or {}
+            j1 = com_retry(lambda: ws.Range("J1").Value)
+            j2 = com_retry(lambda: ws.Range("J2").Value)
+        finally:
+            com_retry(lambda: ws.Unprotect(Password=""))
+        data, code, raw, err = run_cli("excel.py", "write", "--cells", "J4=먼저; J5==SUM(1;2)")
+        j4 = com_retry(lambda: ws.Range("J4").Value)
+        msg = str((data or {}).get("message", ""))
+        ok = (d_lock.get("error_type") == "sheet_protected" and "J2" in (d_lock.get("candidates") or [])
+              and str(d_free.get("agent_directive", "")).startswith("VERIFIED:") and j1 is None and j2 == "y"
+              and (data or {}).get("status") == "error" and "[추천]" in msg and "SUM(1,2)" in msg and j4 is None)
+        record(ctx, "E9", "보호된 시트(잠긴 칸 멈춤·잠기지 않은 칸 씀), 받지 않는 수식은 [추천]과 되돌림", ok,
+               f"잠긴 칸={d_lock.get('error_type')}, 후보={d_lock.get('candidates')}, J1={j1!r}, J2={j2!r}, J4={j4!r}, "
+               f"수식 오류={(data or {}).get('error_type')}", data, code, raw, err)
+
+    def e10():
+        activate_xl("A.xlsx", "E_TEST")
+        # 규격 대조: 열린 문서의 L:N 표를 규격 txt와 대조 (일치·불일치·근거없음), 메모 파일과 다음 명령
+        spec = ctx.path("check_spec.txt")
+        with open(spec, "w", encoding="utf-8") as f:
+            f.write("정격 전압은 5 V ± 0.25 V로 한다.\n\n소비 전류는 최대 3 A로 한다.\n")
+        ws = e_ws()
+        for r, row in enumerate([("항목", "", "측정값 [V]"), ("정격 전압", "", 5.1), ("소비 전류", "", "3.5 A"), ("무게", "", 1)], 1):
+            for c, v in enumerate(row):
+                com_retry(lambda: setattr(ws.Cells(20 + r, 12 + c), "Value", v))
+        data, code, raw, err = run_cli("excel.py", "check", "--range", "L22:N24", "--item-col", "L", "--value-col", "N",
+                                       "--spec", spec)
+        verdicts = [x.get("verdict") for x in (data or {}).get("results", [])]
+        memo_ok = os.path.isfile(str((data or {}).get("memo_file", "")))
+        nxt = ((data or {}).get("next_commands") or [{}])[0].get("command", "")
+        ok = verdicts == ["일치", "불일치", "근거없음"] and memo_ok and "comment" in nxt and "--dry-run" in nxt
+        record(ctx, "E10", "excel check: 표를 규격서와 대조 (판정, 메모 파일, 메모 미리보기 명령)", ok,
+               f"판정={verdicts}, 메모 파일={memo_ok}", data, code, raw, err)
+
     run_test(ctx, "E1", "move", e1)
     run_test(ctx, "E2", "merge 범위 없음", e2)
     run_test(ctx, "E3", "merge 대화상자", e3)
     run_test(ctx, "E4", "따옴표 시트명", e4)
     run_test(ctx, "E5", "수식 보존", e5)
     run_test(ctx, "E6", "테마", e6)
+    run_test(ctx, "E7", "칸 메모", e7)
+    run_test(ctx, "E8", "칸 여러 개 쓰기", e8)
+    run_test(ctx, "E9", "시트 보호와 수식 거부", e9)
+    run_test(ctx, "E10", "규격 대조", e10)
 
 
 # ---------------------------------------------------------------------------
@@ -1125,38 +1207,65 @@ def test_G(ctx):
         to = me or "office-test@example.com"
         data, code, raw, err = run_cli("outlook.py", "new", "--to", to, "--subject", "[office-cli 테스트] 표시 전용",
                                        "--body", "본문 테스트")
-        ok = (data or {}).get("status") == "ok" and (data or {}).get("sent") is False
-        manual = ask(ctx, "메일 작성 창이 떴나요? (서명을 등록해 두었다면 본문 아래 서명도 보여야 합니다. 확인 후 저장하지 않고 닫아 주세요)")
-        record(ctx, "G1", "기본 동작: 작성 창만 표시, 미발송", ok and manual is not False, "", data, code, raw, err)
+        # 1.4.73: 발송 명령은 next_commands가 아니라 confirm_commands (사용자 '예' 뒤에만)
+        nxt = ((data or {}).get("confirm_commands") or [{}])[0]
+        ok = ((data or {}).get("status") == "ok" and (data or {}).get("sent") is False and bool((data or {}).get("draft_id"))
+              and "next_commands" not in (data or {}) and " send --id " in nxt.get("command", ""))
+        manual = ask(ctx, "메일 작성 창이 떴나요? (서명을 등록해 두었다면 본문 아래 서명도 보여야 합니다. "
+                          "확인 후 창을 닫고 임시 보관함의 '[office-cli 테스트] 표시 전용' 초안을 지워 주세요)")
+        record(ctx, "G1", "기본 동작: 초안 저장·작성 창만 표시, 미발송, send 명령은 confirm_commands로", ok and manual is not False, "",
+               data, code, raw, err)
 
     def g2():
-        data, code, raw, err = run_cli("outlook.py", "new", "--to", "zz_office_invalid_recipient_000",
-                                       "--subject", "[office-cli 테스트] 잘못된 수신자", "--body", "발송되면 안 됨", "--send")
+        d_new = run_cli("outlook.py", "new", "--to", "zz_office_invalid_recipient_000",
+                        "--subject", "[office-cli 테스트] 잘못된 수신자", "--body", "발송되면 안 됨")[0] or {}
+        data, code, raw, err = run_cli("outlook.py", "send", "--id", str(d_new.get("draft_id", "")))
         ok = (data or {}).get("status") == "error" and (data or {}).get("sent") is False
-        ask(ctx, "작성 창이 떴다면 저장하지 않고 닫아 주세요. 닫았나요?")
-        record(ctx, "G2", "잘못된 수신자 + --send -> 발송 안 됨", ok,
+        ask(ctx, "작성 창이 떴다면 닫고 임시 보관함의 '[office-cli 테스트] 잘못된 수신자' 초안을 지워 주세요. 지웠나요?")
+        record(ctx, "G2", "잘못된 수신자 초안 send -> 발송 안 됨", ok,
                f"unresolved={(data or {}).get('unresolved_recipients')}", data, code, raw, err)
 
     def g3():
         if not me:
-            record(ctx, "G3", "명시적 --send 실제 발송", None, "--self-email 미지정으로 건너뜀")
+            record(ctx, "G3", "초안 send 실제 발송 (1번만)", None, "--self-email 미지정으로 건너뜀")
             return
         if not ctx.auto and ask(ctx, f"{me} 주소로 실제 테스트 메일을 1통 발송합니다. 진행할까요?") is not True:
-            record(ctx, "G3", "명시적 --send 실제 발송", None, "사용자가 건너뜀")
+            record(ctx, "G3", "초안 send 실제 발송 (1번만)", None, "사용자가 건너뜀")
             return
-        data, code, raw, err = run_cli("outlook.py", "new", "--to", me, "--subject", "[office-cli 테스트] 발송 테스트",
-                                       "--body", "자동 발송 테스트 메일입니다.", "--send")
-        record(ctx, "G3", "명시적 --send 실제 발송", (data or {}).get("sent") is True, "", data, code, raw, err)
+        d_new = run_cli("outlook.py", "new", "--to", me, "--subject", "[office-cli 테스트] 발송 테스트",
+                        "--body", "자동 발송 테스트 메일입니다.")[0] or {}
+        did = str(d_new.get("draft_id", ""))
+        data, code, raw, err = run_cli("outlook.py", "send", "--id", did)
+        again = run_cli("outlook.py", "send", "--id", did)[0] or {}       # 같은 초안을 다시 보내면 거부 (중복 발송 없음)
+        ok = ((data or {}).get("sent") is True and again.get("status") == "error" and again.get("sent") is not True
+              and "next_commands" not in again)
+        record(ctx, "G3", "초안 send 실제 발송 (1번만)", ok, f"두 번째 send: {again.get('message', '')[:60]}",
+               data, code, raw, err)
 
     def g4():
         data, code, raw, err = run_cli("outlook.py", "list", "--limit", "3")
         record(ctx, "G4", "받은편지함 최근 메일 목록", (data or {}).get("status") == "ok",
                f"{len((data or {}).get('mails', []))}통", data, code, raw, err)
 
+    def g5():
+        # 짧은 번호(list 결과 id 1)로 읽기, 같은 메일의 대화, 일정 7일 (모두 읽기 전용)
+        d_list = run_cli("outlook.py", "list", "--limit", "3")[0] or {}
+        mails = d_list.get("mails") or []
+        d_read = run_cli("outlook.py", "read", "--id", "1")[0] or {} if mails else {}
+        d_thread = run_cli("outlook.py", "thread", "--id", "1")[0] or {} if mails else {}
+        data, code, raw, err = run_cli("outlook.py", "calendar", "--days", "7")
+        same = (d_read.get("mail") or {}).get("entry_id") == (mails[0].get("entry_id") if mails else None)
+        ok = (not mails or (mails[0].get("id") == 1 and same and d_thread.get("status") == "ok")) \
+            and str((data or {}).get("agent_directive", "")).startswith("VERIFIED")
+        record(ctx, "G5", "짧은 번호로 읽기, 대화 묶음, 일정 7일 (읽기 전용)", ok,
+               f"목록 {len(mails)}통, 1번 읽기 같은 메일={same}, 대화 {d_thread.get('count')}통, 일정 {(data or {}).get('count')}개",
+               data, code, raw, err)
+
     run_test(ctx, "G1", "표시 전용", g1)
     run_test(ctx, "G2", "잘못된 수신자", g2)
     run_test(ctx, "G3", "실제 발송", g3)
     run_test(ctx, "G4", "메일 목록", g4)
+    run_test(ctx, "G5", "짧은 번호·대화·일정", g5)
 
 
 # ---------------------------------------------------------------------------
@@ -1632,11 +1741,19 @@ def test_I(ctx):
     def i24():
         doc = wd_doc("A.docx")
         n0 = com_retry(lambda: doc.InlineShapes.Count)
-        d, c, r, e = run_cli("office.py", "transfer", "--from", "excel", "--chart", "I 막대", "--to", "word", "--method", "redraw")
+        # --method가 없으므로(1.4.52) --probe가 redraw를 먼저 저장한 PC처럼 임시 설정 파일로 순서를 정함
+        cfg = ctx.path("_i24_config.json")
+        with open(cfg, "w", encoding="utf-8") as f:
+            json.dump({"transfer_method": {"word": ["redraw"]}}, f)
+        RUN_ENV["OFFICE_CLI_CONFIG"] = cfg
+        try:
+            d, c, r, e = run_cli("office.py", "transfer", "--from", "excel", "--chart", "I 막대", "--to", "word")
+        finally:
+            RUN_ENV.pop("OFFICE_CLI_CONFIG", None)
         n1 = com_retry(lambda: wd_doc("A.docx").InlineShapes.Count)
         method = (((d or {}).get("results") or {}).get("word") or {}).get("method")
         ok = ok_(d) and method == "redraw" and n1 == n0 + 1
-        record(ctx, "I24", "차트 전달 redraw 방식 강제 (DRM 대비 경로)", ok, f"방식={method}, 워드 그림 {n0}->{n1}", d, c, r, e)
+        record(ctx, "I24", "차트 전달 redraw 방식 (저장된 순서, DRM 대비 경로)", ok, f"방식={method}, 워드 그림 {n0}->{n1}", d, c, r, e)
 
     # --- 되돌리기 / 창 -----------------------------------------------------------
     def i25():
@@ -2066,11 +2183,12 @@ LIBS = ("pywin32", "openpyxl", "python-docx", "python-pptx", "pymupdf", "olefile
 
 
 def tool_version():
+    """_runtime.py의 VERSION (스킬은 작업별로 여럿이라 도구 쪽 한 곳에서 읽음)."""
     try:
-        with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as f:
-            for line in f:
-                if line.strip().startswith("version:"):
-                    return line.split(":", 1)[1].strip().strip('"')
+        with open(os.path.join(ROOT, "_runtime.py"), encoding="utf-8") as f:
+            m = re.search(r'^VERSION\s*=\s*"([^"]+)"', f.read(), re.M)
+            if m:
+                return m.group(1)
     except Exception:
         pass
     return "?"

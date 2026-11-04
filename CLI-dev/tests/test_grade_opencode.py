@@ -261,7 +261,7 @@ def test_single_request_answer_before_closing_tool(tmp_path):
         {"type": "text", "text": "맵 파일로 계산하겠습니다."},
         _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
         {"type": "text", "text": "B는 16.25, C는 87.5입니다."},
-        _bash('Get-Item "C:\\ml_beta\\agent\\맵.xlsx"', ok),
+        _bash('Get-Item "C:\\CLI-dev\\work\\gemma\\맵.xlsx"', ok),
         {"type": "text", "text": "완료했습니다."}])])
     _, rows, detail = go.grade([path], "t", False, "LLM42")
     m1 = next(r for r in rows if r["id"] == "M1")
@@ -294,14 +294,14 @@ def test_no_adhoc_py_rule():
                'python C:\\CLI\\office-cli\\excel.py read --file a.xlsx',
                'python -u "C:\\CLI\\ml-kit\\ml_map.py" -f m.xlsx',
                'C:\\WPy64-313130\\python\\python.exe "C:\\CLI\\ml-kit\\ml_map.py" -h',
-               'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"',
+               'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\CLI-dev\\work\\gemma"',
                'python "C:\\CLI-dev\\run_beta_check.py" --agent',
-               'cd C:\\CLI-dev\\ml-kit\\tools; python make_beta_samples.py "C:\\ml_beta\\agent"',
-               'python .\\make_beta_samples.py "C:\\ml_beta\\agent"',
+               'cd C:\\CLI-dev\\ml-kit\\tools; python make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
+               'python .\\make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
                'cd C:\\CLI-dev\\office-cli\\tools; python run_win_tests.py',
                'cd C:\\CLI-dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
                'cd C:\\CLI-dev; python ml-kit\\tools\\run_win_tests.py --agent',
-               'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\ml_beta\\agent"',
+               'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
                'python -m pytest -q']
     bad_cmds = ['python -c "import pandas"',
                 "python - <<'EOF'\nprint(1)\nEOF",
@@ -361,7 +361,7 @@ def test_no_read_code_rule_searches_without_py():
               'Select-String -Path "C:\\CLI\\ml-kit\\SKILL.md" -Pattern 제외',
               "findstr 제외 C:\\CLI\\ml-kit\\SKILL.md",
               "Get-ChildItem C:\\CLI\\ml-kit",
-              'Get-ChildItem "C:\\ml_beta\\agent" | Select-String x'):
+              'Get-ChildItem "C:\\CLI-dev\\work\\gemma" | Select-String x'):
         assert not _rule_hits("no_read_code", c), c
     assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit"))
     assert _rule_hits("no_read_code", tool=_tool("grep", pattern="iqr", path="C:/CLI/office-cli", include="*"))
@@ -379,13 +379,27 @@ def test_no_read_code_rule_searches_without_py():
     assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="*.{py,md}"))
 
 
+def test_no_read_code_allows_office_task_skills():
+    """office-cli 스킬은 작업별 4개(C:\\CLI\\office-cli\\skills\\<이름>\\SKILL.md): 읽기·검색은 위반이 아니고, 도구 폴더 검색은 그대로 위반."""
+    for name in ("office-excel", "office-doc", "office-mail", "office-spec"):
+        path = f"C:\\CLI\\office-cli\\skills\\{name}\\SKILL.md"
+        for c in (f"Get-Content {path}", f'Select-String -Path "{path}" -Pattern check', f"findstr comment {path}",
+                  f'[IO.File]::ReadAllText("{path}")'):
+            assert not _rule_hits("no_read_code", c), c
+        assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="check", path=path))
+        assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="check", path=f"C:\\CLI\\office-cli\\skills\\{name}"))
+    assert not _rule_hits("no_read_code", 'Select-String -Path "C:\\CLI\\office-cli\\skills\\*\\SKILL.md" -Pattern undo')
+    assert _rule_hits("no_read_code", 'Select-String -Path "C:\\CLI\\office-cli\\*" -Pattern undo')
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="undo", path="C:\\CLI\\office-cli"))
+
+
 def test_no_write_py_covers_edit_and_patch():
     assert _rule_hits("no_write_py", tool=_tool("write", filePath="C:\\temp\\x.py", content="print(1)"))
     assert _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\CLI\\ml-kit\\ml_train.py", oldString="a", newString="b"))
     assert _rule_hits("no_write_py", tool=_tool("multiedit", filePath="C:\\CLI\\ml-kit\\ml_map.py", edits=[]))
     patch = "*** Begin Patch\n*** Update File: C:\\CLI\\ml-kit\\ml_map.py\n@@\n-a\n+b\n*** End Patch"
     assert _rule_hits("no_write_py", tool=_tool("patch", patchText=patch))
-    assert not _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\ml_beta\\agent\\memo.md", oldString="a", newString="b"))
+    assert not _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\CLI-dev\\work\\gemma\\memo.md", oldString="a", newString="b"))
     md = "*** Begin Patch\n*** Add File: C:\\temp\\notes.md\n+run ml_train.py\n*** End Patch"
     assert not _rule_hits("no_write_py", tool=_tool("patch", patchText=md))
 
@@ -637,7 +651,7 @@ def test_read_run_maps_shell_to_bash_and_path_key(tmp_path):
     p = tmp_path / "S0.jsonl"
     p.write_text(_run_events("S0", [
         ("step_start", {"type": "step-start"}),
-        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"', {"status": "ok"}),
+        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\CLI-dev\\work\\gemma"', {"status": "ok"}),
         ("tool_use", {"type": "tool", "tool": "write", "state": {"status": "completed",
                                                                  "input": {"path": "C:\\temp\\x.py", "content": "print(1)"}}}),
         ("text", {"type": "text", "text": "만들었습니다."}),
@@ -654,7 +668,7 @@ def test_read_run_maps_shell_to_bash_and_path_key(tmp_path):
 
 def test_grade_runs_reads_folder_and_marks_missing(tmp_path):
     (tmp_path / "S0.jsonl").write_text(_run_events("S0", [
-        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"', {"status": "ok"}),
+        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\CLI-dev\\work\\gemma"', {"status": "ok"}),
         ("text", {"type": "text", "text": "샘플을 만들었습니다."})]), encoding="utf-8")
     (tmp_path / go.RUN_MESSAGES).write_text(json.dumps({"S0": "[S0] 보낸 문장"}, ensure_ascii=False), encoding="utf-8")
     meta, rows, detail = go.grade_runs(str(tmp_path))
@@ -680,3 +694,167 @@ def test_reruns_asked_by_continue_are_not_repeats():
     assert ok["같은 명령 3번 이상 반복 없음"]
     bad = {n: v for n, v, _ in go.grade_turn({}, turn([done, done, done]), rules)}
     assert not bad["같은 명령 3번 이상 반복 없음"]
+
+
+# ---------------------------------------------------------------------------
+# office-cli 묶음 O (회사 PC 오류 로그: 경량 LLM이 옵션을 지어낸 경우) - opencode run 기록으로 합격/불합격
+# ---------------------------------------------------------------------------
+G = "C:\\CLI-dev\\work\\gemma"
+EX, WD, OL, RD, OF = (f'python "C:\\CLI\\office-cli\\{n}.py"' for n in ("excel", "word", "outlook", "reader", "office"))
+OK = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+ARG_ERR = {"status": "error", "error_type": "invalid_argument", "agent_directive": "STOP_RETRY: unrecognized arguments"}
+CHECK = f'{EX} check --target "{G}\\규격대조.xlsx" --range B3:C7 --item-col B --value-col C --spec "{G}\\규격서.txt"'
+MEMO = f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --file "C:\\CLI\\office-cli\\data\\_work\\check_memo_검사.csv"'
+O1_ANSWER = ("5행 대조: 일치 2, 불일치 2, 근거없음 1. 불일치: 소비 전류 250 (규격서.txt 3.2, 200 mA 이하), "
+             "동작 온도 70 (3.3, -20~60 ℃). 메모 5개를 미리보기했습니다. 이대로 달까요?")
+
+# 시나리오: (합격 기록들, [(불합격 기록, 실패 이유에 들어갈 글)]). 기록 = [(명령, 결과 JSON), ..., 답변]
+OFFICE_CASES = {
+    "O1": ([[(CHECK, OK), (MEMO + " --dry-run", OK), O1_ANSWER],
+            [(CHECK.replace('"', ""), OK), (MEMO + " --dry-run", OK), O1_ANSWER]],
+           [([(CHECK, OK), (MEMO + " --dry-run", OK), (MEMO, OK), O1_ANSWER], "금지 명령"),        # 확인 없이 실제로 담
+            ([(CHECK, OK), (MEMO, OK), O1_ANSWER], "--dry-run"),                                   # 미리보기 없이 바로 담
+            ([(CHECK, OK), "불일치 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "--dry-run"),   # 메모 미리보기 없음
+            ([(f'{RD} search --query "정격 전압" --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER], "check"),
+            # 회귀: ;로 이은 다른 명령의 --dry-run을 보고 실제 달기를 놓침
+            ([(CHECK, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O1_ANSWER], "금지 명령"),
+            # 회귀: 메모 글(--text) 안의 "--dry-run" 글자를 옵션으로 봄
+            ([(CHECK, OK), (f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --range C5 --text "불일치 (--dry-run 아님)"', OK),
+              O1_ANSWER], "금지 명령")]),
+    "O2": ([[(f'{EX} write --target "{G}\\단위표.xlsx" --cells "C6=ft; C7=℃"', OK), "C6에 ft, C7에 ℃를 넣었습니다."],
+            [(f"{EX} write -t '{G}\\단위표.xlsx' --cells 'C6 = ft;C7 = ℃'", OK), "C6, C7에 썼습니다."]],
+           [([(f'{EX} write --target "{G}\\단위표.xlsx" --cell C6 --text ft', ARG_ERR),
+              (f'{EX} write --target "{G}\\단위표.xlsx" --cells "C6=ft; C7=℃"', OK), "C6, C7 완료"], "없는 명령"),
+            ([(f'{EX} write --target "{G}\\단위표.xlsx" --range C6 --value ft', OK),
+              (f'{EX} write --target "{G}\\단위표.xlsx" --range C7 --value ℃', OK), "C6, C7 완료"], "--cells"),
+            ([(f'{EX} write --target "{G}\\단위표.xlsx" --cells "C6=ft"', OK),
+              (f'{EX} write --target "{G}\\단위표.xlsx" --cells "C7=℃"', OK), "C6, C7 완료"], "금지 명령"),
+            ([(f'{EX} write --target "{G}\\단위표.xlsx" --cells "C6=ft; C7=°C"', OK), "C6, C7 완료"], "--cells")]),
+    "O3": ([[(f"{OL} search --query 시험성적서", OK), (f'{OL} attachments --id 1 --save "{G}\\메일첨부"', OK),
+             (f'{RD} read --file "{G}\\메일첨부\\시험성적서.docx"', OK),
+             f"{G}\\메일첨부 에 시험성적서.docx를 저장했습니다. 판정: 합격"]],
+           [([(f'{OL} attachments --id 1 --save "{G}\\메일첨부"', OK), (f'{WD} read --target "{G}\\메일첨부\\시험성적서.docx"', OK),
+              "메일첨부에 저장했고 판정은 합격입니다."], "reader"),
+            ([(f'{OL} attachments --id 1 --save "{G}\\메일첨부"', OK), (f'{RD} read --file "{G}\\메일첨부\\시험성적서.docx"', OK),
+              (f'{OL} reply --body "확인했습니다" --send', OK), "메일첨부, 합격. 답장도 보냈습니다."], "금지 명령")]),
+    "O4": ([[(f'{WD} write --target "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정"', OK), "문서 끝에 덧붙였습니다."],
+            [(f'{WD} write --target "{G}\\주간보고.docx" --file "{G}\\추가.md"', OK), "추가했습니다."]],
+           [([(f'{OF} write --target "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정"', ARG_ERR),
+              (f'{WD} write --target "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정"', OK), "덧붙였습니다."], "없는 명령"),
+            ([(f'{OF} transfer --from word --to word --text "다음 주 계획: 시험 장비 교정"', ARG_ERR), "추가하지 못했습니다."], "없는 명령"),
+            ([(f'{WD} write --target "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정" --pos replace', OK), "넣었습니다."],
+             "금지 명령"),
+            # 회귀: 앵커 뒤에 넣기는 문서 중간 (요청은 문서 끝)
+            ([(f'{WD} write --target "{G}\\주간보고.docx" --anchor "주간 보고" --pos after --text "다음 주 계획: 시험 장비 교정"', OK),
+              "덧붙였습니다."], "금지 명령"),
+            # 문서 자체를 --file로 줌 (--target이 아님)
+            ([(f'{WD} write --file "{G}\\주간보고.docx" --text "다음 주 계획: 시험 장비 교정"', OK), "덧붙였습니다."], "word")]),
+    "O5": ([[(f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv" --dry-run', OK),
+             (f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv"', OK), "업체명 한빛전자, 시험일 2026-11-04를 채웠습니다."]],
+           [([(f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv" --dry-run', OK), "미리보기입니다. 채울까요?"], "fill"),
+            ([(f'{WD} replace --target "{G}\\성적서양식.docx" --find "{{{{업체명}}}}" --replace 한빛전자', OK), "채웠습니다."], "fill"),
+            ([(f'{WD} fill --target "{G}\\성적서양식.docx" --text "업체명=한빛전자"', ARG_ERR),
+              (f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv"', OK), "한빛전자로 채웠습니다."], "금지 명령"),
+            # 회귀: 다른 문서를 채우고 값 파일 이름에 양식 이름이 들어 있음
+            ([(f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv" --dry-run', OK),
+              (f'{WD} fill --target "{G}\\다른.docx" --file "{G}\\성적서양식.docx_values.csv"', OK), "한빛전자로 채웠습니다."], "fill")]),
+}
+
+
+def _office_run(tmp_path, sid, record):
+    """record ([(명령, 결과), ..., 답변])를 opencode run 기록 <sid>.jsonl 하나로 쓰고 grade_runs의 그 요청 행을 돌려줍니다."""
+    for f in tmp_path.glob("*.jsonl"):
+        f.unlink()
+    events = [_shell(c, out) for c, out in record[:-1]] + [("text", {"type": "text", "text": record[-1]})]
+    (tmp_path / f"{sid}.jsonl").write_text(_run_events(sid, events), encoding="utf-8")
+    rows = go.grade_runs(str(tmp_path))[1]
+    return next(r for r in rows if r["id"] == sid)
+
+
+def test_office_scenarios_pass_and_fail(tmp_path):
+    """묶음 O: 맞는 명령(check -> comment --dry-run, write --cells 한 번, attachments --save -> reader read, word.py write,
+    word.py fill --file)은 통과. 지어낸 옵션, 칸마다 반복, 확인 없이 메모 달기, 다른 도구로 대신하기는 실패."""
+    by_id = go.load_scenarios()[1]
+    assert {s for s in by_id if s.startswith("O")} == set(OFFICE_CASES)
+    for sid, (goods, bads) in OFFICE_CASES.items():
+        for rec in goods:
+            row = _office_run(tmp_path, sid, rec)
+            assert row["결과"] == "통과", (sid, rec, row["실패"])
+        for rec, why in bads:
+            row = _office_run(tmp_path, sid, rec)
+            assert row["결과"] == "실패" and why in row["실패"], (sid, rec, row["실패"])
+
+
+def test_command_segments_split_outside_quotes():
+    assert go.command_segments('a --cells "C6=ft; C7=x"; b --dry-run && c | d') == [
+        'a --cells "C6=ft; C7=x"', "b --dry-run", "c", "d"]
+    assert go.command_segments("a --cells 'C6 = ft;C7 = x'") == ["a --cells 'C6 = ft;C7 = x'"]
+    assert go.cmd_hit(r"comment\b(?![^\n]*--dry-run)", "comment --add; other --dry-run")
+
+
+def test_office_scenarios_judge_by_command_not_skill_name():
+    """채점은 스킬 이름(office-cli, office-excel 등)에 기대지 않는다: 명령 정규식과 금지 규칙에 스킬 이름이 없음."""
+    by_id = go.load_scenarios()[1]
+    for sid in OFFICE_CASES:
+        sc = by_id[sid]
+        regexes = sc.get("commands", []) + [sc.get("tool_ok", "")] + sc.get("forbid", [])
+        assert not any(re.search(r"office-(cli|excel|doc|mail|spec)", rx) for rx in regexes), sid
+
+
+def test_no_fake_office_rule():
+    """회사 PC 오류 로그에서 나온 지어낸 office-cli 명령·옵션은 어느 요청에서든 공통 규칙 위반."""
+    for c in (f'{EX} write --range C6 --text ft', f'{EX} write --cell C6 --value ft', f'{OF} write --text "x"',
+              f'{OF} transfer --source excel --to word', f'{OF} transfer --from word --to excel --text "x"',
+              f'{OF} undo --target "{G}\\a.xlsx"', f'{EX} list', 'cd C:\\CLI\\office-cli; python excel.py write --cell C6'):
+        assert _rule_hits("no_fake_office", c), c
+    for c in (f'{EX} write --cells "C6=ft; C7=℃"', f'{EX} comment --action add --range B5 --text "의견"',
+              f'{WD} write --text "## 제목"', f'{OF} transfer --from excel --range A1:D10 --to word',
+              f'{OF} undo --list', f'{EX} write --cells C6=ft; {WD} write --text "x"', f'{EX} read --range A1:B2',
+              'python "C:\\CLI\\ml-kit\\ml_train.py" -f a.xlsx'):
+        assert not _rule_hits("no_fake_office", c), c
+
+
+def test_make_office_samples_is_allowed_script():
+    for c in (f'python "C:\\CLI-dev\\office-cli\\tools\\make_office_samples.py" "{G}"',
+              f'cd C:\\CLI-dev\\office-cli\\tools; python make_office_samples.py "{G}"'):
+        assert not _rule_hits("no_adhoc_py", c), c
+
+
+def test_manual_scenario_is_marked_and_left_out_of_bulk(tmp_path, monkeypatch):
+    """manual 시나리오(O3, Outlook 메일 준비): 기록이 없으면 '수동 전용'으로 없음, 메시지 팩은 준비 안내를 붙이고 한 번에 보내기에서 뺌."""
+    by_id = go.load_scenarios()[1]
+    assert [s for s in by_id if by_id[s].get("manual")] == ["O3"]
+    rows = {r["id"]: r for r in go.grade_runs(str(tmp_path))[1]}
+    assert rows["O3"]["결과"] == "없음" and "수동 전용" in rows["O3"]["실패"]
+    assert "수동 전용" not in rows["O1"]["실패"]
+    monkeypatch.setattr(go, "PACK_DIR", str(tmp_path / "pack"))
+    go.make_pack(None)
+    text = (tmp_path / "pack" / "O_office-cli_문서_작업.md").read_text(encoding="utf-8")
+    single, bulk = text.split("## 한 번에 보내기")
+    assert "수동 준비: Outlook" in single and f"{G}\\시험성적서.docx" in single and "[O3]" in single
+    assert "[O3]" not in bulk and "[O1]" in bulk and "[O5]" in bulk
+    assert "S -> A -> M -> P -> R -> O -> X" in (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
+
+
+def test_office_samples_match_scenarios(tmp_path):
+    """S1 샘플(make_office_samples.py)이 시나리오가 기대하는 파일과 값을 만든다 (O1 대조 항목, O2의 빈 칸, O5의 자리)."""
+    openpyxl = pytest.importorskip("openpyxl")
+    docx = pytest.importorskip("docx")
+    sys.path.insert(0, os.path.join(os.path.dirname(HERE), "office-cli", "tools"))
+    try:
+        import make_office_samples
+    finally:
+        sys.path.pop(0)
+    made = make_office_samples.main(str(tmp_path))
+    assert set(made) == {"규격서.txt", "규격대조.xlsx", "단위표.xlsx", "주간보고.docx", "성적서양식.docx", "시험성적서.docx"}
+    ws = openpyxl.load_workbook(tmp_path / "규격대조.xlsx").active
+    assert [ws[f"B{r}"].value for r in range(3, 8)] == ["정격 전압", "소비 전류", "동작 온도", "절연 저항", "포장 색상"]
+    ws = openpyxl.load_workbook(tmp_path / "단위표.xlsx").active
+    assert ws["C6"].value is None and ws["C7"].value is None and ws["C5"].value == "단위"
+    form = "\n".join(p.text for p in docx.Document(str(tmp_path / "성적서양식.docx")).paragraphs)
+    assert "{{업체명}}" in form and "{{시험일}}" in form
+    assert "판정: 합격" in "\n".join(p.text for p in docx.Document(str(tmp_path / "시험성적서.docx")).paragraphs)
+    by_id = go.load_scenarios()[1]
+    for sid, files in (("O1", ["규격대조.xlsx", "규격서.txt"]), ("O2", ["단위표.xlsx"]), ("O4", ["주간보고.docx"]),
+                       ("O5", ["성적서양식.docx"])):
+        assert all(f in by_id[sid]["message"] for f in files), sid

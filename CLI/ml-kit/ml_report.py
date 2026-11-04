@@ -7,10 +7,10 @@ cover, contents, summary, data, method, per-target results with charts, version 
 operation guide and appendix. All numbers and texts are generated deterministically from the
 training artifacts; an LLM may optionally override narrative paragraphs with --slots.
 
-Inputs (all written by ml_train.py 2.2.0+):
+Inputs (all written by ml_train.py):
   <data_root>/history.jsonl, <version_dir>/leaderboard.json, model_<t>.json, oof_<t>.csv, correlation.csv
 
-Select the version with -f <data file> (2.4.0: the best version of every target, built by
+Select the version with -f <data file> (the best version of every target, built by
 ml_train.make_best when the history changed; one report per task), -m <version_dir>, or with
 -d <data_root> [-v vN] (without -v: the best version of the latest experiment, i.e. same task and
 target set as the latest training run).
@@ -23,9 +23,11 @@ import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library, MissingLibraryError,
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
-    normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names, VERSION,
+    strip_unit, note_recovered, read_text_file, resolve_column_names,
+    command_text, quote_arg, name_list,
 )
 
 setup_console()
@@ -36,8 +38,12 @@ import argparse
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
-import numpy as np
-import pandas as pd
+check_core_libraries("보고서")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import numpy as np
+    import pandas as pd
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "보고서")
 
 # Optional at import time so a missing package is reported as protocol JSON
 try:
@@ -64,7 +70,6 @@ except ImportError as _e:
 
 
 REPORT_TITLE = "ML 결과 보고서"
-REPORT_VERSION = VERSION
 
 # ==============================================================================
 # 1. Design tokens (grayscale-safe slate palette + one navy accent)
@@ -88,7 +93,6 @@ CONDITIONAL_SCORE = 0.70
 OVERFIT_LIMIT = 0.15
 
 MPL_NAVY = "#1E3A8A"
-MPL_GRAY = "#9CA3AF"
 MPL_LIGHT = "#E5E7EB"
 MPL_ORANGE = "#D97706"
 MPL_INK = "#1F2937"
@@ -404,7 +408,7 @@ def _ensure_styles(doc) -> List[str]:
 
 def docx_from_template_dir(tdir: str):
     """Opens python-docx's unpacked template folder as a document, tolerating missing optional parts.
-    On the company PC a security product removed docProps/thumbnail.jpeg from the folder, and python-docx
+    A security product can remove docProps/thumbnail.jpeg from the folder, and python-docx
     fails on any part a relationship points to but that is missing. The folder is packed into an in-memory
     .docx without those relationships. Returns (document, list of dropped part names)."""
     import io
@@ -561,9 +565,6 @@ class ReportDoc:
     def h2(self, text: str) -> None:
         self.doc.add_heading(text, level=2)
 
-    def h3(self, text: str) -> None:
-        self.doc.add_heading(text, level=3)
-
     def para(self, text: str, size: float = 10, color: str = C_INK, bold: bool = False,
              align=None, space_after: Optional[float] = None) -> Any:
         p = self.doc.add_paragraph()
@@ -573,12 +574,6 @@ class ReportDoc:
             p.paragraph_format.space_after = Pt(space_after)
         _set_run_font(p.add_run(text), size=size, color=color, bold=bold)
         return p
-
-    def bullets(self, items: List[str]) -> None:
-        for it in items:
-            p = self.doc.add_paragraph(style="List Bullet")
-            p.paragraph_format.space_after = Pt(2)
-            _set_run_font(p.add_run(it), size=10, color=C_INK)
 
     def page_break(self) -> None:
         self.doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
@@ -649,26 +644,6 @@ class ReportDoc:
                 elif bold:
                     _shade(cell, "F8FAFC")
                 _set_run_font(p.add_run(text), size=font_size, bold=bold, color=color)
-        self.spacer()
-
-    def kv_table(self, pairs: List[Tuple[str, Any]], caption: Optional[str] = None,
-                 widths: Tuple[float, float] = (4.2, 12.8)) -> None:
-        if caption:
-            self.caption("표", caption)
-        t = self.doc.add_table(rows=len(pairs), cols=2)
-        t.alignment = WD_TABLE_ALIGNMENT.CENTER
-        t.autofit = False
-        _table_borders(t)
-        _fix_widths(t, list(widths))
-        for i, (k, v) in enumerate(pairs):
-            kc, vc = t.rows[i].cells
-            for c in (kc, vc):
-                _cell_margins(c)
-                c.paragraphs[0].paragraph_format.space_after = Pt(0)
-            _shade(kc, C_HEAD)
-            _set_run_font(kc.paragraphs[0].add_run(str(k)), size=9, bold=True, color=C_INK)
-            text = v if isinstance(v, str) else fmt(v)
-            _set_run_font(vc.paragraphs[0].add_run(text), size=9, color=C_INK)
         self.spacer()
 
     def metric_cards(self, cards: List[Tuple[str, str, str]]) -> None:
@@ -884,10 +859,30 @@ def _read_jsonl(path: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _version_hint(vdir: str) -> str:
+    """[추천] / [후보] for a version folder that does not exist: the versions of the same data folder that hold a
+    trained version (leaderboard.json). One -> [추천] the running command with that folder (-m, full command, R8);
+    several -> [후보] (the user picks: another version is another model)."""
+    root = os.path.dirname(vdir)
+    if not os.path.isdir(root):
+        return ""
+    found = [d for d in os.listdir(root)
+             if re.fullmatch(r"v\d+", d) and os.path.isfile(os.path.join(root, d, "leaderboard.json"))]
+    found.sort(key=lambda d: int(d[1:]))
+    if not found:
+        return " 이 데이터 폴더에 학습한 버전이 없습니다. 먼저 ml_train.py로 학습하십시오."
+    if len(found) == 1:
+        cmd = command_text(drop={"--model": "model", "-m": "model"})
+        path = os.path.join(root, found[0])
+        return f" 있는 버전은 {found[0]} 하나입니다. [추천] " + (f"{cmd} -m {quote_arg(path)}" if cmd else f"-m {quote_arg(path)}")
+    return f" 있는 버전 중에서 사용자에게 고르게 하십시오: [후보] {', '.join(found[-10:])}"
+
+
 def load_version(version_dir: str, target_filter: Optional[List[str]] = None) -> Dict[str, Any]:
     vdir = os.path.abspath(version_dir)
     if not os.path.isdir(vdir):
-        raise FileNotFoundError(f"버전 폴더를 찾을 수 없습니다: {vdir} (학습 결과 JSON의 version_dir 값을 지정하십시오)")
+        raise FileNotFoundError(f"버전 폴더를 찾을 수 없습니다: {vdir} (학습 결과 JSON의 version_dir 값을 지정하십시오)."
+                                + _version_hint(vdir))
     lb_path = os.path.join(vdir, "leaderboard.json")
     if not os.path.isfile(lb_path):
         raise InputError(f"leaderboard.json이 없습니다. ml_train.py가 만든 버전 폴더(vX)를 지정하십시오: {vdir}")
@@ -899,7 +894,7 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
     records = _read_jsonl(ledger)
     rec = [r for r in records if r.get("version") == version]
     if not rec:
-        raise InputError(f"원장에 버전 '{version}' 기록이 없습니다. [사용 가능한 버전]: {[r.get('version') for r in records]}")
+        raise InputError(f"원장에 버전 '{version}' 기록이 없습니다. [사용 가능한 버전]: {name_list([r.get('version') for r in records])}")
     record = rec[-1]
     leaderboard = load_json_file(lb_path)
 
@@ -907,7 +902,7 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
     if target_filter:
         # like ml_predict -y: exact name, then a unique name without its unit ('수율' for '수율(1차)' and '수율(최종)'
         # -> [후보]; an exact '수율(1차)' takes that one only)
-        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(--target)")[0])
+        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(-y)")[0])
         names = [t for t in names if t in wanted]
 
     excluded_all = None
@@ -961,12 +956,11 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
             "task_history": task_history}
 
 
-def merged_feature_info(targets: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], List[str]]:
-    """Union of feature schema / stats / required inputs over the targets (they differ in a best version)."""
+def merged_feature_info(targets: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Union of feature schema / stats over the targets (they differ in a best version)."""
     schema: Dict[str, Any] = {"numeric": [], "categorical": {}, "datetime": {}}
     stats: Dict[str, Any] = {}
     dstats: Dict[str, Any] = {}
-    required: List[str] = []
     for t in targets:
         meta = t["meta"]
         sc = meta.get("feature_schema") or {}
@@ -979,25 +973,25 @@ def merged_feature_info(targets: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], 
             stats.setdefault(c, v)
         for c, v in (meta.get("datetime_stats") or {}).items():
             dstats.setdefault(c, v)
-        required += [f for f in meta.get("features_required", []) if f not in required]
-    return schema, stats, dstats, required
+    return schema, stats, dstats
 
 
 # ==============================================================================
 # 5. Narrative (deterministic; --slots may override)
 # ==============================================================================
 
-def _metric_info(task: str) -> Tuple[str, str]:
-    return ("val_r2", "R²") if task == "regression" else ("val_f1_macro", "Macro-F1")
+def _metric_label(task: str) -> str:
+    return "R²" if task == "regression" else "Macro-F1"
 
 
 def exclusion_line(t: Dict[str, Any], metric: str) -> str:
     """'학습 제외 3행 (직접 1, 자동 이상치 2) | 검증 R²(제외 행 포함) 0.81' or '' when nothing was left out."""
     e = t.get("excluded") or {}
-    n = int(e.get("manual", 0)) + int(e.get("auto", 0))
+    n = int(e.get("manual", 0)) + int(e.get("auto", 0)) + int(e.get("condition", 0))
     parts = []
     if n:
-        parts.append(f"학습 제외 {n}행 (직접 표시 {e.get('manual', 0)}, 자동 이상치 {e.get('auto', 0)})")
+        cond = f"조건({e.get('condition_text')}) {e['condition']}, " if e.get("condition") else ""
+        parts.append(f"학습 제외 {n}행 (직접 표시 {e.get('manual', 0)}, {cond}자동 이상치 {e.get('auto', 0)})")
         if isinstance(e.get("all_rows_score"), (int, float)):
             parts.append(f"검증 {metric}(제외 행 포함) {e['all_rows_score']:.4f}")
     if e.get("forced_include"):
@@ -1106,7 +1100,7 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     _setup_matplotlib()
     rec, targets, version = ctx["record"], ctx["targets"], ctx["version"]
     task = rec["task"]
-    metric_key, metric_label = _metric_info(task)
+    metric_label = _metric_label(task)
     prof = rec.get("data_profile", {})
     data_name = prof.get("source_file", "")
     task_ko = "회귀 (수치 예측)" if task == "regression" else "분류 (범주 예측)"
@@ -1222,10 +1216,13 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     excl_lines = [f"{t['name']}: {exclusion_line(t, metric_label)}" for t in targets if exclusion_line(t, metric_label)]
     if excl_lines:
         R.para("학습 제외 행: 데이터의 '제외' 열에 글자가 있는 행(직접 표시)과, 값이 중앙값에서 크게 벗어난 행"
-               "(중앙값·절대편차 기준 3.5배 초과, 자동 이상치)은 학습에서 뺐습니다. '제외' 열에 '포함'이라고 쓴 행은 자동으로 빼지 않습니다. "
+               "(중앙값·절대편차 기준 3.5배 초과, 자동 이상치)은 학습에서 뺐습니다. "
+               + ("학습 때 준 조건(--exclude-where)에 맞는 행도 뺐습니다. "
+                  if any((t.get("excluded") or {}).get("condition") for t in targets) else "")
+               + "'제외' 열에 '포함'이라고 쓴 행은 자동으로 빼지 않습니다. "
                "뺀 행 목록은 버전 폴더의 excluded_rows.csv에 있습니다.\n" + "\n".join(excl_lines),
                size=9, space_after=4)
-    schema, stats, dstats, required_inputs = merged_feature_info(targets)
+    schema, stats, dstats = merged_feature_info(targets)
     miss = prof.get("feature_missing", {})
     frows = []
     for f in schema["numeric"]:
@@ -1355,8 +1352,8 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         **({"unverified": unverified} if unverified else {}),
         "preview": f"[보고서 완료] {version} / 타겟 {len(targets)}개 / 종합 판정 {overall} / 저장: {os.path.basename(saved)}",
         "agent_directive": (("VERIFIED: " if not unverified else "UNVERIFIED: 보고서 확인 실패 (" + "; ".join(unverified)
-                             + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ") + f"ML result report for {version} ({len(targets)} target(s)) saved to "
-                            f"'{os.path.basename(saved)}'. Overall verdict={overall}. Next step: report the file path to the user."),
+                             + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ") + f"{version} ML 결과 보고서(타겟 {len(targets)}개)를 "
+                            f"'{os.path.basename(saved)}'에 저장했습니다. 종합 판정 {overall}. report_file 경로를 사용자에게 알리세요."),
     }
 
 
@@ -1379,37 +1376,11 @@ def parse_slots(raw: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
-def resolve_version_dir(args: argparse.Namespace) -> str:
-    """-m <version_dir> wins; otherwise -d <data_root> with -v, or the task's best version (ml_train.task_best_version)."""
-    if args.model:
-        return args.model
-    if not args.data_dir:
-        raise InputError("보고서를 만들 버전 폴더(-m <version_dir>) 또는 데이터 폴더(-d <data_root>)를 지정하십시오.")
-    root = os.path.abspath(args.data_dir)
-    if args.version:
-        return os.path.join(root, normalize_version(args.version))
-    ledger = os.path.join(root, "history.jsonl")
-    if not os.path.isfile(ledger):
-        raise InputError(f"실험 원장(history.jsonl)이 없습니다: {ledger}")
-    records = _read_jsonl(ledger)
-    if not records:
-        raise InputError(f"실험 원장이 비어 있습니다: {ledger}")
-    import ml_train  # same choice as ml_train.py --history best_version
-    task = records[-1].get("task", "regression")
-    best = ml_train.task_best_version(records, root, task)
-    if best is None:
-        raise InputError(f"{task} 학습 기록 중 버전 폴더가 온전한 기록이 없습니다: {root}. 먼저 ml_train.py로 학습하십시오.")
-    how = ("모든 타겟의 최고 점수" if best["complete"]
-           else f"타겟별 최고가 여러 버전에 나뉘어 최고 타겟이 가장 많은 버전, {best['missing']}은(는) 다른 버전이 더 좋음")
-    sys.stderr.write(f"[INFO] 보고서 버전 자동 선택: {best['version']} ({how})\n")
-    return os.path.join(root, best["version"])
-
-
 def make_export(version_dir: str, task: str, title: Optional[str], targets: Optional[List[str]] = None,
                 overwrite: bool = False) -> Optional[Dict[str, Any]]:
-    """2.9.2: the report and the performance calculator (ml_export.py) are made as a set (regression versions only).
-    Made BEFORE the Word report so the report can state the calculator's agreement with the model (2.9.4).
-    targets: the report's -t targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
+    """The report and the performance calculator (ml_export.py) are made as a set (regression versions only).
+    Made BEFORE the Word report so the report can state the calculator's agreement with the model.
+    targets: the report's -y targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
     A failure never fails the report: {"note": ...}."""
     if task != "regression" or os.environ.get("ML_KIT_SKIP_EXPORT") == "1":
         return None
@@ -1474,17 +1445,17 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
 def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
     for err, pkg in ((_DOCX_IMPORT_ERROR, "python-docx"), (_MPL_IMPORT_ERROR, "matplotlib")):
         if err is not None:
-            raise InputError(f"보고서 생성에 필요한 {pkg} 패키지가 설치되어 있지 않습니다 ({err}). docs/ENVIRONMENT.md를 참고하십시오.")
+            raise MissingLibraryError(pkg, "보고서(Word)")
     target_filter = None
-    if args.target and args.target.strip().lower() != "all":
-        target_filter = [t.strip() for t in args.target.split(",") if t.strip()]
-    if getattr(args, "file", None) and not args.model and not args.data_dir:
+    if args.targets and args.targets.strip().lower() != "all":
+        target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
+    if not args.model:
         return execute_best_report(args, target_filter)
-    vdir = resolve_version_dir(args)
+    vdir = args.model
     ctx = load_version(vdir, target_filter)
     export = make_export(vdir, ctx["record"]["task"], getattr(args, "title", None),
                          [t["name"] for t in ctx["targets"]] if target_filter else None, overwrite=args.overwrite)
-    result = build_report(ctx, parse_slots(args.slots), args.out, overwrite=args.overwrite, export=export)
+    result = build_report(ctx, parse_slots(args.slots), args.save, overwrite=args.overwrite, export=export)
     attach_export(result, export)
     return result
 
@@ -1494,14 +1465,6 @@ def _numbered_out(out: Optional[str], version: str, many: bool) -> Optional[str]
         return out
     stem, ext = os.path.splitext(out)
     return f"{stem}_{version}{ext or '.docx'}"
-
-
-def _layout_args(args: argparse.Namespace, records: List[Dict[str, Any]], task: str) -> argparse.Namespace:
-    """Data layout for the predict command: the -f options, else the latest training of the task (as --best uses)."""
-    import ml_train
-    layout = ml_train._latest_layout(records, task)
-    return argparse.Namespace(**{k: getattr(args, k, None) if getattr(args, k, None) is not None else layout.get(k)
-                                 for k in ("header_row", "unit_row", "data_row")})
 
 
 def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[str]]) -> Dict[str, Any]:
@@ -1519,7 +1482,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
     picked = None
     if target_filter:   # resolved once over the targets of all best versions ('수율' for two of them -> [후보])
         all_names = list(dict.fromkeys(str(t) for bv in versions for t in bv["targets"]))
-        picked = resolve_column_names(target_filter, all_names, "타겟(--target)")[0]
+        picked = resolve_column_names(target_filter, all_names, "타겟(-y)")[0]
     for bv in versions:
         flt = None
         if picked is not None:
@@ -1531,13 +1494,12 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                           [t["name"] for t in ctx["targets"]] if flt else None, overwrite=args.overwrite)
               if export is None else None)
         export = export or ex
-        reports.append(build_report(ctx, slots, _numbered_out(args.out, bv["version"], len(versions) > 1),
+        reports.append(build_report(ctx, slots, _numbered_out(args.save, bv["version"], len(versions) > 1),
                                     overwrite=args.overwrite, export=ex))
     if not reports:
         all_targets = [t for bv in versions for t in bv["targets"]]
         raise InputError(f"지정한 타겟 {target_filter}이(가) 최고 버전에 없습니다. [후보] {', '.join(all_targets[:10])}")
 
-    _, records = ml_train._ledger_for(os.path.abspath(args.file))
     result = dict(reports[0])
     result.update({
         "made_best": info["made_best"],
@@ -1550,8 +1512,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                     for r in reports],
         "next_commands": [
             {"purpose": f"새 데이터 예측 ({bv['task']}, <새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-             "command": f'python "{os.path.join(here, "ml_predict.py")}" -m "{bv["version_dir"]}" -f "<새데이터.xlsx>"'
-                        + ml_train.layout_flags(_layout_args(args, records, bv["task"])),
+             "command": f'python "{os.path.join(here, "ml_predict.py")}" -m "{bv["version_dir"]}" -f "<새데이터.xlsx>"',
              "needs_input": True, "placeholder": "<새데이터.xlsx>"} for bv in versions],
     })
     made = ("타겟별 최고 학습 조건으로 다시 학습한 " if info["made_best"] else "이미 최신인 ")
@@ -1569,7 +1530,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
     result["agent_directive"] = (
         ("VERIFIED: " if not bad else "UNVERIFIED: 보고서 확인 실패 (" + "; ".join(bad) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + f"{made}최고 버전 {vers}으로 ML 결과 보고서 {len(reports)}개를 저장했습니다 ({files}).{multi} "
-        f"report_file 링크, overall_verdict, best_targets의 타겟별 출처 버전과 점수를 사용자에게 알리세요. "
+        f"report_file 경로, overall_verdict, best_targets의 타겟별 출처 버전과 점수를 사용자에게 알리세요. "
         f"이후 예측에는 best_version_dir을 쓰세요 ({predict})."
     )
     attach_export(result, export)
@@ -1577,14 +1538,11 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
 
 
 def main():
-    parser = JsonArgumentParser(description="ML 결과 보고서 (Word) generator (-f: every target in one report per task)")
+    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (-f: 작업 유형마다 모든 타겟을 보고서 1개로)")
     parser.add_argument("--model", "-m",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
-    parser.add_argument("--data-dir", "-d", dest="data_dir",
-                        help="데이터 폴더 (<파일명>_ml_data). -v 생략 시 모든 타겟의 최고가 있는 버전 (--history의 best_version)")
-    parser.add_argument("--version", "-v", help="-d와 함께 쓸 버전 (예: v2 또는 2)")
-    parser.add_argument("--target", "-t", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
-    parser.add_argument("--out", "-o", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
+    parser.add_argument("--targets", "-y", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
+    parser.add_argument("--save", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--slots", help="소견 덮어쓰기 JSON 파일 또는 문자열: summary, data, performance, features, lineage, "
@@ -1598,9 +1556,9 @@ def main():
     parser.add_argument("--data-row", type=int, help="-f와 함께: 데이터 시작 행 (생략 시 이력 값)")
     parser.add_argument("--title", help="함께 만드는 성능예측표(엑셀)의 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
     args = parser.parse_args()
-    if not args.model and not args.data_dir and not args.file:
-        parser.error("-f <데이터파일>, -m <version_dir>, -d <data_root> 중 하나를 지정해야 합니다.")
-    run_cli(lambda: execute_report(args), hint="Check the version folder path (version_dir from the training result).")
+    if not args.model and not args.file:
+        parser.error("-f <데이터파일> 또는 -m <version_dir> 중 하나를 지정해야 합니다.")
+    run_cli(lambda: execute_report(args), hint="확인할 것: 버전 폴더 경로 (학습 결과의 version_dir).")
 
 
 if __name__ == "__main__":

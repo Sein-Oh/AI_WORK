@@ -26,6 +26,7 @@ def isolated_dirs(tmp_path, monkeypatch):
     data.mkdir()
     monkeypatch.setenv("OFFICE_CLI_CACHE_DIR", str(cache))
     monkeypatch.setenv("OFFICE_CLI_DATA_DIR", str(data))
+    monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "0")      # R10: 테스트는 시간 제한 없음 (CONTINUE 시험만 따로 켬)
     return {"cache": cache, "data": data}
 
 

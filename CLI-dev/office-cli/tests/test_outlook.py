@@ -3,6 +3,7 @@ import datetime
 import datetime as dt
 import json
 import os
+import re
 import types
 
 import pytest
@@ -10,6 +11,16 @@ import pytest
 import _runtime as rt
 import outlook
 from office_helpers import error_log_text, run_fresh, run_main, run_outlook, SECRET
+
+
+class _DraftsFolder:
+    """임시 보관함 (send는 메일의 Parent.EntryID가 이 폴더인지 봄)."""
+    Name = "임시 보관함"
+    EntryID = "FOLDER-DRAFTS"
+
+
+DRAFTS = _DraftsFolder()
+DELETED = type("Deleted", (), {"Name": "지운 편지함", "EntryID": "FOLDER-DELETED"})()
 
 
 class Recip:
@@ -57,8 +68,16 @@ class Mail:
         self.HTMLBody = html
         self.Recipients = Recips(list(recips))
         self.Attachments = Attachments()
-        self.sent = self.displayed = False
+        self.sent = self.displayed = self.saved = False
+        self.Sent = False
+        self.Submitted = False
+        self.Parent = DRAFTS
+        self.EntryID = ""
         self.GetInspector = object()
+
+    def Save(self):                                          # 임시 보관함에 저장하면 EntryID가 생김
+        self.saved = True
+        self.EntryID = self.EntryID or "DRAFT-NEW"
 
     def Send(self):
         self.sent = True
@@ -127,6 +146,10 @@ class _DraftMail:
         self.Attachments = type("A", (), {"added": [], "Add": lambda s, p: s.added.append(p), "Count": 0})()
         self.GetInspector = object()
         self.displayed = False
+        self.EntryID = ""
+
+    def Save(self):
+        self.EntryID = "DRAFT-X"
 
     def Display(self):
         self.displayed = True
@@ -352,6 +375,9 @@ class FakeRecipients:
 
 
 class FakeDraft:
+    """작성 중인 메일 (Outlook MailItem: 보내기 전 Sent == False, Save()로 임시 보관함에 저장되면 EntryID가 생김)."""
+    _n = 0
+
     def __init__(self, atts=(), grow=True):
         self.To = ""
         self.Subject = ""
@@ -359,13 +385,25 @@ class FakeDraft:
         self.Attachments = FakeAttachments(atts, grow)
         self.Recipients = FakeRecipients()
         self.GetInspector = object()
-        self.displayed = self.sent = False
+        self.Class = outlook.OL_MAIL
+        self.Sent = False
+        self.Submitted = False
+        self.Parent = DRAFTS
+        self.EntryID = ""
+        self.displayed = False
+        self.sent = 0
+
+    def Save(self):
+        if not self.EntryID:
+            FakeDraft._n += 1
+            self.EntryID = f"D{FakeDraft._n}"
 
     def Display(self):
         self.displayed = True
 
     def Send(self):
-        self.sent = True
+        self.sent += 1
+        self.Sent = True
 
 
 class FakeMail:
@@ -379,6 +417,7 @@ class FakeMail:
         self.CC = ""
         self.UnRead = False
         self.Class = outlook.OL_MAIL
+        self.Sent = True                                     # 받은 메일
         self.ReceivedTime = datetime.datetime(2026, 11, 4, 9, 0)
         self.Attachments = FakeAttachments(atts)
         self.grow = grow
@@ -413,9 +452,11 @@ class FakeOutlookApp:
         self.mail = mail
         self.created = []
         self.grow = grow
+        self.inspector_item = None                           # 열린 창의 메일 (작성 창이면 초안)
 
     def ActiveInspector(self):
-        return None
+        item = self.inspector_item
+        return None if item is None else type("I", (), {"CurrentItem": item})()
 
     def ActiveExplorer(self):
         return type("E", (), {"Selection": FakeSelection(self.mail)})()
@@ -444,10 +485,15 @@ def ol_env(monkeypatch, tmp_path):
 
     def get_namespace(app):
         def find(i):
-            if state["app"].mail is not None and i == state["app"].mail.EntryID:
-                return state["app"].mail
+            app = state["app"]
+            if app.mail is not None and i == app.mail.EntryID:
+                return app.mail
+            drafts = app.created + (app.mail.drafts if app.mail is not None else [])
+            for d in drafts:                                 # 보낸 초안은 보낼 편지함으로 옮겨져 같은 EntryID로 찾지 못함
+                if d.EntryID == i and not (d.sent and state.get("sent_moves", True)):
+                    return d
             raise RuntimeError("없음")
-        return type("NS", (), {"GetItemFromID": staticmethod(find)})()
+        return type("NS", (), {"GetItemFromID": staticmethod(find), "GetDefaultFolder": staticmethod(lambda n: DRAFTS)})()
     monkeypatch.setattr(outlook, "get_namespace", get_namespace)
     return state
 
@@ -535,23 +581,181 @@ def ol(monkeypatch):
 def test_default_is_display_only(capsys, monkeypatch):
     mail = Mail([Recip("a@x.com", True)])
     code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "첫줄\\n둘째줄")
-    assert code == 0 and mail.displayed and not mail.sent and out["sent"] is False
-    assert "대신 발송하지 마세요" in out["agent_directive"]
+    assert code == 0 and mail.displayed and mail.saved and not mail.sent and out["sent"] is False
+    assert "대신 발송하지 마세요" in out["agent_directive"] and "confirm_commands[0](send)" in out["agent_directive"]
+    # 1.4.73: 발송 명령은 next_commands(그대로 실행)가 아니라 confirm_commands(사용자 '예' 뒤에만)
+    assert "next_commands" not in out and "needs_user_confirm" not in json.dumps(out), out
+    assert out["confirm_commands"][0]["command"].endswith(f"send --id {out['draft_id']}"), out
     body_pos = mail.HTMLBody.index("첫줄<br>둘째줄")
     assert mail.HTMLBody.index("<body>") < body_pos < mail.HTMLBody.index("서명")     # 서명 위, body 안
 
 
-def test_explicit_send_after_recipient_check(capsys, monkeypatch):
-    mail = Mail([Recip("a@x.com", True)])
-    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "s", "--send")
-    assert code == 0 and mail.sent and out["sent"] is True
+def test_compose_has_no_send_flag(capsys, monkeypatch):
+    # 1.4.72: new/reply/forward는 보내지 않음 (발송은 저장한 초안을 send로만: 같은 메일을 또 만들어 보내는 길이 없음)
+    code, out = run(capsys, monkeypatch, Mail(), "new", "--to", "a@x.com", "--send")
+    assert code == 2 and out["status"] == "error", out
+
+
+def test_send_sends_saved_draft_once(ol_env, capsys):
+    code, out = run_outlook(capsys, "new", "--to", "a@x.com", "--subject", "s")
+    d = ol_env["app"].created[0]
+    assert code == 0 and d.displayed and d.sent == 0 and out["draft_id"], out
+    cmd = out["confirm_commands"][0]["command"].split(" send ")[1].split()
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 0 and d.sent == 1 and out["sent"] is True and out["agent_directive"].startswith("UNVERIFIED:"), out
+    # 같은 send를 다시 실행해도 (이미 보낸 초안) 다시 나가지 않음
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 1 and d.sent == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "보내지 않았습니다" in out["message"]
+    # Outlook이 보낸 항목을 같은 EntryID로 돌려주더라도 Sent == True면 보내지 않음
+    ol_env["sent_moves"] = False
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 1 and d.sent == 1 and "초안이 아니" in out["message"], out
+
+
+def test_send_refuses_received_mail(ol_env, capsys):
+    m = _attach_mail(ol_env)
+    code, out = run_outlook(capsys, "send", "--id", "M1")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and m.drafts == [], out
 
 
 def test_unresolved_recipient_is_not_sent(capsys, monkeypatch):
     mail = Mail([Recip("오타주소", False)])
-    code, out = run(capsys, monkeypatch, mail, "new", "--to", "오타주소", "--send")
+    mail.EntryID = "D-BAD"
+    assert outlook.remember_draft("D-BAD") is None                  # 이 도구가 만든 초안
+    monkeypatch.setattr(outlook, "get_namespace",
+                        lambda app: types.SimpleNamespace(GetItemFromID=lambda i: mail, GetDefaultFolder=lambda n: DRAFTS))
+    code, out = run(capsys, monkeypatch, mail, "send", "--id", "D-BAD")
     assert code == 1 and not mail.sent and mail.displayed
     assert out["unresolved_recipients"] == ["오타주소"] and out["agent_directive"].startswith("STOP_RETRY")
+    # 보내지 않았으니 원장에 '보냄'이 남지 않음: 주소를 고친 뒤 send 가능
+    mail.Recipients = Recips([Recip("a@x.com", True)])
+    code, out = run(capsys, monkeypatch, mail, "send", "--id", "D-BAD")
+    assert code == 0 and mail.sent, out
+
+
+def _new_draft(ol_env, capsys):
+    code, out = run_outlook(capsys, "new", "--to", "a@x.com", "--subject", "s")
+    assert code == 0, out
+    return ol_env["app"].created[-1], out["confirm_commands"][0]["command"].split(" send ")[1].split()
+
+
+def _refused(out, code):
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY: 발송하지 않았습니다"), out
+    assert "next_commands" not in out, out                          # 목록을 다시 보고 다른 id로 보내는 길을 주지 않음
+
+
+def test_send_refuses_outbox_submitted(ol_env, capsys):
+    # 10차 검토: Send() 뒤 보낼 편지함에 Submitted=True, Sent=False로 남고 같은 EntryID로 찾힘 (오프라인·캐시 모드)
+    d, cmd = _new_draft(ol_env, capsys)
+    ol_env["sent_moves"] = False
+
+    def send():
+        d.sent += 1
+        d.Submitted = True
+    d.Send = send
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 0 and d.sent == 1, out
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 1
+    d.Submitted = False                                              # Submitted를 못 읽어도 원장이 막음
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 1 and "이미 send로 보냈습니다" in out["message"], out
+
+
+def test_send_refuses_deleted_or_moved_draft(ol_env, capsys):
+    d, cmd = _new_draft(ol_env, capsys)
+    d.Parent = DELETED                                               # PST: 지운 편지함으로 옮겨도 EntryID 그대로
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 0 and "임시 보관함에 없어" in out["message"], out
+    d.Parent = type("F", (), {"Name": "?"})()                        # 폴더를 확인하지 못함 -> 보내지 않음
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 0
+
+
+def test_send_refuses_users_own_draft(ol_env, capsys):
+    # 10차 검토: 사용자가 쓰다 둔 초안(임시 보관함)을 목록 번호로 send -> 이 도구가 만든 초안이 아니라 거부
+    other = FakeDraft()
+    other.EntryID, other.Subject = "USER-DRAFT", "쓰다 만 메일"
+    ol_env["app"].created.append(other)
+    m = {"entry_id": "USER-DRAFT", "subject": "쓰다 만 메일", "from": "", "received": ""}
+    outlook.remember_listing([m], "list")
+    for ident in (str(m["id"]), "USER-DRAFT"):
+        code, out = run_outlook(capsys, "send", "--id", ident)
+        _refused(out, code)
+        assert other.sent == 0 and "만든 초안이 아니" in out["message"], out
+
+
+def test_send_bad_id_is_refused_without_relist(ol_env, capsys):
+    # 10차 검토: send의 번호 오류는 RELIST(목록 보고 다시 실행)가 아니라 발송 거부, next_commands 없음
+    for ident in ("999", "NO-SUCH-ENTRY"):
+        code, out = run_outlook(capsys, "send", "--id", ident)
+        _refused(out, code)
+
+
+def test_send_concurrent_only_one_goes(ol_env, capsys, monkeypatch):
+    # 10차 검토: 같은 초안을 동시에 send 두 번 -> 원장 잠금 아래 '보냄' 기록이 먼저라 하나만 나감
+    import threading
+    d, cmd = _new_draft(ol_env, capsys)
+    barrier = threading.Barrier(2)
+    orig = outlook._unresolved
+
+    def slow(m):
+        r = orig(m)
+        barrier.wait(5)
+        return r
+    monkeypatch.setattr(outlook, "_unresolved", slow)
+    res = []
+
+    def go():
+        try:
+            res.append(outlook.cmd_send(types.SimpleNamespace(id=cmd[1]))["status"])
+        except rt.InputError as e:
+            res.append(str(e)[:20])
+    ts = [threading.Thread(target=go) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert d.sent == 1 and res.count("ok") == 1, res
+
+
+def test_compose_send_flag_recommends_command_without_it(capsys, monkeypatch, isolated_dirs):
+    for argv in (["new", "--to", "a@x.com", "--subject", f"보고 {SECRET}", "--send"], ["reply", "--id", "3", "--send", "--body", "네"],
+                 ["forward", "--id", "3", "--to", "b@x.com", "--send"]):
+        monkeypatch.setattr(rt, "CURRENT_ARGV", None)
+        code, out = run(capsys, monkeypatch, Mail(), *argv)
+        assert code == 2 and "--send는 없습니다" in out["message"] and "사용자 확인" in out["message"], out
+        rec = out["message"].split("[추천] ")[1]
+        assert rec.startswith("python ") and "--send" not in rec and f" {argv[0]} " in rec, rec
+        if argv[0] == "new":
+            assert f'--subject "보고 {SECRET}"' in rec, rec
+    assert SECRET not in error_log_text(isolated_dirs)                # 제목 같은 내용 인자는 오류 로그에 남기지 않음
+
+
+def test_compose_without_ledger_gives_no_send_command(ol_env, capsys, monkeypatch):
+    # 발송 원장에 기록하지 못하면 send가 거부하므로 보내는 명령을 주지 않음 (사용자가 작성 창에서 보냄)
+    monkeypatch.setattr(outlook, "remember_draft", lambda eid: "테스트 실패")
+    code, out = run_outlook(capsys, "new", "--to", "a@x.com", "--subject", "s")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "confirm_commands" not in out, out
+
+
+def test_reply_without_id_refuses_open_draft(ol_env, capsys):
+    # 9차 검토: 1단계 초안 창이 열린 채 --id 없는 reply가 그 초안(Sent == False)을 원본으로 잡아 초안에 답장하던 위험
+    m = _attach_mail(ol_env, subject="견적 회신 요청")
+    code, out = run_outlook(capsys, "reply", "--id", "M1", "--body", "확인했습니다.")
+    assert code == 0 and len(m.drafts) == 1, out
+    ol_env["app"].inspector_item = m.drafts[0]                      # 초안 작성 창이 열려 있음
+    for cmd in (["reply"], ["forward", "--to", "b@corp.com"]):
+        code, out = run_outlook(capsys, *cmd)
+        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--id" in out["message"], out
+        assert out["next_commands"][0]["command"].endswith(" list"), out
+    code, out = run_outlook(capsys, "reply", "--id", m.drafts[0].EntryID)      # --id로 초안을 줘도 원본이 아님
+    assert code == 1 and "초안" in out["message"], out
+    assert len(m.drafts) == 1 and m.drafts[0].sent == 0                # 초안이 더 생기거나 나가지 않음
 
 
 def test_attach_resolves_data_dir_and_missing_is_suggested(capsys, monkeypatch):
@@ -615,7 +819,7 @@ def test_search_wildcard_query_keeps_only_literal_matches(monkeypatch, capsys):
     assert code == 0 and "견적서_v2" in folder.Items.filter
     assert [m["subject"] for m in out["mails"]] == ["견적서_v2 송부"]      # '_' 와일드카드로 더 찾은 메일은 뺌
     code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--where", "body")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["id3"]
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["id3"]
 
 
 def test_limit_upper_bound_and_zero(monkeypatch, capsys):
@@ -656,7 +860,7 @@ def test_outlook_count(capsys, monkeypatch, argv):
 
 def test_list_days_includes_today(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
     assert out["period"] == {"since": "2026-11-03", "until": "2026-11-04", "days": 2}, out
     assert "2026-11-03 ~ 2026-11-04" in out["preview"], out
     assert "[ReceivedTime] >= '2026-11-03 00:00'" in ol["log"], ol["log"]       # 지역 설정과 무관한 YYYY-MM-DD
@@ -664,18 +868,18 @@ def test_list_days_includes_today(ol, capsys):
 
 def test_list_days_one_is_today_only(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "1")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a"], out
 
 
 def test_list_since_with_unread(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--since", "2026-10-28", "--unread")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "c"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "c"], out
     assert out["period"]["days"] == 8 and ol["log"][0] == "[UnRead] = True", (out, ol["log"])
 
 
 def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
     flt = ol["log"][-1]
     assert flt.startswith("@SQL=") and flt.count("@SQL=") == 1 and "견적" in flt, flt
     assert '"urn:schemas:httpmail:datereceived" >= ' in flt and ") AND (" in flt, flt
@@ -686,7 +890,7 @@ def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
 
 def test_search_date_only_is_allowed(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--since", "2026-11-03")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
 
 
 def test_zero_result_states_period(ol, capsys):
@@ -700,11 +904,11 @@ def test_zero_result_states_period(ol, capsys):
 def test_restrict_refused_falls_back_and_filters(ol, capsys):
     ol["state"]["refuse"] = True
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
     assert out["agent_directive"].startswith("VERIFIED:") and out["recovered"], out
     rt.RECOVERED.clear()
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
     assert "datereceived" not in ol["log"][-1] and "견적" in ol["log"][-1], ol["log"]
     rt.RECOVERED.clear()
 
@@ -895,7 +1099,7 @@ def test_outlook_new_checks_attachment_before_creating_mail(monkeypatch, tmp_pat
     created = []
     monkeypatch.setattr(outlook, "get_outlook", lambda: types.SimpleNamespace(CreateItem=lambda k: created.append(k)))
     args = types.SimpleNamespace(to="a@x", cc=None, subject="s", body="b", body_file=None,
-                                 attach=str(tmp_path / "없는파일.pdf"), send=False)
+                                 attach=str(tmp_path / "없는파일.pdf"))
     with pytest.raises(rt.InputError):
         outlook.cmd_new(args)
     assert created == []
@@ -921,7 +1125,7 @@ def test_list_attachments_with_index_size_inline(ol_env, capsys):
 def test_list_uses_selected_mail_without_id(ol_env, capsys):
     _attach_mail(ol_env, FakeAttachment("a.pdf"), entry="SEL")
     code, out = run_outlook(capsys, "attachments")
-    assert code == 0 and out["count"] == 1 and out["mail"]["id"] == "SEL"
+    assert code == 0 and out["count"] == 1 and out["mail"]["entry_id"] == "SEL"
     assert "attachments --id SEL --save" in out["next_commands"][0]["command"]    # 다음 명령은 id로 고정
 
 
@@ -1149,9 +1353,7 @@ def test_attach_count_not_grown_is_unverified_and_not_sent(ol_env, capsys, tmp_p
     m = _attach_mail(ol_env, grow=False)
     code, out = run_outlook(capsys, "reply", "--id", "M1", "--attach", str(f))
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and m.drafts[0].displayed
-    code, out = run_outlook(capsys, "reply", "--id", "M1", "--attach", str(f), "--send")
-    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:")
-    assert m.drafts[1].displayed and not m.drafts[1].sent                     # 첨부가 빠진 메일을 보내지 않음
+    assert "next_commands" not in out and not m.drafts[0].sent                # 첨부가 빠진 초안은 보내는 명령을 주지 않음
 
 
 # ---------------------------------------------------------------------------
@@ -1174,3 +1376,482 @@ def test_folder_path_extra_keeps_alias_path_in_log(mail, capsys, monkeypatch, is
     assert code == 1, out
     res = "\n".join(_result_lines(isolated_dirs))
     assert "(경로: inbox\\없음)" in res and ROOT_MAIL.lower() not in res.lower(), res
+
+
+# ---------------------------------------------------------------------------
+# 짧은 번호, 첨부 저장 뒤 읽기 명령, calendar, thread (C2, 1.4.60)
+# ---------------------------------------------------------------------------
+
+
+class _ThreadMail(_DatedMail):
+    def __init__(self, eid, subject, received, topic, body="본문"):
+        super().__init__(eid, subject, received)
+        self.ConversationTopic = topic
+        self.Body = body
+        self.Attachments = type("A", (), {"Count": 0})()
+
+
+class _Items:
+    def __init__(self, items, log=None, refuse=False):
+        self.items = list(items)
+        self.log = log if log is not None else []
+        self.refuse = refuse
+        self.IncludeRecurrences = False
+
+    def Restrict(self, flt):
+        self.log.append(flt)
+        if self.refuse:
+            raise Exception("조건 거부")
+        m = re.search(r"\[ConversationTopic\] = '(.*)'$", flt)
+        if m:
+            return _Items([i for i in self.items if i.ConversationTopic == m.group(1).replace("''", "'")], self.log)
+        return _Items(self.items, self.log)
+
+    def Sort(self, *a):
+        self.log.append(("Sort",) + a)
+
+    def __iter__(self):
+        return iter(self.items)
+
+
+@pytest.fixture
+def ol_short(monkeypatch):
+    mails = _mails()
+    by_id = {m.EntryID: m for m in mails}
+
+    class _Folder:
+        Name = "받은 편지함"
+
+        @property
+        def Items(self):
+            return _DatedItems(mails, [])
+
+    class _NS:
+        def GetItemFromID(self, eid):
+            if eid not in by_id:
+                raise RuntimeError("없음")
+            return by_id[eid]
+
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    monkeypatch.setattr(outlook, "resolve_folder", lambda ns, f: _Folder())
+    return by_id
+
+
+def test_list_gives_short_ids_and_read_accepts_them(ol_short, capsys):
+    code, out = run_outlook(capsys, "list", "--limit", "3")
+    assert code == 0 and [m["id"] for m in out["mails"]] == [1, 2, 3], out
+    second = out["mails"][1]
+    code, out2 = run_outlook(capsys, "read", "--id", "2")
+    assert code == 0 and out2["mail"]["entry_id"] == second["entry_id"] and out2["mail"]["subject"] == second["subject"]
+    code, out3 = run_outlook(capsys, "read", "--id", second["entry_id"])          # 긴 id도 그대로
+    assert code == 0 and out3["mail"]["subject"] == second["subject"]
+    code, bad = run_outlook(capsys, "read", "--id", "9")
+    assert code == 1 and "없는 번호" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
+    assert " list" in bad["next_commands"][0]["command"]
+
+
+def _listing(prefix, n):
+    return [{"entry_id": f"{prefix}{i}", "subject": f"{prefix} 제목 {i}", "from": "홍길동", "received": "2026-11-04T09:00:00"}
+            for i in range(1, n + 1)]
+
+
+def test_short_ids_never_point_to_another_mail_after_new_listing():
+    # 회귀: 목록마다 1부터 다시 매겨 search 뒤 thread를 하면 같은 '--id 3'이 다른 메일이 됨 (reply --send가 엉뚱한 메일로)
+    search = _listing("S", 5)
+    outlook.remember_listing(search, "search")
+    assert [m["id"] for m in search] == [1, 2, 3, 4, 5]
+    thread = _listing("T", 4) + [{"entry_id": "S3", "subject": "S 제목 3"}]
+    outlook.remember_listing(thread, "thread")
+    assert [m["id"] for m in thread] == [6, 7, 8, 9, 3]               # 새 번호는 이어서, 이미 본 메일은 같은 번호
+    assert outlook.entry_id("3") == "S3" and outlook.entry_id("7") == "T2" and outlook.entry_id("1") == "S1"
+
+
+def test_short_id_dropped_is_missing_not_other_mail(monkeypatch):
+    monkeypatch.setattr(outlook, "ID_KEEP", 4)
+    outlook.remember_listing(_listing("A", 3), "list")                   # 1~3
+    outlook.remember_listing(_listing("B", 3), "list")                   # 4~6, 기억은 최근 4개(3~6)
+    with pytest.raises(rt.InputError) as e:
+        outlook.entry_id("1")
+    assert "없는 번호" in str(e.value) and e.value.fields["next_commands"]
+    assert outlook.entry_id("6") == "B3"
+    c = _listing("C", 3)
+    outlook.remember_listing(c, "list")                                   # 1부터 다시 매기지 않음
+    assert [m["id"] for m in c] == [7, 8, 9] and outlook.entry_id("7") == "C1"
+
+
+def _assert_old_ids_safe(old):
+    """옛 번호(old: 번호 -> entry_id)는 같은 메일이거나 '없는 번호' 오류 (다른 메일을 가리키면 안 됨)."""
+    for n, eid in old.items():
+        try:
+            assert outlook.entry_id(str(n)) == eid, n
+        except rt.InputError:
+            pass
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+
+
+def test_short_ids_corrupt_file_never_restarts_numbering(no_wait):
+    # 회귀: 기억 파일이 깨지면 {"next": 1}로 덮어써 번호를 1부터 다시 매김 -> 옛 --id 3이 다른 메일
+    a = _listing("A", 5)
+    outlook.remember_listing(a, "list")
+    old = {m["id"]: m["entry_id"] for m in a}
+    path = outlook._listing_path()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('{"next": 6, "items": {"3": {"entry_id": "A3"')          # 쓰다 끊긴 파일
+    with pytest.raises(rt.InputError) as e:
+        outlook.entry_id("3")                                          # 깨진 파일로는 번호를 풀지 않음
+    assert "목록을 다시 보세요" in str(e.value) and e.value.fields["next_commands"]
+    b = _listing("B", 5)
+    warn = outlook.remember_listing(b, "search")
+    assert warn and [m["id"] for m in b] == [m["entry_id"] for m in b]   # 이번 결과는 긴 EntryID만
+    data_dir = os.path.dirname(path)
+    assert any(n.startswith("outlook_ids.broken_") for n in os.listdir(data_dir))   # 깨진 파일은 백업
+    c = _listing("C", 5)
+    outlook.remember_listing(c, "list")
+    assert min(m["id"] for m in c) > max(old)                          # 번호는 이어서 (1부터 다시 아님)
+    _assert_old_ids_safe(old)
+
+
+def test_short_ids_corrupt_file_and_next_file_keeps_largest(no_wait):
+    outlook.remember_listing(_listing("A", 4), "list")
+    path = outlook._listing_path()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("{bad")
+    with open(os.path.join(os.path.dirname(path), outlook.NEXT_FILE), "w", encoding="utf-8") as f:
+        f.write("40")
+    outlook.remember_listing(_listing("B", 2), "list")
+    c = _listing("C", 2)
+    outlook.remember_listing(c, "list")
+    assert [m["id"] for m in c] == [40, 41]
+
+
+def test_short_ids_read_failure_keeps_file_and_numbering(no_wait, monkeypatch):
+    a = _listing("A", 5)
+    outlook.remember_listing(a, "list")
+    old = {m["id"]: m["entry_id"] for m in a}
+    path = outlook._listing_path()
+    before = open(path, encoding="utf-8").read()
+    orig = rt.read_text_file
+
+    def locked(p):
+        if os.path.abspath(p) == os.path.abspath(path):
+            raise PermissionError(13, "sharing violation", p)
+        return orig(p)
+    monkeypatch.setattr(rt, "read_text_file", locked)
+    b = _listing("B", 5)
+    assert outlook.remember_listing(b, "list")
+    assert [m["id"] for m in b] == [m["entry_id"] for m in b]
+    with pytest.raises(rt.InputError) as e:
+        outlook.entry_id("3")
+    assert "목록을 다시 보세요" in str(e.value)
+    assert open(path, encoding="utf-8").read() == before                # 읽지 못한 파일은 건드리지 않음
+    monkeypatch.setattr(rt, "read_text_file", orig)
+    _assert_old_ids_safe(old)
+    assert outlook.entry_id("3") == "A3"
+
+
+def test_short_ids_concurrent_listings_get_distinct_numbers(monkeypatch):
+    # 회귀: 동시에 실행한 두 목록이 같은 번호를 받음 (잠금 없이 불러오기~저장)
+    import threading
+    import time as _time
+    orig = outlook._load_ids
+
+    def slow(deadline=None):
+        d = orig(deadline)
+        _time.sleep(0.2)
+        return d
+    monkeypatch.setattr(outlook, "_load_ids", slow)
+    lists = {t: _listing(t, 5) for t in ("X", "Y")}
+    ts = [threading.Thread(target=outlook.remember_listing, args=(lists[t], t)) for t in lists]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    ids = [m["id"] for t in lists for m in lists[t]]
+    assert sorted(ids) == list(range(1, 11)), ids
+    for t in lists:
+        for m in lists[t]:
+            assert outlook.entry_id(str(m["id"])) == m["entry_id"]
+
+
+def test_short_ids_leftover_lock_file_does_not_block(monkeypatch):
+    # 잠금은 운영체제 잠금이라 남은 잠금 파일(내용·나이 무관)은 막지 않음. 잠금 파일은 지우지 않고 남김 (4차 검토)
+    import time as _time
+    data_dir = os.path.dirname(outlook._listing_path())
+    os.makedirs(data_dir, exist_ok=True)
+    lock = os.path.join(data_dir, outlook.LOCK_FILE)
+    with open(lock, "w") as f:
+        f.write("999999 old")
+    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.2)
+    t0 = _time.monotonic()
+    a = _listing("A", 2)
+    assert outlook.remember_listing(a, "list") is None and [m["id"] for m in a] == [1, 2]
+    assert _time.monotonic() - t0 < 1.0 and os.path.exists(lock)
+
+
+_HOLDER = r"""
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+import outlook
+lk = outlook._IdsLock().__enter__()
+print("locked" if lk.acquired else "failed", flush=True)
+time.sleep(60)
+"""
+
+
+def _lock_holder():
+    import subprocess
+    import sys as _sys
+    root = os.path.dirname(os.path.abspath(outlook.__file__))
+    p = subprocess.Popen([_sys.executable, "-c", _HOLDER, root], stdout=subprocess.PIPE, text=True, env=dict(os.environ))
+    assert p.stdout.readline().strip() == "locked"
+    return p
+
+
+def test_short_ids_lock_held_by_other_process_then_killed(monkeypatch):
+    # 다른 실행이 잠금을 쥔 동안은 기다리다 긴 EntryID로 (번호를 겹쳐 주지 않음). 그 실행이 강제 종료되면 운영체제가
+    # 잠금을 풀어 다음 실행이 바로 잡음 (pid 확인·나이로 치우기 없음)
+    p = _lock_holder()
+    try:
+        monkeypatch.setattr(outlook, "LOCK_WAIT", 0.3)
+        a = _listing("A", 2)
+        w = outlook.remember_listing(a, "list")
+        assert "다른 실행이 번호 파일을 쓰는 중" in w and [m["id"] for m in a] == ["A1", "A2"], w
+    finally:
+        p.kill()
+        p.wait()
+        p.stdout.close()
+    b = _listing("B", 2)
+    assert outlook.remember_listing(b, "list") is None and [m["id"] for m in b] == [1, 2]
+
+
+_RACER = r"""
+import json, os, sys, time
+sys.path.insert(0, sys.argv[1])
+import outlook
+tag, start = sys.argv[2], float(sys.argv[3])
+while time.time() < start:
+    pass
+mails = [{"entry_id": f"{tag}-{i}", "subject": "s"} for i in range(5)]
+w = outlook.remember_listing(mails, "t")
+print(json.dumps({"ids": [m["id"] for m in mails], "warn": w}))
+"""
+
+
+def test_short_ids_many_processes_never_share_numbers(tmp_path):
+    # 4차 검토: 남은 잠금 치우기 경합으로 두 실행이 함께 잠금을 쥐어 번호가 겹쳤음 (8프로세스 21회 중 2회)
+    import subprocess
+    import sys as _sys
+    import time as _time
+    root = os.path.dirname(os.path.abspath(outlook.__file__))
+    for r in range(4):
+        env = dict(os.environ, OFFICE_CLI_DATA_DIR=str(tmp_path / f"race{r}"))
+        start = _time.time() + 1.0
+        procs = [subprocess.Popen([_sys.executable, "-c", _RACER, root, f"p{i}", str(start)], stdout=subprocess.PIPE,
+                                  text=True, env=env) for i in range(8)]
+        outs = [json.loads(p.communicate(timeout=60)[0]) for p in procs]
+        ids = [i for o in outs for i in o["ids"] if isinstance(i, int)]
+        assert len(ids) == len(set(ids)), (r, outs)
+        assert all(o["warn"] is None for o in outs), outs
+
+
+def test_short_ids_lock_hold_time_is_bounded(monkeypatch):
+    # 3차 검토: 잠금을 쥔 실행이 retry_fs로 30초 넘게 기다려 다른 실행이 쓰는 중인 잠금을 지울 수 있었음
+    import time as _time
+    outlook.remember_listing(_listing("A", 2), "list")
+    path = outlook._listing_path()
+    orig = rt.read_text_file
+
+    def locked(p):
+        if os.path.abspath(p) == os.path.abspath(path):
+            raise PermissionError(13, "sharing violation", p)
+        return orig(p)
+    monkeypatch.setattr(rt, "read_text_file", locked)
+    monkeypatch.setattr(outlook, "LOCK_HOLD", 0.3)
+    t0 = _time.monotonic()
+    b = _listing("B", 2)
+    assert "읽지 못함" in outlook.remember_listing(b, "list")
+    assert _time.monotonic() - t0 < 3.0
+
+
+def test_retry_fs_deadline_stops_waiting():
+    import time as _time
+    calls = []
+
+    def fail():
+        calls.append(1)
+        raise PermissionError(13, "locked", "x.json")
+    t0 = _time.monotonic()
+    with pytest.raises(PermissionError):
+        rt.retry_fs(fail, deadline=_time.monotonic() + 0.2)
+    assert _time.monotonic() - t0 < 1.0 and len(calls) >= 1
+
+
+def test_short_id_older_than_keep_days_is_missing(monkeypatch):
+    outlook.remember_listing(_listing("A", 2), "list")
+    path = outlook._listing_path()
+    data = json.loads(open(path, encoding="utf-8").read())
+    data["items"]["1"]["t"] = "2026-01-01T00:00:00"
+    open(path, "w", encoding="utf-8").write(json.dumps(data))
+    with pytest.raises(rt.InputError):
+        outlook.entry_id("1")
+    assert outlook.entry_id("2") == "A2"
+
+
+@pytest.mark.parametrize("cmd", [["reply", "--all"], ["forward", "--to", "b@corp.com"], ["reply"]])
+def test_reply_forward_report_original_mail(ol_env, capsys, cmd):
+    m = _attach_mail(ol_env, subject="견적 회신 요청")
+    code, out = run_outlook(capsys, cmd[0], "--id", "M1", *cmd[1:])
+    assert code == 0 and out["original"]["subject"] == "견적 회신 요청" and "lead@corp.com" in out["original"]["from"], out
+    assert "견적 회신 요청" in out["preview"] and "original" in out["agent_directive"]
+    assert m.drafts
+
+
+def test_search_next_command_uses_short_id(ol_short, capsys):
+    code, out = run_outlook(capsys, "search", "--query", "견적")
+    assert code == 0 and out["next_commands"][0]["command"].endswith("read --id 1"), out
+
+
+def test_short_id_without_listing_is_input_error(ol_short, capsys):
+    code, out = run_outlook(capsys, "read", "--id", "1")
+    assert code == 1 and "list나 search를 먼저" in out["message"], out
+
+
+def test_attachments_save_gives_reader_commands(ol_env, capsys, tmp_path):
+    _attach_mail(ol_env, FakeAttachment("규격.pdf"), FakeAttachment("시험표.xlsx"), FakeAttachment("사진.png"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save")
+    assert code == 0 and out["count"] == 3, out
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert any("reader.py" in c and " read --file " in c and "규격.pdf" in c for c in cmds)
+    assert any("reader.py" in c and " read --file " in c and "시험표.xlsx" in c for c in cmds)
+    assert not any("사진.png" in c for c in cmds)
+    assert any(" index --folder " in c for c in cmds)
+
+
+def test_calendar_lists_events_read_only(monkeypatch, capsys):
+    log = []
+
+    class _Ev:
+        def __init__(self, subject, start, hours=1, loc="3층 회의실"):
+            self.Subject, self.Start, self.End = subject, start, start + dt.timedelta(hours=hours)
+            self.AllDayEvent, self.Location, self.Organizer = False, loc, "김팀장"
+
+    evs = [_Ev("주간 회의", dt.datetime(2026, 11, 4, 10)), _Ev("설계 검토", dt.datetime(2026, 11, 6, 14))]
+
+    class _NS:
+        def GetDefaultFolder(self, n):
+            assert n == outlook.OL_FOLDER_CALENDAR
+            return type("F", (), {"Items": _Items(evs, log)})()
+
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and out["count"] == 2 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert out["events"][0] == {"subject": "주간 회의", "start": "2026-11-04 10:00", "end": "2026-11-04 11:00", "all_day": False,
+                                "location": "3층 회의실", "organizer": "김팀장"}
+    assert out["period"] == {"since": "2026-11-04", "until": "2026-11-10", "days": 7}
+    assert any("[Start] < '2026-11-11 00:00'" in x for x in log if isinstance(x, str))
+    code, out = run_outlook(capsys, "calendar", "--days", "0")
+    assert code == 1 and "[추천] 7" in out["message"]
+
+
+def _calendar_env(monkeypatch, evs, refuse=False):
+    class _NS:
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(evs, refuse=refuse)})()
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+
+
+class _CalEv:
+    def __init__(self, subject, start, hours=1):
+        self.Subject, self.Start, self.End = subject, start, start + dt.timedelta(hours=hours)
+        self.AllDayEvent, self.Location, self.Organizer = False, "", ""
+
+
+class _BrokenEv:
+    @property
+    def Start(self):
+        raise RuntimeError("COM 오류")
+
+
+def test_calendar_restrict_refused_compares_each_event(monkeypatch, capsys):
+    # 회귀: Outlook이 기간 조건을 거부하면 오류로 끝남 -> 일정마다 시각 비교 (recovered)
+    evs = [_CalEv("지난 회의", dt.datetime(2026, 11, 1, 9)), _CalEv("주간 회의", dt.datetime(2026, 11, 4, 10)),
+           _CalEv("다음달", dt.datetime(2026, 12, 20, 10))]
+    _calendar_env(monkeypatch, evs, refuse=True)
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and [e["subject"] for e in out["events"]] == ["주간 회의"] and out["recovered"], out
+
+
+def test_calendar_unreadable_events_are_not_verified_zero(monkeypatch, capsys):
+    # 회귀: 일정 항목 예외를 삼키고 0건 VERIFIED
+    _calendar_env(monkeypatch, [_BrokenEv(), _BrokenEv()])
+    code, out = run_outlook(capsys, "calendar", "--days", "7")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert out["unread_events"] == 2
+
+
+def test_thread_fallback_scan_limit_is_unverified(monkeypatch, capsys):
+    monkeypatch.setattr(outlook, "THREAD_SCAN_MAX", 2)
+    inbox = [_ThreadMail(f"x{i}", "다른 일", dt.datetime(2026, 11, 2, 9), "다른 일") for i in range(3)]
+    inbox.append(_ThreadMail("i1", "견적 요청", dt.datetime(2026, 11, 1, 9), "견적 요청", "첫 메일"))
+    by_id = {m.EntryID: m for m in inbox}
+
+    class _NS:
+        def GetItemFromID(self, eid):
+            return by_id[eid]
+
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(inbox if n == outlook.OL_FOLDER_INBOX else [], refuse=True)})()
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "thread", "--id", "i1")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "받은 편지함" in out["agent_directive"], out
+
+
+def test_calendar_empty_is_zero(monkeypatch, capsys):
+    class _NS:
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items([])})()
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "calendar")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_thread_collects_conversation_in_time_order(monkeypatch, capsys, refuse):
+    inbox = [_ThreadMail("i1", "견적 요청", dt.datetime(2026, 11, 1, 9), "견적 요청", "첫 메일"),
+             _ThreadMail("i2", "RE: 견적 요청", dt.datetime(2026, 11, 3, 9), "견적 요청", "셋째"),
+             _ThreadMail("x", "다른 일", dt.datetime(2026, 11, 2, 9), "다른 일")]
+    sent = [_ThreadMail("s1", "RE: 견적 요청", dt.datetime(2026, 11, 2, 9), "견적 요청", "둘째(보냄)")]
+    by_id = {m.EntryID: m for m in inbox + sent}
+
+    class _NS:
+        def GetItemFromID(self, eid):
+            return by_id[eid]
+
+        def GetDefaultFolder(self, n):
+            return type("F", (), {"Items": _Items(inbox if n == outlook.OL_FOLDER_INBOX else sent, refuse=refuse)})()
+
+    monkeypatch.setattr(rt, "RECOVERED", [])
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    code, out = run_outlook(capsys, "thread", "--id", "i2")
+    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["i1", "s1", "i2"], out
+    assert [m["id"] for m in out["mails"]] == [1, 2, 3] and out["mails"][1]["body"] == "둘째(보냄)"
+    assert bool(out.get("recovered")) is refuse
+    code, out2 = run_outlook(capsys, "read", "--id", "2")                     # thread 목록 번호로 읽기
+    assert code == 0 and out2["mail"]["entry_id"] == "s1"

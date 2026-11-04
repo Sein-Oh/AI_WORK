@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -264,12 +265,31 @@ def get_active(kind: str) -> Dict[str, Any]:
     raise no_open_doc(kind)
 
 
+ELEVATED_DIRECTIVE = ("실행하지 않았습니다. 다시 실행하지 말고 message의 관리자 권한 안내를 사용자에게 그대로 전하세요. "
+                      "관리자 권한 창에서는 문서를 열어도, 경로를 줘도 사용자가 연 문서에 닿지 않습니다.")
+
+
 def no_open_doc(kind: str, option: str = "--target", note: str = "") -> "rt.UserDecisionError":
-    """열린 문서가 없음. option: 이 명령에서 대상 문서를 주는 옵션 (office.py transfer는 --from-target/--to-target)."""
+    """열린 문서가 없음. option: 이 명령에서 대상 문서를 주는 옵션 (office.py transfer는 --from-target/--to-target).
+    관리자 권한으로 실행 중이면 일반 권한 창의 문서를 볼 수 없으므로 그 안내를 붙입니다 (rt.elevation_hint)."""
+    hint = rt.elevation_hint()
+    if hint:
+        err = rt.UserDecisionError(f"열려 있는 {APP_LABEL[kind]} 문서를 찾지 못했습니다.{note} {hint}", ELEVATED_DIRECTIVE)
+        err.error_type = "elevated_process"
+        return err
     return rt.UserDecisionError(
         f"열려 있는 {APP_LABEL[kind]} 문서가 없습니다.{note}",
         "실행하지 않았습니다. 사용자에게 문서를 열어 달라고 하거나 파일의 전체 경로를 물어, 같은 명령에 "
         f"{option} \"<전체경로>\"를 붙여 1번만 실행하세요. 경로를 추측하지 마세요.")
+
+
+def no_open_docs_result(tool: str, command: str, preview: str, directive: str, **fields: Any) -> Dict[str, Any]:
+    """열린 문서 목록이 0건인 성공 응답 (info --all, office.py windows). 관리자 권한으로 실행 중이면
+    일반 권한 창의 문서를 볼 수 없어 0건을 확인한 것이 아니므로 UNVERIFIED:와 그 안내."""
+    hint = rt.elevation_hint()
+    if hint:
+        return rt.ok_unverified(tool, command, preview, [hint], **fields)
+    return rt.ok(tool, command, preview, directive, **fields)
 
 
 def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = None,
@@ -596,7 +616,7 @@ SHEET_NAME_RESERVED = ("history",)              # 엑셀이 예약한 시트 이
 def check_sheet_name(name: Any, existing: Optional[List[str]] = None) -> None:
     """엑셀 시트 이름 규칙(31자 이하, / \\ ? * [ ] : 없음, 빈 이름 아님, 앞뒤 ' 없음, 예약된 이름 History 아님)을
     문서를 바꾸기 전에 확인합니다. 어기면 InputError와 [추천](쓸 수 없는 글자를 _로 바꾸고 31자로 자른 이름,
-    History는 History_, existing과 겹치지 않게). 이전에는 시트를 만든 뒤 Name에서 실패해 빈 시트가 남았음.
+    History는 History_, existing과 겹치지 않게). 시트를 만든 뒤 Name에서 실패하면 빈 시트가 남기 때문.
     existing을 주지 않으면 [추천]이 있는 시트와 겹칠 수 있으므로 시트 이름을 아는 곳에서 부릅니다."""
     text = "" if name is None else str(name)
     if not text.strip():
@@ -649,6 +669,155 @@ def _new_instance(kind: str) -> Any:
     except Exception:
         pass
     return app
+
+
+# --- 닫힌 파일 열기 감시: 문서 보안(DRM) 인증 창·대화상자로 보이지 않는 인스턴스가 멈추면 그 인스턴스만 끝냄 ---
+
+OPEN_TIMEOUT_ENV = "OFFICE_CLI_OPEN_TIMEOUT"   # 초. 0이면 감시하지 않음
+DEFAULT_OPEN_TIMEOUT = 30.0
+IMAGE_NAME = {"excel": "EXCEL.EXE", "word": "WINWORD.EXE", "ppt": "POWERPNT.EXE"}
+KIND_SCRIPT = {"excel": "excel.py", "word": "word.py", "ppt": "ppt.py"}
+
+
+def open_timeout() -> float:
+    raw = os.environ.get(OPEN_TIMEOUT_ENV, "").strip()
+    try:
+        v = float(raw) if raw else DEFAULT_OPEN_TIMEOUT
+    except ValueError:
+        v = DEFAULT_OPEN_TIMEOUT
+    return v if v > 0 else 0.0
+
+
+def _office_pids(kind: str) -> set:
+    """실행 중인 그 Office 프로그램의 프로세스 번호들 (읽지 못하면 빈 집합)."""
+    try:
+        import subprocess
+        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {IMAGE_NAME[kind]}", "/FO", "CSV", "/NH"],
+                             capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        pids = set()
+        for line in out.stdout.decode("mbcs" if os.name == "nt" else "utf-8", errors="replace").splitlines():
+            parts = [p.strip('"') for p in line.split('","')]
+            if len(parts) > 1 and parts[1].isdigit():
+                pids.add(int(parts[1]))
+        return pids
+    except Exception:
+        return set()
+
+
+def _instance_pid(kind: str, app: Any, before: set) -> Optional[int]:
+    """도구가 띄운 인스턴스의 프로세스 번호. Excel은 창 핸들, 그 밖은 띄우기 전후 프로세스 목록의 차이(하나일 때만)."""
+    if kind == "excel":
+        try:
+            pid = _window_pid(int(app.Hwnd))
+            if pid:
+                return pid
+        except Exception:
+            pass
+    new = _office_pids(kind) - before
+    return next(iter(new)) if len(new) == 1 else None
+
+
+def _kill_pid(pid: int) -> bool:
+    """그 프로세스 하나만 끝냅니다 (사용자의 다른 Office 창은 그대로)."""
+    try:
+        import signal
+        os.kill(pid, signal.SIGTERM)            # Windows: TerminateProcess
+        return True
+    except Exception:
+        return False
+
+
+def _user_windows(kind: str, pid: int) -> Optional[bool]:
+    """도구가 띄운 그 프로세스에 사용자가 볼 수 있는 문서 창(프레임 창)이 있는지 COM 없이 창 목록으로 확인합니다.
+    도구가 연 문서는 창 없이(Visible=False, WithWindow=False) 열므로, 보이는 프레임 창이 있으면 사용자가 그 프로세스에서 연 문서
+    (PowerPoint는 한 프로세스라 사용자가 감시 중에 연 발표 파일도 같은 프로세스). True 있음, False 없음, None 확인하지 못함."""
+    if win32gui is None:
+        return None
+    try:
+        for hwnd in _enum_windows(lambda c: c in FRAME_CLASS[kind]):
+            owner = _window_pid(hwnd)
+            if owner is None:
+                return None
+            if owner == pid and win32gui.IsWindowVisible(hwnd):
+                return True
+        return False
+    except Exception:
+        return None
+
+
+def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float, killed: bool = True,
+                         pid: Optional[int] = None) -> rt.InputError:
+    name = os.path.basename(path)
+
+    def same(a: str) -> bool:
+        try:
+            return bool(a.strip()) and os.path.normcase(os.path.abspath(os.path.expandvars(a.strip().strip('"')))) \
+                == os.path.normcase(os.path.abspath(path))
+        except Exception:
+            return False
+    new_argv = [name if same(a) else a for a in (rt.CURRENT_ARGV or [])]   # 경로 대신 문서 이름 (열린 문서로)
+    nexts = [rt.next_command(f"{tool}.py" if tool else KIND_SCRIPT[kind], new_argv,
+                             "사용자가 문서를 Office에서 직접 열어 둔 뒤 같은 작업을 열린 문서로 실행")] if new_argv else []
+    what = (f"백그라운드 {APP_LABEL[kind]}만 끝냈습니다 (사용자의 다른 창은 그대로)" if killed else
+            f"{APP_LABEL[kind]}에 사용자가 연 문서가 있을 수 있어 {APP_LABEL[kind]}을(를) 끝내지 않았습니다 "
+            f"(그대로 둔 프로세스: {IMAGE_NAME[kind]}" + (f" PID {pid}" if pid else ", 이미 떠 있던 것") +
+            ". 열기 창이 떠 있으면 사용자가 닫으면 됨)")
+    return rt.InputError(
+        f"'{name}'이(가) {waited:g}초 안에 열리지 않아 {what}. "
+        "문서 보안 인증 창 등으로 열리지 않음. 사용자가 문서를 직접 열어 두면 열린 문서로 읽음. "
+        f"열기가 오래 걸린 경우일 수도 있습니다({OPEN_TIMEOUT_ENV}으로 늘릴 수 있음).",
+        directive=("문서가 열리지 않아 멈췄습니다. 다시 실행하지 말고 message를 사용자에게 알리세요. 사용자가 문서를 Office에서 직접 "
+                   "열어 두었다고 하면 next_commands[0]을 1번 실행하세요."),
+        error_type="drm_or_dialog", fields={"next_commands": nexts}, no_fallback=True)
+
+
+def _abandon(err: rt.InputError, kind: str, tool: str) -> None:
+    """프로그램을 끝내지 못해 멈춘 COM 호출이 돌아오지 않을 때: 오류 JSON 1줄을 내고 이 도구 프로세스만 끝냅니다 (감시 스레드에서)."""
+    name = (tool or KIND_SCRIPT[kind]).replace(".py", "")
+    argv = list(rt.CURRENT_ARGV or [])
+    payload = rt.error_payload(err, name, argv[0] if argv else "")
+    try:
+        rt.log("ERROR", str(err))
+        rt.write_error_log(name, None, payload)
+        rt.emit_json(payload)
+        sys.stdout.flush()
+        sys.stderr.flush()
+    finally:
+        os._exit(1)
+
+
+class _OpenWatch:
+    """닫힌 파일을 여는 동안 시간을 잽니다. 시간이 지나면 도구가 띄운 인스턴스 프로세스만 끝냅니다(그러면 멈춘 COM 호출이 오류로 돌아옴).
+    Word·PowerPoint는 그 프로세스에 사용자가 연 문서 창이 없다고 확인될 때만 끝냄(PowerPoint는 한 프로세스라 감시 중에 사용자가 연
+    발표 파일도 같은 프로세스). 끝낼 프로세스를 모르거나(사용자가 이미 띄운 PowerPoint 등) 확인하지 못하면 끝내지 않고
+    drm_or_dialog 오류만 내고 도구를 끝냄(_abandon)."""
+
+    def __init__(self, kind: str, pid: Optional[int], timeout: float, path: str = "", tool: str = ""):
+        import threading
+        self.kind, self.pid, self.timeout, self.path, self.tool = kind, pid, timeout, path, tool
+        self.fired = False
+        self._timer = threading.Timer(timeout, self._fire) if timeout > 0 and (pid or path) else None
+        if self._timer is not None:
+            self._timer.daemon = True
+
+    def _fire(self) -> None:
+        safe = bool(self.pid) and (self.kind == "excel" or _user_windows(self.kind, self.pid) is False)
+        if safe:
+            self.fired = _kill_pid(self.pid)
+            if self.fired:
+                return
+        if self.path:
+            _abandon(_drm_or_dialog_error(self.kind, self.path, self.tool, self.timeout, killed=False, pid=self.pid),
+                     self.kind, self.tool)
+
+    def __enter__(self) -> "_OpenWatch":
+        if self._timer is not None:
+            self._timer.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
 
 
 def _ppt_running() -> bool:
@@ -778,8 +947,9 @@ def resolve_target(kind: str, target: str = "active", readonly: bool = True, cre
             # 파일 이름만 주면 새로 만들지 않음: 열린 문서 이름의 오타로 현재 폴더에 새 파일이 생기고 거기에 쓰는 것을 막음
             names = [d["name"] for d in docs]
             tail = "" if readonly or not create else f" 새 파일은 사용자에게 전체 경로를 물어 {option}으로 줄 때만 만듭니다."
+            hint = "" if names else rt.elevation_hint()      # 관리자 권한이면 열린 문서가 안 보여 0개일 수 있음
             err = rt.not_found(f"{APP_LABEL[kind]} 문서", target, names,
-                               extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail)
+                               extra=" (열린 문서 이름도 아니고 파일도 없음)." + tail + (f" {hint}" if hint else ""))
             # 파일 이름만 준 경우에만 열린 문서를 [후보]로 (전체 경로가 없는 것은 열린 문서 이름의 오타가 아님)
             if names and not is_abs and not err.candidates and "[추천]" not in str(err):
                 err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
@@ -824,16 +994,29 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
         else:
             path, exists = found["path"], found["exists"]
             ppt_was_running = _ppt_running() if kind == "ppt" else False
+            timeout = open_timeout()
+            # 감시할 프로세스 번호: Excel은 창 핸들로, Word·PowerPoint는 띄우기 전후 목록 차이로 (사용자가 띄운 PowerPoint는 감시 안 함)
+            before = _office_pids(kind) if timeout and kind != "excel" and not ppt_was_running else set()
             app = _new_instance(kind)
             owns_app = kind != "ppt" or not ppt_was_running
-            if kind == "ppt":
+            if kind == "ppt" and owns_app:
+                # 사용자가 이미 띄운 PowerPoint의 DisplayAlerts는 바꾸지 않음 (열기 감시가 도구를 끝내면 되돌릴 수 없음)
                 try:
                     restore_alerts = app.DisplayAlerts
                     app.DisplayAlerts = 1  # ppAlertsNone
                 except Exception:
                     restore_alerts = None
             rt.log("PROGRESS", f"{APP_LABEL[kind]} 파일 {'여는' if exists else '만드는'} 중 (백그라운드): {os.path.basename(path)}")
-            doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
+            pid = _instance_pid(kind, app, before) if timeout and owns_app else None
+            with _OpenWatch(kind, pid, timeout, path, tool) as watch:
+                try:
+                    doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
+                except BaseException:
+                    if watch.fired:          # 감시 시간이 지나 그 인스턴스를 끝냄 -> 멈춘 COM 호출이 오류로 돌아옴
+                        raise _drm_or_dialog_error(kind, path, tool, timeout) from None
+                    raise
+            if watch.fired:
+                raise _drm_or_dialog_error(kind, path, tool, timeout)
             owns_doc = True
             t = OfficeTarget(kind, app, doc, "file" if exists else "new", readonly)
             if exists and not readonly and _opened_readonly(doc):
@@ -893,7 +1076,12 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             raise
         drop_or_keep(None)
     finally:
+        own_path = ""
         if owns_doc and t is not None:
+            try:
+                own_path = t.path
+            except Exception:
+                own_path = ""
             try:
                 if kind == "word":
                     t.doc.Close(SaveChanges=0)
@@ -904,16 +1092,30 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             except Exception:
                 pass
         if app is not None:
-            if restore_alerts is not None and not owns_app:
+            quit_ = False
+            if owns_app:
+                # Word·PowerPoint: 자기 문서를 닫은 뒤 남은 문서가 없을 때만 끝냄 (사용자가 그 숨은 인스턴스에서 연 문서의
+                # 변경을 버리지 않게). Excel은 도구 전용 새 인스턴스라 늘 끝냄
+                if kind == "excel":
+                    quit_ = True
+                else:
+                    others = _other_docs_left(kind, app, own_path)
+                    quit_ = others == 0
+                    if others is None:
+                        rt.log("INFO", f"{APP_LABEL[kind]}의 열린 문서 수를 읽지 못해 {APP_LABEL[kind]}을(를) 끝내지 않고 그대로 둡니다.")
+                    elif others:
+                        rt.log("INFO", f"{APP_LABEL[kind]}에 다른 문서 {others}개가 열려 있어 {APP_LABEL[kind]}을(를) 끝내지 않고 "
+                                       "그대로 둡니다.")
+            if restore_alerts is not None and not quit_:
                 try:
                     app.DisplayAlerts = restore_alerts
                 except Exception:
                     pass
-            if owns_app:
+            if quit_:
                 try:
                     if kind == "word":
-                        app.Quit(SaveChanges=0)
-                    elif kind == "excel" or app.Presentations.Count == 0:
+                        app.Quit(SaveChanges=0)      # 남은 문서가 없음을 확인한 뒤라 버릴 변경이 없음
+                    else:
                         app.Quit()
                 except Exception:
                     pass
@@ -921,6 +1123,34 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
         app = doc = None
         import gc
         gc.collect()
+
+
+QUIT_COUNT_TRIES = 5          # 남은 문서 수 읽기 재시도 (Office가 바빠 COM 호출이 실패할 때)
+QUIT_COUNT_DELAY = 0.3
+
+
+def _other_docs_left(kind: str, app: Any, own_path: str) -> Optional[int]:
+    """도구가 띄운 Word·PowerPoint에 남은 문서 중 이 실행의 문서(own_path)가 아닌 것의 수. 끝까지 못 읽으면 None.
+    자기 문서를 닫다가 실패해 남아 있어도(닫기 오류는 삼킴) 그 문서뿐이면 0이라 끌 수 있음."""
+    for i in range(QUIT_COUNT_TRIES):
+        try:
+            docs = app.Documents if kind == "word" else app.Presentations
+            n = int(docs.Count)
+            if n == 0:
+                return 0
+            if not own_path:
+                return n
+            own = os.path.normcase(os.path.abspath(own_path))
+            others = 0
+            for k in range(1, n + 1):
+                full = str(getattr(docs.Item(k), "FullName", "") or "")
+                if not full or os.path.normcase(os.path.abspath(full)) != own:
+                    others += 1
+            return others
+        except Exception:
+            if i + 1 < QUIT_COUNT_TRIES:
+                time.sleep(QUIT_COUNT_DELAY)
+    return None
 
 
 @contextmanager
@@ -1043,16 +1273,6 @@ def parse_color(value: Any) -> Optional[int]:
         except ValueError:
             pass
     raise rt.not_found("색상", s, list(COLOR_NAMES), extra=" ('#RRGGBB' 형식도 가능)", vocab=True)
-
-
-def bgr_to_hex(value: Any) -> Optional[str]:
-    try:
-        v = int(value)
-    except (TypeError, ValueError):
-        return None
-    if v < 0 or v > 0xFFFFFF:
-        return None
-    return f"#{v & 0xFF:02X}{(v >> 8) & 0xFF:02X}{(v >> 16) & 0xFF:02X}"
 
 
 THEMES: Dict[str, Dict[str, Any]] = {

@@ -2,17 +2,17 @@
 
 AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 개발·테스트 폴더입니다. 도구 1개 = 폴더 1개.
 
-- 실행 파일과 SKILL.md는 `CLI/<tool>/`에만 있습니다 (사내 PC `C:\CLI`로 그대로 복사).
+- 실행 파일과 스킬(SKILL.md)은 `CLI/<tool>/`에만 있습니다 (사내 PC `C:\CLI`로 그대로 복사). office-cli 스킬은 작업별 4개(`CLI/office-cli/skills/<이름>/SKILL.md`).
 - 이 `CLI-dev/<tool>/`에는 설명서, 변경 이력, 의존성 목록, 테스트, 실기 러너가 있습니다.
   테스트와 러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험하므로 PC에서는 `C:\CLI-dev`로 `C:\CLI`와 나란히 둡니다.
 
 | 도구 | 설명 | 스킬 |
 |---|---|---|
 | [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`CLI/ml-kit/SKILL.md`](../CLI/ml-kit/SKILL.md) |
-| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`CLI/office-cli/SKILL.md`](../CLI/office-cli/SKILL.md) |
+| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`office-excel`](../CLI/office-cli/skills/office-excel/SKILL.md), [`office-doc`](../CLI/office-cli/skills/office-doc/SKILL.md), [`office-mail`](../CLI/office-cli/skills/office-mail/SKILL.md), [`office-spec`](../CLI/office-cli/skills/office-spec/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
-(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<tool>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다.
+(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<스킬 이름>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `CLI/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 6KB 이하를 목표로 합니다.
 
 ## 실기 자동 점검 (`run_all_tests.py`)
 
@@ -34,7 +34,8 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\CLI\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
   시험 폴더(기본 `C:\CLI-dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\CLI-dev\work\gemma_runs_<시각>`에 남깁니다.
   첫 요청에서 세션이 안 생기면 나머지를 보내지 않고 FAIL. 요청 하나의 시간 상한 `--gemma-timeout`(기본 900초). 관리자 권한 창이면 UNVERIFIED에 경고.
-- `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP). 예전 `--auto`는 기본이 되어 없앴습니다.
+  yaml에 `manual`(사람이 준비할 것)이 있는 요청(O3, Outlook 메일)은 보내지 않고 건너뜀 "수동 전용"으로 남깁니다.
+- `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP).
 - Windows + pywin32가 아니면 `ml`, `office`는 ENV-SKIP (클라우드에서도 나머지는 그대로 돎).
 - 결과: `C:\CLI-dev\result_<라벨>_<시각>.md` 하나. 맨 위 요약 표(단계별 PASS/FAIL/SKIP, 시간, 비고)와 실패·건너뜀(ENV-SKIP)·UNVERIFIED 목록, 그 아래 단계별 상세
   (pytest 출력, 베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
@@ -48,8 +49,8 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 | 파일 | 하는 일 |
 |---|---|
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
-| `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본 |
-| `apply_skills.py` | `C:\CLI`의 `SKILL.md` 2개와 `opencode/AGENTS.md`(전역 지침 원본)를 OpenCode 설정 폴더(`%USERPROFILE%\.config\opencode`)로 복사. 바뀐 것만 복사하고 덮어쓰는 파일은 `work\skill_backup_<시각>`에 보관. `--check`(확인만, 다르면 exit 1), `--test`(office-cli-test 보조 스킬도), `--config-dir`. 스킬 폴더에 남은 예전 `.py`와 rg(ripgrep) 없음도 알림. `run_all_tests.py`의 diag가 같은지 확인해 다르면 FAIL |
+| `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본. ml-kit 묶음(S0 샘플, A/M/P/R/X)과 office-cli 묶음(S1 샘플 `office-cli/tools/make_office_samples.py`, O1~O5: 규격 대조, 여러 칸 쓰기, 메일 첨부 읽기(수동 전용), 워드 문단 덧붙이기, 양식 채우기). 판정은 스킬 이름이 아니라 실행한 명령으로 하고, 회사 PC 오류 로그에서 나온 지어낸 office-cli 옵션은 공통 규칙 `no_fake_office`로 모든 요청에서 실패 |
+| `apply_skills.py` | `C:\CLI`의 스킬(`ml-kit\SKILL.md`, `office-cli\skills\<이름>\SKILL.md` 4개)과 `opencode/AGENTS.md`(전역 지침 원본)를 OpenCode 설정 폴더(`%USERPROFILE%\.config\opencode`)로 복사. 바뀐 것만 복사하고 덮어쓰는 파일은 `work\skill_backup_<시각>`에 보관. 옛 통합 스킬 폴더 `skills\office-cli`는 보관 후 지움(남으면 OpenCode가 옛 스킬도 고름). `--check`(확인만, 다르면 exit 1), `--test`(office-cli-test 보조 스킬도), `--config-dir`. rg(ripgrep)가 PATH에 없으면 알림. `run_all_tests.py`의 diag가 같은지 확인해 다르거나 옛 폴더가 남으면 FAIL |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
 진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
@@ -59,6 +60,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 ```text
 CLI/<tool>/              # 폴더명 = 스킬명 (예: ml-kit). 사내 PC C:\CLI\<tool>로 그대로 복사
 ├── SKILL.md             # OpenCode 스킬. frontmatter: name(=폴더명), description(1024자 이하), license, compatibility, metadata
+│                        # (작업별로 나눌 때는 skills/<스킬 이름>/SKILL.md, 예: CLI/office-cli/skills/office-excel/)
 └── *.py                # CLI 진입점과 공통 런타임 (예: excel.py, _runtime.py. 실행에 필요한 파일만, 폴더째 복사해도 단독 실행 가능)
 
 CLI-dev/<tool>/
@@ -81,7 +83,9 @@ CLI-dev/<tool>/
 5. 문자 규칙: 이모지·원문자·장식 기호 금지, 로그 태그는 `[INFO] [PROGRESS] [WARN] [ERROR] [STATUS]` ([`AGENTS.md`](../AGENTS.md) "문자 규칙").
 6. 폐쇄망: 실행 중 네트워크 접근 금지. [표준 환경](../docs/ENVIRONMENT.md)에 있는 라이브러리만 사용 ([`docs/WINDOWS_OFFLINE.md`](../docs/WINDOWS_OFFLINE.md)).
 7. 공통 결과 키 (해당할 때만 넣음):
-   - `next_commands` - 이어서 그대로 실행할 전체 명령 목록.
+   - `next_commands` - 이어서 그대로 실행할 전체 명령 목록 (LLM이 묻지 않고 실행해도 안전한 것만).
+   - `confirm_commands` - 사용자에게 보여 주고 "예"를 받은 뒤에만 실행할 전체 명령 목록 (메일 발송, 미리보기 뒤 실제 변경).
+     경량 LLM이 `next_commands[0]`을 기계적으로 실행해도 메일이 나가거나 문서가 바뀌지 않게 키를 나눈다.
    - `truncated` - 결과를 상한에서 잘랐으면 `true`, 전체 결과 파일 경로를 함께 제공.
    - `recovered` - 도구가 실패를 즉시 복구해 결과가 달라진 일 (예: 잠긴 파일 -> 새 이름 저장). `warnings`와 구분.
 8. 실패한 실행(exit 1, 2)은 `<도구 데이터 폴더>/logs/errors.txt`에 자동 기록. 로그 경로는 stdout JSON에 넣지 않음.
@@ -158,7 +162,7 @@ CLI-dev/<tool>/
 
 ### R8. 미리보기와 후보 (`--dry-run`, `[추천]`, `[후보]`)
 - `--dry-run`: 검증까지 모두 하고 쓰기는 하지 않는다. 응답 `dry_run: true`, `planned: ["삭제: a.csv", "덮어쓰기: b.xlsx", "변경: Sheet1!A1:C10 (30셀)"]`,
-  `next_commands[0]` = `--dry-run`을 뺀 같은 명령, directive `VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.`
+  `confirm_commands[0]` = `--dry-run`을 뺀 같은 명령(`next_commands`에 넣지 않음), directive `VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.`
 - 실제 실행은 수행한 파괴적 작업을 같은 형식의 `applied` 목록으로 보고한다.
 - `[추천] <값>`: 바로 다시 실행할 수 있는 값 **하나**만. 값은 바꿀 인자 값(이름, `--header-row 2` 등) 또는 `python`으로 시작하는 전체 명령이다.
   LLM은 `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행하고, 아니면 그 값으로 바꿔 1회 재실행한다.
@@ -176,7 +180,8 @@ CLI-dev/<tool>/
   `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [같은 명령]`,
   `agent_directive` = `CONTINUE: ...`(exit 0)을 낸다. 오류 로그에는 남기지 않는다.
 - 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행한다. 실행마다 새 단계를 최소 1개는 하므로 반복하면 반드시 끝난다.
-- LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 (최대 10번).
+- LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 (최대 20번).
 - 사람이 돌리는 점검 러너(`run_beta_check.py`, 실기 러너)와 테스트는 `ML_KIT_TIME_LIMIT=0`(제한 없음).
-- 현재 ml-kit만 해당 (`ml_export.py`의 입력 고르기, 그것을 부르는 `ml_report.py`). 새 도구에 긴 작업이 생기면 같은 이름·같은 키로 구현한다.
+- 적용: ml-kit(`ML_KIT_TIME_LIMIT`, `ml_train.py` 여러 타겟 학습(`--best`, `ml_report -f` 재학습 포함), 성능예측표 입력 고르기와 그것을 부르는 `ml_report.py`), office-cli(`OFFICE_CLI_TIME_LIMIT`, `reader.py index`와 `search --file` 폴더 등록). 새 긴 작업도 같은 이름·같은 키로 구현한다.
+- 나누는 단위는 한 실행에 반드시 끝낼 수 있을 만큼 작게: ml-kit 학습은 타겟 -> 후보 모델 -> 교차검증 fold(2.9.66) -> 1위 전체 적합 -> 순열 중요도 열 단위로 저장한다.
 

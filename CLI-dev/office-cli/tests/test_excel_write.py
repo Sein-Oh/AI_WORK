@@ -13,7 +13,7 @@ import excel
 import office
 from fake_excel import FakeExcelWorkbook, FakeXlApp, SheetNameRefused
 from fake_office import make_win32com
-from office_helpers import EMPTY_FIND, run_excel, run_main, sheet_names, undo_points, ws_of
+from office_helpers import EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
 
 
 def _no_create_imperative(out):
@@ -75,6 +75,7 @@ def test_write_sine_header_and_column_formulas(xl, capsys):
     assert ("Formula", "$B$2:$B$101", "=SIN(A2)") in ws.log
     assert app.ScreenUpdating is True and app.Calculation == -4105       # 대량 쓰기 설정 복원
     assert "chart" in out["next_commands"][0]["command"]
+    assert "--title" not in out["next_commands"][0]["command"]        # 자리표시 제목 '차트'를 그대로 쓰지 않게 (1.4.48)
     assert out["target_resolved"]["sheet"] == "Sheet1"
 
 
@@ -574,7 +575,7 @@ def test_delete_dry_run_then_overwrite(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "B:B", "--dry-run")
     assert code == 0 and out["dry_run"] is True and out["filled_cells"] == 5, out
     assert out["filled_addresses"] == ["B1", "B2", "B3", "B4", "B5"] and "영업" not in json.dumps(out, ensure_ascii=False), out
-    assert "--overwrite" in out["next_commands"][0]["command"] and "--dry-run" not in out["next_commands"][0]["command"], out
+    assert "--overwrite" in out["confirm_commands"][0]["command"] and "--dry-run" not in out["confirm_commands"][0]["command"], out
     assert xl_table.values[(1, 2)] == "부서" and off.list_snapshots("excel") == []
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "B:B", "--overwrite")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
@@ -586,6 +587,62 @@ def test_delete_empty_rows_needs_no_overwrite(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9")
     assert code == 0 and out["filled_cells"] == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     assert _col(xl_table, 1) == ["이름", "가", "나", "다", "라"]
+
+
+# 지울 칸을 참조하는 다른 칸의 수식 (#REF!가 됨, 1.4.41)
+
+
+def _formula(ws, r, c, f, v=0):
+    ws.formulas[(r, c)] = f
+    ws.values[(r, c)] = v
+
+
+def test_formula_refs_parses_a1_references():
+    refs = excel.formula_refs("=SUM($B$2:B5)+'내 시트'!C3+요약!A:A+Sheet1!4:6+\"A9\"+LOG10(2)+[책.xlsx]Sheet1!A1")
+    assert refs == [(None, 2, 2, 5, 2), ("내 시트", 3, 3, 3, 3), ("요약", 1, 1, 1048576, 1), ("Sheet1", 4, 1, 6, 16384)], refs
+
+
+def test_delete_rows_referenced_by_formula_needs_decision(xl_table, capsys):
+    _formula(xl_table, 7, 1, "=C3*2")              # 지울 3행만 참조 -> #REF!
+    _formula(xl_table, 8, 1, "=SUM(C2:C5)")        # 범위 일부만 지움 -> 범위가 줄 뿐
+    _formula(xl_table, 3, 4, "=C2")                # 지울 행 안의 수식은 함께 사라짐
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3", "--overwrite", "--dry-run")
+    assert code == 0 and out["broken_refs"] == 1 and out["broken_ref_cells"] == ["Sheet1!A7"], out
+    assert "#REF!" in out["preview"] and "--overwrite" in out["confirm_commands"][0]["command"], out
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3")
+    assert code == 1 and out["error_type"] == "needs_user_decision", out
+    assert "#REF!" in out["message"] and "Sheet1!A7" in out["message"] and "Sheet1!A8" not in out["message"], out
+    assert "C3*2" not in out["message"] and "C3*2" not in _tool_log_text()          # 수식 글은 보이지 않음
+    assert xl_table.values[(3, 1)] == "나"                                          # 바꾸지 않음
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "3", "--overwrite")
+    assert code == 0 and out["broken_refs"] == 1 and "#REF!" in out["preview"], out
+
+
+def test_delete_empty_rows_referenced_by_formula_needs_decision(xl_table, capsys):
+    _formula(xl_table, 2, 4, "=A9")
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9")
+    assert code == 1 and out["error_type"] == "needs_user_decision" and "Sheet1!D2" in out["message"], out
+    assert "값이 있는 칸" not in out["message"], out
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9", "--dry-run")
+    assert code == 0 and out["filled_cells"] == 0 and out["broken_refs"] == 1 and "--overwrite" in out["confirm_commands"][0]["command"]
+
+
+def test_delete_cols_referenced_from_other_sheet(monkeypatch, capsys):
+    app = FakeXlApp()
+    wb = FakeExcelWorkbook(app, "보고.xlsx", sheets=("Sheet1", "요약"))
+    stub_com(monkeypatch)
+    set_active(monkeypatch, app, wb)
+    ws, other = wb.Worksheets("Sheet1"), wb.Worksheets("요약")
+    _formula(other, 1, 1, "=sheet1!B2")             # 시트 이름은 대소문자 무시
+    _formula(other, 2, 1, "=B2")                   # 요약 시트 자기 칸
+    _formula(other, 3, 1, "=SUM(Sheet1!A:C)")      # 열 범위 일부
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "B", "--dry-run")
+    assert code == 0 and out["broken_ref_cells"] == ["요약!A1"], out
+
+
+def test_delete_without_references_unchanged(xl_table, capsys):
+    code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "8:9")
+    assert code == 0 and out["broken_refs"] == 0 and out["broken_ref_cells"] == [], out
 
 
 def test_cell_range_needs_axis(xl_table, capsys):
@@ -658,6 +715,33 @@ def test_sort_verify_catches_wrong_order(xl_table, capsys, monkeypatch):
     monkeypatch.setattr(fake_excel.FakeRange, "Sort", lambda self, **kw: None)      # Excel이 정렬하지 않음
     code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "금액")
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+
+
+def _wide_table(ws):
+    rows = [("팀", "부서", "등급", "지역", "이름"),
+            ("A", "영업", 2, "서울", "다"), ("A", "영업", 1, "부산", "나"), ("A", "영업", 1, "서울", "라"),
+            ("B", "개발", 1, "서울", "가"), ("A", "영업", 1, "부산", "마")]
+    for i, row in enumerate(rows, start=1):
+        for j, v in enumerate(row, start=1):
+            ws.values[(i, j)] = v
+
+
+def test_sort_more_than_three_keys_uses_sort_fields(xl_table, capsys):
+    """1.4.46: 기준 4개 이상은 Worksheet.Sort.SortFields (전에는 3개까지만, 4개면 STOP_RETRY)."""
+    _wide_table(xl_table)
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:E6", "--by", "팀,부서,등급,지역,이름",
+                         "--desc", "지역")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and len(out["keys"]) == 5, out
+    assert _col(xl_table, 5, 1, 6) == ["이름", "라", "나", "마", "다", "가"], _col(xl_table, 5, 1, 6)
+    applied = [x for x in xl_table.log if x[0] == "SortApply"]
+    assert applied and applied[0][2] == excel.XL_YES and len(applied[0][3]) == 5, xl_table.log
+    assert xl_table.Sort.SortFields.Count == 0                                     # 시트에 정렬 기준을 남기지 않음
+    assert not [x for x in xl_table.log if x[0] == "Sort"]
+
+
+def test_sort_too_many_keys(xl_table, capsys):
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", ",".join(["금액"] * 65))
+    assert code == 1 and "64개" in out["message"], out
 
 
 # ---------------------------------------------------------------------------
@@ -1317,3 +1401,560 @@ def test_missing_table_file_lists_only_table_files(capsys, xl, isolated_dirs):
     msg = out["message"]
     assert "excel_results.csv" in msg and "메모.md" in msg
     assert "chart_export.png" not in msg and "보고서.pdf" not in msg
+
+
+# ---------------------------------------------------------------------------
+# comment: 칸 메모 (목록 / 달기 / 바꾸기·덧붙이기 / 지우기, 1.4.50)
+# ---------------------------------------------------------------------------
+
+from fake_excel import FakeComment  # noqa: E402
+from office_helpers import error_log_text  # noqa: E402
+
+
+def _note(ws, r, c, text):
+    ws.notes[(r, c)] = FakeComment(ws, r, c, text)
+
+
+def _notes(ws):
+    return {excel.addr(r, c): n.text for (r, c), n in ws.notes.items()}
+
+
+def test_comment_list_empty_and_range(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "comment")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+    _note(ws, 2, 2, "첫 메모")
+    _note(ws, 9, 4, "멀리 있는 메모")
+    code, out = run_excel(capsys, "comment")
+    assert code == 0 and out["count"] == 2 and out["truncated"] is False
+    assert [(i["cell"], i["text"]) for i in out["items"]] == [("B2", "첫 메모"), ("D9", "멀리 있는 메모")]
+    assert out["items"][0]["author"] == "검토자" and out["sheet"] == "Sheet1"
+    code, out = run_excel(capsys, "comment", "--range", "A1:C5")
+    assert out["count"] == 1 and out["items"][0]["cell"] == "B2"
+
+
+def test_comment_list_is_capped_with_next_command(xl, capsys, monkeypatch):
+    _, wb = xl
+    ws = ws_of(wb)
+    for r in range(1, 31):
+        _note(ws, r, 1, f"메모 {r} " + "가" * 50)
+    monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 600)
+    code, out = run_excel(capsys, "comment")
+    assert code == 0 and out["count"] == 30 and out["truncated"] is True and 0 < out["shown"] < 30
+    nxt = out["next_commands"][0]["command"]
+    assert f"--start {out['shown'] + 1}" in nxt and " comment " in nxt
+
+
+def test_comment_add_one_verifies_and_leaves_undo_point(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "comment", "--action", "add", "--range", "B5", "--text", "규격 3.1과 다름\\n확인 필요")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert ws.notes[(5, 2)].text == "규격 3.1과 다름\n확인 필요"
+    assert out["applied"] == ["메모 추가: Sheet1!B5"] and out["count"] == 1
+    assert len(undo_points()) == 1
+    # --action add를 빠뜨려도 --text가 있으면 달기 (목록을 보여 주고 '완료'라고 하지 않음)
+    code, out = run_excel(capsys, "comment", "--range", "C5", "--text", "둘째")
+    assert code == 0 and ws.notes[(6 - 1, 3)].text == "둘째"
+
+
+def test_comment_add_from_file_with_sheet(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "메모.csv"
+    f.write_text("칸,메모\nB2,값이 규격보다 큼\n'요약'!C3,\"쉼표, 있는 메모\"\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--action", "add", "--file", str(f))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert _notes(ws_of(wb)) == {"B2": "값이 규격보다 큼"}
+    assert _notes(ws_of(wb, "요약")) == {"C3": "쉼표, 있는 메모"}
+    assert out["count"] == 2 and len(undo_points()) == 1
+    # --sheet: 시트 이름이 없는 칸은 그 시트에
+    f2 = tmp_path / "메모2.csv"
+    f2.write_text("D4,요약 시트 메모\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--file", str(f2), "--sheet", "요약")
+    assert code == 0 and _notes(ws_of(wb, "요약"))["D4"] == "요약 시트 메모"
+
+
+def test_comment_file_bad_rows_add_nothing(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "메모.csv"
+    f.write_text("칸,메모\nB2,좋음\n가나다,잘못된 칸\nC3,\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--action", "add", "--file", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:")
+    assert "3번째 줄" in out["message"] and "4번째 줄" in out["message"]
+    assert ws_of(wb).notes == {} and undo_points() == []
+
+
+def test_comment_existing_note_needs_user_decision(xl, capsys, monkeypatch, isolated_dirs):
+    from office_helpers import run_fresh
+    _, wb = xl
+    ws = ws_of(wb)
+    _note(ws, 5, 2, "ZQX 기존 메모")
+    code, out = run_fresh(excel, capsys, monkeypatch, "comment", "--action", "add", "--range", "B5", "--text", "새 의견")
+    assert code == 1 and out["error_type"] == "needs_user_decision", out
+    assert "B5" in out["message"] and "ZQX" in out["message"]
+    assert "--overwrite" in out["agent_directive"] and "--append" in out["agent_directive"]
+    log = error_log_text(isolated_dirs)
+    assert "B5" in log and "ZQX" not in log and "새 의견" not in log
+    assert ws.notes[(5, 2)].text == "ZQX 기존 메모" and undo_points() == []
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "덧붙임", "--append")
+    assert code == 0 and ws.notes[(5, 2)].text == "ZQX 기존 메모\n덧붙임" and out["applied"] == ["메모 덧붙이기: Sheet1!B5"]
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "바꾼 메모", "--overwrite")
+    assert code == 0 and ws.notes[(5, 2)].text == "바꾼 메모" and out["agent_directive"].startswith("VERIFIED:")
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "x", "--overwrite", "--append")
+    assert code in (1, 2) and out["status"] == "error"
+
+
+def test_comment_add_dry_run_changes_nothing(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    _note(ws, 2, 2, "기존")
+    code, out = run_excel(capsys, "comment", "--range", "B2:B3", "--text", "의견", "--dry-run")
+    assert code == 0 and out["dry_run"] is True and out["agent_directive"].startswith("VERIFIED: 미리보기")
+    assert ws.notes[(2, 2)].text == "기존" and (3, 2) not in ws.notes and undo_points() == []
+    assert any("B2" in p and "이미" in p for p in out["planned"]) and any("B3" in p for p in out["planned"])
+    cmds = [c["command"] for c in out["confirm_commands"]]
+    assert all("--dry-run" not in c for c in cmds)
+    assert any("--overwrite" in c for c in cmds) and any("--append" in c for c in cmds)
+    code, out = run_excel(capsys, "comment", "--range", "C9", "--text", "의견", "--dry-run")
+    assert out["confirm_commands"][0]["command"].endswith('--text 의견') or "--dry-run" not in out["confirm_commands"][0]["command"]
+    assert (9, 3) not in ws.notes
+
+
+def test_comment_delete(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "comment", "--action", "delete")
+    assert code == 1 and "--range" in out["message"]
+    _note(ws, 2, 2, "가")
+    _note(ws, 3, 2, "나")
+    _note(ws, 9, 9, "다")
+    code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5", "--dry-run")
+    assert code == 0 and out["dry_run"] is True and len(ws.notes) == 3 and undo_points() == []
+    assert out["planned"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"]
+    assert "--dry-run" not in out["confirm_commands"][0]["command"]
+    code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and list(ws.notes) == [(9, 9)]
+    assert out["applied"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"] and len(undo_points()) == 1
+    code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "A1:A3")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건") and len(undo_points()) == 1
+
+
+def test_comment_refused_by_excel_is_input_error(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.refuse_notes = True
+    code, out = run_excel(capsys, "comment", "--range", "B2", "--text", "의견")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "보호" in out["message"]
+
+
+# ---------------------------------------------------------------------------
+# 문서에 없던 서식 옵션 점검 (1.4.53): --wrap, --italic, range border --weight/--box,
+# write --no-autofit, style --no-zebra, export --encoding
+# ---------------------------------------------------------------------------
+
+
+def test_style_wrap_and_italic_are_read_back(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    ws.set(1, 1, "긴 글")
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--wrap", "--italic")
+    assert code == 0 and out["verified"] is True, out
+    assert ws.props("$A$1:$B$2", "Misc").get("WrapText") is True
+
+
+def test_style_wrap_not_applied_is_unverified(xl, capsys, monkeypatch):
+    app, wb = xl
+    real = excel._apply_format
+
+    def no_wrap(rng, spec):
+        real(rng, {k: v for k, v in spec.items() if k != "wrap"})
+    monkeypatch.setattr(excel, "_apply_format", no_wrap)
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--wrap")
+    assert code == 0 and out["verified"] is False and any("wrap" in u for u in out["unverified"]), out
+
+
+@pytest.mark.parametrize("box,edges,inner", [(False, (7, 8, 9, 10, 11, 12), ()), (True, (7, 8, 9, 10), (11, 12))])
+def test_range_border_weight_and_box_are_read_back(xl, capsys, box, edges, inner):
+    app, wb = xl
+    ws = ws_of(wb)
+    argv = ["range", "--action", "border", "--range", "A1:C3", "--weight", "medium"] + (["--box"] if box else [])
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["verified"] is True, out
+    for b in edges:
+        p = ws.props("$A$1:$C$3", f"Border{b}")
+        assert p.get("LineStyle") == 1 and p.get("Weight") == excel.XL_WEIGHT["medium"], b
+    for b in inner:
+        assert ws.props("$A$1:$C$3", f"Border{b}").get("LineStyle") is None, b
+
+
+def test_range_border_none_is_read_back(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "range", "--action", "border", "--range", "A1:B2", "--weight", "none")
+    assert code == 0 and out["verified"] is True, out
+    assert ws.props("$A$1:$B$2", "Border7").get("LineStyle") == -4142
+
+
+def test_range_border_failure_is_unverified(xl, capsys, monkeypatch):
+    monkeypatch.setattr(excel, "_apply_border", lambda rng, weight, box=False: None)
+    code, out = run_excel(capsys, "range", "--action", "border", "--range", "A1:B2", "--weight", "thick")
+    assert code == 0 and out["verified"] is False and any("테두리" in u for u in out["unverified"]), out
+
+
+def test_write_table_autofits_unless_no_autofit(xl, capsys, tmp_path):
+    app, wb = xl
+    ws = ws_of(wb)
+    f = tmp_path / "t.csv"
+    f.write_text("a,b\n1,2\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--range", "A1", "--file", str(f))
+    assert code == 0 and any(x[0] == "AutoFit" for x in ws.log), ws.log
+    ws.log.clear()
+    code, out = run_excel(capsys, "write", "--range", "D1", "--file", str(f), "--no-autofit")
+    assert code == 0 and not any(x[0] == "AutoFit" for x in ws.log), ws.log
+
+
+def test_style_theme_no_zebra(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    rows = [["지역", "금액"]] + [[f"지역{i}", float(i)] for i in range(1, 8)]
+    for r, row in enumerate(rows, 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    code, out = run_excel(capsys, "style", "--theme", "navy", "--no-zebra")
+    assert code == 0 and out["applied"]["zebra_rows"] == 0 and out["verified"] is True, out
+
+
+def test_export_csv_cp949_and_row_count(xl, capsys, tmp_path):
+    app, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([["이름", "온도"], ["가", "25℃"], ["나", "30℃"]], 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    out_path = tmp_path / "out.csv"
+    code, out = run_excel(capsys, "export", "--save", str(out_path), "--encoding", "cp949")
+    assert code == 0 and out["verified"] is True, out
+    assert out_path.read_bytes().decode("cp949").splitlines()[1] == "가,25℃"
+
+
+def test_export_csv_cp949_unencodable_is_input_error(xl, capsys, tmp_path):
+    app, wb = xl
+    ws = ws_of(wb)
+    ws.set(1, 1, "이름")
+    ws.set(2, 1, "\U0001F600 값")                     # cp949로 쓸 수 없는 글자
+    out_path = tmp_path / "out.csv"
+    code, out = run_excel(capsys, "export", "--save", str(out_path), "--encoding", "cp949")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "A2" in out["message"] and "[추천] utf-8-sig" in out["message"], out
+    assert not out_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# write --cells: 흩어진 칸 여러 개를 한 번에 (1.4.54). 회사 기록: C6..C16에 write 16번, 확인 8번
+# ---------------------------------------------------------------------------
+
+
+def test_write_cells_inline_many_sheets_one_undo_point(xl, capsys):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", "C6=ft; C7=℃; 요약!C11=20; C8==C6&C7")
+    assert code == 0 and out["verified"] is True and out["agent_directive"].startswith("VERIFIED:"), out
+    ws, ws2 = ws_of(wb), ws_of(wb, "요약")
+    assert ws.values[(6, 3)] == "ft" and ws.values[(7, 3)] == "℃" and ws2.values[(11, 3)] == 20
+    assert ws.formulas[(8, 3)] == "=C6&C7"                                # =로 시작하는 값은 수식
+    assert out["count"] == 4 and len(undo_points()) == 1
+
+
+def test_write_cells_file_with_header_and_quotes(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "칸값.csv"
+    f.write_text("칸,값\nC6,ft\n'요약'!B2,\"쉼표, 든 값\"\nC9,0012\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--cells", str(f))
+    assert code == 0 and out["verified"] is True, out
+    assert ws_of(wb).values[(6, 3)] == "ft" and ws_of(wb, "요약").values[(2, 2)] == "쉼표, 든 값"
+    assert ws_of(wb).values[(9, 3)] == "0012"                            # 앞자리 0은 글자 그대로
+    code, out = run_excel(capsys, "write", "--cells", "C10='a;b'; C11=x")
+    assert code == 0 and ws_of(wb).values[(10, 3)] == "a;b" and ws_of(wb).values[(11, 3)] == "x"
+
+
+def test_write_cells_conflicts_one_decision_one_overwrite(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(6, 3, "old6")
+    ws.set(7, 3, "old7")
+    ws.set(8, 3, "same")
+    cells = "C6=a; C7=b; C8=same; C9=c"
+    code, out = run_excel(capsys, "write", "--cells", cells)
+    assert code == 1 and out["error_type"] == "needs_user_decision", out
+    assert "C6=old6" in out["message"] and "C7=old7" in out["message"] and "C8" not in out["message"]
+    assert (9, 3) not in ws.values and undo_points() == []           # 하나도 쓰지 않음
+    code, out = run_excel(capsys, "write", "--cells", cells, "--overwrite")
+    assert code == 0 and out["verified"] is True, out
+    assert [ws.values[(r, 3)] for r in (6, 7, 8, 9)] == ["a", "b", "same", "c"]
+    assert out["count"] == 3 and out["unchanged"] == 1 and len(undo_points()) == 1
+
+
+def test_write_cells_dry_run(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(6, 3, "old")
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7=b", "--dry-run")
+    assert code == 0 and out["dry_run"] is True and out["agent_directive"].startswith("VERIFIED: 미리보기"), out
+    assert ws.values[(6, 3)] == "old" and (7, 3) not in ws.values and undo_points() == []
+    assert any("덮어쓰기" in p and "C6" in p for p in out["planned"]) and any("C7" in p for p in out["planned"])
+    assert "next_commands" not in out, out              # 1.4.73: 실제로 쓰는 명령은 사용자 확인 뒤에만 (confirm_commands)
+    cmd = out["confirm_commands"][0]["command"]
+    assert "--dry-run" not in cmd and "--overwrite" in cmd and "--cells" in cmd
+
+
+def test_write_cells_bad_items_write_nothing(xl, capsys, tmp_path):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; 가나=b; C8")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "가나" in out["message"] and "C8" in out["message"]
+    assert ws_of(wb).values == {} and undo_points() == []
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C6=b")
+    assert code == 1 and "C6" in out["message"] and ws_of(wb).values == {}
+    code, out = run_excel(capsys, "write", "--cells", "C6=a", "--value", "x")
+    assert code == 1 and "--cells" in out["message"]
+
+
+def test_write_cells_missing_sheet_suggests(xl, capsys):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; 요 약!C7=b")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "요약" in out["message"], out
+    assert ws_of(wb).values == {}
+
+
+def test_write_file_with_cell_value_header_points_to_cells(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "칸값.csv"
+    f.write_text("칸,값\nC6,ft\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--file", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "[추천] python" in out["message"] and "--cells" in out["message"]
+    assert ws_of(wb).values == {}
+
+
+def test_write_cells_reads_back(xl, capsys, monkeypatch):
+    _, wb = xl
+    ws = ws_of(wb)
+    real_set = ws.set
+    monkeypatch.setattr(ws, "set", lambda r, c, v: real_set(r, c, "바뀜" if (r, c) == (7, 3) else v))
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7=b")
+    assert code == 0 and out["verified"] is False and "C7" in " ".join(out["unverified"]), out
+
+
+# ---------------------------------------------------------------------------
+# 시트 보호 사전 확인과 엑셀이 받지 않는 수식 (A6, 1.4.55)
+# ---------------------------------------------------------------------------
+
+
+def _protect(ws, unlocked=(), **allow):
+    ws.ProtectContents = True
+    ws.unlocked = set(unlocked)
+    for k, v in allow.items():
+        setattr(ws.Protection, k, v)
+
+
+@pytest.mark.parametrize("argv", [
+    ("write", "--range", "C6", "--value", "x"),
+    ("write", "--cells", "C6=x; C7=y"),
+    ("replace", "--find", "a", "--replace", "b"),
+    ("style", "--range", "A1:B2", "--bold"),
+    ("range", "--action", "merge", "--range", "A1:B1"),
+    ("range", "--action", "width", "--range", "A1", "--size", "20"),
+    ("range", "--action", "insert", "--range", "3:4"),
+    ("range", "--action", "sort", "--range", "A1:B3", "--by", "A"),
+    ("comment", "--action", "add", "--range", "B2", "--text", "의견"),
+])
+def test_protected_sheet_stops_every_write(xl, capsys, argv):
+    _, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([["a", "x"], ["a", "y"], ["c", "z"]], 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    _protect(ws, unlocked=[(9, 4), (10, 4)])
+    ws.ProtectDrawingObjects = True
+    before = dict(ws.values)
+    code, out = run_excel(capsys, *argv)
+    assert code == 1 and out["error_type"] == "sheet_protected", out
+    assert out["agent_directive"].startswith("STOP_RETRY:") and "시트 보호 해제는 사용자가 직접" in out["message"]
+    assert "암호를 풀지 않음" in out["message"]
+    assert ws.values == before and undo_points() == [] and ws.notes == {}
+
+
+def test_protected_sheet_lists_unlocked_cells_as_candidates(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(1, 1, "제목")
+    ws.set(9, 4, None)
+    ws.set(5, 3, 1)
+    _protect(ws, unlocked=[(5, 3)])
+    code, out = run_excel(capsys, "write", "--range", "A1", "--value", "x", "--overwrite")
+    assert code == 1 and out["error_type"] == "sheet_protected" and "A1" in out["message"], out
+    assert out["candidates"] == ["C5"] and "[후보] C5" in out["message"]
+
+
+def test_protected_sheet_allows_unlocked_cells_and_allowed_formatting(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    _protect(ws, unlocked=[(6, 3), (7, 3)], AllowFormattingCells=True)
+    code, out = run_excel(capsys, "write", "--cells", "C6=1; C7=2")
+    assert code == 0 and out["verified"] is True, out
+    code, out = run_excel(capsys, "style", "--range", "C6:C7", "--bold")
+    assert code == 0, out
+
+
+def test_unprotected_sheet_comment_and_chart_unaffected(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.ProtectDrawingObjects = True          # 시트 보호가 꺼져 있으면 개체 보호 표시는 의미 없음
+    code, out = run_excel(capsys, "comment", "--action", "add", "--range", "B2", "--text", "의견")
+    assert code == 0, out
+
+
+def test_rejected_formula_names_formula_and_recommends_comma(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.reject_formula = lambda f: ";" in f
+    code, out = run_excel(capsys, "write", "--range", "C8", "--formula", "=SUM(A1;A2)")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "=SUM(A1;A2)" in out["message"] and "쉼표" in out["message"] and "영어 함수 이름" in out["message"]
+    assert "[추천] python" in out["message"] and "=SUM(A1,A2)" in out["message"].split("[추천]")[1]
+    assert (8, 3) not in ws.formulas and undo_points() == []
+
+
+def test_rejected_formula_without_mechanical_fix_has_no_recommendation(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.reject_formula = lambda f: "합계" in f
+    code, out = run_excel(capsys, "write", "--cells", "C6=1; C7==합계(A1:A2); C8=3")
+    assert code == 1 and "=합계(A1:A2)" in out["message"] and "[추천]" not in out["message"], out
+    assert "큰따옴표" in out["message"]
+    assert ws.values == {} and ws.formulas == {} and undo_points() == []      # 먼저 쓴 C6도 되돌림
+
+
+def test_rejected_formula_rolls_back_new_sheet(xl, capsys, monkeypatch):
+    app, wb = xl
+    real_add = wb.Worksheets.Add
+
+    def add(**kw):
+        ws = real_add(**kw)
+        ws.reject_formula = lambda f: "SUMA" in f
+        return ws
+    monkeypatch.setattr(wb.Worksheets, "Add", add)
+    code, out = run_excel(capsys, "write", "--sheet", "계산", "--new-sheet", "--range", "A1:A3", "--header", "합",
+                          "--formula", "=SUMA(B1)")
+    assert code == 1 and "=SUMA(B1)" in out["message"], out
+    assert sheet_names(wb) == ["Sheet1", "요약"] and undo_points() == []
+
+
+def test_rejected_formula_log_has_no_formula(xl, capsys):
+    _, wb = xl
+    ws_of(wb).reject_formula = lambda f: "VLOOKUPX" in f
+    code, out = run_excel(capsys, "write", "--range", "C8", "--formula", "=VLOOKUPX(1)")
+    assert code == 1
+    log = _tool_log_text()
+    assert "VLOOKUPX" not in log and "수식" in log
+
+
+# ---------------------------------------------------------------------------
+# 독립 검토 (1.4.63): 칸값·메모 파일의 셋째 열, --cells 따옴표·수식 나누기, --append 재실행
+# ---------------------------------------------------------------------------
+
+
+def test_write_cells_file_third_column_stops_before_writing(xl, capsys, tmp_path):
+    # 값의 쉼표가 열을 나눔: C7,1,500 -> 1만 쓰고 VERIFIED였음
+    _, wb = xl
+    f = tmp_path / "칸값.csv"
+    f.write_text("칸,값\nC6,ft\nC7,1,500\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--cells", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "3번째 줄" in out["message"] and "큰따옴표" in out["message"]
+    assert '고친 줄: 3번째 줄 C7,"1,500"' in out["message"] and "[추천]" not in out["message"]   # 인자 값으로 읽히지 않게
+    assert ws_of(wb).values == {} and undo_points() == []
+    assert "1,500" not in _tool_log_text()                               # 고친 줄(값)은 로그에 남기지 않음
+    f.write_text("칸,값\nC6,ft\nC7,\"1,500\"\nC8,x,\n", encoding="utf-8")   # 따옴표로 감싸거나 뒤 빈 칸은 그대로
+    code, out = run_excel(capsys, "write", "--cells", str(f))
+    assert code == 0 and ws_of(wb).values[(7, 3)] == 1500 and ws_of(wb).values[(8, 3)] == "x", out
+
+
+def test_comment_file_third_column_stops_before_adding(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "메모.csv"
+    f.write_text("칸,메모\nB5,규격 3.1과 다름, 재확인 필요\nB6,좋음\nB7,a,b\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--action", "add", "--file", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "2, 4번째 줄" in out["message"] and "큰따옴표" in out["message"]
+    assert 'B5,"규격 3.1과 다름, 재확인 필요"' in out["message"]
+    assert ws_of(wb).notes == {} and undo_points() == []
+
+
+@pytest.mark.parametrize("cells,want", [
+    ("C6='007; C7=5", {(6, 3): "007", (7, 3): 5}),                            # 닫히지 않은 따옴표가 뒤 항목을 삼키지 않음
+    ("C6='it's'; C7=1", {(6, 3): "it's", (7, 3): 1}),
+    ("C6='a;b'; C7=2", {(6, 3): "a;b", (7, 3): 2}),
+    ("'요약'!C3=5; C4=6", {(4, 3): 6}),
+])
+def test_write_cells_quote_must_close_before_separator(xl, capsys, cells, want):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", cells)
+    assert code == 0 and out["verified"] is True, out
+    assert ws_of(wb).values == want
+    if "007" in cells:
+        assert (6, 3) in ws_of(wb).prefixed                               # Excel 글자 표시 '는 그대로 (앞자리 0 유지)
+
+
+def test_write_cells_formula_keeps_separators_in_quotes_and_parens(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "write", "--cells", 'C6==IF(A1="a;b",1,2); C7=3')
+    assert code == 0 and ws.formulas[(6, 3)] == '=IF(A1="a;b",1,2)' and ws.values[(7, 3)] == 3, out
+    ws.reject_formula = lambda f: ";" in f
+    code, out = run_excel(capsys, "write", "--cells", "C8==SUM(A1;A2)")
+    assert code == 1 and "[추천] python" in out["message"], out                # 수식을 쪼개지 않고 ';' -> ',' 추천까지
+    assert "C8==SUM(A1,A2)" in out["message"].split("[추천]")[1]
+    assert (8, 3) not in ws.formulas
+
+
+def test_rejected_formula_rollback_keeps_text_constants(xl, capsys):
+    # 되돌릴 때 rng.Formula = prior가 글자 007, 1-2, 긴 숫자 글자, '=abc를 숫자·날짜·수식으로 바꿨음 (1.4.63)
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.typing = True
+    old = {(6, 3): "007", (7, 3): "1-2", (8, 3): "12345678901234567890", (9, 3): "=abc"}
+    for (r, c), v in old.items():
+        ws.set(r, c, "'" + v)
+    ws.set(10, 3, 42)
+    ws.reject_formula = lambda f: "BAD" in f
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7=b; C8=c; C9=d; C10=e; C11==BAD(1)", "--overwrite")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert {k: ws.values[k] for k in old} == old and ws.values[(10, 3)] == 42
+    assert all(k in ws.prefixed for k in old) and ws.formulas == {}
+    assert undo_points() == [] and "되돌리지 못한" not in out["message"]
+
+
+def test_rejected_formula_rollback_mismatch_keeps_undo_point(xl, capsys, monkeypatch):
+    # 되돌린 뒤 다시 읽은 값이 다르면 되돌리기 지점을 남기고 undo를 안내
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(6, 3, "원래")
+    ws.reject_formula = lambda f: "BAD" in f
+    real_set = ws.set
+    monkeypatch.setattr(ws, "set", lambda r, c, v: real_set(r, c, "망가짐" if v == "'원래" else v))
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7==BAD(1)", "--overwrite")
+    assert code == 1 and "C6" in out["message"] and "office.py undo" in out["message"], out
+    assert len(undo_points()) == 1
+
+
+def test_comment_append_rerun_does_not_duplicate(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    _note(ws, 5, 2, "기존 메모")
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "덧붙임", "--append")
+    assert code == 0 and ws.notes[(5, 2)].text == "기존 메모\n덧붙임" and len(undo_points()) == 1
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "덧붙임", "--append")
+    assert code == 0 and ws.notes[(5, 2)].text == "기존 메모\n덧붙임", out          # 두 번 붙지 않음
+    assert out["unchanged"] == 1 and out["count"] == 0 and out["applied"] == [] and len(undo_points()) == 1
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "기존 메모\\n덧붙임")
+    assert code == 0 and out["unchanged"] == 1, out                               # 같은 메모는 결정 없이 그대로

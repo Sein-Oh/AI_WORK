@@ -71,7 +71,7 @@ def regression_report(tmp_path_factory):
                                  "targets": {"생산효율(%)": {"features": "슬롯 피처 소견"}}}, ensure_ascii=False),
                      encoding="utf-8")
     out = work / "report.docx"
-    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "--slots", str(slots), "-o", str(out))
+    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "--slots", str(slots), "--save", str(out))
     return work, tr, payload, out
 
 
@@ -137,22 +137,6 @@ def test_report_rejects_non_version_folder(regression_report, tmp_path):
 
 
 @needs_report
-def test_data_dir_mode_picks_best_version_and_slots(regression_report):
-    """-d <데이터 폴더>만 주면(-v 없음) 최근 실험의 최고 버전을 쓰고, --slots 글이 문서에 들어간다."""
-    work, tr, _, _ = regression_report
-    root = os.path.dirname(tr["version_dir"])
-    lines = open(os.path.join(root, "history.jsonl"), encoding="utf-8").read().splitlines()
-    recs = [json.loads(x) for x in lines]
-    best = max(recs, key=lambda r: r["mean_val_score"])["version"]
-    slots = json.dumps({"performance": "직접 쓴 성능 소견", "operation": "직접 쓴 운영 소견"}, ensure_ascii=False)
-    out = work / "slots.docx"
-    payload = run_tool("ml_report.py", "-d", root, "--slots", slots, "-o", str(out))
-    assert payload["best_version"] == payload["version"] == best
-    text = _all_text(docx.Document(str(out)))
-    assert "직접 쓴 성능 소견" in text and "직접 쓴 운영 소견" in text
-
-
-@needs_report
 def test_report_requires_oof_files(regression_report, tmp_path):
     """oof_*.csv가 없는 버전 폴더(2.9.1 전에 학습)는 다시 학습하라는 STOP_RETRY."""
     import shutil
@@ -172,7 +156,7 @@ def test_derived_features_are_shown_with_formulas(tmp_path):
     data = make_sample(str(tmp_path / "d.csv"))
     tr = run_tool("ml_train.py", "-f", data, "-x", "반응온도,압축압력,촉매비율,수분함량", "-y", "생산효율",
                   "--eval", "온도x수분 = 반응온도 * 수분함량; 촉매제곱 = 촉매비율 ** 2; 압력비 = 압축압력 / 촉매비율")
-    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "-o", str(tmp_path / "r.docx"))
+    payload = run_tool("ml_report.py", "-m", tr["version_dir"], "--save", str(tmp_path / "r.docx"))
     text = _all_text(docx.Document(payload["report_file"]))
     assert "온도x수분 = 반응온도(°C) × 수분함량(%)" in text
     assert "촉매제곱 = 촉매비율(wt%)²" in text and "압력비 = 압축압력(bar) ÷ 촉매비율(wt%)" in text
@@ -202,7 +186,7 @@ def test_report_docx_follows_schema_for_word_2007(tmp_path):
     data = tmp_path / "d.csv"
     make_sample(str(data))
     tr = run_tool("ml_train.py", "-f", str(data), "-x", "반응온도,촉매비율,수분함량", "-y", "생산효율")
-    rep = run_tool("ml_report.py", "-d", tr["data_root"], "--out", str(tmp_path / "r.docx"))
+    rep = run_tool("ml_report.py", "-m", tr["version_dir"], "--save", str(tmp_path / "r.docx"))
     body = docx.Document(rep["report_file"]).element.body
 
     assert not list(body.iter(qn("w:start"))) and not list(body.iter(qn("w:end")))   # Word 2010+ names
@@ -241,15 +225,6 @@ def test_report_fmt_significant_digits():
     assert mr.fmt(0.00012346, 3) == "0.000123" and mr.fmt(2.5e-7) == "2.500e-07"
     # no jump around 1e-3: neighbours keep the same number of significant digits
     assert mr.fmt(0.0009876) == "0.0009876" and mr.fmt(0.001234) == "0.001234"
-
-
-def test_report_predict_command_layout_from_history():
-    import ml_report as mr
-    recs = [{"task": "regression", "data_profile": {"layout": {"header_row": 2, "unit_row": 3, "data_row": None}}}]
-    ns = mr._layout_args(argparse.Namespace(header_row=None, unit_row=None, data_row=None), recs, "regression")
-    assert mt.layout_flags(ns) == " --header-row 2 --unit-row 3"
-    ns = mr._layout_args(argparse.Namespace(header_row=5, unit_row=None, data_row=None), recs, "regression")
-    assert mt.layout_flags(ns) == " --header-row 5 --unit-row 3"
 
 
 def test_report_reuses_single_best_version(tmp_path):
@@ -392,7 +367,7 @@ def test_report_succeeds_with_damaged_templates(tmp_path):
     bad = make_damaged_default(tmp_path / "default.docx")
     out = tmp_path / "report.docx"
     proc = subprocess.run(
-        [sys.executable, "-c", RUNNER, KIT, bad, str(tmp_path / "없는폴더"), "-m", tr["version_dir"], "-o", str(out)],
+        [sys.executable, "-c", RUNNER, KIT, bad, str(tmp_path / "없는폴더"), "-m", tr["version_dir"], "--save", str(out)],
         capture_output=True, text=True, encoding="utf-8", timeout=600,
     )
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
@@ -966,6 +941,31 @@ def test_export_stops_at_time_limit_and_the_same_command_continues(tmp_path, mon
     assert again["targets"]["효율"]["inputs"] == last["targets"]["효율"]["inputs"]
 
 
+def test_export_blocked_fit_cache_continues_in_fallback(tmp_path, monkeypatch):
+    """3차 검토(2.9.63): _fits에 저장하지 못하면 나누지 않고 끝까지 진행해 120초를 넘겼다. 이제 대체 위치에 저장하고
+    CONTINUE로 이어 가며(recovered), 끝나면 대체 위치를 지운다."""
+    path = _calc_data(tmp_path)
+    tr = run_tool("ml_train.py", "-f", str(path), "-x", "온도,압력,잡음", "-y", "효율")
+    fits = os.path.join(tr["version_dir"], "export", "_fits")
+    os.makedirs(os.path.dirname(fits), exist_ok=True)
+    with open(fits, "w", encoding="utf-8") as f:
+        f.write("not a folder")
+    fb = mp.resume_places(fits)[1]
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    runs = []
+    for _ in range(10):
+        proc, out = run_raw("ml_export.py", "-m", tr["version_dir"])
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    first, last = runs[0], runs[-1]
+    assert len(runs) >= 2 and first["agent_directive"].startswith("CONTINUE:"), [r.get("progress") for r in runs]
+    assert any("대체 위치" in r and os.path.basename(fb) in r for r in first.get("recovered", [])), first
+    assert last["output_file"] and not last.get("continue")
+    assert not os.path.exists(fb) and os.path.isfile(fits)
+
+
 def test_unfinished_passes_through_the_reports_optional_workbook(monkeypatch, with_export):
     """보고서는 성능예측표 실패를 note로 넘기지만(보고서는 성공), 시간 제한 멈춤은 삼키지 않고 CONTINUE로 끝낸다."""
     import ml_export
@@ -990,3 +990,26 @@ def test_time_limit_setting(monkeypatch):
     monkeypatch.setattr(mp, "RUN_START", mp.time.monotonic() - 5)
     with pytest.raises(mp.Unfinished):
         mp.check_time(0, "x")
+
+
+def test_report_best_retraining_continues(tmp_path, monkeypatch):
+    """2.9.57: the best-version retraining of ml_report.py -f is split like training (CONTINUE, same command)."""
+    pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    data = make_sample(str(tmp_path / "p.csv"))
+    run_tool("ml_train.py", "-f", data, "-x", "반응온도,소비전력,촉매비율", "-y", "생산효율")
+    run_tool("ml_train.py", "-f", data, "-x", "반응온도,압축압력", "-y", "수분함량")
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    runs = []
+    for _ in range(80):         # 2.9.61: split by candidate model too, 2.9.66 by fold: more runs
+        proc, out = run_raw("ml_report.py", "-f", data, "--save", str(tmp_path / "r.docx"))
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    assert len(runs) >= 2 and runs[0]["agent_directive"].startswith("CONTINUE:"), runs[0]
+    assert "ml_report.py" in runs[0]["next_commands"][0]
+    last = runs[-1]
+    assert last["made_best"] is True and os.path.isfile(last["report_file"]), last
+    hist = [json.loads(ln) for ln in open(tmp_path / "p_ml_data" / "history.jsonl", encoding="utf-8")]
+    assert [h["version"] for h in hist] == ["v1", "v2", "v3"] and hist[-1].get("best") is True    # written once

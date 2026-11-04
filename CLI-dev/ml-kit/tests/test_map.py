@@ -110,6 +110,33 @@ def test_one_uneven_key_is_scattered_and_category_filter(process):
     assert "[후보]" in bad["message"]
 
 
+def test_code_column_is_matched_exactly_not_interpolated(tmp_path):
+    """2.9.61: 코드 '007'과 '7'을 같은 숫자 7로 합쳐 보간했다(VERIFIED). 앞자리 0 코드가 있는 열은 범주처럼 같은 코드의
+    행만 쓴다. 학습에 없는 코드('07')는 [후보]."""
+    r = np.random.default_rng(4)
+    t = r.uniform(150, 200, 90).round(2)
+    code = np.array(["007", "7", "12"])[np.arange(90) % 3]
+    y = 2 * t + np.select([code == "007", code == "7"], [100.0, 0.0], 50.0)
+    p = tmp_path / "c.csv"
+    pd.DataFrame({"온도": t, "코드": code, "수율": y.round(2)}).to_csv(p, index=False)
+    for c, off in (("7", 0.0), ("007", 100.0)):
+        res = run_tool("ml_map.py", "-f", str(p), "-i", f"온도=170,코드={c}", "-y", "수율")
+        assert res["keys"] == ["온도"] and res["points"][0]["input"]["코드"] == c, res
+        assert res["points"][0]["values"]["수율"] == pytest.approx(340 + off, abs=1e-6), res
+        assert all(str(n["코드"]) in (c, c + ".0") for n in res["nearest_rows"]), res["nearest_rows"]
+    bad = run_fail("ml_map.py", "-f", str(p), "-i", "온도=170,코드=07", "-y", "수율")
+    assert "[후보] 007, 12, 7" in bad["message"] and "[추천]" not in bad["message"], bad
+
+
+def test_two_digit_numbers_with_a_leading_zero_are_interpolated(tmp_path):
+    """3차 검토(2.9.63): '05, 10, 15, 20'의 '05' 하나로 숫자 열을 코드 열로 보아 보간 대신 틀린 [후보]를 냈다."""
+    p = tmp_path / "mp.csv"
+    p.write_text("온도,압력,수율\n05,1,50\n10,1,60\n15,1,70\n20,1,80\n05,2,55\n10,2,65\n15,2,75\n20,2,85\n",
+                 encoding="utf-8")
+    res = run_tool("ml_map.py", "-f", str(p), "-i", "온도=12,압력=1", "-y", "수율")
+    assert res["keys"] == ["온도", "압력"] and res["points"][0]["values"]["수율"] == pytest.approx(64.0), res
+
+
 # ---- 역산 --find --vary --------------------------------------------------------------------------------
 
 
@@ -330,3 +357,32 @@ def test_map_unused_columns_use_the_filtered_rows(tmp_path):
     res = run_tool("ml_map.py", "-f", write_df(tmp_path / "g.csv", df), "-i", "라인=X,A=15", "-y", "Y1")
     unused = [w for w in res.get("warnings", []) if "기준으로 주지 않은 열" in w]
     assert unused and "'B'" in unused[0] and "Y3" not in unused[0]                # 2.9.14: Y3 (empty for X) listed
+
+
+# ---- 묻지 않은 값 열의 섞인 % (24차 확인 검사 LOW-3, 2.9.42) ------------------------------------------------------
+
+
+@pytest.fixture
+def pct_mixed_grid(tmp_path):
+    rows = [[t, w, round(0.2 * t - w, 2), (f"{w}%" if t == 150 else w / 100)] for t in (150, 170, 190) for w in (5, 10, 15)]
+    df = pd.DataFrame(rows, columns=["온도", "함수율", "수율", "메모율"])
+    return write_df(tmp_path / "g.csv", df)
+
+
+def test_map_without_y_skips_unasked_mixed_percent_column(pct_mixed_grid):
+    res = run_tool("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10")
+    assert res["columns"] == ["수율"], res
+    assert res["points"][0]["values"]["수율"] == pytest.approx(22.0)
+    assert any("['메모율']" in w and "섞여" in w for w in res["warnings"]), res
+
+
+def test_map_asked_mixed_percent_column_still_stops(pct_mixed_grid):
+    res = run_fail("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10", "-y", "메모율")
+    assert res["agent_directive"].startswith("STOP_RETRY") and "'메모율'" in res["message"], res
+    res = run_tool("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10", "-y", "수율")
+    assert not any("메모율" in w for w in res.get("warnings", [])), res
+
+
+def test_map_mixed_percent_key_column_still_stops(pct_mixed_grid):
+    res = run_fail("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,메모율=0.1")
+    assert "'메모율'" in res["message"], res

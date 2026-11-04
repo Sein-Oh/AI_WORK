@@ -6,6 +6,683 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.73] - 2026-11-04
+
+독립 검토(10차) 수정. 발송 안전과 숫자 검색 층 A 경계.
+
+### 기능
+- 사용자 확인이 필요한 명령은 `next_commands`가 아니라 새 키 `confirm_commands`로 줌 (발송 안전): 전역 지침 3장 6번 "next_commands는
+  글자 그대로 실행"을 경량 LLM이 기계적으로 따라도 메일이 나가거나 문서가 바뀌지 않게. `needs_user_confirm` 표시는 없앰.
+  대상: outlook `new`·`reply`·`forward`의 `send --id <draft_id>`, 미리보기(`--dry-run`) 뒤 실제 실행 명령 전부(excel `write`·`range`·`comment`,
+  word `fill`, reader `clear`). excel `check`의 `next_commands[0]`(메모 미리보기, 변경 없음)은 그대로, 그 미리보기 결과가 `confirm_commands`를 줌.
+  전역 지침(`CLI-dev/opencode/AGENTS.md` 3장 6번 예외, 4장, 5장), 네 스킬 규칙 3, `CLI-dev/README.md` 공통 키·R8, 실기 러너 G1·G3,
+  시나리오(`agent_scenarios.yaml` O1·O3·O5, `SCENARIOS.md` 13-1)를 함께 고침.
+- outlook `send` 발송 원장(`<데이터 폴더>/outlook_drafts.json`, 번호 기억 파일과 같은 잠금): `new`·`reply`·`forward`가 만든 초안의 EntryID를 기록하고,
+  `send`는 원장에 있고 아직 보내지 않은 초안만 보냄. 보내기 전에 잠금 아래 '보냄'을 먼저 기록. 원장을 읽지 못하면 보내지 않음(fail-closed),
+  기록하지 못한 초안에는 send 명령을 주지 않음(`UNVERIFIED:`, 사용자가 작성 창에서 보냄). 7일(번호 기억과 같음)이 지난 초안은 send로 보내지 않음.
+- 스니펫 강조: 층 A 자리(글자 그대로)와 숫자 없는 검색어는 `**`, 숫자가 든 검색어의 층 B 자리(표기가 다른 곳)는 `[[ ]]`.
+
+### 수정
+- [높음, 발송 안전] 전역 지침·office-mail 규칙 3의 "next_commands는 그대로 실행"이 send의 사용자 확인을 덮음: 위 `confirm_commands`.
+- [중간, 발송 안전] 같은 초안을 두 번 보낼 수 있던 것(동시 실행, 보낼 편지함의 `Submitted=True, Sent=False`): `Submitted`도 확인하고 원장 잠금.
+- [중간, 발송 안전] 지운 초안(PST에서 EntryID 그대로)과 사용자가 쓰다 둔 다른 초안도 send로 나가던 것: 메일의 폴더가 임시 보관함(기본 계정 또는
+  그 메일 저장소의 임시 보관함)이 아니거나 원장에 없는 초안이면 거부.
+- [중간] send의 id 해석 오류가 "목록을 다시 보고 다시 실행"(`next_commands` = 목록)을 주던 것: 발송 거부 안내(`STOP_RETRY: 발송하지 않았습니다`)만, `next_commands` 없음.
+- [낮음] 없앤 `--send`를 `new`·`reply`·`forward`에 주면 exit 2 + "--send는 없습니다. 초안을 만든 뒤 사용자 확인을 받아 send를 실행" + `[추천] <--send를 뺀 전체 명령>`.
+- [치명] 숫자 앞·단위 뒤의 글자를 금지 목록에서 허용 목록으로 (검토마다 새 글자가 나왔음): 숫자 앞은 공백류, 줄 시작, `(` `[` `~` U+FF5E U+301C `=`,
+  `:`(앞이 숫자면 아님: `1:5 V`), 한글, `DC`/`AC`, 값 구분 `/`, 붙여 쓴 범위 대시만 층 A. 단위 뒤는 공백류, 줄 끝, `)` `]` `;` `~` U+FF5E U+301C,
+  `,` `.`(뒤가 숫자·영문이 아닐 때), `:`(뒤가 공백류·줄 끝), 한글, 값 구분 `/`, `DC`/`AC`, 붙여 쓴 괄호 허용 목록(`(DC)` `(AC)` `(Max)` `(Min)` `(Typ.)` 등),
+  범위 대시(`10 m-20 m`)만 층 A. 그 밖 글자는 층 B: 10차 사례 `1`+U+FF0C+`500 V`, `1`+U+FF0E+`5 V`, `1·5 V`, `△40 ℃`, `▲40 ℃`, `1`+U+2018+`500 V`,
+  ``1`500 V``, `1_500 V`, `1′500 V`, `1:5 V`, `1÷5 V`, `1\5 V`, `½5 A`, `5 V`+U+3383.
+- [치명] 앞이 숫자뿐인 `/` 값 구분에서 분수(`15/16 V`, 분모 2·4·8·16·32·64)와 비율(`10/100 V`, 1·10^n)을 뺌. 위 사례 모두 `number_literal_cases.tsv`에 notA로.
+
+### 회사 PC 확인
+- 실기 러너 G1(`confirm_commands`, `next_commands` 없음), G3(두 번째 send 거부). 임시 보관함이 기본 계정이 아닌 계정(공유 사서함 답장 등)의 초안도
+  send가 보내는지(메일 저장소의 임시 보관함 비교).
+- 미리 저장한 초안은 사용자가 작성 창에서 보내거나 지우기 전까지 임시 보관함에 남음 (README outlook 절).
+
+## [1.4.72] - 2026-11-04
+
+독립 검토(9차) 수정. search `VERIFIED`(층 A)의 뜻(글자 그대로 + 숫자·단위 낱말 경계, 문맥 의미는 스니펫으로)은 그대로.
+
+### 기능
+- outlook 발송 흐름 변경 (발송 안전): `new`·`reply`·`forward`에서 `--send`를 없앰. 세 명령은 초안을 임시 보관함에 저장하고 작성 창만 띄우며,
+  결과에 `draft_id`와 그 초안을 보내는 `next_commands[0]` = `outlook.py send --id <draft_id>`(`needs_user_confirm: true`)를 줌.
+  새 명령 `send --id`는 그 초안(같은 항목)만 보냄: 보내지 않은 초안(`Sent == False`)이 아니면(이미 보냄, 지움, 받은 메일) 보내지 않고 `STOP_RETRY:`.
+  첨부를 확인하지 못했거나 초안을 저장하지 못했으면 send 명령을 주지 않음(`UNVERIFIED:`, 사용자가 작성 창에서 직접 보냄).
+  office-mail 스킬, 전역 지침(`CLI-dev/opencode/AGENTS.md` 5장), 실기 러너 G1~G3, 시나리오 O3 금지 명령을 함께 고침.
+
+### 수정
+- [치명] 1.4.71의 `/` 완화가 넓어 비율·서지 파형·분수가 층 A: `10/350 μs`의 `350 μs`, `15/16 inch`의 `16 inch`, `0.1 mm/1000 mm`의 `0.1 mm`·`1000 mm`,
+  `2 ℃/1 min`, `5 %/1000 h`. `/` 값 구분은 양쪽이 숫자+단위(`100 V/220 V`, `85 ℃/85 %RH`, `10 kHz/50 kHz`)이고 `/` 뒤 값이 1·10^n(비율의 '당')이 아닐 때만,
+  앞이 숫자뿐이면 주파수·전압(Hz, kHz, MHz, GHz, V, kV, mV)과 두 자리 이상 정수만(`50/60 Hz`, `10/50 kHz`, `110/220 V`).
+- [치명] AND 검색 스니펫이 첫 검색어 자리만 창으로 잡아 멀리 있는 숫자 검색어의 층 A 자리가 빠짐: 검색어마다 창(앞 최소 15자), 겹치지 않으면
+  조각을 ` / `로 이음(`...**온도**... / ...범위 - **40 ℃**에서...`).
+- [중요, 발송 안전] 1단계(`--send` 없이) 초안 창이 열린 채 `--id` 없는 `reply/forward --send`가 열린 창의 초안(`ActiveInspector().CurrentItem`)을
+  원본으로 잡아 초안에 답장·전달을 보내거나, 같은 메일이 두 번 나갈 수 있던 것: 위 발송 흐름 변경 + 답장·전달은 보내지 않은 메일(`Sent == False`)을
+  원본으로 쓰지 않음(`STOP_RETRY:` "원본 메일을 --id로 지정하세요" + 목록 `next_commands`).
+- [중간] 단위 없는 검색어에 DC/AC 예외가 적용돼 `12`가 `AC12 단자대`·`DC12 커넥터`, `100`이 `AC100`에 층 A: 검색어에 단위가 있을 때만(`DC24 V`의 `24 V`).
+- [중간] 붙은 기호를 층 A에서 막음: 천 단위 따옴표(`1'500 W`, U+2019), 분수 빗금 U+2044·전각 U+FF0F·나눗셈 U+2215(`1`+U+2044+`4 W`, `10 V`+U+FF0F+`m`),
+  곱하기(`1×2 mm`, `1*2 mm`), 대시로 쓴 한글 U+3161, 폭 없는 공백(U+200B 등)·전각 공백 U+3000을 사이에 둔 빼기, 단위 지수(`10 m-1`), `5 % R.H.`,
+  `3 dB[A]`, `10 kg f`. 붙여 쓴 범위 대시(`40 ℃`+U+2013+`85 ℃`의 `85 ℃`)는 층 A(기호 단위 뒤만).
+- 9차 검토 쌍 118개를 `number_literal_cases.tsv`에 추가.
+
+## [1.4.71] - 2026-11-04
+
+독립 검토(8차) 수정. 숫자 검색 층 A의 뜻을 확정하고 문서화: search의 `VERIFIED`(층 A)는 "검색어 글자열이 그 자리에 글자 그대로,
+숫자·단위 낱말 경계가 맞게 있다"는 뜻이다. 앞뒤 문맥의 의미(띄어 쓴 부호 `- 40 ℃`, 범위 `~`, 이하/이상, 한글 꼬리 `(실효값)`)는 판정하지 않고
+(8번의 검토에서 문맥 의미 판정 규칙은 끝없이 빈틈이 생김) check(늘 UNVERIFIED)와 사용자의 몫으로 둔다. 대신 스니펫이 그 자리를 반드시 보여 준다.
+
+### 기능
+- reader `search`: 숫자가 든 검색어의 directive에 "결과를 알릴 때 snippet의 앞뒤(부호, 범위 ~, 이하/이상)를 그대로 함께 전달하세요" (`NUM_CONTEXT_NOTE`).
+  office-spec 스킬과 전역 지침(`CLI-dev/opencode/AGENTS.md`)에 같은 규칙.
+- 층 A 완화(글자가 같은데 형식 때문에 떨어지던 것): 단위 뒤 `/` 다음이 숫자·부호면 값 구분(`100 V/220 V`, `85 ℃/85 %RH`), `/` 앞이 같은 종류 값이면
+  값 구분(`50/60 Hz`의 `60 Hz`, 분수 `1/4 W`는 아님), 단위 뒤 괄호는 막는 목록(`(rms)`, `(p-p)`, `(g)`, `(a)`·`(A)`, `(G)` 등)만 층 B(`(DC)`, `(AC)`, `(Max)`,
+  `(Min)`, `(Typ.)`은 층 A), 단위에 붙은 대문자 `DC`/`AC`(`24 VDC`, `DC5V`, `AC220V`), 영문 접두와 숫자 사이 띄어쓰기 0~1칸 차이(`IP 67`, `M 10`, `IEC61000-4-2`).
+  8차 정상 문장 60개 중 층 A 28개 -> 41개 (나머지는 표기 자체가 다른 `°C`/`℃`, `㎜`, `µ`/`μ`, `KΩ`, `1,000`/`1000`, `+/-`/`±` 등으로 층 B 그대로).
+- excel `check --header-row 0` = 머리글 없음.
+
+### 수정
+- [중간] 스니펫·근거 문장(`make_snippet`, `match_sentence`)과 check의 조건 읽기·`spec_text`(`near_conditions`)가 층 B 매처 자리를 써서, 층 A로만 맞은 단위
+  (`- 40 ℃`의 `40 ℃` 등)에서 스니펫에 값이 빠지고 글 앞부분만 나오던 것: 층 A 자리를 먼저(`term_span`), 층 A 자리가 든 문장을 먼저, 일치 앞 최소 15자.
+- 낱말 수준 오일치를 층 A에서 막음: 띄어 쓴 천 단위(`1 500 W`, `10 000 h`, NBSP·좁은 공백 포함), 곱 단위 연산자(U+22C5, U+2219, U+2022, U+2217)와 띄어 쓴 단위 이어짐
+  (`5 N m`, `10 Ω cm`, `10 kV A`, `10 mm Hg`, `10 mm H2O`, `2.5 mm SQ`, `5 % RH`, `0.5 % FS`, `3 dB μV`), 띄어 쓴 `/단위`·위첨자(`25 ℃ /W`, `10 m ³`),
+  숫자로 끝나는 검색어 뒤의 `-숫자`(`61000-4`와 `IEC 61000-4-2`, `1234`와 `1234-5`; 회귀 표의 `10`/`10-3`도 층 B로 바뀜),
+  같은 칸의 붙은 빼기(`-\u00a040 ℃`, `온도 −\t40 ℃`; 표 빈 칸 `\t-\t40`은 층 A 그대로).
+- [중간] check 남은 행 명령: 원래 범위가 1행부터(머리글 없음)면 `--header-row 0`을 넘기고 0을 "머리글 없음"으로 처리
+  (전에는 0이 조용히 무시되어 남은 범위 바로 위 데이터 행을 값 열 단위 머리글로 읽어, 이어서 대조한 판정이 처음 대조와 달랐음).
+- 회귀 표 `number_literal_cases.tsv`에 8차 낱말 수준 쌍(층 A 금지)과 완화 대상(층 A) 추가, `- 40 ℃` 유형은 "층 A + 스니펫에 `- 40` 포함" 별도 테스트.
+
+## [1.4.70] - 2026-11-04
+
+독립 검토(7차) 수정. reader 숫자 정확 일치는 일곱 번의 검토마다 부호·대시·단위 정규화의 새 오일치가 나와(7차: 탭 너머 `-`가 부호로
+읽혀 `-40 ℃` exact, 전각 빼기 `－40 ℃`가 `40 ℃` exact, `Tstg-40℃`, `10 mm²`, `5 V rms`, `100 pA`/`100 Pa` 등) 정규화 규칙을 더 땜질하지 않고
+두 층 구조로 바꿈. 회귀 표(6·7차 검토의 오일치 쌍 전부 + 기본 표기)를 먼저 만들어 재현한 뒤 고침.
+
+### 구조
+- 숫자가 든 검색어의 두 층 판정: 층 A(글자 그대로, `_Literal`: 검색어 글자열 + 엄격한 앞뒤 경계)와 층 B(지금까지의 정규화 매처 `_single_pattern`).
+  `build_matcher`는 층 A 또는 층 B로 맞으면 일치이고(층 A로 다 맞은 검색어 묶음을 먼저 고름), `literal_hit(text, terms)`가 층 A인지 알려 줌.
+  숫자가 없는 검색어는 그대로.
+
+### 기능
+- `reader.py search`: 층 B 일치도 결과(`matches`)에 넣되 항목마다 `literal`(true/false, 숫자가 든 검색어일 때), 층 A를 먼저. 새 키 `literal_count`(층 A 수,
+  `count`는 층 A+B). 층 B가 섞이면 `match_mode: exact_mixed`(새 값) + `UNVERIFIED: 글자 그대로 일치 N건, 표기가 다른 곳 M건(literal: false, 부호·단위를
+  확인하세요)`. 모두 층 A면 지금처럼 `exact` VERIFIED. `--save`는 `exact_mixed`일 때 `표기` 열(.md는 제목 표시).
+- 층 A 규칙: 띄어쓰기·탭 여러 칸 = 한 칸, 숫자와 단위 사이·`±` 앞뒤의 띄어쓰기 0~1칸 차이만 허용. 대소문자·전각/반각·부호 글자는 그대로.
+  앞 경계(숫자, `.`, `,`, 영문, 대시·부호류, `/`, `^`가 아님, 띄어 쓴 `±`·`+`, `영하`, `(-)`도 아님, 빼기로 시작하는 검색어는 앞에 띄어 쓴 다른 값·`to`가 없음),
+  뒤 경계(숫자, `.`·`,`+숫자, 영문, `²`, `³`, 위첨자, `^`, `/`, `%`가 아님, 단위 끝이면 `(rms)` 같은 괄호 꼬리, 띄운 `rms`, `p-p`, `peak`, `pk`, `abs`, `g`,
+  `-`·`·`+영문도 아님). 기본 표기(`5 V`, `PLATE 10 mm`, `25 ℃`, `±0.5 mm`, `1,500 rpm`, `50 Hz`, `-40 ℃`, `10 MM`, `5V` = `5 V`)는 층 A.
+- `excel.py check`: 숫자가 든 항목 글을 층 B로만 찾으면 `reason` 끝에 `표기가 다른 곳에서 찾음 (...)`, `match_mode` `exact_mixed`(판정은 그대로).
+- `excel.py check --header-row N`(새 인자): 값 열 단위를 읽을 머리글 행 (기본 `--range` 바로 위 행).
+
+### 수정
+- [치명] 6·7차 검토의 오일치 쌍(review6 q1·q2, review7 q1~q6의 기대 0 전부, 264쌍)이 층 A(VERIFIED)로 나오지 않음 (회귀 `test_number_literal_layer_review7`,
+  표 `tests/number_literal_cases.tsv`).
+- [보통] 층 B에서 모두 영문 대문자로 쓴 단위(`10 MM`, `10UF`, `20MA`)는 접두 대소문자를 가리지 않음 (후보로만 나오던 회귀. `10UF` = `10 uF` = `10 μF`).
+  소문자·섞인 단위(`10 mA`와 `10 MA`, `10 MΩ`과 `10 mΩ`)는 그대로 가림.
+- [보통] 숫자 안전망의 20초 상한을 50단위마다가 아니라 단위마다 확인 (1MB 단위가 이어지면 상한을 크게 넘었음. 1MB 단위 55개에서 상한 2초·5초로
+  재면 2.04초·5.13초에 멈춤).
+- [보통] check 시간 제한으로 대조하지 못한 행: `reason` `대조하지 못함 (명령 시간 제한)`, `match_mode` null, 메모 파일에서 뺌, 남은 범위(대조하지 못한 첫 행~끝 행)만
+  다시 대조하는 전체 check 명령을 `next_commands`에 넣고(머리글은 `--header-row`로 원래 위치) directive는 "사용자에게 확인을 받은 뒤 next_commands[N]을 그대로 실행".
+- [경미] 규격 수치(`_NUM_RE`): 쉼표 뒤가 3자리 묶음이 아니면(`1,2345`, `1,5`, `10,20`) 수치로 보지 않음.
+
+## [1.4.69] - 2026-11-04
+
+독립 검토(6차) 수정. reader 숫자 정확 일치는 다섯 번의 검토에서 매번 부호·대시 경계 오일치가 나와, 경계를 더 땜질하지 않고
+보수적 원칙으로 정리함: 정확 일치(exact, VERIFIED)는 모호하지 않을 때만, 애매하면 숫자 안전망 후보(number, UNVERIFIED).
+회귀 테스트(검토 보고 q1·q2 전부, 6번 ± 빈틈, 반대로 맞아야 할 것)를 표로 먼저 만들어 재현한 뒤 고침.
+
+### 구조
+- 검색어 정규식의 숫자 앞 부호 판정을 고정 길이 뒤보기 묶음(`_NO_MINUS`, `_RANGE_BEFORE`, `_SIGN_PAT`)에서 일치 뒤 확인으로 바꿈:
+  숫자 시작 자리에 빈 표시 그룹을 두고, 일치마다 글의 숫자 앞 부호(`_text_sign`: none / range / hyphen / minus / ambig / pm / plus)를
+  검색어 숫자의 부호와 표(`_SIGN_OK`)로 비교해 맞지 않으면 버림(`_SignChecked`, re.Pattern의 search·finditer·pattern과 같게 씀).
+  띄어쓰기 여러 칸·`/` 건너의 부호를 길이 제한 없이(12자까지) 보게 됨.
+- 숫자 안전망을 하나의 큰 정규식에서 숫자별 `finditer` 위치 목록 + 40자 창 선형 탐색(`_LooseNumbers`)으로 바꿈.
+
+### 수정
+- [치명] 숫자 안전망 정규식(`_loose_number_pattern`)의 지수 백트래킹: `REGA R/W 0 0 0 ...` + `-q "0 0 0 0 0 0 0 1"`,
+  `'1 '*600` + `"1 1 1 1 1 3"`, `'1 '*2500` + `"1 1 1 1 3"`이 끝나지 않았음. 선형 탐색으로 1초 안(회귀 `test_number_search_linear_time`).
+  안전망 전체에 20초 상한(`NUMBER_SEARCH_SECONDS`)을 두고, 넘으면 남은 단위는 보지 않고 `not_searched`에 알려 0건이어도 VERIFIED로 단정하지 않음
+  (`check`는 `판단필요`). search는 읽기 전용이라 저장할 중간 결과가 없어 CONTINUE 대신 이 상한을 씀.
+- [치명] 보수적 원칙(부호·범위 대시): 글의 숫자 바로 앞(띄어쓰기 여러 칸·`/` 건너)이 `-`, U+2212, U+2013, `±`, `+/-`, `+ / -`, `+-`, `+` 중 하나인데
+  검색어의 그 숫자에 같은 부호가 없거나, 검색어에 부호가 있는데 글이 다른 부호이거나 범위 대시인지 부호인지 애매하면 exact가 아님(숫자 안전망 후보).
+  범위 대시는 양옆을 띄운 `0 - 20`만: 부호 없는 `20`과는 exact, `-20`과는 아님. `40 ℃`가 `Ta 25 -40 ℃`·`25 to -40 ℃`·`25,-40 ℃`·`Min-40℃`에,
+  `12 V`가 `전원 +5 V -12 V`에, `+10 %`가 `+5 % -10 %`에, `0.5 mm`가 `±  0.5 mm`·`+ / - 0.5 mm`에, `-5 V`가 `+ / - 5 V`에, `08:30`이 `UTC-08:30`에 맞던 것
+  모두 후보로. `-40 ℃`는 `25 to -40 ℃`·`25,-40 ℃`에 exact(1.4.68은 `to`를 단위로 보아 0건). 동작 변경: `20`과 `1-20`·`10 -20`, `+5V`와 `5V`,
+  `20 ℃`와 `+20 ℃`도 이제 후보(exact 아님). 다른 낱말 뒤 숫자의 붙임표는 구분자(`SOI 1` = `SOI-1`, `ABC-1234`).
+- [높음] 단위 접두 대소문자: 숫자 바로 뒤 `m`/`M`, `p`/`P`는 가림(`10 mohm`/`10 MΩ`, `10 mHz`/`10 MHz`, `1 mW`/`1 MW`, `5 mV`/`5 MV`, `10 MPa`/`10 mPa·s`가 맞았음).
+  소문자 `mohm`은 mΩ로 보아 `MΩ`과 맞지 않음. `μ` = `u` = U+00B5. 접두가 아닌 단위(`min`, `max`, `ppm`, `psi`, `Pa`, `pH`)와 그 밖의 글자는 대소문자 무관(`5 v` = `5 V`, `10 KΩ` = `10 kΩ`).
+- [높음] `spec_conditions` 긴 숫자열 제곱 시간: 수치 패턴이 숫자열의 모든 자리를 시작점으로 다시 읽었음(`"1"*5000` 78초). 숫자는 다른 숫자의 가운데서 시작하지 않고,
+  구분자 없이 30자를 넘는 숫자열은 수치가 아님. `near_conditions`의 낱말 앞 절(`pre`)은 끝 200자만. `"1"*20000`, `시리얼 <숫자 5500자> 정격 전압`이 1초 안
+  (회귀 `test_spec_conditions_long_digit_runs`, `test_check_long_serial_number_is_fast`).
+  `check` 행 대조에 시간 확인(`rt.time_up`): 명령 시간 제한이 다가오면 남은 행은 `판단필요`(명령 시간 제한으로 대조하지 못함) + directive에 행 수와
+  더 작은 `--range`로 다시 대조할지 물으라는 안내 (회귀 `test_check_time_limit_marks_rest_needs_review`).
+- [중간] 숫자 안전망이 숫자 아닌 낱말을 보지 않았음(`1 퀀텀`이 아무 `1`에 후보). 숫자가 든 검색어의 숫자 아닌 낱말(단위 빼고, 조사 처리 포함)도 같은 단위 안에
+  있어야 후보, 없으면 number를 건너뛰고 partial·fuzzy, 그래도 없으면 0건 VERIFIED (회귀 `test_number_safety_net_needs_other_words`).
+- [낮음] 뜻이 다른 꼬리를 같은 단위로 보던 것: `Vp-p`, `Vpp`, `Vp`, `Apk`(피크), `Vrms`(실효), `barg`, `bara`, `MPaG`(게이지·절대), `dBA`(가중)는 exact 아님(후보).
+  `1x10`이 `1×10^-3`·위첨자 지수에 맞던 것(숫자 뒤 지수면 다른 값), `φ`·`Φ`를 `Ø`와 같게 보던 것(상 `3φ`)도 exact 아님. `Vdc`, `VAC`, `sec`, `mins`, `hrs`는 그대로.
+- [낮음] README `check` 설명의 찾기 순서와 판단필요 조건에 number 단계를 넣음.
+- 회귀 표: `tests/test_reader.py` `NUMBER_KIND_CASES_6`(exact / 후보 / 없음). 1.4.67~1.4.68 표의 바뀐 기대값(`+20 ℃`, `1-20`, `+5V`/`5V`, `10 -20`, `Vrms`,
+  `Vp-p`, `Vpp`, `dBA`, `barg`, `MPaG`, `Φ10`/`Ø10`)은 False로 고침.
+
+## [1.4.68] - 2026-11-04
+
+독립 검토(5차)에서 나온 reader 숫자 검색 경계 회귀와 `check` 안내 수정. 숫자 검색은 검토마다 경계 회귀가 나서 땜질에 더해 구조적 안전망을 둠.
+회귀 테스트(보고서 사례 전부)를 먼저 만들어 재현한 뒤 고침.
+
+### 기능
+- 숫자 안전망 (`reader.py search`, `excel.py check`의 항목 찾기): 정확히 일치한 곳이 0건이고 검색어에 숫자가 있으면 숫자 값만 같은 곳을 느슨하게 다시 찾음
+  (부호·단위 경계·붙여쓰기·기호 무시, 숫자 경계와 값은 지킴: `5`는 `15`·`5.5`와 다름, 숫자 사이 40자까지, 숫자가 없는 검색어는 정확히). 결과는 넓혀 찾기와 같은 형식
+  (`count: 0`, `candidates`, `match_mode: number`, 항목마다 `number_words`(검색어: 앞 부호·뒤 단위를 포함한 실제 글)), directive
+  `UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 N건 - 표기를 확인하세요 ...`. 경계 규칙이 너무 엄격해 맞는 표기를 놓쳐도 "0건 VERIFIED -> 규정 없음 단정"이 나지 않음:
+  숫자가 든 검색어의 0건 VERIFIED는 느슨한 검색도 0건일 때만. 순서는 number -> partial -> fuzzy. `check`는 number면 `판단필요`(숫자 값만 같은 곳에서 찾음).
+  회귀 테스트: `tests/test_reader.py` `test_number_safety_net_candidates`.
+
+### 수정
+- [치명] `±` 앞 글자 제한(`(?<![\w.])`) 때문에 `100±0.5 mm`, `Φ10±0.5mm`, `5V±5%`, `AC220V±10%`, `24VDC±10%`, `공차±0.1`, `R5±0.1`, `3 dB±1 dB`, `1000 ppm±2%`,
+  `정격 전압: 5V±5%`가 0건 VERIFIED였음. `±`(`+/-`, `+-`)는 앞 글자와 무관하게 맞음. 검색어 쪽도 `5V±5%`처럼 붙여 쓴 `±`를 부호로 읽음
+  (첫 숫자에 부호가 있으면 앞 경계는 부호 패턴이 봄). 글의 빼기 부호는 앞이 `[\dA-Za-z.]`가 아니면 부호(`온도-20℃`, `Ta=-20℃`), 부호 없는 숫자도 같은 규칙.
+- [높음] (a) `+10%`가 `±10%`에, `+5V`가 `±5V`에 맞았음: 부호 없는/`+` 숫자 앞에 `±`, `+/-`, `+-`(띄어쓰기 하나 포함)가 오면 아님. `-5`도 `+/-5`와 다름.
+  (b) `-20 ℃`가 `0 - 20 ℃`(범위)에 맞았음: 빼기 앞을 띄어쓰기 건너 보아 숫자 또는 숫자+단위(단위 글자 1~3개)면 범위의 대시라 부호가 아님
+  (`0 - 20 ℃`, `0 -20 ℃`, `5 V - 20 ℃`). 부호 없는 숫자는 그 대시 뒤에서 맞음(`20` = `10 -20`, `100 Hz` = `10 -100 Hz`(U+2212 빼기 포함)). `0 ~ -20℃`는 그대로 -20.
+- [중간] 끝 단위 뒤 경계가 같은 단위 표기까지 막았음(`5 V`가 `5 Vrms/Vp-p/Vpp/Vin/Vcc/Vmax`, `3 s`가 `3 sec`, `10 min`이 `10 mins/minutes`, `10 h`가 `10 hr/hrs`,
+  `30 dB`가 `30 dBA`, `1 bar`가 `1 barg`에 0건). 단위별 허용 꼬리(`_UNIT_TAILS`: V `rms p-p pp p pk peak in out o cc dd ee ss max min typ nom ac dc`, A는 같은 목록에서
+  `p o cc dd ee ss` 뺌, W `max min typ nom rms ac dc`, s `sec secs second seconds`, min `s ute utes`, h `r rs our ours`, dB `A`, 압력 `g a`)만 허용하고
+  다른 단위로 이어지면(`10 mm`, `10 MΩ`, `1 Ah`, `30 dBm`, `30 dBi`, `1 kgf`, `100 gf`, `1 Wh`, `5 mmH2O`) 아님. `test_number_search_boundaries`의 `2 s`/`2 sec`·`2 seconds`는 맞음으로 바꿈.
+- [중간] `excel.py check`의 UNVERIFIED 안내가 기본 문구("다시 실행하지 말고 그대로 알리세요")라 메모 미리보기 행동이 빠져 채점 O1(`CLI-dev/agent_scenarios.yaml`)과 어긋났음.
+  directive를 "사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자 확인 뒤에만 그 명령에서 --dry-run을 뺀 명령을 실행하세요.
+  같은 check는 다시 실행하지 마세요"로. O1 요청("판정은 값 칸에 메모로 달아줘")과 판정(미리보기 `--dry-run` 필수, 실제 달기 금지)이 이 흐름과 맞아 yaml·팩은 그대로.
+  규격서 등록이 남으면(`remaining`) 대조가 끝나지 않았으므로 `next_commands`는 같은 check 명령 하나뿐이고 directive는 "그대로 다시 실행해 이어서 대조"(CONTINUE 흐름,
+  "다시 실행하지 말고"와 부딪히지 않음). 회귀 테스트: `tests/test_excel_read.py` `test_check_remaining_specs_reruns_same_command`.
+- [낮음] `spec_norm`의 지수 상한이 3자리라 `1E999`, `1×10^999`가 1000자리 숫자로 바뀌어 조건(`999 Ω 이상` 포함)으로 읽혔음. 지수는 2자리까지 계산하고,
+  3자리 이상은 `(지수 범위 밖)`으로 바꿔 조건으로 읽지 않음(check `판단필요`).
+- [여유] 숫자 검색 표기 차이: `10 kΩ` = `10 kohm` = `10 kΩ`(U+2126), `100mm` = `100㎜`, `10 mA` = `10 ㎃`, `M6x1.0` = `M6×1.0`(숫자 사이 `x × *`), `Φ10` = `Ø10`(`Φ φ Ø ø`, U+2300),
+  `08:30` = `8:30`(`18:30`, `8:30:15`와 다름), 영문으로 시작하고 `-`·`_`로 이은 코드(`ABC-1234`)는 `XABC-1234`, `ABC-1234-5`, `ABC-12345`와 맞지 않음.
+- 회귀 테스트: `tests/test_reader.py` `test_number_search_boundaries_review5`(보고서 사례 전부, 93개), `test_spec_norm_exponent_over_two_digits_is_not_a_condition`.
+  5차 재현 자료 p1~p6(248쌍)을 1.4.67과 비교해 새로 0건이 된 것은 모두 다른 값·부호·단위(`±5V`의 `5V`, 범위 `0 - 20 ℃`의 `-20 ℃`, `5V±5%`의 `5V 5%`)뿐.
+
+## [1.4.67] - 2026-11-04
+
+독립 검토(4차)에서 나온 office-cli 버그 수정과 `excel.py check`의 계약 변경. 회귀 테스트를 먼저 만들어 재현한 뒤 고침.
+
+### 기능 (설계 변경)
+- `excel.py check` 결과는 늘 `UNVERIFIED:`(대조할 항목이 없는 0건도). 이유: 판정은 자연어 규격 문장을 기계로 해석한 것이고, 1~4차 검토마다 새로운 해석 오판정
+  (유니코드 빼기, 지수 표기, 최대·최소 낱말, 단서 조항, 표 평문 행 등)이 나왔음. 규칙을 더해도 휴리스틱이라 모든 문장을 맞힌다고 보장할 수 없으므로
+  "도구가 결과를 확인함(VERIFIED)"이라고 하지 않고 계약을 정직하게 바꿈. `unverified[0]`(`CHECK_ADVISORY`)은 "자동 판정은 참고용입니다 ... 행마다 읽은 조건(condition)과
+  근거 문장(spec_text)을 사용자에게 보여 주고 확인을 받은 뒤 메모를 다세요". 행 판정 값(일치/불일치/판단필요/근거없음)과 보수적 판정 원칙은 그대로.
+  메모 CSV(`memo_file`)와 `next_commands[0]`로 다는 메모는 `자동 판정(참고): <판정> (이유) - 읽은 조건: <condition> - 근거: <장절>: <규격 문장 앞 60자>`.
+  office-spec 스킬·전역 지침(`CLI-dev/opencode/AGENTS.md` 4장)에 "판정은 참고용, 조건을 보여 주고 사용자 확인 뒤 메모" 반영.
+
+### 수정
+- [높음] `excel.py check` 해석 버그 (말뭉치 `tests/check_corpus.tsv`에 4차 묶음 129건 추가, 모두 261건: 일치 110, 불일치 66, 판단필요 83, 근거없음 2):
+  - C1 유니코드 빼기(U+2212, U+2010~2012, 앞이 숫자·단위가 아닌 숫자 앞 U+2013)를 `-`로(`spec_norm`: 규격 글, 칸 값, 다음 항목 찾기). `-20 ~ 60 ℃`(U+2212 빼기)가 `20~60 °C`로 읽혀 -10 ℃를 불일치였음.
+  - C2 `±N 이하/이내`는 -N~N(`±5 % 이내`가 `5 % 이하`라 -6 %를 일치였음).
+  - C3 ohm 계열 대소문자 구분(`mOhm` = mΩ, `Mohm`·`MOhm` = MΩ). 소문자 `mohm`은 밀리인지 메가인지 몰라 단위 모름 -> 판단필요(대소문자 무시로 MΩ이 되어 200 mΩ을 일치였음).
+  - C4 지수 표기 `1×10`+위첨자 9, `1×10^9`, `1E9`, `10`+위첨자 6은 계산(NFKC가 위첨자를 `109`로 바꾸기 전에). 묶음 단위(`Ω·cm`, `V/m`, `mm²`)는 그 단위로 읽지 않음.
+  - C5 단위 뒤 괄호 꼬리(`dB(A)`, `mV(p-p)`, `V(DC)`) 뒤의 이하·이상을 읽음.
+  - C6 기준 값만 있는데 항목·절에 `최소 최대 최고 최저 상한 하한 Max Min Typ 약 내외 정도 approx` 등이 있으면 판단필요. 상황마다 다른 조건(`대기 시 ..., 동작 시 ...`,
+    `초과 시 동작`), 단서 조항(`다만,`, `(단, ...)`, 다음 문장이 `다만`)도 판단필요.
+  - C7 단위 있는 조건 곁의 단위 없는 수치(표 평문 `출력 전압 4.75 5.0 5.25 V`, `외경 100 mm, ±0.5`, `100 mm ±0.5`), 비대칭 공차(`+0.5/-0.2`, `(+10 %, -15 %)`),
+    치수 나열(`100×200×50 mm`, `W 400 × H 300`), 소수점 쉼표일 수 있는 수치(`1,5 mm`) -> 판단필요.
+  - C8 (c) 합치기는 범위 앞에 한계 낱말이 있거나 기준 값 바로 뒤 괄호 안에 범위만 있을 때만. 범위 뒤에 `까지 측정 가능`·`입력 가능` 등 쓰임새가 이어지면 합치지 않음.
+    `A에서 B로(를)`(`220 V에서 110 V로 강압`)는 범위가 아님(`A에서 B까지`, 뒤에 `로`가 없는 `A에서 B`는 범위). `DC 24 V(허용 범위 DC 20.4 V ~ 26.4 V)`의 `DC`는 다른 항목 낱말이 아님.
+  - C9 부정문(`되어서는 안 된다`, `아니 된다`, `이어서는 안`) -> 판단필요.
+  - 4차 자료 c2의 `소음 45 dB(A) 이하` / 44 dB는 판단필요, c3의 같은 문장 / 40 dB는 일치로 기대가 엇갈려 c3(일치)을 따름.
+- [치명] reader 숫자 검색의 오일치가 exact VERIFIED였음: 검색어의 부호를 버려 `-20 ℃`가 `20 ℃`·`+20 ℃`·`1-20 ℃`에, `-5 V`가 `+5 V`에 맞았고, 단위 뒤 경계가 없어
+  `10 m`가 `10 mm`·`10 mA`·`10 MΩ`에, `5 V`가 `5 VA`에, `5 A`가 `5 Ah`에, `100 W`가 `100 Wh`에 맞았고, 기호 분기에 소수 경계가 없어 `±5`가 `±5.5`에, `1/2`가 `1/2.5`에 맞았음.
+  부호(`-`, `+`, `±`, `+/-`, U+2212)는 패턴에 넣고 앞쪽 경계를 지킴(글의 U+2212·U+2010~2013도 `-`). 부호 없는 숫자도 음수(`-20`)의 끝과는 맞지 않음(`1-20`, `A-20`은 맞음).
+  끝이 단위면 뒤 경계 `(?![A-Za-z...])`(Ω·μ·℃ 등 비ASCII 포함, `Vdc`·`VAC`는 맞음). 기호 분기 소수 경계 `(?![.,]?\d)`.
+  맞아야 하는 것: `10%` = `10.0 %`, `0.5` = `0.500`(끝 0 둘 이상, 끝 0 하나는 장절 번호일 수 있어 단위가 붙을 때만), 날짜 모양 `2026.11.04` = `2026.11.4` = `2026-11-04` = `2026/11/04`
+  = `2026년 11월 4일`, 천 단위 쉼표는 3자리 묶음일 때만(`1,500`이 `15,00`, `2,1,500`에 맞지 않음).
+  회귀 테스트: `tests/test_reader.py` `test_number_search_boundaries`(80개). `test_search_recall_variants`의 `20°C` 사례는 `-20°C`로 바꿈(°C = ℃ 확인은 그대로).
+- [중간] outlook 짧은 번호 잠금 경합: 남은 잠금 치우기(`_take_stale`)가 다른 실행이 막 만든 잠금을 이름 바꿔 가져가고 되돌리지 못해 두 실행이 함께 잠금을 쥐어
+  번호가 겹쳤음(8프로세스 21회 중 2회). 잠금 파일을 연 채 운영체제 잠금(Windows `msvcrt.locking`, 그 밖 `fcntl.flock`)을 걸고, 프로세스가 끝나면(강제 종료 포함) 운영체제가 풂.
+  pid 판정·나이로 치우기·이름 바꾸기를 모두 없앰(`LOCK_STALE`, `LOCK_STALE_ALIVE`, `_pid_alive` 삭제). 잠금 파일은 지우지 않고 남김.
+  못 잡은 `warnings`: `다른 실행이 번호 파일을 쓰는 중 (5초 기다림)` / `잠금 파일 outlook_ids.lock을 열지 못함 (...)`.
+  `_backup_broken`의 `_read_next_file()`에 `deadline`을 넘김(잠금을 쥔 동안 재시도 상한).
+  회귀 테스트: `tests/test_outlook.py` `test_short_ids_many_processes_never_share_numbers`(8프로세스 4회), `test_short_ids_lock_held_by_other_process_then_killed`,
+  `test_short_ids_leftover_lock_file_does_not_block`.
+- [낮음] `spec_text`·`condition`·`evidence`에 실리는 규격 원문 인용의 CP949 밖 글자: 도구가 만든 문구가 아니라 사용자 문서의 인용이라 그대로 둠
+  (AGENTS 문자 규칙은 도구가 만드는 문구에 적용). README `check`에 한 줄.
+
+## [1.4.66] - 2026-11-04
+
+독립 검토(3차)에서 나온 1.4.65 회귀와 남은 버그 수정. `excel.py check`는 검토마다 판정 회귀가 나서 땜질 대신 보수적 판정 원칙으로 정리하고
+표준 판정 말뭉치로 회귀를 막음.
+
+### 기능
+- `excel.py check` 보수적 판정: 일치·불일치는 항목 절(항목 낱말부터 다음 항목 직전)의 조건이 모호하지 않을 때만. 조건을 하나로 합치는 규칙은 셋뿐:
+  (a) 같은 단위 아래·위 한계 -> 범위, (b) 기준 값 바로 뒤의 `±N 단위`·`±N %`(같은 절이거나 `허용 오차`·`허용차`·`공차`·`편차`·`허용 범위` 절) -> 기준 값 ± N,
+  (c) 기준 값 바로 뒤의 양쪽 한계 범위가 기준 값을 품으면 그 범위. 그 밖에 조건이 둘 이상 남으면 `판단필요`(`reason`·`condition`에 후보 조건).
+  한쪽 한계만 있는 허용 절(`허용 범위 4.75 V 이상`, `허용 150 mA 이하`, `허용치 10 A 이하`, `오차 0.1 mm 이내`)과 기준 값, `±` 없는 % 조건(`허용 오차 5 %`),
+  기준 값을 품지 않는 범위, 기준 값 없는 `±` 공차, 불합격 기준 문장(`0.5 mA 초과 시 불합격`), 값이 여럿인 문장(`50/60 Hz`)은 `판단필요`.
+  기준 값을 범위 안이면 빼던 1.4.57 규칙(한쪽 한계 포함)은 (c)로 대신함. 약어 점(`Max. 3A`, `min. 100 MΩ`)에서 문장을 나누지 않음.
+- 표준 판정 말뭉치 `tests/check_corpus.tsv` 132건(일치 71, 불일치 36, 판단필요 23, 근거없음 2): B1 33문장, 1.4.63 두께/길이·외경/폭, 1차·2차·3차 검토 사례 전부.
+  기대 판정은 "틀린 VERIFIED 금지"가 최우선(모호하면 판단필요). `test_check_corpus`가 행마다 `_judge_row`로 판정.
+
+### 수정
+- [치명] `excel.py check` 회귀(1.4.65): `사용`·`동작`을 한계 낱말에 넣어 "시험 전압 500 V, 사용 범위 0~1000 V"의 시험 전압 조건이 `0~1000 V`가 되어 800 V를 일치.
+  `사용 범위`·`동작 범위`·`측정 범위`는 별개 항목(한계 낱말에서 뺌). 뒤 항목의 범위로 판단필요를 거는 안전장치도 이름에 `범위`가 든 뒤 항목은 보지 않음
+  (그래서 800 V는 불일치, 500 V는 일치). 회귀 테스트: `check_corpus.tsv` 3차 묶음, `test_near_conditions_stop_at_next_item`.
+- [치명] 숫자 검색어 `2.0`이 `2.5 V`, `1.0`이 `1.03 mm`, `0.0`이 `0.5`에 맞았음(정수 뒤 `(?:\.0+)?`를 건너뛰고 경계가 소수점을 허용).
+  소수 끝 0 무시는 글의 숫자가 수학적으로 같은 값일 때만(`2.0` = `2`, `2.00`; `2.0` != `2.5`, `2.05`, `2.0.3`). 끝 0을 적은 검색어 `2.10`은 글의 `2.10`과 단위 붙은 `2.1 V`에 맞음.
+  회귀 테스트: `test_number_only_query_normalized`(표 20개 추가).
+- [높음] 조사 `로` 이중 검색이 뗀 낱말 앞부분에 맞았음(`전기회로` -> `전기회사`, `냉각수로` -> `냉각수 온도`, `보호회로` -> `보호회의`, `고속도로` -> `고속도`).
+  받침 없는 글자 뒤 `로`는 떼지 않고, ㄹ 받침 뒤 `로`만 뗌(`케이블로` -> `케이블`). 뗀 낱말 뒤에는 한글이 이어지지 않아야 맞음(조사는 허용: `케이블은`은 맞고 `케이블카`는 아님).
+  회귀 테스트: `test_particle_ro`.
+- [낮음] 전각 단위 글자(`㎜ ㎝ ㎏ ㎖ ㎃` 등 U+3380~U+33DF, `ℓ`)를 숫자 끝 0 판정의 단위로 봄(`1.5`가 `1.50㎜`에 맞음).
+- [낮음] 메일 번호 잠금: 잠금을 쥔 실행이 `retry_fs`로 30초 넘게 기다려 다른 실행이 쓰는 중인 잠금을 지울 수 있었음. 잠금을 쥔 동안 재시도는 합쳐 10초(`LOCK_HOLD`) 안에서
+  끝냄(`rt.retry_fs`·`safe_write_text`의 `deadline`). 잠금 파일에 `<pid> <표식>`을 쓰고, 남은 잠금은 만든 실행이 끝났으면 바로(Windows `OpenProcess`·`GetExitCodeProcess`),
+  살았는지 모르면 30초, 살아 있어도 120초가 지나면 지움(이름을 바꿔 가져와 내용이 같을 때만, 다르면 되돌림). 풀 때는 자기 표식일 때만 지움.
+  못 잡은 `warnings` 문구를 까닭에 맞춤(`다른 실행(pid N)이 번호 파일을 쓰는 중` / `잠금 파일 outlook_ids.lock이 남아 있음(...)`).
+  회귀 테스트: `tests/test_outlook.py` `test_short_ids_lock_of_dead_process_is_cleared_at_once`, `test_short_ids_lock_of_live_process_is_kept`,
+  `test_short_ids_lock_hold_time_is_bounded`, `test_retry_fs_deadline_stops_waiting`, `test_short_ids_lock_timeout_and_stale_lock`.
+- [낮음~중간] 숨은 Word·PowerPoint 종료: `Documents.Count`가 예외(COM 바쁨)면 끄지 않고 남겼고, 자기 문서 닫기가 실패해 남아도 끄지 않았음.
+  남은 문서 수는 0.3초 간격으로 5번까지 다시 읽고, 남은 문서가 자기 문서뿐이면 끔. 끝내 못 읽으면 끄지 않고 stderr `[INFO]`.
+  회귀 테스트: `tests/test_office.py` `test_word_hidden_instance_quits_only_when_no_documents_left`(4개 추가).
+
+## [1.4.65] - 2026-11-04
+
+독립 검토(2차 재검토)에서 나온 office-cli 버그 수정. 각 항목은 회귀 테스트로 먼저 재현한 뒤 고침.
+
+### 수정
+- [치명] outlook 짧은 `id` 재사용: 번호 기억 파일을 읽지 못하면(잠김·손상) `{"next": 1}`로 덮어써 번호를 1부터 다시 매겨 옛 `--id 3`이 다른 메일을 가리켰고,
+  동시에 실행한 두 목록이 같은 번호를 받았음. 이제 읽기는 `retry_fs`로 재시도하고, 파일이 있는데 끝내 못 읽거나 깨졌으면 번호를 새로 매기지 않고 그 결과는
+  `id` = 긴 EntryID + `warnings`, 짧은 번호 해석은 STOP_RETRY "목록을 다시 보세요"(+ `next_commands` list). 깨진 파일은 `outlook_ids.broken_<시각>.json`으로 옮겨 보존.
+  다음 번호를 작은 파일 `outlook_ids.next`에도 두고 큰 값을 써서 줄어들지 않음. 9999에서 1로 돌아가던 것도 없앰(번호는 9자리까지).
+  불러오기~저장은 잠금 파일 `outlook_ids.lock`(O_EXCL, 5초 대기 상한, 30초 넘은 잠금은 지움)으로 묶음, 못 잡으면 긴 EntryID + 경고.
+  회귀 테스트: `tests/test_outlook.py` `test_short_ids_corrupt_file_never_restarts_numbering`, `test_short_ids_read_failure_keeps_file_and_numbering`,
+  `test_short_ids_concurrent_listings_get_distinct_numbers`, `test_short_ids_corrupt_file_and_next_file_keeps_largest`, `test_short_ids_lock_timeout_and_stale_lock`.
+- [치명] `excel.py check` 회귀(1.4.63): "정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다."에서 조건이 `5 V`만 남아 5.1 V를 불일치 VERIFIED.
+  허용·변동·범위·공차·오차·편차로 시작하는 절은 새 항목이 아니라 앞 항목의 한계로 봄(`_NEXT_ITEM`, 기준 값 지우기의 항목 낱말 판정). `허용 전류`처럼 뒤에 다른 낱말이
+  오면 새 항목. 안전장치: 잘라 낸 쪽에 기준 값만 남고 같은 문장 뒤에 같은 단위의 범위가 그 값을 품으면, 칸 값이 기준 값과 다르지만 그 범위 안일 때 `판단필요`.
+  회귀 테스트: `tests/test_reader.py` `test_near_conditions_stop_at_next_item`(6개 추가), `test_near_conditions_plain_with_later_range_is_marked`,
+  `tests/test_excel_read.py` `test_check_limit_clause_belongs_to_item`.
+- [높음] 닫힌 Word 파일 작업 뒤 숨은 Word를 `Quit(SaveChanges=0)`로 무조건 끝내 사용자가 그 인스턴스에서 연 문서의 변경을 버렸음. 자기 문서를 닫은 뒤
+  `Documents.Count == 0`일 때만 끝내고(PowerPoint와 같음), 남겨 두면 stderr `[INFO]`. 회귀 테스트: `tests/test_office.py` `test_word_hidden_instance_quits_only_when_no_documents_left`.
+- [중간] 열기 감시: 사용자가 이미 띄운 PowerPoint의 `DisplayAlerts`를 바꾼 채 `_abandon`(os._exit)하면 되돌리지 못했음. 이미 떠 있던 PowerPoint는 바꾸지 않음.
+  끄지 않고 둔 프로세스(`POWERPNT.EXE PID N` 또는 "이미 떠 있던 것")를 message에 적음. 회귀 테스트: `tests/test_office.py` `test_open_watchdog_leaves_running_ppt_alerts`.
+- [중간] 2열 표 파일 셋째 열 오류의 `[추천] C7,"1,500"`이 인자 값처럼 읽혔음. `[추천]`을 쓰지 않고 "고친 줄: 3번째 줄 C7,"1,500"" (한 줄이어도).
+  회귀 테스트: `tests/test_excel_write.py` `test_write_cells_file_third_column_stops_before_writing`.
+- [중간] 숫자 검색어: `2.1`이 `2.10 전압`에 맞고 `2.1.3`에는 안 맞았음. 소수 한 자리 맨 숫자는 장절 번호 경계(`section_matches`와 같음: `2.1.3`은 맞고 `2.10`, `12.1`은 아님),
+  소수 끝 0은 소수 둘째 자리 이상이거나 글에서 단위가 붙을 때만 무시(`0.5` = `0.50 mm`, `0.5` != `0.50 이다`). 회귀 테스트: `test_number_only_query_normalized`(8개 추가).
+- [낮음] 넓혀 찾은 검색의 directive가 stale·indexed_now·상한·text 잘림 안내를 지웠음 -> 덧붙임(stale이면 "다시 실행하지 마세요"를 빼고 그 안내를 따름).
+  조사 `로`: ㄹ 받침 뒤는 뗌(`케이블로` -> `케이블`), 받침 없는 글자 뒤는 원래 낱말과 뗀 낱말을 둘 다 찾음(`서버로`, `보호회로`는 그대로 유지).
+  회귀 테스트: `tests/test_reader.py` `test_search_widened_directive_keeps_notes`, `test_particle_ro`.
+- office-mail 스킬: 규칙 4를 사실에 맞춤(옛 번호는 같은 메일이거나 "없는 번호", 긴 EntryID `id`도 그대로), `--send` 순서(먼저 `--send` 없이 또는 `read --id N` ->
+  `original`·받는 사람을 사용자에게 확인 -> 확인 뒤에만 `--send`).
+
+## [1.4.64] - 2026-11-04
+
+독립 검토(2차)에서 나온 버그 수정. 각 항목은 회귀 테스트로 먼저 재현한 뒤 고침.
+
+### 수정
+- [치명] outlook 짧은 `id`: 마지막 목록 하나만 기억해 `search` 뒤 `thread`(또는 다른 `list`)를 하면 같은 `--id 3`이 다른 메일을 가리켰고,
+  `reply/forward --id 3 --send`가 엉뚱한 메일로 나갈 수 있었음. 번호를 목록마다 1부터 다시 매기지 않고 이어서 늘어나게 주고(이미 번호가 있는 메일은 같은 번호),
+  번호 -> EntryID·제목·보낸사람·받은 시각을 최근 500개(7일)까지 `<데이터 폴더>/outlook_ids.json`(옛 `outlook_last_list.json` 대신)에 기억. 옛 번호는 같은 메일이거나
+  "없는 번호" STOP_RETRY(+ `next_commands` list). 9999를 넘으면 1부터 다시 매기며 기억한 번호를 모두 버림.
+  `reply`/`forward` 결과에 `original`(subject·from·received), `attachments`의 `mail`에 from·received를 더하고 preview·directive가 어느 메일인지 알리게 함.
+  회귀 테스트: `tests/test_outlook.py` `test_short_ids_never_point_to_another_mail_after_new_listing` 외 3개.
+- office-mail 스킬: `reply`·`forward` 행에 `--id 3`, `--send`는 사용자가 받는 사람·원본 메일을 확인한 뒤에만.
+- 스킬 4개에 옛 통합 SKILL의 안전 규칙 보충: 새 파일은 사용자가 준 전체 경로로만, 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알림,
+  office-spec의 메모 `--overwrite`는 사용자가 요청했을 때만 (각 6KB 이하).
+- [치명] reader 등록·검색: 읽기에 실패하는 느린 파일이 있으면 매 실행 같은 파일을 다시 읽고 다음 파일 앞에서 `CONTINUE:`가 나 끝나지 않았음
+  (`_index_files`, 검색 때 원본이 바뀐 캐시 다시 읽기). 실패를 (경로, 수정 시각, 크기, 파서 버전)으로 `<캐시 폴더>/index_failures.json`에 기록해 다음 실행에서
+  건너뛰고 `failures`/`skipped`/새 키 `refresh_failures`로 보고. 파일 하나만 주면 바로 다시 시도, `clear --all`은 기록도 지움. `progress`의 등록 수는 실제 등록 수.
+  회귀 테스트: `tests/test_reader.py` `test_failing_file_is_remembered_so_continue_ends`(R10 실행마다 새 단계 1개), `test_stale_refresh_failure_is_remembered`.
+- [중요] `--section "2.1"`이 `2.10`, `12.1`에도 맞던 문제 (`section_matches`, read/search/diff/excel check 공통). 장절 번호로 보이는 값은 번호 경계를 지키고
+  하위 절(`2.1.3`)과 `제2장`은 포함, 제목 글자는 지금처럼 부분 일치. 회귀 테스트: `tests/test_reader.py` `test_section_number_keeps_boundaries`.
+- [중요] `search` 넓혀 찾기: "대기 전류"가 "대기 전력"에 `VERIFIED` count 2로 맞았음. 한글 fuzzy는 4음절 이상, 첫·끝 음절이 같고 바뀐 음절은 자모 하나만 다를 때만
+  (전압/전류, 최대/최소, 상한/하한이 서로 맞지 않음). 넓혀 찾은 결과는 `count: 0`·`total_matches: 0`, 목록은 `candidates`(`matches` 아님)와 `candidate_count`,
+  directive `UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 N건 ...`(옛 `recovered` "넓혀 찾음"은 없앰). `matched_terms`는 글자 그대로 맞은 검색어만.
+  `excel.py check`의 `판단필요`는 그대로. office-spec 스킬과 전역 지침 `CLI-dev/opencode/AGENTS.md`의 match_mode 문구를 맞춤.
+  회귀 테스트: `tests/test_reader.py` `test_search_fuzzy_daegi_current_is_not_power`, `test_fuzzy_never_matches_different_korean_terms`.
+- 경미: 숫자만 든 검색어 정규화(`5,000` = `5000`, `0.5` = `0.50`, 숫자 경계는 지킴). 검색어 낱말 끝 조사는 받침이 맞을 때만 떼고 `로`는 떼지 않음
+  (`와이파이` -> `와이파`, `보호회로` -> `보호회`로 떼던 문제). 캐시의 수식 칸 다시 확인(`recheck_uncomputed`)은 한 실행에 3개·시간 여유 안에서만.
+  `diff --save x.md`가 말없이 `.xlsx`로 저장하던 것을 `warnings`로 알림. 회귀 테스트: `tests/test_reader.py` `test_number_only_query_normalized`,
+  `test_word_final_syllable_is_not_particle`, `test_recheck_uncomputed_is_capped_per_run`, `test_diff_save_md_warns_xlsx`.
+- 경미(outlook): `calendar`에서 Outlook이 기간 조건을 거부하면 일정마다 시각을 비교(`recovered`, 5,000개 상한), 읽지 못한 일정이 있으면 0건이어도
+  `UNVERIFIED:`(`unread_events`, 예외를 삼켜 0건 VERIFIED이던 문제). `thread` 대체 경로가 폴더마다 2,000통 상한에 닿으면 `UNVERIFIED:`.
+  회귀 테스트: `tests/test_outlook.py` `test_calendar_restrict_refused_compares_each_event`, `test_calendar_unreadable_events_are_not_verified_zero`,
+  `test_thread_fallback_scan_limit_is_unverified`.
+
+### 개발 도구
+- Gemma 종합 테스트 채점(`CLI-dev/grade_opencode.py`, `agent_scenarios.yaml` 묶음 O): 채점기가 `;`·`&&`·`||`·`|`로 이은 명령을 나눠(따옴표 안은 그대로)
+  `commands`·`forbid`를 명령마다 봄 (O1 금지 규칙 `(?![^\n]*--dry-run)`이 이어 붙인 다른 명령의 `--dry-run`을 보고 실제 메모 달기를 놓치던 문제).
+  O1: 메모 글(`--text`) 안의 "--dry-run" 글자는 옵션으로 보지 않음(따옴표 밖만). O4: `--anchor`(문서 중간 삽입) 금지, 문서는 `--target`으로.
+  O5: 채운 문서가 `--target`의 성적서양식.docx여야 함(값 파일 이름에 든 양식 이름으로 통과하던 문제). 회귀 사례: `CLI-dev/tests/test_grade_opencode.py`.
+- `CLI-dev/apply_skills.py`: 옛 `skills\office-cli`가 링크·정션이면 링크만 지우고 가리키던 폴더는 그대로 둠(보관도 하지 않음, 안내에 대상 경로).
+  전에는 링크를 따라 복사한 뒤 지우다 실패하고 "OpenCode를 닫고 다시 실행"이라고 잘못 안내함. 잠김(PermissionError)이 아닌 실패는 다른 안내.
+  회귀 테스트: `CLI-dev/tests/test_apply_skills.py` `test_old_office_cli_skill_link_removes_only_link`.
+
+## [1.4.63] - 2026-11-04
+
+독립 검토에서 나온 버그 수정. 회귀 테스트는 항목마다 고치기 전 코드에서 실패를 확인함.
+
+### 수정
+- 2열 표 파일의 셋째 열 (`excel.py write --cells 칸값.csv`, `excel.py comment --file`, `word.py fill --file`): 값의 쉼표가 열을 나누면
+  (`C7,1,500`, `B5,규격 3.1과 다름, 재확인 필요`) 둘째 열만 쓰고 `VERIFIED`였음. 셋째 열 이후에 글이 있으면 아무것도 쓰기 전에 STOP_RETRY:
+  줄 번호와 "값을 큰따옴표로 감싸세요", 한 줄이면 고친 줄(`C7,"1,500"`)을 `[추천]`(오류 로그에는 줄 번호만). 공통 함수 `_runtime.check_two_columns`.
+  회귀 테스트: `test_excel_write.py` `test_write_cells_file_third_column_*`, `test_comment_file_third_column_*`, `test_word.py` `test_fill_third_column_*`.
+- `write --cells` 항목 나누기: 닫히지 않은 따옴표가 뒤 항목을 삼킴(`C6='007; C7=5` -> 한 항목). 따옴표 묶음은 같은 따옴표로 닫히고 바로 뒤가
+  `;`/끝일 때만 인정, 아니면 따옴표 없는 값으로 나눔(`'007`은 엑셀 글자 표시로 글자 007). `=`로 시작하는 값은 큰따옴표·괄호 안의 `;`를 나누지 않음
+  (`=IF(A1="a;b",1,2)`, `=SUM(A1;A2)`는 엑셀이 받지 않으면 `,`로 고친 `[추천]`까지). 회귀 테스트: `test_write_cells_quote_must_close_*`, `test_write_cells_formula_keeps_*`.
+- `excel.py comment --append` 재실행: 같은 메모가 두 번 붙음. 기존 메모 끝 줄이 붙일 메모와 같거나 기존 메모가 새 메모와 같으면 그 칸은 그대로
+  (`unchanged`, 모두 그대로면 되돌리기 지점 없음). 회귀 테스트: `test_comment_append_rerun_does_not_duplicate`.
+- 엑셀 쓰기 실패 후 되돌리기(`apply_writes`): `rng.Formula = prior`가 글자 `007`, `1-2`, 긴 숫자 글자, `'=abc`를 숫자·날짜·수식으로 바꾸고도
+  되돌린 것으로 보아 되돌리기 지점까지 지웠음. 수식 칸(`HasFormula`)만 수식 글, 상수 칸은 `Value2`(글자는 앞에 `'`)로 저장·복원하고, 복원 뒤 다시 읽어
+  비교해 다르면 그 칸을 message에 적고 되돌리기 지점을 남김. 가짜 Excel에 `typing`(대입한 글자를 Excel처럼 해석), `Value2`, `PrefixCharacter`.
+  회귀 테스트: `test_rejected_formula_rollback_keeps_text_constants`, `test_rejected_formula_rollback_mismatch_keeps_undo_point`.
+- `excel.py check` 규격 조건이 같은 문장의 다른 항목 조건을 섞음: `두께 5 mm 이상, 길이 100 mm 이하로 한다.` -> 두께 `5~100 mm`,
+  `외경 3 mm, 폭 5 mm 이하로 한다.` -> 외경 `5 mm 이하`인데 `VERIFIED`. `reader.near_conditions`는 낱말부터 다음 항목(절 경계 뒤 낱말 + 수치) 직전까지만,
+  없으면 낱말이 든 절에서 찾음. `reader.spec_conditions`는 두 조건 사이에 다른 항목 낱말이 있으면 한계를 합치지 않고 기준 값(plain)도 지우지 않음.
+  기존 규격 문장 33가지(B1)는 그대로. 회귀 테스트: `test_reader.py` `test_spec_conditions_do_not_mix_items`, `test_near_conditions_stop_at_next_item`,
+  `test_excel_read.py` `test_check_does_not_mix_items_of_one_sentence`.
+- `excel.py check` 칸·머리글·항목에 단위가 없으면 규격 단위로 추정해 판정하던 것을 `판단필요`(`칸 단위 없음 (규격은 cm): 값 열 머리글에 단위를 적으세요`)로.
+  머리글 단위가 규격과 같은 종류면 접두어를 맞춰 판정(그대로). 회귀 테스트: `test_check_cell_without_unit_is_not_guessed`.
+- `word.py fill`: 표 칸 `표2!R3C4`가 병합 표에서 다른 칸일 수 있는데 미리보기로 알아볼 수 없었음. `planned`·`applied`·덮어쓰기 확인 message에
+  그 행 첫 칸과 그 열 첫 행 글(12자)을 붙임(`표2!R3C3 [행 '전류', 열 '측정']`). 회귀 테스트: `test_fill_preview_shows_row_and_column_heads`.
+- `word.py fill`: 문서 보호(`ProtectionType`)를 쓰기 전에 확인해 STOP_RETRY, 쓰는 중 실패하면 "앞의 N곳은 이미 바뀌었습니다(office.py undo)"
+  (닫힌 파일은 저장하지 않아 그대로). 회귀 테스트: `test_fill_protected_document_changes_nothing`, `test_fill_failure_midway_says_how_many_changed`.
+- 닫힌 파일 열기 감시: PowerPoint는 한 프로세스라 감시 중에 사용자가 연 발표 파일까지 같이 끝낼 수 있었음. Word·PowerPoint는 끝내기 직전에
+  그 프로세스에 보이는 문서 창이 없다고 창 목록(COM 없이)으로 확인될 때만 끝냄. 사용자 문서 창이 있거나 확인하지 못하거나, 끝낼 프로세스를 모르면
+  (사용자가 이미 띄운 PowerPoint, 번호를 못 찾음: 전에는 감시하지 않아 멈춤) 끝내지 않고 `drm_or_dialog` 오류 1줄을 낸 뒤 도구만 끝냄.
+  시간 초과 message에 "열기가 오래 걸린 경우일 수도 있습니다(OFFICE_CLI_OPEN_TIMEOUT으로 늘릴 수 있음)".
+  회귀 테스트: `test_office.py` `test_open_watchdog_kills_only_without_user_documents`, `test_open_watchdog_abandon_emits_one_json_line`.
+
+## [1.4.62] - 2026-11-04
+
+작업별 스킬로 나누기 (C3). 통합 `SKILL.md`(16KB, 명령 표 한 줄 300~600자)에서 Gemma 26B가 옵션을 잘못 기억하던 문제.
+회귀 테스트: `tests/test_skill_docs.py`(배치·크기·frontmatter·전체 명령·모든 하위 명령 포함), `CLI-dev/tests/test_apply_skills.py`
+(옛 스킬 폴더 보관 후 지움, diag FAIL), `CLI-dev/tests/test_grade_opencode.py`(새 스킬 경로 읽기는 코드 읽기 아님).
+
+### 구조
+- `CLI/office-cli/SKILL.md`를 지우고 `CLI/office-cli/skills/<이름>/SKILL.md` 4개로 나눔 (각 6KB 이하, 명령은 `python "C:\CLI\office-cli\<파일>.py" ...` 전체 명령):
+  `office-excel`(excel.py, 엑셀 차트·범위 transfer), `office-doc`(word.py, ppt.py, office.py transfer·undo·windows·focus),
+  `office-mail`(outlook.py), `office-spec`(reader.py 읽기·검색·diff·캐시, excel.py check·comment).
+  undo·windows는 excel·doc에, excel comment는 excel·spec에 함께 둠. 공통 결과 처리(첫 단어별 행동)는 전역 지침 4장, 스킬에는 작업별 추가 규칙만.
+- 배치 이유: 스킬 폴더 이름 = `name`이어야 해서(OpenCode) 도구 폴더 바로 아래에는 스킬 하나만 둘 수 있음. `skills/` 아래 두면 `C:\CLI\office-cli`를
+  그대로 복사하는 배포가 그대로이고, 도구 VERSION과 스킬 버전이 한 폴더에서 함께 바뀜. 보관된 En-Genius 패키지(`archive/engenius`)는 옛 경로를 읽지만
+  업데이트 중지 상태라 고치지 않음(다시 꺼낼 때 새 경로로).
+- `CLI-dev/apply_skills.py`: 4개 스킬을 `skills\<이름>\`에 설치하고, 옛 `skills\office-cli` 폴더는 `work\skill_backup_<시각>`에 보관한 뒤 지움
+  (남으면 OpenCode가 옛 스킬도 고름). `--check`와 `run_all_tests.py` diag는 옛 폴더가 남아 있으면 "지울 것"으로 FAIL.
+- `-h` 결과의 `skill_file`이 그 도구의 작업 스킬(예: excel.py -> `skills\office-excel\SKILL.md`), directive와 인자 오류 안내가 스킬 이름을 말함.
+- 실기 러너·`run_all_tests.py`의 버전 표시는 `_runtime.py` VERSION / 첫 작업 스킬에서 읽음. 채점 규칙(no_read_code)은 `C:\CLI\office-cli\skills` 읽기·검색을 코드 읽기로 보지 않음.
+- 전역 지침 3장 표(요청 -> 스킬)를 4개로, 저장소 AGENTS.md "폴더 구조"·"작업 절차 6"에 새 배치.
+
+## [1.4.61] - 2026-11-04
+
+워드 양식 채우기 (C4). 회귀 테스트: `tests/test_word.py` "word.py fill"(1.4.60에서 6개 중 6개 실패, 명령 없음).
+가짜 Word에 칸 글이 있는 표(`FakeGridTable`, `doc.Tables(i).Cell(r, c).Range.Text`)를 넣음.
+
+### 기능
+- `word.py fill --file 값.csv`(열: 자리, 값): `{{이름}}` 자리는 문서 모든 영역에서 바꾸고, `표2!R3C4`는 그 표 칸에 씀. 모든 줄을 먼저 확인(모양, 문서에 없는 자리,
+  없는 표·칸)하고 하나라도 틀리면 아무것도 바꾸지 않음. 값이 있는 표 칸은 `needs_user_decision` 하나와 `--overwrite`, `--dry-run`, 되돌리기 지점 하나,
+  다시 읽어 확인.
+
+## [1.4.60] - 2026-11-04
+
+Outlook 이어 하기 (C2). 회귀 테스트: `tests/test_outlook.py` "짧은 번호, 첨부 저장 뒤 읽기 명령, calendar, thread"(1.4.59에서 9개 중 9개 실패).
+
+### 기능
+- 짧은 번호: `list`/`search`/`thread` 결과의 `id`가 1, 2, 3 ...(긴 EntryID는 `entry_id`). 마지막 목록을 데이터 폴더(`outlook_last_list.json`)에 기억해
+  `--id 3`으로 읽기·첨부·답장·전달·대화. 긴 EntryID도 그대로 받음. `read`/`current`/`attachments`의 `mail.id`는 `mail.entry_id`로 바꿈(베타).
+- `attachments --save`: 저장한 문서마다 `reader.py read --file`(3개까지), 둘 이상이면 `reader.py index --folder` 명령을 `next_commands`로.
+- `outlook.py thread --id N`(읽기 전용): 같은 대화의 받은·보낸 메일을 오래된 순으로(20통, 본문 400자).
+- `outlook.py calendar [--days 7]`(읽기 전용): 오늘부터 N일의 일정(반복 일정 펼침, 50개).
+
+## [1.4.59] - 2026-11-04
+
+두 판의 문서 비교 (B5). 회귀 테스트: `tests/test_reader.py` "reader.py diff"(1.4.58에서 5개 중 5개 실패, 명령 없음).
+
+### 기능
+- `reader.py diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "차이.xlsx"]`: 장절 경로로 단락 묶음을 짝짓고(경로가 다르면 제목 유사도,
+  짝 없는 장절은 `unpaired_sections`), 묶음 안에서 `삭제`/`추가`/`변경`. 숫자 변경은 말로(`5 V에서 5.5 V로`, 화살표 기호 없음) `number_changes`, 맨 앞에.
+  항목마다 이전·새 근거(`old_evidence`, `new_evidence`). JSON 20개, 넘으면 `truncated`와 `full_result_file`(xlsx). `--save` xlsx/csv.
+
+## [1.4.58] - 2026-11-04
+
+닫힌 파일 열기 감시 (B4 1부). 문서 보안(DRM) 인증 창이 보이지 않는 인스턴스에 뜨면 명령이 끝나지 않아(에이전트 120초에 끊김)
+LLM이 같은 명령을 반복함. 회귀 테스트: `tests/test_office.py` "닫힌 파일 열기 감시"(1.4.57에서 3개 중 3개 실패).
+
+### 기능
+- `_office.open_target`: 닫힌 파일을 여는 동안 감시(`OFFICE_CLI_OPEN_TIMEOUT`, 기본 30초, 0 = 없음). 시간이 지나면 도구가 띄운 인스턴스의 프로세스만 끝내고
+  STOP_RETRY `error_type: drm_or_dialog`("문서 보안 인증 창 등으로 열리지 않음. 사용자가 문서를 직접 열어 두면 열린 문서로 읽음")와
+  `next_commands[0]`(경로 대신 문서 이름을 넣은 같은 명령). 프로세스 번호: Excel은 창 핸들, Word·PowerPoint는 띄우기 전후 `tasklist` 차이.
+- 하지 않은 것: DRM 문서를 reader 캐시에 평문으로 등록(회사 보안 정책 결정 필요).
+
+## [1.4.57] - 2026-11-04
+
+표 전체를 규격서와 한 번에 대조 (B1). 전에는 칸마다 `read` -> `search` -> 판단 -> 메모.csv를 LLM이 이어 붙여야 했음.
+회귀 테스트: `tests/test_excel_read.py` "excel.py check"(1.4.56에서 5개 중 5개 실패, 명령 없음),
+`tests/test_reader.py` "규격 글의 수치 조건"(규격 문장 33개 말뭉치, 단위·한계·후보 판정).
+
+### 기능
+- `excel.py check --range B2:D50 --item-col B --value-col D [--section-col E] --spec "<파일 또는 폴더>" [--section "3.2"] [--save "대조결과.xlsx"]` (읽기 전용).
+  행마다 항목 글을 등록된 규격서에서 찾고(`reader.py search`와 같은 규칙: 동의어, partial/fuzzy), 근거 문장의 수치 조건(`±`, 범위, 이하·이상·미만·초과,
+  영어 표기, 단위 접두어)을 칸 값(칸 글·머리글·항목 글의 단위)과 비교해 `일치`/`불일치`/`근거없음`/`판단필요`.
+  판단필요: partial/fuzzy, 수치 후보 둘 이상, 단위 종류가 다름, 수치 조건 없음, 숫자가 아닌 값.
+- 결과 `counts`, `results`(20개), `needs_review`, `not_decided`, `memo_file`(CSV 칸,메모 = "판정 | 근거"), `next_commands[0]` = `excel.py comment --action add --file <memo_file> --dry-run`.
+  모든 행을 판정했을 때만 `VERIFIED:`. `--save`는 xlsx로 전체 결과.
+- `reader.py`에 공용 도우미 `find_item`, `spec_conditions`, `near_conditions`, `quantity_of`, `unit_of`, `cond_holds`, `load_spec_docs`.
+
+## [1.4.56] - 2026-11-04
+
+긴 작업 나눠서 진행 (B2, 공통 계약 R10, ml-kit과 같은 이름·키). 회사 PC Gemma 시험에서 명령이 120초에 끊기면 결과 JSON이 없어
+LLM이 같은 명령을 반복함. 회귀 테스트: `tests/test_reader.py` "R10 CONTINUE" (1.4.55에서 4개 중 4개 실패).
+
+### 기능
+- `_runtime.py`: `OFFICE_CLI_TIME_LIMIT`(초, 기본 100, 0 = 없음), `TIME_RESERVE` 30초, `check_time`, `Unfinished`(BaseException),
+  `run_cli`가 `status: ok`, `verified: false`, `continue: true`, `progress`, `next_commands`(같은 명령 하나), `CONTINUE:` directive를 냄(exit 0, 오류 로그 없음).
+  `next_commands` 항목은 office-cli 모양(`{purpose, command}`).
+- `reader.py index`, `search --file 폴더`: 새 파일을 읽기 전마다 시계를 봄(이번 실행에서 한 파일은 읽은 뒤에만, 읽은 파일은 캐시에 저장돼 다시 실행하면 건너뜀).
+  `search`(캐시만)의 바뀐 캐시 다시 읽기도 같음.
+- SKILL.md: 결과 처리 표에 `CONTINUE:` 줄, 규칙 3에 예외. 테스트(conftest)와 실기 러너는 `OFFICE_CLI_TIME_LIMIT=0`.
+
+## [1.4.55] - 2026-11-04
+
+보호된 시트와 엑셀이 받지 않는 수식 (A6). 회귀 테스트: `tests/test_excel_write.py` "시트 보호 사전 확인과 엑셀이 받지 않는 수식"
+(1.4.54에서 17개 중 13개 실패: 보호된 시트에 쓰다 COM 오류(내부 오류) 또는 일부만 바뀜, 거부된 수식이 내부 오류이고 먼저 쓴 칸·새 시트가 남음).
+가짜 COM에 시트 보호(`ProtectContents`, `ProtectDrawingObjects`, `Protection.Allow*`, 칸 `Locked`)와 수식 거부(`reject_formula`)를 넣음.
+
+### 기능
+- 공통 `check_protection`: `write`(`--cells` 포함), `replace`, `style`, `range`(모든 동작, 행·열 넣기·지우기, 정렬), `comment`, `chart`가
+  바꾸기 전에 시트 보호를 확인. 막히면 STOP_RETRY `error_type: sheet_protected`, "검토 > 시트 보호 해제는 사용자가 직접 (도구는 암호를 풀지 않음)",
+  값 쓰기는 잠긴 칸과 잠기지 않은 칸 `[후보]`. 보호 대화상자에서 허용한 서식·행 넣기·정렬은 그대로 함.
+- 공통 `apply_writes`: 엑셀이 받지 않는 수식은 어느 칸의 어떤 수식인지와 규칙(영어 함수 이름, 쉼표, 큰따옴표)을 STOP_RETRY로.
+  따옴표 밖 `;`, 전각, 둥근 따옴표는 고친 전체 명령 `[추천]`. 먼저 쓴 칸을 되돌리고 같은 명령의 `--new-sheet` 시트를 지움(되돌리기 지점 없음).
+  오류 로그에는 수식 글을 남기지 않음.
+
+## [1.4.54] - 2026-11-04
+
+흩어진 칸 여러 개 한 번에 쓰기 (A5). 회사 PC 기록에서 C6..C16을 채우려고 `write`를 16번, 덮어쓰기 확인을 8번 따로 받음.
+회귀 테스트: `tests/test_excel_write.py` "write --cells" (1.4.53에서 9개 중 9개 실패, 옵션 없음). 실기 러너 E8.
+
+### 기능
+- `excel.py write --cells "C6=ft; C7=℃; 계산기!C11=20"` 또는 `--cells "칸값.csv"`(열: 칸, 값, `comment --file`과 같은 모양).
+  `=`로 시작하는 값은 수식. 값이 있는 칸은 모두 모아 `needs_user_decision` 하나, `--overwrite` 한 번, 되돌리기 지점 하나, 쓴 칸을 모두 다시 읽어 확인.
+  이미 같은 값인 칸은 그대로(`unchanged`), `--dry-run`(`planned`, `next_commands`). 하나라도 잘못되면 하나도 쓰지 않음.
+- `write --file`에 머리글이 `칸, 값`인 파일을 주면 표로 쓰지 않고 `--cells` 전체 명령을 `[추천]`(표의 `--file`과 구분은 옵션 이름으로).
+
+## [1.4.53] - 2026-11-04
+
+문서에 없던 엑셀 서식 옵션 점검 (사용자 결정 "구현"). 회귀 테스트: `tests/test_excel_write.py` "문서에 없던 서식 옵션 점검"
+(1.4.52에서 12개 중 4개 실패: 줄바꿈·테두리를 다시 읽지 않음, cp949로 쓸 수 없는 글자가 내부 오류).
+
+### 수정
+- `style --wrap`(`replace`도): 적용 뒤 `WrapText`를 다시 읽어 확인(R1). 전에는 확인 없이 `VERIFIED:`.
+- `range --action border --weight/--box`: 선 모양·굵기를 다시 읽어 비교(R1, 한 줄·한 칸 범위의 안쪽 선은 건너뜀). 다르면 `UNVERIFIED:`.
+- `export --encoding cp949`: 쓸 수 없는 글자(이모지 등)가 있으면 내부 오류 대신 쓰기 전에 STOP_RETRY(칸 주소, `[추천] utf-8-sig`).
+  CSV 내보내기는 다시 읽어 행 수까지 확인.
+
+### 문서
+- 점검 결과 모두 동작해 남김(뺀 옵션 없음): `style --italic --wrap --no-zebra --size`, `range --action border --weight --box`,
+  `write --no-autofit`, `export --encoding`. README `excel.py` 표에 설명, SKILL.md 서식 줄에 `--no-zebra`, `--italic`, `--wrap`, 외곽선(`--box --weight`).
+
+## [1.4.52] - 2026-11-04
+
+쓰지 않는 옵션 정리 (사용자 결정). 회귀 테스트: `tests/test_office.py` `test_transfer_method_option_removed`,
+`tests/test_reader.py` `test_search_case_sensitive_option_removed` (1.4.51에서 2개 중 2개 실패).
+
+### 구조
+- `office.py transfer --method` 삭제. 차트 그림 방식은 자동 순서(`--probe`가 저장한 순서 먼저)만. 실기 러너 I24는 임시 `OFFICE_CLI_CONFIG`로 redraw를 먼저 시도.
+- `reader.py search --case-sensitive`/`-c` 삭제. 검색은 늘 대소문자를 무시.
+
+## [1.4.51] - 2026-11-04
+
+`reader.py search` 재현율 (경량 LLM의 검색어가 규격서 글과 조금 달라도 근거를 찾게). 회귀 테스트: `tests/test_reader.py` "검색 재현율"
+(1.4.50에서 12개 중 11개 실패). 재현율 시험(단락 7개, 검색어 8개, 기대 일치 10건): 1.4.50 2건 -> 1.4.51 10건.
+
+### 기능
+- 검색어마다 도구가 정규식을 만듦(`_single_pattern`): 검색어 끝 조사를 떼고 글의 조사를 허용, 전각 영문·숫자, `5V` = `5 V` = `5[V]` = `5.0 V`,
+  `5000` = `5,000`, `°C` = `℃`. 숫자 경계(`15V`, `5.5V`)와 기존 규칙(`SOI 1` = `SOI #1`, `#4`, `1.2`)은 그대로.
+- 0건이면 넓혀 찾기: `partial`(검색어 절반 이상, 가장 많이 든 단위) -> `fuzzy`(한 글자 다른 낱말, 영문 4자·한글 3음절 이상, 숫자 없는 검색어).
+  `match_mode`, 항목의 `matched_terms`·`missing_terms`·`fuzzy_words`, `recovered`, directive에 "정확히 일치한 근거가 아님".
+- 결과를 점수 순으로(`score`, 저장 파일 `점수` 열): 맞은 검색어 수, 나온 횟수, 검색어끼리 가까움, 장절 제목.
+- 동의어 파일 `<데이터 폴더>/synonyms.txt`(한 줄에 한 묶음, 쉼표 구분). 결과 `synonyms_used`.
+- `--regex` 오류: 몇 번째 글자와 이유. 정규식 문법이 없는 글이면 `--regex` 없이 찾는 전체 명령을 `[추천]`(오류 로그에는 검색어를 남기지 않음).
+
+## [1.4.50] - 2026-11-04
+
+규격 대조 흐름(판단 결과를 엑셀 칸 메모로). 회귀 테스트: `tests/test_excel_write.py` "comment" (1.4.49에서 9개 중 9개 실패, 명령 없음).
+가짜 COM(`tests/fake_excel.py`)에 칸 메모(`Range.Comment`/`AddComment`, `Comment.Text()`/`Delete()`, `Worksheet.Comments`)를 넣음.
+실기 러너 `tools/run_win_tests.py`에 E7(달기·확인 요청·덧붙이기·목록·지우기).
+
+### 기능
+- `excel.py comment`: 칸 메모(이전 방식 메모, Office 2007+와 365). `word.py comment`와 같은 모양.
+  - 목록(기본): 시트 또는 `--range`의 메모 `cell`, `author`, `text`. 상한을 넘으면 `truncated` + `--start` 이어 보기 명령, 0개면 `VERIFIED: 0건`.
+  - `--action add --range B5 --text "의견"`, 여러 개는 `--file "메모.csv"`(열: 칸, 메모, `load_table_file(raw=True)`와 `resolve_input_path`).
+    한 줄이라도 잘못되면 하나도 달지 않음. 이미 메모가 있는 칸은 `needs_user_decision`(오류 로그에는 칸 주소만), `--overwrite` 바꾸기 / `--append` 덧붙이기.
+  - `--action delete --range ...`(`--range` 필수). add/delete 모두 `--dry-run`(`planned`, `next_commands`), 되돌리기 지점, 다시 읽어 확인(`applied`).
+
+## [1.4.49] - 2026-11-04
+
+규격 대조 흐름(엑셀 칸 내용 -> 등록된 규격서의 장절 근거). 회귀 테스트: `tests/test_reader.py` "read --section" (1.4.48에서 3개 중 3개 실패).
+
+### 기능
+- `reader.py read --file 파일 --section "장절 일부"`: 장절 경로에 그 글이 든 단위만 읽음(`search --section`과 같은 규칙, 공통 함수 `section_key`·`section_matches`).
+  `--pages`/`--units`와 함께 쓰면 두 조건을 모두 만족하는 단위. 결과 `section_filter`, 단위마다 `evidence`(search와 같은 근거 문구).
+  읽기 상한·잘림·`--save`는 그대로이고, 이어 읽기와 전체 저장 명령에 `--section`(과 고른 범위)이 붙음.
+  맞는 단위가 없으면 STOP_RETRY + `[후보]`(`suggest`로 찾은 비슷한 장절 이름, 없으면 문서의 장절 이름. `ambiguous`라 오류 로그에는 개수만).
+  장절 정보가 없는 문서는 `--pages`로 읽으라는 STOP_RETRY. 스캔 PDF는 전처럼 OCR 안내(`UNVERIFIED:`).
+  전에는 `search --regex --query "." --section ... --full`(10건 상한)뿐이었음.
+- 1.4.39의 "reader.py read는 장절을 고르지 않습니다" 인자 오류 안내(`OTHER_COMMAND`)를 뺌.
+
+## [1.4.48] - 2026-11-04
+
+저장소 지침 반영(next_commands). 회귀 테스트: `tests/test_excel_write.py`(쓰기 뒤 차트 명령), `tests/test_word.py`·`tests/test_ppt.py`(닫힌 파일 읽기 `--save`)
+(1.4.47에서 3개 중 3개 실패).
+
+### 수정
+- `excel.py write`(`--file`, `--formula`) 뒤 차트 명령에서 자리표시 `--title 차트`를 뺌(LLM이 그대로 실행해 제목이 '차트'인 차트가 생김).
+  purpose에 "제목은 --title \"제목\"을 붙임".
+- `word.py read --save`, `ppt.py read --save`의 "엑셀 표로 옮기기" transfer 명령: `--target`으로 다른 문서(열린 문서 이름, 닫힌 파일)를 읽었으면
+  `--from-target`(전체 경로가 있으면 그것)을 붙임. 전에는 보고 있는 문서에서 옮겼음.
+
+## [1.4.47] - 2026-11-04
+
+저장소 지침 반영(R5): `require_lib()`. 회귀 테스트: `tests/test_contract.py` "R5 require_lib" (1.4.46에서 5개 중 5개 실패, 1개는 함수 없음).
+
+### 수정
+- `_runtime.require_lib(module, pip_name, feature)`와 `MissingLibraryError`: 라이브러리가 없으면 `STOP_RETRY:`, `error_type: "missing_library"`,
+  `missing_package`, `install_command: "python -m pip install <패키지>"`, directive "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요."
+- 적용: reader의 DOCX(python-docx)·PPTX(python-pptx)·XLSX(openpyxl)·PDF(pymupdf)·HWP(olefile) 읽기와 xlsx 저장, excel.py 닫힌 xlsx 읽기와 수식 읽기
+  (전에는 `import` 실패가 `ERROR:` 내부 오류), office.py transfer의 닫힌 워드 표 읽기. 전에는 reader는 `input` 오류 글에 설치 명령만 있었음.
+- pywin32(`require_com`)는 Office 없이 읽는 다른 명령 안내가 있어 그대로 둠.
+
+## [1.4.46] - 2026-11-04
+
+1.4.37에서 남긴 것: range sort 기준 4개 이상. 회귀 테스트: `tests/test_excel_write.py` `test_sort_more_than_three_keys_uses_sort_fields`, `test_sort_too_many_keys`
+(1.4.45에서 2개 중 2개 실패).
+
+### 기능
+- `excel.py range --action sort --by "팀,부서,등급,지역,이름"`: 기준 4개부터 64개(엑셀 상한)까지 `Worksheet.Sort.SortFields`로 정렬
+  (기준마다 데이터 행의 열, 값으로 비교, `--desc` 그대로). 정렬한 뒤 `SortFields.Clear()`로 시트에 정렬 기준을 남기지 않음.
+  3개까지는 전처럼 Range.Sort. 확인(R1)은 같음(모든 기준의 순서). 전에는 4개부터 STOP_RETRY.
+
+### 테스트
+- 가짜 Excel(`tests/fake_excel.py`): `Worksheet.Sort`(`SortFields.Add/Clear`, `SetRange`, `Header`, `Apply`).
+
+## [1.4.45] - 2026-11-04
+
+1.4.37에서 남긴 것: `read --where`의 또는(OR) 조건과 값 안의 `;`. 회귀 테스트: `tests/test_excel_read.py` `test_where_or*`, `test_where_quoted_value_with_separators`
+(1.4.44에서 9개 중 6개 실패).
+
+### 기능
+- `excel.py read --where`: `|`는 또는. `;`(그리고)가 먼저 묶임: `부서 = 영업; 금액 > 250 | 부서 = 기획`. 두 묶음에 맞는 행도 한 번만.
+- 따옴표로 감싼 값 안의 `;` `|`는 나누지 않음(`메모 = 'a;b'`). 따옴표 안의 `AND`·`==` 등도 고치지 않음.
+- `OR`, `or`, `또는`, `||`는 `|`로 고친 식 `[추천]`(`AND`를 `;`로 고치는 것과 같은 방식). 결과 `where`와 `[추천]`은 `;` `|`가 든 값을 작은따옴표로 감쌈.
+
+### 문서
+- SKILL.md 엑셀 읽기 줄에 `|`(또는)와 값 따옴표 한 줄. README `--where` 절.
+
+## [1.4.44] - 2026-11-04
+
+24차 확인 검사 LOW-4. 회귀 테스트: `tests/test_excel_read.py` `test_far_uncomputed_*`, `test_near_uncomputed_row_still_kept` (1.4.43에서 4개 중 3개 실패).
+
+### 수정
+- 닫힌 xlsx에서 값(A1:C10)과 멀리 떨어진 계산되지 않은 수식 칸(Z200000)이 있으면:
+  - 범위 생략 `read`: 그 칸까지 빈 행 20만 개를 채워 읽던 것을 데이터 범위(A1:C10)만. `-r A:Z`: "범위가 너무 큽니다"와 그 칸을 빼는 `[추천]` 대신 A1:Z10.
+    `-r A:C`: 파일 크기 정보 때문에 20만 행을 채우고 `VERIFIED`이던 것을 A1:C10.
+  - 요청한 범위 안의 먼 칸은 `UNVERIFIED:`, `far_uncomputed_formulas`, `far_uncomputed_count`와 그 칸만 읽는 명령(`next_commands` 끝). `export --save .csv`도 같음.
+  - "먼 칸": 값이 있는 끝에서 1,000행(열) 넘게 떨어짐. 가까운 칸(값 바로 아래 합계 행 등)은 전처럼 범위에 넣음.
+- `rt.xlsx_uncomputed_formulas(..., positions=True)`: 센 칸 위치(10만 개까지)와 값이 있는 칸의 범위(`value_bounds`).
+
+## [1.4.43] - 2026-11-04
+
+23차 점검 L1. 회귀 테스트: `tests/test_excel_read.py` `test_array_formula_*` (1.4.42에서 2개 중 1개 실패, 통과한 1개는 엑셀에서 저장한 배열 수식이 0개인지).
+
+### 수정
+- 닫힌 xlsx의 계산된 값이 없는 수식 칸 찾기(`excel.py read`, `export`, transfer, `reader.py`): 배열 수식 `<f t="array" ref="C1:C3">`의 `ref` 범위 모든 칸을
+  수식 칸으로 셈. 다른 칸에 계산된 값이 없거나 파일에 그 칸이 없으면(openpyxl), `fullCalcOnLoad`이면 `uncomputed_formulas`에 들어감.
+  전에는 왼쪽 위 칸만 세어 `uncomputed_count`가 적고, 범위를 생략한 읽기에서 그 행·열이 잘릴 수 있었음.
+
+## [1.4.42] - 2026-11-04
+
+24차 확인 검사 LOW-5. 회귀 테스트: `tests/test_reader.py` `test_check_failure_*` (1.4.41에서 2개 중 2개 실패).
+
+### 수정
+- reader: 닫힌 xlsx의 수식 칸 확인 실패(MemoryError 등, `meta.uncomputed_formulas.unknown`)를 캐시에서 그대로 다시 쓰던 것을, 캐시를 쓸 때마다
+  (`read`, 색인 검색) 원본을 다시 확인하도록. 확인되면 meta와 캐시 파일을 고치고(`[INFO]`), 다시 실패하면 그대로 `UNVERIFIED:`.
+  전에는 파일이 바뀌거나 캐시를 지울 때까지 같은 파일 읽기가 계속 "확인하지 못함"이었음.
+
+## [1.4.41] - 2026-11-04
+
+1.4.37에서 남긴 것: range delete가 다른 칸의 수식이 `#REF!`가 되는 것을 미리 알리지 않음.
+회귀 테스트: `tests/test_excel_write.py` "지울 칸을 참조하는 다른 칸의 수식" (1.4.40에서 5개 중 5개 실패).
+
+### 수정
+- `excel.py range --action delete`: 다른 칸의 수식이 지울 행·열 안에만 있는 칸이나 범위를 참조하면(지우면 `#REF!`) 지우지 않고
+  `needs_user_decision`. 지울 행·열이 비어 있어도 같음. message에 수식 칸 수와 위치(`시트!주소` 5개까지), 수식 글은 넣지 않음(오류 로그도).
+- 결과 `broken_refs`, `broken_ref_cells`(20개까지)는 `--dry-run`과 실행 결과 모두에. `--dry-run`의 preview와 `next_commands[0]`(`--overwrite` 포함)도.
+- 같은 통합문서의 다른 시트 수식(`Sheet1!B2`, `'내 시트'!C3`)도 봄. 범위 일부만 지워지는 참조, 다른 통합문서, 이름 정의·`INDIRECT`는 세지 않음.
+
+## [1.4.40] - 2026-11-04
+
+회사 PC에서 관리자 권한 PowerShell로 띄운 OpenCode가 사용자가 연 문서를 보지 못하고 "열려 있는 ... 문서가 없습니다"라고 답한 문제.
+Windows는 권한 수준(무결성 수준)이 다른 프로세스 사이의 COM 연결을 막아, 관리자 권한 도구에는 일반 권한 Office가 보이지 않음.
+회귀 테스트: `tests/test_office.py` "관리자 권한 실행" (1.4.39에서 11개 중 10개 실패).
+
+### 수정
+- 공용 `_runtime.is_elevated()`(`IsUserAnAdmin`) / `elevation_hint()`, `_office.no_open_doc`과 `no_open_docs_result`가 한 곳에서 판단.
+  관리자 권한이면 열린 문서를 못 찾은 오류(`active`, 열린 문서 이름, transfer 받는 문서)가 `error_type: "elevated_process"`,
+  message "관리자 권한으로 실행 중이라 일반 권한으로 연 문서를 볼 수 없음, 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행",
+  directive는 다시 실행하지 말고 그대로 전하라는 것(경로를 물어 `--target`으로 다시 실행하라는 안내를 하지 않음).
+- `excel/word/ppt.py info --all`, `office.py windows`의 0건: 관리자 권한이면 `VERIFIED: 0건` 대신 `UNVERIFIED:`와 같은 안내.
+- Outlook 연결 실패 message에도 같은 안내(관리자 권한일 때만).
+- 일반 권한에서는 바뀐 것 없음.
+
+## [1.4.39] - 2026-11-04
+
+회사 PC 오류 로그(2026-10-29~11-04, 실제 사용)의 인자 오류를 현재 버전으로 다시 실행해, 안내가 맞지 않던 것을 고침.
+회귀 테스트: `tests/test_contract.py` (1.4.38에서 4개 실패).
+
+### 수정
+- 다른 파일의 명령이 맞는 경우 `[추천]`(옵션 이름만 바꿔 1회 재시도) 대신 맞는 명령을 안내 (`OTHER_COMMAND`):
+  `office.py write`(없는 명령, 전에는 `[후보] windows, focus, transfer, undo`), `office.py transfer --text`(전에는 옵션 목록만),
+  `reader.py read --section`(장절은 `reader.py search --section` 또는 열린 워드의 `word.py read --section`). 세 경우 모두 워드/PPT/엑셀 쓰기 명령을 그대로 적음.
+- `excel.py write --cell K1`에 `[추천] --range` (전에는 옵션 목록만).
+
 ## [1.4.38] - 2026-11-04
 
 회사 PC `opencode run` 기록(Gemma, "열려있는 엑셀 A2에 반가워 입력해줘")에서 찾은 세 가지.
@@ -1079,8 +1756,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - 워드 그림/도형 -> PPT 전달 (`office_bridge` word->ppt), PPT -> 워드 전달.
 
 ### 1.4.0 점검에서 남긴 것
-- PowerPoint 닫힌 파일의 열기 암호, DRM 인증 창이 뜨는 문서: 백그라운드에서 멈출 수 있음 (감시 시간 초과 후 정리 필요).
-- 엑셀: 열린 문서의 열 전체 범위(`A:A`)를 사용 범위로 자르기 (닫힌 파일·CSV는 1.4.5), 조건부 강조 `포함:`의 상대참조(활성 셀 기준), 같은 이름 차트가 여러 시트에 있을 때 `[후보]`, `--map` 연쇄 치환, 보호된 시트 사전 확인. (잘못된 입력 검사 전에 새 시트가 만들어지는 문제는 1.4.13)
+- PowerPoint 닫힌 파일의 열기 암호: 사용자가 이미 띄운 PowerPoint로 열면 감시하지 않음(그 프로세스는 끝낼 수 없음). (DRM 인증 창 감시는 1.4.58)
+- DRM 문서를 reader 캐시(평문)에 등록하기: 회사 보안 정책 결정이 필요해 하지 않음 (1.4.58 B4 2부).
+- 엑셀: 열린 문서의 열 전체 범위(`A:A`)를 사용 범위로 자르기 (닫힌 파일·CSV는 1.4.5), 조건부 강조 `포함:`의 상대참조(활성 셀 기준), `--map` 연쇄 치환. (보호된 시트 사전 확인은 1.4.55) (잘못된 입력 검사 전에 새 시트가 만들어지는 문제는 1.4.13, 같은 이름 차트가 여러 시트에 있을 때 `[후보]`는 1.4.23)
 - 워드: 열린 문서의 자동 번호 제목(`ListFormat.ListString`)이 `outline`/`--section`에 나오지 않음(닫힌 파일과 번호 체계 다름), 목차(TOC) 안의 앵커 후보 구별, 머리글 안 글상자 치환. (`replace --find`만 준 경우는 1.4.10)
 - reader: HWP(바이너리) 개요 번호, PDF `find_tables` 성능(선이 있는 쪽만), 색인 저장 일괄화, BOM 없는 UTF-16 판별.
 - transfer relay 실패 시 넣은 빈 단락 정리.
@@ -1088,15 +1766,16 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
   `range autofit/border/freeze`(같은 칸 다시 고정), 같은 값으로 `write --overwrite`. (1.4.15에서 replace·slide move·notes·range unhide/unmerge/unfreeze/clear 등은 처리)
 
 ### 23차 점검에서 남긴 것 (1.4.32)
-- L1 배열 수식: `ArrayFormula`(`<f t="array" ref="C1:C3">`)는 첫 칸에만 `<f>`가 있어 나머지 칸(C2:C3)은 계산된 값이 없어도 수식 칸으로 세지 않음.
 - L2 성능: 범위를 생략한 닫힌 xlsx 읽기는 수식이 있는 시트 XML 전체를 한 번 더 해석함(30만 행 시트에서 수 초). 열린 값 읽기와 함께 한 번에 훑기.
-- 24차 확인 검사 LOW-4: 데이터(A1:C10)와 멀리 떨어진 계산 안 된 수식 칸 하나(Z200000 등)가 있으면 범위 없는 읽기가 그 칸까지 빈 행을 채워 돌려주고, `-r A:Z`는 "범위가 너무 큽니다"와 그 수식 칸을 포함하지 않는 `[추천]` 범위를 냄 (안전하게 멈추지만 안내가 부정확).
-- 24차 확인 검사 LOW-5: reader 색인이 수식 칸 확인 실패(MemoryError 등)를 캐시에 저장해, 파일이 바뀌거나 캐시를 지울 때까지 같은 파일 읽기가 계속 UNVERIFIED("확인하지 못함")로 나옴. 확인 실패는 캐시하지 않기.
 
 ### 1.4.37에서 남긴 것
-- range delete: 다른 칸의 수식이 지운 칸을 참조하면 `#REF!`가 되는데 미리 알리지 않음 (지울 칸의 값·수식만 셈).
-- range sort: 기준 4개 이상(Worksheet.Sort.SortFields), 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림.
-- read --where: OR 조건, 값 안의 `;`. 실기(회사 PC)에서 outlook `--days`/`--since`의 Restrict 날짜 형식 확인.
+- range sort: 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림. (기준 4개 이상은 1.4.46)
+- 실기(회사 PC)에서 outlook `--days`/`--since`의 Restrict 날짜 형식 확인.
+
+### 1.4.67에서 남긴 것 (check 판단필요 과다)
+- `Output voltage 5.0 V Typ., 4.75 V Min., 5.25 V Max.`(일치가 맞음), `정격 전압은 5 V이며 변동은 ±5 % 이내`(`변동은`이 한계 낱말로 안 잡힘), 기준 값 없는 `오프셋 전압 ±10 mV`
+  (2차 말뭉치의 `허용 오차 ±0.1 mm`는 판단필요 기대라 함께 정해야 함), `리플 50 mVp-p`(괄호 없는 꼬리), `습도 45~85 %RH`, `기울기 ±0.5°`(각도 단위 없음), `approx.`,
+  `각각` 나열(`입력 전압과 출력 전압은 각각 220 V, 110 V`)은 아직 판단필요.
 
 ### 확인 필요
 - Windows 실기 검증: 회사 PC(Office 16)에서 1.4.1 실기 러너 71/71 통과. 남은 것: 1.4.5 쓰기 변경(write 덮어쓰기 확인, transfer 글자 유지)의 실기 확인, 눈 확인 항목.
@@ -1107,13 +1786,11 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 ### 저장소 지침 반영 (AGENTS.md, 2026-10-28)
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현. 우선순위 순.
 - [ ] `recovered` 나머지: transfer 방식 대체, 오래된 스냅샷 정리 (잠금·기존 파일 새 이름 저장, 낡은 캐시는 1.4.0)
-- [ ] `require_lib()`: openpyxl(excel.py:215, reader.py:382), python-docx(reader.py:291, office.py:465), python-pptx(reader.py:329,346) 실패 시 STOP_RETRY + `python -m pip install ...` (회귀 테스트)
 - [ ] `remove_tree` 추가, `os.remove`(_office.py:314, _runtime.py:311, word.py:593)에 적용. (1.4.0: undo 복원 복사는 `retry_fs`, retry_fs는 일시적 오류만 재시도 완료)
 - [ ] COM 내보내기(excel.py, word.py, ppt.py export)의 잠금 대비 `save_with_lock_fallback`. (1.4.0: 기존 출력 파일은 새 이름 저장 + `recovered` 완료)
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)
 - [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (excel range delete·insert는 1.4.37) (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
 - [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위 (office windows·info --all·chart list·undo --list는 1.4.26, outlook list/search·ppt slide list는 1.4.27)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
-- [ ] next_commands: excel write의 차트 명령 자리표시 `--title 차트` 제거, word·ppt의 transfer 명령에 `--from-target`
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
 - [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`

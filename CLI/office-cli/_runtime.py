@@ -23,14 +23,14 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.38"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.73"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def engenius_home() -> Optional[str]:
     """도구 파일이 En-Genius 트레이의 임시 폴더(%TEMP%\\engenius-skill\\<id>)에서 실행 중이면 사용자 데이터를 둘 고정 폴더.
     트레이는 그 폴더를 실행이 끝나면 지우므로 도구 폴더 아래(data, cache, config.json)가 남지 않는다.
-    배포 스킬(docs/engenius)은 C:\\CLI의 도구를 실행하므로 해당 없음: OpenCode와 같은 data, cache를 쓴다 (1.4.35)."""
+    배포 스킬(docs/engenius)은 C:\\CLI의 도구를 실행하므로 해당 없음: OpenCode와 같은 data, cache를 쓴다."""
     if not os.environ.get("ENGENIUS_OUT") or "engenius-skill" not in TOOL_DIR.replace("\\", "/").lower().split("/"):
         return None
     home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
@@ -146,6 +146,44 @@ class UserDecisionError(InputError):
         super().__init__(message + (f" [후보] {', '.join(cands)}" if cands else ""), candidates=cands, no_fallback=True,
                          log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
         self.directive = directive
+
+
+ELEVATED_HINT = ("이 도구가 관리자 권한으로 실행 중이라, 일반 권한으로 연 Office 문서와 창을 볼 수 없습니다 "
+                 "(Windows 권한 수준이 다르면 COM 연결이 막힘). 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행하세요.")
+
+
+def is_elevated() -> bool:
+    """Windows에서 관리자 권한(높은 무결성 수준)으로 실행 중인지. 판단하지 못하면 False."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def elevation_hint() -> str:
+    """'열린 문서가 없음'을 알릴 때 붙일 안내. 관리자 권한으로 실행 중이면 ELEVATED_HINT, 아니면 빈 글."""
+    return ELEVATED_HINT if is_elevated() else ""
+
+
+class MissingLibraryError(InputError):
+    """필요한 파이썬 라이브러리가 설치되어 있지 않음 (R5). LLM은 직접 설치하지 않고 install_command를 사용자에게 전달합니다."""
+
+    def __init__(self, pip_name: str, feature: str):
+        super().__init__(f"{feature}에 필요한 {pip_name}이(가) 설치되어 있지 않습니다. 설치 명령: python -m pip install {pip_name}")
+        self.pip_name = pip_name
+        self.feature = feature
+
+
+def require_lib(module: str, pip_name: str, feature: str) -> Any:
+    """module을 불러옵니다. 없으면 MissingLibraryError (STOP_RETRY, missing_library, install_command)."""
+    import importlib
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        raise MissingLibraryError(pip_name, feature) from None
 
 
 class OfficeBusyError(RuntimeError):
@@ -350,8 +388,14 @@ def _error_payload(exc: BaseException, tool: str = "", command: str = "") -> Dic
         return base
 
     msg = str(exc) or type(exc).__name__
+    if isinstance(exc, MissingLibraryError):
+        base.update(error_type="missing_library", message=msg, missing_package=exc.pip_name,
+                    install_command=f"python -m pip install {exc.pip_name}",
+                    agent_directive=f"STOP_RETRY: {exc.feature}에 필요한 {exc.pip_name}이(가) 설치되어 있지 않습니다. "
+                                    "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요.")
+        return base
     if isinstance(exc, UserDecisionError):
-        base.update(error_type="needs_user_decision", message=msg, agent_directive=f"STOP_RETRY: {exc.directive}")
+        base.update(error_type=exc.error_type or "needs_user_decision", message=msg, agent_directive=f"STOP_RETRY: {exc.directive}")
         if exc.candidates:
             base["candidates"] = exc.candidates
         return base
@@ -577,12 +621,82 @@ def _exc_log_message(exc: BaseException, payload: Dict[str, Any]) -> Optional[st
     return None if lm is None or payload.get("error_type") == "internal" else str(lm)
 
 
+# ------------------------------------------------------------------------------
+# R10. 긴 작업은 나눠서 진행 (CONTINUE:). 에이전트의 명령 실행 도구는 120초에 명령을 끊고, 끊기면 결과 JSON이 없어
+# LLM이 같은 명령을 반복함. 오래 걸리는 반복(문서 등록 등)은 한 단계를 끝낼 때마다 결과를 저장하고, 다음 단계 전에
+# 시계를 봄(check_time). 제한을 넘을 것 같으면 Unfinished로 멈추고 run_cli가 CONTINUE 결과를 냄(같은 명령 = 이어서).
+# 이름과 키는 ml-kit(ml_predict.py PART C)과 같음.
+# ------------------------------------------------------------------------------
+TIME_LIMIT_ENV = "OFFICE_CLI_TIME_LIMIT"     # 명령 하나의 초. 0 = 제한 없음 (사람이 돌리는 러너와 테스트)
+DEFAULT_TIME_LIMIT = 100.0                   # OpenCode 120초보다 짧게 (JSON과 저장할 여유)
+TIME_RESERVE = 30.0                          # 마지막 단계 뒤(검색, 결과 저장)에 남겨 둘 시간
+RUN_START = time.monotonic()                 # run_cli가 명령마다 다시 잼
+
+
+def time_limit() -> float:
+    raw = os.environ.get(TIME_LIMIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TIME_LIMIT
+    try:
+        v = float(raw)
+    except ValueError:
+        return DEFAULT_TIME_LIMIT
+    return float("inf") if v <= 0 else v
+
+
+class Unfinished(BaseException):
+    """시간 제한 때문에 긴 작업을 멈춤 (끝낸 부분은 저장됨). 중간의 'except Exception'이 삼키지 않도록 BaseException.
+    run_cli가 status ok, continue: true, 같은 명령의 next_commands로 바꿉니다."""
+
+    def __init__(self, progress: str):
+        super().__init__(progress)
+        self.progress = progress
+
+
+def check_time(next_step_seconds: float, progress: str) -> None:
+    """다음 느린 단계(예상 next_step_seconds초)가 제한에서 TIME_RESERVE를 뺀 시각을 넘을 것 같으면 Unfinished.
+    부르는 쪽은 끝낸 단계를 모두 저장해 두어야 합니다 (다음 실행이 다시 씀). 실행마다 최소 한 단계는 한 뒤에 부릅니다."""
+    limit = time_limit()
+    if limit == float("inf"):
+        return
+    if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
+        raise Unfinished(progress)
+
+
+def time_up(reserve: float = TIME_RESERVE) -> bool:
+    """명령 시간 제한에서 reserve초를 뺀 시각을 넘었는지. 이어서 할 수 없는 반복(check의 행 대조)이 남은 일을
+    '못 함'으로 표시하고 결과 JSON을 내려고 씀 (이어서 할 수 있는 일은 check_time -> CONTINUE)."""
+    limit = time_limit()
+    return limit != float("inf") and time.monotonic() - RUN_START > limit - reserve
+
+
+def unfinished_payload(exc: "Unfinished", tool: str, command: str) -> Dict[str, Any]:
+    argv = list(CURRENT_ARGV or [])
+    nexts = [next_command(f"{tool}.py", argv, "같은 명령으로 이어서 진행 (끝낸 부분은 저장됨, 묻지 않고 그대로 실행)")] if argv else []
+    payload: Dict[str, Any] = {
+        "status": "ok", "tool": tool, "command": command, "preview": f"진행 중: {exc.progress}",
+        "verified": False, "continue": True, "progress": exc.progress, "next_commands": nexts,
+        "agent_directive": ("CONTINUE: 아직 끝나지 않았습니다. 명령 시간 제한 때문에 나눠서 진행하며, 지금까지 한 일은 저장되어 있습니다. "
+                            + ("next_commands[0]의 command를" if nexts else "방금 실행한 명령을")
+                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). 끝나면 VERIFIED 결과가 나옵니다."),
+    }
+    _attach_recovered(payload)
+    return payload
+
+
 def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> None:
     """도구 본문을 실행하고, 어떤 경우에도 stdout 1줄 JSON과 종료 코드(0/1/130)를 보장합니다.
-    실패(exit 1)는 <데이터 폴더>/logs/errors.txt에 자동 기록합니다 (사용자 중단 130과 성공은 기록하지 않음)."""
+    실패(exit 1)는 <데이터 폴더>/logs/errors.txt에 자동 기록합니다 (사용자 중단 130과 성공은 기록하지 않음).
+    시간 제한으로 멈춘 긴 작업(Unfinished)은 CONTINUE 결과(exit 0, 오류 로그 없음, R10)."""
+    global RUN_START
+    RUN_START = time.monotonic()
     setup_console()
     try:
         result = execute()
+    except Unfinished as u:
+        log("STATUS", f"시간 제한으로 여기서 멈춤 (저장됨, 같은 명령으로 이어서): {u.progress}")
+        emit_json(unfinished_payload(u, tool, command))
+        sys.exit(0)
     except KeyboardInterrupt as e:
         log("ERROR", "실행 중단 (KeyboardInterrupt)")
         emit_json(error_payload(e, tool, command))
@@ -608,13 +722,34 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
     sys.exit(0 if result.get("status") == "ok" else 1)
 
 
-# 경량 LLM이 자주 지어내는 명령·옵션 (회사 PC 오류 로그). 실제 이름으로 안내합니다.
+# 경량 LLM이 자주 지어내는 명령·옵션 (실사용 오류 로그에서 본 것). 실제 이름으로 안내합니다.
 COMMAND_ALIASES = {"excel": {"list": "info", "sheets": "info"}, "word": {"list": "info", "toc": "outline"},
                    "ppt": {"list": "info"}, "office": {"list": "windows", "redo": "undo"},
                    "outlook": {"attachment": "attachments", "attach": "attachments", "download": "attachments"}}
 OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--target"], "--path": ["--file", "--target"],
                    "--text": ["--value", "--file"],  # 엑셀 write에 워드식 --text를 쓰면 --target(철자 비슷)이 아니라 --value
-                   "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"]}
+                   "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"],
+                   "--cell": ["--range"]}
+# 다른 파일의 명령이 맞는 경우: [추천]으로 값만 바꾸면 또 틀리므로 맞는 명령을 안내만 함
+_WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --text "내용", PPT는 ppt.py write --text "내용", '
+               '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
+OTHER_COMMAND = {("office", "write"): "office.py에는 write가 없습니다. " + _WRITE_TEXT,
+                 ("office", "transfer", "--text"): "transfer는 엑셀 차트·범위와 문서의 표를 옮기는 명령이라 글은 받지 않습니다. " + _WRITE_TEXT}
+# 1.4.72에서 없앤 outlook --send (1.4.73): 초안을 만든 뒤 사용자 확인을 받아 send로 보냄. {cmd} = --send를 뺀 같은 명령
+_NO_SEND = ("--send는 없습니다. 초안을 만든 뒤 사용자 확인을 받아 send를 실행합니다(결과의 confirm_commands). "
+            "[추천] {cmd}")
+OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply", "forward")})
+
+
+# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
+SKILL_OF_TOOL = {"excel": "office-excel", "word": "office-doc", "ppt": "office-doc", "office": "office-doc",
+                 "outlook": "office-mail", "reader": "office-spec"}
+
+
+def skill_file(tool: str) -> str:
+    """도구의 스킬 파일 경로. 모르는 도구(테스트용 등)는 office-doc."""
+    name = SKILL_OF_TOOL.get(tool, "office-doc")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills", name, "SKILL.md")
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -638,12 +773,13 @@ class JsonArgumentParser(argparse.ArgumentParser):
         """R7: 도움말 텍스트는 stderr로, stdout에는 JSON 1줄 (argparse가 이어서 exit 0)."""
         super().print_help(sys.stderr)
         emit_json({"status": "ok", "tool": self.tool_name, "command": "help", "verified": True,
-                   "skill_file": os.path.join(os.path.dirname(os.path.abspath(__file__)), "SKILL.md"),
-                   "agent_directive": "VERIFIED: 도움말을 stderr에 출력했습니다. SKILL.md의 명령 템플릿을 그대로 사용하세요. "
+                   "skill_file": skill_file(self.tool_name),
+                   "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} "
+                                      "스킬(SKILL.md)의 명령 템플릿을 그대로 사용하세요. "
                                       "도구 코드(.py)는 읽지 마세요. 방법을 모르겠으면 사용자에게 물어보세요."})
 
     def _hint(self, message: str) -> str:
-        """흔한 잘못(없는 명령, 다른 명령의 옵션, 따옴표 없는 경로)에 [추천]을 붙입니다 (회사 PC 오류 로그)."""
+        """흔한 잘못(없는 명령, 다른 명령의 옵션, 따옴표 없는 경로)에 [추천]을 붙입니다."""
         import difflib
         top = self if self.prog.count(" ") == 0 else None
         subs = {}
@@ -653,6 +789,9 @@ class JsonArgumentParser(argparse.ArgumentParser):
                     subs = act.choices
         m = re.search(r"invalid choice: '([^']+)'", message)
         if m:
+            other = OTHER_COMMAND.get((self.tool_name, m.group(1).lower()))
+            if other:
+                return " " + other
             choices = list(subs) or re.findall(r"'([^']+)'", message.split("choose from", 1)[-1])
             alias = COMMAND_ALIASES.get(self.tool_name, {}).get(m.group(1).lower())
             best = alias or next(iter(difflib.get_close_matches(m.group(1), choices, n=1, cutoff=0.6)), None)
@@ -665,6 +804,13 @@ class JsonArgumentParser(argparse.ArgumentParser):
         opts = [o for a in (sub._actions if sub else []) for o in a.option_strings if o.startswith("--")]
         extra = m.group(1).split()
         flags = [x for x in extra if x.startswith("--")]
+        for f in flags:
+            other = OTHER_COMMAND.get((self.tool_name, cmd, f))
+            if other:
+                if "{cmd}" in other:      # 그 옵션만 뺀 같은 전체 명령
+                    rest = [a for a in (CURRENT_ARGV or []) if a != f]
+                    other = other.replace("{cmd}", next_command(f"{self.tool_name}.py", rest, "")["command"])
+                return " " + other
         for f in flags:
             near = [o for o in OPTION_SYNONYMS.get(f, []) if o in opts] or difflib.get_close_matches(f, opts, n=1, cutoff=0.7)
             if near:
@@ -683,7 +829,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             "error_type": "input",
             "message": f"CLI 인자 오류: {message}." + self._hint(message),
             "agent_directive": "STOP_RETRY: CLI 인자가 잘못되었습니다. message에 [추천]이 있으면 그 부분만 바꿔 1번만 다시 실행하고, "
-                               "없으면 SKILL.md의 명령 형식을 확인해 사용자에게 보고하세요.",
+                               f"없으면 {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} 스킬(SKILL.md)의 명령 형식을 확인해 사용자에게 보고하세요.",
         }
         write_error_log(self.tool_name, None, payload)
         emit_json(payload)
@@ -893,21 +1039,55 @@ def read_text_file(path: str) -> str:
     raise InputError(f"텍스트 파일 인코딩 인식 실패 (UTF-8/UTF-16/CP949 아님): {path}")
 
 
+def _sniff_delimiter(text: str) -> str:
+    sample = text[:4096]
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return "\t" if "\t" in sample and "," not in sample else ","
+
+
 def read_csv_rows(path: str, delimiter: Optional[str] = None) -> List[List[str]]:
     """CSV/TSV를 2차원 문자열 리스트로 읽습니다 (delimiter를 주지 않으면 구분자 자동 판별)."""
     text = read_text_file(path)
-    if delimiter:
-        return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
-    sample = text[:4096]
-    delimiter = ","
+    return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter or _sniff_delimiter(text))]
+
+
+def check_two_columns(path: str, rows: Sequence[Sequence[Any]], start: int, what: str, cols: str, done: str) -> None:
+    """2열 표 파일(칸, 값 / 칸, 메모 / 자리, 값)에서 셋째 열 이후에 비지 않은 칸이 있으면 InputError (쓰기 전에).
+    값의 쉼표(구분자)가 열을 나눈 경우라 둘째 열만 쓰면 값 뒷부분이 사라짐 (예: C7,1,500 -> 1).
+    rows는 머리글을 뺀 행, start는 rows[0]의 파일 줄 번호. 고친 줄은 둘째 열 이후를 구분자로 다시 이어 큰따옴표로 감쌈.
+    오류 로그에는 줄 번호만 (값은 문서 내용)."""
+    def cell(v: Any) -> str:
+        return "" if v is None else str(v)
+    bad = [(n, list(r)) for n, r in enumerate(rows, start) if any(cell(v).strip() for v in list(r)[2:])]
+    if not bad:
+        return
+    ext = os.path.splitext(path)[1].lower()
+    lines = ", ".join(str(n) for n, _ in bad[:10]) + (" ..." if len(bad) > 10 else "")
+    head = f"{what}의 {lines}번째 줄에 열이 3개 이상이라 아무것도 {done}. 열은 {cols} 두 개입니다."
+    if ext not in (".csv", ".tsv"):
+        raise InputError(head + " 값에 | 가 있으면 \\| 로 쓰고 파일을 저장한 뒤 다시 실행하세요.", log_message=head)
     try:
-        delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
-    except csv.Error:
-        if "\t" in sample and "," not in sample:
-            delimiter = "\t"
-    return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+        delim = _sniff_delimiter(read_text_file(path))
+    except Exception:
+        delim = "\t" if ext == ".tsv" else ","
+    shown = "쉼표" if delim == "," else "탭" if delim == "\t" else f"'{delim}'"
+
+    def fixed(r: List[Any]) -> str:
+        vals = [cell(v) for v in r]
+        while len(vals) > 2 and not vals[-1].strip():
+            vals.pop()
+        buf = io.StringIO()
+        csv.writer(buf, delimiter=delim, quoting=csv.QUOTE_MINIMAL, lineterminator="").writerow([vals[0], delim.join(vals[1:])])
+        return buf.getvalue()
+    hint = f" 값에 {shown}가 있으면 값을 큰따옴표로 감싸세요. 그 줄을 고쳐 파일을 저장한 뒤 다시 실행하세요."
+    # [추천]은 쓰지 않음: '[추천] C7,"1,500"'을 경량 LLM이 인자 값으로 읽어 명령에 넣었음 (고친 줄은 파일 내용)
+    tail = " 고친 줄: " + " / ".join(f"{n}번째 줄 {fixed(r)}" for n, r in bad[:5])
+    raise InputError(head + hint + tail, log_message=head + hint + f" (고친 줄 {DOC_OMITTED})")
 
 
+UNCOMPUTED_POSITIONS = 100_000   # positions=True일 때 담는 칸 위치 수 상한 (넘으면 멀리 떨어진 칸을 가려내지 않음)
 UNCOMPUTED_SHOW = 20       # 계산된 값이 없는 수식 칸을 결과에 담는 개수 상한
 _XLSX_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _XLSX_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -923,6 +1103,24 @@ def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
     for ch in m.group(1).upper():
         col = col * 26 + ord(ch) - 64
     return int(m.group(2)), col
+
+
+def _col_letters(n: int) -> str:
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def _array_box(ref: str) -> Optional[Tuple[int, int, int, int]]:
+    """배열 수식의 ref("C1:C3" 또는 "C1") -> (행1, 열1, 행2, 열2). 읽지 못하면 None."""
+    parts = ref.split(":")
+    a = _cell_rc(parts[0])
+    b = _cell_rc(parts[-1])
+    if a is None or b is None or len(parts) > 2:
+        return None
+    return min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])
 
 
 def _full_calc_on_load(wb_root: Any) -> bool:
@@ -945,7 +1143,7 @@ def xlsx_full_calc_on_load(path: str) -> bool:
 
 def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                              area: Optional[Tuple[int, int, int, int]] = None,
-                             limit: int = UNCOMPUTED_SHOW) -> Dict[str, Any]:
+                             limit: int = UNCOMPUTED_SHOW, positions: bool = False) -> Dict[str, Any]:
     """계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 한 번도 열지 않은 파일).
     openpyxl data_only로 읽으면 이런 칸은 빈 칸(None)이라 값이 없는 것처럼 보입니다.
     workbook.xml에 fullCalcOnLoad 표시가 있으면(xlsxwriter는 <v>0</v>을 씀) 모든 수식 칸을 계산되지 않은 칸으로 셉니다.
@@ -954,12 +1152,27 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
     (빈 글 결과(t="str")는 계산된 값).
     반환: {"count": 전체 수, "cells": ["시트!A3", ...] (앞 limit개), "sheets": {시트: 수},
     "bounds": [시작 행, 시작 열, 끝 행, 끝 열] (센 칸 전체를 감싸는 범위, 0개면 없음), "full_calc_on_load": True (표시가 있을 때만)}.
+    positions=True(시트 하나를 볼 때): "positions"(센 칸 (행, 열) 목록, UNCOMPUTED_POSITIONS개까지, 넘으면 "positions_truncated")와
+    "value_bounds"(값이 있는 칸(계산된 값이 없는 수식 칸 제외)을 감싸는 범위, 없으면 키 없음)도 줍니다 (멀리 떨어진 칸 가려내기용).
     읽지 못하면(MemoryError 포함) {"count": 0, "unknown": True, "error": 예외 이름}: 확인하지 못한 것이라 호출하는 쪽은 UNVERIFIED."""
     import posixpath
     import zipfile
     import xml.etree.ElementTree as ET
     result: Dict[str, Any] = {"count": 0, "cells": [], "sheets": {}}
     bounds: List[int] = []
+    vbounds: List[int] = []
+    pos: List[Tuple[int, int]] = []
+    pos_cut = False
+
+    def grow(box: List[int], r1: int, c1: int, r2: int, c2: int) -> List[int]:
+        return [r1, c1, r2, c2] if not box else [min(box[0], r1), min(box[1], c1), max(box[2], r2), max(box[3], c2)]
+
+    def keep_pos(rc: Tuple[int, int]) -> None:
+        nonlocal pos_cut
+        if len(pos) < UNCOMPUTED_POSITIONS:
+            pos.append(rc)
+        else:
+            pos_cut = True
     try:
         with zipfile.ZipFile(path) as z:
             names = set(z.namelist())
@@ -982,6 +1195,21 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                     continue
                 n = 0
                 q = f"'{title}'" if re.search(r"[\s!']", title) else title
+                arrays: List[List[Any]] = []        # 배열 수식 [r1, c1, r2, c2, 왼쪽 위 (행, 열), 만난 다른 칸 set]
+
+                def count(rc: Optional[Tuple[int, int]], ref: str) -> None:
+                    nonlocal n, bounds
+                    n += 1
+                    if len(result["cells"]) < limit:
+                        result["cells"].append(f"{q}!{ref}")
+                    if rc is not None:
+                        bounds = grow(bounds, rc[0], rc[1], rc[0], rc[1])
+                        if positions:
+                            keep_pos(rc)
+
+                def in_area(rc: Optional[Tuple[int, int]]) -> bool:
+                    return area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
+
                 for _, el in ET.iterparse(io.BytesIO(data), events=("end",)):
                     if el.tag == _XLSX_MAIN + "row":
                         r = el.get("r") or ""
@@ -991,19 +1219,61 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                         continue
                     if el.tag != _XLSX_MAIN + "c":
                         continue
-                    if el.find(_XLSX_MAIN + "f") is not None and (full or el.get("t") not in ("str", "inlineStr")):
-                        v = el.find(_XLSX_MAIN + "v")
-                        ref = el.get("r") or ""
-                        rc = _cell_rc(ref)
-                        inside = area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
-                        if (full or v is None or not (v.text or "")) and inside:
-                            n += 1
-                            if len(result["cells"]) < limit:
-                                result["cells"].append(f"{q}!{ref}")
-                            if rc is not None:
-                                bounds = [rc[0], rc[1], rc[0], rc[1]] if not bounds else [
-                                    min(bounds[0], rc[0]), min(bounds[1], rc[1]), max(bounds[2], rc[0]), max(bounds[3], rc[1])]
+                    f = el.find(_XLSX_MAIN + "f")
+                    v = el.find(_XLSX_MAIN + "v")
+                    ref = el.get("r") or ""
+                    rc = _cell_rc(ref)
+                    if f is not None and f.get("t") == "array" and rc is not None:
+                        box = _array_box(f.get("ref") or "")
+                        if box is not None and box != (rc[0], rc[1], rc[0], rc[1]):
+                            arrays.append([box[0], box[1], box[2], box[3], rc, set()])
+                    counted_before = n
+                    if f is not None and (full or el.get("t") not in ("str", "inlineStr")):
+                        if (full or v is None or not (v.text or "")) and in_area(rc):
+                            count(rc, ref)
+                    elif f is None and rc is not None and arrays:
+                        # 배열 수식의 다른 칸: 파일에는 <f> 없이 값만 있음 (계산된 값이 없으면 수식 칸으로 셈, 23차 L1)
+                        for a in arrays:
+                            if a[0] <= rc[0] <= a[2] and a[1] <= rc[1] <= a[3]:
+                                a[5].add(rc)
+                                computed = el.get("t") in ("str", "inlineStr") or (v is not None and (v.text or ""))
+                                if (full or not computed) and in_area(rc):
+                                    count(rc, ref)
+                                break
+                    if positions and rc is not None and n == counted_before and (
+                            (v is not None and (v.text or "")) or el.find(_XLSX_MAIN + "is") is not None):
+                        vbounds = grow(vbounds, rc[0], rc[1], rc[0], rc[1])
                     el.clear()
+                # 배열 수식의 다른 칸 중 파일에 아예 없는 칸 (openpyxl은 왼쪽 위 칸만 씀): 계산된 값이 없는 수식 칸
+                for r1, c1, r2, c2, anchor, seen in arrays:
+                    if area is not None:
+                        r1, c1, r2, c2 = max(r1, area[0]), max(c1, area[1]), min(r2, area[2]), min(c2, area[3])
+                    if r1 > r2 or c1 > c2:
+                        continue
+                    seen_in = sum(1 for x in seen if r1 <= x[0] <= r2 and c1 <= x[1] <= c2)
+                    anchor_in = 1 if (r1 <= anchor[0] <= r2 and c1 <= anchor[1] <= c2) else 0
+                    missing = (r2 - r1 + 1) * (c2 - c1 + 1) - seen_in - anchor_in
+                    if missing <= 0:
+                        continue
+                    shown = 0
+                    for rr in range(r1, r2 + 1):
+                        if shown >= missing or len(result["cells"]) >= limit:
+                            break
+                        for cc in range(c1, c2 + 1):
+                            if (rr, cc) in seen or (rr, cc) == anchor:
+                                continue
+                            if shown >= missing or len(result["cells"]) >= limit:
+                                break
+                            result["cells"].append(f"{q}!{_col_letters(cc)}{rr}")
+                            shown += 1
+                    n += missing
+                    bounds = grow(bounds, r1, c1, r2, c2)
+                    if positions:
+                        if missing > UNCOMPUTED_POSITIONS - len(pos):
+                            pos_cut = True
+                        else:
+                            pos.extend((rr, cc) for rr in range(r1, r2 + 1) for cc in range(c1, c2 + 1)
+                                       if (rr, cc) not in seen and (rr, cc) != anchor)
                 if n:
                     result["count"] += n
                     result["sheets"][title] = n
@@ -1012,6 +1282,12 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
         return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": type(e).__name__}
     if bounds:
         result["bounds"] = bounds
+    if positions:
+        result["positions"] = pos
+        if pos_cut:
+            result["positions_truncated"] = True
+        if vbounds:
+            result["value_bounds"] = vbounds
     return result
 
 
@@ -1064,8 +1340,9 @@ def _transient_fs_error(e: OSError) -> bool:
     return isinstance(e, PermissionError) or getattr(e, "winerror", None) in (5, 32, 33)
 
 
-def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5) -> Any:
+def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5, deadline: Optional[float] = None) -> Any:
     """백신/동기화 프로그램의 일시적 잠금에 대비해 파일 작업을 재시도합니다.
+    deadline(time.monotonic() 기준 시각)을 주면 그 시각을 넘겨 기다리지 않습니다 (잠금을 쥔 채 오래 기다리지 않게).
     한도를 넘기면 오류 로그의 '복구 시도:' 줄에 남기고 마지막 예외를 올립니다."""
     last: Optional[BaseException] = None
     for i in range(attempts):
@@ -1075,20 +1352,26 @@ def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5) -> An
             if not _transient_fs_error(e):
                 raise                       # 없는 파일, 디스크 가득 참 등은 기다려도 소용없음
             last = e
-            time.sleep(delay * (i + 1))
+            wait = delay * (i + 1)
+            if deadline is not None:
+                wait = min(wait, deadline - time.monotonic())
+                if wait <= 0:
+                    attempts = i + 1
+                    break
+            time.sleep(wait)
     assert last is not None
     name = os.path.basename(str(getattr(last, "filename", "") or ""))
     record_recovery_attempt(f"파일 작업 {name} {attempts}회 재시도 실패 ({type(last).__name__})".replace("  ", " "))
     raise last
 
 
-def safe_write_text(path: str, text: str, encoding: str = "utf-8") -> None:
-    """임시 파일에 쓴 뒤 교체해, 쓰다가 중단돼도 기존 파일이 깨지지 않게 합니다."""
+def safe_write_text(path: str, text: str, encoding: str = "utf-8", deadline: Optional[float] = None) -> None:
+    """임시 파일에 쓴 뒤 교체해, 쓰다가 중단돼도 기존 파일이 깨지지 않게 합니다. deadline은 retry_fs와 같음."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = f"{path}.tmp_{os.getpid()}"
     with open(tmp, "w", encoding=encoding, newline="") as f:
         f.write(text)
-    retry_fs(lambda: os.replace(tmp, path))
+    retry_fs(lambda: os.replace(tmp, path), deadline=deadline)
 
 
 _STAMP_RE = re.compile(r"_\d{8}_\d{6}$")

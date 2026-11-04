@@ -10,8 +10,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   호환을 위한 코드(옛 인자·키 별칭, 이전 형식 모델·파일을 읽는 대체 경로)를 새로 넣지 않는다.
 
 ## 폴더 구조
-- `CLI/<tool>/`: 사용자 PC의 `C:\CLI`로 그대로 복사되는 폴더. **실행에 필요한 .py와 `SKILL.md`만** 둔다.
-  런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
+- `CLI/<tool>/`: 사용자 PC의 `C:\CLI`로 그대로 복사되는 폴더. **실행에 필요한 .py와 스킬 파일(`SKILL.md`)만** 둔다.
+  스킬은 도구 폴더 바로 아래 `SKILL.md` 하나(ml-kit) 또는 작업별 `skills/<스킬 이름>/SKILL.md`(office-cli: `office-excel`,
+  `office-doc`, `office-mail`, `office-spec`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
 - `CLI-dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
   `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
   `CLI-dev`의 테스트·러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험한다.
@@ -132,5 +133,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 3. 버그 수정에는 회귀 테스트 추가. 동작이 바뀌면 `SKILL.md`, `README.md`, `CHANGELOG.md` 갱신.
 4. 남은 할 일은 각 도구 `CHANGELOG.md`(`CLI-dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
 5. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (상세는 README.md).
-6. 스킬은 OpenCode 형식: 도구 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`), frontmatter는 name/description/license/compatibility/metadata만.
-   보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다.
+6. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/SKILL.md`는 `ml-kit`,
+   `CLI/office-cli/skills/office-excel/SKILL.md`는 `office-excel`), frontmatter는 name/description/license/compatibility/metadata만.
+   보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `CLI-dev/apply_skills.py`
+   (설치·옛 폴더 정리)와 전역 지침 `CLI-dev/opencode/AGENTS.md` 3장 표를 함께 고친다.

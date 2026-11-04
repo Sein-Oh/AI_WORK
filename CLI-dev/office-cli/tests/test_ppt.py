@@ -253,6 +253,9 @@ def test_read_closed_pptx_uses_python_pptx(tmp_path, capsys, monkeypatch):
     code, out = run_ppt(capsys, "read", "--target", str(p))
     assert code == 0 and out["slides"][0]["title"] == "제목"
     assert not calls
+    code, out = run_ppt(capsys, "read", "--target", str(p), "--save", str(tmp_path / "o.md"))   # 1.4.48: 읽은 문서에서 옮기기
+    transfer = [c["command"] for c in out["next_commands"] if "transfer" in c["command"]][0]
+    assert "--from-target" in transfer and str(p) in transfer, transfer
 
 
 def test_export_pdf_passes_print_range_none(pp, capsys):

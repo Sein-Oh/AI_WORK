@@ -389,6 +389,7 @@ def relay_env(chart_env, monkeypatch):
     monkeypatch.setattr(excel, "find_chart", lambda t, name, sheet=None: (None, chart))
     monkeypatch.setattr(word, "_insert_position", lambda doc, anchor, pos, occurrence=None: (0, "end"))
     monkeypatch.setattr(office, "relay_chart", _real_relay)
+    monkeypatch.setattr(office, "method_order", lambda kind: ["relay"])     # --probe가 relay만 된다고 저장한 PC
     monkeypatch.setattr(office.time, "sleep", lambda s: None)
     prs, wdoc = _prs(2), _WordDoc()
     log["prs"] = prs
@@ -506,9 +507,14 @@ def test_is_plain_png_detects_encrypted(tmp_path):
 
 def test_method_order_uses_probe_result(monkeypatch):
     monkeypatch.setattr(rt, "load_config", lambda: {"transfer_method": {"ppt": ["relay"]}})
-    assert office.method_order("ppt", None) == ["relay", "export", "redraw"]
-    assert office.method_order("word", None) == ["export", "redraw", "relay"]
-    assert office.method_order("ppt", "redraw") == ["redraw"]
+    assert office.method_order("ppt") == ["relay", "export", "redraw"]
+    assert office.method_order("word") == ["export", "redraw", "relay"]
+
+
+def test_transfer_method_option_removed(capsys):
+    """사용자 결정(1.4.52): --method 없음. 방식은 자동 순서(--probe가 저장한 순서)만."""
+    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "word", "--method", "relay")
+    assert code == 2 and "--method" in out["message"], out
 
 
 def test_chart_transfer_falls_back_from_encrypted_export_to_redraw(chart_env, capsys):
@@ -942,9 +948,10 @@ def test_relay_resolves_target_before_clipboard(chart_env, capsys, monkeypatch):
     import excel
     monkeypatch.setattr(excel, "find_chart", lambda t, name, sheet=None: (None, chart))
     monkeypatch.setattr(office, "relay_chart", _real_relay)
+    monkeypatch.setattr(office, "method_order", lambda kind: ["relay"])
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "ZQX_보고서.docx", "path": "", "app": None, "doc": None}])
     code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word",
-                           "--to-target", "zqx 보고서.docx", "--method", "relay")
+                           "--to-target", "zqx 보고서.docx")
     assert code == 1 and out["message"].endswith("[추천] ZQX_보고서.docx"), out
     assert copied == []                                   # 사용자의 클립보드를 덮어쓰지 않음
 
@@ -1025,7 +1032,7 @@ def test_guard_chart_internal_error_text_not_logged(chart_env, capsys, monkeypat
 
 @pytest.mark.parametrize("target", [None, "file"])
 def test_relay_ppt_bad_slide_before_clipboard(relay_env, capsys, tmp_path, target):
-    argv = ["transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "9", "--method", "relay"]
+    argv = ["transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "9"]
     if target == "file":
         p = tmp_path / "deck.pptx"
         p.write_bytes(b"x")
@@ -1036,7 +1043,7 @@ def test_relay_ppt_bad_slide_before_clipboard(relay_env, capsys, tmp_path, targe
 
 
 def test_relay_ppt_ok_after_slide_check(relay_env, capsys):
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "2", "--method", "relay")
+    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "2")
     assert code == 0 and out["results"]["ppt"]["method"] == "relay", out
     assert len(relay_env["copied"]) == 1 and relay_env["dispatch"] == ["Word.Application"]
     assert relay_env["prs"].Slides(2).Shapes.Count == 1 and relay_env["opened"] == [("ppt", "active")]
@@ -1050,7 +1057,7 @@ def test_relay_ppt_ok_after_slide_check(relay_env, capsys):
 @pytest.mark.parametrize("kind", ["word", "ppt"])
 def test_relay_empty_target_is_active(relay_env, capsys, kind):
     slide = ["--slide", "1"] if kind == "ppt" else []
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", kind, "--to-target", "", "--method", "relay",
+    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", kind, "--to-target", "",
                            *slide)
     assert code == 0 and out["results"][kind]["method"] == "relay", out["message"]
     assert "KeyError" not in json.dumps(out, ensure_ascii=False)
@@ -1798,6 +1805,74 @@ def test_no_open_document_asks_for_the_path(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 관리자 권한 실행 (1.4.40): 일반 권한으로 연 문서가 보이지 않으므로 '문서 없음' 대신 권한 안내
+# ---------------------------------------------------------------------------
+
+
+def _elevated(monkeypatch, value=True):
+    monkeypatch.setattr(rt, "is_elevated", lambda: value)
+
+
+def test_is_elevated_false_off_windows():
+    if os.name != "nt":
+        assert rt.is_elevated() is False and rt.elevation_hint() == ""
+
+
+@pytest.mark.parametrize("tool,argv", [(excel, ("read",)), (excel, ("write", "--range", "A1", "--value", "1")),
+                                       (ppt, ("read",))])
+def test_no_open_document_when_elevated_explains_admin(monkeypatch, capsys, tool, argv):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch)
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 1 and out["error_type"] == "elevated_process", out
+    assert "관리자 권한" in out["message"] and "일반 PowerShell" in out["message"]
+    assert "문서가 없습니다" not in out["message"]                 # 없다고 단정하지 않음
+    assert out["agent_directive"].startswith("STOP_RETRY:") and "다시 실행하지" in out["agent_directive"]
+    assert "--target" not in out["agent_directive"]                # 경로를 줘도 해결되지 않음
+
+
+def test_no_open_document_not_elevated_unchanged(monkeypatch, capsys):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch, False)
+    code, out = run_main(excel, capsys, "read")
+    assert code == 1 and out["error_type"] == "needs_user_decision"
+    assert "열려 있는 Excel 문서가 없습니다" in out["message"] and "관리자" not in out["message"]
+
+
+@pytest.mark.parametrize("tool,argv", [(excel, ("info", "--all")), (office, ("windows",)),
+                                       (ppt, ("info", "--all"))])
+def test_empty_open_list_when_elevated_is_unverified(monkeypatch, capsys, tool, argv):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch)
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 0 and out["verified"] is False and out["count"] == 0, out
+    assert out["agent_directive"].startswith("UNVERIFIED:") and "관리자 권한" in out["agent_directive"]
+    _elevated(monkeypatch, False)
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED: 0건")
+
+
+def test_open_document_name_when_elevated_mentions_admin(monkeypatch, capsys):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch)
+    code, out = run_main(excel, capsys, "read", "--target", "보고.xlsx")
+    assert code == 1 and "관리자 권한" in out["message"], out
+
+
+def test_transfer_no_target_open_when_elevated(env, capsys, monkeypatch):
+    env["word"] = None
+    monkeypatch.setattr(off, "get_active", lambda kind: (_ for _ in ()).throw(off.no_open_doc(kind))
+                        if kind != "excel" else {"name": "a.xlsx", "path": "", "app": FakeXlApp(), "doc": None})
+    _elevated(monkeypatch)
+    code, out = run_office(capsys, *CHART)
+    assert code == 1 and out["error_type"] == "elevated_process" and "관리자 권한" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
 # 환경 변수·~ 가 든 전체 경로는 새 파일로 만들 수 있음, 전체 경로가 없으면 열린 문서를 [후보]로 주지 않음
 # ---------------------------------------------------------------------------
 
@@ -1875,3 +1950,216 @@ def test_chart_export_with_slash_in_name():
     assert os.path.dirname(path) == rt.get_work_dir() and "/4" not in os.path.basename(path)
     path = office.image_by_export(_Obj(), "chart_1/4분기 매출")     # 정리하지 않은 이름도 resolve_output_path가 정리
     assert os.path.dirname(path) == rt.get_work_dir()
+
+
+# ---------------------------------------------------------------------------
+# 닫힌 파일 열기 감시 (B4, 1.4.58): DRM 인증 창 등으로 멈추면 그 인스턴스만 끝내고 drm_or_dialog
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hung_open(fake_com, monkeypatch, tmp_path):
+    import threading
+    killed = []
+    gone = threading.Event()
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0.2")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakeExcelApp())
+    monkeypatch.setattr(off, "_instance_pid", lambda kind, app, before: 4242)
+
+    def kill(pid):
+        killed.append(pid)
+        gone.set()
+        return True
+    monkeypatch.setattr(off, "_kill_pid", kill)
+
+    def stuck(kind, app, path, readonly):
+        if not gone.wait(5):                       # 인증 창이 떠서 돌아오지 않는 Open (프로세스가 끝나면 COM 오류)
+            raise AssertionError("감시가 프로세스를 끝내지 않음")
+        raise Exception("com_error: RPC 서버를 사용할 수 없습니다")
+    monkeypatch.setattr(off, "_open_file", stuck)
+    path = tmp_path / "보안 문서.xls"
+    path.write_bytes(b"x")
+    return path, killed
+
+
+def test_open_watchdog_kills_only_its_instance(hung_open, capsys):
+    path, killed = hung_open
+    t0 = time.monotonic()
+    code, out = run_main(excel, capsys, "read", "--target", str(path), "--range", "A1:B2")
+    assert time.monotonic() - t0 < 4
+    assert code == 1 and out["error_type"] == "drm_or_dialog" and killed == [4242], out
+    assert out["agent_directive"].startswith("STOP_RETRY:")
+    assert "문서 보안 인증 창 등으로 열리지 않음" in out["message"] and "직접 열어 두면 열린 문서로 읽음" in out["message"]
+    cmd = out["next_commands"][0]["command"]
+    assert "excel.py" in cmd and "read" in cmd and "보안 문서.xls" in cmd and str(tmp_path_of(path)) not in cmd
+
+
+def tmp_path_of(path):
+    return os.path.dirname(str(path))
+
+
+def test_open_watchdog_quiet_when_open_is_fast(fake_com, monkeypatch, tmp_path):
+    killed = []
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "5")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakeExcelApp())
+    monkeypatch.setattr(off, "_instance_pid", lambda kind, app, before: 4242)
+    monkeypatch.setattr(off, "_kill_pid", lambda pid: killed.append(pid) or True)
+    path = tmp_path / "a.xls"
+    path.write_bytes(b"x")
+    with off.open_target("excel", str(path), readonly=True) as t:
+        assert t.doc is not None
+    assert killed == []
+
+
+@pytest.fixture
+def hung_doc_open(fake_com, monkeypatch, tmp_path):
+    """Word·PowerPoint 열기가 멈춤. 감시가 끝내면(kill) 또는 끝내지 않고 도구를 끝내면(_abandon) 멈춘 Open이 돌아옴."""
+    import threading
+    from fake_office import FakePptApp
+    rec = {"killed": [], "abandoned": []}
+    gone = threading.Event()
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0.2")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakePptApp() if kind == "ppt" else FakeExcelApp())
+    monkeypatch.setattr(off, "_office_pids", lambda kind: set())
+    monkeypatch.setattr(off, "_kill_pid", lambda pid: rec["killed"].append(pid) or gone.set() or True)
+    monkeypatch.setattr(off, "_abandon", lambda err, kind, tool: rec["abandoned"].append(str(err)) or gone.set())
+
+    def stuck(kind, app, path, readonly):
+        if not gone.wait(5):
+            raise AssertionError("감시가 아무것도 하지 않음")
+        raise Exception("com_error: RPC 서버를 사용할 수 없습니다")
+    monkeypatch.setattr(off, "_open_file", stuck)
+    return tmp_path, rec
+
+
+@pytest.mark.parametrize("kind,ext,running,pid,user_windows,kill", [
+    ("ppt", ".pptx", False, 4242, True, False),     # 감시 중 사용자가 같은 PowerPoint 프로세스에서 발표 파일을 엶 (1.4.63)
+    ("ppt", ".pptx", False, 4242, None, False),     # 창을 확인하지 못함
+    ("ppt", ".pptx", False, 4242, False, True),     # 도구가 띄웠고 사용자 문서 없음
+    ("ppt", ".pptx", True, None, False, False),     # 사용자가 이미 띄운 PowerPoint: 끝내지 않고 오류만 (전에는 감시 없음)
+    ("word", ".docx", False, 4242, True, False),
+    ("word", ".docx", False, 4242, False, True),
+    ("word", ".docx", False, None, False, False),   # 띄운 프로세스를 가려내지 못함
+])
+def test_open_watchdog_kills_only_without_user_documents(hung_doc_open, monkeypatch, kind, ext, running, pid,
+                                                         user_windows, kill):
+    tmp_path, rec = hung_doc_open
+    monkeypatch.setattr(off, "_ppt_running", lambda: running)
+    monkeypatch.setattr(off, "_instance_pid", lambda k, app, before: pid)
+    monkeypatch.setattr(off, "_user_windows", lambda k, p: user_windows)
+    path = tmp_path / f"보안 문서{ext}"
+    path.write_bytes(b"x")
+    with pytest.raises(Exception):
+        with off.open_target(kind, str(path), readonly=True, tool=kind):
+            pass
+    if kill:
+        assert rec["killed"] == [4242] and rec["abandoned"] == []
+    else:
+        assert rec["killed"] == [] and len(rec["abandoned"]) == 1
+        msg = rec["abandoned"][0]
+        assert "끝내지 않았습니다" in msg and "OFFICE_CLI_OPEN_TIMEOUT" in msg
+
+
+class _HiddenWordApp:
+    """도구가 띄운 숨은 Word. user_docs: 그 인스턴스에서 사용자가 연 문서 수. busy: Documents.Count가 실패하는 횟수."""
+
+    def __init__(self, user_docs, busy=0):
+        self.docs = [FakeWordDoc(f"C:\\u\\사용자{i}.docx", saved=False) for i in range(user_docs)]
+        self.quit_calls = []
+        self.busy = busy
+        app = self
+
+        class _Docs:
+            @property
+            def Count(self):
+                if app.busy:
+                    app.busy -= 1
+                    raise RuntimeError("Call was rejected by callee")      # COM 바쁨
+                return len(app.docs)
+
+            def Item(self, k):
+                return app.docs[k - 1]
+        self.Documents = _Docs()
+
+    def Quit(self, **k):
+        self.quit_calls.append(k)
+
+
+@pytest.mark.parametrize("user_docs,close_fails,busy,quits,note", [
+    (0, False, 0, True, ""),
+    (1, False, 0, False, "다른 문서 1개"),
+    (0, True, 0, True, ""),            # 자기 문서 닫기가 실패해 남아도 그 문서뿐이면 끔 (1.4.66)
+    (1, True, 0, False, "다른 문서 1개"),
+    (0, False, 2, True, ""),           # 문서 수 읽기가 COM 바쁨으로 실패하면 짧게 재시도 (1.4.66)
+    (0, False, 99, False, "읽지 못해"),
+])
+def test_word_hidden_instance_quits_only_when_no_documents_left(fake_com, monkeypatch, tmp_path, capsys,
+                                                                user_docs, close_fails, busy, quits, note):
+    # 회귀: 정상 종료 때 Quit(SaveChanges=0)을 무조건 불러 사용자가 그 숨은 Word에서 연 문서의 변경을 버림
+    app = _HiddenWordApp(user_docs)
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: app)
+    monkeypatch.setattr(off, "QUIT_COUNT_DELAY", 0)
+    path = tmp_path / "a.docx"
+
+    def opened(kind, a, p, readonly):
+        d = FakeWordDoc(str(path))
+
+        def close(SaveChanges=None):
+            if close_fails:
+                raise RuntimeError("닫기 실패")
+            a.docs.remove(d)
+        a.docs.append(d)
+        d.Close = close
+        return d
+    monkeypatch.setattr(off, "_open_file", opened)
+    path.write_bytes(b"PK")
+    with off.open_target("word", str(path), readonly=True):
+        app.busy = busy
+    assert bool(app.quit_calls) is quits
+    err = capsys.readouterr().err
+    assert ("[INFO]" in err and "끝내지 않고" in err) is (not quits)
+    assert note in err
+
+
+def test_open_watchdog_leaves_running_ppt_alerts(hung_doc_open, monkeypatch):
+    # 회귀: 사용자가 띄운 PowerPoint의 DisplayAlerts를 바꾼 채 _abandon(os._exit) -> 되돌리지 않았음
+    tmp_path, rec = hung_doc_open
+    sets = []
+
+    class _Watched(FakePptApp):
+        def __setattr__(self, key, value):
+            if key == "DisplayAlerts" and hasattr(self, "DisplayAlerts"):
+                sets.append(value)
+            super().__setattr__(key, value)
+    app = _Watched()
+    monkeypatch.setattr(off, "_new_instance", lambda kind: app)
+    monkeypatch.setattr(off, "_ppt_running", lambda: True)
+    monkeypatch.setattr(off, "_instance_pid", lambda k, a, before: None)
+    path = tmp_path / "보안.pptx"
+    path.write_bytes(b"x")
+    with pytest.raises(Exception):
+        with off.open_target("ppt", str(path), readonly=True, tool="ppt"):
+            pass
+    assert sets == [] and app.DisplayAlerts == 2 and not app.quit_called      # 바꾸지 않음 (abandon이면 되돌릴 수 없음)
+    assert "POWERPNT.EXE" in rec["abandoned"][0] and "이미 떠 있던" in rec["abandoned"][0]
+
+
+def test_open_watchdog_abandon_emits_one_json_line(monkeypatch, capsys, isolated_dirs):
+    exits = []
+    monkeypatch.setattr(os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["read", "--target", "a.pptx"])
+    err = off._drm_or_dialog_error("ppt", "C:\\x\\a.pptx", "ppt", 30, killed=False)
+    off._abandon(err, "ppt", "ppt")
+    out = capsys.readouterr().out.strip().splitlines()
+    assert exits == [1] and len(out) == 1
+    payload = json.loads(out[0])
+    assert payload["error_type"] == "drm_or_dialog" and payload["agent_directive"].startswith("STOP_RETRY:")
+    assert "열기가 오래 걸린 경우일 수도 있습니다" in payload["message"]
+
+
+def test_open_timeout_env(monkeypatch):
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "")
+    assert off.open_timeout() == 30.0
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0")
+    assert off.open_timeout() == 0.0

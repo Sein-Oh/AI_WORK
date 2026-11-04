@@ -25,7 +25,7 @@ AI_WORK/
 ├── archive/                   # 보관 도구 (수정·테스트 대상 아님, archive/README.md)
 │   ├── engenius/              # 사내 에이전트 En-Genius 스킬 패키지 (업데이트 중지, 필요할 때 다시 꺼냄)
 │   └── doc-classifier/        # 폴더 파일 목록화/분류 0.9.2 (다른 개발자 담당으로 보관)
-├── CLI/                       # 사내 PC C:\CLI로 그대로 복사. 실행 파일과 SKILL.md만
+├── CLI/                       # 사내 PC C:\CLI로 그대로 복사. 실행 파일과 스킬(SKILL.md)만
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
 │   │   ├── SKILL.md           # 에이전트용 스킬 (짧은 명령 템플릿 + 결과 처리 규칙)
 │   │   ├── ml_train.py        # 1단계: 학습
@@ -34,7 +34,7 @@ AI_WORK/
 │   │   ├── ml_map.py          # 표 보간·반대 찾기 (모델 불필요)
 │   │   └── ml_export.py       # 성능예측표 (엑셀 계산기, 학습 PC용)
 │   └── office-cli/            # Office(Excel/Word/PPT/Outlook) 자동화 + 문서 읽기/검색
-│       ├── SKILL.md           # 에이전트용 스킬
+│       ├── skills/<이름>/SKILL.md   # 작업별 스킬 4개: office-excel, office-doc, office-mail, office-spec
 │       ├── excel.py / word.py / ppt.py / outlook.py   # 앱별 진입점
 │       ├── reader.py          # PDF/HWP/Office 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
 │       ├── office.py          # 창 목록/전환, 앱 간 전달, 되돌리기
@@ -42,7 +42,7 @@ AI_WORK/
 └── CLI-dev/                   # 개발·실기 테스트용 (필요할 때만 C:\CLI-dev로, C:\CLI와 나란히)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)
-    ├── apply_skills.py        # SKILL.md 2개와 전역 지침을 OpenCode 설정 폴더로 복사 (반입 후 한 번)
+    ├── apply_skills.py        # 스킬(ml-kit, office 4개)과 전역 지침을 OpenCode 설정 폴더로 복사 (반입 후 한 번)
     ├── opencode/AGENTS.md     # OpenCode 전역 지침 원본 (%USERPROFILE%\.config\opencode\AGENTS.md로 복사)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
@@ -57,7 +57,7 @@ AI_WORK/
     │   └── tests/             # CLI 계약 + 회귀 테스트
     └── office-cli/
         ├── README.md / CHANGELOG.md / TEST_CHECKLIST.md / requirements.txt
-        ├── tools/             # run_win_tests.py, win_test_rules.py, office-cli-test/ (실기 테스트 스킬)
+        ├── tools/             # run_win_tests.py, win_test_rules.py, office-cli-test/ (실기 테스트 스킬), make_office_samples.py (Gemma 테스트 O 샘플)
         └── tests/             # 오프라인 테스트 (가짜 COM + 실제 샘플 파일)
 ```
 
@@ -76,5 +76,5 @@ python -m pytest -q              # 전체 도구 테스트
 2. **CLI 인터페이스(인자 + stdout 1줄 JSON)는 공개 API** - 바꾸면 `SKILL.md`, `README.md`, `CHANGELOG.md`를 같이 갱신.
 3. **작업 1건 = 브랜치 1개 = PR 1개**, 리팩터링과 동작 변경은 분리.
 4. **모든 PR은 `python -m pytest` 통과가 조건.**
-5. **배포 = 도구 폴더 복사** - `CLI/<tool>/` 폴더를 폐쇄망 PC의 `C:\CLI\<tool>`로 복사하고, OpenCode 스킬 폴더에는 `SKILL.md`만 복사 ([`docs/opencode/README.md`](docs/opencode/README.md)).
+5. **배포 = 도구 폴더 복사** - `CLI/<tool>/` 폴더를 폐쇄망 PC의 `C:\CLI\<tool>`로 복사하고, OpenCode 스킬 폴더에는 `SKILL.md`만 복사 (`CLI-dev/apply_skills.py`, [`docs/opencode/README.md`](docs/opencode/README.md)).
    ml-kit 예측만 배포할 때는 `ml_predict.py` + 학습된 `vX\` 폴더 2가지만 복사하면 됩니다.

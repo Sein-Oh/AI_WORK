@@ -60,7 +60,7 @@ def cmd_windows(args) -> Dict[str, Any]:
         if no_pdf:
             preview += f" (PDF 내보내기 불가: {', '.join(no_pdf)})"
     if not docs:
-        return rt.ok(TOOL, "windows", preview, "VERIFIED: 0건. 열린 Office 문서가 없습니다. 사용자에게 그대로 알리세요.",
+        return off.no_open_docs_result(TOOL, "windows", preview, "VERIFIED: 0건. 열린 Office 문서가 없습니다. 사용자에게 그대로 알리세요.",
                      documents=docs, count=0, office=caps)
     return rt.ok(TOOL, "windows", preview, documents=docs, count=len(docs), office=caps)
 
@@ -135,12 +135,10 @@ def image_by_export(chart_obj: Any, stem: str) -> str:
     return path
 
 
-_LINE = {4, 63, 64, 65, 66, 67}
 _COLUMN = {51, 52, 53}
 _BAR = {57, 58, 59}
 _PIE = {5, 69, 70, -4102, -4120}
 _AREA = {1, 76, 77}
-_SCATTER = {-4169, 72, 73, 74, 75}
 
 
 def chart_data(chart_obj: Any) -> Dict[str, Any]:
@@ -399,9 +397,8 @@ def relay_chart(chart_obj: Any, to_word: Optional[str], to_ppt: Optional[str], a
     return done
 
 
-def method_order(kind: str, forced: Optional[str]) -> List[str]:
-    if forced and forced != "auto":
-        return [forced]
+def method_order(kind: str) -> List[str]:
+    """차트 전달 방식 순서: --probe가 저장한 순서(이 PC에서 된 방식 먼저), 없으면 기본 순서."""
     saved = rt.load_config().get("transfer_method", {}).get(kind)
     if isinstance(saved, list) and saved:
         return [m for m in saved if m in METHODS] + [m for m in METHODS if m not in saved]
@@ -472,7 +469,7 @@ def _with_option_value(argv: List[str], option: str, value: str) -> List[str]:
 
 def _preflight_targets(args, targets: List[str]) -> None:
     """여러 앱에 보낼 때(--to word,ppt) 무엇이든 넣기 전에 모든 받는 문서와 앱별 인자를 확인합니다.
-    이전에는 워드에 넣은 뒤 PowerPoint가 열려 있지 않으면 '실행하지 않았습니다' 오류로 끝나, 다시 실행하면 워드에 두 번 들어갔음.
+    워드에 넣은 뒤 PowerPoint가 없어 실패하면, 다시 실행할 때 워드에 두 번 들어가기 때문.
     못 찾은 문서가 있으면 아무것도 바꾸지 않고, 찾은 앱만으로 같은 명령을 [추천]합니다."""
     if len(targets) < 2:
         return                                    # 앱 하나: open_target이 바꾸기 전에 그 앱의 오류를 냄
@@ -491,6 +488,12 @@ def _preflight_targets(args, targets: List[str]) -> None:
     labels = ", ".join(off.APP_LABEL[k] for k in missing)
     reasons = "; ".join(missing.values())
     if not found:
+        hint = rt.elevation_hint()
+        if hint:
+            err = rt.UserDecisionError(f"받는 문서를 찾지 못해 아무것도 바꾸지 않았습니다: {reasons}. {hint}",
+                                       off.ELEVATED_DIRECTIVE)
+            err.error_type = "elevated_process"
+            raise err
         raise rt.UserDecisionError(
             f"받는 문서를 찾지 못해 아무것도 바꾸지 않았습니다: {reasons}.",
             f"실행하지 않았습니다. 사용자에게 {labels} 문서를 열어 달라고 한 뒤 같은 명령을 1번만 다시 실행하세요. "
@@ -535,7 +538,7 @@ def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
             attempt += 1
             # 대상마다 아직 시도하지 않은 다음 방식으로
             for kind in list(pending):
-                order = method_order(kind, args.method)
+                order = method_order(kind)
                 tried = errors.setdefault(kind, [])
                 remaining = [m for m in order if not any(e.startswith(m + ":") for e in tried)]
                 if not remaining:
@@ -693,7 +696,7 @@ def _word_rows(args) -> Tuple[List[List[Any]], str]:
     n = args.table or 1
     closed = word._closed_docx(args.from_target)
     if closed:
-        import docx
+        docx = rt.require_lib("docx", "python-docx", "Office 없이 닫힌 워드 파일의 표 읽기")
         from docx.table import Table
         import reader
         d = docx.Document(closed)
@@ -774,8 +777,8 @@ def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
         wb = t.doc
         names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]
         if args.sheet:
-            # 있는 시트 이름을 안 뒤에, 아무것도 바꾸기 전에 확인 ([추천]이 있는 시트와 겹치지 않게.
-            # 이전에는 시트 이름 없이 확인해 [추천]대로 다시 실행해도 '이미 있음'으로 막힐 수 있었음)
+            # 있는 시트 이름을 안 뒤에, 아무것도 바꾸기 전에 확인 ([추천]이 있는 시트와 겹치지 않게:
+            # [추천]대로 다시 실행했는데 '이미 있음'으로 막히지 않도록)
             off.check_sheet_name(args.sheet, names)
         name = (args.sheet or sheet_base)[:31]
         k = 2
@@ -1226,7 +1229,6 @@ def build_cli():
     p.add_argument("--slide", help="PPT 슬라이드: 받을 때 번호 또는 new(기본), 보낼 때 표를 찾을 슬라이드")
     p.add_argument("--anchor", help="워드에서 이 글이 있는 단락 뒤에 넣기 (기본: 문서 끝)")
     p.add_argument("--occurrence", type=int, help="--anchor가 여러 단락에 있을 때 몇 번째인지 (1부터, 오류의 [후보] 번호)")
-    p.add_argument("--method", choices=["auto"] + list(METHODS), default="auto", help="차트 그림 방식 (기본 auto)")
     p.add_argument("--theme", help=f"표 색: {', '.join(off.THEMES)}")
     p.add_argument("--probe", action="store_true", help="이 PC에서 되는 차트 전달 방식을 시험해 저장")
 

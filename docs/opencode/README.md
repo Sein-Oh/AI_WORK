@@ -6,7 +6,7 @@
 ## 1. 도구와 스킬 배치
 
 도구는 **`C:\CLI\ml-kit`, `C:\CLI\office-cli`** 에 둡니다. 모든 SKILL.md와 전역 AGENTS.md의 명령 경로가 이 위치를 기준으로 적혀 있습니다.
-반입할 때는 `C:\CLI`만 바꾸면 됩니다. `C:\CLI`에는 실행 파일과 SKILL.md만 있습니다.
+반입할 때는 `C:\CLI`만 바꾸면 됩니다. `C:\CLI`에는 실행 파일과 스킬(SKILL.md)만 있습니다.
 실기 테스트가 필요할 때만 저장소의 `CLI-dev` 폴더를 `C:\CLI-dev`로 함께 가져옵니다 (`C:\CLI`와 나란히 두어야 `C:\CLI`의 도구를 찾습니다).
 
 OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md가 든 폴더만 복사합니다. 도구 파일은 넣지 않습니다.
@@ -14,12 +14,17 @@ OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md�
 | 스킬 폴더 | 넣을 파일 |
 |---|---|
 | `skills\ml-kit\` | `C:\CLI\ml-kit\SKILL.md` |
-| `skills\office-cli\` | `C:\CLI\office-cli\SKILL.md` |
+| `skills\office-excel\` | `C:\CLI\office-cli\skills\office-excel\SKILL.md` (엑셀) |
+| `skills\office-doc\` | `C:\CLI\office-cli\skills\office-doc\SKILL.md` (워드, PPT, 앱 사이 옮기기) |
+| `skills\office-mail\` | `C:\CLI\office-cli\skills\office-mail\SKILL.md` (Outlook) |
+| `skills\office-spec\` | `C:\CLI\office-cli\skills\office-spec\SKILL.md` (파일 읽기·근거 검색, 규격 대조) |
 | `skills\office-cli-test\` | `C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md` (실기 테스트를 맡길 때만) |
 
 SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신한 뒤 `C:\CLI-dev`에서 `python apply_skills.py`로 복사합니다
 (전역 지침까지 바뀐 것만 복사, `--test`면 office-cli-test도, `--check`는 확인만). 그 뒤 OpenCode를 다시 시작합니다.
 폴더 이름은 표와 같아야 합니다 (SKILL.md 맨 위 `name`과 같은 이름).
+office-cli 1.4.61까지 쓰던 통합 스킬 폴더 `skills\office-cli\`는 `apply_skills.py`가 `work\skill_backup_<시각>`에 보관한 뒤 지웁니다
+(남아 있으면 OpenCode가 옛 스킬도 고릅니다).
 
 **ripgrep(rg.exe)이 필요합니다.** OpenCode는 스킬을 불러올 때 ripgrep을 쓰고, 없으면 인터넷에서 받으려 합니다.
 폐쇄망에서는 받지 못해 스킬 불러오기가 `ripgrep execution failed`로 실패합니다(2026-10-29 실기: 대화 6개 모두).
@@ -56,7 +61,7 @@ AGENTS.md와 각 SKILL.md는 아래 원칙으로 썼습니다. 고칠 때도 지
 
 1. 규칙은 번호 목록, 선택은 표로 씁니다. 긴 문단은 작은 모델이 놓칩니다.
 2. 명령은 그대로 복사할 수 있는 템플릿으로 주고 `<...>`만 바꾸게 합니다. 옵션을 짐작하게 두지 않습니다.
-3. 결과 해석은 `agent_directive` 첫 단어 하나로 정합니다 (`VERIFIED:`, `UNVERIFIED:`, `STOP_RETRY:` + `[추천]`/`[후보]`, `ERROR:`).
+3. 결과 해석은 `agent_directive` 첫 단어 하나로 정합니다 (`VERIFIED:`, `UNVERIFIED:`, `CONTINUE:`, `STOP_RETRY:` + `[추천]`/`[후보]`, `ERROR:`).
    전역 지침과 각 SKILL.md의 표가 같은 말을 하도록 맞춰 두었습니다.
 4. "정확하게", "친절하게" 같은 일반론은 쓰지 않습니다. 할 행동과 하지 말 행동만 씁니다.
 5. PowerShell에서 깨지기 쉬운 것(큰따옴표가 든 JSON 인자, `$`, 여러 줄 글)은 파일로 넘기게 합니다.

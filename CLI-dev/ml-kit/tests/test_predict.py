@@ -161,7 +161,7 @@ def test_prediction_with_named_empty_column_imputes(coded, tmp_path):
     df["b"] = ""
     p = tmp_path / "blank_b.csv"
     df.to_csv(p, index=False)
-    res = run_tool("ml_predict.py", "-m", coded["v"], "-f", str(p), "-o", str(tmp_path / "out.csv"))
+    res = run_tool("ml_predict.py", "-m", coded["v"], "-f", str(p), "--save", str(tmp_path / "out.csv"))
     assert res["missing_input_warning"] is True and res["missing_input_counts"]["b"] == 10
 
 
@@ -172,7 +172,7 @@ def test_inline_over_five_records_saved_to_file(coded):
     res = run_tool("ml_predict.py", "-m", coded["v"], "-i", str(js))
     assert res["truncated"] is True and res["count"] == 8 and res["output_file"]
     assert os.path.dirname(res["output_file"]) == str(coded["work"]) and res["verified"] is True
-    assert len(pd.read_csv(res["output_file"], encoding="cp949")) == 8
+    assert len(pd.read_csv(res["output_file"], encoding="utf-8-sig")) == 8
     one = run_tool("ml_predict.py", "-m", coded["v"], "-i", "a=1,b=1,코드=012")
     assert one["truncated"] is False and one["output_file"] is None
 
@@ -193,7 +193,7 @@ def test_truncated_inline_has_full_result_file(tiny, tmp_path):
 
 
 def test_out_extension_checked_first(coded, tmp_path):
-    bad = run_fail("ml_predict.py", "-m", coded["v"], "-f", coded["file"], "-o", str(tmp_path / "r.txt"))
+    bad = run_fail("ml_predict.py", "-m", coded["v"], "-f", coded["file"], "--save", str(tmp_path / "r.txt"))
     assert bad["agent_directive"].startswith("STOP_RETRY") and "[추천]" in bad["message"]
     assert bad["message"].rstrip().endswith("r.csv") and not (tmp_path / "r.txt").exists()
 
@@ -387,7 +387,7 @@ def mc_model(tmp_path_factory):
 
 def test_snapshot_has_rows_and_exclusions(mc_model):
     _, _, vdir = mc_model
-    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="cp949")
+    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="utf-8-sig")
     assert list(snap["원본행"][:3]) == [2, 3, 4]                       # Excel rows (header is row 1)
     assert snap.loc[snap["원본행"] == 12, "학습제외_생산효율"].item() == 1   # '센서오류' on data row 10 = Excel row 12
 
@@ -409,7 +409,7 @@ def test_file_prediction_columns_and_extrapolation(mc_model, tmp_path):
     new = tmp_path / "new.csv"
     pd.DataFrame({"반응온도": [180, 260, None], "압축압력": [3, 3, 3]}).to_csv(new, index=False)
     res = run_tool("ml_predict.py", "-m", vdir, "-f", str(new))
-    out = pd.read_csv(res["output_file"], encoding="cp949")
+    out = pd.read_csv(res["output_file"], encoding="utf-8-sig")
     assert {"map_생산효율", "map_diff_생산효율", "map_방식_생산효율"} <= set(out.columns)
     assert out["map_방식_생산효율"][1].endswith("[외삽]") and out["map_방식_생산효율"][2].startswith("계산 불가")
     assert out["map_diff_생산효율"][0] == pytest.approx(out["pred_생산효율"][0] - out["map_생산효율"][0], abs=1e-3)
@@ -421,9 +421,9 @@ def test_warning_when_measured_data_disagrees(mc_model, tmp_path):
     v2 = tmp_path / "v_tampered"
     shutil.copytree(vdir, v2)
     snap_path = v2 / "model_dataset.csv"
-    snap = pd.read_csv(snap_path, encoding="cp949")
+    snap = pd.read_csv(snap_path, encoding="utf-8-sig")
     snap["생산효율"] += 10                                                # measured data now 10 above the model
-    snap.to_csv(snap_path, index=False, encoding="cp949")
+    snap.to_csv(snap_path, index=False, encoding="utf-8-sig")
     res = run_tool("ml_predict.py", "-m", str(v2), "-i", "반응온도=180,압축압력=3")
     assert res["map_check_warning"] and "90% 예측 범위 밖" in res["map_check_warnings"][0]
     assert res["predictions_summary"]["생산효율"]["map_check"][0]["outside_interval"]
@@ -434,8 +434,8 @@ def test_old_snapshot_and_missing_snapshot(mc_model, tmp_path):
     _, _, vdir = mc_model
     old = tmp_path / "v_old"
     shutil.copytree(vdir, old)
-    snap = pd.read_csv(old / "model_dataset.csv", encoding="cp949").drop(columns=["원본행", "학습제외_생산효율"])
-    snap.to_csv(old / "model_dataset.csv", index=False, encoding="cp949")
+    snap = pd.read_csv(old / "model_dataset.csv", encoding="utf-8-sig").drop(columns=["원본행", "학습제외_생산효율"])
+    snap.to_csv(old / "model_dataset.csv", index=False, encoding="utf-8-sig")
     res = run_tool("ml_predict.py", "-m", str(old), "-i", "반응온도=180,압축압력=3")     # snapshot from before 2.7.0
     assert "map_check" not in res["predictions_summary"]["생산효율"] and "다시 학습" in res["map_check_notes"][0]
 
@@ -479,7 +479,7 @@ def _snapshot(version_dir, n=3000):
     df = pd.DataFrame(r.uniform(0, 1, (n, 4)), columns=list("abcd"))
     df["y"] = df.sum(axis=1)
     df["원본행"] = np.arange(2, n + 2)
-    df.to_csv(os.path.join(version_dir, "model_dataset.csv"), index=False, encoding="cp949")
+    df.to_csv(os.path.join(version_dir, "model_dataset.csv"), index=False, encoding="utf-8-sig")
     return df
 
 
@@ -514,3 +514,154 @@ def test_idw_comparison_converts_snapshot_once_and_keeps_values(tmp_path, monkey
     near = np.argsort(d, kind="stable")[:5]
     w = 1 / d[near]
     assert abs(out["values"][0] - float((w / w.sum()) @ df["y"].to_numpy()[near])) < 1e-9
+
+
+# ---- 조건별 예측(--sweep)과 조건 찾기(--maximize/--minimize) (2.9.58) ------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def whatif(tmp_path_factory):
+    work = tmp_path_factory.mktemp("whatif")
+    r = np.random.default_rng(11)
+    n = 300
+    t = r.uniform(170, 200, n)
+    t[:2] = 170, 200                     # the training range is exactly 170~200
+    pr = r.uniform(2, 4, n)
+    c = r.uniform(0.5, 1.5, n)
+    eff = 0.5 * t + 5 * pr + 2 * c + r.normal(0, 0.3, n)
+    imp = 0.2 * (t - 185) ** 2 + 10 * pr + 30 + r.normal(0, 0.5, n)
+    data = write_df(work / "w.csv", pd.DataFrame({"반응온도": t, "압축압력": pr, "촉매비율": c, "생산효율": eff, "불순물": imp}))
+    v = run_tool("ml_train.py", "-f", data, "-x", "반응온도,압축압력,촉매비율", "-y", "생산효율,불순물")["version_dir"]
+    return {"v": v, "work": work}
+
+
+def test_sweep_table_chart_trend(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도=170:200:5", "-i", "압축압력=3,촉매비율=1")
+    assert res["command"] == "sweep" and res["count"] == 7 and res["truncated"] is False and len(res["points"]) == 7
+    assert [p["반응온도"] for p in res["points"]] == [170, 175, 180, 185, 190, 195, 200]
+    assert res["trend"]["생산효율"]["direction"] == "increasing", res["trend"]
+    assert res["trend"]["불순물"]["direction"] == "valley" and abs(res["trend"]["불순물"]["min"]["반응온도"] - 185) <= 5
+    assert "생산효율_90%" in res["points"][0] and res["out_of_range_points"] == 0 and res["filled_defaults"] == {}
+    assert res["output_file"].endswith(".xlsx") and os.path.dirname(res["output_file"]) == os.path.dirname(whatif["v"])
+    tab = pd.read_excel(res["output_file"])
+    assert len(tab) == 7 and {"pred_생산효율", "pred_lo_생산효율", "pred_hi_불순물", "학습범위"} <= set(tab.columns)
+    assert os.path.getsize(res["chart_file"]) > 0 and res["chart_file"].endswith(".png")
+    assert res["agent_directive"].startswith("VERIFIED") and "trend" in res["agent_directive"]
+
+
+def test_sweep_marks_extrapolation_and_fills_medians(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도=160:210:10", "-y", "생산효율")
+    assert res["targets"] == ["생산효율"] and res["out_of_range_points"] == 2
+    assert [p["in_range"] for p in res["points"]] == [False, True, True, True, True, False]
+    assert any("외삽" in w for w in res["warnings"]) and "중앙값" in res["warnings"][0]
+    assert set(res["filled_defaults"]) == {"압축압력", "촉매비율"}
+
+
+def test_sweep_caps_points(whatif):
+    bad = run_fail("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도=170:200:0.01", "-i", "압축압력=3,촉매비율=1")
+    rec = bad["message"].split("[추천] ")[1]
+    assert rec.startswith("python ") and "--sweep" in rec
+    res = run_tool("ml_predict.py", *shlex.split(rec)[2:])
+    assert 25 < res["count"] <= 500 and res["truncated"] is True and res["shown"] == len(res["points"]) == 25
+    assert res["full_result_file"] == res["output_file"] and len(pd.read_excel(res["output_file"])) == res["count"]
+    assert res["points"][0]["반응온도"] == 170 and res["points"][-1]["반응온도"] == 200
+
+
+def test_maximize_with_constraint(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--maximize", "생산효율", "--where", "불순물 <= 80",
+                   "--vary", "반응온도,압축압력", "-i", "촉매비율=1")
+    assert res["command"] == "maximize" and res["count"] >= 1 and res["where"] == "불순물 <= 80"
+    best = res["solutions"][0]
+    assert best["predictions"]["불순물"] <= 80 and best["inputs"]["압축압력"] > 3.5, best
+    assert 185 < best["inputs"]["반응온도"] < 197, best
+    assert all(170 <= s["inputs"]["반응온도"] <= 200 and 2 <= s["inputs"]["압축압력"] <= 4 for s in res["solutions"])
+    effs = [s["predictions"]["생산효율"] for s in res["solutions"]]
+    assert effs == sorted(effs, reverse=True) and len(res["nearest_rows"]) == 5
+    assert "interval_90" in best and res["agent_directive"].startswith("VERIFIED")
+
+
+def test_search_rechecks_answers(whatif, monkeypatch):
+    """2.9.59: 'VERIFIED: 찾은 조합을 모델로 다시 예측해 조건을 확인했습니다'라고 했지만 다시 예측하지 않았다.
+    이제 적힌 inputs로 다시 예측해 predictions와 --where를 확인하고, 다르면 UNVERIFIED."""
+    import argparse
+    args = argparse.Namespace(model=whatif["v"], maximize="생산효율", minimize=None, vary="반응온도,압축압력",
+                              where="불순물 <= 80", input="촉매비율=1", targets=None)
+    res = mp.execute_search(args)
+    assert res["verified"] is True and res["agent_directive"].startswith("VERIFIED: 답마다 적힌 입력값"), res
+    real = mp._predict_rows
+    # the re-check predicts the (at most 5) answers in one call: a model that answers otherwise there is caught
+    monkeypatch.setattr(mp, "_predict_rows", lambda it, rows: real(it, rows) + (50.0 if len(rows) <= 5 else 0.0))
+    res = mp.execute_search(args)
+    assert res["verified"] is False and res["agent_directive"].startswith("UNVERIFIED"), res
+    assert res["unverified"] and "답 1" in res["unverified"][0], res["unverified"]
+
+
+def test_minimize_impossible_constraint_is_zero(whatif):
+    res = run_tool("ml_predict.py", "-m", whatif["v"], "--minimize", "불순물", "--where", "생산효율 > 1000",
+                   "--vary", "반응온도", "-i", "압축압력=3,촉매비율=1")
+    assert res["count"] == 0 and res["solutions"] == [] and "best_without_where" in res
+    assert res["agent_directive"].startswith("VERIFIED: 0건")
+    assert abs(res["best_without_where"]["inputs"]["반응온도"] - 185) <= 3
+
+
+def test_whatif_argument_rules(whatif):
+    proc, res = run_raw("ml_predict.py", "-m", whatif["v"], "--where", "불순물 <= 80", "-i", "반응온도=180")
+    assert proc.returncode == 2, res
+    proc, res = run_raw("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도", "--find", "생산효율=100", "--vary", "반응온도")
+    assert proc.returncode == 2, res
+    bad = run_fail("ml_predict.py", "-m", whatif["v"], "--maximize", "생산효율", "--vary", "반응온도", "--where", "불순물 == 80")
+    assert '--where "불순물 = 80"' in bad["message"].split("[추천] ")[1]
+
+
+# ---- 범주 입력을 학습 범주와 맞추기 (2.9.60) --------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def line_model(tmp_path_factory):
+    work = tmp_path_factory.mktemp("line")
+    r = np.random.default_rng(5)
+    n = 240
+    t = r.uniform(200, 280, n)
+    line = np.array(["A", "B", "C"] * (n // 3))
+    y = 0.2 * t + np.select([line == "A", line == "B", line == "C"], [0, 10, 20]) + r.normal(0, 0.3, n)
+    data = write_df(work / "cat.csv", pd.DataFrame({"온도": t, "라인": line, "수율": y}))
+    return run_tool("ml_train.py", "-f", data, "-x", "온도,라인", "-y", "수율")["version_dir"]
+
+
+def test_whatif_unknown_category_stops_with_candidates(line_model):
+    """2.9.59: -i "라인=라인C"를 학습 범주와 대조하지 않아 기준값으로 예측하고 VERIFIED였다."""
+    for opt in (["--sweep", "온도"], ["--maximize", "수율", "--vary", "온도"], ["--find", "수율=60", "--vary", "온도"]):
+        bad = run_fail("ml_predict.py", "-m", line_model, *opt, "-i", "라인=라인C")
+        assert bad["agent_directive"].startswith("STOP_RETRY"), bad
+        assert "[후보] A, B, C" in bad["message"] and "라인C" in bad["message"], bad["message"]
+
+
+def test_whatif_category_case_width_space_recovered(line_model):
+    ref = run_tool("ml_predict.py", "-m", line_model, "--sweep", "온도=200:280:40", "-i", "라인=C")
+    for given in ("c", " C ", "Ｃ"):              # 소문자, 앞뒤 공백, 전각
+        res = run_tool("ml_predict.py", "-m", line_model, "--sweep", "온도=200:280:40", "-i", f"라인={given}")
+        assert res["fixed"] == {"라인": "C"}, res
+        assert [p["수율"] for p in res["points"]] == [p["수율"] for p in ref["points"]]
+        if given != " C ":                            # 앞뒤 공백은 읽을 때 이미 지워져 바뀐 것이 없다
+            assert any("'C'" in m for m in res.get("recovered", [])), res
+    res = run_tool("ml_predict.py", "-m", line_model, "--maximize", "수율", "--vary", "온도", "-i", "라인=b")
+    assert res["fixed"] == {"라인": "B"} and res.get("recovered"), res
+    res = run_tool("ml_predict.py", "-m", line_model, "--find", "수율=60", "--vary", "온도", "-i", "라인=a")
+    assert res.get("recovered") and res["fixed"] == {"라인": "A"}, res
+
+
+def test_predict_category_case_matched_like_whatif(line_model):
+    """일반 예측 -i도 같은 공통 함수: 대소문자만 다르면 맞추고 recovered, 그 밖은 unseen_category_warnings."""
+    ref = run_tool("ml_predict.py", "-m", line_model, "-i", "온도=250,라인=C")
+    res = run_tool("ml_predict.py", "-m", line_model, "-i", "온도=250,라인=c")
+    assert res["unseen_category_warning"] is False and res.get("recovered"), res
+    assert res["predictions_summary"]["수율"]["predictions"] == ref["predictions_summary"]["수율"]["predictions"]
+    res = run_tool("ml_predict.py", "-m", line_model, "-i", "온도=250,라인=라인C")
+    assert res["unseen_category_warning"] is True and "recovered" not in res, res
+
+
+def test_match_categories_ambiguous_not_fixed():
+    fixes, unseen = mp.match_categories(["a", "b ", "x"], ["A", "a", "B"])
+    assert fixes == {"b ": "B"} and unseen == ["x"]      # 'a'는 학습 범주 그대로 ('A'로 바꾸지 않음)
+    fixes, unseen = mp.match_categories(["ａ"], ["A", "a"])
+    assert fixes == {} and unseen == ["ａ"]          # 'A'와 'a' 둘 다 맞아 고를 수 없음

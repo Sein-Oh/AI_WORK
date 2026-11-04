@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ml-kit 성능예측표 내보내기 (ml_export.py, 2.9.0)
+ml-kit 성능예측표 내보내기 (ml_export.py)
 
 Turns a trained version into ONE Excel workbook that predicts with plain formulas (no Python, no macros):
   1. input selection : the model's raw numeric inputs (derived features follow their source inputs) are reduced
@@ -21,11 +21,16 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
-    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, retry_fs,
+    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, resume_find, resume_save, resume_clear, save_failed_warning,
 )
-import ml_train as mt  # noqa: E402  same training competition as ml_train.py
+check_core_libraries("성능예측표")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import ml_train as mt  # noqa: E402  same training competition as ml_train.py
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "성능예측표")
 
 setup_console()
 
@@ -146,7 +151,8 @@ def evals_for(subset: List[str], evals: List[str], raw: List[str]) -> List[str]:
 # 2. Training a subset (same competition as ml_train.py)
 # ==============================================================================
 
-# 2.9.40: every retrained candidate is saved in <version>/export/_fits (key = data, target, inputs, formulas, seed,
+# Every retrained candidate is saved in <version>/export/_fits (or a fallback place when it cannot be written:
+# resume_save, removed when the command ends) (key = data, target, inputs, formulas, seed,
 # versions). A command stopped at the time limit (check_time) or killed by the agent's 120 s limit continues where it
 # stopped when it is run again, and a later export with other --keep reuses the same candidates.
 FIT_CACHE: Optional[str] = None
@@ -161,14 +167,14 @@ def _fit_key(data: pd.DataFrame, target: str, subset: List[str], kept: List[str]
     for part in (VERSION, sklearn.__version__, target, "\x1f".join(subset), "\x1f".join(kept), seed):
         h.update(str(part).encode("utf-8") + b"\x1e")
     h.update(pd.util.hash_pandas_object(data[list(subset) + [target]], index=False).values.tobytes())
-    return h.hexdigest()[:32]
+    return h.hexdigest()[:16]                 # short file names: room under MAX_PATH (260) in deep folders
 
 
 def _cached_fit(key: str) -> Optional[Dict[str, Any]]:
     if not FIT_CACHE:
         return None
-    path = os.path.join(FIT_CACHE, key + ".joblib")
-    if not os.path.isfile(path):
+    path = resume_find(FIT_CACHE, key + ".joblib")
+    if not path:
         return None
     try:
         res = joblib.load(path)
@@ -184,16 +190,11 @@ def _cached_fit(key: str) -> Optional[Dict[str, Any]]:
 
 
 def _save_fit(key: str, res: Dict[str, Any]) -> None:
+    """Saves a trained candidate (in _fits or a fallback place: resume_save) and checks the file is there. Saved
+    nowhere: check_time stops with STOP_RETRY instead of CONTINUE (R10)."""
     if not FIT_CACHE:
         return
-    try:
-        os.makedirs(FIT_CACHE, exist_ok=True)
-        path = os.path.join(FIT_CACHE, key + ".joblib")
-        tmp = path + ".tmp"
-        joblib.dump(res, tmp)
-        retry_fs(lambda: os.replace(tmp, path))
-    except Exception as e:                    # no cache only means a slower next run
-        sys.stderr.write(f"[WARN] 학습 결과를 저장하지 못했습니다 (다음 실행이 느려질 뿐): {type(e).__name__}: {e}\n")
+    resume_save(FIT_CACHE, key + ".joblib", lambda tmp: joblib.dump(res, tmp), "입력 고르기 학습 결과")
 
 
 def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[str], raw: List[str],
@@ -436,7 +437,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     for p in plans:
         p["sheet"] = _sheet_name("표_", short[p["target"]], used)
         p["ws"] = wb.create_sheet(p["sheet"])
-        p["ws"].sheet_state = "veryHidden"   # 2.9.3: the grid is not shown (not even in "unhide"); formulas still read it
+        p["ws"].sheet_state = "veryHidden"   # the grid is not shown (not even in "unhide"); formulas still read it
     acc = wb.create_sheet("정확도")
     info = wb.create_sheet("정보")
 
@@ -1089,12 +1090,16 @@ def execute_export(args) -> Dict[str, Any]:
     res = {"status": "ok", "output_file": real, "title": title, "targets": out_targets, "export_model_dir": exp_dir,
            "verified": not unverified, "preview": f"성능예측표 생성: {brief}", "next_commands": next_commands[:SHOW_COMMANDS],
            "next_commands_count": len(next_commands), "truncated": len(next_commands) > SHOW_COMMANDS}
+    resume_clear(FIT_CACHE, lambda name, p: True, fallback_only=True)   # _fits stays for later exports
+    split_note = save_failed_warning()        # a candidate saved nowhere (this run ended before the limit)
+    if split_note and split_note not in warnings:
+        warnings.append(split_note)
     if warnings:
         res["warnings"] = warnings
     if unverified:
         res["unverified"] = unverified
     res["agent_directive"] = (
-        ("VERIFIED: " if not unverified else "UNVERIFIED: " + "; ".join(unverified) + ". 재시도하지 말고 그대로 알리세요. ")
+        ("VERIFIED: " if not unverified else "UNVERIFIED: 성능예측표 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + "output_file 경로, 타겟별 입력(inputs)과 뺀 입력(dropped), 검증 R², 모델 대비 일치도(agreement.agreement_pct, p95_diff_pct)를 알리세요. "
         + "다른 입력 조합을 원하면 targets.<타겟>.candidates를 보여 주고, 사용자가 고른 안의 command를 그대로 실행하세요"
         + (f" (next_commands는 {SHOW_COMMANDS}개만 담았습니다. 모든 안의 명령은 candidates[].command)." if len(next_commands) > SHOW_COMMANDS else ".")
@@ -1115,7 +1120,7 @@ def main():
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     args = parser.parse_args()
-    run_cli(lambda: execute_export(args), hint="Check the version folder and input names in SKILL.md.")
+    run_cli(lambda: execute_export(args), hint="확인할 것: 버전 폴더 경로와 입력 이름.")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,481 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.66] - 2026-11-04
+
+### 기능
+- 학습을 후보 모델 안에서도 교차검증 fold 단위로 나눠 진행 (R10). 지금까지는 후보 모델 단위로만 저장해, 후보 하나의 교차검증(fold 5개)이
+  명령 시간 제한(120초)을 넘으면 그 후보를 매번 fold 1부터 다시 해 끝나지 않았음(무응답 반복). 이제 fold가 끝날 때마다 그 fold의 결과
+  (OOF 예측 조각, 학습 점수, 걸린 시간)를 `.resume_train/<키>.m<번호>.f<fold>.joblib`에 저장(`_cv_folds`, 대체 위치 JIT 복구 포함)하고 다음 fold 전에
+  시계를 봄: 이 후보의 fold 실측(저장된 것 포함) 최대값 x 1.2, 후보의 첫 fold는 이번 실행의 다른 fold 시간과 저장된 후보 시간 / fold 수의 최대값 x 1.2,
+  값이 없으면 진행. 시계는 이번 실행에서 한 단계(fold, 후보, 전체 적합, 타겟)를 끝낸 뒤에만 봄(`_step_done`, 실행마다 최소 1단계). 모든 fold가 끝난
+  후보는 지금처럼 `<키>.m<번호>.joblib`로 합쳐 저장하고 fold 파일은 지움. 손상되었거나 맞지 않는 fold 파일은 버리고 그 fold만 다시 학습(`[WARN]`).
+  분할기·시드·셔플·중복 행 묶음 그대로라 리더보드·OOF·최종 모델 예측·중요도가 한 번에 학습한 것과 같음. `progress`:
+  `타겟 '<이름>' 후보 모델 k/5개 끝남, '<모델>' 교차검증 fold j/5개 끝남, 저장됨 (fold j+1 전에 멈춤)`.
+  대체 위치 정리(`resume_sweep_old`/`resume_clear`)의 도구 파일 이름에 `<키>.m<번호>.f<fold>.joblib` 추가.
+  후보 전 시간 확인(`_candidate_check`)은 fold 확인으로 바뀌고, 1위 전체 적합 전 확인은 `_fit_check`.
+  테스트: `test_train.py` `test_slow_candidate_is_split_by_fold_and_matches_one_run`(회귀·분류 x 중복 행 묶음),
+  `test_killed_run_keeps_saved_folds_and_damaged_fold_is_trained_again`, `test_fold_clock_check_estimates`,
+  명령 단위 동일성 `_assert_same_version`(여러 타겟 `test_training_stops_at_time_limit_and_the_same_command_continues`,
+  `--best` `test_best_continue_skips_finished_task_and_checks_time`: 리더보드·OOF 파일 바이트·최종 모델 예측), 실행 횟수 상한 갱신
+  (`test_report_export.py` `test_report_best_retraining_continues` 포함).
+  실측(리눅스 4코어, 각 실행을 timeout으로 끊어 에이전트 제한 흉내): `h3.csv`(60000행 x 16열, 한 번에 43초) `ML_KIT_TIME_LIMIT=30`(여유를 빼면 0초:
+  실행마다 1단계)·timeout 50초 42번(fold 25, 전체 적합 1, 중요도 열 16), 실행당 11~14초, 모두 1줄 JSON. `=60`·timeout 80초 2번(28초, 26초).
+  `w300.csv`(5000행 x 300열, 한 번에 165초) `=60`·timeout 80초 15번(실행당 20~32초, 모두 JSON). 세 경우 모두 리더보드·`oof_y.csv`(바이트)·
+  최종 모델 예측이 한 번에 학습한 것과 같음.
+
+## [2.9.65] - 2026-11-04
+
+5차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 순열 중요도(`_permutation_means`): 다른 단계를 하지 않은 실행은 처음 열의 1/5(`IMPORTANCE_MAX_RUNS`)을 시계 없이 계산하고, 끝낸 열은
+  멈출 때만 저장해 600열 데이터(HistGB, KNN)에서 120초 강제 종료가 매번 반복되었음(JSON 없음, 진행 없음). 이제 시계 없이 하는 열은 첫 열 1개뿐(R10 진행 보장
+  최소)이고 그 뒤는 열마다 시계를 봄. 끝낸 열은 `IMPORTANCE_SAVE_SECONDS`(12초)마다 저장(처음 저장할 때 1위 모델 전체 적합도 한 번 저장)하므로
+  밖에서 강제 종료되어도 다음 실행이 이어 감. 열 시간 추정은 첫 열 뒤부터 이번 실행의 실측 열 시간(최대값 x 1.2)으로 바꿈(전에는 첫 예측 추정과의
+  최대값이라 첫 예측이 느리면 계속 일찍 멈춤). `IMPORTANCE_MAX_RUNS` 삭제. 테스트: `test_train.py`
+  `test_slow_wide_importance_stops_by_the_clock_from_the_second_column`, `test_killed_importance_keeps_columns_saved_on_the_way`,
+  `test_wide_target_last_step_is_split_and_matches_one_run`·`test_wide_data_command_split_runs_end_like_one_run`(상한 갱신).
+- [개선] 1위 모델 전체 적합 전 시간 추정을 가장 느린 후보(지금까지는 저장된 후보 시간의 최대값 x 1.2)가 아니라 1위 모델 자신의 교차검증 시간
+  x 1.6 / (fold 수 - 1)로 바꿈(`_fit_estimate`): 진 RandomForest가 느리면 빠른 전체 적합 앞에서 멈춰 한 실행을 더 썼음. 5000행 x 300열 타겟 1개
+  (`w300.csv`, 120초 강제 종료 조건)의 실행 횟수: 2.9.64 12번(첫 실행 JSON 없음) -> 2.9.65 5번(모두 JSON, 실행당 21~102초).
+  테스트: `test_last_step_estimate_uses_saved_candidate_times`, `test_single_target_is_split_by_candidate_model`(갱신).
+- [치명] 대체 저장 위치 정리(`resume_sweep_old`)가 `<ML_KIT_DATA_DIR>/resume/` 아래 모든 파일·폴더를 이름 확인 없이 3일 지나면 지웠음
+  (`ML_KIT_DATA_DIR`를 사용자 폴더로 두면 `resume\2025\cv.docx` 삭제). 이제 데이터 폴더의 대체 폴더 이름은 `ml-kit-resume`, 지우는 것은 12자리
+  16진수 하위 폴더 안의 도구 파일 이름(`<키>.joblib`, `<키>.m<번호>.joblib`, `<키>.fit.joblib`, `<키>.imp.joblib`, `best_run.json`, 각 `.tmp`)뿐이고
+  그 밖은 손대지 않음. 끝난 실행의 대체 위치 정리(`resume_clear`)도 같은 이름만. 옛 `resume` 폴더는 쓰지도 지우지도 않음.
+  테스트: `test_train.py` `test_resume_sweep_never_touches_user_files`, `test_resume_find_newest_and_old_fallbacks_swept`(파일 이름 갱신).
+- [경미] 코드 열 규칙 (a): `01, 001, 02, 002`처럼 같은 수를 0 개수만 다르게 적은 칸이 있어도 코드 열이 아니어서 `c = 001`이 `01` 행까지 뺐음.
+  이제 (a)는 같은 수를 다르게 적은 칸이 둘 이상(그중 하나는 앞자리 0)이면 코드 열. 테스트: `test_code_column_judgment`(사례 추가),
+  `test_where_thousands_and_code_columns`.
+- [경미] `--unit-row`의 중량 단위 `킬로그램중`, `그램중`, `톤중`을 '중'으로 끝나는 상태 낱말로 보아 경고·거부했음. 단위 목록(`_KOREAN_UNIT_WORDS`,
+  상태 규칙보다 먼저 봄)에 추가. 테스트: `test_loading_layout.py` `test_named_unit_row_with_korean_units_is_read`(사례 추가).
+
+## [2.9.64] - 2026-11-04
+
+4차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 학습의 마지막 단계(1위 모델 전체 적합 + 순열 중요도)가 열이 많으면(5000행 x 200~300열) 120초를 넘어 JSON 없이 끊기고, 다시 실행해도
+  같은 단계를 반복했음. 이제 순열 중요도를 직접 계산하며(열마다 난수 (시드, 열 번호), 예측 5번) 전체 적합 뒤 예측 1번의 시간을 재어 열마다 시계를
+  보고, 넘을 것 같으면 전체 적합 모델(`<키>.fit.joblib`)과 끝낸 열(`<키>.imp.joblib`)을 저장하고 `CONTINUE`(`progress`: `순열 중요도 k/N열 끝남`).
+  실행마다 열의 1/5 이상(`IMPORTANCE_MAX_RUNS` 5)을 하므로 유한 횟수에 끝나고, 나눠 계산한 결과(리더보드·모델·중요도)는 한 번에 학습한 것과 같음.
+  후보 저장 파일에 실측 시간을 함께 남겨 다음 후보·전체 적합 전 추정은 저장된 후보 시간(재사용 포함)의 최대값을 씀(후보를 모두 재사용한 실행 포함).
+  `sklearn.inspection.permutation_importance` 대신 `_permutation_means`(같은 방법: 기준 점수 - 열을 섞은 점수의 평균, 회귀 R2·분류 Macro-F1).
+  공통 `time_would_pass`(PART C). 결과 JSON `top_features`의 비중은 반올림해도 합이 1을 넘지 않게 맞춤(가장 큰 값에서 뺌). 테스트: `test_train.py` `test_wide_target_last_step_is_split_and_matches_one_run`(회귀·분류),
+  `test_last_step_estimate_uses_saved_candidate_times`, `test_full_fit_after_reused_candidates_is_checked`(갱신).
+- [높음, 2.9.63 회귀] `--unit-row`로 준 정상 한글 단위 행(`세/백만원/cm`, `억원`, `킬로/km`, `기가바이트/Mbps`, `개수/EA`, `초/센티`,
+  `점/퍼센트포인트`, `킬로` 한 칸)을 낱말 목록에 없다고 거부했음. 이제 사용자가 준 행의 짧은 한글 낱말(공백 없는 6자 이하, 아래 열이 대부분 숫자)은
+  단위이고, 거부는 상태·결측 표시 낱말(`점검중`, `센서고장`, `정지` 등)이 글자 칸의 절반 이상일 때만(아래 열의 값과 같은 칸이 든 행은 전처럼 데이터 행).
+  경고도 그런 낱말이 있을 때만. 단위 목록 보강(세, 살, 억원, 만원, 백만원, 천원, 원, 킬로, 센티, 미리, 바이트~기가바이트, 개수, 마리, 명, 점,
+  퍼센트포인트, 배, 대, 건). 테스트: `test_loading_layout.py` `test_named_unit_row_with_korean_units_is_read`; `점검중,센서고장,정지` 거부는 그대로.
+- [중간] 코드 열 규칙 (b)(앞자리 0 칸 50% 이상)가 월 `01`~`12`를 코드 열로 보아 `--exclude-where "월 = 1"`이 0행(학습은 숫자 1로 읽음). (b)를 없앰:
+  코드 열은 (a) `007`과 `7`처럼 같은 수를 다르게 적었거나 (b) 모든 칸이 3자리 이상 같은 자릿수 코드일 때만. `ml_map`도 같은 함수.
+  테스트: `test_train.py` `test_where_on_zero_padded_month_column_compares_numbers`, `test_code_column_judgment`(기대값 정리).
+- [낮음] 중간 저장: `resume_find`가 여러 위치 중 가장 최근 파일을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지움(`best_run.json` 고정 이름).
+  명령 시작 때 대체 폴더 전체에서 3일 넘은 항목을 지움(`resume_sweep_old`). 저장 실패 `STOP_RETRY`의 directive가 "열 이름과 --eval 식" 대신
+  쓰기 권한·디스크·경로 길이를 안내. 테스트: `test_resume_find_newest_and_old_fallbacks_swept`, `test_resume_saved_nowhere_stops_with_stop_retry`(보강).
+
+## [2.9.63] - 2026-11-04
+
+3차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 중간 저장 실패 때 2.9.62가 "나누지 않고 끝까지" 진행해 큰 데이터(6만 행)에서 120초를 넘겨 JSON 없이 끊겼음. JIT 복구로 바꿈:
+  `.resume_train`/`best_run.json`/성능예측표 `_fits`를 원래 위치에 저장하지 못하면 데이터 폴더 `resume\<해시 12자>\`, 그다음 `%TEMP%\ml-kit-resume\<해시>\`에
+  저장하고 `recovered`와 `[WARN]`. 이어 실행은 모든 위치를 찾고, 끝나면 대체 위치도 지움. 어디에도 저장하지 못하면 `check_time`이 멈출 지점에서
+  `STOP_RETRY`(쓰기 권한·디스크·경로 길이 안내, 1줄 JSON). 저장 파일 이름은 키 해시 16자(전 32자)로 줄여 MAX_PATH 여유.
+  공통 함수 `resume_places`/`resume_save`/`resume_find`/`resume_clear`/`save_failed_warning`(PART C), `split_off`·`SPLIT_OFF` 삭제.
+  테스트: `test_train.py` `test_blocked_resume_folder_continues_in_fallback`(타겟 1개·2개), `test_resume_saved_nowhere_stops_with_stop_retry`,
+  `test_resume_save_checks_the_file`, `test_report_export.py` `test_export_blocked_fit_cache_continues_in_fallback`.
+- [중간] `is_code_column`이 앞자리 0 칸 하나로 코드 열이라 판정해 `ml_map`이 숫자 열(`05,10,15,20`)을 보간하지 않고 틀린 `[후보]`. 이제 앞자리 0 칸이 있고
+  (a) 같은 숫자의 0 없는 표기가 함께 있거나, (b) 앞자리 0 칸이 절반 이상이거나, (c) 모든 칸이 3자리 이상 같은 자릿수 코드일 때만 코드 열.
+  `--where`/`--exclude-where`와 `ml_map`이 같은 함수. 테스트: `test_train.py` `test_code_column_judgment`,
+  `test_where_on_two_digit_number_column_compares_numbers`, `test_map.py` `test_two_digit_numbers_with_a_leading_zero_are_interpolated`.
+- [중간] 코드 열에서 `--exclude-where "월 = 1"`이 `01` 행(학습은 숫자 1)을 말없이 빼지 않았음. 이제 `warnings`에 `'01' N행은(는) 표기가 달라 빼지 않음`
+  (`!=`는 `함께 뺌`) + `[추천] <전체 명령>`, `next_commands[0]`에 그 표기를 포함한 조건(`월 = 1 | 월 = 01`)의 명령. 테스트:
+  `test_where_on_code_column_warns_other_notation`(추천 명령을 실행하면 경고 없이 12행을 뺌).
+- [낮음~중간] 데이터 행(`점검중,센서고장,정지`)을 `--unit-row`로 주면 받아 피처 이름이 `온도(점검중)`. 이제 한글 단위 낱말 목록(`_KOREAN_UNIT_WORDS`,
+  `--unit-row`로 준 행에만 씀)에 없는 한글 낱말이 그 행 글자 칸의 절반 이상이면 `STOP_RETRY` "단위 행이 아닙니다" + `[추천]`(--unit-row를 뺀 명령),
+  일부면 받아들이고 `warnings`에 `2행을 단위로 읽음: 압력(점검중) ... 데이터 행이면 --unit-row를 빼세요`. 도구가 스스로 판단할 때의 목록
+  (`_KOREAN_UNITS`)은 그대로. 테스트: `test_loading_layout.py` `test_data_row_given_as_unit_row_is_refused`,
+  `test_some_odd_words_in_unit_row_are_read_with_a_warning`; `test_korean_unit_words_in_named_unit_row`(도씨·킬로그램·기압·섭씨·회전·평)는 그대로 통과.
+
+## [2.9.62] - 2026-11-04
+
+2차 독립 검토의 ml-kit 발견 수정. 회귀 테스트는 수정 전 실패를 확인했습니다.
+
+### 버그 수정
+- [치명] `--exclude-where`/`--where`: 숫자 열에 `측정불가` 같은 결측 표시 한 칸만 있어도 글자 열로 보아 `압력 = 2`가 `2.0`과 맞지 않고
+  `!= 2`가 모든 행에 맞아 틀린 행을 빼고도 `VERIFIED`였음. 이제 `=`/`!=`의 숫자 값은 숫자로 읽히는 칸과 숫자로 비교(`1,000` = `1000`,
+  학습과 같은 `coerce_numeric`)하고, 글자 비교는 앞자리 0 코드일 때만(코드 열, 또는 글자 칸이 있는 열에 `= 01`). 결측 표시 칸은 열 판정에서 뺌.
+  `= 2`, `!= 2`, `!= 2; 온도 > 180`의 행 수는 2.9.59와 같음. 공통 함수 `is_code_column`(PART C).
+  테스트: `test_train.py` `test_where_number_column_with_missing_mark_compares_numbers`, `test_where_thousands_and_code_columns`.
+- [치명] 학습 나눠 진행(R10): 중간 저장(`_resume_save`, 후보 모델과 타겟)이 실패해도 `[WARN]`만 내고 시간을 기록해 `저장됨`이라며 `CONTINUE:`를 냈고,
+  같은 명령을 반복해도 끝나지 않았음. 이제 저장 뒤 파일이 있는지 확인하고, 실패하면 그 실행은 나누지 않고 끝까지 진행(`split_off`,
+  `check_time`이 멈추지 않음) + `warnings`에 `중간 저장 실패로 나누지 않음: ...`. `--best`의 `best_run.json`, 성능예측표 후보 저장(`_fits`)도 같음.
+  타겟 1개·여러 개 모두. 테스트: `test_failed_resume_save_is_not_split`(`.resume_train`을 파일로 만들어 저장 실패), `test_resume_save_checks_the_file`.
+- [중요] 목록에 없는 한글 단위(`도씨`, `킬로그램`, `기압`, `섭씨`, `회전`, `평`)를 메모로 보아 `--unit-row 2`가 `STOP_RETRY`(틀린 이유와 `[추천]`)였고,
+  예측은 단위 행을 데이터로 예측(`VERIFIED`). 이제 사용자가 준 `--unit-row` 행은 공백 없는 6자 이하 한글 낱말도 단위
+  (`unit_row_verdict(..., given=True)`). 도구가 스스로 판단할 때는 그대로 한글 낱말을 단위로 보지 않고(`점검중`, `센서고장` 첫 데이터 행 보존),
+  예측 레이아웃 복구는 `--unit-row`로 읽어 모델 이름(`온도(도씨)`)이 모두 있을 때만 그 행을 단위로 씀.
+  테스트: `test_loading_layout.py` `test_korean_unit_words_in_named_unit_row`(학습 성공, 예측 `sample_count` = 데이터 행 수).
+- [기존] `ml_map.py`가 코드 `007`과 `7`을 같은 숫자 7로 합쳐 보간(`VERIFIED`). 이제 앞자리 0 코드가 있는 열은 숫자 열이 아니라(`_is_numeric_col`이
+  `is_code_column`을 봄) `-i`의 같은 코드 행만 쓰고, 없는 코드(`코드=07`)는 `[후보]`(10개까지). 테스트: `test_map.py`
+  `test_code_column_is_matched_exactly_not_interpolated`.
+
+### 구조
+- 시간 확인: 이번 실행에서 한 단계(후보 또는 타겟)를 끝낸 뒤면 데이터 읽기 직후 첫 후보, 후보를 모두 다시 쓴 타겟의 1위 전체 적합·순열 중요도 앞에서도
+  `check_time`(전에는 이번 실행에서 후보를 학습했을 때만). 아직 아무 단계도 하지 않은 실행은 멈추지 않음(저장 없이 멈추면 끝나지 않음, R10).
+  테스트: `test_full_fit_after_reused_candidates_is_checked`.
+- `--best`가 오류로 끝나면 `.resume_train/best_run.json`을 지움(나눠 진행 `CONTINUE:`와 사용자 중단은 남김). 테스트: `test_best_run_record_is_removed_after_an_error`.
+
+## [2.9.61] - 2026-11-04
+
+학습 나눠 진행(R10) 버그 수정 (`ml_train.py`). 회귀 테스트는 수정 전 실패를 확인했습니다(단일 타겟은 새 동작).
+
+### 버그 수정
+- [중요] `--best`를 `CONTINUE`로 나눌 때, 회귀 최고 버전을 만든 뒤 분류 작업 유형에서 멈추면 다음 실행이 회귀 최고 버전을 다시 만들어 원장에
+  중복(v3, v5)되었음. 이제 만든 최고 버전을 `.resume_train/best_run.json`에 적고, 이어 실행 때 그 버전이 `best_is_fresh`면 건너뜀
+  (결과의 `best_versions`·`best_targets`에는 그대로 들어감). 다 끝나면 기록을 지움.
+- [중요] 타겟 학습 시간 기록(`fit_seconds`)이 `train_version` 호출마다 새로 시작해, 두 번째 작업 유형의 첫 타겟은 시간 확인 없이 학습했음.
+  이제 명령 단위(`RUN_FIT_SECONDS`)라 `--best`와 `ml_report.py -f`(최고 버전 다시 학습)도 같은 확인.
+  테스트: `test_train.py` `test_best_continue_skips_finished_task_and_checks_time`.
+
+### 기능 (검토 항목 7)
+- 타겟이 1개면 나눌 곳이 없어 100초를 넘으면 JSON 없이 끊길 수 있었음. 후보 모델(5개)마다 교차검증 결과를 `.resume_train/<키>.m<번호>.joblib`에
+  저장하고 다음 후보와 1위 모델 전체 적합 전에 `check_time`(가장 오래 걸린 후보 x 1.2). 같은 명령을 다시 실행하면 저장된 후보를 씀.
+  결과(점수, 모델)는 한 번에 학습한 것과 같음. 성능예측표(`ml_export.py`)의 후보 학습은 이 저장을 쓰지 않음(자체 `_fits`).
+  테스트: `test_single_target_is_split_by_candidate_model`. 기존 나눠 진행 테스트 2개는 실행 횟수 대신 진행 문구와 결과로 확인.
+
+## [2.9.60] - 2026-11-04
+
+독립 검토에서 나온 예측 쪽 버그 수정 (`ml_predict.py`, 학습의 `--exclude-where` 포함). 회귀 테스트는 수정 전 실패를 확인했습니다.
+
+### 버그 수정
+- [치명] `--sweep`, `--maximize/--minimize`, `--find`의 `-i` 글자 입력을 학습 범주와 대조하지 않았음: `-i "라인=라인C"`나 `라인=c`가 어느 범주도 아닌
+  기준값으로 예측되고 경고 없이 `VERIFIED`. 이제 공통 함수 `match_categories`/`fixed_category_value`(PART C)로 대조:
+  대소문자·앞뒤 공백·전각만 다르고 학습 범주 하나와 맞으면 그 범주로 맞추고 `recovered`, 그 밖은 `STOP_RETRY` + `[후보] <학습 범주>`(10개까지).
+  일반 예측(`-i`, `-f`)도 같은 함수(`align_categories`)로 맞추고, 남은 값만 `unseen_category_warnings`. 빠진 글자 입력의 `[후보]`도 10개까지(R8).
+  같은 `recovered` 문구는 한 번만 적음(`note_recovered`, 타겟이 여럿일 때).
+  테스트: `test_predict.py` `test_whatif_unknown_category_stops_with_candidates`, `test_whatif_category_case_width_space_recovered`,
+  `test_predict_category_case_matched_like_whatif`, `test_match_categories_ambiguous_not_fixed`.
+- [중요] 예측 파일 레이아웃 자동 복구가 첫 데이터 행에 글자(`점검중`, `센서고장`)가 섞였다고 단위·메모 행으로 보고 그 데이터 행을 버렸음.
+  숫자·날짜가 하나라도 든 행과 글자 칸이 단위 모양이 아닌 행(한글 낱말)은 데이터로 남김(`_unit_shaped`, 단위 행 판단 `unit_row_verdict`도 같은 기준).
+  행을 건너뛰면 원본 행 번호와 내용을 `warnings`에. 레이아웃 옵션을 주지 않았을 때 `recovered`는 `머리글 N행, 데이터 K행부터로 읽음`
+  ("레이아웃 옵션이 이 파일과 달라"는 옵션을 줬을 때만). 테스트: `test_loading_layout.py` `test_first_data_row_with_text_marks_is_kept`,
+  `test_skipped_unit_row_is_in_warnings`, 기존 `recovered` 기대값 5곳.
+- [중요] `--exclude-where`/`--where`의 표기 고치기가 값 안의 `포함`/`and`/`or`까지 바꿔 틀린 `[추천]`을 냈음(`비고 = 불량 포함 시료` -> `비고 = 불량 ~ 시료`).
+  이제 조건을 잇는 자리에서만 바꾸고(`_where_words`), 다른 표기를 고친 `[추천]`에서는 그런 값을 작은따옴표로 감싸고 "값을 작은따옴표로 감싸세요" 안내.
+  테스트: `test_train.py` `test_where_words_inside_value_are_kept`.
+- [경미] `!=`가 빈 칸까지 맞는 행으로 셌음 -> 빈 칸은 맞지 않음(글자 칸은 숫자 값과 다른 값이라 맞음, README 9)). 크기 비교(`> < >= <=`) 값이
+  숫자·날짜가 아니면 조용히 0행이었음 -> `9 0`처럼 공백만 빼면 숫자면 `[추천]`(전체 명령), 그 밖은 `STOP_RETRY`. `= 01`은 숫자 열이면 숫자로,
+  글자 열(글자 칸이나 앞자리 0 코드가 있는 열)이면 글자로 비교. 테스트: `test_where_not_equal_keeps_blank_and_size_value_checked`,
+  `test_where_code_text_column_compares_as_text`.
+- [경미] 조건 찾기(`--maximize/--minimize`) directive "찾은 조합을 모델로 다시 예측해 조건을 확인했습니다"가 사실이 아니었음. 이제 답마다 적힌
+  `inputs`로 다시 예측해 `predictions`와 `--where`를 확인하고(`_recheck_solutions`), 다르면 `UNVERIFIED` + `unverified`.
+  테스트: `test_predict.py` `test_search_rechecks_answers`.
+
+### 문서
+- SKILL.md: `--exclude-where` 값의 작은따옴표, 4-C단계 글자 입력 `[후보]`/`recovered` 한 줄씩. README: 레이아웃 복구 문구·건너뛴 행, `--exclude-where` 규칙, 범주 맞추기, 조건 찾기 확인.
+
+## [2.9.59] - 2026-11-04
+
+결과 문구를 짧은 한국어로 통일 (동작 변경 없음). 소비자인 경량 LLM(Gemma 26B)이 사용자에게 한국어로 전달하는데 `agent_directive`·`message`·
+`preview`·경고에 영어와 한국어가 섞여 있었음. 첫 단어(`VERIFIED:` `UNVERIFIED:` `CONTINUE:` `STOP_RETRY:` `ERROR:`), `[추천]`/`[후보]` 표지,
+JSON 키, `error_type` 값, 열·모델·옵션 이름은 그대로.
+
+### 바뀐 대표 문구 (전 -> 후)
+- 학습: `VERIFIED: v1 competitive training completed. Champion models and leaderboard packaged into 'v1'. Task=regression, Mean 검증 R2=0.9486. Next step: ...`
+  -> `VERIFIED: v1 학습을 마쳤습니다 (regression, 평균 검증 R2=0.9486). ... 다음: 사용자가 원하면 next_commands[0]을 실행하거나 예측으로 넘어갑니다. ...`
+- 학습 preview: `(Delta: +0.0123)`, `소요시간: 8.61s`, `산출물 저장:` -> `(변화: +0.0123)`, `소요 8.61초`, `저장:`
+- 이력: `VERIFIED: History summary returned. Do not re-read history.jsonl ...` -> `VERIFIED: 학습 이력입니다. history.jsonl을 다시 읽지 마세요.`
+- 예측: `VERIFIED: Prediction completed for 3 target(s) with extrapolation warning (...). Output saved to x.csv. Next step: report inference results to user.`
+  -> `VERIFIED: 타겟 3개를 예측했습니다. 학습 범위 밖 입력이 있어 예측은 참고용입니다 (extrapolation_warnings). 결과 파일: x.csv. 위 경고를 함께 알리세요.`
+  (저확신, 빈 입력, 학습 때 없던 종류, 실측 비교 경고, 잘린 직접 입력도 같은 식의 한국어 문장)
+- 예측 preview·`source`: `[추론 완료] 소스: Inline Input (1 record(s)) | 타겟 예측 요약: [...] | 인라인 반환` -> `[예측 완료] 입력: 직접 입력 1건 | 예측 요약: [...]`
+- 외삽 경고: `피처 'X' 상한 초과 외삽(Extrapolation) 감지: ... (범위 대비 +50.0% 초과 이탈, 범위 밖 3건)` -> `입력 'X' 학습 범위 초과: ... (범위의 +50.0%, 범위 밖 3건)`
+- 보고서: `ML result report for v1 (1 target(s)) saved to '...'. Overall verdict=적합. Next step: report the file path to the user.`
+  -> `v1 ML 결과 보고서(타겟 1개)를 '...'에 저장했습니다. 종합 판정 적합. report_file 경로를 사용자에게 알리세요.` (`report_file 링크` -> `경로`)
+- 입력 오류: `STOP_RETRY: Argument or data schema validation failed. If the message contains '[추천]', re-run ONCE ...`
+  -> `STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 그 값으로 바꿔 1번만 다시 실행하세요 (... 전체 명령이니 그대로 1번 실행). 없으면 message를 그대로 알리세요.`
+  뒤에 붙는 안내(`Check column names or formula syntax.` 등) -> `확인할 것: 열 이름과 --eval 식.` 등.
+- 인자 오류: `STOP_RETRY: Invalid CLI arguments. Check the option names in SKILL.md ...` -> `STOP_RETRY: 명령 인자가 잘못되었습니다. 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준).`
+- 중단: `STOP_RETRY: Execution was interrupted. Ask the user before running again.` -> `STOP_RETRY: 실행이 중단되었습니다. 다시 실행하기 전에 사용자에게 물으세요.`
+- 내부 오류: `ERROR: Unexpected internal failure. Do not retry; ...` -> `ERROR: 도구 내부 오류입니다. 다시 실행하지 말고 message를 그대로 알리세요.`
+- 누수: `[DATA LEAKAGE DETECTED] ...` -> `타겟 누수: ...`
+- `UNVERIFIED:` 끝맺음을 `다시 실행하지 말고 unverified를 그대로 알리세요.`로 통일 (`재시도하지 말고 ...` 혼용 제거).
+- 모델 읽기 실패 `Joblib 모델 로드 실패` -> `모델 파일을 읽지 못했습니다`, `-h` 설명 문구, 예측 stderr `[WARN]` 머리말도 한국어.
+
+테스트: `test_contract.py`의 누수·`[추천]` 전체 명령 문구 기대값을 새 문구로.
+
+## [2.9.58] - 2026-11-04
+
+조건별 예측(what-if)과 제약 안의 최적 조건 찾기. 이전에는 조건을 바꿔 보려면 에이전트가 `-i` JSON 배열을 직접 만들고 결과를 비교해야 했고,
+"불순물 100 이하에서 생산효율 최대" 같은 요청은 방법이 없었음. 회귀 테스트: `tests/test_predict.py` `test_sweep_*` 3개,
+`test_maximize_with_constraint`, `test_minimize_impossible_constraint_is_zero`, `test_whatif_argument_rules` (2.9.57에서 6개 모두 실패).
+
+### 새 기능 (`ml_predict.py`, 회귀 타겟만, 단독 배포 그대로)
+- `--sweep "<입력>=<시작>:<끝>:<간격>" [-i "<고정 입력>"] [-y <타겟>] [--save <표>]`: 입력 하나를 바꿔 가며 예측.
+  `<시작>:<끝>`만 주면 21점, `<입력>`만 주면 학습 범위 21점, 500점까지(넘으면 `[추천] <간격을 넓힌 전체 명령>`).
+  - 표(xlsx, 데이터 폴더의 `sweep_<입력>_<시각>.xlsx`)와 그래프(같은 이름 `.png`, 90% 띠, 학습 범위 음영. matplotlib이 없으면 표만과 경고).
+  - JSON `points`(25점까지 고르게, 넘으면 `truncated`, `full_result_file`), 점마다 `in_range`, `<타겟>_90%`; `trend`(타겟마다 `direction`
+    increasing/decreasing/peak/valley/flat/mixed, `max`, `min`, `text`); `out_of_range_points`와 외삽 경고.
+- `--maximize|--minimize "<타겟>" --vary "<입력1>,<입력2>" [--where "<제약>"] [-i "<고정 입력>"]`: 학습 범위 안에서만 격자 탐색(약 2만 번 평가)과
+  좌표 탐색. `--where`는 `--exclude-where`와 같은 식으로 타겟 예측값·입력에 겁니다. `solutions`(5개까지, 좋은 순, 서로 다른 조합,
+  `inputs`, `predictions`, `interval_90`), `feasible_count`, `nearest_rows`(첫 답에 가까운 학습 행 5개). 0건이면 `VERIFIED: 0건`과 `best_without_where`.
+- 말하지 않은 숫자 입력은 `--find`처럼 학습 중앙값(`filled_defaults`, `warnings`), 글자·날짜 입력은 `[후보]`로 멈춤.
+- 인자 규칙: `--where`는 `--maximize`/`--minimize`와만, `--sweep`은 `--find`·`--maximize`·`-f`·`--vary`와 함께 쓰지 않음 (인자 오류).
+- SKILL.md 4-C단계 (명령 2개와 알릴 것), 1단계 표에 한 줄.
+
+## [2.9.57] - 2026-11-04
+
+학습도 나눠서 진행 (CLI-dev/README.md R10 `CONTINUE:`). 회사 PC Gemma 시험 R1, R2처럼 타겟이 여러 개인 학습은 120초를 넘겨 결과 JSON 없이
+끊기고 에이전트가 같은 명령을 처음부터 반복했음. 회귀 테스트: `tests/test_train.py`
+`test_training_stops_at_time_limit_and_the_same_command_continues`, `test_damaged_saved_target_is_trained_again`,
+`tests/test_report_export.py` `test_report_best_retraining_continues` (2.9.56에서 3개 모두 실패: 시간 제한을 보지 않음).
+
+### 바뀐 동작
+- `ml_train.py`(일반 학습, `--best`)와 `ml_report.py -f`의 최고 버전 다시 학습: 타겟이 2개 이상이면 5개 모델 경쟁을 마친 타겟마다
+  `<데이터>_ml_data/.resume_train/<키>.joblib`에 저장하고, 다음 타겟을 학습하기 전에 시계를 봅니다
+  (`check_time`, 이번 실행에서 가장 오래 걸린 타겟 시간 x 1.2). 제한(`ML_KIT_TIME_LIMIT`, 기본 100초, 여유 30초)을 넘을 것 같으면
+  `status: ok`, `continue: true`, `progress`("학습: 타겟 1/3개 끝남, 저장됨 ..."), `next_commands: [같은 명령]`, `CONTINUE:` directive.
+- 같은 명령을 다시 실행하면 저장된 타겟을 다시 쓰고(`[INFO]`) 다음 타겟부터 학습합니다. 끝난 실행의 결과에 `resumed_targets`(앞 실행이 학습한 타겟).
+  키는 학습 입력 그 자체(학습 행과 값, 스키마, 작업 유형, 시드, 양성 클래스, 도구·scikit-learn 버전)의 해시라, 데이터나 조건이 바뀌면 다시 학습합니다.
+- 멈춘 실행은 스테이징 폴더를 지우고 버전 폴더와 원장 기록을 남기지 않습니다. 버전 번호와 `history.jsonl`은 끝나는 실행이 한 번만 씁니다
+  (원자적 커밋은 그대로). 멈춤은 비정상 중단이 아니므로 `[WARN] 비정상 중단` 대신 `[STATUS]`만. 오류 로그에도 남기지 않습니다.
+- 커밋 뒤 이번 실행이 쓴 저장 파일과 3일 넘은 저장 파일을 지웁니다. 손상된 저장 파일은 버리고 다시 학습합니다(`[WARN]`, JIT).
+- 실행마다 새 타겟을 최소 1개 학습하므로 반복하면 반드시 끝납니다. 타겟이 1개면 나눌 단계가 없어 저장하지 않습니다.
+- SKILL.md 규칙 6: "학습, 보고서, 성능예측표는 오래 걸리면 도구가 나눠서 진행한다".
+
+## [2.9.56] - 2026-11-04
+
+조건으로 학습에서 뺄 행 (`--exclude-where`). 회사 PC 시험 A3("생산효율이 90보다 큰 행은 빼고 다시 학습해줘")에서 에이전트가 할 수 있는 일이
+`제외` 열에 직접 적으라는 안내뿐이었음. 회귀 테스트: `tests/test_train.py` `test_exclude_where_*` 4개, `test_where_mask_rules`
+(2.9.55에서 5개 모두 실패: 옵션 없음).
+
+### 새 기능
+- `ml_train.py --exclude-where "<조건>"`: office-cli `excel.py read --where`와 같은 식 (`;` 그리고, `|` 또는(`;`가 먼저), 연산자 `>= <= > < = != ~`,
+  `;`·`|`가 든 값은 따옴표). 숫자는 숫자로(`1,500` = 1500), `YYYY-MM-DD`는 날짜로, 그 밖은 글자로(대소문자 무시) 비교. 데이터 파일은 바꾸지 않습니다.
+  - 열 이름은 `-x`/`-y`와 같이 맞춤(`resolve_column_names`: 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`). `==`, `<>`, `AND`, `OR`는
+    `[추천] <고친 식의 전체 명령>`, 읽을 수 없는 식은 형식 안내.
+  - 조건에 맞는 행은 모든 타겟의 학습에서 빠짐: `exclusions.<타겟>.condition`(행 수)·`condition_text`, 이유 `조건: <열 이름을 맞춘 식>`
+    (`excluded_rows.csv` 구분 `조건`, `excluded_preview`의 `kind` `조건`, `excluded_reasons`), preview `학습 제외 N행(직접 a, 조건 b, 자동 c)`.
+    `제외` 열에 이유를 적은 행은 직접 표시로 셈.
+  - `제외` 열이 `포함`인 행은 조건에 맞아도 학습에 넣고 `warnings`에 그 행을 적음. 조건에 맞는 행이 없으면 `warnings`에 알림.
+  - 조건으로 빼서 학습 행이 10개 미만이면 `STOP_RETRY`(남는 행 수).
+  - 원장 `exclude_where`(맞춘 식), 개선 `next_commands`의 재학습 명령과 `--best`(`target_recipes.<타겟>.exclude_where`)가 같은 조건을 이어받음.
+    `model_dataset.csv`의 `학습제외_<타겟>`에도 표시되어 예측의 실측 비교값이 그 행을 쓰지 않습니다.
+- 공통 런타임(PART C)에 조건 식 함수: `parse_where`, `resolve_where`, `where_mask`, `where_text` (예측의 조건 검색에도 씀).
+- 보고서: 학습 제외 행 줄에 조건 행 수와 식.
+- SKILL.md 2단계: 옵션 표에 한 줄, 행 빼기 안내를 `--exclude-where`(조건) / `제외` 열(특정 행)로. `agent_scenarios.yaml` A3를 이 옵션으로 채점
+  (샘플 데이터의 생산효율 최대가 84라 기준을 80으로), 메시지 팩(`docs/opencode/자동테스트`) 다시 만듦.
+
+## [2.9.55] - 2026-11-04
+
+사용자가 정할 일을 도구가 고를 수 있는 명령으로 바꿔 줌. 회귀 테스트: `tests/test_contract.py`
+`test_train_target_in_features_offers_both_commands`, `test_predict_missing_inputs_offer_median_fill`, `tests/test_train.py`
+`test_prediction_uses_source_and_caps` (2.9.54에서 3개 모두 실패).
+
+### 바뀐 동작
+- 학습: 같은 열을 `-x`와 `-y`에 함께 주면(`[DATA LEAKAGE DETECTED]`) `STOP_RETRY` + `[후보] 1) <그 열을 -y에서 뺀 전체 명령> / 2) <-x에서 뺀 전체 명령>`.
+  두 명령은 `next_commands`(`purpose`, `command`)에도 있고 다른 옵션은 그대로입니다. `-y`가 그 열뿐이면 2)만, `-x`가 그 열뿐이면 1)만.
+  이전에는 "종속변수는 독립변수로 사용될 수 없습니다"만 알려 에이전트가 명령을 직접 고쳐야 했습니다.
+- 예측: `-i`(한 건)에 숫자 모델 입력이 빠지면 `status: error`, `error_type: "needs_user_decision"`, `missing_inputs`, `fill_values`(학습 중앙값),
+  `next_commands[0]` = 빠진 입력을 중앙값으로 채운 같은 명령(`needs_user_confirm: true`). 도구는 채워서 실행하지 않습니다 (사용자 값은 도구가 알 수 없음).
+  `agent_directive`는 `STOP_RETRY:`로 시작하고 사용자에게 묻고 원할 때만 `next_commands[0].command`를 그대로 1번 실행하라고 합니다.
+  이름 오타·모델 입력이 아닌 이름, 빠진 글자·날짜 입력, 여러 건은 이전 안내 그대로입니다.
+- 공통 런타임: `InputError(message, extra=..., error_type=...)`. `extra`의 키는 오류 JSON에 들어가고, `error_type="needs_user_decision"`은
+  위 directive를 씁니다 (office-cli의 `needs_user_decision`과 같은 이름).
+- SKILL.md: 4단계에 빠진 입력 안내 한 줄, 결과 처리 표에 `needs_user_decision` 행과 전체 명령 `[후보]`(고른 번호의 `next_commands` 실행).
+
+## [2.9.54] - 2026-11-04
+
+예측 파일의 레이아웃이 학습 파일과 다를 때 도구가 그 자리에서 고쳐 읽음 (AGENTS.md JIT 자가복구). 회귀 테스트:
+`tests/test_loading_layout.py` `test_training_layout_on_plain_file_is_recovered`, `test_two_level_header_hint`,
+`test_several_header_rows_with_every_input_stop_with_candidates`, `test_layout_recovery_keeps_the_unit_row`,
+`test_predict_finds_model_names_with_units_in_a_header_unit_pair`, `test_predict_plain_template_on_a_unit_row_file`,
+`test_unit_row_file_for_a_unitless_model`, `test_title_and_unit_row_file_for_a_unitless_model`, `tests/test_train.py`
+`test_predict_next_commands_have_no_layout` (2.9.53에서 9개 모두 실패: STOP_RETRY [추천], 예측 명령에 레이아웃 옵션).
+
+### 바뀐 동작
+- `ml_predict.py -f`: 레이아웃이 파일과 맞지 않을 때 모델 입력이 모두 든 레이아웃이 **하나로 정해지면** 그 레이아웃으로 다시 읽고 `status: ok`,
+  `recovered: ["레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음"]`(단위 행이면 `, 단위 M행`, 건너뛴 행이 있으면 `, 데이터 K행부터`).
+  이전에는 `STOP_RETRY` + `[추천] <고친 전체 명령>`이었습니다. 대상 (판단 규칙은 이전 `[추천]`과 같음, `_layout_fix`):
+  - 준 레이아웃 옵션(학습 때 옵션을 붙인 경우)으로는 데이터가 없거나 모델 열이 없고, 옵션 없이 읽으면 모델 열이 모두 있음.
+  - 모델 입력이 모두 든 머리글이 위쪽의 다른 한 행에 있음 (두 줄 머리글, 병합된 머리글, 제목 행).
+  - 옵션 없이 읽은 첫 데이터 행이 단위·메모 행 (단위가 든 모델은 `--unit-row`, 단위 없는 모델은 `--data-row`로 건너뜀).
+  모델 입력이 모두 든 행이 둘 이상이면 고르지 않고 `STOP_RETRY` + `[후보] --header-row 2, --header-row 4`(사용자에게 물음).
+  준 옵션으로 모델 열이 모두 읽히면 옵션을 그대로 씁니다(복구 없음). 모델 입력의 일부만 다른 행에 있으면 이전처럼 `[추천]`.
+- 학습 결과와 `--best`, 보고서 결과의 예측 명령(`next_commands`)에서 `--header-row/--unit-row/--data-row`를 뺐습니다. 새 파일은 구조가
+  다를 수 있고, 도구가 파일마다 머리글을 찾습니다. SKILL.md 4단계의 "학습 때 옵션을 예측에도 붙인다"를 "붙이지 않는다"로.
+- 내부: `ml_train.layout_flags`, `ml_report._layout_args`와 그 테스트를 없앰. `_unit_row_hint`는 `_layout_fix`에 합침.
+
+## [2.9.53] - 2026-11-04
+
+회사 PC 시험: 에이전트가 CP949로 저장된 `excluded_rows.csv`를 깨진 글자로 읽고 제외 이유를 지어냄. 회귀 테스트: `tests/test_train.py`
+`test_marks_auto_outliers_and_all_rows_score`, `test_multiclass_predict_batch_columns` (2.9.52에서 2개 모두 실패).
+
+### 바뀐 동작
+- 도구가 쓰는 CSV(예측 결과 `--save .csv`와 기본 `pred_*.csv`, `inline_pred_*.csv`, `excluded_rows.csv`, `model_dataset.csv`)를 CP949 대신
+  BOM이 붙은 UTF-8(`utf-8-sig`)로 저장합니다. Excel은 더블클릭으로 그대로 엽니다. 도구의 CSV 읽기는 인코딩을 자동 판별하므로 이전 파일도 읽습니다.
+- 학습 결과 JSON에 제외 행을 직접 담습니다 (제외 행이 있을 때만): `excluded_count`, `excluded_reasons`(이유별 행 수: `제외` 열의 글,
+  자동은 `자동 이상치: <열>`), `excluded_preview`(앞 20행: `target`, `row`, `kind` `직접`/`자동`, `reason`, `value`),
+  `excluded_preview_truncated`. `agent_directive`는 이 키를 그대로 알리고 CSV를 열지 말라고 합니다.
+- SKILL.md 2단계: `excluded_reasons`와 `excluded_preview`를 그대로 알리고 `excluded_rows_file`은 열지 않음.
+
+## [2.9.52] - 2026-11-04
+
+사용자 결정: 쓰지 않는 옵션 정리 (베타, 별칭 없이 없앰). 회귀 테스트: `tests/test_contract.py` `test_old_option_names_are_argument_errors`
+(새 7개, 2.9.51에서 모두 실패: 옵션을 받음).
+
+### 없앤 옵션 (주면 인자 오류, exit 2)
+- `ml_predict.py --meta`: 개별 `.joblib`을 주면 모델 정보는 늘 같은 폴더의 같은 이름 `.json`(`model_<타겟>.json`)에서 읽습니다.
+- `ml_predict.py --encoding`, `ml_train.py --encoding`: 결과 CSV와 `model_dataset.csv`의 인코딩은 도구가 정합니다.
+- `ml_report.py -d/--data-dir`, `-v/--version`: 보고서는 `-f <데이터파일>`(권장, 최고 버전) 또는 `-m <version_dir>`만. 없는 `-m` 폴더의
+  `[추천]`/`[후보]`(2.9.48)는 그대로이고, `[추천]` 명령은 `-m`만 바꿉니다.
+- 이 옵션들만 시험하던 테스트(`-v 1` 숫자 버전, `-d`의 최고 버전 자동 선택 2개)를 지우고, 보고서 테스트와 실기 러너(M6, M7)는 `-m <version_dir>`로 바꿈.
+  `ml_train.py --version/-v`(학습 버전 지정)는 그대로입니다.
+
+## [2.9.51] - 2026-11-04
+
+저장소 지침 반영: 인자 이름 통일 (AGENTS.md ACI 설계 권장 5, 베타라 별칭 없이 바꿈). 회귀 테스트: `tests/test_contract.py`
+`test_old_option_names_are_argument_errors`, `test_report_targets_and_save` (2.9.50에서 6개 중 5개 실패), `tests/test_skill_docs.py`.
+
+### 바뀐 인자 (옛 이름은 인자 오류, exit 2)
+- 결과 저장: `ml_predict.py --out`/`-o`, `ml_report.py --out`/`-o` -> `--save` (`ml_map.py`, `ml_export.py`와 같음, office-cli도 `--save`).
+  예측의 확장자 오류 문구도 "결과 파일(--save)", `[추천] <이름>.csv`는 `--save`의 값입니다.
+- 보고서 타겟: `ml_report.py --target`/`-t` -> `--targets`/`-y` (학습·예측·성능예측표·표 보간과 같음). `--target`은 argparse가 `--targets`의
+  줄임으로 받습니다(같은 뜻, 따로 만든 별칭 아님).
+- SKILL.md(예측 엑셀 저장 `--save`), README 옵션 표·예시, 테스트, 실기 러너(`tools/run_win_tests.py` M5)를 함께 고침.
+  `agent_scenarios.yaml`과 `docs/opencode`에는 바뀐 옵션을 쓰는 곳이 없습니다.
+
+## [2.9.50] - 2026-11-04
+
+저장소 지침 반영: 로그 태그. 회귀 테스트: `tests/test_contract.py` `test_stderr_uses_only_shared_log_tags` (2.9.49에서 실패).
+
+### 바뀐 동작 (stderr만, stdout JSON 그대로)
+- 학습 진행 줄 `[PROGRESS  45%] [=========-----------] <내용>`(터미널에서는 `\r` 덮어쓰기)을 `[PROGRESS] 45% <내용>` 한 줄씩으로.
+- `--history` 표 머리 `[ML EXPERIMENT HISTORY LEDGER] Root: ...`, `[PROJECT DESCRIPTION] ...`을 `[STATUS] 실험 이력 (history.jsonl): ...`,
+  `[STATUS] 설명: ...`으로 (허용 태그는 `[INFO] [PROGRESS] [WARN] [ERROR] [STATUS]`뿐).
+- 실기 러너(`tools/run_win_tests.py`)의 `[준비]`를 `[INFO]`로. 러너 M14 검사(stdout 1줄 JSON, stderr `\r` 없음)는 진행 줄 모양을 읽지 않아 그대로입니다.
+
+## [2.9.49] - 2026-11-04
+
+저장소 지침 반영: 출력 양 제한(R2). 회귀 테스트: `tests/test_train.py` "JSON 목록 상한 + truncated" (2.9.48에서 3개 모두 실패).
+
+### 바뀐 동작
+- `ml_train.py --history`의 `records`는 최근 30건(`HISTORY_SHOWN`)까지. `count`(= `record_count`, 전체), `shown`, `truncated`, 잘렸으면
+  `full_result_file`(`<데이터>_ml_data/history.json`, 전체 기록)과 `agent_directive`에 "최근 N건만" 안내. 이전에는 기록 수만큼 모두.
+- 학습 결과의 `feature_types`는 종류(numeric, categorical, datetime)마다 30개(`FEATURE_TYPES_SHOWN`)까지. 넘으면 `truncated: true`, `feature_count`,
+  `full_result_file`(`history.json`). 학습 결과에 `truncated`가 늘 있습니다(안 잘렸으면 false). 원장 기록은 그대로 전체.
+- 오류 메시지의 열 목록(`[사용 가능한 컬럼 목록]`, `[모델 입력 목록]`, 보고서의 `[사용 가능한 버전]`)은 40개(`MESSAGE_LIST_MAX`)까지와 `외 N개 (전체 M개)`
+  (PART C `name_list`). 열이 500개인 표의 오류 한 번이 경량 LLM의 문맥을 채우지 않게.
+
+## [2.9.48] - 2026-11-04
+
+저장소 지침 반영: 보고서 버전 없음의 `[추천]`. 회귀 테스트: `tests/test_contract.py` `test_report_unknown_version_*` 3개
+(2.9.47에서 3개 모두 실패).
+
+### 수정
+- `ml_report.py -d <폴더> -v <없는 버전>`과 `-m <없는 버전 폴더>`가 "버전 폴더를 찾을 수 없습니다"만 알려 에이전트가 고칠 값을 몰랐던 문제.
+  같은 데이터 폴더에 학습한 버전(`leaderboard.json`이 있는 `vN`)이 하나면 `[추천]` 그 폴더를 `-m`으로 준 전체 명령(다른 옵션 유지, `-d`/`-v` 뺌),
+  여럿이면 `[후보] v1, v3`(다른 버전은 다른 모델이라 사용자가 고름), 없으면 먼저 학습하라는 안내.
+- 예측 `--targets`(`-y`) 불일치는 바꾸지 않았습니다: 이미 `resolve_column_names`로 단위 없는 고유한 이름은 자동으로 맞추고, 비슷한 이름은 `[후보]`,
+  없으면 모델의 타겟 목록을 알립니다. 다른 타겟을 `[추천]`하면 다른 양을 예측하게 되므로 2.9.33 규칙대로 `[추천]`을 두지 않습니다.
+
+## [2.9.47] - 2026-11-04
+
+저장소 지침 반영: `--dtypes` 이름 맞추기. 회귀 테스트: `tests/test_train.py` "--dtypes 이름과 형식 확인" (2.9.46에서 2개 모두 실패).
+
+### 수정
+- `--dtypes`의 열 이름이 정확히 같을 때만 적용하고, 다른 이름(`설비코드` / 열 `설비코드(번호)`)과 모르는 형식(`strr`)은 말없이 무시하던 문제.
+  새 `resolve_dtypes`가 열 이름을 `-x`/`-y`와 같은 규칙(`resolve_column_names`: 정확한 이름, 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`)으로 맞추고,
+  형식을 확인합니다: 형식 오타는 `[추천] --dtypes "<고친 전체 값>"`, 비슷한 형식이 없으면 쓸 수 있는 형식(float, int, str, datetime) 안내,
+  `:`가 없으면 형식 없음 안내. 원장의 `dtypes`에는 맞춘 전체 이름과 표준 형식이 남습니다.
+- `int` 형식이 빈 칸을 0으로 채우던 것(`fillna(0)`)을 없앰: 숫자 열로 읽고 빈 칸은 다른 숫자 열처럼 중앙값으로 채웁니다.
+- 지침의 "`[추천]`"은 이름에는 쓰지 않았습니다: 비슷한 이름은 다른 양일 수 있어 `[후보]`(2.9.33 규칙). `[추천]`은 형식 오타에만.
+
+## [2.9.46] - 2026-11-04
+
+저장소 지침 반영: 빈 결과(R2)와 원장. 회귀 테스트: `tests/test_contract.py` `test_history_without_records_is_ok_zero`,
+`test_blank_rows_only_input_says_zero_rows`, `tests/test_safety.py` `test_existing_version_refused_then_overwrite` (2.9.45에서 3개 모두 실패).
+
+### 바뀐 동작
+- `ml_train.py --history`에 학습 기록이 없으면 `status: no_history`(그 밖의 키 없음) 대신 `status: ok`, `verified: true`, `record_count: 0`, `count: 0`,
+  `records: []`, `no_history: true`, `agent_directive` `VERIFIED: 0건. 이 데이터 파일의 학습 기록(history.jsonl)이 없습니다. ...`.
+- 머리글 아래가 모두 빈 행인 입력은 "머리글(N행) 아래의 M행이 모두 빈 행이라 데이터가 0행입니다"로 멈춥니다 (공통 로더라 학습·예측·표 보간 같음).
+  이전에는 학습이 "숫자로 변환 가능한 값이 하나도 없습니다 ... --task classification", 표 보간이 "숫자 기준 열이 하나 이상 필요합니다"로 원인과 다르게 안내.
+
+### 수정
+- `--version vX --overwrite`로 버전을 바꾸면 원장에 같은 version 기록이 둘 남아, 새 기록의 `delta_score`·`is_best`가 바뀐 옛 폴더의 점수와 비교되고
+  `--history`·보고서가 옛 기록을 볼 수 있던 문제. 원장에 그 버전 기록이 있으면 빼고 새 기록을 붙여 다시 씁니다(원자적 쓰기, stderr `[INFO]`),
+  `delta_score`·`is_best`도 그 버전의 옛 기록을 빼고 계산합니다.
+
+## [2.9.45] - 2026-11-04
+
+저장소 지침 반영(R5): 라이브러리 없음. 회귀 테스트: `tests/test_contract.py` "라이브러리 없음" (2.9.44에서 7개 중 6개 실패).
+
+### 수정
+- 진입점 최상단 import(numpy, pandas, joblib, scikit-learn)가 실패하면 traceback만 나오고 stdout JSON이 없던 문제. `ml_predict.py`는 핵심
+  라이브러리를 감싸서 불러오고(`CORE_IMPORT_ERROR`, 타입 표시는 `from __future__ import annotations`), 모든 진입점이 먼저
+  `check_core_libraries`, 나머지 무거운 import는 `exit_missing_library`로 감쌉니다. 응답: exit 1, `error_type: "missing_library"`,
+  `missing_package`, `install_command: "python -m pip install <패키지>"`, `agent_directive` `STOP_RETRY: <기능>에 필요한 <패키지>이(가) 설치되어
+  있지 않습니다. install_command를 사용자에게 전달하세요. 직접 설치하지 마세요.` 오류 로그에도 남습니다.
+- 실행 중의 `ImportError`(scipy, openpyxl 등)도 `ERROR:`(내부 오류) 대신 같은 `missing_library` `STOP_RETRY`. 보고서의 python-docx·matplotlib 없음도 같은 형식.
+- PART C에 `MissingLibraryError`, `missing_library_error`, `require_lib`, `exit_missing_library`, `check_core_libraries`, `PIP_NAMES`(sklearn -> scikit-learn 등).
+
+## [2.9.44] - 2026-11-04
+
+23차 점검 L1. 회귀 테스트: `tests/test_names.py` `test_alias_pair_with_degree_spelling_refused` (2.9.43에서 3개 모두 실패).
+
+### 수정
+- 예측 `-i`에 `온도`와 `온도(C)`를 함께 주면(모델 입력 `온도(°C)`) 같은 열의 두 값이라는 `[후보]` 대신 "'온도'은(는) 모델 입력이 아님"으로
+  안내하던 문제. `check_inline_aliases`가 단위 붙은 이름도 입력 열 맞추기(`align_input_columns`)와 같은 도 기호 동등성(`_same_unit_name`:
+  `°C`·`℃`·`C`, 띄어쓰기)으로 모델 입력에 맞춥니다: `[후보] 온도=180, 온도(C)=182`. `온도(℃)`, `온도( °C)`도 같습니다.
+
+## [2.9.43] - 2026-11-04
+
+9차 점검 CSV-4. 회귀 테스트: `tests/test_loading_numbers.py` "소수점 쉼표 판단은 열마다" (2.9.42에서 5개 중 3개 실패).
+
+### 수정
+- 탭·`;` CSV에서 글자 열의 `1,2`(라인 목록)가 파일 전체를 소수점 쉼표로 정해, 다른 열의 천 단위 숫자(`1,000`)나 점 묶음 숫자(`2.125`) 때문에
+  파일 전체가 `STOP_RETRY`이던 문제 (2.9.18은 학습). 소수점 쉼표 판단을 열마다 합니다(`_comma_columns`, PART C):
+  - 채운 칸의 절반 이상이 숫자가 아닌 글자 열은 근거가 아니고 바꾸지 않습니다 (`1,2`, `A`, `1,2,3` 열의 `1,2`는 글자 그대로).
+  - 소수점 쉼표가 없는 열에 점 소수(`61.5`)가 있으면 파일의 소수점은 `.`: 어느 열도 소수점 쉼표로 읽지 않고 `1,000`은 1000, `2.125`는 2.125.
+    `1,2`만 든 열은 글자 그대로라 학습 피처로 쓰면 기존 "소수점 쉼표로 쓴 숫자 글자" 검사가 `--dtypes "<열>:str"`를 안내합니다.
+  - 점 소수가 없는 파일은 지금처럼 소수점 쉼표 열과 `1,000`·`2.125`가 함께 있으면 `STOP_RETRY` (유럽식 파일이면 1000배 다름, 2.9.22 규칙).
+
+### 바뀐 동작 (의도한 변경)
+- `;`·탭 CSV에 소수점 쉼표 열(`170,5`)과 점 소수 열(`60.25`)이 함께 있으면 2.9.42는 둘 다 소수로 읽었지만, 이제 소수점 쉼표 열은 글자로 남고
+  학습 피처로 쓰면 "소수점 쉼표로 쓴 숫자 글자" `STOP_RETRY`입니다 (한 파일에 두 소수점 규칙이 섞임).
+- 학습 판단(`decimal_comma`)을 따르는 예측 파일·`--points` 파일도 글자 열은 바꾸지 않습니다.
+
+## [2.9.42] - 2026-11-04
+
+24차 확인 검사 LOW-3. 회귀 테스트: `tests/test_map.py` "묻지 않은 값 열의 섞인 %" (2.9.41에서 3개 중 1개 실패).
+
+### 수정
+- `ml_map.py`를 `-y` 없이 실행하면 묻지 않은 값 열 하나에 `%` 칸과 `%` 없는 숫자 칸이 섞여 있어도 조회 전체가 `STOP_RETRY`이던 문제.
+  `-y`가 없으면 섞인 값 열은 빼고 나머지 값 열로 계산하며 `warnings`에 "값 열 ['<열>']은(는) ... 섞여 있어 계산하지 않았습니다"를 넣습니다.
+  기준 열(`-i`, `--points`), `-y`로 지정한 열, 역산의 `--find`·`--vary` 열은 지금처럼 멈춥니다. 값 열이 모두 섞였으면 멈춥니다.
+- PART C에 `percent_mix`(섞인 열 목록, `check_percent_mix`가 씀).
+
+## [2.9.41] - 2026-11-04
+
+23차 점검 M1. 회귀 테스트: `tests/test_loading_numbers.py` ".xlsx 백분율 서식 칸" (2.9.40에서 5개 모두 실패).
+
+### 수정
+- .xlsx의 백분율 서식 칸(Excel 화면 `11.9%`, 저장 값 0.119)을 분수(0.119)로, 같은 표를 CSV로 저장한 `11.9%`는 11.9로 읽어 두 저장 형식이
+  100배 다르던 문제. 공통 로더(`read_raw_table`)가 첫 시트에서 서식에 `%`가 있는 숫자 칸을 Excel이 보여 주는 글자(`11.9%`, 유효숫자 15자리)로
+  바꿔 CSV와 같은 규칙으로 읽습니다: 학습(피처·타겟), 예측 입력 파일, `ml_map.py`(데이터·조회 파일), `ml_export.py`(학습 스냅숏) 모두 11.9.
+  `warnings`의 "'<열>' 열의 N칸 ... %를 떼고 숫자로 읽었습니다"에 ".xlsx의 백분율 서식 칸도 화면에 보이는 숫자로 읽음"을 더했습니다.
+- 한 열에 백분율 서식 칸과 일반 숫자 칸이 섞이면 CSV의 `11.9%`/`0.119`처럼 `check_percent_mix`가 `STOP_RETRY`(안내에 "열 전체를 같은 셀 서식으로").
+- 따옴표·`\`로 쓴 `%`(`0.0"%"`)는 글자일 뿐이라 값 그대로. 서식 표에 백분율 서식이 없는 통합 문서는 다시 읽지 않습니다(속도 그대로).
+
+### 바뀐 동작 (의도한 변경)
+- 백분율 서식 열로 학습한 모델은 이제 11.9 배율입니다. 2.9.40 이전에 .xlsx 백분율 열로 학습한 모델은 다시 학습하십시오 (베타, 호환 없음).
+
 ## [2.9.40] - 2026-11-04
 
 회사 PC `run_all_tests.py --gemma`(Gemma, opencode CLI 2.2.5)에서 R1(보고서)과 R2(성능예측표)가 결과 JSON 없이 끝남:
@@ -1295,21 +1770,9 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - [ ] 260자 넘는 긴 경로
 - [ ] `--best`: 조건이 다른 타겟들이 같은 이름의 파생변수를 다른 수식으로 만들면 `model_dataset.csv`·`correlation.csv`에는 첫 수식 값만 들어감 (모델은 타겟별로 정확)
 - [ ] 회사 PC에서 6타겟 실제 데이터로 `ml_report.py -f` 소요 시간 확인
-- [ ] .xlsx 백분율 서식 칸은 분수(`0.119`)로, CSV의 `%` 칸은 `%`를 뗀 값(`11.9`)으로 읽혀 같은 데이터의 두 저장 형식이 100배 다름 (23차 점검 M1)
-- [ ] 23차 점검 L1: 예측 `-i`에 `온도`와 `온도(C)`를 함께 주면(모델 입력 `온도(°C)`) 같은 열 두 값이라는 `[후보] 온도=.., 온도(C)=..` 대신 "'온도'은(는) 모델 입력이 아님"으로 안내함. 안전하게 멈추지만 문구가 부정확함 (`check_inline_aliases`가 도 기호 C 동등성을 쓰지 않음).
-- [ ] 탭 CSV에서 천 단위 숫자(`1,000`)나 점 묶음 숫자(`2.125`, 2.9.22)와 글자 열의 `1,2`(라인 목록)가 함께 있으면 파일 전체가 `STOP_RETRY` (2.9.18은 학습, 9차 점검 CSV-4): 소수점 쉼표 판단을 열마다 하기
-- [ ] 24차 확인 검사 LOW-3: `ml_map.py`를 `-y` 없이 실행하면 묻지 않은 값 열 하나에 `%` 칸과 `%` 없는 숫자 칸이 섞여 있어도 조회 전체가 `STOP_RETRY` (`check_percent_mix`가 모든 값 열을 검사)
 
 ### 저장소 지침 반영 (AGENTS.md 2026-10-28, 우선순위 순)
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
-- [ ] 진입점 최상단 import(numpy/pandas/joblib/sklearn) 실패 시 traceback 대신 STOP_RETRY JSON + `python -m pip install ...` 안내, ImportError를 STOP_RETRY로 분류 (회귀 테스트)
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
-- [ ] `--history` 원장 0건을 `status: ok` + `record_count: 0`으로 (ml_train.py:1582, `no_history`는 별도 키로 유지), 빈 행만 있는 입력의 0행 명시 오류(ml_predict.py:444)
 - [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상
-- [ ] `--overwrite`로 버전을 교체하면 원장에 같은 version 기록이 2개 생김: `ml_report -d` 최고 버전 선택과 `is_best` 비교가 옛 기록을 볼 수 있음 (교체 표시 또는 마지막 기록 우선)
-- [ ] `--dtypes` 컬럼명을 resolve_column_names로 매칭 + `[추천]`, int 변환의 fillna(0) 제거 또는 경고(ml_train.py:237-242)
-- [ ] 예측 `--targets` 불일치(ml_predict.py:904), 보고서 버전 없음(ml_report.py:772)에 `[추천] <후보>`
-- [ ] JSON 목록 상한 + `truncated`: `--history` records, feature_types/features_used, 오류 메시지 컬럼 목록
-- [ ] 로그 태그 정리: `[PROGRESS  5%] [===]` -> `[PROGRESS] 5% ...`(러너 M14 파서 확인), 이력 표 머리 `[STATUS]`, 러너 `[준비]` -> `[INFO]`
-- [ ] 인자 이름 통일: ml_report `--targets`(다른 도구와 같게), 저장 `--out` -> `--save` (베타라 별칭 없이 바꿈)
 - [ ] 테스트 보강: exit 130 롤백, 성공 경로 `VERIFIED:` 검사 확대, 빈 데이터 (덮어쓰기 차단은 2.3.0)

@@ -1,0 +1,501 @@
+# 숫자 검색 두 층 판정 회귀 표 (1.4.70). 열: 검색어, 글(\t = 탭, \n = 줄바꿈), 기대
+# A = 층 A(글자 그대로, VERIFIED)여야 함, notA = 층 A이면 안 됨 (6·7차 검토의 오일치 쌍 전부: 층 B·숫자 안전망·0건은 괜찮음)
+5 V	정격 5 V	A
+10 mm	PLATE 10 mm	A
+25 ℃	주위 25 ℃	A
+±0.5 mm	공차 ±0.5 mm	A
+1,500 rpm	회전수 1,500 rpm	A
+50 Hz	주파수 50 Hz	A
+-40 ℃	보관 -40 ℃	A
+10 MM	PLATE 10 MM	A
+5V	정격 5 V	A
+5 V	정격 5V	A
+40 ℃	동작 온도\t-\t\t40\t℃	A
+100 mA	소비 전류\t-\t-\t100\tmA	A
+5V ±5%	정격 전압: DC 5V±5%	A
+±0.5 mm	100±0.5 mm	A
+-5 %	+10 %/-5 %	A
+-40 ℃	-40 ~ 85 ℃ 아님 -40 ℃	A
+10 V	0 - 10 V	A
+정격 전압 5 V	정격 전압 5 V 이하	A
+5 V	5 V DC	A
+1/2	1/2 inch	A
+ABC-1234	(ABC-1234)	A
+-5 V	-5V~5V	A
+5 V	-5V~5V	A
+1,500 rpm	1,500 rpm	A
+50 Hz	50 Hz	A
+40 ℃	Ta 25 -40 ℃	notA
+40 ℃	보관 85 ℃ -40 ℃	notA
+40 °C	Range 85 °C -40 °C	notA
+40 ℃	25 to -40 ℃	notA
+40 °C	from 85 to -40 °C	notA
+12 V	전원 +5 V -12 V	notA
+12 V	Pin 3 VEE -12 V	notA
+5 V	OUT2 -5 V	notA
+10 %	허용차 +5 % -10 %	notA
++10 %	허용차 +5 % -10 %	notA
+15 %	+10 % -15 %	notA
++15 %	+10 % -15 %	notA
+0.1 mm	공차 +0.2 mm -0.1 mm	notA
+0.1	공차 +0.2 -0.1	notA
+0.5	+0 -0.5	notA
++0.5	+0 -0.5	notA
+3 dB	Gain 1 dB -3 dB	notA
+40	Typ 25 Min -40	notA
+0.02 mm	+0.05 mm -0.02 mm	notA
+1 A	Offset 2 A -1 A	notA
+0.5 mm	±  0.5 mm	notA
+0.5 mm	+ / - 0.5 mm	notA
++0.5 mm	+ / - 0.5 mm	notA
+10 %	+/-  10 %	notA
+-5 V	+ / - 5 V	notA
+40 ℃	25,-40 ℃	notA
+40℃	Min-40℃	notA
+10 mohm	10 MΩ	notA
+10 Mohm	10 mΩ	notA
+10 MΩ	10 mohm	notA
+1 mΩ	1 ㏁	notA
+10 kohm	10 MΩ	notA
+10 mHz	10 MHz	notA
+1 mW	1 MW	notA
+10 MPa	10 mPa·s	notA
+5 mV	5 MV	notA
+08:30	UTC-08:30	notA
+5:30	GMT-5:30	notA
+1x10	1×10\u207b³	notA
+5 V	5 Vp-p	notA
+10 A	10 Apk	notA
+1 bar	1 barg	notA
+30 dB	30 dBA	notA
+5 V	5 Vo	notA
+1 A	1 Ain	notA
+10 s	10 sec	notA
+5 V	5 VA	notA
+10 m	10 mm	notA
+ABC-1234	ABC-1234-5	notA
+Ø10	φ10	notA
+-0.1 mm	공차 +0.2 mm -0.1 mm	notA
+-40 ℃	25 to -40 ℃	notA
+-12 V	전원 +5 V -12 V	notA
+30 ℃	보관 70 ℃ -30 ℃	notA
+0.5 V	Offset 1 mV -0.5 V	notA
+2 mm	X 10 mm -2 mm	notA
+55 ℃	Tmax 125 ℃ Tmin 25 ℃ -55 ℃	notA
+20 dBm	Pout 10 dBm -20 dBm	notA
+1 %	±2 % -1 %	notA
+3 ㎜	치수 10 ㎜ -3 ㎜	notA
+100 mohm	100 MΩ	notA
+1 Mohm	1 mohm	notA
+5 ohm	5 ㏁	notA
+5 V	-5 V	notA
+5 V	\u22125 V	notA
+5 V	\u20135 V	notA
+5 V	±5 V	notA
+5 V	+/-5 V	notA
+5 V	+ / - 5 V	notA
+5 V	+-5 V	notA
+5 V	입력 -5V	notA
+5 V	입력-5V	notA
+5 V	Ta=-5V	notA
+5 V	5 mV	notA
+5 V	5 kV	notA
+5 V	5 Vrms	notA
+5 V	5 Vpp	notA
+10 mm	10 m	notA
+10 mm	10 mm²	notA
+10 mm	10 mm2	notA
+10 mm	10 mmHg	notA
+10 mm	길이 -10 mm	notA
+10 mm	1.10 mm	notA
+10 mm	10.5 mm	notA
+10 mm	10 cm	notA
+25 ℃	-25 ℃	notA
+25 ℃	\u221225℃	notA
+25 ℃	25 °F	notA
+25 ℃	25 K	notA
+-40 ℃	보관 40 ℃	notA
+-40 ℃	25 -40 ℃	notA
+-40 ℃	A-40℃	notA
+±0.5 mm	공차 0.5 mm	notA
+±0.5 mm	공차 -0.5 mm	notA
+±0.5 mm	공차 +0.5 mm	notA
+±0.5 mm	공차 ±0.5 m	notA
+±0.5 mm	공차 ±0.05 mm	notA
+1,500 rpm	회전수 11,500 rpm	notA
+1,500 rpm	회전수 -1,500 rpm	notA
+1,500 rpm	1.500 rpm	notA
+50 Hz	50 kHz	notA
+50 Hz	50 MHz	notA
+50 Hz	50 mHz	notA
+50 Hz	60 Hz	notA
+10 MHz	10 mHz	notA
+10 MΩ	10 mΩ	notA
+10 mΩ	10 MΩ	notA
+10 mA	10 MA	notA
+10 mA	10 μA	notA
+10 uA	10 mA	notA
+10 pF	10 PF	notA
+10 pF	10 nF	notA
+5 %	-5 %	notA
+5 %	±5 %	notA
+±5 %	5%	notA
+5%	±5%	notA
+10 ppm	-10 ppm	notA
+10 ppm	±10 ppm	notA
+10 ppm	10 ppb	notA
+30 dB	30 dBm	notA
+30 dB	30 dB(A)	notA
+30 dB	-30 dB	notA
+-30 dB	30 dB	notA
+1 bar	1 bar(g)	notA
+1 MPa	1 MPaG	notA
+1 MPa	1 mPa	notA
+45°	-45°	notA
+45°	45°C	notA
+45°	±45°	notA
+1/2	11/2	notA
+1/2	1/2.5	notA
+1/2	-1/2	notA
+1E-3	1E-30	notA
+10	10^-3	notA
+10	10\u207b³	notA
+5 A	5 Apk	notA
+5 A	5 Arms	notA
+5 A	5 Ah	notA
+5 A	5 mA	notA
+5 A	-5 A	notA
+5 kΩ	5 Ω	notA
+5 kΩ	5 MΩ	notA
+Φ10	Ø10	notA
+Ø10	Φ10	notA
+3φ	3Ø	notA
+ABC-1234	ABC-12345	notA
+ABC-1234	XABC-1234	notA
+정격 전압 5 V	정격 전압 -5 V	notA
+정격 전압 5 V	정격 전압 ±5 V	notA
+2.1	2.10	notA
+2.1	12.1	notA
+-20	온도 20	notA
+-20	1-20	notA
+-20	A-20	notA
+-20	0 - 20	notA
+-20	0-20	notA
++20	20	notA
++20	-20	notA
+20	+20	notA
+20	+ 20	notA
+-40 ℃	보관 온도 \u2014 40 ℃	notA
+-40 ℃	보관 온도 - 40 ℃	notA
+-5 V	- 5 V 입력	notA
+-40 ℃	동작 온도\t-\t40\t℃	notA
+-40 ℃	동작 온도\t-\t\t40\t℃	notA
+-40	동작 온도\t-\t\t\t40	notA
+-40 ℃	동작 온도  -     40 ℃	notA
+10 mm	10 mm^2	notA
+10 mm	10 mm³	notA
+10 mm	10 mm3	notA
+10 m	10 m/s	notA
+10 m	10 m²	notA
+1 kg	1 kgf	notA
+1 kg	1 kg/cm²	notA
+5 V	5 V/m	notA
+5 V	5 V/μs	notA
+100 V	100 V/μs	notA
+30 dB	30 dB (A)	notA
+1 bar	1 bar g	notA
+45°	45 °C	notA
+45 °	45 ℃	notA
+25 ℃	25 ℃/W	notA
+0.5 ℃	0.5 ℃/min	notA
+10 %	10 %RH	notA
+10 %	10 %IACS	notA
+10 ppm	10 ppm/℃	notA
+5 V	5 V(rms)	notA
+5 V	5 V (p-p)	notA
+5 V	5 V rms	notA
+5 V	5 V p-p	notA
+5 V	5 VRMS	notA
+10 A	10 A peak	notA
+10 A	10 Apeak	notA
+10 W	10 Wrms	notA
+1 MPa	1 MPa(G)	notA
+1 MPa	1 MPa G	notA
+1 MPa	1 MPa(abs)	notA
+10 m	10 M	notA
+1 ms	1 Ms	notA
+1 ms	1 MS	notA
+1 pA	1 PA	notA
+1 Pa	1 pA	notA
+1 mm	1 Mm	notA
+1 mΩ	1 MOhm	notA
+1 MΩ	1 mohm	notA
+1 μm	1 mm	notA
+1 s	1 ms	notA
+-40 ℃	동작 온도\t-\t40\t℃	notA
+-40 ℃	동작 온도\t-\t\t40\t℃	notA
+-40 ℃	동작 온도\t-\t\t40 ℃	notA
+-40	동작 온도\t-\t\t\t40	notA
+-5 V	전압\t-\n5 V	notA
+40 ℃	보관 －40 ℃	notA
+40 ℃	보관 \ufe6340 ℃	notA
+40 ℃	보관 \u221340 ℃	notA
+0.5 mm	공차 \u22130.5 mm	notA
+40 ℃	보관 \u02d740 ℃	notA
+5 V	＋5 V	notA
+5 V	± 5 V	notA
+5 V	+/- 5 V	notA
+5 V	+ /- 5 V	notA
+5 V	(-)5 V	notA
+5 V	(－)5 V	notA
+40 ℃	영하 40 ℃	notA
+10 %	-10 %	notA
+10 %	+10 %/-5 %	notA
+5 %	+10 %/-5 %	notA
+10 %	+10/-5 %	notA
+5 %	+10/-5 %	notA
+0.1 mm	+0.1/-0 mm	notA
+0 mm	+0.1/-0 mm	notA
+0.5 V	5±0.5 V	notA
+10%	5 V±10%	notA
+Tstg 40 ℃	Tstg-40℃	notA
+Topr 20 ℃	Topr-20℃	notA
+Tstg 40 ℃	Tstg -40℃	notA
+Tstg 40	Tstg-40	notA
+VEE 5 V	VEE-5V	notA
+Ta 25 ℃	Ta-25℃	notA
+Tmin 40 ℃	Tmin-40℃	notA
+Low 40 ℃	Low-40℃	notA
+저온 40 ℃	저온-40℃	notA
+LOW 40	LOW-40℃	notA
+Tj 150 ℃	Tj-150℃	notA
+T 40 ℃	T-40℃	notA
+Ts 40 ℃	Ts-40℃	notA
+TA 40 ℃	TA-40℃	notA
+Temp 40 ℃	Temp-40℃	notA
+Storage 40 ℃	Storage-40℃	notA
+Min 40	Min-40	notA
+Vmin 5 V	Vmin-5V	notA
+Ambient 20 ℃	Ambient-20℃	notA
+1 ms	1 mS	notA
+10 nm	10 Nm	notA
+10 Nm	10 nm	notA
+10 N·m	10 nm	notA
+1 Gb	1 GB	notA
+1 kb	1 kB	notA
+1 mbar	1 Mbar	notA
+1 T	1 t	notA
+1 G	1 g	notA
+100 pA	100 Pa	notA
+100 Pa	100 pA	notA
+1 mA	1 MA	notA
+# 8차 검토 (1.4.71) 낱말 수준 오일치 (층 A 금지): 띄어 쓴 천 단위, 곱 단위·띄어 쓴 단위 이어짐, 숫자 코드, 같은 칸의 붙은 빼기
+40 ℃	동작 온도 - 40 ℃	notA
+40 ℃	온도 −\t40 ℃	notA
+500 W	정격 출력 1 500 W	notA
+200 mm	길이 1 200 mm	notA
+200 mm	길이 1 200 mm	notA
+200 mm	길이 1 200 mm	notA
+200 mm	길이 1 200 mm	notA
+000 h	수명 10 000 h	notA
+5 N	체결 토크 5 N\u22c5m	notA
+5 N	체결 토크 5 N\u2219m	notA
+5 N	체결 토크 5 N\u2022m	notA
+5 N	체결 토크 5 N\u2217m	notA
+5 N	체결 토크 5 N m	notA
+10 A	용량 10 A\u22c5h	notA
+10 kgf	토크 10 kgf\u2219cm	notA
+10 mm	압력 10 mm Hg	notA
+10 mm	압력 10 mm H2O	notA
+2.5 mm	전선 2.5 mm SQ	notA
+5 %	습도 5 % RH ~ 95 % RH	notA
+0.5 %	정확도 0.5 % FS	notA
+61000-4	IEC 61000-4-2 시험	notA
+60068-2	IEC 60068-2-6 진동	notA
+1234	부품 번호 1234-5	notA
+10	10-3	notA
+10 m	10 m ³	notA
+25 ℃	25 ℃ /W	notA
+5 V	5 V /m	notA
+10 mm	10 mm ²	notA
+10 Ω	10 Ω\u22c5cm	notA
+10 Ω	10 Ω cm	notA
+3 dB	3 dB μV	notA
+10 kV	10 kV A	notA
+10 kV	10 kV\u22c5A	notA
+4 W	저항 1/4 W	notA
+# 8차 검토 (1.4.71) 완화: 글자가 같은데 형식 때문에 떨어지던 것 (층 A)
+24 V	입력 전원: 24 VDC	A
+5 V	로직 전원 5 V(DC)	A
+220 V	공급 전압 AC220V	A
+5 V	제어 전원 DC5V	A
+10 A	최대 전류 10 A(Max)	A
+3 A	최대 전류 3 A(Min)	A
+3.3 V	I/O 전압 3.3 V(Typ.)	A
+3.3 V	I/O 전압 3.3 V(typ)	A
+220 V	AC 220 V(AC) 단상	A
+100 V	입력 100 V/220 V 겸용	A
+220 V	입력 100 V/220 V 겸용	A
+85 ℃	고온고습 85 ℃/85 %RH, 1000 h	A
+60 Hz	주파수 50/60 Hz	A
+IP67	보호 등급 IP 67 이상	A
+IP 67	보호 등급 IP67 이상	A
+IEC 61000-4-2	정전기 시험은 IEC61000-4-2에 따른다	A
+M10	볼트 M 10 이상	A
+M 10	볼트 M10 이상	A
+1000 h	고온고습 85 ℃/85 %RH, 1000 h	A
+# 9차 검토 (1.4.72): '/' 값 구분(양쪽 숫자+단위, '/' 뒤 1·10^n은 비율), 단위 없는 검색어의 DC/AC 예외 없음, 붙은 기호(천 단위 따옴표, U+2044, U+FF0F, U+2215, 곱하기, U+3161, 폭 없는 공백, 지수 m-1), 붙여 쓴 범위 대시
+12	모델 AC12 사용	notA
+12	DC12 커넥터	notA
+24 V	DC24 V	A
+5 V	ADC5 V	notA
+40 ℃	\u316140 ℃	notA
+40 ℃	\u201240 ℃	notA
+40 ℃	\u207b40 ℃	notA
+40 ℃	\ufe6340 ℃	notA
+40 ℃	\uff0d40 ℃	notA
+40 ℃	\u201040 ℃	notA
+40 ℃	-\u202f40 ℃	notA
+40 ℃	-\u200b40 ℃	notA
+40 ℃	-\u300040 ℃	notA
+5 V	0.5 V	notA
+5 V	0,5 V	notA
+5 V	1/5 V	notA
+60 Hz	50/60 Hz	A
+60 Hz	1/60 Hz	notA
+4 W	11/4 W	notA
+5 V	5 V/ m	notA
+5 V	5 V / m	notA
+5 V	5 V/\u339d	notA
+5 V	5 V/\u00b5s	notA
+5 V	5 V/\u00b0C	notA
+5 V	5 V/℃	notA
+5 V	5 V/%	notA
+5 V	5 V/\u03a9	notA
+1 kg	1 kg/m\u00b3	notA
+5 %	5 %/℃	notA
+85 %	85 %/85 ℃	A
+20 ms	20 ms/div	notA
+10 V	10 V/div	notA
+10 V	10 V\uff0fm	notA
+10 V	10 V\u2215m	notA
+10 V	10 V\u2044m	notA
+5 V	5 V.m	notA
+M10	NUM 10	notA
+M10	M 10	A
+IP67	SHIP 67	notA
+IP67	IP 6 7	notA
+PT100	PT 1000	notA
+IP 67	IP67	A
+A 10	CA10	notA
+24 V	24 VDC	A
+24 V	24 VDCX	notA
+5 V	5 VAC	A
+10 m	10 m-1	notA
+10 m	10 m^-1	notA
+10 m	10 m\u207b\u00b9	notA
+1 W	1 W/kg	notA
+10 \u03a9	10 \u03a9/sq	notA
+10 \u03a9	10 \u03a9/\u25a1	notA
+3 dB	3 dB/oct	notA
+10 dB	10 dB/decade	notA
+1 A	1 A/mm\u00b2	notA
+1 A	1 A/\u339f	notA
+2 mm	2 mm\u00b2	notA
+2 mm	2 mm2	notA
+2 mm	2 mm^2	notA
+10 kV	10 kV/\u03bcs	notA
+100 V	100 V/220 V	A
+220 V	100 V/220 V	A
+5 V	5 V/-5 V	A
+16 inch	볼트 규격 15/16 inch	notA
+16 in	볼트 15/16 in	notA
+16"	배관 11/16"	notA
+8 inch	배관 13/8 inch	notA
+4 W	저항 1\u20444 W	notA
+4 W	저항 3/4 W	notA
+2 W	저항 1\u00bd W	notA
+32 UNC	나사 10-32 UNC	notA
+4 inch	배관 1-1/4 inch	notA
+4 inch	배관 1 1/4 inch	notA
+4 inch	배관 11/4 inch	notA
+12	AC12 모델	notA
+12 V	DC12 V	A
+12 V	DC12V	A
+5	PDC5 단자	notA
+100	AC100 단자	notA
+100	AC 100	A
+3	IEC61000-4-3	notA
+10 kHz	10 kHz/50 kHz	A
+50 kHz	10 kHz/50 kHz	A
+50 kHz	10/50 kHz	A
+50 Hz	1.2/50 Hz	notA
+50 \u03bcs	1.2/50 \u03bcs	notA
+50 us	서지 1.2/50 us	notA
+20 \u03bcs	8/20 \u03bcs	notA
+700 \u03bcs	10/700 \u03bcs	notA
+-40 ℃	범위 10-40 ℃	notA
+-5 V	Vcc-5 V	notA
+-5 V	VCC-5 V	notA
+-5 V	단자1-5 V	notA
+-40 ℃	범위 -40 ℃	A
+500 W	1'500 W	notA
+500 W	1\u2019500 W	notA
+5 %	5 % R.H.	notA
+3 dB	3 dB[A]	notA
+10 kg	10 kg f	notA
+40 ℃	40 ℃\u201385 ℃	A
+85 ℃	40 ℃\u201385 ℃	A
+2 mm	1x2 mm	notA
+2 mm	1\u00d72 mm	notA
+2 mm	1*2 mm	notA
+2 mm	1 x2 mm	notA
+20 A	IP20 A	notA
+0.1 mm	진직도 0.1 mm/1000 mm	notA
+1000 mm	진직도 0.1 mm/1000 mm	notA
+5 %	용량 변화 5 %/1000 h	notA
+1000 h	용량 변화 5 %/1000 h	notA
+100 mm	평면도 0.02/100 mm	notA
+2 ℃	승온 속도 2 ℃/1 min	notA
+1 min	승온 속도 2 ℃/1 min	notA
+350 \u03bcs	10/350 \u03bcs	notA
+350 \u03bcs	서지 10/350 \u03bcs 파형	notA
+220 V	110/220 V	A
+85 %RH	85 ℃/85 %RH	A
+10 m	10 m-20 m	A
+# 10차 검토: 숫자 앞·단위 뒤 허용 목록 (1.4.73)
+500 V	1\uff0c500 V	notA
+5 V	1\uff0e5 V	notA
+5 V	1\u00b75 V	notA
+40 \u2103	\u25b340 \u2103	notA
+500 V	1\u2018500 V	notA
+500 V	1`500 V	notA
+500 V	1_500 V	notA
+500 V	1\u2032500 V	notA
+40 \u2103	\u25b240 \u2103	notA
+5 V	1:5 V	notA
+5 V	1\u00f75 V	notA
+5 V	1\5 V	notA
+60 Hz	1\60 Hz	notA
+5 A	\u00bd5 A	notA
+5 V	5 V\u3383	notA
+5 V	5 V\u33a3	notA
+16 V	15/16 V	notA
+100 V	10/100 V	notA
+5 V	정격 1\uff0c5 V 이하	notA
+40 \u2103	온도 \u25b340 \u2103	notA
+5 V	5 V\u2032	notA
+5 V	5 V(1)	notA
+5 V	5 V'	notA
+5 V	"5 V	notA
+5 V	전압=5 V	A
+25 \u2103	온도:25 \u2103	A
+5 V	(5 V)	A
+5 V	[5 V]	A
+5 V	정격5 V이하	A
+10 mm	5\uff5e10 mm	A
+10 mm	5\u301c10 mm	A
+5 V	5 V, 12 V	A
+5 V	출력 5 V.	A
+5 V	출력 5 V: 정격	A
+5 V	5 V; 12 V	A

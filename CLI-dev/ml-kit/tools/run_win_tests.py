@@ -58,7 +58,7 @@ EXPECT = {
     "M10": "2만 행 학습 300초 미만, 예측 60초 미만, 둘 다 status=ok",
     "M11": "같은 데이터 동시 학습: 두 번째는 status=error + STOP_RETRY + exit 1, 첫 번째는 status=ok",
     "M12": "학습 강제 종료 뒤 재학습 status=ok, .tmp_* 임시 폴더가 남지 않고 새 버전 생성",
-    "M13": "--history status=ok, 컬럼 오타는 exit 1 + message에 '[추천]', 없는 옵션은 exit 2 + status=error",
+    "M13": "--history status=ok, 컬럼 오타는 exit 1 + message에 '[후보]'(2.9.33부터 이름 오타는 사용자가 고름), 없는 옵션은 exit 2 + status=error",
     "M14": "모든 호출의 stdout이 정확히 1줄 JSON, stderr에 \\r 덮어쓰기 없음",
 }
 
@@ -349,7 +349,7 @@ def test_all(ctx, only):
         xl = Office("Excel.Application")
         try:
             wb = xl.app.Workbooks.Open(out, ReadOnly=False)            # 결과 CSV를 Excel이 잠금
-            d, c, o, e = run_tool("ml_predict.py", "-m", vd, "-f", s["xlsx"], *xlsx_layout, "--out", out, "--overwrite")
+            d, c, o, e = run_tool("ml_predict.py", "-m", vd, "-f", s["xlsx"], *xlsx_layout, "--save", out, "--overwrite")
             wb.Close(SaveChanges=False)
         finally:
             xl.quit()
@@ -360,8 +360,8 @@ def test_all(ctx, only):
                f"요청={os.path.basename(out)}, 실제={os.path.basename(got)}", d, c, e)
 
     def m6():
-        root = (s.get("m1") or {}).get("data_root")
-        d, c, o, e = run_tool("ml_report.py", "-d", root)
+        vdir = (s.get("m1") or {}).get("version_dir")
+        d, c, o, e = run_tool("ml_report.py", "-m", vdir)
         rep = (d or {}).get("report_file")
         info = None
         if rep and os.path.exists(rep):
@@ -380,11 +380,11 @@ def test_all(ctx, only):
 
     def m7():
         rep = s.get("report")
-        root = (s.get("m1") or {}).get("data_root")
+        vdir = (s.get("m1") or {}).get("version_dir")
         wd = Office("Word.Application")
         try:
             doc = wd.app.Documents.Open(rep, ReadOnly=False, AddToRecentFiles=False, Visible=False)   # Word가 잠금
-            d, c, o, e = run_tool("ml_report.py", "-d", root, "--overwrite")
+            d, c, o, e = run_tool("ml_report.py", "-m", vdir, "--overwrite")
             doc.Close(SaveChanges=0)
         finally:
             wd.quit()
@@ -484,9 +484,9 @@ def test_all(ctx, only):
         d, c, o, e = run_tool("ml_train.py", "-f", s["xlsx"], "--history")
         bad = run_tool("ml_train.py", "-f", s["xlsx"], "-x", "반응온두", "-y", "생산효율", *xlsx_layout)
         arg = run_tool("ml_train.py", "--없는옵션")
-        ok = ok_(d) and (bad[0] or {}).get("status") == "error" and "[추천]" in (bad[0] or {}).get("message", "") \
+        ok = ok_(d) and (bad[0] or {}).get("status") == "error" and "[후보]" in (bad[0] or {}).get("message", "") \
             and bad[1] == 1 and arg[1] == 2 and (arg[0] or {}).get("status") == "error"
-        record(ctx, "M13", "이력 조회 / 오타 추천(exit 1) / 잘못된 옵션(exit 2)도 1줄 JSON", ok,
+        record(ctx, "M13", "이력 조회 / 오타 [후보](exit 1) / 잘못된 옵션(exit 2)도 1줄 JSON", ok,
                f"history={(d or {}).get('status')}, 오타 exit={bad[1]}, 옵션 exit={arg[1]}, root={os.path.basename(root or '')}",
                d, c, e)
 
@@ -650,7 +650,7 @@ def main():
     log("=" * 70)
     fatal = None
     try:
-        log("[준비] Excel로 테스트 데이터(xlsx, CP949 CSV) 생성")
+        log("[INFO] Excel로 테스트 데이터(xlsx, CP949 CSV) 생성")
         try:
             setup(ctx)
         except Exception as e:

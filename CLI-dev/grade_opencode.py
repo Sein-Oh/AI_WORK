@@ -23,7 +23,9 @@
 판정 (도구로 확인, LLM 판단 없음):
   - 필요한 명령을 실행했는가 (commands), 도구 결과 JSON이 ok인가 (tool_ok)
   - 답변에 꼭 들어갈 값이 있는가 (answer_all, answer_any)
-  - 공통 금지: 패키지 설치, py/python3, 임의 파이썬 코드, 도구 코드 읽기, .py 쓰기, 같은 명령 반복, 답변의 이모지·file:///·같은 말 반복
+  - 공통 금지: 패키지 설치, py/python3, 임의 파이썬 코드, 도구 코드 읽기, .py 쓰기, office-cli에 없는 명령·옵션(지어낸 것),
+    같은 명령 반복, 답변의 이모지·file:///·같은 말 반복
+  - manual이 있는 시나리오(O3, Outlook 메일 준비 필요)는 run_all_tests.py --gemma가 보내지 않는다. 기록이 없으면 "없음"(수동 전용)
   - answer_reference: true인 시나리오(X2처럼 자유 문장 답)는 답변 정규식 판정을 참고로만 보인다 ("통과(참고)"/"실패(참고)").
     최종 판정은 --judge 점수나 사람이 답변을 읽고 정한다. 명령·금지 규칙 위반은 그대로 "실패".
 --judge: 사내 OpenAI 호환 API(completions)로 시나리오별 1~5점과 이유를 붙인다 (참고용, 통과 여부에는 넣지 않음).
@@ -231,6 +233,20 @@ def final_answer(turn, sc=None):
     return "\n".join(t for t, at in zip(turn["texts"], turn["text_at"]) if at == last)
 
 
+_SEGMENT = re.compile(r"""(?:"[^"\n]*"?|'[^'\n]*'?|[^;&|\n"'])+""")
+
+
+def command_segments(cmd):
+    """One shell line -> the commands joined by ; && || | or newlines (separators inside quotes are kept:
+    --cells "C6=ft; C7=ft" stays one command). Scenario commands/forbid regexes are matched per command, so a
+    lookahead such as (?![^\n]*--dry-run) does not see another command's --dry-run."""
+    return [m.group(0).strip() for m in _SEGMENT.finditer(str(cmd)) if m.group(0).strip()] or [str(cmd)]
+
+
+def cmd_hit(rx, cmd):
+    return any(re.search(rx, seg, re.I) for seg in command_segments(cmd))
+
+
 def bash_commands(turn):
     return [(i, ENC_PREFIX.sub("", t["command"])) for i, t in enumerate(turn["tools"]) if t["tool"] == "bash"]
 
@@ -334,7 +350,7 @@ def grade_turn(sc, turn, rules):
     answer = final_answer(turn, sc)
     out = []
     for rx in sc.get("commands", []):
-        hit = any(re.search(rx, c, re.I) for c in cmds)
+        hit = any(cmd_hit(rx, c) for c in cmds)
         out.append((f"명령: {rx}", hit, "" if hit else "맞는 명령 없음"))
     if sc.get("tool_ok"):
         runs = [t for t in turn["tools"] if t["tool"] == "bash" and re.search(sc["tool_ok"], t["command"], re.I)]
@@ -352,7 +368,7 @@ def grade_turn(sc, turn, rules):
         bad = re.search(rx, answer, re.I | re.M)
         out.append((f"답변에 없어야 함: {rx}", not bad, bad.group(0)[:100] if bad else ""))
     for rx in sc.get("forbid", []):
-        bad = [c for c in cmds if re.search(rx, c, re.I)]
+        bad = [c for c in cmds if cmd_hit(rx, c)]
         out.append((f"금지 명령: {rx}", not bad, "; ".join(bad)[:300]))
 
     allow = set(sc.get("allow", []))
@@ -475,7 +491,8 @@ def score(found, spec, by_id, order, use_judge, model):
     for sid in order:
         sc = by_id[sid]
         if sid not in found:
-            rows.append({"id": sid, "결과": "없음", "실패": "대화에 이 요청이 없음", "명령수": 0, "초": None, "보낸횟수": 0})
+            why = "수동 전용 요청 (자동 실행에서는 보내지 않음)" if sc.get("manual") else "대화에 이 요청이 없음"
+            rows.append({"id": sid, "결과": "없음", "실패": why, "명령수": 0, "초": None, "보낸횟수": 0})
             continue
         turn = found[sid][-1]                            # graded on the last time the request was sent
         checks = grade_turn(sc, turn, rules)
@@ -574,7 +591,8 @@ def make_pack(test_dir):
     d = test_dir or spec["dir"]
     os.makedirs(PACK_DIR, exist_ok=True)
     msg = lambda s: f"[{s['id']}] " + s["message"].replace("{DIR}", d)
-    index = ["# OpenCode 종합 테스트 메시지 팩", "",
+    manual = [s for g in spec["groups"] for s in g["scenarios"] if s.get("manual")]
+    index =["# OpenCode 종합 테스트 메시지 팩", "",
              "agent_scenarios.yaml에서 만든 파일입니다. 직접 고치지 말고 yaml을 고친 뒤 `python grade_opencode.py --make-pack`으로 다시 만듭니다.", "",
              "## 1. 도구 점검 (정답을 아는 샘플로 도구만 확인, 5~10분)", "",
              "PowerShell에서 직접 실행하거나 Gemma에게 아래 메시지를 붙여넣습니다. 결과는 `C:\\CLI-dev\\beta_check_회사PC_<시각>.md`.", "",
@@ -589,7 +607,10 @@ def make_pack(test_dir):
              "   - 하나씩: 메시지 1개를 보내고 답을 받은 뒤 다음 메시지를 보냅니다 (권장).",
              "   - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때). "
              "요청이 한 턴에 섞이므로 채점은 명령 순서로 나눈 참고 결과입니다.",
-             "   - 묶음은 S -> A -> M -> P -> R -> X 순서입니다. P와 R은 A에서 만든 모델을 씁니다.",
+             "   - 묶음은 " + " -> ".join(g["id"] for g in spec["groups"]) + " 순서입니다. P와 R은 A에서 만든 모델을 씁니다. "
+             "O는 S1이 만든 샘플을 닫힌 파일 경로로 쓰고 Excel·Word가 있어야 합니다.",
+             *([f"   - 수동 준비가 필요한 요청({', '.join(s['id'] for s in manual)})은 묶음 파일의 '수동 준비'를 먼저 하고 하나씩 보냅니다. "
+                "`run_all_tests.py --gemma`는 이 요청을 보내지 않습니다."] if manual else []),
              "3. 끝나면 대화를 JSON으로 내보냅니다. PowerShell에서 (세션ID는 OpenCode 화면이나 `opencode session list`에서 확인):", "",
              "```powershell", EXPORT_CMD, "```", "",
              "   cmd의 `>`는 opencode가 쓴 UTF-8을 그대로 저장합니다. PowerShell의 `| Out-File`이나 `>`로 저장하면 "
@@ -607,10 +628,18 @@ def make_pack(test_dir):
         index.append(f"- [{g['id']} {g['title']}]({name}): " + ", ".join(s["id"] for s in g["scenarios"]))
         body = [f"# {g['id']} {g['title']}", "", "## 하나씩 보내기", ""]
         for s in g["scenarios"]:
-            body += [f"{s['id']}:", "", "```text", msg(s), "```", ""]
-        body += ["## 한 번에 보내기", "", "```text",
+            body += [f"{s['id']}:", ""]
+            if s.get("manual"):
+                body += ["수동 준비: " + s["manual"].replace("{DIR}", d), ""]
+            body += ["```text", msg(s), "```", ""]
+        auto = [s for s in g["scenarios"] if not s.get("manual")]
+        body += ["## 한 번에 보내기", ""]
+        if len(auto) < len(g["scenarios"]):
+            body += ["수동 준비가 필요한 " + ", ".join(s["id"] for s in g["scenarios"] if s.get("manual"))
+                     + "은(는) 뺐습니다 (하나씩 보내기로 따로 보냅니다).", ""]
+        body += ["```text",
                  "아래 요청을 순서대로 하나씩 처리해줘. 요청마다 결과를 짧게 알리고 다음 요청으로 넘어가. 중간에 막히면 그 요청만 건너뛰고 이유를 알려줘.", ""]
-        body += [msg(s) for s in g["scenarios"]] + ["```", ""]
+        body += [msg(s) for s in auto] + ["```", ""]
         with open(os.path.join(PACK_DIR, name), "w", encoding="utf-8") as f:
             f.write("\n".join(body))
     with open(os.path.join(PACK_DIR, "README.md"), "w", encoding="utf-8") as f:

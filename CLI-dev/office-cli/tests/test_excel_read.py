@@ -3,6 +3,7 @@ import datetime as dt
 import json
 import os
 import re
+import shlex
 import types
 import zipfile
 
@@ -15,7 +16,7 @@ import office
 import reader
 from fake_excel import FakeExcelWorkbook, FakeRange, FakeXlApp
 from fake_office import make_win32com
-from office_helpers import error_log_text, formula_xlsx, run_excel, run_main, TABLE, ws_of
+from office_helpers import error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
 
 
 def _strip_dimension(src, dst):
@@ -518,6 +519,39 @@ def test_where_unknown_column_and_bad_expression(xl_table, capsys):
     assert code == 1, out
 
 
+@pytest.mark.parametrize("expr, rows", [
+    ("부서 = 개발 | 부서 = 기획", ["나", "라"]),                         # 또는
+    ("부서 = 영업; 금액 > 250 | 부서 = 기획", ["가", "라"]),              # ;가 먼저 묶임
+    ("금액 > 5000 | 이름 = 나", ["나"]),
+    ("부서 = 영업 | 금액 >= 200", ["가", "다", "라"]),                   # 두 묶음에 모두 맞는 행은 한 번
+])
+def test_where_or(xl_table, capsys, expr, rows):
+    """1.4.45: 또는(|)."""
+    code, out = run_main(excel, capsys, "read", "--where", expr)
+    assert code == 0 and [r[0] for r in out["values"][1:]] == rows and out["count"] == len(rows), out
+
+
+def test_where_quoted_value_with_separators(xl_table, capsys):
+    xl_table.values[(3, 2)] = "개발;품질|지원"
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = '개발;품질|지원'")
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["나"], out
+    assert out["where"] == "부서 = '개발;품질|지원'", out
+    code, out = run_main(excel, capsys, "read", "--where", '부서 ~ "품질|지" | 이름 = 라')
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["나", "라"], out
+    xl_table.values[(4, 2)] = "R and D"
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = 'R and D'")         # 따옴표 안 AND는 고치지 않음
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["다"], out
+
+
+def test_where_or_spellings_recommend(xl_table, capsys):
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = 개발 OR 부서 = 기획")
+    assert code == 1 and out["message"].endswith("[추천] 부서 = 개발 | 부서 = 기획"), out
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = 개발 || 금액 > 500")
+    assert code == 1 and out["message"].endswith("[추천] 부서 = 개발 | 금액 > 500"), out
+    code, out = run_main(excel, capsys, "read", "--where", "| 부서 = 개발")
+    assert code == 1 and "[추천]" not in out["message"], out
+
+
 def test_where_truncation_and_save(xl_table, capsys, tmp_path):
     code, out = run_main(excel, capsys, "read", "--where", "금액 > 0", "--max-rows", "2")
     assert code == 0 and out["truncated"] is True and out["count"] == 4 and len(out["values"]) == 2, out
@@ -618,6 +652,90 @@ def test_detect_helper(tmp_path):
     fields = rt.uncomputed_fields(info)
     assert fields["uncomputed_count"] == 25 and fields["uncomputed_truncated"] is True
     assert rt.xlsx_uncomputed_formulas(formula_xlsx(tmp_path / "c.xlsx", cached=True))["count"] == 0
+
+
+def _array_xlsx(path, cached_anchor=False):
+    """A1:A3 값, C1:C3 배열 수식 (openpyxl은 왼쪽 위 C1만 파일에 씀, fullCalcOnLoad 표시)."""
+    import openpyxl
+    from openpyxl.worksheet.formula import ArrayFormula
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "배열"
+    for r in range(1, 4):
+        ws.cell(r, 1, r)
+    ws["C1"] = ArrayFormula("C1:C3", "=A1:A3*2")
+    wb.save(path)
+    if cached_anchor:                              # 왼쪽 위만 값이 있고 표시도 없음: C2, C3은 값이 없음
+        set_cached_value(str(path), "<v></v>", "<v>2</v>")
+    return str(path)
+
+
+def test_array_formula_counts_every_cell(tmp_path, capsys):
+    """23차 L1 (1.4.43): 배열 수식은 ref 범위의 모든 칸이 수식 칸."""
+    info = rt.xlsx_uncomputed_formulas(_array_xlsx(tmp_path / "a.xlsx"))
+    assert info["count"] == 3 and info["cells"] == ["배열!C1", "배열!C2", "배열!C3"] and info["bounds"] == [1, 3, 3, 3], info
+    p = _array_xlsx(tmp_path / "b.xlsx", cached_anchor=True)
+    info = rt.xlsx_uncomputed_formulas(p)
+    assert info["count"] == 2 and info["cells"] == ["배열!C2", "배열!C3"], info
+    assert rt.xlsx_uncomputed_formulas(p, area=(1, 1, 2, 3))["count"] == 1         # 범위 안의 C2만
+    assert rt.xlsx_uncomputed_formulas(p, area=(1, 1, 3, 2))["count"] == 0         # C열 밖
+    code, out = run_main(excel, capsys, "read", "--target", p)
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["uncomputed_count"] == 2, out
+
+
+def test_array_formula_with_values_is_computed(tmp_path):
+    p = tmp_path / "m.xlsx"
+    assert rt.xlsx_uncomputed_formulas(_mixed_xlsx(p))["count"] == 0               # 엑셀 저장: 다른 칸에 값이 있음
+
+
+def _far_xlsx(path):
+    """값 A1:C10과 멀리 떨어진 계산되지 않은 수식 칸 Z200000 하나 (openpyxl 저장, 파일 크기 정보는 A1:Z200000)."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "S"
+    for r in range(1, 11):
+        for c in range(1, 4):
+            ws.cell(r, c, f"h{c}" if r == 1 else r * c)
+    ws["Z200000"] = "=A2*2"
+    wb.save(path)
+    return str(path)
+
+
+def test_far_uncomputed_cell_is_not_padded(tmp_path, capsys):
+    """24차 LOW-4 (1.4.44): 멀리 떨어진 계산되지 않은 수식 칸까지 빈 행을 채우지 않고 따로 읽는 명령을 줌."""
+    p = _far_xlsx(tmp_path / "far.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p)
+    assert code == 0 and out["range"] == "A1:C10" and out["rows"] == 10, {k: out[k] for k in out if k != "values"}
+    assert out["agent_directive"].startswith("UNVERIFIED:") and out["far_uncomputed_formulas"] == ["S!Z200000"], out
+    cmd = out["next_commands"][-1]["command"]
+    assert "--range S!Z200000" in cmd, cmd
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "S!Z200000")    # 그 명령으로 읽으면 그 칸
+    assert code == 0 and out["uncomputed_formulas"] == ["S!Z200000"], out
+
+
+def test_far_uncomputed_cell_whole_columns(tmp_path, capsys):
+    p = _far_xlsx(tmp_path / "far.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "A:Z")       # 전에는 '너무 큽니다' + 그 칸을 뺀 [추천]
+    assert code == 0 and out["range"] == "A1:Z10" and out["far_uncomputed_count"] == 1, out
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "A:C")       # 그 칸은 요청한 열 밖
+    assert code == 0 and out["range"] == "A1:C10" and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "far_uncomputed_formulas" not in out
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "A1:Z300000")
+    assert code == 0 and out["rows"] == 10 and out["far_uncomputed_count"] == 1, out
+
+
+def test_far_uncomputed_cell_export(tmp_path, capsys):
+    p = _far_xlsx(tmp_path / "far.xlsx")
+    code, out = run_main(excel, capsys, "export", "--target", p, "--save", str(tmp_path / "o.csv"))
+    assert code == 0 and out["rows"] == 10 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert out["far_uncomputed_formulas"] == ["S!Z200000"]
+
+
+def test_near_uncomputed_row_still_kept(tmp_path, capsys):
+    p = formula_xlsx(tmp_path / "f.xlsx")                                       # 값 바로 아래 합계 행 (가까운 칸)
+    code, out = run_main(excel, capsys, "read", "--target", p)
+    assert code == 0 and out["rows"] == 4 and "far_uncomputed_formulas" not in out, out
 
 
 def test_excel_read_closed_is_unverified(tmp_path, capsys):
@@ -914,3 +1032,300 @@ def test_read_csv_target_without_excel(capsys, monkeypatch, tmp_path):
     assert code == 0 and out["values"] == [[61], [63]] and out["range"] == "B2:B3"
     code, out = run_excel(capsys, "read", "--target", str(p), "--range", "A:A")
     assert code == 0 and out["values"] == [["반응온도(°C)"], [200.5], [210]]
+
+
+# ---------------------------------------------------------------------------
+# excel.py check: 표의 값을 규격서와 한 번에 대조 (B1, 1.4.57)
+# ---------------------------------------------------------------------------
+
+SPEC_TEXT = """정격 전압은 5 V ± 0.25 V로 한다.
+
+소비 전류는 최대 3 A로 한다.
+
+절연 저항은 100 MΩ 이상일 것.
+
+내전압은 1.5 kV 1분 이상 견딜 것.
+
+동작 온도는 -10 ~ 50 ℃로 한다.
+
+대기 전력은 0.5 W 이하, 1 W 이하(시험 모드)로 한다.
+
+표시등은 녹색으로 한다.
+"""
+
+
+def _check_book(path, rows, header=("항목", "비고", "측정값 [V]")):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "시험"
+    ws["B1"], ws["C1"], ws["D1"] = header
+    for i, (item, val) in enumerate(rows, 2):
+        ws.cell(i, 2, item)
+        ws.cell(i, 4, val)
+    wb.save(path)
+
+
+@pytest.fixture
+def check_env(tmp_path, monkeypatch):
+    fake, _ = make_win32com()
+    monkeypatch.setattr(off, "win32com", fake)
+    monkeypatch.setattr(off, "list_open", lambda kind: [])
+    spec = tmp_path / "규격" / "규격서.txt"
+    spec.parent.mkdir()
+    spec.write_text(SPEC_TEXT, encoding="utf-8")
+    book = tmp_path / "시험.xlsx"
+    return spec, book
+
+
+def test_check_verdicts_memo_and_next_command(check_env, capsys):
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.1), ("소비 전류", "3.5 A"), ("절연 저항", "150 MΩ"), ("내전압", "1.5 kV"),
+                       ("동작 온도", 60), ("무게", 1.2), ("정격 젼압", 5.0), ("대기 전력", "0.8 W"), ("표시등", "녹색")])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D10", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec.parent))
+    assert code == 0 and out["status"] == "ok", out
+    got = {r["item"]: (r["verdict"], r["cell"]) for r in out["results"]}
+    assert got["정격 전압"] == ("일치", "시험!D2")
+    assert got["소비 전류"][0] == "불일치"                       # 칸 단위(A)가 머리글 단위(V)보다 먼저
+    assert got["절연 저항"][0] == "일치"
+    assert got["내전압"][0] == "일치"                             # 1분(시간)은 단위가 달라 후보에서 빠짐
+    assert got["동작 온도"][0] == "판단필요"                       # 머리글 단위 V와 규격 ℃가 다름
+    assert got["무게"][0] == "근거없음"
+    assert got["정격 젼압"][0] == "판단필요"                       # 한 글자 다른 낱말(fuzzy)
+    assert got["대기 전력"][0] == "판단필요"                       # 수치 후보 둘
+    assert got["표시등"][0] == "판단필요"                         # 수치 조건 없음
+    assert out["counts"] == {"일치": 3, "불일치": 1, "근거없음": 1, "판단필요": 4}
+    assert out["agent_directive"].startswith("UNVERIFIED:") and out["not_decided"] == 4
+    assert set(out["needs_review"]) == {"시험!D6", "시험!D8", "시험!D9", "시험!D10"}
+    r0 = out["results"][0]
+    assert "규격서.txt" in r0["evidence"] and "5 V" in r0["spec_text"] and len(r0["spec_text"]) <= 120
+    memo = open(out["memo_file"], encoding="utf-8-sig").read().splitlines()
+    # 4차 검토(1.4.67): 메모에 '자동 판정(참고)'과 읽은 조건·근거 문장 앞부분을 함께 적어 사람이 확인
+    assert memo[0] == "칸,메모" and memo[1].startswith("시험!D2,자동 판정(참고): 일치 - 읽은 조건: 4.75~5.25 V - 근거: 규격서.txt"), memo[1]
+    assert "정격 전압은 5 V" in memo[1]
+    assert any("자동 판정(참고): 근거없음 (규격서에서 항목을 찾지 못함) - 읽은 조건: 없음 - 근거: 없음" in m for m in memo), memo
+    cmd = out["next_commands"][0]["command"]
+    assert "excel.py" in cmd and "comment" in cmd and "--dry-run" in cmd and out["memo_file"] in cmd
+    # 5차 검토(1.4.68): 안내에 메모 미리보기 행동(채점 O1: 미리보기 -> 사용자 확인 뒤 미리보기 결과의 confirm_commands, 1.4.73)
+    d = out["agent_directive"]
+    assert "next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고" in d and "'예'라고 한 뒤에만" in d and "confirm_commands[0]" in d, d
+    assert "다시 실행하지 말고 사용자에게 그대로 알리세요" not in d and len(out["next_commands"]) == 1
+
+
+def test_check_remaining_specs_reruns_same_command(check_env, capsys, monkeypatch):
+    # 5차 검토(1.4.68): 규격서 등록이 남으면 같은 명령 다시 대조만 (메모 미리보기·'다시 실행하지 말고'와 부딪히지 않게)
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.0)])
+    real = reader.load_spec_docs
+
+    def partial(path, max_files=10):
+        docs, info = real(path)
+        info["remaining"] = 2
+        return docs, info
+    monkeypatch.setattr(reader, "load_spec_docs", partial)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec.parent))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert len(cmds) == 1 and " check " in cmds[0] and "--dry-run" not in cmds[0], cmds
+    d = out["agent_directive"]
+    assert "next_commands[0](같은 명령)을 그대로 다시 실행" in d and "다시 실행하지 말고" not in d, d
+
+
+def test_check_time_limit_marks_rest_needs_review(check_env, capsys, monkeypatch):
+    # 6차 검토 (1.4.69): 명령 시간 제한이 다가오면 남은 행은 대조하지 않고 판단필요 + UNVERIFIED (JSON은 늘 냄)
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.1), ("소비 전류", "3.5 A"), ("절연 저항", "150 MΩ")])
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: True)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec.parent))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    got = [(r["cell"], r["verdict"]) for r in out["results"]]
+    assert got[0] == ("시험!D2", "일치") and got[1:] == [("시험!D3", "판단필요"), ("시험!D4", "판단필요")], got
+    # 7차 검토 (1.4.70): 대조하지 못한 행은 reason '대조하지 못함', match_mode null, 메모에서 빼고 남은 범위의 전체 check 명령
+    r1 = out["results"][1]
+    assert r1["reason"].startswith("대조하지 못함") and r1["match_mode"] is None, r1
+    memo = open(out["memo_file"], encoding="utf-8-sig").read().splitlines()
+    assert len(memo) == 2 and memo[1].startswith("시험!D2,"), memo
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert len(cmds) == 2 and "comment" in cmds[0] and " check " in cmds[1], cmds
+    assert "--range B3:D4" in cmds[1] and "--header-row 1" in cmds[1] and "--item-col B" in cmds[1], cmds[1]
+    d = out["agent_directive"]
+    assert "명령 시간 제한으로 2행(시험!D3부터)은 대조하지 못함" in d and "확인을 받은 뒤 next_commands[1]을 그대로 실행" in d, d
+    # 남은 범위 명령: 머리글(값 열 단위)은 원래 범위 위 행에서 읽음
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: False)
+    code, out = run_excel(capsys, *shlex.split(cmds[1], posix=True)[2:])
+    assert code == 0 and [r["cell"] for r in out["results"]] == ["시험!D3", "시험!D4"], out
+    assert all(r["reason"] != "대조하지 못함 (명령 시간 제한)" for r in out["results"]), out
+
+
+def test_check_rest_rows_without_header_pass_header_row_0(check_env, capsys, monkeypatch):
+    # 8차 검토 (1.4.71): 원래 범위가 1행부터(머리글 없음)면 남은 행 명령에 --header-row 0 (머리글 없음).
+    # 전에는 0이 조용히 무시되어 남은 범위 바로 위 데이터 행('2 A')을 값 열 단위 머리글로 읽어 판정이 달라졌음
+    import openpyxl
+    spec, book = check_env
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "시험"
+    for i, (item, val) in enumerate([("소비 전류", "2 A"), ("소비 전류", 2.5), ("정격 전압", 5.1)], 1):
+        ws.cell(i, 2, item)
+        ws.cell(i, 4, val)
+    wb.save(book)
+    base = ["check", "--target", str(book), "--item-col", "B", "--value-col", "D", "--spec", str(spec.parent)]
+    code, full = run_excel(capsys, *base, "--range", "B1:D3")
+    assert code == 0, full
+    want = [(r["cell"], r["verdict"], r["reason"]) for r in full["results"][1:]]
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: True)
+    code, out = run_excel(capsys, *base, "--range", "B1:D3")
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert "--range B2:D3" in cmds[1] and "--header-row 0" in cmds[1], cmds[1]
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: False)
+    code, rest = run_excel(capsys, *shlex.split(cmds[1], posix=True)[2:])
+    assert code == 0 and [(r["cell"], r["verdict"], r["reason"]) for r in rest["results"]] == want, (rest, want)
+    # 0은 머리글 없음, 범위 첫 행 이상은 인자 오류
+    code, bad = run_excel(capsys, *base, "--range", "B2:D3", "--header-row", "2")
+    assert code == 1 and bad["agent_directive"].startswith("STOP_RETRY:") and "없으면 0" in bad["message"], bad
+
+
+def test_check_long_serial_number_is_fast(tmp_path):
+    # 6차 검토 [높음]: 규격 문장의 긴 숫자열(시리얼 5500자)에서 조건 읽기가 제곱 시간이던 문제
+    import time
+    p = tmp_path / "s.txt"
+    p.write_text("시리얼 " + "1234567890" * 550 + " 정격 전압\n", encoding="utf-8")
+    docs = [{"file": str(p), "units": reader.parse_txt(str(p))[0]}]
+    t = time.monotonic()
+    r = excel._judge_row(docs, "정격 전압", "5", "", "값(V)")
+    assert time.monotonic() - t < 3.0 and r["verdict"] in ("판단필요", "근거없음"), r
+
+
+def test_check_all_decided_is_still_unverified_and_save(check_env, capsys, tmp_path):
+    # 4차 검토(1.4.67): 자연어 규격 해석은 휴리스틱이라 모든 행을 판정해도 VERIFIED가 아님 (참고 판정, 사용자 확인)
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.0), ("소비 전류", "2 A")])
+    save = tmp_path / "대조결과.xlsx"
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D3", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec), "--save", str(save))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["verified"] is False, out
+    assert "자동 판정은 참고용" in out["agent_directive"] and "condition" in out["agent_directive"]
+    assert out["unverified"][0] == excel.CHECK_ADVISORY and out["not_decided"] == 0
+    assert out["counts"]["일치"] == 2 and out["output_file"] == str(save)
+    import openpyxl
+    rows = list(openpyxl.load_workbook(save, read_only=True).active.iter_rows(values_only=True))
+    assert rows[0][:4] == ("칸", "항목", "값", "판정") and len(rows) == 3
+
+
+def test_check_section_column_limits_search(check_env, capsys, tmp_path):
+    spec, book = check_env
+    spec.write_text("1. 전원\n정격 전압은 5 V로 한다.\n\n2. 시험 조건\n정격 전압은 12 V로 한다.\n", encoding="utf-8")
+    _check_book(book, [("정격 전압", 12)])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec), "--section", "시험 조건")
+    assert code == 0 and out["results"][0]["verdict"] == "일치", out
+
+
+def test_check_does_not_mix_items_of_one_sentence(check_env, capsys):
+    # 같은 문장의 다른 항목 조건을 섞어 VERIFIED였음: 두께 '5~100 mm', 외경 '5 mm 이하' (1.4.63)
+    spec, book = check_env
+    spec.write_text("3. 치수\n두께 5 mm 이상, 길이 100 mm 이하로 한다.\n외경 3 mm, 폭 5 mm 이하로 한다.\n", encoding="utf-8")
+    _check_book(book, [("두께", 150), ("외경", 4), ("폭", 4)], header=("항목", "비고", "값(mm)"))
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    got = {r["item"]: (r["verdict"], r.get("condition")) for r in out["results"]}
+    assert got == {"두께": ("일치", "5 mm 이상"), "외경": ("불일치", "3 mm"), "폭": ("일치", "5 mm 이하")}, out
+
+
+@pytest.mark.parametrize("sentence,value,verdict", [
+    ("정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다.", 5.1, "일치"),     # 1.4.64 회귀: '5 V'만 남아 불일치
+    ("정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다.", 5.3, "불일치"),
+    ("정격 전압 5 V, 허용 범위 4.75~5.25 V", 5.1, "일치"),
+    ("정격 전압: 5 V (허용 범위: 4.75 V ~ 5.25 V)", 5.1, "일치"),
+    ("정격 전압 5 V, 시험 전압 4.75~5.25 V", 5.1, "판단필요"),       # 안전장치: 기준 값과 다르지만 같은 문장의 범위 안
+    ("정격 전압 5 V, 시험 전압 4.75~5.25 V", 5.0, "일치"),
+    ("정격 전압 5 V, 시험 전압 4.75~5.25 V", 6.0, "불일치"),
+])
+def test_check_limit_clause_belongs_to_item(check_env, capsys, sentence, value, verdict):
+    spec, book = check_env
+    spec.write_text(sentence + "\n", encoding="utf-8")
+    _check_book(book, [("정격 전압", value)])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    assert code == 0 and out["results"][0]["verdict"] == verdict, out
+
+
+def _load_check_corpus():
+    rows = []
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_corpus.tsv"), encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            line = line.rstrip("\n")
+            if line.strip() and not line.startswith("#"):
+                spec, item, value, verdict, *note = line.split("\t")
+                rows.append(pytest.param(spec, item, value, verdict, id=f"L{n}"))
+    return rows
+
+
+CHECK_CORPUS = _load_check_corpus()
+
+
+def test_check_corpus_size_and_spread():
+    # 표준 판정 말뭉치 (1.4.66): 규격 문장 + 측정값 + 기대 판정. 앞으로의 check 회귀를 막는 기준
+    verdicts = [p.values[3] for p in CHECK_CORPUS]
+    assert len(verdicts) >= 60 and set(verdicts) == set(excel.VERDICTS)
+
+
+@pytest.mark.parametrize("spec,item,value,verdict", CHECK_CORPUS)
+def test_check_corpus(tmp_path, spec, item, value, verdict):
+    # 틀린 VERIFIED(일치·불일치) 금지가 최우선: 조건을 하나로 합치는 규칙이 확실하지 않으면 판단필요
+    import reader
+    path = tmp_path / "규격서.txt"
+    path.write_text(spec + "\n", encoding="utf-8")
+    docs = [{"file": str(path), "units": reader.parse_txt(str(path))[0]}]
+    r = excel._judge_row(docs, item, value, "", "값")
+    assert r["verdict"] == verdict, r
+
+
+@pytest.mark.parametrize("header,value,verdict", [
+    (("항목", "비고", "값"), 30, "판단필요"),              # 칸·머리글에 단위 없음: 규격 단위(cm)로 추정하지 않음
+    (("항목", "비고", "값(mm)"), 30, "일치"),              # 머리글 단위로 바꿔 비교 (30 mm <= 5 cm)
+    (("항목", "비고", "값(mm)"), 60, "불일치"),
+    (("항목", "비고", "값"), "30 mm", "일치"),             # 칸 값의 단위
+    (("항목", "비고", "값(cm)"), 4, "일치"),               # 규격과 같은 단위의 머리글
+])
+def test_check_cell_without_unit_is_not_guessed(check_env, capsys, header, value, verdict):
+    spec, book = check_env
+    spec.write_text("두께는 5 cm 이하로 한다.\n", encoding="utf-8")
+    _check_book(book, [("두께", value)], header=header)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    r = out["results"][0]
+    assert r["verdict"] == verdict, out
+    if verdict == "판단필요":
+        assert "칸 단위 없음" in r["reason"] and "머리글" in r["reason"] and out["agent_directive"].startswith("UNVERIFIED:")
+
+
+def test_check_empty_items_is_zero(check_env, capsys):
+    spec, book = check_env
+    _check_book(book, [])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D5", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert "0건(찾은 항목 없음)" in out["agent_directive"] and "next_commands" not in out
+
+
+def test_check_bad_column_is_input_error(check_env, capsys):
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.0)])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "항목",
+                          "--value-col", "D", "--spec", str(spec))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+
+
+def test_check_layer_b_item_marks_reason(tmp_path):
+    # 7차 검토 (1.4.70): 숫자가 든 항목 글을 표기가 다른 곳(층 B)에서만 찾으면 reason에 표시, match_mode exact_mixed
+    p = tmp_path / "s.txt"
+    p.write_text("SOI-1 전압은 5 V 이하\n\nSOI 2 전압은 3 V 이하\n", encoding="utf-8")
+    docs = [{"file": str(p), "units": reader.parse_txt(str(p))[0]}]
+    r = excel._judge_row(docs, "SOI 1 전압", "4", "", "값(V)")
+    assert r["verdict"] == "일치" and r["match_mode"] == "exact_mixed" and excel.LAYER_B_NOTE in r["reason"], r
+    r = excel._judge_row(docs, "SOI 2 전압", "4", "", "값(V)")       # 글자 그대로(층 A)는 그대로
+    assert r["verdict"] == "불일치" and r["match_mode"] == "exact" and excel.LAYER_B_NOTE not in r["reason"], r

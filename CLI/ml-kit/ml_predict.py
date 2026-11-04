@@ -16,12 +16,16 @@ inference can never drift apart.
 Designed for lightweight 26B-30B LLM agents with 1-turn declarative execution.
 """
 
+from __future__ import annotations   # type hints never touch numpy/pandas (they may be missing: R5)
+
 import sys
 import os
 import re
 import ast
 import csv
+import io
 import glob
+import contextlib
 import json
 import time
 import shutil
@@ -33,9 +37,16 @@ from datetime import datetime
 from itertools import product
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
-import numpy as np
-import pandas as pd
-import joblib
+# R5: the core libraries are imported guarded so that a missing one still answers with 1 JSON line
+# (missing_library + install_command) instead of a traceback. Every entry point calls check_core_libraries().
+try:
+    import numpy as np
+    import pandas as pd
+    import joblib
+    CORE_IMPORT_ERROR: Optional[ImportError] = None
+except ImportError as _core_exc:
+    np = pd = joblib = None  # type: ignore[assignment]
+    CORE_IMPORT_ERROR = _core_exc
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -48,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.40"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.66"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -80,6 +91,8 @@ def json_safe(obj: Any) -> Any:
         return {str(k): json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [json_safe(v) for v in obj]
+    if np is None:     # missing_library answer (R5): plain Python values only
+        return None if isinstance(obj, float) and obj != obj else obj
     if isinstance(obj, np.ndarray):
         return [json_safe(v) for v in obj.tolist()]
     if isinstance(obj, (bool, np.bool_)):
@@ -104,11 +117,18 @@ def emit_json_response(payload: Dict[str, Any]) -> None:
 
 
 class InputError(ValueError):
-    """User/agent input or data schema problem. Retrying with the same arguments will not help."""
+    """User/agent input or data schema problem. Retrying with the same arguments will not help.
+    extra: keys added to the error JSON (e.g. next_commands); error_type: 'needs_user_decision' when the tool stopped
+    for a choice only the user can make (the directive then says to ask and run next_commands[0] only if they agree)."""
+
+    def __init__(self, message: str = "", extra: Optional[Dict[str, Any]] = None, error_type: Optional[str] = None):
+        super().__init__(message)
+        self.extra = dict(extra or {})
+        self.error_type = error_type
 
 
 # ------------------------------------------------------------------------------
-# Time limit (2.9.40): OpenCode's command tool stops a command at 120 s (the LLM often does not pass a longer
+# Time limit: OpenCode's command tool stops a command at 120 s (the LLM often does not pass a longer
 # timeout). Long work (ml_export input search, also inside ml_report) checks the clock before each slow step,
 # saves what it finished, and stops cleanly with a CONTINUE result: running the same command again continues.
 # ------------------------------------------------------------------------------
@@ -139,13 +159,186 @@ class Unfinished(BaseException):
         self.progress = progress
 
 
-def check_time(next_step_seconds: float, progress: str) -> None:
-    """Raises Unfinished when the next slow step (estimated next_step_seconds) would end past the time limit
-    minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run)."""
+# A finished step that cannot be saved where it belongs (<data_root>/.resume_train, <version>/export/_fits) is saved in
+# a fallback place (JIT: resume_save): <tool data folder>/ml-kit-resume/<hash>, then %TEMP%/ml-kit-resume/<hash> (hash =
+# the first 12 characters of the hash of the original folder, so paths stay short). The next run looks in every place
+# (resume_find). When no place can be written the step is lost at a stop, so check_time does not stop with CONTINUE
+# (the same command would train it again forever) and does not go past the limit either: it stops with STOP_RETRY.
+RESUME_FALLBACK_DIR = "ml-kit-resume"      # a name of its own: ML_KIT_DATA_DIR may be a user folder
+TEMP_RESUME_DIR = "ml-kit-resume"
+# Only what resume_places/resume_save make is ever swept: <hash> folders and the saved step files
+# (<key>.joblib, <key>.m<k>.joblib, <key>.m<k>.f<fold>.joblib, <key>.fit.joblib, <key>.imp.joblib, best_run.json,
+# each also with .tmp).
+_RESUME_SUB_RE = re.compile(r"[0-9a-f]{12}")
+_RESUME_FILE_RE = re.compile(r"(?:[0-9a-f]{16}(?:\.m\d+(?:\.f\d+)?|\.fit|\.imp)?\.joblib|best_run\.json)(?:\.tmp)?")
+RESUME_MAX_AGE = 3 * 24 * 3600             # saved steps of runs never continued are removed after this many seconds
+SAVE_FAILED: List[str] = []                # finished steps no place could hold in this command
+_RESUME_PLACE: Dict[str, int] = {}         # original folder -> index of the place that worked in this command
+
+
+def resume_places(primary: str) -> List[str]:
+    """[original folder, data folder fallback, %TEMP% fallback] for the finished steps of `primary`."""
+    import hashlib
+    primary = os.path.abspath(primary)
+    h = hashlib.sha1(os.path.normcase(primary).encode("utf-8")).hexdigest()[:12]
+    temp = os.environ.get("TEMP") or os.environ.get("TMP") or __import__("tempfile").gettempdir()
+    return [primary, os.path.join(get_data_dir(), RESUME_FALLBACK_DIR, h), os.path.join(temp, TEMP_RESUME_DIR, h)]
+
+
+def _place_label(places: List[str], i: int) -> str:
+    h = os.path.basename(places[i])
+    return [os.path.basename(places[0]), f"데이터 폴더 {RESUME_FALLBACK_DIR}\\{h}", f"임시 폴더 {TEMP_RESUME_DIR}\\{h}"][i]
+
+
+def resume_find(primary: str, name: str) -> Optional[str]:
+    """The saved step `name` of `primary` in the original folder or a fallback place (None when not saved). When it
+    is in several places (a file saved again elsewhere after the original folder became blocked), the newest one."""
+    found = []
+    for d in resume_places(primary):
+        path = os.path.join(d, name)
+        try:
+            if os.path.isfile(path):
+                found.append((os.path.getmtime(path), path))
+        except OSError:
+            pass
+    return max(found)[1] if found else None
+
+
+def resume_sweep_old() -> None:
+    """At the start of a command: removes the saved steps older than RESUME_MAX_AGE in every fallback folder
+    (<tool data folder>/ml-kit-resume/<hash>, %TEMP%/ml-kit-resume/<hash>), also those of data files never trained
+    again, and the folders left empty. Only the <hash> folders and the file names the tool makes (_RESUME_SUB_RE,
+    _RESUME_FILE_RE): anything else there (a user file, ML_KIT_DATA_DIR set to a user folder) is never touched.
+    Never raises."""
+    temp = os.environ.get("TEMP") or os.environ.get("TMP") or __import__("tempfile").gettempdir()
+    now = time.time()
+    for root in (os.path.join(get_data_dir(), RESUME_FALLBACK_DIR), os.path.join(temp, TEMP_RESUME_DIR)):
+        try:
+            subs = [os.path.join(root, n) for n in os.listdir(root) if _RESUME_SUB_RE.fullmatch(n)]
+        except OSError:
+            continue
+        for sub in subs:
+            try:
+                if not os.path.isdir(sub) or os.path.islink(sub):
+                    continue
+                for name in os.listdir(sub):
+                    p = os.path.join(sub, name)
+                    try:
+                        if (_RESUME_FILE_RE.fullmatch(name) and os.path.isfile(p) and not os.path.islink(p)
+                                and now - os.path.getmtime(p) > RESUME_MAX_AGE):
+                            os.remove(p)
+                    except OSError:
+                        pass
+                if not os.listdir(sub):
+                    os.rmdir(sub)
+            except OSError:
+                pass
+        try:
+            if not os.listdir(root):
+                os.rmdir(root)
+        except OSError:
+            pass
+
+
+def resume_save(primary: str, name: str, write: Callable[[str], Any], what: str) -> Optional[str]:
+    """Saves a finished step (write(path) writes the file) in the first place of resume_places that works and
+    checks the file is there. A fallback place is a JIT recovery (note_recovered). Returns the saved path, or None
+    when no place worked (SAVE_FAILED: check_time then stops with STOP_RETRY instead of CONTINUE)."""
+    places = resume_places(primary)
+    key = os.path.normcase(places[0])
+    errors: List[str] = []
+    for i in range(_RESUME_PLACE.get(key, 0), len(places)):
+        path = os.path.join(places[i], name)
+        tmp = path + ".tmp"
+        err = ""
+        try:
+            os.makedirs(places[i], exist_ok=True)
+            write(tmp)
+            retry_fs(lambda: os.replace(tmp, path))
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"[:160]
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        if not err and os.path.isfile(path) and os.path.getsize(path) > 0:
+            _RESUME_PLACE[key] = i
+            if i > 0:
+                note_recovered(f"중간 저장 실패 ({os.path.basename(places[0])}) -> 대체 위치 {_place_label(places, i)}에 저장")
+                for d in places[:i]:          # an older copy left in a place that worked before is not read again
+                    try:
+                        os.remove(os.path.join(d, name))
+                    except OSError:
+                        pass
+            return path
+        errors.append(f"{_place_label(places, i)}: {err or '저장한 파일을 찾지 못함'}")
+    _RESUME_PLACE[key] = len(places)          # no place works: the next steps of this command do not try again
+    reason = f"{what} {name}를 어디에도 저장하지 못했습니다 ({'; '.join(errors)})"
+    if not SAVE_FAILED:
+        record_recovery_attempt(f"중간 저장 {len(errors)}곳 시도 실패 ({os.path.basename(places[0])}, 데이터 폴더, 임시 폴더)")
+        sys.stderr.write(f"[WARN] 중간 저장 실패: {reason}. 시간 제한에 닿으면 이어서 진행할 수 없어 멈춥니다\n")
+    SAVE_FAILED.append(reason)
+    return None
+
+
+def resume_clear(primary: str, drop: Callable[[str, str], bool], fallback_only: bool = False) -> None:
+    """Removes the saved steps of `primary` for which drop(name, path) is true in every place (or only the fallback
+    places), then the places left empty. Never raises."""
+    for i, d in enumerate(resume_places(primary)):
+        if (fallback_only and i == 0) or not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            p = os.path.join(d, name)
+            if i > 0 and not _RESUME_FILE_RE.fullmatch(name):     # a fallback place: only the tool's own files
+                continue
+            try:
+                if drop(name, p):
+                    os.remove(p)
+            except OSError:
+                pass
+        for folder in ([d] if i == 0 else [d, os.path.dirname(d)]):
+            try:
+                if not os.listdir(folder):
+                    os.rmdir(folder)
+            except OSError:
+                pass
+
+
+SAVE_FAILED_HINT = "확인할 것: 데이터 폴더와 임시 폴더(%TEMP%)의 쓰기 권한, 디스크 남은 공간, 경로 길이(260자). 명령 인자는 고치지 마세요."
+
+
+def save_failed_error() -> InputError:
+    err = InputError(
+        "중간 결과를 저장하지 못해 나눠서 진행할 수 없습니다 (시간 제한 전에 멈춤): " + SAVE_FAILED[0]
+        + ". 데이터 폴더와 임시 폴더(%TEMP%)의 쓰기 권한, 디스크 남은 공간, 경로 길이(260자)를 확인한 뒤 같은 명령을 다시 실행하십시오.")
+    err.hint = SAVE_FAILED_HINT           # error_payload: this hint, not the command's own (column names, --eval)
+    return err
+
+
+def save_failed_warning() -> Optional[str]:
+    """The result warning of a command that ended although a finished step could not be saved (None otherwise)."""
+    if not SAVE_FAILED:
+        return None
+    return (f"중간 저장 실패: {SAVE_FAILED[0]}. 이번 실행은 시간 제한 안에 끝나 결과에는 영향이 없습니다 "
+            f"(데이터 폴더와 임시 폴더의 쓰기 권한·디스크 공간을 확인하십시오)")
+
+
+def time_would_pass(next_step_seconds: float) -> bool:
+    """True when the next slow step (estimated next_step_seconds) would end past the time limit minus TIME_RESERVE
+    (check_time would stop). Lets a caller save its partial work only when it is about to stop."""
     limit = time_limit()
     if limit == float("inf"):
-        return
-    if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
+        return False
+    return time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE
+
+
+def check_time(next_step_seconds: float, progress: str) -> None:
+    """Raises Unfinished when the next slow step (estimated next_step_seconds) would end past the time limit
+    minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run); when a
+    step could not be saved anywhere (SAVE_FAILED) it raises the STOP_RETRY error instead."""
+    if time_would_pass(next_step_seconds):
+        if SAVE_FAILED:
+            raise save_failed_error()
         raise Unfinished(progress)
 
 
@@ -158,6 +351,55 @@ def unfinished_payload(exc: "Unfinished") -> Dict[str, Any]:
                             + ("next_commands의 명령을" if cmd else "방금 실행한 명령을")
                             + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). 끝나면 VERIFIED 결과가 나옵니다."),
     }
+
+
+# pip package of an import name (R5 install_command); other names install under their own name
+PIP_NAMES = {"sklearn": "scikit-learn", "docx": "python-docx", "dateutil": "python-dateutil", "yaml": "PyYAML",
+             "cv2": "opencv-python", "fitz": "pymupdf"}
+
+
+class MissingLibraryError(InputError):
+    """R5: a library the tool needs is not installed. error_payload answers missing_library + install_command."""
+
+    def __init__(self, pip_name: str, feature: str):
+        super().__init__(f"{feature}에 필요한 {pip_name}이(가) 설치되어 있지 않습니다. "
+                         f"설치 명령: python -m pip install {pip_name}")
+        self.pip_name = pip_name
+        self.feature = feature
+
+
+def missing_library_error(exc: ImportError, feature: str = "ml-kit") -> MissingLibraryError:
+    """MissingLibraryError of an ImportError ('No module named sklearn.utils' -> scikit-learn)."""
+    name = getattr(exc, "name", None)
+    if not name:
+        m = re.search(r"No module named '?([\w.]+)", str(exc))
+        name = m.group(1) if m else "unknown"
+    top = name.split(".")[0]
+    return MissingLibraryError(PIP_NAMES.get(top, top), feature)
+
+
+def require_lib(module: str, pip_name: str, feature: str) -> Any:
+    """Imports module or raises MissingLibraryError (R5)."""
+    import importlib
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        raise MissingLibraryError(pip_name, feature)
+
+
+def exit_missing_library(exc: ImportError, feature: str = "ml-kit") -> None:
+    """A core import of an entry point failed (outside run_cli): the missing_library JSON line, the error log, exit 1."""
+    payload = error_payload(missing_library_error(exc, feature))
+    sys.stderr.write(f"[ERROR] {payload['message']}\n")
+    write_error_log(payload)
+    emit_json_response(payload)
+    sys.exit(1)
+
+
+def check_core_libraries(feature: str = "ml-kit") -> None:
+    """Entry points call this before anything else: numpy / pandas / joblib missing -> exit_missing_library."""
+    if CORE_IMPORT_ERROR is not None:
+        exit_missing_library(CORE_IMPORT_ERROR, feature)
 
 
 class ColumnNameError(InputError):
@@ -176,25 +418,49 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             "status": "error",
             "error_type": "interrupted",
             "message": "사용자 또는 상위 프로세스에 의해 실행이 중단되었습니다. 임시 산출물은 롤백되었습니다.",
-            "agent_directive": "STOP_RETRY: Execution was interrupted. Ask the user before running again.",
+            "agent_directive": "STOP_RETRY: 실행이 중단되었습니다. 다시 실행하기 전에 사용자에게 물으세요.",
+        }
+    if isinstance(exc, ImportError) and not isinstance(exc, MissingLibraryError):
+        exc = missing_library_error(exc, "이 기능")
+    if isinstance(exc, MissingLibraryError):
+        return {
+            "status": "error",
+            "error_type": "missing_library",
+            "message": str(exc),
+            "missing_package": exc.pip_name,
+            "install_command": f"python -m pip install {exc.pip_name}",
+            "agent_directive": (f"STOP_RETRY: {exc.feature}에 필요한 {exc.pip_name}이(가) 설치되어 있지 않습니다. "
+                                "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요."),
+        }
+    if isinstance(exc, InputError) and getattr(exc, "error_type", None) == "needs_user_decision":
+        return {
+            "status": "error",
+            "error_type": "needs_user_decision",
+            "message": msg,
+            **{k: v for k, v in exc.extra.items() if k not in ("status", "message", "agent_directive", "error_type")},
+            "agent_directive": (
+                "STOP_RETRY: 사용자가 정할 일이 있어 멈췄습니다. message를 그대로 알리고 사용자에게 물으세요. 스스로 실행하지 말고, "
+                "사용자가 그렇게 하라고 하면 next_commands[0].command를 글자 그대로 1번 실행하세요."),
         }
     if isinstance(exc, _STOP_RETRY_ERRORS):
+        hint = getattr(exc, "hint", None) or hint
         return {
             "status": "error",
             "error_type": "input",
             "message": msg,
+            **{k: v for k, v in getattr(exc, "extra", {}).items()
+               if k not in ("status", "message", "agent_directive", "error_type")},
             "agent_directive": (
-                "STOP_RETRY: Argument or data schema validation failed. "
-                "If the message contains '[추천]', re-run ONCE with the suggested name, option or command "
-                "(a [추천] that starts with python is a full command: run it as given, once); "
-                "otherwise report the message to the user." + (f" {hint}" if hint else "")
+                "STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 그 값으로 바꿔 1번만 다시 실행하세요 "
+                "([추천] 뒤가 python으로 시작하면 전체 명령이니 그대로 1번 실행). 없으면 message를 그대로 알리세요."
+                + (f" {hint}" if hint else "")
             ),
         }
     return {
         "status": "error",
         "error_type": "internal",
         "message": f"{type(exc).__name__}: {msg}",
-        "agent_directive": "ERROR: Unexpected internal failure. Do not retry; report the message to the user.",
+        "agent_directive": "ERROR: 도구 내부 오류입니다. 다시 실행하지 말고 message를 그대로 알리세요.",
     }
 
 
@@ -204,6 +470,8 @@ _RECOVERED: List[str] = []
 def note_recovered(msg: str) -> None:
     """Records a JIT recovery that changed the result (e.g. saved under a new name); reported as JSON `recovered`."""
     msg = str(msg)[:200]
+    if msg in _RECOVERED:          # the same recovery for every target of one run is reported once
+        return
     sys.stderr.write(f"[WARN] {msg}\n")
     _RECOVERED.append(msg)
 
@@ -230,7 +498,7 @@ def record_recovery_attempt(msg: str) -> None:
 def engenius_home() -> Optional[str]:
     """Fixed folder for tool data when the tool files themselves run from the En-Genius tray's temporary folder
     (%TEMP%\\engenius-skill\\<id>, deleted after each run, so <tool folder>/data would not survive). The deployed skill
-    (docs/engenius) runs the tools in C:\\CLI instead and shares OpenCode's data folder (2.9.38)."""
+    (docs/engenius) runs the tools in C:\\CLI instead and shares OpenCode's data folder."""
     if not os.environ.get("ENGENIUS_OUT") or "engenius-skill" not in TOOL_DIR.replace("\\", "/").lower().split("/"):
         return None
     home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
@@ -288,7 +556,10 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     Failures (exit 1) are appended to <data>/logs/errors.txt; interruptions (130) are not."""
     global RUN_START
     RUN_START = time.monotonic()
+    SAVE_FAILED.clear()
+    _RESUME_PLACE.clear()
     try:
+        resume_sweep_old()
         result = execute()
     except Unfinished as u:
         sys.stderr.write(f"[STATUS] 시간 제한으로 여기서 멈춤 (저장됨, 같은 명령으로 이어서): {u.progress}\n")
@@ -328,7 +599,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             "status": "error",
             "error_type": "input",
             "message": f"CLI 인자 오류: {message}",
-            "agent_directive": "STOP_RETRY: Invalid CLI arguments. Check the option names in SKILL.md and report to the user.",
+            "agent_directive": "STOP_RETRY: 명령 인자가 잘못되었습니다. 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준).",
         }
         write_error_log(payload)
         emit_json_response(payload)
@@ -466,6 +737,18 @@ def _same_unit_name(given: str, column: str) -> bool:
         not other_unit(given, column)
 
 
+MESSAGE_LIST_MAX = 40     # names listed in one error message ('[사용 가능한 컬럼 목록]'); the rest are counted
+
+
+def name_list(names: List[Any], limit: int = MESSAGE_LIST_MAX) -> str:
+    """A name list for a message, at most limit names and '외 N개 (전체 M개)' (R2: a wide sheet of 500 columns must not
+    fill the LLM context with one error message)."""
+    names = list(names)
+    if len(names) <= limit:
+        return str(names)
+    return f"{names[:limit]} 외 {len(names) - limit}개 (전체 {len(names)}개)"
+
+
 def suggest_columns(name: str, columns: List[str], n: int = 3, bare: bool = True) -> List[str]:
     """Similar columns: the columns of the same name without unit first (all of them: '수율' for '수율(1차)' and
     '수율(최종)', whatever their length), then close spellings, up to n (more only for same-name columns). bare: a name
@@ -571,11 +854,327 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                if any("[후보]" in h for h in hints) else "")
         raise ColumnNameError(
             f"지정하신 {kind} 컬럼 {missing}을(를) 데이터셋에서 찾을 수 없습니다. "
-            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {col_list}"
+            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {name_list(col_list)}"
         )
     for short, full in applied.items():
         sys.stderr.write(f"[INFO] 컬럼명 자동 매칭: '{short}' -> '{full}'\n")
     return resolved, applied
+
+
+# ==============================================================================
+# C3-B. Row conditions: ml_train.py --exclude-where, ml_predict.py --where (constrained search)
+# ==============================================================================
+# The syntax of office-cli excel.py read --where: '<column> <op> <value>' joined by ';' (AND) and '|' (OR, ';' binds
+# first), operators >= <= != > < = ~ (~ = contains), a value with ; or | in single or double quotes.
+# Numbers compare as numbers ('1,500' is 1500), dates (YYYY-MM-DD) as dates, other values as trimmed text, case-insensitive.
+
+_WHERE_HEAD = re.compile(r"\s*([^;|]+?)\s*(>=|<=|!=|>|<|=|~)[ \t]*", re.S)
+_WHERE_FIXES = (("==", "="), ("=>", ">="), ("=<", "<="), ("<>", "!="), ("=!", "!="))   # one meaning only
+_WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
+_WHERE_OR = re.compile(r"\s+(?:or|OR|Or|또는)\s+|\s*\|\|\s*")
+_WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
+_WHERE_QUOTED = re.compile(r"(\"[^\"]*\"|'[^']*')")
+_WHERE_WORD = re.compile(f"(?P<and>{_WHERE_AND.pattern})|(?P<or>{_WHERE_OR.pattern})|(?P<has>{_WHERE_CONTAINS.pattern})")
+_WHERE_OP = re.compile(r">=|<=|!=|==|=>|=<|<>|=!|>|<|=|~")
+_WHERE_DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?")
+WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
+              "값에 ; | 가 있으면 작은따옴표로 감쌈. 예: 생산효율 > 90; 라인 = B | 라인 = C)")
+
+Cond = Tuple[str, str, str]
+
+
+def _where_parts(text: str) -> Optional[List[List[Cond]]]:
+    """'<col> <op> <value>' joined by ; and | -> OR groups [[cond, ...], ...]; ; | inside a quoted value do not split."""
+    groups: List[List[Cond]] = [[]]
+    pos, n = 0, len(text)
+    while pos < n:
+        if not text[pos:].strip():
+            break
+        m = _WHERE_HEAD.match(text, pos)
+        if not m or not m.group(1).strip():
+            return None
+        col, op = m.group(1).strip(), m.group(2)
+        pos = m.end()
+        q = text[pos] if pos < n and text[pos] in "\"'" else ""
+        close = re.compile(re.escape(q) + r"\s*(?=[;|]|$)").search(text, pos + 1) if q else None
+        if close:
+            val, pos = text[pos + 1:close.start()], close.end()
+        else:
+            nxt = re.search(r"[;|]", text[pos:])
+            stop = pos + nxt.start() if nxt else n
+            val, pos = text[pos:stop].strip(), stop
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+        if op in (">", "<", ">=", "<=", "~") and val == "":
+            return None
+        groups[-1].append((col, op, val))
+        if pos < n:
+            sep = text[pos]
+            pos += 1
+            if sep == "|":
+                if not groups[-1]:
+                    return None
+                groups.append([])
+    groups = [g for g in groups if g]
+    return groups or None
+
+
+def _where_value_text(v: str) -> str:
+    """A value as written in a condition: in single quotes when it holds ; | an operator sign or a joining word
+    ('불량 포함 시료', 'A and B'), so the text reads back as the same value."""
+    quote = re.search(r"[;|]", v) or v != v.strip() or _WHERE_WORD.search(f" {v} ") or _WHERE_OP.search(v)
+    return f"'{v}'" if quote else v
+
+
+def _where_words(part: str) -> Tuple[str, bool]:
+    """Joining words outside a value -> the notation (' and ' -> '; ', ' or ' -> ' | ', '<열> 포함 <값>' -> '~'),
+    and whether such a word was left inside a value. A word is a joint only where it can be one: 'and' / 'or' after
+    a condition with an operator and before another '<열> <연산자>', '포함' right after a column name (no operator
+    yet in the condition). '비고 = 불량 포함 시료' keeps its value."""
+    out: List[str] = []
+    pos = 0
+    has_op = False            # the current condition (since the last ; | or joint) has an operator
+    kept = False
+    for m in _WHERE_WORD.finditer(part):
+        before = part[pos:m.start()]
+        cut = max(before.rfind(";"), before.rfind("|"))
+        has_op = bool(_WHERE_OP.search(before[cut + 1:])) if cut >= 0 else has_op or bool(_WHERE_OP.search(before))
+        out.append(before)
+        rest = part[m.end():]
+        nxt = re.search(r"[;|]", rest)
+        upto = rest[:nxt.start()] if nxt else rest
+        cond = re.split(f"{_WHERE_AND.pattern}|{_WHERE_OR.pattern}", upto)[0]
+        if m.group("has"):
+            if has_op:
+                out.append(m.group(0))
+                kept = True
+            else:
+                out.append(" ~ ")
+                has_op = True
+        elif has_op and (_WHERE_OP.search(cond) or _WHERE_CONTAINS.search(cond)):
+            out.append("; " if m.group("and") else " | ")
+            has_op = False
+        else:
+            out.append(m.group(0))
+            kept = True
+        pos = m.end()
+    out.append(part[pos:])
+    return "".join(out), kept
+
+
+_WHERE_SIZE_OPS = (">", "<", ">=", "<=")
+
+
+def _where_size_ok(v: str) -> bool:
+    n = coerce_numeric(pd.Series([v])).iloc[0]
+    return (n is not None and n == n) or bool(_WHERE_DATE.fullmatch(v.strip()))
+
+
+def _where_size_value(groups: List[List[Cond]], option: str) -> List[List[Cond]]:
+    """A size comparison (> < >= <=) needs a number or a date: '9 0' -> STOP_RETRY [추천] '90' (spaces removed, one
+    meaning), other text -> STOP_RETRY (a text value compared by size matched no row without a word)."""
+    bad = [(c, o, v) for g in groups for c, o, v in g if o in _WHERE_SIZE_OPS and not _where_size_ok(v)]
+    if not bad:
+        return groups
+    c, o, v = bad[0]
+    fix = re.sub(r"\s+", "", v)
+    if len(bad) == 1 and fix != v and _where_size_ok(fix):
+        fixed = [[(c2, o2, fix if (c2, o2, v2) == bad[0] else v2) for c2, o2, v2 in g] for g in groups]
+        raise InputError(f"{option}의 '{c} {o} {v}'에서 크기 비교 값 '{v}'이(가) 숫자로 읽히지 않습니다 (가운데 공백). "
+                         f"[추천] {where_retry(option, where_text(fixed))}")
+    raise InputError(f"{option}의 '{c} {o} {v}'에서 크기 비교(> < >= <=) 값 '{v}'이(가) 숫자나 날짜(YYYY-MM-DD)가 "
+                     f"아닙니다. 글자 값은 = != ~로 비교하십시오.")
+
+
+def where_text(groups: List[List[Cond]]) -> str:
+    """The OR groups as one condition text (a value with ; or | in single quotes)."""
+    return " | ".join("; ".join(f"{c} {o} {_where_value_text(v)}" for c, o, v in g) for g in groups)
+
+
+def _outside_quotes(text: str, fn: Callable[[str], str]) -> str:
+    return "".join(part if i % 2 else fn(part) for i, part in enumerate(_WHERE_QUOTED.split(text)))
+
+
+def where_retry(option: str, fixed: str) -> str:
+    """[추천] for a fixed condition: the running command with the option replaced (a full command, R8), else the text."""
+    cmd = command_text(drop={option: option.lstrip("-").replace("-", "_")})
+    return f"{cmd} {option} {quote_arg(fixed)}" if cmd else fixed
+
+
+def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
+    """Condition text -> OR groups [[(column, op, value), ...], ...] (every condition of a group must hold).
+    Notation with one meaning (==, =>, <>, AND, OR) -> STOP_RETRY [추천] the command with the fixed text."""
+    raw = str(text).strip()
+    kept: List[bool] = []
+
+    def fix(part: str) -> str:
+        part, k = _where_words(part)
+        kept.append(k)
+        for a, b in _WHERE_FIXES:
+            part = part.replace(a, b)
+        return part
+    fixed = _outside_quotes(raw, fix)
+    groups = _where_parts(fixed)
+    if groups is None:
+        raise InputError(f"{option} 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
+    if fixed != raw:
+        # a word or sign left inside a value ('불량 포함 시료') is quoted in the [추천] so it stays the value
+        quoted = any(kept) or any(_where_value_text(v) != v for g in groups for _, _, v in g)
+        raise InputError(f"{option} 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;, 또는은 |). "
+                         + ("값 안의 낱말(포함, and, or)과 기호는 바꾸지 않았습니다. 값을 작은따옴표로 감싸세요. " if quoted else "")
+                         + f"형식: {WHERE_FORM}. [추천] {where_retry(option, where_text(groups))}")
+    return _where_size_value(groups, option)
+
+
+def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "--where",
+                  layout: Optional[Dict[str, Any]] = None) -> List[List[Cond]]:
+    """Column names of the conditions resolved like -x / -y (resolve_column_names: exact, a unique name without its
+    unit, a similar name -> [후보])."""
+    names = list(dict.fromkeys(c for g in groups for c, _, _ in g))
+    resolved = resolve_column_names(names, columns, f"조건({option})의 열", layout=layout)[0]
+    rmap = dict(zip(names, resolved))
+    return [[(rmap[c], o, v) for c, o, v in g] for g in groups]
+
+
+_CODE_RE = re.compile(r"\s*[-+]?0\d")     # a code with a leading zero ('007', '01'), never '0.5'
+
+_FIXED_CODE_RE = re.compile(r"\d{3,}")    # a fixed-width code ('001' ~ '120'); two digits ('05', '10') read as numbers
+
+
+def is_code_column(series: pd.Series) -> bool:
+    """A category / code column, matched as exact text ('007' is not '7', not a number to interpolate) by
+    --where / --exclude-where and ml_map keys. Only when some cell has a leading zero ('007') and
+    (a) the same number is written in two ways ('007' and '7', '01' and '001'), or
+    (b) every filled cell is a code of the same width of 3 or more digits ('001' ~ '120').
+    Otherwise the column is read as numbers, as training reads it: months '01' ~ '12' and '05, 10, 15, 20' are
+    number columns ('월 = 1' meets '01'). A number or date column (Excel cells) is never one; missing-value marks
+    and blank cells do not count."""
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return False
+    filled = [v.strip() if isinstance(v, str) else v for v in series.tolist()
+              if v is not None and not (isinstance(v, float) and v != v)]
+    filled = [v for v in filled if not (isinstance(v, str) and (v == "" or v in MISSING_MARKS))]
+    zero = [isinstance(v, str) and _CODE_RE.match(v) is not None for v in filled]
+    if not any(zero):
+        return False
+    if all(isinstance(v, str) and _FIXED_CODE_RE.fullmatch(v) for v in filled) and len({len(v) for v in filled}) == 1:
+        return True
+    nums = coerce_numeric(pd.Series(filled, dtype=object)).tolist()
+    ways: Dict[float, list] = {}               # number -> [its notations (01, 001, 1), one has a leading zero]
+    for v, n, z in zip(filled, nums, zero):
+        if n is not None and n == n:
+            ways.setdefault(n, [set(), False])
+            ways[n][0].add(str(v))
+            ways[n][1] = ways[n][1] or z
+    return any(len(texts) > 1 and has_zero for texts, has_zero in ways.values())
+
+
+def _where_cells(series: pd.Series) -> pd.Series:
+    """The cells of a condition column as stripped text ('' for a blank)."""
+    return series.map(lambda v: "" if v is None or (isinstance(v, float) and v != v) else str(v).strip())
+
+
+def _compare_as_text(series: pd.Series, text: pd.Series, val: str) -> bool:
+    """'= v' / '!= v' compares as text only for codes with a leading zero: a code column (is_code_column), or a code
+    value ('= 01') on a column with text values ('01' is not '1'). Otherwise a number value meets the cells read as
+    numbers by number ('2' = '2.0', '1,000' = '1000', as training reads them), text cells and missing-value marks
+    ('측정불가') by text: one '측정불가' in a number column does not make it a text column."""
+    if pd.api.types.is_numeric_dtype(series) or _WHERE_DATE.fullmatch(val.strip()):
+        return False
+    if is_code_column(series):
+        return True
+    if not _CODE_RE.match(val):
+        return False
+    filled = text[(text != "") & ~text.isin(MISSING_MARKS)]
+    return bool(coerce_numeric(filled).isna().any())
+
+
+def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
+    """Rows meeting one condition. A blank cell never meets '!=' (an empty cell is not a value that differs)."""
+    text = _where_cells(series)
+    blank = (text == "").to_numpy(dtype=bool)
+    if op == "~":
+        return text.str.casefold().str.contains(val.strip().casefold(), regex=False).to_numpy(dtype=bool)
+    vnum = coerce_numeric(pd.Series([val])).iloc[0]
+    cmp = {"=": np.equal, "!=": np.not_equal, ">": np.greater, "<": np.less, ">=": np.greater_equal,
+           "<=": np.less_equal}[op]
+    if op in ("=", "!=") and _compare_as_text(series, text, val):
+        eq = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
+        return eq if op == "=" else ~eq & ~blank
+    if vnum == vnum and vnum is not None:
+        num = coerce_numeric(series).to_numpy(dtype=float)
+        ok = ~np.isnan(num)
+        out = np.zeros(len(series), dtype=bool)
+        out[ok] = cmp(num[ok], float(vnum))
+        if op in ("=", "!="):        # a text cell against a number: compared as text
+            tv = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
+            out[~ok] = tv[~ok] if op == "=" else ~tv[~ok]
+        return out & ~blank if op == "!=" else out
+    if _WHERE_DATE.fullmatch(val.strip()):
+        dt = parse_datetime(series)
+        vd = pd.Timestamp(val.strip())
+        ok = dt.notna().to_numpy(dtype=bool)
+        out = np.zeros(len(series), dtype=bool)
+        if len(val.strip()) == 10:
+            left = dt[ok].dt.normalize()
+        else:
+            left = dt[ok]
+        out[ok] = cmp(left.to_numpy(), np.datetime64(vd))
+        if op == "!=":
+            out[~ok] = True
+        return out & ~blank if op == "!=" else out
+    if op not in ("=", "!="):
+        return np.zeros(len(series), dtype=bool)   # a size comparison with a text value: no row
+    eq = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
+    return eq if op == "=" else ~eq & ~blank
+
+
+def where_mask(df: pd.DataFrame, groups: List[List[Cond]]) -> np.ndarray:
+    """Rows of df that meet the condition (any OR group whose conditions all hold). Column names must be resolved."""
+    out = np.zeros(len(df), dtype=bool)
+    for g in groups:
+        hit = np.ones(len(df), dtype=bool)
+        for col, op, val in g:
+            hit &= _where_cond_mask(df[col], op, val)
+        out |= hit
+    return out
+
+
+def where_notation_variants(df: pd.DataFrame, groups: List[List[Cond]]) -> List[Tuple[Cond, Dict[str, int]]]:
+    """Conditions '= v' / '!= v' compared as text (a code column) whose number is also written another way in
+    that column ('월 = 1' and cells '01'): [(condition, {other notation: rows})]. Those rows read as the same number
+    in training but do not meet '=' (and do meet '!='): the caller warns and offers where_with_variants."""
+    out: List[Tuple[Cond, Dict[str, int]]] = []
+    # notations the condition already names ('월 = 1 | 월 = 01', '월 != 1; 월 != 01') need no note
+    named = {(c, o, v.strip().casefold()) for g in groups for c, o, v in g}
+    for cond in dict.fromkeys(c for g in groups for c in g):
+        col, op, val = cond
+        if op not in ("=", "!=") or col not in df.columns:
+            continue
+        series = df[col]
+        text = _where_cells(series)
+        vnum = coerce_numeric(pd.Series([val])).iloc[0]
+        if vnum is None or vnum != vnum or not _compare_as_text(series, text, val):
+            continue
+        same = (coerce_numeric(series) == float(vnum)) & (text != "") & (text.str.casefold() != val.strip().casefold())
+        counts = {str(k): int(n) for k, n in text[same].value_counts().items() if (col, op, str(k).casefold()) not in named}
+        if counts:
+            out.append((cond, counts))
+    return out
+
+
+def where_with_variants(groups: List[List[Cond]], variants: List[Tuple[Cond, Dict[str, int]]]) -> List[List[Cond]]:
+    """The condition that also covers the other notations: '월 = 1' -> '월 = 1 | 월 = 01' (each OR group repeated
+    with the other notation), '월 != 1' -> '월 != 1; 월 != 01'."""
+    vm = {cond: list(cnt) for cond, cnt in variants}
+    out: List[List[Cond]] = []
+    for g in groups:
+        base = list(g) + [(c, "!=", t) for c, o, v in g if o == "!=" and (c, o, v) in vm for t in vm[(c, o, v)]]
+        alts = [[cond] + ([(cond[0], "=", t) for t in vm[cond]] if cond[1] == "=" and cond in vm else []) for cond in base]
+        for combo in product(*alts):
+            if list(combo) not in out:
+                out.append(list(combo))
+    return out
 
 
 # ==============================================================================
@@ -651,14 +1250,14 @@ def percent_warning(df: pd.DataFrame, columns: List[str], where: str = "") -> Li
         if n:
             first = _strip_percent(ex[0])
             out.append(f"{where}'{c}' 열의 {n}칸({', '.join(repr(v) for v in ex)})은 %를 떼고 숫자로 읽었습니다 "
-                       f"({ex[0]} -> {first}, 100으로 나누지 않음). 열의 단위가 %인지 확인하십시오.")
+                       f"({ex[0]} -> {first}, 100으로 나누지 않음. .xlsx의 백분율 서식 칸도 화면에 보이는 숫자로 읽음). "
+                       f"열의 단위가 %인지 확인하십시오.")
     return out
 
 
-def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> None:
-    """STOP_RETRY when a column of columns holds numbers written with '%' ('11.9%') AND plain numbers ('0.119'):
-    coerce_numeric reads 11.9% as 11.9, so the two forms may differ by 100x and no rule tells which scale is meant.
-    The user makes the column one form. A column of '%' cells only is read as before (percent_warning)."""
+def percent_mix(df: pd.DataFrame, columns: List[str]) -> List[Tuple[str, str, str]]:
+    """(column, a '%' cell, a plain number cell) of each column of columns holding both forms (check_percent_mix)."""
+    out = []
     for c in dict.fromkeys(columns):
         if c not in df.columns:
             continue
@@ -669,13 +1268,21 @@ def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> 
         is_pct = obj.map(lambda v: isinstance(v, str) and bool(_PERCENT_RE.fullmatch(v.strip()))).to_numpy(dtype=bool)
         is_num = coerce_numeric(s).notna().to_numpy(dtype=bool)
         if is_pct.any() and (is_num & ~is_pct).any():
-            pct = str(obj.iloc[int(np.flatnonzero(is_pct)[0])]).strip()
-            plain = str(obj.iloc[int(np.flatnonzero(is_num & ~is_pct)[0])]).strip()
-            raise InputError(
-                f"{where}'{c}' 열에 %를 붙인 숫자 칸({pct!r})과 % 없는 숫자 칸({plain!r})이 섞여 있습니다. "
-                f"%를 붙인 값은 % 없이 읽으므로({pct} -> {_strip_percent(pct)}) 두 형식은 100배 차이가 날 수 있어 "
-                f"어느 배율인지 정할 수 없습니다. 사용자에게 알려 이 열을 모두 %를 붙인 값으로, 또는 모두 % 없는 숫자"
-                f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오.")
+            out.append((c, str(obj.iloc[int(np.flatnonzero(is_pct)[0])]).strip(),
+                        str(obj.iloc[int(np.flatnonzero(is_num & ~is_pct)[0])]).strip()))
+    return out
+
+
+def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> None:
+    """STOP_RETRY when a column of columns holds numbers written with '%' ('11.9%') AND plain numbers ('0.119'):
+    coerce_numeric reads 11.9% as 11.9, so the two forms may differ by 100x and no rule tells which scale is meant.
+    The user makes the column one form. A column of '%' cells only is read as before (percent_warning)."""
+    for c, pct, plain in percent_mix(df, columns)[:1]:
+        raise InputError(
+            f"{where}'{c}' 열에 %를 붙인 숫자 칸({pct!r})과 % 없는 숫자 칸({plain!r})이 섞여 있습니다. "
+            f"%를 붙인 값은 % 없이 읽으므로({pct} -> {_strip_percent(pct)}) 두 형식은 100배 차이가 날 수 있어 "
+            f"어느 배율인지 정할 수 없습니다. 사용자에게 알려 이 열을 모두 %를 붙인 값으로, 또는 모두 % 없는 숫자"
+            f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오 (.xlsx는 열 전체를 같은 셀 서식으로).")
 
 
 def coerce_numeric(series: pd.Series) -> pd.Series:
@@ -689,7 +1296,7 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
         return series
     s = series.astype("object").where(series.notna(), None)
     # 천 단위 쉼표만 지움 ('1,500', '1,234,567.5'). '175,6'처럼 쉼표 뒤가 3자리가 아니면 천 단위가 아니므로
-    # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (예전에는 1756으로 조용히 바뀜)
+    # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (1756으로 조용히 바뀌지 않게)
     s = s.map(lambda v: _strip_thousands(_strip_percent(v.strip())) if isinstance(v, str) else v)
     s = s.replace(_NA_PLACEHOLDERS, np.nan)
     return pd.to_numeric(s, errors="coerce").astype(float)
@@ -725,7 +1332,7 @@ def _sniff_delimiter(sample: str) -> str:
 
 
 # Number cells of a CSV not separated by commas (fullmatch). Each name is assigned once in this module: a second
-# assignment of a shared name (2.9.19 _THOUSANDS_RE, unanchored for check_comma_numbers) silently changed this check.
+# assignment of a shared name (an unanchored pattern for check_comma_numbers) would silently change this check.
 _DECIMAL_COMMA_RE = re.compile(r"\s*[-+]?\d+,\d+\s*")                          # '175,6', '0,149', '27,8448'
 _CSV_THOUSANDS_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(,\d{3})+(\.\d+)?\s*")   # '1,500', '1,346.8' (never '0,149')
 _EURO_NUMBER_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(\.\d{3})+,\d+\s*")       # '1.346,8': thousands dot, decimal comma
@@ -733,29 +1340,66 @@ _DOT_THOUSANDS_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(\.\d{3})+\s*")          # 
 _DOT_COMMA_NUMBER_RE = re.compile(r"\s*[-+]?[\d.,]*\d[\d.,]*\s*")              # digits with '.' and ',' only
 
 
+_PLAIN_DOT_RE = re.compile(r"\s*[-+]?\d+\.\d+\s*")                              # '61.5', '0.300', '1.300'
+
+
+def _comma_columns(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Number cells of each column of a CSV read as text (_decimal_commas): decimal-comma cells ('175,6', '1,2'),
+    thousands-comma cells ('1,500'), European numbers ('1.346,8') and other dotted comma numbers, dot-grouped numbers
+    without a comma ('1.300', '2.125'), plain decimal-point numbers that cannot be a thousands group ('61.5', '0.300').
+    text: most filled cells are not numbers (a line-list / note column whose '1,2' is no number)."""
+    out = []
+    for j in df.columns:
+        col = df[j]
+        vals = col[col.map(lambda v: isinstance(v, str) and v.strip() != "")].astype(str)
+        vals = vals[~vals.str.strip().isin(_NA_PLACEHOLDERS)]
+        commas = vals[vals.str.contains(",", regex=False)]
+        dec = commas[commas.str.fullmatch(_DECIMAL_COMMA_RE)]
+        dotted = commas[commas.str.contains(".", regex=False) & commas.str.fullmatch(_DOT_COMMA_NUMBER_RE)]
+        nocomma = vals[~vals.str.contains(",", regex=False) & vals.str.contains(".", regex=False)]
+        grouped = nocomma[nocomma.str.fullmatch(_DOT_THOUSANDS_RE)]
+        plain = nocomma[nocomma.str.fullmatch(_PLAIN_DOT_RE)]
+        numberish = int(vals.str.fullmatch(_DOT_COMMA_NUMBER_RE).sum())
+        out.append({"dec": dec, "only_dec": dec[~dec.str.fullmatch(_CSV_THOUSANDS_RE)],
+                    "thousands": commas[commas.str.fullmatch(_CSV_THOUSANDS_RE)],
+                    "euro": dotted[dotted.str.fullmatch(_EURO_NUMBER_RE)], "dotted": dotted,
+                    "grouped": grouped, "plain": plain[~plain.str.fullmatch(_DOT_THOUSANDS_RE)],
+                    "text": len(vals) > 0 and numberish * 2 < len(vals)})
+    return out
+
+
 def _decimal_commas(df: pd.DataFrame, sep: str, trained: bool = False) -> pd.DataFrame:
     """A CSV not separated by commas (';', tab) whose numbers use a decimal comma ('175,6', European Excel): a comma
-    that cannot be a thousands separator ('175,6', '2,19', '0,149', '27,8448') means every '<digits>,<digits>' cell is
-    a decimal number, read with a decimal point (df.attrs["decimal_comma"], layout_warnings). European numbers with a
+    that cannot be a thousands separator ('175,6', '2,19', '0,149', '27,8448') means the '<digits>,<digits>' cells are
+    decimal numbers, read with a decimal point (df.attrs["decimal_comma"], layout_warnings). European numbers with a
     thousands dot ('1.346,8') are read as 1346.8 (with a warning) when every number cell with both '.' and ',' has that
-    form. Refused (InputError, a value would change by 1000x either way): cells that could be thousands too ('1,500'),
-    dot-grouped numbers without a comma ('1.300', '2.125': 1300 or 1.3), or European numbers mixed with other '.'/','
-    forms in the same file. trained: the model (or the ml_map data file) was read with decimal commas, so this file is
-    read the same way whatever its delimiter (a one-column file is sniffed as ','), and refused when it has no
+    form. Judged per column: a mostly-text column (a line list '1,2' among '1,2,3' / 'A') is no evidence and
+    is never changed, and a file with a plain decimal-point column ('61.5') uses '.' as its decimal point, so no
+    column is read with decimal commas there (a '175,6' column stays text: training stops on it as before).
+    Refused (InputError, a value would change by 1000x either way) in a decimal-comma file: cells that could be
+    thousands too ('1,500'), dot-grouped numbers without a comma ('1.300', '2.125': 1300 or 1.3), or European numbers
+    mixed with other '.'/',' forms. trained: the model (or the ml_map data file) was read with decimal commas, so this
+    file is read the same way whatever its delimiter (a one-column file is sniffed as ','), and refused when it has no
     decimal-comma cell but a '1.300' or '1,500' (read differently from the training file). A comma CSV, or one
     without such cells, is unchanged (coerce_numeric strips thousands separators)."""
     if df.empty or (sep == "," and not trained):
         return df
-    cells = pd.Series(df.to_numpy(dtype=object).ravel())
-    vals = cells[cells.map(lambda v: isinstance(v, str) and "," in v)].astype(str)
-    dec = vals[vals.str.fullmatch(_DECIMAL_COMMA_RE)]
-    thousands = vals[vals.str.fullmatch(_CSV_THOUSANDS_RE)]
-    only_dec = dec[~dec.str.fullmatch(_CSV_THOUSANDS_RE)]
-    dotted = vals[vals.str.contains(".", regex=False) & vals.str.fullmatch(_DOT_COMMA_NUMBER_RE)]
-    euro = dotted[dotted.str.fullmatch(_EURO_NUMBER_RE)]
-    confirmed = not (only_dec.empty and euro.empty)
-    if not confirmed and not trained:
+    cols = _comma_columns(df)
+    num = [c for c in cols if not c["text"]]               # text columns: never evidence, never changed
+    for c in num:
+        c["dc"] = not (c["only_dec"].empty and c["euro"].empty)
+    confirmed = any(c["dc"] for c in num)
+    # a plain decimal-point number ('61.5') in a column without decimal commas: '.' is this file's decimal point
+    dot_file = any(not c["dc"] and not c["plain"].empty and c["grouped"].empty for c in num)
+    if not trained and (not confirmed or dot_file):
         return df
+
+    def cat(key: str) -> pd.Series:
+        parts = [c[key] for c in num if not c[key].empty]
+        return pd.concat(parts) if parts else pd.Series([], dtype=object)
+
+    only_dec, euro, dec, thousands, dotted, grouped = (cat(k) for k in ("only_dec", "euro", "dec", "thousands",
+                                                                        "dotted", "grouped"))
     first = (only_dec if not only_dec.empty else euro).iloc[0].strip() if confirmed else None
     why = (f"소수점 쉼표('{first}')" if confirmed else "소수점 쉼표(학습 파일이 소수점 쉼표 형식)")
     tail = (" 파일 하나에는 한 가지 숫자 형식만 쓰십시오: Excel에서 숫자 형식을 소수점 '.'으로 바꿔 저장하거나 "
@@ -772,8 +1416,6 @@ def _decimal_commas(df: pd.DataFrame, sep: str, trained: bool = False) -> pd.Dat
                 f"CSV(구분 기호 '{sep}')의 숫자에 점(.)이 천 단위인 숫자('{euro.iloc[0].strip()}')와 다른 형식의 숫자"
                 f"('{odd.iloc[0].strip()}')가 섞여 있어 값을 정할 수 없습니다 (점이 천 단위인지 소수점인지에 따라 1000배 "
                 f"달라짐).{tail}")
-    text = cells[cells.map(lambda v: isinstance(v, str) and "," not in v and "." in v)].astype(str)
-    grouped = text[text.str.fullmatch(_DOT_THOUSANDS_RE)]
     if not grouped.empty:
         g0 = grouped.iloc[0].strip()
         raise InputError(
@@ -789,7 +1431,10 @@ def _decimal_commas(df: pd.DataFrame, sep: str, trained: bool = False) -> pd.Dat
             return v.strip().replace(".", "").replace(",", ".")
         return v.replace(",", ".") if _DECIMAL_COMMA_RE.fullmatch(v) else v
 
-    out = df.apply(lambda c: c.map(fix))
+    out = df.copy()
+    for j, c in zip(df.columns, cols):
+        if not c["text"]:
+            out[j] = df[j].map(fix)
     e0 = euro.iloc[0].strip() if not euro.empty else None
     out.attrs["decimal_comma"] = [f"{first} -> {fix(first)}", int(len(dec) + len(euro)), sep,
                                   f"{e0} -> {fix(e0)}" if e0 else None, int(len(euro))]
@@ -889,6 +1534,7 @@ def read_raw_table(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
     if ext in [".xlsx", ".xlsm"]:
         try:
             df_raw = pd.read_excel(file_path, header=None)
+            df_raw = _excel_percent_cells(file_path, df_raw)
         except ImportError:
             raise InputError("openpyxl 패키지가 설치되어 있지 않아 .xlsx를 읽을 수 없습니다. `python -m pip install openpyxl`로 설치하십시오.")
         except PermissionError:
@@ -900,6 +1546,64 @@ def read_raw_table(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
     else:
         raise InputError(f"지원하지 않는 데이터 포맷입니다 ({ext}). .xlsx 또는 .csv 파일을 지정하십시오.")
     return df_raw
+
+
+_FORMAT_LITERAL_RE = re.compile(r'"[^"]*"|\\.|\[[^\]]*\]')   # quoted text, escaped character, [color] / [>=100]
+
+
+def _percent_format(fmt: Any) -> bool:
+    """An Excel number format that shows the value x100 with '%' ('0%', '0.0%', '#,##0.00%'); a '%' in quoted text
+    or escaped ('0.0"%"', '0.0\\%') is a literal sign that does not scale the value."""
+    return isinstance(fmt, str) and "%" in _FORMAT_LITERAL_RE.sub("", fmt)
+
+
+def _percent_text(v: float) -> str:
+    """0.119 (an Excel percent cell) -> '11.9%': the number Excel shows (15 significant digits, Excel's precision),
+    as a CSV export writes it, so coerce_numeric, percent_warning and check_percent_mix treat both files alike."""
+    return f"{float(v) * 100:.15g}%"
+
+
+def _excel_percent_cells(file_path: str, df_raw: pd.DataFrame) -> pd.DataFrame:
+    """The number cells of the first sheet (the one pd.read_excel read) with a percent number format, written as the
+    text Excel shows ('11.9%' for 0.119): read_excel gives the stored fraction, a CSV export of the same
+    sheet gives '11.9%' (read as 11.9), so the same data would differ by 100x between the two file formats.
+    Sheets without a percent format in their styles are returned unchanged (one cheap style check, no second read)."""
+    from openpyxl import load_workbook
+    from openpyxl.styles.numbers import BUILTIN_FORMATS
+
+    wb = load_workbook(file_path, read_only=True, data_only=True, keep_links=False)
+    try:
+        try:   # style table check: no percent format anywhere -> nothing to do
+            fmts = [BUILTIN_FORMATS.get(st.numFmtId) if st.numFmtId < 164 else wb._number_formats[st.numFmtId - 164]
+                    for st in wb._cell_styles]
+            if not any(_percent_format(f) for f in fmts):
+                return df_raw
+        except Exception:
+            pass
+        ws = wb.worksheets[0]
+        if getattr(ws, "reset_dimensions", None):
+            ws.reset_dimensions()
+        hits: Dict[int, Dict[int, str]] = {}
+        ncols, nrows = df_raw.shape[1], len(df_raw)
+        for r, row in enumerate(ws.rows):
+            if r >= nrows:
+                break
+            for c, cell in enumerate(row[:ncols]):
+                v = cell.value
+                if (cell.data_type == "n" and isinstance(v, (int, float)) and not isinstance(v, bool)
+                        and _percent_format(cell.number_format)):
+                    hits.setdefault(c, {})[r] = _percent_text(v)
+    finally:
+        wb.close()
+    if not hits:
+        return df_raw
+    out = df_raw.copy()
+    for c, cells in hits.items():
+        col = out.iloc[:, c].astype(object)
+        for r, text in cells.items():
+            col.iat[r] = text
+        out[out.columns[c]] = col
+    return out
 
 
 def sniff_header_index(df_raw: pd.DataFrame) -> int:
@@ -934,7 +1638,7 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     if unit_row is not None:
         j = unit_row - 1
         unit_cells = _row_cells(df_raw, j) if 0 <= j < total_rows else []
-        ok, reason = unit_row_verdict(df_raw, j, header_idx) if unit_cells and j > header_idx else (False, "")
+        ok, reason = unit_row_verdict(df_raw, j, header_idx, given=True) if unit_cells and j > header_idx else (False, "")
         if not ok:
             pair = _header_unit_pair(df_raw)
             if pair and pair != (header_idx + 1, unit_row):
@@ -955,6 +1659,10 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
                              f"단위 행 번호를 고치거나 단위 행이 없으면 --unit-row를 빼십시오.{hint}")
         units = df_raw.iloc[unit_row - 1].values
         headers = [_with_unit(h, u) for h, u in zip(headers, units)]
+        # a few Hangul words that are no known unit ('점검중' among '도씨, 킬로그램'): read as units, with a warning
+        odd_units = [h for h, u in zip(headers, units) if _odd_unit_word(_cell_text(u))]
+    else:
+        odd_units = []
 
     # De-duplicate headers (handles accidental duplicate column names in source files). A generated name can
     # itself be taken (a, a, a_1), so the suffix grows until the name is unused.
@@ -992,6 +1700,9 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     # Clean rows that are entirely NaN, and entirely empty columns without a header (col_<i>). A named empty
     # column stays: training then says it has no values, prediction imputes it with a warning.
     df_data = df_data.dropna(how="all", axis=0)
+    if df_data.empty:   # only blank rows below the header: say so (the later messages blamed the columns)
+        raise InputError(f"머리글({header_idx + 1}행) 아래의 {total_rows - start_idx}행이 모두 빈 행이라 데이터가 0행입니다. "
+                         f"데이터가 채워진 파일인지, 머리글·데이터 시작 행(--header-row, --data-row)이 맞는지 확인하십시오.")
     # The header (and unit) row repeated inside the data (page breaks of an exported report) carries no values:
     # dropped, with the row numbers in attrs (layout_warnings), so numeric columns stay numeric.
     repeated = _repeated_header_rows(df_raw, df_data, header_idx, unit_row, start_idx)
@@ -1028,6 +1739,7 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
                                        and header_idx + 1 < total_rows and _looks_like_unit_row(df_raw, header_idx + 1, header_idx)
                                        else None)
     df_data.attrs["repeated_header_rows"] = [int(i) + 1 for i in repeated]
+    df_data.attrs["odd_unit_names"] = odd_units
     df_data.attrs["summary_rows"] = _SharedList(_summary_rows(df_data, source_rows))
     df_data.attrs["decimal_comma"] = df_raw.attrs.get("decimal_comma")
     return df_data
@@ -1037,11 +1749,11 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
 # average words can also be values of a category ('집계' = 평균/최대) and are judged per column (_summary_rows).
 TOTAL_WORDS = {"합계", "총계", "소계", "계", "총합", "total", "sum", "subtotal", "grandtotal"}
 AVERAGE_WORDS = {"평균", "average", "avg", "mean"}
-# Wording of the same rows in daily reports (2.9.25): '일계', '월계', '누계', '총 합계', '전체합계', '합계:', 'Total:',
+# Wording of the same rows in daily reports: '일계', '월계', '누계', '총 합계', '전체합계', '합계:', 'Total:',
 # '소계(A)', '주간계', '평균값', 'AVG.'. Exact words: TOTAL_WORDS, AVERAGE_WORDS and the period totals below.
 # Loose words ('...합계', short '...계' other than ordinary words, 'Total'/'Sum' as a separate word, '평균값'/'평균치')
 # are also values of a category ('A계'/'B계', '생산계', 'pH계'): _summary_rows counts a loose totals word only when
-# the row's numbers are totals (_loose_by_value, 2.9.27), a loose average word when its rows are few between the data
+# the row's numbers are totals (_loose_by_value), a loose average word when its rows are few between the data
 # (LOOSE_MAX_TEXTS).
 _TOTAL_PERIOD_WORDS = {"일계", "월계", "주계", "연계", "년계", "누계"}
 _GYE_NOT_TOTAL = ("단계", "설계", "경계", "관계", "세계", "시계", "기계", "회계", "체계", "한계", "업계", "생계", "통계",
@@ -1423,6 +2135,10 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
         out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 쉼표를 소수점으로 읽었습니다 ({dec[1]}칸, 예: {dec[0]})")
         if dec[3]:
             out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 점(.)을 천 단위 구분 기호로 읽었습니다 ({dec[4]}칸, 예: {dec[3]})")
+    odd = df.attrs.get("odd_unit_names") or []
+    if odd:
+        out.append(f"{df.attrs.get('unit_row')}행을 단위로 읽음: {', '.join(odd[:5])}{' 등' if len(odd) > 5 else ''}. "
+                   f"상태·결측 표시로 보이는 낱말이 있습니다. 데이터 행이면 --unit-row를 빼세요")
     rep = df.attrs.get("repeated_header_rows") or []
     if rep:
         out.append(f"{_row_list(rep)}행은 머리글(단위) 행과 같아(페이지마다 반복된 머리글) 데이터에서 뺐습니다")
@@ -1488,6 +2204,63 @@ def _unit_text(t: str) -> bool:
     return len(t) <= 12 and t.count(" ") <= 1
 
 
+_KOREAN_UNITS = {"개", "회", "초", "분", "시간", "일", "주", "월", "년", "원", "천원", "만원", "명", "건", "점", "매", "장",
+                 "대", "도", "배", "번", "개월", "퍼센트", "미터", "그램", "리터", "톤", "와트", "볼트", "암페어"}
+
+
+# Korean unit words of a unit row the user named (--unit-row): never a state word (_odd_unit_word). Any other short
+# Hangul word there is a unit too ('마리', '킬로'); only state words ('점검중', '센서고장', '정지': a data row of a
+# measurement sheet) make the row suspect: half or more of its text cells -> not a unit row, fewer -> read with a
+# warning. The tool's own guess (no --unit-row) knows only _KOREAN_UNITS.
+_KOREAN_UNIT_WORDS = _KOREAN_UNITS | {
+    "도씨", "섭씨", "화씨", "켈빈", "킬로그램", "밀리그램", "그램", "톤", "킬로톤", "기압", "바", "밀리바", "파스칼", "킬로파스칼",
+    "메가파스칼", "헥토파스칼", "미터", "킬로미터", "센티미터", "밀리미터", "마이크로미터", "마이크론", "나노미터", "인치", "피트",
+    "리터", "밀리리터", "시씨", "세제곱미터", "제곱미터", "평", "헥타르", "시", "시간", "분", "초", "밀리초", "회", "회전",
+    "개", "세트", "쌍", "벌", "켤레", "박스", "상자", "팩", "롤", "묶음", "포", "통", "병", "캔", "봉", "알", "정", "가지", "명",
+    "퍼센트", "프로", "퍼밀", "피피엠", "와트", "킬로와트", "메가와트", "킬로와트시", "볼트", "킬로볼트", "암페어", "밀리암페어",
+    "옴", "헤르츠", "킬로헤르츠", "데시벨", "뉴턴", "줄", "킬로줄", "칼로리", "킬로칼로리", "마력", "알피엠", "노트", "룩스",
+    "도", "라디안", "주기", "사이클", "건", "차", "호", "층", "동", "칸", "달러", "엔", "유로", "위안",
+    "세", "살", "억원", "만원", "백만원", "천원", "원", "킬로", "센티", "미리", "바이트", "킬로바이트", "메가바이트",
+    "기가바이트", "테라바이트", "개수", "마리", "점", "퍼센트포인트", "배", "대",
+    "킬로그램중", "그램중", "톤중",              # weight units (kgf, gf, tf): before the rule of words ending in "중"
+}
+
+# State and status words of a measurement sheet's data cells (a machine state, a missing reading): a row of them is a
+# data row, not units. Also any Hangul word ending in '중' ('측정중', '가동중') or holding one of _STATE_PARTS.
+_STATE_WORDS = {"정지", "가동", "운전", "대기", "정상", "이상", "불량", "양품", "미가동", "휴무", "휴지", "오류", "에러",
+                "누락", "미입력", "미측정", "고장", "점검", "보류", "완료", "합격", "불합격", "판정", "확인", "재측정"}
+_STATE_PARTS = ("고장", "정지", "불량", "오류", "에러", "누락", "점검", "측정", "이상", "교체", "수리", "정비")
+
+
+def _hangul_word(t: str) -> bool:
+    t = t.strip()
+    return bool(t) and all("\uac00" <= ch <= "\ud7a3" or "\u3131" <= ch <= "\u318e" or ch.isspace() for ch in t)
+
+
+def _odd_unit_word(t: str) -> bool:
+    """A state word in a unit row ('점검중', '센서고장', '정지'; '도씨', '마리', '킬로' are units): the row may be data."""
+    t = t.strip()
+    if not _hangul_word(t) or t in _KOREAN_UNIT_WORDS:
+        return False
+    return t in _STATE_WORDS or (len(t) > 1 and t.endswith("중")) or any(w in t for w in _STATE_PARTS)
+
+
+KOREAN_UNIT_MAX = 6      # a Hangul word of a unit row the user named (--unit-row): at most this many letters, no space
+
+
+def _unit_shaped(t: str, given: bool = False) -> bool:
+    """Text a unit is written as: some letter, digit or sign that is not Hangul ('kg/cm2 G', '°C', '%', 'mm'), or a
+    Korean unit word ('개', '시간'). Other Hangul words ('점검중', '센서고장') are not units when the tool judges the
+    row by itself; in the unit row the user named (given: --unit-row) a short Hangul word without space is a unit
+    ('도씨', '킬로그램', '기압', '회전')."""
+    t = t.strip()
+    if not t or not _unit_text(t):
+        return False
+    if t in _KOREAN_UNITS or (given and len(t) <= KOREAN_UNIT_MAX and " " not in t):
+        return True
+    return any(not ("\uac00" <= ch <= "\ud7a3" or "\u3131" <= ch <= "\u318e" or ch.isspace()) for ch in t)
+
+
 UNIT_SCAN_ROWS = 50 * UNIT_SCAN_CELLS    # rows below a unit row read for the judgment (bounded on a large sheet)
 
 
@@ -1523,7 +2296,7 @@ def _column_below(block: np.ndarray, k: int) -> List[Any]:
     return [v for v in block[:, k] if not _blank_mark(_cell_text(v))]
 
 
-def _unit_cell(v: Any, below: List[Any]) -> str:
+def _unit_cell(v: Any, below: List[Any], given: bool = False) -> str:
     """One filled cell of a candidate unit row against the filled cells of its column below:
     'unit'  text that is not among the values below ('°C', a scale '1000' far outside the numbers below);
     'data'  a number or date in the range of the values below, or text that is a value below (category 'A');
@@ -1536,7 +2309,7 @@ def _unit_cell(v: Any, below: List[Any]) -> str:
             return "data"
         if _blank_mark(t):
             return "blank"
-        return "unit" if _unit_text(t) else "note"
+        return "unit" if _unit_shaped(t, given) else "note"      # '점검중', '센서고장' are not units (unless given)
     x = _number(v)
     nums = [n for n in (_number(b) for b in below) if n is not None]
     if x is None or not nums or x == 0:
@@ -1546,9 +2319,11 @@ def _unit_cell(v: Any, below: List[Any]) -> str:
     return "unit" if (x > hi + 3 * w or x < lo - 3 * w) else "data"     # a scale unit: 1000 over 1..5
 
 
-def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None) -> Tuple[bool, str]:
+def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None,
+                     given: bool = False) -> Tuple[bool, str]:
     """(row j (0-based) is the unit row of the header row `header` (default j - 1), why not). Judged per cell, then
-    by the row (_unit_cell):
+    by the row (_unit_cell). given: the user named the row (--unit-row), so short Hangul words count as units
+    ('도씨', '킬로그램'); without it (the tool's own guess) they are data ('점검중', '센서고장' of a first data row):
     - no cell is data (a number or date in the range below, or a text value found below such as a category 'A'),
       and some text cell is a unit; missing-value marks ('측정불가', 'NG') count as blank, so a first data row of
       '측정불가, 측정불가, A' or '측정불가, 측정불가' is data, not units;
@@ -1580,13 +2355,16 @@ def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None)
             if any(_is_data_value(b) for b in below[:UNIT_SCAN_CELLS * 5]):   # a name under a title row
                 return False, "이름 없는 머리글 칸 아래에 숫자·날짜가 든 열이 있어(제목 행 아래의 머리글)"
             continue                                    # '비고' over a column without data: not judged
-        kinds[k] = _unit_cell(v, below)
+        kinds[k] = _unit_cell(v, below, given)
     if any(c == "data" for c in kinds.values()):
         return False, "아래 데이터와 같은 값(그 열 범위 안의 숫자·날짜, 아래에도 있는 글자 값)이 든 데이터 행이라"
     units = [k for k, c in kinds.items() if c == "unit" and not _is_data_value(row[k])]
     text = [k for k, c in kinds.items() if c in ("unit", "note") and not _is_data_value(row[k])]
     if not units:
         return False, "단위로 볼 짧은 글자가 없어"
+    odd = [_cell_text(row[k]) for k in units if _odd_unit_word(_cell_text(row[k]))]
+    if odd and len(odd) * 2 >= len(text):
+        return False, "상태·결측 표시로 보이는 한글 낱말(점검중, 고장, 정지 등)이 글자 칸의 절반 이상이라"
     good = 0
     for k in units:
         below = _column_below(block, k)[:UNIT_SCAN_CELLS]
@@ -1632,7 +2410,7 @@ def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
 
 
 LAYOUT_OPTS = {"--header-row": "header_row", "--unit-row": "unit_row", "--data-row": "data_row"}
-PATH_OPTS = ("-f", "--file", "-m", "--model", "--meta", "-o", "--out", "--save", "--points", "-d", "--data-dir")
+PATH_OPTS = ("-f", "--file", "-m", "--model", "--save", "--points")
 
 
 def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
@@ -1713,12 +2491,6 @@ def find_header_layout(candidates: Optional[List[List[Any]]], names: List[str],
     return None
 
 
-def find_header_row(candidates: Optional[List[List[Any]]], names: List[str]) -> Optional[int]:
-    """1-based row (df.attrs["header_candidates"] of load_data_file) that holds every name (a two-level / merged header)."""
-    found = find_header_layout(candidates, names)
-    return found[0] if found else None
-
-
 def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> str:
     """'파일 N행에 이 이름들이 있습니다 ... [추천] ...' for names found in another top row, else ''.
     [추천] --header-row N alone when no unit row is involved; with a unit row below N, or when the run gave
@@ -1740,7 +2512,7 @@ def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> st
 # C4-B. Feature Schema (numeric / categorical / datetime), identical at train and inference
 # ==============================================================================
 #
-# feature_schema (stored in vX/model_<target>.json, models trained by 2.1.0+):
+# feature_schema (stored in vX/model_<target>.json):
 #   {"numeric": [...], "categorical": {col: [known categories]},
 #    "datetime": {col: [parts]}, "input_columns": [...model input column order...]}
 # Datetime columns are expanded OUTSIDE the sklearn pipeline (no custom code is pickled,
@@ -1801,6 +2573,80 @@ def normalize_category(series: pd.Series) -> pd.Series:
     return series.astype("object").map(_one).astype("object")
 
 
+CATEGORY_CANDIDATES_MAX = 10    # [후보] lists at most this many training categories (R8)
+
+
+def _category_key(v: Any) -> str:
+    """The form two category values are matched in: full-width -> half-width (NFKC), trimmed, case-folded."""
+    import unicodedata
+    return unicodedata.normalize("NFKC", str(v)).strip().casefold()
+
+
+def match_categories(values: Any, known: List[Any]) -> Tuple[Dict[str, str], List[str]]:
+    """Given category values against the training categories: ({value: training category} for the values that differ
+    from exactly one training category only by case, surrounding spaces or full-width letters, [values matching none]).
+    A value equal to a training category is kept; one matching two training categories ('a' for 'A' and 'a') is unseen."""
+    known_s = [str(k) for k in known]
+    by_key: Dict[str, List[str]] = {}
+    for k in known_s:
+        by_key.setdefault(_category_key(k), []).append(k)
+    fixes: Dict[str, str] = {}
+    unseen: List[str] = []
+    for v in dict.fromkeys(str(x) for x in values):
+        if v in known_s:
+            continue
+        hit = by_key.get(_category_key(v), [])
+        if len(hit) == 1:
+            fixes[v] = hit[0]
+        else:
+            unseen.append(v)
+    return fixes, unseen
+
+
+def category_candidates(known: List[Any]) -> str:
+    """'[후보] A, B, C' of the training categories (at most CATEGORY_CANDIDATES_MAX, the rest counted)."""
+    known = [str(k) for k in known]
+    text = f"[후보] {', '.join(known[:CATEGORY_CANDIDATES_MAX])}"
+    if len(known) > CATEGORY_CANDIDATES_MAX:
+        text += f" (학습 범주 {len(known)}개 중 {CATEGORY_CANDIDATES_MAX}개)"
+    return text
+
+
+def _category_recovered(col: str, fixes: Dict[str, str]) -> None:
+    for given, k in fixes.items():
+        note_recovered(f"'{col}' 값 '{given}'이(가) 학습 범주와 대소문자·공백·전각만 달라 -> '{k}'(으)로 맞춰 예측")
+
+
+def align_categories(df: pd.DataFrame, schema: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Category inputs of df (file or -i) matched to the training categories in place (match_categories, reported with
+    note_recovered). Returns {column: values matching no training category} (the caller warns about them)."""
+    left: Dict[str, List[str]] = {}
+    for col, known in (schema.get("categorical") or {}).items():
+        if col not in df.columns:
+            continue
+        s = normalize_category(df[col])
+        fixes, unseen = match_categories(s.dropna(), known)
+        if fixes:
+            df[col] = s.map(lambda v: fixes.get(v, v))
+            _category_recovered(col, fixes)
+        if unseen:
+            left[col] = unseen
+    return left
+
+
+def fixed_category_value(col: str, value: Any, known: List[Any], option: str = "-i") -> str:
+    """One fixed category input (--sweep / --maximize / --find): the training category it means, or STOP_RETRY with the
+    training categories as [후보] (an unseen category would be predicted as the baseline without a word)."""
+    v = normalize_category(pd.Series([value])).iloc[0]
+    if isinstance(v, str):
+        fixes, unseen = match_categories([v], known)
+        if not unseen:
+            _category_recovered(col, fixes)
+            return fixes.get(v, v)
+    raise InputError(f"{option}의 '{col}={value}'은(는) 학습 때 없던 값이라 예측할 수 없습니다. "
+                     f"학습 범주 중 하나로 다시 지정하십시오. {category_candidates(known)}")
+
+
 def prepare_features(df: pd.DataFrame, schema: Dict[str, Any]) -> pd.DataFrame:
     """Builds the model input frame (column order = schema['input_columns'])."""
     out: Dict[str, pd.Series] = {}
@@ -1814,11 +2660,6 @@ def prepare_features(df: pd.DataFrame, schema: Dict[str, Any]) -> pd.DataFrame:
         out[col] = normalize_category(df[col])
     frame = pd.DataFrame(out, index=df.index)
     return frame[schema["input_columns"]]
-
-
-def schema_raw_columns(schema: Dict[str, Any]) -> List[str]:
-    """User-facing input columns (before date expansion)."""
-    return list(schema.get("numeric", [])) + list(schema.get("datetime", {})) + list(schema.get("categorical", {}))
 
 
 def input_column_owner(schema: Dict[str, Any]) -> Dict[str, str]:
@@ -1857,7 +2698,7 @@ SAFE_MATH: Dict[str, Any] = {
     "e": np.e,
     "radians": np.radians,
     "degrees": np.degrees,
-}
+} if np is not None else {}      # numpy missing: check_core_libraries answers before any formula (R5)
 
 _NUMBER_NAME_RE = re.compile(r"(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")    # a column name that reads as a number
 _NAME_BOUNDARY_L = r"(?<![가-힣a-zA-Z0-9_])"
@@ -1889,7 +2730,7 @@ def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: 
             raise InputError(
                 f"수식의 식별자 '{node.id}'에 해당하는 컬럼이 없습니다"
                 + hint
-                + f". 컬럼명은 데이터의 전체 이름(단위 포함) 또는 단위를 뺀 고유 이름으로 쓰십시오. [사용 가능한 컬럼 목록]: {columns}"
+                + f". 컬럼명은 데이터의 전체 이름(단위 포함) 또는 단위를 뺀 고유 이름으로 쓰십시오. [사용 가능한 컬럼 목록]: {name_list(columns)}"
             )
 
 
@@ -2005,8 +2846,8 @@ def apply_eval_expressions(
             leaked = [c for c in token_to_col.values() if c in target_set]
             if leaked:
                 raise InputError(
-                    f"[DATA LEAKAGE DETECTED] 파생변수 '{new_col}' 수식에 타겟 변수 {leaked}이(가) 포함되어 있습니다. "
-                    f"타겟 변수는 독립변수 및 파생변수 생성에 절대 투입될 수 없습니다."
+                    f"타겟 누수: 파생변수 '{new_col}' 수식에 타겟 {leaked}이(가) 들어 있습니다. "
+                    f"타겟은 입력이나 파생변수 수식에 쓸 수 없습니다."
                 )
 
             try:
@@ -2131,24 +2972,21 @@ def save_with_lock_fallback(path: str, writer: Callable[[str], None], what: str 
         return alt
 
 
-def write_csv_excel_compatible(df: pd.DataFrame, path: str, encoding: Optional[str] = None) -> str:
+def write_csv_excel_compatible(df: pd.DataFrame, path: str) -> str:
     """
-    Writes CSV that opens correctly by double-click in Korean Windows Excel:
-    CP949 by default, utf-8-sig fallback when characters are not representable.
+    Writes a CSV that people and LLM agents read: UTF-8 with BOM (utf-8-sig). Korean Windows Excel opens it by
+    double-click, and an agent's file reader does not mistake it for another encoding (a CP949 file was read as
+    garbled text by an agent, which then made up the content). Readers in this tool detect the encoding anyway.
     Returns the path actually written (may differ if the target was locked).
     """
     def _write(p: str) -> None:
-        enc = encoding or "cp949"
-        try:
-            df.to_csv(p, index=False, encoding=enc)
-        except (UnicodeEncodeError, LookupError):
-            df.to_csv(p, index=False, encoding="utf-8-sig")
+        df.to_csv(p, index=False, encoding="utf-8-sig")
 
     return save_with_lock_fallback(path, _write, what="CSV 파일")
 
 
 # ==============================================================================
-# C8. Table Interpolation (ml_map.py, and the measured-data comparison of ml_predict.py, 2.6.0+)
+# C8. Table Interpolation (ml_map.py, and the measured-data comparison of ml_predict.py)
 # ==============================================================================
 #
 # grid      : every combination of the key values exists (one key: evenly spaced) -> classic multilinear
@@ -2165,7 +3003,9 @@ NUMERIC_SHARE = 0.9       # a column is numeric when this share of its non-empty
 
 
 def _is_numeric_col(s: pd.Series) -> bool:
-    if pd.api.types.is_datetime64_any_dtype(s):
+    """A number column of ml_map (a key to interpolate, a value column). A code column ('007', '7', '12':
+    is_code_column) is not: its rows are used only for the exact same code."""
+    if pd.api.types.is_datetime64_any_dtype(s) or is_code_column(s):
         return False
     filled = s.notna() & (s.astype(str).str.strip() != "")
     if filled.sum() == 0:
@@ -2476,12 +3316,18 @@ def apply_inference_evals(df: pd.DataFrame, eval_expressions: List[str]) -> pd.D
 def check_inline_aliases(df: pd.DataFrame, required: List[str]) -> None:
     """-i: '온도' next to '온도(°C)' when the model has '온도(°C)' but not '온도' (align_input_columns would match
     '온도' to '온도(°C)'): one value would be silently dropped -> STOP_RETRY. A model with both '온도' and '온도(°C)'
-    takes both."""
+    takes both. A name with the same unit written otherwise ('온도(C)', '온도(℃)', '온도( °C)': _same_unit_name, the
+    other align_input_columns rule) counts as the model name too ('온도' + '온도(C)')."""
     req = set(required)
     given = [str(c) for c in df.columns]
     target = []
     for c in given:
-        hit = [] if c in req or strip_unit(c) != c.strip() else [f for f in required if _alias_key(f) == _alias_key(c)]
+        if c in req:
+            hit = []
+        elif strip_unit(c) != c.strip():
+            hit = [f for f in required if _same_unit_name(c, f)]
+        else:
+            hit = [f for f in required if _alias_key(f) == _alias_key(c)]
         target.append(hit[0] if len(hit) == 1 else c)
     values = {str(k): v for k, v in df.iloc[0].to_dict().items()} if len(df) == 1 else None
     check_same_column(given, target, "-i", values)
@@ -2513,7 +3359,7 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
         else:
             hints.append(f"-i의 '{c}'과(와) 비슷한 모델 입력이 없습니다")
     raise InputError(f"-i의 {', '.join(repr(c) for c in unknown)}은(는) 모델 입력이 아니라 예측에 쓰이지 않습니다. "
-                     f"{' / '.join(hints)}. 모델 입력이 아닌 값을 빼고 예측할지 사용자에게 물으십시오.\n[모델 입력 목록]: {list(dict.fromkeys(inputs))}")
+                     f"{' / '.join(hints)}. 모델 입력이 아닌 값을 빼고 예측할지 사용자에게 물으십시오.\n[모델 입력 목록]: {name_list(dict.fromkeys(inputs))}")
 
 
 def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str]) -> Dict[str, str]:
@@ -2549,7 +3395,6 @@ def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str
 
 def resolve_target_models(
     target_path: str,
-    meta_path: Optional[str] = None,
     filter_targets: Optional[List[str]] = None,
     kind: str = "타겟(-y)",
     values: bool = False
@@ -2611,15 +3456,7 @@ def resolve_target_models(
         target_name = match.group(1) if match else os.path.splitext(fname)[0]
 
         # Resolve Meta Path
-        m_path = meta_path
-        if not m_path:
-            cand_m = os.path.join(os.path.dirname(j_path), f"model_{target_name}.json")
-            if os.path.exists(cand_m):
-                m_path = cand_m
-            else:
-                cand_m2 = os.path.splitext(j_path)[0] + ".json"
-                if os.path.exists(cand_m2):
-                    m_path = cand_m2
+        m_path = os.path.splitext(j_path)[0] + ".json"
 
         meta_dict = {}
         if m_path and os.path.exists(m_path):
@@ -2669,7 +3506,7 @@ def resolve_target_models(
             item["pipeline"] = joblib.load(item["joblib_path"])
         except Exception as e:
             raise InputError(
-                f"Joblib 모델 로드 실패 ({item['joblib_path']}): {e}. "
+                f"모델 파일을 읽지 못했습니다 ({item['joblib_path']}): {e}. "
                 f"학습 PC와 scikit-learn 버전(학습={sk_train or '미기록'}, 현재={sk_now})이 다르면 동일 버전으로 맞추십시오."
             )
 
@@ -2782,7 +3619,7 @@ def kv_text(pairs: Dict[str, str]) -> str:
 
 
 # ==============================================================================
-# 4-B. Measured-data comparison (map check, 2.7.0)
+# 4-B. Measured-data comparison (map check)
 # ==============================================================================
 #
 # Every regression prediction is compared with the training rows themselves (vX/model_dataset.csv, which travels
@@ -3021,8 +3858,6 @@ def _predict_command(args: argparse.Namespace, layout: str = "", inline: Optiona
     or with -i <inline> instead of the input. Paths are absolute and quoted (a trailing backslash or a relative
     path must not break the command on Windows)."""
     parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(os.path.abspath(args.model))]
-    if getattr(args, "meta", None):
-        parts += ["--meta", quote_arg(os.path.abspath(args.meta))]
     if getattr(args, "targets", None):
         parts += ["-y", quote_arg(args.targets)]
     if inline is not None:
@@ -3031,10 +3866,8 @@ def _predict_command(args: argparse.Namespace, layout: str = "", inline: Optiona
         parts += ["-f", quote_arg(os.path.abspath(args.file))]
     if layout:
         parts.append(layout.strip())
-    if getattr(args, "out", None):
-        parts += ["-o", quote_arg(os.path.abspath(args.out))]
-    if getattr(args, "encoding", None):
-        parts += ["--encoding", quote_arg(args.encoding)]
+    if getattr(args, "save", None):
+        parts += ["--save", quote_arg(os.path.abspath(args.save))]
     if getattr(args, "overwrite", False):
         parts.append("--overwrite")
     return " ".join(parts)
@@ -3082,71 +3915,174 @@ def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share <= 0.5
 
 
-def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
-                 missing: Optional[List[str]] = None) -> str:
-    """Why a file misses the model columns, as ONE suggestion (the tool never switches the layout by itself):
-    - layout options given, and the file read WITHOUT them has every model input and numbers in the first data row
-      -> [추천] <the command without them>; a unit row read as data -> the command with --unit-row <header + 1>
-    - the missing names are in another top row (two-level / merged header) -> [추천] --header-row N"""
+def _model_inputs(model_items: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
+    """(every raw model input, the numeric ones) over all target models."""
     needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
-    numeric = [c for it in model_items for c in model_raw_inputs(it["meta"])
-               if c not in it["meta"]["feature_schema"].get("categorical", {})
-               and c not in it["meta"]["feature_schema"].get("datetime", {})]
-    numeric = list(dict.fromkeys(numeric))
-    has_layout = any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row"))
-    if has_layout and getattr(args, "file", None):
-        cmd = None
+    numeric = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])
+                                 if c not in it["meta"]["feature_schema"].get("categorical", {})
+                                 and c not in it["meta"]["feature_schema"].get("datetime", {})))
+    return needed, numeric
+
+
+def _has_layout(args: argparse.Namespace) -> bool:
+    return any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row"))
+
+
+def _layout_fix(args: argparse.Namespace, model_items: List[Dict[str, Any]],
+                df_input: Optional[pd.DataFrame] = None) -> Tuple[Optional[str], List[int]]:
+    """The layout of a prediction file whose layout options (often copied from training) or automatic reading miss
+    the model columns, when exactly ONE layout reads every model input: (layout option text, '' = no options, []).
+    (None, rows) when several top rows hold every model input (the tool cannot pick), (None, []) when none does.
+    - layout options given, and the file read WITHOUT them has every model input and data in the first data row
+      -> no options; a unit or notes row right below that header -> the options that skip it (_fit_unit_layout)
+    - the model inputs are all in ONE other top row (two-level / merged header, title rows) -> --header-row N
+      (with the unit row below it when there is one)
+    - read without options, the first data row is a unit or notes row -> the options that skip it"""
+    needed, numeric = _model_inputs(model_items)
+    has_layout = _has_layout(args)
+    read_ok = df_input is not None and _inputs_present(needed, [str(c) for c in df_input.columns])
+    if has_layout and not read_ok:      # options that read the file with every model input are kept as given
         try:
             auto = load_data_file(args.file)
         except Exception:
             auto = None
         if auto is not None and _inputs_present(needed, [str(c) for c in auto.columns]):
-            # the row below the header decides (_fit_unit_layout): a unit or notes row -> the options that skip it;
-            # else the first data row is data (numbers, or a measurement failure row with a number) -> no options
             layout = _fit_unit_layout(args.file, needed, None, int(auto.attrs.get("header_row", 1)) + 1, numeric)
             if layout:
-                cmd = _predict_command(args, layout=layout)
-            elif not auto.attrs.get("unit_row_below") and (_first_row_numeric(auto, numeric) or _row_has_data(auto, 0)):
-                cmd = _predict_command(args)
-        if cmd:
-            return ("레이아웃 옵션(--header-row/--unit-row/--data-row)이 이 파일과 맞지 않습니다. "
-                    f"이 파일의 머리글로 읽으면 모델 입력 열이 모두 있습니다. [추천] {cmd}")
+                return layout, []
+            if not auto.attrs.get("unit_row_below") and (_first_row_numeric(auto, numeric) or _row_has_data(auto, 0)):
+                return "", []
+    if df_input is None:
+        return None, []
+    if not read_ok:
+        cands = df_input.attrs.get("header_candidates") or []
+        hits = [c for c in cands if find_header_layout([c], needed, model_names=True) is not None]
+        rows = sorted({int(c[0]) for c in hits})
+        if len(rows) > 1:
+            return None, rows
+        if len(rows) == 1 and rows[0] != getattr(args, "header_row", None):
+            row, unit = find_header_layout(hits, needed, model_names=True)
+            layout = f"--header-row {row}"
+            if unit:
+                # a model trained without units needs the unit row skipped (--data-row), not joined to the names
+                layout = _fit_unit_layout(args.file, needed, row, unit, numeric) or f"{layout} --unit-row {unit}"
+            return layout, []
+        return None, []
+    if not has_layout and not df_input.empty and (df_input.attrs.get("unit_row_below")
+                                                  or _first_row_is_text(df_input, numeric)):
+        layout = _fit_unit_layout(args.file, needed, None, int(df_input.attrs.get("header_row", 1)) + 1, numeric)
+        if layout:
+            return layout, []
+    return None, []
+
+
+_LAYOUT_OPT_RE = re.compile(r"--(header-row|unit-row|data-row) (\d+)")
+
+
+def _apply_layout(args: argparse.Namespace, layout: str) -> None:
+    """Sets args.header_row / unit_row / data_row to the option text of _layout_fix (absent = None)."""
+    vals: Dict[str, Optional[int]] = {"header_row": None, "unit_row": None, "data_row": None}
+    for flag, v in _LAYOUT_OPT_RE.findall(layout):
+        vals[flag.replace("-", "_")] = int(v)
+    for k, v in vals.items():
+        setattr(args, k, v)
+
+
+def _layout_note(df: pd.DataFrame, had_options: bool) -> str:
+    """The recovered line of a layout the tool chose: '레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음(, 단위 M행)
+    (, 데이터 K행부터)' when layout options were given, else '머리글 N행(, 단위 M행)(, 데이터 K행부터)(으)로 읽음'."""
+    parts = [f"머리글 {df.attrs.get('header_row', 1)}행"]
+    if df.attrs.get("unit_row"):
+        parts.append(f"단위 {df.attrs['unit_row']}행")
+    if df.attrs.get("data_row"):
+        parts.append(f"데이터 {df.attrs['data_row']}행부터")
+    if had_options:
+        return f"레이아웃 옵션이 이 파일과 달라 {parts[0]}으로 읽음" + "".join(f", {x}" for x in parts[1:])
+    return ", ".join(parts) + ("로 읽음" if parts[-1].endswith("부터") else "으로 읽음")
+
+
+def _skipped_rows_warning(args: argparse.Namespace, df: pd.DataFrame) -> Optional[str]:
+    """The rows between the header (or unit row) and the first data row the tool chose (--data-row), with their
+    source row numbers: they are not predicted, so the user hears about them (warnings)."""
+    start = df.attrs.get("data_row")
+    if not start:
+        return None
+    first = int(df.attrs.get("unit_row") or df.attrs.get("header_row", 1)) + 1
+    rows = list(range(first, int(start)))
+    if not rows:
+        return None
+    try:
+        raw = read_raw_table(args.file)
+        shown = " / ".join(", ".join(c for c in _row_cells(raw, r - 1))[:60] for r in rows[:3] if r - 1 < len(raw))
+    except Exception:
+        shown = ""
+    return (f"파일 {', '.join(map(str, rows))}행은 데이터가 아닌 단위·메모 행으로 보고 건너뛰었습니다 (예측하지 않음)"
+            + (f": {shown}" if shown else ""))
+
+
+def _layout_candidates_text(rows: List[int]) -> str:
+    return (f"모델 입력 열이 모두 들어 있는 행이 파일에 여러 개 있습니다 ({', '.join(map(str, rows))}행). 어느 행이 머리글인지 "
+            f"사용자에게 물으십시오. [후보] " + ", ".join(f"--header-row {r}" for r in rows[:10]))
+
+
+def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
+                 missing: Optional[List[str]] = None) -> str:
+    """Why a file still misses some model columns after _load_prediction_file (no single layout reads every model
+    input): [후보] rows when several rows hold every input; the missing names in another top row -> [추천] that
+    layout (only some inputs there, so the tool does not switch by itself)."""
+    _, rows = _layout_fix(args, model_items, df_input)
+    if rows:
+        return _layout_candidates_text(rows)
     if df_input is not None and missing:
+        needed, numeric = _model_inputs(model_items)
         found = find_header_layout(df_input.attrs.get("header_candidates"), missing, model_names=True)
         if found is not None and found[0] != getattr(args, "header_row", None):
             row, unit = found
             where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
-            if unit is None and not has_layout:
+            if unit is None and not _has_layout(args):
                 return f"{where}. [추천] --header-row {row}"
             layout = f"--header-row {row}"
             if unit:
                 where += f", {unit}행은 단위 행입니다"
-                # a model trained without units needs the unit row skipped (--data-row), not joined to the names
                 layout = (_fit_unit_layout(args.file, needed, row, unit, numeric) if getattr(args, "file", None)
                           else "") or f"{layout} --unit-row {unit}"
             return f"{where}. [추천] " + _predict_command(args, layout=layout)
     return ""
 
 
-def _unit_row_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: pd.DataFrame) -> str:
-    """A file read without layout options whose first data row is a unit row ('°C', 'bar'; _looks_like_unit_row on
-    the file, so a first data row of blank or '측정불가' inputs does not hide it) or a notes row: predicting it would
-    impute every input. The layout that skips it (_fit_unit_layout) -> '[추천] <the command with it>', else ''."""
-    if any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row")) or df_input.empty:
-        return ""
-    needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
-    numeric = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])
-                                 if c not in it["meta"]["feature_schema"].get("categorical", {})
-                                 and c not in it["meta"]["feature_schema"].get("datetime", {})))
-    if not df_input.attrs.get("unit_row_below") and not _first_row_is_text(df_input, numeric):
-        return ""
-    unit_row = int(df_input.attrs.get("header_row", 1)) + 1
-    layout = _fit_unit_layout(args.file, needed, None, unit_row, numeric)
-    if not layout:
-        return ""
-    first = [str(df_input[c].iloc[0]) for c in df_input.columns[:6]]
-    return (f"파일 {unit_row}행(첫 데이터 행)이 데이터가 아니라 단위·메모 행으로 보입니다 ({first}). 그대로 예측하면 "
-            f"이 행을 빈 값으로 채워 예측합니다. [추천] {_predict_command(args, layout=layout)}")
+def _load_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Reads the prediction file. A layout that does not fit the file (training layout options on another file, a
+    header in another row, a unit row read as data) is recovered in place (JIT, AGENTS.md) when exactly one layout
+    reads every model input: recovered '레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음'. Several candidate rows
+    stop with [후보]; no layout that fits stops with the loader's / the column check's message."""
+    decimal_comma = any(bool(it["meta"].get("decimal_comma")) for it in model_items)
+    had_options = _has_layout(args)
+
+    def _read() -> pd.DataFrame:
+        return load_data_file(file_path=args.file, header_row=args.header_row, unit_row=args.unit_row,
+                              data_row=args.data_row, decimal_comma=decimal_comma)
+    try:
+        df = _read()
+    except InputError as e:
+        layout, rows = _layout_fix(args, model_items)
+        if layout is None:
+            if rows:
+                raise InputError(f"{str(e).split('[추천]')[0].rstrip()} {_layout_candidates_text(rows)}")
+            raise
+        _apply_layout(args, layout)
+        df = _read()
+        note_recovered(_layout_note(df, had_options))
+        df.attrs["skipped_rows_warning"] = _skipped_rows_warning(args, df)
+        return df
+    layout, rows = _layout_fix(args, model_items, df)
+    if rows:
+        raise InputError(_layout_candidates_text(rows))
+    if layout is not None:
+        _apply_layout(args, layout)
+        df = _read()
+        note_recovered(_layout_note(df, had_options))
+        df.attrs["skipped_rows_warning"] = _skipped_rows_warning(args, df)
+    return df
 
 
 def _row_has_data(df: pd.DataFrame, i: int) -> bool:
@@ -3196,29 +4132,41 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
     if not hdr < j < len(raw) - 1:
         return ""
     is_unit = _looks_like_unit_row(raw, j, hdr)
+    tries: List[Tuple[Dict[str, Any], str, bool]] = []
+    # a row of Korean unit words ('도씨, 킬로그램') is read as units only when the model's names hold them
+    # ('온도(도씨)'): the tool's own guess never takes other Hangul words for units ('점검중, 센서고장' is data)
+    if is_unit or unit_row_verdict(raw, j, hdr, given=True)[0]:
+        tries.append(({"unit_row": unit_row, "data_row": None}, f"--unit-row {unit_row}", False))
+    skip = is_unit or _notes_row(raw, j)
     check_first = False
-    if not is_unit and not _notes_row(raw, j):
-        # 2.9.17 fallback: text in the numeric inputs of the row (a unit row the rule did not accept) -> skip it
-        # when the next row reads as data
+    # Fallback: text in the numeric inputs of the row (a unit row the rule did not accept, 'kg/cm2 G') -> skip it
+    # when the next row reads as data. A row with a number or date ('점검중, 센서고장, 45') or with text that is
+    # not unit-shaped ('점검중, 센서고장') is data (its marks are imputed and reported as missing inputs).
+    if not skip and numeric and not _row_has_data(raw, j) and _unit_shaped_row(raw, j):
         try:
-            auto = _layout_frame(raw, hdr, None, None)
+            auto: Optional[pd.DataFrame] = _layout_frame(raw, hdr, None, None)
         except Exception:
-            return ""
-        rows = auto.attrs.get("source_rows") or []
-        if not numeric or unit_row not in rows or not _text_input_row(auto, rows.index(unit_row), numeric):
-            return ""
-        check_first = True
-    tries = ([({"unit_row": unit_row, "data_row": None}, f"--unit-row {unit_row}")] if is_unit else []) + \
-        [({"unit_row": None, "data_row": unit_row + 1}, f"--data-row {unit_row + 1}")]
-    for opts, layout in tries:
+            auto = None
+        rows = (auto.attrs.get("source_rows") or []) if auto is not None else []
+        if unit_row in rows and _text_input_row(auto, rows.index(unit_row), numeric):
+            skip = check_first = True
+    if skip:
+        tries.append(({"unit_row": None, "data_row": unit_row + 1}, f"--data-row {unit_row + 1}", check_first))
+    for opts, layout, first in tries:
         try:
             df = _layout_frame(raw, hdr, **opts)
         except Exception:
             continue
         if _inputs_present(needed, [str(c) for c in df.columns]) and \
-                (not check_first or _first_row_numeric(df, numeric or [])):
+                (not first or _first_row_numeric(df, numeric or [])):
             return head + layout
     return ""
+
+
+def _unit_shaped_row(df_raw: pd.DataFrame, j: int) -> bool:
+    """Every filled cell of row j (missing marks are blank) is unit-shaped (_unit_shaped)."""
+    cells = [_cell_text(v) for v in df_raw.iloc[j].tolist() if not _blank_mark(_cell_text(v))]
+    return bool(cells) and all(_unit_shaped(c) for c in cells)
 
 
 def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
@@ -3228,51 +4176,80 @@ def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share > 0.5
 
 
+def _offer_median_fill(args: argparse.Namespace, df_input: pd.DataFrame, model_items: List[Dict[str, Any]]) -> None:
+    """-i (one record, every key a model name) without some numeric model inputs: never filled by the tool (the user's
+    value is a fact the tool cannot know). Stops with needs_user_decision and next_commands[0] = the same command with
+    the missing inputs set to their training medians (values shown); run only when the user agrees. Other cases
+    (several records, unknown or misspelled keys, a missing text / date input) go on to the usual messages."""
+    if len(df_input) != 1:
+        return
+    needed: List[str] = []
+    known: List[str] = []
+    medians: Dict[str, float] = {}
+    text_inputs: set = set()
+    for it in model_items:
+        meta = it["meta"]
+        schema = meta.get("feature_schema") or {}
+        derived = [e.split("=", 1)[0].strip() for e in meta.get("derived_evals", []) if "=" in e]
+        raw = model_raw_inputs(meta)
+        needed += raw
+        known += raw + list(meta.get("features_required", [])) + derived
+        text_inputs |= set(schema.get("categorical", {})) | set(schema.get("datetime", {}))
+        for c in raw:
+            st = (meta.get("feature_stats") or {}).get(c) or {}
+            if c not in medians and st.get("median") is not None:
+                medians[c] = float(st["median"])
+    needed = list(dict.fromkeys(needed))
+    probe = df_input.copy()
+    with contextlib.redirect_stderr(io.StringIO()):
+        align_input_columns(probe, list(dict.fromkeys(known)), [])
+    if any(str(c) not in set(known) for c in probe.columns):
+        return                                  # a misspelled / unknown key: check_inline_unknown explains it
+    missing = [c for c in needed if c not in probe.columns]
+    if not missing or any(c in text_inputs or c not in medians for c in missing):
+        return
+    fill = {c: float(f"{medians[c]:.6g}") for c in missing}
+    pairs = dict(df_input.attrs.get("kv_pairs") or {str(k): v for k, v in df_input.iloc[0].to_dict().items()})
+    pairs.update({c: f"{v:g}" for c, v in fill.items()})
+    shown = ", ".join(f"{c}={v:g}" for c, v in fill.items())
+    raise InputError(
+        f"-i에 모델 입력 {', '.join(repr(c) for c in missing)}이(가) 없어 예측하지 않았습니다. 학습 데이터의 중앙값({shown})으로 채워 "
+        f"예측할 수 있지만, 실제 조건과 다르면 예측도 달라집니다. 사용자에게 실제 값을 묻거나, 중앙값으로 채울지 확인하십시오.",
+        extra={"missing_inputs": missing, "fill_values": fill,
+               "next_commands": [{"purpose": f"빠진 입력을 학습 중앙값({shown})으로 채워 예측 (사용자가 원할 때만)",
+                                  "command": _predict_command(args, inline=kv_text(pairs)), "needs_user_confirm": True}]},
+        error_type="needs_user_decision")
+
+
 def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     """Orchestrates 1-Turn declarative inference."""
     # 1. Resolve Targets & Models
     filter_targets = [t.strip() for t in args.targets.split(",") if t.strip()] if args.targets else None
     model_items = resolve_target_models(
         target_path=args.model,
-        meta_path=args.meta,
         filter_targets=filter_targets
     )
 
-    # -o format is checked before any work: only CSV and Excel can be written and read back (R1)
-    if args.out:
-        out_ext = os.path.splitext(args.out)[1].lower()
+    # --save format is checked before any work: only CSV and Excel can be written and read back (R1)
+    if args.save:
+        out_ext = os.path.splitext(args.save)[1].lower()
         if out_ext not in (".csv", ".xlsx", ".xls"):
-            raise InputError(f"결과 파일(-o)은 .csv 또는 .xlsx만 저장합니다: '{os.path.basename(args.out)}'. "
-                             f"[추천] {os.path.splitext(args.out)[0]}.csv")
+            raise InputError(f"결과 파일(--save)은 .csv 또는 .xlsx만 저장합니다: '{os.path.basename(args.save)}'. "
+                             f"[추천] {os.path.splitext(args.save)[0]}.csv")
 
     # 2. Resolve Input Data (Batch File or Inline Input)
     file_warnings: List[str] = []
     if args.input:
         df_input = parse_inline_input(args.input)
         is_inline = True
-        source_desc = f"Inline Input ({len(df_input)} record(s))"
+        source_desc = f"직접 입력 {len(df_input)}건"
     elif args.file:
-        try:
-            df_input = load_data_file(
-                file_path=args.file,
-                header_row=args.header_row,
-                unit_row=args.unit_row,
-                data_row=args.data_row,
-                decimal_comma=any(bool(it["meta"].get("decimal_comma")) for it in model_items)
-            )
-        except InputError as e:
-            # the layout options (often copied from training) do not fit this file: suggest the command without them
-            # (one [추천] only: this checked suggestion replaces the loader's own)
-            hint = _layout_hint(args, model_items)
-            if hint:
-                raise InputError(f"{str(e).split('[추천]')[0].rstrip()} {hint}")
-            raise
+        df_input = _load_prediction_file(args, model_items)
         is_inline = False
         source_desc = os.path.basename(args.file)
-        hint = _unit_row_hint(args, model_items, df_input)
-        if hint:
-            raise InputError(hint)
         file_warnings = layout_warnings(df_input, training=False)   # repeated header rows, totals rows
+        if df_input.attrs.get("skipped_rows_warning"):
+            file_warnings.insert(0, df_input.attrs["skipped_rows_warning"])
     else:
         raise InputError("추론할 입력 데이터(--file 또는 --input)를 지정해야 합니다.")
 
@@ -3290,6 +4267,9 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     known_inputs: List[str] = []
     numeric_inputs: List[str] = []    # numbers written with '%' in these are read without it (percent_warning)
 
+    if is_inline:
+        _offer_median_fill(args, df_input, model_items)
+
     # 3. Perform Inference per Target
     for item in model_items:
         target_name = item["target"]
@@ -3302,7 +4282,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         if not req_features:
             raise InputError(
                 f"타겟 '{target_name}'의 메타데이터(model_*.json)에 features_required가 없습니다. "
-                f"모델과 같은 폴더의 .json 파일을 확인하거나 --meta로 지정하십시오."
+                f"모델과 같은 폴더의 model_<타겟>.json 파일을 확인하십시오."
             )
         derived_names = [e.split("=", 1)[0].strip() for e in derived_evals if "=" in e]
 
@@ -3330,6 +4310,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                 + (f" {hint}" if hint else ""))
         # '11.9%' next to '0.119' in one numeric input: no scale is sure (the same check as training)
         check_percent_mix(df_input, [c for c in numeric_inputs if c in df_input.columns], "입력 데이터 ")
+        # 'c' / ' C ' / full-width for the training category 'C' (match_categories, the same as --sweep / --find)
+        align_categories(df_input, meta["feature_schema"])
         df_evaled = apply_inference_evals(df_input, derived_evals)
 
         # Check required features
@@ -3392,12 +4374,12 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                             if c_max > f_max:
                                 over_pct = round(float((c_max - f_max) / f_range * 100), 1)
                                 drift_warnings.append(
-                                    f"피처 '{fname}' 상한 초과 외삽(Extrapolation) 감지: 학습 최대={_fmt4(f_max)}, 입력 최대={_fmt4(c_max)} (범위 대비 +{over_pct}% 초과 이탈, 범위 밖 {n_out}건)"
+                                    f"입력 '{fname}' 학습 범위 초과: 학습 최대={_fmt4(f_max)}, 입력 최대={_fmt4(c_max)} (범위의 +{over_pct}%, 범위 밖 {n_out}건)"
                                 )
                             if c_min < f_min:
                                 under_pct = round(float((f_min - c_min) / f_range * 100), 1)
                                 drift_warnings.append(
-                                    f"피처 '{fname}' 하한 미달 외삽(Extrapolation) 감지: 학습 최소={_fmt4(f_min)}, 입력 최소={_fmt4(c_min)} (범위 대비 -{under_pct}% 미달 이탈, 범위 밖 {n_out}건)"
+                                    f"입력 '{fname}' 학습 범위 미달: 학습 최소={_fmt4(f_min)}, 입력 최소={_fmt4(c_min)} (범위의 -{under_pct}%, 범위 밖 {n_out}건)"
                                 )
 
         X_input = X_model
@@ -3483,7 +4465,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
     # 4. Save Output if Requested or File-based
     inline_truncated = is_inline and len(df_result) > INLINE_SHOW_MAX
-    out_path = args.out
+    out_path = args.save
     saved_file = None
     if out_path:
         saved_file = os.path.abspath(out_path)
@@ -3517,7 +4499,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                 saved_file, lambda p: df_result.to_excel(p, index=False), what="결과 Excel 파일")
         else:
             # CSV Output with Windows Excel CP949 compatibility (utf-8-sig fallback)
-            saved_file = write_csv_excel_compatible(df_result, saved_file, encoding=getattr(args, "encoding", None))
+            saved_file = write_csv_excel_compatible(df_result, saved_file)
 
     # R1: the saved file is read back (rows and columns) before saying VERIFIED
     unverified: List[str] = []
@@ -3533,23 +4515,23 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     # 5. Build Response
     drift_warnings = list(dict.fromkeys(drift_warnings))  # same feature is checked once per target
     for w in drift_warnings[:WARNINGS_SHOW_MAX]:
-        sys.stderr.write(f"[WARN] Extrapolation detected: {w}\n")
+        sys.stderr.write(f"[WARN] 학습 범위 밖: {w}\n")
     if len(drift_warnings) > WARNINGS_SHOW_MAX:
-        sys.stderr.write(f"[WARN] Extrapolation detected: 외 {len(drift_warnings) - WARNINGS_SHOW_MAX}건\n")
+        sys.stderr.write(f"[WARN] 학습 범위 밖: 외 {len(drift_warnings) - WARNINGS_SHOW_MAX}건\n")
 
     for w in low_conf_warnings:
-        sys.stderr.write(f"[WARN] Low confidence: {w}\n")
+        sys.stderr.write(f"[WARN] 낮은 확신도: {w}\n")
     category_warnings = list(dict.fromkeys(category_warnings))
     for w in category_warnings:
-        sys.stderr.write(f"[WARN] Unseen category: {w}\n")
+        sys.stderr.write(f"[WARN] 학습 때 없던 종류: {w}\n")
     missing_warnings = [
         f"피처 '{c}': 빈 값 또는 숫자로 읽을 수 없는 값 {n}건 -> 학습 데이터 기준값(중앙값/결측 범주)으로 대치됨"
         for c, n in missing_counts.items()
     ]
     for w in missing_warnings:
-        sys.stderr.write(f"[WARN] Missing input: {w}\n")
+        sys.stderr.write(f"[WARN] 빈 입력: {w}\n")
     for w in map_warnings:
-        sys.stderr.write(f"[WARN] Map check: {w}\n")
+        sys.stderr.write(f"[WARN] 실측 비교: {w}\n")
     file_warnings += [w for w in percent_warning(df_input, numeric_inputs) if w not in file_warnings]
     for w in file_warnings:
         sys.stderr.write(f"[WARN] {w}\n")
@@ -3562,8 +4544,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
     targets_brief = ", ".join(_brief(t) for t in predictions_summary)
     preview = (
-        f"[추론 완료] 소스: {source_desc} | 타겟 예측 요약: [{targets_brief}] | "
-        f"{'저장: ' + os.path.basename(saved_file) if saved_file else '인라인 반환'}"
+        f"[예측 완료] 입력: {source_desc} | 예측 요약: [{targets_brief}]"
+        + (f" | 저장: {os.path.basename(saved_file)}" if saved_file else "")
         + (f" | 외삽 경고 {len(drift_warnings)}건" if drift_warnings else "")
         + (f" | 저확신 경고 {len(low_conf_warnings)}건" if low_conf_warnings else "")
         + (f" | 결측 대치 {sum(missing_counts.values())}건" if missing_counts else "")
@@ -3571,25 +4553,24 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + (f" | 실측 비교 경고 {len(map_warnings)}건" if map_warnings else "")
     )
     agent_directive = (
-        ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 그대로 알리세요. ")
-        + f"Prediction completed for {len(model_items)} target(s)"
-        + (" with extrapolation warning (inputs outside training range; predictions may be unreliable)" if drift_warnings else "")
-        + (f" (extrapolation_warnings shows {WARNINGS_SHOW_MAX} of {len(drift_warnings)}; tell the user the total count)"
+        ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
+        + f"타겟 {len(model_items)}개를 예측했습니다. "
+        + ("학습 범위 밖 입력이 있어 예측은 참고용입니다 (extrapolation_warnings). " if drift_warnings else "")
+        + (f"extrapolation_warnings에는 {len(drift_warnings)}건 중 {WARNINGS_SHOW_MAX}건만 있으니 전체 건수도 알리세요. "
            if len(drift_warnings) > WARNINGS_SHOW_MAX else "")
-        + (" with low-confidence warning (class probability < 0.6 for some rows)" if low_conf_warnings else "")
-        + (" with missing-input warning (empty or non-numeric inputs were imputed)" if missing_counts else "")
-        + (" with unseen-category warning" if category_warnings else "")
-        + (" with map-check warning (measured-data comparison outside the prediction interval)" if map_warnings else "")
-        + ". "
-        + ("Tell the user every item of warnings (rows of the file that are not data rows, numbers read without '%'). "
-           if file_warnings else "")
-        + ("Report each prediction together with its measured-data comparison (map_check: value, diff, method) in Korean as "
-           "'실측 비교값'. " if any("map_check_keys" in p for p in predictions_summary.values()) else "")
-        + (f"Inline input has {len(df_result)} records, more than {INLINE_SHOW_MAX}: per-record predictions are not in "
-           f"the JSON (truncated). Give the user output_file ({os.path.basename(saved_file)}) for every record. "
+        + ("분류 확신도가 낮은 행이 있습니다 (low_confidence_warnings, 확률 0.6 미만). " if low_conf_warnings else "")
+        + ("빈 값이나 숫자가 아닌 입력을 학습 기준값으로 채웠습니다 (missing_input_warnings). " if missing_counts else "")
+        + ("학습 때 없던 종류가 있습니다 (unseen_category_warnings). " if category_warnings else "")
+        + ("실측 비교값이 예측 범위 밖입니다 (map_check_warnings). " if map_warnings else "")
+        + ("warnings(데이터가 아닌 행, '%' 없이 읽은 숫자)를 빠짐없이 알리세요. " if file_warnings else "")
+        + ("예측값마다 실측 비교값(map_check의 value, diff, method)을 '실측 비교값'으로 함께 알리세요. "
+           if any("map_check_keys" in p for p in predictions_summary.values()) else "")
+        + (f"직접 입력이 {len(df_result)}건으로 {INLINE_SHOW_MAX}건보다 많아 건별 예측은 JSON에 없습니다 (truncated). "
+           f"전체 결과는 output_file({os.path.basename(saved_file)})로 알리세요. "
            if inline_truncated and saved_file else
-           f"Output saved to {os.path.basename(saved_file)}. " if saved_file else "Inline predictions returned. ")
-        + "Next step: report inference results to user."
+           f"결과 파일: {os.path.basename(saved_file)}. " if saved_file else "")
+        + ("위 경고를 함께 알리세요." if (drift_warnings or low_conf_warnings or missing_counts or category_warnings or map_warnings)
+           else "다음: 예측 결과를 사용자에게 알리세요.")
     )
 
     result = {
@@ -3634,7 +4615,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 5-B. Model-based reverse lookup (--find / --vary, 2.8.0)
+# 5-B. Model-based reverse lookup (--find / --vary)
 # ==============================================================================
 #
 # "Which value of <vary> makes the model predict <target> = y0, the other inputs fixed?"
@@ -3680,8 +4661,6 @@ def _model_curve(pipe: Any, meta: Dict[str, Any], base: Dict[str, Any], vary: st
 def _find_command(args: argparse.Namespace, find: Optional[str] = None, inline: Optional[str] = None) -> str:
     """The same --find command with a corrected --find or -i text (absolute, quoted paths)."""
     parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(os.path.abspath(args.model))]
-    if getattr(args, "meta", None):
-        parts += ["--meta", quote_arg(os.path.abspath(args.meta))]
     parts += ["--find", quote_arg(find if find is not None else args.find), "--vary", quote_arg(args.vary)]
     i_text = inline if inline is not None else getattr(args, "input", None)
     if i_text:
@@ -3706,7 +4685,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
     # the goal is resolved like ml_map --find: exact name, then a unique name without its unit ('수율' for '수율(1차)'
     # and '수율(최종)' -> [후보]); a different unit -> unit_hint
-    items = resolve_target_models(target_path=args.model, meta_path=args.meta, filter_targets=[str(goal_name)],
+    items = resolve_target_models(target_path=args.model, filter_targets=[str(goal_name)],
                                   kind="목표(--find)", values=True)
     item = items[0]
     meta, pipe, target = item["meta"], item["pipeline"], item["target"]
@@ -3749,11 +4728,13 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
             filled[f] = float(stats[f]["median"])
         elif f in schema.get("categorical", {}):
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오. "
-                             f"[후보] {', '.join(map(str, schema['categorical'][f][:20]))}")
+                             f"{category_candidates(schema['categorical'][f])}")
         else:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
     warnings: List[str] = []
     for f, v in fixed.items():
+        if f in schema.get("categorical", {}):
+            fixed[f] = fixed_category_value(f, v, schema["categorical"][f])
         if f not in numeric_in:
             continue
         st = stats.get(f)
@@ -3878,11 +4859,527 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         res["preview"] += " | 실측 기준: " + (", ".join(_fmt(v) for v in measured["solutions"]) or "없음")
     res["agent_directive"] = (
         ("VERIFIED: 찾은 답 근처를 다시 예측해 목표값을 지나는지 확인했습니다. " if not unverified else
-         f"UNVERIFIED: 확인하지 못한 답이 있습니다 ({'; '.join(unverified)}). 재시도하지 말고 그대로 알리세요. ")
+         f"UNVERIFIED: 확인하지 못한 답이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + ("답을 모두 알리세요(하나만 고르지 않음). " if answers else "찾은 값 없음(count 0): reachable(가능한 예측 범위)을 알리세요. ")
         + "operating_windows(목표가 90% 예측 오차 안에 드는 운전 구간), measured(학습 데이터 기준 답), "
         + "nearest_rows(가까운 실측 5행)를 함께 알리세요. 모델이 예측한 조건이지 보장된 조건이 아니라는 점을 덧붙이세요."
         + (" warnings도 반드시 알리세요." if warnings else ""))
+    return res
+
+
+# ==============================================================================
+# 5-C. What-if analysis: --sweep (one input over a range) and --maximize / --minimize (constrained search)
+# ==============================================================================
+#
+# Both use the regression models of the version folder, the fixed inputs of -i and the training medians for the
+# numeric inputs not given (reported, like --find). The search stays inside the training range of the inputs it
+# varies (no extrapolation: tree models are flat outside it); the sweep may leave it, and every such point is marked.
+
+SWEEP_DEFAULT_POINTS = 21       # --sweep "<input>" or "<input>=a:b" without a step
+SWEEP_MAX_POINTS = 500          # more points -> STOP_RETRY with [추천] a larger step
+SWEEP_SHOWN = 25                # points in the JSON (evenly picked, ends kept); the table holds all
+SWEEP_RANGE_TOL = 0.005         # a point this share of the training span outside it still counts as inside
+SEARCH_MAX_VARY = 6
+SEARCH_GRID_BUDGET = 20000      # model evaluations of the grid stage
+SEARCH_REFINE_ROUNDS = 3        # coordinate search rounds after the grid (more than 3 inputs)
+SEARCH_LINE_POINTS = 41
+SEARCH_SOLUTIONS = 5
+SEARCH_DISTINCT = 0.1           # solutions closer than this (inputs scaled to the training range) are one answer
+TREND_FLAT = 0.01               # steps smaller than this share of the predicted span count as flat
+
+
+def _regression_items(args: argparse.Namespace, names: Optional[List[str]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """The regression target models of -m (filtered by names when given) and the classification targets left out."""
+    items = resolve_target_models(target_path=args.model, filter_targets=names)
+    reg = [it for it in items if it["meta"].get("task", "regression") == "regression"]
+    skipped = [str(it["target"]) for it in items if it not in reg]
+    if not reg:
+        raise InputError(f"조건별 예측(--sweep)과 조건 찾기(--maximize/--minimize)는 숫자 타겟(회귀) 모델만 씁니다. "
+                         f"이 폴더의 타겟 {skipped}은(는) 분류 모델입니다.")
+    return reg, skipped
+
+
+def _model_input_info(items: List[Dict[str, Any]]) -> Tuple[List[str], List[str], Dict[str, List[Any]], Dict[str, Dict[str, Any]]]:
+    """(raw inputs, numeric raw inputs, categorical inputs -> known values, numeric stats) over the models."""
+    raw: List[str] = []
+    cats: Dict[str, List[Any]] = {}
+    dates: set = set()
+    stats: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        meta = it["meta"]
+        schema = meta.get("feature_schema") or {}
+        raw += model_raw_inputs(meta)
+        for c, known in (schema.get("categorical") or {}).items():
+            cats.setdefault(c, list(known))
+        dates |= set(schema.get("datetime") or {})
+        for c, st in (meta.get("feature_stats") or {}).items():
+            stats.setdefault(c, st)
+    raw = list(dict.fromkeys(raw))
+    numeric = [c for c in raw if c not in cats and c not in dates]
+    return raw, numeric, cats, stats
+
+
+def _whatif_command(args: argparse.Namespace, inline: str) -> Optional[str]:
+    cmd = command_text(drop={"-i": "input", "--input": "input"})
+    return f"{cmd} -i {quote_arg(inline)}" if cmd else None
+
+
+def _base_inputs(args: argparse.Namespace, items: List[Dict[str, Any]], vary: List[str]) -> Dict[str, Any]:
+    """The fixed inputs (-i, one record) and the training medians of the numeric inputs not given (not the varied ones).
+    A missing text / date input stops (STOP_RETRY [후보]): no value of it is neutral."""
+    raw, numeric, cats, stats = _model_input_info(items)
+    given_df = parse_inline_input(args.input) if getattr(args, "input", None) else None
+    if given_df is not None and len(given_df) != 1:
+        raise InputError(f"-i은(는) 한 줄('열=값,열=값')로 주십시오 (지금 {len(given_df)}줄). 고정 입력이 여러 경우면 경우마다 따로 실행하십시오.")
+    given = given_df.iloc[0].to_dict() if given_df is not None else {}
+    names, _ = (resolve_column_names([str(k) for k in given], raw, "고정 입력(-i)", values=True, exclude=vary)
+                if given else ([], {}))
+    check_same_column([str(k) for k in given], names, "-i", {str(k): v for k, v in given.items()})
+    fixed = {n: given[k] for k, n in zip(given, names)}
+    resolved = dict(zip([str(k) for k in given], names))
+    if given_df is not None:
+        check_comma_numbers(given_df.attrs.get("kv_pairs"), lambda k: resolved.get(k) in numeric, "-i",
+                            lambda fx: _whatif_command(args, kv_text(fx)))
+    both = [v for v in vary if v in fixed]
+    if both:
+        raise InputError(f"{both}은(는) 바꿔 보는 입력이라 -i에 함께 줄 수 없습니다. -i에서 빼십시오.")
+    warnings: List[str] = []
+    for f in list(fixed):
+        if f in cats:
+            fixed[f] = fixed_category_value(f, fixed[f], cats[f])
+        if f not in numeric:
+            continue
+        try:
+            fixed[f] = float(fixed[f])
+        except (TypeError, ValueError):
+            raise InputError(f"고정 입력 '{f}'의 값 '{fixed[f]}'이(가) 숫자가 아닙니다. -i에 '{f}=<숫자>'로 다시 지정하십시오.")
+        st = stats.get(f)
+        if st and (fixed[f] < st["min"] or fixed[f] > st["max"]):
+            warnings.append(f"고정 입력 '{f}'={_fmt(fixed[f])}이(가) 학습 범위({_fmt(st['min'])}~{_fmt(st['max'])}) 밖이라 "
+                            f"예측을 믿기 어렵습니다 (외삽)")
+    filled: Dict[str, float] = {}
+    for f in raw:
+        if f in vary or f in fixed:
+            continue
+        if f in numeric and f in stats:
+            filled[f] = float(stats[f]["median"])
+        elif f in cats:
+            raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오. "
+                             f"{category_candidates(cats[f])}")
+        else:
+            raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
+    if filled:
+        warnings.insert(0, "주지 않은 입력은 학습 데이터 중앙값으로 고정했습니다: "
+                        + ", ".join(f"{k}={_fmt(v)}" for k, v in filled.items()))
+    return {"base": {**fixed, **filled}, "fixed": fixed, "filled": filled, "warnings": warnings,
+            "raw": raw, "numeric": numeric, "stats": stats}
+
+
+def _predict_rows(item: Dict[str, Any], rows: pd.DataFrame) -> np.ndarray:
+    meta = item["meta"]
+    df = apply_inference_evals(rows.copy(), meta.get("derived_evals", []))
+    return np.asarray(item["pipeline"].predict(prepare_features(df, meta["feature_schema"])), dtype=float)
+
+
+def _vary_names(args: argparse.Namespace, text: str, numeric: List[str], stats: Dict[str, Any], option: str) -> List[str]:
+    given = [v.strip() for v in str(text).split(",") if v.strip()]
+    if not given:
+        raise InputError(f"{option}에 바꿔 볼 숫자 입력을 주십시오. [후보] {', '.join(numeric[:10])}")
+    names = resolve_column_names(given, numeric, f"바꿔 볼 입력({option})")[0]
+    bad = [n for n in names if n not in stats]
+    if bad:
+        raise InputError(f"{bad}의 학습 범위가 모델 정보에 없어 바꿔 볼 수 없습니다. [후보] {', '.join([c for c in numeric if c in stats][:10])}")
+    if len(set(names)) != len(names):
+        raise InputError(f"{option}에 같은 입력이 두 번 있습니다: {given}")
+    return names
+
+
+def _sweep_values(args: argparse.Namespace, name: str, given: str, spec: Optional[str], lo: float, hi: float) -> np.ndarray:
+    """'a:b:step' (both ends included), 'a:b' (SWEEP_DEFAULT_POINTS points), nothing (the training range)."""
+    if spec is None or not spec.strip():
+        return np.linspace(lo, hi, SWEEP_DEFAULT_POINTS)
+    parts = [p.strip() for p in spec.split(":")]
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        raise InputError(f"--sweep '{args.sweep}'을(를) 읽을 수 없습니다. 형식: '<입력>=<시작>:<끝>:<간격>' "
+                         f"(예: {strip_unit(name)}={_fmt(lo)}:{_fmt(hi)}:{_fmt((hi - lo) / 10 or 1)}), 숫자에 쉼표 없이")
+    if len(nums) not in (2, 3) or nums[0] == nums[1] or (len(nums) == 3 and nums[2] <= 0):
+        raise InputError(f"--sweep '{args.sweep}': 시작과 끝이 다르고 간격은 0보다 커야 합니다. 형식: '<입력>=<시작>:<끝>:<간격>'")
+    a, b = nums[0], nums[1]
+    if len(nums) == 2:
+        return np.linspace(a, b, SWEEP_DEFAULT_POINTS)
+    step = nums[2] if b > a else -nums[2]
+    n = int(np.floor((b - a) / step + 1e-9)) + 1
+    if n > SWEEP_MAX_POINTS:
+        new_step = abs(b - a) / (SWEEP_MAX_POINTS - 1)
+        nice = float(f"{new_step:.2g}")
+        while nice < new_step:          # rounded up: the new step never makes too many points
+            nice = float(f"{nice * 1.1:.2g}")
+        new_step = nice
+        cmd = command_text(drop={"--sweep": "sweep"})
+        fixed = f"{given}={_fmt(a)}:{_fmt(b)}:{_fmt(new_step)}"
+        rec = f"{cmd} --sweep {quote_arg(fixed)}" if cmd else fixed
+        raise InputError(f"--sweep의 점이 {n}개로 많습니다 (최대 {SWEEP_MAX_POINTS}개). 간격을 넓히십시오. [추천] {rec}")
+    xs = a + step * np.arange(n)
+    if abs(xs[-1] - b) > 1e-9 * max(1.0, abs(b)):
+        xs = np.append(xs, b)       # the end is always a point
+    return xs
+
+
+def _trend(xs: np.ndarray, ys: np.ndarray, vary: str, target: str) -> Dict[str, Any]:
+    span = float(np.ptp(ys)) if len(ys) else 0.0
+    imax, imin = int(np.argmax(ys)), int(np.argmin(ys))
+    out: Dict[str, Any] = {"max": {vary: _r6(xs[imax]), "value": _r6(ys[imax])},
+                           "min": {vary: _r6(xs[imin]), "value": _r6(ys[imin])},
+                           "start": _r6(ys[0]), "end": _r6(ys[-1])}
+    tol = TREND_FLAT * span
+    d = np.diff(ys)
+    up, down = int((d > tol).sum()), int((d < -tol).sum())
+    v, t = strip_unit(vary), strip_unit(target)
+    if span <= 1e-12 * max(1.0, float(np.max(np.abs(ys)))):
+        out["direction"], text = "flat", f"{v}를 바꿔도 {t} 예측이 거의 변하지 않음"
+    elif down == 0:
+        out["direction"], text = "increasing", f"{v}가 커질수록 {t}이(가) 커짐 ({_fmt(ys[0])} -> {_fmt(ys[-1])})"
+    elif up == 0:
+        out["direction"], text = "decreasing", f"{v}가 커질수록 {t}이(가) 작아짐 ({_fmt(ys[0])} -> {_fmt(ys[-1])})"
+    elif 0 < imax < len(ys) - 1 and ys[imax] - max(ys[0], ys[-1]) > 5 * tol:
+        out["direction"], text = "peak", f"{v} {_fmt(xs[imax])}에서 {t}이(가) 가장 큼 ({_fmt(ys[imax])})"
+    elif 0 < imin < len(ys) - 1 and min(ys[0], ys[-1]) - ys[imin] > 5 * tol:
+        out["direction"], text = "valley", f"{v} {_fmt(xs[imin])}에서 {t}이(가) 가장 작음 ({_fmt(ys[imin])})"
+    else:
+        out["direction"], text = "mixed", (f"{v}에 따라 {t}이(가) 오르내림 (최대 {_fmt(ys[imax])} @ {_fmt(xs[imax])}, "
+                                           f"최소 {_fmt(ys[imin])} @ {_fmt(xs[imin])})")
+    out["text"] = text
+    return out
+
+
+def _sweep_chart(path: str, xs: np.ndarray, vary: str, curves: Dict[str, Dict[str, Any]], lo: float, hi: float) -> Optional[str]:
+    """Line chart PNG (one panel per target, 90% band, training range shaded). None when matplotlib is missing."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+    except ImportError:
+        return None
+    have = {f.name for f in font_manager.fontManager.ttflist}
+    font = next((f for f in ("Malgun Gothic", "NanumGothic", "AppleGothic", "Noto Sans CJK KR") if f in have), None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rc = {"axes.unicode_minus": False}
+        if font:
+            rc["font.family"] = font
+        with matplotlib.rc_context(rc):
+            n = len(curves)
+            fig, axes = plt.subplots(n, 1, figsize=(6.4, 2.6 * n + 0.4), squeeze=False)
+            for ax, (t, c) in zip(axes[:, 0], curves.items()):
+                if c.get("lo") is not None:
+                    ax.fill_between(xs, c["lo"], c["hi"], color="#93C5FD", alpha=0.45, linewidth=0, label="90% 범위")
+                ax.plot(xs, c["y"], color="#1E3A8A", linewidth=1.8, marker="o", markersize=2.5, label="예측")
+                ax.axvspan(lo, hi, color="#E5E7EB", alpha=0.5, zorder=0, label="학습 범위")
+                ax.set_ylabel(t)
+                ax.grid(True, linewidth=0.4, alpha=0.6)
+            axes[-1, 0].set_xlabel(vary)
+            axes[0, 0].legend(loc="best", fontsize=8)
+            fig.tight_layout()
+            fig.savefig(path, dpi=120)
+            plt.close(fig)
+    return path
+
+
+def _version_dir_of(items: List[Dict[str, Any]]) -> str:
+    return os.path.dirname(os.path.abspath(items[0]["joblib_path"]))
+
+
+def _save_table(args: argparse.Namespace, df: pd.DataFrame, default_name: str, what: str) -> Tuple[str, List[str]]:
+    """Writes the result table (--save .xlsx/.csv, else <data folder>/<default_name>.xlsx) and reads it back (R1)."""
+    if getattr(args, "save", None):
+        path = os.path.abspath(args.save)
+        if os.path.splitext(path)[1].lower() not in (".xlsx", ".csv"):
+            raise InputError(f"결과 파일(--save)은 .xlsx 또는 .csv만 저장합니다: '{os.path.basename(path)}'. "
+                             f"[추천] {os.path.splitext(args.save)[0]}.xlsx")
+    else:
+        path = os.path.join(os.path.dirname(_version_dir_of_args(args)), default_name + ".xlsx")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    path = avoid_overwrite(path, getattr(args, "overwrite", False), what=what)
+    if path.lower().endswith(".csv"):
+        path = write_csv_excel_compatible(df, path)
+    else:
+        path = save_with_lock_fallback(path, lambda p: df.to_excel(p, index=False), what=what)
+    unverified: List[str] = []
+    try:
+        back = load_data_file(path, header_row=1)
+        if len(back) != len(df):
+            unverified.append(f"저장한 표를 다시 읽으니 {len(back)}행 (기대 {len(df)}행)")
+    except Exception as e:
+        unverified.append(f"저장한 표를 다시 읽지 못함: {type(e).__name__}: {e}")
+    return path, unverified
+
+
+def _version_dir_of_args(args: argparse.Namespace) -> str:
+    p = os.path.abspath(args.model)
+    return p if os.path.isdir(p) else os.path.dirname(p)
+
+
+def _pick_evenly(n: int, k: int) -> List[int]:
+    if n <= k:
+        return list(range(n))
+    return sorted(set(int(round(i)) for i in np.linspace(0, n - 1, k)))
+
+
+def execute_sweep(args: argparse.Namespace) -> Dict[str, Any]:
+    raw_spec = str(args.sweep)
+    m = re.fullmatch(r"\s*([^=]+?)\s*(?:=(.*))?", raw_spec, re.S)
+    if not m or not m.group(1).strip():
+        raise InputError(f"--sweep '{raw_spec}'을(를) 읽을 수 없습니다. 형식: '<입력>=<시작>:<끝>:<간격>' (예: 반응온도=170:200:5)")
+    filt = [t.strip() for t in args.targets.split(",") if t.strip()] if args.targets else None
+    items, skipped = _regression_items(args, filt)
+    raw, numeric, _, stats = _model_input_info(items)
+    vary = _vary_names(args, m.group(1), numeric, stats, "--sweep")
+    if len(vary) != 1:
+        raise InputError("--sweep에는 입력 하나만 주십시오 (예: --sweep \"반응온도=170:200:5\"). 여러 입력을 함께 바꾸는 최적 조건 찾기는 --maximize/--minimize입니다.")
+    vary_name = vary[0]
+    info = _base_inputs(args, items, vary)
+    st = stats[vary_name]
+    lo, hi = float(st["min"]), float(st["max"])
+    xs = _sweep_values(args, vary_name, m.group(1).strip(), m.group(2), lo, hi)
+    rows = pd.DataFrame({**{k: [v] * len(xs) for k, v in info["base"].items()}, vary_name: xs})
+    tol = SWEEP_RANGE_TOL * (hi - lo)       # 170 for a training minimum of 170.03 is not an extrapolation
+    in_range = (xs >= lo - tol - 1e-12) & (xs <= hi + tol + 1e-12)
+    table = pd.DataFrame({vary_name: [_r6(x) for x in xs]})
+    curves: Dict[str, Dict[str, Any]] = {}
+    trend: Dict[str, Any] = {}
+    for it in items:
+        t = str(it["target"])
+        ys = _predict_rows(it, rows)
+        iv = it["meta"].get("prediction_interval")
+        c: Dict[str, Any] = {"y": ys, "lo": None, "hi": None}
+        table[f"pred_{t}"] = [round_pred(float(v)) for v in ys]
+        if iv:
+            c["lo"], c["hi"] = ys + float(iv["residual_lower"]), ys + float(iv["residual_upper"])
+            table[f"pred_lo_{t}"] = [round_pred(float(v)) for v in c["lo"]]
+            table[f"pred_hi_{t}"] = [round_pred(float(v)) for v in c["hi"]]
+        curves[t] = c
+        trend[t] = _trend(xs, ys, vary_name, t)
+    table["학습범위"] = np.where(in_range, "안", "밖(외삽)")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out, unverified = _save_table(args, table, f"sweep_{sanitize_filename(strip_unit(vary_name))}_{stamp}", "조건별 예측 표")
+    chart = None
+    try:
+        chart = _sweep_chart(os.path.splitext(out)[0] + ".png", xs, vary_name, curves, lo, hi)
+        if chart and not (os.path.isfile(chart) and os.path.getsize(chart) > 0):
+            unverified.append("그래프 PNG를 저장했지만 다시 확인하지 못함")
+    except Exception as e:                 # the table is the result; the chart is an extra
+        unverified.append(f"그래프를 그리지 못함: {type(e).__name__}: {str(e)[:120]}")
+        chart = None
+    warnings_out = list(info["warnings"])
+    n_out = int((~in_range).sum())
+    if n_out:
+        warnings_out.append(f"{vary_name}의 {n_out}점이 학습 범위({_fmt(lo)}~{_fmt(hi)}) 밖입니다 (표의 '학습범위' 열 '밖(외삽)', "
+                            f"points의 in_range false): 그 점의 예측은 참고용입니다. 트리 모델은 범위 밖에서 값이 거의 변하지 않습니다")
+    if chart is None and not any("그래프" in u for u in unverified):
+        warnings_out.append("matplotlib이 없어 그래프는 만들지 않았습니다 (표는 정상). 설치: python -m pip install matplotlib")
+    if skipped:
+        warnings_out.append(f"분류 타겟 {skipped}은(는) 조건별 예측에서 뺐습니다 (숫자 타겟만)")
+    pick = _pick_evenly(len(xs), SWEEP_SHOWN)
+    points = []
+    for i in pick:
+        p: Dict[str, Any] = {vary_name: _r6(xs[i]), "in_range": bool(in_range[i])}
+        for t, c in curves.items():
+            p[t] = round_pred(float(c["y"][i]))
+            if c["lo"] is not None:
+                p[f"{t}_90%"] = [round_pred(float(c["lo"][i])), round_pred(float(c["hi"][i]))]
+        points.append(p)
+    truncated = len(pick) < len(xs)
+    res: Dict[str, Any] = {
+        "status": "ok", "command": "sweep", "vary": vary_name, "targets": list(curves),
+        "fixed": {k: (float(v) if isinstance(v, (int, float, np.floating)) else v) for k, v in info["fixed"].items()},
+        "filled_defaults": {k: _r6(v) for k, v in info["filled"].items()},
+        "training_range": {vary_name: [_r6(lo), _r6(hi)]},
+        "count": len(xs), "shown": len(points), "truncated": truncated, "points": points,
+        "out_of_range_points": n_out, "trend": trend, "output_file": out, "verified": not unverified,
+    }
+    if chart:
+        res["chart_file"] = chart
+    if truncated:
+        res["full_result_file"] = out
+    if warnings_out:
+        res["warnings"] = warnings_out
+    if unverified:
+        res["unverified"] = unverified
+    res["preview"] = (f"{vary_name} {_fmt(xs[0])}~{_fmt(xs[-1])} ({len(xs)}점) 조건별 예측 | "
+                      + " | ".join(tr["text"] for tr in trend.values()) + f" | 표: {os.path.basename(out)}")
+    res["agent_directive"] = (
+        ("VERIFIED: 표를 다시 읽어 확인했습니다. " if not unverified else
+         f"UNVERIFIED: 확인하지 못한 것이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
+        + "trend의 타겟별 text(경향)와 points(조건별 예측값" + (", 90% 범위" if any(c["lo"] is not None for c in curves.values()) else "")
+        + "), output_file(엑셀 표)" + (", chart_file(그래프)" if chart else "") + " 경로를 알리세요. "
+        + (f"points는 전체 {len(xs)}점 중 고르게 고른 {len(points)}점이고 전체는 output_file에 있습니다. " if truncated else "")
+        + ("in_range가 false인 점은 학습 범위 밖(외삽)이라 참고용이라고 알리세요. " if n_out else "")
+        + ("warnings도 반드시 알리세요. " if warnings_out else "")
+        + "모델 예측이지 실측이 아니라는 점을 덧붙이세요.")
+    return res
+
+
+SEARCH_RECHECK_TOL = 1e-6      # relative difference allowed between a reported and a re-predicted value
+
+
+def _recheck_solutions(items: List[Dict[str, Any]], base: Dict[str, Any], vary: List[str],
+                       solutions: List[Dict[str, Any]], conds: Optional[List[List[Cond]]], goal: str) -> List[str]:
+    """R1 check of --maximize / --minimize: every answer is predicted again from the inputs as reported (rounded) and
+    the fixed inputs, in one new call per model; the reported predictions must match and the --where condition must
+    hold. Returns what did not (empty = verified)."""
+    if not solutions:
+        return []
+    rows = pd.DataFrame({**{k: [v] * len(solutions) for k, v in base.items()},
+                         **{v: [s["inputs"][v] for s in solutions] for v in vary}})
+    frame = rows.copy()
+    for it in items:
+        frame[str(it["target"])] = _predict_rows(it, rows)
+    ok = where_mask(frame, conds) if conds else np.ones(len(solutions), dtype=bool)
+    bad: List[str] = []
+    for i, s in enumerate(solutions):
+        diff = [t for t, v in s["predictions"].items()
+                if abs(float(frame[t].iloc[i]) - float(v)) > SEARCH_RECHECK_TOL * max(1.0, abs(float(v))) + 1e-4]
+        if diff:
+            bad.append(f"답 {i + 1}: 다시 예측한 {', '.join(diff)} 값이 다름")
+        elif not ok[i]:
+            bad.append(f"답 {i + 1}: 적힌 입력값으로 다시 예측하면 조건을 만족하지 않음")
+    return bad
+
+
+def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
+    goal_text = args.maximize if args.maximize else args.minimize
+    sense = 1.0 if args.maximize else -1.0
+    option = "--maximize" if args.maximize else "--minimize"
+    items, skipped = _regression_items(args)
+    names = [str(it["target"]) for it in items]
+    goal = resolve_column_names([str(goal_text).strip()], names, f"목표({option})")[0][0]
+    raw, numeric, _, stats = _model_input_info(items)
+    if not args.vary:
+        raise InputError(f"{option}에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다. [후보] {', '.join(numeric[:10])}")
+    vary = _vary_names(args, args.vary, numeric, stats, "--vary")
+    if len(vary) > SEARCH_MAX_VARY:
+        raise InputError(f"--vary 입력은 {SEARCH_MAX_VARY}개까지입니다 (지금 {len(vary)}개). 영향이 큰 입력만 고르도록 사용자에게 물으십시오.")
+    info = _base_inputs(args, items, vary)
+    conds = None
+    if args.where:
+        conds = resolve_where(parse_where(args.where, "--where"), names + raw, "--where")
+    lows = np.array([float(stats[v]["min"]) for v in vary])
+    highs = np.array([float(stats[v]["max"]) for v in vary])
+    spans = np.maximum(highs - lows, 1e-12)
+    evals = {"n": 0}
+
+    def evaluate(points: np.ndarray) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+        rows = pd.DataFrame({**{k: [v] * len(points) for k, v in info["base"].items()},
+                             **{v: points[:, j] for j, v in enumerate(vary)}})
+        frame = rows.copy()
+        for it in items:
+            frame[str(it["target"])] = _predict_rows(it, rows)
+        evals["n"] += len(points)
+        ok = where_mask(frame, conds) if conds else np.ones(len(points), dtype=bool)
+        return frame, ok, sense * frame[goal].to_numpy(dtype=float)
+
+    k = len(vary)
+    per = max(int(np.floor(SEARCH_GRID_BUDGET ** (1.0 / k))), 3)
+    per = min(per, 2001)
+    axes = [np.linspace(lows[j], highs[j], per) for j in range(k)]
+    grid = np.array(np.meshgrid(*axes, indexing="ij")).reshape(k, -1).T
+    frame, ok, score = evaluate(grid)
+    frames = [frame.assign(_ok=ok, _score=score)]
+    method = f"격자 탐색 (입력마다 {per}점, {len(grid)}개 조합)"
+    if k > 1 and ok.any():
+        # coordinate search from the best feasible grid point: one input at a time over its whole training range
+        best = grid[int(np.argmax(np.where(ok, score, -np.inf)))].copy()
+        for _ in range(SEARCH_REFINE_ROUNDS):
+            moved = False
+            for j in range(k):
+                line = np.repeat(best[None, :], SEARCH_LINE_POINTS, axis=0)
+                line[:, j] = np.linspace(lows[j], highs[j], SEARCH_LINE_POINTS)
+                f2, ok2, s2 = evaluate(line)
+                frames.append(f2.assign(_ok=ok2, _score=s2))
+                if ok2.any():
+                    i = int(np.argmax(np.where(ok2, s2, -np.inf)))
+                    cur = np.where(ok2, s2, -np.inf)[int(np.argmin(np.abs(line[:, j] - best[j])))]
+                    if s2[i] > cur + 1e-12 and not np.isclose(line[i, j], best[j]):
+                        best = line[i].copy()
+                        moved = True
+            if not moved:
+                break
+        method += f" + 좌표 탐색 ({SEARCH_REFINE_ROUNDS}회까지, 입력마다 {SEARCH_LINE_POINTS}점)"
+    allf = pd.concat(frames, ignore_index=True)
+    feas = allf[allf["_ok"]].sort_values("_score", ascending=False, kind="stable")
+    chosen: List[int] = []
+    pts = feas[vary].to_numpy(dtype=float)
+    for i in range(len(feas)):
+        if all(np.max(np.abs(pts[i] - pts[c]) / spans) > SEARCH_DISTINCT for c in chosen):
+            chosen.append(i)
+        if len(chosen) >= SEARCH_SOLUTIONS:
+            break
+    goal_item = next(it for it in items if str(it["target"]) == goal)
+    iv = goal_item["meta"].get("prediction_interval")
+    solutions = []
+    for c in chosen:
+        r = feas.iloc[c]
+        sol: Dict[str, Any] = {"inputs": {v: _r6(r[v]) for v in vary},
+                               "predictions": {t: round_pred(float(r[t])) for t in names}}
+        if iv:
+            sol["interval_90"] = {goal: [round_pred(float(r[goal]) + float(iv["residual_lower"])),
+                                         round_pred(float(r[goal]) + float(iv["residual_upper"]))]}
+        solutions.append(sol)
+    unverified = _recheck_solutions(items, info["base"], vary, solutions, conds, goal)
+    warnings_out = list(info["warnings"])
+    if skipped:
+        warnings_out.append(f"분류 타겟 {skipped}은(는) 조건 찾기에서 뺐습니다 (숫자 타겟만)")
+    best_free = allf.iloc[int(np.argmax(allf["_score"].to_numpy()))]
+    near: List[Dict[str, Any]] = []
+    data = _load_snapshot(_version_dir_of(items), {})
+    if data is not None and solutions and all(c in data.columns for c in [SNAPSHOT_ROW_COL] + vary):
+        data = data.copy()
+        data["__row"] = coerce_numeric(data[SNAPSHOT_ROW_COL]).fillna(-1).astype(int)
+        keys = vary + [c for c in info["numeric"] if c not in vary and c in data.columns and c in info["base"]]
+        target_pt = np.array([solutions[0]["inputs"][v] for v in vary] + [float(info["base"][c]) for c in keys[len(vary):]])
+        span_k = np.array([max(float(stats[c]["max"]) - float(stats[c]["min"]), 1e-12) for c in keys])
+        show = list(dict.fromkeys(keys + [t for t in names if t in data.columns]))
+        near = nearest_rows(data, keys, target_pt, span_k, show)
+    count = len(solutions)
+    where_txt = where_text(conds) if conds else ""
+    word = "최대" if sense > 0 else "최소"
+    res: Dict[str, Any] = {
+        "status": "ok", "command": "maximize" if sense > 0 else "minimize", "goal": goal, "vary": vary,
+        "where": where_txt or None,
+        "fixed": {k2: (float(v) if isinstance(v, (int, float, np.floating)) else v) for k2, v in info["fixed"].items()},
+        "filled_defaults": {k2: _r6(v) for k2, v in info["filled"].items()},
+        "training_range": {v: [_r6(lows[j]), _r6(highs[j])] for j, v in enumerate(vary)},
+        "method": method, "evaluations": evals["n"], "feasible_count": int(len(feas)),
+        "count": count, "solutions": solutions, "nearest_rows": near, "verified": not unverified,
+    }
+    if unverified:
+        res["unverified"] = unverified
+    if not count:
+        res["best_without_where"] = {"inputs": {v: _r6(best_free[v]) for v in vary},
+                                     "predictions": {t: round_pred(float(best_free[t])) for t in names}}
+    if warnings_out:
+        res["warnings"] = warnings_out
+    cond_txt = f" ({where_txt})" if where_txt else ""
+    if count:
+        s0 = solutions[0]
+        res["preview"] = (f"{goal} {word} 조건{cond_txt}: " + ", ".join(f"{v}={_fmt(x)}" for v, x in s0["inputs"].items())
+                          + f" -> {goal} {_fmt(s0['predictions'][goal])} | 답 {count}개 | 학습 범위 안에서만 찾음")
+        res["agent_directive"] = (
+            ("VERIFIED: 답마다 적힌 입력값(inputs)으로 모델을 다시 예측해 predictions와 조건을 확인했습니다. " if not unverified else
+             f"UNVERIFIED: 다시 예측해 확인하지 못한 답이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
+            + "solutions(답 모두, 첫 번째가 가장 좋음)의 inputs와 predictions, "
+            "nearest_rows(가까운 실측 행)를 알리세요. 학습 범위 안에서 모델이 예측한 조건이지 보장된 조건이 아니라는 점을 덧붙이세요."
+            + (" warnings도 반드시 알리세요." if warnings_out else ""))
+    else:
+        res["preview"] = (f"{goal} {word} 조건{cond_txt}: 0건 (학습 범위 안에서 조건을 만족하는 조합 없음) | "
+                          f"조건 없이 {word}: {_fmt(best_free[goal])}")
+        res["agent_directive"] = (
+            f"VERIFIED: 0건. 학습 범위 안에서 조건({where_txt})을 만족하는 조합을 찾지 못했습니다. 사용자에게 그대로 알리고 "
+            "best_without_where(조건 없이 가장 좋은 조합)를 함께 알리세요. 조건을 바꿔 다시 실행하지 마세요."
+            + (" warnings도 반드시 알리세요." if warnings_out else ""))
     return res
 
 
@@ -3892,16 +5389,13 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
 
 def main():
     setup_console()
+    check_core_libraries("예측")
     parser = JsonArgumentParser(
-        description="Zero-Office Ultra-Fast Standalone ML Inference Engine (Folder or Specific Files)"
+        description="학습한 모델로 예측 (한 건, 파일, 반대 찾기, 조건별 예측, 조건 찾기)"
     )
     parser.add_argument(
         "--model", "-m", required=True,
         help="학습 산출물 버전 폴더 경로(예: sample_v2_ml_data/v1/) 또는 개별 .joblib 파일 경로"
-    )
-    parser.add_argument(
-        "--meta",
-        help="개별 .joblib 지정 시 동반할 .json 메타데이터 파일 경로 (생략 시 동일 폴더 자동 탐지)"
     )
     parser.add_argument(
         "--targets", "-y",
@@ -3916,31 +5410,55 @@ def main():
         help="단일/인라인 추론용 입력 데이터 ('k1=v1,k2=v2' 형식, JSON 문자열, 또는 .json 파일 경로)"
     )
     parser.add_argument(
-        "--out", "-o",
+        "--save",
         help="예측 결과 저장 파일 경로 (.csv, .xlsx, 생략 시 원본 파일 위치에 pred_*.csv 자동 생성)"
     )
     parser.add_argument("--header-row", type=int, help="컬럼명 헤더 행 번호 (1-based, 미지정 시 상단 빈 행 자동 건너뜀)")
     parser.add_argument("--unit-row", type=int, help="단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
-    parser.add_argument("--encoding", help="결과 CSV 저장 인코딩 (기본값: Windows Excel 최적화 cp949)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="--out 파일이 이미 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
+                        help="--save 파일이 이미 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--find", help="모델 반대 찾기 목표 ('생산효율=50', 숫자 타겟). --vary와 함께")
-    parser.add_argument("--vary", help="반대 찾기에서 값을 찾을 숫자 입력 (예: 반응온도). 나머지 입력은 -i로 고정, 생략하면 학습 중앙값")
+    parser.add_argument("--vary", help="반대 찾기에서 값을 찾을 숫자 입력 (예: 반응온도). 나머지 입력은 -i로 고정, 생략하면 학습 중앙값. "
+                                       "--maximize/--minimize에서는 바꿔 볼 입력 목록 (쉼표 구분, 6개까지)")
+    parser.add_argument("--sweep", help="조건별 예측: 입력 하나를 바꿔 가며 예측 ('반응온도=170:200:5' = 시작:끝:간격, "
+                                        "'반응온도' = 학습 범위). 나머지 입력은 -i, 생략하면 학습 중앙값. 표(엑셀)와 그래프 저장")
+    parser.add_argument("--maximize", help="조건 찾기: 이 숫자 타겟이 가장 커지는 --vary 입력 조합 (학습 범위 안)")
+    parser.add_argument("--minimize", help="조건 찾기: 이 숫자 타겟이 가장 작아지는 --vary 입력 조합 (학습 범위 안)")
+    parser.add_argument("--where", help="조건 찾기의 제약 (예: '불순물 <= 100; 반응온도 < 190'. ;는 그리고, |는 또는)")
 
     args = parser.parse_args()
 
+    search = args.maximize or args.minimize
+    if args.where and not search:
+        parser.error("--where는 --maximize 또는 --minimize와 함께 씁니다.")
+    if args.maximize and args.minimize:
+        parser.error("--maximize와 --minimize는 하나만 주십시오.")
+    if args.sweep:
+        if args.find or search or args.file:
+            parser.error("조건별 예측(--sweep)에는 --find, --maximize, --minimize, -f를 함께 쓰지 않습니다.")
+        if args.vary:
+            parser.error("--sweep에는 바꿀 입력을 --sweep 값에 씁니다 (예: --sweep \"반응온도=170:200:5\"). --vary를 빼십시오.")
+        run_cli(lambda: execute_sweep(args), hint="확인할 것: 입력 이름과 --sweep 범위.")
+        return
+    if search:
+        if args.find or args.file or args.targets:
+            parser.error("조건 찾기(--maximize/--minimize)에는 --find, -f, -y를 함께 쓰지 않습니다.")
+        if not args.vary:
+            parser.error("조건 찾기(--maximize/--minimize)에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다.")
+        run_cli(lambda: execute_search(args), hint="확인할 것: 타겟, --vary, --where의 이름.")
+        return
     if args.find or args.vary:
         if not (args.find and args.vary):
             parser.error("모델 반대 찾기는 --find와 --vary를 함께 주어야 합니다.")
-        if args.file or args.targets or args.out:
-            parser.error("반대 찾기(--find)에는 -f, -y, -o를 쓰지 않습니다.")
-        run_cli(lambda: execute_find(args), hint="Check the target name and the input names in SKILL.md.")
+        if args.file or args.targets or args.save:
+            parser.error("반대 찾기(--find)에는 -f, -y, --save를 쓰지 않습니다.")
+        run_cli(lambda: execute_find(args), hint="확인할 것: 타겟 이름과 입력 이름.")
         return
     if not args.file and not args.input:
         parser.error("추론을 수행하려면 --file (배치 파일) 또는 --input (인라인 데이터) 중 하나를 지정해야 합니다.")
 
-    run_cli(lambda: execute_predict(args), hint="Check model path or feature names.")
+    run_cli(lambda: execute_predict(args), hint="확인할 것: 모델 폴더 경로와 입력 이름.")
 
 
 if __name__ == "__main__":

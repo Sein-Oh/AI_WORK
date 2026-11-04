@@ -6,9 +6,12 @@ import argparse
 import json
 import os
 import random
+import re
 import shlex
+import shutil
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pandas as pd
@@ -141,7 +144,7 @@ def test_xlsx_layout_multi_target_and_excel_dates(tmp_path):
     assert "측정일" in payload["feature_types"]["datetime"]
     out = tmp_path / "pred.xlsx"
     pred = run_tool("ml_predict.py", "-m", payload["version_dir"], "-f", str(p),
-                    "--header-row", "3", "--unit-row", "4", "-o", str(out))
+                    "--header-row", "3", "--unit-row", "4", "--save", str(out))
     assert set(pred["targets_predicted"]) == {"생산효율(%)", "인장강도(MPa)"}
     df = pd.read_excel(out)
     assert {"pred_생산효율(%)", "pred_lo_생산효율(%)", "pred_hi_인장강도(MPa)"} <= set(df.columns)
@@ -251,8 +254,9 @@ def test_multiclass_predict_batch_columns(multiclass):
     import pandas as pd
     work, data, _ = multiclass
     out = work / "pred.csv"
-    run_tool("ml_predict.py", "-m", str(work / "proc_ml_data" / "v1"), "-f", data, "-o", str(out))
-    df = pd.read_csv(out, encoding="cp949")
+    run_tool("ml_predict.py", "-m", str(work / "proc_ml_data" / "v1"), "-f", data, "--save", str(out))
+    assert open(out, "rb").read(3) == b"\xef\xbb\xbf"                     # 2.9.53: UTF-8 BOM, not CP949
+    df = pd.read_csv(out, encoding="utf-8-sig")
     for col in ["pred_품질등급", "conf_품질등급", "proba_품질등급_A등급", "proba_품질등급_C등급"]:
         assert col in df.columns
     assert (df["pred_품질등급"] == df["품질등급"]).mean() > 0.6
@@ -302,11 +306,11 @@ def test_history_mixed_tasks_compare_within_task(multiclass):
 
 
 def test_report_supports_classification(multiclass):
-    """분류 버전도 통합 보고서를 만든다 (-d, -t, -v)."""
+    """분류 버전도 통합 보고서를 만든다 (-m, -y)."""
     pytest.importorskip("docx")
     pytest.importorskip("matplotlib")
     work, _, _ = multiclass
-    payload = run_tool("ml_report.py", "-d", str(work / "proc_ml_data"), "-t", "품질등급", "-v", "v1")
+    payload = run_tool("ml_report.py", "-m", str(work / "proc_ml_data" / "v1"), "-y", "품질등급")
     assert payload["task"] == "classification" and payload["targets"] == ["품질등급"]
 
 
@@ -518,7 +522,16 @@ def test_marks_auto_outliers_and_all_rows_score(tmp_path):
     assert "검증 R2(제외 행 포함)" in res["preview"] and "검증 R2=" in res["preview"]
     assert f.read_bytes() == before                                       # data file untouched
 
-    rows = pd.read_csv(res["excluded_rows_file"], encoding="cp949")
+    raw = open(res["excluded_rows_file"], "rb").read()
+    assert raw.startswith(b"\xef\xbb\xbf")                                # 2.9.53: UTF-8 BOM (Excel, LLM read it)
+    rows = pd.read_csv(res["excluded_rows_file"], encoding="utf-8-sig")
+    # 2.9.53: the JSON itself carries the rows and the reasons (the LLM never opens the CSV)
+    prev = {p["row"]: p for p in res["excluded_preview"]}
+    assert set(prev) == {7, 32, 52} and res["excluded_count"] == 3
+    assert prev[52]["kind"] == "직접" and prev[52]["reason"] == "센서오류" and prev[52]["target"] == "생산효율"
+    assert prev[7]["kind"] == "자동" and "생산효율" in prev[7]["reason"] and isinstance(prev[7]["value"], float)
+    assert res["excluded_reasons"] == {"센서오류": 1, "자동 이상치: 생산효율": 1, "자동 이상치: 반응온도": 1}
+    assert "excluded_preview" in res["agent_directive"]
     by_row = {int(r["원본 행"]): r for _, r in rows.iterrows()}
     assert set(by_row) == {7, 32, 52}                                     # Excel rows (header is row 1)
     assert by_row[52]["구분"] == "직접 표시" and by_row[52]["이유"] == "센서오류"
@@ -532,6 +545,240 @@ def test_marks_auto_outliers_and_all_rows_score(tmp_path):
     hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
     assert hist[-1]["exclusions"]["생산효율"]["manual"] == 1
     assert hist[-1]["data_profile"]["rows_used"]["생산효율"] == N - 3
+
+
+# ---- --exclude-where: 조건으로 학습에서 뺄 행 (2.9.56, office-cli excel.py read --where와 같은 식) ----------------
+
+WHERE = "생산효율 > 112; 라인 = B | 라인 = C"
+
+
+def _where_frame():
+    df = _excl_frame(_excl_marks())
+    df["라인"] = ["A", "B"] * (N // 2)
+    df.loc[17, "라인"] = "C"            # matches the condition but is marked '포함' -> kept, with a warning
+    df.loc[50, "라인"] = "C"            # matches the condition and is marked '센서오류' -> the user's reason wins
+    df = df.rename(columns={"생산효율": "생산효율(%)"})
+    return df
+
+
+def _where_expected(df):
+    y = df["생산효율(%)"]
+    hit = ((y > 112) & (df["라인"] == "B")) | (df["라인"] == "C")
+    return hit & (df["제외"] == "")
+
+
+@pytest.fixture(scope="module")
+def where_run(tmp_path_factory):
+    work = tmp_path_factory.mktemp("where")
+    f = work / "d.xlsx"
+    df = _where_frame()
+    df.to_excel(f, index=False)
+    res = run_tool("ml_train.py", "-f", str(f), "-x", "반응온도,압축압력,촉매비율", "-y", "생산효율",
+                   "--exclude-where", WHERE)
+    return work, f, df, res
+
+
+def test_exclude_where_leaves_out_matching_rows(where_run):
+    _, f, df, res = where_run
+    want = _where_expected(df)
+    assert 0 < want.sum() < 60
+    ex = res["exclusions"]["생산효율(%)"]
+    assert ex["condition"] == int(want.sum()) and ex["manual"] == 1, ex
+    text = "조건: 생산효율(%) > 112; 라인 = B | 라인 = C"                    # column names resolved (unit added)
+    assert res["excluded_reasons"][text] == int(want.sum())
+    rows = {p["row"] for p in res["excluded_preview"] if p["kind"] == "조건"}
+    assert rows <= {i + 2 for i in np.flatnonzero(want.to_numpy())} and rows
+    assert any("포함" in w and "--exclude-where" in w for w in res["warnings"]), res.get("warnings")
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert hist[-1]["exclude_where"] == "생산효율(%) > 112; 라인 = B | 라인 = C"
+    snap = pd.read_csv(os.path.join(res["version_dir"], "model_dataset.csv"), encoding="utf-8-sig")
+    assert int(snap["학습제외_생산효율(%)"].sum()) == ex["manual"] + ex["auto"] + ex["condition"]
+
+
+def test_exclude_where_is_inherited_by_best(where_run):
+    _, f, _, res = where_run
+    best = run_tool("ml_train.py", "-f", str(f), "--best")
+    assert best["exclusions"]["생산효율(%)"]["condition"] == res["exclusions"]["생산효율(%)"]["condition"], best
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert hist[-1]["target_recipes"]["생산효율(%)"]["exclude_where"] == "생산효율(%) > 112; 라인 = B | 라인 = C"
+
+
+def test_exclude_where_in_retrain_commands(tmp_path):
+    args = argparse.Namespace(header_row=None, unit_row=None, data_row=None, dtypes=None)
+    cmds = mt.build_next_commands(
+        args=args, raw_file=str(tmp_path / "d.xlsx"), task=mt.TASK_REGRESSION, positive_class=None,
+        feature_names=["a", "b", "c"], created_features=[], applied_evals=[], target_names=["y"],
+        champion={"weak_features": ["c"], "top_features": [{"feature": "a"}, {"feature": "b"}]},
+        schema={"numeric": ["a", "b", "c"]}, mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"),
+        exclude_where="a > 1; 라인 = 'B|C'")
+    retrain = [c["command"] for c in cmds if "ml_train.py" in c["command"]]
+    assert retrain and all("--exclude-where \"a > 1; 라인 = 'B|C'\"" in c for c in retrain), retrain
+
+
+def test_exclude_where_errors(tmp_path):
+    f = tmp_path / "d.csv"
+    _where_frame().to_csv(f, index=False)
+    base = ["-f", str(f), "-x", "반응온도,압축압력,촉매비율", "-y", "생산효율"]
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "생산효율 > 0")             # every row
+    assert bad["agent_directive"].startswith("STOP_RETRY") and "1행만 남습니다" in bad["message"], bad   # the '포함' row
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "라인x = B")               # unknown column -> [후보]
+    assert "[후보]" in bad["message"] and "라인" in bad["message"], bad
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "라인 == B")               # fixable notation -> [추천] command
+    rec = bad["message"].split("[추천] ")[1]
+    assert rec.startswith("python ") and '--exclude-where "라인 = B"' in rec, rec
+    bad = run_fail("ml_train.py", *base, "--exclude-where", "생산효율 >")              # unreadable
+    assert "--exclude-where" in bad["message"] and "형식" in bad["message"], bad
+
+
+def test_where_mask_rules():
+    df = pd.DataFrame({"a": ["1,500", "20", "", "x"], "b": ["Line A", "line a", "B", "A;B"],
+                       "d": ["2026-01-02", "2026-02-01", None, "2025-12-31"]})
+    g = mp.parse_where("a >= 20; b = line a | b ~ ';' | d < 2026-01-01")
+    assert mp.where_text(g) == "a >= 20; b = line a | b ~ ';' | d < 2026-01-01"
+    assert list(mp.where_mask(df, g)) == [True, True, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("d < 2026-01-01"))) == [False, False, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("a > 100"))) == [True, False, False, False]   # '1,500' is 1500
+    assert list(mp.where_mask(df, mp.parse_where("b != B"))) == [True, True, False, True]
+
+
+def test_where_words_inside_value_are_kept():
+    """2.9.59: 값 안의 '포함'·'and'·'or'까지 바꿔 틀린 [추천](비고 ~ ...)을 냈다."""
+    g = mp.parse_where("비고 = 불량 포함 시료")
+    assert g == [[("비고", "=", "불량 포함 시료")]]
+    assert mp.parse_where("비고 = A and B | 라인 = C") == [[("비고", "=", "A and B")], [("라인", "=", "C")]]
+    with pytest.raises(mp.InputError) as e:                     # 진짜 표기 오류는 [추천], 값은 작은따옴표로
+        mp.parse_where("비고 == 불량 포함 시료 and 라인 = A")
+    msg = str(e.value)
+    assert "작은따옴표" in msg and msg.split("[추천] ")[1] == "비고 = '불량 포함 시료'; 라인 = A", msg
+    assert mp.parse_where(msg.split("[추천] ")[1]) == [[("비고", "=", "불량 포함 시료"), ("라인", "=", "A")]]
+    with pytest.raises(mp.InputError) as e:                     # 열 다음의 '포함'은 연산자
+        mp.parse_where("비고 포함 불량 and 생산효율 > 3")
+    assert str(e.value).split("[추천] ")[1] == "비고 ~ 불량; 생산효율 > 3"
+
+
+def test_where_not_equal_keeps_blank_and_size_value_checked():
+    df = pd.DataFrame({"c": [1.0, np.nan, 3.0], "t": ["A", "", "B"], "d": ["2026-01-01", None, "2026-01-02"]})
+    assert list(mp.where_mask(df, mp.parse_where("c != 1"))) == [False, False, True]     # 빈 칸은 빼지 않음
+    assert list(mp.where_mask(df, mp.parse_where("t != A"))) == [False, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("d != 2026-01-01"))) == [False, False, True]
+    with pytest.raises(mp.InputError) as e:
+        mp.parse_where("c > 9 0")
+    assert str(e.value).split("[추천] ")[1] == "c > 90"
+    with pytest.raises(mp.InputError) as e:
+        mp.parse_where("c >= 높음")
+    assert "[추천]" not in str(e.value) and "숫자" in str(e.value)
+
+
+def test_where_code_text_column_compares_as_text():
+    df = pd.DataFrame({"k": ["01", "1", "02"], "n": [1, 2, 1]})
+    assert list(mp.where_mask(df, mp.parse_where("k = 01"))) == [True, False, False]     # 글자 열: 글자 비교
+    assert list(mp.where_mask(df, mp.parse_where("k != 01"))) == [False, True, True]
+    assert list(mp.where_mask(df, mp.parse_where("n = 01"))) == [True, False, True]      # 숫자 열: 숫자 비교
+
+
+def _marked_pressure_frame(n=60):
+    """숫자 열(압력 1.0/2.0/3.0)에 결측 표시 '측정불가' 한 칸."""
+    r = np.random.default_rng(5)
+    p = r.choice([1.0, 2.0, 3.0], n)
+    t = r.uniform(150, 200, n).round(1)
+    df = pd.DataFrame({"온도": t, "압력": p.astype(object), "생산량": (2 * t + 10 * p + r.normal(0, 1, n)).round(2)})
+    df.loc[4, "압력"] = "측정불가"
+    return df
+
+
+def test_where_number_column_with_missing_mark_compares_numbers(tmp_path):
+    """2.9.61: 숫자 열에 '측정불가' 한 칸만 있어도 글자 열로 보아 '압력 = 2'가 '2.0'과 안 맞고 '!= 2'가 전부 맞았다.
+    행 수는 2.9.59와 같다 (결측 표시 칸은 '!='에 맞음, 빈 칸은 맞지 않음)."""
+    df = _marked_pressure_frame()
+    f = write_df(tmp_path / "w.csv", df)
+    raw = mp.load_data_file(f)
+    num = pd.to_numeric(df["압력"], errors="coerce")
+    eq = int((num == 2).sum())
+    assert 0 < eq < len(df)
+    for cond, want in (("압력 = 2", eq), ("압력 != 2", len(df) - eq),
+                       ("압력 != 2; 온도 > 180", int(((num != 2) & (df["온도"] > 180)).sum())),
+                       ("압력 = 2.0", eq), ("압력 = 02", eq), ("압력 = 측정불가", 1)):
+        assert int(mp.where_mask(raw, mp.parse_where(cond)).sum()) == want, cond
+    res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력", "-y", "생산량", "--exclude-where", "압력 = 2")
+    assert res["exclusions"]["생산량"]["condition"] == eq, res["exclusions"]
+
+
+def test_where_thousands_and_code_columns():
+    df = pd.DataFrame({"a": ["1,000", "1000", "측정불가", "", "2,000.5"], "c": ["007", "7", "12", "007", None]})
+    assert list(mp.where_mask(df, mp.parse_where("a = 1000"))) == [True, True, False, False, False]
+    assert list(mp.where_mask(df, mp.parse_where("a = 1,000"))) == [True, True, False, False, False]
+    assert list(mp.where_mask(df, mp.parse_where("a != 1000"))) == [False, False, True, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("c = 7"))) == [False, True, False, False, False]     # 코드 열: 글자
+    assert list(mp.where_mask(df, mp.parse_where("c = 007"))) == [True, False, False, True, False]
+    assert list(mp.where_mask(df, mp.parse_where("c != 7"))) == [True, False, True, True, False]
+    mix = pd.DataFrame({"c": ["01", "001", "02", "002"]})      # 5차 검토: '001'이 '01'까지 빼지 않게
+    assert list(mp.where_mask(mix, mp.parse_where("c = 001"))) == [False, True, False, False]
+    assert list(mp.where_mask(mix, mp.parse_where("c = 01"))) == [True, False, False, False]
+
+
+@pytest.mark.parametrize("cells,code", [
+    (["05", "10", "15", "20", "05"], False),          # 3차 검토: 두 자리 숫자 열 ('05' 하나)
+    (["5", "10", "15", "20"], False),
+    (["01", "02", "03", "10", "11"], False),          # 4차 검토: 앞자리 0 칸이 많아도 숫자 열 (월 01~12)
+    (["007", "7", "12", "13", "14", "15"], True),     # (a) 같은 숫자의 0 없는 표기
+    (["01", "001", "02", "002"], True),               # 5차 검토: (a) 같은 숫자를 0 개수만 다르게 적음
+    (["01", "011", "012", "02", "021"], False),       # 같은 수의 다른 표기 없음 (자릿수만 섞임)
+    (["001", "050", "120", "100"], True),             # (b) 3자리 이상 고정폭 코드
+    (["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], False),
+    (["05", "10", "측정불가", "", None, "20"], False),  # 빈 값 표시는 세지 않음
+])
+def test_code_column_judgment(cells, code):
+    assert mp.is_code_column(pd.Series(cells, dtype=object)) is code
+
+
+def test_where_on_code_column_warns_other_notation(tmp_path):
+    """3차 검토(2.9.63): 코드 열에서 '월 = 1'이 '01' 행을 말없이 빼지 않았다(학습은 둘 다 숫자 1). warnings와 그 표기를 포함한
+    조건의 [추천] 전체 명령(next_commands[0])을 준다."""
+    r = np.random.default_rng(5)
+    months = ["01", "02", "03", "1", "2", "3", "10", "11", "12"] * 6
+    x = r.uniform(0, 10, len(months)).round(3)
+    df = pd.DataFrame({"월": months, "온도": x, "수율": (3 * x + r.normal(0, 0.1, len(months))).round(3)})
+    f = write_df(tmp_path / "mo.csv", df)
+    raw = mp.load_data_file(f)
+    g = mp.parse_where("월 = 1")
+    assert mp.is_code_column(raw["월"]) and int(mp.where_mask(raw, g).sum()) == 6
+    variants = mp.where_notation_variants(raw, g)
+    assert variants == [(("월", "=", "1"), {"01": 6})]
+    assert mp.where_text(mp.where_with_variants(g, variants)) == "월 = 1 | 월 = 01"
+    neg = mp.parse_where("월 != 1; 온도 > 3")
+    assert mp.where_text(mp.where_with_variants(neg, mp.where_notation_variants(raw, neg))) == "월 != 1; 온도 > 3; 월 != 01"
+    res = run_tool("ml_train.py", "-f", f, "-x", "월,온도", "-y", "수율", "--exclude-where", "월 = 1")
+    assert res["exclusions"]["수율"]["condition"] == 6
+    w = [x for x in res.get("warnings", []) if "'01' 6행" in x]
+    assert w and "빼지 않음" in w[0] and "[추천] python " in w[0], res.get("warnings")
+    cmd = res["next_commands"][0]["command"]
+    assert "--exclude-where \"월 = 1 | 월 = 01\"" in cmd and cmd.count("--exclude-where") == 1, cmd
+    proc = subprocess.run([sys.executable] + shlex.split(cmd)[1:], capture_output=True, text=True, encoding="utf-8")
+    again = json.loads(proc.stdout)
+    assert again["exclusions"]["수율"]["condition"] == 12 and not any("'01'" in x for x in again.get("warnings", []))
+
+
+def test_where_on_zero_padded_month_column_compares_numbers(tmp_path):
+    """4차 검토: 월 '01'~'12' 열을 앞자리 0 칸이 절반 이상이라 코드 열로 보아 '월 = 1'이 0행이었다 (학습은 숫자로 읽음).
+    학습에서 숫자로 읽는 열은 = / != 도 숫자 비교."""
+    months = [f"{i:02d}" for i in range(1, 13)] * 2
+    df = pd.DataFrame({"월": months, "y": np.arange(24.0)})
+    raw = mp.load_data_file(write_df(tmp_path / "mon.csv", df))
+    assert not mp.is_code_column(raw["월"])
+    for cond, want in (("월 = 1", 2), ("월 = 01", 2), ("월 != 1", 22), ("월 > 6", 12)):
+        g = mp.parse_where(cond)
+        assert int(mp.where_mask(raw, g).sum()) == want, cond
+        assert mp.where_notation_variants(raw, g) == []
+
+
+def test_where_on_two_digit_number_column_compares_numbers(tmp_path):
+    """'05, 10, 15, 20' 열은 숫자 열: '온도 = 5'가 '05' 행에 맞는다 (경고 없음)."""
+    df = pd.DataFrame({"온도": ["05", "10", "15", "20"] * 5, "y": np.arange(20.0)})
+    f = write_df(tmp_path / "n.csv", df)
+    raw = mp.load_data_file(f)
+    g = mp.parse_where("온도 = 5")
+    assert not mp.is_code_column(raw["온도"]) and int(mp.where_mask(raw, g).sum()) == 5
+    assert mp.where_notation_variants(raw, g) == []
 
 
 def test_no_exclude_column_still_finds_outliers_and_clean_data_has_no_key(tmp_path):
@@ -638,7 +885,7 @@ def test_source_column_is_recorded(capped):
     _, vdir = capped
     meta = json.load(open(os.path.join(vdir, "model_효율.json"), encoding="utf-8"))
     assert meta["input_columns_required"] == ["압력", "온도(°C)"] and "온도(°C)" in meta["feature_stats"]
-    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="cp949")
+    snap = pd.read_csv(os.path.join(vdir, "model_dataset.csv"), encoding="utf-8-sig")
     assert "온도(°C)" in snap.columns and "온도상한" in snap.columns
 
 
@@ -648,7 +895,8 @@ def test_prediction_uses_source_and_caps(capped):
     cap = run_tool("ml_predict.py", "-m", vdir, "-i", "온도=250,압력=2")["predictions_summary"]["효율"]["predictions"][0]
     assert hi == pytest.approx(cap, abs=1e-6)                                   # above 250 is treated as 250
     miss = run_fail("ml_predict.py", "-m", vdir, "-i", "압력=2")
-    assert "'온도(°C)'" in miss["message"] and "원본 입력" in miss["message"]
+    assert "'온도(°C)'" in miss["message"] and miss["missing_inputs"] == ["온도(°C)"]    # the source input, not '온도상한'
+    assert miss["error_type"] == "needs_user_decision"                                # 2.9.54: '원본 입력' only
 
 
 def test_find_and_export_work_on_the_source(capped, tmp_path):
@@ -702,16 +950,16 @@ def test_next_commands_flag_placeholders_and_put_runnable_first(sample_model, tm
     assert not any("성능예측표" in c["purpose"] for c in payload["next_commands"])   # 분류는 성능예측표 없음
 
 
-def test_predict_next_commands_carry_layout(tmp_path):
+def test_predict_next_commands_have_no_layout(tmp_path):
     args = argparse.Namespace(header_row=3, unit_row=4, data_row=None, dtypes=None)
     cmds = mt.build_next_commands(
         args=args, raw_file=str(tmp_path / "d.xlsx"), task=mt.TASK_REGRESSION, positive_class=None,
         feature_names=["a"], created_features=[], applied_evals=[], target_names=["y"], champion={}, schema={"numeric": ["a"]},
-        mean_score=0.99, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"), data_root=str(tmp_path))
+        mean_score=0.99, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"))
     pred = [c for c in cmds if "ml_predict.py" in c["command"]][0]
-    assert pred["command"].endswith("--header-row 3 --unit-row 4")
+    assert pred["command"].endswith('-f "<새데이터.xlsx>"')                     # 2.9.53: --header-row 3 --unit-row 4
     best = mt.build_best_next_commands(str(tmp_path / "d.xlsx"), str(tmp_path / "v2"), args)
-    assert best[1]["command"].endswith("--header-row 3 --unit-row 4")
+    assert best[1]["command"].endswith('-f "<새데이터.xlsx>"') and "--unit-row" not in best[1]["command"]
 
 
 def test_quoted_names_go_through_files(tmp_path):
@@ -720,7 +968,7 @@ def test_quoted_names_go_through_files(tmp_path):
         args=args, raw_file=str(tmp_path / "d.csv"), task=mt.TASK_REGRESSION, positive_class=None,
         feature_names=['온도"A', "b", "c"], created_features=[], applied_evals=[], target_names=['수율"%'],
         champion={"weak_features": ["c"], "top_features": []}, schema={"numeric": ['온도"A', "b", "c"]},
-        mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path), data_root=str(tmp_path))
+        mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path))
     cmd = cmds[0]["command"]
     assert "'" not in cmd and "next_features_pruned.txt" in cmd and "next_targets.txt" in cmd
     assert (tmp_path / "next_features_pruned.txt").read_text(encoding="utf-8").split() == ['온도"A', "b"]
@@ -747,8 +995,6 @@ def test_history_best_version_covers_every_target(tmp_path):
     hist = run_tool("ml_train.py", "-f", data, "--history")
     assert hist["best_version"] == "v1" and hist["best_version_dir"] == v1["version_dir"]   # 2.9.14: v2
     assert hist["best_by_task"]["regression"]["complete"] is True and "best_version_note" not in hist
-    rep = run_tool("ml_report.py", "-d", os.path.dirname(v1["version_dir"]), "-o", str(tmp_path / "r.docx"))
-    assert rep["version"] == "v1"                                                  # 2.9.14: v2
 
 
 def _fake_version(root, ver, targets):
@@ -1063,3 +1309,744 @@ def test_importance_failure_is_noted():
                                               notes=notes)
     assert len(ranks) == 2 and notes and "실패" in notes[0]
     assert abs(sum(r["share"] for r in ranks) - 1.0) < 1e-6
+
+
+# ---- --dtypes 이름과 형식 확인 (저장소 지침 반영, 2.9.47) --------------------------------------------------------
+
+
+def test_resolve_dtypes_names_and_types():
+    cols = ["일시", "설비코드(번호)", "온도(°C)", "수율"]
+    assert mt.resolve_dtypes("설비코드:str, 온도:float", cols) == "설비코드(번호):str,온도(°C):float"
+    assert mt.resolve_dtypes("일시:date,수율:int64", cols) == "일시:datetime,수율:int"
+    assert mt.resolve_dtypes(None, cols) is None and mt.resolve_dtypes(" ", cols) is None
+    with pytest.raises(mp.InputError) as e:
+        mt.resolve_dtypes("설비코드:strr,일시:datetime", cols)
+    assert '[추천] --dtypes "설비코드:str,일시:datetime"' in str(e.value)
+    with pytest.raises(mp.InputError) as e:
+        mt.resolve_dtypes("설비코드:텍스트", cols)
+    assert "[추천]" not in str(e.value) and "float, int, str, datetime" in str(e.value)
+    with pytest.raises(mp.InputError) as e:
+        mt.resolve_dtypes("설비코드", cols)
+    assert "형식이 없습니다" in str(e.value)
+    with pytest.raises(mp.ColumnNameError) as e:
+        mt.resolve_dtypes("설비코두:str", cols)                    # a close spelling is asked, never auto-picked
+    assert "[후보]" in str(e.value) and "설비코드(번호)" in str(e.value)
+
+
+def test_train_dtypes_unitless_name_applies(tmp_path):
+    rows = [["설비코드(번호)", "온도", "수율"]] + [[1000 + i % 4, 150 + i, 0.3 * (150 + i) + (i % 4)] for i in range(40)]
+    data = write_rows(str(tmp_path / "d.csv"), rows, [])
+    res = run_tool("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:str")
+    assert "설비코드(번호)" in res["feature_types"]["categorical"], res["feature_types"]    # 2.9.46: ignored (numeric)
+    err = run_fail("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:strr")
+    assert err["agent_directive"].startswith("STOP_RETRY") and '[추천] --dtypes "설비코드:str"' in err["message"], err
+
+
+# ---- JSON 목록 상한 + truncated (R2, 2.9.49) ---------------------------------------------------------------------
+
+
+def test_history_records_capped(tmp_path):
+    root = tmp_path / "h_ml_data"
+    root.mkdir()
+    recs = [{"version": f"v{i}", "task": "regression", "mean_val_score": 0.5 + i / 100, "targets": ["y"]}
+            for i in range(1, 36)]
+    (root / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    res = mt.print_history_summary(str(root))                                     # 2.9.48: all 35 records
+    assert res["record_count"] == 35 and res["count"] == 35 and res["shown"] == mt.HISTORY_SHOWN
+    assert res["truncated"] is True and res["full_result_file"].endswith("history.json")
+    assert [r["version"] for r in res["records"]][-1] == "v35" and res["records"][0]["version"] == "v6"
+    assert res["latest_version"] == "v35"
+    (root / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs[:3]), encoding="utf-8")
+    res = mt.print_history_summary(str(root))
+    assert res["truncated"] is False and res["shown"] == 3 and "full_result_file" not in res
+
+
+def test_feature_types_capped():
+    ft = {"numeric": [f"x{i}" for i in range(40)], "categorical": ["c"], "datetime": {f"d{i}": ["year"] for i in range(35)}}
+    out, cut = mt.capped_feature_types(ft)
+    assert cut and len(out["numeric"]) == mt.FEATURE_TYPES_SHOWN and out["categorical"] == ["c"]
+    assert len(out["datetime"]) == mt.FEATURE_TYPES_SHOWN and isinstance(out["datetime"], dict)
+    assert mt.capped_feature_types({"numeric": ["a"], "categorical": [], "datetime": {}}) == (
+        {"numeric": ["a"], "categorical": [], "datetime": {}}, False)
+
+
+def test_message_column_list_capped():
+    cols = [f"열{i}" for i in range(100)]
+    assert mp.name_list(cols[:3]) == "['열0', '열1', '열2']"
+    text = mp.name_list(cols)
+    assert "열39" in text and "'열40'" not in text and "외 60개 (전체 100개)" in text
+    with pytest.raises(mp.ColumnNameError) as e:                                # 2.9.48: all 100 names
+        mp.resolve_column_names(["없는열zz"], cols, "피처(-x)")
+    assert "외 60개" in str(e.value)
+
+
+# ---- 학습도 나눠서 진행 (R10, 2.9.57): 끝낸 타겟은 .resume_train에 저장, 같은 명령을 다시 실행하면 이어서 ----------------
+
+SPLIT_X = "반응온도(°C),소비전력(kW),압축압력(bar)"
+SPLIT_Y = "생산효율(%),수분함량(%),촉매비율(wt%)"
+
+
+def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, monkeypatch):
+    ref = make_sample(str(tmp_path / "ref.csv"))
+    want = run_tool("ml_train.py", "-f", ref, "-x", SPLIT_X, "-y", SPLIT_Y)         # no limit: one run
+    data = make_sample(str(tmp_path / "s.csv"))
+    root = tmp_path / "s_ml_data"
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 0.5 s after the reserve: one new target per run
+    runs = []
+    for _ in range(80):
+        proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", SPLIT_Y, "--desc", "나눠 학습")
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+        # nothing is written twice: no version folder, no ledger record until the run that ends
+        assert not (root / "history.jsonl").exists() and not (root / "v1").exists()
+        assert "[WARN] 비정상 중단" not in proc.stderr
+    progress = [r.get("progress") or "" for r in runs]
+    assert len(runs) >= 3 and all(r.get("continue") for r in runs[:-1]), progress
+    first, last = runs[0], runs[-1]
+    assert first["agent_directive"].startswith("CONTINUE:") and first["verified"] is False
+    # every target is split by candidate model (2.9.60) and the run stops before the next one
+    assert "후보 모델" in first["progress"] and "5개 끝남" in first["progress"], progress
+    assert any("'수분함량(%)'" in t for t in progress) and any("'촉매비율(wt%)'" in t for t in progress), progress
+    cmd = first["next_commands"][0]
+    assert cmd.startswith("python ") and "ml_train.py" in cmd and "--desc" in cmd
+    assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
+    assert last["resumed_targets"] == ["생산효율(%)", "수분함량(%)"]
+    assert last["mean_val_score"] == pytest.approx(want["mean_val_score"], abs=1e-9)   # the same models as one run
+    _assert_same_version(want["version_dir"], last["version_dir"])       # 2.9.66: OOF and predictions too
+    hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
+    assert [h["version"] for h in hist] == ["v1"]
+    assert not (root / ".resume_train").exists()                                       # cleaned after the commit
+    assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
+
+
+def _assert_same_version(a, b):
+    """Two version folders trained from the same data and command (one run / split runs, 2.9.66): the same
+    leaderboard, OOF files (byte for byte) and final model predictions."""
+    import joblib
+    lb = [json.load(open(os.path.join(d, "leaderboard.json"), encoding="utf-8")) for d in (a, b)]
+    for x in lb:
+        x.pop("timestamp", None)
+    assert lb[0] == lb[1]
+    names = sorted(n for n in os.listdir(a) if n.startswith(("oof_", "model_")) and n.endswith((".csv", ".joblib")))
+    assert names and names == sorted(n for n in os.listdir(b) if n.startswith(("oof_", "model_"))
+                                     and n.endswith((".csv", ".joblib")))
+    frame = pd.read_csv(os.path.join(a, "model_dataset.csv"), encoding="utf-8-sig")
+    for n in names:
+        if n.endswith(".csv"):
+            assert open(os.path.join(a, n), "rb").read() == open(os.path.join(b, n), "rb").read(), n
+            continue
+        pa, pb = joblib.load(os.path.join(a, n)), joblib.load(os.path.join(b, n))
+        X = frame[list(pa.feature_names_in_)]
+        assert np.array_equal(pa.predict(X), pb.predict(X)), n
+
+
+def _split_runs(monkeypatch, *argv, limit=40, seconds="30.5"):
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", seconds)        # 0.5 s after the reserve: one new step per run
+    runs = []
+    for _ in range(limit):
+        proc, out = run_raw("ml_train.py", *argv)
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    assert all(r.get("continue") for r in runs[:-1]) and not runs[-1].get("continue"), [r.get("progress") for r in runs]
+    return runs
+
+
+def test_single_target_is_split_by_candidate_model(tmp_path, monkeypatch):
+    """2.9.59: 타겟이 1개면 나눌 곳이 없어 오래 걸리면 JSON 없이 끊겼다. 이제 후보 모델마다 저장하고 멈춘다."""
+    ref = make_sample(str(tmp_path / "ref.csv"))
+    want = run_tool("ml_train.py", "-f", ref, "-x", SPLIT_X, "-y", "생산효율(%)")
+    data = make_sample(str(tmp_path / "one.csv"))
+    root = tmp_path / "one_ml_data"
+    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", "생산효율(%)", limit=40)
+    assert len(runs) >= 3, [r.get("progress") for r in runs]
+    assert "후보 모델" in runs[0]["progress"] and "5개 끝남" in runs[0]["progress"], runs[0]["progress"]
+    # the final fit is estimated by the champion's own time (2.9.65): it may go on in the run of the last candidate
+    assert all("후보 모델" in r["progress"] or "1위 모델" in r["progress"] or "순열 중요도" in r["progress"]
+               for r in runs[:-1]), [r.get("progress") for r in runs]
+    last = runs[-1]
+    assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
+    assert last["mean_val_score"] == pytest.approx(want["mean_val_score"], abs=1e-9)   # the same models as one run
+    assert not (root / ".resume_train").exists()
+
+
+def test_best_continue_skips_finished_task_and_checks_time(tmp_path, monkeypatch):
+    """2.9.59: --best를 CONTINUE로 나누면 이미 만든 회귀 최고 버전을 다시 만들어 원장에 중복되었고,
+    두 번째 작업 유형의 첫 타겟은 시간 확인 없이 학습했다. 2.9.66: 나눠 만든 최고 버전은 한 번에 만든 것과 같다."""
+    ref_best = None
+    for stem in ("ref", "b"):
+        data = make_class_sample(str(tmp_path / f"{stem}.csv"))
+        run_tool("ml_train.py", "-f", data, "-x", "촉매비율(wt%)", "-y", "수분함량(%),반응온도(°C)")
+        run_tool("ml_train.py", "-f", data, "-x", "반응온도(°C),촉매비율(wt%),수분함량(%)", "-y", "품질등급,불량여부",
+                 "--task", "classification")
+        if stem == "ref":
+            ref_best = run_tool("ml_train.py", "-f", data, "--best")          # no limit: one run
+    root = tmp_path / "b_ml_data"
+    runs = _split_runs(monkeypatch, "-f", data, "--best", limit=120)
+    progress = [r.get("progress") or "" for r in runs]
+    # the first classification target waits for the clock too (it was trained without a check)
+    assert any("'품질등급' 후보 모델" in t or "'불량여부' 후보 모델" in t for t in progress), progress
+    hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
+    assert [h["version"] for h in hist] == ["v1", "v2", "v3", "v4"], [h["version"] for h in hist]
+    assert [mt._record_task(h) for h in hist if h.get("best")] == ["regression", "classification"]
+    last = runs[-1]
+    assert last["agent_directive"].startswith("VERIFIED") and last["made_best"] is True
+    assert [b["version"] for b in last["best_versions"]] == ["v3", "v4"], last["best_versions"]
+    for v in ("v3", "v4"):
+        _assert_same_version(str(tmp_path / "ref_ml_data" / v), str(root / v))
+    assert ref_best["made_best"] is True
+    assert not (root / ".resume_train").exists()
+
+
+def _block(path):
+    """A file where the folder should be: makedirs and every write into it fail (same on Windows and Linux)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not a folder", encoding="utf-8")
+
+
+def _fallbacks(primary):
+    return mp.resume_places(str(primary))[1:]
+
+
+@pytest.mark.parametrize("targets", ["생산효율(%)", "생산효율(%),수분함량(%)"])
+def test_blocked_resume_folder_continues_in_fallback(tmp_path, monkeypatch, targets):
+    """3차 검토(2.9.63): 2.9.62는 중간 저장이 실패하면 나누지 않고 끝까지 진행해 큰 데이터에서 120초를 넘겨 JSON 없이 끊겼다.
+    이제 대체 위치(데이터 폴더 resume\\<해시>)에 저장하고(recovered) CONTINUE로 나눠 끝까지, 끝나면 대체 위치도 지운다."""
+    data = make_sample(str(tmp_path / "f.csv"))
+    root = tmp_path / "f_ml_data"
+    _block(root / ".resume_train")
+    fb = _fallbacks(root / ".resume_train")[0]
+    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", targets)
+    assert len(runs) >= 2, [r.get("progress") for r in runs]
+    first, last = runs[0], runs[-1]
+    assert first["agent_directive"].startswith("CONTINUE:"), first
+    assert any("대체 위치 데이터 폴더" in r for r in first["recovered"]), first.get("recovered")
+    assert os.path.basename(fb) in first["recovered"][0]
+    assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED"), last
+    assert not os.path.exists(fb)                                  # cleaned after the commit
+    assert (root / ".resume_train").is_file()                      # the user's file is not touched
+
+
+def test_resume_saved_nowhere_stops_with_stop_retry(tmp_path, monkeypatch):
+    """원래 위치·데이터 폴더·임시 폴더가 모두 막히면 제한을 넘겨 계속하지 않고, 멈출 지점에서 STOP_RETRY 1줄 JSON."""
+    data = make_sample(str(tmp_path / "n.csv"))
+    root = tmp_path / "n_ml_data"
+    _block(root / ".resume_train")
+    temp = tmp_path / "temp"
+    monkeypatch.setenv("TEMP", str(temp))
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    _block(tmp_path / "data" / mp.RESUME_FALLBACK_DIR)
+    _block(temp / mp.TEMP_RESUME_DIR)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    t0 = time.monotonic()
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
+    assert proc.returncode == 1 and out["status"] == "error", out
+    assert out["agent_directive"].startswith("STOP_RETRY") and "저장하지 못해" in out["message"], out
+    assert "쓰기 권한" in out["message"] and "[WARN] 중간 저장 실패" in proc.stderr
+    # 4차 검토: the directive points at the save problem, not the training hint (column names, --eval)
+    assert "--eval" not in out["agent_directive"] and "쓰기 권한" in out["agent_directive"], out["agent_directive"]
+    assert time.monotonic() - t0 < 60
+    assert not (root / "history.jsonl").exists()
+
+
+def test_resume_save_checks_the_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(mp, "_RECOVERED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    assert mt._resume_save(str(tmp_path / "r" / "a.joblib"), (1, 2, 3, 4)) is True and not mp.SAVE_FAILED
+    assert mt._resume_load(str(tmp_path / "r" / "a.joblib")) == (1, 2, 3, 4) and not mp._RECOVERED
+    _block(tmp_path / "x")                                            # original blocked -> data folder
+    assert mt._resume_save(str(tmp_path / "x" / "a.joblib"), (1, 2, 3, 4)) is True and mp._RECOVERED
+    data_fb, temp_fb = _fallbacks(tmp_path / "x")
+    assert os.path.isfile(os.path.join(data_fb, "a.joblib"))
+    assert mt._resume_load(str(tmp_path / "x" / "a.joblib")) == (1, 2, 3, 4)   # found in the fallback
+    assert len(os.path.basename(data_fb)) == 12
+    _block(tmp_path / "y")                                            # original and data folder blocked -> %TEMP%
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    _block(tmp_path / "data2" / mp.RESUME_FALLBACK_DIR)
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data2"))
+    assert mt._resume_save(str(tmp_path / "y" / "a.joblib"), (1, 2, 3, 4)) is True
+    assert os.path.isfile(os.path.join(_fallbacks(tmp_path / "y")[1], "a.joblib"))
+    _block(tmp_path / "temp2" / mp.TEMP_RESUME_DIR)                   # every place blocked
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp2"))
+    assert mt._resume_save(str(tmp_path / "z" / "q" / "a.joblib"), (1,)) is True    # a plain new folder works
+    _block(tmp_path / "w")
+    assert mt._resume_save(str(tmp_path / "w" / "a.joblib"), (1, 2, 3, 4)) is False
+    assert mp.SAVE_FAILED and mp.save_failed_warning().startswith("중간 저장 실패")
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.001")
+    with pytest.raises(mp.InputError) as e:                           # stops where it would stop, as STOP_RETRY
+        mp.check_time(1000.0, "멈춤")
+    assert "저장하지 못해" in str(e.value)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    mp.check_time(1000.0, "제한 없음")                                 # no limit: goes on to the end
+
+
+def test_resume_find_newest_and_old_fallbacks_swept(tmp_path, monkeypatch):
+    """4차 검토: (a) 같은 이름이 여러 위치에 있으면 가장 최근 것을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지운다
+    (best_run.json 같은 고정 이름). (b) 실행 시작 때 대체 폴더 전체에서 보관 기한(3일)이 지난 항목을 지운다."""
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(mp, "_RECOVERED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    primary = str(tmp_path / "rt")
+    places = mp.resume_places(primary)
+    for i, d in enumerate(places[:2]):
+        os.makedirs(d)
+        with open(os.path.join(d, "best_run.json"), "w", encoding="utf-8") as f:
+            f.write(str(i))
+    old = time.time() - 100
+    os.utime(os.path.join(places[0], "best_run.json"), (old, old))
+    assert mp.resume_find(primary, "best_run.json") == os.path.join(places[1], "best_run.json")
+    os.utime(os.path.join(places[1], "best_run.json"), (old - 100, old - 100))
+    assert mp.resume_find(primary, "best_run.json") == os.path.join(places[0], "best_run.json")
+    mp._RESUME_PLACE[os.path.normcase(places[0])] = 1         # the original folder failed earlier in this command
+    path = mp.resume_save(primary, "best_run.json", lambda tmp: open(tmp, "w", encoding="utf-8").write("new"), "기록")
+    assert path == os.path.join(places[1], "best_run.json")
+    assert not os.path.exists(os.path.join(places[0], "best_run.json"))     # the older copy is not read again
+    assert mp.resume_find(primary, "best_run.json") == path
+    # (b) sweep: an old saved step of another data file in both fallback roots goes, a recent one stays
+    stale = [os.path.join(tmp_path / "data", mp.RESUME_FALLBACK_DIR, "aaaaaaaaaaaa", "0123456789abcdef.m0.joblib"),
+             os.path.join(tmp_path / "temp", mp.TEMP_RESUME_DIR, "bbbbbbbbbbbb", "0123456789abcdef.joblib")]
+    for f in stale:
+        os.makedirs(os.path.dirname(f))
+        open(f, "wb").write(b"1")
+        t = time.time() - mp.RESUME_MAX_AGE - 60
+        os.utime(f, (t, t))
+    mp.resume_sweep_old()
+    assert not any(os.path.exists(os.path.dirname(f)) for f in stale)
+    assert not os.path.exists(tmp_path / "temp" / mp.TEMP_RESUME_DIR)      # left empty -> removed
+    assert os.path.isfile(path)                                              # recent: kept
+
+
+def test_resume_sweep_never_touches_user_files(tmp_path, monkeypatch):
+    """5차 검토: ML_KIT_DATA_DIR를 사용자 폴더로 두면 resume_sweep_old가 그 아래 resume 폴더의 모든 파일·폴더를 3일 지나면 지웠다
+    (docs/resume/2025/cv.docx). 이제 대체 폴더 이름은 ml-kit-resume, 지우는 것은 12자리 16진수 하위 폴더 안의 도구 파일 이름뿐."""
+    docs = tmp_path / "docs"
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(docs))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    old = time.time() - mp.RESUME_MAX_AGE - 3600
+    user = [docs / "resume" / "2025" / "cv.docx", docs / "resume" / "0123456789ab" / "0123456789abcdef.joblib",
+            docs / mp.RESUME_FALLBACK_DIR / "2025" / "cv.docx", docs / mp.RESUME_FALLBACK_DIR / "notes.txt",
+            docs / mp.RESUME_FALLBACK_DIR / "0123456789ab" / "cv.docx",
+            tmp_path / "temp" / mp.TEMP_RESUME_DIR / "0123456789ab" / "model.joblib"]
+    tool = [docs / mp.RESUME_FALLBACK_DIR / "0123456789ab" / n
+            for n in ("0123456789abcdef.joblib", "0123456789abcdef.m3.joblib", "0123456789abcdef.fit.joblib",
+                      "0123456789abcdef.imp.joblib.tmp", "best_run.json")]
+    for f in user + tool:
+        os.makedirs(f.parent, exist_ok=True)
+        f.write_bytes(b"1")
+        os.utime(f, (old, old))
+    mp.resume_sweep_old()
+    assert all(f.is_file() for f in user), [str(f) for f in user if not f.is_file()]
+    assert not any(f.exists() for f in tool)
+    primary = str(tmp_path / "rt")                            # resume_clear in a fallback place: only the tool's names
+    fb = mp.resume_places(primary)[1]
+    os.makedirs(fb)
+    for n in ("cv.docx", "0123456789abcdef.joblib"):
+        open(os.path.join(fb, n), "wb").write(b"1")
+    mp.resume_clear(primary, lambda name, p: True, fallback_only=True)
+    assert os.listdir(fb) == ["cv.docx"]
+
+
+def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
+    """후보를 모두 재사용한 타겟의 1위 전체 적합·순열 중요도 앞에도 시간 확인 (이 실행에서 다른 단계를 했을 때만)."""
+    r = np.random.default_rng(3)
+    X = pd.DataFrame({"a": r.uniform(0, 1, 60), "b": r.uniform(0, 1, 60)})
+    y = pd.Series(3 * X.a + X.b + r.normal(0, 0.05, 60))
+    schema = {"numeric": ["a", "b"], "categorical": {}, "datetime": {}, "input_columns": ["a", "b"]}
+    resume = str(tmp_path / "rt" / "k")
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)   # saves 5 candidates
+    assert sorted(os.listdir(tmp_path / "rt")) == [f"k.m{i}.joblib" for i in range(5)]   # fit saved only at a stop
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    with pytest.raises(mp.Unfinished) as e:                   # first step (the fit) goes on, then stops (4차 검토)
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "순열 중요도 0/2열" in e.value.progress, e.value.progress
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [5.0])        # another target was trained in this command
+    with pytest.raises(mp.Unfinished) as e:                   # the saved fit is reused: no stop before it
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "순열 중요도 0/2열" in e.value.progress, e.value.progress
+    os.remove(mp.resume_find(str(tmp_path / "rt"), "k.fit.joblib"))
+    with pytest.raises(mp.Unfinished) as e:
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "1위 모델 전체 적합 전에 멈춤" in e.value.progress and "5/5개" in e.value.progress
+
+
+def _wide_frame(n=60, p=24, seed=11):
+    r = np.random.default_rng(seed)
+    X = pd.DataFrame({f"x{i}": r.uniform(0, 1, n) for i in range(p)})
+    y = pd.Series(5 * X.x0 + 3 * X.x1 - 2 * X.x2 + X.x3 + r.normal(0, 0.05, n))
+    cols = list(X.columns)
+    return X, y, {"numeric": cols, "categorical": {}, "datetime": {}, "input_columns": cols}
+
+
+@pytest.mark.parametrize("task", ["regression", "classification"])
+def test_wide_target_last_step_is_split_and_matches_one_run(tmp_path, monkeypatch, task):
+    """4차 검토: 열이 많으면 마지막 단계(1위 모델 전체 적합 + 순열 중요도)가 120초를 넘어 JSON 없이 끊겼고, 다시 실행해도
+    같은 단계를 반복했다. 이제 전체 적합을 저장하고 순열 중요도를 열 묶음으로 나눠 저장하며 CONTINUE: 실행마다 최소 한 단계
+    (중요도는 1열 이상)를 하므로 유한 횟수에 끝나고, 결과(리더보드·모델·중요도)는 한 번에 학습한 것과 같다."""
+    X, y, schema = _wide_frame()
+    if task == "classification":
+        y = pd.Series(np.where(y > y.median(), "A", "B"))
+        fn = mt.train_and_benchmark_classifiers
+    else:
+        fn = mt.train_and_benchmark_models
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    want = fn(X=X, y_series=y, target_name="y", schema=schema)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")          # every check after a step stops (in-process clock)
+    resume = str(tmp_path / "rt" / "k")
+    progress = []
+    for _ in range(60):
+        monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])      # a new run of the same command
+        monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
+        monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
+        try:
+            got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+            break
+        except mp.Unfinished as e:
+            progress.append(e.progress)
+    else:
+        pytest.fail(f"끝나지 않음: {progress[-3:]}")
+    imp_stops = [t for t in progress if "순열 중요도" in t]
+    assert len(progress) <= 5 * 5 + 1 + 24, progress                    # at least one fold or column per run
+    assert imp_stops and "0/24열" in imp_stops[0], progress
+    assert len({t for t in imp_stops}) == len(imp_stops), imp_stops                 # every run moves on
+    assert got[0]["leaderboard"] == want[0]["leaderboard"]
+    assert got[2]["feature_importances"] == want[2]["feature_importances"]          # even the importances
+    assert np.array_equal(got[1].predict(X), want[1].predict(X))
+
+
+def test_wide_data_command_split_runs_end_like_one_run(tmp_path, monkeypatch):
+    """4차 검토 재현(명령 단위): 열이 많은 데이터를 작은 ML_KIT_TIME_LIMIT로 학습하면 실행마다 제한 안에 1줄 JSON(CONTINUE)을 내고
+    유한 횟수에 끝나며, 리더보드·중요도는 한 번에 학습한 것과 같다."""
+    X, y, _ = _wide_frame(n=60, p=8)
+    df = X.round(5).assign(y=y.round(5))
+    cols = ",".join(X.columns)
+    ref = write_df(tmp_path / "ref.csv", df)
+    want = run_tool("ml_train.py", "-f", ref, "-x", cols, "-y", "y")
+    data = write_df(tmp_path / "w.csv", df)
+    t0 = time.monotonic()
+    runs = _split_runs(monkeypatch, "-f", data, "-x", cols, "-y", "y", limit=5 * 5 + 1 + 8 + 1,
+                       seconds="30.01")                     # 0.01 s after the reserve: every step stops
+    progress = [r.get("progress") or "" for r in runs]
+    assert any("순열 중요도" in t for t in progress), progress
+    assert time.monotonic() - t0 < 60 * len(runs)
+    last = runs[-1]
+    assert last["agent_directive"].startswith("VERIFIED") and last["top_features"] == want["top_features"], last
+    board = [json.load(open(os.path.join(r["version_dir"], "leaderboard.json"), encoding="utf-8")) for r in (want, last)]
+    for b in board:
+        b.pop("timestamp", None)
+    assert board[0] == board[1]
+    assert not (tmp_path / "w_ml_data" / ".resume_train").exists()
+
+
+# ---- 후보 모델 안에서도 교차검증 fold 단위로 나눠 진행 (R10, 2.9.66) -------------------------------------------------
+# 후보 하나의 교차검증(fold 5개)이 120초를 넘으면 그 후보는 매번 처음부터 다시 해 끝나지 않았다(무응답 반복).
+# 이제 fold마다 <키>.m<번호>.f<fold>.joblib에 저장하고, 다음 fold 앞에서 시계를 본다.
+
+FOLD_CASES = [("regression", False), ("regression", True), ("classification", False), ("classification", True)]
+_FOLD_FILE = re.compile(r"k\.m\d+\.f\d+\.joblib")
+
+
+def _new_run(monkeypatch, fold=(), model=(), fit=()):
+    """A new run of the same command in this process: the steps done in this command start empty."""
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", list(fold))
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", list(model))
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", list(fit))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_command_steps(monkeypatch):
+    """Every test starts like a new command: steps of in-process trainings of other tests do not count."""
+    _new_run(monkeypatch)
+
+
+def _fold_data(task, dup):
+    r = np.random.default_rng(5)
+    n = 70
+    X = pd.DataFrame({"a": r.uniform(0, 1, n).round(2), "b": r.uniform(0, 1, n).round(2)})
+    y = pd.Series(4 * X.a - 2 * X.b + r.normal(0, 0.05, n))
+    if task == "classification":
+        y = pd.Series(np.where(y > y.median(), "A", "B"))
+    if dup:                                     # identical rows (inputs + target): one fold per copy group (2.9.13)
+        X = pd.concat([X, X.iloc[:12]], ignore_index=True)
+        y = pd.concat([y, y.iloc[:12]], ignore_index=True)
+    fn = mt.train_and_benchmark_classifiers if task == "classification" else mt.train_and_benchmark_models
+    return X, y, {"numeric": ["a", "b"], "categorical": {}, "datetime": {}, "input_columns": ["a", "b"]}, fn
+
+
+def _assert_same_as_one_run(got, want, X):
+    assert got[0]["leaderboard"] == want[0]["leaderboard"]
+    assert got[3].equals(want[3])                                            # OOF predictions, to the last bit
+    assert got[2]["feature_importances"] == want[2]["feature_importances"]
+    assert got[2]["top_features"] == want[2]["top_features"]
+    assert np.array_equal(got[1].predict(X), want[1].predict(X))            # the final model
+
+
+@pytest.mark.parametrize("task,dup", FOLD_CASES)
+def test_slow_candidate_is_split_by_fold_and_matches_one_run(tmp_path, monkeypatch, task, dup):
+    """2.9.66: 실행마다 fold 1개만 끝낼 시간이어도 fold를 저장하며 CONTINUE로 나아가 유한 횟수에 끝나고, 결과(리더보드·OOF·
+    최종 모델 예측·중요도)는 한 번에 학습한 것과 같다. 회귀·분류(층화), 중복 행 묶음 fold 모두."""
+    X, y, schema, fn = _fold_data(task, dup)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    want = fn(X=X, y_series=y, target_name="y", schema=schema)
+    assert bool(want[2].get("duplicate_rows")) == dup
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")          # every check after a step stops: one fold per run
+    resume = str(tmp_path / "rt" / "k")
+    progress, fold_files = [], set()
+    for _ in range(60):
+        _new_run(monkeypatch)
+        try:
+            got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+            break
+        except mp.Unfinished as e:
+            progress.append(e.progress)
+            fold_files |= {n for n in os.listdir(tmp_path / "rt") if _FOLD_FILE.fullmatch(n)}
+    else:
+        pytest.fail(f"끝나지 않음: {progress[-3:]}")
+    fold_stops = [t for t in progress if "교차검증 fold" in t]
+    assert fold_stops and "'HistGradientBoosting' 교차검증 fold 1/" in fold_stops[0], progress
+    assert len(set(progress)) == len(progress), progress                    # every run moves on
+    assert len(progress) <= 5 * 5 + 1 + 2, progress                          # folds + final fit + 2 importance columns
+    assert "k.m0.f1.joblib" in fold_files and "k.m4.f1.joblib" in fold_files, fold_files
+    assert not any(_FOLD_FILE.fullmatch(n) for n in os.listdir(tmp_path / "rt"))   # merged into the candidates
+    _assert_same_as_one_run(got, want, X)
+
+
+@pytest.mark.parametrize("task", ["regression", "classification"])
+def test_killed_run_keeps_saved_folds_and_damaged_fold_is_trained_again(tmp_path, monkeypatch, capsys, task):
+    """2.9.66: fold를 저장한 뒤 바깥에서 끊긴 실행(에이전트의 120초 강제 종료)도 끝낸 fold가 남아 다음 실행이 이어서 하고,
+    손상된 fold 파일은 버리고 그 fold만 다시 학습한다 (JIT: 다시 생성). 결과는 한 번에 학습한 것과 같다."""
+    X, y, schema, fn = _fold_data(task, False)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    want = fn(X=X, y_series=y, target_name="y", schema=schema)
+    real, calls = mt.fit_safe_model, []
+
+    def killed_at_8th_fit(est, y_train):                       # candidate 2, fold 3
+        calls.append(1)
+        if len(calls) == 8:
+            raise KeyboardInterrupt("killed")
+        return real(est, y_train)
+
+    monkeypatch.setattr(mt, "fit_safe_model", killed_at_8th_fit)
+    resume = str(tmp_path / "rt" / "k")
+    _new_run(monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert sorted(os.listdir(tmp_path / "rt")) == ["k.m0.joblib", "k.m1.f1.joblib", "k.m1.f2.joblib"]
+    (tmp_path / "rt" / "k.m1.f2.joblib").write_bytes(b"broken")
+    calls.clear()
+    monkeypatch.setattr(mt, "fit_safe_model", lambda est, y_train: calls.append(1) or real(est, y_train))
+    capsys.readouterr()
+    _new_run(monkeypatch)
+    got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    err = capsys.readouterr().err
+    assert "[WARN] 저장된 교차검증 fold 결과 k.m1.f2.joblib를 읽지 못해" in err, err
+    assert "교차검증 fold 1/5개는 이전 실행에서 저장한 결과를 씀" in err, err
+    assert len(calls) == 4 + 3 * 5 + 1                                     # folds 2-5, 3 candidates, the final fit
+    assert sorted(os.listdir(tmp_path / "rt")) == [f"k.m{i}.joblib" for i in range(5)]
+    _assert_same_as_one_run(got, want, X)
+
+
+def test_fold_clock_check_estimates(tmp_path, monkeypatch):
+    """2.9.66: fold 앞 시간 확인은 이 후보의 fold 실측(저장된 것 포함) 최대값 x 1.2, 첫 fold는 이 실행의 다른 후보 fold 시간으로
+    추정하고, 추정할 값이 없으면 진행한다. 이 실행에서 아무 단계도 안 했으면 멈추지 않는다 (R10: 실행마다 최소 1단계)."""
+    import joblib
+    X, y, schema, fn = _fold_data("regression", False)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    resume = str(tmp_path / "rt" / "k")
+    _new_run(monkeypatch, fold=[1000.0])                       # a slow fold of another candidate in this command
+    with pytest.raises(mp.Unfinished) as e:
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "후보 모델 0/5개 끝남, 'HistGradientBoosting' 교차검증 fold 0/5개 끝남" in e.value.progress, e.value.progress
+    assert "(fold 1 전에 멈춤)" in e.value.progress
+    os.makedirs(tmp_path / "rt", exist_ok=True)               # this candidate's own saved fold was slow: it decides
+    joblib.dump({"model": "HistGradientBoosting", "folds": 5, "seconds": 1000.0,
+                 "res": {"train": 0.0, "pred": np.zeros(14), "params": {}}}, tmp_path / "rt" / "k.m0.f1.joblib")
+    _new_run(monkeypatch, fold=[0.01])
+    with pytest.raises(mp.Unfinished) as e:
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤)" in e.value.progress, e.value.progress
+    os.remove(tmp_path / "rt" / "k.m0.f1.joblib")
+    _new_run(monkeypatch, fit=[5.0])                           # a step, but no fold time known: goes on to the end
+    res = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert len(res[0]["leaderboard"]) == 5
+    shutil.rmtree(tmp_path / "rt")
+    real = mt.fit_safe_model                                   # no step in this run: the first fold always goes
+    monkeypatch.setattr(mt, "fit_safe_model", lambda est, y_train: time.sleep(0.2) or real(est, y_train))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.1")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    _new_run(monkeypatch)
+    with pytest.raises(mp.Unfinished) as e:
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "'HistGradientBoosting' 교차검증 fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤)" in e.value.progress, e.value.progress
+
+
+def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
+    """4차 검토 (d): 1위 모델 전체 적합 전 시간 확인은 저장된 후보 실측 시간(재사용 포함)으로 추정한다. 5차 검토: 가장 느린 후보가 아니라
+    1위 모델 자신의 교차검증 시간으로 추정한다(느린 RandomForest가 지면 빠른 전체 적합 앞에서 멈춰 실행 횟수가 늘었음).
+    (b) 순열 중요도는 예측 1회 시간으로 추정해 예산 안이면 한 번에 끝낸다."""
+    import joblib
+    X, y, schema = _wide_frame(p=4)
+    resume = str(tmp_path / "rt" / "k")
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    first = mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    champion = first[0]["champion"]["champion_model"]
+    cands = {joblib.load(tmp_path / "rt" / f"k.m{i}.joblib")[0]: tmp_path / "rt" / f"k.m{i}.joblib" for i in range(5)}
+    slow = cands[champion]
+    other = next(p for n, p in cands.items() if n != champion)
+    saved = joblib.load(slow)
+    assert isinstance(saved[-1], float)                       # the measured time is saved with the candidate
+    o_saved = joblib.load(other)
+    joblib.dump(o_saved[:-1] + (1000.0,), other)              # a slow candidate that lost: not the final fit's time
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [0.01])      # a fast step done in this run
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
+    res = mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert len(res[2]["feature_importances"]) == 4
+    joblib.dump(saved[:-1] + (1000.0,), slow)                 # the champion was slow in an earlier run
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    with pytest.raises(mp.Unfinished) as e:
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "1위 모델 전체 적합 전에 멈춤" in e.value.progress
+    joblib.dump(saved[:-1] + (0.01,), slow)
+    res = mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert len(res[2]["feature_importances"]) == 4             # fit and the whole importance in this run
+
+
+class _SlowScore:
+    """A fitted pipeline whose score takes `delay` seconds (a slow prediction: 600 columns, KNN) and that can be
+    'killed' (KeyboardInterrupt from outside, like the 120 s limit of the agent) at the kill-th call."""
+
+    def __init__(self, pipe, delay=0.0, kill=None):
+        self.pipe, self.delay, self.kill, self.calls = pipe, delay, kill, 0
+
+    def score(self, X, y):
+        self.calls += 1
+        if self.kill and self.calls == self.kill:
+            raise KeyboardInterrupt("killed")
+        time.sleep(self.delay)
+        return self.pipe.score(X, y)
+
+
+def _imp_setup(tmp_path, monkeypatch, p=40):
+    X, y, schema = _wide_frame(p=p)
+    from sklearn.linear_model import Ridge
+    pipe = mt.build_pipeline(Ridge(), schema, "regressor").fit(X, y)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    want = mt._permutation_means(pipe, X, y.values, 42, None, None, "y", "M", lambda: None)
+    return X, y.values, pipe, want, str(tmp_path / "rt" / "k")
+
+
+def test_slow_wide_importance_stops_by_the_clock_from_the_second_column(tmp_path, monkeypatch):
+    """5차 검토 (fh.py, 600열 HistGB/KNN): 다른 단계를 안 한 실행은 처음 열의 1/5을 시계 없이 계산해 120초를 넘겨 JSON 없이
+    끊기기를 반복했다. 이제 시계 없이 하는 열은 1개뿐이고 그 뒤는 실측한 열 시간으로 끊는다: 실행마다 예산 안에서 멈추며
+    앞으로 나아가고, 나눠 계산한 값은 한 번에 계산한 것과 같다."""
+    X, y, pipe, want, resume = _imp_setup(tmp_path, monkeypatch)
+    slow = _SlowScore(pipe, delay=0.05)                       # one column ~0.25 s; 40 columns ~10 s
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", str(mp.TIME_RESERVE + 1.0))    # 1 s of work per run
+    done_before, runs = 0, 0
+    while True:
+        runs += 1
+        assert runs <= 40, "끝나지 않음"
+        monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+        try:
+            got = mt._permutation_means(slow, X, y, 42, None, resume, "y", "M", lambda: None)
+            break
+        except mp.Unfinished as e:
+            assert time.monotonic() - mp.RUN_START < 1.0 + 0.5, e.progress          # within the budget (+ a column)
+            k = int(e.progress.split("순열 중요도 ")[1].split("/")[0])
+            assert k > done_before, e.progress                                          # every run moves on
+            done_before = k
+    assert 5 <= runs <= 25, runs
+    assert np.allclose(got, want)
+
+
+def test_killed_importance_keeps_columns_saved_on_the_way(tmp_path, monkeypatch):
+    """5차 검토: 끝낸 열을 멈출 때만 저장해 명령이 밖에서 강제 종료되면(120초) 진행이 사라졌다. 이제 IMPORTANCE_SAVE_SECONDS마다
+    저장(먼저 before_stop: 1위 모델 전체 적합)하므로 강제 종료돼도 다음 실행은 저장된 열부터 이어 가고 값은 한 번에 한 것과 같다."""
+    import joblib
+    X, y, pipe, want, resume = _imp_setup(tmp_path, monkeypatch, p=12)
+    monkeypatch.setattr(mt, "IMPORTANCE_SAVE_SECONDS", 0.0)   # save after every column
+    stops = []
+    killed = _SlowScore(pipe, kill=1 + 5 * 4 + 2)             # base score, 4 columns, killed in the 5th
+    with pytest.raises(KeyboardInterrupt):
+        mt._permutation_means(killed, X, y, 42, None, resume, "y", "M", lambda: stops.append(1))
+    saved = joblib.load(mp.resume_find(os.path.dirname(resume), "k.imp.joblib"))
+    assert sorted(saved["done"]) == [0, 1, 2, 3] and stops, saved
+    again = _SlowScore(pipe)
+    got = mt._permutation_means(again, X, y, 42, None, resume, "y", "M", lambda: None)
+    assert again.calls == 1 + 5 * 8                           # only the 8 columns left
+    assert np.allclose(got, want)
+
+
+def test_best_run_record_is_removed_after_an_error(tmp_path, monkeypatch):
+    """오류로 끝난 --best 실행 뒤에 나눠 진행 기록(best_run.json)이 남아 나중 실행이 쓰지 않게."""
+    data = make_class_sample(str(tmp_path / "e.csv"))
+    root = tmp_path / "e_ml_data"
+    run_tool("ml_train.py", "-f", data, "-x", "촉매비율(wt%)", "-y", "수분함량(%)")
+    run_tool("ml_train.py", "-f", data, "-x", "반응온도(°C),촉매비율(wt%)", "-y", "불량여부", "--task", "classification")
+    calls, seen = [], []
+
+    def fail_second(args, task, records):
+        calls.append(task)
+        if len(calls) == 2:
+            seen.append((root / ".resume_train" / mt.BEST_RUN_FILE).exists())     # the record of the first task
+            raise mp.InputError("시험용 오류")
+        return {"version": "v1"}
+    monkeypatch.setattr(mt, "build_best_version", fail_second)
+    with pytest.raises(mp.InputError):
+        mt.execute_make_best(argparse.Namespace(file=data, task=None))
+    assert len(calls) == 2 and seen == [True]
+    assert not (root / ".resume_train" / mt.BEST_RUN_FILE).exists()
+
+
+def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):
+    data = make_sample(str(tmp_path / "d.csv"))
+    root = tmp_path / "d_ml_data"
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
+    assert out.get("continue"), out
+    saved = os.listdir(root / ".resume_train")
+    assert saved and all(".m" in n for n in saved), saved          # the first target's candidates (2.9.60)
+    for n in saved:
+        (root / ".resume_train" / n).write_bytes(b"broken")
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
+    assert out["status"] == "ok" and out["version"] == "v1" and "resumed_targets" not in out, out
+    assert "다시 학습" in proc.stderr

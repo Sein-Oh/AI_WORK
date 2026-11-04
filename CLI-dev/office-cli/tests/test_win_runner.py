@@ -136,7 +136,7 @@ def run_cleanup(monkeypatch, capsys, desk, test_dir, only_name="", allowed=None,
     return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
 
-TEST_DIR = os.path.normcase(os.path.join("C:", os.sep, "office_test"))
+TEST_DIR = os.path.normcase(os.path.join("C:", os.sep, "CLI-dev", "work", "office"))
 
 
 def a5_desk(hidden_user_frame=True):

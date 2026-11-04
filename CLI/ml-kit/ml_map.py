@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ml-kit 표 보간 / 반대 찾기 (ml_map.py, 2.6.0)
+ml-kit 표 보간 / 반대 찾기 (ml_map.py)
 
 Reads a data table (.xlsx / .csv) directly (no Excel) and answers two questions with linear interpolation:
   forward : values of the other columns at given key values      -i "반응온도=232.5,소비전력=60"
@@ -25,10 +25,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
-    percent_warning, check_percent_mix, _strip_percent,
+    percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
-    check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, CATEGORY_CANDIDATES_MAX, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -36,8 +37,12 @@ setup_console()
 from datetime import datetime  # noqa: E402
 from typing import Any, Dict, List, Optional, Tuple  # noqa: E402
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
+check_core_libraries("표 보간")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import numpy as np  # noqa: E402
+    import pandas as pd  # noqa: E402
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "표 보간")
 
 MAX_SOLUTIONS_JSON = 20   # more reverse-lookup answers than this go to a result workbook
 SCAN_STEPS = 2000         # reverse lookup sampling steps on scattered data with 2-3 keys
@@ -240,7 +245,7 @@ def _filter(df: pd.DataFrame, categorical: Dict[str, str]) -> pd.DataFrame:
     for col, v in categorical.items():
         vals = df[col].map(lambda s: "" if pd.isna(s) else str(s).strip())
         if not (vals == v).any():
-            known = sorted(set(vals) - {""})[:20]
+            known = sorted(set(vals) - {""})[:CATEGORY_CANDIDATES_MAX]
             raise InputError(f"'{col}' 열에 '{v}' 값이 없습니다. [후보] {', '.join(known)}")
         df = df[vals == v]
     return df
@@ -356,7 +361,7 @@ def execute_forward(args) -> Dict[str, Any]:
             names = [str(c) for c in points_df.columns if not re.fullmatch(r"col_\d+", str(c))]
             hint = header_layout_hint(df.attrs, names) if names else ""
             raise InputError(f"조회 파일 열 {list(points_df.columns)} 중 데이터에 있는 기준 열이 없습니다. "
-                             + (f"데이터 {hint}\n" if hint else "") + f"[사용 가능한 컬럼 목록]: {columns}")
+                             + (f"데이터 {hint}\n" if hint else "") + f"[사용 가능한 컬럼 목록]: {name_list(columns)}")
         # '12%' next to '0.12' in one key column of the points file: no scale is sure (as in the data)
         check_percent_mix(points_df, usable, "조회 파일 ")
         input_pct = percent_warning(points_df, usable, "조회 파일 ")
@@ -380,8 +385,17 @@ def execute_forward(args) -> Dict[str, Any]:
     sub = _filter(df, categorical)
     values = _value_columns(df, args.targets, columns, skip=keys + list(categorical))
     asked = list(values)
+    # '11.9%' next to '0.119' in a data column used: no scale is sure. Without -y every numeric column is a value
+    # column: one nobody asked for is left out with a warning instead of stopping the lookup
+    check_percent_mix(df, keys + (values if args.targets else []))
+    if not args.targets:
+        mixed = [c for c, _, _ in percent_mix(df, values)]
+        if mixed and len(mixed) < len(values):
+            values = [c for c in values if c not in mixed]
+            warnings.append(f"값 열 {mixed}은(는) %를 붙인 숫자 칸과 % 없는 숫자 칸이 섞여 있어(100배 차이가 날 수 있음) "
+                            f"계산하지 않았습니다. 그 열이 필요하면 열을 한 가지 형식으로 고친 뒤 -y로 지정하십시오")
+        check_percent_mix(df, values)       # every value column mixed: nothing left to compute
     show = list(dict.fromkeys(keys + list(categorical) + values))
-    check_percent_mix(df, keys + values)    # '11.9%' next to '0.119' in a data column used: no scale is sure
 
     if len(keys) > MAX_KEYS:
         x = np.array([numeric[k] for k in keys])
@@ -432,7 +446,8 @@ def execute_forward(args) -> Dict[str, Any]:
         res = {"status": "ok", "mode": t.mode, "keys": keys, "columns": values, "count": len(out_rows),
                "extrapolated_count": n_ext, "output_file": real, "data_range": data_range, "verified": ok,
                "preview": f"조회 {len(out_rows)}건 보간 ({'격자' if t.mode == 'grid' else '흩어진 기록'}), 외삽 {n_ext}건 -> {real}"}
-        res["agent_directive"] = (("VERIFIED: " if ok else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. ")
+        res["agent_directive"] = (("VERIFIED: " if ok else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. "
+                                   "다시 실행하지 말고 unverified를 그대로 알리세요. ")
                                   + "output_file 경로와 외삽 건수(extrapolated_count), warnings를 사용자에게 알리세요.")
         if not ok:
             res["unverified"] = ["결과 파일 다시 읽기"]
@@ -461,7 +476,7 @@ def execute_forward(args) -> Dict[str, Any]:
                                        for k, v in nr.items()} for nr in near])}, args.overwrite)
         res["output_file"], res["verified"] = real, ok
     res["agent_directive"] = (
-        ("VERIFIED: " if res["verified"] else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. ")
+        ("VERIFIED: " if res["verified"] else "UNVERIFIED: 결과 파일을 다시 읽어 확인하지 못했습니다. 다시 실행하지 말고 그대로 알리세요. ")
         + "preview의 값과 method, basis(사용한 원본 행과 비율)를 사용자에게 알리고, nearest_rows(가까운 실측 5행)를 표로 보여 주세요. "
         + ("extrapolated=true이므로 warnings의 범위 밖 내용을 반드시 함께 알리세요. " if r["extrapolated"] else "")
         + f"값은 데이터 파일의 마지막 저장 시각({tab['saved_at']}) 기준입니다.")
@@ -597,7 +612,7 @@ def execute_reverse(args) -> Dict[str, Any]:
         directive = ("답을 모두 알리세요(하나만 고르지 않음). 답마다 method와 basis(원본 행과 비율)를 함께 알리고, "
                      "nearest_rows(가까운 실측 5행)를 표로 보여 주세요. ")
     res["agent_directive"] = (("VERIFIED: 찾은 답을 보간식에 다시 넣어 목표값이 나오는지 확인했습니다. " if not unverified else
-                               f"UNVERIFIED: 확인하지 못한 항목이 있습니다 ({'; '.join(unverified)}). 재시도하지 말고 그대로 알리세요. ")
+                               f"UNVERIFIED: 확인하지 못한 항목이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
                               + directive + ("warnings도 함께 알리세요. " if warnings else "")
                               + f"값은 데이터 파일의 마지막 저장 시각({tab['saved_at']}) 기준입니다.")
     return _common(tab, res, warnings, input_pct)

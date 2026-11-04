@@ -33,7 +33,6 @@ import _runtime as rt  # noqa: E402
 TOOL = "ppt"
 
 PP_LAYOUT = {"title": 1, "text": 2, "title_only": 11, "blank": 12}
-PH_TITLE = (1, 3)          # ppPlaceholderTitle, ppPlaceholderCenterTitle
 PH_BODY = (2, 7)           # ppPlaceholderBody, ppPlaceholderObject
 MSO_GROUP = 6
 MSO_PLACEHOLDER = 14
@@ -180,6 +179,13 @@ def _closed_pptx(target: str) -> Optional[str]:
     return raw
 
 
+def _from_target(args: Any, source: Dict[str, Any]) -> List[str]:
+    """transfer 다음 명령의 --from-target: 보고 있는 문서(active)가 아니면 읽은 문서 (전체 경로가 있으면 그것)."""
+    if (args.target or "active").strip().lower() == "active":
+        return []
+    return ["--from-target", source.get("path") or args.target]
+
+
 def cmd_read(args) -> Dict[str, Any]:
     import reader
     closed = _closed_pptx(args.target)
@@ -205,7 +211,8 @@ def cmd_read(args) -> Dict[str, Any]:
         out = rt.write_text(out, reader.units_to_markdown(source["name"], units))
         result.update(output_file=out, next_commands=[
             rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기"),
-            rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"],
+            rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"]
+                            + _from_target(args, source),
                             "슬라이드 내용을 엑셀 표로 옮기기")])
         return rt.ok_file(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", out,
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
@@ -338,7 +345,7 @@ def cmd_info(args) -> Dict[str, Any]:
         items = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                  for d in off.list_open("ppt")]
         if not items:
-            return rt.ok(TOOL, "info", "0건: 열린 프레젠테이션이 없습니다",
+            return off.no_open_docs_result(TOOL, "info", "0건: 열린 프레젠테이션이 없습니다",
                          "VERIFIED: 0건. 열린 PowerPoint 프레젠테이션이 없습니다. 사용자에게 그대로 알리세요.",
                          presentations=items, count=0)
         return rt.ok(TOOL, "info", f"열린 프레젠테이션 {len(items)}개", presentations=items, count=len(items))
@@ -655,7 +662,7 @@ def cmd_write(args) -> Dict[str, Any]:
     image = rt.resolve_input_path(args.image, "그림 파일") if args.image else None
     cards = _parse_cards(args.cards) if args.cards else None
     if md_sections and args.title:
-        # --title은 첫 슬라이드의 제목 (이전에는 .md가 있으면 버려졌음). 첫 절의 제목이 --title과 다르면 그 제목은 본문 첫 줄로
+        # --title은 첫 슬라이드의 제목 (.md가 있어도). 첫 절의 제목이 --title과 다르면 그 제목은 본문 첫 줄로
         first = dict(md_sections[0])
         if first["title"] and first["title"].strip().casefold() != args.title.strip().casefold():
             first["lines"] = [(first["title"], "")] + list(first["lines"])
@@ -825,7 +832,7 @@ def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[s
 
     (바꾼 곳 수, 찾았지만 이미 바꿀 글과 같아 그대로 둔 곳 수)를 돌려줍니다. 서식이 없으면 찾은 곳의 글이
     바꿀 글과 글자 그대로 같은 곳(대소문자까지)은 바꾸지 않고 세기만 합니다
-    (예: --find iphone --replace iPhone에서 이미 'iPhone'인 곳. 이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음).
+    (예: --find iphone --replace iPhone에서 이미 'iPhone'인 곳. 바꾼 곳으로 세면 되돌리기 지점이 남음).
     """
     text = str(tr.Text)
     if (find not in text) if match_case else (find.lower() not in text.lower()):

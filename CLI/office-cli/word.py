@@ -8,6 +8,7 @@
     info     문서 요약 (페이지/단어/글자 수, 표, 그림, 제목 목록). --all: 열린 문서 전체 목록
     write    텍스트/마크다운/표/그림/요약상자/목차 넣기 (기본: 문서 끝, --anchor로 위치 지정)
     replace  찾아 바꾸기 (+서식). 머리글/바닥글/글상자 포함
+    fill     서식 문서 채우기: 값 파일(자리, 값)의 {{이름}} 자리와 표 칸(표2!R3C4)을 한 번에 (--dry-run, --overwrite)
     export   PDF / DOCX 사본 저장 (원본은 그대로, --page-number는 사본에만)
 
 --target: active(기본, 지금 보고 있는 문서) | 열린 문서 이름 | 파일 경로
@@ -259,6 +260,13 @@ def _find_section(units: List[Dict[str, Any]], query: str, occurrence: Optional[
     return units[i:j]
 
 
+def _from_target(args: Any, source: Dict[str, Any]) -> List[str]:
+    """transfer 다음 명령의 --from-target: 보고 있는 문서(active)가 아니면 읽은 문서 (전체 경로가 있으면 그것)."""
+    if (args.target or "active").strip().lower() == "active":
+        return []
+    return ["--from-target", source.get("path") or args.target]
+
+
 def cmd_read(args) -> Dict[str, Any]:
     if sum(1 for x in (args.pages, args.paragraphs, args.section) if x) > 1:
         raise rt.InputError("--pages, --paragraphs, --section 중 하나만 지정하세요.")
@@ -306,7 +314,8 @@ def cmd_read(args) -> Dict[str, Any]:
         out = rt.write_text(out, reader.units_to_markdown(name, save_units))
         result.update(output_file=out, next_commands=[
             rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기"),
-            rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"],
+            rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"]
+                            + _from_target(args, source),
                             "이 문서의 단락을 엑셀 표로 옮기기")])
         return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
@@ -378,7 +387,7 @@ def cmd_info(args) -> Dict[str, Any]:
         docs = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                 for d in off.list_open("word")]
         if not docs:
-            return rt.ok(TOOL, "info", "0건: 열린 문서가 없습니다",
+            return off.no_open_docs_result(TOOL, "info", "0건: 열린 문서가 없습니다",
                          "VERIFIED: 0건. 열린 Word 문서가 없습니다. 사용자에게 그대로 알리세요.", documents=docs, count=0)
         return rt.ok(TOOL, "info", f"열린 문서 {len(docs)}개", documents=docs, count=len(docs))
     with off.open_target("word", args.target, readonly=True) as t:
@@ -1166,7 +1175,7 @@ def cmd_replace(args) -> Dict[str, Any]:
                          tool=TOOL, command="replace") as t:
         for find, rep in mapping.items():
             if find == rep and not formatting:
-                # 바뀌는 것이 없음: 세기만 함 (이전에는 'N곳 처리'로 보고하고 바꾼 것으로 표시해 되돌리기 지점이 남았음)
+                # 바뀌는 것이 없음: 세기만 함 (바꾼 것으로 보고하지 않고 되돌리기 지점도 남기지 않음)
                 hits = _count_text(t.doc, find, args.match_case, args.whole_word)
                 if hits:
                     same[find] = hits
@@ -1179,7 +1188,6 @@ def cmd_replace(args) -> Dict[str, Any]:
                 while _find(rng, find, args.match_case, args.whole_word):
                     if not formatting and str(rng.Text) == rep:
                         # 찾은 글이 이미 바꿀 글 그대로 (예: --find iphone --replace iPhone에서 'iPhone'): 세기만 함
-                        # (이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음)
                         same[find] = same.get(find, 0) + 1
                         rng.Collapse(0)
                         continue
@@ -1258,6 +1266,224 @@ def _count_text(doc: Any, text: str, match_case: bool, whole_word: bool, limit: 
             n += 1
             rng.Collapse(0)
     return n
+
+
+# ==============================================================================
+# 3-1. fill: 서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)에 값을 한 번에 채우기
+# ==============================================================================
+
+FILL_MAX = 500
+_FILL_HEADER = ("자리", "위치", "place", "placeholder", "칸")
+_FILL_PLACE = re.compile(r"^\{\{\s*[^{}\r\n]{1,100}?\s*\}\}$")
+_FILL_CELL = re.compile(r"^\s*표\s*(\d{1,3})\s*!\s*R\s*(\d{1,4})\s*C\s*(\d{1,3})\s*$", re.IGNORECASE)
+_FILL_FOUND = re.compile(r"\{\{[^{}\r\n]{1,100}?\}\}")
+_CELL_END = "\r\x07"
+
+
+def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
+    """값 파일(.csv/.tsv/.md 표): 자리, 값 -> [(줄 번호, 자리, 값)]. 첫 행이 머리글(자리/위치/place)이면 건너뜀. 값은 글자 그대로."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".csv", ".tsv"):
+        rows = rt.read_csv_rows(path)
+    else:
+        table = next((payload for kind, payload in rt.parse_markdown_blocks(rt.read_text_file(path)) if kind == "table"), None)
+        if table is None:
+            raise rt.InputError("값 파일에서 표를 찾지 못했습니다. CSV(열: 자리, 값)나 마크다운 표로 만드세요.")
+        rows = table
+    start = 1
+    if rows and str(rows[0][0] if rows[0] else "").strip().lower() in _FILL_HEADER:
+        rows, start = rows[1:], 2
+    rt.check_two_columns(path, rows, start, "값 파일", "자리, 값", "채우지 않았습니다")
+    return [(n, str(r[0] if r else "").strip(), "" if len(r) < 2 or r[1] is None else str(r[1]))
+            for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
+
+
+def _cell_text(cell: Any) -> str:
+    t = str(cell.Range.Text)
+    return t[:-2] if t.endswith(_CELL_END) else t.rstrip("\r\x07")
+
+
+def _cell_heads(doc: Any, ti: int, r: int, c: int) -> str:
+    """표 칸 옆에 붙일 그 행 첫 칸 글과 그 열 첫 행(머리글) 글: " [행 '전압', 열 '측정']".
+    병합된 표에서는 R3C4가 눈에 보이는 3행 4열과 다를 수 있어 미리보기로 맞는 칸인지 알아볼 수 있게. 못 읽으면 뺌."""
+    def text(rr: int, cc: int) -> str:
+        try:
+            return _preview(_cell_text(doc.Tables(ti).Cell(rr, cc)), 12)
+        except Exception:
+            return ""
+    row = text(r, 1) if c != 1 else ""
+    col = text(1, c) if r != 1 else ""
+    parts = ([f"행 '{row}'"] if row else []) + ([f"열 '{col}'"] if col else [])
+    return f" [{', '.join(parts)}]" if parts else ""
+
+
+def _doc_protected(doc: Any) -> bool:
+    """편집 제한(문서 보호)이 걸렸는지. ProtectionType: -1 = 보호 없음. 읽지 못하면 보호 없음으로 봄 (쓰기에서 오류로 잡힘)."""
+    try:
+        return int(doc.ProtectionType) != -1
+    except Exception:
+        return False
+
+
+def _fill_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
+    argv = ["fill", "--target", args.target, "--file", args.file]
+    for flag, on in (("--overwrite", args.overwrite), ("--no-focus", args.no_focus)):
+        if on:
+            argv.append(flag)
+    argv += [x for x in extra if x not in argv]
+    return rt.next_command("word.py", argv, "자리와 표 칸 채우기 실행" + (" (값이 있는 표 칸 덮어쓰기)" if "--overwrite" in argv else ""))
+
+
+def cmd_fill(args) -> Dict[str, Any]:
+    rows = _fill_rows(rt.resolve_input_path(args.file, "값 파일", exts=(".csv", ".tsv", ".md", ".txt")))
+    if not rows:
+        raise rt.InputError("값 파일에 내용이 없습니다. 열: 자리, 값 (예: {{업체명}},한빛전자 / 표2!R3C4,25).")
+    if len(rows) > FILL_MAX:
+        raise rt.InputError(f"한 번에 {FILL_MAX}줄까지 채웁니다 (받은 {len(rows)}줄). 파일을 나눠 실행하세요.")
+    bad: List[str] = []
+    places: Dict[str, str] = {}
+    cells: Dict[Tuple[int, int, int], str] = {}
+    for n, key, val in rows:
+        m = _FILL_CELL.match(key)
+        if m:
+            k = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if k in cells and cells[k] != val:
+                bad.append(f"{n}번째 줄 '{key}': 같은 칸에 다른 값이 두 번 있습니다")
+            cells[k] = val
+        elif _FILL_PLACE.match(key):
+            if key in places and places[key] != val:
+                bad.append(f"{n}번째 줄 '{key}': 같은 자리에 다른 값이 두 번 있습니다")
+            places[key] = val
+        else:
+            bad.append(f"{n}번째 줄 '{key[:30]}': 자리는 {{{{이름}}}} 또는 표 칸 표2!R3C4 모양이어야 합니다")
+    if bad:
+        head = f"값 파일 {len(rows)}줄 중 {len(bad)}줄이 잘못되어 하나도 채우지 않았습니다 (열: 자리, 값). 고친 뒤 다시 실행하세요. "
+        raise rt.InputError(head + " / ".join(bad[:10]), log_message=head + f"잘못된 줄 {len(bad)}개 ({rt.DOC_OMITTED})")
+    with off.open_target("word", args.target, readonly=args.dry_run, focus=not args.no_focus,
+                         tool=TOOL, command="fill") as t:
+        doc = t.doc
+        if _doc_protected(doc):
+            raise rt.InputError("문서에 편집 제한(문서 보호)이 걸려 있어 아무것도 채우지 않았습니다. 사용자가 Word에서 보호를 풀었다고 하면 "
+                                "같은 명령을 1번 다시 실행하세요 (암호를 묻거나 추측하지 않음).", no_fallback=True)
+        # 1) 모두 확인: 자리가 문서에 있는지, 표 칸이 있는지, 값이 있는 칸 (하나라도 문제면 아무것도 바꾸지 않음)
+        counts = {k: _count_text(doc, k, True, False) for k in places}
+        missing = [k for k, c in counts.items() if not c]
+        problems_in: List[str] = []
+        if missing:
+            text = "".join(str(s.Text) for s in _stories(doc))
+            found = sorted(set(_FILL_FOUND.findall(text)))
+            problems_in.append(f"문서에 없는 자리 {len(missing)}개: {', '.join(missing[:10])}"
+                               + (f" (문서에 있는 자리: {', '.join(found[:10])})" if found else " (문서에 {{...}} 자리가 없음)"))
+        try:
+            n_tables = int(doc.Tables.Count)
+        except Exception:
+            n_tables = 0
+        old: Dict[Tuple[int, int, int], str] = {}
+        for (ti, r, c) in cells:
+            ref = f"표{ti}!R{r}C{c}"
+            if not 1 <= ti <= n_tables:
+                problems_in.append(f"{ref}: 표 {ti}번이 없습니다 (표 {n_tables}개)")
+                continue
+            try:
+                old[(ti, r, c)] = _cell_text(doc.Tables(ti).Cell(r, c))
+            except Exception:
+                problems_in.append(f"{ref}: 그 칸이 없습니다 (행·열 번호 또는 병합된 칸)")
+        if problems_in:
+            raise rt.InputError("아무것도 채우지 않았습니다. " + " / ".join(problems_in[:10]))
+        conflicts = [(k, v) for k, v in old.items() if v.strip() and v != cells[k]]
+        same = [k for k, v in old.items() if v == cells[k]]
+        heads = {k: _cell_heads(doc, *k) for k in cells}
+        planned = [f"바꾸기: {k} {counts[k]}곳 -> {_preview(v)}" for k, v in places.items()]
+        for k, v in cells.items():
+            ref = f"표{k[0]}!R{k[1]}C{k[2]}{heads[k]}"
+            if k in same:
+                planned.append(f"그대로(같은 값): {ref}")
+            elif old[k].strip():
+                planned.append(f"덮어쓰기: {ref} ({_preview(old[k], 15)} -> {_preview(v, 15)})")
+            else:
+                planned.append(f"채우기: {ref} (빈 칸 -> {_preview(v, 15)})")
+        if args.dry_run:
+            fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(places) + len(cells) - len(same),
+                                      "confirm_commands": [_fill_command(args, ["--overwrite"] if conflicts else [])],
+                                      "target_resolved": t.resolved(), "truncated": len(planned) > 50}
+            if conflicts:
+                fields["overwrite_cells"] = len(conflicts)
+            return rt.ok(TOOL, "fill", f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개"
+                         + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else ""),
+                         "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고(표 칸은 [행, 열] 글로 맞는 칸인지) 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.",
+                         **fields)
+        if conflicts and not args.overwrite:
+            refs = [f"표{k[0]}!R{k[1]}C{k[2]}" for k, _ in conflicts]
+            head = f"값이 있는 표 칸 {len(conflicts)}개가 덮어써집니다: "
+            raise rt.UserDecisionError(
+                head + ", ".join(f"{r}{heads[k]}='{_preview(v, 15)}'" for r, (k, v) in zip(refs[:5], conflicts[:5]))
+                + (" ..." if len(refs) > 5 else ""),
+                "채우지 않았습니다. 덮어쓸 칸과 기존 값을 사용자에게 보여 주고, 사용자가 덮어써도 된다고 하면 같은 명령에 --overwrite를 붙여 "
+                "다시 실행하세요 (미리 보려면 --dry-run).",
+                log_message=head + ", ".join(refs[:5]) + f" (값 {rt.DOC_OMITTED})")
+        # 2) 채우기 (되돌리기 지점은 open_target이 남김)
+        done = 0
+        where = ""
+        try:
+            for story in _stories(doc):
+                for key, val in places.items():
+                    where = key
+                    rng = story.Duplicate
+                    n = 0
+                    while n < 5000 and _find(rng, key, True, False):
+                        rng.Text = val.replace("\r\n", "\v").replace("\n", "\v")      # 자리 안의 줄바꿈은 줄 바꿈(단락 나누지 않음)
+                        t.changed = True
+                        done += 1
+                        n += 1
+                        rng.Collapse(0)
+            for k, v in cells.items():
+                if k in same:
+                    continue
+                where = f"표{k[0]}!R{k[1]}C{k[2]}"
+                doc.Tables(k[0]).Cell(k[1], k[2]).Range.Text = v.replace("\r\n", "\r").replace("\n", "\r")
+                t.changed = True
+                done += 1
+        except Exception as e:
+            info = rt._com_error_info(e)
+            if info is not None and info[2] in ("busy", "gone"):
+                raise
+            rt.debug(f"채우기 실패: {e}")
+            if done and t.source in ("active", "open"):
+                left = f"앞의 {done}곳은 이미 바뀌었습니다(office.py undo로 되돌릴 수 있음). "
+            elif done:
+                left = "파일은 저장하지 않아 그대로입니다. "
+            else:
+                left = "아무것도 바꾸지 않았습니다. "
+            raise rt.InputError(f"{where}을(를) 채우지 못했습니다 (문서 보호, 편집 중, 내용 컨트롤 잠금 등, {type(e).__name__}). "
+                                + left + "원인을 사용자에게 알리고 해결했다고 하면 같은 명령을 1번 다시 실행하세요.",
+                                log_message=f"{where if where.startswith('표') else '자리'}을(를) 채우지 못했습니다 ({type(e).__name__}). "
+                                + left, no_fallback=True)
+        # 3) 다시 읽어 확인 (R1)
+        problems: List[str] = []
+        for key, val in places.items():
+            left = _count_text(doc, key, True, False)
+            if left and key not in val:
+                problems.append(f"{key}이(가) {left}곳 남아 있음")
+        for k, v in cells.items():
+            got = _cell_text(doc.Tables(k[0]).Cell(k[1], k[2])).replace("\r", "\n")
+            if got != v.replace("\r\n", "\n"):
+                problems.append(f"표{k[0]}!R{k[1]}C{k[2]}의 글이 쓴 값과 다름")
+        if t.changed:
+            t.set_focus()
+        resolved = t.resolved()
+    fields = {"target_resolved": resolved, "count": len(places) + len(cells) - len(same),
+              "places": {k: counts[k] for k in places}, "cells": len(cells) - len(same),
+              "applied": [p for p in planned if not p.startswith("그대로")][:50]}
+    if same:
+        fields["unchanged"] = len(same)
+    if conflicts:
+        fields["overwritten"] = len(conflicts)
+    preview = f"자리 {len(places)}개({sum(counts.values())}곳), 표 칸 {len(cells) - len(same)}개를 채웠습니다" \
+        + (f" (이미 같은 값 {len(same)}칸은 그대로)" if same else "")
+    if problems:
+        return rt.ok_unverified(TOOL, "fill", preview, problems[:10], **fields)
+    return rt.ok(TOOL, "fill", preview, "VERIFIED: 채운 곳을 다시 읽어 확인했습니다. 잘못 채웠으면 office.py undo로 되돌릴 수 있습니다.",
+                 verified=True, **fields)
 
 
 # ==============================================================================
@@ -1392,6 +1618,12 @@ def build_cli():
     p.add_argument("--size", type=float, help="글자 크기")
     p.add_argument("--highlight", help="형광펜 (yellow, green, pink, blue, red, gray, none)")
 
+    p = sub.add_parser("fill", help="서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 채우기")
+    common(p, write=True)
+    p.add_argument("--file", "-f", required=True, help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25)")
+    p.add_argument("--overwrite", action="store_true", help="값이 있는 표 칸도 덮어쓰기 (사용자가 확인했을 때만)")
+    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 채울 곳만 미리 보기")
+
     p = sub.add_parser("export", help="PDF/DOCX 사본 저장")
     common(p)
     p.add_argument("--save", help="저장 경로 (.pdf 또는 .docx, 생략 시 작업 폴더에 PDF)")
@@ -1400,7 +1632,7 @@ def build_cli():
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "export": cmd_export,
-            "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions}
+            "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions, "fill": cmd_fill}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

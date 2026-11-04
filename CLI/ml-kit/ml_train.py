@@ -7,7 +7,7 @@ Atomic Version Packaging, and Single Source of Truth (SSOT) Ledger.
 --task regression (default) : champion by Out-of-Fold R2
 --task classification       : champion by Out-of-Fold Macro-F1 (Stratified K-Fold)
 
---best (2.4.0)              : every target of the history retrained with its best recipe into one version per task
+--best                      : every target of the history retrained with its best recipe into one version per task
 
 Shared runtime (data loading, --eval engine, CLI protocol) is imported from ml_predict.py.
 
@@ -20,13 +20,17 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library,
     setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path,
     read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
-    load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
+    load_data_file, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
-    retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
+    retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
+    parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
+    check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
+    RESUME_MAX_AGE,
 )
 
 setup_console()
@@ -39,39 +43,42 @@ import warnings
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import numpy as np
-import pandas as pd
-import joblib
+check_core_libraries("모델 학습")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import numpy as np
+    import pandas as pd
+    import joblib
 
-import sklearn
-from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold, StratifiedKFold
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (
-    r2_score, mean_absolute_error, root_mean_squared_error,
-    f1_score, accuracy_score, balanced_accuracy_score, roc_auc_score,
-    confusion_matrix, classification_report, make_scorer,
-)
-from sklearn.inspection import permutation_importance
-from sklearn.exceptions import ConvergenceWarning
+    import sklearn
+    from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold, StratifiedKFold
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import (
+        r2_score, mean_absolute_error, root_mean_squared_error,
+        f1_score, accuracy_score, balanced_accuracy_score, roc_auc_score,
+        confusion_matrix, classification_report, make_scorer, get_scorer,
+    )
+    from sklearn.exceptions import ConvergenceWarning
 
-# 5 Core Regression Algorithms
-from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor, ExtraTreesRegressor
-from sklearn.linear_model import RidgeCV, ElasticNetCV
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.base import clone
+    # 5 Core Regression Algorithms
+    from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor, ExtraTreesRegressor
+    from sklearn.linear_model import RidgeCV, ElasticNetCV
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.base import clone
 
-# 5 Core Classification Algorithms (--task classification)
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.neighbors import KNeighborsClassifier
+    # 5 Core Classification Algorithms (--task classification)
+    from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
+    from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+    from sklearn.neighbors import KNeighborsClassifier
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "모델 학습")
 
 TASK_REGRESSION = "regression"
 TASK_CLASSIFICATION = "classification"
 PRIMARY_METRIC = {TASK_REGRESSION: "val_r2", TASK_CLASSIFICATION: "val_f1_macro"}
-METRIC_LABEL = {TASK_REGRESSION: "검증 R2", TASK_CLASSIFICATION: "검증 Macro-F1"}   # 점수 용어: 학습 / 검증 (제외 행 포함/미포함) (2.5.0)
+METRIC_LABEL = {TASK_REGRESSION: "검증 R2", TASK_CLASSIFICATION: "검증 Macro-F1"}   # 점수 용어: 학습 / 검증 (제외 행 포함/미포함)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
@@ -83,24 +90,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # ==============================================================================
 
 def log_progress(percent: int, message: str) -> None:
-    """
-    Outputs real-time progress to stderr with immediate flush.
-    Ensures newline-based streaming in agent environments (OpenCode, CI, Subprocess)
-    to prevent idle stream timeouts while maintaining clean formatting.
-    """
-    bar_len = 20
-    filled = int(bar_len * percent / 100)
-    bar = "=" * filled + "-" * (bar_len - filled)
-    
-    # In agent/piped execution (OpenCode, etc.), output with newline so stream readers don't block
-    is_interactive = hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
-    if is_interactive:
-        sys.stderr.write(f"\r[PROGRESS {percent:3d}%] [{bar}] {message}")
-        if percent >= 100:
-            sys.stderr.write("\n")
-    else:
-        sys.stderr.write(f"[PROGRESS {percent:3d}%] [{bar}] {message}\n")
-    
+    """One progress line on stderr, flushed: '[PROGRESS] 45% <message>' (the shared log tag, AGENTS.md; one line per
+    step, so stream readers never wait for a carriage-return redraw)."""
+    sys.stderr.write(f"[PROGRESS] {percent}% {message}\n")
     sys.stderr.flush()
 
 
@@ -177,23 +169,71 @@ def parse_feature_or_target_list(input_arg: str, param_name: str = "features") -
     return [col.strip() for col in stripped.split(",") if col.strip()]
 
 
-def load_data_file(
-    file_path: str,
-    header_row: Optional[int] = None,
-    unit_row: Optional[int] = None,
-    data_row: Optional[int] = None
-) -> Tuple[pd.DataFrame, str]:
-    """
-    Loads tabular data from CSV (multi-encoding) or Excel (.xlsx) via the shared loader
-    (identical parsing in ml_predict.py). Returns (dataframe, file_name).
-    """
-    df_data = _load_table(file_path, header_row=header_row, unit_row=unit_row, data_row=data_row)
-    return df_data, os.path.basename(file_path)
-
-
 # ==============================================================================
 # 4. Fail-Fast Validation & Type Sanitization
 # ==============================================================================
+
+# --dtypes type words -> the canonical word stored in the ledger and read by infer_feature_schema
+DTYPE_WORDS = {"float": "float", "float64": "float", "num": "float", "int": "int", "int64": "int",
+               "str": "str", "object": "str", "category": "str", "cat": "str", "datetime": "datetime", "date": "datetime"}
+
+
+def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """--dtypes 'col:type,...' with every column name resolved like -x / -y (resolve_column_names: exact name, a unique
+    name without its unit, else [후보]) and every type checked (a misspelt type -> [추천] the corrected --dtypes).
+    Returns the canonical 'full column name:type' list (an unknown name or type stops the run, never silently ignored)."""
+    if not dtypes_arg or not str(dtypes_arg).strip():
+        return None
+    pairs: List[Tuple[str, str]] = []
+    for raw in str(dtypes_arg).split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        if ":" not in raw:
+            raise InputError(f"--dtypes의 '{raw}'에 형식이 없습니다. '<열>:<형식>'으로 쓰십시오 "
+                             f"(형식: float, int, str, datetime. 예: --dtypes \"일시:datetime,설비코드:str\").")
+        name, kind = (x.strip() for x in raw.split(":", 1))
+        pairs.append((name, kind))
+    bad = [(n, k) for n, k in pairs if k.lower() not in DTYPE_WORDS]
+    if bad:
+        import difflib
+        fixed, sure = [], True
+        for n, k in pairs:
+            if k.lower() in DTYPE_WORDS:
+                fixed.append(f"{n}:{k}")
+                continue
+            close = difflib.get_close_matches(k.lower(), list(DTYPE_WORDS), n=1, cutoff=0.6)
+            sure = sure and bool(close)
+            fixed.append(f"{n}:{DTYPE_WORDS[close[0]]}" if close else f"{n}:{k}")
+        rec = f" [추천] --dtypes \"{','.join(fixed)}\"" if sure else ""
+        raise InputError(f"--dtypes의 형식 {[k for _, k in bad]}을(를) 알 수 없습니다. 쓸 수 있는 형식: float, int, str, datetime.{rec}")
+    names, _ = resolve_column_names([n for n, _ in pairs], columns, "--dtypes 열", layout=layout)
+    out = dict(zip(names, (DTYPE_WORDS[k.lower()] for _, k in pairs)))
+    return ",".join(f"{c}:{k}" for c, k in out.items())
+
+
+def leakage_error(overlap: List[str], features: List[str], targets: List[str]) -> InputError:
+    """A column given in both -x and -y: STOP_RETRY with [후보] of the two full commands (the column taken out of -y,
+    or out of -x) and the same commands in next_commands. Which one is meant is the user's choice."""
+    names = ", ".join(f"'{t}'" for t in overlap)
+    cmd = command_text(drop={"-x": "features", "--features": "features", "-y": "targets", "--targets": "targets"})
+    cands: List[Dict[str, Any]] = []
+    feats_wo = [f for f in features if f not in overlap]
+    tgts_wo = [t for t in targets if t not in overlap]
+    if cmd and not any('"' in n for n in features + targets):
+        if tgts_wo:
+            cands.append({"purpose": f"{names}을(를) 타겟(-y)에서 빼고 입력으로만 쓰기",
+                          "command": f"{cmd} -x {_q(','.join(features))} -y {_q(','.join(tgts_wo))}"})
+        if feats_wo:
+            cands.append({"purpose": f"{names}을(를) 입력(-x)에서 빼고 타겟으로만 예측하기",
+                          "command": f"{cmd} -x {_q(','.join(feats_wo))} -y {_q(','.join(targets))}"})
+    msg = (f"타겟 누수: {names}이(가) 입력(-x)과 타겟(-y)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
+           f"어느 쪽에서 뺄지 사용자에게 물으십시오.")
+    if cands:
+        msg += " [후보] " + " / ".join(f"{i + 1}) {c['command']}" for i, c in enumerate(cands))
+        return InputError(msg, extra={"next_commands": cands})
+    return InputError(msg)
+
 
 def validate_and_sanitize_data(
     df: pd.DataFrame,
@@ -226,10 +266,7 @@ def validate_and_sanitize_data(
     # Data Leakage Check: Targets in Features
     overlap = [t for t in target_names if t in set(feature_names)]
     if overlap:
-        raise InputError(
-            f"[DATA LEAKAGE DETECTED] 타겟 변수 '{', '.join(overlap)}'이(가) 피처(-x) 목록에 포함되어 있습니다. "
-            f"종속변수는 독립변수로 사용될 수 없습니다."
-        )
+        raise leakage_error(overlap, feature_names, target_names)
 
     df_clean = df.copy()
 
@@ -245,7 +282,8 @@ def validate_and_sanitize_data(
                         if c_type in ["float", "float64"]:
                             df_clean[c_name] = coerce_numeric(df_clean[c_name]).astype(float)
                         elif c_type in ["int", "int64"]:
-                            df_clean[c_name] = coerce_numeric(df_clean[c_name]).fillna(0).astype(int)
+                            # a number column (blank cells stay blank and are imputed like any number: never 0)
+                            df_clean[c_name] = coerce_numeric(df_clean[c_name]).astype(float)
                         elif c_type in ["str", "object"]:
                             df_clean[c_name] = df_clean[c_name].astype(str)
                         elif c_type in ["datetime", "date"]:
@@ -383,26 +421,106 @@ PERMUTATION_MAX_ROWS = 5000
 KNN_MAX_ROWS = 50000
 
 
+PERMUTATION_REPEATS = 5
+IMPORTANCE_SAVE_SECONDS = 12.0   # finished importance columns are saved this often: a killed run keeps its progress
+
+
+def _importance_path(resume: Optional[str]) -> Optional[str]:
+    return f"{resume}.imp.joblib" if resume else None
+
+
+def _permutation_means(pipe: Pipeline, Xs: pd.DataFrame, ys: np.ndarray, seed: int, scoring: Optional[str],
+                       resume: Optional[str], target_name: str, champion_name: str,
+                       before_stop: Callable[[], None]) -> np.ndarray:
+    """
+    Mean drop of the score when one input column is shuffled (PERMUTATION_REPEATS times), per column of Xs.
+    Each column has its own random stream (seed, column index), so the result does not depend on how the work is
+    split between runs. Split execution (R10): before each column the clock is checked with the time of one column
+    (first estimated from one prediction of the whole pipeline x PERMUTATION_REPEATS, then the longest measured
+    column of this run); the finished columns are saved in <resume>.imp.joblib (before_stop first) every
+    IMPORTANCE_SAVE_SECONDS and at a stop, which ends with CONTINUE. Only the first column of a run that did no other
+    step (a candidate, the final fit) is done without the clock, so running again always moves on and ends, and a
+    run killed from outside keeps the columns saved so far.
+    """
+    scorer = get_scorer(scoring) if scoring else (lambda est, X_, y_: est.score(X_, y_))
+    n_cols = Xs.shape[1]
+    path = _importance_path(resume)
+    done: Dict[int, float] = {}
+    saved_at = path and resume_find(os.path.dirname(path), os.path.basename(path))
+    if saved_at:
+        try:
+            st = joblib.load(saved_at)
+            if st.get("champion") == champion_name and st.get("columns") == list(map(str, Xs.columns)):
+                done = {int(k): float(v) for k, v in st["done"].items()}
+        except Exception:
+            sys.stderr.write(f"[WARN] 저장된 순열 중요도 {os.path.basename(saved_at)}를 읽지 못해 다시 계산합니다\n")
+    todo = [j for j in range(n_cols) if j not in done]
+    if not todo:
+        return np.array([done[j] for j in range(n_cols)], dtype=float)
+    t0 = time.monotonic()
+    base = float(scorer(pipe, Xs, ys))       # the whole pipeline (transform + predict), like one shuffled column
+    col_seconds = max(time.monotonic() - t0, 1e-3) * PERMUTATION_REPEATS * 1.2
+    if resume:
+        sys.stderr.write(f"[INFO] 타겟 '{target_name}': 순열 중요도 남은 열 {len(todo)}/{n_cols}개, "
+                         f"예상 {col_seconds * len(todo):.0f}초 (예측 1회 {col_seconds / PERMUTATION_REPEATS / 1.2:.2f}초)\n")
+    meta = {"champion": champion_name, "columns": list(map(str, Xs.columns))}
+
+    def save() -> None:
+        before_stop()
+        _resume_save(path, dict(meta, done=dict(done)))
+
+    new_cols = 0
+    measured = 0.0                             # longest column of this run
+    saved_new = time.monotonic()
+    other_step = _step_done()                  # this run already moved on (a fold, a candidate, the fit)
+    Xw = Xs.copy()
+    for j in todo:
+        if resume and (other_step or new_cols >= 1) and time_would_pass(col_seconds):
+            save()
+            check_time(col_seconds, f"학습: 타겟 '{target_name}' 순열 중요도 {len(done)}/{n_cols}열 끝남, 저장됨 "
+                                    f"(나머지 열 전에 멈춤)")
+        t_col = time.monotonic()
+        orig = Xs.iloc[:, j]
+        rng = np.random.default_rng([seed, j])
+        scores = []
+        for _ in range(PERMUTATION_REPEATS):
+            Xw.isetitem(j, orig.take(rng.permutation(len(orig))).set_axis(Xw.index))
+            scores.append(float(scorer(pipe, Xw, ys)))
+        Xw.isetitem(j, orig)
+        done[j] = base - float(np.mean(scores))
+        new_cols += 1
+        measured = max(measured, time.monotonic() - t_col)
+        col_seconds = measured * 1.2           # measured columns replace the first estimate (a busy PC is slower)
+        if resume and len(done) < n_cols and time.monotonic() - saved_new >= IMPORTANCE_SAVE_SECONDS:
+            save()                             # a run killed from outside still keeps these columns
+            saved_new = time.monotonic()
+    return np.array([done[j] for j in range(n_cols)], dtype=float)
+
+
 def feature_importance_ranks(
     pipe: Pipeline, X: pd.DataFrame, y: np.ndarray, schema: Dict[str, Any], seed: int, scoring: Optional[str],
-    notes: Optional[List[str]] = None,
+    notes: Optional[List[str]] = None, resume: Optional[str] = None, target_name: str = "", champion_name: str = "",
+    before_stop: Callable[[], None] = lambda: None,
 ) -> List[Dict[str, Any]]:
     """
     Permutation importance on at most PERMUTATION_MAX_ROWS rows (keeps large data fast),
     aggregated back to user-facing columns (date parts are summed into their date column; a categorical
     column is permuted as a whole because one-hot encoding happens inside the pipeline).
-    notes (2.9.39): gets one line when the ranks carry no information (calculation failed or every
+    notes: gets one line when the ranks carry no information (calculation failed or every
     importance is 0), so the training result can give top_features [] with a reason.
+    resume: split execution of a long calculation (_permutation_means); before_stop saves what the caller must keep.
     """
     Xs, ys = X, y
     if len(X) > PERMUTATION_MAX_ROWS:
         idx = np.random.default_rng(seed).choice(len(X), PERMUTATION_MAX_ROWS, replace=False)
         Xs, ys = X.iloc[idx], y[idx]
     try:
-        res = permutation_importance(pipe, Xs, ys, n_repeats=5, random_state=seed, scoring=scoring)
-        raw = np.maximum(res.importances_mean, 0)
+        raw = np.maximum(_permutation_means(pipe, Xs, ys, seed, scoring, resume, target_name, champion_name,
+                                            before_stop), 0)
         if notes is not None and not float(raw.sum()) > 0:
             notes.append("모든 입력의 순열 중요도가 0입니다 (입력을 섞어도 점수가 떨어지지 않음)")
+    except InputError:                         # a finished step saved nowhere at a stop (check_time: STOP_RETRY)
+        raise
     except Exception as e:
         raw = np.ones(X.shape[1])
         if notes is not None:
@@ -418,13 +536,13 @@ def feature_importance_ranks(
     return sorted(ranks, key=lambda r: r["importance"], reverse=True)
 
 
-TOP_FEATURES_MAX = 5      # top_features entries per target in the training result (2.9.39)
+TOP_FEATURES_MAX = 5      # top_features entries per target in the training result
 TOP_FEATURES_PREVIEW = 3  # of which the preview line shows this many
 
 
 def top_feature_shares(champion: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    2.9.39: the best model's most important inputs for the training result JSON, from the same permutation
+    The best model's most important inputs for the training result JSON, from the same permutation
     importances as leaderboard.json and the Word report (original column names, shares of the sum over all
     inputs). Returns ([], reason) when the importances carry no information.
     """
@@ -434,6 +552,9 @@ def top_feature_shares(champion: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], 
         return [], note or "중요도 기록이 없습니다"
     top = [{"feature": r["feature"], "importance": round(float(r.get("share", r["pct"] / 100)), 3)}
            for r in ranks[:TOP_FEATURES_MAX]]
+    extra = round(sum(t["importance"] for t in top) - 1.0, 3)
+    if extra > 0:                 # rounding (0.64 + 0.344 + 0.017): the shares never add up to more than 1
+        top[0]["importance"] = round(top[0]["importance"] - extra, 3)
     return top, None
 
 
@@ -534,6 +655,201 @@ def duplicate_warning(target_name: str, n_dup: int, n_rows: int, note: Optional[
             f"{how} 중복이 실수라면 데이터에서 지우십시오.")
 
 
+# Candidate models of a target are saved one by one, and inside a candidate every cross-validation fold: a single
+# slow target, or a single slow candidate, is split at the time limit too (R10; the check before a target cannot
+# protect the first target of a run, and a candidate whose folds take longer than the limit together would start
+# again from fold 1 in every run and never end). <resume>.m<k>.f<j>.joblib holds fold j of candidate k until the
+# candidate is finished, <resume>.m<k>.joblib the finished candidate (its fold files are then removed); the same
+# command run again reuses them. The folds are the same splits (same splitter, seed, groups) in every run, and each
+# fold's model is built only from its own training rows, so a split run gives the same scores, OOF predictions and
+# final model as one run.
+RUN_MODEL_SECONDS: List[float] = []
+RUN_FOLD_SECONDS: List[float] = []          # every fold trained in this command (all candidates, all targets)
+
+
+def _step_done() -> bool:
+    """True when this command already finished a step (a fold, a candidate, a final fit or a target): only then may
+    a clock check stop it, so every run moves on (R10)."""
+    return bool(RUN_FOLD_SECONDS or RUN_MODEL_SECONDS or RUN_FIT_SECONDS)
+
+
+def _candidate_path(resume: Optional[str], m_idx: int) -> Optional[str]:
+    """Where the candidate is meant to be saved (<resume_dir>/<key>.m<k>.joblib); resume_save may put it elsewhere."""
+    return f"{resume}.m{m_idx}.joblib" if resume else None
+
+
+def _fold_path(resume: str, m_idx: int, fold: int) -> str:
+    return f"{resume}.m{m_idx}.f{fold}.joblib"
+
+
+def _candidate_load(resume: Optional[str], m_idx: int) -> Optional[Tuple[Any, ...]]:
+    want = _candidate_path(resume, m_idx)
+    path = want and resume_find(os.path.dirname(want), os.path.basename(want))
+    if not path:
+        return None
+    try:
+        res = joblib.load(path)
+        if isinstance(res, tuple):
+            return res
+    except Exception:
+        pass
+    try:                                       # damaged saved candidate: drop it and train again (JIT: rebuilt)
+        os.remove(path)
+    except OSError:
+        pass
+    sys.stderr.write(f"[WARN] 저장된 중간 학습 결과 {os.path.basename(path)}를 읽지 못해 다시 학습합니다\n")
+    return None
+
+
+def _fold_load(resume: str, m_idx: int, fold: int, model_name: str, n_folds: int,
+               n_val: int) -> Optional[Tuple[Dict[str, Any], float]]:
+    """A fold saved by an earlier run of the same command: (its result, its seconds), or None. A damaged file, or one
+    that does not match this candidate (another model, fold count or fold size), is dropped and the fold trained again
+    (JIT: rebuilt)."""
+    want = _fold_path(resume, m_idx, fold)
+    path = resume_find(os.path.dirname(want), os.path.basename(want))
+    if not path:
+        return None
+    try:
+        st = joblib.load(path)
+        if (isinstance(st, dict) and st.get("model") == model_name and st.get("folds") == n_folds
+                and len(st["res"]["pred"]) == n_val):
+            return st["res"], float(st["seconds"])
+    except Exception:
+        pass
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    sys.stderr.write(f"[WARN] 저장된 교차검증 fold 결과 {os.path.basename(path)}를 읽지 못해 그 fold를 다시 학습합니다\n")
+    return None
+
+
+def _cv_folds(resume: Optional[str], m_idx: int, model_name: str, model_count: int, splits: List[Any],
+              target_name: str, known: List[float], fold_fn: Callable[[np.ndarray, np.ndarray], Dict[str, Any]],
+              log_offset: int, log_weight: int) -> Tuple[List[Dict[str, Any]], float]:
+    """
+    The cross-validation of one candidate, fold by fold: fold_fn(train_idx, val_idx) -> the fold's result (its OOF
+    part 'pred', training score, ...). Returns the results in fold order and the candidate's seconds (sum of its
+    folds, saved ones included). Split execution (R10): folds saved by an earlier run are reused; before each new
+    fold the clock is checked (only after a step of this command: _step_done) with the longest fold of this
+    candidate x 1.2, or, before its first fold, the longest fold known (this command's folds, this target's saved
+    candidates), and no check when nothing is known; every finished fold but the last is saved
+    (<resume>.m<k>.f<j>.joblib), the last one is saved with the whole candidate by the caller.
+    """
+    n = len(splits)
+    results: List[Optional[Dict[str, Any]]] = [None] * n
+    own: List[float] = []                      # seconds of this candidate's folds (saved ones included)
+    if resume:
+        for k, (_, val_idx) in enumerate(splits, 1):
+            saved = _fold_load(resume, m_idx, k, model_name, n, len(val_idx))
+            if saved is not None:
+                results[k - 1] = saved[0]
+                own.append(saved[1])
+        if own:
+            sys.stderr.write(f"[INFO] 타겟 '{target_name}': '{model_name}' 교차검증 fold {len(own)}/{n}개는 "
+                             f"이전 실행에서 저장한 결과를 씀 (나눠서 진행)\n")
+    for k, (train_idx, val_idx) in enumerate(splits, 1):
+        if results[k - 1] is not None:
+            continue
+        if resume and _step_done():
+            pool = own or (RUN_FOLD_SECONDS + [t / n for t in known])
+            if pool:
+                done = sum(r is not None for r in results)
+                check_time(max(pool) * 1.2,
+                           f"학습: 타겟 '{target_name}' 후보 모델 {m_idx}/{model_count}개 끝남, '{model_name}' 교차검증 "
+                           f"fold {done}/{n}개 끝남, 저장됨 (fold {k} 전에 멈춤)")
+        pct = log_offset + int(log_weight * (m_idx * n + k) / (model_count * n))
+        log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {k}/{n})...")
+        t_fold = time.monotonic()
+        res = fold_fn(train_idx, val_idx)
+        seconds = time.monotonic() - t_fold
+        results[k - 1] = res
+        own.append(seconds)
+        if resume:
+            RUN_FOLD_SECONDS.append(seconds)
+            if any(r is None for r in results):    # the last fold is saved with the candidate (_candidate_save)
+                _resume_save(_fold_path(resume, m_idx, k),
+                             {"model": model_name, "folds": n, "res": res, "seconds": seconds})
+    return results, float(sum(own))            # type: ignore[return-value]
+
+
+def _candidate_save(resume: Optional[str], m_idx: int, res: Tuple[Any, ...], seconds: float) -> None:
+    """res + (seconds,): the measured time is kept with the candidate for the clock checks of later runs. Its fold
+    files are removed once the candidate is saved (in every place)."""
+    if not resume:
+        return
+    RUN_MODEL_SECONDS.append(seconds)
+    if _resume_save(_candidate_path(resume, m_idx), res + (seconds,)):
+        prefix = os.path.basename(resume) + f".m{m_idx}.f"
+        resume_clear(os.path.dirname(resume), lambda name, p: name.startswith(prefix))
+
+
+def _fit_check(resume: Optional[str], target_name: str, model_count: int, estimate: float) -> None:
+    """Clock check before the final fit of a target (also one whose candidates were all reused): only after a step
+    of this command (_step_done), so every run moves on (R10). A step saved nowhere makes check_time stop with
+    STOP_RETRY instead, so '저장됨' is true when it stops."""
+    if resume and _step_done():
+        check_time(estimate, f"학습: 타겟 '{target_name}' 후보 모델 {model_count}/{model_count}개 끝남, 저장됨 "
+                             f"(1위 모델 전체 적합 전에 멈춤)")
+
+
+def _fit_estimate(champion_cv_seconds: float, n_folds: int) -> float:
+    """Seconds of the final fit of the champion on all rows, from its own measured cross-validation (n_folds fits on
+    (n_folds - 1) / n_folds of the rows, with their predictions): one fit on all rows is about 1 / (n_folds - 1) of it,
+    x 1.6 for models slower than linear in the rows. Not the longest candidate: a slow candidate that did not win
+    (RandomForest) made the run stop before a fast final fit."""
+    return champion_cv_seconds * 1.6 / max(n_folds - 1, 1)
+
+
+def _final_fit_and_importance(estimator: Any, champion_name: str, step_name: str, X: pd.DataFrame, y: np.ndarray,
+                              schema: Dict[str, Any], seed: int, scoring: Optional[str], resume: Optional[str],
+                              target_name: str, model_count: int, fit_estimate: float, log_offset: int,
+                              log_weight: int) -> Tuple[Any, List[Dict[str, Any]], List[str]]:
+    """
+    The last step of a target: the best model fitted on all rows, then its permutation importance. Split execution
+    (R10): the fit is checked against the clock like a candidate, and when the importance must stop at the time limit
+    the fitted model is saved first (<resume>.fit.joblib) with the finished importance columns, so the next run of the
+    same command neither fits again nor repeats the finished columns (the same model as one run).
+    """
+    fit_path = f"{resume}.fit.joblib" if resume else None
+    saved = None
+    at = fit_path and resume_find(os.path.dirname(fit_path), os.path.basename(fit_path))
+    if at:
+        try:
+            saved = joblib.load(at)
+            if not (isinstance(saved, tuple) and len(saved) == 3 and saved[0] == champion_name):
+                saved = None
+        except Exception:
+            saved = None
+            sys.stderr.write(f"[WARN] 저장된 1위 모델 적합 결과 {os.path.basename(at)}를 읽지 못해 다시 적합합니다\n")
+    fresh = saved is None
+    if fresh:
+        _fit_check(resume, target_name, model_count, fit_estimate)
+        log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
+        t_fit = time.monotonic()
+        final_pipeline = build_pipeline(fit_safe_model(estimator, y), schema, step_name)
+        final_pipeline.fit(X, y)
+        fit_seconds = time.monotonic() - t_fit
+        if resume:
+            RUN_MODEL_SECONDS.append(fit_seconds)   # a step done in this command
+    else:
+        final_pipeline, fit_seconds = saved[1], saved[2]
+        sys.stderr.write(f"[INFO] 타겟 '{target_name}': 이전 실행에서 저장한 1위 모델 전체 적합을 씀 (나눠서 진행)\n")
+
+    fit_saved: List[bool] = []
+
+    def save_fit() -> None:                    # once: the importance saves its columns again and again
+        if fresh and resume and not fit_saved:
+            fit_saved.append(_resume_save(fit_path, (champion_name, final_pipeline, fit_seconds)))
+
+    log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
+    notes: List[str] = []
+    ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring=scoring, notes=notes, resume=resume,
+                                     target_name=target_name, champion_name=champion_name, before_stop=save_fit)
+    return final_pipeline, ranks, notes
+
+
 def train_and_benchmark_models(
     X: pd.DataFrame,
     y_series: pd.Series,
@@ -541,7 +857,8 @@ def train_and_benchmark_models(
     schema: Dict[str, Any],
     seed: int = 42,
     log_offset: int = 20,
-    log_weight: int = 50
+    log_weight: int = 50,
+    resume: Optional[str] = None
 ) -> Tuple[Dict[str, Any], Any, Dict[str, Any]]:
     """
     Performs 5-Fold Leakage-Free Cross-Validation across the 5 models.
@@ -580,22 +897,29 @@ def train_and_benchmark_models(
     leaderboard = []
     model_oof_map = {}
 
+    known: List[float] = []                   # measured seconds of this target's candidates (saved ones included)
     for m_idx, (model_name, regressor) in enumerate(models.items()):
-        oof_preds = np.zeros(len(y))
-        train_r2_list = []
-        params = {}
+        saved = _candidate_load(resume, m_idx)
+        if saved is not None and saved[0] == model_name and len(saved) == 4:
+            model_oof_map[model_name] = saved[2]
+            leaderboard.append(saved[1])
+            known.append(float(saved[3]))
+            continue
 
-        for fold, (train_idx, val_idx) in enumerate(splits, 1):
-            pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
-            log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
-
+        def reg_fold(train_idx: np.ndarray, val_idx: np.ndarray, regressor: Any = regressor) -> Dict[str, Any]:
             # Leakage-Free Pipeline: fitted ONLY on training fold
             pipe = build_pipeline(fit_safe_model(regressor, y[train_idx]), schema, "regressor")
             pipe.fit(X.iloc[train_idx], y[train_idx])
-            train_r2_list.append(r2_score(y[train_idx], pipe.predict(X.iloc[train_idx])))
-            oof_preds[val_idx] = pipe.predict(X.iloc[val_idx])
-            params = _model_params(pipe)
-            del pipe  # Explicit memory cleanup per fold
+            return {"train": r2_score(y[train_idx], pipe.predict(X.iloc[train_idx])),
+                    "pred": pipe.predict(X.iloc[val_idx]), "params": _model_params(pipe)}
+
+        folds, seconds = _cv_folds(resume, m_idx, model_name, model_count, splits, target_name, known, reg_fold,
+                                   log_offset, log_weight)
+        oof_preds = np.zeros(len(y))
+        for (_, val_idx), f in zip(splits, folds):
+            oof_preds[val_idx] = f["pred"]
+        train_r2_list = [f["train"] for f in folds]
+        params = folds[-1]["params"]
 
         model_oof_map[model_name] = oof_preds
         val_r2 = float(r2_score(y, oof_preds))
@@ -611,6 +935,8 @@ def train_and_benchmark_models(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
+        known.append(seconds)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_preds), seconds)
 
     # Sort leaderboard by val_r2 descending
     leaderboard.sort(key=lambda item: item["val_r2"], reverse=True)
@@ -633,14 +959,10 @@ def train_and_benchmark_models(
         "method": "champion OOF residual quantiles (constant width)",
     }
 
-    # Fit Champion Model on 100% of data
-    log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "regressor")
-    final_pipeline.fit(X, y)
-
-    log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
-    importance_notes: List[str] = []
-    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring=None, notes=importance_notes)
+    # Fit Champion Model on 100% of data, then its permutation importance (split at the time limit)
+    final_pipeline, feature_ranks, importance_notes = _final_fit_and_importance(
+        models[champion_name], champion_name, "regressor", X, y, schema, seed, None, resume, target_name,
+        model_count, _fit_estimate(known[list(models).index(champion_name)], len(splits)), log_offset, log_weight)
 
     champion_summary = {
         "task": TASK_REGRESSION,
@@ -776,7 +1098,8 @@ def train_and_benchmark_classifiers(
     seed: int = 42,
     log_offset: int = 20,
     log_weight: int = 50,
-    positive_class: Optional[str] = None
+    positive_class: Optional[str] = None,
+    resume: Optional[str] = None
 ) -> Tuple[Dict[str, Any], Any, Dict[str, Any]]:
     """
     Stratified K-Fold competition of 5 classifiers. Champion = highest Out-of-Fold Macro-F1
@@ -849,25 +1172,31 @@ def train_and_benchmark_classifiers(
     model_oof_map: Dict[str, np.ndarray] = {}
     model_proba_map: Dict[str, np.ndarray] = {}
 
+    known: List[float] = []                   # measured seconds of this target's candidates (saved ones included)
     for m_idx, (model_name, clf) in enumerate(models.items()):
-        oof_pred = np.empty(len(y), dtype=object)
-        oof_proba = np.zeros((len(y), len(classes)))
-        train_f1_list = []
-        params = {}
+        saved = _candidate_load(resume, m_idx)
+        if saved is not None and saved[0] == model_name and len(saved) == 5:
+            model_oof_map[model_name], model_proba_map[model_name] = saved[2], saved[3]
+            leaderboard.append(saved[1])
+            known.append(float(saved[4]))
+            continue
 
-        for fold, (train_idx, val_idx) in enumerate(splits, 1):
-            pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
-            log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
-
+        def clf_fold(train_idx: np.ndarray, val_idx: np.ndarray, clf: Any = clf) -> Dict[str, Any]:
             pipe = build_pipeline(fit_safe_model(clf, y[train_idx]), schema, "classifier")
             pipe.fit(X.iloc[train_idx], y[train_idx])
-            train_f1_list.append(f1_score(y[train_idx], pipe.predict(X.iloc[train_idx]), average="macro", zero_division=0))
-            oof_pred[val_idx] = pipe.predict(X.iloc[val_idx])
-            proba = pipe.predict_proba(X.iloc[val_idx])
-            col_idx = [classes.index(c) for c in pipe.classes_]
-            oof_proba[np.ix_(val_idx, col_idx)] = proba
-            params = _model_params(pipe)
-            del pipe
+            return {"train": f1_score(y[train_idx], pipe.predict(X.iloc[train_idx]), average="macro", zero_division=0),
+                    "pred": pipe.predict(X.iloc[val_idx]), "proba": pipe.predict_proba(X.iloc[val_idx]),
+                    "cols": [classes.index(c) for c in pipe.classes_], "params": _model_params(pipe)}
+
+        folds, seconds = _cv_folds(resume, m_idx, model_name, model_count, splits, target_name, known, clf_fold,
+                                   log_offset, log_weight)
+        oof_pred = np.empty(len(y), dtype=object)
+        oof_proba = np.zeros((len(y), len(classes)))
+        for (_, val_idx), f in zip(splits, folds):
+            oof_pred[val_idx] = f["pred"]
+            oof_proba[np.ix_(val_idx, f["cols"])] = f["proba"]
+        train_f1_list = [f["train"] for f in folds]
+        params = folds[-1]["params"]
 
         oof_pred = oof_pred.astype(str)
         model_oof_map[model_name] = oof_pred
@@ -887,6 +1216,8 @@ def train_and_benchmark_classifiers(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
+        known.append(seconds)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_pred, oof_proba), seconds)
 
     leaderboard.sort(key=lambda item: item["val_f1_macro"], reverse=True)
     for rank, entry in enumerate(leaderboard, 1):
@@ -918,13 +1249,9 @@ def train_and_benchmark_classifiers(
         for c in classes
     }
 
-    log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
-    final_pipeline = build_pipeline(fit_safe_model(models[champion_name], y), schema, "classifier")
-    final_pipeline.fit(X, y)
-
-    log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
-    importance_notes: List[str] = []
-    feature_ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring="f1_macro", notes=importance_notes)
+    final_pipeline, feature_ranks, importance_notes = _final_fit_and_importance(
+        models[champion_name], champion_name, "classifier", X, y, schema, seed, "f1_macro", resume, target_name,
+        model_count, _fit_estimate(known[list(models).index(champion_name)], len(splits)), log_offset, log_weight)
 
     champion_summary = {
         "task": TASK_CLASSIFICATION,
@@ -1085,8 +1412,9 @@ class TransactionGuard:
             except Exception as e:
                 sys.stderr.write(f"[WARN] 이전 버전 백업 폴더 정리 실패 (다음 학습 때 다시 안내): {e}\n")
 
-    def rollback(self) -> None:
-        """Undoes a run that was not finalized: staging folder, committed folder and parked backup."""
+    def rollback(self, quiet: bool = False) -> None:
+        """Undoes a run that was not finalized: staging folder, committed folder and parked backup.
+        quiet: a run stopped at the time limit (Unfinished, R10) is not an abnormal stop (no [WARN])."""
         if self.is_finalized:
             return
         try:
@@ -1097,7 +1425,8 @@ class TransactionGuard:
                 sys.stderr.write(f"[WARN] 비정상 중단: 기존 {self.version_str} 폴더를 되돌렸습니다\n")
             if self.tmp_dir and os.path.exists(self.tmp_dir):
                 remove_tree(self.tmp_dir)
-            sys.stderr.write(f"[WARN] 비정상 중단: 임시 스테이징 폴더 롤백 완료 ({self.tmp_dir})\n")
+            if not quiet:
+                sys.stderr.write(f"[WARN] 비정상 중단: 임시 스테이징 폴더 롤백 완료 ({self.tmp_dir})\n")
         except Exception:
             pass
 
@@ -1145,9 +1474,18 @@ def append_history_ledger(ledger_path: str, record: Dict[str, Any],
     data_root = os.path.dirname(ledger_path)
     os.makedirs(data_root, exist_ok=True)
 
-    # 1. Append to history.jsonl (streaming ledger)
-    with open(ledger_path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(dumps_json(record) + "\n")
+    # 1. Append to history.jsonl (streaming ledger). A version replaced with --overwrite keeps one record: the old
+    # record of that version is removed (the ledger is rewritten atomically), so the report's best version and the
+    # is_best / delta comparisons never see the replaced folder's scores.
+    ver = record.get("version")
+    existing = load_history_ledger(ledger_path) if ver else []
+    if any(r.get("version") == ver for r in existing):
+        kept = [r for r in existing if r.get("version") != ver]
+        atomic_write_text(ledger_path, "".join(dumps_json(r) + "\n" for r in kept + [record]))
+        sys.stderr.write(f"[INFO] 원장(history.jsonl)의 {ver} 기록을 이번 기록으로 교체했습니다 (--overwrite)\n")
+    else:
+        with open(ledger_path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(dumps_json(record) + "\n")
     if on_recorded:
         on_recorded()
 
@@ -1251,18 +1589,12 @@ def _q(v: str) -> str:
     return '"' + str(v) + '"'
 
 
-def layout_flags(args: argparse.Namespace) -> str:
-    """' --header-row 4 --unit-row 5' when the data was read with a layout: a new file of the same layout needs it too."""
-    return "".join(f" {flag} {int(val)}" for flag, val in (
-        ("--header-row", getattr(args, "header_row", None)), ("--unit-row", getattr(args, "unit_row", None)),
-        ("--data-row", getattr(args, "data_row", None))) if val is not None)
-
-
-def predict_next_command(final_dir: str, args: argparse.Namespace, purpose: str) -> Dict[str, Any]:
+def predict_next_command(final_dir: str, purpose: str) -> Dict[str, Any]:
+    """The prediction command for a new file, without layout options: ml_predict.py finds the header of each file
+    (a layout that does not fit the new file is recovered in place, so copying the training layout is not needed)."""
     here = os.path.dirname(os.path.abspath(__file__))
     return {"purpose": purpose,
-            "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\""
-                       + layout_flags(args),
+            "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\"",
             "needs_input": True, "placeholder": "<새데이터.xlsx>"}
 
 
@@ -1270,7 +1602,7 @@ def build_next_commands(
     args: argparse.Namespace, raw_file: str, task: str, positive_class: Optional[str],
     feature_names: List[str], created_features: List[str], applied_evals: List[str],
     target_names: List[str], champion: Dict[str, Any], schema: Dict[str, Any],
-    mean_score: float, staging_dir: str, final_dir: str, data_root: str,
+    mean_score: float, staging_dir: str, final_dir: str, exclude_where: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Ready-to-run follow-up commands so a small LLM does not have to compose arguments:
@@ -1285,7 +1617,7 @@ def build_next_commands(
     train_py = _q(os.path.join(here, "ml_train.py"))
     base = [f"python {train_py}", "-f", _q(raw_file)]
     for flag, val in (("--header-row", args.header_row), ("--unit-row", args.unit_row),
-                      ("--data-row", args.data_row), ("--dtypes", args.dtypes)):
+                      ("--data-row", args.data_row), ("--dtypes", args.dtypes), ("--exclude-where", exclude_where)):
         if val is not None:
             base += [flag, _q(val)]
     if task == TASK_CLASSIFICATION:
@@ -1307,7 +1639,7 @@ def build_next_commands(
         return not any(t is not None and '"' in str(t) for t in texts)
 
     base += ["-y", names_arg(target_names, "next_targets.txt", limit=10 ** 6)]
-    retrain_ok = quotable(args.dtypes, positive_class)
+    retrain_ok = quotable(args.dtypes, positive_class, exclude_where)
 
     base_features = [f for f in feature_names if f not in created_features]
     cmds: List[Dict[str, Any]] = []
@@ -1319,7 +1651,7 @@ def build_next_commands(
             "needs_input": False,
         })
         cmds.append(predict_next_command(
-            final_dir, args, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
+            final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
@@ -1369,7 +1701,7 @@ def data_fingerprint(path: str) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 7-B. Row Exclusion: '제외' column + automatic outlier detection (2.5.0)
+# 7-B. Row Exclusion: '제외' column + automatic outlier detection
 # ==============================================================================
 #
 # The data file is never modified. A column named '제외' (fixed name, unit suffix ignored) is read per row:
@@ -1381,8 +1713,8 @@ def data_fingerprint(path: str) -> Dict[str, Any]:
 
 EXCLUDE_COL = "제외"
 INCLUDE_MARK = "포함"
-SNAPSHOT_ROW_COL = "원본행"              # model_dataset.csv: Excel row number of each row (2.7.0)
-SNAPSHOT_EXCL_PREFIX = "학습제외_"       # model_dataset.csv: 1 = left out of training for that target (2.7.0)
+SNAPSHOT_ROW_COL = "원본행"              # model_dataset.csv: Excel row number of each row
+SNAPSHOT_EXCL_PREFIX = "학습제외_"       # model_dataset.csv: 1 = left out of training for that target
 OUTLIER_Z = 3.5               # robust z-score (median / MAD) above which a value is an outlier
 OUTLIER_MAX_FRACTION = 0.10   # more candidates than this is a skewed distribution, not outliers: exclude none
 MIN_TRAIN_ROWS = 10
@@ -1415,24 +1747,35 @@ def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
 
 
 def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, schema: Dict[str, Any],
-                    created: List[str], task: str, target_name: str) -> Dict[str, Any]:
-    """Rows to leave out of training for one target: the user's '제외' marks plus automatic outliers."""
+                    created: List[str], task: str, target_name: str,
+                    cond: Optional[np.ndarray] = None, cond_text: str = "") -> Dict[str, Any]:
+    """Rows to leave out of training for one target: the user's '제외' marks, the rows meeting --exclude-where
+    (cond, unless the row is marked: '포함' keeps it, a written reason wins) plus automatic outliers."""
     n = len(y)
     valid = y.notna().to_numpy()
     text = (marks.map(_exclude_mark).to_numpy() if marks is not None else np.array([""] * n, dtype=object))
     forced = text == INCLUDE_MARK
     manual = (text != "") & ~forced & valid
-    candidate = valid & ~manual & ~forced
+    cond_all = np.asarray(cond, dtype=bool) if cond is not None else np.zeros(n, dtype=bool)
+    by_cond = cond_all & valid & ~forced & ~manual
+    cond_forced = cond_all & valid & forced
+    left = int((valid & ~manual & ~by_cond).sum())
+    if by_cond.any() and left < MIN_TRAIN_ROWS:
+        raise InputError(f"--exclude-where 조건({cond_text})에 맞는 {int(by_cond.sum())}행과 '제외' 표시 행을 빼면 타겟 "
+                         f"'{target_name}'의 학습 행이 {left}행만 남습니다 (최소 {MIN_TRAIN_ROWS}행). 조건을 사용자와 확인하십시오.")
+    candidate = valid & ~manual & ~forced & ~by_cond
 
     check_cols = ([target_name] if task == TASK_REGRESSION else []) + \
         [c for c in schema["numeric"] if c not in created and c in X.columns]
     auto = np.zeros(n, dtype=bool)
     reasons = [""] * n
+    auto_cols: List[List[str]] = [[] for _ in range(n)]
     for col in check_cols:
         series = y if col == target_name else X[col]
         flags, med = _outlier_flags(series.where(candidate))
         for i in np.flatnonzero(flags):
             auto[i] = True
+            auto_cols[i].append(strip_unit(col))
             val = pd.to_numeric(pd.Series([series.iloc[i]]), errors="coerce").iloc[0]
             reasons[i] += ("; " if reasons[i] else "") + f"{strip_unit(col)} {val:.6g} (중앙값 {med:.6g})"
 
@@ -1442,7 +1785,7 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
             note = (f"이상치 후보가 {int(auto.sum())}행({auto.sum() / max(candidate.sum(), 1):.0%})으로 많아 자동 제외하지 않았습니다 "
                     f"(값이 넓게 퍼진 데이터일 수 있음)")
             auto[:] = False
-        elif (valid & ~manual & ~auto).sum() < MIN_TRAIN_ROWS:
+        elif (valid & ~manual & ~by_cond & ~auto).sum() < MIN_TRAIN_ROWS:
             note = f"자동 제외하면 학습 행이 {MIN_TRAIN_ROWS}개 미만이 되어 자동 제외하지 않았습니다"
             auto[:] = False
     if task == TASK_CLASSIFICATION and auto.any():
@@ -1451,8 +1794,28 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
             in_cls = valid & (y_arr == cls)
             if (in_cls & ~manual & ~auto).sum() < 2:
                 auto[in_cls] = False   # never remove a class from training
-    return {"manual": manual, "auto": auto, "forced": forced, "mask": manual | auto,
-            "text": text, "reasons": reasons, "note": note, "checked_columns": check_cols}
+    return {"manual": manual, "auto": auto, "forced": forced, "mask": manual | auto | by_cond, "cond": by_cond,
+            "cond_forced": cond_forced, "text": text, "reasons": reasons, "auto_cols": auto_cols, "note": note,
+            "checked_columns": check_cols}
+
+
+EXCLUDED_PREVIEW_MAX = 20    # excluded rows listed in the training JSON; excluded_rows.csv holds all
+
+
+def excluded_preview_keys(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """JSON keys of the excluded rows: excluded_preview (first EXCLUDED_PREVIEW_MAX: target, row, kind 직접/자동,
+    reason, value = the target value), excluded_reasons (rows per reason: the '제외' text, or '자동 이상치: <columns>'),
+    excluded_count, excluded_preview_truncated."""
+    def _val(v: Any) -> Any:
+        return v if isinstance(v, (int, float, str)) and not (isinstance(v, float) and v != v) else str(v)
+    preview = [{"target": r["타겟"], "row": int(r["원본 행"]), "kind": "직접" if r["구분"] == "직접 표시" else
+                ("조건" if r["구분"] == "조건" else "자동"), "reason": r["이유"], "value": _val(r["실제값"])}
+               for r in rows[:EXCLUDED_PREVIEW_MAX]]
+    reasons: Dict[str, int] = {}
+    for r in rows:
+        reasons[r["_key"]] = reasons.get(r["_key"], 0) + 1
+    return {"excluded_count": len(rows), "excluded_preview": preview, "excluded_reasons": reasons,
+            "excluded_preview_truncated": len(rows) > EXCLUDED_PREVIEW_MAX}
 
 
 def score_with_excluded(task: str, pipe: Any, info: Dict[str, Any], oof_df: pd.DataFrame,
@@ -1494,7 +1857,36 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
         raise InputError("학습에 투입할 독립변수 목록(-x, --features)이 지정되지 않았거나 파일이 비어 있습니다.")
     if not target_names:
         raise InputError("예측할 종속변수 목록(-y, --targets)이 지정되지 않았거나 파일이 비어 있습니다.")
-    dtypes = group.get("dtypes")
+    # --dtypes names resolved like -x / -y, types checked (the canonical list is what the ledger keeps)
+    dtypes = resolve_dtypes(group.get("dtypes"), [str(c) for c in df_raw.columns], dict(df_raw.attrs))
+    # --exclude-where: column names resolved like -x / -y, the canonical text is what the ledger keeps
+    where_txt: Optional[str] = None
+    where_hit: Optional[np.ndarray] = None
+    group_warnings_pre: List[str] = []
+    where_fix: Optional[Dict[str, Any]] = None
+    if group.get("exclude_where"):
+        conds = resolve_where(parse_where(group["exclude_where"], "--exclude-where"), [str(c) for c in df_raw.columns],
+                              "--exclude-where", dict(df_raw.attrs))
+        where_txt = where_text(conds)
+        where_hit = where_mask(df_raw, conds)
+        sys.stderr.write(f"[INFO] --exclude-where 조건({where_txt})에 맞는 행: {int(where_hit.sum())}개\n")
+        if not where_hit.any():
+            group_warnings_pre.append(f"--exclude-where 조건({where_txt})에 맞는 행이 없어 조건으로 뺀 행은 0개입니다")
+            sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
+        variants = where_notation_variants(df_raw, conds)
+        if variants:
+            # a code column compared as text: '월 = 1' leaves the '01' rows (the same number in training) in
+            fixed = where_text(where_with_variants(conds, variants))
+            cmd = where_retry("--exclude-where", fixed)
+            for (c, o, v), cnt in variants:
+                notes = ", ".join(f"'{t}' {n}행" for t, n in cnt.items())
+                group_warnings_pre.append(
+                    f"--exclude-where '{c} {o} {v}': {notes}은(는) 표기가 달라 " + ("빼지 않음" if o == "=" else "함께 뺌")
+                    + f" ('{c}' 열은 앞자리 0을 구분하는 코드 열이라 글자 그대로 비교). 같은 값으로 보려면 [추천] {cmd}")
+                sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
+            if cmd.startswith("python "):
+                where_fix = {"purpose": f"--exclude-where를 표기가 다른 같은 값까지 포함한 조건({fixed})으로 다시 학습 "
+                                        "(사용자가 원할 때만)", "command": cmd, "needs_input": False}
 
     # Fail-Fast Validation & Type Sanitization
     log_progress(10, "컬럼 유효성 검증 및 타입 정제 중...")
@@ -1534,8 +1926,9 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
         )
     for col in feature_schema["numeric"]:
         df_clean[col] = X_all[col]
-    group_warnings = _decimal_comma_category_check(df_raw, feature_schema, feature_names, created_features, dtypes)
-    # Columns the user must provide at prediction time: own raw features + sources of derived features (2.9.1)
+    group_warnings = group_warnings_pre + _decimal_comma_category_check(df_raw, feature_schema, feature_names,
+                                                                        created_features, dtypes)
+    # Columns the user must provide at prediction time: own raw features + sources of derived features
     sources = eval_source_columns(applied_evals, [str(c) for c in df_raw.columns])
     raw_required = [f for f in feature_names if f not in created_features]
     raw_required += [c for c in sources if c not in raw_required and c not in target_names]
@@ -1545,7 +1938,8 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     return {"df": df_clean, "features": feature_names, "targets": target_names, "aliases": column_aliases,
             "raw_required": raw_required,
             "evals": applied_evals, "created": created_features, "schema": feature_schema, "X": X_all,
-            "dtypes": dtypes, "positive_class": group.get("positive_class"), "warnings": group_warnings}
+            "dtypes": dtypes, "positive_class": group.get("positive_class"), "warnings": group_warnings,
+            "where": where_txt, "where_hit": where_hit, "where_fix": where_fix}
 
 
 DECIMAL_COMMA_STOP_SHARE = 0.5     # a selected text feature with this share of '175,6' cells is refused
@@ -1641,8 +2035,70 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
             raise InputError("--positive-class는 --task classification과 함께 사용해야 합니다.")
         positive_class = normalize_labels(pd.Series([positive_class])).iloc[0]
     group = {"features": args.features, "targets": args.targets, "eval": args.eval,
-             "dtypes": args.dtypes, "positive_class": positive_class}
+             "dtypes": args.dtypes, "positive_class": positive_class,
+             "exclude_where": getattr(args, "exclude_where", None)}
     return train_version(args, task, [group])
+
+
+# ------------------------------------------------------------------------------
+# Split execution (R10): the agent's command tool stops a command at 120 s. Every target whose 5-model competition
+# finished is saved in <data_root>/.resume_train/<key>.joblib (key = the exact training input: data, schema, task,
+# seed, tool and scikit-learn versions; in a fallback place when that folder cannot be written: resume_save).
+# Before the next target the clock is checked (check_time); a run that would
+# pass the limit stops with CONTINUE, leaving no version folder and no ledger record. The same command run again
+# reuses the saved targets and goes on; the version folder and history.jsonl are written once, by the run that ends.
+# ------------------------------------------------------------------------------
+RESUME_DIR = ".resume_train"
+BEST_RUN_FILE = "best_run.json"    # in RESUME_DIR: the best versions a split --best run already made ({task: version})
+
+# Seconds of every target trained in this command (all tasks of --best, ml_report -f retraining): the clock check
+# before a new target uses them, so the first target of the second task is checked too.
+RUN_FIT_SECONDS: List[float] = []
+
+
+def _resume_key(task: str, target: str, X: pd.DataFrame, y: pd.Series, schema: Dict[str, Any], seed: int,
+                extra: Dict[str, Any]) -> str:
+    import hashlib
+    h = hashlib.sha1()
+    for part in (VERSION, sklearn.__version__, task, target, dumps_json(schema), seed, dumps_json(extra)):
+        h.update(str(part).encode("utf-8") + b"\x1e")
+    h.update(pd.util.hash_pandas_object(X, index=False).values.tobytes())
+    h.update(pd.util.hash_pandas_object(y.astype(object), index=False).values.tobytes())
+    return h.hexdigest()[:16]                 # short file names: room under MAX_PATH (260) in deep folders
+
+
+def _resume_load(want: str) -> Optional[Tuple[Any, Any, Any, Any]]:
+    path = resume_find(os.path.dirname(want), os.path.basename(want))
+    if not path:
+        return None
+    try:
+        res = joblib.load(path)
+        if isinstance(res, tuple) and len(res) == 4:
+            return res
+    except Exception:
+        pass
+    try:                                       # damaged saved target: drop it and train again (JIT: rebuilt)
+        os.remove(path)
+    except OSError:
+        pass
+    sys.stderr.write(f"[WARN] 저장된 중간 학습 결과 {os.path.basename(path)}를 읽지 못해 다시 학습합니다\n")
+    return None
+
+
+def _resume_save(want: str, res: Tuple[Any, ...]) -> bool:
+    """Saves a finished step for the next run of the same command (at `want`, or in a fallback place: resume_save)
+    and checks the file is there. False when no place worked (check_time then stops with STOP_RETRY)."""
+    return resume_save(os.path.dirname(want), os.path.basename(want), lambda tmp: joblib.dump(res, tmp),
+                       "중간 학습 결과") is not None
+
+
+def _resume_cleanup(resume_dir: str, used: List[str]) -> None:
+    """Removes the saved targets of this (finished) run and those older than RESUME_MAX_AGE, in the original folder
+    and in the fallback places."""
+    now = time.time()
+    keys = {os.path.basename(p).split(".")[0] for p in used}
+    # a finished target and its saved candidates (<key>.joblib, <key>.m<k>.joblib), or an old one
+    resume_clear(resume_dir, lambda name, p: name.split(".")[0] in keys or now - os.path.getmtime(p) > RESUME_MAX_AGE)
 
 
 def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]],
@@ -1681,7 +2137,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
     try:
         log_progress(5, f"입력 데이터 로드 중: {os.path.basename(raw_file)}...")
-        df_raw, file_name = load_data_file(
+        df_raw = load_data_file(   # the shared loader: identical parsing in ml_predict.py
             file_path=raw_file,
             header_row=args.header_row,
             unit_row=args.unit_row,
@@ -1753,6 +2209,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         benchmark_fn = train_and_benchmark_models if task == TASK_REGRESSION else train_and_benchmark_classifiers
 
         total_targets = len(target_names)
+        resume_dir = os.path.join(data_root, RESUME_DIR)
+        resume_used: List[str] = []
+        reused_targets: List[str] = []
         for t_idx, target_name in enumerate(target_names):
             g = target_group[target_name]
             t_offset = 25 + int(55 * t_idx / total_targets)
@@ -1763,10 +2222,19 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             extra = {"positive_class": g["positive_class"]} if task == TASK_CLASSIFICATION else {}
             y_full = g["df"][target_name]
             plan = plan_exclusions(g["df"][excl_col] if excl_col else None, y_full, g["X"], g["schema"],
-                                   g["created"], task, target_name)
+                                   g["created"], task, target_name, cond=g["where_hit"], cond_text=g["where"] or "")
             if plan["mask"].any():
                 sys.stderr.write(f"[INFO] 타겟 '{target_name}': 학습에서 뺀 행 {int(plan['mask'].sum())}개 "
-                                 f"(직접 표시 {int(plan['manual'].sum())}, 자동 이상치 {int(plan['auto'].sum())})\n")
+                                 f"(직접 표시 {int(plan['manual'].sum())}, 조건 {int(plan['cond'].sum())}, "
+                                 f"자동 이상치 {int(plan['auto'].sum())})\n")
+            if plan["cond_forced"].any():
+                rows_kept = [source_rows[i] if i < len(source_rows) else i + 1 for i in np.flatnonzero(plan["cond_forced"])]
+                w = (f"타겟 '{target_name}': '{excl_col}' 열에 '{INCLUDE_MARK}'으로 표시한 {len(rows_kept)}행(원본 행 "
+                     f"{', '.join(map(str, rows_kept[:10]))}{' 등' if len(rows_kept) > 10 else ''})은 --exclude-where 조건에 맞지만 "
+                     f"학습에 넣었습니다 ('{INCLUDE_MARK}' 표시가 우선)")
+                if w not in train_warnings:
+                    train_warnings.append(w)
+                    sys.stderr.write(f"[WARN] {w}\n")
             if plan["note"]:
                 sys.stderr.write(f"[WARN] 타겟 '{target_name}': {plan['note']}\n")
             trained = np.array(y_full.notna(), dtype=bool) & ~np.asarray(plan["mask"], dtype=bool)
@@ -1777,16 +2245,34 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     entry = unparsed.setdefault(c, {"rows": set(), "examples": []})
                     entry["rows"].update(pos)
                     entry["examples"] += [v for v in ex if v not in entry["examples"]]
-            t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
-                X=g["X"],
-                y_series=y_full.mask(plan["mask"]),
-                target_name=target_name,
-                schema=g["schema"],
-                seed=args.seed,
-                log_offset=t_offset,
-                log_weight=t_weight,
-                **extra
-            )
+            y_train = y_full.mask(plan["mask"])
+            r_path = os.path.join(resume_dir, _resume_key(task, target_name, g["X"], y_train, g["schema"], args.seed,
+                                                          extra) + ".joblib")
+            cached = _resume_load(r_path)
+            if cached is not None:
+                t_bench, champion_pipe, champion_info, oof_df = cached
+                reused_targets.append(target_name)
+                sys.stderr.write(f"[INFO] 타겟 '{target_name}': 이전 실행에서 저장한 학습 결과를 씀 (나눠서 진행)\n")
+            else:
+                if RUN_FIT_SECONDS:     # at least one new target per run: running again always moves on
+                    check_time(max(RUN_FIT_SECONDS) * 1.2,
+                               f"학습: 타겟 {t_idx}/{total_targets}개 끝남, 저장됨 ('{target_name}' 학습 전에 멈춤)")
+                t_fit = time.monotonic()
+                t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
+                    X=g["X"],
+                    y_series=y_train,
+                    target_name=target_name,
+                    schema=g["schema"],
+                    seed=args.seed,
+                    log_offset=t_offset,
+                    log_weight=t_weight,
+                    resume=r_path[:-len(".joblib")],
+                    **extra
+                )
+                RUN_FIT_SECONDS.append(time.monotonic() - t_fit)
+                if total_targets > 1:
+                    _resume_save(r_path, (t_bench, champion_pipe, champion_info, oof_df))
+            resume_used.append(r_path)
 
             if champion_info.get("duplicate_rows"):
                 train_warnings.append(duplicate_warning(target_name, champion_info["duplicate_rows"],
@@ -1802,6 +2288,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 "auto_note": plan["note"],
                 "all_rows_score": all_score,
             }
+            if g["where"]:
+                excl_info["condition"] = int(plan["cond"].sum())
+                excl_info["condition_text"] = g["where"]
             champion_info["excluded"] = excl_info
             if all_score is not None:
                 champion_info["all_rows_score"] = all_score
@@ -1811,8 +2300,12 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 excluded_rows_out.append({
                     "타겟": target_name,
                     "원본 행": source_rows[i] if i < len(source_rows) else i + 1,
-                    "구분": "직접 표시" if plan["manual"][i] else "자동 이상치",
-                    "이유": plan["text"][i] if plan["manual"][i] else plan["reasons"][i],
+                    "구분": "직접 표시" if plan["manual"][i] else ("조건" if plan["cond"][i] else "자동 이상치"),
+                    "이유": (plan["text"][i] if plan["manual"][i]
+                           else (f"조건: {g['where']}" if plan["cond"][i] else plan["reasons"][i])),
+                    "_key": (plan["text"][i] if plan["manual"][i]
+                             else (f"조건: {g['where']}" if plan["cond"][i]
+                                   else "자동 이상치: " + ", ".join(plan["auto_cols"][i]))),
                     "실제값": actual if task == TASK_CLASSIFICATION else round(float(actual), 6),
                     "예측값": (str(excl_pred[k]) if task == TASK_CLASSIFICATION else round(float(excl_pred[k]), 6)),
                 })
@@ -1845,7 +2338,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
         # Check Previous History (same task only) for Delta
         log_progress(85, f"이전 이력 대조 및 성능 변화(Delta {metric_label}) 산출 중...")
-        history_records = load_history_ledger(ledger_path)
+        # the record of a version replaced with --overwrite is no earlier run to compare with
+        history_records = [h for h in load_history_ledger(ledger_path) if h.get("version") != current_version]
 
         # Resolve project description: explicit arg takes precedence, otherwise inherit from previous version
         project_desc = (getattr(args, "description", None) or "").strip()
@@ -2020,7 +2514,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         raw_extra = [c for g in prepared for c in g["raw_required"] if c not in feature_names]
         dataset_snapshot_cols = list(dict.fromkeys(c for c in feature_names + raw_extra + target_names if c in df_clean.columns))
         snapshot_df = df_clean[dataset_snapshot_cols].copy()
-        # 2.7.0: Excel row numbers and per-target training exclusions, so ml_predict.py can compare its predictions
+        # Excel row numbers and per-target training exclusions, so ml_predict.py can compare its predictions
         # with the measured rows the model learned from (evidence rows are shown as Excel row numbers)
         snapshot_df[SNAPSHOT_ROW_COL] = [source_rows[i] if i < len(source_rows) else i + 1 for i in range(len(snapshot_df))]
         for t in target_names:
@@ -2028,15 +2522,16 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         snapshot_path = os.path.join(staging_dir, "model_dataset.csv")
 
         # Windows 한국어 Excel 호환: cp949 기본, 표현 불가 문자 포함 시 utf-8-sig 자동 폴백
-        write_csv_excel_compatible(snapshot_df, snapshot_path, encoding=getattr(args, "encoding", None))
+        write_csv_excel_compatible(snapshot_df, snapshot_path)
 
         # 3-B. Rows left out of training (user marks + automatic outliers), for the user to review in Excel
         excluded_rows_file = None
         if excluded_rows_out:
-            ex_path = write_csv_excel_compatible(pd.DataFrame(excluded_rows_out), os.path.join(staging_dir, "excluded_rows.csv"))
+            ex_path = write_csv_excel_compatible(pd.DataFrame(excluded_rows_out).drop(columns="_key"),
+                                                 os.path.join(staging_dir, "excluded_rows.csv"))
             excluded_rows_file = os.path.join(guard.final_dir, os.path.basename(ex_path))
         exclusion_summary = {t: {k: v for k, v in e.items() if k != "mask"} for t, e in exclusions.items()
-                             if e["manual"] or e["auto"] or e["forced_include"] or e["auto_note"]}
+                             if e["manual"] or e["auto"] or e["forced_include"] or e["auto_note"] or e.get("condition")}
 
         # 4. Append Record to history.jsonl (SSOT)
         duration_sec = round(time.time() - start_time, 2)
@@ -2097,12 +2592,14 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         }
         if exclusion_summary:
             history_record["exclusions"] = exclusion_summary
-        # Recipe inputs that ml_train --best needs to replay a run (added in 2.4.0)
+        # Recipe inputs that ml_train --best needs to replay a run
         if len(prepared) == 1:
             if g0["dtypes"]:
                 history_record["dtypes"] = g0["dtypes"]
             if g0["positive_class"] is not None:
                 history_record["positive_class"] = g0["positive_class"]
+            if g0["where"]:
+                history_record["exclude_where"] = g0["where"]
         try:
             history_record["data_fingerprint"] = data_fingerprint(raw_file)
         except OSError as e:
@@ -2114,7 +2611,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 t: {"features": [f for f in target_group[t]["features"] if f not in target_group[t]["created"]],
                     "derived_evals": target_group[t]["evals"],
                     "dtypes": target_group[t]["dtypes"],
-                    "positive_class": target_group[t]["positive_class"]}
+                    "positive_class": target_group[t]["positive_class"],
+                    "exclude_where": target_group[t]["where"]}
                 for t in target_names
             }
             next_commands = build_best_next_commands(raw_file, guard.final_dir, args, task)
@@ -2123,26 +2621,33 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 args=args, raw_file=raw_file, task=task, positive_class=g0["positive_class"],
                 feature_names=g0["features"], created_features=g0["created"], applied_evals=g0["evals"],
                 target_names=target_names, champion={**prim_champ, "weak_features": weak_feats}, schema=g0["schema"],
-                mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir, data_root=data_root,
+                mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir, exclude_where=g0["where"],
             )
+        if not best_info:     # a plain run: the command again with the condition covering the other notations
+            where_fixes = [g["where_fix"] for g in prepared if g.get("where_fix")]
+            next_commands = [c for i, c in enumerate(where_fixes) if c not in where_fixes[:i]] + next_commands
         history_record["next_commands"] = next_commands
 
         # Commit Transaction: atomic rename .tmp_vX -> vX, then record it in the ledger.
         # The ledger never names a version folder that does not exist (a failed commit leaves no record).
         final_version_dir = guard.commit()
         append_history_ledger(ledger_path, history_record, on_recorded=guard.finalize)
+        _resume_cleanup(resume_dir, resume_used)
         unverified = verify_version_dir(final_version_dir, target_names, ledger_path, current_version)
         for u in unverified:
             sys.stderr.write(f"[WARN] 저장 확인 실패: {u}\n")
         log_progress(100, f"학습 및 산출물 패키징 완료: {current_version} ({os.path.basename(final_version_dir)}) [소요: {duration_sec}초]")
 
-        # 2.9.39: the most important inputs per target (users ask right after training)
+        # The most important inputs per target (users ask right after training)
         top_features: Dict[str, List[Dict[str, Any]]] = {}
         for t in target_names:
             top_features[t], imp_note = top_feature_shares(target_champions[t]["info"])
             if imp_note:
                 train_warnings.append(f"타겟 '{t}': 중요 입력(top_features)을 내지 못했습니다 ({imp_note}).")
                 sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
+        split_note = save_failed_warning()      # a finished step saved nowhere (this run ended before the limit)
+        if split_note and split_note not in train_warnings:
+            train_warnings.append(split_note)
         top_brief = " | ".join(
             "중요 입력" + (f"({t})" if len(target_names) > 1 else "") + ": "
             + ", ".join(f"{r['feature']} {r['importance']:.2f}" for r in top_features[t][:TOP_FEATURES_PREVIEW])
@@ -2153,31 +2658,32 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         target_brief = ", ".join([f"{t}({target_champions[t]['info']['champion_model']}: 검증 {short}={target_champions[t]['info']['val_score']:.4f})" for t in target_names])
         delta_txt = delta_score if delta_score == "base" else f"{delta_score:+.4f}"
         excl_brief = "; ".join(
-            f"{t}: 학습 제외 {e['manual'] + e['auto']}행(직접 {e['manual']}, 자동 {e['auto']}), "
+            f"{t}: 학습 제외 {e['manual'] + e['auto'] + e.get('condition', 0)}행(직접 {e['manual']}, "
+            + (f"조건 {e['condition']}, " if e.get("condition") else "") + f"자동 {e['auto']}), "
             f"검증 {short}(제외 행 포함)={e['all_rows_score'] if e['all_rows_score'] is not None else '-'}"
-            for t, e in exclusion_summary.items() if e["manual"] or e["auto"])
+            for t, e in exclusion_summary.items() if e["manual"] or e["auto"] or e.get("condition"))
         preview = (
             f"[{current_version} 완료 / {task}] 타겟: [{target_brief}] | "
             + (f"{excl_brief} | " if excl_brief else "") +
-            f"평균 {metric_label}={mean_val_score:.4f} (Delta: {delta_txt}) | "
+            f"평균 {metric_label}={mean_val_score:.4f} (변화: {delta_txt}) | "
             + (f"{top_brief} | " if top_brief else "") +
-            f"소요시간: {duration_sec}s | "
-            f"산출물 저장: {final_version_dir}"
+            f"소요 {duration_sec}초 | "
+            f"저장: {final_version_dir}"
         )
         agent_directive = (
             (f"UNVERIFIED: {current_version} 학습은 끝났지만 저장 결과를 확인하지 못했습니다 ({'; '.join(unverified)}). "
-             f"재시도하지 말고 이 내용을 사용자에게 그대로 알리세요. " if unverified else "VERIFIED: ")
-            + f"{current_version} competitive training completed. "
-            f"Champion models and leaderboard packaged into '{os.path.basename(final_version_dir)}'. "
-            f"Task={task}, Mean {metric_label}={mean_val_score:.4f}. "
-            + ("Some rows were left out of training ('제외' column or automatic outliers): tell the user the counts and "
-               "the score with excluded rows (검증 ... 제외 행 포함) from preview, and the excluded_rows_file path so they can review it. " if excl_brief else "")
-            + ("Tell the user the most important inputs (중요 입력 in preview, top_features: share of all inputs). " if top_brief else "")
-            + ("Tell the user every item of warnings (duplicate rows, repeated header rows, totals rows). " if train_warnings else "") +
-            "Next step: run next_commands[0] if the user wants to continue, or proceed to inference. "
-            "A command with needs_input=true has a placeholder: replace it with a path the user gave, or ask the user first."
+             f"다시 실행하지 말고 unverified를 그대로 알리세요. " if unverified else "VERIFIED: ")
+            + f"{current_version} 학습을 마쳤습니다 ({task}, 평균 {metric_label}={mean_val_score:.4f}). "
+            + ("학습에서 뺀 행이 있습니다. preview의 제외 행 수와 '제외 행 포함' 점수, excluded_reasons(이유별 행 수), "
+               "excluded_preview(행, 직접/자동, 이유, 값)를 그대로, excluded_rows_file 경로도 알리세요. "
+               "그 파일은 열지 말고 다른 이유를 짐작하지 마세요. " if excl_brief else "")
+            + ("preview의 중요 입력(top_features, 전체 입력 대비 비중)을 알리세요. " if top_brief else "")
+            + ("warnings(중복 행, 반복된 머리글 행, 합계 행 등)를 빠짐없이 알리세요. " if train_warnings else "") +
+            "다음: 사용자가 원하면 next_commands[0]을 실행하거나 예측으로 넘어갑니다. "
+            "needs_input=true인 명령의 자리표시자는 사용자가 준 경로로 바꾸고, 모르면 먼저 물으세요."
         )
 
+        shown_types, types_cut = capped_feature_types(history_record["feature_types"])
         result = {
             "status": "ok",
             "version": current_version,
@@ -2193,7 +2699,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "verified": not unverified,
             "recommendations": recommendations,
             "next_commands": next_commands,
-            "feature_types": history_record["feature_types"],
+            "feature_types": shown_types,
+            "truncated": types_cut,
             "top_features": top_features,
             "preview": preview,
             "agent_directive": agent_directive
@@ -2210,17 +2717,26 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             result["exclusions"] = exclusion_summary
             if excluded_rows_file:
                 result["excluded_rows_file"] = excluded_rows_file
+        if excluded_rows_out:   # the rows and reasons in the JSON: the LLM never needs to open the CSV
+            result.update(excluded_preview_keys(excluded_rows_out))
+        if reused_targets:   # trained by earlier runs of the same command (split execution, R10)
+            result["resumed_targets"] = reused_targets
         if column_aliases:
             result["column_aliases"] = column_aliases
         if unverified:
             result["unverified"] = unverified
         if guard.incomplete_versions:
             result["incomplete_versions"] = guard.incomplete_versions
+        if types_cut:     # every input name is in the ledger record of this version
+            result["feature_count"] = len(feature_names)
+            result["full_result_file"] = os.path.join(data_root, "history.json")
         return result
 
-    except BaseException:
-        # Includes KeyboardInterrupt (Ctrl+C) so the staging folder never leaks
-        guard.rollback()
+    except BaseException as exc:
+        # Includes KeyboardInterrupt (Ctrl+C) so the staging folder never leaks. A stop at the time limit (Unfinished)
+        # leaves no version folder and no ledger record: the finished targets wait in .resume_train (or a fallback
+        # place) for the next run.
+        guard.rollback(quiet=isinstance(exc, Unfinished))
         raise
     finally:
         run_lock.release()
@@ -2230,11 +2746,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 # 8-B. Best Version (--best): every target retrained with its best recipe, one version per task
 # ==============================================================================
 
-BEST_TAG = "best"
 TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
 
 
-REPORT_PURPOSE = {  # 2.9.2: a regression report also makes the performance calculator (ml_export.py)
+REPORT_PURPOSE = {  # a regression report also makes the performance calculator (ml_export.py)
     TASK_REGRESSION: "ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (모든 타겟, 입력을 줄이며 다시 학습해 몇 분 걸림. "
                      "성능예측표 제목은 학습 때 데이터 설명에서 자동으로 정함)",
     TASK_CLASSIFICATION: "ML 결과 보고서(Word) 생성 (이 데이터의 모든 타겟을 1개 문서로)",
@@ -2249,7 +2764,7 @@ def build_best_next_commands(raw_file: str, final_dir: str, args: argparse.Names
         {"purpose": REPORT_PURPOSE.get(task, REPORT_PURPOSE[TASK_CLASSIFICATION]),
          "command": f"python {_q(os.path.join(here, 'ml_report.py'))} -f {_q(raw_file)}",
          "needs_input": False},
-        predict_next_command(final_dir, args, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
+        predict_next_command(final_dir, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
     ]
 
 
@@ -2268,7 +2783,8 @@ def _target_recipe(rec: Dict[str, Any], target: str) -> Dict[str, Any]:
     stored = (rec.get("target_recipes") or {}).get(target)
     if stored:
         return {"features": list(stored.get("features") or []), "derived_evals": list(stored.get("derived_evals") or []),
-                "dtypes": stored.get("dtypes"), "positive_class": stored.get("positive_class")}
+                "dtypes": stored.get("dtypes"), "positive_class": stored.get("positive_class"),
+                "exclude_where": stored.get("exclude_where")}
     evals = list(rec.get("derived_evals") or [])
     derived = {e.split("=", 1)[0].strip() for e in evals if "=" in e}
     pos = rec.get("positive_class")
@@ -2276,7 +2792,8 @@ def _target_recipe(rec: Dict[str, Any], target: str) -> Dict[str, Any]:
         champ = ((rec.get("targets_benchmark") or {}).get(target) or {}).get("champion") or {}
         pos = (champ.get("decision_threshold") or {}).get("positive_class")
     return {"features": [f for f in rec.get("features_used", []) if f not in derived], "derived_evals": evals,
-            "dtypes": rec.get("dtypes"), "positive_class": pos if _record_task(rec) == TASK_CLASSIFICATION else None}
+            "dtypes": rec.get("dtypes"), "positive_class": pos if _record_task(rec) == TASK_CLASSIFICATION else None,
+            "exclude_where": rec.get("exclude_where")}
 
 
 def _version_intact(data_root: str, rec: Dict[str, Any]) -> bool:
@@ -2346,15 +2863,16 @@ def build_best_version(args: argparse.Namespace, task: str, records: List[Dict[s
     groups: Dict[str, Dict[str, Any]] = {}
     for t, c in chosen.items():
         r = c["recipe"]
-        key = dumps_json([r["features"], r["derived_evals"], r["dtypes"], r["positive_class"]])
+        key = dumps_json([r["features"], r["derived_evals"], r["dtypes"], r["positive_class"], r.get("exclude_where")])
         g = groups.setdefault(key, {"features": r["features"], "targets": [], "eval": r["derived_evals"],
-                                    "dtypes": r["dtypes"], "positive_class": r["positive_class"]})
+                                    "dtypes": r["dtypes"], "positive_class": r["positive_class"],
+                                    "exclude_where": r.get("exclude_where")})
         g["targets"].append(t)
         sys.stderr.write(f"[INFO] 최고 조건: '{t}' <- {c['selected_version']} (점수 {c['selected_score']:.4f}, "
                          f"원래 출처 {c['source_version']}), 피처 {len(r['features'])}개\n")
     layout = _latest_layout(records, task)
     run_args = argparse.Namespace(**vars(args))
-    for k, default in (("seed", 42), ("description", None), ("tag", None), ("encoding", None)):
+    for k, default in (("seed", 42), ("description", None), ("tag", None)):
         if getattr(run_args, k, None) is None:
             setattr(run_args, k, default)
     for k in ("header_row", "unit_row", "data_row"):
@@ -2394,23 +2912,85 @@ def best_summary(version_result: Dict[str, Any]) -> Dict[str, Any]:
             **({"warnings": version_result["warnings"]} if version_result.get("warnings") else {})}
 
 
+def _best_run_load(data_root: str, raw_file: str) -> Dict[str, str]:
+    """{task: version} of the best versions an earlier run of this --best command made before it stopped (CONTINUE)."""
+    path = resume_find(os.path.join(data_root, RESUME_DIR), BEST_RUN_FILE)
+    if not path:
+        return {}
+    try:
+        if time.time() - os.path.getmtime(path) > RESUME_MAX_AGE:
+            return {}
+        info = load_json_file(path)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(info, dict) or info.get("file") != os.path.normcase(raw_file):
+        return {}
+    return {str(k): str(v) for k, v in (info.get("done") or {}).items()}
+
+
+def _best_run_save(data_root: str, raw_file: str, done: Dict[str, str]) -> None:
+    """Saved nowhere: a continued run would build that task again, so check_time stops with STOP_RETRY."""
+    text = dumps_json({"file": os.path.normcase(raw_file), "done": done})
+
+    def write(tmp: str) -> None:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+    resume_save(os.path.join(data_root, RESUME_DIR), BEST_RUN_FILE, write, "나눠 진행 기록")
+
+
+def _best_run_clear(data_root: str) -> None:
+    resume_clear(os.path.join(data_root, RESUME_DIR), lambda name, p: name == BEST_RUN_FILE)
+
+
+def _best_record_summary(data_root: str, rec: Dict[str, Any], task: str) -> Dict[str, Any]:
+    """The --best result entry of a best version an earlier run of the same command made (not built again)."""
+    sources = rec.get("best_source") or {}
+    best_targets = {}
+    for t in rec.get("targets", []):
+        src = sources.get(t) or {"version": rec["version"], "score": _target_score(rec, t)}
+        best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
+                           "new_score": _target_score(rec, t)}
+    return {"task": task, "version": rec["version"], "version_dir": os.path.join(data_root, rec["version"]),
+            "targets": list(rec.get("targets", [])), "mean_val_score": rec.get("mean_val_score"),
+            "best_targets": best_targets, "reused_best": True}
+
+
 def execute_make_best(args: argparse.Namespace) -> Dict[str, Any]:
-    """ml_train.py --best: builds one best version per task (always retrains)."""
+    """ml_train.py --best: builds one best version per task (always retrains). A run split by the time limit (R10)
+    remembers the best versions it made (.resume_train/best_run.json); the same command run again keeps those that
+    are still fresh (best_is_fresh) and goes on with the next task, so no best version is made twice."""
     raw_file = os.path.abspath(args.file)
     if not os.path.exists(raw_file):
         raise FileNotFoundError(f"입력 파일이 존재하지 않습니다: {raw_file}")
     data_root, records = _ledger_for(raw_file)
     tasks = _tasks_to_build(records, getattr(args, "task", None), os.path.join(data_root, "history.jsonl"))
+    done = _best_run_load(data_root, raw_file) if len(tasks) > 1 else {}
     built = []
-    for task in tasks:
-        built.append(build_best_version(args, task, records))
-        records = load_history_ledger(os.path.join(data_root, "history.jsonl"))
+    try:
+        for i, task in enumerate(tasks):
+            rec = best_is_fresh(records, data_root, raw_file, task) if task in done else None
+            if rec is not None and str(rec.get("version")) == done[task]:
+                sys.stderr.write(f"[INFO] 이전 실행에서 만든 최고 버전 {rec['version']} ({task})을(를) 그대로 씁니다 (나눠서 진행)\n")
+                built.append(_best_record_summary(data_root, rec, task))
+                continue
+            built.append(build_best_version(args, task, records))
+            records = load_history_ledger(os.path.join(data_root, "history.jsonl"))
+            if i < len(tasks) - 1:
+                done[task] = str(built[-1]["version"])
+                _best_run_save(data_root, raw_file, done)
+    except Exception:
+        # an error: no record left for a later run to reuse (a split run, Unfinished, keeps it: the same command run
+        # again goes on from it; so does a stop by the user, so running it again makes no best version twice)
+        _best_run_clear(data_root)
+        raise
+    _best_run_clear(data_root)
     return combine_best_results(built)
 
 
 def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Result JSON of --best: the first version's training keys plus best_* keys covering every task."""
-    result = dict(built[0])
+    """Result JSON of --best: the first built version's training keys plus best_* keys covering every task (a best
+    version kept from an earlier run of a split command has only its summary)."""
+    result = dict(next((b for b in built if not b.get("reused_best")), built[0]))
     summaries = [best_summary(b) for b in built]
     best_targets: Dict[str, Any] = {}
     top_features: Dict[str, Any] = {}
@@ -2435,7 +3015,7 @@ def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
     result["preview"] = f"[최고 버전 완료] {vers} | 타겟별 출처 -> 이번 점수: {brief}"
     multi = (f" 작업 유형이 {len(built)}가지라 최고 버전도 {len(built)}개입니다 (best_versions). 보고서도 {len(built)}개가 됩니다."
              if len(built) > 1 else "")
-    head = (f"UNVERIFIED: 저장 결과를 확인하지 못했습니다 ({'; '.join(unverified)}). 재시도하지 말고 사용자에게 알리세요. "
+    head = (f"UNVERIFIED: 저장 결과를 확인하지 못했습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. "
             if unverified else "VERIFIED: ")
     result["agent_directive"] = (
         head + f"타겟별 최고 학습 조건으로 모든 타겟을 다시 학습해 {vers}을(를) 만들었습니다.{multi} "
@@ -2568,6 +3148,22 @@ def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
 # 9. CLI Interface & History Mode
 # ==============================================================================
 
+HISTORY_SHOWN = 30        # --history records in the JSON (the latest); history.json holds all (R2)
+FEATURE_TYPES_SHOWN = 30  # names per feature_types list in the training result; the ledger record holds all
+
+
+def capped_feature_types(ft: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    """feature_types of the training result with at most FEATURE_TYPES_SHOWN names per kind (R2)."""
+    out, cut = {}, False
+    for kind, names in ft.items():
+        items = list(names.items()) if isinstance(names, dict) else list(names)
+        if len(items) > FEATURE_TYPES_SHOWN:
+            cut = True
+            items = items[:FEATURE_TYPES_SHOWN]
+        out[kind] = dict(items) if isinstance(names, dict) else items
+    return out, cut
+
+
 def print_history_summary(data_root: str) -> Dict[str, Any]:
     """
     Prints a human-readable summary table of all experiments to stderr and returns
@@ -2575,20 +3171,23 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
     """
     ledger_path = os.path.join(data_root, "history.jsonl")
     records = load_history_ledger(ledger_path)
-    if not records:
+    if not records:     # 0 records is a result, not an error (R2)
         return {
-            "status": "no_history",
-            "message": f"실험 원장이 존재하지 않습니다: {ledger_path}",
-            "agent_directive": "VERIFIED: No experiments yet. Next step: run baseline training (v1).",
+            "status": "ok", "verified": True, "no_history": True, "data_root": data_root,
+            "record_count": 0, "count": 0, "shown": 0, "truncated": False, "records": [], "best_version": None,
+            "latest_version": None,
+            "preview": "학습 기록 0건",
+            "agent_directive": ("VERIFIED: 0건. 이 데이터 파일의 학습 기록(history.jsonl)이 없습니다. "
+                                "사용자에게 학습 기록이 없다고 그대로 알리세요."),
         }
 
     proj_desc = records[-1].get("description", "")
     out = sys.stderr
 
     out.write("\n" + "=" * 125 + "\n")
-    out.write(f" [ML EXPERIMENT HISTORY LEDGER] Root: {data_root}\n")
+    out.write(f"[STATUS] 실험 이력 (history.jsonl): {data_root}\n")
     if proj_desc:
-        out.write(f" [PROJECT DESCRIPTION] {proj_desc}\n")
+        out.write(f"[STATUS] 설명: {proj_desc}\n")
     out.write("=" * 125 + "\n")
     out.write(f"{'Version':<8} | {'Tag / Memo':<16} | {'Task / Score':<16} | {'Delta':<10} | {'Time':<7} | {'Targets':<22} | {'Status'}\n")
     out.write(f"{'-'*8}-+-{'-'*16}-+-{'-'*16}-+-{'-'*10}-+-{'-'*7}-+-{'-'*22}-+-{'-'*15}\n")
@@ -2639,27 +3238,34 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
     if split:
         note = ("타겟별 최고 점수가 여러 버전에 나뉘어 있습니다 (" + "; ".join(split) + "). "
                 "모든 타겟의 최고 모델은 ml_report.py -f <데이터파일>이 한 버전으로 묶어 만듭니다.")
+    shown = rows[-HISTORY_SHOWN:]
+    cut = len(shown) < len(rows)
     return {
         "status": "ok",
         "data_root": data_root,
         "description": proj_desc,
         "record_count": len(rows),
+        "count": len(rows),
+        "shown": len(shown),
+        "truncated": cut,
+        **({"full_result_file": os.path.join(data_root, "history.json")} if cut else {}),
         "best_version": best["version"] if best else None,
         "best_version_dir": best["version_dir"] if best else None,
         "best_mean_val_score": best["mean_val_score"] if best else None,
         "best_by_task": best_by_task,
         **({"best_version_note": note} if note else {}),
         "latest_version": rows[-1]["version"],
-        "records": rows,
+        "records": shown,
         "verified": True,
-        "agent_directive": ("VERIFIED: History summary returned. Do not re-read history.jsonl for the same information."
+        "agent_directive": ("VERIFIED: 학습 이력입니다. history.jsonl을 다시 읽지 마세요."
+                            + (f" records에는 최근 {len(shown)}건만 있습니다 (전체 {len(rows)}건: full_result_file)." if cut else "")
                             + (f" 사용자에게 알리세요: {note}" if note else "")),
     }
 
 
 def main():
     parser = JsonArgumentParser(
-        description="Autonomous Regression / Classification ML Engine with 5-Model Competitive Benchmark & Version Lineage"
+        description="회귀/분류 모델 학습 (5개 모델 경쟁, 버전 관리)"
     )
     parser.add_argument("--file", "-f", help="입력 데이터 파일 경로 (.xlsx, .csv)")
     parser.add_argument("--features", "-x", help="독립변수(피처) 목록 (쉼표 구분 문자열 또는 파일 경로: .txt, .json, .csv)")
@@ -2674,7 +3280,9 @@ def main():
     parser.add_argument("--unit-row", type=int, help="단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
     parser.add_argument("--dtypes", help="데이터 타입 수동 오버라이드 (예: '일시:datetime,설비코드:str')")
-    parser.add_argument("--encoding", help="model_dataset.csv 저장 인코딩 (기본값: Windows Excel 최적화 cp949, 특수문자 발생 시 utf-8-sig 자동 폴백)")
+    parser.add_argument("--exclude-where", dest="exclude_where",
+                        help="학습에서 뺄 행의 조건 (예: '생산효율 > 90; 라인 = B | 라인 = C'. ;는 그리고, |는 또는, "
+                             "연산자 >= <= > < = != ~). 데이터 파일은 바꾸지 않음")
     parser.add_argument("--version", "-v", help="버전 수동 지정 (미지정 시 자동 계산 v1, v2...)")
     parser.add_argument("--overwrite", action="store_true",
                         help="--version으로 지정한 버전 폴더가 이미 있으면 교체 (사용자 확인 후에만 사용)")
@@ -2695,11 +3303,12 @@ def main():
             parser.error("--best에는 --file(-f) 인자가 필요합니다.")
         ignored = [flag for flag, val in (("-x", args.features), ("-y", args.targets), ("--eval", args.eval),
                                           ("--version", args.version), ("--positive-class", args.positive_class),
-                                          ("--dtypes", args.dtypes)) if val]
+                                          ("--dtypes", args.dtypes), ("--exclude-where", args.exclude_where)) if val]
         if ignored:
             sys.stderr.write(f"[WARN] --best는 이력의 학습 조건을 쓰므로 {ignored}을(를) 무시합니다\n")
             args.features = args.targets = args.eval = args.version = args.positive_class = args.dtypes = None
-        run_cli(lambda: execute_make_best(args), hint="Train at least once with ml_train.py before --best.")
+            args.exclude_where = None
+        run_cli(lambda: execute_make_best(args), hint="확인할 것: --best 전에 ml_train.py로 1번 이상 학습했는지.")
         return
 
     if args.history:
@@ -2714,7 +3323,7 @@ def main():
     if not args.file or not args.targets or not args.features:
         parser.error("--file, --features(-x), --targets(-y)는 모델 학습에 필수적인 인자입니다.")
 
-    run_cli(lambda: execute_ml_train(args), hint="Check column names or formula syntax.")
+    run_cli(lambda: execute_ml_train(args), hint="확인할 것: 열 이름과 --eval 식.")
 
 
 if __name__ == "__main__":

@@ -3,9 +3,11 @@
 지원: Range("A1:B2" / "A1:B2,A4:B4") / Range(cell, cell) / Cells(r, c), Value(읽기/쓰기, 스칼라 채우기),
 Formula(쓰기 시 상대참조 문자열 그대로 저장), HasFormula/HasArray/CurrentArray(배열 수식 arrays), Row/Column/Rows.Count/Columns.Count/Address, UsedRange,
 End(xlUp), 서식 속성 기록(Interior/Font/Borders/NumberFormat ...), ChartObjects, Cut/Copy/Merge,
-EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header).
+EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header), Worksheet.Sort(SortFields, SetRange, Apply),
+메모(Range.Comment/AddComment, Comment.Text()/Delete(), Worksheet.Comments).
 """
 import re
+import types
 
 
 def col_num(s):
@@ -138,6 +140,74 @@ class FakeLines:
         self._shift(hi + 1, -len(self.keys))
 
 
+_TYPED_NUM = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+_TYPED_DATE = re.compile(r"^\d{1,2}\s*[-/]\s*\d{1,2}$")
+
+
+def _typed(ws, v):
+    """ws.typing이 True면 실제 Excel처럼 '·= 없이 대입한 글자를 직접 입력한 것처럼 해석 (007 -> 7, 1-2 -> 날짜).
+    기본은 False (대입한 값 그대로)."""
+    if not getattr(ws, "typing", False) or not isinstance(v, str) or v.startswith(("'", "=")):
+        return v
+    t = v.strip()
+    if _TYPED_NUM.match(t):
+        num = float(t)
+        return int(num) if num.is_integer() and abs(num) < 1e15 else num
+    if _TYPED_DATE.match(t):
+        return 46000.0                             # 날짜 일련번호
+    return v
+
+
+class FakeComment:
+    """칸 메모(이전 방식 메모, Office 2007+). Text(): 읽기, Text(Text=글): 바꾸기, Text(Text=글, Start=n): n번째 글자 앞에 넣기."""
+
+    def __init__(self, ws, r, c, text, author="검토자"):
+        self.ws = ws
+        self.rc = (r, c)
+        self.text = text
+        self.Author = author
+
+    @property
+    def Parent(self):
+        return FakeRange(self.ws, [self.rc * 2])
+
+    def Text(self, Text=None, Start=None, Overwrite=False):
+        if Text is not None:
+            if self.ws.refuse_notes:
+                raise Exception("시트 보호")
+            if Start is None:
+                self.text = Text
+            else:
+                i = Start - 1
+                self.text = self.text[:i] + Text + self.text[i + (len(Text) if Overwrite else 0):]
+            self.ws.log.append(("CommentText", self.rc))
+        return self.text
+
+    def Delete(self):
+        self.ws.log.append(("CommentDelete", self.rc))
+        self.ws.notes.pop(self.rc, None)
+
+
+class FakeComments:
+    """Worksheet.Comments: 실제 Excel처럼 시트의 메모를 행 순서로."""
+
+    def __init__(self, ws):
+        self.ws = ws
+
+    def _items(self):
+        return [self.ws.notes[k] for k in sorted(self.ws.notes)]
+
+    @property
+    def Count(self):
+        return len(self.ws.notes)
+
+    def Item(self, i):
+        return self._items()[i - 1]
+
+    def __call__(self, i):
+        return self.Item(i)
+
+
 class FakeRange:
     def __init__(self, ws, areas):
         self.ws = ws
@@ -215,16 +285,41 @@ class FakeRange:
             return self.ws.values.get((r1, c1))
         return tuple(tuple(self.ws.values.get((r, c)) for c in range(c1, c2 + 1)) for r in range(r1, r2 + 1))
 
+    def _reject(self, v):
+        vals = [x for row in v for x in row] if isinstance(v, tuple) else [v]
+        rej = self.ws.reject_formula
+        if rej and any(isinstance(x, str) and x.startswith("=") and rej(x) for x in vals):
+            raise Exception("com_error: 이 수식에 문제가 있습니다")
+
+    @property
+    def Locked(self):
+        keys = list(self.cells())
+        n = sum(1 for k in keys if k not in self.ws.unlocked)
+        return True if n == len(keys) else (False if n == 0 else None)
+
     @Value.setter
     def Value(self, v):
+        self._reject(v)
         r1, c1, r2, c2 = self.areas[0]
         if isinstance(v, tuple):
             for i, row in enumerate(v):
                 for j, x in enumerate(row):
-                    self.ws.set(r1 + i, c1 + j, x)
+                    self.ws.set(r1 + i, c1 + j, _typed(self.ws, x))
         else:
             for r, c in self.cells():
-                self.ws.set(r, c, v)
+                self.ws.set(r, c, _typed(self.ws, v))
+
+    @property
+    def Value2(self):
+        return self.Value
+
+    @Value2.setter
+    def Value2(self, v):
+        self.Value = v
+
+    @property
+    def PrefixCharacter(self):
+        return "'" if (self.Row, self.Column) in self.ws.prefixed else ""
 
     @property
     def HasFormula(self):
@@ -267,6 +362,23 @@ class FakeRange:
 
     @Formula.setter
     def Formula(self, v):
+        self._reject(v)
+        if isinstance(v, tuple):                  # 되돌리기: 칸마다 원래 수식·값
+            r1, c1, _, _ = self.areas[0]
+            for i, row in enumerate(v):
+                for j, x in enumerate(row):
+                    FakeRange(self.ws, [(r1 + i, c1 + j, r1 + i, c1 + j)]).Formula = x
+            return
+        if not (isinstance(v, str) and v.startswith("=")):
+            for r, c in self.cells():
+                self.ws.formulas.pop((r, c), None)
+                if v in ("", None):
+                    self.ws.values.pop((r, c), None)
+                    self.ws.prefixed.discard((r, c))
+                else:
+                    self.ws.set(r, c, _typed(self.ws, v))
+            self.ws.log.append(("Formula", self.Address, v))
+            return
         for r, c in self.cells():
             self.ws.formulas[(r, c)] = v
             self.ws.values[(r, c)] = f"<{v}>"
@@ -290,12 +402,16 @@ class FakeRange:
     def __getattr__(self, name):
         if name in ("Interior", "Font", "Borders_"):
             return self.ws.props(self.Address, name)
+        if name == "WrapText":                   # 자동 줄바꿈: 쓴 범위 그대로 다시 읽음 (안 썼으면 False)
+            return bool(self.ws.props(self.Address, "Misc").get("WrapText", False))
         raise AttributeError(name)
 
     def __setattr__(self, k, v):
-        if k in ("ws", "areas", "Value", "Formula"):
+        if k in ("ws", "areas", "Value", "Value2", "Formula"):
             object.__setattr__(self, k, v)
         else:
+            if k == "WrapText":
+                self.ws.props(self.Address, "Misc").WrapText = v
             self.ws.log.append(("set", self.Address, k, v))
 
     def Borders(self, i):
@@ -361,9 +477,12 @@ class FakeRange:
     def Sort(self, Key1=None, Order1=1, Key2=None, Order2=1, Key3=None, Order3=1, Header=2, MatchCase=False,
              Orientation=1, **kw):
         """Excel처럼 행 단위 정렬: 숫자 < 글자(대소문자 무시) < 논리값, 빈 칸은 오름·내림 모두 맨 뒤, 같은 값은 순서 유지."""
+        keys = [(k, o) for k, o in ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]
+        self.ws.log.append(("Sort", self.Address, Header, [(k.Column, o) for k, o in keys]))
+        self._sort_rows(keys, Header)
+
+    def _sort_rows(self, keys, Header):
         r1, c1, r2, c2 = self.areas[0]
-        self.ws.log.append(("Sort", self.Address, Header, [(k.Column, o) for k, o in
-                                                          ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]))
         start = r1 + 1 if Header == 1 else r1
         rows = [[self.ws.values.get((r, c)) for c in range(c1, c2 + 1)] for r in range(start, r2 + 1)]
 
@@ -373,7 +492,7 @@ class FakeRange:
             if isinstance(v, (int, float)):
                 return (0, float(v))
             return (1, str(v).casefold())
-        for key, order in reversed([(k, o) for k, o in ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]):
+        for key, order in reversed(keys):
             j = key.Column - c1
             blank = [r for r in rows if r[j] is None or r[j] == ""]
             full = sorted((r for r in rows if not (r[j] is None or r[j] == "")), key=lambda r: cls(r[j]), reverse=order == 2)
@@ -397,6 +516,20 @@ class FakeRange:
 
     def Select(self):
         self.ws.log.append(("Select", self.Address))
+
+    # --- 메모 ---
+    @property
+    def Comment(self):
+        """왼쪽 위 칸의 메모, 없으면 None (실제 Excel처럼)."""
+        return self.ws.notes.get((self.Row, self.Column))
+
+    def AddComment(self, Text=None):
+        key = (self.Row, self.Column)
+        if key in self.ws.notes or self.ws.refuse_notes:      # 실제 Excel: 메모가 있는 칸, 보호된 시트는 COM 오류
+            raise Exception("AddComment 실패")
+        self.ws.notes[key] = FakeComment(self.ws, *key, Text or "")
+        self.ws.log.append(("AddComment", key))
+        return self.ws.notes[key]
 
 
 class FakeChartObject:
@@ -452,6 +585,41 @@ class FakeChartObjects:
         self.ws.charts.clear()
 
 
+class FakeSortFields:
+    def __init__(self):
+        self.fields = []
+
+    def Clear(self):
+        self.fields = []
+
+    def Add(self, Key=None, SortOn=0, Order=1, DataOption=0):
+        self.fields.append((Key, Order))
+
+    @property
+    def Count(self):
+        return len(self.fields)
+
+
+class FakeSort:
+    """Worksheet.Sort (엑셀 2007 이상): SortFields, SetRange, Header, Apply."""
+
+    def __init__(self, ws):
+        self.ws = ws
+        self.SortFields = FakeSortFields()
+        self.rng = None
+        self.Header = 2
+        self.MatchCase = False
+        self.Orientation = 1
+
+    def SetRange(self, rng):
+        self.rng = rng
+
+    def Apply(self):
+        keys = list(self.SortFields.fields)
+        self.ws.log.append(("SortApply", self.rng.Address, self.Header, [(k.Column, o) for k, o in keys]))
+        self.rng._sort_rows(keys, self.Header)
+
+
 class FakeWorksheet:
     def __init__(self, app, wb, name):
         self.app = app
@@ -470,6 +638,19 @@ class FakeWorksheet:
         self.activated = 0
         self.Shapes = Count(0)
         self.Rows = Count(1048576)
+        self.Sort = FakeSort(self)
+        self.notes = {}              # 칸 메모 {(r, c): FakeComment}
+        self.refuse_notes = False    # True면 메모 추가·수정이 COM 오류 (보호된 시트 흉내)
+        self.Comments = FakeComments(self)
+        # 시트 보호: ProtectContents, 개체 보호, 허용 항목(Protection.Allow*), 잠기지 않은 칸(기본은 모두 잠김, 엑셀과 같음)
+        self.ProtectContents = False
+        self.ProtectDrawingObjects = False
+        self.Protection = types.SimpleNamespace(**{k: False for k in (
+            "AllowFormattingCells", "AllowFormattingColumns", "AllowFormattingRows", "AllowInsertingRows",
+            "AllowInsertingColumns", "AllowDeletingRows", "AllowDeletingColumns", "AllowSorting")})
+        self.unlocked = set()
+        self.reject_formula = None   # 함수(수식) -> True면 .Formula/.Value 대입이 COM 오류 (엑셀이 받지 않는 수식 흉내)
+        self.typing = False          # True면 대입한 글자를 Excel처럼 해석 (007 -> 7, 1-2 -> 날짜, _typed)
 
     @property
     def Name(self):
@@ -484,6 +665,8 @@ class FakeWorksheet:
         if isinstance(v, str) and v.startswith("'"):      # Excel: 앞의 '는 "글자로 두기" 표시라 값에 남지 않음
             self.prefixed.add((r, c))
             v = v[1:]
+        else:
+            self.prefixed.discard((r, c))
         self.values[(r, c)] = v
         self.formulas.pop((r, c), None)
 

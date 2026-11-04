@@ -61,6 +61,16 @@ def test_existing_version_refused_then_overwrite(work):
     meta = json.loads((root / "v2" / f"model_{TARGET}.json").read_text(encoding="utf-8"))
     assert meta["feature_count"] == 2                                 # replaced only with --overwrite
     assert not any(p.name.startswith((".bak_", ".tmp_")) for p in root.iterdir())
+    # 2.9.46: one record per version (2.9.45 kept the replaced v2 record too: two 'v2' lines, and the new v2 was
+    # compared with the old one for delta_score / is_best)
+    ledger = _ledger(root)
+    assert [r["version"] for r in ledger] == ["v2"], ledger
+    assert ledger[0]["mean_val_score"] == again["mean_val_score"] and ledger[0]["delta_score"] == "base"
+    assert ledger[0]["is_best"] is True
+    hist = run_tool("ml_train.py", "-f", data, "--history")
+    assert hist["record_count"] == 1 and hist["best_version"] == "v2"
+    synced = json.loads((root / "history.json").read_text(encoding="utf-8"))
+    assert [r["version"] for r in synced] == ["v2"]
 
 
 def _train_in_process(monkeypatch, capsys, data, *extra):
@@ -168,15 +178,15 @@ def test_predict_out_is_not_overwritten(work):
     vd = work["first"]["version_dir"]
     out = work["dir"] / "pred.csv"
     out.write_text("사용자 결과\n", encoding="cp949")
-    p = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--out", str(out))
+    p = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--save", str(out))
     assert os.path.normcase(p["output_file"]) != os.path.normcase(str(out))
     assert os.path.basename(p["output_file"]).startswith("pred_") and os.path.exists(p["output_file"])
     assert out.read_text(encoding="cp949") == "사용자 결과\n"
     assert any("pred.csv 이미 있음" in x for x in p["recovered"])
 
-    p2 = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--out", str(out), "--overwrite")
+    p2 = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--save", str(out), "--overwrite")
     assert os.path.normcase(p2["output_file"]) == os.path.normcase(str(out)) and "recovered" not in p2
-    assert out.read_text(encoding="cp949") != "사용자 결과\n"
+    assert out.read_bytes() != "사용자 결과\n".encode("cp949")
 
 
 def test_report_default_name_is_not_overwritten(work):

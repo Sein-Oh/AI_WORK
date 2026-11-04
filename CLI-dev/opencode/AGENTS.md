@@ -7,7 +7,7 @@
 ## 2. 이 PC 환경
 - Windows 11, 셸은 PowerShell이다.
 - 인터넷과 외부 네트워크가 막혀 있다. `pip install`, 웹 검색, 다운로드를 시도하지 않는다. 필요한 패키지가 없으면 사용자에게 알리고 멈춘다.
-- 파이썬은 `python` 명령으로 실행한다. `py`, `python3`는 쓰지 않는다.
+- 파이썬은 `python` 명령으로 실행한다 (`C:\CLI\python`, PATH에 등록됨). `py`, `python3`, `pip`는 쓰지 않는다.
 - 셸 명령은 한글이 깨지지 않게 **항상 아래 줄을 맨 앞에 붙여** 한 줄로 실행한다.
   ```powershell
   $env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; python "<스크립트>" <인자>
@@ -20,19 +20,25 @@
 ## 3. 스킬을 먼저 쓴다
 | 요청 | 스킬 |
 |---|---|
-| Excel, Word, PowerPoint, Outlook 작업 / PDF, HWP, Office 파일 읽기와 검색 / 워드 목차·메모·변경 추적, PPT 노트 | `office-cli` |
+| Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `office-excel` |
+| Word, PowerPoint 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 슬라이드, 발표자 노트, 앱 사이 옮기기) | `office-doc` |
+| Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일) | `office-mail` |
+| PDF, HWP, Office 파일 읽기와 근거 검색, 두 판 비교, 엑셀 표를 규격서와 대조 | `office-spec` |
 | 표(Excel/CSV) 데이터로 예측 모델 학습, 새 데이터 예측, ML 결과 보고서 | `ml-kit` |
 
 1. 위 작업은 스킬 명령으로만 한다. pandas, openpyxl, python-docx, win32com 등으로 파이썬 코드를 직접 짜서 하지 않는다.
    파일 내용이나 행 수 확인도 스킬로 한다: 엑셀/CSV는 `excel.py read --target "<파일>"`, 그 밖의 문서는 `reader.py read --file "<파일>"`.
-2. 도구는 `C:\CLI\ml-kit`, `C:\CLI\office-cli`에 있다. SKILL.md의 명령 경로를 그대로 쓴다.
+2. 도구는 `C:\CLI\ml-kit`, `C:\CLI\office-cli`에 있다. SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
-   - office-cli: `C:\CLI\office-cli\SKILL.md`
+   - office-cli: `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\office-cli\skills\office-excel\SKILL.md`)
    - ml-kit: `C:\CLI\ml-kit\SKILL.md`
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
 5. 명령은 1번만 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]`, `[INFO]`, `[WARN]` 줄은 무시한다.
 6. JSON에 `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다. 명령을 새로 만들지 않는다.
+   예외: `confirm_commands`(메일 발송, 미리보기 뒤 실제 변경)는 바로 실행하지 않는다. 무엇을 할지(받는 사람·제목, `planned`)를
+   사용자에게 보여 주고 "예"를 받은 뒤에만 그 `command`를 글자 그대로 1번 실행한다. 사용자가 이번 요청에서 이미
+   "묻지 말고 끝까지" 하라고 했으면 다시 묻지 않는다. 단 메일 발송(`outlook.py send`)은 늘 묻는다.
 7. 파일 경로, 타겟 컬럼처럼 작업에 꼭 필요한 값을 모르면 실행 전에 사용자에게 묻는다.
 8. 도구 코드(`C:\CLI` 아래 .py 파일)는 사용자가 코드를 열어 보라고 직접 요청할 때만 읽는다. 그 밖에는 읽지 않고, SKILL.md와 `-h` 결과로 방법을 찾지 못하면
    직접 해결하려 하지 말고, 하려던 일과 막힌 곳을 사용자에게 알리고 멈춘다.
@@ -40,22 +46,31 @@
 ## 4. 결과 처리 (agent_directive의 첫 단어)
 | 첫 단어 | 할 일 |
 |---|---|
-| `VERIFIED:` | 성공. `preview`를 알리고 끝낸다. 같은 명령을 다시 실행하거나 결과를 다시 열어 보지 않는다. |
+| `VERIFIED:` | 성공. `preview`를 알리고 끝낸다. 같은 명령을 다시 실행하거나 결과를 다시 열어 보지 않는다. `confirm_commands`가 있으면 3장 6번대로 사용자에게 묻는다. |
 | `UNVERIFIED:` | 실행은 됐지만 도구가 결과를 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
-| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 반복 (최대 10번). |
+| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 반복 (최대 20번, 그래도 `CONTINUE:`이면 `progress`를 알리고 멈춤). |
 | `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그 명령을 그대로 **1번만** 실행한다. 아니면 `[추천]` 뒤의 값으로 바꿔 **1번만** 다시 실행한다. 또 실패하면 message를 그대로 알린다. |
-| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다. |
-| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. |
+| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). 고른 값으로 1번 실행한다. 후보가 `1) python ...` 같은 전체 명령이면 고른 번호의 `next_commands` 명령을 그대로 1번 실행한다. |
+| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `error_type`이 `needs_user_decision`이면 사용자에게 묻고, 원할 때만 `next_commands[0].command`를 그대로 1번 실행한다 (없으면 directive가 말한 옵션을 붙여 1번, 5장). |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |
 
-- JSON에 `recovered`가 있으면 (예: 파일이 열려 있어 새 이름으로 저장) 그 문장을 그대로 알린다.
-- `install_command`가 있으면 그 명령을 사용자에게 전달만 하고 직접 실행하지 않는다.
+- JSON에 `recovered`가 있으면 (예: 파일이 열려 있어 새 이름으로 저장) 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.
+- `error_type`이 `missing_library`이면 `install_command`를 사용자에게 전달만 하고 직접 실행하지 않는다.
+- `error_type`이 `elevated_process`이면 다시 실행하지 않는다. 관리자 권한 창에서 실행 중이라 사용자가 연 문서가 안 보이니, 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행하라고 알린다.
+- 규격 대조(`excel.py check`)의 판정은 도구가 규격 문장을 기계로 읽은 참고 판정이다(늘 `UNVERIFIED:`). 행마다 `condition`(읽은 조건)과 `spec_text`(근거 문장)를 보여 주고 사용자가 확인한 뒤에만 메모를 단다(`next_commands[0]` 미리보기 -> 확인 -> 미리보기 결과의 `confirm_commands[0]`).
+- 문서 검색 결과의 `match_mode`가 `number`(숫자 값만 같은 곳, 부호·대시가 다른 숫자 포함), `partial`, `fuzzy`이면 정확히 일치한 곳은 0건(`count: 0`)이고 `candidates`는 비슷한 곳일 뿐이다. 근거로 쓰지 말고 사용자에게 확인받는다. `exact_mixed`이면 `matches` 중 `literal: false`(표기가 다른 곳, 부호·단위가 다를 수 있음)는 근거로 확정하지 말고 실제 글을 보여 주고 확인받는다(`snippet`에서 `**`는 글자 그대로 맞은 곳, `[[ ]]`는 표기가 다른 곳). 숫자를 찾은 결과를 알릴 때는 `snippet`의 앞뒤(부호, 범위 `~`, 이하/이상)를 그대로 함께 전달한다(`VERIFIED`는 그 글자가 그 자리에 있다는 뜻이고 문맥의 뜻은 판정하지 않음).
+- `truncated`가 true이면 결과 일부만 받은 것이다. 전체 결과 파일 경로(`full_result_file` 또는 `output_file`)를 알리거나, 이어 보기가 필요하면 `next_commands`를 쓴다.
+- `error_type`이 `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. 사용자에게 알리고, 사용자가 보호를 푼 뒤 같은 명령을 1번 다시 실행하거나 사용자가 고른 `[후보]` 칸에 쓴다.
+- `error_type`이 `drm_or_dialog`이면 사용자에게 그 문서를 직접 열어 두라고 알리고, 열었다고 하면 `next_commands[0]`을 1번 실행한다.
+- 메일은 가장 최근 목록·검색·대화(thread) 결과의 짧은 `id`(`--id 3`)로 고른다. 예전 목록의 번호를 다시 쓰지 않는다.
+- 여러 칸이나 양식을 채울 때는 칸마다 명령을 따로 실행하지 않는다. `excel.py write --cells ...` 또는 `word.py fill --file ...` 한 번으로 한다.
+- 학습에서 행을 빼 달라고 하면 데이터 파일을 고치지 않는다. 조건이면 ml-kit `--exclude-where`, 특정 행이면 `제외` 열을 쓴다.
 
 ## 5. 사용자 승인이 필요한 일
 아래는 사용자가 이번 대화에서 분명히 요청했을 때만 한다. 실행 전에 대상(파일 경로, 시트 이름 등)을 보여 주고 "진행할까요?"라고 물어 "예"를 받는다.
 - 파일·폴더 삭제 (`Remove-Item`, `del` 포함)
 - 기존 파일 덮어쓰기 (`--overwrite` 포함)
-- 메일 발송 (`--send`)
+- 메일 발송 (`outlook.py send`, `confirm_commands`로만 받음)
 - 시트·슬라이드 삭제, 문서 내용 전체 지우기
 - 사용자가 말하지 않은 새 시트·새 파일 만들기 (`--new-sheet` 포함). 사용자가 "Sheet9에 써줘"라고 해도 Sheet9가 없으면 먼저 만들지 물어본다.
 
@@ -69,6 +84,6 @@
 - 실패 원인을 추측해 지어내지 않는다. message를 그대로 전달한다.
 
 ## 7. 긴 대화
-- SKILL.md는 한 대화에서 1번만 읽는다. 이미 읽었으면 다시 읽지 않는다.
+- 같은 스킬의 SKILL.md는 한 대화에서 1번만 읽는다. 이미 읽었으면 다시 읽지 않는다.
 - 같은 파일을 반복해서 열어 보지 않는다. 도구 출력은 마지막 1줄 JSON만 본다.
 - 작업 하나가 끝났고 다음 요청이 다른 파일이나 다른 주제면, "새 대화(/new)에서 이어 가면 더 정확합니다"라고 1번 안내한다.

@@ -3,6 +3,7 @@ search/list/clear, CLI 계약. 샘플 파일은 테스트 안에서 만듭니다
 """
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -632,11 +633,11 @@ def test_old_office_format_is_redirected():
 
 
 def test_matcher_and_or_and_snippet():
-    m = reader.build_matcher("케이블카 AND 사파리 OR 단가", False, False)
+    m = reader.build_matcher("케이블카 AND 사파리 OR 단가", False)
     assert m("케이블카와 사파리") == ["케이블카", "사파리"]
     assert m("케이블카만") is None
     assert m("견적 단가") == ["단가"]
-    snip = reader.make_snippet("가" * 200 + "단가표" + "나" * 200, ["단가"], 10, False)
+    snip = reader.make_snippet("가" * 200 + "단가표" + "나" * 200, ["단가"], 10)
     assert snip.startswith("...") and "**단가**" in snip
 
 
@@ -1297,6 +1298,54 @@ def test_ole_without_fileheader_is_input_error(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
+def test_check_failure_is_not_reused_from_cache(tmp_path, capsys, monkeypatch):
+    """24차 LOW-5 (1.4.42): 수식 칸 확인 실패(MemoryError 등)를 캐시에서 그대로 다시 쓰지 않음."""
+    c = formula_xlsx(tmp_path / "c.xlsx", cached=True)
+    real = rt.xlsx_uncomputed_formulas
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas",
+                        lambda *a, **k: {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"})
+    code, out = run_main(reader, capsys, "read", "--file", c)
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", real)          # 일시적 실패가 지나감 (파일은 그대로)
+    code, out = run_main(reader, capsys, "read", "--file", c)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    cached = reader.load_cached_only(os.path.abspath(c))
+    assert "uncomputed_formulas" not in cached["meta"]                  # 캐시 파일도 고쳐 씀
+
+
+def test_check_failure_rechecked_in_index_search(tmp_path, capsys, monkeypatch):
+    c = formula_xlsx(tmp_path / "c.xlsx", cached=True)
+    real = rt.xlsx_uncomputed_formulas
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas",
+                        lambda *a, **k: {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"})
+    code, out = run_main(reader, capsys, "index", "--file", c)
+    assert code == 0, out
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", real)
+    code, out = run_main(reader, capsys, "search", "--query", "없는글자ZQX")       # 색인(캐시)만 검색
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED: 0건."), out
+
+
+def test_recheck_uncomputed_is_capped_per_run(tmp_path, capsys, monkeypatch):
+    # 회귀: 확인 실패가 남은 큰 엑셀이 많으면 검색 한 번에 모두 다시 확인해 시간 제한을 넘음
+    files = [formula_xlsx(tmp_path / f"c{i}.xlsx", cached=True) for i in range(reader.RECHECK_MAX + 2)]
+    calls = []
+
+    def failing(*a, **k):
+        calls.append(1)
+        return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"}
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", failing)
+    for f in files:
+        run_main(reader, capsys, "index", "--file", f)
+    calls.clear()
+    code, out = run_main(reader, capsys, "search", "--query", "없는글자ZQX")
+    assert code == 0 and len(calls) == reader.RECHECK_MAX, calls
+    assert out["agent_directive"].startswith("UNVERIFIED:"), out          # 확인하지 못한 문서는 그대로 UNVERIFIED
+    calls.clear()
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)       # 시간 여유가 없으면 다시 확인하지 않음
+    run_main(reader, capsys, "search", "--query", "없는글자ZQX")
+    assert calls == []
+
+
 def test_reader_read_and_search(tmp_path, capsys):
     p = formula_xlsx(tmp_path / "f.xlsx")
     code, out = run_main(reader, capsys, "read", "--file", p)
@@ -1591,7 +1640,7 @@ def test_search_save_xlsx_columns_and_md_evidence(docs, tmp_path):
     wb = openpyxl.load_workbook(out["output_file"])
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
-    assert list(rows[0]) == ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥"]
+    assert list(rows[0]) == ["파일", "쪽", "장절", "번호", "위치", "내용(문장/단락)", "문맥", "점수"]
     assert ws["A1"].font.bold and ws["F2"].alignment.wrap_text
     docx_row = [r for r in rows if r[0] == "규격.docx"][0]
     assert docx_row[1] == 2 and docx_row[2] == "요구사항 > 가. 검증기술" and docx_row[4] == "표 1 2행"
@@ -1686,11 +1735,11 @@ def test_parse_query_quotes_case_insensitive_operators():
 
 
 def test_matcher_ignores_spacing_and_empty_regex():
-    m = reader.build_matcher("설계기준", False, False)
+    m = reader.build_matcher("설계기준", False)
     assert m("본 설계 기준에 따른다") == ["설계기준"] and m("설계기\n준") == ["설계기준"]
-    assert reader.build_matcher('"설계 기준"', False, False)("설계기준을 따른다")
-    assert reader.build_matcher("a*", True, False)("xyz") is None
-    assert "**설계 기준**" in reader.make_snippet("본 설계 기준에 따른다", ["설계기준"], 20, False)
+    assert reader.build_matcher('"설계 기준"', False)("설계기준을 따른다")
+    assert reader.build_matcher("a*", True)("xyz") is None
+    assert "**설계 기준**" in reader.make_snippet("본 설계 기준에 따른다", ["설계기준"], 20)
 
 
 def test_zero_hits_with_unindexed_files_is_unverified(tmp_path):
@@ -1784,11 +1833,19 @@ def test_numbering_helper_creates_part_when_template_has_none(tmp_path):
     ("C++", "C++ 코딩 규칙", True),
 ])
 def test_search_ignores_symbols_and_spacing_but_keeps_number_boundaries(query, text, hit):
-    assert (reader.build_matcher(query, False, False)(text) is not None) == hit
+    assert (reader.build_matcher(query, False)(text) is not None) == hit
 
 
 def test_snippet_highlights_symbol_insensitive_match():
-    assert "**SOI #1**" in reader.make_snippet("Activities for SOI #1 are listed", ["SOI 1"], 30, False)
+    assert "[[SOI #1]]" in reader.make_snippet("Activities for SOI #1 are listed", ["SOI 1"], 30)
+
+
+def test_snippet_marks_layer_b_differently():
+    # 10차 검토(1.4.73): 층 A 자리만 **, 숫자가 든 검색어의 층 B 자리(표기가 다른 곳)는 [[ ]], 숫자 없는 검색어는 **
+    s = reader.make_snippet("허용 1·5 V 전원", ["5 V", "전원"], 20)
+    assert "[[5 V]]" in s and "**전원**" in s and "**5 V**" not in s, s
+    s = reader.make_snippet("보관 -40 ℃, 동작 40 ℃", ["40 ℃"], 30)
+    assert "-[[40 ℃]]" in s and "동작 **40 ℃**" in s, s
 
 
 # ---------------------------------------------------------------------------
@@ -1802,7 +1859,7 @@ def test_clear_requires_target_and_dry_run_changes_nothing(tmp_path):
     assert code == 1 and "--dry-run" in out["message"]
     code, out = run_reader("clear", "--name", "규격", "--dry-run")
     assert code == 0 and out["dry_run"] is True and out["count"] == 1 and out["planned"] == ["캐시 삭제: a규격.txt"]
-    assert "clear --name 규격" in out["next_commands"][0]["command"] and "--dry-run" not in out["next_commands"][0]["command"]
+    assert "clear --name 규격" in out["confirm_commands"][0]["command"] and "--dry-run" not in out["confirm_commands"][0]["command"]
     assert len(reader.load_index()) == 2
 
 
@@ -1884,8 +1941,8 @@ def test_index_repairs_entries_lost_to_another_run(tmp_path, capsys, monkeypatch
         (tmp_path / f"d{i}.txt").write_text(f"내용 {i}", encoding="utf-8")
     real = reader._index_files
 
-    def racing(files, max_files):
-        res = real(files, max_files)
+    def racing(files, max_files, **kw):
+        res = real(files, max_files, **kw)
         # 다른 실행이 옛 색인으로 덮어쓴 상황: 방금 넣은 항목 하나가 사라짐
         index = reader.load_index()
         index.pop(sorted(index)[0])
@@ -2232,3 +2289,1015 @@ def test_folder_search_failure_reason_names_error_type(one_file, capsys, monkeyp
     code, out = run_fresh(reader, capsys, monkeypatch, "search", "-q", "hello", "--file", str(one_file.parent))
     assert code == 0, out
     assert [s["reason"] for s in out["skipped"]] == ["KeyError: 'heading'"], out
+
+
+# ---------------------------------------------------------------------------
+# read --section: 장절 경로 일부가 맞는 단위만 읽기 (search --section과 같은 규칙, 1.4.49)
+# ---------------------------------------------------------------------------
+
+
+def test_read_section_reads_only_matching_units_with_evidence(tmp_path, capsys):
+    p = tmp_path / "spec.pdf"
+    english_pdf(p)
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "1.1.  SCOPE")   # 대소문자·공백 무시
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert out["section_filter"] == "1.1.  SCOPE" and out["count"] == len(out["units"]) >= 2
+    assert all("1.1. Scope" in u["section"] for u in out["units"])
+    data = [u for u in out["units"] if u["text"].startswith("Data body")][0]
+    assert data["page"] == 1 and data["evidence"] == "spec.pdf p.1, 1. SCOPE > 1.1. Scope > 1.1.1. Data"
+    assert out["units_total"] > out["count"]
+    # --pages와 함께: 두 조건을 모두 만족하는 단위만
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "scope", "--pages", "2")
+    assert code == 0 and out["units"] and all(u["page"] == 2 and "1. SCOPE" in u["section"] for u in out["units"])
+    assert not any(u["text"].startswith("Requirement") for u in out["units"])
+
+
+def test_read_section_not_found_gives_candidates_not_logged(tmp_path, capsys, monkeypatch, isolated_dirs):
+    from office_helpers import assert_not_logged
+    p = tmp_path / "spec.pdf"
+    make_text_pdf(p, [[("1. ZQX SCOPE", 16, True), ("Scope body.", 10, False), ("2. PURPOSE", 16, True),
+                       ("Purpose body.", 10, False)]], font="helv")
+    code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "zqx scop")
+    assert code == 0 and out["units"], out           # 부분 일치는 그대로 읽힘
+    code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "ZQX SCOPEE")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[후보]" in out["message"]
+    assert "1. ZQX SCOPE" in out["candidates"]
+    assert_not_logged(out, isolated_dirs, marker="1. ZQX SCOPE")   # 장절 이름(문서 글)은 오류 로그에 남지 않음
+    # 비슷한 장절이 없으면 문서의 장절 일부를 [후보]로
+    code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "warranty")
+    assert code == 1 and "[후보]" in out["message"] and set(out["candidates"]) == {"1. ZQX SCOPE", "2. PURPOSE"}
+
+
+def test_read_section_continuation_and_save_keep_section(tmp_path, capsys, monkeypatch):
+    p = tmp_path / "spec.pdf"
+    english_pdf(p)
+    monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 60)
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "1. SCOPE")
+    assert code == 0 and out["truncated"] is True and out["next_commands"]
+    assert all('--section "1. SCOPE"' in c["command"] for c in out["next_commands"]), out["next_commands"]
+    monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 8000)
+    save = tmp_path / "근거.csv"
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "purpose", "--save", str(save))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:")
+    body = open(out["output_file"], encoding="utf-8-sig").read()
+    assert "Purpose body" in body and "Data body" not in body and "Requirement" not in body
+
+
+# ---------------------------------------------------------------------------
+# 검색 재현율: 조사·숫자와 단위·전각·대시, 일부·유사 일치로 넓히기, 순위, 동의어 (1.4.51)
+# ---------------------------------------------------------------------------
+
+RECALL_TEXT = "\n\n".join([
+    "정격 전압은 5.0 V 이하로 한다.",                   # 1
+    "작동 온도 범위는 -20℃ ~ 60℃이다.",                # 2
+    "ＰＣＢ 두께는 1.6 mm로 한다.",                     # 3 전각 영문
+    "절연 저항은 100 MΩ 이상이어야 한다.",              # 4
+    "접지\u2013단자는 외함에 연결한다.",                 # 5 en dash
+    "rated voltage shall not exceed 220 V.",           # 6
+    "케이블 피복의 난연성은 KS C 3341에 따른다.",       # 7
+])
+
+# (검색어, 찾아야 하는 단락 번호들, 기대 match_mode)
+RECALL_CASES = [
+    # 숫자가 든 검색어가 표기가 다른 곳(조사, 5V = 5.0 V, °C = ℃)에서만 맞으면 exact_mixed (층 B, 1.4.70)
+    ("정격전압은 5V", {1}, "exact_mixed"),    # 검색어의 조사, 5V = 5.0 V
+    ("작동 온도 AND -20°C", {2}, "exact_mixed"),  # °C = ℃ (부호 없는 '20°C'는 음수 '-20℃'와 맞지 않음, 1.4.68)
+    ("PCB 두께", {3}, "exact"),               # 전각 ＰＣＢ (숫자 없는 검색어는 그대로)
+    ("절연저항이 100MΩ", {4}, "exact_mixed"),  # 조사, 숫자와 단위 띄어쓰기
+    ("접지-단자", {5}, "exact"),              # 대시 종류
+    ("정격 전압 AND 절연", {1, 4}, "partial"),  # 둘 다 든 단락 없음 -> 하나씩 든 단락
+    ("케이불 피복", {7}, "fuzzy"),            # 오타 한 글자 (한글 4음절 이상, 첫·끝 음절 같음)
+]
+
+
+def _recall_file(tmp_path):
+    p = tmp_path / "규격_재현율.txt"
+    p.write_text(RECALL_TEXT, encoding="utf-8")
+    return p
+
+
+def _hit_numbers(out):
+    paras = RECALL_TEXT.split("\n\n")
+    got = set()
+    for m in out.get("matches", []) + out.get("candidates", []):
+        text = m.get("text") or m.get("snippet", "")
+        for i, para in enumerate(paras, 1):
+            if para[:6] in text.replace("**", ""):
+                got.add(i)
+    return got
+
+
+@pytest.mark.parametrize("query,want,mode", RECALL_CASES)
+def test_search_recall_variants(tmp_path, capsys, query, want, mode):
+    p = _recall_file(tmp_path)
+    code, out = run_main(reader, capsys, "search", "--query", query, "--file", str(p), "--full")
+    assert code == 0 and _hit_numbers(out) == want, (query, out.get("matches"))
+    assert out["match_mode"] == mode
+    if mode == "exact_mixed":
+        # 표기가 다른 곳만: 결과에 넣되 literal false + UNVERIFIED (글자 그대로 0건)
+        assert out["count"] == len(want) and out["literal_count"] == 0 and all(m["literal"] is False for m in out["matches"])
+        assert out["agent_directive"].startswith(f"UNVERIFIED: 글자 그대로 일치 0건, 표기가 다른 곳 {len(want)}건"), out
+    elif mode != "exact":
+        # 넓혀 찾은 결과는 정확 일치 0건 + candidates + UNVERIFIED (근거로 쓰지 않게)
+        assert out["count"] == 0 and out["total_matches"] == 0 and out["candidate_count"] == len(want) and "matches" not in out
+        assert out["agent_directive"].startswith("UNVERIFIED: 정확히 일치한 곳은 0건") and mode in out["agent_directive"]
+        assert "recovered" not in out
+
+
+def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
+    p = _recall_file(tmp_path)
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
+    assert {tuple(m["missing_terms"]) for m in out["candidates"]} == {("절연",), ("정격 전압",)}
+    assert {tuple(m["matched_terms"]) for m in out["candidates"]} == {("정격 전압",), ("절연",)}
+    code, out = run_main(reader, capsys, "search", "--query", "케이불 피복", "--file", str(p))
+    c = out["candidates"][0]
+    assert c["fuzzy_words"] == {"케이불 피복": "케이블피복"} and c["matched_terms"] == [], c   # 실제로 맞은 낱말만
+    # 짧은 검색어(한글 3음절 이하)는 유사 일치로 넓히지 않음: 0건 그대로
+    code, out = run_main(reader, capsys, "search", "--query", "난연셩", "--file", str(p))
+    assert out["count"] == 0 and out["match_mode"] == "exact" and "recovered" not in out
+
+
+def test_search_widened_directive_keeps_notes(tmp_path, capsys):
+    # 회귀: 넓혀 찾은 결과의 directive가 indexed_now·stale·clamp·text_cut 안내를 덮어씀
+    p = _recall_file(tmp_path)
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
+    assert out["match_mode"] != "exact" and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert "indexed_now" in out["agent_directive"] and "다시 실행하지 마세요" in out["agent_directive"]
+
+
+@pytest.mark.parametrize("query,word", [("전압", "전류"), ("전류", "전력"), ("최대", "최소"), ("상한", "하한"),
+                                        ("대기 전류", "대기 전력"), ("최대 전류", "최소 전류"), ("정격 전압", "정격 전류"),
+                                        ("상한 온도", "하한 온도")])
+def test_fuzzy_never_matches_different_korean_terms(query, word):
+    core = reader._fuzzy_core(query)
+    assert core is None or reader._fuzzy_word(f"이 장치의 {word}는 5 이하", core) is None, (query, word)
+
+
+def test_search_fuzzy_daegi_current_is_not_power(tmp_path, capsys):
+    # 회귀: "대기 전류"가 "대기 전력"에 VERIFIED count 2로 맞음
+    p = tmp_path / "규격.md"
+    p.write_text("대기 전력은 0.5 W 이하로 한다.\n\n대기 전력 측정 방법은 부록 A.\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "대기 전류", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["match_mode"] == "exact" and out["agent_directive"].startswith("VERIFIED: 0건"), out
+
+
+def test_search_particles_do_not_overstrip_short_words():
+    m = reader.build_matcher("높이", False)
+    assert m("높이 10 mm") and m("높은 온도") is None          # '높이'의 '이'는 조사가 아님 (남는 글이 1자)
+    assert reader.build_matcher("5V", False)("15V 전원") is None
+    assert reader.build_matcher("5V", False)("5.5 V 전원") is None
+    assert reader.build_matcher("5V", False)("5[V] 전원")
+
+
+def test_search_ranks_best_hits_first_and_saves_score(tmp_path, capsys):
+    p = tmp_path / "순위.txt"
+    p.write_text("\n\n".join(["전압 언급 하나.", "다른 문단.", "전압 시험: 전압을 올리며 전압 강하를 본다. 전압 기록.",
+                              "전압 한 번."]), encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "전압", "--file", str(p), "--top", "1",
+                         "--save", str(tmp_path / "근거.csv"))
+    assert out["matches"][0]["snippet"].startswith("**전압** 시험") or "전압 시험" in out["matches"][0]["snippet"]
+    assert out["matches"][0]["score"] >= max(1, out["matches"][0]["score"])
+    rows = open(out["output_file"], encoding="utf-8-sig").read().splitlines()
+    assert rows[0].endswith(",점수") and "전압 시험" in rows[1]
+
+
+def test_search_synonym_file(tmp_path, capsys, isolated_dirs):
+    p = _recall_file(tmp_path)
+    (isolated_dirs["data"] / "synonyms.txt").write_text("# 동의어\n정격 전압, rated voltage\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "rated voltage", "--file", str(p), "--full")
+    assert code == 0 and _hit_numbers(out) == {1, 6} and out["match_mode"] == "exact"
+    assert out["synonyms_used"] == {"rated voltage": ["정격 전압"]}
+
+
+def test_search_bad_regex_recommends_literal_search(tmp_path, capsys, monkeypatch, isolated_dirs):
+    p = _recall_file(tmp_path)
+    code, out = run_fresh(reader, capsys, monkeypatch, "search", "--query", "전압 (5V", "--file", str(p), "--regex")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "정규식" in out["message"]
+    rec = out["message"].split("[추천] ", 1)[1]
+    assert rec.startswith("python ") and "--regex" not in rec and "search" in rec
+    assert "전압 (5V" not in error_log_text(isolated_dirs)        # 검색어는 오류 로그에 남지 않음
+    code, out = run_fresh(reader, capsys, monkeypatch, "search", "--query", r"\d+(V", "--file", str(p), "--regex")
+    assert code == 1 and "[추천]" not in out["message"]          # 정규식을 쓰려던 것이 분명하면 글자 그대로 찾기를 권하지 않음
+
+
+def test_search_case_sensitive_option_removed(capsys):
+    """사용자 결정(1.4.52): search --case-sensitive/-c 없음. 대소문자는 늘 무시."""
+    for flag in ("--case-sensitive", "-c"):
+        code, out = run_main(reader, capsys, "search", "--query", "abc", flag)
+        assert code == 2 and out["status"] == "error", out
+    assert reader.build_matcher("ABC", False)("xx abc yy")
+
+
+# ---------------------------------------------------------------------------
+# R10 CONTINUE: 긴 문서 등록은 시간 제한 전에 멈추고 같은 명령으로 이어서 (1.4.56)
+# ---------------------------------------------------------------------------
+
+
+def _txt_folder(tmp_path, n=3):
+    folder = tmp_path / "규격"
+    folder.mkdir()
+    for i in range(n):
+        (folder / f"doc{i}.txt").write_text(f"정격 전압 {i} V 문서 {i}\n", encoding="utf-8")
+    return folder
+
+
+def _shell_args(cmd):
+    import shlex
+    parts = shlex.split(cmd, posix=False)
+    return [p[1:-1] if len(p) > 1 and p[0] == p[-1] == '"' else p for p in parts[2:]]
+
+
+@pytest.mark.parametrize("command", ["index", "search"])
+def test_long_registration_continues_with_same_command(tmp_path, capsys, monkeypatch, command):
+    folder = _txt_folder(tmp_path)
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)      # 첫 파일 뒤로는 늘 시간 초과
+    argv = ["index", "--folder", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
+    seen = []
+    for _ in range(5):
+        code, out = run_main(reader, capsys, *argv)
+        assert code == 0 and out["status"] == "ok", out
+        seen.append(out["agent_directive"].split(":")[0])
+        if not out.get("continue"):
+            break
+        assert out["verified"] is False and out["agent_directive"].startswith("CONTINUE:") and out["progress"], out
+        nxt = out["next_commands"][0]["command"]
+        assert nxt.startswith("python ") and _shell_args(nxt) == argv, nxt
+    assert seen == ["CONTINUE", "CONTINUE", "VERIFIED"], seen          # 실행마다 새 파일 1개, 세 번째에 끝
+    assert len(reader.load_index()) == 3
+    if command == "search":
+        assert out["count"] >= 3, out
+
+
+@pytest.mark.parametrize("command", ["index", "search"])
+def test_failing_file_is_remembered_so_continue_ends(tmp_path, capsys, monkeypatch, command):
+    # 회귀: 실패하는 느린 파일이 앞에 있으면 매 실행 같은 파일을 다시 읽고 다음 파일 앞에서 CONTINUE (끝나지 않음)
+    folder = _txt_folder(tmp_path)
+    (folder / "a_bad.txt").write_text("깨진 파일", encoding="utf-8")
+    orig = reader.load_document_status
+    calls = []
+
+    def fake(path, *a, **k):
+        calls.append(os.path.basename(path))
+        if "a_bad" in path:
+            raise ValueError("손상된 파일")
+        return orig(path, *a, **k)
+    monkeypatch.setattr(reader, "load_document_status", fake)
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)      # 첫 파일 뒤로는 늘 시간 초과
+    argv = ["index", "--folder", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
+    seen, progress = [], []
+    for _ in range(6):
+        code, out = run_main(reader, capsys, *argv)
+        assert code == 0, out
+        seen.append(out["agent_directive"].split(":")[0])
+        if not out.get("continue"):
+            break
+        progress.append(out["progress"])
+    assert seen[:3] == ["CONTINUE"] * 3 and seen[3] in ("VERIFIED", "UNVERIFIED"), seen   # 실행마다 새 파일 1개 (실패도 한 단계), 네 번째에 끝
+    assert calls.count("a_bad.txt") == 1, calls                         # 실패한 파일은 한 번만 읽음
+    assert "새로 등록 0개, 읽지 못함 1개" in progress[0], progress
+    fails = out["failures"] if command == "index" else out["skipped"]
+    assert [f["file"] for f in fails] == ["a_bad.txt"] and "이전 실행에서 읽지 못함" in fails[0]["reason"], out
+    assert len(reader.load_index()) == 3
+    # 파일이 바뀌면 다시 읽음, 하나만 주면 바로 다시 시도
+    (folder / "a_bad.txt").write_text("고친 파일 정격 전압", encoding="utf-8")
+    monkeypatch.setattr(reader, "load_document_status", orig)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0 and out["failed"] == 0 and out["indexed"] == 1 and not reader.load_failed(), out
+
+
+def test_single_file_retries_known_failure(tmp_path, capsys, monkeypatch):
+    f = tmp_path / "bad.txt"
+    f.write_text("x", encoding="utf-8")
+    reader.record_failure(str(f), "손상")
+    code, out = run_main(reader, capsys, "index", "--file", str(f))
+    assert code == 0 and out["indexed"] == 1 and not reader.load_failed(), out
+
+
+def test_stale_refresh_failure_is_remembered(tmp_path, capsys, monkeypatch):
+    # 회귀: 원본이 바뀐 캐시를 다시 읽다 실패하는 파일을 매 검색마다 다시 읽음
+    folder = _txt_folder(tmp_path, 2)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0 and out["indexed"] == 2
+    for i in range(2):
+        p = folder / f"doc{i}.txt"
+        p.write_text(f"정격 전압 바뀐 {i}\n", encoding="utf-8")
+        os.utime(p, (1, 2_000_000_000 + i))
+    orig = reader.load_document_status
+    calls = []
+
+    def fake(path, *a, **k):
+        calls.append(os.path.basename(path))
+        if "doc0" in path:
+            raise ValueError("손상된 파일")
+        return orig(path, *a, **k)
+    monkeypatch.setattr(reader, "load_document_status", fake)
+    for _ in range(2):
+        code, out = run_main(reader, capsys, "search", "--query", "정격 전압")
+        assert code == 0, out
+    assert calls.count("doc0.txt") == 1, calls
+    assert [f["file"] for f in out["refresh_failures"]] == ["doc0.txt"], out
+    assert "이전 실행에서 읽지 못함" in out["refresh_failures"][0]["reason"]
+
+
+def test_time_limit_env(monkeypatch):
+    monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "0")
+    assert rt.time_limit() == float("inf")
+    monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "")
+    assert rt.time_limit() == rt.DEFAULT_TIME_LIMIT == 100.0
+    monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "45")
+    assert rt.time_limit() == 45.0
+
+
+def test_continue_is_not_logged(tmp_path, capsys, monkeypatch, isolated_dirs):
+    folder = _txt_folder(tmp_path, 2)
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert out.get("continue") is True
+    assert not error_log_text(isolated_dirs)
+
+
+# ---------------------------------------------------------------------------
+# 규격 글의 수치 조건 (excel.py check가 씀, 1.4.57): 회귀 말뭉치
+# ---------------------------------------------------------------------------
+
+SPEC_CORPUS = [
+    ("정격 전압은 5 V ± 0.25 V로 한다.", ["4.75~5.25 V"]),
+    ("정격 전압: 5V±5%", ["4.75~5.25 V"]),
+    ("(5±0.5) V", ["4.5~5.5 V"]),
+    ("공급 전압은 4.75 V 이상 5.25 V 이하일 것", ["4.75~5.25 V"]),
+    ("4.75 ~ 5.25 V", ["4.75~5.25 V"]),
+    ("4.75V～5.25V", ["4.75~5.25 V"]),
+    ("4.75 V에서 5.25 V까지", ["4.75~5.25 V"]),
+    ("between 4.75 V and 5.25 V", ["4.75~5.25 V"]),
+    ("from 10 to 20 mA", ["10~20 mA"]),
+    ("10-20 mA", ["10~20 mA"]),
+    ("소비 전류는 최대 3 A로 한다.", ["3 A 이하"]),
+    ("Max. 3A", ["3 A 이하"]),
+    ("≤ 3 A", ["3 A 이하"]),
+    ("3 A 이하", ["3 A 이하"]),
+    ("3 A 미만", ["3 A 미만"]),
+    ("The current shall not exceed 3 A.", ["3 A 이하"]),
+    ("5 V를 넘지 않을 것", ["5 V 이하"]),
+    ("절연 저항은 100 MΩ 이상", ["100 MΩ 이상"]),
+    ("Insulation resistance: min. 100 MΩ", ["100 MΩ 이상"]),
+    ("at least 100 MΩ", ["100 MΩ 이상"]),
+    ("누설 전류 0.5 mA 초과 시 불합격", ["0.5 mA 초과"]),
+    ("동작 온도 -10 ~ +50 ℃", ["-10~50 °C"]),
+    ("저장 온도 -20°C ~ 70°C", ["-20~70 °C"]),
+    ("내전압 1.5 kV 1분", ["1.5 kV", "60 s"]),
+    ("정격 5 V (4.75 ~ 5.25 V)", ["4.75~5.25 V"]),
+    ("입력 220 V AC ±10%", ["198~242 V"]),
+    ("주파수 60 Hz ± 1 Hz", ["59~61 Hz"]),
+    ("출력 5Vdc", ["5 V"]),
+    ("무게 1,500 g 이하", ["1500 g 이하"]),
+    ("KS C 1234에 따른다.", []),
+    ("3.2절 참조", []),
+    ("IEC 60950-1 시험", []),
+    ("5 초과", []),
+]
+
+
+@pytest.mark.parametrize("text,want", [
+    ("1×10\u2079 Ω", "1000000000 Ω"), ("1×10^9 Ω", "1000000000 Ω"), ("2.5x10^-3 A", "0.0025 A"), ("1E9 Ω", "1000000000 Ω"),
+    ("1.5e3 V", "1500 V"), ("10\u2076 Ω", "1000000 Ω"),
+    ("\u221220 ℃", "-20 °C"), ("\u201020", "-20"), ("온도 \u201320 ~ 60", "온도 -20 ~ 60"), ("10 \u2013 20 V", "10 \u2013 20 V"),
+    ("1.5 mm²", "1.5 mm^2"), ("체적 1×10¹² Ω·cm", "체적 1000000000000 Ω·cm"),
+])
+def test_spec_norm_exponent_dash_superscript(text, want):
+    # 4차 검토 C1·C4: NFKC가 위첨자 지수를 '109'로 바꾸기 전에 계산, 유니코드 빼기는 '-'
+    assert reader.spec_norm(text) == want
+
+
+def test_quantity_of_unicode_minus_and_ohm_case():
+    assert reader.quantity_of("\u221210 ℃")[0] == -10.0
+    assert reader.quantity_of("100 mOhm")[1][:2] == ("Ω", 1e-3) and reader.quantity_of("100 MOhm")[1][:2] == ("Ω", 1e6)
+    assert reader.quantity_of("100 mohm") is None                        # 밀리인지 메가인지 모름 -> 숫자로 읽지 않음
+
+
+def _cond_texts(text):
+    out = []
+    for c in reader.spec_conditions(text):
+        if c["unit"] == "분" and c["kind"] == "plain":          # 1분 -> 60 s (기준 단위로 비교)
+            out.append(f"{c['lo']:g} s")
+        else:
+            out.append(reader.cond_text(c))
+    return out
+
+
+@pytest.mark.parametrize("text,expected", SPEC_CORPUS)
+def test_spec_conditions_corpus(text, expected):
+    assert _cond_texts(text) == expected
+
+
+def test_quantity_and_unit_of():
+    assert reader.quantity_of(5.1) == (5.1, None)
+    assert reader.quantity_of("5.1 V")[1][0] == "V" and reader.quantity_of("1,500 g")[0] == 1500
+    assert reader.quantity_of("150MΩ")[1] == ("Ω", 1e6, "MΩ")
+    assert reader.quantity_of("합격") is None
+    assert reader.unit_of("측정값(mA)") == ("A", 1e-3, "mA") and reader.unit_of("전압 [V]")[0] == "V"
+    assert reader.unit_of("항목") is None
+
+
+@pytest.mark.parametrize("text,expected", [
+    # 한 문장의 다른 항목 조건을 합치거나 지우지 않음 (1.4.63 독립 검토)
+    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", ["5 mm 이상", "100 mm 이하"]),
+    ("외경 3 mm, 폭 5 mm 이하로 한다.", ["3 mm", "5 mm 이하"]),
+    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", ["2 m 이상", "10 mm 이하"]),
+    # 같은 항목의 한계는 그대로 합침
+    ("두께는 5 mm 이상이며 10 mm 이하", ["5~10 mm"]),
+    ("두께 5 mm 이상, 10 mm 이하", ["5~10 mm"]),
+])
+def test_spec_conditions_do_not_mix_items(text, expected):
+    assert _cond_texts(text) == expected
+
+
+@pytest.mark.parametrize("text,term,expected", [
+    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", "두께", ["5 mm 이상"]),
+    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", "길이", ["100 mm 이하"]),
+    ("외경 3 mm, 폭 5 mm 이하로 한다.", "외경", ["3 mm"]),
+    ("외경 3 mm, 폭 5 mm 이하로 한다.", "폭", ["5 mm 이하"]),
+    ("길이 3 mm, 두께 5 mm 이하로 한다.", "길이", ["3 mm"]),
+    ("정격 전압 220 V, 허용 전류 10 A 이하", "정격 전압", ["220 V"]),
+    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", "케이블 길이", ["2 m 이상"]),
+    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", "외경", ["10 mm 이하"]),
+    ("두께는 5 mm 이상이어야 한다. 폭은 100 mm 이하.", "두께", ["5 mm 이상"]),
+    ("대기 전력은 0.5 W 이하, 1 W 이하(시험 모드)로 한다.", "대기 전력", ["0.5 W 이하", "1 W 이하"]),
+    ("소비 전류는 최대 3 A, 최소 1 A로 한다.", "소비 전류", ["1~3 A"]),      # 최대·최소는 새 항목이 아님
+    # 허용·변동 범위로 시작하는 절은 새 항목이 아니라 앞 항목의 한계 (1.4.64 회귀: 기준 값 '5 V'만 남아 5.1 V가 불일치)
+    ("정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다.", "정격 전압", ["4.75~5.25 V"]),
+    ("정격 전압 5 V, 허용 범위 4.75~5.25 V", "정격 전압", ["4.75~5.25 V"]),
+    ("정격 전압은 5 V로 하고, 허용 범위는 4.75~5.25 V로 한다.", "정격 전압", ["4.75~5.25 V"]),
+    ("출력 전압은 12 V이며, 변동 범위는 11.5 V 이상 12.5 V 이하", "출력 전압", ["11.5~12.5 V"]),
+    # 한쪽 한계와 기준 값은 합치지 않음 (1.4.66 보수적 판정: check가 판단필요)
+    ("회전수 1,500 rpm, 허용 범위 1,400 rpm 이상", "회전수", ["1500 rpm", "1400 rpm 이상"]),
+    # 기준 값 + 떨어진 공차 ±N 단위 / ±N % (규칙 b)
+    ("두께 3 mm, 공차 ±0.1 mm", "두께", ["2.9~3.1 mm"]),
+    ("정격 전류 2 A, 허용 오차 ±5 %", "정격 전류", ["1.9~2.1 A"]),
+    ("높이 100 mm, 허용 공차 ±2 mm, 폭 50 mm", "높이", ["98~102 mm"]),
+    # 사용·동작 범위는 한계 낱말이 아니라 별개 항목 (1.4.65 회귀: 시험 전압의 조건이 0~1000 V가 됨)
+    ("시험 전압 500 V, 사용 범위 0~1000 V", "시험 전압", ["500 V"]),
+    ("시험 온도 23 ℃, 동작 범위 -10~40 ℃", "시험 온도", ["23 °C"]),
+    ("보관 온도 25 ℃ 이하, 동작 범위 0~40 ℃", "보관 온도", ["25 °C 이하"]),
+    ("Current Max. 3A", "Current", ["3 A 이하"]),                          # 약어 점에서 문장을 나누지 않음
+    ("정격 전압: 5 V (허용 범위: 4.75 V ~ 5.25 V)", "정격 전압", ["4.75~5.25 V"]),
+])
+def test_near_conditions_stop_at_next_item(text, term, expected):
+    cs, _ = reader.near_conditions(text, [term])
+    assert [reader.cond_text(c) for c in cs] == expected
+
+
+def test_near_conditions_plain_with_later_range_is_marked():
+    # 안전장치: 잘라 낸 쪽에 기준 값만 남고 같은 문장 뒤에 같은 단위의 범위가 그 값을 품으면 alt로 표시 (불일치 단정 금지)
+    cs, _ = reader.near_conditions("외경 3 mm, 폭 2~5 mm로 한다.", ["외경"])
+    assert [reader.cond_text(c) for c in cs] == ["3 mm"] and [reader.cond_text(a) for a in cs[0]["alt"]] == ["2~5 mm"]
+    cs, _ = reader.near_conditions("외경 3 mm, 폭 5 mm 이하로 한다.", ["외경"])       # 한쪽 한계는 다른 항목으로 봄
+    assert "alt" not in cs[0]
+    cs, _ = reader.near_conditions("시험 전압 500 V, 사용 범위 0~1000 V", ["시험 전압"])  # 이름에 '범위'가 든 별개 항목
+    assert "alt" not in cs[0]
+
+
+def test_near_conditions_marks_reject_and_multi_value():
+    cs, _ = reader.near_conditions("누설 전류 0.5 mA 초과 시 불합격", ["누설 전류"])
+    assert cs and "불합격" in cs[0]["ambiguous"]
+    cs, _ = reader.near_conditions("주파수 50/60 Hz, 허용 범위 47~63 Hz", ["주파수"])
+    assert cs and "여럿" in cs[0]["ambiguous"]
+
+
+def test_cond_holds_bounds():
+    c = reader.spec_conditions("3 A 미만")[0]
+    assert reader.cond_holds(c, 2.99) and not reader.cond_holds(c, 3.0)
+    c = reader.spec_conditions("3 A 이하")[0]
+    assert reader.cond_holds(c, 3.0) and not reader.cond_holds(c, 3.01)
+    c = reader.spec_conditions("5 V ± 0.25 V")[0]
+    assert reader.cond_holds(c, 5.25) and not reader.cond_holds(c, 5.2501)
+
+
+# ---------------------------------------------------------------------------
+# reader.py diff: 두 판 비교 (장절 짝짓기, 삭제·추가·변경, 숫자 변경, 1.4.59)
+# ---------------------------------------------------------------------------
+
+OLD_SPEC = """1. 일반
+
+이 규격은 전원 장치에 적용한다.
+
+2. 전기 특성
+
+정격 전압은 5 V로 한다.
+
+소비 전류는 최대 3 A로 한다.
+
+대기 전력은 0.5 W 이하로 한다.
+
+3. 표시
+
+표시등은 녹색으로 한다.
+
+4. 포장
+
+상자에 넣어 출하한다.
+"""
+
+NEW_SPEC = """1. 일반
+
+이 규격은 전원 장치에 적용한다.
+
+2. 전기 특성
+
+정격 전압은 5.5 V로 한다.
+
+소비 전류는 최대 3 A로 한다.
+
+돌입 전류는 10 A 이하로 한다.
+
+3. 표시 방법
+
+표시등은 청색으로 한다.
+
+5. 보관
+
+습도 60 % 이하에 보관한다.
+"""
+
+
+def _two_versions(tmp_path):
+    old, new = tmp_path / "규격_v1.txt", tmp_path / "규격_v2.txt"
+    old.write_text(OLD_SPEC, encoding="utf-8")
+    new.write_text(NEW_SPEC, encoding="utf-8")
+    return old, new
+
+
+def test_diff_classifies_and_flags_numbers(tmp_path, capsys):
+    old, new = _two_versions(tmp_path)
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    ch = out["changes"]
+    first = ch[0]
+    assert first["kind"] == "변경" and first["numeric"] is True and first["number_changes"] == ["5 V에서 5.5 V로"], first
+    assert "->" not in json.dumps(out, ensure_ascii=False)           # 화살표 없이 말로
+    assert "규격_v1.txt" in first["old_evidence"] and "규격_v2.txt" in first["new_evidence"]
+    kinds = {(c["kind"], c["old_text"] or c["new_text"]) for c in ch}
+    assert ("삭제", "대기 전력은 0.5 W 이하로 한다.") in kinds
+    assert ("추가", "돌입 전류는 10 A 이하로 한다.") in kinds
+    assert ("변경", "표시등은 녹색으로 한다.") in kinds                 # '3. 표시' -> '3. 표시 방법' 제목 유사도로 짝
+    assert ("삭제", "상자에 넣어 출하한다.") in kinds and ("추가", "습도 60 % 이하에 보관한다.") in kinds
+    assert out["unpaired_sections"]["old"] and out["unpaired_sections"]["new"]
+    assert not any("적용한다" in (c["old_text"] + c["new_text"]) for c in ch)     # 같은 글은 빠짐
+    assert ("변경", "3. 표시") in kinds                                     # 장절 제목 변경도
+    assert out["counts"]["변경"] == 3 and out["numeric_changes"] == 1 and out["truncated"] is False
+
+
+def test_diff_section_filter_and_save(tmp_path, capsys):
+    old, new = _two_versions(tmp_path)
+    save = tmp_path / "차이.xlsx"
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--section", "전기 특성",
+                         "--save", str(save))
+    assert code == 0 and out["count"] == 3 and out["output_file"] == str(save), out
+    import openpyxl
+    rows = list(openpyxl.load_workbook(save, read_only=True).active.iter_rows(values_only=True))
+    assert rows[0][0] == "구분" and len(rows) == 4
+
+
+def test_diff_same_document_is_zero(tmp_path, capsys):
+    old, _ = _two_versions(tmp_path)
+    copy = tmp_path / "같은판.txt"
+    copy.write_text(OLD_SPEC.replace("5 V", "5  V"), encoding="utf-8")      # 띄어쓰기 차이는 무시
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(copy))
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+
+
+def test_diff_truncates_with_full_result_file(tmp_path, capsys):
+    old, new = tmp_path / "a.txt", tmp_path / "b.txt"
+    old.write_text("\n\n".join(f"항목 {i}의 값은 {i} V이다." for i in range(30)), encoding="utf-8")
+    new.write_text("\n\n".join(f"항목 {i}의 값은 {i + 1} V이다." for i in range(30)), encoding="utf-8")
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
+    assert code == 0 and out["count"] == 30 and out["shown"] == 20 and out["truncated"] is True, out
+    assert os.path.isfile(out["full_result_file"])
+
+
+def test_number_changes_words():
+    assert reader.number_changes("정격 5V, 3 A", "정격 5.0 V, 3 A") == []
+    assert reader.number_changes("5 V", "5.5 V") == ["5 V에서 5.5 V로"]
+    assert reader.number_changes("5 V", "5 V, 2 A") == ["숫자 추가: 2 A"]
+
+
+# ---------------------------------------------------------------------------
+# --section 장절 번호 경계 (1.4.64)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sec,key,want", [
+    (["2. 전기", "2.1 정격"], "2.1", True),
+    (["2. 전기", "2.1 정격", "2.1.3 전압"], "2.1", True),          # 하위 절 포함
+    (["2. 전기", "2.10 기타"], "2.1", False),                      # 회귀: 2.10에도 맞았음
+    (["12. 부록", "12.1 표"], "2.1", False),                       # 회귀: 12.1에도 맞았음
+    (["1. 개요", "1.2.1 범위"], "2.1", False),
+    (["2.1. 정격"], "2.1.", True),
+    (["제2장 전기"], "2", True),
+    (["12. 부록"], "2", False),
+    (["A.1 부록 표"], "A.1", True),
+    (["1. SCOPE", "1.1. Scope"], "Scope", True),                   # 제목 글자는 부분 일치
+    (["3.2 정격 전압"], "정격", True),
+])
+def test_section_number_keeps_boundaries(sec, key, want):
+    assert reader.section_matches({"section": sec}, reader.section_key(key)) is want
+
+
+def test_search_section_number_excludes_2_10(tmp_path, capsys):
+    f = tmp_path / "규격.md"
+    f.write_text("# 2. 전기\n\n## 2.1 정격\n\n정격 전압 5 V\n\n## 2.10 기타\n\n정격 전압 12 V\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--file", str(f), "--section", "2.1")
+    assert code == 0 and out["count"] == 1 and "5 V" in json.dumps(out["matches"][0], ensure_ascii=False), out
+
+
+# ---------------------------------------------------------------------------
+# 숫자만 든 검색어, 낱말 끝 조사 (1.4.64)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query,text,want", [
+    ("5,000", "5000 rpm", True), ("5000", "5,000 rpm", True), ("0.5", "0.50 mm", True), ("0.50", "0.5 mm", True),
+    ("0.5", "10.5 mm", False), ("0.5", "0.55 mm", False), ("1.2", "11.2", False), ("1.2", "3.1.2절", False),
+    ("1.2", "12", False), ("5,000", "15,000", False),
+    # 소수 한 자리 맨 숫자는 장절 번호 경계, 끝 0은 단위가 붙을 때만 (1.4.65)
+    ("2.1", "2.10 전압", False), ("2.1", "2.1.3 세부", True), ("2.1", "12.1 전압", False), ("0.5", "0.50 이다", False),
+    ("3.14", "3.140 이다", True), ("2.1 전압", "2.10 전압", False), ("1.5 mm", "1.50 mm", True), ("1.5", "1.50 mm", True),
+    # 소수 끝 0 무시는 수학적으로 같은 값일 때만 (1.4.65 회귀: '2.0'이 '2.5 V', '1.0'이 '1.03 mm', '0.0'이 '0.5'에 맞음)
+    ("2.0", "2.5 V", False), ("2.0", "2.05 V", False), ("2.0", "2.0 V", True), ("2.0", "2 V", True), ("2.0", "2.00", True),
+    ("1.0", "1.03 mm", False), ("1.0", "1.0.3절", False), ("3.0", "3.5", False), ("0.0", "0.5", False), ("0.0", "0", True),
+    ("2.0 V", "2.5 V", False), ("1.0 mm", "1.03 mm", False), ("2.10", "2.10 전압", True), ("2.10", "2.1 V", True),
+    ("2.10", "2.1 전압", False), ("2.1", "2.15 V", False), ("1,500", "1,500.", True), ("0.5", "0.5,1.0", False),
+    # 전각 단위 글자 (CP949): 끝 0이 단위 앞이면 같은 값
+    ("1.5", "1.50㎜", True), ("2.5", "2.50㎝", True), ("0.5", "0.50㎏", True), ("1.5", "1.50㎖", True), ("0.5", "0.50㎃", True),
+])
+def test_number_only_query_normalized(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want
+
+
+# 4차 검토 (1.4.67): 숫자 검색의 오일치가 exact VERIFIED였음 (부호·단위 경계·기호 소수 경계·천 단위 쉼표)
+NUMBER_SEARCH_CASES = [
+    # 검색어의 부호는 패턴에 넣고 앞쪽 경계를 지킴. 글의 U+2212·U+2010~2013 빼기도 '-'와 같음
+    ("-20 ℃", "보관 온도 20 ℃", False), ("-20 ℃", "+20 ℃", False), ("-20 ℃", "-20 ℃", True), ("-20 ℃", "\u221220 ℃", True),
+    ("-20 ℃", "-20.5 ℃", False), ("-20 ℃", "1-20 ℃", False),
+    ("-5 V", "5 V", False), ("-5 V", "+5 V", False), ("-5 V", "-5 V", True),
+    ("-20", "-20", True), ("-20", "\u221220", True), ("-20", "\u201320", True), ("-20", "-20~60", True), ("-20", "20", False),
+    ("-20", "1-20", False), ("-20", "A-20", False), ("-20", "-200", False), ("-20", "-20.5", False),
+    ("20 ℃", "-20 ℃", False), ("20 ℃", "\u221220 ℃", False), ("20 ℃", "+20 ℃", False), ("20", "1-20", False),   # 1.4.69: 부호·대시가 다르면 후보
+    ("±5 %", "5 %", False), ("±5 %", "-5 %", False), ("±5 %", "± 5 %", True),
+    ("±5", "±5", True), ("±5", "±5.0", True), ("±5", "+/-5", True), ("±5", "±5.5", False), ("±5", "±50", False),
+    ("±5", "±0.5", False),
+    # 끝이 단위면 뒤에 영문·단위 글자가 이어지지 않아야 함 (Ω 등 비ASCII 포함)
+    ("10 m", "10 m", True), ("10 m", "10m", True), ("10 m", "10 mm", False), ("10 m", "10 mA", False), ("10 m", "10 ms", False),
+    ("10 m", "10 min", False), ("10 m", "10 MΩ", False),
+    ("5 V", "5 VA", False), ("5 V", "5 V", True), ("5 V", "5 Vdc", True), ("5 V", "5 V/m", True), ("5V", "5 VA", False),
+    ("5 A", "5 Ah", False), ("5 A", "5 A", True), ("100 W", "100 Wh", False), ("100 W", "100 W", True),
+    ("2 s", "2 sec", True), ("2 s", "2 seconds", True), ("2 s", "2 s", True),         # 같은 단위 꼬리 (1.4.68)
+    # 기호 분기의 소수 경계
+    ("1/2", "1/2.5", False), ("1/2", "1/2", True), ("1/2", "1/2인치", True), ("1/2", "1/20", False),
+    # 맞아야 하는 것: 10% = 10.0 %, 0.5 = 0.500, 날짜 표기
+    ("10%", "10.0 %", True), ("10%", "10 %", True), ("10%", "110%", False), ("10%", "10.5%", False), ("10%", "100%", False),
+    ("0.5", "0.500", True), ("0.5", "0.5", True), ("0.5", "0.55", False), ("12.5", "12.500", True),
+    ("2026.11.04", "2026.11.4", True), ("2026.11.04", "2026-11-04", True), ("2026.11.04", "2026/11/04", True),
+    ("2026.11.04", "2026. 11. 04", True), ("2026.11.04", "2026년 11월 4일", True), ("2026.11.4", "2026.11.04", True),
+    ("2026.11.04", "2026.11.041", False), ("2026.11.04", "12026.11.04", False), ("2026.11.04", "2026.11.040", False),
+    # 천 단위 쉼표는 3자리 묶음일 때만
+    ("1,500", "1500", True), ("1,500", "1,500", True), ("1,500", "15,00", False), ("1,500", "2,1,500", False),
+    ("1,500", "1,5000", False), ("1500", "1,500 rpm", True), ("1,500,000", "1500000", True), ("1,500,000", "1,500,000", True),
+]
+
+
+@pytest.mark.parametrize("query,text,want", NUMBER_SEARCH_CASES)
+def test_number_search_boundaries(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want
+
+
+# 5차 검토 (1.4.68): 보고서 사례 전부. 정상 표기가 0건이 되던 것(±·부호 앞 글자, 같은 단위 꼬리)과 오일치
+NUMBER_SEARCH_CASES_5 = [
+    # [치명] ± 앞 글자 제한 없음 (+/-, +- 포함)
+    ("±0.5 mm", "100±0.5 mm", True), ("±0.5 mm", "Φ10±0.5mm", True), ("±5%", "5V±5%", True), ("±10%", "AC220V±10%", True),
+    ("±10%", "24VDC±10%", True), ("±0.1", "공차±0.1", True), ("±0.1", "R5±0.1", True), ("±1 dB", "3 dB±1 dB", True),
+    ("±2%", "1000 ppm±2%", True), ("정격 전압 5V ±5%", "정격 전압: 5V±5%", True), ("±0.1 mm", "치수 100±0.1 mm", True),
+    ("5 V ±5%", "5V±5%", True), ("220V ±10%", "AC 220V±10%", True), ("±5 %", "5 V±5 %", True), ("±10 %", "정격±10 %", True),
+    ("±0.5", "100+/-0.5", True), ("±0.5", "100+-0.5", True), ("5V±5%", "5V±5%", True), ("5V±5%", "5V 5%", False),
+    # 빼기 부호: 앞이 한글·=·: 이면 부호, 영문·숫자면 대시
+    ("-20℃", "온도-20℃", True), ("-20 ℃", "Ta=-20℃", True), ("-20", "온도:-20℃", True), ("-20", "X-20", False),
+    ("20", "온도-20℃", False), ("-5", "+/-5", False),
+    # [높음] (a) + 또는 부호 없는 숫자는 ±에 맞지 않음
+    ("+10%", "±10%", False), ("+5V", "±5V", False), ("+5 V", "±5 V 이내", False), ("5V", "±5V", False),
+    ("10%", "+/-10%", False), ("10%", "+- 10%", False), ("+5V", "5V", False), ("+5V", "+5V", True),
+    # [높음] (b) 숫자(+단위) 뒤 띄어쓴 대시는 범위 ('0 - 20 ℃'의 20은 -20이 아님)
+    ("-20 ℃", "0 - 20 ℃", False), ("-20 ℃", "0 \u2013 20 ℃", False), ("-20 ℃", "0 -20 ℃", False), ("-20", "10 - 20", False),
+    ("-5 V", "입력 0 -5 V", False), ("-3 dB", "1 - 3 dB", False), ("-20℃", "온도 0 ~ -20℃", True),
+    ("-20 ℃", "5 V - 20 ℃", False), ("20", "10 -20", False), ("100 Hz", "10 \u2212100 Hz", False), ("20", "10~-20", False),
+    # [중간] 같은 단위 꼬리는 허용, 다른 단위로 이어지면 아님
+    ("5 V", "5 Vrms", False), ("5 V", "5 Vp-p", False), ("5 V", "5 Vpp", False), ("5 V", "5 Vin", True), ("5 V", "5 Vcc", True),
+    ("5 V", "5 Vmax", True), ("5 V", "5 Vmin", True), ("5 V", "5 VAC", True), ("5V", "5 Vrms", False),
+    ("3 s", "3 sec", True), ("3 s", "3 secs", True), ("10 min", "10 mins", True), ("10 min", "10 minutes", True),
+    ("10 h", "10 hr", True), ("10 h", "10 hrs", True), ("30 dB", "30 dBA", False), ("1 bar", "1 barg", False),
+    ("1 MPa", "1 MPaG", False), ("5 V", "5 VA", False), ("10 m", "10 mm", False), ("10 m", "10 MΩ", False),
+    ("10 m", "10 min", False), ("1 A", "1 Ah", False), ("30 dB", "30 dBm", False), ("30 dB", "30 dBi", False),
+    ("1 kg", "1 kgf", False), ("100 g", "100 gf", False), ("1 W", "1 Wh", False), ("2 s", "2 sq", False),
+    # (여유) 표기 차이: 단위 글자, 곱하기, 지름, 시각, 영숫자 코드 경계
+    ("10 kΩ", "10 kohm", True), ("10 kΩ", "10 k\u2126", True), ("10 Ω", "10 ohm", True), ("100mm", "100㎜", True),
+    ("10 mA", "10 ㎃", True), ("100 ㎜", "100 mm", True), ("10 m", "10 ㎜", False),
+    ("M6x1.0", "M6×1.0", True), ("M6×1.0", "M6x1.0", True), ("M6x1.0", "M6 1.0", False), ("Φ10", "Ø10", False),
+    ("08:30", "8:30", True), ("8:30", "08:30", True), ("8:30", "18:30", False), ("08:30", "08 30", False),
+    ("ABC-1234", "ABC-1234", True), ("ABC-1234", "(ABC-1234)", True), ("ABC-1234", "XABC-1234", False),
+    ("ABC-1234", "ABC-1234-5", False), ("ABC-1234", "ABC-12345", False),
+]
+
+
+@pytest.mark.parametrize("query,text,want", NUMBER_SEARCH_CASES_5)
+def test_number_search_boundaries_review5(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want, (query, text)
+
+
+def test_number_safety_net_candidates(tmp_path, capsys):
+    # 5차 검토 S: 정확 일치 0건 + 검색어에 숫자 -> 숫자 값만 같은 곳을 candidates로 (0건 VERIFIED -> '규정 없음' 단정 방지)
+    p = tmp_path / "규격.txt"
+    p.write_text("정격 전압: DC 5V±5%\n\n외경: Φ10±0.5mm, 길이 100±0.5 mm\n\n보관 온도 -20℃\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "0.5 mm", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["match_mode"] == "number" and "matches" not in out, out
+    assert out["agent_directive"].startswith("UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 1건 - 표기를 확인하세요")
+    c = out["candidates"][0]
+    assert c["number_words"] == {"0.5 mm": "±0.5mm"} and c["matched_terms"] == [] and "외경" in c["snippet"], c
+    code, out = run_main(reader, capsys, "search", "--query", "20 ℃", "--file", str(p))   # 부호 없는 20은 -20과 다름
+    assert out["match_mode"] == "number" and out["candidates"][0]["number_words"] == {"20 ℃": "-20℃"}, out
+    code, out = run_main(reader, capsys, "search", "--query", "보관 AND 20", "--file", str(p))  # 숫자 없는 검색어는 정확히
+    assert out["match_mode"] == "number" and out["candidates"][0]["matched_terms"] == ["보관"], out
+    # 숫자 경계는 지킴: 느슨한 검색도 0건이면 그때만 0건 VERIFIED
+    code, out = run_main(reader, capsys, "search", "--query", "0.05 mm", "--file", str(p))
+    assert out["count"] == 0 and out["match_mode"] == "exact" and out["agent_directive"].startswith("VERIFIED: 0건"), out
+    code, out = run_main(reader, capsys, "search", "--query", "5V ±5%", "--file", str(p))  # 정확 일치는 그대로
+    assert out["count"] == 1 and out["match_mode"] == "exact", out
+
+
+# 6차 검토 (1.4.69): 보수적 원칙. 정확 일치(exact, VERIFIED)는 숫자 앞 부호가 분명히 같을 때만, 부호·대시가 다르거나
+# 범위인지 부호인지 애매하면 숫자 안전망 후보(number, UNVERIFIED). 범위 대시는 양옆이 띄어진 '0 - 20'만.
+# 'E' = exact, 'N' = 숫자 안전망 후보, '-' = 둘 다 아님
+def _match_kind(query, text):
+    if reader.build_matcher(query, False)(text) is not None:
+        return "E"
+    return "N" if reader.number_search([({}, {"text": text})], reader.parse_query(query), 2) else "-"
+
+
+NUMBER_KIND_CASES_6 = [
+    # 검토 보고 q1: 글의 숫자 앞에 부호가 있는데 검색어에는 없음 (또는 다른 부호) -> 후보
+    ("40 ℃", "Ta 25 -40 ℃", "N"), ("40 ℃", "보관 85 ℃ -40 ℃", "N"), ("40 °C", "Range 85 °C -40 °C", "N"),
+    ("40 ℃", "25 to -40 ℃", "N"), ("40 °C", "from 85 to -40 °C", "N"), ("12 V", "전원 +5 V -12 V", "N"),
+    ("12 V", "Pin 3 VEE -12 V", "N"), ("5 V", "OUT2 -5 V", "N"), ("10 %", "허용차 +5 % -10 %", "N"),
+    ("+10 %", "허용차 +5 % -10 %", "N"), ("15 %", "+10 % -15 %", "N"), ("+15 %", "+10 % -15 %", "N"),
+    ("0.1 mm", "공차 +0.2 mm -0.1 mm", "N"), ("0.1", "공차 +0.2 -0.1", "N"), ("0.5", "+0 -0.5", "N"),
+    ("+0.5", "+0 -0.5", "N"), ("3 dB", "Gain 1 dB -3 dB", "N"), ("40", "Typ 25 Min -40", "N"),
+    ("0.02 mm", "+0.05 mm -0.02 mm", "N"), ("1 A", "Offset 2 A -1 A", "N"),
+    # 6번: ± 빈틈(띄어쓰기 여러 칸, + / -), 쉼표·낱말에 붙은 빼기, 시간대
+    ("0.5 mm", "±  0.5 mm", "N"), ("0.5 mm", "+ / - 0.5 mm", "N"), ("+0.5 mm", "+ / - 0.5 mm", "N"),
+    ("10 %", "+/-  10 %", "N"), ("-5 V", "+ / - 5 V", "N"), ("40 ℃", "25,-40 ℃", "N"), ("40℃", "Min-40℃", "N"),
+    ("08:30", "UTC-08:30", "N"), ("5:30", "GMT-5:30", "N"),
+    # q2: 앞에 다른 값이 있는 음수
+    ("30 ℃", "보관 70 ℃ -30 ℃", "N"), ("0.5 V", "Offset 1 mV -0.5 V", "N"), ("2 mm", "X 10 mm -2 mm", "N"),
+    ("55 ℃", "Tmax 125 ℃ Tmin 25 ℃ -55 ℃", "N"), ("20 dBm", "Pout 10 dBm -20 dBm", "N"), ("1 %", "±2 % -1 %", "N"),
+    ("3 ㎜", "치수 10 ㎜ -3 ㎜", "N"),
+    # 반대로 맞아야 할 것: 같은 부호는 exact, 범위인지 애매하면 최소한 후보
+    ("-40 ℃", "25 to -40 ℃", "E"), ("-0.1 mm", "공차 +0.2 mm -0.1 mm", "N"), ("-12 V", "전원 +5 V -12 V", "N"),
+    ("±0.5 mm", "±  0.5 mm", "E"), ("±0.5 mm", "+ / - 0.5 mm", "E"), ("±10 %", "+/-  10 %", "E"),
+    ("-40 ℃", "25,-40 ℃", "E"), ("-40℃", "Min-40℃", "E"), ("-20", "\u221220", "E"), ("-20", "\u201320", "E"),
+    ("+5 V", "+ 5 V", "E"), ("-20", "10\u201320", "N"), ("3 dB", "-3 dB", "N"), ("0.5", "±0.5", "N"),
+    # 범위 대시: 양옆이 띄어진 '0 - 20'만 범위 (부호 없는 20과는 exact, -20과는 아님)
+    ("20", "0 - 20", "E"), ("20 ℃", "0 - 20 ℃", "E"), ("-20", "0 - 20", "N"), ("-20 ℃", "0 - 20 ℃", "N"),
+    ("20", "10 -20", "N"), ("20", "1-20", "N"), ("100 Hz", "10-100 Hz", "N"),
+    # 다른 낱말 뒤 숫자의 붙임표는 구분자 ('SOI 1' = 'SOI-1'), 영숫자 코드
+    ("SOI 1", "SOI-1", "E"), ("SOI 1", "SOI #1", "E"), ("ABC-1234", "ABC-1234", "E"), ("ABC-1234", "ABC-1234-5", "N"),
+    ("정격 전압 5 V", "정격 전압: 5V", "E"), ("정격 전압 5 V", "정격 전압: -5V", "N"),
+    # 3번: 단위 접두 대소문자 (m/M, p/P, μ = u = U+00B5). 소문자 'mohm'은 밀리로 봄
+    ("10 mohm", "10 MΩ", "N"), ("10 Mohm", "10 mΩ", "N"), ("10 MΩ", "10 mohm", "N"), ("100 mohm", "100 MΩ", "N"),
+    ("1 Mohm", "1 mohm", "N"), ("1 mΩ", "1 ㏁", "N"), ("10 kohm", "10 MΩ", "N"), ("5 ohm", "5 ㏁", "N"),
+    ("10 mHz", "10 MHz", "N"), ("1 mW", "1 MW", "N"), ("10 MPa", "10 mPa·s", "N"), ("5 mV", "5 MV", "N"),
+    ("10 mA", "10 MA", "N"), ("5 v", "5 V", "E"), ("10 KΩ", "10 kΩ", "E"), ("10 uA", "10 \u03bcA", "E"),
+    ("10 \u03bcA", "10 \u00b5A", "E"), ("10 min", "10 MIN", "E"), ("1 ppm", "1 PPM", "E"), ("10 mΩ", "10 mohm", "E"),
+    # 7번: 뜻이 다른 꼬리 (피크·실효·게이지·가중), 지수, 상(φ)은 exact가 아님. 같은 단위 꼬리는 그대로
+    ("1x10", "1×10\u207b\u00b3", "N"), ("1x10", "1×10^-3", "N"), ("1x10", "1×10", "E"),
+    ("5 V", "5 Vp-p", "N"), ("5 V", "5 Vpp", "N"), ("5 V", "5 Vp", "N"), ("10 A", "10 Apk", "N"), ("5 V", "5 Vrms", "N"),
+    ("1 bar", "1 barg", "N"), ("1 bar", "1 bara", "N"), ("30 dB", "30 dBA", "N"), ("Ø10", "φ10", "N"),
+    ("Ø10", "ø10", "E"), ("Φ10", "φ10", "E"), ("5 V", "5 Vdc", "E"), ("5 V", "5 VAC", "E"), ("10 s", "10 sec", "E"),
+    ("10 min", "10 mins", "E"), ("10 h", "10 hrs", "E"), ("5 V", "5 VA", "N"), ("10 m", "10 mm", "N"),
+]
+
+
+@pytest.mark.parametrize("query,text,want", NUMBER_KIND_CASES_6)
+def test_number_match_kind_review6(query, text, want):
+    assert _match_kind(query, text) == want, (query, text)
+
+
+@pytest.mark.parametrize("query,text", [
+    ("0 0 0 0 0 0 0 1", "REGA R/W " + "0 " * 3000), ("1 1 1 1 1 3", "1 " * 600), ("1 1 1 1 3", "1 " * 2500),
+    ("1 1 1 1 1 1 1 3", "1 " * 20000), ("20", "1-20 " * 20000), ("5 V", "-5 V " * 20000),
+])
+def test_number_search_linear_time(query, text):
+    # 6차 검토 [치명]: 숫자 안전망의 큰 정규식이 '1 1 1 ...'에서 지수 시간 -> 숫자별 위치 목록 + 40자 창 선형 탐색
+    t = time.monotonic()
+    reader.build_matcher(query, False)(text)
+    reader.number_search([({}, {"text": text})], reader.parse_query(query), re.IGNORECASE)
+    assert time.monotonic() - t < 1.0
+
+
+@pytest.mark.parametrize("text", ["1" * 20000, "시리얼 " + "1234567890" * 550 + " 정격 전압", ("1 " * 20000)[:20000],
+                                  ("10 - 20 " * 3000)])
+def test_spec_conditions_long_digit_runs(text):
+    # 6차 검토 [높음]: 긴 숫자열에서 모든 자리를 시작점으로 다시 읽어 제곱 시간. 구분자 없는 31자 이상 숫자열은 수치가 아님
+    t = time.monotonic()
+    reader.spec_conditions(text)
+    reader.near_conditions(text + " 정격 전압 5 V", ["정격 전압"])
+    assert time.monotonic() - t < 3.0
+    assert reader.spec_conditions("시리얼 " + "1" * 40 + " V") == []
+    assert reader.spec_conditions("정격 5 V")[0]["lo"] == 5.0
+
+
+def test_number_safety_net_needs_other_words(tmp_path, capsys):
+    # 6차 검토 [중간]: 숫자 아닌 낱말(단위 빼고)도 같은 단위 안에 있어야 후보. 낱말이 없으면 number를 건너뜀
+    p = tmp_path / "규격.txt"
+    p.write_text("정격 전류 1 A\n\n보관 온도 -20 ℃\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "1 퀀텀", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["match_mode"] == "exact", out
+    assert out["agent_directive"].startswith("VERIFIED: 0건"), out
+    code, out = run_main(reader, capsys, "search", "--query", "보관 20 ℃", "--file", str(p))   # 낱말이 있으면 후보
+    assert out["match_mode"] == "number" and out["candidates"][0]["number_words"] == {"보관 20 ℃": "-20 ℃"}, out
+    code, out = run_main(reader, capsys, "search", "--query", "정격 20 ℃", "--file", str(p))   # 같은 단위에 '정격' 없음
+    assert out["match_mode"] != "number", out
+
+
+def test_number_safety_net_time_cap_is_not_zero_verified(tmp_path, capsys, monkeypatch):
+    # 6차 검토: 숫자 안전망이 시간 상한에 걸리면 0건이어도 VERIFIED로 단정하지 않음
+    p = tmp_path / "규격.txt"
+    p.write_text("\n\n".join(f"항목 {i} 값 {i}" for i in range(200)) + "\n", encoding="utf-8")
+    monkeypatch.setattr(reader, "NUMBER_SEARCH_SECONDS", -1.0)
+    code, out = run_main(reader, capsys, "search", "--query", "없는말 7777", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert any("숫자 안전망" in g for g in out["not_searched"]), out
+
+
+@pytest.mark.parametrize("text", ["1E999 Ω 이상", "1×10^999 Ω 이상", "1×10\u2079\u2079\u2079 Ω 이상", "10^999 Ω 이상", "1E-120 A 이하"])
+def test_spec_norm_exponent_over_two_digits_is_not_a_condition(text):
+    # 5차 검토: 지수는 2자리까지 계산. 3자리 이상은 조건으로 읽지 않음 (check에서 판단필요)
+    n = reader.spec_norm(text)
+    assert "지수 범위 밖" in n and reader.spec_conditions(n) == [], n
+    assert reader.spec_norm("1E99 V")[:3] == "100" and reader.spec_norm("1×10^12 Ω") == "1000000000000 Ω"
+
+
+@pytest.mark.parametrize("query,text,want", [
+    ("케이블로", "케이블 연결", True),          # ㄹ 받침 뒤 '로'는 조사
+    ("케이블로", "케이블은 2 m", True),         # 뗀 낱말 뒤 조사는 허용
+    ("케이블로", "케이블카 운행", False),       # 뗀 낱말 뒤에 한글이 이어지면 다른 낱말
+    ("프로토콜로", "프로토콜", True),
+    ("서버로", "서버로 전송", True),            # 받침 없는 글자 뒤 '로'는 떼지 않고 그대로 찾음
+    ("보호회로", "보호회로 시험", True),        # 낱말 끝 '로'도 그대로 맞음
+    ("보호회로 시험", "보호회로의 시험", True),
+    # 1.4.65 회귀: 받침 없는 '로'를 떼고도 찾아 뗀 낱말 앞부분에 맞음
+    ("전기회로", "전기회사 납품", False), ("냉각수로", "냉각수 온도 80 ℃", False), ("배수로", "배수 펌프", False),
+    ("보호회로", "보호회의 개최", False), ("고속도로", "고속도 카메라", False), ("보호회로 시험", "보호회 시험", False),
+    ("서버로", "서버 설정", False), ("우회로", "우회 경로", False),
+])
+def test_particle_ro(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want
+    assert reader.strip_particles("케이블로 보호회로") == "케이블 보호회로"
+
+
+def test_word_final_syllable_is_not_particle():
+    assert reader.strip_particles("와이파이 보호회로 역효과") == "와이파이 보호회로 역효과"
+    assert reader.strip_particles("정격전압이 전류가 저항은 시험을 케이블의 전압으로") == "정격전압 전류 저항 시험 케이블 전압"
+    assert reader.build_matcher("와이파이", False)("와이파 모듈") is None
+
+
+def test_diff_save_md_warns_xlsx(tmp_path, capsys):
+    # 회귀: diff --save x.md가 말없이 .xlsx로 저장됨
+    old, new = _two_versions(tmp_path)
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--save", str(tmp_path / "차이.md"))
+    assert code == 0 and out["output_file"].endswith(".xlsx"), out
+    assert any(".md" in w and ".xlsx" in w for w in out["warnings"]) and "warnings" in out["agent_directive"], out
+
+
+# 7차 검토 (1.4.70): 숫자가 든 검색어의 두 층 판정. 층 A(literal: 글자 그대로 + 엄격한 경계)만 VERIFIED,
+# 층 B(정규화 매처만 찾은 곳: 띄어쓰기·단위 별칭·부호 판정)는 결과에 넣되 literal false + UNVERIFIED (exact_mixed)
+def _layer(query, text):
+    g = reader.build_matcher(query, False)(text)
+    if g is not None:
+        return "A" if reader.literal_hit(text, g) else "B"
+    return "N" if reader.number_search([({}, {"text": text})], reader.parse_query(query), re.IGNORECASE) else "-"
+
+
+def _unescape(x):
+    return re.sub(r"\\u([0-9a-f]{4})", lambda m: chr(int(m.group(1), 16)), x).replace("\\t", "\t").replace("\\n", "\n")
+
+
+def _load_literal_cases():
+    out = []
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "number_literal_cases.tsv")
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or "\t" not in line:
+                continue
+            q, t, want = line.rstrip("\n").split("\t")
+            out.append((_unescape(q), _unescape(t), want))
+    return out
+
+
+LITERAL_CASES = _load_literal_cases()
+
+
+@pytest.mark.parametrize("query,text,want", LITERAL_CASES)
+def test_number_literal_layer_review7(query, text, want):
+    got = _layer(query, text)
+    assert (got == "A") is (want == "A"), (query, text, got)
+
+
+def test_number_literal_layer_counts():
+    # 6·7차 검토 오일치 쌍 전부(notA)가 표에 있고, 기본 표기(A)는 모두 층 A
+    assert sum(1 for c in LITERAL_CASES if c[2] == "notA") >= 250 and sum(1 for c in LITERAL_CASES if c[2] == "A") >= 20
+
+
+@pytest.mark.parametrize("query,text,want", [
+    # 층 B로 찾음 (표기가 다름): 결과에는 들지만 VERIFIED가 아님
+    ("5 V", "5 Vdc", "B"), ("25 \u2103", "25\u00b0C", "B"), ("-40 \u2103", "\u221240\u2103", "B"),
+    ("1,500 rpm", "1500 rpm", "B"), ("10 uA", "10 \u03bcA", "B"), ("SOI 1", "SOI-1", "B"),
+    ("정격 전압 5 V", "정격 전압은 5V", "B"),
+    # 모두 대문자 단위는 층 B에서 대소문자를 가리지 않음 ('10 MM', '10UF', '20MA'가 후보로만 나오던 회귀)
+    ("10 MM", "10 mm", "B"), ("10 MM", "10 \u339c", "B"), ("10UF", "10 uF", "B"), ("10UF", "10 \u03bcF", "B"),
+    ("20MA", "20 mA", "B"), ("20MA", "20 MA", "A"),
+    # 소문자·섞인 단위의 접두 대소문자는 그대로 가림
+    ("10 mA", "10 MA", "N"), ("10 M\u03a9", "10 m\u03a9", "N"), ("10 mW", "10 MW", "N"),
+    # 7차 검토에서 exact VERIFIED였던 전각 빼기·탭 너머 빼기: 이제 층 B(UNVERIFIED)로만
+    ("40 \u2103", "보관 \uff0d40 \u2103", "B"), ("-40 \u2103", "동작 온도\t-\t40 \u2103", "B"),
+])
+def test_number_layer_b_and_caps_units(query, text, want):
+    assert _layer(query, text) == want, (query, text)
+
+
+def test_search_exact_mixed_output(tmp_path, capsys):
+    p = tmp_path / "규격.txt"
+    p.write_text("정격 5 Vdc 공급\n\n입력 -5 V\n\n보조 전원 5V 공급\n\n출력 5 V 이하\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "5 V", "--file", str(p), "--save", str(tmp_path / "근거.csv"))
+    assert code == 0 and out["match_mode"] == "exact_mixed" and out["count"] == 3 and out["literal_count"] == 2, out
+    # 층 A를 먼저, 항목마다 literal. 부호가 다른 '-5 V'는 결과에 없음
+    assert [m["literal"] for m in out["matches"]] == [True, True, False], out["matches"]
+    assert "정격" in out["matches"][2]["snippet"] and all("-5" not in m["snippet"] for m in out["matches"])
+    d = out["agent_directive"]
+    assert d.startswith("UNVERIFIED: 글자 그대로 일치 2건, 표기가 다른 곳 1건(literal: false, 부호·단위를 확인하세요)"), d
+    assert "literal: true인 결과만 근거로" in d and "evidence" in d and out["verified"] is False, d
+    rows = open(out["output_file"], encoding="utf-8-sig").read().splitlines()
+    assert rows[0].endswith(",점수,표기") and rows[-1].endswith(",표기 다름"), rows
+    # 층 A만이면 그대로 exact VERIFIED, literal_count = count
+    code, out = run_main(reader, capsys, "search", "--query", "출력 5 V", "--file", str(p))
+    assert out["match_mode"] == "exact" and out["count"] == out["literal_count"] == 1, out
+    assert out["matches"][0]["literal"] is True and out["agent_directive"].startswith("VERIFIED:"), out
+    # 숫자 없는 검색어는 literal 키 없이 지금 그대로
+    code, out = run_main(reader, capsys, "search", "--query", "공급", "--file", str(p))
+    assert out["match_mode"] == "exact" and "literal" not in out["matches"][0] and out["literal_count"] == 2, out
+
+
+def test_spaced_sign_is_layer_a_and_snippet_shows_it(tmp_path, capsys):
+    # 8차 검토 (1.4.71) 설계 확정: 층 A는 '검색어 글자열이 그 자리에 글자 그대로'까지만. 띄어 쓴 부호('- 40 ℃')·범위의 뜻은
+    # 판정하지 않고, 스니펫이 그 일치 자리와 앞(최소 15자, 부호 포함)을 반드시 보여 줌 + directive에 앞뒤를 함께 전달하라는 안내
+    p = tmp_path / "규격.txt"
+    p.write_text("동작 온도: - 40 \u2103 ~ + 85 \u2103\n", encoding="utf-8")
+    assert _layer("40 \u2103", "동작 온도: - 40 \u2103 ~ + 85 \u2103") == "A"
+    code, out = run_main(reader, capsys, "search", "--query", "40 \u2103", "--file", str(p), "-C", "3")
+    assert code == 0 and out["count"] == out["literal_count"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
+    snip = out["matches"][0]["snippet"]
+    assert "- **40 \u2103**" in snip and snip.startswith("동작 온도: -"), snip
+    assert reader.NUM_CONTEXT_NOTE in out["agent_directive"], out["agent_directive"]
+    # 층 A로만 맞은 단위(정규화 매처는 못 찾음)도 스니펫·근거 문장에 값이 들어감 (전에는 글 앞부분만)
+    text = "가" * 200 + " 출력 - 5 V"
+    assert "- **5 V**" in reader.make_snippet(text, ["5 V"], 80)
+    # 근거 문장·check 조건: 층 A 자리가 든 문장을 먼저 ('5 Vdc'는 층 B)
+    text = "정격 5 Vdc 공급. 출력 5 V 이하."
+    assert reader.match_sentence(text, ["5 V"]) == "출력 5 V 이하."
+    conds, sent = reader.near_conditions(text, ["5 V"])
+    assert sent == "출력 5 V 이하." and conds and conds[0]["hi"] == 5, (conds, sent)
+
+
+def test_and_snippet_shows_far_number_term(tmp_path, capsys):
+    # 9차 검토 [치명]: AND 검색 스니펫이 첫 검색어 자리만 창으로 잡아, 멀리 있는 숫자 검색어의 층 A 자리가 빠짐
+    # -> 검색어마다 창, 겹치지 않으면 조각을 ' / '로 이음
+    text = "보관 온도 조건은 아래와 같다. " + "가" * 150 + " 동작 범위 - 40 ℃에서 시험한다."
+    p = tmp_path / "규격.txt"
+    p.write_text(text + "\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "온도 AND 40 ℃", "--file", str(p), "-C", "20")
+    assert code == 0 and out["count"] == 1, out
+    snip = out["matches"][0]["snippet"]
+    assert "**온도**" in snip and "- **40 ℃**에서" in snip and reader.SNIPPET_JOIN in snip, snip
+    assert snip.index("**온도**") < snip.index(reader.SNIPPET_JOIN) < snip.index("**40 ℃**"), snip
+    # 가까우면 조각 하나 (지금 그대로)
+    assert reader.SNIPPET_JOIN not in reader.make_snippet("온도 - 40 ℃에서", ["온도", "40 ℃"], 20)
+
+
+def test_number_safety_net_checks_time_every_unit(monkeypatch):
+    # 7차 검토 [보통]: 시간 상한을 50단위마다 확인해 큰 단위(1MB)가 이어지면 상한을 크게 넘음 -> 단위마다 확인
+    monkeypatch.setattr(reader, "NUMBER_SEARCH_SECONDS", -1.0)
+    st = {}
+    units = [({}, {"text": "값 1 2 3"}) for _ in range(10)]
+    reader.number_search(units, reader.parse_query("1 2 3 9"), re.IGNORECASE, st)
+    assert st == {"cut": True, "checked": 0}, st
+
+
+@pytest.mark.parametrize("text,want", [("정격 1,5 V", []), ("정격 1,2345 V", []), ("정격 10,20 mm", []),
+                                       ("정격 1,500 V", [1500.0]), ("정격 5 V, 10 A", [5.0, 10.0])])
+def test_spec_number_comma_needs_three_digits(text, want):
+    # 7차 검토 [경미]: 쉼표 뒤가 3자리 묶음이 아니면 수치로 보지 않음 ('1,5'가 1이나 5로 읽히지 않게)
+    assert [c["lo"] for c in reader.spec_conditions(text)] == want

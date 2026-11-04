@@ -13,8 +13,6 @@ def test_version_matches_skill_metadata():
     text = open(os.path.join(KIT, "SKILL.md"), encoding="utf-8").read()
     m = re.search(r'^\s*version:\s*"?([0-9.]+)"?\s*$', text, re.M)
     assert m and m.group(1) == mp.VERSION
-    import ml_report
-    assert ml_report.REPORT_VERSION == mp.VERSION
 
 
 def _argparse_options(script):
@@ -36,7 +34,7 @@ def test_skill_options_exist_in_argparse():
     scripts = sorted(f for f in os.listdir(KIT) if f.startswith("ml_") and f.endswith(".py"))
     per = {s: _argparse_options(s) for s in scripts}
     union = set().union(*per.values())
-    assert "--history" in per["ml_train.py"] and "--out" in per["ml_predict.py"]
+    assert "--history" in per["ml_train.py"] and "--save" in per["ml_predict.py"] and "--out" not in per["ml_predict.py"]
     bad, checked = [], 0
     for span in _backtick_spans(text):
         opts = re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", span)
@@ -59,5 +57,5 @@ def test_skill_options_exist_in_argparse():
 def test_skill_mentions_batch_features():
     text = open(os.path.join(KIT, "SKILL.md"), encoding="utf-8").read()
     assert re.search(r"ml_train\.py\" -f \"[^\"]+\" --history", text)
-    assert re.search(r"ml_predict\.py\" -m \"[^\"]+\" -f \"[^\"]+\" --out \"[^\"]+\.xlsx>?\"", text)
+    assert re.search(r"ml_predict\.py\" -m \"[^\"]+\" -f \"[^\"]+\" --save \"[^\"]+\.xlsx>?\"", text)
     assert "--eval \"" in text and "top_features" in text

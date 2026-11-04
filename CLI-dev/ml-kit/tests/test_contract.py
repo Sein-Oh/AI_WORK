@@ -82,7 +82,7 @@ def test_train_column_typo_suggests(trained):
 def test_train_eval_leakage_blocked(trained):
     _, data, _ = trained
     payload = run_fail("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--eval", "누수 = 생산효율 * 2")
-    assert "LEAKAGE" in payload["message"]
+    assert "타겟 누수" in payload["message"]
 
 
 def test_train_eval_rejects_code(trained):
@@ -113,6 +113,22 @@ def test_train_history_mode_is_json(trained):
     _, data, _ = trained
     payload = run_tool("ml_train.py", "-f", data, "--history")
     assert payload["record_count"] >= 1 and payload["records"][0]["version"] == "v1"
+
+
+def test_history_without_records_is_ok_zero(tmp_path):
+    # R2 (2.9.46): 0 records is a result (2.9.45: "status": "no_history", no verified key)
+    proc, res = run_raw("ml_train.py", "-f", str(tmp_path / "새데이터.csv"), "--history")
+    assert proc.returncode == 0 and res["status"] == "ok" and res["verified"] is True, res
+    assert res["record_count"] == 0 and res["count"] == 0 and res["records"] == [] and res["no_history"] is True, res
+    assert res["agent_directive"].startswith("VERIFIED: 0건") and "next_commands" not in res, res
+
+
+def test_blank_rows_only_input_says_zero_rows(tmp_path):
+    p = tmp_path / "blank.csv"
+    p.write_text("온도,압력,수율\n,,\n,,\n", encoding="utf-8-sig")
+    for script, args in (("ml_train.py", ["-x", "온도,압력", "-y", "수율"]), ("ml_map.py", ["-i", "온도=1"])):
+        res = run_fail(script, "-f", str(p), *args)
+        assert "데이터가 0행" in res["message"] and res["agent_directive"].startswith("STOP_RETRY"), res
 
 
 def test_bad_cli_args_emit_json():
@@ -149,14 +165,42 @@ def test_predict_extrapolation_flag(trained):
 def test_predict_batch(trained):
     work, data, _ = trained
     out = work / "pred.csv"
-    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-f", data, "-o", str(out))
+    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-f", data, "--save", str(out))
     assert out.is_file() and payload["total_rows"] == 120
 
 
-def test_predict_missing_feature(trained):
+def test_predict_missing_inputs_offer_median_fill(trained):
+    """2.9.55: -i without some numeric inputs -> needs_user_decision + a command that fills training medians (never run)."""
     work, _, _ = trained
-    payload = run_fail("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-i", "반응온도(°C)=240")
-    assert "누락" in payload["message"]
+    vdir = str(work / "sample_ml_data" / "v1")
+    payload = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65")    # 2.9.54: '누락' only
+    assert payload["error_type"] == "needs_user_decision" and payload["agent_directive"].startswith("STOP_RETRY:")
+    assert "next_commands[0]" in payload["agent_directive"] and "[추천]" not in payload["message"]
+    assert set(payload["missing_inputs"]) == {"압축압력(bar)", "촉매비율(wt%)", "수분함량(%)"}, payload
+    meta = json.load(open(os.path.join(vdir, "model_생산효율(%).json"), encoding="utf-8"))
+    med = meta["feature_stats"]["수분함량(%)"]["median"]
+    assert abs(payload["fill_values"]["수분함량(%)"] - med) < 1e-3 and "수분함량(%)=" in payload["message"]
+    nxt = payload["next_commands"][0]
+    assert nxt["needs_user_confirm"] is True and nxt["command"].startswith("python ")
+    import shlex
+    ok = run_tool("ml_predict.py", *shlex.split(nxt["command"])[2:])               # the offered command works as given
+    assert ok["predictions_summary"][TARGET]["predictions"] and not ok.get("missing_input_warning")
+    # a misspelled key is not filled: the usual [후보] for the name
+    bad = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함럄=20")
+    assert bad["error_type"] == "input" and "[후보]" in bad["message"], bad
+
+
+def test_train_target_in_features_offers_both_commands(trained):
+    """2.9.55: a target also in -x -> [후보] of two full commands (out of -y / out of -x), also in next_commands."""
+    _, data, _ = trained
+    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
+                       "-y", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
+    assert "타겟 누수:" in payload["message"] and "[후보] 1) python" in payload["message"]
+    import shlex
+    one, two = (shlex.split(c["command"]) for c in payload["next_commands"])
+    assert one[one.index("-y") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("-x") + 1]
+    assert two[two.index("-x") + 1] == "반응온도(°C),소비전력(kW)" and two[two.index("-y") + 1] == "생산효율(%),수분함량(%)"
+    assert "--desc" in one and "--desc" in two                                    # the other options are kept
 
 
 def test_predict_standalone_deployment(trained, tmp_path):
@@ -180,7 +224,7 @@ needs_docx = pytest.mark.skipif(not HAS_DOCX, reason="python-docx not installed 
 @pytest.mark.skipif(HAS_DOCX, reason="only meaningful when python-docx is missing")
 def test_report_without_docx_returns_json(trained):
     work, _, _ = trained
-    payload = run_fail("ml_report.py", "-d", str(work / "sample_ml_data"))
+    payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"))
     assert payload["agent_directive"].startswith("STOP_RETRY") and "python-docx" in payload["message"]
 
 
@@ -188,29 +232,39 @@ def test_report_without_docx_returns_json(trained):
 def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
-    payload = run_tool("ml_report.py", "-d", str(work / "sample_ml_data"), "-t", TARGET, "-o", str(out))
+    payload = run_tool("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"), "-y", TARGET, "--save", str(out))
     assert out.is_file() and payload["best_version"]
-
-
-@needs_docx
-def test_report_version_without_v_and_jsonl_only(trained):
-    """history.json이 없으면 history.jsonl을 읽는다. -v는 'v' 없이 숫자만 줘도 된다."""
-    work, _, _ = trained
-    root = work / "sample_ml_data"
-    (root / "history.json").rename(root / "history.json.bak")
-    try:
-        payload = run_tool("ml_report.py", "-d", str(root), "-t", "생산효율", "-v", "1",
-                           "-o", str(work / "r_v1.docx"))
-        assert payload["best_version"] == "v1"
-    finally:
-        (root / "history.json.bak").rename(root / "history.json")
 
 
 @needs_docx
 def test_report_unknown_version_fails(trained):
     work, _, _ = trained
-    payload = run_fail("ml_report.py", "-d", str(work / "sample_ml_data"), "-v", "v99")
+    payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v99"))
     assert "v99" in payload["message"]
+    assert "[후보] v1" in payload["message"] or "[추천] python" in payload["message"], payload     # 2.9.48
+
+
+@needs_docx
+def test_report_unknown_version_recommends_the_only_one(tmp_path):
+    root = tmp_path / "y_ml_data"
+    (root / "v1").mkdir(parents=True)
+    (root / "v1" / "leaderboard.json").write_text("{}", encoding="utf-8")
+    payload = run_fail("ml_report.py", "-m", str(root / "v5"), "--title", "제목")
+    # 2.9.48: the one trained version is recommended as a full command (-m), the other options kept
+    rec = payload["message"].split("[추천] ")[1]
+    assert rec.startswith("python ") and rec.endswith(str(root / "v1")) and "--title" in rec, rec
+    assert rec.count(" -m ") == 1, rec
+
+
+@needs_docx
+def test_report_unknown_version_lists_candidates(tmp_path):
+    root = tmp_path / "x_ml_data"
+    for v in ("v1", "v3"):
+        (root / v).mkdir(parents=True)
+        (root / v / "leaderboard.json").write_text("{}", encoding="utf-8")
+    (root / "v2").mkdir()                                            # no leaderboard.json: not a trained version
+    payload = run_fail("ml_report.py", "-m", str(root / "v9"))
+    assert "[후보] v1, v3" in payload["message"] and "[추천]" not in payload["message"], payload
 
 
 # ---- 도움말과 STOP_RETRY 안내 문구 ----------------------------------------------------------------------
@@ -229,7 +283,7 @@ def test_help_is_stderr_text_and_one_json_line(script, data_dir):
 
 def test_stop_retry_directive_mentions_full_command():
     d = mp.error_payload(mp.InputError("x [추천] python a.py"))["agent_directive"]
-    assert "full command" in d and "run it as given, once" in d
+    assert "전체 명령" in d and "그대로 1번 실행" in d
 
 
 # ---- 오류 로그 <데이터 폴더>/logs/errors.txt (AGENTS.md 오류 로그 저장, CLI-dev/README.md R6) ----
@@ -439,3 +493,94 @@ def test_no_module_level_name_assigned_twice():
                 if isinstance(n, ast.Name):
                     (dup.append(n.id) if n.id in seen else seen.add(n.id))
     assert not dup, dup
+
+
+# ---- 라이브러리 없음 (R5, 2.9.45): traceback 대신 missing_library JSON 1줄 ------------------------------------------
+
+
+def _without(tmp_path, *modules):
+    """modules를 import하면 ModuleNotFoundError가 나는 폴더 (PYTHONPATH 맨 앞)."""
+    fake = tmp_path / "fake_site"
+    fake.mkdir(exist_ok=True)
+    for m in modules:
+        (fake / f"{m}.py").write_text(f"raise ModuleNotFoundError(\"No module named '{m}'\", name='{m}')\n",
+                                      encoding="utf-8")
+    return str(fake)
+
+
+def _run_without(tmp_path, fake, script, *args):
+    env = {**os.environ, "PYTHONPATH": fake, "ML_KIT_DATA_DIR": str(tmp_path / "data")}
+    proc = subprocess.run([sys.executable, os.path.join(KIT, script), *args], capture_output=True, text=True,
+                          encoding="utf-8", env=env, timeout=120)
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1, (proc.stdout, proc.stderr)
+    return proc, json.loads(lines[0])
+
+
+@pytest.mark.parametrize("script,module,pip", [
+    ("ml_predict.py", "numpy", "numpy"), ("ml_train.py", "sklearn", "scikit-learn"), ("ml_map.py", "pandas", "pandas"),
+    ("ml_report.py", "joblib", "joblib"), ("ml_export.py", "sklearn", "scikit-learn")])
+def test_missing_library_is_one_json_line(tmp_path, script, module, pip):
+    args = {"ml_predict.py": ["-m", str(tmp_path), "-i", "a=1"], "ml_train.py": ["-f", "x.csv", "-x", "a", "-y", "b"],
+            "ml_map.py": ["-f", "x.csv", "-i", "a=1"], "ml_report.py": ["-m", str(tmp_path)],
+            "ml_export.py": ["-m", str(tmp_path)]}[script]
+    proc, res = _run_without(tmp_path, _without(tmp_path, module), script, *args)
+    assert proc.returncode == 1 and res["status"] == "error", res              # 2.9.44: traceback, no JSON
+    assert res["error_type"] == "missing_library" and res["missing_package"] == pip, res
+    assert res["install_command"] == f"python -m pip install {pip}", res
+    assert res["agent_directive"].startswith("STOP_RETRY:") and "직접 설치하지 마세요" in res["agent_directive"], res
+    assert "Traceback" not in proc.stderr
+    log = (tmp_path / "data" / "logs" / "errors.txt").read_text(encoding="utf-8")
+    assert "missing_library" in log
+
+
+def test_import_error_inside_run_is_missing_library():
+    res = mp.error_payload(ModuleNotFoundError("No module named 'scipy.spatial'", name="scipy.spatial"))
+    assert res["error_type"] == "missing_library" and res["install_command"] == "python -m pip install scipy", res
+    res = mp.error_payload(ImportError("No module named docx"))
+    assert res["missing_package"] == "python-docx" and res["agent_directive"].startswith("STOP_RETRY:"), res
+
+
+# ---- 로그 태그 (AGENTS.md 문자 규칙, 2.9.50) --------------------------------------------------------------------
+
+LOG_TAGS = ("[INFO]", "[PROGRESS]", "[WARN]", "[ERROR]", "[STATUS]")
+
+
+def test_stderr_uses_only_shared_log_tags(trained, tmp_path):
+    import re
+    work, data, _ = trained
+    proc, _ = run_raw("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW)", "-y", TARGET, "--tag", "tags")
+    hist, _ = run_raw("ml_train.py", "-f", data, "--history")
+    for err in (proc.stderr, hist.stderr):
+        assert "\r" not in err.replace("\r\n", "\n")
+        tagged = [ln for ln in err.splitlines() if re.match(r"\s*\[[A-Z]", ln)]
+        bad = [ln for ln in tagged if not ln.lstrip().startswith(LOG_TAGS)]
+        assert not bad, bad                                           # 2.9.49: '[PROGRESS  5%] [=---]', '[ML EXPERIMENT ...]'
+    prog = [ln for ln in proc.stderr.splitlines() if ln.startswith("[PROGRESS]")]
+    assert prog and all(re.match(r"\[PROGRESS\] \d{1,3}% \S", ln) for ln in prog), prog[:3]
+    assert "[STATUS] 실험 이력" in hist.stderr
+
+
+# ---- 인자 이름 통일 (AGENTS.md ACI 설계 권장 5, 2.9.51): 저장은 --save, 타겟은 --targets/-y. 옛 이름은 받지 않음 (베타) ----
+
+
+@pytest.mark.parametrize("script,args", [
+    ("ml_predict.py", ["-m", "x", "-i", "a=1", "--out", "p.csv"]), ("ml_predict.py", ["-m", "x", "-i", "a=1", "-o", "p.csv"]),
+    ("ml_report.py", ["-m", "x", "--out", "r.docx"]), ("ml_report.py", ["-m", "x", "-o", "r.docx"]),
+    ("ml_report.py", ["-m", "x", "-t", "y"]),         # '--target' is argparse's abbreviation of --targets (same meaning)
+    # 2.9.52: removed options (user decision)
+    ("ml_predict.py", ["-m", "x", "-i", "a=1", "--meta", "m.json"]), ("ml_predict.py", ["-m", "x", "-i", "a=1", "--encoding", "cp949"]),
+    ("ml_train.py", ["-f", "x.csv", "-x", "a", "-y", "b", "--encoding", "cp949"]),
+    ("ml_report.py", ["-d", "x_ml_data"]), ("ml_report.py", ["--data-dir", "x_ml_data"]),
+    ("ml_report.py", ["-m", "x", "-v", "v1"]), ("ml_report.py", ["-m", "x", "--version", "v1"])])
+def test_old_option_names_are_argument_errors(data_dir, script, args):
+    proc, res = run_raw(script, *args)
+    assert proc.returncode == 2 and res["status"] == "error", res              # 2.9.50: accepted
+
+
+@needs_docx
+def test_report_targets_and_save(trained):
+    work, _, _ = trained
+    out = work / "r_targets.docx"
+    payload = run_tool("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
+    assert out.is_file() and payload["report_file"] == str(out), payload

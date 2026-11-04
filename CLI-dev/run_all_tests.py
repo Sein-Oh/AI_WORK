@@ -15,6 +15,7 @@
     office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
     gemma   Gemma 종합 테스트: agent_scenarios.yaml의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
             grade_opencode.py로 채점 (20~60분). 기본 단계가 아니며 --gemma 또는 --only에 넣을 때만.
+            사람이 준비해야 하는 요청(yaml의 manual, 예: Outlook 메일이 필요한 O3)은 보내지 않고 건너뜀(수동 전용)으로 남깁니다.
             opencode는 --opencode, PATH, C:\\CLI\\opencode.exe 순서로 찾고, 없으면 ENV-SKIP.
             관리자 권한 창이면 열린 문서를 못 보므로 일반 PowerShell에서 실행하세요.
     기본은 diag, pytest, beta, office. Windows + pywin32가 아니면 ml, office는 ENV-SKIP.
@@ -108,6 +109,9 @@ def tool_versions():
     for tool in TOOLS:
         ver = "?"
         skill = os.path.join(CLI_DIR, tool, "SKILL.md")
+        if not os.path.isfile(skill):                  # office-cli: 작업별 스킬 여럿 (skills\<이름>\SKILL.md, 버전은 모두 같음)
+            found = sorted(glob.glob(os.path.join(CLI_DIR, tool, "skills", "*", "SKILL.md")))
+            skill = found[0] if found else skill
         try:
             for line in open(skill, encoding="utf-8"):
                 if line.strip().startswith("version:"):
@@ -442,7 +446,7 @@ def step_diag(stage, args, ctx):
 
 def diag_skills(stage, lines, config_dir=None):
     """OpenCode 설정 폴더의 SKILL.md, AGENTS.md가 C:\\CLI, C:\\CLI-dev와 같은지. 설정 폴더가 없으면(클라우드 등) 참고만.
-    다르면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: python apply_skills.py)."""
+    다르거나 옛 스킬 폴더(skills\\office-cli)가 남아 있으면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: python apply_skills.py)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("apply_skills", os.path.join(HERE, "apply_skills.py"))
     mod = importlib.util.module_from_spec(spec)
@@ -832,16 +836,18 @@ def step_gemma(stage, args, ctx):
     if is_elevated():
         stage.unverified.append("관리자 권한 창에서 실행함: opencode가 열린 Office 문서를 못 볼 수 있음 (일반 PowerShell 권장)")
     sent, session, log = {}, None, []
-    say(f"Gemma 종합 테스트 시작: 요청 {len(order)}개를 opencode run으로 한 세션에 보냅니다 (요청마다 최대 {args.gemma_timeout}초).")
+    auto = [sid for sid in order if not by_id[sid].get("manual")]       # manual: 사람이 준비해야 하는 요청 (보내지 않음)
+    say(f"Gemma 종합 테스트 시작: 요청 {len(auto)}개를 opencode run으로 한 세션에 보냅니다 (요청마다 최대 {args.gemma_timeout}초"
+        + (f", 수동 전용 {', '.join(s for s in order if s not in auto)}은 보내지 않음" if len(auto) < len(order) else "") + ").")
     stop = False
-    for i, sid in enumerate(order, 1):
+    for i, sid in enumerate(auto, 1):
         msg = f"[{sid}] " + str(by_id[sid]["message"]).replace("{DIR}", test_dir)
         sent[sid] = msg
         with open(os.path.join(runs, go.RUN_MESSAGES), "w", encoding="utf-8") as f:
             json.dump(sent, f, ensure_ascii=False, indent=1)
         cmd = [exe, "run", "--format", "json"] + (["--session", session] if session else []) + [msg]
         out_path, err_path = os.path.join(runs, f"{sid}.jsonl"), os.path.join(runs, f"{sid}.stderr.txt")
-        say(f"[{i}/{len(order)}] {sid} 보내는 중")
+        say(f"[{i}/{len(auto)}] {sid} 보내는 중")
         code, sec, stop = run_to_files(cmd, CLI_DIR, args.gemma_timeout, out_path, err_path)
         _, got, errors = go.read_run(out_path, sid, msg)
         session = session or got
@@ -864,7 +870,8 @@ def step_gemma(stage, args, ctx):
                 stage.skips.append(f"{r['id']}: 자유 문장 답이라 사람이 확인 (아래 '최종 답변')")
             elif r["결과"] == "없음":
                 stage.skipped += 1
-                stage.skips.append(f"{r['id']}: 보내지 못함 (중단 또는 앞 요청 문제)")
+                stage.skips.append(f"{r['id']}: 수동 전용 (사람이 준비한 뒤 메시지 팩으로 보냄)" if by_id[r["id"]].get("manual")
+                                   else f"{r['id']}: 보내지 못함 (중단 또는 앞 요청 문제)")
             else:
                 stage.fail(f"{r['id']}: {r['실패'][:200]}")
         stage.details.insert(0, ("채점 결과 (grade_opencode)", _read(report, limit=60000)))
