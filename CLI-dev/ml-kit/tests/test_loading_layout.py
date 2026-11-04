@@ -269,12 +269,12 @@ def test_header_hint_not_the_current_row(heads):
     assert "--header-row" not in bad["message"] and "[후보] '온도(°C)'" in bad["message"]       # 2.9.33: 온도(C), [추천]
 
 
-def test_find_header_row_rules():
+def test_find_header_layout_rules():
     cands = [[1, ["제목"]], [3, ["온도(°C)", "압력"]]]
-    assert mp.find_header_row(cands, ["온도", "압력"]) == 3
-    assert mp.find_header_row(cands, ["온도(K)"]) is None                       # a different unit is not the same name
-    assert mp.find_header_row(cands, ["온도(C)"]) == 3                          # 2.9.33: '°C' / 'C' is one unit (was None)
-    assert mp.find_header_row([[2, ["온도(C)", "온도(K)"]]], ["온도"]) is None   # ambiguous alias
+    assert mp.find_header_layout(cands, ["온도", "압력"]) == (3, None)
+    assert mp.find_header_layout(cands, ["온도(K)"]) is None                    # a different unit is not the same name
+    assert mp.find_header_layout(cands, ["온도(C)"]) == (3, None)               # '°C' / 'C' is one unit
+    assert mp.find_header_layout([[2, ["온도(C)", "온도(K)"]]], ["온도"]) is None   # ambiguous alias
 
 
 @pytest.fixture(scope="module")

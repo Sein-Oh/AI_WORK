@@ -24,7 +24,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path,
     read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
-    load_data_file as _load_table, apply_eval_expressions, eval_source_columns,
+    load_data_file, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
@@ -165,20 +165,6 @@ def parse_feature_or_target_list(input_arg: str, param_name: str = "features") -
 
     # 2. In-line Comma-separated string mode
     return [col.strip() for col in stripped.split(",") if col.strip()]
-
-
-def load_data_file(
-    file_path: str,
-    header_row: Optional[int] = None,
-    unit_row: Optional[int] = None,
-    data_row: Optional[int] = None
-) -> Tuple[pd.DataFrame, str]:
-    """
-    Loads tabular data from CSV (multi-encoding) or Excel (.xlsx) via the shared loader
-    (identical parsing in ml_predict.py). Returns (dataframe, file_name).
-    """
-    df_data = _load_table(file_path, header_row=header_row, unit_row=unit_row, data_row=data_row)
-    return df_data, os.path.basename(file_path)
 
 
 # ==============================================================================
@@ -1309,7 +1295,7 @@ def build_next_commands(
     args: argparse.Namespace, raw_file: str, task: str, positive_class: Optional[str],
     feature_names: List[str], created_features: List[str], applied_evals: List[str],
     target_names: List[str], champion: Dict[str, Any], schema: Dict[str, Any],
-    mean_score: float, staging_dir: str, final_dir: str, data_root: str,
+    mean_score: float, staging_dir: str, final_dir: str,
 ) -> List[Dict[str, Any]]:
     """
     Ready-to-run follow-up commands so a small LLM does not have to compose arguments:
@@ -1721,7 +1707,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
     try:
         log_progress(5, f"입력 데이터 로드 중: {os.path.basename(raw_file)}...")
-        df_raw, file_name = load_data_file(
+        df_raw = load_data_file(   # the shared loader: identical parsing in ml_predict.py
             file_path=raw_file,
             header_row=args.header_row,
             unit_row=args.unit_row,
@@ -2164,7 +2150,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 args=args, raw_file=raw_file, task=task, positive_class=g0["positive_class"],
                 feature_names=g0["features"], created_features=g0["created"], applied_evals=g0["evals"],
                 target_names=target_names, champion={**prim_champ, "weak_features": weak_feats}, schema=g0["schema"],
-                mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir, data_root=data_root,
+                mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir,
             )
         history_record["next_commands"] = next_commands
 
@@ -2276,7 +2262,6 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 # 8-B. Best Version (--best): every target retrained with its best recipe, one version per task
 # ==============================================================================
 
-BEST_TAG = "best"
 TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
 
 

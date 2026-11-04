@@ -707,7 +707,7 @@ def test_predict_next_commands_carry_layout(tmp_path):
     cmds = mt.build_next_commands(
         args=args, raw_file=str(tmp_path / "d.xlsx"), task=mt.TASK_REGRESSION, positive_class=None,
         feature_names=["a"], created_features=[], applied_evals=[], target_names=["y"], champion={}, schema={"numeric": ["a"]},
-        mean_score=0.99, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"), data_root=str(tmp_path))
+        mean_score=0.99, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"))
     pred = [c for c in cmds if "ml_predict.py" in c["command"]][0]
     assert pred["command"].endswith("--header-row 3 --unit-row 4")
     best = mt.build_best_next_commands(str(tmp_path / "d.xlsx"), str(tmp_path / "v2"), args)
@@ -720,7 +720,7 @@ def test_quoted_names_go_through_files(tmp_path):
         args=args, raw_file=str(tmp_path / "d.csv"), task=mt.TASK_REGRESSION, positive_class=None,
         feature_names=['온도"A', "b", "c"], created_features=[], applied_evals=[], target_names=['수율"%'],
         champion={"weak_features": ["c"], "top_features": []}, schema={"numeric": ['온도"A', "b", "c"]},
-        mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path), data_root=str(tmp_path))
+        mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path))
     cmd = cmds[0]["command"]
     assert "'" not in cmd and "next_features_pruned.txt" in cmd and "next_targets.txt" in cmd
     assert (tmp_path / "next_features_pruned.txt").read_text(encoding="utf-8").split() == ['온도"A', "b"]

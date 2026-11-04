@@ -26,7 +26,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library, MissingLibraryError,
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
-    normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names, VERSION,
+    normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names,
     command_text, quote_arg, name_list,
 )
 
@@ -70,7 +70,6 @@ except ImportError as _e:
 
 
 REPORT_TITLE = "ML 결과 보고서"
-REPORT_VERSION = VERSION
 
 # ==============================================================================
 # 1. Design tokens (grayscale-safe slate palette + one navy accent)
@@ -94,7 +93,6 @@ CONDITIONAL_SCORE = 0.70
 OVERFIT_LIMIT = 0.15
 
 MPL_NAVY = "#1E3A8A"
-MPL_GRAY = "#9CA3AF"
 MPL_LIGHT = "#E5E7EB"
 MPL_ORANGE = "#D97706"
 MPL_INK = "#1F2937"
@@ -567,9 +565,6 @@ class ReportDoc:
     def h2(self, text: str) -> None:
         self.doc.add_heading(text, level=2)
 
-    def h3(self, text: str) -> None:
-        self.doc.add_heading(text, level=3)
-
     def para(self, text: str, size: float = 10, color: str = C_INK, bold: bool = False,
              align=None, space_after: Optional[float] = None) -> Any:
         p = self.doc.add_paragraph()
@@ -579,12 +574,6 @@ class ReportDoc:
             p.paragraph_format.space_after = Pt(space_after)
         _set_run_font(p.add_run(text), size=size, color=color, bold=bold)
         return p
-
-    def bullets(self, items: List[str]) -> None:
-        for it in items:
-            p = self.doc.add_paragraph(style="List Bullet")
-            p.paragraph_format.space_after = Pt(2)
-            _set_run_font(p.add_run(it), size=10, color=C_INK)
 
     def page_break(self) -> None:
         self.doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
@@ -655,26 +644,6 @@ class ReportDoc:
                 elif bold:
                     _shade(cell, "F8FAFC")
                 _set_run_font(p.add_run(text), size=font_size, bold=bold, color=color)
-        self.spacer()
-
-    def kv_table(self, pairs: List[Tuple[str, Any]], caption: Optional[str] = None,
-                 widths: Tuple[float, float] = (4.2, 12.8)) -> None:
-        if caption:
-            self.caption("표", caption)
-        t = self.doc.add_table(rows=len(pairs), cols=2)
-        t.alignment = WD_TABLE_ALIGNMENT.CENTER
-        t.autofit = False
-        _table_borders(t)
-        _fix_widths(t, list(widths))
-        for i, (k, v) in enumerate(pairs):
-            kc, vc = t.rows[i].cells
-            for c in (kc, vc):
-                _cell_margins(c)
-                c.paragraphs[0].paragraph_format.space_after = Pt(0)
-            _shade(kc, C_HEAD)
-            _set_run_font(kc.paragraphs[0].add_run(str(k)), size=9, bold=True, color=C_INK)
-            text = v if isinstance(v, str) else fmt(v)
-            _set_run_font(vc.paragraphs[0].add_run(text), size=9, color=C_INK)
         self.spacer()
 
     def metric_cards(self, cards: List[Tuple[str, str, str]]) -> None:
@@ -988,12 +957,11 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
             "task_history": task_history}
 
 
-def merged_feature_info(targets: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], List[str]]:
-    """Union of feature schema / stats / required inputs over the targets (they differ in a best version)."""
+def merged_feature_info(targets: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Union of feature schema / stats over the targets (they differ in a best version)."""
     schema: Dict[str, Any] = {"numeric": [], "categorical": {}, "datetime": {}}
     stats: Dict[str, Any] = {}
     dstats: Dict[str, Any] = {}
-    required: List[str] = []
     for t in targets:
         meta = t["meta"]
         sc = meta.get("feature_schema") or {}
@@ -1006,16 +974,15 @@ def merged_feature_info(targets: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], 
             stats.setdefault(c, v)
         for c, v in (meta.get("datetime_stats") or {}).items():
             dstats.setdefault(c, v)
-        required += [f for f in meta.get("features_required", []) if f not in required]
-    return schema, stats, dstats, required
+    return schema, stats, dstats
 
 
 # ==============================================================================
 # 5. Narrative (deterministic; --slots may override)
 # ==============================================================================
 
-def _metric_info(task: str) -> Tuple[str, str]:
-    return ("val_r2", "R²") if task == "regression" else ("val_f1_macro", "Macro-F1")
+def _metric_label(task: str) -> str:
+    return "R²" if task == "regression" else "Macro-F1"
 
 
 def exclusion_line(t: Dict[str, Any], metric: str) -> str:
@@ -1133,7 +1100,7 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     _setup_matplotlib()
     rec, targets, version = ctx["record"], ctx["targets"], ctx["version"]
     task = rec["task"]
-    metric_key, metric_label = _metric_info(task)
+    metric_label = _metric_label(task)
     prof = rec.get("data_profile", {})
     data_name = prof.get("source_file", "")
     task_ko = "회귀 (수치 예측)" if task == "regression" else "분류 (범주 예측)"
@@ -1252,7 +1219,7 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
                "(중앙값·절대편차 기준 3.5배 초과, 자동 이상치)은 학습에서 뺐습니다. '제외' 열에 '포함'이라고 쓴 행은 자동으로 빼지 않습니다. "
                "뺀 행 목록은 버전 폴더의 excluded_rows.csv에 있습니다.\n" + "\n".join(excl_lines),
                size=9, space_after=4)
-    schema, stats, dstats, required_inputs = merged_feature_info(targets)
+    schema, stats, dstats = merged_feature_info(targets)
     miss = prof.get("feature_missing", {})
     frows = []
     for f in schema["numeric"]:

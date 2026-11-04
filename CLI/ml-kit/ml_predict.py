@@ -1905,12 +1905,6 @@ def find_header_layout(candidates: Optional[List[List[Any]]], names: List[str],
     return None
 
 
-def find_header_row(candidates: Optional[List[List[Any]]], names: List[str]) -> Optional[int]:
-    """1-based row (df.attrs["header_candidates"] of load_data_file) that holds every name (a two-level / merged header)."""
-    found = find_header_layout(candidates, names)
-    return found[0] if found else None
-
-
 def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> str:
     """'파일 N행에 이 이름들이 있습니다 ... [추천] ...' for names found in another top row, else ''.
     [추천] --header-row N alone when no unit row is involved; with a unit row below N, or when the run gave
@@ -2006,11 +2000,6 @@ def prepare_features(df: pd.DataFrame, schema: Dict[str, Any]) -> pd.DataFrame:
         out[col] = normalize_category(df[col])
     frame = pd.DataFrame(out, index=df.index)
     return frame[schema["input_columns"]]
-
-
-def schema_raw_columns(schema: Dict[str, Any]) -> List[str]:
-    """User-facing input columns (before date expansion)."""
-    return list(schema.get("numeric", [])) + list(schema.get("datetime", {})) + list(schema.get("categorical", {}))
 
 
 def input_column_owner(schema: Dict[str, Any]) -> Dict[str, str]:

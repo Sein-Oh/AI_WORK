@@ -13,8 +13,6 @@ def test_version_matches_skill_metadata():
     text = open(os.path.join(KIT, "SKILL.md"), encoding="utf-8").read()
     m = re.search(r'^\s*version:\s*"?([0-9.]+)"?\s*$', text, re.M)
     assert m and m.group(1) == mp.VERSION
-    import ml_report
-    assert ml_report.REPORT_VERSION == mp.VERSION
 
 
 def _argparse_options(script):
