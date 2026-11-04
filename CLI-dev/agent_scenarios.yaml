@@ -39,18 +39,18 @@ rules:
   # search: grep 도구가 찾는 곳(path, include. 검색어는 보지 않음, SKILL.md와 include가 *.md인 검색은 제외)
   # glob: glob 도구의 path·pattern (파일 이름 목록만 보므로 .py를 찾을 때만 위반)
   # command: 목록이면 하나라도 맞으면 위반. 1. 셸로 .py 내용 보기  2. 도구 폴더(C:\CLI\ml-kit, C:\CLI\office-cli)에서 글자 찾기
-  #   (SKILL.md 제외)  3. 도구 폴더 목록을 Select-String·Get-Content로 넘기기  4. [IO.File]::ReadAll*로 .py나 도구 폴더 읽기
+  #   (SKILL.md와 skills 폴더 제외)  3. 도구 폴더 목록을 Select-String·Get-Content로 넘기기  4. [IO.File]::ReadAll*로 .py나 도구 폴더 읽기
   #   5. python -m pydoc. 도구 실행(python C:\CLI\ml-kit\ml_train.py ...)과 SKILL.md 읽기는 위반이 아니다.
   no_read_code:
     title: "도구 코드(.py) 읽기 없음"
     read: '\.py$'
-    search: '[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)\b|\.py\b'
+    search: '[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)\b(?![\\/]+skills\b)|\.py\b'
     glob: '\.(\{[\w,]*)?py\b'
     command:
       - '(?<![\w-])(Get-Content|gc|cat|type|more|less|head|tail|sed|awk|grep|rg|findstr|Select-String|sls)\b[^|;\n]*\.py\b'
-      - '(?<![\w-])(Select-String|sls|findstr|grep|rg)\b[^|;\n]*[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)(?![\\/]+SKILL\.md)\b'
+      - '(?<![\w-])(Select-String|sls|findstr|grep|rg)\b[^|;\n]*[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)(?![\\/]+(SKILL\.md|skills\b))\b'
       - '(?<![\w-])(Get-ChildItem|gci|ls|dir)\b[^|;\n]*[A-Za-z]:[\\/]+CLI[\\/]+(ml-kit|office-cli)\b[^;\n]*\|\s*(Select-String|sls|Get-Content|gc|cat|type)\b'
-      - '\[(System\.)?IO\.File\]::ReadAll\w*\s*\([^)]*(\.py\b|[\\/]CLI[\\/]+(ml-kit|office-cli)(?![\\/]+SKILL\.md))'
+      - '\[(System\.)?IO\.File\]::ReadAll\w*\s*\([^)]*(\.py\b|[\\/]CLI[\\/]+(ml-kit|office-cli)(?![\\/]+(SKILL\.md|skills\b)))'
       - '-m\s+pydoc\b'
   # write: OpenCode write/edit/multiedit 도구 경로와 patch 도구의 파일 줄
   no_write_py:  {title: ".py 파일 만들기·고치기 없음", write: '\.py$'}

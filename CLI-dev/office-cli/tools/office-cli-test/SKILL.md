@@ -1,10 +1,10 @@
 ---
 name: office-cli-test
-description: office-cli 도구의 Windows 실기 테스트(실제 Excel/Word/PowerPoint로 수십 개 항목 자동 확인)를 실행하고 결과를 보고한다. 사용자가 "office-cli 테스트", "실기 테스트 돌려줘", "오피스 도구 점검해줘"라고 요청할 때만 사용. 일반 문서 작업에는 쓰지 않는다(그때는 office-cli 스킬).
+description: office-cli 도구의 Windows 실기 테스트(실제 Excel/Word/PowerPoint로 수십 개 항목 자동 확인)를 실행하고 결과를 보고한다. 사용자가 "office-cli 테스트", "실기 테스트 돌려줘", "오피스 도구 점검해줘"라고 요청할 때만 사용. 일반 문서 작업에는 쓰지 않는다(그때는 office-excel, office-doc, office-mail, office-spec 스킬).
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.61"
+  version: "1.4.62"
   platform: windows
 ---
 

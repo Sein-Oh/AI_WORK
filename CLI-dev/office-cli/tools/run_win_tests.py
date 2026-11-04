@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -2170,11 +2171,12 @@ LIBS = ("pywin32", "openpyxl", "python-docx", "python-pptx", "pymupdf", "olefile
 
 
 def tool_version():
+    """_runtime.py의 VERSION (스킬은 작업별로 여럿이라 도구 쪽 한 곳에서 읽음)."""
     try:
-        with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as f:
-            for line in f:
-                if line.strip().startswith("version:"):
-                    return line.split(":", 1)[1].strip().strip('"')
+        with open(os.path.join(ROOT, "_runtime.py"), encoding="utf-8") as f:
+            m = re.search(r'^VERSION\s*=\s*"([^"]+)"', f.read(), re.M)
+            if m:
+                return m.group(1)
     except Exception:
         pass
     return "?"

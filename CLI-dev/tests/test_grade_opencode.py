@@ -379,6 +379,20 @@ def test_no_read_code_rule_searches_without_py():
     assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit", include="*.{py,md}"))
 
 
+def test_no_read_code_allows_office_task_skills():
+    """office-cli 스킬은 작업별 4개(C:\\CLI\\office-cli\\skills\\<이름>\\SKILL.md): 읽기·검색은 위반이 아니고, 도구 폴더 검색은 그대로 위반."""
+    for name in ("office-excel", "office-doc", "office-mail", "office-spec"):
+        path = f"C:\\CLI\\office-cli\\skills\\{name}\\SKILL.md"
+        for c in (f"Get-Content {path}", f'Select-String -Path "{path}" -Pattern check', f"findstr comment {path}",
+                  f'[IO.File]::ReadAllText("{path}")'):
+            assert not _rule_hits("no_read_code", c), c
+        assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="check", path=path))
+        assert not _rule_hits("no_read_code", tool=_tool("grep", pattern="check", path=f"C:\\CLI\\office-cli\\skills\\{name}"))
+    assert not _rule_hits("no_read_code", 'Select-String -Path "C:\\CLI\\office-cli\\skills\\*\\SKILL.md" -Pattern undo')
+    assert _rule_hits("no_read_code", 'Select-String -Path "C:\\CLI\\office-cli\\*" -Pattern undo')
+    assert _rule_hits("no_read_code", tool=_tool("grep", pattern="undo", path="C:\\CLI\\office-cli"))
+
+
 def test_no_write_py_covers_edit_and_patch():
     assert _rule_hits("no_write_py", tool=_tool("write", filePath="C:\\temp\\x.py", content="print(1)"))
     assert _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\CLI\\ml-kit\\ml_train.py", oldString="a", newString="b"))

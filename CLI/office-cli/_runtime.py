@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.61"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.62"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -730,6 +730,17 @@ OTHER_COMMAND = {("office", "write"): "office.py에는 write가 없습니다. " 
                  ("office", "transfer", "--text"): "transfer는 엑셀 차트·범위와 문서의 표를 옮기는 명령이라 글은 받지 않습니다. " + _WRITE_TEXT}
 
 
+# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
+SKILL_OF_TOOL = {"excel": "office-excel", "word": "office-doc", "ppt": "office-doc", "office": "office-doc",
+                 "outlook": "office-mail", "reader": "office-spec"}
+
+
+def skill_file(tool: str) -> str:
+    """도구의 스킬 파일 경로. 모르는 도구(테스트용 등)는 office-doc."""
+    name = SKILL_OF_TOOL.get(tool, "office-doc")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills", name, "SKILL.md")
+
+
 class JsonArgumentParser(argparse.ArgumentParser):
     """인자 오류를 텍스트 대신 JSON(exit 2)으로 응답하는 ArgumentParser. 서브파서에도 그대로 상속됩니다."""
 
@@ -751,8 +762,9 @@ class JsonArgumentParser(argparse.ArgumentParser):
         """R7: 도움말 텍스트는 stderr로, stdout에는 JSON 1줄 (argparse가 이어서 exit 0)."""
         super().print_help(sys.stderr)
         emit_json({"status": "ok", "tool": self.tool_name, "command": "help", "verified": True,
-                   "skill_file": os.path.join(os.path.dirname(os.path.abspath(__file__)), "SKILL.md"),
-                   "agent_directive": "VERIFIED: 도움말을 stderr에 출력했습니다. SKILL.md의 명령 템플릿을 그대로 사용하세요. "
+                   "skill_file": skill_file(self.tool_name),
+                   "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} "
+                                      "스킬(SKILL.md)의 명령 템플릿을 그대로 사용하세요. "
                                       "도구 코드(.py)는 읽지 마세요. 방법을 모르겠으면 사용자에게 물어보세요."})
 
     def _hint(self, message: str) -> str:
@@ -803,7 +815,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             "error_type": "input",
             "message": f"CLI 인자 오류: {message}." + self._hint(message),
             "agent_directive": "STOP_RETRY: CLI 인자가 잘못되었습니다. message에 [추천]이 있으면 그 부분만 바꿔 1번만 다시 실행하고, "
-                               "없으면 SKILL.md의 명령 형식을 확인해 사용자에게 보고하세요.",
+                               f"없으면 {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} 스킬(SKILL.md)의 명령 형식을 확인해 사용자에게 보고하세요.",
         }
         write_error_log(self.tool_name, None, payload)
         emit_json(payload)

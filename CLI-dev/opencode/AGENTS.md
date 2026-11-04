@@ -20,15 +20,18 @@
 ## 3. 스킬을 먼저 쓴다
 | 요청 | 스킬 |
 |---|---|
-| Excel, Word, PowerPoint, Outlook 작업 / PDF, HWP, Office 파일 읽기와 검색 / 워드 목차·메모·변경 추적, PPT 노트 | `office-cli` |
+| Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `office-excel` |
+| Word, PowerPoint 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 슬라이드, 발표자 노트, 앱 사이 옮기기) | `office-doc` |
+| Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일) | `office-mail` |
+| PDF, HWP, Office 파일 읽기와 근거 검색, 두 판 비교, 엑셀 표를 규격서와 대조 | `office-spec` |
 | 표(Excel/CSV) 데이터로 예측 모델 학습, 새 데이터 예측, ML 결과 보고서 | `ml-kit` |
 
 1. 위 작업은 스킬 명령으로만 한다. pandas, openpyxl, python-docx, win32com 등으로 파이썬 코드를 직접 짜서 하지 않는다.
    파일 내용이나 행 수 확인도 스킬로 한다: 엑셀/CSV는 `excel.py read --target "<파일>"`, 그 밖의 문서는 `reader.py read --file "<파일>"`.
-2. 도구는 `C:\CLI\ml-kit`, `C:\CLI\office-cli`에 있다. SKILL.md의 명령 경로를 그대로 쓴다.
+2. 도구는 `C:\CLI\ml-kit`, `C:\CLI\office-cli`에 있다. SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
-   - office-cli: `C:\CLI\office-cli\SKILL.md`
+   - office-cli: `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\office-cli\skills\office-excel\SKILL.md`)
    - ml-kit: `C:\CLI\ml-kit\SKILL.md`
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
 5. 명령은 1번만 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]`, `[INFO]`, `[WARN]` 줄은 무시한다.
@@ -77,6 +80,6 @@
 - 실패 원인을 추측해 지어내지 않는다. message를 그대로 전달한다.
 
 ## 7. 긴 대화
-- SKILL.md는 한 대화에서 1번만 읽는다. 이미 읽었으면 다시 읽지 않는다.
+- 같은 스킬의 SKILL.md는 한 대화에서 1번만 읽는다. 이미 읽었으면 다시 읽지 않는다.
 - 같은 파일을 반복해서 열어 보지 않는다. 도구 출력은 마지막 1줄 JSON만 본다.
 - 작업 하나가 끝났고 다음 요청이 다른 파일이나 다른 주제면, "새 대화(/new)에서 이어 가면 더 정확합니다"라고 1번 안내한다.

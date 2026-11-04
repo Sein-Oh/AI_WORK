@@ -3,7 +3,11 @@
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
-- 에이전트용 요약: [`SKILL.md`](../../CLI/office-cli/SKILL.md)
+- 에이전트용 스킬 (작업별 4개, 각 6KB 이하): [`office-excel`](../../CLI/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
+  [`office-doc`](../../CLI/office-cli/skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
+  [`office-mail`](../../CLI/office-cli/skills/office-mail/SKILL.md) (outlook.py),
+  [`office-spec`](../../CLI/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment).
+  공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`CLI-dev/opencode/AGENTS.md`](../opencode/AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
 - 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../docs/history/office-cli_WORK_PLAN_1.0.md)
 
@@ -11,7 +15,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 
 ```text
 CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
-├── SKILL.md     에이전트용 스킬
+├── skills/      에이전트용 스킬 4개: office-excel, office-doc, office-mail, office-spec (<이름>/SKILL.md)
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check
 ├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
@@ -620,5 +624,5 @@ python CLI-dev/office-cli/tools/run_win_tests.py  :: Windows + Office 실기 (�
   `errors_*.txt`에는 러너의 자동 복구(닫힌 A 문서 다시 열기), 창/프로세스 정리 기록(어떤 PID에 Quit/WM_CLOSE를 보냈고 무엇을 보호했는지), 도구 오류 로그가 함께 들어 있습니다.
 - 러너는 테스트 문서(A.xlsx/A.docx/A.pptx)가 열린 프로세스를 끝내지 않습니다. 정리 판단 규칙은 `tools/win_test_rules.py`(오프라인 테스트 `tests/test_win_runner.py`).
 - DRM PC에서 python-pptx 기본 템플릿(`pptx/templates/default.pptx`)이 암호화돼 있으면 그 템플릿이 필요한 오프라인 테스트만 "python-pptx 기본 템플릿이 손상됨 (DRM 추정)"으로 건너뜁니다. python-docx는 폴더 템플릿으로 대신 만듭니다. 도구 코드는 기본 템플릿을 쓰지 않습니다.
-- 도구는 `C:\CLI\office-cli`에 둡니다 (SKILL.md의 명령 경로 기준). 실기 테스트 파일은 `C:\CLI-dev`(이 저장소의 `CLI-dev` 폴더)에 둡니다. OpenCode 에이전트에게 실기 테스트를 맡기려면 스킬 폴더 `office-cli-test`에 `C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md`를 복사합니다. 에이전트는 `--agent`로 실행해 결과 JSON 1줄만 읽습니다.
+- 도구는 `C:\CLI\office-cli`에 둡니다 (스킬 SKILL.md의 명령 경로 기준). 실기 테스트 파일은 `C:\CLI-dev`(이 저장소의 `CLI-dev` 폴더)에 둡니다. OpenCode 에이전트에게 실기 테스트를 맡기려면 스킬 폴더 `office-cli-test`에 `C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md`를 복사합니다. 에이전트는 `--agent`로 실행해 결과 JSON 1줄만 읽습니다.
 - 대상은 Office 16.0(2016/2019/2021/365)입니다. Word 2007의 `SaveAs2` 부재는 `SaveAs`로 대체하므로 Office 2007에서도 실기 테스트가 돕니다. 다만 PDF 추가 기능이 없으면 PDF 내보내기 항목은 `ENV-SKIP`으로 기록됩니다.

@@ -108,6 +108,9 @@ def tool_versions():
     for tool in TOOLS:
         ver = "?"
         skill = os.path.join(CLI_DIR, tool, "SKILL.md")
+        if not os.path.isfile(skill):                  # office-cli: 작업별 스킬 여럿 (skills\<이름>\SKILL.md, 버전은 모두 같음)
+            found = sorted(glob.glob(os.path.join(CLI_DIR, tool, "skills", "*", "SKILL.md")))
+            skill = found[0] if found else skill
         try:
             for line in open(skill, encoding="utf-8"):
                 if line.strip().startswith("version:"):
@@ -442,7 +445,7 @@ def step_diag(stage, args, ctx):
 
 def diag_skills(stage, lines, config_dir=None):
     """OpenCode 설정 폴더의 SKILL.md, AGENTS.md가 C:\\CLI, C:\\CLI-dev와 같은지. 설정 폴더가 없으면(클라우드 등) 참고만.
-    다르면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: python apply_skills.py)."""
+    다르거나 옛 스킬 폴더(skills\\office-cli)가 남아 있으면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: python apply_skills.py)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("apply_skills", os.path.join(HERE, "apply_skills.py"))
     mod = importlib.util.module_from_spec(spec)

@@ -2,17 +2,17 @@
 
 AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 개발·테스트 폴더입니다. 도구 1개 = 폴더 1개.
 
-- 실행 파일과 SKILL.md는 `CLI/<tool>/`에만 있습니다 (사내 PC `C:\CLI`로 그대로 복사).
+- 실행 파일과 스킬(SKILL.md)은 `CLI/<tool>/`에만 있습니다 (사내 PC `C:\CLI`로 그대로 복사). office-cli 스킬은 작업별 4개(`CLI/office-cli/skills/<이름>/SKILL.md`).
 - 이 `CLI-dev/<tool>/`에는 설명서, 변경 이력, 의존성 목록, 테스트, 실기 러너가 있습니다.
   테스트와 러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험하므로 PC에서는 `C:\CLI-dev`로 `C:\CLI`와 나란히 둡니다.
 
 | 도구 | 설명 | 스킬 |
 |---|---|---|
 | [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`CLI/ml-kit/SKILL.md`](../CLI/ml-kit/SKILL.md) |
-| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`CLI/office-cli/SKILL.md`](../CLI/office-cli/SKILL.md) |
+| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`office-excel`](../CLI/office-cli/skills/office-excel/SKILL.md), [`office-doc`](../CLI/office-cli/skills/office-doc/SKILL.md), [`office-mail`](../CLI/office-cli/skills/office-mail/SKILL.md), [`office-spec`](../CLI/office-cli/skills/office-spec/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
-(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<tool>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다.
+(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<스킬 이름>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `CLI/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 6KB 이하를 목표로 합니다.
 
 ## 실기 자동 점검 (`run_all_tests.py`)
 
@@ -49,7 +49,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 |---|---|
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
 | `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본 |
-| `apply_skills.py` | `C:\CLI`의 `SKILL.md` 2개와 `opencode/AGENTS.md`(전역 지침 원본)를 OpenCode 설정 폴더(`%USERPROFILE%\.config\opencode`)로 복사. 바뀐 것만 복사하고 덮어쓰는 파일은 `work\skill_backup_<시각>`에 보관. `--check`(확인만, 다르면 exit 1), `--test`(office-cli-test 보조 스킬도), `--config-dir`. rg(ripgrep)가 PATH에 없으면 알림. `run_all_tests.py`의 diag가 같은지 확인해 다르면 FAIL |
+| `apply_skills.py` | `C:\CLI`의 스킬(`ml-kit\SKILL.md`, `office-cli\skills\<이름>\SKILL.md` 4개)과 `opencode/AGENTS.md`(전역 지침 원본)를 OpenCode 설정 폴더(`%USERPROFILE%\.config\opencode`)로 복사. 바뀐 것만 복사하고 덮어쓰는 파일은 `work\skill_backup_<시각>`에 보관. 옛 통합 스킬 폴더 `skills\office-cli`는 보관 후 지움(남으면 OpenCode가 옛 스킬도 고름). `--check`(확인만, 다르면 exit 1), `--test`(office-cli-test 보조 스킬도), `--config-dir`. rg(ripgrep)가 PATH에 없으면 알림. `run_all_tests.py`의 diag가 같은지 확인해 다르거나 옛 폴더가 남으면 FAIL |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
 진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
@@ -59,6 +59,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 ```text
 CLI/<tool>/              # 폴더명 = 스킬명 (예: ml-kit). 사내 PC C:\CLI\<tool>로 그대로 복사
 ├── SKILL.md             # OpenCode 스킬. frontmatter: name(=폴더명), description(1024자 이하), license, compatibility, metadata
+│                        # (작업별로 나눌 때는 skills/<스킬 이름>/SKILL.md, 예: CLI/office-cli/skills/office-excel/)
 └── *.py                # CLI 진입점과 공통 런타임 (예: excel.py, _runtime.py. 실행에 필요한 파일만, 폴더째 복사해도 단독 실행 가능)
 
 CLI-dev/<tool>/

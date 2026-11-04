@@ -1,15 +1,17 @@
 r"""OpenCode 스킬과 전역 지침 적용 (사람이 실행하는 개발 도구, 반입 후 한 번)
 
 사용법 (C:\CLI-dev에서):
-    python apply_skills.py            # 바뀐 파일만 복사 (이전 파일은 work\skill_backup_<시각>에 보관)
+    python apply_skills.py            # 바뀐 파일만 복사, 옛 스킬 폴더는 지움 (이전 파일은 work\skill_backup_<시각>에 보관)
     python apply_skills.py --check    # 복사하지 않고 무엇이 다른지만 보여 줌 (다르면 exit 1)
     python apply_skills.py --test     # 실기 테스트용 보조 스킬(office-cli-test)도 함께
 
 복사하는 파일 (원본 -> OpenCode 설정 폴더 %USERPROFILE%\.config\opencode):
     C:\CLI\ml-kit\SKILL.md                              -> skills\ml-kit\SKILL.md
-    C:\CLI\office-cli\SKILL.md                          -> skills\office-cli\SKILL.md
+    C:\CLI\office-cli\skills\<이름>\SKILL.md            -> skills\<이름>\SKILL.md
+        (<이름> = office-excel, office-doc, office-mail, office-spec: 작업별 office-cli 스킬 4개)
     C:\CLI-dev\opencode\AGENTS.md                       -> AGENTS.md (전역 지침)
     C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md -> skills\office-cli-test\SKILL.md (--test일 때만)
+지우는 폴더 (보관 후): skills\office-cli (1.4.61까지의 통합 스킬. 남아 있으면 OpenCode가 옛 스킬도 고름).
 설정 폴더가 다르면 --config-dir. 끝나면 OpenCode를 다시 시작해야 새 지침이 적용됩니다.
 
 함께 알려 주는 것: rg.exe(ripgrep)가 PATH에 있는지.
@@ -30,11 +32,16 @@ def default_config_dir():
     return os.path.join(os.path.expanduser("~"), ".config", "opencode")
 
 
+OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec")    # CLI\office-cli\skills\<이름>\SKILL.md
+OBSOLETE = (("옛 office-cli 스킬", os.path.join("skills", "office-cli")),)        # 설정 폴더에서 지울 옛 스킬 폴더
+
+
 def targets(include_test=False):
     """(이름, 원본, 설정 폴더 기준 대상 상대 경로) 목록."""
-    items = [("ml-kit 스킬", os.path.join(CLI_DIR, "ml-kit", "SKILL.md"), os.path.join("skills", "ml-kit", "SKILL.md")),
-             ("office-cli 스킬", os.path.join(CLI_DIR, "office-cli", "SKILL.md"), os.path.join("skills", "office-cli", "SKILL.md")),
-             ("전역 지침", os.path.join(HERE, "opencode", "AGENTS.md"), "AGENTS.md")]
+    items = [("ml-kit 스킬", os.path.join(CLI_DIR, "ml-kit", "SKILL.md"), os.path.join("skills", "ml-kit", "SKILL.md"))]
+    items += [(f"{name} 스킬", os.path.join(CLI_DIR, "office-cli", "skills", name, "SKILL.md"), os.path.join("skills", name, "SKILL.md"))
+              for name in OFFICE_SKILLS]
+    items.append(("전역 지침", os.path.join(HERE, "opencode", "AGENTS.md"), "AGENTS.md"))
     if include_test:
         items.append(("office-cli-test 스킬", os.path.join(HERE, "office-cli", "tools", "office-cli-test", "SKILL.md"),
                       os.path.join("skills", "office-cli-test", "SKILL.md")))
@@ -56,17 +63,23 @@ def version_of(data):
 
 
 def compare(config_dir, include_test=False):
-    """[(이름, 원본, 대상, 상태)]. 상태: 같음 / 다름 / 새 파일(대상 없음) / 원본 없음."""
+    """[(이름, 원본, 대상, 상태)]. 상태: 같음 / 다름 / 새 파일(대상 없음) / 원본 없음 / 지울 것(옛 스킬 폴더가 남음, 원본은 None)."""
     out = []
     for name, src, rel in targets(include_test):
         dst = os.path.join(config_dir, rel)
         a, b = _read(src), _read(dst)
         state = "원본 없음" if a is None else "새 파일" if b is None else "같음" if a == b else "다름"
         out.append((name, src, dst, state))
+    for name, rel in OBSOLETE:
+        dst = os.path.join(config_dir, rel)
+        if os.path.exists(dst):
+            out.append((name, None, dst, "지울 것"))
     return out
 
 
 def label(name, src, dst, state):
+    if src is None:
+        return f"{name}: {state}  {dst}"
     a, b = version_of(_read(src)), version_of(_read(dst))
     ver = f" ({b or '?'} -> {a})" if state == "다름" and a else (f" ({a})" if a else "")
     return f"{name}: {state}{ver}  {dst}"
@@ -85,6 +98,23 @@ def apply(config_dir, include_test=False, now=None):
         if state == "같음":
             lines.append(f"[INFO] {label(name, src, dst, state)}")
             continue
+        if state == "지울 것":
+            keep = os.path.join(backup, os.path.relpath(dst, config_dir))
+            err = ""
+            try:
+                if os.path.isdir(dst):
+                    shutil.copytree(dst, keep, dirs_exist_ok=True)
+                    shutil.rmtree(dst)
+                else:
+                    os.makedirs(os.path.dirname(keep), exist_ok=True)
+                    shutil.copy2(dst, keep)
+                    os.remove(dst)
+            except OSError as e:                        # OpenCode가 파일을 잡고 있으면: 닫고 다시 실행
+                err = f" ({type(e).__name__}: {e}. OpenCode를 닫고 다시 실행)"
+            ok = not os.path.exists(dst)
+            lines.append(f"[{'OK' if ok else 'FAIL'}] {name}: {dst}" + (" -> 보관 후 지움" if ok else " -> 지우지 못함" + err))
+            missing += 0 if ok else 1
+            continue
         if state == "다름":
             keep = os.path.join(backup, os.path.relpath(dst, config_dir))
             os.makedirs(os.path.dirname(keep), exist_ok=True)
@@ -102,7 +132,7 @@ def apply(config_dir, include_test=False, now=None):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="OpenCode 스킬(SKILL.md)과 전역 지침(AGENTS.md)을 C:\\CLI, C:\\CLI-dev에서 설정 폴더로 복사")
+    p = argparse.ArgumentParser(description="OpenCode 스킬(SKILL.md)과 전역 지침(AGENTS.md)을 C:\\CLI, C:\\CLI-dev에서 설정 폴더로 복사, 옛 스킬 폴더 정리")
     p.add_argument("--check", action="store_true", help="복사하지 않고 다른 것만 보여 줌 (다르면 exit 1)")
     p.add_argument("--test", action="store_true", help="실기 테스트용 보조 스킬 office-cli-test도 함께")
     p.add_argument("--config-dir", default=default_config_dir(), help=r"OpenCode 설정 폴더 (기본 %%USERPROFILE%%\.config\opencode)")

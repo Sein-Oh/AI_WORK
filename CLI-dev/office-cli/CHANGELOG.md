@@ -6,6 +6,26 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.62] - 2026-11-04
+
+작업별 스킬로 나누기 (C3). 통합 `SKILL.md`(16KB, 명령 표 한 줄 300~600자)에서 Gemma 26B가 옵션을 잘못 기억하던 문제.
+회귀 테스트: `tests/test_skill_docs.py`(배치·크기·frontmatter·전체 명령·모든 하위 명령 포함), `CLI-dev/tests/test_apply_skills.py`
+(옛 스킬 폴더 보관 후 지움, diag FAIL), `CLI-dev/tests/test_grade_opencode.py`(새 스킬 경로 읽기는 코드 읽기 아님).
+
+### 구조
+- `CLI/office-cli/SKILL.md`를 지우고 `CLI/office-cli/skills/<이름>/SKILL.md` 4개로 나눔 (각 6KB 이하, 명령은 `python "C:\CLI\office-cli\<파일>.py" ...` 전체 명령):
+  `office-excel`(excel.py, 엑셀 차트·범위 transfer), `office-doc`(word.py, ppt.py, office.py transfer·undo·windows·focus),
+  `office-mail`(outlook.py), `office-spec`(reader.py 읽기·검색·diff·캐시, excel.py check·comment).
+  undo·windows는 excel·doc에, excel comment는 excel·spec에 함께 둠. 공통 결과 처리(첫 단어별 행동)는 전역 지침 4장, 스킬에는 작업별 추가 규칙만.
+- 배치 이유: 스킬 폴더 이름 = `name`이어야 해서(OpenCode) 도구 폴더 바로 아래에는 스킬 하나만 둘 수 있음. `skills/` 아래 두면 `C:\CLI\office-cli`를
+  그대로 복사하는 배포가 그대로이고, 도구 VERSION과 스킬 버전이 한 폴더에서 함께 바뀜. 보관된 En-Genius 패키지(`archive/engenius`)는 옛 경로를 읽지만
+  업데이트 중지 상태라 고치지 않음(다시 꺼낼 때 새 경로로).
+- `CLI-dev/apply_skills.py`: 4개 스킬을 `skills\<이름>\`에 설치하고, 옛 `skills\office-cli` 폴더는 `work\skill_backup_<시각>`에 보관한 뒤 지움
+  (남으면 OpenCode가 옛 스킬도 고름). `--check`와 `run_all_tests.py` diag는 옛 폴더가 남아 있으면 "지울 것"으로 FAIL.
+- `-h` 결과의 `skill_file`이 그 도구의 작업 스킬(예: excel.py -> `skills\office-excel\SKILL.md`), directive와 인자 오류 안내가 스킬 이름을 말함.
+- 실기 러너·`run_all_tests.py`의 버전 표시는 `_runtime.py` VERSION / 첫 작업 스킬에서 읽음. 채점 규칙(no_read_code)은 `C:\CLI\office-cli\skills` 읽기·검색을 코드 읽기로 보지 않음.
+- 전역 지침 3장 표(요청 -> 스킬)를 4개로, 저장소 AGENTS.md "폴더 구조"·"작업 절차 6"에 새 배치.
+
 ## [1.4.61] - 2026-11-04
 
 워드 양식 채우기 (C4). 회귀 테스트: `tests/test_word.py` "word.py fill"(1.4.60에서 6개 중 6개 실패, 명령 없음).

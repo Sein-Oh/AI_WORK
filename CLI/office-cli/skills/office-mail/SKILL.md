@@ -1,0 +1,44 @@
+---
+name: office-mail
+description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기, 첨부 목록·내려받기, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조). 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
+license: Proprietary
+compatibility: opencode
+metadata:
+  version: "1.4.62"
+  platform: windows
+---
+
+# office-mail 스킬 (Windows)
+
+## 규칙
+1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
+2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
+3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다.
+4. 메일은 가장 최근 `list`·`search`·`thread` 결과의 짧은 `id`(`--id 3`)로 고른다. 예전 목록의 번호를 다시 쓰지 않는다. `--id`를 빼면 사용자가 보고 있는 메일이다.
+5. 긴 본문과 여러 줄 글은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .md를 만들고 `--body-file "<그 경로>"`로 넘긴다.
+6. 첨부 경로는 전체 경로로 쓴다. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.
+
+## 명령
+| 할 일 | 명령 |
+|---|---|
+| 목록 | `python "C:\CLI\office-cli\outlook.py" list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간 `--days 7`(오늘 포함) 또는 `--since 2026-11-01`) |
+| 검색 | `python "C:\CLI\office-cli\outlook.py" search --query <말> [--from <이름>] [--folder sent] [--where subject]` (기간 `--days 7`, `--since 2026-11-01`) |
+| 읽기 | `python "C:\CLI\office-cli\outlook.py" read --id 3` / 보고 있는 메일 `python "C:\CLI\office-cli\outlook.py" current` |
+| 대화 전체 | `python "C:\CLI\office-cli\outlook.py" thread --id 3` |
+| 일정 | `python "C:\CLI\office-cli\outlook.py" calendar --days 7` |
+| 폴더 목록 | `python "C:\CLI\office-cli\outlook.py" folders` |
+| 첨부 목록 | `python "C:\CLI\office-cli\outlook.py" attachments --id <id>` |
+| 첨부 저장 | `python "C:\CLI\office-cli\outlook.py" attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>`) |
+| 답장 | `python "C:\CLI\office-cli\outlook.py" reply --body "<내용>" [--attach "C:\전체경로\파일.pdf"]` (전체 답장 `--all`, 긴 본문 `--body-file "<본문.md>"`) |
+| 새 메일 | `python "C:\CLI\office-cli\outlook.py" new --to <주소> --subject "<제목>" --body "<내용>" [--cc <주소>] [--attach "<전체경로>"]` |
+| 전달 | `python "C:\CLI\office-cli\outlook.py" forward --to <주소> [--attach "<전체경로>"]` |
+
+- `--attach` 여러 파일은 `;`로 구분한다 (`"C:\a.pdf;C:\b.xlsx"`).
+- 첨부를 저장하면 결과의 `folder`와 파일 이름을 알린다. 내용을 보려면 결과의 `next_commands`(reader.py read, 여럿이면 reader.py index)를 그대로 실행한다.
+
+## 결과 처리
+`agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
+- `new`·`reply`·`forward`는 기본으로 작성 창만 띄운다. `--send`는 사용자가 **발송을 분명히 요청한 경우에만** 붙인다.
+- `elevated_process`이면 다시 실행하지 않고 message를 그대로 알린다.
+- 목록·검색이 0건(`count: 0`)이면 "찾은 메일 없음"과 찾은 조건(폴더, 기간)을 알린다.
+- `recovered`와 `warnings`가 있으면 그대로 알린다.
