@@ -2,7 +2,8 @@
 
 지원: Range("A1:B2" / "A1:B2,A4:B4") / Range(cell, cell) / Cells(r, c), Value(읽기/쓰기, 스칼라 채우기),
 Formula(쓰기 시 상대참조 문자열 그대로 저장), HasFormula/HasArray/CurrentArray(배열 수식 arrays), Row/Column/Rows.Count/Columns.Count/Address, UsedRange,
-End(xlUp), 서식 속성 기록(Interior/Font/Borders/NumberFormat ...), ChartObjects, Cut/Copy/Merge.
+End(xlUp), 서식 속성 기록(Interior/Font/Borders/NumberFormat ...), ChartObjects, Cut/Copy/Merge,
+EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header).
 """
 import re
 
@@ -106,6 +107,35 @@ class FakeLines:
             self.ws.log.append(("Hidden", self.kind, tuple(self.keys), v))
         else:
             object.__setattr__(self, k, v)
+
+    def _shift(self, start, n):
+        """start행(열) 이상의 칸을 n만큼 옮김 (n < 0이면 당김). 수식 글의 참조는 고치지 않음."""
+        i = 0 if self.kind == "rows" else 1
+        for store in (self.ws.values, self.ws.formulas):
+            moved = {}
+            for key, v in store.items():
+                if key[i] >= start:
+                    nk = list(key)
+                    nk[i] += n
+                    moved[tuple(nk)] = v
+                else:
+                    moved[key] = v
+            store.clear()
+            store.update(moved)
+
+    def Insert(self, Shift=None, CopyOrigin=None):
+        """행·열 넣기: 첫 행(열) 앞에 len(keys)개를 넣음 (실제 Excel처럼 연속 범위만)."""
+        self.ws.log.append(("Insert", self.kind, tuple(self.keys)))
+        self._shift(self.keys[0], len(self.keys))
+
+    def Delete(self, Shift=None):
+        self.ws.log.append(("Delete", self.kind, tuple(self.keys)))
+        i = 0 if self.kind == "rows" else 1
+        lo, hi = self.keys[0], self.keys[-1]
+        for store in (self.ws.values, self.ws.formulas):
+            for key in [k for k in store if lo <= k[i] <= hi]:
+                del store[key]
+        self._shift(hi + 1, -len(self.keys))
 
 
 class FakeRange:
@@ -327,6 +357,33 @@ class FakeRange:
     @property
     def EntireColumn(self):
         return FakeLines(self.ws, "cols", sorted({c for a in self.areas for c in range(a[1], a[3] + 1)}))
+
+    def Sort(self, Key1=None, Order1=1, Key2=None, Order2=1, Key3=None, Order3=1, Header=2, MatchCase=False,
+             Orientation=1, **kw):
+        """Excel처럼 행 단위 정렬: 숫자 < 글자(대소문자 무시) < 논리값, 빈 칸은 오름·내림 모두 맨 뒤, 같은 값은 순서 유지."""
+        r1, c1, r2, c2 = self.areas[0]
+        self.ws.log.append(("Sort", self.Address, Header, [(k.Column, o) for k, o in
+                                                          ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]))
+        start = r1 + 1 if Header == 1 else r1
+        rows = [[self.ws.values.get((r, c)) for c in range(c1, c2 + 1)] for r in range(start, r2 + 1)]
+
+        def cls(v):
+            if isinstance(v, bool):
+                return (2, v)
+            if isinstance(v, (int, float)):
+                return (0, float(v))
+            return (1, str(v).casefold())
+        for key, order in reversed([(k, o) for k, o in ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]):
+            j = key.Column - c1
+            blank = [r for r in rows if r[j] is None or r[j] == ""]
+            full = sorted((r for r in rows if not (r[j] is None or r[j] == "")), key=lambda r: cls(r[j]), reverse=order == 2)
+            rows = full + blank
+        for i, row in enumerate(rows):
+            for j, v in enumerate(row):
+                if v is None:
+                    self.ws.values.pop((start + i, c1 + j), None)
+                else:
+                    self.ws.set(start + i, c1 + j, v)
 
     def ClearFormats(self):
         self.ws.log.append(("ClearFormats", self.Address))

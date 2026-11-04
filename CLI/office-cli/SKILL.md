@@ -25,13 +25,14 @@ metadata:
 
 | 할 일 | 명령 |
 |---|---|
-| 엑셀·CSV 읽기 / 행 수 / 셀 찾기 | `excel.py read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (결과 `rows`가 행 수). 수식 보기는 `--formulas` (결과 `formulas`) |
+| 엑셀·CSV 읽기 / 행 수 / 셀 찾기 | `excel.py read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (결과 `rows`가 행 수). 수식 보기는 `--formulas` (결과 `formulas`). 조건에 맞는 행만: `excel.py read --where "금액 >= 100; 부서 = 영업"` (첫 행은 머리글, 연산자 `>= <= > < = != ~`(포함), 결과 `row_numbers`) |
 | 엑셀에 표 쓰기 | `excel.py write --range A1 --file "표.csv"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트는 `--sheet 이름 --new-sheet`) |
 | 엑셀에 수식 쓰기 | `excel.py write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
 | 엑셀 차트 | `excel.py chart --range A1:B101 --type line --title "제목"` (`--type column|bar|line|pie|scatter|area`, `--action list` / `--action delete --name 제목`) |
 | 엑셀 서식 | `excel.py style --range A1:E10 --theme navy` / `--bg yellow --bold` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin` |
 | 엑셀 기타 | `excel.py info`, `replace --find A --replace B [--all-sheets]`, `sheet --action add|rename|copy|delete --name A [--new-name B]`, `export --save "결과.csv|.xlsx|.pdf" [--range A1:D20]` |
 | 엑셀 범위 | `excel.py range --action freeze|unfreeze|hide|unhide|width|height|autofit|clear|copy|move|merge|border --range A1:D10 [--dest B2] [--size 20]` |
+| 엑셀 행·열 넣기 / 지우기 / 정렬 | `excel.py range --action insert|delete --range 5:7` (열은 `--range B:C`, 지울 때 먼저 `--dry-run`) / `excel.py range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
 | 워드 읽기 / 쓰기 | `word.py read [--save]` / `word.py write --file "내용.md"` / 한 줄이면 `--text "## 제목\n- 항목"` / `--image "그림.png"` (`--anchor 글 --pos after`, 여러 곳이면 `--occurrence N`). 쪽 나누기는 `word.py write --page-break` (.md의 `---`는 구분선). 목차 `word.py write --toc`, 요약 상자 `word.py write --text "요약" --callout` |
 | 워드 목차 / 범위 읽기 | `word.py outline` / `word.py read --section "1.1"` (장절, 하위 절 포함) / `--pages 3-5` / `--paragraphs 120-140` |
 | 워드 검토 메모 / 변경 추적 | `word.py comment` (목록) / `word.py comment --action add --anchor "문서의 글" --text "메모"` (여러 개는 `--file "메모.csv"`, 열: 기준 글, 메모 내용) / `word.py revisions` |
@@ -46,7 +47,7 @@ metadata:
 | 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호는 무시: `SOI 1` = `SOI #1`. 사용자가 패턴을 말하면 `--regex`) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |
-| 메일 읽기 | `outlook.py current`, `list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]`, `search --query 말 [--from 이름] [--folder sent] [--where subject]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일), 폴더 목록 `outlook.py folders` |
+| 메일 읽기 | `outlook.py current`, `list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간: `--days 7`(오늘 포함) 또는 `--since 2026-11-01`, search도 같음), `search --query 말 [--from 이름] [--folder sent] [--where subject]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일), 폴더 목록 `outlook.py folders` |
 | 메일 첨부 내려받기 | 목록 `outlook.py attachments --id <id>` / 저장 `outlook.py attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더는 `--save "<전체경로 폴더>"`, 일부만 `--name 이름일부`). 결과의 `folder`와 파일 이름을 알린다 |
 | 메일 쓰기 / 문서 첨부 | `outlook.py reply --body "내용" --attach "C:\전체경로\파일.pdf"`. `--attach`는 `new --to 주소 --subject 제목 --body 내용`, `forward --to 주소`에도 같다. 여러 파일은 `;`로 구분. 전체 답장 `reply --all`, 참조 `new --cc 주소`, 긴 본문은 `--body-file "본문.md"` |
 | 되돌리기 / 창 | `office.py undo` (목록 `--list`: 사용자가 고른 항목의 `command`를 그대로 실행), `office.py windows`, `office.py focus --app excel` |
@@ -76,7 +77,7 @@ metadata:
 - `search` 결과가 `UNVERIFIED:`이면 `not_searched`(검색하지 못한 부분)를 그대로 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서(캐시)만 찾는다. `--file`을 주면 그 파일/폴더의 새 문서를 먼저 등록한다(`indexed_now`를 사용자에게 알린다). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - 메일은 기본으로 작성 창만 띄운다. `--send`는 사용자가 **발송을 분명히 요청한 경우에만** 붙인다.
-- 아래는 사용자가 요청한 경우에만 쓴다: 시트/슬라이드 삭제, `ppt.py slide --action clear --all-slides`, `--new-sheet`(새 시트), `--overwrite`(기존 시트·기존 노트·기존 슬라이드 제목·값이 있는 칸을 덮어쓰기).
+- 아래는 사용자가 요청한 경우에만 쓴다: 시트/슬라이드/행·열 삭제, `ppt.py slide --action clear --all-slides`, `--new-sheet`(새 시트), `--overwrite`(기존 시트·기존 노트·기존 슬라이드 제목·값이 있는 칸을 덮어쓰거나 지우기).
 - `replace`의 `--find`는 비워 두지 않는다 (빈 칸 채우기는 `excel.py write --range B2:B10 --value 0`).
 - 새 파일은 사용자가 준 전체 경로로만 만든다 (`--target "C:\폴더\새파일.xlsx"`). 파일 이름만으로는 만들지 않는다.
 - 저장 경로에 같은 이름의 파일이 있으면 도구가 덮어쓰지 않고 새 이름으로 저장한다. 결과의 `output_file`과 `recovered`를 그대로 알린다.
