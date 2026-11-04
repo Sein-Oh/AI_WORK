@@ -518,6 +518,39 @@ def test_where_unknown_column_and_bad_expression(xl_table, capsys):
     assert code == 1, out
 
 
+@pytest.mark.parametrize("expr, rows", [
+    ("부서 = 개발 | 부서 = 기획", ["나", "라"]),                         # 또는
+    ("부서 = 영업; 금액 > 250 | 부서 = 기획", ["가", "라"]),              # ;가 먼저 묶임
+    ("금액 > 5000 | 이름 = 나", ["나"]),
+    ("부서 = 영업 | 금액 >= 200", ["가", "다", "라"]),                   # 두 묶음에 모두 맞는 행은 한 번
+])
+def test_where_or(xl_table, capsys, expr, rows):
+    """1.4.45: 또는(|)."""
+    code, out = run_main(excel, capsys, "read", "--where", expr)
+    assert code == 0 and [r[0] for r in out["values"][1:]] == rows and out["count"] == len(rows), out
+
+
+def test_where_quoted_value_with_separators(xl_table, capsys):
+    xl_table.values[(3, 2)] = "개발;품질|지원"
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = '개발;품질|지원'")
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["나"], out
+    assert out["where"] == "부서 = '개발;품질|지원'", out
+    code, out = run_main(excel, capsys, "read", "--where", '부서 ~ "품질|지" | 이름 = 라')
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["나", "라"], out
+    xl_table.values[(4, 2)] = "R and D"
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = 'R and D'")         # 따옴표 안 AND는 고치지 않음
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["다"], out
+
+
+def test_where_or_spellings_recommend(xl_table, capsys):
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = 개발 OR 부서 = 기획")
+    assert code == 1 and out["message"].endswith("[추천] 부서 = 개발 | 부서 = 기획"), out
+    code, out = run_main(excel, capsys, "read", "--where", "부서 = 개발 || 금액 > 500")
+    assert code == 1 and out["message"].endswith("[추천] 부서 = 개발 | 금액 > 500"), out
+    code, out = run_main(excel, capsys, "read", "--where", "| 부서 = 개발")
+    assert code == 1 and "[추천]" not in out["message"], out
+
+
 def test_where_truncation_and_save(xl_table, capsys, tmp_path):
     code, out = run_main(excel, capsys, "read", "--where", "금액 > 0", "--max-rows", "2")
     assert code == 0 and out["truncated"] is True and out["count"] == 4 and len(out["values"]) == 2, out

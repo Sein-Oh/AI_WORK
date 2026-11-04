@@ -856,43 +856,88 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
 
 # --- read --where: 조건에 맞는 행만 ---
 
-_WHERE_RE = re.compile(r"^\s*(.+?)\s*(>=|<=|!=|>|<|=|~)\s*(.*?)\s*$", re.S)
-# 고쳐서 [추천]할 수 있는 표기 (뜻이 하나뿐인 것만)
+_WHERE_HEAD = re.compile(r"\s*([^;|]+?)\s*(>=|<=|!=|>|<|=|~)[ \t]*", re.S)
+# 고쳐서 [추천]할 수 있는 표기 (뜻이 하나뿐인 것만, 따옴표 밖에서만)
 _WHERE_FIXES = (("==", "="), ("=>", ">="), ("=<", "<="), ("<>", "!="), ("=!", "!="))
 _WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
+_WHERE_OR = re.compile(r"\s+(?:or|OR|Or|또는)\s+|\s*\|\|\s*")
 _WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
+_WHERE_QUOTED = re.compile(r"(\"[^\"]*\"|'[^']*')")
 _WHERE_NUM = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
-WHERE_FORM = "'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 여러 조건은 ; 로, 모두 맞는 행. 예: 금액 >= 100; 부서 = 영업)"
+WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
+              "값에 ; | 가 있으면 작은따옴표로 감쌈. 예: 금액 >= 100; 부서 = 영업 | 부서 = 개발)")
+
+Cond = Tuple[str, str, str]
 
 
-def _where_parts(text: str) -> Optional[List[Tuple[str, str, str]]]:
-    conds = []
-    for part in [p for p in text.split(";") if p.strip()]:
-        m = _WHERE_RE.match(part)
+def _where_parts(text: str) -> Optional[List[List[Cond]]]:
+    """'<열> <연산자> <값>'을 ;(그리고)와 |(또는)로 이은 식 -> 또는 묶음 [[조건, ...], ...]. 따옴표로 감싼 값 안의 ; | 는 나누지 않음."""
+    groups: List[List[Cond]] = [[]]
+    pos, n = 0, len(text)
+    while pos < n:
+        if not text[pos:].strip():
+            break
+        m = _WHERE_HEAD.match(text, pos)
         if not m or not m.group(1).strip():
             return None
-        col, op, val = m.group(1).strip(), m.group(2), m.group(3).strip()
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
-            val = val[1:-1]
+        col, op = m.group(1).strip(), m.group(2)
+        pos = m.end()
+        q = text[pos] if pos < n and text[pos] in "\"'" else ""
+        close = re.compile(re.escape(q) + r"\s*(?=[;|]|$)").search(text, pos + 1) if q else None
+        if close:
+            val, pos = text[pos + 1:close.start()], close.end()
+        else:
+            nxt = re.search(r"[;|]", text[pos:])
+            stop = pos + nxt.start() if nxt else n
+            val, pos = text[pos:stop].strip(), stop
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
         if op in (">", "<", ">=", "<=", "~") and val == "":
             return None
-        conds.append((col, op, val))
-    return conds or None
+        groups[-1].append((col, op, val))
+        if pos < n:
+            sep = text[pos]
+            pos += 1
+            if sep == "|":
+                if not groups[-1]:
+                    return None
+                groups.append([])
+    groups = [g for g in groups if g]
+    return groups or None
 
 
-def parse_where(text: str) -> List[Tuple[str, str, str]]:
-    """--where '<열> <연산자> <값>; ...' -> [(열, 연산자, 값)]. 고칠 수 있는 표기(==, =>, <>, AND)는 [추천]으로 고친 식."""
+def _where_value_text(v: str) -> str:
+    return f"'{v}'" if re.search(r"[;|]", v) or v != v.strip() else v
+
+
+def where_text(groups: List[List[Cond]]) -> str:
+    """조건 묶음을 --where 식으로 (값에 ; | 가 있으면 작은따옴표)."""
+    return " | ".join("; ".join(f"{c} {o} {_where_value_text(v)}" for c, o, v in g) for g in groups)
+
+
+def _outside_quotes(text: str, fn: Any) -> str:
+    """따옴표로 감싼 부분은 그대로 두고 나머지에만 fn(글)을 적용."""
+    return "".join(part if i % 2 else fn(part) for i, part in enumerate(_WHERE_QUOTED.split(text)))
+
+
+def parse_where(text: str) -> List[List[Cond]]:
+    """--where '<열> <연산자> <값>; ... | ...' -> 또는 묶음 [[(열, 연산자, 값), ...], ...] (묶음 안은 모두 맞아야 함).
+    고칠 수 있는 표기(==, =>, <>, AND, OR)는 [추천]으로 고친 식."""
     raw = str(text).strip()
-    fixed = _WHERE_CONTAINS.sub(" ~ ", _WHERE_AND.sub("; ", raw))
-    for a, b in _WHERE_FIXES:
-        fixed = fixed.replace(a, b)
-    conds = _where_parts(fixed)
-    if conds is None:
+
+    def fix(part: str) -> str:
+        part = _WHERE_CONTAINS.sub(" ~ ", _WHERE_OR.sub(" | ", _WHERE_AND.sub("; ", part)))
+        for a, b in _WHERE_FIXES:
+            part = part.replace(a, b)
+        return part
+    fixed = _outside_quotes(raw, fix)
+    groups = _where_parts(fixed)
+    if groups is None:
         raise rt.InputError(f"--where 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
     if fixed != raw:
-        raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;). 형식: {WHERE_FORM}. "
-                            f"[추천] {'; '.join(f'{c} {o} {v}' for c, o, v in conds)}")
-    return conds
+        raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;, 또는은 |). "
+                            f"형식: {WHERE_FORM}. [추천] {where_text(groups)}")
+    return groups
 
 
 def _where_num(v: Any) -> Optional[float]:
@@ -938,17 +983,22 @@ def _where_match(cell: Any, op: str, val: str) -> bool:
     return {"=": a == b, "!=": a != b, ">": a > b, "<": a < b, ">=": a >= b, "<=": a <= b}[op]
 
 
-def _read_where(args, conds: List[Tuple[str, str, str]], matrix: List[List[Any]], sheet: str, r0: int, c0: int,
+def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: str, r0: int, c0: int,
                 full_addr: str, result: Dict[str, Any], save_cmd: Dict[str, str]) -> Dict[str, Any]:
-    """첫 행을 머리글로 보고 조건에 모두 맞는 행만 돌려줍니다. values[0]은 머리글, row_numbers는 values와 같은 순서의 시트 행 번호."""
+    """첫 행을 머리글로 보고 조건에 맞는 행만 돌려줍니다 (또는 묶음 중 하나라도 묶음 안의 조건이 모두 맞으면).
+    values[0]은 머리글, row_numbers는 values와 같은 순서의 시트 행 번호."""
     ncols = max((len(r) for r in matrix), default=0)
     header = matrix[0] if matrix else []
-    cols = [(resolve_column(col, header if matrix else None, c0, ncols, "조건 열")[0], op, val) for col, op, val in conds]
+    groups = [[(resolve_column(col, header if matrix else None, c0, ncols, "조건 열")[0], op, val) for col, op, val in g]
+              for g in conds]
+
+    def cell(i: int, j: int) -> Any:
+        return matrix[i][j] if j < len(matrix[i]) else None
     hits = [i for i in range(1, len(matrix))
-            if all(_where_match(matrix[i][j] if j < len(matrix[i]) else None, op, val) for j, op, val in cols)]
+            if any(all(_where_match(cell(i, j), op, val) for j, op, val in g) for g in groups)]
     values = [[out_value(v) for v in matrix[i]] for i in [0] + hits] if matrix else []
     numbers = [r0 + i for i in [0] + hits] if matrix else []
-    cond_text = "; ".join(f"{c} {o} {v}" for c, o, v in conds)
+    cond_text = where_text(conds)
     result.update(where=cond_text, header_row=r0, count=len(hits), data_rows=max(len(matrix) - 1, 0))
     where = f"{sheet}!{full_addr}"
     if not hits:      # R2 0건
