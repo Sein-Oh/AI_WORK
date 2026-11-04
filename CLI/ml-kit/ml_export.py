@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ml-kit 성능예측표 내보내기 (ml_export.py, 2.9.0)
+ml-kit 성능예측표 내보내기 (ml_export.py)
 
 Turns a trained version into ONE Excel workbook that predicts with plain formulas (no Python, no macros):
   1. input selection : the model's raw numeric inputs (derived features follow their source inputs) are reduced
@@ -151,7 +151,7 @@ def evals_for(subset: List[str], evals: List[str], raw: List[str]) -> List[str]:
 # 2. Training a subset (same competition as ml_train.py)
 # ==============================================================================
 
-# 2.9.40: every retrained candidate is saved in <version>/export/_fits (key = data, target, inputs, formulas, seed,
+# Every retrained candidate is saved in <version>/export/_fits (key = data, target, inputs, formulas, seed,
 # versions). A command stopped at the time limit (check_time) or killed by the agent's 120 s limit continues where it
 # stopped when it is run again, and a later export with other --keep reuses the same candidates.
 FIT_CACHE: Optional[str] = None
@@ -441,7 +441,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     for p in plans:
         p["sheet"] = _sheet_name("표_", short[p["target"]], used)
         p["ws"] = wb.create_sheet(p["sheet"])
-        p["ws"].sheet_state = "veryHidden"   # 2.9.3: the grid is not shown (not even in "unhide"); formulas still read it
+        p["ws"].sheet_state = "veryHidden"   # the grid is not shown (not even in "unhide"); formulas still read it
     acc = wb.create_sheet("정확도")
     info = wb.create_sheet("정보")
 

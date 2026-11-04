@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ml-kit 표 보간 / 반대 찾기 (ml_map.py, 2.6.0)
+ml-kit 표 보간 / 반대 찾기 (ml_map.py)
 
 Reads a data table (.xlsx / .csv) directly (no Excel) and answers two questions with linear interpolation:
   forward : values of the other columns at given key values      -i "반응온도=232.5,소비전력=60"
@@ -386,7 +386,7 @@ def execute_forward(args) -> Dict[str, Any]:
     values = _value_columns(df, args.targets, columns, skip=keys + list(categorical))
     asked = list(values)
     # '11.9%' next to '0.119' in a data column used: no scale is sure. Without -y every numeric column is a value
-    # column: one nobody asked for is left out with a warning instead of stopping the lookup (LOW-3, 2.9.42)
+    # column: one nobody asked for is left out with a warning instead of stopping the lookup
     check_percent_mix(df, keys + (values if args.targets else []))
     if not args.targets:
         mixed = [c for c, _, _ in percent_mix(df, values)]

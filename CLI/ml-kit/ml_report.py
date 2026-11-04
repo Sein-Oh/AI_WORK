@@ -7,10 +7,10 @@ cover, contents, summary, data, method, per-target results with charts, version 
 operation guide and appendix. All numbers and texts are generated deterministically from the
 training artifacts; an LLM may optionally override narrative paragraphs with --slots.
 
-Inputs (all written by ml_train.py 2.2.0+):
+Inputs (all written by ml_train.py):
   <data_root>/history.jsonl, <version_dir>/leaderboard.json, model_<t>.json, oof_<t>.csv, correlation.csv
 
-Select the version with -f <data file> (2.4.0: the best version of every target, built by
+Select the version with -f <data file> (the best version of every target, built by
 ml_train.make_best when the history changed; one report per task), -m <version_dir>, or with
 -d <data_root> [-v vN] (without -v: the best version of the latest experiment, i.e. same task and
 target set as the latest training run).
@@ -408,7 +408,7 @@ def _ensure_styles(doc) -> List[str]:
 
 def docx_from_template_dir(tdir: str):
     """Opens python-docx's unpacked template folder as a document, tolerating missing optional parts.
-    On the company PC a security product removed docProps/thumbnail.jpeg from the folder, and python-docx
+    A security product can remove docProps/thumbnail.jpeg from the folder, and python-docx
     fails on any part a relationship points to but that is missing. The folder is packed into an in-memory
     .docx without those relationships. Returns (document, list of dropped part names)."""
     import io
@@ -1401,8 +1401,8 @@ def resolve_version_dir(args: argparse.Namespace) -> str:
 
 def make_export(version_dir: str, task: str, title: Optional[str], targets: Optional[List[str]] = None,
                 overwrite: bool = False) -> Optional[Dict[str, Any]]:
-    """2.9.2: the report and the performance calculator (ml_export.py) are made as a set (regression versions only).
-    Made BEFORE the Word report so the report can state the calculator's agreement with the model (2.9.4).
+    """The report and the performance calculator (ml_export.py) are made as a set (regression versions only).
+    Made BEFORE the Word report so the report can state the calculator's agreement with the model.
     targets: the report's -y targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
     A failure never fails the report: {"note": ...}."""
     if task != "regression" or os.environ.get("ML_KIT_SKIP_EXPORT") == "1":

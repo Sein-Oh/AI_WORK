@@ -7,7 +7,7 @@ Atomic Version Packaging, and Single Source of Truth (SSOT) Ledger.
 --task regression (default) : champion by Out-of-Fold R2
 --task classification       : champion by Out-of-Fold Macro-F1 (Stratified K-Fold)
 
---best (2.4.0)              : every target of the history retrained with its best recipe into one version per task
+--best                      : every target of the history retrained with its best recipe into one version per task
 
 Shared runtime (data loading, --eval engine, CLI protocol) is imported from ml_predict.py.
 
@@ -76,7 +76,7 @@ except ImportError as _import_exc:
 TASK_REGRESSION = "regression"
 TASK_CLASSIFICATION = "classification"
 PRIMARY_METRIC = {TASK_REGRESSION: "val_r2", TASK_CLASSIFICATION: "val_f1_macro"}
-METRIC_LABEL = {TASK_REGRESSION: "검증 R2", TASK_CLASSIFICATION: "검증 Macro-F1"}   # 점수 용어: 학습 / 검증 (제외 행 포함/미포함) (2.5.0)
+METRIC_LABEL = {TASK_REGRESSION: "검증 R2", TASK_CLASSIFICATION: "검증 Macro-F1"}   # 점수 용어: 학습 / 검증 (제외 행 포함/미포함)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
@@ -179,7 +179,7 @@ DTYPE_WORDS = {"float": "float", "float64": "float", "num": "float", "int": "int
 def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """--dtypes 'col:type,...' with every column name resolved like -x / -y (resolve_column_names: exact name, a unique
     name without its unit, else [후보]) and every type checked (a misspelt type -> [추천] the corrected --dtypes).
-    Returns the canonical 'full column name:type' list (2.9.47; before, an unknown name or type was silently ignored)."""
+    Returns the canonical 'full column name:type' list (an unknown name or type stops the run, never silently ignored)."""
     if not dtypes_arg or not str(dtypes_arg).strip():
         return None
     pairs: List[Tuple[str, str]] = []
@@ -407,7 +407,7 @@ def feature_importance_ranks(
     Permutation importance on at most PERMUTATION_MAX_ROWS rows (keeps large data fast),
     aggregated back to user-facing columns (date parts are summed into their date column; a categorical
     column is permuted as a whole because one-hot encoding happens inside the pipeline).
-    notes (2.9.39): gets one line when the ranks carry no information (calculation failed or every
+    notes: gets one line when the ranks carry no information (calculation failed or every
     importance is 0), so the training result can give top_features [] with a reason.
     """
     Xs, ys = X, y
@@ -434,13 +434,13 @@ def feature_importance_ranks(
     return sorted(ranks, key=lambda r: r["importance"], reverse=True)
 
 
-TOP_FEATURES_MAX = 5      # top_features entries per target in the training result (2.9.39)
+TOP_FEATURES_MAX = 5      # top_features entries per target in the training result
 TOP_FEATURES_PREVIEW = 3  # of which the preview line shows this many
 
 
 def top_feature_shares(champion: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    2.9.39: the best model's most important inputs for the training result JSON, from the same permutation
+    The best model's most important inputs for the training result JSON, from the same permutation
     importances as leaderboard.json and the Word report (original column names, shares of the sum over all
     inputs). Returns ([], reason) when the importances carry no information.
     """
@@ -1163,7 +1163,7 @@ def append_history_ledger(ledger_path: str, record: Dict[str, Any],
 
     # 1. Append to history.jsonl (streaming ledger). A version replaced with --overwrite keeps one record: the old
     # record of that version is removed (the ledger is rewritten atomically), so the report's best version and the
-    # is_best / delta comparisons never see the replaced folder's scores (2.9.46).
+    # is_best / delta comparisons never see the replaced folder's scores.
     ver = record.get("version")
     existing = load_history_ledger(ledger_path) if ver else []
     if any(r.get("version") == ver for r in existing):
@@ -1394,7 +1394,7 @@ def data_fingerprint(path: str) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 7-B. Row Exclusion: '제외' column + automatic outlier detection (2.5.0)
+# 7-B. Row Exclusion: '제외' column + automatic outlier detection
 # ==============================================================================
 #
 # The data file is never modified. A column named '제외' (fixed name, unit suffix ignored) is read per row:
@@ -1406,8 +1406,8 @@ def data_fingerprint(path: str) -> Dict[str, Any]:
 
 EXCLUDE_COL = "제외"
 INCLUDE_MARK = "포함"
-SNAPSHOT_ROW_COL = "원본행"              # model_dataset.csv: Excel row number of each row (2.7.0)
-SNAPSHOT_EXCL_PREFIX = "학습제외_"       # model_dataset.csv: 1 = left out of training for that target (2.7.0)
+SNAPSHOT_ROW_COL = "원본행"              # model_dataset.csv: Excel row number of each row
+SNAPSHOT_EXCL_PREFIX = "학습제외_"       # model_dataset.csv: 1 = left out of training for that target
 OUTLIER_Z = 3.5               # robust z-score (median / MAD) above which a value is an outlier
 OUTLIER_MAX_FRACTION = 0.10   # more candidates than this is a skewed distribution, not outliers: exclude none
 MIN_TRAIN_ROWS = 10
@@ -1561,7 +1561,7 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     for col in feature_schema["numeric"]:
         df_clean[col] = X_all[col]
     group_warnings = _decimal_comma_category_check(df_raw, feature_schema, feature_names, created_features, dtypes)
-    # Columns the user must provide at prediction time: own raw features + sources of derived features (2.9.1)
+    # Columns the user must provide at prediction time: own raw features + sources of derived features
     sources = eval_source_columns(applied_evals, [str(c) for c in df_raw.columns])
     raw_required = [f for f in feature_names if f not in created_features]
     raw_required += [c for c in sources if c not in raw_required and c not in target_names]
@@ -2047,7 +2047,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         raw_extra = [c for g in prepared for c in g["raw_required"] if c not in feature_names]
         dataset_snapshot_cols = list(dict.fromkeys(c for c in feature_names + raw_extra + target_names if c in df_clean.columns))
         snapshot_df = df_clean[dataset_snapshot_cols].copy()
-        # 2.7.0: Excel row numbers and per-target training exclusions, so ml_predict.py can compare its predictions
+        # Excel row numbers and per-target training exclusions, so ml_predict.py can compare its predictions
         # with the measured rows the model learned from (evidence rows are shown as Excel row numbers)
         snapshot_df[SNAPSHOT_ROW_COL] = [source_rows[i] if i < len(source_rows) else i + 1 for i in range(len(snapshot_df))]
         for t in target_names:
@@ -2124,7 +2124,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         }
         if exclusion_summary:
             history_record["exclusions"] = exclusion_summary
-        # Recipe inputs that ml_train --best needs to replay a run (added in 2.4.0)
+        # Recipe inputs that ml_train --best needs to replay a run
         if len(prepared) == 1:
             if g0["dtypes"]:
                 history_record["dtypes"] = g0["dtypes"]
@@ -2163,7 +2163,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             sys.stderr.write(f"[WARN] 저장 확인 실패: {u}\n")
         log_progress(100, f"학습 및 산출물 패키징 완료: {current_version} ({os.path.basename(final_version_dir)}) [소요: {duration_sec}초]")
 
-        # 2.9.39: the most important inputs per target (users ask right after training)
+        # The most important inputs per target (users ask right after training)
         top_features: Dict[str, List[Dict[str, Any]]] = {}
         for t in target_names:
             top_features[t], imp_note = top_feature_shares(target_champions[t]["info"])
@@ -2265,7 +2265,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
 
 
-REPORT_PURPOSE = {  # 2.9.2: a regression report also makes the performance calculator (ml_export.py)
+REPORT_PURPOSE = {  # a regression report also makes the performance calculator (ml_export.py)
     TASK_REGRESSION: "ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (모든 타겟, 입력을 줄이며 다시 학습해 몇 분 걸림. "
                      "성능예측표 제목은 학습 때 데이터 설명에서 자동으로 정함)",
     TASK_CLASSIFICATION: "ML 결과 보고서(Word) 생성 (이 데이터의 모든 타겟을 1개 문서로)",

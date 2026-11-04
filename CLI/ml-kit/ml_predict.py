@@ -119,7 +119,7 @@ class InputError(ValueError):
 
 
 # ------------------------------------------------------------------------------
-# Time limit (2.9.40): OpenCode's command tool stops a command at 120 s (the LLM often does not pass a longer
+# Time limit: OpenCode's command tool stops a command at 120 s (the LLM often does not pass a longer
 # timeout). Long work (ml_export input search, also inside ml_report) checks the clock before each slow step,
 # saves what it finished, and stops cleanly with a CONTINUE result: running the same command again continues.
 # ------------------------------------------------------------------------------
@@ -302,7 +302,7 @@ def record_recovery_attempt(msg: str) -> None:
 def engenius_home() -> Optional[str]:
     """Fixed folder for tool data when the tool files themselves run from the En-Genius tray's temporary folder
     (%TEMP%\\engenius-skill\\<id>, deleted after each run, so <tool folder>/data would not survive). The deployed skill
-    (docs/engenius) runs the tools in C:\\CLI instead and shares OpenCode's data folder (2.9.38)."""
+    (docs/engenius) runs the tools in C:\\CLI instead and shares OpenCode's data folder."""
     if not os.environ.get("ENGENIUS_OUT") or "engenius-skill" not in TOOL_DIR.replace("\\", "/").lower().split("/"):
         return None
     home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
@@ -781,7 +781,7 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
         return series
     s = series.astype("object").where(series.notna(), None)
     # 천 단위 쉼표만 지움 ('1,500', '1,234,567.5'). '175,6'처럼 쉼표 뒤가 3자리가 아니면 천 단위가 아니므로
-    # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (예전에는 1756으로 조용히 바뀜)
+    # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (1756으로 조용히 바뀌지 않게)
     s = s.map(lambda v: _strip_thousands(_strip_percent(v.strip())) if isinstance(v, str) else v)
     s = s.replace(_NA_PLACEHOLDERS, np.nan)
     return pd.to_numeric(s, errors="coerce").astype(float)
@@ -817,7 +817,7 @@ def _sniff_delimiter(sample: str) -> str:
 
 
 # Number cells of a CSV not separated by commas (fullmatch). Each name is assigned once in this module: a second
-# assignment of a shared name (2.9.19 _THOUSANDS_RE, unanchored for check_comma_numbers) silently changed this check.
+# assignment of a shared name (an unanchored pattern for check_comma_numbers) would silently change this check.
 _DECIMAL_COMMA_RE = re.compile(r"\s*[-+]?\d+,\d+\s*")                          # '175,6', '0,149', '27,8448'
 _CSV_THOUSANDS_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(,\d{3})+(\.\d+)?\s*")   # '1,500', '1,346.8' (never '0,149')
 _EURO_NUMBER_RE = re.compile(r"\s*[-+]?[1-9]\d{0,2}(\.\d{3})+,\d+\s*")       # '1.346,8': thousands dot, decimal comma
@@ -858,7 +858,7 @@ def _decimal_commas(df: pd.DataFrame, sep: str, trained: bool = False) -> pd.Dat
     that cannot be a thousands separator ('175,6', '2,19', '0,149', '27,8448') means the '<digits>,<digits>' cells are
     decimal numbers, read with a decimal point (df.attrs["decimal_comma"], layout_warnings). European numbers with a
     thousands dot ('1.346,8') are read as 1346.8 (with a warning) when every number cell with both '.' and ',' has that
-    form. Judged per column (2.9.43): a mostly-text column (a line list '1,2' among '1,2,3' / 'A') is no evidence and
+    form. Judged per column: a mostly-text column (a line list '1,2' among '1,2,3' / 'A') is no evidence and
     is never changed, and a file with a plain decimal-point column ('61.5') uses '.' as its decimal point, so no
     column is read with decimal commas there (a '175,6' column stays text: training stops on it as before).
     Refused (InputError, a value would change by 1000x either way) in a decimal-comma file: cells that could be
@@ -1050,7 +1050,7 @@ def _percent_text(v: float) -> str:
 
 def _excel_percent_cells(file_path: str, df_raw: pd.DataFrame) -> pd.DataFrame:
     """The number cells of the first sheet (the one pd.read_excel read) with a percent number format, written as the
-    text Excel shows ('11.9%' for 0.119, M1 2.9.41): read_excel gives the stored fraction, a CSV export of the same
+    text Excel shows ('11.9%' for 0.119): read_excel gives the stored fraction, a CSV export of the same
     sheet gives '11.9%' (read as 11.9), so the same data would differ by 100x between the two file formats.
     Sheets without a percent format in their styles are returned unchanged (one cheap style check, no second read)."""
     from openpyxl import load_workbook
@@ -1229,11 +1229,11 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
 # average words can also be values of a category ('집계' = 평균/최대) and are judged per column (_summary_rows).
 TOTAL_WORDS = {"합계", "총계", "소계", "계", "총합", "total", "sum", "subtotal", "grandtotal"}
 AVERAGE_WORDS = {"평균", "average", "avg", "mean"}
-# Wording of the same rows in daily reports (2.9.25): '일계', '월계', '누계', '총 합계', '전체합계', '합계:', 'Total:',
+# Wording of the same rows in daily reports: '일계', '월계', '누계', '총 합계', '전체합계', '합계:', 'Total:',
 # '소계(A)', '주간계', '평균값', 'AVG.'. Exact words: TOTAL_WORDS, AVERAGE_WORDS and the period totals below.
 # Loose words ('...합계', short '...계' other than ordinary words, 'Total'/'Sum' as a separate word, '평균값'/'평균치')
 # are also values of a category ('A계'/'B계', '생산계', 'pH계'): _summary_rows counts a loose totals word only when
-# the row's numbers are totals (_loose_by_value, 2.9.27), a loose average word when its rows are few between the data
+# the row's numbers are totals (_loose_by_value), a loose average word when its rows are few between the data
 # (LOOSE_MAX_TEXTS).
 _TOTAL_PERIOD_WORDS = {"일계", "월계", "주계", "연계", "년계", "누계"}
 _GYE_NOT_TOTAL = ("단계", "설계", "경계", "관계", "세계", "시계", "기계", "회계", "체계", "한계", "업계", "생계", "통계",
@@ -1926,7 +1926,7 @@ def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> st
 # C4-B. Feature Schema (numeric / categorical / datetime), identical at train and inference
 # ==============================================================================
 #
-# feature_schema (stored in vX/model_<target>.json, models trained by 2.1.0+):
+# feature_schema (stored in vX/model_<target>.json):
 #   {"numeric": [...], "categorical": {col: [known categories]},
 #    "datetime": {col: [parts]}, "input_columns": [...model input column order...]}
 # Datetime columns are expanded OUTSIDE the sklearn pipeline (no custom code is pickled,
@@ -2329,7 +2329,7 @@ def write_csv_excel_compatible(df: pd.DataFrame, path: str, encoding: Optional[s
 
 
 # ==============================================================================
-# C8. Table Interpolation (ml_map.py, and the measured-data comparison of ml_predict.py, 2.6.0+)
+# C8. Table Interpolation (ml_map.py, and the measured-data comparison of ml_predict.py)
 # ==============================================================================
 #
 # grid      : every combination of the key values exists (one key: evenly spaced) -> classic multilinear
@@ -2658,7 +2658,7 @@ def check_inline_aliases(df: pd.DataFrame, required: List[str]) -> None:
     """-i: '온도' next to '온도(°C)' when the model has '온도(°C)' but not '온도' (align_input_columns would match
     '온도' to '온도(°C)'): one value would be silently dropped -> STOP_RETRY. A model with both '온도' and '온도(°C)'
     takes both. A name with the same unit written otherwise ('온도(C)', '온도(℃)', '온도( °C)': _same_unit_name, the
-    other align_input_columns rule) counts as the model name too (L1 2.9.44: '온도' + '온도(C)')."""
+    other align_input_columns rule) counts as the model name too ('온도' + '온도(C)')."""
     req = set(required)
     given = [str(c) for c in df.columns]
     target = []
@@ -2969,7 +2969,7 @@ def kv_text(pairs: Dict[str, str]) -> str:
 
 
 # ==============================================================================
-# 4-B. Measured-data comparison (map check, 2.7.0)
+# 4-B. Measured-data comparison (map check)
 # ==============================================================================
 #
 # Every regression prediction is compared with the training rows themselves (vX/model_dataset.csv, which travels
@@ -3385,7 +3385,7 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
     is_unit = _looks_like_unit_row(raw, j, hdr)
     check_first = False
     if not is_unit and not _notes_row(raw, j):
-        # 2.9.17 fallback: text in the numeric inputs of the row (a unit row the rule did not accept) -> skip it
+        # Fallback: text in the numeric inputs of the row (a unit row the rule did not accept) -> skip it
         # when the next row reads as data
         try:
             auto = _layout_frame(raw, hdr, None, None)
@@ -3821,7 +3821,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 5-B. Model-based reverse lookup (--find / --vary, 2.8.0)
+# 5-B. Model-based reverse lookup (--find / --vary)
 # ==============================================================================
 #
 # "Which value of <vary> makes the model predict <target> = y0, the other inputs fixed?"
