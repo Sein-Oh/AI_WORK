@@ -6,6 +6,21 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.57] - 2026-11-04
+
+표 전체를 규격서와 한 번에 대조 (B1). 전에는 칸마다 `read` -> `search` -> 판단 -> 메모.csv를 LLM이 이어 붙여야 했음.
+회귀 테스트: `tests/test_excel_read.py` "excel.py check"(1.4.56에서 5개 중 5개 실패, 명령 없음),
+`tests/test_reader.py` "규격 글의 수치 조건"(규격 문장 33개 말뭉치, 단위·한계·후보 판정).
+
+### 기능
+- `excel.py check --range B2:D50 --item-col B --value-col D [--section-col E] --spec "<파일 또는 폴더>" [--section "3.2"] [--save "대조결과.xlsx"]` (읽기 전용).
+  행마다 항목 글을 등록된 규격서에서 찾고(`reader.py search`와 같은 규칙: 동의어, partial/fuzzy), 근거 문장의 수치 조건(`±`, 범위, 이하·이상·미만·초과,
+  영어 표기, 단위 접두어)을 칸 값(칸 글·머리글·항목 글의 단위)과 비교해 `일치`/`불일치`/`근거없음`/`판단필요`.
+  판단필요: partial/fuzzy, 수치 후보 둘 이상, 단위 종류가 다름, 수치 조건 없음, 숫자가 아닌 값.
+- 결과 `counts`, `results`(20개), `needs_review`, `not_decided`, `memo_file`(CSV 칸,메모 = "판정 | 근거"), `next_commands[0]` = `excel.py comment --action add --file <memo_file> --dry-run`.
+  모든 행을 판정했을 때만 `VERIFIED:`. `--save`는 xlsx로 전체 결과.
+- `reader.py`에 공용 도우미 `find_item`, `spec_conditions`, `near_conditions`, `quantity_of`, `unit_of`, `cond_holds`, `load_spec_docs`.
+
 ## [1.4.56] - 2026-11-04
 
 긴 작업 나눠서 진행 (B2, 공통 계약 R10, ml-kit과 같은 이름·키). 회사 PC Gemma 시험에서 명령이 120초에 끊기면 결과 JSON이 없어

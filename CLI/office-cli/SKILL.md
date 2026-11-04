@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.56"
+  version: "1.4.57"
   platform: windows
 ---
 
@@ -36,6 +36,7 @@ metadata:
 | 엑셀 범위 | `excel.py range --action freeze|unfreeze|hide|unhide|width|height|autofit|clear|copy|move|merge|border --range A1:D10 [--dest B2] [--size 20]` |
 | 엑셀 행·열 넣기 / 지우기 / 정렬 | `excel.py range --action insert|delete --range 5:7` (열은 `--range B:C`, 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸을 알림) / `excel.py range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
 | 엑셀 칸 메모 (검토 의견) | `excel.py comment [--range B2:D20]` (목록) / `excel.py comment --action add --range B5 --text "의견"` (여러 개는 `--file "메모.csv"`, 열: 칸, 메모) / `excel.py comment --action delete --range B2:D20` (먼저 `--dry-run`). 메모가 이미 있으면 바꾸기 `--overwrite`, 덧붙이기 `--append` |
+| 엑셀 표를 규격서와 대조 | `excel.py check --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "대조결과.xlsx"]` (행마다 일치/불일치/근거없음/판단필요와 근거. `needs_review` 행은 사용자가 정함. 메모는 결과의 `next_commands[0]`) |
 | 워드 읽기 / 쓰기 | `word.py read [--save]` / `word.py write --file "내용.md"` / 한 줄이면 `--text "## 제목\n- 항목"` / `--image "그림.png"` (`--anchor 글 --pos after`, 여러 곳이면 `--occurrence N`). 쪽 나누기는 `word.py write --page-break` (.md의 `---`는 구분선). 목차 `word.py write --toc`, 요약 상자 `word.py write --text "요약" --callout` |
 | 워드 목차 / 범위 읽기 | `word.py outline` / `word.py read --section "1.1"` (장절, 하위 절 포함) / `--pages 3-5` / `--paragraphs 120-140` |
 | 워드 검토 메모 / 변경 추적 | `word.py comment` (목록) / `word.py comment --action add --anchor "문서의 글" --text "메모"` (여러 개는 `--file "메모.csv"`, 열: 기준 글, 메모 내용) / `word.py revisions` |
@@ -64,7 +65,7 @@ metadata:
    1. `excel.py write --range A1:B101 --header "x,sin(x)" --formula "=(ROW()-2)*4*PI()/99" "=SIN(A2)"`
    2. `excel.py chart --range A1:B101 --type line --title "사인 2주기"`
    3. 결과의 `next_commands[0]` 실행 (워드/PPT로 전달. 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 줌)
-4. 엑셀 내용을 규격서와 대조해 검토 메모 남기기: `excel.py read`로 칸 읽기 -> `reader.py search --query "말" --section "장절"` 또는 `reader.py read --file "<규격서>" --section "장절"`로 근거(`evidence`) 찾기 -> 맞는지 판단 -> 메모.csv(칸, 메모: 판단과 근거)를 만들어 `excel.py comment --action add --file "메모.csv"`.
+4. 엑셀 표를 규격서와 대조해 검토 메모 남기기: `excel.py check ...` 한 번 -> `counts`와 불일치·`needs_review` 행을 근거와 함께 알림 -> 사용자가 원하면 `next_commands[0]`(메모 미리보기) -> 확인 뒤 그 명령에서 `--dry-run`을 뺀 명령. 한 칸만 볼 때는 `reader.py search --query "말" --section "장절"`로 근거를 찾는다.
 
 ## 3. 결과 처리 규칙 (반드시 따른다)
 

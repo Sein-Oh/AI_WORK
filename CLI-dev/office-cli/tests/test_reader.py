@@ -2481,3 +2481,77 @@ def test_continue_is_not_logged(tmp_path, capsys, monkeypatch, isolated_dirs):
     code, out = run_main(reader, capsys, "index", "--folder", str(folder))
     assert out.get("continue") is True
     assert not error_log_text(isolated_dirs)
+
+
+# ---------------------------------------------------------------------------
+# 규격 글의 수치 조건 (excel.py check가 씀, 1.4.57): 회귀 말뭉치
+# ---------------------------------------------------------------------------
+
+SPEC_CORPUS = [
+    ("정격 전압은 5 V ± 0.25 V로 한다.", ["4.75~5.25 V"]),
+    ("정격 전압: 5V±5%", ["4.75~5.25 V"]),
+    ("(5±0.5) V", ["4.5~5.5 V"]),
+    ("공급 전압은 4.75 V 이상 5.25 V 이하일 것", ["4.75~5.25 V"]),
+    ("4.75 ~ 5.25 V", ["4.75~5.25 V"]),
+    ("4.75V～5.25V", ["4.75~5.25 V"]),
+    ("4.75 V에서 5.25 V까지", ["4.75~5.25 V"]),
+    ("between 4.75 V and 5.25 V", ["4.75~5.25 V"]),
+    ("from 10 to 20 mA", ["10~20 mA"]),
+    ("10-20 mA", ["10~20 mA"]),
+    ("소비 전류는 최대 3 A로 한다.", ["3 A 이하"]),
+    ("Max. 3A", ["3 A 이하"]),
+    ("≤ 3 A", ["3 A 이하"]),
+    ("3 A 이하", ["3 A 이하"]),
+    ("3 A 미만", ["3 A 미만"]),
+    ("The current shall not exceed 3 A.", ["3 A 이하"]),
+    ("5 V를 넘지 않을 것", ["5 V 이하"]),
+    ("절연 저항은 100 MΩ 이상", ["100 MΩ 이상"]),
+    ("Insulation resistance: min. 100 MΩ", ["100 MΩ 이상"]),
+    ("at least 100 MΩ", ["100 MΩ 이상"]),
+    ("누설 전류 0.5 mA 초과 시 불합격", ["0.5 mA 초과"]),
+    ("동작 온도 -10 ~ +50 ℃", ["-10~50 °C"]),
+    ("저장 온도 -20°C ~ 70°C", ["-20~70 °C"]),
+    ("내전압 1.5 kV 1분", ["1.5 kV", "60 s"]),
+    ("정격 5 V (4.75 ~ 5.25 V)", ["4.75~5.25 V"]),
+    ("입력 220 V AC ±10%", ["198~242 V"]),
+    ("주파수 60 Hz ± 1 Hz", ["59~61 Hz"]),
+    ("출력 5Vdc", ["5 V"]),
+    ("무게 1,500 g 이하", ["1500 g 이하"]),
+    ("KS C 1234에 따른다.", []),
+    ("3.2절 참조", []),
+    ("IEC 60950-1 시험", []),
+    ("5 초과", []),
+]
+
+
+def _cond_texts(text):
+    out = []
+    for c in reader.spec_conditions(text):
+        if c["unit"] == "분" and c["kind"] == "plain":          # 1분 -> 60 s (기준 단위로 비교)
+            out.append(f"{c['lo']:g} s")
+        else:
+            out.append(reader.cond_text(c))
+    return out
+
+
+@pytest.mark.parametrize("text,expected", SPEC_CORPUS)
+def test_spec_conditions_corpus(text, expected):
+    assert _cond_texts(text) == expected
+
+
+def test_quantity_and_unit_of():
+    assert reader.quantity_of(5.1) == (5.1, None)
+    assert reader.quantity_of("5.1 V")[1][0] == "V" and reader.quantity_of("1,500 g")[0] == 1500
+    assert reader.quantity_of("150MΩ")[1] == ("Ω", 1e6, "MΩ")
+    assert reader.quantity_of("합격") is None
+    assert reader.unit_of("측정값(mA)") == ("A", 1e-3, "mA") and reader.unit_of("전압 [V]")[0] == "V"
+    assert reader.unit_of("항목") is None
+
+
+def test_cond_holds_bounds():
+    c = reader.spec_conditions("3 A 미만")[0]
+    assert reader.cond_holds(c, 2.99) and not reader.cond_holds(c, 3.0)
+    c = reader.spec_conditions("3 A 이하")[0]
+    assert reader.cond_holds(c, 3.0) and not reader.cond_holds(c, 3.01)
+    c = reader.spec_conditions("5 V ± 0.25 V")[0]
+    assert reader.cond_holds(c, 5.25) and not reader.cond_holds(c, 5.2501)

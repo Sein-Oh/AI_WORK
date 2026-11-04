@@ -1031,3 +1031,113 @@ def test_read_csv_target_without_excel(capsys, monkeypatch, tmp_path):
     assert code == 0 and out["values"] == [[61], [63]] and out["range"] == "B2:B3"
     code, out = run_excel(capsys, "read", "--target", str(p), "--range", "A:A")
     assert code == 0 and out["values"] == [["반응온도(°C)"], [200.5], [210]]
+
+
+# ---------------------------------------------------------------------------
+# excel.py check: 표의 값을 규격서와 한 번에 대조 (B1, 1.4.57)
+# ---------------------------------------------------------------------------
+
+SPEC_TEXT = """정격 전압은 5 V ± 0.25 V로 한다.
+
+소비 전류는 최대 3 A로 한다.
+
+절연 저항은 100 MΩ 이상일 것.
+
+내전압은 1.5 kV 1분 이상 견딜 것.
+
+동작 온도는 -10 ~ 50 ℃로 한다.
+
+대기 전력은 0.5 W 이하, 1 W 이하(시험 모드)로 한다.
+
+표시등은 녹색으로 한다.
+"""
+
+
+def _check_book(path, rows, header=("항목", "비고", "측정값 [V]")):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "시험"
+    ws["B1"], ws["C1"], ws["D1"] = header
+    for i, (item, val) in enumerate(rows, 2):
+        ws.cell(i, 2, item)
+        ws.cell(i, 4, val)
+    wb.save(path)
+
+
+@pytest.fixture
+def check_env(tmp_path, monkeypatch):
+    fake, _ = make_win32com()
+    monkeypatch.setattr(off, "win32com", fake)
+    monkeypatch.setattr(off, "list_open", lambda kind: [])
+    spec = tmp_path / "규격" / "규격서.txt"
+    spec.parent.mkdir()
+    spec.write_text(SPEC_TEXT, encoding="utf-8")
+    book = tmp_path / "시험.xlsx"
+    return spec, book
+
+
+def test_check_verdicts_memo_and_next_command(check_env, capsys):
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.1), ("소비 전류", "3.5 A"), ("절연 저항", "150 MΩ"), ("내전압", "1.5 kV"),
+                       ("동작 온도", 60), ("무게", 1.2), ("정격 젼압", 5.0), ("대기 전력", "0.8 W"), ("표시등", "녹색")])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D10", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec.parent))
+    assert code == 0 and out["status"] == "ok", out
+    got = {r["item"]: (r["verdict"], r["cell"]) for r in out["results"]}
+    assert got["정격 전압"] == ("일치", "시험!D2")
+    assert got["소비 전류"][0] == "불일치"                       # 칸 단위(A)가 머리글 단위(V)보다 먼저
+    assert got["절연 저항"][0] == "일치"
+    assert got["내전압"][0] == "일치"                             # 1분(시간)은 단위가 달라 후보에서 빠짐
+    assert got["동작 온도"][0] == "판단필요"                       # 머리글 단위 V와 규격 ℃가 다름
+    assert got["무게"][0] == "근거없음"
+    assert got["정격 젼압"][0] == "판단필요"                       # 한 글자 다른 낱말(fuzzy)
+    assert got["대기 전력"][0] == "판단필요"                       # 수치 후보 둘
+    assert got["표시등"][0] == "판단필요"                         # 수치 조건 없음
+    assert out["counts"] == {"일치": 3, "불일치": 1, "근거없음": 1, "판단필요": 4}
+    assert out["agent_directive"].startswith("UNVERIFIED:") and out["not_decided"] == 4
+    assert set(out["needs_review"]) == {"시험!D6", "시험!D8", "시험!D9", "시험!D10"}
+    r0 = out["results"][0]
+    assert "규격서.txt" in r0["evidence"] and "5 V" in r0["spec_text"] and len(r0["spec_text"]) <= 120
+    memo = open(out["memo_file"], encoding="utf-8-sig").read().splitlines()
+    assert memo[0] == "칸,메모" and memo[1].startswith("시험!D2,일치") and " | 규격서.txt" in memo[1]
+    cmd = out["next_commands"][0]["command"]
+    assert "excel.py" in cmd and "comment" in cmd and "--dry-run" in cmd and out["memo_file"] in cmd
+
+
+def test_check_all_decided_is_verified_and_save(check_env, capsys, tmp_path):
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.0), ("소비 전류", "2 A")])
+    save = tmp_path / "대조결과.xlsx"
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D3", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec), "--save", str(save))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert out["counts"]["일치"] == 2 and out["output_file"] == str(save)
+    import openpyxl
+    rows = list(openpyxl.load_workbook(save, read_only=True).active.iter_rows(values_only=True))
+    assert rows[0][:4] == ("칸", "항목", "값", "판정") and len(rows) == 3
+
+
+def test_check_section_column_limits_search(check_env, capsys, tmp_path):
+    spec, book = check_env
+    spec.write_text("1. 전원\n정격 전압은 5 V로 한다.\n\n2. 시험 조건\n정격 전압은 12 V로 한다.\n", encoding="utf-8")
+    _check_book(book, [("정격 전압", 12)])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec), "--section", "시험 조건")
+    assert code == 0 and out["results"][0]["verdict"] == "일치", out
+
+
+def test_check_empty_items_is_zero(check_env, capsys):
+    spec, book = check_env
+    _check_book(book, [])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D5", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec))
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+
+
+def test_check_bad_column_is_input_error(check_env, capsys):
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.0)])
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D2", "--item-col", "항목",
+                          "--value-col", "D", "--spec", str(spec))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out

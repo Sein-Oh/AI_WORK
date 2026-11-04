@@ -1125,6 +1125,25 @@ def test_E(ctx):
                f"잠긴 칸={d_lock.get('error_type')}, 후보={d_lock.get('candidates')}, J1={j1!r}, J2={j2!r}, J4={j4!r}, "
                f"수식 오류={(data or {}).get('error_type')}", data, code, raw, err)
 
+    def e10():
+        activate_xl("A.xlsx", "E_TEST")
+        # 규격 대조: 열린 문서의 L:N 표를 규격 txt와 대조 (일치·불일치·근거없음), 메모 파일과 다음 명령
+        spec = ctx.path("check_spec.txt")
+        with open(spec, "w", encoding="utf-8") as f:
+            f.write("정격 전압은 5 V ± 0.25 V로 한다.\n\n소비 전류는 최대 3 A로 한다.\n")
+        ws = e_ws()
+        for r, row in enumerate([("항목", "", "측정값 [V]"), ("정격 전압", "", 5.1), ("소비 전류", "", "3.5 A"), ("무게", "", 1)], 1):
+            for c, v in enumerate(row):
+                com_retry(lambda: setattr(ws.Cells(20 + r, 12 + c), "Value", v))
+        data, code, raw, err = run_cli("excel.py", "check", "--range", "L22:N24", "--item-col", "L", "--value-col", "N",
+                                       "--spec", spec)
+        verdicts = [x.get("verdict") for x in (data or {}).get("results", [])]
+        memo_ok = os.path.isfile(str((data or {}).get("memo_file", "")))
+        nxt = ((data or {}).get("next_commands") or [{}])[0].get("command", "")
+        ok = verdicts == ["일치", "불일치", "근거없음"] and memo_ok and "comment" in nxt and "--dry-run" in nxt
+        record(ctx, "E10", "excel check: 표를 규격서와 대조 (판정, 메모 파일, 메모 미리보기 명령)", ok,
+               f"판정={verdicts}, 메모 파일={memo_ok}", data, code, raw, err)
+
     run_test(ctx, "E1", "move", e1)
     run_test(ctx, "E2", "merge 범위 없음", e2)
     run_test(ctx, "E3", "merge 대화상자", e3)
@@ -1134,6 +1153,7 @@ def test_E(ctx):
     run_test(ctx, "E7", "칸 메모", e7)
     run_test(ctx, "E8", "칸 여러 개 쓰기", e8)
     run_test(ctx, "E9", "시트 보호와 수식 거부", e9)
+    run_test(ctx, "E10", "규격 대조", e10)
 
 
 # ---------------------------------------------------------------------------

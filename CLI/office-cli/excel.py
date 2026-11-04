@@ -10,6 +10,8 @@
     sheet    시트 목록/추가/이름변경/복사/삭제/선택
     range    너비/높이/자동맞춤/병합/틀고정/숨김/지우기/복사/이동/테두리
     chart    차트 만들기/목록/삭제
+    comment  칸 메모 목록/달기/지우기
+    check    표의 값을 등록된 규격서와 대조 (판정과 근거, 칸 메모 파일)
 
 --target: active(기본, 지금 보고 있는 통합문서) | 열린 통합문서 이름 | 파일 경로
 닫힌 xlsx/xlsm 파일 읽기는 Excel을 띄우지 않고 openpyxl로 읽습니다.
@@ -3784,6 +3786,203 @@ def cmd_comment(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
+# 9-1. check: 엑셀 표의 값을 등록된 규격서와 한 번에 대조 (항목 찾기 -> 수치 조건 -> 판정 -> 메모 파일)
+# ==============================================================================
+
+CHECK_MAX_ROWS = 500           # 한 번에 대조하는 행 수 상한
+CHECK_SHOWN = 20               # JSON에 담는 결과 수
+CHECK_SPEC_CHARS = 120         # 결과의 규격 문장 글자 수
+VERDICTS = ("일치", "불일치", "근거없음", "판단필요")
+_UNIT_IN_ITEM = re.compile(r"\s*[\(\[]\s*[^\)\]]{1,8}\s*[\)\]]\s*$")
+
+
+def _col_arg(text: Optional[str], what: str) -> Optional[int]:
+    if not text:
+        return None
+    t = text.strip().upper().replace("$", "")
+    if not re.fullmatch(r"[A-Z]{1,3}", t):
+        raise rt.InputError(f"{what}은(는) 열 문자로 적습니다 (예: B). 받은 값: {text}")
+    return col_number(t)
+
+
+def _check_rows(args, cols: List[int]) -> Tuple[str, int, List[List[Any]], Optional[List[Any]], Dict[str, Any]]:
+    """대조할 행: (시트 이름, 첫 행 번호, 행마다 [cols의 값], 머리글(첫 행 위 한 줄 또는 None), target_resolved)."""
+    sh, cells = split_sheet(args.range)
+    r1, _, r2, _ = parse_area(cells, None, None)
+    if r2 is None:
+        raise rt.InputError("--range는 행 범위가 있는 주소로 적습니다 (예: B2:D50).")
+    if r2 - r1 + 1 > CHECK_MAX_ROWS:
+        raise rt.InputError(f"한 번에 {CHECK_MAX_ROWS}행까지 대조합니다 (받은 {r2 - r1 + 1}행). --range를 나눠 실행하세요.")
+    c_lo, c_hi = min(cols), max(cols)
+    top = r1 - 1 if r1 > 1 else r1
+    address = addr(top, c_lo, r2, c_hi)
+    sheet_arg = sh or args.sheet
+    closed = is_closed_xlsx(args.target)
+    csvp = closed_csv(args.target)
+    if closed or csvp:
+        ref = (f"'{sheet_arg}'!" if sheet_arg else "") + address
+        sheet, rr, cc, matrix, _ = (_read_matrix_closed(closed, sheet_arg, address) if closed
+                                    else _read_matrix_csv(csvp, address))
+        resolved = {"app": "file", "name": os.path.basename(closed or csvp), "path": closed or csvp, "sheet": sheet}
+    else:
+        with off.open_target("excel", args.target, readonly=True) as t:
+            ws = t.sheet(sheet_arg)
+            rng = ws.Range(ws.Cells(top, c_lo), ws.Cells(r2, c_hi))
+            matrix = off.range_to_matrix(rng.Value)
+            sheet = str(ws.Name)
+            resolved = t.resolved()
+    width = c_hi - c_lo + 1
+    matrix = [list(r) + [None] * (width - len(r)) for r in matrix]
+    pick = lambda row: [row[c - c_lo] for c in cols]  # noqa: E731
+    header = pick(matrix[0]) if top < r1 and matrix else None
+    body = [pick(r) for r in (matrix[1:] if top < r1 else matrix)]
+    body += [[None] * len(cols)] * max(0, (r2 - r1 + 1) - len(body))
+    return sheet, r1, body, header, resolved
+
+
+def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit_hint: Any) -> Dict[str, Any]:
+    """한 행 판정: {verdict, reason, evidence, spec_text, condition, match_mode}."""
+    import reader
+    out: Dict[str, Any] = {"verdict": "근거없음", "reason": "", "evidence": "", "spec_text": "", "match_mode": "exact"}
+    query = _UNIT_IN_ITEM.sub("", item).strip() or item
+    mode, hits = reader.find_item(docs, query, reader.section_key(sec))
+    out["match_mode"] = mode
+    if not hits:
+        out["reason"] = "규격서에서 항목을 찾지 못함" + (f" (장절 '{sec}' 안)" if sec else "")
+        return out
+    best = hits[0]
+    top = [h for h in hits if h["score"] == best["score"]][:5]
+    conds: List[Dict[str, Any]] = []
+    sentences: List[str] = []
+    for h in top:
+        cs, sent = reader.near_conditions(h["unit"]["text"], h["terms"])
+        sentences.append(sent)
+        for c in cs:
+            if not any(cond_same(c, x) for x in conds):
+                conds.append(c)
+    out["evidence"] = reader.evidence_text(best["doc"]["file"], best["unit"])
+    out["spec_text"] = re.sub(r"\s+", " ", sentences[0])[:CHECK_SPEC_CHARS]
+    qty = reader.quantity_of(value)
+    cell_unit = (qty[1] if qty else None) or reader.unit_of(unit_hint) or reader.unit_of(item)
+    if cell_unit and conds:
+        same = [c for c in conds if c["base"] == cell_unit[0]]
+        if not same:
+            out.update(verdict="판단필요", reason=f"단위가 다름 (칸 {cell_unit[2]}, 규격 {', '.join(sorted({c['unit'] for c in conds}))})")
+            return out
+        conds = same
+    if mode != "exact":
+        out.update(verdict="판단필요", reason="검색어 일부만 맞음(partial)" if mode == "partial" else "한 글자 다른 낱말로 찾음(fuzzy)")
+        if conds:
+            out["condition"] = ", ".join(reader.cond_text(c) for c in conds[:3])
+        return out
+    if not conds:
+        out.update(verdict="판단필요", reason="근거 문장에서 단위가 있는 수치 조건을 찾지 못함")
+        return out
+    if len(conds) > 1:
+        out.update(verdict="판단필요", reason=f"수치 후보가 {len(conds)}개", condition=", ".join(reader.cond_text(c) for c in conds[:3]))
+        return out
+    c = conds[0]
+    out["condition"] = reader.cond_text(c)
+    if qty is None:
+        out.update(verdict="판단필요", reason="칸 값이 숫자가 아님")
+        return out
+    v = qty[0] * (cell_unit[1] if cell_unit else c["scale"])        # 단위 없는 칸은 규격에 쓴 단위로 봄
+    ok_ = reader.cond_holds(c, v)
+    out.update(verdict="일치" if ok_ else "불일치",
+               reason=f"{out['condition']}" + ("" if cell_unit else f" (칸 단위 없음: {c['unit']}로 봄)"))
+    return out
+
+
+def cond_same(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    return all(a[k] == b[k] for k in ("base", "lo", "hi", "lo_strict", "hi_strict"))
+
+
+def _check_command(args, extra: Sequence[str] = ()) -> List[str]:
+    argv = ["check", "--target", args.target, "--range", args.range, "--item-col", args.item_col,
+            "--value-col", args.value_col, "--spec", args.spec]
+    for flag, val in (("--section-col", args.section_col), ("--section", args.section), ("--sheet", args.sheet)):
+        if val:
+            argv += [flag, val]
+    return argv + list(extra)
+
+
+def cmd_check(args) -> Dict[str, Any]:
+    import reader
+    item_c = _col_arg(args.item_col, "--item-col")
+    value_c = _col_arg(args.value_col, "--value-col")
+    sec_c = _col_arg(args.section_col, "--section-col")
+    if item_c is None or value_c is None:
+        raise rt.InputError("--item-col(항목 열)과 --value-col(값 열)을 열 문자로 지정하세요 (예: --item-col B --value-col D).")
+    cols = [item_c, value_c] + ([sec_c] if sec_c else [])
+    sheet, r1, body, header, resolved = _check_rows(args, cols)
+    docs, info = reader.load_spec_docs(args.spec)       # 등록 안 된 규격서는 먼저 등록 (오래 걸리면 CONTINUE)
+    if not docs:
+        raise rt.InputError(f"--spec에서 읽을 수 있는 규격 문서가 없습니다: {args.spec} (지원 형식: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD).")
+    unit_hint = header[1] if header else None
+    sheet_ref = sheet if re.fullmatch(r"[\w가-힣]+", sheet) else f"'{sheet}'"
+    results: List[Dict[str, Any]] = []
+    for i, row in enumerate(body):
+        item, value = row[0], row[1]
+        if item is None or str(item).strip() == "":
+            continue
+        sec = str(row[2]).strip() if sec_c and row[2] is not None else (args.section or "")
+        j = _judge_row(docs, str(item).strip(), value, sec, unit_hint)
+        cell = f"{sheet_ref}!{addr(r1 + i, value_c)}"
+        results.append({"cell": cell, "item": str(item).strip()[:60], "value": out_value(value), **j})
+    counts = {v: sum(1 for r in results if r["verdict"] == v) for v in VERDICTS}
+    not_decided = counts["판단필요"]
+    # 메모 파일 (칸, 메모 = "판정 | 근거") -> excel.py comment --file로 칸 메모
+    memo_rows = [["칸", "메모"]] + [[r["cell"], f"{r['verdict']}" + (f" ({r['reason']})" if r["reason"] else "")
+                                     + (f" | {r['evidence']}: {r['spec_text']}" if r["evidence"] else " | 근거 없음")]
+                                    for r in results]
+    memo = rt.write_csv_rows(rt.resolve_output_path(None, f"check_memo_{sheet}", ".csv"), memo_rows)
+    problems: List[str] = []
+    memo_problem = rt.check_saved_file(memo, len(memo_rows), delimiter=",")
+    if memo_problem:
+        problems.append(f"메모 파일: {memo_problem}")
+    fields: Dict[str, Any] = {"target_resolved": resolved, "count": len(results), "counts": counts,
+                              "results": [{k: r.get(k, "") for k in ("cell", "item", "value", "verdict", "reason", "condition",
+                                                                     "spec_text", "evidence", "match_mode")}
+                                          for r in results[:CHECK_SHOWN]],
+                              "truncated": len(results) > CHECK_SHOWN, "shown": min(len(results), CHECK_SHOWN),
+                              "needs_review": [r["cell"] for r in results if r["verdict"] == "판단필요"][:50],
+                              "not_decided": not_decided, "memo_file": memo}
+    if args.save:
+        header_row = ["칸", "항목", "값", "판정", "이유", "규격 조건", "근거", "규격 문장", "찾은 방식"]
+        rows = [[r["cell"], r["item"], r["value"], r["verdict"], r["reason"], r.get("condition", ""), r["evidence"],
+                 r["spec_text"], r["match_mode"]] for r in results]
+        out = rt.resolve_output_path(args.save, f"check_{sheet}", ".xlsx")
+        out, _ = reader.write_xlsx_table(out, header_row, rows, [12, 24, 10, 10, 30, 18, 40, 60, 10], "대조결과")
+        fields["output_file"] = out
+        if len(results) > CHECK_SHOWN:
+            fields["full_result_file"] = out
+    elif len(results) > CHECK_SHOWN:
+        fields["full_result_file"] = memo
+    nexts = [rt.next_command("excel.py", ["comment", "--target", args.target, "--action", "add", "--file", memo, "--dry-run"],
+                             "판정과 근거를 값 칸의 메모로 달기 미리보기 (사용자 확인 뒤 next_commands[0]의 --dry-run을 뺀 명령)")]
+    if info.get("remaining"):
+        nexts.append(rt.next_command("excel.py", _check_command(args), f"규격서 {info['remaining']}개가 아직 등록되지 않아 다시 대조 (같은 명령)"))
+        problems.append(f"규격 폴더의 문서 {info['remaining']}개를 아직 등록하지 못해 대조에 쓰지 않음")
+    if info.get("skipped"):
+        problems.append(f"읽지 못한 규격 문서 {len(info['skipped'])}개: " + ", ".join(os.path.basename(s["file"]) for s in info["skipped"][:5]))
+    fields["next_commands"] = nexts
+    preview = (f"{len(results)}행 대조: 일치 {counts['일치']}, 불일치 {counts['불일치']}, 근거없음 {counts['근거없음']}, "
+               f"판단필요 {counts['판단필요']}")
+    if not results:
+        fields.pop("next_commands", None)
+        return rt.ok(TOOL, "check", "0건: 대조할 항목이 없습니다",
+                     f"VERIFIED: 0건. {args.range}의 항목 열({args.item_col})이 비어 있습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.",
+                     verified=True, **fields)
+    if not_decided:
+        problems.insert(0, f"판단필요 {not_decided}행(needs_review)은 도구가 판정하지 못함: 사용자가 근거를 보고 정해야 함")
+    if problems:
+        return rt.ok_unverified(TOOL, "check", preview, problems, **fields)
+    return rt.ok(TOOL, "check", preview,
+                 "VERIFIED: 모든 행을 판정했습니다. counts와 불일치 행을 근거(evidence)와 함께 사용자에게 알리고, 메모로 남기려면 "
+                 "next_commands[0](미리보기)을 실행하세요.", verified=True, **fields)
+
+
+# ==============================================================================
 # 10. 진입점
 # ==============================================================================
 
@@ -3919,12 +4118,22 @@ def build_cli():
     p.add_argument("--append", action="store_true", help="add: 이미 메모가 있는 칸은 기존 메모 아래 줄에 덧붙이기")
     p.add_argument("--dry-run", action="store_true", help="add/delete: 바꾸지 않고 달거나 지울 메모만 보기")
     p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
+
+    p = sub.add_parser("check", help="표의 값을 등록된 규격서와 한 번에 대조 (일치/불일치/근거없음/판단필요, 메모 파일)")
+    common(p)
+    p.add_argument("--range", "-r", required=True, help="대조할 행 범위 (예: B2:D50). 바로 위 행은 머리글(값 열의 단위)로 읽음")
+    p.add_argument("--item-col", required=True, help="항목 열 (예: B). 이 글로 규격서를 찾음")
+    p.add_argument("--value-col", required=True, help="값 열 (예: D)")
+    p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
+    p.add_argument("--spec", required=True, help="규격서 파일 또는 폴더 (등록 안 된 문서는 먼저 등록)")
+    p.add_argument("--section", help="모든 행을 이 장절 안에서만 찾음 (예: 3.2)")
+    p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
     return parser
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
             "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
-            "comment": cmd_comment}
+            "comment": cmd_comment, "check": cmd_check}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

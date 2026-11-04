@@ -3275,6 +3275,260 @@ def cmd_clear(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
+# 8-1. 규격 대조 도우미 (excel.py check가 씀): 항목 찾기, 규격 글의 수치 조건, 값 판정
+# ==============================================================================
+
+# 단위: 쓴 글자 -> (기준 단위, 배율). NFKC 뒤의 글자로 적음 (℃ -> °C, Ω는 그대로, µ -> μ)
+_UNIT_TABLE: Dict[str, Tuple[str, float]] = {}
+for _base, _units in {
+    "V": {"μV": 1e-6, "uV": 1e-6, "mV": 1e-3, "V": 1, "kV": 1e3, "MV": 1e6},
+    "A": {"μA": 1e-6, "uA": 1e-6, "mA": 1e-3, "A": 1, "kA": 1e3},
+    "W": {"mW": 1e-3, "W": 1, "kW": 1e3, "MW": 1e6},
+    "VA": {"VA": 1, "kVA": 1e3, "MVA": 1e6},
+    "Ω": {"mΩ": 1e-3, "Ω": 1, "kΩ": 1e3, "MΩ": 1e6, "GΩ": 1e9, "ohm": 1, "kohm": 1e3, "Mohm": 1e6, "옴": 1},
+    "Hz": {"Hz": 1, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9},
+    "°C": {"°C": 1, "도씨": 1},
+    "%": {"%": 1},
+    "m": {"nm": 1e-9, "μm": 1e-6, "um": 1e-6, "mm": 1e-3, "cm": 1e-2, "m": 1, "km": 1e3},
+    "s": {"ns": 1e-9, "μs": 1e-6, "us": 1e-6, "ms": 1e-3, "s": 1, "sec": 1, "초": 1, "min": 60, "분": 60, "h": 3600, "hr": 3600, "시간": 3600},
+    "g": {"mg": 1e-3, "g": 1, "kg": 1e3},
+    "N": {"N": 1, "kN": 1e3},
+    "Pa": {"Pa": 1, "kPa": 1e3, "MPa": 1e6, "bar": 1e5},
+    "rpm": {"rpm": 1, "RPM": 1},
+    "dB": {"dB": 1},
+    "dBm": {"dBm": 1},
+    "F": {"pF": 1e-12, "nF": 1e-9, "μF": 1e-6, "uF": 1e-6, "F": 1},
+    "lx": {"lx": 1, "lux": 1},
+}.items():
+    for _u, _s in _units.items():
+        _UNIT_TABLE[_u] = (_base, float(_s))
+_UNIT_CI: Dict[str, str] = {}
+for _u in _UNIT_TABLE:
+    _UNIT_CI[_u.lower()] = "" if _u.lower() in _UNIT_CI else _u      # 대소문자만 다른 단위가 둘이면(mV, MV) 쓰지 않음
+
+
+def _unit_key(u: Optional[str]) -> Optional[str]:
+    """쓴 단위 글자 -> _UNIT_TABLE 키 (Vdc -> V, KV -> kV). 모르면 None."""
+    if not u:
+        return None
+    for k in (u, re.sub(r"(?i)(dc|ac)$", "", u)):
+        if k in _UNIT_TABLE:
+            return k
+        if _UNIT_CI.get(k.lower()):
+            return _UNIT_CI[k.lower()]
+    return None
+
+
+_UNIT_ALT = "|".join(re.escape(u) for u in sorted(_UNIT_TABLE, key=len, reverse=True))
+# 단위 뒤에 영문이 이어지면 단위가 아님 (Vdc는 V로 봄: dc/ac는 허용). '초' 뒤 '과'는 '초과'
+_UNIT_RE = rf"(?:{_UNIT_ALT})(?:(?<=초)(?!과)|(?<!초))(?:(?=dc|ac|DC|AC)|(?![A-Za-z]))"
+_NUM_RE = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+_Q = rf"(?P<{{n}}>{_NUM_RE})\s*(?P<{{u}}>{_UNIT_RE})?"          # 숫자와 (있으면) 단위
+_AD = r"(?:\s*(?:AC|DC|ac|dc|rms|RMS))?"
+
+
+def _q(n: str, u: str) -> str:
+    return _Q.replace("{n}", n).replace("{u}", u)
+
+
+# 순서가 우선순위 (앞 패턴이 차지한 글은 뒤 패턴이 다시 쓰지 않음)
+_COND_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [(k, re.compile(p, re.IGNORECASE)) for k, p in (
+    ("tol", rf"\(\s*(?P<a>{_NUM_RE})\s*(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%)?\s*\)\s*(?P<ua>{_UNIT_RE})"),
+    ("between", rf"(?:between|from)\s+{_q('a', 'ua')}{_AD}\s*(?:and|to|~)\s*{_q('b', 'ub')}"),
+    ("tol", rf"{_q('a', 'ua')}{_AD}\s*\(?\s*(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%|{_UNIT_RE})?\s*\)?"),
+    ("range", rf"{_q('a', 'ua')}{_AD}\s*(?:~|∼|〜|～|–|—|to|에서|부터)\s*{_q('b', 'ub')}(?:\s*(?:까지|사이))?"),
+    ("range", rf"(?<![\w.-]){_q('a', 'ua')}\s*-\s*{_q('b', 'ub')}"),
+    ("upper", rf"(?:최대|max(?:imum)?\.?|≤|<=|=<|not\s+(?:more|greater)\s+than|no\s+more\s+than|not\s+exceed(?:ing)?|"
+              rf"up\s+to|less\s+than\s+or\s+equal\s+to|at\s+most)\s*[:=]?\s*{_q('a', 'ua')}"),
+    ("upper_x", rf"(?:<|less\s+than|below|under)\s*{_q('a', 'ua')}"),
+    ("lower", rf"(?:최소|min(?:imum)?\.?|≥|>=|=>|not\s+less\s+than|no\s+less\s+than|at\s+least|greater\s+than\s+or\s+equal\s+to)"
+              rf"\s*[:=]?\s*{_q('a', 'ua')}"),
+    ("lower_x", rf"(?:>|greater\s+than|more\s+than|above|over)\s*{_q('a', 'ua')}"),
+    ("upper", rf"{_q('a', 'ua')}{_AD}\s*(?:을|를|이|가)?\s*(?:이하|이내|max(?:imum)?\b|or\s+less|or\s+below|넘지\s*않|초과하지\s*않)"),
+    ("upper_x", rf"{_q('a', 'ua')}{_AD}\s*(?:미만|보다\s*작)"),
+    ("lower", rf"{_q('a', 'ua')}{_AD}\s*(?:을|를|이|가)?\s*(?:이상|min(?:imum)?\b|or\s+more|or\s+greater|or\s+above)"),
+    ("lower_x", rf"{_q('a', 'ua')}{_AD}\s*(?:초과|보다\s*커|보다\s*큰)"),
+    ("plain", rf"(?<![\w.]){_q('a', 'ua')}"),
+)]
+
+
+def _num(text: str) -> float:
+    return float(text.replace(",", ""))
+
+
+def unit_of(text: Any) -> Optional[Tuple[str, float, str]]:
+    """'mA', '전류(mA)', '[V]', '5 V'의 단위 -> (기준 단위, 배율, 쓴 글자). 모르면 None."""
+    t = unicodedata.normalize("NFKC", str(text or "")).replace("µ", "μ")
+    m = re.search(rf"[\(\[]\s*({_UNIT_ALT})\s*[\)\]]", t)
+    if not m:
+        m = re.search(rf"(?:^|[\s\d])({_UNIT_RE})\s*$", t.strip())
+    if not m:
+        return None
+    k = _unit_key(m.group(1).strip())
+    return (_UNIT_TABLE[k][0], _UNIT_TABLE[k][1], k) if k else None
+
+
+def quantity_of(value: Any) -> Optional[Tuple[float, Optional[Tuple[str, float, str]]]]:
+    """칸 값 -> (숫자, 단위 또는 None). 숫자 칸, '5.1', '5.1 V', '5,000 rpm'. 숫자가 아니면 None."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value), None
+    t = unicodedata.normalize("NFKC", str(value)).replace("µ", "μ").strip()
+    m = re.fullmatch(rf"({_NUM_RE})\s*({_UNIT_RE})?\s*", t)
+    if not m:
+        return None
+    unit = None
+    k = _unit_key(m.group(2))
+    if k:
+        unit = (_UNIT_TABLE[k][0], _UNIT_TABLE[k][1], k)
+    return _num(m.group(1)), unit
+
+
+def _cond(kind: str, m: "re.Match[str]") -> Optional[Dict[str, Any]]:
+    """패턴 일치 하나 -> 조건 {kind, lo, hi, lo_strict, hi_strict, base, scale, unit, text} (기준 단위 값). 단위가 없으면 None."""
+    gd = m.groupdict()
+    ua, ub = gd.get("ua"), gd.get("ub")
+    unit = ua or ub or (gd.get("ud") if gd.get("ud") and gd.get("ud") != "%" else None)
+    if kind == "tol" and not unit and gd.get("ud") == "%":
+        return None                                 # '5 ± 5%'처럼 기준 값의 단위가 없으면 판단하지 않음
+    if not unit:
+        return None
+    key = _unit_key(unit)
+    if key is None:
+        return None
+    base, scale = _UNIT_TABLE[key]
+
+    def val(num: str, u: Optional[str]) -> float:
+        k = _unit_key(u) if u else key
+        if k is None or _UNIT_TABLE[k][0] != base:
+            raise ValueError("단위가 다름")
+        return _num(num) * _UNIT_TABLE[k][1]
+    try:
+        a = val(gd["a"], ua)
+        c: Dict[str, Any] = {"kind": kind, "lo": None, "hi": None, "lo_strict": False, "hi_strict": False,
+                             "base": base, "scale": scale, "unit": key, "text": m.group(0).strip()}
+        if kind in ("range", "between"):
+            b = val(gd["b"], ub or ua)
+            c.update(lo=min(a, b), hi=max(a, b), kind="range")
+        elif kind == "tol":
+            d = _num(gd["d"])
+            ud = gd.get("ud")
+            d = abs(a) * d / 100 if ud == "%" and base != "%" else val(gd["d"], ud) if ud else d * scale
+            c.update(lo=a - d, hi=a + d)
+        elif kind.startswith("upper"):
+            c.update(hi=a, hi_strict=kind.endswith("_x"), kind="upper")
+        elif kind.startswith("lower"):
+            c.update(lo=a, lo_strict=kind.endswith("_x"), kind="lower")
+        else:
+            c.update(lo=a, hi=a)
+    except (ValueError, KeyError, TypeError):
+        return None
+    return c
+
+
+def spec_conditions(text: str) -> List[Dict[str, Any]]:
+    """규격 글의 수치 조건 목록 (글 순서). 단위가 있는 수치만 (규격 번호 'KS C 1234', 장절 '3.2'는 빼려고).
+    '4.75 V 이상 5.25 V 이하'처럼 같은 단위의 아래·위 한계가 하나씩이면 범위 하나로 합칩니다."""
+    t = unicodedata.normalize("NFKC", text).replace("µ", "μ")
+    taken: List[Tuple[int, int]] = []
+    found: List[Tuple[int, Dict[str, Any]]] = []
+    for kind, pat in _COND_PATTERNS:
+        for m in pat.finditer(t):
+            s, e = m.span()
+            if any(s < b and a < e for a, b in taken):
+                continue
+            c = _cond(kind, m)
+            if c is None:
+                continue
+            taken.append((s, e))
+            found.append((s, c))
+    conds = [c for _, c in sorted(found, key=lambda x: x[0])]
+    lows = [c for c in conds if c["kind"] == "lower"]
+    highs = [c for c in conds if c["kind"] == "upper"]
+    if len(lows) == 1 and len(highs) == 1 and lows[0]["base"] == highs[0]["base"] and lows[0]["lo"] <= highs[0]["hi"]:
+        lo, hi = lows[0], highs[0]
+        merged = dict(lo, kind="range", hi=hi["hi"], hi_strict=hi["hi_strict"], text=f"{lo['text']} ~ {hi['text']}")
+        conds = [merged] + [c for c in conds if c is not lo and c is not hi]
+    # '정격 5 V (4.75~5.25 V)': 기준 값(plain)이 하나뿐인 범위·한계 안에 있으면 그 범위로 판정 (후보 하나)
+    bounded = [c for c in conds if c["kind"] != "plain"]
+    if len(bounded) == 1:
+        b = bounded[0]
+        conds = [c for c in conds if not (c["kind"] == "plain" and c["base"] == b["base"] and cond_holds(b, c["lo"]))]
+    out, seen = [], set()
+    for c in conds:
+        key = (c["base"], c["lo"], c["hi"], c["lo_strict"], c["hi_strict"])
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+def cond_text(c: Dict[str, Any]) -> str:
+    """조건을 사람이 읽는 글로 (쓴 단위 기준). 예: '4.75~5.25 V', '100 MΩ 이상', '3 A 미만'."""
+    s = c["scale"] or 1.0
+    f = lambda v: f"{v / s:.6g}"  # noqa: E731
+    u = c["unit"]
+    if c["lo"] is not None and c["hi"] is not None:
+        return f"{f(c['lo'])} {u}" if c["lo"] == c["hi"] else f"{f(c['lo'])}~{f(c['hi'])} {u}"
+    if c["hi"] is not None:
+        return f"{f(c['hi'])} {u} {'미만' if c['hi_strict'] else '이하'}"
+    return f"{f(c['lo'])} {u} {'초과' if c['lo_strict'] else '이상'}"
+
+
+def cond_holds(c: Dict[str, Any], v: float) -> bool:
+    eps = 1e-9 * max(1.0, abs(v), abs(c["lo"] or 0), abs(c["hi"] or 0))
+    if c["lo"] is not None and (v < c["lo"] - eps or (c["lo_strict"] and v <= c["lo"] + eps)):
+        return False
+    if c["hi"] is not None and (v > c["hi"] + eps or (c["hi_strict"] and v >= c["hi"] - eps)):
+        return False
+    return True
+
+
+def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], str]:
+    """찾은 낱말 가까이의 수치 조건과 그 문장. 낱말이 든 문장에서 낱말 뒤(200자까지)를 먼저, 없으면 문장 전체."""
+    flags = re.IGNORECASE
+    for sent in _SENT_SPLIT.split(text):
+        ms = [m for t in terms for m in [_term_pattern(t, flags).search(sent)] if m]
+        if not ms:
+            continue
+        start = min(m.start() for m in ms)
+        after = spec_conditions(sent[start:start + 200])
+        return (after or spec_conditions(sent)), sent.strip()
+    return spec_conditions(text[:400]), text.strip()[:400]
+
+
+def find_item(docs: List[Dict[str, Any]], query: str, sec_key: str = "") -> Tuple[str, List[Dict[str, Any]]]:
+    """등록 문서에서 항목 글을 찾습니다 (search와 같은 규칙: 띄어쓰기·조사·단위 표기 무시, 동의어, 0건이면 partial -> fuzzy).
+    반환 (match_mode, 점수 순 결과 [{doc, unit, terms, score}]). 0건이면 ('exact', [])."""
+    flags = re.IGNORECASE
+    matcher = build_matcher(query, False)
+    hits: List[Dict[str, Any]] = []
+    pool: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for doc in docs:
+        for u in doc["units"]:
+            if sec_key and not section_matches(u, sec_key):
+                continue
+            pool.append((doc, u))
+            terms = matcher(u["text"])
+            if terms is not None:
+                hits.append({"doc": doc, "unit": u, "terms": terms})
+    mode = "exact"
+    if not hits and pool:
+        mode, hits = widen_search(pool, parse_query(query), flags)
+    for h in hits:
+        h["score"] = hit_score(h["unit"], h["terms"], flags)
+    hits.sort(key=lambda h: -h["score"])
+    return mode, hits
+
+
+def load_spec_docs(spec: str, max_files: int = MAX_FOLDER_FILES) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """--spec 파일 또는 폴더의 문서 (등록되지 않았거나 바뀐 문서는 먼저 등록, R10 CONTINUE 포함)."""
+    import types as _types
+    return _search_targets(_types.SimpleNamespace(file=spec, max_files=max_files))
+
+
+# ==============================================================================
 # 9. 진입점
 # ==============================================================================
 
