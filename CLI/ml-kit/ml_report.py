@@ -26,7 +26,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library, MissingLibraryError,
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
-    normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names,
+    strip_unit, note_recovered, read_text_file, resolve_column_names,
     command_text, quote_arg, name_list,
 )
 
@@ -872,8 +872,7 @@ def _version_hint(vdir: str) -> str:
     if not found:
         return " 이 데이터 폴더에 학습한 버전이 없습니다. 먼저 ml_train.py로 학습하십시오."
     if len(found) == 1:
-        cmd = command_text(drop={"--model": "model", "-m": "model", "--version": "version", "-v": "version",
-                                 "--data-dir": "data_dir", "-d": "data_dir"})
+        cmd = command_text(drop={"--model": "model", "-m": "model"})
         path = os.path.join(root, found[0])
         return f" 있는 버전은 {found[0]} 하나입니다. [추천] " + (f"{cmd} -m {quote_arg(path)}" if cmd else f"-m {quote_arg(path)}")
     return f" 있는 버전 중에서 사용자에게 고르게 하십시오: [후보] {', '.join(found[-10:])}"
@@ -1373,32 +1372,6 @@ def parse_slots(raw: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
-def resolve_version_dir(args: argparse.Namespace) -> str:
-    """-m <version_dir> wins; otherwise -d <data_root> with -v, or the task's best version (ml_train.task_best_version)."""
-    if args.model:
-        return args.model
-    if not args.data_dir:
-        raise InputError("보고서를 만들 버전 폴더(-m <version_dir>) 또는 데이터 폴더(-d <data_root>)를 지정하십시오.")
-    root = os.path.abspath(args.data_dir)
-    if args.version:
-        return os.path.join(root, normalize_version(args.version))
-    ledger = os.path.join(root, "history.jsonl")
-    if not os.path.isfile(ledger):
-        raise InputError(f"실험 원장(history.jsonl)이 없습니다: {ledger}")
-    records = _read_jsonl(ledger)
-    if not records:
-        raise InputError(f"실험 원장이 비어 있습니다: {ledger}")
-    import ml_train  # same choice as ml_train.py --history best_version
-    task = records[-1].get("task", "regression")
-    best = ml_train.task_best_version(records, root, task)
-    if best is None:
-        raise InputError(f"{task} 학습 기록 중 버전 폴더가 온전한 기록이 없습니다: {root}. 먼저 ml_train.py로 학습하십시오.")
-    how = ("모든 타겟의 최고 점수" if best["complete"]
-           else f"타겟별 최고가 여러 버전에 나뉘어 최고 타겟이 가장 많은 버전, {best['missing']}은(는) 다른 버전이 더 좋음")
-    sys.stderr.write(f"[INFO] 보고서 버전 자동 선택: {best['version']} ({how})\n")
-    return os.path.join(root, best["version"])
-
-
 def make_export(version_dir: str, task: str, title: Optional[str], targets: Optional[List[str]] = None,
                 overwrite: bool = False) -> Optional[Dict[str, Any]]:
     """The report and the performance calculator (ml_export.py) are made as a set (regression versions only).
@@ -1472,9 +1445,9 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
     target_filter = None
     if args.targets and args.targets.strip().lower() != "all":
         target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
-    if getattr(args, "file", None) and not args.model and not args.data_dir:
+    if not args.model:
         return execute_best_report(args, target_filter)
-    vdir = resolve_version_dir(args)
+    vdir = args.model
     ctx = load_version(vdir, target_filter)
     export = make_export(vdir, ctx["record"]["task"], getattr(args, "title", None),
                          [t["name"] for t in ctx["targets"]] if target_filter else None, overwrite=args.overwrite)
@@ -1574,9 +1547,6 @@ def main():
     parser = JsonArgumentParser(description="ML 결과 보고서 (Word) generator (-f: every target in one report per task)")
     parser.add_argument("--model", "-m",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
-    parser.add_argument("--data-dir", "-d", dest="data_dir",
-                        help="데이터 폴더 (<파일명>_ml_data). -v 생략 시 모든 타겟의 최고가 있는 버전 (--history의 best_version)")
-    parser.add_argument("--version", "-v", help="-d와 함께 쓸 버전 (예: v2 또는 2)")
     parser.add_argument("--targets", "-y", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
     parser.add_argument("--save", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
@@ -1592,8 +1562,8 @@ def main():
     parser.add_argument("--data-row", type=int, help="-f와 함께: 데이터 시작 행 (생략 시 이력 값)")
     parser.add_argument("--title", help="함께 만드는 성능예측표(엑셀)의 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
     args = parser.parse_args()
-    if not args.model and not args.data_dir and not args.file:
-        parser.error("-f <데이터파일>, -m <version_dir>, -d <data_root> 중 하나를 지정해야 합니다.")
+    if not args.model and not args.file:
+        parser.error("-f <데이터파일> 또는 -m <version_dir> 중 하나를 지정해야 합니다.")
     run_cli(lambda: execute_report(args), hint="Check the version folder path (version_dir from the training result).")
 
 

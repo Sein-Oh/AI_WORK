@@ -302,11 +302,11 @@ def test_history_mixed_tasks_compare_within_task(multiclass):
 
 
 def test_report_supports_classification(multiclass):
-    """분류 버전도 통합 보고서를 만든다 (-d, -t, -v)."""
+    """분류 버전도 통합 보고서를 만든다 (-m, -y)."""
     pytest.importorskip("docx")
     pytest.importorskip("matplotlib")
     work, _, _ = multiclass
-    payload = run_tool("ml_report.py", "-d", str(work / "proc_ml_data"), "-y", "품질등급", "-v", "v1")
+    payload = run_tool("ml_report.py", "-m", str(work / "proc_ml_data" / "v1"), "-y", "품질등급")
     assert payload["task"] == "classification" and payload["targets"] == ["품질등급"]
 
 
@@ -747,8 +747,6 @@ def test_history_best_version_covers_every_target(tmp_path):
     hist = run_tool("ml_train.py", "-f", data, "--history")
     assert hist["best_version"] == "v1" and hist["best_version_dir"] == v1["version_dir"]   # 2.9.14: v2
     assert hist["best_by_task"]["regression"]["complete"] is True and "best_version_note" not in hist
-    rep = run_tool("ml_report.py", "-d", os.path.dirname(v1["version_dir"]), "--save", str(tmp_path / "r.docx"))
-    assert rep["version"] == "v1"                                                  # 2.9.14: v2
 
 
 def _fake_version(root, ver, targets):

@@ -360,8 +360,8 @@ def test_all(ctx, only):
                f"요청={os.path.basename(out)}, 실제={os.path.basename(got)}", d, c, e)
 
     def m6():
-        root = (s.get("m1") or {}).get("data_root")
-        d, c, o, e = run_tool("ml_report.py", "-d", root)
+        vdir = (s.get("m1") or {}).get("version_dir")
+        d, c, o, e = run_tool("ml_report.py", "-m", vdir)
         rep = (d or {}).get("report_file")
         info = None
         if rep and os.path.exists(rep):
@@ -380,11 +380,11 @@ def test_all(ctx, only):
 
     def m7():
         rep = s.get("report")
-        root = (s.get("m1") or {}).get("data_root")
+        vdir = (s.get("m1") or {}).get("version_dir")
         wd = Office("Word.Application")
         try:
             doc = wd.app.Documents.Open(rep, ReadOnly=False, AddToRecentFiles=False, Visible=False)   # Word가 잠금
-            d, c, o, e = run_tool("ml_report.py", "-d", root, "--overwrite")
+            d, c, o, e = run_tool("ml_report.py", "-m", vdir, "--overwrite")
             doc.Close(SaveChanges=0)
         finally:
             wd.quit()

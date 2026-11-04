@@ -196,7 +196,7 @@ needs_docx = pytest.mark.skipif(not HAS_DOCX, reason="python-docx not installed 
 @pytest.mark.skipif(HAS_DOCX, reason="only meaningful when python-docx is missing")
 def test_report_without_docx_returns_json(trained):
     work, _, _ = trained
-    payload = run_fail("ml_report.py", "-d", str(work / "sample_ml_data"))
+    payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"))
     assert payload["agent_directive"].startswith("STOP_RETRY") and "python-docx" in payload["message"]
 
 
@@ -204,28 +204,14 @@ def test_report_without_docx_returns_json(trained):
 def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
-    payload = run_tool("ml_report.py", "-d", str(work / "sample_ml_data"), "-y", TARGET, "--save", str(out))
+    payload = run_tool("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"), "-y", TARGET, "--save", str(out))
     assert out.is_file() and payload["best_version"]
-
-
-@needs_docx
-def test_report_version_without_v_and_jsonl_only(trained):
-    """history.json이 없으면 history.jsonl을 읽는다. -v는 'v' 없이 숫자만 줘도 된다."""
-    work, _, _ = trained
-    root = work / "sample_ml_data"
-    (root / "history.json").rename(root / "history.json.bak")
-    try:
-        payload = run_tool("ml_report.py", "-d", str(root), "-y", "생산효율", "-v", "1",
-                           "--save", str(work / "r_v1.docx"))
-        assert payload["best_version"] == "v1"
-    finally:
-        (root / "history.json.bak").rename(root / "history.json")
 
 
 @needs_docx
 def test_report_unknown_version_fails(trained):
     work, _, _ = trained
-    payload = run_fail("ml_report.py", "-d", str(work / "sample_ml_data"), "-v", "v99")
+    payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v99"))
     assert "v99" in payload["message"]
     assert "[후보] v1" in payload["message"] or "[추천] python" in payload["message"], payload     # 2.9.48
 
@@ -235,11 +221,11 @@ def test_report_unknown_version_recommends_the_only_one(tmp_path):
     root = tmp_path / "y_ml_data"
     (root / "v1").mkdir(parents=True)
     (root / "v1" / "leaderboard.json").write_text("{}", encoding="utf-8")
-    payload = run_fail("ml_report.py", "-d", str(root), "-v", "v5", "--title", "제목")
+    payload = run_fail("ml_report.py", "-m", str(root / "v5"), "--title", "제목")
     # 2.9.48: the one trained version is recommended as a full command (-m), the other options kept
     rec = payload["message"].split("[추천] ")[1]
     assert rec.startswith("python ") and rec.endswith(str(root / "v1")) and "--title" in rec, rec
-    assert " -v " not in rec and " -d " not in rec, rec
+    assert rec.count(" -m ") == 1, rec
 
 
 @needs_docx
@@ -553,7 +539,12 @@ def test_stderr_uses_only_shared_log_tags(trained, tmp_path):
 @pytest.mark.parametrize("script,args", [
     ("ml_predict.py", ["-m", "x", "-i", "a=1", "--out", "p.csv"]), ("ml_predict.py", ["-m", "x", "-i", "a=1", "-o", "p.csv"]),
     ("ml_report.py", ["-m", "x", "--out", "r.docx"]), ("ml_report.py", ["-m", "x", "-o", "r.docx"]),
-    ("ml_report.py", ["-m", "x", "-t", "y"])])        # '--target' is argparse's abbreviation of --targets (same meaning)
+    ("ml_report.py", ["-m", "x", "-t", "y"]),         # '--target' is argparse's abbreviation of --targets (same meaning)
+    # 2.9.52: removed options (user decision)
+    ("ml_predict.py", ["-m", "x", "-i", "a=1", "--meta", "m.json"]), ("ml_predict.py", ["-m", "x", "-i", "a=1", "--encoding", "cp949"]),
+    ("ml_train.py", ["-f", "x.csv", "-x", "a", "-y", "b", "--encoding", "cp949"]),
+    ("ml_report.py", ["-d", "x_ml_data"]), ("ml_report.py", ["--data-dir", "x_ml_data"]),
+    ("ml_report.py", ["-m", "x", "-v", "v1"]), ("ml_report.py", ["-m", "x", "--version", "v1"])])
 def test_old_option_names_are_argument_errors(data_dir, script, args):
     proc, res = run_raw(script, *args)
     assert proc.returncode == 2 and res["status"] == "error", res              # 2.9.50: accepted
@@ -563,5 +554,5 @@ def test_old_option_names_are_argument_errors(data_dir, script, args):
 def test_report_targets_and_save(trained):
     work, _, _ = trained
     out = work / "r_targets.docx"
-    payload = run_tool("ml_report.py", "-d", str(work / "sample_ml_data"), "--targets", TARGET, "--save", str(out))
+    payload = run_tool("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
     assert out.is_file() and payload["report_file"] == str(out), payload

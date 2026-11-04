@@ -2055,7 +2055,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         snapshot_path = os.path.join(staging_dir, "model_dataset.csv")
 
         # Windows 한국어 Excel 호환: cp949 기본, 표현 불가 문자 포함 시 utf-8-sig 자동 폴백
-        write_csv_excel_compatible(snapshot_df, snapshot_path, encoding=getattr(args, "encoding", None))
+        write_csv_excel_compatible(snapshot_df, snapshot_path)
 
         # 3-B. Rows left out of training (user marks + automatic outliers), for the user to review in Excel
         excluded_rows_file = None
@@ -2385,7 +2385,7 @@ def build_best_version(args: argparse.Namespace, task: str, records: List[Dict[s
                          f"원래 출처 {c['source_version']}), 피처 {len(r['features'])}개\n")
     layout = _latest_layout(records, task)
     run_args = argparse.Namespace(**vars(args))
-    for k, default in (("seed", 42), ("description", None), ("tag", None), ("encoding", None)):
+    for k, default in (("seed", 42), ("description", None), ("tag", None)):
         if getattr(run_args, k, None) is None:
             setattr(run_args, k, default)
     for k in ("header_row", "unit_row", "data_row"):
@@ -2731,7 +2731,6 @@ def main():
     parser.add_argument("--unit-row", type=int, help="단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
     parser.add_argument("--dtypes", help="데이터 타입 수동 오버라이드 (예: '일시:datetime,설비코드:str')")
-    parser.add_argument("--encoding", help="model_dataset.csv 저장 인코딩 (기본값: Windows Excel 최적화 cp949, 특수문자 발생 시 utf-8-sig 자동 폴백)")
     parser.add_argument("--version", "-v", help="버전 수동 지정 (미지정 시 자동 계산 v1, v2...)")
     parser.add_argument("--overwrite", action="store_true",
                         help="--version으로 지정한 버전 폴더가 이미 있으면 교체 (사용자 확인 후에만 사용)")

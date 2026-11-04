@@ -137,22 +137,6 @@ def test_report_rejects_non_version_folder(regression_report, tmp_path):
 
 
 @needs_report
-def test_data_dir_mode_picks_best_version_and_slots(regression_report):
-    """-d <데이터 폴더>만 주면(-v 없음) 최근 실험의 최고 버전을 쓰고, --slots 글이 문서에 들어간다."""
-    work, tr, _, _ = regression_report
-    root = os.path.dirname(tr["version_dir"])
-    lines = open(os.path.join(root, "history.jsonl"), encoding="utf-8").read().splitlines()
-    recs = [json.loads(x) for x in lines]
-    best = max(recs, key=lambda r: r["mean_val_score"])["version"]
-    slots = json.dumps({"performance": "직접 쓴 성능 소견", "operation": "직접 쓴 운영 소견"}, ensure_ascii=False)
-    out = work / "slots.docx"
-    payload = run_tool("ml_report.py", "-d", root, "--slots", slots, "--save", str(out))
-    assert payload["best_version"] == payload["version"] == best
-    text = _all_text(docx.Document(str(out)))
-    assert "직접 쓴 성능 소견" in text and "직접 쓴 운영 소견" in text
-
-
-@needs_report
 def test_report_requires_oof_files(regression_report, tmp_path):
     """oof_*.csv가 없는 버전 폴더(2.9.1 전에 학습)는 다시 학습하라는 STOP_RETRY."""
     import shutil
@@ -202,7 +186,7 @@ def test_report_docx_follows_schema_for_word_2007(tmp_path):
     data = tmp_path / "d.csv"
     make_sample(str(data))
     tr = run_tool("ml_train.py", "-f", str(data), "-x", "반응온도,촉매비율,수분함량", "-y", "생산효율")
-    rep = run_tool("ml_report.py", "-d", tr["data_root"], "--save", str(tmp_path / "r.docx"))
+    rep = run_tool("ml_report.py", "-m", tr["version_dir"], "--save", str(tmp_path / "r.docx"))
     body = docx.Document(rep["report_file"]).element.body
 
     assert not list(body.iter(qn("w:start"))) and not list(body.iter(qn("w:end")))   # Word 2010+ names

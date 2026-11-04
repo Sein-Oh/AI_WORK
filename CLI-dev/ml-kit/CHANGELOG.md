@@ -8,6 +8,19 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.52] - 2026-11-04
+
+사용자 결정: 쓰지 않는 옵션 정리 (베타, 별칭 없이 없앰). 회귀 테스트: `tests/test_contract.py` `test_old_option_names_are_argument_errors`
+(새 7개, 2.9.51에서 모두 실패: 옵션을 받음).
+
+### 없앤 옵션 (주면 인자 오류, exit 2)
+- `ml_predict.py --meta`: 개별 `.joblib`을 주면 모델 정보는 늘 같은 폴더의 같은 이름 `.json`(`model_<타겟>.json`)에서 읽습니다.
+- `ml_predict.py --encoding`, `ml_train.py --encoding`: 결과 CSV와 `model_dataset.csv`의 인코딩은 도구가 정합니다.
+- `ml_report.py -d/--data-dir`, `-v/--version`: 보고서는 `-f <데이터파일>`(권장, 최고 버전) 또는 `-m <version_dir>`만. 없는 `-m` 폴더의
+  `[추천]`/`[후보]`(2.9.48)는 그대로이고, `[추천]` 명령은 `-m`만 바꿉니다.
+- 이 옵션들만 시험하던 테스트(`-v 1` 숫자 버전, `-d`의 최고 버전 자동 선택 2개)를 지우고, 보고서 테스트와 실기 러너(M6, M7)는 `-m <version_dir>`로 바꿈.
+  `ml_train.py --version/-v`(학습 버전 지정)는 그대로입니다.
+
 ## [2.9.51] - 2026-11-04
 
 저장소 지침 반영: 인자 이름 통일 (AGENTS.md ACI 설계 권장 5, 베타라 별칭 없이 바꿈). 회귀 테스트: `tests/test_contract.py`

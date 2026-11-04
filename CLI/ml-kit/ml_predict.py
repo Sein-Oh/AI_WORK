@@ -57,7 +57,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.51"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.52"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1824,7 +1824,7 @@ def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
 
 
 LAYOUT_OPTS = {"--header-row": "header_row", "--unit-row": "unit_row", "--data-row": "data_row"}
-PATH_OPTS = ("-f", "--file", "-m", "--model", "--meta", "--save", "--points", "-d", "--data-dir")
+PATH_OPTS = ("-f", "--file", "-m", "--model", "--save", "--points")
 
 
 def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
@@ -2312,16 +2312,15 @@ def save_with_lock_fallback(path: str, writer: Callable[[str], None], what: str 
         return alt
 
 
-def write_csv_excel_compatible(df: pd.DataFrame, path: str, encoding: Optional[str] = None) -> str:
+def write_csv_excel_compatible(df: pd.DataFrame, path: str) -> str:
     """
     Writes CSV that opens correctly by double-click in Korean Windows Excel:
     CP949 by default, utf-8-sig fallback when characters are not representable.
     Returns the path actually written (may differ if the target was locked).
     """
     def _write(p: str) -> None:
-        enc = encoding or "cp949"
         try:
-            df.to_csv(p, index=False, encoding=enc)
+            df.to_csv(p, index=False, encoding="cp949")
         except (UnicodeEncodeError, LookupError):
             df.to_csv(p, index=False, encoding="utf-8-sig")
 
@@ -2736,7 +2735,6 @@ def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str
 
 def resolve_target_models(
     target_path: str,
-    meta_path: Optional[str] = None,
     filter_targets: Optional[List[str]] = None,
     kind: str = "타겟(-y)",
     values: bool = False
@@ -2798,15 +2796,7 @@ def resolve_target_models(
         target_name = match.group(1) if match else os.path.splitext(fname)[0]
 
         # Resolve Meta Path
-        m_path = meta_path
-        if not m_path:
-            cand_m = os.path.join(os.path.dirname(j_path), f"model_{target_name}.json")
-            if os.path.exists(cand_m):
-                m_path = cand_m
-            else:
-                cand_m2 = os.path.splitext(j_path)[0] + ".json"
-                if os.path.exists(cand_m2):
-                    m_path = cand_m2
+        m_path = os.path.splitext(j_path)[0] + ".json"
 
         meta_dict = {}
         if m_path and os.path.exists(m_path):
@@ -3208,8 +3198,6 @@ def _predict_command(args: argparse.Namespace, layout: str = "", inline: Optiona
     or with -i <inline> instead of the input. Paths are absolute and quoted (a trailing backslash or a relative
     path must not break the command on Windows)."""
     parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(os.path.abspath(args.model))]
-    if getattr(args, "meta", None):
-        parts += ["--meta", quote_arg(os.path.abspath(args.meta))]
     if getattr(args, "targets", None):
         parts += ["-y", quote_arg(args.targets)]
     if inline is not None:
@@ -3220,8 +3208,6 @@ def _predict_command(args: argparse.Namespace, layout: str = "", inline: Optiona
         parts.append(layout.strip())
     if getattr(args, "save", None):
         parts += ["--save", quote_arg(os.path.abspath(args.save))]
-    if getattr(args, "encoding", None):
-        parts += ["--encoding", quote_arg(args.encoding)]
     if getattr(args, "overwrite", False):
         parts.append("--overwrite")
     return " ".join(parts)
@@ -3421,7 +3407,6 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     filter_targets = [t.strip() for t in args.targets.split(",") if t.strip()] if args.targets else None
     model_items = resolve_target_models(
         target_path=args.model,
-        meta_path=args.meta,
         filter_targets=filter_targets
     )
 
@@ -3489,7 +3474,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         if not req_features:
             raise InputError(
                 f"타겟 '{target_name}'의 메타데이터(model_*.json)에 features_required가 없습니다. "
-                f"모델과 같은 폴더의 .json 파일을 확인하거나 --meta로 지정하십시오."
+                f"모델과 같은 폴더의 model_<타겟>.json 파일을 확인하십시오."
             )
         derived_names = [e.split("=", 1)[0].strip() for e in derived_evals if "=" in e]
 
@@ -3704,7 +3689,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                 saved_file, lambda p: df_result.to_excel(p, index=False), what="결과 Excel 파일")
         else:
             # CSV Output with Windows Excel CP949 compatibility (utf-8-sig fallback)
-            saved_file = write_csv_excel_compatible(df_result, saved_file, encoding=getattr(args, "encoding", None))
+            saved_file = write_csv_excel_compatible(df_result, saved_file)
 
     # R1: the saved file is read back (rows and columns) before saying VERIFIED
     unverified: List[str] = []
@@ -3867,8 +3852,6 @@ def _model_curve(pipe: Any, meta: Dict[str, Any], base: Dict[str, Any], vary: st
 def _find_command(args: argparse.Namespace, find: Optional[str] = None, inline: Optional[str] = None) -> str:
     """The same --find command with a corrected --find or -i text (absolute, quoted paths)."""
     parts = [f"python {quote_arg(os.path.abspath(__file__))}", "-m", quote_arg(os.path.abspath(args.model))]
-    if getattr(args, "meta", None):
-        parts += ["--meta", quote_arg(os.path.abspath(args.meta))]
     parts += ["--find", quote_arg(find if find is not None else args.find), "--vary", quote_arg(args.vary)]
     i_text = inline if inline is not None else getattr(args, "input", None)
     if i_text:
@@ -3893,7 +3876,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
         raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
     # the goal is resolved like ml_map --find: exact name, then a unique name without its unit ('수율' for '수율(1차)'
     # and '수율(최종)' -> [후보]); a different unit -> unit_hint
-    items = resolve_target_models(target_path=args.model, meta_path=args.meta, filter_targets=[str(goal_name)],
+    items = resolve_target_models(target_path=args.model, filter_targets=[str(goal_name)],
                                   kind="목표(--find)", values=True)
     item = items[0]
     meta, pipe, target = item["meta"], item["pipeline"], item["target"]
@@ -4088,10 +4071,6 @@ def main():
         help="학습 산출물 버전 폴더 경로(예: sample_v2_ml_data/v1/) 또는 개별 .joblib 파일 경로"
     )
     parser.add_argument(
-        "--meta",
-        help="개별 .joblib 지정 시 동반할 .json 메타데이터 파일 경로 (생략 시 동일 폴더 자동 탐지)"
-    )
-    parser.add_argument(
         "--targets", "-y",
         help="예측할 특정 타겟 목록 (쉼표 구분, 폴더 모드에서 생략 시 폴더 내 모든 타겟 모델 자동 추론)"
     )
@@ -4110,7 +4089,6 @@ def main():
     parser.add_argument("--header-row", type=int, help="컬럼명 헤더 행 번호 (1-based, 미지정 시 상단 빈 행 자동 건너뜀)")
     parser.add_argument("--unit-row", type=int, help="단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
-    parser.add_argument("--encoding", help="결과 CSV 저장 인코딩 (기본값: Windows Excel 최적화 cp949)")
     parser.add_argument("--overwrite", action="store_true",
                         help="--save 파일이 이미 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--find", help="모델 반대 찾기 목표 ('생산효율=50', 숫자 타겟). --vary와 함께")
