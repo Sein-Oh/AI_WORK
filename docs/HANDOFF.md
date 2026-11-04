@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.39**, **office-cli 1.4.38**
+- main 기준 도구 버전: **ml-kit 2.9.40**, **office-cli 1.4.38**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -75,6 +75,7 @@
 | ml-kit 2.9.36 | 2.9.35 회귀 수정: `ml_map.py --points`에서 위치·단이 다른 키 열(`온도_1`과 데이터 `온도(1)`, `온도_상`과 `온도(상)`, `압력1`과 `압력(1단)`)을 말없이 빼고 `VERIFIED`로 내던 문제. `-y` 이름을 뺀 나머지를 기호 없이 비교하고 한쪽이 다른 쪽을 포함해도 비슷한 열로 보아 `[후보]`로 멈춤 |
 | ml-kit 2.9.37 | En-Genius 스킬로 실행하면 데이터 폴더(오류 로그)를 `<사용자>\Documents\En-Genius\CLI-data\ml-kit\data`에 둠. `ML_KIT_DATA_DIR`가 있으면 그것이 먼저. 모델·보고서는 지금처럼 데이터 파일 옆 |
 | ml-kit 2.9.38 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\ml-kit`를 실행: OpenCode와 같은 데이터 폴더 |
+| ml-kit 2.9.40 | 회사 PC Gemma 시험 R1·R2가 opencode 명령 시간 제한(120초)에 끊김 -> 성능예측표 후보 학습을 저장하며 100초 전에 `CONTINUE:`로 멈추고 같은 명령으로 이어서 (R10). SKILL·전역 지침에 `CONTINUE:` 행동, 채점기는 CONTINUE 뒤 재실행을 반복으로 세지 않음 |
 | ml-kit 2.9.39 | 학습 결과에 타겟별 중요 입력 `top_features`(최고 모델의 순열 중요도 비중, 최대 5개, 원래 열 이름)와 preview의 "중요 입력". SKILL.md에 버전 비교(`--history`), 파일 예측 엑셀 저장(`--out`), 파생변수(`--eval`), 예측 범위·확률 열 추가. SKILL.md 옵션이 argparse에 있는지 검사하는 테스트 |
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
 
@@ -100,6 +101,7 @@
 ## 4. 지난 실기 결과 요약
 - 집 PC(2026-10-31, Office 2007, ml-kit 2.9.10 / office-cli 1.4.9): beta check 27/27(F7 포함), pytest 통과, ml-kit 실기 14/14, office-cli 실기 PASS 69·ENV-SKIP 2(PDF 추가 기능 없음), UNVERIFIED 0건, 눈 확인 V1~V7·V9~V10 통과
 - 회사 PC(2026-10-29~30): beta check 26/27(F2), Gemma 12/14(X1·X2에서 도구 코드 읽기 -> 지침 보강, X2 시나리오 변경)
+- 회사 PC(2026-11-04, `run_all_tests.py --only gemma`, opencode CLI 2.2.5, ml-kit 2.9.39): Gemma 12/14. R1(보고서)·R2(성능예측표)가 opencode 명령 시간 제한 120초에 끊겨 결과 JSON 없음(R1은 같은 명령 4번) -> 2.9.40 나눠서 진행(`CONTINUE:`). 나머지 12건 통과, X2 답변 판정 통과(참고)
 
 ## 5. 남은 일
 - 회사 PC 실기 결과 분석과 수정

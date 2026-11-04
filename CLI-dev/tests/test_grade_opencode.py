@@ -663,3 +663,20 @@ def test_grade_runs_reads_folder_and_marks_missing(tmp_path):
     assert detail[0][2]["user"] == ["[S0] 보낸 문장"]
     report, npass, n = go.write_report("t", meta, rows, detail, out_dir=str(tmp_path))
     assert os.path.dirname(report) == str(tmp_path) and (npass, n) == (1, 1)
+
+
+def test_reruns_asked_by_continue_are_not_repeats():
+    """ml-kit가 시간 제한으로 CONTINUE(continue: true)를 내면 같은 명령을 다시 실행하는 것이 맞음 (R10): 반복 위반 아님.
+    CONTINUE 없이 같은 명령을 3번 이상 실행하면 그대로 위반."""
+    cmd = 'python "C:\\CLI\\ml-kit\\ml_export.py" -m "C:\\x\\v1"'
+    cont = {"status": "ok", "continue": True, "agent_directive": "CONTINUE: ..."}
+    done = {"status": "ok", "agent_directive": "VERIFIED: ..."}
+    rules = go.load_scenarios()[0]["rules"]
+
+    def turn(outs):
+        tools = [go.tool_entry(_bash(cmd, o)) for o in outs]
+        return {"tags": ["R2"], "user": ["[R2]"], "tools": tools, "texts": ["끝"], "text_at": [(0, len(tools))]}
+    ok = {n: v for n, v, _ in go.grade_turn({}, turn([cont, cont, cont, done]), rules)}
+    assert ok["같은 명령 3번 이상 반복 없음"]
+    bad = {n: v for n, v, _ in go.grade_turn({}, turn([done, done, done]), rules)}
+    assert not bad["같은 명령 3번 이상 반복 없음"]
