@@ -2734,3 +2734,31 @@ def test_number_changes_words():
     assert reader.number_changes("정격 5V, 3 A", "정격 5.0 V, 3 A") == []
     assert reader.number_changes("5 V", "5.5 V") == ["5 V에서 5.5 V로"]
     assert reader.number_changes("5 V", "5 V, 2 A") == ["숫자 추가: 2 A"]
+
+
+# ---------------------------------------------------------------------------
+# --section 장절 번호 경계 (1.4.70)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sec,key,want", [
+    (["2. 전기", "2.1 정격"], "2.1", True),
+    (["2. 전기", "2.1 정격", "2.1.3 전압"], "2.1", True),          # 하위 절 포함
+    (["2. 전기", "2.10 기타"], "2.1", False),                      # 회귀: 2.10에도 맞았음
+    (["12. 부록", "12.1 표"], "2.1", False),                       # 회귀: 12.1에도 맞았음
+    (["1. 개요", "1.2.1 범위"], "2.1", False),
+    (["2.1. 정격"], "2.1.", True),
+    (["제2장 전기"], "2", True),
+    (["12. 부록"], "2", False),
+    (["A.1 부록 표"], "A.1", True),
+    (["1. SCOPE", "1.1. Scope"], "Scope", True),                   # 제목 글자는 부분 일치
+    (["3.2 정격 전압"], "정격", True),
+])
+def test_section_number_keeps_boundaries(sec, key, want):
+    assert reader.section_matches({"section": sec}, reader.section_key(key)) is want
+
+
+def test_search_section_number_excludes_2_10(tmp_path, capsys):
+    f = tmp_path / "규격.md"
+    f.write_text("# 2. 전기\n\n## 2.1 정격\n\n정격 전압 5 V\n\n## 2.10 기타\n\n정격 전압 12 V\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--file", str(f), "--section", "2.1")
+    assert code == 0 and out["count"] == 1 and "5 V" in json.dumps(out["matches"][0], ensure_ascii=False), out

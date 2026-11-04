@@ -22,7 +22,7 @@ metadata:
 |---|---|
 | 폴더 등록 | `python "C:\CLI\office-cli\reader.py" index --folder "<폴더>"` |
 | 파일 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` |
-| 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (이름 일부, 대소문자 무시. `units[].evidence`가 근거) |
+| 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |
 | 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A AND B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` |
 | 두 판 비교 | `python "C:\CLI\office-cli\reader.py" diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "<차이.xlsx>"]` |
 | 엑셀 표를 규격서와 대조 | `python "C:\CLI\office-cli\excel.py" check --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "<대조결과.xlsx>"]` |

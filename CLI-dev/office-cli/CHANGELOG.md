@@ -22,6 +22,8 @@
   (`_index_files`, 검색 때 원본이 바뀐 캐시 다시 읽기). 실패를 (경로, 수정 시각, 크기, 파서 버전)으로 `<캐시 폴더>/index_failures.json`에 기록해 다음 실행에서
   건너뛰고 `failures`/`skipped`/새 키 `refresh_failures`로 보고. 파일 하나만 주면 바로 다시 시도, `clear --all`은 기록도 지움. `progress`의 등록 수는 실제 등록 수.
   회귀 테스트: `tests/test_reader.py` `test_failing_file_is_remembered_so_continue_ends`(R10 실행마다 새 단계 1개), `test_stale_refresh_failure_is_remembered`.
+- [중요] `--section "2.1"`이 `2.10`, `12.1`에도 맞던 문제 (`section_matches`, read/search/diff/excel check 공통). 장절 번호로 보이는 값은 번호 경계를 지키고
+  하위 절(`2.1.3`)과 `제2장`은 포함, 제목 글자는 지금처럼 부분 일치. 회귀 테스트: `tests/test_reader.py` `test_section_number_keeps_boundaries`.
 
 ## [1.4.62] - 2026-11-04
 

@@ -1924,9 +1924,22 @@ def section_key(spec: Optional[str]) -> str:
     return re.sub(r"\s+", " ", spec or "").strip().lower()
 
 
+_SECTION_NUMBER = re.compile(r"(?:[a-z]\.)?\d+(?:\.\d+)*\.?")
+
+
+def _section_number_pattern(key: str) -> "re.Pattern[str]":
+    """장절 번호 '2.1'은 번호 경계를 지킴: 2.1, 2.1.3(하위 절), 제2.1절은 맞고 2.10, 12.1, 1.2.1은 맞지 않음."""
+    num = re.escape(key.rstrip("."))
+    return re.compile(rf"(?:(?<![\w.])|(?<=제)){num}(?!\d)")
+
+
 def section_matches(unit: Dict[str, Any], key: str) -> bool:
-    """장절 경로(section_text)에 --section 값이 들어 있는지 (대소문자·공백 무시). key는 section_key 결과."""
-    return key in re.sub(r"\s+", " ", section_text(unit)).lower()
+    """장절 경로(section_text)에 --section 값이 들어 있는지 (대소문자·공백 무시). key는 section_key 결과.
+    장절 번호로 보이는 값(2.1, 3, A.1)은 번호 경계를 지키고 하위 절을 포함, 제목 글자는 부분 일치."""
+    text = re.sub(r"\s+", " ", section_text(unit)).lower()
+    if _SECTION_NUMBER.fullmatch(key):
+        return bool(_section_number_pattern(key).search(text))
+    return key in text
 
 
 def where_text(unit: Dict[str, Any]) -> str:
