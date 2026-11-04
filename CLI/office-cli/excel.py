@@ -1280,7 +1280,7 @@ def cmd_write(args) -> Dict[str, Any]:
 
         # 2) never overwrite existing values without the user's consent (--append도 쓸 칸을 확인)
         if not args.overwrite and ws is not None:
-            filled = [fc for (a, b, c, d, _, _) in ops for fc in _filled_cells(ws, ws.Range(ws.Cells(a, b), ws.Cells(c, d)))]
+            filled = [fc for (a, b, c, d, _, _) in ops for fc in _filled_cells(ws.Range(ws.Cells(a, b), ws.Cells(c, d)))]
             if filled:
                 area = addr(ops[0][0], ops[0][1], ops[-1][2], max(o[3] for o in ops))
                 head = f"{area}에 값이 있는 칸 {len(filled)}개가 덮어써집니다: "
@@ -1836,7 +1836,7 @@ def _is_number(text: str) -> bool:
         return False
 
 
-def _filled_cells(ws: Any, rng: Any) -> List[Tuple[str, Any]]:
+def _filled_cells(rng: Any) -> List[Tuple[str, Any]]:
     """범위에서 값이나 수식이 있는 칸 [(주소, 값 또는 수식)] (문서 순서).
     빈 글("")을 내는 수식도 칸을 채운 것으로 봅니다 (값만 보면 확인 없이 덮어썼음)."""
     r0, c0 = int(rng.Row), int(rng.Column)
@@ -1911,7 +1911,7 @@ def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
             if used is None:
                 if args.type == "contents":
                     return "빈 범위 (사용 범위 밖)"
-            elif args.type == "contents" and "," not in str(used.Address) and not _filled_cells(ws, used):
+            elif args.type == "contents" and "," not in str(used.Address) and not _filled_cells(used):
                 return "값이 있는 칸이 없음"
     except Exception as e:
         rt.debug(f"바뀌는 것이 있는지 확인 생략: {e}")
@@ -1955,7 +1955,7 @@ def cmd_range(args) -> Dict[str, Any]:
         elif a in ("merge", "unmerge"):
             if a == "merge" and not args.overwrite:
                 top_left = addr(int(rng.Row), int(rng.Column))
-                lost = [(c, v) for c, v in _filled_cells(ws, rng) if c != top_left]
+                lost = [(c, v) for c, v in _filled_cells(rng) if c != top_left]
                 if lost:          # 병합하면 왼쪽 위 칸만 남음 (왼쪽 위가 비고 다른 칸에 값 하나만 있어도 지워짐)
                     head = f"병합하면 왼쪽 위 칸({top_left})만 남고 값 {len(lost)}개가 지워집니다: "
                     raise rt.UserDecisionError(
@@ -1998,7 +1998,7 @@ def cmd_range(args) -> Dict[str, Any]:
                 block = dws.Range(dws.Cells(dr, dc), dws.Cells(dr + nr - 1, dc + nc - 1))
                 src = (int(rng.Row), int(rng.Column), int(rng.Row) + nr - 1, int(rng.Column) + nc - 1)
                 same_sheet = str(dws.Name) == str(ws.Name)
-                filled = [(c, v) for c, v in _filled_cells(dws, block)
+                filled = [(c, v) for c, v in _filled_cells(block)
                           if not (same_sheet and _inside(parse_cell(c), src))]   # 원본과 겹치는 칸은 옮겨지는 값
                 if filled:
                     head = f"{addr(dr, dc, dr + nr - 1, dc + nc - 1)}에 값이 있는 칸 {len(filled)}개가 덮어써집니다: "
@@ -2047,7 +2047,7 @@ def cmd_range(args) -> Dict[str, Any]:
                 if bad:
                     problems.append(f"대상에서 원본과 다른 칸 {len(bad)}개: {', '.join(bad[:5])}")
             elif a == "clear" and args.type != "formats":
-                left = _filled_cells(ws, rng)
+                left = _filled_cells(rng)
                 if left:
                     problems.append(f"지운 범위에 값이 남은 칸 {len(left)}개: {', '.join(c for c, _ in left[:5])}")
             elif a in ("merge", "unmerge") and bool(rng.MergeCells) != (a == "merge"):
@@ -2136,7 +2136,7 @@ def _used_box(ws: Any) -> Optional[Tuple[int, int, int, int]]:
     used = ws.UsedRange
     r1, c1 = int(used.Row), int(used.Column)
     r2, c2 = r1 + int(used.Rows.Count) - 1, c1 + int(used.Columns.Count) - 1
-    if (r1, c1, r2, c2) == (1, 1, 1, 1) and not _filled_cells(ws, ws.Cells(1, 1)):
+    if (r1, c1, r2, c2) == (1, 1, 1, 1) and not _filled_cells(ws.Cells(1, 1)):
         return None
     return r1, c1, r2, c2
 
@@ -2283,7 +2283,7 @@ def range_lines(args) -> Dict[str, Any]:
         if a == "delete" and box is not None:
             used = t.app.Intersect(block, ws.UsedRange)
             if used is not None:
-                filled = _filled_cells(ws, used)
+                filled = _filled_cells(used)
         cells_text = ", ".join(c for c, _ in filled[:5]) + (" ..." if len(filled) > 5 else "")
         refs: List[str] = []
         ref_skipped: List[str] = []
@@ -2356,7 +2356,7 @@ def range_lines(args) -> Dict[str, Any]:
                     if last > n2 and got != last - n:
                         problems.append(f"사용 범위 끝이 {got}{'행' if axis == 'rows' else '열'} (기대 {last - n})")
                     elif last <= n2 and got >= n1:
-                        left = _filled_cells(ws, ws.Range(_lines_addr(axis, n1, n2)))
+                        left = _filled_cells(ws.Range(_lines_addr(axis, n1, n2)))
                         if left:
                             problems.append(f"지운 자리에 값이 남은 칸 {len(left)}개")
             if ref is not None:
@@ -2491,7 +2491,7 @@ def _row_key(row: List[Any]) -> str:
 def _adjacent_filled(ws: Any, r1: int, r2: int, col: int) -> bool:
     if col < 1 or col > XL_MAX_COL:
         return False
-    return bool(_filled_cells(ws, ws.Range(ws.Cells(r1, col), ws.Cells(r2, col))))
+    return bool(_filled_cells(ws.Range(ws.Cells(r1, col), ws.Cells(r2, col))))
 
 
 def _sort_fields(ws: Any, rng: Any, r1: int, c1: int, r2: int, order: List[Tuple[int, bool]], has_header: bool) -> None:

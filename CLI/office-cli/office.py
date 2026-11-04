@@ -135,12 +135,10 @@ def image_by_export(chart_obj: Any, stem: str) -> str:
     return path
 
 
-_LINE = {4, 63, 64, 65, 66, 67}
 _COLUMN = {51, 52, 53}
 _BAR = {57, 58, 59}
 _PIE = {5, 69, 70, -4102, -4120}
 _AREA = {1, 76, 77}
-_SCATTER = {-4169, 72, 73, 74, 75}
 
 
 def chart_data(chart_obj: Any) -> Dict[str, Any]:

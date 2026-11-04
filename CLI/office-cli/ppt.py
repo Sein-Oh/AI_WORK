@@ -33,7 +33,6 @@ import _runtime as rt  # noqa: E402
 TOOL = "ppt"
 
 PP_LAYOUT = {"title": 1, "text": 2, "title_only": 11, "blank": 12}
-PH_TITLE = (1, 3)          # ppPlaceholderTitle, ppPlaceholderCenterTitle
 PH_BODY = (2, 7)           # ppPlaceholderBody, ppPlaceholderObject
 MSO_GROUP = 6
 MSO_PLACEHOLDER = 14

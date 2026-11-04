@@ -1065,16 +1065,6 @@ def parse_color(value: Any) -> Optional[int]:
     raise rt.not_found("색상", s, list(COLOR_NAMES), extra=" ('#RRGGBB' 형식도 가능)", vocab=True)
 
 
-def bgr_to_hex(value: Any) -> Optional[str]:
-    try:
-        v = int(value)
-    except (TypeError, ValueError):
-        return None
-    if v < 0 or v > 0xFFFFFF:
-        return None
-    return f"#{v & 0xFF:02X}{(v >> 8) & 0xFF:02X}{(v >> 16) & 0xFF:02X}"
-
-
 THEMES: Dict[str, Dict[str, Any]] = {
     "navy": {"label": "네이비", "primary": "#1B365D", "secondary": "#4A777A", "accent": "#D9381E",
              "header_bg": "#1B365D", "header_fg": "#FFFFFF", "zebra": "#F4F7FB", "summary_bg": "#E8EEF5",

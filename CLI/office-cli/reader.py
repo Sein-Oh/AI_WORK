@@ -408,11 +408,6 @@ def _inside(bbox: Tuple[float, ...], box: Tuple[float, ...]) -> bool:
     return box[0] - 1 <= cx <= box[2] + 1 and box[1] - 1 <= cy <= box[3] + 1
 
 
-def _pdf_lines(page, tables: Optional[List[Dict[str, Any]]] = None) -> List[Any]:
-    """페이지의 내용을 읽는 순서로: 글 블록은 (줄 글, 글자 크기, 굵게) 목록, 표는 {"table": 행 목록}."""
-    return _order_items(_pdf_items(page, tables), float(page.rect.width))
-
-
 def _pdf_items(page, tables: Optional[List[Dict[str, Any]]] = None) -> List[Tuple[Tuple[float, ...], Any]]:
     """페이지의 (bbox, 내용) 목록. 표 영역 안의 글 블록은 표 행과 겹치므로 뺍니다."""
     tables = tables or []
