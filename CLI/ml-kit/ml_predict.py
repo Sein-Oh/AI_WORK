@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.39"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.40"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -105,6 +105,59 @@ def emit_json_response(payload: Dict[str, Any]) -> None:
 
 class InputError(ValueError):
     """User/agent input or data schema problem. Retrying with the same arguments will not help."""
+
+
+# ------------------------------------------------------------------------------
+# Time limit (2.9.40): OpenCode's command tool stops a command at 120 s (the LLM often does not pass a longer
+# timeout). Long work (ml_export input search, also inside ml_report) checks the clock before each slow step,
+# saves what it finished, and stops cleanly with a CONTINUE result: running the same command again continues.
+# ------------------------------------------------------------------------------
+TIME_LIMIT_ENV = "ML_KIT_TIME_LIMIT"       # seconds for one command; 0 = no limit (human test runners set 0)
+DEFAULT_TIME_LIMIT = 100.0                 # below OpenCode's 120 s, with room for the JSON and file writes
+TIME_RESERVE = 30.0                        # kept free after the last slow step (table, workbook, Excel check, report)
+RUN_START = time.monotonic()               # reset by run_cli for each command
+
+
+def time_limit() -> float:
+    raw = os.environ.get(TIME_LIMIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TIME_LIMIT
+    try:
+        v = float(raw)
+    except ValueError:
+        return DEFAULT_TIME_LIMIT
+    return float("inf") if v <= 0 else v
+
+
+class Unfinished(BaseException):
+    """Long work stopped at the time limit with its finished parts saved. BaseException so that no
+    'except Exception' on the way (e.g. ml_report's optional workbook) swallows it; run_cli turns it into an ok
+    result with continue: true and the same command in next_commands."""
+
+    def __init__(self, progress: str):
+        super().__init__(progress)
+        self.progress = progress
+
+
+def check_time(next_step_seconds: float, progress: str) -> None:
+    """Raises Unfinished when the next slow step (estimated next_step_seconds) would end past the time limit
+    minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run)."""
+    limit = time_limit()
+    if limit == float("inf"):
+        return
+    if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
+        raise Unfinished(progress)
+
+
+def unfinished_payload(exc: "Unfinished") -> Dict[str, Any]:
+    cmd = command_text()
+    return {
+        "status": "ok", "verified": False, "continue": True, "progress": exc.progress,
+        "next_commands": [cmd] if cmd else [],
+        "agent_directive": ("CONTINUE: 아직 끝나지 않았습니다. 명령 시간 제한 때문에 나눠서 진행하며, 지금까지 한 일은 저장되어 있습니다. "
+                            + ("next_commands의 명령을" if cmd else "방금 실행한 명령을")
+                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). 끝나면 VERIFIED 결과가 나옵니다."),
+    }
 
 
 class ColumnNameError(InputError):
@@ -233,8 +286,14 @@ def write_error_log(payload: Dict[str, Any], trace: str = "", argv: Optional[Lis
 def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     """Runs a tool body, guaranteeing exactly one JSON line on stdout and exit code 0/1/130.
     Failures (exit 1) are appended to <data>/logs/errors.txt; interruptions (130) are not."""
+    global RUN_START
+    RUN_START = time.monotonic()
     try:
         result = execute()
+    except Unfinished as u:
+        sys.stderr.write(f"[STATUS] 시간 제한으로 여기서 멈춤 (저장됨, 같은 명령으로 이어서): {u.progress}\n")
+        emit_json_response(_with_recovered(unfinished_payload(u)))
+        return
     except KeyboardInterrupt as e:
         sys.stderr.write("\n[ERROR] 실행 중단 (KeyboardInterrupt)\n")
         emit_json_response(_with_recovered(error_payload(e)))
@@ -1581,16 +1640,23 @@ def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
     --data-row dropped (several options change, so a full command, R8); option text when the running program is not
     an ml-kit command (in-process use)."""
     opts = f"--header-row {header_row}" + (f" --unit-row {unit_row}" if unit_row else "")
+    cmd = command_text(drop=LAYOUT_OPTS)
+    return f"{cmd} {opts}" if cmd else opts
+
+
+def command_text(drop: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """The running ml-kit command as one full command line (python, absolute script and path options), without the
+    options in drop. None when the running program is not an ml-kit command (in-process use)."""
     argv = CURRENT_ARGV if CURRENT_ARGV is not None else list(sys.argv)
     script = os.path.basename(argv[0] or "") if argv else ""
     if not (script.startswith("ml_") and script.endswith(".py")):
-        return opts
+        return None
     out: List[str] = []
     i = 1
     while i < len(argv):
         a = str(argv[i])
         key, has_eq = a.split("=", 1)[0], "=" in a
-        hit = [o for o in LAYOUT_OPTS if o == key or (key.startswith("--") and len(key) > 3 and o.startswith(key))]
+        hit = [o for o in (drop or {}) if o == key or (key.startswith("--") and len(key) > 3 and o.startswith(key))]
         if len(hit) == 1:
             i += 1 if has_eq else 2
             continue
@@ -1600,7 +1666,7 @@ def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
             continue
         out.append(quote_arg(a))
         i += 1
-    return " ".join([f"python {quote_arg(os.path.abspath(argv[0]))}"] + out + [opts])
+    return " ".join([f"python {quote_arg(os.path.abspath(argv[0]))}"] + out)
 
 
 def _numeric_share(cells: List[str]) -> float:

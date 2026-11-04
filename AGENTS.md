@@ -35,8 +35,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    - 사람용 실기 테스트 러너(`tools/run_win_tests.py`)는 계약 대상이 아니다. 단, 에이전트용 모드(`--agent` 등)는 계약을 지킨다.
 2. exit 0 = ok, 1 = error, 2 = 인자 오류, 130 = 중단.
    - 성공: `"status": "ok"`, `agent_directive`는 `VERIFIED:`(도구가 결과를 확인함) 또는 `UNVERIFIED:`(확인하지 못함, 재시도 없이 보고)로 시작.
+     긴 작업이 명령 시간 제한(에이전트 실행 도구 120초) 전에 멈추면 `CONTINUE:` + `"continue": true` + `next_commands`(같은 명령): 한 일은 저장, 같은 명령을 다시 실행하면 이어서 진행 (R10).
    - 실패: `"status": "error"`, `agent_directive`는 `STOP_RETRY:`(입력/데이터 문제. message에 `[추천]`이 있으면 1회만 재시도(`python`으로 시작하는 전체 명령이면 그대로, 아니면 그 값으로 바꿔서), `[후보]`면 사용자에게 선택 요청) 또는 `ERROR:`(내부 오류, 재시도 금지).
-   - 공통 키·문구·함수의 구현 규칙은 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)을 따른다.
+   - 공통 키·문구·함수의 구현 규칙은 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R10)을 따른다.
 3. 모든 진입점은 공통 런타임의 `run_cli()` + `JsonArgumentParser`를 사용한다.
 4. CLI 인자·JSON 키는 바꿔도 된다 (베타, 호환 불필요). 바꾸면 SKILL.md·README.md·CHANGELOG.md와 테스트를 같은 커밋에서 함께 고친다.
 5. 문자 규칙(아래)을 지킨다.

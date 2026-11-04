@@ -638,6 +638,7 @@ def main():
     parser.add_argument("--log-dir", default=os.path.join(DEV, "tools", "test_logs"),
                         help="AI 판독용 로그 폴더 (기본: tools/test_logs, GitHub 웹으로 docs/test_logs/에 업로드)")
     args = parser.parse_args()
+    os.environ["ML_KIT_TIME_LIMIT"] = "0"     # 사람이 돌리는 실기 러너: 명령 시간 제한(에이전트용 100초) 끔
     only, bad = parse_only(args.only)
     if bad:
         parser.error(f"알 수 없는 항목: {', '.join(bad)} (가능: {','.join(TEST_IDS)})")

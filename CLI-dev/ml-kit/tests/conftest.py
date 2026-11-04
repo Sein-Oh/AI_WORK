@@ -23,6 +23,8 @@ def _mlkit_data_dir(tmp_path_factory):
     os.environ["ML_KIT_DATA_DIR"] = str(tmp_path_factory.mktemp("mlkit_data"))
     # ml_report.py가 성능예측표(재학습, 몇 분)까지 만들지 않게 한다: test_report_export.py의 성능예측표 검사만 켠다
     os.environ["ML_KIT_SKIP_EXPORT"] = "1"
+    # 명령 시간 제한(2.9.40)은 끔: 세션이 길어도 학습이 멈추지 않게. 시간 제한 테스트는 값을 직접 줌
+    os.environ["ML_KIT_TIME_LIMIT"] = "0"
     yield os.environ["ML_KIT_DATA_DIR"]
     if old is None:
         os.environ.pop("ML_KIT_DATA_DIR", None)

@@ -345,6 +345,7 @@ def main(argv=None):
     ap.add_argument("--only", help="실행할 묶음 (쉼표: H,B,C,D,E,F,G)")
     ap.add_argument("--agent", action="store_true", help="에이전트용: 로그는 stderr, stdout은 결과 JSON 1줄")
     args = ap.parse_args(argv)
+    os.environ["ML_KIT_TIME_LIMIT"] = "0"     # 사람이 돌리는 점검: ml-kit 명령 시간 제한(에이전트용 100초) 끔
     groups = {g for g in (args.only or ",".join(GROUPS)).upper().replace(" ", "").split(",") if g}
     bad = sorted(groups - set(GROUPS))
     if bad or not groups:

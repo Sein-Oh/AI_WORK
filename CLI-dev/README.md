@@ -72,7 +72,8 @@ CLI-dev/<tool>/
 ## 모든 도구가 지키는 ACI 공통 계약
 
 1. **stdout = 정확히 1줄 JSON.** 진행 로그·표·경고는 모두 stderr.
-2. 성공: exit 0, `"status": "ok"`, `agent_directive`가 `VERIFIED:`로 시작.
+2. 성공: exit 0, `"status": "ok"`, `agent_directive`가 `VERIFIED:`(확인함) 또는 `UNVERIFIED:`(확인 못 함, R1)로 시작.
+   긴 작업이 시간 제한 전에 멈추면 `CONTINUE:` + `"continue": true`, 같은 명령을 다시 실행하면 이어서 진행 (R10).
 3. 실패: exit 1(인자 오류 2, 중단 130), `"status": "error"`, `agent_directive`가
    - `STOP_RETRY:` - 입력/데이터 문제. message에 `[추천]`이 있으면 1회만 재시도 (전체 명령이면 그대로, 아니면 그 값으로 바꿔서. R8).
    - `ERROR:` - 내부 오류. 재시도 금지.
@@ -168,3 +169,14 @@ CLI-dev/<tool>/
 각 도구는 위 규칙마다 회귀 테스트를 둔다: `verified`/`UNVERIFIED:`, 0건 응답, `truncated` 키, `recovered`(잠금 모의),
 `retry_fs`의 재시도 대상 구분, `remove_tree`의 사용자 경로 거부, `missing_library` 응답, errors.txt(exit 1/2 기록, 130 미기록, 회전),
 `-h` stdout 1줄, `--dry-run`이 파일을 바꾸지 않음.
+
+### R10. 긴 작업은 나눠서 진행 (`CONTINUE:`)
+- 에이전트의 명령 실행 도구는 명령을 시간 제한(OpenCode 120초)에 끊는다. 끊기면 결과 JSON이 없어 LLM이 같은 명령을 반복한다 (2026-11-04 회사 PC Gemma 시험 R1, R2).
+- 오래 걸리는 단계(재학습 등)는 끝낸 결과를 디스크에 저장하고, 다음 단계 전에 시계를 본다 (`check_time`). 제한(`ML_KIT_TIME_LIMIT`, 기본 100초)에서 여유 30초를 뺀 시각을 넘을 것 같으면
+  `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [같은 명령]`,
+  `agent_directive` = `CONTINUE: ...`(exit 0)을 낸다. 오류 로그에는 남기지 않는다.
+- 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행한다. 실행마다 새 단계를 최소 1개는 하므로 반복하면 반드시 끝난다.
+- LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 (최대 10번).
+- 사람이 돌리는 점검 러너(`run_beta_check.py`, 실기 러너)와 테스트는 `ML_KIT_TIME_LIMIT=0`(제한 없음).
+- 현재 ml-kit만 해당 (`ml_export.py`의 입력 고르기, 그것을 부르는 `ml_report.py`). 새 도구에 긴 작업이 생기면 같은 이름·같은 키로 구현한다.
+
