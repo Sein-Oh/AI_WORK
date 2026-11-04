@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.59"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.60"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -296,6 +296,8 @@ _RECOVERED: List[str] = []
 def note_recovered(msg: str) -> None:
     """Records a JIT recovery that changed the result (e.g. saved under a new name); reported as JSON `recovered`."""
     msg = str(msg)[:200]
+    if msg in _RECOVERED:          # the same recovery for every target of one run is reported once
+        return
     sys.stderr.write(f"[WARN] {msg}\n")
     _RECOVERED.append(msg)
 
@@ -695,6 +697,8 @@ _WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
 _WHERE_OR = re.compile(r"\s+(?:or|OR|Or|또는)\s+|\s*\|\|\s*")
 _WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
 _WHERE_QUOTED = re.compile(r"(\"[^\"]*\"|'[^']*')")
+_WHERE_WORD = re.compile(f"(?P<and>{_WHERE_AND.pattern})|(?P<or>{_WHERE_OR.pattern})|(?P<has>{_WHERE_CONTAINS.pattern})")
+_WHERE_OP = re.compile(r">=|<=|!=|==|=>|=<|<>|=!|>|<|=|~")
 _WHERE_DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?")
 WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
               "값에 ; | 가 있으면 작은따옴표로 감쌈. 예: 생산효율 > 90; 라인 = B | 라인 = C)")
@@ -739,7 +743,70 @@ def _where_parts(text: str) -> Optional[List[List[Cond]]]:
 
 
 def _where_value_text(v: str) -> str:
-    return f"'{v}'" if re.search(r"[;|]", v) or v != v.strip() else v
+    """A value as written in a condition: in single quotes when it holds ; | an operator sign or a joining word
+    ('불량 포함 시료', 'A and B'), so the text reads back as the same value."""
+    quote = re.search(r"[;|]", v) or v != v.strip() or _WHERE_WORD.search(f" {v} ") or _WHERE_OP.search(v)
+    return f"'{v}'" if quote else v
+
+
+def _where_words(part: str) -> Tuple[str, bool]:
+    """Joining words outside a value -> the notation (' and ' -> '; ', ' or ' -> ' | ', '<열> 포함 <값>' -> '~'),
+    and whether such a word was left inside a value. A word is a joint only where it can be one: 'and' / 'or' after
+    a condition with an operator and before another '<열> <연산자>', '포함' right after a column name (no operator
+    yet in the condition). '비고 = 불량 포함 시료' keeps its value."""
+    out: List[str] = []
+    pos = 0
+    has_op = False            # the current condition (since the last ; | or joint) has an operator
+    kept = False
+    for m in _WHERE_WORD.finditer(part):
+        before = part[pos:m.start()]
+        cut = max(before.rfind(";"), before.rfind("|"))
+        has_op = bool(_WHERE_OP.search(before[cut + 1:])) if cut >= 0 else has_op or bool(_WHERE_OP.search(before))
+        out.append(before)
+        rest = part[m.end():]
+        nxt = re.search(r"[;|]", rest)
+        upto = rest[:nxt.start()] if nxt else rest
+        cond = re.split(f"{_WHERE_AND.pattern}|{_WHERE_OR.pattern}", upto)[0]
+        if m.group("has"):
+            if has_op:
+                out.append(m.group(0))
+                kept = True
+            else:
+                out.append(" ~ ")
+                has_op = True
+        elif has_op and (_WHERE_OP.search(cond) or _WHERE_CONTAINS.search(cond)):
+            out.append("; " if m.group("and") else " | ")
+            has_op = False
+        else:
+            out.append(m.group(0))
+            kept = True
+        pos = m.end()
+    out.append(part[pos:])
+    return "".join(out), kept
+
+
+_WHERE_SIZE_OPS = (">", "<", ">=", "<=")
+
+
+def _where_size_ok(v: str) -> bool:
+    n = coerce_numeric(pd.Series([v])).iloc[0]
+    return (n is not None and n == n) or bool(_WHERE_DATE.fullmatch(v.strip()))
+
+
+def _where_size_value(groups: List[List[Cond]], option: str) -> List[List[Cond]]:
+    """A size comparison (> < >= <=) needs a number or a date: '9 0' -> STOP_RETRY [추천] '90' (spaces removed, one
+    meaning), other text -> STOP_RETRY (a text value compared by size matched no row without a word)."""
+    bad = [(c, o, v) for g in groups for c, o, v in g if o in _WHERE_SIZE_OPS and not _where_size_ok(v)]
+    if not bad:
+        return groups
+    c, o, v = bad[0]
+    fix = re.sub(r"\s+", "", v)
+    if len(bad) == 1 and fix != v and _where_size_ok(fix):
+        fixed = [[(c2, o2, fix if (c2, o2, v2) == bad[0] else v2) for c2, o2, v2 in g] for g in groups]
+        raise InputError(f"{option}의 '{c} {o} {v}'에서 크기 비교 값 '{v}'이(가) 숫자로 읽히지 않습니다 (가운데 공백). "
+                         f"[추천] {_where_retry(option, where_text(fixed))}")
+    raise InputError(f"{option}의 '{c} {o} {v}'에서 크기 비교(> < >= <=) 값 '{v}'이(가) 숫자나 날짜(YYYY-MM-DD)가 "
+                     f"아닙니다. 글자 값은 = != ~로 비교하십시오.")
 
 
 def where_text(groups: List[List[Cond]]) -> str:
@@ -761,9 +828,11 @@ def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
     """Condition text -> OR groups [[(column, op, value), ...], ...] (every condition of a group must hold).
     Notation with one meaning (==, =>, <>, AND, OR) -> STOP_RETRY [추천] the command with the fixed text."""
     raw = str(text).strip()
+    kept: List[bool] = []
 
     def fix(part: str) -> str:
-        part = _WHERE_CONTAINS.sub(" ~ ", _WHERE_OR.sub(" | ", _WHERE_AND.sub("; ", part)))
+        part, k = _where_words(part)
+        kept.append(k)
         for a, b in _WHERE_FIXES:
             part = part.replace(a, b)
         return part
@@ -772,9 +841,12 @@ def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
     if groups is None:
         raise InputError(f"{option} 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
     if fixed != raw:
+        # a word or sign left inside a value ('불량 포함 시료') is quoted in the [추천] so it stays the value
+        quoted = any(kept) or any(_where_value_text(v) != v for g in groups for _, _, v in g)
         raise InputError(f"{option} 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;, 또는은 |). "
-                         f"형식: {WHERE_FORM}. [추천] {_where_retry(option, where_text(groups))}")
-    return groups
+                         + ("값 안의 낱말(포함, and, or)과 기호는 바꾸지 않았습니다. 값을 작은따옴표로 감싸세요. " if quoted else "")
+                         + f"형식: {WHERE_FORM}. [추천] {_where_retry(option, where_text(groups))}")
+    return _where_size_value(groups, option)
 
 
 def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "--where",
@@ -787,13 +859,31 @@ def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "-
     return [[(rmap[c], o, v) for c, o, v in g] for g in groups]
 
 
+def _text_column(series: pd.Series, text: pd.Series) -> bool:
+    """A column of text values: not a number column, and some filled cell is not a number or is a code with a
+    leading zero ('01'). '= 01' compares such a column as text ('01' is not '1')."""
+    if pd.api.types.is_numeric_dtype(series):
+        return False
+    filled = text[text != ""]
+    if filled.empty:
+        return False
+    if coerce_numeric(filled).isna().any():
+        return True
+    return bool(filled.str.match(r"^[-+]?0\d").any())
+
+
 def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
+    """Rows meeting one condition. A blank cell never meets '!=' (an empty cell is not a value that differs)."""
     text = series.map(lambda v: "" if v is None or (isinstance(v, float) and v != v) else str(v).strip())
+    blank = (text == "").to_numpy(dtype=bool)
     if op == "~":
         return text.str.casefold().str.contains(val.strip().casefold(), regex=False).to_numpy(dtype=bool)
     vnum = coerce_numeric(pd.Series([val])).iloc[0]
     cmp = {"=": np.equal, "!=": np.not_equal, ">": np.greater, "<": np.less, ">=": np.greater_equal,
            "<=": np.less_equal}[op]
+    if op in ("=", "!=") and _text_column(series, text):
+        eq = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
+        return eq if op == "=" else ~eq & ~blank
     if vnum == vnum and vnum is not None:
         num = coerce_numeric(series).to_numpy(dtype=float)
         ok = ~np.isnan(num)
@@ -802,7 +892,7 @@ def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
         if op in ("=", "!="):        # a text cell against a number: compared as text
             tv = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
             out[~ok] = tv[~ok] if op == "=" else ~tv[~ok]
-        return out
+        return out & ~blank if op == "!=" else out
     if _WHERE_DATE.fullmatch(val.strip()):
         dt = parse_datetime(series)
         vd = pd.Timestamp(val.strip())
@@ -815,11 +905,11 @@ def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
         out[ok] = cmp(left.to_numpy(), np.datetime64(vd))
         if op == "!=":
             out[~ok] = True
-        return out
+        return out & ~blank if op == "!=" else out
     if op not in ("=", "!="):
         return np.zeros(len(series), dtype=bool)   # a size comparison with a text value: no row
     eq = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
-    return eq if op == "=" else ~eq
+    return eq if op == "=" else ~eq & ~blank
 
 
 def where_mask(df: pd.DataFrame, groups: List[List[Cond]]) -> np.ndarray:
@@ -1851,6 +1941,21 @@ def _unit_text(t: str) -> bool:
     return len(t) <= 12 and t.count(" ") <= 1
 
 
+_KOREAN_UNITS = {"개", "회", "초", "분", "시간", "일", "주", "월", "년", "원", "천원", "만원", "명", "건", "점", "매", "장",
+                 "대", "도", "배", "번", "개월", "퍼센트", "미터", "그램", "리터", "톤", "와트", "볼트", "암페어"}
+
+
+def _unit_shaped(t: str) -> bool:
+    """Text a unit is written as: some letter, digit or sign that is not Hangul ('kg/cm2 G', '°C', '%', 'mm'), or a
+    Korean unit word ('개', '시간'). Hangul words ('점검중', '센서고장') are not units."""
+    t = t.strip()
+    if not t or not _unit_text(t):
+        return False
+    if t in _KOREAN_UNITS:
+        return True
+    return any(not ("\uac00" <= ch <= "\ud7a3" or "\u3131" <= ch <= "\u318e" or ch.isspace()) for ch in t)
+
+
 UNIT_SCAN_ROWS = 50 * UNIT_SCAN_CELLS    # rows below a unit row read for the judgment (bounded on a large sheet)
 
 
@@ -1899,7 +2004,7 @@ def _unit_cell(v: Any, below: List[Any]) -> str:
             return "data"
         if _blank_mark(t):
             return "blank"
-        return "unit" if _unit_text(t) else "note"
+        return "unit" if _unit_shaped(t) else "note"      # '점검중', '센서고장' are not units
     x = _number(v)
     nums = [n for n in (_number(b) for b in below) if n is not None]
     if x is None or not nums or x == 0:
@@ -2156,6 +2261,80 @@ def normalize_category(series: pd.Series) -> pd.Series:
         t = str(v).strip()
         return np.nan if t in _NA_PLACEHOLDERS else t
     return series.astype("object").map(_one).astype("object")
+
+
+CATEGORY_CANDIDATES_MAX = 10    # [후보] lists at most this many training categories (R8)
+
+
+def _category_key(v: Any) -> str:
+    """The form two category values are matched in: full-width -> half-width (NFKC), trimmed, case-folded."""
+    import unicodedata
+    return unicodedata.normalize("NFKC", str(v)).strip().casefold()
+
+
+def match_categories(values: Any, known: List[Any]) -> Tuple[Dict[str, str], List[str]]:
+    """Given category values against the training categories: ({value: training category} for the values that differ
+    from exactly one training category only by case, surrounding spaces or full-width letters, [values matching none]).
+    A value equal to a training category is kept; one matching two training categories ('a' for 'A' and 'a') is unseen."""
+    known_s = [str(k) for k in known]
+    by_key: Dict[str, List[str]] = {}
+    for k in known_s:
+        by_key.setdefault(_category_key(k), []).append(k)
+    fixes: Dict[str, str] = {}
+    unseen: List[str] = []
+    for v in dict.fromkeys(str(x) for x in values):
+        if v in known_s:
+            continue
+        hit = by_key.get(_category_key(v), [])
+        if len(hit) == 1:
+            fixes[v] = hit[0]
+        else:
+            unseen.append(v)
+    return fixes, unseen
+
+
+def category_candidates(known: List[Any]) -> str:
+    """'[후보] A, B, C' of the training categories (at most CATEGORY_CANDIDATES_MAX, the rest counted)."""
+    known = [str(k) for k in known]
+    text = f"[후보] {', '.join(known[:CATEGORY_CANDIDATES_MAX])}"
+    if len(known) > CATEGORY_CANDIDATES_MAX:
+        text += f" (학습 범주 {len(known)}개 중 {CATEGORY_CANDIDATES_MAX}개)"
+    return text
+
+
+def _category_recovered(col: str, fixes: Dict[str, str]) -> None:
+    for given, k in fixes.items():
+        note_recovered(f"'{col}' 값 '{given}'이(가) 학습 범주와 대소문자·공백·전각만 달라 -> '{k}'(으)로 맞춰 예측")
+
+
+def align_categories(df: pd.DataFrame, schema: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Category inputs of df (file or -i) matched to the training categories in place (match_categories, reported with
+    note_recovered). Returns {column: values matching no training category} (the caller warns about them)."""
+    left: Dict[str, List[str]] = {}
+    for col, known in (schema.get("categorical") or {}).items():
+        if col not in df.columns:
+            continue
+        s = normalize_category(df[col])
+        fixes, unseen = match_categories(s.dropna(), known)
+        if fixes:
+            df[col] = s.map(lambda v: fixes.get(v, v))
+            _category_recovered(col, fixes)
+        if unseen:
+            left[col] = unseen
+    return left
+
+
+def fixed_category_value(col: str, value: Any, known: List[Any], option: str = "-i") -> str:
+    """One fixed category input (--sweep / --maximize / --find): the training category it means, or STOP_RETRY with the
+    training categories as [후보] (an unseen category would be predicted as the baseline without a word)."""
+    v = normalize_category(pd.Series([value])).iloc[0]
+    if isinstance(v, str):
+        fixes, unseen = match_categories([v], known)
+        if not unseen:
+            _category_recovered(col, fixes)
+            return fixes.get(v, v)
+    raise InputError(f"{option}의 '{col}={value}'은(는) 학습 때 없던 값이라 예측할 수 없습니다. "
+                     f"학습 범주 중 하나로 다시 지정하십시오. {category_candidates(known)}")
 
 
 def prepare_features(df: pd.DataFrame, schema: Dict[str, Any]) -> pd.DataFrame:
@@ -3497,14 +3676,36 @@ def _apply_layout(args: argparse.Namespace, layout: str) -> None:
         setattr(args, k, v)
 
 
-def _layout_note(df: pd.DataFrame) -> str:
-    """'레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음' (+ unit row / first data row) for the recovered list."""
-    text = f"레이아웃 옵션이 이 파일과 달라 머리글 {df.attrs.get('header_row', 1)}행으로 읽음"
+def _layout_note(df: pd.DataFrame, had_options: bool) -> str:
+    """The recovered line of a layout the tool chose: '레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음(, 단위 M행)
+    (, 데이터 K행부터)' when layout options were given, else '머리글 N행(, 단위 M행)(, 데이터 K행부터)(으)로 읽음'."""
+    parts = [f"머리글 {df.attrs.get('header_row', 1)}행"]
     if df.attrs.get("unit_row"):
-        text += f", 단위 {df.attrs['unit_row']}행"
+        parts.append(f"단위 {df.attrs['unit_row']}행")
     if df.attrs.get("data_row"):
-        text += f", 데이터 {df.attrs['data_row']}행부터"
-    return text
+        parts.append(f"데이터 {df.attrs['data_row']}행부터")
+    if had_options:
+        return f"레이아웃 옵션이 이 파일과 달라 {parts[0]}으로 읽음" + "".join(f", {x}" for x in parts[1:])
+    return ", ".join(parts) + ("로 읽음" if parts[-1].endswith("부터") else "으로 읽음")
+
+
+def _skipped_rows_warning(args: argparse.Namespace, df: pd.DataFrame) -> Optional[str]:
+    """The rows between the header (or unit row) and the first data row the tool chose (--data-row), with their
+    source row numbers: they are not predicted, so the user hears about them (warnings)."""
+    start = df.attrs.get("data_row")
+    if not start:
+        return None
+    first = int(df.attrs.get("unit_row") or df.attrs.get("header_row", 1)) + 1
+    rows = list(range(first, int(start)))
+    if not rows:
+        return None
+    try:
+        raw = read_raw_table(args.file)
+        shown = " / ".join(", ".join(c for c in _row_cells(raw, r - 1))[:60] for r in rows[:3] if r - 1 < len(raw))
+    except Exception:
+        shown = ""
+    return (f"파일 {', '.join(map(str, rows))}행은 데이터가 아닌 단위·메모 행으로 보고 건너뛰었습니다 (예측하지 않음)"
+            + (f": {shown}" if shown else ""))
 
 
 def _layout_candidates_text(rows: List[int]) -> str:
@@ -3543,6 +3744,7 @@ def _load_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, 
     reads every model input: recovered '레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음'. Several candidate rows
     stop with [후보]; no layout that fits stops with the loader's / the column check's message."""
     decimal_comma = any(bool(it["meta"].get("decimal_comma")) for it in model_items)
+    had_options = _has_layout(args)
 
     def _read() -> pd.DataFrame:
         return load_data_file(file_path=args.file, header_row=args.header_row, unit_row=args.unit_row,
@@ -3557,7 +3759,8 @@ def _load_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, 
             raise
         _apply_layout(args, layout)
         df = _read()
-        note_recovered(_layout_note(df))
+        note_recovered(_layout_note(df, had_options))
+        df.attrs["skipped_rows_warning"] = _skipped_rows_warning(args, df)
         return df
     layout, rows = _layout_fix(args, model_items, df)
     if rows:
@@ -3565,7 +3768,8 @@ def _load_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, 
     if layout is not None:
         _apply_layout(args, layout)
         df = _read()
-        note_recovered(_layout_note(df))
+        note_recovered(_layout_note(df, had_options))
+        df.attrs["skipped_rows_warning"] = _skipped_rows_warning(args, df)
     return df
 
 
@@ -3618,8 +3822,11 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
     is_unit = _looks_like_unit_row(raw, j, hdr)
     check_first = False
     if not is_unit and not _notes_row(raw, j):
-        # Fallback: text in the numeric inputs of the row (a unit row the rule did not accept) -> skip it
-        # when the next row reads as data
+        # Fallback: text in the numeric inputs of the row (a unit row the rule did not accept, 'kg/cm2 G') -> skip it
+        # when the next row reads as data. A row with a number or date ('점검중, 센서고장, 45') or with text that is
+        # not unit-shaped ('점검중, 센서고장') is data (its marks are imputed and reported as missing inputs).
+        if _row_has_data(raw, j) or not _unit_shaped_row(raw, j):
+            return ""
         try:
             auto = _layout_frame(raw, hdr, None, None)
         except Exception:
@@ -3639,6 +3846,12 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
                 (not check_first or _first_row_numeric(df, numeric or [])):
             return head + layout
     return ""
+
+
+def _unit_shaped_row(df_raw: pd.DataFrame, j: int) -> bool:
+    """Every filled cell of row j (missing marks are blank) is unit-shaped (_unit_shaped)."""
+    cells = [_cell_text(v) for v in df_raw.iloc[j].tolist() if not _blank_mark(_cell_text(v))]
+    return bool(cells) and all(_unit_shaped(c) for c in cells)
 
 
 def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
@@ -3720,6 +3933,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         is_inline = False
         source_desc = os.path.basename(args.file)
         file_warnings = layout_warnings(df_input, training=False)   # repeated header rows, totals rows
+        if df_input.attrs.get("skipped_rows_warning"):
+            file_warnings.insert(0, df_input.attrs["skipped_rows_warning"])
     else:
         raise InputError("추론할 입력 데이터(--file 또는 --input)를 지정해야 합니다.")
 
@@ -3780,6 +3995,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                 + (f" {hint}" if hint else ""))
         # '11.9%' next to '0.119' in one numeric input: no scale is sure (the same check as training)
         check_percent_mix(df_input, [c for c in numeric_inputs if c in df_input.columns], "입력 데이터 ")
+        # 'c' / ' C ' / full-width for the training category 'C' (match_categories, the same as --sweep / --find)
+        align_categories(df_input, meta["feature_schema"])
         df_evaled = apply_inference_evals(df_input, derived_evals)
 
         # Check required features
@@ -4196,11 +4413,13 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
             filled[f] = float(stats[f]["median"])
         elif f in schema.get("categorical", {}):
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오. "
-                             f"[후보] {', '.join(map(str, schema['categorical'][f][:20]))}")
+                             f"{category_candidates(schema['categorical'][f])}")
         else:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
     warnings: List[str] = []
     for f, v in fixed.items():
+        if f in schema.get("categorical", {}):
+            fixed[f] = fixed_category_value(f, v, schema["categorical"][f])
         if f not in numeric_in:
             continue
         st = stats.get(f)
@@ -4411,6 +4630,8 @@ def _base_inputs(args: argparse.Namespace, items: List[Dict[str, Any]], vary: Li
         raise InputError(f"{both}은(는) 바꿔 보는 입력이라 -i에 함께 줄 수 없습니다. -i에서 빼십시오.")
     warnings: List[str] = []
     for f in list(fixed):
+        if f in cats:
+            fixed[f] = fixed_category_value(f, fixed[f], cats[f])
         if f not in numeric:
             continue
         try:
@@ -4429,7 +4650,7 @@ def _base_inputs(args: argparse.Namespace, items: List[Dict[str, Any]], vary: Li
             filled[f] = float(stats[f]["median"])
         elif f in cats:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오. "
-                             f"[후보] {', '.join(map(str, cats[f][:20]))}")
+                             f"{category_candidates(cats[f])}")
         else:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
     if filled:
@@ -4686,6 +4907,33 @@ def execute_sweep(args: argparse.Namespace) -> Dict[str, Any]:
     return res
 
 
+SEARCH_RECHECK_TOL = 1e-6      # relative difference allowed between a reported and a re-predicted value
+
+
+def _recheck_solutions(items: List[Dict[str, Any]], base: Dict[str, Any], vary: List[str],
+                       solutions: List[Dict[str, Any]], conds: Optional[List[List[Cond]]], goal: str) -> List[str]:
+    """R1 check of --maximize / --minimize: every answer is predicted again from the inputs as reported (rounded) and
+    the fixed inputs, in one new call per model; the reported predictions must match and the --where condition must
+    hold. Returns what did not (empty = verified)."""
+    if not solutions:
+        return []
+    rows = pd.DataFrame({**{k: [v] * len(solutions) for k, v in base.items()},
+                         **{v: [s["inputs"][v] for s in solutions] for v in vary}})
+    frame = rows.copy()
+    for it in items:
+        frame[str(it["target"])] = _predict_rows(it, rows)
+    ok = where_mask(frame, conds) if conds else np.ones(len(solutions), dtype=bool)
+    bad: List[str] = []
+    for i, s in enumerate(solutions):
+        diff = [t for t, v in s["predictions"].items()
+                if abs(float(frame[t].iloc[i]) - float(v)) > SEARCH_RECHECK_TOL * max(1.0, abs(float(v))) + 1e-4]
+        if diff:
+            bad.append(f"답 {i + 1}: 다시 예측한 {', '.join(diff)} 값이 다름")
+        elif not ok[i]:
+            bad.append(f"답 {i + 1}: 적힌 입력값으로 다시 예측하면 조건을 만족하지 않음")
+    return bad
+
+
 def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
     goal_text = args.maximize if args.maximize else args.minimize
     sense = 1.0 if args.maximize else -1.0
@@ -4765,6 +5013,7 @@ def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
             sol["interval_90"] = {goal: [round_pred(float(r[goal]) + float(iv["residual_lower"])),
                                          round_pred(float(r[goal]) + float(iv["residual_upper"]))]}
         solutions.append(sol)
+    unverified = _recheck_solutions(items, info["base"], vary, solutions, conds, goal)
     warnings_out = list(info["warnings"])
     if skipped:
         warnings_out.append(f"분류 타겟 {skipped}은(는) 조건 찾기에서 뺐습니다 (숫자 타겟만)")
@@ -4789,8 +5038,10 @@ def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
         "filled_defaults": {k2: _r6(v) for k2, v in info["filled"].items()},
         "training_range": {v: [_r6(lows[j]), _r6(highs[j])] for j, v in enumerate(vary)},
         "method": method, "evaluations": evals["n"], "feasible_count": int(len(feas)),
-        "count": count, "solutions": solutions, "nearest_rows": near, "verified": True,
+        "count": count, "solutions": solutions, "nearest_rows": near, "verified": not unverified,
     }
+    if unverified:
+        res["unverified"] = unverified
     if not count:
         res["best_without_where"] = {"inputs": {v: _r6(best_free[v]) for v in vary},
                                      "predictions": {t: round_pred(float(best_free[t])) for t in names}}
@@ -4802,7 +5053,9 @@ def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
         res["preview"] = (f"{goal} {word} 조건{cond_txt}: " + ", ".join(f"{v}={_fmt(x)}" for v, x in s0["inputs"].items())
                           + f" -> {goal} {_fmt(s0['predictions'][goal])} | 답 {count}개 | 학습 범위 안에서만 찾음")
         res["agent_directive"] = (
-            "VERIFIED: 찾은 조합을 모델로 다시 예측해 조건을 확인했습니다. solutions(답 모두, 첫 번째가 가장 좋음)의 inputs와 predictions, "
+            ("VERIFIED: 답마다 적힌 입력값(inputs)으로 모델을 다시 예측해 predictions와 조건을 확인했습니다. " if not unverified else
+             f"UNVERIFIED: 다시 예측해 확인하지 못한 답이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
+            + "solutions(답 모두, 첫 번째가 가장 좋음)의 inputs와 predictions, "
             "nearest_rows(가까운 실측 행)를 알리세요. 학습 범위 안에서 모델이 예측한 조건이지 보장된 조건이 아니라는 점을 덧붙이세요."
             + (" warnings도 반드시 알리세요." if warnings_out else ""))
     else:

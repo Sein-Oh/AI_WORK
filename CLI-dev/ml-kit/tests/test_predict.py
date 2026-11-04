@@ -580,6 +580,22 @@ def test_maximize_with_constraint(whatif):
     assert "interval_90" in best and res["agent_directive"].startswith("VERIFIED")
 
 
+def test_search_rechecks_answers(whatif, monkeypatch):
+    """2.9.59: 'VERIFIED: 찾은 조합을 모델로 다시 예측해 조건을 확인했습니다'라고 했지만 다시 예측하지 않았다.
+    이제 적힌 inputs로 다시 예측해 predictions와 --where를 확인하고, 다르면 UNVERIFIED."""
+    import argparse
+    args = argparse.Namespace(model=whatif["v"], maximize="생산효율", minimize=None, vary="반응온도,압축압력",
+                              where="불순물 <= 80", input="촉매비율=1", targets=None)
+    res = mp.execute_search(args)
+    assert res["verified"] is True and res["agent_directive"].startswith("VERIFIED: 답마다 적힌 입력값"), res
+    real = mp._predict_rows
+    # the re-check predicts the (at most 5) answers in one call: a model that answers otherwise there is caught
+    monkeypatch.setattr(mp, "_predict_rows", lambda it, rows: real(it, rows) + (50.0 if len(rows) <= 5 else 0.0))
+    res = mp.execute_search(args)
+    assert res["verified"] is False and res["agent_directive"].startswith("UNVERIFIED"), res
+    assert res["unverified"] and "답 1" in res["unverified"][0], res["unverified"]
+
+
 def test_minimize_impossible_constraint_is_zero(whatif):
     res = run_tool("ml_predict.py", "-m", whatif["v"], "--minimize", "불순물", "--where", "생산효율 > 1000",
                    "--vary", "반응온도", "-i", "압축압력=3,촉매비율=1")
@@ -595,3 +611,57 @@ def test_whatif_argument_rules(whatif):
     assert proc.returncode == 2, res
     bad = run_fail("ml_predict.py", "-m", whatif["v"], "--maximize", "생산효율", "--vary", "반응온도", "--where", "불순물 == 80")
     assert '--where "불순물 = 80"' in bad["message"].split("[추천] ")[1]
+
+
+# ---- 범주 입력을 학습 범주와 맞추기 (2.9.60) --------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def line_model(tmp_path_factory):
+    work = tmp_path_factory.mktemp("line")
+    r = np.random.default_rng(5)
+    n = 240
+    t = r.uniform(200, 280, n)
+    line = np.array(["A", "B", "C"] * (n // 3))
+    y = 0.2 * t + np.select([line == "A", line == "B", line == "C"], [0, 10, 20]) + r.normal(0, 0.3, n)
+    data = write_df(work / "cat.csv", pd.DataFrame({"온도": t, "라인": line, "수율": y}))
+    return run_tool("ml_train.py", "-f", data, "-x", "온도,라인", "-y", "수율")["version_dir"]
+
+
+def test_whatif_unknown_category_stops_with_candidates(line_model):
+    """2.9.59: -i "라인=라인C"를 학습 범주와 대조하지 않아 기준값으로 예측하고 VERIFIED였다."""
+    for opt in (["--sweep", "온도"], ["--maximize", "수율", "--vary", "온도"], ["--find", "수율=60", "--vary", "온도"]):
+        bad = run_fail("ml_predict.py", "-m", line_model, *opt, "-i", "라인=라인C")
+        assert bad["agent_directive"].startswith("STOP_RETRY"), bad
+        assert "[후보] A, B, C" in bad["message"] and "라인C" in bad["message"], bad["message"]
+
+
+def test_whatif_category_case_width_space_recovered(line_model):
+    ref = run_tool("ml_predict.py", "-m", line_model, "--sweep", "온도=200:280:40", "-i", "라인=C")
+    for given in ("c", " C ", "Ｃ"):              # 소문자, 앞뒤 공백, 전각
+        res = run_tool("ml_predict.py", "-m", line_model, "--sweep", "온도=200:280:40", "-i", f"라인={given}")
+        assert res["fixed"] == {"라인": "C"}, res
+        assert [p["수율"] for p in res["points"]] == [p["수율"] for p in ref["points"]]
+        if given != " C ":                            # 앞뒤 공백은 읽을 때 이미 지워져 바뀐 것이 없다
+            assert any("'C'" in m for m in res.get("recovered", [])), res
+    res = run_tool("ml_predict.py", "-m", line_model, "--maximize", "수율", "--vary", "온도", "-i", "라인=b")
+    assert res["fixed"] == {"라인": "B"} and res.get("recovered"), res
+    res = run_tool("ml_predict.py", "-m", line_model, "--find", "수율=60", "--vary", "온도", "-i", "라인=a")
+    assert res.get("recovered") and res["fixed"] == {"라인": "A"}, res
+
+
+def test_predict_category_case_matched_like_whatif(line_model):
+    """일반 예측 -i도 같은 공통 함수: 대소문자만 다르면 맞추고 recovered, 그 밖은 unseen_category_warnings."""
+    ref = run_tool("ml_predict.py", "-m", line_model, "-i", "온도=250,라인=C")
+    res = run_tool("ml_predict.py", "-m", line_model, "-i", "온도=250,라인=c")
+    assert res["unseen_category_warning"] is False and res.get("recovered"), res
+    assert res["predictions_summary"]["수율"]["predictions"] == ref["predictions_summary"]["수율"]["predictions"]
+    res = run_tool("ml_predict.py", "-m", line_model, "-i", "온도=250,라인=라인C")
+    assert res["unseen_category_warning"] is True and "recovered" not in res, res
+
+
+def test_match_categories_ambiguous_not_fixed():
+    fixes, unseen = mp.match_categories(["a", "b ", "x"], ["A", "a", "B"])
+    assert fixes == {"b ": "B"} and unseen == ["x"]      # 'a'는 학습 범주 그대로 ('A'로 바꾸지 않음)
+    fixes, unseen = mp.match_categories(["ａ"], ["A", "a"])
+    assert fixes == {} and unseen == ["ａ"]          # 'A'와 'a' 둘 다 맞아 고를 수 없음

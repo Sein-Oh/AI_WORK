@@ -638,6 +638,41 @@ def test_where_mask_rules():
     assert list(mp.where_mask(df, mp.parse_where("b != B"))) == [True, True, False, True]
 
 
+def test_where_words_inside_value_are_kept():
+    """2.9.59: 값 안의 '포함'·'and'·'or'까지 바꿔 틀린 [추천](비고 ~ ...)을 냈다."""
+    g = mp.parse_where("비고 = 불량 포함 시료")
+    assert g == [[("비고", "=", "불량 포함 시료")]]
+    assert mp.parse_where("비고 = A and B | 라인 = C") == [[("비고", "=", "A and B")], [("라인", "=", "C")]]
+    with pytest.raises(mp.InputError) as e:                     # 진짜 표기 오류는 [추천], 값은 작은따옴표로
+        mp.parse_where("비고 == 불량 포함 시료 and 라인 = A")
+    msg = str(e.value)
+    assert "작은따옴표" in msg and msg.split("[추천] ")[1] == "비고 = '불량 포함 시료'; 라인 = A", msg
+    assert mp.parse_where(msg.split("[추천] ")[1]) == [[("비고", "=", "불량 포함 시료"), ("라인", "=", "A")]]
+    with pytest.raises(mp.InputError) as e:                     # 열 다음의 '포함'은 연산자
+        mp.parse_where("비고 포함 불량 and 생산효율 > 3")
+    assert str(e.value).split("[추천] ")[1] == "비고 ~ 불량; 생산효율 > 3"
+
+
+def test_where_not_equal_keeps_blank_and_size_value_checked():
+    df = pd.DataFrame({"c": [1.0, np.nan, 3.0], "t": ["A", "", "B"], "d": ["2026-01-01", None, "2026-01-02"]})
+    assert list(mp.where_mask(df, mp.parse_where("c != 1"))) == [False, False, True]     # 빈 칸은 빼지 않음
+    assert list(mp.where_mask(df, mp.parse_where("t != A"))) == [False, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("d != 2026-01-01"))) == [False, False, True]
+    with pytest.raises(mp.InputError) as e:
+        mp.parse_where("c > 9 0")
+    assert str(e.value).split("[추천] ")[1] == "c > 90"
+    with pytest.raises(mp.InputError) as e:
+        mp.parse_where("c >= 높음")
+    assert "[추천]" not in str(e.value) and "숫자" in str(e.value)
+
+
+def test_where_code_text_column_compares_as_text():
+    df = pd.DataFrame({"k": ["01", "1", "02"], "n": [1, 2, 1]})
+    assert list(mp.where_mask(df, mp.parse_where("k = 01"))) == [True, False, False]     # 글자 열: 글자 비교
+    assert list(mp.where_mask(df, mp.parse_where("k != 01"))) == [False, True, True]
+    assert list(mp.where_mask(df, mp.parse_where("n = 01"))) == [True, False, True]      # 숫자 열: 숫자 비교
+
+
 def test_no_exclude_column_still_finds_outliers_and_clean_data_has_no_key(tmp_path):
     f = tmp_path / "d.csv"
     _excl_frame().to_csv(f, index=False)

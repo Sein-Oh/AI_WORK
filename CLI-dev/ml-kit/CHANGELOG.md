@@ -8,6 +8,37 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.60] - 2026-11-04
+
+독립 검토에서 나온 예측 쪽 버그 수정 (`ml_predict.py`, 학습의 `--exclude-where` 포함). 회귀 테스트는 수정 전 실패를 확인했습니다.
+
+### 버그 수정
+- [치명] `--sweep`, `--maximize/--minimize`, `--find`의 `-i` 글자 입력을 학습 범주와 대조하지 않았음: `-i "라인=라인C"`나 `라인=c`가 어느 범주도 아닌
+  기준값으로 예측되고 경고 없이 `VERIFIED`. 이제 공통 함수 `match_categories`/`fixed_category_value`(PART C)로 대조:
+  대소문자·앞뒤 공백·전각만 다르고 학습 범주 하나와 맞으면 그 범주로 맞추고 `recovered`, 그 밖은 `STOP_RETRY` + `[후보] <학습 범주>`(10개까지).
+  일반 예측(`-i`, `-f`)도 같은 함수(`align_categories`)로 맞추고, 남은 값만 `unseen_category_warnings`. 빠진 글자 입력의 `[후보]`도 10개까지(R8).
+  같은 `recovered` 문구는 한 번만 적음(`note_recovered`, 타겟이 여럿일 때).
+  테스트: `test_predict.py` `test_whatif_unknown_category_stops_with_candidates`, `test_whatif_category_case_width_space_recovered`,
+  `test_predict_category_case_matched_like_whatif`, `test_match_categories_ambiguous_not_fixed`.
+- [중요] 예측 파일 레이아웃 자동 복구가 첫 데이터 행에 글자(`점검중`, `센서고장`)가 섞였다고 단위·메모 행으로 보고 그 데이터 행을 버렸음.
+  숫자·날짜가 하나라도 든 행과 글자 칸이 단위 모양이 아닌 행(한글 낱말)은 데이터로 남김(`_unit_shaped`, 단위 행 판단 `unit_row_verdict`도 같은 기준).
+  행을 건너뛰면 원본 행 번호와 내용을 `warnings`에. 레이아웃 옵션을 주지 않았을 때 `recovered`는 `머리글 N행, 데이터 K행부터로 읽음`
+  ("레이아웃 옵션이 이 파일과 달라"는 옵션을 줬을 때만). 테스트: `test_loading_layout.py` `test_first_data_row_with_text_marks_is_kept`,
+  `test_skipped_unit_row_is_in_warnings`, 기존 `recovered` 기대값 5곳.
+- [중요] `--exclude-where`/`--where`의 표기 고치기가 값 안의 `포함`/`and`/`or`까지 바꿔 틀린 `[추천]`을 냈음(`비고 = 불량 포함 시료` -> `비고 = 불량 ~ 시료`).
+  이제 조건을 잇는 자리에서만 바꾸고(`_where_words`), 다른 표기를 고친 `[추천]`에서는 그런 값을 작은따옴표로 감싸고 "값을 작은따옴표로 감싸세요" 안내.
+  테스트: `test_train.py` `test_where_words_inside_value_are_kept`.
+- [경미] `!=`가 빈 칸까지 맞는 행으로 셌음 -> 빈 칸은 맞지 않음(글자 칸은 숫자 값과 다른 값이라 맞음, README 9)). 크기 비교(`> < >= <=`) 값이
+  숫자·날짜가 아니면 조용히 0행이었음 -> `9 0`처럼 공백만 빼면 숫자면 `[추천]`(전체 명령), 그 밖은 `STOP_RETRY`. `= 01`은 숫자 열이면 숫자로,
+  글자 열(글자 칸이나 앞자리 0 코드가 있는 열)이면 글자로 비교. 테스트: `test_where_not_equal_keeps_blank_and_size_value_checked`,
+  `test_where_code_text_column_compares_as_text`.
+- [경미] 조건 찾기(`--maximize/--minimize`) directive "찾은 조합을 모델로 다시 예측해 조건을 확인했습니다"가 사실이 아니었음. 이제 답마다 적힌
+  `inputs`로 다시 예측해 `predictions`와 `--where`를 확인하고(`_recheck_solutions`), 다르면 `UNVERIFIED` + `unverified`.
+  테스트: `test_predict.py` `test_search_rechecks_answers`.
+
+### 문서
+- SKILL.md: `--exclude-where` 값의 작은따옴표, 4-C단계 글자 입력 `[후보]`/`recovered` 한 줄씩. README: 레이아웃 복구 문구·건너뛴 행, `--exclude-where` 규칙, 범주 맞추기, 조건 찾기 확인.
+
 ## [2.9.59] - 2026-11-04
 
 결과 문구를 짧은 한국어로 통일 (동작 변경 없음). 소비자인 경량 LLM(Gemma 26B)이 사용자에게 한국어로 전달하는데 `agent_directive`·`message`·

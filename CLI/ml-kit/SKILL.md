@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.59"
+  version: "2.9.60"
   platform: windows
 ---
 
@@ -65,7 +65,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 | 숫자로 된 코드(101, 102)를 종류로 다뤄야 한다 | `--dtypes "설비코드:str"` |
 | 사용자가 계산한 입력(비율, 차이)을 원한다 | `--eval "<이름> = <식>; <이름2> = <식2>"` (예: `--eval "온도압력비 = 온도 / 압력"`). 숫자로 읽히는 열 이름(`2`, `2(mm)`)이 식에 있으면 도구가 멈춘다 |
 | 피처가 10개 이상이다 | 파일 쓰기 도구로 한 줄에 피처 하나씩 쓴 `features.txt`(UTF-8)를 데이터 파일 옆에 만들고 `-x "<그 경로>"` |
-| 조건에 맞는 행을 빼고 학습한다 ("생산효율이 90보다 큰 행 빼고") | `--exclude-where "생산효율 > 90"` (`;` 그리고, `|` 또는, 연산자 `>= <= > < = != ~`) |
+| 조건에 맞는 행을 빼고 학습한다 ("생산효율이 90보다 큰 행 빼고") | `--exclude-where "생산효율 > 90"` (`;` 그리고, `|` 또는, 연산자 `>= <= > < = != ~`, 값에 띄어쓰기·`포함`·`and`가 있으면 `'불량 포함 시료'`처럼 작은따옴표) |
 | 숫자 타겟과 등급 타겟이 섞여 있다 | 회귀 타겟끼리 1번, 분류 타겟끼리 `--task classification`으로 1번 (모두 2번) |
 
 - 컬럼명의 단위는 빼도 된다 (`반응온도` = `반응온도(°C)`).
@@ -140,6 +140,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" --sweep "<바꿀입력>=
 python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" --maximize "<타겟>" --where "<타겟2> <= <값>" --vary "<바꿀입력1>,<바꿀입력2>" -i "<고정입력>=<값>"
 ```
 - `-i`에는 사용자가 말한 고정 입력만. 말하지 않은 숫자 입력은 학습 중앙값으로 채운다(`warnings`에 있음).
+  글자 입력이 학습 때 없던 값이면 도구가 멈추고 `[후보]`(학습 범주)를 준다. 대소문자·공백만 다르면 도구가 맞추고 `recovered`에 적는다.
 - 조건별 예측 알릴 것: `trend`의 타겟별 `text`, `points`(조건별 예측값과 90% 범위), `output_file`(엑셀 표), `chart_file`(그래프). `in_range`가 false인 점은 학습 범위 밖(참고용).
 - 조건 찾기 알릴 것: `solutions`(모두, 첫 번째가 가장 좋음)의 `inputs`와 `predictions`, `nearest_rows`. 0건이면 `best_without_where`. 모델 예측이지 보장된 조건이 아니라고 덧붙인다.
 

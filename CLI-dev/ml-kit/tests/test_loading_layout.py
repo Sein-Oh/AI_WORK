@@ -240,7 +240,7 @@ def test_two_level_header_hint(tmp_path, layout):
     assert "[추천] --header-row 2" in bad["message"]                              # 2.9.12: no hint
     v = run_tool("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "수율", "--header-row", "2")["version_dir"]
     ok = run_tool("ml_predict.py", "-m", v, "-f", str(p))                       # 2.9.53: [추천] --header-row 2
-    assert ok["sample_count"] == 30 and ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 2행으로 읽음"], ok
+    assert ok["sample_count"] == 30 and ok["recovered"] == ["머리글 2행으로 읽음"], ok
 
 
 def test_several_header_rows_with_every_input_stop_with_candidates(tmp_path):
@@ -392,7 +392,7 @@ def test_predict_finds_model_names_with_units_in_a_header_unit_pair(unit_book, t
     wb.save(p)
     ok = run_tool("ml_predict.py", "-m", unit_book["v"], "-f", str(p))           # 2.9.53: [추천] --header-row 2 --unit-row 3
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
-    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 2행으로 읽음, 단위 3행"], ok
+    assert ok["recovered"] == ["머리글 2행, 단위 3행으로 읽음"], ok
 
 
 def test_typo_hints_skip_layout_artefacts():
@@ -412,7 +412,7 @@ def test_predict_plain_template_on_a_unit_row_file(unit_book, tmp_path):
     wb.save(p)
     ok = run_tool("ml_predict.py", "-m", unit_book["v"], "-f", str(p))           # 2.9.14: unit row imputed; 2.9.53: [추천]
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
-    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 1행으로 읽음, 단위 2행"], ok
+    assert ok["recovered"] == ["머리글 1행, 단위 2행으로 읽음"], ok
 
 
 def test_placeholder_first_row_is_not_a_unit_row(unit_book, tmp_path):
@@ -474,7 +474,7 @@ def test_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
     p = write_book(tmp_path / "u2.xlsx", [["반응온도", "압력"], ["°C", "bar"], [180, 3], [185, 3.2]])
     ok = run_tool("ml_predict.py", "-m", plain_model, "-f", p)      # 2.9.15: unit row imputed; 2.9.53: [추천] --data-row 3
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
-    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 1행으로 읽음, 데이터 3행부터"], ok
+    assert ok["recovered"] == ["머리글 1행, 데이터 3행부터로 읽음"], ok
 
 
 def test_title_and_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
@@ -482,7 +482,28 @@ def test_title_and_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
                                       [180, 3], [185, 3.2]])
     ok = run_tool("ml_predict.py", "-m", plain_model, "-f", p)       # 2.9.53: [추천] --header-row 2 --data-row 4
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
-    assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 2행으로 읽음, 데이터 4행부터"], ok
+    assert ok["recovered"] == ["머리글 2행, 데이터 4행부터로 읽음"], ok
+
+
+def test_first_data_row_with_text_marks_is_kept(p1_model, tmp_path):
+    """2.9.59: 첫 데이터 행에 '점검중'·'센서고장'이 섞였다고 단위·메모 행으로 보고 그 데이터 행을 버렸다."""
+    body = [[180.5, 3.1, 45.0], [185.0, 3.3, 47.5], [176.0, 2.6, 41.0]]
+    p = write_book(tmp_path / "marks.xlsx", [["온도(°C)", "압력(bar)", "속도"], ["점검중", "센서고장", 45.0]] + body)
+    ok = run_tool("ml_predict.py", "-m", p1_model["v"], "-f", p)
+    assert ok["sample_count"] == 4 and "recovered" not in ok, ok          # 숫자가 든 행은 데이터
+    assert ok["missing_input_warning"] is True, ok
+    p = write_book(tmp_path / "marks2.xlsx", [["온도(°C)", "압력(bar)", "속도"], ["점검중", "센서고장", "점검중"]] + body)
+    ok = run_tool("ml_predict.py", "-m", p1_model["v"], "-f", p)
+    assert ok["sample_count"] == 4 and "recovered" not in ok, ok          # 단위 모양이 아닌 글자 행도 데이터
+
+
+def test_skipped_unit_row_is_in_warnings(p1_model, tmp_path):
+    body = [[180.5, 3.1, 45.0], [185.0, 3.3, 47.5]]
+    p = write_book(tmp_path / "u.xlsx", [["온도", "압력", "속도"], ["kg/cm2 G", "kg/cm2 G", "m/s"]] + body)
+    ok = run_tool("ml_predict.py", "-m", p1_model["v"], "-f", p)
+    assert ok["sample_count"] == 2, ok
+    assert ok["recovered"] == ["머리글 1행, 데이터 3행부터로 읽음"], ok             # 옵션을 주지 않았으니 '옵션이 달라'가 아님
+    assert any("2행" in w and "건너" in w for w in ok.get("warnings", [])), ok
 
 
 # ---- 열 이름: 빈 열, 중복 머리글, 연도 숫자 머리글 --------------------------------------------------------
