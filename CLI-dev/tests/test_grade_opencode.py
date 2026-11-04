@@ -615,3 +615,51 @@ def test_answer_variants_other_scenarios():
             assert _answer_pass(by_id[sid], a), (sid, a)
         for a in bads:
             assert not _answer_pass(by_id[sid], a), (sid, a)
+
+
+# ---------------------------------------------------------------------------
+# opencode run --format json 기록 (OpenCode 2.x: 셸 도구 이름 shell, 파일 경로 키 path)
+# ---------------------------------------------------------------------------
+def _run_events(sid, events):
+    lines = ["opencode 안내 글 (JSON 아님)"]
+    for i, (kind, part) in enumerate(events):
+        part = dict(part, sessionID="ses_x", messageID=f"msg_{i // 2}")
+        lines.append(json.dumps({"type": kind, "timestamp": 1000 * (i + 1), "sessionID": "ses_x", "part": part}, ensure_ascii=False))
+    return "\n".join(lines) + "\n"
+
+
+def _shell(cmd, out):
+    return ("tool_use", {"type": "tool", "tool": "shell", "state": {"status": "completed", "input": {"command": ENC + cmd},
+                                                                   "output": json.dumps(out, ensure_ascii=False)}})
+
+
+def test_read_run_maps_shell_to_bash_and_path_key(tmp_path):
+    p = tmp_path / "S0.jsonl"
+    p.write_text(_run_events("S0", [
+        ("step_start", {"type": "step-start"}),
+        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"', {"status": "ok"}),
+        ("tool_use", {"type": "tool", "tool": "write", "state": {"status": "completed",
+                                                                 "input": {"path": "C:\\temp\\x.py", "content": "print(1)"}}}),
+        ("text", {"type": "text", "text": "만들었습니다."}),
+        ("error", {}),
+    ]), encoding="utf-8")
+    turn, session, errors = go.read_run(str(p), "S0", "[S0] 요청")
+    assert session == "ses_x" and len(errors) == 1
+    assert [t["tool"] for t in turn["tools"]] == ["bash", "write"] and turn["tools"][1]["path"] == "C:\\temp\\x.py"
+    assert go.final_answer(turn) == "만들었습니다." and turn["end"] - turn["start"] == 4000
+    sc = go.load_scenarios()[1]["S0"]
+    checks = {n: ok for n, ok, _ in go.grade_turn(sc, turn, go.load_scenarios()[0]["rules"])}
+    assert checks["명령: make_beta_samples\\.py"] and not checks[".py 파일 만들기·고치기 없음"]
+
+
+def test_grade_runs_reads_folder_and_marks_missing(tmp_path):
+    (tmp_path / "S0.jsonl").write_text(_run_events("S0", [
+        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"', {"status": "ok"}),
+        ("text", {"type": "text", "text": "샘플을 만들었습니다."})]), encoding="utf-8")
+    (tmp_path / go.RUN_MESSAGES).write_text(json.dumps({"S0": "[S0] 보낸 문장"}, ensure_ascii=False), encoding="utf-8")
+    meta, rows, detail = go.grade_runs(str(tmp_path))
+    by = {r["id"]: r for r in rows}
+    assert by["S0"]["결과"] == "통과" and by["A1"]["결과"] == "없음" and "ses_x" in meta[0]
+    assert detail[0][2]["user"] == ["[S0] 보낸 문장"]
+    report, npass, n = go.write_report("t", meta, rows, detail, out_dir=str(tmp_path))
+    assert os.path.dirname(report) == str(tmp_path) and (npass, n) == (1, 1)

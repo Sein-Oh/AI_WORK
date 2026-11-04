@@ -23,12 +23,17 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 cd /d C:\CLI-dev
 python run_all_tests.py --label 회사PC            :: 자동 점검 전부 (질문 없음, 자리 비워도 됨)
 python run_all_tests.py --label 회사PC --outlook  :: office 러너에 Outlook(G그룹)도
+python run_all_tests.py --label 회사PC --gemma    :: 끝에 Gemma 종합 테스트 (opencode run, 일반 권한 창에서)
 python run_all_tests.py --only diag              :: 환경 진단과 도구 오류 로그만 (1분)
 ```
 
 - 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `CLI-dev\tests`)
   -> `beta`(`run_beta_check.py --agent`, F7 엑셀 재계산 포함) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
+- `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.yaml`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
+  (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\CLI\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
+  시험 폴더(기본 `C:\ml_beta\agent`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\ml_beta\gemma_runs_<시각>`에 남깁니다.
+  첫 요청에서 세션이 안 생기면 나머지를 보내지 않고 FAIL. 요청 하나의 시간 상한 `--gemma-timeout`(기본 900초). 관리자 권한 창이면 UNVERIFIED에 경고.
 - `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP). 예전 `--auto`는 기본이 되어 없앴습니다.
 - Windows + pywin32가 아니면 `ml`, `office`는 ENV-SKIP (클라우드에서도 나머지는 그대로 돎).
 - 결과: `C:\CLI-dev\result_<라벨>_<시각>.md` 하나. 맨 위 요약 표(단계별 PASS/FAIL/SKIP, 시간, 비고)와 실패·건너뜀(ENV-SKIP)·UNVERIFIED 목록, 그 아래 단계별 상세
@@ -43,7 +48,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 |---|---|
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
 | `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본 |
-| `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤) |
+| `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
 진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
 

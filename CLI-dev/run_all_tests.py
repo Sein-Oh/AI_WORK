@@ -4,7 +4,8 @@
     python run_all_tests.py --label 회사PC             # 자동 점검 전부 (질문 없음, 자리 비워도 됨)
     python run_all_tests.py --label 회사PC --outlook   # office 단계에 Outlook(G그룹)도
     python run_all_tests.py --label 회사PC --ask       # office 단계의 눈 확인 질문(y/n)에 답하면서
-    python run_all_tests.py --only diag                # 일부 단계만 (diag, pytest, beta, ml, office)
+    python run_all_tests.py --label 회사PC --gemma     # 끝에 Gemma 종합 테스트(opencode run)도
+    python run_all_tests.py --only diag                # 일부 단계만 (diag, pytest, beta, ml, office, gemma)
 
 단계 (이 순서로 실행. --only로 고르면 고른 단계만 같은 순서로):
     diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
@@ -12,6 +13,10 @@
     beta    ml-kit 베타 점검 (run_beta_check.py, F7 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
     ml      ml-kit 실기 러너 (ml-kit/tools/run_win_tests.py, 10~20분). 기본 단계가 아니며 --only에 넣을 때만
     office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
+    gemma   Gemma 종합 테스트: agent_scenarios.yaml의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
+            grade_opencode.py로 채점 (20~60분). 기본 단계가 아니며 --gemma 또는 --only에 넣을 때만.
+            opencode는 --opencode, PATH, C:\\CLI\\opencode.exe 순서로 찾고, 없으면 ENV-SKIP.
+            관리자 권한 창이면 열린 문서를 못 보므로 일반 PowerShell에서 실행하세요.
     기본은 diag, pytest, beta, office. Windows + pywin32가 아니면 ml, office는 ENV-SKIP.
     끝에 각 도구의 오류 로그(<도구>/data/logs/errors.txt, 실제 사용 중 생긴 오류)를 늘 붙입니다.
 
@@ -42,10 +47,11 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))                 # CLI-dev (테스트, 러너)
 CLI_DIR = os.path.join(os.path.dirname(HERE), "CLI")               # 실행 파일 (CLI-dev 옆의 CLI)
 TOOLS = ("ml-kit", "office-cli")
-STAGES = ("diag", "pytest", "beta", "ml", "office")               # 실행 순서
+STAGES = ("diag", "pytest", "beta", "ml", "office", "gemma")      # 실행 순서
 DEFAULT_STAGES = ("diag", "pytest", "beta", "office")
 TITLES = {"diag": "환경 진단", "pytest": "오프라인 테스트 (pytest)", "beta": "ml-kit 베타 점검 (run_beta_check)",
-          "ml": "ml-kit 실기 러너", "office": "office-cli 실기 러너 (실제 Office)"}
+          "ml": "ml-kit 실기 러너", "office": "office-cli 실기 러너 (실제 Office)",
+          "gemma": "Gemma 종합 테스트 (opencode run)"}
 PACKAGES = ("numpy", "pandas", "scikit-learn", "scipy", "joblib", "openpyxl", "python-docx", "python-pptx",
             "matplotlib", "pymupdf", "olefile", "pywin32", "pytest", "PyYAML")
 IMPORTS = {"numpy": "numpy", "pandas": "pandas", "scikit-learn": "sklearn", "scipy": "scipy", "joblib": "joblib",
@@ -477,6 +483,7 @@ def step_pytest(stage, args, ctx):
 # 3. ml-kit 베타 점검 (run_beta_check.py)
 # ---------------------------------------------------------------------------
 BETA_SCRIPT = os.path.join(HERE, "run_beta_check.py")
+GRADER = os.path.join(HERE, "grade_opencode.py")
 _BETA_DETAIL = re.compile(r"^- (\S+) (.*) \[(FAIL|SKIP)\]: (.*)$")
 _BETA_ROW = re.compile(r"^\| (\S+) \| (\S+) \| (.*) \| (PASS|FAIL|SKIP) \|$")
 
@@ -703,13 +710,151 @@ def attach_tool_error_logs(rep):
 
 
 # ---------------------------------------------------------------------------
-RUNNERS = {"diag": step_diag, "pytest": step_pytest, "beta": step_beta, "ml": step_ml, "office": step_office}
+# 6. Gemma 종합 테스트 (opencode run)
+# ---------------------------------------------------------------------------
+def find_opencode(given=None):
+    """opencode 실행 파일: --opencode, PATH, C:\\CLI\\opencode.exe(이 폴더 옆 CLI) 순서. 없으면 None."""
+    if given:
+        return given if os.path.isfile(given) else None
+    found = shutil.which("opencode")
+    if found:
+        return found
+    for name in ("opencode.exe", "opencode"):
+        p = os.path.join(CLI_DIR, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def is_elevated():
+    """Windows 관리자 권한으로 실행 중인지 (관리자 창의 opencode는 일반 권한으로 연 Office 문서를 COM으로 못 봄)."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def run_to_files(args, cwd, timeout, out_path, err_path, poll=1.0):
+    """stdout은 out_path에 바이트 그대로(opencode가 쓴 UTF-8), stderr는 err_path에 저장합니다.
+    (종료코드, 걸린 초, Ctrl+C 여부). timeout초가 지나면 끝냅니다 (run_capture와 같은 규칙)."""
+    start = time.time()
+    interrupted = False
+    with open(out_path, "wb") as out, open(err_path, "wb") as err:
+        proc = subprocess.Popen(args, cwd=cwd, env=child_env(), stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+        try:
+            while True:
+                try:
+                    proc.wait(timeout=poll)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.time() - start > timeout:
+                        kill_tree(proc)
+                        err.write(f"\n[ERROR] 시간 초과 ({timeout}초)로 중단했습니다.\n".encode("utf-8"))
+                        break
+        except KeyboardInterrupt:
+            interrupted = True
+            kill_tree(proc)
+    return proc.returncode, round(time.time() - start, 1), interrupted
+
+
+def _load_grader():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("grade_opencode", GRADER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _read(path, limit=4000):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()[-limit:]
+    except OSError:
+        return ""
+
+
+def step_gemma(stage, args, ctx):
+    exe = find_opencode(args.opencode)
+    if not exe:
+        stage.env_skip("opencode 없음 (--opencode <경로>, PATH, 또는 C:\\CLI\\opencode.exe)")
+        return
+    try:
+        go = _load_grader()
+        spec, by_id, order = go.load_scenarios()
+    except Exception as e:                                       # PyYAML 없음 등
+        stage.env_skip(f"시나리오를 읽지 못함 ({type(e).__name__}: {e})")
+        return
+    test_dir = args.gemma_dir or spec["dir"]
+    if os.path.exists(test_dir):                                 # 이전 모델이 남으면 버전 번호가 달라짐: 지우지 않고 이름만 바꿈
+        old = f"{test_dir}_old_{ctx['stamp']}"
+        try:
+            os.rename(test_dir, old)
+            say(f"이전 시험 폴더를 {old}(으)로 옮겼습니다.")
+        except OSError as e:
+            stage.fail(f"이전 시험 폴더를 옮기지 못함 ({test_dir}: {e}). 열린 파일을 닫고 다시 실행하세요.")
+            return
+    runs = os.path.join(os.path.dirname(test_dir.rstrip("\\/")) or HERE, f"gemma_runs_{ctx['stamp']}")
+    os.makedirs(runs, exist_ok=True)
+    if is_elevated():
+        stage.unverified.append("관리자 권한 창에서 실행함: opencode가 열린 Office 문서를 못 볼 수 있음 (일반 PowerShell 권장)")
+    sent, session, log = {}, None, []
+    say(f"Gemma 종합 테스트 시작: 요청 {len(order)}개를 opencode run으로 한 세션에 보냅니다 (요청마다 최대 {args.gemma_timeout}초).")
+    stop = False
+    for i, sid in enumerate(order, 1):
+        msg = f"[{sid}] " + str(by_id[sid]["message"]).replace("{DIR}", test_dir)
+        sent[sid] = msg
+        with open(os.path.join(runs, go.RUN_MESSAGES), "w", encoding="utf-8") as f:
+            json.dump(sent, f, ensure_ascii=False, indent=1)
+        cmd = [exe, "run", "--format", "json"] + (["--session", session] if session else []) + [msg]
+        out_path, err_path = os.path.join(runs, f"{sid}.jsonl"), os.path.join(runs, f"{sid}.stderr.txt")
+        say(f"[{i}/{len(order)}] {sid} 보내는 중")
+        code, sec, stop = run_to_files(cmd, CLI_DIR, args.gemma_timeout, out_path, err_path)
+        _, got, errors = go.read_run(out_path, sid, msg)
+        session = session or got
+        log.append(f"{sid}: exit {code}, {sec}초, 세션 {got or '없음'}" + (f", 오류 {'; '.join(errors)}" if errors else ""))
+        if stop:
+            break
+        if not session:                                          # 첫 요청에서 세션이 안 생기면 나머지도 같음
+            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(opencode.jsonc의 model)과 접속을 확인하세요.")
+            stage.details.append((f"{sid} opencode 오류 출력", _read(err_path) or "(없음)"))
+            break
+    stage.details.append(("opencode run 실행 기록", "\n".join(log)))
+    if session:
+        meta, rows, detail = go.grade_runs(runs)
+        report, npass, n = go.write_report(ctx["label"], meta, rows, detail, out_dir=runs)
+        for r in rows:
+            if r["결과"] in ("통과", "통과(참고)"):
+                stage.passed += 1
+            elif r["결과"] == "실패(참고)":
+                stage.skipped += 1
+                stage.skips.append(f"{r['id']}: 자유 문장 답이라 사람이 확인 (아래 '최종 답변')")
+            elif r["결과"] == "없음":
+                stage.skipped += 1
+                stage.skips.append(f"{r['id']}: 보내지 못함 (중단 또는 앞 요청 문제)")
+            else:
+                stage.fail(f"{r['id']}: {r['실패'][:200]}")
+        stage.details.insert(0, ("채점 결과 (grade_opencode)", _read(report, limit=60000)))
+    stage.note = f"세션 {session or '없음'}, 기록 폴더 {runs}, 시험 폴더 {test_dir}"
+    if stop:
+        raise KeyboardInterrupt
+
+
+# ---------------------------------------------------------------------------
+RUNNERS = {"diag": step_diag, "pytest": step_pytest, "beta": step_beta, "ml": step_ml, "office": step_office,
+           "gemma": step_gemma}
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="CLI 도구 실기 점검 (결과는 파일 1개: result_<라벨>_<시각>.md)")
     p.add_argument("--label", default="PC", help="결과 파일 이름에 붙일 PC 라벨 (예: 회사PC)")
-    p.add_argument("--only", help="실행할 단계 (쉼표로): diag,pytest,beta,ml,office (기본: diag,pytest,beta,office)")
+    p.add_argument("--only", help="실행할 단계 (쉼표로): diag,pytest,beta,ml,office,gemma (기본: diag,pytest,beta,office)")
+    p.add_argument("--gemma", action="store_true", help="기본 단계 끝에 Gemma 종합 테스트(opencode run)를 더함")
+    p.add_argument("--opencode", help=r"opencode 실행 파일 (기본: PATH의 opencode, 없으면 C:\CLI\opencode.exe)")
+    p.add_argument("--gemma-dir", help=r"gemma 단계 시험 폴더 (기본: agent_scenarios.yaml의 dir, C:\ml_beta\agent)")
+    p.add_argument("--gemma-timeout", type=int, default=900, help="gemma 단계 요청 하나의 시간 상한(초, 기본 900)")
     p.add_argument("--ask", action="store_true", help="office 단계의 눈 확인 질문(y/n)에 답하면서 진행 (기본: 질문 없음)")
     p.add_argument("--outlook", action="store_true", help="office 단계에서 Outlook(G그룹)도 시험 (기본: 건너뜀)")
     p.add_argument("--ml-dir", help=r"ml 단계 시험 폴더 (기본 C:\ml_test\ml 테스트)")
@@ -717,6 +862,8 @@ def main(argv=None):
     p.add_argument("--timeout", type=int, default=3600, help="단계별 시간 상한(초, 기본 3600)")
     args = p.parse_args(argv)
     chosen = [s.strip().lower() for s in (args.only or ",".join(DEFAULT_STAGES)).split(",") if s.strip()]
+    if args.gemma and "gemma" not in chosen:
+        chosen.append("gemma")
     bad = [s for s in chosen if s not in STAGES]
     if bad or not chosen:
         p.error(f"알 수 없는 단계: {', '.join(bad) or '(비어 있음)'} (가능: {', '.join(STAGES)})")
@@ -729,6 +876,8 @@ def main(argv=None):
     ctx = {"label": label, "stamp": stamp}
     say(f"결과 파일: {out}")
     say("단계: " + " -> ".join(stages) + " -> 도구 오류 로그")
+    if "gemma" in stages:
+        say("gemma 단계는 opencode로 Gemma에게 요청을 보냅니다. 관리자 권한이 아닌 일반 PowerShell에서 실행하세요.")
     if any(s in stages for s in ("beta", "ml", "office")):
         say("점검 중 Excel/Word/PowerPoint 창이 열리고 닫힙니다. 열린 Office 문서는 모두 저장하고 닫은 뒤 시작하세요.")
     code = 0
