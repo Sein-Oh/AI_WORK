@@ -1546,3 +1546,104 @@ def test_comment_refused_by_excel_is_input_error(xl, capsys):
     ws.refuse_notes = True
     code, out = run_excel(capsys, "comment", "--range", "B2", "--text", "의견")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "보호" in out["message"]
+
+
+# ---------------------------------------------------------------------------
+# 문서에 없던 서식 옵션 점검 (1.4.53): --wrap, --italic, range border --weight/--box,
+# write --no-autofit, style --no-zebra, export --encoding
+# ---------------------------------------------------------------------------
+
+
+def test_style_wrap_and_italic_are_read_back(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    ws.set(1, 1, "긴 글")
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--wrap", "--italic")
+    assert code == 0 and out["verified"] is True, out
+    assert ws.props("$A$1:$B$2", "Misc").get("WrapText") is True
+
+
+def test_style_wrap_not_applied_is_unverified(xl, capsys, monkeypatch):
+    app, wb = xl
+    real = excel._apply_format
+
+    def no_wrap(rng, spec):
+        real(rng, {k: v for k, v in spec.items() if k != "wrap"})
+    monkeypatch.setattr(excel, "_apply_format", no_wrap)
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--wrap")
+    assert code == 0 and out["verified"] is False and any("wrap" in u for u in out["unverified"]), out
+
+
+@pytest.mark.parametrize("box,edges,inner", [(False, (7, 8, 9, 10, 11, 12), ()), (True, (7, 8, 9, 10), (11, 12))])
+def test_range_border_weight_and_box_are_read_back(xl, capsys, box, edges, inner):
+    app, wb = xl
+    ws = ws_of(wb)
+    argv = ["range", "--action", "border", "--range", "A1:C3", "--weight", "medium"] + (["--box"] if box else [])
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["verified"] is True, out
+    for b in edges:
+        p = ws.props("$A$1:$C$3", f"Border{b}")
+        assert p.get("LineStyle") == 1 and p.get("Weight") == excel.XL_WEIGHT["medium"], b
+    for b in inner:
+        assert ws.props("$A$1:$C$3", f"Border{b}").get("LineStyle") is None, b
+
+
+def test_range_border_none_is_read_back(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "range", "--action", "border", "--range", "A1:B2", "--weight", "none")
+    assert code == 0 and out["verified"] is True, out
+    assert ws.props("$A$1:$B$2", "Border7").get("LineStyle") == -4142
+
+
+def test_range_border_failure_is_unverified(xl, capsys, monkeypatch):
+    monkeypatch.setattr(excel, "_apply_border", lambda rng, weight, box=False: None)
+    code, out = run_excel(capsys, "range", "--action", "border", "--range", "A1:B2", "--weight", "thick")
+    assert code == 0 and out["verified"] is False and any("테두리" in u for u in out["unverified"]), out
+
+
+def test_write_table_autofits_unless_no_autofit(xl, capsys, tmp_path):
+    app, wb = xl
+    ws = ws_of(wb)
+    f = tmp_path / "t.csv"
+    f.write_text("a,b\n1,2\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--range", "A1", "--file", str(f))
+    assert code == 0 and any(x[0] == "AutoFit" for x in ws.log), ws.log
+    ws.log.clear()
+    code, out = run_excel(capsys, "write", "--range", "D1", "--file", str(f), "--no-autofit")
+    assert code == 0 and not any(x[0] == "AutoFit" for x in ws.log), ws.log
+
+
+def test_style_theme_no_zebra(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    rows = [["지역", "금액"]] + [[f"지역{i}", float(i)] for i in range(1, 8)]
+    for r, row in enumerate(rows, 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    code, out = run_excel(capsys, "style", "--theme", "navy", "--no-zebra")
+    assert code == 0 and out["applied"]["zebra_rows"] == 0 and out["verified"] is True, out
+
+
+def test_export_csv_cp949_and_row_count(xl, capsys, tmp_path):
+    app, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([["이름", "온도"], ["가", "25℃"], ["나", "30℃"]], 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    out_path = tmp_path / "out.csv"
+    code, out = run_excel(capsys, "export", "--save", str(out_path), "--encoding", "cp949")
+    assert code == 0 and out["verified"] is True, out
+    assert out_path.read_bytes().decode("cp949").splitlines()[1] == "가,25℃"
+
+
+def test_export_csv_cp949_unencodable_is_input_error(xl, capsys, tmp_path):
+    app, wb = xl
+    ws = ws_of(wb)
+    ws.set(1, 1, "이름")
+    ws.set(2, 1, "\U0001F600 값")                     # cp949로 쓸 수 없는 글자
+    out_path = tmp_path / "out.csv"
+    code, out = run_excel(capsys, "export", "--save", str(out_path), "--encoding", "cp949")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "A2" in out["message"] and "[추천] utf-8-sig" in out["message"], out
+    assert not out_path.exists()

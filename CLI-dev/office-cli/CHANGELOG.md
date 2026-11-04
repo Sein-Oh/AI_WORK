@@ -6,6 +6,21 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.53] - 2026-11-04
+
+문서에 없던 엑셀 서식 옵션 점검 (사용자 결정 "구현"). 회귀 테스트: `tests/test_excel_write.py` "문서에 없던 서식 옵션 점검"
+(1.4.52에서 12개 중 4개 실패: 줄바꿈·테두리를 다시 읽지 않음, cp949로 쓸 수 없는 글자가 내부 오류).
+
+### 수정
+- `style --wrap`(`replace`도): 적용 뒤 `WrapText`를 다시 읽어 확인(R1). 전에는 확인 없이 `VERIFIED:`.
+- `range --action border --weight/--box`: 선 모양·굵기를 다시 읽어 비교(R1, 한 줄·한 칸 범위의 안쪽 선은 건너뜀). 다르면 `UNVERIFIED:`.
+- `export --encoding cp949`: 쓸 수 없는 글자(이모지 등)가 있으면 내부 오류 대신 쓰기 전에 STOP_RETRY(칸 주소, `[추천] utf-8-sig`).
+  CSV 내보내기는 다시 읽어 행 수까지 확인.
+
+### 문서
+- 점검 결과 모두 동작해 남김(뺀 옵션 없음): `style --italic --wrap --no-zebra --size`, `range --action border --weight --box`,
+  `write --no-autofit`, `export --encoding`. README `excel.py` 표에 설명, SKILL.md 서식 줄에 `--no-zebra`, `--italic`, `--wrap`, 외곽선(`--box --weight`).
+
 ## [1.4.52] - 2026-11-04
 
 쓰지 않는 옵션 정리 (사용자 결정). 회귀 테스트: `tests/test_office.py` `test_transfer_method_option_removed`,

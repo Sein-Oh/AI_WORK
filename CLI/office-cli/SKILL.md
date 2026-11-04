@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.52"
+  version: "1.4.53"
   platform: windows
 ---
 
@@ -30,7 +30,7 @@ metadata:
 | 엑셀에 표 쓰기 | `excel.py write --range A1 --file "표.csv"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트는 `--sheet 이름 --new-sheet`) |
 | 엑셀에 수식 쓰기 | `excel.py write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
 | 엑셀 차트 | `excel.py chart --range A1:B101 --type line --title "제목"` (`--type column|bar|line|pie|scatter|area`, `--action list` / `--action delete --name 제목`) |
-| 엑셀 서식 | `excel.py style --range A1:E10 --theme navy` / `--bg yellow --bold` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin` |
+| 엑셀 서식 | `excel.py style --range A1:E10 --theme navy` (줄무늬 빼기 `--no-zebra`) / `--bg yellow --bold --italic` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap`(줄바꿈). 외곽선만: `excel.py range --action border --range A1:E10 --box --weight medium` |
 | 엑셀 기타 | `excel.py info`, `replace --find A --replace B [--all-sheets]`, `sheet --action add|rename|copy|delete --name A [--new-name B]`, `export --save "결과.csv|.xlsx|.pdf" [--range A1:D20]` |
 | 엑셀 범위 | `excel.py range --action freeze|unfreeze|hide|unhide|width|height|autofit|clear|copy|move|merge|border --range A1:D10 [--dest B2] [--size 20]` |
 | 엑셀 행·열 넣기 / 지우기 / 정렬 | `excel.py range --action insert|delete --range 5:7` (열은 `--range B:C`, 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸을 알림) / `excel.py range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |

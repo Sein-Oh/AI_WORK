@@ -341,12 +341,16 @@ class FakeRange:
     def __getattr__(self, name):
         if name in ("Interior", "Font", "Borders_"):
             return self.ws.props(self.Address, name)
+        if name == "WrapText":                   # 자동 줄바꿈: 쓴 범위 그대로 다시 읽음 (안 썼으면 False)
+            return bool(self.ws.props(self.Address, "Misc").get("WrapText", False))
         raise AttributeError(name)
 
     def __setattr__(self, k, v):
         if k in ("ws", "areas", "Value", "Formula"):
             object.__setattr__(self, k, v)
         else:
+            if k == "WrapText":
+                self.ws.props(self.Address, "Misc").WrapText = v
             self.ws.log.append(("set", self.Address, k, v))
 
     def Borders(self, i):

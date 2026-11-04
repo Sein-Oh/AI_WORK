@@ -1506,6 +1506,28 @@ def _apply_border(rng: Any, weight: str, box: bool = False) -> None:
             pass
 
 
+def _verify_border(rng: Any, weight: str, box: bool = False) -> List[str]:
+    """R1: 테두리 선(좌/상/하/우, 격자면 내부 세로/가로까지)의 선 모양과 굵기를 다시 읽어 비교합니다."""
+    edges = (7, 8, 9, 10) if box and weight != "none" else (7, 8, 9, 10, 11, 12)
+    bad = []
+    for b in edges:
+        if b in (11, 12) and weight != "none" and (int(rng.Rows.Count) if b == 12 else int(rng.Columns.Count)) < 2:
+            continue                                     # 한 줄·한 칸 범위에는 내부 선이 없음
+        try:
+            border = rng.Borders(b)
+            style, w = border.LineStyle, border.Weight if weight != "none" else None
+        except Exception:
+            style, w = "?", None
+        if weight == "none":
+            if style not in (-4142, None):
+                bad.append(f"{b}={style!r}")
+        elif style != 1 or w is None or int(w) != XL_WEIGHT[weight]:
+            bad.append(f"{b}={style!r}/{w!r}")
+    if bad:
+        return [f"테두리를 다시 읽은 값이 다름 (선 번호=모양/굵기: {', '.join(bad)})"]
+    return []
+
+
 def _apply_theme(ws: Any, rng: Any, theme: Dict[str, Any], zebra: bool = True) -> Dict[str, Any]:
     """표 범위에 테마 적용: 헤더, 줄무늬, 숫자 서식, 테두리, 합계 행."""
     r0, c0 = int(rng.Row), int(rng.Column)
@@ -1616,7 +1638,7 @@ def cmd_style(args) -> Dict[str, Any]:
 
 
 def _verify_style(ws: Any, rng: Any, fmt: Dict[str, Any], theme: Optional[Dict[str, Any]], highlight: bool) -> List[str]:
-    """R1: 범위에 준 서식(배경·글자색·굵게·기울임·크기·숫자 서식)과 테마 머리글 색, 조건부 강조를 다시 읽어 비교합니다."""
+    """R1: 범위에 준 서식(배경·글자색·굵게·기울임·크기·숫자 서식·자동 줄바꿈)과 테마 머리글 색, 조건부 강조를 다시 읽어 비교합니다."""
     problems: List[str] = []
     checks = [("bg", lambda: rng.Interior.Color), ("color", lambda: rng.Font.Color), ("bold", lambda: rng.Font.Bold),
               ("italic", lambda: rng.Font.Italic), ("size", lambda: rng.Font.Size), ("number_format", lambda: rng.NumberFormat)]
@@ -1633,6 +1655,8 @@ def _verify_style(ws: Any, rng: Any, fmt: Dict[str, Any], theme: Optional[Dict[s
             got = ws.Range(ws.Cells(r0, c0), ws.Cells(r0, c0 + ncols - 1)).Interior.Color
             if got is None or float(got) != float(off.parse_color(theme["header_bg"])):
                 problems.append(f"테마 머리글 배경색이 {got!r}")
+        if fmt.get("wrap") and not bool(rng.WrapText):     # 여러 칸 중 일부만 켜졌으면 None
+            problems.append(f"서식 'wrap'(자동 줄바꿈)이 {rng.WrapText!r}")
         if highlight and int(rng.FormatConditions.Count) < 1:
             problems.append("조건부 강조가 없음")
     except Exception as e:
@@ -1644,6 +1668,31 @@ def _verify_style(ws: Any, rng: Any, fmt: Dict[str, Any], theme: Optional[Dict[s
 # 7. export
 # ==============================================================================
 
+def _nonblank_rows(matrix: List[List[Any]]) -> int:
+    """다시 읽은 CSV와 비교할 행 수 (check_saved_file처럼 빈 행은 세지 않음)."""
+    return sum(1 for r in matrix if any(str(out_value(v)).strip() for v in r))
+
+
+def _check_encodable(matrix: List[List[Any]], encoding: str, r0: int, cols: List[int]) -> None:
+    """CSV 인코딩으로 쓸 수 없는 글자(cp949의 이모지 등)가 있으면 쓰기 전에 STOP_RETRY (내부 오류로 끝나지 않게).
+    cols: matrix 열마다의 원래 열 번호. 오류 로그에는 칸 주소만 남깁니다(문서 글 없음)."""
+    if encoding.startswith("utf-8"):
+        return
+    bad = []
+    for i, row in enumerate(matrix):
+        for j, v in enumerate(row):
+            text = out_value(v)
+            if isinstance(text, str):
+                try:
+                    text.encode(encoding)
+                except UnicodeEncodeError:
+                    bad.append(addr(r0 + i, cols[j]))
+    if bad:
+        more = f" 외 {len(bad) - 5}개" if len(bad) > 5 else ""
+        raise rt.InputError(f"--encoding {encoding}로 쓸 수 없는 글자(이모지·일부 기호)가 있는 칸: {', '.join(bad[:5])}{more}. "
+                            f"값을 바꾸지 않고 저장하려면 UTF-8로 저장하세요. [추천] utf-8-sig")
+
+
 def cmd_export(args) -> Dict[str, Any]:
     ext = os.path.splitext(args.save)[1].lower() if args.save else ".csv"
     if ext not in (".csv", ".xlsx", ".pdf"):
@@ -1651,11 +1700,13 @@ def cmd_export(args) -> Dict[str, Any]:
     closed = is_closed_xlsx(args.target)
     if ext == ".csv" and closed and not args.columns:
         sheet, r0, c0, matrix, _ = _read_matrix_closed(closed, args.sheet, args.range)
+        _check_encodable(matrix, args.encoding, r0, [c0 + j for j in range(len(matrix[0]) if matrix else 0)])
         out = rt.resolve_output_path(args.save, sheet, ".csv")
         out = rt.write_csv_rows(out, [[out_value(v) for v in r] for r in matrix], args.encoding)
         far = _far_for_read(closed, sheet, args.range, r0, c0, matrix)
         return _with_far(rt.with_uncomputed(rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
-                                                       "VERIFIED: 저장한 파일을 확인했습니다.", delimiter=",", output_file=out,
+                                                       "VERIFIED: 저장한 파일을 다시 읽어 행 수까지 확인했습니다.", delimiter=",",
+                                                       expected_rows=_nonblank_rows(matrix), output_file=out,
                                                        rows=len(matrix)),
                                             closed_uncomputed(closed, sheet, r0, c0, matrix)), far, args.target)
 
@@ -1665,16 +1716,21 @@ def cmd_export(args) -> Dict[str, Any]:
         ws = rng.Worksheet
         stem = f"{t.name.rsplit('.', 1)[0]}_{ws.Name}"
         out = rt.resolve_output_path(args.save, stem, ext)
+        expected_rows = None
         if ext == ".csv":
             matrix = off.range_to_matrix(rng.Value)
+            c0 = int(rng.Column)
+            cols = [c0 + j for j in range(len(matrix[0]) if matrix else 0)]
             if args.columns:
-                c0 = int(rng.Column)
                 idx = [col_number(c.strip()) - c0 for c in args.columns.split(",") if c.strip()]
                 bad = [args.columns.split(",")[k] for k, i in enumerate(idx) if i < 0 or i >= len(matrix[0])]
                 if bad:
                     raise rt.InputError(f"--columns의 열이 범위 밖입니다: {bad}")
                 matrix = [[row[i] for i in idx] for row in matrix]
+                cols = [c0 + i for i in idx]
+            _check_encodable(matrix, args.encoding, int(rng.Row), cols)
             out = rt.write_csv_rows(out, [[out_value(v) for v in r] for r in matrix], args.encoding)
+            expected_rows = _nonblank_rows(matrix)
             detail = f"{len(matrix)}행"
         elif ext == ".pdf":
             off.require_pdf_export(t.app, ".csv 또는 .xlsx")
@@ -1712,7 +1768,7 @@ def cmd_export(args) -> Dict[str, Any]:
         resolved = t.resolved()
     return rt.ok_file(TOOL, "export", f"{info['sheet']}!{info['range']}를 {detail}로 저장: {out}", out,
                       "VERIFIED: 저장한 파일을 확인했습니다. 원본 통합문서는 그대로입니다.", delimiter=",",
-                      target_resolved=resolved, output_file=out, **info)
+                      expected_rows=expected_rows, target_resolved=resolved, output_file=out, **info)
 
 
 # ==============================================================================
@@ -2062,6 +2118,8 @@ def cmd_range(args) -> Dict[str, Any]:
                     problems.append(f"숨김 상태가 {tgt.Hidden!r}")
             elif a in ("freeze", "unfreeze") and bool(t.app.ActiveWindow.FreezePanes) != (a == "freeze"):
                 problems.append("틀 고정 상태가 다름")
+            elif a == "border":
+                problems += _verify_border(rng if rng is not None else ws.UsedRange, args.weight, args.box)
         except Exception as e:
             problems.append(f"결과를 다시 읽지 못함: {type(e).__name__}")
         t.set_focus(sheet=ws, changed=not noop)
