@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.33"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.34"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -609,7 +609,8 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
 
 # 경량 LLM이 자주 지어내는 명령·옵션 (회사 PC 오류 로그). 실제 이름으로 안내합니다.
 COMMAND_ALIASES = {"excel": {"list": "info", "sheets": "info"}, "word": {"list": "info", "toc": "outline"},
-                   "ppt": {"list": "info"}, "office": {"list": "windows", "redo": "undo"}}
+                   "ppt": {"list": "info"}, "office": {"list": "windows", "redo": "undo"},
+                   "outlook": {"attachment": "attachments", "attach": "attachments", "download": "attachments"}}
 OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--target"], "--path": ["--file", "--target"],
                    "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"]}
 

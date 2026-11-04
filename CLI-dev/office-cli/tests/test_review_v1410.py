@@ -405,7 +405,7 @@ def test_r6_r8_saved_mail_name_is_sanitized_and_verified(isolated_dirs):
     item = type("M", (), {"Subject": 'RE: 견적/회신? "최종"', "Body": "본문입니다", "To": "a", "CC": "",
                           "SenderName": "김", "SenderEmailAddress": "", "EntryID": "1", "UnRead": False,
                           "Attachments": type("A", (), {"Count": 0})()})()
-    args = type("Args", (), {"save": True, "save_attach": False})()
+    args = type("Args", (), {"save": True})()
     res = outlook._mail_detail(item, args, "id")
     name = os.path.basename(res["output_file"])
     assert not any(ch in name for ch in ':/?"') and name.startswith("mail_RE_ 견적_회신_")

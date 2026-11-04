@@ -45,7 +45,9 @@
 | 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호는 무시: `SOI 1` = `SOI #1`. 사용자가 패턴을 말하면 `--regex`) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |
-| 메일 | `outlook.py current`, `search --query 말 [--from 이름]`, `read --id <id>`, `reply --body "내용"`, `new --to 주소 --subject 제목 --body 내용` (첨부 `--attach "a.pdf;b.pdf"`) |
+| 메일 읽기 | `outlook.py current`, `search --query 말 [--from 이름]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일) |
+| 메일 첨부 내려받기 | 목록 `outlook.py attachments --id <id>` / 저장 `outlook.py attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더는 `--save "<전체경로 폴더>"`, 일부만 `--name 이름일부`). 결과의 `folder`와 파일 이름을 알린다 |
+| 메일 쓰기 / 문서 첨부 | `outlook.py reply --body "내용" --attach "C:\전체경로\파일.pdf"`. `--attach`는 `new --to 주소 --subject 제목 --body 내용`, `forward --to 주소`에도 같다. 여러 파일은 `;`로 구분 |
 | 되돌리기 / 창 | `office.py undo` (목록 `--list`: 사용자가 고른 항목의 `command`를 그대로 실행), `office.py windows`, `office.py focus --app excel` |
 | 결과 배치 확인 | `ppt.py info --detail --slides N`, `excel.py info --detail`, `word.py info --detail` (`layout_warnings`가 0이 아니면 `warnings`를 알림) |
 

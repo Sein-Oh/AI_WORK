@@ -46,7 +46,7 @@ zip은 `CLI/<도구>`의 도구 파일과 SKILL.md로 만듭니다. 도구나 SK
 `%USERPROFILE%\Documents\En-Genius\CLI-data\<도구>\`에 둡니다 (office-cli 1.4.33, ml-kit 2.9.37).
 | 도구 | 남는 것 |
 |---|---|
-| office-cli | `config.json`(차트 전달 방식), `data\`(오류 로그, `_work` 결과 파일, 메일 첨부), `cache\`(문서 색인, 되돌리기 스냅샷) |
+| office-cli | `config.json`(차트 전달 방식), `data\`(오류 로그, `_work` 결과 파일), `cache\`(문서 색인, 되돌리기 스냅샷). 메일 첨부 내려받기(`outlook.py attachments --save`)는 이 폴더가 아니라 `%USERPROFILE%\Downloads\메일 첨부\` (1.4.34) |
 | ml-kit | `data\logs\errors.txt`(오류 로그). 모델과 보고서는 지금처럼 데이터 파일 옆 `<데이터>_ml_data\` |
 
 OpenCode에서 쓰던 `C:\CLI\...\data`, `cache`와는 따로입니다. 옮기려면 그 폴더를 위 위치로 복사합니다.

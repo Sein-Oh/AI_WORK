@@ -2,6 +2,35 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.34] - 2026-11-04
+
+메일 첨부 내려받기 명령과 답장·전달 첨부 안내. En-Genius 에이전트가 "첨부를 내려받을 수 없다"고 답한 문제에서 시작.
+회귀 테스트: `tests/test_review_v1434.py` (1.4.33에서 44개 중 38개 실패. 통과한 6개는 이미 되던 답장·전달·새 메일 `--attach`).
+
+### 기능
+- 새 명령 `outlook.py attachments [--id <id>]`: 첨부 목록(`index` 1부터, `name`, `size`, `hidden_inline` 본문 삽입 이미지, `blocked` 실행 파일 형식).
+  `--id`를 빼면 열린 창이나 목록에서 선택한 메일(`reply`와 같음). 첨부가 없으면 `count: 0`과 `VERIFIED: 0건. 이 메일에는 첨부 없음`.
+- `attachments --save [폴더]`: 내려받기. 기본 폴더는 `<다운로드>\메일 첨부\<YYYYMMDD_HHMMSS>_<제목 40자>`(자동 정리 안 함, En-Genius 실행도 같음).
+  다운로드는 Windows 셸 폴더 설정을 따르고, 읽지 못하면 `%USERPROFILE%\Downloads`. 폴더를 주면 전체 경로만 받고(없으면 만듦) 상대 경로는 STOP_RETRY.
+  결과 `saved`(전체 경로), `skipped`(`name`, `reason`), `count`, `folder`. 덮어쓰지 않고 ` (2)`를 붙여 `recovered`로 알림.
+  저장 뒤 파일이 있는지, 크기를 아는 첨부는 빈 파일이 아닌지 다시 확인하고 아니면 `UNVERIFIED:`(Outlook `Size`는 메일 속성 몫이 더해져 같은 크기는 비교하지 않음).
+- `attachments --save --name 이름일부`(대소문자 무시, `;`·옵션 반복) / `--index 1,3`(`2-4`): 고른 첨부만 저장. 맞는 것이 없는 값이 있으면
+  아무것도 저장하지 않고 첨부 이름을 `[후보]`로 STOP_RETRY. 실행 파일 형식은 골라도 저장하지 않고, 본문 삽입 이미지는 직접 고른 경우에만 저장.
+- `read`/`current`: 첨부가 있으면 `attachment_names`(본문 삽입 이미지 제외, 20개까지, `attachment_names_truncated`), `inline_images`,
+  `next_commands` "첨부 내려받기"(`attachments --id <id> --save`, `--save`와 함께면 워드 넣기 다음).
+- `new/reply/forward --attach`: 전체 경로 파일이 없으면 Outlook에 연결하기 전에 같은 폴더의 비슷한 파일을 전체 경로 `[후보]`로 STOP_RETRY
+  (폴더가 없으면 그렇게 알림). 붙인 뒤 `Attachments.Count`가 붙인 수만큼 늘었는지 다시 셈(R1, 전달은 원본 첨부를 그대로 두고 늘어난 수로 비교).
+  맞지 않으면 작성 창만 띄우고 `UNVERIFIED:`, `--send`면 보내지 않고 STOP_RETRY(`attach_problems`). 답장·전달 첨부는 원래 되던 것을 테스트로 고정.
+- 명령 별칭: `outlook.py download|attach|attachment` -> `[추천] attachments`.
+
+### 바뀐 동작
+- `read`/`current --save-attach`를 없앴습니다(베타, 호환 없음). 7일 뒤 정리되는 `data\_work\mail_attachments\`에 저장해 내려받기가 아니었습니다.
+  이제 `attachments --save`를 씁니다. 결과 키 `saved_attachments`, `skipped_attachments`도 없앴습니다.
+
+### 문서
+- SKILL.md 메일 줄을 읽기 / 첨부 내려받기 / 쓰기·문서 첨부로 나눔(`reply --body ... --attach "C:\전체경로\파일.pdf"`, new·forward도 같음).
+- README outlook 절, 파일 위치 표(메일 첨부), 사용 가이드 6절, En-Genius README 데이터 표.
+
 ## [1.4.33] - 2026-11-04
 
 En-Genius(사내 에이전트) 스킬 실행 대응. 회귀 테스트: `tests/test_review_v1433.py` (1.4.32에서 4개 중 3개 실패).

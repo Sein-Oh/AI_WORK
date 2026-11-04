@@ -1,10 +1,10 @@
 ---
 name: office-cli
-description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표/수식/차트/서식, 본문/표/그림, 슬라이드, 워드 목차·장절·쪽 읽기, 검토 메모·변경 추적, PPT 발표자 노트), 앱 사이로 차트·표·내용을 옮기고(office.py transfer), Outlook 메일을 조회·작성하고, PDF/HWP/Office 파일을 Office 없이 읽고 등록(캐시)해 쪽·장절·번호 근거와 함께 검색한다(reader.py). 작업 전 자동 스냅샷으로 되돌리기(office.py undo)를 지원한다. 엑셀 표/그래프 만들기, 보고서·발표자료 작성, 문서 내용 검색 후 다른 문서에 넣기, 규격/규정 근거 찾기, 메일 답장 작성 요청 시 사용.
+description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표/수식/차트/서식, 본문/표/그림, 슬라이드, 워드 목차·장절·쪽 읽기, 검토 메모·변경 추적, PPT 발표자 노트), 앱 사이로 차트·표·내용을 옮기고(office.py transfer), Outlook 메일을 조회·작성하고(첨부 내려받기, 답장·전달에 문서 첨부), PDF/HWP/Office 파일을 Office 없이 읽고 등록(캐시)해 쪽·장절·번호 근거와 함께 검색한다(reader.py). 작업 전 자동 스냅샷으로 되돌리기(office.py undo)를 지원한다. 엑셀 표/그래프 만들기, 보고서·발표자료 작성, 문서 내용 검색 후 다른 문서에 넣기, 규격/규정 근거 찾기, 메일 답장 작성·첨부 저장 요청 시 사용.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.33"
+  version: "1.4.34"
   platform: windows
 ---
 
@@ -45,7 +45,9 @@ metadata:
 | 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호는 무시: `SOI 1` = `SOI #1`. 사용자가 패턴을 말하면 `--regex`) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |
-| 메일 | `outlook.py current`, `search --query 말 [--from 이름]`, `read --id <id>`, `reply --body "내용"`, `new --to 주소 --subject 제목 --body 내용` (첨부 `--attach "a.pdf;b.pdf"`) |
+| 메일 읽기 | `outlook.py current`, `search --query 말 [--from 이름]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일) |
+| 메일 첨부 내려받기 | 목록 `outlook.py attachments --id <id>` / 저장 `outlook.py attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더는 `--save "<전체경로 폴더>"`, 일부만 `--name 이름일부`). 결과의 `folder`와 파일 이름을 알린다 |
+| 메일 쓰기 / 문서 첨부 | `outlook.py reply --body "내용" --attach "C:\전체경로\파일.pdf"`. `--attach`는 `new --to 주소 --subject 제목 --body 내용`, `forward --to 주소`에도 같다. 여러 파일은 `;`로 구분 |
 | 되돌리기 / 창 | `office.py undo` (목록 `--list`: 사용자가 고른 항목의 `command`를 그대로 실행), `office.py windows`, `office.py focus --app excel` |
 | 결과 배치 확인 | `ppt.py info --detail --slides N`, `excel.py info --detail`, `word.py info --detail` (`layout_warnings`가 0이 아니면 `warnings`를 알림) |
 

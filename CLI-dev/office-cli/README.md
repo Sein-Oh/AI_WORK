@@ -15,7 +15,7 @@ CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart
 ├── word.py      워드   read / info / outline / write / replace / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
-├── outlook.py   메일   list / search / read / current / folders / new / reply / forward
+├── outlook.py   메일   list / search / read / current / folders / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
 ├── _runtime.py  공통 런타임 (응답 계약, 경로, 입출력, 마크다운 해석)
@@ -111,6 +111,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` (En-Genius 실행은 아래 고정 폴더) | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
 | 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` (En-Genius 실행은 아래 고정 폴더) | 환경변수 `OFFICE_CLI_CONFIG` (1.4.33) |
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
+| 메일 첨부 (`outlook.py attachments --save`) | `<다운로드>\메일 첨부\<시각>_<제목>` (자동 정리 안 함, En-Genius 실행도 같음, 1.4.34) | `--save "<전체경로 폴더>"` |
 
 - En-Genius 스킬로 실행하면(트레이가 환경변수 `ENGENIUS_OUT`을 넣음) 트레이가 스킬 파일을 실행마다 임시 폴더에 풀고 끝나면 지웁니다.
   그래서 `config.json`, `data`, `cache`의 기본 위치를 `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli\`로 바꿉니다 (1.4.33).
@@ -225,7 +226,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `notes` | 발표자 노트. 읽기: `--slides 1-3`(생략 시 전체, `--slide 3`도 됨), 노트가 있는 슬라이드만 `no, title, notes`. 쓰기: `--slide N --text 노트`(줄바꿈 `\n`) 또는 `--file 노트.md`. 기존 노트가 있으면 `--append`(뒤에 덧붙이기) 또는 `--overwrite`(바꾸기)가 필요하고, 둘 다 없으면 지우지 않고 `needs_user_decision`. 노트 본문 개체틀이 없으면 쓰지 않음. 쓴 뒤 다시 읽어 확인(`verified`, `before`, `after`). 이미 같은 노트면 쓰지 않고 `unchanged: true`(1.4.15) |
 
 ### outlook.py
-- 조회: `list [--folder --unread --limit]`, `search --query [--from --where all|subject|body]`, `read --id [--save-attach --save]`, `current`, `folders`
+- 조회: `list [--folder --unread --limit]`, `search --query [--from --where all|subject|body]`, `read --id [--save]`, `current [--save]`, `folders`
+- 첨부: `attachments [--id] [--save [폴더]] [--name 이름일부] [--index 1,3]` (1.4.34)
 - `--folder`의 폴더를 찾지 못하면 그 단계의 하위 폴더 이름(끝 이름)끼리 비교해 `[추천]`(표기만 다름)이나 `[후보]`를 주고, 보여 줄 때만
   전체 경로(`계정\폴더\하위`)로 바꿉니다. 1.4.28까지는 전체 경로끼리 비교해 같은 계정 이름 때문에 관계없는 폴더가 모두 `[후보]`였습니다.
   오류 로그에는 계정 이름(보통 메일 주소) 대신 `<메일 계정>`을 남깁니다(1.4.29). message 끝의 `(경로: ...)`도 로그에서는
@@ -235,12 +237,32 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `search`: 검색어의 `%`, `_`는 글자 그대로 찾습니다. DASL `LIKE`에서는 와일드카드라 더 넓게 찾으므로, 그런 검색어는 제목·본문·보낸사람을
   다시 읽어 글자 그대로 들어 있는 메일만 남깁니다(대소문자 무시, 읽지 못한 칸은 남김). 1.4.22까지는 `_`를 공백으로 바꾸고 `%`를 지워
   `견적서_v2`, `10% 할인`이 0건이었습니다(1.4.23).
-- 작성: `new --to --subject --body [--cc --attach --body-file --send]`, `reply [--id --all --body]`, `forward [--id --to --body]`
+- 작성: `new --to --subject --body [--cc --attach --body-file --send]`, `reply [--id --all --body --attach]`, `forward [--id --to --body --attach]`
 - `--attach`: 여러 개는 `;`로 구분(쉼표도 됨). 값 전체가 있는 파일이면 하나로 봅니다(`보고서,최종.pdf`). 나눈 조각이 있는 파일이 아니면 뒤 조각을 이어 붙여 봅니다(폴더 이름에 `;`가 든 경로 여러 개). `--body`의 글자 `\n`만 줄바꿈으로 바꾸고(Windows 경로 안의 `\n`은 그대로), `--body-file` 내용은 그대로 씁니다.
 - `read --save`, `current --save`: 파일 이름에 쓸 수 없는 글자(`RE:`의 `:` 등)는 `_`로 바꾸고, 저장한 파일을 다시 읽어 확인합니다(확인하지 못하면 `UNVERIFIED:`).
-- 첨부는 `data\_work\mail_attachments\`에 저장합니다. 같은 이름 첨부는 번호를 붙이고, 본문 삽입 이미지와 실행 파일 형식은 저장하지 않습니다.
-  저장에 실패한 첨부(`skipped_attachments`에 "저장 실패")가 있거나 저장한 파일이 다시 보니 없으면 `UNVERIFIED:`입니다(1.4.13).
-- `new/reply/forward`는 본문 파일·첨부 파일을 메일을 만들기 전에 확인합니다(없으면 아무것도 만들지 않고 STOP_RETRY, 1.4.13).
+- `read`/`current`는 첨부를 저장하지 않습니다. 첨부가 있으면 `attachment_names`(본문 삽입 이미지를 뺀 이름, 20개까지,
+  `attachment_names_truncated`), 본문 삽입 이미지 수 `inline_images`, `next_commands`의 "첨부 내려받기"
+  (`attachments --id <id> --save`)를 줍니다. `--save`와 함께면 "메일 내용을 워드에 넣기"가 먼저입니다. `--save-attach`는 1.4.34에서 없앴습니다.
+- `attachments` (1.4.34): `--id`를 빼면 `reply`처럼 열린 창이나 목록에서 선택한 메일입니다. 다음 명령에는 그 메일의 id를 넣습니다.
+  - `--save` 없이: 목록 `attachments`(항목마다 `index` 1부터, `name`, `size` 바이트(모르면 null), `hidden_inline` 본문 삽입 이미지, `blocked` 실행 파일 형식),
+    `count`, `truncated`(50개 상한). 0개면 `count: 0`과 `VERIFIED: 0건. 이 메일에는 첨부 없음`.
+  - `--save`: 기본 폴더는 `<다운로드>\메일 첨부\<YYYYMMDD_HHMMSS>_<제목 40자>`입니다. 다운로드는 Windows 셸 폴더 설정(옮긴 경우 그 위치),
+    없으면 `%USERPROFILE%\Downloads`. data 폴더(En-Genius 고정 폴더 포함)와 관계없고 자동 정리하지 않습니다.
+    `--save "<폴더>"`는 전체 경로만 받고(없으면 만듦), 상대 경로는 STOP_RETRY(사용자에게 전체 경로를 물음).
+  - 고르기: `--name`(이름 일부, 대소문자 무시, `;`로 여러 개, 옵션 반복 가능), `--index 1,3`(`2-4`도 됨). 둘을 함께 주면 합칩니다.
+    맞는 첨부가 없는 값이 하나라도 있으면 아무것도 저장하지 않고 첨부 이름을 `[후보]`로 STOP_RETRY. `--save` 없이 고르기만 주면 STOP_RETRY.
+  - 실행 파일 형식(`.exe .bat .cmd .js .vbs .ps1 .msi .lnk` 등)은 골라도 저장하지 않습니다. 본문 삽입 이미지(서명 그림 등)는
+    전부 저장할 때는 건너뛰고 `--name`/`--index`로 직접 고르면 저장합니다. 건너뛴 첨부는 `skipped`(`name`, `reason`).
+  - 덮어쓰지 않습니다. 같은 이름 파일이 있으면(폴더에 있거나 같은 메일에 같은 이름 첨부) ` (2)`를 붙이고 `recovered`로 알립니다.
+    파일 이름에 쓸 수 없는 글자는 `_`(`rt.safe_filename`).
+  - 결과: `saved`(전체 경로), `skipped`, `count`(저장한 수), `folder`(저장한 것이 없으면 null). 저장한 것이 0개면 `VERIFIED: 0건.`과 이유.
+  - 확인(R1): 저장한 파일이 있는지 다시 보고, Outlook이 크기를 알려 준 첨부는 빈 파일이 아닌지 봅니다. Outlook의 `Size`에는 메일 속성 몫이 더해져
+    파일보다 조금 크므로 같은 크기는 요구하지 않습니다. 저장 실패, 저장 뒤 파일 없음, 빈 파일이 있으면 `UNVERIFIED:`와 그 첨부 이름.
+- `new/reply/forward --attach`: 본문 파일·첨부 파일을 Outlook에 연결하기 전에 확인합니다(없으면 아무것도 만들지 않고 STOP_RETRY, 1.4.13).
+  전체 경로가 아닌 파일 이름은 data 폴더에서 찾고(없으면 data 폴더의 비슷한 이름 `[추천]`/`[후보]`), 전체 경로 파일이 없으면 같은 폴더의
+  비슷한 파일을 전체 경로로 `[후보]`(폴더가 없으면 그렇게 알림, 1.4.34). 붙인 뒤 `Attachments.Count`가 붙인 수만큼 늘었는지 다시 셉니다
+  (전달은 원본 첨부가 그대로 있고 늘어난 수로 비교). 맞지 않거나 붙이다 실패하면 작성 창만 띄우고 `UNVERIFIED:`, `--send`였으면
+  보내지 않고 작성 창을 띄운 뒤 STOP_RETRY(`attach_problems`, 1.4.34).
 
 ### reader.py
 용도: (1) 작성 중인 문서(Word/Excel/PPT)가 규정·규격서(PDF/Word)에 맞는지 확인, (2) 여러 문서에서 키워드를 찾아 근거(쪽, 장절, 문항/조항 번호)와 함께 모으기.

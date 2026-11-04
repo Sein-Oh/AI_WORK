@@ -43,6 +43,7 @@ class Attachments:
 
     def Add(self, path):
         self.added.append(path)
+        self.items.append(Att(os.path.basename(path)))      # Outlook처럼 Count가 늘어남 (1.4.34부터 다시 셈)
 
 
 class Mail:
@@ -136,15 +137,17 @@ class Att:
         open(path, "w").close()
 
 
-def test_save_attachments_rules():
+def test_save_attachments_rules(tmp_path):
     item = Mail()
     item.Subject = "견적/회신"
     item.Attachments = Attachments([Att("a.xlsx"), Att("a.xlsx"), Att("logo.png", hidden=True),
                                     Att("setup.exe"), Att("b.pdf", fail=True)])
-    saved, skipped = outlook._save_attachments(item)
-    assert [os.path.basename(p) for p in saved] == ["a.xlsx", "a (2).xlsx"]          # 같은 이름은 번호 붙여 보존
-    assert any("본문 삽입" in s for s in skipped) and any("setup.exe" in s for s in skipped)
-    assert any("b.pdf" in s and "실패" in s for s in skipped)
+    infos = outlook._attachment_infos(item)
+    saved, skipped, problems = outlook._save_selected(infos, None, str(tmp_path / "out"))
+    assert [os.path.basename(s["path"]) for s in saved] == ["a.xlsx", "a (2).xlsx"]          # 같은 이름은 번호 붙여 보존
+    reasons = [f"{s['name']} {s['reason']}" for s in skipped]
+    assert any("본문 삽입" in s for s in reasons) and any("setup.exe" in s for s in reasons)
+    assert any("b.pdf" in s and "실패" in s for s in reasons) and problems == ["b.pdf 저장 실패"]
 
 
 class Folder:
