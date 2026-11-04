@@ -62,7 +62,8 @@ def get_outlook() -> Any:
         try:
             return off.win32com.client.Dispatch("Outlook.Application")
         except Exception as e:
-            raise rt.InputError(f"Outlook에 연결할 수 없습니다 (설치/프로필 확인 필요): {e}")
+            hint = rt.elevation_hint()     # 관리자 권한이면 일반 권한으로 띄운 Outlook에 붙지 못함
+            raise rt.InputError(f"Outlook에 연결할 수 없습니다 (설치/프로필 확인 필요): {e}" + (f" {hint}" if hint else ""))
 
 
 def get_namespace(app: Any) -> Any:

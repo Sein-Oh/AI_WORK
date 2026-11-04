@@ -378,7 +378,7 @@ def cmd_info(args) -> Dict[str, Any]:
         docs = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                 for d in off.list_open("word")]
         if not docs:
-            return rt.ok(TOOL, "info", "0건: 열린 문서가 없습니다",
+            return off.no_open_docs_result(TOOL, "info", "0건: 열린 문서가 없습니다",
                          "VERIFIED: 0건. 열린 Word 문서가 없습니다. 사용자에게 그대로 알리세요.", documents=docs, count=0)
         return rt.ok(TOOL, "info", f"열린 문서 {len(docs)}개", documents=docs, count=len(docs))
     with off.open_target("word", args.target, readonly=True) as t:

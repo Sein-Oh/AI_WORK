@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.39"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.40"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -146,6 +146,26 @@ class UserDecisionError(InputError):
         super().__init__(message + (f" [후보] {', '.join(cands)}" if cands else ""), candidates=cands, no_fallback=True,
                          log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
         self.directive = directive
+
+
+ELEVATED_HINT = ("이 도구가 관리자 권한으로 실행 중이라, 일반 권한으로 연 Office 문서와 창을 볼 수 없습니다 "
+                 "(Windows 권한 수준이 다르면 COM 연결이 막힘). 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행하세요.")
+
+
+def is_elevated() -> bool:
+    """Windows에서 관리자 권한(높은 무결성 수준)으로 실행 중인지. 판단하지 못하면 False."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def elevation_hint() -> str:
+    """'열린 문서가 없음'을 알릴 때 붙일 안내. 관리자 권한으로 실행 중이면 ELEVATED_HINT, 아니면 빈 글."""
+    return ELEVATED_HINT if is_elevated() else ""
 
 
 class OfficeBusyError(RuntimeError):
@@ -351,7 +371,7 @@ def _error_payload(exc: BaseException, tool: str = "", command: str = "") -> Dic
 
     msg = str(exc) or type(exc).__name__
     if isinstance(exc, UserDecisionError):
-        base.update(error_type="needs_user_decision", message=msg, agent_directive=f"STOP_RETRY: {exc.directive}")
+        base.update(error_type=exc.error_type or "needs_user_decision", message=msg, agent_directive=f"STOP_RETRY: {exc.directive}")
         if exc.candidates:
             base["candidates"] = exc.candidates
         return base

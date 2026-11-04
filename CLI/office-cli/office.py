@@ -60,7 +60,7 @@ def cmd_windows(args) -> Dict[str, Any]:
         if no_pdf:
             preview += f" (PDF 내보내기 불가: {', '.join(no_pdf)})"
     if not docs:
-        return rt.ok(TOOL, "windows", preview, "VERIFIED: 0건. 열린 Office 문서가 없습니다. 사용자에게 그대로 알리세요.",
+        return off.no_open_docs_result(TOOL, "windows", preview, "VERIFIED: 0건. 열린 Office 문서가 없습니다. 사용자에게 그대로 알리세요.",
                      documents=docs, count=0, office=caps)
     return rt.ok(TOOL, "windows", preview, documents=docs, count=len(docs), office=caps)
 
@@ -491,6 +491,12 @@ def _preflight_targets(args, targets: List[str]) -> None:
     labels = ", ".join(off.APP_LABEL[k] for k in missing)
     reasons = "; ".join(missing.values())
     if not found:
+        hint = rt.elevation_hint()
+        if hint:
+            err = rt.UserDecisionError(f"받는 문서를 찾지 못해 아무것도 바꾸지 않았습니다: {reasons}. {hint}",
+                                       off.ELEVATED_DIRECTIVE)
+            err.error_type = "elevated_process"
+            raise err
         raise rt.UserDecisionError(
             f"받는 문서를 찾지 못해 아무것도 바꾸지 않았습니다: {reasons}.",
             f"실행하지 않았습니다. 사용자에게 {labels} 문서를 열어 달라고 한 뒤 같은 명령을 1번만 다시 실행하세요. "

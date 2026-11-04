@@ -55,6 +55,12 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 열린 문서 이름 | 예: `보고.xlsx` (대소문자 무시). 같은 이름의 문서가 둘 이상 열려 있으면 고르지 않고 `[후보]`(전체 경로)로 오류 |
 | 파일 경로 | 닫힌 파일. 읽기는 라이브러리로, 쓰기는 사용자 창과 분리된 백그라운드 인스턴스로 열고 저장 후 닫음 |
 
+- 관리자 권한(높은 무결성 수준)으로 실행하면 일반 권한으로 연 Office 창·문서에 COM으로 닿지 못합니다(회사 PC에서 관리자 PowerShell의 OpenCode).
+  이때 "열린 문서 없음"으로 끝내지 않고(1.4.40): `active` 대상, 열린 문서 이름 대상, `office.py transfer`의 받는 문서를 찾지 못하면
+  `error_type: "elevated_process"`와 "관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행" 안내(STOP_RETRY, 다시 실행하지 말 것).
+  `info --all`·`office.py windows`의 0건은 확인한 0건이 아니므로 `UNVERIFIED:`와 같은 안내. Outlook 연결 실패 message에도 붙입니다.
+  판단은 `ctypes.windll.shell32.IsUserAnAdmin()`(`_runtime.is_elevated`, Windows 밖이나 실패하면 일반 권한으로 봄).
+
 ### 화면과 안전
 - **읽기는 화면을 움직이지 않습니다.** 활성 시트, 스크롤, PPT 슬라이드가 그대로입니다.
 - **쓰기는 고친 시트/슬라이드로만 이동합니다.** `--no-focus`를 주면 이동하지 않습니다.

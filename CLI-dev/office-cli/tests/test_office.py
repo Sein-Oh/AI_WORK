@@ -1798,6 +1798,74 @@ def test_no_open_document_asks_for_the_path(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 관리자 권한 실행 (1.4.40): 일반 권한으로 연 문서가 보이지 않으므로 '문서 없음' 대신 권한 안내
+# ---------------------------------------------------------------------------
+
+
+def _elevated(monkeypatch, value=True):
+    monkeypatch.setattr(rt, "is_elevated", lambda: value)
+
+
+def test_is_elevated_false_off_windows():
+    if os.name != "nt":
+        assert rt.is_elevated() is False and rt.elevation_hint() == ""
+
+
+@pytest.mark.parametrize("tool,argv", [(excel, ("read",)), (excel, ("write", "--range", "A1", "--value", "1")),
+                                       (ppt, ("read",))])
+def test_no_open_document_when_elevated_explains_admin(monkeypatch, capsys, tool, argv):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch)
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 1 and out["error_type"] == "elevated_process", out
+    assert "관리자 권한" in out["message"] and "일반 PowerShell" in out["message"]
+    assert "문서가 없습니다" not in out["message"]                 # 없다고 단정하지 않음
+    assert out["agent_directive"].startswith("STOP_RETRY:") and "다시 실행하지" in out["agent_directive"]
+    assert "--target" not in out["agent_directive"]                # 경로를 줘도 해결되지 않음
+
+
+def test_no_open_document_not_elevated_unchanged(monkeypatch, capsys):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch, False)
+    code, out = run_main(excel, capsys, "read")
+    assert code == 1 and out["error_type"] == "needs_user_decision"
+    assert "열려 있는 Excel 문서가 없습니다" in out["message"] and "관리자" not in out["message"]
+
+
+@pytest.mark.parametrize("tool,argv", [(excel, ("info", "--all")), (office, ("windows",)),
+                                       (ppt, ("info", "--all"))])
+def test_empty_open_list_when_elevated_is_unverified(monkeypatch, capsys, tool, argv):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch)
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 0 and out["verified"] is False and out["count"] == 0, out
+    assert out["agent_directive"].startswith("UNVERIFIED:") and "관리자 권한" in out["agent_directive"]
+    _elevated(monkeypatch, False)
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED: 0건")
+
+
+def test_open_document_name_when_elevated_mentions_admin(monkeypatch, capsys):
+    stub_com(monkeypatch)
+    monkeypatch.setattr(off, "find_apps", lambda kind: [])
+    _elevated(monkeypatch)
+    code, out = run_main(excel, capsys, "read", "--target", "보고.xlsx")
+    assert code == 1 and "관리자 권한" in out["message"], out
+
+
+def test_transfer_no_target_open_when_elevated(env, capsys, monkeypatch):
+    env["word"] = None
+    monkeypatch.setattr(off, "get_active", lambda kind: (_ for _ in ()).throw(off.no_open_doc(kind))
+                        if kind != "excel" else {"name": "a.xlsx", "path": "", "app": FakeXlApp(), "doc": None})
+    _elevated(monkeypatch)
+    code, out = run_office(capsys, *CHART)
+    assert code == 1 and out["error_type"] == "elevated_process" and "관리자 권한" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
 # 환경 변수·~ 가 든 전체 경로는 새 파일로 만들 수 있음, 전체 경로가 없으면 열린 문서를 [후보]로 주지 않음
 # ---------------------------------------------------------------------------
 

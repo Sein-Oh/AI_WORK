@@ -6,6 +6,21 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.40] - 2026-11-04
+
+회사 PC에서 관리자 권한 PowerShell로 띄운 OpenCode가 사용자가 연 문서를 보지 못하고 "열려 있는 ... 문서가 없습니다"라고 답한 문제.
+Windows는 권한 수준(무결성 수준)이 다른 프로세스 사이의 COM 연결을 막아, 관리자 권한 도구에는 일반 권한 Office가 보이지 않음.
+회귀 테스트: `tests/test_office.py` "관리자 권한 실행" (1.4.39에서 11개 중 10개 실패).
+
+### 수정
+- 공용 `_runtime.is_elevated()`(`IsUserAnAdmin`) / `elevation_hint()`, `_office.no_open_doc`과 `no_open_docs_result`가 한 곳에서 판단.
+  관리자 권한이면 열린 문서를 못 찾은 오류(`active`, 열린 문서 이름, transfer 받는 문서)가 `error_type: "elevated_process"`,
+  message "관리자 권한으로 실행 중이라 일반 권한으로 연 문서를 볼 수 없음, 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행",
+  directive는 다시 실행하지 말고 그대로 전하라는 것(경로를 물어 `--target`으로 다시 실행하라는 안내를 하지 않음).
+- `excel/word/ppt.py info --all`, `office.py windows`의 0건: 관리자 권한이면 `VERIFIED: 0건` 대신 `UNVERIFIED:`와 같은 안내.
+- Outlook 연결 실패 message에도 같은 안내(관리자 권한일 때만).
+- 일반 권한에서는 바뀐 것 없음.
+
 ## [1.4.39] - 2026-11-04
 
 회사 PC 오류 로그(2026-10-29~11-04, 실제 사용)의 인자 오류를 현재 버전으로 다시 실행해, 안내가 맞지 않던 것을 고침.

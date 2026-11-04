@@ -338,7 +338,7 @@ def cmd_info(args) -> Dict[str, Any]:
         items = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                  for d in off.list_open("ppt")]
         if not items:
-            return rt.ok(TOOL, "info", "0건: 열린 프레젠테이션이 없습니다",
+            return off.no_open_docs_result(TOOL, "info", "0건: 열린 프레젠테이션이 없습니다",
                          "VERIFIED: 0건. 열린 PowerPoint 프레젠테이션이 없습니다. 사용자에게 그대로 알리세요.",
                          presentations=items, count=0)
         return rt.ok(TOOL, "info", f"열린 프레젠테이션 {len(items)}개", presentations=items, count=len(items))

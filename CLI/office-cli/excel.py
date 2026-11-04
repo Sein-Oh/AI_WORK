@@ -960,7 +960,7 @@ def cmd_info(args) -> Dict[str, Any]:
         books = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
                  for d in off.list_open("excel")]
         if not books:
-            return rt.ok(TOOL, "info", "0건: 열린 통합문서가 없습니다",
+            return off.no_open_docs_result(TOOL, "info", "0건: 열린 통합문서가 없습니다",
                          "VERIFIED: 0건. 열린 Excel 통합문서가 없습니다. 사용자에게 그대로 알리세요.", workbooks=books, count=0)
         return rt.ok(TOOL, "info", f"열린 통합문서 {len(books)}개", workbooks=books, count=len(books))
     with off.open_target("excel", args.target, readonly=True) as t:
