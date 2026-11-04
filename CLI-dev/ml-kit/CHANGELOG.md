@@ -8,6 +8,33 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.65] - 2026-11-04
+
+5차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 순열 중요도(`_permutation_means`): 다른 단계를 하지 않은 실행은 처음 열의 1/5(`IMPORTANCE_MAX_RUNS`)을 시계 없이 계산하고, 끝낸 열은
+  멈출 때만 저장해 600열 데이터(HistGB, KNN)에서 120초 강제 종료가 매번 반복되었음(JSON 없음, 진행 없음). 이제 시계 없이 하는 열은 첫 열 1개뿐(R10 진행 보장
+  최소)이고 그 뒤는 열마다 시계를 봄. 끝낸 열은 `IMPORTANCE_SAVE_SECONDS`(12초)마다 저장(처음 저장할 때 1위 모델 전체 적합도 한 번 저장)하므로
+  밖에서 강제 종료되어도 다음 실행이 이어 감. 열 시간 추정은 첫 열 뒤부터 이번 실행의 실측 열 시간(최대값 x 1.2)으로 바꿈(전에는 첫 예측 추정과의
+  최대값이라 첫 예측이 느리면 계속 일찍 멈춤). `IMPORTANCE_MAX_RUNS` 삭제. 테스트: `test_train.py`
+  `test_slow_wide_importance_stops_by_the_clock_from_the_second_column`, `test_killed_importance_keeps_columns_saved_on_the_way`,
+  `test_wide_target_last_step_is_split_and_matches_one_run`·`test_wide_data_command_split_runs_end_like_one_run`(상한 갱신).
+- [개선] 1위 모델 전체 적합 전 시간 추정을 가장 느린 후보(지금까지는 저장된 후보 시간의 최대값 x 1.2)가 아니라 1위 모델 자신의 교차검증 시간
+  x 1.6 / (fold 수 - 1)로 바꿈(`_fit_estimate`): 진 RandomForest가 느리면 빠른 전체 적합 앞에서 멈춰 한 실행을 더 썼음. 5000행 x 300열 타겟 1개
+  (`w300.csv`, 120초 강제 종료 조건)의 실행 횟수: 2.9.64 12번(첫 실행 JSON 없음) -> 2.9.65 5번(모두 JSON, 실행당 21~102초).
+  테스트: `test_last_step_estimate_uses_saved_candidate_times`, `test_single_target_is_split_by_candidate_model`(갱신).
+- [치명] 대체 저장 위치 정리(`resume_sweep_old`)가 `<ML_KIT_DATA_DIR>/resume/` 아래 모든 파일·폴더를 이름 확인 없이 3일 지나면 지웠음
+  (`ML_KIT_DATA_DIR`를 사용자 폴더로 두면 `resume\2025\cv.docx` 삭제). 이제 데이터 폴더의 대체 폴더 이름은 `ml-kit-resume`, 지우는 것은 12자리
+  16진수 하위 폴더 안의 도구 파일 이름(`<키>.joblib`, `<키>.m<번호>.joblib`, `<키>.fit.joblib`, `<키>.imp.joblib`, `best_run.json`, 각 `.tmp`)뿐이고
+  그 밖은 손대지 않음. 끝난 실행의 대체 위치 정리(`resume_clear`)도 같은 이름만. 옛 `resume` 폴더는 쓰지도 지우지도 않음.
+  테스트: `test_train.py` `test_resume_sweep_never_touches_user_files`, `test_resume_find_newest_and_old_fallbacks_swept`(파일 이름 갱신).
+- [경미] 코드 열 규칙 (a): `01, 001, 02, 002`처럼 같은 수를 0 개수만 다르게 적은 칸이 있어도 코드 열이 아니어서 `c = 001`이 `01` 행까지 뺐음.
+  이제 (a)는 같은 수를 다르게 적은 칸이 둘 이상(그중 하나는 앞자리 0)이면 코드 열. 테스트: `test_code_column_judgment`(사례 추가),
+  `test_where_thousands_and_code_columns`.
+- [경미] `--unit-row`의 중량 단위 `킬로그램중`, `그램중`, `톤중`을 '중'으로 끝나는 상태 낱말로 보아 경고·거부했음. 단위 목록(`_KOREAN_UNIT_WORDS`,
+  상태 규칙보다 먼저 봄)에 추가. 테스트: `test_loading_layout.py` `test_named_unit_row_with_korean_units_is_read`(사례 추가).
+
 ## [2.9.64] - 2026-11-04
 
 4차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.

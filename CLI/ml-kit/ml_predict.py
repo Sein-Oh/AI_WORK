@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.64"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.65"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -160,12 +160,16 @@ class Unfinished(BaseException):
 
 
 # A finished step that cannot be saved where it belongs (<data_root>/.resume_train, <version>/export/_fits) is saved in
-# a fallback place (JIT: resume_save): <tool data folder>/resume/<hash>, then %TEMP%/ml-kit-resume/<hash> (hash = the
-# first 12 characters of the hash of the original folder, so paths stay short). The next run looks in every place
+# a fallback place (JIT: resume_save): <tool data folder>/ml-kit-resume/<hash>, then %TEMP%/ml-kit-resume/<hash> (hash =
+# the first 12 characters of the hash of the original folder, so paths stay short). The next run looks in every place
 # (resume_find). When no place can be written the step is lost at a stop, so check_time does not stop with CONTINUE
 # (the same command would train it again forever) and does not go past the limit either: it stops with STOP_RETRY.
-RESUME_FALLBACK_DIR = "resume"
+RESUME_FALLBACK_DIR = "ml-kit-resume"      # a name of its own: ML_KIT_DATA_DIR may be a user folder
 TEMP_RESUME_DIR = "ml-kit-resume"
+# Only what resume_places/resume_save make is ever swept: <hash> folders and the saved step files
+# (<key>.joblib, <key>.m<k>.joblib, <key>.fit.joblib, <key>.imp.joblib, best_run.json, each also with .tmp).
+_RESUME_SUB_RE = re.compile(r"[0-9a-f]{12}")
+_RESUME_FILE_RE = re.compile(r"(?:[0-9a-f]{16}(?:\.m\d+|\.fit|\.imp)?\.joblib|best_run\.json)(?:\.tmp)?")
 RESUME_MAX_AGE = 3 * 24 * 3600             # saved steps of runs never continued are removed after this many seconds
 SAVE_FAILED: List[str] = []                # finished steps no place could hold in this command
 _RESUME_PLACE: Dict[str, int] = {}         # original folder -> index of the place that worked in this command
@@ -201,23 +205,26 @@ def resume_find(primary: str, name: str) -> Optional[str]:
 
 def resume_sweep_old() -> None:
     """At the start of a command: removes the saved steps older than RESUME_MAX_AGE in every fallback folder
-    (<tool data folder>/resume/<hash>, %TEMP%/ml-kit-resume/<hash>), also those of data files never trained again,
-    and the folders left empty. Only these tool folders; never raises."""
+    (<tool data folder>/ml-kit-resume/<hash>, %TEMP%/ml-kit-resume/<hash>), also those of data files never trained
+    again, and the folders left empty. Only the <hash> folders and the file names the tool makes (_RESUME_SUB_RE,
+    _RESUME_FILE_RE): anything else there (a user file, ML_KIT_DATA_DIR set to a user folder) is never touched.
+    Never raises."""
     temp = os.environ.get("TEMP") or os.environ.get("TMP") or __import__("tempfile").gettempdir()
     now = time.time()
     for root in (os.path.join(get_data_dir(), RESUME_FALLBACK_DIR), os.path.join(temp, TEMP_RESUME_DIR)):
         try:
-            subs = [os.path.join(root, n) for n in os.listdir(root)]
+            subs = [os.path.join(root, n) for n in os.listdir(root) if _RESUME_SUB_RE.fullmatch(n)]
         except OSError:
             continue
         for sub in subs:
             try:
-                if not os.path.isdir(sub):
+                if not os.path.isdir(sub) or os.path.islink(sub):
                     continue
                 for name in os.listdir(sub):
                     p = os.path.join(sub, name)
                     try:
-                        if os.path.isfile(p) and now - os.path.getmtime(p) > RESUME_MAX_AGE:
+                        if (_RESUME_FILE_RE.fullmatch(name) and os.path.isfile(p) and not os.path.islink(p)
+                                and now - os.path.getmtime(p) > RESUME_MAX_AGE):
                             os.remove(p)
                     except OSError:
                         pass
@@ -281,6 +288,8 @@ def resume_clear(primary: str, drop: Callable[[str, str], bool], fallback_only: 
             continue
         for name in os.listdir(d):
             p = os.path.join(d, name)
+            if i > 0 and not _RESUME_FILE_RE.fullmatch(name):     # a fallback place: only the tool's own files
+                continue
             try:
                 if drop(name, p):
                     os.remove(p)
@@ -1034,7 +1043,7 @@ _FIXED_CODE_RE = re.compile(r"\d{3,}")    # a fixed-width code ('001' ~ '120'); 
 def is_code_column(series: pd.Series) -> bool:
     """A category / code column, matched as exact text ('007' is not '7', not a number to interpolate) by
     --where / --exclude-where and ml_map keys. Only when some cell has a leading zero ('007') and
-    (a) the same number is also written without it ('007' and '7'), or
+    (a) the same number is written in two ways ('007' and '7', '01' and '001'), or
     (b) every filled cell is a code of the same width of 3 or more digits ('001' ~ '120').
     Otherwise the column is read as numbers, as training reads it: months '01' ~ '12' and '05, 10, 15, 20' are
     number columns ('월 = 1' meets '01'). A number or date column (Excel cells) is never one; missing-value marks
@@ -1049,10 +1058,14 @@ def is_code_column(series: pd.Series) -> bool:
         return False
     if all(isinstance(v, str) and _FIXED_CODE_RE.fullmatch(v) for v in filled) and len({len(v) for v in filled}) == 1:
         return True
-    nums = coerce_numeric(pd.Series(filled, dtype=object))
-    zmask = np.array(zero, dtype=bool)
-    with_zero = set(nums[zmask].dropna().tolist())
-    return bool(with_zero & set(nums[~zmask].dropna().tolist()))
+    nums = coerce_numeric(pd.Series(filled, dtype=object)).tolist()
+    ways: Dict[float, list] = {}               # number -> [its notations (01, 001, 1), one has a leading zero]
+    for v, n, z in zip(filled, nums, zero):
+        if n is not None and n == n:
+            ways.setdefault(n, [set(), False])
+            ways[n][0].add(str(v))
+            ways[n][1] = ways[n][1] or z
+    return any(len(texts) > 1 and has_zero for texts, has_zero in ways.values())
 
 
 def _where_cells(series: pd.Series) -> pd.Series:
@@ -2208,6 +2221,7 @@ _KOREAN_UNIT_WORDS = _KOREAN_UNITS | {
     "도", "라디안", "주기", "사이클", "건", "차", "호", "층", "동", "칸", "달러", "엔", "유로", "위안",
     "세", "살", "억원", "만원", "백만원", "천원", "원", "킬로", "센티", "미리", "바이트", "킬로바이트", "메가바이트",
     "기가바이트", "테라바이트", "개수", "마리", "점", "퍼센트포인트", "배", "대",
+    "킬로그램중", "그램중", "톤중",              # weight units (kgf, gf, tf): before the rule of words ending in "중"
 }
 
 # State and status words of a measurement sheet's data cells (a machine state, a missing reading): a row of them is a

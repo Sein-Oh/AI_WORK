@@ -547,6 +547,7 @@ def test_data_row_given_as_unit_row_is_refused(tmp_path):
     ["세", "백만원", "cm", None], ["억원", "백만원", "km", None], ["킬로", "km", "킬로", None],
     ["기가바이트", "Mbps", "초", None], ["개수", "EA", "센티", None], ["점", "퍼센트포인트", "마리", None],
     ["킬로", None, None, None], ["명", "건", "대", "배"],
+    ["킬로그램중", "mm", "도씨", None], ["톤중", "그램중", None, None],            # 5차 검토: 중량 단위는 "중"으로 끝나도 상태 낱말이 아님
 ])
 def test_named_unit_row_with_korean_units_is_read(tmp_path, units):
     """4차 검토(2.9.63 회귀): --unit-row로 준 정상 한글 단위 행(세/백만원/cm, 억원, 킬로/km, 기가바이트/Mbps, 개수/EA, 초/센티,
