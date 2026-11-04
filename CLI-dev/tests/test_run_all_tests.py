@@ -2,6 +2,7 @@
 """run_all_tests.py: a silent hung child is stopped at the timeout, CLI-dev/tests is a pytest target, PyYAML is checked,
 stages run in a fixed order into one result file with the summary on top and the tool error logs at the end."""
 import importlib.util
+import json
 import os
 import sys
 import time
@@ -248,3 +249,94 @@ def test_beta_stage_moves_report_and_isolates_tool_log(iso, monkeypatch, capsys)
     titles = [t for t, _ in st.details]
     assert titles[0] == "점검 결과 (beta_check 보고서)" and any("일부러 낸 오류" in t for t in titles)
     assert not (iso / "CLI" / "ml-kit" / "data").exists()       # the real tool log is not touched
+
+
+# ---------------------------------------------------------------------------
+# gemma: agent_scenarios.yaml 요청을 opencode run --format json으로 한 세션에 보내고 채점
+# ---------------------------------------------------------------------------
+FAKE_OPENCODE = r'''#!/usr/bin/env python3
+"""가짜 opencode: run --format json [--session ID] <요청>. 받은 인자를 calls.jsonl에 남기고 OpenCode 2.x 형식 사건을 씁니다.
+S0 요청이면 make_beta_samples.py를 shell 도구로 실행한 것처럼 기록합니다."""
+import json, os, sys
+argv = sys.argv[1:]
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "calls.jsonl"), "a", encoding="utf-8") as f:
+    f.write(json.dumps(argv, ensure_ascii=False) + "\n")
+if os.environ.get("FAKE_OC_DEAD"):
+    sys.stderr.write("provider not found\n")
+    sys.exit(1)
+sid = argv[argv.index("--session") + 1] if "--session" in argv else "ses_fake1"
+msg = argv[-1]
+def ev(kind, part, ts):
+    part = dict(part, sessionID=sid, messageID="msg_" + str(ts))
+    sys.stdout.write(json.dumps({"type": kind, "timestamp": ts, "sessionID": sid, "part": part}, ensure_ascii=False) + "\n")
+if msg.startswith("[S0]"):
+    out = json.dumps({"status": "ok", "agent_directive": "VERIFIED: 샘플 3개"}, ensure_ascii=False)
+    ev("tool_use", {"type": "tool", "tool": "shell", "state": {"status": "completed",
+       "input": {"command": 'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"'}, "output": out}}, 1000)
+    ev("text", {"type": "text", "text": "샘플 3개를 만들었습니다."}, 2000)
+else:
+    ev("text", {"type": "text", "text": "모르겠습니다."}, 3000)
+'''
+
+
+@pytest.fixture
+def fake_oc(tmp_path):
+    exe = tmp_path / "bin" / "opencode"
+    exe.parent.mkdir()
+    exe.write_text(FAKE_OPENCODE, encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
+
+
+def _calls(exe):
+    with open(exe.parent / "calls.jsonl", encoding="utf-8") as f:
+        return [json.loads(x) for x in f]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
+def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc, capsys):
+    pytest.importorskip("yaml")
+    work = iso / "ml_beta" / "agent"
+    work.mkdir(parents=True)
+    (work / "old.txt").write_text("x", encoding="utf-8")
+    code = rat.main(["--only", "gemma", "--label", "t", "--opencode", str(fake_oc), "--gemma-dir", str(work)])
+    assert code == 1                                            # 가짜는 S0만 맞게 답함
+    order = rat._load_grader().load_scenarios()[2]
+    calls = _calls(fake_oc)
+    assert len(calls) == len(order)
+    assert calls[0][:3] == ["run", "--format", "json"] and "--session" not in calls[0]
+    assert all(c[c.index("--session") + 1] == "ses_fake1" for c in calls[1:])      # 같은 세션에 이어서
+    assert calls[0][-1].startswith("[S0] ") and str(work) in calls[0][-1] and "{DIR}" not in calls[0][-1]
+    assert not work.exists() and any(p.name.startswith("agent_old_") for p in work.parent.iterdir())   # 지우지 않고 옮김
+    runs = next(p for p in work.parent.iterdir() if p.name.startswith("gemma_runs_"))
+    assert {f"{s}.jsonl" for s in order} <= {p.name for p in runs.iterdir()}
+    assert any(p.name.startswith("grade_t_") and p.suffix == ".md" for p in runs.iterdir())
+    text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
+    assert "Gemma 종합 테스트" in text and "ses_fake1" in text and "채점 결과" in text
+    assert "[gemma] S0" not in text and "[gemma] A1" in text                     # S0 통과, A1 실패로 목록에
+
+
+@pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
+def test_gemma_stage_stops_when_opencode_gives_no_session(iso, fake_oc, monkeypatch, capsys):
+    pytest.importorskip("yaml")
+    monkeypatch.setenv("FAKE_OC_DEAD", "1")
+    work = iso / "ml_beta" / "agent"
+    assert rat.main(["--only", "gemma", "--opencode", str(fake_oc), "--gemma-dir", str(work)]) == 1
+    assert len(_calls(fake_oc)) == 1                            # 첫 요청에서 멈춤 (나머지 20개를 기다리지 않음)
+    text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
+    assert "opencode가 응답하지 않음" in text and "provider not found" in text
+
+
+def test_gemma_is_opt_in_and_env_skip_without_opencode(iso, monkeypatch, capsys):
+    order = []
+    _fake_runners(monkeypatch, order)
+    rat.main(["--label", "a"])
+    assert "gemma" not in order
+    order.clear()
+    rat.main(["--label", "a", "--gemma"])
+    assert order == ["diag", "pytest", "beta", "office", "gemma"]
+    monkeypatch.setattr(rat.shutil, "which", lambda name: None)
+    assert rat.find_opencode() is None and rat.find_opencode(str(iso / "없음.exe")) is None
+    stage = rat.Stage("gemma")
+    rat.step_gemma(stage, rat.argparse.Namespace(opencode=None, gemma_dir=None, gemma_timeout=5), {"stamp": "s", "label": "a"})
+    assert stage.status == "ENV-SKIP" and "opencode 없음" in stage.note
