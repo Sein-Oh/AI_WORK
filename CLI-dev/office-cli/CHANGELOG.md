@@ -6,6 +6,15 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.59] - 2026-11-04
+
+두 판의 문서 비교 (B5). 회귀 테스트: `tests/test_reader.py` "reader.py diff"(1.4.58에서 5개 중 5개 실패, 명령 없음).
+
+### 기능
+- `reader.py diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "차이.xlsx"]`: 장절 경로로 단락 묶음을 짝짓고(경로가 다르면 제목 유사도,
+  짝 없는 장절은 `unpaired_sections`), 묶음 안에서 `삭제`/`추가`/`변경`. 숫자 변경은 말로(`5 V에서 5.5 V로`, 화살표 기호 없음) `number_changes`, 맨 앞에.
+  항목마다 이전·새 근거(`old_evidence`, `new_evidence`). JSON 20개, 넘으면 `truncated`와 `full_result_file`(xlsx). `--save` xlsx/csv.
+
 ## [1.4.58] - 2026-11-04
 
 닫힌 파일 열기 감시 (B4 1부). 문서 보안(DRM) 인증 창이 보이지 않는 인스턴스에 뜨면 명령이 끝나지 않아(에이전트 120초에 끊김)

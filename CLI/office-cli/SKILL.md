@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.58"
+  version: "1.4.59"
   platform: windows
 ---
 
@@ -50,6 +50,7 @@ metadata:
 | 문서 등록 (PDF/HWP/Office) | 폴더: `reader.py index --folder "<폴더>"` / 파일 하나 읽기: `reader.py read --file "<파일>" [--pages 1-3] [--save]` |
 | 문서의 장절 읽기 (근거 포함) | `reader.py read --file "<파일>" --section "장절 일부" [--pages 3-7]` (장절 이름 일부, 대소문자 무시. 결과 `units[].evidence`가 근거) |
 | 문서 검색 (근거 포함) | `reader.py search --query "A AND B" [--file 파일또는폴더] [--pages 3-7] [--section "장절 일부"] --save "근거.xlsx"` (띄어쓰기·기호·조사·단위 표기는 무시: `SOI 1` = `SOI #1`, `정격전압은 5V` = `정격 전압이 5.0 V`. 사용자가 패턴을 말하면 `--regex`. 사용자가 동의어를 주면 `C:\CLI\office-cli\data\synonyms.txt`에 적는다: UTF-8, 한 줄에 한 묶음, 쉼표 구분, 있던 줄은 지우지 않음) |
+| 두 판의 문서 비교 | `reader.py diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "차이.xlsx"]` (삭제·추가·변경, 숫자 변경 `number_changes`를 먼저, 항목마다 `old_evidence`·`new_evidence`를 붙여 알림) |
 | 캐시된 파일 조회 | `reader.py list [--name 이름일부] [--folder 폴더]` |
 | 캐시 지우기 (원본은 그대로) | `reader.py clear --name 이름일부` / `--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 먼저 `--dry-run`으로 목록을 보여 주고 확인받은 뒤 `next_commands[0]` 실행 |
 | 메일 읽기 | `outlook.py current`, `list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간: `--days 7`(오늘 포함) 또는 `--since 2026-11-01`, search도 같음), `search --query 말 [--from 이름] [--folder sent] [--where subject]`, `read --id <id>` (`--id`를 빼면 보고 있는 메일), 폴더 목록 `outlook.py folders` |

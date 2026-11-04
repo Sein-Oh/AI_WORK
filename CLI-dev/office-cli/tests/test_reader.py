@@ -2555,3 +2555,111 @@ def test_cond_holds_bounds():
     assert reader.cond_holds(c, 3.0) and not reader.cond_holds(c, 3.01)
     c = reader.spec_conditions("5 V ± 0.25 V")[0]
     assert reader.cond_holds(c, 5.25) and not reader.cond_holds(c, 5.2501)
+
+
+# ---------------------------------------------------------------------------
+# reader.py diff: 두 판 비교 (장절 짝짓기, 삭제·추가·변경, 숫자 변경, 1.4.59)
+# ---------------------------------------------------------------------------
+
+OLD_SPEC = """1. 일반
+
+이 규격은 전원 장치에 적용한다.
+
+2. 전기 특성
+
+정격 전압은 5 V로 한다.
+
+소비 전류는 최대 3 A로 한다.
+
+대기 전력은 0.5 W 이하로 한다.
+
+3. 표시
+
+표시등은 녹색으로 한다.
+
+4. 포장
+
+상자에 넣어 출하한다.
+"""
+
+NEW_SPEC = """1. 일반
+
+이 규격은 전원 장치에 적용한다.
+
+2. 전기 특성
+
+정격 전압은 5.5 V로 한다.
+
+소비 전류는 최대 3 A로 한다.
+
+돌입 전류는 10 A 이하로 한다.
+
+3. 표시 방법
+
+표시등은 청색으로 한다.
+
+5. 보관
+
+습도 60 % 이하에 보관한다.
+"""
+
+
+def _two_versions(tmp_path):
+    old, new = tmp_path / "규격_v1.txt", tmp_path / "규격_v2.txt"
+    old.write_text(OLD_SPEC, encoding="utf-8")
+    new.write_text(NEW_SPEC, encoding="utf-8")
+    return old, new
+
+
+def test_diff_classifies_and_flags_numbers(tmp_path, capsys):
+    old, new = _two_versions(tmp_path)
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    ch = out["changes"]
+    first = ch[0]
+    assert first["kind"] == "변경" and first["numeric"] is True and first["number_changes"] == ["5 V에서 5.5 V로"], first
+    assert "->" not in json.dumps(out, ensure_ascii=False)           # 화살표 없이 말로
+    assert "규격_v1.txt" in first["old_evidence"] and "규격_v2.txt" in first["new_evidence"]
+    kinds = {(c["kind"], c["old_text"] or c["new_text"]) for c in ch}
+    assert ("삭제", "대기 전력은 0.5 W 이하로 한다.") in kinds
+    assert ("추가", "돌입 전류는 10 A 이하로 한다.") in kinds
+    assert ("변경", "표시등은 녹색으로 한다.") in kinds                 # '3. 표시' -> '3. 표시 방법' 제목 유사도로 짝
+    assert ("삭제", "상자에 넣어 출하한다.") in kinds and ("추가", "습도 60 % 이하에 보관한다.") in kinds
+    assert out["unpaired_sections"]["old"] and out["unpaired_sections"]["new"]
+    assert not any("적용한다" in (c["old_text"] + c["new_text"]) for c in ch)     # 같은 글은 빠짐
+    assert ("변경", "3. 표시") in kinds                                     # 장절 제목 변경도
+    assert out["counts"]["변경"] == 3 and out["numeric_changes"] == 1 and out["truncated"] is False
+
+
+def test_diff_section_filter_and_save(tmp_path, capsys):
+    old, new = _two_versions(tmp_path)
+    save = tmp_path / "차이.xlsx"
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--section", "전기 특성",
+                         "--save", str(save))
+    assert code == 0 and out["count"] == 3 and out["output_file"] == str(save), out
+    import openpyxl
+    rows = list(openpyxl.load_workbook(save, read_only=True).active.iter_rows(values_only=True))
+    assert rows[0][0] == "구분" and len(rows) == 4
+
+
+def test_diff_same_document_is_zero(tmp_path, capsys):
+    old, _ = _two_versions(tmp_path)
+    copy = tmp_path / "같은판.txt"
+    copy.write_text(OLD_SPEC.replace("5 V", "5  V"), encoding="utf-8")      # 띄어쓰기 차이는 무시
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(copy))
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+
+
+def test_diff_truncates_with_full_result_file(tmp_path, capsys):
+    old, new = tmp_path / "a.txt", tmp_path / "b.txt"
+    old.write_text("\n\n".join(f"항목 {i}의 값은 {i} V이다." for i in range(30)), encoding="utf-8")
+    new.write_text("\n\n".join(f"항목 {i}의 값은 {i + 1} V이다." for i in range(30)), encoding="utf-8")
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
+    assert code == 0 and out["count"] == 30 and out["shown"] == 20 and out["truncated"] is True, out
+    assert os.path.isfile(out["full_result_file"])
+
+
+def test_number_changes_words():
+    assert reader.number_changes("정격 5V, 3 A", "정격 5.0 V, 3 A") == []
+    assert reader.number_changes("5 V", "5.5 V") == ["5 V에서 5.5 V로"]
+    assert reader.number_changes("5 V", "5 V, 2 A") == ["숫자 추가: 2 A"]

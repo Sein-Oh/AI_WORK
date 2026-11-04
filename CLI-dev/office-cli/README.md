@@ -16,7 +16,7 @@ CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── word.py      워드   read / info / outline / write / replace / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
 ├── outlook.py   메일   list / search / read / current / folders / attachments / new / reply / forward
-├── reader.py    파일   read / index / search / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
+├── reader.py    파일   read / index / search / diff / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
 ├── _runtime.py  공통 런타임 (응답 계약, 경로, 입출력, 마크다운 해석)
 └── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
@@ -382,6 +382,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `index --folder 폴더 [--depth 3 \| --recursive] [--max-files 300]` | 폴더의 문서를 내용 출력 없이 캐시에 등록. 결과: `count`, `indexed`, `updated`, `unchanged`, `failed`, `failures`(20개까지), `remaining`, `truncated`, `skipped_types`(지원하지 않는 확장자별 개수) |
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
 | `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`과 같은 규칙: 공백을 하나로 보고 대소문자 무시, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
+| `diff --file 이전판 --file2 새판 [--section "3"] [--save 차이.xlsx\|.csv]` | 두 판 비교. 아래 "diff" |
 | `search --query "A AND B" \| "A OR B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`next_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`). `applied`와 완료 CSV(`clear_done_...`, 20개를 넘을 때)는 지운 뒤 만들고, CSV의 `removed` 열이 실제로 지웠는지 |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
@@ -398,6 +399,15 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   없는 문서와 같습니다. 닫힌 파일의 `word.py read`도 같습니다.
 - XLSX의 계산된 값이 없는 수식 칸(엑셀에서 연 적 없는 파일)은 `meta.uncomputed_formulas`에 남기고 `read`는 `UNVERIFIED:`(`uncomputed_formulas`),
   `search`는 `not_searched`에 넣어 `UNVERIFIED:`입니다. 파서 버전 9의 캐시는 이 두 가지를 반영해 다시 읽습니다.
+
+#### diff (두 판 비교)
+- 두 문서를 읽어(캐시에 등록) 장절 경로가 같은 묶음끼리 짝짓고, 경로가 다르면 마지막 제목(번호 뺌)이 비슷하거나 한쪽이 다른 쪽을 품을 때(`표시` / `표시 방법`) 짝짓습니다.
+  짝이 없는 장절은 `unpaired_sections`(`old`, `new`)에 따로 적고 그 단락은 모두 삭제·추가로 셉니다. `--section`이면 그 장절 안만.
+- 짝지은 묶음 안에서 단락 순서대로 비교해 `삭제` / `추가` / `변경`(글이 75% 이상 같거나, 첫 낱말이 같고 절반 이상 같음)으로 나눕니다. 띄어쓰기 차이는 같은 글.
+- 숫자 변경: 단위까지 같은 값으로 비교해(`5V` = `5.0 V`) 바뀐 숫자를 말로 적습니다(`number_changes`: `5 V에서 5.5 V로`, `숫자 추가: 2 A`, 화살표 기호 없음). `numeric: true`인 변경을 맨 앞에.
+- 결과: `count`, `counts`(변경·삭제·추가), `numeric_changes`, `changes`(20개까지: `kind`, `numeric`, `number_changes`, `summary`, `old_text`/`new_text` 200자, `old_evidence`/`new_evidence`),
+  `shown`, `truncated`. 넘으면 `<데이터 폴더>/results/diff_<시각>.xlsx`를 `full_result_file`로(R2). `--save`는 전체를 xlsx/csv로 저장하고 다시 열어 확인.
+  0건이면 `VERIFIED: 0건`, 스캔 PDF(글자 없음)가 있으면 `UNVERIFIED:`.
 
 #### 검색과 캐시
 - 검색은 늘 대소문자를 무시합니다(`--regex` 포함). 대소문자를 가리는 옵션은 없습니다.
