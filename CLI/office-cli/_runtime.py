@@ -23,14 +23,15 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.34"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.35"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def engenius_home() -> Optional[str]:
-    """En-Genius 스킬로 실행 중이면(트레이가 ENGENIUS_OUT을 넣음) 사용자 데이터를 둘 고정 폴더.
-    트레이는 스킬 파일을 실행마다 임시 폴더에 풀고 끝나면 지우므로, 도구 폴더 아래(data, cache, config.json)는 남지 않는다."""
-    if not os.environ.get("ENGENIUS_OUT"):
+    """도구 파일이 En-Genius 트레이의 임시 폴더(%TEMP%\\engenius-skill\\<id>)에서 실행 중이면 사용자 데이터를 둘 고정 폴더.
+    트레이는 그 폴더를 실행이 끝나면 지우므로 도구 폴더 아래(data, cache, config.json)가 남지 않는다.
+    배포 스킬(docs/engenius)은 C:\\CLI의 도구를 실행하므로 해당 없음: OpenCode와 같은 data, cache를 쓴다 (1.4.35)."""
+    if not os.environ.get("ENGENIUS_OUT") or "engenius-skill" not in TOOL_DIR.replace("\\", "/").lower().split("/"):
         return None
     home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
     return os.path.join(home, "Documents", "En-Genius", "CLI-data", TOOL_NAME)

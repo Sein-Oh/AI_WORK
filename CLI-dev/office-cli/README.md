@@ -106,16 +106,16 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### 파일과 폴더
 | 항목 | 기본 위치 | 바꾸는 방법 |
 |---|---|---|
-| data 폴더 (파일명만 쓴 입력/출력) | `<도구폴더>\data` (En-Genius 실행은 아래 고정 폴더) | 환경변수 `OFFICE_CLI_DATA_DIR` 또는 `config.json`의 `data_dir` |
+| data 폴더 (파일명만 쓴 입력/출력) | `<도구폴더>\data` | 환경변수 `OFFICE_CLI_DATA_DIR` 또는 `config.json`의 `data_dir` |
 | 작업 폴더 (`--save` 경로 생략 시 `<이름>_<시각>`, 같은 초에 겹치면 `_2`를 붙이고 `recovered`, 7일 후 자동 정리. 이름의 쓸 수 없는 글자 `\ / : * ? " < > \|`는 `_`, 1.4.23) | `data\_work` | - |
-| 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` (En-Genius 실행은 아래 고정 폴더) | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
-| 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` (En-Genius 실행은 아래 고정 폴더) | 환경변수 `OFFICE_CLI_CONFIG` (1.4.33) |
+| 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
+| 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` | 환경변수 `OFFICE_CLI_CONFIG` (1.4.33) |
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
 | 메일 첨부 (`outlook.py attachments --save`) | `<다운로드>\메일 첨부\<시각>_<제목>` (자동 정리 안 함, En-Genius 실행도 같음, 1.4.34) | `--save "<전체경로 폴더>"` |
 
-- En-Genius 스킬로 실행하면(트레이가 환경변수 `ENGENIUS_OUT`을 넣음) 트레이가 스킬 파일을 실행마다 임시 폴더에 풀고 끝나면 지웁니다.
-  그래서 `config.json`, `data`, `cache`의 기본 위치를 `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli\`로 바꿉니다 (1.4.33).
-  환경변수(`OFFICE_CLI_CONFIG`, `OFFICE_CLI_DATA_DIR`, `OFFICE_CLI_CACHE_DIR`)를 주면 그것이 먼저입니다. 스킬 패키지는 `docs/engenius/`.
+- En-Genius 스킬(`docs/engenius/office-cli.zip`)은 `C:\CLI\office-cli`의 도구를 실행하므로 OpenCode와 같은 `data`, `cache`, `config.json`을 씁니다.
+  도구 파일 자체가 트레이의 임시 폴더(`%TEMP%\engenius-skill\<id>`)에서 실행될 때만(실행마다 지워짐) 기본 위치를
+  `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli\`로 바꿉니다 (1.4.33, 1.4.35부터 이 경우만). 환경변수가 있으면 그것이 먼저입니다.
 
 - 입력 파일은 절대경로 -> data 폴더 -> 작업 폴더 순서로 찾습니다. 없으면 비슷한 파일명을 `[추천]`으로 알려 줍니다.
 - 텍스트 입력은 UTF-8, UTF-16, CP949를 자동으로 판별합니다. CSV 출력은 기본 utf-8-sig입니다(Excel에서 한글 정상).
@@ -247,7 +247,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - `--save` 없이: 목록 `attachments`(항목마다 `index` 1부터, `name`, `size` 바이트(모르면 null), `hidden_inline` 본문 삽입 이미지, `blocked` 실행 파일 형식),
     `count`, `truncated`(50개 상한). 0개면 `count: 0`과 `VERIFIED: 0건. 이 메일에는 첨부 없음`.
   - `--save`: 기본 폴더는 `<다운로드>\메일 첨부\<YYYYMMDD_HHMMSS>_<제목 40자>`입니다. 다운로드는 Windows 셸 폴더 설정(옮긴 경우 그 위치),
-    없으면 `%USERPROFILE%\Downloads`. data 폴더(En-Genius 고정 폴더 포함)와 관계없고 자동 정리하지 않습니다.
+    없으면 `%USERPROFILE%\Downloads`. data 폴더와 관계없고 자동 정리하지 않습니다.
     `--save "<폴더>"`는 전체 경로만 받고(없으면 만듦), 상대 경로는 STOP_RETRY(사용자에게 전체 경로를 물음).
   - 고르기: `--name`(이름 일부, 대소문자 무시, `;`로 여러 개, 옵션 반복 가능), `--index 1,3`(`2-4`도 됨). 둘을 함께 주면 합칩니다.
     맞는 첨부가 없는 값이 하나라도 있으면 아무것도 저장하지 않고 첨부 이름을 `[후보]`로 STOP_RETRY. `--save` 없이 고르기만 주면 STOP_RETRY.

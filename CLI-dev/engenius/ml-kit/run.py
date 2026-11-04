@@ -1,25 +1,38 @@
 """En-Genius ml-kit 스킬 실행 입구. run_skill_script(name="ml-kit", path="run.py", args=[...])로 불린다.
 
+도구는 이 PC의 C:\\CLI\\ml-kit에 있다 (OpenCode와 같은 폴더, 같은 데이터). 이 스킬에는 지시문과 이 파일만 있다.
 args[0] = 도구 명령 한 줄 (SKILL.md의 명령, 결과의 next_commands[i].command, [추천]의 전체 명령을 그대로).
-  - 맨 앞의 `python`과 스크립트 경로(C:\\CLI\\...\\, 임시 폴더 경로)는 있어도 되고 없어도 된다.
+  - 맨 앞의 `python`과 스크립트 경로(C:\\CLI\\...\\)는 있어도 되고 없어도 된다.
   - `@input1.csv`, `@input2.md`처럼 쓴 자리는 args[1], args[2]의 내용을 UTF-8 파일로 만들어 그 경로로 바꾼다
     (표, 여러 줄 글, 큰따옴표가 든 값을 넘기는 방법. En-Genius 대화에는 PC에 파일을 쓰는 도구가 없다).
-args가 이미 나뉘어 있으면(`["ml_train.py", "-f", "a.xlsx"]`, `@input` 자리 없음) 그대로 쓴다.
+args가 이미 나뉘어 있으면(`["ml_train.py", "-h"]`, `@input` 자리 없음) 그대로 쓴다.
 
-도구는 이 폴더의 스크립트를 같은 프로세스에서 실행하고, 결과(stdout 1줄 JSON, 종료 코드)는 도구의 것 그대로다.
-이 입구의 오류도 1줄 JSON이다 (exit 2, STOP_RETRY). 빌드: CLI-dev/engenius/build.py가 ml-kit.zip에 넣는다.
+파이썬: 지금 파이썬(트레이의 「스킬 실행 파이썬」)에 도구 라이브러리가 있으면 그것으로, 없으면 C:\\WPy64-*의 WinPython으로 실행한다.
+도구 결과(stdout 1줄 JSON, 종료 코드)는 도구의 것 그대로다. 이 입구의 오류도 1줄 JSON이다 (exit 2, STOP_RETRY).
+위치 바꾸기(시험용): 환경변수 ENGENIUS_CLI_DIR(C:\\CLI 대신), ENGENIUS_PYTHON(WinPython python.exe).
+빌드: CLI-dev/engenius/build.py가 SKILL_VERSION을 채워 ml-kit.zip에 넣는다.
 """
+import glob
+import importlib.util
 import json
 import os
 import re
 import runpy
+import subprocess
 import sys
 
 TOOL = "ml-kit"
-HERE = os.path.dirname(os.path.abspath(__file__))
+SKILL_VERSION = ""                                   # 빌드가 채운다 (zip의 지시문 버전)
 SCRIPTS = ("ml_train.py", "ml_predict.py", "ml_report.py", "ml_map.py", "ml_export.py")
+VERSION_FILE = "ml_predict.py"
+NEEDS = ("sklearn", "openpyxl", "docx")                 # 지금 파이썬으로 실행해도 되는지 보는 라이브러리
 OTHER_TOOL = "office-cli"
 OTHER_SCRIPTS = ("excel.py", "word.py", "ppt.py", "outlook.py", "reader.py", "office.py")
+EXAMPLE = 'args=["ml_train.py -f \\"C:\\\\데이터\\\\공정.xlsx\\" -y 수율"]'
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CLI_DIR = os.environ.get("ENGENIUS_CLI_DIR") or r"C:\CLI"
+TOOL_DIR = os.path.join(CLI_DIR, TOOL)
 INPUT = re.compile(r"@input(\d+)((?:\.[A-Za-z0-9]{1,8})?)")
 MAX_INPUTS = 20
 
@@ -30,9 +43,9 @@ def emit(obj, code):
     sys.exit(code)
 
 
-def stop(message):
-    emit({"status": "error", "error_type": "input", "message": message,
-          "agent_directive": "STOP_RETRY: 명령 형식 문제입니다. message의 안내대로 고칠 수 있으면 1번만 다시 실행하고, "
+def stop(message, error_type="input"):
+    emit({"status": "error", "error_type": error_type, "message": message,
+          "agent_directive": "STOP_RETRY: 명령 형식이나 설치 문제입니다. message의 안내대로 고칠 수 있으면 1번만 다시 실행하고, "
                              "아니면 message를 사용자에게 그대로 알리세요."}, 2)
 
 
@@ -71,56 +84,114 @@ def split_command(line):
     return [a[1:-1] if len(a) >= 2 and a[0] == "'" and a[-1] == "'" else a for a in args]
 
 
+def tool_version():
+    """C:\\CLI 도구의 버전 (도구를 불러오지 않고 VERSION 줄만 읽는다). 없으면 None."""
+    try:
+        with open(os.path.join(TOOL_DIR, VERSION_FILE), encoding="utf-8") as f:
+            m = re.search(r'^VERSION\s*=\s*"([^"]+)"', f.read(), re.M)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+def check_install():
+    if not all(os.path.isfile(os.path.join(TOOL_DIR, s)) for s in SCRIPTS):
+        stop(f"이 PC에 {TOOL} 도구가 없습니다 ({TOOL_DIR}). 배포 폴더의 CLI를 C:\\CLI로 복사한 뒤 다시 실행하세요. "
+             "사용자에게 그대로 알리세요.", "setup")
+    found = tool_version()
+    if SKILL_VERSION and found != SKILL_VERSION:
+        stop(f"스킬 zip({TOOL} {SKILL_VERSION})과 C:\\CLI 도구({TOOL} {found or '버전 모름'})의 버전이 다릅니다. "
+             "같은 배포본의 C:\\CLI 폴더와 스킬 zip으로 맞춘 뒤 다시 실행하세요. 사용자에게 그대로 알리세요.", "setup")
+
+
+def winpython():
+    """도구 라이브러리가 있는 파이썬: ENGENIUS_PYTHON > C:\\WPy64-*의 WinPython (최신 이름 먼저)."""
+    given = os.environ.get("ENGENIUS_PYTHON")
+    if given:
+        return given if os.path.isfile(given) else None
+    found = sorted(glob.glob(r"C:\WPy64-*\python\python.exe") + glob.glob(r"C:\WPy64-*\python-*\python.exe"),
+                   reverse=True)
+    return found[0] if found else None
+
+
+def has_libs():
+    try:
+        return all(importlib.util.find_spec(m) is not None for m in NEEDS)
+    except (ImportError, ValueError):
+        return False
+
+
 def usage():
     print(__doc__, file=sys.stderr)
-    emit({"status": "ok", "tool": TOOL, "scripts": SCRIPTS,
-          "usage": f'run_skill_script(name="{TOOL}", path="run.py", args=["<명령 한 줄>"])',
-          "example": 'args=["ml_train.py -f \\"C:\\\\데이터\\\\공정.xlsx\\" -y 수율"]',
+    emit({"status": "ok", "tool": TOOL, "skill_version": SKILL_VERSION or None, "tool_dir": TOOL_DIR,
+          "tool_version": tool_version(), "scripts": list(SCRIPTS),
+          "python": sys.executable if has_libs() else winpython(),
+          "usage": f'run_skill_script(name="{TOOL}", path="run.py", args=["<명령 한 줄>"])', "example": EXAMPLE,
           "agent_directive": "VERIFIED: 사용법입니다. SKILL.md의 명령을 args 첫 칸에 그대로 넣어 실행하세요."}, 0)
+
+
+def build_argv(raw):
+    used = sorted({int(m.group(1)) for m in INPUT.finditer(raw[0])})
+    if len(raw) > 1 and not used:
+        return [str(a) for a in raw]                       # 이미 나뉜 인자
+    argv = split_command(raw[0])
+    if argv is None:
+        stop("명령의 큰따옴표가 닫히지 않았습니다. 따옴표 짝을 맞춰 다시 실행하세요.")
+    contents = raw[1:]
+    if used and (used[0] < 1 or used[-1] > len(contents) or len(used) > MAX_INPUTS):
+        stop(f"명령에 @input{used[-1]} 자리가 있지만 args에 그 내용이 없습니다 (내용 {len(contents)}칸). "
+             "@input1은 args 두 번째 칸, @input2는 세 번째 칸의 내용입니다.")
+    if len(contents) > len(used):
+        stop(f"args에 쓰이지 않은 칸이 {len(contents) - len(used)}개 있습니다. 명령은 args 첫 칸에 한 줄로 넣고, "
+             "그 뒤 칸은 명령의 @input1, @input2 자리 내용만 넣으세요.")
+    if not used:
+        return argv
+    folder = os.path.join(HERE, "_inputs")
+    os.makedirs(folder, exist_ok=True)
+    paths = {}
+    for n in used:
+        ext = next((m.group(2) for m in INPUT.finditer(raw[0]) if int(m.group(1)) == n and m.group(2)), ".txt")
+        path = os.path.join(folder, f"input{n}{ext}")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(str(contents[n - 1]))
+        paths[n] = path
+    return [INPUT.sub(lambda m: paths[int(m.group(1))], a) for a in argv]
 
 
 def main(raw):
     if not raw or raw[0].strip() in ("", "-h", "--help"):
         usage()
-    used = sorted({int(m.group(1)) for m in INPUT.finditer(raw[0])})
-    if len(raw) > 1 and not used:
-        argv = [str(a) for a in raw]                       # 이미 나뉜 인자
-    else:
-        argv = split_command(raw[0])
-        if argv is None:
-            stop("명령의 큰따옴표가 닫히지 않았습니다. 따옴표 짝을 맞춰 다시 실행하세요.")
-        contents = raw[1:]
-        if used and (used[0] < 1 or used[-1] > len(contents) or len(used) > MAX_INPUTS):
-            stop(f"명령에 @input{used[-1]} 자리가 있지만 args에 그 내용이 없습니다 (내용 {len(contents)}칸). "
-                 "@input1은 args 두 번째 칸, @input2는 세 번째 칸의 내용입니다.")
-        if len(contents) > len(used):
-            stop(f"args에 쓰이지 않은 칸이 {len(contents) - len(used)}개 있습니다. 명령은 args 첫 칸에 한 줄로 넣고, "
-                 "그 뒤 칸은 명령의 @input1, @input2 자리 내용만 넣으세요.")
-        if used:
-            folder = os.path.join(HERE, "_inputs")
-            os.makedirs(folder, exist_ok=True)
-            paths = {}
-            for n in used:
-                ext = next((m.group(2) for m in INPUT.finditer(raw[0]) if int(m.group(1)) == n and m.group(2)), ".txt")
-                path = os.path.join(folder, f"input{n}{ext}")
-                with open(path, "w", encoding="utf-8", newline="") as f:
-                    f.write(str(contents[n - 1]))
-                paths[n] = path
-            argv = [INPUT.sub(lambda m: paths[int(m.group(1))], a) for a in argv]
+    argv = build_argv(raw)
     if argv and os.path.splitext(os.path.basename(argv[0]).lower())[0] in ("python", "python3", "py"):
         argv = argv[1:]
     if not argv:
-        stop("실행할 스크립트가 없습니다. 예: " + (f'"{SCRIPTS[0]} -h"' if SCRIPTS else '"-h"'))
+        stop(f'실행할 스크립트가 없습니다. 예: "{SCRIPTS[0]} -h"')
     script = os.path.basename(argv[0].replace("\\", "/"))
     if script not in SCRIPTS:
         if script in OTHER_SCRIPTS:
             stop(f"'{script}'는 {OTHER_TOOL} 스킬의 명령입니다. 같은 명령을 "
                  f'run_skill_script(name="{OTHER_TOOL}", path="run.py", args=["<같은 명령>"])로 실행하세요.')
         stop(f"'{argv[0]}'는 {TOOL} 스킬의 명령이 아닙니다. 쓸 수 있는 스크립트: {', '.join(SCRIPTS)}")
-    path = os.path.join(HERE, script)
-    sys.argv = [path] + argv[1:]
-    sys.path[0] = HERE
-    runpy.run_path(path, run_name="__main__")
+    check_install()
+    path = os.path.join(TOOL_DIR, script)
+    if has_libs():
+        sys.argv = [path] + argv[1:]
+        sys.path[0] = TOOL_DIR
+        runpy.run_path(path, run_name="__main__")
+        return
+    py = winpython()
+    if not py:
+        stop("도구 라이브러리(pandas, openpyxl 등)가 있는 파이썬을 찾지 못했습니다. WinPython을 C:\\WPy64-...에 두거나, "
+             "En-Genius® MCP 설정의 「스킬 실행 파이썬」을 직접 지정으로 WinPython의 python.exe로 바꾸세요. 사용자에게 그대로 알리세요.",
+             "setup")
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    for k in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
+        env.pop(k, None)
+    try:
+        code = subprocess.call([py, path] + argv[1:], cwd=TOOL_DIR, env=env)
+    except OSError as e:
+        stop(f"WinPython을 실행하지 못했습니다 ({py}): {e}. 사용자에게 그대로 알리세요.", "setup")
+    sys.exit(code)
 
 
 if __name__ == "__main__":

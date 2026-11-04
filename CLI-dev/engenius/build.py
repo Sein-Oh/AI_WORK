@@ -1,6 +1,8 @@
-"""En-Genius 스킬 가져오기용 zip(docs/engenius/<tool>.zip)을 만듭니다.
+r"""En-Genius 스킬 가져오기용 zip(docs/engenius/<tool>.zip)을 만듭니다.
 
-zip 구성: <tool>/SKILL.md (En-Genius용으로 바꾼 지시문) + <tool>/run.py (CLI-dev/engenius/<tool>/run.py, 도구마다 따로) + CLI/<tool>/*.py
+zip 구성: <tool>/SKILL.md (En-Genius용으로 바꾼 지시문) + <tool>/run.py (CLI-dev/engenius/<tool>/run.py, 도구마다 따로).
+도구 코드는 넣지 않는다: run.py가 사용자 PC의 C:\CLI\<tool>을 실행한다 (OpenCode와 같은 폴더). run.py의 SKILL_VERSION에
+지시문 버전을 채워, C:\CLI 도구와 버전이 다르면 실행하지 않고 맞추라고 안내하게 한다.
 SKILL.md는 CLI/<tool>/SKILL.md 본문 앞에 En-Genius 실행 방법을 붙이고, OpenCode·PowerShell 전용 문장만 바꿉니다.
 CLI/<tool>/SKILL.md가 바뀌어 바꿀 문장을 못 찾으면 멈춥니다 (그 문장에 맞게 REPLACE를 고칩니다).
 같은 입력이면 같은 zip이 나옵니다 (시각 고정). tests/test_engenius.py가 저장소의 zip이 최신인지 확인합니다.
@@ -27,6 +29,7 @@ DESCRIPTION = {
 }
 
 HEAD = """# 실행 방법 (En-Genius, 반드시 따른다) - {tool} {version}
+0. 도구는 사용자 PC의 `C:\\CLI\\{tool}`에 있고, 이 스킬의 run.py가 그것을 실행한다. 설치 문제(error_type "setup")는 사용자에게 그대로 알린다.
 1. 이 문서의 명령은 모두 run_skill_script로 실행한다. path는 항상 "run.py"이고, args 첫 칸에 명령 한 줄을 그대로 넣는다.
    예: run_skill_script(name="{tool}", path="run.py", args=["{example}"]{timeout_example})
    - 명령 앞의 `python`과 `C:\\CLI\\...\\` 같은 스크립트 경로는 있어도 되고 없어도 된다.
@@ -114,15 +117,19 @@ def skill_md(tool):
     return f'---\nname: {tool}\ndescription: "{desc}"\n---\n\n{head}{body}'
 
 
+def run_py(tool):
+    """CLI-dev/engenius/<tool>/run.py에 지시문 버전을 채운 것 (도구마다 따로 둔 실행 입구)."""
+    with open(os.path.join(HERE, tool, "run.py"), encoding="utf-8") as f:
+        text = f.read()
+    line = 'SKILL_VERSION = ""'
+    if text.count(line) != 1:
+        raise SystemExit(f"[ERROR] {tool}/run.py에 '{line}' 줄이 1번 있어야 합니다")
+    return text.replace(line, f'SKILL_VERSION = "{_version(tool)}"')
+
+
 def zip_bytes(tool):
     files = [("SKILL.md", skill_md(tool).encode("utf-8"))]
-    with open(os.path.join(HERE, tool, "run.py"), "rb") as f:     # 도구마다 따로 둔 실행 입구
-        files.append(("run.py", f.read()))
-    src = os.path.join(ROOT, "CLI", tool)
-    for name in sorted(os.listdir(src)):
-        if name.endswith(".py"):
-            with open(os.path.join(src, name), "rb") as f:
-                files.append((name, f.read()))
+    files.append(("run.py", run_py(tool).encode("utf-8")))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in files:

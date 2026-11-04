@@ -1,6 +1,7 @@
 """En-Genius 스킬 zip(docs/engenius/<tool>.zip)과 실행 입구(run.py) 테스트.
 
-- 저장소의 zip이 CLI-dev/engenius/build.py로 새로 만든 것과 같은지 (도구·SKILL.md를 고치면 build.py를 다시 실행)
+- 저장소의 zip이 CLI-dev/engenius/build.py로 새로 만든 것과 같은지 (SKILL.md·run.py·버전을 고치면 build.py를 다시 실행)
+- zip에는 SKILL.md와 run.py만: run.py가 C:\\CLI\\<tool>의 도구를 실행한다 (OpenCode와 같은 폴더)
 - En-Genius 가져오기 규칙: SKILL.md 위치, 이름(영문·숫자·한글·-·_ 1~64자), 경로(4칸, 합계 120자, 한 칸 64자),
   본문 30,000자, SKILL.md 512KB, 파일 합계는 실행 프레임 상한(약 11MB) 안
 - run.py: 명령 한 줄 나누기, python·경로 앞부분 무시, @input 자리 내용, 오류는 1줄 JSON(exit 2), 도구 결과는 그대로
@@ -42,7 +43,7 @@ def test_committed_zip_is_current(tool):
 def test_zip_follows_import_rules(tool):
     z = zipfile.ZipFile(os.path.join(ROOT, "docs", "engenius", f"{tool}.zip"))
     names = [i.filename for i in z.infolist()]
-    assert {n.split("/", 1)[0] for n in names} == {tool} and f"{tool}/SKILL.md" in names
+    assert sorted(names) == [f"{tool}/SKILL.md", f"{tool}/run.py"]                # 도구 코드는 C:\\CLI에
     for n in names:
         rel = n.split("/", 1)[1]
         parts = rel.split("/")
@@ -81,12 +82,16 @@ def unpacked(tmp_path_factory):
     return out
 
 
-def run(unpacked, tool, args, tmp_path):
+def run(unpacked, tool, args, tmp_path, py_flags=(), **extra):
+    """트레이처럼 실행: 풀린 스킬 폴더가 cwd, C:\\CLI 대신 저장소 CLI 폴더(ENGENIUS_CLI_DIR)."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("OFFICE_CLI_", "ML_KIT_")) and k != "ENGENIUS_OUT"}
-    env.update(ENGENIUS_OUT=str(tmp_path / "out"), USERPROFILE=str(tmp_path / "home"), PYTHONUTF8="1")
-    proc = subprocess.run([sys.executable, "run.py", *args], cwd=unpacked[tool], capture_output=True, timeout=300,
-                          env=env)
+           if not k.startswith(("OFFICE_CLI_", "ML_KIT_", "ENGENIUS_"))}
+    env.update(ENGENIUS_OUT=str(tmp_path / "out"), USERPROFILE=str(tmp_path / "home"), PYTHONUTF8="1",
+               ENGENIUS_CLI_DIR=os.path.join(ROOT, "CLI"), OFFICE_CLI_DATA_DIR=str(tmp_path / "odata"),
+               OFFICE_CLI_CACHE_DIR=str(tmp_path / "ocache"), ML_KIT_DATA_DIR=str(tmp_path / "mdata"))
+    env.update(extra)
+    proc = subprocess.run([sys.executable, *py_flags, "run.py", *args], cwd=unpacked[tool], capture_output=True,
+                          timeout=300, env=env)
     lines = [ln for ln in proc.stdout.decode("utf-8").splitlines() if ln.strip()]
     assert len(lines) == 1, (proc.stdout, proc.stderr.decode("utf-8", "replace")[-2000:])
     return proc.returncode, json.loads(lines[0])
@@ -102,14 +107,17 @@ def test_each_tool_has_its_own_run_py(tool):
     assert set(mod.SCRIPTS) == {f for f in os.listdir(os.path.join(ROOT, "CLI", tool))
                                 if f.endswith(".py") and not f.startswith("_")}
     z = zipfile.ZipFile(os.path.join(ROOT, "docs", "engenius", f"{tool}.zip"))
-    with open(os.path.join(DEV, "engenius", tool, "run.py"), "rb") as f:
-        assert z.read(f"{tool}/run.py") == f.read()
+    packed = z.read(f"{tool}/run.py").decode("utf-8")
+    assert packed == build.run_py(tool)
+    m = re.search(r'^SKILL_VERSION = "([^"]+)"', packed, re.M)
+    with open(os.path.join(ROOT, "CLI", tool, mod.VERSION_FILE), encoding="utf-8") as f:
+        assert m and m.group(1) == re.search(r'^VERSION\s*=\s*"([^"]+)"', f.read(), re.M).group(1)
 
 
 def test_run_py_files_differ_only_in_tool_settings():
     texts = [open(os.path.join(DEV, "engenius", t, "run.py"), encoding="utf-8").read() for t in TOOLS]
-    strip = [re.sub(r'(?m)^(TOOL|SCRIPTS|OTHER_TOOL|OTHER_SCRIPTS) = .*$|^\s*"example": .*$|^"""En-Genius .*$'
-                    r'|^이 입구의 오류도 .*$', "", t) for t in texts]
+    strip = [re.sub(r'(?m)^(TOOL|SCRIPTS|VERSION_FILE|NEEDS|OTHER_TOOL|OTHER_SCRIPTS|EXAMPLE) = .*$', "",
+                    t.split('"""', 2)[2]) for t in texts]                        # 설명(docstring)과 도구 설정 줄만 다름
     assert strip[0] == strip[1], "두 run.py의 공통 부분이 다릅니다 (한쪽만 고쳤는지 확인)"
 
 
@@ -155,11 +163,34 @@ def test_input_placeholder_becomes_file(unpacked, tmp_path):
     assert code == 0 and res["status"] == "ok" and res["rows"] == 3, res
 
 
-def test_tool_error_keeps_tool_json_and_data_folder(unpacked, tmp_path):
+def test_tool_error_keeps_tool_json(unpacked, tmp_path):
     code, res = run(unpacked, "office-cli", ["excel.py --bogus"], tmp_path)
-    assert code == 2 and res["status"] == "error"
-    log = tmp_path / "home" / "Documents" / "En-Genius" / "CLI-data" / "office-cli" / "data" / "logs" / "errors.txt"
-    assert log.is_file()
+    assert code == 2 and res["status"] == "error" and res["error_type"] != "setup"
+    assert (tmp_path / "odata" / "logs" / "errors.txt").is_file()          # 도구의 오류 로그 (C:\\CLI 쪽 설정 그대로)
+
+
+def test_python_without_libraries_falls_back_to_winpython(unpacked, tmp_path):
+    """트레이 내장 파이썬처럼 도구 라이브러리가 없으면(-S: site-packages 없음) WinPython(ENGENIUS_PYTHON)으로 실행."""
+    code, res = run(unpacked, "ml-kit", ["ml_train.py -h"], tmp_path, py_flags=("-S",), ENGENIUS_PYTHON=sys.executable)
+    assert code == 0 and res["status"] == "ok", res
+    code, res = run(unpacked, "ml-kit", ["ml_train.py -h"], tmp_path, py_flags=("-S",),
+                    ENGENIUS_PYTHON=str(tmp_path / "없음" / "python.exe"))
+    assert code == 2 and res["error_type"] == "setup" and "WinPython" in res["message"]
+
+
+def test_missing_cli_folder_is_setup_error(unpacked, tmp_path):
+    code, res = run(unpacked, "office-cli", ["excel.py read"], tmp_path, ENGENIUS_CLI_DIR=str(tmp_path / "noCLI"))
+    assert code == 2 and res["error_type"] == "setup" and "C:\\CLI" in res["message"]
+
+
+def test_version_mismatch_is_setup_error(unpacked, tmp_path):
+    other = tmp_path / "skill" / "office-cli"
+    other.mkdir(parents=True)
+    text = open(os.path.join(unpacked["office-cli"], "run.py"), encoding="utf-8").read()
+    (other / "run.py").write_text(re.sub(r'^SKILL_VERSION = "[^"]+"', 'SKILL_VERSION = "0.0.1"', text, flags=re.M),
+                                  encoding="utf-8")
+    code, res = run({"office-cli": str(other)}, "office-cli", ["excel.py read"], tmp_path)
+    assert code == 2 and res["error_type"] == "setup" and "0.0.1" in res["message"]
 
 
 @pytest.mark.parametrize("tool,args,needle", [

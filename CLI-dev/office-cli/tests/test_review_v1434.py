@@ -350,10 +350,11 @@ def test_empty_file_for_sized_attachment_is_unverified(env, capsys, tmp_path, mo
 
 
 def test_engenius_data_dir_does_not_move_downloads_default(env, capsys, monkeypatch):
-    monkeypatch.setenv("ENGENIUS_OUT", str(env["home"] / "out"))
+    # 도구가 트레이 임시 폴더에서 돌 때처럼 data 폴더가 En-Genius 고정 폴더인 경우 (1.4.35부터 그 경우만)
+    home = os.path.join(str(env["home"]), "Documents", "En-Genius", "CLI-data", "office-cli")
+    monkeypatch.setattr(rt, "_tool_home", lambda: home)
     monkeypatch.delenv("OFFICE_CLI_DATA_DIR", raising=False)
-    engenius_data = os.path.join(str(env["home"]), "Documents", "En-Genius", "CLI-data", "office-cli", "data")
-    assert rt.get_data_dir() == engenius_data
+    assert rt.get_data_dir() == os.path.join(home, "data")
     _mail(env, Att("a.pdf"))
     code, out = run(capsys, "attachments", "--id", "M1", "--save")
     assert code == 0 and os.path.dirname(out["folder"]) == _default_root(env)

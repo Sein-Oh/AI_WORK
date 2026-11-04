@@ -2,6 +2,15 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.35] - 2026-11-04
+
+En-Genius 스킬 배포 구조 변경에 맞춤. 회귀 테스트: `tests/test_review_v1433.py` (고침).
+
+### 바뀐 동작
+- En-Genius 스킬 zip(`docs/engenius/office-cli.zip`)에는 지시문과 `run.py`만 들어가고, `run.py`가 `C:\CLI\office-cli`의 도구를 실행합니다.
+  그래서 `ENGENIUS_OUT`이 있어도 도구 폴더의 `config.json`, `data`, `cache`(OpenCode와 같은 것)를 씁니다.
+  `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli` 고정 폴더(1.4.33)는 도구 파일이 트레이 임시 폴더(`engenius-skill`)에서 실행될 때만 씁니다.
+
 ## [1.4.34] - 2026-11-04
 
 메일 첨부 내려받기 명령과 답장·전달 첨부 안내. En-Genius 에이전트가 "첨부를 내려받을 수 없다"고 답한 문제에서 시작.
