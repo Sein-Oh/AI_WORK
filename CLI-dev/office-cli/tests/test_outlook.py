@@ -1248,7 +1248,61 @@ def test_list_gives_short_ids_and_read_accepts_them(ol_short, capsys):
     code, out3 = run_outlook(capsys, "read", "--id", second["entry_id"])          # 긴 id도 그대로
     assert code == 0 and out3["mail"]["subject"] == second["subject"]
     code, bad = run_outlook(capsys, "read", "--id", "9")
-    assert code == 1 and "1~3번" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
+    assert code == 1 and "없는 번호" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
+    assert " list" in bad["next_commands"][0]["command"]
+
+
+def _listing(prefix, n):
+    return [{"entry_id": f"{prefix}{i}", "subject": f"{prefix} 제목 {i}", "from": "홍길동", "received": "2026-11-04T09:00:00"}
+            for i in range(1, n + 1)]
+
+
+def test_short_ids_never_point_to_another_mail_after_new_listing():
+    # 회귀: 목록마다 1부터 다시 매겨 search 뒤 thread를 하면 같은 '--id 3'이 다른 메일이 됨 (reply --send가 엉뚱한 메일로)
+    search = _listing("S", 5)
+    outlook.remember_listing(search, "search")
+    assert [m["id"] for m in search] == [1, 2, 3, 4, 5]
+    thread = _listing("T", 4) + [{"entry_id": "S3", "subject": "S 제목 3"}]
+    outlook.remember_listing(thread, "thread")
+    assert [m["id"] for m in thread] == [6, 7, 8, 9, 3]               # 새 번호는 이어서, 이미 본 메일은 같은 번호
+    assert outlook.entry_id("3") == "S3" and outlook.entry_id("7") == "T2" and outlook.entry_id("1") == "S1"
+
+
+def test_short_id_dropped_or_wrapped_is_missing_not_other_mail(monkeypatch):
+    monkeypatch.setattr(outlook, "ID_KEEP", 4)
+    outlook.remember_listing(_listing("A", 3), "list")                   # 1~3
+    outlook.remember_listing(_listing("B", 3), "list")                   # 4~6, 기억은 최근 4개(3~6)
+    with pytest.raises(rt.InputError) as e:
+        outlook.entry_id("1")
+    assert "없는 번호" in str(e.value) and e.value.fields["next_commands"]
+    assert outlook.entry_id("6") == "B3"
+    monkeypatch.setattr(outlook, "SHORT_ID_MAX", 8)
+    c = _listing("C", 3)
+    outlook.remember_listing(c, "list")                                   # 7~9는 상한을 넘음 -> 1부터 다시, 옛 번호는 모두 버림
+    assert [m["id"] for m in c] == [1, 2, 3] and outlook.entry_id("1") == "C1"
+    for old in ("4", "6"):
+        with pytest.raises(rt.InputError):
+            outlook.entry_id(old)
+
+
+def test_short_id_older_than_keep_days_is_missing(monkeypatch):
+    outlook.remember_listing(_listing("A", 2), "list")
+    path = outlook._listing_path()
+    data = json.loads(open(path, encoding="utf-8").read())
+    data["items"]["1"]["t"] = "2026-01-01T00:00:00"
+    open(path, "w", encoding="utf-8").write(json.dumps(data))
+    with pytest.raises(rt.InputError):
+        outlook.entry_id("1")
+    assert outlook.entry_id("2") == "A2"
+
+
+@pytest.mark.parametrize("cmd", [["reply", "--send"], ["forward", "--to", "b@corp.com", "--send"], ["reply"]])
+def test_reply_forward_report_original_mail(ol_env, capsys, cmd):
+    m = _attach_mail(ol_env, subject="견적 회신 요청")
+    code, out = run_outlook(capsys, cmd[0], "--id", "M1", *cmd[1:])
+    assert code == 0 and out["original"]["subject"] == "견적 회신 요청" and "lead@corp.com" in out["original"]["from"], out
+    assert "견적 회신 요청" in out["preview"] and "original" in out["agent_directive"]
+    assert m.drafts
 
 
 def test_search_next_command_uses_short_id(ol_short, capsys):

@@ -346,8 +346,12 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `--days 0`/`-7`은 `[추천]`, 없는 날짜·미래 날짜·읽을 수 없는 글은 `[추천]` 없이 예만.
 - 첨부: `attachments [--id] [--save [폴더]] [--name 이름일부] [--index 1,3]`. 저장한 문서(reader가 읽는 형식: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)가 있으면
   `next_commands`에 `reader.py read --file <저장한 파일>`(3개까지)과, 둘 이상이면 `reader.py index --folder <저장 폴더>`.
-- 짧은 번호: `list`·`search`·`thread` 결과의 메일마다 `id`(1, 2, 3 ...)와 `entry_id`(Outlook EntryID). 마지막 목록을 `<데이터 폴더>/outlook_last_list.json`에 기억해
-  `read`/`attachments`/`reply`/`forward`/`thread --id 3`이 그 목록의 3번째 메일을 엽니다. 긴 EntryID도 그대로 받습니다. 목록이 없거나 번호가 범위 밖이면 STOP_RETRY.
+- 짧은 번호: `list`·`search`·`thread` 결과의 메일마다 `id`와 `entry_id`(Outlook EntryID). 번호는 목록마다 1부터 다시 매기지 않고 이어서 늘어나며(첫 목록 1~10,
+  다음 목록 11~20 ...), 이미 번호가 있는 메일은 같은 번호를 다시 씁니다. 번호 -> EntryID·제목·보낸사람·받은 시각을 최근 500개(7일)까지
+  `<데이터 폴더>/outlook_ids.json`에 기억하므로, 옛 목록의 번호도 같은 메일을 가리키거나 "없는 번호" 오류입니다(다른 메일을 가리키지 않음).
+  9999를 넘으면 1부터 다시 매기고 기억한 번호를 모두 버립니다. 없는·만료된 번호는 STOP_RETRY + `next_commands`(list). 긴 EntryID도 그대로 받습니다.
+- `reply`/`forward` 결과의 `original`(고른 원본 메일의 subject·from·received)과 `attachments` 결과의 `mail`(같은 키 + entry_id)은 preview에도 들어가며,
+  directive가 사용자에게 어느 메일인지 알리게 합니다(특히 `--send`).
   `read`/`current`의 `mail`과 `attachments`의 `mail`에는 `entry_id`.
 - `thread --id N`(읽기 전용): 그 메일의 대화 제목(`ConversationTopic`, 없으면 RE:/FW:를 뺀 제목)으로 받은 편지함과 보낸 편지함에서 같은 대화를 모아 오래된 순으로
   최근 20통(`mails`: 요약과 본문 400자, `count`, `truncated`). Outlook이 조건을 거부하면 메일마다 비교(최근 2,000통, `recovered`). 결과도 짧은 번호로 기억.

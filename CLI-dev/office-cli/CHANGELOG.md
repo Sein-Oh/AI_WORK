@@ -6,6 +6,19 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.70] - 2026-11-04
+
+독립 검토(2차)에서 나온 버그 수정. 각 항목은 회귀 테스트로 먼저 재현한 뒤 고침.
+
+### 수정
+- [치명] outlook 짧은 `id`: 마지막 목록 하나만 기억해 `search` 뒤 `thread`(또는 다른 `list`)를 하면 같은 `--id 3`이 다른 메일을 가리켰고,
+  `reply/forward --id 3 --send`가 엉뚱한 메일로 나갈 수 있었음. 번호를 목록마다 1부터 다시 매기지 않고 이어서 늘어나게 주고(이미 번호가 있는 메일은 같은 번호),
+  번호 -> EntryID·제목·보낸사람·받은 시각을 최근 500개(7일)까지 `<데이터 폴더>/outlook_ids.json`(옛 `outlook_last_list.json` 대신)에 기억. 옛 번호는 같은 메일이거나
+  "없는 번호" STOP_RETRY(+ `next_commands` list). 9999를 넘으면 1부터 다시 매기며 기억한 번호를 모두 버림.
+  `reply`/`forward` 결과에 `original`(subject·from·received), `attachments`의 `mail`에 from·received를 더하고 preview·directive가 어느 메일인지 알리게 함.
+  회귀 테스트: `tests/test_outlook.py` `test_short_ids_never_point_to_another_mail_after_new_listing` 외 3개.
+- office-mail 스킬: `reply`·`forward` 행에 `--id 3`, `--send`는 사용자가 받는 사람·원본 메일을 확인한 뒤에만.
+
 ## [1.4.62] - 2026-11-04
 
 작업별 스킬로 나누기 (C3). 통합 `SKILL.md`(16KB, 명령 표 한 줄 300~600자)에서 Gemma 26B가 옵션을 잘못 기억하던 문제.
