@@ -911,3 +911,83 @@ def test_guard_word_section(wd, capsys, isolated_dirs, monkeypatch, paras, secti
     code, out = run_as_tool(word, capsys, monkeypatch, "word", "read", "--section", section)
     assert code == 1, out
     assert_not_logged(out, isolated_dirs)
+
+
+# ---------------------------------------------------------------------------
+# word.py fill: 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 (C4, 1.4.61)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def form_doc(wd, monkeypatch):
+    from fake_word import FakeGridTable
+    doc = FakeWordDocument("시험 성적서\r업체: {{업체명}}\r시험일: {{시험일}}\r담당: {{업체명}} 품질팀")
+    doc.grid_tables = [FakeGridTable([["항목", "값"], ["전압", ""]]),
+                       FakeGridTable([["항목", "기준", "측정"], ["전압", "5 V", ""], ["전류", "3 A", "2.1 A"], ["무게", None, ""]])]
+    wd["doc"] = doc
+    points = []
+    monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: points.append(a) or None)
+    return doc, points
+
+
+def _vals(tmp_path, text, name="값.csv"):
+    f = tmp_path / name
+    f.write_text(text, encoding="utf-8")
+    return str(f)
+
+
+def test_fill_places_and_cells(form_doc, capsys, tmp_path):
+    doc, points = form_doc
+    f = _vals(tmp_path, "자리,값\n{{업체명}},한빛전자\n{{시험일}},2026-11-04\n표2!R2C3,5.1 V\n표1!R2C2,\"5,1\"\n")
+    code, out = run_word(capsys, "fill", "--file", f)
+    assert code == 0 and out["verified"] is True and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "업체: 한빛전자" in doc.text and "담당: 한빛전자 품질팀" in doc.text and "{{" not in doc.text
+    assert doc.grid_tables[1].grid[1][2] == "5.1 V" and doc.grid_tables[0].grid[1][1] == "5,1"
+    assert out["places"] == {"{{업체명}}": 2, "{{시험일}}": 1} and out["count"] == 4
+    assert len(points) == 1                                              # 되돌리기 지점 하나
+
+
+def test_fill_nonempty_cell_needs_decision_then_overwrite(form_doc, capsys, tmp_path):
+    doc, _ = form_doc
+    f = _vals(tmp_path, "{{업체명}},한빛전자\n표2!R3C3,2.5 A\n표2!R2C3,5.1 V\n")
+    code, out = run_word(capsys, "fill", "--file", f)
+    assert code == 1 and out["error_type"] == "needs_user_decision" and "표2!R3C3='2.1 A'" in out["message"], out
+    assert "{{업체명}}" in doc.text and doc.grid_tables[1].grid[1][2] == ""             # 아무것도 바꾸지 않음
+    code, out = run_word(capsys, "fill", "--file", f, "--overwrite")
+    assert code == 0 and doc.grid_tables[1].grid[2][2] == "2.5 A" and out["overwritten"] == 1, out
+
+
+def test_fill_dry_run_changes_nothing(form_doc, capsys, tmp_path):
+    doc, points = form_doc
+    before = doc.text
+    f = _vals(tmp_path, "{{업체명}},한빛전자\n표2!R3C3,2.5 A\n")
+    code, out = run_word(capsys, "fill", "--file", f, "--dry-run")
+    assert code == 0 and out["dry_run"] is True and doc.text == before and points == [], out
+    assert any("덮어쓰기: 표2!R3C3" in p for p in out["planned"]) and any("{{업체명}} 2곳" in p for p in out["planned"])
+    cmd = out["next_commands"][0]["command"]
+    assert "--dry-run" not in cmd and "--overwrite" in cmd and " fill " in cmd
+
+
+def test_fill_bad_rows_and_missing_places_change_nothing(form_doc, capsys, tmp_path):
+    doc, _ = form_doc
+    before = doc.text
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "{{업체명}},a\n업체명,b\n표X,c\n"))
+    assert code == 1 and "2번째 줄" in out["message"] and "3번째 줄" in out["message"] and doc.text == before, out
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "{{업체명}},a\n{{담당자}},b\n표9!R1C1,c\n표2!R4C2,d\n"))
+    assert code == 1 and "{{담당자}}" in out["message"] and "{{시험일}}" in out["message"], out     # 문서에 있는 자리 안내
+    assert "표 9번이 없습니다" in out["message"] and "표2!R4C2" in out["message"] and doc.text == before
+
+
+def test_fill_same_value_cell_is_unchanged(form_doc, capsys, tmp_path):
+    doc, points = form_doc
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "표2!R3C3,2.1 A\n"))
+    assert code == 0 and out["unchanged"] == 1 and out["count"] == 0, out
+
+
+def test_fill_reads_back(form_doc, capsys, tmp_path, monkeypatch):
+    doc, _ = form_doc
+    from fake_word import FakeCellRange
+    monkeypatch.setattr(FakeCellRange, "Text", property(lambda s: s.grid[s.r][s.c] + "\r\x07",
+                                                        lambda s, v: s.grid[s.r].__setitem__(s.c, v[:2])))
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "표2!R2C3,5.1 V\n"))
+    assert code == 0 and out["verified"] is False and "표2!R2C3" in out["unverified"][0], out

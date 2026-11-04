@@ -107,14 +107,14 @@ th { background: var(--soft); font-weight: 700; }
 <button id="menu" type="button">목차 열기/닫기</button>
 <nav id="side">
   <div class="brand">office-cli 사용 가이드</div>
-  <div class="ver">베타 | office-cli 1.4.60 | Gemma 기준</div>
+  <div class="ver">베타 | office-cli 1.4.61 | Gemma 기준</div>
   <input id="tocq" type="search" placeholder="목차에서 찾기 (예: 차트)">
   <div id="toc"></div>
 </nav>
 <main>
 <header class="top">
   <h1>office-cli 사용 가이드</h1>
-  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.60</p>
+  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.61</p>
 </header>
 
 <p class="lead">office-cli는 에이전트가 Office 문서를 직접 읽고 고칠 수 있게 해 주는 도구입니다. 채팅에 <b>하고 싶은 일을 평소 말투로</b> 쓰면 에이전트가 알맞은 도구를 골라 실행하고 결과를 알려 줍니다.
@@ -418,6 +418,11 @@ C7, 단위 확인 필요</p>
   <p class="req">열린 워드에서 "2025년"을 "2026년"으로 모두 바꿔줘</p>
   <p class="req">"주의"라는 글자를 모두 굵게 해줘</p>
   <div class="res"><p>머리글, 바닥글, 글상자 안의 글도 함께 바꿉니다. 바꾼 개수를 알려 줍니다.</p></div>
+</div>
+<div class="case">
+  <h4>서식 문서 채우기 (성적서·양식)</h4>
+  <p class="req">열린 워드 양식의 {{업체명}}은 한빛전자, {{시험일}}은 2026-11-04로 채우고, 2번 표 2행 3열에 5.1 V 넣어줘</p>
+  <div class="res"><p>에이전트가 "자리, 값" 표 파일을 만들어 한 번에 채웁니다. 양식의 <code>{{이름}}</code> 자리는 모두 바꾸고, 표 칸은 "표2!R2C3"(2번 표 2행 3열)처럼 가리킵니다. 이미 값이 든 표 칸은 한꺼번에 보여 주고 덮어쓸지 묻습니다. 채운 뒤 다시 읽어 확인하고, 잘못 채웠으면 되돌리기 한 번으로 돌아갑니다.</p></div>
 </div>
 
 <h3 id="w-comment">3.4 검토 메모 달기</h3>

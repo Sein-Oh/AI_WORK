@@ -13,7 +13,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── SKILL.md     에이전트용 스킬
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check
-├── word.py      워드   read / info / outline / write / replace / comment / revisions / export
+├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
 ├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / diff / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
@@ -291,6 +291,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `read` | `--start N`, `--save [경로.md]`(저장한 파일을 다시 열어 확인). 제목 구조(개요 수준) 포함. 본문 그림은 `[그림]`으로 표시. 범위 고르기(하나만): `--pages 3-5`(Word가 계산한 실제 쪽, 앞 쪽에서 이어지는 단락 포함, 결과에 `page`), `--paragraphs 120-140`(`141-`는 끝까지), `--section "제목 일부"`(그 제목부터 같은 수준 이상의 다음 제목 전까지, 하위 절 포함) |
 | `outline` | 제목 구조(목차): 제목마다 `paragraph`(read `--paragraphs`와 같은 번호), `level`, `text`, `page`. 200개씩, `--start N`. 제목이 없으면 count 0 |
 | `comment` | `--anchor`/`--text`/`--file`이 있으면 `--action add`가 없어도 메모 달기. `--action list`(기본): 메모마다 `no, author, date, page, target_text`(메모를 단 글), `text, done, reply_to`. 100개씩 `--start`. `--action add --anchor 글 --text 메모`(또는 `--file 메모.txt`): 기준 글이 든 단락을 `write`의 앵커와 같은 규칙으로 고르고(여러 곳이면 `[후보]` + `--occurrence`) 그 글 자체에 메모를 답니다. `--file 메모.csv`(열: 기준 글, 메모 내용[, 몇 번째 단락])는 여러 메모를 한 번에 달며, 기준 글 하나라도 정할 수 없으면 하나도 달지 않습니다. 단 뒤 다시 읽어 확인(`verified`) |
+| `fill` | 서식 문서 채우기: `--file 값.csv`(`.csv/.tsv/.md 표`, 열: 자리, 값. 첫 행이 `자리`·`위치`·`place`면 머리글). 자리는 `{{이름}}`(문서 모든 영역에서 모두 바꿈, 값의 줄바꿈은 줄 바꿈 `\v`) 또는 표 칸 `표2!R3C4`(문서의 2번째 표 3행 4열, `doc.Tables(2).Cell(3, 4)`). 모든 줄을 먼저 확인합니다: 모양이 틀린 줄, 같은 자리에 다른 값, 문서에 없는 자리(문서에 있는 `{{...}}` 목록을 함께 알림), 없는 표·칸(병합)이 하나라도 있으면 아무것도 바꾸지 않고 STOP_RETRY. 값이 있는 표 칸은 모두 모아 `needs_user_decision` 하나 -> 사용자가 원하면 `--overwrite`. 이미 같은 값인 칸은 그대로(`unchanged`). `--dry-run`(`planned`, `next_commands[0]`), 되돌리기 지점 하나, 채운 뒤 자리가 남지 않았는지와 표 칸 글을 다시 읽어 확인(`places`(자리별 바꾼 곳 수), `cells`, `applied`). 500줄까지 |
 | `revisions` | 변경 내용 추적 목록: `no, type`(삽입/삭제/서식 변경 등), `author, date, page, text`, `track_changes`(추적 켜짐 여부). 100개씩 `--start`. 읽기만 합니다(수락·거부는 Word에서) |
 | `info` | 쪽/단어/글자 수, 표, 그림, 제목 목록. `--all`. `--detail`: 그림 크기(쪽 너비 대비)와 제목 수준, 쪽보다 넓은 그림 경고 |
 | `write` | `--text`(마크다운 자동 변환, 줄바꿈 `\n`), `--file (.md/.txt, .csv는 표)`, `--image`, `--width`, `--heading N`, `--title`, `--callout`, `--toc`, `--page-break`, `--anchor 글 --pos after\|before\|replace`, `--occurrence N`(앵커가 여러 단락에 있을 때), `--theme`. 앵커가 표 칸 안이면 `after`는 표 뒤에 넣고 `before`/`replace`는 거절(칸 안에 들어가지 않게). 문서가 표로 시작하면 `--pos start` 거절 |

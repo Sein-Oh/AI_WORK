@@ -8,6 +8,7 @@
     info     문서 요약 (페이지/단어/글자 수, 표, 그림, 제목 목록). --all: 열린 문서 전체 목록
     write    텍스트/마크다운/표/그림/요약상자/목차 넣기 (기본: 문서 끝, --anchor로 위치 지정)
     replace  찾아 바꾸기 (+서식). 머리글/바닥글/글상자 포함
+    fill     서식 문서 채우기: 값 파일(자리, 값)의 {{이름}} 자리와 표 칸(표2!R3C4)을 한 번에 (--dry-run, --overwrite)
     export   PDF / DOCX 사본 저장 (원본은 그대로, --page-number는 사본에만)
 
 --target: active(기본, 지금 보고 있는 문서) | 열린 문서 이름 | 파일 경로
@@ -1268,6 +1269,174 @@ def _count_text(doc: Any, text: str, match_case: bool, whole_word: bool, limit: 
 
 
 # ==============================================================================
+# 3-1. fill: 서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)에 값을 한 번에 채우기
+# ==============================================================================
+
+FILL_MAX = 500
+_FILL_HEADER = ("자리", "위치", "place", "placeholder", "칸")
+_FILL_PLACE = re.compile(r"^\{\{\s*[^{}\r\n]{1,100}?\s*\}\}$")
+_FILL_CELL = re.compile(r"^\s*표\s*(\d{1,3})\s*!\s*R\s*(\d{1,4})\s*C\s*(\d{1,3})\s*$", re.IGNORECASE)
+_FILL_FOUND = re.compile(r"\{\{[^{}\r\n]{1,100}?\}\}")
+_CELL_END = "\r\x07"
+
+
+def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
+    """값 파일(.csv/.tsv/.md 표): 자리, 값 -> [(줄 번호, 자리, 값)]. 첫 행이 머리글(자리/위치/place)이면 건너뜀. 값은 글자 그대로."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".csv", ".tsv"):
+        rows = rt.read_csv_rows(path)
+    else:
+        table = next((payload for kind, payload in rt.parse_markdown_blocks(rt.read_text_file(path)) if kind == "table"), None)
+        if table is None:
+            raise rt.InputError("값 파일에서 표를 찾지 못했습니다. CSV(열: 자리, 값)나 마크다운 표로 만드세요.")
+        rows = table
+    start = 1
+    if rows and str(rows[0][0] if rows[0] else "").strip().lower() in _FILL_HEADER:
+        rows, start = rows[1:], 2
+    return [(n, str(r[0] if r else "").strip(), "" if len(r) < 2 or r[1] is None else str(r[1]))
+            for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
+
+
+def _cell_text(cell: Any) -> str:
+    t = str(cell.Range.Text)
+    return t[:-2] if t.endswith(_CELL_END) else t.rstrip("\r\x07")
+
+
+def _fill_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
+    argv = ["fill", "--target", args.target, "--file", args.file]
+    for flag, on in (("--overwrite", args.overwrite), ("--no-focus", args.no_focus)):
+        if on:
+            argv.append(flag)
+    argv += [x for x in extra if x not in argv]
+    return rt.next_command("word.py", argv, "자리와 표 칸 채우기 실행" + (" (값이 있는 표 칸 덮어쓰기)" if "--overwrite" in argv else ""))
+
+
+def cmd_fill(args) -> Dict[str, Any]:
+    rows = _fill_rows(rt.resolve_input_path(args.file, "값 파일", exts=(".csv", ".tsv", ".md", ".txt")))
+    if not rows:
+        raise rt.InputError("값 파일에 내용이 없습니다. 열: 자리, 값 (예: {{업체명}},한빛전자 / 표2!R3C4,25).")
+    if len(rows) > FILL_MAX:
+        raise rt.InputError(f"한 번에 {FILL_MAX}줄까지 채웁니다 (받은 {len(rows)}줄). 파일을 나눠 실행하세요.")
+    bad: List[str] = []
+    places: Dict[str, str] = {}
+    cells: Dict[Tuple[int, int, int], str] = {}
+    for n, key, val in rows:
+        m = _FILL_CELL.match(key)
+        if m:
+            k = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if k in cells and cells[k] != val:
+                bad.append(f"{n}번째 줄 '{key}': 같은 칸에 다른 값이 두 번 있습니다")
+            cells[k] = val
+        elif _FILL_PLACE.match(key):
+            if key in places and places[key] != val:
+                bad.append(f"{n}번째 줄 '{key}': 같은 자리에 다른 값이 두 번 있습니다")
+            places[key] = val
+        else:
+            bad.append(f"{n}번째 줄 '{key[:30]}': 자리는 {{{{이름}}}} 또는 표 칸 표2!R3C4 모양이어야 합니다")
+    if bad:
+        head = f"값 파일 {len(rows)}줄 중 {len(bad)}줄이 잘못되어 하나도 채우지 않았습니다 (열: 자리, 값). 고친 뒤 다시 실행하세요. "
+        raise rt.InputError(head + " / ".join(bad[:10]), log_message=head + f"잘못된 줄 {len(bad)}개 ({rt.DOC_OMITTED})")
+    with off.open_target("word", args.target, readonly=args.dry_run, focus=not args.no_focus,
+                         tool=TOOL, command="fill") as t:
+        doc = t.doc
+        # 1) 모두 확인: 자리가 문서에 있는지, 표 칸이 있는지, 값이 있는 칸 (하나라도 문제면 아무것도 바꾸지 않음)
+        counts = {k: _count_text(doc, k, True, False) for k in places}
+        missing = [k for k, c in counts.items() if not c]
+        problems_in: List[str] = []
+        if missing:
+            text = "".join(str(s.Text) for s in _stories(doc))
+            found = sorted(set(_FILL_FOUND.findall(text)))
+            problems_in.append(f"문서에 없는 자리 {len(missing)}개: {', '.join(missing[:10])}"
+                               + (f" (문서에 있는 자리: {', '.join(found[:10])})" if found else " (문서에 {{...}} 자리가 없음)"))
+        try:
+            n_tables = int(doc.Tables.Count)
+        except Exception:
+            n_tables = 0
+        old: Dict[Tuple[int, int, int], str] = {}
+        for (ti, r, c) in cells:
+            ref = f"표{ti}!R{r}C{c}"
+            if not 1 <= ti <= n_tables:
+                problems_in.append(f"{ref}: 표 {ti}번이 없습니다 (표 {n_tables}개)")
+                continue
+            try:
+                old[(ti, r, c)] = _cell_text(doc.Tables(ti).Cell(r, c))
+            except Exception:
+                problems_in.append(f"{ref}: 그 칸이 없습니다 (행·열 번호 또는 병합된 칸)")
+        if problems_in:
+            raise rt.InputError("아무것도 채우지 않았습니다. " + " / ".join(problems_in[:10]))
+        conflicts = [(k, v) for k, v in old.items() if v.strip() and v != cells[k]]
+        same = [k for k, v in old.items() if v == cells[k]]
+        planned = [f"바꾸기: {k} {counts[k]}곳 -> {_preview(v)}" for k, v in places.items()]
+        for k, v in cells.items():
+            ref = f"표{k[0]}!R{k[1]}C{k[2]}"
+            if k in same:
+                planned.append(f"그대로(같은 값): {ref}")
+            elif old[k].strip():
+                planned.append(f"덮어쓰기: {ref} ({_preview(old[k], 15)} -> {_preview(v, 15)})")
+            else:
+                planned.append(f"채우기: {ref} (빈 칸 -> {_preview(v, 15)})")
+        if args.dry_run:
+            fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(places) + len(cells) - len(same),
+                                      "next_commands": [_fill_command(args, ["--overwrite"] if conflicts else [])],
+                                      "target_resolved": t.resolved(), "truncated": len(planned) > 50}
+            if conflicts:
+                fields["overwrite_cells"] = len(conflicts)
+            return rt.ok(TOOL, "fill", f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개"
+                         + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else ""),
+                         "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.",
+                         **fields)
+        if conflicts and not args.overwrite:
+            refs = [f"표{k[0]}!R{k[1]}C{k[2]}" for k, _ in conflicts]
+            head = f"값이 있는 표 칸 {len(conflicts)}개가 덮어써집니다: "
+            raise rt.UserDecisionError(
+                head + ", ".join(f"{r}='{_preview(v, 15)}'" for r, (_, v) in zip(refs[:5], conflicts[:5])) + (" ..." if len(refs) > 5 else ""),
+                "채우지 않았습니다. 덮어쓸 칸과 기존 값을 사용자에게 보여 주고, 사용자가 덮어써도 된다고 하면 같은 명령에 --overwrite를 붙여 "
+                "다시 실행하세요 (미리 보려면 --dry-run).",
+                log_message=head + ", ".join(refs[:5]) + f" (값 {rt.DOC_OMITTED})")
+        # 2) 채우기 (되돌리기 지점은 open_target이 남김)
+        for story in _stories(doc):
+            for key, val in places.items():
+                rng = story.Duplicate
+                n = 0
+                while n < 5000 and _find(rng, key, True, False):
+                    rng.Text = val.replace("\r\n", "\v").replace("\n", "\v")      # 자리 안의 줄바꿈은 줄 바꿈(단락 나누지 않음)
+                    t.changed = True
+                    n += 1
+                    rng.Collapse(0)
+        for k, v in cells.items():
+            if k in same:
+                continue
+            doc.Tables(k[0]).Cell(k[1], k[2]).Range.Text = v.replace("\r\n", "\r").replace("\n", "\r")
+            t.changed = True
+        # 3) 다시 읽어 확인 (R1)
+        problems: List[str] = []
+        for key, val in places.items():
+            left = _count_text(doc, key, True, False)
+            if left and key not in val:
+                problems.append(f"{key}이(가) {left}곳 남아 있음")
+        for k, v in cells.items():
+            got = _cell_text(doc.Tables(k[0]).Cell(k[1], k[2])).replace("\r", "\n")
+            if got != v.replace("\r\n", "\n"):
+                problems.append(f"표{k[0]}!R{k[1]}C{k[2]}의 글이 쓴 값과 다름")
+        if t.changed:
+            t.set_focus()
+        resolved = t.resolved()
+    fields = {"target_resolved": resolved, "count": len(places) + len(cells) - len(same),
+              "places": {k: counts[k] for k in places}, "cells": len(cells) - len(same),
+              "applied": [p for p in planned if not p.startswith("그대로")][:50]}
+    if same:
+        fields["unchanged"] = len(same)
+    if conflicts:
+        fields["overwritten"] = len(conflicts)
+    preview = f"자리 {len(places)}개({sum(counts.values())}곳), 표 칸 {len(cells) - len(same)}개를 채웠습니다" \
+        + (f" (이미 같은 값 {len(same)}칸은 그대로)" if same else "")
+    if problems:
+        return rt.ok_unverified(TOOL, "fill", preview, problems[:10], **fields)
+    return rt.ok(TOOL, "fill", preview, "VERIFIED: 채운 곳을 다시 읽어 확인했습니다. 잘못 채웠으면 office.py undo로 되돌릴 수 있습니다.",
+                 verified=True, **fields)
+
+
+# ==============================================================================
 # 4. export
 # ==============================================================================
 
@@ -1399,6 +1568,12 @@ def build_cli():
     p.add_argument("--size", type=float, help="글자 크기")
     p.add_argument("--highlight", help="형광펜 (yellow, green, pink, blue, red, gray, none)")
 
+    p = sub.add_parser("fill", help="서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 채우기")
+    common(p, write=True)
+    p.add_argument("--file", "-f", required=True, help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25)")
+    p.add_argument("--overwrite", action="store_true", help="값이 있는 표 칸도 덮어쓰기 (사용자가 확인했을 때만)")
+    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 채울 곳만 미리 보기")
+
     p = sub.add_parser("export", help="PDF/DOCX 사본 저장")
     common(p)
     p.add_argument("--save", help="저장 경로 (.pdf 또는 .docx, 생략 시 작업 폴더에 PDF)")
@@ -1407,7 +1582,7 @@ def build_cli():
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "export": cmd_export,
-            "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions}
+            "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions, "fill": cmd_fill}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

@@ -6,6 +6,16 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.61] - 2026-11-04
+
+워드 양식 채우기 (C4). 회귀 테스트: `tests/test_word.py` "word.py fill"(1.4.60에서 6개 중 6개 실패, 명령 없음).
+가짜 Word에 칸 글이 있는 표(`FakeGridTable`, `doc.Tables(i).Cell(r, c).Range.Text`)를 넣음.
+
+### 기능
+- `word.py fill --file 값.csv`(열: 자리, 값): `{{이름}}` 자리는 문서 모든 영역에서 바꾸고, `표2!R3C4`는 그 표 칸에 씀. 모든 줄을 먼저 확인(모양, 문서에 없는 자리,
+  없는 표·칸)하고 하나라도 틀리면 아무것도 바꾸지 않음. 값이 있는 표 칸은 `needs_user_decision` 하나와 `--overwrite`, `--dry-run`, 되돌리기 지점 하나,
+  다시 읽어 확인.
+
 ## [1.4.60] - 2026-11-04
 
 Outlook 이어 하기 (C2). 회귀 테스트: `tests/test_outlook.py` "짧은 번호, 첨부 저장 뒤 읽기 명령, calendar, thread"(1.4.59에서 9개 중 9개 실패).

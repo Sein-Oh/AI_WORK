@@ -144,6 +144,43 @@ class FakeTable:
         return cell
 
 
+class FakeCellRange:
+    def __init__(self, grid, r, c):
+        self.grid, self.r, self.c = grid, r, c
+
+    @property
+    def Text(self):
+        return self.grid[self.r][self.c] + "\r\x07"            # Word: 칸 끝 표시
+
+    @Text.setter
+    def Text(self, value):
+        self.grid[self.r][self.c] = value
+
+
+class FakeGridTable:
+    """칸 글만 있는 표 (word.py fill의 doc.Tables(i).Cell(r, c).Range.Text). None 칸은 병합으로 없는 칸."""
+
+    def __init__(self, rows):
+        self.grid = [list(r) for r in rows]
+
+    def Cell(self, r, c):
+        if not (1 <= r <= len(self.grid) and 1 <= c <= len(self.grid[r - 1])) or self.grid[r - 1][c - 1] is None:
+            raise RuntimeError("요청한 구성원이 컬렉션에 없습니다")
+        return type("Cell", (), {"Range": FakeCellRange(self.grid, r - 1, c - 1)})()
+
+
+class FakeTables:
+    def __init__(self, doc):
+        self.doc = doc
+
+    @property
+    def Count(self):
+        return len(self.doc.grid_tables)
+
+    def __call__(self, i):
+        return self.doc.grid_tables[i - 1]
+
+
 class FakeComment:
     def __init__(self, scope, text, author="검토자", done=False):
         self.Scope = scope
@@ -192,6 +229,8 @@ class FakeWordDocument:
         self.WordOpenXML = "<xml/>"
         self.Comments = FakeComments(self)
         self.table_spans = []        # 표 영역 [(시작, 끝)] (끝 = 표 다음 단락의 시작)
+        self.grid_tables = []        # fill용 표 (FakeGridTable): doc.Tables(i).Cell(r, c)
+        self.Tables = FakeTables(self)
 
     def replace(self, s, e, v):
         self.text = self.text[:s] + v + self.text[e:]
