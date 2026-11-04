@@ -20,6 +20,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library,
     setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path,
     read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
@@ -39,34 +40,38 @@ import warnings
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import numpy as np
-import pandas as pd
-import joblib
+check_core_libraries("모델 학습")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import numpy as np
+    import pandas as pd
+    import joblib
 
-import sklearn
-from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold, StratifiedKFold
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (
-    r2_score, mean_absolute_error, root_mean_squared_error,
-    f1_score, accuracy_score, balanced_accuracy_score, roc_auc_score,
-    confusion_matrix, classification_report, make_scorer,
-)
-from sklearn.inspection import permutation_importance
-from sklearn.exceptions import ConvergenceWarning
+    import sklearn
+    from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold, StratifiedKFold
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import (
+        r2_score, mean_absolute_error, root_mean_squared_error,
+        f1_score, accuracy_score, balanced_accuracy_score, roc_auc_score,
+        confusion_matrix, classification_report, make_scorer,
+    )
+    from sklearn.inspection import permutation_importance
+    from sklearn.exceptions import ConvergenceWarning
 
-# 5 Core Regression Algorithms
-from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor, ExtraTreesRegressor
-from sklearn.linear_model import RidgeCV, ElasticNetCV
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.base import clone
+    # 5 Core Regression Algorithms
+    from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor, ExtraTreesRegressor
+    from sklearn.linear_model import RidgeCV, ElasticNetCV
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.base import clone
 
-# 5 Core Classification Algorithms (--task classification)
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.neighbors import KNeighborsClassifier
+    # 5 Core Classification Algorithms (--task classification)
+    from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
+    from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+    from sklearn.neighbors import KNeighborsClassifier
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "모델 학습")
 
 TASK_REGRESSION = "regression"
 TASK_CLASSIFICATION = "classification"

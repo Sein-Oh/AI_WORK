@@ -23,6 +23,7 @@ import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library, MissingLibraryError,
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
     normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names, VERSION,
@@ -36,8 +37,12 @@ import argparse
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
-import numpy as np
-import pandas as pd
+check_core_libraries("보고서")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import numpy as np
+    import pandas as pd
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "보고서")
 
 # Optional at import time so a missing package is reported as protocol JSON
 try:
@@ -1474,7 +1479,7 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
 def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
     for err, pkg in ((_DOCX_IMPORT_ERROR, "python-docx"), (_MPL_IMPORT_ERROR, "matplotlib")):
         if err is not None:
-            raise InputError(f"보고서 생성에 필요한 {pkg} 패키지가 설치되어 있지 않습니다 ({err}). docs/ENVIRONMENT.md를 참고하십시오.")
+            raise MissingLibraryError(pkg, "보고서(Word)")
     target_filter = None
     if args.target and args.target.strip().lower() != "all":
         target_filter = [t.strip() for t in args.target.split(",") if t.strip()]

@@ -25,6 +25,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
     percent_warning, check_percent_mix, percent_mix, _strip_percent,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
@@ -36,8 +37,12 @@ setup_console()
 from datetime import datetime  # noqa: E402
 from typing import Any, Dict, List, Optional, Tuple  # noqa: E402
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
+check_core_libraries("표 보간")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import numpy as np  # noqa: E402
+    import pandas as pd  # noqa: E402
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "표 보간")
 
 MAX_SOLUTIONS_JSON = 20   # more reverse-lookup answers than this go to a result workbook
 SCAN_STEPS = 2000         # reverse lookup sampling steps on scattered data with 2-3 keys

@@ -439,3 +439,49 @@ def test_no_module_level_name_assigned_twice():
                 if isinstance(n, ast.Name):
                     (dup.append(n.id) if n.id in seen else seen.add(n.id))
     assert not dup, dup
+
+
+# ---- 라이브러리 없음 (R5, 2.9.45): traceback 대신 missing_library JSON 1줄 ------------------------------------------
+
+
+def _without(tmp_path, *modules):
+    """modules를 import하면 ModuleNotFoundError가 나는 폴더 (PYTHONPATH 맨 앞)."""
+    fake = tmp_path / "fake_site"
+    fake.mkdir(exist_ok=True)
+    for m in modules:
+        (fake / f"{m}.py").write_text(f"raise ModuleNotFoundError(\"No module named '{m}'\", name='{m}')\n",
+                                      encoding="utf-8")
+    return str(fake)
+
+
+def _run_without(tmp_path, fake, script, *args):
+    env = {**os.environ, "PYTHONPATH": fake, "ML_KIT_DATA_DIR": str(tmp_path / "data")}
+    proc = subprocess.run([sys.executable, os.path.join(KIT, script), *args], capture_output=True, text=True,
+                          encoding="utf-8", env=env, timeout=120)
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1, (proc.stdout, proc.stderr)
+    return proc, json.loads(lines[0])
+
+
+@pytest.mark.parametrize("script,module,pip", [
+    ("ml_predict.py", "numpy", "numpy"), ("ml_train.py", "sklearn", "scikit-learn"), ("ml_map.py", "pandas", "pandas"),
+    ("ml_report.py", "joblib", "joblib"), ("ml_export.py", "sklearn", "scikit-learn")])
+def test_missing_library_is_one_json_line(tmp_path, script, module, pip):
+    args = {"ml_predict.py": ["-m", str(tmp_path), "-i", "a=1"], "ml_train.py": ["-f", "x.csv", "-x", "a", "-y", "b"],
+            "ml_map.py": ["-f", "x.csv", "-i", "a=1"], "ml_report.py": ["-m", str(tmp_path)],
+            "ml_export.py": ["-m", str(tmp_path)]}[script]
+    proc, res = _run_without(tmp_path, _without(tmp_path, module), script, *args)
+    assert proc.returncode == 1 and res["status"] == "error", res              # 2.9.44: traceback, no JSON
+    assert res["error_type"] == "missing_library" and res["missing_package"] == pip, res
+    assert res["install_command"] == f"python -m pip install {pip}", res
+    assert res["agent_directive"].startswith("STOP_RETRY:") and "직접 설치하지 마세요" in res["agent_directive"], res
+    assert "Traceback" not in proc.stderr
+    log = (tmp_path / "data" / "logs" / "errors.txt").read_text(encoding="utf-8")
+    assert "missing_library" in log
+
+
+def test_import_error_inside_run_is_missing_library():
+    res = mp.error_payload(ModuleNotFoundError("No module named 'scipy.spatial'", name="scipy.spatial"))
+    assert res["error_type"] == "missing_library" and res["install_command"] == "python -m pip install scipy", res
+    res = mp.error_payload(ImportError("No module named docx"))
+    assert res["missing_package"] == "python-docx" and res["agent_directive"].startswith("STOP_RETRY:"), res

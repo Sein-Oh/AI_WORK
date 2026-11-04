@@ -21,11 +21,16 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+    check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
     VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, retry_fs,
 )
-import ml_train as mt  # noqa: E402  same training competition as ml_train.py
+check_core_libraries("성능예측표")
+try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
+    import ml_train as mt  # noqa: E402  same training competition as ml_train.py
+except ImportError as _import_exc:
+    exit_missing_library(_import_exc, "성능예측표")
 
 setup_console()
 

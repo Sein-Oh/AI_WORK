@@ -8,6 +8,19 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.45] - 2026-11-04
+
+저장소 지침 반영(R5): 라이브러리 없음. 회귀 테스트: `tests/test_contract.py` "라이브러리 없음" (2.9.44에서 7개 중 6개 실패).
+
+### 수정
+- 진입점 최상단 import(numpy, pandas, joblib, scikit-learn)가 실패하면 traceback만 나오고 stdout JSON이 없던 문제. `ml_predict.py`는 핵심
+  라이브러리를 감싸서 불러오고(`CORE_IMPORT_ERROR`, 타입 표시는 `from __future__ import annotations`), 모든 진입점이 먼저
+  `check_core_libraries`, 나머지 무거운 import는 `exit_missing_library`로 감쌉니다. 응답: exit 1, `error_type: "missing_library"`,
+  `missing_package`, `install_command: "python -m pip install <패키지>"`, `agent_directive` `STOP_RETRY: <기능>에 필요한 <패키지>이(가) 설치되어
+  있지 않습니다. install_command를 사용자에게 전달하세요. 직접 설치하지 마세요.` 오류 로그에도 남습니다.
+- 실행 중의 `ImportError`(scipy, openpyxl 등)도 `ERROR:`(내부 오류) 대신 같은 `missing_library` `STOP_RETRY`. 보고서의 python-docx·matplotlib 없음도 같은 형식.
+- PART C에 `MissingLibraryError`, `missing_library_error`, `require_lib`, `exit_missing_library`, `check_core_libraries`, `PIP_NAMES`(sklearn -> scikit-learn 등).
+
 ## [2.9.44] - 2026-11-04
 
 23차 점검 L1. 회귀 테스트: `tests/test_names.py` `test_alias_pair_with_degree_spelling_refused` (2.9.43에서 3개 모두 실패).
@@ -1349,7 +1362,6 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 
 ### 저장소 지침 반영 (AGENTS.md 2026-10-28, 우선순위 순)
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
-- [ ] 진입점 최상단 import(numpy/pandas/joblib/sklearn) 실패 시 traceback 대신 STOP_RETRY JSON + `python -m pip install ...` 안내, ImportError를 STOP_RETRY로 분류 (회귀 테스트)
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
 - [ ] `--history` 원장 0건을 `status: ok` + `record_count: 0`으로 (ml_train.py:1582, `no_history`는 별도 키로 유지), 빈 행만 있는 입력의 0행 명시 오류(ml_predict.py:444)
 - [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상

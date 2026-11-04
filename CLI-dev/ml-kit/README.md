@@ -931,7 +931,10 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
   `"Word 보고서 a.docx 잠김(Excel/Word 등에서 열림) -> a_20261028_101500.docx로 저장"`. 실제 저장 경로는 `output_file`/`report_file`에 있습니다.
 
 #### [에러 발생 시 반환 JSON]
-모든 도구 공통. `error_type`은 `input`(인자/데이터 문제, `STOP_RETRY:`), `internal`(내부 오류, `ERROR:`), `interrupted`(Ctrl+C, exit 130) 중 하나이며, 컬럼명 오타 시 message에 `[추천]` 후보가 포함됩니다.
+모든 도구 공통. `error_type`은 `input`(인자/데이터 문제, `STOP_RETRY:`), `missing_library`(라이브러리 없음, `STOP_RETRY:`), `internal`(내부 오류, `ERROR:`), `interrupted`(Ctrl+C, exit 130) 중 하나이며, 컬럼명 오타 시 message에 `[후보]`가 포함됩니다.
+`missing_library`(R5, 2.9.45): numpy·pandas·joblib·scikit-learn·scipy·openpyxl·python-docx·matplotlib 중 없는 것이 있으면 traceback 대신
+`missing_package`, `install_command`(`python -m pip install <패키지>`)를 주고 `agent_directive`가 "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요."입니다.
+진입점의 최상단 import(`check_core_libraries`, `exit_missing_library`)와 실행 중 import 모두 같습니다(`error_payload`가 `ImportError`를 `missing_library`로).
 ```json
 {
   "status": "error",

@@ -16,6 +16,8 @@ inference can never drift apart.
 Designed for lightweight 26B-30B LLM agents with 1-turn declarative execution.
 """
 
+from __future__ import annotations   # type hints never touch numpy/pandas (they may be missing: R5)
+
 import sys
 import os
 import re
@@ -33,9 +35,16 @@ from datetime import datetime
 from itertools import product
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
-import numpy as np
-import pandas as pd
-import joblib
+# R5: the core libraries are imported guarded so that a missing one still answers with 1 JSON line
+# (missing_library + install_command) instead of a traceback. Every entry point calls check_core_libraries().
+try:
+    import numpy as np
+    import pandas as pd
+    import joblib
+    CORE_IMPORT_ERROR: Optional[ImportError] = None
+except ImportError as _core_exc:
+    np = pd = joblib = None  # type: ignore[assignment]
+    CORE_IMPORT_ERROR = _core_exc
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -48,7 +57,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.44"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.45"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -80,6 +89,8 @@ def json_safe(obj: Any) -> Any:
         return {str(k): json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [json_safe(v) for v in obj]
+    if np is None:     # missing_library answer (R5): plain Python values only
+        return None if isinstance(obj, float) and obj != obj else obj
     if isinstance(obj, np.ndarray):
         return [json_safe(v) for v in obj.tolist()]
     if isinstance(obj, (bool, np.bool_)):
@@ -160,6 +171,55 @@ def unfinished_payload(exc: "Unfinished") -> Dict[str, Any]:
     }
 
 
+# pip package of an import name (R5 install_command); other names install under their own name
+PIP_NAMES = {"sklearn": "scikit-learn", "docx": "python-docx", "dateutil": "python-dateutil", "yaml": "PyYAML",
+             "cv2": "opencv-python", "fitz": "pymupdf"}
+
+
+class MissingLibraryError(InputError):
+    """R5: a library the tool needs is not installed. error_payload answers missing_library + install_command."""
+
+    def __init__(self, pip_name: str, feature: str):
+        super().__init__(f"{feature}에 필요한 {pip_name}이(가) 설치되어 있지 않습니다. "
+                         f"설치 명령: python -m pip install {pip_name}")
+        self.pip_name = pip_name
+        self.feature = feature
+
+
+def missing_library_error(exc: ImportError, feature: str = "ml-kit") -> MissingLibraryError:
+    """MissingLibraryError of an ImportError ('No module named sklearn.utils' -> scikit-learn)."""
+    name = getattr(exc, "name", None)
+    if not name:
+        m = re.search(r"No module named '?([\w.]+)", str(exc))
+        name = m.group(1) if m else "unknown"
+    top = name.split(".")[0]
+    return MissingLibraryError(PIP_NAMES.get(top, top), feature)
+
+
+def require_lib(module: str, pip_name: str, feature: str) -> Any:
+    """Imports module or raises MissingLibraryError (R5)."""
+    import importlib
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        raise MissingLibraryError(pip_name, feature)
+
+
+def exit_missing_library(exc: ImportError, feature: str = "ml-kit") -> None:
+    """A core import of an entry point failed (outside run_cli): the missing_library JSON line, the error log, exit 1."""
+    payload = error_payload(missing_library_error(exc, feature))
+    sys.stderr.write(f"[ERROR] {payload['message']}\n")
+    write_error_log(payload)
+    emit_json_response(payload)
+    sys.exit(1)
+
+
+def check_core_libraries(feature: str = "ml-kit") -> None:
+    """Entry points call this before anything else: numpy / pandas / joblib missing -> exit_missing_library."""
+    if CORE_IMPORT_ERROR is not None:
+        exit_missing_library(CORE_IMPORT_ERROR, feature)
+
+
 class ColumnNameError(InputError):
     """A given column name matches no column (resolve_column_names): the message lists [후보] or no similar column."""
 
@@ -177,6 +237,18 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             "error_type": "interrupted",
             "message": "사용자 또는 상위 프로세스에 의해 실행이 중단되었습니다. 임시 산출물은 롤백되었습니다.",
             "agent_directive": "STOP_RETRY: Execution was interrupted. Ask the user before running again.",
+        }
+    if isinstance(exc, ImportError) and not isinstance(exc, MissingLibraryError):
+        exc = missing_library_error(exc, "이 기능")
+    if isinstance(exc, MissingLibraryError):
+        return {
+            "status": "error",
+            "error_type": "missing_library",
+            "message": str(exc),
+            "missing_package": exc.pip_name,
+            "install_command": f"python -m pip install {exc.pip_name}",
+            "agent_directive": (f"STOP_RETRY: {exc.feature}에 필요한 {exc.pip_name}이(가) 설치되어 있지 않습니다. "
+                                "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요."),
         }
     if isinstance(exc, _STOP_RETRY_ERRORS):
         return {
@@ -1962,7 +2034,7 @@ SAFE_MATH: Dict[str, Any] = {
     "e": np.e,
     "radians": np.radians,
     "degrees": np.degrees,
-}
+} if np is not None else {}      # numpy missing: check_core_libraries answers before any formula (R5)
 
 _NUMBER_NAME_RE = re.compile(r"(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")    # a column name that reads as a number
 _NAME_BOUNDARY_L = r"(?<![가-힣a-zA-Z0-9_])"
@@ -4003,6 +4075,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
 
 def main():
     setup_console()
+    check_core_libraries("예측")
     parser = JsonArgumentParser(
         description="Zero-Office Ultra-Fast Standalone ML Inference Engine (Folder or Specific Files)"
     )
