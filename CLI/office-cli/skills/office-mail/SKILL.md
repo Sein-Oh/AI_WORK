@@ -34,7 +34,7 @@ metadata:
 | 전달 | `python "C:\CLI\office-cli\outlook.py" forward --id 3 --to <주소> [--attach "<전체경로>"]` |
 
 - `--attach` 여러 파일은 `;`로 구분한다 (`"C:\a.pdf;C:\b.xlsx"`).
-- 첨부를 저장하면 결과의 `folder`와 파일 이름을 알린다. 내용을 보려면 결과의 `next_commands`(reader.py read, 여럿이면 reader.py index)를 그대로 실행한다.
+- 첨부를 저장하면 결과의 `folder`와 파일 이름을 알린다. 다른 폴더는 사용자가 준 전체 경로로만. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장된다. 내용을 보려면 결과의 `next_commands`(reader.py read, 여럿이면 reader.py index)를 그대로 실행한다.
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:

@@ -47,5 +47,5 @@ metadata:
 - `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸)이면 사용자에게 묻고 원할 때만 directive가 말한 옵션(`--overwrite` 등)을 붙여 1번 실행한다.
 - `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. 사용자가 풀었다고 하면 같은 명령 1번, `[후보]` 칸을 고르면 그 칸으로.
 - `drm_or_dialog`이면 사용자가 문서를 직접 열었다고 할 때 `next_commands[0]` 1번.
-- 시트·행·열 삭제, `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 새 파일은 사용자가 준 전체 경로로만(`--target "C:\폴더\새파일.xlsx"`).
+- 시트·행·열 삭제, `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 잘못 고쳤으면 위 표의 되돌리기 명령으로 되돌린다.

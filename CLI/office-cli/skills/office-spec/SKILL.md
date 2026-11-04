@@ -43,3 +43,5 @@ metadata:
 - `search`는 `--file`이 없으면 등록된 문서만 찾는다. `--file`을 주면 새 문서를 먼저 등록한다(`indexed_now`를 알림). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - `diff`는 숫자 변경 `number_changes`를 먼저, 삭제·추가·변경 항목마다 `old_evidence`·`new_evidence`를 붙여 알린다.
 - `truncated`이면 `full_result_file`을 알린다. `recovered`와 `warnings`는 그대로 알린다.
+- `--save` 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- 메모의 `--overwrite`(있던 메모 바꾸기)는 사용자가 요청했을 때만 붙인다.

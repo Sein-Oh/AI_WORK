@@ -18,6 +18,8 @@
   `reply`/`forward` 결과에 `original`(subject·from·received), `attachments`의 `mail`에 from·received를 더하고 preview·directive가 어느 메일인지 알리게 함.
   회귀 테스트: `tests/test_outlook.py` `test_short_ids_never_point_to_another_mail_after_new_listing` 외 3개.
 - office-mail 스킬: `reply`·`forward` 행에 `--id 3`, `--send`는 사용자가 받는 사람·원본 메일을 확인한 뒤에만.
+- 스킬 4개에 옛 통합 SKILL의 안전 규칙 보충: 새 파일은 사용자가 준 전체 경로로만, 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알림,
+  office-spec의 메모 `--overwrite`는 사용자가 요청했을 때만 (각 6KB 이하).
 - [치명] reader 등록·검색: 읽기에 실패하는 느린 파일이 있으면 매 실행 같은 파일을 다시 읽고 다음 파일 앞에서 `CONTINUE:`가 나 끝나지 않았음
   (`_index_files`, 검색 때 원본이 바뀐 캐시 다시 읽기). 실패를 (경로, 수정 시각, 크기, 파서 버전)으로 `<캐시 폴더>/index_failures.json`에 기록해 다음 실행에서
   건너뛰고 `failures`/`skipped`/새 키 `refresh_failures`로 보고. 파일 하나만 주면 바로 다시 시도, `clear --all`은 기록도 지움. `progress`의 등록 수는 실제 등록 수.
