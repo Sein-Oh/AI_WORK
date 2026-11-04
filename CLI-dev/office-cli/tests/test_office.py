@@ -1950,3 +1950,69 @@ def test_chart_export_with_slash_in_name():
     assert os.path.dirname(path) == rt.get_work_dir() and "/4" not in os.path.basename(path)
     path = office.image_by_export(_Obj(), "chart_1/4분기 매출")     # 정리하지 않은 이름도 resolve_output_path가 정리
     assert os.path.dirname(path) == rt.get_work_dir()
+
+
+# ---------------------------------------------------------------------------
+# 닫힌 파일 열기 감시 (B4, 1.4.58): DRM 인증 창 등으로 멈추면 그 인스턴스만 끝내고 drm_or_dialog
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hung_open(fake_com, monkeypatch, tmp_path):
+    import threading
+    killed = []
+    gone = threading.Event()
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0.2")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakeExcelApp())
+    monkeypatch.setattr(off, "_instance_pid", lambda kind, app, before: 4242)
+
+    def kill(pid):
+        killed.append(pid)
+        gone.set()
+        return True
+    monkeypatch.setattr(off, "_kill_pid", kill)
+
+    def stuck(kind, app, path, readonly):
+        if not gone.wait(5):                       # 인증 창이 떠서 돌아오지 않는 Open (프로세스가 끝나면 COM 오류)
+            raise AssertionError("감시가 프로세스를 끝내지 않음")
+        raise Exception("com_error: RPC 서버를 사용할 수 없습니다")
+    monkeypatch.setattr(off, "_open_file", stuck)
+    path = tmp_path / "보안 문서.xls"
+    path.write_bytes(b"x")
+    return path, killed
+
+
+def test_open_watchdog_kills_only_its_instance(hung_open, capsys):
+    path, killed = hung_open
+    t0 = time.monotonic()
+    code, out = run_main(excel, capsys, "read", "--target", str(path), "--range", "A1:B2")
+    assert time.monotonic() - t0 < 4
+    assert code == 1 and out["error_type"] == "drm_or_dialog" and killed == [4242], out
+    assert out["agent_directive"].startswith("STOP_RETRY:")
+    assert "문서 보안 인증 창 등으로 열리지 않음" in out["message"] and "직접 열어 두면 열린 문서로 읽음" in out["message"]
+    cmd = out["next_commands"][0]["command"]
+    assert "excel.py" in cmd and "read" in cmd and "보안 문서.xls" in cmd and str(tmp_path_of(path)) not in cmd
+
+
+def tmp_path_of(path):
+    return os.path.dirname(str(path))
+
+
+def test_open_watchdog_quiet_when_open_is_fast(fake_com, monkeypatch, tmp_path):
+    killed = []
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "5")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakeExcelApp())
+    monkeypatch.setattr(off, "_instance_pid", lambda kind, app, before: 4242)
+    monkeypatch.setattr(off, "_kill_pid", lambda pid: killed.append(pid) or True)
+    path = tmp_path / "a.xls"
+    path.write_bytes(b"x")
+    with off.open_target("excel", str(path), readonly=True) as t:
+        assert t.doc is not None
+    assert killed == []
+
+
+def test_open_timeout_env(monkeypatch):
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "")
+    assert off.open_timeout() == 30.0
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0")
+    assert off.open_timeout() == 0.0

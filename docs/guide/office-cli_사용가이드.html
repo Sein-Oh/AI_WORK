@@ -107,14 +107,14 @@ th { background: var(--soft); font-weight: 700; }
 <button id="menu" type="button">목차 열기/닫기</button>
 <nav id="side">
   <div class="brand">office-cli 사용 가이드</div>
-  <div class="ver">베타 | office-cli 1.4.57 | Gemma 기준</div>
+  <div class="ver">베타 | office-cli 1.4.58 | Gemma 기준</div>
   <input id="tocq" type="search" placeholder="목차에서 찾기 (예: 차트)">
   <div id="toc"></div>
 </nav>
 <main>
 <header class="top">
   <h1>office-cli 사용 가이드</h1>
-  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.57</p>
+  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.58</p>
 </header>
 
 <p class="lead">office-cli는 에이전트가 Office 문서를 직접 읽고 고칠 수 있게 해 주는 도구입니다. 채팅에 <b>하고 싶은 일을 평소 말투로</b> 쓰면 에이전트가 알맞은 도구를 골라 실행하고 결과를 알려 줍니다.
@@ -655,6 +655,7 @@ C7, 단위 확인 필요</p>
 <ul>
   <li><b>스캔한 PDF</b>(그림으로 된 쪽)는 글자가 없어 검색되지 않습니다.</li>
   <li><b>보안(DRM)이 걸린 Office 파일</b>은 등록이 안 될 수 있습니다. 그 파일을 Office로 열어 두고 "열린 워드에서 찾아줘"처럼 요청하세요.</li>
+  <li>닫힌 파일을 경로로 시켰는데 보안 인증 창 때문에 30초 안에 열리지 않으면, 도구가 몰래 띄운 Office만 닫고 "직접 열어 두세요"라고 알려 줍니다. 문서를 열어 두고 "열었어"라고 하면 열린 문서로 이어서 합니다.</li>
   <li>HWP, 엑셀, CSV는 쪽 정보가 없어 쪽 대신 장절이나 행 위치(예: <code>매출!12행</code>)로 근거를 알려 줍니다.</li>
 </ul>
 

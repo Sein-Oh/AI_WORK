@@ -670,6 +670,106 @@ def _new_instance(kind: str) -> Any:
     return app
 
 
+# --- 닫힌 파일 열기 감시: 문서 보안(DRM) 인증 창·대화상자로 보이지 않는 인스턴스가 멈추면 그 인스턴스만 끝냄 ---
+
+OPEN_TIMEOUT_ENV = "OFFICE_CLI_OPEN_TIMEOUT"   # 초. 0이면 감시하지 않음
+DEFAULT_OPEN_TIMEOUT = 30.0
+IMAGE_NAME = {"excel": "EXCEL.EXE", "word": "WINWORD.EXE", "ppt": "POWERPNT.EXE"}
+KIND_SCRIPT = {"excel": "excel.py", "word": "word.py", "ppt": "ppt.py"}
+
+
+def open_timeout() -> float:
+    raw = os.environ.get(OPEN_TIMEOUT_ENV, "").strip()
+    try:
+        v = float(raw) if raw else DEFAULT_OPEN_TIMEOUT
+    except ValueError:
+        v = DEFAULT_OPEN_TIMEOUT
+    return v if v > 0 else 0.0
+
+
+def _office_pids(kind: str) -> set:
+    """실행 중인 그 Office 프로그램의 프로세스 번호들 (읽지 못하면 빈 집합)."""
+    try:
+        import subprocess
+        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {IMAGE_NAME[kind]}", "/FO", "CSV", "/NH"],
+                             capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        pids = set()
+        for line in out.stdout.decode("mbcs" if os.name == "nt" else "utf-8", errors="replace").splitlines():
+            parts = [p.strip('"') for p in line.split('","')]
+            if len(parts) > 1 and parts[1].isdigit():
+                pids.add(int(parts[1]))
+        return pids
+    except Exception:
+        return set()
+
+
+def _instance_pid(kind: str, app: Any, before: set) -> Optional[int]:
+    """도구가 띄운 인스턴스의 프로세스 번호. Excel은 창 핸들, 그 밖은 띄우기 전후 프로세스 목록의 차이(하나일 때만)."""
+    if kind == "excel":
+        try:
+            pid = _window_pid(int(app.Hwnd))
+            if pid:
+                return pid
+        except Exception:
+            pass
+    new = _office_pids(kind) - before
+    return next(iter(new)) if len(new) == 1 else None
+
+
+def _kill_pid(pid: int) -> bool:
+    """그 프로세스 하나만 끝냅니다 (사용자의 다른 Office 창은 그대로)."""
+    try:
+        import signal
+        os.kill(pid, signal.SIGTERM)            # Windows: TerminateProcess
+        return True
+    except Exception:
+        return False
+
+
+def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float) -> rt.InputError:
+    name = os.path.basename(path)
+
+    def same(a: str) -> bool:
+        try:
+            return bool(a.strip()) and os.path.normcase(os.path.abspath(os.path.expandvars(a.strip().strip('"')))) \
+                == os.path.normcase(os.path.abspath(path))
+        except Exception:
+            return False
+    new_argv = [name if same(a) else a for a in (rt.CURRENT_ARGV or [])]   # 경로 대신 문서 이름 (열린 문서로)
+    nexts = [rt.next_command(f"{tool}.py" if tool else KIND_SCRIPT[kind], new_argv,
+                             "사용자가 문서를 Office에서 직접 열어 둔 뒤 같은 작업을 열린 문서로 실행")] if new_argv else []
+    return rt.InputError(
+        f"'{name}'이(가) {waited:g}초 안에 열리지 않아 백그라운드 {APP_LABEL[kind]}만 끝냈습니다 (사용자의 다른 창은 그대로). "
+        "문서 보안 인증 창 등으로 열리지 않음. 사용자가 문서를 직접 열어 두면 열린 문서로 읽음.",
+        directive=("문서가 열리지 않아 멈췄습니다. 다시 실행하지 말고 message를 사용자에게 알리세요. 사용자가 문서를 Office에서 직접 "
+                   "열어 두었다고 하면 next_commands[0]을 1번 실행하세요."),
+        error_type="drm_or_dialog", fields={"next_commands": nexts}, no_fallback=True)
+
+
+class _OpenWatch:
+    """닫힌 파일을 여는 동안 시간을 잽니다. 시간이 지나면 도구가 띄운 인스턴스 프로세스만 끝냅니다(그러면 멈춘 COM 호출이 오류로 돌아옴)."""
+
+    def __init__(self, kind: str, pid: Optional[int], timeout: float):
+        import threading
+        self.kind, self.pid, self.timeout = kind, pid, timeout
+        self.fired = False
+        self._timer = threading.Timer(timeout, self._fire) if pid and timeout > 0 else None
+        if self._timer is not None:
+            self._timer.daemon = True
+
+    def _fire(self) -> None:
+        self.fired = _kill_pid(self.pid) if self.pid else False
+
+    def __enter__(self) -> "_OpenWatch":
+        if self._timer is not None:
+            self._timer.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+
+
 def _ppt_running() -> bool:
     try:
         win32com.client.GetActiveObject(PROG_ID["ppt"])
@@ -844,6 +944,9 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
         else:
             path, exists = found["path"], found["exists"]
             ppt_was_running = _ppt_running() if kind == "ppt" else False
+            timeout = open_timeout()
+            # 감시할 프로세스 번호: Excel은 창 핸들로, Word·PowerPoint는 띄우기 전후 목록 차이로 (사용자가 띄운 PowerPoint는 감시 안 함)
+            before = _office_pids(kind) if timeout and kind != "excel" and not ppt_was_running else set()
             app = _new_instance(kind)
             owns_app = kind != "ppt" or not ppt_was_running
             if kind == "ppt":
@@ -853,7 +956,16 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
                 except Exception:
                     restore_alerts = None
             rt.log("PROGRESS", f"{APP_LABEL[kind]} 파일 {'여는' if exists else '만드는'} 중 (백그라운드): {os.path.basename(path)}")
-            doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
+            pid = _instance_pid(kind, app, before) if timeout and owns_app else None
+            with _OpenWatch(kind, pid, timeout) as watch:
+                try:
+                    doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
+                except BaseException:
+                    if watch.fired:          # 감시 시간이 지나 그 인스턴스를 끝냄 -> 멈춘 COM 호출이 오류로 돌아옴
+                        raise _drm_or_dialog_error(kind, path, tool, timeout) from None
+                    raise
+            if watch.fired:
+                raise _drm_or_dialog_error(kind, path, tool, timeout)
             owns_doc = True
             t = OfficeTarget(kind, app, doc, "file" if exists else "new", readonly)
             if exists and not readonly and _opened_readonly(doc):

@@ -6,6 +6,17 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.58] - 2026-11-04
+
+닫힌 파일 열기 감시 (B4 1부). 문서 보안(DRM) 인증 창이 보이지 않는 인스턴스에 뜨면 명령이 끝나지 않아(에이전트 120초에 끊김)
+LLM이 같은 명령을 반복함. 회귀 테스트: `tests/test_office.py` "닫힌 파일 열기 감시"(1.4.57에서 3개 중 3개 실패).
+
+### 기능
+- `_office.open_target`: 닫힌 파일을 여는 동안 감시(`OFFICE_CLI_OPEN_TIMEOUT`, 기본 30초, 0 = 없음). 시간이 지나면 도구가 띄운 인스턴스의 프로세스만 끝내고
+  STOP_RETRY `error_type: drm_or_dialog`("문서 보안 인증 창 등으로 열리지 않음. 사용자가 문서를 직접 열어 두면 열린 문서로 읽음")와
+  `next_commands[0]`(경로 대신 문서 이름을 넣은 같은 명령). 프로세스 번호: Excel은 창 핸들, Word·PowerPoint는 띄우기 전후 `tasklist` 차이.
+- 하지 않은 것: DRM 문서를 reader 캐시에 평문으로 등록(회사 보안 정책 결정 필요).
+
 ## [1.4.57] - 2026-11-04
 
 표 전체를 규격서와 한 번에 대조 (B1). 전에는 칸마다 `read` -> `search` -> 판단 -> 메모.csv를 LLM이 이어 붙여야 했음.
@@ -1311,7 +1322,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - 워드 그림/도형 -> PPT 전달 (`office_bridge` word->ppt), PPT -> 워드 전달.
 
 ### 1.4.0 점검에서 남긴 것
-- PowerPoint 닫힌 파일의 열기 암호, DRM 인증 창이 뜨는 문서: 백그라운드에서 멈출 수 있음 (감시 시간 초과 후 정리 필요).
+- PowerPoint 닫힌 파일의 열기 암호: 사용자가 이미 띄운 PowerPoint로 열면 감시하지 않음(그 프로세스는 끝낼 수 없음). (DRM 인증 창 감시는 1.4.58)
+- DRM 문서를 reader 캐시(평문)에 등록하기: 회사 보안 정책 결정이 필요해 하지 않음 (1.4.58 B4 2부).
 - 엑셀: 열린 문서의 열 전체 범위(`A:A`)를 사용 범위로 자르기 (닫힌 파일·CSV는 1.4.5), 조건부 강조 `포함:`의 상대참조(활성 셀 기준), `--map` 연쇄 치환. (보호된 시트 사전 확인은 1.4.55) (잘못된 입력 검사 전에 새 시트가 만들어지는 문제는 1.4.13, 같은 이름 차트가 여러 시트에 있을 때 `[후보]`는 1.4.23)
 - 워드: 열린 문서의 자동 번호 제목(`ListFormat.ListString`)이 `outline`/`--section`에 나오지 않음(닫힌 파일과 번호 체계 다름), 목차(TOC) 안의 앵커 후보 구별, 머리글 안 글상자 치환. (`replace --find`만 준 경우는 1.4.10)
 - reader: HWP(바이너리) 개요 번호, PDF `find_tables` 성능(선이 있는 쪽만), 색인 저장 일괄화, BOM 없는 UTF-16 판별.
