@@ -1743,12 +1743,76 @@ def _folder_arg(raw: str) -> str:
     return folder
 
 
-def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
+# 읽지 못한 파일 기록 {정규화한 경로: {mtime, size, parser_version, reason}}. 같은 파일(수정 시각·크기·파서 버전이 같음)은
+# 다음 실행에서 다시 읽지 않고 failures로만 보고합니다. 실패하는 느린 파일을 매 실행 다시 읽어 CONTINUE가 끝나지 않던 문제 (R10).
+FAILED_FILE = "index_failures.json"
+
+
+def _failed_path() -> str:
+    return os.path.join(rt.get_cache_dir(), FAILED_FILE)
+
+
+def load_failed() -> Dict[str, Dict[str, Any]]:
+    try:
+        data = json.loads(rt.read_text_file(_failed_path()))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}                            # 없거나 손상: 빈 기록 (다음 실패 때 새로 씀)
+
+
+def _save_failed(data: Dict[str, Dict[str, Any]]) -> None:
+    try:
+        rt.safe_write_text(_failed_path(), json.dumps(data, ensure_ascii=False))
+    except Exception as e:
+        rt.log("WARN", f"읽지 못한 파일 기록을 저장하지 못했습니다: {type(e).__name__}")
+
+
+def known_failure(path: str, st: Optional[os.stat_result] = None) -> Optional[str]:
+    """이 파일이 지금 모습 그대로 전에 읽기에 실패했으면 그 사유, 아니면 None."""
+    rec = load_failed().get(os.path.normcase(os.path.abspath(path)))
+    if not isinstance(rec, dict):
+        return None
+    try:
+        st = st or os.stat(path)
+    except OSError:
+        return None
+    if (rec.get("mtime") == st.st_mtime and rec.get("size") == st.st_size
+            and rec.get("parser_version") == PARSER_VERSION):
+        return str(rec.get("reason") or "읽기 실패")
+    return None
+
+
+def record_failure(path: str, reason: str) -> None:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    data = load_failed()
+    data[os.path.normcase(os.path.abspath(path))] = {"mtime": st.st_mtime, "size": st.st_size,
+                                                     "parser_version": PARSER_VERSION, "reason": reason[:300]}
+    _save_failed(data)
+
+
+def clear_failure(path: str) -> None:
+    key = os.path.normcase(os.path.abspath(path))
+    data = load_failed()
+    if key in data:
+        del data[key]
+        _save_failed(data)
+
+
+KNOWN_FAILURE_NOTE = "이전 실행에서 읽지 못함 (파일이 바뀌면 다시 시도. 바로 다시 해 보려면 index --file로 이 파일 하나만): "
+
+
+def _index_files(files: List[str], max_files: int, retry_failed: bool = False) -> Dict[str, Any]:
     """파일들을 캐시에 등록합니다. 새로 파싱하는 파일 수만 max_files로 제한합니다 (이미 최신인 파일은 세지 않음).
+    전에 읽지 못한 파일(그대로인 것)은 retry_failed가 아니면 다시 읽지 않고 failures에만 넣습니다.
     반환: docs(불러온 문서), new/updated/cached(파일 이름 목록), failures, remaining.
     failures 항목: file, reason, error(원래 예외. 파일 하나만 줬을 때 _raise_single_failure가 그대로 다시 냄, JSON에는 넣지 않음)."""
     out: Dict[str, Any] = {"docs": [], "new": [], "updated": [], "cached": [], "failures": [], "remaining": 0}
-    parsed = 0
+    parsed = 0                                   # 이번 실행에서 새로 읽어 본 파일 수 (실패 포함)
+    registered = 0                               # 그중 등록에 성공한 수
+    failed_now = 0
     spent = 0.0                                  # 이번 실행에서 새로 읽는 데 쓴 초 (다음 파일 예상 시간)
     index = load_index()
     total = len(files)
@@ -1762,13 +1826,20 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
         entry = next((e for k, e in index.items() if os.path.normcase(k) == key), None)
         fresh = bool(entry and entry.get("parser_version") == PARSER_VERSION
                      and entry.get("mtime") == st.st_mtime and entry.get("size") == st.st_size)
+        if not fresh and not retry_failed:
+            known = known_failure(path, st)
+            if known is not None:
+                out["failures"].append({"file": path, "reason": (KNOWN_FAILURE_NOTE + known)[:300],
+                                        "error": rt.InputError(known)})
+                continue
         if not fresh and parsed >= max_files:
             out["remaining"] += 1
             continue
         if not fresh and parsed:
             # R10: 새 파일을 읽기 전에 시계를 봄 (이번 실행에서 하나는 읽은 뒤에만: 반복하면 반드시 끝남).
-            # 읽은 파일은 캐시에 저장되어 같은 명령을 다시 실행하면 건너뜀
-            rt.check_time(spent / parsed, f"문서 {total}개 중 {i - 1}개 확인, 이번에 새로 등록 {parsed}개 (남은 파일은 같은 명령으로 이어서)")
+            # 읽은 파일은 캐시에, 실패한 파일은 실패 기록에 저장되어 같은 명령을 다시 실행하면 건너뜀
+            rt.check_time(spent / parsed, f"문서 {total}개 중 {i - 1}개 확인, 이번에 새로 등록 {registered}개"
+                          + (f", 읽지 못함 {failed_now}개" if failed_now else "") + " (남은 파일은 같은 명령으로 이어서)")
         t0 = time.monotonic()
         try:
             if not fresh:
@@ -1776,13 +1847,19 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
             doc, status = load_document_status(path, check_index=not fresh)
         except Exception as e:
             # 내부 오류는 'KeyError: ...'처럼 종류와 함께 (str(e)만 쓰면 "'heading'"만 남음)
-            out["failures"].append({"file": path, "reason": rt.error_payload(e)["message"][:300], "error": e})
-            parsed += 0 if fresh else 1
-            spent += 0 if fresh else time.monotonic() - t0
+            reason = rt.error_payload(e)["message"][:300]
+            out["failures"].append({"file": path, "reason": reason, "error": e})
+            if not fresh:
+                parsed += 1
+                failed_now += 1
+                spent += time.monotonic() - t0
+                record_failure(path, reason)
             continue
         if status != "cached":
             parsed += 1
+            registered += 1
             spent += time.monotonic() - t0
+            clear_failure(path)
         out["docs"].append(doc)
         out[status].append(path)
     return out
@@ -2235,7 +2312,7 @@ def cmd_index(args) -> Dict[str, Any]:
         if orphan_docs:
             files += orphan_docs
             rt.log("WARN", f"색인에 없는 캐시 문서 {len(orphan_docs)}개를 찾아 다시 등록합니다.")
-    res = _index_files(files, max(1, args.max_files))
+    res = _index_files(files, max(1, args.max_files), retry_failed=bool(args.file))
     if args.file:
         _raise_single_failure(res)
     readded = [d for d in res["docs"]
@@ -2725,7 +2802,7 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     반환: (문서 목록, 정보: indexed_now, from_cache, skipped, remaining, stale, missing, skipped_types)"""
     info: Dict[str, Any] = {"indexed_now": [], "from_cache": 0, "skipped": [], "remaining": 0, "stale": [],
                             "missing": 0, "skipped_types": {}, "folder": None, "excluded_dirs": [], "refreshed": 0,
-                            "reindex": 0, "orphan": 0}
+                            "reindex": 0, "orphan": 0, "refresh_failed": []}
     docs: List[Dict[str, Any]] = []
     if args.file:
         raw = os.path.expandvars(os.path.expanduser(str(args.file).strip().strip('"')))
@@ -2737,7 +2814,7 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             path = rt.resolve_input_path(raw, "검색할 파일")
             file_type(path)
             files = [path]
-        res = _index_files(files, max(1, args.max_files))
+        res = _index_files(files, max(1, args.max_files), retry_failed=len(files) == 1 and not info["folder"])
         if len(files) == 1 and not info["folder"]:
             _raise_single_failure(res)
         docs = res["docs"]
@@ -2771,17 +2848,26 @@ def _search_targets(args) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         elif not is_stale_doc(doc):
             doc = recheck_uncomputed(doc)
         attempted = False
-        if is_stale_doc(doc) and not doc.get("file_missing") and tried < STALE_REFRESH_MAX:
+        known = known_failure(path) if is_stale_doc(doc) and not doc.get("file_missing") else None
+        if known is not None:
+            # 전에 다시 읽지 못한 원본(그대로임)은 매 실행 다시 읽지 않음 (실패하는 느린 파일 때문에 CONTINUE가 끝나지 않던 문제)
+            attempted = True
+            info["refresh_failed"].append({"file": path, "reason": (KNOWN_FAILURE_NOTE + known)[:300]})
+        elif is_stale_doc(doc) and not doc.get("file_missing") and tried < STALE_REFRESH_MAX:
             if tried:
-                # R10: 다시 읽은 캐시는 저장되어 같은 명령을 다시 실행하면 그대로 씀
-                rt.check_time(0.0, f"원본이 바뀐 캐시 {tried}개를 다시 읽음 (남은 캐시는 같은 명령으로 이어서)")
+                # R10: 다시 읽은 캐시는 저장되고, 실패한 원본은 실패 기록에 남아 같은 명령을 다시 실행하면 건너뜀
+                rt.check_time(0.0, f"원본이 바뀐 캐시 {tried}개 중 {info['refreshed']}개를 다시 읽음 (남은 캐시는 같은 명령으로 이어서)")
             tried += 1
             attempted = True
             try:
                 doc, _ = load_document_status(path)     # 원본이 바뀐 캐시는 그 자리에서 다시 읽음 (JIT 복구)
                 info["refreshed"] += 1
+                clear_failure(path)
             except Exception as e:
-                rt.debug(f"다시 읽기 실패, 이전 캐시로 검색: {e}")
+                reason = rt.error_payload(e)["message"][:300]
+                rt.debug(f"다시 읽기 실패, 이전 캐시로 검색: {reason}")
+                record_failure(path, reason)
+                info["refresh_failed"].append({"file": path, "reason": reason})
         if doc.get("parser_version") != PARSER_VERSION:
             # 이전 파서 형식의 캐시는 단위 키가 달라 검색하지 않음 (skipped에만, stale은 '옛 내용으로 검색한 문서'만)
             if doc.get("file_missing"):
@@ -2883,6 +2969,10 @@ def cmd_search(args) -> Dict[str, Any]:
                              for s in info["skipped"][:MAX_LIST_ITEMS]]
     if info["stale"]:
         result["stale_cache_count"] = len(info["stale"])
+    if info["refresh_failed"]:
+        # 원본이 바뀐 캐시를 다시 읽지 못한 파일 (실패 기록에 남겨 다음 실행에서 다시 읽지 않음)
+        result["refresh_failures"] = [{"file": os.path.basename(f["file"]), "path": f["file"], "reason": f["reason"]}
+                                      for f in info["refresh_failed"][:MAX_LIST_ITEMS]]
     if info["missing"]:
         result["missing_file_count"] = info["missing"]
 
@@ -3256,6 +3346,11 @@ def cmd_clear(args) -> Dict[str, Any]:
             rt.retry_fs(lambda: os.remove(f))
         except OSError as e:
             failed.append(f"{os.path.basename(f)}: {e}")
+    if args.all and os.path.exists(_failed_path()):       # 읽지 못한 파일 기록도 비움 (다음 등록 때 모두 다시 시도)
+        try:
+            rt.retry_fs(lambda: os.remove(_failed_path()))
+        except OSError as e:
+            failed.append(f"{FAILED_FILE}: {e}")
     # 잠근 상태에서 색인을 다시 읽어 지운 항목만 뺌 (그 사이 다른 실행이 넣은 항목을 지우지 않게)
     _index_update(lambda idx: [idx.pop(p, None) for p in removed])
     # 다시 읽어 확인: 색인에서 빠졌고 캐시 파일도 없는지

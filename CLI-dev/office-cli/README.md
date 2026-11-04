@@ -410,6 +410,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `--pages`/`--units`(ppt `--slides`)의 범위는 문서 크기로 먼저 줄입니다(`1-999999999`도 바로 끝남).
 - 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 지원하지 않습니다.
 - 문서가 많아 등록이 오래 걸리면 시간 제한(약 70초) 전에 `CONTINUE:`로 멈춥니다(R10, 위 출력 계약). 읽은 문서는 캐시에 저장되어 같은 명령을 다시 실행하면 건너뜁니다.
+- 읽지 못한 파일은 `<캐시 폴더>/index_failures.json`에 (경로, 수정 시각, 크기, 파서 버전, 사유)로 기록해, 파일이 그대로면 다음 실행(폴더 등록, `index --all`,
+  검색 때 원본이 바뀐 캐시 다시 읽기)에서 다시 읽지 않고 `failures`(검색은 `skipped`, 바뀐 캐시는 `refresh_failures`)에 "이전 실행에서 읽지 못함"으로 보고합니다.
+  실패하는 느린 파일 때문에 `CONTINUE:`가 끝나지 않던 문제. 파일이 바뀌면 다시 읽고, `index --file`·`search --file`로 그 파일 하나만 주면 바로 다시 시도합니다.
+  `clear --all`은 이 기록도 지웁니다. `progress`의 "새로 등록 N개"는 실제로 등록한 수, 실패는 "읽지 못함 N개"로 따로 셉니다.
 - `--max-files`는 이번 실행에서 **새로 읽는** 파일 수의 상한입니다. 이미 최신인 파일은 세지 않으므로 같은 명령을 다시 실행하면 남은 파일부터 이어서 등록합니다(`next_commands[0]`). 등록은 원본을 바꾸지 않는 읽기 전용 작업입니다.
 - DRM으로 암호화된 Office 파일은 라이브러리로 열 수 없으므로, `excel.py`/`word.py`/`ppt.py read --target 경로`로 Office에서 읽으라고 안내합니다.
 - DOCX 글상자(`w:txbxContent`)의 글은 그 글상자가 든 단락(표) 바로 뒤에 `글상자 N`(여러 단락이면 `글상자 N 단락 M`) 단위로 넣습니다. Word 2010 이후

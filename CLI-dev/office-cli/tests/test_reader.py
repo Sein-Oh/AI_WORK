@@ -1911,8 +1911,8 @@ def test_index_repairs_entries_lost_to_another_run(tmp_path, capsys, monkeypatch
         (tmp_path / f"d{i}.txt").write_text(f"내용 {i}", encoding="utf-8")
     real = reader._index_files
 
-    def racing(files, max_files):
-        res = real(files, max_files)
+    def racing(files, max_files, **kw):
+        res = real(files, max_files, **kw)
         # 다른 실행이 옛 색인으로 덮어쓴 상황: 방금 넣은 항목 하나가 사라짐
         index = reader.load_index()
         index.pop(sorted(index)[0])
@@ -2464,6 +2464,77 @@ def test_long_registration_continues_with_same_command(tmp_path, capsys, monkeyp
     assert len(reader.load_index()) == 3
     if command == "search":
         assert out["count"] >= 3, out
+
+
+@pytest.mark.parametrize("command", ["index", "search"])
+def test_failing_file_is_remembered_so_continue_ends(tmp_path, capsys, monkeypatch, command):
+    # 회귀: 실패하는 느린 파일이 앞에 있으면 매 실행 같은 파일을 다시 읽고 다음 파일 앞에서 CONTINUE (끝나지 않음)
+    folder = _txt_folder(tmp_path)
+    (folder / "a_bad.txt").write_text("깨진 파일", encoding="utf-8")
+    orig = reader.load_document_status
+    calls = []
+
+    def fake(path, *a, **k):
+        calls.append(os.path.basename(path))
+        if "a_bad" in path:
+            raise ValueError("손상된 파일")
+        return orig(path, *a, **k)
+    monkeypatch.setattr(reader, "load_document_status", fake)
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)      # 첫 파일 뒤로는 늘 시간 초과
+    argv = ["index", "--folder", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
+    seen, progress = [], []
+    for _ in range(6):
+        code, out = run_main(reader, capsys, *argv)
+        assert code == 0, out
+        seen.append(out["agent_directive"].split(":")[0])
+        if not out.get("continue"):
+            break
+        progress.append(out["progress"])
+    assert seen[:3] == ["CONTINUE"] * 3 and seen[3] in ("VERIFIED", "UNVERIFIED"), seen   # 실행마다 새 파일 1개 (실패도 한 단계), 네 번째에 끝
+    assert calls.count("a_bad.txt") == 1, calls                         # 실패한 파일은 한 번만 읽음
+    assert "새로 등록 0개, 읽지 못함 1개" in progress[0], progress
+    fails = out["failures"] if command == "index" else out["skipped"]
+    assert [f["file"] for f in fails] == ["a_bad.txt"] and "이전 실행에서 읽지 못함" in fails[0]["reason"], out
+    assert len(reader.load_index()) == 3
+    # 파일이 바뀌면 다시 읽음, 하나만 주면 바로 다시 시도
+    (folder / "a_bad.txt").write_text("고친 파일 정격 전압", encoding="utf-8")
+    monkeypatch.setattr(reader, "load_document_status", orig)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0 and out["failed"] == 0 and out["indexed"] == 1 and not reader.load_failed(), out
+
+
+def test_single_file_retries_known_failure(tmp_path, capsys, monkeypatch):
+    f = tmp_path / "bad.txt"
+    f.write_text("x", encoding="utf-8")
+    reader.record_failure(str(f), "손상")
+    code, out = run_main(reader, capsys, "index", "--file", str(f))
+    assert code == 0 and out["indexed"] == 1 and not reader.load_failed(), out
+
+
+def test_stale_refresh_failure_is_remembered(tmp_path, capsys, monkeypatch):
+    # 회귀: 원본이 바뀐 캐시를 다시 읽다 실패하는 파일을 매 검색마다 다시 읽음
+    folder = _txt_folder(tmp_path, 2)
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0 and out["indexed"] == 2
+    for i in range(2):
+        p = folder / f"doc{i}.txt"
+        p.write_text(f"정격 전압 바뀐 {i}\n", encoding="utf-8")
+        os.utime(p, (1, 2_000_000_000 + i))
+    orig = reader.load_document_status
+    calls = []
+
+    def fake(path, *a, **k):
+        calls.append(os.path.basename(path))
+        if "doc0" in path:
+            raise ValueError("손상된 파일")
+        return orig(path, *a, **k)
+    monkeypatch.setattr(reader, "load_document_status", fake)
+    for _ in range(2):
+        code, out = run_main(reader, capsys, "search", "--query", "정격 전압")
+        assert code == 0, out
+    assert calls.count("doc0.txt") == 1, calls
+    assert [f["file"] for f in out["refresh_failures"]] == ["doc0.txt"], out
+    assert "이전 실행에서 읽지 못함" in out["refresh_failures"][0]["reason"]
 
 
 def test_time_limit_env(monkeypatch):
