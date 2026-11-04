@@ -8,6 +8,35 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.62] - 2026-11-04
+
+2차 독립 검토의 ml-kit 발견 수정. 회귀 테스트는 수정 전 실패를 확인했습니다.
+
+### 버그 수정
+- [치명] `--exclude-where`/`--where`: 숫자 열에 `측정불가` 같은 결측 표시 한 칸만 있어도 글자 열로 보아 `압력 = 2`가 `2.0`과 맞지 않고
+  `!= 2`가 모든 행에 맞아 틀린 행을 빼고도 `VERIFIED`였음. 이제 `=`/`!=`의 숫자 값은 숫자로 읽히는 칸과 숫자로 비교(`1,000` = `1000`,
+  학습과 같은 `coerce_numeric`)하고, 글자 비교는 앞자리 0 코드일 때만(코드 열, 또는 글자 칸이 있는 열에 `= 01`). 결측 표시 칸은 열 판정에서 뺌.
+  `= 2`, `!= 2`, `!= 2; 온도 > 180`의 행 수는 2.9.59와 같음. 공통 함수 `is_code_column`(PART C).
+  테스트: `test_train.py` `test_where_number_column_with_missing_mark_compares_numbers`, `test_where_thousands_and_code_columns`.
+- [치명] 학습 나눠 진행(R10): 중간 저장(`_resume_save`, 후보 모델과 타겟)이 실패해도 `[WARN]`만 내고 시간을 기록해 `저장됨`이라며 `CONTINUE:`를 냈고,
+  같은 명령을 반복해도 끝나지 않았음. 이제 저장 뒤 파일이 있는지 확인하고, 실패하면 그 실행은 나누지 않고 끝까지 진행(`split_off`,
+  `check_time`이 멈추지 않음) + `warnings`에 `중간 저장 실패로 나누지 않음: ...`. `--best`의 `best_run.json`, 성능예측표 후보 저장(`_fits`)도 같음.
+  타겟 1개·여러 개 모두. 테스트: `test_failed_resume_save_is_not_split`(`.resume_train`을 파일로 만들어 저장 실패), `test_resume_save_checks_the_file`.
+- [중요] 목록에 없는 한글 단위(`도씨`, `킬로그램`, `기압`, `섭씨`, `회전`, `평`)를 메모로 보아 `--unit-row 2`가 `STOP_RETRY`(틀린 이유와 `[추천]`)였고,
+  예측은 단위 행을 데이터로 예측(`VERIFIED`). 이제 사용자가 준 `--unit-row` 행은 공백 없는 6자 이하 한글 낱말도 단위
+  (`unit_row_verdict(..., given=True)`). 도구가 스스로 판단할 때는 그대로 한글 낱말을 단위로 보지 않고(`점검중`, `센서고장` 첫 데이터 행 보존),
+  예측 레이아웃 복구는 `--unit-row`로 읽어 모델 이름(`온도(도씨)`)이 모두 있을 때만 그 행을 단위로 씀.
+  테스트: `test_loading_layout.py` `test_korean_unit_words_in_named_unit_row`(학습 성공, 예측 `sample_count` = 데이터 행 수).
+- [기존] `ml_map.py`가 코드 `007`과 `7`을 같은 숫자 7로 합쳐 보간(`VERIFIED`). 이제 앞자리 0 코드가 있는 열은 숫자 열이 아니라(`_is_numeric_col`이
+  `is_code_column`을 봄) `-i`의 같은 코드 행만 쓰고, 없는 코드(`코드=07`)는 `[후보]`(10개까지). 테스트: `test_map.py`
+  `test_code_column_is_matched_exactly_not_interpolated`.
+
+### 구조
+- 시간 확인: 이번 실행에서 한 단계(후보 또는 타겟)를 끝낸 뒤면 데이터 읽기 직후 첫 후보, 후보를 모두 다시 쓴 타겟의 1위 전체 적합·순열 중요도 앞에서도
+  `check_time`(전에는 이번 실행에서 후보를 학습했을 때만). 아직 아무 단계도 하지 않은 실행은 멈추지 않음(저장 없이 멈추면 끝나지 않음, R10).
+  테스트: `test_full_fit_after_reused_candidates_is_checked`.
+- `--best`가 오류로 끝나면 `.resume_train/best_run.json`을 지움(나눠 진행 `CONTINUE:`와 사용자 중단은 남김). 테스트: `test_best_run_record_is_removed_after_an_error`.
+
 ## [2.9.61] - 2026-11-04
 
 학습 나눠 진행(R10) 버그 수정 (`ml_train.py`). 회귀 테스트는 수정 전 실패를 확인했습니다(단일 타겟은 새 동작).

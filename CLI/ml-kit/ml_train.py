@@ -28,7 +28,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
-    parse_where, resolve_where, where_text, where_mask, check_time, Unfinished, VERSION,
+    parse_where, resolve_where, where_text, where_mask, check_time, Unfinished, VERSION, split_off, split_off_warning,
 )
 
 setup_console()
@@ -601,10 +601,12 @@ def _candidate_load(resume: Optional[str], m_idx: int) -> Optional[Tuple[Any, ..
 
 
 def _candidate_check(resume: Optional[str], target_name: str, done: int, total: int, what: str) -> None:
-    """Clock check before the next candidate (or the final fit) of a target: only after some candidate was trained in
-    this command (every run moves on: a candidate, or the final fit of a target whose candidates were all saved)."""
-    if resume and RUN_MODEL_SECONDS:
-        check_time(max(RUN_MODEL_SECONDS) * 1.2,
+    """Clock check before the next candidate (or the final fit and importance) of a target, also the first candidate
+    after the data was read and the final fit of a target whose candidates were all reused: only after some step was
+    done in this command (a candidate or a target), so every run moves on and never stops without a new saved step
+    (R10). A failed save turns the split off (check_time no longer stops), so '저장됨' is true when it stops."""
+    if resume and (RUN_MODEL_SECONDS or RUN_FIT_SECONDS):
+        check_time(max(RUN_MODEL_SECONDS or RUN_FIT_SECONDS) * 1.2,
                    f"학습: 타겟 '{target_name}' 후보 모델 {done}/{total}개 끝남, 저장됨 ({what} 전에 멈춤)")
 
 
@@ -1843,14 +1845,21 @@ def _resume_load(path: str) -> Optional[Tuple[Any, Any, Any, Any]]:
     return None
 
 
-def _resume_save(path: str, res: Tuple[Any, Any, Any, Any]) -> None:
+def _resume_save(path: str, res: Tuple[Any, ...]) -> bool:
+    """Saves a finished step for the next run of the same command and checks the file is there. A failed save turns
+    the split off (split_off): a stop would lose the step and the same command would train it again forever."""
+    err = ""
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".tmp"
         joblib.dump(res, tmp)
         retry_fs(lambda: os.replace(tmp, path))
-    except Exception as e:                     # not saved only means a later run trains this target again
-        sys.stderr.write(f"[WARN] 중간 학습 결과를 저장하지 못했습니다 (나눠 진행하면 다시 학습): {type(e).__name__}: {e}\n")
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+    if not err and os.path.isfile(path) and os.path.getsize(path) > 0:
+        return True
+    split_off(f"중간 학습 결과 {os.path.basename(path)}를 저장하지 못했습니다" + (f" ({err})" if err else ""))
+    return False
 
 
 def _resume_cleanup(resume_dir: str, used: List[str]) -> None:
@@ -2414,6 +2423,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             if imp_note:
                 train_warnings.append(f"타겟 '{t}': 중요 입력(top_features)을 내지 못했습니다 ({imp_note}).")
                 sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
+        split_note = split_off_warning()        # a failed save of a finished step: this run was not split (R10)
+        if split_note and split_note not in train_warnings:
+            train_warnings.append(split_note)
         top_brief = " | ".join(
             "중요 입력" + (f"({t})" if len(target_names) > 1 else "") + ": "
             + ", ".join(f"{r['feature']} {r['importance']:.2f}" for r in top_features[t][:TOP_FEATURES_PREVIEW])
@@ -2696,8 +2708,8 @@ def _best_run_save(data_root: str, raw_file: str, done: Dict[str, str]) -> None:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         atomic_write_text(path, dumps_json({"file": os.path.normcase(raw_file), "done": done}))
-    except Exception as e:                     # not saved only means a continued run builds that task again
-        sys.stderr.write(f"[WARN] 나눠 진행 기록을 저장하지 못했습니다: {type(e).__name__}: {e}\n")
+    except Exception as e:                     # a continued run would build that task again: not split
+        split_off(f"나눠 진행 기록 {BEST_RUN_FILE}을(를) 저장하지 못했습니다 ({type(e).__name__}: {e})")
 
 
 def _best_run_clear(data_root: str) -> None:
@@ -2734,17 +2746,23 @@ def execute_make_best(args: argparse.Namespace) -> Dict[str, Any]:
     tasks = _tasks_to_build(records, getattr(args, "task", None), os.path.join(data_root, "history.jsonl"))
     done = _best_run_load(data_root, raw_file) if len(tasks) > 1 else {}
     built = []
-    for i, task in enumerate(tasks):
-        rec = best_is_fresh(records, data_root, raw_file, task) if task in done else None
-        if rec is not None and str(rec.get("version")) == done[task]:
-            sys.stderr.write(f"[INFO] 이전 실행에서 만든 최고 버전 {rec['version']} ({task})을(를) 그대로 씁니다 (나눠서 진행)\n")
-            built.append(_best_record_summary(data_root, rec, task))
-            continue
-        built.append(build_best_version(args, task, records))
-        records = load_history_ledger(os.path.join(data_root, "history.jsonl"))
-        if i < len(tasks) - 1:
-            done[task] = str(built[-1]["version"])
-            _best_run_save(data_root, raw_file, done)
+    try:
+        for i, task in enumerate(tasks):
+            rec = best_is_fresh(records, data_root, raw_file, task) if task in done else None
+            if rec is not None and str(rec.get("version")) == done[task]:
+                sys.stderr.write(f"[INFO] 이전 실행에서 만든 최고 버전 {rec['version']} ({task})을(를) 그대로 씁니다 (나눠서 진행)\n")
+                built.append(_best_record_summary(data_root, rec, task))
+                continue
+            built.append(build_best_version(args, task, records))
+            records = load_history_ledger(os.path.join(data_root, "history.jsonl"))
+            if i < len(tasks) - 1:
+                done[task] = str(built[-1]["version"])
+                _best_run_save(data_root, raw_file, done)
+    except Exception:
+        # an error: no record left for a later run to reuse (a split run, Unfinished, keeps it: the same command run
+        # again goes on from it; so does a stop by the user, so running it again makes no best version twice)
+        _best_run_clear(data_root)
+        raise
     _best_run_clear(data_root)
     return combine_best_results(built)
 

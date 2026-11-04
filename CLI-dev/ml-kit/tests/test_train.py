@@ -673,6 +673,43 @@ def test_where_code_text_column_compares_as_text():
     assert list(mp.where_mask(df, mp.parse_where("n = 01"))) == [True, False, True]      # 숫자 열: 숫자 비교
 
 
+def _marked_pressure_frame(n=60):
+    """숫자 열(압력 1.0/2.0/3.0)에 결측 표시 '측정불가' 한 칸."""
+    r = np.random.default_rng(5)
+    p = r.choice([1.0, 2.0, 3.0], n)
+    t = r.uniform(150, 200, n).round(1)
+    df = pd.DataFrame({"온도": t, "압력": p.astype(object), "생산량": (2 * t + 10 * p + r.normal(0, 1, n)).round(2)})
+    df.loc[4, "압력"] = "측정불가"
+    return df
+
+
+def test_where_number_column_with_missing_mark_compares_numbers(tmp_path):
+    """2.9.61: 숫자 열에 '측정불가' 한 칸만 있어도 글자 열로 보아 '압력 = 2'가 '2.0'과 안 맞고 '!= 2'가 전부 맞았다.
+    행 수는 2.9.59와 같다 (결측 표시 칸은 '!='에 맞음, 빈 칸은 맞지 않음)."""
+    df = _marked_pressure_frame()
+    f = write_df(tmp_path / "w.csv", df)
+    raw = mp.load_data_file(f)
+    num = pd.to_numeric(df["압력"], errors="coerce")
+    eq = int((num == 2).sum())
+    assert 0 < eq < len(df)
+    for cond, want in (("압력 = 2", eq), ("압력 != 2", len(df) - eq),
+                       ("압력 != 2; 온도 > 180", int(((num != 2) & (df["온도"] > 180)).sum())),
+                       ("압력 = 2.0", eq), ("압력 = 02", eq), ("압력 = 측정불가", 1)):
+        assert int(mp.where_mask(raw, mp.parse_where(cond)).sum()) == want, cond
+    res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력", "-y", "생산량", "--exclude-where", "압력 = 2")
+    assert res["exclusions"]["생산량"]["condition"] == eq, res["exclusions"]
+
+
+def test_where_thousands_and_code_columns():
+    df = pd.DataFrame({"a": ["1,000", "1000", "측정불가", "", "2,000.5"], "c": ["007", "7", "12", "007", None]})
+    assert list(mp.where_mask(df, mp.parse_where("a = 1000"))) == [True, True, False, False, False]
+    assert list(mp.where_mask(df, mp.parse_where("a = 1,000"))) == [True, True, False, False, False]
+    assert list(mp.where_mask(df, mp.parse_where("a != 1000"))) == [False, False, True, False, True]
+    assert list(mp.where_mask(df, mp.parse_where("c = 7"))) == [False, True, False, False, False]     # 코드 열: 글자
+    assert list(mp.where_mask(df, mp.parse_where("c = 007"))) == [True, False, False, True, False]
+    assert list(mp.where_mask(df, mp.parse_where("c != 7"))) == [True, False, True, True, False]
+
+
 def test_no_exclude_column_still_finds_outliers_and_clean_data_has_no_key(tmp_path):
     f = tmp_path / "d.csv"
     _excl_frame().to_csv(f, index=False)
@@ -1360,6 +1397,81 @@ def test_best_continue_skips_finished_task_and_checks_time(tmp_path, monkeypatch
     assert last["agent_directive"].startswith("VERIFIED") and last["made_best"] is True
     assert [b["version"] for b in last["best_versions"]] == ["v3", "v4"], last["best_versions"]
     assert not (root / ".resume_train").exists()
+
+
+@pytest.mark.parametrize("targets", ["생산효율(%)", "생산효율(%),수분함량(%)"])
+def test_failed_resume_save_is_not_split(tmp_path, monkeypatch, targets):
+    """2.9.61: 중간 저장이 실패해도(.resume_train이 파일) WARN만 내고 시간을 기록해 '저장됨'이라며 CONTINUE를 냈고,
+    같은 명령을 반복해도 끝나지 않았다. 이제 그 실행은 나누지 않고 끝까지 진행하고 warnings에 알린다."""
+    data = make_sample(str(tmp_path / "f.csv"))
+    root = tmp_path / "f_ml_data"
+    root.mkdir()
+    (root / ".resume_train").write_text("not a folder", encoding="utf-8")
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    runs = []
+    for _ in range(3):
+        proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", targets)
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    assert len(runs) == 1 and not runs[0].get("continue"), [r.get("progress") for r in runs]
+    last = runs[0]
+    assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED"), last
+    assert any(w.startswith(mp.SPLIT_OFF_WARNING) for w in last.get("warnings", [])), last.get("warnings")
+    assert "[WARN] " + mp.SPLIT_OFF_WARNING in proc.stderr
+
+
+def test_resume_save_checks_the_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(mp, "SPLIT_OFF", [])
+    assert mt._resume_save(str(tmp_path / "r" / "a.joblib"), (1, 2, 3, 4)) is True and not mp.SPLIT_OFF
+    (tmp_path / "x").write_text("file", encoding="utf-8")
+    assert mt._resume_save(str(tmp_path / "x" / "a.joblib"), (1, 2, 3, 4)) is False
+    assert mp.SPLIT_OFF and mp.split_off_warning().startswith(mp.SPLIT_OFF_WARNING)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.001")
+    mp.check_time(1000.0, "멈추지 않음")                      # split off: never stops
+
+
+def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
+    """후보를 모두 재사용한 타겟의 1위 전체 적합·순열 중요도 앞에도 시간 확인 (이 실행에서 다른 단계를 했을 때만)."""
+    r = np.random.default_rng(3)
+    X = pd.DataFrame({"a": r.uniform(0, 1, 60), "b": r.uniform(0, 1, 60)})
+    y = pd.Series(3 * X.a + X.b + r.normal(0, 0.05, 60))
+    schema = {"numeric": ["a", "b"], "categorical": {}, "datetime": {}, "input_columns": ["a", "b"]}
+    resume = str(tmp_path / "rt" / "k")
+    monkeypatch.setattr(mp, "SPLIT_OFF", [])
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)   # saves 5 candidates
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)   # first step: goes on
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [5.0])        # another target was trained in this command
+    with pytest.raises(mp.Unfinished) as e:
+        mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "1위 모델 전체 적합 전에 멈춤" in e.value.progress and "5/5개" in e.value.progress
+
+
+def test_best_run_record_is_removed_after_an_error(tmp_path, monkeypatch):
+    """오류로 끝난 --best 실행 뒤에 나눠 진행 기록(best_run.json)이 남아 나중 실행이 쓰지 않게."""
+    data = make_class_sample(str(tmp_path / "e.csv"))
+    root = tmp_path / "e_ml_data"
+    run_tool("ml_train.py", "-f", data, "-x", "촉매비율(wt%)", "-y", "수분함량(%)")
+    run_tool("ml_train.py", "-f", data, "-x", "반응온도(°C),촉매비율(wt%)", "-y", "불량여부", "--task", "classification")
+    calls, seen = [], []
+
+    def fail_second(args, task, records):
+        calls.append(task)
+        if len(calls) == 2:
+            seen.append((root / ".resume_train" / mt.BEST_RUN_FILE).exists())     # the record of the first task
+            raise mp.InputError("시험용 오류")
+        return {"version": "v1"}
+    monkeypatch.setattr(mt, "build_best_version", fail_second)
+    with pytest.raises(mp.InputError):
+        mt.execute_make_best(argparse.Namespace(file=data, task=None))
+    assert len(calls) == 2 and seen == [True]
+    assert not (root / ".resume_train" / mt.BEST_RUN_FILE).exists()
 
 
 def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):

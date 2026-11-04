@@ -110,6 +110,24 @@ def test_one_uneven_key_is_scattered_and_category_filter(process):
     assert "[후보]" in bad["message"]
 
 
+def test_code_column_is_matched_exactly_not_interpolated(tmp_path):
+    """2.9.61: 코드 '007'과 '7'을 같은 숫자 7로 합쳐 보간했다(VERIFIED). 앞자리 0 코드가 있는 열은 범주처럼 같은 코드의
+    행만 쓴다. 학습에 없는 코드('07')는 [후보]."""
+    r = np.random.default_rng(4)
+    t = r.uniform(150, 200, 90).round(2)
+    code = np.array(["007", "7", "12"])[np.arange(90) % 3]
+    y = 2 * t + np.select([code == "007", code == "7"], [100.0, 0.0], 50.0)
+    p = tmp_path / "c.csv"
+    pd.DataFrame({"온도": t, "코드": code, "수율": y.round(2)}).to_csv(p, index=False)
+    for c, off in (("7", 0.0), ("007", 100.0)):
+        res = run_tool("ml_map.py", "-f", str(p), "-i", f"온도=170,코드={c}", "-y", "수율")
+        assert res["keys"] == ["온도"] and res["points"][0]["input"]["코드"] == c, res
+        assert res["points"][0]["values"]["수율"] == pytest.approx(340 + off, abs=1e-6), res
+        assert all(str(n["코드"]) in (c, c + ".0") for n in res["nearest_rows"]), res["nearest_rows"]
+    bad = run_fail("ml_map.py", "-f", str(p), "-i", "온도=170,코드=07", "-y", "수율")
+    assert "[후보] 007, 12, 7" in bad["message"] and "[추천]" not in bad["message"], bad
+
+
 # ---- 역산 --find --vary --------------------------------------------------------------------------------
 
 

@@ -24,7 +24,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
-    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, retry_fs,
+    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, retry_fs, split_off, split_off_warning,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
@@ -189,16 +189,21 @@ def _cached_fit(key: str) -> Optional[Dict[str, Any]]:
 
 
 def _save_fit(key: str, res: Dict[str, Any]) -> None:
+    """Saves a trained candidate and checks the file is there. A failed save turns the split off (split_off): a stop
+    would lose the candidate and the same command would train it again forever (R10)."""
     if not FIT_CACHE:
         return
+    path = os.path.join(FIT_CACHE, key + ".joblib")
+    err = ""
     try:
         os.makedirs(FIT_CACHE, exist_ok=True)
-        path = os.path.join(FIT_CACHE, key + ".joblib")
         tmp = path + ".tmp"
         joblib.dump(res, tmp)
         retry_fs(lambda: os.replace(tmp, path))
-    except Exception as e:                    # no cache only means a slower next run
-        sys.stderr.write(f"[WARN] 학습 결과를 저장하지 못했습니다 (다음 실행이 느려질 뿐): {type(e).__name__}: {e}\n")
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+    if err or not os.path.isfile(path) or os.path.getsize(path) == 0:
+        split_off(f"입력 고르기 학습 결과 {os.path.basename(path)}를 저장하지 못했습니다" + (f" ({err})" if err else ""))
 
 
 def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[str], raw: List[str],
@@ -1094,6 +1099,9 @@ def execute_export(args) -> Dict[str, Any]:
     res = {"status": "ok", "output_file": real, "title": title, "targets": out_targets, "export_model_dir": exp_dir,
            "verified": not unverified, "preview": f"성능예측표 생성: {brief}", "next_commands": next_commands[:SHOW_COMMANDS],
            "next_commands_count": len(next_commands), "truncated": len(next_commands) > SHOW_COMMANDS}
+    split_note = split_off_warning()          # a failed save of a candidate: this run was not split (R10)
+    if split_note and split_note not in warnings:
+        warnings.append(split_note)
     if warnings:
         res["warnings"] = warnings
     if unverified:

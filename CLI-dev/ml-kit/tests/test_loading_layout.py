@@ -497,6 +497,28 @@ def test_first_data_row_with_text_marks_is_kept(p1_model, tmp_path):
     assert ok["sample_count"] == 4 and "recovered" not in ok, ok          # 단위 모양이 아닌 글자 행도 데이터
 
 
+@pytest.mark.parametrize("units", [["도씨", "킬로그램", "시간", "킬로그램"], ["℃", "기압", "분", "킬로그램"],
+                                   [None, "킬로그램", None, "킬로그램"], ["섭씨", "기압", "회전", "평"]])
+def test_korean_unit_words_in_named_unit_row(tmp_path, units):
+    """2.9.61: 목록에 없는 한글 단위('도씨', '킬로그램', '기압')를 메모로 보아 --unit-row 2가 STOP_RETRY(틀린 [추천]),
+    예측은 단위 행을 데이터로 예측했다(VERIFIED). 사용자가 준 단위 행의 짧은 한글 낱말은 단위다."""
+    r = np.random.default_rng(8)
+    n = 40
+    rows = [["온도", "압력", "시간", "생산량"], units]
+    for _ in range(n):
+        t, p, h = r.uniform(150, 200), r.uniform(1, 5), r.uniform(1, 5)
+        rows.append([round(t, 2), round(p, 3), round(h, 2), round(2 * t + 10 * p + 3 * h, 2)])
+    f = str(tmp_path / "k.csv")
+    write_rows(f, rows, [])
+    raw = mp.read_raw_table(f)
+    assert mp.unit_row_verdict(raw, 1, 0, given=True)[0]
+    assert not mp.unit_row_verdict(raw, 1, 0)[0]          # the tool's own guess keeps Hangul words as data
+    res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
+    ok = run_tool("ml_predict.py", "-m", res["version_dir"], "-f", f)
+    assert ok["sample_count"] == n, ok
+    assert ok["recovered"] == ["머리글 1행, 단위 2행으로 읽음"], ok
+
+
 def test_skipped_unit_row_is_in_warnings(p1_model, tmp_path):
     body = [[180.5, 3.1, 45.0], [185.0, 3.3, 47.5]]
     p = write_book(tmp_path / "u.xlsx", [["온도", "압력", "속도"], ["kg/cm2 G", "kg/cm2 G", "m/s"]] + body)

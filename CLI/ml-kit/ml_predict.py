@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.61"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.62"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -159,11 +159,33 @@ class Unfinished(BaseException):
         self.progress = progress
 
 
+# Why the running command is not split (a finished step could not be saved): a stop would lose the step and the same
+# command would repeat it forever, so the command goes on to the end instead (warning SPLIT_OFF_WARNING).
+SPLIT_OFF: List[str] = []
+SPLIT_OFF_WARNING = "중간 저장 실패로 나누지 않음"
+
+
+def split_off(reason: str) -> None:
+    """A finished step was not saved (reason): check_time no longer stops this command."""
+    if reason not in SPLIT_OFF:
+        SPLIT_OFF.append(reason)
+        sys.stderr.write(f"[WARN] {SPLIT_OFF_WARNING}: {reason}. 이 실행은 시간 제한에서 멈추지 않고 끝까지 진행합니다\n")
+
+
+def split_off_warning() -> Optional[str]:
+    """The result warning of a command that was not split (None when every step was saved)."""
+    if not SPLIT_OFF:
+        return None
+    return (f"{SPLIT_OFF_WARNING}: {SPLIT_OFF[0]}. 나눠서 진행하지 않고 한 번에 끝까지 진행했습니다 "
+            f"(데이터 폴더의 쓰기 권한·디스크 공간을 확인하십시오)")
+
+
 def check_time(next_step_seconds: float, progress: str) -> None:
     """Raises Unfinished when the next slow step (estimated next_step_seconds) would end past the time limit
-    minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run)."""
+    minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run); after a
+    failed save (split_off) the command is not split."""
     limit = time_limit()
-    if limit == float("inf"):
+    if limit == float("inf") or SPLIT_OFF:
         return
     if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
         raise Unfinished(progress)
@@ -859,17 +881,31 @@ def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "-
     return [[(rmap[c], o, v) for c, o, v in g] for g in groups]
 
 
-def _text_column(series: pd.Series, text: pd.Series) -> bool:
-    """A column of text values: not a number column, and some filled cell is not a number or is a code with a
-    leading zero ('01'). '= 01' compares such a column as text ('01' is not '1')."""
-    if pd.api.types.is_numeric_dtype(series):
+_CODE_RE = re.compile(r"\s*[-+]?0\d")     # a code with a leading zero ('007', '01'), never '0.5'
+
+
+def is_code_column(series: pd.Series) -> bool:
+    """A category / code column: some filled cell is a code with a leading zero ('007'). Its values are matched as
+    exact text ('007' is not '7', not a number to interpolate): --where / --exclude-where and ml_map keys.
+    A number or date column (Excel cells) is never one; missing-value marks do not count."""
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
         return False
-    filled = text[text != ""]
-    if filled.empty:
+    return any(isinstance(v, str) and _CODE_RE.match(v) is not None for v in series.tolist())
+
+
+def _compare_as_text(series: pd.Series, text: pd.Series, val: str) -> bool:
+    """'= v' / '!= v' compares as text only for codes with a leading zero: a code column (is_code_column), or a code
+    value ('= 01') on a column with text values ('01' is not '1'). Otherwise a number value meets the cells read as
+    numbers by number ('2' = '2.0', '1,000' = '1000', as training reads them), text cells and missing-value marks
+    ('측정불가') by text: one '측정불가' in a number column does not make it a text column."""
+    if pd.api.types.is_numeric_dtype(series) or _WHERE_DATE.fullmatch(val.strip()):
         return False
-    if coerce_numeric(filled).isna().any():
+    if is_code_column(series):
         return True
-    return bool(filled.str.match(r"^[-+]?0\d").any())
+    if not _CODE_RE.match(val):
+        return False
+    filled = text[(text != "") & ~text.isin(MISSING_MARKS)]
+    return bool(coerce_numeric(filled).isna().any())
 
 
 def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
@@ -881,7 +917,7 @@ def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
     vnum = coerce_numeric(pd.Series([val])).iloc[0]
     cmp = {"=": np.equal, "!=": np.not_equal, ">": np.greater, "<": np.less, ">=": np.greater_equal,
            "<=": np.less_equal}[op]
-    if op in ("=", "!=") and _text_column(series, text):
+    if op in ("=", "!=") and _compare_as_text(series, text, val):
         eq = (text.str.casefold() == val.strip().casefold()).to_numpy(dtype=bool)
         return eq if op == "=" else ~eq & ~blank
     if vnum == vnum and vnum is not None:
@@ -1384,7 +1420,7 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     if unit_row is not None:
         j = unit_row - 1
         unit_cells = _row_cells(df_raw, j) if 0 <= j < total_rows else []
-        ok, reason = unit_row_verdict(df_raw, j, header_idx) if unit_cells and j > header_idx else (False, "")
+        ok, reason = unit_row_verdict(df_raw, j, header_idx, given=True) if unit_cells and j > header_idx else (False, "")
         if not ok:
             pair = _header_unit_pair(df_raw)
             if pair and pair != (header_idx + 1, unit_row):
@@ -1945,13 +1981,18 @@ _KOREAN_UNITS = {"개", "회", "초", "분", "시간", "일", "주", "월", "년
                  "대", "도", "배", "번", "개월", "퍼센트", "미터", "그램", "리터", "톤", "와트", "볼트", "암페어"}
 
 
-def _unit_shaped(t: str) -> bool:
+KOREAN_UNIT_MAX = 6      # a Hangul word of a unit row the user named (--unit-row): at most this many letters, no space
+
+
+def _unit_shaped(t: str, given: bool = False) -> bool:
     """Text a unit is written as: some letter, digit or sign that is not Hangul ('kg/cm2 G', '°C', '%', 'mm'), or a
-    Korean unit word ('개', '시간'). Hangul words ('점검중', '센서고장') are not units."""
+    Korean unit word ('개', '시간'). Other Hangul words ('점검중', '센서고장') are not units when the tool judges the
+    row by itself; in the unit row the user named (given: --unit-row) a short Hangul word without space is a unit
+    ('도씨', '킬로그램', '기압', '회전')."""
     t = t.strip()
     if not t or not _unit_text(t):
         return False
-    if t in _KOREAN_UNITS:
+    if t in _KOREAN_UNITS or (given and len(t) <= KOREAN_UNIT_MAX and " " not in t):
         return True
     return any(not ("\uac00" <= ch <= "\ud7a3" or "\u3131" <= ch <= "\u318e" or ch.isspace()) for ch in t)
 
@@ -1991,7 +2032,7 @@ def _column_below(block: np.ndarray, k: int) -> List[Any]:
     return [v for v in block[:, k] if not _blank_mark(_cell_text(v))]
 
 
-def _unit_cell(v: Any, below: List[Any]) -> str:
+def _unit_cell(v: Any, below: List[Any], given: bool = False) -> str:
     """One filled cell of a candidate unit row against the filled cells of its column below:
     'unit'  text that is not among the values below ('°C', a scale '1000' far outside the numbers below);
     'data'  a number or date in the range of the values below, or text that is a value below (category 'A');
@@ -2004,7 +2045,7 @@ def _unit_cell(v: Any, below: List[Any]) -> str:
             return "data"
         if _blank_mark(t):
             return "blank"
-        return "unit" if _unit_shaped(t) else "note"      # '점검중', '센서고장' are not units
+        return "unit" if _unit_shaped(t, given) else "note"      # '점검중', '센서고장' are not units (unless given)
     x = _number(v)
     nums = [n for n in (_number(b) for b in below) if n is not None]
     if x is None or not nums or x == 0:
@@ -2014,9 +2055,11 @@ def _unit_cell(v: Any, below: List[Any]) -> str:
     return "unit" if (x > hi + 3 * w or x < lo - 3 * w) else "data"     # a scale unit: 1000 over 1..5
 
 
-def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None) -> Tuple[bool, str]:
+def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None,
+                     given: bool = False) -> Tuple[bool, str]:
     """(row j (0-based) is the unit row of the header row `header` (default j - 1), why not). Judged per cell, then
-    by the row (_unit_cell):
+    by the row (_unit_cell). given: the user named the row (--unit-row), so short Hangul words count as units
+    ('도씨', '킬로그램'); without it (the tool's own guess) they are data ('점검중', '센서고장' of a first data row):
     - no cell is data (a number or date in the range below, or a text value found below such as a category 'A'),
       and some text cell is a unit; missing-value marks ('측정불가', 'NG') count as blank, so a first data row of
       '측정불가, 측정불가, A' or '측정불가, 측정불가' is data, not units;
@@ -2048,7 +2091,7 @@ def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None)
             if any(_is_data_value(b) for b in below[:UNIT_SCAN_CELLS * 5]):   # a name under a title row
                 return False, "이름 없는 머리글 칸 아래에 숫자·날짜가 든 열이 있어(제목 행 아래의 머리글)"
             continue                                    # '비고' over a column without data: not judged
-        kinds[k] = _unit_cell(v, below)
+        kinds[k] = _unit_cell(v, below, given)
     if any(c == "data" for c in kinds.values()):
         return False, "아래 데이터와 같은 값(그 열 범위 안의 숫자·날짜, 아래에도 있는 글자 값)이 든 데이터 행이라"
     units = [k for k, c in kinds.items() if c == "unit" and not _is_data_value(row[k])]
@@ -2693,7 +2736,9 @@ NUMERIC_SHARE = 0.9       # a column is numeric when this share of its non-empty
 
 
 def _is_numeric_col(s: pd.Series) -> bool:
-    if pd.api.types.is_datetime64_any_dtype(s):
+    """A number column of ml_map (a key to interpolate, a value column). A code column ('007', '7', '12':
+    is_code_column) is not: its rows are used only for the exact same code."""
+    if pd.api.types.is_datetime64_any_dtype(s) or is_code_column(s):
         return False
     filled = s.notna() & (s.astype(str).str.strip() != "")
     if filled.sum() == 0:
@@ -3820,30 +3865,33 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
     if not hdr < j < len(raw) - 1:
         return ""
     is_unit = _looks_like_unit_row(raw, j, hdr)
+    tries: List[Tuple[Dict[str, Any], str, bool]] = []
+    # a row of Korean unit words ('도씨, 킬로그램') is read as units only when the model's names hold them
+    # ('온도(도씨)'): the tool's own guess never takes other Hangul words for units ('점검중, 센서고장' is data)
+    if is_unit or unit_row_verdict(raw, j, hdr, given=True)[0]:
+        tries.append(({"unit_row": unit_row, "data_row": None}, f"--unit-row {unit_row}", False))
+    skip = is_unit or _notes_row(raw, j)
     check_first = False
-    if not is_unit and not _notes_row(raw, j):
-        # Fallback: text in the numeric inputs of the row (a unit row the rule did not accept, 'kg/cm2 G') -> skip it
-        # when the next row reads as data. A row with a number or date ('점검중, 센서고장, 45') or with text that is
-        # not unit-shaped ('점검중, 센서고장') is data (its marks are imputed and reported as missing inputs).
-        if _row_has_data(raw, j) or not _unit_shaped_row(raw, j):
-            return ""
+    # Fallback: text in the numeric inputs of the row (a unit row the rule did not accept, 'kg/cm2 G') -> skip it
+    # when the next row reads as data. A row with a number or date ('점검중, 센서고장, 45') or with text that is
+    # not unit-shaped ('점검중, 센서고장') is data (its marks are imputed and reported as missing inputs).
+    if not skip and numeric and not _row_has_data(raw, j) and _unit_shaped_row(raw, j):
         try:
-            auto = _layout_frame(raw, hdr, None, None)
+            auto: Optional[pd.DataFrame] = _layout_frame(raw, hdr, None, None)
         except Exception:
-            return ""
-        rows = auto.attrs.get("source_rows") or []
-        if not numeric or unit_row not in rows or not _text_input_row(auto, rows.index(unit_row), numeric):
-            return ""
-        check_first = True
-    tries = ([({"unit_row": unit_row, "data_row": None}, f"--unit-row {unit_row}")] if is_unit else []) + \
-        [({"unit_row": None, "data_row": unit_row + 1}, f"--data-row {unit_row + 1}")]
-    for opts, layout in tries:
+            auto = None
+        rows = (auto.attrs.get("source_rows") or []) if auto is not None else []
+        if unit_row in rows and _text_input_row(auto, rows.index(unit_row), numeric):
+            skip = check_first = True
+    if skip:
+        tries.append(({"unit_row": None, "data_row": unit_row + 1}, f"--data-row {unit_row + 1}", check_first))
+    for opts, layout, first in tries:
         try:
             df = _layout_frame(raw, hdr, **opts)
         except Exception:
             continue
         if _inputs_present(needed, [str(c) for c in df.columns]) and \
-                (not check_first or _first_row_numeric(df, numeric or [])):
+                (not first or _first_row_numeric(df, numeric or [])):
             return head + layout
     return ""
 
