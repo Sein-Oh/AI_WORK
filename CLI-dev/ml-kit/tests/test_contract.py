@@ -525,3 +525,23 @@ def test_import_error_inside_run_is_missing_library():
     assert res["error_type"] == "missing_library" and res["install_command"] == "python -m pip install scipy", res
     res = mp.error_payload(ImportError("No module named docx"))
     assert res["missing_package"] == "python-docx" and res["agent_directive"].startswith("STOP_RETRY:"), res
+
+
+# ---- 로그 태그 (AGENTS.md 문자 규칙, 2.9.50) --------------------------------------------------------------------
+
+LOG_TAGS = ("[INFO]", "[PROGRESS]", "[WARN]", "[ERROR]", "[STATUS]")
+
+
+def test_stderr_uses_only_shared_log_tags(trained, tmp_path):
+    import re
+    work, data, _ = trained
+    proc, _ = run_raw("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW)", "-y", TARGET, "--tag", "tags")
+    hist, _ = run_raw("ml_train.py", "-f", data, "--history")
+    for err in (proc.stderr, hist.stderr):
+        assert "\r" not in err.replace("\r\n", "\n")
+        tagged = [ln for ln in err.splitlines() if re.match(r"\s*\[[A-Z]", ln)]
+        bad = [ln for ln in tagged if not ln.lstrip().startswith(LOG_TAGS)]
+        assert not bad, bad                                           # 2.9.49: '[PROGRESS  5%] [=---]', '[ML EXPERIMENT ...]'
+    prog = [ln for ln in proc.stderr.splitlines() if ln.startswith("[PROGRESS]")]
+    assert prog and all(re.match(r"\[PROGRESS\] \d{1,3}% \S", ln) for ln in prog), prog[:3]
+    assert "[STATUS] 실험 이력" in hist.stderr

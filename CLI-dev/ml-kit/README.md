@@ -27,6 +27,7 @@
 
 5. **터미널 및 인코딩 무결성 (Clean Terminal Principle & CP949/UTF-8 Dual Guard)**:
    - Windows 콘솔의 폰트 폭 계산 오차, 줄바꿈 꼬임, 로그 오염, 인코딩 에러(`UnicodeEncodeError`)를 유발하는 유니코드 이모지(아이콘, 원문자 등)의 사용을 엄격히 금지하고 표준 텍스트 태그(`[INFO]`, `[PROGRESS]`, `[WARN]`, `[ERROR]`, `[STATUS]`)만을 사용합니다.
+     진행 줄은 `[PROGRESS] 45% <내용>` 한 줄씩(줄 덮어쓰기 `\r`과 막대 `[===---]` 없음), `--history` 표의 머리는 `[STATUS]` (2.9.50).
    - 한국어 Windows 환경에서 Excel 더블클릭 시 한글이 깨지지 않도록 모든 데이터 CSV는 `CP949`를 우선 적용하며, 특수문자 예외 발생 시 `utf-8-sig`로 자동 폴백합니다.
 
 ---

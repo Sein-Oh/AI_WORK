@@ -8,6 +8,16 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.50] - 2026-11-04
+
+저장소 지침 반영: 로그 태그. 회귀 테스트: `tests/test_contract.py` `test_stderr_uses_only_shared_log_tags` (2.9.49에서 실패).
+
+### 바뀐 동작 (stderr만, stdout JSON 그대로)
+- 학습 진행 줄 `[PROGRESS  45%] [=========-----------] <내용>`(터미널에서는 `\r` 덮어쓰기)을 `[PROGRESS] 45% <내용>` 한 줄씩으로.
+- `--history` 표 머리 `[ML EXPERIMENT HISTORY LEDGER] Root: ...`, `[PROJECT DESCRIPTION] ...`을 `[STATUS] 실험 이력 (history.jsonl): ...`,
+  `[STATUS] 설명: ...`으로 (허용 태그는 `[INFO] [PROGRESS] [WARN] [ERROR] [STATUS]`뿐).
+- 실기 러너(`tools/run_win_tests.py`)의 `[준비]`를 `[INFO]`로. 러너 M14 검사(stdout 1줄 JSON, stderr `\r` 없음)는 진행 줄 모양을 읽지 않아 그대로입니다.
+
 ## [2.9.49] - 2026-11-04
 
 저장소 지침 반영: 출력 양 제한(R2). 회귀 테스트: `tests/test_train.py` "JSON 목록 상한 + truncated" (2.9.48에서 3개 모두 실패).
@@ -1416,6 +1426,5 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
 - [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상
-- [ ] 로그 태그 정리: `[PROGRESS  5%] [===]` -> `[PROGRESS] 5% ...`(러너 M14 파서 확인), 이력 표 머리 `[STATUS]`, 러너 `[준비]` -> `[INFO]`
 - [ ] 인자 이름 통일: ml_report `--targets`(다른 도구와 같게), 저장 `--out` -> `--save` (베타라 별칭 없이 바꿈)
 - [ ] 테스트 보강: exit 130 롤백, 성공 경로 `VERIFIED:` 검사 확대, 빈 데이터 (덮어쓰기 차단은 2.3.0)

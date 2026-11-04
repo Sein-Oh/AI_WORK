@@ -88,24 +88,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # ==============================================================================
 
 def log_progress(percent: int, message: str) -> None:
-    """
-    Outputs real-time progress to stderr with immediate flush.
-    Ensures newline-based streaming in agent environments (OpenCode, CI, Subprocess)
-    to prevent idle stream timeouts while maintaining clean formatting.
-    """
-    bar_len = 20
-    filled = int(bar_len * percent / 100)
-    bar = "=" * filled + "-" * (bar_len - filled)
-    
-    # In agent/piped execution (OpenCode, etc.), output with newline so stream readers don't block
-    is_interactive = hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
-    if is_interactive:
-        sys.stderr.write(f"\r[PROGRESS {percent:3d}%] [{bar}] {message}")
-        if percent >= 100:
-            sys.stderr.write("\n")
-    else:
-        sys.stderr.write(f"[PROGRESS {percent:3d}%] [{bar}] {message}\n")
-    
+    """One progress line on stderr, flushed: '[PROGRESS] 45% <message>' (the shared log tag, AGENTS.md; one line per
+    step, so stream readers never wait for a carriage-return redraw)."""
+    sys.stderr.write(f"[PROGRESS] {percent}% {message}\n")
     sys.stderr.flush()
 
 
@@ -2666,9 +2651,9 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
     out = sys.stderr
 
     out.write("\n" + "=" * 125 + "\n")
-    out.write(f" [ML EXPERIMENT HISTORY LEDGER] Root: {data_root}\n")
+    out.write(f"[STATUS] 실험 이력 (history.jsonl): {data_root}\n")
     if proj_desc:
-        out.write(f" [PROJECT DESCRIPTION] {proj_desc}\n")
+        out.write(f"[STATUS] 설명: {proj_desc}\n")
     out.write("=" * 125 + "\n")
     out.write(f"{'Version':<8} | {'Tag / Memo':<16} | {'Task / Score':<16} | {'Delta':<10} | {'Time':<7} | {'Targets':<22} | {'Status'}\n")
     out.write(f"{'-'*8}-+-{'-'*16}-+-{'-'*16}-+-{'-'*10}-+-{'-'*7}-+-{'-'*22}-+-{'-'*15}\n")

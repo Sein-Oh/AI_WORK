@@ -650,7 +650,7 @@ def main():
     log("=" * 70)
     fatal = None
     try:
-        log("[준비] Excel로 테스트 데이터(xlsx, CP949 CSV) 생성")
+        log("[INFO] Excel로 테스트 데이터(xlsx, CP949 CSV) 생성")
         try:
             setup(ctx)
         except Exception as e:
