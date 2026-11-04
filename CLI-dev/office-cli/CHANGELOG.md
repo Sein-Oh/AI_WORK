@@ -20,6 +20,10 @@
   (`=IF(A1="a;b",1,2)`, `=SUM(A1;A2)`는 엑셀이 받지 않으면 `,`로 고친 `[추천]`까지). 회귀 테스트: `test_write_cells_quote_must_close_*`, `test_write_cells_formula_keeps_*`.
 - `excel.py comment --append` 재실행: 같은 메모가 두 번 붙음. 기존 메모 끝 줄이 붙일 메모와 같거나 기존 메모가 새 메모와 같으면 그 칸은 그대로
   (`unchanged`, 모두 그대로면 되돌리기 지점 없음). 회귀 테스트: `test_comment_append_rerun_does_not_duplicate`.
+- 엑셀 쓰기 실패 후 되돌리기(`apply_writes`): `rng.Formula = prior`가 글자 `007`, `1-2`, 긴 숫자 글자, `'=abc`를 숫자·날짜·수식으로 바꾸고도
+  되돌린 것으로 보아 되돌리기 지점까지 지웠음. 수식 칸(`HasFormula`)만 수식 글, 상수 칸은 `Value2`(글자는 앞에 `'`)로 저장·복원하고, 복원 뒤 다시 읽어
+  비교해 다르면 그 칸을 message에 적고 되돌리기 지점을 남김. 가짜 Excel에 `typing`(대입한 글자를 Excel처럼 해석), `Value2`, `PrefixCharacter`.
+  회귀 테스트: `test_rejected_formula_rollback_keeps_text_constants`, `test_rejected_formula_rollback_mismatch_keeps_undo_point`.
 
 ## [1.4.62] - 2026-11-04
 

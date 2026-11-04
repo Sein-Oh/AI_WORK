@@ -1328,6 +1328,49 @@ def formula_rejected(e: BaseException, ref: str, formula: str) -> rt.InputError:
     return rt.InputError(head + " 수식을 고쳐 다시 실행하세요.", log_message=log_head, no_fallback=True)
 
 
+def _restore_matrix(rng: Any) -> Tuple[List[List[Any]], List[List[Any]], List[List[Any]]]:
+    """되돌리기용으로 칸의 지금 상태를 읽습니다 -> (다시 넣을 값, 비교용 Formula, 비교용 Value2).
+    수식 칸만 수식 글로, 상수 칸은 Value2로 (Formula 글을 다시 넣으면 Excel이 글자 007·1-2·긴 숫자를 숫자·날짜로,
+    글자 '=abc를 수식으로 바꿈). 글자 상수는 앞에 '를 붙여 글자 그대로 (엑셀의 글자 표시, 값에 남지 않음)."""
+    forms = off.range_to_matrix(rng.Formula)
+    vals = off.range_to_matrix(rng.Value2)
+    has = rng.HasFormula                                    # True 모두 수식, False 없음, None 섞임 (글자 '=abc도 Formula는 =abc)
+    out: List[List[Any]] = []
+    for i, row in enumerate(forms):
+        line: List[Any] = []
+        for j, f in enumerate(row):
+            v = vals[i][j] if i < len(vals) and j < len(vals[i]) else None
+            if isinstance(f, str) and f.startswith("=") and (has is True or (has is None and rng.Cells(i + 1, j + 1).HasFormula)):
+                line.append(f)                              # 수식
+            elif isinstance(f, str) and f.startswith("#") and not isinstance(v, str):
+                line.append(f)                              # 오류 상수 (#N/A 등: Value2는 오류 번호)
+            elif isinstance(v, str):
+                line.append("'" + v if v != "" else "")
+            else:
+                line.append(v)
+        out.append(line)
+    return out, forms, vals
+
+
+def _restore(rng: Any, saved: Tuple[List[List[Any]], List[List[Any]], List[List[Any]]]) -> bool:
+    """_restore_matrix로 읽어 둔 상태로 되돌리고 다시 읽어 비교합니다. 같으면 True."""
+    data, forms, vals = saved
+    if len(data) == 1 and len(data[0]) == 1:
+        rng.Formula = data[0][0]
+    else:
+        rng.Formula = tuple(tuple(row) for row in data)
+    _, forms2, vals2 = _restore_matrix(rng)
+
+    def same(a: Any, b: Any) -> bool:
+        if a in (None, "") and b in (None, ""):
+            return True
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
+            return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(a)))
+        return str(a) == str(b) if isinstance(a, str) or isinstance(b, str) else a == b
+    return all(same(x, y) for a, b in ((forms, forms2), (vals, vals2))
+               for ra, rb in zip(a, b) for x, y in zip(ra, rb)) and len(forms) == len(forms2)
+
+
 def apply_writes(t: Any, items: Sequence[Tuple[Any, int, int, int, int, str, Any]], new_sheet: Any = None) -> None:
     """값·수식을 씁니다 [(시트, r1, c1, r2, c2, value|values|formula, 값)]. 엑셀이 하나라도 받지 않으면(잘못된 수식 등)
     이미 쓴 칸을 원래대로 되돌리고, 이 명령이 만든 새 시트(new_sheet)는 지운 뒤 STOP_RETRY (반쯤 쓴 채로 남기지 않음)."""
@@ -1341,7 +1384,7 @@ def apply_writes(t: Any, items: Sequence[Tuple[Any, int, int, int, int, str, Any
         for ws, a, b, c, d, kind, payload in items:
             rng = ws.Range(ws.Cells(a, b), ws.Cells(c, d))
             try:
-                prior = rng.Formula             # 상수는 값, 수식은 수식 글 (되돌리기용)
+                prior = _restore_matrix(rng)    # 되돌리기용: 수식 칸은 수식 글, 상수 칸은 Value2(글자는 ')
             except Exception:
                 prior = None
             try:
@@ -1369,8 +1412,8 @@ def apply_writes(t: Any, items: Sequence[Tuple[Any, int, int, int, int, str, Any
                 try:
                     if prior is None:
                         rng.ClearContents()
-                    else:
-                        rng.Formula = prior
+                    elif not _restore(rng, prior):
+                        problems.append(str(rng.Address).replace("$", "") + "(다시 읽은 값이 원래와 다름)")
                 except Exception:
                     problems.append(str(rng.Address).replace("$", ""))
             if new_sheet is not None:

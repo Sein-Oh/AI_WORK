@@ -1916,6 +1916,36 @@ def test_write_cells_formula_keeps_separators_in_quotes_and_parens(xl, capsys):
     assert (8, 3) not in ws.formulas
 
 
+def test_rejected_formula_rollback_keeps_text_constants(xl, capsys):
+    # 되돌릴 때 rng.Formula = prior가 글자 007, 1-2, 긴 숫자 글자, '=abc를 숫자·날짜·수식으로 바꿨음 (1.4.63)
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.typing = True
+    old = {(6, 3): "007", (7, 3): "1-2", (8, 3): "12345678901234567890", (9, 3): "=abc"}
+    for (r, c), v in old.items():
+        ws.set(r, c, "'" + v)
+    ws.set(10, 3, 42)
+    ws.reject_formula = lambda f: "BAD" in f
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7=b; C8=c; C9=d; C10=e; C11==BAD(1)", "--overwrite")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert {k: ws.values[k] for k in old} == old and ws.values[(10, 3)] == 42
+    assert all(k in ws.prefixed for k in old) and ws.formulas == {}
+    assert undo_points() == [] and "되돌리지 못한" not in out["message"]
+
+
+def test_rejected_formula_rollback_mismatch_keeps_undo_point(xl, capsys, monkeypatch):
+    # 되돌린 뒤 다시 읽은 값이 다르면 되돌리기 지점을 남기고 undo를 안내
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(6, 3, "원래")
+    ws.reject_formula = lambda f: "BAD" in f
+    real_set = ws.set
+    monkeypatch.setattr(ws, "set", lambda r, c, v: real_set(r, c, "망가짐" if v == "'원래" else v))
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7==BAD(1)", "--overwrite")
+    assert code == 1 and "C6" in out["message"] and "office.py undo" in out["message"], out
+    assert len(undo_points()) == 1
+
+
 def test_comment_append_rerun_does_not_duplicate(xl, capsys):
     _, wb = xl
     ws = ws_of(wb)

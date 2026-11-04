@@ -140,6 +140,24 @@ class FakeLines:
         self._shift(hi + 1, -len(self.keys))
 
 
+_TYPED_NUM = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+_TYPED_DATE = re.compile(r"^\d{1,2}\s*[-/]\s*\d{1,2}$")
+
+
+def _typed(ws, v):
+    """ws.typing이 True면 실제 Excel처럼 '·= 없이 대입한 글자를 직접 입력한 것처럼 해석 (007 -> 7, 1-2 -> 날짜).
+    기본은 False (대입한 값 그대로)."""
+    if not getattr(ws, "typing", False) or not isinstance(v, str) or v.startswith(("'", "=")):
+        return v
+    t = v.strip()
+    if _TYPED_NUM.match(t):
+        num = float(t)
+        return int(num) if num.is_integer() and abs(num) < 1e15 else num
+    if _TYPED_DATE.match(t):
+        return 46000.0                             # 날짜 일련번호
+    return v
+
+
 class FakeComment:
     """칸 메모(이전 방식 메모, Office 2007+). Text(): 읽기, Text(Text=글): 바꾸기, Text(Text=글, Start=n): n번째 글자 앞에 넣기."""
 
@@ -286,10 +304,22 @@ class FakeRange:
         if isinstance(v, tuple):
             for i, row in enumerate(v):
                 for j, x in enumerate(row):
-                    self.ws.set(r1 + i, c1 + j, x)
+                    self.ws.set(r1 + i, c1 + j, _typed(self.ws, x))
         else:
             for r, c in self.cells():
-                self.ws.set(r, c, v)
+                self.ws.set(r, c, _typed(self.ws, v))
+
+    @property
+    def Value2(self):
+        return self.Value
+
+    @Value2.setter
+    def Value2(self, v):
+        self.Value = v
+
+    @property
+    def PrefixCharacter(self):
+        return "'" if (self.Row, self.Column) in self.ws.prefixed else ""
 
     @property
     def HasFormula(self):
@@ -344,8 +374,9 @@ class FakeRange:
                 self.ws.formulas.pop((r, c), None)
                 if v in ("", None):
                     self.ws.values.pop((r, c), None)
+                    self.ws.prefixed.discard((r, c))
                 else:
-                    self.ws.values[(r, c)] = v
+                    self.ws.set(r, c, _typed(self.ws, v))
             self.ws.log.append(("Formula", self.Address, v))
             return
         for r, c in self.cells():
@@ -376,7 +407,7 @@ class FakeRange:
         raise AttributeError(name)
 
     def __setattr__(self, k, v):
-        if k in ("ws", "areas", "Value", "Formula"):
+        if k in ("ws", "areas", "Value", "Value2", "Formula"):
             object.__setattr__(self, k, v)
         else:
             if k == "WrapText":
@@ -619,6 +650,7 @@ class FakeWorksheet:
             "AllowInsertingColumns", "AllowDeletingRows", "AllowDeletingColumns", "AllowSorting")})
         self.unlocked = set()
         self.reject_formula = None   # 함수(수식) -> True면 .Formula/.Value 대입이 COM 오류 (엑셀이 받지 않는 수식 흉내)
+        self.typing = False          # True면 대입한 글자를 Excel처럼 해석 (007 -> 7, 1-2 -> 날짜, _typed)
 
     @property
     def Name(self):
@@ -633,6 +665,8 @@ class FakeWorksheet:
         if isinstance(v, str) and v.startswith("'"):      # Excel: 앞의 '는 "글자로 두기" 표시라 값에 남지 않음
             self.prefixed.add((r, c))
             v = v[1:]
+        else:
+            self.prefixed.discard((r, c))
         self.values[(r, c)] = v
         self.formulas.pop((r, c), None)
 
