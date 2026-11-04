@@ -1067,12 +1067,32 @@ def test_E(ctx):
         ok = (data or {}).get("status") == "ok" and color == 0x5D361B
         record(ctx, "E6", "테마 적용 (머리글 색)", ok, f"B2 배경색={color:#x}", data, code, raw, err)
 
+    def e7():
+        activate_xl("A.xlsx", "E_TEST")
+        # 칸 메모: 달기 -> 같은 칸 다시 달기(확인 요청) -> 덧붙이기 -> 목록 -> 지우기 (Office 2007+ 이전 방식 메모)
+        d_add = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "검토 의견")[0] or {}
+        d_ask = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "둘째 의견")[0] or {}
+        d_app = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "둘째 의견", "--append")[0] or {}
+        note = com_retry(lambda: e_ws().Range("D1").Comment)
+        text = com_retry(lambda: str(note.Text()).replace("\r", "\n")) if note is not None else None
+        d_list = run_cli("excel.py", "comment", "--range", "A1:E5")[0] or {}
+        data, code, raw, err = run_cli("excel.py", "comment", "--action", "delete", "--range", "D1")
+        gone = com_retry(lambda: e_ws().Range("D1").Comment) is None
+        ok = (str(d_add.get("agent_directive", "")).startswith("VERIFIED:") and d_ask.get("error_type") == "needs_user_decision"
+              and str(d_app.get("agent_directive", "")).startswith("VERIFIED:") and text == "검토 의견\n둘째 의견"
+              and [i.get("cell") for i in d_list.get("items", [])] == ["D1"]
+              and (data or {}).get("status") == "ok" and gone)
+        record(ctx, "E7", "칸 메모 달기·덧붙이기·목록·지우기 (다시 읽어 확인)", ok,
+               f"달기={d_add.get('status')}, 확인 요청={d_ask.get('error_type')}, 메모={text!r}, "
+               f"목록={[i.get('cell') for i in d_list.get('items', [])]}, 지운 뒤 없음={gone}", data, code, raw, err)
+
     run_test(ctx, "E1", "move", e1)
     run_test(ctx, "E2", "merge 범위 없음", e2)
     run_test(ctx, "E3", "merge 대화상자", e3)
     run_test(ctx, "E4", "따옴표 시트명", e4)
     run_test(ctx, "E5", "수식 보존", e5)
     run_test(ctx, "E6", "테마", e6)
+    run_test(ctx, "E7", "칸 메모", e7)
 
 
 # ---------------------------------------------------------------------------

@@ -1401,3 +1401,148 @@ def test_missing_table_file_lists_only_table_files(capsys, xl, isolated_dirs):
     msg = out["message"]
     assert "excel_results.csv" in msg and "메모.md" in msg
     assert "chart_export.png" not in msg and "보고서.pdf" not in msg
+
+
+# ---------------------------------------------------------------------------
+# comment: 칸 메모 (목록 / 달기 / 바꾸기·덧붙이기 / 지우기, 1.4.50)
+# ---------------------------------------------------------------------------
+
+from fake_excel import FakeComment  # noqa: E402
+from office_helpers import error_log_text  # noqa: E402
+
+
+def _note(ws, r, c, text):
+    ws.notes[(r, c)] = FakeComment(ws, r, c, text)
+
+
+def _notes(ws):
+    return {excel.addr(r, c): n.text for (r, c), n in ws.notes.items()}
+
+
+def test_comment_list_empty_and_range(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "comment")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+    _note(ws, 2, 2, "첫 메모")
+    _note(ws, 9, 4, "멀리 있는 메모")
+    code, out = run_excel(capsys, "comment")
+    assert code == 0 and out["count"] == 2 and out["truncated"] is False
+    assert [(i["cell"], i["text"]) for i in out["items"]] == [("B2", "첫 메모"), ("D9", "멀리 있는 메모")]
+    assert out["items"][0]["author"] == "검토자" and out["sheet"] == "Sheet1"
+    code, out = run_excel(capsys, "comment", "--range", "A1:C5")
+    assert out["count"] == 1 and out["items"][0]["cell"] == "B2"
+
+
+def test_comment_list_is_capped_with_next_command(xl, capsys, monkeypatch):
+    _, wb = xl
+    ws = ws_of(wb)
+    for r in range(1, 31):
+        _note(ws, r, 1, f"메모 {r} " + "가" * 50)
+    monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 600)
+    code, out = run_excel(capsys, "comment")
+    assert code == 0 and out["count"] == 30 and out["truncated"] is True and 0 < out["shown"] < 30
+    nxt = out["next_commands"][0]["command"]
+    assert f"--start {out['shown'] + 1}" in nxt and " comment " in nxt
+
+
+def test_comment_add_one_verifies_and_leaves_undo_point(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "comment", "--action", "add", "--range", "B5", "--text", "규격 3.1과 다름\\n확인 필요")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert ws.notes[(5, 2)].text == "규격 3.1과 다름\n확인 필요"
+    assert out["applied"] == ["메모 추가: Sheet1!B5"] and out["count"] == 1
+    assert len(undo_points()) == 1
+    # --action add를 빠뜨려도 --text가 있으면 달기 (목록을 보여 주고 '완료'라고 하지 않음)
+    code, out = run_excel(capsys, "comment", "--range", "C5", "--text", "둘째")
+    assert code == 0 and ws.notes[(6 - 1, 3)].text == "둘째"
+
+
+def test_comment_add_from_file_with_sheet(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "메모.csv"
+    f.write_text("칸,메모\nB2,값이 규격보다 큼\n'요약'!C3,\"쉼표, 있는 메모\"\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--action", "add", "--file", str(f))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert _notes(ws_of(wb)) == {"B2": "값이 규격보다 큼"}
+    assert _notes(ws_of(wb, "요약")) == {"C3": "쉼표, 있는 메모"}
+    assert out["count"] == 2 and len(undo_points()) == 1
+    # --sheet: 시트 이름이 없는 칸은 그 시트에
+    f2 = tmp_path / "메모2.csv"
+    f2.write_text("D4,요약 시트 메모\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--file", str(f2), "--sheet", "요약")
+    assert code == 0 and _notes(ws_of(wb, "요약"))["D4"] == "요약 시트 메모"
+
+
+def test_comment_file_bad_rows_add_nothing(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "메모.csv"
+    f.write_text("칸,메모\nB2,좋음\n가나다,잘못된 칸\nC3,\n", encoding="utf-8")
+    code, out = run_excel(capsys, "comment", "--action", "add", "--file", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:")
+    assert "3번째 줄" in out["message"] and "4번째 줄" in out["message"]
+    assert ws_of(wb).notes == {} and undo_points() == []
+
+
+def test_comment_existing_note_needs_user_decision(xl, capsys, monkeypatch, isolated_dirs):
+    from office_helpers import run_fresh
+    _, wb = xl
+    ws = ws_of(wb)
+    _note(ws, 5, 2, "ZQX 기존 메모")
+    code, out = run_fresh(excel, capsys, monkeypatch, "comment", "--action", "add", "--range", "B5", "--text", "새 의견")
+    assert code == 1 and out["error_type"] == "needs_user_decision", out
+    assert "B5" in out["message"] and "ZQX" in out["message"]
+    assert "--overwrite" in out["agent_directive"] and "--append" in out["agent_directive"]
+    log = error_log_text(isolated_dirs)
+    assert "B5" in log and "ZQX" not in log and "새 의견" not in log
+    assert ws.notes[(5, 2)].text == "ZQX 기존 메모" and undo_points() == []
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "덧붙임", "--append")
+    assert code == 0 and ws.notes[(5, 2)].text == "ZQX 기존 메모\n덧붙임" and out["applied"] == ["메모 덧붙이기: Sheet1!B5"]
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "바꾼 메모", "--overwrite")
+    assert code == 0 and ws.notes[(5, 2)].text == "바꾼 메모" and out["agent_directive"].startswith("VERIFIED:")
+    code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "x", "--overwrite", "--append")
+    assert code in (1, 2) and out["status"] == "error"
+
+
+def test_comment_add_dry_run_changes_nothing(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    _note(ws, 2, 2, "기존")
+    code, out = run_excel(capsys, "comment", "--range", "B2:B3", "--text", "의견", "--dry-run")
+    assert code == 0 and out["dry_run"] is True and out["agent_directive"].startswith("VERIFIED: 미리보기")
+    assert ws.notes[(2, 2)].text == "기존" and (3, 2) not in ws.notes and undo_points() == []
+    assert any("B2" in p and "이미" in p for p in out["planned"]) and any("B3" in p for p in out["planned"])
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert all("--dry-run" not in c for c in cmds)
+    assert any("--overwrite" in c for c in cmds) and any("--append" in c for c in cmds)
+    code, out = run_excel(capsys, "comment", "--range", "C9", "--text", "의견", "--dry-run")
+    assert out["next_commands"][0]["command"].endswith('--text 의견') or "--dry-run" not in out["next_commands"][0]["command"]
+    assert (9, 3) not in ws.notes
+
+
+def test_comment_delete(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "comment", "--action", "delete")
+    assert code == 1 and "--range" in out["message"]
+    _note(ws, 2, 2, "가")
+    _note(ws, 3, 2, "나")
+    _note(ws, 9, 9, "다")
+    code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5", "--dry-run")
+    assert code == 0 and out["dry_run"] is True and len(ws.notes) == 3 and undo_points() == []
+    assert out["planned"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"]
+    assert "--dry-run" not in out["next_commands"][0]["command"]
+    code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and list(ws.notes) == [(9, 9)]
+    assert out["applied"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"] and len(undo_points()) == 1
+    code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "A1:A3")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건") and len(undo_points()) == 1
+
+
+def test_comment_refused_by_excel_is_input_error(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.refuse_notes = True
+    code, out = run_excel(capsys, "comment", "--range", "B2", "--text", "의견")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "보호" in out["message"]

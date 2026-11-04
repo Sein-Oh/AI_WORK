@@ -12,7 +12,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 ```text
 CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── SKILL.md     에이전트용 스킬
-├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart
+├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment
 ├── word.py      워드   read / info / outline / write / replace / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
 ├── outlook.py   메일   list / search / read / current / folders / attachments / new / reply / forward
@@ -164,6 +164,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `export` | `--save 경로.csv\|.xlsx\|.pdf`, `--columns A,C,E` |
 | `sheet` | `--action list\|add\|rename\|copy\|delete\|select --name --new-name`. 엑셀에서 쓸 수 없는 이름(`/ \ ? * [ ] :`, 31자 초과, 빈 이름, 앞뒤 `'`, 엑셀이 예약한 `History`(대소문자 무관, 1.4.15))은 아무것도 바꾸기 전에 STOP_RETRY와 `[추천]`(쓸 수 없는 글자를 `_`로 바꾸고 31자로 자른 이름, `History`는 `History_`, 있는 시트와 겹치면 번호, 1.4.14). `write --new-sheet`, `office.py transfer --sheet`도 같음(`transfer`는 받는 문서의 시트 이름을 안 뒤에 확인해 `[추천]`이 있는 시트와 겹치지 않음, 새로 만들 파일은 만들기 전에 확인, 1.4.15). `copy`의 기본 이름은 `<시트 28자> 복사` |
 | `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border\|insert\|delete\|sort`(insert/delete/sort는 아래, 1.4.37). `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열. 이미 그 상태면(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 값이 없는 범위의 `clear --type contents`, 같은 자리로 `copy`/`move` 등) 바꾸지 않고 "바뀐 것 없음"(`unchanged: true`, 1.4.15). `hide`/`unhide`와 `clear`(전체·서식)는 엑셀이 일부만 숨김·사용 범위 밖 유효성 검사를 알려 주지 않을 수 있어 늘 바꾼 것으로 봅니다(1.4.16) |
+| `comment` | 칸 메모(이전 방식 메모, `Range.Comment`/`AddComment`, Office 2007+와 365). `--action list`(기본): 시트(또는 `--range`)의 메모마다 `no, cell, author, text`(메모 하나 1,000자까지, 넘으면 `text_truncated`), 행·열 순서, 100개 또는 글자 상한까지 표시하고 넘으면 `truncated` + `--start`로 이어 보는 명령. 0개면 `VERIFIED: 0건`. `--action add --range B5 --text "의견"`(`--text`/`--file`이 있으면 `--action add`가 없어도 달기, `\n`은 줄바꿈, 범위를 주면 칸마다 같은 메모, 한 번에 500개까지): `--file 메모.csv`(`.csv/.tsv/.md 표`, 열: 칸, 메모. 첫 행이 `칸`·`셀`·`cell` 등이면 머리글. 칸에 `'요약'!C3`처럼 시트를 적을 수 있고 없으면 `--sheet`·활성 시트. 값은 글자 그대로)로 여러 개를 한 번에 달며, 한 줄이라도 잘못되면(칸 주소가 아님, 메모 없음) 하나도 달지 않고 STOP_RETRY(파일 줄 번호, 오류 로그에는 줄 번호만). 같은 칸이 여러 줄이면 한 메모로 합치고 `warnings`. 이미 메모가 있는 칸이 있으면 아무것도 달지 않고 `needs_user_decision`(message에 칸과 기존 메모 앞부분, 오류 로그에는 칸 주소만): 사용자가 고르면 `--overwrite`(새 메모로 바꿈) 또는 `--append`(기존 메모 아래 줄에 덧붙임, 둘은 함께 쓸 수 없음). `--action delete --range B2:D20`(`--range` 필수): 그 범위의 메모를 지움(0개면 바꾼 것 없음, 되돌리기 지점도 남기지 않음). add/delete 모두 `--dry-run`(`planned`, `next_commands`: 이미 메모가 있는데 `--overwrite`/`--append`가 없으면 두 명령을 모두 줌)과 되돌리기 지점(`office.py undo`), 단 뒤·지운 뒤 메모를 다시 읽어 확인(`applied`, 다르면 `UNVERIFIED:`). 엑셀이 메모 달기를 거절하면(보호된 시트 등) STOP_RETRY(1.4.50) |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
@@ -534,6 +535,12 @@ python reader.py index --folder "C:\docs\규격"
 python reader.py search --query "내전압 AND 기준" --save "근거.xlsx"
 python reader.py search --query "마일스톤" --file "C:\docs\기획" --save
 python word.py write --file "<결과의 output_file>"
+
+:: 엑셀 칸을 규격서와 대조해 검토 메모 (칸 읽기 -> 장절 근거 -> 판단 -> 메모)
+python excel.py read --range A1:D30
+python reader.py read --file "C:\docs\규격\규격서.pdf" --section "3.1"
+python excel.py comment --action add --file "메모.csv"        :: 열: 칸, 메모 (예: C5,규격 3.1의 25도와 다름 (규격서.pdf p.12))
+python excel.py comment --range A1:D30
 ```
 
 ## 6. 테스트

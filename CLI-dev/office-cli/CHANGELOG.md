@@ -6,6 +6,19 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.50] - 2026-11-04
+
+규격 대조 흐름(판단 결과를 엑셀 칸 메모로). 회귀 테스트: `tests/test_excel_write.py` "comment" (1.4.49에서 9개 중 9개 실패, 명령 없음).
+가짜 COM(`tests/fake_excel.py`)에 칸 메모(`Range.Comment`/`AddComment`, `Comment.Text()`/`Delete()`, `Worksheet.Comments`)를 넣음.
+실기 러너 `tools/run_win_tests.py`에 E7(달기·확인 요청·덧붙이기·목록·지우기).
+
+### 기능
+- `excel.py comment`: 칸 메모(이전 방식 메모, Office 2007+와 365). `word.py comment`와 같은 모양.
+  - 목록(기본): 시트 또는 `--range`의 메모 `cell`, `author`, `text`. 상한을 넘으면 `truncated` + `--start` 이어 보기 명령, 0개면 `VERIFIED: 0건`.
+  - `--action add --range B5 --text "의견"`, 여러 개는 `--file "메모.csv"`(열: 칸, 메모, `load_table_file(raw=True)`와 `resolve_input_path`).
+    한 줄이라도 잘못되면 하나도 달지 않음. 이미 메모가 있는 칸은 `needs_user_decision`(오류 로그에는 칸 주소만), `--overwrite` 바꾸기 / `--append` 덧붙이기.
+  - `--action delete --range ...`(`--range` 필수). add/delete 모두 `--dry-run`(`planned`, `next_commands`), 되돌리기 지점, 다시 읽어 확인(`applied`).
+
 ## [1.4.49] - 2026-11-04
 
 규격 대조 흐름(엑셀 칸 내용 -> 등록된 규격서의 장절 근거). 회귀 테스트: `tests/test_reader.py` "read --section" (1.4.48에서 3개 중 3개 실패).

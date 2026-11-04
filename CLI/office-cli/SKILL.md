@@ -1,10 +1,10 @@
 ---
 name: office-cli
-description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표/수식/차트/서식, 본문/표/그림, 슬라이드, 워드 목차·장절·쪽 읽기, 검토 메모·변경 추적, PPT 발표자 노트), 앱 사이로 차트·표·내용을 옮기고(office.py transfer), Outlook 메일을 조회·작성하고(첨부 내려받기, 답장·전달에 문서 첨부), PDF/HWP/Office 파일을 Office 없이 읽고 등록(캐시)해 쪽·장절·번호 근거와 함께 검색한다(reader.py). 작업 전 자동 스냅샷으로 되돌리기(office.py undo)를 지원한다. 엑셀 표/그래프 만들기, 보고서·발표자료 작성, 문서 내용 검색 후 다른 문서에 넣기, 규격/규정 근거 찾기, 메일 답장 작성·첨부 저장 요청 시 사용.
+description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표/수식/차트/서식/칸 메모, 본문/표/그림, 슬라이드, 워드 목차·장절·쪽 읽기, 검토 메모·변경 추적, PPT 발표자 노트), 앱 사이로 차트·표·내용을 옮기고(office.py transfer), Outlook 메일을 조회·작성하고(첨부 내려받기, 답장·전달에 문서 첨부), PDF/HWP/Office 파일을 Office 없이 읽고 등록(캐시)해 쪽·장절·번호 근거와 함께 검색한다(reader.py). 작업 전 자동 스냅샷으로 되돌리기(office.py undo)를 지원한다. 엑셀 표/그래프 만들기, 보고서·발표자료 작성, 문서 내용 검색 후 다른 문서에 넣기, 규격/규정 근거 찾기, 메일 답장 작성·첨부 저장 요청 시 사용.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.49"
+  version: "1.4.50"
   platform: windows
 ---
 
@@ -34,6 +34,7 @@ metadata:
 | 엑셀 기타 | `excel.py info`, `replace --find A --replace B [--all-sheets]`, `sheet --action add|rename|copy|delete --name A [--new-name B]`, `export --save "결과.csv|.xlsx|.pdf" [--range A1:D20]` |
 | 엑셀 범위 | `excel.py range --action freeze|unfreeze|hide|unhide|width|height|autofit|clear|copy|move|merge|border --range A1:D10 [--dest B2] [--size 20]` |
 | 엑셀 행·열 넣기 / 지우기 / 정렬 | `excel.py range --action insert|delete --range 5:7` (열은 `--range B:C`, 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸을 알림) / `excel.py range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
+| 엑셀 칸 메모 (검토 의견) | `excel.py comment [--range B2:D20]` (목록) / `excel.py comment --action add --range B5 --text "의견"` (여러 개는 `--file "메모.csv"`, 열: 칸, 메모) / `excel.py comment --action delete --range B2:D20` (먼저 `--dry-run`). 메모가 이미 있으면 바꾸기 `--overwrite`, 덧붙이기 `--append` |
 | 워드 읽기 / 쓰기 | `word.py read [--save]` / `word.py write --file "내용.md"` / 한 줄이면 `--text "## 제목\n- 항목"` / `--image "그림.png"` (`--anchor 글 --pos after`, 여러 곳이면 `--occurrence N`). 쪽 나누기는 `word.py write --page-break` (.md의 `---`는 구분선). 목차 `word.py write --toc`, 요약 상자 `word.py write --text "요약" --callout` |
 | 워드 목차 / 범위 읽기 | `word.py outline` / `word.py read --section "1.1"` (장절, 하위 절 포함) / `--pages 3-5` / `--paragraphs 120-140` |
 | 워드 검토 메모 / 변경 추적 | `word.py comment` (목록) / `word.py comment --action add --anchor "문서의 글" --text "메모"` (여러 개는 `--file "메모.csv"`, 열: 기준 글, 메모 내용) / `word.py revisions` |
@@ -62,6 +63,7 @@ metadata:
    1. `excel.py write --range A1:B101 --header "x,sin(x)" --formula "=(ROW()-2)*4*PI()/99" "=SIN(A2)"`
    2. `excel.py chart --range A1:B101 --type line --title "사인 2주기"`
    3. 결과의 `next_commands[0]` 실행 (워드/PPT로 전달. 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 줌)
+4. 엑셀 내용을 규격서와 대조해 검토 메모 남기기: `excel.py read`로 칸 읽기 -> `reader.py search --query "말" --section "장절"` 또는 `reader.py read --file "<규격서>" --section "장절"`로 근거(`evidence`) 찾기 -> 맞는지 판단 -> 메모.csv(칸, 메모: 판단과 근거)를 만들어 `excel.py comment --action add --file "메모.csv"`.
 
 ## 3. 결과 처리 규칙 (반드시 따른다)
 

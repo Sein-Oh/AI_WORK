@@ -3,7 +3,8 @@
 지원: Range("A1:B2" / "A1:B2,A4:B4") / Range(cell, cell) / Cells(r, c), Value(읽기/쓰기, 스칼라 채우기),
 Formula(쓰기 시 상대참조 문자열 그대로 저장), HasFormula/HasArray/CurrentArray(배열 수식 arrays), Row/Column/Rows.Count/Columns.Count/Address, UsedRange,
 End(xlUp), 서식 속성 기록(Interior/Font/Borders/NumberFormat ...), ChartObjects, Cut/Copy/Merge,
-EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header), Worksheet.Sort(SortFields, SetRange, Apply).
+EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header), Worksheet.Sort(SortFields, SetRange, Apply),
+메모(Range.Comment/AddComment, Comment.Text()/Delete(), Worksheet.Comments).
 """
 import re
 
@@ -136,6 +137,56 @@ class FakeLines:
             for key in [k for k in store if lo <= k[i] <= hi]:
                 del store[key]
         self._shift(hi + 1, -len(self.keys))
+
+
+class FakeComment:
+    """칸 메모(이전 방식 메모, Office 2007+). Text(): 읽기, Text(Text=글): 바꾸기, Text(Text=글, Start=n): n번째 글자 앞에 넣기."""
+
+    def __init__(self, ws, r, c, text, author="검토자"):
+        self.ws = ws
+        self.rc = (r, c)
+        self.text = text
+        self.Author = author
+
+    @property
+    def Parent(self):
+        return FakeRange(self.ws, [self.rc * 2])
+
+    def Text(self, Text=None, Start=None, Overwrite=False):
+        if Text is not None:
+            if self.ws.refuse_notes:
+                raise Exception("시트 보호")
+            if Start is None:
+                self.text = Text
+            else:
+                i = Start - 1
+                self.text = self.text[:i] + Text + self.text[i + (len(Text) if Overwrite else 0):]
+            self.ws.log.append(("CommentText", self.rc))
+        return self.text
+
+    def Delete(self):
+        self.ws.log.append(("CommentDelete", self.rc))
+        self.ws.notes.pop(self.rc, None)
+
+
+class FakeComments:
+    """Worksheet.Comments: 실제 Excel처럼 시트의 메모를 행 순서로."""
+
+    def __init__(self, ws):
+        self.ws = ws
+
+    def _items(self):
+        return [self.ws.notes[k] for k in sorted(self.ws.notes)]
+
+    @property
+    def Count(self):
+        return len(self.ws.notes)
+
+    def Item(self, i):
+        return self._items()[i - 1]
+
+    def __call__(self, i):
+        return self.Item(i)
 
 
 class FakeRange:
@@ -401,6 +452,20 @@ class FakeRange:
     def Select(self):
         self.ws.log.append(("Select", self.Address))
 
+    # --- 메모 ---
+    @property
+    def Comment(self):
+        """왼쪽 위 칸의 메모, 없으면 None (실제 Excel처럼)."""
+        return self.ws.notes.get((self.Row, self.Column))
+
+    def AddComment(self, Text=None):
+        key = (self.Row, self.Column)
+        if key in self.ws.notes or self.ws.refuse_notes:      # 실제 Excel: 메모가 있는 칸, 보호된 시트는 COM 오류
+            raise Exception("AddComment 실패")
+        self.ws.notes[key] = FakeComment(self.ws, *key, Text or "")
+        self.ws.log.append(("AddComment", key))
+        return self.ws.notes[key]
+
 
 class FakeChartObject:
     def __init__(self, ws, name):
@@ -509,6 +574,9 @@ class FakeWorksheet:
         self.Shapes = Count(0)
         self.Rows = Count(1048576)
         self.Sort = FakeSort(self)
+        self.notes = {}              # 칸 메모 {(r, c): FakeComment}
+        self.refuse_notes = False    # True면 메모 추가·수정이 COM 오류 (보호된 시트 흉내)
+        self.Comments = FakeComments(self)
 
     @property
     def Name(self):

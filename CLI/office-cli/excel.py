@@ -181,16 +181,18 @@ def rect(rows: List[List[Any]]) -> List[List[Any]]:
 TABLE_FILE_EXTS = (".csv", ".tsv", ".md", ".txt")  # load_table_file이 읽는 표 파일 (못 찾을 때 후보 목록도 이것만)
 
 
-def load_table_file(path: str) -> List[List[Any]]:
-    """CSV/TSV, 마크다운 표(.md의 첫 번째 표), 일반 텍스트(한 줄 = 한 행)를 표로 읽습니다."""
+def load_table_file(path: str, raw: bool = False) -> List[List[Any]]:
+    """CSV/TSV, 마크다운 표(.md의 첫 번째 표), 일반 텍스트(한 줄 = 한 행)를 표로 읽습니다.
+    raw=True면 칸 값을 글자 그대로 (숫자로 바꾸지 않음: 메모 파일)."""
     ext = os.path.splitext(path)[1].lower()
+    conv = (lambda c: c) if raw else coerce
     if ext in (".csv", ".tsv"):
-        return [[coerce(c) for c in row] for row in rt.read_csv_rows(path)]
+        return [[conv(c) for c in row] for row in rt.read_csv_rows(path)]
     text = rt.read_text_file(path)
     # word/ppt와 같은 마크다운 해석: 첫 번째 표만 (코드 블록 안의 '|' 줄, 두 번째 표 제외), 정렬 줄 제외, '\|'는 칸 안의 글자 '|'
     table = next((payload for kind, payload in rt.parse_markdown_blocks(text) if kind == "table"), None)
     if table:
-        return [[coerce(c) for c in row] for row in table]
+        return [[conv(c) for c in row] for row in table]
     return [[ln.rstrip()] for ln in text.splitlines() if ln.strip()]
 
 
@@ -2921,6 +2923,310 @@ def cmd_chart(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
+# 10. comment (칸 메모: 이전 방식 메모, Office 2007+와 365 모두 Range.Comment / AddComment)
+# ==============================================================================
+
+COMMENT_LIST_MAX = 100        # 목록 한 번에 보여 줄 메모 수 (넘으면 --start로 이어 보기)
+COMMENT_TEXT_MAX = 1000       # 목록에 담는 메모 하나의 글자 수
+COMMENT_MAX_CHARS = 32767     # 엑셀 메모 글자 수 상한
+COMMENT_MAX_CELLS = 500       # 한 번에 달 수 있는 메모 수
+_MEMO_HEADER = ("칸", "셀", "cell", "주소", "위치", "range", "address")
+
+
+def _note_text(c: Any) -> str:
+    """메모 글 (엑셀 줄바꿈은 \\n, 끝 공백 제거)."""
+    try:
+        raw = c.Text()
+    except Exception:
+        raw = ""
+    return str(raw or "").replace("\r\n", "\n").replace("\r", "\n").rstrip()
+
+
+def _same_note(a: str, b: str) -> bool:
+    return re.sub(r"\s+", " ", a).strip() == re.sub(r"\s+", " ", b).strip()
+
+
+def _sheet_notes(ws: Any, box: Optional[Tuple[int, int, int, int]] = None) -> List[Tuple[int, int, Any]]:
+    """시트의 메모 [(행, 열, Comment)] (행, 열 순서). box(r1, c1, r2, c2)를 주면 그 안만.
+    칸마다 Range.Comment를 묻지 않고 Worksheet.Comments를 훑음 (큰 범위도 메모 수만큼)."""
+    out = []
+    coll = ws.Comments
+    for i in range(1, int(coll.Count) + 1):
+        c = coll.Item(i)
+        cell = c.Parent
+        r, col = int(cell.Row), int(cell.Column)
+        if box is None or _inside((r, col), box):
+            out.append((r, col, c))
+    return sorted(out, key=lambda x: (x[0], x[1]))
+
+
+def _range_box(rng: Any) -> Tuple[int, int, int, int]:
+    r1, c1 = int(rng.Row), int(rng.Column)
+    return r1, c1, r1 + int(rng.Rows.Count) - 1, c1 + int(rng.Columns.Count) - 1
+
+
+def _memo_rows(path: str) -> List[Tuple[int, str, str]]:
+    """메모 파일(.csv/.tsv/.md 표): 칸, 메모. [(파일 줄 번호, 칸, 메모)]. 첫 행이 머리글이면 건너뜀. 값은 글자 그대로 (숫자로 바꾸지 않음)."""
+    rows = load_table_file(path, raw=True)
+    start = 1
+    if rows and str(rows[0][0] if rows[0] else "").strip().lower() in _MEMO_HEADER:
+        rows, start = rows[1:], 2
+    return [(n, str(r[0] if r else "").strip(), str(r[1] if len(r) > 1 and r[1] is not None else "").strip())
+            for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
+
+
+def _comment_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
+    """--dry-run을 뺀 같은 comment 명령 (next_commands)."""
+    argv = ["comment", "--target", args.target, "--action", args.action]
+    for flag, val in (("--sheet", args.sheet), ("--range", args.range), ("--file", args.file), ("--text", args.text)):
+        if val is not None:
+            argv += [flag, val]
+    for flag, on in (("--overwrite", args.overwrite), ("--append", args.append), ("--no-focus", args.no_focus)):
+        if on:
+            argv.append(flag)
+    argv += list(extra)
+    what = {"add": "메모 달기", "delete": "메모 지우기"}[args.action]
+    how = {"--overwrite": " (기존 메모를 새 메모로 바꿈)", "--append": " (기존 메모 아래 줄에 덧붙임)"}
+    return rt.next_command("excel.py", argv, what + " 실행" + "".join(how.get(x, "") for x in extra))
+
+
+def _comment_plan(args, t: Any) -> Tuple[List[Tuple[Any, int, int, str]], List[str]]:
+    """달 메모 [(시트, 행, 열, 메모)]와 주의 사항. 무엇이든 바꾸기 전에 모든 줄을 확인 (하나라도 틀리면 하나도 달지 않음)."""
+    warnings: List[str] = []
+    if args.file:
+        if args.text is not None:
+            raise rt.InputError("--text와 --file은 하나만 지정하세요 (여러 메모는 --file \"메모.csv\": 칸, 메모).")
+        if args.range:
+            raise rt.InputError("--file의 메모는 파일의 칸 열에 달 칸을 적습니다. --range를 빼고 다시 실행하세요.")
+        rows = _memo_rows(rt.resolve_input_path(args.file, "메모 파일", exts=TABLE_FILE_EXTS))
+        if not rows:
+            raise rt.InputError("메모 파일에 내용이 없습니다. 열: 칸, 메모 (예: B5,규격 3.1과 다름).")
+    else:
+        memo = rt.unescape_newlines(args.text or "").strip()
+        if not args.range or not memo:
+            raise rt.InputError("메모를 달 칸과 내용을 지정하세요: --range B5 --text \"메모\" "
+                                "(여러 개는 --file \"메모.csv\": 칸, 메모).")
+        rows = [(0, args.range, memo)]
+    bad: List[Tuple[int, str]] = []
+    cells: List[Tuple[str, int, int, str]] = []
+    for n, ref, memo in rows:
+        where = f"{n}번째 줄" if n else "--range"
+        sheet, part = split_sheet(ref)
+        try:
+            if not memo:
+                raise rt.InputError("메모 내용이 없습니다")
+            if len(memo) > COMMENT_MAX_CHARS:
+                raise rt.InputError(f"메모가 {COMMENT_MAX_CHARS}자(엑셀 상한)보다 깁니다")
+            r1, c1, r2, c2 = parse_area(part, None, None) if part else (None, None, None, None)
+            if r1 is None or r2 is None or c2 is None:
+                raise rt.InputError("칸 주소가 아닙니다 (예: B5, B2:B9)")
+            if n and (r1, c1) != (r2, c2):
+                raise rt.InputError("칸 하나만 적습니다 (예: B5)")
+            if (r2 - r1 + 1) * (c2 - c1 + 1) > COMMENT_MAX_CELLS:
+                raise rt.InputError(f"한 번에 {COMMENT_MAX_CELLS}칸까지 메모를 달 수 있습니다")
+        except rt.InputError as e:
+            bad.append((n, f"{where} '{ref}': {str(e).rstrip('.')}"))
+            continue
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                cells.append((sheet or args.sheet or "", r, c, memo))
+    if bad:
+        if not args.file:
+            raise rt.InputError(bad[0][1].split(": ", 1)[1] + ". 예: --range B5 --text \"메모\"")
+        head = f"메모 파일 {len(rows)}줄 중 {len(bad)}줄이 잘못되어 하나도 달지 않았습니다 (열: 칸, 메모). 고친 뒤 다시 실행하세요. "
+        raise rt.InputError(head + " / ".join(b for _, b in bad[:10]),
+                            log_message=head + f"잘못된 줄: {', '.join(str(n) for n, _ in bad[:10])} ({rt.DOC_OMITTED})")
+    if len(cells) > COMMENT_MAX_CELLS:
+        raise rt.InputError(f"한 번에 {COMMENT_MAX_CELLS}개까지 메모를 달 수 있습니다 (받은 칸 {len(cells)}개). 파일을 나눠 실행하세요.")
+    # 시트 찾기 (없는 시트는 [추천]/[후보]) + 같은 칸이 여러 줄이면 한 메모로 합침
+    plan: Dict[Tuple[str, int, int], List[Any]] = {}
+    for name, r, c, memo in cells:
+        ws = t.sheet(name or None)
+        key = (str(ws.Name), r, c)
+        if key in plan:
+            plan[key][3] += "\n" + memo
+            warnings.append(f"{key[0]}!{addr(r, c)}에 메모가 여러 줄이라 한 메모로 합침")
+        else:
+            plan[key] = [ws, r, c, memo]
+    return [tuple(v) for v in plan.values()], warnings  # type: ignore[misc]
+
+
+def _comment_list(args) -> Dict[str, Any]:
+    with off.open_target("excel", args.target, readonly=True) as t:
+        ws = t.sheet(args.sheet)
+        rng = target_range(t, ws, args.range) if args.range else None
+        if rng is not None:
+            ws = rng.Worksheet
+        notes = _sheet_notes(ws, _range_box(rng) if rng is not None else None)
+        total = len(notes)
+        first = max(1, args.start)
+        items: List[Dict[str, Any]] = []
+        used = 0
+        for no, (r, c, note) in enumerate(notes[first - 1:first - 1 + COMMENT_LIST_MAX], first):
+            text, cut = rt.clamp_text(_note_text(note), COMMENT_TEXT_MAX)
+            item = {"no": no, "cell": addr(r, c), "author": str(getattr(note, "Author", "") or ""), "text": text}
+            if cut:
+                item["text_truncated"] = True
+            size = len(text) + 30
+            if items and used + size > rt.DEFAULT_MAX_CHARS:
+                break
+            items.append(item)
+            used += size
+        sheet = str(ws.Name)
+        resolved = t.resolved()
+    where = f"{sheet}!{str(rng.Address).replace('$', '')}" if rng is not None else sheet
+    shown_end = first - 1 + len(items)
+    truncated = shown_end < total
+    result: Dict[str, Any] = {"target_resolved": resolved, "sheet": sheet, "count": total, "shown": len(items),
+                              "items": items, "truncated": truncated}
+    if not total:
+        return rt.ok(TOOL, "comment", f"{where}: 메모 없음 (count 0)",
+                     f"VERIFIED: 0건. {where}에는 메모가 없습니다. 사용자에게 그대로 알리세요.", **result)
+    if truncated:
+        argv = ["comment", "--target", args.target, "--sheet", sheet] + (["--range", args.range] if args.range else [])
+        result["next_commands"] = [rt.next_command("excel.py", argv + ["--start", str(shown_end + 1)],
+                                                   f"{shown_end + 1}번째 메모부터 이어서 보기")]
+    return rt.ok(TOOL, "comment", f"{where}: 메모 {len(items)}개 표시 (전체 {total}개)",
+                 "VERIFIED: 읽기 완료." + (" 일부만 표시되었으면 next_commands로 이어서 보세요." if truncated else ""), **result)
+
+
+def _comment_add(args, t: Any) -> Dict[str, Any]:
+    plan, warnings = _comment_plan(args, t)
+    existing = [(ws, r, c, ws.Cells(r, c).Comment) for ws, r, c, _ in plan]
+    taken = [(ws, r, c, n) for ws, r, c, n in existing if n is not None]
+    old = {(str(ws.Name), r, c): _note_text(n) for ws, r, c, n in taken}
+    mode = "overwrite" if args.overwrite else "append" if args.append else ""
+    planned = []
+    for ws, r, c, _ in plan:
+        ref = f"{ws.Name}!{addr(r, c)}"
+        if (str(ws.Name), r, c) not in old:
+            planned.append(f"메모 추가: {ref}")
+        elif mode:
+            planned.append(f"메모 {'바꾸기' if mode == 'overwrite' else '덧붙이기'}: {ref}")
+        else:
+            planned.append(f"이미 메모가 있음 (바꾸기 --overwrite, 덧붙이기 --append 중 선택): {ref}")
+    taken_refs = [f"{ws.Name}!{addr(r, c)}" for ws, r, c, _ in taken]
+    taken_text = ", ".join(f"{ref}='{_short(old[(str(ws.Name), r, c)], 30)}'"
+                           for ref, (ws, r, c, _) in zip(taken_refs[:5], taken[:5])) + (" ..." if len(taken) > 5 else "")
+    if args.dry_run:
+        nexts = [_comment_command(args, ["--overwrite"]), _comment_command(args, ["--append"])] if taken and not mode \
+            else [_comment_command(args)]
+        fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(plan), "next_commands": nexts,
+                                  "target_resolved": t.resolved()}
+        if taken:
+            fields["existing_notes"] = len(taken)
+        if warnings:
+            fields["warnings"] = warnings[:10]
+        directive = ("VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요."
+                     if not (taken and not mode) else
+                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고, 이미 메모가 있는 칸을 바꿀지(next_commands[0]) "
+                     "덧붙일지(next_commands[1]) 사용자가 고르면 그 명령을 실행하세요.")
+        preview = f"미리보기: 메모 {len(plan)}개" + (f" (이미 메모가 있는 칸 {len(taken)}개: {taken_text})" if taken else "")
+        return rt.ok(TOOL, "comment", preview, directive, **fields)
+    if taken and not mode:
+        head = f"이미 메모가 있는 칸 {len(taken)}개: "
+        raise rt.UserDecisionError(
+            head + taken_text,
+            "메모를 달지 않았습니다. 이미 메모가 있는 칸과 그 메모를 사용자에게 보여 주고, 사용자가 원하면 새 메모로 바꾸기는 "
+            "--overwrite, 기존 메모 아래에 덧붙이기는 --append를 붙여 다시 실행하세요 (미리 보려면 --dry-run).",
+            log_message=head + ", ".join(taken_refs[:5]) + (" ..." if len(taken) > 5 else "") + f" (메모 {rt.DOC_OMITTED})")
+    expected: Dict[Tuple[str, int, int], str] = {}
+    done = 0
+    try:
+        for ws, r, c, memo in plan:
+            key = (str(ws.Name), r, c)
+            cell = ws.Cells(r, c)
+            if key in old:
+                want = memo if mode == "overwrite" else (old[key] + "\n" + memo if old[key] else memo)
+                cell.Comment.Text(Text=want)
+            else:
+                want = memo
+                cell.AddComment(memo)
+            expected[key] = want
+            done += 1
+            t.changed = True
+    except Exception as e:
+        rt.debug(f"메모 달기 실패: {e}")
+        ref = f"{plan[done][0].Name}!{addr(plan[done][1], plan[done][2])}"
+        raise rt.InputError(f"{ref}에 메모를 달지 못했습니다 (시트 보호, 편집 중인 칸 등, {type(e).__name__}). "
+                            + (f"앞의 {done}개는 달렸습니다(office.py undo로 되돌릴 수 있음). " if done else "")
+                            + "시트 보호를 풀거나 칸 편집을 끝낸 뒤 다시 실행하세요.", no_fallback=True)
+    # R1: 단 메모를 다시 읽어 확인
+    problems: List[str] = []
+    for (sheet, r, c), want in expected.items():
+        try:
+            got = t.sheet(sheet).Cells(r, c).Comment
+            if got is None or not _same_note(_note_text(got), want):
+                problems.append(f"{sheet}!{addr(r, c)}의 메모가 쓴 내용과 다름")
+        except Exception as e:
+            problems.append(f"{sheet}!{addr(r, c)}의 메모를 다시 읽지 못함 ({type(e).__name__})")
+    t.set_focus(sheet=plan[0][0])
+    resolved = t.resolved()
+    fields = {"target_resolved": resolved, "applied": planned[:50], "count": len(plan)}
+    if warnings:
+        fields["warnings"] = warnings[:10]
+    preview = f"메모 {len(plan)}개를 달았습니다" + (f" (기존 메모 {'바꿈' if mode == 'overwrite' else '덧붙임'} {len(taken)}개)" if taken else "")
+    if problems:
+        return rt.ok_unverified(TOOL, "comment", preview, problems[:10], **fields)
+    return rt.ok(TOOL, "comment", preview,
+                 "VERIFIED: 메모를 달고 다시 읽어 확인했습니다. 잘못 달았으면 office.py undo로 되돌릴 수 있습니다.", verified=True, **fields)
+
+
+def _comment_delete(args, t: Any) -> Dict[str, Any]:
+    ws = t.sheet(args.sheet)
+    rng = target_range(t, ws, args.range)
+    ws = rng.Worksheet
+    box = _range_box(rng)
+    notes = _sheet_notes(ws, box)
+    sheet = str(ws.Name)
+    where = f"{sheet}!{str(rng.Address).replace('$', '')}"
+    planned = [f"메모 삭제: {sheet}!{addr(r, c)}" for r, c, _ in notes]
+    if not notes:
+        if not args.dry_run:
+            t.set_focus(sheet=ws, changed=False)       # 바뀐 것 없음: 이번 되돌리기 지점은 지움
+        return rt.ok(TOOL, "comment", f"{where}: 지울 메모 없음 (count 0)",
+                     f"VERIFIED: 0건. {where}에는 메모가 없어 바꾼 것이 없습니다. 사용자에게 그대로 알리세요.",
+                     target_resolved=t.resolved(), count=0)
+    if args.dry_run:
+        return rt.ok(TOOL, "comment", f"미리보기: {where}의 메모 {len(notes)}개를 지웁니다 (바꾸지 않음)",
+                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.",
+                     dry_run=True, planned=planned[:50], count=len(notes), next_commands=[_comment_command(args)],
+                     target_resolved=t.resolved())
+    for _, _, note in notes:
+        note.Delete()
+    t.set_focus(sheet=ws)
+    left = _sheet_notes(ws, box)                       # R1: 다시 읽어 확인
+    resolved = t.resolved()
+    fields = {"target_resolved": resolved, "applied": planned[:50], "count": len(notes)}
+    preview = f"{where}의 메모 {len(notes)}개를 지웠습니다"
+    if left:
+        return rt.ok_unverified(TOOL, "comment", preview,
+                                [f"다시 읽은 범위에 메모가 남음: {', '.join(addr(r, c) for r, c, _ in left[:5])}"], **fields)
+    return rt.ok(TOOL, "comment", preview,
+                 "VERIFIED: 메모를 지우고 다시 읽어 확인했습니다. 잘못 지웠으면 office.py undo로 되돌릴 수 있습니다.", verified=True, **fields)
+
+
+def cmd_comment(args) -> Dict[str, Any]:
+    if args.overwrite and args.append:
+        raise rt.InputError("--overwrite(기존 메모 바꾸기)와 --append(기존 메모에 덧붙이기)는 하나만 지정하세요.")
+    # --action add를 빠뜨리고 메모만 준 경우: 목록을 보여 주고 '완료'라고 하면 LLM이 메모를 단 것으로 오해함
+    if args.action == "list" and (args.text is not None or args.file):
+        args.action = "add"
+    if args.action == "list":
+        if args.dry_run:
+            raise rt.InputError("--dry-run은 comment --action add/delete에만 씁니다.")
+        return _comment_list(args)
+    if args.action == "delete":
+        if not args.range:
+            raise rt.InputError("지울 메모의 범위를 --range로 지정하세요 (예: --range B2:D20). 먼저 --dry-run으로 지울 메모를 볼 수 있습니다.")
+        if args.text is not None or args.file:
+            raise rt.InputError("--action delete에는 --text, --file을 쓰지 않습니다.")
+    with off.open_target("excel", args.target, readonly=args.dry_run, focus=not args.no_focus,
+                         tool=TOOL, command="comment") as t:
+        return _comment_add(args, t) if args.action == "add" else _comment_delete(args, t)
+
+
+# ==============================================================================
 # 10. 진입점
 # ==============================================================================
 
@@ -3042,11 +3348,24 @@ def build_cli():
     p.add_argument("--legend", choices=list(XL_LEGEND) + ["none"], help="범례 위치 (계열 1개면 기본 없음)")
     p.add_argument("--theme", help=f"색 테마: {', '.join(off.THEMES)}")
     p.add_argument("--all", action="store_true", help="delete: 시트의 모든 차트")
+
+    p = sub.add_parser("comment", help="칸 메모 (목록 / 달기 / 지우기)")
+    common(p, write=True)
+    p.add_argument("--action", "-a", choices=["list", "add", "delete"], default="list",
+                   help="list(기본): 메모 목록, add: 메모 달기 (--text나 --file이 있으면 add), delete: --range 안의 메모 지우기")
+    p.add_argument("--range", "-r", help="list: 이 범위의 메모만, add: 메모를 달 칸 (예: B5), delete: 메모를 지울 범위")
+    p.add_argument("--text", help="add: 메모 내용. 줄바꿈은 \\n")
+    p.add_argument("--file", "-f", help="add: 여러 메모 파일 (.csv/.md 표, 열: 칸, 메모. 예: B5,규격과 다름)")
+    p.add_argument("--overwrite", action="store_true", help="add: 이미 메모가 있는 칸은 새 메모로 바꾸기 (사용자가 확인했을 때만)")
+    p.add_argument("--append", action="store_true", help="add: 이미 메모가 있는 칸은 기존 메모 아래 줄에 덧붙이기")
+    p.add_argument("--dry-run", action="store_true", help="add/delete: 바꾸지 않고 달거나 지울 메모만 보기")
+    p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
     return parser
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
-            "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart}
+            "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
+            "comment": cmd_comment}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
