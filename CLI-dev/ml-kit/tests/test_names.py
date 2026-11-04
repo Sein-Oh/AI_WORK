@@ -558,6 +558,17 @@ def test_alias_pair_one_feature_refused(alias_models, inline):
     assert "같은 열 '온도(°C)'" in res["message"] and "[후보] 온도=180, 온도(°C)=182" in res["message"], res
 
 
+@pytest.mark.parametrize("other", ["온도(C)", "온도(℃)", "온도( °C)"])
+def test_alias_pair_with_degree_spelling_refused(alias_models, other):
+    # 23차 점검 L1 (2.9.44): '온도(C)' is '온도(°C)' written otherwise, so '온도' + '온도(C)' are the same column twice
+    # (2.9.43: "'온도'은(는) 모델 입력이 아님")
+    proc, res = _pred(alias_models["unit"], f"온도=180,{other}=182,압력(bar)=3")
+    assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:"), res
+    assert "같은 열 '온도(°C)'" in res["message"] and f"[후보] 온도=180, {other}=182" in res["message"], res
+    assert "모델 입력이 아니" not in res["message"], res
+    mp.check_inline_aliases(mp.parse_inline_input(f"{other}=182,압력(bar)=3"), ["온도(°C)", "압력(bar)"])   # one name: ok
+
+
 def test_alias_pair_ml_map_and_find(alias_models):
     proc, res = run_raw("ml_map.py", "-f", alias_models["unit_f"], "-i", '{"온도":180,"온도(°C)":182}', "-y", "수율")
     assert proc.returncode == 1 and "[후보] 온도=180, 온도(°C)=182" in res["message"], res

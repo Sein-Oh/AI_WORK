@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.43"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.44"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -2581,12 +2581,18 @@ def apply_inference_evals(df: pd.DataFrame, eval_expressions: List[str]) -> pd.D
 def check_inline_aliases(df: pd.DataFrame, required: List[str]) -> None:
     """-i: '온도' next to '온도(°C)' when the model has '온도(°C)' but not '온도' (align_input_columns would match
     '온도' to '온도(°C)'): one value would be silently dropped -> STOP_RETRY. A model with both '온도' and '온도(°C)'
-    takes both."""
+    takes both. A name with the same unit written otherwise ('온도(C)', '온도(℃)', '온도( °C)': _same_unit_name, the
+    other align_input_columns rule) counts as the model name too (L1 2.9.44: '온도' + '온도(C)')."""
     req = set(required)
     given = [str(c) for c in df.columns]
     target = []
     for c in given:
-        hit = [] if c in req or strip_unit(c) != c.strip() else [f for f in required if _alias_key(f) == _alias_key(c)]
+        if c in req:
+            hit = []
+        elif strip_unit(c) != c.strip():
+            hit = [f for f in required if _same_unit_name(c, f)]
+        else:
+            hit = [f for f in required if _alias_key(f) == _alias_key(c)]
         target.append(hit[0] if len(hit) == 1 else c)
     values = {str(k): v for k, v in df.iloc[0].to_dict().items()} if len(df) == 1 else None
     check_same_column(given, target, "-i", values)
