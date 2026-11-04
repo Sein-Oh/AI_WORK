@@ -8,7 +8,8 @@
 - 스킬 zip에는 지시문(`SKILL.md`)과 실행 입구(`run.py`)만 들어 있습니다. `run.py`가 `C:\CLI\<도구>`의 도구를 실행합니다.
 - `run.py`는 도구마다 따로 있습니다 (`CLI-dev/engenius/ml-kit/run.py`, `CLI-dev/engenius/office-cli/run.py`).
   - 자기 도구의 스크립트만 실행합니다. 다른 도구의 명령이 오면 그 스킬로 실행하라고 안내합니다.
-  - zip과 `C:\CLI` 도구의 버전이 다르면 실행하지 않고 맞추라고 안내합니다 (`error_type: "setup"`).
+  - `C:\CLI\<도구>\SKILL.md`의 명령 안내(버전 줄 제외)가 zip을 만들 때와 달라졌으면 실행하지 않고 zip을 다시 가져오라고 안내합니다
+    (`error_type: "setup"`). 도구만 고친 업데이트는 zip을 그대로 둬도 됩니다.
   - 트레이가 고른 파이썬에 도구 라이브러리가 없으면 `C:\WPy64-*`의 WinPython을 찾아 그것으로 실행합니다.
 
 | 파일 | 용도 |
@@ -39,8 +40,11 @@ zip은 `CLI/<도구>/SKILL.md`와 `CLI-dev/engenius/<도구>/run.py`로 만듭�
    (그 사람 PC에도 1~3이 필요).
 
 ## 업데이트
-도구를 고치면 `C:\CLI` 폴더를 새 것으로 바꾸고, 스킬 zip 2개를 다시 [가져오기] -> "덮어쓸지" 물으면 덮어씁니다.
-둘의 버전이 다르면 `run.py`가 실행하지 않고 "버전이 다릅니다"라고 알려 줍니다. OpenCode 스킬(`C:\CLI\<도구>\SKILL.md`)은 그대로 함께 쓰입니다.
+1. 언제나: `C:\CLI` 폴더를 새 것으로 바꿉니다. OpenCode와 En-Genius가 함께 새 도구를 씁니다.
+2. 명령 안내가 바뀐 업데이트만(새 명령·옵션, CHANGELOG에 "SKILL" 변경이 있을 때): 스킬 zip을 다시 [가져오기] -> "덮어쓸지" 물으면 덮어씁니다.
+   - En-Genius의 지시문은 zip을 가져올 때 서버에 복사되므로, PC의 `C:\CLI`만 바꿔서는 모델이 새 명령을 모릅니다.
+   - 잊어도 괜찮습니다: `run.py`가 `C:\CLI\<도구>\SKILL.md`(버전 줄 제외)와 zip을 만들 때의 지시문 지문을 비교해,
+     다르면 실행하지 않고 "스킬 zip을 다시 가져오세요"라고 알려 줍니다. 버그 수정처럼 지시문이 그대로인 업데이트는 zip이 그대로여도 실행됩니다.
 
 ## 실행 방식 (모델이 하는 일)
 - `run_skill_script(name="office-cli", path="run.py", args=["excel.py read --range A1:D20"])`
@@ -57,7 +61,7 @@ OpenCode와 같습니다: `C:\CLI\office-cli\data`, `cache`, `config.json`, `C:\
 ## 실기에서 먼저 확인할 것
 | # | 확인 | 방법 | 통과 기준 |
 |---|---|---|---|
-| E1 | 연결·파이썬 | `@오피스ML`에게 "office-cli 사용법 보여 줘" (run.py를 인자 없이 실행) | 승인 창 -> 결과 JSON에 `tool_version`, `python`(WinPython 경로) |
+| E1 | 연결·파이썬 | `@오피스ML`에게 "office-cli 사용법 보여 줘" (run.py를 인자 없이 실행) | 승인 창 -> 결과 JSON에 `tool_version`, `python`(WinPython 경로), `skill_current: true` |
 | E2 | 한글 출력 | "바탕화면의 <엑셀 파일> 앞부분 읽어 줘" | 결과의 한글 값이 깨지지 않음 |
 | E3 | Office 조작 | 열린 엑셀에 "A1에 시험 이라고 써 줘" | 실제로 써지고 `VERIFIED` |
 | E4 | 여러 줄 글 | 열린 워드에 "제목과 항목 2개로 회의 요약 써 줘" | `@input1.md`로 실행, 제목·목록이 들어감 |

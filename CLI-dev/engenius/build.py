@@ -1,14 +1,16 @@
 r"""En-Genius 스킬 가져오기용 zip(docs/engenius/<tool>.zip)을 만듭니다.
 
 zip 구성: <tool>/SKILL.md (En-Genius용으로 바꾼 지시문) + <tool>/run.py (CLI-dev/engenius/<tool>/run.py, 도구마다 따로).
-도구 코드는 넣지 않는다: run.py가 사용자 PC의 C:\CLI\<tool>을 실행한다 (OpenCode와 같은 폴더). run.py의 SKILL_VERSION에
-지시문 버전을 채워, C:\CLI 도구와 버전이 다르면 실행하지 않고 맞추라고 안내하게 한다.
+도구 코드는 넣지 않는다: run.py가 사용자 PC의 C:\CLI\<tool>을 실행한다 (OpenCode와 같은 폴더). run.py의 SKILL_HASH에
+지시문 원본(CLI/<tool>/SKILL.md, 버전 줄 제외)의 지문을 채워, C:\CLI의 SKILL.md가 바뀌었으면(명령 안내 변경) zip을 다시 가져오라고 안내하게 한다.
+도구만 고친 업데이트는 zip을 바꾸지 않아도 된다.
 SKILL.md는 CLI/<tool>/SKILL.md 본문 앞에 En-Genius 실행 방법을 붙이고, OpenCode·PowerShell 전용 문장만 바꿉니다.
 CLI/<tool>/SKILL.md가 바뀌어 바꿀 문장을 못 찾으면 멈춥니다 (그 문장에 맞게 REPLACE를 고칩니다).
 같은 입력이면 같은 zip이 나옵니다 (시각 고정). tests/test_engenius.py가 저장소의 zip이 최신인지 확인합니다.
 
 사용: python CLI-dev/engenius/build.py   (저장소 루트에서)
 """
+import importlib.util
 import io
 import os
 import re
@@ -121,10 +123,16 @@ def run_py(tool):
     """CLI-dev/engenius/<tool>/run.py에 지시문 버전을 채운 것 (도구마다 따로 둔 실행 입구)."""
     with open(os.path.join(HERE, tool, "run.py"), encoding="utf-8") as f:
         text = f.read()
-    line = 'SKILL_VERSION = ""'
-    if text.count(line) != 1:
-        raise SystemExit(f"[ERROR] {tool}/run.py에 '{line}' 줄이 1번 있어야 합니다")
-    return text.replace(line, f'SKILL_VERSION = "{_version(tool)}"')
+    spec = importlib.util.spec_from_file_location(f"engenius_run_{tool}", os.path.join(HERE, tool, "run.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                    # 지문 계산을 run.py와 똑같이
+    with open(os.path.join(ROOT, "CLI", tool, "SKILL.md"), encoding="utf-8") as f:
+        digest = mod.skill_hash(f.read())
+    for line, value in (('SKILL_VERSION = ""', _version(tool)), ('SKILL_HASH = ""', digest)):
+        if text.count(line) != 1:
+            raise SystemExit(f"[ERROR] {tool}/run.py에 '{line}' 줄이 1번 있어야 합니다")
+        text = text.replace(line, f'{line[:-2]}"{value}"')
+    return text
 
 
 def zip_bytes(tool):

@@ -9,6 +9,7 @@ En-Genius 스킬 배포 구조 변경에 맞춤. 회귀 테스트: `tests/test_r
 ### 바뀐 동작
 - En-Genius 스킬 zip(`docs/engenius/ml-kit.zip`)에는 지시문과 `run.py`만 들어가고, `run.py`가 `C:\CLI\ml-kit`의 도구를 실행합니다.
   그래서 `ENGENIUS_OUT`이 있어도 도구 폴더의 데이터 폴더(OpenCode와 같은 것)를 씁니다. 고정 폴더(2.9.37)는 도구 파일이 트레이 임시 폴더에서 실행될 때만.
+- 도구 업데이트 때 스킬 zip을 다시 가져올 필요는 `SKILL.md` 본문(버전 줄 제외)이 바뀐 경우뿐입니다. `run.py`가 지문을 비교해 알려 줍니다.
 
 ## [2.9.37] - 2026-11-04
 

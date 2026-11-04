@@ -10,9 +10,12 @@ args가 이미 나뉘어 있으면(`["excel.py", "read"]`, `@input` 자리 없�
 파이썬: 지금 파이썬(트레이의 「스킬 실행 파이썬」)에 도구 라이브러리가 있으면 그것으로, 없으면 C:\\WPy64-*의 WinPython으로 실행한다.
 도구 결과(stdout 1줄 JSON, 종료 코드)는 도구의 것 그대로다. 이 입구의 오류도 1줄 JSON이다 (exit 2, STOP_RETRY).
 위치 바꾸기(시험용): 환경변수 ENGENIUS_CLI_DIR(C:\\CLI 대신), ENGENIUS_PYTHON(WinPython python.exe).
-빌드: CLI-dev/engenius/build.py가 SKILL_VERSION을 채워 office-cli.zip에 넣는다.
+빌드: CLI-dev/engenius/build.py가 SKILL_VERSION, SKILL_HASH를 채워 office-cli.zip에 넣는다.
+지시문 확인: zip의 지시문은 C:\\CLI\\office-cli\\SKILL.md(OpenCode용)로 만든다. 그 본문(버전 줄 제외)이 zip을 만들 때와 다르면
+명령 안내가 바뀐 것이므로 실행하지 않고 zip을 다시 가져오라고 안내한다. 도구만 고친 업데이트는 C:\\CLI만 바꾸면 된다.
 """
 import glob
+import hashlib
 import importlib.util
 import json
 import os
@@ -22,7 +25,8 @@ import subprocess
 import sys
 
 TOOL = "office-cli"
-SKILL_VERSION = ""                                   # 빌드가 채운다 (zip의 지시문 버전)
+SKILL_VERSION = ""                                   # 빌드가 채운다 (zip을 만들 때의 도구 버전, 표시용)
+SKILL_HASH = ""                                      # 빌드가 채운다 (그때 SKILL.md 본문의 skill_hash)
 SCRIPTS = ("excel.py", "word.py", "ppt.py", "outlook.py", "reader.py", "office.py")
 VERSION_FILE = "_runtime.py"
 NEEDS = ("openpyxl", "docx", "pptx")                 # 지금 파이썬으로 실행해도 되는지 보는 라이브러리
@@ -94,14 +98,32 @@ def tool_version():
         return None
 
 
+def skill_hash(text):
+    """SKILL.md 본문 지문: 줄바꿈·BOM을 맞추고 버전 줄(version: "...")을 뺀 글의 sha256 앞 16자.
+    빌드(build.py)도 이 함수를 불러 쓴다 (같은 계산)."""
+    text = text.replace("\r\n", "\n").lstrip("\ufeff")
+    text = re.sub(r'(?m)^[ \t]*version:[ \t]*"[^"]*"[ \t]*\n?', "", text)
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
+
+
+def installed_skill_hash():
+    """C:\\CLI 도구 폴더 SKILL.md의 지문. 없으면 None (확인하지 않음)."""
+    try:
+        with open(os.path.join(TOOL_DIR, "SKILL.md"), encoding="utf-8") as f:
+            return skill_hash(f.read())
+    except OSError:
+        return None
+
+
 def check_install():
     if not all(os.path.isfile(os.path.join(TOOL_DIR, s)) for s in SCRIPTS):
         stop(f"이 PC에 {TOOL} 도구가 없습니다 ({TOOL_DIR}). 배포 폴더의 CLI를 C:\\CLI로 복사한 뒤 다시 실행하세요. "
              "사용자에게 그대로 알리세요.", "setup")
-    found = tool_version()
-    if SKILL_VERSION and found != SKILL_VERSION:
-        stop(f"스킬 zip({TOOL} {SKILL_VERSION})과 C:\\CLI 도구({TOOL} {found or '버전 모름'})의 버전이 다릅니다. "
-             "같은 배포본의 C:\\CLI 폴더와 스킬 zip으로 맞춘 뒤 다시 실행하세요. 사용자에게 그대로 알리세요.", "setup")
+    found = installed_skill_hash()
+    if SKILL_HASH and found and found != SKILL_HASH:
+        stop(f"C:\\CLI의 {TOOL}({tool_version() or '버전 모름'})는 명령 안내가 바뀌었는데 En-Genius의 스킬 zip은 예전 것"
+             f"({SKILL_VERSION or '버전 모름'})입니다. 같은 배포본의 {TOOL}.zip을 En-Genius 스킬 탭에서 다시 가져온 뒤(덮어쓰기) "
+             "실행하세요. 사용자에게 그대로 알리세요.", "setup")
 
 
 def winpython():
@@ -123,8 +145,10 @@ def has_libs():
 
 def usage():
     print(__doc__, file=sys.stderr)
+    current = installed_skill_hash()
     emit({"status": "ok", "tool": TOOL, "skill_version": SKILL_VERSION or None, "tool_dir": TOOL_DIR,
-          "tool_version": tool_version(), "scripts": list(SCRIPTS),
+          "tool_version": tool_version(), "skill_current": None if not (SKILL_HASH and current) else current == SKILL_HASH,
+          "scripts": list(SCRIPTS),
           "python": sys.executable if has_libs() else winpython(),
           "usage": f'run_skill_script(name="{TOOL}", path="run.py", args=["<명령 한 줄>"])', "example": EXAMPLE,
           "agent_directive": "VERIFIED: 사용법입니다. SKILL.md의 명령을 args 첫 칸에 그대로 넣어 실행하세요."}, 0)

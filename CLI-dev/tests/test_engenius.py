@@ -112,6 +112,9 @@ def test_each_tool_has_its_own_run_py(tool):
     m = re.search(r'^SKILL_VERSION = "([^"]+)"', packed, re.M)
     with open(os.path.join(ROOT, "CLI", tool, mod.VERSION_FILE), encoding="utf-8") as f:
         assert m and m.group(1) == re.search(r'^VERSION\s*=\s*"([^"]+)"', f.read(), re.M).group(1)
+    with open(os.path.join(ROOT, "CLI", tool, "SKILL.md"), encoding="utf-8") as f:
+        digest = mod.skill_hash(f.read())
+    assert re.search(r'^SKILL_HASH = "([0-9a-f]{16})"', packed, re.M).group(1) == digest
 
 
 def test_run_py_files_differ_only_in_tool_settings():
@@ -183,14 +186,32 @@ def test_missing_cli_folder_is_setup_error(unpacked, tmp_path):
     assert code == 2 and res["error_type"] == "setup" and "C:\\CLI" in res["message"]
 
 
-def test_version_mismatch_is_setup_error(unpacked, tmp_path):
+def test_changed_skill_text_asks_to_reimport_zip(unpacked, tmp_path):
     other = tmp_path / "skill" / "office-cli"
     other.mkdir(parents=True)
     text = open(os.path.join(unpacked["office-cli"], "run.py"), encoding="utf-8").read()
-    (other / "run.py").write_text(re.sub(r'^SKILL_VERSION = "[^"]+"', 'SKILL_VERSION = "0.0.1"', text, flags=re.M),
+    (other / "run.py").write_text(re.sub(r'^SKILL_HASH = "[^"]+"', 'SKILL_HASH = "0000000000000000"', text, flags=re.M),
                                   encoding="utf-8")
     code, res = run({"office-cli": str(other)}, "office-cli", ["excel.py read"], tmp_path)
-    assert code == 2 and res["error_type"] == "setup" and "0.0.1" in res["message"]
+    assert code == 2 and res["error_type"] == "setup" and "다시 가져온" in res["message"]
+
+
+def test_tool_only_update_needs_no_new_zip(unpacked, tmp_path):
+    """도구만 고친 업데이트: C:\\CLI의 버전 줄(SKILL.md metadata, VERSION)만 바뀌면 zip은 그대로 실행된다."""
+    import shutil
+    cli = tmp_path / "CLI"
+    shutil.copytree(os.path.join(ROOT, "CLI", "office-cli"), cli / "office-cli",
+                    ignore=shutil.ignore_patterns("data", "cache", "config.json", "__pycache__"))
+    for name, pat, new in (("SKILL.md", r'version: "[^"]+"', 'version: "9.9.9"'),
+                           ("_runtime.py", r'^VERSION = "[^"]+"', 'VERSION = "9.9.9"')):
+        f = cli / "office-cli" / name
+        f.write_text(re.sub(pat, new, f.read_text(encoding="utf-8"), count=1, flags=re.M), encoding="utf-8")
+    code, res = run(unpacked, "office-cli", [], tmp_path, ENGENIUS_CLI_DIR=str(cli))
+    assert code == 0 and res["tool_version"] == "9.9.9" and res["skill_current"] is True
+    csv = tmp_path / "t.csv"
+    csv.write_text("a,b\n1,2\n", encoding="utf-8")
+    code, res = run(unpacked, "office-cli", [f'excel.py read --target "{csv}"'], tmp_path, ENGENIUS_CLI_DIR=str(cli))
+    assert code == 0 and res["status"] == "ok", res
 
 
 @pytest.mark.parametrize("tool,args,needle", [
