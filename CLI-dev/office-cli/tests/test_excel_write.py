@@ -1741,3 +1741,117 @@ def test_write_cells_reads_back(xl, capsys, monkeypatch):
     monkeypatch.setattr(ws, "set", lambda r, c, v: real_set(r, c, "바뀜" if (r, c) == (7, 3) else v))
     code, out = run_excel(capsys, "write", "--cells", "C6=a; C7=b")
     assert code == 0 and out["verified"] is False and "C7" in " ".join(out["unverified"]), out
+
+
+# ---------------------------------------------------------------------------
+# 시트 보호 사전 확인과 엑셀이 받지 않는 수식 (A6, 1.4.55)
+# ---------------------------------------------------------------------------
+
+
+def _protect(ws, unlocked=(), **allow):
+    ws.ProtectContents = True
+    ws.unlocked = set(unlocked)
+    for k, v in allow.items():
+        setattr(ws.Protection, k, v)
+
+
+@pytest.mark.parametrize("argv", [
+    ("write", "--range", "C6", "--value", "x"),
+    ("write", "--cells", "C6=x; C7=y"),
+    ("replace", "--find", "a", "--replace", "b"),
+    ("style", "--range", "A1:B2", "--bold"),
+    ("range", "--action", "merge", "--range", "A1:B1"),
+    ("range", "--action", "width", "--range", "A1", "--size", "20"),
+    ("range", "--action", "insert", "--range", "3:4"),
+    ("range", "--action", "sort", "--range", "A1:B3", "--by", "A"),
+    ("comment", "--action", "add", "--range", "B2", "--text", "의견"),
+])
+def test_protected_sheet_stops_every_write(xl, capsys, argv):
+    _, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([["a", "x"], ["a", "y"], ["c", "z"]], 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    _protect(ws, unlocked=[(9, 4), (10, 4)])
+    ws.ProtectDrawingObjects = True
+    before = dict(ws.values)
+    code, out = run_excel(capsys, *argv)
+    assert code == 1 and out["error_type"] == "sheet_protected", out
+    assert out["agent_directive"].startswith("STOP_RETRY:") and "시트 보호 해제는 사용자가 직접" in out["message"]
+    assert "암호를 풀지 않음" in out["message"]
+    assert ws.values == before and undo_points() == [] and ws.notes == {}
+
+
+def test_protected_sheet_lists_unlocked_cells_as_candidates(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(1, 1, "제목")
+    ws.set(9, 4, None)
+    ws.set(5, 3, 1)
+    _protect(ws, unlocked=[(5, 3)])
+    code, out = run_excel(capsys, "write", "--range", "A1", "--value", "x", "--overwrite")
+    assert code == 1 and out["error_type"] == "sheet_protected" and "A1" in out["message"], out
+    assert out["candidates"] == ["C5"] and "[후보] C5" in out["message"]
+
+
+def test_protected_sheet_allows_unlocked_cells_and_allowed_formatting(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    _protect(ws, unlocked=[(6, 3), (7, 3)], AllowFormattingCells=True)
+    code, out = run_excel(capsys, "write", "--cells", "C6=1; C7=2")
+    assert code == 0 and out["verified"] is True, out
+    code, out = run_excel(capsys, "style", "--range", "C6:C7", "--bold")
+    assert code == 0, out
+
+
+def test_unprotected_sheet_comment_and_chart_unaffected(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.ProtectDrawingObjects = True          # 시트 보호가 꺼져 있으면 개체 보호 표시는 의미 없음
+    code, out = run_excel(capsys, "comment", "--action", "add", "--range", "B2", "--text", "의견")
+    assert code == 0, out
+
+
+def test_rejected_formula_names_formula_and_recommends_comma(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.reject_formula = lambda f: ";" in f
+    code, out = run_excel(capsys, "write", "--range", "C8", "--formula", "=SUM(A1;A2)")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "=SUM(A1;A2)" in out["message"] and "쉼표" in out["message"] and "영어 함수 이름" in out["message"]
+    assert "[추천] python" in out["message"] and "=SUM(A1,A2)" in out["message"].split("[추천]")[1]
+    assert (8, 3) not in ws.formulas and undo_points() == []
+
+
+def test_rejected_formula_without_mechanical_fix_has_no_recommendation(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.reject_formula = lambda f: "합계" in f
+    code, out = run_excel(capsys, "write", "--cells", "C6=1; C7==합계(A1:A2); C8=3")
+    assert code == 1 and "=합계(A1:A2)" in out["message"] and "[추천]" not in out["message"], out
+    assert "큰따옴표" in out["message"]
+    assert ws.values == {} and ws.formulas == {} and undo_points() == []      # 먼저 쓴 C6도 되돌림
+
+
+def test_rejected_formula_rolls_back_new_sheet(xl, capsys, monkeypatch):
+    app, wb = xl
+    real_add = wb.Worksheets.Add
+
+    def add(**kw):
+        ws = real_add(**kw)
+        ws.reject_formula = lambda f: "SUMA" in f
+        return ws
+    monkeypatch.setattr(wb.Worksheets, "Add", add)
+    code, out = run_excel(capsys, "write", "--sheet", "계산", "--new-sheet", "--range", "A1:A3", "--header", "합",
+                          "--formula", "=SUMA(B1)")
+    assert code == 1 and "=SUMA(B1)" in out["message"], out
+    assert sheet_names(wb) == ["Sheet1", "요약"] and undo_points() == []
+
+
+def test_rejected_formula_log_has_no_formula(xl, capsys):
+    _, wb = xl
+    ws_of(wb).reject_formula = lambda f: "VLOOKUPX" in f
+    code, out = run_excel(capsys, "write", "--range", "C8", "--formula", "=VLOOKUPX(1)")
+    assert code == 1
+    log = _tool_log_text()
+    assert "VLOOKUPX" not in log and "수식" in log

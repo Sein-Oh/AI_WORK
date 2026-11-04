@@ -1101,6 +1101,29 @@ def test_E(ctx):
                f"첫 쓰기={d1.get('status')}, 확인 요청={d_ask.get('error_type')}, H9 그대로={h9_kept}, H6:H9={vals}",
                data, code, raw, err)
 
+    def e9():
+        activate_xl("A.xlsx", "E_TEST")
+        # 보호된 시트: 잠긴 칸 쓰기는 sheet_protected, 잠기지 않은 칸은 씀 / 엑셀이 받지 않는 수식(;)은 [추천]과 함께 멈추고 먼저 쓴 칸은 되돌림
+        ws = e_ws()
+        com_retry(lambda: setattr(ws.Range("J2"), "Locked", False))
+        com_retry(lambda: ws.Protect(Password="", Contents=True))
+        try:
+            d_lock = run_cli("excel.py", "write", "--cells", "J1=x; J2=y")[0] or {}
+            d_free = run_cli("excel.py", "write", "--cells", "J2=y")[0] or {}
+            j1 = com_retry(lambda: ws.Range("J1").Value)
+            j2 = com_retry(lambda: ws.Range("J2").Value)
+        finally:
+            com_retry(lambda: ws.Unprotect(Password=""))
+        data, code, raw, err = run_cli("excel.py", "write", "--cells", "J4=먼저; J5==SUM(1;2)")
+        j4 = com_retry(lambda: ws.Range("J4").Value)
+        msg = str((data or {}).get("message", ""))
+        ok = (d_lock.get("error_type") == "sheet_protected" and "J2" in (d_lock.get("candidates") or [])
+              and str(d_free.get("agent_directive", "")).startswith("VERIFIED:") and j1 is None and j2 == "y"
+              and (data or {}).get("status") == "error" and "[추천]" in msg and "SUM(1,2)" in msg and j4 is None)
+        record(ctx, "E9", "보호된 시트(잠긴 칸 멈춤·잠기지 않은 칸 씀), 받지 않는 수식은 [추천]과 되돌림", ok,
+               f"잠긴 칸={d_lock.get('error_type')}, 후보={d_lock.get('candidates')}, J1={j1!r}, J2={j2!r}, J4={j4!r}, "
+               f"수식 오류={(data or {}).get('error_type')}", data, code, raw, err)
+
     run_test(ctx, "E1", "move", e1)
     run_test(ctx, "E2", "merge 범위 없음", e2)
     run_test(ctx, "E3", "merge 대화상자", e3)
@@ -1109,6 +1132,7 @@ def test_E(ctx):
     run_test(ctx, "E6", "테마", e6)
     run_test(ctx, "E7", "칸 메모", e7)
     run_test(ctx, "E8", "칸 여러 개 쓰기", e8)
+    run_test(ctx, "E9", "시트 보호와 수식 거부", e9)
 
 
 # ---------------------------------------------------------------------------

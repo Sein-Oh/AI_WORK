@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.54"
+  version: "1.4.55"
   platform: windows
 ---
 
@@ -77,6 +77,7 @@ metadata:
 | `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸, 되돌리기 위험)이면 사용자에게 묻고, 사용자가 원할 때만 directive가 말한 옵션을 붙여 1번 실행한다. `install_command`가 있으면 그 명령을 알린다(직접 설치하지 않는다). |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |
 
+- `error_type`이 `sheet_protected`(보호된 시트)이면 보호를 풀거나 암호를 묻지 않는다. message를 알리고, 사용자가 직접 풀었다고 하면 같은 명령을 1번, `[후보]`(잠기지 않은 칸)에 쓰라고 하면 그 칸으로 실행한다.
 - `error_type`이 `elevated_process`(관리자 권한 실행이라 사용자가 연 문서가 안 보임)이면 다시 실행하지 않고 message를 그대로 알린다.
 - JSON에 `recovered`가 있으면 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.
 - 문서 검색 결과는 항목마다 근거를 붙여 알린다: `evidence`(예: `규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`)를 그대로 쓴다. `page`가 null인 형식(엑셀, HWP 등)은 장절(`section_text`)과 번호(`number`), 위치(`loc`)로 알린다.

@@ -7,6 +7,7 @@ EntireRow/EntireColumn Insert/Delete(칸 옮기기), Sort(Key1~Key3, Header), Wo
 메모(Range.Comment/AddComment, Comment.Text()/Delete(), Worksheet.Comments).
 """
 import re
+import types
 
 
 def col_num(s):
@@ -266,8 +267,21 @@ class FakeRange:
             return self.ws.values.get((r1, c1))
         return tuple(tuple(self.ws.values.get((r, c)) for c in range(c1, c2 + 1)) for r in range(r1, r2 + 1))
 
+    def _reject(self, v):
+        vals = [x for row in v for x in row] if isinstance(v, tuple) else [v]
+        rej = self.ws.reject_formula
+        if rej and any(isinstance(x, str) and x.startswith("=") and rej(x) for x in vals):
+            raise Exception("com_error: 이 수식에 문제가 있습니다")
+
+    @property
+    def Locked(self):
+        keys = list(self.cells())
+        n = sum(1 for k in keys if k not in self.ws.unlocked)
+        return True if n == len(keys) else (False if n == 0 else None)
+
     @Value.setter
     def Value(self, v):
+        self._reject(v)
         r1, c1, r2, c2 = self.areas[0]
         if isinstance(v, tuple):
             for i, row in enumerate(v):
@@ -318,6 +332,22 @@ class FakeRange:
 
     @Formula.setter
     def Formula(self, v):
+        self._reject(v)
+        if isinstance(v, tuple):                  # 되돌리기: 칸마다 원래 수식·값
+            r1, c1, _, _ = self.areas[0]
+            for i, row in enumerate(v):
+                for j, x in enumerate(row):
+                    FakeRange(self.ws, [(r1 + i, c1 + j, r1 + i, c1 + j)]).Formula = x
+            return
+        if not (isinstance(v, str) and v.startswith("=")):
+            for r, c in self.cells():
+                self.ws.formulas.pop((r, c), None)
+                if v in ("", None):
+                    self.ws.values.pop((r, c), None)
+                else:
+                    self.ws.values[(r, c)] = v
+            self.ws.log.append(("Formula", self.Address, v))
+            return
         for r, c in self.cells():
             self.ws.formulas[(r, c)] = v
             self.ws.values[(r, c)] = f"<{v}>"
@@ -581,6 +611,14 @@ class FakeWorksheet:
         self.notes = {}              # 칸 메모 {(r, c): FakeComment}
         self.refuse_notes = False    # True면 메모 추가·수정이 COM 오류 (보호된 시트 흉내)
         self.Comments = FakeComments(self)
+        # 시트 보호: ProtectContents, 개체 보호, 허용 항목(Protection.Allow*), 잠기지 않은 칸(기본은 모두 잠김, 엑셀과 같음)
+        self.ProtectContents = False
+        self.ProtectDrawingObjects = False
+        self.Protection = types.SimpleNamespace(**{k: False for k in (
+            "AllowFormattingCells", "AllowFormattingColumns", "AllowFormattingRows", "AllowInsertingRows",
+            "AllowInsertingColumns", "AllowDeletingRows", "AllowDeletingColumns", "AllowSorting")})
+        self.unlocked = set()
+        self.reject_formula = None   # 함수(수식) -> True면 .Formula/.Value 대입이 COM 오류 (엑셀이 받지 않는 수식 흉내)
 
     @property
     def Name(self):

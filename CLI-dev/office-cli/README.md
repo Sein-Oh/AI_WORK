@@ -172,6 +172,15 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 첫 열이 숫자인 `line` 차트는 x축이 숫자 축이 되도록 `scatter_lines`로 그립니다(예: 사인 그래프).
 - `--at`을 생략하면 차트는 시트의 데이터(사용 범위) 오른쪽에 놓여 다른 데이터를 가리지 않습니다.
 - 칸 주소는 엑셀 범위(1~1,048,576행, A~XFD열) 안이어야 합니다. `A0`, `0:3`, `XFE1`은 STOP_RETRY.
+- 시트 보호(모든 쓰기 명령 공통 `check_protection`, 아무것도 바꾸기 전에): 시트가 보호되어 있으면(`ProtectContents`) 할 일마다 확인하고, 막히면
+  STOP_RETRY `error_type: sheet_protected`와 "검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음)".
+  - 값·수식(`write`, `write --cells`, `replace`, `range clear`): 쓸 칸이 잠겨 있으면(`Locked`) 잠긴 칸 5개와, 시트의 잠기지 않아 쓸 수 있는 칸(사용 범위에서 10개까지)을 `[후보]`로. 잠기지 않은 칸만 쓰면 그대로 씀.
+  - 서식(`style`, `replace`의 서식, `range border/width/height/autofit/hide/unhide`, 행·열 `insert/delete`, `sort`): 시트 보호 대화상자의 허용 항목(`Protection.AllowFormattingCells` 등)이 켜져 있을 때만 함.
+  - 메모·차트(`comment add/delete`, `chart create/delete`): 개체 보호(`ProtectDrawingObjects`)가 켜져 있으면 멈춤. `merge/unmerge/move`와 보호된 시트로의 `copy`는 늘 멈춤.
+  - 도구는 보호를 풀거나 암호를 묻지 않습니다. 오류 로그에는 칸 주소만 남습니다.
+- 엑셀이 받지 않는 수식(`.Formula` 대입이 COM 오류: 한글 함수 이름, `;` 구분 등): `write`(`--formula`, `--values`·`--file`·`--value`의 `=` 값, `--cells`)는 어느 칸의 어떤 수식인지와
+  규칙(영어 함수 이름, 쉼표 구분, 글자는 큰따옴표)을 STOP_RETRY로 알립니다. 따옴표 밖의 `;`, 전각 글자, 둥근 따옴표처럼 기계적으로 고칠 수 있으면 고친 수식으로 바꾼 전체 명령을 `[추천]`.
+  먼저 쓴 칸은 원래대로 되돌리고, 같은 명령에서 `--new-sheet`로 만든 시트는 지웁니다(되돌리기 지점도 남기지 않음). 오류 로그에는 수식 글을 남기지 않습니다.
 - 닫힌 xlsx에서 범위를 직접 주면(`A1:C5`) 데이터 뒤의 빈 행까지 그 범위만큼 `rows`를 셉니다(열린 문서와 같음). 범위를 생략하면 끝쪽 빈 행은 뺍니다.
   단 계산된 값이 없는 수식 칸이 있는 행·열(값 없이 수식만 있는 합계 행 등)은 빈 칸으로 읽혀도 빼지 않습니다(아래).
   준 범위가 200만 칸을 넘으면(`A1:XFD1048576`) 데이터가 있는 끝까지만 읽고 `recovered`로 알리며, 그래도 넘으면 STOP_RETRY와 `[추천] --range`.

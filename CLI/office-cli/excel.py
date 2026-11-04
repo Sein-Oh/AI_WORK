@@ -1182,6 +1182,219 @@ def _rebase_formula(app: Any, ws: Any, formula: str, from_row: int, from_col: in
             f"[추천] --range {addr(to_row, to_col)}")
 
 
+# ==============================================================================
+# 3-1. 쓰기 전 확인: 시트 보호, 쓰기 실패 되돌리기 (모든 쓰기 명령 공통)
+# ==============================================================================
+
+PROTECT_HINT = "검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음)"
+# 보호된 시트에서도 엑셀이 허용할 수 있는 일: 시트 보호 대화상자의 허용 항목 (Worksheet.Protection.Allow*)
+_PROTECT_ALLOW = {"format_cells": "AllowFormattingCells", "format_columns": "AllowFormattingColumns",
+                  "format_rows": "AllowFormattingRows", "insert_rows": "AllowInsertingRows",
+                  "insert_columns": "AllowInsertingColumns", "delete_rows": "AllowDeletingRows",
+                  "delete_columns": "AllowDeletingColumns", "sort": "AllowSorting"}
+_PROTECT_WHAT = {"values": "값을 쓸", "format_cells": "서식을 바꿀", "format_columns": "열 너비·숨김을 바꿀",
+                 "format_rows": "행 높이·숨김을 바꿀", "insert_rows": "행을 넣을", "insert_columns": "열을 넣을",
+                 "delete_rows": "행을 지울", "delete_columns": "열을 지울", "sort": "정렬할",
+                 "objects": "메모·차트를 넣거나 지울", "structure": "병합·이동·복사할"}
+PROTECT_SCAN_CELLS = 2000      # 잠기지 않은 칸 [후보]를 찾을 때 훑는 칸 수 상한
+
+
+def _is_protected(ws: Any) -> bool:
+    try:
+        return bool(ws.ProtectContents)
+    except Exception:
+        return False          # 읽지 못하면 막지 않음 (쓰기가 실패하면 그때 COM 오류로 알림)
+
+
+def _locked_cells(rng: Any, limit: int = 500) -> List[str]:
+    """범위에서 잠긴 칸 주소 (Locked: True 모두, False 없음, None 섞임 -> 칸마다)."""
+    try:
+        lk = rng.Locked
+    except Exception:
+        return []
+    r0, c0 = int(rng.Row), int(rng.Column)
+    nr, nc = int(rng.Rows.Count), int(rng.Columns.Count)
+    if lk is False or lk == 0:
+        return []
+    if lk is True or lk == -1 or lk == 1:
+        return [addr(r0 + i, c0 + j) for i in range(min(nr, 50)) for j in range(nc)][:limit]
+    out = []
+    for i in range(nr):
+        for j in range(nc):
+            try:
+                if rng.Cells(i + 1, j + 1).Locked:
+                    out.append(addr(r0 + i, c0 + j))
+            except Exception:
+                pass
+            if len(out) >= limit or (i * nc + j) > PROTECT_SCAN_CELLS:
+                return out
+    return out
+
+
+def _unlocked_cells(ws: Any, limit: int = rt.MAX_CANDIDATES) -> List[str]:
+    """보호된 시트에서 써도 되는(잠기지 않은) 칸 (사용 범위 안, 앞에서부터)."""
+    try:
+        used = ws.UsedRange
+        r0, c0 = int(used.Row), int(used.Column)
+        nr, nc = int(used.Rows.Count), int(used.Columns.Count)
+    except Exception:
+        return []
+    out: List[str] = []
+    for i in range(nr):
+        for j in range(nc):
+            if i * nc + j >= PROTECT_SCAN_CELLS or len(out) >= limit:
+                return out
+            try:
+                if not ws.Cells(r0 + i, c0 + j).Locked:
+                    out.append(addr(r0 + i, c0 + j))
+            except Exception:
+                pass
+    return out
+
+
+def check_protection(ws: Any, ranges: Sequence[Any], need: str = "values") -> None:
+    """쓰기 전에 시트 보호를 확인합니다 (excel 쓰기 명령 공통). 막히면 아무것도 바꾸지 않고 STOP_RETRY sheet_protected.
+    need: values(값·수식: 잠기지 않은 칸은 씀), objects(메모·차트), _PROTECT_ALLOW의 일(보호 대화상자에서 허용했으면 함),
+    structure(병합·이동 등 늘 막힘). 값 쓰기가 잠긴 칸에 막히면 잠기지 않은 칸을 [후보]로 (사용자가 그 칸에 쓰라고 할 수 있음)."""
+    if not _is_protected(ws):
+        return
+    locked: List[str] = []
+    if need == "objects":
+        try:
+            blocked = bool(ws.ProtectDrawingObjects)
+        except Exception:
+            blocked = False
+    elif need in ("values", "sort"):
+        for rng in ranges:
+            locked += _locked_cells(rng)
+        blocked = bool(locked)
+        if need == "sort" and not blocked:
+            try:
+                blocked = not bool(getattr(ws.Protection, _PROTECT_ALLOW["sort"]))
+            except Exception:
+                blocked = True
+    elif need in _PROTECT_ALLOW:
+        try:
+            blocked = not bool(getattr(ws.Protection, _PROTECT_ALLOW[need]))
+        except Exception:
+            blocked = True
+    else:
+        blocked = True
+    if not blocked:
+        return
+    name = str(ws.Name)
+    where = f" (잠긴 칸 {len(locked)}개: {', '.join(locked[:5])}{' ...' if len(locked) > 5 else ''})" if locked else ""
+    msg = f"시트 '{name}'이(가) 보호되어 있어 {_PROTECT_WHAT.get(need, '바꿀')} 수 없습니다{where}. {PROTECT_HINT}."
+    cands = _unlocked_cells(ws) if need == "values" else []
+    if cands:
+        msg += " 이 시트에서 잠기지 않아 쓸 수 있는 칸:"
+    err = rt.UserDecisionError(
+        msg,
+        "시트가 보호되어 있어 아무것도 바꾸지 않았습니다. message를 사용자에게 그대로 알리세요. 시트 보호를 풀지 말고(암호를 묻거나 "
+        "추측하지 않음) 사용자가 직접 풀었다고 하면 같은 명령을 1번 다시 실행하세요."
+        + (" 사용자가 [후보]의 잠기지 않은 칸에 쓰라고 하면 그 칸으로 실행하세요." if cands else ""),
+        candidates=cands)
+    err.error_type = "sheet_protected"
+    raise err
+
+
+def _fixed_formula(formula: str) -> str:
+    """기계적으로 고칠 수 있는 수식 표기: 전각 글자, 둥근 따옴표, 따옴표 밖의 ';' 인수 구분 -> ','."""
+    import unicodedata
+    f = unicodedata.normalize("NFKC", formula).replace("“", '"').replace("”", '"')
+    out, quoted = [], False
+    for ch in f:
+        if ch == '"':
+            quoted = not quoted
+        out.append("," if ch == ";" and not quoted else ch)
+    return "".join(out)
+
+
+def formula_rejected(e: BaseException, ref: str, formula: str) -> rt.InputError:
+    """엑셀이 받지 않은 수식(.Formula 대입 COM 오류) -> 어느 수식이 왜 실패했는지와 고칠 규칙 (STOP_RETRY).
+    기계적으로 고칠 수 있으면(';' 구분, 전각) 그 수식으로 바꾼 전체 명령을 [추천]. 오류 로그에는 수식 글을 남기지 않음."""
+    rules = "엑셀 수식은 영어 함수 이름(SUM, IF, VLOOKUP), 인수 구분은 쉼표(,), 글자는 큰따옴표(\"글자\")로 씁니다"
+    head = f"{ref}에 넣을 수식 {formula!r}을(를) 엑셀이 받지 않았습니다 ({type(e).__name__}). 아무것도 바꾸지 않았습니다. {rules}."
+    log_head = f"{ref}에 넣을 수식을 엑셀이 받지 않았습니다 ({type(e).__name__}, 수식 {rt.DOC_OMITTED}). {rules}."
+    fixed = _fixed_formula(formula)
+    argv = list(rt.CURRENT_ARGV or [])
+    if fixed != formula and argv and any(formula in a for a in argv):
+        new_argv = [a.replace(formula, fixed) for a in argv]
+        cmd = rt.next_command("excel.py", new_argv, "")["command"]
+        return rt.InputError(head + f" 고친 수식 {fixed!r}로 다시 실행하세요. [추천] {cmd}",
+                             log_message=log_head + " [추천 명령 생략: 수식]", no_fallback=True)
+    return rt.InputError(head + " 수식을 고쳐 다시 실행하세요.", log_message=log_head, no_fallback=True)
+
+
+def apply_writes(t: Any, items: Sequence[Tuple[Any, int, int, int, int, str, Any]], new_sheet: Any = None) -> None:
+    """값·수식을 씁니다 [(시트, r1, c1, r2, c2, value|values|formula, 값)]. 엑셀이 하나라도 받지 않으면(잘못된 수식 등)
+    이미 쓴 칸을 원래대로 되돌리고, 이 명령이 만든 새 시트(new_sheet)는 지운 뒤 STOP_RETRY (반쯤 쓴 채로 남기지 않음)."""
+    try:
+        saved_before = bool(t.doc.Saved)
+    except Exception:
+        saved_before = None
+    done: List[Tuple[Any, Any]] = []
+    failure: Optional[rt.InputError] = None
+    with off.excel_batch(t.app):
+        for ws, a, b, c, d, kind, payload in items:
+            rng = ws.Range(ws.Cells(a, b), ws.Cells(c, d))
+            try:
+                prior = rng.Formula             # 상수는 값, 수식은 수식 글 (되돌리기용)
+            except Exception:
+                prior = None
+            try:
+                if kind == "formula":
+                    rng.Formula = payload
+                else:
+                    rng.Value = payload
+            except Exception as e:
+                info = rt._com_error_info(e)
+                if info is not None and info[2] in ("busy", "gone"):
+                    raise                       # 엑셀이 바쁘거나 꺼짐: 수식 문제가 아님
+                text = payload if kind == "formula" else next(
+                    (str(v) for row in (payload if kind == "values" else ((payload,),)) for v in row
+                     if isinstance(v, str) and v.startswith("=")), None)
+                ref = f"{ws.Name}!{addr(a, b, c, d)}"
+                failure = formula_rejected(e, ref, text) if text else rt.InputError(
+                    f"{ref}에 값을 쓰지 못했습니다 ({type(e).__name__}). 아무것도 바꾸지 않았습니다. 시트 보호·편집 중인 칸·병합된 칸인지 확인하세요.",
+                    no_fallback=True)
+                break
+            done.append((rng, prior))
+            t.changed = True
+        if failure is not None:
+            problems = []
+            for rng, prior in reversed(done):
+                try:
+                    if prior is None:
+                        rng.ClearContents()
+                    else:
+                        rng.Formula = prior
+                except Exception:
+                    problems.append(str(rng.Address).replace("$", ""))
+            if new_sheet is not None:
+                prev = t.app.DisplayAlerts
+                try:
+                    t.app.DisplayAlerts = False
+                    new_sheet.Delete()
+                except Exception:
+                    problems.append(f"새 시트 {new_sheet.Name}")
+                finally:
+                    t.app.DisplayAlerts = prev
+            if problems:
+                failure = rt.InputError(str(failure).replace("아무것도 바꾸지 않았습니다.", "")
+                                        + f" 먼저 쓴 칸을 되돌리지 못한 곳: {', '.join(problems[:5])} (office.py undo로 되돌리세요).",
+                                        log_message=failure.log_message, no_fallback=True)
+            else:
+                t.changed = False
+                if saved_before is not None:
+                    try:
+                        t.doc.Saved = saved_before      # 되돌렸으니 저장 상태도 그대로 (되돌리기 지점도 남기지 않음)
+                    except Exception:
+                        pass
+    if failure is not None:
+        raise failure
+
+
 # --- write --cells: 흩어진 칸 여러 개에 한 번에 ---
 
 CELLS_MAX = 500                 # write --cells 한 번에 쓰는 칸 수 상한
@@ -1344,6 +1557,8 @@ def write_cells(args) -> Dict[str, Any]:
             if name.lower() not in sheets:
                 sheets[name.lower()] = t.sheet(name or None)       # 없는 시트는 [추천]/[후보] (만들지 않음)
             ops.append((sheets[name.lower()], r1, c1, r2, c2, kind, payload))
+        for key, ws in sheets.items():
+            check_protection(ws, [ws.Range(ws.Cells(o[1], o[2]), ws.Cells(o[3], o[4])) for o in ops if o[0] is ws], "values")
         conflicts: List[Tuple[str, Any]] = []
         same: List[str] = []
         todo: List[Tuple[Any, int, int, int, int, str, Any]] = []
@@ -1387,14 +1602,7 @@ def write_cells(args) -> Dict[str, Any]:
                 "같은 명령에 --overwrite를 한 번만 붙여 다시 실행하세요 (미리 보려면 --dry-run).",
                 log_message=head + _filled_preview(conflicts, log=True))
         if todo:
-            with off.excel_batch(t.app):
-                for ws, r1, c1, r2, c2, kind, payload in todo:
-                    rng = ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2))
-                    if kind == "formula":
-                        rng.Formula = payload
-                    else:
-                        rng.Value = payload
-                    t.changed = True
+            apply_writes(t, todo)          # 엑셀이 받지 않는 수식이 있으면 쓴 칸을 되돌리고 STOP_RETRY
         problems: List[str] = []
         for ws, r1, c1, r2, c2, kind, payload in todo:          # R1: 다시 읽어 확인 (시트마다)
             problems += [f"{ws.Name}!{p}" for p in _verify_written(ws, [(r1, c1, r2, c2, kind, payload)])]
@@ -1527,6 +1735,9 @@ def cmd_write(args) -> Dict[str, Any]:
             nrows, ncols = len(data), len(data[0])
             ops.append((r1, c1, r1 + nrows - 1, c1 + ncols - 1, "values", tuple(tuple(xl_text(v) for v in r) for r in data)))
 
+        if ws is not None:          # 보호된 시트: 아무것도 바꾸기 전에 (잠긴 칸이면 STOP_RETRY, 잠기지 않은 칸 [후보])
+            check_protection(ws, [ws.Range(ws.Cells(a, b), ws.Cells(c, d)) for (a, b, c, d, _, _) in ops], "values")
+
         # 2) never overwrite existing values without the user's consent (--append도 쓸 칸을 확인)
         if not args.overwrite and ws is not None:
             filled = [fc for (a, b, c, d, _, _) in ops for fc in _filled_cells(ws.Range(ws.Cells(a, b), ws.Cells(c, d)))]
@@ -1539,18 +1750,12 @@ def cmd_write(args) -> Dict[str, Any]:
                     "아니면 비어 있는 다른 --range를 쓰거나 --append로 아래에 이어 쓰세요.",
                     log_message=head + _filled_preview(filled, log=True))
 
-        # 3) write (새 시트는 여기서 처음 만듦)
+        # 3) write (새 시트는 여기서 처음 만듦). 엑셀이 받지 않는 수식이 있으면 쓴 칸과 새 시트를 되돌리고 STOP_RETRY
+        new_ws = None
         if ws is None:
-            ws = t.sheet(sh or args.sheet, create=True, allow_create=True)
-        written: List[str] = []
-        with off.excel_batch(t.app):
-            for a, b, c, d, kind, payload in ops:
-                cells_rng = ws.Range(ws.Cells(a, b), ws.Cells(c, d))
-                if kind == "formula":
-                    cells_rng.Formula = payload
-                else:
-                    cells_rng.Value = payload
-                written.append(addr(a, b, c, d))
+            ws = new_ws = t.sheet(sh or args.sheet, create=True, allow_create=True)
+        apply_writes(t, [(ws, *op) for op in ops], new_sheet=new_ws)
+        written: List[str] = [addr(a, b, c, d) for a, b, c, d, _, _ in ops]
 
         problems = _verify_written(ws, ops)
         first = parse_cell(written[0].split(":")[0])
@@ -1627,45 +1832,57 @@ def cmd_replace(args) -> Dict[str, Any]:
     with write_session(args, "replace") as t:
         sheets = [t.doc.Worksheets(i) for i in range(1, t.doc.Worksheets.Count + 1)] if args.all_sheets else [t.sheet(args.sheet)]
         ranges = [target_range(t, ws, args.range) for ws in sheets]     # 주소·시트 확인을 바꾸기 전에 모두
+        plans = []
+        for rng in ranges:
+            ws = rng.Worksheet               # --range 'S2!A1'은 읽기와 쓰기 모두 그 시트
+            values = off.range_to_matrix(rng.Value)
+            formulas = off.range_to_matrix(rng.Formula)
+            r0, c0 = int(rng.Row), int(rng.Column)
+            hits = []
+            for i, row in enumerate(values):
+                for j, v in enumerate(row):
+                    if v is None:
+                        continue
+                    s = str(out_value(v))
+                    new = None
+                    for find, rep in mapping.items():
+                        if (args.whole and s == find) or (not args.whole and find in s):
+                            new = rep if args.whole else (new or s).replace(find, rep)
+                    if new is not None:
+                        hits.append((i, j, v, s, new))
+            # 보호된 시트: 바꿀 칸이 잠겼으면(값) / 서식이 허용되지 않으면 아무것도 바꾸기 전에 멈춤
+            value_cells = [ws.Cells(r0 + i, c0 + j) for i, j, v, s_, new in hits
+                           if new != s_ and not (isinstance(formulas[i][j], str) and formulas[i][j].startswith("="))]
+            if value_cells:
+                check_protection(ws, value_cells, "values")
+            if fmt and hits:
+                check_protection(ws, [ws.Cells(r0 + i, c0 + j) for i, j, *_ in hits], "format_cells")
+            plans.append((rng, ws, formulas, r0, c0, hits))
         with off.excel_batch(t.app):
-            for rng in ranges:
-                ws = rng.Worksheet           # --range 'S2!A1'은 읽기와 쓰기 모두 그 시트
-                values = off.range_to_matrix(rng.Value)
-                formulas = off.range_to_matrix(rng.Formula)
-                r0, c0 = int(rng.Row), int(rng.Column)
-                for i, row in enumerate(values):
-                    for j, v in enumerate(row):
-                        if v is None:
-                            continue
-                        s = str(out_value(v))
-                        new = None
-                        for find, rep in mapping.items():
-                            if (args.whole and s == find) or (not args.whole and find in s):
-                                new = rep if args.whole else (new or s).replace(find, rep)
-                        if new is None:
-                            continue
-                        cell_ref = f"{ws.Name}!{addr(r0 + i, c0 + j)}"
-                        f = formulas[i][j]
-                        cell = ws.Cells(r0 + i, c0 + j)
-                        did = False
-                        is_formula = isinstance(f, str) and f.startswith("=")
-                        if is_formula:
-                            if new != s:
-                                skipped_formulas.append(cell_ref)      # 수식은 보존, 서식만
-                        elif new != s:
-                            val = xl_text(coerce(new) if not isinstance(v, str) else new)
-                            cell.Value = val
-                            written.append((ws, r0 + i, c0 + j, val, cell_ref))
-                            did = True
-                        if fmt:
-                            _apply_format(cell, fmt)
-                            did = True
-                        if did:
-                            replaced.append(cell_ref)
-                        elif not is_formula:
-                            # 찾는 글과 바꿀 글이 같고(--map {"A": "A"} 포함) 서식도 없으면 바뀐 것 없음:
-                            # 바꾼 칸으로 세지 않음 (되돌리기 지점도 남기지 않음)
-                            same_cells += 1
+            for rng, ws, formulas, r0, c0, hits in plans:
+                for i, j, v, s, new in hits:
+                    cell_ref = f"{ws.Name}!{addr(r0 + i, c0 + j)}"
+                    f = formulas[i][j]
+                    cell = ws.Cells(r0 + i, c0 + j)
+                    did = False
+                    is_formula = isinstance(f, str) and f.startswith("=")
+                    if is_formula:
+                        if new != s:
+                            skipped_formulas.append(cell_ref)      # 수식은 보존, 서식만
+                    elif new != s:
+                        val = xl_text(coerce(new) if not isinstance(v, str) else new)
+                        cell.Value = val
+                        written.append((ws, r0 + i, c0 + j, val, cell_ref))
+                        did = True
+                    if fmt:
+                        _apply_format(cell, fmt)
+                        did = True
+                    if did:
+                        replaced.append(cell_ref)
+                    elif not is_formula:
+                        # 찾는 글과 바꿀 글이 같고(--map {"A": "A"} 포함) 서식도 없으면 바뀐 것 없음:
+                        # 바꾼 칸으로 세지 않음 (되돌리기 지점도 남기지 않음)
+                        same_cells += 1
                 if replaced:
                     t.set_focus(sheet=ws)
         problems = [ref for ws, r, c, val, ref in written if not _same_cell(val, ws.Cells(r, c).Value)]
@@ -1851,6 +2068,7 @@ def cmd_style(args) -> Dict[str, Any]:
         ws = t.sheet(args.sheet)
         rng = target_range(t, ws, args.range)
         ws = rng.Worksheet
+        check_protection(ws, [rng], "format_cells")      # 보호된 시트에서 서식이 허용되지 않으면 바꾸기 전에 멈춤
         applied: Dict[str, Any] = {}
         with off.excel_batch(t.app):
             if args.clear:
@@ -2223,6 +2441,25 @@ def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
     return ""
 
 
+def _check_range_protection(ws: Any, rng: Any, a: str, args: Any) -> None:
+    """range 동작별 시트 보호 확인 (바꾸기 전에). freeze/unfreeze는 창 설정이라 보호와 상관없음."""
+    if a in ("freeze", "unfreeze", "copy"):
+        return
+    rows = _axis(args) == "rows"
+    need = {"autofit": "format_rows" if rows else "format_columns", "width": "format_columns", "height": "format_rows",
+            "hide": "format_rows" if rows else "format_columns", "unhide": "format_rows" if rows else "format_columns",
+            "border": "format_cells", "merge": "structure", "unmerge": "structure", "move": "structure"}.get(a)
+    target = rng if rng is not None else ws.UsedRange
+    if a == "clear":
+        if args.type in ("all", "contents"):
+            check_protection(ws, [target], "values")
+        if args.type in ("all", "formats"):
+            check_protection(ws, [target], "format_cells")
+        return
+    if need:
+        check_protection(ws, [target], need)
+
+
 def cmd_range(args) -> Dict[str, Any]:
     a = args.action
     if a in ("insert", "delete"):
@@ -2244,6 +2481,8 @@ def cmd_range(args) -> Dict[str, Any]:
         # 이미 그 상태라 바뀌는 것이 없으면(숨긴 것 없는 unhide, 고정 없는 unfreeze, 병합 없는 unmerge, 빈 범위 clear 등)
         # 바꾸지 않고 바뀐 것 없음으로 표시 (되돌리기 지점을 남기지 않음). 알 수 없으면 바꾼 것으로 봄
         noop = _range_noop(t, ws, rng, a, args)
+        if not noop:
+            _check_range_protection(ws, rng, a, args)
         if noop:
             detail = f"(바뀐 것 없음: {noop})"
         elif a == "autofit":
@@ -2297,6 +2536,7 @@ def cmd_range(args) -> Dict[str, Any]:
             dsheet, dcell = split_sheet(args.dest)
             dws = t.sheet(dsheet) if dsheet else ws
             dest = dws.Range(dcell)
+            check_protection(dws, [dest], "structure")       # 붙여 넣을 시트가 보호되어 있으면 (move의 원본 시트는 위에서 확인)
             if not args.overwrite:
                 dr, dc = parse_cell(dcell.replace("$", "").split(":")[0])
                 nr, nc = int(rng.Rows.Count), int(rng.Columns.Count)
@@ -2585,6 +2825,8 @@ def range_lines(args) -> Dict[str, Any]:
         ws = t.sheet(sheet) if sheet else t.sheet(args.sheet)
         block = ws.Range(_lines_addr(axis, n1, n2))
         lines = block.EntireRow if axis == "rows" else block.EntireColumn
+        if not args.dry_run:
+            check_protection(ws, [block], f"{a}_{'rows' if axis == 'rows' else 'columns'}")
         box = _used_box(ws)
         filled: List[Tuple[str, Any]] = []
         if a == "delete" and box is not None:
@@ -2844,6 +3086,7 @@ def range_sort(args) -> Dict[str, Any]:
         if used is None:
             raise rt.InputError(f"{args.range}에 정렬할 값이 없습니다 (사용 범위 밖).")
         rng = used
+        check_protection(ws, [rng], "sort")              # 보호된 시트: 잠긴 칸이 있거나 정렬이 허용되지 않으면 멈춤
         r1, c1 = int(rng.Row), int(rng.Column)
         nr, nc = int(rng.Rows.Count), int(rng.Columns.Count)
         r2, c2 = r1 + nr - 1, c1 + nc - 1
@@ -3124,10 +3367,12 @@ def cmd_chart(args) -> Dict[str, Any]:
                 ws = t.sheet(args.sheet)
                 n = len(_chart_objects(ws))
                 if n:
+                    check_protection(ws, [], "objects")
                     ws.ChartObjects().Delete()
                 msg = f"시트 '{ws.Name}'의 차트 {n}개를 삭제했습니다"
             else:
                 ws, obj = find_chart(t, args.name, args.sheet)
+                check_protection(ws, [], "objects")
                 gone = str(obj.Name)
                 before = sum(1 for o in _chart_objects(ws) if str(o.Name) == gone)   # 같은 이름이 여럿일 수 있음
                 msg = f"차트 '{gone}'을(를) 삭제했습니다"
@@ -3147,6 +3392,7 @@ def cmd_chart(args) -> Dict[str, Any]:
         ws = rng.Worksheet
         if args.range is None and int(rng.Rows.Count) * int(rng.Columns.Count) <= 1:
             raise rt.InputError("차트로 만들 데이터가 없습니다. --range로 데이터 범위를 지정하세요.")
+        check_protection(ws, [], "objects")              # 보호된 시트에서 개체(차트) 편집이 막혀 있으면 만들기 전에
         values = off.range_to_matrix(rng.Value)
         chart_type = args.type
         # 첫 열이 숫자(x값)인 꺾은선은 분산형(선)으로 그려야 x축이 숫자 축이 됨 (예: 사인 그래프)
@@ -3399,6 +3645,8 @@ def _comment_list(args) -> Dict[str, Any]:
 
 def _comment_add(args, t: Any) -> Dict[str, Any]:
     plan, warnings = _comment_plan(args, t)
+    for ws in {id(p[0]): p[0] for p in plan}.values():
+        check_protection(ws, [], "objects")              # 보호된 시트에서 메모(개체) 편집이 막혀 있으면 달기 전에
     existing = [(ws, r, c, ws.Cells(r, c).Comment) for ws, r, c, _ in plan]
     taken = [(ws, r, c, n) for ws, r, c, n in existing if n is not None]
     old = {(str(ws.Name), r, c): _note_text(n) for ws, r, c, n in taken}
@@ -3488,6 +3736,8 @@ def _comment_delete(args, t: Any) -> Dict[str, Any]:
     sheet = str(ws.Name)
     where = f"{sheet}!{str(rng.Address).replace('$', '')}"
     planned = [f"메모 삭제: {sheet}!{addr(r, c)}" for r, c, _ in notes]
+    if notes:
+        check_protection(ws, [], "objects")
     if not notes:
         if not args.dry_run:
             t.set_focus(sheet=ws, changed=False)       # 바뀐 것 없음: 이번 되돌리기 지점은 지움
