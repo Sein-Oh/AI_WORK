@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.36**, **office-cli 1.4.32**
+- main 기준 도구 버전: **ml-kit 2.9.37**, **office-cli 1.4.33**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -41,6 +41,7 @@
 | office-cli 1.4.30 | outlook `--folder` 오류의 `(경로: ...)`도 오류 로그에서는 계정 이름 자리를 `<메일 계정>`으로(`not_found`의 `log_extra`). `transfer --method relay --to ppt`는 받는 PPT의 `--slide`를 확인한 뒤에 클립보드·임시 워드를 씀(없는 슬라이드로 클립보드를 덮어쓰지 않음). relay `--to-target ""`는 활성 문서(`KeyError` 아님) |
 | office-cli 1.4.31 | relay `--to ppt`는 열린·활성 PPT의 `--slide`를 찾기만으로 확인하고 쓰기 세션(되돌리기 지점)은 임시 워드 단계 뒤에 엶(워드 단계가 실패해도 바꾼 것 없는 지점이 남지 않음). 닫힌 xlsx의 계산된 값이 없는 수식 칸(openpyxl이 쓰고 엑셀에서 연 적 없는 파일)은 excel read/export, transfer 범위, reader read/search에서 UNVERIFIED와 칸 목록(`uncomputed_formulas`). docx 글상자 글을 따로 단위로 읽음(두 벌 저장은 한 번). 닫힌 docx 표 번호는 콘텐츠 컨트롤 안의 표도 셈(read·COM과 같음). word 굵게 위치는 UTF-16 단위. excel read --search에 `count`와 `VERIFIED: 0건.`. 마크다운 `---`는 word에서 구분선(아래 테두리 빈 단락), 맨 앞 YAML 머리말은 넣지 않고 `warnings` |
 | office-cli 1.4.32 | 닫힌 xlsx를 범위 없이 읽을 때(`excel read`·`--search`·`--save`, `export`, transfer, `B:B`, 큰 범위 줄이기) 계산된 값이 없는 수식 칸의 행·열(합계 행 등)을 자르지 않고 남기며 UNVERIFIED. workbook.xml `fullCalcOnLoad`(xlsxwriter·openpyxl)면 모든 수식 칸을 계산되지 않은 칸으로 봄(`<v>0</v>`을 값으로 믿지 않음, 엑셀은 저장할 때 지움). 수식 칸 확인이 실패하면(MemoryError 포함) `uncomputed_check: "unknown"`과 UNVERIFIED "수식 계산 여부를 확인하지 못함". reader 파서 버전 10 |
+| office-cli 1.4.33 | En-Genius 스킬로 실행하면(`ENGENIUS_OUT`이 있으면) `config.json`, data, cache를 `<사용자>\Documents\En-Genius\CLI-data\office-cli`에 둠 (트레이가 스킬 폴더를 실행마다 지우므로). `OFFICE_CLI_CONFIG`로 설정 파일 위치 지정 가능. OpenCode·`C:\CLI` 실행은 그대로 |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
 | ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `docs/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |
@@ -67,6 +68,7 @@
 | ml-kit 2.9.34 | 2.9.33 회귀 수정: `ml_map.py --points`에서 `-y` 이름이 든 기준 열(`냉각수 온도(°C)`와 `-y 온도`, `함수율%`와 `-y 수율`)이 실측값·메모 열로 말없이 빠지던 문제(비슷한 열 검사를 먼저, `[후보]`), `-i`와 `--points`의 `%` 값(`함수율=10%`, `12%`)을 데이터처럼 읽음(경고). 한 숫자 열에 `%` 칸과 `%` 없는 숫자 칸이 섞이면(`11.9%`, `0.119`) 학습·예측·표 보간 모두 `STOP_RETRY`. 숫자로 읽히는 단위 없는 이름(`2(mm)`의 `2`)도 `--eval` 수식 이름으로 쓰지 않고 수식에 그 숫자가 있으면 `STOP_RETRY` |
 | ml-kit 2.9.35 | 2.9.34 회귀 수정: `ml_map.py --points`의 실측값·메모 열(`수율_실측`, `목표수율`, `-y 수율`)이 쓰지 않은 `함수율` 열 때문에 `[후보] '함수율'`로 멈추던 문제(두 이름에 든 `-y` 이름을 빼고 비교, `함수율%`는 그대로 멈춤). `--eval`의 단위까지 쓴 숫자 이름 열(`0.5(mm)*2(mm)`, `온도+2(mm)`)이 `STOP_RETRY`되던 문제와 더 긴 숫자 안의 숫자(`온도*2.5`와 `2(mm)` 열)를 그 열로 보던 문제. 학습의 섞인 `%` 검사는 `제외` 표시 행을 빼고 |
 | ml-kit 2.9.36 | 2.9.35 회귀 수정: `ml_map.py --points`에서 위치·단이 다른 키 열(`온도_1`과 데이터 `온도(1)`, `온도_상`과 `온도(상)`, `압력1`과 `압력(1단)`)을 말없이 빼고 `VERIFIED`로 내던 문제. `-y` 이름을 뺀 나머지를 기호 없이 비교하고 한쪽이 다른 쪽을 포함해도 비슷한 열로 보아 `[후보]`로 멈춤 |
+| ml-kit 2.9.37 | En-Genius 스킬로 실행하면 데이터 폴더(오류 로그)를 `<사용자>\Documents\En-Genius\CLI-data\ml-kit\data`에 둠. `ML_KIT_DATA_DIR`가 있으면 그것이 먼저. 모델·보고서는 지금처럼 데이터 파일 옆 |
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
 | 원격 에이전트 | `docs/remote-agent/run.py`가 바뀜: 사용하는 팀원은 한 번 다시 올림 |
 

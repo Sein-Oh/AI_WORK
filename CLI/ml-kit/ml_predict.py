@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.36"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.37"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -174,9 +174,19 @@ def record_recovery_attempt(msg: str) -> None:
 # by people and development agents. The path is never put in stdout JSON.
 # ------------------------------------------------------------------------------
 
+def engenius_home() -> Optional[str]:
+    """Fixed folder for tool data when run as an En-Genius skill (the tray sets ENGENIUS_OUT, unpacks the skill files
+    into a temporary folder for each run and deletes it afterwards, so <tool folder>/data would not survive)."""
+    if not os.environ.get("ENGENIUS_OUT"):
+        return None
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(home, "Documents", "En-Genius", "CLI-data", "ml-kit")
+
+
 def get_data_dir() -> str:
-    """Tool data folder: ML_KIT_DATA_DIR > <tool folder>/data (not created here)."""
-    return os.path.abspath(os.environ.get("ML_KIT_DATA_DIR") or os.path.join(TOOL_DIR, "data"))
+    """Tool data folder: ML_KIT_DATA_DIR > En-Genius fixed folder/data > <tool folder>/data (not created here)."""
+    return os.path.abspath(os.environ.get("ML_KIT_DATA_DIR")
+                           or os.path.join(engenius_home() or TOOL_DIR, "data"))
 
 
 def error_log_path() -> str:

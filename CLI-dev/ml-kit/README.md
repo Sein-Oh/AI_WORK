@@ -1040,6 +1040,7 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
 ### 4) 오류 로그 (`data\logs\errors.txt`, 2.3.1)
 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 도구 폴더의 `data\logs\errors.txt`에 덧붙습니다.
 `C:\CLI\ml-kit`에 배포했다면 `C:\CLI\ml-kit\data\logs\errors.txt`입니다. 환경변수 `ML_KIT_DATA_DIR`로 데이터 폴더를 바꿀 수 있습니다.
+En-Genius 스킬로 실행하면(트레이가 `ENGENIUS_OUT`을 넣고 스킬 폴더를 실행마다 지움) 데이터 폴더는 `%USERPROFILE%\Documents\En-Genius\CLI-data\ml-kit\data`입니다 (2.9.37, `ML_KIT_DATA_DIR`가 먼저). 스킬 패키지는 `docs/engenius/`.
 - 기록: 시각, ml-kit 버전, Python 버전, OS, 실행한 명령(스크립트와 인자), 오류 종류와 메시지,
   자동 복구가 한도를 넘겨 실패한 경우 `복구 시도:`, 내부 오류(`ERROR:`)일 때만 traceback.
   데이터 내용은 기록하지 않고 경로와 인자만 남깁니다.
