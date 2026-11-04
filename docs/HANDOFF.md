@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.59**, **office-cli 1.4.62**
+- main 기준 도구 버전: **ml-kit 2.9.59**, **office-cli 1.4.63**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -49,6 +49,7 @@
 | office-cli 1.4.49~1.4.51 | 규격서 대조 작업: `reader.py read --section`(캐시 문서 장절 읽기), `excel.py comment`(칸 메모 목록·달기·지우기, CSV로 여러 개), `reader.py search` 재현율(조사·단위 표기·전각 허용, 0건이면 부분/오타 일치로 넓힘 `match_mode`, 점수 순위, `data\synonyms.txt` 동의어) |
 | office-cli 1.4.52~1.4.61 | `transfer --method`·`search -c` 삭제, 여러 칸 한 번에 `excel.py write --cells`, 시트 보호 `sheet_protected`와 거부된 수식 `[추천]`(되돌림), reader 등록·검색 `CONTINUE:`(`OFFICE_CLI_TIME_LIMIT`), 규격 대조 `excel.py check`, 열기 감시 30초 `drm_or_dialog`, `reader.py diff`(판 비교), 메일 짧은 `id`(긴 값은 `entry_id`)·`thread`·`calendar --days`, `word.py fill --file` |
 | office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`CLI/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
+| office-cli 1.4.63 | 독립 검토 버그 수정: 2열 표 파일(칸값·메모·값 파일)의 셋째 열은 쓰기 전에 STOP_RETRY(큰따옴표 안내), `--cells` 따옴표·수식 나누기, `comment --append` 재실행 중복, 엑셀 쓰기 실패 후 되돌리기가 글자 상수(`007`, `1-2`)를 바꾸던 것, `check`가 같은 문장의 다른 항목 조건을 섞던 것과 칸 단위 없음은 `판단필요`, `word.py fill` 표 칸에 행·열 머리글 표시·문서 보호 확인, 열기 감시가 사용자 문서가 있는 Word·PowerPoint를 끝내지 않음 |
 | office-cli 1.4.39 | 실제 사용 오류 로그 반영: `office.py write`, `office.py transfer --text`, `reader.py read --section`에 맞는 명령(워드/PPT/엑셀 write, reader search --section) 안내, `excel.py write --cell`에 `[추천] --range` |
 | office-cli 1.4.38 | `opencode run` 기록에서: 엑셀 `write`의 `--text`에 `[추천] --value`(전에는 `--target`), 표 파일 못 찾음 후보에 표 파일만, SKILL.md에 칸 하나 쓰기(`--value`) 줄 |
 | office-cli 1.4.37 | SKILL.md에 빠졌던 기존 기능(메일 list/folders·search --folder/--where·reply --all·new --cc·--body-file, PPT slide add/duplicate/delete/move, 엑셀 sheet/range/export/style/replace --all-sheets·차트 종류, 워드 --toc/--callout·replace --highlight)을 넣고 SKILL.md의 명령·옵션이 argparse에 있는지 테스트로 대조. 새 기능: `outlook.py list|search --days N|--since YYYY-MM-DD`(period), `excel.py range --action insert|delete`(값이 있으면 needs_user_decision, `--dry-run`, `--overwrite`), `range --action sort --by "부서,금액" [--desc]`, `read --where "금액 >= 100; 부서 = 영업"`(`row_numbers`) |
