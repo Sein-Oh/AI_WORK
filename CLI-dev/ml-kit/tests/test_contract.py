@@ -227,6 +227,30 @@ def test_report_unknown_version_fails(trained):
     work, _, _ = trained
     payload = run_fail("ml_report.py", "-d", str(work / "sample_ml_data"), "-v", "v99")
     assert "v99" in payload["message"]
+    assert "[후보] v1" in payload["message"] or "[추천] python" in payload["message"], payload     # 2.9.48
+
+
+@needs_docx
+def test_report_unknown_version_recommends_the_only_one(tmp_path):
+    root = tmp_path / "y_ml_data"
+    (root / "v1").mkdir(parents=True)
+    (root / "v1" / "leaderboard.json").write_text("{}", encoding="utf-8")
+    payload = run_fail("ml_report.py", "-d", str(root), "-v", "v5", "--title", "제목")
+    # 2.9.48: the one trained version is recommended as a full command (-m), the other options kept
+    rec = payload["message"].split("[추천] ")[1]
+    assert rec.startswith("python ") and rec.endswith(str(root / "v1")) and "--title" in rec, rec
+    assert " -v " not in rec and " -d " not in rec, rec
+
+
+@needs_docx
+def test_report_unknown_version_lists_candidates(tmp_path):
+    root = tmp_path / "x_ml_data"
+    for v in ("v1", "v3"):
+        (root / v).mkdir(parents=True)
+        (root / v / "leaderboard.json").write_text("{}", encoding="utf-8")
+    (root / "v2").mkdir()                                            # no leaderboard.json: not a trained version
+    payload = run_fail("ml_report.py", "-m", str(root / "v9"))
+    assert "[후보] v1, v3" in payload["message"] and "[추천]" not in payload["message"], payload
 
 
 # ---- 도움말과 STOP_RETRY 안내 문구 ----------------------------------------------------------------------

@@ -27,6 +27,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
     normalize_version, strip_unit, note_recovered, read_text_file, resolve_column_names, VERSION,
+    command_text, quote_arg,
 )
 
 setup_console()
@@ -889,10 +890,31 @@ def _read_jsonl(path: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _version_hint(vdir: str) -> str:
+    """[추천] / [후보] for a version folder that does not exist: the versions of the same data folder that hold a
+    trained version (leaderboard.json). One -> [추천] the running command with that folder (-m, full command, R8);
+    several -> [후보] (the user picks: another version is another model)."""
+    root = os.path.dirname(vdir)
+    if not os.path.isdir(root):
+        return ""
+    found = [d for d in os.listdir(root)
+             if re.fullmatch(r"v\d+", d) and os.path.isfile(os.path.join(root, d, "leaderboard.json"))]
+    found.sort(key=lambda d: int(d[1:]))
+    if not found:
+        return " 이 데이터 폴더에 학습한 버전이 없습니다. 먼저 ml_train.py로 학습하십시오."
+    if len(found) == 1:
+        cmd = command_text(drop={"--model": "model", "-m": "model", "--version": "version", "-v": "version",
+                                 "--data-dir": "data_dir", "-d": "data_dir"})
+        path = os.path.join(root, found[0])
+        return f" 있는 버전은 {found[0]} 하나입니다. [추천] " + (f"{cmd} -m {quote_arg(path)}" if cmd else f"-m {quote_arg(path)}")
+    return f" 있는 버전 중에서 사용자에게 고르게 하십시오: [후보] {', '.join(found[-10:])}"
+
+
 def load_version(version_dir: str, target_filter: Optional[List[str]] = None) -> Dict[str, Any]:
     vdir = os.path.abspath(version_dir)
     if not os.path.isdir(vdir):
-        raise FileNotFoundError(f"버전 폴더를 찾을 수 없습니다: {vdir} (학습 결과 JSON의 version_dir 값을 지정하십시오)")
+        raise FileNotFoundError(f"버전 폴더를 찾을 수 없습니다: {vdir} (학습 결과 JSON의 version_dir 값을 지정하십시오)."
+                                + _version_hint(vdir))
     lb_path = os.path.join(vdir, "leaderboard.json")
     if not os.path.isfile(lb_path):
         raise InputError(f"leaderboard.json이 없습니다. ml_train.py가 만든 버전 폴더(vX)를 지정하십시오: {vdir}")
