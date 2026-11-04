@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.38**, **office-cli 1.4.36**
+- main 기준 도구 버전: **ml-kit 2.9.38**, **office-cli 1.4.37**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -45,6 +45,7 @@
 | office-cli 1.4.34 | 새 명령 `outlook.py attachments`: 첨부 목록(`index`, `name`, `size`, `hidden_inline`), `--save [전체 경로 폴더]`로 내려받기(기본 `%USERPROFILE%\Downloads\메일 첨부\<시각>_<제목>`, 자동 정리 안 함), `--name 일부`/`--index 1,3`으로 고르기(맞는 것이 없으면 `[후보]`), 같은 이름은 ` (2)`와 `recovered`. `read/current --save-attach` 없앰(대신 `attachment_names`와 `next_commands` "첨부 내려받기"). `new/reply/forward --attach`는 없는 전체 경로 파일이면 메일을 만들기 전에 같은 폴더의 비슷한 파일 `[후보]`, 붙인 뒤 `Attachments.Count`로 확인(못 하면 UNVERIFIED, `--send`면 보내지 않음) |
 | office-cli 1.4.35 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\office-cli`를 실행: OpenCode와 같은 data, cache, config.json을 씀 (1.4.33의 고정 폴더는 도구가 트레이 임시 폴더에서 돌 때만) |
 | office-cli 1.4.36 | `excel.py read --formulas`: 읽은 범위의 수식 칸 목록(`formulas`: `cell`, `formula`, `value`, 배열 수식은 `array`·`array_range`), `formula_count`, 200개 상한(`formulas_truncated`, 전체는 `full_result_file` CSV). 열린 문서는 Formula2(없으면 Formula)를 범위 한 번에, 닫힌 xlsx는 openpyxl. SKILL.md가 바뀌어 En-Genius 스킬 zip을 다시 가져와야 함 |
+| office-cli 1.4.37 | SKILL.md에 빠졌던 기존 기능(메일 list/folders·search --folder/--where·reply --all·new --cc·--body-file, PPT slide add/duplicate/delete/move, 엑셀 sheet/range/export/style/replace --all-sheets·차트 종류, 워드 --toc/--callout·replace --highlight)을 넣고 SKILL.md의 명령·옵션이 argparse에 있는지 테스트로 대조. 새 기능: `outlook.py list|search --days N|--since YYYY-MM-DD`(period), `excel.py range --action insert|delete`(값이 있으면 needs_user_decision, `--dry-run`, `--overwrite`), `range --action sort --by "부서,금액" [--desc]`, `read --where "금액 >= 100; 부서 = 영업"`(`row_numbers`) |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
 | ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `docs/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |

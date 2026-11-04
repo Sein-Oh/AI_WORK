@@ -107,14 +107,14 @@ th { background: var(--soft); font-weight: 700; }
 <button id="menu" type="button">목차 열기/닫기</button>
 <nav id="side">
   <div class="brand">office-cli 사용 가이드</div>
-  <div class="ver">베타 | office-cli 1.4.36 | Gemma 기준</div>
+  <div class="ver">베타 | office-cli 1.4.37 | Gemma 기준</div>
   <input id="tocq" type="search" placeholder="목차에서 찾기 (예: 차트)">
   <div id="toc"></div>
 </nav>
 <main>
 <header class="top">
   <h1>office-cli 사용 가이드</h1>
-  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.36</p>
+  <p>엑셀, 워드, 파워포인트, 아웃룩, 문서 검색을 AI 에이전트(Gemma)에게 말로 시키는 방법 | 베타테스트용 | office-cli 1.4.37</p>
 </header>
 
 <p class="lead">office-cli는 에이전트가 Office 문서를 직접 읽고 고칠 수 있게 해 주는 도구입니다. 채팅에 <b>하고 싶은 일을 평소 말투로</b> 쓰면 에이전트가 알맞은 도구를 골라 실행하고 결과를 알려 줍니다.
@@ -199,6 +199,12 @@ th { background: var(--soft); font-weight: 700; }
   <p class="when">이럴 때: 값이 어떤 수식으로 계산됐는지 확인하고 싶을 때</p>
   <p class="req">열린 엑셀 A1:F30의 수식 보여줘</p>
   <div class="res"><p>수식이 든 칸마다 주소, 수식(예: <code>=SUM(B2:B4)</code>), 계산된 값을 알려 줍니다. 수식이 없으면 없다고 알려 줍니다. 닫힌 xlsx 파일도 엑셀 없이 읽습니다.</p></div>
+</div>
+<div class="case">
+  <h4>조건에 맞는 행만 보기</h4>
+  <p class="when">이럴 때: 큰 표에서 금액이 얼마 이상인 행, 특정 부서의 행만 보고 싶을 때</p>
+  <p class="req">열린 엑셀에서 금액이 100 이상이고 부서가 영업인 행만 보여줘</p>
+  <div class="res"><p>첫 행을 머리글로 보고, 조건에 모두 맞는 행과 그 행 번호를 알려 줍니다. 맞는 행이 없으면 0건이라고 알려 줍니다. 닫힌 xlsx·CSV 파일도 됩니다.</p></div>
 </div>
 <div class="case">
   <h4>CSV 파일 읽기, 행 수 세기</h4>
@@ -295,11 +301,23 @@ th { background: var(--soft); font-weight: 700; }
   <div class="res"><p>바꾼 칸 수를 알려 줍니다. 수식이 들어 있는 칸의 수식은 보존합니다.</p></div>
 </div>
 
-<h3 id="x-sheet">2.7 시트 추가, 칸 병합</h3>
+<h3 id="x-sheet">2.7 시트 추가, 칸 병합, 행·열 넣기·지우기, 정렬</h3>
 <div class="case">
   <p class="req">열린 엑셀에 "11월" 시트 추가해줘</p>
   <p class="req">A1:E1 칸 병합해줘</p>
   <div class="res"><p>병합할 칸 중 값이 든 칸이 둘 이상이면 값이 사라질 수 있어 먼저 묻습니다.</p></div>
+</div>
+<div class="case">
+  <h4>행·열 넣기, 지우기</h4>
+  <p class="req">5행 위에 빈 행 3개 넣어줘</p>
+  <p class="req">B열과 C열 지워줘</p>
+  <div class="res"><p>지울 행·열에 값이 있으면 지우지 않고 몇 칸이 지워지는지 먼저 알려 줍니다. "지워도 돼"라고 답하면 지웁니다. 잘못 지웠으면 되돌리기(8장)로 돌아갑니다.</p></div>
+</div>
+<div class="case">
+  <h4>정렬</h4>
+  <p class="req">A1:E100을 금액 큰 순서로 정렬해줘</p>
+  <p class="req">부서별로, 같은 부서 안에서는 금액 큰 순서로 정렬해줘</p>
+  <div class="res"><p>머리글 행은 그대로 두고 아래 행만 정렬한 뒤 다시 읽어 순서를 확인합니다. 병합된 칸이 있거나, 범위 옆 열에도 표가 이어지면(정렬하면 행이 어긋남) 먼저 알려 줍니다.</p></div>
 </div>
 
 <h3 id="x-export">2.8 다른 형식으로 저장</h3>
@@ -490,6 +508,12 @@ th { background: var(--soft); font-weight: 700; }
   <p class="req">"견적" 들어간 메일 찾아줘</p>
   <p class="req">김과장이 보낸 메일 중에 "회의" 들어간 거 찾아줘</p>
   <div class="res"><p>찾은 메일 목록(보낸 사람, 날짜, 제목)을 알려 줍니다. "2번 메일 읽어줘"처럼 이어서 요청하면 본문을 읽습니다.</p></div>
+</div>
+<div class="case">
+  <h4>기간으로 메일 보기</h4>
+  <p class="req">최근 7일 동안 받은 안 읽은 메일 보여줘</p>
+  <p class="req">11월 1일 이후에 받은 "견적" 메일 찾아줘</p>
+  <div class="res"><p>오늘을 포함한 기간(예: 2026-10-29 ~ 2026-11-04)을 함께 알려 줍니다.</p></div>
 </div>
 <div class="case">
   <h4>답장 초안</h4>

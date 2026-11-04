@@ -2,6 +2,54 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.37] - 2026-11-04
+
+SKILL.md에 없던 기존 기능을 넣고(경량 LLM은 SKILL.md에 없는 기능을 "지원하지 않음"으로 답함) 빠진 기능 넷을 더함.
+회귀 테스트: `tests/test_review_v1437.py` (1.4.36에서 48개 중 47개 실패·오류, 통과한 1개는 SKILL.md와 argparse 대조로 1.4.36 SKILL.md도 어긋남이 없었음).
+
+### 기능
+- `outlook.py list|search --days N`(오늘 포함 최근 N일, 1 = 오늘) / `--since YYYY-MM-DD`(그 날짜 0시부터). `--unread`, `--query`, `--from`과 함께 씀.
+  - `list`: Jet `[ReceivedTime] >= 'YYYY-MM-DD HH:MM'`(현지 시각). `MM/DD/YYYY`는 일/월 순서 지역에서 뒤바뀔 수 있어 쓰지 않음.
+  - `search`: DASL `"urn:schemas:httpmail:datereceived" >= '<UTC 시각>'`을 같은 `@SQL=`에 AND로 붙임(DASL 날짜 비교는 UTC. 현지 시각으로 읽혀도
+    UTC보다 빠른 지역은 더 넓게 거르므로 빠지는 메일이 없음). `--days`/`--since`만으로도 검색됨.
+  - 두 경우 모두 받은 시각을 메일마다 다시 확인하고(내림차순이라 기간 밖 메일을 만나면 멈춤), Outlook이 날짜 조건을 거부하면 날짜 없는 필터로
+    거른 뒤 받은 시각으로 거르고 `recovered`로 알림(JIT 복구).
+  - 결과 `period`(`since`, `until`, `days`)와 preview·0건 안내의 기간. 잘못된 날짜는 Outlook에 연결하기 전에 STOP_RETRY:
+    고칠 수 있는 표기(`2026/10/1`, `20261001`, `2026년 10월 1일`, `2026-1-5`)는 `[추천] YYYY-MM-DD`, `--days 0`은 `[추천] 1`, `--days -7`은 `[추천] 7`.
+    없는 날짜(`2026-02-30`), 미래 날짜, 읽을 수 없는 글, `--days`와 `--since`를 함께 쓰면 `[추천]` 없이 STOP_RETRY.
+- `excel.py range --action insert|delete --range 5:7`(행) / `B:C`(열), `5`, `B`도 됨. `A5:C7`은 `--axis rows|cols`가 필요(없으면 `[후보]`).
+  - insert는 범위 앞에 넣고 아래(오른쪽)가 밀림. delete는 지울 행·열에 값·수식이 있는 칸이 있으면 지우지 않고 `needs_user_decision`(칸 수와 주소
+    5개까지. 값은 stdout·오류 로그 어디에도 넣지 않음), 사용자가 원하면 `--overwrite`.
+  - `--dry-run`(insert/delete만): 바꾸지 않고 `filled_cells`, `filled_addresses`(20개까지), 실행 명령 `next_commands[0]`(값이 있으면 `--overwrite`).
+    되돌리기 지점도 남기지 않음. 다른 range 동작에 `--dry-run`을 주면 STOP_RETRY.
+  - 되돌리기 지점(열린 문서 스냅샷)은 다른 쓰기와 같음. 닫힌 파일은 다른 range 동작처럼 엑셀로 열어 고침.
+  - 확인(R1): 사용 범위 끝 행(열)이 넣은·지운 수만큼 바뀌었는지, 옮겨진 칸 하나(수식이 아닌 값의 첫 칸, `moved`)가 기대한 자리에 같은 값인지.
+- `excel.py range --action sort --range A1:E100 --by "<열>" [--desc [기준]] [--header auto|yes|no]`: Range.Sort, 기준 3개까지(`--by "부서,금액"`).
+  - `--desc`만 쓰면 모든 기준 내림차순, `--desc "금액"`은 그 기준만. `--by`가 머리글 이름이면 첫 행은 머리글, 열 문자면 `--header auto`가
+    판단(첫 행 칸이 모두 글자이고 굵게이거나 아래에 숫자·날짜가 있는 열이 있으면 머리글). 결과 `header`, `header_decided_by`, `keys`.
+  - 없는 열은 머리글 이름 `[후보]`(오류 로그에는 남기지 않음). 병합된 칸은 STOP_RETRY, 범위 바로 옆 열의 같은 행에 값이 있으면(표를 가로지름)
+    `needs_user_decision`과 표 전체 범위. 열 전체 범위는 사용 범위까지만. 이미 정렬되어 있으면 바꾸지 않음(`unchanged`).
+  - 확인(R1): 다시 읽어 행 수, 머리글 행, 행 묶음이 그대로인지와 기준 순서(숫자 < 글자 < 논리값, 빈 칸은 맨 뒤). 순서를 확인하지 못하면 `UNVERIFIED:`.
+- `excel.py read --where "<열> <연산자> <값>; ..."`: 첫 행을 머리글로 보고 조건에 모두 맞는 행만. 열린 문서, 닫힌 xlsx, CSV 모두 같은 읽기 결과를 씀.
+  - 연산자 `>= <= > < = != ~`(포함). 숫자는 숫자로(`1,000` 포함), 날짜 칸은 `YYYY-MM-DD` 값과 날짜로, 글자는 앞뒤 공백을 빼고 대소문자 없이.
+  - 결과 `values`(머리글 + 맞는 행), `row_numbers`(`values`와 같은 순서의 시트 행 번호), `count`, `data_rows`, `where`. 0건은 `VERIFIED: 0건.`(R2).
+    잘림(`truncated`, `--where`가 든 저장 명령)과 `--save`(머리글과 맞는 행 CSV, 다시 읽어 확인)는 read와 같음.
+  - 없는 열은 머리글 이름 `[후보]`. 고칠 수 있는 표기(`==`, `=>`, `<>`, `AND`, `contains` 등)는 고친 식 `[추천]`, 읽을 수 없는 식은 형식과 예만.
+    `--search`, `--formulas`와 함께 쓸 수 없음.
+
+### 문서
+- SKILL.md에 이미 있던 기능을 넣음: 메일 `list [--unread] [--folder] [-n]`, `folders`, `search --folder --where subject`, `reply --all`, `new --cc`, `--body-file`,
+  PPT `slide --action add|duplicate|delete|move --slide --to --layout`, 엑셀 `sheet --action add|rename|copy|delete --name --new-name`,
+  `range --action freeze|...|border --dest --size`, `export --save .csv|.xlsx|.pdf --range`, `style --number-format --align --border`,
+  `replace --all-sheets`, 차트 `--type`, 워드 `write --toc`, `--callout`, `replace --find --highlight`(서식만).
+- SKILL.md에 새 기능(`--days`/`--since`, `range insert|delete|sort`, `read --where`). 행·열 삭제와 `--overwrite`(지우기)는 사용자가 요청한 경우에만.
+- README excel·outlook 절, 사용 가이드 2.1(조건에 맞는 행), 2.7(행·열 넣기·지우기, 정렬), 6절(기간으로 메일 보기).
+
+### 테스트
+- SKILL.md의 백틱 구간(`<script>.py <명령> --옵션`, 표의 한 행 안에서는 앞 명령에 딸린 `--옵션`과 `명령 --옵션`)의 명령·옵션·`a|b` 선택지가
+  argparse에 있는지 대조(앞으로 문서와 코드가 어긋나지 않게).
+- 가짜 Excel(`tests/fake_excel.py`): `EntireRow`/`EntireColumn`의 `Insert`/`Delete`(칸 옮기기), `Range.Sort`(Key1~Key3, Header).
+
 ## [1.4.36] - 2026-11-04
 
 엑셀 수식 읽기. 회귀 테스트: `tests/test_review_v1436.py` (1.4.35에서 18개 중 17개 실패, 통과한 1개는 `--formulas` 없는 읽기가 그대로인지).
@@ -1010,7 +1058,6 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - 새 문서 만들기 / 파일 열기 (`office_window --new/--open`).
 - EML 읽기·마스터 JSON 빌드·스레드는 Outlook 통합 도구에서 별도로 다룸 (reader.py에서는 1.3.0에서 제거).
 - 워드 그림/도형 -> PPT 전달 (`office_bridge` word->ppt), PPT -> 워드 전달.
-- Outlook 날짜 범위 검색 (`--since`).
 
 ### 1.4.0 점검에서 남긴 것
 - PowerPoint 닫힌 파일의 열기 암호, DRM 인증 창이 뜨는 문서: 백그라운드에서 멈출 수 있음 (감시 시간 초과 후 정리 필요).
@@ -1027,6 +1074,11 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - 24차 확인 검사 LOW-4: 데이터(A1:C10)와 멀리 떨어진 계산 안 된 수식 칸 하나(Z200000 등)가 있으면 범위 없는 읽기가 그 칸까지 빈 행을 채워 돌려주고, `-r A:Z`는 "범위가 너무 큽니다"와 그 수식 칸을 포함하지 않는 `[추천]` 범위를 냄 (안전하게 멈추지만 안내가 부정확).
 - 24차 확인 검사 LOW-5: reader 색인이 수식 칸 확인 실패(MemoryError 등)를 캐시에 저장해, 파일이 바뀌거나 캐시를 지울 때까지 같은 파일 읽기가 계속 UNVERIFIED("확인하지 못함")로 나옴. 확인 실패는 캐시하지 않기.
 
+### 1.4.37에서 남긴 것
+- range delete: 다른 칸의 수식이 지운 칸을 참조하면 `#REF!`가 되는데 미리 알리지 않음 (지울 칸의 값·수식만 셈).
+- range sort: 기준 4개 이상(Worksheet.Sort.SortFields), 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림.
+- read --where: OR 조건, 값 안의 `;`. 실기(회사 PC)에서 outlook `--days`/`--since`의 Restrict 날짜 형식 확인.
+
 ### 확인 필요
 - Windows 실기 검증: 회사 PC(Office 16)에서 1.4.1 실기 러너 71/71 통과. 남은 것: 1.4.5 쓰기 변경(write 덮어쓰기 확인, transfer 글자 유지)의 실기 확인, 눈 확인 항목.
 - 실제 HWP 5.0 파일과 DRM 문서로 `reader.py` 검증. 실제 규격서(PDF/Word/HWPX)로 장절·쪽 인식 확인 (1.3.0).
@@ -1040,7 +1092,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] `remove_tree` 추가, `os.remove`(_office.py:314, _runtime.py:311, word.py:593)에 적용. (1.4.0: undo 복원 복사는 `retry_fs`, retry_fs는 일시적 오류만 재시도 완료)
 - [ ] COM 내보내기(excel.py, word.py, ppt.py export)의 잠금 대비 `save_with_lock_fallback`. (1.4.0: 기존 출력 파일은 새 이름 저장 + `recovered` 완료)
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)
-- [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
+- [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (excel range delete·insert는 1.4.37) (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
 - [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위 (office windows·info --all·chart list·undo --list는 1.4.26, outlook list/search·ppt slide list는 1.4.27)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
 - [ ] next_commands: excel write의 차트 명령 자리표시 `--title 차트` 제거, word·ppt의 transfer 명령에 `--from-target`

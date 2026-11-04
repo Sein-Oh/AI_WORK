@@ -4,7 +4,7 @@ description: 열려 있는 Excel/Word/PowerPoint 문서를 읽고 쓰며(값/표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.36"
+  version: "1.4.37"
   platform: windows
 ---
 
