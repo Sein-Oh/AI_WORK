@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-2.3.0 regression tests: the tools never delete, replace or overwrite without the user's say-so
-(AGENTS.md JIT 자가복구 3번, CLI-dev/README.md R3/R4).
+"""사용자 확인 없이 지우거나 덮어쓰지 않는다 (AGENTS.md JIT 자가복구 3번, CLI-dev/README.md R3/R4).
+
+학습 버전 폴더의 트랜잭션(되돌리기, 원장), 예측·보고서 결과 파일의 새 이름 저장, 잠김 복구,
+실기 러너(tools/run_win_tests.py)의 폴더 정리와 AI 판독용 로그.
 """
 import importlib.util
 import json
@@ -12,14 +13,13 @@ import types
 
 import pytest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEV = os.path.dirname(HERE)  # CLI-dev\ml-kit (tests, tools)
-KIT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), "CLI", "ml-kit")  # 실행 파일은 CLI\ml-kit
-sys.path.insert(0, HERE)
-sys.path.insert(0, KIT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_sample  # noqa: E402
-from test_cli_smoke import FEATURES, TARGET, run_raw, run_tool  # noqa: E402
-import ml_predict as mc  # noqa: E402
+from mlkit_helpers import DEV, FEATURES, TARGET, run_raw, run_tool  # noqa: E402
+import ml_predict as mp  # noqa: E402
+
+
+# ---- 학습 버전 폴더: 불완전한 폴더 보존, --overwrite, 트랜잭션 ----------------------------------
 
 
 def _ledger(root):
@@ -29,7 +29,7 @@ def _ledger(root):
 
 @pytest.fixture(scope="module")
 def work(tmp_path_factory):
-    """One dataset whose data folder already holds an incomplete v1 (e.g. a half-copied folder)."""
+    """데이터 폴더에 이미 불완전한 v1(예: 복사하다 만 폴더)이 있는 데이터. 첫 학습은 v2가 된다."""
     w = tmp_path_factory.mktemp("safety")
     data = make_sample(str(w / "safe.csv"))
     root = w / "safe_ml_data"
@@ -103,7 +103,7 @@ def test_failed_ledger_write_rolls_back_and_restores_old_version(work, tmp_path,
 
 
 def test_interrupt_after_ledger_line_keeps_version(work, tmp_path, monkeypatch, capsys):
-    """Once history.jsonl names the version, an interrupt during the history.json sync must not roll it back."""
+    """history.jsonl에 버전이 적힌 뒤 history.json 동기화 중에 중단돼도 그 버전을 되돌리지 않는다."""
     import ml_train
     w = tmp_path / "copy"
     shutil.copytree(work["dir"], w)
@@ -125,7 +125,7 @@ def test_interrupt_after_ledger_line_keeps_version(work, tmp_path, monkeypatch, 
 
 
 def test_leftover_backup_blocks_overwrite(work, tmp_path, monkeypatch, capsys):
-    """A leftover .bak_vX may be the only good copy: --overwrite refuses instead of deleting it."""
+    """남은 .bak_vX는 유일한 정상 사본일 수 있다: --overwrite는 지우지 않고 멈춘다."""
     w = tmp_path / "copy"
     shutil.copytree(work["dir"], w)
     data, root = str(w / "safe.csv"), w / "safe_ml_data"
@@ -135,6 +135,7 @@ def test_leftover_backup_blocks_overwrite(work, tmp_path, monkeypatch, capsys):
     code, payload = _train_in_process(monkeypatch, capsys, data, "-v", "v2", "--overwrite")
     assert code == 1 and payload["agent_directive"].startswith("STOP_RETRY")
     assert ".bak_v2" in payload["message"] and marker.read_bytes() == before
+
 
 def test_parked_backup_restored_on_next_run(tmp_path):
     import ml_train
@@ -158,6 +159,9 @@ def test_verify_version_dir_detects_broken_model(work, tmp_path):
     (vd / f"model_{TARGET}.joblib").write_bytes(b"broken")
     problems = ml_train.verify_version_dir(str(vd), [TARGET], ledger, version)
     assert any("joblib" in p for p in problems)
+
+
+# ---- 결과 파일: 덮어쓰지 않고 새 이름, 잠김 복구 ------------------------------------------------------------
 
 
 def test_predict_out_is_not_overwritten(work):
@@ -188,13 +192,13 @@ def test_report_default_name_is_not_overwritten(work):
 
 def test_timestamp_suffix_is_not_doubled(tmp_path):
     p = tmp_path / "a_pred_20260101_101010.csv"
-    alt = mc._timestamped(str(p))
+    alt = mp._timestamped(str(p))
     stem = os.path.splitext(os.path.basename(alt))[0]
     assert stem.startswith("a_pred_") and stem.count("_") == 3       # a_pred_<date>_<time>
 
 
 def test_lock_fallback_reports_recovered(tmp_path, monkeypatch):
-    monkeypatch.setattr(mc, "_RECOVERED", [])
+    monkeypatch.setattr(mp, "_RECOVERED", [])
     calls = []
 
     def writer(p):
@@ -202,9 +206,12 @@ def test_lock_fallback_reports_recovered(tmp_path, monkeypatch):
         if len(calls) == 1:
             raise PermissionError("locked")
         open(p, "w").close()
-    saved = mc.save_with_lock_fallback(str(tmp_path / "r.docx"), writer, what="Word 보고서")
+    saved = mp.save_with_lock_fallback(str(tmp_path / "r.docx"), writer, what="Word 보고서")
     assert saved != str(tmp_path / "r.docx") and os.path.exists(saved)
-    assert len(mc._RECOVERED) == 1 and "r.docx 잠김" in mc._RECOVERED[0]
+    assert len(mp._RECOVERED) == 1 and "r.docx 잠김" in mp._RECOVERED[0]
+
+
+# ---- 실기 러너 tools/run_win_tests.py (Windows 전용 모듈은 가짜로 채움) --------
 
 
 def _load_runner():
@@ -231,3 +238,53 @@ def test_runner_does_not_delete_user_folder(tmp_path):
     (new_dir / "old_result.txt").write_text("x", encoding="utf-8")
     rwt.prepare_test_dir(str(new_dir))                                # runner's own folder: emptied
     assert sorted(os.listdir(new_dir)) == [rwt.DIR_MARKER]
+
+
+def test_testlog_contains_criteria_calls_and_traceback(tmp_path):
+    rwt = _load_runner()
+    ctx = rwt.Ctx(type("Args", (), {"dir": str(tmp_path)})())
+
+    def m13():
+        d, c, o, e = rwt.run_tool("ml_train.py", "--없는옵션")
+        rwt.record(ctx, "M13", "잘못된 옵션", False, f"exit={c}", d, c, e)
+
+    def m6():
+        raise RuntimeError("Word COM 실패 (테스트)")
+
+    rwt.run_test(ctx, "M13", "오류 계약", m13)
+    rwt.run_test(ctx, "M6", "보고서를 Word로", m6)
+    path = rwt.write_testlog(ctx, str(tmp_path / "logs"), "테스트PC", "20260101_000000", fatal=None)
+    text = open(path, encoding="utf-8").read()
+    assert os.path.basename(path) == "testlog_테스트PC_20260101_000000.txt"
+    assert "결과: ERROR=1, FAIL=1" in text
+    assert rwt.EXPECT["M13"] in text and rwt.EXPECT["M6"] in text          # pass criteria
+    assert "$ python ml_train.py --없는옵션" in text and "exit=2" in text  # recorded call
+    assert '"status": "error"' in text                                     # full stdout JSON
+    assert "RuntimeError: Word COM 실패" in text and "Traceback" in text   # exception trace
+    assert "[환경]" in text and "scikit-learn" in text and "[전체 호출 기록]" in text
+
+
+def test_only_rejects_unknown_ids(monkeypatch, capsys):
+    import pytest
+    rwt = _load_runner()
+    assert rwt.TEST_IDS == tuple(f"M{i}" for i in range(1, 15))
+    assert rwt.parse_only(None) == (None, [])
+    assert rwt.parse_only("m1, M4") == ({"M1", "M4"}, [])
+    assert rwt.parse_only("M1,M15,X") == (None, ["X", "M15"])
+    assert rwt.parse_only(",") == (None, ["(비어 있음)"])
+    monkeypatch.setattr(sys, "argv", ["run_win_tests.py", "--only", "M1,M99"])
+    with pytest.raises(SystemExit) as ex:
+        rwt.main()
+    assert ex.value.code == 2 and "M99" in capsys.readouterr().err
+
+
+def test_decode_console_reads_locale_text():
+    import locale
+    rwt = _load_runner()
+    assert rwt.decode_console(b"Active code page: 65001") == "Active code page: 65001"
+    text = "활성 코드 페이지: 949"
+    try:                                     # the console code page of this PC (Korean Windows: cp949)
+        raw = text.encode("oem" if os.name == "nt" else locale.getpreferredencoding(False))
+    except (LookupError, UnicodeEncodeError):
+        return
+    assert rwt.decode_console(raw) == text
