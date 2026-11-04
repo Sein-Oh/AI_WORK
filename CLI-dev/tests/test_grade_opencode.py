@@ -261,7 +261,7 @@ def test_single_request_answer_before_closing_tool(tmp_path):
         {"type": "text", "text": "맵 파일로 계산하겠습니다."},
         _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
         {"type": "text", "text": "B는 16.25, C는 87.5입니다."},
-        _bash('Get-Item "C:\\ml_beta\\agent\\맵.xlsx"', ok),
+        _bash('Get-Item "C:\\CLI-dev\\work\\gemma\\맵.xlsx"', ok),
         {"type": "text", "text": "완료했습니다."}])])
     _, rows, detail = go.grade([path], "t", False, "LLM42")
     m1 = next(r for r in rows if r["id"] == "M1")
@@ -294,14 +294,14 @@ def test_no_adhoc_py_rule():
                'python C:\\CLI\\office-cli\\excel.py read --file a.xlsx',
                'python -u "C:\\CLI\\ml-kit\\ml_map.py" -f m.xlsx',
                'C:\\WPy64-313130\\python\\python.exe "C:\\CLI\\ml-kit\\ml_map.py" -h',
-               'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"',
+               'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\CLI-dev\\work\\gemma"',
                'python "C:\\CLI-dev\\run_beta_check.py" --agent',
-               'cd C:\\CLI-dev\\ml-kit\\tools; python make_beta_samples.py "C:\\ml_beta\\agent"',
-               'python .\\make_beta_samples.py "C:\\ml_beta\\agent"',
+               'cd C:\\CLI-dev\\ml-kit\\tools; python make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
+               'python .\\make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
                'cd C:\\CLI-dev\\office-cli\\tools; python run_win_tests.py',
                'cd C:\\CLI-dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
                'cd C:\\CLI-dev; python ml-kit\\tools\\run_win_tests.py --agent',
-               'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\ml_beta\\agent"',
+               'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
                'python -m pytest -q']
     bad_cmds = ['python -c "import pandas"',
                 "python - <<'EOF'\nprint(1)\nEOF",
@@ -361,7 +361,7 @@ def test_no_read_code_rule_searches_without_py():
               'Select-String -Path "C:\\CLI\\ml-kit\\SKILL.md" -Pattern 제외',
               "findstr 제외 C:\\CLI\\ml-kit\\SKILL.md",
               "Get-ChildItem C:\\CLI\\ml-kit",
-              'Get-ChildItem "C:\\ml_beta\\agent" | Select-String x'):
+              'Get-ChildItem "C:\\CLI-dev\\work\\gemma" | Select-String x'):
         assert not _rule_hits("no_read_code", c), c
     assert _rule_hits("no_read_code", tool=_tool("grep", pattern="outlier", path="C:\\CLI\\ml-kit"))
     assert _rule_hits("no_read_code", tool=_tool("grep", pattern="iqr", path="C:/CLI/office-cli", include="*"))
@@ -385,7 +385,7 @@ def test_no_write_py_covers_edit_and_patch():
     assert _rule_hits("no_write_py", tool=_tool("multiedit", filePath="C:\\CLI\\ml-kit\\ml_map.py", edits=[]))
     patch = "*** Begin Patch\n*** Update File: C:\\CLI\\ml-kit\\ml_map.py\n@@\n-a\n+b\n*** End Patch"
     assert _rule_hits("no_write_py", tool=_tool("patch", patchText=patch))
-    assert not _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\ml_beta\\agent\\memo.md", oldString="a", newString="b"))
+    assert not _rule_hits("no_write_py", tool=_tool("edit", filePath="C:\\CLI-dev\\work\\gemma\\memo.md", oldString="a", newString="b"))
     md = "*** Begin Patch\n*** Add File: C:\\temp\\notes.md\n+run ml_train.py\n*** End Patch"
     assert not _rule_hits("no_write_py", tool=_tool("patch", patchText=md))
 
@@ -637,7 +637,7 @@ def test_read_run_maps_shell_to_bash_and_path_key(tmp_path):
     p = tmp_path / "S0.jsonl"
     p.write_text(_run_events("S0", [
         ("step_start", {"type": "step-start"}),
-        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"', {"status": "ok"}),
+        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\CLI-dev\\work\\gemma"', {"status": "ok"}),
         ("tool_use", {"type": "tool", "tool": "write", "state": {"status": "completed",
                                                                  "input": {"path": "C:\\temp\\x.py", "content": "print(1)"}}}),
         ("text", {"type": "text", "text": "만들었습니다."}),
@@ -654,7 +654,7 @@ def test_read_run_maps_shell_to_bash_and_path_key(tmp_path):
 
 def test_grade_runs_reads_folder_and_marks_missing(tmp_path):
     (tmp_path / "S0.jsonl").write_text(_run_events("S0", [
-        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\ml_beta\\agent"', {"status": "ok"}),
+        _shell('python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\CLI-dev\\work\\gemma"', {"status": "ok"}),
         ("text", {"type": "text", "text": "샘플을 만들었습니다."})]), encoding="utf-8")
     (tmp_path / go.RUN_MESSAGES).write_text(json.dumps({"S0": "[S0] 보낸 문장"}, ensure_ascii=False), encoding="utf-8")
     meta, rows, detail = go.grade_runs(str(tmp_path))
