@@ -1,9 +1,9 @@
-"""실기 테스트 러너(tools/run_win_tests.py)의 판단 로직 테스트 (Windows·pywin32 없이 가짜 모듈로).
+"""실기 테스트 러너(tools/run_win_tests.py)의 판단 로직 (Windows·pywin32 없이 가짜 모듈로).
 
-회사 PC 실기(Office 16)에서 A5 정리가 A.xlsx를 연 사용자 Excel까지 닫아 이후 항목이 줄줄이 실패한 문제의 회귀 테스트:
 - 문서가 남아 있는 프로세스는 Quit도 WM_CLOSE도 하지 않음
 - A5는 자기가 띄운 PID만 끝냄
 - 닫힌 테스트 문서는 다시 열고(JIT), 못 열면 항목을 바로 ERROR로 끝냄 (com_retry가 오래 돌지 않음)
+- 에이전트 모드(--agent)는 ACI 계약을 지키고, 인자를 pywin32 확인보다 먼저 해석함
 """
 import datetime
 import importlib.util
@@ -15,9 +15,9 @@ import types
 
 import pytest
 
-DEV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # CLI-dev\office-cli (tests, tools)
-TOOL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "CLI", "office-cli")  # 실행 파일은 CLI\office-cli
-TOOLS = os.path.join(DEV, "tools")
+from office_helpers import TOOL_DIR, TOOLS
+
+
 if TOOLS not in sys.path:
     sys.path.insert(0, TOOLS)
 
@@ -29,89 +29,23 @@ class com_error(Exception):
 
 
 BADINDEX = com_error(-2147352567, "예외가 발생했습니다.", (0, None, None, None, 0, -2147352565), None)
+
+
 BUSY = com_error(-2147418111, "호출이 거부되었습니다.", None, None)          # RPC_E_CALL_REJECTED
+
+
 NOT_RUNNING = com_error(-2147221021, "작업을 사용할 수 없습니다.", None, None)  # MK_E_UNAVAILABLE
 
 
-# ---------------------------------------------------------------------------
-# win_test_rules (순수 규칙)
-# ---------------------------------------------------------------------------
-
-def test_missing_doc_error_detection():
-    assert rules.is_missing_doc_error(BADINDEX)
-    assert rules.is_missing_doc_error(com_error(-2147352565, "x", None, None))
-    assert not rules.is_missing_doc_error(NOT_RUNNING)        # 앱 시작 직후 ROT 등록 지연일 수 있어 재시도 대상
-    assert rules.is_doc_gone_error(NOT_RUNNING) and rules.is_doc_gone_error(BADINDEX)
-    assert not rules.is_missing_doc_error(BUSY) and not rules.is_doc_gone_error(BUSY)
-    assert not rules.is_missing_doc_error(ValueError("x"))
-
-
-def test_parse_tasklist_pids():
-    out = ('"EXCEL.EXE","1234","Console","1","123,456 K"\r\n'
-           '"EXCEL.EXE","5678","Console","1","9,000 K"\r\n')
-    assert rules.parse_tasklist_pids(out, "EXCEL.EXE") == [1234, 5678]
-    assert rules.parse_tasklist_pids("정보: 지정된 조건에 맞는 작업이 실행되고 있지 않습니다.", "EXCEL.EXE") == []
-
-
-def test_title_has_doc():
-    assert rules.title_has_doc("A.xlsx - Excel", "A.xlsx")
-    assert rules.title_has_doc("C:\\t\\A.xlsx [읽기 전용] - Excel", "A.xlsx")
-    assert not rules.title_has_doc("Data.xlsx - Excel", "A.xlsx")
-    assert not rules.title_has_doc("Excel", "A.xlsx")
-
-
 T0 = datetime.datetime(2026, 10, 28, 13, 0, tzinfo=datetime.timezone.utc)
+
+
 BEFORE, AFTER = T0 - datetime.timedelta(hours=1), T0 + datetime.timedelta(minutes=5)
 
 
 def W(hwnd, pid, title, visible=True, cls="XLMAIN"):
     return {"hwnd": hwnd, "pid": pid, "cls": cls, "title": title, "visible": visible}
 
-
-def test_hidden_frame_of_document_process_is_never_closed():
-    """회사 PC 재현: 사용자 Excel(A.xlsx, 테스트 중 시작됨)에 숨은 XLMAIN 창이 있음."""
-    windows = [W(1, 100, "A.xlsx - Excel"), W(2, 100, "", visible=False), W(3, 200, "Excel")]
-    starts = {100: AFTER, 200: AFTER}
-    protected = rules.protected_pids(windows)
-    assert protected == {100}
-    targets, skipped = rules.select_close_targets(windows, protected, None, T0, starts)
-    assert [w["hwnd"] for w in targets] == [3]
-    assert [(w["hwnd"], why) for w, why in skipped] == [(2, "문서가 열려 있는 프로세스 (보호)")]
-
-
-def test_allowed_pids_limit_targets():
-    windows = [W(2, 100, "", visible=False), W(3, 200, "Excel"), W(4, 300, "", visible=False)]
-    targets, skipped = rules.select_close_targets(windows, set(), {200}, T0, {100: AFTER, 200: AFTER, 300: AFTER})
-    assert [w["pid"] for w in targets] == [200]
-    assert {w["pid"] for w, _ in skipped} == {100, 300}
-
-
-def test_pre_existing_or_unknown_start_is_kept():
-    windows = [W(2, 100, "Excel"), W(3, 200, "Excel")]
-    targets, _ = rules.select_close_targets(windows, set(), None, T0, {100: BEFORE})
-    assert targets == []
-
-
-def test_doc_pids_from_com_are_protected():
-    windows = [W(2, 100, "", visible=False)]
-    protected = rules.protected_pids(windows, doc_pids=[100])
-    assert rules.select_close_targets(windows, protected, None, T0, {100: AFTER})[0] == []
-    assert rules.protected_pids([W(5, 400, "a.xlsx", visible=False)], protect_names=["A.xlsx"]) == {400}
-
-
-def test_may_quit_app():
-    assert rules.may_quit_app(100, 1, set())[0] is False
-    assert rules.may_quit_app(None, 0, set(), allowed_pids={200})[0] is False
-    assert rules.may_quit_app(None, 0, set())[0] is True
-    assert rules.may_quit_app(200, 0, set(), {200})[0] is True
-    assert rules.may_quit_app(100, 0, {100}, None, T0, AFTER)[0] is False
-    assert rules.may_quit_app(100, 0, set(), None, T0, BEFORE)[0] is False
-    assert rules.may_quit_app(100, 0, set(), None, T0, AFTER)[0] is True
-
-
-# ---------------------------------------------------------------------------
-# 정리 스크립트(CLEANUP_SCRIPT)를 가짜 Office/pywin32로 실행
-# ---------------------------------------------------------------------------
 
 class Doc:
     def __init__(self, coll, name, path):
@@ -215,6 +149,153 @@ def a5_desk(hidden_user_frame=True):
     return Desk([user_xl, second, word, ppt], extra, {10: AFTER, 20: AFTER, 30: AFTER, 40: AFTER})
 
 
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, s):
+        self.now += s
+
+
+@pytest.fixture
+def runner(monkeypatch, tmp_path):
+    win32com = types.ModuleType("win32com")
+    client = types.ModuleType("win32com.client")
+    client.GetActiveObject = lambda prog: (_ for _ in ()).throw(NOT_RUNNING)
+    win32com.client = client
+    monkeypatch.setitem(sys.modules, "pythoncom", types.ModuleType("pythoncom"))
+    monkeypatch.setitem(sys.modules, "win32com", win32com)
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+    spec = importlib.util.spec_from_file_location("run_win_tests_t", os.path.join(TOOLS, "run_win_tests.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    clock = Clock()
+    monkeypatch.setattr(mod, "time", clock)
+    args = types.SimpleNamespace(dir=str(tmp_path), auto=True, only=None, agent=False, skip_outlook=True,
+                                 self_email=None, keep_open=False)
+    mod.CTX = mod.Ctx(args)
+    mod.CTX.docs_ready = True
+    mod.LOG_LINES.clear()
+    mod.CALLS.clear()
+    return mod
+
+
+def _agent_main(runner, monkeypatch, capsys, tmp_path, argv, groups=None, **patch):
+    """Runs runner.main() in agent mode with every Windows step stubbed; returns (exit code, stdout lines)."""
+    monkeypatch.setattr(runner, "AGENT", True)
+    monkeypatch.setattr(sys, "argv", ["run_win_tests.py", "--agent", "--dir", str(tmp_path)] + argv)
+    pc = runner.pythoncom
+    monkeypatch.setattr(pc, "CoInitialize", lambda: None, raising=False)
+    monkeypatch.setattr(pc, "CoUninitialize", lambda: None, raising=False)
+    stubs = {"process_count": lambda img: 0, "untitled_documents": lambda: [], "setup_files": lambda ctx: None,
+             "open_user_windows": lambda ctx: None, "ensure_test_docs": lambda ctx: None,
+             "save_shots": lambda ctx: (str(tmp_path / "shots"), 0), "close_test_documents": lambda ctx: [],
+             "environment_lines": lambda ctx: ["(환경)"]}
+    stubs.update(patch)
+    for name, fn in stubs.items():
+        monkeypatch.setattr(runner, name, fn)
+    if groups is not None:
+        monkeypatch.setattr(runner, "GROUPS", groups)
+    runner.UNVERIFIED_SEEN.clear()
+    with pytest.raises(SystemExit) as ex:
+        runner.main()
+    return ex.value.code, capsys.readouterr().out.splitlines()
+
+
+def _passing_group(ctx):
+    ctx.results.append({"id": "A1", "title": "t", "status": "PASS"})
+
+
+def _runner_without_pywin32(monkeypatch, argv):
+    monkeypatch.setitem(sys.modules, "pythoncom", None)          # import pythoncom -> ImportError
+    monkeypatch.setitem(sys.modules, "win32com", None)
+    monkeypatch.setitem(sys.modules, "win32com.client", None)
+    monkeypatch.setattr(sys, "argv", ["run_win_tests.py"] + argv)
+    if TOOLS not in sys.path:
+        monkeypatch.syspath_prepend(TOOLS)
+    spec = importlib.util.spec_from_file_location("run_win_tests_l3", os.path.join(TOOLS, "run_win_tests.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ---------------------------------------------------------------------------
+# win_test_rules (순수 규칙)
+# ---------------------------------------------------------------------------
+
+
+def test_missing_doc_error_detection():
+    assert rules.is_missing_doc_error(BADINDEX)
+    assert rules.is_missing_doc_error(com_error(-2147352565, "x", None, None))
+    assert not rules.is_missing_doc_error(NOT_RUNNING)        # 앱 시작 직후 ROT 등록 지연일 수 있어 재시도 대상
+    assert rules.is_doc_gone_error(NOT_RUNNING) and rules.is_doc_gone_error(BADINDEX)
+    assert not rules.is_missing_doc_error(BUSY) and not rules.is_doc_gone_error(BUSY)
+    assert not rules.is_missing_doc_error(ValueError("x"))
+
+
+def test_parse_tasklist_pids():
+    out = ('"EXCEL.EXE","1234","Console","1","123,456 K"\r\n'
+           '"EXCEL.EXE","5678","Console","1","9,000 K"\r\n')
+    assert rules.parse_tasklist_pids(out, "EXCEL.EXE") == [1234, 5678]
+    assert rules.parse_tasklist_pids("정보: 지정된 조건에 맞는 작업이 실행되고 있지 않습니다.", "EXCEL.EXE") == []
+
+
+def test_title_has_doc():
+    assert rules.title_has_doc("A.xlsx - Excel", "A.xlsx")
+    assert rules.title_has_doc("C:\\t\\A.xlsx [읽기 전용] - Excel", "A.xlsx")
+    assert not rules.title_has_doc("Data.xlsx - Excel", "A.xlsx")
+    assert not rules.title_has_doc("Excel", "A.xlsx")
+
+
+def test_hidden_frame_of_document_process_is_never_closed():
+    """회사 PC 재현: 사용자 Excel(A.xlsx, 테스트 중 시작됨)에 숨은 XLMAIN 창이 있음."""
+    windows = [W(1, 100, "A.xlsx - Excel"), W(2, 100, "", visible=False), W(3, 200, "Excel")]
+    starts = {100: AFTER, 200: AFTER}
+    protected = rules.protected_pids(windows)
+    assert protected == {100}
+    targets, skipped = rules.select_close_targets(windows, protected, None, T0, starts)
+    assert [w["hwnd"] for w in targets] == [3]
+    assert [(w["hwnd"], why) for w, why in skipped] == [(2, "문서가 열려 있는 프로세스 (보호)")]
+
+
+def test_allowed_pids_limit_targets():
+    windows = [W(2, 100, "", visible=False), W(3, 200, "Excel"), W(4, 300, "", visible=False)]
+    targets, skipped = rules.select_close_targets(windows, set(), {200}, T0, {100: AFTER, 200: AFTER, 300: AFTER})
+    assert [w["pid"] for w in targets] == [200]
+    assert {w["pid"] for w, _ in skipped} == {100, 300}
+
+
+def test_pre_existing_or_unknown_start_is_kept():
+    windows = [W(2, 100, "Excel"), W(3, 200, "Excel")]
+    targets, _ = rules.select_close_targets(windows, set(), None, T0, {100: BEFORE})
+    assert targets == []
+
+
+def test_doc_pids_from_com_are_protected():
+    windows = [W(2, 100, "", visible=False)]
+    protected = rules.protected_pids(windows, doc_pids=[100])
+    assert rules.select_close_targets(windows, protected, None, T0, {100: AFTER})[0] == []
+    assert rules.protected_pids([W(5, 400, "a.xlsx", visible=False)], protect_names=["A.xlsx"]) == {400}
+
+
+def test_may_quit_app():
+    assert rules.may_quit_app(100, 1, set())[0] is False
+    assert rules.may_quit_app(None, 0, set(), allowed_pids={200})[0] is False
+    assert rules.may_quit_app(None, 0, set())[0] is True
+    assert rules.may_quit_app(200, 0, set(), {200})[0] is True
+    assert rules.may_quit_app(100, 0, {100}, None, T0, AFTER)[0] is False
+    assert rules.may_quit_app(100, 0, set(), None, T0, BEFORE)[0] is False
+    assert rules.may_quit_app(100, 0, set(), None, T0, AFTER)[0] is True
+
+
+# ---------------------------------------------------------------------------
+# 정리 스크립트(CLEANUP_SCRIPT)를 가짜 Office/pywin32로 실행
+# ---------------------------------------------------------------------------
+
+
 def test_a5_cleanup_keeps_user_excel_with_a_xlsx(monkeypatch, capsys):
     desk = a5_desk()
     user_xl, second = desk.apps[0], desk.apps[1]
@@ -251,39 +332,6 @@ def test_end_of_run_cleanup(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 # 러너 모듈 (가짜 pythoncom/win32com으로 import)
 # ---------------------------------------------------------------------------
-
-class Clock:
-    def __init__(self):
-        self.now = 1000.0
-
-    def time(self):
-        return self.now
-
-    def sleep(self, s):
-        self.now += s
-
-
-@pytest.fixture
-def runner(monkeypatch, tmp_path):
-    win32com = types.ModuleType("win32com")
-    client = types.ModuleType("win32com.client")
-    client.GetActiveObject = lambda prog: (_ for _ in ()).throw(NOT_RUNNING)
-    win32com.client = client
-    monkeypatch.setitem(sys.modules, "pythoncom", types.ModuleType("pythoncom"))
-    monkeypatch.setitem(sys.modules, "win32com", win32com)
-    monkeypatch.setitem(sys.modules, "win32com.client", client)
-    spec = importlib.util.spec_from_file_location("run_win_tests_t", os.path.join(TOOLS, "run_win_tests.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    clock = Clock()
-    monkeypatch.setattr(mod, "time", clock)
-    args = types.SimpleNamespace(dir=str(tmp_path), auto=True, only=None, agent=False, skip_outlook=True,
-                                 self_email=None, keep_open=False)
-    mod.CTX = mod.Ctx(args)
-    mod.CTX.docs_ready = True
-    mod.LOG_LINES.clear()
-    mod.CALLS.clear()
-    return mod
 
 
 def test_com_retry_fails_fast_on_missing_doc(runner):
@@ -397,31 +445,6 @@ def test_error_log_has_recoveries_cleanup_and_tool_log(runner, monkeypatch, tmp_
 # 에이전트 모드 계약 (--agent): stdout JSON 1줄, exit 0/1/2/130, verified, unverified_count
 # ---------------------------------------------------------------------------
 
-def _agent_main(runner, monkeypatch, capsys, tmp_path, argv, groups=None, **patch):
-    """Runs runner.main() in agent mode with every Windows step stubbed; returns (exit code, stdout lines)."""
-    monkeypatch.setattr(runner, "AGENT", True)
-    monkeypatch.setattr(sys, "argv", ["run_win_tests.py", "--agent", "--dir", str(tmp_path)] + argv)
-    pc = runner.pythoncom
-    monkeypatch.setattr(pc, "CoInitialize", lambda: None, raising=False)
-    monkeypatch.setattr(pc, "CoUninitialize", lambda: None, raising=False)
-    stubs = {"process_count": lambda img: 0, "untitled_documents": lambda: [], "setup_files": lambda ctx: None,
-             "open_user_windows": lambda ctx: None, "ensure_test_docs": lambda ctx: None,
-             "save_shots": lambda ctx: (str(tmp_path / "shots"), 0), "close_test_documents": lambda ctx: [],
-             "environment_lines": lambda ctx: ["(환경)"]}
-    stubs.update(patch)
-    for name, fn in stubs.items():
-        monkeypatch.setattr(runner, name, fn)
-    if groups is not None:
-        monkeypatch.setattr(runner, "GROUPS", groups)
-    runner.UNVERIFIED_SEEN.clear()
-    with pytest.raises(SystemExit) as ex:
-        runner.main()
-    return ex.value.code, capsys.readouterr().out.splitlines()
-
-
-def _passing_group(ctx):
-    ctx.results.append({"id": "A1", "title": "t", "status": "PASS"})
-
 
 def test_agent_help_and_bad_args_are_json(runner, monkeypatch, capsys, tmp_path):
     code, out = _agent_main(runner, monkeypatch, capsys, tmp_path, ["-h"])
@@ -471,3 +494,22 @@ def test_unknown_group_rejected_without_agent(runner, monkeypatch, capsys):
     with pytest.raises(SystemExit) as ex:
         runner.main()
     assert ex.value.code == 2 and "Z" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# run_win_tests.py는 인자를 먼저 해석
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("argv,code,status", [(["--agent", "-h"], 0, "ok"), (["--agent", "--nope"], 2, "error"),
+                                              (["--agent", "--only", "Z"], 2, "error"), (["--agent"], 1, "error")])
+def test_runner_parses_args_before_pywin32_check(monkeypatch, capsys, argv, code, status):
+    mod = _runner_without_pywin32(monkeypatch, argv)
+    with pytest.raises(SystemExit) as ei:
+        mod.main()
+    out = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert ei.value.code == code and len(out) == 1, out
+    payload = json.loads(out[0])
+    assert payload["status"] == status
+    if code == 1:
+        assert payload["error_type"] == "dependency" and "python -m pip install pywin32" in payload["agent_directive"]

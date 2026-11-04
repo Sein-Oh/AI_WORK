@@ -2,6 +2,10 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## 테스트 정리
+
+- `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
+
 ## [1.4.37] - 2026-11-04
 
 SKILL.md에 없던 기존 기능을 넣고(경량 LLM은 SKILL.md에 없는 기능을 "지원하지 않음"으로 답함) 빠진 기능 넷을 더함.

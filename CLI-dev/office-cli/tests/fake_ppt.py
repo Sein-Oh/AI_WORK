@@ -203,3 +203,24 @@ class FakePresentation:
 
     def SaveCopyAs(self, path):
         open(path, "wb").close()
+
+
+class FakeView:
+    """ActiveWindow.View: GotoSlide로 옮긴 슬라이드 번호를 goto에 남김."""
+    def __init__(self):
+        self.goto = []
+
+    def GotoSlide(self, n):
+        self.goto.append(n)
+
+
+class FakeWindow:
+    def __init__(self, prs):
+        self.View = FakeView()
+        self.Presentation = prs
+
+
+class FakePptWindowApp:
+    """ActiveWindow 하나만 있는 PowerPoint 앱 (화면 이동 확인용)."""
+    def __init__(self, prs):
+        self.ActiveWindow = FakeWindow(prs)
