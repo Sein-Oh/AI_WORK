@@ -1,6 +1,6 @@
 """En-Genius 스킬 가져오기용 zip(docs/engenius/<tool>.zip)을 만듭니다.
 
-zip 구성: <tool>/SKILL.md (En-Genius용으로 바꾼 지시문) + <tool>/run.py (이 폴더의 실행 입구) + CLI/<tool>/*.py
+zip 구성: <tool>/SKILL.md (En-Genius용으로 바꾼 지시문) + <tool>/run.py (CLI-dev/engenius/<tool>/run.py, 도구마다 따로) + CLI/<tool>/*.py
 SKILL.md는 CLI/<tool>/SKILL.md 본문 앞에 En-Genius 실행 방법을 붙이고, OpenCode·PowerShell 전용 문장만 바꿉니다.
 CLI/<tool>/SKILL.md가 바뀌어 바꿀 문장을 못 찾으면 멈춥니다 (그 문장에 맞게 REPLACE를 고칩니다).
 같은 입력이면 같은 zip이 나옵니다 (시각 고정). tests/test_engenius.py가 저장소의 zip이 최신인지 확인합니다.
@@ -116,7 +116,7 @@ def skill_md(tool):
 
 def zip_bytes(tool):
     files = [("SKILL.md", skill_md(tool).encode("utf-8"))]
-    with open(os.path.join(HERE, "run.py"), "rb") as f:
+    with open(os.path.join(HERE, tool, "run.py"), "rb") as f:     # 도구마다 따로 둔 실행 입구
         files.append(("run.py", f.read()))
     src = os.path.join(ROOT, "CLI", tool)
     for name in sorted(os.listdir(src)):

@@ -92,7 +92,25 @@ def run(unpacked, tool, args, tmp_path):
     return proc.returncode, json.loads(lines[0])
 
 
-runpy_mod = _load(os.path.join(DEV, "engenius", "run.py"), "engenius_run")
+runpy_mod = _load(os.path.join(DEV, "engenius", "office-cli", "run.py"), "engenius_run_office")
+
+
+@pytest.mark.parametrize("tool", TOOLS)
+def test_each_tool_has_its_own_run_py(tool):
+    mod = _load(os.path.join(DEV, "engenius", tool, "run.py"), f"engenius_run_{tool}")
+    assert mod.TOOL == tool and mod.OTHER_TOOL == next(t for t in TOOLS if t != tool)
+    assert set(mod.SCRIPTS) == {f for f in os.listdir(os.path.join(ROOT, "CLI", tool))
+                                if f.endswith(".py") and not f.startswith("_")}
+    z = zipfile.ZipFile(os.path.join(ROOT, "docs", "engenius", f"{tool}.zip"))
+    with open(os.path.join(DEV, "engenius", tool, "run.py"), "rb") as f:
+        assert z.read(f"{tool}/run.py") == f.read()
+
+
+def test_run_py_files_differ_only_in_tool_settings():
+    texts = [open(os.path.join(DEV, "engenius", t, "run.py"), encoding="utf-8").read() for t in TOOLS]
+    strip = [re.sub(r'(?m)^(TOOL|SCRIPTS|OTHER_TOOL|OTHER_SCRIPTS) = .*$|^\s*"example": .*$|^"""En-Genius .*$'
+                    r'|^이 입구의 오류도 .*$', "", t) for t in texts]
+    assert strip[0] == strip[1], "두 run.py의 공통 부분이 다릅니다 (한쪽만 고쳤는지 확인)"
 
 
 @pytest.mark.parametrize("line,expected", [

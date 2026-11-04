@@ -10,6 +10,8 @@
 | `office-cli.zip` | 같은 구성의 office-cli |
 | `에이전트_프롬프트.md` | 전용 에이전트의 역할 프롬프트 (OpenCode 전역 지침을 En-Genius에 맞게 고친 것) |
 
+`run.py`는 도구마다 따로 있습니다 (`CLI-dev/engenius/ml-kit/run.py`, `CLI-dev/engenius/office-cli/run.py`). 각자 자기 도구의 스크립트만 실행하고,
+다른 도구의 명령이 오면 그 스킬로 실행하라고 안내합니다.
 zip은 `CLI/<도구>`의 도구 파일과 SKILL.md로 만듭니다. 도구나 SKILL.md를 고치면 저장소 루트에서
 `python CLI-dev/engenius/build.py`를 실행해 다시 만듭니다 (`CLI-dev/tests/test_engenius.py`가 최신인지 확인).
 

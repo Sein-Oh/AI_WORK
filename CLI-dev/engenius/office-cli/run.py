@@ -1,4 +1,4 @@
-"""En-Genius 스킬 실행 입구. run_skill_script(name, path="run.py", args=[...])로 불린다.
+"""En-Genius office-cli 스킬 실행 입구. run_skill_script(name="office-cli", path="run.py", args=[...])로 불린다.
 
 args[0] = 도구 명령 한 줄 (SKILL.md의 명령, 결과의 next_commands[i].command, [추천]의 전체 명령을 그대로).
   - 맨 앞의 `python`과 스크립트 경로(C:\\CLI\\...\\, 임시 폴더 경로)는 있어도 되고 없어도 된다.
@@ -7,7 +7,7 @@ args[0] = 도구 명령 한 줄 (SKILL.md의 명령, 결과의 next_commands[i].
 args가 이미 나뉘어 있으면(`["ml_train.py", "-f", "a.xlsx"]`, `@input` 자리 없음) 그대로 쓴다.
 
 도구는 이 폴더의 스크립트를 같은 프로세스에서 실행하고, 결과(stdout 1줄 JSON, 종료 코드)는 도구의 것 그대로다.
-이 입구의 오류도 1줄 JSON이다 (exit 2, STOP_RETRY). 빌드: CLI-dev/engenius/build.py가 스킬 zip마다 넣는다.
+이 입구의 오류도 1줄 JSON이다 (exit 2, STOP_RETRY). 빌드: CLI-dev/engenius/build.py가 office-cli.zip에 넣는다.
 """
 import json
 import os
@@ -15,11 +15,11 @@ import re
 import runpy
 import sys
 
+TOOL = "office-cli"
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS = sorted(f for f in os.listdir(HERE) if f.endswith(".py") and not f.startswith("_") and f != "run.py")
-TOOL = "ml-kit" if "ml_train.py" in SCRIPTS else "office-cli"
-OTHER = {"ml-kit": ("ml_train.py", "ml_predict.py", "ml_report.py", "ml_map.py", "ml_export.py"),
-         "office-cli": ("excel.py", "word.py", "ppt.py", "outlook.py", "reader.py", "office.py")}
+SCRIPTS = ("excel.py", "word.py", "ppt.py", "outlook.py", "reader.py", "office.py")
+OTHER_TOOL = "ml-kit"
+OTHER_SCRIPTS = ("ml_train.py", "ml_predict.py", "ml_report.py", "ml_map.py", "ml_export.py")
 INPUT = re.compile(r"@input(\d+)((?:\.[A-Za-z0-9]{1,8})?)")
 MAX_INPUTS = 20
 
@@ -75,8 +75,7 @@ def usage():
     print(__doc__, file=sys.stderr)
     emit({"status": "ok", "tool": TOOL, "scripts": SCRIPTS,
           "usage": f'run_skill_script(name="{TOOL}", path="run.py", args=["<명령 한 줄>"])',
-          "example": ('args=["ml_train.py -f \\"C:\\\\데이터\\\\공정.xlsx\\" -y 수율"]' if TOOL == "ml-kit"
-                      else 'args=["word.py write --file @input1.md", "## 제목\\n- 항목"]'),
+          "example": 'args=["word.py write --file @input1.md", "## 제목\\n- 항목"]',
           "agent_directive": "VERIFIED: 사용법입니다. SKILL.md의 명령을 args 첫 칸에 그대로 넣어 실행하세요."}, 0)
 
 
@@ -114,10 +113,9 @@ def main(raw):
         stop("실행할 스크립트가 없습니다. 예: " + (f'"{SCRIPTS[0]} -h"' if SCRIPTS else '"-h"'))
     script = os.path.basename(argv[0].replace("\\", "/"))
     if script not in SCRIPTS:
-        other = next((t for t, names in OTHER.items() if t != TOOL and script in names), None)
-        if other:
-            stop(f"'{script}'는 {other} 스킬의 명령입니다. 같은 명령을 "
-                 f'run_skill_script(name="{other}", path="run.py", args=["<같은 명령>"])로 실행하세요.')
+        if script in OTHER_SCRIPTS:
+            stop(f"'{script}'는 {OTHER_TOOL} 스킬의 명령입니다. 같은 명령을 "
+                 f'run_skill_script(name="{OTHER_TOOL}", path="run.py", args=["<같은 명령>"])로 실행하세요.')
         stop(f"'{argv[0]}'는 {TOOL} 스킬의 명령이 아닙니다. 쓸 수 있는 스크립트: {', '.join(SCRIPTS)}")
     path = os.path.join(HERE, script)
     sys.argv = [path] + argv[1:]
