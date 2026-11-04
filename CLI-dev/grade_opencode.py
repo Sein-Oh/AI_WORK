@@ -3,6 +3,7 @@
 
 채점:
     python grade_opencode.py --export <대화.json> [<대화2.json> ...] [--label 회사PC] [--judge]
+    python grade_opencode.py --runs <기록 폴더> [--label 회사PC]   # run_all_tests.py --gemma가 남긴 opencode run 기록(<ID>.jsonl)
 메시지 팩 다시 만들기 (agent_scenarios.yaml을 고친 뒤):
     python grade_opencode.py --make-pack [--dir C:\\ml_beta\\agent]
 
@@ -51,6 +52,7 @@ REPEAT = re.compile(r"(\S{1,10})(?:\s*\1){7,}")
 PY_SCRIPT = re.compile(r"""(?<![\w.-])python(?:\.exe)?"?(?:\s+-(?:[XW]\s*\S+|[bBdEiIOPqsSuv]+))*\s+"""
                        r"""("[^"]*\.py"|'[^']*\.py'|[^\s"']*\.py)(?=["'\s;|&)]|$)""", re.I)
 WRITE_TOOLS = ("write", "edit", "multiedit", "patch", "apply_patch")
+TOOL_ALIASES = {"shell": "bash"}           # OpenCode 2.x는 셸 도구 이름이 shell (채점은 bash 하나로 봄)
 PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to):\s*(.+?)\s*$", re.M)   # file lines of a patch tool's text
 ENC_PREFIX = re.compile(r"^(\s*(\$env:\w+\s*=\s*[^;]+|\[Console\]::\w+\s*=\s*[^;]+);)+\s*")   # PowerShell encoding line from the global rules
 
@@ -78,6 +80,18 @@ HANJA = re.compile("[\u4e00-\u9fff\uf900-\ufaff]")
 def load_export(path):
     """Reads an OpenCode export: UTF-8 with or without a BOM (cmd /c ... > file), or UTF-16 with a BOM (PowerShell `>`).
     The encoding of the file says nothing about garbled text inside it: see check_mojibake."""
+    text = _read_text(path)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ExportError(f"대화 파일이 JSON이 아닙니다 ({e.msg}, {e.lineno}행): {path}. {EXPORT_HINT}")
+    if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+        raise ExportError(f"OpenCode 대화 내보내기 형식이 아닙니다 (messages 목록 없음): {path}. {EXPORT_HINT}")
+    return data
+
+
+def _read_text(path):
+    """UTF-8 (BOM 있거나 없거나) 또는 BOM 있는 UTF-16 파일을 글로 읽습니다."""
     try:
         with open(path, "rb") as f:
             raw = f.read()
@@ -98,14 +112,53 @@ def load_export(path):
             tried.append(enc)
     if text is None:
         raise ExportError(f"대화 파일의 인코딩을 알 수 없습니다 ({', '.join(tried)} 실패): {path}. {EXPORT_HINT}")
-    text = text.lstrip("\ufeff")
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ExportError(f"대화 파일이 JSON이 아닙니다 ({e.msg}, {e.lineno}행): {path}. {EXPORT_HINT}")
-    if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
-        raise ExportError(f"OpenCode 대화 내보내기 형식이 아닙니다 (messages 목록 없음): {path}. {EXPORT_HINT}")
-    return data
+    return text.lstrip("\ufeff")
+
+
+def tool_entry(p):
+    """OpenCode tool part -> 채점용 도구 기록 (내보내기와 run 기록 공통). 파일 경로는 filePath(1.x) 또는 path(2.x)."""
+    st = p.get("state", {}) or {}
+    inp = st.get("input", {}) or {}
+    name = p.get("tool")
+    return {"tool": TOOL_ALIASES.get(name, name), "status": st.get("status"), "input": inp,
+            "command": inp.get("command", ""), "path": inp.get("filePath") or inp.get("path") or "",
+            "output": st.get("output") or st.get("error") or "",
+            "exit": (st.get("metadata") or {}).get("exit")}
+
+
+def read_run(path, sid, message):
+    """`opencode run --format json` 기록 하나(요청 1개, 한 줄에 사건 하나)를 채점용 차례 하나로 읽습니다.
+    요청 문장은 기록에 없으므로 보낸 message를 씁니다. (차례, 세션ID, 오류 사건 목록)을 돌려줍니다.
+    JSON이 아닌 줄(opencode 안내 글)은 건너뜁니다."""
+    turn = {"tags": [sid], "user": [message], "tools": [], "texts": [], "text_at": [], "start": None, "end": None,
+            "file": os.path.basename(path), "bulk": False, "shared": []}
+    msgs, session, errors = {}, None, []
+    for line in _read_text(path).splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        ts = ev.get("timestamp")
+        if isinstance(ts, (int, float)):
+            turn["start"] = ts if turn["start"] is None else turn["start"]
+            turn["end"] = ts
+        session = session or ev.get("sessionID")
+        part = ev.get("part") or {}
+        mi = msgs.setdefault(part.get("messageID"), len(msgs))
+        kind = ev.get("type")
+        if kind == "text" and str(part.get("text", "")).strip():
+            turn["texts"].append(part["text"])
+            turn["text_at"].append((mi, len(turn["tools"])))
+        elif kind == "tool_use" or part.get("type") == "tool":
+            turn["tools"].append(tool_entry(part))
+        elif kind == "error":
+            errors.append(json.dumps(ev.get("error") or ev, ensure_ascii=False)[:300])
+    return turn, session, errors
 
 
 def read_turns(path):
@@ -134,12 +187,7 @@ def read_turns(path):
                 cur["texts"].append(p["text"])
                 cur["text_at"].append((mi, len(cur["tools"])))
             elif p.get("type") == "tool":
-                st = p.get("state", {})
-                inp = st.get("input", {}) or {}
-                cur["tools"].append({"tool": p.get("tool"), "status": st.get("status"), "input": inp,
-                                     "command": inp.get("command", ""), "path": inp.get("filePath", ""),
-                                     "output": st.get("output") or st.get("error") or "",
-                                     "exit": (st.get("metadata") or {}).get("exit")})
+                cur["tools"].append(tool_entry(p))
     return data.get("info", {}), turns
 
 
@@ -361,7 +409,6 @@ def judge(sc, turn, rubric, model):
 
 def grade(paths, label, use_judge, model):
     spec, by_id, order = load_scenarios()
-    rules = spec["rules"]
     found, meta = {}, []
     for p in paths:
         info, turns = read_turns(p)
@@ -374,7 +421,37 @@ def grade(paths, label, use_judge, model):
                     found.setdefault(tag, []).append(sub)
             elif tags:
                 found.setdefault(tags[0], []).append(dict(t, bulk=False, shared=[x for x in t["tags"] if x != tags[0]]))
+    return meta, *score(found, spec, by_id, order, use_judge, model)
+
+
+RUN_MESSAGES = "messages.json"     # run_all_tests.py --gemma가 기록 폴더에 남기는 {요청 ID: 보낸 문장}
+
+
+def grade_runs(folder, use_judge=False, model="LLM42"):
+    """opencode run 기록 폴더(<ID>.jsonl + messages.json)를 채점합니다. 요청마다 run 한 번이라 나눌 필요가 없습니다.
+    기록이 없는 요청은 "없음"."""
+    spec, by_id, order = load_scenarios()
+    try:
+        with open(os.path.join(folder, RUN_MESSAGES), encoding="utf-8") as f:
+            sent = json.load(f)
+    except (OSError, ValueError):
+        sent = {}
+    found, sessions = {}, set()
+    for sid in order:
+        path = os.path.join(folder, f"{sid}.jsonl")
+        if not os.path.isfile(path):
+            continue
+        turn, session, _ = read_run(path, sid, sent.get(sid) or f"[{sid}] " + by_id[sid]["message"])
+        sessions.add(session or "?")
+        found[sid] = [turn]
+    meta = [f"opencode run 기록 {folder} ({len(found)}건, 세션 {', '.join(sorted(sessions)) or '없음'})"]
+    return meta, *score(found, spec, by_id, order, use_judge, model)
+
+
+def score(found, spec, by_id, order, use_judge, model):
+    """{요청 ID: [차례, ...]} -> (rows, detail). 요청마다 마지막으로 보낸 차례로 채점합니다."""
     rows, detail = [], []
+    rules = spec["rules"]
     for sid in order:
         sc = by_id[sid]
         if sid not in found:
@@ -396,7 +473,7 @@ def grade(paths, label, use_judge, model):
             row["점수"], row["채점 이유"] = judge(sc, turn, sc.get("judge") or spec["default_judge"], model)
         rows.append(row)
         detail.append((sid, sc, turn, checks))
-    return meta, rows, detail
+    return rows, detail
 
 
 def is_answer_check(name):
@@ -409,10 +486,10 @@ def safe_label(label):
     return "".join(c for c in str(label) if c.isalnum() or c in "-_") or "PC"
 
 
-def write_report(label, meta, rows, detail):
+def write_report(label, meta, rows, detail, out_dir=None):
     label = safe_label(label)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = os.path.join(HERE, f"grade_{label}_{stamp}")
+    base = os.path.join(out_dir or HERE, f"grade_{label}_{stamp}")
     graded = [r for r in rows if r["결과"] != "없음"]
     npass = sum(r["결과"] in ("통과", "통과(참고)") for r in graded)
     nbulk = sum(bool(r.get("참고")) for r in graded)
@@ -524,6 +601,7 @@ def make_pack(test_dir):
 def main():
     ap = argparse.ArgumentParser(description="OpenCode 대화 채점 / 메시지 팩 생성")
     ap.add_argument("--export", nargs="+", help="OpenCode에서 내보낸 대화 JSON (여러 개 가능)")
+    ap.add_argument("--runs", help="run_all_tests.py --gemma가 남긴 opencode run 기록 폴더 (<ID>.jsonl)")
     ap.add_argument("--label", default="PC")
     ap.add_argument("--judge", action="store_true", help="사내 OpenAI 호환 API로 참고 점수 (JUDGE_BASE_URL)")
     ap.add_argument("--judge-model", default="LLM42")
@@ -533,10 +611,13 @@ def main():
     if args.make_pack:
         print(f"[INFO] 메시지 팩 저장: {make_pack(args.dir)}")
         return 0
-    if not args.export:
-        ap.error("--export 또는 --make-pack 이 필요합니다")
+    if not args.export and not args.runs:
+        ap.error("--export, --runs 또는 --make-pack 이 필요합니다")
     try:
-        meta, rows, detail = grade(args.export, args.label, args.judge, args.judge_model)
+        if args.runs:
+            meta, rows, detail = grade_runs(args.runs, args.judge, args.judge_model)
+        else:
+            meta, rows, detail = grade(args.export, args.label, args.judge, args.judge_model)
     except ExportError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 1
