@@ -106,11 +106,15 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### 파일과 폴더
 | 항목 | 기본 위치 | 바꾸는 방법 |
 |---|---|---|
-| data 폴더 (파일명만 쓴 입력/출력) | `<도구폴더>\data` | 환경변수 `OFFICE_CLI_DATA_DIR` 또는 `config.json`의 `data_dir` |
+| data 폴더 (파일명만 쓴 입력/출력) | `<도구폴더>\data` (En-Genius 실행은 아래 고정 폴더) | 환경변수 `OFFICE_CLI_DATA_DIR` 또는 `config.json`의 `data_dir` |
 | 작업 폴더 (`--save` 경로 생략 시 `<이름>_<시각>`, 같은 초에 겹치면 `_2`를 붙이고 `recovered`, 7일 후 자동 정리. 이름의 쓸 수 없는 글자 `\ / : * ? " < > \|`는 `_`, 1.4.23) | `data\_work` | - |
-| 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
-| 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` | - |
+| 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` (En-Genius 실행은 아래 고정 폴더) | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
+| 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` (En-Genius 실행은 아래 고정 폴더) | 환경변수 `OFFICE_CLI_CONFIG` (1.4.33) |
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
+
+- En-Genius 스킬로 실행하면(트레이가 환경변수 `ENGENIUS_OUT`을 넣음) 트레이가 스킬 파일을 실행마다 임시 폴더에 풀고 끝나면 지웁니다.
+  그래서 `config.json`, `data`, `cache`의 기본 위치를 `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli\`로 바꿉니다 (1.4.33).
+  환경변수(`OFFICE_CLI_CONFIG`, `OFFICE_CLI_DATA_DIR`, `OFFICE_CLI_CACHE_DIR`)를 주면 그것이 먼저입니다. 스킬 패키지는 `docs/engenius/`.
 
 - 입력 파일은 절대경로 -> data 폴더 -> 작업 폴더 순서로 찾습니다. 없으면 비슷한 파일명을 `[추천]`으로 알려 줍니다.
 - 텍스트 입력은 UTF-8, UTF-16, CP949를 자동으로 판별합니다. CSV 출력은 기본 utf-8-sig입니다(Excel에서 한글 정상).

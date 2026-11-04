@@ -23,9 +23,25 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.32"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.33"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(TOOL_DIR, "config.json")
+
+
+def engenius_home() -> Optional[str]:
+    """En-Genius 스킬로 실행 중이면(트레이가 ENGENIUS_OUT을 넣음) 사용자 데이터를 둘 고정 폴더.
+    트레이는 스킬 파일을 실행마다 임시 폴더에 풀고 끝나면 지우므로, 도구 폴더 아래(data, cache, config.json)는 남지 않는다."""
+    if not os.environ.get("ENGENIUS_OUT"):
+        return None
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(home, "Documents", "En-Genius", "CLI-data", TOOL_NAME)
+
+
+def _tool_home() -> str:
+    """config.json, data, cache의 기본 위치: En-Genius 실행이면 고정 폴더, 아니면 도구 폴더."""
+    return engenius_home() or TOOL_DIR
+
+
+CONFIG_FILE = os.environ.get("OFFICE_CLI_CONFIG") or os.path.join(_tool_home(), "config.json")
 
 # 결과 길이 기본 상한 (경량 LLM 컨텍스트 보호)
 DEFAULT_MAX_ROWS = 200
@@ -688,7 +704,7 @@ _config_cache: Optional[Dict[str, Any]] = None
 
 
 def load_config() -> Dict[str, Any]:
-    """도구 폴더의 config.json (없으면 빈 설정). 프로세스당 한 번만 읽습니다."""
+    """config.json (없으면 빈 설정). 위치: OFFICE_CLI_CONFIG > En-Genius 고정 폴더 > 도구 폴더. 프로세스당 한 번만 읽습니다."""
     global _config_cache
     if _config_cache is None:
         cfg: Dict[str, Any] = {}
@@ -706,6 +722,7 @@ def load_config() -> Dict[str, Any]:
 
 def set_config(key: str, value: Any) -> None:
     """설정 값을 저장합니다 (예: transfer 방식 자동 판별 결과)."""
+    os.makedirs(os.path.dirname(CONFIG_FILE) or ".", exist_ok=True)
     cfg = dict(load_config())
     cfg[key] = value
     safe_write_text(CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
@@ -721,13 +738,13 @@ def _dir_setting(env_name: str, cfg_key: str, default: str) -> str:
 
 
 def get_data_dir() -> str:
-    """사용자 데이터 폴더. 우선순위: OFFICE_CLI_DATA_DIR > config.json data_dir > <도구폴더>/data"""
-    return _dir_setting("OFFICE_CLI_DATA_DIR", "data_dir", os.path.join(TOOL_DIR, "data"))
+    """사용자 데이터 폴더. 우선순위: OFFICE_CLI_DATA_DIR > config.json data_dir > <도구폴더 또는 En-Genius 고정 폴더>/data"""
+    return _dir_setting("OFFICE_CLI_DATA_DIR", "data_dir", os.path.join(_tool_home(), "data"))
 
 
 def get_cache_dir() -> str:
-    """캐시 폴더 (읽은 문서 텍스트, 색인, 스냅샷). 우선순위: OFFICE_CLI_CACHE_DIR > config.json cache_dir > <도구폴더>/cache"""
-    return _dir_setting("OFFICE_CLI_CACHE_DIR", "cache_dir", os.path.join(TOOL_DIR, "cache"))
+    """캐시 폴더 (읽은 문서 텍스트, 색인, 스냅샷). 우선순위: OFFICE_CLI_CACHE_DIR > config.json cache_dir > <도구폴더 또는 En-Genius 고정 폴더>/cache"""
+    return _dir_setting("OFFICE_CLI_CACHE_DIR", "cache_dir", os.path.join(_tool_home(), "cache"))
 
 
 def get_work_dir() -> str:

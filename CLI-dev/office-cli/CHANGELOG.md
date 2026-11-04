@@ -2,6 +2,17 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`. 1.0.0부터 관리합니다.
 
+## [1.4.33] - 2026-11-04
+
+En-Genius(사내 에이전트) 스킬 실행 대응. 회귀 테스트: `tests/test_review_v1433.py` (1.4.32에서 4개 중 3개 실패).
+
+### 기능
+- En-Genius 트레이는 스킬 파일을 실행마다 `%TEMP%\engenius-skill\<id>\`에 풀고 끝나면 지웁니다. 그래서 도구 폴더 아래의 `config.json`(transfer 방식 기억),
+  `data`(오류 로그, `_work` 결과, 메일 첨부), `cache`(문서 색인, 되돌리기 스냅샷)가 다음 실행에 남지 않았습니다.
+  환경변수 `ENGENIUS_OUT`이 있으면(트레이가 넣음) 세 가지의 기본 위치를 `%USERPROFILE%\Documents\En-Genius\CLI-data\office-cli\`로 바꿉니다.
+  OpenCode·`C:\CLI` 실행은 바뀌지 않습니다.
+- 환경변수 `OFFICE_CLI_CONFIG`로 `config.json` 위치를 정할 수 있습니다. `OFFICE_CLI_DATA_DIR`, `OFFICE_CLI_CACHE_DIR`와 함께 En-Genius 기본값보다 먼저입니다.
+
 ## [1.4.32] - 2026-11-03
 
 23차 점검에서 찾은 오류 수정. 회귀 테스트: `tests/test_review_v1432.py`.
