@@ -2688,7 +2688,7 @@ def match_sentence(text: str, terms: List[str], limit: int = 1000) -> str:
 # --- 검색 넓히기 (0건일 때: 일부 검색어 -> 유사 낱말)와 순위 ---
 
 FUZZY_MIN_LATIN = 4      # 유사 일치(한 글자 다름)로 찾는 검색어의 최소 글자 수 (영문·숫자)
-FUZZY_MIN_HANGUL = 3     # 한글은 음절 수
+FUZZY_MIN_HANGUL = 4     # 한글은 음절 수. 첫·끝 음절이 같을 때만 (전압/전류, 대기 전류/대기 전력, 최대/최소가 서로 맞지 않게)
 
 
 def _edit1(a: str, b: str) -> bool:
@@ -2715,15 +2715,41 @@ def _fuzzy_core(term: str) -> Optional[str]:
     return core if len(core) >= FUZZY_MIN_LATIN else None
 
 
+def _jamo(ch: str) -> Optional[Tuple[int, int, int]]:
+    """한글 음절 -> (초성, 중성, 종성) 번호, 음절이 아니면 None."""
+    code = ord(ch) - 0xAC00
+    if not 0 <= code < 11172:
+        return None
+    return code // 588, (code % 588) // 28, code % 28
+
+
+def _korean_typo(a: str, b: str) -> bool:
+    """같은 길이의 두 글에서 다른 글자가 한글 음절이면 자모 하나만 다를 때만 오타로 봄 (젼압/전압, 케이불/케이블).
+    음절이 통째로 다르면(대/소, 류/력, 상/하) 다른 말이라 맞추지 않음."""
+    for x, y in zip(a, b):
+        if x != y:
+            jx, jy = _jamo(x), _jamo(y)
+            if jx is None or jy is None:
+                return True
+            return sum(p != q for p, q in zip(jx, jy)) == 1
+    return True
+
+
 def _fuzzy_word(text: str, core: str) -> Optional[str]:
-    """글에서 core와 한 글자만 다른 낱말(또는 이어진 두 낱말, 뒤 조사는 무시)."""
+    """글에서 core와 한 글자만 다른 낱말(또는 이어진 두 낱말, 뒤 조사는 무시).
+    한글이 든 검색어는 첫 글자와 끝 글자가 같고, 바뀐 음절은 자모 하나만 달라야 함: 한 음절 차이로 뜻이 반대·다른 말
+    (전류/전력, 최대/최소, 상한/하한)이 맞지 않게."""
     words = re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text))
     cands = words + [a + b for a, b in zip(words, words[1:])]
     n = len(core)
+    hangul = bool(_HANGUL.search(core))
     for w in cands:
         low = w.lower()
         for k in (n, n - 1, n + 1):
             if 0 < k <= len(low) and _edit1(core, low[:k]):
+                if hangul and (low[0] != core[0] or low[k - 1] != core[-1]
+                               or (k == n and not _korean_typo(core, low[:k]))):
+                    continue
                 return w[:k]
     return None
 
@@ -2737,8 +2763,8 @@ def widen_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: Lis
     def pick(rows: List[Tuple[int, Dict[str, Any]]], need_all: bool) -> List[Dict[str, Any]]:
         if need_all:
             return [r for n, r in rows if n == 0]
-        best = max((len(r["matched_terms"]) for _, r in rows), default=0)
-        return [r for _, r in rows if len(r["matched_terms"]) == best]
+        best = max((r["_found"] for _, r in rows), default=0)
+        return [r for _, r in rows if r["_found"] == best]
 
     def scan(fuzzy: bool) -> List[Tuple[int, Dict[str, Any]]]:
         rows = []
@@ -2758,9 +2784,10 @@ def widen_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: Lis
                 missing = [x for x in g if x not in found]
                 if not found or (missing and (len(g) < 2 or len(found) * 2 < len(g))):
                     continue
-                row = {"doc": doc, "unit": u, "matched_terms": found, "missing_terms": missing, "fuzzy_words": fw,
-                       "terms": [fw.get(x, x) for x in found]}
-                if best_row is None or (len(missing), -len(found)) < (best_row[0], -len(best_row[1]["matched_terms"])):
+                # matched_terms는 글자 그대로 맞은 검색어만 (비슷한 낱말로 찾은 검색어는 fuzzy_words에만)
+                row = {"doc": doc, "unit": u, "matched_terms": [x for x in found if x not in fw], "missing_terms": missing,
+                       "fuzzy_words": fw, "terms": [fw.get(x, x) for x in found], "_found": len(found)}
+                if best_row is None or (len(missing), -len(found)) < (best_row[0], -best_row[1]["_found"]):
                     best_row = (len(missing), row)
             if best_row:
                 rows.append(best_row)
@@ -2941,13 +2968,9 @@ def cmd_search(args) -> Dict[str, Any]:
     groups = [] if args.regex else parse_query(args.query)
     mode = "exact"
     if not hits and groups and pool:
-        # 0건: 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음 (넓혔다는 사실은 recovered와 match_mode로 알림)
+        # 0건: 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음. 정확 일치는 여전히 0건이라
+        # count 0, 넓혀 찾은 결과는 candidates와 UNVERIFIED로 알림 (근거로 쓰지 않게)
         mode, hits = widen_search(pool, groups, flags)
-        if hits:
-            n_terms = max(len(g) for g in groups)
-            how = ("검색어 일부(절반 이상)만 든 단락" if mode == "partial"
-                   else "한 글자 다른 낱말(오타·표기 차이)을 허용한 단락")
-            rt.note_recovered(f"검색어 {n_terms}개가 모두 든 곳이 없음 -> {how}으로 넓혀 찾음 ({len(hits)}건, match_mode {mode})")
     for h in hits:
         h["score"] = hit_score(h["unit"], h["terms"], flags) if not args.regex else 0
         h["snippet"] = make_snippet(h["unit"]["text"], h["terms"], args.context)
@@ -2957,9 +2980,12 @@ def cmd_search(args) -> Dict[str, Any]:
 
     total = len(hits)
     shown = hits[: max(0, args.top)]
-    result: Dict[str, Any] = {"query": args.query, "files_searched": len(docs), "total_matches": total,
-                              "count": total, "matched": len(shown), "shown": len(shown),
+    exact_total = total if mode == "exact" else 0       # 넓혀 찾은 결과는 일치 건수에 넣지 않음
+    result: Dict[str, Any] = {"query": args.query, "files_searched": len(docs), "total_matches": exact_total,
+                              "count": exact_total, "matched": len(shown) if mode == "exact" else 0, "shown": len(shown),
                               "truncated": total > len(shown), "match_mode": mode}
+    if mode != "exact":
+        result["candidate_count"] = total
     if syn_used:
         result["synonyms_used"] = syn_used
     filters = {k: v for k, v in (("file", args.file), ("pages", args.pages), ("section", args.section)) if v}
@@ -3062,7 +3088,7 @@ def cmd_search(args) -> Dict[str, Any]:
         if doc.get("_stale"):
             item["stale"] = True             # 원본이 바뀌기 전 내용 (근거로 쓰기 전에 다시 등록 필요)
         view.append(item)
-    result["matches"] = view
+    result["matches" if mode == "exact" else "candidates"] = view
     if text_cut:
         result["truncated"] = True
         result["truncated_reason"] = (f"--full 항목 {text_cut}개의 text를 {SEARCH_JSON_FULL_CHARS}자에서 자름 "
@@ -3126,14 +3152,20 @@ def cmd_search(args) -> Dict[str, Any]:
         return rt.ok(TOOL, "search", preview,
                      "VERIFIED: 0건. 조건에 맞는 항목이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요." + notes,
                      **result)
+    if mode != "exact":
+        # 정확히 일치한 곳은 0건: 넓혀 찾은 결과는 후보일 뿐이라 VERIFIED로 내지 않음 ("대기 전류"가 "대기 전력"에 맞던 문제)
+        what = "일부 검색어만 든 곳, 빠진 검색어는 missing_terms" if mode == "partial" else \
+            "한 글자 다른 낱말이 든 곳, 실제 낱말은 fuzzy_words"
+        preview = (f"'{args.query}': {scope}에서 정확히 일치한 곳 0건, 비슷한 곳 {total}건(candidates, match_mode {mode})"
+                   + (f", 저장: {result['output_file']}" if "output_file" in result else ""))
+        payload = rt.ok_unverified(TOOL, "search", preview, [f"정확히 일치한 곳은 0건, 비슷한 곳 {total}건({what})"]
+                                   + (["검색하지 못한 부분이 있음: " + "; ".join(gaps)] if gaps else []), **result)
+        payload["agent_directive"] = (f"UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 {total}건(match_mode {mode}: {what}) - "
+                                      "candidates를 근거로 쓰지 말고, 사용자에게 '정확히 일치한 곳은 없고 비슷한 곳이 있다'고 알린 뒤 "
+                                      "맞는지 확인을 받으세요. 같은 검색을 다시 실행하지 마세요.")
+        return payload
     preview = f"'{args.query}': {scope}에서 {total}건 일치" + (f" (상위 {len(shown)}건 표시)" if total > len(shown) else "")
     evid = " 각 결과의 근거는 evidence(파일 p.N, 장절 (번호))를 그대로 알리세요. page가 null이면 장절과 번호로 알립니다."
-    if mode != "exact":
-        what = "일부 검색어만 든 결과, 빠진 검색어는 missing_terms" if mode == "partial" else \
-            "한 글자 다른 낱말로 찾은 결과, 실제 낱말은 fuzzy_words"
-        preview += f" - 검색어가 모두 든 곳이 없어 넓혀 찾음(match_mode {mode})"
-        evid = (f" 주의: 검색어가 모두 든 곳이 없어 넓혀 찾았습니다(match_mode {mode}: {what}). "
-                "정확히 일치한 근거가 아니라고 사용자에게 알리세요." + evid)
     if "output_file" in result:
         preview += f", 저장: {result['output_file']}"
         directive = "VERIFIED: 검색과 저장 완료(저장 파일을 다시 열어 확인)." + evid

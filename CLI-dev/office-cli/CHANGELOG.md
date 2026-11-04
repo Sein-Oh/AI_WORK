@@ -24,6 +24,11 @@
   회귀 테스트: `tests/test_reader.py` `test_failing_file_is_remembered_so_continue_ends`(R10 실행마다 새 단계 1개), `test_stale_refresh_failure_is_remembered`.
 - [중요] `--section "2.1"`이 `2.10`, `12.1`에도 맞던 문제 (`section_matches`, read/search/diff/excel check 공통). 장절 번호로 보이는 값은 번호 경계를 지키고
   하위 절(`2.1.3`)과 `제2장`은 포함, 제목 글자는 지금처럼 부분 일치. 회귀 테스트: `tests/test_reader.py` `test_section_number_keeps_boundaries`.
+- [중요] `search` 넓혀 찾기: "대기 전류"가 "대기 전력"에 `VERIFIED` count 2로 맞았음. 한글 fuzzy는 4음절 이상, 첫·끝 음절이 같고 바뀐 음절은 자모 하나만 다를 때만
+  (전압/전류, 최대/최소, 상한/하한이 서로 맞지 않음). 넓혀 찾은 결과는 `count: 0`·`total_matches: 0`, 목록은 `candidates`(`matches` 아님)와 `candidate_count`,
+  directive `UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 N건 ...`(옛 `recovered` "넓혀 찾음"은 없앰). `matched_terms`는 글자 그대로 맞은 검색어만.
+  `excel.py check`의 `판단필요`는 그대로. office-spec 스킬과 전역 지침 `CLI-dev/opencode/AGENTS.md`의 match_mode 문구를 맞춤.
+  회귀 테스트: `tests/test_reader.py` `test_search_fuzzy_daegi_current_is_not_power`, `test_fuzzy_never_matches_different_korean_terms`.
 
 ## [1.4.62] - 2026-11-04
 

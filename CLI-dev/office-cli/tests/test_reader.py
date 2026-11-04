@@ -2335,7 +2335,7 @@ RECALL_CASES = [
     ("절연저항이 100MΩ", {4}, "exact"),       # 조사, 숫자와 단위 띄어쓰기
     ("접지-단자", {5}, "exact"),              # 대시 종류
     ("정격 전압 AND 절연", {1, 4}, "partial"),  # 둘 다 든 단락 없음 -> 하나씩 든 단락
-    ("난연셩", {7}, "fuzzy"),                 # 오타 한 글자
+    ("케이불 피복", {7}, "fuzzy"),            # 오타 한 글자 (한글 4음절 이상, 첫·끝 음절 같음)
 ]
 
 
@@ -2348,7 +2348,7 @@ def _recall_file(tmp_path):
 def _hit_numbers(out):
     paras = RECALL_TEXT.split("\n\n")
     got = set()
-    for m in out.get("matches", []):
+    for m in out.get("matches", []) + out.get("candidates", []):
         text = m.get("text") or m.get("snippet", "")
         for i, para in enumerate(paras, 1):
             if para[:6] in text.replace("**", ""):
@@ -2363,20 +2363,39 @@ def test_search_recall_variants(tmp_path, capsys, query, want, mode):
     assert code == 0 and _hit_numbers(out) == want, (query, out.get("matches"))
     assert out["match_mode"] == mode
     if mode != "exact":
-        assert out["recovered"] and "넓혀" in out["recovered"][0]
-        assert out["agent_directive"].startswith("VERIFIED:") and mode in out["agent_directive"]
-        assert all(m["matched_terms"] for m in out["matches"])
+        # 넓혀 찾은 결과는 정확 일치 0건 + candidates + UNVERIFIED (근거로 쓰지 않게)
+        assert out["count"] == 0 and out["total_matches"] == 0 and out["candidate_count"] == len(want) and "matches" not in out
+        assert out["agent_directive"].startswith("UNVERIFIED: 정확히 일치한 곳은 0건") and mode in out["agent_directive"]
+        assert "recovered" not in out
 
 
 def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
     p = _recall_file(tmp_path)
     code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
-    assert {tuple(m["missing_terms"]) for m in out["matches"]} == {("절연",), ("정격 전압",)}
+    assert {tuple(m["missing_terms"]) for m in out["candidates"]} == {("절연",), ("정격 전압",)}
+    assert {tuple(m["matched_terms"]) for m in out["candidates"]} == {("정격 전압",), ("절연",)}
+    code, out = run_main(reader, capsys, "search", "--query", "케이불 피복", "--file", str(p))
+    c = out["candidates"][0]
+    assert c["fuzzy_words"] == {"케이불 피복": "케이블피복"} and c["matched_terms"] == [], c   # 실제로 맞은 낱말만
+    # 짧은 검색어(한글 3음절 이하)는 유사 일치로 넓히지 않음: 0건 그대로
     code, out = run_main(reader, capsys, "search", "--query", "난연셩", "--file", str(p))
-    assert out["matches"][0]["fuzzy_words"] == {"난연셩": "난연성"} and "**난연성**" in out["matches"][0]["snippet"]
-    # 짧은 검색어(한글 2음절)는 유사 일치로 넓히지 않음: 0건 그대로
-    code, out = run_main(reader, capsys, "search", "--query", "난얀", "--file", str(p))
     assert out["count"] == 0 and out["match_mode"] == "exact" and "recovered" not in out
+
+
+@pytest.mark.parametrize("query,word", [("전압", "전류"), ("전류", "전력"), ("최대", "최소"), ("상한", "하한"),
+                                        ("대기 전류", "대기 전력"), ("최대 전류", "최소 전류"), ("정격 전압", "정격 전류"),
+                                        ("상한 온도", "하한 온도")])
+def test_fuzzy_never_matches_different_korean_terms(query, word):
+    core = reader._fuzzy_core(query)
+    assert core is None or reader._fuzzy_word(f"이 장치의 {word}는 5 이하", core) is None, (query, word)
+
+
+def test_search_fuzzy_daegi_current_is_not_power(tmp_path, capsys):
+    # 회귀: "대기 전류"가 "대기 전력"에 VERIFIED count 2로 맞음
+    p = tmp_path / "규격.md"
+    p.write_text("대기 전력은 0.5 W 이하로 한다.\n\n대기 전력 측정 방법은 부록 A.\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "대기 전류", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["match_mode"] == "exact" and out["agent_directive"].startswith("VERIFIED: 0건"), out
 
 
 def test_search_particles_do_not_overstrip_short_words():
