@@ -169,10 +169,38 @@ def test_predict_batch(trained):
     assert out.is_file() and payload["total_rows"] == 120
 
 
-def test_predict_missing_feature(trained):
+def test_predict_missing_inputs_offer_median_fill(trained):
+    """2.9.55: -i without some numeric inputs -> needs_user_decision + a command that fills training medians (never run)."""
     work, _, _ = trained
-    payload = run_fail("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-i", "반응온도(°C)=240")
-    assert "누락" in payload["message"]
+    vdir = str(work / "sample_ml_data" / "v1")
+    payload = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65")    # 2.9.54: '누락' only
+    assert payload["error_type"] == "needs_user_decision" and payload["agent_directive"].startswith("STOP_RETRY:")
+    assert "next_commands[0]" in payload["agent_directive"] and "[추천]" not in payload["message"]
+    assert set(payload["missing_inputs"]) == {"압축압력(bar)", "촉매비율(wt%)", "수분함량(%)"}, payload
+    meta = json.load(open(os.path.join(vdir, "model_생산효율(%).json"), encoding="utf-8"))
+    med = meta["feature_stats"]["수분함량(%)"]["median"]
+    assert abs(payload["fill_values"]["수분함량(%)"] - med) < 1e-3 and "수분함량(%)=" in payload["message"]
+    nxt = payload["next_commands"][0]
+    assert nxt["needs_user_confirm"] is True and nxt["command"].startswith("python ")
+    import shlex
+    ok = run_tool("ml_predict.py", *shlex.split(nxt["command"])[2:])               # the offered command works as given
+    assert ok["predictions_summary"][TARGET]["predictions"] and not ok.get("missing_input_warning")
+    # a misspelled key is not filled: the usual [후보] for the name
+    bad = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함럄=20")
+    assert bad["error_type"] == "input" and "[후보]" in bad["message"], bad
+
+
+def test_train_target_in_features_offers_both_commands(trained):
+    """2.9.55: a target also in -x -> [후보] of two full commands (out of -y / out of -x), also in next_commands."""
+    _, data, _ = trained
+    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
+                       "-y", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
+    assert "[DATA LEAKAGE DETECTED]" in payload["message"] and "[후보] 1) python" in payload["message"]
+    import shlex
+    one, two = (shlex.split(c["command"]) for c in payload["next_commands"])
+    assert one[one.index("-y") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("-x") + 1]
+    assert two[two.index("-x") + 1] == "반응온도(°C),소비전력(kW)" and two[two.index("-y") + 1] == "생산효율(%),수분함량(%)"
+    assert "--desc" in one and "--desc" in two                                    # the other options are kept
 
 
 def test_predict_standalone_deployment(trained, tmp_path):

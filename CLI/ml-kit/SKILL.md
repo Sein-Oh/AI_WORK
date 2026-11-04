@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.54"
+  version: "2.9.55"
   platform: windows
 ---
 
@@ -99,6 +99,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>
 결과를 엑셀로 받고 싶다고 하면: `python "C:\CLI\ml-kit\ml_predict.py" -m "<version_dir>" -f "<새데이터파일>" --save "<전체경로.xlsx>"`
 - 파일 예측에는 `--header-row`/`--unit-row`를 붙이지 않는다 (도구가 파일마다 머리글을 찾는다).
 - `-i`에는 모델 입력만 넣는다. 모델 입력이 아닌 이름(`습도`, 다른 단위 `압력(MPa)`)이 있으면 도구가 멈춘다 (`[후보]`나 목록을 사용자에게 보여 주고 묻는다).
+- `-i`에 빠진 숫자 입력이 있으면 도구가 멈추고(`needs_user_decision`) 학습 중앙값으로 채운 명령을 `next_commands[0]`에 준다. 사용자에게 실제 값을 묻거나 중앙값을 쓸지 확인한다.
 - `-i "k=v"`는 한 건이다. 여러 건은 JSON 배열(`-i "[{...},{...}]"`)이나 .json 파일로 준다 (같은 이름이 두 번이면 도구가 멈춘다).
 - `-i`에 6건 이상을 넣으면 건별 값 대신 `output_file`(결과 파일)을 알린다 (`truncated: true`).
 - `-i`의 숫자 값에는 쉼표를 쓰지 않는다 (`압력=3000`, `3,000` 아님). 쉼표가 있으면 도구가 멈추고 `[추천]` 명령을 준다 (`--find`, `ml_map.py`도 같음).
@@ -177,7 +178,8 @@ python "C:\CLI\ml-kit\ml_export.py" -m "<best_version_dir>" --keep "<입력1>,<�
 | `UNVERIFIED:` | 실행은 됐지만 결과를 확인하지 못했다. 다시 실행하지 않는다. `unverified` 내용을 그대로 알린다. |
 | `CONTINUE:` | 아직 끝나지 않았다 (시간 제한 때문에 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`나 `UNVERIFIED:`가 나올 때까지 반복한다 (최대 10번, 그래도 `CONTINUE:`이면 `progress`를 알리고 멈춤). |
 | `STOP_RETRY:` 이고 `message`에 `[추천]`이 있다 | `[추천]` 뒤의 값(`--header-row 2` 같은 옵션 값)으로 바꿔 **1번만** 다시 실행한다. `[추천]` 뒤가 `python`으로 시작하는 명령이면 그 명령을 그대로 실행한다. 또 실패하면 `message`를 그대로 알린다. |
-| `STOP_RETRY:` 이고 `message`에 `[후보]`가 있다 | 다시 실행하지 않는다. `[후보]`를 보여 주고 사용자가 고른 값으로 1번 실행한다 (후보가 하나여도 묻는다: 비슷한 열 이름은 다른 양일 수 있음). "(단위 다름: 값 환산 필요)"가 붙은 후보를 고르면 그 단위로 환산한 값도 사용자에게 받는다. |
+| `STOP_RETRY:` 이고 `message`에 `[후보]`가 있다 | 다시 실행하지 않는다. `[후보]`를 보여 주고 사용자가 고른 값으로 1번 실행한다 (후보가 하나여도 묻는다: 비슷한 열 이름은 다른 양일 수 있음). 후보가 `1) python ...` 같은 전체 명령이면 고른 명령(`next_commands`의 같은 번호)을 그대로 실행한다. "(단위 다름: 값 환산 필요)"가 붙은 후보를 고르면 그 단위로 환산한 값도 사용자에게 받는다. |
+| `STOP_RETRY:` 이고 `error_type`이 `needs_user_decision` | 다시 실행하지 않는다. `message`를 그대로 알리고 묻는다. 사용자가 그렇게 하라고 하면 `next_commands[0].command`를 그대로 1번 실행한다. |
 | `STOP_RETRY:` 이고 `[추천]`, `[후보]`가 없다 | 다시 실행하지 않는다. `message`를 그대로 알린다. `install_command`가 있으면 그 명령을 알린다(직접 설치하지 않는다). |
 | `ERROR:` | 다시 실행하지 않는다. `message`를 그대로 알린다. |
 

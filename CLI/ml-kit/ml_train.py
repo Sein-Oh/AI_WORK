@@ -27,7 +27,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     load_data_file, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
-    retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible,
+    retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
 )
 
 setup_console()
@@ -210,6 +210,29 @@ def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Option
     return ",".join(f"{c}:{k}" for c, k in out.items())
 
 
+def leakage_error(overlap: List[str], features: List[str], targets: List[str]) -> InputError:
+    """A column given in both -x and -y: STOP_RETRY with [후보] of the two full commands (the column taken out of -y,
+    or out of -x) and the same commands in next_commands. Which one is meant is the user's choice."""
+    names = ", ".join(f"'{t}'" for t in overlap)
+    cmd = command_text(drop={"-x": "features", "--features": "features", "-y": "targets", "--targets": "targets"})
+    cands: List[Dict[str, Any]] = []
+    feats_wo = [f for f in features if f not in overlap]
+    tgts_wo = [t for t in targets if t not in overlap]
+    if cmd and not any('"' in n for n in features + targets):
+        if tgts_wo:
+            cands.append({"purpose": f"{names}을(를) 타겟(-y)에서 빼고 입력으로만 쓰기",
+                          "command": f"{cmd} -x {_q(','.join(features))} -y {_q(','.join(tgts_wo))}"})
+        if feats_wo:
+            cands.append({"purpose": f"{names}을(를) 입력(-x)에서 빼고 타겟으로만 예측하기",
+                          "command": f"{cmd} -x {_q(','.join(feats_wo))} -y {_q(','.join(targets))}"})
+    msg = (f"[DATA LEAKAGE DETECTED] {names}이(가) 입력(-x)과 타겟(-y)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
+           f"어느 쪽에서 뺄지 사용자에게 물으십시오.")
+    if cands:
+        msg += " [후보] " + " / ".join(f"{i + 1}) {c['command']}" for i, c in enumerate(cands))
+        return InputError(msg, extra={"next_commands": cands})
+    return InputError(msg)
+
+
 def validate_and_sanitize_data(
     df: pd.DataFrame,
     feature_names: List[str],
@@ -241,10 +264,7 @@ def validate_and_sanitize_data(
     # Data Leakage Check: Targets in Features
     overlap = [t for t in target_names if t in set(feature_names)]
     if overlap:
-        raise InputError(
-            f"[DATA LEAKAGE DETECTED] 타겟 변수 '{', '.join(overlap)}'이(가) 피처(-x) 목록에 포함되어 있습니다. "
-            f"종속변수는 독립변수로 사용될 수 없습니다."
-        )
+        raise leakage_error(overlap, feature_names, target_names)
 
     df_clean = df.copy()
 

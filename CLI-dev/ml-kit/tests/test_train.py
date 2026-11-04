@@ -658,7 +658,8 @@ def test_prediction_uses_source_and_caps(capped):
     cap = run_tool("ml_predict.py", "-m", vdir, "-i", "온도=250,압력=2")["predictions_summary"]["효율"]["predictions"][0]
     assert hi == pytest.approx(cap, abs=1e-6)                                   # above 250 is treated as 250
     miss = run_fail("ml_predict.py", "-m", vdir, "-i", "압력=2")
-    assert "'온도(°C)'" in miss["message"] and "원본 입력" in miss["message"]
+    assert "'온도(°C)'" in miss["message"] and miss["missing_inputs"] == ["온도(°C)"]    # the source input, not '온도상한'
+    assert miss["error_type"] == "needs_user_decision"                                # 2.9.54: '원본 입력' only
 
 
 def test_find_and_export_work_on_the_source(capped, tmp_path):

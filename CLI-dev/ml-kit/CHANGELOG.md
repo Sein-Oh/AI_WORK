@@ -8,6 +8,24 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.55] - 2026-11-04
+
+사용자가 정할 일을 도구가 고를 수 있는 명령으로 바꿔 줌. 회귀 테스트: `tests/test_contract.py`
+`test_train_target_in_features_offers_both_commands`, `test_predict_missing_inputs_offer_median_fill`, `tests/test_train.py`
+`test_prediction_uses_source_and_caps` (2.9.54에서 3개 모두 실패).
+
+### 바뀐 동작
+- 학습: 같은 열을 `-x`와 `-y`에 함께 주면(`[DATA LEAKAGE DETECTED]`) `STOP_RETRY` + `[후보] 1) <그 열을 -y에서 뺀 전체 명령> / 2) <-x에서 뺀 전체 명령>`.
+  두 명령은 `next_commands`(`purpose`, `command`)에도 있고 다른 옵션은 그대로입니다. `-y`가 그 열뿐이면 2)만, `-x`가 그 열뿐이면 1)만.
+  이전에는 "종속변수는 독립변수로 사용될 수 없습니다"만 알려 에이전트가 명령을 직접 고쳐야 했습니다.
+- 예측: `-i`(한 건)에 숫자 모델 입력이 빠지면 `status: error`, `error_type: "needs_user_decision"`, `missing_inputs`, `fill_values`(학습 중앙값),
+  `next_commands[0]` = 빠진 입력을 중앙값으로 채운 같은 명령(`needs_user_confirm: true`). 도구는 채워서 실행하지 않습니다 (사용자 값은 도구가 알 수 없음).
+  `agent_directive`는 `STOP_RETRY:`로 시작하고 사용자에게 묻고 원할 때만 `next_commands[0].command`를 그대로 1번 실행하라고 합니다.
+  이름 오타·모델 입력이 아닌 이름, 빠진 글자·날짜 입력, 여러 건은 이전 안내 그대로입니다.
+- 공통 런타임: `InputError(message, extra=..., error_type=...)`. `extra`의 키는 오류 JSON에 들어가고, `error_type="needs_user_decision"`은
+  위 directive를 씁니다 (office-cli의 `needs_user_decision`과 같은 이름).
+- SKILL.md: 4단계에 빠진 입력 안내 한 줄, 결과 처리 표에 `needs_user_decision` 행과 전체 명령 `[후보]`(고른 번호의 `next_commands` 실행).
+
 ## [2.9.54] - 2026-11-04
 
 예측 파일의 레이아웃이 학습 파일과 다를 때 도구가 그 자리에서 고쳐 읽음 (AGENTS.md JIT 자가복구). 회귀 테스트:

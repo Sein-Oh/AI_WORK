@@ -23,7 +23,9 @@ import os
 import re
 import ast
 import csv
+import io
 import glob
+import contextlib
 import json
 import time
 import shutil
@@ -57,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.54"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.55"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -115,7 +117,14 @@ def emit_json_response(payload: Dict[str, Any]) -> None:
 
 
 class InputError(ValueError):
-    """User/agent input or data schema problem. Retrying with the same arguments will not help."""
+    """User/agent input or data schema problem. Retrying with the same arguments will not help.
+    extra: keys added to the error JSON (e.g. next_commands); error_type: 'needs_user_decision' when the tool stopped
+    for a choice only the user can make (the directive then says to ask and run next_commands[0] only if they agree)."""
+
+    def __init__(self, message: str = "", extra: Optional[Dict[str, Any]] = None, error_type: Optional[str] = None):
+        super().__init__(message)
+        self.extra = dict(extra or {})
+        self.error_type = error_type
 
 
 # ------------------------------------------------------------------------------
@@ -250,11 +259,23 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             "agent_directive": (f"STOP_RETRY: {exc.feature}에 필요한 {exc.pip_name}이(가) 설치되어 있지 않습니다. "
                                 "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요."),
         }
+    if isinstance(exc, InputError) and getattr(exc, "error_type", None) == "needs_user_decision":
+        return {
+            "status": "error",
+            "error_type": "needs_user_decision",
+            "message": msg,
+            **{k: v for k, v in exc.extra.items() if k not in ("status", "message", "agent_directive", "error_type")},
+            "agent_directive": (
+                "STOP_RETRY: 사용자가 정할 일이 있어 멈췄습니다. message를 그대로 알리고 사용자에게 물으세요. 스스로 실행하지 말고, "
+                "사용자가 그렇게 하라고 하면 next_commands[0].command를 글자 그대로 1번 실행하세요."),
+        }
     if isinstance(exc, _STOP_RETRY_ERRORS):
         return {
             "status": "error",
             "error_type": "input",
             "message": msg,
+            **{k: v for k, v in getattr(exc, "extra", {}).items()
+               if k not in ("status", "message", "agent_directive", "error_type")},
             "agent_directive": (
                 "STOP_RETRY: Argument or data schema validation failed. "
                 "If the message contains '[추천]', re-run ONCE with the suggested name, option or command "
@@ -3477,6 +3498,51 @@ def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share > 0.5
 
 
+def _offer_median_fill(args: argparse.Namespace, df_input: pd.DataFrame, model_items: List[Dict[str, Any]]) -> None:
+    """-i (one record, every key a model name) without some numeric model inputs: never filled by the tool (the user's
+    value is a fact the tool cannot know). Stops with needs_user_decision and next_commands[0] = the same command with
+    the missing inputs set to their training medians (values shown); run only when the user agrees. Other cases
+    (several records, unknown or misspelled keys, a missing text / date input) go on to the usual messages."""
+    if len(df_input) != 1:
+        return
+    needed: List[str] = []
+    known: List[str] = []
+    medians: Dict[str, float] = {}
+    text_inputs: set = set()
+    for it in model_items:
+        meta = it["meta"]
+        schema = meta.get("feature_schema") or {}
+        derived = [e.split("=", 1)[0].strip() for e in meta.get("derived_evals", []) if "=" in e]
+        raw = model_raw_inputs(meta)
+        needed += raw
+        known += raw + list(meta.get("features_required", [])) + derived
+        text_inputs |= set(schema.get("categorical", {})) | set(schema.get("datetime", {}))
+        for c in raw:
+            st = (meta.get("feature_stats") or {}).get(c) or {}
+            if c not in medians and st.get("median") is not None:
+                medians[c] = float(st["median"])
+    needed = list(dict.fromkeys(needed))
+    probe = df_input.copy()
+    with contextlib.redirect_stderr(io.StringIO()):
+        align_input_columns(probe, list(dict.fromkeys(known)), [])
+    if any(str(c) not in set(known) for c in probe.columns):
+        return                                  # a misspelled / unknown key: check_inline_unknown explains it
+    missing = [c for c in needed if c not in probe.columns]
+    if not missing or any(c in text_inputs or c not in medians for c in missing):
+        return
+    fill = {c: float(f"{medians[c]:.6g}") for c in missing}
+    pairs = dict(df_input.attrs.get("kv_pairs") or {str(k): v for k, v in df_input.iloc[0].to_dict().items()})
+    pairs.update({c: f"{v:g}" for c, v in fill.items()})
+    shown = ", ".join(f"{c}={v:g}" for c, v in fill.items())
+    raise InputError(
+        f"-i에 모델 입력 {', '.join(repr(c) for c in missing)}이(가) 없어 예측하지 않았습니다. 학습 데이터의 중앙값({shown})으로 채워 "
+        f"예측할 수 있지만, 실제 조건과 다르면 예측도 달라집니다. 사용자에게 실제 값을 묻거나, 중앙값으로 채울지 확인하십시오.",
+        extra={"missing_inputs": missing, "fill_values": fill,
+               "next_commands": [{"purpose": f"빠진 입력을 학습 중앙값({shown})으로 채워 예측 (사용자가 원할 때만)",
+                                  "command": _predict_command(args, inline=kv_text(pairs)), "needs_user_confirm": True}]},
+        error_type="needs_user_decision")
+
+
 def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     """Orchestrates 1-Turn declarative inference."""
     # 1. Resolve Targets & Models
@@ -3520,6 +3586,9 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     known_names: List[str] = []       # every name a model takes (-i keys beyond these are refused)
     known_inputs: List[str] = []
     numeric_inputs: List[str] = []    # numbers written with '%' in these are read without it (percent_warning)
+
+    if is_inline:
+        _offer_median_fill(args, df_input, model_items)
 
     # 3. Perform Inference per Target
     for item in model_items:
