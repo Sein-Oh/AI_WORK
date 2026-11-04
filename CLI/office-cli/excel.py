@@ -3952,6 +3952,10 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
     mode, hits = reader.find_item(docs, query, reader.section_key(sec))
     out["match_mode"] = mode
     if not hits:
+        if mode == "number":
+            # 숫자 안전망이 시간 상한으로 규격서를 끝까지 보지 못함: '근거없음'으로 단정하지 않음
+            out.update(verdict="판단필요", reason="숫자 안전망 검색이 시간 상한으로 규격서 일부만 확인함")
+            return out
         out["reason"] = "규격서에서 항목을 찾지 못함" + (f" (장절 '{sec}' 안)" if sec else "")
         return out
     best = hits[0]
@@ -4053,12 +4057,19 @@ def cmd_check(args) -> Dict[str, Any]:
     unit_hint = header[1] if header else None
     sheet_ref = sheet if re.fullmatch(r"[\w가-힣]+", sheet) else f"'{sheet}'"
     results: List[Dict[str, Any]] = []
+    late: List[str] = []              # 시간 상한으로 대조하지 못한 칸 (판단필요)
     for i, row in enumerate(body):
         item, value = row[0], row[1]
         if item is None or str(item).strip() == "":
             continue
         sec = str(row[2]).strip() if sec_c and row[2] is not None else (args.section or "")
-        j = _judge_row(docs, str(item).strip(), value, sec, unit_hint)
+        if late or (results and rt.time_up()):
+            # 명령 시간 제한 전에 결과를 내려고 남은 행은 대조하지 않음 (대조는 저장할 중간 결과가 없어 CONTINUE가 아님)
+            late.append(f"{sheet_ref}!{addr(r1 + i, value_c)}")
+            j = {"verdict": "판단필요", "reason": "명령 시간 제한으로 대조하지 못함 (--range를 나눠 다시 실행)",
+                 "evidence": "", "spec_text": "", "match_mode": "exact"}
+        else:
+            j = _judge_row(docs, str(item).strip(), value, sec, unit_hint)
         cell = f"{sheet_ref}!{addr(r1 + i, value_c)}"
         results.append({"cell": cell, "item": str(item).strip()[:60], "value": out_value(value), **j})
     counts = {v: sum(1 for r in results if r["verdict"] == v) for v in VERDICTS}
@@ -4101,6 +4112,9 @@ def cmd_check(args) -> Dict[str, Any]:
                                  "(사용자가 판정을 확인한 뒤에만 이 명령에서 --dry-run을 뺀 명령)")]
         action = ("사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자 확인 뒤에만 "
                   "그 명령에서 --dry-run을 뺀 명령을 실행하세요. 같은 check는 다시 실행하지 마세요.")
+    if late:
+        problems.append(f"명령 시간 제한으로 {len(late)}행({late[0]}부터)은 대조하지 못해 판단필요로 둠")
+        action += f" 대조하지 못한 {len(late)}행은 사용자에게 알리고, 그 행을 더 작은 --range로 다시 대조할지 사용자에게 물으세요."
     if info.get("skipped"):
         problems.append(f"읽지 못한 규격 문서 {len(info['skipped'])}개: " + ", ".join(os.path.basename(s["file"]) for s in info["skipped"][:5]))
     fields["next_commands"] = nexts

@@ -3,6 +3,7 @@ search/list/clear, CLI 계약. 샘플 파일은 테스트 안에서 만듭니다
 """
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -2925,7 +2926,7 @@ NUMBER_SEARCH_CASES = [
     ("-5 V", "5 V", False), ("-5 V", "+5 V", False), ("-5 V", "-5 V", True),
     ("-20", "-20", True), ("-20", "\u221220", True), ("-20", "\u201320", True), ("-20", "-20~60", True), ("-20", "20", False),
     ("-20", "1-20", False), ("-20", "A-20", False), ("-20", "-200", False), ("-20", "-20.5", False),
-    ("20 ℃", "-20 ℃", False), ("20 ℃", "\u221220 ℃", False), ("20 ℃", "+20 ℃", True), ("20", "1-20", True),
+    ("20 ℃", "-20 ℃", False), ("20 ℃", "\u221220 ℃", False), ("20 ℃", "+20 ℃", False), ("20", "1-20", False),   # 1.4.69: 부호·대시가 다르면 후보
     ("±5 %", "5 %", False), ("±5 %", "-5 %", False), ("±5 %", "± 5 %", True),
     ("±5", "±5", True), ("±5", "±5.0", True), ("±5", "+/-5", True), ("±5", "±5.5", False), ("±5", "±50", False),
     ("±5", "±0.5", False),
@@ -2967,23 +2968,23 @@ NUMBER_SEARCH_CASES_5 = [
     ("20", "온도-20℃", False), ("-5", "+/-5", False),
     # [높음] (a) + 또는 부호 없는 숫자는 ±에 맞지 않음
     ("+10%", "±10%", False), ("+5V", "±5V", False), ("+5 V", "±5 V 이내", False), ("5V", "±5V", False),
-    ("10%", "+/-10%", False), ("10%", "+- 10%", False), ("+5V", "5V", True), ("+5V", "+5V", True),
+    ("10%", "+/-10%", False), ("10%", "+- 10%", False), ("+5V", "5V", False), ("+5V", "+5V", True),
     # [높음] (b) 숫자(+단위) 뒤 띄어쓴 대시는 범위 ('0 - 20 ℃'의 20은 -20이 아님)
     ("-20 ℃", "0 - 20 ℃", False), ("-20 ℃", "0 \u2013 20 ℃", False), ("-20 ℃", "0 -20 ℃", False), ("-20", "10 - 20", False),
     ("-5 V", "입력 0 -5 V", False), ("-3 dB", "1 - 3 dB", False), ("-20℃", "온도 0 ~ -20℃", True),
-    ("-20 ℃", "5 V - 20 ℃", False), ("20", "10 -20", True), ("100 Hz", "10 \u2212100 Hz", True), ("20", "10~-20", False),
+    ("-20 ℃", "5 V - 20 ℃", False), ("20", "10 -20", False), ("100 Hz", "10 \u2212100 Hz", False), ("20", "10~-20", False),
     # [중간] 같은 단위 꼬리는 허용, 다른 단위로 이어지면 아님
-    ("5 V", "5 Vrms", True), ("5 V", "5 Vp-p", True), ("5 V", "5 Vpp", True), ("5 V", "5 Vin", True), ("5 V", "5 Vcc", True),
-    ("5 V", "5 Vmax", True), ("5 V", "5 Vmin", True), ("5 V", "5 VAC", True), ("5V", "5 Vrms", True),
+    ("5 V", "5 Vrms", False), ("5 V", "5 Vp-p", False), ("5 V", "5 Vpp", False), ("5 V", "5 Vin", True), ("5 V", "5 Vcc", True),
+    ("5 V", "5 Vmax", True), ("5 V", "5 Vmin", True), ("5 V", "5 VAC", True), ("5V", "5 Vrms", False),
     ("3 s", "3 sec", True), ("3 s", "3 secs", True), ("10 min", "10 mins", True), ("10 min", "10 minutes", True),
-    ("10 h", "10 hr", True), ("10 h", "10 hrs", True), ("30 dB", "30 dBA", True), ("1 bar", "1 barg", True),
-    ("1 MPa", "1 MPaG", True), ("5 V", "5 VA", False), ("10 m", "10 mm", False), ("10 m", "10 MΩ", False),
+    ("10 h", "10 hr", True), ("10 h", "10 hrs", True), ("30 dB", "30 dBA", False), ("1 bar", "1 barg", False),
+    ("1 MPa", "1 MPaG", False), ("5 V", "5 VA", False), ("10 m", "10 mm", False), ("10 m", "10 MΩ", False),
     ("10 m", "10 min", False), ("1 A", "1 Ah", False), ("30 dB", "30 dBm", False), ("30 dB", "30 dBi", False),
     ("1 kg", "1 kgf", False), ("100 g", "100 gf", False), ("1 W", "1 Wh", False), ("2 s", "2 sq", False),
     # (여유) 표기 차이: 단위 글자, 곱하기, 지름, 시각, 영숫자 코드 경계
     ("10 kΩ", "10 kohm", True), ("10 kΩ", "10 k\u2126", True), ("10 Ω", "10 ohm", True), ("100mm", "100㎜", True),
     ("10 mA", "10 ㎃", True), ("100 ㎜", "100 mm", True), ("10 m", "10 ㎜", False),
-    ("M6x1.0", "M6×1.0", True), ("M6×1.0", "M6x1.0", True), ("M6x1.0", "M6 1.0", False), ("Φ10", "Ø10", True),
+    ("M6x1.0", "M6×1.0", True), ("M6×1.0", "M6x1.0", True), ("M6x1.0", "M6 1.0", False), ("Φ10", "Ø10", False),
     ("08:30", "8:30", True), ("8:30", "08:30", True), ("8:30", "18:30", False), ("08:30", "08 30", False),
     ("ABC-1234", "ABC-1234", True), ("ABC-1234", "(ABC-1234)", True), ("ABC-1234", "XABC-1234", False),
     ("ABC-1234", "ABC-1234-5", False), ("ABC-1234", "ABC-12345", False),
@@ -3013,6 +3014,110 @@ def test_number_safety_net_candidates(tmp_path, capsys):
     assert out["count"] == 0 and out["match_mode"] == "exact" and out["agent_directive"].startswith("VERIFIED: 0건"), out
     code, out = run_main(reader, capsys, "search", "--query", "5V ±5%", "--file", str(p))  # 정확 일치는 그대로
     assert out["count"] == 1 and out["match_mode"] == "exact", out
+
+
+# 6차 검토 (1.4.69): 보수적 원칙. 정확 일치(exact, VERIFIED)는 숫자 앞 부호가 분명히 같을 때만, 부호·대시가 다르거나
+# 범위인지 부호인지 애매하면 숫자 안전망 후보(number, UNVERIFIED). 범위 대시는 양옆이 띄어진 '0 - 20'만.
+# 'E' = exact, 'N' = 숫자 안전망 후보, '-' = 둘 다 아님
+def _match_kind(query, text):
+    if reader.build_matcher(query, False)(text) is not None:
+        return "E"
+    return "N" if reader.number_search([({}, {"text": text})], reader.parse_query(query), 2) else "-"
+
+
+NUMBER_KIND_CASES_6 = [
+    # 검토 보고 q1: 글의 숫자 앞에 부호가 있는데 검색어에는 없음 (또는 다른 부호) -> 후보
+    ("40 ℃", "Ta 25 -40 ℃", "N"), ("40 ℃", "보관 85 ℃ -40 ℃", "N"), ("40 °C", "Range 85 °C -40 °C", "N"),
+    ("40 ℃", "25 to -40 ℃", "N"), ("40 °C", "from 85 to -40 °C", "N"), ("12 V", "전원 +5 V -12 V", "N"),
+    ("12 V", "Pin 3 VEE -12 V", "N"), ("5 V", "OUT2 -5 V", "N"), ("10 %", "허용차 +5 % -10 %", "N"),
+    ("+10 %", "허용차 +5 % -10 %", "N"), ("15 %", "+10 % -15 %", "N"), ("+15 %", "+10 % -15 %", "N"),
+    ("0.1 mm", "공차 +0.2 mm -0.1 mm", "N"), ("0.1", "공차 +0.2 -0.1", "N"), ("0.5", "+0 -0.5", "N"),
+    ("+0.5", "+0 -0.5", "N"), ("3 dB", "Gain 1 dB -3 dB", "N"), ("40", "Typ 25 Min -40", "N"),
+    ("0.02 mm", "+0.05 mm -0.02 mm", "N"), ("1 A", "Offset 2 A -1 A", "N"),
+    # 6번: ± 빈틈(띄어쓰기 여러 칸, + / -), 쉼표·낱말에 붙은 빼기, 시간대
+    ("0.5 mm", "±  0.5 mm", "N"), ("0.5 mm", "+ / - 0.5 mm", "N"), ("+0.5 mm", "+ / - 0.5 mm", "N"),
+    ("10 %", "+/-  10 %", "N"), ("-5 V", "+ / - 5 V", "N"), ("40 ℃", "25,-40 ℃", "N"), ("40℃", "Min-40℃", "N"),
+    ("08:30", "UTC-08:30", "N"), ("5:30", "GMT-5:30", "N"),
+    # q2: 앞에 다른 값이 있는 음수
+    ("30 ℃", "보관 70 ℃ -30 ℃", "N"), ("0.5 V", "Offset 1 mV -0.5 V", "N"), ("2 mm", "X 10 mm -2 mm", "N"),
+    ("55 ℃", "Tmax 125 ℃ Tmin 25 ℃ -55 ℃", "N"), ("20 dBm", "Pout 10 dBm -20 dBm", "N"), ("1 %", "±2 % -1 %", "N"),
+    ("3 ㎜", "치수 10 ㎜ -3 ㎜", "N"),
+    # 반대로 맞아야 할 것: 같은 부호는 exact, 범위인지 애매하면 최소한 후보
+    ("-40 ℃", "25 to -40 ℃", "E"), ("-0.1 mm", "공차 +0.2 mm -0.1 mm", "N"), ("-12 V", "전원 +5 V -12 V", "N"),
+    ("±0.5 mm", "±  0.5 mm", "E"), ("±0.5 mm", "+ / - 0.5 mm", "E"), ("±10 %", "+/-  10 %", "E"),
+    ("-40 ℃", "25,-40 ℃", "E"), ("-40℃", "Min-40℃", "E"), ("-20", "\u221220", "E"), ("-20", "\u201320", "E"),
+    ("+5 V", "+ 5 V", "E"), ("-20", "10\u201320", "N"), ("3 dB", "-3 dB", "N"), ("0.5", "±0.5", "N"),
+    # 범위 대시: 양옆이 띄어진 '0 - 20'만 범위 (부호 없는 20과는 exact, -20과는 아님)
+    ("20", "0 - 20", "E"), ("20 ℃", "0 - 20 ℃", "E"), ("-20", "0 - 20", "N"), ("-20 ℃", "0 - 20 ℃", "N"),
+    ("20", "10 -20", "N"), ("20", "1-20", "N"), ("100 Hz", "10-100 Hz", "N"),
+    # 다른 낱말 뒤 숫자의 붙임표는 구분자 ('SOI 1' = 'SOI-1'), 영숫자 코드
+    ("SOI 1", "SOI-1", "E"), ("SOI 1", "SOI #1", "E"), ("ABC-1234", "ABC-1234", "E"), ("ABC-1234", "ABC-1234-5", "N"),
+    ("정격 전압 5 V", "정격 전압: 5V", "E"), ("정격 전압 5 V", "정격 전압: -5V", "N"),
+    # 3번: 단위 접두 대소문자 (m/M, p/P, μ = u = U+00B5). 소문자 'mohm'은 밀리로 봄
+    ("10 mohm", "10 MΩ", "N"), ("10 Mohm", "10 mΩ", "N"), ("10 MΩ", "10 mohm", "N"), ("100 mohm", "100 MΩ", "N"),
+    ("1 Mohm", "1 mohm", "N"), ("1 mΩ", "1 ㏁", "N"), ("10 kohm", "10 MΩ", "N"), ("5 ohm", "5 ㏁", "N"),
+    ("10 mHz", "10 MHz", "N"), ("1 mW", "1 MW", "N"), ("10 MPa", "10 mPa·s", "N"), ("5 mV", "5 MV", "N"),
+    ("10 mA", "10 MA", "N"), ("5 v", "5 V", "E"), ("10 KΩ", "10 kΩ", "E"), ("10 uA", "10 \u03bcA", "E"),
+    ("10 \u03bcA", "10 \u00b5A", "E"), ("10 min", "10 MIN", "E"), ("1 ppm", "1 PPM", "E"), ("10 mΩ", "10 mohm", "E"),
+    # 7번: 뜻이 다른 꼬리 (피크·실효·게이지·가중), 지수, 상(φ)은 exact가 아님. 같은 단위 꼬리는 그대로
+    ("1x10", "1×10\u207b\u00b3", "N"), ("1x10", "1×10^-3", "N"), ("1x10", "1×10", "E"),
+    ("5 V", "5 Vp-p", "N"), ("5 V", "5 Vpp", "N"), ("5 V", "5 Vp", "N"), ("10 A", "10 Apk", "N"), ("5 V", "5 Vrms", "N"),
+    ("1 bar", "1 barg", "N"), ("1 bar", "1 bara", "N"), ("30 dB", "30 dBA", "N"), ("Ø10", "φ10", "N"),
+    ("Ø10", "ø10", "E"), ("Φ10", "φ10", "E"), ("5 V", "5 Vdc", "E"), ("5 V", "5 VAC", "E"), ("10 s", "10 sec", "E"),
+    ("10 min", "10 mins", "E"), ("10 h", "10 hrs", "E"), ("5 V", "5 VA", "N"), ("10 m", "10 mm", "N"),
+]
+
+
+@pytest.mark.parametrize("query,text,want", NUMBER_KIND_CASES_6)
+def test_number_match_kind_review6(query, text, want):
+    assert _match_kind(query, text) == want, (query, text)
+
+
+@pytest.mark.parametrize("query,text", [
+    ("0 0 0 0 0 0 0 1", "REGA R/W " + "0 " * 3000), ("1 1 1 1 1 3", "1 " * 600), ("1 1 1 1 3", "1 " * 2500),
+    ("1 1 1 1 1 1 1 3", "1 " * 20000), ("20", "1-20 " * 20000), ("5 V", "-5 V " * 20000),
+])
+def test_number_search_linear_time(query, text):
+    # 6차 검토 [치명]: 숫자 안전망의 큰 정규식이 '1 1 1 ...'에서 지수 시간 -> 숫자별 위치 목록 + 40자 창 선형 탐색
+    t = time.monotonic()
+    reader.build_matcher(query, False)(text)
+    reader.number_search([({}, {"text": text})], reader.parse_query(query), re.IGNORECASE)
+    assert time.monotonic() - t < 1.0
+
+
+@pytest.mark.parametrize("text", ["1" * 20000, "시리얼 " + "1234567890" * 550 + " 정격 전압", ("1 " * 20000)[:20000],
+                                  ("10 - 20 " * 3000)])
+def test_spec_conditions_long_digit_runs(text):
+    # 6차 검토 [높음]: 긴 숫자열에서 모든 자리를 시작점으로 다시 읽어 제곱 시간. 구분자 없는 31자 이상 숫자열은 수치가 아님
+    t = time.monotonic()
+    reader.spec_conditions(text)
+    reader.near_conditions(text + " 정격 전압 5 V", ["정격 전압"])
+    assert time.monotonic() - t < 3.0
+    assert reader.spec_conditions("시리얼 " + "1" * 40 + " V") == []
+    assert reader.spec_conditions("정격 5 V")[0]["lo"] == 5.0
+
+
+def test_number_safety_net_needs_other_words(tmp_path, capsys):
+    # 6차 검토 [중간]: 숫자 아닌 낱말(단위 빼고)도 같은 단위 안에 있어야 후보. 낱말이 없으면 number를 건너뜀
+    p = tmp_path / "규격.txt"
+    p.write_text("정격 전류 1 A\n\n보관 온도 -20 ℃\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "1 퀀텀", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["match_mode"] == "exact", out
+    assert out["agent_directive"].startswith("VERIFIED: 0건"), out
+    code, out = run_main(reader, capsys, "search", "--query", "보관 20 ℃", "--file", str(p))   # 낱말이 있으면 후보
+    assert out["match_mode"] == "number" and out["candidates"][0]["number_words"] == {"보관 20 ℃": "-20 ℃"}, out
+    code, out = run_main(reader, capsys, "search", "--query", "정격 20 ℃", "--file", str(p))   # 같은 단위에 '정격' 없음
+    assert out["match_mode"] != "number", out
+
+
+def test_number_safety_net_time_cap_is_not_zero_verified(tmp_path, capsys, monkeypatch):
+    # 6차 검토: 숫자 안전망이 시간 상한에 걸리면 0건이어도 VERIFIED로 단정하지 않음
+    p = tmp_path / "규격.txt"
+    p.write_text("\n\n".join(f"항목 {i} 값 {i}" for i in range(200)) + "\n", encoding="utf-8")
+    monkeypatch.setattr(reader, "NUMBER_SEARCH_SECONDS", -1.0)
+    code, out = run_main(reader, capsys, "search", "--query", "없는말 7777", "--file", str(p))
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert any("숫자 안전망" in g for g in out["not_searched"]), out
 
 
 @pytest.mark.parametrize("text", ["1E999 Ω 이상", "1×10^999 Ω 이상", "1×10\u2079\u2079\u2079 Ω 이상", "10^999 Ω 이상", "1E-120 A 이하"])

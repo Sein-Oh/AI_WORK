@@ -1132,6 +1132,32 @@ def test_check_remaining_specs_reruns_same_command(check_env, capsys, monkeypatc
     assert "next_commands[0](같은 명령)을 그대로 다시 실행" in d and "다시 실행하지 말고" not in d, d
 
 
+def test_check_time_limit_marks_rest_needs_review(check_env, capsys, monkeypatch):
+    # 6차 검토 (1.4.69): 명령 시간 제한이 다가오면 남은 행은 대조하지 않고 판단필요 + UNVERIFIED (JSON은 늘 냄)
+    spec, book = check_env
+    _check_book(book, [("정격 전압", 5.1), ("소비 전류", "3.5 A"), ("절연 저항", "150 MΩ")])
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: True)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec.parent))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    got = [(r["cell"], r["verdict"]) for r in out["results"]]
+    assert got[0] == ("시험!D2", "일치") and got[1:] == [("시험!D3", "판단필요"), ("시험!D4", "판단필요")], got
+    assert out["results"][1]["reason"].startswith("명령 시간 제한으로 대조하지 못함"), out["results"][1]
+    d = out["agent_directive"]
+    assert "명령 시간 제한으로 2행(시험!D3부터)은 대조하지 못해 판단필요로 둠" in d and "다시 대조할지 사용자에게 물으세요" in d, d
+
+
+def test_check_long_serial_number_is_fast(tmp_path):
+    # 6차 검토 [높음]: 규격 문장의 긴 숫자열(시리얼 5500자)에서 조건 읽기가 제곱 시간이던 문제
+    import time
+    p = tmp_path / "s.txt"
+    p.write_text("시리얼 " + "1234567890" * 550 + " 정격 전압\n", encoding="utf-8")
+    docs = [{"file": str(p), "units": reader.parse_txt(str(p))[0]}]
+    t = time.monotonic()
+    r = excel._judge_row(docs, "정격 전압", "5", "", "값(V)")
+    assert time.monotonic() - t < 3.0 and r["verdict"] in ("판단필요", "근거없음"), r
+
+
 def test_check_all_decided_is_still_unverified_and_save(check_env, capsys, tmp_path):
     # 4차 검토(1.4.67): 자연어 규격 해석은 휴리스틱이라 모든 행을 판정해도 VERIFIED가 아님 (참고 판정, 사용자 확인)
     spec, book = check_env

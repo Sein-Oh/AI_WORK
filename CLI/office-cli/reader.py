@@ -20,6 +20,7 @@
     python reader.py search --query "단가" --file "C:\\docs\\견적" --pages 3-7 --section "SCOPE"
     python reader.py list --name 규격
 """
+import bisect
 import contextlib
 import functools
 import hashlib
@@ -2579,15 +2580,18 @@ def strip_particles(term: str) -> str:
     return " ".join(_strip_word(w) for w in term.split())
 
 
-_DIAMETER = "\u03a6\u03c6\u00d8\u00f8\u2300"          # 지름 기호: Φ φ Ø ø U+2300 (Φ10 = Ø10)
+_DIAMETER = "\u00d8\u00f8\u2300"          # 지름 기호: Ø ø U+2300 (서로 같음)
+_PHI = "\u03a6\u03c6"                     # Φ φ: 지름으로도 상(phase, '3φ')으로도 쓰여 Ø와 같게 보지 않음 (1.4.69)
 
 
 def _char(c: str) -> str:
-    """글자 하나의 정규식: 영문·숫자는 전각(ＰＣＢ, ５)도 맞게, 지름 기호는 서로 같게."""
+    """글자 하나의 정규식: 영문·숫자는 전각(ＰＣＢ, ５)도 맞게, 지름 기호는 서로 같게 (Φ·φ는 Ø와 다름)."""
     if c.isascii() and c.isalnum():
         return f"[{c}{chr(ord(c) + 0xFEE0)}]"
     if c in _DIAMETER:
-        return f"[{_DIAMETER}]"
+        return f"(?-i:[{_DIAMETER}])"
+    if c in _PHI:
+        return f"(?-i:[{_PHI}])"
     return re.escape(c)
 
 
@@ -2605,7 +2609,9 @@ def _unit_alias(u: str) -> Optional[str]:
     squares = [chr(c) for c in range(0x3380, 0x33E0) if unicodedata.normalize("NFKC", chr(c)) in forms + [u]]
     if not forms and not squares:
         return None
-    alts = [r"\s*".join(_char(x) for x in f) for f in sorted(set(forms + [u]), key=len, reverse=True)]
+    # 첫 글자가 단위 접두(m, M, μ 등)면 대소문자를 가림: 'mohm'(밀리로 봄)은 'MΩ'과 다름
+    alts = [r"\s*".join((_prefix_char(x, f) if i == 0 else None) or _char(x) for i, x in enumerate(f))
+            for f in sorted(set(forms + [u]), key=len, reverse=True)]
     return "(?:" + "|".join(alts + [re.escape(x) for x in squares]) + ")"
 
 
@@ -2617,35 +2623,119 @@ _SQUARE_UNIT = "[\u3380-\u33df\u2113]"
 
 
 _MINUS = "\\-\u2010\u2011\u2012\u2013\u2212"          # 글에서 빼기로 쓰는 글자 ('-', U+2010~2013, U+2212)
-# 빼기 앞이 '숫자(+단위) 띄어쓰기'면 범위의 대시 ('0 - 20 ℃', '10 -100 Hz', '5 V - 10 V'): 부호가 아님.
-# 파이썬 re의 뒤보기는 길이가 고정이라 길이마다 따로 둠 (단위 글자 1~3개, 띄어쓰기 1~3개)
-_UNIT_CH = "[A-Za-z%\u00b0\u2103\u03a9\u2126\u03bc\u00b5\u3380-\u33df\u2113]"
-_RANGE_BEFORE = [r"\d" + r"\s" * j for j in (1, 2, 3)] + [
-    r"\d" + r"\s" * s + _UNIT_CH * k + r"\s" * j for k in (1, 2, 3) for s in (0, 1) for j in (1, 2, 3)]
-_NOT_RANGE = "".join(f"(?<!{x})" for x in _RANGE_BEFORE)
-# 부호 없는 숫자 앞: 빼기 부호가 붙은 음수('-20', '온도-20', ' -20'(U+2212), '~-20')와 '±5', '+/-5'는 아님.
-# '1-20', 'A-20'(앞이 영문·숫자), '0 - 20'·'10 -20'(범위)의 대시는 부호가 아니라 맞음
-_NO_PM = r"(?<!±)(?<!±\s)(?<!\+/-)(?<!\+-)(?<!\+/-\s)(?<!\+-\s)"
-_NO_MINUS = (_NO_PM + rf"(?:(?<![{_MINUS}])|(?<=[\dA-Za-z.,][{_MINUS}])|"
-             + "|".join(f"(?<={x}[{_MINUS}])" for x in _RANGE_BEFORE) + ")")
-_UNSIGNED = r"(?<![\d.])" + _NO_MINUS
-# 글의 부호: 빼기는 앞이 영문·숫자·점이 아니고 범위의 대시도 아닐 때 ('온도-20', 'Ta=-20'은 부호, 'X-20', '0 - 20'은 아님).
-# ±(+/-, +-)는 앞 글자와 무관 ('100±0.5', '5V±5%', '공차±0.1')
-_SIGN_PAT = {"-": rf"(?<![\dA-Za-z.])(?<!\+)(?<!\+/){_NOT_RANGE}[{_MINUS}]\s?",
-             "±": r"(?:±|\+\s*/\s*-|\+-)\s*", "+": _UNSIGNED + r"(?:\+\s?)?"}
-# 검색어의 숫자 앞 부호: +·빼기는 낱말 처음이거나 앞이 영문·숫자가 아닐 때만 ('A-20', '1-20'의 대시는 부호가 아님),
-# ±는 어디서나 ('5V±5%')
-_SIGN_BEFORE = re.compile(rf"(?:(?:^|(?<=[^\dA-Za-z.]))([+{_MINUS}])|(±|\+\s*/\s*-|\+-))\s?$")
-# 끝 단위 뒤에 이어져도 같은 단위인 꼬리 ('5 Vrms', '3 sec', '10 hrs', '30 dBA', '1 barg'). 다른 단위로 이어지면
-# ('10 mm', '1 Ah', '30 dBm', '1 kgf') 아님. 키: _UNIT_TABLE의 단위(정확히) 또는 기준 단위
-_ELEC_TAIL = ("rms", "p-p", "pp", "pk", "peak", "max", "min", "typ", "nom", "ac", "dc", "in", "out")
+_DASHES = "-\u2010\u2011\u2012\u2013\u2014\u2212"      # 숫자 앞 부호 판정에서 대시로 보는 글자 (U+2014 포함)
+# 숫자 앞 부호 판정 (보수적 원칙, 1.4.69): 정확 일치(exact, VERIFIED)는 검색어 숫자와 글 숫자의 앞 부호가 분명히 같을 때만.
+# 글의 숫자 바로 앞(띄어쓰기 여러 칸·'/' 건너)이 -, U+2212, U+2013, ±, +/-, + / -, +-, + 중 하나인데 검색어에 같은 부호가
+# 없으면(또는 그 반대, 범위 대시인지 부호인지 애매하면) exact로 세지 않고 숫자 안전망 후보(number, UNVERIFIED)로 보냄.
+# 범위 대시는 양옆이 띄어진 '0 - 20', '5 V - 10 V'만 (부호 없는 20과는 exact, 부호 있는 -20과는 아님).
+_SIGN_GAP = 12                                         # 부호를 찾으며 건너뛸 띄어쓰기·'/'의 최대 글자 수
+_DASH_LABEL = re.compile(r"(?<![A-Za-z])(?:min|max|typ|nom|ta|tc|tj|tamb|temp|utc|gmt|to)$", re.IGNORECASE)
+_RANGE_LEFT = re.compile(r"(?<![\d.])\d+(?:[.,]\d+)?(?:[ \t]?([^\s\d]{1,4}))?\s+$")
+
+
+def _range_unit(u: Optional[str]) -> bool:
+    """범위 대시 앞 '숫자 단위'의 단위인지 ('5 V - 10 V'의 V). 'to', 'Min' 같은 낱말은 아님."""
+    if not u:
+        return True
+    n = unicodedata.normalize("NFKC", u)
+    return n in ("%", "°", "°C", "°F") or bool(_unit_key(n) or _unit_key("°" + n))
+
+
+def _text_sign(text: str, p: int) -> str:
+    """text[p]에서 시작하는 숫자의 앞 부호: 'none', 'range'(띄어 쓴 범위 대시), 'hyphen'(영문·숫자에 붙은 대시: 'A-20', '1-20'),
+    'minus', 'ambig'('25 -40': 범위인지 부호인지 애매), 'pm'(±, +/-, + / -, +-), 'plus'."""
+    j, lim = p, max(0, p - _SIGN_GAP)
+    while j > lim and (text[j - 1].isspace() or text[j - 1] == "/"):
+        j -= 1
+    if j == 0 or (j == lim and lim > 0):
+        return "none"
+    c = text[j - 1]
+    if c == "\u00b1":
+        return "pm"
+    if c == "+":
+        return "plus"
+    if c not in _DASHES:
+        return "none"
+    d = j - 1
+    k, lim = d, max(0, d - _SIGN_GAP)
+    while k > lim and (text[k - 1].isspace() or text[k - 1] == "/"):
+        k -= 1
+    if k > 0 and text[k - 1] == "+":
+        return "pm"
+    after, before = text[d + 1:p], text[k:d]
+    prev = text[d - 1] if d > 0 else ""
+    if not after and not before and prev.isascii() and prev.isalnum():
+        return "minus" if _DASH_LABEL.search(text[max(0, d - 5):d]) else "hyphen"     # 'Min-40', 'UTC-08:30'은 부호
+    left = _RANGE_LEFT.search(text[max(0, d - 20):d]) if before and "/" not in before else None
+    if left and _range_unit(left.group(1)):
+        return "range" if after and "/" not in after else "ambig"
+    return "minus"
+
+
+# 검색어 숫자의 앞 부호(왼쪽) -> exact로 셀 글 숫자의 앞 부호. 'after'는 검색어에서 다른 낱말 뒤의 부호 없는 숫자
+# ('SOI 1' = 'SOI-1'). 그 밖의 조합은 exact가 아님 (숫자 안전망 후보)
+_SIGN_OK: Dict[str, Tuple[str, ...]] = {
+    "none": ("none", "range"), "after": ("none", "range", "hyphen"), "hyphen": ("none", "range", "hyphen"),
+    "range": ("none", "range", "hyphen"), "minus": ("minus",), "ambig": ("minus", "ambig"), "pm": ("pm",), "plus": ("plus",),
+}
+# 검색어 숫자가 맨 앞일 때 글에서 부호까지 차지할 패턴 (뒤에 _text_sign으로 다시 확인)
+_SIGN_HEAD = {"minus": rf"[{_MINUS}\u2014]\s*", "ambig": rf"[{_MINUS}\u2014]\s*",
+              "pm": r"(?:±|\+\s*/\s*-|\+-)\s*", "plus": r"\+\s*"}
+_MARK_CLASS: Dict[str, str] = {}                       # 숫자 표시 그룹 이름 -> 검색어 숫자의 앞 부호
+_MARK_RE = re.compile(r"\(\?P<_n\d+>\)")
+_NUM_END = r"(?![.,]?\d)(?!\s*(?:[\u00b2\u00b3\u00b9\u2070-\u209f]|\^|\*\*))"    # 지수(위첨자 '10-3', '10^-3')가 이어지면 다른 값
+
+
+def _mark(cls: str) -> str:
+    """숫자 시작 자리 표시 (빈 그룹). 일치 뒤 _text_sign으로 글의 부호를 보고 _SIGN_OK에 없으면 버림."""
+    name = f"_n{len(_MARK_CLASS)}"
+    _MARK_CLASS[name] = cls
+    return f"(?P<{name}>)"
+
+
+class _SignChecked:
+    """숫자 표시가 든 검색어 정규식: 일치마다 글의 숫자 앞 부호를 확인 (re.Pattern의 search·finditer·pattern만)."""
+
+    def __init__(self, pat: "re.Pattern[str]", names: List[str]):
+        self.pat = pat
+        self.pattern = _MARK_RE.sub("", pat.pattern)      # 강조용으로 합칠 때 (그룹 이름이 겹치지 않게)
+        self.checks = [(n, _MARK_CLASS[n]) for n in names]
+
+    def _ok(self, m: "re.Match[str]") -> bool:
+        for name, cls in self.checks:
+            p = m.start(name)
+            if p >= 0 and _text_sign(m.string, p) not in _SIGN_OK[cls]:
+                return False
+        return True
+
+    def search(self, text: str, pos: int = 0) -> Optional["re.Match[str]"]:
+        while True:
+            m = self.pat.search(text, pos)
+            if m is None or self._ok(m):
+                return m
+            pos = m.start() + 1
+
+    def finditer(self, text: str):
+        pos = 0
+        while pos <= len(text):
+            m = self.search(text, pos)
+            if m is None:
+                return
+            yield m
+            pos = m.end() if m.end() > m.start() else m.end() + 1
+
+
+# 끝 단위 뒤에 이어져도 같은 단위인 꼬리 ('5 Vdc', '3 sec', '10 hrs'). 다른 단위로 이어지거나 뜻이 다른 꼬리
+# ('10 mm', '1 Ah', '30 dBm', '5 Vp-p'·'5 Vpp'·'10 Apk'(피크), '5 Vrms'(실효), '1 barg'(게이지), '30 dBA'(가중))는 아님.
+# 키: _UNIT_TABLE의 단위(정확히) 또는 기준 단위
+_ELEC_TAIL = ("max", "min", "typ", "nom", "ac", "dc", "in", "out")
 _UNIT_TAILS: Dict[str, Tuple[str, ...]] = {
-    "V": _ELEC_TAIL + ("p", "o", "cc", "dd", "ee", "ss"),
+    "V": _ELEC_TAIL + ("o", "cc", "dd", "ee", "ss"),
     "A": _ELEC_TAIL,
-    "W": ("max", "min", "typ", "nom", "rms", "ac", "dc"),
+    "W": ("max", "min", "typ", "nom", "ac", "dc"),
     "s": ("ec", "ecs", "econd", "econds"), "ms": ("ec", "ecs"), "us": ("ec", "ecs"), "μs": ("ec", "ecs"),
     "ns": ("ec", "ecs"), "sec": ("s", "ond", "onds"), "min": ("s", "ute", "utes"), "h": ("r", "rs", "our", "ours"),
-    "hr": ("s",), "dB": ("A",), "Pa": ("g", "a"),
+    "hr": ("s",),
 }
 _UNIT_LETTER = "[A-Za-z\uff21-\uff3a\uff41-\uff5a\u03a9\u2126\u03bc\u00b5\u00b0\u2103]"
 
@@ -2658,14 +2748,31 @@ def _unit_end(unit_key: Optional[str]) -> str:
     return rf"(?:(?=(?:{alts})(?!{_UNIT_LETTER}))|(?!{_UNIT_LETTER}))"
 
 
-def _sign_of(text_before: str) -> Optional[str]:
-    """숫자 바로 앞 글에서 부호: '-', '±', '+' 또는 None."""
-    m = _SIGN_BEFORE.search(text_before)
-    if not m:
-        return None
-    if m.group(2):
-        return "±"
-    return "+" if m.group(1) == "+" else "-"
+# 숫자 바로 뒤 단위 접두의 대소문자 (m = 밀리, M = 메가, p = 피코, P = 페타): 대소문자가 다르면 다른 단위 ('10 mHz' != '10 MHz').
+# μ·u·U+00B5는 같은 마이크로. 접두가 아닌 단위('min', 'max', 'ppm', 'psi', 'Pa', 'pH')는 대소문자 무관
+_CASE_PREFIX = "mMpP"
+_CASE_FREE_UNITS = {"min", "mins", "minute", "minutes", "max", "mile", "miles", "mph", "ppm", "ppb", "ppt", "psi", "psig",
+                    "psia", "pcs", "pc", "pa", "pas", "ph"}
+_MICRO = "u\u03bc\u00b5"
+
+
+def _prefix_char(c: str, unit: str) -> Optional[str]:
+    """단위 첫 글자 c(단위 글자 전체 unit)의 정규식: 대소문자를 가려야 하면 (?-i:...), 아니면 None."""
+    if c in _CASE_PREFIX and unit.lower() not in _CASE_FREE_UNITS:
+        return f"(?-i:{_char(c)})"
+    if c in _MICRO and len(unit) >= 2:
+        return f"(?-i:[{_MICRO}])"
+    return None
+
+
+def _unit_letters(w: List[str], ti: int) -> str:
+    """낱말 토큰 w의 ti부터 이어진 영문·그리스 글자 (숫자 뒤 단위 글자: '10mHz이상' -> 'mHz')."""
+    out = ""
+    for x in w[ti:]:
+        if len(x) != 1 or not (x.isascii() and x.isalpha() or x in _MICRO or x in "\u03a9\u2126"):
+            break
+        out += x
+    return out
 
 
 def _number(tok: str) -> str:
@@ -2711,43 +2818,48 @@ def _single_pattern(term: str) -> str:
     if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+", compact):
         # 숫자 하나: 천 단위 쉼표·소수 끝 0과 무관 ('5,000' = '5000', '0.5' = '0.50'), 숫자 경계는 지킴 ('0.5'는 '10.5'와 다름)
         # 소수 한 자리 맨 숫자('2.1')는 장절 번호 경계(section_matches와 같음): '2.1.3'(하위 절)은 맞고 '2.10', '12.1'은 아님
-        tail = r"(?!,?\d)" if re.fullmatch(r"\d+\.[1-9]", compact) else r"(?![.,]?\d)"
-        return _UNSIGNED + _number(compact) + tail
+        tail = r"(?!,?\d)" if re.fullmatch(r"\d+\.[1-9]", compact) else _NUM_END
+        return r"(?<![\d.])" + _mark("none") + _number(compact) + tail
     tm = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", compact)
     if tm and int(tm.group(1)) <= 24 and int(tm.group(2)) < 60:
         # 시각: '08:30' = '8:30' = '8 : 30' ('18:30', '8:300', '8:30:15'(초가 있는 다른 시각)과는 다름)
         sec = rf"\s*:\s*{tm.group(3)}" if tm.group(3) else r"(?!\s*:\s*\d)"
-        return rf"(?<![\d.:])0?{int(tm.group(1))}\s*:\s*{tm.group(2)}{sec}(?![.,]?\d)"
+        return rf"(?<![\d.:]){_mark('none')}0?{int(tm.group(1))}\s*:\s*{tm.group(2)}{sec}(?![.,]?\d)"
     dm = re.fullmatch(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\.?", compact)
     if dm and 1 <= int(dm.group(2)) <= 12 and 1 <= int(dm.group(3)) <= 31:
         # 날짜: '2026.11.04' = '2026.11.4' = '2026-11-04' = '2026/11/04' = '2026년 11월 4일'
         y, mo, d = dm.group(1), str(int(dm.group(2))), str(int(dm.group(3)))
         sep = r"\s*[.\-/]\s*"
-        return (rf"(?<![\d.]){y}(?:{sep}0?{mo}{sep}0?{d}|\s*년\s*0?{mo}\s*월\s*0?{d}\s*일)(?![.,]?\d)")
+        return (rf"(?<![\d.]){_mark('none')}{y}(?:{sep}0?{mo}{sep}0?{d}|\s*년\s*0?{mo}\s*월\s*0?{d}\s*일)(?![.,]?\d)")
     sm = re.fullmatch(rf"(±|\+/-|\+-|[+{_MINUS}])?(\d{{1,3}}(?:,\d{{3}})+(?:\.\d+)?|\d+(?:\.\d+)?)(%)?", compact)
     if sm and (sm.group(1) or sm.group(3)):
         # 부호·%가 붙은 숫자 하나: '-20'은 '20', '1-20', 'A-20'과 다름, '±5'는 '±5.5'와 다름, '10%' = '10.0 %'
-        sign = _sign_of(sm.group(1) or "")
-        head = _SIGN_PAT[sign] if sign else _UNSIGNED
-        return head + _number(sm.group(2)) + (r"\s*%" if sm.group(3) else r"(?![.,]?\d)")
+        cls = _text_sign(compact, sm.start(2))
+        head = _SIGN_HEAD.get(cls) or r"(?<![\d.])"
+        return head + _mark(cls) + _number(sm.group(2)) + (r"\s*%" if sm.group(3) else _NUM_END)
     if not core or (core.isdigit() and core != compact):
         chars = compact or t
         body = r"\s*".join(_char(c) for c in chars)      # 기호까지 그대로 ('1.2'는 '12'와 다름)
         if chars[0].isdigit():
-            body = _UNSIGNED + body                       # '1.2'가 '11.2', '3.1.2'의 끝과 맞지 않게
+            body = r"(?<![\d.])" + _mark("none") + body   # '1.2'가 '11.2', '3.1.2', '-1.2'의 끝과 맞지 않게
         if chars[-1].isdigit():
-            body += r"(?![.,]?\d)"                       # '1/2'가 '1/2.5'와 맞지 않게
+            body += _NUM_END                             # '1/2'가 '1/2.5'와 맞지 않게
         return body
     # 낱말마다 글자 사이에 기호·띄어쓰기를 허용하고, 한글로 끝나는 낱말 뒤에는 글의 조사를 허용 ('절연저항이 100MΩ' = '절연 저항은 100 MΩ')
-    raw_words = [w for w in t.split() if any(re.match(r"[^\W_]", x) for x in _NUM_TOKEN.findall(w))]
-    signs: Dict[Tuple[int, int], Optional[str]] = {}
+    raw = [(wm.group(0), wm.start()) for wm in re.finditer(r"\S+", t)
+           if any(re.match(r"[^\W_]", x) for x in _NUM_TOKEN.findall(wm.group(0)))]
+    raw_words = [w for w, _ in raw]
+    # 숫자마다 검색어 안의 앞 부호 (_text_sign: 'Ta -20' -> minus, '0 - 20' -> range, 'ABC-1234' -> hyphen).
+    # 다른 낱말 뒤의 부호 없는 숫자는 'after' ('SOI 1'은 'SOI-1'과도 맞음)
+    signs: Dict[Tuple[int, int], str] = {}
     words: List[List[str]] = []
-    for wi, w in enumerate(raw_words):
+    for wi, (w, off) in enumerate(raw):
         kept: List[str] = []
         for m in _NUM_TOKEN.finditer(w):
             if re.match(r"[^\W_]", m.group(0)):
                 if m.group(0)[0].isdigit():
-                    signs[(wi, len(kept))] = _sign_of(w[:m.start()])
+                    cls = _text_sign(t, off + m.start())
+                    signs[(wi, len(kept))] = "after" if cls == "none" and (kept or words) else cls
                 kept.append(m.group(0))
         words.append(kept)
     toks = [x for w in words for x in w]
@@ -2779,9 +2891,13 @@ def _single_pattern(term: str) -> str:
                 prev = tok
                 continue
             if tok[0].isdigit():
-                sign = signs.get((wi, ti))
-                # 부호는 패턴에 넣음 ('-20 ℃'는 '20 ℃', '+20 ℃'와 다름). 부호 없는 숫자는 음수의 끝과 맞지 않게
-                parts.append((_SIGN_PAT[sign] if sign else _NO_MINUS) + _number(tok))
+                cls = signs.get((wi, ti), "none")
+                # 맨 앞 숫자의 부호는 패턴에 넣고(가운데 숫자는 낱말 사이 _SEP가 부호를 차지), 일치 뒤 글의 부호를 확인
+                # ('-20 ℃'는 '20 ℃', '+20 ℃', '1-20 ℃'와 다름: _SignChecked)
+                head = _SIGN_HEAD.get(cls, "") if not parts and not pieces else ""
+                parts.append(head + _mark(cls) + _number(tok))
+            elif after_num and _prefix_char(tok, _unit_letters(w, ti)):
+                parts.append(_prefix_char(tok, _unit_letters(w, ti)))  # 단위 접두 대소문자: '10 mHz' != '10 MHz'
             elif tok.upper() == "C" and prev[:1].isdigit():
                 parts.append(r"(?:\u2103|[Cc\uff23\uff43])")            # 숫자 뒤 C: 25°C = 25 ℃ = 25C
             else:
@@ -2797,10 +2913,10 @@ def _single_pattern(term: str) -> str:
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*[\-_][A-Za-z0-9\-_]*\d", compact):
         # 영숫자 코드('ABC-1234'): 앞뒤로 영문·숫자가 이어진 다른 코드('XABC-1234', 'ABC-1234-5', 'ABC-12345')와 다름
         body = r"(?<![A-Za-z0-9])" + body + r"(?![\-_]?[0-9])(?![A-Za-z])"
-    if toks[0][0].isdigit() and signs.get((0, 0)) in (None, "+"):
-        body = r"(?<![\d.])" + body                     # 부호('-', '±')가 있으면 앞 경계는 부호 패턴이 봄 ('100±0.5 mm')
+    if toks[0][0].isdigit() and signs.get((0, 0)) not in _SIGN_HEAD:
+        body = r"(?<![\d.])" + body                     # 부호('-', '±', '+')가 있으면 앞 경계는 부호 패턴이 봄 ('100±0.5 mm')
     if toks[-1][0].isdigit():
-        body += r"(?![.,]?\d)"
+        body += _NUM_END
     else:
         last_num = max((i for i, x in enumerate(toks) if x[0].isdigit()), default=-1)
         tail = toks[last_num + 1:]
@@ -2854,9 +2970,12 @@ def synonyms_of(term: str) -> List[str]:
 
 
 @functools.lru_cache(maxsize=512)
-def _compiled(term: str, flags: int, syn: Tuple[str, ...]) -> "re.Pattern[str]":
+def _compiled(term: str, flags: int, syn: Tuple[str, ...]) -> Any:
+    """검색어 정규식. 숫자가 들면 글의 숫자 앞 부호를 확인하는 _SignChecked (search·finditer·pattern은 re.Pattern과 같음)."""
     alts = [_single_pattern(t) for t in (term,) + syn]
-    return re.compile("|".join(f"(?:{a})" for a in alts), flags)
+    pat = re.compile("|".join(f"(?:{a})" for a in alts), flags)
+    names = [n for n in pat.groupindex if n in _MARK_CLASS]
+    return _SignChecked(pat, names) if names else pat
 
 
 def _term_pattern(term: str, flags: int) -> "re.Pattern[str]":
@@ -2962,9 +3081,53 @@ def _fuzzy_word(text: str, core: str) -> Optional[str]:
     return None
 
 
-def _loose_number_pattern(term: str) -> Optional["re.Pattern[str]"]:
-    """숫자 안전망: 검색어의 숫자 값만 차례로 찾는 느슨한 정규식 (부호·단위·붙여쓰기·기호 무시, 숫자 경계는 지킴:
-    '5'는 '15', '5.5'와 다름). 숫자 사이에는 40자까지 무엇이든 허용. 숫자가 없으면 None."""
+NUMBER_GAP = 40                # 숫자 안전망: 검색어의 숫자 사이에 끼어도 되는 글자 수
+NUMBER_SEARCH_SECONDS = 20.0   # 숫자 안전망 전체의 시간 상한 (넘으면 남은 단위는 보지 않고 결과에 알림)
+
+
+class _LooseSpan:
+    """_LooseNumbers.search의 결과 (re.Match의 start·end만)."""
+
+    def __init__(self, s: int, e: int):
+        self._s, self._e = s, e
+
+    def start(self) -> int:
+        return self._s
+
+    def end(self) -> int:
+        return self._e
+
+
+class _LooseNumbers:
+    """숫자 안전망: 검색어의 숫자 값만 차례로 찾음 (부호·단위·붙여쓰기·기호 무시, 숫자 경계는 지킴: '5'는 '15', '5.5'와 다름).
+    숫자 사이에는 NUMBER_GAP자까지 무엇이든 허용. 숫자마다 위치 목록을 만든 뒤 앞 숫자의 끝에서 NUMBER_GAP자 안에
+    다음 숫자가 시작하는 사슬을 선형으로 찾음 (하나의 큰 정규식은 '1 1 1 ...' 같은 글에서 지수 시간이 걸렸음, 1.4.69)."""
+
+    def __init__(self, pieces: List[str]):
+        self.pats = [re.compile(p, re.IGNORECASE) for p in pieces]
+
+    def search(self, text: str) -> Optional[_LooseSpan]:
+        # reach: 지금 숫자까지 사슬이 닿은 일치들 [(끝, 사슬 시작)], 끝 위치 오름차순
+        reach: List[Tuple[int, int]] = [(m.end(), m.start()) for m in self.pats[0].finditer(text)]
+        for pat in self.pats[1:]:
+            if not reach:
+                return None
+            ends = [e for e, _ in reach]
+            nxt: List[Tuple[int, int]] = []
+            for m in pat.finditer(text):
+                s = m.start()
+                hi = bisect.bisect_right(ends, s) - 1          # 앞 숫자의 끝이 s 이하인 마지막 일치
+                if hi >= 0 and ends[hi] >= s - NUMBER_GAP:
+                    nxt.append((m.end(), reach[hi][1]))
+            reach = nxt
+        if not reach:
+            return None
+        s, e = min((s0, e) for e, s0 in reach)
+        return _LooseSpan(s, e)
+
+
+def _loose_number_pattern(term: str) -> Optional[_LooseNumbers]:
+    """숫자 안전망의 찾기 객체 (_LooseNumbers). 숫자가 없으면 None."""
     t = unicodedata.normalize("NFKC", term)
     if not re.search(r"\d", t):
         return None
@@ -2977,38 +3140,67 @@ def _loose_number_pattern(term: str) -> Optional["re.Pattern[str]"]:
         whole, dot, frac = n.partition(".")
         whole = whole.lstrip("0") if whole.replace(",", "").strip("0") else "0"
         pieces.append(r"(?<![\d.])(?<!\d,)0*" + _number(whole + dot + frac) + r"(?![.,]?\d)")
-    return re.compile(r"[\s\S]{0,40}?".join(pieces), re.IGNORECASE)
+    return _LooseNumbers(pieces)
+
+
+def _need_words(term: str) -> List[str]:
+    """숫자 안전망에서도 같은 단위 안에 있어야 할 검색어 낱말: 숫자가 없고 글자가 든 낱말 중 단위('V', 'mm', '℃')가 아닌 것
+    ('1 퀀텀'의 '퀀텀', '정격 전압 5 V'의 '정격', '전압')."""
+    out = []
+    for w in unicodedata.normalize("NFKC", term).split():
+        if re.search(r"\d", w) or not re.search(r"[^\W\d_]", w):
+            continue
+        core = re.sub(r"[\W_]+", "", w)
+        if _unit_key(core) or _unit_key("°" + core) or core.lower() in ("c", "rms") \
+                or core.lower().endswith(("ohm", chr(0x3c9))):          # 'mohm', 'kΩ'(소문자로 ω)도 단위
+            continue
+        out.append(w)
+    return out
 
 
 def number_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: List[List[str]], flags: int,
-                  ) -> List[Dict[str, Any]]:
+                  status: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """정확히 일치한 곳이 0건일 때의 숫자 안전망: 숫자가 든 검색어는 숫자 값만 같은 곳, 나머지 검색어는 정확히 일치.
-    숫자 경계 규칙이 너무 엄격해 맞는 표기를 놓쳐도 '0건(규정 없음)'으로 단정하지 않게 후보로 줌.
+    숫자 경계·부호 규칙이 엄격해 맞는 표기를 놓쳐도 '0건(규정 없음)'으로 단정하지 않게 후보로 줌.
+    숫자가 든 검색어의 숫자 아닌 낱말(단위 빼고)도 같은 단위 안에 있어야 함 ('1 퀀텀'은 '퀀텀'이 없는 곳의 '1'과 맞지 않음).
+    NUMBER_SEARCH_SECONDS를 넘으면 남은 단위는 보지 않고 status['cut'] = True.
     반환 [{doc, unit, terms(강조할 글), matched_terms, missing_terms, number_words}] (숫자가 든 검색어가 없으면 빈 목록)."""
     loose = {t: _loose_number_pattern(t) for g in groups for t in g}
     if not any(loose.values()):
         return []
     pats = {t: _term_pattern(t, flags) for g in groups for t in g}
-    words = {t: " ".join(w for w in t.split() if not re.search(r"\d", w)) for t in loose}
+    need = {t: [_term_pattern(w, flags) for w in _need_words(t)] for t in loose if loose[t]}
+    words = {t: " ".join(_need_words(t)) for t in loose}
     rows: List[Dict[str, Any]] = []
-    for doc, u in units:
+    sign_chars = "\u00b1+/ \t" + _DASHES
+    deadline = time.monotonic() + NUMBER_SEARCH_SECONDS
+    for i, (doc, u) in enumerate(units):
+        if i % 50 == 49 and time.monotonic() > deadline:
+            if status is not None:
+                status["cut"] = True
+                status["checked"] = i
+            break
         text = unicodedata.normalize("NFC", u["text"])
         for g in groups:
             if not any(loose[t] for t in g):
                 continue
             exact, nw, extra = [], {}, []
             for term in g:
-                m = loose[term].search(text) if loose[term] else None
-                if m:
+                if loose[term]:
+                    if not all(p.search(text) for p in need[term]):
+                        break                                # 숫자 밖의 낱말이 없는 곳은 후보가 아님
+                    m = loose[term].search(text)
+                    if not m:
+                        break
                     # 실제 글: 앞의 부호(±, +/-, 빼기)와 뒤의 단위 글자까지 ('±0.5 mm', '-20℃')
                     a = m.start()
-                    while a > 0 and m.start() - a < 4 and text[a - 1] in "±+/ " + _MINUS.replace("\\", ""):
+                    while a > 0 and m.start() - a < 6 and text[a - 1] in sign_chars:
                         a -= 1
                     tail = re.match(r"\s?(?:[%\u00b0\u2103]|[A-Za-z\u03a9\u2126\u03bc\u3380-\u33df]{1,6})?", text[m.end():])
                     nw[term] = text[a:m.end() + len(tail.group(0))].strip()
-                    if words[term] and _term_pattern(words[term], flags).search(text):
-                        extra.append(words[term])            # 숫자 밖의 낱말도 든 곳을 앞으로 (점수)
-                elif not loose[term] and pats[term].search(text):
+                    if words[term]:
+                        extra.append(words[term])            # 숫자 밖의 낱말도 강조 (점수)
+                elif pats[term].search(text):
                     exact.append(term)
                 else:
                     break
@@ -3020,11 +3212,12 @@ def number_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: Li
 
 
 def widen_search(units: List[Tuple[Dict[str, Any], Dict[str, Any]]], groups: List[List[str]], flags: int,
-                 ) -> Tuple[str, List[Dict[str, Any]]]:
+                 status: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Dict[str, Any]]]:
     """모든 검색어가 든 단위가 없을 때 넓혀 찾기. 순서: number(숫자가 든 검색어면 숫자 값만 같은 곳, number_search) ->
     partial(검색어 절반 이상, 가장 많이 든 단위) -> fuzzy(한 글자 다른 낱말 허용, 모두 또는 절반 이상).
-    반환 (match_mode, [{doc, unit, terms(강조할 글), matched_terms, missing_terms, fuzzy_words 또는 number_words}])."""
-    num_rows = number_search(units, groups, flags)
+    반환 (match_mode, [{doc, unit, terms(강조할 글), matched_terms, missing_terms, fuzzy_words 또는 number_words}]).
+    status: number_search의 시간 상한 표시 (status['cut'])."""
+    num_rows = number_search(units, groups, flags, status)
     if num_rows:
         return "number", num_rows
     pats = {t: _term_pattern(t, flags) for g in groups for t in g}
@@ -3236,10 +3429,11 @@ def cmd_search(args) -> Dict[str, Any]:
             hits.append({"doc": doc, "unit": u, "terms": terms, "matched_terms": list(terms)})
     groups = [] if args.regex else parse_query(args.query)
     mode = "exact"
+    net_status: Dict[str, Any] = {}
     if not hits and groups and pool:
         # 0건: 숫자가 든 검색어면 숫자 값만 같은 곳(안전망) -> 일부 검색어만 든 단위 -> 한 글자 다른 낱말로 넓혀 찾음.
         # 정확 일치는 여전히 0건이라 count 0, 넓혀 찾은 결과는 candidates와 UNVERIFIED로 알림 (근거로 쓰지 않게)
-        mode, hits = widen_search(pool, groups, flags)
+        mode, hits = widen_search(pool, groups, flags, net_status)
     for h in hits:
         h["score"] = hit_score(h["unit"], h["terms"], flags) if not args.regex else 0
         h["snippet"] = make_snippet(h["unit"]["text"], h["terms"], args.context)
@@ -3412,6 +3606,10 @@ def cmd_search(args) -> Dict[str, Any]:
     if result.get("context_clamped"):
         notes += f" 저장 파일의 {result['context_clamped_reason']}."
     gaps = _search_gaps(docs, info, pages, sec_filter)
+    if net_status.get("cut"):
+        # 숫자 안전망이 시간 상한(NUMBER_SEARCH_SECONDS)으로 일부 단위만 봄: 0건이어도 '규정 없음'으로 단정하지 않음
+        gaps.append(f"숫자 안전망 검색이 {NUMBER_SEARCH_SECONDS:.0f}초 상한으로 단위 {len(pool)}개 중 "
+                    f"{net_status.get('checked', 0)}개만 확인함 (--file이나 --section으로 범위를 좁혀 다시 검색)")
     if gaps:
         result["not_searched"] = gaps
     if total == 0:
@@ -3747,7 +3945,9 @@ _UNIT_ALT = "|".join(re.escape(u) for u in sorted(_UNIT_TABLE, key=len, reverse=
 # 묶음 단위('Ω·cm', 'V/m', 'mm^2', 'mm2')도 그 단위가 아님 (모르는 단위 -> 조건으로 쓰지 않음)
 _UNIT_RE = (rf"(?:{_UNIT_ALT})(?:(?<=초)(?!과)|(?<!초))(?:(?=dc|ac|DC|AC)|(?![A-Za-z]))"
             r"(?!\s*[\u00b7\u22c5*/]\s*[A-Za-z\u03a9\u03bc\u00b0])(?![\^\d])")
-_NUM_RE = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+# 숫자는 다른 숫자의 가운데서 시작하지 않고 구분자 없이 30자를 넘으면 수치가 아님 (시리얼 번호 등): 긴 숫자열에서
+# 모든 자리를 시작점으로 다시 읽어 시간이 제곱으로 늘던 문제 (1.4.69)
+_NUM_RE = r"[+-]?(?<!\d)(?:\d{1,3}(?:,\d{3})+|\d{1,30})(?!\d)(?:\.\d{1,30}(?!\d))?"
 _Q = rf"(?P<{{n}}>{_NUM_RE})\s*(?P<{{u}}>{_UNIT_RE})?"          # 숫자와 (있으면) 단위
 # 단위 뒤 꼬리: 'V DC', 'V rms', 'dB(A)', 'mV(p-p)', 'V(DC)' (그 뒤의 이하·이상을 읽으려고)
 _AD = (r"(?:\s*(?:AC|DC|ac|dc|rms|RMS))?"
@@ -4100,6 +4300,9 @@ _PROVISO = re.compile(r"(?:^|[\s(\[])(?:다만|단)\s*[,:]|^\s*다만|(?<![A-Za-
 _COND_SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])(?<![Mm][Aa][Xx]\.)(?<![Mm][Ii][Nn]\.)(?<![Tt][Yy][Pp]\.)\s+|\n+")
 
 
+NEAR_PRE_CHARS = 200           # 낱말 앞 같은 절에서 조건을 읽을 글자 수
+
+
 def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], str]:
     """찾은 낱말 가까이의 수치 조건과 그 문장. 낱말이 든 문장에서 낱말부터 다음 항목 낱말(절 경계 뒤 낱말 + 수치) 직전까지
     (200자까지, '항목 절')를 먼저, 없으면 낱말이 든 절(앞쪽 절 경계부터 낱말까지). 같은 문장의 다른 항목 조건을 섞지 않으려고.
@@ -4136,6 +4339,7 @@ def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], 
                     c["alt"] = alt
         cuts = [m.end() for m in _CLAUSE_END.finditer(sent[:start])]
         pre = sent[cuts[-1] if cuts else 0:start]          # 낱말 앞 같은 절 ('최소 두께'를 '두께'로 찾았을 때 '최소')
+        pre = pre[-NEAR_PRE_CHARS:]                        # 끝 200자만 (구분자 없는 긴 글에서 시간이 늘지 않게)
         if not after:
             clause = pre
             after = spec_conditions(clause)
@@ -4171,8 +4375,11 @@ def find_item(docs: List[Dict[str, Any]], query: str, sec_key: str = "") -> Tupl
             if terms is not None:
                 hits.append({"doc": doc, "unit": u, "terms": terms})
     mode = "exact"
+    status: Dict[str, Any] = {}
     if not hits and pool:
-        mode, hits = widen_search(pool, parse_query(query), flags)
+        mode, hits = widen_search(pool, parse_query(query), flags, status)
+        if not hits and status.get("cut"):
+            mode = "number"           # 숫자 안전망이 시간 상한으로 끝까지 보지 못함: check는 '근거없음'이 아니라 판단필요
     for h in hits:
         h["score"] = hit_score(h["unit"], h["terms"], flags)
     hits.sort(key=lambda h: -h["score"])

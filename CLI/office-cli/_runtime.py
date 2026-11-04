@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.68"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.69"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -661,6 +661,13 @@ def check_time(next_step_seconds: float, progress: str) -> None:
         return
     if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
         raise Unfinished(progress)
+
+
+def time_up(reserve: float = TIME_RESERVE) -> bool:
+    """명령 시간 제한에서 reserve초를 뺀 시각을 넘었는지. 이어서 할 수 없는 반복(check의 행 대조)이 남은 일을
+    '못 함'으로 표시하고 결과 JSON을 내려고 씀 (이어서 할 수 있는 일은 check_time -> CONTINUE)."""
+    limit = time_limit()
+    return limit != float("inf") and time.monotonic() - RUN_START > limit - reserve
 
 
 def unfinished_payload(exc: "Unfinished", tool: str, command: str) -> Dict[str, Any]:
