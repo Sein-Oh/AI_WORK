@@ -109,7 +109,7 @@
   - 전용 에이전트: 사내 에이전트 En-Genius에 스킬로 붙이는 패키지를 만들었으나 업데이트를 멈추고 `archive/engenius`에 보관 (2026-11-04).
     다시 쓸 때 원래 자리로 옮기고 zip을 새로 만듦 (archive/README.md). 도구 쪽 En-Genius 대응(임시 폴더 실행 시 고정 데이터 폴더)은 그대로 둠
   - ml-kit 웹 서버: 동료 수요(예측이면 성능예측표로 충분)와 IT 정책·문서 보안 확인 후
-  - `opencode run` 자동화: 사용 안 함 (관리자 권한 문제로 열린 문서를 못 봄)
+  - `opencode run` 자동화: opencode CLI v2.2.5를 일반 권한 창에서 실행하면 동작 (관리자 창에서는 열린 문서를 못 봄). 기본 모델은 opencode.jsonc의 `model`, 이어 묻기 `-c`, 기록 `--format json`. Gemma 단계 자동 채점은 검토 중
 
 ## 6. 붙여넣을 첫 메시지
 ```text
