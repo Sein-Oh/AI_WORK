@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.40**, **office-cli 1.4.38**
+- main 기준 도구 버전: **ml-kit 2.9.40**, **office-cli 1.4.39**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -45,6 +45,7 @@
 | office-cli 1.4.34 | 새 명령 `outlook.py attachments`: 첨부 목록(`index`, `name`, `size`, `hidden_inline`), `--save [전체 경로 폴더]`로 내려받기(기본 `%USERPROFILE%\Downloads\메일 첨부\<시각>_<제목>`, 자동 정리 안 함), `--name 일부`/`--index 1,3`으로 고르기(맞는 것이 없으면 `[후보]`), 같은 이름은 ` (2)`와 `recovered`. `read/current --save-attach` 없앰(대신 `attachment_names`와 `next_commands` "첨부 내려받기"). `new/reply/forward --attach`는 없는 전체 경로 파일이면 메일을 만들기 전에 같은 폴더의 비슷한 파일 `[후보]`, 붙인 뒤 `Attachments.Count`로 확인(못 하면 UNVERIFIED, `--send`면 보내지 않음) |
 | office-cli 1.4.35 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\office-cli`를 실행: OpenCode와 같은 data, cache, config.json을 씀 (1.4.33의 고정 폴더는 도구가 트레이 임시 폴더에서 돌 때만) |
 | office-cli 1.4.36 | `excel.py read --formulas`: 읽은 범위의 수식 칸 목록(`formulas`: `cell`, `formula`, `value`, 배열 수식은 `array`·`array_range`), `formula_count`, 200개 상한(`formulas_truncated`, 전체는 `full_result_file` CSV). 열린 문서는 Formula2(없으면 Formula)를 범위 한 번에, 닫힌 xlsx는 openpyxl. SKILL.md가 바뀌어 En-Genius 스킬 zip을 다시 가져와야 함 |
+| office-cli 1.4.39 | 실제 사용 오류 로그 반영: `office.py write`, `office.py transfer --text`, `reader.py read --section`에 맞는 명령(워드/PPT/엑셀 write, reader search --section) 안내, `excel.py write --cell`에 `[추천] --range` |
 | office-cli 1.4.38 | `opencode run` 기록에서: 엑셀 `write`의 `--text`에 `[추천] --value`(전에는 `--target`), 표 파일 못 찾음 후보에 표 파일만, SKILL.md에 칸 하나 쓰기(`--value`) 줄 |
 | office-cli 1.4.37 | SKILL.md에 빠졌던 기존 기능(메일 list/folders·search --folder/--where·reply --all·new --cc·--body-file, PPT slide add/duplicate/delete/move, 엑셀 sheet/range/export/style/replace --all-sheets·차트 종류, 워드 --toc/--callout·replace --highlight)을 넣고 SKILL.md의 명령·옵션이 argparse에 있는지 테스트로 대조. 새 기능: `outlook.py list|search --days N|--since YYYY-MM-DD`(period), `excel.py range --action insert|delete`(값이 있으면 needs_user_decision, `--dry-run`, `--overwrite`), `range --action sort --by "부서,금액" [--desc]`, `read --where "금액 >= 100; 부서 = 영업"`(`row_numbers`) |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
@@ -112,7 +113,8 @@
   - 전용 에이전트: 사내 에이전트 En-Genius에 스킬로 붙이는 패키지를 만들었으나 업데이트를 멈추고 `archive/engenius`에 보관 (2026-11-04).
     다시 쓸 때 원래 자리로 옮기고 zip을 새로 만듦 (archive/README.md). 도구 쪽 En-Genius 대응(임시 폴더 실행 시 고정 데이터 폴더)은 그대로 둠
   - ml-kit 웹 서버: 동료 수요(예측이면 성능예측표로 충분)와 IT 정책·문서 보안 확인 후
-  - `opencode run` 자동화: opencode CLI v2.2.5를 일반 권한 창에서 실행하면 동작 (관리자 창에서는 열린 문서를 못 봄). 기본 모델은 opencode.jsonc의 `model`, 이어 묻기 `-c`, 기록 `--format json`. `run_all_tests.py --gemma`가 시나리오를 한 세션에 보내고 `grade_opencode.py --runs`로 채점 (회사 PC 확인 전)
+  - `opencode run` 자동화: 사용 중. opencode CLI v2.2.5, 일반 권한 창 (관리자 창에서는 열린 문서를 못 봄), 기본 모델은 opencode.jsonc의 `model`.
+    `run_all_tests.py --gemma`가 시나리오 14개를 한 세션에 보내고 `grade_opencode.py --runs`로 채점 (2026-11-04 회사 PC 12/14, R1·R2는 2.9.40에서 수정)
 
 ## 6. 붙여넣을 첫 메시지
 ```text
