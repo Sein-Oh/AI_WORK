@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.59**, **office-cli 1.4.64**
+- main 기준 도구 버전: **ml-kit 2.9.61**, **office-cli 1.4.64**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -83,6 +83,7 @@
 | ml-kit 2.9.37 | En-Genius 스킬로 실행하면 데이터 폴더(오류 로그)를 `<사용자>\Documents\En-Genius\CLI-data\ml-kit\data`에 둠. `ML_KIT_DATA_DIR`가 있으면 그것이 먼저. 모델·보고서는 지금처럼 데이터 파일 옆 |
 | ml-kit 2.9.38 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\ml-kit`를 실행: OpenCode와 같은 데이터 폴더 |
 | ml-kit 2.9.41~2.9.51 | .xlsx 백분율 서식 칸을 화면 값(11.9)으로 읽음(재학습 필요), `ml_map` 묻지 않은 열의 % 섞임은 빼고 계산, CSV 소수점 쉼표를 열마다 판단, `-i`의 `온도`+`온도(C)` 안내, 라이브러리 없음 `missing_library`, `--history` 0건 ok와 `--overwrite` 원장 중복 제거, `--dtypes` 이름 맞추기, 없는 버전 `[추천]`/`[후보]`, 목록 상한 `truncated`, 로그 태그 `[PROGRESS] 45%`, 인자 이름 `--save`(예측·보고서), 보고서 `--targets/-y` |
+| ml-kit 2.9.60~2.9.61 | 독립 검토 수정: `--sweep`/`--maximize`/`--find`의 범주 입력을 학습 범주와 대조(대소문자·공백만 다르면 맞추고, 아니면 `[후보]`), 예측 파일 첫 데이터 행을 단위 행으로 버리던 것, `--exclude-where`의 값 안 `포함`을 바꾸던 `[추천]`, `!=`와 크기 비교 규칙, 조건 찾기 답을 다시 예측해 확인, `--best` 이어 실행 때 최고 버전 중복 제거, 타겟 1개 학습도 후보 모델 단위로 `CONTINUE:` |
 | ml-kit 2.9.59 | 결과 문구(`agent_directive`, `message`, `preview`, 경고)를 짧은 한국어로 통일 (동작 불변, 첫 단어·`[추천]`/`[후보]`·키는 그대로) |
 | ml-kit 2.9.52~2.9.58 | `--meta`·`--encoding`·보고서 `-d/-v` 삭제, CSV는 UTF-8 BOM, 학습 결과 `excluded_reasons`/`excluded_preview`, 예측 파일 레이아웃 그 자리 복구(`recovered`), 누수 `[후보]` 전체 명령 둘, `-i` 빠진 입력은 `needs_user_decision`+중앙값 명령, `--exclude-where`, 여러 타겟 학습 `CONTINUE:`, `--sweep`과 `--maximize/--minimize --vary --where` |
 | ml-kit 2.9.40 | 회사 PC Gemma 시험 R1·R2가 opencode 명령 시간 제한(120초)에 끊김 -> 성능예측표 후보 학습을 저장하며 100초 전에 `CONTINUE:`로 멈추고 같은 명령으로 이어서 (R10). SKILL·전역 지침에 `CONTINUE:` 행동, 채점기는 CONTINUE 뒤 재실행을 반복으로 세지 않음 |
