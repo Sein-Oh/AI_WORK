@@ -6,6 +6,17 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.54] - 2026-11-04
+
+흩어진 칸 여러 개 한 번에 쓰기 (A5). 회사 PC 기록에서 C6..C16을 채우려고 `write`를 16번, 덮어쓰기 확인을 8번 따로 받음.
+회귀 테스트: `tests/test_excel_write.py` "write --cells" (1.4.53에서 9개 중 9개 실패, 옵션 없음). 실기 러너 E8.
+
+### 기능
+- `excel.py write --cells "C6=ft; C7=℃; 계산기!C11=20"` 또는 `--cells "칸값.csv"`(열: 칸, 값, `comment --file`과 같은 모양).
+  `=`로 시작하는 값은 수식. 값이 있는 칸은 모두 모아 `needs_user_decision` 하나, `--overwrite` 한 번, 되돌리기 지점 하나, 쓴 칸을 모두 다시 읽어 확인.
+  이미 같은 값인 칸은 그대로(`unchanged`), `--dry-run`(`planned`, `next_commands`). 하나라도 잘못되면 하나도 쓰지 않음.
+- `write --file`에 머리글이 `칸, 값`인 파일을 주면 표로 쓰지 않고 `--cells` 전체 명령을 `[추천]`(표의 `--file`과 구분은 옵션 이름으로).
+
 ## [1.4.53] - 2026-11-04
 
 문서에 없던 엑셀 서식 옵션 점검 (사용자 결정 "구현"). 회귀 테스트: `tests/test_excel_write.py` "문서에 없던 서식 옵션 점검"

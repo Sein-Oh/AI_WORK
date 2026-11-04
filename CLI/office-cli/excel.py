@@ -1182,10 +1182,253 @@ def _rebase_formula(app: Any, ws: Any, formula: str, from_row: int, from_col: in
             f"[추천] --range {addr(to_row, to_col)}")
 
 
+# --- write --cells: 흩어진 칸 여러 개에 한 번에 ---
+
+CELLS_MAX = 500                 # write --cells 한 번에 쓰는 칸 수 상한
+CELLS_SHOWN = 30                # 결과 JSON에 담는 칸 목록 상한
+_CELLS_VALUE_HEADER = ("값", "value", "내용", "입력값")
+
+
+def _split_outside_quotes(text: str, seps: str) -> List[str]:
+    """seps의 글자로 나눕니다. 작은·큰따옴표 안의 글자는 나누지 않습니다 ('a;b')."""
+    parts, buf, quote = [], [], ""
+    for ch in text:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"" and not "".join(buf).split("=", 1)[-1].strip() and "=" in "".join(buf):
+            quote = ch                         # 값의 맨 앞 따옴표만 묶음 ('요약'!C3의 시트 따옴표는 그대로)
+            buf.append(ch)
+        elif ch in seps:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf))
+    return parts
+
+
+def _unquote(v: str) -> str:
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        return v[1:-1]
+    return v
+
+
+def _is_cells_file(text: str) -> bool:
+    t = text.strip().strip('"')
+    return "=" not in t and os.path.splitext(t)[1].lower() in TABLE_FILE_EXTS
+
+
+def _cells_items(spec: str) -> Tuple[List[Tuple[str, str, str]], bool]:
+    """--cells 값 -> [(어디(오류 표시용), 칸, 값)], 파일인지. 글: 'C6=ft; 계산기!C11=20' (; 또는 줄바꿈),
+    파일(.csv/.tsv/.md/.txt): 열 칸, 값 (첫 행이 칸/값 머리글이면 건너뜀). 값은 글자 그대로 받고 쓸 때 숫자·수식을 가립니다."""
+    if _is_cells_file(spec):
+        rows = load_table_file(rt.resolve_input_path(spec.strip().strip('"'), "칸값 파일", exts=TABLE_FILE_EXTS), raw=True)
+        start = 1
+        if rows and str(rows[0][0] if rows[0] else "").strip().lower() in _MEMO_HEADER:
+            rows, start = rows[1:], 2
+        items = [(f"{n}번째 줄", str(r[0] if r else "").strip(), "" if len(r) < 2 or r[1] is None else str(r[1]))
+                 for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
+        return items, True
+    items = []
+    for k, part in enumerate(_split_outside_quotes(rt.unescape_newlines(spec), ";\n"), 1):
+        if not part.strip():
+            continue
+        if "=" not in part:
+            items.append((f"{k}번째 항목", part.strip(), None))      # 값 없음 -> 오류로 모음
+            continue
+        ref, val = part.split("=", 1)
+        items.append((f"{k}번째 항목", ref.strip(), _unquote(val)))
+    return items, False
+
+
+def _cells_command(args, extra: Sequence[str] = (), drop_dry: bool = True) -> Dict[str, str]:
+    argv = ["write", "--target", args.target, "--cells", args.cells]
+    if args.sheet:
+        argv += ["--sheet", args.sheet]
+    for flag, on in (("--overwrite", args.overwrite), ("--no-focus", args.no_focus), ("--dry-run", args.dry_run and not drop_dry)):
+        if on:
+            argv.append(flag)
+    argv += [x for x in extra if x not in argv]
+    return rt.next_command("excel.py", argv, "칸 여러 개 쓰기 실행" + (" (값이 있는 칸 덮어쓰기)" if "--overwrite" in argv else ""))
+
+
+def _cells_plan(args) -> Tuple[List[Tuple[str, int, int, int, int, str, Any]], List[str]]:
+    """쓸 칸 [(시트 이름 또는 "", r1, c1, r2, c2, 종류 value|formula, 값)]. 하나라도 잘못되면 하나도 쓰지 않음."""
+    items, from_file = _cells_items(args.cells)
+    if not items:
+        raise rt.InputError("--cells에 쓸 칸이 없습니다. 예: --cells \"C6=ft; C7=20\" (많으면 칸값.csv: 열 칸, 값).")
+    bad: List[str] = []
+    plan: List[Tuple[str, int, int, int, int, str, Any]] = []
+    seen: Dict[Tuple[str, int, int], Any] = {}
+    warnings: List[str] = []
+    for where, ref, val in items:
+        sheet, part = split_sheet(ref)
+        sheet = (sheet or args.sheet or "").strip()
+        try:
+            if val is None:
+                raise rt.InputError("'칸=값' 모양이 아닙니다 (예: C6=ft)")
+            r1, c1, r2, c2 = parse_area(part, None, None) if part else (None, None, None, None)
+            if r1 is None or r2 is None or c2 is None:
+                raise rt.InputError("칸 주소가 아닙니다 (예: C6, 계산기!C11)")
+        except rt.InputError as e:
+            bad.append(f"{where} '{ref}': {str(e).rstrip('.')}")
+            continue
+        text = val.strip()
+        if text.startswith("=") and len(text) > 1:
+            kind, payload = "formula", text
+        else:
+            kind, payload = "value", xl_text(coerce(val))
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                key = (sheet.lower(), r, c)
+                if key in seen:
+                    if seen[key] != (kind, payload):
+                        bad.append(f"{where} '{ref}': 같은 칸({addr(r, c)})에 다른 값이 두 번 있습니다")
+                    else:
+                        warnings.append(f"{addr(r, c)}가 두 번 있어 한 번만 씀")
+                seen[key] = (kind, payload)
+        plan.append((sheet, r1, c1, r2, c2, kind, payload))
+    if bad:
+        src = "칸값 파일" if from_file else "--cells"
+        head = f"{src} {len(items)}개 중 {len(bad)}개가 잘못되어 하나도 쓰지 않았습니다 (모양: 칸=값, 칸끼리 ; 로 구분). 고친 뒤 다시 실행하세요. "
+        raise rt.InputError(head + " / ".join(bad[:10]),
+                            log_message=head + f"잘못된 항목 {len(bad)}개 ({rt.DOC_OMITTED})")
+    if len(seen) > CELLS_MAX:
+        raise rt.InputError(f"한 번에 {CELLS_MAX}칸까지 쓸 수 있습니다 (받은 칸 {len(seen)}개). 나눠 실행하세요.")
+    # 같은 값이 두 번이면 한 번만
+    uniq: List[Tuple[str, int, int, int, int, str, Any]] = []
+    for p in plan:
+        if p not in uniq:
+            uniq.append(p)
+    return uniq, warnings[:10]
+
+
+def _cell_same(cell_rng: Any, kind: str, payload: Any) -> bool:
+    """칸에 이미 같은 값(수식)이 있는지 (다시 실행해도 덮어쓰기 확인을 묻지 않게)."""
+    norm = lambda f: re.sub(r"\s+", "", str(f)).upper()  # noqa: E731
+    try:
+        if kind == "formula":
+            return norm(cell_rng.Formula) == norm(payload)
+        vals = off.range_to_matrix(cell_rng.Value)
+        forms = off.range_to_matrix(cell_rng.Formula)
+    except Exception:
+        return False
+    for i, row in enumerate(vals):
+        for j, v in enumerate(row):
+            f = forms[i][j] if i < len(forms) and j < len(forms[i]) else None
+            if isinstance(f, str) and f.startswith("="):
+                return False
+            if not _same_cell(payload, v) or (payload in (None, "") and v not in (None, "")):
+                return False
+            if isinstance(payload, str) and isinstance(v, (int, float)) and not isinstance(v, bool):
+                return False
+    return True
+
+
+def write_cells(args) -> Dict[str, Any]:
+    """excel.py write --cells: 흩어진 칸에 값·수식을 한 번에. 덮어쓸 칸은 한 번에 묻고(--overwrite 하나), 되돌리기 지점 하나, 다시 읽어 확인."""
+    others = [f for f, v in (("--value", args.value is not None), ("--values", args.values), ("--file", args.file),
+                             ("--formula", args.formula), ("--header", args.header), ("--append", args.append),
+                             ("--new-sheet", args.new_sheet), ("--range", args.range)) if v]
+    if others:
+        raise rt.InputError(f"--cells는 {', '.join(others)}와 함께 쓰지 않습니다. 칸마다 '칸=값'으로 적으세요 (예: --cells \"C6=ft; C7=20\").")
+    plan, warnings = _cells_plan(args)
+    with off.open_target("excel", args.target, readonly=args.dry_run, focus=not args.no_focus,
+                         create=not args.dry_run, tool=TOOL, command="write") as t:
+        sheets: Dict[str, Any] = {}
+        ops: List[Tuple[Any, int, int, int, int, str, Any]] = []
+        for name, r1, c1, r2, c2, kind, payload in plan:
+            if name.lower() not in sheets:
+                sheets[name.lower()] = t.sheet(name or None)       # 없는 시트는 [추천]/[후보] (만들지 않음)
+            ops.append((sheets[name.lower()], r1, c1, r2, c2, kind, payload))
+        conflicts: List[Tuple[str, Any]] = []
+        same: List[str] = []
+        todo: List[Tuple[Any, int, int, int, int, str, Any]] = []
+        planned: List[str] = []
+        for ws, r1, c1, r2, c2, kind, payload in ops:
+            rng = ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2))
+            ref = f"{ws.Name}!{addr(r1, c1, r2, c2)}"
+            shown = payload if kind == "formula" else out_value(payload[1:] if isinstance(payload, str) and payload.startswith("'") else payload)
+            if _cell_same(rng, kind, payload):
+                same.append(ref)
+                planned.append(f"그대로(같은 값): {ref}")
+                continue
+            filled = _filled_cells(rng)
+            if filled:
+                conflicts += [(f"{ws.Name}!{c}", v) for c, v in filled]
+                planned.append(f"덮어쓰기: {ref} ({_short(filled[0][1])} -> {_short(shown)})")
+            else:
+                planned.append(f"변경: {ref} (빈 칸 -> {_short(shown)})")
+            todo.append((ws, r1, c1, r2, c2, kind, payload))
+        if args.dry_run:
+            fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(todo),
+                                      "next_commands": [_cells_command(args, ["--overwrite"] if conflicts else [])],
+                                      "target_resolved": t.resolved()}
+            if len(planned) > 50:
+                fields["truncated"] = True
+            if conflicts:
+                fields["overwrite_cells"] = len(conflicts)
+            if same:
+                fields["unchanged"] = len(same)
+            if warnings:
+                fields["warnings"] = warnings
+            directive = "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요."
+            preview = f"미리보기: 칸 {len(todo)}개" + (f" (값이 있어 덮어쓸 칸 {len(conflicts)}개: "
+                                                     + _filled_preview(conflicts) + ")" if conflicts else "")
+            return rt.ok(TOOL, "write", preview, directive, **fields)
+        if conflicts and not args.overwrite:
+            head = f"값이 있는 칸 {len(conflicts)}개가 덮어써집니다: "
+            raise rt.UserDecisionError(
+                head + _filled_preview(conflicts),
+                "쓰지 않았습니다(빈 칸도 쓰지 않음). 덮어쓸 칸과 기존 값을 사용자에게 한 번에 보여 주고, 사용자가 덮어써도 된다고 하면 "
+                "같은 명령에 --overwrite를 한 번만 붙여 다시 실행하세요 (미리 보려면 --dry-run).",
+                log_message=head + _filled_preview(conflicts, log=True))
+        if todo:
+            with off.excel_batch(t.app):
+                for ws, r1, c1, r2, c2, kind, payload in todo:
+                    rng = ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2))
+                    if kind == "formula":
+                        rng.Formula = payload
+                    else:
+                        rng.Value = payload
+                    t.changed = True
+        problems: List[str] = []
+        for ws, r1, c1, r2, c2, kind, payload in todo:          # R1: 다시 읽어 확인 (시트마다)
+            problems += [f"{ws.Name}!{p}" for p in _verify_written(ws, [(r1, c1, r2, c2, kind, payload)])]
+        if todo:
+            t.set_focus(sheet=todo[0][0])
+        resolved = t.resolved()
+    written = [f"{ws.Name}!{addr(r1, c1, r2, c2)}" for ws, r1, c1, r2, c2, _, _ in todo]
+    fields = {"target_resolved": resolved, "count": len(todo), "cells": written[:CELLS_SHOWN],
+              "truncated": len(written) > CELLS_SHOWN, "applied": [p for p in planned if not p.startswith("그대로")][:CELLS_SHOWN]}
+    if same:
+        fields["unchanged"] = len(same)
+    if warnings:
+        fields["warnings"] = warnings
+    if conflicts:
+        fields["overwritten"] = len(conflicts)
+    if not todo:
+        return rt.ok(TOOL, "write", f"칸 {len(same)}개가 이미 같은 값이라 바꾸지 않았습니다", "VERIFIED: 모든 칸이 이미 같은 값입니다(바뀐 것 없음). 다시 실행하지 마세요.",
+                     verified=True, **fields)
+    preview = f"칸 {len(todo)}개에 썼습니다: {', '.join(written[:5])}" + (" ..." if len(written) > 5 else "") \
+        + (f" (덮어쓴 칸 {len(conflicts)}개)" if conflicts else "") + (f" (이미 같은 값 {len(same)}칸은 그대로)" if same else "")
+    if problems:
+        return rt.ok_unverified(TOOL, "write", preview, problems[:10], **fields)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 쓴 칸을 모두 다시 읽어 확인했습니다. 잘못 썼으면 office.py undo로 되돌릴 수 있습니다. "
+                 "같은 명령을 다시 실행하지 마세요.", verified=True, **fields)
+
+
 def cmd_write(args) -> Dict[str, Any]:
+    if args.cells:
+        return write_cells(args)
+    if args.dry_run:
+        raise rt.InputError("write --dry-run은 --cells(칸 여러 개)에만 씁니다.")
     sources = [x for x in (args.value is not None, args.values, args.file, args.formula) if x]
     if not sources:
-        raise rt.InputError("쓸 내용이 없습니다. --value, --values, --file, --formula 중 하나를 지정하세요.")
+        raise rt.InputError("쓸 내용이 없습니다. --value, --values, --file, --formula, --cells 중 하나를 지정하세요.")
     if len(sources) > 1:
         raise rt.InputError("--value, --values, --file, --formula는 하나만 지정하세요 (--header는 함께 사용 가능).")
     table: Optional[List[List[Any]]] = None
@@ -1195,6 +1438,12 @@ def cmd_write(args) -> Dict[str, Any]:
         table = load_table_file(rt.resolve_input_path(args.file, "입력 표 파일", exts=TABLE_FILE_EXTS))
         if not table:
             raise rt.InputError(f"입력 파일에 데이터가 없습니다: {args.file}")
+        head = [str(v or "").strip().lower() for v in table[0][:3]]
+        if len(head) == 2 and head[0] in _MEMO_HEADER and head[1] in _CELLS_VALUE_HEADER and not args.range:
+            # 머리글이 '칸, 값'이면 표가 아니라 칸마다 쓸 값 목록 (표로 쓰면 A1부터 머리글까지 그대로 들어감)
+            argv = ["write", "--target", args.target, "--cells", args.file] + (["--sheet", args.sheet] if args.sheet else [])
+            raise rt.InputError("이 파일은 머리글이 '칸, 값'인 칸별 값 목록입니다. 표가 아니라 칸마다 쓰려면 --cells를 씁니다. "
+                                f"[추천] {rt.next_command('excel.py', argv, '')['command']}")
     header = [h.strip() for h in args.header.split(",")] if args.header else None
     start = args.range or "A1"
     sh, cells = split_sheet(start)
@@ -3336,6 +3585,8 @@ def build_cli():
     p.add_argument("--new-sheet", action="store_true",
                    help="--sheet(또는 --range '이름'!A1)의 시트를 새로 만들어 쓰기. 없으면 없는 시트는 오류")
     p.add_argument("--no-autofit", action="store_true", help="열 너비 자동 맞춤 안 함")
+    p.add_argument("--cells", help="흩어진 칸 여러 개: \"C6=ft; C7=20; 계산기!C11==A1*2\" 또는 칸값 파일(.csv, 열: 칸, 값). =로 시작하는 값은 수식")
+    p.add_argument("--dry-run", action="store_true", help="--cells: 쓰지 않고 바뀔 칸만 미리 보기")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)

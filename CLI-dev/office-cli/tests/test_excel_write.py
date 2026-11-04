@@ -1647,3 +1647,97 @@ def test_export_csv_cp949_unencodable_is_input_error(xl, capsys, tmp_path):
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
     assert "A2" in out["message"] and "[추천] utf-8-sig" in out["message"], out
     assert not out_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# write --cells: 흩어진 칸 여러 개를 한 번에 (1.4.54). 회사 기록: C6..C16에 write 16번, 확인 8번
+# ---------------------------------------------------------------------------
+
+
+def test_write_cells_inline_many_sheets_one_undo_point(xl, capsys):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", "C6=ft; C7=℃; 요약!C11=20; C8==C6&C7")
+    assert code == 0 and out["verified"] is True and out["agent_directive"].startswith("VERIFIED:"), out
+    ws, ws2 = ws_of(wb), ws_of(wb, "요약")
+    assert ws.values[(6, 3)] == "ft" and ws.values[(7, 3)] == "℃" and ws2.values[(11, 3)] == 20
+    assert ws.formulas[(8, 3)] == "=C6&C7"                                # =로 시작하는 값은 수식
+    assert out["count"] == 4 and len(undo_points()) == 1
+
+
+def test_write_cells_file_with_header_and_quotes(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "칸값.csv"
+    f.write_text("칸,값\nC6,ft\n'요약'!B2,\"쉼표, 든 값\"\nC9,0012\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--cells", str(f))
+    assert code == 0 and out["verified"] is True, out
+    assert ws_of(wb).values[(6, 3)] == "ft" and ws_of(wb, "요약").values[(2, 2)] == "쉼표, 든 값"
+    assert ws_of(wb).values[(9, 3)] == "0012"                            # 앞자리 0은 글자 그대로
+    code, out = run_excel(capsys, "write", "--cells", "C10='a;b'; C11=x")
+    assert code == 0 and ws_of(wb).values[(10, 3)] == "a;b" and ws_of(wb).values[(11, 3)] == "x"
+
+
+def test_write_cells_conflicts_one_decision_one_overwrite(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(6, 3, "old6")
+    ws.set(7, 3, "old7")
+    ws.set(8, 3, "same")
+    cells = "C6=a; C7=b; C8=same; C9=c"
+    code, out = run_excel(capsys, "write", "--cells", cells)
+    assert code == 1 and out["error_type"] == "needs_user_decision", out
+    assert "C6=old6" in out["message"] and "C7=old7" in out["message"] and "C8" not in out["message"]
+    assert (9, 3) not in ws.values and undo_points() == []           # 하나도 쓰지 않음
+    code, out = run_excel(capsys, "write", "--cells", cells, "--overwrite")
+    assert code == 0 and out["verified"] is True, out
+    assert [ws.values[(r, 3)] for r in (6, 7, 8, 9)] == ["a", "b", "same", "c"]
+    assert out["count"] == 3 and out["unchanged"] == 1 and len(undo_points()) == 1
+
+
+def test_write_cells_dry_run(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.set(6, 3, "old")
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7=b", "--dry-run")
+    assert code == 0 and out["dry_run"] is True and out["agent_directive"].startswith("VERIFIED: 미리보기"), out
+    assert ws.values[(6, 3)] == "old" and (7, 3) not in ws.values and undo_points() == []
+    assert any("덮어쓰기" in p and "C6" in p for p in out["planned"]) and any("C7" in p for p in out["planned"])
+    cmd = out["next_commands"][0]["command"]
+    assert "--dry-run" not in cmd and "--overwrite" in cmd and "--cells" in cmd
+
+
+def test_write_cells_bad_items_write_nothing(xl, capsys, tmp_path):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; 가나=b; C8")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "가나" in out["message"] and "C8" in out["message"]
+    assert ws_of(wb).values == {} and undo_points() == []
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C6=b")
+    assert code == 1 and "C6" in out["message"] and ws_of(wb).values == {}
+    code, out = run_excel(capsys, "write", "--cells", "C6=a", "--value", "x")
+    assert code == 1 and "--cells" in out["message"]
+
+
+def test_write_cells_missing_sheet_suggests(xl, capsys):
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; 요 약!C7=b")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "요약" in out["message"], out
+    assert ws_of(wb).values == {}
+
+
+def test_write_file_with_cell_value_header_points_to_cells(xl, capsys, tmp_path):
+    _, wb = xl
+    f = tmp_path / "칸값.csv"
+    f.write_text("칸,값\nC6,ft\n", encoding="utf-8")
+    code, out = run_excel(capsys, "write", "--file", str(f))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "[추천] python" in out["message"] and "--cells" in out["message"]
+    assert ws_of(wb).values == {}
+
+
+def test_write_cells_reads_back(xl, capsys, monkeypatch):
+    _, wb = xl
+    ws = ws_of(wb)
+    real_set = ws.set
+    monkeypatch.setattr(ws, "set", lambda r, c, v: real_set(r, c, "바뀜" if (r, c) == (7, 3) else v))
+    code, out = run_excel(capsys, "write", "--cells", "C6=a; C7=b")
+    assert code == 0 and out["verified"] is False and "C7" in " ".join(out["unverified"]), out

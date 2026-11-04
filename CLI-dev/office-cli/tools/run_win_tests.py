@@ -1086,6 +1086,21 @@ def test_E(ctx):
                f"달기={d_add.get('status')}, 확인 요청={d_ask.get('error_type')}, 메모={text!r}, "
                f"목록={[i.get('cell') for i in d_list.get('items', [])]}, 지운 뒤 없음={gone}", data, code, raw, err)
 
+    def e8():
+        activate_xl("A.xlsx", "E_TEST")
+        # 흩어진 칸 여러 개 한 번에: 빈 칸 쓰기 -> 값이 있는 칸은 한 번에 확인 요청 -> --overwrite 한 번
+        d1 = run_cli("excel.py", "write", "--cells", "H6=ft; H7=℃; H8==LEN(H6)")[0] or {}
+        d_ask = run_cli("excel.py", "write", "--cells", "H6=m; H7=K; H9=새 값")[0] or {}
+        h9_kept = com_retry(lambda: e_ws().Range("H9").Value) is None
+        data, code, raw, err = run_cli("excel.py", "write", "--cells", "H6=m; H7=K; H9=새 값", "--overwrite")
+        vals = com_retry(lambda: [e_ws().Range(c).Value for c in ("H6", "H7", "H8", "H9")])
+        ok = (str(d1.get("agent_directive", "")).startswith("VERIFIED:") and d_ask.get("error_type") == "needs_user_decision"
+              and h9_kept and str((data or {}).get("agent_directive", "")).startswith("VERIFIED:")
+              and vals[:2] == ["m", "K"] and vals[2] == 1 and vals[3] == "새 값")
+        record(ctx, "E8", "write --cells: 흩어진 칸 한 번에, 덮어쓰기 확인 한 번 (다시 읽어 확인)", ok,
+               f"첫 쓰기={d1.get('status')}, 확인 요청={d_ask.get('error_type')}, H9 그대로={h9_kept}, H6:H9={vals}",
+               data, code, raw, err)
+
     run_test(ctx, "E1", "move", e1)
     run_test(ctx, "E2", "merge 범위 없음", e2)
     run_test(ctx, "E3", "merge 대화상자", e3)
@@ -1093,6 +1108,7 @@ def test_E(ctx):
     run_test(ctx, "E5", "수식 보존", e5)
     run_test(ctx, "E6", "테마", e6)
     run_test(ctx, "E7", "칸 메모", e7)
+    run_test(ctx, "E8", "칸 여러 개 쓰기", e8)
 
 
 # ---------------------------------------------------------------------------
