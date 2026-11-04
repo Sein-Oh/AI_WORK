@@ -1160,6 +1160,34 @@ def test_check_time_limit_marks_rest_needs_review(check_env, capsys, monkeypatch
     assert all(r["reason"] != "대조하지 못함 (명령 시간 제한)" for r in out["results"]), out
 
 
+def test_check_rest_rows_without_header_pass_header_row_0(check_env, capsys, monkeypatch):
+    # 8차 검토 (1.4.71): 원래 범위가 1행부터(머리글 없음)면 남은 행 명령에 --header-row 0 (머리글 없음).
+    # 전에는 0이 조용히 무시되어 남은 범위 바로 위 데이터 행('2 A')을 값 열 단위 머리글로 읽어 판정이 달라졌음
+    import openpyxl
+    spec, book = check_env
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "시험"
+    for i, (item, val) in enumerate([("소비 전류", "2 A"), ("소비 전류", 2.5), ("정격 전압", 5.1)], 1):
+        ws.cell(i, 2, item)
+        ws.cell(i, 4, val)
+    wb.save(book)
+    base = ["check", "--target", str(book), "--item-col", "B", "--value-col", "D", "--spec", str(spec.parent)]
+    code, full = run_excel(capsys, *base, "--range", "B1:D3")
+    assert code == 0, full
+    want = [(r["cell"], r["verdict"], r["reason"]) for r in full["results"][1:]]
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: True)
+    code, out = run_excel(capsys, *base, "--range", "B1:D3")
+    cmds = [c["command"] for c in out["next_commands"]]
+    assert "--range B2:D3" in cmds[1] and "--header-row 0" in cmds[1], cmds[1]
+    monkeypatch.setattr(rt, "time_up", lambda reserve=0: False)
+    code, rest = run_excel(capsys, *shlex.split(cmds[1], posix=True)[2:])
+    assert code == 0 and [(r["cell"], r["verdict"], r["reason"]) for r in rest["results"]] == want, (rest, want)
+    # 0은 머리글 없음, 범위 첫 행 이상은 인자 오류
+    code, bad = run_excel(capsys, *base, "--range", "B2:D3", "--header-row", "2")
+    assert code == 1 and bad["agent_directive"].startswith("STOP_RETRY:") and "없으면 0" in bad["message"], bad
+
+
 def test_check_long_serial_number_is_fast(tmp_path):
     # 6차 검토 [높음]: 규격 문장의 긴 숫자열(시리얼 5500자)에서 조건 읽기가 제곱 시간이던 문제
     import time

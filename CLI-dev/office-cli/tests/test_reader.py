@@ -3243,6 +3243,27 @@ def test_search_exact_mixed_output(tmp_path, capsys):
     assert out["match_mode"] == "exact" and "literal" not in out["matches"][0] and out["literal_count"] == 2, out
 
 
+def test_spaced_sign_is_layer_a_and_snippet_shows_it(tmp_path, capsys):
+    # 8차 검토 (1.4.71) 설계 확정: 층 A는 '검색어 글자열이 그 자리에 글자 그대로'까지만. 띄어 쓴 부호('- 40 ℃')·범위의 뜻은
+    # 판정하지 않고, 스니펫이 그 일치 자리와 앞(최소 15자, 부호 포함)을 반드시 보여 줌 + directive에 앞뒤를 함께 전달하라는 안내
+    p = tmp_path / "규격.txt"
+    p.write_text("동작 온도: - 40 \u2103 ~ + 85 \u2103\n", encoding="utf-8")
+    assert _layer("40 \u2103", "동작 온도: - 40 \u2103 ~ + 85 \u2103") == "A"
+    code, out = run_main(reader, capsys, "search", "--query", "40 \u2103", "--file", str(p), "-C", "3")
+    assert code == 0 and out["count"] == out["literal_count"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
+    snip = out["matches"][0]["snippet"]
+    assert "- **40 \u2103**" in snip and snip.startswith("동작 온도: -"), snip
+    assert reader.NUM_CONTEXT_NOTE in out["agent_directive"], out["agent_directive"]
+    # 층 A로만 맞은 단위(정규화 매처는 못 찾음)도 스니펫·근거 문장에 값이 들어감 (전에는 글 앞부분만)
+    text = "가" * 200 + " 출력 - 5 V"
+    assert "- **5 V**" in reader.make_snippet(text, ["5 V"], 80)
+    # 근거 문장·check 조건: 층 A 자리가 든 문장을 먼저 ('5 Vdc'는 층 B)
+    text = "정격 5 Vdc 공급. 출력 5 V 이하."
+    assert reader.match_sentence(text, ["5 V"]) == "출력 5 V 이하."
+    conds, sent = reader.near_conditions(text, ["5 V"])
+    assert sent == "출력 5 V 이하." and conds and conds[0]["hi"] == 5, (conds, sent)
+
+
 def test_number_safety_net_checks_time_every_unit(monkeypatch):
     # 7차 검토 [보통]: 시간 상한을 50단위마다 확인해 큰 단위(1MB)가 이어지면 상한을 크게 넘음 -> 단위마다 확인
     monkeypatch.setattr(reader, "NUMBER_SEARCH_SECONDS", -1.0)

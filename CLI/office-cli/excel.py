@@ -3919,10 +3919,14 @@ def _check_rows(args, cols: List[int]) -> Tuple[str, int, List[List[Any]], Optio
         raise rt.InputError(f"한 번에 {CHECK_MAX_ROWS}행까지 대조합니다 (받은 {r2 - r1 + 1}행). --range를 나눠 실행하세요.")
     c_lo, c_hi = min(cols), max(cols)
     top = r1 - 1 if r1 > 1 else r1
-    if getattr(args, "header_row", None):
-        if not 1 <= args.header_row < r1:
-            raise rt.InputError(f"--header-row는 --range의 첫 행({r1})보다 위의 행 번호로 적습니다. 받은 값: {args.header_row}")
-        top = args.header_row
+    head = getattr(args, "header_row", None)
+    if head == 0:
+        top = r1                                           # 0 = 머리글 없음 (남은 행 명령: 원래 범위가 1행부터, 1.4.71)
+    elif head is not None:
+        if not 1 <= head < r1:
+            raise rt.InputError(f"--header-row는 --range의 첫 행({r1})보다 위의 행 번호(머리글이 없으면 0)로 적습니다. "
+                                f"받은 값: {head}")
+        top = head
     address = addr(top, c_lo, r2, c_hi)
     sheet_arg = sh or args.sheet
     closed = is_closed_xlsx(args.target)
@@ -4054,7 +4058,7 @@ def _check_command(args, extra: Sequence[str] = ()) -> List[str]:
     argv = ["check", "--target", args.target, "--range", args.range, "--item-col", args.item_col,
             "--value-col", args.value_col, "--spec", args.spec]
     for flag, val in (("--section-col", args.section_col), ("--section", args.section), ("--sheet", args.sheet),
-                      ("--header-row", str(args.header_row) if getattr(args, "header_row", None) else None)):
+                      ("--header-row", str(args.header_row) if getattr(args, "header_row", None) is not None else None)):
         if val:
             argv += [flag, val]
     return argv + list(extra)
@@ -4141,7 +4145,9 @@ def cmd_check(args) -> Dict[str, Any]:
             _, c1, r2, c2 = parse_area(cells, None, None)
             rest = ((args.range.rsplit("!", 1)[0] + "!") if "!" in args.range else "") + \
                 addr(late_row, c1 or min(cols), r2, c2 or max(cols))
-            head_row = getattr(args, "header_row", None) or (r1 - 1 if r1 > 1 else None)
+            # 원래 범위가 1행부터면 머리글이 없었음: 0(머리글 없음)을 넘겨 남은 행 범위 위의 데이터 행을 머리글로 읽지 않게
+            head_row = getattr(args, "header_row", None)
+            head_row = head_row if head_row is not None else (r1 - 1 if r1 > 1 else 0)
             rest_args = type(args)(**{**vars(args), "range": rest, "header_row": head_row})
             nexts.append(rt.next_command("excel.py", _check_command(rest_args),
                                          f"대조하지 못한 {len(late)}행({rest})만 다시 대조 (읽기 전용)"))
@@ -4326,7 +4332,7 @@ def build_cli():
     p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
     p.add_argument("--spec", required=True, help="규격서 파일 또는 폴더 (등록 안 된 문서는 먼저 등록)")
     p.add_argument("--section", help="모든 행을 이 장절 안에서만 찾음 (예: 3.2)")
-    p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행)")
+    p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행, 0 = 머리글 없음)")
     p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
     return parser
 

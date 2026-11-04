@@ -3021,8 +3021,19 @@ _LIT_PAREN_SIGN = re.compile(r"\(\s*[" + re.escape(_LIT_SIGNS) + r"]\s*\)" + _LI
 _LIT_PM_GAP = re.compile(r"[+\u00b1\u2213\uff0b][ \t\u00a0/]*(?:[" + re.escape(_LIT_SIGNS) + r"])?[ \t\u00a0/]*$")
 # 빼기로 시작하는 검색어 앞에 띄어 쓴 다른 값(숫자+단위)이나 'to'가 있으면 범위 대시인지 부호인지 애매
 _LIT_RANGE_LEFT = re.compile(r"(?:\d(?:" + _LIT_SP + r"?[^\s\d]{1,4})?|(?<![A-Za-z])to)" + _LIT_SP + r"+$", re.IGNORECASE)
-# 단위 끝 뒤의 뜻이 다른 꼬리: '(rms)', '(g)', '(A)', ' rms', ' p-p', ' peak', ' pk', ' abs', ' g'(게이지)
-_LIT_TAIL = re.compile(_LIT_SP + r"*\([A-Za-z]|" + _LIT_SP + r"+(?:rms|p-p|pp|peak|pk|abs|g)(?![A-Za-z])", re.IGNORECASE)
+# 단위 끝 뒤의 뜻이 다른 꼬리: '(rms)', '(g)', '(A)', ' rms', ' p-p', ' peak', ' pk', ' abs', ' g'(게이지).
+# 괄호는 이 목록만 막음: '(DC)', '(AC)', '(Max)', '(Typ.)'처럼 값의 뜻을 바꾸지 않는 괄호는 층 A (1.4.71)
+_LIT_TAIL = re.compile(_LIT_SP + r"*\((?:rms|p-p|pp|peak|pk|abs|g|a|gauge)\)|"
+                       + _LIT_SP + r"+(?:rms|p-p|pp|peak|pk|abs|g)(?![A-Za-z])", re.IGNORECASE)
+# 띄어 쓴 단위 이어짐 (낱말이 다른 단위): '5 N m', '10 Ω cm', '10 kV A', '10 mm Hg', '2.5 mm SQ', '5 % RH', '3 dB μV',
+# 띄어 쓴 '/단위'('25 ℃ /W'), 띄어 쓴 위첨자('10 m ³'). 대소문자 그대로 (1.4.71)
+_LIT_UNIT_GO = re.compile("[ \u00a0]{1,2}(?:(?:H2O|Hg|Aq|SQ|RH|FS|[\u03bc\u00b5u]V|cm|mm|km|m|h|s|A|V|W|\u03a9|\u2126)"
+                          r"(?![A-Za-z0-9])|/[ \u00a0]*[^\s\d+\-\u00b1\u2212]|[" + _LIT_SUPER + "])")
+_LIT_UNIT_OP = "\u00b7\u22c5\u2219\u2022\u2217*"                   # 곱 단위 연산자 (가운뎃점, U+22C5, U+2219, U+2022, U+2217)
+_LIT_THOUSANDS = re.compile("(?<![\\d.,])\\d{1,3}[ \u00a0\u2009\u202f]$")   # 띄어 쓴 천 단위의 앞 묶음 ('1 500 W')
+_LIT_GLUED_SPACE = "\u00a0\u2009\u202f"                            # 붙여 쓴 것과 같은 공백 ('-\u00a040 ℃')
+# '/' 앞이 같은 종류 값이면 값 구분: '50/60 Hz'의 '50/', '100 V/220 V'의 '100 V/' (분수 '1/2'는 아님)
+_LIT_SLASH_LEFT = re.compile(r"(?<![\d.,])(?:\d{2,}|\d[\d.,]*[ \u00a0]?[^\s\d/]{1,4})/$")
 
 
 def _latin(c: str) -> bool:
@@ -3046,13 +3057,17 @@ class _Literal:
             for k, tok in enumerate(toks):
                 if tok[0] in " \t\u00a0\u3000":
                     nxt = toks[k + 1][0] if k + 1 < len(toks) else ""
-                    loose = (prev.isdecimal() and _unit_start(nxt)) or prev in "\u00b1\u2213" or nxt in "\u00b1\u2213"
+                    # 영문 접두와 숫자 사이도 0~1칸 차이 허용 ('IP 67' = 'IP67', 'M 10' = 'M10', 1.4.71)
+                    loose = ((prev.isdecimal() and _unit_start(nxt)) or prev in "\u00b1\u2213" or nxt in "\u00b1\u2213"
+                             or (_latin(prev) and nxt.isdecimal()))
                     out.append(_LIT_SP + ("*" if loose else "+"))
                 else:
                     # 숫자와 단위 사이, ± 앞뒤는 띄어쓰기 0~1칸 차이 허용 ('5V' = '5 V', '5V ±5%' = '5V±5%')
                     if prev not in ("", " ") and ((prev.isdecimal() and _unit_start(tok)) or tok in "\u00b1\u2213"
                                                   or (prev in "\u00b1\u2213" and tok.isdecimal())):
                         out.append(_LIT_SP + "*")
+                    elif _latin(prev) and tok.isdecimal():
+                        out.append(_LIT_SP + "?")
                     out.append(re.escape(tok))
                 prev = tok[-1] if tok[0] not in " \t\u00a0\u3000" else " "
             if out:
@@ -3064,8 +3079,17 @@ class _Literal:
         before = text[s - 1] if s else ""
         if before:
             if first.isdecimal():
-                if before.isdecimal() or before in ".,/^" or before in _LIT_SIGNS or _latin(before):
-                    return False
+                dc_ac = _latin(before) and text[max(0, s - 2):s] in ("DC", "AC") and not _latin(text[s - 3:s - 2])
+                slash = before == "/" and not last.isdecimal() and _LIT_SLASH_LEFT.search(text, max(0, s - 16), s)
+                if (before.isdecimal() or (before in ".,/^" and not slash) or before in _LIT_SIGNS
+                        or (_latin(before) and not dc_ac)):
+                    return False                                   # 'DC5V'의 '5V', '50/60 Hz'의 '60 Hz'는 층 A
+                if before in _LIT_GLUED_SPACE and text[s - 2:s - 1] in _LIT_SIGNS:
+                    return False                                   # '-\u00a040 ℃': 붙여 쓴 빼기와 같음
+                if before == "\t" and text[s - 2:s - 1] in _LIT_SIGNS and s >= 3 and text[s - 3] not in "\t\r\n":
+                    return False                                   # '온도 -\t40 ℃': 같은 칸의 빼기 (표 빈 칸 '\t-\t40'은 허용)
+                if re.match(r"\d{3}(?!\d)", q) and _LIT_THOUSANDS.search(text, max(0, s - 6), s):
+                    return False                                   # '1 500 W', '10 000 h': 띄어 쓴 천 단위
                 if _LIT_SIGN_WORD.search(text[max(0, s - 20):s]) or _LIT_PAREN_SIGN.search(text[max(0, s - 12):s]):
                     return False                                   # '영하 40 ℃', '(-)5 V'
                 if _LIT_PM_GAP.search(text[max(0, s - 24):s]):
@@ -3086,19 +3110,28 @@ class _Literal:
         if last.isdecimal():
             if _latin(first) and after in "-_" and nxt.isalnum():
                 return False                                       # 영숫자 코드 'ABC-1234'는 'ABC-1234-5'와 다름
+            if after == "-" and nxt.isdecimal():
+                return False                                       # 숫자 코드 '61000-4'는 'IEC 61000-4-2', '1234'는 '1234-5'와 다름
             return not (after.isdecimal() or (after in ".," and nxt.isdecimal()) or _latin(after)
                         or after in "^/*%" or after in _LIT_SUPER)
         if _unit_start(last):
-            if after.isdecimal() or _latin(after) or after in _LIT_LETTER_AFTER or after in "^/" or after in _LIT_SUPER:
+            if _latin(last) and text[e:e + 2] in ("DC", "AC") and not _latin(text[e + 2:e + 3]):
+                return True                                        # '24 VDC'의 '24 V' (단위에 붙은 DC/AC)
+            if after == "/":
+                return nxt.isdecimal() or nxt in _LIT_SIGNS        # '100 V/220 V', '85 ℃/85 %RH'는 값 구분, '5 V/m'은 단위
+            if after.isdecimal() or _latin(after) or after in _LIT_LETTER_AFTER or after == "^" or after in _LIT_SUPER:
                 return False
             if after == "%" and last != "%":
                 return False
-            if after in "-·." and _latin(nxt):
-                return False                                       # '10 N·m', '5 kgf-cm'
-            return not _LIT_TAIL.match(text, e)
+            if after in "-." and _latin(nxt):
+                return False                                       # '5 kgf-cm'
+            if after in _LIT_UNIT_OP and (_latin(nxt) or nxt in _LIT_LETTER_AFTER):
+                return False                                       # '10 N·m', '5 N(U+22C5)m'
+            return not (_LIT_TAIL.match(text, e) or _LIT_UNIT_GO.match(text, e))
         return True
 
-    def search(self, text: str) -> Optional["re.Match[str]"]:
+    def finditer(self, text: str):
+        """경계를 만족한 일치를 모두 (검색어 묶음 순서대로, 같은 묶음 안에서는 앞에서부터)."""
         for pat, q in self.items:
             pos = 0
             while True:
@@ -3106,9 +3139,11 @@ class _Literal:
                 if m is None:
                     break
                 if self._ok(text, m.start(), m.end(), q):
-                    return m
+                    yield m
                 pos = m.start() + 1
-        return None
+
+    def search(self, text: str) -> Optional["re.Match[str]"]:
+        return next(self.finditer(text), None)
 
 
 @functools.lru_cache(maxsize=512)
@@ -3130,20 +3165,49 @@ def literal_hit(text: str, terms: List[str]) -> bool:
     return all(f.search(t) is not None for f in (literal_finder(x) for x in terms) if f is not None)
 
 
+def term_span(term: str, text: str, flags: int = re.IGNORECASE, loose_text: Optional[str] = None) -> Optional[Tuple[int, int]]:
+    """검색어가 글에서 맞은 자리 (시작, 끝). 숫자가 든 검색어는 층 A(글자 그대로) 자리를 먼저, 없으면 층 B(정규화 매처) 자리.
+    loose_text: 층 B를 찾을 글 (글자 수가 같은 변환본, 예: 빼기 대시를 '-'로 바꾼 문장). 없으면 None (1.4.71)"""
+    lf = literal_finder(term)
+    m = lf.search(text) if lf is not None else None
+    if m is None:
+        m = _term_pattern(term, flags).search(text if loose_text is None else loose_text)
+    return (m.start(), m.end()) if m else None
+
+
+# 숫자 검색어의 VERIFIED(층 A)는 '검색어 글자열이 그 자리에 글자 그대로 있다'까지만 확인 (앞뒤 부호·범위·이하/이상의 뜻은 판정하지 않음)
+NUM_CONTEXT_NOTE = "결과를 알릴 때 snippet의 앞뒤(부호, 범위 ~, 이하/이상)를 그대로 함께 전달하세요."
+SNIPPET_MIN_BEFORE = 15        # 스니펫에 늘 담는 일치 앞 글자 수 (부호 '- 40 ℃', 범위 '-10 ~', '이하'가 보이게)
+
+
 def make_snippet(text: str, terms: List[str], context: int) -> str:
+    """일치 자리(숫자가 든 검색어는 층 A 자리 먼저)와 앞뒤 문맥. 앞은 최소 SNIPPET_MIN_BEFORE자. 맞은 곳은 **강조**."""
     flags = re.IGNORECASE
-    first = None
-    for term in terms:
-        m = _term_pattern(term, flags).search(text)
-        if m and (first is None or m.start() < first.start()):
-            first = m
-    if first is None:
+    spans = [sp for sp in (term_span(t, text, flags) for t in terms) if sp]
+    if not spans:
         return text[: context * 2]
-    start = max(0, first.start() - context)
-    end = min(len(text), first.end() + context)
-    snippet = ("..." if start > 0 else "") + text[start:end] + ("..." if end < len(text) else "")
+    s0, e0 = min(spans)
+    start = max(0, s0 - max(context, SNIPPET_MIN_BEFORE))
+    end = min(len(text), e0 + context)
+    piece = text[start:end]
+    marks: List[Tuple[int, int]] = []
     pattern = re.compile("|".join(_term_pattern(t, 0).pattern for t in sorted(terms, key=len, reverse=True)), flags)
-    return pattern.sub(lambda m: f"**{m.group(0)}**", snippet).replace("\n", " ")
+    marks += [(m.start(), m.end()) for m in pattern.finditer(piece) if m.group(0)]
+    for t in terms:
+        lf = literal_finder(t)
+        if lf is not None:
+            marks += [(m.start() - start, m.end() - start) for m in lf.finditer(text)
+                      if m.start() >= start and m.end() <= end]
+    merged: List[List[int]] = []
+    for a, b in sorted(marks):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    for a, b in reversed(merged):
+        piece = piece[:a] + "**" + piece[a:b] + "**" + piece[b:]
+    snippet = ("..." if start > 0 else "") + piece + ("..." if end < len(text) else "")
+    return snippet.replace("\n", " ")
 
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])\s+|\n+")
@@ -3152,8 +3216,13 @@ _SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])\s+|\n+")
 def match_sentence(text: str, terms: List[str], limit: int = 1000) -> str:
     """일치한 단어가 든 문장 (문장으로 못 나누면 단락 앞부분)."""
     flags = re.IGNORECASE
-    for sent in _SENT_SPLIT.split(text):
-        if any(_term_pattern(t, flags).search(sent) for t in terms):
+    sents = _SENT_SPLIT.split(text)
+    lits = [f for f in (literal_finder(t) for t in terms) if f is not None]
+    for sent in sents if lits else ():
+        if any(f.search(sent) for f in lits):
+            return sent.strip()[:limit]                     # 층 A(글자 그대로) 자리가 든 문장을 먼저 (1.4.71)
+    for sent in sents:
+        if any(term_span(t, sent, flags) for t in terms):
             return sent.strip()[:limit]
     return text.strip()[:limit]
 
@@ -3807,6 +3876,8 @@ def cmd_search(args) -> Dict[str, Any]:
     if mixed:
         preview += f" (글자 그대로 {literal_total}건, 표기가 다른 곳 {total - literal_total}건)"
     evid = " 각 결과의 근거는 evidence(파일 p.N, 장절 (번호))를 그대로 알리세요. page가 null이면 장절과 번호로 알립니다."
+    if has_num:
+        evid += " " + NUM_CONTEXT_NOTE
     if "output_file" in result:
         preview += f", 저장: {result['output_file']}"
         directive = "VERIFIED: 검색과 저장 완료(저장 파일을 다시 열어 확인)." + evid
@@ -4483,14 +4554,24 @@ def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], 
     조건에 'ambiguous'(판정에 바로 쓰면 안 되는 이유)나 'alt'(같은 문장 다른 항목의, 기준 값을 품는 범위)를 붙일 수 있습니다."""
     flags = re.IGNORECASE
     sents = _COND_SENT_SPLIT.split(text)
-    for si, raw in enumerate(sents):
-        # 빼기 대시(U+2212 등)를 '-'로 (글자 수가 같아 위치가 그대로): 다음 항목 찾기의 '[+-]?\d'가 맞게. 돌려주는 문장은 원문
-        sent = re.sub(f"[{_MINUS_DASH}]", "-", raw)
-        ms = [m for t in terms for m in [_term_pattern(t, flags).search(sent)] if m]
-        if not ms:
-            continue
-        start = min(m.start() for m in ms)
-        end_term = max(m.end() for m in ms if m.start() == start)
+    lits = {t: literal_finder(t) for t in terms}
+    cands = []
+    # 숫자가 든 검색어는 층 A(글자 그대로) 자리가 든 문장을 먼저, 그 자리에서 조건을 읽음 (search 스니펫과 같은 자리, 1.4.71)
+    for lit_only in ((True, False) if any(lits.values()) else (False,)):
+        for si, raw in enumerate(sents):
+            # 빼기 대시(U+2212 등)를 '-'로 (글자 수가 같아 위치가 그대로): 다음 항목 찾기의 '[+-]?\d'가 맞게. 돌려주는 문장은 원문
+            sent = re.sub(f"[{_MINUS_DASH}]", "-", raw)
+            if lit_only and not any(f.search(raw) for f in lits.values() if f is not None):
+                continue
+            ms = [sp for t in terms for sp in [term_span(t, raw, flags, sent)] if sp]
+            if ms:
+                cands.append((si, raw, sent, ms))
+                break
+        if cands:
+            break
+    for si, raw, sent, ms in cands:
+        start = min(m[0] for m in ms)
+        end_term = max(m[1] for m in ms if m[0] == start)
         window = sent[start:start + 200]
         nxt = _NEXT_ITEM.search(window, end_term - start)
         clause = window[:nxt.start()] if nxt else window
