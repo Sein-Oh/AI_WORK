@@ -35,6 +35,11 @@
   그 행 첫 칸과 그 열 첫 행 글(12자)을 붙임(`표2!R3C3 [행 '전류', 열 '측정']`). 회귀 테스트: `test_fill_preview_shows_row_and_column_heads`.
 - `word.py fill`: 문서 보호(`ProtectionType`)를 쓰기 전에 확인해 STOP_RETRY, 쓰는 중 실패하면 "앞의 N곳은 이미 바뀌었습니다(office.py undo)"
   (닫힌 파일은 저장하지 않아 그대로). 회귀 테스트: `test_fill_protected_document_changes_nothing`, `test_fill_failure_midway_says_how_many_changed`.
+- 닫힌 파일 열기 감시: PowerPoint는 한 프로세스라 감시 중에 사용자가 연 발표 파일까지 같이 끝낼 수 있었음. Word·PowerPoint는 끝내기 직전에
+  그 프로세스에 보이는 문서 창이 없다고 창 목록(COM 없이)으로 확인될 때만 끝냄. 사용자 문서 창이 있거나 확인하지 못하거나, 끝낼 프로세스를 모르면
+  (사용자가 이미 띄운 PowerPoint, 번호를 못 찾음: 전에는 감시하지 않아 멈춤) 끝내지 않고 `drm_or_dialog` 오류 1줄을 낸 뒤 도구만 끝냄.
+  시간 초과 message에 "열기가 오래 걸린 경우일 수도 있습니다(OFFICE_CLI_OPEN_TIMEOUT으로 늘릴 수 있음)".
+  회귀 테스트: `test_office.py` `test_open_watchdog_kills_only_without_user_documents`, `test_open_watchdog_abandon_emits_one_json_line`.
 
 ## [1.4.62] - 2026-11-04
 

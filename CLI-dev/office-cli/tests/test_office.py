@@ -2011,6 +2011,68 @@ def test_open_watchdog_quiet_when_open_is_fast(fake_com, monkeypatch, tmp_path):
     assert killed == []
 
 
+@pytest.fixture
+def hung_doc_open(fake_com, monkeypatch, tmp_path):
+    """Word·PowerPoint 열기가 멈춤. 감시가 끝내면(kill) 또는 끝내지 않고 도구를 끝내면(_abandon) 멈춘 Open이 돌아옴."""
+    import threading
+    from fake_office import FakePptApp
+    rec = {"killed": [], "abandoned": []}
+    gone = threading.Event()
+    monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0.2")
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakePptApp() if kind == "ppt" else FakeExcelApp())
+    monkeypatch.setattr(off, "_office_pids", lambda kind: set())
+    monkeypatch.setattr(off, "_kill_pid", lambda pid: rec["killed"].append(pid) or gone.set() or True)
+    monkeypatch.setattr(off, "_abandon", lambda err, kind, tool: rec["abandoned"].append(str(err)) or gone.set())
+
+    def stuck(kind, app, path, readonly):
+        if not gone.wait(5):
+            raise AssertionError("감시가 아무것도 하지 않음")
+        raise Exception("com_error: RPC 서버를 사용할 수 없습니다")
+    monkeypatch.setattr(off, "_open_file", stuck)
+    return tmp_path, rec
+
+
+@pytest.mark.parametrize("kind,ext,running,pid,user_windows,kill", [
+    ("ppt", ".pptx", False, 4242, True, False),     # 감시 중 사용자가 같은 PowerPoint 프로세스에서 발표 파일을 엶 (1.4.63)
+    ("ppt", ".pptx", False, 4242, None, False),     # 창을 확인하지 못함
+    ("ppt", ".pptx", False, 4242, False, True),     # 도구가 띄웠고 사용자 문서 없음
+    ("ppt", ".pptx", True, None, False, False),     # 사용자가 이미 띄운 PowerPoint: 끝내지 않고 오류만 (전에는 감시 없음)
+    ("word", ".docx", False, 4242, True, False),
+    ("word", ".docx", False, 4242, False, True),
+    ("word", ".docx", False, None, False, False),   # 띄운 프로세스를 가려내지 못함
+])
+def test_open_watchdog_kills_only_without_user_documents(hung_doc_open, monkeypatch, kind, ext, running, pid,
+                                                         user_windows, kill):
+    tmp_path, rec = hung_doc_open
+    monkeypatch.setattr(off, "_ppt_running", lambda: running)
+    monkeypatch.setattr(off, "_instance_pid", lambda k, app, before: pid)
+    monkeypatch.setattr(off, "_user_windows", lambda k, p: user_windows)
+    path = tmp_path / f"보안 문서{ext}"
+    path.write_bytes(b"x")
+    with pytest.raises(Exception):
+        with off.open_target(kind, str(path), readonly=True, tool=kind):
+            pass
+    if kill:
+        assert rec["killed"] == [4242] and rec["abandoned"] == []
+    else:
+        assert rec["killed"] == [] and len(rec["abandoned"]) == 1
+        msg = rec["abandoned"][0]
+        assert "끝내지 않았습니다" in msg and "OFFICE_CLI_OPEN_TIMEOUT" in msg
+
+
+def test_open_watchdog_abandon_emits_one_json_line(monkeypatch, capsys, isolated_dirs):
+    exits = []
+    monkeypatch.setattr(os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["read", "--target", "a.pptx"])
+    err = off._drm_or_dialog_error("ppt", "C:\\x\\a.pptx", "ppt", 30, killed=False)
+    off._abandon(err, "ppt", "ppt")
+    out = capsys.readouterr().out.strip().splitlines()
+    assert exits == [1] and len(out) == 1
+    payload = json.loads(out[0])
+    assert payload["error_type"] == "drm_or_dialog" and payload["agent_directive"].startswith("STOP_RETRY:")
+    assert "열기가 오래 걸린 경우일 수도 있습니다" in payload["message"]
+
+
 def test_open_timeout_env(monkeypatch):
     monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "")
     assert off.open_timeout() == 30.0

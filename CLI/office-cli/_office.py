@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -726,7 +727,25 @@ def _kill_pid(pid: int) -> bool:
         return False
 
 
-def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float) -> rt.InputError:
+def _user_windows(kind: str, pid: int) -> Optional[bool]:
+    """도구가 띄운 그 프로세스에 사용자가 볼 수 있는 문서 창(프레임 창)이 있는지 COM 없이 창 목록으로 확인합니다.
+    도구가 연 문서는 창 없이(Visible=False, WithWindow=False) 열므로, 보이는 프레임 창이 있으면 사용자가 그 프로세스에서 연 문서
+    (PowerPoint는 한 프로세스라 사용자가 감시 중에 연 발표 파일도 같은 프로세스). True 있음, False 없음, None 확인하지 못함."""
+    if win32gui is None:
+        return None
+    try:
+        for hwnd in _enum_windows(lambda c: c in FRAME_CLASS[kind]):
+            owner = _window_pid(hwnd)
+            if owner is None:
+                return None
+            if owner == pid and win32gui.IsWindowVisible(hwnd):
+                return True
+        return False
+    except Exception:
+        return None
+
+
+def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float, killed: bool = True) -> rt.InputError:
     name = os.path.basename(path)
 
     def same(a: str) -> bool:
@@ -738,27 +757,55 @@ def _drm_or_dialog_error(kind: str, path: str, tool: str, waited: float) -> rt.I
     new_argv = [name if same(a) else a for a in (rt.CURRENT_ARGV or [])]   # 경로 대신 문서 이름 (열린 문서로)
     nexts = [rt.next_command(f"{tool}.py" if tool else KIND_SCRIPT[kind], new_argv,
                              "사용자가 문서를 Office에서 직접 열어 둔 뒤 같은 작업을 열린 문서로 실행")] if new_argv else []
+    what = (f"백그라운드 {APP_LABEL[kind]}만 끝냈습니다 (사용자의 다른 창은 그대로)" if killed else
+            f"{APP_LABEL[kind]}에 사용자가 연 문서가 있을 수 있어 {APP_LABEL[kind]}을(를) 끝내지 않았습니다 "
+            "(열기 창이 떠 있으면 사용자가 닫으면 됨)")
     return rt.InputError(
-        f"'{name}'이(가) {waited:g}초 안에 열리지 않아 백그라운드 {APP_LABEL[kind]}만 끝냈습니다 (사용자의 다른 창은 그대로). "
-        "문서 보안 인증 창 등으로 열리지 않음. 사용자가 문서를 직접 열어 두면 열린 문서로 읽음.",
+        f"'{name}'이(가) {waited:g}초 안에 열리지 않아 {what}. "
+        "문서 보안 인증 창 등으로 열리지 않음. 사용자가 문서를 직접 열어 두면 열린 문서로 읽음. "
+        f"열기가 오래 걸린 경우일 수도 있습니다({OPEN_TIMEOUT_ENV}으로 늘릴 수 있음).",
         directive=("문서가 열리지 않아 멈췄습니다. 다시 실행하지 말고 message를 사용자에게 알리세요. 사용자가 문서를 Office에서 직접 "
                    "열어 두었다고 하면 next_commands[0]을 1번 실행하세요."),
         error_type="drm_or_dialog", fields={"next_commands": nexts}, no_fallback=True)
 
 
-class _OpenWatch:
-    """닫힌 파일을 여는 동안 시간을 잽니다. 시간이 지나면 도구가 띄운 인스턴스 프로세스만 끝냅니다(그러면 멈춘 COM 호출이 오류로 돌아옴)."""
+def _abandon(err: rt.InputError, kind: str, tool: str) -> None:
+    """프로그램을 끝내지 못해 멈춘 COM 호출이 돌아오지 않을 때: 오류 JSON 1줄을 내고 이 도구 프로세스만 끝냅니다 (감시 스레드에서)."""
+    name = (tool or KIND_SCRIPT[kind]).replace(".py", "")
+    argv = list(rt.CURRENT_ARGV or [])
+    payload = rt.error_payload(err, name, argv[0] if argv else "")
+    try:
+        rt.log("ERROR", str(err))
+        rt.write_error_log(name, None, payload)
+        rt.emit_json(payload)
+        sys.stdout.flush()
+        sys.stderr.flush()
+    finally:
+        os._exit(1)
 
-    def __init__(self, kind: str, pid: Optional[int], timeout: float):
+
+class _OpenWatch:
+    """닫힌 파일을 여는 동안 시간을 잽니다. 시간이 지나면 도구가 띄운 인스턴스 프로세스만 끝냅니다(그러면 멈춘 COM 호출이 오류로 돌아옴).
+    Word·PowerPoint는 그 프로세스에 사용자가 연 문서 창이 없다고 확인될 때만 끝냄(PowerPoint는 한 프로세스라 감시 중에 사용자가 연
+    발표 파일도 같은 프로세스). 끝낼 프로세스를 모르거나(사용자가 이미 띄운 PowerPoint 등) 확인하지 못하면 끝내지 않고
+    drm_or_dialog 오류만 내고 도구를 끝냄(_abandon)."""
+
+    def __init__(self, kind: str, pid: Optional[int], timeout: float, path: str = "", tool: str = ""):
         import threading
-        self.kind, self.pid, self.timeout = kind, pid, timeout
+        self.kind, self.pid, self.timeout, self.path, self.tool = kind, pid, timeout, path, tool
         self.fired = False
-        self._timer = threading.Timer(timeout, self._fire) if pid and timeout > 0 else None
+        self._timer = threading.Timer(timeout, self._fire) if timeout > 0 and (pid or path) else None
         if self._timer is not None:
             self._timer.daemon = True
 
     def _fire(self) -> None:
-        self.fired = _kill_pid(self.pid) if self.pid else False
+        safe = bool(self.pid) and (self.kind == "excel" or _user_windows(self.kind, self.pid) is False)
+        if safe:
+            self.fired = _kill_pid(self.pid)
+            if self.fired:
+                return
+        if self.path:
+            _abandon(_drm_or_dialog_error(self.kind, self.path, self.tool, self.timeout, killed=False), self.kind, self.tool)
 
     def __enter__(self) -> "_OpenWatch":
         if self._timer is not None:
@@ -957,7 +1004,7 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
                     restore_alerts = None
             rt.log("PROGRESS", f"{APP_LABEL[kind]} 파일 {'여는' if exists else '만드는'} 중 (백그라운드): {os.path.basename(path)}")
             pid = _instance_pid(kind, app, before) if timeout and owns_app else None
-            with _OpenWatch(kind, pid, timeout) as watch:
+            with _OpenWatch(kind, pid, timeout, path, tool) as watch:
                 try:
                     doc = _open_file(kind, app, path, readonly) if exists else _create_file(kind, app, path)
                 except BaseException:
