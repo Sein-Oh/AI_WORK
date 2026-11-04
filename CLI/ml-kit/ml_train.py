@@ -472,7 +472,7 @@ def _permutation_means(pipe: Pipeline, Xs: pd.DataFrame, ys: np.ndarray, seed: i
     new_cols = 0
     measured = 0.0                             # longest column of this run
     saved_new = time.monotonic()
-    other_step = bool(RUN_MODEL_SECONDS or RUN_FIT_SECONDS)    # this run already moved on (a candidate, the fit)
+    other_step = _step_done()                  # this run already moved on (a fold, a candidate, the fit)
     Xw = Xs.copy()
     for j in todo:
         if resume and (other_step or new_cols >= 1) and time_would_pass(col_seconds):
@@ -655,16 +655,31 @@ def duplicate_warning(target_name: str, n_dup: int, n_rows: int, note: Optional[
             f"{how} 중복이 실수라면 데이터에서 지우십시오.")
 
 
-# Candidate models of a target are saved one by one and the clock is checked before each: a single slow target is
-# split at the time limit too (R10; the check before a target cannot protect the first target of a run, and the time
-# of a target finished from saved candidates says little about the next one). <resume>.m<k>.joblib holds candidate k;
-# the same command run again reuses them.
+# Candidate models of a target are saved one by one, and inside a candidate every cross-validation fold: a single
+# slow target, or a single slow candidate, is split at the time limit too (R10; the check before a target cannot
+# protect the first target of a run, and a candidate whose folds take longer than the limit together would start
+# again from fold 1 in every run and never end). <resume>.m<k>.f<j>.joblib holds fold j of candidate k until the
+# candidate is finished, <resume>.m<k>.joblib the finished candidate (its fold files are then removed); the same
+# command run again reuses them. The folds are the same splits (same splitter, seed, groups) in every run, and each
+# fold's model is built only from its own training rows, so a split run gives the same scores, OOF predictions and
+# final model as one run.
 RUN_MODEL_SECONDS: List[float] = []
+RUN_FOLD_SECONDS: List[float] = []          # every fold trained in this command (all candidates, all targets)
+
+
+def _step_done() -> bool:
+    """True when this command already finished a step (a fold, a candidate, a final fit or a target): only then may
+    a clock check stop it, so every run moves on (R10)."""
+    return bool(RUN_FOLD_SECONDS or RUN_MODEL_SECONDS or RUN_FIT_SECONDS)
 
 
 def _candidate_path(resume: Optional[str], m_idx: int) -> Optional[str]:
     """Where the candidate is meant to be saved (<resume_dir>/<key>.m<k>.joblib); resume_save may put it elsewhere."""
     return f"{resume}.m{m_idx}.joblib" if resume else None
+
+
+def _fold_path(resume: str, m_idx: int, fold: int) -> str:
+    return f"{resume}.m{m_idx}.f{fold}.joblib"
 
 
 def _candidate_load(resume: Optional[str], m_idx: int) -> Optional[Tuple[Any, ...]]:
@@ -686,26 +701,97 @@ def _candidate_load(resume: Optional[str], m_idx: int) -> Optional[Tuple[Any, ..
     return None
 
 
-def _candidate_check(resume: Optional[str], target_name: str, done: int, total: int, what: str,
-                     known: List[float], estimate: Optional[float] = None) -> None:
-    """Clock check before the next candidate (or the final fit) of a target, also the first candidate after the data
-    was read and the final fit of a target whose candidates were all reused: only after some step was done in this
-    command (a candidate, a final fit or a target), so every run moves on and never stops without a new saved step
-    (R10). The next step is estimated by the longest measured candidate: of this command and the saved candidates of
-    this target (known, reused ones included), or by `estimate` (the final fit: _fit_estimate). A step saved nowhere
-    makes check_time stop with STOP_RETRY instead, so '저장됨' is true when it stops."""
-    if resume and (RUN_MODEL_SECONDS or RUN_FIT_SECONDS):
-        seconds = RUN_MODEL_SECONDS + known
-        check_time(estimate if estimate is not None else max(seconds or RUN_FIT_SECONDS) * 1.2,
-                   f"학습: 타겟 '{target_name}' 후보 모델 {done}/{total}개 끝남, 저장됨 ({what} 전에 멈춤)")
+def _fold_load(resume: str, m_idx: int, fold: int, model_name: str, n_folds: int,
+               n_val: int) -> Optional[Tuple[Dict[str, Any], float]]:
+    """A fold saved by an earlier run of the same command: (its result, its seconds), or None. A damaged file, or one
+    that does not match this candidate (another model, fold count or fold size), is dropped and the fold trained again
+    (JIT: rebuilt)."""
+    want = _fold_path(resume, m_idx, fold)
+    path = resume_find(os.path.dirname(want), os.path.basename(want))
+    if not path:
+        return None
+    try:
+        st = joblib.load(path)
+        if (isinstance(st, dict) and st.get("model") == model_name and st.get("folds") == n_folds
+                and len(st["res"]["pred"]) == n_val):
+            return st["res"], float(st["seconds"])
+    except Exception:
+        pass
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    sys.stderr.write(f"[WARN] 저장된 교차검증 fold 결과 {os.path.basename(path)}를 읽지 못해 그 fold를 다시 학습합니다\n")
+    return None
+
+
+def _cv_folds(resume: Optional[str], m_idx: int, model_name: str, model_count: int, splits: List[Any],
+              target_name: str, known: List[float], fold_fn: Callable[[np.ndarray, np.ndarray], Dict[str, Any]],
+              log_offset: int, log_weight: int) -> Tuple[List[Dict[str, Any]], float]:
+    """
+    The cross-validation of one candidate, fold by fold: fold_fn(train_idx, val_idx) -> the fold's result (its OOF
+    part 'pred', training score, ...). Returns the results in fold order and the candidate's seconds (sum of its
+    folds, saved ones included). Split execution (R10): folds saved by an earlier run are reused; before each new
+    fold the clock is checked (only after a step of this command: _step_done) with the longest fold of this
+    candidate x 1.2, or, before its first fold, the longest fold known (this command's folds, this target's saved
+    candidates), and no check when nothing is known; every finished fold but the last is saved
+    (<resume>.m<k>.f<j>.joblib), the last one is saved with the whole candidate by the caller.
+    """
+    n = len(splits)
+    results: List[Optional[Dict[str, Any]]] = [None] * n
+    own: List[float] = []                      # seconds of this candidate's folds (saved ones included)
+    if resume:
+        for k, (_, val_idx) in enumerate(splits, 1):
+            saved = _fold_load(resume, m_idx, k, model_name, n, len(val_idx))
+            if saved is not None:
+                results[k - 1] = saved[0]
+                own.append(saved[1])
+        if own:
+            sys.stderr.write(f"[INFO] 타겟 '{target_name}': '{model_name}' 교차검증 fold {len(own)}/{n}개는 "
+                             f"이전 실행에서 저장한 결과를 씀 (나눠서 진행)\n")
+    for k, (train_idx, val_idx) in enumerate(splits, 1):
+        if results[k - 1] is not None:
+            continue
+        if resume and _step_done():
+            pool = own or (RUN_FOLD_SECONDS + [t / n for t in known])
+            if pool:
+                done = sum(r is not None for r in results)
+                check_time(max(pool) * 1.2,
+                           f"학습: 타겟 '{target_name}' 후보 모델 {m_idx}/{model_count}개 끝남, '{model_name}' 교차검증 "
+                           f"fold {done}/{n}개 끝남, 저장됨 (fold {k} 전에 멈춤)")
+        pct = log_offset + int(log_weight * (m_idx * n + k) / (model_count * n))
+        log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {k}/{n})...")
+        t_fold = time.monotonic()
+        res = fold_fn(train_idx, val_idx)
+        seconds = time.monotonic() - t_fold
+        results[k - 1] = res
+        own.append(seconds)
+        if resume:
+            RUN_FOLD_SECONDS.append(seconds)
+            if any(r is None for r in results):    # the last fold is saved with the candidate (_candidate_save)
+                _resume_save(_fold_path(resume, m_idx, k),
+                             {"model": model_name, "folds": n, "res": res, "seconds": seconds})
+    return results, float(sum(own))            # type: ignore[return-value]
 
 
 def _candidate_save(resume: Optional[str], m_idx: int, res: Tuple[Any, ...], seconds: float) -> None:
-    """res + (seconds,): the measured time is kept with the candidate for the clock checks of later runs."""
+    """res + (seconds,): the measured time is kept with the candidate for the clock checks of later runs. Its fold
+    files are removed once the candidate is saved (in every place)."""
     if not resume:
         return
     RUN_MODEL_SECONDS.append(seconds)
-    _resume_save(_candidate_path(resume, m_idx), res + (seconds,))
+    if _resume_save(_candidate_path(resume, m_idx), res + (seconds,)):
+        prefix = os.path.basename(resume) + f".m{m_idx}.f"
+        resume_clear(os.path.dirname(resume), lambda name, p: name.startswith(prefix))
+
+
+def _fit_check(resume: Optional[str], target_name: str, model_count: int, estimate: float) -> None:
+    """Clock check before the final fit of a target (also one whose candidates were all reused): only after a step
+    of this command (_step_done), so every run moves on (R10). A step saved nowhere makes check_time stop with
+    STOP_RETRY instead, so '저장됨' is true when it stops."""
+    if resume and _step_done():
+        check_time(estimate, f"학습: 타겟 '{target_name}' 후보 모델 {model_count}/{model_count}개 끝남, 저장됨 "
+                             f"(1위 모델 전체 적합 전에 멈춤)")
 
 
 def _fit_estimate(champion_cv_seconds: float, n_folds: int) -> float:
@@ -739,7 +825,7 @@ def _final_fit_and_importance(estimator: Any, champion_name: str, step_name: str
             sys.stderr.write(f"[WARN] 저장된 1위 모델 적합 결과 {os.path.basename(at)}를 읽지 못해 다시 적합합니다\n")
     fresh = saved is None
     if fresh:
-        _candidate_check(resume, target_name, model_count, model_count, "1위 모델 전체 적합", [], fit_estimate)
+        _fit_check(resume, target_name, model_count, fit_estimate)
         log_progress(log_offset + log_weight - 4, f"Target '{target_name}' | 1위 챔피언({champion_name}) 전체 데이터 적합 중...")
         t_fit = time.monotonic()
         final_pipeline = build_pipeline(fit_safe_model(estimator, y), schema, step_name)
@@ -819,23 +905,21 @@ def train_and_benchmark_models(
             leaderboard.append(saved[1])
             known.append(float(saved[3]))
             continue
-        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'", known)
-        t_model = time.monotonic()
-        oof_preds = np.zeros(len(y))
-        train_r2_list = []
-        params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(splits, 1):
-            pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
-            log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
-
+        def reg_fold(train_idx: np.ndarray, val_idx: np.ndarray, regressor: Any = regressor) -> Dict[str, Any]:
             # Leakage-Free Pipeline: fitted ONLY on training fold
             pipe = build_pipeline(fit_safe_model(regressor, y[train_idx]), schema, "regressor")
             pipe.fit(X.iloc[train_idx], y[train_idx])
-            train_r2_list.append(r2_score(y[train_idx], pipe.predict(X.iloc[train_idx])))
-            oof_preds[val_idx] = pipe.predict(X.iloc[val_idx])
-            params = _model_params(pipe)
-            del pipe  # Explicit memory cleanup per fold
+            return {"train": r2_score(y[train_idx], pipe.predict(X.iloc[train_idx])),
+                    "pred": pipe.predict(X.iloc[val_idx]), "params": _model_params(pipe)}
+
+        folds, seconds = _cv_folds(resume, m_idx, model_name, model_count, splits, target_name, known, reg_fold,
+                                   log_offset, log_weight)
+        oof_preds = np.zeros(len(y))
+        for (_, val_idx), f in zip(splits, folds):
+            oof_preds[val_idx] = f["pred"]
+        train_r2_list = [f["train"] for f in folds]
+        params = folds[-1]["params"]
 
         model_oof_map[model_name] = oof_preds
         val_r2 = float(r2_score(y, oof_preds))
@@ -851,8 +935,8 @@ def train_and_benchmark_models(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
-        known.append(time.monotonic() - t_model)
-        _candidate_save(resume, m_idx, (model_name, entry, oof_preds), known[-1])
+        known.append(seconds)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_preds), seconds)
 
     # Sort leaderboard by val_r2 descending
     leaderboard.sort(key=lambda item: item["val_r2"], reverse=True)
@@ -1096,26 +1180,23 @@ def train_and_benchmark_classifiers(
             leaderboard.append(saved[1])
             known.append(float(saved[4]))
             continue
-        _candidate_check(resume, target_name, m_idx, model_count, f"'{model_name}'", known)
-        t_model = time.monotonic()
-        oof_pred = np.empty(len(y), dtype=object)
-        oof_proba = np.zeros((len(y), len(classes)))
-        train_f1_list = []
-        params = {}
 
-        for fold, (train_idx, val_idx) in enumerate(splits, 1):
-            pct = log_offset + int(log_weight * (m_idx * n_splits + fold) / (model_count * n_splits))
-            log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {fold}/{n_splits})...")
-
+        def clf_fold(train_idx: np.ndarray, val_idx: np.ndarray, clf: Any = clf) -> Dict[str, Any]:
             pipe = build_pipeline(fit_safe_model(clf, y[train_idx]), schema, "classifier")
             pipe.fit(X.iloc[train_idx], y[train_idx])
-            train_f1_list.append(f1_score(y[train_idx], pipe.predict(X.iloc[train_idx]), average="macro", zero_division=0))
-            oof_pred[val_idx] = pipe.predict(X.iloc[val_idx])
-            proba = pipe.predict_proba(X.iloc[val_idx])
-            col_idx = [classes.index(c) for c in pipe.classes_]
-            oof_proba[np.ix_(val_idx, col_idx)] = proba
-            params = _model_params(pipe)
-            del pipe
+            return {"train": f1_score(y[train_idx], pipe.predict(X.iloc[train_idx]), average="macro", zero_division=0),
+                    "pred": pipe.predict(X.iloc[val_idx]), "proba": pipe.predict_proba(X.iloc[val_idx]),
+                    "cols": [classes.index(c) for c in pipe.classes_], "params": _model_params(pipe)}
+
+        folds, seconds = _cv_folds(resume, m_idx, model_name, model_count, splits, target_name, known, clf_fold,
+                                   log_offset, log_weight)
+        oof_pred = np.empty(len(y), dtype=object)
+        oof_proba = np.zeros((len(y), len(classes)))
+        for (_, val_idx), f in zip(splits, folds):
+            oof_pred[val_idx] = f["pred"]
+            oof_proba[np.ix_(val_idx, f["cols"])] = f["proba"]
+        train_f1_list = [f["train"] for f in folds]
+        params = folds[-1]["params"]
 
         oof_pred = oof_pred.astype(str)
         model_oof_map[model_name] = oof_pred
@@ -1135,8 +1216,8 @@ def train_and_benchmark_classifiers(
         if params:
             entry["params"] = params
         leaderboard.append(entry)
-        known.append(time.monotonic() - t_model)
-        _candidate_save(resume, m_idx, (model_name, entry, oof_pred, oof_proba), known[-1])
+        known.append(seconds)
+        _candidate_save(resume, m_idx, (model_name, entry, oof_pred, oof_proba), seconds)
 
     leaderboard.sort(key=lambda item: item["val_f1_macro"], reverse=True)
     for rank, entry in enumerate(leaderboard, 1):

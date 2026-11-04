@@ -8,6 +8,29 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.66] - 2026-11-04
+
+### 기능
+- 학습을 후보 모델 안에서도 교차검증 fold 단위로 나눠 진행 (R10). 지금까지는 후보 모델 단위로만 저장해, 후보 하나의 교차검증(fold 5개)이
+  명령 시간 제한(120초)을 넘으면 그 후보를 매번 fold 1부터 다시 해 끝나지 않았음(무응답 반복). 이제 fold가 끝날 때마다 그 fold의 결과
+  (OOF 예측 조각, 학습 점수, 걸린 시간)를 `.resume_train/<키>.m<번호>.f<fold>.joblib`에 저장(`_cv_folds`, 대체 위치 JIT 복구 포함)하고 다음 fold 전에
+  시계를 봄: 이 후보의 fold 실측(저장된 것 포함) 최대값 x 1.2, 후보의 첫 fold는 이번 실행의 다른 fold 시간과 저장된 후보 시간 / fold 수의 최대값 x 1.2,
+  값이 없으면 진행. 시계는 이번 실행에서 한 단계(fold, 후보, 전체 적합, 타겟)를 끝낸 뒤에만 봄(`_step_done`, 실행마다 최소 1단계). 모든 fold가 끝난
+  후보는 지금처럼 `<키>.m<번호>.joblib`로 합쳐 저장하고 fold 파일은 지움. 손상되었거나 맞지 않는 fold 파일은 버리고 그 fold만 다시 학습(`[WARN]`).
+  분할기·시드·셔플·중복 행 묶음 그대로라 리더보드·OOF·최종 모델 예측·중요도가 한 번에 학습한 것과 같음. `progress`:
+  `타겟 '<이름>' 후보 모델 k/5개 끝남, '<모델>' 교차검증 fold j/5개 끝남, 저장됨 (fold j+1 전에 멈춤)`.
+  대체 위치 정리(`resume_sweep_old`/`resume_clear`)의 도구 파일 이름에 `<키>.m<번호>.f<fold>.joblib` 추가.
+  후보 전 시간 확인(`_candidate_check`)은 fold 확인으로 바뀌고, 1위 전체 적합 전 확인은 `_fit_check`.
+  테스트: `test_train.py` `test_slow_candidate_is_split_by_fold_and_matches_one_run`(회귀·분류 x 중복 행 묶음),
+  `test_killed_run_keeps_saved_folds_and_damaged_fold_is_trained_again`, `test_fold_clock_check_estimates`,
+  명령 단위 동일성 `_assert_same_version`(여러 타겟 `test_training_stops_at_time_limit_and_the_same_command_continues`,
+  `--best` `test_best_continue_skips_finished_task_and_checks_time`: 리더보드·OOF 파일 바이트·최종 모델 예측), 실행 횟수 상한 갱신
+  (`test_report_export.py` `test_report_best_retraining_continues` 포함).
+  실측(리눅스 4코어, 각 실행을 timeout으로 끊어 에이전트 제한 흉내): `h3.csv`(60000행 x 16열, 한 번에 43초) `ML_KIT_TIME_LIMIT=30`(여유를 빼면 0초:
+  실행마다 1단계)·timeout 50초 42번(fold 25, 전체 적합 1, 중요도 열 16), 실행당 11~14초, 모두 1줄 JSON. `=60`·timeout 80초 2번(28초, 26초).
+  `w300.csv`(5000행 x 300열, 한 번에 165초) `=60`·timeout 80초 15번(실행당 20~32초, 모두 JSON). 세 경우 모두 리더보드·`oof_y.csv`(바이트)·
+  최종 모델 예측이 한 번에 학습한 것과 같음.
+
 ## [2.9.65] - 2026-11-04
 
 5차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.

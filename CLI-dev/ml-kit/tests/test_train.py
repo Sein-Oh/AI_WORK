@@ -6,7 +6,9 @@ import argparse
 import json
 import os
 import random
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -1391,7 +1393,7 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     root = tmp_path / "s_ml_data"
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 0.5 s after the reserve: one new target per run
     runs = []
-    for _ in range(30):
+    for _ in range(80):
         proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", SPLIT_Y, "--desc", "나눠 학습")
         assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
         runs.append(out)
@@ -1412,13 +1414,35 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
     assert last["resumed_targets"] == ["생산효율(%)", "수분함량(%)"]
     assert last["mean_val_score"] == pytest.approx(want["mean_val_score"], abs=1e-9)   # the same models as one run
+    _assert_same_version(want["version_dir"], last["version_dir"])       # 2.9.66: OOF and predictions too
     hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
     assert [h["version"] for h in hist] == ["v1"]
     assert not (root / ".resume_train").exists()                                       # cleaned after the commit
     assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
 
 
-def _split_runs(monkeypatch, *argv, limit=12, seconds="30.5"):
+def _assert_same_version(a, b):
+    """Two version folders trained from the same data and command (one run / split runs, 2.9.66): the same
+    leaderboard, OOF files (byte for byte) and final model predictions."""
+    import joblib
+    lb = [json.load(open(os.path.join(d, "leaderboard.json"), encoding="utf-8")) for d in (a, b)]
+    for x in lb:
+        x.pop("timestamp", None)
+    assert lb[0] == lb[1]
+    names = sorted(n for n in os.listdir(a) if n.startswith(("oof_", "model_")) and n.endswith((".csv", ".joblib")))
+    assert names and names == sorted(n for n in os.listdir(b) if n.startswith(("oof_", "model_"))
+                                     and n.endswith((".csv", ".joblib")))
+    frame = pd.read_csv(os.path.join(a, "model_dataset.csv"), encoding="utf-8-sig")
+    for n in names:
+        if n.endswith(".csv"):
+            assert open(os.path.join(a, n), "rb").read() == open(os.path.join(b, n), "rb").read(), n
+            continue
+        pa, pb = joblib.load(os.path.join(a, n)), joblib.load(os.path.join(b, n))
+        X = frame[list(pa.feature_names_in_)]
+        assert np.array_equal(pa.predict(X), pb.predict(X)), n
+
+
+def _split_runs(monkeypatch, *argv, limit=40, seconds="30.5"):
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", seconds)        # 0.5 s after the reserve: one new step per run
     runs = []
     for _ in range(limit):
@@ -1437,7 +1461,7 @@ def test_single_target_is_split_by_candidate_model(tmp_path, monkeypatch):
     want = run_tool("ml_train.py", "-f", ref, "-x", SPLIT_X, "-y", "생산효율(%)")
     data = make_sample(str(tmp_path / "one.csv"))
     root = tmp_path / "one_ml_data"
-    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", "생산효율(%)")
+    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", "생산효율(%)", limit=40)
     assert len(runs) >= 3, [r.get("progress") for r in runs]
     assert "후보 모델" in runs[0]["progress"] and "5개 끝남" in runs[0]["progress"], runs[0]["progress"]
     # the final fit is estimated by the champion's own time (2.9.65): it may go on in the run of the last candidate
@@ -1451,13 +1475,17 @@ def test_single_target_is_split_by_candidate_model(tmp_path, monkeypatch):
 
 def test_best_continue_skips_finished_task_and_checks_time(tmp_path, monkeypatch):
     """2.9.59: --best를 CONTINUE로 나누면 이미 만든 회귀 최고 버전을 다시 만들어 원장에 중복되었고,
-    두 번째 작업 유형의 첫 타겟은 시간 확인 없이 학습했다."""
-    data = make_class_sample(str(tmp_path / "b.csv"))
+    두 번째 작업 유형의 첫 타겟은 시간 확인 없이 학습했다. 2.9.66: 나눠 만든 최고 버전은 한 번에 만든 것과 같다."""
+    ref_best = None
+    for stem in ("ref", "b"):
+        data = make_class_sample(str(tmp_path / f"{stem}.csv"))
+        run_tool("ml_train.py", "-f", data, "-x", "촉매비율(wt%)", "-y", "수분함량(%),반응온도(°C)")
+        run_tool("ml_train.py", "-f", data, "-x", "반응온도(°C),촉매비율(wt%),수분함량(%)", "-y", "품질등급,불량여부",
+                 "--task", "classification")
+        if stem == "ref":
+            ref_best = run_tool("ml_train.py", "-f", data, "--best")          # no limit: one run
     root = tmp_path / "b_ml_data"
-    run_tool("ml_train.py", "-f", data, "-x", "촉매비율(wt%)", "-y", "수분함량(%),반응온도(°C)")
-    run_tool("ml_train.py", "-f", data, "-x", "반응온도(°C),촉매비율(wt%),수분함량(%)", "-y", "품질등급,불량여부",
-             "--task", "classification")
-    runs = _split_runs(monkeypatch, "-f", data, "--best", limit=40)
+    runs = _split_runs(monkeypatch, "-f", data, "--best", limit=120)
     progress = [r.get("progress") or "" for r in runs]
     # the first classification target waits for the clock too (it was trained without a check)
     assert any("'품질등급' 후보 모델" in t or "'불량여부' 후보 모델" in t for t in progress), progress
@@ -1467,6 +1495,9 @@ def test_best_continue_skips_finished_task_and_checks_time(tmp_path, monkeypatch
     last = runs[-1]
     assert last["agent_directive"].startswith("VERIFIED") and last["made_best"] is True
     assert [b["version"] for b in last["best_versions"]] == ["v3", "v4"], last["best_versions"]
+    for v in ("v3", "v4"):
+        _assert_same_version(str(tmp_path / "ref_ml_data" / v), str(root / v))
+    assert ref_best["made_best"] is True
     assert not (root / ".resume_train").exists()
 
 
@@ -1632,16 +1663,19 @@ def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
     resume = str(tmp_path / "rt" / "k")
     monkeypatch.setattr(mp, "SAVE_FAILED", [])
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)   # saves 5 candidates
     assert sorted(os.listdir(tmp_path / "rt")) == [f"k.m{i}.joblib" for i in range(5)]   # fit saved only at a stop
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
     with pytest.raises(mp.Unfinished) as e:                   # first step (the fit) goes on, then stops (4차 검토)
         mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "순열 중요도 0/2열" in e.value.progress, e.value.progress
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [5.0])        # another target was trained in this command
     with pytest.raises(mp.Unfinished) as e:                   # the saved fit is reused: no stop before it
         mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
@@ -1678,8 +1712,9 @@ def test_wide_target_last_step_is_split_and_matches_one_run(tmp_path, monkeypatc
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")          # every check after a step stops (in-process clock)
     resume = str(tmp_path / "rt" / "k")
     progress = []
-    for _ in range(40):
+    for _ in range(60):
         monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])      # a new run of the same command
+        monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
         monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
         try:
             got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
@@ -1689,7 +1724,7 @@ def test_wide_target_last_step_is_split_and_matches_one_run(tmp_path, monkeypatc
     else:
         pytest.fail(f"끝나지 않음: {progress[-3:]}")
     imp_stops = [t for t in progress if "순열 중요도" in t]
-    assert len(progress) <= 5 + 1 + 24, progress                                   # at least one column per run
+    assert len(progress) <= 5 * 5 + 1 + 24, progress                    # at least one fold or column per run
     assert imp_stops and "0/24열" in imp_stops[0], progress
     assert len({t for t in imp_stops}) == len(imp_stops), imp_stops                 # every run moves on
     assert got[0]["leaderboard"] == want[0]["leaderboard"]
@@ -1707,7 +1742,7 @@ def test_wide_data_command_split_runs_end_like_one_run(tmp_path, monkeypatch):
     want = run_tool("ml_train.py", "-f", ref, "-x", cols, "-y", "y")
     data = write_df(tmp_path / "w.csv", df)
     t0 = time.monotonic()
-    runs = _split_runs(monkeypatch, "-f", data, "-x", cols, "-y", "y", limit=5 + 1 + 8 + 1,
+    runs = _split_runs(monkeypatch, "-f", data, "-x", cols, "-y", "y", limit=5 * 5 + 1 + 8 + 1,
                        seconds="30.01")                     # 0.01 s after the reserve: every step stops
     progress = [r.get("progress") or "" for r in runs]
     assert any("순열 중요도" in t for t in progress), progress
@@ -1721,6 +1756,155 @@ def test_wide_data_command_split_runs_end_like_one_run(tmp_path, monkeypatch):
     assert not (tmp_path / "w_ml_data" / ".resume_train").exists()
 
 
+# ---- 후보 모델 안에서도 교차검증 fold 단위로 나눠 진행 (R10, 2.9.66) -------------------------------------------------
+# 후보 하나의 교차검증(fold 5개)이 120초를 넘으면 그 후보는 매번 처음부터 다시 해 끝나지 않았다(무응답 반복).
+# 이제 fold마다 <키>.m<번호>.f<fold>.joblib에 저장하고, 다음 fold 앞에서 시계를 본다.
+
+FOLD_CASES = [("regression", False), ("regression", True), ("classification", False), ("classification", True)]
+_FOLD_FILE = re.compile(r"k\.m\d+\.f\d+\.joblib")
+
+
+def _new_run(monkeypatch, fold=(), model=(), fit=()):
+    """A new run of the same command in this process: the steps done in this command start empty."""
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", list(fold))
+    monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", list(model))
+    monkeypatch.setattr(mt, "RUN_FIT_SECONDS", list(fit))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_command_steps(monkeypatch):
+    """Every test starts like a new command: steps of in-process trainings of other tests do not count."""
+    _new_run(monkeypatch)
+
+
+def _fold_data(task, dup):
+    r = np.random.default_rng(5)
+    n = 70
+    X = pd.DataFrame({"a": r.uniform(0, 1, n).round(2), "b": r.uniform(0, 1, n).round(2)})
+    y = pd.Series(4 * X.a - 2 * X.b + r.normal(0, 0.05, n))
+    if task == "classification":
+        y = pd.Series(np.where(y > y.median(), "A", "B"))
+    if dup:                                     # identical rows (inputs + target): one fold per copy group (2.9.13)
+        X = pd.concat([X, X.iloc[:12]], ignore_index=True)
+        y = pd.concat([y, y.iloc[:12]], ignore_index=True)
+    fn = mt.train_and_benchmark_classifiers if task == "classification" else mt.train_and_benchmark_models
+    return X, y, {"numeric": ["a", "b"], "categorical": {}, "datetime": {}, "input_columns": ["a", "b"]}, fn
+
+
+def _assert_same_as_one_run(got, want, X):
+    assert got[0]["leaderboard"] == want[0]["leaderboard"]
+    assert got[3].equals(want[3])                                            # OOF predictions, to the last bit
+    assert got[2]["feature_importances"] == want[2]["feature_importances"]
+    assert got[2]["top_features"] == want[2]["top_features"]
+    assert np.array_equal(got[1].predict(X), want[1].predict(X))            # the final model
+
+
+@pytest.mark.parametrize("task,dup", FOLD_CASES)
+def test_slow_candidate_is_split_by_fold_and_matches_one_run(tmp_path, monkeypatch, task, dup):
+    """2.9.66: 실행마다 fold 1개만 끝낼 시간이어도 fold를 저장하며 CONTINUE로 나아가 유한 횟수에 끝나고, 결과(리더보드·OOF·
+    최종 모델 예측·중요도)는 한 번에 학습한 것과 같다. 회귀·분류(층화), 중복 행 묶음 fold 모두."""
+    X, y, schema, fn = _fold_data(task, dup)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    want = fn(X=X, y_series=y, target_name="y", schema=schema)
+    assert bool(want[2].get("duplicate_rows")) == dup
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")          # every check after a step stops: one fold per run
+    resume = str(tmp_path / "rt" / "k")
+    progress, fold_files = [], set()
+    for _ in range(60):
+        _new_run(monkeypatch)
+        try:
+            got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+            break
+        except mp.Unfinished as e:
+            progress.append(e.progress)
+            fold_files |= {n for n in os.listdir(tmp_path / "rt") if _FOLD_FILE.fullmatch(n)}
+    else:
+        pytest.fail(f"끝나지 않음: {progress[-3:]}")
+    fold_stops = [t for t in progress if "교차검증 fold" in t]
+    assert fold_stops and "'HistGradientBoosting' 교차검증 fold 1/" in fold_stops[0], progress
+    assert len(set(progress)) == len(progress), progress                    # every run moves on
+    assert len(progress) <= 5 * 5 + 1 + 2, progress                          # folds + final fit + 2 importance columns
+    assert "k.m0.f1.joblib" in fold_files and "k.m4.f1.joblib" in fold_files, fold_files
+    assert not any(_FOLD_FILE.fullmatch(n) for n in os.listdir(tmp_path / "rt"))   # merged into the candidates
+    _assert_same_as_one_run(got, want, X)
+
+
+@pytest.mark.parametrize("task", ["regression", "classification"])
+def test_killed_run_keeps_saved_folds_and_damaged_fold_is_trained_again(tmp_path, monkeypatch, capsys, task):
+    """2.9.66: fold를 저장한 뒤 바깥에서 끊긴 실행(에이전트의 120초 강제 종료)도 끝낸 fold가 남아 다음 실행이 이어서 하고,
+    손상된 fold 파일은 버리고 그 fold만 다시 학습한다 (JIT: 다시 생성). 결과는 한 번에 학습한 것과 같다."""
+    X, y, schema, fn = _fold_data(task, False)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    want = fn(X=X, y_series=y, target_name="y", schema=schema)
+    real, calls = mt.fit_safe_model, []
+
+    def killed_at_8th_fit(est, y_train):                       # candidate 2, fold 3
+        calls.append(1)
+        if len(calls) == 8:
+            raise KeyboardInterrupt("killed")
+        return real(est, y_train)
+
+    monkeypatch.setattr(mt, "fit_safe_model", killed_at_8th_fit)
+    resume = str(tmp_path / "rt" / "k")
+    _new_run(monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert sorted(os.listdir(tmp_path / "rt")) == ["k.m0.joblib", "k.m1.f1.joblib", "k.m1.f2.joblib"]
+    (tmp_path / "rt" / "k.m1.f2.joblib").write_bytes(b"broken")
+    calls.clear()
+    monkeypatch.setattr(mt, "fit_safe_model", lambda est, y_train: calls.append(1) or real(est, y_train))
+    capsys.readouterr()
+    _new_run(monkeypatch)
+    got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    err = capsys.readouterr().err
+    assert "[WARN] 저장된 교차검증 fold 결과 k.m1.f2.joblib를 읽지 못해" in err, err
+    assert "교차검증 fold 1/5개는 이전 실행에서 저장한 결과를 씀" in err, err
+    assert len(calls) == 4 + 3 * 5 + 1                                     # folds 2-5, 3 candidates, the final fit
+    assert sorted(os.listdir(tmp_path / "rt")) == [f"k.m{i}.joblib" for i in range(5)]
+    _assert_same_as_one_run(got, want, X)
+
+
+def test_fold_clock_check_estimates(tmp_path, monkeypatch):
+    """2.9.66: fold 앞 시간 확인은 이 후보의 fold 실측(저장된 것 포함) 최대값 x 1.2, 첫 fold는 이 실행의 다른 후보 fold 시간으로
+    추정하고, 추정할 값이 없으면 진행한다. 이 실행에서 아무 단계도 안 했으면 멈추지 않는다 (R10: 실행마다 최소 1단계)."""
+    import joblib
+    X, y, schema, fn = _fold_data("regression", False)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    resume = str(tmp_path / "rt" / "k")
+    _new_run(monkeypatch, fold=[1000.0])                       # a slow fold of another candidate in this command
+    with pytest.raises(mp.Unfinished) as e:
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "후보 모델 0/5개 끝남, 'HistGradientBoosting' 교차검증 fold 0/5개 끝남" in e.value.progress, e.value.progress
+    assert "(fold 1 전에 멈춤)" in e.value.progress
+    os.makedirs(tmp_path / "rt", exist_ok=True)               # this candidate's own saved fold was slow: it decides
+    joblib.dump({"model": "HistGradientBoosting", "folds": 5, "seconds": 1000.0,
+                 "res": {"train": 0.0, "pred": np.zeros(14), "params": {}}}, tmp_path / "rt" / "k.m0.f1.joblib")
+    _new_run(monkeypatch, fold=[0.01])
+    with pytest.raises(mp.Unfinished) as e:
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤)" in e.value.progress, e.value.progress
+    os.remove(tmp_path / "rt" / "k.m0.f1.joblib")
+    _new_run(monkeypatch, fit=[5.0])                           # a step, but no fold time known: goes on to the end
+    res = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert len(res[0]["leaderboard"]) == 5
+    shutil.rmtree(tmp_path / "rt")
+    real = mt.fit_safe_model                                   # no step in this run: the first fold always goes
+    monkeypatch.setattr(mt, "fit_safe_model", lambda est, y_train: time.sleep(0.2) or real(est, y_train))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.1")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    _new_run(monkeypatch)
+    with pytest.raises(mp.Unfinished) as e:
+        fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
+    assert "'HistGradientBoosting' 교차검증 fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤)" in e.value.progress, e.value.progress
+
+
 def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
     """4차 검토 (d): 1위 모델 전체 적합 전 시간 확인은 저장된 후보 실측 시간(재사용 포함)으로 추정한다. 5차 검토: 가장 느린 후보가 아니라
     1위 모델 자신의 교차검증 시간으로 추정한다(느린 RandomForest가 지면 빠른 전체 적합 앞에서 멈춰 실행 횟수가 늘었음).
@@ -1730,6 +1914,7 @@ def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
     resume = str(tmp_path / "rt" / "k")
     monkeypatch.setattr(mp, "SAVE_FAILED", [])
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     first = mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
@@ -1744,6 +1929,7 @@ def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
     monkeypatch.setattr(mp, "RUN_START", time.monotonic())
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [0.01])      # a fast step done in this run
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     res = mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert len(res[2]["feature_importances"]) == 4
     joblib.dump(saved[:-1] + (1000.0,), slow)                 # the champion was slow in an earlier run
@@ -1778,6 +1964,7 @@ def _imp_setup(tmp_path, monkeypatch, p=40):
     monkeypatch.setattr(mp, "SAVE_FAILED", [])
     monkeypatch.setattr(mp, "_RESUME_PLACE", {})
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
+    monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
