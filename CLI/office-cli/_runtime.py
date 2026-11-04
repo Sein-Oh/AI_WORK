@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.73"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.74"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -153,12 +153,26 @@ ELEVATED_HINT = ("이 도구가 관리자 권한으로 실행 중이라, 일반 
 
 
 def is_elevated() -> bool:
-    """Windows에서 관리자 권한(높은 무결성 수준)으로 실행 중인지. 판단하지 못하면 False."""
+    """UAC로 권한을 올린 관리자 창(TokenElevationTypeFull)에서 실행 중인지. UAC가 꺼진 PC는 False. 판단하지 못하면 False."""
     if os.name != "nt":
         return False
     try:
         import ctypes
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        from ctypes import wintypes
+        # UAC가 꺼진 PC(EnableLUA=0)나 기본 Administrator 계정은 모든 프로그램이 같은 권한으로 떠서
+        # Office 문서도 보인다. 권한이 갈리는 것은 UAC 분리 토큰을 올린 경우(TokenElevationTypeFull=2)뿐이다.
+        token = wintypes.HANDLE()
+        if not ctypes.windll.advapi32.OpenProcessToken(ctypes.windll.kernel32.GetCurrentProcess(), 0x0008,
+                                                       ctypes.byref(token)):
+            return False
+        try:
+            kind = ctypes.c_int(0)
+            size = wintypes.DWORD(0)
+            ok = ctypes.windll.advapi32.GetTokenInformation(token, 18, ctypes.byref(kind),
+                                                            ctypes.sizeof(kind), ctypes.byref(size))
+            return bool(ok) and kind.value == 2
+        finally:
+            ctypes.windll.kernel32.CloseHandle(token)
     except Exception:
         return False
 

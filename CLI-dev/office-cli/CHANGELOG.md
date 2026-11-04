@@ -6,6 +6,14 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.74] - 2026-11-05
+
+### 수정
+- 관리자 권한 판단(`_runtime.is_elevated`)을 `IsUserAnAdmin`에서 토큰 상승 종류(`TokenElevationTypeFull`)로 바꿈. UAC가 꺼진 회사 PC
+  (`EnableLUA`=0, 모든 프로그램이 High 무결성)에서는 Office도 같은 권한이라 열린 문서가 보이는데, 문서가 없을 때마다 "일반 PowerShell에서
+  다시 실행" 안내(`elevated_process`)를 내서 사용자가 따를 수 없는 행동을 시켰음. `CLI-dev/run_all_tests.py`의 Gemma 단계 경고도 같은 판단.
+  회귀 테스트: `test_office.py` `test_is_elevated_only_for_uac_split_token`.
+
 ## [1.4.73] - 2026-11-04
 
 독립 검토(10차) 수정. 발송 안전과 숫자 검색 층 A 경계.

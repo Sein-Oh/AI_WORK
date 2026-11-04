@@ -70,6 +70,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   이때 "열린 문서 없음"으로 끝내지 않고: `active` 대상, 열린 문서 이름 대상, `office.py transfer`의 받는 문서를 찾지 못하면
   `error_type: "elevated_process"`와 "관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행" 안내(STOP_RETRY, 다시 실행하지 말 것).
   `info --all`·`office.py windows`의 0건은 확인한 0건이 아니므로 `UNVERIFIED:`와 같은 안내. Outlook 연결 실패 message에도 붙입니다.
+  관리자 권한 판단은 UAC로 권한을 올린 창(TokenElevationTypeFull)일 때만입니다. UAC가 꺼진 PC(`EnableLUA`=0)는 모든 프로그램이 같은
+  권한으로 떠서 Office 문서가 보이므로 이 안내를 하지 않습니다 (1.4.74).
   판단은 `ctypes.windll.shell32.IsUserAnAdmin()`(`_runtime.is_elevated`, Windows 밖이나 실패하면 일반 권한으로 봄).
 
 ### 화면과 안전

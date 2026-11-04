@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.66**, **office-cli 1.4.73**
+- main 기준 도구 버전: **ml-kit 2.9.66**, **office-cli 1.4.74**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -51,6 +51,7 @@
 | office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`CLI/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
 | office-cli 1.4.63 | 독립 검토 버그 수정: 2열 표 파일(칸값·메모·값 파일)의 셋째 열은 쓰기 전에 STOP_RETRY(큰따옴표 안내), `--cells` 따옴표·수식 나누기, `comment --append` 재실행 중복, 엑셀 쓰기 실패 후 되돌리기가 글자 상수(`007`, `1-2`)를 바꾸던 것, `check`가 같은 문장의 다른 항목 조건을 섞던 것과 칸 단위 없음은 `판단필요`, `word.py fill` 표 칸에 행·열 머리글 표시·문서 보호 확인, 열기 감시가 사용자 문서가 있는 Word·PowerPoint를 끝내지 않음 |
 | office-cli 1.4.73 | 10차 검토 수정: 사용자 확인이 필요한 명령(메일 send, 미리보기 뒤 실제 변경)은 `next_commands`가 아니라 `confirm_commands`로(`needs_user_confirm` 없앰, 전역 지침 3장 6번 예외), send는 발송 원장(`outlook_drafts.json`, 잠금 아래 '보냄' 먼저 기록)에 있는 이 도구가 만든 초안이고 임시 보관함에 있으며 `Sent`·`Submitted`가 아닐 때만(동시·두 번 발송, 지운 초안, 사용자의 다른 초안 거부, id 오류는 `next_commands` 없는 거부), 없앤 `--send`는 exit 2 + `[추천]`. reader 층 A 경계를 허용 목록으로(숫자 앞·단위 뒤), 앞이 숫자뿐인 `/`의 분수·비율 제외, 스니펫 층 B 자리는 `[[ ]]` |
+| office-cli 1.4.74 | 관리자 권한 안내는 UAC로 권한을 올린 창일 때만 (UAC가 꺼진 회사 PC는 모든 프로그램이 같은 권한이라 안내하지 않음) |
 | office-cli 1.4.72 | 9차 검토 수정: outlook 발송은 저장한 초안을 그 항목 그대로 보내는 `send --id <draft_id>` 하나로(`new`·`reply`·`forward`의 `--send` 없앰, 초안 결과의 `next_commands[0]`에 `needs_user_confirm: true`, 이미 보냈거나 지운 초안은 거부해 중복 발송 없음), 답장·전달은 보내지 않은 초안을 원본으로 쓰지 않음(열린 초안 창에 답장하던 위험). reader 층 A: `/` 값 구분은 양쪽 숫자+단위이고 `/` 뒤가 1·10^n이 아닐 때만(숫자만 앞이면 Hz·V 목록), AND 스니펫은 검색어마다 창(` / `로 이음), 단위 없는 검색어의 DC/AC 예외 없앰, 붙은 기호(천 단위 따옴표, U+2044·U+FF0F·U+2215, 곱하기, U+3161, 폭 없는 공백, 지수 `m-1`) 차단 |
 | office-cli 1.4.71 | 8차 검토 수정: 층 A(`VERIFIED`)의 뜻 확정 - 검색어 글자열이 그 자리에 글자 그대로, 숫자·단위 낱말 경계가 맞게 있음(띄어 쓴 부호 `- 40 ℃`·범위·이하/이상·한글 꼬리의 뜻은 판정하지 않고 스니펫으로 보임). 스니펫·근거 문장·check 조건은 층 A 자리(일치 앞 최소 15자), 숫자 검색 directive에 앞뒤 함께 전달 안내. 낱말 수준 오일치(띄어 쓴 천 단위, 곱 단위·띄어 쓴 단위 이어짐, 숫자 코드 뒤 `-숫자`)는 층 A 금지, 형식 차이(`/` 값 구분, `(DC)`·`(Max)` 괄호, 붙은 `DC`/`AC`, `IP 67`/`M 10`)는 층 A. check `--header-row 0`(머리글 없음)을 남은 행 명령에 |
 | office-cli 1.4.70 | 7차 검토 수정: reader 숫자가 든 검색어는 두 층 판정. 글자 그대로 일치(층 A: 띄어쓰기·탭 여러 칸 = 한 칸, 숫자와 단위·± 앞뒤 띄어쓰기 0~1칸 차이만 허용, 엄격한 앞뒤 경계)만 `exact` VERIFIED, 정규화 매처만 찾은 곳(층 B)은 결과에 넣되 `literal: false` + `match_mode: exact_mixed` + `UNVERIFIED:`(`literal_count` 새 키). check는 층 B로 찾은 항목의 reason에 표시. 층 B에서 모두 대문자 단위(`10 MM`, `10UF`, `20MA`)는 대소문자 무관. 숫자 안전망 시간 상한은 단위마다 확인, check 시간 제한으로 대조하지 못한 행은 `대조하지 못함`(match_mode null, 메모 제외) + 남은 범위 check 명령(`--header-row` 새 인자), 규격 수치의 쉼표 뒤가 3자리가 아니면 수치 아님 |

@@ -1813,6 +1813,44 @@ def _elevated(monkeypatch, value=True):
     monkeypatch.setattr(rt, "is_elevated", lambda: value)
 
 
+def _fake_token_windll(kind_value, ok=1):
+    """OpenProcessToken/GetTokenInformation(TokenElevationType)을 흉내 내는 가짜 ctypes.windll."""
+    import ctypes
+
+    class _Advapi:
+        def OpenProcessToken(self, proc, access, out):
+            return 1
+
+        def GetTokenInformation(self, token, cls, buf, size, outsize):
+            assert cls == 18
+            ctypes.cast(buf, ctypes.POINTER(ctypes.c_int)).contents.value = kind_value
+            return ok
+
+    class _Kernel:
+        def GetCurrentProcess(self):
+            return 0
+
+        def CloseHandle(self, h):
+            return 1
+
+    class _Windll:
+        advapi32 = _Advapi()
+        kernel32 = _Kernel()
+    return _Windll()
+
+
+def test_is_elevated_only_for_uac_split_token(monkeypatch):
+    """UAC가 꺼진 PC(EnableLUA=0)는 모든 프로그램이 같은 권한이라 Office 문서가 보이므로 권한 안내를 하지 않는다 (1.4.74).
+    권한 안내는 UAC 분리 토큰을 올린 관리자 창(TokenElevationTypeFull=2)일 때만."""
+    import ctypes
+    monkeypatch.setattr(rt.os, "name", "nt")
+    for kind, want in ((1, False), (2, True), (3, False)):
+        monkeypatch.setattr(ctypes, "windll", _fake_token_windll(kind), raising=False)
+        assert rt.is_elevated() is want, kind
+    monkeypatch.setattr(ctypes, "windll", _fake_token_windll(2, ok=0), raising=False)
+    assert rt.is_elevated() is False
+
+
 def test_is_elevated_false_off_windows():
     if os.name != "nt":
         assert rt.is_elevated() is False and rt.elevation_hint() == ""

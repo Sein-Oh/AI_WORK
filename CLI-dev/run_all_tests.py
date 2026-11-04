@@ -17,7 +17,7 @@
             grade_opencode.py로 채점 (20~60분). 기본 단계가 아니며 --gemma 또는 --only에 넣을 때만.
             사람이 준비해야 하는 요청(yaml의 manual, 예: Outlook 메일이 필요한 O3)은 보내지 않고 건너뜀(수동 전용)으로 남깁니다.
             opencode는 --opencode, PATH, C:\\CLI\\opencode.exe 순서로 찾고, 없으면 ENV-SKIP.
-            관리자 권한 창이면 열린 문서를 못 보므로 일반 PowerShell에서 실행하세요.
+            UAC로 권한을 올린 관리자 창이면 열린 문서를 못 보므로 일반 창에서 실행하세요 (UAC가 꺼진 PC는 상관없음).
     기본은 diag, pytest, beta, office. Windows + pywin32가 아니면 ml, office는 ENV-SKIP.
     끝에 각 도구의 오류 로그(<도구>/data/logs/errors.txt, 실제 사용 중 생긴 오류)를 늘 붙입니다.
 
@@ -767,7 +767,21 @@ def is_elevated():
         return False
     try:
         import ctypes
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        from ctypes import wintypes
+        # UAC가 꺼진 PC(EnableLUA=0)나 기본 Administrator 계정은 모든 프로그램이 같은 권한으로 떠서
+        # Office 문서도 보인다. 권한이 갈리는 것은 UAC 분리 토큰을 올린 경우(TokenElevationTypeFull=2)뿐이다.
+        token = wintypes.HANDLE()
+        if not ctypes.windll.advapi32.OpenProcessToken(ctypes.windll.kernel32.GetCurrentProcess(), 0x0008,
+                                                       ctypes.byref(token)):
+            return False
+        try:
+            kind = ctypes.c_int(0)
+            size = wintypes.DWORD(0)
+            ok = ctypes.windll.advapi32.GetTokenInformation(token, 18, ctypes.byref(kind),
+                                                            ctypes.sizeof(kind), ctypes.byref(size))
+            return bool(ok) and kind.value == 2
+        finally:
+            ctypes.windll.kernel32.CloseHandle(token)
     except Exception:
         return False
 
