@@ -2697,7 +2697,17 @@ def test_spec_conditions_do_not_mix_items(text, expected):
     ("정격 전압 5 V, 허용 범위 4.75~5.25 V", "정격 전압", ["4.75~5.25 V"]),
     ("정격 전압은 5 V로 하고, 허용 범위는 4.75~5.25 V로 한다.", "정격 전압", ["4.75~5.25 V"]),
     ("출력 전압은 12 V이며, 변동 범위는 11.5 V 이상 12.5 V 이하", "출력 전압", ["11.5~12.5 V"]),
-    ("회전수 1,500 rpm, 허용 범위 1,400 rpm 이상", "회전수", ["1400 rpm 이상"]),
+    # 한쪽 한계와 기준 값은 합치지 않음 (1.4.66 보수적 판정: check가 판단필요)
+    ("회전수 1,500 rpm, 허용 범위 1,400 rpm 이상", "회전수", ["1500 rpm", "1400 rpm 이상"]),
+    # 기준 값 + 떨어진 공차 ±N 단위 / ±N % (규칙 b)
+    ("두께 3 mm, 공차 ±0.1 mm", "두께", ["2.9~3.1 mm"]),
+    ("정격 전류 2 A, 허용 오차 ±5 %", "정격 전류", ["1.9~2.1 A"]),
+    ("높이 100 mm, 허용 공차 ±2 mm, 폭 50 mm", "높이", ["98~102 mm"]),
+    # 사용·동작 범위는 한계 낱말이 아니라 별개 항목 (1.4.65 회귀: 시험 전압의 조건이 0~1000 V가 됨)
+    ("시험 전압 500 V, 사용 범위 0~1000 V", "시험 전압", ["500 V"]),
+    ("시험 온도 23 ℃, 동작 범위 -10~40 ℃", "시험 온도", ["23 °C"]),
+    ("보관 온도 25 ℃ 이하, 동작 범위 0~40 ℃", "보관 온도", ["25 °C 이하"]),
+    ("Current Max. 3A", "Current", ["3 A 이하"]),                          # 약어 점에서 문장을 나누지 않음
     ("정격 전압: 5 V (허용 범위: 4.75 V ~ 5.25 V)", "정격 전압", ["4.75~5.25 V"]),
 ])
 def test_near_conditions_stop_at_next_item(text, term, expected):
@@ -2711,6 +2721,15 @@ def test_near_conditions_plain_with_later_range_is_marked():
     assert [reader.cond_text(c) for c in cs] == ["3 mm"] and [reader.cond_text(a) for a in cs[0]["alt"]] == ["2~5 mm"]
     cs, _ = reader.near_conditions("외경 3 mm, 폭 5 mm 이하로 한다.", ["외경"])       # 한쪽 한계는 다른 항목으로 봄
     assert "alt" not in cs[0]
+    cs, _ = reader.near_conditions("시험 전압 500 V, 사용 범위 0~1000 V", ["시험 전압"])  # 이름에 '범위'가 든 별개 항목
+    assert "alt" not in cs[0]
+
+
+def test_near_conditions_marks_reject_and_multi_value():
+    cs, _ = reader.near_conditions("누설 전류 0.5 mA 초과 시 불합격", ["누설 전류"])
+    assert cs and "불합격" in cs[0]["ambiguous"]
+    cs, _ = reader.near_conditions("주파수 50/60 Hz, 허용 범위 47~63 Hz", ["주파수"])
+    assert cs and "여럿" in cs[0]["ambiguous"]
 
 
 def test_cond_holds_bounds():
@@ -2869,6 +2888,13 @@ def test_search_section_number_excludes_2_10(tmp_path, capsys):
     # 소수 한 자리 맨 숫자는 장절 번호 경계, 끝 0은 단위가 붙을 때만 (1.4.65)
     ("2.1", "2.10 전압", False), ("2.1", "2.1.3 세부", True), ("2.1", "12.1 전압", False), ("0.5", "0.50 이다", False),
     ("3.14", "3.140 이다", True), ("2.1 전압", "2.10 전압", False), ("1.5 mm", "1.50 mm", True), ("1.5", "1.50 mm", True),
+    # 소수 끝 0 무시는 수학적으로 같은 값일 때만 (1.4.65 회귀: '2.0'이 '2.5 V', '1.0'이 '1.03 mm', '0.0'이 '0.5'에 맞음)
+    ("2.0", "2.5 V", False), ("2.0", "2.05 V", False), ("2.0", "2.0 V", True), ("2.0", "2 V", True), ("2.0", "2.00", True),
+    ("1.0", "1.03 mm", False), ("1.0", "1.0.3절", False), ("3.0", "3.5", False), ("0.0", "0.5", False), ("0.0", "0", True),
+    ("2.0 V", "2.5 V", False), ("1.0 mm", "1.03 mm", False), ("2.10", "2.10 전압", True), ("2.10", "2.1 V", True),
+    ("2.10", "2.1 전압", False), ("2.1", "2.15 V", False), ("1,500", "1,500.", True), ("0.5", "0.5,1.0", False),
+    # 전각 단위 글자 (CP949): 끝 0이 단위 앞이면 같은 값
+    ("1.5", "1.50㎜", True), ("2.5", "2.50㎝", True), ("0.5", "0.50㎏", True), ("1.5", "1.50㎖", True), ("0.5", "0.50㎃", True),
 ])
 def test_number_only_query_normalized(query, text, want):
     assert (reader.build_matcher(query, False)(text) is not None) is want
@@ -2876,10 +2902,16 @@ def test_number_only_query_normalized(query, text, want):
 
 @pytest.mark.parametrize("query,text,want", [
     ("케이블로", "케이블 연결", True),          # ㄹ 받침 뒤 '로'는 조사
-    ("서버로", "서버 설정", True),              # 받침 없는 글자 뒤 '로': 원래 낱말과 뗀 낱말 둘 다
-    ("서버로", "서버로 전송", True),
+    ("케이블로", "케이블은 2 m", True),         # 뗀 낱말 뒤 조사는 허용
+    ("케이블로", "케이블카 운행", False),       # 뗀 낱말 뒤에 한글이 이어지면 다른 낱말
+    ("프로토콜로", "프로토콜", True),
+    ("서버로", "서버로 전송", True),            # 받침 없는 글자 뒤 '로'는 떼지 않고 그대로 찾음
     ("보호회로", "보호회로 시험", True),        # 낱말 끝 '로'도 그대로 맞음
     ("보호회로 시험", "보호회로의 시험", True),
+    # 1.4.65 회귀: 받침 없는 '로'를 떼고도 찾아 뗀 낱말 앞부분에 맞음
+    ("전기회로", "전기회사 납품", False), ("냉각수로", "냉각수 온도 80 ℃", False), ("배수로", "배수 펌프", False),
+    ("보호회로", "보호회의 개최", False), ("고속도로", "고속도 카메라", False), ("보호회로 시험", "보호회 시험", False),
+    ("서버로", "서버 설정", False), ("우회로", "우회 경로", False),
 ])
 def test_particle_ro(query, text, want):
     assert (reader.build_matcher(query, False)(text) is not None) is want

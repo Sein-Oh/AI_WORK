@@ -1156,6 +1156,37 @@ def test_check_limit_clause_belongs_to_item(check_env, capsys, sentence, value, 
     assert code == 0 and out["results"][0]["verdict"] == verdict, out
 
 
+def _load_check_corpus():
+    rows = []
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_corpus.tsv"), encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            line = line.rstrip("\n")
+            if line.strip() and not line.startswith("#"):
+                spec, item, value, verdict, *note = line.split("\t")
+                rows.append(pytest.param(spec, item, value, verdict, id=f"L{n}"))
+    return rows
+
+
+CHECK_CORPUS = _load_check_corpus()
+
+
+def test_check_corpus_size_and_spread():
+    # 표준 판정 말뭉치 (1.4.66): 규격 문장 + 측정값 + 기대 판정. 앞으로의 check 회귀를 막는 기준
+    verdicts = [p.values[3] for p in CHECK_CORPUS]
+    assert len(verdicts) >= 60 and set(verdicts) == set(excel.VERDICTS)
+
+
+@pytest.mark.parametrize("spec,item,value,verdict", CHECK_CORPUS)
+def test_check_corpus(tmp_path, spec, item, value, verdict):
+    # 틀린 VERIFIED(일치·불일치) 금지가 최우선: 조건을 하나로 합치는 규칙이 확실하지 않으면 판단필요
+    import reader
+    path = tmp_path / "규격서.txt"
+    path.write_text(spec + "\n", encoding="utf-8")
+    docs = [{"file": str(path), "units": reader.parse_txt(str(path))[0]}]
+    r = excel._judge_row(docs, item, value, "", "값")
+    assert r["verdict"] == verdict, r
+
+
 @pytest.mark.parametrize("header,value,verdict", [
     (("항목", "비고", "값"), 30, "판단필요"),              # 칸·머리글에 단위 없음: 규격 단위(cm)로 추정하지 않음
     (("항목", "비고", "값(mm)"), 30, "일치"),              # 머리글 단위로 바꿔 비교 (30 mm <= 5 cm)

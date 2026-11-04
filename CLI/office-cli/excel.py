@@ -3967,6 +3967,17 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
     out["spec_text"] = re.sub(r"\s+", " ", sentences[0])[:CHECK_SPEC_CHARS]
     qty = reader.quantity_of(value)
     cell_unit = (qty[1] if qty else None) or reader.unit_of(unit_hint) or reader.unit_of(item)
+    # 보수적 판정: 같은 항목 절에 합치지 못한 공차(±N)나 % 조건이 있으면 기준 값과 어떻게 합칠지 확실하지 않음
+    # ('정격 전류 2 A, 허용 오차 5 %'에서 % 조건을 단위가 달라 버리면 2 A만 남아 2.05 A가 불일치로 단정됨)
+    loose = [c for c in conds if c["kind"] == "pm" or (c["base"] == "%" and not (cell_unit and cell_unit[0] == "%"))]
+    odd = next((c["ambiguous"] for c in conds if c.get("ambiguous")), "")
+    if odd and mode == "exact":
+        out.update(verdict="판단필요", reason=f"{odd}: 조건을 그대로 판정에 쓰지 않음", condition=_cond_list(conds))
+        return out
+    if loose and mode == "exact":
+        out.update(verdict="판단필요", reason=f"같은 항목에 합치는 규칙이 확실하지 않은 조건이 있음: {_cond_list(conds)}",
+                   condition=_cond_list(conds))
+        return out
     if cell_unit and conds:
         same = [c for c in conds if c["base"] == cell_unit[0]]
         if not same:
@@ -3982,7 +3993,8 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
         out.update(verdict="판단필요", reason="근거 문장에서 단위가 있는 수치 조건을 찾지 못함")
         return out
     if len(conds) > 1:
-        out.update(verdict="판단필요", reason=f"수치 후보가 {len(conds)}개", condition=", ".join(reader.cond_text(c) for c in conds[:3]))
+        out.update(verdict="판단필요", reason=f"같은 항목에 조건이 {len(conds)}개 (하나로 합치는 규칙이 확실하지 않음): {_cond_list(conds)}",
+                   condition=_cond_list(conds))
         return out
     c = conds[0]
     out["condition"] = reader.cond_text(c)
@@ -4005,8 +4017,14 @@ def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit
     return out
 
 
+def _cond_list(conds: List[Dict[str, Any]]) -> str:
+    import reader
+    return ", ".join(reader.cond_text(c) for c in conds[:3]) + (" 등" if len(conds) > 3 else "")
+
+
 def cond_same(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
-    return all(a[k] == b[k] for k in ("base", "lo", "hi", "lo_strict", "hi_strict"))
+    return (a["kind"] == "pm") == (b["kind"] == "pm") and all(a.get(k) == b.get(k)
+                                                              for k in ("base", "lo", "hi", "lo_strict", "hi_strict", "d"))
 
 
 def _check_command(args, extra: Sequence[str] = ()) -> List[str]:

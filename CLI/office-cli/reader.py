@@ -2539,8 +2539,9 @@ _SEP = r"[\W_]*"          # 글자 사이에 끼어도 되는 것: 띄어쓰기,
 
 # 검색어 낱말 끝의 조사·어미: 떼고 찾음 (글에서는 낱말 뒤에 무엇이 와도 맞음). 긴 것부터.
 # 떼고 남는 글이 2자 이상일 때만 ('높이', '단가', '회의'는 그대로). '도'·'만'은 낱말 끝 글자인 경우가 많아('정확도') 떼지 않음.
-# '로'는 ㄹ 받침 뒤에서만 뗌('케이블로' -> '케이블'). 받침 없는 글자 뒤의 '로'는 낱말 끝 글자인 경우가 많아('보호회로', '도로')
-# 떼지 않고, 검색 정규식에서 원래 낱말과 뗀 낱말을 둘 다 찾음(_open_ro). '으로'는 뗌.
+# '로'는 ㄹ 받침 뒤에서만 뗌('케이블로' -> '케이블'). 뗀 낱말 뒤에는 한글이 이어지지 않아야 맞음(조사는 허용:
+# '케이블은'은 맞고 '케이블카'는 아님). 받침 없는 글자 뒤의 '로'는 낱말 끝 글자인 경우가 많아('보호회로', '도로', '냉각수로')
+# 떼지 않고 그대로 찾음 ('전기회로'가 '전기회사'에 맞지 않게). '으로'는 뗌.
 _PARTICLES = ("에서의", "에서는", "으로는", "으로서", "으로써", "이어야", "에서", "으로", "에는", "에게", "까지", "부터",
               "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "및", "로")
 # 받침에 따라 붙는 조사: 앞 글자의 받침이 맞을 때만 뗌 ('와이파이', '역효과'의 끝 글자는 조사가 아님)
@@ -2573,11 +2574,6 @@ def _strip_word(word: str) -> str:
     return word
 
 
-def _open_ro(word: str) -> bool:
-    """받침 없는 글자 뒤 '로'로 끝나는 낱말(3자 이상): 조사('서버로')인지 낱말 끝('보호회로')인지 사전 없이 알 수 없음."""
-    return len(word) >= 3 and word.endswith("로") and bool(_HANGUL.match(word[-2])) and not _has_final(word[-2])
-
-
 def strip_particles(term: str) -> str:
     """'정격전압은 5V' -> '정격전압 5V' (낱말마다 끝의 조사를 뗌)."""
     return " ".join(_strip_word(w) for w in term.split())
@@ -2593,18 +2589,27 @@ def _char(c: str) -> str:
 _NUM_TOKEN = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|[^\W\d_]|\S")
 
 
+# CP949에 있는 전각 단위 글자(㎜ ㎝ ㎏ ㎖ ㎃ ㎾ ㏊ ...: U+3380~U+33DF)와 ℓ. 글은 NFKC로 바꾸지 않고 찾으므로 따로 둠
+_SQUARE_UNIT = "[\u3380-\u33df\u2113]"
+
+
 def _number(tok: str) -> str:
     """숫자 하나: 천 단위 쉼표 무시(5000 = 5,000), 정수와 .0은 같음(5 = 5.0 = 5.00).
+    글의 숫자가 수학적으로 같은 값일 때만 맞음: '2.0'은 '2', '2.00'과 맞고 '2.5', '2.05'와는 맞지 않음
+    (정수 부분 뒤에 0이 아닌 소수가 이어지면 아님).
     소수 끝 0: 소수 둘째 자리 이상(3.14 = 3.140)은 늘 무시, 소수 한 자리(2.1)는 글에서 단위가 붙을 때만
-    (0.5 = '0.50 mm'이지만 2.1 != '2.10 전압': 장절 번호 2.10은 2.1과 다름)."""
+    (0.5 = '0.50 mm' = '0.50㎜'이지만 2.1 != '2.10 전압': 장절 번호 2.10은 2.1과 다름)."""
     whole, _, frac = tok.replace(",", "").partition(".")
     body = ",?".join(_char(d) for d in whole) if len(whole) > 3 else "".join(_char(d) for d in whole)
     sig = frac.rstrip("0")
     if len(sig) >= 2:
         return body + r"\." + "".join(_char(d) for d in sig) + "0*"
     if sig:
-        return body + r"\." + _char(sig) + rf"(?:0+(?=\s*[(\[]?\s*(?:{_UNIT_RE}|\u2103)))?"
-    return body + r"(?:\.0+)?"
+        unit = rf"(?=\s*[(\[]?\s*(?:{_UNIT_RE}|\u2103|{_SQUARE_UNIT}))"
+        if frac != sig:                                 # 검색어가 끝 0을 적음('2.10'): 글의 '2.10', '2.100', 단위 붙은 '2.1 V'
+            return body + r"\." + _char(sig) + rf"(?:0+|{unit})"
+        return body + r"\." + _char(sig) + rf"(?:0+{unit})?"
+    return body + r"(?:\.0+)?(?!\.0*[1-9])"
 
 
 def _single_pattern(term: str) -> str:
@@ -2614,13 +2619,16 @@ def _single_pattern(term: str) -> str:
     (5V = 5 V = 5[V] = 5.0 V), °C = ℃.
     숫자 경계는 지킵니다: 'SOI 1'은 'SOI #10'이나 'SOI 21'과, '5V'는 '15V', '5.5V'와 맞지 않습니다.
     기호를 빼면 숫자만 남는 검색어('#4', '1.2')는 기호를 그대로 찾습니다 (모든 '4'와 맞지 않게)."""
-    t = strip_particles(unicodedata.normalize("NFKC", term))       # 전각 -> 반각, ℃ -> °C
+    orig = unicodedata.normalize("NFKC", term).split()             # 전각 -> 반각, ℃ -> °C
+    stripped = [_strip_word(w) for w in orig]
+    ro_cut = {sw for w, sw in zip(orig, stripped) if w.endswith("로") and sw == w[:-1]}   # ㄹ 받침 뒤 '로'를 뗀 낱말
+    t = " ".join(stripped)
     compact = re.sub(r"\s+", "", t)
     core = re.sub(r"[\W_]+", "", compact)
     if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+", compact):
         # 숫자 하나: 천 단위 쉼표·소수 끝 0과 무관 ('5,000' = '5000', '0.5' = '0.50'), 숫자 경계는 지킴 ('0.5'는 '10.5'와 다름)
         # 소수 한 자리 맨 숫자('2.1')는 장절 번호 경계(section_matches와 같음): '2.1.3'(하위 절)은 맞고 '2.10', '12.1'은 아님
-        tail = r"(?!,?\d)" if re.fullmatch(r"\d+\.\d", compact) else r"(?![.,]?\d)"
+        tail = r"(?!,?\d)" if re.fullmatch(r"\d+\.[1-9]", compact) else r"(?![.,]?\d)"
         return r"(?<![\d.])" + _number(compact) + tail
     if not core or (core.isdigit() and core != compact):
         chars = compact or t
@@ -2648,9 +2656,9 @@ def _single_pattern(term: str) -> str:
                 parts.append(_char(tok))
             prev = tok
         piece = _SEP.join(parts)
-        if _open_ro(raw_words[wi]) and len(parts) >= 3:
-            piece = f"(?:{piece}|{_SEP.join(parts[:-1])})"            # '서버로' = '서버로' 또는 '서버'
-        if wi < len(words) - 1 and _HANGUL.match(w[-1]):
+        if raw_words[wi] in ro_cut:
+            piece += particle + r"(?![\uac00-\ud7a3])"                  # '케이블로' -> '케이블'(+조사), '케이블카'는 아님
+        elif wi < len(words) - 1 and _HANGUL.match(w[-1]):
             piece += particle
         pieces.append(piece)
     body = _SEP.join(pieces)
@@ -3550,6 +3558,7 @@ _COND_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [(k, re.compile(p, re.IGNO
     ("upper_x", rf"{_q('a', 'ua')}{_AD}\s*(?:미만|보다\s*작)"),
     ("lower", rf"{_q('a', 'ua')}{_AD}\s*(?:을|를|이|가)?\s*(?:이상|min(?:imum)?\b|or\s+more|or\s+greater|or\s+above)"),
     ("lower_x", rf"{_q('a', 'ua')}{_AD}\s*(?:초과|보다\s*커|보다\s*큰)"),
+    ("pm", rf"(?:±|\+/-|\+-)\s*(?P<d>{_NUM_RE})\s*(?P<ud>%|{_UNIT_RE})"),       # 기준 값 없이 떨어진 공차 '±0.1 mm', '±5 %'
     ("plain", rf"(?<![\w.]){_q('a', 'ua')}"),
 )]
 
@@ -3590,6 +3599,18 @@ def quantity_of(value: Any) -> Optional[Tuple[float, Optional[Tuple[str, float, 
 def _cond(kind: str, m: "re.Match[str]") -> Optional[Dict[str, Any]]:
     """패턴 일치 하나 -> 조건 {kind, lo, hi, lo_strict, hi_strict, base, scale, unit, text} (기준 단위 값). 단위가 없으면 None."""
     gd = m.groupdict()
+    if kind == "pm":
+        # 떨어진 공차: 혼자서는 판정 조건이 아님 (spec_conditions가 바로 앞 기준 값과 합치거나, 못 합치면 판단필요)
+        ud = gd.get("ud")
+        if ud == "%":
+            return {"kind": "pm", "lo": None, "hi": None, "lo_strict": False, "hi_strict": False, "base": "%", "scale": 1.0,
+                    "unit": "%", "d": _num(gd["d"]), "pct": True, "text": m.group(0).strip()}
+        key = _unit_key(ud)
+        if key is None:
+            return None
+        base, scale = _UNIT_TABLE[key]
+        return {"kind": "pm", "lo": None, "hi": None, "lo_strict": False, "hi_strict": False, "base": base, "scale": scale,
+                "unit": key, "d": _num(gd["d"]) * scale, "pct": False, "text": m.group(0).strip()}
     ua, ub = gd.get("ua"), gd.get("ub")
     unit = ua or ub or (gd.get("ud") if gd.get("ud") and gd.get("ud") != "%" else None)
     if kind == "tol" and not unit and gd.get("ud") == "%":
@@ -3632,8 +3653,9 @@ def _cond(kind: str, m: "re.Match[str]") -> Optional[Dict[str, Any]]:
 # 조건 사이를 잇는 말 (이것만 있으면 같은 항목): '5 mm 이상이며 10 mm 이하', '5 mm 이상, 10 mm 이하'
 _COND_JOIN = re.compile(r"(?:으로|로)\s*(?:하고|하며|하되)|이고|이며|이면서|이되|및|그리고|또한|and|or|또는|[\s,;:()\[\]~-]", re.IGNORECASE)
 # 앞 항목의 한계를 말하는 낱말 (새 항목이 아님): '정격 전압 5 V, 허용 범위 4.75~5.25 V', '변동 범위는 ...'
-# '허용 전류 10 A 이하'처럼 허용·변동 뒤에 다른 낱말이 오면 새 항목
-_LIMIT_WORD = (r"(?:(?:허용|변동|사용|동작)\s*)?(?:범위|공차|오차|편차)|허용\s*(?:차|치|값)|변동\s*폭"
+# '허용 전류 10 A 이하'처럼 허용·변동 뒤에 다른 낱말이 오면 새 항목.
+# '사용 범위', '동작 범위', '측정 범위'는 한계 낱말이 아니라 별개 항목 ('시험 전압 500 V, 사용 범위 0~1000 V')
+_LIMIT_WORD = (r"(?:(?:허용|변동)\s*)?(?:범위|공차|오차|편차)|허용\s*(?:차|치|값)|변동\s*폭"
                r"|(?:허용|변동)(?!\s*[가-힣A-Za-z])|tolerance|range|deviation")
 _LIMIT_PHRASE = re.compile(rf"(?:{_LIMIT_WORD})\s*(?:은|는|이|가|의|을|를|에서|내)?", re.IGNORECASE)
 
@@ -3647,12 +3669,15 @@ def _other_item_between(t: str, a: int, b: int) -> bool:
 
 def spec_conditions(text: str) -> List[Dict[str, Any]]:
     """규격 글의 수치 조건 목록 (글 순서). 단위가 있는 수치만 (규격 번호 'KS C 1234', 장절 '3.2'는 빼려고).
-    '4.75 V 이상 5.25 V 이하'처럼 같은 단위의 아래·위 한계가 하나씩이면 범위 하나로 합칩니다.
-    두 조건 사이에 다른 항목 낱말이 있으면('두께 5 mm 이상, 길이 100 mm 이하') 합치지 않고, 기준 값(plain)도 지우지 않습니다."""
+    여러 조건을 하나로 합치는 것은 확실한 규칙 셋뿐입니다 (보수적 판정: 나머지는 그대로 여러 개 -> check가 판단필요):
+    (a) 같은 단위의 아래·위 한계가 하나씩: '4.75 V 이상 5.25 V 이하' -> 4.75~5.25 V
+    (b) 기준 값 바로 뒤의 떨어진 공차 '±N 단위'·'±N %' (사이에 잇는 말·괄호·허용 오차 같은 한계 낱말만): '두께 3 mm, 공차 ±0.1 mm'
+    (c) 기준 값 바로 뒤의 양쪽 한계 범위(사이에 잇는 말·괄호·한계 낱말만)가 기준 값을 품음: '정격 5 V (4.75~5.25 V)'
+    두 조건 사이에 다른 항목 낱말이 있으면('두께 5 mm 이상, 길이 100 mm 이하') 합치지 않습니다.
+    한쪽 한계와 기준 값('5 V, 허용 범위 4.75 V 이상')은 합치지 않습니다."""
     t = unicodedata.normalize("NFKC", text).replace("\u00b5", "μ")
     taken: List[Tuple[int, int]] = []
-    found: List[Tuple[int, Dict[str, Any]]] = []
-    spans_found: List[Tuple[int, int, Dict[str, Any]]] = []
+    found: List[Tuple[int, int, Dict[str, Any]]] = []
     for kind, pat in _COND_PATTERNS:
         for m in pat.finditer(t):
             s, e = m.span()
@@ -3662,44 +3687,64 @@ def spec_conditions(text: str) -> List[Dict[str, Any]]:
             if c is None:
                 continue
             taken.append((s, e))
-            found.append((s, c))
-            spans_found.append((s, e, c))
-    spans = {id(c): (s, e) for s, e, c in spans_found}
+            found.append((s, e, c))
     found.sort(key=lambda x: x[0])
-    conds = [c for _, c in found]
+    spans = {id(c): (s, e) for s, e, c in found}
+    conds = [c for _, _, c in found]
 
     def apart(x: Dict[str, Any], y: Dict[str, Any]) -> bool:
         (xs, xe), (ys, ye) = spans[id(x)], spans[id(y)]
         return _other_item_between(t, xe, ys) if xs <= ys else _other_item_between(t, ye, xs)
+
+    def joined(x: Dict[str, Any], y: Dict[str, Any], **kw: Any) -> Dict[str, Any]:
+        c = dict(x, **kw)
+        spans[id(c)] = (min(spans[id(x)][0], spans[id(y)][0]), max(spans[id(x)][1], spans[id(y)][1]))
+        return c
+    # (a)
     lows = [c for c in conds if c["kind"] == "lower"]
     highs = [c for c in conds if c["kind"] == "upper"]
     if len(lows) == 1 and len(highs) == 1 and lows[0]["base"] == highs[0]["base"] and lows[0]["lo"] <= highs[0]["hi"] \
             and not apart(lows[0], highs[0]):
         lo, hi = lows[0], highs[0]
-        merged = dict(lo, kind="range", hi=hi["hi"], hi_strict=hi["hi_strict"], text=f"{lo['text']} ~ {hi['text']}")
-        spans[id(merged)] = (min(spans[id(lo)][0], spans[id(hi)][0]), max(spans[id(lo)][1], spans[id(hi)][1]))
-        conds = [merged] + [c for c in conds if c is not lo and c is not hi]
-    # '정격 5 V (4.75~5.25 V)': 기준 값(plain)이 하나뿐인 범위·한계 안에 있으면 그 범위로 판정 (후보 하나).
-    # 사이에 다른 항목 낱말이 있으면('외경 3 mm, 폭 5 mm 이하') 다른 항목의 값이라 지우지 않음
-    bounded = [c for c in conds if c["kind"] != "plain"]
-    if len(bounded) == 1:
-        b = bounded[0]
-        conds = [c for c in conds if not (c["kind"] == "plain" and c["base"] == b["base"] and cond_holds(b, c["lo"])
-                                          and not apart(c, b))]
-    out, seen = [], set()
-    for c in conds:
-        key = (c["base"], c["lo"], c["hi"], c["lo_strict"], c["hi_strict"])
+        merged = joined(lo, hi, kind="range", hi=hi["hi"], hi_strict=hi["hi_strict"], text=f"{lo['text']} ~ {hi['text']}")
+        i = min(conds.index(lo), conds.index(hi))
+        conds = [c for c in conds if c is not lo and c is not hi]
+        conds.insert(i, merged)
+    # (b), (c): 기준 값(plain)과 바로 다음 조건
+    out: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(conds):
+        c = conds[i]
+        nxt = conds[i + 1] if i + 1 < len(conds) else None
+        if c["kind"] == "plain" and nxt is not None and not apart(c, nxt):
+            v = c["lo"]
+            if nxt["kind"] == "pm" and (nxt["pct"] and c["base"] != "%" or not nxt["pct"] and nxt["base"] == c["base"]):
+                d = abs(v) * nxt["d"] / 100 if nxt["pct"] else nxt["d"]
+                out.append(joined(c, nxt, kind="tol", lo=v - d, hi=v + d, text=f"{c['text']} {nxt['text']}"))
+                i += 2
+                continue
+            if nxt["kind"] == "range" and nxt["base"] == c["base"] and nxt["lo"] != nxt["hi"] and cond_holds(nxt, v):
+                out.append(nxt)
+                i += 2
+                continue
+        out.append(c)
+        i += 1
+    res, seen = [], set()
+    for c in out:
+        key = (c["kind"] == "pm", c["base"], c["lo"], c["hi"], c["lo_strict"], c["hi_strict"], c.get("d"))
         if key not in seen:
             seen.add(key)
-            out.append(c)
-    return out
+            res.append(c)
+    return res
 
 
 def cond_text(c: Dict[str, Any]) -> str:
-    """조건을 사람이 읽는 글로 (쓴 단위 기준). 예: '4.75~5.25 V', '100 MΩ 이상', '3 A 미만'."""
+    """조건을 사람이 읽는 글로 (쓴 단위 기준). 예: '4.75~5.25 V', '100 MΩ 이상', '3 A 미만', '±0.1 mm'(합치지 못한 공차)."""
     s = c["scale"] or 1.0
     f = lambda v: f"{v / s:.6g}"  # noqa: E731
     u = c["unit"]
+    if c["kind"] == "pm":
+        return f"±{f(c['d'])} {u}"
     if c["lo"] is not None and c["hi"] is not None:
         return f"{f(c['lo'])} {u}" if c["lo"] == c["hi"] else f"{f(c['lo'])}~{f(c['hi'])} {u}"
     if c["hi"] is not None:
@@ -3727,11 +3772,19 @@ _NEXT_ITEM = re.compile(
 _CLAUSE_END = re.compile(r"[,;]|\s(?:이며|이고|및|그리고)\s|(?<=[가-힣])(?:이며|이고)\s")
 
 
+# 판정 조건으로 바로 쓰면 안 되는 문장: 불합격(거부) 기준, 값이 여럿('50/60 Hz')
+_REJECT_WORDS = re.compile(r"불합격|부적합|불량|reject|fail", re.IGNORECASE)
+_MULTI_VALUE = re.compile(r"\d\s*/\s*\d")
+# 문장 나누기 (check용): 'Max. 3A', 'min. 100 MΩ'의 약어 점에서는 나누지 않음
+_COND_SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])(?<![Mm][Aa][Xx]\.)(?<![Mm][Ii][Nn]\.)(?<![Tt][Yy][Pp]\.)\s+|\n+")
+
+
 def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], str]:
     """찾은 낱말 가까이의 수치 조건과 그 문장. 낱말이 든 문장에서 낱말부터 다음 항목 낱말(절 경계 뒤 낱말 + 수치) 직전까지
-    (200자까지)를 먼저, 없으면 낱말이 든 절(앞쪽 절 경계부터 낱말까지). 같은 문장의 다른 항목 조건을 섞지 않으려고."""
+    (200자까지, '항목 절')를 먼저, 없으면 낱말이 든 절(앞쪽 절 경계부터 낱말까지). 같은 문장의 다른 항목 조건을 섞지 않으려고.
+    조건에 'ambiguous'(판정에 바로 쓰면 안 되는 이유)나 'alt'(같은 문장 다른 항목의, 기준 값을 품는 범위)를 붙일 수 있습니다."""
     flags = re.IGNORECASE
-    for sent in _SENT_SPLIT.split(text):
+    for sent in _COND_SENT_SPLIT.split(text):
         ms = [m for t in terms for m in [_term_pattern(t, flags).search(sent)] if m]
         if not ms:
             continue
@@ -3739,19 +3792,33 @@ def near_conditions(text: str, terms: List[str]) -> Tuple[List[Dict[str, Any]], 
         end_term = max(m.end() for m in ms if m.start() == start)
         window = sent[start:start + 200]
         nxt = _NEXT_ITEM.search(window, end_term - start)
-        after = spec_conditions(window[:nxt.start()] if nxt else window)
+        clause = window[:nxt.start()] if nxt else window
+        after = spec_conditions(clause)
         if nxt and after and all(c["kind"] == "plain" for c in after):
-            # 안전장치: 잘라 낸 쪽에 기준 값만 남았는데 같은 문장 뒤쪽에 같은 단위의 범위(아래·위 한계 둘 다)가 있고
-            # 그 범위가 기준 값을 품으면 그 범위가 이 항목의 허용 범위일 수 있음 -> 기준 값만으로 불일치라 단정하지 않게 표시
-            rest = [c for c in spec_conditions(window[nxt.start():])
-                    if c["lo"] is not None and c["hi"] is not None and c["lo"] != c["hi"]]
+            # 안전장치: 항목 절에 기준 값만 남았는데 같은 문장 뒤쪽 항목에 같은 단위의 범위(아래·위 한계 둘 다)가 있고
+            # 그 범위가 기준 값을 품으면 그 범위가 이 항목의 허용 범위일 수 있음 -> 기준 값만으로 불일치라 단정하지 않게 표시.
+            # 이름에 '범위'가 든 뒤 항목('사용 범위', '동작 범위', '측정 범위')은 별개 항목이 분명해 보지 않음
+            marks = list(_NEXT_ITEM.finditer(window, nxt.start()))
+            rest: List[Dict[str, Any]] = []
+            for k, m in enumerate(marks):
+                if "범위" in m.group(0):
+                    continue
+                seg = window[m.start():marks[k + 1].start() if k + 1 < len(marks) else len(window)]
+                rest += [c for c in spec_conditions(seg)
+                         if c["lo"] is not None and c["hi"] is not None and c["lo"] != c["hi"]]
             for c in after:
                 alt = [r for r in rest if r["base"] == c["base"] and cond_holds(r, c["lo"])]
                 if alt:
                     c["alt"] = alt
         if not after:
             cuts = [m.end() for m in _CLAUSE_END.finditer(sent[:start])]
-            after = spec_conditions(sent[cuts[-1] if cuts else 0:start])
+            clause = sent[cuts[-1] if cuts else 0:start]
+            after = spec_conditions(clause)
+        why = ("불합격(거부) 기준을 말하는 문장" if _REJECT_WORDS.search(clause)
+               else "값이 여럿('/')인 문장" if _MULTI_VALUE.search(unicodedata.normalize("NFKC", clause)) else "")
+        if why:
+            for c in after:
+                c["ambiguous"] = why
         return after, sent.strip()
     return spec_conditions(text[:400]), text.strip()[:400]
 

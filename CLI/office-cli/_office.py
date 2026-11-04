@@ -1076,7 +1076,12 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             raise
         drop_or_keep(None)
     finally:
+        own_path = ""
         if owns_doc and t is not None:
+            try:
+                own_path = t.path
+            except Exception:
+                own_path = ""
             try:
                 if kind == "word":
                     t.doc.Close(SaveChanges=0)
@@ -1091,17 +1096,16 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
             if owns_app:
                 # Word·PowerPoint: 자기 문서를 닫은 뒤 남은 문서가 없을 때만 끝냄 (사용자가 그 숨은 인스턴스에서 연 문서의
                 # 변경을 버리지 않게). Excel은 도구 전용 새 인스턴스라 늘 끝냄
-                try:
-                    if kind == "excel":
-                        quit_ = True
-                    else:
-                        left = int(app.Documents.Count if kind == "word" else app.Presentations.Count)
-                        quit_ = left == 0
-                        if not quit_:
-                            rt.log("INFO", f"{APP_LABEL[kind]}에 다른 문서 {left}개가 열려 있어 {APP_LABEL[kind]}을(를) 끝내지 않고 "
-                                           "그대로 둡니다.")
-                except Exception:
-                    quit_ = False
+                if kind == "excel":
+                    quit_ = True
+                else:
+                    others = _other_docs_left(kind, app, own_path)
+                    quit_ = others == 0
+                    if others is None:
+                        rt.log("INFO", f"{APP_LABEL[kind]}의 열린 문서 수를 읽지 못해 {APP_LABEL[kind]}을(를) 끝내지 않고 그대로 둡니다.")
+                    elif others:
+                        rt.log("INFO", f"{APP_LABEL[kind]}에 다른 문서 {others}개가 열려 있어 {APP_LABEL[kind]}을(를) 끝내지 않고 "
+                                       "그대로 둡니다.")
             if restore_alerts is not None and not quit_:
                 try:
                     app.DisplayAlerts = restore_alerts
@@ -1119,6 +1123,34 @@ def open_target(kind: str, target: str = "active", readonly: bool = True, snapsh
         app = doc = None
         import gc
         gc.collect()
+
+
+QUIT_COUNT_TRIES = 5          # 남은 문서 수 읽기 재시도 (Office가 바빠 COM 호출이 실패할 때)
+QUIT_COUNT_DELAY = 0.3
+
+
+def _other_docs_left(kind: str, app: Any, own_path: str) -> Optional[int]:
+    """도구가 띄운 Word·PowerPoint에 남은 문서 중 이 실행의 문서(own_path)가 아닌 것의 수. 끝까지 못 읽으면 None.
+    자기 문서를 닫다가 실패해 남아 있어도(닫기 오류는 삼킴) 그 문서뿐이면 0이라 끌 수 있음."""
+    for i in range(QUIT_COUNT_TRIES):
+        try:
+            docs = app.Documents if kind == "word" else app.Presentations
+            n = int(docs.Count)
+            if n == 0:
+                return 0
+            if not own_path:
+                return n
+            own = os.path.normcase(os.path.abspath(own_path))
+            others = 0
+            for k in range(1, n + 1):
+                full = str(getattr(docs.Item(k), "FullName", "") or "")
+                if not full or os.path.normcase(os.path.abspath(full)) != own:
+                    others += 1
+            return others
+        except Exception:
+            if i + 1 < QUIT_COUNT_TRIES:
+                time.sleep(QUIT_COUNT_DELAY)
+    return None
 
 
 @contextmanager

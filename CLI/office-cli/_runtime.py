@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.65"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.66"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1326,8 +1326,9 @@ def _transient_fs_error(e: OSError) -> bool:
     return isinstance(e, PermissionError) or getattr(e, "winerror", None) in (5, 32, 33)
 
 
-def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5) -> Any:
+def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5, deadline: Optional[float] = None) -> Any:
     """백신/동기화 프로그램의 일시적 잠금에 대비해 파일 작업을 재시도합니다.
+    deadline(time.monotonic() 기준 시각)을 주면 그 시각을 넘겨 기다리지 않습니다 (잠금을 쥔 채 오래 기다리지 않게).
     한도를 넘기면 오류 로그의 '복구 시도:' 줄에 남기고 마지막 예외를 올립니다."""
     last: Optional[BaseException] = None
     for i in range(attempts):
@@ -1337,20 +1338,26 @@ def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5) -> An
             if not _transient_fs_error(e):
                 raise                       # 없는 파일, 디스크 가득 참 등은 기다려도 소용없음
             last = e
-            time.sleep(delay * (i + 1))
+            wait = delay * (i + 1)
+            if deadline is not None:
+                wait = min(wait, deadline - time.monotonic())
+                if wait <= 0:
+                    attempts = i + 1
+                    break
+            time.sleep(wait)
     assert last is not None
     name = os.path.basename(str(getattr(last, "filename", "") or ""))
     record_recovery_attempt(f"파일 작업 {name} {attempts}회 재시도 실패 ({type(last).__name__})".replace("  ", " "))
     raise last
 
 
-def safe_write_text(path: str, text: str, encoding: str = "utf-8") -> None:
-    """임시 파일에 쓴 뒤 교체해, 쓰다가 중단돼도 기존 파일이 깨지지 않게 합니다."""
+def safe_write_text(path: str, text: str, encoding: str = "utf-8", deadline: Optional[float] = None) -> None:
+    """임시 파일에 쓴 뒤 교체해, 쓰다가 중단돼도 기존 파일이 깨지지 않게 합니다. deadline은 retry_fs와 같음."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = f"{path}.tmp_{os.getpid()}"
     with open(tmp, "w", encoding=encoding, newline="") as f:
         f.write(text)
-    retry_fs(lambda: os.replace(tmp, path))
+    retry_fs(lambda: os.replace(tmp, path), deadline=deadline)
 
 
 _STAMP_RE = re.compile(r"_\d{8}_\d{6}$")

@@ -1361,8 +1361,8 @@ def test_short_ids_concurrent_listings_get_distinct_numbers(monkeypatch):
     import time as _time
     orig = outlook._load_ids
 
-    def slow():
-        d = orig()
+    def slow(deadline=None):
+        d = orig(deadline)
         _time.sleep(0.2)
         return d
     monkeypatch.setattr(outlook, "_load_ids", slow)
@@ -1384,16 +1384,85 @@ def test_short_ids_lock_timeout_and_stale_lock(monkeypatch):
     data_dir = os.path.dirname(outlook._listing_path())
     os.makedirs(data_dir, exist_ok=True)
     lock = os.path.join(data_dir, outlook.LOCK_FILE)
-    open(lock, "w").close()
+    open(lock, "w").close()                                            # 만든 실행을 알 수 없는 잠금
     monkeypatch.setattr(outlook, "LOCK_WAIT", 0.2)
     a = _listing("A", 2)
-    assert "다른 실행" in outlook.remember_listing(a, "list")
+    w = outlook.remember_listing(a, "list")
+    assert "outlook_ids.lock이 남아 있음" in w and "30초가 지나면" in w and "다른 실행" not in w, w
     assert [m["id"] for m in a] == ["A1", "A2"]
     old = _time.time() - 3600
     os.utime(lock, (old, old))                                         # 끝나지 못한 실행이 남긴 잠금
     b = _listing("B", 2)
     assert outlook.remember_listing(b, "list") is None and [m["id"] for m in b] == [1, 2]
     assert not os.path.exists(lock)
+
+
+def test_short_ids_lock_of_dead_process_is_cleared_at_once(monkeypatch):
+    # 3차 검토: 잠금을 쥔 실행이 강제 종료되면 30초 동안 번호를 못 붙였음 -> 잠금의 pid가 끝났으면 바로 지움
+    import subprocess
+    import sys as _sys
+    p = subprocess.Popen([_sys.executable, "-c", "pass"])
+    p.wait()
+    data_dir = os.path.dirname(outlook._listing_path())
+    os.makedirs(data_dir, exist_ok=True)
+    lock = os.path.join(data_dir, outlook.LOCK_FILE)
+    with open(lock, "w") as f:
+        f.write(f"{p.pid} dead")
+    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.5)
+    a = _listing("A", 2)
+    assert outlook.remember_listing(a, "list") is None and [m["id"] for m in a] == [1, 2]
+    assert not os.path.exists(lock)
+
+
+def test_short_ids_lock_of_live_process_is_kept(monkeypatch):
+    # 살아 있는 실행의 새 잠금은 지우지 않고, 경고에 그 실행을 적음. 풀 때 남의 잠금은 지우지 않음
+    data_dir = os.path.dirname(outlook._listing_path())
+    os.makedirs(data_dir, exist_ok=True)
+    lock = os.path.join(data_dir, outlook.LOCK_FILE)
+    with open(lock, "w") as f:
+        f.write(f"{os.getpid()} other")
+    monkeypatch.setattr(outlook, "LOCK_WAIT", 0.2)
+    a = _listing("A", 2)
+    w = outlook.remember_listing(a, "list")
+    assert f"다른 실행(pid {os.getpid()})이 번호 파일을 쓰는 중" in w, w
+    assert open(lock).read() == f"{os.getpid()} other"
+    lk = outlook._IdsLock()
+    lk.acquired = True                                                 # 남의 잠금을 자기 것으로 착각해도 지우지 않음
+    lk.__exit__(None, None, None)
+    assert os.path.exists(lock)
+
+
+def test_short_ids_lock_hold_time_is_bounded(monkeypatch):
+    # 3차 검토: 잠금을 쥔 실행이 retry_fs로 30초 넘게 기다려 다른 실행이 쓰는 중인 잠금을 지울 수 있었음
+    import time as _time
+    outlook.remember_listing(_listing("A", 2), "list")
+    path = outlook._listing_path()
+    orig = rt.read_text_file
+
+    def locked(p):
+        if os.path.abspath(p) == os.path.abspath(path):
+            raise PermissionError(13, "sharing violation", p)
+        return orig(p)
+    monkeypatch.setattr(rt, "read_text_file", locked)
+    monkeypatch.setattr(outlook, "LOCK_HOLD", 0.3)
+    t0 = _time.monotonic()
+    b = _listing("B", 2)
+    assert "읽지 못함" in outlook.remember_listing(b, "list")
+    assert _time.monotonic() - t0 < outlook.LOCK_STALE / 10 and outlook.LOCK_HOLD < outlook.LOCK_STALE
+    assert outlook.LOCK_STALE > 10.0 + 5.0                             # 기본 LOCK_HOLD(10초)보다 넉넉히 김
+
+
+def test_retry_fs_deadline_stops_waiting():
+    import time as _time
+    calls = []
+
+    def fail():
+        calls.append(1)
+        raise PermissionError(13, "locked", "x.json")
+    t0 = _time.monotonic()
+    with pytest.raises(PermissionError):
+        rt.retry_fs(fail, deadline=_time.monotonic() + 0.2)
+    assert _time.monotonic() - t0 < 1.0 and len(calls) >= 1
 
 
 def test_short_id_older_than_keep_days_is_missing(monkeypatch):
