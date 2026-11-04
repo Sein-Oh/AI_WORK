@@ -430,9 +430,36 @@ def step_diag(stage, args, ctx):
             stage.fail(f"{what}: {broken[0][:200]}")
         else:
             stage.passed += 1
+    lines += ["", "[OpenCode 스킬, 전역 지침 (apply_skills.py --check)]"]
+    try:
+        diag_skills(stage, lines)
+    except Exception as e:
+        lines.append(f"diag_skills 오류: {type(e).__name__}: {e}")
     text = "\n".join(lines)
     echo(text)
     stage.details.append(("진단 내용", text))
+
+
+def diag_skills(stage, lines, config_dir=None):
+    """OpenCode 설정 폴더의 SKILL.md, AGENTS.md가 C:\\CLI, C:\\CLI-dev와 같은지. 설정 폴더가 없으면(클라우드 등) 참고만.
+    다르면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: python apply_skills.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("apply_skills", os.path.join(HERE, "apply_skills.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.HERE, mod.CLI_DIR = HERE, CLI_DIR
+    cfg = config_dir or mod.default_config_dir()
+    if not os.path.isdir(cfg):
+        lines.append(f"  OpenCode 설정 폴더 없음 ({cfg}): 확인 안 함")
+        return
+    rows = mod.compare(cfg)
+    lines += [f"  {mod.label(*r)}" for r in rows]
+    bad = [r for r in rows if r[3] != "같음"]
+    if bad:
+        stage.fail("OpenCode 스킬/지침이 C:\\CLI와 다름 (" + ", ".join(f"{r[0]} {r[3]}" for r in bad)
+                   + "). C:\\CLI-dev에서 python apply_skills.py 실행 후 OpenCode 다시 시작")
+    else:
+        stage.passed += 1
 
 
 # ---------------------------------------------------------------------------
