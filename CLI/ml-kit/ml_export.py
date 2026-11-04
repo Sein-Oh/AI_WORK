@@ -24,7 +24,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
-    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, retry_fs, split_off, split_off_warning,
+    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, resume_find, resume_save, resume_clear, save_failed_warning,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
@@ -151,7 +151,8 @@ def evals_for(subset: List[str], evals: List[str], raw: List[str]) -> List[str]:
 # 2. Training a subset (same competition as ml_train.py)
 # ==============================================================================
 
-# Every retrained candidate is saved in <version>/export/_fits (key = data, target, inputs, formulas, seed,
+# Every retrained candidate is saved in <version>/export/_fits (or a fallback place when it cannot be written:
+# resume_save, removed when the command ends) (key = data, target, inputs, formulas, seed,
 # versions). A command stopped at the time limit (check_time) or killed by the agent's 120 s limit continues where it
 # stopped when it is run again, and a later export with other --keep reuses the same candidates.
 FIT_CACHE: Optional[str] = None
@@ -166,14 +167,14 @@ def _fit_key(data: pd.DataFrame, target: str, subset: List[str], kept: List[str]
     for part in (VERSION, sklearn.__version__, target, "\x1f".join(subset), "\x1f".join(kept), seed):
         h.update(str(part).encode("utf-8") + b"\x1e")
     h.update(pd.util.hash_pandas_object(data[list(subset) + [target]], index=False).values.tobytes())
-    return h.hexdigest()[:32]
+    return h.hexdigest()[:16]                 # short file names: room under MAX_PATH (260) in deep folders
 
 
 def _cached_fit(key: str) -> Optional[Dict[str, Any]]:
     if not FIT_CACHE:
         return None
-    path = os.path.join(FIT_CACHE, key + ".joblib")
-    if not os.path.isfile(path):
+    path = resume_find(FIT_CACHE, key + ".joblib")
+    if not path:
         return None
     try:
         res = joblib.load(path)
@@ -189,21 +190,11 @@ def _cached_fit(key: str) -> Optional[Dict[str, Any]]:
 
 
 def _save_fit(key: str, res: Dict[str, Any]) -> None:
-    """Saves a trained candidate and checks the file is there. A failed save turns the split off (split_off): a stop
-    would lose the candidate and the same command would train it again forever (R10)."""
+    """Saves a trained candidate (in _fits or a fallback place: resume_save) and checks the file is there. Saved
+    nowhere: check_time stops with STOP_RETRY instead of CONTINUE (R10)."""
     if not FIT_CACHE:
         return
-    path = os.path.join(FIT_CACHE, key + ".joblib")
-    err = ""
-    try:
-        os.makedirs(FIT_CACHE, exist_ok=True)
-        tmp = path + ".tmp"
-        joblib.dump(res, tmp)
-        retry_fs(lambda: os.replace(tmp, path))
-    except Exception as e:
-        err = f"{type(e).__name__}: {e}"
-    if err or not os.path.isfile(path) or os.path.getsize(path) == 0:
-        split_off(f"입력 고르기 학습 결과 {os.path.basename(path)}를 저장하지 못했습니다" + (f" ({err})" if err else ""))
+    resume_save(FIT_CACHE, key + ".joblib", lambda tmp: joblib.dump(res, tmp), "입력 고르기 학습 결과")
 
 
 def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[str], raw: List[str],
@@ -1099,7 +1090,8 @@ def execute_export(args) -> Dict[str, Any]:
     res = {"status": "ok", "output_file": real, "title": title, "targets": out_targets, "export_model_dir": exp_dir,
            "verified": not unverified, "preview": f"성능예측표 생성: {brief}", "next_commands": next_commands[:SHOW_COMMANDS],
            "next_commands_count": len(next_commands), "truncated": len(next_commands) > SHOW_COMMANDS}
-    split_note = split_off_warning()          # a failed save of a candidate: this run was not split (R10)
+    resume_clear(FIT_CACHE, lambda name, p: True, fallback_only=True)   # _fits stays for later exports
+    split_note = save_failed_warning()        # a candidate saved nowhere (this run ended before the limit)
     if split_note and split_note not in warnings:
         warnings.append(split_note)
     if warnings:

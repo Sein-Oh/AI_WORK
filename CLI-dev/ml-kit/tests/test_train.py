@@ -9,6 +9,7 @@ import random
 import shlex
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pandas as pd
@@ -710,6 +711,55 @@ def test_where_thousands_and_code_columns():
     assert list(mp.where_mask(df, mp.parse_where("c != 7"))) == [True, False, True, True, False]
 
 
+@pytest.mark.parametrize("cells,code", [
+    (["05", "10", "15", "20", "05"], False),          # 3차 검토: 두 자리 숫자 열 ('05' 하나)
+    (["5", "10", "15", "20"], False),
+    (["01", "02", "03", "10", "11"], True),           # (b) 앞자리 0 칸이 절반 이상
+    (["007", "7", "12", "13", "14", "15"], True),     # (a) 같은 숫자의 0 없는 표기
+    (["001", "050", "120", "100"], True),             # (c) 3자리 이상 고정폭 코드
+    (["05", "10", "측정불가", "", None, "20"], False),  # 빈 값 표시는 세지 않음
+])
+def test_code_column_judgment(cells, code):
+    assert mp.is_code_column(pd.Series(cells, dtype=object)) is code
+
+
+def test_where_on_code_column_warns_other_notation(tmp_path):
+    """3차 검토(2.9.63): 코드 열에서 '월 = 1'이 '01' 행을 말없이 빼지 않았다(학습은 둘 다 숫자 1). warnings와 그 표기를 포함한
+    조건의 [추천] 전체 명령(next_commands[0])을 준다."""
+    r = np.random.default_rng(5)
+    months = ["01", "02", "03", "1", "2", "3", "10", "11", "12"] * 6
+    x = r.uniform(0, 10, len(months)).round(3)
+    df = pd.DataFrame({"월": months, "온도": x, "수율": (3 * x + r.normal(0, 0.1, len(months))).round(3)})
+    f = write_df(tmp_path / "mo.csv", df)
+    raw = mp.load_data_file(f)
+    g = mp.parse_where("월 = 1")
+    assert mp.is_code_column(raw["월"]) and int(mp.where_mask(raw, g).sum()) == 6
+    variants = mp.where_notation_variants(raw, g)
+    assert variants == [(("월", "=", "1"), {"01": 6})]
+    assert mp.where_text(mp.where_with_variants(g, variants)) == "월 = 1 | 월 = 01"
+    neg = mp.parse_where("월 != 1; 온도 > 3")
+    assert mp.where_text(mp.where_with_variants(neg, mp.where_notation_variants(raw, neg))) == "월 != 1; 온도 > 3; 월 != 01"
+    res = run_tool("ml_train.py", "-f", f, "-x", "월,온도", "-y", "수율", "--exclude-where", "월 = 1")
+    assert res["exclusions"]["수율"]["condition"] == 6
+    w = [x for x in res.get("warnings", []) if "'01' 6행" in x]
+    assert w and "빼지 않음" in w[0] and "[추천] python " in w[0], res.get("warnings")
+    cmd = res["next_commands"][0]["command"]
+    assert "--exclude-where \"월 = 1 | 월 = 01\"" in cmd and cmd.count("--exclude-where") == 1, cmd
+    proc = subprocess.run([sys.executable] + shlex.split(cmd)[1:], capture_output=True, text=True, encoding="utf-8")
+    again = json.loads(proc.stdout)
+    assert again["exclusions"]["수율"]["condition"] == 12 and not any("'01'" in x for x in again.get("warnings", []))
+
+
+def test_where_on_two_digit_number_column_compares_numbers(tmp_path):
+    """'05, 10, 15, 20' 열은 숫자 열: '온도 = 5'가 '05' 행에 맞는다 (경고 없음)."""
+    df = pd.DataFrame({"온도": ["05", "10", "15", "20"] * 5, "y": np.arange(20.0)})
+    f = write_df(tmp_path / "n.csv", df)
+    raw = mp.load_data_file(f)
+    g = mp.parse_where("온도 = 5")
+    assert not mp.is_code_column(raw["온도"]) and int(mp.where_mask(raw, g).sum()) == 5
+    assert mp.where_notation_variants(raw, g) == []
+
+
 def test_no_exclude_column_still_finds_outliers_and_clean_data_has_no_key(tmp_path):
     f = tmp_path / "d.csv"
     _excl_frame().to_csv(f, index=False)
@@ -1399,37 +1449,87 @@ def test_best_continue_skips_finished_task_and_checks_time(tmp_path, monkeypatch
     assert not (root / ".resume_train").exists()
 
 
+def _block(path):
+    """A file where the folder should be: makedirs and every write into it fail (same on Windows and Linux)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not a folder", encoding="utf-8")
+
+
+def _fallbacks(primary):
+    return mp.resume_places(str(primary))[1:]
+
+
 @pytest.mark.parametrize("targets", ["생산효율(%)", "생산효율(%),수분함량(%)"])
-def test_failed_resume_save_is_not_split(tmp_path, monkeypatch, targets):
-    """2.9.61: 중간 저장이 실패해도(.resume_train이 파일) WARN만 내고 시간을 기록해 '저장됨'이라며 CONTINUE를 냈고,
-    같은 명령을 반복해도 끝나지 않았다. 이제 그 실행은 나누지 않고 끝까지 진행하고 warnings에 알린다."""
+def test_blocked_resume_folder_continues_in_fallback(tmp_path, monkeypatch, targets):
+    """3차 검토(2.9.63): 2.9.62는 중간 저장이 실패하면 나누지 않고 끝까지 진행해 큰 데이터에서 120초를 넘겨 JSON 없이 끊겼다.
+    이제 대체 위치(데이터 폴더 resume\\<해시>)에 저장하고(recovered) CONTINUE로 나눠 끝까지, 끝나면 대체 위치도 지운다."""
     data = make_sample(str(tmp_path / "f.csv"))
     root = tmp_path / "f_ml_data"
-    root.mkdir()
-    (root / ".resume_train").write_text("not a folder", encoding="utf-8")
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
-    runs = []
-    for _ in range(3):
-        proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", targets)
-        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
-        runs.append(out)
-        if not out.get("continue"):
-            break
-    assert len(runs) == 1 and not runs[0].get("continue"), [r.get("progress") for r in runs]
-    last = runs[0]
+    _block(root / ".resume_train")
+    fb = _fallbacks(root / ".resume_train")[0]
+    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", targets)
+    assert len(runs) >= 2, [r.get("progress") for r in runs]
+    first, last = runs[0], runs[-1]
+    assert first["agent_directive"].startswith("CONTINUE:"), first
+    assert any("대체 위치 데이터 폴더" in r for r in first["recovered"]), first.get("recovered")
+    assert os.path.basename(fb) in first["recovered"][0]
     assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED"), last
-    assert any(w.startswith(mp.SPLIT_OFF_WARNING) for w in last.get("warnings", [])), last.get("warnings")
-    assert "[WARN] " + mp.SPLIT_OFF_WARNING in proc.stderr
+    assert not os.path.exists(fb)                                  # cleaned after the commit
+    assert (root / ".resume_train").is_file()                      # the user's file is not touched
+
+
+def test_resume_saved_nowhere_stops_with_stop_retry(tmp_path, monkeypatch):
+    """원래 위치·데이터 폴더·임시 폴더가 모두 막히면 제한을 넘겨 계속하지 않고, 멈출 지점에서 STOP_RETRY 1줄 JSON."""
+    data = make_sample(str(tmp_path / "n.csv"))
+    root = tmp_path / "n_ml_data"
+    _block(root / ".resume_train")
+    temp = tmp_path / "temp"
+    monkeypatch.setenv("TEMP", str(temp))
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    _block(tmp_path / "data" / mp.RESUME_FALLBACK_DIR)
+    _block(temp / mp.TEMP_RESUME_DIR)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    t0 = time.monotonic()
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
+    assert proc.returncode == 1 and out["status"] == "error", out
+    assert out["agent_directive"].startswith("STOP_RETRY") and "저장하지 못해" in out["message"], out
+    assert "쓰기 권한" in out["message"] and "[WARN] 중간 저장 실패" in proc.stderr
+    assert time.monotonic() - t0 < 60
+    assert not (root / "history.jsonl").exists()
 
 
 def test_resume_save_checks_the_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(mp, "SPLIT_OFF", [])
-    assert mt._resume_save(str(tmp_path / "r" / "a.joblib"), (1, 2, 3, 4)) is True and not mp.SPLIT_OFF
-    (tmp_path / "x").write_text("file", encoding="utf-8")
-    assert mt._resume_save(str(tmp_path / "x" / "a.joblib"), (1, 2, 3, 4)) is False
-    assert mp.SPLIT_OFF and mp.split_off_warning().startswith(mp.SPLIT_OFF_WARNING)
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(mp, "_RECOVERED", [])
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    assert mt._resume_save(str(tmp_path / "r" / "a.joblib"), (1, 2, 3, 4)) is True and not mp.SAVE_FAILED
+    assert mt._resume_load(str(tmp_path / "r" / "a.joblib")) == (1, 2, 3, 4) and not mp._RECOVERED
+    _block(tmp_path / "x")                                            # original blocked -> data folder
+    assert mt._resume_save(str(tmp_path / "x" / "a.joblib"), (1, 2, 3, 4)) is True and mp._RECOVERED
+    data_fb, temp_fb = _fallbacks(tmp_path / "x")
+    assert os.path.isfile(os.path.join(data_fb, "a.joblib"))
+    assert mt._resume_load(str(tmp_path / "x" / "a.joblib")) == (1, 2, 3, 4)   # found in the fallback
+    assert len(os.path.basename(data_fb)) == 12
+    _block(tmp_path / "y")                                            # original and data folder blocked -> %TEMP%
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    _block(tmp_path / "data2" / mp.RESUME_FALLBACK_DIR)
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data2"))
+    assert mt._resume_save(str(tmp_path / "y" / "a.joblib"), (1, 2, 3, 4)) is True
+    assert os.path.isfile(os.path.join(_fallbacks(tmp_path / "y")[1], "a.joblib"))
+    _block(tmp_path / "temp2" / mp.TEMP_RESUME_DIR)                   # every place blocked
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp2"))
+    assert mt._resume_save(str(tmp_path / "z" / "q" / "a.joblib"), (1,)) is True    # a plain new folder works
+    _block(tmp_path / "w")
+    assert mt._resume_save(str(tmp_path / "w" / "a.joblib"), (1, 2, 3, 4)) is False
+    assert mp.SAVE_FAILED and mp.save_failed_warning().startswith("중간 저장 실패")
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.001")
-    mp.check_time(1000.0, "멈추지 않음")                      # split off: never stops
+    with pytest.raises(mp.InputError) as e:                           # stops where it would stop, as STOP_RETRY
+        mp.check_time(1000.0, "멈춤")
+    assert "저장하지 못해" in str(e.value)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    mp.check_time(1000.0, "제한 없음")                                 # no limit: goes on to the end
 
 
 def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
@@ -1439,7 +1539,7 @@ def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
     y = pd.Series(3 * X.a + X.b + r.normal(0, 0.05, 60))
     schema = {"numeric": ["a", "b"], "categorical": {}, "datetime": {}, "input_columns": ["a", "b"]}
     resume = str(tmp_path / "rt" / "k")
-    monkeypatch.setattr(mp, "SPLIT_OFF", [])
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")

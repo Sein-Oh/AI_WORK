@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치 예측(회귀) 또는 범주 예
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.62"
+  version: "2.9.63"
   platform: windows
 ---
 
@@ -73,7 +73,7 @@ python "C:\CLI\ml-kit\ml_train.py" -f "<데이터파일>" -x "<피처1>,<피처2
 - 이상치는 도구가 자동으로 찾아 학습에서 뺀다. 데이터의 `제외` 열은 도구가 읽는 표시용 열이다 (피처에 넣어도 도구가 뺀다).
   데이터 파일은 직접 고치지 않는다. 조건으로 뺄 행은 `--exclude-where`, 특정 행은 엑셀의 `제외` 열에 이유(뺄 때) 또는 `포함`(빼지 않을 때)을 적으라고 안내한다.
 
-결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `top_features`(타겟별 중요 입력과 비중, 합이 1), `recommendations`의 첫 문장. `warnings`(예: 중복 행, 반복된 머리글 행, 합계·평균 행, 중간 저장 실패)가 있으면 그대로.
+결과 JSON에서 사용자에게 알릴 것: `version`, `mean_val_score`(검증 점수, 1에 가까울수록 좋음), `top_features`(타겟별 중요 입력과 비중, 합이 1), `recommendations`의 첫 문장. `warnings`(예: 중복 행, 반복된 머리글 행, 합계·평균 행, 단위로 읽은 행, 조건과 표기가 다른 코드)가 있으면 그대로. warnings의 `[추천]` 명령(next_commands[0])은 사용자가 원할 때만 실행한다.
 `exclusions`가 있으면 타겟별 학습 제외 행 수(직접 `manual`, 자동 `auto`), 제외 행 포함 검증 점수 `all_rows_score`, `excluded_reasons`(이유별 행 수)와 `excluded_preview`(행, 직접/자동, 이유, 값)를 그대로, `excluded_rows_file` 경로도 알린다. 그 파일은 열지 않는다.
 다음 단계를 위해 기억할 것: `version_dir`, `goal_met`, `next_commands`.
 

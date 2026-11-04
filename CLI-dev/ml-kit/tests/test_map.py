@@ -128,6 +128,15 @@ def test_code_column_is_matched_exactly_not_interpolated(tmp_path):
     assert "[후보] 007, 12, 7" in bad["message"] and "[추천]" not in bad["message"], bad
 
 
+def test_two_digit_numbers_with_a_leading_zero_are_interpolated(tmp_path):
+    """3차 검토(2.9.63): '05, 10, 15, 20'의 '05' 하나로 숫자 열을 코드 열로 보아 보간 대신 틀린 [후보]를 냈다."""
+    p = tmp_path / "mp.csv"
+    p.write_text("온도,압력,수율\n05,1,50\n10,1,60\n15,1,70\n20,1,80\n05,2,55\n10,2,65\n15,2,75\n20,2,85\n",
+                 encoding="utf-8")
+    res = run_tool("ml_map.py", "-f", str(p), "-i", "온도=12,압력=1", "-y", "수율")
+    assert res["keys"] == ["온도", "압력"] and res["points"][0]["values"]["수율"] == pytest.approx(64.0), res
+
+
 # ---- 역산 --find --vary --------------------------------------------------------------------------------
 
 

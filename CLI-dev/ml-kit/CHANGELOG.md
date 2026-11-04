@@ -8,6 +8,31 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.63] - 2026-11-04
+
+3차 독립 검토의 ml-kit 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 중간 저장 실패 때 2.9.62가 "나누지 않고 끝까지" 진행해 큰 데이터(6만 행)에서 120초를 넘겨 JSON 없이 끊겼음. JIT 복구로 바꿈:
+  `.resume_train`/`best_run.json`/성능예측표 `_fits`를 원래 위치에 저장하지 못하면 데이터 폴더 `resume\<해시 12자>\`, 그다음 `%TEMP%\ml-kit-resume\<해시>\`에
+  저장하고 `recovered`와 `[WARN]`. 이어 실행은 모든 위치를 찾고, 끝나면 대체 위치도 지움. 어디에도 저장하지 못하면 `check_time`이 멈출 지점에서
+  `STOP_RETRY`(쓰기 권한·디스크·경로 길이 안내, 1줄 JSON). 저장 파일 이름은 키 해시 16자(전 32자)로 줄여 MAX_PATH 여유.
+  공통 함수 `resume_places`/`resume_save`/`resume_find`/`resume_clear`/`save_failed_warning`(PART C), `split_off`·`SPLIT_OFF` 삭제.
+  테스트: `test_train.py` `test_blocked_resume_folder_continues_in_fallback`(타겟 1개·2개), `test_resume_saved_nowhere_stops_with_stop_retry`,
+  `test_resume_save_checks_the_file`, `test_report_export.py` `test_export_blocked_fit_cache_continues_in_fallback`.
+- [중간] `is_code_column`이 앞자리 0 칸 하나로 코드 열이라 판정해 `ml_map`이 숫자 열(`05,10,15,20`)을 보간하지 않고 틀린 `[후보]`. 이제 앞자리 0 칸이 있고
+  (a) 같은 숫자의 0 없는 표기가 함께 있거나, (b) 앞자리 0 칸이 절반 이상이거나, (c) 모든 칸이 3자리 이상 같은 자릿수 코드일 때만 코드 열.
+  `--where`/`--exclude-where`와 `ml_map`이 같은 함수. 테스트: `test_train.py` `test_code_column_judgment`,
+  `test_where_on_two_digit_number_column_compares_numbers`, `test_map.py` `test_two_digit_numbers_with_a_leading_zero_are_interpolated`.
+- [중간] 코드 열에서 `--exclude-where "월 = 1"`이 `01` 행(학습은 숫자 1)을 말없이 빼지 않았음. 이제 `warnings`에 `'01' N행은(는) 표기가 달라 빼지 않음`
+  (`!=`는 `함께 뺌`) + `[추천] <전체 명령>`, `next_commands[0]`에 그 표기를 포함한 조건(`월 = 1 | 월 = 01`)의 명령. 테스트:
+  `test_where_on_code_column_warns_other_notation`(추천 명령을 실행하면 경고 없이 12행을 뺌).
+- [낮음~중간] 데이터 행(`점검중,센서고장,정지`)을 `--unit-row`로 주면 받아 피처 이름이 `온도(점검중)`. 이제 한글 단위 낱말 목록(`_KOREAN_UNIT_WORDS`,
+  `--unit-row`로 준 행에만 씀)에 없는 한글 낱말이 그 행 글자 칸의 절반 이상이면 `STOP_RETRY` "단위 행이 아닙니다" + `[추천]`(--unit-row를 뺀 명령),
+  일부면 받아들이고 `warnings`에 `2행을 단위로 읽음: 압력(점검중) ... 데이터 행이면 --unit-row를 빼세요`. 도구가 스스로 판단할 때의 목록
+  (`_KOREAN_UNITS`)은 그대로. 테스트: `test_loading_layout.py` `test_data_row_given_as_unit_row_is_refused`,
+  `test_some_odd_words_in_unit_row_are_read_with_a_warning`; `test_korean_unit_words_in_named_unit_row`(도씨·킬로그램·기압·섭씨·회전·평)는 그대로 통과.
+
 ## [2.9.62] - 2026-11-04
 
 2차 독립 검토의 ml-kit 발견 수정. 회귀 테스트는 수정 전 실패를 확인했습니다.

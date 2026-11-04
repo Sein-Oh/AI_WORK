@@ -28,7 +28,8 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
-    parse_where, resolve_where, where_text, where_mask, check_time, Unfinished, VERSION, split_off, split_off_warning,
+    parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
+    check_time, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
 )
 
 setup_console()
@@ -579,12 +580,14 @@ RUN_MODEL_SECONDS: List[float] = []
 
 
 def _candidate_path(resume: Optional[str], m_idx: int) -> Optional[str]:
+    """Where the candidate is meant to be saved (<resume_dir>/<key>.m<k>.joblib); resume_save may put it elsewhere."""
     return f"{resume}.m{m_idx}.joblib" if resume else None
 
 
 def _candidate_load(resume: Optional[str], m_idx: int) -> Optional[Tuple[Any, ...]]:
-    path = _candidate_path(resume, m_idx)
-    if not path or not os.path.isfile(path):
+    want = _candidate_path(resume, m_idx)
+    path = want and resume_find(os.path.dirname(want), os.path.basename(want))
+    if not path:
         return None
     try:
         res = joblib.load(path)
@@ -604,7 +607,7 @@ def _candidate_check(resume: Optional[str], target_name: str, done: int, total: 
     """Clock check before the next candidate (or the final fit and importance) of a target, also the first candidate
     after the data was read and the final fit of a target whose candidates were all reused: only after some step was
     done in this command (a candidate or a target), so every run moves on and never stops without a new saved step
-    (R10). A failed save turns the split off (check_time no longer stops), so '저장됨' is true when it stops."""
+    (R10). A step saved nowhere makes check_time stop with STOP_RETRY instead, so '저장됨' is true when it stops."""
     if resume and (RUN_MODEL_SECONDS or RUN_FIT_SECONDS):
         check_time(max(RUN_MODEL_SECONDS or RUN_FIT_SECONDS) * 1.2,
                    f"학습: 타겟 '{target_name}' 후보 모델 {done}/{total}개 끝남, 저장됨 ({what} 전에 멈춤)")
@@ -1639,6 +1642,7 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     where_txt: Optional[str] = None
     where_hit: Optional[np.ndarray] = None
     group_warnings_pre: List[str] = []
+    where_fix: Optional[Dict[str, Any]] = None
     if group.get("exclude_where"):
         conds = resolve_where(parse_where(group["exclude_where"], "--exclude-where"), [str(c) for c in df_raw.columns],
                               "--exclude-where", dict(df_raw.attrs))
@@ -1648,6 +1652,20 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
         if not where_hit.any():
             group_warnings_pre.append(f"--exclude-where 조건({where_txt})에 맞는 행이 없어 조건으로 뺀 행은 0개입니다")
             sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
+        variants = where_notation_variants(df_raw, conds)
+        if variants:
+            # a code column compared as text: '월 = 1' leaves the '01' rows (the same number in training) in
+            fixed = where_text(where_with_variants(conds, variants))
+            cmd = where_retry("--exclude-where", fixed)
+            for (c, o, v), cnt in variants:
+                notes = ", ".join(f"'{t}' {n}행" for t, n in cnt.items())
+                group_warnings_pre.append(
+                    f"--exclude-where '{c} {o} {v}': {notes}은(는) 표기가 달라 " + ("빼지 않음" if o == "=" else "함께 뺌")
+                    + f" ('{c}' 열은 앞자리 0을 구분하는 코드 열이라 글자 그대로 비교). 같은 값으로 보려면 [추천] {cmd}")
+                sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
+            if cmd.startswith("python "):
+                where_fix = {"purpose": f"--exclude-where를 표기가 다른 같은 값까지 포함한 조건({fixed})으로 다시 학습 "
+                                        "(사용자가 원할 때만)", "command": cmd, "needs_input": False}
 
     # Fail-Fast Validation & Type Sanitization
     log_progress(10, "컬럼 유효성 검증 및 타입 정제 중...")
@@ -1700,7 +1718,7 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
             "raw_required": raw_required,
             "evals": applied_evals, "created": created_features, "schema": feature_schema, "X": X_all,
             "dtypes": dtypes, "positive_class": group.get("positive_class"), "warnings": group_warnings,
-            "where": where_txt, "where_hit": where_hit}
+            "where": where_txt, "where_hit": where_hit, "where_fix": where_fix}
 
 
 DECIMAL_COMMA_STOP_SHARE = 0.5     # a selected text feature with this share of '175,6' cells is refused
@@ -1804,7 +1822,8 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
 # ------------------------------------------------------------------------------
 # Split execution (R10): the agent's command tool stops a command at 120 s. Every target whose 5-model competition
 # finished is saved in <data_root>/.resume_train/<key>.joblib (key = the exact training input: data, schema, task,
-# seed, tool and scikit-learn versions). Before the next target the clock is checked (check_time); a run that would
+# seed, tool and scikit-learn versions; in a fallback place when that folder cannot be written: resume_save).
+# Before the next target the clock is checked (check_time); a run that would
 # pass the limit stops with CONTINUE, leaving no version folder and no ledger record. The same command run again
 # reuses the saved targets and goes on; the version folder and history.jsonl are written once, by the run that ends.
 # ------------------------------------------------------------------------------
@@ -1825,11 +1844,12 @@ def _resume_key(task: str, target: str, X: pd.DataFrame, y: pd.Series, schema: D
         h.update(str(part).encode("utf-8") + b"\x1e")
     h.update(pd.util.hash_pandas_object(X, index=False).values.tobytes())
     h.update(pd.util.hash_pandas_object(y.astype(object), index=False).values.tobytes())
-    return h.hexdigest()[:32]
+    return h.hexdigest()[:16]                 # short file names: room under MAX_PATH (260) in deep folders
 
 
-def _resume_load(path: str) -> Optional[Tuple[Any, Any, Any, Any]]:
-    if not os.path.isfile(path):
+def _resume_load(want: str) -> Optional[Tuple[Any, Any, Any, Any]]:
+    path = resume_find(os.path.dirname(want), os.path.basename(want))
+    if not path:
         return None
     try:
         res = joblib.load(path)
@@ -1845,41 +1865,20 @@ def _resume_load(path: str) -> Optional[Tuple[Any, Any, Any, Any]]:
     return None
 
 
-def _resume_save(path: str, res: Tuple[Any, ...]) -> bool:
-    """Saves a finished step for the next run of the same command and checks the file is there. A failed save turns
-    the split off (split_off): a stop would lose the step and the same command would train it again forever."""
-    err = ""
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        joblib.dump(res, tmp)
-        retry_fs(lambda: os.replace(tmp, path))
-    except Exception as e:
-        err = f"{type(e).__name__}: {e}"
-    if not err and os.path.isfile(path) and os.path.getsize(path) > 0:
-        return True
-    split_off(f"중간 학습 결과 {os.path.basename(path)}를 저장하지 못했습니다" + (f" ({err})" if err else ""))
-    return False
+def _resume_save(want: str, res: Tuple[Any, ...]) -> bool:
+    """Saves a finished step for the next run of the same command (at `want`, or in a fallback place: resume_save)
+    and checks the file is there. False when no place worked (check_time then stops with STOP_RETRY)."""
+    return resume_save(os.path.dirname(want), os.path.basename(want), lambda tmp: joblib.dump(res, tmp),
+                       "중간 학습 결과") is not None
 
 
 def _resume_cleanup(resume_dir: str, used: List[str]) -> None:
-    """Removes the saved targets of this (finished) run and those older than RESUME_MAX_AGE."""
-    if not os.path.isdir(resume_dir):
-        return
+    """Removes the saved targets of this (finished) run and those older than RESUME_MAX_AGE, in the original folder
+    and in the fallback places."""
     now = time.time()
-    for name in os.listdir(resume_dir):
-        p = os.path.join(resume_dir, name)
-        try:
-            # a finished target and its saved candidates (<key>.m<k>.joblib), or an old one
-            if p in used or p.rsplit(".m", 1)[0] + ".joblib" in used or now - os.path.getmtime(p) > RESUME_MAX_AGE:
-                os.remove(p)
-        except OSError:
-            pass
-    try:
-        if not os.listdir(resume_dir):
-            os.rmdir(resume_dir)
-    except OSError:
-        pass
+    keys = {os.path.basename(p).split(".")[0] for p in used}
+    # a finished target and its saved candidates (<key>.joblib, <key>.m<k>.joblib), or an old one
+    resume_clear(resume_dir, lambda name, p: name.split(".")[0] in keys or now - os.path.getmtime(p) > RESUME_MAX_AGE)
 
 
 def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]],
@@ -2404,6 +2403,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 target_names=target_names, champion={**prim_champ, "weak_features": weak_feats}, schema=g0["schema"],
                 mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir, exclude_where=g0["where"],
             )
+        if not best_info:     # a plain run: the command again with the condition covering the other notations
+            where_fixes = [g["where_fix"] for g in prepared if g.get("where_fix")]
+            next_commands = [c for i, c in enumerate(where_fixes) if c not in where_fixes[:i]] + next_commands
         history_record["next_commands"] = next_commands
 
         # Commit Transaction: atomic rename .tmp_vX -> vX, then record it in the ledger.
@@ -2423,7 +2425,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             if imp_note:
                 train_warnings.append(f"타겟 '{t}': 중요 입력(top_features)을 내지 못했습니다 ({imp_note}).")
                 sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
-        split_note = split_off_warning()        # a failed save of a finished step: this run was not split (R10)
+        split_note = save_failed_warning()      # a finished step saved nowhere (this run ended before the limit)
         if split_note and split_note not in train_warnings:
             train_warnings.append(split_note)
         top_brief = " | ".join(
@@ -2512,7 +2514,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
     except BaseException as exc:
         # Includes KeyboardInterrupt (Ctrl+C) so the staging folder never leaks. A stop at the time limit (Unfinished)
-        # leaves no version folder and no ledger record: the finished targets wait in .resume_train for the next run.
+        # leaves no version folder and no ledger record: the finished targets wait in .resume_train (or a fallback
+        # place) for the next run.
         guard.rollback(quiet=isinstance(exc, Unfinished))
         raise
     finally:
@@ -2691,7 +2694,9 @@ def best_summary(version_result: Dict[str, Any]) -> Dict[str, Any]:
 
 def _best_run_load(data_root: str, raw_file: str) -> Dict[str, str]:
     """{task: version} of the best versions an earlier run of this --best command made before it stopped (CONTINUE)."""
-    path = os.path.join(data_root, RESUME_DIR, BEST_RUN_FILE)
+    path = resume_find(os.path.join(data_root, RESUME_DIR), BEST_RUN_FILE)
+    if not path:
+        return {}
     try:
         if time.time() - os.path.getmtime(path) > RESUME_MAX_AGE:
             return {}
@@ -2704,22 +2709,17 @@ def _best_run_load(data_root: str, raw_file: str) -> Dict[str, str]:
 
 
 def _best_run_save(data_root: str, raw_file: str, done: Dict[str, str]) -> None:
-    path = os.path.join(data_root, RESUME_DIR, BEST_RUN_FILE)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        atomic_write_text(path, dumps_json({"file": os.path.normcase(raw_file), "done": done}))
-    except Exception as e:                     # a continued run would build that task again: not split
-        split_off(f"나눠 진행 기록 {BEST_RUN_FILE}을(를) 저장하지 못했습니다 ({type(e).__name__}: {e})")
+    """Saved nowhere: a continued run would build that task again, so check_time stops with STOP_RETRY."""
+    text = dumps_json({"file": os.path.normcase(raw_file), "done": done})
+
+    def write(tmp: str) -> None:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+    resume_save(os.path.join(data_root, RESUME_DIR), BEST_RUN_FILE, write, "나눠 진행 기록")
 
 
 def _best_run_clear(data_root: str) -> None:
-    resume_dir = os.path.join(data_root, RESUME_DIR)
-    try:
-        os.remove(os.path.join(resume_dir, BEST_RUN_FILE))
-        if not os.listdir(resume_dir):
-            os.rmdir(resume_dir)
-    except OSError:
-        pass
+    resume_clear(os.path.join(data_root, RESUME_DIR), lambda name, p: name == BEST_RUN_FILE)
 
 
 def _best_record_summary(data_root: str, rec: Dict[str, Any], task: str) -> Dict[str, Any]:

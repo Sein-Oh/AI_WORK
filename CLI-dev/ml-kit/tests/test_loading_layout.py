@@ -519,6 +519,41 @@ def test_korean_unit_words_in_named_unit_row(tmp_path, units):
     assert ok["recovered"] == ["머리글 1행, 단위 2행으로 읽음"], ok
 
 
+def _unit_rows_file(tmp_path, units, name="k.csv"):
+    r = np.random.default_rng(9)
+    rows = [["온도", "압력", "시간", "생산량"], units]
+    for _ in range(40):
+        t, p, h = r.uniform(150, 200), r.uniform(1, 5), r.uniform(1, 5)
+        rows.append([round(t, 2), round(p, 3), round(h, 2), round(2 * t + 10 * p + 3 * h, 2)])
+    f = str(tmp_path / name)
+    write_rows(f, rows, [])
+    return f
+
+
+def test_data_row_given_as_unit_row_is_refused(tmp_path):
+    """3차 검토(2.9.63): 데이터 행('점검중, 센서고장, 정지')을 --unit-row로 주면 받아 '온도(점검중)'이 되었다.
+    단위가 아닌 한글 낱말이 글자 칸의 절반 이상이면 단위 행이 아니다 (STOP_RETRY [추천] --unit-row를 뺀 명령)."""
+    f = _unit_rows_file(tmp_path, ["점검중", "센서고장", "정지", None])
+    raw = mp.read_raw_table(f)
+    ok, why = mp.unit_row_verdict(raw, 1, 0, given=True)
+    assert not ok and "한글 낱말" in why
+    bad = run_fail("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
+    assert bad["agent_directive"].startswith("STOP_RETRY") and "단위 행이 아닙니다" in bad["message"], bad
+    rec = bad["message"].split("[추천] ", 1)[1]
+    assert rec.startswith("python ") and "--unit-row" not in rec, rec
+
+
+def test_some_odd_words_in_unit_row_are_read_with_a_warning(tmp_path):
+    """단위 행의 일부 칸만 단위가 아닌 한글 낱말이면 받아들이되 warnings로 알린다."""
+    f = _unit_rows_file(tmp_path, ["도씨", "점검중", "시간", "킬로그램"])
+    res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
+    w = [x for x in res.get("warnings", []) if x.startswith("2행을 단위로 읽음")]
+    assert w and "압력(점검중)" in w[0] and "--unit-row를 빼세요" in w[0], res.get("warnings")
+    clean = run_tool("ml_train.py", "-f", _unit_rows_file(tmp_path, ["도씨", "기압", "시간", "킬로그램"], "c.csv"),
+                     "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
+    assert not any("단위로 읽음" in x for x in clean.get("warnings", [])), clean.get("warnings")
+
+
 def test_skipped_unit_row_is_in_warnings(p1_model, tmp_path):
     body = [[180.5, 3.1, 45.0], [185.0, 3.3, 47.5]]
     p = write_book(tmp_path / "u.xlsx", [["온도", "압력", "속도"], ["kg/cm2 G", "kg/cm2 G", "m/s"]] + body)

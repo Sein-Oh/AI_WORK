@@ -59,7 +59,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.62"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.63"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -159,35 +159,121 @@ class Unfinished(BaseException):
         self.progress = progress
 
 
-# Why the running command is not split (a finished step could not be saved): a stop would lose the step and the same
-# command would repeat it forever, so the command goes on to the end instead (warning SPLIT_OFF_WARNING).
-SPLIT_OFF: List[str] = []
-SPLIT_OFF_WARNING = "중간 저장 실패로 나누지 않음"
+# A finished step that cannot be saved where it belongs (<data_root>/.resume_train, <version>/export/_fits) is saved in
+# a fallback place (JIT: resume_save): <tool data folder>/resume/<hash>, then %TEMP%/ml-kit-resume/<hash> (hash = the
+# first 12 characters of the hash of the original folder, so paths stay short). The next run looks in every place
+# (resume_find). When no place can be written the step is lost at a stop, so check_time does not stop with CONTINUE
+# (the same command would train it again forever) and does not go past the limit either: it stops with STOP_RETRY.
+RESUME_FALLBACK_DIR = "resume"
+TEMP_RESUME_DIR = "ml-kit-resume"
+SAVE_FAILED: List[str] = []                # finished steps no place could hold in this command
+_RESUME_PLACE: Dict[str, int] = {}         # original folder -> index of the place that worked in this command
 
 
-def split_off(reason: str) -> None:
-    """A finished step was not saved (reason): check_time no longer stops this command."""
-    if reason not in SPLIT_OFF:
-        SPLIT_OFF.append(reason)
-        sys.stderr.write(f"[WARN] {SPLIT_OFF_WARNING}: {reason}. 이 실행은 시간 제한에서 멈추지 않고 끝까지 진행합니다\n")
+def resume_places(primary: str) -> List[str]:
+    """[original folder, data folder fallback, %TEMP% fallback] for the finished steps of `primary`."""
+    import hashlib
+    primary = os.path.abspath(primary)
+    h = hashlib.sha1(os.path.normcase(primary).encode("utf-8")).hexdigest()[:12]
+    temp = os.environ.get("TEMP") or os.environ.get("TMP") or __import__("tempfile").gettempdir()
+    return [primary, os.path.join(get_data_dir(), RESUME_FALLBACK_DIR, h), os.path.join(temp, TEMP_RESUME_DIR, h)]
 
 
-def split_off_warning() -> Optional[str]:
-    """The result warning of a command that was not split (None when every step was saved)."""
-    if not SPLIT_OFF:
+def _place_label(places: List[str], i: int) -> str:
+    h = os.path.basename(places[i])
+    return [os.path.basename(places[0]), f"데이터 폴더 {RESUME_FALLBACK_DIR}\\{h}", f"임시 폴더 {TEMP_RESUME_DIR}\\{h}"][i]
+
+
+def resume_find(primary: str, name: str) -> Optional[str]:
+    """The saved step `name` of `primary` in the original folder or a fallback place (None when not saved)."""
+    for d in resume_places(primary):
+        path = os.path.join(d, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def resume_save(primary: str, name: str, write: Callable[[str], Any], what: str) -> Optional[str]:
+    """Saves a finished step (write(path) writes the file) in the first place of resume_places that works and
+    checks the file is there. A fallback place is a JIT recovery (note_recovered). Returns the saved path, or None
+    when no place worked (SAVE_FAILED: check_time then stops with STOP_RETRY instead of CONTINUE)."""
+    places = resume_places(primary)
+    key = os.path.normcase(places[0])
+    errors: List[str] = []
+    for i in range(_RESUME_PLACE.get(key, 0), len(places)):
+        path = os.path.join(places[i], name)
+        tmp = path + ".tmp"
+        err = ""
+        try:
+            os.makedirs(places[i], exist_ok=True)
+            write(tmp)
+            retry_fs(lambda: os.replace(tmp, path))
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"[:160]
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        if not err and os.path.isfile(path) and os.path.getsize(path) > 0:
+            _RESUME_PLACE[key] = i
+            if i > 0:
+                note_recovered(f"중간 저장 실패 ({os.path.basename(places[0])}) -> 대체 위치 {_place_label(places, i)}에 저장")
+            return path
+        errors.append(f"{_place_label(places, i)}: {err or '저장한 파일을 찾지 못함'}")
+    _RESUME_PLACE[key] = len(places)          # no place works: the next steps of this command do not try again
+    reason = f"{what} {name}를 어디에도 저장하지 못했습니다 ({'; '.join(errors)})"
+    if not SAVE_FAILED:
+        record_recovery_attempt(f"중간 저장 {len(errors)}곳 시도 실패 ({os.path.basename(places[0])}, 데이터 폴더, 임시 폴더)")
+        sys.stderr.write(f"[WARN] 중간 저장 실패: {reason}. 시간 제한에 닿으면 이어서 진행할 수 없어 멈춥니다\n")
+    SAVE_FAILED.append(reason)
+    return None
+
+
+def resume_clear(primary: str, drop: Callable[[str, str], bool], fallback_only: bool = False) -> None:
+    """Removes the saved steps of `primary` for which drop(name, path) is true in every place (or only the fallback
+    places), then the places left empty. Never raises."""
+    for i, d in enumerate(resume_places(primary)):
+        if (fallback_only and i == 0) or not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            p = os.path.join(d, name)
+            try:
+                if drop(name, p):
+                    os.remove(p)
+            except OSError:
+                pass
+        for folder in ([d] if i == 0 else [d, os.path.dirname(d)]):
+            try:
+                if not os.listdir(folder):
+                    os.rmdir(folder)
+            except OSError:
+                pass
+
+
+def save_failed_error() -> InputError:
+    return InputError(
+        "중간 결과를 저장하지 못해 나눠서 진행할 수 없습니다 (시간 제한 전에 멈춤): " + SAVE_FAILED[0]
+        + ". 데이터 폴더와 임시 폴더(%TEMP%)의 쓰기 권한, 디스크 남은 공간, 경로 길이(260자)를 확인한 뒤 같은 명령을 다시 실행하십시오.")
+
+
+def save_failed_warning() -> Optional[str]:
+    """The result warning of a command that ended although a finished step could not be saved (None otherwise)."""
+    if not SAVE_FAILED:
         return None
-    return (f"{SPLIT_OFF_WARNING}: {SPLIT_OFF[0]}. 나눠서 진행하지 않고 한 번에 끝까지 진행했습니다 "
-            f"(데이터 폴더의 쓰기 권한·디스크 공간을 확인하십시오)")
+    return (f"중간 저장 실패: {SAVE_FAILED[0]}. 이번 실행은 시간 제한 안에 끝나 결과에는 영향이 없습니다 "
+            f"(데이터 폴더와 임시 폴더의 쓰기 권한·디스크 공간을 확인하십시오)")
 
 
 def check_time(next_step_seconds: float, progress: str) -> None:
     """Raises Unfinished when the next slow step (estimated next_step_seconds) would end past the time limit
-    minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run); after a
-    failed save (split_off) the command is not split."""
+    minus TIME_RESERVE. The caller must have saved every finished step (they are reused by the next run); when a
+    step could not be saved anywhere (SAVE_FAILED) it raises the STOP_RETRY error instead."""
     limit = time_limit()
-    if limit == float("inf") or SPLIT_OFF:
+    if limit == float("inf"):
         return
     if time.monotonic() - RUN_START + max(next_step_seconds, 0.0) > limit - TIME_RESERVE:
+        if SAVE_FAILED:
+            raise save_failed_error()
         raise Unfinished(progress)
 
 
@@ -404,6 +490,8 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     Failures (exit 1) are appended to <data>/logs/errors.txt; interruptions (130) are not."""
     global RUN_START
     RUN_START = time.monotonic()
+    SAVE_FAILED.clear()
+    _RESUME_PLACE.clear()
     try:
         result = execute()
     except Unfinished as u:
@@ -826,7 +914,7 @@ def _where_size_value(groups: List[List[Cond]], option: str) -> List[List[Cond]]
     if len(bad) == 1 and fix != v and _where_size_ok(fix):
         fixed = [[(c2, o2, fix if (c2, o2, v2) == bad[0] else v2) for c2, o2, v2 in g] for g in groups]
         raise InputError(f"{option}의 '{c} {o} {v}'에서 크기 비교 값 '{v}'이(가) 숫자로 읽히지 않습니다 (가운데 공백). "
-                         f"[추천] {_where_retry(option, where_text(fixed))}")
+                         f"[추천] {where_retry(option, where_text(fixed))}")
     raise InputError(f"{option}의 '{c} {o} {v}'에서 크기 비교(> < >= <=) 값 '{v}'이(가) 숫자나 날짜(YYYY-MM-DD)가 "
                      f"아닙니다. 글자 값은 = != ~로 비교하십시오.")
 
@@ -840,7 +928,7 @@ def _outside_quotes(text: str, fn: Callable[[str], str]) -> str:
     return "".join(part if i % 2 else fn(part) for i, part in enumerate(_WHERE_QUOTED.split(text)))
 
 
-def _where_retry(option: str, fixed: str) -> str:
+def where_retry(option: str, fixed: str) -> str:
     """[추천] for a fixed condition: the running command with the option replaced (a full command, R8), else the text."""
     cmd = command_text(drop={option: option.lstrip("-").replace("-", "_")})
     return f"{cmd} {option} {quote_arg(fixed)}" if cmd else fixed
@@ -867,7 +955,7 @@ def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
         quoted = any(kept) or any(_where_value_text(v) != v for g in groups for _, _, v in g)
         raise InputError(f"{option} 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;, 또는은 |). "
                          + ("값 안의 낱말(포함, and, or)과 기호는 바꾸지 않았습니다. 값을 작은따옴표로 감싸세요. " if quoted else "")
-                         + f"형식: {WHERE_FORM}. [추천] {_where_retry(option, where_text(groups))}")
+                         + f"형식: {WHERE_FORM}. [추천] {where_retry(option, where_text(groups))}")
     return _where_size_value(groups, option)
 
 
@@ -884,13 +972,39 @@ def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "-
 _CODE_RE = re.compile(r"\s*[-+]?0\d")     # a code with a leading zero ('007', '01'), never '0.5'
 
 
+CODE_ZERO_SHARE = 0.5                     # a column is a code column when this share of its cells has a leading zero
+_FIXED_CODE_RE = re.compile(r"\d{3,}")    # a fixed-width code ('001' ~ '120'); two digits ('05', '10') read as numbers
+
+
 def is_code_column(series: pd.Series) -> bool:
-    """A category / code column: some filled cell is a code with a leading zero ('007'). Its values are matched as
-    exact text ('007' is not '7', not a number to interpolate): --where / --exclude-where and ml_map keys.
-    A number or date column (Excel cells) is never one; missing-value marks do not count."""
+    """A category / code column, matched as exact text ('007' is not '7', not a number to interpolate) by
+    --where / --exclude-where and ml_map keys. Only when some cell has a leading zero ('007') and
+    (a) the same number is also written without it ('007' and '7'), or
+    (b) at least CODE_ZERO_SHARE of the filled cells have a leading zero ('01' ~ '12'), or
+    (c) every filled cell is a code of the same width of 3 or more digits ('001' ~ '120').
+    '05, 10, 15, 20' is a number column. A number or date column (Excel cells) is never one; missing-value marks
+    and blank cells do not count."""
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
         return False
-    return any(isinstance(v, str) and _CODE_RE.match(v) is not None for v in series.tolist())
+    filled = [v.strip() if isinstance(v, str) else v for v in series.tolist()
+              if v is not None and not (isinstance(v, float) and v != v)]
+    filled = [v for v in filled if not (isinstance(v, str) and (v == "" or v in MISSING_MARKS))]
+    zero = [isinstance(v, str) and _CODE_RE.match(v) is not None for v in filled]
+    if not any(zero):
+        return False
+    if sum(zero) >= CODE_ZERO_SHARE * len(filled):
+        return True
+    if all(isinstance(v, str) and _FIXED_CODE_RE.fullmatch(v) for v in filled) and len({len(v) for v in filled}) == 1:
+        return True
+    nums = coerce_numeric(pd.Series(filled, dtype=object))
+    zmask = np.array(zero, dtype=bool)
+    with_zero = set(nums[zmask].dropna().tolist())
+    return bool(with_zero & set(nums[~zmask].dropna().tolist()))
+
+
+def _where_cells(series: pd.Series) -> pd.Series:
+    """The cells of a condition column as stripped text ('' for a blank)."""
+    return series.map(lambda v: "" if v is None or (isinstance(v, float) and v != v) else str(v).strip())
 
 
 def _compare_as_text(series: pd.Series, text: pd.Series, val: str) -> bool:
@@ -910,7 +1024,7 @@ def _compare_as_text(series: pd.Series, text: pd.Series, val: str) -> bool:
 
 def _where_cond_mask(series: pd.Series, op: str, val: str) -> np.ndarray:
     """Rows meeting one condition. A blank cell never meets '!=' (an empty cell is not a value that differs)."""
-    text = series.map(lambda v: "" if v is None or (isinstance(v, float) and v != v) else str(v).strip())
+    text = _where_cells(series)
     blank = (text == "").to_numpy(dtype=bool)
     if op == "~":
         return text.str.casefold().str.contains(val.strip().casefold(), regex=False).to_numpy(dtype=bool)
@@ -956,6 +1070,43 @@ def where_mask(df: pd.DataFrame, groups: List[List[Cond]]) -> np.ndarray:
         for col, op, val in g:
             hit &= _where_cond_mask(df[col], op, val)
         out |= hit
+    return out
+
+
+def where_notation_variants(df: pd.DataFrame, groups: List[List[Cond]]) -> List[Tuple[Cond, Dict[str, int]]]:
+    """Conditions '= v' / '!= v' compared as text (a code column) whose number is also written another way in
+    that column ('월 = 1' and cells '01'): [(condition, {other notation: rows})]. Those rows read as the same number
+    in training but do not meet '=' (and do meet '!='): the caller warns and offers where_with_variants."""
+    out: List[Tuple[Cond, Dict[str, int]]] = []
+    # notations the condition already names ('월 = 1 | 월 = 01', '월 != 1; 월 != 01') need no note
+    named = {(c, o, v.strip().casefold()) for g in groups for c, o, v in g}
+    for cond in dict.fromkeys(c for g in groups for c in g):
+        col, op, val = cond
+        if op not in ("=", "!=") or col not in df.columns:
+            continue
+        series = df[col]
+        text = _where_cells(series)
+        vnum = coerce_numeric(pd.Series([val])).iloc[0]
+        if vnum is None or vnum != vnum or not _compare_as_text(series, text, val):
+            continue
+        same = (coerce_numeric(series) == float(vnum)) & (text != "") & (text.str.casefold() != val.strip().casefold())
+        counts = {str(k): int(n) for k, n in text[same].value_counts().items() if (col, op, str(k).casefold()) not in named}
+        if counts:
+            out.append((cond, counts))
+    return out
+
+
+def where_with_variants(groups: List[List[Cond]], variants: List[Tuple[Cond, Dict[str, int]]]) -> List[List[Cond]]:
+    """The condition that also covers the other notations: '월 = 1' -> '월 = 1 | 월 = 01' (each OR group repeated
+    with the other notation), '월 != 1' -> '월 != 1; 월 != 01'."""
+    vm = {cond: list(cnt) for cond, cnt in variants}
+    out: List[List[Cond]] = []
+    for g in groups:
+        base = list(g) + [(c, "!=", t) for c, o, v in g if o == "!=" and (c, o, v) in vm for t in vm[(c, o, v)]]
+        alts = [[cond] + ([(cond[0], "=", t) for t in vm[cond]] if cond[1] == "=" and cond in vm else []) for cond in base]
+        for combo in product(*alts):
+            if list(combo) not in out:
+                out.append(list(combo))
     return out
 
 
@@ -1441,6 +1592,10 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
                              f"단위 행 번호를 고치거나 단위 행이 없으면 --unit-row를 빼십시오.{hint}")
         units = df_raw.iloc[unit_row - 1].values
         headers = [_with_unit(h, u) for h, u in zip(headers, units)]
+        # a few Hangul words that are no known unit ('점검중' among '도씨, 킬로그램'): read as units, with a warning
+        odd_units = [h for h, u in zip(headers, units) if _odd_unit_word(_cell_text(u))]
+    else:
+        odd_units = []
 
     # De-duplicate headers (handles accidental duplicate column names in source files). A generated name can
     # itself be taken (a, a, a_1), so the suffix grows until the name is unused.
@@ -1517,6 +1672,7 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
                                        and header_idx + 1 < total_rows and _looks_like_unit_row(df_raw, header_idx + 1, header_idx)
                                        else None)
     df_data.attrs["repeated_header_rows"] = [int(i) + 1 for i in repeated]
+    df_data.attrs["odd_unit_names"] = odd_units
     df_data.attrs["summary_rows"] = _SharedList(_summary_rows(df_data, source_rows))
     df_data.attrs["decimal_comma"] = df_raw.attrs.get("decimal_comma")
     return df_data
@@ -1912,6 +2068,10 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
         out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 쉼표를 소수점으로 읽었습니다 ({dec[1]}칸, 예: {dec[0]})")
         if dec[3]:
             out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 점(.)을 천 단위 구분 기호로 읽었습니다 ({dec[4]}칸, 예: {dec[3]})")
+    odd = df.attrs.get("odd_unit_names") or []
+    if odd:
+        out.append(f"{df.attrs.get('unit_row')}행을 단위로 읽음: {', '.join(odd[:5])}{' 등' if len(odd) > 5 else ''}. "
+                   f"단위가 아닌 낱말이 있습니다. 데이터 행이면 --unit-row를 빼세요")
     rep = df.attrs.get("repeated_header_rows") or []
     if rep:
         out.append(f"{_row_list(rep)}행은 머리글(단위) 행과 같아(페이지마다 반복된 머리글) 데이터에서 뺐습니다")
@@ -1979,6 +2139,30 @@ def _unit_text(t: str) -> bool:
 
 _KOREAN_UNITS = {"개", "회", "초", "분", "시간", "일", "주", "월", "년", "원", "천원", "만원", "명", "건", "점", "매", "장",
                  "대", "도", "배", "번", "개월", "퍼센트", "미터", "그램", "리터", "톤", "와트", "볼트", "암페어"}
+
+
+# Korean unit words of a unit row the user named (--unit-row). Other Hangul words there ('점검중', '센서고장') are read
+# as units only while they are fewer than half of the row's text cells (with a warning); half or more -> not a unit row.
+# The tool's own guess (no --unit-row) knows only _KOREAN_UNITS.
+_KOREAN_UNIT_WORDS = _KOREAN_UNITS | {
+    "도씨", "섭씨", "화씨", "켈빈", "킬로그램", "밀리그램", "그램", "톤", "킬로톤", "기압", "바", "밀리바", "파스칼", "킬로파스칼",
+    "메가파스칼", "헥토파스칼", "미터", "킬로미터", "센티미터", "밀리미터", "마이크로미터", "마이크론", "나노미터", "인치", "피트",
+    "리터", "밀리리터", "시씨", "세제곱미터", "제곱미터", "평", "헥타르", "시", "시간", "분", "초", "밀리초", "회", "회전",
+    "개", "세트", "쌍", "벌", "켤레", "박스", "상자", "팩", "롤", "묶음", "포", "통", "병", "캔", "봉", "알", "정", "가지", "명",
+    "퍼센트", "프로", "퍼밀", "피피엠", "와트", "킬로와트", "메가와트", "킬로와트시", "볼트", "킬로볼트", "암페어", "밀리암페어",
+    "옴", "헤르츠", "킬로헤르츠", "데시벨", "뉴턴", "줄", "킬로줄", "칼로리", "킬로칼로리", "마력", "알피엠", "노트", "룩스",
+    "도", "라디안", "주기", "사이클", "건", "차", "호", "층", "동", "칸", "달러", "엔", "유로", "위안",
+}
+
+
+def _hangul_word(t: str) -> bool:
+    t = t.strip()
+    return bool(t) and all("\uac00" <= ch <= "\ud7a3" or "\u3131" <= ch <= "\u318e" or ch.isspace() for ch in t)
+
+
+def _odd_unit_word(t: str) -> bool:
+    """A Hangul word that is no known unit ('점검중', '센서고장'; '도씨', '기압' are units)."""
+    return _hangul_word(t) and t.strip() not in _KOREAN_UNIT_WORDS
 
 
 KOREAN_UNIT_MAX = 6      # a Hangul word of a unit row the user named (--unit-row): at most this many letters, no space
@@ -2098,6 +2282,9 @@ def unit_row_verdict(df_raw: pd.DataFrame, j: int, header: Optional[int] = None,
     text = [k for k, c in kinds.items() if c in ("unit", "note") and not _is_data_value(row[k])]
     if not units:
         return False, "단위로 볼 짧은 글자가 없어"
+    odd = [_cell_text(row[k]) for k in units if _odd_unit_word(_cell_text(row[k]))]
+    if odd and len(odd) * 2 >= len(text):
+        return False, "단위가 아닌 한글 낱말이 글자 칸의 절반 이상이라"
     good = 0
     for k in units:
         below = _column_below(block, k)[:UNIT_SCAN_CELLS]

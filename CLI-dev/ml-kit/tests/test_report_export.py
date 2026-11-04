@@ -941,6 +941,31 @@ def test_export_stops_at_time_limit_and_the_same_command_continues(tmp_path, mon
     assert again["targets"]["효율"]["inputs"] == last["targets"]["효율"]["inputs"]
 
 
+def test_export_blocked_fit_cache_continues_in_fallback(tmp_path, monkeypatch):
+    """3차 검토(2.9.63): _fits에 저장하지 못하면 나누지 않고 끝까지 진행해 120초를 넘겼다. 이제 대체 위치에 저장하고
+    CONTINUE로 이어 가며(recovered), 끝나면 대체 위치를 지운다."""
+    path = _calc_data(tmp_path)
+    tr = run_tool("ml_train.py", "-f", str(path), "-x", "온도,압력,잡음", "-y", "효율")
+    fits = os.path.join(tr["version_dir"], "export", "_fits")
+    os.makedirs(os.path.dirname(fits), exist_ok=True)
+    with open(fits, "w", encoding="utf-8") as f:
+        f.write("not a folder")
+    fb = mp.resume_places(fits)[1]
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
+    runs = []
+    for _ in range(10):
+        proc, out = run_raw("ml_export.py", "-m", tr["version_dir"])
+        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
+        runs.append(out)
+        if not out.get("continue"):
+            break
+    first, last = runs[0], runs[-1]
+    assert len(runs) >= 2 and first["agent_directive"].startswith("CONTINUE:"), [r.get("progress") for r in runs]
+    assert any("대체 위치" in r and os.path.basename(fb) in r for r in first.get("recovered", [])), first
+    assert last["output_file"] and not last.get("continue")
+    assert not os.path.exists(fb) and os.path.isfile(fits)
+
+
 def test_unfinished_passes_through_the_reports_optional_workbook(monkeypatch, with_export):
     """보고서는 성능예측표 실패를 note로 넘기지만(보고서는 성공), 시간 제한 멈춤은 삼키지 않고 CONTINUE로 끝낸다."""
     import ml_export
