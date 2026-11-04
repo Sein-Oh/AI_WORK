@@ -21,7 +21,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 | 항목 | 값 |
 |---|---|
 | OS | Windows 11, **폐쇄망** (런타임 인터넷 접근 불가) |
-| Python | **WinPython**, Python 3.13.13, 시스템 PATH 등록 |
+| Python | **WinPython**, Python 3.13.13, `C:\CLI\python`에 두고 시스템 PATH 등록 (`python`, `python\Scripts`) |
 | 실행 명령 | `python`, `python -m pip` 만 사용 (`py`, `python3`, 단독 `pip` 금지). 명령 예시·스킬·배치 파일 포함 |
 | 에이전트 | **OpenCode** + 26B~30B 경량 LLM, 도구는 OpenCode 스킬로 제공 |
 | 주요 라이브러리 | pandas 3.0.5, scikit-learn 1.9.0, scipy 1.18.1, numpy/joblib(의존성), openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, matplotlib 3.11.1, seaborn 0.13.2, pymupdf 1.28.2, olefile 0.47, opencv-python 5.0.0.93, PyYAML 6.0.3, python-dateutil 2.9.0.post0, pywin32 312, pytest 9.1.1, pymupdf4llm 1.28.2, fastapi 0.141.1, fastmcp 3.4.7, mcp 1.28.1, langgraph 1.2.11, openai 2.54.0 |
