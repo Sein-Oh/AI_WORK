@@ -7,7 +7,7 @@
 ## 2. 이 PC 환경
 - Windows 11, 셸은 PowerShell이다.
 - 인터넷과 외부 네트워크가 막혀 있다. `pip install`, 웹 검색, 다운로드를 시도하지 않는다. 필요한 패키지가 없으면 사용자에게 알리고 멈춘다.
-- 파이썬은 `python` 명령으로 실행한다. `py`, `python3`는 쓰지 않는다.
+- 파이썬은 `python` 명령으로 실행한다 (`C:\CLI\python`, PATH에 등록됨). `py`, `python3`, `pip`는 쓰지 않는다.
 - 셸 명령은 한글이 깨지지 않게 **항상 아래 줄을 맨 앞에 붙여** 한 줄로 실행한다.
   ```powershell
   $env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; python "<스크립트>" <인자>
@@ -42,14 +42,17 @@
 |---|---|
 | `VERIFIED:` | 성공. `preview`를 알리고 끝낸다. 같은 명령을 다시 실행하거나 결과를 다시 열어 보지 않는다. |
 | `UNVERIFIED:` | 실행은 됐지만 도구가 결과를 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
-| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 반복 (최대 10번). |
+| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 반복 (최대 10번, 그래도 `CONTINUE:`이면 `progress`를 알리고 멈춤). |
 | `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그 명령을 그대로 **1번만** 실행한다. 아니면 `[추천]` 뒤의 값으로 바꿔 **1번만** 다시 실행한다. 또 실패하면 message를 그대로 알린다. |
-| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다. |
-| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. |
+| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). 고른 값으로 1번 실행한다. |
+| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `needs_user_decision`이 true이면 사용자에게 묻고, 원할 때만 directive가 말한 옵션을 붙여 1번 실행한다 (5장). |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |
 
-- JSON에 `recovered`가 있으면 (예: 파일이 열려 있어 새 이름으로 저장) 그 문장을 그대로 알린다.
-- `install_command`가 있으면 그 명령을 사용자에게 전달만 하고 직접 실행하지 않는다.
+- JSON에 `recovered`가 있으면 (예: 파일이 열려 있어 새 이름으로 저장) 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.
+- `error_type`이 `missing_library`이면 `install_command`를 사용자에게 전달만 하고 직접 실행하지 않는다.
+- `error_type`이 `elevated_process`이면 다시 실행하지 않는다. 관리자 권한 창에서 실행 중이라 사용자가 연 문서가 안 보이니, 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행하라고 알린다.
+- 문서 검색 결과의 `match_mode`가 `partial`이나 `fuzzy`이면 정확히 일치한 근거가 아니라고 함께 알린다.
+- `truncated`가 true이면 결과 일부만 받은 것이다. 전체 결과 파일 경로(`full_result_file` 또는 `output_file`)를 알리거나, 이어 보기가 필요하면 `next_commands`를 쓴다.
 
 ## 5. 사용자 승인이 필요한 일
 아래는 사용자가 이번 대화에서 분명히 요청했을 때만 한다. 실행 전에 대상(파일 경로, 시트 이름 등)을 보여 주고 "진행할까요?"라고 물어 "예"를 받는다.
