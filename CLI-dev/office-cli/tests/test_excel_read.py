@@ -654,6 +654,56 @@ def test_array_formula_with_values_is_computed(tmp_path):
     assert rt.xlsx_uncomputed_formulas(_mixed_xlsx(p))["count"] == 0               # 엑셀 저장: 다른 칸에 값이 있음
 
 
+def _far_xlsx(path):
+    """값 A1:C10과 멀리 떨어진 계산되지 않은 수식 칸 Z200000 하나 (openpyxl 저장, 파일 크기 정보는 A1:Z200000)."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "S"
+    for r in range(1, 11):
+        for c in range(1, 4):
+            ws.cell(r, c, f"h{c}" if r == 1 else r * c)
+    ws["Z200000"] = "=A2*2"
+    wb.save(path)
+    return str(path)
+
+
+def test_far_uncomputed_cell_is_not_padded(tmp_path, capsys):
+    """24차 LOW-4 (1.4.44): 멀리 떨어진 계산되지 않은 수식 칸까지 빈 행을 채우지 않고 따로 읽는 명령을 줌."""
+    p = _far_xlsx(tmp_path / "far.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p)
+    assert code == 0 and out["range"] == "A1:C10" and out["rows"] == 10, {k: out[k] for k in out if k != "values"}
+    assert out["agent_directive"].startswith("UNVERIFIED:") and out["far_uncomputed_formulas"] == ["S!Z200000"], out
+    cmd = out["next_commands"][-1]["command"]
+    assert "--range S!Z200000" in cmd, cmd
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "S!Z200000")    # 그 명령으로 읽으면 그 칸
+    assert code == 0 and out["uncomputed_formulas"] == ["S!Z200000"], out
+
+
+def test_far_uncomputed_cell_whole_columns(tmp_path, capsys):
+    p = _far_xlsx(tmp_path / "far.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "A:Z")       # 전에는 '너무 큽니다' + 그 칸을 뺀 [추천]
+    assert code == 0 and out["range"] == "A1:Z10" and out["far_uncomputed_count"] == 1, out
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "A:C")       # 그 칸은 요청한 열 밖
+    assert code == 0 and out["range"] == "A1:C10" and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "far_uncomputed_formulas" not in out
+    code, out = run_main(excel, capsys, "read", "--target", p, "--range", "A1:Z300000")
+    assert code == 0 and out["rows"] == 10 and out["far_uncomputed_count"] == 1, out
+
+
+def test_far_uncomputed_cell_export(tmp_path, capsys):
+    p = _far_xlsx(tmp_path / "far.xlsx")
+    code, out = run_main(excel, capsys, "export", "--target", p, "--save", str(tmp_path / "o.csv"))
+    assert code == 0 and out["rows"] == 10 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert out["far_uncomputed_formulas"] == ["S!Z200000"]
+
+
+def test_near_uncomputed_row_still_kept(tmp_path, capsys):
+    p = formula_xlsx(tmp_path / "f.xlsx")                                       # 값 바로 아래 합계 행 (가까운 칸)
+    code, out = run_main(excel, capsys, "read", "--target", p)
+    assert code == 0 and out["rows"] == 4 and "far_uncomputed_formulas" not in out, out
+
+
 def test_excel_read_closed_is_unverified(tmp_path, capsys):
     p = formula_xlsx(tmp_path / "f.xlsx")
     code, out = run_main(excel, capsys, "read", "--target", p)

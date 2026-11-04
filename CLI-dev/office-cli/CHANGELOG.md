@@ -6,6 +6,18 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.44] - 2026-11-04
+
+24차 확인 검사 LOW-4. 회귀 테스트: `tests/test_excel_read.py` `test_far_uncomputed_*`, `test_near_uncomputed_row_still_kept` (1.4.43에서 4개 중 3개 실패).
+
+### 수정
+- 닫힌 xlsx에서 값(A1:C10)과 멀리 떨어진 계산되지 않은 수식 칸(Z200000)이 있으면:
+  - 범위 생략 `read`: 그 칸까지 빈 행 20만 개를 채워 읽던 것을 데이터 범위(A1:C10)만. `-r A:Z`: "범위가 너무 큽니다"와 그 칸을 빼는 `[추천]` 대신 A1:Z10.
+    `-r A:C`: 파일 크기 정보 때문에 20만 행을 채우고 `VERIFIED`이던 것을 A1:C10.
+  - 요청한 범위 안의 먼 칸은 `UNVERIFIED:`, `far_uncomputed_formulas`, `far_uncomputed_count`와 그 칸만 읽는 명령(`next_commands` 끝). `export --save .csv`도 같음.
+  - "먼 칸": 값이 있는 끝에서 1,000행(열) 넘게 떨어짐. 가까운 칸(값 바로 아래 합계 행 등)은 전처럼 범위에 넣음.
+- `rt.xlsx_uncomputed_formulas(..., positions=True)`: 센 칸 위치(10만 개까지)와 값이 있는 칸의 범위(`value_bounds`).
+
 ## [1.4.43] - 2026-11-04
 
 23차 점검 L1. 회귀 테스트: `tests/test_excel_read.py` `test_array_formula_*` (1.4.42에서 2개 중 1개 실패, 통과한 1개는 엑셀에서 저장한 배열 수식이 0개인지).
@@ -1144,7 +1156,6 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 
 ### 23차 점검에서 남긴 것 (1.4.32)
 - L2 성능: 범위를 생략한 닫힌 xlsx 읽기는 수식이 있는 시트 XML 전체를 한 번 더 해석함(30만 행 시트에서 수 초). 열린 값 읽기와 함께 한 번에 훑기.
-- 24차 확인 검사 LOW-4: 데이터(A1:C10)와 멀리 떨어진 계산 안 된 수식 칸 하나(Z200000 등)가 있으면 범위 없는 읽기가 그 칸까지 빈 행을 채워 돌려주고, `-r A:Z`는 "범위가 너무 큽니다"와 그 수식 칸을 포함하지 않는 `[추천]` 범위를 냄 (안전하게 멈추지만 안내가 부정확).
 
 ### 1.4.37에서 남긴 것
 - range sort: 기준 4개 이상(Worksheet.Sort.SortFields), 사용자 지정 순서, 가로 정렬. 엑셀과 다른 글자 비교(기호 등)는 `UNVERIFIED:`로만 알림.

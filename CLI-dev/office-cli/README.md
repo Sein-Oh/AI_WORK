@@ -182,6 +182,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - `xl/workbook.xml`의 `<calcPr fullCalcOnLoad="1">`(또는 `"true"`)은 "열 때 모두 다시 계산" 표시입니다. xlsxwriter(`<v>0</v>`을 씀)·openpyxl 같은
     프로그램이 쓰며, 그 파일의 수식 칸은 값이 있어도(0 등) 모두 계산된 값이 없는 칸으로 봅니다(1.4.32). 엑셀은 저장할 때 이 표시를 지우므로
     엑셀에서 저장한 파일은 해당 없습니다.
+  - 값이 있는 끝에서 1,000행(열) 넘게 떨어진 계산된 값이 없는 수식 칸(데이터 A1:C10과 `Z200000`)은 범위를 데이터로 정할 때 넣지 않습니다(1.4.44).
+    전에는 범위 생략 읽기가 그 칸까지 빈 행을 채웠고, `-r A:Z`는 "너무 큽니다"와 그 칸을 빼는 `[추천]`을 냈습니다. 이제 데이터 범위만 읽고,
+    요청한 범위 안의 먼 칸은 `far_uncomputed_formulas`(20개까지), `far_uncomputed_count`, `UNVERIFIED:`와 그 칸만 읽는 명령(`next_commands` 끝,
+    `--range 시트!Z200000`)으로 알립니다(`read`, `export --save .csv`). 요청한 열 밖이면(`-r A:C`) 알리지 않습니다.
+    칸 위치는 10만 개까지 보고, 넘으면 전처럼 모두 범위에 넣습니다.
   - 배열 수식(`<f t="array" ref="C1:C3">`)은 파일에 왼쪽 위 칸에만 `<f>`가 있지만 `ref` 범위의 모든 칸을 수식 칸으로 셉니다(1.4.43). 다른 칸에
     계산된 값이 없거나(openpyxl은 왼쪽 위 칸만 씀) `fullCalcOnLoad`이면 계산된 값이 없는 칸입니다(전에는 왼쪽 위 칸만 셈).
   - 수식 칸 확인 자체가 실패하면(파일 손상, MemoryError 등) 0개로 보지 않고 `uncomputed_check: "unknown"`과

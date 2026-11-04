@@ -326,26 +326,77 @@ def _last_value_cell(ws: Any, r1: int, c1: int, r2: int, c2: int) -> Tuple[int, 
 _SHEET_SCANS: Dict[Tuple[str, str], Dict[str, Any]] = {}   # (경로, 시트) -> 이번 읽기에서 훑은 시트 전체의 계산되지 않은 수식 칸
 
 
+FAR_GAP = 1000   # 값이 있는 끝에서 이보다 멀리(행 또는 열) 떨어진 계산된 값이 없는 수식 칸은 읽는 범위에 넣지 않음
+_FAR: Dict[Tuple[str, str], Dict[str, Any]] = {}   # (경로, 시트) -> 범위에 넣지 않은 먼 칸 {"positions", "data_end"}
+
+
+def _box(cells: List[Tuple[int, int]]) -> Tuple[int, int, int, int]:
+    return (min(r for r, _ in cells), min(c for _, c in cells), max(r for r, _ in cells), max(c for _, c in cells))
+
+
 def _uncomputed_extent(path: str, title: str) -> Optional[Tuple[int, int, int, int]]:
     """시트 전체에서 계산된 값이 없는 수식 칸을 감싸는 범위 (없으면 None). 데이터로 범위를 정할 때(범위 생략, B:B, 큰 범위 줄이기)
-    끝쪽 행·열을 자르기 전에 확인합니다: 그런 칸은 빈 칸(None)으로 읽혀 합계 행 같은 수식 행·열이 잘려 나갔음(1.4.31까지)."""
+    끝쪽 행·열을 자르기 전에 확인합니다: 그런 칸은 빈 칸(None)으로 읽혀 합계 행 같은 수식 행·열이 잘려 나갔음(1.4.31까지).
+    값이 있는 끝에서 FAR_GAP보다 멀리 떨어진 칸(데이터 A1:C10과 Z200000)은 넣지 않고 _FAR에 남깁니다: 넣으면 그 칸까지
+    빈 행을 채워 읽고, 큰 범위의 [추천]이 그 칸을 빼는 범위가 되었음(1.4.44)."""
     if not path.lower().endswith((".xlsx", ".xlsm")):
         return None
     info = _SHEET_SCANS.get((path, title))
     if info is None:
-        info = _SHEET_SCANS[(path, title)] = rt.xlsx_uncomputed_formulas(path, title)
+        info = _SHEET_SCANS[(path, title)] = rt.xlsx_uncomputed_formulas(path, title, positions=True)
     b = info.get("bounds")
-    return (b[0], b[1], b[2], b[3]) if b else None
+    if not b:
+        return None
+    vb = info.get("value_bounds")
+    pos = info.get("positions") or []
+    if vb and pos and not info.get("positions_truncated"):
+        lim_r, lim_c = vb[2] + FAR_GAP, vb[3] + FAR_GAP
+        far = [p for p in pos if p[0] > lim_r or p[1] > lim_c]
+        if far:
+            near = [p for p in pos if p[0] <= lim_r and p[1] <= lim_c]
+            _FAR[(path, title)] = {"positions": far, "data_end": (vb[2], vb[3])}
+            return _box(near) if near else None
+    return (b[0], b[1], b[2], b[3])
+
+
+def _data_end(path: str, ws: Any) -> Tuple[int, int]:
+    """닫힌 시트의 데이터 끝 (행, 열): 파일에 적힌 크기(서식만 있는 칸 포함)에 가까운 계산되지 않은 수식 칸까지.
+    먼 칸이 있으면(파일 크기가 그 칸까지라) 값이 있는 끝과 가까운 수식 칸까지만."""
+    _, _, mr2, mc2 = _closed_bounds(ws)
+    ext = _uncomputed_extent(path, ws.title)
+    far = _FAR.get((path, ws.title))
+    if far:
+        mr2, mc2 = far["data_end"]
+    if ext:
+        mr2, mc2 = max(mr2, ext[2]), max(mc2, ext[3])
+    return mr2, mc2
+
+
+def far_uncomputed(path: str, sheet: str, asked: Tuple[int, int, int, int],
+                   read: Tuple[int, int, int, int]) -> Optional[Dict[str, Any]]:
+    """읽은 범위에 넣지 않은 먼 계산되지 않은 수식 칸 중 요청한 범위(asked) 안이고 읽은 범위(read) 밖인 칸. 없으면 None.
+    {"count", "cells"(앞 rt.UNCOMPUTED_SHOW개, 시트!주소), "box"(감싸는 주소)}."""
+    far = _FAR.get((path, sheet))
+    if not far:
+        return None
+    hits = [p for p in far["positions"]
+            if asked[0] <= p[0] <= asked[2] and asked[1] <= p[1] <= asked[3]
+            and not (read[0] <= p[0] <= read[2] and read[1] <= p[1] <= read[3])]
+    if not hits:
+        return None
+    hits.sort()
+    q = f"'{sheet}'" if re.search(r"[\s!']", sheet) else sheet
+    b = _box(hits)
+    return {"count": len(hits), "cells": [f"{q}!{addr(r, c)}" for r, c in hits[:rt.UNCOMPUTED_SHOW]],
+            "box": f"{q}!{addr(b[0], b[1], b[2], b[3])}"}
 
 
 def _clip_closed_range(path: str, ws: Any, address: str, r1: int, c1: int, r2: int, c2: int) -> Tuple[int, int]:
     """준 범위가 CLOSED_MAX_CELLS칸을 넘으면 데이터가 있는 끝(행·열)까지로 줄입니다 (빈 칸만 빠져 값은 같음).
     파일에 적힌 크기(<dimension>)가 서식만 있는 먼 칸(Z300000 등)까지라 그것으로도 넘으면 값을 훑어 실제 끝을 찾습니다
     (이전에는 기록된 크기만 보고 STOP_RETRY). 줄여도 넘으면 입력 오류와 [추천] 범위를 냅니다. 줄인 (끝 행, 끝 열)을 돌려줍니다."""
-    _, _, mr2, mc2 = _closed_bounds(ws)
+    mr2, mc2 = _data_end(path, ws)    # 계산된 값이 없는 수식 칸(빈 칸으로 읽힘)까지는 자르지 않음 (먼 칸 제외)
     ext = _uncomputed_extent(path, ws.title)
-    if ext:   # 계산된 값이 없는 수식 칸(빈 칸으로 읽힘)까지는 자르지 않음
-        mr2, mc2 = max(mr2, ext[2]), max(mc2, ext[3])
     nr2, nc2 = min(r2, max(mr2, r1)), min(c2, max(mc2, c1))
     if (nr2 - r1 + 1) * (nc2 - c1 + 1) > CLOSED_MAX_CELLS:
         nr2, nc2 = _last_value_cell(ws, r1, c1, nr2, nc2)
@@ -364,6 +415,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
     """닫힌 파일을 openpyxl로 읽습니다. (시트명, 시작행, 시작열, 값, 전체 시트명)"""
     import openpyxl
     _SHEET_SCANS.clear()      # 이번 읽기에서 훑은 것만 closed_uncomputed가 다시 씀
+    _FAR.clear()
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         names = list(wb.sheetnames)
@@ -385,15 +437,14 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
                 ws = wb[found]
             r1, c1, r2, c2 = parse_area(cells, None, None)
             if r2 is None or c2 is None:
-                _, _, mr2, mc2 = _closed_bounds(ws)
-                ext = _uncomputed_extent(path, ws.title)
-                if ext:   # 계산된 값이 없는 수식 칸(빈 칸으로 읽힘)의 행·열도 데이터 범위에 넣음
-                    mr2, mc2 = max(mr2, ext[2]), max(mc2, ext[3])
+                mr2, mc2 = _data_end(path, ws)   # 계산된 값이 없는 수식 칸(빈 칸으로 읽힘)의 행·열도 데이터 범위에 넣음
                 r1, c1, r2, c2 = parse_area(cells, mr2, mc2)
         else:
             # 열린 문서의 UsedRange처럼 데이터가 시작하는 칸부터 (A1부터 읽으면 rows가 열린 문서와 달랐음)
             r1, c1, r2, c2 = _closed_bounds(ws)
             ext = _uncomputed_extent(path, ws.title)
+            if (path, ws.title) in _FAR:          # 먼 칸 때문에 커진 파일 크기 대신 값이 있는 끝까지
+                r2, c2 = _FAR[(path, ws.title)]["data_end"]
             if ext:   # 계산된 값이 없는 수식 칸은 빈 칸으로 읽혀도 자르지 않고 남김 (합계 행 등이 있다는 것을 보이게)
                 r1, c1, r2, c2 = (ext if r2 < r1 or c2 < c1 else
                                   (min(r1, ext[0]), min(c1, ext[1]), max(r2, ext[2]), max(c2, ext[3])))
@@ -650,7 +701,37 @@ def cmd_read(args) -> Dict[str, Any]:
     payload = _read(args, found)
     if args.formulas:
         payload = _with_formulas(payload, found["formulas"])
-    return rt.with_uncomputed(payload, found.get("uncomputed"))
+    return _with_far(rt.with_uncomputed(payload, found.get("uncomputed")), found.get("far"), args.target)
+
+
+def _far_for_read(path: str, sheet: str, address: Optional[str], r0: int, c0: int,
+                  matrix: List[List[Any]]) -> Optional[Dict[str, Any]]:
+    """읽은 범위에 넣지 않은 먼 계산되지 않은 수식 칸 중 요청한 범위 안의 것 (범위 생략이면 시트 전체)."""
+    if (path, sheet) not in _FAR:
+        return None
+    asked = (1, 1, XL_MAX_ROW, XL_MAX_COL)
+    if address:
+        r1, c1, r2, c2 = parse_area(split_sheet(address)[1], XL_MAX_ROW, XL_MAX_COL)
+        asked = (r1, c1, r2 if r2 is not None else XL_MAX_ROW, c2 if c2 is not None else XL_MAX_COL)
+    width = max((len(r) for r in matrix), default=0)
+    read = (r0, c0, r0 + len(matrix) - 1, c0 + width - 1) if matrix and width else (0, 0, -1, -1)
+    return far_uncomputed(path, sheet, asked, read)
+
+
+def _with_far(payload: Dict[str, Any], far: Optional[Dict[str, Any]], target: str) -> Dict[str, Any]:
+    """R1: 읽지 않은 먼 계산되지 않은 수식 칸이 있으면 UNVERIFIED와 그 칸을 따로 읽는 명령 (1.4.44)."""
+    if not far or payload.get("status") != "ok":
+        return payload
+    fields = {k: v for k, v in payload.items() if k not in rt._PAYLOAD_BASE}
+    cmd = rt.next_command("excel.py", ["read", "--target", target, "--range", far["box"]],
+                          "데이터에서 멀리 떨어진 계산된 값이 없는 수식 칸만 따로 읽기")
+    fields["next_commands"] = list(fields.get("next_commands") or []) + [cmd]
+    fields.update(far_uncomputed_formulas=far["cells"], far_uncomputed_count=far["count"])
+    shown = ", ".join(far["cells"][:5]) + (" 등" if far["count"] > 5 else "")
+    note = (f"데이터에서 {FAR_GAP}행(열) 넘게 떨어진 계산된 값이 없는 수식 칸 {far['count']}개({shown})는 빈 행을 채우지 않으려고 "
+            "읽은 범위에 넣지 않음. 사용자에게 그대로 알리고, 그 칸이 필요하면 next_commands의 '따로 읽기' 명령을 쓰세요")
+    return rt.ok_unverified(payload["tool"], payload["command"], payload["preview"],
+                            list(payload.get("unverified") or []) + [note], **fields)
 
 
 def _read_formulas(fn: Any, *a: Any) -> List[Dict[str, Any]]:
@@ -687,6 +768,7 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     elif closed:
         sheet, r0, c0, matrix, names = _read_matrix_closed(closed, args.sheet, args.range)
         found["uncomputed"] = closed_uncomputed(closed, sheet, r0, c0, matrix)
+        found["far"] = _far_for_read(closed, sheet, args.range, r0, c0, matrix)
         if args.formulas:
             finfo["entries"] = _read_formulas(_closed_formulas, closed, sheet, r0, c0, matrix)
         source = {"app": "Excel", "name": os.path.basename(closed), "path": closed, "source": "file(openpyxl)"}
@@ -1519,10 +1601,11 @@ def cmd_export(args) -> Dict[str, Any]:
         sheet, r0, c0, matrix, _ = _read_matrix_closed(closed, args.sheet, args.range)
         out = rt.resolve_output_path(args.save, sheet, ".csv")
         out = rt.write_csv_rows(out, [[out_value(v) for v in r] for r in matrix], args.encoding)
-        return rt.with_uncomputed(rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
-                                             "VERIFIED: 저장한 파일을 확인했습니다.", delimiter=",", output_file=out,
-                                             rows=len(matrix)),
-                                  closed_uncomputed(closed, sheet, r0, c0, matrix))
+        far = _far_for_read(closed, sheet, args.range, r0, c0, matrix)
+        return _with_far(rt.with_uncomputed(rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
+                                                       "VERIFIED: 저장한 파일을 확인했습니다.", delimiter=",", output_file=out,
+                                                       rows=len(matrix)),
+                                            closed_uncomputed(closed, sheet, r0, c0, matrix)), far, args.target)
 
     with off.open_target("excel", args.target, readonly=True) as t:
         ws = t.sheet(args.sheet)

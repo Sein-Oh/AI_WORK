@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.43"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.44"                         # SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -944,6 +944,7 @@ def read_csv_rows(path: str, delimiter: Optional[str] = None) -> List[List[str]]
     return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
 
 
+UNCOMPUTED_POSITIONS = 100_000   # positions=True일 때 담는 칸 위치 수 상한 (넘으면 멀리 떨어진 칸을 가려내지 않음)
 UNCOMPUTED_SHOW = 20       # 계산된 값이 없는 수식 칸을 결과에 담는 개수 상한
 _XLSX_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _XLSX_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -999,7 +1000,7 @@ def xlsx_full_calc_on_load(path: str) -> bool:
 
 def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                              area: Optional[Tuple[int, int, int, int]] = None,
-                             limit: int = UNCOMPUTED_SHOW) -> Dict[str, Any]:
+                             limit: int = UNCOMPUTED_SHOW, positions: bool = False) -> Dict[str, Any]:
     """계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 한 번도 열지 않은 파일).
     openpyxl data_only로 읽으면 이런 칸은 빈 칸(None)이라 값이 없는 것처럼 보입니다.
     workbook.xml에 fullCalcOnLoad 표시가 있으면(xlsxwriter는 <v>0</v>을 씀) 모든 수식 칸을 계산되지 않은 칸으로 셉니다.
@@ -1008,12 +1009,27 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
     (빈 글 결과(t="str")는 계산된 값).
     반환: {"count": 전체 수, "cells": ["시트!A3", ...] (앞 limit개), "sheets": {시트: 수},
     "bounds": [시작 행, 시작 열, 끝 행, 끝 열] (센 칸 전체를 감싸는 범위, 0개면 없음), "full_calc_on_load": True (표시가 있을 때만)}.
+    positions=True(시트 하나를 볼 때): "positions"(센 칸 (행, 열) 목록, UNCOMPUTED_POSITIONS개까지, 넘으면 "positions_truncated")와
+    "value_bounds"(값이 있는 칸(계산된 값이 없는 수식 칸 제외)을 감싸는 범위, 없으면 키 없음)도 줍니다 (멀리 떨어진 칸 가려내기용).
     읽지 못하면(MemoryError 포함) {"count": 0, "unknown": True, "error": 예외 이름}: 확인하지 못한 것이라 호출하는 쪽은 UNVERIFIED."""
     import posixpath
     import zipfile
     import xml.etree.ElementTree as ET
     result: Dict[str, Any] = {"count": 0, "cells": [], "sheets": {}}
     bounds: List[int] = []
+    vbounds: List[int] = []
+    pos: List[Tuple[int, int]] = []
+    pos_cut = False
+
+    def grow(box: List[int], r1: int, c1: int, r2: int, c2: int) -> List[int]:
+        return [r1, c1, r2, c2] if not box else [min(box[0], r1), min(box[1], c1), max(box[2], r2), max(box[3], c2)]
+
+    def keep_pos(rc: Tuple[int, int]) -> None:
+        nonlocal pos_cut
+        if len(pos) < UNCOMPUTED_POSITIONS:
+            pos.append(rc)
+        else:
+            pos_cut = True
     try:
         with zipfile.ZipFile(path) as z:
             names = set(z.namelist())
@@ -1044,8 +1060,9 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                     if len(result["cells"]) < limit:
                         result["cells"].append(f"{q}!{ref}")
                     if rc is not None:
-                        bounds = [rc[0], rc[1], rc[0], rc[1]] if not bounds else [
-                            min(bounds[0], rc[0]), min(bounds[1], rc[1]), max(bounds[2], rc[0]), max(bounds[3], rc[1])]
+                        bounds = grow(bounds, rc[0], rc[1], rc[0], rc[1])
+                        if positions:
+                            keep_pos(rc)
 
                 def in_area(rc: Optional[Tuple[int, int]]) -> bool:
                     return area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
@@ -1067,6 +1084,7 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                         box = _array_box(f.get("ref") or "")
                         if box is not None and box != (rc[0], rc[1], rc[0], rc[1]):
                             arrays.append([box[0], box[1], box[2], box[3], rc, set()])
+                    counted_before = n
                     if f is not None and (full or el.get("t") not in ("str", "inlineStr")):
                         if (full or v is None or not (v.text or "")) and in_area(rc):
                             count(rc, ref)
@@ -1079,6 +1097,9 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                                 if (full or not computed) and in_area(rc):
                                     count(rc, ref)
                                 break
+                    if positions and rc is not None and n == counted_before and (
+                            (v is not None and (v.text or "")) or el.find(_XLSX_MAIN + "is") is not None):
+                        vbounds = grow(vbounds, rc[0], rc[1], rc[0], rc[1])
                     el.clear()
                 # 배열 수식의 다른 칸 중 파일에 아예 없는 칸 (openpyxl은 왼쪽 위 칸만 씀): 계산된 값이 없는 수식 칸
                 for r1, c1, r2, c2, anchor, seen in arrays:
@@ -1103,8 +1124,13 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
                             result["cells"].append(f"{q}!{_col_letters(cc)}{rr}")
                             shown += 1
                     n += missing
-                    bounds = [r1, c1, r2, c2] if not bounds else [
-                        min(bounds[0], r1), min(bounds[1], c1), max(bounds[2], r2), max(bounds[3], c2)]
+                    bounds = grow(bounds, r1, c1, r2, c2)
+                    if positions:
+                        if missing > UNCOMPUTED_POSITIONS - len(pos):
+                            pos_cut = True
+                        else:
+                            pos.extend((rr, cc) for rr in range(r1, r2 + 1) for cc in range(c1, c2 + 1)
+                                       if (rr, cc) not in seen and (rr, cc) != anchor)
                 if n:
                     result["count"] += n
                     result["sheets"][title] = n
@@ -1113,6 +1139,12 @@ def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
         return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": type(e).__name__}
     if bounds:
         result["bounds"] = bounds
+    if positions:
+        result["positions"] = pos
+        if pos_cut:
+            result["positions_truncated"] = True
+        if vbounds:
+            result["value_bounds"] = vbounds
     return result
 
 
