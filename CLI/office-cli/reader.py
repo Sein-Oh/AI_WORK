@@ -1630,13 +1630,34 @@ def _uncomputed_from_check(meta: Dict[str, Any], uncomputed: Dict[str, Any]) -> 
         meta["uncomputed_formulas"] = uncomputed
 
 
+RECHECK_MAX = 3                  # 한 실행에서 수식 칸을 다시 확인하는 문서 수 상한 (큰 엑셀이 많으면 검색 한 번이 시간 제한을 넘던 문제)
+_RECHECK_RUN: Dict[str, Any] = {"run": None, "done": 0}
+
+
+def _recheck_allowed() -> bool:
+    """이번 실행에서 수식 칸 다시 확인을 더 해도 되는지 (상한 RECHECK_MAX, 시간 제한에서 여유를 뺀 시각 전)."""
+    if _RECHECK_RUN["run"] != rt.RUN_START:              # 실행마다 새로 셈 (테스트처럼 한 프로세스에서 여러 번 실행해도)
+        _RECHECK_RUN.update(run=rt.RUN_START, done=0)
+    if _RECHECK_RUN["done"] >= RECHECK_MAX:
+        return False
+    limit = rt.time_limit()
+    if limit != float("inf") and time.monotonic() - rt.RUN_START > limit - rt.TIME_RESERVE:
+        return False
+    _RECHECK_RUN["done"] += 1
+    return True
+
+
 def recheck_uncomputed(doc: Dict[str, Any], cache_file: Optional[str] = None) -> Dict[str, Any]:
     """캐시의 '수식 칸 확인 실패'(MemoryError 등 일시적 실패)는 결과로 믿지 않고 캐시를 쓸 때마다 다시 확인합니다.
-    확인되면 meta를 고치고 캐시 파일도 고쳐 씁니다(실패는 무시). 다시 실패하면 그대로 (UNVERIFIED 유지)."""
+    확인되면 meta를 고치고 캐시 파일도 고쳐 씁니다(실패는 무시). 다시 실패하면 그대로 (UNVERIFIED 유지).
+    한 실행에서 RECHECK_MAX개까지, 시간 제한 여유 안에서만 (넘으면 확인하지 않은 채 UNVERIFIED 유지, 다음 실행에서 다시)."""
     meta = doc.get("meta") or {}
     info = meta.get("uncomputed_formulas")
     path = doc.get("file", "")
     if not (isinstance(info, dict) and info.get("unknown")) or doc.get("type") != "xlsx" or not os.path.isfile(path):
+        return doc
+    if not _recheck_allowed():
+        rt.debug(f"수식 칸 다시 확인 상한/시간 초과로 건너뜀: {os.path.basename(path)}")
         return doc
     again = rt.xlsx_uncomputed_formulas(path)
     if again.get("unknown"):
@@ -2518,9 +2539,18 @@ _SEP = r"[\W_]*"          # 글자 사이에 끼어도 되는 것: 띄어쓰기,
 
 # 검색어 낱말 끝의 조사·어미: 떼고 찾음 (글에서는 낱말 뒤에 무엇이 와도 맞음). 긴 것부터.
 # 떼고 남는 글이 2자 이상일 때만 ('높이', '단가', '회의'는 그대로). '도'·'만'은 낱말 끝 글자인 경우가 많아('정확도') 떼지 않음.
+# '로'는 낱말 끝 글자인 경우가 많아('회로', '경로') 떼지 않음('으로'는 뗌).
 _PARTICLES = ("에서의", "에서는", "으로는", "으로서", "으로써", "이어야", "에서", "으로", "에는", "에게", "까지", "부터",
-              "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "및")
+              "보다", "과의", "와의", "이며", "이고", "이다", "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "및")
+# 받침에 따라 붙는 조사: 앞 글자의 받침이 맞을 때만 뗌 ('와이파이', '역효과'의 끝 글자는 조사가 아님)
+_AFTER_FINAL = {"이", "은", "을", "과", "이며", "이고", "이다", "이어야", "과의"}       # 받침 있는 글자 뒤
+_AFTER_OPEN = {"가", "는", "를", "와", "와의"}                                      # 받침 없는 글자 뒤
 _HANGUL = re.compile(r"[\uac00-\ud7a3]")
+
+
+def _has_final(ch: str) -> bool:
+    """한글 음절에 받침이 있는지."""
+    return (ord(ch) - 0xAC00) % 28 != 0
 
 
 def _strip_word(word: str) -> str:
@@ -2528,6 +2558,9 @@ def _strip_word(word: str) -> str:
         return word
     for p in _PARTICLES:
         if word.endswith(p) and len(word) - len(p) >= 2 and _HANGUL.match(word[len(word) - len(p) - 1]):
+            before = word[len(word) - len(p) - 1]
+            if (p in _AFTER_FINAL and not _has_final(before)) or (p in _AFTER_OPEN and _has_final(before)):
+                continue
             return word[: -len(p)]
     return word
 
@@ -2566,6 +2599,9 @@ def _single_pattern(term: str) -> str:
     t = strip_particles(unicodedata.normalize("NFKC", term))       # 전각 -> 반각, ℃ -> °C
     compact = re.sub(r"\s+", "", t)
     core = re.sub(r"[\W_]+", "", compact)
+    if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+", compact):
+        # 숫자 하나: 천 단위 쉼표·소수 끝 0과 무관 ('5,000' = '5000', '0.5' = '0.50'), 숫자 경계는 지킴 ('0.5'는 '10.5'와 다름)
+        return r"(?<![\d.])" + _number(compact) + r"(?![.,]?\d)"
     if not core or (core.isdigit() and core != compact):
         chars = compact or t
         body = r"\s*".join(_char(c) for c in chars)      # 기호까지 그대로 ('1.2'는 '12'와 다름)
@@ -3844,8 +3880,11 @@ def cmd_diff(args) -> Dict[str, Any]:
         header = ["구분", "숫자 변경", "요약", "이전 근거", "이전 글", "새 근거", "새 글"]
         rows = [[c["kind"], ", ".join(c["number_changes"]), c["summary"], c["old_evidence"], c["old_text"],
                  c["new_evidence"], c["new_text"]] for c in changes]
-        ext = ".xlsx" if not args.save else (os.path.splitext(str(args.save))[1].lower() or ".xlsx")
-        ext = ext if ext in (".xlsx", ".csv") else ".xlsx"
+        asked = "" if not args.save else os.path.splitext(str(args.save).strip().strip('"'))[1].lower()
+        ext = asked if asked in (".xlsx", ".csv") else ".xlsx"
+        if asked and asked != ext:
+            # 말없이 .xlsx로 바꾸던 문제: 바꾼 사실을 warnings로 알림
+            result.setdefault("warnings", []).append(f"diff는 .xlsx와 .csv로만 저장합니다: --save의 {asked} 대신 .xlsx로 저장")
         if args.save:
             out = rt.resolve_output_path(args.save, "diff", ext)
         else:
@@ -3876,7 +3915,8 @@ def cmd_diff(args) -> Dict[str, Any]:
         return rt.ok_unverified(TOOL, "diff", preview, problems, **result)
     return rt.ok(TOOL, "diff", preview,
                  "VERIFIED: 두 문서를 비교했습니다. 숫자가 바뀐 곳(numeric, number_changes)을 먼저, 항목마다 이전·새 근거(old_evidence, new_evidence)와 "
-                 "함께 사용자에게 알리세요" + (". 전체 목록은 full_result_file" if result["truncated"] else "") + ".", verified=True, **result)
+                 "함께 사용자에게 알리세요" + (". 전체 목록은 full_result_file" if result["truncated"] else "")
+                 + (". warnings도 그대로 알리세요" if result.get("warnings") else "") + ".", verified=True, **result)
 
 
 # ==============================================================================

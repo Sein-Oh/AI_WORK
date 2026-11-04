@@ -1324,6 +1324,27 @@ def test_check_failure_rechecked_in_index_search(tmp_path, capsys, monkeypatch):
     assert code == 0 and out["agent_directive"].startswith("VERIFIED: 0건."), out
 
 
+def test_recheck_uncomputed_is_capped_per_run(tmp_path, capsys, monkeypatch):
+    # 회귀: 확인 실패가 남은 큰 엑셀이 많으면 검색 한 번에 모두 다시 확인해 시간 제한을 넘음
+    files = [formula_xlsx(tmp_path / f"c{i}.xlsx", cached=True) for i in range(reader.RECHECK_MAX + 2)]
+    calls = []
+
+    def failing(*a, **k):
+        calls.append(1)
+        return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"}
+    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", failing)
+    for f in files:
+        run_main(reader, capsys, "index", "--file", f)
+    calls.clear()
+    code, out = run_main(reader, capsys, "search", "--query", "없는글자ZQX")
+    assert code == 0 and len(calls) == reader.RECHECK_MAX, calls
+    assert out["agent_directive"].startswith("UNVERIFIED:"), out          # 확인하지 못한 문서는 그대로 UNVERIFIED
+    calls.clear()
+    monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)       # 시간 여유가 없으면 다시 확인하지 않음
+    run_main(reader, capsys, "search", "--query", "없는글자ZQX")
+    assert calls == []
+
+
 def test_reader_read_and_search(tmp_path, capsys):
     p = formula_xlsx(tmp_path / "f.xlsx")
     code, out = run_main(reader, capsys, "read", "--file", p)
@@ -2781,3 +2802,30 @@ def test_search_section_number_excludes_2_10(tmp_path, capsys):
     f.write_text("# 2. 전기\n\n## 2.1 정격\n\n정격 전압 5 V\n\n## 2.10 기타\n\n정격 전압 12 V\n", encoding="utf-8")
     code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--file", str(f), "--section", "2.1")
     assert code == 0 and out["count"] == 1 and "5 V" in json.dumps(out["matches"][0], ensure_ascii=False), out
+
+
+# ---------------------------------------------------------------------------
+# 숫자만 든 검색어, 낱말 끝 조사 (1.4.70)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query,text,want", [
+    ("5,000", "5000 rpm", True), ("5000", "5,000 rpm", True), ("0.5", "0.50 mm", True), ("0.50", "0.5 mm", True),
+    ("0.5", "10.5 mm", False), ("0.5", "0.55 mm", False), ("1.2", "11.2", False), ("1.2", "3.1.2절", False),
+    ("1.2", "12", False), ("5,000", "15,000", False),
+])
+def test_number_only_query_normalized(query, text, want):
+    assert (reader.build_matcher(query, False)(text) is not None) is want
+
+
+def test_word_final_syllable_is_not_particle():
+    assert reader.strip_particles("와이파이 보호회로 역효과") == "와이파이 보호회로 역효과"
+    assert reader.strip_particles("정격전압이 전류가 저항은 시험을 케이블의 전압으로") == "정격전압 전류 저항 시험 케이블 전압"
+    assert reader.build_matcher("와이파이", False)("와이파 모듈") is None
+
+
+def test_diff_save_md_warns_xlsx(tmp_path, capsys):
+    # 회귀: diff --save x.md가 말없이 .xlsx로 저장됨
+    old, new = _two_versions(tmp_path)
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--save", str(tmp_path / "차이.md"))
+    assert code == 0 and out["output_file"].endswith(".xlsx"), out
+    assert any(".md" in w and ".xlsx" in w for w in out["warnings"]) and "warnings" in out["agent_directive"], out

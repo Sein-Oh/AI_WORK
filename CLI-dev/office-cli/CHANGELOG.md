@@ -31,6 +31,10 @@
   directive `UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 N건 ...`(옛 `recovered` "넓혀 찾음"은 없앰). `matched_terms`는 글자 그대로 맞은 검색어만.
   `excel.py check`의 `판단필요`는 그대로. office-spec 스킬과 전역 지침 `CLI-dev/opencode/AGENTS.md`의 match_mode 문구를 맞춤.
   회귀 테스트: `tests/test_reader.py` `test_search_fuzzy_daegi_current_is_not_power`, `test_fuzzy_never_matches_different_korean_terms`.
+- 경미: 숫자만 든 검색어 정규화(`5,000` = `5000`, `0.5` = `0.50`, 숫자 경계는 지킴). 검색어 낱말 끝 조사는 받침이 맞을 때만 떼고 `로`는 떼지 않음
+  (`와이파이` -> `와이파`, `보호회로` -> `보호회`로 떼던 문제). 캐시의 수식 칸 다시 확인(`recheck_uncomputed`)은 한 실행에 3개·시간 여유 안에서만.
+  `diff --save x.md`가 말없이 `.xlsx`로 저장하던 것을 `warnings`로 알림. 회귀 테스트: `tests/test_reader.py` `test_number_only_query_normalized`,
+  `test_word_final_syllable_is_not_particle`, `test_recheck_uncomputed_is_capped_per_run`, `test_diff_save_md_warns_xlsx`.
 
 ### 개발 도구
 - Gemma 종합 테스트 채점(`CLI-dev/grade_opencode.py`, `agent_scenarios.yaml` 묶음 O): 채점기가 `;`·`&&`·`||`·`|`로 이은 명령을 나눠(따옴표 안은 그대로)
