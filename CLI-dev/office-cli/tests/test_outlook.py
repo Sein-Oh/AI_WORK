@@ -58,8 +58,14 @@ class Mail:
         self.HTMLBody = html
         self.Recipients = Recips(list(recips))
         self.Attachments = Attachments()
-        self.sent = self.displayed = False
+        self.sent = self.displayed = self.saved = False
+        self.Sent = False
+        self.EntryID = ""
         self.GetInspector = object()
+
+    def Save(self):                                          # 임시 보관함에 저장하면 EntryID가 생김
+        self.saved = True
+        self.EntryID = self.EntryID or "DRAFT-NEW"
 
     def Send(self):
         self.sent = True
@@ -128,6 +134,10 @@ class _DraftMail:
         self.Attachments = type("A", (), {"added": [], "Add": lambda s, p: s.added.append(p), "Count": 0})()
         self.GetInspector = object()
         self.displayed = False
+        self.EntryID = ""
+
+    def Save(self):
+        self.EntryID = "DRAFT-X"
 
     def Display(self):
         self.displayed = True
@@ -353,6 +363,9 @@ class FakeRecipients:
 
 
 class FakeDraft:
+    """작성 중인 메일 (Outlook MailItem: 보내기 전 Sent == False, Save()로 임시 보관함에 저장되면 EntryID가 생김)."""
+    _n = 0
+
     def __init__(self, atts=(), grow=True):
         self.To = ""
         self.Subject = ""
@@ -360,13 +373,23 @@ class FakeDraft:
         self.Attachments = FakeAttachments(atts, grow)
         self.Recipients = FakeRecipients()
         self.GetInspector = object()
-        self.displayed = self.sent = False
+        self.Class = outlook.OL_MAIL
+        self.Sent = False
+        self.EntryID = ""
+        self.displayed = False
+        self.sent = 0
+
+    def Save(self):
+        if not self.EntryID:
+            FakeDraft._n += 1
+            self.EntryID = f"D{FakeDraft._n}"
 
     def Display(self):
         self.displayed = True
 
     def Send(self):
-        self.sent = True
+        self.sent += 1
+        self.Sent = True
 
 
 class FakeMail:
@@ -380,6 +403,7 @@ class FakeMail:
         self.CC = ""
         self.UnRead = False
         self.Class = outlook.OL_MAIL
+        self.Sent = True                                     # 받은 메일
         self.ReceivedTime = datetime.datetime(2026, 11, 4, 9, 0)
         self.Attachments = FakeAttachments(atts)
         self.grow = grow
@@ -414,9 +438,11 @@ class FakeOutlookApp:
         self.mail = mail
         self.created = []
         self.grow = grow
+        self.inspector_item = None                           # 열린 창의 메일 (작성 창이면 초안)
 
     def ActiveInspector(self):
-        return None
+        item = self.inspector_item
+        return None if item is None else type("I", (), {"CurrentItem": item})()
 
     def ActiveExplorer(self):
         return type("E", (), {"Selection": FakeSelection(self.mail)})()
@@ -445,8 +471,13 @@ def ol_env(monkeypatch, tmp_path):
 
     def get_namespace(app):
         def find(i):
-            if state["app"].mail is not None and i == state["app"].mail.EntryID:
-                return state["app"].mail
+            app = state["app"]
+            if app.mail is not None and i == app.mail.EntryID:
+                return app.mail
+            drafts = app.created + (app.mail.drafts if app.mail is not None else [])
+            for d in drafts:                                 # 보낸 초안은 보낼 편지함으로 옮겨져 같은 EntryID로 찾지 못함
+                if d.EntryID == i and not (d.sent and state.get("sent_moves", True)):
+                    return d
             raise RuntimeError("없음")
         return type("NS", (), {"GetItemFromID": staticmethod(find)})()
     monkeypatch.setattr(outlook, "get_namespace", get_namespace)
@@ -536,23 +567,64 @@ def ol(monkeypatch):
 def test_default_is_display_only(capsys, monkeypatch):
     mail = Mail([Recip("a@x.com", True)])
     code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "첫줄\\n둘째줄")
-    assert code == 0 and mail.displayed and not mail.sent and out["sent"] is False
-    assert "대신 발송하지 마세요" in out["agent_directive"]
+    assert code == 0 and mail.displayed and mail.saved and not mail.sent and out["sent"] is False
+    assert "대신 발송하지 마세요" in out["agent_directive"] and "next_commands[0](send)" in out["agent_directive"]
+    nxt = out["next_commands"][0]
+    assert nxt["needs_user_confirm"] is True and nxt["command"].endswith(f"send --id {out['draft_id']}"), out
     body_pos = mail.HTMLBody.index("첫줄<br>둘째줄")
     assert mail.HTMLBody.index("<body>") < body_pos < mail.HTMLBody.index("서명")     # 서명 위, body 안
 
 
-def test_explicit_send_after_recipient_check(capsys, monkeypatch):
-    mail = Mail([Recip("a@x.com", True)])
-    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "s", "--send")
-    assert code == 0 and mail.sent and out["sent"] is True
+def test_compose_has_no_send_flag(capsys, monkeypatch):
+    # 1.4.72: new/reply/forward는 보내지 않음 (발송은 저장한 초안을 send로만: 같은 메일을 또 만들어 보내는 길이 없음)
+    code, out = run(capsys, monkeypatch, Mail(), "new", "--to", "a@x.com", "--send")
+    assert code == 2 and out["status"] == "error", out
+
+
+def test_send_sends_saved_draft_once(ol_env, capsys):
+    code, out = run_outlook(capsys, "new", "--to", "a@x.com", "--subject", "s")
+    d = ol_env["app"].created[0]
+    assert code == 0 and d.displayed and d.sent == 0 and out["draft_id"], out
+    cmd = out["next_commands"][0]["command"].split(" send ")[1].split()
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 0 and d.sent == 1 and out["sent"] is True and out["agent_directive"].startswith("UNVERIFIED:"), out
+    # 같은 send를 다시 실행해도 (이미 보낸 초안) 다시 나가지 않음
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 1 and d.sent == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "보내지 않았습니다" in out["message"]
+    # Outlook이 보낸 항목을 같은 EntryID로 돌려주더라도 Sent == True면 보내지 않음
+    ol_env["sent_moves"] = False
+    code, out = run_outlook(capsys, "send", *cmd)
+    assert code == 1 and d.sent == 1 and "초안이 아니" in out["message"], out
+
+
+def test_send_refuses_received_mail(ol_env, capsys):
+    m = _attach_mail(ol_env)
+    code, out = run_outlook(capsys, "send", "--id", "M1")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and m.drafts == [], out
 
 
 def test_unresolved_recipient_is_not_sent(capsys, monkeypatch):
     mail = Mail([Recip("오타주소", False)])
-    code, out = run(capsys, monkeypatch, mail, "new", "--to", "오타주소", "--send")
+    mail.EntryID = "D-BAD"
+    monkeypatch.setattr(outlook, "get_namespace", lambda app: types.SimpleNamespace(GetItemFromID=lambda i: mail))
+    code, out = run(capsys, monkeypatch, mail, "send", "--id", "D-BAD")
     assert code == 1 and not mail.sent and mail.displayed
     assert out["unresolved_recipients"] == ["오타주소"] and out["agent_directive"].startswith("STOP_RETRY")
+
+
+def test_reply_without_id_refuses_open_draft(ol_env, capsys):
+    # 9차 검토: 1단계 초안 창이 열린 채 --id 없는 reply가 그 초안(Sent == False)을 원본으로 잡아 초안에 답장하던 위험
+    m = _attach_mail(ol_env, subject="견적 회신 요청")
+    code, out = run_outlook(capsys, "reply", "--id", "M1", "--body", "확인했습니다.")
+    assert code == 0 and len(m.drafts) == 1, out
+    ol_env["app"].inspector_item = m.drafts[0]                      # 초안 작성 창이 열려 있음
+    for cmd in (["reply"], ["forward", "--to", "b@corp.com"]):
+        code, out = run_outlook(capsys, *cmd)
+        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--id" in out["message"], out
+        assert out["next_commands"][0]["command"].endswith(" list"), out
+    code, out = run_outlook(capsys, "reply", "--id", m.drafts[0].EntryID)      # --id로 초안을 줘도 원본이 아님
+    assert code == 1 and "초안" in out["message"], out
+    assert len(m.drafts) == 1 and m.drafts[0].sent == 0                # 초안이 더 생기거나 나가지 않음
 
 
 def test_attach_resolves_data_dir_and_missing_is_suggested(capsys, monkeypatch):
@@ -896,7 +968,7 @@ def test_outlook_new_checks_attachment_before_creating_mail(monkeypatch, tmp_pat
     created = []
     monkeypatch.setattr(outlook, "get_outlook", lambda: types.SimpleNamespace(CreateItem=lambda k: created.append(k)))
     args = types.SimpleNamespace(to="a@x", cc=None, subject="s", body="b", body_file=None,
-                                 attach=str(tmp_path / "없는파일.pdf"), send=False)
+                                 attach=str(tmp_path / "없는파일.pdf"))
     with pytest.raises(rt.InputError):
         outlook.cmd_new(args)
     assert created == []
@@ -1150,9 +1222,7 @@ def test_attach_count_not_grown_is_unverified_and_not_sent(ol_env, capsys, tmp_p
     m = _attach_mail(ol_env, grow=False)
     code, out = run_outlook(capsys, "reply", "--id", "M1", "--attach", str(f))
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and m.drafts[0].displayed
-    code, out = run_outlook(capsys, "reply", "--id", "M1", "--attach", str(f), "--send")
-    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:")
-    assert m.drafts[1].displayed and not m.drafts[1].sent                     # 첨부가 빠진 메일을 보내지 않음
+    assert "next_commands" not in out and not m.drafts[0].sent                # 첨부가 빠진 초안은 보내는 명령을 주지 않음
 
 
 # ---------------------------------------------------------------------------
@@ -1503,7 +1573,7 @@ def test_short_id_older_than_keep_days_is_missing(monkeypatch):
     assert outlook.entry_id("2") == "A2"
 
 
-@pytest.mark.parametrize("cmd", [["reply", "--send"], ["forward", "--to", "b@corp.com", "--send"], ["reply"]])
+@pytest.mark.parametrize("cmd", [["reply", "--all"], ["forward", "--to", "b@corp.com"], ["reply"]])
 def test_reply_forward_report_original_mail(ol_env, capsys, cmd):
     m = _attach_mail(ol_env, subject="견적 회신 요청")
     code, out = run_outlook(capsys, cmd[0], "--id", "M1", *cmd[1:])

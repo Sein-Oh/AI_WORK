@@ -202,7 +202,7 @@ def test_skill_mentions_new_and_existing_features():
                        "outline", "revisions", "notes --slide", "--page-number", "transfer --from word --what text",
                        "office.py\" undo", "focus --app"),
         "office-mail": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
-                        "--days 7", "--since 2026-11-01", "thread --id", "calendar --days", "attachments --id", "--send"),
+                        "--days 7", "--since 2026-11-01", "thread --id", "calendar --days", "attachments --id", "send --id"),
         "office-spec": ("reader.py\" index --folder", "--section", "search --query", "diff --file", "--file2", "list [--name",
                         "clear --name", "--missing", "synonyms.txt", "--regex", "excel.py\" check", "comment --action add",
                         "not_searched", "match_mode"),

@@ -10,13 +10,13 @@
     folders  폴더 구조와 안 읽은 메일 수
     attachments  첨부 목록, --save 로 내려받기 (기본: %USERPROFILE%\\Downloads\\메일 첨부\\<시각>_<제목>)
 
-작성 (기본: 작성 창만 띄우고 사용자가 직접 [보내기]):
+작성 (초안을 임시 보관함에 저장하고 작성 창만 띄움. 보내지 않음):
     new      새 메일
-    reply    답장 (--all: 전체 답장). 원본 대화 이력 유지
+    reply    답장 (--all: 전체 답장). 원본 대화 이력 유지. 보내지 않은 초안은 원본으로 쓰지 않음
     forward  전달
-
---send 는 사용자가 "보내줘", "바로 발송"처럼 발송을 분명히 요청한 경우에만 씁니다.
-발송 전 수신자 주소를 확인하고, 확인되지 않으면 보내지 않고 작성 창으로 바꿉니다.
+    send     new/reply/forward가 저장한 초안(draft_id) 보내기. 결과의 next_commands[0]을 사용자가 확인한 뒤에만.
+             같은 초안은 한 번만 나감 (이미 보냈거나 지운 초안, 받은 메일은 보내지 않음).
+             발송 전 수신자 주소를 확인하고, 확인되지 않으면 보내지 않고 작성 창을 띄웁니다.
 
 예:
     python outlook.py current
@@ -610,7 +610,8 @@ def cmd_attachments(args) -> Dict[str, Any]:
     if listing and (args.name or args.index):
         raise rt.InputError("--name/--index는 --save와 함께 씁니다. 목록만 보려면 둘 다 빼세요. "
                             "[추천] 같은 명령 끝에 --save를 붙이세요.")
-    item = _target_item(get_outlook(), args, "첨부를 볼 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.")
+    item = _target_item(get_outlook(), args, "첨부를 볼 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.",
+                        original=False)
     subject = _text(getattr(item, "Subject", ""))
     infos = _attachment_infos(item)
     base: Dict[str, Any] = {"mail": {"entry_id": _text(getattr(item, "EntryID", "")), **_original_info(item)}}
@@ -817,55 +818,104 @@ def _original_note(original: Optional[Dict[str, Any]]) -> str:
     return f" (원본: '{original['subject']}', 보낸사람 {original['from'] or '(없음)'}, {original['received']})"
 
 
-def _finalize(mail: Any, send: bool, command: str, attach: Tuple[List[str], List[str]],
+def _unresolved(mail: Any) -> List[str]:
+    """보내기 전 수신자 확인: 확인하지 못한 수신자 이름 (없으면 빈 목록)."""
+    try:
+        recips = mail.Recipients
+        if recips.Count == 0:
+            return ["(수신자 없음)"]
+        if not recips.ResolveAll():
+            return [str(recips.Item(i).Name) for i in range(1, recips.Count + 1) if not recips.Item(i).Resolved]
+    except Exception as e:
+        return [f"(수신자 확인 실패: {e})"]
+    return []
+
+
+def _save_draft(mail: Any) -> str:
+    """작성한 메일을 임시 보관함에 저장하고 EntryID를 돌려줍니다 (저장하지 못하면 빈 글자)."""
+    try:
+        mail.Save()
+        return _text(getattr(mail, "EntryID", ""))
+    except Exception as e:
+        rt.log("WARN", f"초안을 임시 보관함에 저장하지 못함: {type(e).__name__}")
+        return ""
+
+
+def _draft_id(eid: str, subject: str, warnings: List[str]) -> str:
+    """초안에 짧은 번호를 붙임 (붙이지 못하면 EntryID 그대로)."""
+    m: Dict[str, Any] = {"entry_id": eid, "subject": subject, "from": "", "received": ""}
+    warn = remember_listing([m], "draft")
+    if warn:
+        warnings.append(warn)
+    return str(m["id"])
+
+
+def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
               original: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """작성한 메일을 초안으로 저장하고 작성 창을 띄움. 보내지 않고, 이 초안(같은 항목)을 보내는 send 명령을 next_commands에.
+    new/reply/forward에 --send가 없음 (1.4.72): 초안 창이 열린 채 같은 메일을 또 만들어 보내거나(중복 발송),
+    --id 없는 두 번째 명령이 열린 초안을 원본으로 잡아 초안에 답장·전달하는 일(엉뚱한 대상)이 구조적으로 생기지 않게."""
     attached, attach_problems = attach
     extra: Dict[str, Any] = {"to": _text(getattr(mail, "To", "")), "subject": _text(getattr(mail, "Subject", "")),
                              "attached": attached, "sent": False}
     note = _original_note(original)
     if original is not None:
         extra["original"] = original
-    if attach_problems:
-        # 첨부를 확인하지 못했으면 발송하지 않음: 첨부가 빠진 메일이 나가면 되돌릴 수 없음
-        mail.Display()
-        what = "; ".join(attach_problems)
-        if send:
-            return {"status": "error", "tool": TOOL, "command": command, "error_type": "input",
-                    "message": f"첨부를 확인하지 못해 보내지 않고 작성 창을 띄웠습니다: {what}",
-                    "agent_directive": "STOP_RETRY: 발송하지 않았습니다. 사용자에게 작성 창의 첨부를 확인하고 직접 보내라고 알리세요.",
-                    "attach_problems": attach_problems, **extra}
-        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄웠습니다: '{extra['subject']}'",
-                                attach_problems + ["사용자에게 작성 창의 첨부를 확인하라고 알리세요"], **extra)
-    if send:
-        unresolved: List[str] = []
-        try:
-            recips = mail.Recipients
-            if recips.Count == 0:
-                unresolved.append("(수신자 없음)")
-            elif not recips.ResolveAll():
-                unresolved = [str(recips.Item(i).Name) for i in range(1, recips.Count + 1) if not recips.Item(i).Resolved]
-        except Exception as e:
-            unresolved.append(f"(수신자 확인 실패: {e})")
-        if unresolved:
-            mail.Display()
-            extra["unresolved_recipients"] = unresolved
-            return {"status": "error", "tool": TOOL, "command": command, "error_type": "input",
-                    "message": f"수신자 주소를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다: {', '.join(unresolved)}",
-                    rt.LOG_MESSAGE_KEY: f"수신자 주소 {len(unresolved)}개를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다 (수신자 생략).",
-                    "agent_directive": "STOP_RETRY: 발송하지 않았습니다. 사용자에게 수신자 주소 확인을 요청하세요.", **extra}
-        mail.Send()
-        extra["sent"] = True
-        # R1: 발송은 Outlook이 처리하므로 실제로 나갔는지는 여기서 확인할 수 없음 (보낸 편지함 확인은 사용자 몫)
-        unv = ["실제 발송 여부(보낸 편지함)는 확인하지 않음. 사용자에게 보낸 편지함을 확인하라고 알리세요"]
-        if original is not None:
-            unv.append("어느 메일에 답장/전달했는지(original의 제목·보낸사람)를 사용자에게 알리세요")
-        return rt.ok_unverified(TOOL, command, f"메일 발송을 Outlook에 맡겼습니다: '{extra['subject']}' -> {extra['to']}{note}",
-                                unv, **extra)
+    eid = _save_draft(mail)
     mail.Display()
-    tell = " original(원본 메일의 제목·보낸사람)도 사용자에게 알리세요." if original is not None else ""
-    return rt.ok(TOOL, command, f"메일 작성 창을 띄웠습니다: '{extra['subject']}' -> {extra['to'] or '(받는 사람 미입력)'}{note}",
-                 "VERIFIED: 작성 창의 받는 사람과 제목을 다시 읽었습니다. 발송은 사용자가 직접 [보내기]를 눌러야 합니다. 대신 발송하지 마세요."
-                 + tell, verified=True, **extra)
+    if attach_problems or not eid:
+        # 첨부를 확인하지 못했거나 초안을 저장하지 못했으면 보내는 명령을 주지 않음 (첨부가 빠진 메일은 되돌릴 수 없음)
+        why = attach_problems + ([] if eid else ["초안을 임시 보관함에 저장하지 못해 보내는 명령을 만들지 못함"])
+        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄웠습니다: '{extra['subject']}'{note}",
+                                why + ["보내려면 사용자가 작성 창을 확인하고 직접 [보내기]를 누르라고 알리세요"], **extra)
+    warnings: List[str] = []
+    extra["draft_id"] = _draft_id(eid, extra["subject"], warnings)
+    if warnings:
+        extra["warnings"] = warnings
+    cmd = rt.next_command("outlook.py", ["send", "--id", extra["draft_id"]], "사용자가 확인한 뒤 이 초안을 보내기")
+    cmd["needs_user_confirm"] = True
+    extra["next_commands"] = [cmd]
+    tell = " original(원본 메일의 제목·보낸사람)," if original is not None else ""
+    return rt.ok(TOOL, command,
+                 f"메일 작성 창을 띄웠습니다(초안 저장): '{extra['subject']}' -> {extra['to'] or '(받는 사람 미입력)'}{note}",
+                 f"VERIFIED: 초안을 저장하고 작성 창의 받는 사람과 제목을 다시 읽었습니다. 아직 보내지 않았습니다. 받는 사람·제목,{tell} "
+                 "첨부를 사용자에게 보여 주고, 사용자가 보내라고 확인한 뒤에만 next_commands[0](send)을 1번 실행하세요. "
+                 "확인 전에는 대신 발송하지 마세요. 사용자가 작성 창에서 직접 보냈으면 실행하지 마세요. "
+                 "이 명령을 다시 실행하지 마세요(초안이 하나 더 생김).",
+                 verified=True, **extra)
+
+
+SEND_REFUSED_DIRECTIVE = "발송하지 않았습니다. 같은 명령을 다시 실행하거나 메일을 새로 만들지 말고 message를 사용자에게 그대로 알리세요."
+
+
+def cmd_send(args) -> Dict[str, Any]:
+    """new/reply/forward가 저장한 초안(같은 항목)을 보냄. 이미 보냈거나 지운 초안, 보낸·받은 메일은 보내지 않음:
+    한 초안은 한 번만 나감 (중복 발송 방지, 1.4.72)."""
+    ns = get_namespace(get_outlook())
+    eid = entry_id(args.id)
+    try:
+        mail = ns.GetItemFromID(eid)
+    except Exception:
+        raise rt.InputError("초안을 찾을 수 없어 보내지 않았습니다(이미 보냈거나 지웠을 수 있음). "
+                            "사용자에게 보낸 편지함과 임시 보관함을 확인하라고 알리세요.", directive=SEND_REFUSED_DIRECTIVE)
+    if getattr(mail, "Sent", None) is not False or getattr(mail, "Class", OL_MAIL) != OL_MAIL:
+        raise rt.InputError("이 id는 보내지 않은 초안이 아니라 보내지 않았습니다(이미 보낸 메일이거나 받은 메일). "
+                            "사용자에게 보낸 편지함을 확인하라고 알리세요.", directive=SEND_REFUSED_DIRECTIVE)
+    extra: Dict[str, Any] = {"to": _text(getattr(mail, "To", "")), "subject": _text(getattr(mail, "Subject", "")),
+                             "draft_id": str(args.id), "sent": False}
+    unresolved = _unresolved(mail)
+    if unresolved:
+        mail.Display()
+        extra["unresolved_recipients"] = unresolved
+        return {"status": "error", "tool": TOOL, "command": "send", "error_type": "input",
+                "message": f"수신자 주소를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다: {', '.join(unresolved)}",
+                rt.LOG_MESSAGE_KEY: f"수신자 주소 {len(unresolved)}개를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다 (수신자 생략).",
+                "agent_directive": "STOP_RETRY: 발송하지 않았습니다. 사용자에게 수신자 주소 확인을 요청하세요.", **extra}
+    mail.Send()
+    extra["sent"] = True
+    # R1: 발송은 Outlook이 처리하므로 실제로 나갔는지는 여기서 확인할 수 없음 (보낸 편지함 확인은 사용자 몫)
+    return rt.ok_unverified(TOOL, "send", f"메일 발송을 Outlook에 맡겼습니다: '{extra['subject']}' -> {extra['to']}",
+                            ["실제 발송 여부(보낸 편지함)는 확인하지 않음. 사용자에게 보낸 편지함을 확인하라고 알리세요"], **extra)
 
 
 def _load_signature(mail: Any) -> None:
@@ -875,12 +925,18 @@ def _load_signature(mail: Any) -> None:
         pass
 
 
-def _target_item(app: Any, args, missing: str = "답장/전달할 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.") -> Any:
-    if args.id:
-        return get_item(get_namespace(app), args.id)
-    item, _ = current_item(app)
+def _target_item(app: Any, args, missing: str = "답장/전달할 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.",
+                 original: bool = True) -> Any:
+    """답장·전달·첨부 대상 메일 (--id, 없으면 열린 창·선택한 메일).
+    original=True(답장·전달): 보내지 않은 메일(작성 중인 초안, Sent == False)은 원본으로 쓰지 않음. 앞서 띄운 초안 창이
+    열려 있으면 그 초안에 답장·전달하게 되므로 (1.4.72)"""
+    item = get_item(get_namespace(app), args.id) if args.id else current_item(app)[0]
     if item is None:
         raise rt.InputError(missing)
+    if original and getattr(item, "Sent", True) is False:
+        raise rt.InputError("지금 열려 있거나 고른 메일은 보내지 않은 초안이라 원본으로 쓸 수 없습니다. 원본 메일을 --id로 지정하세요: "
+                            "next_commands[0]으로 목록을 보고 사용자가 말한 메일의 id를 쓰세요.",
+                            directive=RELIST_DIRECTIVE, fields={"next_commands": _relist_commands()})
     return item
 
 
@@ -905,7 +961,7 @@ def cmd_new(args) -> Dict[str, Any]:
         mail.Subject = args.subject
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))   # Body 대입은 서명을 지우므로 HTML로
-    return _finalize(mail, args.send, "new", _attach(mail, attach))
+    return _finalize(mail, "new", _attach(mail, attach))
 
 
 def cmd_reply(args) -> Dict[str, Any]:
@@ -917,7 +973,7 @@ def cmd_reply(args) -> Dict[str, Any]:
     _load_signature(mail)
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))
-    return _finalize(mail, args.send, "reply", _attach(mail, attach), _original_info(original))
+    return _finalize(mail, "reply", _attach(mail, attach), _original_info(original))
 
 
 def cmd_forward(args) -> Dict[str, Any]:
@@ -931,7 +987,7 @@ def cmd_forward(args) -> Dict[str, Any]:
         mail.To = args.to
     if body:
         mail.HTMLBody = _prepend_html(mail.HTMLBody, _html_prefix(body))
-    return _finalize(mail, args.send, "forward", _attach(mail, attach), _original_info(original))
+    return _finalize(mail, "forward", _attach(mail, attach), _original_info(original))
 
 
 # ------------------------------------------------------------------------------
@@ -1396,8 +1452,6 @@ def build_cli():
         p.add_argument("--body", help="본문 (줄바꿈은 \\n)")
         p.add_argument("--body-file", help="본문 파일 (.txt/.md)")
         p.add_argument("--attach", help="첨부 파일 전체 경로 (여러 개는 ; 로 구분, 쉼표도 됨. 파일명만 쓰면 data 폴더)")
-        p.add_argument("--send", action="store_true",
-                       help="사용자가 발송을 명시적으로 요청한 경우에만. 수신자 확인 후 발송 (기본: 작성 창만 표시)")
 
     p = sub.add_parser("new", help="새 메일 작성")
     compose(p)
@@ -1412,11 +1466,14 @@ def build_cli():
     p = sub.add_parser("forward", help="전달")
     compose(p)
     p.add_argument("--id", help="전달할 메일 id (생략 시 지금 보고 있거나 선택한 메일)")
+
+    p = sub.add_parser("send", help="new/reply/forward가 저장한 초안 보내기 (사용자가 확인한 뒤에만)")
+    p.add_argument("--id", required=True, help="new/reply/forward 결과의 draft_id (next_commands[0]을 그대로)")
     return parser
 
 
 HANDLERS = {"list": cmd_list, "search": cmd_search, "read": cmd_read, "current": cmd_current, "folders": cmd_folders,
-            "attachments": cmd_attachments, "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward,
+            "attachments": cmd_attachments, "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward, "send": cmd_send,
             "thread": cmd_thread, "calendar": cmd_calendar}
 
 

@@ -129,7 +129,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     방금 만든 새 파일이면 기본 시트 이름(`Sheet1` 등)은 새 시트를 만들지 않고 그 빈 기본 시트에 받습니다(기본 시트가 여럿이어도).
   - 쓰기 `--target`에 파일 이름만 주었는데 열린 문서도 파일도 아니면 새 파일을 만들지 않고 "찾을 수 없음"(열린 문서가 있으면 `[후보]`). 새 파일은 전체 경로를 줄 때만 만듭니다.
     전체 경로인지는 `%USERPROFILE%`·`~`를 푼 뒤에 판단하고(`%USERPROFILE%\Desktop\새.xlsx`도 새로 만듦), 없는 전체 경로는 열린 문서를 `[후보]`로 주지 않습니다.
-- **메일**: 기본은 작성 창만 띄웁니다. `--send`는 명시했을 때만 쓰고, 수신자 주소를 확인한 뒤 발송합니다.
+- **메일**: `new`·`reply`·`forward`는 보내지 않고 초안 저장 + 작성 창만. 발송은 그 초안을 보내는 `send --id <draft_id>`(사용자 확인 뒤)만, 수신자 주소를 확인한 뒤 발송합니다.
 
 ### 파일과 폴더
 | 항목 | 기본 위치 | 바꾸는 방법 |
@@ -411,7 +411,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   번호를 새로 매기지 않고 그 결과의 `id`는 긴 EntryID + `warnings`, 짧은 번호 해석은 STOP_RETRY "목록을 다시 보세요"(깨진 파일은 `outlook_ids.broken_<시각>.json`으로 옮김).
   없는·만료된 번호는 STOP_RETRY + `next_commands`(list). 긴 EntryID도 그대로 받습니다.
 - `reply`/`forward` 결과의 `original`(고른 원본 메일의 subject·from·received)과 `attachments` 결과의 `mail`(같은 키 + entry_id)은 preview에도 들어가며,
-  directive가 사용자에게 어느 메일인지 알리게 합니다(특히 `--send`).
+  directive가 사용자에게 어느 메일인지 알리게 합니다(특히 발송 전).
   `read`/`current`의 `mail`과 `attachments`의 `mail`에는 `entry_id`.
 - `thread --id N`(읽기 전용): 그 메일의 대화 제목(`ConversationTopic`, 없으면 RE:/FW:를 뺀 제목)으로 받은 편지함과 보낸 편지함에서 같은 대화를 모아 오래된 순으로
   최근 20통(`mails`: 요약과 본문 400자, `count`, `truncated`). Outlook이 조건을 거부하면 메일마다 비교(폴더마다 2,000통, `recovered`, 상한에 닿으면 빠진 메일이 있을 수 있어 `UNVERIFIED:`). 결과도 짧은 번호로 기억.
@@ -427,7 +427,21 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `list`, `search`의 `count`는 `--limit` 안에서 가져온 메일 수입니다. 0통이면 `count: 0`과 `VERIFIED: 0건.` 안내(조건을 바꿔 다시 실행하지 않음).
 - `search`: 검색어의 `%`, `_`는 글자 그대로 찾습니다. DASL `LIKE`에서는 와일드카드라 더 넓게 찾으므로, 그런 검색어는 제목·본문·보낸사람을
   다시 읽어 글자 그대로 들어 있는 메일만 남깁니다(대소문자 무시, 읽지 못한 칸은 남김).
-- 작성: `new --to --subject --body [--cc --attach --body-file --send]`, `reply [--id --all --body --attach]`, `forward [--id --to --body --attach]`
+- 작성: `new --to --subject --body [--cc --attach --body-file]`, `reply [--id --all --body --attach]`, `forward [--id --to --body --attach]`, 발송 `send --id <draft_id>`
+- 발송 흐름 (1.4.72, 발송 안전): `new`·`reply`·`forward`는 보내지 않습니다. 메일을 만들어 임시 보관함에 저장(`Save`)하고 작성 창을 띄운 뒤
+  `draft_id`(그 초안의 짧은 번호, 번호를 못 붙이면 EntryID)와 `next_commands[0]` = `outlook.py send --id <draft_id>`(`needs_user_confirm: true`)를 줍니다.
+  directive: 받는 사람·제목·original·첨부를 보여 주고 사용자가 보내라고 확인한 뒤에만 next_commands[0]을 1번, 사용자가 작성 창에서 직접 보냈으면 실행하지 않음,
+  같은 작성 명령을 다시 실행하지 않음(초안이 하나 더 생김). `send --id`는 그 항목을 다시 찾아(`GetItemFromID`) 보내지 않은 메일(`Sent == False`,
+  `Class` = 메일)일 때만 수신자를 확인하고(`ResolveAll`, 실패하면 보내지 않고 작성 창 + STOP_RETRY `unresolved_recipients`) `Send()`합니다.
+  찾지 못하거나(이미 보내 보낼 편지함·보낸 편지함으로 옮겨짐, 지움) 보낸·받은 메일이면 보내지 않고 STOP_RETRY(다시 실행하거나 새로 만들지 말라는 안내).
+  발송 결과는 `UNVERIFIED:`(실제 발송은 보낸 편지함에서 사용자가 확인).
+  - 이 방식을 고른 이유: 예전 흐름(1단계 `--send` 없이 초안 창, 3단계 같은 명령 + `--send`)은 3단계가 메일을 새로 만들어 보내므로, 1단계 초안 창이 열린 채
+    남아 사용자가 그것도 보내면 같은 메일이 두 번 나가고, `--id` 없는 3단계는 열린 창(`ActiveInspector().CurrentItem`) = 1단계 초안을 원본으로 잡아
+    초안에 답장·전달을 보낼 수 있었습니다. 지금은 보내는 길이 "저장한 초안 한 개를 그 항목 그대로 보내기" 하나뿐이라, 한 초안은 많아야 한 번 나가고
+    (사용자가 창에서 이미 보냈으면 send가 거부), 받는 대상은 1단계에서 사용자에게 보여 준 바로 그 초안입니다. 1단계를 Display 없는 미리보기로 바꾸는 방식은
+    사용자가 작성 창에서 고쳐 보내는 기본 사용을 잃어 고르지 않았습니다.
+  - 답장·전달의 원본(`--id`, 없으면 열린 창·선택한 메일)이 보내지 않은 메일(`Sent == False`: 작성 중인 초안)이면 쓰지 않고
+    STOP_RETRY "원본 메일을 --id로 지정하세요" + `next_commands`(list). `attachments`는 초안도 대상(읽기·저장만).
 - `--attach`: 여러 개는 `;`로 구분(쉼표도 됨). 값 전체가 있는 파일이면 하나로 봅니다(`보고서,최종.pdf`). 나눈 조각이 있는 파일이 아니면 뒤 조각을 이어 붙여 봅니다(폴더 이름에 `;`가 든 경로 여러 개). `--body`의 글자 `\n`만 줄바꿈으로 바꾸고(Windows 경로 안의 `\n`은 그대로), `--body-file` 내용은 그대로 씁니다.
 - `read --save`, `current --save`: 파일 이름에 쓸 수 없는 글자(`RE:`의 `:` 등)는 `_`로 바꾸고, 저장한 파일을 다시 읽어 확인합니다(확인하지 못하면 `UNVERIFIED:`).
 - `read`/`current`는 첨부를 저장하지 않습니다. 첨부가 있으면 `attachment_names`(본문 삽입 이미지를 뺀 이름, 20개까지,
@@ -451,8 +465,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `new/reply/forward --attach`: 본문 파일·첨부 파일을 Outlook에 연결하기 전에 확인합니다(없으면 아무것도 만들지 않고 STOP_RETRY).
   전체 경로가 아닌 파일 이름은 data 폴더에서 찾고(없으면 data 폴더의 비슷한 이름 `[추천]`/`[후보]`), 전체 경로 파일이 없으면 같은 폴더의
   비슷한 파일을 전체 경로로 `[후보]`(폴더가 없으면 그렇게 알림). 붙인 뒤 `Attachments.Count`가 붙인 수만큼 늘었는지 다시 셉니다
-  (전달은 원본 첨부가 그대로 있고 늘어난 수로 비교). 맞지 않거나 붙이다 실패하면 작성 창만 띄우고 `UNVERIFIED:`, `--send`였으면
-  보내지 않고 작성 창을 띄운 뒤 STOP_RETRY(`attach_problems`).
+  (전달은 원본 첨부가 그대로 있고 늘어난 수로 비교). 맞지 않거나 붙이다 실패하면 작성 창만 띄우고 `UNVERIFIED:`, send 명령을 주지 않습니다
+  (사용자가 창의 첨부를 확인하고 직접 보냄). 초안을 저장하지 못했을 때도 같습니다.
 
 ### reader.py
 용도: (1) 작성 중인 문서(Word/Excel/PPT)가 규정·규격서(PDF/Word)에 맞는지 확인, (2) 여러 문서에서 키워드를 찾아 근거(쪽, 장절, 문항/조항 번호)와 함께 모으기.
@@ -568,6 +582,13 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `(rms)`, `(p-p)`, `(pp)`, `(peak)`, `(pk)`, `(abs)`, `(g)`, `(a)`·`(A)`, `(G)`, `(gauge)`만 층 B(`(DC)`, `(AC)`, `(Max)`, `(Min)`, `(Typ.)`은 층 A),
   단위에 붙은 대문자 `DC`/`AC`(`24 VDC`의 `24 V`, `DC5V`의 `5V`, `AC220V`의 `220V`, 소문자 `5 Vdc`는 층 B), 영문 접두와 숫자 사이 띄어쓰기 0~1칸 차이
   (`IP67` = `IP 67`, `M10` = `M 10`, `IEC 61000-4-2` = `IEC61000-4-2`). 표기 자체가 다른 것(`°C`/`℃`, `㎜`, `µ`/`μ`, `KΩ`, `1,000`/`1000`, `+/-`/`±`)은 층 B 그대로.
+  1.4.72(9차 검토, `/` 완화 좁힘): `/` 값 구분은 양쪽이 숫자+단위이고 `/` 뒤 값이 1·10^n이 아닐 때만입니다(`100 V/220 V`, `85 ℃/85 %RH`, `85 %/85 ℃`,
+  `10 kHz/50 kHz`는 층 A). `/` 뒤가 1, 10, 100, 1000이면 비율의 '당'이라 양쪽 모두 층 A가 아닙니다(`0.1 mm/1000 mm`, `2 ℃/1 min`, `5 %/1000 h`).
+  `/` 앞이 숫자뿐이면 Hz, kHz, MHz, GHz, V, kV, mV이고 앞 숫자가 두 자리 이상 정수일 때만(`50/60 Hz`, `10/50 kHz`, `110/220 V`; 서지 파형 `10/350 μs`,
+  `1.2/50 μs`, 분수 `15/16 inch`, `11/4 W`, `0.02/100 mm`는 아님). U+FF0F, U+2215, U+2044 빗금은 값 구분으로 보지 않습니다.
+  단위에 붙은 `DC`/`AC` 예외는 검색어에 단위가 있을 때만(`12`는 `AC12`, `DC12 커넥터`와 다름). 숫자 앞에 붙은 천 단위 따옴표(`'`, U+2019), 곱하기(`×`, `*`),
+  U+3161, 폭 없는 공백(U+200B~200D, U+2060, U+FEFF)·전각 공백을 사이에 둔 빼기, 단위 뒤 지수(`10 m-1`), `R.H.`, `[A]`, 띄어 쓴 `f`(`10 kg f`)도 층 A가 아닙니다.
+  기호 단위(℃, ℉, %, Ω) 바로 뒤에 붙인 대시는 범위(`40 ℃`+U+2013+`85 ℃`의 `85 ℃`는 층 A).
   `--regex`의 정규식이 잘못되면 STOP_RETRY(몇 번째 글자, 이유). 정규식 문법(`\d`, `.*`, `[..]`, `|`, `(?`, `{n`)이 없는 글(`전압 (5V`)이면 `--regex` 없이 같은 조건으로 찾는 전체 명령을 `[추천]`(오류 로그에는 명령 생략).
 - 검색어 표기 차이 (검색어마다 정규식을 도구가 만듦): 검색어 낱말 끝의 조사(`은 는 이 가 을 를 의 에 에서 으로 와 과 및 에는 에서의` 등, 떼고 2자 이상 남을 때만:
   `높이`, `단가`는 그대로. 받침에 따라 붙는 조사는 받침이 맞을 때만(`이 은 을 과`는 받침 뒤, `가 는 를 와`는 받침 없는 글자 뒤: `와이파이`, `역효과`는 그대로),
@@ -602,6 +623,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 결과 항목: `file`, `path`, `page`, `page_source`, `section`(목록), `section_text`(` > `로 이음), `number`, `loc`, `heading`, `evidence`, `snippet`, `score`, `matched_terms`, `--full`이면 `text`.
   공통: `total_matches`(= `count`), `matched`(= `shown`), `truncated`, `files_searched`, `output_file`, `next_commands`. 잘렸으면 `--save "근거.xlsx"`로 전체를 저장하는 명령을 줍니다
   (`--full`에서 엑셀 칸 상한 32,000자보다 긴 단락이 있으면 `--save "근거.md"`). directive는 저장 이름을 적지 않고 `next_commands`의 저장 명령을 가리킵니다.
+- `snippet`: 검색어마다 맞은 자리(숫자가 든 검색어는 층 A 자리 먼저) 앞 `max(-C, 15)`자 ~ 뒤 `-C`자. AND 검색어들이 멀어 창이 겹치지 않으면 조각을 ` / `로 이어
+  검색어마다 자리가 보입니다(1.4.72: 전에는 첫 검색어 창만이라 멀리 있는 숫자 검색어 자리가 빠짐). 맞은 곳은 `**강조**`.
 - `evidence` 형식: `규격서.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`. 쪽이 없으면 `loc`(예: `매출.xlsx 매출!12행`), Word 쪽을 쪽 나눔으로만 셌으면 `p.3(추정)`.
 - `--save`: `.xlsx`(머리글 굵게, 줄바꿈, 열 너비, 첫 행 고정), `.csv`, `.md`(기본). 열: 파일, 쪽, 장절, 번호, 위치, 내용(문장/단락), 문맥, 점수. `.md`에는 항목마다 `근거:` 줄. 저장 파일에는 `--top`과 관계없이 전체(최대 5,000건)를 담습니다. 5,000건을 넘으면 `save_truncated`와 함께 `UNVERIFIED:`. 저장한 파일은 다시 열어 확인합니다(`save_problem`이 있으면 `UNVERIFIED:`). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `save_problem`(`.md`는 전체).
 - `index`: 새로 읽은 문서의 캐시 파일이 실제로 저장됐는지 확인하고, 저장하지 못한 파일이 있으면 `cache_failed`와 함께 `UNVERIFIED:`.

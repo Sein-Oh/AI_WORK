@@ -3264,6 +3264,21 @@ def test_spaced_sign_is_layer_a_and_snippet_shows_it(tmp_path, capsys):
     assert sent == "출력 5 V 이하." and conds and conds[0]["hi"] == 5, (conds, sent)
 
 
+def test_and_snippet_shows_far_number_term(tmp_path, capsys):
+    # 9차 검토 [치명]: AND 검색 스니펫이 첫 검색어 자리만 창으로 잡아, 멀리 있는 숫자 검색어의 층 A 자리가 빠짐
+    # -> 검색어마다 창, 겹치지 않으면 조각을 ' / '로 이음
+    text = "보관 온도 조건은 아래와 같다. " + "가" * 150 + " 동작 범위 - 40 ℃에서 시험한다."
+    p = tmp_path / "규격.txt"
+    p.write_text(text + "\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "온도 AND 40 ℃", "--file", str(p), "-C", "20")
+    assert code == 0 and out["count"] == 1, out
+    snip = out["matches"][0]["snippet"]
+    assert "**온도**" in snip and "- **40 ℃**에서" in snip and reader.SNIPPET_JOIN in snip, snip
+    assert snip.index("**온도**") < snip.index(reader.SNIPPET_JOIN) < snip.index("**40 ℃**"), snip
+    # 가까우면 조각 하나 (지금 그대로)
+    assert reader.SNIPPET_JOIN not in reader.make_snippet("온도 - 40 ℃에서", ["온도", "40 ℃"], 20)
+
+
 def test_number_safety_net_checks_time_every_unit(monkeypatch):
     # 7차 검토 [보통]: 시간 상한을 50단위마다 확인해 큰 단위(1MB)가 이어지면 상한을 크게 넘음 -> 단위마다 확인
     monkeypatch.setattr(reader, "NUMBER_SEARCH_SECONDS", -1.0)

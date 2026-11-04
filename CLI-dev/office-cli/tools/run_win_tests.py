@@ -3,7 +3,7 @@
 사용법 (CLI-dev/office-cli 폴더에서 실행. 시험하는 도구는 옆 폴더 CLI/office-cli):
     python tools/run_win_tests.py                     # 전체 진행 (눈으로 확인할 항목은 y/n 질문)
     python tools/run_win_tests.py --only A,C          # 특정 그룹만
-    python tools/run_win_tests.py --self-email me@company.com   # G3 실제 발송 테스트 포함
+    python tools/run_win_tests.py --self-email me@company.com   # G3 실제 발송 테스트 포함 (초안 send 1번)
     python tools/run_win_tests.py --auto              # 질문 없이 자동 판정 항목만
     python tools/run_win_tests.py --dir D:\\시험\\office --skip-outlook
     python tools/run_win_tests.py --agent --skip-outlook   # 에이전트(OpenCode 스킬)용: 질문 없음, stdout은 JSON 1줄
@@ -1207,28 +1207,38 @@ def test_G(ctx):
         to = me or "office-test@example.com"
         data, code, raw, err = run_cli("outlook.py", "new", "--to", to, "--subject", "[office-cli 테스트] 표시 전용",
                                        "--body", "본문 테스트")
-        ok = (data or {}).get("status") == "ok" and (data or {}).get("sent") is False
-        manual = ask(ctx, "메일 작성 창이 떴나요? (서명을 등록해 두었다면 본문 아래 서명도 보여야 합니다. 확인 후 저장하지 않고 닫아 주세요)")
-        record(ctx, "G1", "기본 동작: 작성 창만 표시, 미발송", ok and manual is not False, "", data, code, raw, err)
+        nxt = ((data or {}).get("next_commands") or [{}])[0]
+        ok = ((data or {}).get("status") == "ok" and (data or {}).get("sent") is False and bool((data or {}).get("draft_id"))
+              and nxt.get("needs_user_confirm") is True and " send --id " in nxt.get("command", ""))
+        manual = ask(ctx, "메일 작성 창이 떴나요? (서명을 등록해 두었다면 본문 아래 서명도 보여야 합니다. "
+                          "확인 후 창을 닫고 임시 보관함의 '[office-cli 테스트] 표시 전용' 초안을 지워 주세요)")
+        record(ctx, "G1", "기본 동작: 초안 저장·작성 창만 표시, 미발송, send 명령 제시", ok and manual is not False, "",
+               data, code, raw, err)
 
     def g2():
-        data, code, raw, err = run_cli("outlook.py", "new", "--to", "zz_office_invalid_recipient_000",
-                                       "--subject", "[office-cli 테스트] 잘못된 수신자", "--body", "발송되면 안 됨", "--send")
+        d_new = run_cli("outlook.py", "new", "--to", "zz_office_invalid_recipient_000",
+                        "--subject", "[office-cli 테스트] 잘못된 수신자", "--body", "발송되면 안 됨")[0] or {}
+        data, code, raw, err = run_cli("outlook.py", "send", "--id", str(d_new.get("draft_id", "")))
         ok = (data or {}).get("status") == "error" and (data or {}).get("sent") is False
-        ask(ctx, "작성 창이 떴다면 저장하지 않고 닫아 주세요. 닫았나요?")
-        record(ctx, "G2", "잘못된 수신자 + --send -> 발송 안 됨", ok,
+        ask(ctx, "작성 창이 떴다면 닫고 임시 보관함의 '[office-cli 테스트] 잘못된 수신자' 초안을 지워 주세요. 지웠나요?")
+        record(ctx, "G2", "잘못된 수신자 초안 send -> 발송 안 됨", ok,
                f"unresolved={(data or {}).get('unresolved_recipients')}", data, code, raw, err)
 
     def g3():
         if not me:
-            record(ctx, "G3", "명시적 --send 실제 발송", None, "--self-email 미지정으로 건너뜀")
+            record(ctx, "G3", "초안 send 실제 발송 (1번만)", None, "--self-email 미지정으로 건너뜀")
             return
         if not ctx.auto and ask(ctx, f"{me} 주소로 실제 테스트 메일을 1통 발송합니다. 진행할까요?") is not True:
-            record(ctx, "G3", "명시적 --send 실제 발송", None, "사용자가 건너뜀")
+            record(ctx, "G3", "초안 send 실제 발송 (1번만)", None, "사용자가 건너뜀")
             return
-        data, code, raw, err = run_cli("outlook.py", "new", "--to", me, "--subject", "[office-cli 테스트] 발송 테스트",
-                                       "--body", "자동 발송 테스트 메일입니다.", "--send")
-        record(ctx, "G3", "명시적 --send 실제 발송", (data or {}).get("sent") is True, "", data, code, raw, err)
+        d_new = run_cli("outlook.py", "new", "--to", me, "--subject", "[office-cli 테스트] 발송 테스트",
+                        "--body", "자동 발송 테스트 메일입니다.")[0] or {}
+        did = str(d_new.get("draft_id", ""))
+        data, code, raw, err = run_cli("outlook.py", "send", "--id", did)
+        again = run_cli("outlook.py", "send", "--id", did)[0] or {}       # 같은 초안을 다시 보내면 거부 (중복 발송 없음)
+        ok = (data or {}).get("sent") is True and again.get("status") == "error" and again.get("sent") is not True
+        record(ctx, "G3", "초안 send 실제 발송 (1번만)", ok, f"두 번째 send: {again.get('message', '')[:60]}",
+               data, code, raw, err)
 
     def g4():
         data, code, raw, err = run_cli("outlook.py", "list", "--limit", "3")

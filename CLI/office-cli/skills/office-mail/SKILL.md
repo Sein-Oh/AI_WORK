@@ -1,10 +1,10 @@
 ---
 name: office-mail
-description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기, 첨부 목록·내려받기, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조). 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
+description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기, 첨부 목록·내려받기, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.71"
+  version: "1.4.72"
   platform: windows
 ---
 
@@ -32,16 +32,19 @@ metadata:
 | 답장 | `python "C:\CLI\office-cli\outlook.py" reply --id 3 --body "<내용>" [--attach "C:\전체경로\파일.pdf"]` (전체 답장 `--all`, 긴 본문 `--body-file "<본문.md>"`) |
 | 새 메일 | `python "C:\CLI\office-cli\outlook.py" new --to <주소> --subject "<제목>" --body "<내용>" [--cc <주소>] [--attach "<전체경로>"]` |
 | 전달 | `python "C:\CLI\office-cli\outlook.py" forward --id 3 --to <주소> [--attach "<전체경로>"]` |
+| 초안 보내기 | `python "C:\CLI\office-cli\outlook.py" send --id <draft_id>` (new·reply·forward 결과의 `next_commands[0]`, 사용자 확인 뒤에만) |
 
 - `--attach` 여러 파일은 `;`로 구분한다 (`"C:\a.pdf;C:\b.xlsx"`).
 - 첨부를 저장하면 결과의 `folder`와 파일 이름을 알린다. 다른 폴더는 사용자가 준 전체 경로로만. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장된다. 내용을 보려면 결과의 `next_commands`(reader.py read, 여럿이면 reader.py index)를 그대로 실행한다.
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
-- `new`·`reply`·`forward`는 기본으로 작성 창만 띄운다. `--send` 순서:
-  1. 먼저 `--send` 없이 실행(초안)하거나 `read --id N`으로 원본 메일을 본다.
-  2. 결과의 `original`(제목·보낸사람)과 받는 사람을 사용자에게 보여 주고 "이 메일이 맞는지, 보낼지" 확인을 받는다.
-  3. 사용자가 확인한 뒤에만 같은 명령에 `--send`를 붙여 실행한다. 확인 전에는 `--send`를 붙이지 않는다.
+- `new`·`reply`·`forward`는 보내지 않는다. 초안을 저장하고 작성 창만 띄운다. 발송 순서:
+  1. `new`·`reply`·`forward`를 1번 실행한다 (답장·전달은 `--id`로 원본을 지정).
+  2. 결과의 `original`(제목·보낸사람)과 받는 사람·제목을 사용자에게 보여 주고 "이 메일이 맞는지, 보낼지" 확인을 받는다.
+  3. 사용자가 보내라고 하면 `next_commands[0]`(`send --id <draft_id>`)을 글자 그대로 1번 실행한다. 확인 전에는 실행하지 않는다.
+  4. 사용자가 작성 창에서 직접 보냈으면 `send`를 실행하지 않는다. 같은 `new`·`reply`·`forward`를 다시 실행하지 않는다(초안이 하나 더 생김).
+- "보내지 않은 초안이라 원본으로 쓸 수 없습니다"면 `next_commands[0]`으로 목록을 보고 원본 메일의 `id`로 다시 실행한다.
 - `reply`·`forward`·`attachments` 결과의 `original`(또는 `mail`)의 제목·보낸사람을 사용자에게 알린다.
 - `elevated_process`이면 다시 실행하지 않고 message를 그대로 알린다.
 - 목록·검색이 0건(`count: 0`)이면 "찾은 메일 없음"과 찾은 조건(폴더, 기간)을 알린다.

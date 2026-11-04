@@ -344,3 +344,122 @@ IEC 61000-4-2	정전기 시험은 IEC61000-4-2에 따른다	A
 M10	볼트 M 10 이상	A
 M 10	볼트 M10 이상	A
 1000 h	고온고습 85 ℃/85 %RH, 1000 h	A
+# 9차 검토 (1.4.72): '/' 값 구분(양쪽 숫자+단위, '/' 뒤 1·10^n은 비율), 단위 없는 검색어의 DC/AC 예외 없음, 붙은 기호(천 단위 따옴표, U+2044, U+FF0F, U+2215, 곱하기, U+3161, 폭 없는 공백, 지수 m-1), 붙여 쓴 범위 대시
+12	모델 AC12 사용	notA
+12	DC12 커넥터	notA
+24 V	DC24 V	A
+5 V	ADC5 V	notA
+40 ℃	\u316140 ℃	notA
+40 ℃	\u201240 ℃	notA
+40 ℃	\u207b40 ℃	notA
+40 ℃	\ufe6340 ℃	notA
+40 ℃	\uff0d40 ℃	notA
+40 ℃	\u201040 ℃	notA
+40 ℃	-\u202f40 ℃	notA
+40 ℃	-\u200b40 ℃	notA
+40 ℃	-\u300040 ℃	notA
+5 V	0.5 V	notA
+5 V	0,5 V	notA
+5 V	1/5 V	notA
+60 Hz	50/60 Hz	A
+60 Hz	1/60 Hz	notA
+4 W	11/4 W	notA
+5 V	5 V/ m	notA
+5 V	5 V / m	notA
+5 V	5 V/\u339d	notA
+5 V	5 V/\u00b5s	notA
+5 V	5 V/\u00b0C	notA
+5 V	5 V/℃	notA
+5 V	5 V/%	notA
+5 V	5 V/\u03a9	notA
+1 kg	1 kg/m\u00b3	notA
+5 %	5 %/℃	notA
+85 %	85 %/85 ℃	A
+20 ms	20 ms/div	notA
+10 V	10 V/div	notA
+10 V	10 V\uff0fm	notA
+10 V	10 V\u2215m	notA
+10 V	10 V\u2044m	notA
+5 V	5 V.m	notA
+M10	NUM 10	notA
+M10	M 10	A
+IP67	SHIP 67	notA
+IP67	IP 6 7	notA
+PT100	PT 1000	notA
+IP 67	IP67	A
+A 10	CA10	notA
+24 V	24 VDC	A
+24 V	24 VDCX	notA
+5 V	5 VAC	A
+10 m	10 m-1	notA
+10 m	10 m^-1	notA
+10 m	10 m\u207b\u00b9	notA
+1 W	1 W/kg	notA
+10 \u03a9	10 \u03a9/sq	notA
+10 \u03a9	10 \u03a9/\u25a1	notA
+3 dB	3 dB/oct	notA
+10 dB	10 dB/decade	notA
+1 A	1 A/mm\u00b2	notA
+1 A	1 A/\u339f	notA
+2 mm	2 mm\u00b2	notA
+2 mm	2 mm2	notA
+2 mm	2 mm^2	notA
+10 kV	10 kV/\u03bcs	notA
+100 V	100 V/220 V	A
+220 V	100 V/220 V	A
+5 V	5 V/-5 V	A
+16 inch	볼트 규격 15/16 inch	notA
+16 in	볼트 15/16 in	notA
+16"	배관 11/16"	notA
+8 inch	배관 13/8 inch	notA
+4 W	저항 1\u20444 W	notA
+4 W	저항 3/4 W	notA
+2 W	저항 1\u00bd W	notA
+32 UNC	나사 10-32 UNC	notA
+4 inch	배관 1-1/4 inch	notA
+4 inch	배관 1 1/4 inch	notA
+4 inch	배관 11/4 inch	notA
+12	AC12 모델	notA
+12 V	DC12 V	A
+12 V	DC12V	A
+5	PDC5 단자	notA
+100	AC100 단자	notA
+100	AC 100	A
+3	IEC61000-4-3	notA
+10 kHz	10 kHz/50 kHz	A
+50 kHz	10 kHz/50 kHz	A
+50 kHz	10/50 kHz	A
+50 Hz	1.2/50 Hz	notA
+50 \u03bcs	1.2/50 \u03bcs	notA
+50 us	서지 1.2/50 us	notA
+20 \u03bcs	8/20 \u03bcs	notA
+700 \u03bcs	10/700 \u03bcs	notA
+-40 ℃	범위 10-40 ℃	notA
+-5 V	Vcc-5 V	notA
+-5 V	VCC-5 V	notA
+-5 V	단자1-5 V	notA
+-40 ℃	범위 -40 ℃	A
+500 W	1'500 W	notA
+500 W	1\u2019500 W	notA
+5 %	5 % R.H.	notA
+3 dB	3 dB[A]	notA
+10 kg	10 kg f	notA
+40 ℃	40 ℃\u201385 ℃	A
+85 ℃	40 ℃\u201385 ℃	A
+2 mm	1x2 mm	notA
+2 mm	1\u00d72 mm	notA
+2 mm	1*2 mm	notA
+2 mm	1 x2 mm	notA
+20 A	IP20 A	notA
+0.1 mm	진직도 0.1 mm/1000 mm	notA
+1000 mm	진직도 0.1 mm/1000 mm	notA
+5 %	용량 변화 5 %/1000 h	notA
+1000 h	용량 변화 5 %/1000 h	notA
+100 mm	평면도 0.02/100 mm	notA
+2 ℃	승온 속도 2 ℃/1 min	notA
+1 min	승온 속도 2 ℃/1 min	notA
+350 \u03bcs	10/350 \u03bcs	notA
+350 \u03bcs	서지 10/350 \u03bcs 파형	notA
+220 V	110/220 V	A
+85 %RH	85 ℃/85 %RH	A
+10 m	10 m-20 m	A

@@ -2645,6 +2645,7 @@ _DASHES = "-\u2010\u2011\u2012\u2013\u2014\u2212"      # 숫자 앞 부호 판�
 _SIGN_GAP = 12                                         # 부호를 찾으며 건너뛸 띄어쓰기·'/'의 최대 글자 수
 _DASH_LABEL = re.compile(r"(?<![A-Za-z])(?:min|max|typ|nom|ta|tc|tj|tamb|temp|utc|gmt|to)$", re.IGNORECASE)
 _RANGE_LEFT = re.compile(r"(?<![\d.])\d+(?:[.,]\d+)?(?:[ \t]?([^\s\d]{1,4}))?\s+$")
+_GLUED_RANGE_LEFT = re.compile("(?<![\\d.])\\d+(?:[.,]\\d+)?[ \u00a0]?[\u2103\u2109%\u03a9\u2126]$")   # '40 ℃'(기호 단위)
 
 
 def _range_unit(u: Optional[str]) -> bool:
@@ -2680,6 +2681,8 @@ def _text_sign(text: str, p: int) -> str:
     prev = text[d - 1] if d > 0 else ""
     if not after and not before and prev.isascii() and prev.isalnum():
         return "minus" if _DASH_LABEL.search(text[max(0, d - 5):d]) else "hyphen"     # 'Min-40', 'UTC-08:30'은 부호
+    if not after and not before and _GLUED_RANGE_LEFT.search(text, max(0, d - 16), d):
+        return "range"                                     # '40 ℃\u201385 ℃': 기호 단위 바로 뒤에 붙인 범위 대시 (1.4.72)
     left = _RANGE_LEFT.search(text[max(0, d - 20):d]) if before and "/" not in before else None
     if left and _range_unit(left.group(1)):
         return "range" if after and "/" not in after else "ambig"
@@ -3023,17 +3026,47 @@ _LIT_PM_GAP = re.compile(r"[+\u00b1\u2213\uff0b][ \t\u00a0/]*(?:[" + re.escape(_
 _LIT_RANGE_LEFT = re.compile(r"(?:\d(?:" + _LIT_SP + r"?[^\s\d]{1,4})?|(?<![A-Za-z])to)" + _LIT_SP + r"+$", re.IGNORECASE)
 # 단위 끝 뒤의 뜻이 다른 꼬리: '(rms)', '(g)', '(A)', ' rms', ' p-p', ' peak', ' pk', ' abs', ' g'(게이지).
 # 괄호는 이 목록만 막음: '(DC)', '(AC)', '(Max)', '(Typ.)'처럼 값의 뜻을 바꾸지 않는 괄호는 층 A (1.4.71)
-_LIT_TAIL = re.compile(_LIT_SP + r"*\((?:rms|p-p|pp|peak|pk|abs|g|a|gauge)\)|"
+_LIT_TAIL = re.compile(_LIT_SP + r"*[(\[](?:rms|p-p|pp|peak|pk|abs|g|a|gauge)[)\]]|"
                        + _LIT_SP + r"+(?:rms|p-p|pp|peak|pk|abs|g)(?![A-Za-z])", re.IGNORECASE)
 # 띄어 쓴 단위 이어짐 (낱말이 다른 단위): '5 N m', '10 Ω cm', '10 kV A', '10 mm Hg', '2.5 mm SQ', '5 % RH', '3 dB μV',
 # 띄어 쓴 '/단위'('25 ℃ /W'), 띄어 쓴 위첨자('10 m ³'). 대소문자 그대로 (1.4.71)
-_LIT_UNIT_GO = re.compile("[ \u00a0]{1,2}(?:(?:H2O|Hg|Aq|SQ|RH|FS|[\u03bc\u00b5u]V|cm|mm|km|m|h|s|A|V|W|\u03a9|\u2126)"
+_LIT_UNIT_GO = re.compile("[ \u00a0]{1,2}(?:(?:H2O|Hg|Aq|SQ|R\\.H\\.?|RH|FS|f|[\u03bc\u00b5u]V|cm|mm|km|m|h|s|A|V|W|\u03a9|\u2126)"
                           r"(?![A-Za-z0-9])|/[ \u00a0]*[^\s\d+\-\u00b1\u2212]|[" + _LIT_SUPER + "])")
 _LIT_UNIT_OP = "\u00b7\u22c5\u2219\u2022\u2217*"                   # 곱 단위 연산자 (가운뎃점, U+22C5, U+2219, U+2022, U+2217)
 _LIT_THOUSANDS = re.compile("(?<![\\d.,])\\d{1,3}[ \u00a0\u2009\u202f]$")   # 띄어 쓴 천 단위의 앞 묶음 ('1 500 W')
-_LIT_GLUED_SPACE = "\u00a0\u2009\u202f"                            # 붙여 쓴 것과 같은 공백 ('-\u00a040 ℃')
-# '/' 앞이 같은 종류 값이면 값 구분: '50/60 Hz'의 '50/', '100 V/220 V'의 '100 V/' (분수 '1/2'는 아님)
-_LIT_SLASH_LEFT = re.compile(r"(?<![\d.,])(?:\d{2,}|\d[\d.,]*[ \u00a0]?[^\s\d/]{1,4})/$")
+# 붙여 쓴 것과 같은 공백 ('-\u00a040 ℃'): 붙는 공백, 폭 없는 공백(U+200B~200D, U+2060, U+FEFF), 전각 공백(U+3000)
+_LIT_GLUED_SPACE = "\u00a0\u2009\u202f\u200b\u200c\u200d\u2060\ufeff\u3000"
+# 숫자 바로 앞에 붙으면 다른 값의 일부인 글자: 곱하기('1\u00d72 mm', '1*2 mm'), 대시로 쓴 한글 모음(U+3161)
+_LIT_GLUED_BEFORE = "\u00d7*\u3161"
+# 빗금 글자: '/', 전각 U+FF0F, 나눗셈 U+2215, 분수 U+2044. 값 구분으로 볼 수 있는 것은 '/'뿐 (나머지는 늘 단위·분수)
+_LIT_SLASHES = "/\uff0f\u2215\u2044"
+# '/' 값 구분 (1.4.72): 양쪽이 '숫자+단위'('100 V/220 V', '85 ℃/85 %RH')이고 '/' 뒤 값이 1·10·100·1000(1·10^n)이 아닐 때만.
+# '/' 뒤 값이 1·10^n이면 '당'(비율: '0.1 mm/1000 mm', '2 ℃/1 min', '5 %/1000 h'). 앞이 숫자뿐이면 주파수·전압만
+# ('50/60 Hz', '10/50 kHz', '110/220 V'. '10/350 μs', '15/16 inch', '1.2/50 μs'는 서지 파형·분수)
+_LIT_SLASH_LEFT_UNIT = re.compile(r"(?<![\d.,])\d[\d.,]*[ \u00a0]?[^\s\d/\uff0f\u2215\u2044]{1,4}/$")
+_LIT_SLASH_LEFT_NUM = re.compile(r"(?<![\d.,])\d{2,}/$")
+_LIT_SLASH_NUM_UNITS = ("Hz", "kHz", "MHz", "GHz", "V", "kV", "mV")
+_LIT_SLASH_RIGHT = re.compile(r"[+\-\u00b1\u2212]?(\d[\d.,]*)[ \u00a0]?[^\s\d/\uff0f\u2215\u2044]")
+_LIT_PER = re.compile(r"10*(?:[.,]0+)?")                          # 1, 10, 100, 1000, 1.0 (비율의 '당' 값)
+# 붙여 쓴 범위 대시 앞의 '숫자+기호 단위'는 _GLUED_RANGE_LEFT ('40 ℃\u201385 ℃'의 '40 ℃'): 영문 단위('5 V-10 V')는 하이픈 코드와 구분할 수 없어 뺌
+
+
+def _lit_slash_left(text: str, s: int, q: str) -> bool:
+    """text[s-1]이 '/'일 때 그 앞이 값 구분인지 ('100 V/220 V'의 '220 V', '50/60 Hz'의 '60 Hz')."""
+    head = text[max(0, s - 16):s]
+    num = re.match(r"[\d.,]+", q)
+    if num is None:
+        return False
+    if _LIT_SLASH_LEFT_UNIT.search(head):
+        return not _LIT_PER.fullmatch(num.group(0))
+    unit = q[num.end():].strip(" \t\u00a0")
+    return bool(_LIT_SLASH_LEFT_NUM.search(head)) and unit in _LIT_SLASH_NUM_UNITS
+
+
+def _lit_slash_right(text: str, e: int) -> bool:
+    """text[e]가 '/'일 때 그 뒤가 다른 값(부호·숫자+단위, 1·10^n 아님)인지 ('100 V/220 V', '+10 %/-5 %')."""
+    m = _LIT_SLASH_RIGHT.match(text, e + 1)
+    return bool(m) and not _LIT_PER.fullmatch(m.group(1))
 
 
 def _latin(c: str) -> bool:
@@ -3079,10 +3112,14 @@ class _Literal:
         before = text[s - 1] if s else ""
         if before:
             if first.isdecimal():
-                dc_ac = _latin(before) and text[max(0, s - 2):s] in ("DC", "AC") and not _latin(text[s - 3:s - 2])
-                slash = before == "/" and not last.isdecimal() and _LIT_SLASH_LEFT.search(text, max(0, s - 16), s)
-                if (before.isdecimal() or (before in ".,/^" and not slash) or before in _LIT_SIGNS
-                        or (_latin(before) and not dc_ac)):
+                # 'DC24 V'의 '24 V'는 층 A, 단위 없는 검색어 '12'·'100'은 'AC12 단자대'·'AC100'과 다름 (1.4.72)
+                dc_ac = (not last.isdecimal() and _latin(before) and text[max(0, s - 2):s] in ("DC", "AC")
+                         and not _latin(text[s - 3:s - 2]))
+                slash = before == "/" and not last.isdecimal() and _lit_slash_left(text, s, q)
+                glued_range = before in "-\u2013" and _GLUED_RANGE_LEFT.search(text, max(0, s - 16), s - 1)
+                if (before.isdecimal() or before in ".,^" or (before in _LIT_SLASHES and not slash)
+                        or (before in _LIT_SIGNS and not glued_range) or (_latin(before) and not dc_ac)
+                        or before in _LIT_GLUED_BEFORE or (before in "'\u2019" and text[s - 2:s - 1].isdecimal())):
                     return False                                   # 'DC5V'의 '5V', '50/60 Hz'의 '60 Hz'는 층 A
                 if before in _LIT_GLUED_SPACE and text[s - 2:s - 1] in _LIT_SIGNS:
                     return False                                   # '-\u00a040 ℃': 붙여 쓴 빼기와 같음
@@ -3113,12 +3150,16 @@ class _Literal:
             if after == "-" and nxt.isdecimal():
                 return False                                       # 숫자 코드 '61000-4'는 'IEC 61000-4-2', '1234'는 '1234-5'와 다름
             return not (after.isdecimal() or (after in ".," and nxt.isdecimal()) or _latin(after)
-                        or after in "^/*%" or after in _LIT_SUPER)
+                        or after in "^*%" or after in _LIT_SLASHES or after in _LIT_SUPER)
         if _unit_start(last):
             if _latin(last) and text[e:e + 2] in ("DC", "AC") and not _latin(text[e + 2:e + 3]):
                 return True                                        # '24 VDC'의 '24 V' (단위에 붙은 DC/AC)
-            if after == "/":
-                return nxt.isdecimal() or nxt in _LIT_SIGNS        # '100 V/220 V', '85 ℃/85 %RH'는 값 구분, '5 V/m'은 단위
+            if after in _LIT_SLASHES:
+                # '100 V/220 V', '85 ℃/85 %RH'는 값 구분, '5 V/m', '0.1 mm/1000 mm', '10 V\uff0fm'은 단위·비율 (1.4.72)
+                return after == "/" and _lit_slash_right(text, e)
+            if after in "-\u2212\u207b" and nxt.isdecimal() and not re.match(
+                    "[\\d.,]+[ \u00a0]?[A-Za-z%\u00b0\u2103\u2109\u03a9\u2126\u03bc\u00b5]", text[e + 1:e + 12]):
+                return False                                       # '10 m-1': 단위의 지수 (범위 '10 m-20 m'은 아님)
             if after.isdecimal() or _latin(after) or after in _LIT_LETTER_AFTER or after == "^" or after in _LIT_SUPER:
                 return False
             if after == "%" and last != "%":
@@ -3180,24 +3221,14 @@ NUM_CONTEXT_NOTE = "결과를 알릴 때 snippet의 앞뒤(부호, 범위 ~, 이
 SNIPPET_MIN_BEFORE = 15        # 스니펫에 늘 담는 일치 앞 글자 수 (부호 '- 40 ℃', 범위 '-10 ~', '이하'가 보이게)
 
 
-def make_snippet(text: str, terms: List[str], context: int) -> str:
-    """일치 자리(숫자가 든 검색어는 층 A 자리 먼저)와 앞뒤 문맥. 앞은 최소 SNIPPET_MIN_BEFORE자. 맞은 곳은 **강조**."""
-    flags = re.IGNORECASE
-    spans = [sp for sp in (term_span(t, text, flags) for t in terms) if sp]
-    if not spans:
-        return text[: context * 2]
-    s0, e0 = min(spans)
-    start = max(0, s0 - max(context, SNIPPET_MIN_BEFORE))
-    end = min(len(text), e0 + context)
+SNIPPET_JOIN = " / "          # 검색어 자리가 멀어 창이 겹치지 않을 때 조각 사이 (1.4.72)
+
+
+def _highlight(text: str, start: int, end: int, pattern: Any, lit_spans: List[Tuple[int, int]]) -> str:
+    """text[start:end]에서 맞은 곳(정규화 매처·층 A 자리)을 **강조**."""
     piece = text[start:end]
-    marks: List[Tuple[int, int]] = []
-    pattern = re.compile("|".join(_term_pattern(t, 0).pattern for t in sorted(terms, key=len, reverse=True)), flags)
-    marks += [(m.start(), m.end()) for m in pattern.finditer(piece) if m.group(0)]
-    for t in terms:
-        lf = literal_finder(t)
-        if lf is not None:
-            marks += [(m.start() - start, m.end() - start) for m in lf.finditer(text)
-                      if m.start() >= start and m.end() <= end]
+    marks = [(m.start(), m.end()) for m in pattern.finditer(piece) if m.group(0)]
+    marks += [(a - start, b - start) for a, b in lit_spans if a >= start and b <= end]
     merged: List[List[int]] = []
     for a, b in sorted(marks):
         if merged and a <= merged[-1][1]:
@@ -3206,8 +3237,27 @@ def make_snippet(text: str, terms: List[str], context: int) -> str:
             merged.append([a, b])
     for a, b in reversed(merged):
         piece = piece[:a] + "**" + piece[a:b] + "**" + piece[b:]
-    snippet = ("..." if start > 0 else "") + piece + ("..." if end < len(text) else "")
-    return snippet.replace("\n", " ")
+    return ("..." if start > 0 else "") + piece + ("..." if end < len(text) else "")
+
+
+def make_snippet(text: str, terms: List[str], context: int) -> str:
+    """검색어마다 일치 자리(숫자가 든 검색어는 층 A 자리 먼저)와 앞뒤 문맥. 앞은 최소 SNIPPET_MIN_BEFORE자. 맞은 곳은 **강조**.
+    AND 검색어들이 멀어 창이 겹치지 않으면 조각을 SNIPPET_JOIN으로 이음 ('...**온도**... / ...0 - **40 ℃**에서...')"""
+    flags = re.IGNORECASE
+    spans = sorted({sp for sp in (term_span(t, text, flags) for t in terms) if sp})
+    if not spans:
+        return text[: context * 2]
+    before = max(context, SNIPPET_MIN_BEFORE)
+    wins: List[List[int]] = []
+    for s0, e0 in spans:
+        a, b = max(0, s0 - before), min(len(text), e0 + context)
+        if wins and a <= wins[-1][1]:
+            wins[-1][1] = max(wins[-1][1], b)
+        else:
+            wins.append([a, b])
+    pattern = re.compile("|".join(_term_pattern(t, 0).pattern for t in sorted(terms, key=len, reverse=True)), flags)
+    lit_spans = [(m.start(), m.end()) for lf in (literal_finder(t) for t in terms) if lf is not None for m in lf.finditer(text)]
+    return SNIPPET_JOIN.join(_highlight(text, a, b, pattern, lit_spans) for a, b in wins).replace("\n", " ")
 
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?\u3002])\s+|\n+")

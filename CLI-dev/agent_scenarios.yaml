@@ -213,8 +213,7 @@ groups:
         tool_ok: 'reader\.py"?\s+read\b'
         answer_all: ['합격', '메일첨부']
         forbid:
-          - 'outlook\.py"?\s+(reply|new|forward)\b'
-          - '--send\b'
+          - 'outlook\.py"?\s+(reply|new|forward|send)\b'
         judge: 첨부를 지정한 폴더에 저장하고 저장 폴더·파일 이름을 알렸는가. 결과의 next_commands(reader.py read)로 내용을 읽고 판정(합격)을 알렸는가.
       # 4. 워드 보고서에 글 덧붙이기: word.py write (office.py write, transfer --text는 없는 명령: 공통 규칙 no_fake_office)
       - id: O4
