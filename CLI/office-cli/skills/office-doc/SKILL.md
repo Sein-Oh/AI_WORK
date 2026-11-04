@@ -26,7 +26,7 @@ metadata:
 | 워드 목차(장절 목록) | `python "C:\CLI\office-cli\word.py" outline` |
 | 워드 쓰기 | `python "C:\CLI\office-cli\word.py" write --file "<내용.md>"` / 한 줄 `--text "## 제목\n- 항목"` / 그림 `--image "<그림.png>"` (위치 `--anchor <글> --pos after`, 여러 곳이면 `--occurrence N`) |
 | 워드 쪽 나누기 / 목차 / 요약 상자 | `python "C:\CLI\office-cli\word.py" write --page-break` (.md의 `---`는 구분선) / `--toc` / `--text "<요약>" --callout` |
-| 워드 양식 채우기 | `python "C:\CLI\office-cli\word.py" fill --file "<값.csv>" --dry-run` (열: 자리, 값. 자리는 `{{업체명}}` 또는 표 칸 `표2!R3C4`. 확인 뒤 `--dry-run` 없이. 값이 있는 표 칸은 사용자가 원할 때만 `--overwrite`) |
+| 워드 양식 채우기 | `python "C:\CLI\office-cli\word.py" fill --file "<값.csv>" --dry-run` (열: 자리, 값. 자리는 `{{업체명}}` 또는 표 칸 `표2!R3C4`. 표 칸은 미리보기의 `[행, 열]` 글로 맞는 칸인지 확인 뒤 `--dry-run` 없이. 값이 있는 표 칸은 사용자가 원할 때만 `--overwrite`) |
 | 워드 검토 메모 | 목록 `python "C:\CLI\office-cli\word.py" comment` / 넣기 `python "C:\CLI\office-cli\word.py" comment --action add --anchor "<문서의 글>" --text "<메모>"` (여러 개 `--file "<메모.csv>"`, 열: 기준 글, 메모 내용) |
 | 워드 변경 추적 | `python "C:\CLI\office-cli\word.py" revisions` |
 | 워드 바꾸기 | `python "C:\CLI\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (`--replace` 없음) |

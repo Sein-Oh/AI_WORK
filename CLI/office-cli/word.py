@@ -1303,6 +1303,28 @@ def _cell_text(cell: Any) -> str:
     return t[:-2] if t.endswith(_CELL_END) else t.rstrip("\r\x07")
 
 
+def _cell_heads(doc: Any, ti: int, r: int, c: int) -> str:
+    """표 칸 옆에 붙일 그 행 첫 칸 글과 그 열 첫 행(머리글) 글: " [행 '전압', 열 '측정']".
+    병합된 표에서는 R3C4가 눈에 보이는 3행 4열과 다를 수 있어 미리보기로 맞는 칸인지 알아볼 수 있게. 못 읽으면 뺌."""
+    def text(rr: int, cc: int) -> str:
+        try:
+            return _preview(_cell_text(doc.Tables(ti).Cell(rr, cc)), 12)
+        except Exception:
+            return ""
+    row = text(r, 1) if c != 1 else ""
+    col = text(1, c) if r != 1 else ""
+    parts = ([f"행 '{row}'"] if row else []) + ([f"열 '{col}'"] if col else [])
+    return f" [{', '.join(parts)}]" if parts else ""
+
+
+def _doc_protected(doc: Any) -> bool:
+    """편집 제한(문서 보호)이 걸렸는지. ProtectionType: -1 = 보호 없음. 읽지 못하면 보호 없음으로 봄 (쓰기에서 오류로 잡힘)."""
+    try:
+        return int(doc.ProtectionType) != -1
+    except Exception:
+        return False
+
+
 def _fill_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
     argv = ["fill", "--target", args.target, "--file", args.file]
     for flag, on in (("--overwrite", args.overwrite), ("--no-focus", args.no_focus)):
@@ -1340,6 +1362,9 @@ def cmd_fill(args) -> Dict[str, Any]:
     with off.open_target("word", args.target, readonly=args.dry_run, focus=not args.no_focus,
                          tool=TOOL, command="fill") as t:
         doc = t.doc
+        if _doc_protected(doc):
+            raise rt.InputError("문서에 편집 제한(문서 보호)이 걸려 있어 아무것도 채우지 않았습니다. 사용자가 Word에서 보호를 풀었다고 하면 "
+                                "같은 명령을 1번 다시 실행하세요 (암호를 묻거나 추측하지 않음).", no_fallback=True)
         # 1) 모두 확인: 자리가 문서에 있는지, 표 칸이 있는지, 값이 있는 칸 (하나라도 문제면 아무것도 바꾸지 않음)
         counts = {k: _count_text(doc, k, True, False) for k in places}
         missing = [k for k, c in counts.items() if not c]
@@ -1367,9 +1392,10 @@ def cmd_fill(args) -> Dict[str, Any]:
             raise rt.InputError("아무것도 채우지 않았습니다. " + " / ".join(problems_in[:10]))
         conflicts = [(k, v) for k, v in old.items() if v.strip() and v != cells[k]]
         same = [k for k, v in old.items() if v == cells[k]]
+        heads = {k: _cell_heads(doc, *k) for k in cells}
         planned = [f"바꾸기: {k} {counts[k]}곳 -> {_preview(v)}" for k, v in places.items()]
         for k, v in cells.items():
-            ref = f"표{k[0]}!R{k[1]}C{k[2]}"
+            ref = f"표{k[0]}!R{k[1]}C{k[2]}{heads[k]}"
             if k in same:
                 planned.append(f"그대로(같은 값): {ref}")
             elif old[k].strip():
@@ -1384,31 +1410,54 @@ def cmd_fill(args) -> Dict[str, Any]:
                 fields["overwrite_cells"] = len(conflicts)
             return rt.ok(TOOL, "fill", f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개"
                          + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else ""),
-                         "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 확인을 받은 뒤 next_commands[0]을 실행하세요.",
+                         "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고(표 칸은 [행, 열] 글로 맞는 칸인지) 확인을 받은 뒤 next_commands[0]을 실행하세요.",
                          **fields)
         if conflicts and not args.overwrite:
             refs = [f"표{k[0]}!R{k[1]}C{k[2]}" for k, _ in conflicts]
             head = f"값이 있는 표 칸 {len(conflicts)}개가 덮어써집니다: "
             raise rt.UserDecisionError(
-                head + ", ".join(f"{r}='{_preview(v, 15)}'" for r, (_, v) in zip(refs[:5], conflicts[:5])) + (" ..." if len(refs) > 5 else ""),
+                head + ", ".join(f"{r}{heads[k]}='{_preview(v, 15)}'" for r, (k, v) in zip(refs[:5], conflicts[:5]))
+                + (" ..." if len(refs) > 5 else ""),
                 "채우지 않았습니다. 덮어쓸 칸과 기존 값을 사용자에게 보여 주고, 사용자가 덮어써도 된다고 하면 같은 명령에 --overwrite를 붙여 "
                 "다시 실행하세요 (미리 보려면 --dry-run).",
                 log_message=head + ", ".join(refs[:5]) + f" (값 {rt.DOC_OMITTED})")
         # 2) 채우기 (되돌리기 지점은 open_target이 남김)
-        for story in _stories(doc):
-            for key, val in places.items():
-                rng = story.Duplicate
-                n = 0
-                while n < 5000 and _find(rng, key, True, False):
-                    rng.Text = val.replace("\r\n", "\v").replace("\n", "\v")      # 자리 안의 줄바꿈은 줄 바꿈(단락 나누지 않음)
-                    t.changed = True
-                    n += 1
-                    rng.Collapse(0)
-        for k, v in cells.items():
-            if k in same:
-                continue
-            doc.Tables(k[0]).Cell(k[1], k[2]).Range.Text = v.replace("\r\n", "\r").replace("\n", "\r")
-            t.changed = True
+        done = 0
+        where = ""
+        try:
+            for story in _stories(doc):
+                for key, val in places.items():
+                    where = key
+                    rng = story.Duplicate
+                    n = 0
+                    while n < 5000 and _find(rng, key, True, False):
+                        rng.Text = val.replace("\r\n", "\v").replace("\n", "\v")      # 자리 안의 줄바꿈은 줄 바꿈(단락 나누지 않음)
+                        t.changed = True
+                        done += 1
+                        n += 1
+                        rng.Collapse(0)
+            for k, v in cells.items():
+                if k in same:
+                    continue
+                where = f"표{k[0]}!R{k[1]}C{k[2]}"
+                doc.Tables(k[0]).Cell(k[1], k[2]).Range.Text = v.replace("\r\n", "\r").replace("\n", "\r")
+                t.changed = True
+                done += 1
+        except Exception as e:
+            info = rt._com_error_info(e)
+            if info is not None and info[2] in ("busy", "gone"):
+                raise
+            rt.debug(f"채우기 실패: {e}")
+            if done and t.source in ("active", "open"):
+                left = f"앞의 {done}곳은 이미 바뀌었습니다(office.py undo로 되돌릴 수 있음). "
+            elif done:
+                left = "파일은 저장하지 않아 그대로입니다. "
+            else:
+                left = "아무것도 바꾸지 않았습니다. "
+            raise rt.InputError(f"{where}을(를) 채우지 못했습니다 (문서 보호, 편집 중, 내용 컨트롤 잠금 등, {type(e).__name__}). "
+                                + left + "원인을 사용자에게 알리고 해결했다고 하면 같은 명령을 1번 다시 실행하세요.",
+                                log_message=f"{where if where.startswith('표') else '자리'}을(를) 채우지 못했습니다 ({type(e).__name__}). "
+                                + left, no_fallback=True)
         # 3) 다시 읽어 확인 (R1)
         problems: List[str] = []
         for key, val in places.items():

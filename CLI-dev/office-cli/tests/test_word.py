@@ -951,7 +951,7 @@ def test_fill_nonempty_cell_needs_decision_then_overwrite(form_doc, capsys, tmp_
     doc, _ = form_doc
     f = _vals(tmp_path, "{{업체명}},한빛전자\n표2!R3C3,2.5 A\n표2!R2C3,5.1 V\n")
     code, out = run_word(capsys, "fill", "--file", f)
-    assert code == 1 and out["error_type"] == "needs_user_decision" and "표2!R3C3='2.1 A'" in out["message"], out
+    assert code == 1 and out["error_type"] == "needs_user_decision" and "표2!R3C3 [행 '전류', 열 '측정']='2.1 A'" in out["message"], out
     assert "{{업체명}}" in doc.text and doc.grid_tables[1].grid[1][2] == ""             # 아무것도 바꾸지 않음
     code, out = run_word(capsys, "fill", "--file", f, "--overwrite")
     assert code == 0 and doc.grid_tables[1].grid[2][2] == "2.5 A" and out["overwritten"] == 1, out
@@ -985,7 +985,46 @@ def test_fill_third_column_stops_before_filling(form_doc, capsys, tmp_path):
     code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "자리,값\n{{업체명}},서울시 강남구, 101호\n표2!R2C3,1,500\n"))
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
     assert "2, 3번째 줄" in out["message"] and "큰따옴표" in out["message"] and '{{업체명}},"서울시 강남구, 101호"' in out["message"]
-    assert doc.text == before and doc.grid_tables[1].grid[1][2] == "" and points == []
+    assert doc.text == before and doc.grid_tables[1].grid[1][2] == "" and undo_points("word") == []
+
+
+def test_fill_preview_shows_row_and_column_heads(form_doc, capsys, tmp_path):
+    # 병합 표에서 표2!R3C4가 다른 칸일 수 있음: 미리보기·결과에 그 행 첫 칸과 그 열 첫 행 글을 함께 (1.4.63)
+    doc, _ = form_doc
+    f = _vals(tmp_path, "표2!R2C3,5.1 V\n표2!R3C3,2.5 A\n")
+    code, out = run_word(capsys, "fill", "--file", f, "--dry-run")
+    assert code == 0, out
+    assert any("표2!R2C3" in p and "행 '전압'" in p and "열 '측정'" in p for p in out["planned"]), out["planned"]
+    assert any("표2!R3C3" in p and "행 '전류'" in p and "열 '측정'" in p for p in out["planned"])
+    code, out = run_word(capsys, "fill", "--file", f)
+    assert code == 1 and out["error_type"] == "needs_user_decision" and "행 '전류'" in out["message"], out
+    code, out = run_word(capsys, "fill", "--file", f, "--overwrite")
+    assert code == 0 and any("행 '전압'" in p and "열 '측정'" in p for p in out["applied"]), out
+
+
+def test_fill_protected_document_changes_nothing(form_doc, capsys, tmp_path):
+    doc, points = form_doc
+    doc.ProtectionType = 2                                   # wdAllowOnlyFormFields
+    before = doc.text
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "{{업체명}},한빛전자\n표2!R2C3,5.1 V\n"))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "보호" in out["message"], out
+    assert doc.text == before and doc.grid_tables[1].grid[1][2] == "" and undo_points("word") == []
+
+
+def test_fill_failure_midway_says_how_many_changed(form_doc, capsys, tmp_path, monkeypatch):
+    doc, points = form_doc
+    from fake_word import FakeCellRange
+    real = FakeCellRange.Text
+
+    def refuse(s, v):
+        if v == "막힘":
+            raise RuntimeError("com_error: 이 명령을 사용할 수 없습니다")
+        real.fset(s, v)
+    monkeypatch.setattr(FakeCellRange, "Text", property(real.fget, refuse))
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "{{업체명}},한빛전자\n표1!R2C2,x\n표2!R2C3,막힘\n"))
+    assert code == 1 and out["status"] == "error", out
+    assert "앞의 3곳" in out["message"] and "office.py undo" in out["message"]
+    assert len(points) == 1
 
 
 def test_fill_same_value_cell_is_unchanged(form_doc, capsys, tmp_path):

@@ -31,6 +31,10 @@
   `test_excel_read.py` `test_check_does_not_mix_items_of_one_sentence`.
 - `excel.py check` 칸·머리글·항목에 단위가 없으면 규격 단위로 추정해 판정하던 것을 `판단필요`(`칸 단위 없음 (규격은 cm): 값 열 머리글에 단위를 적으세요`)로.
   머리글 단위가 규격과 같은 종류면 접두어를 맞춰 판정(그대로). 회귀 테스트: `test_check_cell_without_unit_is_not_guessed`.
+- `word.py fill`: 표 칸 `표2!R3C4`가 병합 표에서 다른 칸일 수 있는데 미리보기로 알아볼 수 없었음. `planned`·`applied`·덮어쓰기 확인 message에
+  그 행 첫 칸과 그 열 첫 행 글(12자)을 붙임(`표2!R3C3 [행 '전류', 열 '측정']`). 회귀 테스트: `test_fill_preview_shows_row_and_column_heads`.
+- `word.py fill`: 문서 보호(`ProtectionType`)를 쓰기 전에 확인해 STOP_RETRY, 쓰는 중 실패하면 "앞의 N곳은 이미 바뀌었습니다(office.py undo)"
+  (닫힌 파일은 저장하지 않아 그대로). 회귀 테스트: `test_fill_protected_document_changes_nothing`, `test_fill_failure_midway_says_how_many_changed`.
 
 ## [1.4.62] - 2026-11-04
 
