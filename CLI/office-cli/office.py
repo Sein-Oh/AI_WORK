@@ -470,7 +470,7 @@ def _with_option_value(argv: List[str], option: str, value: str) -> List[str]:
 
 def _preflight_targets(args, targets: List[str]) -> None:
     """여러 앱에 보낼 때(--to word,ppt) 무엇이든 넣기 전에 모든 받는 문서와 앱별 인자를 확인합니다.
-    이전에는 워드에 넣은 뒤 PowerPoint가 열려 있지 않으면 '실행하지 않았습니다' 오류로 끝나, 다시 실행하면 워드에 두 번 들어갔음.
+    워드에 넣은 뒤 PowerPoint가 없어 실패하면, 다시 실행할 때 워드에 두 번 들어가기 때문.
     못 찾은 문서가 있으면 아무것도 바꾸지 않고, 찾은 앱만으로 같은 명령을 [추천]합니다."""
     if len(targets) < 2:
         return                                    # 앱 하나: open_target이 바꾸기 전에 그 앱의 오류를 냄
@@ -778,8 +778,8 @@ def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
         wb = t.doc
         names = [str(wb.Worksheets(i).Name) for i in range(1, wb.Worksheets.Count + 1)]
         if args.sheet:
-            # 있는 시트 이름을 안 뒤에, 아무것도 바꾸기 전에 확인 ([추천]이 있는 시트와 겹치지 않게.
-            # 이전에는 시트 이름 없이 확인해 [추천]대로 다시 실행해도 '이미 있음'으로 막힐 수 있었음)
+            # 있는 시트 이름을 안 뒤에, 아무것도 바꾸기 전에 확인 ([추천]이 있는 시트와 겹치지 않게:
+            # [추천]대로 다시 실행했는데 '이미 있음'으로 막히지 않도록)
             off.check_sheet_name(args.sheet, names)
         name = (args.sheet or sheet_base)[:31]
         k = 2

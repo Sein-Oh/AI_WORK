@@ -297,7 +297,7 @@ def cmd_list(args) -> Dict[str, Any]:
 
 def _dasl_like(fields: Sequence[str], value: str) -> str:
     # 작은따옴표만 겹쳐 씁니다. % _는 그대로 둠: DASL 와일드카드지만 자기 자신과도 맞으므로 빠지는 메일이 없음
-    # (예전에는 _를 공백으로 바꾸고 %를 지워 '견적서_v2', '10% 할인'이 절대 맞지 않고 0건 VERIFIED가 나왔음)
+    # (_를 공백으로 바꾸거나 %를 지우면 '견적서_v2', '10% 할인'이 절대 맞지 않아 0건 VERIFIED가 됨)
     v = value.replace("'", "''")
     return "(" + " OR ".join(f'"{f}" LIKE \'%{v}%\'' for f in fields) + ")"
 

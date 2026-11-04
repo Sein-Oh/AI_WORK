@@ -662,7 +662,7 @@ def cmd_write(args) -> Dict[str, Any]:
     image = rt.resolve_input_path(args.image, "그림 파일") if args.image else None
     cards = _parse_cards(args.cards) if args.cards else None
     if md_sections and args.title:
-        # --title은 첫 슬라이드의 제목 (이전에는 .md가 있으면 버려졌음). 첫 절의 제목이 --title과 다르면 그 제목은 본문 첫 줄로
+        # --title은 첫 슬라이드의 제목 (.md가 있어도). 첫 절의 제목이 --title과 다르면 그 제목은 본문 첫 줄로
         first = dict(md_sections[0])
         if first["title"] and first["title"].strip().casefold() != args.title.strip().casefold():
             first["lines"] = [(first["title"], "")] + list(first["lines"])
@@ -832,7 +832,7 @@ def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[s
 
     (바꾼 곳 수, 찾았지만 이미 바꿀 글과 같아 그대로 둔 곳 수)를 돌려줍니다. 서식이 없으면 찾은 곳의 글이
     바꿀 글과 글자 그대로 같은 곳(대소문자까지)은 바꾸지 않고 세기만 합니다
-    (예: --find iphone --replace iPhone에서 이미 'iPhone'인 곳. 이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음).
+    (예: --find iphone --replace iPhone에서 이미 'iPhone'인 곳. 바꾼 곳으로 세면 되돌리기 지점이 남음).
     """
     text = str(tr.Text)
     if (find not in text) if match_case else (find.lower() not in text.lower()):

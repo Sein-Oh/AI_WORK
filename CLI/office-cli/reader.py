@@ -1781,8 +1781,8 @@ def _index_files(files: List[str], max_files: int) -> Dict[str, Any]:
 
 def _raise_single_failure(res: Dict[str, Any]) -> None:
     """--file로 파일 하나만 줬는데 읽지 못했으면 원래 예외를 그대로 다시 냅니다 (read와 같은 결과).
-    이전에는 사유 글로 InputError를 새로 만들어 내부 오류(파서 버그)도 STOP_RETRY 입력 오류가 되고 traceback이 남지 않았으며,
-    InputError의 log_message(문서 글을 뺀 글)도 잃었음. 내부 오류는 ERROR와 traceback, InputError는 그대로."""
+    사유 글로 InputError를 새로 만들면 내부 오류(파서 버그)도 STOP_RETRY 입력 오류가 되고 traceback이 남지 않으며,
+    InputError의 log_message(문서 글을 뺀 글)도 잃기 때문. 내부 오류는 ERROR와 traceback, InputError는 그대로."""
     if res["failures"]:
         raise res["failures"][0]["error"]
 
@@ -2023,7 +2023,7 @@ def cmd_read(args) -> Dict[str, Any]:
     blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, by_range)
     notes: List[str] = []
     # 모든 쪽이 스캔 이미지(도장·Bates 번호 같은 짧은 글만 있음)이거나 읽으려는 쪽이 모두 스캔 쪽: 읽은 글은 본문이 아님
-    # -> 저장해도 읽어도 UNVERIFIED (이전에는 --save와 스캔 쪽만 고른 --pages가 VERIFIED)
+    # -> 저장해도 읽어도 UNVERIFIED (--save, 스캔 쪽만 고른 --pages도)
     got = "읽은 글은 도장·쪽 번호 같은 짧은 글뿐" if selected else "읽은 글 없음"
     ocr_reason = ""
     if meta.get("ocr_needed"):

@@ -615,7 +615,7 @@ SHEET_NAME_RESERVED = ("history",)              # 엑셀이 예약한 시트 이
 def check_sheet_name(name: Any, existing: Optional[List[str]] = None) -> None:
     """엑셀 시트 이름 규칙(31자 이하, / \\ ? * [ ] : 없음, 빈 이름 아님, 앞뒤 ' 없음, 예약된 이름 History 아님)을
     문서를 바꾸기 전에 확인합니다. 어기면 InputError와 [추천](쓸 수 없는 글자를 _로 바꾸고 31자로 자른 이름,
-    History는 History_, existing과 겹치지 않게). 이전에는 시트를 만든 뒤 Name에서 실패해 빈 시트가 남았음.
+    History는 History_, existing과 겹치지 않게). 시트를 만든 뒤 Name에서 실패하면 빈 시트가 남기 때문.
     existing을 주지 않으면 [추천]이 있는 시트와 겹칠 수 있으므로 시트 이름을 아는 곳에서 부릅니다."""
     text = "" if name is None else str(name)
     if not text.strip():

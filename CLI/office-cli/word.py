@@ -1174,7 +1174,7 @@ def cmd_replace(args) -> Dict[str, Any]:
                          tool=TOOL, command="replace") as t:
         for find, rep in mapping.items():
             if find == rep and not formatting:
-                # 바뀌는 것이 없음: 세기만 함 (이전에는 'N곳 처리'로 보고하고 바꾼 것으로 표시해 되돌리기 지점이 남았음)
+                # 바뀌는 것이 없음: 세기만 함 (바꾼 것으로 보고하지 않고 되돌리기 지점도 남기지 않음)
                 hits = _count_text(t.doc, find, args.match_case, args.whole_word)
                 if hits:
                     same[find] = hits
@@ -1187,7 +1187,6 @@ def cmd_replace(args) -> Dict[str, Any]:
                 while _find(rng, find, args.match_case, args.whole_word):
                     if not formatting and str(rng.Text) == rep:
                         # 찾은 글이 이미 바꿀 글 그대로 (예: --find iphone --replace iPhone에서 'iPhone'): 세기만 함
-                        # (이전에는 바꾼 곳으로 세어 되돌리기 지점이 남았음)
                         same[find] = same.get(find, 0) + 1
                         rng.Collapse(0)
                         continue

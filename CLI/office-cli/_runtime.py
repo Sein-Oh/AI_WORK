@@ -30,7 +30,7 @@ TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 def engenius_home() -> Optional[str]:
     """도구 파일이 En-Genius 트레이의 임시 폴더(%TEMP%\\engenius-skill\\<id>)에서 실행 중이면 사용자 데이터를 둘 고정 폴더.
     트레이는 그 폴더를 실행이 끝나면 지우므로 도구 폴더 아래(data, cache, config.json)가 남지 않는다.
-    배포 스킬(docs/engenius)은 C:\\CLI의 도구를 실행하므로 해당 없음: OpenCode와 같은 data, cache를 쓴다 (1.4.35)."""
+    배포 스킬(docs/engenius)은 C:\\CLI의 도구를 실행하므로 해당 없음: OpenCode와 같은 data, cache를 쓴다."""
     if not os.environ.get("ENGENIUS_OUT") or "engenius-skill" not in TOOL_DIR.replace("\\", "/").lower().split("/"):
         return None
     home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
@@ -652,7 +652,7 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
     sys.exit(0 if result.get("status") == "ok" else 1)
 
 
-# 경량 LLM이 자주 지어내는 명령·옵션 (회사 PC 오류 로그). 실제 이름으로 안내합니다.
+# 경량 LLM이 자주 지어내는 명령·옵션 (실사용 오류 로그에서 본 것). 실제 이름으로 안내합니다.
 COMMAND_ALIASES = {"excel": {"list": "info", "sheets": "info"}, "word": {"list": "info", "toc": "outline"},
                    "ppt": {"list": "info"}, "office": {"list": "windows", "redo": "undo"},
                    "outlook": {"attachment": "attachments", "attach": "attachments", "download": "attachments"}}
@@ -660,7 +660,7 @@ OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--targ
                    "--text": ["--value", "--file"],  # 엑셀 write에 워드식 --text를 쓰면 --target(철자 비슷)이 아니라 --value
                    "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"],
                    "--cell": ["--range"]}
-# 다른 파일의 명령이 맞는 경우 (회사 PC 오류 로그 2026-11-04): [추천]으로 값만 바꾸면 또 틀리므로 맞는 명령을 안내만 함
+# 다른 파일의 명령이 맞는 경우: [추천]으로 값만 바꾸면 또 틀리므로 맞는 명령을 안내만 함
 _WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --text "내용", PPT는 ppt.py write --text "내용", '
                '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
 OTHER_COMMAND = {("office", "write"): "office.py에는 write가 없습니다. " + _WRITE_TEXT,
@@ -693,7 +693,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
                                       "도구 코드(.py)는 읽지 마세요. 방법을 모르겠으면 사용자에게 물어보세요."})
 
     def _hint(self, message: str) -> str:
-        """흔한 잘못(없는 명령, 다른 명령의 옵션, 따옴표 없는 경로)에 [추천]을 붙입니다 (회사 PC 오류 로그)."""
+        """흔한 잘못(없는 명령, 다른 명령의 옵션, 따옴표 없는 경로)에 [추천]을 붙입니다."""
         import difflib
         top = self if self.prog.count(" ") == 0 else None
         subs = {}

@@ -100,7 +100,7 @@ def parse_area(cells: str, max_row: Optional[int], max_col: Optional[int]) -> Tu
         return ra, 1, rb, max_col
     r1, c1 = parse_cell(a)
     r2, c2 = parse_cell(b)
-    # 거꾸로 준 범위(C5:A1)는 Excel처럼 A1:C5로 (이전에는 닫힌 파일에서 빈 결과)
+    # 거꾸로 준 범위(C5:A1)는 Excel처럼 A1:C5로 (닫힌 파일에서도 같게)
     return min(r1, r2), min(c1, c2), max(r1, r2), max(c1, c2)
 
 
@@ -287,7 +287,7 @@ def range_info(rng: Any) -> Dict[str, Any]:
 def _closed_bounds(ws: Any) -> Tuple[int, int, int, int]:
     """닫힌 시트의 데이터 범위 (첫 행, 첫 열, 끝 행, 끝 열). 빈 시트는 (1, 1, 0, 0).
     크기 정보(<dimension>)가 없는 파일(다른 프로그램이 만든 xlsx)은 칸을 훑어 실제 범위를 셉니다
-    (이전에는 B:B가 B:D로, 5:7이 끝 열 없이 읽혔음)."""
+    (B:B가 B:D로, 5:7이 끝 열 없이 읽히지 않게)."""
     if ws.max_row is not None and ws.max_column is not None:
         return int(ws.min_row), int(ws.min_column), int(ws.max_row), int(ws.max_column)
     r1 = c1 = None
@@ -338,9 +338,9 @@ def _box(cells: List[Tuple[int, int]]) -> Tuple[int, int, int, int]:
 
 def _uncomputed_extent(path: str, title: str) -> Optional[Tuple[int, int, int, int]]:
     """시트 전체에서 계산된 값이 없는 수식 칸을 감싸는 범위 (없으면 None). 데이터로 범위를 정할 때(범위 생략, B:B, 큰 범위 줄이기)
-    끝쪽 행·열을 자르기 전에 확인합니다: 그런 칸은 빈 칸(None)으로 읽혀 합계 행 같은 수식 행·열이 잘려 나갔음(1.4.31까지).
+    끝쪽 행·열을 자르기 전에 확인합니다: 그런 칸은 빈 칸(None)으로 읽혀 합계 행 같은 수식 행·열이 잘려 나가기 때문.
     값이 있는 끝에서 FAR_GAP보다 멀리 떨어진 칸(데이터 A1:C10과 Z200000)은 넣지 않고 _FAR에 남깁니다: 넣으면 그 칸까지
-    빈 행을 채워 읽고, 큰 범위의 [추천]이 그 칸을 빼는 범위가 되었음(1.4.44)."""
+    빈 행을 채워 읽고, 큰 범위의 [추천]이 그 칸을 빼는 범위가 되기 때문."""
     if not path.lower().endswith((".xlsx", ".xlsm")):
         return None
     info = _SHEET_SCANS.get((path, title))
@@ -396,7 +396,7 @@ def far_uncomputed(path: str, sheet: str, asked: Tuple[int, int, int, int],
 def _clip_closed_range(path: str, ws: Any, address: str, r1: int, c1: int, r2: int, c2: int) -> Tuple[int, int]:
     """준 범위가 CLOSED_MAX_CELLS칸을 넘으면 데이터가 있는 끝(행·열)까지로 줄입니다 (빈 칸만 빠져 값은 같음).
     파일에 적힌 크기(<dimension>)가 서식만 있는 먼 칸(Z300000 등)까지라 그것으로도 넘으면 값을 훑어 실제 끝을 찾습니다
-    (이전에는 기록된 크기만 보고 STOP_RETRY). 줄여도 넘으면 입력 오류와 [추천] 범위를 냅니다. 줄인 (끝 행, 끝 열)을 돌려줍니다."""
+    (기록된 크기만 보고 멈추지 않음). 줄여도 넘으면 입력 오류와 [추천] 범위를 냅니다. 줄인 (끝 행, 끝 열)을 돌려줍니다."""
     mr2, mc2 = _data_end(path, ws)    # 계산된 값이 없는 수식 칸(빈 칸으로 읽힘)까지는 자르지 않음 (먼 칸 제외)
     ext = _uncomputed_extent(path, ws.title)
     nr2, nc2 = min(r2, max(mr2, r1)), min(c2, max(mc2, c1))
@@ -515,7 +515,7 @@ def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: 
     return hits, total, cut_n
 
 
-# --- read --formulas (1.4.36): 수식 칸 목록 ---------------------------------------------------------------
+# --- read --formulas: 수식 칸 목록 ----------------------------------------------------------------------
 
 FORMULA_SHOW = 200          # JSON formulas에 담는 수식 칸 수 (넘으면 formulas_truncated, 전체는 full_result_file CSV)
 ARRAY_CHECK_MAX = 2000      # 열린 문서에서 배열 수식인지 칸마다 확인하는 수식 칸 수 상한 (COM 호출 수 제한)
@@ -721,7 +721,7 @@ def _far_for_read(path: str, sheet: str, address: Optional[str], r0: int, c0: in
 
 
 def _with_far(payload: Dict[str, Any], far: Optional[Dict[str, Any]], target: str) -> Dict[str, Any]:
-    """R1: 읽지 않은 먼 계산되지 않은 수식 칸이 있으면 UNVERIFIED와 그 칸을 따로 읽는 명령 (1.4.44)."""
+    """R1: 읽지 않은 먼 계산되지 않은 수식 칸이 있으면 UNVERIFIED와 그 칸을 따로 읽는 명령."""
     if not far or payload.get("status") != "ok":
         return payload
     fields = {k: v for k, v in payload.items() if k not in rt._PAYLOAD_BASE}
@@ -763,7 +763,7 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
                                 "(Office 없이 수식을 읽는 것은 .xlsx/.xlsm만). 엑셀에서 이 파일을 연 뒤 같은 명령을 다시 실행하세요 "
                                 "(열린 문서는 엑셀에서 수식을 읽음).")
     if csv_path:
-        # CSV도 같은 명령으로 (행 수 세기, 머리글 확인): 이전에는 확장자 오류가 나 LLM이 pandas 코드를 직접 짰음
+        # CSV도 같은 명령으로 (행 수 세기, 머리글 확인): 확장자 오류를 내면 LLM이 pandas 코드를 직접 짬
         sheet, r0, c0, matrix, names = _read_matrix_csv(csv_path, args.range)
         source = {"app": "Excel", "name": os.path.basename(csv_path), "path": csv_path, "source": "file(csv)"}
         finfo["csv"] = True
@@ -1216,7 +1216,7 @@ def cmd_write(args) -> Dict[str, Any]:
                 body_w = len(args.formula)
             else:
                 body_w = 1
-            # 수식·값도 쓸 열 수만큼 (이전에는 1열만 보고 다른 열의 데이터 위에 썼음)
+            # 수식·값도 쓸 열 수만큼 (1열만 보면 다른 열의 데이터 위에 씀)
             width = max(len(header) if header else 0, body_w)
             # 쓸 열 전체에서 가장 아래 행 (한 열만 보면 그 열이 비어 있는 행에 다른 열 데이터를 덮어씀)
             last = max(_last_used_row(ws, c) for c in range(c1, c1 + width))
@@ -1261,7 +1261,7 @@ def cmd_write(args) -> Dict[str, Any]:
                 raise rt.InputError("--range 범위가 헤더 행만 포함합니다. 데이터 행까지 포함하세요.")
             ncols = c2 - c1 + 1
             if r1 != authored_row:
-                # --append로 수식 행이 옮겨짐: 상대 참조를 실제 행 기준으로 (그대로 쓰면 원래 행을 계속 가리켰음)
+                # --append로 수식 행이 옮겨짐: 상대 참조를 실제 행 기준으로 (그대로 쓰면 원래 행을 계속 가리킴)
                 formulas = [_rebase_formula(t.app, ws, f, authored_row, c1 + j, r1, c1 + j) for j, f in enumerate(formulas)]
             if len(formulas) == 1:
                 ops.append((r1, c1, r2, c2, "formula", formulas[0]))          # 상대참조 자동 조정
@@ -1380,7 +1380,7 @@ def cmd_replace(args) -> Dict[str, Any]:
         ranges = [target_range(t, ws, args.range) for ws in sheets]     # 주소·시트 확인을 바꾸기 전에 모두
         with off.excel_batch(t.app):
             for rng in ranges:
-                ws = rng.Worksheet           # --range 'S2!A1'은 그 시트 (이전에는 읽기는 S2, 쓰기는 지금 시트)
+                ws = rng.Worksheet           # --range 'S2!A1'은 읽기와 쓰기 모두 그 시트
                 values = off.range_to_matrix(rng.Value)
                 formulas = off.range_to_matrix(rng.Formula)
                 r0, c0 = int(rng.Row), int(rng.Column)
@@ -1415,7 +1415,7 @@ def cmd_replace(args) -> Dict[str, Any]:
                             replaced.append(cell_ref)
                         elif not is_formula:
                             # 찾는 글과 바꿀 글이 같고(--map {"A": "A"} 포함) 서식도 없으면 바뀐 것 없음:
-                            # 바꾼 칸으로 세지 않음 (이전에는 'N개 셀 처리'로 보고하고 되돌리기 지점을 남겼음)
+                            # 바꾼 칸으로 세지 않음 (되돌리기 지점도 남기지 않음)
                             same_cells += 1
                 if replaced:
                     t.set_focus(sheet=ws)
