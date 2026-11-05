@@ -449,7 +449,9 @@ def _mail_detail(item: Any, args, source: str) -> Dict[str, Any]:
             problem = "저장한 파일에 메일 제목이 없음"
         if problem:
             result["save_problem"] = problem
-        nexts.append(rt.next_command("word.py", ["write", "--file", result["output_file"]], "메일 내용을 워드에 넣기"))
+        # 워드에 넣기는 열린 문서를 바꿈: confirm_commands (1.4.75)
+        result["confirm_commands"] = [rt.next_command("word.py", ["write", "--file", result["output_file"]],
+                                                      "메일 내용을 열린 워드 문서에 넣기 (사용자가 원할 때만)")]
     if info["attachments"]:
         atts = _attachment_infos(item)
         names = [a["name"] for a in atts if not a["hidden_inline"]]
@@ -480,7 +482,7 @@ def _detail_response(command: str, preview: str, result: Dict[str, Any]) -> Dict
         return rt.ok_unverified(TOOL, command, preview, [result["save_problem"]], **result)
     if "output_file" in result:
         return rt.ok(TOOL, command, preview + f", 저장: {result['output_file']}",
-                     "VERIFIED: 메일을 읽고 저장한 파일을 다시 열어 확인했습니다.", verified=True, **result)
+                     "VERIFIED: 메일을 읽고 저장한 파일을 다시 열어 확인했습니다. " + rt.INTO_OTHER_DOC, verified=True, **result)
     return rt.ok(TOOL, command, preview, **result)
 
 
@@ -883,7 +885,8 @@ def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
     # 발송은 next_commands가 아니라 confirm_commands로 (1.4.73): next_commands는 '그대로 실행'하는 다음 단계라
     # 경량 LLM이 기계적으로 실행해도 메일이 나가지 않게, 사용자 '예' 뒤에만 실행하는 명령은 키를 나눔
     extra["confirm_commands"] = [rt.next_command("outlook.py", ["send", "--id", extra["draft_id"]],
-                                                 "사용자가 받는 사람·제목을 보고 보내라고 한 뒤에만 이 초안을 보내기")]
+                                                 "사용자가 받는 사람·제목을 보고 보내라고 한 뒤에만 이 초안을 보내기",
+                                                 destructive=True)]
     tell = " original(원본 메일의 제목·보낸사람)," if original is not None else ""
     return rt.ok(TOOL, command,
                  f"메일 작성 창을 띄웠습니다(초안 저장): '{extra['subject']}' -> {extra['to'] or '(받는 사람 미입력)'}{note}",
@@ -957,6 +960,7 @@ def cmd_send(args) -> Dict[str, Any]:
     try:
         mail.Send()
     except Exception as e:
+        _draft_mark_failed(eid)
         raise _send_refused(f"Outlook이 발송을 거부했습니다({type(e).__name__}). 이 초안은 send로 다시 보내지 않습니다. "
                             "사용자에게 작성 창과 보낸 편지함을 확인하고 필요하면 직접 [보내기]를 누르라고 알리세요.") from None
     extra["sent"] = True
@@ -1331,6 +1335,10 @@ def _draft_record(eid: str, claim: bool) -> None:
         if rec is None:
             raise _send_refused("이 메일은 이 도구(new·reply·forward)가 최근에 만든 초안이 아니라 보내지 않았습니다. "
                                 "사용자가 쓰던 초안은 사용자가 작성 창에서 직접 보내라고 알리세요.")
+        if rec.get("failed"):
+            # 발송이 실패한 초안 (1.4.75): 이미 보냄과 구분해 알림. fail-closed는 그대로 (send로 다시 보내지 않음)
+            raise _send_refused(f"발송이 실패한 초안입니다({rec['failed']}). 다시 보내지 않았습니다. "
+                                "사용자에게 작성 창(임시 보관함)에서 초안을 확인하고 직접 [보내기]를 누르라고 알리세요.")
         if rec.get("sent"):
             raise _send_refused(f"이 초안은 이미 send로 보냈습니다({rec['sent']}). 다시 보내지 않았습니다. "
                                 "사용자에게 보낸 편지함과 보낼 편지함을 확인하라고 알리세요.")
@@ -1341,6 +1349,23 @@ def _draft_record(eid: str, claim: bool) -> None:
             rt.safe_write_text(_side_path(DRAFTS_FILE), json.dumps(data, ensure_ascii=False), deadline=lock.deadline)
         except Exception as e:
             raise _send_refused(f"발송 기록을 남기지 못해({type(e).__name__}) 보내지 않았습니다. 사용자에게 알리세요.") from None
+
+
+def _draft_mark_failed(eid: str) -> None:
+    """Send 예외 뒤 원장에 실패 시각을 기록 (1.4.75): 다음 send 거부 문구를 '이미 보냄'과 구분. 기록하지 못해도
+    '보냄' 기록이 남아 있어 다시 보내지 않음 (fail-closed). 오류는 삼킴."""
+    try:
+        with _IdsLock() as lock:
+            if not lock.acquired:
+                return
+            data = _load_drafts(lock.deadline)
+            rec = data.get(eid)
+            if rec is None:
+                return
+            rec["failed"] = _dt.datetime.now().isoformat(timespec="seconds")
+            rt.safe_write_text(_side_path(DRAFTS_FILE), json.dumps(data, ensure_ascii=False), deadline=lock.deadline)
+    except Exception:
+        pass
 
 
 def _relist_commands() -> List[Dict[str, str]]:

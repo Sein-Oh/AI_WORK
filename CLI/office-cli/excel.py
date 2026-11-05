@@ -823,13 +823,14 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     if args.save:
         out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}", ".csv")
         out = rt.write_csv_rows(out, values)
-        result.update(output_file=out, next_commands=[
-            rt.next_command("word.py", ["write", "--file", out], "저장한 표를 열린 워드 문서에 넣기"),
-            rt.next_command("ppt.py", ["write", "--file", out], "저장한 표를 열린 PPT에 넣기")])
+        # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75): next_commands는 묻지 않고 실행해도 되는 읽기·미리보기만
+        result.update(output_file=out, confirm_commands=[
+            rt.next_command("word.py", ["write", "--file", out], "저장한 표를 열린 워드 문서에 넣기 (사용자가 원할 때만)"),
+            rt.next_command("ppt.py", ["write", "--file", out], "저장한 표를 열린 PPT에 넣기 (사용자가 원할 때만)")])
         # R1: 저장한 CSV를 다시 읽어 행 수 비교 (check_saved_file은 빈 행을 빼고 세므로 기대값도 빈 행 제외)
         filled = sum(1 for r in values if any(v is not None and str(v).strip() for v in r))
         return rt.ok_file(TOOL, "read", f"{sheet}!{full_addr} ({nrows}행 x {ncols}열)를 CSV로 저장: {out}", out,
-                          "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. " + rt.INTO_OTHER_DOC,
                           expected_rows=filled, delimiter=",", **result)
 
     shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows(values, args.max_rows)
@@ -1012,12 +1013,13 @@ def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: s
     if args.save:
         out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}_조건", ".csv")
         out = rt.write_csv_rows(out, values)
-        result.update(output_file=out, next_commands=[
-            rt.next_command("word.py", ["write", "--file", out], "저장한 표를 열린 워드 문서에 넣기"),
-            rt.next_command("ppt.py", ["write", "--file", out], "저장한 표를 열린 PPT에 넣기")])
+        # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75): next_commands는 묻지 않고 실행해도 되는 읽기·미리보기만
+        result.update(output_file=out, confirm_commands=[
+            rt.next_command("word.py", ["write", "--file", out], "저장한 표를 열린 워드 문서에 넣기 (사용자가 원할 때만)"),
+            rt.next_command("ppt.py", ["write", "--file", out], "저장한 표를 열린 PPT에 넣기 (사용자가 원할 때만)")])
         filled = sum(1 for r in values if any(v is not None and str(v).strip() for v in r))
         return rt.ok_file(TOOL, "read", f"{where}에서 조건({cond_text})에 맞는 {len(hits)}행을 머리글과 함께 CSV로 저장: {out}", out,
-                          "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. " + rt.INTO_OTHER_DOC,
                           expected_rows=filled, delimiter=",", **result)
     shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows(values, args.max_rows)
     truncated = rows_cut or cells_cut > 0 or cols_dropped > 0
@@ -1538,7 +1540,7 @@ def _cells_items(spec: str) -> Tuple[List[Tuple[str, str, str]], bool]:
     return items, False
 
 
-def _cells_command(args, extra: Sequence[str] = (), drop_dry: bool = True) -> Dict[str, str]:
+def _cells_command(args, extra: Sequence[str] = (), drop_dry: bool = True) -> Dict[str, Any]:
     argv = ["write", "--target", args.target, "--cells", args.cells]
     if args.sheet:
         argv += ["--sheet", args.sheet]
@@ -1546,7 +1548,8 @@ def _cells_command(args, extra: Sequence[str] = (), drop_dry: bool = True) -> Di
         if on:
             argv.append(flag)
     argv += [x for x in extra if x not in argv]
-    return rt.next_command("excel.py", argv, "칸 여러 개 쓰기 실행" + (" (값이 있는 칸 덮어쓰기)" if "--overwrite" in argv else ""))
+    return rt.next_command("excel.py", argv, "칸 여러 개 쓰기 실행" + (" (값이 있는 칸 덮어쓰기)" if "--overwrite" in argv else ""),
+                           destructive="--overwrite" in argv)
 
 
 def _cells_plan(args) -> Tuple[List[Tuple[str, int, int, int, int, str, Any]], List[str]]:
@@ -1860,13 +1863,16 @@ def cmd_write(args) -> Dict[str, Any]:
     result = {"target_resolved": resolved, "sheet": sheet_name, "range_written": full,
               "rows": last[0] - first[0] + 1, "cols": last[1] - first[1] + 1}
     if table is not None or args.formula:
-        result["next_commands"] = [rt.next_command("excel.py", ["chart", "--target", tgt, "--range", f"{sheet_ref}!{full}",
-                                                                "--type", "line"],
-                                                   "방금 쓴 범위로 차트 만들기 (제목은 --title \"제목\"을 붙임, --type은 원하는 종류로)")]
+        # 차트 만들기는 문서를 바꿈: confirm_commands (1.4.75)
+        result["confirm_commands"] = [rt.next_command("excel.py", ["chart", "--target", tgt, "--range", f"{sheet_ref}!{full}",
+                                                                   "--type", "line"],
+                                                      "방금 쓴 범위로 차트 만들기, 사용자가 원할 때만 (제목은 --title \"제목\"을 붙임, --type은 원하는 종류로)")]
     preview = f"{sheet_name}!{full}에 썼습니다 ({result['rows']}행 x {result['cols']}열)"
     if problems:
         return rt.ok_unverified(TOOL, "write", preview, problems, **result)
-    return rt.ok(TOOL, "write", preview, "VERIFIED: 쓴 칸을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요.", verified=True, **result)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 쓴 칸을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+                 + (" 사용자가 차트를 원하면 confirm_commands[0]을 1번 실행하세요." if "confirm_commands" in result else ""),
+                 verified=True, **result)
 
 
 # ==============================================================================
@@ -2800,7 +2806,7 @@ def _ref_cell(ws: Any, axis: str, start: int, box: Tuple[int, int, int, int]) ->
     return _first_constant(ws, ur1, s, min(ur2, ur1 + LINES_SCAN - 1), min(uc2, s + 199))
 
 
-def _lines_command(args, axis: str, a: int, b: int, overwrite: bool) -> Dict[str, str]:
+def _lines_command(args, axis: str, a: int, b: int, overwrite: bool) -> Dict[str, Any]:
     argv = ["range", "--target", args.target, "--action", args.action, "--range", args.range]
     if args.sheet:
         argv += ["--sheet", args.sheet]
@@ -2809,7 +2815,8 @@ def _lines_command(args, axis: str, a: int, b: int, overwrite: bool) -> Dict[str
     if overwrite:
         argv.append("--overwrite")
     what = "넣기" if args.action == "insert" else "지우기"
-    return rt.next_command("excel.py", argv, f"{_lines_text(axis, a, b)} {what} 실행" + (" (값이 있는 칸도 지움)" if overwrite else ""))
+    return rt.next_command("excel.py", argv, f"{_lines_text(axis, a, b)} {what} 실행" + (" (값이 있는 칸도 지움)" if overwrite else ""),
+                           destructive=args.action == "delete" or overwrite)
 
 
 REF_SCAN_CELLS = 2_000_000   # 지울 칸을 참조하는 수식을 찾을 때 훑는 칸 수 상한 (통합문서 전체)
@@ -3545,14 +3552,14 @@ def cmd_chart(args) -> Dict[str, Any]:
     preview = f"차트 '{chart_name}' 생성 ({chart_type}, 데이터 {info['sheet']}!{info['range']})"
     to = _open_receivers()
     fields = dict(target_resolved=resolved, chart_name=chart_name, chart_type=chart_type, data_range=info,
-                  next_commands=[rt.next_command("office.py", ["transfer", "--from", "excel", "--from-target", tgt,
+                  confirm_commands=[rt.next_command("office.py", ["transfer", "--from", "excel", "--from-target", tgt,
                                                                "--sheet", str(ws.Name), "--chart", chart_name,
                                                                "--to", ",".join(to)],
                                                  f"이 차트를 열린 {'와 '.join(off.APP_LABEL[k] for k in to)}에 그림으로 넣기"
                                                  + (" (한쪽만이면 --to word 또는 --to ppt)" if len(to) > 1 else ""))])
     if problems:
         return rt.ok_unverified(TOOL, "chart", preview, problems, **fields)
-    return rt.ok(TOOL, "chart", preview, "VERIFIED: 차트를 다시 읽어 확인했습니다. 워드/PPT로 옮기려면 next_commands를 그대로 실행하세요.",
+    return rt.ok(TOOL, "chart", preview, "VERIFIED: 차트를 다시 읽어 확인했습니다. 사용자가 워드/PPT로 옮기기를 원하면 confirm_commands[0]을 1번 실행하세요(열린 문서를 바꿈).",
                  verified=True, **fields)
 
 
@@ -3622,7 +3629,7 @@ def _memo_rows(path: str) -> List[Tuple[int, str, str]]:
             for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
 
 
-def _comment_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
+def _comment_command(args, extra: Sequence[str] = ()) -> Dict[str, Any]:
     """--dry-run을 뺀 같은 comment 명령 (confirm_commands: 사용자 확인 뒤에만)."""
     argv = ["comment", "--target", args.target, "--action", args.action]
     for flag, val in (("--sheet", args.sheet), ("--range", args.range), ("--file", args.file), ("--text", args.text)):
@@ -3634,7 +3641,8 @@ def _comment_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
     argv += list(extra)
     what = {"add": "메모 달기", "delete": "메모 지우기"}[args.action]
     how = {"--overwrite": " (기존 메모를 새 메모로 바꿈)", "--append": " (기존 메모 아래 줄에 덧붙임)"}
-    return rt.next_command("excel.py", argv, what + " 실행" + "".join(how.get(x, "") for x in extra))
+    return rt.next_command("excel.py", argv, what + " 실행" + "".join(how.get(x, "") for x in extra),
+                           destructive=args.action == "delete" or "--overwrite" in argv)
 
 
 def _comment_plan(args, t: Any) -> Tuple[List[Tuple[Any, int, int, str]], List[str]]:

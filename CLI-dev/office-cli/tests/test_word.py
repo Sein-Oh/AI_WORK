@@ -384,7 +384,8 @@ def test_read_closed_docx_with_python_docx(tmp_path, capsys, monkeypatch):
     assert out["paragraphs"][1]["heading"] == "배경"
     assert not any(c[0] == "DispatchEx" for c in calls)
     code, out = run_word(capsys, "read", "--target", str(p), "--save", str(tmp_path / "o.md"))   # 1.4.48: 읽은 문서에서 옮기기
-    transfer = [c["command"] for c in out["next_commands"] if "transfer" in c["command"]][0]
+    assert "next_commands" not in out                                     # 넣기·옮기기는 confirm_commands (1.4.75)
+    transfer = [c["command"] for c in out["confirm_commands"] if "transfer" in c["command"]][0]
     assert "--from-target" in transfer and str(p) in transfer, transfer
 
 
@@ -966,6 +967,7 @@ def test_fill_dry_run_changes_nothing(form_doc, capsys, tmp_path):
     assert any("덮어쓰기: 표2!R3C3" in p for p in out["planned"]) and any("{{업체명}} 2곳" in p for p in out["planned"])
     cmd = out["confirm_commands"][0]["command"]
     assert "--dry-run" not in cmd and "--overwrite" in cmd and " fill " in cmd
+    assert out["confirm_commands"][0]["destructive"] is True  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
 
 
 def test_fill_bad_rows_and_missing_places_change_nothing(form_doc, capsys, tmp_path):

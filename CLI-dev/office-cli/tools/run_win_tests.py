@@ -1210,7 +1210,8 @@ def test_G(ctx):
         # 1.4.73: 발송 명령은 next_commands가 아니라 confirm_commands (사용자 '예' 뒤에만)
         nxt = ((data or {}).get("confirm_commands") or [{}])[0]
         ok = ((data or {}).get("status") == "ok" and (data or {}).get("sent") is False and bool((data or {}).get("draft_id"))
-              and "next_commands" not in (data or {}) and " send --id " in nxt.get("command", ""))
+              and "next_commands" not in (data or {}) and " send --id " in nxt.get("command", "")
+              and nxt.get("destructive") is True)           # 1.4.75: 발송은 '묻지 말고'라고 해도 늘 물음
         manual = ask(ctx, "메일 작성 창이 떴나요? (서명을 등록해 두었다면 본문 아래 서명도 보여야 합니다. "
                           "확인 후 창을 닫고 임시 보관함의 '[office-cli 테스트] 표시 전용' 초안을 지워 주세요)")
         record(ctx, "G1", "기본 동작: 초안 저장·작성 창만 표시, 미발송, send 명령은 confirm_commands로", ok and manual is not False, "",

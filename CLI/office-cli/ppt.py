@@ -209,13 +209,14 @@ def cmd_read(args) -> Dict[str, Any]:
         units = [{"loc": f"슬라이드 {s['no']}", "heading": s["title"], "text": s["text"]} for s in slides]
         out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(source["name"])[0], ".md")
         out = rt.write_text(out, reader.units_to_markdown(source["name"], units))
-        result.update(output_file=out, next_commands=[
-            rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기"),
+        # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
+        result.update(output_file=out, confirm_commands=[
+            rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기 (사용자가 원할 때만)"),
             rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"]
                             + _from_target(args, source),
-                            "슬라이드 내용을 엑셀 표로 옮기기")])
+                            "슬라이드 내용을 엑셀 표로 옮기기 (사용자가 원할 때만)")])
         return rt.ok_file(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", out,
-                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. " + rt.INTO_OTHER_DOC,
                           **result)
     shown: List[Dict[str, Any]] = []
     used = 0

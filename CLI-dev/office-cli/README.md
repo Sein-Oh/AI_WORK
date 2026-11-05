@@ -57,7 +57,14 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `install_command`(`python -m pip install <패키지>`). LLM은 직접 설치하지 않고 설치 명령을 사용자에게 전달합니다(R5 `require_lib`). pywin32는 그대로 `input`.
 - 공통 키: `status`, `tool`, `command`, `preview`, `agent_directive`. 오류 시 `error_type`, `message`가 추가됩니다. COM 오류는 `hresult`도 들어갑니다.
 - `target_resolved`: 실제로 작업한 문서(앱, 이름, 경로, 시트/슬라이드)
-- `next_commands`: 이어서 실행할 명령 `[{purpose, command}]`. 완성된 형태라 그대로 실행하면 됩니다.
+- `next_commands`: 이어서 실행할 명령 `[{purpose, command}]`. 완성된 형태라 그대로 실행하면 됩니다. 묻지 않고 실행해도 안전한 것(읽기, 미리보기 `--dry-run`,
+  첨부·파일 저장처럼 문서를 바꾸지 않는 것)만 넣습니다(1.4.75: 테스트 `conftest.py`가 모든 테스트 결과에서 확인).
+- `confirm_commands`: 사용자에게 보여 주고 "예"를 받은 뒤에만 실행할 명령 `[{purpose, command, destructive?}]`. 메일 발송, 미리보기 뒤 실제 변경,
+  읽기·저장 뒤 열린 문서에 넣기(`read --save` 뒤 `word.py`/`ppt.py`/`excel.py write`, `transfer`, `write` 뒤 `chart`, `chart` 뒤 `transfer`, 1.4.75).
+  덮어쓰기·삭제·메일 발송(`--overwrite`가 든 명령, `range --action delete`, `comment --action delete`, `send`)에는 `"destructive": true`(1.4.75):
+  전역 지침 3장 6번에서 사용자가 "묻지 말고 끝까지"라고 했어도 이 항목은 늘 묻습니다. 캐시 지우기(`reader.py clear`)는 원본이 그대로라 destructive가 아닙니다.
+- 오타 추천(1.4.75): 없는 명령 이름은 가장 비슷한 명령을 `[추천]`(LLM이 묻지 않고 1번 실행)으로 주지만, 되돌리기 어려운 명령(`send`, `clear`, `undo`)이면
+  `[후보]`로 줍니다(`sent`, `sned`, `end` -> 사용자에게 물음).
 
 ### 대상 문서 (`--target`)
 | 값 | 의미 |
@@ -447,6 +454,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   3. 원장에 있고 아직 send로 보내지 않음 (사용자가 쓰다 둔 다른 초안, 두 번째 send, 동시에 실행한 두 send 중 늦은 쪽 거부).
   거부는 모두 `STOP_RETRY: 발송하지 않았습니다...`(다시 실행하거나 새로 만들지 말고 message를 알림)이고 `next_commands`가 없습니다.
   `--id` 해석 오류(기억에 없는 번호 등)도 목록을 다시 보라는 안내 대신 같은 거부입니다. `Send()`가 예외를 내면 원장의 '보냄'은 남기고 거부 안내(사용자가 창에서 확인).
+  이때 원장에 실패 시각(`failed`)도 남겨, 그 뒤 send 거부 문구는 "이미 send로 보냈습니다"가 아니라 "발송이 실패한 초안입니다. 작성 창에서 직접 보내세요"입니다
+  (1.4.75, 여전히 보내지 않음: fail-closed). 없앤 `--send`의 `[추천]`은 받지 않는 다른 옵션(`--dry-run` 등)도 뺀 전체 명령입니다(1.4.75).
   발송 결과는 `UNVERIFIED:`(실제 발송은 보낸 편지함에서 사용자가 확인).
   - 이 방식을 고른 이유: 예전 흐름(1단계 `--send` 없이 초안 창, 3단계 같은 명령 + `--send`)은 3단계가 메일을 새로 만들어 보내므로, 1단계 초안 창이 열린 채
     남아 사용자가 그것도 보내면 같은 메일이 두 번 나가고, `--id` 없는 3단계는 열린 창(`ActiveInspector().CurrentItem`) = 1단계 초안을 원본으로 잡아
@@ -459,7 +468,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `read --save`, `current --save`: 파일 이름에 쓸 수 없는 글자(`RE:`의 `:` 등)는 `_`로 바꾸고, 저장한 파일을 다시 읽어 확인합니다(확인하지 못하면 `UNVERIFIED:`).
 - `read`/`current`는 첨부를 저장하지 않습니다. 첨부가 있으면 `attachment_names`(본문 삽입 이미지를 뺀 이름, 20개까지,
   `attachment_names_truncated`), 본문 삽입 이미지 수 `inline_images`, `next_commands`의 "첨부 내려받기"
-  (`attachments --id <id> --save`)를 줍니다. `--save`와 함께면 "메일 내용을 워드에 넣기"가 먼저입니다.
+  (`attachments --id <id> --save`)를 줍니다. `--save`와 함께면 "메일 내용을 워드에 넣기"(`word.py write --file`, 열린 문서를 바꿈)는
+  `confirm_commands`에 넣습니다(1.4.75, 사용자가 원할 때만).
 - `attachments`: `--id`를 빼면 `reply`처럼 열린 창이나 목록에서 선택한 메일입니다. 다음 명령에는 그 메일의 id를 넣습니다.
   - `--save` 없이: 목록 `attachments`(항목마다 `index` 1부터, `name`, `size` 바이트(모르면 null), `hidden_inline` 본문 삽입 이미지, `blocked` 실행 파일 형식),
     `count`, `truncated`(50개 상한). 0개면 `count: 0`과 `VERIFIED: 0건. 이 메일에는 첨부 없음`.
@@ -536,7 +546,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   (스캔 위에 찍은 도장, 한 쪽짜리 스캔의 Bates 번호처럼 짧은 글만 남은 쪽 포함). 모든 쪽이 그런 쪽이면 `ocr_needed`.
   빈 쪽·간지(쪽마다 있는 작은 로고만 있는 쪽 포함)는 해당 없고, 그림 위에 보이지 않는 글자 층(OCR 결과)이 있는 쪽도 해당 없습니다.
   `read`는 `ocr_needed` 문서나 고른 쪽이 스캔 쪽뿐이면 `UNVERIFIED`(스캔 이미지라 OCR 필요)로 답합니다.
-  `--save`도 같고, 도장·쪽 번호만 남은 스캔 쪽(`--pages 3`)도 고른 쪽이 모두 스캔 쪽이면 `UNVERIFIED`입니다. 그때와 0개 저장이면 다른 문서에 넣는 `next_commands`를 주지 않습니다.
+  `--save`도 같고, 도장·쪽 번호만 남은 스캔 쪽(`--pages 3`)도 고른 쪽이 모두 스캔 쪽이면 `UNVERIFIED`입니다. 그때와 0개 저장이면 다른 문서에 넣는 `confirm_commands`를 주지 않습니다.
   글이 없는 쪽의 장절은 바로 앞 글의 장절로 봅니다.
 - 검색어: `A AND B`, `A OR B`(대소문자 무관, AND가 먼저 묶임), `"설계 기준"`(따옴표는 구문, 검색어에 넣지 않음), 연산자 없이 이어진 단어는 한 구문.
   띄어쓰기, 줄바꿈, 기호(`# - . : / ( )` 등)는 무시하고 비교합니다: `SOI 1` = `SOI #1` = `SOI-1`, `설계기준` = `설계 기준`, PDF 줄바꿈으로 갈라진 글.
@@ -608,6 +618,13 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   단위 뒤: 줄 끝, 공백류(이어서 위 꼬리·띄어 쓴 단위 검사), `)` `]` `;` `~` U+FF5E U+301C, `,` `.`(뒤가 숫자·영문이 아닐 때), `:`(뒤가 공백류·줄 끝), 한글 음절,
   값 구분 `/`, 단위에 붙은 `DC`/`AC`, 붙여 쓴 괄호는 허용 목록 `(DC)` `(AC)` `(Max)` `(Min)` `(Typ.)` `(Nom.)` `(Ref.)` `(정격)` `(최대)` `(최소)` `(이하)` `(이상)` `(미만)` `(초과)`만
   (대소문자 무시, `[ ]`도 같음), 범위 대시 `-` U+2013 U+2212 뒤에 숫자+단위(`10 m-20 m`). 그 밖(`5 V`+U+3383, `5 V(1)`, `5 V'`)은 층 B.
+  1.4.75(11차 검토, 허용 목록 완화: 글자가 같은데 형식 때문에 층 B로 떨어지던 것): 숫자 앞에 여는 따옴표·괄호 U+201C U+2018 U+300C U+300E U+3010 U+3008
+  U+300A(앞이 숫자면 아님: `1`+U+2018+`500 V`는 천 단위), ASCII `"` `'`는 단위 뒤에 같은 따옴표가 닫을 때만(`"24 V"`, 짝 없는 `"5 V`·`5 V'`는 층 B),
+  전각 콜론 U+FF1A(`:`와 같은 규칙), 목록 머리 U+2022(줄 시작·공백 뒤만). 단위 뒤에 닫는 짝 U+201D U+2019 U+300D U+300F U+3011 U+3009 U+300B,
+  쉼표 U+3001, 곱하기 U+00D7(`100 mm`+U+00D7+`폭`: 숫자 앞 U+00D7은 계속 층 B), `±` 바로 뒤 숫자(`220 V±10 %`의 `220 V`: 기준값),
+  각주 `*1`(`*` 뒤 1~2자리 숫자), 괄호 `(`는 막는 꼬리(`(rms)` 등 위 목록)와 부호만·숫자만·한글 실효값류(`(-)`, `(1)`, `(실효값)`, `(피크)`, `(첨두)`,
+  `(게이지)`, `(절대)`, `(평균)`) 밖이면 허용(`220 V(60 Hz)`, `1 MPa(10 kgf/cm²)`, `2 h(1회)`, `85 ℃(주위 온도)`, `24 V(±10 %)`).
+  회귀 표 `tests/number_literal_cases.tsv` "11차 검토" 묶음.
   앞이 숫자뿐인 `/` 값 구분에서 분수(분모 2·4·8·16·32·64: `15/16 V`)와 비율(1·10^n: `10/100 V`)은 뺐습니다.
   `--regex`의 정규식이 잘못되면 STOP_RETRY(몇 번째 글자, 이유). 정규식 문법(`\d`, `.*`, `[..]`, `|`, `(?`, `{n`)이 없는 글(`전압 (5V`)이면 `--regex` 없이 같은 조건으로 찾는 전체 명령을 `[추천]`(오류 로그에는 명령 생략).
 - 검색어 표기 차이 (검색어마다 정규식을 도구가 만듦): 검색어 낱말 끝의 조사(`은 는 이 가 을 를 의 에 에서 으로 와 과 및 에는 에서의` 등, 떼고 2자 이상 남을 때만:
@@ -751,11 +768,11 @@ relay가 사용자의 클립보드를 덮어쓰고 `[추천]`이 `; relay: ...` 
   `[추천] python ...office.py transfer ... --to word`를 냅니다. 에이전트는 그대로 1회 실행하고 못 넣은 앱을 사용자에게 알립니다.
 - `--to-target`은 `--to`의 모든 앱에 함께 쓰이므로 파일 경로를 줄 때는 `--to`에 앱 하나만 둡니다.
   열린 문서가 없을 때 안내는 받는 쪽 `--to-target`, 보내는 쪽 `--from-target`입니다(transfer에는 `--target`이 없음).
-- `word.py read --save`/`ppt.py read --save`의 `next_commands` transfer 명령은 `--target`으로 다른 문서를 읽었으면 그 문서를 `--from-target`(전체 경로가 있으면 그것)으로 줍니다.
+- `word.py read --save`/`ppt.py read --save`의 `confirm_commands` transfer 명령(1.4.75, 전에는 `next_commands`)은 `--target`으로 다른 문서를 읽었으면 그 문서를 `--from-target`(전체 경로가 있으면 그것)으로 줍니다.
 - 넣은 뒤 한 앱만 실패하면(늦게 드러난 대상 문제, COM 오류) 오류로 끝내지 않고 `UNVERIFIED`와 `succeeded`/`failed`/`failures`로 답합니다.
   같은 명령을 다시 실행하면 넣은 앱에 또 들어가므로, 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 `--to <그 앱>`으로 실행합니다.
   되돌리기 지점은 실제로 바뀐 문서에만 남습니다.
-- `excel chart`의 `next_commands`는 문서가 열린 받는 앱만 `--to`에 넣습니다(둘 다 열렸거나 둘 다 없으면 `word,ppt`).
+- `excel chart`의 `confirm_commands`(1.4.75, 전에는 `next_commands`) transfer 명령은 문서가 열린 받는 앱만 `--to`에 넣습니다(둘 다 열렸거나 둘 다 없으면 `word,ppt`).
   `--sheet <차트가 있는 시트>`도 넣습니다.
 
 차트 찾기(`--chart`, `chart --action delete --name`): 이름 또는 제목(대소문자 무시), 없으면 번호.

@@ -586,6 +586,7 @@ def test_default_is_display_only(capsys, monkeypatch):
     # 1.4.73: 발송 명령은 next_commands(그대로 실행)가 아니라 confirm_commands(사용자 '예' 뒤에만)
     assert "next_commands" not in out and "needs_user_confirm" not in json.dumps(out), out
     assert out["confirm_commands"][0]["command"].endswith(f"send --id {out['draft_id']}"), out
+    assert out["confirm_commands"][0]["destructive"] is True  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
     body_pos = mail.HTMLBody.index("첫줄<br>둘째줄")
     assert mail.HTMLBody.index("<body>") < body_pos < mail.HTMLBody.index("서명")     # 서명 위, body 안
 
@@ -664,6 +665,25 @@ def test_send_refuses_outbox_submitted(ol_env, capsys):
     assert d.sent == 1 and "이미 send로 보냈습니다" in out["message"], out
 
 
+def test_send_failure_is_recorded_and_refused_with_own_message(ol_env, capsys):
+    # 11차 검토: Send 예외 뒤 다시 send -> '이미 보냄'이 아니라 '발송이 실패한 초안' 문구, 여전히 보내지 않음 (fail-closed)
+    d, cmd = _new_draft(ol_env, capsys)
+
+    def boom():
+        raise RuntimeError("guard denied")
+    d.Send = boom
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert "발송을 거부했습니다" in out["message"], out
+    data = json.load(open(outlook._side_path(outlook.DRAFTS_FILE), encoding="utf-8"))
+    assert all(v.get("failed") and v.get("sent") for v in data.values()), data
+    d.Send = FakeDraft.Send.__get__(d)
+    code, out = run_outlook(capsys, "send", *cmd)
+    _refused(out, code)
+    assert d.sent == 0 and "발송이 실패한 초안입니다" in out["message"] and "이미 send로" not in out["message"], out
+    assert "작성 창" in out["message"]
+
+
 def test_send_refuses_deleted_or_moved_draft(ol_env, capsys):
     d, cmd = _new_draft(ol_env, capsys)
     d.Parent = DELETED                                               # PST: 지운 편지함으로 옮겨도 EntryID 그대로
@@ -725,13 +745,16 @@ def test_send_concurrent_only_one_goes(ol_env, capsys, monkeypatch):
 
 def test_compose_send_flag_recommends_command_without_it(capsys, monkeypatch, isolated_dirs):
     for argv in (["new", "--to", "a@x.com", "--subject", f"보고 {SECRET}", "--send"], ["reply", "--id", "3", "--send", "--body", "네"],
-                 ["forward", "--id", "3", "--to", "b@x.com", "--send"]):
+                 ["forward", "--id", "3", "--to", "b@x.com", "--send"],
+                 # 11차 검토: 받지 않는 다른 옵션(--dry-run)도 함께 뺀 명령을 추천
+                 ["new", "--to", "a@x.com", "--subject", "s", "--send", "--dry-run"]):
         monkeypatch.setattr(rt, "CURRENT_ARGV", None)
         code, out = run(capsys, monkeypatch, Mail(), *argv)
         assert code == 2 and "--send는 없습니다" in out["message"] and "사용자 확인" in out["message"], out
         rec = out["message"].split("[추천] ")[1]
         assert rec.startswith("python ") and "--send" not in rec and f" {argv[0]} " in rec, rec
-        if argv[0] == "new":
+        assert "--dry-run" not in rec and (argv[1] != "--to" or "a@x.com" in rec), rec
+        if argv[0] == "new" and "--dry-run" not in argv:
             assert f'--subject "보고 {SECRET}"' in rec, rec
     assert SECRET not in error_log_text(isolated_dirs)                # 제목 같은 내용 인자는 오류 로그에 남기지 않음
 
@@ -1009,7 +1032,9 @@ def test_read_shows_attachment_names_and_download_command(ol_env, capsys):
 def test_read_save_puts_word_command_first(ol_env, capsys):
     _attach_mail(ol_env, FakeAttachment("a.pdf"))
     code, out = run_outlook(capsys, "read", "--id", "M1", "--save")
-    assert code == 0 and [c["purpose"] for c in out["next_commands"]] == ["메일 내용을 워드에 넣기", "첨부 내려받기"]
+    # 워드에 넣기는 열린 문서를 바꿈: confirm_commands, next_commands는 첨부 내려받기만 (1.4.75, 11차 검토)
+    assert code == 0 and [c["purpose"] for c in out["next_commands"]] == ["첨부 내려받기"]
+    assert "word.py" in out["confirm_commands"][0]["command"] and "confirm_commands" in out["agent_directive"]
 
 
 def test_current_caps_attachment_names(ol_env, capsys):

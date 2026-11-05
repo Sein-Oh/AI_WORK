@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.74"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.75"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -744,6 +744,9 @@ OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--targ
                    "--text": ["--value", "--file"],  # 엑셀 write에 워드식 --text를 쓰면 --target(철자 비슷)이 아니라 --value
                    "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"],
                    "--cell": ["--range"]}
+# 되돌리기 어려운 명령 (메일 발송, 캐시 지우기, 되돌리기): 오타 추천을 [추천](LLM이 묻지 않고 1번 실행)이 아니라
+# [후보](사용자에게 물음)로 줌 (1.4.75, 11차 검토: 'sent', 'sned', 'end' -> send)
+DESTRUCTIVE_COMMANDS = {"send", "clear", "undo"}
 # 다른 파일의 명령이 맞는 경우: [추천]으로 값만 바꾸면 또 틀리므로 맞는 명령을 안내만 함
 _WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --text "내용", PPT는 ppt.py write --text "내용", '
                '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
@@ -809,6 +812,9 @@ class JsonArgumentParser(argparse.ArgumentParser):
             choices = list(subs) or re.findall(r"'([^']+)'", message.split("choose from", 1)[-1])
             alias = COMMAND_ALIASES.get(self.tool_name, {}).get(m.group(1).lower())
             best = alias or next(iter(difflib.get_close_matches(m.group(1), choices, n=1, cutoff=0.6)), None)
+            if best in DESTRUCTIVE_COMMANDS:
+                return (f" '{best}'은(는) 되돌리기 어려운 명령이라 추천하지 않습니다. 사용자가 이 명령을 원했는지 물으세요."
+                        f" [후보] {best}")
             return f" [추천] {best}" if best else f" [후보] {', '.join(choices)}"
         m = re.search(r"unrecognized arguments: (.+)$", message)
         if not m:
@@ -821,8 +827,17 @@ class JsonArgumentParser(argparse.ArgumentParser):
         for f in flags:
             other = OTHER_COMMAND.get((self.tool_name, cmd, f))
             if other:
-                if "{cmd}" in other:      # 그 옵션만 뺀 같은 전체 명령
-                    rest = [a for a in (CURRENT_ARGV or []) if a != f]
+                if "{cmd}" in other:      # 받지 않는 옵션(과 그 값)을 모두 뺀 같은 전체 명령 ('--send --dry-run' 둘 다, 1.4.75)
+                    rest, drop = [], False
+                    for a in (CURRENT_ARGV or []):
+                        if a in flags:
+                            drop = True
+                            continue
+                        if drop and not a.startswith("-") and a in extra:
+                            drop = False
+                            continue
+                        drop = False
+                        rest.append(a)
                     other = other.replace("{cmd}", next_command(f"{self.tool_name}.py", rest, "")["command"])
                 return " " + other
         for f in flags:
@@ -1568,10 +1583,20 @@ def quote_arg(value: Any) -> str:
     return '"' + s.replace('"', '\\"') + '"'
 
 
-def next_command(script: str, args: Sequence[Any], purpose: str) -> Dict[str, str]:
-    """next_commands 항목 하나를 만듭니다. script는 도구 폴더 기준 파일명 (예: 'office.py')."""
+# 읽기·저장 뒤 열린 문서를 바꾸는 이어 하기 명령(confirm_commands, 1.4.75)의 directive 문구
+INTO_OTHER_DOC = "사용자가 다른 문서에 넣기를 원하면 confirm_commands에서 맞는 명령을 1번 실행하세요(열린 문서를 바꿈)."
+
+
+def next_command(script: str, args: Sequence[Any], purpose: str, destructive: bool = False) -> Dict[str, Any]:
+    """next_commands·confirm_commands 항목 하나를 만듭니다. script는 도구 폴더 기준 파일명 (예: 'office.py').
+
+    destructive=True(덮어쓰기·삭제·메일 발송, confirm_commands에만)이면 "destructive": true를 붙입니다 (1.4.75): 사용자가
+    '묻지 말고 끝까지'라고 했어도 LLM이 늘 묻게 하는 표시 (전역 지침 3장 6번)."""
     parts = [f"python {quote_arg(os.path.join(TOOL_DIR, script))}"] + [quote_arg(a) for a in args]
-    return {"purpose": purpose, "command": " ".join(parts)}
+    item: Dict[str, Any] = {"purpose": purpose, "command": " ".join(parts)}
+    if destructive:
+        item["destructive"] = True
+    return item
 
 
 # ==============================================================================
