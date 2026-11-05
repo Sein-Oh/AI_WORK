@@ -1769,6 +1769,8 @@ def _new_run(monkeypatch, fold=(), model=(), fit=()):
     monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", list(fold))
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", list(model))
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", list(fit))
+    monkeypatch.setattr(mt, "RUN_PREP_SECONDS", [])
+    monkeypatch.setattr(mp, "CURRENT_STEP", {})
 
 
 @pytest.fixture(autouse=True)
@@ -1882,14 +1884,14 @@ def test_fold_clock_check_estimates(tmp_path, monkeypatch):
     with pytest.raises(mp.Unfinished) as e:
         fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "후보 모델 0/5개 끝남, 'HistGradientBoosting' 교차검증 fold 0/5개 끝남" in e.value.progress, e.value.progress
-    assert "(fold 1 전에 멈춤)" in e.value.progress
+    assert "(fold 1 전에 멈춤, 약 27단계 남음)" in e.value.progress
     os.makedirs(tmp_path / "rt", exist_ok=True)               # this candidate's own saved fold was slow: it decides
     joblib.dump({"model": "HistGradientBoosting", "folds": 5, "seconds": 1000.0,
                  "res": {"train": 0.0, "pred": np.zeros(14), "params": {}}}, tmp_path / "rt" / "k.m0.f1.joblib")
     _new_run(monkeypatch, fold=[0.01])
     with pytest.raises(mp.Unfinished) as e:
         fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
-    assert "fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤)" in e.value.progress, e.value.progress
+    assert "fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤, 약 26단계 남음)" in e.value.progress, e.value.progress
     os.remove(tmp_path / "rt" / "k.m0.f1.joblib")
     _new_run(monkeypatch, fit=[5.0])                           # a step, but no fold time known: goes on to the end
     res = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
@@ -1902,7 +1904,7 @@ def test_fold_clock_check_estimates(tmp_path, monkeypatch):
     _new_run(monkeypatch)
     with pytest.raises(mp.Unfinished) as e:
         fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
-    assert "'HistGradientBoosting' 교차검증 fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤)" in e.value.progress, e.value.progress
+    assert "'HistGradientBoosting' 교차검증 fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤, 약 26단계 남음)" in e.value.progress, e.value.progress
 
 
 def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
@@ -2050,3 +2052,197 @@ def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):
     proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
     assert out["status"] == "ok" and out["version"] == "v1" and "resumed_targets" not in out, out
     assert "다시 학습" in proc.stderr
+
+
+# ---- 학습 전 준비 저장, 시작 표시, 시간 제한 감시 (R10, 2.9.67) ----------------------------------------------------------
+# 6차 검토(10000행 x 1000열): 실행마다 학습 전 준비(읽기·검증·상관행렬·타겟 준비, 50~94초)를 다시 하고 그 실행의 첫 단계
+# (fold 1개, 시계 없음)를 더하면 120초를 넘어 JSON 없이 끊기고 진행도 없어 같은 명령을 끝없이 반복했다.
+
+def _train_args(data, x, y, **kw):
+    base = dict(file=data, features=x, targets=y, eval=None, dtypes=None, exclude_where=None, task=None,
+                positive_class=None, header_row=None, unit_row=None, data_row=None, seed=42, version=None,
+                overwrite=False, description=None, tag=None)
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def test_preparation_is_saved_and_reused_by_the_continued_run(tmp_path, monkeypatch):
+    """준비가 오래 걸리면(PREP_SAVE_SECONDS 이상) 통째로 저장하고, 제한에 닿았으면 첫 학습 단계 전에 CONTINUE로 멈춘다.
+    같은 명령을 다시 실행하면 준비를 다시 하지 않고 저장한 것을 쓰며, 결과는 한 번에 학습한 것과 같다."""
+    ref = make_sample(str(tmp_path / "ref.csv"))
+    want = run_tool("ml_train.py", "-f", ref, "-x", SPLIT_X, "-y", "생산효율(%)")
+    data = make_sample(str(tmp_path / "p.csv"))
+    root = tmp_path / "p_ml_data"
+    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(mt, "PREP_SAVE_SECONDS", 0.0)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic() - 80)       # the preparation ends past the limit - reserve
+    with pytest.raises(mp.Unfinished) as e:
+        mt.execute_ml_train(_train_args(data, SPLIT_X, "생산효율(%)"))
+    assert "학습 준비" in e.value.progress and "첫 학습 단계 전에 멈춤" in e.value.progress, e.value.progress
+    assert "약 27단계 남음" in e.value.progress, e.value.progress
+    saved = os.listdir(root / ".resume_train")
+    assert len(saved) == 1 and saved[0].endswith(".prep.joblib"), saved          # no start mark left
+    assert not (root / "v1").exists() and not (root / "history.jsonl").exists()
+
+    def no_second_preparation(*a, **k):
+        raise AssertionError("준비를 다시 함")
+    monkeypatch.setattr(mt, "_prepare_run", no_second_preparation)
+    _new_run(monkeypatch)
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    got = mt.execute_ml_train(_train_args(data, SPLIT_X, "생산효율(%)"))
+    assert got["version"] == "v1" and got["mean_val_score"] == want["mean_val_score"]
+    assert got["top_features"] == want["top_features"]
+    _assert_same_version(want["version_dir"], got["version_dir"])
+    assert not (root / ".resume_train").exists()                                       # cleaned after the commit
+
+
+def test_preparation_key_follows_data_and_arguments(tmp_path):
+    data = make_sample(str(tmp_path / "k.csv"))
+    xfile = tmp_path / "x.txt"
+    xfile.write_text("반응온도(°C)\n소비전력(kW)\n", encoding="utf-8")
+    a = _train_args(data, str(xfile), "생산효율(%)")
+    group = {"features": str(xfile), "targets": "생산효율(%)", "eval": None, "dtypes": None, "positive_class": None,
+             "exclude_where": None}
+    k1 = mt._prep_key(a, "regression", [group], data)
+    assert k1 == mt._prep_key(a, "regression", [group], data) and re.fullmatch(r"[0-9a-f]{16}", k1)
+    assert mp._RESUME_FILE_RE.fullmatch(k1 + ".prep.joblib") and mp._RESUME_FILE_RE.fullmatch(k1 + ".prep.start")
+    assert mp._RESUME_FILE_RE.fullmatch(k1 + ".m2.f3.start") and mp._RESUME_FILE_RE.fullmatch(k1 + ".fit.start.tmp")
+    assert k1 != mt._prep_key(a, "classification", [group], data)
+    assert k1 != mt._prep_key(_train_args(data, str(xfile), "생산효율(%)", header_row=1), "regression", [group], data)
+    xfile.write_text("반응온도(°C)\n", encoding="utf-8")                               # the list file changed
+    k2 = mt._prep_key(a, "regression", [group], data)
+    assert k2 != k1
+    with open(data, "a", encoding="utf-8-sig") as f:                                  # the data changed
+        f.write("1,2,3,4,5,6\n")
+    assert mt._prep_key(a, "regression", [group], data) != k2
+
+
+def test_step_mark_stops_a_step_longer_than_the_limit(tmp_path, monkeypatch):
+    """시계 없이 하는 단계(실행의 첫 단계)는 시작 표시를 남기고 끝나면 지운다. 표시만 남은 단계(이전 실행이 그 단계 도중 끊김)를
+    다시 만나면 2번째까지는 다시 시도하고, 2번 끊긴 단계는 시작하지 않고 STOP_RETRY: [추천] 시간 제한을 늘린 같은 명령.
+    시간 제한을 늘리면 다시 시도하고, 늘린 제한으로도 끊겼으면 [추천] 없이 멈춘다."""
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    monkeypatch.setattr(mp, "CURRENT_STEP", {})
+    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(mp, "CURRENT_ARGV", [os.path.join(KIT, "ml_train.py"), "-f", "big.csv", "-x", "a,b", "-y", "y"])
+    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    rt = str(tmp_path / "rt")
+    mark = tmp_path / "rt" / "0123456789abcdef.m1.f2.start"
+    mp.step_begin(rt, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+    assert json.loads(mark.read_text(encoding="utf-8"))["tries"] == 1
+    mp.step_end()                                             # the step ended: no mark
+    assert not mark.exists()
+    for tries in (1, 2):                                      # two runs stopped inside the step (no step_end)
+        mp.step_begin(rt, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+        assert json.loads(mark.read_text(encoding="utf-8"))["tries"] == tries
+    with pytest.raises(mp.InputError) as e:
+        mp.step_begin(rt, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+    msg = str(e.value)
+    assert "한 단계(학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5)가 명령 시간 제한(100초) 안에 끝나지 않습니다" in msg, msg
+    rec = msg.split("[추천] ")[1]
+    assert rec.startswith("python ") and rec.endswith(" --time-limit 570") and '-x "a,b" -y y' in rec, rec
+    payload = mp.error_payload(e.value)
+    assert payload["agent_directive"].startswith("STOP_RETRY:") and "timeout) 600000" in payload["agent_directive"]
+    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [570.0])      # the [추천] command: a larger limit tries again
+    mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
+    mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
+    with pytest.raises(mp.InputError) as e:
+        mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
+    assert "[추천]" not in str(e.value) and "시간 제한을 늘려도 끝나지 않았습니다" in str(e.value), str(e.value)
+    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [0.0])        # no limit: no mark, never stopped
+    mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
+    assert mp.CURRENT_STEP.get("name") is None
+
+
+def test_time_limit_argument_overrides_the_environment(monkeypatch):
+    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    p = mp.JsonArgumentParser()
+    p.add_argument("-f")
+    ns = p.parse_args(["-f", "a.csv"])
+    assert not hasattr(ns, "time_limit") and mp.time_limit() == 100.0
+    p.parse_args(["-f", "a.csv", "--time-limit", "570"])
+    assert mp.time_limit() == 570.0
+    p.parse_args(["--time-limit", "0"])
+    assert mp.time_limit() == float("inf")
+
+
+_WATCHDOG_SCRIPT = r'''
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+import ml_predict as mp
+mp.WATCHDOG_GRACE = 0.5
+p = mp.JsonArgumentParser()
+p.add_argument("--mode")
+p.add_argument("--rt")
+a = p.parse_args(sys.argv[2:])
+
+def body():
+    if a.mode == "saved":
+        mp.resume_save(a.rt, "0123456789abcdef.m0.f1.joblib", lambda t: open(t, "w").write("x"), "fold")
+        mp.step_label("학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+    elif a.mode == "marked":
+        mp.step_begin(a.rt, "0123456789abcdef.m0.f1", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 1/5")
+    elif a.mode == "fast":
+        return {"status": "ok", "verified": True, "agent_directive": "VERIFIED: 끝"}
+    time.sleep(30)                       # a slow step
+    print("never", flush=True)
+    return {"status": "ok", "verified": True, "agent_directive": "VERIFIED: 늦음"}
+
+mp.run_cli(body)
+'''
+
+
+def test_watchdog_writes_one_json_line_at_the_limit(tmp_path, monkeypatch):
+    """명령이 시간 제한 + 여유(WATCHDOG_GRACE) 뒤에도 끝나지 않으면 감시 스레드가 stdout에 JSON 1줄을 내고 끝낸다: 이 실행이 저장한
+    단계가 있으면 CONTINUE, 표시한 단계를 1번 끊었으면 CONTINUE(다시 시도), 2번째로 끊기거나 아무것도 저장하지 않았으면
+    STOP_RETRY(오류 로그에 기록). 제한 안에 끝난 명령은 감시가 끼어들지 않는다 (두 줄 출력 없음)."""
+    script = tmp_path / "ml_slow.py"                         # an ml-kit command name: the watchdog runs
+    script.write_text(_WATCHDOG_SCRIPT, encoding="utf-8")
+    data = tmp_path / "data"
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(data))
+    monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    rt = str(tmp_path / "rt")
+
+    def run(mode, limit="1"):
+        t0 = time.monotonic()
+        proc = subprocess.run([sys.executable, str(script), KIT, "--mode", mode, "--rt", rt, "--time-limit", limit],
+                              capture_output=True, text=True, encoding="utf-8", timeout=120)
+        lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+        assert len(lines) == 1, proc.stdout + proc.stderr
+        assert time.monotonic() - t0 < 20, proc.stderr                                # not the 30 s step
+        return proc, json.loads(lines[0])
+
+    proc, out = run("saved")
+    assert proc.returncode == 0 and out["continue"] is True and out["agent_directive"].startswith("CONTINUE:"), out
+    assert "'RandomForest' 교차검증 fold 2/5 도중 시간 제한(1초)에 닿아 멈춤" in out["progress"], out
+    assert out["next_commands"][0].endswith("--time-limit 1") and "[STATUS]" in proc.stderr
+    proc, out = run("marked")
+    assert proc.returncode == 0 and out["continue"] is True and "다시 시도 1/2" in out["progress"], out
+    proc, out = run("marked")
+    assert proc.returncode == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "[추천]" in out["message"] and out["message"].rstrip().endswith("--time-limit 570"), out["message"]
+    proc, out = run("marked", "2")                          # stopped twice under a smaller limit: tried again
+    assert proc.returncode == 0 and "다시 시도 1/2" in out["progress"], out
+    log = (data / "logs" / "errors.txt").read_text(encoding="utf-8")
+    assert log.count("===== ") == 1 and "끝나지 않습니다" in log
+    proc, out = run("none")
+    assert proc.returncode == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[추천]" in out["message"]
+    proc, out = run("fast")
+    assert proc.returncode == 0 and out["agent_directive"] == "VERIFIED: 끝", out
+
+
+def test_step_mark_is_removed_when_the_run_fails_by_itself(tmp_path, monkeypatch):
+    """입력 오류로 끝난 실행은 시작 표시를 남기지 않는다 (표시는 밖에서 끊긴 실행만): 같은 오류가 반복돼도 '시간 제한' 오류가 되지 않음."""
+    data = make_sample(str(tmp_path / "e.csv"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
+    for _ in range(3):
+        out = run_fail("ml_train.py", "-f", data, "-x", "없는열", "-y", "생산효율(%)")
+        assert "시간 제한" not in out["message"] and "없는열" in out["message"], out
+    assert not (tmp_path / "e_ml_data" / ".resume_train").exists()

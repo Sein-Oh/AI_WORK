@@ -6,6 +6,42 @@
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
 
+## [1.4.75] - 2026-11-05
+
+독립 검토(11차) 수정. 확인 없이 실행되는 길(파괴적 confirm, 문서를 바꾸는 next_commands, 파괴적 오타 추천)과 숫자 검색 층 A 허용 목록.
+
+### 기능
+- `confirm_commands` 항목에 `"destructive": true`(덮어쓰기·삭제·메일 발송): `--overwrite`가 든 excel `write --cells`·`range`·`comment`, word `fill`,
+  excel `range --action delete`, `comment --action delete`, outlook `send`. 전역 지침 3장 6번의 "묻지 말고 끝까지" 예외가 이 항목에는 적용되지 않음
+  (늘 묻는다, 5장과 같음). 그 밖의 confirm_commands(빈 칸 쓰기, 새 메모, 다른 문서에 넣기)만 예외. `rt.next_command(..., destructive=True)`.
+  전역 지침 3장 6번·5장, 네 스킬 규칙 3, `CLI-dev/README.md` 공통 키, 실기 러너 G1, 시나리오 O5 judge(빈 자리라 destructive 아님)를 함께 고침.
+- 문서를 바꾸는 이어 하기 명령을 `next_commands`에서 `confirm_commands`(destructive 아님)로 옮기고 directive는 "사용자가 원하면": excel `read --save`(조건 읽기 포함)
+  뒤 word/ppt `write`, excel `write`(표·수식) 뒤 `chart`, excel `chart` 뒤 `transfer`, word·ppt `read --save` 뒤 `write`·`transfer`,
+  reader `read --save`·`search --save` 뒤 word/ppt/excel `write`(`_write_confirm_commands`), outlook `read`/`current --save` 뒤 `word.py write`(대상 생략 = 열린 활성 문서).
+  `next_commands`에는 읽기·미리보기·파일 저장(문서를 바꾸지 않음)만 남음. 예외: `CONTINUE:`와 `drm_or_dialog`의 같은 명령(사용자가 시킨 그 명령).
+  회귀: `tests/conftest.py`의 자동 점검(모든 테스트의 stdout JSON에서 `next_commands`에 문서를 바꾸는 명령이 있으면 실패).
+- 명령 오타 추천: 가장 비슷한 명령이 되돌리기 어려운 명령(`send`, `clear`, `undo`)이면 `[추천]`(LLM이 묻지 않고 실행)이 아니라 `[후보]`(사용자에게 물음).
+  `sent`, `sned`, `end` -> `[후보] send`, office `redo` -> `[후보] undo`.
+
+### 수정
+- reader 층 A 허용 목록 완화 (글자가 같은데 형식 때문에 층 B로 떨어지던 것): 숫자 앞의 여는 따옴표·괄호(U+201C, U+2018, U+300C, U+300E, U+3010, U+3008,
+  U+300A, 앞이 숫자면 아님), 짝이 맞는 ASCII `"` `'`, 전각 콜론 U+FF1A, 목록 머리 U+2022(줄 시작·공백 뒤). 단위 뒤의 닫는 짝(U+201D, U+2019, U+300D,
+  U+300F, U+3011, U+3009, U+300B), U+3001, U+00D7(뒤만, 숫자 앞 U+00D7은 계속 층 B), `±` 뒤 숫자(`220 V±10 %`의 `220 V`), 각주 `*1`, 괄호 `(`
+  (막는 꼬리 `(rms)` 등과 `(-)`, `(1)`, `(실효값)`류 밖: `220 V(60 Hz)`, `1 MPa(10 kgf/cm²)`, `2 h(1회)`). 10차 `cases.txt`와 `number_literal_cases.tsv`의
+  notA는 그대로 notA. 11차 검토 모음 층 A 비율 6/21 -> 20/21(`100 mm`+U+00D7+`50 mm`의 `50 mm`만 층 B), 8차 `pos.tsv` 37/60 -> 41/60.
+  회귀 표 `number_literal_cases.tsv` "11차 검토" 묶음(A 24, notA 13).
+- outlook `send`: `Send()` 예외 뒤 발송 원장에 실패 시각(`failed`)을 남기고, 그 뒤 send 거부 문구는 "발송이 실패한 초안입니다 ... 작성 창에서 직접 [보내기]"
+  ("이미 send로 보냈습니다"와 구분). 여전히 보내지 않음(fail-closed, '보냄' 기록 유지). 회귀 `test_send_failure_is_recorded_and_refused_with_own_message`.
+- 없앤 `--send`의 `[추천]` 명령에서 받지 않는 다른 옵션(`new ... --send --dry-run`의 `--dry-run`)도 뺌.
+
+## [1.4.74] - 2026-11-05
+
+### 수정
+- 관리자 권한 판단(`_runtime.is_elevated`)을 `IsUserAnAdmin`에서 토큰 상승 종류(`TokenElevationTypeFull`)로 바꿈. UAC가 꺼진 회사 PC
+  (`EnableLUA`=0, 모든 프로그램이 High 무결성)에서는 Office도 같은 권한이라 열린 문서가 보이는데, 문서가 없을 때마다 "일반 PowerShell에서
+  다시 실행" 안내(`elevated_process`)를 내서 사용자가 따를 수 없는 행동을 시켰음. `CLI-dev/run_all_tests.py`의 Gemma 단계 경고도 같은 판단.
+  회귀 테스트: `test_office.py` `test_is_elevated_only_for_uac_split_token`.
+
 ## [1.4.73] - 2026-11-04
 
 독립 검토(10차) 수정. 발송 안전과 숫자 검색 층 A 경계.

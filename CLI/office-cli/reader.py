@@ -1997,17 +1997,18 @@ def units_to_markdown(title: str, units: List[Dict[str, Any]], file: Optional[st
     return "\n".join(lines)
 
 
-def _write_next_commands(output_file: str) -> List[Dict[str, str]]:
+def _write_confirm_commands(output_file: str) -> List[Dict[str, Any]]:
+    """저장한 파일을 열린 문서에 넣는 명령 (문서를 바꿈: next_commands가 아니라 confirm_commands, 1.4.75)."""
     low = output_file.lower()
     if low.endswith(".xlsx"):
         return []
     if low.endswith(".csv"):
         return [rt.next_command("excel.py", ["write", "--target", "active", "--file", output_file],
-                                "저장한 표를 열린 엑셀에 넣기")]
+                                "저장한 표를 열린 엑셀에 넣기 (사용자가 원할 때만)")]
     return [rt.next_command("word.py", ["write", "--target", "active", "--file", output_file],
-                            "저장한 내용을 열린 워드 문서 끝에 넣기"),
+                            "저장한 내용을 열린 워드 문서 끝에 넣기 (사용자가 원할 때만)"),
             rt.next_command("ppt.py", ["write", "--target", "active", "--file", output_file],
-                            "저장한 내용을 열린 PPT에 새 슬라이드로 넣기")]
+                            "저장한 내용을 열린 PPT에 새 슬라이드로 넣기 (사용자가 원할 때만)")]
 
 
 def _save_ext(save: Any) -> str:
@@ -2173,7 +2174,7 @@ def cmd_read(args) -> Dict[str, Any]:
             out = rt.write_text(out, units_to_markdown(name, selected, path))
         result["output_file"] = out
         if selected and not ocr_reason:     # 0개 저장, 스캔 쪽의 도장·쪽 번호뿐: 다른 문서에 넣는 명령은 주지 않음
-            result["next_commands"] = _write_next_commands(out)
+            result["confirm_commands"] = _write_confirm_commands(out)
         preview = f"{name}: {len(selected)}개 {unit_name}을(를) 파일로 저장했습니다 ({out})"
         # R1: 저장한 파일을 다시 열어 확인 (CSV는 행 수까지)
         problems = [p for p in [rt.check_saved_file(out, len(rows) + 1 if ext == ".csv" else None, delimiter=",")] if p]
@@ -2190,7 +2191,8 @@ def cmd_read(args) -> Dict[str, Any]:
             if notes:
                 payload["agent_directive"] += " 주의: " + "; ".join(notes) + "."
             return payload
-        directive = ("VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요."
+        directive = ("VERIFIED: 저장한 파일을 다시 열어 확인했습니다."
+                     + (" " + rt.INTO_OTHER_DOC if result.get("confirm_commands") else "")
                      if selected else "VERIFIED: 0건. 저장할 글이 없어 빈 파일을 저장했습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.")
         if notes:
             directive += " 주의: " + "; ".join(notes) + ". 사용자에게 알리세요."
@@ -3045,6 +3047,16 @@ _LIT_SLASHES = "/\uff0f\u2215\u2044"
 # ('50/60 Hz', '10/50 kHz', '110/220 V'. '10/350 μs', '15/16 inch', '1.2/50 μs'는 서지 파형·분수)
 # 숫자 바로 앞에 붙어도 층 A인 여는 글자 (1.4.73 허용 목록): 괄호, 범위 물결(~, U+FF5E, U+301C), '='
 _LIT_OPEN_BEFORE = "([~\uff5e\u301c="
+# 여는 따옴표·괄호 (1.4.75, 앞이 숫자가 아닐 때만: '1\u2018500 V'의 천 단위와 구분): U+201C, U+2018, U+300C, U+300E,
+# U+3010, U+3008, U+300A. ASCII 따옴표는 짝일 때만 ('"24 V"', 짝 없는 '"5 V'·'5 V\''는 층 B)
+_LIT_QUOTE_OPEN = "\"'"
+_LIT_OPEN_PAIR = "\u201c\u2018\u300c\u300e\u3010\u3008\u300a"
+# 단위 바로 뒤에 붙어도 층 A인 닫는 짝·구분 (1.4.75): 닫는 따옴표·괄호(U+201D, U+2019, U+300D, U+300F, U+3011, U+3009,
+# U+300B), 쉼표 U+3001, 곱하기 U+00D7('100 mm×폭': 숫자 앞의 ×만 막음). ASCII 따옴표는 위처럼 짝일 때만
+_LIT_CLOSE_AFTER = "\u201d\u2019\u300d\u300f\u3011\u3009\u300b\u3001\u00d7"
+# 단위 뒤 괄호 중 값의 뜻이 바뀌는 것 ('(rms)' 등은 _LIT_TAIL): 부호만 '5 V(-)', 숫자만 '5 V(1)'(각주·지수),
+# 한글 실효값·피크 등 '5 V(실효값)'
+_LIT_PAREN_BAD_AFTER = re.compile(r"\(\s*(?:[" + re.escape(_LIT_SIGNS) + r"]|\d+|실효|피크|첨두|게이지|절대|평균)\s*(?:값)?\s*\)")
 # 단위 바로 뒤에 붙은 괄호 중 값의 뜻을 바꾸지 않는 것 (허용 목록): '5 V(DC)', '10 A(Max)', '3.3 V(Typ.)'
 _LIT_PAREN_OK = re.compile(r"[(\[](?:DC|AC|max\.?|min\.?|typ\.?|nom\.?|ref\.?|정격|최대|최소|이하|이상|미만|초과)[)\]]",
                            re.IGNORECASE)
@@ -3141,8 +3153,13 @@ class _Literal:
                 # 허용 목록 (1.4.73): 공백류, 줄 시작, 여는 괄호, 범위 물결, '=', ':'(앞이 숫자가 아닐 때), 한글, 'DC'/'AC',
                 # 값 구분 '/', 붙여 쓴 범위 대시만. 그 밖 글자(문장부호·기호·숫자·영문: '1，500 V', '1．5 V', '1·5 V',
                 # '△40 ℃', '1:5 V', '1÷5 V', '½5 A')는 층 B. 금지 목록은 검토마다 새 글자가 나왔음 (10차 검토)
+                # 1.4.75: 여는 따옴표·괄호, 전각 콜론 U+FF1A, 목록 머리 U+2022(줄 시작·공백 뒤)도 허용
+                prev2 = text[s - 2:s - 1]
                 if not (_lit_space(before) or before in _LIT_OPEN_BEFORE or _hangul(before) or dc_ac or slash
-                        or glued_range or (before == ":" and not text[s - 2:s - 1].isdecimal())):
+                        or glued_range or (before in ":\uff1a" and not prev2.isdecimal())
+                        or (before in _LIT_OPEN_PAIR and not prev2.isdecimal())
+                        or (before in _LIT_QUOTE_OPEN and text[e:e + 1] == before)
+                        or (before == "\u2022" and (not prev2 or _lit_space(prev2)))):
                     return False                                   # 'DC5V'의 '5V', '50/60 Hz'의 '60 Hz'는 층 A
                 if before in _LIT_GLUED_SPACE and text[s - 2:s - 1] in _LIT_SIGNS:
                     return False                                   # '-\u00a040 ℃': 붙여 쓴 빼기와 같음
@@ -3183,10 +3200,16 @@ class _Literal:
             # 허용 목록 (1.4.73): 공백류, 줄 끝, 닫는 괄호, ',' '.'(뒤가 숫자·영문이 아닐 때), ';', ':'(뒤가 공백류·줄 끝),
             # 범위 물결, 한글, 붙여 쓴 괄호의 허용 목록('(DC)', '(Max)', '(Typ.)'), 범위 대시('10 m-20 m').
             # 그 밖 글자('5 V㎃', '5 VA', '5 V·s', '5 V′')는 층 B (10차 검토)
+            # 1.4.75: 닫는 따옴표·괄호, U+3001, 곱하기 U+00D7, '±' 뒤 숫자('220 V±10 %'), 각주 '*1', 괄호 '('(막는 꼬리
+            # '(rms)' '(g)' '(A)'와 부호 괄호 '(-)' 밖: '220 V(60 Hz)', '1 MPa(10 kgf/cm²)', '2 h(1회)', '24 V(±10 %)')
             if not (_lit_space(after) or after in ")];~\uff5e\u301c" or _hangul(after)
                     or (after in ",." and not (nxt.isdecimal() or _latin(nxt)))
-                    or (after == ":" and (not nxt or _lit_space(nxt)))
-                    or (after in "([" and _LIT_PAREN_OK.match(text, e))
+                    or (after in ":\uff1a" and (not nxt or _lit_space(nxt)))
+                    or (after == "[" and _LIT_PAREN_OK.match(text, e))
+                    or (after == "(" and not _LIT_PAREN_BAD_AFTER.match(text, e))
+                    or after in _LIT_CLOSE_AFTER or (after in _LIT_QUOTE_OPEN and text[s - 1:s] == after)
+                    or (after == "\u00b1" and nxt.isdecimal())
+                    or (after == "*" and re.match(r"\*\d{1,2}(?![\d.,A-Za-z])", text[e:e + 4]))
                     or (after in "-\u2013\u2212" and _LIT_RANGE_RIGHT.match(text, e + 1))):
                 return False
             if after in "-\u2212\u207b" and nxt.isdecimal() and not re.match(
@@ -3847,7 +3870,8 @@ def cmd_search(args) -> Dict[str, Any]:
             save_problem = _xlsx_cut_text(cut_cells)
         if save_problem:
             result["save_problem"] = save_problem
-        nexts += _write_next_commands(out)
+        if _write_confirm_commands(out):
+            result["confirm_commands"] = _write_confirm_commands(out)
 
     view = []
     text_cut = 0
@@ -3982,8 +4006,8 @@ def cmd_search(args) -> Dict[str, Any]:
                 ["검색하지 못한 부분이 있음: " + "; ".join(gaps)] if gaps else []), **result)
             payload["agent_directive"] += evid
             return payload
-        if result.get("next_commands") and _write_next_commands(result["output_file"]):
-            directive += " 다른 문서에 넣으려면 next_commands를 그대로 실행하세요."
+        if result.get("confirm_commands"):
+            directive += " " + rt.INTO_OTHER_DOC
     else:
         directive = "VERIFIED: 검색 완료." + evid
         if result["truncated"]:

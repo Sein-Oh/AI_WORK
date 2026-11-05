@@ -4,7 +4,7 @@ description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.73"
+  version: "1.4.75"
   platform: windows
 ---
 
@@ -13,7 +13,7 @@ metadata:
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
 2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
-3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번.
+3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
 4. 메일은 `list`·`search`·`thread` 결과의 `id`(`--id 3`)를 글자 그대로 쓴다. 번호는 목록마다 이어서 늘어나고 1부터 다시 매기지 않아, 옛 번호는 같은 메일이거나 "없는 번호" 오류다. 번호 오류("목록을 다시 보세요")면 `next_commands`로 목록을 다시 보고 새 `id`를 쓴다. `id`가 긴 글자(EntryID)여도 그대로 쓴다. `--id`를 빼면 사용자가 보고 있는 메일이다.
 5. 긴 본문과 여러 줄 글은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .md를 만들고 `--body-file "<그 경로>"`로 넘긴다.
 6. 첨부 경로는 전체 경로로 쓴다. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.

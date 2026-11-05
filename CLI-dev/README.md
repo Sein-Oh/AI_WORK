@@ -50,7 +50,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 |---|---|
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
 | `agent_scenarios.yaml` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본. ml-kit 묶음(S0 샘플, A/M/P/R/X)과 office-cli 묶음(S1 샘플 `office-cli/tools/make_office_samples.py`, O1~O5: 규격 대조, 여러 칸 쓰기, 메일 첨부 읽기(수동 전용), 워드 문단 덧붙이기, 양식 채우기). 판정은 스킬 이름이 아니라 실행한 명령으로 하고, 회사 PC 오류 로그에서 나온 지어낸 office-cli 옵션은 공통 규칙 `no_fake_office`로 모든 요청에서 실패 |
-| `apply_skills.py` | `C:\CLI`의 스킬(`ml-kit\SKILL.md`, `office-cli\skills\<이름>\SKILL.md` 4개)과 `opencode/AGENTS.md`(전역 지침 원본)를 OpenCode 설정 폴더(`%USERPROFILE%\.config\opencode`)로 복사. 바뀐 것만 복사하고 덮어쓰는 파일은 `work\skill_backup_<시각>`에 보관. 옛 통합 스킬 폴더 `skills\office-cli`는 보관 후 지움(남으면 OpenCode가 옛 스킬도 고름). `--check`(확인만, 다르면 exit 1), `--test`(office-cli-test 보조 스킬도), `--config-dir`. rg(ripgrep)가 PATH에 없으면 알림. `run_all_tests.py`의 diag가 같은지 확인해 다르거나 옛 폴더가 남으면 FAIL |
+| `../CLI/setup.py` (`setup.bat`) | 배포 설치 (CLI-dev가 아니라 `C:\CLI`에 있음, 사람이 실행). `C:\CLI`의 스킬(`ml-kit\SKILL.md`, `office-cli\skills\<이름>\SKILL.md` 4개), `opencode\AGENTS.md`(전역 지침 원본), `opencode\opencode.jsonc`(있을 때만)를 OpenCode 설정 폴더(`%USERPROFILE%\.config\opencode`)로 복사. 바뀐 것만 복사하고 덮어쓰는 파일은 `C:\CLI\data\setup_backup_<시각>`에 보관. 옛 통합 스킬 폴더 `skills\office-cli`는 보관 후 지움(링크·정션이면 링크만). 시스템 PATH(HKLM)에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 없을 때만 추가(`winreg`, 형식 유지, 원래 값 보관, `WM_SETTINGCHANGE`), 동작 확인(라이브러리 import, 도구 `-h` 1줄 JSON, `opencode.exe`, rg). `--check`(바꾸지 않고 확인만, 다르면 exit 1), `--no-path`, `--config-dir`, 개발용 `--test-skill C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md`. `run_all_tests.py`의 diag가 같은 비교와 PATH 읽기로 확인해 다르거나 옛 폴더가 남으면 FAIL |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 yaml로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. yaml에 `answer_reference: true`인 시나리오(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
 진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
@@ -84,8 +84,10 @@ CLI-dev/<tool>/
 6. 폐쇄망: 실행 중 네트워크 접근 금지. [표준 환경](../docs/ENVIRONMENT.md)에 있는 라이브러리만 사용 ([`docs/WINDOWS_OFFLINE.md`](../docs/WINDOWS_OFFLINE.md)).
 7. 공통 결과 키 (해당할 때만 넣음):
    - `next_commands` - 이어서 그대로 실행할 전체 명령 목록 (LLM이 묻지 않고 실행해도 안전한 것만).
-   - `confirm_commands` - 사용자에게 보여 주고 "예"를 받은 뒤에만 실행할 전체 명령 목록 (메일 발송, 미리보기 뒤 실제 변경).
+   - `confirm_commands` - 사용자에게 보여 주고 "예"를 받은 뒤에만 실행할 전체 명령 목록 (메일 발송, 미리보기 뒤 실제 변경, 읽기·저장 뒤 다른 문서에 넣기 같은 문서를 바꾸는 이어 하기).
      경량 LLM이 `next_commands[0]`을 기계적으로 실행해도 메일이 나가거나 문서가 바뀌지 않게 키를 나눈다.
+     덮어쓰기·삭제·메일 발송 항목에는 `"destructive": true`를 붙인다: 사용자가 "묻지 말고 끝까지"라고 했어도 늘 묻는 항목 (전역 지침 3장 6번).
+   - 명령 오타 추천은 되돌리기 어려운 명령(메일 발송 등)이면 `[추천]`이 아니라 `[후보]`로 준다 (`[추천]`은 LLM이 묻지 않고 실행).
    - `truncated` - 결과를 상한에서 잘랐으면 `true`, 전체 결과 파일 경로를 함께 제공.
    - `recovered` - 도구가 실패를 즉시 복구해 결과가 달라진 일 (예: 잠긴 파일 -> 새 이름 저장). `warnings`와 구분.
 8. 실패한 실행(exit 1, 2)은 `<도구 데이터 폴더>/logs/errors.txt`에 자동 기록. 로그 경로는 stdout JSON에 넣지 않음.
@@ -180,8 +182,15 @@ CLI-dev/<tool>/
   `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [같은 명령]`,
   `agent_directive` = `CONTINUE: ...`(exit 0)을 낸다. 오류 로그에는 남기지 않는다.
 - 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행한다. 실행마다 새 단계를 최소 1개는 하므로 반복하면 반드시 끝난다.
-- LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 (최대 20번).
+- LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `VERIFIED:`/`UNVERIFIED:`가 나올 때까지. `progress`가 바뀌는 동안 계속하고,
+  바로 앞과 같은 `progress`가 나오거나(2번 연속) 60번을 넘으면 멈추고 알린다. 그래서 `progress`는 실행마다 달라지게(끝낸 단계 수, `약 N단계 남음`) 쓴다.
 - 사람이 돌리는 점검 러너(`run_beta_check.py`, 실기 러너)와 테스트는 `ML_KIT_TIME_LIMIT=0`(제한 없음).
 - 적용: ml-kit(`ML_KIT_TIME_LIMIT`, `ml_train.py` 여러 타겟 학습(`--best`, `ml_report -f` 재학습 포함), 성능예측표 입력 고르기와 그것을 부르는 `ml_report.py`), office-cli(`OFFICE_CLI_TIME_LIMIT`, `reader.py index`와 `search --file` 폴더 등록). 새 긴 작업도 같은 이름·같은 키로 구현한다.
-- 나누는 단위는 한 실행에 반드시 끝낼 수 있을 만큼 작게: ml-kit 학습은 타겟 -> 후보 모델 -> 교차검증 fold(2.9.66) -> 1위 전체 적합 -> 순열 중요도 열 단위로 저장한다.
+- 나누는 단위는 한 실행에 반드시 끝낼 수 있을 만큼 작게: ml-kit 학습은 학습 전 준비(2.9.67) -> 타겟 -> 후보 모델 -> 교차검증 fold(2.9.66) -> 1위 전체 적합 -> 순열 중요도 열 단위로 저장한다.
+  실행마다 다시 하는 고정 비용(파일 읽기, 검증 등)이 크면 그것도 저장해 이어 실행이 다시 쓴다 (고정 비용 + 첫 단계가 제한을 넘으면 진행이 없음).
+- 단계 하나가 제한보다 긴 경우 (ml-kit 2.9.67): 실행의 첫 단계(시계 없이 함)는 시작 표시(`<단계>.start`, 시도 횟수와 제한)를 남기고 저장하면 지운다.
+  표시만 남은 단계를 다시 만나면(이전 실행이 그 단계 도중 끊김) 2번째까지 다시 시도하고, 2번 끊긴 단계는 시작하지 않고 `STOP_RETRY:` +
+  `[추천] <같은 명령> --time-limit 570`(명령 실행 도구 timeout 600000)을 낸다. 늘린 제한으로도 끊겼으면 `[추천]` 없이 멈춘다.
+- 안전망 (ml-kit 2.9.67): `run_cli`가 감시 스레드를 둔다. 명령 시작부터 제한 + 15초에 아직 안 끝났으면 1줄 JSON을 직접 내고 끝낸다
+  (이 실행이 저장한 단계가 있거나 표시한 단계의 첫 끊김이면 `CONTINUE:`, 아니면 `STOP_RETRY:`, 오류 로그 기록). stdout은 락과 표시로 한 번만 쓴다.
 

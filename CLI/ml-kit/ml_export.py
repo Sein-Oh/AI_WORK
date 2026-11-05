@@ -25,6 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
     VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, resume_find, resume_save, resume_clear, save_failed_warning,
+    step_begin, step_end, step_label,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
@@ -206,9 +207,13 @@ def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[s
         _FIT_STATS["reused"] += 1
         return hit
     done = _FIT_STATS["reused"] + _FIT_STATS["trained"]
+    label = f"성능예측표 입력 고르기: '{strip_unit(target)}' 입력 {len(subset)}개 학습"
     if _FIT_STATS["trained"]:                 # at least one new candidate per run: running again always moves on
         check_time(max(_FIT_SECONDS, default=0.0) * 1.2,
                    f"성능예측표 입력 고르기: 후보 {done}개 학습 저장됨 ('{strip_unit(target)}' 입력 {len(subset)}개 시험 전에 멈춤)")
+        step_label(label)
+    else:                                     # the first candidate of this run, without a clock check: marked
+        step_begin(FIT_CACHE, key, label)
     t0 = time.monotonic()
     df = data[subset].apply(coerce_numeric)
     if kept:
@@ -229,6 +234,7 @@ def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[s
     _FIT_SECONDS.append(time.monotonic() - t0)
     _FIT_STATS["trained"] += 1
     _save_fit(key, res)
+    step_end()
     return dict(res)
 
 

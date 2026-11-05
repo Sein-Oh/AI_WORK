@@ -20,10 +20,11 @@ OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md�
 | `skills\office-spec\` | `C:\CLI\office-cli\skills\office-spec\SKILL.md` (파일 읽기·근거 검색, 규격 대조) |
 | `skills\office-cli-test\` | `C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md` (실기 테스트를 맡길 때만) |
 
-SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신한 뒤 `C:\CLI-dev`에서 `python apply_skills.py`로 복사합니다
-(전역 지침까지 바뀐 것만 복사, `--test`면 office-cli-test도, `--check`는 확인만). 그 뒤 OpenCode를 다시 시작합니다.
+SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신한 뒤 `C:\CLI\setup.bat`을 두 번 클릭(또는 `python C:\CLI\setup.py`)해 복사합니다
+(전역 지침·`opencode.jsonc`까지 바뀐 것만 복사, 시스템 PATH 등록, 동작 확인. `--check`는 확인만). 그 뒤 새 터미널을 열고 OpenCode를 다시 시작합니다.
+office-cli-test는 개발용이라 `python C:\CLI\setup.py --test-skill C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md`로 따로 넣습니다.
 폴더 이름은 표와 같아야 합니다 (SKILL.md 맨 위 `name`과 같은 이름).
-office-cli 1.4.61까지 쓰던 통합 스킬 폴더 `skills\office-cli\`는 `apply_skills.py`가 `work\skill_backup_<시각>`에 보관한 뒤 지웁니다
+office-cli 1.4.61까지 쓰던 통합 스킬 폴더 `skills\office-cli\`는 `setup.py`가 `C:\CLI\data\setup_backup_<시각>`에 보관한 뒤 지웁니다
 (남아 있으면 OpenCode가 옛 스킬도 고릅니다).
 
 **ripgrep(rg.exe)이 필요합니다.** OpenCode는 스킬을 불러올 때 ripgrep을 쓰고, 없으면 인터넷에서 받으려 합니다.
@@ -36,8 +37,9 @@ PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시
 
 ## 2. 전역 지침 (AGENTS.md)
 
-1. `CLI-dev/opencode/AGENTS.md`(PC에서는 `C:\CLI-dev\opencode\AGENTS.md`)를 `%USERPROFILE%\.config\opencode\AGENTS.md`로 복사합니다.
-   `python apply_skills.py`가 스킬과 함께 복사합니다. 원본은 CLI-dev에 둡니다 (반입 때 `C:\CLI-dev`가 함께 가므로).
+1. `CLI/opencode/AGENTS.md`(PC에서는 `C:\CLI\opencode\AGENTS.md`)를 `%USERPROFILE%\.config\opencode\AGENTS.md`로 복사합니다.
+   `C:\CLI\setup.bat`이 스킬과 함께 복사합니다. 원본은 배포 폴더 `C:\CLI`에 둡니다 (배포는 `C:\CLI` 하나).
+   같은 폴더의 `opencode.jsonc`(사내 LLM 주소, 사용자가 배포 전에 넣음, git 제외)도 있으면 설정 폴더로 복사합니다.
 2. 고쳐 쓸 곳은 없습니다. 도구 경로는 `C:\CLI` 기준으로 적혀 있습니다.
 
 이미 넣어 두신 내용은 아래처럼 반영했습니다.

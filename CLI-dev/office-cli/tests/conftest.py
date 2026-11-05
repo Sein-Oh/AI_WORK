@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 
 import pytest
@@ -14,7 +15,7 @@ import _office as off  # noqa: E402
 from fake_excel import FakeExcelWorkbook, FakeXlApp  # noqa: E402
 from fake_ppt import FakePptWindowApp, FakePresentation  # noqa: E402
 from fake_word import FakeWordDocument  # noqa: E402
-from office_helpers import TABLE, set_active, stub_com  # noqa: E402
+from office_helpers import TABLE, set_active, stub_com, unsafe_next_commands  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +29,22 @@ def isolated_dirs(tmp_path, monkeypatch):
     monkeypatch.setenv("OFFICE_CLI_DATA_DIR", str(data))
     monkeypatch.setenv("OFFICE_CLI_TIME_LIMIT", "0")      # R10: 테스트는 시간 제한 없음 (CONTINUE 시험만 따로 켬)
     return {"cache": cache, "data": data}
+
+
+# next_commands = 묻지 않고 실행해도 되는 것(읽기·미리보기)만 (1.4.75, 11차 검토). 문서를 바꾸는 이어 하기는 confirm_commands.
+# 모든 테스트의 stdout JSON을 보고, 바꾸는 명령이 next_commands에 들면 그 테스트를 실패시킨다.
+@pytest.fixture(autouse=True)
+def _next_commands_are_safe(monkeypatch):
+    import _runtime as rt
+    seen = []
+    orig = rt.emit_json
+
+    def emit(payload):
+        seen.extend(unsafe_next_commands(payload))
+        return orig(payload)
+    monkeypatch.setattr(rt, "emit_json", emit)
+    yield
+    assert not seen, f"next_commands에 문서를 바꾸는 명령 (confirm_commands로): {seen}"
 
 
 # ---------------------------------------------------------------------------

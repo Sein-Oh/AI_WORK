@@ -74,8 +74,10 @@ def test_write_sine_header_and_column_formulas(xl, capsys):
     assert ("Formula", "$A$2:$A$101", "=(ROW()-2)*4*PI()/99") in ws.log
     assert ("Formula", "$B$2:$B$101", "=SIN(A2)") in ws.log
     assert app.ScreenUpdating is True and app.Calculation == -4105       # 대량 쓰기 설정 복원
-    assert "chart" in out["next_commands"][0]["command"]
-    assert "--title" not in out["next_commands"][0]["command"]        # 자리표시 제목 '차트'를 그대로 쓰지 않게 (1.4.48)
+    # 차트 만들기는 문서를 바꿈: next_commands가 아니라 confirm_commands (1.4.75, 11차 검토)
+    assert "next_commands" not in out and "chart" in out["confirm_commands"][0]["command"]
+    assert "confirm_commands[0]" in out["agent_directive"] and "destructive" not in out["confirm_commands"][0]
+    assert "--title" not in out["confirm_commands"][0]["command"]        # 자리표시 제목 '차트'를 그대로 쓰지 않게 (1.4.48)
     assert out["target_resolved"]["sheet"] == "Sheet1"
 
 
@@ -576,6 +578,7 @@ def test_delete_dry_run_then_overwrite(xl_table, capsys):
     assert code == 0 and out["dry_run"] is True and out["filled_cells"] == 5, out
     assert out["filled_addresses"] == ["B1", "B2", "B3", "B4", "B5"] and "영업" not in json.dumps(out, ensure_ascii=False), out
     assert "--overwrite" in out["confirm_commands"][0]["command"] and "--dry-run" not in out["confirm_commands"][0]["command"], out
+    assert out["confirm_commands"][0]["destructive"] is True  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
     assert xl_table.values[(1, 2)] == "부서" and off.list_snapshots("excel") == []
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "B:B", "--overwrite")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
@@ -877,7 +880,8 @@ def test_chart_numeric_x_becomes_scatter_and_offers_transfer(xl, capsys):
     code, out = run_excel(capsys, "chart", "--range", "A1:B11", "--type", "line", "--title", "사인 2주기")
     assert code == 0 and out["chart_type"] == "scatter_lines" and out["chart_name"] == "사인 2주기"
     assert out["agent_directive"].startswith("VERIFIED:")                 # 차트 목록·제목을 다시 읽음 (R1)
-    cmd = out["next_commands"][0]["command"]
+    assert "next_commands" not in out                                     # 옮기기는 문서를 바꿈 (1.4.75)
+    cmd = out["confirm_commands"][0]["command"]
     assert "transfer" in cmd and '"사인 2주기"' in cmd
     code, out = run_excel(capsys, "chart", "--range", "A1:B11", "--title", "사인 2주기")
     assert out["chart_name"] == "사인 2주기 2"                    # 이름 중복 방지
@@ -971,7 +975,7 @@ def test_same_title_on_two_sheets_next_command_targets_new_chart(xl, capsys):
     run_main(excel, capsys, "chart", "--sheet", "Sheet1", "--range", "A1:B3", "--title", "매출")
     code, out = run_main(excel, capsys, "chart", "--sheet", "요약", "--range", "A1:B3", "--title", "매출")
     assert code == 0
-    argv = shlex.split(out["next_commands"][0]["command"])
+    argv = shlex.split(out["confirm_commands"][0]["command"])
     assert argv[argv.index("--sheet") + 1] == "요약"
     ws, obj = excel.find_chart(_T(wb), argv[argv.index("--chart") + 1], argv[argv.index("--sheet") + 1])
     assert ws.Name == "요약"
@@ -1516,6 +1520,8 @@ def test_comment_add_dry_run_changes_nothing(xl, capsys):
     cmds = [c["command"] for c in out["confirm_commands"]]
     assert all("--dry-run" not in c for c in cmds)
     assert any("--overwrite" in c for c in cmds) and any("--append" in c for c in cmds)
+    flags = {("--overwrite" in c["command"]): c.get("destructive", False) for c in out["confirm_commands"]}
+    assert flags == {True: True, False: False}  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
     code, out = run_excel(capsys, "comment", "--range", "C9", "--text", "의견", "--dry-run")
     assert out["confirm_commands"][0]["command"].endswith('--text 의견') or "--dry-run" not in out["confirm_commands"][0]["command"]
     assert (9, 3) not in ws.notes
@@ -1532,7 +1538,7 @@ def test_comment_delete(xl, capsys):
     code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5", "--dry-run")
     assert code == 0 and out["dry_run"] is True and len(ws.notes) == 3 and undo_points() == []
     assert out["planned"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"]
-    assert "--dry-run" not in out["confirm_commands"][0]["command"]
+    assert "--dry-run" not in out["confirm_commands"][0]["command"] and out["confirm_commands"][0]["destructive"] is True
     code, out = run_excel(capsys, "comment", "--action", "delete", "--range", "B1:B5")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and list(ws.notes) == [(9, 9)]
     assert out["applied"] == ["메모 삭제: Sheet1!B2", "메모 삭제: Sheet1!B3"] and len(undo_points()) == 1
@@ -1704,6 +1710,9 @@ def test_write_cells_dry_run(xl, capsys):
     assert "next_commands" not in out, out              # 1.4.73: 실제로 쓰는 명령은 사용자 확인 뒤에만 (confirm_commands)
     cmd = out["confirm_commands"][0]["command"]
     assert "--dry-run" not in cmd and "--overwrite" in cmd and "--cells" in cmd
+    assert out["confirm_commands"][0]["destructive"] is True  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
+    code, out = run_excel(capsys, "write", "--cells", "C8=a; C9=b", "--dry-run")
+    assert code == 0 and "destructive" not in out["confirm_commands"][0], out           # 빈 칸만: 덮어쓰기 아님
 
 
 def test_write_cells_bad_items_write_nothing(xl, capsys, tmp_path):

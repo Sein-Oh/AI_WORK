@@ -26,6 +26,10 @@ AI_WORK/
 │   ├── engenius/              # 사내 에이전트 En-Genius 스킬 패키지 (업데이트 중지, 필요할 때 다시 꺼냄)
 │   └── doc-classifier/        # 폴더 파일 목록화/분류 0.9.2 (다른 개발자 담당으로 보관)
 ├── CLI/                       # 사내 PC C:\CLI로 그대로 복사. 실행 파일과 스킬(SKILL.md)만
+│   ├── setup.py / setup.bat   # 배포 설치: 스킬·전역 지침·opencode.jsonc를 OpenCode 설정 폴더로, 시스템 PATH 등록, 동작 확인
+│   ├── web.bat                # OpenCode Web UI를 바로 띄움 (opencode 2.x: opencode pair의 일회용 로그인 링크를 브라우저로 엶)
+│   ├── opencode/AGENTS.md     # OpenCode 전역 지침 원본 (%USERPROFILE%\.config\opencode\AGENTS.md로 복사)
+│   │                          # opencode/opencode.jsonc는 사용자가 배포 전에 넣음 (사내 LLM 주소, git 제외)
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
 │   │   ├── SKILL.md           # 에이전트용 스킬 (짧은 명령 템플릿 + 결과 처리 규칙)
 │   │   ├── ml_train.py        # 1단계: 학습
@@ -42,12 +46,10 @@ AI_WORK/
 └── CLI-dev/                   # 개발·실기 테스트용 (필요할 때만 C:\CLI-dev로, C:\CLI와 나란히)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)
-    ├── apply_skills.py        # 스킬(ml-kit, office 4개)과 전역 지침을 OpenCode 설정 폴더로 복사 (반입 후 한 번)
-    ├── opencode/AGENTS.md     # OpenCode 전역 지침 원본 (%USERPROFILE%\.config\opencode\AGENTS.md로 복사)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
     ├── agent_scenarios.yaml   # Gemma 종합 테스트 요청과 채점 기준
-    ├── tests/                 # 채점기·메시지 팩·점검 러너·apply_skills 테스트
+    ├── tests/                 # 채점기·메시지 팩·점검 러너·setup.py 테스트
     ├── work/                  # (git 제외) 모든 시험 폴더: 베타 점검, 실기 러너, Gemma, 눈 확인
     ├── ml-kit/
     │   ├── README.md          # 상세 설명서
@@ -70,11 +72,24 @@ python -m pytest -q              # 전체 도구 테스트
 ```
 폐쇄망 설치는 [`docs/WINDOWS_OFFLINE.md`](docs/WINDOWS_OFFLINE.md), 에이전트 연동은 각 도구의 `SKILL.md`.
 
+## 배포 방법
+
+배포는 `C:\CLI` 폴더 하나입니다 (저장소 `CLI/` + WinPython `python\` + `opencode.exe`).
+1. `CLI` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\CLI\setup.bat`, `C:\CLI\python\python.exe`가 되도록).
+2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\CLI\opencode\`에 넣어 둡니다 (git에 올리지 않는 파일. 없으면 설정 폴더에 이미 있는 것을 씀).
+3. `C:\CLI\setup.bat`을 두 번 클릭합니다 (또는 `python C:\CLI\setup.py`). 스킬 5개·전역 지침·`opencode.jsonc`를
+   `%USERPROFILE%\.config\opencode\`로 복사(바뀐 것만, 이전 파일은 `C:\CLI\data\setup_backup_<시각>`에 보관)하고,
+   시스템 PATH에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 없을 때만 추가한 뒤, 도구가 동작하는지 확인합니다. `--check`는 확인만.
+4. 새 터미널을 열고 OpenCode(TUI, Desktop)를 다시 시작합니다.
+5. (선택) 브라우저 화면으로 쓰려면 `C:\CLI\web.bat`을 두 번 클릭합니다. `opencode pair`가 OpenCode 백그라운드 서비스를 띄우고
+   (이 PC에서만 접속, 화면은 opencode.exe 안에 들어 있어 폐쇄망에서도 됨) 일회용 로그인 링크를 브라우저로 엽니다. 링크는 한 번만 쓰이고
+   몇 분 뒤 만료되니 다시 열 때는 web.bat을 다시 실행합니다. 서비스는 창을 닫아도 계속 돌며 `web.bat stop`으로 끕니다(`web.bat status`로 상태).
+
 ## 관리 방법
 
 1. **코드는 압축 파일 대신 평문 파일로 커밋** - diff/리뷰가 가능해야 합니다.
 2. **CLI 인터페이스(인자 + stdout 1줄 JSON)는 공개 API** - 바꾸면 `SKILL.md`, `README.md`, `CHANGELOG.md`를 같이 갱신.
 3. **작업 1건 = 브랜치 1개 = PR 1개**, 리팩터링과 동작 변경은 분리.
 4. **모든 PR은 `python -m pytest` 통과가 조건.**
-5. **배포 = 도구 폴더 복사** - `CLI/<tool>/` 폴더를 폐쇄망 PC의 `C:\CLI\<tool>`로 복사하고, OpenCode 스킬 폴더에는 `SKILL.md`만 복사 (`CLI-dev/apply_skills.py`, [`docs/opencode/README.md`](docs/opencode/README.md)).
+5. **배포 = `CLI` 폴더 하나** - 아래 "배포 방법". OpenCode 스킬 폴더에는 `SKILL.md`만 들어갑니다 ([`docs/opencode/README.md`](docs/opencode/README.md)).
    ml-kit 예측만 배포할 때는 `ml_predict.py` + 학습된 `vX\` 폴더 2가지만 복사하면 됩니다.

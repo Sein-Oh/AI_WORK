@@ -30,7 +30,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
     parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
-    RESUME_MAX_AGE,
+    RESUME_MAX_AGE, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD,
 )
 
 setup_console()
@@ -467,18 +467,24 @@ def _permutation_means(pipe: Pipeline, Xs: pd.DataFrame, ys: np.ndarray, seed: i
 
     def save() -> None:
         before_stop()
-        _resume_save(path, dict(meta, done=dict(done)))
+        if _resume_save(path, dict(meta, done=dict(done))):
+            step_end()
 
     new_cols = 0
     measured = 0.0                             # longest column of this run
     saved_new = time.monotonic()
     other_step = _step_done()                  # this run already moved on (a fold, a candidate, the fit)
     Xw = Xs.copy()
+    if resume and not other_step:              # the first column of this run, without a clock check: marked
+        step_begin(os.path.dirname(resume), f"{os.path.basename(resume)}.imp",
+                   f"학습: 타겟 '{target_name}' 순열 중요도 {len(done) + 1}/{n_cols}열")
+    elif resume:
+        step_label(f"학습: 타겟 '{target_name}' 순열 중요도 ({len(done)}/{n_cols}열 끝남)")
     for j in todo:
         if resume and (other_step or new_cols >= 1) and time_would_pass(col_seconds):
             save()
             check_time(col_seconds, f"학습: 타겟 '{target_name}' 순열 중요도 {len(done)}/{n_cols}열 끝남, 저장됨 "
-                                    f"(나머지 열 전에 멈춤)")
+                                    f"(나머지 열 전에 멈춤, 약 {1 + TARGETS_AFTER[0] * STEPS_PER_TARGET}단계 남음)")
         t_col = time.monotonic()
         orig = Xs.iloc[:, j]
         rng = np.random.default_rng([seed, j])
@@ -668,9 +674,9 @@ RUN_FOLD_SECONDS: List[float] = []          # every fold trained in this command
 
 
 def _step_done() -> bool:
-    """True when this command already finished a step (a fold, a candidate, a final fit or a target): only then may
-    a clock check stop it, so every run moves on (R10)."""
-    return bool(RUN_FOLD_SECONDS or RUN_MODEL_SECONDS or RUN_FIT_SECONDS)
+    """True when this command already finished a step (a fold, a candidate, a final fit, a target or the saved
+    preparation): only then may a clock check stop it, so every run moves on (R10)."""
+    return bool(RUN_FOLD_SECONDS or RUN_MODEL_SECONDS or RUN_FIT_SECONDS or RUN_PREP_SECONDS)
 
 
 def _candidate_path(resume: Optional[str], m_idx: int) -> Optional[str]:
@@ -752,13 +758,18 @@ def _cv_folds(resume: Optional[str], m_idx: int, model_name: str, model_count: i
     for k, (train_idx, val_idx) in enumerate(splits, 1):
         if results[k - 1] is not None:
             continue
+        label = f"학습: 타겟 '{target_name}' '{model_name}' 교차검증 fold {k}/{n}"
         if resume and _step_done():
             pool = own or (RUN_FOLD_SECONDS + [t / n for t in known])
             if pool:
                 done = sum(r is not None for r in results)
+                left = (model_count - m_idx) * n - done + 2 + TARGETS_AFTER[0] * STEPS_PER_TARGET
                 check_time(max(pool) * 1.2,
                            f"학습: 타겟 '{target_name}' 후보 모델 {m_idx}/{model_count}개 끝남, '{model_name}' 교차검증 "
-                           f"fold {done}/{n}개 끝남, 저장됨 (fold {k} 전에 멈춤)")
+                           f"fold {done}/{n}개 끝남, 저장됨 (fold {k} 전에 멈춤, 약 {left}단계 남음)")
+            step_label(label)
+        elif resume:                           # the first step of this run, without a clock check: marked
+            step_begin(os.path.dirname(resume), f"{os.path.basename(resume)}.m{m_idx}.f{k}", label)
         pct = log_offset + int(log_weight * (m_idx * n + k) / (model_count * n))
         log_progress(pct, f"Target '{target_name}' | {model_name} (Fold {k}/{n})...")
         t_fold = time.monotonic()
@@ -771,6 +782,7 @@ def _cv_folds(resume: Optional[str], m_idx: int, model_name: str, model_count: i
             if any(r is None for r in results):    # the last fold is saved with the candidate (_candidate_save)
                 _resume_save(_fold_path(resume, m_idx, k),
                              {"model": model_name, "folds": n, "res": res, "seconds": seconds})
+                step_end()
     return results, float(sum(own))            # type: ignore[return-value]
 
 
@@ -781,6 +793,7 @@ def _candidate_save(resume: Optional[str], m_idx: int, res: Tuple[Any, ...], sec
         return
     RUN_MODEL_SECONDS.append(seconds)
     if _resume_save(_candidate_path(resume, m_idx), res + (seconds,)):
+        step_end()
         prefix = os.path.basename(resume) + f".m{m_idx}.f"
         resume_clear(os.path.dirname(resume), lambda name, p: name.startswith(prefix))
 
@@ -789,9 +802,13 @@ def _fit_check(resume: Optional[str], target_name: str, model_count: int, estima
     """Clock check before the final fit of a target (also one whose candidates were all reused): only after a step
     of this command (_step_done), so every run moves on (R10). A step saved nowhere makes check_time stop with
     STOP_RETRY instead, so '저장됨' is true when it stops."""
+    label = f"학습: 타겟 '{target_name}' 1위 모델 전체 적합"
     if resume and _step_done():
         check_time(estimate, f"학습: 타겟 '{target_name}' 후보 모델 {model_count}/{model_count}개 끝남, 저장됨 "
-                             f"(1위 모델 전체 적합 전에 멈춤)")
+                             f"(1위 모델 전체 적합 전에 멈춤, 약 {2 + TARGETS_AFTER[0] * STEPS_PER_TARGET}단계 남음)")
+        step_label(label)
+    elif resume:                               # the first step of this run, without a clock check: marked
+        step_begin(os.path.dirname(resume), f"{os.path.basename(resume)}.fit", label)
 
 
 def _fit_estimate(champion_cv_seconds: float, n_folds: int) -> float:
@@ -842,11 +859,13 @@ def _final_fit_and_importance(estimator: Any, champion_name: str, step_name: str
     def save_fit() -> None:                    # once: the importance saves its columns again and again
         if fresh and resume and not fit_saved:
             fit_saved.append(_resume_save(fit_path, (champion_name, final_pipeline, fit_seconds)))
+            step_end()
 
     log_progress(log_offset + log_weight - 2, f"Target '{target_name}' | 순열 피처 중요도(Feature Importance) 산출 중...")
     notes: List[str] = []
     ranks = feature_importance_ranks(final_pipeline, X, y, schema, seed, scoring=scoring, notes=notes, resume=resume,
                                      target_name=target_name, champion_name=champion_name, before_stop=save_fit)
+    step_end()                                 # the target's last step ended within this run
     return final_pipeline, ranks, notes
 
 
@@ -2101,6 +2120,148 @@ def _resume_cleanup(resume_dir: str, used: List[str]) -> None:
     resume_clear(resume_dir, lambda name, p: name.split(".")[0] in keys or now - os.path.getmtime(p) > RESUME_MAX_AGE)
 
 
+# The preparation of a run (everything before the first model: reading the file, checks, feature typing,
+# correlation, row exclusions, the resume key of each target) is one step of its own: on large data it takes tens of
+# seconds, so a run continued after CONTINUE that did it again would have no time left for a model (2.9.67). When it
+# took at least PREP_SAVE_SECONDS under a time limit it is saved whole in <resume_dir>/<key>.prep.joblib (key = the
+# data file's bytes, the training arguments that shape the data, tool and library versions) and the next run of the
+# same command uses it. The saved objects are the same objects (pickle), so a split run trains exactly what one run does.
+PREP_SAVE_SECONDS = 5.0
+PREP_LABEL = "학습 준비(데이터 읽기, 검증, 상관행렬)"
+RUN_PREP_SECONDS: List[float] = []        # a preparation saved in this command (a step: _step_done)
+STEPS_PER_TARGET = 5 * 5 + 2              # progress estimate: candidates x folds + final fit + importance
+TARGETS_AFTER: List[int] = [0]            # targets after the one being trained (the steps left in progress)
+
+
+def _prep_key(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]], raw_file: str) -> str:
+    import hashlib
+
+    def spec(v: Any) -> Any:                 # a list given as a file (-x, -y, --eval, ...): its content
+        if isinstance(v, str) and len(v) < 1024 and os.path.isfile(v):
+            with open(v, "rb") as f:
+                return ["file", hashlib.sha1(f.read()).hexdigest()]
+        return v
+
+    h = hashlib.sha1()
+    for part in (VERSION, sklearn.__version__, pd.__version__, np.__version__, task, args.header_row, args.unit_row,
+                 args.data_row, args.seed, dumps_json([{k: spec(v) for k, v in sorted(g.items())} for g in groups])):
+        h.update(str(part).encode("utf-8") + b"\x1e")
+    with open(raw_file, "rb") as f:
+        for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def _prep_load(want: str) -> Optional[Dict[str, Any]]:
+    path = resume_find(os.path.dirname(want), os.path.basename(want))
+    if not path:
+        return None
+    try:
+        res = joblib.load(path)
+        if isinstance(res, dict) and res.get("version") == VERSION:
+            return res
+    except Exception:
+        pass
+    try:                                       # damaged: prepared again (JIT: rebuilt)
+        os.remove(path)
+    except OSError:
+        pass
+    sys.stderr.write(f"[WARN] 저장된 {PREP_LABEL} 결과 {os.path.basename(path)}를 읽지 못해 다시 준비합니다\n")
+    return None
+
+
+def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]], raw_file: str) -> Dict[str, Any]:
+    """The preparation of train_version (see PREP_SAVE_SECONDS): a dict of everything training and packaging use."""
+    log_progress(5, f"입력 데이터 로드 중: {os.path.basename(raw_file)}...")
+    df_raw = load_data_file(   # the shared loader: identical parsing in ml_predict.py
+        file_path=raw_file,
+        header_row=args.header_row,
+        unit_row=args.unit_row,
+        data_row=args.data_row
+    )
+
+    prepared = [_prepare_group(df_raw, g, task) for g in groups]
+    excl_col = find_exclude_column(list(df_raw.columns))
+    source_rows = df_raw.attrs.get("source_rows") or list(range(1, len(df_raw) + 1))
+    column_aliases: Dict[str, str] = {}
+    target_group: Dict[str, Dict[str, Any]] = {}
+    target_names: List[str] = []
+    for g in prepared:
+        column_aliases.update(g["aliases"])
+        for t in g["targets"]:
+            if t in target_group:
+                raise InputError(f"타겟 '{t}'이(가) 학습 조건 두 곳에 들어 있습니다.")
+            target_group[t] = g
+            target_names.append(t)
+    # Version-wide views: identical to the group's own values when there is one group
+    g0 = prepared[0]
+    feature_names = list(dict.fromkeys(f for g in prepared for f in g["features"]))
+    applied_evals = list(dict.fromkeys(e for g in prepared for e in g["evals"]))
+    feature_schema = _merge_schemas([g["schema"] for g in prepared])
+    X_all = _union_frame([g["X"] for g in prepared])
+    df_clean = _union_frame([g["df"][[c for c in g["features"] + g["targets"] if c in g["df"].columns]]
+                             for g in prepared]) if len(prepared) > 1 else g0["df"]
+
+    # Correlation (numeric inputs incl. date parts + numeric targets) for SSOT reporting
+    log_progress(20, "변수 간 2차원 상관행렬 계산 중...")
+    target_numeric = target_names if task == TASK_REGRESSION else []
+    corr_parts = []
+    for g in prepared:
+        num_inputs = [c for c in g["schema"]["input_columns"] if c not in g["schema"]["categorical"]]
+        corr_parts.append(g["X"][num_inputs])
+    corr_parts.append(pd.concat([target_group[t]["df"][[t]] for t in target_numeric], axis=1)
+                      if target_numeric else pd.DataFrame(index=df_raw.index))
+    corr_frame = _union_frame(corr_parts) if len(prepared) > 1 else pd.concat(corr_parts, axis=1)
+    corr_full = corr_frame.corr().round(4)
+
+    # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader),
+    # totals / average rows (kept: the '제외' column is the user's decision)
+    train_warnings: List[str] = layout_warnings(df_raw, target_names)
+    for g in prepared:
+        train_warnings.extend(w for w in g["warnings"] if w not in train_warnings)
+    # numbers written with '%' ('64.4%' of an Excel CSV export) are read as 64.4: said, never silent; '%' cells
+    # next to plain numbers in one column stop (no scale is sure)
+    pct_cols = ([c for g in prepared for c in _numeric_input_columns(g)]
+                + (target_names if task == TASK_REGRESSION else []))
+    # (on the rows training uses: a row the user marked in '제외' never stops the run)
+    marked = (df_raw[excl_col].map(_exclude_mark).map(lambda t: bool(t) and t != INCLUDE_MARK).to_numpy(dtype=bool)
+              if excl_col else np.zeros(len(df_raw), dtype=bool))
+    check_percent_mix(df_raw[~marked], pct_cols)
+    train_warnings.extend(percent_warning(df_raw, pct_cols))
+    for w in train_warnings:
+        sys.stderr.write(f"[WARN] {w}\n")
+    # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the
+    # header (target empty), rows marked in '제외' or rows without a target
+    unparsed: Dict[str, Dict[str, Any]] = {}
+    unit_below = df_raw.attrs.get("unit_row_below")
+    unit_pos = [i for i, r in enumerate(source_rows) if r == unit_below] if unit_below else []
+    targets: Dict[str, Dict[str, Any]] = {}
+    for target_name in target_names:
+        g = target_group[target_name]
+        extra = {"positive_class": g["positive_class"]} if task == TASK_CLASSIFICATION else {}
+        y_full = g["df"][target_name]
+        plan = plan_exclusions(g["df"][excl_col] if excl_col else None, y_full, g["X"], g["schema"],
+                               g["created"], task, target_name, cond=g["where_hit"], cond_text=g["where"] or "")
+        trained = np.array(y_full.notna(), dtype=bool) & ~np.asarray(plan["mask"], dtype=bool)
+        trained[unit_pos] = False
+        for c in _numeric_input_columns(g):
+            if c in df_raw.columns:
+                pos, ex = unparsed_number_cells(df_raw[c], trained)
+                entry = unparsed.setdefault(c, {"rows": set(), "examples": []})
+                entry["rows"].update(pos)
+                entry["examples"] += [v for v in ex if v not in entry["examples"]]
+        y_train = y_full.mask(plan["mask"])
+        targets[target_name] = {"plan": plan, "key": _resume_key(task, target_name, g["X"], y_train, g["schema"],
+                                                                 args.seed, extra)}
+    return {"version": VERSION, "prepared": prepared, "target_names": target_names, "excl_col": excl_col,
+            "source_rows": source_rows, "column_aliases": column_aliases, "feature_names": feature_names,
+            "applied_evals": applied_evals, "feature_schema": feature_schema, "X_all": X_all, "df_clean": df_clean,
+            "target_numeric": target_numeric, "corr_full": corr_full, "warnings": train_warnings,
+            "unparsed": unparsed, "targets": targets,
+            "raw_info": {"rows": int(len(df_raw)), "columns": int(df_raw.shape[1]),
+                         "decimal_comma": bool(df_raw.attrs.get("decimal_comma"))}}
+
+
 def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]],
                   best_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
@@ -2136,93 +2297,59 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         raise
 
     try:
-        log_progress(5, f"입력 데이터 로드 중: {os.path.basename(raw_file)}...")
-        df_raw = load_data_file(   # the shared loader: identical parsing in ml_predict.py
-            file_path=raw_file,
-            header_row=args.header_row,
-            unit_row=args.unit_row,
-            data_row=args.data_row
-        )
-
-        prepared = [_prepare_group(df_raw, g, task) for g in groups]
-        excl_col = find_exclude_column(list(df_raw.columns))
-        source_rows = df_raw.attrs.get("source_rows") or list(range(1, len(df_raw) + 1))
-        exclusions: Dict[str, Dict[str, Any]] = {}
-        excluded_rows_out: List[Dict[str, Any]] = []
+        resume_dir = os.path.join(data_root, RESUME_DIR)
+        resume_used: List[str] = []
+        # Everything before the first model (reading, checks, typing, correlation, exclusions, keys): saved whole when
+        # it took long, so a run continued after CONTINUE does not pay it again (R10)
+        prep_path = os.path.join(resume_dir, _prep_key(args, task, groups, raw_file) + ".prep.joblib")
+        P = _prep_load(prep_path)
+        if P is None:
+            step_begin(resume_dir, os.path.basename(prep_path)[:-len(".joblib")], PREP_LABEL)
+            t_prep = time.monotonic()
+            P = _prepare_run(args, task, groups, raw_file)
+            prep_seconds = time.monotonic() - t_prep
+            if time_limit() != float("inf") and prep_seconds >= PREP_SAVE_SECONDS and _resume_save(prep_path, P):
+                RUN_PREP_SECONDS.append(prep_seconds)
+            step_end()
+            if RUN_PREP_SECONDS:            # a step of this run: nothing else may fit before the limit
+                check_time(0.0, f"학습: {PREP_LABEL} 저장됨 (첫 학습 단계 전에 멈춤, 약 "
+                                f"{len(P['target_names']) * STEPS_PER_TARGET}단계 남음)")
+        else:
+            sys.stderr.write(f"[INFO] 이전 실행에서 저장한 {PREP_LABEL} 결과를 씀 (나눠서 진행)\n")
+            for w in P["warnings"]:
+                sys.stderr.write(f"[WARN] {w}\n")
+        resume_used.append(prep_path)
+        prepared, target_names = P["prepared"], P["target_names"]
+        excl_col, source_rows, column_aliases = P["excl_col"], P["source_rows"], P["column_aliases"]
+        feature_names, applied_evals, feature_schema = P["feature_names"], P["applied_evals"], P["feature_schema"]
+        X_all, df_clean, target_numeric, corr_full = P["X_all"], P["df_clean"], P["target_numeric"], P["corr_full"]
+        unparsed, raw_info = P["unparsed"], P["raw_info"]
+        target_group = {t: g for g in prepared for t in g["targets"]}
         g0 = prepared[0]
-        column_aliases: Dict[str, str] = {}
-        target_group: Dict[str, Dict[str, Any]] = {}
-        target_names: List[str] = []
-        for g in prepared:
-            column_aliases.update(g["aliases"])
-            for t in g["targets"]:
-                if t in target_group:
-                    raise InputError(f"타겟 '{t}'이(가) 학습 조건 두 곳에 들어 있습니다.")
-                target_group[t] = g
-                target_names.append(t)
-        # Version-wide views: identical to the group's own values when there is one group
-        feature_names = list(dict.fromkeys(f for g in prepared for f in g["features"]))
-        applied_evals = list(dict.fromkeys(e for g in prepared for e in g["evals"]))
-        feature_schema = _merge_schemas([g["schema"] for g in prepared])
-        X_all = _union_frame([g["X"] for g in prepared])
-        df_clean = _union_frame([g["df"][[c for c in g["features"] + g["targets"] if c in g["df"].columns]]
-                                 for g in prepared]) if len(prepared) > 1 else g0["df"]
-
-        # Correlation (numeric inputs incl. date parts + numeric targets) for SSOT reporting
-        log_progress(20, "변수 간 2차원 상관행렬 계산 중...")
-        target_numeric = target_names if task == TASK_REGRESSION else []
-        corr_parts = []
-        for g in prepared:
-            num_inputs = [c for c in g["schema"]["input_columns"] if c not in g["schema"]["categorical"]]
-            corr_parts.append(g["X"][num_inputs])
-        corr_parts.append(pd.concat([target_group[t]["df"][[t]] for t in target_numeric], axis=1)
-                          if target_numeric else pd.DataFrame(index=df_raw.index))
-        corr_frame = _union_frame(corr_parts) if len(prepared) > 1 else pd.concat(corr_parts, axis=1)
-        corr_full = corr_frame.corr().round(4)
 
         # Multi-Target 5-Model Competitive Training (one task per run)
         target_benchmarks = {}
         target_champions = {}
         target_summaries = {}
         all_champion_scores = []
-        # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader),
-        # totals / average rows (kept: the '제외' column is the user's decision)
-        train_warnings: List[str] = layout_warnings(df_raw, target_names)
-        for g in prepared:
-            train_warnings.extend(w for w in g["warnings"] if w not in train_warnings)
-        # numbers written with '%' ('64.4%' of an Excel CSV export) are read as 64.4: said, never silent; '%' cells
-        # next to plain numbers in one column stop (no scale is sure)
-        pct_cols = ([c for g in prepared for c in _numeric_input_columns(g)]
-                    + (target_names if task == TASK_REGRESSION else []))
-        # (on the rows training uses: a row the user marked in '제외' never stops the run)
-        marked = (df_raw[excl_col].map(_exclude_mark).map(lambda t: bool(t) and t != INCLUDE_MARK).to_numpy(dtype=bool)
-                  if excl_col else np.zeros(len(df_raw), dtype=bool))
-        check_percent_mix(df_raw[~marked], pct_cols)
-        train_warnings.extend(percent_warning(df_raw, pct_cols))
-        for w in train_warnings:
-            sys.stderr.write(f"[WARN] {w}\n")
-        # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the
-        # header (target empty), rows marked in '제외' or rows without a target
-        unparsed: Dict[str, Dict[str, Any]] = {}
-        unit_below = df_raw.attrs.get("unit_row_below")
-        unit_pos = [i for i, r in enumerate(source_rows) if r == unit_below] if unit_below else []
+        exclusions: Dict[str, Dict[str, Any]] = {}
+        excluded_rows_out: List[Dict[str, Any]] = []
+        train_warnings: List[str] = list(P["warnings"])
         benchmark_fn = train_and_benchmark_models if task == TASK_REGRESSION else train_and_benchmark_classifiers
 
         total_targets = len(target_names)
-        resume_dir = os.path.join(data_root, RESUME_DIR)
-        resume_used: List[str] = []
         reused_targets: List[str] = []
         for t_idx, target_name in enumerate(target_names):
             g = target_group[target_name]
             t_offset = 25 + int(55 * t_idx / total_targets)
             t_weight = int(55 / total_targets)
+            TARGETS_AFTER[0] = total_targets - t_idx - 1
 
             log_progress(t_offset, f"타겟 [{t_idx+1}/{total_targets}] '{target_name}' 5대 모델 경쟁 학습 ({task})...")
 
             extra = {"positive_class": g["positive_class"]} if task == TASK_CLASSIFICATION else {}
             y_full = g["df"][target_name]
-            plan = plan_exclusions(g["df"][excl_col] if excl_col else None, y_full, g["X"], g["schema"],
-                                   g["created"], task, target_name, cond=g["where_hit"], cond_text=g["where"] or "")
+            plan = P["targets"][target_name]["plan"]
             if plan["mask"].any():
                 sys.stderr.write(f"[INFO] 타겟 '{target_name}': 학습에서 뺀 행 {int(plan['mask'].sum())}개 "
                                  f"(직접 표시 {int(plan['manual'].sum())}, 조건 {int(plan['cond'].sum())}, "
@@ -2237,17 +2364,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     sys.stderr.write(f"[WARN] {w}\n")
             if plan["note"]:
                 sys.stderr.write(f"[WARN] 타겟 '{target_name}': {plan['note']}\n")
-            trained = np.array(y_full.notna(), dtype=bool) & ~np.asarray(plan["mask"], dtype=bool)
-            trained[unit_pos] = False
-            for c in _numeric_input_columns(g):
-                if c in df_raw.columns:
-                    pos, ex = unparsed_number_cells(df_raw[c], trained)
-                    entry = unparsed.setdefault(c, {"rows": set(), "examples": []})
-                    entry["rows"].update(pos)
-                    entry["examples"] += [v for v in ex if v not in entry["examples"]]
             y_train = y_full.mask(plan["mask"])
-            r_path = os.path.join(resume_dir, _resume_key(task, target_name, g["X"], y_train, g["schema"], args.seed,
-                                                          extra) + ".joblib")
+            r_path = os.path.join(resume_dir, P["targets"][target_name]["key"] + ".joblib")
             cached = _resume_load(r_path)
             if cached is not None:
                 t_bench, champion_pipe, champion_info, oof_df = cached
@@ -2256,7 +2374,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             else:
                 if RUN_FIT_SECONDS:     # at least one new target per run: running again always moves on
                     check_time(max(RUN_FIT_SECONDS) * 1.2,
-                               f"학습: 타겟 {t_idx}/{total_targets}개 끝남, 저장됨 ('{target_name}' 학습 전에 멈춤)")
+                               f"학습: 타겟 {t_idx}/{total_targets}개 끝남, 저장됨 ('{target_name}' 학습 전에 멈춤, "
+                               f"약 {(total_targets - t_idx) * STEPS_PER_TARGET}단계 남음)")
                 t_fit = time.monotonic()
                 t_bench, champion_pipe, champion_info, oof_df = benchmark_fn(
                     X=g["X"],
@@ -2270,8 +2389,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                     **extra
                 )
                 RUN_FIT_SECONDS.append(time.monotonic() - t_fit)
-                if total_targets > 1:
+                # the next target, or the packaging of a run near the limit, may be stopped: keep this target
+                if total_targets > 1 or time_would_pass(0.0):
                     _resume_save(r_path, (t_bench, champion_pipe, champion_info, oof_df))
+                step_end()
             resume_used.append(r_path)
 
             if champion_info.get("duplicate_rows"):
@@ -2499,7 +2620,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 "feature_stats": feat_stats,
                 "datetime_stats": _datetime_stats(g, used_rows),
                 "feature_schema": g["schema"],
-                "decimal_comma": bool(df_raw.attrs.get("decimal_comma")),   # prediction CSVs are read the same way
+                "decimal_comma": raw_info["decimal_comma"],   # prediction CSVs are read the same way
                 "derived_evals": g["evals"],
                 "target_summary": target_summaries.get(target_name, {}),
                 "sklearn_version": sklearn.__version__,
@@ -2549,8 +2670,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             sys.stderr.write(f"[WARN] {w}\n")
         data_profile = {
             "source_file": os.path.basename(raw_file),
-            "rows_loaded": int(len(df_raw)),
-            "columns_loaded": int(df_raw.shape[1]),
+            "rows_loaded": raw_info["rows"],
+            "columns_loaded": raw_info["columns"],
             "rows_used": {t: int(target_benchmarks[t]["sample_count"]) for t in target_names},
             "target_missing_rows": {t: int(target_group[t]["df"][t].isna().sum()) for t in target_names},
             "feature_missing": feature_missing,
@@ -2630,6 +2751,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
         # Commit Transaction: atomic rename .tmp_vX -> vX, then record it in the ledger.
         # The ledger never names a version folder that does not exist (a failed commit leaves no record).
+        WATCHDOG_HOLD.append(True)             # the version is being written: the watchdog waits a little
         final_version_dir = guard.commit()
         append_history_ledger(ledger_path, history_record, on_recorded=guard.finalize)
         _resume_cleanup(resume_dir, resume_used)

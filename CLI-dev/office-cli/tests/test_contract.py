@@ -404,6 +404,39 @@ def test_argument_errors_from_real_logs_get_a_hint(argv, want):
 
 
 @pytest.mark.parametrize("argv, want", [
+    (["outlook.py", "sent", "--id", "3"], "send"),
+    (["outlook.py", "sned", "--id", "3"], "send"),
+    (["outlook.py", "end", "--id", "3"], "send"),
+    (["reader.py", "clea", "--all"], "clear"),
+    (["office.py", "redo"], "undo"),
+])
+def test_destructive_command_typo_is_candidate_not_recommendation(argv, want):
+    """11차 검토: 오타가 되돌리기 어려운 명령(발송·캐시 지우기·되돌리기)과 비슷하면 [추천](묻지 않고 실행)이 아니라 [후보](사용자에게 물음)."""
+    tool_dir = os.path.dirname(rt.__file__)
+    proc = subprocess.run([sys.executable, os.path.join(tool_dir, argv[0]), *argv[1:]], capture_output=True, text=True,
+                          encoding="utf-8")
+    payload = json.loads([ln for ln in proc.stdout.splitlines() if ln.strip()][-1])
+    assert proc.returncode == 2 and "[추천]" not in payload["message"], payload
+    assert f"[후보] {want}" in payload["message"], payload
+
+
+def test_destructive_flag_marks_only_overwrite_delete_send():
+    assert rt.next_command("outlook.py", ["send", "--id", "3"], "보내기", destructive=True)["destructive"] is True
+    assert "destructive" not in rt.next_command("excel.py", ["read"], "읽기")
+
+
+def test_unsafe_next_commands_checker():
+    """conftest의 next_commands 점검(모든 테스트에 자동 적용)이 문서를 바꾸는 명령을 잡는지."""
+    from office_helpers import unsafe_next_commands   # conftest 이름은 ml-kit tests와 겹쳐 함께 돌 때 다른 모듈을 집음
+    nxt = lambda *cmds: {"status": "ok", "next_commands": [{"command": f'python "C:\\CLI\\{c}"'} for c in cmds]}
+    assert unsafe_next_commands(nxt('word.py" write --file "a.md"', 'office.py" transfer --from excel'))
+    assert unsafe_next_commands(nxt('excel.py" chart --target active --range A1:B3'))
+    assert not unsafe_next_commands(nxt('reader.py" read --file "a.pdf"', 'excel.py" comment --action add --dry-run',
+                                        'excel.py" chart --action list', 'office.py" undo --list'))
+    assert not unsafe_next_commands({"continue": True, **nxt('excel.py" write --cells "A1=1"')})
+
+
+@pytest.mark.parametrize("argv, want", [
     (["office.py", "write", "--target", "보고서.docx", "--text", "요약"], 'word.py write --text'),
     (["office.py", "transfer", "--to-target", "보고서.docx", "--text", "요약"], "글은 받지 않습니다"),
 ])

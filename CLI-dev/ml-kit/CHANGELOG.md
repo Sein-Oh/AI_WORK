@@ -8,6 +8,55 @@
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
 
+## [2.9.67] - 2026-11-05
+
+6차 독립 검토(10000행 x 1000열 회귀)의 [치명] 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 큰 데이터의 나눠 진행이 끝나지 않음 (R10): 실행마다 학습 전 고정 비용(읽기 8초, 검증 26초, 상관행렬 38초, 타겟 준비 20초, 합 50~94초)을
+  다시 하고, 그 실행의 첫 단계(fold 1개, 시계 없음)를 더하면 120초를 넘어 강제 종료 -> JSON 없음 -> 진행 없음 -> 같은 명령을 끝없이 반복했음.
+  - 학습 전 준비를 한 단계로 저장 (`_prepare_run`, `_prep_key`, `_prep_load`): 첫 모델 전에 하는 일(읽기, 검증·타입 정제, 피처 판별, 상관행렬, `%` 검사,
+    학습 제외 행, 타겟별 저장 키)을 한 번에 하고, 시간 제한이 있고 `PREP_SAVE_SECONDS`(5초) 이상 걸렸으면 `.resume_train/<키>.prep.joblib`에 통째로 저장
+    (대체 위치 JIT 복구 포함). 키는 데이터 파일 바이트, 데이터를 정하는 인자(목록 파일은 내용), 행 인자, 시드, 도구·scikit-learn·pandas·numpy 버전.
+    이어 실행은 준비를 다시 하지 않음. 준비를 저장한 실행은 그것이 한 단계라 다음 단계 전에 시계를 보고, 이미 제한 - 여유를 넘었으면 첫 학습 단계 전에 멈춤
+    (`progress`: `학습: 학습 준비(데이터 읽기, 검증, 상관행렬) 저장됨 (첫 학습 단계 전에 멈춤, 약 N단계 남음)`). 상관행렬도 이 준비에 들어 한 번만 계산.
+    같은 객체를 저장했다 읽으므로 결과(리더보드, OOF, 모델, `top_features`, 패키지 파일)가 한 번에 학습한 것과 같음.
+  - 숫자 열 읽기(`coerce_numeric`)를 칸마다 한 번에 처리(정규식은 `%`가 있는 칸만, 결측 표시는 집합 대조)하고 `%` 칸 찾기(`percent_cells`, `percent_mix`)도
+    `%`가 없는 칸은 건너뜀: 같은 결과로 준비 시간 94초 -> 53초 (10000행 x 1000열).
+  - 시작 표시 (`step_begin`/`step_end`, PART C): 실행의 첫 단계(시계 없이 하는 준비, fold, 1위 전체 적합, 중요도 첫 열, 성능예측표 첫 후보)는 시작 전에
+    `<단계>.start`(시도 횟수, 그때 제한)를 남기고 저장하면 지움(실행이 오류로 끝나도 지움: 밖에서 끊긴 실행만 남김). 표시만 남은 단계를 다시 만나면 2번째까지는
+    다시 시도하고(일시적 부하로 한 번 끊길 수 있음), 같은 제한 이하에서 2번 끊긴 단계는 시작하지 않고 `STOP_RETRY`:
+    `이 데이터는 한 단계(...)가 명령 시간 제한(100초) 안에 끝나지 않습니다 ... [추천] <같은 명령> --time-limit 570` (명령 실행 도구 timeout 600000으로).
+    늘린 제한에서는 다시 시도하고, 570초로도 끊겼으면 `[추천]` 없이 멈춤. 정리 패턴(`_RESUME_FILE_RE`)에 `<키>.prep.joblib`, `<단계>.start` 추가.
+  - 안전망 감시 스레드 (`run_cli`, `start_watchdog`): 명령 시작부터 제한 + 15초(`WATCHDOG_GRACE`, 기본 115초)에 아직 끝나지 않았으면 1줄 JSON을 직접 내고
+    `os._exit`: 이 실행이 저장한 단계가 있으면 `CONTINUE`(`<단계> 도중 시간 제한(100초)에 닿아 멈춤. 그 전 단계까지 저장됨`), 표시한 첫 단계의 첫 끊김이면
+    `CONTINUE`(`그 단계 다시 시도 1/2`), 아니면 위 `STOP_RETRY`(오류 로그 기록). stdout은 락과 표시(`emit_json_response`가 이미 썼으면 쓰지 않음)로 한 번만
+    쓰고, 버전 폴더 커밋 중이면 4초 기다림(`WATCHDOG_HOLD`). 제한이 없거나 ml-kit 명령이 아닌 실행(같은 프로세스 테스트)에는 감시 없음.
+  - 단일 타겟도 끝난 타겟을 저장 (제한 - 여유를 넘었을 때): 마지막 패키징 도중 감시가 끊어도 다음 실행이 학습을 다시 하지 않음.
+
+### 기능
+- 모든 ml-kit 명령이 `--time-limit 초`를 받음 (`JsonArgumentParser`, `ML_KIT_TIME_LIMIT`보다 우선, 0 = 없음). 위 `STOP_RETRY`의 `[추천]` 명령용.
+- `progress`에 남은 단계 수 추정 `약 N단계 남음`(후보 x fold + 전체 적합 + 중요도, 뒤 타겟은 27단계씩).
+- CONTINUE 반복 상한: SKILL.md·전역 지침(`CLI-dev/opencode/AGENTS.md`, office-cli와 공통 문구)·CLI-dev/README.md R10의 "최대 20번"을
+  "`progress`가 바뀌는 동안 반복, 바로 앞과 같은 `progress`가 나오면(2번 연속) 멈추고 알림, 안전 상한 60번"으로. office-cli의 `progress`도 실행마다
+  처리 개수가 바뀌어 같은 규칙이 맞음(office-cli 파일은 바꾸지 않음).
+
+### 테스트
+- `test_train.py`: `test_preparation_is_saved_and_reused_by_the_continued_run`(준비 저장 -> 첫 단계 전 CONTINUE -> 이어 실행은 준비를 다시 하지 않고
+  한 번에 학습한 것과 같은 버전), `test_preparation_key_follows_data_and_arguments`, `test_step_mark_stops_a_step_longer_than_the_limit`,
+  `test_time_limit_argument_overrides_the_environment`, `test_watchdog_writes_one_json_line_at_the_limit`(작은 제한 + 느린 가짜 단계: 저장 있음 CONTINUE,
+  표시 단계 1번째 CONTINUE, 2번째 STOP_RETRY와 오류 로그, 늘린 제한 다시 시도, 저장 없음 STOP_RETRY, 빨리 끝난 명령은 감시 없음, 늘 1줄),
+  `test_step_mark_is_removed_when_the_run_fails_by_itself`.
+
+### 실측
+리눅스 4코어, 에이전트 흉내(같은 명령을 다시 실행, 각 실행을 `timeout -s KILL 120`으로 끊음):
+- `big.csv`(10000행 x 1000열 회귀, 한 번에 994초, 준비 53초): 기본 제한(100초)으로 17번에 `VERIFIED`. 실행당 17~89초, 모두 1줄 JSON, 강제 종료 0번
+  (2.9.66: 실행 6번째부터 120초 강제 종료 반복). 1번째 실행이 준비를 저장하고 HistGB fold 3개까지, 이어 실행은 준비를 다시 쓰는 데 4~6초.
+  리더보드·`oof_y.csv`·`correlation.csv`·`model_dataset.csv`(바이트)·`model_y.json`·최종 모델 예측·`top_features`·`warnings`가 한 번에 학습한 것과 같음.
+- 같은 데이터 `ML_KIT_TIME_LIMIT=50`(fold 하나 72초가 제한보다 김): 4번째 실행에서 감시가 65초에 `CONTINUE`(저장된 진행 있음), 5번째 `CONTINUE`(다시 시도 1/2),
+  6번째 `STOP_RETRY` + `[추천] ... --time-limit 570`과 오류 로그 1건. 모두 1줄 JSON, 무한 반복 없음.
+- `w300.csv`(5000행 x 300열): 2번(2.9.66: 5번), `h3.csv`(60000행 x 16열): 1번(35초). 두 경우 모두 결과가 한 번에 학습한 것과 같음.
+
 ## [2.9.66] - 2026-11-04
 
 ### 기능

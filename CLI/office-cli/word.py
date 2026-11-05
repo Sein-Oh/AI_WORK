@@ -312,13 +312,14 @@ def cmd_read(args) -> Dict[str, Any]:
         save_units = selected if filtered else units
         out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(name)[0], ".md")
         out = rt.write_text(out, reader.units_to_markdown(name, save_units))
-        result.update(output_file=out, next_commands=[
-            rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기"),
+        # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
+        result.update(output_file=out, confirm_commands=[
+            rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기 (사용자가 원할 때만)"),
             rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"]
                             + _from_target(args, source),
-                            "이 문서의 단락을 엑셀 표로 옮기기")])
+                            "이 문서의 단락을 엑셀 표로 옮기기 (사용자가 원할 때만)")])
         return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
-                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. 다른 문서에 넣으려면 next_commands를 그대로 실행하세요.",
+                          "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. " + rt.INTO_OTHER_DOC,
                           **result)
     if filtered and not selected:
         result.update(paragraphs=[], truncated=False)
@@ -1325,13 +1326,14 @@ def _doc_protected(doc: Any) -> bool:
         return False
 
 
-def _fill_command(args, extra: Sequence[str] = ()) -> Dict[str, str]:
+def _fill_command(args, extra: Sequence[str] = ()) -> Dict[str, Any]:
     argv = ["fill", "--target", args.target, "--file", args.file]
     for flag, on in (("--overwrite", args.overwrite), ("--no-focus", args.no_focus)):
         if on:
             argv.append(flag)
     argv += [x for x in extra if x not in argv]
-    return rt.next_command("word.py", argv, "자리와 표 칸 채우기 실행" + (" (값이 있는 표 칸 덮어쓰기)" if "--overwrite" in argv else ""))
+    return rt.next_command("word.py", argv, "자리와 표 칸 채우기 실행" + (" (값이 있는 표 칸 덮어쓰기)" if "--overwrite" in argv else ""),
+                           destructive="--overwrite" in argv)
 
 
 def cmd_fill(args) -> Dict[str, Any]:

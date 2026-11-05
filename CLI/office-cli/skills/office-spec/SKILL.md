@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.73"
+  version: "1.4.75"
   platform: windows
 ---
 
@@ -13,7 +13,7 @@ metadata:
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
 2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
-3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번.
+3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
 4. 검색한 내용을 다른 문서에 넣을 때는 내용을 복사해 인자로 넣지 않는다. `--save`로 파일을 만들고 결과의 `output_file`을 office-doc·office-excel 명령의 `--file`로 넘긴다.
 5. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.
 
@@ -40,7 +40,6 @@ metadata:
 - 근거는 항목마다 `evidence`(예: `규격.pdf p.12, 1.1. Scope (1.1)`)를 그대로 쓴다. `page`가 null(엑셀, HWP 등)이면 장절 `section_text`, 번호 `number`, 위치 `loc`로 알린다.
 - `match_mode`가 `number`(숫자 값만 같은 곳, 실제 글 `number_words`), `partial`(일부 검색어만), `fuzzy`(한 글자 다른 낱말)이면 `count: 0`이고 결과는 `candidates`다. 근거로 쓰지 말고 "정확히 일치한 곳은 없고 비슷한 곳이 있다"고 알려 사용자에게 확인받는다. 부호·대시가 다른 숫자(`40 ℃`와 `-40 ℃`)도 `number`다.
 - `match_mode`가 `exact_mixed`이면 `literal: false`(표기가 다른 곳, `snippet`의 `[[ ]]`)는 근거로 확정하지 말고 `snippet`을 보여 주고 확인받는다.
-- 숫자를 찾은 결과를 알릴 때 `snippet`의 앞뒤(부호, 범위 `~`, 이하/이상)를 그대로 함께 전달한다.
 - `search`가 `UNVERIFIED:`이면 `not_searched`를 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서만 찾는다. `--file`을 주면 새 문서를 먼저 등록한다(`indexed_now`를 알림). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - `diff`는 숫자 변경 `number_changes`를 먼저, 삭제·추가·변경 항목마다 `old_evidence`·`new_evidence`를 붙여 알린다.

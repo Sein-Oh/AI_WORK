@@ -239,7 +239,7 @@ groups:
         forbid:
           - 'word\.py"?\s+fill\b[^\n;|&]*\s--(text|value|values|cells|set|data)\b'
           - 'word\.py"?\s+fill\b[^\n]*--overwrite\b'
-        judge: 값 파일(.csv, 열 자리·값)을 만들어 word.py fill --file로 두 자리를 채우고 결과를 알렸는가. 미리보기를 했다면 그 결과의 confirm_commands[0]을 (요청에서 이미 묻지 말라고 했으므로) 다시 묻지 않고 실행했는가.
+        judge: 값 파일(.csv, 열 자리·값)을 만들어 word.py fill --file로 두 자리를 채우고 결과를 알렸는가. 미리보기를 했다면 그 결과의 confirm_commands[0]을 (빈 자리라 destructive 항목이 아니고 요청에서 이미 묻지 말라고 했으므로) 다시 묻지 않고 실행했는가.
 
   - id: X
     title: 하면 안 되는 일

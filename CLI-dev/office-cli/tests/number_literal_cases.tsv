@@ -499,3 +499,41 @@ A 10	CA10	notA
 5 V	출력 5 V.	A
 5 V	출력 5 V: 정격	A
 5 V	5 V; 12 V	A
+# 11차 검토: 허용 목록 완화 (1.4.75) 짝 따옴표·괄호, 전각 콜론, 목록 머리, 닫는 짝, U+3001, '±' 뒤 숫자, 단위 뒤 '(', 단위 뒤 곱하기, 각주
+5 V	출력 전압은 \u201c5 V\u201d로 표기한다.	A
+5 V	표시 문구 \u300c5 V\u300d 확인	A
+5 V	\u300e5 V\u300f	A
+5 V	\u30105 V\u3011 모델	A
+5 V	\u30085 V\u3009	A
+5 V	\u300a5 V\u300b	A
+5 V	\u20185 V\u2019	A
+24 V	정격 "24 V" 라벨 부착	A
+24 V	정격 '24 V' 라벨	A
+12 V	전원\uff1a12 V	A
+12 V	\u202212 V 전원	A
+12 V	- \u202212 V 전원	A
+12 V	정격 12 V\u30012 A	A
+220 V	전원 220 V\u00b110 %, 60 Hz	A
+220 V	공급 전압 220 V\u00b110 %	A
+220 V	입력 AC 220 V(단상)	A
+220 V	AC 220 V(60 Hz) 단상	A
+24 V	제어 전원 24 V(\u00b110 %)	A
+85 \u2103	최고 85 \u2103(주위 온도)	A
+1 h	시험 1 h(연속) 유지	A
+1 MPa	내압 1 MPa(10 kgf/cm\u00b2)	A
+2 h	시험 시간 2 h(1회)	A
+100 mm	길이 100 mm\u00d7폭 50 mm	A
+5 V	출력 5 V*1 (주석 참조)	A
+10 %	전원 220 V\u00b110 %	notA
+50 mm	길이 100 mm\u00d750 mm	notA
+5 V	5 V(실효값)	notA
+5 V	5 V(피크)	notA
+5 V	5 V(-)	notA
+5 V	5 V(1)	notA
+5 V	"5 V	notA
+5 V	5 V'	notA
+5 V	1\u201c5 V\u201d	notA
+5 V	1\u20225 V	notA
+5 V	5 V\u00b1	notA
+5 V	5 V*12345	notA
+5 V	5 V*m	notA

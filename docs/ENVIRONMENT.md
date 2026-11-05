@@ -8,7 +8,7 @@
 | OS | Windows 11 (폐쇄망) |
 | Python | **WinPython** 배포판, Python 3.13.13 |
 | 위치 | `C:\CLI\python` (WinPython의 `python` 폴더만 옮긴 것, `rg.exe` 포함. 2026-11-04) |
-| 실행 방식 | 시스템 환경변수 `PATH`에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 등록하여 `python` 명령으로 호출 |
+| 실행 방식 | 시스템 환경변수 `PATH`에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 등록하여 `python` 명령으로 호출. 등록은 배포 설치 `C:\CLI\setup.bat`(`setup.py`)이 없을 때만 함 |
 | 에이전트 LLM | 26B~30B 경량 모델 (스킬로 도구 호출) |
 
 ## WinPython 사용 시 유의점

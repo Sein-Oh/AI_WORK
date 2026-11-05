@@ -1436,7 +1436,9 @@ def test_cli_read_pages_and_summary(samples, env):
 def test_cli_read_save_gives_write_commands(samples, env):
     code, out = run_reader_env(env, "read", "--file", samples["docx"], "--save")
     assert code == 0 and os.path.exists(out["output_file"]) and out["output_file"].endswith(".md")
-    assert "word.py" in out["next_commands"][0]["command"]
+    # 열린 문서에 넣기는 confirm_commands (1.4.75, 11차 검토: next_commands는 묻지 않고 실행해도 되는 것만)
+    assert "word.py" in out["confirm_commands"][0]["command"] and "next_commands" not in out
+    assert "confirm_commands" in out["agent_directive"] and "next_commands" not in out["agent_directive"]
     text = open(out["output_file"], encoding="utf-8").read()
     assert "## 표 1 2행 - 추진 배경" in text
 
@@ -1460,12 +1462,13 @@ def test_cli_search_index_folder_save_and_no_match(samples, env, tmp_path):
 
     code, out = run_reader_env(env, "search", "--query", "마일스톤", "--save")
     assert out["matched"] == 1 and os.path.exists(out["output_file"])
-    assert "word.py" in out["next_commands"][0]["command"]
+    assert "word.py" in out["confirm_commands"][0]["command"]
+    assert not any(" write " in c["command"] for c in out.get("next_commands", []))
 
     code, out = run_reader_env(env, "search", "--query", "양산", "--file", str(tmp_path), "--save", "결과.csv")
     assert out["total_matches"] >= 1 and out["output_file"].endswith("결과.csv")
     assert out["from_cache"] >= 3                       # read로 등록한 문서는 다시 읽지 않음
-    assert "excel.py" in out["next_commands"][0]["command"]
+    assert "excel.py" in out["confirm_commands"][0]["command"]
 
     code, out = run_reader_env(env, "search", "--query", "존재하지않는단어")
     assert code == 0 and out["total_matches"] == 0 and out["agent_directive"].startswith("VERIFIED:")
@@ -1650,7 +1653,7 @@ def test_search_save_xlsx_columns_and_md_evidence(docs, tmp_path):
     text = open(out["output_file"], encoding="utf-8").read()
     assert "근거: spec.pdf p.2, 1. SCOPE > 1.2. Purpose (1.2)" in text
     code, out = run_reader("search", "--query", "Purpose", "--save", str(tmp_path / "근거.csv"))
-    assert out["output_file"].endswith(".csv") and "excel.py" in out["next_commands"][0]["command"]
+    assert out["output_file"].endswith(".csv") and "excel.py" in out["confirm_commands"][0]["command"]
 
 
 def test_search_truncated_offers_full_save(docs):

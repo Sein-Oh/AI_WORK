@@ -29,6 +29,7 @@ import contextlib
 import json
 import time
 import shutil
+import threading
 import difflib
 import functools
 import argparse
@@ -59,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.66"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.67"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -109,11 +110,24 @@ def dumps_json(obj: Any, indent: Optional[int] = None) -> str:
     return json.dumps(json_safe(obj), ensure_ascii=False, indent=indent)
 
 
-def emit_json_response(payload: Dict[str, Any]) -> None:
-    """Prints standard 1-line JSON response to stdout for LLM consumption."""
+# stdout holds exactly one JSON line per command: the main thread and the time limit watchdog (run_cli) both answer
+# through emit_json_response, and only the first one writes.
+_OUT_LOCK = threading.Lock()
+_OUT_DONE: List[bool] = [False]
+
+
+def emit_json_response(payload: Dict[str, Any]) -> bool:
+    """Prints standard 1-line JSON response to stdout for LLM consumption. False (nothing written) when this command
+    already wrote its line (the watchdog answered first, or the other way round)."""
     setup_console()
-    sys.stdout.write(dumps_json(payload) + "\n")
-    sys.stdout.flush()
+    text = dumps_json(payload) + "\n"
+    with _OUT_LOCK:
+        if _OUT_DONE[0]:
+            return False
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        _OUT_DONE[0] = True
+        return True
 
 
 class InputError(ValueError):
@@ -138,7 +152,12 @@ TIME_RESERVE = 30.0                        # kept free after the last slow step 
 RUN_START = time.monotonic()               # reset by run_cli for each command
 
 
+TIME_LIMIT_ARG: List[float] = []            # --time-limit of this command (JsonArgumentParser), over the env value
+
+
 def time_limit() -> float:
+    if TIME_LIMIT_ARG:
+        return float("inf") if TIME_LIMIT_ARG[-1] <= 0 else TIME_LIMIT_ARG[-1]
     raw = os.environ.get(TIME_LIMIT_ENV, "").strip()
     if not raw:
         return DEFAULT_TIME_LIMIT
@@ -167,12 +186,14 @@ class Unfinished(BaseException):
 RESUME_FALLBACK_DIR = "ml-kit-resume"      # a name of its own: ML_KIT_DATA_DIR may be a user folder
 TEMP_RESUME_DIR = "ml-kit-resume"
 # Only what resume_places/resume_save make is ever swept: <hash> folders and the saved step files
-# (<key>.joblib, <key>.m<k>.joblib, <key>.m<k>.f<fold>.joblib, <key>.fit.joblib, <key>.imp.joblib, best_run.json,
-# each also with .tmp).
+# (<key>.joblib, <key>.m<k>.joblib, <key>.m<k>.f<fold>.joblib, <key>.fit.joblib, <key>.imp.joblib, <key>.prep.joblib,
+# the start markers <step>.start (step_begin), best_run.json, each also with .tmp).
 _RESUME_SUB_RE = re.compile(r"[0-9a-f]{12}")
-_RESUME_FILE_RE = re.compile(r"(?:[0-9a-f]{16}(?:\.m\d+(?:\.f\d+)?|\.fit|\.imp)?\.joblib|best_run\.json)(?:\.tmp)?")
+_RESUME_FILE_RE = re.compile(r"(?:[0-9a-f]{16}(?:\.m\d+(?:\.f\d+)?|\.fit|\.imp|\.prep)?\.(?:joblib|start)|best_run\.json)"
+                             r"(?:\.tmp)?")
 RESUME_MAX_AGE = 3 * 24 * 3600             # saved steps of runs never continued are removed after this many seconds
 SAVE_FAILED: List[str] = []                # finished steps no place could hold in this command
+RUN_SAVED: List[str] = []                  # finished steps saved in this command (the watchdog: progress kept)
 _RESUME_PLACE: Dict[str, int] = {}         # original folder -> index of the place that worked in this command
 
 
@@ -263,6 +284,7 @@ def resume_save(primary: str, name: str, write: Callable[[str], Any], what: str)
                 pass
         if not err and os.path.isfile(path) and os.path.getsize(path) > 0:
             _RESUME_PLACE[key] = i
+            RUN_SAVED.append(name)
             if i > 0:
                 note_recovered(f"중간 저장 실패 ({os.path.basename(places[0])}) -> 대체 위치 {_place_label(places, i)}에 저장")
                 for d in places[:i]:          # an older copy left in a place that worked before is not read again
@@ -351,6 +373,151 @@ def unfinished_payload(exc: "Unfinished") -> Dict[str, Any]:
                             + ("next_commands의 명령을" if cmd else "방금 실행한 명령을")
                             + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). 끝나면 VERIFIED 결과가 나옵니다."),
     }
+
+
+# ------------------------------------------------------------------------------
+# A step that is longer than the limit by itself (R10): every run does at least one new step without a clock check (so
+# running again always moves on). When that step alone does not end before the agent stops the command (120 s), the run
+# leaves no JSON and saves nothing, and the same command would start it again forever. So:
+#   - step_begin marks such a step before it starts (<step>.start in the resume places, {"tries", "limit"}), and
+#     step_end removes the mark once the step is saved. A run that finds the mark of the step it is about to start
+#     knows an earlier run was stopped inside it; after STEP_TRIES stopped tries under this limit (a busy PC may stop it
+#     once) it does not start it again but stops with STOP_RETRY (step_too_long_error: [추천] the same command with
+#     --time-limit STEP_LIMIT_RECOMMENDED, under the 600000 ms command timeout SKILL.md asks for).
+#   - run_cli starts a watchdog: at the limit + WATCHDOG_GRACE seconds it writes the one JSON line itself (CONTINUE
+#     when this run saved a step, or the stopped step may be tried again; STOP_RETRY otherwise) and ends the process.
+# ------------------------------------------------------------------------------
+STEP_TRIES = 2
+WATCHDOG_GRACE = 15.0                      # after the limit (100 s): still before the agent's 120 s
+STEP_LIMIT_RECOMMENDED = 570               # --time-limit for a 600000 ms command timeout (30 s kept for the JSON)
+CURRENT_STEP: Dict[str, Any] = {}          # the step this command is doing: label, and its mark (step_begin)
+
+
+def step_label(label: str) -> None:
+    """Names the step this command starts now (the watchdog's progress), without a mark: a step with a clock check
+    or one started after another step of this command (the mark of the first step stays until step_end)."""
+    CURRENT_STEP["label"] = label
+
+
+def _read_mark(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            st = json.load(f)
+        return st if isinstance(st, dict) else {}
+    except Exception:
+        return {}
+
+
+def step_begin(primary: Optional[str], base: str, label: str) -> None:
+    """Before a step done without a clock check as the first step of this command (R10). Raises the STOP_RETRY error
+    (step_too_long_error) when STEP_TRIES earlier runs under this limit (or a larger one) were stopped inside this
+    step; otherwise marks it (<base>.start, tries + 1). No mark without a limit or a resume folder. Never fails
+    otherwise: a mark that cannot be written only loses the stop count."""
+    CURRENT_STEP.clear()
+    step_label(label)
+    limit = time_limit()
+    if not primary or limit == float("inf"):
+        return
+    name = base + ".start"
+    tries = 0
+    at = resume_find(primary, name)
+    if at:
+        st = _read_mark(at)
+        try:
+            if float(st.get("limit", 0)) >= limit:      # stopped under this limit (a larger one now: try again)
+                tries = int(st.get("tries", 0))
+        except (TypeError, ValueError):
+            tries = 0
+    if tries >= STEP_TRIES:
+        raise step_too_long_error(label, limit, tries)
+    body = dumps_json({"tries": tries + 1, "limit": limit, "label": label})
+    for d in resume_places(primary):
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+                f.write(body)
+            CURRENT_STEP.update(primary=primary, name=name, tries=tries + 1)
+            return
+        except OSError:
+            continue
+
+
+def step_end() -> None:
+    """The marked step is saved (or finished): its mark is removed (every place). Never raises."""
+    name, primary = CURRENT_STEP.get("name"), CURRENT_STEP.get("primary")
+    if name and primary:
+        resume_clear(primary, lambda n, p: n == name)
+    CURRENT_STEP.pop("name", None)
+
+
+def step_too_long_error(label: str, limit: float, tries: int) -> InputError:
+    """STOP_RETRY: one step does not end within the command time limit."""
+    cmd = command_text(drop={"--time-limit": ""})
+    head = (f"이 데이터는 한 단계({label})가 명령 시간 제한({limit:.0f}초) 안에 끝나지 않습니다 "
+            f"({tries}번 시도했지만 그 단계 도중에 끊김). ")
+    if cmd and limit < STEP_LIMIT_RECOMMENDED:
+        err = InputError(head + "명령 실행 도구의 시간 제한(timeout)을 600000으로 주고 시간 제한을 늘린 명령으로 1번만 다시 실행하세요. "
+                         f"[추천] {cmd} --time-limit {STEP_LIMIT_RECOMMENDED}", extra={"time_limit": limit})
+        err.hint = "[추천] 명령은 명령 실행 도구의 시간 제한(timeout) 600000으로 실행하세요."
+    else:
+        err = InputError(head + "시간 제한을 늘려도 끝나지 않았습니다. 사용자에게 그대로 알리세요 (입력 열이나 행을 줄이거나, "
+                         "사람이 명령 창에서 ML_KIT_TIME_LIMIT=0으로 직접 실행).", extra={"time_limit": limit})
+        err.hint = "다시 실행하지 마세요."
+    return err
+
+
+def _watchdog_payload() -> Tuple[Dict[str, Any], int]:
+    """The JSON line (and exit code) of a command still running at the limit + WATCHDOG_GRACE."""
+    label = CURRENT_STEP.get("label") or "작업"
+    limit = time_limit()
+    if RUN_SAVED:
+        return unfinished_payload(Unfinished(f"{label} 도중 시간 제한({limit:.0f}초)에 닿아 멈춤. 그 전 단계까지 저장됨")), 0
+    tries = int(CURRENT_STEP.get("tries") or 0)
+    if CURRENT_STEP.get("name") and tries < STEP_TRIES:
+        return unfinished_payload(Unfinished(f"{label} 도중 시간 제한({limit:.0f}초)에 닿아 멈춤 "
+                                             f"(그 단계 다시 시도 {tries}/{STEP_TRIES})")), 0
+    return error_payload(step_too_long_error(label, limit, max(tries, 1))), 1
+
+
+WATCHDOG_HOLD: List[bool] = []            # the command is writing its result (version commit): wait a little
+WATCHDOG_HOLD_SECONDS = 4.0
+
+
+def _watchdog_fire() -> None:
+    if WATCHDOG_HOLD:
+        end = time.monotonic() + WATCHDOG_HOLD_SECONDS
+        while not _OUT_DONE[0] and time.monotonic() < end:
+            time.sleep(0.1)
+    try:
+        payload, code = _watchdog_payload()
+        payload = _with_recovered(payload)
+    except BaseException as e:                    # never leave the command without its line
+        payload, code = error_payload(RuntimeError(f"시간 제한 감시 오류: {type(e).__name__}")), 1
+    with _OUT_LOCK:
+        if _OUT_DONE[0]:                          # the command answered first: it ends by itself
+            return
+    sys.stderr.write(f"\n[STATUS] 시간 제한({time_limit():.0f}초 + {WATCHDOG_GRACE:.0f}초)에 닿아 명령을 끝냄: "
+                     f"{payload.get('progress') or payload.get('message')}\n")
+    if code:
+        write_error_log(payload)
+    if emit_json_response(payload):
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(code)
+
+
+def start_watchdog() -> Optional[threading.Timer]:
+    """run_cli: the time limit watchdog of an ml-kit command (none without a limit, or when the program is not an
+    ml-kit command: in-process use such as tests)."""
+    limit = time_limit()
+    if limit == float("inf") or command_text() is None:
+        return None
+    t = threading.Timer(max(limit + WATCHDOG_GRACE - (time.monotonic() - RUN_START), 0.0), _watchdog_fire)
+    t.daemon = True
+    t.start()
+    return t
 
 
 # pip package of an import name (R5 install_command); other names install under their own name
@@ -557,7 +724,12 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     global RUN_START
     RUN_START = time.monotonic()
     SAVE_FAILED.clear()
+    RUN_SAVED.clear()
+    CURRENT_STEP.clear()
+    WATCHDOG_HOLD.clear()
     _RESUME_PLACE.clear()
+    _OUT_DONE[0] = False
+    watchdog = start_watchdog()
     try:
         resume_sweep_old()
         result = execute()
@@ -577,11 +749,29 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
         write_error_log(payload, trace if payload.get("error_type") == "internal" else "")
         emit_json_response(payload)
         sys.exit(1)
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
+        step_end()       # ended by itself (also with an error): only a run stopped from outside leaves its mark
     emit_json_response(_with_recovered(result))
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
-    """argparse that reports usage errors as Agent CLI Protocol JSON instead of bare text."""
+    """argparse that reports usage errors as Agent CLI Protocol JSON instead of bare text. Every ml-kit command takes
+    --time-limit SEC (over ML_KIT_TIME_LIMIT, 0 = none): the [추천] command of a step longer than the limit
+    (step_too_long_error)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.add_argument("--time-limit", dest="time_limit", type=float, default=argparse.SUPPRESS,
+                          help=f"명령 1번의 시간 제한(초, 기본 {TIME_LIMIT_ENV} 또는 {DEFAULT_TIME_LIMIT:.0f}, 0 = 없음). "
+                               f"한 단계가 시간 제한보다 길다는 STOP_RETRY의 [추천] 명령에만 씀")
+
+    def parse_known_args(self, args=None, namespace=None):  # type: ignore[override]
+        ns, extra = super().parse_known_args(args, namespace)
+        if getattr(ns, "time_limit", None) is not None:
+            TIME_LIMIT_ARG[:] = [float(ns.time_limit)]
+        return ns, extra
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
         """R7: help text goes to stderr, stdout gets exactly 1 JSON line (argparse then exits 0)."""
@@ -1236,7 +1426,8 @@ def percent_cells(series: pd.Series) -> Tuple[int, List[str]]:
     without '%' (64.4, not 0.644). Training, prediction and ml_map warn with percent_warning."""
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
         return 0, []
-    hits = [v.strip() for v in series.astype("object") if isinstance(v, str) and _PERCENT_RE.fullmatch(v.strip())]
+    hits = [v.strip() for v in series.astype("object")
+            if isinstance(v, str) and "%" in v and _PERCENT_RE.fullmatch(v.strip())]
     return len(hits), list(dict.fromkeys(hits))[:3]
 
 
@@ -1265,7 +1456,8 @@ def percent_mix(df: pd.DataFrame, columns: List[str]) -> List[Tuple[str, str, st
         if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_datetime64_any_dtype(s):
             continue
         obj = s.astype("object")
-        is_pct = obj.map(lambda v: isinstance(v, str) and bool(_PERCENT_RE.fullmatch(v.strip()))).to_numpy(dtype=bool)
+        is_pct = np.array([isinstance(v, str) and "%" in v and bool(_PERCENT_RE.fullmatch(v.strip())) for v in obj],
+                          dtype=bool)
         is_num = coerce_numeric(s).notna().to_numpy(dtype=bool)
         if is_pct.any() and (is_num & ~is_pct).any():
             out.append((c, str(obj.iloc[int(np.flatnonzero(is_pct)[0])]).strip(),
@@ -1285,6 +1477,21 @@ def check_percent_mix(df: pd.DataFrame, columns: List[str], where: str = "") -> 
             f"(한 가지 배율, 예: 11.9 또는 0.119)로 고친 뒤 다시 실행하십시오 (.xlsx는 열 전체를 같은 셀 서식으로).")
 
 
+_NA_PLACEHOLDER_SET = frozenset(_NA_PLACEHOLDERS)
+
+
+def _number_cell(v: Any) -> Any:
+    """One cell of coerce_numeric before pd.to_numeric: text stripped, '%' and thousands separators removed, a
+    placeholder ('-', 'N/A', ...) made NaN; any other value unchanged."""
+    if not isinstance(v, str):
+        return v
+    t = v.strip()
+    if "%" in t:
+        t = _strip_percent(t)
+    t = _strip_thousands(t)
+    return np.nan if t in _NA_PLACEHOLDER_SET else t
+
+
 def coerce_numeric(series: pd.Series) -> pd.Series:
     """
     Converts a column to float regardless of its storage dtype (object in pandas 2,
@@ -1296,9 +1503,9 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
         return series
     s = series.astype("object").where(series.notna(), None)
     # 천 단위 쉼표만 지움 ('1,500', '1,234,567.5'). '175,6'처럼 쉼표 뒤가 3자리가 아니면 천 단위가 아니므로
-    # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (1756으로 조용히 바뀌지 않게)
-    s = s.map(lambda v: _strip_thousands(_strip_percent(v.strip())) if isinstance(v, str) else v)
-    s = s.replace(_NA_PLACEHOLDERS, np.nan)
+    # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (1756으로 조용히 바뀌지 않게). 칸마다 한 번에 (열이 많은
+    # 큰 데이터: 칸마다 정규식과 replace를 따로 돌리면 학습 전 준비만 수십 초)
+    s = pd.Series([_number_cell(v) for v in s.to_numpy()], index=s.index, name=s.name, dtype=object)
     return pd.to_numeric(s, errors="coerce").astype(float)
 
 
