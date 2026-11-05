@@ -1,8 +1,11 @@
 @echo off
-rem OpenCode Web UI launcher (double-click). Starts 'opencode web' on this PC only (127.0.0.1)
-rem and opens the browser. Usage: web.bat [work folder] [port]
-rem   work folder: folder OpenCode works in (default: %USERPROFILE%\Documents)
-rem   port: default 4096. Close this window to stop the server.
+rem OpenCode Web UI launcher (double-click), for opencode 2.x.
+rem 'opencode pair' starts the OpenCode background service if needed and prints one-time login links.
+rem This opens the local (127.0.0.1/localhost) link in the default browser.
+rem The web UI is embedded in opencode.exe, so it works without internet.
+rem Usage: web.bat         open the Web UI
+rem        web.bat stop    stop the background service
+rem        web.bat status  show the background service status
 setlocal
 set "OC=%~dp0opencode.exe"
 if not exist "%OC%" (
@@ -10,26 +13,29 @@ if not exist "%OC%" (
   pause
   exit /b 1
 )
-set "WORK=%~1"
-if "%WORK%"=="" set "WORK=%USERPROFILE%\Documents"
-if not exist "%WORK%\" (
-  echo [FAIL] work folder not found: %WORK%
+if /i "%~1"=="stop" (
+  "%OC%" service stop
+  pause
+  exit /b %ERRORLEVEL%
+)
+if /i "%~1"=="status" (
+  "%OC%" service status
+  pause
+  exit /b %ERRORLEVEL%
+)
+set "LINK="
+for /f "tokens=*" %%L in ('""%OC%" pair 2^>nul ^| findstr /R /C:"http://127\.0\.0\.1[:/]" /C:"http://localhost[:/]""') do (
+  if not defined LINK set "LINK=%%L"
+)
+if not defined LINK (
+  echo [FAIL] no local login link from 'opencode pair'. Output:
+  "%OC%" pair
   pause
   exit /b 1
 )
-set "PORT=%~2"
-if "%PORT%"=="" set "PORT=4096"
-netstat -ano | findstr /R /C:":%PORT% .*LISTENING" >nul
-if not errorlevel 1 (
-  echo [INFO] port %PORT% is already in use. Opening http://127.0.0.1:%PORT%/
-  echo [INFO] If that is not OpenCode, run: web.bat "%WORK%" 4097
-  start "" "http://127.0.0.1:%PORT%/"
-  exit /b 0
-)
-cd /d "%WORK%"
-echo [INFO] OpenCode Web UI: http://127.0.0.1:%PORT%/  (work folder: %WORK%)
-echo [INFO] Keep this window open while using the Web UI. Close it to stop.
-"%OC%" web --port %PORT% --hostname 127.0.0.1
-echo [INFO] OpenCode server stopped (exit %ERRORLEVEL%).
-pause
+echo [INFO] Opening OpenCode Web UI: %LINK%
+echo [INFO] The link works once and expires in a few minutes. Run web.bat again for a new one.
+echo [INFO] The background service keeps running after this window closes. Stop it with: web.bat stop
+start "" "%LINK%"
 endlocal
+exit /b 0
