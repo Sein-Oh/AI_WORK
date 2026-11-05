@@ -6,7 +6,6 @@
 """
 import itertools
 import os
-import shlex
 import sys
 
 import numpy as np
@@ -15,7 +14,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlkit_helpers import recommendation, run_fail, run_raw, run_tool, write_book, write_csv, write_df  # noqa: E402
+from mlkit_helpers import split_command, recommendation, run_fail, run_raw, run_tool, write_book, write_csv, write_df  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 
@@ -245,7 +244,7 @@ def test_map_comma_number_stops_with_command(tmp_path):
     bad = run_fail("ml_map.py", "-f", p, "-i", "A=1,000", "-y", "Y")            # 2.9.13: '숫자가 아닙니다' without a fix
     rec = bad["message"].split("[추천] ")[1].strip()
     assert '"A=1000"' in rec
-    assert run_tool("ml_map.py", *shlex.split(rec)[2:])["points"][0]["values"]["Y"] == 2000
+    assert run_tool("ml_map.py", *split_command(rec)[2:])["points"][0]["values"]["Y"] == 2000
     bad = run_fail("ml_map.py", "-f", p, "--find", "Y=1,000", "--vary", "A")
     assert '--find "Y=1000"' in bad["message"]
 

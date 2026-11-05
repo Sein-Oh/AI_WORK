@@ -7,6 +7,10 @@
 > `test_report_export`, `test_loading_layout`, `test_loading_totals`, `test_loading_numbers`, `test_layout_matrix`, `test_skill_docs`)로
 > 합쳤습니다. 공용 도구는 `tests/mlkit_helpers.py`, 여러 파일이 쓰는 fixture는 `tests/conftest.py`. 같은 입력·같은 기대값의 중복 검사
 > 13개를 빼고, 같은 데이터로 학습하던 모델은 한 번만 학습합니다. 아래 버전 항목의 테스트 파일 이름은 당시 이름입니다.
+>
+> 회사 PC 실기(2026-11-05, Windows) 테스트 수정 (도구 동작 변경 없음): `[추천]`·`next_commands` 명령을 `shlex.split`(posix)으로 나눠
+> Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
+> `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
 ## [2.9.67] - 2026-11-05
 

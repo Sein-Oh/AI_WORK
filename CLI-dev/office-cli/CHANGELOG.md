@@ -5,6 +5,11 @@
 ## 테스트 정리
 
 - `tests/`의 차수별 파일(`test_review_v14xx.py` 등 35개)을 기능별 11개 파일(`test_contract`, `test_excel_read`, `test_excel_write`, `test_word`, `test_ppt`, `test_outlook`, `test_reader`, `test_office`, `test_markdown`, `test_skill_docs`, `test_win_runner`)과 공용 도우미 `office_helpers.py`로 합침 (동작 변경 없음). 아래 기록에 나오는 옛 테스트 파일 이름은 정리 전 배치를 가리킴.
+- 회사 PC 실기(2026-11-05, Windows) 테스트 수정 (도구 동작 변경 없음): 도구가 낸 명령을 `shlex.split`(posix)으로 나눠 Windows 경로의 백슬래시가
+  지워지던 것을 `office_helpers.split_command`(Windows 명령줄 규칙)로. 매개변수 id가 긴 테스트(`test_number_search_linear_time`)는 `ids=`, conftest의
+  `pytest_make_parametrize_id`로 긴 글자 id를 60자로 자름(Windows 환경변수 `PYTEST_CURRENT_TEST` 32767자 한도 ERROR). DRM이 python-pptx 기본 템플릿을
+  지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
+  (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
 ## [1.4.75] - 2026-11-05
 

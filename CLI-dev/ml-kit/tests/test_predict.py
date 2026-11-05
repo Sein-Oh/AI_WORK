@@ -5,7 +5,6 @@
 """
 import json
 import os
-import shlex
 import shutil
 import sys
 import time
@@ -15,7 +14,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlkit_helpers import KIT, run_fail, run_raw, run_tool, stop_msg, write_df, write_rows  # noqa: E402
+from mlkit_helpers import split_command, KIT, run_fail, run_raw, run_tool, stop_msg, write_df, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 
@@ -60,7 +59,7 @@ def test_inline_comma_number_stops_with_command(small):
     assert bad["agent_directive"].startswith("STOP_RETRY")                      # 2.9.13: 180190, VERIFIED
     rec = bad["message"].split("[추천] ")[1].strip()
     assert rec.startswith("python") and '"온도=180190,압력=3000,라인=A"' in rec and "천 단위" in bad["message"]
-    assert run_tool("ml_predict.py", *shlex.split(rec)[2:])["sample_count"] == 1
+    assert run_tool("ml_predict.py", *split_command(rec)[2:])["sample_count"] == 1
     bad = run_fail("ml_predict.py", "-m", small["v"], "-i", "온도=1,5,압력=3000,라인=A")
     assert "[추천]" not in bad["message"]
     # text values keep the joined text (not a number): unseen category, no stop
@@ -324,7 +323,7 @@ def test_find_comma_number_stops_with_command(small):
     bad = run_fail("ml_predict.py", "-m", small["v"], "--find", "y=120", "--vary", "온도", "-i", "압력=3,000,라인=A")
     rec = bad["message"].split("[추천] ")[1].strip()
     assert '"압력=3000,라인=A"' in rec
-    assert run_tool("ml_predict.py", *shlex.split(rec)[2:])["command"] == "find"
+    assert run_tool("ml_predict.py", *split_command(rec)[2:])["command"] == "find"
 
 
 def test_find_multi_row_input_refused(p1_model):
@@ -561,7 +560,7 @@ def test_sweep_caps_points(whatif):
     bad = run_fail("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도=170:200:0.01", "-i", "압축압력=3,촉매비율=1")
     rec = bad["message"].split("[추천] ")[1]
     assert rec.startswith("python ") and "--sweep" in rec
-    res = run_tool("ml_predict.py", *shlex.split(rec)[2:])
+    res = run_tool("ml_predict.py", *split_command(rec)[2:])
     assert 25 < res["count"] <= 500 and res["truncated"] is True and res["shown"] == len(res["points"]) == 25
     assert res["full_result_file"] == res["output_file"] and len(pd.read_excel(res["output_file"])) == res["count"]
     assert res["points"][0]["반응온도"] == 170 and res["points"][-1]["반응온도"] == 200

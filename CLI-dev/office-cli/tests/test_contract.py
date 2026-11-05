@@ -24,6 +24,7 @@ from fake_excel import FakeChartObject, FakeExcelWorkbook, FakeXlApp
 from fake_office import make_win32com
 from fake_word import FakeWordDocument
 from office_helpers import assert_not_logged, error_log_text, run_as_tool, run_main, SECRET, TOOL_DIR
+from sample_docs import new_docx, new_pptx
 
 
 def run_script(tmp_path, body, *args):
@@ -514,14 +515,12 @@ def test_error_log_redacts_content_options(isolated_dirs):
 
 
 def test_word_and_ppt_read_save_is_reopened(tmp_path, capsys, monkeypatch):
-    import docx
-    import pptx
     d = tmp_path / "문서.docx"
-    doc = docx.Document()
+    doc = new_docx()
     doc.add_paragraph("첫 단락")
     doc.save(str(d))
     s = tmp_path / "발표.pptx"
-    prs = pptx.Presentation()
+    prs = new_pptx()
     prs.slides.add_slide(prs.slide_layouts[0]).shapes.title.text = "제목"
     prs.save(str(s))
     for module, target in ((word, d), (ppt, s)):
@@ -539,9 +538,8 @@ def test_word_and_ppt_read_save_is_reopened(tmp_path, capsys, monkeypatch):
 
 
 def test_pptm_is_reopened(tmp_path):
-    import pptx
     src = tmp_path / "a.pptx"
-    pptx.Presentation().save(str(src))
+    new_pptx().save(str(src))
     dst = tmp_path / "a.pptm"
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
         for info in zin.infolist():
@@ -571,10 +569,8 @@ def test_clamp_rows_caps_cells_and_first_row():
 
 
 def test_ppt_and_word_long_text_marked_truncated(tmp_path, capsys):
-    import docx
-    import pptx
     s = tmp_path / "deck.pptx"
-    prs = pptx.Presentation()
+    prs = new_pptx()
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "제목"
     slide.placeholders[1].text = "라" * 20000
@@ -584,7 +580,7 @@ def test_ppt_and_word_long_text_marked_truncated(tmp_path, capsys):
     assert code == 0 and out["truncated"] is True and sl["text_truncated"] and len(sl["text"]) == rt.DEFAULT_MAX_CHARS
     assert out["next_commands"][-1]["command"].endswith("--save")
     d = tmp_path / "doc.docx"
-    doc = docx.Document()
+    doc = new_docx()
     doc.add_paragraph("마" * 20000)
     doc.save(str(d))
     code, out = run_main(word, capsys, "read", "--target", str(d))

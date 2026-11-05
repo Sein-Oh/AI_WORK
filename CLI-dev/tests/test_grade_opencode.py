@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""grade_opencode.py: OpenCode export parsing, scenario checks, and the message pack staying in sync with the yaml."""
+"""grade_opencode.py: OpenCode export parsing, scenario checks, and the message pack staying in sync with agent_scenarios.py."""
 import codecs
 import importlib.util
 import json
@@ -13,6 +13,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("grade_opencode", os.path.join(os.path.dirname(HERE), "grade_opencode.py"))
 go = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(go)
+
+# agent_scenarios.py가 빠진 채 반입된 PC: 시나리오가 필요한 테스트는 FileNotFoundError로 실패하지 않고 원인을 적어 건너뜀
+_load_scenarios = go.load_scenarios
+
+
+def _load_scenarios_or_skip():
+    try:
+        return _load_scenarios()
+    except go.ScenarioFileMissing as e:
+        pytest.skip(f"agent_scenarios.py 없음 (반입 누락): {e}")
+
+
+go.load_scenarios = _load_scenarios_or_skip
 
 # C:\CLI-dev is copied to the PC without docs/: tests of files under docs/ run only in the repository
 needs_pack = pytest.mark.skipif(not os.path.isdir(go.PACK_DIR), reason="docs/opencode/자동테스트 없음 (저장소에서만)")
@@ -467,14 +480,45 @@ def test_scenario_regexes():
 
 
 @needs_pack
-def test_message_pack_matches_yaml(tmp_path, monkeypatch):
+def test_message_pack_matches_scenarios(tmp_path, monkeypatch):
     committed = {f: open(os.path.join(go.PACK_DIR, f), encoding="utf-8").read() for f in os.listdir(go.PACK_DIR)}
     monkeypatch.setattr(go, "PACK_DIR", str(tmp_path))
     go.make_pack(None)
     fresh = {f: (tmp_path / f).read_text(encoding="utf-8") for f in os.listdir(tmp_path)}
-    assert fresh == committed, "agent_scenarios.yaml이 바뀌었으면 python grade_opencode.py --make-pack 으로 메시지 팩을 다시 만드세요"
+    assert fresh == committed, "agent_scenarios.py가 바뀌었으면 python grade_opencode.py --make-pack 으로 메시지 팩을 다시 만드세요"
     spec_, by_id, order = go.load_scenarios()
     assert len(order) == len(set(order)) and all(go.TAG.fullmatch(f"[{s}]") for s in order)
+
+
+def test_missing_scenario_file_names_the_cause(tmp_path, monkeypatch):
+    """C:\\CLI-dev에 agent_scenarios.py가 빠진 채 반입되면: 원인(반입 누락)을 적은 오류, 테스트는 실패 대신 건너뜀."""
+    monkeypatch.setattr(go, "SCENARIOS_FILE", str(tmp_path / "agent_scenarios.py"))
+    with pytest.raises(go.ScenarioFileMissing, match="반입"):
+        _load_scenarios()
+    with pytest.raises(pytest.skip.Exception, match="반입 누락"):
+        go.load_scenarios()
+
+
+def test_scenarios_module_is_data_only():
+    """agent_scenarios.py는 데이터 상수만 (함수·import 없음): 채점기가 경로로 읽어 실행한다."""
+    import ast
+    tree = ast.parse(open(go.SCENARIOS_FILE, encoding="utf-8").read())
+    assert not [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.Call))]
+    spec_, _, _ = go.load_scenarios()
+    spec_["groups"].clear()                                       # 읽은 쪽이 고쳐도 다음 읽기는 그대로
+    assert go.load_scenarios()[0]["groups"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="변환 확인은 저장소(git)에서만")
+def test_scenarios_module_equals_former_yaml():
+    """한 번만 쓰는 변환 확인: agent_scenarios.yaml(변환 전, git 기록) == agent_scenarios.py의 SCENARIOS."""
+    import subprocess
+    yaml = pytest.importorskip("yaml")
+    repo = os.path.dirname(os.path.dirname(HERE))
+    proc = subprocess.run(["git", "show", "fd8e0e8:CLI-dev/agent_scenarios.yaml"], cwd=repo, capture_output=True)
+    if proc.returncode:
+        pytest.skip("git 기록 없음")
+    assert go.load_scenarios()[0] == yaml.safe_load(proc.stdout.decode("utf-8"))
 
 
 def test_judge_uses_completions_api(tmp_path, monkeypatch):

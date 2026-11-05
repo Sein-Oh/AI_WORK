@@ -19,7 +19,7 @@ AI_WORK/
 │   ├── history/               # 지난 설계·검토 기록 (1.0 설계, 1차 지침 준수 검토)
 │   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode/              # 사내 PC OpenCode 스킬 배치 안내, 실기테스트.md (회사 PC 실기 절차 한 장)
-│   │   ├── 자동테스트/        # Gemma 종합 테스트 메시지 팩 (CLI-dev/agent_scenarios.yaml에서 생성)
+│   │   ├── 자동테스트/        # Gemma 종합 테스트 메시지 팩 (CLI-dev/agent_scenarios.py에서 생성)
 │   │   └── 실기테스트_샘플/   # 정답을 아는 샘플 데이터 (CLI-dev/ml-kit/tools/make_beta_samples.py)
 │   └── test_logs/             # 사내 PC 실기 결과 (GitHub 웹으로 업로드, 프로젝트 마무리 때 이력에서 정리)
 ├── archive/                   # 보관 도구 (수정·테스트 대상 아님, archive/README.md)
@@ -46,9 +46,10 @@ AI_WORK/
 └── CLI-dev/                   # 개발·실기 테스트용 (필요할 때만 C:\CLI-dev로, C:\CLI와 나란히)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)
+    ├── pytest_live_report.py  # run_all_tests.py pytest 단계 플러그인 (실패를 생기는 즉시 기록)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
-    ├── agent_scenarios.yaml   # Gemma 종합 테스트 요청과 채점 기준
+    ├── agent_scenarios.py     # Gemma 종합 테스트 요청과 채점 기준 (데이터 모듈)
     ├── tests/                 # 채점기·메시지 팩·점검 러너·setup.py 테스트
     ├── work/                  # (git 제외) 모든 시험 폴더: 베타 점검, 실기 러너, Gemma, 눈 확인
     ├── ml-kit/

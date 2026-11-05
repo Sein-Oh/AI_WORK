@@ -4,14 +4,14 @@
 채점:
     python grade_opencode.py --export <대화.json> [<대화2.json> ...] [--label 회사PC] [--judge]
     python grade_opencode.py --runs <기록 폴더> [--label 회사PC]   # run_all_tests.py --gemma가 남긴 opencode run 기록(<ID>.jsonl)
-메시지 팩 다시 만들기 (agent_scenarios.yaml을 고친 뒤):
+메시지 팩 다시 만들기 (agent_scenarios.py를 고친 뒤):
     python grade_opencode.py --make-pack [--dir C:\\CLI-dev\\work\\gemma]
 
 대화 내보내기: PowerShell에서 `cmd /c "opencode export <세션ID> > chat.json"`
   (cmd의 `>`는 opencode가 쓴 UTF-8 바이트를 그대로 저장한다. PowerShell 5.1의 `| Out-File`이나 `>`는 출력을
    콘솔 코드 페이지(cp949)로 읽어 한글이 깨진다. 채점기는 한글이 깨진 대화를 찾으면 [ERROR]로 멈춘다.)
 
-채점 기준은 agent_scenarios.yaml 한 곳에 있다. 사용자 메시지 앞의 "[ID]" 표시로 시나리오를 찾고,
+채점 기준은 agent_scenarios.py 한 곳에 있다. 사용자 메시지 앞의 "[ID]" 표시로 시나리오를 찾고,
 그 요청부터 다음 표시가 나오기 전까지의 명령·도구 결과·답변을 본다.
 답변 검사(answer_all, answer_any, answer_clean)는 최종 답변만 본다: 그 시나리오의 tool_ok/commands에 맞는 마지막 명령
 뒤의 글 전부 (맞는 명령이 없으면 마지막 도우미 메시지의 마지막 명령 뒤 글). 답 뒤에 명령을 하나 더 실행하고
@@ -45,7 +45,7 @@ from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-SCENARIOS = os.path.join(HERE, "agent_scenarios.yaml")
+SCENARIOS_FILE = os.path.join(HERE, "agent_scenarios.py")      # 데이터만 담은 모듈 (회사 반입 시스템이 .yaml을 막음)
 PACK_DIR = os.path.join(REPO, "docs", "opencode", "자동테스트")
 TAG = re.compile(r"\[([A-Z]\d+)\]")
 EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2460-\u24FF\u2190-\u21FF]")
@@ -59,10 +59,21 @@ PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to):\s*(.+?
 ENC_PREFIX = re.compile(r"^(\s*(\$env:\w+\s*=\s*[^;]+|\[Console\]::\w+\s*=\s*[^;]+);)+\s*")   # PowerShell encoding line from the global rules
 
 
+class ScenarioFileMissing(FileNotFoundError):
+    """agent_scenarios.py가 없음 (반입 때 빠짐)."""
+
+
 def load_scenarios():
-    import yaml
-    with open(SCENARIOS, encoding="utf-8") as f:
-        spec = yaml.safe_load(f)
+    """agent_scenarios.py의 SCENARIOS -> (spec, {id: 시나리오}, [id 순서]). 파일은 경로로 읽는다 (sys.path와 상관없음)."""
+    import copy
+    import importlib.util
+    if not os.path.isfile(SCENARIOS_FILE):
+        raise ScenarioFileMissing(f"시나리오 파일이 없습니다: {SCENARIOS_FILE} (반입 때 빠졌는지 확인하세요. "
+                                  f"저장소의 CLI-dev\\agent_scenarios.py를 이 폴더에 두면 됩니다)")
+    mod_spec = importlib.util.spec_from_file_location("agent_scenarios", SCENARIOS_FILE)
+    mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(mod)
+    spec = copy.deepcopy(mod.SCENARIOS)                  # 부르는 쪽이 고쳐도 다음 읽기에 섞이지 않게
     order = [s for g in spec["groups"] for s in g["scenarios"]]
     return spec, {s["id"]: s for s in order}, [s["id"] for s in order]
 
@@ -195,7 +206,7 @@ def read_turns(path):
 
 def check_mojibake(path, turns, by_id):
     """Raises ExportError when the export's Korean text was garbled on the way to the file (opencode's UTF-8 output read as
-    cp949 by PowerShell 5.1 `| Out-File` or `>`). Looks at the tagged user messages, whose text is known from the yaml:
+    cp949 by PowerShell 5.1 `| Out-File` or `>`). Looks at the tagged user messages, whose text is known from agent_scenarios.py:
     no Hangul at all, few of the expected Hangul syllables, or Hanja / replacement characters the messages do not have."""
     tagged = [(t, [by_id[x]["message"] for x in t["tags"] if x in by_id]) for t in turns]
     tagged = [(t, msgs) for t, msgs in tagged if msgs]
@@ -593,7 +604,7 @@ def make_pack(test_dir):
     msg = lambda s: f"[{s['id']}] " + s["message"].replace("{DIR}", d)
     manual = [s for g in spec["groups"] for s in g["scenarios"] if s.get("manual")]
     index =["# OpenCode 종합 테스트 메시지 팩", "",
-             "agent_scenarios.yaml에서 만든 파일입니다. 직접 고치지 말고 yaml을 고친 뒤 `python grade_opencode.py --make-pack`으로 다시 만듭니다.", "",
+             "agent_scenarios.py에서 만든 파일입니다. 직접 고치지 말고 agent_scenarios.py를 고친 뒤 `python grade_opencode.py --make-pack`으로 다시 만듭니다.", "",
              "## 1. 도구 점검 (정답을 아는 샘플로 도구만 확인, 5~10분)", "",
              "PowerShell에서 직접 실행하거나 Gemma에게 아래 메시지를 붙여넣습니다. 결과는 `C:\\CLI-dev\\beta_check_회사PC_<시각>.md`.", "",
              "```powershell", "python \"C:\\CLI-dev\\run_beta_check.py\" --label 회사PC", "```", "",
@@ -654,8 +665,8 @@ def main():
     ap.add_argument("--label", default="PC")
     ap.add_argument("--judge", action="store_true", help="사내 OpenAI 호환 API로 참고 점수 (JUDGE_BASE_URL)")
     ap.add_argument("--judge-model", default="LLM42")
-    ap.add_argument("--make-pack", action="store_true", help="agent_scenarios.yaml로 docs/opencode/자동테스트 다시 만들기")
-    ap.add_argument("--dir", help="메시지 팩의 시험 폴더 (기본: yaml의 dir)")
+    ap.add_argument("--make-pack", action="store_true", help="agent_scenarios.py로 docs/opencode/자동테스트 다시 만들기")
+    ap.add_argument("--dir", help="메시지 팩의 시험 폴더 (기본: agent_scenarios.py의 DIR)")
     args = ap.parse_args()
     if args.make_pack:
         print(f"[INFO] 메시지 팩 저장: {make_pack(args.dir)}")

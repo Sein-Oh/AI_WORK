@@ -8,7 +8,6 @@ import argparse
 import copy
 import json
 import os
-import shlex
 import sys
 from datetime import datetime
 
@@ -18,7 +17,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlkit_helpers import (H, U, family_rows, recommendation, recommended_command, run_fail, run_raw,  # noqa: E402
+from mlkit_helpers import (split_command, H, U, family_rows, recommendation, recommended_command, run_fail, run_raw,  # noqa: E402
                            run_tool, write_book, write_csv_header, write_df, write_rows)
 import ml_predict as mp  # noqa: E402
 
@@ -210,7 +209,7 @@ def layout(tmp_path_factory):
 def test_training_layout_on_plain_file_is_recovered(layout):
     cmd = [c for c in layout["res"]["next_commands"] if "ml_predict.py" in c["command"]][0]["command"]
     assert "--header-row" not in cmd and "--unit-row" not in cmd                # 2.9.53: the training layout options
-    argv = shlex.split(cmd.replace("<새데이터.xlsx>", str(layout["new"])))[2:]   # drop 'python <script>'
+    argv = split_command(cmd.replace("<새데이터.xlsx>", str(layout["new"])))[2:]   # drop 'python <script>'
     assert run_tool("ml_predict.py", *argv)["sample_count"] == 2
     # the training options copied by hand: read with the file's own header row (JIT), said in recovered
     ok = run_tool("ml_predict.py", *argv, "--header-row", "2", "--unit-row", "3")   # 2.9.53: STOP_RETRY [추천]

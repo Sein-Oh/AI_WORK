@@ -3,7 +3,6 @@
 """
 import json
 import os
-import shlex
 
 import pytest
 
@@ -13,7 +12,7 @@ import excel
 import office
 from fake_excel import FakeExcelWorkbook, FakeXlApp, SheetNameRefused
 from fake_office import make_win32com
-from office_helpers import EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
+from office_helpers import split_command, EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
 
 
 def _no_create_imperative(out):
@@ -975,7 +974,7 @@ def test_same_title_on_two_sheets_next_command_targets_new_chart(xl, capsys):
     run_main(excel, capsys, "chart", "--sheet", "Sheet1", "--range", "A1:B3", "--title", "매출")
     code, out = run_main(excel, capsys, "chart", "--sheet", "요약", "--range", "A1:B3", "--title", "매출")
     assert code == 0
-    argv = shlex.split(out["confirm_commands"][0]["command"])
+    argv = split_command(out["confirm_commands"][0]["command"])
     assert argv[argv.index("--sheet") + 1] == "요약"
     ws, obj = excel.find_chart(_T(wb), argv[argv.index("--chart") + 1], argv[argv.index("--sheet") + 1])
     assert ws.Name == "요약"

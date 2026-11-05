@@ -9,13 +9,14 @@
 
 단계 (이 순서로 실행. --only로 고르면 고른 단계만 같은 순서로):
     diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
-    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (python -m pytest)
+    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (python -m pytest, 도구마다 상한 --pytest-timeout 7200초,
+            실패는 pytest_live_report 플러그인이 [LIVE] 줄로 바로 남겨 끊겨도 이름이 남음)
     beta    ml-kit 베타 점검 (run_beta_check.py, F7 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
     ml      ml-kit 실기 러너 (ml-kit/tools/run_win_tests.py, 10~20분). 기본 단계가 아니며 --only에 넣을 때만
     office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
-    gemma   Gemma 종합 테스트: agent_scenarios.yaml의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
+    gemma   Gemma 종합 테스트: agent_scenarios.py의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
             grade_opencode.py로 채점 (20~60분). 기본 단계가 아니며 --gemma 또는 --only에 넣을 때만.
-            사람이 준비해야 하는 요청(yaml의 manual, 예: Outlook 메일이 필요한 O3)은 보내지 않고 건너뜀(수동 전용)으로 남깁니다.
+            사람이 준비해야 하는 요청(시나리오의 manual, 예: Outlook 메일이 필요한 O3)은 보내지 않고 건너뜀(수동 전용)으로 남깁니다.
             opencode는 --opencode, PATH, C:\\CLI\\opencode.exe 순서로 찾고, 없으면 ENV-SKIP.
             UAC로 권한을 올린 관리자 창이면 열린 문서를 못 보므로 일반 창에서 실행하세요 (UAC가 꺼진 PC는 상관없음).
     기본은 diag, pytest, beta, office. Windows + pywin32가 아니면 ml, office는 ENV-SKIP.
@@ -54,10 +55,10 @@ TITLES = {"diag": "환경 진단", "pytest": "오프라인 테스트 (pytest)", 
           "ml": "ml-kit 실기 러너", "office": "office-cli 실기 러너 (실제 Office)",
           "gemma": "Gemma 종합 테스트 (opencode run)"}
 PACKAGES = ("numpy", "pandas", "scikit-learn", "scipy", "joblib", "openpyxl", "python-docx", "python-pptx",
-            "matplotlib", "pymupdf", "olefile", "pywin32", "pytest", "PyYAML")
+            "matplotlib", "pymupdf", "olefile", "pywin32", "pytest")          # PyYAML은 쓰지 않음 (시나리오는 agent_scenarios.py)
 IMPORTS = {"numpy": "numpy", "pandas": "pandas", "scikit-learn": "sklearn", "scipy": "scipy", "joblib": "joblib",
            "openpyxl": "openpyxl", "python-docx": "docx", "python-pptx": "pptx", "matplotlib": "matplotlib",
-           "pymupdf": "fitz", "olefile": "olefile", "pywin32": "win32com.client", "pytest": "pytest", "PyYAML": "yaml"}
+           "pymupdf": "fitz", "olefile": "olefile", "pywin32": "win32com.client", "pytest": "pytest"}
 LIST_CAP = 30                                                      # 요약 목록 상한 (넘으면 "외 N건", 전체는 상세에)
 
 
@@ -74,6 +75,7 @@ class Stage:
         self.seconds = None
         self.note = ""
         self.failures, self.skips, self.unverified = [], [], []
+        self.warnings = []                                       # 참고(WARN): 실패로 세지 않지만 알릴 것
         self.details = []                                        # (제목, 본문)
 
     def env_skip(self, why):
@@ -156,6 +158,9 @@ class Report:
         L += ["", f"### 실패 {len(fails)}건", ""] + _capped(fails)
         L += ["", f"### 건너뜀 (ENV-SKIP, SKIP) {len(skips)}건", ""] + _capped(skips)
         L += ["", f"### UNVERIFIED (도구가 결과를 확인하지 못한 호출) {len(unver)}건", ""] + _capped(unver)
+        warns = [f"[{s.key}] {x}" for s in self.stages for x in s.warnings]
+        if warns:
+            L += ["", f"### 참고 (WARN, 실패로 세지 않음) {len(warns)}건", ""] + _capped(warns)
         for i, s in enumerate(self.stages, 1):
             L += ["", f"## {i}. {s.title}: {s.status}"]
             if s.note:
@@ -317,6 +322,47 @@ def diag_pptx(lines):
         lines.append(f"pptx.Presentation() 실패: {type(e).__name__}: {e}")
 
 
+MIN_DOCX_TYPES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                  '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                  '<Default Extension="xml" ContentType="application/xml"/>'
+                  '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.'
+                  'wordprocessingml.document.main+xml"/></Types>')
+MIN_DOCX_RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
+                 'officeDocument" Target="word/document.xml"/></Relationships>')
+MIN_DOCX_BODY = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+                 '<w:p><w:r><w:t>진단</w:t></w:r></w:p></w:body></w:document>')
+
+# 도구가 라이브러리 기본 템플릿을 쓰는지 (diag 등급): office-cli는 쓰지 않음(있는 파일만 엶). python-pptx 기본 템플릿은
+# 어느 도구도 쓰지 않음 -> 손상돼도 참고(WARN). python-docx는 ml-kit 보고서(ml_report.new_report_document)가 폴더 템플릿을
+# 먼저 쓰고(빠진 파일은 빼고 복구) default.docx는 그다음 -> 보고서 문서를 실제로 만들 수 있으면 참고, 못 만들면 FAIL.
+REPORT_DOC_CHECK = ("import json, sys; sys.path.insert(0, sys.argv[1]); import ml_predict as p, ml_report as r; "
+                    "d = r.new_report_document(); "
+                    "print(json.dumps({'styles': len(d.styles), 'recovered': p._RECOVERED}, ensure_ascii=True))")
+
+
+def diag_report_docx(lines):
+    """ml-kit 보고서가 쓰는 빈 Word 문서를 실제 도구 함수로 만들어 봅니다 (별도 프로세스). 정상이면 True."""
+    kit = os.path.join(CLI_DIR, "ml-kit")
+    try:
+        proc = subprocess.run([sys.executable, "-c", REPORT_DOC_CHECK, kit], capture_output=True, timeout=300,
+                              env=child_env())
+        res = _last_json(proc.stdout.decode("utf-8", errors="replace"))
+    except Exception as e:
+        lines.append(f"ml-kit 보고서 빈 문서(ml_report.new_report_document) 확인 못 함: {type(e).__name__}: {e}")
+        return False
+    if proc.returncode == 0 and res:
+        lines.append(f"ml-kit 보고서 빈 문서(ml_report.new_report_document): 정상 (스타일 {res['styles']}개, "
+                     f"도구 자동 복구 {res['recovered'] or '없음'})")
+        return True
+    err = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+    lines.append(f"ml-kit 보고서 빈 문서(ml_report.new_report_document) 만들기 안 됨: {(err[-1] if err else '')[:300]}")
+    return False
+
+
 def diag_new_files(lines):
     """도구가 새로 쓴 Office 파일도 문서 보안(DRM)이 바꾸는지: 쓰고 잠시 뒤 다시 읽어 zip 형식인지 봅니다."""
     work = tempfile.mkdtemp(prefix="cli_diag_")
@@ -330,17 +376,12 @@ def diag_new_files(lines):
         made.append(p)
     except Exception as e:
         lines.append(f"xlsx 쓰기 실패: {type(e).__name__}: {e}")
-    try:
-        import docx
-        tdir = os.path.join(os.path.dirname(docx.__file__), "templates", "default-docx-template")
-        try:
-            d = docx.Document(tdir)
-        except Exception as e:                       # 회사 PC: 폴더 템플릿에서 docProps/thumbnail.jpeg가 빠져 있었음
-            lines.append(f"python-docx 폴더 템플릿 열기 실패 ({type(e).__name__}: {e}) -> default.docx로 진단 계속")
-            d = docx.Document()
-        d.add_paragraph("진단")
+    try:                                             # 라이브러리 템플릿과 상관없이 최소 docx를 직접 씀 (템플릿 점검은 위 항목)
         p = os.path.join(work, "진단.docx")
-        d.save(p)
+        with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", MIN_DOCX_TYPES)
+            z.writestr("_rels/.rels", MIN_DOCX_RELS)
+            z.writestr("word/document.xml", MIN_DOCX_BODY)
         made.append(p)
     except Exception as e:
         lines.append(f"docx 쓰기 실패: {type(e).__name__}: {e}")
@@ -359,6 +400,14 @@ def diag_new_files(lines):
         lines.append("새로 쓴 xlsx 다시 열기: 정상")
     except Exception as e:
         lines.append(f"새로 쓴 xlsx 다시 열기 실패: {type(e).__name__}: {e}")
+    try:
+        import docx
+        made_docx = [p for p in made if p.endswith(".docx")]
+        if made_docx:
+            texts = [x.text for x in docx.Document(made_docx[0]).paragraphs]
+            lines.append("새로 쓴 docx 다시 열기: " + ("정상" if texts == ["진단"] else f"내용이 바뀜 실패 ({texts[:3]})"))
+    except Exception as e:
+        lines.append(f"새로 쓴 docx 다시 열기 실패: {type(e).__name__}: {e}")
     shutil.rmtree(work, ignore_errors=True)
 
 
@@ -430,10 +479,16 @@ def step_diag(stage, args, ctx):
         if what is None:                                        # Office 버전, 프로세스, pip list: 참고 정보
             continue
         broken = [x for x in lines[n0:] if _broken(x) or " 오류: " in x]
-        if broken:
-            stage.fail(f"{what}: {broken[0][:200]}")
-        else:
+        if not broken:
             stage.passed += 1
+        elif fn is diag_pptx:                                   # 어느 도구도 python-pptx 기본 템플릿을 쓰지 않음
+            stage.passed += 1
+            stage.warnings.append(f"{what}: {broken[0][:200]} (도구는 이 템플릿을 쓰지 않음, 테스트는 코드로 만든 샘플 사용)")
+        elif fn is diag_docx and diag_report_docx(lines):        # 도구(ml-kit 보고서)는 폴더 템플릿으로 복구해 씀
+            stage.passed += 1
+            stage.warnings.append(f"{what}: {broken[0][:200]} (ml-kit 보고서는 폴더 템플릿으로 복구해 정상 동작, 위 진단 참고)")
+        else:
+            stage.fail(f"{what}: {broken[0][:200]}")
     lines += ["", "[OpenCode 스킬, 전역 지침, PATH (C:\\CLI\\setup.py --check)]"]
     try:
         diag_skills(stage, lines)
@@ -508,20 +563,58 @@ def parse_pytest(out):
             counts.get("skipped", 0), fails, skips)
 
 
+LIVE_PLUGIN = "pytest_live_report"                # CLI-dev/pytest_live_report.py: 실패를 생기는 즉시 [LIVE] 줄로
+TIMEOUT_MARK = "시간 초과"
+
+
+def parse_live(out):
+    """pytest_live_report 플러그인의 '[LIVE] FAILED <id> - <원인>' 줄 -> ['FAILED <id> - <원인>', ...] (나온 순서, 중복 없음)."""
+    seen, found = set(), []
+    for line in out.splitlines():
+        if "[LIVE] " in line:                                 # -q 진행 점(..F) 바로 뒤에 붙어 나옴
+            item = line.split("[LIVE] ", 1)[1].strip()
+            if item not in seen:
+                seen.add(item)
+                found.append(item)
+    return found
+
+
+def merge_live(fails, live):
+    """-rfE 요약(끝까지 돈 경우)에 없는 실시간 실패를 덧붙임. 시간 초과로 끊기면 요약이 없으므로 실시간 줄이 전부."""
+    def nodeid(line):
+        rest = line.split(" ", 1)[1] if " " in line else line
+        return re.sub(r" \((setup|teardown)\)$", "", rest.split(" - ")[0].strip())
+
+    out = list(fails)
+    have = {nodeid(f) for f in out}
+    for item in live:
+        if nodeid(item) not in have:
+            have.add(nodeid(item))
+            out.append(item)
+    return out
+
+
 def step_pytest(stage, args, ctx):
+    env = {"PYTHONUNBUFFERED": "1",                              # 끊겨도 그때까지의 출력이 남게
+           "PYTHONPATH": os.pathsep.join([HERE] + [p for p in [os.environ.get("PYTHONPATH")] if p])}
     for tool in PYTEST_TARGETS:
         folder = os.path.join(HERE, tool)
         if not os.path.isdir(folder):
             continue
-        say(f"{tool} 오프라인 테스트 시작 (몇 분 걸릴 수 있습니다)")
-        code, out, sec, stop = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfEs"],
-                                           folder, args.timeout)
+        say(f"{tool} 오프라인 테스트 시작 (몇 분 걸릴 수 있습니다, 상한 {args.pytest_timeout}초)")
+        code, out, sec, stop = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", LIVE_PLUGIN,
+                                            "-rfEs"], folder, args.pytest_timeout, env_extra=env)
         npass, nfail, nskip, fails, skips = parse_pytest(out)
+        fails = merge_live(fails, parse_live(out))
+        timed_out = TIMEOUT_MARK in (out.rstrip().splitlines() or [""])[-1]
         stage.passed += npass
         stage.skipped += nskip
         stage.failures += [f"{tool}: {x[:200]}" for x in fails]
         stage.failed += max(nfail, len(fails))
-        if code not in (0, None) and not nfail and not fails:
+        if timed_out:
+            stage.fail(f"{tool}: 시간 상한 {args.pytest_timeout}초로 중단 (그때까지 실패 {len(fails)}건은 위 목록, "
+                       f"나머지 테스트는 실행 안 됨. --pytest-timeout으로 늘릴 수 있음)")
+        elif code not in (0, None) and not nfail and not fails:
             stage.fail(f"{tool}: pytest exit {code} (실패 항목 없이 끝남, 상세 참고)")
         stage.skips += [f"{tool}: {x[:200]}" for x in skips]
         stage.details.append((f"pytest {tool} (exit {code}, {sec}초)", f"cwd={folder}\n{out}"))
@@ -852,8 +945,9 @@ def step_gemma(stage, args, ctx):
     try:
         go = _load_grader()
         spec, by_id, order = go.load_scenarios()
-    except Exception as e:                                       # PyYAML 없음 등
-        stage.env_skip(f"시나리오를 읽지 못함 ({type(e).__name__}: {e})")
+    except Exception as e:                                       # agent_scenarios.py 없음(반입 누락) 등
+        stage.env_skip(f"시나리오를 읽지 못함 ({type(e).__name__}: {e}). {HERE}에 agent_scenarios.py가 있는지"
+                       f"(반입 누락) 확인하세요")
         return
     test_dir = args.gemma_dir or os.path.join(work_root(), "gemma")
     if os.path.exists(test_dir):                                 # 이전 모델이 남으면 버전 번호가 달라짐: 지우지 않고 이름만 바꿈
@@ -931,6 +1025,8 @@ def main(argv=None):
     p.add_argument("--ml-dir", help=r"ml 단계 시험 폴더 (기본 C:\CLI-dev\work\ml 테스트)")
     p.add_argument("--office-dir", help=r"office 단계 시험 폴더 (기본 C:\CLI-dev\work\office)")
     p.add_argument("--timeout", type=int, default=3600, help="단계별 시간 상한(초, 기본 3600)")
+    p.add_argument("--pytest-timeout", type=int, default=7200,
+                   help="pytest 단계에서 도구 하나의 시간 상한(초, 기본 7200. 회사 PC에서 ml-kit이 3600초를 넘음)")
     args = p.parse_args(argv)
     chosen = [s.strip().lower() for s in (args.only or ",".join(DEFAULT_STAGES)).split(",") if s.strip()]
     if args.gemma and "gemma" not in chosen:
