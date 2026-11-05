@@ -17,7 +17,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
   `CLI-dev`의 테스트·러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험한다.
 - 새 파일을 `CLI/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
-- `CLI/` 맨 위에는 도구 폴더 외에 배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`과
+- `CLI/` 맨 위에는 도구 폴더 외에 배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`과
   OpenCode 전역 지침 원본 `opencode/AGENTS.md`만 둔다. 사용자가 배포 전에 넣는 `opencode/opencode.jsonc`(사내 LLM 주소)와
   설치가 만드는 `data/`(보관 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
 

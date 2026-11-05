@@ -27,6 +27,7 @@ AI_WORK/
 │   └── doc-classifier/        # 폴더 파일 목록화/분류 0.9.2 (다른 개발자 담당으로 보관)
 ├── CLI/                       # 사내 PC C:\CLI로 그대로 복사. 실행 파일과 스킬(SKILL.md)만
 │   ├── setup.py / setup.bat   # 배포 설치: 스킬·전역 지침·opencode.jsonc를 OpenCode 설정 폴더로, 시스템 PATH 등록, 동작 확인
+│   ├── web.bat                # OpenCode Web UI를 이 PC에서 바로 띄움 (opencode web, 127.0.0.1:4096, 브라우저 열기)
 │   ├── opencode/AGENTS.md     # OpenCode 전역 지침 원본 (%USERPROFILE%\.config\opencode\AGENTS.md로 복사)
 │   │                          # opencode/opencode.jsonc는 사용자가 배포 전에 넣음 (사내 LLM 주소, git 제외)
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
@@ -80,6 +81,8 @@ python -m pytest -q              # 전체 도구 테스트
    `%USERPROFILE%\.config\opencode\`로 복사(바뀐 것만, 이전 파일은 `C:\CLI\data\setup_backup_<시각>`에 보관)하고,
    시스템 PATH에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 없을 때만 추가한 뒤, 도구가 동작하는지 확인합니다. `--check`는 확인만.
 4. 새 터미널을 열고 OpenCode(TUI, Desktop)를 다시 시작합니다.
+5. (선택) 브라우저 화면으로 쓰려면 `C:\CLI\web.bat`을 두 번 클릭합니다. 문서 폴더에서 `opencode web --port 4096 --hostname 127.0.0.1`을
+   실행하고 브라우저를 엽니다(이 PC에서만 접속). 다른 폴더·포트는 `web.bat "D:\작업" 4097`, 창을 닫으면 서버가 꺼집니다.
 
 ## 관리 방법
 
