@@ -427,7 +427,7 @@ def test_destructive_flag_marks_only_overwrite_delete_send():
 
 def test_unsafe_next_commands_checker():
     """conftest의 next_commands 점검(모든 테스트에 자동 적용)이 문서를 바꾸는 명령을 잡는지."""
-    from conftest import unsafe_next_commands
+    from office_helpers import unsafe_next_commands   # conftest 이름은 ml-kit tests와 겹쳐 함께 돌 때 다른 모듈을 집음
     nxt = lambda *cmds: {"status": "ok", "next_commands": [{"command": f'python "C:\\CLI\\{c}"'} for c in cmds]}
     assert unsafe_next_commands(nxt('word.py" write --file "a.md"', 'office.py" transfer --from excel'))
     assert unsafe_next_commands(nxt('excel.py" chart --target active --range A1:B3'))

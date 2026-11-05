@@ -4,6 +4,7 @@
 """
 import json
 import os
+import re
 import sys
 import zipfile
 
@@ -165,3 +166,25 @@ def formula_xlsx(path, n=1, cached=False):
     if cached:
         set_cached_value(str(path), "<v></v>", "<v>30</v>")
     return str(path)
+
+
+# next_commands = 묻지 않고 실행해도 되는 것(읽기·미리보기)만 (1.4.75). conftest가 모든 테스트에 자동 적용.
+_SAFE_NEXT = {"attachments", "calendar", "check", "diff", "folders", "index", "info", "list", "outline", "read",
+              "search", "thread", "windows", "help"}
+_NEXT_RE = re.compile(r'(\w+)\.py"?\s+(\S+)')
+
+
+def unsafe_next_commands(payload):
+    """payload의 next_commands 중 문서·메일을 바꿀 수 있는 명령 목록 (예외: 같은 명령을 다시 실행하는 CONTINUE·drm_or_dialog)."""
+    if payload.get("continue") or payload.get("error_type") == "drm_or_dialog":
+        return []
+    bad = []
+    for c in payload.get("next_commands") or []:
+        cmd = c.get("command", "")
+        m = _NEXT_RE.search(cmd)
+        sub = m.group(2) if m else ""
+        listing = re.search(r"--action\s+\"?list\b", cmd) or (sub == "undo" and "--list" in cmd) \
+            or (sub in ("notes", "revisions", "comment") and not re.search(r"--(text|file|action)\b", cmd))
+        if not (sub in _SAFE_NEXT or "--dry-run" in cmd or listing):
+            bad.append(cmd)
+    return bad
