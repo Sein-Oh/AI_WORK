@@ -48,7 +48,7 @@
 |---|---|
 | `VERIFIED:` | 성공. `preview`를 알리고 끝낸다. 같은 명령을 다시 실행하거나 결과를 다시 열어 보지 않는다. `confirm_commands`가 있으면 3장 6번대로 사용자에게 묻는다. |
 | `UNVERIFIED:` | 실행은 됐지만 도구가 결과를 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
-| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 반복 (최대 20번, 그래도 `CONTINUE:`이면 `progress`를 알리고 멈춤). |
+| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 반복한다. `progress`가 바뀌는 동안 계속하고, 바로 앞과 같은 `progress`가 나오거나(2번 연속) 60번을 넘으면 멈추고 `progress`를 알린다. |
 | `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그 명령을 그대로 **1번만** 실행한다. 아니면 `[추천]` 뒤의 값으로 바꿔 **1번만** 다시 실행한다. 또 실패하면 message를 그대로 알린다. |
 | `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). 고른 값으로 1번 실행한다. 후보가 `1) python ...` 같은 전체 명령이면 고른 번호의 `next_commands` 명령을 그대로 1번 실행한다. |
 | `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `error_type`이 `needs_user_decision`이면 사용자에게 묻고, 원할 때만 `next_commands[0].command`를 그대로 1번 실행한다 (없으면 directive가 말한 옵션을 붙여 1번, 5장). |
