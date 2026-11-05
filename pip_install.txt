@@ -1,0 +1,34 @@
+CLI 도구 2종(ml-kit, office-cli) 패키지 설치 명령 (WinPython)
+버전은 AGENTS.md "사용자 환경" 표 기준. 모든 PC에 같은 버전을 설치한다 (ml-kit 모델(joblib)은 버전에 민감).
+
+1. WinPython 활성화
+   WinPython 폴더의 "WinPython Command Prompt.exe"(또는 "WinPython Powershell Prompt.exe")를 실행한다.
+   그 창에서 아래 명령으로 WinPython의 python인지 확인한다.
+
+python -c "import sys; print(sys.executable, sys.version)"
+
+   출력이 WinPython 폴더 아래의 python.exe, 3.13.x 이면 된다.
+
+2. 설치 (아래 셋 중 하나를 그 창에 그대로 붙여넣기)
+
+2-1. pip 저장소에서 설치 (인터넷 PC 또는 사내 미러)
+
+python -m pip install numpy joblib pandas==3.0.5 scikit-learn==1.9.0 scipy==1.18.1 openpyxl==3.1.5 python-docx==1.2.0 python-pptx==1.0.2 matplotlib==3.11.1 pymupdf==1.28.2 olefile==0.47 pywin32==312 pytest==9.1.1
+
+2-2. 인터넷 PC에서 wheel 받기 (D:\wheels는 원하는 폴더로)
+
+python -m pip download --only-binary=:all: --platform win_amd64 --python-version 3.13 --implementation cp --dest D:\wheels numpy joblib pandas==3.0.5 scikit-learn==1.9.0 scipy==1.18.1 openpyxl==3.1.5 python-docx==1.2.0 python-pptx==1.0.2 matplotlib==3.11.1 pymupdf==1.28.2 olefile==0.47 pywin32==312 pytest==9.1.1
+
+2-3. 폐쇄망 PC에서 반입한 wheel 폴더로 설치
+
+python -m pip install --no-index --find-links D:\wheels numpy joblib pandas==3.0.5 scikit-learn==1.9.0 scipy==1.18.1 openpyxl==3.1.5 python-docx==1.2.0 python-pptx==1.0.2 matplotlib==3.11.1 pymupdf==1.28.2 olefile==0.47 pywin32==312 pytest==9.1.1
+
+3. 확인 (오류 없이 버전이 나오면 된다)
+
+python -c "import pandas, sklearn, scipy, openpyxl, docx, pptx, matplotlib, pymupdf, olefile, win32com.client, pytest; print(pandas.__version__, sklearn.__version__, scipy.__version__)"
+
+참고
+- 쓰는 곳: ml-kit = pandas, scikit-learn, scipy, numpy, joblib / office-cli = pywin32, python-pptx, pymupdf, olefile
+  / 둘 다 = openpyxl, python-docx, matplotlib / pytest = CLI-dev 테스트용.
+- 이미 같은 버전이 있으면 "Requirement already satisfied"로 넘어간다. 다른 버전이 있으면 표 버전으로 바뀐다.
+- 명령은 python -m pip 만 쓴다 (py, python3, 단독 pip 금지).
