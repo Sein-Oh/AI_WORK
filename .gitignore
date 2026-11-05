@@ -29,6 +29,13 @@ CLI/*/data/
 CLI/*/cache/
 CLI/office-cli/config.json
 
+# 배포 설치(CLI/setup.py): 보관 폴더(data/setup_backup_<시각>), 사용자가 넣는 OpenCode 설정(사내 LLM 주소)
+CLI/data/
+CLI/opencode/opencode.jsonc
+# 배포 때 C:\CLI에 함께 두는 것 (저장소에는 넣지 않음)
+CLI/python/
+CLI/opencode.exe
+
 # 실기 자동 점검 결과 (CLI-dev/run_all_tests.py)
 CLI-dev/result_*.md
 

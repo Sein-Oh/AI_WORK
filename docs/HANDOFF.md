@@ -48,7 +48,7 @@
 | office-cli 1.4.40~1.4.48 | 관리자 권한 실행이면 "열린 문서 없음" 대신 권한 안내(`elevated_process`), `range delete` 전 `#REF!`가 될 수식 칸 알림, reader 캐시의 확인 실패 다시 확인, 배열 수식 범위 전체를 수식 칸으로, 멀리 떨어진 계산 안 된 수식 칸 처리, `read --where`의 또는(`\|`)과 따옴표 값, 정렬 기준 4개 이상, 라이브러리 없음은 `missing_library`, next_commands 다듬기 |
 | office-cli 1.4.49~1.4.51 | 규격서 대조 작업: `reader.py read --section`(캐시 문서 장절 읽기), `excel.py comment`(칸 메모 목록·달기·지우기, CSV로 여러 개), `reader.py search` 재현율(조사·단위 표기·전각 허용, 0건이면 부분/오타 일치로 넓힘 `match_mode`, 점수 순위, `data\synonyms.txt` 동의어) |
 | office-cli 1.4.52~1.4.61 | `transfer --method`·`search -c` 삭제, 여러 칸 한 번에 `excel.py write --cells`, 시트 보호 `sheet_protected`와 거부된 수식 `[추천]`(되돌림), reader 등록·검색 `CONTINUE:`(`OFFICE_CLI_TIME_LIMIT`), 규격 대조 `excel.py check`, 열기 감시 30초 `drm_or_dialog`, `reader.py diff`(판 비교), 메일 짧은 `id`(긴 값은 `entry_id`)·`thread`·`calendar --days`, `word.py fill --file` |
-| office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`CLI/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
+| office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`CLI/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`(지금은 `CLI/setup.py`)가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
 | office-cli 1.4.63 | 독립 검토 버그 수정: 2열 표 파일(칸값·메모·값 파일)의 셋째 열은 쓰기 전에 STOP_RETRY(큰따옴표 안내), `--cells` 따옴표·수식 나누기, `comment --append` 재실행 중복, 엑셀 쓰기 실패 후 되돌리기가 글자 상수(`007`, `1-2`)를 바꾸던 것, `check`가 같은 문장의 다른 항목 조건을 섞던 것과 칸 단위 없음은 `판단필요`, `word.py fill` 표 칸에 행·열 머리글 표시·문서 보호 확인, 열기 감시가 사용자 문서가 있는 Word·PowerPoint를 끝내지 않음 |
 | office-cli 1.4.73 | 10차 검토 수정: 사용자 확인이 필요한 명령(메일 send, 미리보기 뒤 실제 변경)은 `next_commands`가 아니라 `confirm_commands`로(`needs_user_confirm` 없앰, 전역 지침 3장 6번 예외), send는 발송 원장(`outlook_drafts.json`, 잠금 아래 '보냄' 먼저 기록)에 있는 이 도구가 만든 초안이고 임시 보관함에 있으며 `Sent`·`Submitted`가 아닐 때만(동시·두 번 발송, 지운 초안, 사용자의 다른 초안 거부, id 오류는 `next_commands` 없는 거부), 없앤 `--send`는 exit 2 + `[추천]`. reader 층 A 경계를 허용 목록으로(숫자 앞·단위 뒤), 앞이 숫자뿐인 `/`의 분수·비율 제외, 스니펫 층 B 자리는 `[[ ]]` |
 | office-cli 1.4.74 | 관리자 권한 안내는 UAC로 권한을 올린 창일 때만 (UAC가 꺼진 회사 PC는 모든 프로그램이 같은 권한이라 안내하지 않음) |
@@ -67,7 +67,7 @@
 | office-cli 1.4.37 | SKILL.md에 빠졌던 기존 기능(메일 list/folders·search --folder/--where·reply --all·new --cc·--body-file, PPT slide add/duplicate/delete/move, 엑셀 sheet/range/export/style/replace --all-sheets·차트 종류, 워드 --toc/--callout·replace --highlight)을 넣고 SKILL.md의 명령·옵션이 argparse에 있는지 테스트로 대조. 새 기능: `outlook.py list|search --days N|--since YYYY-MM-DD`(period), `excel.py range --action insert|delete`(값이 있으면 needs_user_decision, `--dry-run`, `--overwrite`), `range --action sort --by "부서,금액" [--desc]`, `read --where "금액 >= 100; 부서 = 영업"`(`row_numbers`) |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
-| ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `CLI-dev/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |
+| ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `CLI/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |
 | ml-kit 2.9.14 | 숫자 입력에 쉼표(`-i "압력=500,000"`)가 있으면 `STOP_RETRY` + 쉼표를 뺀 전체 명령 `[추천]`. 예측 JSON의 `drift_warnings` 키 삭제(`extrapolation_warnings`는 20개까지, 전체 수 `extrapolation_warning_count`). 한 버전이 모든 타겟의 최고면 `ml_report -f`가 다시 학습하지 않고 그 버전을 씀(`made_best: false`). 머리글 행 안내는 열 이름 `[추천]`/`[후보]` 또는 `--header-row`. 입력+타겟이 다른 행이 10개 미만이면 `STOP_RETRY` |
 | ml-kit 2.9.15 | 클래스가 많고 행이 적은 분류(10~15행)도 내부 오류 없이 학습. 숫자가 대부분인 단위 행은 `STOP_RETRY`, `[추천]` 머리글 행에 단위 행도 함께(전체 명령). 단위 행이 있는 새 파일을 옵션 없이 예측하면 `--unit-row`를 넣은 `[추천]` 명령. `--history`의 `best_version`(새 키 `best_version_dir`)과 보고서 `-d`는 모든 타겟의 최고가 있는 버전. 엑셀이 없는 PC의 보고서는 성능예측표를 확인하지 못해 `UNVERIFIED:` |
 | ml-kit 2.9.16 | 범주·글자 타겟이 든 첫 데이터 행을 단위 행으로 보지 않음(`[추천]`에 틀린 `--unit-row`가 없고, 그런 `--unit-row`는 `STOP_RETRY`). 단위 없이 학습한 모델로 단위 행이 있는 새 파일을 예측하면 `--data-row`를 넣은 `[추천]` 명령. `ml_map --points`도 머리글 행 `[추천]` |
@@ -109,8 +109,10 @@
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
-1. 준비: `C:\CLI\ml-kit`, `C:\CLI\office-cli`, `C:\CLI-dev`를 지우고 새로 붙여넣음(`C:\CLI\python`, `opencode.exe`는 둠).
-   시험 폴더는 모두 `C:\CLI-dev\work\` 아래라 함께 지워짐. `python apply_skills.py`(C:\CLI-dev)로 OpenCode 스킬(ml-kit, office 4개: office-excel·office-doc·office-mail·office-spec)과 전역 지침(`CLI-dev/opencode/AGENTS.md`)을 적용하고 OpenCode 다시 시작 (옛 `skills\office-cli` 폴더는 보관 후 지워짐)
+1. 준비: `C:\CLI\ml-kit`, `C:\CLI\office-cli`, `C:\CLI\opencode\AGENTS.md`, `C:\CLI\setup.py`·`setup.bat`, `C:\CLI-dev`를 지우고 새로 붙여넣음
+   (`C:\CLI\python`, `opencode.exe`, `C:\CLI\opencode\opencode.jsonc`는 둠). 시험 폴더는 모두 `C:\CLI-dev\work\` 아래라 함께 지워짐.
+   `C:\CLI\setup.bat` 두 번 클릭(또는 `python C:\CLI\setup.py`)으로 OpenCode 스킬(ml-kit, office 4개: office-excel·office-doc·office-mail·office-spec),
+   전역 지침(`CLI/opencode/AGENTS.md`), `opencode.jsonc`를 적용하고 시스템 PATH 확인 -> 새 터미널·OpenCode 다시 시작 (옛 `skills\office-cli` 폴더는 보관 후 지워짐)
 2. 자동 점검 (명령 하나, 질문 없음, 40~70분):
    ```powershell
    cd C:\CLI-dev
@@ -124,6 +126,11 @@
 5. `result_회사PC_<시각>.md`, 눈 확인 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림
 
 회사 PC에서만 확인할 수 있는 것: 문서 보안(DRM) 영향, Office 16 차트 전달 방식, Gemma의 요청 처리, 사내 API 채점(`--judge`).
+
+배포 절차 (사용자 PC, `C:\CLI` 하나만 줌): `CLI` 폴더(저장소 `CLI/` + WinPython `python\` + `opencode.exe`)를 `C:\`에 복사 ->
+사내 LLM 주소가 든 `opencode.jsonc`를 `C:\CLI\opencode\`에 넣어 둠(git 제외) -> `C:\CLI\setup.bat` 두 번 클릭 -> 새 터미널·OpenCode 재시작.
+`setup.py`가 바꾸는 것: OpenCode 설정 폴더의 스킬·`AGENTS.md`·`opencode.jsonc`(이전 파일은 `C:\CLI\data\setup_backup_<시각>`),
+시스템 PATH(`C:\CLI\python`, `C:\CLI\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
 
 ## 4. 지난 실기 결과 요약
 - 집 PC(2026-10-31, Office 2007, ml-kit 2.9.10 / office-cli 1.4.9): beta check 27/27(F7 포함), pytest 통과, ml-kit 실기 14/14, office-cli 실기 PASS 69·ENV-SKIP 2(PDF 추가 기능 없음), UNVERIFIED 0건, 눈 확인 V1~V7·V9~V10 통과

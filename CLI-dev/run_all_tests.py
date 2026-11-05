@@ -434,7 +434,7 @@ def step_diag(stage, args, ctx):
             stage.fail(f"{what}: {broken[0][:200]}")
         else:
             stage.passed += 1
-    lines += ["", "[OpenCode 스킬, 전역 지침 (apply_skills.py --check)]"]
+    lines += ["", "[OpenCode 스킬, 전역 지침, PATH (C:\\CLI\\setup.py --check)]"]
     try:
         diag_skills(stage, lines)
     except Exception as e:
@@ -444,14 +444,30 @@ def step_diag(stage, args, ctx):
     stage.details.append(("진단 내용", text))
 
 
-def diag_skills(stage, lines, config_dir=None):
-    """OpenCode 설정 폴더의 SKILL.md, AGENTS.md가 C:\\CLI, C:\\CLI-dev와 같은지. 설정 폴더가 없으면(클라우드 등) 참고만.
-    다르거나 옛 스킬 폴더(skills\\office-cli)가 남아 있으면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: python apply_skills.py)."""
+def diag_skills(stage, lines, config_dir=None, reg=None):
+    """OpenCode 설정 폴더의 SKILL.md, AGENTS.md, opencode.jsonc가 C:\\CLI와 같은지, 시스템 PATH에 C:\\CLI\\python이 있는지
+    (C:\\CLI\\setup.py --check와 같은 비교, PATH는 읽기만). 설정 폴더가 없으면(클라우드 등) 참고만.
+    다르거나 옛 스킬 폴더(skills\\office-cli)가 남아 있으면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: C:\\CLI\\setup.bat)."""
     import importlib.util
-    spec = importlib.util.spec_from_file_location("apply_skills", os.path.join(HERE, "apply_skills.py"))
+    spec = importlib.util.spec_from_file_location("cli_setup", os.path.join(CLI_DIR, "setup.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    mod.HERE, mod.CLI_DIR = HERE, CLI_DIR
+    mod.HERE = CLI_DIR
+    fix = "C:\\CLI\\setup.bat(또는 python C:\\CLI\\setup.py) 실행 후 새 터미널·OpenCode 다시 시작"
+    try:
+        missing = mod.missing_path_entries(reg)
+    except OSError as e:
+        missing = f"읽지 못함 ({type(e).__name__}: {e})"
+    if isinstance(missing, str):
+        lines.append(f"  시스템 PATH를 {missing}")
+    elif missing is None:
+        lines.append("  시스템 PATH: Windows가 아니라 확인 안 함")
+    elif missing:
+        lines.append("  시스템 PATH에 없음: " + ", ".join(missing))
+        stage.fail("시스템 PATH에 없음 (" + ", ".join(missing) + "). " + fix)
+    else:
+        lines.append("  시스템 PATH: " + ", ".join(mod.path_entries()) + " 있음")
+        stage.passed += 1
     cfg = config_dir or mod.default_config_dir()
     if not os.path.isdir(cfg):
         lines.append(f"  OpenCode 설정 폴더 없음 ({cfg}): 확인 안 함")
@@ -459,9 +475,12 @@ def diag_skills(stage, lines, config_dir=None):
     rows = mod.compare(cfg)
     lines += [f"  {mod.label(*r)}" for r in rows]
     bad = [r for r in rows if r[3] != "같음"]
+    src, dst, state = mod.jsonc_state(cfg)
+    lines.append(f"  opencode.jsonc: {state}  {dst}")
+    if state in ("다름", "새 파일"):
+        bad.append(("opencode.jsonc", src, dst, state))
     if bad:
-        stage.fail("OpenCode 스킬/지침이 C:\\CLI와 다름 (" + ", ".join(f"{r[0]} {r[3]}" for r in bad)
-                   + "). C:\\CLI-dev에서 python apply_skills.py 실행 후 OpenCode 다시 시작")
+        stage.fail("OpenCode 스킬/지침이 C:\\CLI와 다름 (" + ", ".join(f"{r[0]} {r[3]}" for r in bad) + "). " + fix)
     else:
         stage.passed += 1
 

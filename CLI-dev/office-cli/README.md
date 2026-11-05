@@ -7,7 +7,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
   [`office-doc`](../../CLI/office-cli/skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
   [`office-mail`](../../CLI/office-cli/skills/office-mail/SKILL.md) (outlook.py),
   [`office-spec`](../../CLI/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment).
-  공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`CLI-dev/opencode/AGENTS.md`](../opencode/AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
+  공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`CLI/opencode/AGENTS.md`](../../CLI/opencode/AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
 - 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../docs/history/office-cli_WORK_PLAN_1.0.md)
 

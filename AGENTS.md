@@ -17,6 +17,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
   `CLI-dev`의 테스트·러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험한다.
 - 새 파일을 `CLI/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
+- `CLI/` 맨 위에는 도구 폴더 외에 배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`과
+  OpenCode 전역 지침 원본 `opencode/AGENTS.md`만 둔다. 사용자가 배포 전에 넣는 `opencode/opencode.jsonc`(사내 LLM 주소)와
+  설치가 만드는 `data/`(보관 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
 
 ## 사용자 환경 (모든 작업의 전제)
 | 항목 | 값 |
@@ -135,5 +138,5 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 5. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (상세는 README.md).
 6. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/SKILL.md`는 `ml-kit`,
    `CLI/office-cli/skills/office-excel/SKILL.md`는 `office-excel`), frontmatter는 name/description/license/compatibility/metadata만.
-   보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `CLI-dev/apply_skills.py`
-   (설치·옛 폴더 정리)와 전역 지침 `CLI-dev/opencode/AGENTS.md` 3장 표를 함께 고친다.
+   보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `CLI/setup.py`
+   (설치·옛 폴더 정리)와 전역 지침 `CLI/opencode/AGENTS.md` 3장 표를 함께 고친다.
