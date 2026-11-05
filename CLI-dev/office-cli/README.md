@@ -29,7 +29,7 @@ CLI-dev/office-cli/  개발·실기 테스트용 (사내 PC C:\CLI-dev\office-cl
 ├── README.md / CHANGELOG.md / TEST_CHECKLIST.md / requirements.txt
 ├── tools/run_win_tests.py  Windows 실기 테스트 러너 (판단 규칙 tools/win_test_rules.py)
 ├── tools/office-cli-test/SKILL.md  실기 테스트를 에이전트가 돌리는 스킬 (스킬 폴더 office-cli-test에 SKILL.md만 복사)
-├── tools/make_office_samples.py  Gemma 종합 테스트 office-cli 묶음(O1~O5)의 샘플 파일 (agent_scenarios.yaml의 S1)
+├── tools/make_office_samples.py  Gemma 종합 테스트 office-cli 묶음(O1~O5)의 샘플 파일 (agent_scenarios.py의 S1)
 └── tests/       오프라인 테스트 (가짜 COM + 실제 샘플 파일, 도구는 ../../CLI/office-cli에서 불러옴)
 ```
 

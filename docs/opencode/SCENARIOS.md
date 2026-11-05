@@ -3,7 +3,7 @@
 사내 LLM이 전역 AGENTS.md와 스킬(ml-kit, office 4개)을 지키는지 직접 요청을 입력해 확인합니다. 40~50분 걸립니다.
 판정은 화면에 보이는 것(실행한 명령, 마지막 답변)만으로 할 수 있게 적었습니다.
 
-자동 채점되는 요청(ml-kit S/A/M/P/R/X, office-cli 묶음 O)은 `CLI-dev/agent_scenarios.yaml`에 있고,
+자동 채점되는 요청(ml-kit S/A/M/P/R/X, office-cli 묶음 O)은 `CLI-dev/agent_scenarios.py`(데이터만 담은 파이썬 모듈)에 있고,
 `run_all_tests.py --gemma`나 메시지 팩([`자동테스트/README.md`](자동테스트/README.md))으로 돌립니다 ([`실기테스트.md`](실기테스트.md) 3장).
 office-cli 묶음 O는 닫힌 파일로 하는 규격 대조(O1), 여러 칸 쓰기(O2), 메일 첨부 읽기(O3, 수동 전용), 워드 문단 덧붙이기(O4),
 양식 채우기(O5)이고, 아래 묶음 2~5는 열린 문서와 화면을 사람이 보는 요청입니다.

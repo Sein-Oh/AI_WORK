@@ -4,7 +4,6 @@ windows, 문서 세션(사용자 창 미간섭, 읽기 전용, 파일 열기·�
 import contextlib
 import json
 import os
-import shlex
 import time
 import types
 
@@ -20,7 +19,7 @@ from fake_excel import FakeExcelWorkbook, FakeXlApp
 from fake_office import FakeExcelApp, FakePptApp, FakeWordDoc, FakeWorkbook, FakeWorkbooks, make_win32com
 from fake_ppt import FakePresentation
 from fake_word import FakeWordDocument
-from office_helpers import error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
+from office_helpers import split_command, error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
 
 
 @pytest.fixture
@@ -225,10 +224,18 @@ def _volatile_open(monkeypatch):
     monkeypatch.setattr(off, "_new_instance", lambda kind: FakeExcelApp())
 
 
+@pytest.mark.parametrize("value", [r"C:\work\보고서 1.xlsx", r"C:\work\a.xlsx", r"\\server\공유\b.docx", 'say "hi"',
+                                   "A=1,B=2", "", r"C:\a\b"])
+def test_split_command_reads_quote_arg_like_windows(value):
+    """테스트 도우미 split_command는 도구의 quote_arg로 만든 명령을 Windows처럼 나눈다 (shlex posix는 백슬래시를 지움)."""
+    cmd = f"python {rt.quote_arg(r'C:\CLI\office-cli\excel.py')} read --target {rt.quote_arg(value)} --sheet S1"
+    assert split_command(cmd) == ["python", r"C:\CLI\office-cli\excel.py", "read", "--target", value, "--sheet", "S1"]
+
+
 def _recommended_argv(message):
     """message의 '[추천] python .../office.py <인자>'에서 인자만."""
     cmd = message.split("[추천] ", 1)[1]
-    parts = shlex.split(cmd)
+    parts = split_command(cmd)
     assert parts[0] == "python" and parts[1].endswith("office.py")
     return parts[2:]
 

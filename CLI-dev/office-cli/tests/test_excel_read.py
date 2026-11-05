@@ -3,7 +3,6 @@ import datetime as dt
 import json
 import os
 import re
-import shlex
 import types
 import zipfile
 
@@ -16,7 +15,7 @@ import office
 import reader
 from fake_excel import FakeExcelWorkbook, FakeRange, FakeXlApp
 from fake_office import make_win32com
-from office_helpers import error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
+from office_helpers import split_command, error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
 
 
 def _strip_dimension(src, dst):
@@ -1155,7 +1154,7 @@ def test_check_time_limit_marks_rest_needs_review(check_env, capsys, monkeypatch
     assert "명령 시간 제한으로 2행(시험!D3부터)은 대조하지 못함" in d and "확인을 받은 뒤 next_commands[1]을 그대로 실행" in d, d
     # 남은 범위 명령: 머리글(값 열 단위)은 원래 범위 위 행에서 읽음
     monkeypatch.setattr(rt, "time_up", lambda reserve=0: False)
-    code, out = run_excel(capsys, *shlex.split(cmds[1], posix=True)[2:])
+    code, out = run_excel(capsys, *split_command(cmds[1])[2:])
     assert code == 0 and [r["cell"] for r in out["results"]] == ["시험!D3", "시험!D4"], out
     assert all(r["reason"] != "대조하지 못함 (명령 시간 제한)" for r in out["results"]), out
 
@@ -1181,7 +1180,7 @@ def test_check_rest_rows_without_header_pass_header_row_0(check_env, capsys, mon
     cmds = [c["command"] for c in out["next_commands"]]
     assert "--range B2:D3" in cmds[1] and "--header-row 0" in cmds[1], cmds[1]
     monkeypatch.setattr(rt, "time_up", lambda reserve=0: False)
-    code, rest = run_excel(capsys, *shlex.split(cmds[1], posix=True)[2:])
+    code, rest = run_excel(capsys, *split_command(cmds[1])[2:])
     assert code == 0 and [(r["cell"], r["verdict"], r["reason"]) for r in rest["results"]] == want, (rest, want)
     # 0은 머리글 없음, 범위 첫 행 이상은 인자 오류
     code, bad = run_excel(capsys, *base, "--range", "B2:D3", "--header-row", "2")

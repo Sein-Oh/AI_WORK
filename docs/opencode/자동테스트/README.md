@@ -1,6 +1,6 @@
 # OpenCode 종합 테스트 메시지 팩
 
-agent_scenarios.yaml에서 만든 파일입니다. 직접 고치지 말고 yaml을 고친 뒤 `python grade_opencode.py --make-pack`으로 다시 만듭니다.
+agent_scenarios.py에서 만든 파일입니다. 직접 고치지 말고 agent_scenarios.py를 고친 뒤 `python grade_opencode.py --make-pack`으로 다시 만듭니다.
 
 ## 1. 도구 점검 (정답을 아는 샘플로 도구만 확인, 5~10분)
 

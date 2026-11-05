@@ -7,7 +7,6 @@ import json
 import os
 import random
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -19,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
-from mlkit_helpers import HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
+from mlkit_helpers import split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
 import ml_train as mt  # noqa: E402
 
@@ -753,7 +752,7 @@ def test_where_on_code_column_warns_other_notation(tmp_path):
     assert w and "빼지 않음" in w[0] and "[추천] python " in w[0], res.get("warnings")
     cmd = res["next_commands"][0]["command"]
     assert "--exclude-where \"월 = 1 | 월 = 01\"" in cmd and cmd.count("--exclude-where") == 1, cmd
-    proc = subprocess.run([sys.executable] + shlex.split(cmd)[1:], capture_output=True, text=True, encoding="utf-8")
+    proc = subprocess.run([sys.executable] + split_command(cmd)[1:], capture_output=True, text=True, encoding="utf-8")
     again = json.loads(proc.stdout)
     assert again["exclusions"]["수율"]["condition"] == 12 and not any("'01'" in x for x in again.get("warnings", []))
 
@@ -923,7 +922,7 @@ def test_next_command_runs(sample_model):
     assert payload["next_commands"], payload
     cmd = payload["next_commands"][0]["command"].replace("<새데이터.xlsx>", data)
     assert cmd.startswith("python ")
-    args = shlex.split(cmd)[1:]
+    args = split_command(cmd)[1:]
     proc = subprocess.run([sys.executable] + args, capture_output=True, text=True, encoding="utf-8", timeout=600)
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     assert out["status"] == "ok", proc.stderr[-2000:]

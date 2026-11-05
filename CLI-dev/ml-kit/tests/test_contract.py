@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_sample  # noqa: E402
-from mlkit_helpers import FEATURES, HAS_DOCX, INLINE, KIT, TARGET, run_fail, run_raw, run_tool  # noqa: E402
+from mlkit_helpers import split_command, FEATURES, HAS_DOCX, INLINE, KIT, TARGET, run_fail, run_raw, run_tool  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 
@@ -182,8 +182,7 @@ def test_predict_missing_inputs_offer_median_fill(trained):
     assert abs(payload["fill_values"]["수분함량(%)"] - med) < 1e-3 and "수분함량(%)=" in payload["message"]
     nxt = payload["next_commands"][0]
     assert nxt["needs_user_confirm"] is True and nxt["command"].startswith("python ")
-    import shlex
-    ok = run_tool("ml_predict.py", *shlex.split(nxt["command"])[2:])               # the offered command works as given
+    ok = run_tool("ml_predict.py", *split_command(nxt["command"])[2:])               # the offered command works as given
     assert ok["predictions_summary"][TARGET]["predictions"] and not ok.get("missing_input_warning")
     # a misspelled key is not filled: the usual [후보] for the name
     bad = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함럄=20")
@@ -196,8 +195,7 @@ def test_train_target_in_features_offers_both_commands(trained):
     payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
                        "-y", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
     assert "타겟 누수:" in payload["message"] and "[후보] 1) python" in payload["message"]
-    import shlex
-    one, two = (shlex.split(c["command"]) for c in payload["next_commands"])
+    one, two = (split_command(c["command"]) for c in payload["next_commands"])
     assert one[one.index("-y") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("-x") + 1]
     assert two[two.index("-x") + 1] == "반응온도(°C),소비전력(kW)" and two[two.index("-y") + 1] == "생산효율(%),수분함량(%)"
     assert "--desc" in one and "--desc" in two                                    # the other options are kept

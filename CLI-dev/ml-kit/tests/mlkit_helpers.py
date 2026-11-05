@@ -38,6 +38,54 @@ except ImportError:
     HAS_MPL = False
 
 
+def split_command(cmd):
+    """도구가 낸 명령 문자열(quote_arg 규칙: 공백 등이 있으면 "...", 안의 " 는 \\")을 Windows처럼 인자 목록으로 나눈다.
+
+    Windows 명령줄 규칙(CommandLineToArgvW, MS C 런타임)을 따른다: 백슬래시는 " 앞에서만 특별하고
+    (2n개 + " -> n개 + 따옴표 열고 닫기, 2n+1개 + " -> n개 + 글자 "), 그 밖에서는 글자 그대로다.
+    shlex.split(posix=True)는 C:\\work\\a.xlsx 의 백슬래시를 지워 Windows 경로가 깨지므로 테스트는 이 함수를 쓴다.
+    """
+    args, cur, have, quoted, i, n = [], [], False, False, 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if ch == "\\":
+            j = i
+            while j < n and cmd[j] == "\\":
+                j += 1
+            count = j - i
+            if j < n and cmd[j] == '"':
+                cur.append("\\" * (count // 2))
+                if count % 2:
+                    cur.append('"')
+                else:
+                    quoted = not quoted
+                i, have = j + 1, True
+                continue
+            cur.append("\\" * count)
+            i, have = j, True
+            continue
+        if ch == '"':
+            if quoted and i + 1 < n and cmd[i + 1] == '"':       # 따옴표 안의 "" -> 글자 "
+                cur.append('"')
+                i += 2
+                continue
+            quoted, have = not quoted, True
+            i += 1
+            continue
+        if ch in " \t" and not quoted:
+            if have:
+                args.append("".join(cur))
+                cur, have = [], False
+            i += 1
+            continue
+        cur.append(ch)
+        have = True
+        i += 1
+    if have:
+        args.append("".join(cur))
+    return args
+
+
 # ---- CLI 실행 ----------------------------------------------------------------------------------------------
 
 def run_raw(script, *args):
@@ -87,10 +135,9 @@ def recommendation(message):
 
 def recommended_command(message):
     """전체 명령인 [추천](python <script> args...)을 (스크립트 이름, 인자 목록)으로."""
-    import shlex
     rec = recommendation(message)
     assert rec.startswith("python"), rec
-    parts = shlex.split(rec)
+    parts = split_command(rec)
     return os.path.basename(parts[1]), parts[2:]
 
 

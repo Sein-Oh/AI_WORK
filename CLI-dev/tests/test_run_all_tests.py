@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""run_all_tests.py: a silent hung child is stopped at the timeout, CLI-dev/tests is a pytest target, PyYAML is checked,
+"""run_all_tests.py: a silent hung child is stopped at the timeout, CLI-dev/tests is a pytest target, PyYAML is not needed,
 stages run in a fixed order into one result file with the summary on top and the tool error logs at the end."""
 import importlib.util
 import json
@@ -30,7 +30,7 @@ def test_normal_child_output_and_exit_code(capsys):
 
 def test_pytest_targets_and_packages():
     assert "tests" in rat.PYTEST_TARGETS and os.path.isdir(os.path.join(rat.HERE, "tests"))
-    assert rat.IMPORTS["PyYAML"] == "yaml" and "PyYAML" in rat.PACKAGES
+    assert "PyYAML" not in rat.PACKAGES                         # 시나리오는 agent_scenarios.py (회사 반입이 .yaml을 막음)
     assert set(rat.PACKAGES) == set(rat.IMPORTS)
 
 
@@ -215,6 +215,72 @@ def test_parse_pytest_summary():
     assert rat.parse_pytest("1 passed, 2 errors in 1s")[:3] == (1, 2, 0)
 
 
+def test_live_failures_merge_with_summary():
+    summary = ["FAILED tests/test_a.py::test_x - assert 1 == 2"]
+    live = rat.parse_live("..F[LIVE] FAILED tests/test_a.py::test_x - assert 1 == 2\n"
+                          "[LIVE] ERROR tests/test_b.py::test_y[a b] (setup) - ValueError: boom\n"
+                          "[LIVE] ERROR tests/test_b.py::test_y[a b] (setup) - ValueError: boom\n")
+    assert live == ["FAILED tests/test_a.py::test_x - assert 1 == 2", "ERROR tests/test_b.py::test_y[a b] (setup) - ValueError: boom"]
+    assert rat.merge_live(summary, live) == summary + [live[1]]
+    assert rat.merge_live([], live) == live                     # 시간 초과로 요약이 없을 때
+
+
+SLOW_TESTS = '''import time
+def test_fails_first():
+    assert 1 == 2, "보이는 원인"
+def test_ok():
+    pass
+def test_hangs():
+    time.sleep(120)
+'''
+
+
+def test_pytest_stage_keeps_failure_names_when_stopped_by_time_limit(iso, monkeypatch, capsys):
+    """회사 PC: ml-kit pytest가 시간 상한에 끊겨 실패 F 11개의 이름이 남지 않았다. 이제 플러그인이 실패를 생기는 즉시 [LIVE] 줄로
+    내보내므로 끊겨도 실패 이름과 원인이 결과에 남고, 시간 초과도 따로 FAIL로 적힌다."""
+    folder = iso / "tests"
+    folder.mkdir()
+    (folder / "test_slow.py").write_text(SLOW_TESTS, encoding="utf-8")
+    (iso / "pytest_live_report.py").write_text(open(os.path.join(os.path.dirname(HERE), "pytest_live_report.py"),
+                                                    encoding="utf-8").read(), encoding="utf-8")
+    monkeypatch.setattr(rat, "PYTEST_TARGETS", ("tests",))
+    st = rat.Stage("pytest")
+    rat.step_pytest(st, type("A", (), {"pytest_timeout": 20})(), {})
+    assert any("test_slow.py::test_fails_first" in f and "보이는 원인" in f for f in st.failures), st.failures
+    assert any("시간 상한 20초로 중단" in f for f in st.failures), st.failures
+    assert st.failed == 2
+
+
+def test_diag_template_damage_is_warn_when_tools_do_not_need_it(monkeypatch):
+    """python-pptx 기본 템플릿은 어느 도구도 쓰지 않음 -> 참고(WARN). python-docx 기본 템플릿 손상은 ml-kit 보고서가
+    폴더 템플릿으로 복구해 빈 문서를 만들 수 있으면 참고, 못 만들면 FAIL."""
+    monkeypatch.setattr(rat, "diag_docx", lambda lines: lines.append("docx.Document(): 스타일 4개 (정상 164), Caption 있음=False"))
+    monkeypatch.setattr(rat, "diag_pptx", lambda lines: lines.append("pptx.Presentation() 실패: PackageNotFoundError"))
+    monkeypatch.setattr(rat, "diag_new_files", lambda lines: lines.append("새로 쓴 xlsx 다시 열기: 정상"))
+    monkeypatch.setattr(rat, "diag_system", lambda lines: None)
+    monkeypatch.setattr(rat, "diag_skills", lambda stage, lines: None)
+    for report_ok, failed in ((True, 0), (False, 1)):
+        monkeypatch.setattr(rat, "diag_report_docx", lambda lines, ok=report_ok: ok)
+        st = rat.Stage("diag")
+        rat.step_diag(st, None, {})
+        assert st.failed == failed, st.failures
+        assert any("python-pptx" in w and "쓰지 않음" in w for w in st.warnings), st.warnings
+        assert any("python-docx" in w for w in st.warnings) == report_ok
+
+
+def test_report_doc_check_runs_the_real_tool_function():
+    lines = []
+    assert rat.diag_report_docx(lines) is True, lines
+    assert "ml_report.new_report_document): 정상" in lines[0]
+
+
+def test_warnings_listed_at_top_without_failing(iso, monkeypatch, capsys):
+    _fake_runners(monkeypatch, [], {"diag": lambda st: (setattr(st, "passed", 1), st.warnings.append("참고할 일"))})
+    assert rat.main(["--only", "diag", "--label", "w"]) == 0
+    text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
+    assert "### 참고 (WARN, 실패로 세지 않음) 1건" in text and "- [diag] 참고할 일" in text
+
+
 FAKE_BETA = r'''import json, os, sys
 a = sys.argv
 work = a[a.index("--dir") + 1]
@@ -252,7 +318,7 @@ def test_beta_stage_moves_report_and_isolates_tool_log(iso, monkeypatch, capsys)
 
 
 # ---------------------------------------------------------------------------
-# gemma: agent_scenarios.yaml 요청을 opencode run --format json으로 한 세션에 보내고 채점
+# gemma: agent_scenarios.py 요청을 opencode run --format json으로 한 세션에 보내고 채점
 # ---------------------------------------------------------------------------
 FAKE_OPENCODE = r'''#!/usr/bin/env python3
 """가짜 opencode: run --format json [--session ID] <요청>. 받은 인자를 calls.jsonl에 남기고 OpenCode 2.x 형식 사건을 씁니다.
@@ -295,7 +361,6 @@ def _calls(exe):
 
 @pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
 def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc, capsys):
-    pytest.importorskip("yaml")
     work = iso / "work" / "gemma"
     work.mkdir(parents=True)
     (work / "old.txt").write_text("x", encoding="utf-8")
@@ -322,7 +387,6 @@ def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc,
 
 @pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
 def test_gemma_stage_stops_when_opencode_gives_no_session(iso, fake_oc, monkeypatch, capsys):
-    pytest.importorskip("yaml")
     monkeypatch.setenv("FAKE_OC_DEAD", "1")
     work = iso / "work" / "gemma"
     assert rat.main(["--only", "gemma", "--opencode", str(fake_oc), "--gemma-dir", str(work)]) == 1
@@ -335,9 +399,7 @@ def test_all_test_folders_default_under_cli_dev_work(iso):
     """반입 때 C:\\CLI-dev를 통째로 지우면 시험 흔적도 사라지도록 기본 시험 폴더는 모두 CLI-dev\\work 아래."""
     work = str(iso / "work")
     assert rat.work_root() == work and rat.beta_work_dir("s").startswith(work)
-    import yaml
-    with open(os.path.join(os.path.dirname(HERE), "agent_scenarios.yaml"), encoding="utf-8") as f:
-        assert yaml.safe_load(f)["dir"] == "C:\\CLI-dev\\work\\gemma"
+    assert rat._load_grader().load_scenarios()[0]["dir"] == "C:\\CLI-dev\\work\\gemma"
     for rel in ("run_beta_check.py", os.path.join("office-cli", "tools", "run_win_tests.py"),
                 os.path.join("ml-kit", "tools", "run_win_tests.py"), "run_all_tests.py"):
         with open(os.path.join(os.path.dirname(HERE), rel), encoding="utf-8") as f:

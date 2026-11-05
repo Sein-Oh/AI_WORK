@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Gemma 종합 테스트(office-cli 묶음 O)용 샘플 파일을 만든다. 사람이나 Gemma가 실행하는 개발 도구 (agent_scenarios.yaml의 S1).
+"""Gemma 종합 테스트(office-cli 묶음 O)용 샘플 파일을 만든다. 사람이나 Gemma가 실행하는 개발 도구 (agent_scenarios.py의 S1).
 
     python make_office_samples.py [출력 폴더]      # 출력 폴더 생략 시 현재 폴더 아래 office_샘플 폴더
 

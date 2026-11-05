@@ -11,14 +11,13 @@
 비고가 든 단위 행·배율 숫자 단위 행과 타겟 없는 예측 파일. 매트릭스마다 4개씩 병렬로 실행한다 (별도 프로세스).
 """
 import os
-import shlex
 import sys
 
 import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlkit_helpers import FAMILIES, H, U, family_rows, run_raw, write_rows  # noqa: E402
+from mlkit_helpers import split_command, FAMILIES, H, U, family_rows, run_raw, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 N_TRAIN, N_PRED = 20, 5
@@ -96,9 +95,9 @@ def _follow(script, args, message):
     """[추천] 하나를 한 번 따른 명령: 전체 명령이면 그것, 옵션 값이면 명령에 넣거나 바꾼다."""
     rec = _recommendation(message)
     if rec.startswith("python"):
-        parts = shlex.split(rec)
+        parts = split_command(rec)
         return os.path.basename(parts[1]), parts[2:]
-    toks = shlex.split(rec)
+    toks = split_command(rec)
     assert toks and toks[0].startswith("--"), f"[추천] is not a command or an option: {rec}"
     new = list(args)
     for i in range(0, len(toks), 2):
@@ -152,7 +151,7 @@ def _predict(folder, lid, kind, how, model_res):
     if how == "template":
         args = ["-m", trained["version_dir"], "-f", path]
     else:
-        args = shlex.split(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
+        args = split_command(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
     return _run_with_one_retry("ml_predict.py", args)
 
 
@@ -325,7 +324,7 @@ def _predict_b(folder, lid, how, model_res):
     if how == "template":
         args = ["-m", trained["version_dir"], "-f", path]
     else:
-        args = shlex.split(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
+        args = split_command(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
     return _run_with_one_retry("ml_predict.py", args)
 
 
@@ -432,7 +431,7 @@ PRED_CASES_C = [(lid, kind, how) for lid in LAYOUTS_C for kind in ("units", "pla
 def _predict_args(trained, path, how):
     if how == "template":
         return ["-m", trained["version_dir"], "-f", path]
-    return shlex.split(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
+    return split_command(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
 
 
 def _predict_c(folder, lid, how, model_res):

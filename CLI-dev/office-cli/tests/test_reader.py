@@ -17,7 +17,7 @@ import _runtime as rt
 import office
 import reader
 import word
-from office_helpers import error_log_text, formula_xlsx, run_fresh, run_main, SECRET, set_cached_value, TOOL_DIR
+from office_helpers import split_command, error_log_text, formula_xlsx, run_fresh, run_main, SECRET, set_cached_value, TOOL_DIR
 from sample_docs import new_docx, new_pptx
 
 
@@ -501,7 +501,7 @@ def _txbx(text):
 def _textbox_docx(path, body=True):
     import docx
     from docx.oxml import parse_xml
-    d = docx.Document()
+    d = new_docx()
     d.add_paragraph("본문 첫 단락")
     tail = d.add_paragraph("본문 끝 단락")
     if body:
@@ -521,7 +521,7 @@ def _textbox_docx(path, body=True):
 def _sdt_docx(path):
     import docx
     from docx.oxml import parse_xml
-    d = docx.Document()
+    d = new_docx()
     d.add_paragraph("서식 안내")
     t1 = d.add_table(rows=2, cols=1)
     t1.cell(0, 0).text, t1.cell(1, 0).text = "SDT표머리", "sdt값"
@@ -547,22 +547,35 @@ def test_samples_skip_only_broken_kind(tmp_path):
         s["pptx"]
 
 
-def test_drm_damaged_templates_docx_falls_back_pptx_skips(tmp_path, monkeypatch):
-    """DRM이 라이브러리 기본 템플릿을 암호화한 PC 흉내: docx는 폴더 템플릿으로 만들고 pptx만 건너뜀."""
+@pytest.mark.parametrize("docx_default", ["encrypted", "stub"])
+def test_drm_damaged_templates_still_make_samples(tmp_path, monkeypatch, docx_default):
+    """DRM이 라이브러리 기본 템플릿을 망가뜨린 PC 흉내 (2026-11-05 실기: default.pptx 없음, default.docx는 스타일 4개뿐인
+    zip): docx는 폴더 템플릿으로, pptx는 코드로 만든 최소 프레젠테이션으로 만들어 건너뛰지 않고 시험한다."""
+    import docx
     import sample_docs
     enc = tmp_path / "default.enc"
     enc.write_bytes(b"DRMONE\x00\x01" + os.urandom(64))
     real_default, real_folder = sample_docs.docx_template_paths()
-    monkeypatch.setattr(sample_docs, "docx_template_paths", lambda: (str(enc), real_folder))
+    bad_docx = enc
+    if docx_default == "stub":                     # zip이지만 제목 스타일이 없고 빈 단락이 있는 문서
+        bad_docx = tmp_path / "stub.docx"
+        d = sample_docs.docx_from_folder(real_folder)
+        for st in [s for s in d.styles if s.name.startswith("Heading")]:
+            st.element.getparent().remove(st.element)
+        d.add_paragraph("")
+        d.save(str(bad_docx))
+        monkeypatch.setattr(docx, "Document", lambda docx=None, _real=docx.Document: _real(docx or str(bad_docx)))
+    monkeypatch.setattr(sample_docs, "docx_template_paths", lambda: (str(bad_docx), real_folder))
     monkeypatch.setattr(sample_docs, "pptx_template_path", lambda: str(enc))
     out = tmp_path / "out"
     out.mkdir()
     s = build_samples(out)
-    assert set(s.keys()) == {"docx", "xlsx", "pdf", "hwpx"}
+    assert set(s.keys()) == {"docx", "pptx", "xlsx", "pdf", "hwpx"}
     units, _ = reader.parse_docx(s["docx"])
     assert units[0]["text"] == "추진 배경"
-    with pytest.raises(pytest.skip.Exception, match="DRM"):
-        s["pptx"]
+    units, _ = reader.parse_pptx(s["pptx"])
+    assert [u["heading"] for u in units] == ["세 번째 슬라이드", "첫 슬라이드", "두 번째 슬라이드"]
+    assert "항목 | 케이블카" in units[2]["text"] and "[노트] 발표 노트" in units[2]["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -1377,7 +1390,7 @@ def test_parse_docx_reads_textboxes_once(tmp_path):
 def test_textbox_in_table_cell_not_doubled(tmp_path):
     import docx
     from docx.oxml import parse_xml
-    d = docx.Document()
+    d = new_docx()
     cell = d.add_table(rows=2, cols=1).cell(0, 0)
     cell.paragraphs[0].text = "머리"
     cell._tc.append(parse_xml(f'<w:p {_NS}><w:r><w:pict><v:shape><v:textbox>{_txbx("칸 글상자 BOXCELL")}'
@@ -2505,9 +2518,7 @@ def _txt_folder(tmp_path, n=3):
 
 
 def _shell_args(cmd):
-    import shlex
-    parts = shlex.split(cmd, posix=False)
-    return [p[1:-1] if len(p) > 1 and p[0] == p[-1] == '"' else p for p in parts[2:]]
+    return split_command(cmd)[2:]
 
 
 @pytest.mark.parametrize("command", ["index", "search"])
@@ -3092,7 +3103,7 @@ def test_number_match_kind_review6(query, text, want):
 @pytest.mark.parametrize("query,text", [
     ("0 0 0 0 0 0 0 1", "REGA R/W " + "0 " * 3000), ("1 1 1 1 1 3", "1 " * 600), ("1 1 1 1 3", "1 " * 2500),
     ("1 1 1 1 1 1 1 3", "1 " * 20000), ("20", "1-20 " * 20000), ("5 V", "-5 V " * 20000),
-])
+], ids=["zeros", "ones600", "ones2500", "ones20000", "range20", "minus5V"])     # 긴 글이 id에 들면 Windows 환경변수 한도 초과
 def test_number_search_linear_time(query, text):
     # 6차 검토 [치명]: 숫자 안전망의 큰 정규식이 '1 1 1 ...'에서 지수 시간 -> 숫자별 위치 목록 + 40자 창 선형 탐색
     t = time.monotonic()

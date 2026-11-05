@@ -116,6 +116,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 새 기능은 표준 환경 라이브러리를 우선 사용. 없는 패키지는 Python 3.13 / win_amd64 wheel이 있는 것만,
   도구 `requirements.txt`(`CLI-dev/<tool>/`), 위 "사용자 환경" 표, `docs/ENVIRONMENT.md`에 기록하고 미설치 시 JSON 오류로 안내.
 - 파일 저장·폴더 조작·텍스트 읽기는 JIT 자가복구 표의 공통 함수를 사용한다.
+- CLI/·CLI-dev/에 반입할 파일은 .py .md .txt .json .tsv .bat만 쓴다. .yaml/.yml/.jsonl/.toml 등은 회사 반입 시스템이 막으므로 쓰지 않는다(실행 중 PC에서 생기는 파일은 상관없음). 검사: `CLI-dev/tests/test_repo_files.py`.
 - 도구 폴더(`CLI/<tool>/`)는 단독 배포된다. 공통 런타임 함수는 도구마다 자기 폴더에 두고, 다른 도구 폴더를 import하지 않는다.
 - 테스트는 "사용자 환경" 표의 버전 기준으로 통과해야 한다.
 
