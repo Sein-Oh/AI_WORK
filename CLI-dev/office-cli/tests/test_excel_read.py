@@ -708,7 +708,7 @@ def test_far_uncomputed_cell_is_not_padded(tmp_path, capsys):
     assert code == 0 and out["range"] == "A1:C10" and out["rows"] == 10, {k: out[k] for k in out if k != "values"}
     assert out["agent_directive"].startswith("UNVERIFIED:") and out["far_uncomputed_formulas"] == ["S!Z200000"], out
     cmd = out["next_commands"][-1]["command"]
-    assert "--range S!Z200000" in cmd, cmd
+    assert "--range S!Z200000" in cmd, cmd     # 낱말 가운데의 !는 따옴표 없이
     code, out = run_main(excel, capsys, "read", "--target", p, "--range", "S!Z200000")    # 그 명령으로 읽으면 그 칸
     assert code == 0 and out["uncomputed_formulas"] == ["S!Z200000"], out
 

@@ -1512,7 +1512,8 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                     for r in reports],
         "next_commands": [
             {"purpose": f"새 데이터 예측 ({bv['task']}, <새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-             "command": f'python "{os.path.join(here, "ml_predict.py")}" -m "{bv["version_dir"]}" -f "<새데이터.xlsx>"',
+             "command": (f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} -m {quote_arg(bv['version_dir'])} "
+                         f"-f {quote_arg('<새데이터.xlsx>')}"),
              "needs_input": True, "placeholder": "<새데이터.xlsx>"} for bv in versions],
     })
     made = ("타겟별 최고 학습 조건으로 다시 학습한 " if info["made_best"] else "이미 최신인 ")
@@ -1522,7 +1523,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                          f"종합 판정 " + ", ".join(f"{r['version']} {r['overall_verdict']}" for r in reports))
     multi = (f" 회귀와 분류 타겟이 섞여 있어 최고 버전과 보고서가 각각 {len(reports)}개입니다 (best_reports)."
              if len(reports) > 1 else "")
-    predict = "; ".join(f"{bv['task']}: ml_predict.py -m \"{bv['version_dir']}\"" for bv in versions)
+    predict = "; ".join(f"{bv['task']}: ml_predict.py -m {quote_arg(bv['version_dir'])}" for bv in versions)
     bad = [u for r in reports for u in r.get("unverified", [])]
     result["verified"] = not bad
     if bad:

@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_sample  # noqa: E402
-from mlkit_helpers import split_command, FEATURES, HAS_DOCX, INLINE, KIT, TARGET, run_fail, run_raw, run_tool  # noqa: E402
+from mlkit_helpers import shell_sim, split_command, FEATURES, HAS_DOCX, INLINE, KIT, TARGET, run_fail, run_raw, run_tool  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 
@@ -201,6 +201,28 @@ def test_train_target_in_features_offers_both_commands(trained):
     assert "--desc" in one and "--desc" in two                                    # the other options are kept
 
 
+@pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd", "bash"])
+def test_offered_commands_survive_each_shell(trained, monkeypatch, shell):
+    """2.9.68: next_commands의 따옴표는 실행 셸에 맞춤 (ML_KIT_SHELL, 기본은 OpenCode처럼 pwsh > Windows PowerShell 5.1).
+    그 셸이 실행하면(shell_sim) -i·--exclude-where·--desc 값이 글자 그대로 도구에 들어간다."""
+    work, data, _ = trained
+    monkeypatch.setenv("ML_KIT_SHELL", shell)
+    vdir = str(work / "sample_ml_data" / "v1")
+    payload = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65")
+    nxt = payload["next_commands"][0]["command"]
+    argv = shell_sim.run_shell(nxt, shell)
+    assert argv[argv.index("-m") + 1] == vdir and argv[argv.index("-i") + 1].startswith("반응온도=240,소비전력=65,"), nxt
+    assert run_tool("ml_predict.py", *argv[2:])["predictions_summary"][TARGET]["predictions"]
+    desc = "누수 $x `t '시험' \"따옴표\" 100% {{a}} @b #c; C:\\a b\\"
+    where = "반응온도(°C) > 9999 | 수분함량(%) > 9999; 소비전력(kW) > 9999"
+    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
+                       "-y", "생산효율(%),수분함량(%)", "--desc", desc, "--exclude-where", where)
+    assert "타겟 누수:" in payload["message"], payload
+    for c in payload["next_commands"]:
+        argv = shell_sim.run_shell(c["command"], shell)
+        assert argv[argv.index("--desc") + 1] == desc and argv[argv.index("--exclude-where") + 1] == where, c["command"]
+
+
 def test_predict_standalone_deployment(trained, tmp_path):
     """ml_predict.py와 버전 폴더만으로 예측이 된다 (단독 배포)."""
     import shutil
@@ -336,7 +358,7 @@ def test_argument_error_exit2_logged(data_dir):
     proc, payload = run_raw("ml_predict.py", "-i", "a=1")  # --model missing
     assert proc.returncode == 2 and payload["status"] == "error"
     log = _log(data_dir)
-    assert "명령: ml_predict.py -i \"a=1\"" in log and "결과: input | CLI 인자 오류" in log
+    assert "명령: ml_predict.py -i a=1" in log and "결과: input | CLI 인자 오류" in log
 
 
 def test_internal_error_logged_with_traceback(data_dir, capsys):

@@ -149,6 +149,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` | 환경변수 `OFFICE_CLI_CONFIG` |
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
 | 메일 첨부 (`outlook.py attachments --save`) | `<다운로드>\메일 첨부\<시각>_<제목>` (자동 정리 안 함, En-Genius 실행도 같음) | `--save "<전체경로 폴더>"` |
+| 명령 문자열의 셸 (`next_commands`·`confirm_commands`·`[추천]` 명령의 따옴표, 1.4.76) | `pwsh`가 PATH에 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1 (OpenCode 셸 도구와 같은 순서). 값은 작은따옴표 `'...'`, 5.1이면 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈 | 환경변수 `OFFICE_CLI_SHELL`=`pwsh`/`powershell`/`cmd`/`bash` (규칙: `CLI-dev/README.md` 공통 결과 키) |
 
 - En-Genius 스킬(보관: `archive/engenius`)은 `C:\CLI\office-cli`의 도구를 실행하므로 OpenCode와 같은 `data`, `cache`, `config.json`을 씁니다.
   도구 파일 자체가 트레이의 임시 폴더(`%TEMP%\engenius-skill\<id>`)에서 실행될 때만(실행마다 지워짐) 기본 위치를

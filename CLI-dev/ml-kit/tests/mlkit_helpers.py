@@ -17,9 +17,11 @@ import openpyxl
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEV = os.path.dirname(HERE)  # CLI-dev\ml-kit (tests, tools)
 KIT = os.path.join(os.path.dirname(os.path.dirname(DEV)), "CLI", "ml-kit")  # 실행 파일은 CLI\ml-kit
-for _p in (os.path.join(DEV, "tools"), KIT, HERE):
+for _p in (os.path.join(DEV, "tools"), KIT, HERE, os.path.join(os.path.dirname(DEV), "tests")):  # tests: shell_sim
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+import shell_sim  # noqa: E402  (CLI-dev/tests: 셸 시뮬레이터)
 
 # make_sample()로 만든 데이터의 열 (test_contract, test_safety, test_report_export)
 FEATURES = "반응온도(°C),소비전력(kW),압축압력(bar),촉매비율(wt%),수분함량(%)"
@@ -39,51 +41,11 @@ except ImportError:
 
 
 def split_command(cmd):
-    """도구가 낸 명령 문자열(quote_arg 규칙: 공백 등이 있으면 "...", 안의 " 는 \\")을 Windows처럼 인자 목록으로 나눈다.
-
-    Windows 명령줄 규칙(CommandLineToArgvW, MS C 런타임)을 따른다: 백슬래시는 " 앞에서만 특별하고
-    (2n개 + " -> n개 + 따옴표 열고 닫기, 2n+1개 + " -> n개 + 글자 "), 그 밖에서는 글자 그대로다.
+    """도구가 낸 명령 문자열을 실제 셸처럼 인자 목록으로 나눈다 (CLI-dev/tests/shell_sim.py: 도구의 quote_arg와 같은 셸,
+    ML_KIT_SHELL 강제 > pwsh 있음 > Windows PowerShell 5.1). 셸 토크나이저 -> 네이티브 명령줄 조립 -> Windows argv 해석.
     shlex.split(posix=True)는 C:\\work\\a.xlsx 의 백슬래시를 지워 Windows 경로가 깨지므로 테스트는 이 함수를 쓴다.
     """
-    args, cur, have, quoted, i, n = [], [], False, False, 0, len(cmd)
-    while i < n:
-        ch = cmd[i]
-        if ch == "\\":
-            j = i
-            while j < n and cmd[j] == "\\":
-                j += 1
-            count = j - i
-            if j < n and cmd[j] == '"':
-                cur.append("\\" * (count // 2))
-                if count % 2:
-                    cur.append('"')
-                else:
-                    quoted = not quoted
-                i, have = j + 1, True
-                continue
-            cur.append("\\" * count)
-            i, have = j, True
-            continue
-        if ch == '"':
-            if quoted and i + 1 < n and cmd[i + 1] == '"':       # 따옴표 안의 "" -> 글자 "
-                cur.append('"')
-                i += 2
-                continue
-            quoted, have = not quoted, True
-            i += 1
-            continue
-        if ch in " \t" and not quoted:
-            if have:
-                args.append("".join(cur))
-                cur, have = [], False
-            i += 1
-            continue
-        cur.append(ch)
-        have = True
-        i += 1
-    if have:
-        args.append("".join(cur))
-    return args
+    return shell_sim.split_command(cmd, "ML_KIT_SHELL")
 
 
 # ---- CLI 실행 ----------------------------------------------------------------------------------------------

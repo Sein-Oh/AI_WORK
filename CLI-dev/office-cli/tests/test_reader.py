@@ -2350,7 +2350,7 @@ def test_read_section_continuation_and_save_keep_section(tmp_path, capsys, monke
     monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 60)
     code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "1. SCOPE")
     assert code == 0 and out["truncated"] is True and out["next_commands"]
-    assert all('--section "1. SCOPE"' in c["command"] for c in out["next_commands"]), out["next_commands"]
+    assert all("--section '1. SCOPE'" in c["command"] for c in out["next_commands"]), out["next_commands"]
     monkeypatch.setattr(rt, "DEFAULT_MAX_CHARS", 8000)
     save = tmp_path / "근거.csv"
     code, out = run_main(reader, capsys, "read", "--file", str(p), "--section", "purpose", "--save", str(save))

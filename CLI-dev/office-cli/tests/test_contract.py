@@ -23,7 +23,7 @@ import word
 from fake_excel import FakeChartObject, FakeExcelWorkbook, FakeXlApp
 from fake_office import make_win32com
 from fake_word import FakeWordDocument
-from office_helpers import assert_not_logged, error_log_text, run_as_tool, run_main, SECRET, TOOL_DIR
+from office_helpers import assert_not_logged, error_log_text, run_as_tool, run_main, SECRET, split_command, TOOL_DIR
 from sample_docs import new_docx, new_pptx
 
 
@@ -285,7 +285,8 @@ def test_clamp_rows_and_text():
 def test_next_command_quotes_paths():
     cmd = rt.next_command("office.py", ["transfer", "--chart", "사인 2주기", "--to", "word,ppt"], "차트 전달")
     assert cmd["purpose"] == "차트 전달"
-    assert '"사인 2주기"' in cmd["command"] and '"word,ppt"' in cmd["command"]
+    assert "'사인 2주기'" in cmd["command"] and " --to word,ppt" in cmd["command"]   # PowerShell 작은따옴표 (1.4.76)
+    assert split_command(cmd["command"])[2:] == ["transfer", "--chart", "사인 2주기", "--to", "word,ppt"]
     assert "office.py" in cmd["command"]
 
 

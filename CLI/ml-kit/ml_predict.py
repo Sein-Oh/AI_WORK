@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.67"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.68"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -682,12 +682,100 @@ def error_log_path() -> str:
     return os.path.join(get_data_dir(), "logs", "errors.txt")
 
 
-def quote_arg(value: Any) -> str:
-    """Quotes one command-line argument the way cmd.exe expects (for logs and next_commands)."""
+# The shell that runs the commands the tools print (next_commands, [추천] full commands) as given.
+# Same order as the OpenCode shell tool: pwsh (PowerShell 7) when on PATH, else Windows PowerShell 5.1.
+# ML_KIT_SHELL=pwsh|powershell|cmd|bash forces one (2.9.68). Both PowerShells are exact, cmd and bash best effort.
+SHELL_ENV = "ML_KIT_SHELL"
+SHELLS = ("pwsh", "powershell", "cmd", "bash")
+_FOUND_SHELL: List[str] = []
+# Characters PowerShell reads as a single quote (doubled inside a single-quoted string)
+_PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+_PLAIN_PUNCT = "_-.:\\/,=+@!"
+_PLAIN_INT = re.compile(r"-?(?:0|[1-9]\d{0,8})")
+_PLAIN_OPTION = re.compile(r"--?[A-Za-z][A-Za-z0-9-]*")
+
+
+def command_shell() -> str:
+    """The shell for command strings: ML_KIT_SHELL > pwsh when on PATH > powershell (Windows PowerShell 5.1)."""
+    forced = os.environ.get(SHELL_ENV, "").strip().lower()
+    if forced in SHELLS:
+        return forced
+    if not _FOUND_SHELL:
+        _FOUND_SHELL.append("pwsh" if shutil.which("pwsh") else "powershell")
+    return _FOUND_SHELL[0]
+
+
+def _net_space(ch: str) -> bool:
+    """.NET char.IsWhiteSpace (what makes Windows PowerShell 5.1 wrap an argument in double quotes)."""
+    import unicodedata
+    return ch in "\t\n\v\f\r\x85\xa0" or unicodedata.category(ch) in ("Zs", "Zl", "Zp")
+
+
+def _plain_arg(s: str, shell: str) -> bool:
+    """A value every shell passes as is without quotes: letters and digits (any script) and _-.:\\/,=+@! only.
+    Quoted anyway: shapes PowerShell may turn into a number (007, 1e3, 0x10, 1.50, 2-8), a leading - that is not an
+    option (-a.b splits in two), a leading = : + @ (array, splatting) !, a leading, trailing or doubled comma (array)
+    and, for bash, a backslash."""
+    if not s or s == "--":
+        return False
+    for ch in s:
+        if not (ch.isalnum() if not ch.isascii() else (ch.isalnum() or ch in _PLAIN_PUNCT)):
+            return False
+    if s[0] in "=:+,@!" or s[-1] == "," or ",," in s:
+        return False
+    if shell == "bash":
+        return "\\" not in s
+    if s[0] == "-" and not (_PLAIN_OPTION.fullmatch(s) or _PLAIN_INT.fullmatch(s)):
+        return False
+    if (s[0].isdigit() or s[0] == "." and s[1:2].isdigit()) and not _PLAIN_INT.fullmatch(s):
+        return False
+    return True
+
+
+def _argv_escape(s: str, wrapped: bool, quote: str = '\\"') -> str:
+    """Escapes s so the Windows command-line parser (CommandLineToArgvW, Python argv) gets it back: backslashes before
+    a " are doubled and the " becomes quote; in a wrapped value the trailing backslashes are doubled too (before the closing ")."""
+    out: List[str] = []
+    slashes = 0
+    for ch in s:
+        if ch == "\\":
+            slashes += 1
+            continue
+        if ch == '"':
+            out.append("\\" * (2 * slashes) + quote)
+        else:
+            out.append("\\" * slashes + ch)
+        slashes = 0
+    out.append("\\" * (2 * slashes if wrapped else slashes))
+    return "".join(out)
+
+
+def _ps_single(s: str) -> str:
+    return "'" + "".join(ch * 2 if ch in _PS_SINGLE_QUOTES else ch for ch in s) + "'"
+
+
+def quote_arg(value: Any, shell: Optional[str] = None) -> str:
+    """Quotes one argument of a command string for the shell that runs it (command_shell) (2.9.68).
+
+    - A value without shell special characters (_plain_arg) stays as is.
+    - PowerShell: single quotes '...' (a ' inside is '') keep $, backtick, {}, @, #, ; and ( literal.
+      Windows PowerShell 5.1 hands the value to python wrapped in "..." when it has a space but leaves a " inside as is,
+      so " -> \\" (backslashes before it doubled), trailing backslashes of a wrapped value doubled and an empty value
+      '""' (5.1 drops an empty argument) are done here. PowerShell 7.3+ escapes by itself, so nothing is done for it.
+    - cmd: "..." (a " inside is "", % is cut as "^%" so %NAME% is not expanded). bash: '...' (a ' inside is '\\'')."""
     s = str(value)
-    if s and all(ch not in s for ch in ' \t"&|<>^()%,;='):
+    shell = shell or command_shell()
+    if _plain_arg(s, shell):
         return s
-    return '"' + s.replace('"', '\\"') + '"'
+    if shell == "pwsh":
+        return _ps_single(s)
+    if shell == "bash":
+        return "'" + s.replace("'", "'\\''") + "'"
+    if shell == "cmd":
+        return '"' + _argv_escape(s, True, '""').replace("%", '"^%"') + '"'
+    if not s:
+        return _ps_single('""')
+    return _ps_single(_argv_escape(s, any(_net_space(ch) for ch in s)))
 
 
 def write_error_log(payload: Dict[str, Any], trace: str = "", argv: Optional[List[str]] = None) -> None:

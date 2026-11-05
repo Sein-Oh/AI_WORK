@@ -1846,7 +1846,7 @@ def test_K(ctx):
         d, c, r, e = run_cli("word.py", "outline", "--target", docx, "--start", "1")
         heads = {h["text"]: h for h in (d or {}).get("headings", [])}
         while (d or {}).get("next_commands"):
-            nxt = d["next_commands"][0]["command"].split("--start")[-1].strip().strip('"')
+            nxt = d["next_commands"][0]["command"].split("--start")[-1].strip().strip("'\"")
             d = run_cli("word.py", "outline", "--target", docx, "--start", nxt)[0]
             heads.update({h["text"]: h for h in (d or {}).get("headings", [])})
         h1, h2 = heads.get(f"K장 {tag}"), heads.get(f"K절 {tag}")

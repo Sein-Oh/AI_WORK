@@ -23,6 +23,10 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 DEV = os.path.dirname(TESTS_DIR)                                                   # CLI-dev\office-cli (tests, tools)
 TOOL_DIR = os.path.join(os.path.dirname(os.path.dirname(DEV)), "CLI", "office-cli")    # 실행 파일은 CLI\office-cli
 TOOLS = os.path.join(DEV, "tools")
+SHARED_TESTS = os.path.join(os.path.dirname(DEV), "tests")                         # CLI-dev\tests (shell_sim)
+if SHARED_TESTS not in sys.path:
+    sys.path.insert(0, SHARED_TESTS)
+import shell_sim  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -40,51 +44,11 @@ def run_main(mod, capsys, *argv):
 
 
 def split_command(cmd):
-    """도구가 낸 명령 문자열(quote_arg 규칙: 공백 등이 있으면 "...", 안의 " 는 \\")을 Windows처럼 인자 목록으로 나눈다.
-
-    Windows 명령줄 규칙(CommandLineToArgvW, MS C 런타임)을 따른다: 백슬래시는 " 앞에서만 특별하고
-    (2n개 + " -> n개 + 따옴표 열고 닫기, 2n+1개 + " -> n개 + 글자 "), 그 밖에서는 글자 그대로다.
+    """도구가 낸 명령 문자열을 실제 셸처럼 인자 목록으로 나눈다 (CLI-dev/tests/shell_sim.py: 도구의 quote_arg와 같은 셸,
+    OFFICE_CLI_SHELL 강제 > pwsh 있음 > Windows PowerShell 5.1). 셸 토크나이저 -> 네이티브 명령줄 조립 -> Windows argv 해석.
     shlex.split(posix=True)는 C:\\work\\a.xlsx 의 백슬래시를 지워 Windows 경로가 깨지므로 테스트는 이 함수를 쓴다.
     """
-    args, cur, have, quoted, i, n = [], [], False, False, 0, len(cmd)
-    while i < n:
-        ch = cmd[i]
-        if ch == "\\":
-            j = i
-            while j < n and cmd[j] == "\\":
-                j += 1
-            count = j - i
-            if j < n and cmd[j] == '"':
-                cur.append("\\" * (count // 2))
-                if count % 2:
-                    cur.append('"')
-                else:
-                    quoted = not quoted
-                i, have = j + 1, True
-                continue
-            cur.append("\\" * count)
-            i, have = j, True
-            continue
-        if ch == '"':
-            if quoted and i + 1 < n and cmd[i + 1] == '"':       # 따옴표 안의 "" -> 글자 "
-                cur.append('"')
-                i += 2
-                continue
-            quoted, have = not quoted, True
-            i += 1
-            continue
-        if ch in " \t" and not quoted:
-            if have:
-                args.append("".join(cur))
-                cur, have = [], False
-            i += 1
-            continue
-        cur.append(ch)
-        have = True
-        i += 1
-    if have:
-        args.append("".join(cur))
-    return args
+    return shell_sim.split_command(cmd, "OFFICE_CLI_SHELL")
 
 
 def run_excel(capsys, *argv):
@@ -219,7 +183,7 @@ def formula_xlsx(path, n=1, cached=False):
 # next_commands = 묻지 않고 실행해도 되는 것(읽기·미리보기)만 (1.4.75). conftest가 모든 테스트에 자동 적용.
 _SAFE_NEXT = {"attachments", "calendar", "check", "diff", "folders", "index", "info", "list", "outline", "read",
               "search", "thread", "windows", "help"}
-_NEXT_RE = re.compile(r'(\w+)\.py"?\s+(\S+)')
+_NEXT_RE = re.compile(r'(\w+)\.py[\'"]?\s+(\S+)')
 
 
 def unsafe_next_commands(payload):
@@ -231,7 +195,7 @@ def unsafe_next_commands(payload):
         cmd = c.get("command", "")
         m = _NEXT_RE.search(cmd)
         sub = m.group(2) if m else ""
-        listing = re.search(r"--action\s+\"?list\b", cmd) or (sub == "undo" and "--list" in cmd) \
+        listing = re.search(r"--action\s+[\"']?list\b", cmd) or (sub == "undo" and "--list" in cmd) \
             or (sub in ("notes", "revisions", "comment") and not re.search(r"--(text|file|action)\b", cmd))
         if not (sub in _SAFE_NEXT or "--dry-run" in cmd or listing):
             bad.append(cmd)

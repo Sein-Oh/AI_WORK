@@ -611,7 +611,8 @@ def test_exclude_where_in_retrain_commands(tmp_path):
         schema={"numeric": ["a", "b", "c"]}, mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"),
         exclude_where="a > 1; 라인 = 'B|C'")
     retrain = [c["command"] for c in cmds if "ml_train.py" in c["command"]]
-    assert retrain and all("--exclude-where \"a > 1; 라인 = 'B|C'\"" in c for c in retrain), retrain
+    assert retrain and all(split_command(c)[split_command(c).index("--exclude-where") + 1] == "a > 1; 라인 = 'B|C'"
+                           for c in retrain), retrain
 
 
 def test_exclude_where_errors(tmp_path):
@@ -624,7 +625,7 @@ def test_exclude_where_errors(tmp_path):
     assert "[후보]" in bad["message"] and "라인" in bad["message"], bad
     bad = run_fail("ml_train.py", *base, "--exclude-where", "라인 == B")               # fixable notation -> [추천] command
     rec = bad["message"].split("[추천] ")[1]
-    assert rec.startswith("python ") and '--exclude-where "라인 = B"' in rec, rec
+    assert rec.startswith("python ") and "--exclude-where '라인 = B'" in rec, rec
     bad = run_fail("ml_train.py", *base, "--exclude-where", "생산효율 >")              # unreadable
     assert "--exclude-where" in bad["message"] and "형식" in bad["message"], bad
 
@@ -751,7 +752,7 @@ def test_where_on_code_column_warns_other_notation(tmp_path):
     w = [x for x in res.get("warnings", []) if "'01' 6행" in x]
     assert w and "빼지 않음" in w[0] and "[추천] python " in w[0], res.get("warnings")
     cmd = res["next_commands"][0]["command"]
-    assert "--exclude-where \"월 = 1 | 월 = 01\"" in cmd and cmd.count("--exclude-where") == 1, cmd
+    assert "--exclude-where '월 = 1 | 월 = 01'" in cmd and cmd.count("--exclude-where") == 1, cmd
     proc = subprocess.run([sys.executable] + split_command(cmd)[1:], capture_output=True, text=True, encoding="utf-8")
     again = json.loads(proc.stdout)
     assert again["exclusions"]["수율"]["condition"] == 12 and not any("'01'" in x for x in again.get("warnings", []))
@@ -956,9 +957,9 @@ def test_predict_next_commands_have_no_layout(tmp_path):
         feature_names=["a"], created_features=[], applied_evals=[], target_names=["y"], champion={}, schema={"numeric": ["a"]},
         mean_score=0.99, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"))
     pred = [c for c in cmds if "ml_predict.py" in c["command"]][0]
-    assert pred["command"].endswith('-f "<새데이터.xlsx>"')                     # 2.9.53: --header-row 3 --unit-row 4
+    assert pred["command"].endswith("-f '<새데이터.xlsx>'")                     # 2.9.53: --header-row 3 --unit-row 4
     best = mt.build_best_next_commands(str(tmp_path / "d.xlsx"), str(tmp_path / "v2"), args)
-    assert best[1]["command"].endswith('-f "<새데이터.xlsx>"') and "--unit-row" not in best[1]["command"]
+    assert best[1]["command"].endswith("-f '<새데이터.xlsx>'") and "--unit-row" not in best[1]["command"]
 
 
 def test_quoted_names_go_through_files(tmp_path):
@@ -2144,7 +2145,7 @@ def test_step_mark_stops_a_step_longer_than_the_limit(tmp_path, monkeypatch):
     msg = str(e.value)
     assert "한 단계(학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5)가 명령 시간 제한(100초) 안에 끝나지 않습니다" in msg, msg
     rec = msg.split("[추천] ")[1]
-    assert rec.startswith("python ") and rec.endswith(" --time-limit 570") and '-x "a,b" -y y' in rec, rec
+    assert rec.startswith("python ") and rec.endswith(" --time-limit 570") and '-x a,b -y y' in rec, rec
     payload = mp.error_payload(e.value)
     assert payload["agent_directive"].startswith("STOP_RETRY:") and "timeout) 600000" in payload["agent_directive"]
     monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [570.0])      # the [추천] command: a larger limit tries again

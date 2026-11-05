@@ -11,6 +11,24 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.76] - 2026-11-05
+
+도구가 내는 명령(`next_commands`, `confirm_commands`, `[추천]` 전체 명령)의 인자 따옴표를 실제 실행 셸에 맞춤.
+
+### 수정
+- `quote_arg`가 `"..."` + `\"`(cmd 기준)라 OpenCode가 쓰는 PowerShell에서 깨지던 값: 끝이 `\`인 경로(`"C:\a b\"`), 값 안의 `"`,
+  `$`·백틱 확장(`=$A$1*2`), 따옴표 없던 `{{업체명}}`·`@a`·맨 앞 `#`·`'`·`;`·`(`, cmd의 `%NAME%`.
+  - 실행 셸: OpenCode 셸 도구(v2.2.5 `shell/select.ts`)와 같은 순서로 `pwsh`가 PATH에 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1
+    (`rt.command_shell()`). `OFFICE_CLI_SHELL=pwsh|powershell|cmd|bash`로 강제.
+  - 셸 특수문자가 없는 값(영숫자·한글과 `_-.:\/,=+@!`, 숫자로 읽힐 모양·맨 앞 `-`(옵션 제외)·`=`·`@`·`,` 등 제외)은 그대로.
+    나머지는 PowerShell 작은따옴표 `'...'`(안의 `'`와 둥근 작은따옴표는 두 번).
+  - Windows PowerShell 5.1은 값을 파이썬에 넘길 때 공백이 있으면 바깥만 `"..."`로 감싸고 안의 `"`는 그대로 두며 빈 값은 버리므로,
+    `"` -> `\"`(앞 백슬래시 두 배), 감쌀 값의 끝 백슬래시 두 배, 빈 값 `'""'`를 미리 함. PowerShell 7.3+는 미리 바꾸지 않음(이중 이스케이프 방지).
+  - cmd(`"..."`, 안의 `"`는 `""`, `%`는 `"^%"`)와 bash(`'...'`)는 최선 노력. ml-kit 2.9.68에 같은 코드(복사).
+- 테스트: 셸 시뮬레이터 `CLI-dev/tests/shell_sim.py`(PowerShell 토크나이저, 5.1 레거시·7.3 Standard 명령줄 조립, Windows argv(UCRT) 해석,
+  cmd, bash)와 `CLI-dev/tests/test_shell_quote.py`(까다로운 값 100여 개 x 셸 4종 x 두 도구, 셸 판별, 채점기 `command_segments`).
+  `office_helpers.split_command`는 시뮬레이터를 씀(작은따옴표를 읽음). excel `write --cells`·word `fill`의 `confirm_commands`를 셸마다 끝까지 실행.
+
 ## [1.4.75] - 2026-11-05
 
 독립 검토(11차) 수정. 확인 없이 실행되는 길(파괴적 confirm, 문서를 바꾸는 next_commands, 파괴적 오타 추천)과 숫자 검색 층 A 허용 목록.
