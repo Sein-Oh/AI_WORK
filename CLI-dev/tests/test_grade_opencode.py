@@ -509,18 +509,6 @@ def test_scenarios_module_is_data_only():
     assert go.load_scenarios()[0]["groups"]
 
 
-@pytest.mark.skipif(os.name == "nt", reason="변환 확인은 저장소(git)에서만")
-def test_scenarios_module_equals_former_yaml():
-    """한 번만 쓰는 변환 확인: agent_scenarios.yaml(변환 전, git 기록) == agent_scenarios.py의 SCENARIOS."""
-    import subprocess
-    yaml = pytest.importorskip("yaml")
-    repo = os.path.dirname(os.path.dirname(HERE))
-    proc = subprocess.run(["git", "show", "fd8e0e8:CLI-dev/agent_scenarios.yaml"], cwd=repo, capture_output=True)
-    if proc.returncode:
-        pytest.skip("git 기록 없음")
-    assert go.load_scenarios()[0] == yaml.safe_load(proc.stdout.decode("utf-8"))
-
-
 def test_judge_uses_completions_api(tmp_path, monkeypatch):
     import http.server
     import threading
