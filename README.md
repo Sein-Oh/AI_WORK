@@ -12,6 +12,7 @@ AI_WORK/
 ├── AGENTS.md                  # 에이전트 공통 규칙 + 사용자 환경 (단일 원본, OpenCode가 자동으로 읽음)
 ├── CLAUDE.md                  # @AGENTS.md 한 줄 (Claude Code용)
 ├── pytest.ini                 # python -m pytest -> CLI-dev/ 아래 모든 도구 테스트
+├── install_requirements.bat   # WinPython에 두 도구(ml-kit, office-cli)의 패키지를 표준 버전으로 설치 (wheel 폴더 오프라인 설치, 다운로드)
 ├── docs/
 │   ├── ENVIRONMENT.md         # 표준 사용자 환경 정의 + 도구별 호환 현황
 │   ├── HANDOFF.md             # 작업 인계 (다른 PC·새 대화에서 이어 하기)
@@ -71,6 +72,8 @@ python -m pip install -r CLI-dev/ml-kit/requirements.txt
 python -m pip install -r CLI-dev/office-cli/requirements.txt
 python -m pytest -q              # 전체 도구 테스트
 ```
+Windows에서는 `install_requirements.bat`이 두 도구의 패키지를 표준 환경 버전으로 한 번에 설치합니다
+(`install_requirements.bat D:\wheels`는 wheel 폴더에서 오프라인 설치, `--download D:\wheels`는 인터넷 PC에서 wheel 받기).
 폐쇄망 설치는 [`docs/WINDOWS_OFFLINE.md`](docs/WINDOWS_OFFLINE.md), 에이전트 연동은 각 도구의 `SKILL.md`.
 
 ## 배포 방법
