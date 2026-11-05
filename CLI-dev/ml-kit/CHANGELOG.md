@@ -12,6 +12,18 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.68] - 2026-11-05
+
+`next_commands`·`[추천]` 전체 명령의 인자 따옴표를 실제 실행 셸에 맞춤 (office-cli 1.4.76과 같은 코드, 복사).
+
+### 버그 수정
+- `quote_arg`(PART C)가 cmd 기준 `"..."` + `\"`라 PowerShell에서 깨지던 값(끝이 `\`인 폴더, 값 안의 `"`, `$`·백틱, cmd의 `%NAME%`):
+  `pwsh`가 PATH에 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1(OpenCode 셸 도구와 같은 순서, `ML_KIT_SHELL`로 강제)에 맞춰
+  작은따옴표 `'...'`로 감싸고, 5.1이면 값 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈. 단순 토큰(영숫자·한글·`_-.:\/,=+@!`)은 그대로.
+- `ml_train.py`가 따로 `"..."`를 붙이던 `_q`와 `ml_report.py`의 예측 명령(`-m`, `-f <새데이터.xlsx>`)도 `quote_arg`로.
+- 테스트: `mlkit_helpers.split_command`가 셸 시뮬레이터(`CLI-dev/tests/shell_sim.py`)를 씀. `test_contract`에서 `ml_predict -i` 채우기 명령과
+  `ml_train` 타겟 누수 `[후보]` 명령(`--exclude-where`, `$`·`"`·`'`·`%`가 든 `--desc`)을 셸 4종마다 끝까지 확인.
+
 ## [2.9.67] - 2026-11-05
 
 6차 독립 검토(10000행 x 1000열 회귀)의 [치명] 발견 수정. 항목마다 회귀 테스트를 추가했습니다.

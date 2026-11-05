@@ -20,7 +20,7 @@ from scipy.interpolate import RegularGridInterpolator
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
-from mlkit_helpers import (FEATURES, HAS_DOCX, HAS_MPL, KIT, TARGET, ok_res, run_fail, run_raw, run_tool,  # noqa: E402
+from mlkit_helpers import (split_command, FEATURES, HAS_DOCX, HAS_MPL, KIT, TARGET, ok_res, run_fail, run_raw, run_tool,  # noqa: E402
                            stop_msg, write_df)
 import ml_export as mx  # noqa: E402
 import ml_predict as mp  # noqa: E402
@@ -825,7 +825,8 @@ def test_keep_and_inputs_apply_to_targets_that_have_them(two_export):
     assert cmds and all(" -y " not in c and "ya=" in c and "yb=" in c for c in cmds)
     assert res["truncated"] is False and res["next_commands_count"] == len(cmds)
     alt = [c for c in res["targets"]["ya"]["candidates"] if "command" in c][0]
-    spec = alt["command"].split("--inputs ")[1].split(" --title")[0].strip('"')
+    argv = split_command(alt["command"])
+    spec = argv[argv.index("--inputs") + 1]
     again = run_tool("ml_export.py", "-m", two_export["v"], "--inputs", spec, "--save", str(two_export["work"] / "k2.xlsx"))
     assert again["targets"]["ya"]["inputs"] == alt["inputs"]
     assert again["targets"]["yb"]["inputs"] == res["targets"]["yb"]["inputs"]

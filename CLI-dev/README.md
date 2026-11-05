@@ -95,6 +95,13 @@ CLI-dev/<tool>/
      경량 LLM이 `next_commands[0]`을 기계적으로 실행해도 메일이 나가거나 문서가 바뀌지 않게 키를 나눈다.
      덮어쓰기·삭제·메일 발송 항목에는 `"destructive": true`를 붙인다: 사용자가 "묻지 말고 끝까지"라고 했어도 늘 묻는 항목 (전역 지침 3장 6번).
    - 명령 오타 추천은 되돌리기 어려운 명령(메일 발송 등)이면 `[추천]`이 아니라 `[후보]`로 준다 (`[추천]`은 LLM이 묻지 않고 실행).
+   - 명령 문자열(`next_commands`·`confirm_commands`·`[추천]` 전체 명령)의 인자는 공통 런타임 `quote_arg`로만 따옴표 처리한다
+     (office-cli 1.4.76, ml-kit 2.9.68). 실행 셸은 OpenCode 셸 도구와 같은 순서로 정한다: `pwsh`가 PATH에 있으면 PowerShell 7, 없으면
+     Windows PowerShell 5.1 (`OFFICE_CLI_SHELL`/`ML_KIT_SHELL`=`pwsh|powershell|cmd|bash`로 강제). 셸 특수문자가 없는 값은 그대로,
+     나머지는 PowerShell 작은따옴표 `'...'`(안의 `'`는 `''`; `$`·백틱·`{}`·`@`·`#`·`;`·`(`가 글자 그대로). 5.1은 파이썬에 넘길 때 값 안의 `"`를
+     이스케이프하지 않으므로 `"` -> `\"`, 공백이 있는 값의 끝 백슬래시 두 배, 빈 값 `'""'`를 미리 한다(7.3+는 스스로 하므로 하지 않음).
+     cmd(`"..."`, `%`는 `"^%"`)와 bash(`'...'`)는 최선 노력. 검증: `CLI-dev/tests/shell_sim.py`(PowerShell 토크나이저, 5.1·7.3 명령줄 조립,
+     Windows argv 해석, cmd, bash)와 `test_shell_quote.py`. 손으로 `"..."`를 붙여 명령을 만들지 않는다.
    - `truncated` - 결과를 상한에서 잘랐으면 `true`, 전체 결과 파일 경로를 함께 제공.
    - `recovered` - 도구가 실패를 즉시 복구해 결과가 달라진 일 (예: 잠긴 파일 -> 새 이름 저장). `warnings`와 구분.
 8. 실패한 실행(exit 1, 2)은 `<도구 데이터 폴더>/logs/errors.txt`에 자동 기록. 로그 경로는 stdout JSON에 넣지 않음.

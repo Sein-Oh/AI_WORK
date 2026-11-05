@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.75"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.76"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1575,12 +1575,100 @@ def clamp_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> Tuple[str, bool
     return text[:max_chars], True
 
 
-def quote_arg(value: Any) -> str:
-    """명령 문자열에 넣을 인자를 Windows cmd 기준으로 따옴표 처리합니다."""
+# 도구가 내는 명령(next_commands, confirm_commands, [추천] 전체 명령)을 LLM이 그대로 실행하는 셸.
+# OpenCode 셸 도구와 같은 순서: pwsh(PowerShell 7)가 있으면 pwsh, 없으면 Windows PowerShell 5.1.
+# OFFICE_CLI_SHELL=pwsh|powershell|cmd|bash로 강제 (1.4.76). PowerShell 두 종류는 정확, cmd·bash는 최선 노력.
+SHELL_ENV = "OFFICE_CLI_SHELL"
+SHELLS = ("pwsh", "powershell", "cmd", "bash")
+_FOUND_SHELL: List[str] = []
+# PowerShell이 작은따옴표로 읽는 글자 (안에서는 두 번 써야 글자 하나)
+_PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+_PLAIN_PUNCT = "_-.:\\/,=+@!"
+_PLAIN_INT = re.compile(r"-?(?:0|[1-9]\d{0,8})")
+_PLAIN_OPTION = re.compile(r"--?[A-Za-z][A-Za-z0-9-]*")
+
+
+def command_shell() -> str:
+    """명령 문자열을 실행할 셸: OFFICE_CLI_SHELL > pwsh가 PATH에 있으면 pwsh > powershell (Windows PowerShell 5.1)."""
+    forced = os.environ.get(SHELL_ENV, "").strip().lower()
+    if forced in SHELLS:
+        return forced
+    if not _FOUND_SHELL:
+        import shutil
+        _FOUND_SHELL.append("pwsh" if shutil.which("pwsh") else "powershell")
+    return _FOUND_SHELL[0]
+
+
+def _net_space(ch: str) -> bool:
+    """.NET char.IsWhiteSpace (Windows PowerShell 5.1이 인자를 큰따옴표로 감쌀지 정하는 기준)."""
+    import unicodedata
+    return ch in "\t\n\v\f\r\x85\xa0" or unicodedata.category(ch) in ("Zs", "Zl", "Zp")
+
+
+def _plain_arg(s: str, shell: str) -> bool:
+    """따옴표 없이 써도 셸이 글자 그대로 넘기는 값: 영숫자·한글(그 밖의 유니코드 글자)과 _-.:\\/,=+@! 만.
+    PowerShell이 숫자로 바꿀 수 있는 모양(007, 1e3, 0x10, 1.50, 2-8), 옵션이 아닌 -로 시작(-a.b는 둘로 나뉨),
+    맨 앞 =·:·+·@(배열·스플래팅)·!, 앞뒤·연속 쉼표(배열), bash의 백슬래시는 따옴표로 감쌉니다."""
+    if not s or s == "--":
+        return False
+    for ch in s:
+        if not (ch.isalnum() if not ch.isascii() else (ch.isalnum() or ch in _PLAIN_PUNCT)):
+            return False
+    if s[0] in "=:+,@!" or s[-1] == "," or ",," in s:
+        return False
+    if shell == "bash":
+        return "\\" not in s
+    if s[0] == "-" and not (_PLAIN_OPTION.fullmatch(s) or _PLAIN_INT.fullmatch(s)):
+        return False
+    if (s[0].isdigit() or s[0] == "." and s[1:2].isdigit()) and not _PLAIN_INT.fullmatch(s):
+        return False
+    return True
+
+
+def _argv_escape(s: str, wrapped: bool, quote: str = '\\"') -> str:
+    """Windows 명령줄 해석(CommandLineToArgvW, 파이썬 argv)이 s를 그대로 얻게: " 앞의 백슬래시는 두 배 + quote,
+    큰따옴표로 감싸는 값은 끝 백슬래시도 두 배 (닫는 " 앞이라)."""
+    out: List[str] = []
+    slashes = 0
+    for ch in s:
+        if ch == "\\":
+            slashes += 1
+            continue
+        if ch == '"':
+            out.append("\\" * (2 * slashes) + quote)
+        else:
+            out.append("\\" * slashes + ch)
+        slashes = 0
+    out.append("\\" * (2 * slashes if wrapped else slashes))
+    return "".join(out)
+
+
+def _ps_single(s: str) -> str:
+    return "'" + "".join(ch * 2 if ch in _PS_SINGLE_QUOTES else ch for ch in s) + "'"
+
+
+def quote_arg(value: Any, shell: Optional[str] = None) -> str:
+    """명령 문자열에 넣을 인자 하나를 실행 셸(command_shell)에 맞게 따옴표 처리합니다 (1.4.76).
+
+    - 셸 특수문자가 없는 값(_plain_arg)은 그대로.
+    - PowerShell: 작은따옴표 '...'(안의 '는 '') 안은 $·백틱·{}·@·#·;·( 모두 글자 그대로.
+      Windows PowerShell 5.1은 값을 파이썬에 넘길 때 공백이 있으면 "..."로 감싸기만 하고 안의 "는 그대로 두므로,
+      " -> \\"(앞 백슬래시 두 배), 감쌀 값의 끝 백슬래시 두 배, 빈 값은 '""'(5.1은 빈 인자를 버림)로 미리 바꿉니다.
+      PowerShell 7.3+는 스스로 올바르게 바꾸므로 미리 바꾸지 않습니다.
+    - cmd: "..."(안의 "는 "", %는 "^%"로 끊어 %NAME% 확장을 막음). bash: '...'(안의 '는 '\\'')."""
     s = str(value)
-    if s and all(ch not in s for ch in ' \t"&|<>^()%,;='):
+    shell = shell or command_shell()
+    if _plain_arg(s, shell):
         return s
-    return '"' + s.replace('"', '\\"') + '"'
+    if shell == "pwsh":
+        return _ps_single(s)
+    if shell == "bash":
+        return "'" + s.replace("'", "'\\''") + "'"
+    if shell == "cmd":
+        return '"' + _argv_escape(s, True, '""').replace("%", '"^%"') + '"'
+    if not s:
+        return _ps_single('""')
+    return _ps_single(_argv_escape(s, any(_net_space(ch) for ch in s)))
 
 
 # 읽기·저장 뒤 열린 문서를 바꾸는 이어 하기 명령(confirm_commands, 1.4.75)의 directive 문구

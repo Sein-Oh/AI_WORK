@@ -12,7 +12,7 @@ import excel
 import office
 from fake_excel import FakeExcelWorkbook, FakeXlApp, SheetNameRefused
 from fake_office import make_win32com
-from office_helpers import split_command, EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
+from office_helpers import shell_sim, split_command, EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
 
 
 def _no_create_imperative(out):
@@ -881,7 +881,7 @@ def test_chart_numeric_x_becomes_scatter_and_offers_transfer(xl, capsys):
     assert out["agent_directive"].startswith("VERIFIED:")                 # 차트 목록·제목을 다시 읽음 (R1)
     assert "next_commands" not in out                                     # 옮기기는 문서를 바꿈 (1.4.75)
     cmd = out["confirm_commands"][0]["command"]
-    assert "transfer" in cmd and '"사인 2주기"' in cmd
+    assert "transfer" in cmd and "'사인 2주기'" in cmd
     code, out = run_excel(capsys, "chart", "--range", "A1:B11", "--title", "사인 2주기")
     assert out["chart_name"] == "사인 2주기 2"                    # 이름 중복 방지
     code, out = run_excel(capsys, "chart", "--action", "list")
@@ -1712,6 +1712,24 @@ def test_write_cells_dry_run(xl, capsys):
     assert out["confirm_commands"][0]["destructive"] is True  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
     code, out = run_excel(capsys, "write", "--cells", "C8=a; C9=b", "--dry-run")
     assert code == 0 and "destructive" not in out["confirm_commands"][0], out           # 빈 칸만: 덮어쓰기 아님
+
+
+@pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd", "bash"])
+def test_write_cells_confirm_command_runs_as_given_in_each_shell(xl, capsys, monkeypatch, shell):
+    """1.4.76: confirm_commands의 따옴표는 실행 셸에 맞춤 (PowerShell은 작은따옴표, 5.1은 안의 "를 \\"로).
+    $·백틱·{}·@·#·;·%·" 가 든 --cells를 그 셸이 실행하면(shell_sim) 같은 값이 그대로 도구에 들어간다."""
+    _, wb = xl
+    monkeypatch.setenv("OFFICE_CLI_SHELL", shell)
+    ws_of(wb).set(6, 3, "old")
+    cells = 'C6==$A$1*2; C7={{업체명}} @a #b; C8=100% `x; C9=\'a;b\'; C10=부서 = "영업"; C11=C:\\a b\\'
+    code, out = run_excel(capsys, "write", "--cells", cells, "--dry-run")
+    assert code == 0 and out["dry_run"] is True, out
+    argv = shell_sim.run_shell(out["confirm_commands"][0]["command"], shell)
+    assert argv[argv.index("--cells") + 1] == cells and "--overwrite" in argv, (shell, out["confirm_commands"])
+    code, out = run_excel(capsys, *argv[2:])
+    ws = ws_of(wb)
+    assert code == 0 and ws.formulas[(6, 3)] == "=$A$1*2" and ws.values[(7, 3)] == "{{업체명}} @a #b", out
+    assert ws.values[(8, 3)] == "100% `x" and ws.values[(9, 3)] == "a;b" and ws.values[(11, 3)] == "C:\\a b\\"
 
 
 def test_write_cells_bad_items_write_nothing(xl, capsys, tmp_path):

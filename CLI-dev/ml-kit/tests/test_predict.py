@@ -58,7 +58,7 @@ def test_inline_comma_number_stops_with_command(small):
     bad = run_fail("ml_predict.py", "-m", small["v"], "-i", "온도=180,190,압력=3000,라인=A")
     assert bad["agent_directive"].startswith("STOP_RETRY")                      # 2.9.13: 180190, VERIFIED
     rec = bad["message"].split("[추천] ")[1].strip()
-    assert rec.startswith("python") and '"온도=180190,압력=3000,라인=A"' in rec and "천 단위" in bad["message"]
+    assert rec.startswith("python") and " -i 온도=180190,압력=3000,라인=A" in rec and "천 단위" in bad["message"]
     assert run_tool("ml_predict.py", *split_command(rec)[2:])["sample_count"] == 1
     bad = run_fail("ml_predict.py", "-m", small["v"], "-i", "온도=1,5,압력=3000,라인=A")
     assert "[추천]" not in bad["message"]
@@ -319,10 +319,10 @@ def test_find_with_text_inline_values(coded):
 
 def test_find_comma_number_stops_with_command(small):
     bad = run_fail("ml_predict.py", "-m", small["v"], "--find", "y=1,000", "--vary", "온도", "-i", "압력=3000,라인=A")
-    assert '--find "y=1000"' in bad["message"].split("[추천] ")[1]
+    assert '--find y=1000' in bad["message"].split("[추천] ")[1]
     bad = run_fail("ml_predict.py", "-m", small["v"], "--find", "y=120", "--vary", "온도", "-i", "압력=3,000,라인=A")
     rec = bad["message"].split("[추천] ")[1].strip()
-    assert '"압력=3000,라인=A"' in rec
+    assert ' -i 압력=3000,라인=A' in rec
     assert run_tool("ml_predict.py", *split_command(rec)[2:])["command"] == "find"
 
 
@@ -609,7 +609,7 @@ def test_whatif_argument_rules(whatif):
     proc, res = run_raw("ml_predict.py", "-m", whatif["v"], "--sweep", "반응온도", "--find", "생산효율=100", "--vary", "반응온도")
     assert proc.returncode == 2, res
     bad = run_fail("ml_predict.py", "-m", whatif["v"], "--maximize", "생산효율", "--vary", "반응온도", "--where", "불순물 == 80")
-    assert '--where "불순물 = 80"' in bad["message"].split("[추천] ")[1]
+    assert "--where '불순물 = 80'" in bad["message"].split("[추천] ")[1]
 
 
 # ---- 범주 입력을 학습 범주와 맞추기 (2.9.60) --------------------------------------------------------------------

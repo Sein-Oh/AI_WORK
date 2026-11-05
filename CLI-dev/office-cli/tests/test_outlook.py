@@ -755,7 +755,7 @@ def test_compose_send_flag_recommends_command_without_it(capsys, monkeypatch, is
         assert rec.startswith("python ") and "--send" not in rec and f" {argv[0]} " in rec, rec
         assert "--dry-run" not in rec and (argv[1] != "--to" or "a@x.com" in rec), rec
         if argv[0] == "new" and "--dry-run" not in argv:
-            assert f'--subject "보고 {SECRET}"' in rec, rec
+            assert f"--subject '보고 {SECRET}'" in rec, rec
     assert SECRET not in error_log_text(isolated_dirs)                # 제목 같은 내용 인자는 오류 로그에 남기지 않음
 
 

@@ -243,10 +243,10 @@ def test_map_comma_number_stops_with_command(tmp_path):
     p = write_df(tmp_path / "g.csv", pd.DataFrame({"A": A, "Y": A * 2}))
     bad = run_fail("ml_map.py", "-f", p, "-i", "A=1,000", "-y", "Y")            # 2.9.13: '숫자가 아닙니다' without a fix
     rec = bad["message"].split("[추천] ")[1].strip()
-    assert '"A=1000"' in rec
+    assert " -i A=1000" in rec
     assert run_tool("ml_map.py", *split_command(rec)[2:])["points"][0]["values"]["Y"] == 2000
     bad = run_fail("ml_map.py", "-f", p, "--find", "Y=1,000", "--vary", "A")
-    assert '--find "Y=1000"' in bad["message"]
+    assert '--find Y=1000' in bad["message"]
 
 
 # ---- 값 열마다 따로 (MultiTable): 빈 칸, 근거 행, 범위, 쓰지 않은 열 경고 ----------------

@@ -1129,6 +1129,10 @@ python ml_export.py -m 공정_ml_data\v3 --inputs "생산효율=반응온도,촉
 본문은 지운 뒤 작성합니다. 이때 결과 JSON `recovered`에 적힙니다. 두 템플릿을 모두 열 수 없으면 `STOP_RETRY`와 재설치 명령
 (`python -m pip install --force-reinstall python-docx`)을 안내합니다.
 
+명령 문자열(`next_commands`·`[추천]` 전체 명령)의 인자 따옴표는 실행 셸에 맞춥니다 (2.9.68): `pwsh`가 PATH에 있으면 PowerShell 7, 없으면
+Windows PowerShell 5.1(OpenCode 셸 도구와 같은 순서), 환경변수 `ML_KIT_SHELL`=`pwsh|powershell|cmd|bash`로 강제. 값은 작은따옴표 `'...'`이고
+5.1이면 값 안의 `"`·끝 백슬래시·빈 값을 미리 바꿉니다 (규칙: `CLI-dev/README.md` 공통 결과 키).
+
 ### 4) 오류 로그 (`data\logs\errors.txt`)
 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 도구 폴더의 `data\logs\errors.txt`에 덧붙습니다.
 `C:\CLI\ml-kit`에 배포했다면 `C:\CLI\ml-kit\data\logs\errors.txt`입니다. 환경변수 `ML_KIT_DATA_DIR`로 데이터 폴더를 바꿀 수 있습니다.

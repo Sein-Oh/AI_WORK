@@ -159,9 +159,9 @@ def run_shell(command, shell_kind, label):
     t0 = time.time()
     if shell_kind == "cmd":
         proc = subprocess.run(command, shell=True, capture_output=True, timeout=900, env=env)
-    else:
+    else:   # powershell = Windows PowerShell 5.1, pwsh = PowerShell 7 (OpenCode 셸 도구와 같은 두 셸)
         ps = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command
-        proc = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=900, env=env)
+        proc = subprocess.run([shell_kind, "-NoProfile", "-Command", ps], capture_output=True, timeout=900, env=env)
     return _parse(proc, label, command=f"[{shell_kind}] {command}", sec=time.time() - t0)
 
 
@@ -395,22 +395,28 @@ def test_all(ctx, only):
                f"기존={os.path.basename(rep)}, 새 파일={os.path.basename(got)}", d, c, e)
 
     def m8():
-        d, c, o, e = run_tool("ml_train.py", "-f", ctx.path("품질 등급.csv"), "-x", "반응온도,촉매비율,수분함량",
-                              "-y", "품질등급", "--task", "classification", "--desc", "등급 분류")
-        nexts = (d or {}).get("next_commands", [])
-        flagged_ok = all(isinstance(x.get("needs_input"), bool) and (x["needs_input"] == ("<" in x["command"]))
-                         for x in nexts)
-        cmds = [x["command"] for x in nexts if not x.get("needs_input")]
-        if not cmds:
-            record(ctx, "M8", "next_commands를 cmd.exe / PowerShell에 그대로 실행", False, "실행할 next_commands 없음", d, c, e)
-            return
-        cmd = cmds[0]
-        results = {}
-        for kind in ("cmd", "powershell"):
+        # 2.9.68: 명령의 따옴표는 실행 셸에 맞춤 (ML_KIT_SHELL). 셸마다 그 셸용 명령을 만들게 해서 그 셸에 그대로 넣음
+        kinds = ["cmd", "powershell"] + (["pwsh"] if shutil.which("pwsh") else [])
+        results, flagged_ok, d, c, e, cmd = {}, True, None, None, "", ""
+        for kind in kinds:
+            os.environ["ML_KIT_SHELL"] = kind
+            try:
+                d, c, o, e = run_tool("ml_train.py", "-f", ctx.path("품질 등급.csv"), "-x", "반응온도,촉매비율,수분함량",
+                                      "-y", "품질등급", "--task", "classification", "--desc", "등급 분류 $x 100% (A)")
+            finally:
+                os.environ.pop("ML_KIT_SHELL", None)
+            nexts = (d or {}).get("next_commands", [])
+            flagged_ok = flagged_ok and all(isinstance(x.get("needs_input"), bool) and (x["needs_input"] == ("<" in x["command"]))
+                                            for x in nexts)
+            cmds = [x["command"] for x in nexts if not x.get("needs_input")]
+            if not ok_(d) or not cmds:
+                results[kind] = ("실행할 next_commands 없음", None, c, e[-200:])
+                continue
+            cmd = cmds[0]
             rd, rc, ro, re_ = run_shell(cmd, kind, f"next_commands via {kind}")
             results[kind] = ((rd or {}).get("status"), (rd or {}).get("version"), rc, re_[-200:] if not ok_(rd) else "")
-        ok = ok_(d) and flagged_ok and all(v[0] == "ok" for v in results.values())
-        record(ctx, "M8", "next_commands를 cmd.exe / PowerShell에 그대로 실행 (따옴표, %, 괄호) + needs_input 표시", ok,
+        ok = flagged_ok and all(v[0] == "ok" for v in results.values())
+        record(ctx, "M8", "next_commands를 cmd.exe / PowerShell에 그대로 실행 (셸별 따옴표, $, %, 괄호) + needs_input 표시", ok,
                f"needs_input 표시 정확={flagged_ok}, 명령={cmd[-120:]!r}, 결과={results}", d, c, e)
 
     def m9():

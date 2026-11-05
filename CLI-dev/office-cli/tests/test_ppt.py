@@ -332,7 +332,7 @@ def test_truncated_read_continues_with_remaining_selected_slides(pp, capsys):
     pp["prs"] = prs
     code, out = run_main(ppt, capsys, "read", "--slides", "1,5,9")
     assert code == 0 and out["truncated"] is True and [s["no"] for s in out["slides"]] == [1]
-    assert out["next_commands"][0]["command"].endswith('--slides "5,9"')          # 이전: 2-9
+    assert out["next_commands"][0]["command"].endswith("--slides '5,9'")          # 이전: 2-9
 
 
 # ---------------------------------------------------------------------------

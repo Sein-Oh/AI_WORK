@@ -9,7 +9,7 @@ import fake_word as fw
 import word
 from fake_office import make_win32com
 from fake_word import FakeComment, FakeRange, FakeWordDocument
-from office_helpers import assert_not_logged, Bag, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, stub_com, undo_points
+from office_helpers import assert_not_logged, Bag, shell_sim, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, stub_com, undo_points
 
 
 def doc_paras(doc):
@@ -750,7 +750,7 @@ def test_read_section_truncated_gives_paragraph_range(wd_pages, capsys, monkeypa
     assert code == 0 and out["truncated"] is True
     nxt = out["next_commands"][0]["command"]
     shown = len(out["paragraphs"])
-    assert f"--paragraphs {shown + 1}-8" in nxt                      # 1장 끝(단락 8)까지만 이어 읽기
+    assert f"--paragraphs '{shown + 1}-8'" in nxt                      # 1장 끝(단락 8)까지만 이어 읽기
     assert "--section 1 --save" in out["next_commands"][1]["command"]
 
 
@@ -871,7 +871,7 @@ def test_read_paragraphs_noncontiguous_truncated_continues_with_paragraphs(wd_pa
     assert code == 0 and out["truncated"] is True
     shown = [p["no"] for p in out["paragraphs"]]
     rest = [n for n in (1, 2, 3, 9) if n not in shown]
-    assert f'--paragraphs "{word._compress(rest)}"' in out["next_commands"][0]["command"]
+    assert f"--paragraphs '{word._compress(rest)}'" in out["next_commands"][0]["command"]
 
 
 def test_comment_text_without_action_add_still_adds(cd, capsys):
@@ -968,6 +968,22 @@ def test_fill_dry_run_changes_nothing(form_doc, capsys, tmp_path):
     cmd = out["confirm_commands"][0]["command"]
     assert "--dry-run" not in cmd and "--overwrite" in cmd and " fill " in cmd
     assert out["confirm_commands"][0]["destructive"] is True  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
+
+
+@pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd", "bash"])
+def test_fill_confirm_command_path_survives_each_shell(form_doc, capsys, tmp_path, monkeypatch, shell):
+    """1.4.76: 값 파일 경로에 공백·$·'·()·%·끝 백슬래시 폴더가 있어도 confirm_commands를 그 셸로 실행하면 같은 경로."""
+    doc, _ = form_doc
+    monkeypatch.setenv("OFFICE_CLI_SHELL", shell)
+    folder = tmp_path / "값 $x (1) it's 100%"
+    folder.mkdir()
+    f = _vals(folder, "{{업체명}},한빛 $전자\n표2!R3C3,2.5 A\n")
+    code, out = run_word(capsys, "fill", "--file", f, "--dry-run")
+    assert code == 0 and out["dry_run"] is True, out
+    argv = shell_sim.run_shell(out["confirm_commands"][0]["command"], shell)
+    assert argv[argv.index("--file") + 1] == f, (shell, out["confirm_commands"])
+    code, out = run_word(capsys, *argv[2:])
+    assert code == 0 and "업체: 한빛 $전자" in doc.text and doc.grid_tables[1].grid[2][2] == "2.5 A", out
 
 
 def test_fill_bad_rows_and_missing_places_change_nothing(form_doc, capsys, tmp_path):

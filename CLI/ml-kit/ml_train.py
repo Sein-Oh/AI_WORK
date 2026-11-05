@@ -27,7 +27,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     load_data_file, apply_eval_expressions, eval_source_columns,
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
-    retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text,
+    retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text, quote_arg,
     parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
     RESUME_MAX_AGE, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD,
@@ -223,10 +223,10 @@ def leakage_error(overlap: List[str], features: List[str], targets: List[str]) -
     if cmd and not any('"' in n for n in features + targets):
         if tgts_wo:
             cands.append({"purpose": f"{names}을(를) 타겟(-y)에서 빼고 입력으로만 쓰기",
-                          "command": f"{cmd} -x {_q(','.join(features))} -y {_q(','.join(tgts_wo))}"})
+                          "command": f"{cmd} -x {quote_arg(','.join(features))} -y {quote_arg(','.join(tgts_wo))}"})
         if feats_wo:
             cands.append({"purpose": f"{names}을(를) 입력(-x)에서 빼고 타겟으로만 예측하기",
-                          "command": f"{cmd} -x {_q(','.join(feats_wo))} -y {_q(','.join(targets))}"})
+                          "command": f"{cmd} -x {quote_arg(','.join(feats_wo))} -y {quote_arg(','.join(targets))}"})
     msg = (f"타겟 누수: {names}이(가) 입력(-x)과 타겟(-y)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
            f"어느 쪽에서 뺄지 사용자에게 물으십시오.")
     if cands:
@@ -1604,16 +1604,12 @@ def bounded_correlation(
     return corr_full.loc[keep, keep].to_dict(), True
 
 
-def _q(v: str) -> str:
-    return '"' + str(v) + '"'
-
-
 def predict_next_command(final_dir: str, purpose: str) -> Dict[str, Any]:
     """The prediction command for a new file, without layout options: ml_predict.py finds the header of each file
     (a layout that does not fit the new file is recovered in place, so copying the training layout is not needed)."""
     here = os.path.dirname(os.path.abspath(__file__))
     return {"purpose": purpose,
-            "command": f"python {_q(os.path.join(here, 'ml_predict.py'))} -m {_q(final_dir)} -f \"<새데이터.xlsx>\"",
+            "command": f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} -m {quote_arg(final_dir)} -f {quote_arg('<새데이터.xlsx>')}",
             "needs_input": True, "placeholder": "<새데이터.xlsx>"}
 
 
@@ -1633,23 +1629,23 @@ def build_next_commands(
     carry the placeholder name, and are listed after the commands that can run as-is.
     """
     here = os.path.dirname(os.path.abspath(__file__))
-    train_py = _q(os.path.join(here, "ml_train.py"))
-    base = [f"python {train_py}", "-f", _q(raw_file)]
+    train_py = quote_arg(os.path.join(here, "ml_train.py"))
+    base = [f"python {train_py}", "-f", quote_arg(raw_file)]
     for flag, val in (("--header-row", args.header_row), ("--unit-row", args.unit_row),
                       ("--data-row", args.data_row), ("--dtypes", args.dtypes), ("--exclude-where", exclude_where)):
         if val is not None:
-            base += [flag, _q(val)]
+            base += [flag, quote_arg(val)]
     if task == TASK_CLASSIFICATION:
         base += ["--task", TASK_CLASSIFICATION]
         if positive_class is not None:
-            base += ["--positive-class", _q(positive_class)]
+            base += ["--positive-class", quote_arg(positive_class)]
 
     def names_arg(names: List[str], fname: str, limit: int = 15) -> str:
         if len(names) <= limit and not any('"' in n for n in names):
-            return _q(",".join(names))
+            return quote_arg(",".join(names))
         with open(os.path.join(staging_dir, fname), "w", encoding="utf-8") as f:
             f.write("\n".join(names) + "\n")
-        return _q(os.path.join(final_dir, fname))
+        return quote_arg(os.path.join(final_dir, fname))
 
     def features_arg(feats: List[str], tag: str) -> str:
         return names_arg(feats, f"next_features_{tag}.txt")
@@ -1666,7 +1662,7 @@ def build_next_commands(
     if mean_score >= 0.90:  # caller passes the weakest target's score
         cmds.append({
             "purpose": REPORT_PURPOSE[task],
-            "command": f"python {_q(os.path.join(here, 'ml_report.py'))} -f {_q(raw_file)}",
+            "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
             "needs_input": False,
         })
         cmds.append(predict_next_command(
@@ -1679,8 +1675,8 @@ def build_next_commands(
     if weak and keep_base and retrain_ok and quotable(*keep_evals):
         parts = base + ["-x", features_arg(keep_base, "pruned")]
         if keep_evals:
-            parts += ["--eval", _q("; ".join(keep_evals))]
-        parts += ["--tag", _q("저기여피처_제외")]
+            parts += ["--eval", quote_arg("; ".join(keep_evals))]
+        parts += ["--tag", quote_arg("저기여피처_제외")]
         cmds.append({"purpose": f"기여도 1% 이하 피처 {weak[:5]} 제외 후 재학습", "command": " ".join(parts),
                      "needs_input": False})
 
@@ -1691,8 +1687,8 @@ def build_next_commands(
         existing = set(feature_names) | {e.split("=", 1)[0].strip() for e in applied_evals}
         if new_name not in existing and retrain_ok and quotable(*applied_evals, a, b):
             evals = applied_evals + [f"{new_name} = {a} * {b}"]
-            parts = base + ["-x", features_arg(base_features, "all"), "--eval", _q("; ".join(evals)),
-                            "--tag", _q("교차항_추가")]
+            parts = base + ["-x", features_arg(base_features, "all"), "--eval", quote_arg("; ".join(evals)),
+                            "--tag", quote_arg("교차항_추가")]
             cmds.append({"purpose": f"상위 피처 '{a}', '{b}' 교차항 추가 후 재학습", "command": " ".join(parts),
                          "needs_input": False})
     return cmds
@@ -2884,7 +2880,7 @@ def build_best_next_commands(raw_file: str, final_dir: str, args: argparse.Names
     here = os.path.dirname(os.path.abspath(__file__))
     return [
         {"purpose": REPORT_PURPOSE.get(task, REPORT_PURPOSE[TASK_CLASSIFICATION]),
-         "command": f"python {_q(os.path.join(here, 'ml_report.py'))} -f {_q(raw_file)}",
+         "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
          "needs_input": False},
         predict_next_command(final_dir, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
     ]
