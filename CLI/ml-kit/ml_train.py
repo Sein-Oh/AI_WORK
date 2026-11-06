@@ -1072,8 +1072,10 @@ def get_classification_models(seed: int = 42, balanced: bool = False, n_rows: in
         "ExtraTrees": ExtraTreesClassifier(n_estimators=100, random_state=seed, n_jobs=-1, class_weight=cw,
                                            **_bagging_kwargs(n_rows)),
         # make_scorer object (not the "f1_macro" string): the string fails for binary labels in scikit-learn 1.9
+        # l1_ratios=(0.0,) (L2, 지금 기본과 같음)·use_legacy_attributes=False: scikit-learn 1.10에서 바뀌는 기본값을 미리 정함 (FutureWarning)
         "LogisticRegression": LogisticRegressionCV(Cs=8, cv=3, max_iter=3000, class_weight=cw,
-                                                   scoring=make_scorer(f1_score, average="macro")),
+                                                   scoring=make_scorer(f1_score, average="macro"),
+                                                   l1_ratios=(0.0,), use_legacy_attributes=False),
         "KNeighbors": KNeighborsClassifier(n_neighbors=5),
     }
     if n_rows > KNN_MAX_ROWS:
