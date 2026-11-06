@@ -28,7 +28,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
     percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,
-    load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, avoid_overwrite, warn_long_path,
+    load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, mark_committed, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, CATEGORY_CANDIDATES_MAX, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
@@ -288,6 +288,7 @@ def _write_book(path: str, sheets: Dict[str, pd.DataFrame], overwrite: bool = Fa
             for name, frame in sheets.items():
                 frame.to_excel(xw, sheet_name=name, index=False)
     real = save_with_lock_fallback(path, _w, what="결과 파일")
+    mark_committed(f"결과 파일 {os.path.basename(real)}", output_file=real)
     try:
         back = pd.read_excel(real, sheet_name=None)
         ok = all(len(back[n]) == len(f) for n, f in sheets.items())

@@ -315,8 +315,11 @@ def test_no_adhoc_py_rule():
                'cd C:\\CLI-dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
                'cd C:\\CLI-dev; python ml-kit\\tools\\run_win_tests.py --agent',
                'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
-               'python -m pytest -q']
+               'python -m pytest -q',
+               # 회사 PC 2026-11-06 R1: JSON 이스케이프 그대로 겹친 구분자 (Windows에서는 같은 파일)
+               'python "C:\\\\CLI\\\\ml-kit\\\\ml_report.py" -f "C:\\\\CLI-dev\\\\work\\\\a.xlsx"']
     bad_cmds = ['python -c "import pandas"',
+                'python "C:\\\\CLI\\\\ml-kit\\\\helper.py"',
                 "python - <<'EOF'\nprint(1)\nEOF",
                 "python <<EOF\nprint(1)\nEOF",
                 "python -u C:\\temp\\x.py",
@@ -881,6 +884,7 @@ def test_office_samples_match_scenarios(tmp_path):
     assert set(made) == {"규격서.txt", "규격대조.xlsx", "단위표.xlsx", "주간보고.docx", "성적서양식.docx", "시험성적서.docx"}
     ws = openpyxl.load_workbook(tmp_path / "규격대조.xlsx").active
     assert [ws[f"B{r}"].value for r in range(3, 8)] == ["정격 전압", "소비 전류", "동작 온도", "절연 저항", "포장 색상"]
+    assert ws["D2"].value == "단위" and ws["D3"].value == "V"       # check가 머리글 '단위' 열을 행마다 읽음
     ws = openpyxl.load_workbook(tmp_path / "단위표.xlsx").active
     assert ws["C6"].value is None and ws["C7"].value is None and ws["C5"].value == "단위"
     form = "\n".join(p.text for p in docx.Document(str(tmp_path / "성적서양식.docx")).paragraphs)

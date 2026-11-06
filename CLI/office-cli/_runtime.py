@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.76"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.77"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -740,10 +740,21 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
 COMMAND_ALIASES = {"excel": {"list": "info", "sheets": "info"}, "word": {"list": "info", "toc": "outline"},
                    "ppt": {"list": "info"}, "office": {"list": "windows", "redo": "undo"},
                    "outlook": {"attachment": "attachments", "attach": "attachments", "download": "attachments"}}
-OPTION_SYNONYMS = {"--target": ["--app", "--file", "--name"], "--file": ["--target"], "--path": ["--file", "--target"],
-                   "--text": ["--value", "--file"],  # 엑셀 write에 워드식 --text를 쓰면 --target(철자 비슷)이 아니라 --value
-                   "--output": ["--save"], "--out": ["--save"], "--sheet-name": ["--sheet", "--name"],
-                   "--cell": ["--range"]}
+# 같은 뜻이라 바꿔 실행해도 되는 옵션 (도구, 명령, 지어낸 옵션) -> 바꿀 토큰 ("*" = 모든 도구·명령, [] = 빼기).
+# 바꿀 옵션이 그 명령에 있을 때만 씀. 값은 그대로 뒤에 붙고, 고친 전체 명령을 [추천]으로 줌 (Gemma 기록 2026-11-06 감사)
+SAME_MEANING = [
+    ("*", "*", "--file", ["--target"]), ("*", "*", "--path", ["--target"]), ("*", "*", "--input", ["--target"]),
+    ("reader", "*", "--target", ["--file"]), ("reader", "*", "--path", ["--file"]), ("reader", "*", "--input", ["--file"]),
+    ("office", "undo", "--target", ["--app"]),
+    ("*", "*", "--output", ["--save"]), ("*", "*", "--out", ["--save"]), ("*", "*", "--save-as", ["--save"]),
+    ("*", "*", "--sheet-name", ["--sheet"]), ("excel", "*", "--cell", ["--range"]), ("*", "*", "--rows", ["--max-rows"]),
+    ("excel", "write", "--text", ["--value"]), ("excel", "read", "--text", ["--search"]),
+    ("word", "write", "--append", ["--pos", "end"]), ("word", "write", "--position", ["--pos"]), ("word", "write", "--at", ["--pos"]),
+    ("outlook", "*", "--text", ["--body"]), ("outlook", "*", "--max", ["--limit"]),
+    ("*", "*", "--json", []), ("*", "*", "--encoding", []),      # 출력은 늘 JSON, 인코딩은 자동 판별
+]
+# 철자가 비슷해도 추천하지 않는 옵션 (뜻이 크게 다르거나 되돌리기 어려움: --cell -> --all이 캐시 전부 삭제·전체 답장이었음)
+NO_FUZZY_OPTIONS = {"--all", "--overwrite", "--to", "--cc", "--bcc", "--attach", "--target", "--delete", "--send", "--app"}
 # 되돌리기 어려운 명령 (메일 발송, 캐시 지우기, 되돌리기): 오타 추천을 [추천](LLM이 묻지 않고 1번 실행)이 아니라
 # [후보](사용자에게 물음)로 줌 (1.4.75, 11차 검토: 'sent', 'sned', 'end' -> send)
 DESTRUCTIVE_COMMANDS = {"send", "clear", "undo"}
@@ -817,11 +828,21 @@ class JsonArgumentParser(argparse.ArgumentParser):
                         f" [후보] {best}")
             return f" [추천] {best}" if best else f" [후보] {', '.join(choices)}"
         m = re.search(r"unrecognized arguments: (.+)$", message)
-        if not m:
+        req = re.search(r"the following arguments are required: (.+)$", message)
+        if not m and not req:
             return ""
         cmd = CURRENT_ARGV[0] if CURRENT_ARGV else ""
         sub = subs.get(cmd) if subs else self
         opts = [o for a in (sub._actions if sub else []) for o in a.option_strings if o.startswith("--")]
+        known = {o for a in (sub._actions if sub else []) for o in a.option_strings}
+        argv = list(CURRENT_ARGV or [])
+        flags = [x for x in argv[1:] if x.startswith("--") and "=" not in x and x not in known]
+        if req:
+            # 필수 옵션이 없다는 오류: 지어낸 옵션이 그 필수 옵션과 같은 뜻이면 고친 명령 (reader read --target a.pdf -> --file)
+            fixed = self._same_meaning(argv, flags, opts, known) if flags else None
+            if fixed is not None:
+                return " " + fixed
+            return ""
         extra = m.group(1).split()
         flags = [x for x in extra if x.startswith("--")]
         for f in flags:
@@ -840,14 +861,50 @@ class JsonArgumentParser(argparse.ArgumentParser):
                         rest.append(a)
                     other = other.replace("{cmd}", next_command(f"{self.tool_name}.py", rest, "")["command"])
                 return " " + other
+        fixed = self._same_meaning(argv, flags, opts, known) if flags else None
+        if fixed is not None:
+            return " " + fixed
         for f in flags:
-            near = [o for o in OPTION_SYNONYMS.get(f, []) if o in opts] or difflib.get_close_matches(f, opts, n=1, cutoff=0.7)
+            near = [o for o in difflib.get_close_matches(f, opts, n=1, cutoff=0.85)
+                    if o not in NO_FUZZY_OPTIONS and o[2:5] == f[2:5]]
             if near:
-                return f" '{cmd}' 명령에는 {f} 옵션이 없습니다. [추천] {near[0]}"
+                # 철자만 비슷한 옵션은 뜻이 다를 수 있어 묻게 함 ([추천]이면 LLM이 묻지 않고 실행)
+                return f" '{cmd}' 명령에는 {f} 옵션이 없습니다. 비슷한 옵션이 맞는지 사용자에게 물으세요. [후보] {near[0]}"
         if not flags:
             return " 띄어쓰기가 있는 경로나 값은 큰따옴표로 감싸세요 (예: --target \"C:\\폴더 이름\\파일.xlsx\")."
         opts = [o for o in opts if o != "--help"]
-        return f" '{cmd}' 명령의 옵션: {', '.join(opts)}" if opts else ""
+        return f" '{cmd}' 명령에는 {', '.join(flags)} 옵션이 없습니다. 옵션: {', '.join(opts)}" if opts else ""
+
+    def _same_meaning(self, argv: List[str], flags: List[str], opts: List[str], known: set) -> Optional[str]:
+        """지어낸 옵션을 모두 같은 뜻의 옵션으로 바꿀 수 있으면 '... [추천] <고친 전체 명령>', 하나라도 못 바꾸면 None."""
+        cmd = argv[0] if argv else ""
+        plan: Dict[str, List[str]] = {}
+        for f in flags:
+            repl = next((r for t, c, o, r in SAME_MEANING if o == f and t in ("*", self.tool_name) and c in ("*", cmd)
+                         and (not r or r[0] in opts)), None)
+            if repl is None:
+                return None
+            plan[f] = repl
+        out: List[str] = []
+        i = 0
+        while i < len(argv):
+            a = argv[i]
+            if a in plan:
+                has_value = i + 1 < len(argv) and not argv[i + 1].startswith("--") and argv[i + 1] not in known
+                repl = plan[a]
+                if repl:
+                    out += repl
+                    if has_value and len(repl) == 1:
+                        out.append(argv[i + 1])
+                    i += 2 if has_value and len(repl) == 1 else 1     # --append처럼 바꾼 토큰이 둘이면 뒤의 글은 그대로 둠
+                else:
+                    i += 2 if has_value else 1                # 빼는 옵션은 값도 뺌
+                continue
+            out.append(a)
+            i += 1
+        what = ", ".join(f"{f} -> {' '.join(r) if r else '(뺌)'}" for f, r in plan.items())
+        return (f"'{cmd}' 명령에는 {', '.join(plan)} 옵션이 없어 같은 뜻으로 고쳤습니다 ({what}). "
+                f"[추천] {next_command(f'{self.tool_name}.py', out, '')['command']}")
 
     def error(self, message: str) -> None:  # type: ignore[override]
         self.print_usage(sys.stderr)

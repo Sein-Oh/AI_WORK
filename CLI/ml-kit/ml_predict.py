@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.68"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.69"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -371,7 +371,9 @@ def unfinished_payload(exc: "Unfinished") -> Dict[str, Any]:
         "next_commands": [cmd] if cmd else [],
         "agent_directive": ("CONTINUE: 아직 끝나지 않았습니다. 명령 시간 제한 때문에 나눠서 진행하며, 지금까지 한 일은 저장되어 있습니다. "
                             + ("next_commands의 명령을" if cmd else "방금 실행한 명령을")
-                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). 끝나면 VERIFIED 결과가 나옵니다."),
+                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). progress가 바뀌는 동안(약 N단계 남음이 줄거나 "
+                            "글이 달라짐) 계속하고, 바로 앞과 같은 progress가 나오거나 300번을 넘으면 멈추고 progress를 알리세요. "
+                            "끝나면 VERIFIED 결과가 나옵니다."),
     }
 
 
@@ -466,11 +468,48 @@ def step_too_long_error(label: str, limit: float, tries: int) -> InputError:
     return err
 
 
+# A result this command already saved for good (a version folder recorded in the ledger, a performance table, a report,
+# a result file): mark_committed. Running the same command again would do that work again (a second version, a second
+# file), so the watchdog no longer answers CONTINUE once such a result is saved: it answers ok + UNVERIFIED (saved, not
+# checked) with the saved paths (2.9.69). rerun_safe=True: the same command run again reuses it (ml_report -f reuses a
+# fresh best version, ml_train --best remembers the best versions it made), so CONTINUE stays right.
+RUN_COMMITTED: List[Dict[str, Any]] = []
+
+
+def mark_committed(what: str, rerun_safe: bool = False, **keys: Any) -> None:
+    """Records a result this command saved for good (what: '학습 버전 v2', keys: version, version_dir, output_file ...)."""
+    RUN_COMMITTED.append({"what": what, "rerun_safe": rerun_safe, "keys": keys})
+
+
+def committed_rerun_safe() -> None:
+    """The results saved so far are reused by the same command run again (e.g. ml_train --best saved best_run.json)."""
+    for c in RUN_COMMITTED:
+        c["rerun_safe"] = True
+
+
+def committed_payload(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """ok + UNVERIFIED of a command stopped by the watchdog after it saved its result (mark_committed)."""
+    what = ", ".join(c["what"] for c in items)
+    keys: Dict[str, Any] = {}
+    for c in items:
+        keys.update(c["keys"])
+    note = (f"{what} 저장됨, 확인하지 못함 (시간 제한({time_limit():.0f}초)에 닿아 저장 뒤 확인과 결과 정리 전에 명령을 끝냄)")
+    return {
+        "status": "ok", "verified": False, **keys,
+        "saved": [{"what": c["what"], **c["keys"]} for c in items],
+        "unverified": [note],
+        "agent_directive": (f"UNVERIFIED: {note}. 같은 명령을 다시 실행하지 마세요 (다시 하면 같은 일을 또 해서 새 버전이나 "
+                            "새 파일이 하나 더 생김). saved의 내용(버전, 경로)과 확인하지 못했다는 것을 사용자에게 그대로 알리세요."),
+    }
+
+
 def _watchdog_payload() -> Tuple[Dict[str, Any], int]:
     """The JSON line (and exit code) of a command still running at the limit + WATCHDOG_GRACE."""
     label = CURRENT_STEP.get("label") or "작업"
     limit = time_limit()
-    if RUN_SAVED:
+    if any(not c["rerun_safe"] for c in RUN_COMMITTED):
+        return committed_payload(RUN_COMMITTED), 0
+    if RUN_SAVED or RUN_COMMITTED:
         return unfinished_payload(Unfinished(f"{label} 도중 시간 제한({limit:.0f}초)에 닿아 멈춤. 그 전 단계까지 저장됨")), 0
     tries = int(CURRENT_STEP.get("tries") or 0)
     if CURRENT_STEP.get("name") and tries < STEP_TRIES:
@@ -813,6 +852,7 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     RUN_START = time.monotonic()
     SAVE_FAILED.clear()
     RUN_SAVED.clear()
+    RUN_COMMITTED.clear()
     CURRENT_STEP.clear()
     WATCHDOG_HOLD.clear()
     _RESUME_PLACE.clear()
@@ -844,22 +884,126 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     emit_json_response(_with_recovered(result))
 
 
+# Option names a light LLM invents for an option that exists (2.9.69): an argument error gives [추천] the full command
+# with the real option (the first of the list this command has). One that starts the real option ('--target' for
+# --targets: argparse's abbreviation before 2.9.69, allow_abbrev is now off) is read as the real option, with [INFO].
+SAME_MEANING: Dict[str, List[str]] = {
+    "--model-dir": ["--model"], "--model-path": ["--model"], "--models": ["--model"], "--dir": ["--model"],
+    "--version-dir": ["--model"], "--model-folder": ["--model"],
+    "--input-file": ["--file"], "--data": ["--file"], "--data-file": ["--file"], "--path": ["--file"],
+    "--input": ["--file", "--inputs"], "--inputs": ["--input"], "--query": ["--input"],
+    "--target": ["--targets"], "--target-col": ["--targets"], "--target-cols": ["--targets"],
+    "--target-column": ["--targets"], "--y": ["--targets"],
+    "--feature": ["--features"], "--columns": ["--features"], "--feature-cols": ["--features"], "--x": ["--features"],
+    "--output": ["--save"], "--out": ["--save"], "--output-file": ["--save"], "-o": ["--save"],
+    "--header": ["--header-row"], "--unit": ["--unit-row"], "--exclude": ["--exclude-where"],
+    "--positive": ["--positive-class"], "--time": ["--time-limit"],
+}
+# Options with nothing to do in ml-kit: dropped in the [추천] command (value: how many arguments follow)
+DROP_OPTIONS = {"--json": 0, "--encoding": 1, "--verbose": 0, "--quiet": 0}
+# Never given as a lookalike, even as [후보]: replaces files or retrains everything
+NO_FUZZY_OPTIONS = {"--overwrite", "--best", "--help"}
+_OPTION_TOKEN = re.compile(r"--?[A-Za-z][A-Za-z0-9_-]*")
+
+
+class _ProbeError(Exception):
+    """A probe parse (JsonArgumentParser._parses) failed: the [추천] command would not parse either."""
+
+
 class JsonArgumentParser(argparse.ArgumentParser):
     """argparse that reports usage errors as Agent CLI Protocol JSON instead of bare text. Every ml-kit command takes
     --time-limit SEC (over ML_KIT_TIME_LIMIT, 0 = none): the [추천] command of a step longer than the limit
-    (step_too_long_error)."""
+    (step_too_long_error). Abbreviations are not read (allow_abbrev=False: '--data x' was --data-row); the same-meaning
+    names (SAME_MEANING) are mapped instead."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
+        self._probing = False
         self.add_argument("--time-limit", dest="time_limit", type=float, default=argparse.SUPPRESS,
                           help=f"명령 1번의 시간 제한(초, 기본 {TIME_LIMIT_ENV} 또는 {DEFAULT_TIME_LIMIT:.0f}, 0 = 없음). "
                                f"한 단계가 시간 제한보다 길다는 STOP_RETRY의 [추천] 명령에만 씀")
 
+    def _options(self) -> set:
+        return {o for a in self._actions for o in a.option_strings}
+
+    def _same_meaning(self, flag: str) -> Optional[str]:
+        opts = self._options()
+        return next((o for o in SAME_MEANING.get(flag, []) if o in opts), None)
+
     def parse_known_args(self, args=None, namespace=None):  # type: ignore[override]
-        ns, extra = super().parse_known_args(args, namespace)
-        if getattr(ns, "time_limit", None) is not None:
+        given = [str(a) for a in (sys.argv[1:] if args is None else args)]
+        if not self._probing:
+            self._given = given                       # what _hint fixes
+        opts = self._options()
+        read: List[str] = []
+        for a in given:
+            key, eq, val = str(a).partition("=")
+            real = self._same_meaning(key) if key.startswith("--") and key not in opts else None
+            if real and real.startswith(key):              # the abbreviation argparse read before 2.9.69
+                if not self._probing:
+                    sys.stderr.write(f"[INFO] 옵션 {key}을(를) {real}(으)로 읽음\n")
+                a = real + eq + val
+            read.append(a)
+        ns, extra = super().parse_known_args(read, namespace)
+        if getattr(ns, "time_limit", None) is not None and not self._probing:
             TIME_LIMIT_ARG[:] = [float(ns.time_limit)]
         return ns, extra
+
+    def _parses(self, args: List[str]) -> bool:
+        """True when args parse without an argument error (the [추천] command is checked before it is given)."""
+        self._probing = True
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.parse_args(args)
+            return True
+        except (_ProbeError, SystemExit):
+            return False
+        finally:
+            self._probing = False
+
+    def _hint(self) -> str:
+        """[추천] the full command with same-meaning names replaced and DROP_OPTIONS removed (when it parses),
+        else [후보] lookalike option names (never NO_FUZZY_OPTIONS), else nothing."""
+        import difflib
+        given = list(getattr(self, "_given", None) or [str(a) for a in sys.argv[1:]])
+        if "-h" in given or "--help" in given:
+            return ""
+        opts = self._options()
+        fixed: List[str] = []
+        unknown: List[str] = []
+        changes: List[str] = []
+        i = 0
+        while i < len(given):
+            a = given[i]
+            key, eq, val = a.partition("=")
+            if _OPTION_TOKEN.fullmatch(key) and key not in opts:
+                if key in DROP_OPTIONS:
+                    changes.append(f"{key} 뺌")
+                    takes_value = not eq and DROP_OPTIONS[key] and i + 1 < len(given) and not given[i + 1].startswith("-")
+                    i += 2 if takes_value else 1
+                    continue
+                real = self._same_meaning(key)
+                if real:
+                    changes.append(f"{key} -> {real}")
+                    fixed.append(real + eq + val)
+                    i += 1
+                    continue
+                unknown.append(key)
+            fixed.append(a)
+            i += 1
+        if changes and not unknown and self._parses(fixed):
+            cmd = command_text(argv=[sys.argv[0]] + fixed)
+            if cmd:
+                return f" 같은 뜻의 옵션으로 고친 명령 ({', '.join(changes)}). [추천] {cmd}"
+        hints = []
+        for key in unknown:
+            near = difflib.get_close_matches(key, sorted(o for o in opts if o.startswith("--")), n=3, cutoff=0.6)
+            if near and near[0] in NO_FUZZY_OPTIONS:      # '--overwrit': never guessed (replaces files, retrains all)
+                hints.append(f"'{key}' 옵션은 없습니다. 무엇을 하려던 것인지 사용자에게 확인하세요.")
+            elif near:
+                hints.append(f"'{key}' 옵션은 없습니다. [후보] {', '.join(o for o in near if o not in NO_FUZZY_OPTIONS)} (뜻이 같은지 사용자에게 확인)")
+        return (" " + " ".join(hints)) if hints else ""
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
         """R7: help text goes to stderr, stdout gets exactly 1 JSON line (argparse then exits 0)."""
@@ -872,12 +1016,20 @@ class JsonArgumentParser(argparse.ArgumentParser):
         })
 
     def error(self, message: str) -> None:  # type: ignore[override]
+        if self._probing:
+            raise _ProbeError(message)
         self.print_usage(sys.stderr)
+        try:
+            hint = self._hint()
+        except Exception:                 # a hint never breaks the one JSON line
+            hint = ""
         payload = {
             "status": "error",
             "error_type": "input",
-            "message": f"CLI 인자 오류: {message}",
-            "agent_directive": "STOP_RETRY: 명령 인자가 잘못되었습니다. 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준).",
+            "message": f"CLI 인자 오류: {message}.{hint}",
+            "agent_directive": ("STOP_RETRY: 명령 인자가 잘못되었습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 "
+                                "실행하세요. 없으면 다시 실행하지 말고 message를 그대로 알리세요 ([후보]가 있으면 사용자에게 묻기, "
+                                "옵션 이름은 SKILL.md 기준)."),
         }
         write_error_log(payload)
         emit_json_response(payload)
@@ -1159,6 +1311,20 @@ WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포�
               "값에 ; | 가 있으면 작은따옴표로 감쌈. 예: 생산효율 > 90; 라인 = B | 라인 = C)")
 
 Cond = Tuple[str, str, str]
+# ',' between two conditions ('라인 = A, 온도 > 180'): read as ONE condition (라인 equals the text 'A, 온도 > 180') it
+# matched no row and training excluded nothing without a word (2.9.69). A ',' after a condition with an operator and
+# before '<name with a letter> <operator>' (outside quotes) is that mistake: STOP_RETRY [추천] the command with ';'.
+# '1,500' (no name after it) and a quoted value ('비고 = \'A, B > 3\'') are not touched.
+_WHERE_COMMA = re.compile(r"(?:>=|<=|!=|>|<|=|~)[^;|]*?(,)\s*(?=[^;|,=<>!~'\"]*[^\W\d_][^;|,=<>!~'\"]*?(?:>=|<=|!=|>|<|=|~))")
+
+
+def _where_comma_fix(text: str) -> str:
+    """text with every ',' that joins two conditions (outside quotes) replaced by '; ' (_WHERE_COMMA)."""
+    masked = _WHERE_QUOTED.sub(lambda m: "Q" * len(m.group(0)), text)
+    cuts = [m.start(1) for m in _WHERE_COMMA.finditer(masked)]
+    for i in reversed(cuts):
+        text = text[:i] + ";" + text[i + 1:]
+    return text
 
 
 def _where_parts(text: str) -> Optional[List[List[Cond]]]:
@@ -1275,8 +1441,15 @@ def _outside_quotes(text: str, fn: Callable[[str], str]) -> str:
 
 def where_retry(option: str, fixed: str) -> str:
     """[추천] for a fixed condition: the running command with the option replaced (a full command, R8), else the text."""
-    cmd = command_text(drop={option: option.lstrip("-").replace("-", "_")})
+    cmd = command_text(drop={option: ""})
     return f"{cmd} {option} {quote_arg(fixed)}" if cmd else fixed
+
+
+def option_retry(fixed: str, option: str, *aliases: str) -> str:
+    """[추천] for a fixed option value: the running command with `option` (also written as one of `aliases`) given
+    `fixed` (a full command, R8); in-process use (no ml-kit command): the option and the value."""
+    cmd = command_text(drop={o: "" for o in (option,) + aliases})
+    return f"{cmd} {option} {quote_arg(fixed)}" if cmd else f"{option} {quote_arg(fixed, 'cmd')}"
 
 
 def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
@@ -1292,9 +1465,14 @@ def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
             part = part.replace(a, b)
         return part
     fixed = _outside_quotes(raw, fix)
-    groups = _where_parts(fixed)
+    comma = _where_comma_fix(fixed)
+    groups = _where_parts(comma)
     if groups is None:
         raise InputError(f"{option} 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
+    if comma != fixed:
+        raise InputError(f"{option} 식 '{raw}'에서 조건 사이를 ','로 나눴습니다. ','로 나누면 조건 하나(앞 열의 값이 ',' 뒤까지 "
+                         f"전부)로 읽혀 맞는 행이 없습니다. 그리고는 ;, 또는은 |로 나눕니다. "
+                         f"[추천] {where_retry(option, where_text(groups))}")
     if fixed != raw:
         # a word or sign left inside a value ('불량 포함 시료') is quoted in the [추천] so it stays the value
         quoted = any(kept) or any(_where_value_text(v) != v for g in groups for _, _, v in g)
@@ -2717,10 +2895,11 @@ def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
     return f"{cmd} {opts}" if cmd else opts
 
 
-def command_text(drop: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """The running ml-kit command as one full command line (python, absolute script and path options), without the
-    options in drop. None when the running program is not an ml-kit command (in-process use)."""
-    argv = CURRENT_ARGV if CURRENT_ARGV is not None else list(sys.argv)
+def command_text(drop: Optional[Dict[str, str]] = None, argv: Optional[List[str]] = None) -> Optional[str]:
+    """The running ml-kit command (or argv: script + arguments) as one full command line (python, absolute script and
+    path options), without the options in drop. None when the program is not an ml-kit command (in-process use)."""
+    if argv is None:
+        argv = CURRENT_ARGV if CURRENT_ARGV is not None else list(sys.argv)
     script = os.path.basename(argv[0] or "") if argv else ""
     if not (script.startswith("ml_") and script.endswith(".py")):
         return None
@@ -3825,6 +4004,56 @@ def _no_repeated_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+# 'k1=v1; k2=v2' or 'k1=v1 k2=v2' ('k=v' pairs joined by ';' or spaces instead of ','): read as ONE pair (k1 = the
+# text 'v1; k2=v2'), so k2 looked missing and the tool asked to fill it with the median (2.9.69). A ';' or a space
+# before '<name>=' inside a value is that mistake: STOP_RETRY [추천] the command with ','.
+_KV_SLIP = re.compile(r"(?:;|\s)\s*[^\s,;=]+\s*=")
+_KV_SPLIT = re.compile(r"\s*;\s*|\s+(?=[^\s,;=]+\s*=)")
+
+
+def command_with_value(old: str, new: str) -> Optional[str]:
+    """The running command with the option whose value is `old` given `new` instead (a full command for [추천]),
+    None when the running program is not an ml-kit command or no option has that value."""
+    argv = CURRENT_ARGV if CURRENT_ARGV is not None else list(sys.argv)
+    for j in range(2, len(argv)):
+        if argv[j] == old and str(argv[j - 1]).startswith("-") and argv[j - 1] != old:
+            cmd = command_text(drop={argv[j - 1]: ""})
+            return f"{cmd} {argv[j - 1]} {quote_arg(new)}" if cmd else None
+    return None
+
+
+def _kv_separator_slip(input_str: str, row: Dict[str, str]) -> None:
+    """'k1=v1; k2=v2' / 'k1=v1 k2=v2' -> STOP_RETRY ([추천] the pairs joined by ',' when the split has one meaning)."""
+    slips = {k: v for k, v in row.items() if _KV_SLIP.search(v)}
+    if not slips:
+        return
+    fixed: Dict[str, str] = {}
+    clean = True
+    for k, v in row.items():
+        if k not in slips:
+            fixed[k] = v
+            continue
+        pieces = [p for p in _KV_SPLIT.split(v) if p.strip()]
+        first, rest = pieces[0], pieces[1:]
+        if ";" not in v and re.search(r"\s", first.strip()):
+            clean = False              # '160 압력 x=3': where the next name starts is not clear
+        fixed[k] = first.strip()
+        for p in rest:
+            if "=" not in p:
+                clean = False
+                continue
+            k2, v2 = p.split("=", 1)
+            if k2.strip() in fixed or k2.strip() in row:
+                clean = False
+            fixed[k2.strip()] = v2.strip()
+    text = ",".join(f"{k}={v}" for k, v in fixed.items())
+    head = (f"입력 '{input_str}'에서 '이름=값' 사이를 ','가 아닌 ';'이나 띄어쓰기로 나눴습니다. 그러면 앞 이름의 값이 뒤까지 "
+            f"전부로 읽혀 뒤 입력이 빠집니다. 'k1=v1,k2=v2'처럼 ','로 나누십시오.")
+    if clean:
+        raise InputError(f"{head} [추천] {command_with_value(input_str, text) or text}")
+    raise InputError(head + " 이름에 띄어쓰기가 있어 어디서 나눌지 정하지 못했습니다. 사용자에게 입력을 확인하십시오.")
+
+
 def parse_inline_input(input_str: str) -> pd.DataFrame:
     """
     Parses inline input into a DataFrame:
@@ -3877,6 +4106,7 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
             row_dict[last_key] = f"{row_dict[last_key]},{pair.strip()}"
     if not row_dict:
         raise InputError(f"유효한 인라인 입력 형식이 아닙니다 (JSON 또는 'k1=v1,k2=v2'): '{input_str}'")
+    _kv_separator_slip(input_str, row_dict)
     # '온도' next to '온도(°C)' (one column when the model / data has only '온도(°C)') is checked where the names are
     # matched to the model inputs or data columns (check_same_column), not here: a model can have both.
     df = pd.DataFrame([row_dict])
@@ -4795,6 +5025,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         else:
             # CSV Output with Windows Excel CP949 compatibility (utf-8-sig fallback)
             saved_file = write_csv_excel_compatible(df_result, saved_file)
+        mark_committed(f"예측 결과 파일 {os.path.basename(saved_file)}", output_file=saved_file)
 
     # R1: the saved file is read back (rows and columns) before saying VERIFIED
     unverified: List[str] = []
@@ -5402,6 +5633,7 @@ def _save_table(args: argparse.Namespace, df: pd.DataFrame, default_name: str, w
         path = write_csv_excel_compatible(df, path)
     else:
         path = save_with_lock_fallback(path, lambda p: df.to_excel(p, index=False), what=what)
+    mark_committed(f"{what} {os.path.basename(path)}", output_file=path)
     unverified: List[str] = []
     try:
         back = load_data_file(path, header_row=1)

@@ -11,6 +11,37 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.77] - 2026-11-06
+
+회사 PC 실기(2026-11-06, Gemma 종합 테스트 O1·O2·O5) 대응.
+
+### 수정
+- 닫힌 파일에 쓴 뒤 세션(문서를 닫고 백그라운드 Office를 끝낸 뒤)에서 시트·범위 객체를 읽어 OLE 0x800a01a8(개체 필요)로 실패하던 문제.
+  저장은 이미 끝나 실제로는 바뀌었는데 도구는 실패를 보고했음: `excel write --cells`(결과의 칸 목록 `ws.Name`), `excel chart`(transfer 명령의
+  `--sheet`), `excel comment --action list --range`(`rng.Address`). 회귀 테스트 `tests/test_session_scope.py`: with 세션 블록 밖에서 그 안의
+  COM 객체 속성을 읽는 코드를 코드 모양으로 찾음 (가짜 COM은 닫힌 뒤의 객체를 흉내 내지 않음).
+- `excel write --cells "C6=ft,C7=℃"`: 칸 구분은 `;`인데 쉼표로 나누면 C6에 `ft,C7=℃`가 통째로 들어감. 값 안에 `,<칸>=`(시트 붙은 칸 포함)가
+  있으면 쓰지 않고 `;`로 바꾼 전체 명령을 `[추천]` (값 안의 쉼표 `1,234`·글·수식·따옴표로 묶은 값은 그대로).
+  첫 `,<칸>=` 앞에 `=`가 있으면 값 자체가 `R1=10k,R2=4.7k` 같은 글이라 나누지 않음(검토: 그대로 실행하면 R2 칸에 쓰는 [추천]이었음),
+  따옴표는 값 전체를 묶었을 때만 제외(`'ft',C7='x'`는 거절). `word fill --slots`도 같은 규칙, JSON의 객체·목록·참거짓 값은 거절.
+  공백·`|`로 나눈 것(`C6=ft C7=20`: C6에 `ft C7=20`이 들어갔음)도 같은 방식으로 거절.
+- `excel read --where "금액 >= 100, 부서 = 영업"`: 조건을 쉼표로 나누면 값 `100, 부서 = 영업` 하나로 읽어 0건이었음. 쉼표 뒤가 `<열> <연산자>`이면
+  `;`로 고친 식을 `[추천]` (값 안의 쉼표 `1,000`, 따옴표로 묶은 글은 그대로).
+- 인자 오류의 옵션 추천 (Gemma 실패 유형 감사): 철자 비교(difflib)로 고른 옵션을 `[추천]`(LLM이 묻지 않고 실행)으로 줘
+  `--cell` -> `--all`(reader clear 캐시 전부 삭제, outlook reply 전체 답장), `--at` -> `--to`, `--text` -> `--target`, `--append` -> `--app`처럼 뜻이 다른
+  추천이 30종쯤 있었음. 같은 뜻 표 `SAME_MEANING`(도구·명령별: `--file`/`--path`/`--input` -> `--target`, reader는 `--target` -> `--file`,
+  `--output` -> `--save`, `--cell` -> `--range`(엑셀), `--rows` -> `--max-rows`, word write `--append` -> `--pos end`, excel read `--text` -> `--search`,
+  outlook `--text` -> `--body`, `--max` -> `--limit`, `--json`·`--encoding`은 뺌)로 고친 전체 명령을 `[추천]`. 필수 옵션 누락 오류(`reader read --target`)에도.
+  표에 없으면 철자 비교는 cutoff 0.85·앞 글자가 같을 때만 `[후보]`(사용자에게 물음), `--all`·`--overwrite`·`--to`·`--cc`·`--attach`·`--target` 등은 추천하지 않음.
+
+### 기능
+- `excel check --unit-col <열>`: 항목·값·단위 3열 표에서 행마다 단위 열을 읽음. 생략하면 값 열 바로 오른쪽 열의 머리글이 `단위`(`Unit`)일 때
+  자동으로 씀(JSON `unit_col`). 전에는 값 칸·머리글에 단위가 없으면 모든 행이 `판단필요`(`칸 단위 없음`)라 Gemma가 메모 미리보기 없이 사용자에게
+  판정을 되물었음. 실기 샘플 `규격대조.xlsx`에 단위 열(D)을 넣음 (기대: 일치 2, 불일치 2, 근거없음 1).
+- `word fill --slots "업체명=한빛전자; 시험일=2026-11-04; 표2!R3C4=25"`: 값 파일 없이 바로 채움. Gemma는 값 파일이 없어 `--slots` JSON을
+  지어냈고(PowerShell 5.1에서 따옴표가 깨짐), 이어 양식 문서를 `--file`로 줘 '인코딩 인식 실패'로 끝났음. `--file`과 `--slots`는 둘 중 하나,
+  양식 문서(.docx 등)를 `--file`로 주면 "양식은 --target" 안내, 값이 없으면 두 방법을 안내(예시 값 없이 `<자리>=<값>`).
+
 ## [1.4.76] - 2026-11-05
 
 도구가 내는 명령(`next_commands`, `confirm_commands`, `[추천]` 전체 명령)의 인자 따옴표를 실제 실행 셸에 맞춤.

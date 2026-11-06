@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library, MissingLibraryError,
     setup_console, run_cli, JsonArgumentParser, InputError,
-    sanitize_filename, load_json_file, save_with_lock_fallback, warn_long_path, avoid_overwrite,
+    sanitize_filename, load_json_file, save_with_lock_fallback, mark_committed, warn_long_path, avoid_overwrite,
     strip_unit, note_recovered, read_text_file, resolve_column_names,
     command_text, quote_arg, name_list,
 )
@@ -1334,6 +1334,7 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     warn_long_path(out_abs)
     out_abs = avoid_overwrite(out_abs, overwrite, what="보고서")
     saved = R.save(out_abs)
+    mark_committed(f"보고서 {os.path.basename(saved)}", report_file=saved)   # a stop now: saved, not CONTINUE
     unverified = verify_docx(saved, version, len(targets))
 
     return {

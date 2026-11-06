@@ -30,7 +30,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text, quote_arg,
     parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
-    RESUME_MAX_AGE, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD,
+    RESUME_MAX_AGE, option_retry, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed, committed_rerun_safe,
 )
 
 setup_console()
@@ -100,6 +100,30 @@ def log_progress(percent: int, message: str) -> None:
 # 2. Bulletproof AST Formula Sandbox & Feature Engineering (--eval)
 # ==============================================================================
 
+_EVAL_NEXT = re.compile(r"\s*[^\W\d][^,;=()<>!]*?\s*=(?!=)")    # '<name> =' (not '==') after a ',' between formulas
+
+
+def _eval_comma_fix(text: str) -> str:
+    """'a = x/y, b = x*2' -> 'a = x/y; b = x*2': a ',' outside parentheses after a formula with '=' and before
+    '<name> =' joins two formulas (2.9.69). The ',' of a function call (max(a, b)) is never touched."""
+    out, depth, seen_eq = [], 0, False
+    for i, ch in enumerate(text):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(depth - 1, 0)
+        elif ch == ";":
+            seen_eq = False
+        elif ch == "=" and depth == 0:
+            seen_eq = True
+        if ch == "," and depth == 0 and seen_eq and _EVAL_NEXT.match(text, i + 1):
+            out.append(";")
+            seen_eq = False
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def run_safe_eval(df: pd.DataFrame, eval_str: str, target_cols: List[str]) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
     Safely evaluates semicolon-separated derived feature formulas (--eval).
@@ -109,6 +133,10 @@ def run_safe_eval(df: pd.DataFrame, eval_str: str, target_cols: List[str]) -> Tu
     """
     if not eval_str or not eval_str.strip():
         return df, [], []
+    fixed = _eval_comma_fix(eval_str.strip())
+    if fixed != eval_str.strip():
+        raise InputError(f"--eval '{eval_str.strip()}'에서 식 사이를 ','로 나눴습니다. 식은 ';'로 나눕니다 "
+                         f"(','는 max(a, b) 같은 함수 안에서만). [추천] {option_retry(fixed, '--eval')}")
     expressions = [e.strip() for e in eval_str.split(";") if e.strip()]
     return apply_eval_expressions(df, expressions, target_cols=target_cols, strict=True)
 
@@ -184,6 +212,11 @@ def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Option
     Returns the canonical 'full column name:type' list (an unknown name or type stops the run, never silently ignored)."""
     if not dtypes_arg or not str(dtypes_arg).strip():
         return None
+    if ";" in str(dtypes_arg):
+        pieces = [p.strip() for p in re.split(r"[;,]", str(dtypes_arg)) if p.strip()]
+        if pieces and all(":" in p for p in pieces):     # '온도:str;압력:str': the pairs are joined by ','
+            raise InputError(f"--dtypes '{dtypes_arg}'에서 '<열>:<형식>' 사이를 ';'로 나눴습니다. ','로 나눕니다. "
+                             f"[추천] {option_retry(','.join(pieces), '--dtypes')}")
     pairs: List[Tuple[str, str]] = []
     for raw in str(dtypes_arg).split(","):
         raw = raw.strip()
@@ -1072,8 +1105,10 @@ def get_classification_models(seed: int = 42, balanced: bool = False, n_rows: in
         "ExtraTrees": ExtraTreesClassifier(n_estimators=100, random_state=seed, n_jobs=-1, class_weight=cw,
                                            **_bagging_kwargs(n_rows)),
         # make_scorer object (not the "f1_macro" string): the string fails for binary labels in scikit-learn 1.9
+        # l1_ratios=(0.0,) (L2, 지금 기본과 같음)·use_legacy_attributes=False: scikit-learn 1.10에서 바뀌는 기본값을 미리 정함 (FutureWarning)
         "LogisticRegression": LogisticRegressionCV(Cs=8, cv=3, max_iter=3000, class_weight=cw,
-                                                   scoring=make_scorer(f1_score, average="macro")),
+                                                   scoring=make_scorer(f1_score, average="macro"),
+                                                   l1_ratios=(0.0,), use_legacy_attributes=False),
         "KNeighbors": KNeighborsClassifier(n_neighbors=5),
     }
     if n_rows > KNN_MAX_ROWS:
@@ -1860,6 +1895,25 @@ def score_with_excluded(task: str, pipe: Any, info: Dict[str, Any], oof_df: pd.D
     return round(score, 4), pred
 
 
+def _semicolon_names(names: List[str], option: str, long: str, columns: List[str]) -> None:
+    """-x '온도;압력' (names joined by ';' instead of ','): when a name with ';' is no column but every piece is one
+    (exact or a unique name without its unit) -> STOP_RETRY [추천] the command with ',' (2.9.69). A column whose name
+    has ';' is used as is."""
+    if not any(";" in n and n not in columns for n in names):
+        return
+    fixed: List[str] = []
+    for n in names:
+        if ";" in n and n not in columns:
+            pieces = [p.strip() for p in n.split(";") if p.strip()]
+            if len(known_columns(pieces, columns)) != len(pieces):
+                return                   # not every piece is a column: the usual [후보] of resolve_column_names
+            fixed += pieces
+        else:
+            fixed.append(n)
+    raise InputError(f"{option} '{','.join(names)}'에서 열 이름 사이를 ';'로 나눴습니다. ','로 나눕니다. "
+                     f"[추천] {option_retry(','.join(fixed), option, long)}")
+
+
 def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Dict[str, Any]:
     """
     One feature recipe (features, --eval formulas, --dtypes, positive class) applied to the loaded data.
@@ -1870,6 +1924,11 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     target_names = parse_feature_or_target_list(tgts_in, "targets") if isinstance(tgts_in, str) else list(tgts_in or [])
     if not feature_names:
         raise InputError("학습에 투입할 독립변수 목록(-x, --features)이 지정되지 않았거나 파일이 비어 있습니다.")
+    columns = [str(c) for c in df_raw.columns]
+    for names, given, opt, long in ((feature_names, feats_in, "-x", "--features"),
+                                    (target_names, tgts_in, "-y", "--targets")):
+        if isinstance(given, str):
+            _semicolon_names(names, opt, long, columns)
     if not target_names:
         raise InputError("예측할 종속변수 목록(-y, --targets)이 지정되지 않았거나 파일이 비어 있습니다.")
     # --dtypes names resolved like -x / -y, types checked (the canonical list is what the ledger keeps)
@@ -2127,6 +2186,7 @@ PREP_LABEL = "학습 준비(데이터 읽기, 검증, 상관행렬)"
 RUN_PREP_SECONDS: List[float] = []        # a preparation saved in this command (a step: _step_done)
 STEPS_PER_TARGET = 5 * 5 + 2              # progress estimate: candidates x folds + final fit + importance
 TARGETS_AFTER: List[int] = [0]            # targets after the one being trained (the steps left in progress)
+COMMIT_RERUN_SAFE: List[bool] = []        # set by ensure_best_versions: ml_report -f run again reuses a fresh best version
 
 
 def _prep_key(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]], raw_file: str) -> str:
@@ -2747,9 +2807,17 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 
         # Commit Transaction: atomic rename .tmp_vX -> vX, then record it in the ledger.
         # The ledger never names a version folder that does not exist (a failed commit leaves no record).
+        # A run that trained something and is near the limit stops here, before the version is written: the next run
+        # reuses every saved target and only packages (a stop after the commit could not continue, R10)
+        if (RUN_FIT_SECONDS or RUN_PREP_SECONDS) and time_would_pass(0.0) and all(
+                resume_find(resume_dir, P["targets"][t]["key"] + ".joblib") for t in target_names):
+            raise Unfinished(f"학습: 타겟 {total_targets}/{total_targets}개 끝남, 저장됨 (버전 저장 전에 멈춤, 약 1단계 남음)")
         WATCHDOG_HOLD.append(True)             # the version is being written: the watchdog waits a little
         final_version_dir = guard.commit()
         append_history_ledger(ledger_path, history_record, on_recorded=guard.finalize)
+        # saved for good: a stop from now on answers ok + UNVERIFIED, never CONTINUE (the same command would train again)
+        mark_committed(f"학습 버전 {current_version}", rerun_safe=bool(COMMIT_RERUN_SAFE),
+                       version=current_version, version_dir=final_version_dir)
         _resume_cleanup(resume_dir, resume_used)
         unverified = verify_version_dir(final_version_dir, target_names, ledger_path, current_version)
         for u in unverified:
@@ -3096,6 +3164,7 @@ def execute_make_best(args: argparse.Namespace) -> Dict[str, Any]:
             if i < len(tasks) - 1:
                 done[task] = str(built[-1]["version"])
                 _best_run_save(data_root, raw_file, done)
+                committed_rerun_safe()     # remembered in best_run.json: the same command run again keeps it
     except Exception:
         # an error: no record left for a later run to reuse (a split run, Unfinished, keeps it: the same command run
         # again goes on from it; so does a stop by the user, so running it again makes no best version twice)
@@ -3253,7 +3322,11 @@ def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
                 best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
                                    "new_score": _target_score(rec, t)}
             continue
-        res = build_best_version(args, task, records)
+        COMMIT_RERUN_SAFE.append(True)       # ml_report -f run again finds this best version fresh (best_is_fresh)
+        try:
+            res = build_best_version(args, task, records)
+        finally:
+            COMMIT_RERUN_SAFE.clear()
         built.append(res)
         versions.append(best_summary(res))
         best_targets.update(res.get("best_targets", {}))

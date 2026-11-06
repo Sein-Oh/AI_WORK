@@ -499,6 +499,21 @@ def test_where_operators(xl_table, capsys, expr, rows):
     assert code == 0 and [r[0] for r in out["values"][1:]] == rows, out
 
 
+@pytest.mark.parametrize("expr, fixed", [
+    ("금액 >= 200, 부서 = 영업", "금액 >= 200; 부서 = 영업"),       # Gemma 실패 유형 감사: 쉼표로 나눈 조건이 값 하나로 읽혀 0건이었음
+    ("금액 >= 1,000, 부서 = 영업", "금액 >= 1,000; 부서 = 영업"),
+])
+def test_where_comma_between_conditions_gets_fixed_expression(xl_table, capsys, expr, fixed):
+    code, out = run_main(excel, capsys, "read", "--where", expr)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and out["message"].endswith(f"[추천] {fixed}"), out
+
+
+@pytest.mark.parametrize("expr, rows", [("금액 = 1,000", ["라"]), ("부서 = '영업, 기획'", [])])
+def test_where_comma_inside_value_is_kept(xl_table, capsys, expr, rows):
+    code, out = run_main(excel, capsys, "read", "--where", expr)
+    assert code == 0 and [r[0] for r in out["values"][1:]] == rows, out
+
+
 def test_where_zero_is_r2(xl_table, capsys):
     code, out = run_main(excel, capsys, "read", "--where", "금액 > 5000")
     assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
@@ -1300,6 +1315,47 @@ def test_check_cell_without_unit_is_not_guessed(check_env, capsys, header, value
     assert r["verdict"] == verdict, out
     if verdict == "판단필요":
         assert "칸 단위 없음" in r["reason"] and "머리글" in r["reason"] and out["agent_directive"].startswith("UNVERIFIED:")
+
+
+def _unit_book(path, head_e, rows):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "시험"
+    ws["B1"], ws["D1"], ws["E1"] = "항목", "값", head_e
+    for i, (item, val, unit) in enumerate(rows, 2):
+        ws.cell(i, 2, item)
+        ws.cell(i, 4, val)
+        ws.cell(i, 5, unit)
+    wb.save(path)
+
+
+ROWS_UNIT = [("두께", 30, "mm"), ("폭", 7, "cm"), ("길이", 2, None)]
+
+
+@pytest.mark.parametrize("head_e,extra,verdicts,unit_col", [
+    ("단위", [], ["일치", "불일치", "판단필요"], "E (머리글이 '단위'라 자동으로 씀)"),   # 값 열 오른쪽의 '단위' 열
+    ("Unit", [], ["일치", "불일치", "판단필요"], "E (머리글이 '단위'라 자동으로 씀)"),
+    ("비고", [], ["판단필요", "판단필요", "판단필요"], None),                        # 머리글이 '단위'가 아니면 쓰지 않음
+    ("비고", ["--unit-col", "E"], ["일치", "불일치", "판단필요"], "E"),              # 직접 지정하면 머리글과 상관없이
+])
+def test_check_reads_unit_column(check_env, capsys, head_e, extra, verdicts, unit_col):
+    """회사 PC 2026-11-06 O1: 항목·값·단위 3열 표의 값 칸에 단위가 없어 모든 행이 판단필요였다. 단위 열을 행마다 읽는다."""
+    spec, book = check_env
+    spec.write_text("두께는 5 cm 이하로 한다.\n\n폭은 5 cm 이하로 한다.\n\n길이는 5 cm 이하로 한다.\n", encoding="utf-8")
+    _unit_book(book, head_e, ROWS_UNIT)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec), *extra)
+    assert [r["verdict"] for r in out["results"]] == verdicts, out
+    assert out.get("unit_col") == unit_col, out
+
+
+def test_check_unit_col_must_differ_from_value_col(check_env, capsys):
+    spec, book = check_env
+    _unit_book(book, "단위", ROWS_UNIT)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--unit-col", "D", "--spec", str(spec))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--unit-col" in out["message"], out
 
 
 def test_check_empty_items_is_zero(check_env, capsys):

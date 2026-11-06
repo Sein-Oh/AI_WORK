@@ -309,7 +309,7 @@ GROUPS = [
                 'id': 'O5',
                 'message': r'{DIR}\성적서양식.docx 양식의 {{업체명}}에 한빛전자, {{시험일}}에 2026-11-04를 채워줘. 미리보기를 해도 되지만 나에게 다시 묻지 말고 끝까지 채워줘.',
                 'commands': [
-                    r'''word\.py"?\s+fill\b(?=[^\n]*(--target|-t)\s+['"]?[^'"\n]*성적서양식\.docx(?:['"\s]|$))(?=[^\n]*--file\b)(?!(?:[^"'\n]|"[^"\n]*"|'[^'\n]*')*?\s--dry-run\b)''',
+                    r'''word\.py"?\s+fill\b(?=[^\n]*(--target|-t)\s+['"]?[^'"\n]*성적서양식\.docx(?:['"\s]|$))(?=[^\n]*--(slots|file)\b)(?!(?:[^"'\n]|"[^"\n]*"|'[^'\n]*')*?\s--dry-run\b)''',
                 ],
                 'tool_ok': r'word\.py"?\s+fill\b(?![^\n]*--dry-run)',
                 'answer_any': ['한빛전자|채웠|채움|채워 ?넣'],
@@ -317,7 +317,7 @@ GROUPS = [
                     r'word\.py"?\s+fill\b[^\n;|&]*\s--(text|value|values|cells|set|data)\b',
                     r'word\.py"?\s+fill\b[^\n]*--overwrite\b',
                 ],
-                'judge': '값 파일(.csv, 열 자리·값)을 만들어 word.py fill --file로 두 자리를 채우고 결과를 알렸는가. 미리보기를 했다면 그 결과의 confirm_commands[0]을 (빈 자리라 destructive 항목이 아니고 요청에서 이미 묻지 말라고 했으므로) 다시 묻지 않고 실행했는가.',
+                'judge': 'word.py fill --slots(자리=값; 자리=값) 또는 값 파일(--file)로 두 자리를 채우고 결과를 알렸는가. 미리보기를 했다면 그 결과의 confirm_commands[0]을 (빈 자리라 destructive 항목이 아니고 요청에서 이미 묻지 말라고 했으므로) 다시 묻지 않고 실행했는가.',
             },
         ],
     },

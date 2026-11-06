@@ -82,8 +82,10 @@ def test_sources_exist_in_repo_layout():
     assert sorted(su.OFFICE_SKILLS) == on_disk                            # 새 스킬 폴더를 만들면 setup.py에도 올림
     assert {os.path.dirname(rel) for _n, _s, rel in su.targets()} >= {os.path.join("skills", n) for n in on_disk}
     assert su.jsonc_source() == os.path.join(CLI, "opencode", "opencode.jsonc")
-    ignore = open(os.path.join(REPO, ".gitignore"), encoding="utf-8").read().splitlines()
-    assert "CLI/opencode/opencode.jsonc" in ignore and "CLI/data/" in ignore     # 사내 LLM 주소, 보관 폴더는 git 제외
+    gitignore = os.path.join(REPO, ".gitignore")
+    if os.path.isfile(gitignore):        # 저장소에서만 (회사 PC는 C:\CLI-dev만 반입해 .gitignore가 없음)
+        ignore = open(gitignore, encoding="utf-8").read().splitlines()
+        assert "CLI/opencode/opencode.jsonc" in ignore and "CLI/data/" in ignore     # 사내 LLM 주소, 보관 폴더는 git 제외
     assert not os.path.exists(os.path.join(DEV, "apply_skills.py"))             # 설치는 setup.py 하나
     for dist in ("pandas", "scikit-learn", "openpyxl", "python-docx", "python-pptx", "pymupdf", "pywin32"):
         assert dist in dict(su.LIBS)

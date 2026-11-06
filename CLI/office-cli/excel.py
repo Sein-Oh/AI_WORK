@@ -867,6 +867,8 @@ _WHERE_FIXES = (("==", "="), ("=>", ">="), ("=<", "<="), ("<>", "!="), ("=!", "!
 _WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
 _WHERE_OR = re.compile(r"\s+(?:or|OR|Or|또는)\s+|\s*\|\|\s*")
 _WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
+# 조건을 쉼표로 나눈 것 ('금액 >= 100, 부서 = 영업'): 쉼표 뒤가 '<열> <연산자>'이면 ; 로 (전에는 값 '100, 부서 = 영업' 하나로 읽어 0건)
+_WHERE_COMMA = re.compile(r",\s*(?=[^,;|=<>!~'\"]+?\s*(?:>=|<=|!=|=|>|<|~))")
 _WHERE_QUOTED = re.compile(r"(\"[^\"]*\"|'[^']*')")
 _WHERE_NUM = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
 WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
@@ -931,7 +933,7 @@ def parse_where(text: str) -> List[List[Cond]]:
     raw = str(text).strip()
 
     def fix(part: str) -> str:
-        part = _WHERE_CONTAINS.sub(" ~ ", _WHERE_OR.sub(" | ", _WHERE_AND.sub("; ", part)))
+        part = _WHERE_CONTAINS.sub(" ~ ", _WHERE_OR.sub(" | ", _WHERE_AND.sub("; ", _WHERE_COMMA.sub("; ", part))))
         for a, b in _WHERE_FIXES:
             part = part.replace(a, b)
         return part
@@ -940,7 +942,7 @@ def parse_where(text: str) -> List[List[Cond]]:
     if groups is None:
         raise rt.InputError(f"--where 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
     if fixed != raw:
-        raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;, 또는은 |). "
+        raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ; (쉼표 아님), 또는은 |). "
                             f"형식: {WHERE_FORM}. [추천] {where_text(groups)}")
     return groups
 
@@ -1540,6 +1542,38 @@ def _cells_items(spec: str) -> Tuple[List[Tuple[str, str, str]], bool]:
     return items, False
 
 
+# 'C6=ft,C7=20'처럼 쉼표로 나눈 항목: 값 안에 ',<칸>=' (시트 붙은 칸 포함)가 있으면 칸을 쉼표로 나눈 것
+_COMMA_ITEM = re.compile(r"(?:\s*[,|]\s*|\s+)(?=(?:(?:'[^']+'|[\w가-힣]+)!)?\$?[A-Za-z]{1,3}\$?\d+\s*=)")   # 쉼표·|·공백
+
+
+def rt_fully_quoted(val: str) -> bool:
+    """값 전체가 한 쌍의 따옴표로 묶였는지 ('a,b' 예, 'ft',C7='x' 아니오: 첫 닫는 따옴표가 끝이어야 함)."""
+    return len(val) >= 2 and val[0] in "'\"" and val.find(val[0], 1) == len(val) - 1
+
+
+def _refuse_comma_items(args) -> None:
+    """칸 구분은 ; 입니다. 'C6=ft,C7=20'을 그대로 쓰면 C6에 'ft,C7=20'이 들어가므로 쓰기 전에 멈추고 ;로 바꾼 전체 명령을 [추천]
+    (값에 쉼표가 들어가는 일은 흔해 쉼표를 구분자로 추측하지 않음, 회사 PC 2026-11-06 O2). 수식(=로 시작)·따옴표로 묶은 값은 제외."""
+    def comma_split(part: str) -> bool:
+        if "=" not in part:
+            return False
+        val = part.split("=", 1)[1].strip()
+        if val.startswith("=") or rt_fully_quoted(val):
+            return False
+        m = _COMMA_ITEM.search(val)
+        # 첫 ',<칸>=' 앞에 '='가 있으면 값 자체가 'R1=10k,R2=4.7k' 같은 글 (나누지 않음, 1.4.77 검토)
+        return bool(m) and "=" not in val[:m.start()]
+
+    parts = [p.strip() for p in _split_outside_quotes(rt.unescape_newlines(args.cells), ";\n") if p.strip()]
+    hit = [p.split("=", 1)[0].strip() for p in parts if comma_split(p)]
+    if not hit:
+        return
+    fixed = "; ".join(_COMMA_ITEM.sub("; ", p) if comma_split(p) else p for p in parts)
+    cmd = _cells_command(type(args)(**{**vars(args), "cells": fixed}), drop_dry=False)["command"]
+    raise rt.InputError(f"--cells의 칸은 ; 로 나눕니다. 쉼표로 나눈 것 같아 쓰지 않았습니다 ({', '.join(hit[:3])}의 값에 '칸=' 이 들어 있음). "
+                        f"[추천] {cmd}")
+
+
 def _cells_command(args, extra: Sequence[str] = (), drop_dry: bool = True) -> Dict[str, Any]:
     argv = ["write", "--target", args.target, "--cells", args.cells]
     if args.sheet:
@@ -1557,6 +1591,8 @@ def _cells_plan(args) -> Tuple[List[Tuple[str, int, int, int, int, str, Any]], L
     items, from_file = _cells_items(args.cells)
     if not items:
         raise rt.InputError("--cells에 쓸 칸이 없습니다. 예: --cells \"C6=ft; C7=20\" (많으면 칸값.csv: 열 칸, 값).")
+    if not from_file:
+        _refuse_comma_items(args)
     bad: List[str] = []
     plan: List[Tuple[str, int, int, int, int, str, Any]] = []
     seen: Dict[Tuple[str, int, int], Any] = {}
@@ -1693,7 +1729,8 @@ def write_cells(args) -> Dict[str, Any]:
         if todo:
             t.set_focus(sheet=todo[0][0])
         resolved = t.resolved()
-    written = [f"{ws.Name}!{addr(r1, c1, r2, c2)}" for ws, r1, c1, r2, c2, _, _ in todo]
+        # 시트 이름은 세션 안에서: 닫힌 파일은 세션이 끝나면 문서를 닫아 ws.Name이 OLE 0x800a01a8 (회사 PC 2026-11-06 O2)
+        written = [f"{ws.Name}!{addr(r1, c1, r2, c2)}" for ws, r1, c1, r2, c2, _, _ in todo]
     fields = {"target_resolved": resolved, "count": len(todo), "cells": written[:CELLS_SHOWN],
               "truncated": len(written) > CELLS_SHOWN, "applied": [p for p in planned if not p.startswith("그대로")][:CELLS_SHOWN]}
     if same:
@@ -3549,11 +3586,12 @@ def cmd_chart(args) -> Dict[str, Any]:
         info = range_info(rng)
         resolved = t.resolved()
         tgt = t.path if t.source in ("file", "new") else args.target
+        sheet_name = str(ws.Name)            # 세션 안에서 (닫힌 파일은 세션이 끝나면 문서를 닫음)
     preview = f"차트 '{chart_name}' 생성 ({chart_type}, 데이터 {info['sheet']}!{info['range']})"
     to = _open_receivers()
     fields = dict(target_resolved=resolved, chart_name=chart_name, chart_type=chart_type, data_range=info,
                   confirm_commands=[rt.next_command("office.py", ["transfer", "--from", "excel", "--from-target", tgt,
-                                                               "--sheet", str(ws.Name), "--chart", chart_name,
+                                                               "--sheet", sheet_name, "--chart", chart_name,
                                                                "--to", ",".join(to)],
                                                  f"이 차트를 열린 {'와 '.join(off.APP_LABEL[k] for k in to)}에 그림으로 넣기"
                                                  + (" (한쪽만이면 --to word 또는 --to ppt)" if len(to) > 1 else ""))])
@@ -3729,7 +3767,7 @@ def _comment_list(args) -> Dict[str, Any]:
             used += size
         sheet = str(ws.Name)
         resolved = t.resolved()
-    where = f"{sheet}!{str(rng.Address).replace('$', '')}" if rng is not None else sheet
+        where = f"{sheet}!{str(rng.Address).replace('$', '')}" if rng is not None else sheet   # 세션 안에서
     shown_end = first - 1 + len(items)
     truncated = shown_end < total
     result: Dict[str, Any] = {"target_resolved": resolved, "sheet": sheet, "count": total, "shown": len(items),
@@ -4038,7 +4076,7 @@ def _judge_row_core(docs: List[Dict[str, Any]], item: str, value: Any, sec: str,
         return out
     if not cell_unit:
         # 칸 값·값 열 머리글·항목에 단위가 없으면 규격 단위로 추정하지 않음 (30이 mm인지 cm인지 모름)
-        out.update(verdict="판단필요", reason=f"칸 단위 없음 (규격은 {c['unit']}): 값 열 머리글에 단위를 적으세요 (예: 값({c['unit']}))")
+        out.update(verdict="판단필요", reason=f"칸 단위 없음 (규격은 {c['unit']}): 값 열 머리글에 단위를 적거나(예: 값({c['unit']})) 단위 열을 두세요(머리글 '단위' 또는 --unit-col)")
         return out
     v = qty[0] * cell_unit[1]
     ok_ = reader.cond_holds(c, v)
@@ -4066,10 +4104,14 @@ def _check_command(args, extra: Sequence[str] = ()) -> List[str]:
     argv = ["check", "--target", args.target, "--range", args.range, "--item-col", args.item_col,
             "--value-col", args.value_col, "--spec", args.spec]
     for flag, val in (("--section-col", args.section_col), ("--section", args.section), ("--sheet", args.sheet),
+                      ("--unit-col", getattr(args, "unit_col", None)),
                       ("--header-row", str(args.header_row) if getattr(args, "header_row", None) is not None else None)):
         if val:
             argv += [flag, val]
     return argv + list(extra)
+
+
+UNIT_HEADERS = ("단위", "unit", "units", "단위(unit)")
 
 
 def cmd_check(args) -> Dict[str, Any]:
@@ -4077,10 +4119,24 @@ def cmd_check(args) -> Dict[str, Any]:
     item_c = _col_arg(args.item_col, "--item-col")
     value_c = _col_arg(args.value_col, "--value-col")
     sec_c = _col_arg(args.section_col, "--section-col")
+    unit_c = _col_arg(getattr(args, "unit_col", None), "--unit-col")
     if item_c is None or value_c is None:
         raise rt.InputError("--item-col(항목 열)과 --value-col(값 열)을 열 문자로 지정하세요 (예: --item-col B --value-col D).")
     cols = [item_c, value_c] + ([sec_c] if sec_c else [])
-    sheet, r1, body, header, resolved = _check_rows(args, cols)
+    # 단위 열: --unit-col, 생략하면 값 열 바로 오른쪽 열의 머리글이 '단위'이면 그 열 (항목·값·단위 3열 표, 회사 PC 2026-11-06 O1)
+    auto_unit = unit_c is None and value_c + 1 not in cols
+    unit_try = unit_c if unit_c is not None else (value_c + 1 if auto_unit else None)
+    if unit_try is not None and unit_try in cols:
+        raise rt.InputError("--unit-col은 항목·값·장절 열과 다른 열로 적습니다.")
+    sheet, r1, body, header, resolved = _check_rows(args, cols + ([unit_try] if unit_try is not None else []))
+    unit_idx = None
+    if unit_try is not None:
+        head_text = re.sub(r"\s+", "", str(header[-1] if header else "") or "").lower()
+        if unit_c is not None or head_text in UNIT_HEADERS:
+            unit_idx = len(cols)
+            unit_c = unit_try
+        else:
+            unit_c = None
     docs, info = reader.load_spec_docs(args.spec)       # 등록 안 된 규격서는 먼저 등록 (오래 걸리면 CONTINUE)
     if not docs:
         raise rt.InputError(f"--spec에서 읽을 수 있는 규격 문서가 없습니다: {args.spec} (지원 형식: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD).")
@@ -4093,6 +4149,8 @@ def cmd_check(args) -> Dict[str, Any]:
         item, value = row[0], row[1]
         if item is None or str(item).strip() == "":
             continue
+        row_unit = row[unit_idx] if unit_idx is not None else None
+        hint = row_unit if row_unit is not None and str(row_unit).strip() else unit_hint   # 행의 단위 칸이 머리글보다 먼저
         sec = str(row[2]).strip() if sec_c and row[2] is not None else (args.section or "")
         if late or (results and rt.time_up()):
             # 명령 시간 제한 전에 결과를 내려고 남은 행은 대조하지 않음 (대조는 저장할 중간 결과가 없어 CONTINUE가 아님)
@@ -4101,7 +4159,7 @@ def cmd_check(args) -> Dict[str, Any]:
             j = {"verdict": "판단필요", "reason": "대조하지 못함 (명령 시간 제한)", "evidence": "", "spec_text": "",
                  "match_mode": None}
         else:
-            j = _judge_row(docs, str(item).strip(), value, sec, unit_hint)
+            j = _judge_row(docs, str(item).strip(), value, sec, hint)
         cell = f"{sheet_ref}!{addr(r1 + i, value_c)}"
         results.append({"cell": cell, "item": str(item).strip()[:60], "value": out_value(value), **j})
     counts = {v: sum(1 for r in results if r["verdict"] == v) for v in VERDICTS}
@@ -4122,6 +4180,8 @@ def cmd_check(args) -> Dict[str, Any]:
                               "truncated": len(results) > CHECK_SHOWN, "shown": min(len(results), CHECK_SHOWN),
                               "needs_review": [r["cell"] for r in results if r["verdict"] == "판단필요"][:50],
                               "not_decided": not_decided, "memo_file": memo}
+    if unit_c is not None:
+        fields["unit_col"] = col_letter(unit_c) + (" (머리글이 '단위'라 자동으로 씀)" if auto_unit else "")
     if args.save:
         header_row = ["칸", "항목", "값", "판정", "이유", "규격 조건", "근거", "규격 문장", "찾은 방식"]
         rows = [[r["cell"], r["item"], r["value"], r["verdict"], r["reason"], r.get("condition", ""), r["evidence"],
@@ -4338,6 +4398,7 @@ def build_cli():
     p.add_argument("--item-col", required=True, help="항목 열 (예: B). 이 글로 규격서를 찾음")
     p.add_argument("--value-col", required=True, help="값 열 (예: D)")
     p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
+    p.add_argument("--unit-col", help="단위 열 (예: E). 생략하면 값 열 바로 오른쪽 열의 머리글이 '단위'일 때 그 열을 씀")
     p.add_argument("--spec", required=True, help="규격서 파일 또는 폴더 (등록 안 된 문서는 먼저 등록)")
     p.add_argument("--section", help="모든 행을 이 장절 안에서만 찾음 (예: 3.2)")
     p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행, 0 = 머리글 없음)")

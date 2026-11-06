@@ -5,6 +5,8 @@
 "status": "error" + agent_directive(STOP_RETRY/ERROR).
 """
 import ast
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -16,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_sample  # noqa: E402
-from mlkit_helpers import shell_sim, split_command, FEATURES, HAS_DOCX, INLINE, KIT, TARGET, run_fail, run_raw, run_tool  # noqa: E402
+from mlkit_helpers import shell_sim, split_command, FEATURES, HAS_DOCX, INLINE, KIT, TARGET, recommended_command, run_fail, run_raw, run_tool  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 
@@ -604,3 +606,39 @@ def test_report_targets_and_save(trained):
     out = work / "r_targets.docx"
     payload = run_tool("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
     assert out.is_file() and payload["report_file"] == str(out), payload
+
+
+# ---- 인자 오류 힌트 (2.9.69): 같은 뜻의 지어낸 옵션 -> [추천] 고친 전체 명령, 줄임말은 같은 뜻 표만 -----------------
+
+
+@pytest.mark.parametrize("script,args,want", [
+    ("ml_predict.py", ["--model-dir", "v1", "-i", "a=1"], ["--model"]),                 # required 오류여도
+    ("ml_predict.py", ["-m", "v1", "--inputs", "a=1", "--json"], ["--input"]),
+    ("ml_predict.py", ["-m", "v1", "-i", "a=1", "--output", "p.csv", "--encoding", "cp949"], ["--save"]),
+    ("ml_train.py", ["--data", "d.csv", "--columns", "a,b", "--target-col", "y"], ["--file", "--features", "--targets"]),
+    ("ml_map.py", ["-f", "d.csv", "--query", "a=1"], ["--input"]),
+])
+def test_same_meaning_option_gives_fixed_command(data_dir, script, args, want):
+    proc, res = run_raw(script, *args)
+    assert proc.returncode == 2 and res["agent_directive"].startswith("STOP_RETRY:") and "[추천]" in res["agent_directive"]
+    name, fixed = recommended_command(res["message"])
+    assert name == script and all(o in fixed for o in want), fixed
+    invented = {a for a in args if a.startswith("--")} | {"cp949"}
+    assert not invented & set(fixed), fixed
+
+
+def test_abbreviations_only_through_the_same_meaning_table(data_dir):
+    """allow_abbrev=False: '--data-ro 2'는 --data-row로 몰래 읽지 않고 [후보], '--overwrit'는 어떤 후보도 주지 않음.
+    예전에 줄임말로 되던 같은 뜻('--target' = --targets)은 그대로 읽힘."""
+    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--data-ro", "2")
+    assert proc.returncode == 2 and "[후보] --data-row" in res["message"] and "[추천]" not in res["message"], res
+    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--overwrit")
+    assert proc.returncode == 2 and "[후보]" not in res["message"] and "--overwrite" not in res["message"], res
+    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "--target", "b")
+    assert proc.returncode == 1 and "없음.csv" in res["message"] and "[INFO] 옵션 --target" in proc.stderr, res
+    p = mp.JsonArgumentParser()
+    p.add_argument("--data-row", type=int)
+    p.add_argument("--file")
+    with pytest.raises(SystemExit):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            p.parse_args(["--data-r", "3"])

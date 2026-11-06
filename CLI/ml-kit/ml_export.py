@@ -24,7 +24,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
-    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, resume_find, resume_save, resume_clear, save_failed_warning,
+    VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, mark_committed, resume_find, resume_save, resume_clear, save_failed_warning,
     step_begin, step_end, step_label,
 )
 check_core_libraries("성능예측표")
@@ -207,7 +207,7 @@ def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[s
         _FIT_STATS["reused"] += 1
         return hit
     done = _FIT_STATS["reused"] + _FIT_STATS["trained"]
-    label = f"성능예측표 입력 고르기: '{strip_unit(target)}' 입력 {len(subset)}개 학습"
+    label = f"성능예측표 입력 고르기: 후보 {done + 1}번째 ('{strip_unit(target)}' 입력 {len(subset)}개) 학습"   # unique per step
     if _FIT_STATS["trained"]:                 # at least one new candidate per run: running again always moves on
         check_time(max(_FIT_SECONDS, default=0.0) * 1.2,
                    f"성능예측표 입력 고르기: 후보 {done}개 학습 저장됨 ('{strip_unit(target)}' 입력 {len(subset)}개 시험 전에 멈춤)")
@@ -1039,6 +1039,7 @@ def execute_export(args) -> Dict[str, Any]:
     path = avoid_overwrite(os.path.abspath(path), getattr(args, "overwrite", False), what="성능예측표")
     progress("엑셀 파일 작성")
     real = write_workbook(path, title, vinfo, plans)
+    mark_committed(f"성능예측표 {os.path.basename(real)}", output_file=real)   # a stop now: saved, not CONTINUE
     # remember where the calculator puts each result (for the Excel check)
     all_inputs = list(dict.fromkeys(c for p in plans for c in p["cand"]["inputs"]))
     for ti, p in enumerate(plans):

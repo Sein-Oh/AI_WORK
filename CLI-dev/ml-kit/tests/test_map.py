@@ -385,3 +385,18 @@ def test_map_asked_mixed_percent_column_still_stops(pct_mixed_grid):
 def test_map_mixed_percent_key_column_still_stops(pct_mixed_grid):
     res = run_fail("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,메모율=0.1")
     assert "'메모율'" in res["message"], res
+
+
+def test_inline_input_joined_by_semicolon_or_space_gives_fixed_command(grid2):
+    """회귀 (2.9.69): -i "온도=12; 압력=3"은 '온도' 하나(값 '12; 압력=3')로 읽혀 압력이 빠진 것으로 보였다 (ml_predict는
+    중앙값으로 채울지 물음). 이제 STOP_RETRY + [추천] ','로 고친 전체 명령. 텍스트 값의 띄어쓰기, 천 단위 숫자는 그대로."""
+    for given in ("온도=12; 압력=3", "온도=12 압력=3"):
+        proc, out = run_raw("ml_map.py", *P(grid2, "-i", given))
+        assert proc.returncode == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+        args = split_command(recommendation(out["message"]))
+        assert args[args.index("-i") + 1] == "온도=12,압력=3", args
+    assert mp.parse_inline_input("비고=a b,온도=1,000").to_dict("records") == [{"비고": "a b", "온도": "1,000"}]
+    assert mp.parse_inline_input("온도 = 12, 압력 = 3").to_dict("records") == [{"온도": "12", "압력": "3"}]
+    with pytest.raises(mp.InputError) as e:                       # where a spaced name starts is not clear: no [추천]
+        mp.parse_inline_input("반응 온도=1 반응 압력=2")
+    assert "[추천]" not in str(e.value) and "','" in str(e.value)

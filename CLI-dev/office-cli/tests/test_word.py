@@ -9,7 +9,7 @@ import fake_word as fw
 import word
 from fake_office import make_win32com
 from fake_word import FakeComment, FakeRange, FakeWordDocument
-from office_helpers import assert_not_logged, Bag, shell_sim, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, stub_com, undo_points
+from office_helpers import assert_not_logged, Bag, shell_sim, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, split_command, stub_com, undo_points
 
 
 def doc_paras(doc):
@@ -984,6 +984,77 @@ def test_fill_confirm_command_path_survives_each_shell(form_doc, capsys, tmp_pat
     assert argv[argv.index("--file") + 1] == f, (shell, out["confirm_commands"])
     code, out = run_word(capsys, *argv[2:])
     assert code == 0 and "업체: 한빛 $전자" in doc.text and doc.grid_tables[1].grid[2][2] == "2.5 A", out
+
+
+@pytest.mark.parametrize("slots", [
+    "업체명=한빛전자; 시험일=2026-11-04; 표2!R2C3=5.1 V",                # 자리 이름만 (회사 PC 2026-11-06 O5)
+    "{{업체명}}=한빛전자\\n{{시험일}}=2026-11-04\\n표2!R2C3=5.1 V",   # {{ }}와 줄바꿈 구분
+    '{"업체명": "한빛전자", "시험일": "2026-11-04", "표2!R2C3": "5.1 V"}',    # JSON 객체
+])
+def test_fill_slots_without_values_file(form_doc, capsys, slots):
+    """1.4.77: 값 파일 없이 --slots로 바로 채움 (Gemma가 값 파일이 없어 --slots를 지어내고 실패했음)."""
+    doc, points = form_doc
+    code, out = run_word(capsys, "fill", "--slots", slots)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "업체: 한빛전자" in doc.text and "시험일: 2026-11-04" in doc.text and doc.grid_tables[1].grid[1][2] == "5.1 V"
+    assert len(points) == 1
+
+
+def test_fill_slots_dry_run_confirm_keeps_slots(form_doc, capsys):
+    doc, _ = form_doc
+    before = doc.text
+    code, out = run_word(capsys, "fill", "--slots", "업체명=한빛 $전자; 시험일='2026;11'", "--dry-run")
+    assert code == 0 and doc.text == before, out
+    argv = split_command(out["confirm_commands"][0]["command"])
+    assert argv[argv.index("--slots") + 1] == "업체명=한빛 $전자; 시험일='2026;11'" and "--dry-run" not in argv
+    code, out = run_word(capsys, *argv[2:])
+    assert code == 0 and "업체: 한빛 $전자" in doc.text and "시험일: 2026;11" in doc.text, out
+
+
+def test_fill_slots_comma_separated_is_refused_with_full_command(form_doc, capsys):
+    doc, _ = form_doc
+    before = doc.text
+    code, out = run_word(capsys, "fill", "--slots", "업체명=한빛전자, 시험일=2026-11-04")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and doc.text == before, out
+    cmd = out["message"].split("[추천] ", 1)[1]
+    assert cmd.startswith("python ") and split_command(cmd)[split_command(cmd).index("--slots") + 1] == "업체명=한빛전자; 시험일=2026-11-04"
+    code, out = run_word(capsys, "fill", "--slots", "업체명=한빛전자, 서울; 시험일=2026-11-04")   # 값 안의 쉼표는 그대로
+    assert code == 0 and "업체: 한빛전자, 서울" in doc.text, out
+
+
+@pytest.mark.parametrize("slots", ["업체명=한빛전자 시험일=2026-11-04", "업체명=한빛전자|시험일=2026-11-04"])
+def test_fill_slots_space_or_bar_separated_is_refused(form_doc, capsys, slots):
+    doc, _ = form_doc
+    code, out = run_word(capsys, "fill", "--slots", slots)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    cmd = split_command(out["message"].split("[추천] ", 1)[1])
+    assert cmd[cmd.index("--slots") + 1] == "업체명=한빛전자; 시험일=2026-11-04", cmd
+
+
+def test_fill_slots_value_with_name_value_pairs_is_kept(form_doc, capsys):
+    """1.4.77 검토: '업체명=V1=5, V2=12'는 자리 업체명의 값 'V1=5, V2=12' (자리를 쉼표로 나눈 것이 아님)."""
+    doc, _ = form_doc
+    code, out = run_word(capsys, "fill", "--slots", "업체명=V1=5, V2=12; 시험일=2026-11-04")
+    assert code == 0 and "업체: V1=5, V2=12" in doc.text, out
+
+
+@pytest.mark.parametrize("slots", ['{"업체명": {"a": 1}}', '{"업체명": true}', '{"업체명": [1, 2]}'])
+def test_fill_slots_json_non_scalar_is_refused(form_doc, capsys, slots):
+    doc, _ = form_doc
+    before = doc.text
+    code, out = run_word(capsys, "fill", "--slots", slots)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and doc.text == before, out
+
+
+@pytest.mark.parametrize("argv,needle", [
+    ((), "채울 값이 없습니다"),
+    (("--file", "C:\\work\\성적서양식.docx"), "--target"),                    # 양식 문서를 값 파일로 (회사 PC 2026-11-06 O5)
+    (("--file", "a.csv", "--slots", "업체명=a"), "하나만"),
+])
+def test_fill_value_source_errors_explain_slots(form_doc, capsys, argv, needle):
+    code, out = run_word(capsys, "fill", *argv)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and needle in out["message"], out
+    assert "--slots" in out["message"] and "한빛" not in out["message"]       # 예시 값을 실제 값으로 옮겨 쓰지 않게
 
 
 def test_fill_bad_rows_and_missing_places_change_nothing(form_doc, capsys, tmp_path):
