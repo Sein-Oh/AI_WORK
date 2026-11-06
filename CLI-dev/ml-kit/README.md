@@ -390,6 +390,7 @@ python ml_train.py -f "공정.xlsx" -x "반응온도,촉매비율,수분함량" 
 | `--dtypes` | - | 선택 | 데이터 타입 수동 오버라이드 (예: `일시:datetime,코드:str`). 형식은 `float`, `int`, `str`, `datetime`(`date`, `category` 등 같은 뜻의 말도 받음). 열 이름은 `-x`/`-y`처럼 맞춤(정확한 이름, 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`), 형식 오타는 `[추천] --dtypes "<고친 값>"`, `int`는 숫자 열(빈 칸을 0으로 채우지 않음) |
 | `--version` | `-v` | 선택 | 버전 폴더 수동 지정 (미지정 시 `v1`, `v2`, ... 자동 채번). 이미 있는 버전이면 `STOP_RETRY` + `[추천] --version v<다음>` |
 | `--overwrite` | - | 선택 | `--version` 폴더가 이미 있을 때 교체 (사용자 확인 후에만). 새 버전이 원장에 기록될 때까지 기존 폴더를 `.bak_vX`로 보관했다가 실패하면 되돌림. 원장(`history.jsonl`, `history.json`)의 그 버전 기록도 새 기록으로 바꿔 버전마다 기록 하나 |
+| `--dry-run` | - | 선택 | 학습하지 않고 만들 버전(`version`, `version_dir`)과 `--overwrite`면 바꿀 기존 폴더의 파일(`replaces`, `replaced_files` 20개까지, `replaced_count`)만 보여 줌. `confirm_commands[0]`은 `--dry-run`을 뺀 실제 명령(교체면 `destructive: true`). 이미 있는 버전을 `--overwrite` 없이 주면 `STOP_RETRY` + 다음 버전 `[추천]` 전체 명령. `--best`·`--history`와는 같이 쓰지 않음(인자 오류) |
 | `--task` | - | 선택 | 학습 유형 `regression`(기본값) / `classification`. `--best`와 함께 쓰면 그 유형의 최고 버전만 |
 | `--positive-class` | - | 선택 | 이진 분류 양성 클래스. 지정 시 판정 기준 확률 자동 조정 |
 | `--seed` | - | 선택 | 교차검증 난수 시드 (기본값: 42) |

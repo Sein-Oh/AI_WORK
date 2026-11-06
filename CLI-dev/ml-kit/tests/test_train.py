@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
-from mlkit_helpers import recommendation, recommended_command, split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
+from mlkit_helpers import FEATURES, TARGET, recommendation, recommended_command, split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
 import ml_train as mt  # noqa: E402
 
@@ -2361,3 +2361,24 @@ def test_eval_dtypes_features_separator_slips_give_fixed_command(tmp_path):
     assert args[args.index("-x") + 1] == "온도,압력" and args.count("-x") == 1, args
     assert mt._eval_comma_fix("a = where(온도 > 1, 1, 0)") == "a = where(온도 > 1, 1, 0)"
     assert mt._eval_comma_fix("a = x == y, b = 1") == "a = x == y; b = 1"
+
+
+def test_dry_run_shows_version_and_replaced_folder_without_training(tmp_path):
+    """2.9.70: --dry-run은 학습하지 않고 만들 버전과 (--overwrite면) 바꿀 기존 폴더의 파일을 보여 주고 confirm_commands에 실제 명령."""
+    data = make_sample(str(tmp_path / "d.csv"))
+    root = tmp_path / "d_ml_data"
+    res = run_tool("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--dry-run")
+    assert res["dry_run"] is True and res["version"] == "v1" and res["replaces"] is False and not root.exists(), res
+    cmd = res["confirm_commands"][0]
+    assert cmd["destructive"] is False and "--dry-run" not in split_command(cmd["command"])
+    (root / "v1").mkdir(parents=True)
+    (root / "v1" / "model_a.joblib").write_text("x", encoding="utf-8")
+    msg = run_fail("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--version", "v1", "--dry-run")["message"]
+    rec = split_command(msg.split("[추천] ", 1)[1])
+    assert rec[rec.index("--version") + 1] == "v2" and rec[0] == "python", msg
+    res = run_tool("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--version", "v1", "--overwrite", "--dry-run")
+    assert res["replaces"] is True and res["replaced_files"] == ["model_a.joblib"] and res["confirm_commands"][0]["destructive"] is True
+    argv = split_command(res["confirm_commands"][0]["command"])
+    assert "--overwrite" in argv and "--dry-run" not in argv
+    assert sorted(os.listdir(root)) == ["v1"] and os.listdir(root / "v1") == ["model_a.joblib"]      # 아무것도 바꾸지 않음
+    assert run_fail("ml_train.py", "-f", data, "--best", "--dry-run")["error_type"] == "input"

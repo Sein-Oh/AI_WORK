@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.69"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.70"                         # must equal SKILL.md metadata.version (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1006,8 +1006,12 @@ class JsonArgumentParser(argparse.ArgumentParser):
         return (" " + " ".join(hints)) if hints else ""
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
-        """R7: help text goes to stderr, stdout gets exactly 1 JSON line (argparse then exits 0)."""
-        super().print_help(sys.stderr)
+        """R7: help text goes to stderr, stdout gets exactly 1 JSON line (argparse then exits 0). A help text that cannot
+        be built (a bare '%' in an option help) still gives the JSON line."""
+        try:
+            super().print_help(sys.stderr)
+        except Exception as e:
+            sys.stderr.write(f"[WARN] 도움말을 만들지 못했습니다 ({type(e).__name__}). SKILL.md를 보세요.\n")
         skill = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0] or __file__)), "SKILL.md")
         emit_json_response({
             "status": "ok", "tool": "ml-kit", "command": "help", "verified": True, "skill_file": skill,

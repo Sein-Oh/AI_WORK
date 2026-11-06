@@ -1393,7 +1393,7 @@ class TransactionGuard:
                 raise InputError(
                     f"버전 폴더 '{self.version_str}'이(가) 이미 있어 덮어쓰지 않았습니다. "
                     f"기존 {self.version_str}를 바꾸는 것은 사용자가 요청한 경우에만 --overwrite로 합니다. "
-                    f"[추천] --version {self._next_version()}"
+                    f"[추천] {option_retry(self._next_version(), '--version')}"
                 )
         else:
             # Auto-infer next version (incomplete vN folders still take their number)
@@ -2100,6 +2100,41 @@ def _union_frame(frames: List[pd.DataFrame]) -> pd.DataFrame:
     return pd.concat(parts, axis=1)
 
 
+def dry_run_train(args: argparse.Namespace) -> Dict[str, Any]:
+    """--dry-run: which version folder the command would write and, with --overwrite, which existing folder (models,
+    report files) it would replace. Nothing is read beyond the folder list, nothing is trained or written (R8)."""
+    raw_file = os.path.abspath(args.file)
+    if not os.path.exists(raw_file):
+        raise FileNotFoundError(f"입력 파일이 존재하지 않습니다: {raw_file}")
+    data_root = os.path.join(os.path.dirname(raw_file), f"{os.path.splitext(os.path.basename(raw_file))[0]}_ml_data")
+    nums = [int(i[1:]) for i in (os.listdir(data_root) if os.path.isdir(data_root) else [])
+            if re.match(r"^v\d+$", i) and os.path.isdir(os.path.join(data_root, i))]
+    version = normalize_version(args.version) if args.version else f"v{max(nums, default=0) + 1}"
+    version_dir = os.path.join(data_root, version)
+    exists = os.path.isdir(version_dir)
+    argv = [a for a in sys.argv if a != "--dry-run"]
+    cmd = command_text(argv=argv)
+    fields: Dict[str, Any] = {"status": "ok", "verified": True, "dry_run": True, "version": version,
+                              "version_dir": version_dir, "replaces": bool(exists and args.overwrite)}
+    if exists and not args.overwrite:
+        raise InputError(f"버전 폴더 '{version}'이(가) 이미 있어 덮어쓰지 않습니다. 기존 {version}를 바꾸는 것은 사용자가 요청한 경우에만 "
+                         f"--overwrite로 합니다. [추천] {option_retry(f'v{max(nums, default=0) + 1}', '--version')}")
+    if exists:
+        files = sorted(os.listdir(version_dir))
+        fields["replaced_files"] = files[:20]
+        fields["replaced_count"] = len(files)
+        fields["truncated"] = len(files) > 20
+        what = f"기존 {version} 폴더(파일 {len(files)}개: 모델·결과)를 이번 학습 결과로 바꿈"
+    else:
+        what = f"새 버전 {version}를 만듦 (기존 폴더는 바꾸지 않음)"
+    fields["preview"] = what
+    if cmd:
+        fields["confirm_commands"] = [{"command": cmd, "destructive": bool(exists), "description": what}]
+    fields["agent_directive"] = ("VERIFIED: 미리보기만 했습니다 (학습·저장 안 함). preview" + (", replaced_files" if exists else "")
+                                 + "를 사용자에게 보여 주고, 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 1번 실행하세요.")
+    return fields
+
+
 def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
     """Orchestrates 1-Turn declarative regression / classification pipeline."""
     task = (getattr(args, "task", None) or TASK_REGRESSION).lower()
@@ -2108,6 +2143,8 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
         if task != TASK_CLASSIFICATION:
             raise InputError("--positive-class는 --task classification과 함께 사용해야 합니다.")
         positive_class = normalize_labels(pd.Series([positive_class])).iloc[0]
+    if getattr(args, "dry_run", False):
+        return dry_run_train(args)
     group = {"features": args.features, "targets": args.targets, "eval": args.eval,
              "dtypes": args.dtypes, "positive_class": positive_class,
              "exclude_where": getattr(args, "exclude_where", None)}
@@ -3477,6 +3514,8 @@ def main():
     parser.add_argument("--version", "-v", help="버전 수동 지정 (미지정 시 자동 계산 v1, v2...)")
     parser.add_argument("--overwrite", action="store_true",
                         help="--version으로 지정한 버전 폴더가 이미 있으면 교체 (사용자 확인 후에만 사용)")
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true",
+                        help="학습하지 않고 만들 버전 폴더와 (--overwrite면) 바꿀 기존 폴더만 보여 줌 (confirm_commands에 실제 명령)")
     parser.add_argument("--task", choices=[TASK_REGRESSION, TASK_CLASSIFICATION], default=None,
                         help="학습 유형: regression(기본값, 연속 수치 예측) 또는 classification(범주/라벨 예측). "
                              "--best와 함께 쓰면 그 작업 유형만")
@@ -3489,6 +3528,8 @@ def main():
 
     args = parser.parse_args()
 
+    if args.dry_run and (args.best or args.history):
+        parser.error("--dry-run은 -x/-y 학습에만 씁니다 (--best는 늘 새 버전을 만들어 기존 폴더를 바꾸지 않고, --history는 읽기만 함)")
     if args.best and not args.history:
         if not args.file:
             parser.error("--best에는 --file(-f) 인자가 필요합니다.")

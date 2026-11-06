@@ -12,6 +12,20 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.70] - 2026-11-07
+
+클라우드 점검(두 도구 모든 진입점 일괄 점검, 남은 할 일).
+
+### 기능
+- `ml_train --dry-run`: 학습하지 않고 만들 버전과 `--overwrite`면 바꿀 기존 폴더의 파일을 보여 줌 (`dry_run`, `version`, `version_dir`, `replaces`,
+  `replaced_files`, `replaced_count`). `confirm_commands[0]`은 `--dry-run`을 뺀 실제 명령, 기존 폴더를 바꾸면 `destructive: true`(사용자에게 늘 물음).
+  `--best`·`--history`와 같이 주면 인자 오류. 성능예측표·보고서·예측·ml_map의 `--overwrite`는 도구가 만든 결과 파일만 바꾸므로 미리보기를 넣지 않음.
+
+### 수정
+- 이미 있는 `--version`을 `--overwrite` 없이 주면 `[추천] --version v3`(옵션 조각)이던 것을 다음 버전을 넣은 전체 명령으로 (R8).
+- 도움말을 만들다 실패해도(옵션 설명의 `%` 등) stdout JSON 1줄은 냄 (`JsonArgumentParser.print_help`). ml-kit에는 깨진 도움말이 없었고,
+  office-cli 1.4.78에서 같은 문제(`excel style -h`)를 찾아 함께 막음.
+
 ## [2.9.69] - 2026-11-06
 
 독립 검토와 감사의 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
@@ -1865,5 +1879,5 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 ### 저장소 지침 반영 (AGENTS.md 2026-10-28, 우선순위 순)
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
-- [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상
+- [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 예측·보고서 `--overwrite` 대상 (학습은 2.9.70, 결과 파일은 도구가 만든 것만 바뀌어 보류)
 - [ ] 테스트 보강: exit 130 롤백, 성공 경로 `VERIFIED:` 검사 확대, 빈 데이터 (덮어쓰기 차단은 2.3.0)
