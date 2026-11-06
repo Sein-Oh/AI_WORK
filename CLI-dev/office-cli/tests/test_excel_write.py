@@ -1386,7 +1386,7 @@ def test_text_option_on_excel_write_recommends_value(capsys):
     # 철자가 비슷한 --target이 아니라 같은 뜻의 --value를 추천 (그대로 따르면 바로 성공해야 함)
     code, out = run_excel(capsys, "write", "--range", "A2", "--text", "반가워")
     assert code == 2 and out["error_type"] == "input"
-    assert "[추천] --value" in out["message"] and "--target" not in out["message"]
+    assert "--value 반가워" in out["message"].split("[추천] ", 1)[1] and "--target" not in out["message"]
 
 
 def test_value_writes_single_cell(capsys, xl):

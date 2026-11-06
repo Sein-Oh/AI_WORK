@@ -391,9 +391,9 @@ def test_unescape_newlines_keeps_windows_paths():
 @pytest.mark.parametrize("argv, want", [
     (["excel.py", "list"], "[추천] info"),
     (["excel.py", "raed"], "[추천] read"),
-    (["office.py", "undo", "--target", "excel"], "[추천] --app"),
+    (["office.py", "undo", "--target", "excel"], "undo --app excel"),
     (["excel.py", "read", "--target", "C:\\a", "b.xlsx"], "큰따옴표"),
-    (["excel.py", "write", "--cell", "K1", "--value", "3"], "[추천] --range"),                      # 1.4.39
+    (["excel.py", "write", "--cell", "K1", "--value", "3"], "write --range K1 --value 3"),          # 1.4.39
 ])
 def test_argument_errors_from_real_logs_get_a_hint(argv, want):
     tool_dir = os.path.dirname(rt.__file__)
@@ -403,6 +403,44 @@ def test_argument_errors_from_real_logs_get_a_hint(argv, want):
     assert proc.returncode == 2 and len(out) == 1
     payload = json.loads(out[0])
     assert want in payload["message"] and "[추천]" in payload["agent_directive"]
+
+
+@pytest.mark.parametrize("argv, fixed", [
+    (["excel.py", "check", "--file", "a.xlsx", "--range", "B3:C7", "--item-col", "B", "--value-col", "C", "--spec", "s.txt"],
+     ["check", "--target", "a.xlsx", "--range", "B3:C7", "--item-col", "B", "--value-col", "C", "--spec", "s.txt"]),   # Gemma O1
+    (["word.py", "write", "--target", "a.docx", "--text", "다음", "--append"],
+     ["write", "--target", "a.docx", "--text", "다음", "--pos", "end"]),                                                 # Gemma O4
+    (["reader.py", "read", "--target", "a.pdf"], ["read", "--file", "a.pdf"]),              # 필수 --file 누락 오류에서도
+    (["excel.py", "read", "--target", "a.xlsx", "--text", "전압"], ["read", "--target", "a.xlsx", "--search", "전압"]),
+    (["excel.py", "read", "--target", "a.xlsx", "--encoding", "utf-8", "--json"], ["read", "--target", "a.xlsx"]),
+    (["outlook.py", "search", "--query", "견적", "--max", "5"], ["search", "--query", "견적", "--limit", "5"]),
+])
+def test_same_meaning_option_gets_full_fixed_command(argv, fixed):
+    """Gemma 기록 감사 (1.4.77): 같은 뜻의 옵션은 옵션 이름이 아니라 고친 전체 명령을 [추천] (그대로 1번 실행하면 됨)."""
+    tool_dir = os.path.dirname(rt.__file__)
+    proc = subprocess.run([sys.executable, os.path.join(tool_dir, argv[0]), *argv[1:]], capture_output=True, text=True,
+                          encoding="utf-8")
+    payload = json.loads([ln for ln in proc.stdout.splitlines() if ln.strip()][-1])
+    assert proc.returncode == 2 and "[추천] python" in payload["message"], payload
+    got = split_command(payload["message"].split("[추천] ", 1)[1])
+    assert got[2:] == fixed, got
+
+
+@pytest.mark.parametrize("argv, never", [
+    (["reader.py", "clear", "--cell", "A1"], "--all"),          # 철자가 비슷한 --all: 캐시 전부 삭제였음
+    (["outlook.py", "reply", "--id", "1", "--cell", "x"], "--all"),   # 전체 답장
+    (["outlook.py", "new", "--to", "a", "--at", "b", "--body", "x"], "[추천]"),   # --at -> --to(받는 사람)였음
+    (["office.py", "undo", "--append"], "[추천]"),               # --append -> --app이었음
+    (["excel.py", "info", "--target", "a.xlsx", "--text", "x"], "[추천]"),       # --text -> --target이었음
+])
+def test_lookalike_option_is_never_recommended(argv, never):
+    tool_dir = os.path.dirname(rt.__file__)
+    proc = subprocess.run([sys.executable, os.path.join(tool_dir, argv[0]), *argv[1:]], capture_output=True, text=True,
+                          encoding="utf-8")
+    payload = json.loads([ln for ln in proc.stdout.splitlines() if ln.strip()][-1])
+    assert proc.returncode == 2 and never not in payload["message"].split("CLI 인자 오류:", 1)[1].split("옵션:", 1)[0], payload
+    if never == "--all":
+        assert "[추천]" not in payload["message"] and "[후보] --all" not in payload["message"]
 
 
 @pytest.mark.parametrize("argv, want", [
