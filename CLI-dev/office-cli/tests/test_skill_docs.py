@@ -107,8 +107,10 @@ def test_skill_layout():
 
 
 def test_skill_size_limit():
+    # 줄 끝을 LF로 세어 잼: Windows에서 core.autocrlf=true로 받으면 CRLF가 되어 줄 수만큼 커짐 (집 PC 2026-11-06, 6123 -> 6173)
     for name, path in SKILL_FILES.items():
-        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            size = len(f.read().replace(b"\r\n", b"\n"))
         assert size <= MAX_SKILL_BYTES, (name, size)
 
 
