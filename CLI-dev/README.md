@@ -201,7 +201,7 @@ CLI-dev/<tool>/
   `agent_directive` = `CONTINUE: ...`(exit 0)을 낸다. 오류 로그에는 남기지 않는다.
 - 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행한다. 실행마다 새 단계를 최소 1개는 하므로 반복하면 반드시 끝난다.
 - LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `VERIFIED:`/`UNVERIFIED:`가 나올 때까지. `progress`가 바뀌는 동안 계속하고,
-  바로 앞과 같은 `progress`가 나오거나(2번 연속) 60번을 넘으면 멈추고 알린다. 그래서 `progress`는 실행마다 달라지게(끝낸 단계 수, `약 N단계 남음`) 쓴다.
+  바로 앞과 같은 `progress`가 나오거나(2번 연속) 300번을 넘으면 멈추고 알린다 (회사 PC에서 타겟 2개에 약 55번이 걸려 60번 상한은 타겟 3개나 `--best`에 모자랐다, 2.9.69). 그래서 `progress`는 실행마다 달라지게(끝낸 단계 수, `약 N단계 남음`) 쓴다.
 - 사람이 돌리는 점검 러너(`run_beta_check.py`, 실기 러너)와 테스트는 `ML_KIT_TIME_LIMIT=0`(제한 없음).
 - 적용: ml-kit(`ML_KIT_TIME_LIMIT`, `ml_train.py` 여러 타겟 학습(`--best`, `ml_report -f` 재학습 포함), 성능예측표 입력 고르기와 그것을 부르는 `ml_report.py`), office-cli(`OFFICE_CLI_TIME_LIMIT`, `reader.py index`와 `search --file` 폴더 등록). 새 긴 작업도 같은 이름·같은 키로 구현한다.
 - 나누는 단위는 한 실행에 반드시 끝낼 수 있을 만큼 작게: ml-kit 학습은 학습 전 준비(2.9.67) -> 타겟 -> 후보 모델 -> 교차검증 fold(2.9.66) -> 1위 전체 적합 -> 순열 중요도 열 단위로 저장한다.

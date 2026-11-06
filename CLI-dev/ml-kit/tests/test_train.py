@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
-from mlkit_helpers import split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
+from mlkit_helpers import recommendation, recommended_command, split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
 import ml_train as mt  # noqa: E402
 
@@ -2239,6 +2239,65 @@ def test_watchdog_writes_one_json_line_at_the_limit(tmp_path, monkeypatch):
     assert proc.returncode == 0 and out["agent_directive"] == "VERIFIED: 끝", out
 
 
+_FIRE_AFTER_COMMIT = r'''
+import os, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import ml_predict as mp
+import ml_train as mt
+_verify = mt.verify_version_dir
+
+def slow_verify(*a, **k):                # the limit + grace timer elapses while the saved version is checked
+    t = threading.Thread(target=mp._watchdog_fire)
+    t.start()
+    time.sleep(mp.WATCHDOG_HOLD_SECONDS + 4)
+    return _verify(*a, **k)
+
+mt.verify_version_dir = slow_verify
+sys.argv = [sys.argv[0]] + sys.argv[2:]
+mt.main()
+'''
+
+
+def test_watchdog_after_commit_answers_saved_not_continue(tmp_path, monkeypatch):
+    """2.9.69 회귀: 버전을 저장(commit, 원장 기록)한 뒤 확인 도중 감시가 끝내면 CONTINUE가 아니라 ok + UNVERIFIED
+    ('v1 저장됨, 확인하지 못함', version·version_dir). 예전에는 같은 명령을 다시 하라고 해서 처음부터 다시 학습해 v2가 또 생겼고,
+    저장한 단계가 없으면 v1이 저장됐는데도 '한 단계가 너무 길다' 오류를 냈다."""
+    data = make_sample(str(tmp_path / "w.csv"))
+    script = tmp_path / "ml_firewd.py"
+    script.write_text(_FIRE_AFTER_COMMIT, encoding="utf-8")
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "1000")
+    proc = subprocess.run([sys.executable, str(script), KIT, "-f", data, "-x", "반응온도(°C),소비전력(kW)",
+                           "-y", "생산효율(%)"], capture_output=True, text=True, encoding="utf-8", timeout=600)
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1, proc.stdout + proc.stderr
+    out = json.loads(lines[0])
+    assert proc.returncode == 0 and out["status"] == "ok" and not out.get("continue"), out
+    assert out["agent_directive"].startswith("UNVERIFIED:") and "학습 버전 v1 저장됨, 확인하지 못함" in out["agent_directive"]
+    assert out["version"] == "v1" and out["version_dir"].endswith("v1") and os.path.isdir(out["version_dir"])
+    assert "next_commands" not in out and out["verified"] is False
+    ledger = (tmp_path / "w_ml_data" / "history.jsonl").read_text(encoding="utf-8")
+    assert len([ln for ln in ledger.splitlines() if ln.strip()]) == 1
+
+
+def test_watchdog_payload_after_commit(monkeypatch):
+    """저장한 결과가 같은 명령으로 다시 쓰이면(rerun_safe: ml_report -f의 최고 버전, --best의 best_run.json) CONTINUE 그대로,
+    아니면 ok + UNVERIFIED. 아무것도 저장하지 않았으면 예전처럼 STOP_RETRY."""
+    monkeypatch.setattr(mp, "RUN_SAVED", [])
+    monkeypatch.setattr(mp, "RUN_COMMITTED", [])
+    monkeypatch.setattr(mp, "CURRENT_STEP", {"label": "보고서 작성"})
+    mp.mark_committed("학습 버전 v3", rerun_safe=True, version="v3")
+    out, code = mp._watchdog_payload()
+    assert code == 0 and out["continue"] is True, out
+    mp.mark_committed("보고서 r.docx", report_file="r.docx")
+    out, code = mp._watchdog_payload()
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["report_file"] == "r.docx", out
+    assert [s["what"] for s in out["saved"]] == ["학습 버전 v3", "보고서 r.docx"] and "continue" not in out
+    mp.RUN_COMMITTED.clear()
+    out, code = mp._watchdog_payload()
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+
+
 def test_step_mark_is_removed_when_the_run_fails_by_itself(tmp_path, monkeypatch):
     """입력 오류로 끝난 실행은 시작 표시를 남기지 않는다 (표시는 밖에서 끊긴 실행만): 같은 오류가 반복돼도 '시간 제한' 오류가 되지 않음."""
     data = make_sample(str(tmp_path / "e.csv"))
@@ -2247,3 +2306,58 @@ def test_step_mark_is_removed_when_the_run_fails_by_itself(tmp_path, monkeypatch
         out = run_fail("ml_train.py", "-f", data, "-x", "없는열", "-y", "생산효율(%)")
         assert "시간 제한" not in out["message"] and "없는열" in out["message"], out
     assert not (tmp_path / "e_ml_data" / ".resume_train").exists()
+
+
+# ---- 구분자 실수 (2.9.69): ',' 대신 ';' 또는 그 반대 -> [추천] 고친 전체 명령 ------------------------------------
+
+
+def _sep_data(tmp_path):
+    rng = np.random.default_rng(0)
+    n = 60
+    t, p = rng.uniform(150, 200, n), rng.uniform(900, 1200, n)
+    path = tmp_path / "sep.csv"
+    pd.DataFrame({"라인": rng.choice(["A", "B"], n), "온도": t.round(1), "압력": p.round(0),
+                  "수율": (0.3 * t + 0.01 * p + rng.normal(0, 1, n)).round(2)}).to_csv(path, index=False)
+    return str(path)
+
+
+def test_exclude_where_with_comma_between_conditions_stops_with_fixed_command(tmp_path):
+    """회귀: --exclude-where "라인 = A, 온도 > 180"은 조건 하나(라인 = 'A, 온도 > 180')로 읽혀 0행을 빼고 VERIFIED로 학습했다.
+    이제 STOP_RETRY + [추천] ';'로 고친 전체 명령. 그 명령은 그대로 실행되어 조건대로 행을 뺀다."""
+    data = _sep_data(tmp_path)
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", "온도,압력", "-y", "수율", "--exclude-where", "라인 = A, 온도 > 180")
+    assert proc.returncode == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    rec = recommended_command(out["message"])
+    assert rec[0] == "ml_train.py" and rec[1][rec[1].index("--exclude-where") + 1] == "라인 = A; 온도 > 180", rec
+    res = run_tool(rec[0], *rec[1])
+    assert res["exclusions"]["수율"]["condition"] > 0, res
+
+
+def test_where_comma_detection_leaves_real_values():
+    """','가 조건 사이일 때만 잡는다: 천 단위 숫자, 따옴표 값, 이름 없는 텍스트 값은 그대로."""
+    assert mp.parse_where("온도 > 1,500") == [[("온도", ">", "1,500")]]
+    assert mp.parse_where("비고 = 'A, B > 3'") == [[("비고", "=", "A, B > 3")]]
+    assert mp.parse_where("비고 = A, B") == [[("비고", "=", "A, B")]]
+    for text, fixed in (("온도 <= 190, 압력 >= 1000", "온도 <= 190; 압력 >= 1000"),
+                        ("온도 > 1,500, 2(mm) < 3 | 라인 = B", "온도 > 1,500; 2(mm) < 3 | 라인 = B")):
+        with pytest.raises(mp.InputError) as e:
+            mp.parse_where(text, "--where")
+        assert "','로 나눴습니다" in str(e.value) and recommendation(str(e.value)) == fixed, str(e.value)
+
+
+def test_eval_dtypes_features_separator_slips_give_fixed_command(tmp_path):
+    """--eval 식 사이 ',', --dtypes 쌍 사이 ';', -x 이름 사이 ';' -> STOP_RETRY [추천] 고친 전체 명령 (예전: 문법 오류,
+    '형식을 알 수 없음', [후보])."""
+    data = _sep_data(tmp_path)
+    base = ["-f", data, "-x", "온도,압력", "-y", "수율"]
+    for extra, opt, want in ((["--eval", "a = 온도/압력, b = max(온도, 압력)"], "--eval", "a = 온도/압력; b = max(온도, 압력)"),
+                             (["--dtypes", "온도:float;압력:float"], "--dtypes", "온도:float,압력:float")):
+        proc, out = run_raw("ml_train.py", *base, *extra)
+        assert proc.returncode == 1 and "[추천] python" in out["message"], out
+        args = recommended_command(out["message"])[1]
+        assert args[args.index(opt) + 1] == want, args
+    proc, out = run_raw("ml_train.py", "-f", data, "-x", "온도;압력", "-y", "수율")
+    args = recommended_command(out["message"])[1]
+    assert args[args.index("-x") + 1] == "온도,압력" and args.count("-x") == 1, args
+    assert mt._eval_comma_fix("a = where(온도 > 1, 1, 0)") == "a = where(온도 > 1, 1, 0)"
+    assert mt._eval_comma_fix("a = x == y, b = 1") == "a = x == y; b = 1"

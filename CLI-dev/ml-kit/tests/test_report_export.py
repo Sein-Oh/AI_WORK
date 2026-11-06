@@ -980,6 +980,26 @@ def test_unfinished_passes_through_the_reports_optional_workbook(monkeypatch, wi
         ml_report.make_export("v", "regression", None)
 
 
+def test_fit_subset_step_labels_are_unique(monkeypatch):
+    """2.9.69 회귀: 같은 타겟의 같은 개수 다른 입력 조합도 진행 문구(감시가 내는 progress)가 서로 다르다 (후보 번호).
+    예전에는 둘 다 'y' 입력 2개 학습이라 CONTINUE 반복이 같은 progress 2번으로 보여 멈출 수 있었다."""
+    seen = []
+
+    def fake_train(**kw):
+        seen.append(mp.CURRENT_STEP.get("label"))
+        return None, None, {"val_r2": 0.9, "rmse": 1.0, "champion_model": "Ridge"}, None
+    monkeypatch.setattr(mx.mt, "train_and_benchmark_models", fake_train)
+    monkeypatch.setattr(mx, "FIT_CACHE", None)
+    monkeypatch.setattr(mx, "_FIT_STATS", {"reused": 0, "trained": 0})
+    monkeypatch.setattr(mx, "_FIT_SECONDS", [])
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    data = pd.DataFrame({"a": [1.0, 2, 3, 4], "b": [2.0, 1, 4, 3], "c": [5.0, 3, 1, 2], "y": [1.0, 2, 3, 4]})
+    mx.fit_subset(data, "y", ["a", "b"], [], ["a", "b", "c"])
+    mx.fit_subset(data, "y", ["a", "c"], [], ["a", "b", "c"])
+    assert len(seen) == 2 and seen[0] != seen[1], seen
+    assert "후보 1번째" in seen[0] and "후보 2번째" in seen[1]
+
+
 def test_time_limit_setting(monkeypatch):
     import ml_predict as mp
     for raw, want in (("", mp.DEFAULT_TIME_LIMIT), ("abc", mp.DEFAULT_TIME_LIMIT), ("0", float("inf")), ("250", 250.0)):

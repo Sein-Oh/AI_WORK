@@ -12,6 +12,32 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.69] - 2026-11-06
+
+독립 검토와 감사의 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
+
+### 버그 수정
+- [치명] 저장 뒤 감시가 `CONTINUE`: 학습 버전을 커밋하고 원장에 적은 뒤 확인(`verify_version_dir`) 도중 감시(제한 + 15초)가 끝내면 같은 명령을
+  다시 하라고 해서 처음부터 다시 학습해 v2가 또 생겼고, 저장한 단계가 없으면 v1이 저장됐는데도 `STOP_RETRY`(한 단계가 너무 김)였음.
+  저장한 결과를 `mark_committed`(PART C)로 적고, 그 뒤의 감시는 `ok` + `UNVERIFIED: <버전> 저장됨, 확인하지 못함` + `version`·`version_dir`·`saved`
+  (`next_commands`·`continue` 없음). 같은 곳: 성능예측표, 보고서, 예측·조건별 결과 파일, ml_map 결과 파일. 같은 명령으로 다시 쓰이는 저장(보고서 `-f`의
+  최고 버전, `--best`의 `best_run.json`)은 `CONTINUE` 그대로. 학습은 버전을 쓰기 직전에도 시계를 봄(제한 - 여유를 넘었고 모든 타겟이 저장됐으면 멈춤).
+  테스트: `test_train.py`의 `test_watchdog_after_commit_answers_saved_not_continue`(확인 시작 때 감시를 터뜨림), `test_watchdog_payload_after_commit`.
+- [치명] `ml_train --exclude-where "라인 = A, 온도 > 180"`: 조건 하나로 읽혀 0행을 빼고 `VERIFIED`. `,`로 나눈 조건은 `STOP_RETRY` +
+  `[추천] <;로 고친 전체 명령>` (`ml_predict --where`도 같음). 천 단위 숫자·따옴표 값은 그대로.
+- `-i "온도=160; 압력=1100"`(`;`·띄어쓰기로 나눔, `--find`, ml_map 포함): 압력이 빠졌다며 중앙값 채우기를 묻던 것을 그 전에 잡아 `[추천] <,로 고친 명령>`.
+- `--eval "a = 온도/압력, b = 온도*2"`(문법 오류), `--dtypes "온도:str;압력:str"`(형식 모름), `-x "온도;압력"`(`[후보]`): `[추천] <고친 전체 명령>`.
+- 성능예측표 입력 고르기의 단계 이름이 같은 타겟·같은 개수의 다른 조합에서 같았음(`'y' 입력 2개 학습`): 후보 번호를 붙임.
+
+### 기능
+- CONTINUE 반복 상한 60번 -> 300번 (SKILL.md, 전역 지침 `CLI/opencode/AGENTS.md`, `CLI-dev/README.md` R10, CONTINUE 결과의 `agent_directive`):
+  회사 PC에서 실행마다 1단계씩 진행되어 타겟 2개에 약 55번(`STEPS_PER_TARGET` 27)이 걸려 타겟 3개(약 82번)나 `--best`가 60번을 넘었음.
+  `progress`가 바뀌는 동안(`약 N단계 남음`이 줄거나 글이 달라짐) 계속하고 같은 `progress` 2번 연속이면 멈추는 안전장치는 그대로.
+- 인자 오류 힌트 (`JsonArgumentParser`, office-cli의 설계를 복사): 같은 뜻의 지어낸 옵션(`SAME_MEANING`)은 `[추천] <고친 전체 명령>`(필수 인자 빠짐 오류 포함,
+  고친 명령이 읽히는지 먼저 확인), `--json`·`--encoding`은 뺌, 비슷한 철자는 `[후보]`(`--overwrite`·`--best`는 제외). `allow_abbrev=False`
+  (`--data x`가 `--data-row`로 읽혀 정수 오류였음), 예전에 줄임말로 되던 같은 뜻(`--target` -> `--targets`)은 표로 계속 읽음. directive:
+  `[추천]`이 있으면 1번 실행, 없으면 보고 (예전: 다시 실행하지 말 것).
+
 ## [2.9.68] - 2026-11-05
 
 `next_commands`·`[추천]` 전체 명령의 인자 따옴표를 실제 실행 셸에 맞춤 (office-cli 1.4.76과 같은 코드, 복사).
