@@ -391,7 +391,9 @@ def grade_turn(sc, turn, rules):
             rx = rule["command"] if isinstance(rule["command"], str) else "|".join(f"(?:{r})" for r in rule["command"])
             bad += [c for c in cmds if re.search(rx, c, re.I | re.M)]
         if rule.get("script_allow"):
-            bad += [c for c in cmds if any(not re.fullmatch(rule["script_allow"], m.group(1).strip("\"'"), re.I)
+            # 겹친 경로 구분자(C:\\CLI\\ml-kit\\ml_report.py: JSON 이스케이프를 그대로 옮긴 것)도 Windows에서는 같은 파일
+            bad += [c for c in cmds if any(not re.fullmatch(rule["script_allow"],
+                                                            re.sub(r"[\\/]{2,}", lambda g: g.group(0)[0], m.group(1).strip("\"'")), re.I)
                                            for m in PY_SCRIPT.finditer(c)) and c not in bad]
         if rule.get("read"):
             bad += [t["path"] for t in turn["tools"] if t["tool"] == "read" and re.search(rule["read"], t["path"], re.I)]

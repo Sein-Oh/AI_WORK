@@ -1519,7 +1519,8 @@ def test_blocked_resume_folder_continues_in_fallback(tmp_path, monkeypatch, targ
     root = tmp_path / "f_ml_data"
     _block(root / ".resume_train")
     fb = _fallbacks(root / ".resume_train")[0]
-    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", targets)
+    # 느린 PC는 실행마다 한 단계만 진행: 타겟 2개면 약 55단계 (회사 PC 2026-11-06: 40회 상한에 걸림)
+    runs = _split_runs(monkeypatch, "-f", data, "-x", SPLIT_X, "-y", targets, limit=120)
     assert len(runs) >= 2, [r.get("progress") for r in runs]
     first, last = runs[0], runs[-1]
     assert first["agent_directive"].startswith("CONTINUE:"), first

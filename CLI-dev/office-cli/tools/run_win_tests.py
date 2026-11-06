@@ -645,6 +645,14 @@ def open_user_windows(ctx):
 # ---------------------------------------------------------------------------
 # A. 사용자 창 간섭 / 닫힌 파일 처리
 # ---------------------------------------------------------------------------
+def _settled_count(image, before, timeout=15):
+    """도구가 띄운 백그라운드 Office가 Quit 뒤 실제로 끝날 때까지 기다린 프로세스 수 (끝나는 데 2초 넘게 걸리는 PC가 있음,
+    회사 PC 2026-11-06 A3: 2초 뒤 WINWORD.EXE 1->2). timeout 안에 before 이하가 되지 않으면 그때의 수."""
+    time.sleep(2)
+    got = wait_for(lambda: (lambda n: (n,) if n <= before else None)(process_count(image)), timeout=timeout)
+    return process_count(image) if got is None else got[0]
+
+
 def test_A(ctx):
     def a1():
         activate_xl("A.xlsx")
@@ -661,8 +669,7 @@ def test_A(ctx):
         before = process_count("EXCEL.EXE")
         b_mtime = mtime(ctx.path("B.xlsx"))
         data, code, raw, err = run_cli("excel.py", "write", "--target", ctx.path("B.xlsx"), "--range", "C1", "--value", "닫힌파일쓰기")
-        time.sleep(2)
-        after = process_count("EXCEL.EXE")
+        after = _settled_count("EXCEL.EXE", before)
         still_open = bool(wait_for(lambda: xl_wb("A.xlsx"), timeout=5))
         visible = com_retry(lambda: bool(xl_app().Visible))
         ok = (data or {}).get("status") == "ok" and still_open and visible and after <= before \
@@ -674,8 +681,7 @@ def test_A(ctx):
     def a3():
         before = process_count("WINWORD.EXE")
         data, code, raw, err = run_cli("word.py", "write", "--target", ctx.path("B.docx"), "--text", "닫힌 문서에 추가")
-        time.sleep(2)
-        after = process_count("WINWORD.EXE")
+        after = _settled_count("WINWORD.EXE", before)
         still_open = bool(wait_for(lambda: wd_doc("A.docx"), timeout=5))
         ok = (data or {}).get("status") == "ok" and still_open and after <= before
         manual = ask(ctx, "실행 중 A.docx 창이 그대로 있었나요?")

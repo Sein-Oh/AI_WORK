@@ -315,8 +315,11 @@ def test_no_adhoc_py_rule():
                'cd C:\\CLI-dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
                'cd C:\\CLI-dev; python ml-kit\\tools\\run_win_tests.py --agent',
                'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
-               'python -m pytest -q']
+               'python -m pytest -q',
+               # 회사 PC 2026-11-06 R1: JSON 이스케이프 그대로 겹친 구분자 (Windows에서는 같은 파일)
+               'python "C:\\\\CLI\\\\ml-kit\\\\ml_report.py" -f "C:\\\\CLI-dev\\\\work\\\\a.xlsx"']
     bad_cmds = ['python -c "import pandas"',
+                'python "C:\\\\CLI\\\\ml-kit\\\\helper.py"',
                 "python - <<'EOF'\nprint(1)\nEOF",
                 "python <<EOF\nprint(1)\nEOF",
                 "python -u C:\\temp\\x.py",
