@@ -3,7 +3,7 @@
 
     python make_office_samples.py [출력 폴더]      # 출력 폴더 생략 시 현재 폴더 아래 office_샘플 폴더
 
-- 규격대조.xlsx  : 항목(B열)·값(C열) 5행 (B3:C7, 머리글 2행). 규격서.txt와 대조하면 일치 2, 불일치 2, 근거없음 1
+- 규격대조.xlsx  : 항목(B열)·값(C열)·단위(D열) 5행 (B3:C7, 머리글 2행). 규격서.txt와 대조하면 일치 2, 불일치 2, 근거없음 1
                    (정격 전압 5.1 일치, 소비 전류 250 불일치, 동작 온도 70 불일치, 절연 저항 150 일치, 포장 색상 근거없음)
 - 규격서.txt     : 장절 번호가 있는 규격 문장 (전압 V, 전류 mA, 온도 ℃, 저항 MΩ)
 - 단위표.xlsx    : 5행 머리글(항목, 값, 단위), 6~7행 항목·값. 단위 칸 C6, C7은 비어 있음 (O2에서 채움)
@@ -29,7 +29,8 @@ SPEC = """3. 전기적 특성
 3.4 절연 저항은 100 MΩ 이상이어야 한다.
 """
 
-CHECK_ROWS = [("정격 전압", 5.1), ("소비 전류", 250), ("동작 온도", 70), ("절연 저항", 150), ("포장 색상", "회색")]
+CHECK_ROWS = [("정격 전압", 5.1, "V"), ("소비 전류", 250, "mA"), ("동작 온도", 70, "℃"), ("절연 저항", 150, "MΩ"),
+              ("포장 색상", "회색", None)]
 
 
 def main(out: str) -> list:
@@ -47,9 +48,9 @@ def main(out: str) -> list:
     ws = wb.active
     ws.title = "검사"
     ws["B1"] = "부품 검사 기록 (실기 테스트용 샘플)"
-    ws.append([None, "항목", "값"])
-    for item, value in CHECK_ROWS:
-        ws.append([None, item, value])
+    ws.append([None, "항목", "값", "단위"])          # 단위 열(D): check가 머리글 '단위'로 찾아 씀
+    for item, value, unit in CHECK_ROWS:
+        ws.append([None, item, value, unit])
     wb.save(keep("규격대조.xlsx"))
 
     wb = openpyxl.Workbook()

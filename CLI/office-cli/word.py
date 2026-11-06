@@ -1299,6 +1299,72 @@ def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
             for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
 
 
+_SLOT_COMMA = re.compile(r",\s*(?:\{\{[^{}\r\n]{1,100}\}\}|표\s*\d{1,3}\s*!\s*R\s*\d{1,4}\s*C\s*\d{1,3}|[\w가-힣]{1,30})\s*=")
+
+
+def _split_slots(text: str) -> List[str]:
+    """'업체명=한빛전자; 시험일=2026-11-04'를 ; 또는 줄바꿈으로 나눔. 따옴표로 묶은 값('a;b') 안의 ;는 나누지 않음."""
+    parts: List[str] = []
+    buf, quote = "", ""
+    for ch in text:
+        if quote:
+            buf += ch
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"" and buf.split("=", 1)[-1].strip() == "" and "=" in buf:
+            quote = ch
+            buf += ch
+            continue
+        if ch in ";\n":
+            parts.append(buf)
+            buf = ""
+            continue
+        buf += ch
+    parts.append(buf)
+    return [p for p in parts if p.strip()]
+
+
+def _slot_rows(args) -> List[Tuple[int, str, str]]:
+    """--slots 글 -> [(번호, 자리, 값)]. 모양: 자리=값; 자리=값 (자리는 업체명, {{업체명}}, 표2!R3C4). JSON 객체({"업체명": "한빛전자"})도 받음.
+    {{ }} 없이 적은 이름은 {{이름}} 자리로 봄. 쉼표로 나눈 것 같으면(값에 ',자리=') 채우지 않고 ;로 바꾼 명령을 [추천]."""
+    text = rt.unescape_newlines(args.slots).strip()
+    pairs: List[Tuple[str, str]] = []
+    if text.startswith("{") and not text.startswith("{{"):
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            raise rt.InputError("--slots는 '자리=값; 자리=값' 모양으로 적습니다 (예: --slots \"업체명=한빛전자; 시험일=2026-11-04\"). "
+                                "JSON은 셸에서 따옴표가 깨지기 쉬워 권하지 않습니다.")
+        if not isinstance(obj, dict):
+            raise rt.InputError("--slots JSON은 {\"자리\": \"값\"} 객체여야 합니다. '자리=값; 자리=값' 모양을 권합니다.")
+        pairs = [(str(k), "" if v is None else str(v)) for k, v in obj.items()]
+    else:
+        bad: List[str] = []
+        for part in _split_slots(text):
+            if "=" not in part:
+                bad.append(f"'{part.strip()[:30]}': '자리=값' 모양이 아닙니다")
+                continue
+            key, val = part.split("=", 1)
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
+                val = val[1:-1]
+            elif _SLOT_COMMA.search(val):
+                fixed = "; ".join(_SLOT_COMMA.sub(lambda m: "; " + m.group(0)[1:].lstrip(), p.strip()) for p in _split_slots(text))
+                cmd = _fill_command(type(args)(**{**vars(args), "slots": fixed}), ["--dry-run"] if args.dry_run else [])["command"]
+                raise rt.InputError(f"--slots의 자리는 ; 로 나눕니다. 쉼표로 나눈 것 같아 채우지 않았습니다 ('{key.strip()}'의 값에 '자리=' 이 들어 있음). "
+                                    f"[추천] {cmd}")
+            pairs.append((key.strip(), val))
+        if bad:
+            raise rt.InputError(f"--slots {len(bad)}개 항목이 잘못되어 채우지 않았습니다 (모양: 자리=값; 자리=값). " + " / ".join(bad[:10]))
+    rows = []
+    for n, (key, val) in enumerate(pairs, 1):
+        if key and not _FILL_CELL.match(key) and not _FILL_PLACE.match(key):
+            key = "{{" + key.strip("{} ") + "}}"
+        rows.append((n, key, val))
+    return rows
+
+
 def _cell_text(cell: Any) -> str:
     t = str(cell.Range.Text)
     return t[:-2] if t.endswith(_CELL_END) else t.rstrip("\r\x07")
@@ -1327,7 +1393,7 @@ def _doc_protected(doc: Any) -> bool:
 
 
 def _fill_command(args, extra: Sequence[str] = ()) -> Dict[str, Any]:
-    argv = ["fill", "--target", args.target, "--file", args.file]
+    argv = ["fill", "--target", args.target] + (["--slots", args.slots] if args.slots else ["--file", args.file])
     for flag, on in (("--overwrite", args.overwrite), ("--no-focus", args.no_focus)):
         if on:
             argv.append(flag)
@@ -1336,13 +1402,26 @@ def _fill_command(args, extra: Sequence[str] = ()) -> Dict[str, Any]:
                            destructive="--overwrite" in argv)
 
 
+FILL_HOWTO = ("값은 --slots \"<자리>=<값>; <자리>=<값>\" (자리는 양식의 {{이름}}에서 이름만 적어도 됨, 표 칸은 표2!R3C4, 자리마다 ; 로 구분) "
+              "또는 --file 값.csv(열: 자리, 값)")
+
+
 def cmd_fill(args) -> Dict[str, Any]:
-    rows = _fill_rows(rt.resolve_input_path(args.file, "값 파일", exts=(".csv", ".tsv", ".md", ".txt")))
+    if bool(args.slots) == bool(args.file):
+        raise rt.InputError(("--slots와 --file 중 하나만 씁니다. " if args.slots else "채울 값이 없습니다. ") + FILL_HOWTO +
+                            ". 채울 양식 문서는 --target으로 줍니다.")
+    if args.file and os.path.splitext(args.file.strip().strip('"'))[1].lower() in (".docx", ".doc", ".docm", ".dotx", ".hwp", ".hwpx"):
+        # 양식 문서를 --file로 준 경우 (회사 PC 2026-11-06 O5: 인코딩 인식 실패로 끝남)
+        raise rt.InputError(f"--file은 채울 값 파일입니다. 양식 문서 '{os.path.basename(args.file.strip().strip(chr(34)))}'은(는) --target으로 주고, "
+                            + FILL_HOWTO + ".")
+    rows = _slot_rows(args) if args.slots else \
+        _fill_rows(rt.resolve_input_path(args.file, "값 파일", exts=(".csv", ".tsv", ".md", ".txt")))
     if not rows:
-        raise rt.InputError("값 파일에 내용이 없습니다. 열: 자리, 값 (예: {{업체명}},한빛전자 / 표2!R3C4,25).")
+        raise rt.InputError("채울 값이 없습니다. " + FILL_HOWTO + ".")
     if len(rows) > FILL_MAX:
         raise rt.InputError(f"한 번에 {FILL_MAX}줄까지 채웁니다 (받은 {len(rows)}줄). 파일을 나눠 실행하세요.")
     bad: List[str] = []
+    unit = "번째 항목" if args.slots else "번째 줄"
     places: Dict[str, str] = {}
     cells: Dict[Tuple[int, int, int], str] = {}
     for n, key, val in rows:
@@ -1350,16 +1429,17 @@ def cmd_fill(args) -> Dict[str, Any]:
         if m:
             k = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
             if k in cells and cells[k] != val:
-                bad.append(f"{n}번째 줄 '{key}': 같은 칸에 다른 값이 두 번 있습니다")
+                bad.append(f"{n}{unit} '{key}': 같은 칸에 다른 값이 두 번 있습니다")
             cells[k] = val
         elif _FILL_PLACE.match(key):
             if key in places and places[key] != val:
-                bad.append(f"{n}번째 줄 '{key}': 같은 자리에 다른 값이 두 번 있습니다")
+                bad.append(f"{n}{unit} '{key}': 같은 자리에 다른 값이 두 번 있습니다")
             places[key] = val
         else:
-            bad.append(f"{n}번째 줄 '{key[:30]}': 자리는 {{{{이름}}}} 또는 표 칸 표2!R3C4 모양이어야 합니다")
+            bad.append(f"{n}{unit} '{key[:30]}': 자리는 {{{{이름}}}} 또는 표 칸 표2!R3C4 모양이어야 합니다")
     if bad:
-        head = f"값 파일 {len(rows)}줄 중 {len(bad)}줄이 잘못되어 하나도 채우지 않았습니다 (열: 자리, 값). 고친 뒤 다시 실행하세요. "
+        head = (f"--slots {len(rows)}개 중 {len(bad)}개가 잘못되어 하나도 채우지 않았습니다 (모양: 자리=값; 자리=값). " if args.slots else
+                f"값 파일 {len(rows)}줄 중 {len(bad)}줄이 잘못되어 하나도 채우지 않았습니다 (열: 자리, 값). ") + "고친 뒤 다시 실행하세요. "
         raise rt.InputError(head + " / ".join(bad[:10]), log_message=head + f"잘못된 줄 {len(bad)}개 ({rt.DOC_OMITTED})")
     with off.open_target("word", args.target, readonly=args.dry_run, focus=not args.no_focus,
                          tool=TOOL, command="fill") as t:
@@ -1622,7 +1702,8 @@ def build_cli():
 
     p = sub.add_parser("fill", help="서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 채우기")
     common(p, write=True)
-    p.add_argument("--file", "-f", required=True, help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25)")
+    p.add_argument("--slots", help="채울 값 '자리=값; 자리=값' (예: \"업체명=한빛전자; 시험일=2026-11-04; 표2!R3C4=25\")")
+    p.add_argument("--file", "-f", help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25). 많을 때")
     p.add_argument("--overwrite", action="store_true", help="값이 있는 표 칸도 덮어쓰기 (사용자가 확인했을 때만)")
     p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 채울 곳만 미리 보기")
 

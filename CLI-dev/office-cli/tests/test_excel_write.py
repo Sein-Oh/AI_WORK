@@ -1984,3 +1984,28 @@ def test_comment_append_rerun_does_not_duplicate(xl, capsys):
     assert out["unchanged"] == 1 and out["count"] == 0 and out["applied"] == [] and len(undo_points()) == 1
     code, out = run_excel(capsys, "comment", "--range", "B5", "--text", "기존 메모\\n덧붙임")
     assert code == 0 and out["unchanged"] == 1, out                               # 같은 메모는 결정 없이 그대로
+
+
+@pytest.mark.parametrize("cells,fixed", [
+    ("C6=ft,C7=℃", "C6=ft; C7=℃"),                              # 회사 PC 2026-11-06 O2 (Gemma가 쉼표로 나눔)
+    ("C6=ft, 요약!C7=20", "C6=ft; 요약!C7=20"),
+    ("C5=a; C6=ft,C7=b", "C5=a; C6=ft; C7=b"),
+])
+def test_write_cells_comma_separated_is_refused_with_fixed_command(xl, capsys, cells, fixed):
+    """쉼표로 나눈 칸을 그대로 쓰면 C6에 'ft,C7=℃'가 들어간다. 쓰지 않고 ;로 바꾼 전체 명령을 [추천]."""
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", cells)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "[추천] python" in out["message"], out
+    cmd = out["message"].split("[추천] ", 1)[1]
+    argv = split_command(cmd)
+    assert argv[argv.index("--cells") + 1] == fixed, cmd
+    assert ws_of(wb).values == {}
+
+
+@pytest.mark.parametrize("cells", ["C6=1,234", "C6=a,b", "C6==IF(A1=1,B2,0)", "C6='x,C7=1'", "C6=크기 3,4"])
+def test_write_cells_comma_inside_value_is_kept(xl, capsys, cells):
+    """값 안의 쉼표(숫자, 글, 수식, 따옴표로 묶은 값)는 칸 구분으로 보지 않음."""
+    _, wb = xl
+    code, out = run_excel(capsys, "write", "--cells", cells)
+    assert code == 0 and out["status"] == "ok", out

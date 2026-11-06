@@ -884,6 +884,7 @@ def test_office_samples_match_scenarios(tmp_path):
     assert set(made) == {"규격서.txt", "규격대조.xlsx", "단위표.xlsx", "주간보고.docx", "성적서양식.docx", "시험성적서.docx"}
     ws = openpyxl.load_workbook(tmp_path / "규격대조.xlsx").active
     assert [ws[f"B{r}"].value for r in range(3, 8)] == ["정격 전압", "소비 전류", "동작 온도", "절연 저항", "포장 색상"]
+    assert ws["D2"].value == "단위" and ws["D3"].value == "V"       # check가 머리글 '단위' 열을 행마다 읽음
     ws = openpyxl.load_workbook(tmp_path / "단위표.xlsx").active
     assert ws["C6"].value is None and ws["C7"].value is None and ws["C5"].value == "단위"
     form = "\n".join(p.text for p in docx.Document(str(tmp_path / "성적서양식.docx")).paragraphs)

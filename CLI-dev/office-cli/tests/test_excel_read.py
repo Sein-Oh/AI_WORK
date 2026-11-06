@@ -1302,6 +1302,47 @@ def test_check_cell_without_unit_is_not_guessed(check_env, capsys, header, value
         assert "칸 단위 없음" in r["reason"] and "머리글" in r["reason"] and out["agent_directive"].startswith("UNVERIFIED:")
 
 
+def _unit_book(path, head_e, rows):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "시험"
+    ws["B1"], ws["D1"], ws["E1"] = "항목", "값", head_e
+    for i, (item, val, unit) in enumerate(rows, 2):
+        ws.cell(i, 2, item)
+        ws.cell(i, 4, val)
+        ws.cell(i, 5, unit)
+    wb.save(path)
+
+
+ROWS_UNIT = [("두께", 30, "mm"), ("폭", 7, "cm"), ("길이", 2, None)]
+
+
+@pytest.mark.parametrize("head_e,extra,verdicts,unit_col", [
+    ("단위", [], ["일치", "불일치", "판단필요"], "E (머리글이 '단위'라 자동으로 씀)"),   # 값 열 오른쪽의 '단위' 열
+    ("Unit", [], ["일치", "불일치", "판단필요"], "E (머리글이 '단위'라 자동으로 씀)"),
+    ("비고", [], ["판단필요", "판단필요", "판단필요"], None),                        # 머리글이 '단위'가 아니면 쓰지 않음
+    ("비고", ["--unit-col", "E"], ["일치", "불일치", "판단필요"], "E"),              # 직접 지정하면 머리글과 상관없이
+])
+def test_check_reads_unit_column(check_env, capsys, head_e, extra, verdicts, unit_col):
+    """회사 PC 2026-11-06 O1: 항목·값·단위 3열 표의 값 칸에 단위가 없어 모든 행이 판단필요였다. 단위 열을 행마다 읽는다."""
+    spec, book = check_env
+    spec.write_text("두께는 5 cm 이하로 한다.\n\n폭은 5 cm 이하로 한다.\n\n길이는 5 cm 이하로 한다.\n", encoding="utf-8")
+    _unit_book(book, head_e, ROWS_UNIT)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--spec", str(spec), *extra)
+    assert [r["verdict"] for r in out["results"]] == verdicts, out
+    assert out.get("unit_col") == unit_col, out
+
+
+def test_check_unit_col_must_differ_from_value_col(check_env, capsys):
+    spec, book = check_env
+    _unit_book(book, "단위", ROWS_UNIT)
+    code, out = run_excel(capsys, "check", "--target", str(book), "--range", "B2:D4", "--item-col", "B",
+                          "--value-col", "D", "--unit-col", "D", "--spec", str(spec))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--unit-col" in out["message"], out
+
+
 def test_check_empty_items_is_zero(check_env, capsys):
     spec, book = check_env
     _check_book(book, [])

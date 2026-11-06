@@ -198,7 +198,7 @@ def test_skill_mentions_new_and_existing_features():
                          "--number-format", "--all-sheets", "--type column|bar|line|pie|scatter|area", "--action insert|delete",
                          "--dry-run", "--action sort", "--by", "--where \"", "--formulas", "--cells", "comment --action add",
                          "office.py\" undo", "transfer --from excel --chart"),
-        "office-doc": ("slide --action add|duplicate|delete|move", "--toc", "--callout", "--highlight yellow", "fill --file",
+        "office-doc": ("slide --action add|duplicate|delete|move", "--toc", "--callout", "--highlight yellow", "fill --target", "--slots",
                        "outline", "revisions", "notes --slide", "--page-number", "transfer --from word --what text",
                        "office.py\" undo", "focus --app"),
         "office-mail": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
