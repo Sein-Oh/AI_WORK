@@ -138,6 +138,11 @@
 시스템 PATH(`C:\CLI\python`, `C:\CLI\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
 
 ## 4. 지난 실기 결과 요약
+- 집 PC(2026-11-06, Office 2007, ml-kit 2.9.69 / office-cli 1.4.77, `--only diag,pytest,beta,ml,office`): 결과 `docs/test_logs/result_집PC_20261106_192244.md`.
+  beta check 27/27, office-cli 실기 PASS 77·ENV-SKIP 2(PDF 추가 기능 없음), 새 항목 A2·A3·I26·I28~I31·E8·E10 모두 통과, 도구 오류 로그 0건.
+  ml-kit 실기 13/14: M4(결과 CSV를 Excel로 열면 한글)는 Excel 2007이 UTF-8 BOM을 무시하는 한계로 기록 (실행 파일로 직접 열어도 같음, ml-kit README Q1).
+  pytest office-cli 1건(`test_skill_size_limit`, office-excel 6173 > 6144)은 점검용 파일을 `core.autocrlf=true`로 풀어 CRLF가 된 탓이며 LF로 다시 풀어 통과
+  (저장소 원본 6123바이트, 한도까지 21바이트). diag FAIL 2건은 이 PC에 `C:\CLI\python`·opencode가 없고 스킬을 복사하지 않은 환경 차이.
 - 집 PC(2026-10-31, Office 2007, ml-kit 2.9.10 / office-cli 1.4.9): beta check 27/27(F7 포함), pytest 통과, ml-kit 실기 14/14, office-cli 실기 PASS 69·ENV-SKIP 2(PDF 추가 기능 없음), UNVERIFIED 0건, 눈 확인 V1~V7·V9~V10 통과
 - 회사 PC(2026-10-29~30): beta check 26/27(F2), Gemma 12/14(X1·X2에서 도구 코드 읽기 -> 지침 보강, X2 시나리오 변경)
 - 회사 PC(2026-11-04, `run_all_tests.py --only gemma`, opencode CLI 2.2.5, ml-kit 2.9.39): Gemma 12/14. R1(보고서)·R2(성능예측표)가 opencode 명령 시간 제한 120초에 끊겨 결과 JSON 없음(R1은 같은 명령 4번) -> 2.9.40 나눠서 진행(`CONTINUE:`). 나머지 12건 통과, X2 답변 판정 통과(참고)
