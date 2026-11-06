@@ -1991,6 +1991,8 @@ def test_comment_append_rerun_does_not_duplicate(xl, capsys):
     ("C6=ft, 요약!C7=20", "C6=ft; 요약!C7=20"),
     ("C5=a; C6=ft,C7=b", "C5=a; C6=ft; C7=b"),
     ("C6='ft',C7='x'", "C6='ft'; C7='x'"),                     # 따옴표가 쉼표 앞에서 닫힘 (값 전체를 묶은 것이 아님)
+    ("C6=ft C7=20", "C6=ft; C7=20"),                             # 공백·| 로 나눔 (감사: C6에 'ft C7=20'이 들어갔음)
+    ("C6=a|C7=b", "C6=a; C7=b"),
 ])
 def test_write_cells_comma_separated_is_refused_with_fixed_command(xl, capsys, cells, fixed):
     """쉼표로 나눈 칸을 그대로 쓰면 C6에 'ft,C7=℃'가 들어간다. 쓰지 않고 ;로 바꾼 전체 명령을 [추천]."""

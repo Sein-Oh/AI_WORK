@@ -499,6 +499,21 @@ def test_where_operators(xl_table, capsys, expr, rows):
     assert code == 0 and [r[0] for r in out["values"][1:]] == rows, out
 
 
+@pytest.mark.parametrize("expr, fixed", [
+    ("금액 >= 200, 부서 = 영업", "금액 >= 200; 부서 = 영업"),       # Gemma 실패 유형 감사: 쉼표로 나눈 조건이 값 하나로 읽혀 0건이었음
+    ("금액 >= 1,000, 부서 = 영업", "금액 >= 1,000; 부서 = 영업"),
+])
+def test_where_comma_between_conditions_gets_fixed_expression(xl_table, capsys, expr, fixed):
+    code, out = run_main(excel, capsys, "read", "--where", expr)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and out["message"].endswith(f"[추천] {fixed}"), out
+
+
+@pytest.mark.parametrize("expr, rows", [("금액 = 1,000", ["라"]), ("부서 = '영업, 기획'", [])])
+def test_where_comma_inside_value_is_kept(xl_table, capsys, expr, rows):
+    code, out = run_main(excel, capsys, "read", "--where", expr)
+    assert code == 0 and [r[0] for r in out["values"][1:]] == rows, out
+
+
 def test_where_zero_is_r2(xl_table, capsys):
     code, out = run_main(excel, capsys, "read", "--where", "금액 > 5000")
     assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out

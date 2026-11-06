@@ -1022,6 +1022,15 @@ def test_fill_slots_comma_separated_is_refused_with_full_command(form_doc, capsy
     assert code == 0 and "업체: 한빛전자, 서울" in doc.text, out
 
 
+@pytest.mark.parametrize("slots", ["업체명=한빛전자 시험일=2026-11-04", "업체명=한빛전자|시험일=2026-11-04"])
+def test_fill_slots_space_or_bar_separated_is_refused(form_doc, capsys, slots):
+    doc, _ = form_doc
+    code, out = run_word(capsys, "fill", "--slots", slots)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    cmd = split_command(out["message"].split("[추천] ", 1)[1])
+    assert cmd[cmd.index("--slots") + 1] == "업체명=한빛전자; 시험일=2026-11-04", cmd
+
+
 def test_fill_slots_value_with_name_value_pairs_is_kept(form_doc, capsys):
     """1.4.77 검토: '업체명=V1=5, V2=12'는 자리 업체명의 값 'V1=5, V2=12' (자리를 쉼표로 나눈 것이 아님)."""
     doc, _ = form_doc

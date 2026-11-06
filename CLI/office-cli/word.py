@@ -1299,7 +1299,7 @@ def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
             for n, r in enumerate(rows, start) if any(str(v or "").strip() for v in r)]
 
 
-_SLOT_COMMA = re.compile(r",\s*(?:\{\{[^{}\r\n]{1,100}\}\}|표\s*\d{1,3}\s*!\s*R\s*\d{1,4}\s*C\s*\d{1,3}|[\w가-힣]{1,30})\s*=")
+_SLOT_COMMA = re.compile(r"(?:\s*[,|]\s*|\s+)(?:\{\{[^{}\r\n]{1,100}\}\}|표\s*\d{1,3}\s*!\s*R\s*\d{1,4}\s*C\s*\d{1,3}|[\w가-힣]{1,30})\s*=")
 
 
 def _fully_quoted(val: str) -> bool:
@@ -1366,7 +1366,7 @@ def _slot_rows(args) -> List[Tuple[int, str, str]]:
             if _fully_quoted(val):
                 val = val[1:-1]
             elif _slot_comma_split(val):
-                fixed = "; ".join(_SLOT_COMMA.sub(lambda m: "; " + m.group(0)[1:].lstrip(), p.strip())
+                fixed = "; ".join(_SLOT_COMMA.sub(lambda m: "; " + re.sub(r"^\s*[,|]?\s*", "", m.group(0)), p.strip())
                                   if "=" in p and _slot_comma_split(p.split("=", 1)[1].strip()) else p.strip()
                                   for p in _split_slots(text))
                 cmd = _fill_command(type(args)(**{**vars(args), "slots": fixed}), ["--dry-run"] if args.dry_run else [])["command"]

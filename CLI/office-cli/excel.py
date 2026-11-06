@@ -867,6 +867,8 @@ _WHERE_FIXES = (("==", "="), ("=>", ">="), ("=<", "<="), ("<>", "!="), ("=!", "!
 _WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
 _WHERE_OR = re.compile(r"\s+(?:or|OR|Or|또는)\s+|\s*\|\|\s*")
 _WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
+# 조건을 쉼표로 나눈 것 ('금액 >= 100, 부서 = 영업'): 쉼표 뒤가 '<열> <연산자>'이면 ; 로 (전에는 값 '100, 부서 = 영업' 하나로 읽어 0건)
+_WHERE_COMMA = re.compile(r",\s*(?=[^,;|=<>!~'\"]+?\s*(?:>=|<=|!=|=|>|<|~))")
 _WHERE_QUOTED = re.compile(r"(\"[^\"]*\"|'[^']*')")
 _WHERE_NUM = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
 WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
@@ -931,7 +933,7 @@ def parse_where(text: str) -> List[List[Cond]]:
     raw = str(text).strip()
 
     def fix(part: str) -> str:
-        part = _WHERE_CONTAINS.sub(" ~ ", _WHERE_OR.sub(" | ", _WHERE_AND.sub("; ", part)))
+        part = _WHERE_CONTAINS.sub(" ~ ", _WHERE_OR.sub(" | ", _WHERE_AND.sub("; ", _WHERE_COMMA.sub("; ", part))))
         for a, b in _WHERE_FIXES:
             part = part.replace(a, b)
         return part
@@ -940,7 +942,7 @@ def parse_where(text: str) -> List[List[Cond]]:
     if groups is None:
         raise rt.InputError(f"--where 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
     if fixed != raw:
-        raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ;, 또는은 |). "
+        raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ; (쉼표 아님), 또는은 |). "
                             f"형식: {WHERE_FORM}. [추천] {where_text(groups)}")
     return groups
 
@@ -1541,7 +1543,7 @@ def _cells_items(spec: str) -> Tuple[List[Tuple[str, str, str]], bool]:
 
 
 # 'C6=ft,C7=20'처럼 쉼표로 나눈 항목: 값 안에 ',<칸>=' (시트 붙은 칸 포함)가 있으면 칸을 쉼표로 나눈 것
-_COMMA_ITEM = re.compile(r",(\s*)(?=(?:(?:'[^']+'|[\w가-힣]+)!)?\$?[A-Za-z]{1,3}\$?\d+\s*=)")
+_COMMA_ITEM = re.compile(r"(?:\s*[,|]\s*|\s+)(?=(?:(?:'[^']+'|[\w가-힣]+)!)?\$?[A-Za-z]{1,3}\$?\d+\s*=)")   # 쉼표·|·공백
 
 
 def rt_fully_quoted(val: str) -> bool:
