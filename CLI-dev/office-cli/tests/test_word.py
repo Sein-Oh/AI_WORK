@@ -1022,6 +1022,21 @@ def test_fill_slots_comma_separated_is_refused_with_full_command(form_doc, capsy
     assert code == 0 and "업체: 한빛전자, 서울" in doc.text, out
 
 
+def test_fill_slots_value_with_name_value_pairs_is_kept(form_doc, capsys):
+    """1.4.77 검토: '업체명=V1=5, V2=12'는 자리 업체명의 값 'V1=5, V2=12' (자리를 쉼표로 나눈 것이 아님)."""
+    doc, _ = form_doc
+    code, out = run_word(capsys, "fill", "--slots", "업체명=V1=5, V2=12; 시험일=2026-11-04")
+    assert code == 0 and "업체: V1=5, V2=12" in doc.text, out
+
+
+@pytest.mark.parametrize("slots", ['{"업체명": {"a": 1}}', '{"업체명": true}', '{"업체명": [1, 2]}'])
+def test_fill_slots_json_non_scalar_is_refused(form_doc, capsys, slots):
+    doc, _ = form_doc
+    before = doc.text
+    code, out = run_word(capsys, "fill", "--slots", slots)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and doc.text == before, out
+
+
 @pytest.mark.parametrize("argv,needle", [
     ((), "채울 값이 없습니다"),
     (("--file", "C:\\work\\성적서양식.docx"), "--target"),                    # 양식 문서를 값 파일로 (회사 PC 2026-11-06 O5)

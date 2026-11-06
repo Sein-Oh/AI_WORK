@@ -1544,6 +1544,11 @@ def _cells_items(spec: str) -> Tuple[List[Tuple[str, str, str]], bool]:
 _COMMA_ITEM = re.compile(r",(\s*)(?=(?:(?:'[^']+'|[\w가-힣]+)!)?\$?[A-Za-z]{1,3}\$?\d+\s*=)")
 
 
+def rt_fully_quoted(val: str) -> bool:
+    """값 전체가 한 쌍의 따옴표로 묶였는지 ('a,b' 예, 'ft',C7='x' 아니오: 첫 닫는 따옴표가 끝이어야 함)."""
+    return len(val) >= 2 and val[0] in "'\"" and val.find(val[0], 1) == len(val) - 1
+
+
 def _refuse_comma_items(args) -> None:
     """칸 구분은 ; 입니다. 'C6=ft,C7=20'을 그대로 쓰면 C6에 'ft,C7=20'이 들어가므로 쓰기 전에 멈추고 ;로 바꾼 전체 명령을 [추천]
     (값에 쉼표가 들어가는 일은 흔해 쉼표를 구분자로 추측하지 않음, 회사 PC 2026-11-06 O2). 수식(=로 시작)·따옴표로 묶은 값은 제외."""
@@ -1551,7 +1556,11 @@ def _refuse_comma_items(args) -> None:
         if "=" not in part:
             return False
         val = part.split("=", 1)[1].strip()
-        return not val.startswith(("=", "'", '"')) and bool(_COMMA_ITEM.search(val))
+        if val.startswith("=") or rt_fully_quoted(val):
+            return False
+        m = _COMMA_ITEM.search(val)
+        # 첫 ',<칸>=' 앞에 '='가 있으면 값 자체가 'R1=10k,R2=4.7k' 같은 글 (나누지 않음, 1.4.77 검토)
+        return bool(m) and "=" not in val[:m.start()]
 
     parts = [p.strip() for p in _split_outside_quotes(rt.unescape_newlines(args.cells), ";\n") if p.strip()]
     hit = [p.split("=", 1)[0].strip() for p in parts if comma_split(p)]

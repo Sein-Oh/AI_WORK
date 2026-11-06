@@ -1302,6 +1302,19 @@ def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
 _SLOT_COMMA = re.compile(r",\s*(?:\{\{[^{}\r\n]{1,100}\}\}|표\s*\d{1,3}\s*!\s*R\s*\d{1,4}\s*C\s*\d{1,3}|[\w가-힣]{1,30})\s*=")
 
 
+def _fully_quoted(val: str) -> bool:
+    """값 전체가 한 쌍의 따옴표로 묶였는지 (첫 닫는 따옴표가 끝)."""
+    return len(val) >= 2 and val[0] in "'\"" and val.find(val[0], 1) == len(val) - 1
+
+
+def _slot_comma_split(val: str) -> bool:
+    """값에 ',자리='가 있고 그 앞에 '='가 없으면 자리를 쉼표로 나눈 것 ('a,시험일=b'). '조건=V1=5, V2=12'의 값 'V1=5, V2=12'는 아님."""
+    if _fully_quoted(val):
+        return False
+    m = _SLOT_COMMA.search(val)
+    return bool(m) and "=" not in val[:m.start()]
+
+
 def _split_slots(text: str) -> List[str]:
     """'업체명=한빛전자; 시험일=2026-11-04'를 ; 또는 줄바꿈으로 나눔. 따옴표로 묶은 값('a;b') 안의 ;는 나누지 않음."""
     parts: List[str] = []
@@ -1338,6 +1351,9 @@ def _slot_rows(args) -> List[Tuple[int, str, str]]:
                                 "JSON은 셸에서 따옴표가 깨지기 쉬워 권하지 않습니다.")
         if not isinstance(obj, dict):
             raise rt.InputError("--slots JSON은 {\"자리\": \"값\"} 객체여야 합니다. '자리=값; 자리=값' 모양을 권합니다.")
+        odd = [str(k) for k, v in obj.items() if isinstance(v, (dict, list, bool))]
+        if odd:
+            raise rt.InputError(f"--slots JSON의 값은 글이나 숫자여야 합니다 ({', '.join(odd[:5])}). '자리=값; 자리=값' 모양을 권합니다.")
         pairs = [(str(k), "" if v is None else str(v)) for k, v in obj.items()]
     else:
         bad: List[str] = []
@@ -1347,10 +1363,12 @@ def _slot_rows(args) -> List[Tuple[int, str, str]]:
                 continue
             key, val = part.split("=", 1)
             val = val.strip()
-            if len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
+            if _fully_quoted(val):
                 val = val[1:-1]
-            elif _SLOT_COMMA.search(val):
-                fixed = "; ".join(_SLOT_COMMA.sub(lambda m: "; " + m.group(0)[1:].lstrip(), p.strip()) for p in _split_slots(text))
+            elif _slot_comma_split(val):
+                fixed = "; ".join(_SLOT_COMMA.sub(lambda m: "; " + m.group(0)[1:].lstrip(), p.strip())
+                                  if "=" in p and _slot_comma_split(p.split("=", 1)[1].strip()) else p.strip()
+                                  for p in _split_slots(text))
                 cmd = _fill_command(type(args)(**{**vars(args), "slots": fixed}), ["--dry-run"] if args.dry_run else [])["command"]
                 raise rt.InputError(f"--slots의 자리는 ; 로 나눕니다. 쉼표로 나눈 것 같아 채우지 않았습니다 ('{key.strip()}'의 값에 '자리=' 이 들어 있음). "
                                     f"[추천] {cmd}")
@@ -1419,7 +1437,7 @@ def cmd_fill(args) -> Dict[str, Any]:
     if not rows:
         raise rt.InputError("채울 값이 없습니다. " + FILL_HOWTO + ".")
     if len(rows) > FILL_MAX:
-        raise rt.InputError(f"한 번에 {FILL_MAX}줄까지 채웁니다 (받은 {len(rows)}줄). 파일을 나눠 실행하세요.")
+        raise rt.InputError(f"한 번에 {FILL_MAX}곳까지 채웁니다 (받은 {len(rows)}곳). 나눠 실행하세요.")
     bad: List[str] = []
     unit = "번째 항목" if args.slots else "번째 줄"
     places: Dict[str, str] = {}
