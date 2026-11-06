@@ -34,6 +34,10 @@
   outlook `--text` -> `--body`, `--max` -> `--limit`, `--json`·`--encoding`은 뺌)로 고친 전체 명령을 `[추천]`. 필수 옵션 누락 오류(`reader read --target`)에도.
   표에 없으면 철자 비교는 cutoff 0.85·앞 글자가 같을 때만 `[후보]`(사용자에게 물음), `--all`·`--overwrite`·`--to`·`--cc`·`--attach`·`--target` 등은 추천하지 않음.
 
+### 실기 러너
+- `tools/run_win_tests.py` I28~I31: 닫힌 파일 `write --cells`·메모 목록 결과 보고, 구분자 실수 거절(`--cells`, `--where`),
+  `check` 단위 열 자동, `word fill --slots`를 실제 Office로 확인 (집 PC 점검 `docs/HOME_PC_CHECK.md`).
+
 ### 기능
 - `excel check --unit-col <열>`: 항목·값·단위 3열 표에서 행마다 단위 열을 읽음. 생략하면 값 열 바로 오른쪽 열의 머리글이 `단위`(`Unit`)일 때
   자동으로 씀(JSON `unit_col`). 전에는 값 칸·머리글에 단위가 없으면 모든 행이 `판단필요`(`칸 단위 없음`)라 Gemma가 메모 미리보기 없이 사용자에게

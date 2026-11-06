@@ -1804,6 +1804,86 @@ def test_I(ctx):
         ok = ok_(d) and state == -4137
         record(ctx, "I27", "창 전환 시 최대화 유지", ok, f"WindowState={state} (최대화 -4137), 앞 창 클래스={fg}", d, c, r, e)
 
+    # --- 1.4.77: 닫힌 파일 쓰기 결과 보고, 구분자 거절, 단위 열, word fill --slots -------------------
+    def _closed_xlsx(name, rows):
+        import openpyxl
+        path = ctx.path(name)
+        wb = openpyxl.Workbook()
+        for row in rows:
+            wb.active.append(row)
+        wb.save(path)
+        return path
+
+    def _xlsx_values(path, cells):
+        import openpyxl
+        ws = openpyxl.load_workbook(path).active
+        return [ws[c].value for c in cells]
+
+    def i28():
+        # 닫힌 파일에 --cells를 쓰고 메모 목록을 읽을 때 닫힌 시트 객체를 읽어 0x800a01a8로 실패를 보고하던 문제
+        b = _closed_xlsx("I28.xlsx", [["항목", "값"]])
+        d1 = run_cli("excel.py", "write", "--target", b, "--cells", "C1=가; C2=나; C3=R1=10k,R2=4.7k")[0] or {}
+        vals = _xlsx_values(b, ("C1", "C2", "C3"))
+        d2 = run_cli("excel.py", "comment", "--target", b, "--action", "add", "--range", "C1", "--text", "닫힌 파일 메모")[0] or {}
+        d, c, r, e = run_cli("excel.py", "comment", "--target", b, "--range", "A1:D5")
+        cells = [i.get("cell") for i in (d or {}).get("items", [])]
+        text = " ".join(str(x.get("message", "")) for x in (d1, d2, d or {}))
+        ok = (str(d1.get("agent_directive", "")).startswith("VERIFIED:") and vals == ["가", "나", "R1=10k,R2=4.7k"]
+              and ok_(d2) and ok_(d) and any(str(x).endswith("C1") for x in cells) and "800a01a8" not in text.lower())
+        record(ctx, "I28", "닫힌 파일 write --cells + 메모 달기·목록 (결과를 실패로 보고하지 않음)", ok,
+               f"쓰기={d1.get('agent_directive', '')[:40]!r}, C1:C3={vals}, 메모 목록={cells}", d, c, r, e)
+
+    def i29():
+        # --cells를 ',' / 띄어쓰기 / '|'로 나누면 쓰지 않고 ';'로 고친 전체 명령을 [추천]
+        b = _closed_xlsx("I29.xlsx", [["항목", "값"]])
+        before = mtime(b)
+        got = []
+        for cells in ("D1=1, D2=2", "D1=1 D2=2", "D1=1 | D2=2"):
+            d = run_cli("excel.py", "write", "--target", b, "--cells", cells)[0] or {}
+            msg = str(d.get("message", ""))
+            got.append(d.get("status") == "error" and str(d.get("agent_directive", "")).startswith("STOP_RETRY:")
+                       and "[추천] python" in msg and "D1=1; D2=2" in msg)
+        vals = _xlsx_values(b, ("D1", "D2"))
+        d, c, r, e = run_cli("excel.py", "read", "--target", b, "--where", "항목 = A, 값 > 1")
+        msg = str((d or {}).get("message", ""))
+        where_ok = (d or {}).get("status") == "error" and "[추천]" in msg and "항목 = A; 값 > 1" in msg
+        ok = all(got) and vals == [None, None] and mtime(b) == before and where_ok
+        record(ctx, "I29", "구분자 실수 거절: --cells ','·띄어쓰기·'|', --where ',' -> 고친 명령 [추천], 파일 그대로", ok,
+               f"cells 거절={got}, D1:D2={vals}, 파일 그대로={mtime(b) == before}, where={where_ok}", d, c, r, e)
+
+    def i30():
+        # check: 값 열 오른쪽 머리글이 '단위'이면 그 열의 단위로 판정 (--unit-col 생략)
+        b = _closed_xlsx("I30.xlsx", [["항목", "값", "단위"], ["정격 전압", 5.1, "V"], ["소비 전류", 3.5, "A"]])
+        spec = ctx.path("i30_spec.txt")
+        with open(spec, "w", encoding="utf-8") as f:
+            f.write("정격 전압은 5 V ± 0.25 V로 한다.\n\n소비 전류는 최대 3 A로 한다.\n")
+        d, c, r, e = run_cli("excel.py", "check", "--target", b, "--range", "A2:C3", "--item-col", "A", "--value-col", "B",
+                             "--spec", spec)
+        verdicts = [x.get("verdict") for x in (d or {}).get("results", [])]
+        unit = str((d or {}).get("unit_col", ""))
+        ok = verdicts == ["일치", "불일치"] and unit.startswith("C")
+        record(ctx, "I30", "excel check 단위 열 자동 (머리글 '단위')", ok, f"판정={verdicts}, unit_col={unit!r}", d, c, r, e)
+
+    def i31():
+        # word fill --slots: 값 파일 없이 채움 / 양식을 --file로 주면 --target 안내 / ',' 구분은 [추천]
+        import docx
+        path = ctx.path("I31.docx")
+        doc = docx.Document()
+        doc.add_paragraph("업체명: {{업체명}}")
+        doc.add_paragraph("날짜: {{날짜}}")
+        doc.save(path)
+        d_file = run_cli("word.py", "fill", "--file", path)[0] or {}
+        d_comma = run_cli("word.py", "fill", "--target", path, "--slots", "{{업체명}}=한빛, {{날짜}}=2026-11-09")[0] or {}
+        untouched = "{{업체명}}" in "\n".join(p.text for p in docx.Document(path).paragraphs)
+        d, c, r, e = run_cli("word.py", "fill", "--target", path, "--slots", "업체명=한빛; {{날짜}}=2026-11-09")
+        text = "\n".join(p.text for p in docx.Document(path).paragraphs)
+        ok = (d_file.get("status") == "error" and "--target" in str(d_file.get("message", ""))
+              and d_comma.get("status") == "error" and "[추천]" in str(d_comma.get("message", "")) and untouched
+              and str((d or {}).get("agent_directive", "")).startswith("VERIFIED:")
+              and "업체명: 한빛" in text and "날짜: 2026-11-09" in text and "{{" not in text)
+        record(ctx, "I31", "word fill --slots (값 파일 없이), --file 오용 안내, ',' 구분 [추천]", ok,
+               f"--file 오용={d_file.get('status')}, 쉼표={d_comma.get('status')}, 결과={text!r}", d, c, r, e)
+
     for tid, title, fn in [
         ("I1", "엑셀 CSV/append", i1), ("I2", "엑셀 --values", i2), ("I3", "엑셀 search/save", i3), ("I4", "엑셀 잘림", i4),
         ("I5", "차트 종류", i5), ("I6", "차트 목록/삭제", i6), ("I7", "엑셀 서식", i7), ("I8", "시트 관리", i8),
@@ -1812,6 +1892,8 @@ def test_I(ctx):
         ("I17", "PPT 마크다운", i17), ("I18", "PPT 긴 표", i18), ("I19", "PPT 슬라이드 관리", i19), ("I20", "PPT 치환", i20),
         ("I21", "PPT 사본", i21), ("I22", "범위 -> 표", i22), ("I23", "워드 표 -> 엑셀", i23), ("I24", "redraw", i24),
         ("I25", "undo pick", i25), ("I26", "닫힌 파일 undo", i26), ("I27", "창 최대화", i27),
+        ("I28", "닫힌 파일 --cells", i28), ("I29", "구분자 거절", i29), ("I30", "단위 열", i30),
+        ("I31", "fill --slots", i31),
     ]:
         run_test(ctx, tid, title, fn)
 
