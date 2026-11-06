@@ -4,7 +4,7 @@
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.69**, **office-cli 1.4.77**
+- main 기준 도구 버전: **ml-kit 2.9.69**, **office-cli 1.4.78**
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -53,6 +53,7 @@
 | office-cli 1.4.73 | 10차 검토 수정: 사용자 확인이 필요한 명령(메일 send, 미리보기 뒤 실제 변경)은 `next_commands`가 아니라 `confirm_commands`로(`needs_user_confirm` 없앰, 전역 지침 3장 6번 예외), send는 발송 원장(`outlook_drafts.json`, 잠금 아래 '보냄' 먼저 기록)에 있는 이 도구가 만든 초안이고 임시 보관함에 있으며 `Sent`·`Submitted`가 아닐 때만(동시·두 번 발송, 지운 초안, 사용자의 다른 초안 거부, id 오류는 `next_commands` 없는 거부), 없앤 `--send`는 exit 2 + `[추천]`. reader 층 A 경계를 허용 목록으로(숫자 앞·단위 뒤), 앞이 숫자뿐인 `/`의 분수·비율 제외, 스니펫 층 B 자리는 `[[ ]]` |
 | office-cli 1.4.74 | 관리자 권한 안내는 UAC로 권한을 올린 창일 때만 (UAC가 꺼진 회사 PC는 모든 프로그램이 같은 권한이라 안내하지 않음) |
 | office-cli 1.4.77 | 회사 PC 실기(2026-11-06) 대응: 닫힌 파일에 쓴 뒤 닫힌 시트를 읽어 실패로 보고하던 문제(`write --cells`, `chart`, `comment list`), `--cells` 쉼표 구분은 `;`로 바꾼 명령을 `[추천]`, `check --unit-col`(값 열 오른쪽 `단위` 열 자동), `word fill --slots "자리=값; 자리=값"`(값 파일 없이) |
+| office-cli 1.4.78 | `word fill`: 괄호 안 띄어쓰기만 다른 자리(`{{ 업체명 }}`)는 문서의 자리 하나와 맞으면 채우고 `recovered`, `--slots` 값 안의 줄바꿈 유지. 스킬 크기 여유(각 64~118바이트) |
 | office-cli 1.4.76 | 도구가 내는 명령(`next_commands`, `confirm_commands`, `[추천]` 전체 명령)의 따옴표를 실행 셸에 맞춤: OpenCode처럼 `pwsh`가 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1(`OFFICE_CLI_SHELL`로 강제). PowerShell은 작은따옴표(`$`·백틱·`{}`·`@`·`;` 글자 그대로), 5.1은 값 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈. 테스트에 셸 시뮬레이터(`CLI-dev/tests/shell_sim.py`) |
 | office-cli 1.4.75 | 11차 검토 수정: `confirm_commands`의 덮어쓰기·삭제·발송 항목에 `"destructive": true`("묻지 말고"라고 해도 늘 물음, 전역 지침 3장 6번), 문서를 바꾸는 이어 하기(`read --save` 뒤 write, write 뒤 chart, chart 뒤 transfer 등)는 `next_commands`에서 `confirm_commands`로, 파괴적 명령 오타는 `[후보]`, 발송 실패 초안은 다른 거부 문구, reader 층 A 허용 목록 완화(짝 따옴표·괄호, 전각 콜론, `±` 뒤 숫자, 단위 뒤 `(`) |
 | office-cli 1.4.72 | 9차 검토 수정: outlook 발송은 저장한 초안을 그 항목 그대로 보내는 `send --id <draft_id>` 하나로(`new`·`reply`·`forward`의 `--send` 없앰, 초안 결과의 `next_commands[0]`에 `needs_user_confirm: true`, 이미 보냈거나 지운 초안은 거부해 중복 발송 없음), 답장·전달은 보내지 않은 초안을 원본으로 쓰지 않음(열린 초안 창에 답장하던 위험). reader 층 A: `/` 값 구분은 양쪽 숫자+단위이고 `/` 뒤가 1·10^n이 아닐 때만(숫자만 앞이면 Hz·V 목록), AND 스니펫은 검색어마다 창(` / `로 이음), 단위 없는 검색어의 DC/AC 예외 없앰, 붙은 기호(천 단위 따옴표, U+2044·U+FF0F·U+2215, 곱하기, U+3161, 폭 없는 공백, 지수 `m-1`) 차단 |

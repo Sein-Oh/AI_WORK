@@ -1129,3 +1129,30 @@ def test_fill_reads_back(form_doc, capsys, tmp_path, monkeypatch):
                                                         lambda s, v: s.grid[s.r].__setitem__(s.c, v[:2])))
     code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "표2!R2C3,5.1 V\n"))
     assert code == 0 and out["verified"] is False and "표2!R2C3" in out["unverified"][0], out
+
+
+@pytest.mark.parametrize("doc_place, slot", [("{{업체명}}", "{{ 업체명 }}"), ("{{ 업체명 }}", "업체명"), ("{{업체 명}}", "{{업체명}}")])
+def test_fill_place_differing_only_in_spaces_is_filled_and_reported(wd, monkeypatch, capsys, doc_place, slot):
+    """괄호 안 띄어쓰기만 다른 자리는 문서의 자리 하나와만 맞으면 그 자리로 채우고 recovered로 알림 (검토 1.4.77에서 남긴 것)."""
+    doc = FakeWordDocument(f"업체: {doc_place}\r시험일: {{{{시험일}}}}")
+    wd["doc"] = doc
+    monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: None)
+    code, out = run_word(capsys, "fill", "--slots", f"{slot}=한빛전자; 시험일=2026-11-09")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out.get("message")
+    assert "업체: 한빛전자" in doc.text and doc_place in " ".join(out["recovered"]), out
+
+
+def test_fill_place_spaces_with_two_matches_is_not_guessed(wd, monkeypatch, capsys):
+    doc = FakeWordDocument("업체: {{ 업체명}}\r담당: {{업체명 }}")
+    wd["doc"] = doc
+    monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: None)
+    code, out = run_word(capsys, "fill", "--slots", "업체명=한빛전자")
+    assert code == 1 and out["status"] == "error" and "{{ 업체명}}" in doc.text and "{{업체명 }}" in doc.text, out
+
+
+def test_fill_slots_newline_inside_value_is_kept(form_doc, capsys):
+    """'주소=서울\\n강남구': 다음 줄이 '자리='가 아니면 값 안의 줄바꿈 (예전: '강남구' 항목이 잘못되었다며 멈춤)."""
+    doc, _ = form_doc
+    code, out = run_word(capsys, "fill", "--slots", "업체명=한빛\\n전자; 시험일=2026-11-04")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "업체: 한빛\v전자" in doc.text and "시험일: 2026-11-04" in doc.text

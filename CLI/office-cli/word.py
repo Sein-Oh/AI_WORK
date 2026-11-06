@@ -1332,10 +1332,23 @@ def _split_slots(text: str) -> List[str]:
         if ch in ";\n":
             parts.append(buf)
             buf = ""
+            if ch == "\n":
+                parts.append("\n")              # 줄바꿈 표시: 다음 줄이 '자리='가 아니면 앞 값의 줄바꿈 (아래)
             continue
         buf += ch
     parts.append(buf)
-    return [p for p in parts if p.strip()]
+    out: List[str] = []
+    joined = False
+    for p in parts:
+        if p == "\n":
+            joined = True
+            continue
+        if joined and out and "=" not in p.split("'", 1)[0].split('"', 1)[0] and p.strip():
+            out[-1] += "\n" + p                  # '주소=서울\n강남구': 값 안의 줄바꿈
+        elif p.strip():
+            out.append(p)
+        joined = False
+    return out
 
 
 def _slot_rows(args) -> List[Tuple[int, str, str]]:
@@ -1381,6 +1394,11 @@ def _slot_rows(args) -> List[Tuple[int, str, str]]:
             key = "{{" + key.strip("{} ") + "}}"
         rows.append((n, key, val))
     return rows
+
+
+def _place_key(place: str) -> str:
+    """자리 '{{ 업체 명 }}'의 비교 열쇠: 괄호 안 띄어쓰기를 모두 뺀 이름 ('업체명')."""
+    return re.sub(r"\s+", "", place.strip()[2:-2])
 
 
 def _cell_text(cell: Any) -> str:
@@ -1472,6 +1490,16 @@ def cmd_fill(args) -> Dict[str, Any]:
         if missing:
             text = "".join(str(s.Text) for s in _stories(doc))
             found = sorted(set(_FILL_FOUND.findall(text)))
+            # 괄호 안 띄어쓰기만 다른 자리('{{ 업체명 }}' <-> '{{업체명}}')는 문서의 자리 하나와만 맞으면 그 자리로 채움 (뜻이 같음)
+            for k in missing:
+                alt = [f for f in found if _place_key(f) == _place_key(k) and f not in places]
+                if len(alt) == 1:
+                    places = {(alt[0] if kk == k else kk): vv for kk, vv in places.items()}
+                    counts = {(alt[0] if kk == k else kk): (_count_text(doc, alt[0], True, False) if kk == k else cc)
+                              for kk, cc in counts.items()}
+                    rt.note_recovered(f"자리 {k} -> 문서의 {alt[0]}(띄어쓰기만 다름)로 채움")
+            missing = [k for k, c in counts.items() if not c]
+        if missing:
             problems_in.append(f"문서에 없는 자리 {len(missing)}개: {', '.join(missing[:10])}"
                                + (f" (문서에 있는 자리: {', '.join(found[:10])})" if found else " (문서에 {{...}} 자리가 없음)"))
         try:

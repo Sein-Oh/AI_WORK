@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.77"
+  version: "1.4.78"
   platform: windows
 ---
 
@@ -12,7 +12,7 @@ metadata:
 
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
-2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
+2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄을 붙인다.
 3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
 4. 검색한 내용을 다른 문서에 넣을 때는 내용을 복사해 인자로 넣지 않는다. `--save`로 파일을 만들고 결과의 `output_file`을 office-doc·office-excel 명령의 `--file`로 넘긴다.
 5. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.
@@ -44,5 +44,5 @@ metadata:
 - `search`는 `--file`이 없으면 등록된 문서만 찾는다. `--file`을 주면 새 문서를 먼저 등록한다(`indexed_now`를 알림). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - `diff`는 숫자 변경 `number_changes`를 먼저, 삭제·추가·변경 항목마다 `old_evidence`·`new_evidence`를 붙여 알린다.
 - `truncated`이면 `full_result_file`을, `recovered`와 `warnings`는 그대로 알린다.
-- `--save` 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- `--save` 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 메모의 `--overwrite`(있던 메모 바꾸기)는 사용자가 요청했을 때만 붙인다.
