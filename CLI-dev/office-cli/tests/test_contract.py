@@ -1191,3 +1191,26 @@ def test_excel_closed_read_missing_openpyxl(tmp_path, capsys, monkeypatch):
     code, out = run_main(excel, capsys, "read", "--target", str(path))
     assert code == 1
     _check_missing(out, "openpyxl")
+
+
+def _all_subparsers():
+    import argparse
+    import excel, office, outlook, ppt, reader, word
+    for mod in (excel, word, ppt, outlook, office, reader):
+        top = mod.build_cli()
+        yield mod.__name__, top
+        for act in top._actions:
+            if isinstance(act, argparse._SubParsersAction):
+                for name, sp in act.choices.items():
+                    yield f"{mod.__name__} {name}", sp
+
+
+def test_every_help_text_builds():
+    """1.4.78: 옵션 설명의 '%'(예: '0.0%')가 argparse 서식으로 읽혀 `excel style -h`·`replace -h`가 JSON 없이 traceback만 냈음."""
+    bad = []
+    for name, p in _all_subparsers():
+        try:
+            p.format_help()
+        except Exception as e:
+            bad.append(f"{name}: {e}")
+    assert not bad, bad

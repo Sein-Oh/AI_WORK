@@ -798,8 +798,12 @@ class JsonArgumentParser(argparse.ArgumentParser):
         return super().parse_args(args, namespace)
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
-        """R7: 도움말 텍스트는 stderr로, stdout에는 JSON 1줄 (argparse가 이어서 exit 0)."""
-        super().print_help(sys.stderr)
+        """R7: 도움말 텍스트는 stderr로, stdout에는 JSON 1줄 (argparse가 이어서 exit 0).
+        도움말 글을 만들다 실패해도(옵션 설명의 '%' 등) JSON 1줄은 냄 (1.4.78: excel style·replace -h가 traceback만 냈음)."""
+        try:
+            super().print_help(sys.stderr)
+        except Exception as e:                      # 도움말이 깨져도 계약(stdout JSON 1줄)은 지킴
+            sys.stderr.write(f"[WARN] 도움말을 만들지 못했습니다 ({type(e).__name__}). SKILL.md를 보세요.\n")
         emit_json({"status": "ok", "tool": self.tool_name, "command": "help", "verified": True,
                    "skill_file": skill_file(self.tool_name),
                    "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} "

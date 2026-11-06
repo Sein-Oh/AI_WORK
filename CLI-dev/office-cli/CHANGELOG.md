@@ -21,6 +21,10 @@
 - `word fill --slots "주소=서울\n강남구; 업체=..."`: 줄바꿈을 자리 구분으로 읽어 `강남구`가 잘못된 항목이라며 멈췄음. 다음 줄이 `자리=` 모양이 아니면
   앞 값 안의 줄바꿈으로 읽음 (자리 안의 줄 바꿈은 Word 줄 바꿈, 단락은 나누지 않음).
 
+- `excel style -h`·`excel replace -h`: `--number-format` 설명의 `0.0%`가 argparse 서식으로 읽혀 JSON 없이 traceback만 냈음(exit 1).
+  `%%`로 고치고, 도움말을 만들다 실패해도 stdout JSON 1줄은 내도록 함(`JsonArgumentParser.print_help`). 찾은 방법: 두 도구 모든 진입점·하위 명령
+  455가지 잘못된 입력 일괄 점검(stdout 1줄 JSON, exit 코드, directive, CP949). 회귀 테스트 `test_contract.py::test_every_help_text_builds`.
+
 ### 구조
 - 스킬 4개의 겹치는 문구를 줄임 (인코딩 줄 내용은 전역 지침에만, 되돌리기 안내 짧게): office-doc 6142 -> 6057, office-excel 6123 -> 6026,
   office-spec 6138 -> 6080바이트 (한도 6144). `test_skill_size_limit`는 줄 끝을 LF로 세어 Windows CRLF 체크아웃에서도 같은 판정.

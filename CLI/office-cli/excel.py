@@ -4275,7 +4275,7 @@ def build_cli():
         p.add_argument("--italic", action="store_true", default=None, help="기울임")
         p.add_argument("--size", type=float, help="글자 크기(pt)")
         p.add_argument("--align", choices=list(XL_ALIGN), help="가로 정렬")
-        p.add_argument("--number-format", help="숫자 서식 (예: #,##0  0.0%  yyyy-mm-dd)")
+        p.add_argument("--number-format", help="숫자 서식 (예: #,##0  0.0%%  yyyy-mm-dd)")
         p.add_argument("--border", choices=list(XL_WEIGHT) + ["none"], help="테두리 (격자)")
         p.add_argument("--wrap", action="store_true", default=None, help="자동 줄바꿈")
 
