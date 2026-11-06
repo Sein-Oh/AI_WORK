@@ -1393,7 +1393,7 @@ class TransactionGuard:
                 raise InputError(
                     f"버전 폴더 '{self.version_str}'이(가) 이미 있어 덮어쓰지 않았습니다. "
                     f"기존 {self.version_str}를 바꾸는 것은 사용자가 요청한 경우에만 --overwrite로 합니다. "
-                    f"[추천] {option_retry(self._next_version(), '--version')}"
+                    f"[추천] {option_retry(self._next_version(), '--version', '-v')}"
                 )
         else:
             # Auto-infer next version (incomplete vN folders still take their number)
@@ -2118,7 +2118,7 @@ def dry_run_train(args: argparse.Namespace) -> Dict[str, Any]:
                               "version_dir": version_dir, "replaces": bool(exists and args.overwrite)}
     if exists and not args.overwrite:
         raise InputError(f"버전 폴더 '{version}'이(가) 이미 있어 덮어쓰지 않습니다. 기존 {version}를 바꾸는 것은 사용자가 요청한 경우에만 "
-                         f"--overwrite로 합니다. [추천] {option_retry(f'v{max(nums, default=0) + 1}', '--version')}")
+                         f"--overwrite로 합니다. [추천] {option_retry(f'v{max(nums, default=0) + 1}', '--version', '-v')}")
     if exists:
         files = sorted(os.listdir(version_dir))
         fields["replaced_files"] = files[:20]

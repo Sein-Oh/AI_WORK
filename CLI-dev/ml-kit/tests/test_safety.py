@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_sample  # noqa: E402
-from mlkit_helpers import DEV, FEATURES, TARGET, run_raw, run_tool  # noqa: E402
+from mlkit_helpers import DEV, FEATURES, TARGET, run_raw, run_tool, split_command  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 
@@ -52,7 +52,9 @@ def test_existing_version_refused_then_overwrite(work):
     before = (root / "v2" / "leaderboard.json").read_bytes()
     proc, payload = run_raw("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "-v", "v2")
     assert proc.returncode == 1 and payload["agent_directive"].startswith("STOP_RETRY:")
-    assert "[추천] --version v3" in payload["message"] and "--overwrite" in payload["message"]
+    assert "--overwrite" in payload["message"]
+    rec = split_command(payload["message"].split("[추천] ", 1)[1])      # 2.9.70: 전체 명령, '-v v2'는 빼고 --version v3
+    assert rec[0] == "python" and "-v" not in rec and rec[rec.index("--version") + 1] == "v3", rec
     assert (root / "v2" / "leaderboard.json").read_bytes() == before
     assert len(_ledger(root)) == 1
 
