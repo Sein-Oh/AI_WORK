@@ -176,8 +176,8 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
   - 고친 것: 단순화 점검 D2 인자, 러너 결과 파일의 Office 작성자 이름(`author`) 가림, setup.py 스킬 덮어쓰기 표시의 옛 버전
   - 도구 오류 로그: ml-kit 1건은 라이브러리 설치 전 setup.bat 확인(`numpy` 없음)이라 문제 아님
 - 집 PC opencode 모델 비교(2026-11-07 밤, opencode 1.19.5, gemma 단계 시나리오 S0·A1·P1만, 같은 채점기 `grade_opencode`):
-  - **Upstage solar 계열(solar-mini4, solar-pro4)은 Gemma 4보다 성능 미달로 사용 불가 판정**, 집 PC opencode 설정과 인증에서 지움.
-    두 모델 모두 1/3: 스킬의 경로·명령을 따르지 않음(없는 `tools\*.py`를 지어냄, `ml_train.py`를 `C:\CLI-dev` 아래에서 찾음, 한 건 예측에 `-i` 대신 파일),
+  - Upstage solar 계열(solar-mini4, solar-pro4): 두 모델 모두 1/3. 처음에 사용 불가로 보고 설정에서 지웠다가, 결과가 모델만의 문제가 아니라고 보고
+    **solar-mini4는 비교 시험에 다시 넣음**(집 PC opencode 설정 `upstage/solar-mini4`, solar-pro4는 뺀 채). 두 모델 모두 1/3이었던 내용: 스킬의 경로·명령을 따르지 않음(없는 `tools\*.py`를 지어냄, `ml_train.py`를 `C:\CLI-dev` 아래에서 찾음, 한 건 예측에 `-i` 대신 파일),
     해야 할 명령을 실행하지 않고 사용자에게 되물음, 같은 요청에 결과가 들쭉날쭉. solar-mini4는 X1(라이브러리 업데이트 요청)을 거절하지 않고 `pip install --upgrade` 실행.
   - **Gemma 4 26B(OpenRouter `google/gemma-4-26b-a4b-it`): 3/3 통과.** P1에서 옵션을 한 번 틀렸지만(`-x`) 도구 안내를 보고 `ml-predict` 스킬을 열어 `-i`로 바로잡음.
   - 시험 전에 바로잡은 집 PC 환경 (결과를 흐렸던 것): opencode `"shell": "cmd"` -> `"powershell"`(PowerShell 명령이 cmd에서 깨짐),
