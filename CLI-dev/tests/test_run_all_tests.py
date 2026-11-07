@@ -436,6 +436,11 @@ def test_result_file_masks_user_folder_names():
         assert m("C:/Users/kim/Desktop") == "C:/Users/<사용자>/Desktop"
         assert m("C:\\Users\\<사용자>\\.config") == "C:\\Users\\<사용자>\\.config"
         assert m("Users 수 3명, kim") == "Users 수 3명, kim"             # 경로 밖은 그대로
+        # 2026-11-07 집 PC: Office 변경 내용·메모의 작성자(Office 사용자 이름)가 결과 파일에 남음
+        assert m("{'no': 1, 'author': 'kim', 'date': 'x'}") == "{'no': 1, 'author': '<사용자>', 'date': 'x'}"
+        assert m('[{"cell": "C1", "author": "Kim Lee", "text": "a"}]') == '[{"cell": "C1", "author": "<사용자>", "text": "a"}]'
+        assert m('{\\"author\\": \\"kim\\"}') == '{\\"author\\": \\"<사용자>\\"}'   # JSON 안의 JSON
+        assert m("author 열 3개") == "author 열 3개"
 
 
 def test_simplify_dry_run_sheet_delete_uses_name():

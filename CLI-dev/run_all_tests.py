@@ -131,8 +131,13 @@ def tool_versions():
 _USER_SEGMENT = re.compile(r"(?i)(\bUsers(?:\\\\|\\|/)+)(?!<사용자>)[^\\/\s\"'<>|:*?]+")
 
 
+# Office 변경 내용·메모의 작성자(Office 사용자 이름): 'author': '홍길동', "author": "홍길동"
+_AUTHOR_VALUE = re.compile(r"""((['"])author\\?\2\s*:\s*\\?['"])(?!<사용자>)[^'"\\]+""")
+
+
 def mask_private(text):
-    return _USER_SEGMENT.sub(lambda m: m.group(1) + "<사용자>", text)
+    text = _USER_SEGMENT.sub(lambda m: m.group(1) + "<사용자>", text)
+    return _AUTHOR_VALUE.sub(lambda m: m.group(1) + "<사용자>", text)
 
 
 class Report:
