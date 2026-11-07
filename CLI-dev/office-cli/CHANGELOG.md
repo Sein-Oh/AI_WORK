@@ -28,6 +28,10 @@
   스킬 office-spec 검색 줄에 `(; 그리고, | 또는)`.
 
 ### 기능
+- `--dry-run` 미리보기 (R8, 문서를 바꾸지 않고 바뀔 곳과 확인 명령 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 지우기·바꾸기는 `destructive`),
+  읽기 전용으로 열어 되돌리기 지점 없음, 바뀔 것이 없으면 `count 0`과 명령 없음, `planned` 50개까지 + `truncated`):
+  `word replace`, `word write`(모든 `--pos`, `replace`는 지워질 단락), `ppt replace`, `ppt slide`(delete·clear, `--all-slides`, add·duplicate·move, list는 무시하고 warnings).
+  실제 실행과 같은 검사(없는 슬라이드, 앵커 없음·여러 곳 등)를 그대로 함.
 - 빈 결과 명시: `excel read`의 값이 없는 범위, `word read`의 빈 문서(필터 없이), `ppt read`의 슬라이드·글 없음이 `count: 0`, preview `0건:`,
   directive `VERIFIED: 0건. ... (찾은 항목 없음)` (전에는 빈 배열만).
 - `_runtime.remove_file`: 스냅샷·비교 캐시·내보내기 임시 파일·작업 폴더 정리를 백신의 일시적 잠금에 대비해 다시 시도 (`retry_fs`, 최대 약 1.2초,

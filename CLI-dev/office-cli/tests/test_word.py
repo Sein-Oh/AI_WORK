@@ -1173,3 +1173,76 @@ def test_read_empty_document_is_explicit_zero(wd_pages, capsys):
     code, out = run_word(capsys, "read")
     assert code == 0 and out["count"] == 0 and out["paragraphs"] == [], (out.get("message"), out)
     assert out["agent_directive"].startswith("VERIFIED: 0건.") and "찾은 항목 없음" in out["agent_directive"], out
+
+
+# ---------------------------------------------------------------------------
+# replace / write --dry-run: 문서를 바꾸지 않고 바뀔 곳만 보여 주고, confirm_commands[0] = 같은 명령에서 --dry-run만 뺀 것
+# ---------------------------------------------------------------------------
+
+
+def _confirm_argv(out):
+    return split_command(out["confirm_commands"][0]["command"])[2:]
+
+
+def test_replace_dry_run_changes_nothing_then_confirm_replaces(wd_doc, capsys):
+    before = wd_doc.text
+    argv = ["replace", "--find", "계획", "--replace", "목표", "--bold"]
+    code, out = run_main(word, capsys, *argv, "--dry-run")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["dry_run"] is True, out
+    assert out["count"] == 1 and out["by_text"] == {"계획": 1}, out
+    assert out["preview"].startswith("미리보기:") and out["preview"].endswith("(바꾸지 않음)"), out
+    assert out["planned"] == ["'계획': 2026년 계획입니다. -> 2026년 목표입니다. (굵게)"] and out["truncated"] is False, out
+    assert out["confirm_commands"][0]["destructive"] is True and _confirm_argv(out) == argv, out
+    assert wd_doc.text == before and wd_doc.Saved is True and undo_points("word") == []
+    code, out = run_main(word, capsys, *_confirm_argv(out))
+    assert code == 0 and out["replaced"] == 1 and "2026년 목표입니다." in wd_doc.text, out
+    assert len(undo_points("word")) == 1                  # 실제 실행은 되돌리기 지점을 남김 (미리보기 검사가 헛돌지 않음)
+
+
+def test_replace_dry_run_zero_and_same_text(wd_doc, capsys):
+    code, out = run_main(word, capsys, "replace", "--find", "없는글", "--replace", "x", "--dry-run")
+    assert code == 0 and out["count"] == 0 and "바뀔 것 없음" in out["preview"] and "confirm_commands" not in out, out
+    assert "count 0" in out["agent_directive"] and out["preview"].endswith("(바꾸지 않음)"), out
+    code, out = run_main(word, capsys, "replace", "--find", "계획", "--replace", "계획", "--dry-run")
+    assert code == 0 and out["count"] == 0 and out["unchanged_same_text"] == {"계획": 1}, out
+    assert undo_points("word") == [] and wd_doc.Saved is True
+
+
+def test_replace_dry_run_planned_is_capped(wd, capsys):
+    wd["doc"] = FakeWordDocument("가 " * 60)
+    before = wd["doc"].text
+    code, out = run_main(word, capsys, "replace", "--map", '{"가": "나"}', "--dry-run")
+    assert code == 0 and out["count"] == 60 and len(out["planned"]) == 50 and out["truncated"] is True, out
+    assert wd["doc"].text == before
+    assert _confirm_argv(out) == ["replace", "--map", '{"가": "나"}']
+
+
+def test_write_replace_dry_run_shows_removed_paragraph_then_confirm(wd_doc, capsys):
+    before = wd_doc.text
+    argv = ["write", "--text", "새 계획", "--anchor", "2026년", "--pos", "replace"]
+    code, out = run_main(word, capsys, *argv, "--dry-run")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["dry_run"] is True and out["count"] == 1, out
+    assert out["planned"] == ["지우기: 단락 '2026년 계획입니다.'", "넣기: 글 '새 계획'"], out
+    assert out["preview"].startswith("미리보기:") and out["preview"].endswith("(바꾸지 않음)") and "지워질 단락" in out["preview"], out
+    assert out["confirm_commands"][0]["destructive"] is True and _confirm_argv(out) == argv, out
+    assert wd_doc.text == before and wd_doc.Saved is True and undo_points("word") == []
+    code, out = run_main(word, capsys, *_confirm_argv(out))
+    assert code == 0 and "2026년 계획입니다." not in wd_doc.text and "새 계획" in doc_paras(wd_doc), out
+
+
+@pytest.mark.parametrize("extra", [[], ["--anchor", "일정", "--pos", "after"], ["--anchor", "추진", "--pos", "before"]])
+def test_write_dry_run_other_positions_change_nothing(wd_doc, capsys, extra):
+    before = wd_doc.text
+    argv = ["write", "--text", "추가", *extra]
+    code, out = run_main(word, capsys, *argv, "--dry-run")
+    assert code == 0 and out["dry_run"] is True and out["planned"] == ["넣기: 글 '추가'"], out
+    assert "destructive" not in out["confirm_commands"][0] and _confirm_argv(out) == argv, out
+    assert wd_doc.text == before and undo_points("word") == []
+
+
+def test_write_dry_run_anchor_errors_same_as_real_run(wd, capsys):
+    wd["doc"] = _doc_with_table()
+    code, out = run_main(word, capsys, "write", "--text", "x", "--anchor", "시험 온도", "--pos", "replace", "--dry-run")
+    assert code == 1 and "표 안에" in out["message"], out
+    code, out = run_main(word, capsys, "write", "--text", "x", "--anchor", "없는문구", "--pos", "replace", "--dry-run")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
