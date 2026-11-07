@@ -627,6 +627,27 @@ def test_same_meaning_option_gives_fixed_command(data_dir, script, args, want):
     assert not invented & set(fixed), fixed
 
 
+def test_inline_values_in_wrong_option_recommend_i(p1_model, tmp_path):
+    """2.9.74 집 PC opencode: 한 건 예측에서 ml_train의 -x를 쓰거나('-x "온도=180,..."') 값을 -f에 넣거나, 한 건을 파일로 만들려다
+    없는 파일을 -f로 줬을 때 '알 수 없는 옵션'/'파일 없음'만 받아 멈췄음 -> -i로 고친 전체 명령([추천]) 또는 -i 명령(next_commands)."""
+    vals = "온도=180,압력=3,속도=45"
+    # Gemma 4: '--eval "온도=180; 압력=3; ..."' (ml_train 옵션, ; 구분) -> 예전에는 철자만 비슷한 [후보] --vary/--model
+    for args in (["-x", vals], ["--features", vals], ["-f", vals], ["--eval", "온도=180; 압력=3; 속도=45"]):
+        proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], *args)
+        assert proc.returncode in (1, 2) and "[추천]" in res["message"] and "[후보]" not in res["message"], res
+        name, fixed = recommended_command(res["message"])
+        assert name == "ml_predict.py" and fixed[fixed.index("-i") + 1] == vals and args[0] not in fixed, fixed
+        assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
+    missing = str(tmp_path / "새조건.csv")
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-f", missing)
+    assert proc.returncode == 1 and "-i" in res["message"] and "[추천]" not in res["message"], res
+    nxt = res["next_commands"][0]
+    cmd = split_command(nxt["command"])
+    assert nxt["needs_input"] is True and "-f" not in cmd and cmd[cmd.index("-i") + 1].startswith("온도(°C)=<값>"), nxt
+    assert not mp.looks_inline_input(str(tmp_path)) and not mp.looks_inline_input("a.csv")
+    assert not mp.looks_inline_input("C:\\d\\a=1.csv") and mp.looks_inline_input("반응온도(°C)=182, 압력=3")
+
+
 def test_abbreviations_only_through_the_same_meaning_table(data_dir):
     """allow_abbrev=False: '--data-ro 2'는 --data-row로 몰래 읽지 않고 [후보], '--overwrit'는 어떤 후보도 주지 않음.
     예전에 줄임말로 되던 같은 뜻('--target' = --targets)도 읽지 않고 고친 전체 명령을 [추천] (2.9.71: 한 가지 사용법)."""

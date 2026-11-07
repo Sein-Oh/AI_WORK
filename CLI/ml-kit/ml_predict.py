@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.73"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.74"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -971,6 +971,21 @@ DROP_OPTIONS = {"--json": 0, "--encoding": 1, "--verbose": 0, "--quiet": 0}
 # Never given as a lookalike, even as [후보]: replaces files or retrains everything
 NO_FUZZY_OPTIONS = {"--overwrite", "--best", "--help"}
 _OPTION_TOKEN = re.compile(r"--?[A-Za-z][A-Za-z0-9_-]*")
+# '이름=값,이름=값' (the -i form): a value of this shape after an unknown option or in -f is the -i input (2.9.74, 집 PC
+# opencode: '-x "반응온도=182,..."' copied from ml_train, '-f "반응온도=182,..."')
+_INLINE_PAIRS = re.compile(r"\s*[^=,;\\/:*?\"<>|]+=[^=,;]*(\s*[,;]\s*[^=,;\\/:*?\"<>|]+=[^=,;]*)*\s*")
+
+
+def looks_inline_input(value: Any) -> bool:
+    """True for '이름=값[,이름=값...]' text that is not an existing path (the -i form; pairs split by ';' too, as
+    '--eval "온도=182; 압력=3"' from ml_train: the [추천] value uses ',', AGENTS.md 구분자 규칙)."""
+    text = str(value or "")
+    return bool(text) and "=" in text and not os.path.exists(text) and bool(_INLINE_PAIRS.fullmatch(text))
+
+
+def inline_value(value: str) -> str:
+    """The -i text of looks_inline_input value: pairs joined with ','."""
+    return ",".join(p.strip() for p in re.split(r"[,;]", value) if p.strip())
 
 
 # 스크립트 -> 그 명령을 설명하는 작업별 스킬 (skills/<이름>/SKILL.md, 2.9.71에 스킬 하나를 넷으로 나눔)
@@ -1051,6 +1066,16 @@ class JsonArgumentParser(argparse.ArgumentParser):
                     changes.append(f"{key} -> {real}")
                     fixed.append(real + eq + val)
                     i += 1
+                    continue
+                value = val if eq else (given[i + 1] if i + 1 < len(given) else "")
+                if "-i" in opts and "-i" not in given and "--input" not in given and looks_inline_input(value):
+                    changes.append(f"{key} -> -i ('이름=값' 입력은 -i, 사이는 ,)")  # one meaning: the value form is -i's
+                    if eq:
+                        fixed.append("-i=" + inline_value(val))
+                        i += 1
+                    else:
+                        fixed += ["-i", inline_value(value)]
+                        i += 2
                     continue
                 unknown.append(key)
             fixed.append(a)
@@ -4699,6 +4724,29 @@ def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share <= 0.5
 
 
+def _check_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, Any]]) -> None:
+    """-f that does not exist (2.9.74, 집 PC opencode): '이름=값' text -> [추천] the command with -i; a file the agent
+    meant to write for one condition -> say that a few conditions go in -i without a file, and give that command
+    (next_commands, needs_input: the model inputs with <값>)."""
+    path = str(args.file)
+    if os.path.exists(path):
+        return
+    base = command_text(drop={"-f": "", "--file": "", "-i": "", "--input": ""})
+    if looks_inline_input(path):
+        cmd = f"{base} -i {quote_arg(inline_value(path))}" if base else None
+        raise InputError("-f에는 데이터 파일 경로를 줍니다. '이름=값' 입력은 -i로 줍니다."
+                         + (f" [추천] {cmd}" if cmd else ""))
+    needed, _ = _model_inputs(model_items)
+    template = ",".join(f"{c}=<값>" for c in needed)
+    extra = {}
+    if base and needed:
+        extra["next_commands"] = [{"purpose": "새 조건 한 건 예측 (<값>을 사용자가 준 값으로 바꿈)",
+                                   "command": f"{base} -i {quote_arg(template)}", "needs_input": True}]
+    raise InputError(f"입력 데이터 파일을 찾을 수 없습니다: {path}. 새 조건 몇 건은 파일을 만들지 않고 "
+                     f"-i \"이름=값,...\"로 예측합니다 (모델 입력: {', '.join(needed)}). "
+                     "next_commands[0]의 <값>을 사용자가 준 값으로 바꿔 실행하세요.", extra=extra)
+
+
 def _model_inputs(model_items: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
     """(every raw model input, the numeric ones) over all target models."""
     needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
@@ -5299,6 +5347,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         is_inline = True
         source_desc = f"직접 입력 {len(df_input)}건"
     elif args.file:
+        _check_prediction_file(args, model_items)
         df_input = _load_prediction_file(args, model_items)
         is_inline = False
         source_desc = os.path.basename(args.file)

@@ -12,6 +12,19 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.74] - 2026-11-07
+
+집 PC opencode 시험(solar-mini4, solar-pro4, Gemma 4 26B)에서 한 건 예측(P1)이 막힌 곳.
+
+### 기능
+- `-i`가 있는 명령(예측, ml_map)에서 모르는 옵션의 값이 `이름=값,...` 꼴이면 그 옵션을 `-i`로 바꾼 `[추천]` 전체 명령
+  (학습의 `-x`를 그대로 쓴 `-x "반응온도=182,..."`: 예전에는 "unrecognized arguments"만 받아 모델이 멈추거나 헤맴).
+  쌍 사이를 `;`로 쓴 것(Gemma 4: `--eval "반응온도=182; 압축압력=3"`)도 같고, `[추천]`의 값은 `,`로 바꿈. 예전에는 철자만 비슷한
+  `[후보] --vary / --model`을 받아 사용자에게 되물음.
+- 예측 `-f`: 값이 `이름=값,...`이면 `-i`로 바꾼 `[추천]`, 없는 파일(한 건을 파일로 만들려던 경우)이면 "몇 건은 파일 없이 `-i`" 안내와
+  모델 입력 이름에 `<값>`을 넣은 `-i` 명령(`next_commands`, `needs_input: true`). 예전에는 "파일을 찾을 수 없습니다"만 받아 파일 쓰기로 빠짐.
+- 테스트: `test_contract.py::test_inline_values_in_wrong_option_recommend_i`.
+
 ## [2.9.73] - 2026-11-07
 
 사용법 단순성 남은 것 (AGENTS.md "사용법 단순성" 2번: `[후보]`는 번호와 같은 번호의 전체 명령).
