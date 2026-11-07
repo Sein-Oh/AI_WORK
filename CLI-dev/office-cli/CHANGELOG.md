@@ -30,6 +30,9 @@
 - `outlook` 첨부 내려받기 명령을 `next_commands`(묻지 않고 실행)에서 `confirm_commands`로. 첨부 목록은 모두(`[0]`)와 첨부 하나씩(`--index N`).
 - `reader search --query`의 묶음에 `'a;b'`도 (excel `--where`와 같은 작은따옴표, 한 항목 전체일 때만).
 - `replace --dry-run`의 `formula_cells_kept`를 실제 실행과 같은 칸 주소 목록으로.
+- 2차 검토: `retry_replacing(option=)`은 옵션 묶음도 받음(정렬 `--by`·`--desc` 둘 다 바꿈), 그 옵션 값 안의 경로 조각·목록 안의 시트 주소(`--cells "C6=1; 요약 !C7=2"`)도
+  바꿈, 옵션 값에서 못 찾으면 명령 전체에서(`--range 매출2!A1`이 `--sheet`보다 앞섬). 메일 폴더(`--folder`)·장절(`--section`)도 그 옵션만.
+  없는 시트 `[후보]`의 명령은 원래 명령에 `--overwrite`가 있으면 `destructive`. `--query`의 짝 없는 따옴표는 버리고 글자를 잃지 않음.
 - `retry_fs`는 마지막 시도 뒤에 기다리지 않음, `remove_file`은 실패를 오류 로그 '복구 시도'에 남기지 않음.
 - 스킬 템플릿의 고르기 표기 `--action freeze|unfreeze|...`를 `--action <freeze/unfreeze/...>`로 (따옴표 밖의 `|`는 PowerShell 파이프, `|`는 "또는" 구분자).
   테스트 `test_no_pipe_alternatives_in_templates`.

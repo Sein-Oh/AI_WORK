@@ -1149,7 +1149,7 @@ def main(argv=None):
                    help="pytest 단계에서 도구 하나의 시간 상한(초, 기본 7200. 회사 PC에서 ml-kit이 3600초를 넘음)")
     args = p.parse_args(argv)
     chosen = [s.strip().lower() for s in (args.only or ",".join(DEFAULT_STAGES)).split(",") if s.strip()]
-    if args.gemma and "gemma" not in chosen:
+    if (args.gemma or args.gemma_only or args.gemma_model) and "gemma" not in chosen:   # gemma 옵션을 주면 gemma 단계도
         chosen.append("gemma")
     bad = [s for s in chosen if s not in STAGES]
     if bad or not chosen:

@@ -1751,6 +1751,7 @@ def test_parse_query_separators():
     assert reader.parse_query('"a;b|c";d') == [["a;b|c", "d"]]
     assert reader.parse_query("'a;b|c';d") == [["a;b|c", "d"]]                       # 1.4.83: excel --where와 같은 작은따옴표
     assert reader.parse_query("don't stop;x") == [["don't stop", "x"]]                   # 낱말 안의 '는 글자
+    assert reader.parse_query('"견적') == [["견적"]] and reader.parse_query("'unclosed;x") == [["'unclosed", "x"]]   # 짝 없는 따옴표
     assert reader.parse_query("terms and conditions") == [["terms and conditions"]]    # 소문자 낱말은 글자 그대로
     assert reader.parse_query('""') == []
 

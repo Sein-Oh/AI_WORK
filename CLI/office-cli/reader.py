@@ -2091,8 +2091,9 @@ def _section_not_found(spec: str, units: List[Dict[str, Any]], pages: Optional[s
     near = rt.suggest(spec, names, n=5)
     if near:
         tail = " 비슷한 장절이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요."
-        return rt.ambiguous(head + tail, near, replace=spec)
-    return rt.ambiguous(head + " 비슷한 장절이 없습니다. 이 문서의 장절 중에서 사용자에게 고르게 하세요.", names, replace=spec)
+        return rt.ambiguous(head + tail, near, replace=spec, option="--section")
+    return rt.ambiguous(head + " 비슷한 장절이 없습니다. 이 문서의 장절 중에서 사용자에게 고르게 하세요.", names, replace=spec,
+                        option="--section")
 
 
 # ==============================================================================
@@ -2543,7 +2544,7 @@ def parse_query(query: str) -> List[List[str]]:
             groups.append([])
         elif tok == ";":
             continue
-        elif tok[:1] in ('"', "\u201c", "'") and len(tok) >= 2:
+        elif len(tok) >= 2 and {'"': '"', "\u201c": "\u201d", "'": "'"}.get(tok[0]) == tok[-1]:
             if tok[1:-1].strip():
                 groups[-1].append(tok[1:-1].strip())
         elif " ".join(tok.split()):
@@ -2573,11 +2574,14 @@ def _query_tokens(text: str) -> List[str]:
                 out.append(text[i:end + 1])
                 i = end + 1
                 continue
-        j = i
+        if c in '"\u201c':                    # 짝 없는 큰따옴표는 버림 (검색어가 아님)
+            i += 1
+            continue
+        j = i + 1
         while j < n and text[j] not in ';|"\u201c':
             j += 1
-        out.append(text[i:j] if j > i else text[i])
-        i = j if j > i else i + 1
+        out.append(text[i:j])
+        i = j
     return out
 
 

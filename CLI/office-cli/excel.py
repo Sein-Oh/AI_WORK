@@ -3221,7 +3221,8 @@ def range_lines(args) -> Dict[str, Any]:
 _LETTERS = re.compile(r"^[A-Za-z]{1,3}$")
 
 
-def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, what: str = "열") -> Tuple[int, bool]:
+def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, what: str = "열",
+                   option: Any = None) -> Tuple[int, bool]:
     """--by/--where의 열 -> (범위 안 열 위치 0부터, 머리글 이름으로 찾았는지).
     머리글(header)이 있으면 이름(대소문자·공백·_- 무시)을 먼저 찾고, 없으면 열 문자(B, AA). 찾지 못하면 [후보] 머리글 이름."""
     k = str(key).strip()
@@ -3237,7 +3238,7 @@ def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, w
             raise rt.ambiguous(f"머리글에 '{k}' 열이 여러 개입니다. 열 문자로 고르세요.",
                                [f"{col_letter(c0 + i)} ({names[i]})" for i in exact],
                                log_message=f"머리글에 같은 이름의 {what}이 {len(exact)}개",
-                               replace=k, values=[col_letter(c0 + i) for i in exact])
+                               replace=k, values=[col_letter(c0 + i) for i in exact], option=option)
     if _LETTERS.match(k):
         idx = col_number(k) - c0
         if 0 <= idx < ncols:
@@ -3248,7 +3249,7 @@ def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, w
         raise rt.InputError(f"{what} '{k}'을(를) 찾을 수 없습니다. 머리글 행이 없으면 열 문자(예: B)를 쓰세요.")
     near = rt.suggest(k, shown, 5)
     raise rt.ambiguous(f"{what} '{k}'을(를) 머리글에서 찾을 수 없습니다. 머리글 이름이나 열 문자(예: B)를 쓰세요.", near or shown,
-                       log_message=f"{what} 이름을 머리글에서 찾을 수 없음", replace=k)
+                       log_message=f"{what} 이름을 머리글에서 찾을 수 없음", replace=k, option=option)
 
 
 def _is_num(v: Any) -> bool:
@@ -3399,7 +3400,7 @@ def range_sort(args) -> Dict[str, Any]:
         cols: List[Tuple[int, bool]] = []
         by_name = False
         for k in keys:
-            idx, named = resolve_column(k, header_row, c1, nc, "정렬 기준 열")
+            idx, named = resolve_column(k, header_row, c1, nc, "정렬 기준 열", option=("--by", "--desc"))
             by_name = by_name or named
             cols.append((idx, named))
         if header_given == "yes" or by_name:

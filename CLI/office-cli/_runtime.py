@@ -170,6 +170,7 @@ class UserDecisionError(InputError):
         """commands: candidates와 같은 순서의 전체 명령 (모두 python으로 시작하면 '[후보] 1) a'와 같은 번호의 confirm_commands, 1.4.83)."""
         cands = [str(c) for c in (candidates or [])][:MAX_CANDIDATES]
         cmds = list(commands or [])[:len(cands)]
+        destructive = destructive or "--overwrite" in (CURRENT_ARGV or [])
         numbered = bool(cands) and len(cmds) == len(cands) and all(str(c).startswith("python ") for c in cmds)
         tail = (" [후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(cands, 1)) if numbered
                 else f" [후보] {', '.join(cands)}") if cands else ""
@@ -1924,46 +1925,67 @@ def retry_command(options: Dict[str, Any], drop: Sequence[str] = (), multi: Sequ
     return next_command(f"{CURRENT_TOOL}.py", out + add, "")["command"]
 
 
-def retry_replacing(old: str, new: str, option: Optional[str] = None) -> str:
+def retry_replacing(old: str, new: str, option: Any = None) -> str:
     """[추천]·[후보]에 넣을 전체 명령: 지금 실행한 명령에서 값 old를 new로 바꿈. 사용법 단순성 2번: 값만 주어 LLM이 끼워 넣게 하지 않음.
-    option이 명령에 있으면 그 옵션의 값만 봄 (1.4.83: '--id 2 --index 2'의 --index만, '--sheet 매출 --name 매출'의 --name만).
-    값 전체가 old인 인자가 있으면 그것만 바꾸고(폴더 이름 '요약'이 든 경로는 그대로), 없을 때만 시트 주소의 앞부분('old!A1'),
-    ;·, 목록의 한 값, 경로의 한 부분 중 처음 찾은 한 곳을 바꿈. 못 찾으면 option이 있으면 그 옵션 값으로 넣고(retry_command), 없으면 new만."""
+    option(옵션 이름 또는 그 묶음, 예: ('--by', '--desc'))이 명령에 있으면 그 옵션 값들 안에서 old인 값을 모두 바꿈
+    (1.4.83: '--id 2 --index 2'의 --index만, '--by 금액,부서 --desc 금액'은 둘 다). 거기서 못 찾았거나 option이 없으면 명령 전체에서
+    값 전체가 old인 인자만 바꾸고(폴더 이름 '요약'이 든 경로는 그대로), 그것도 없으면 시트 주소의 앞부분('old!A1', 목록 안의 'old!C7'),
+    ;·, 목록의 한 값, 경로의 한 부분 중 처음 찾은 한 곳. 못 찾으면 option이 있으면 그 옵션 값으로 넣고(retry_command), 없으면 new만."""
     argv = list(CURRENT_ARGV or [])
+    options = [option] if isinstance(option, str) else list(option or [])
     part_sep = re.compile(r"([\\/,])")          # 경로의 한 부분('보관\\회의록'), 쉼표 목록의 한 값('word,ppt')
     list_sep = re.compile(r"(\s*[;,]\s*)")       # 목록의 한 값 전체 ('a.pdf;C:\\폴더\\b.pdf'의 전체 경로, 'A;B'의 B)
-    sheet_ref = re.compile(r"^(?:'" + re.escape(old.replace("'", "''")) + r"'|" + re.escape(old) + r")!")
+    sheet_ref = re.compile(r"^(\s*)(?:'" + re.escape(old.replace("'", "''")) + r"'|" + re.escape(old) + r")\s*!")
     quoted_new = f"'{new.replace(chr(39), chr(39) * 2)}'" if re.search(r"[^\w가-힣]", new) else new
-    scope = list(range(len(argv)))
-    if option:
-        own = [i + 1 for i, a in enumerate(argv) if a == option and i + 1 < len(argv)] + \
-              [i for i, a in enumerate(argv) if a.startswith(option + "=")]
-        scope = own or scope
 
     def split_value(a: str) -> Tuple[str, str, str]:
         key, eq, val = a.partition("=")
         return (key, eq, val) if eq and key.startswith("--") else ("", "", a)
 
-    exact = [i for i in scope if split_value(argv[i])[2] == old]
-    for i in exact:
+    def put(i: int, text: str) -> None:
         key, eq, _ = split_value(argv[i])
-        argv[i] = f"{key}={new}" if eq else new
-    found = bool(exact)
-    for i in ([] if found else scope):
-        key, eq, text = split_value(argv[i])
-        if sheet_ref.match(text):
-            fixed = sheet_ref.sub(lambda _m: quoted_new + "!", text, count=1)
-        elif old in [p.strip() for p in list_sep.split(text)]:
-            fixed = "".join(new if p.strip() == old else p for p in list_sep.split(text))
-        elif old in part_sep.split(text):
+        argv[i] = f"{key}={text}" if eq else text
+
+    def in_list(text: str) -> Optional[str]:
+        parts = list_sep.split(text)
+        if old not in [p.strip() for p in parts]:
+            return None
+        return "".join(new if p.strip() == old else p for p in parts)
+
+    def partial(text: str) -> Optional[str]:
+        """시트 주소 앞부분(목록 안 포함), 목록의 한 값, 경로의 한 부분."""
+        items = list_sep.split(text)
+        if any(sheet_ref.match(p) for p in items):
+            return "".join(sheet_ref.sub(lambda m: m.group(1) + quoted_new + "!", p, count=1) for p in items)
+        fixed = in_list(text)
+        if fixed is None and old in part_sep.split(text):
             fixed = "".join(new if p == old else p for p in part_sep.split(text))
-        else:
-            continue
-        argv[i] = f"{key}={fixed}" if eq else fixed
-        found = True
-        break
+        return fixed
+
+    found = False
+    own = [i + 1 for i, a in enumerate(argv) if a in options and i + 1 < len(argv)] + \
+          [i for i, a in enumerate(argv) if any(a.startswith(o + "=") for o in options)]
+    for i in own:                                        # 1) 이름을 준 옵션의 값 안에서 모두 (값 전체, 목록, 시트 주소, 경로 조각)
+        text = split_value(argv[i])[2]
+        fixed = new if text == old else partial(text)
+        if fixed is not None:
+            put(i, fixed)
+            found = True
+    if not found:                                        # 2) 명령 전체에서 값 전체가 old인 인자
+        for i, a in enumerate(argv):
+            if split_value(a)[2] == old:
+                put(i, new)
+                found = True
+    if not found:                                        # 3) 그 밖의 인자에서 처음 한 곳 (시트 주소, 목록의 한 값, 경로 조각)
+        for i in range(len(argv)):
+            fixed = partial(split_value(argv[i])[2])
+            if fixed is None:
+                continue
+            put(i, fixed)
+            found = True
+            break
     if not found:
-        return retry_command({option: new}) if option else str(new)
+        return retry_command({options[0]: new}) if options else str(new)
     if not CURRENT_TOOL:
         return str(new)
     return next_command(f"{CURRENT_TOOL}.py", argv, "")["command"]

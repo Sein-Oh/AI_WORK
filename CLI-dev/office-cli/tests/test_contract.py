@@ -1293,3 +1293,17 @@ def test_retry_replacing_changes_only_the_named_option(monkeypatch):
     monkeypatch.setattr(rt, "CURRENT_ARGV", ["chart", "--sheet", "매출", "--name", "매출"])
     got = split_command(rt.retry_replacing("매출", "매출!#1", "--name"))[2:]
     assert got == ["chart", "--sheet", "매출", "--name", "매출!#1"], got
+    # 2차 검토: 옵션 묶음 안에서는 모두 (--by 목록과 --desc 둘 다), 목록 안의 시트 주소, --range의 시트가 --sheet보다 앞섬
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["range", "--action", "sort", "--by", "금액,부서", "--desc", "금액"])
+    got = split_command(rt.retry_replacing("금액", "B", ("--by", "--desc")))[2:]
+    assert got == ["range", "--action", "sort", "--by", "B,부서", "--desc", "B"], got
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["write", "--cells", "C6=1; 요약 !C7=2"])
+    got = split_command(rt.retry_replacing("요약", "요약표", "--sheet"))[2:]
+    assert got == ["write", "--cells", "C6=1; 요약표!C7=2"], got
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["write", "--range", "매출2!A1", "--value", "1", "--sheet", "기타"])
+    got = split_command(rt.retry_replacing("매출2", "매출", "--sheet"))[2:]
+    assert got == ["write", "--range", "매출!A1", "--value", "1", "--sheet", "기타"], got
+    monkeypatch.setattr(rt, "CURRENT_TOOL", "outlook")
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["search", "--query", "보관", "--folder", "받은 편지함\\보관"])
+    got = split_command(rt.retry_replacing("보관", "보관함", "--folder"))[2:]
+    assert got == ["search", "--query", "보관", "--folder", "받은 편지함\\보관함"], got

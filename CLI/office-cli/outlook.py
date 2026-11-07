@@ -117,7 +117,7 @@ def resolve_folder(ns: Any, spec: Optional[str]) -> Any:
             raise rt.not_found("메일 폴더", part, list(subs), extra=f" (경로: {s})",
                                display=lambda n: prefix + "\\" + n,
                                log_name="\\".join([log_root] + walked[1:] + [part]),
-                               log_extra=f" (경로: {log_spec})")
+                               log_extra=f" (경로: {log_spec})", option="--folder")
         cur = subs[name]
         walked.append(name)
     return cur
