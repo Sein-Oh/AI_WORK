@@ -299,7 +299,7 @@ def test_help_is_stderr_text_and_one_json_line(script, data_dir):
     assert proc.returncode == 0 and "usage:" in proc.stderr
     assert payload["status"] == "ok" and payload["command"] == "help" and payload["verified"] is True
     assert payload["agent_directive"].startswith("VERIFIED:") and "SKILL.md" in payload["agent_directive"]
-    assert os.path.normcase(payload["skill_file"]) == os.path.normcase(os.path.join(KIT, "SKILL.md"))
+    assert os.path.isfile(payload["skill_file"]) and os.path.dirname(payload["skill_file"]).startswith(os.path.join(KIT, "skills"))
     assert _log(data_dir) == ""
 
 
@@ -629,16 +629,41 @@ def test_same_meaning_option_gives_fixed_command(data_dir, script, args, want):
 
 def test_abbreviations_only_through_the_same_meaning_table(data_dir):
     """allow_abbrev=False: '--data-ro 2'는 --data-row로 몰래 읽지 않고 [후보], '--overwrit'는 어떤 후보도 주지 않음.
-    예전에 줄임말로 되던 같은 뜻('--target' = --targets)은 그대로 읽힘."""
+    예전에 줄임말로 되던 같은 뜻('--target' = --targets)도 읽지 않고 고친 전체 명령을 [추천] (2.9.71: 한 가지 사용법)."""
     proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--data-ro", "2")
     assert proc.returncode == 2 and "[후보] --data-row" in res["message"] and "[추천]" not in res["message"], res
     proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--overwrit")
     assert proc.returncode == 2 and "[후보]" not in res["message"] and "--overwrite" not in res["message"], res
     proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "--target", "b")
-    assert proc.returncode == 1 and "없음.csv" in res["message"] and "[INFO] 옵션 --target" in proc.stderr, res
+    assert proc.returncode == 2 and "[INFO] 옵션 --target" not in proc.stderr, res
+    _, fixed = recommended_command(res["message"])
+    assert fixed[fixed.index("--targets") + 1] == "b" and "--target" not in fixed, fixed
+    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--description", "설명")      # 별칭 없음
+    _, fixed = recommended_command(res["message"])
+    assert proc.returncode == 2 and fixed[fixed.index("--desc") + 1] == "설명" and "--description" not in fixed, fixed
     p = mp.JsonArgumentParser()
     p.add_argument("--data-row", type=int)
     p.add_argument("--file")
     with pytest.raises(SystemExit):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             p.parse_args(["--data-r", "3"])
+
+
+def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
+    """2.9.71: CONTINUE 횟수는 도구가 셈. 새로 저장한 것 없이 바로 앞과 같은 progress면 STOP_RETRY(unfinished_limit),
+    새로 저장했으면 같은 글이어도 계속, CONTINUE_MAX를 넘으면 멈춤."""
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_train.py", "-f", "d.csv", "-x", "a", "-y", "b"])
+    mp.RUN_SAVED.clear()
+    assert mp.unfinished_payload(mp.Unfinished("학습 1/5"))["continue_runs"] == 1
+    mp.RUN_SAVED.append("x")
+    assert mp.unfinished_payload(mp.Unfinished("학습 1/5"))["continue_runs"] == 2      # 저장했으면 진행한 것
+    mp.RUN_SAVED.clear()
+    stuck = mp.unfinished_payload(mp.Unfinished("학습 1/5"))
+    assert stuck["status"] == "error" and stuck["error_type"] == "unfinished_limit", stuck
+    monkeypatch.setattr(mp, "CONTINUE_MAX", 2)
+    for i in range(2):
+        assert mp.unfinished_payload(mp.Unfinished(f"단계 {i}"))["status"] == "ok"
+    assert mp.unfinished_payload(mp.Unfinished("단계 9"))["error_type"] == "unfinished_limit"
+    mp.continue_clear()
+    assert mp._continue_state() == {}

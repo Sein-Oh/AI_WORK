@@ -12,6 +12,36 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.71] - 2026-11-07
+
+사용법 단순화 (AGENTS.md "사용법 단순성", 경량 LLM이 고르기·세기·조합을 하지 않게).
+
+### 구조
+- 스킬 하나(`CLI/ml-kit/SKILL.md`, 약 20KB)를 작업별 4개로 나눔: `skills/ml-train`(학습·개선·이력), `skills/ml-predict`(예측·반대 찾기·
+  조건별 예측·최적 조건), `skills/ml-report`(보고서·성능예측표), `skills/ml-map`(모델 없이 표 보간). 각 6KB 이하(3~5.5KB), 공통 규칙은
+  4개에서 같은 글(테스트로 확인). 단계마다 "알릴 키" 목록(63개)을 빼고 "preview와 agent_directive가 알리라고 한 값"으로: 도구의
+  `agent_directive`가 이미 알릴 값을 적음(학습 이력에 `preview`와 표로 알릴 열, 예측에 예측 범위·확률·결과 파일 안내를 더함).
+  결과 처리 표는 전역 지침 4장과 같아 빼고 "전역 지침 4장대로"로. `setup.py`는 4개를 설치하고 옛 `skills\ml-kit`을 보관 후 지움.
+  `-h`의 `skill_file`은 스크립트마다 맡은 스킬. 전역 지침 3장 표와 스킬 경로도 바꿈.
+
+### 기능
+- `ml_predict -m "<데이터 파일>"`(또는 `<이름>_ml_data` 폴더): 도구가 최고 버전을 골라 예측하고 `model_chosen`에 적음. 학습이 원장을 쓸 때마다
+  `<이름>_ml_data/best_version.json`(작업 유형마다 `--history`의 best_version과 같은 선택)을 씀. 회귀·분류가 함께 있어 정할 수 없거나
+  기록이 없으면 `STOP_RETRY` + `[후보]` 번호 붙은 전체 명령. `ml_export -m`도 같음. 스킬은 `-m "<데이터파일>"` 하나만 적음
+  (전에는 보고서의 `best_version_dir` / 마지막 `version_dir` / `--history` 중 LLM이 고름).
+- 개선 반복 횟수를 도구가 셈: 같은 작업·타겟 학습이 5번(`IMPROVE_ROUNDS`) 연속 이전 최고를 넘지 못하면 재학습 명령 대신 보고서 명령 하나와
+  `improve_stopped` (전에는 스킬이 "최대 5번 반복"을 LLM에게 세게 함).
+- `CONTINUE` 횟수를 도구가 셈: `<데이터 폴더>/continue_state.json`. 300번을 넘거나, 새로 저장한 것 없이 바로 앞과 같은 `progress`에서 멈추면
+  `STOP_RETRY`(`error_type: unfinished_limit`, exit 1). 다른 결과로 끝나면 기록을 지움. 스킬·전역 지침은 "CONTINUE가 아닐 때까지 다시 실행"만.
+
+### 수정
+- `[추천]`은 늘 전체 명령: 값만 주던 곳(`--header-row N`, `--dtypes "..."`, 성능예측표 `--inputs`, `--save` 확장자)을 실행 중인 명령에서 그
+  옵션만 바꾼 전체 명령으로 (`option_retry`). STOP_RETRY directive도 "`[추천]` 뒤의 명령을 그대로 1번".
+- 한 가지 사용법: `--desc`/`--description` 별칭 -> `--desc` 하나 (`--description`은 같은 뜻 표로 `[추천]`). 예전 줄임말을 같은 뜻 표로 받아 주던
+  길(`--target` -> `--targets` 등, `[INFO]`만 남김)을 없앰: 인자 오류 + 고친 전체 명령 `[추천]`.
+- 스킬 규칙 5("같은 명령을 다시 실행하지 않는다")가 `CONTINUE`와 부딪히던 것: 예외를 같은 문장 안에.
+- 머리글 옵션 규칙이 단계마다 달랐음(학습·보간은 붙임, 예측은 붙이지 않음): "사용자가 머리글 행을 말했을 때만, 어느 명령이나 같음".
+
 ## [2.9.70] - 2026-11-07
 
 클라우드 점검(두 도구 모든 진입점 일괄 점검, 남은 할 일).
@@ -1869,9 +1899,8 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - 이전 이력 문서(ROADMAP 등)를 정리하고 이 CHANGELOG로 일원화. `requirements-dev.txt`, `install_offline.bat` 삭제.
 
 ## 남은 할 일
-- [ ] 사용법 단순성(AGENTS.md, 2026-11-07) 맞추기: SKILL.md 약 20KB -> 6KB(알릴 키 63개를 `preview` 중심으로), 규칙 5와 `CONTINUE` 모순,
-  `[추천]` 값 형태(`--header-row`, `--dtypes`) -> 전체 명령, 예전 줄임말을 같은 뜻 표로 받아 주는 길(`--target` -> `--targets`, 베타 호환 금지와도 충돌),
-  `--desc` 별칭, 예측 `--header-row` 예외, 예측 모델 폴더 고르기 3갈래, 3단계 5번·`CONTINUE` 300번을 LLM이 셈
+- [ ] 사용법 단순성 남은 것: `[후보]`를 번호 붙은 전체 명령으로 (열 이름 후보 등은 아직 값 목록), 짧은 옵션(`-f -x -y -i -m`)과 긴 옵션 두 형태
+  (도구가 내는 명령과 스킬은 짧은 형태 하나로 맞춰 둠)
 - [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트.md` 4장 눈 확인 2번). 엑셀 재계산은 회사 PC 통과 (2.9.4)
 - [ ] `-x` 생략 시 피처 자동 선택 (ID/일련번호 배제 규칙)
 - [ ] 무거운 import 지연 로딩 (`--history` 응답 속도)

@@ -13,7 +13,7 @@ OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md�
 
 | 스킬 폴더 | 넣을 파일 |
 |---|---|
-| `skills\ml-kit\` | `C:\CLI\ml-kit\SKILL.md` |
+| `skills\ml-train\`, `skills\ml-predict\`, `skills\ml-report\`, `skills\ml-map\` | `C:\CLI\ml-kit\skills\<이름>\SKILL.md` (학습, 예측, 보고서·성능예측표, 표 보간) |
 | `skills\office-excel\` | `C:\CLI\office-cli\skills\office-excel\SKILL.md` (엑셀) |
 | `skills\office-doc\` | `C:\CLI\office-cli\skills\office-doc\SKILL.md` (워드, PPT, 앱 사이 옮기기) |
 | `skills\office-mail\` | `C:\CLI\office-cli\skills\office-mail\SKILL.md` (Outlook) |

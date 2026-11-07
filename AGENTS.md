@@ -11,7 +11,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 
 ## 폴더 구조
 - `CLI/<tool>/`: 사용자 PC의 `C:\CLI`로 그대로 복사되는 폴더. **실행에 필요한 .py와 스킬 파일(`SKILL.md`)만** 둔다.
-  스킬은 도구 폴더 바로 아래 `SKILL.md` 하나(ml-kit) 또는 작업별 `skills/<스킬 이름>/SKILL.md`(office-cli: `office-excel`,
+  스킬은 작업별 `skills/<스킬 이름>/SKILL.md`(ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, office-cli: `office-excel`,
   `office-doc`, `office-mail`, `office-spec`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
 - `CLI-dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
   `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
@@ -42,7 +42,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 2. exit 0 = ok, 1 = error, 2 = 인자 오류, 130 = 중단.
    - 성공: `"status": "ok"`, `agent_directive`는 `VERIFIED:`(도구가 결과를 확인함) 또는 `UNVERIFIED:`(확인하지 못함, 재시도 없이 보고)로 시작.
      긴 작업이 명령 시간 제한(에이전트 실행 도구 120초) 전에 멈추면 `CONTINUE:` + `"continue": true` + `next_commands`(같은 명령): 한 일은 저장, 같은 명령을 다시 실행하면 이어서 진행 (R10).
-   - 실패: `"status": "error"`, `agent_directive`는 `STOP_RETRY:`(입력/데이터 문제. message에 `[추천]`이 있으면 그 전체 명령을 그대로 1회만 재시도(값만 주는 옛 형태는 고칠 대상, 아래 "사용법 단순성" 2번), `[후보]`면 사용자에게 선택 요청) 또는 `ERROR:`(내부 오류, 재시도 금지).
+   - 실패: `"status": "error"`, `agent_directive`는 `STOP_RETRY:`(입력/데이터 문제. message에 `[추천]`이 있으면 그 뒤의 전체 명령을 그대로 1회만 실행(아래 "사용법 단순성" 2번), `[후보]`면 사용자에게 선택 요청) 또는 `ERROR:`(내부 오류, 재시도 금지).
    - 공통 키·문구·함수의 구현 규칙은 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R10)을 따른다.
 3. 모든 진입점은 공통 런타임의 `run_cli()` + `JsonArgumentParser`를 사용한다.
 4. CLI 인자·JSON 키는 바꿔도 된다 (베타, 호환 불필요). 바꾸면 SKILL.md·README.md·CHANGELOG.md와 테스트를 같은 커밋에서 함께 고친다.
@@ -171,7 +171,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    (요약은 `docs/HANDOFF.md` 4장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
 5. 남은 할 일은 각 도구 `CHANGELOG.md`(`CLI-dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
 6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (6KB, 상세는 README.md, 위 "사용법 단순성" 7번).
-7. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/SKILL.md`는 `ml-kit`,
+7. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/skills/ml-train/SKILL.md`는 `ml-train`,
    `CLI/office-cli/skills/office-excel/SKILL.md`는 `office-excel`), frontmatter는 name/description/license/compatibility/metadata만.
    보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `CLI/setup.py`
    (설치·옛 폴더 정리)와 전역 지침 `CLI/opencode/AGENTS.md` 3장 표를 함께 고친다.

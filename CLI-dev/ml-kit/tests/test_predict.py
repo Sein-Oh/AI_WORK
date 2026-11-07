@@ -664,3 +664,23 @@ def test_match_categories_ambiguous_not_fixed():
     assert fixes == {"b ": "B"} and unseen == ["x"]      # 'a'는 학습 범주 그대로 ('A'로 바꾸지 않음)
     fixes, unseen = mp.match_categories(["ａ"], ["A", "a"])
     assert fixes == {} and unseen == ["ａ"]          # 'A'와 'a' 둘 다 맞아 고를 수 없음
+
+
+def test_model_given_as_data_file_uses_best_version(p1_model, tmp_path):
+    """2.9.71: -m <데이터 파일>이면 도구가 best_version.json(학습이 원장마다 씀)의 최고 버전으로 예측 (LLM이 버전 폴더를 고르지 않음)."""
+    root = os.path.join(os.path.dirname(p1_model["f"]), "p1_ml_data")
+    pointer = json.load(open(os.path.join(root, "best_version.json"), encoding="utf-8"))
+    assert pointer["tasks"]["regression"]["version"] == "v1", pointer
+    res = run_tool("ml_predict.py", "-m", p1_model["f"], "-i", "온도=180,압력=3,속도=45")
+    by_dir = run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도=180,압력=3,속도=45")
+    assert res["predictions_summary"] == by_dir["predictions_summary"] and "v1" in res["model_chosen"], res
+    assert "model_chosen" not in by_dir
+    # 기록이 없으면 고르지 않고 버전 폴더를 [후보] 전체 명령으로
+    copy = tmp_path / "p1_ml_data"
+    shutil.copytree(root, copy)
+    os.remove(copy / "best_version.json")
+    shutil.copy(p1_model["f"], tmp_path / "p1.csv")
+    msg = run_fail("ml_predict.py", "-m", str(tmp_path / "p1.csv"), "-i", "온도=180,압력=3,속도=45")["message"]
+    first = msg.split("[후보] 1) ", 1)[1].split(" / ")[0]
+    argv = split_command(first)
+    assert argv[0] == "python" and argv[argv.index("-m") + 1] == str(copy / "v1"), msg

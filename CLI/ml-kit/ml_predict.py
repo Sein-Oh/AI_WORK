@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.70"                         # must equal SKILL.md metadata.version (tests check it)
+VERSION = "2.9.71"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -364,15 +364,68 @@ def check_time(next_step_seconds: float, progress: str) -> None:
         raise Unfinished(progress)
 
 
+# The tool counts the CONTINUE runs of one command (2.9.71, AGENTS.md "사용법 단순성" 5: the agent never counts):
+# <data folder>/continue_state.json {command key: {n, progress, t}}. More than CONTINUE_MAX runs, or a run that saved
+# nothing new and stopped at the same progress as the run before -> STOP_RETRY instead of CONTINUE. Any other end of
+# the command (ok, error) clears its entry. Entries older than CONTINUE_STATE_AGE are dropped.
+CONTINUE_MAX = 300
+CONTINUE_STATE_AGE = 24 * 3600.0
+
+
+def _continue_key(cmd: Optional[str] = None) -> str:
+    import hashlib
+    text = cmd or " ".join(CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _continue_state(update: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+    """Reads (and with update, rewrites) the CONTINUE counts. Never fails: no counting when the folder is not writable."""
+    path = os.path.join(get_data_dir(), "continue_state.json")
+    try:
+        state = json.loads(read_text_file(path)) if os.path.isfile(path) else {}
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:
+        state = {}
+    now = time.time()
+    state = {k: v for k, v in state.items() if isinstance(v, dict) and now - float(v.get("t", 0)) < CONTINUE_STATE_AGE}
+    if update is not None:
+        update(state)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            atomic_write_text(path, json.dumps(state, ensure_ascii=False))
+        except Exception:
+            pass
+    return state
+
+
+def continue_clear() -> None:
+    """The command ended (ok or error): its CONTINUE count starts again next time."""
+    key = _continue_key(command_text())
+    if key in _continue_state():
+        _continue_state(lambda st: st.pop(key, None))
+
+
 def unfinished_payload(exc: "Unfinished") -> Dict[str, Any]:
     cmd = command_text()
+    key = _continue_key(cmd)
+    prev = _continue_state().get(key) or {}
+    n = int(prev.get("n", 0)) + 1
+    stuck = prev.get("progress") == exc.progress and not RUN_SAVED
+    if n > CONTINUE_MAX or stuck:
+        _continue_state(lambda st: st.pop(key, None))
+        why = (f"같은 명령을 {n - 1}번 이어서 실행했지만 끝나지 않았습니다" if n > CONTINUE_MAX else
+               "바로 앞 실행과 같은 곳에서 멈추고 새로 저장한 것이 없어 더 이어서 해도 끝나지 않습니다")
+        return {"status": "error", "error_type": "unfinished_limit", "progress": exc.progress,
+                "message": f"{why} (진행: {exc.progress}). 지금까지 한 일은 저장되어 있습니다.",
+                "agent_directive": "STOP_RETRY: 다시 실행하지 말고 message와 progress를 사용자에게 그대로 알리세요."}
+    _continue_state(lambda st: st.__setitem__(key, {"n": n, "progress": exc.progress, "t": time.time()}))
     return {
-        "status": "ok", "verified": False, "continue": True, "progress": exc.progress,
+        "status": "ok", "verified": False, "continue": True, "progress": exc.progress, "continue_runs": n,
         "next_commands": [cmd] if cmd else [],
         "agent_directive": ("CONTINUE: 아직 끝나지 않았습니다. 명령 시간 제한 때문에 나눠서 진행하며, 지금까지 한 일은 저장되어 있습니다. "
                             + ("next_commands의 명령을" if cmd else "방금 실행한 명령을")
-                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). progress가 바뀌는 동안(약 N단계 남음이 줄거나 "
-                            "글이 달라짐) 계속하고, 바로 앞과 같은 progress가 나오거나 300번을 넘으면 멈추고 progress를 알리세요. "
+                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음, 몇 번째인지 세지 않음: 멈출 때는 도구가 알림). "
                             "끝나면 VERIFIED 결과가 나옵니다."),
     }
 
@@ -510,11 +563,13 @@ def _watchdog_payload() -> Tuple[Dict[str, Any], int]:
     if any(not c["rerun_safe"] for c in RUN_COMMITTED):
         return committed_payload(RUN_COMMITTED), 0
     if RUN_SAVED or RUN_COMMITTED:
-        return unfinished_payload(Unfinished(f"{label} 도중 시간 제한({limit:.0f}초)에 닿아 멈춤. 그 전 단계까지 저장됨")), 0
+        p = unfinished_payload(Unfinished(f"{label} 도중 시간 제한({limit:.0f}초)에 닿아 멈춤. 그 전 단계까지 저장됨"))
+        return p, (0 if p["status"] == "ok" else 1)
     tries = int(CURRENT_STEP.get("tries") or 0)
     if CURRENT_STEP.get("name") and tries < STEP_TRIES:
-        return unfinished_payload(Unfinished(f"{label} 도중 시간 제한({limit:.0f}초)에 닿아 멈춤 "
-                                             f"(그 단계 다시 시도 {tries}/{STEP_TRIES})")), 0
+        p = unfinished_payload(Unfinished(f"{label} 도중 시간 제한({limit:.0f}초)에 닿아 멈춤 "
+                                          f"(그 단계 다시 시도 {tries}/{STEP_TRIES})"))
+        return p, (0 if p["status"] == "ok" else 1)
     return error_payload(step_too_long_error(label, limit, max(tries, 1))), 1
 
 
@@ -657,8 +712,8 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             **{k: v for k, v in getattr(exc, "extra", {}).items()
                if k not in ("status", "message", "agent_directive", "error_type")},
             "agent_directive": (
-                "STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 그 값으로 바꿔 1번만 다시 실행하세요 "
-                "([추천] 뒤가 python으로 시작하면 전체 명령이니 그대로 1번 실행). 없으면 message를 그대로 알리세요."
+                "STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 실행하세요. "
+                "없으면 다시 실행하지 말고 message를 그대로 알리세요."
                 + (f" {hint}" if hint else "")
             ),
         }
@@ -685,6 +740,9 @@ def note_recovered(msg: str) -> None:
 def _with_recovered(payload: Dict[str, Any]) -> Dict[str, Any]:
     if _RECOVERED and "recovered" not in payload:
         payload = {**payload, "recovered": list(_RECOVERED)}
+    chosen = globals().get("MODEL_CHOSEN")
+    if chosen and payload.get("status") == "ok" and "model_chosen" not in payload:
+        payload = {**payload, "model_chosen": chosen[-1]}      # -m <데이터 파일>: 도구가 고른 버전 (2.9.71)
     return payload
 
 
@@ -853,6 +911,7 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     SAVE_FAILED.clear()
     RUN_SAVED.clear()
     RUN_COMMITTED.clear()
+    MODEL_CHOSEN.clear()
     CURRENT_STEP.clear()
     WATCHDOG_HOLD.clear()
     _RESUME_PLACE.clear()
@@ -863,7 +922,12 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
         result = execute()
     except Unfinished as u:
         sys.stderr.write(f"[STATUS] 시간 제한으로 여기서 멈춤 (저장됨, 같은 명령으로 이어서): {u.progress}\n")
-        emit_json_response(_with_recovered(unfinished_payload(u)))
+        payload = _with_recovered(unfinished_payload(u))
+        if payload["status"] != "ok":
+            write_error_log(payload)
+        emit_json_response(payload)
+        if payload["status"] != "ok":
+            sys.exit(1)
         return
     except KeyboardInterrupt as e:
         sys.stderr.write("\n[ERROR] 실행 중단 (KeyboardInterrupt)\n")
@@ -874,6 +938,7 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
         trace = traceback.format_exc()
         sys.stderr.write(f"\n[ERROR] {e}\n")
         payload = _with_recovered(error_payload(e, hint))
+        continue_clear()
         write_error_log(payload, trace if payload.get("error_type") == "internal" else "")
         emit_json_response(payload)
         sys.exit(1)
@@ -881,12 +946,13 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
         if watchdog is not None:
             watchdog.cancel()
         step_end()       # ended by itself (also with an error): only a run stopped from outside leaves its mark
+    continue_clear()
     emit_json_response(_with_recovered(result))
 
 
 # Option names a light LLM invents for an option that exists (2.9.69): an argument error gives [추천] the full command
-# with the real option (the first of the list this command has). One that starts the real option ('--target' for
-# --targets: argparse's abbreviation before 2.9.69, allow_abbrev is now off) is read as the real option, with [INFO].
+# with the real option (the first of the list this command has). None is read as the real option (2.9.71: one way to
+# write each option, AGENTS.md "사용법 단순성" 1; '--target' for --targets is an argument error with that [추천]).
 SAME_MEANING: Dict[str, List[str]] = {
     "--model-dir": ["--model"], "--model-path": ["--model"], "--models": ["--model"], "--dir": ["--model"],
     "--version-dir": ["--model"], "--model-folder": ["--model"],
@@ -897,13 +963,18 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--feature": ["--features"], "--columns": ["--features"], "--feature-cols": ["--features"], "--x": ["--features"],
     "--output": ["--save"], "--out": ["--save"], "--output-file": ["--save"], "-o": ["--save"],
     "--header": ["--header-row"], "--unit": ["--unit-row"], "--exclude": ["--exclude-where"],
-    "--positive": ["--positive-class"], "--time": ["--time-limit"],
+    "--positive": ["--positive-class"], "--time": ["--time-limit"], "--description": ["--desc"],
 }
 # Options with nothing to do in ml-kit: dropped in the [추천] command (value: how many arguments follow)
 DROP_OPTIONS = {"--json": 0, "--encoding": 1, "--verbose": 0, "--quiet": 0}
 # Never given as a lookalike, even as [후보]: replaces files or retrains everything
 NO_FUZZY_OPTIONS = {"--overwrite", "--best", "--help"}
 _OPTION_TOKEN = re.compile(r"--?[A-Za-z][A-Za-z0-9_-]*")
+
+
+# 스크립트 -> 그 명령을 설명하는 작업별 스킬 (skills/<이름>/SKILL.md, 2.9.71에 스킬 하나를 넷으로 나눔)
+SKILL_OF_SCRIPT = {"ml_train.py": "ml-train", "ml_predict.py": "ml-predict", "ml_report.py": "ml-report",
+                   "ml_export.py": "ml-report", "ml_map.py": "ml-map"}
 
 
 class _ProbeError(Exception):
@@ -914,7 +985,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
     """argparse that reports usage errors as Agent CLI Protocol JSON instead of bare text. Every ml-kit command takes
     --time-limit SEC (over ML_KIT_TIME_LIMIT, 0 = none): the [추천] command of a step longer than the limit
     (step_too_long_error). Abbreviations are not read (allow_abbrev=False: '--data x' was --data-row); the same-meaning
-    names (SAME_MEANING) are mapped instead."""
+    names (SAME_MEANING) are not read either: an argument error with [추천] the fixed full command."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("allow_abbrev", False)
@@ -935,16 +1006,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         given = [str(a) for a in (sys.argv[1:] if args is None else args)]
         if not self._probing:
             self._given = given                       # what _hint fixes
-        opts = self._options()
-        read: List[str] = []
-        for a in given:
-            key, eq, val = str(a).partition("=")
-            real = self._same_meaning(key) if key.startswith("--") and key not in opts else None
-            if real and real.startswith(key):              # the abbreviation argparse read before 2.9.69
-                if not self._probing:
-                    sys.stderr.write(f"[INFO] 옵션 {key}을(를) {real}(으)로 읽음\n")
-                a = real + eq + val
-            read.append(a)
+        read = given
         ns, extra = super().parse_known_args(read, namespace)
         if getattr(ns, "time_limit", None) is not None and not self._probing:
             TIME_LIMIT_ARG[:] = [float(ns.time_limit)]
@@ -1012,10 +1074,11 @@ class JsonArgumentParser(argparse.ArgumentParser):
             super().print_help(sys.stderr)
         except Exception as e:
             sys.stderr.write(f"[WARN] 도움말을 만들지 못했습니다 ({type(e).__name__}). SKILL.md를 보세요.\n")
-        skill = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0] or __file__)), "SKILL.md")
+        name = SKILL_OF_SCRIPT.get(os.path.basename(sys.argv[0] or ""), "ml-train")
+        skill = os.path.join(TOOL_DIR, "skills", name, "SKILL.md")
         emit_json_response({
             "status": "ok", "tool": "ml-kit", "command": "help", "verified": True, "skill_file": skill,
-            "agent_directive": "VERIFIED: 도움말을 stderr에 출력했습니다. SKILL.md의 명령 템플릿을 그대로 사용하세요. "
+            "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {name} 스킬(SKILL.md)의 명령 템플릿을 그대로 사용하세요. "
                                "도구 코드(.py)는 읽지 마세요. 방법을 모르겠으면 사용자에게 물어보세요.",
         })
 
@@ -2982,7 +3045,7 @@ def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> st
     if unit:
         where += f", {unit}행은 단위 행입니다"
     if unit is None and layout.get("unit_row") is None and layout.get("data_row") is None:
-        return f"{where}. [추천] --header-row {row}"
+        return f"{where}. [추천] {option_retry(str(row), '--header-row')}"
     return f"{where}. [추천] {layout_retry(row, unit)}"
 
 
@@ -3871,6 +3934,71 @@ def align_input_columns(df: pd.DataFrame, required: List[str], derived: List[str
 # 4. Target Model Resolution (Directory Mode vs Specific File Mode)
 # ==============================================================================
 
+# ml_train writes <data>_ml_data/best_version.json after every ledger change: per task the version a report or a
+# prediction should use (ml_train task_best_version). `-m <data file>` (or the _ml_data folder) reads it, so the agent
+# never chooses a version folder itself (2.9.71, AGENTS.md "사용법 단순성" 5).
+BEST_POINTER = "best_version.json"
+DATA_EXTS = (".xlsx", ".xls", ".xlsm", ".csv")
+MODEL_CHOSEN: List[str] = []
+
+
+def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: str = "-m") -> str:
+    """-m value -> model path: a version folder or .joblib as given; a data file or its _ml_data folder -> the best
+    version folder of best_version.json (one task, or the task holding `targets`). Several tasks with no way to tell
+    -> STOP_RETRY [후보] full commands; no pointer -> STOP_RETRY [후보] the version folders as full commands."""
+    ap = os.path.abspath(str(path).strip().strip('"'))
+    if os.path.isfile(ap) and os.path.splitext(ap)[1].lower() in DATA_EXTS:
+        root = os.path.join(os.path.dirname(ap), os.path.splitext(os.path.basename(ap))[0] + "_ml_data")
+    elif os.path.isdir(ap) and os.path.basename(ap.rstrip("\\/")).endswith("_ml_data"):
+        root = ap
+    else:
+        return path
+    if not os.path.isdir(root):
+        raise InputError(f"'{os.path.basename(ap)}'의 학습 결과 폴더가 없습니다 ({root}). 먼저 ml_train.py로 학습하십시오.")
+    try:
+        tasks = (json.loads(read_text_file(os.path.join(root, BEST_POINTER))) or {}).get("tasks") or {}
+    except (OSError, ValueError):
+        tasks = {}
+    if not tasks:
+        vers = sorted((d for d in os.listdir(root) if re.match(r"^v\d+$", d) and os.path.isdir(os.path.join(root, d))),
+                      key=lambda d: int(d[1:]))
+        if not vers:
+            raise InputError(f"'{os.path.basename(root)}'에 학습된 버전 폴더가 없습니다. 먼저 ml_train.py로 학습하십시오.")
+        cands = [command_with_value(str(path), os.path.join(root, v)) or os.path.join(root, v) for v in vers[-5:]]
+        raise InputError("최고 버전 기록(best_version.json)이 없어 쓸 버전을 정하지 못했습니다. 쓸 버전을 사용자에게 물으십시오. [후보] "
+                         + " / ".join(f"{i}) {c}" for i, c in enumerate(cands, 1)))
+    keys = {strip_unit(str(t)).strip() for t in (targets or []) if str(t).strip()}
+    picks = list(tasks)
+    if len(picks) > 1 and keys:
+        hold = [t for t in picks if keys & {strip_unit(str(x)).strip() for x in tasks[t].get("targets", [])}]
+        picks = hold or picks
+    if len(picks) > 1:
+        cands = [command_with_value(str(path), os.path.join(root, tasks[t]["version"])) or os.path.join(root, tasks[t]["version"])
+                 for t in picks]
+        raise InputError("회귀와 분류 모델이 함께 있어 어느 버전으로 예측할지 정하지 못했습니다. 사용자에게 물으십시오. [후보] "
+                         + " / ".join(f"{i}) {c} ({t})" for i, (c, t) in enumerate(zip(cands, picks), 1)))
+    info = tasks[picks[0]]
+    vdir = os.path.join(root, info["version"])
+    msg = f"최고 버전 {info['version']} ({picks[0]}, best_version.json)으로 예측"
+    if not info.get("complete", True):
+        msg += f". 이 버전에 없는 타겟 최고 모델: {', '.join(info.get('missing') or [])} (ml_report.py -f로 한 버전에 묶을 수 있음)"
+    sys.stderr.write(f"[INFO] {option} {os.path.basename(ap)} -> {vdir}\n")
+    MODEL_CHOSEN.append(msg)
+    return vdir
+
+
+def resolve_model_arg(args: argparse.Namespace) -> argparse.Namespace:
+    """args.model: a data file -> its best version folder (model_dir_from_data), before any work."""
+    names = []
+    for v in (getattr(args, "targets", None), getattr(args, "maximize", None), getattr(args, "minimize", None)):
+        if v:
+            names += [x for x in str(v).split(",") if x.strip()]
+    if getattr(args, "find", None):
+        names.append(str(args.find).split("=", 1)[0])
+    args.model = model_dir_from_data(args.model, names)
+    return args
+
+
 def resolve_target_models(
     target_path: str,
     filter_targets: Optional[List[str]] = None,
@@ -4569,7 +4697,7 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
             row, unit = found
             where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
             if unit is None and not _has_layout(args):
-                return f"{where}. [추천] --header-row {row}"
+                return f"{where}. [추천] {option_retry(str(row), '--header-row')}"
             layout = f"--header-row {row}"
             if unit:
                 where += f", {unit}행은 단위 행입니다"
@@ -4764,7 +4892,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         out_ext = os.path.splitext(args.save)[1].lower()
         if out_ext not in (".csv", ".xlsx", ".xls"):
             raise InputError(f"결과 파일(--save)은 .csv 또는 .xlsx만 저장합니다: '{os.path.basename(args.save)}'. "
-                             f"[추천] {os.path.splitext(args.save)[0]}.csv")
+                             f"[추천] {option_retry(os.path.splitext(args.save)[0] + '.csv', '--save')}")
 
     # 2. Resolve Input Data (Batch File or Inline Input)
     file_warnings: List[str] = []
@@ -5085,6 +5213,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     agent_directive = (
         ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + f"타겟 {len(model_items)}개를 예측했습니다. "
+        + ("predictions_summary의 예측값과 회귀는 intervals(90% 예측 범위), 분류는 probabilities(종류별 확률)를 알리세요. "
+           if not saved_file else "결과 파일 output_file 경로를 알리세요. ")
         + ("학습 범위 밖 입력이 있어 예측은 참고용입니다 (extrapolation_warnings). " if drift_warnings else "")
         + (f"extrapolation_warnings에는 {len(drift_warnings)}건 중 {WARNINGS_SHOW_MAX}건만 있으니 전체 건수도 알리세요. "
            if len(drift_warnings) > WARNINGS_SHOW_MAX else "")
@@ -5628,7 +5758,7 @@ def _save_table(args: argparse.Namespace, df: pd.DataFrame, default_name: str, w
         path = os.path.abspath(args.save)
         if os.path.splitext(path)[1].lower() not in (".xlsx", ".csv"):
             raise InputError(f"결과 파일(--save)은 .xlsx 또는 .csv만 저장합니다: '{os.path.basename(path)}'. "
-                             f"[추천] {os.path.splitext(args.save)[0]}.xlsx")
+                             f"[추천] {option_retry(os.path.splitext(args.save)[0] + '.xlsx', '--save')}")
     else:
         path = os.path.join(os.path.dirname(_version_dir_of_args(args)), default_name + ".xlsx")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -5926,7 +6056,7 @@ def main():
     )
     parser.add_argument(
         "--model", "-m", required=True,
-        help="학습 산출물 버전 폴더 경로(예: sample_v2_ml_data/v1/) 또는 개별 .joblib 파일 경로"
+        help="학습한 데이터 파일(도구가 최고 버전을 고름), 버전 폴더(예: sample_ml_data/v1) 또는 .joblib 파일"
     )
     parser.add_argument(
         "--targets", "-y",
@@ -5970,26 +6100,26 @@ def main():
             parser.error("조건별 예측(--sweep)에는 --find, --maximize, --minimize, -f를 함께 쓰지 않습니다.")
         if args.vary:
             parser.error("--sweep에는 바꿀 입력을 --sweep 값에 씁니다 (예: --sweep \"반응온도=170:200:5\"). --vary를 빼십시오.")
-        run_cli(lambda: execute_sweep(args), hint="확인할 것: 입력 이름과 --sweep 범위.")
+        run_cli(lambda: execute_sweep(resolve_model_arg(args)), hint="확인할 것: 입력 이름과 --sweep 범위.")
         return
     if search:
         if args.find or args.file or args.targets:
             parser.error("조건 찾기(--maximize/--minimize)에는 --find, -f, -y를 함께 쓰지 않습니다.")
         if not args.vary:
             parser.error("조건 찾기(--maximize/--minimize)에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다.")
-        run_cli(lambda: execute_search(args), hint="확인할 것: 타겟, --vary, --where의 이름.")
+        run_cli(lambda: execute_search(resolve_model_arg(args)), hint="확인할 것: 타겟, --vary, --where의 이름.")
         return
     if args.find or args.vary:
         if not (args.find and args.vary):
             parser.error("모델 반대 찾기는 --find와 --vary를 함께 주어야 합니다.")
         if args.file or args.targets or args.save:
             parser.error("반대 찾기(--find)에는 -f, -y, --save를 쓰지 않습니다.")
-        run_cli(lambda: execute_find(args), hint="확인할 것: 타겟 이름과 입력 이름.")
+        run_cli(lambda: execute_find(resolve_model_arg(args)), hint="확인할 것: 타겟 이름과 입력 이름.")
         return
     if not args.file and not args.input:
         parser.error("추론을 수행하려면 --file (배치 파일) 또는 --input (인라인 데이터) 중 하나를 지정해야 합니다.")
 
-    run_cli(lambda: execute_predict(args), hint="확인할 것: 모델 폴더 경로와 입력 이름.")
+    run_cli(lambda: execute_predict(resolve_model_arg(args)), hint="확인할 것: 모델 폴더 경로와 입력 이름.")
 
 
 if __name__ == "__main__":

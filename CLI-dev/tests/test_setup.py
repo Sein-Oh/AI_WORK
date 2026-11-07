@@ -94,7 +94,8 @@ def test_sources_exist_in_repo_layout():
 def test_apply_copies_new_then_reports_same(monkeypatch, tmp_path, capsys):
     cli, cfg = _iso(monkeypatch, tmp_path)
     assert su.main(["--config-dir", str(cfg), "--no-path"]) == 0
-    assert (cfg / "skills" / "ml-kit" / "SKILL.md").read_bytes() == (cli / "ml-kit" / "SKILL.md").read_bytes()
+    for name in ("ml-train", "ml-predict", "ml-report", "ml-map"):
+        assert (cfg / "skills" / name / "SKILL.md").read_bytes() == (cli / "ml-kit" / "skills" / name / "SKILL.md").read_bytes()
     assert (cfg / "AGENTS.md").read_bytes() == (cli / "opencode" / "AGENTS.md").read_bytes()
     assert not (cfg / "skills" / "office-cli-test").exists()
     assert not (cli / "data").exists()                                    # 덮어쓴 것이 없으면 보관도 없음
@@ -110,7 +111,7 @@ def test_changed_file_is_backed_up_and_check_fails_before_apply(monkeypatch, tmp
     su.main(["--config-dir", str(cfg), "--no-path"])
     old = cfg / "skills" / "office-excel" / "SKILL.md"
     old.write_text('---\nname: office-excel\nmetadata:\n  version: "1.0.0"\n---\n옛 내용', encoding="utf-8")
-    (cfg / "skills" / "ml-kit" / "ml_train.py").write_text("x", encoding="utf-8")
+    (cfg / "skills" / "ml-train" / "ml_train.py").write_text("x", encoding="utf-8")
     capsys.readouterr()
     assert su.main(["--config-dir", str(cfg), "--no-path", "--check"]) == 1
     out = capsys.readouterr().out
@@ -140,6 +141,22 @@ def test_old_office_cli_skill_is_backed_up_and_removed(monkeypatch, tmp_path, ca
     assert len(kept) == 1 and "옛 통합 스킬" in kept[0].read_text(encoding="utf-8")
     assert "보관 후 지움" in capsys.readouterr().out
     assert su.main(["--config-dir", str(cfg), "--no-path", "--check"]) == 0
+
+
+def test_old_ml_kit_skill_is_backed_up_and_removed(monkeypatch, tmp_path, capsys):
+    """2.9.71: ml-kit 스킬을 넷(ml-train, ml-predict, ml-report, ml-map)으로 나눔. 옛 skills\\ml-kit이 남으면 OpenCode가 옛 스킬도 고름."""
+    cli, cfg = _iso(monkeypatch, tmp_path)
+    su.main(["--config-dir", str(cfg), "--no-path"])
+    old = cfg / "skills" / "ml-kit" / "SKILL.md"
+    old.parent.mkdir(parents=True)
+    old.write_text('---\nname: ml-kit\nmetadata:\n  version: "2.9.70"\n---\n옛 통합 스킬', encoding="utf-8")
+    capsys.readouterr()
+    assert su.main(["--config-dir", str(cfg), "--no-path", "--check"]) == 1
+    assert "옛 ml-kit 스킬: 지울 것" in capsys.readouterr().out
+    assert su.main(["--config-dir", str(cfg), "--no-path"]) == 0
+    assert not old.parent.exists() and len(_backups(cli, "config/skills/ml-kit/SKILL.md")) == 1
+    for name in su.ML_SKILLS:
+        assert (cfg / "skills" / name / "SKILL.md").is_file()
 
 
 def test_old_office_cli_skill_link_removes_only_link(monkeypatch, tmp_path, capsys):

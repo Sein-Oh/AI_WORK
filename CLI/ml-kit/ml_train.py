@@ -30,7 +30,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text, quote_arg,
     parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
-    RESUME_MAX_AGE, option_retry, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed, committed_rerun_safe,
+    RESUME_MAX_AGE, option_retry, BEST_POINTER, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed, committed_rerun_safe,
 )
 
 setup_console()
@@ -238,7 +238,7 @@ def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Option
             close = difflib.get_close_matches(k.lower(), list(DTYPE_WORDS), n=1, cutoff=0.6)
             sure = sure and bool(close)
             fixed.append(f"{n}:{DTYPE_WORDS[close[0]]}" if close else f"{n}:{k}")
-        rec = f" [추천] --dtypes \"{','.join(fixed)}\"" if sure else ""
+        rec = f" [추천] {option_retry(','.join(fixed), '--dtypes')}" if sure else ""
         raise InputError(f"--dtypes의 형식 {[k for _, k in bad]}을(를) 알 수 없습니다. 쓸 수 있는 형식: float, int, str, datetime.{rec}")
     names, _ = resolve_column_names([n for n, _ in pairs], columns, "--dtypes 열", layout=layout)
     out = dict(zip(names, (DTYPE_WORDS[k.lower()] for _, k in pairs)))
@@ -1550,6 +1550,23 @@ def append_history_ledger(ledger_path: str, record: Dict[str, Any],
         atomic_write_text(json_path, dumps_json(all_records, indent=2))
     except OSError as e:
         sys.stderr.write(f"[WARN] history.json 동기화 실패 (history.jsonl은 정상 기록됨): {e}\n")
+    write_best_pointer(data_root, all_records)
+
+
+def write_best_pointer(data_root: str, records: List[Dict[str, Any]]) -> None:
+    """<data_root>/best_version.json: per task the version every target should be predicted with (task_best_version,
+    the same choice as --history best_version and the report). ml_predict -m <data file> reads it (2.9.71). A failure
+    only warns: ml_predict then asks which version folder to use."""
+    try:
+        tasks: Dict[str, Any] = {}
+        for task in TASK_ORDER:
+            if any(_record_task(r) == task for r in records):
+                info = task_best_version(records, data_root, task)
+                if info:
+                    tasks[task] = {k: info[k] for k in ("version", "mean_val_score", "targets", "complete", "missing")}
+        atomic_write_text(os.path.join(data_root, BEST_POINTER), dumps_json({"tasks": tasks}, indent=2))
+    except Exception as e:      # the ledger itself is written; the pointer is a convenience for ml_predict
+        sys.stderr.write(f"[WARN] best_version.json 쓰기 실패 ({type(e).__name__}): {e}\n")
 
 
 def load_history_ledger(ledger_path: str) -> List[Dict[str, Any]]:
@@ -2837,6 +2854,19 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 target_names=target_names, champion={**prim_champ, "weak_features": weak_feats}, schema=g0["schema"],
                 mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir, exclude_where=g0["where"],
             )
+        # 2.9.71: the tool counts the improvement rounds (AGENTS.md "사용법 단순성" 5): when the last IMPROVE_ROUNDS
+        # runs of this task and targets (this one included) did not beat the best score before them, it stops offering
+        # more retraining and offers the report instead
+        improve_stopped = None
+        if not best_info and min_score < 0.90:
+            scores = [float(h["mean_val_score"]) for h in history_records
+                      if _same_experiment(h, task, target_names) and isinstance(h.get("mean_val_score"), (int, float))]
+            scores.append(float(mean_val_score))
+            if len(scores) > IMPROVE_ROUNDS and max(scores[-IMPROVE_ROUNDS:]) <= max(scores[:-IMPROVE_ROUNDS]) + 1e-4:
+                improve_stopped = (f"최근 {IMPROVE_ROUNDS}번의 학습이 이전 최고 점수({max(scores[:-IMPROVE_ROUNDS]):.4f})를 넘지 못해 "
+                                   f"재학습 제안을 멈춤. 지금까지의 최고 모델로 보고서를 만듭니다")
+                next_commands = [{"purpose": REPORT_PURPOSE[task], "needs_input": False,
+                                  "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} -f {quote_arg(raw_file)}"}]
         if not best_info:     # a plain run: the command again with the condition covering the other notations
             where_fixes = [g["where_fix"] for g in prepared if g.get("where_fix")]
             next_commands = [c for i, c in enumerate(where_fixes) if c not in where_fixes[:i]] + next_commands
@@ -2902,6 +2932,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                "그 파일은 열지 말고 다른 이유를 짐작하지 마세요. " if excl_brief else "")
             + ("preview의 중요 입력(top_features, 전체 입력 대비 비중)을 알리세요. " if top_brief else "")
             + ("warnings(중복 행, 반복된 머리글 행, 합계 행 등)를 빠짐없이 알리세요. " if train_warnings else "") +
+            (f"{improve_stopped} (improve_stopped를 알리세요). " if improve_stopped else "") +
             "다음: 사용자가 원하면 next_commands[0]을 실행하거나 예측으로 넘어갑니다. "
             "needs_input=true인 명령의 자리표시자는 사용자가 준 경로로 바꾸고, 모르면 먼저 물으세요."
         )
@@ -2919,6 +2950,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             **score_keys,
             "is_best": is_best,
             "goal_met": bool(min_score >= 0.90),
+            **({"improve_stopped": improve_stopped} if improve_stopped else {}),
             "verified": not unverified,
             "recommendations": recommendations,
             "next_commands": next_commands,
@@ -2972,6 +3004,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
 
 
+IMPROVE_ROUNDS = 5   # training runs in a row without a new best before the tool stops offering retraining (2.9.71)
 REPORT_PURPOSE = {  # a regression report also makes the performance calculator (ml_export.py)
     TASK_REGRESSION: "ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (모든 타겟, 입력을 줄이며 다시 학습해 몇 분 걸림. "
                      "성능예측표 제목은 학습 때 데이터 설명에서 자동으로 정함)",
@@ -3485,7 +3518,10 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
         "latest_version": rows[-1]["version"],
         "records": shown,
         "verified": True,
-        "agent_directive": ("VERIFIED: 학습 이력입니다. history.jsonl을 다시 읽지 마세요."
+        "preview": (f"학습 기록 {len(rows)}건, 마지막 {rows[-1]['version']}"
+                    + (f", 최고 {best['version']} (점수 {best['mean_val_score']})" if best else "")),
+        "agent_directive": ("VERIFIED: 학습 이력입니다. records의 version, mean_val_score, delta_score, tag를 표로 알리세요. "
+                            "history.jsonl을 다시 읽지 마세요."
                             + (f" records에는 최근 {len(shown)}건만 있습니다 (전체 {len(rows)}건: full_result_file)." if cut else "")
                             + (f" 사용자에게 알리세요: {note}" if note else "")),
     }
@@ -3501,7 +3537,7 @@ def main():
     parser.add_argument("--eval", help="방탄 AST 파생변수 생성 수식 (세미콜론 구분). 컬럼명은 전체 이름 또는 단위를 뺀 고유 이름")
     parser.add_argument("--tag", help="해당 회차 실험 의도 및 변경 사항 메모 태그 (예: '베이스라인_학습', '파생변수2종_추가')")
     parser.add_argument(
-        "--description", "--desc", dest="description",
+        "--desc", dest="description",
         help="데이터셋 도메인 및 모델링 목적 설명 (문자열 또는 파일 경로 .txt, .md 지원. 미지정 시 이전 회차 설명 자동 상속)"
     )
     parser.add_argument("--header-row", type=int, help="컬럼명 헤더 행 번호 (1-based, 미지정 시 상단 빈 행 자동 건너뜀)")

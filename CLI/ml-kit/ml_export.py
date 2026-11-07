@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
     VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, mark_committed, resume_find, resume_save, resume_clear, save_failed_warning,
-    step_begin, step_end, step_label,
+    step_begin, step_end, step_label, option_retry, model_dir_from_data,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
@@ -903,6 +903,7 @@ def inputs_arg(choice: Dict[str, List[str]], single: bool) -> str:
 
 def execute_export(args) -> Dict[str, Any]:
     global FIT_CACHE
+    args.model = model_dir_from_data(args.model, [t for t in str(args.targets or "").split(",") if t.strip()])
     vinfo = load_version(args.model, args.targets)
     FIT_CACHE = os.path.join(vinfo["dir"], "export", "_fits")
     data_all = vinfo["data"]
@@ -1002,7 +1003,7 @@ def execute_export(args) -> Dict[str, Any]:
         if not spec_safe(choice, len(vinfo["targets"]) == 1):
             raise InputError(f"{head} 줄인 입력: {choice}. 타겟이나 입력 이름에 ',' ';' '='가 있어 --inputs로 쓸 수 없습니다. "
                              f"--inputs 없이 실행하면 입력을 자동으로 고릅니다 (--keep으로 꼭 넣을 입력 지정).")
-        raise InputError(f"{head} [추천] {inputs_arg(choice, len(vinfo['targets']) == 1)}")
+        raise InputError(f"{head} [추천] {option_retry(inputs_arg(choice, len(vinfo['targets']) == 1), '--inputs')}")
 
     # retrained models and the candidate table next to the version (never inside the version files)
     exp_dir = os.path.join(vinfo["dir"], "export")
@@ -1117,7 +1118,7 @@ def execute_export(args) -> Dict[str, Any]:
 def main():
     setup_console()
     parser = JsonArgumentParser(description="ml-kit 성능예측표 (엑셀, 수식만, 잠금) 내보내기")
-    parser.add_argument("--model", "-m", required=True, help="학습 결과 버전 폴더 (예: 공정_ml_data/v3)")
+    parser.add_argument("--model", "-m", required=True, help="학습한 데이터 파일(도구가 최고 버전을 고름) 또는 버전 폴더 (예: 공정_ml_data/v3)")
     parser.add_argument("--targets", "-y", help="표로 만들 숫자 타겟 (쉼표 구분, 생략 시 전부)")
     parser.add_argument("--keep", help="입력을 줄일 때 꼭 포함할 입력 (쉼표 구분)")
     parser.add_argument("--inputs", help=f"최적화 없이 이 입력 조합으로 바로 만들기 (쉼표 구분, 최대 {MAX_INPUTS}개). "

@@ -1321,7 +1321,7 @@ def test_resolve_dtypes_names_and_types():
     assert mt.resolve_dtypes(None, cols) is None and mt.resolve_dtypes(" ", cols) is None
     with pytest.raises(mp.InputError) as e:
         mt.resolve_dtypes("설비코드:strr,일시:datetime", cols)
-    assert '[추천] --dtypes "설비코드:str,일시:datetime"' in str(e.value)
+    assert '[추천] --dtypes 설비코드:str,일시:datetime' in str(e.value)        # 함수 직접 호출: 옵션과 값 (명령으로 실행하면 전체 명령)
     with pytest.raises(mp.InputError) as e:
         mt.resolve_dtypes("설비코드:텍스트", cols)
     assert "[추천]" not in str(e.value) and "float, int, str, datetime" in str(e.value)
@@ -1339,7 +1339,7 @@ def test_train_dtypes_unitless_name_applies(tmp_path):
     res = run_tool("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:str")
     assert "설비코드(번호)" in res["feature_types"]["categorical"], res["feature_types"]    # 2.9.46: ignored (numeric)
     err = run_fail("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:strr")
-    assert err["agent_directive"].startswith("STOP_RETRY") and '[추천] --dtypes "설비코드:str"' in err["message"], err
+    assert err["agent_directive"].startswith("STOP_RETRY") and recommended_command(err["message"])[1][-2:] == ["--dtypes", "설비코드:str"], err
 
 
 # ---- JSON 목록 상한 + truncated (R2, 2.9.49) ---------------------------------------------------------------------
@@ -1418,7 +1418,7 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
     assert [h["version"] for h in hist] == ["v1"]
     assert not (root / ".resume_train").exists()                                       # cleaned after the commit
-    assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
+    assert sorted(os.listdir(root)) == [".train.lock", "best_version.json", "history.json", "history.jsonl", "v1"]
 
 
 def _assert_same_version(a, b):
@@ -2382,3 +2382,17 @@ def test_dry_run_shows_version_and_replaced_folder_without_training(tmp_path):
     assert "--overwrite" in argv and "--dry-run" not in argv
     assert sorted(os.listdir(root)) == ["v1"] and os.listdir(root / "v1") == ["model_a.joblib"]      # 아무것도 바꾸지 않음
     assert run_fail("ml_train.py", "-f", data, "--best", "--dry-run")["error_type"] == "input"
+
+
+def test_tool_stops_offering_retraining_after_rounds_without_gain(tmp_path):
+    """2.9.71: 개선 반복 횟수는 도구가 센다. 같은 타겟 학습이 IMPROVE_ROUNDS(5)번 연속 이전 최고를 넘지 못하면
+    재학습 next_commands 대신 보고서 명령 하나와 improve_stopped (LLM이 5번을 세지 않음)."""
+    data = make_sample(str(tmp_path / "d.csv"))
+    x = "반응온도(°C),소비전력(kW),압축압력(bar)"
+    for i in range(mt.IMPROVE_ROUNDS):
+        res = run_tool("ml_train.py", "-f", data, "-x", x, "-y", TARGET)
+        assert res["goal_met"] is False and "improve_stopped" not in res, (i, res.get("improve_stopped"))
+    res = run_tool("ml_train.py", "-f", data, "-x", x, "-y", TARGET)
+    assert "improve_stopped" in res and len(res["next_commands"]) == 1, res
+    argv = split_command(res["next_commands"][0]["command"])
+    assert os.path.basename(argv[1]) == "ml_report.py" and argv[argv.index("-f") + 1] == data, argv

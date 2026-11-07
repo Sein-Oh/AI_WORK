@@ -24,7 +24,10 @@
 | Word, PowerPoint 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 슬라이드, 발표자 노트, 앱 사이 옮기기) | `office-doc` |
 | Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일) | `office-mail` |
 | PDF, HWP, Office 파일 읽기와 근거 검색, 두 판 비교, 엑셀 표를 규격서와 대조 | `office-spec` |
-| 표(Excel/CSV) 데이터로 예측 모델 학습, 새 데이터 예측, ML 결과 보고서 | `ml-kit` |
+| 표(Excel/CSV) 데이터로 예측 모델 학습, 성능 개선, 학습 이력 | `ml-train` |
+| 학습한 모델로 예측, 목표값이 되는 조건 찾기, 조건별 예측, 최적 조건 | `ml-predict` |
+| ML 결과 보고서(Word), 성능예측표(엑셀 계산기) | `ml-report` |
+| 모델 없이 표 데이터에서 사잇값 보간, 목표값이 되는 기준값 찾기 | `ml-map` |
 
 1. 위 작업은 스킬 명령으로만 한다. pandas, openpyxl, python-docx, win32com 등으로 파이썬 코드를 직접 짜서 하지 않는다.
    파일 내용이나 행 수 확인도 스킬로 한다: 엑셀/CSV는 `excel.py read --target "<파일>"`, 그 밖의 문서는 `reader.py read --file "<파일>"`.
@@ -32,7 +35,7 @@
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
    - office-cli: `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\office-cli\skills\office-excel\SKILL.md`)
-   - ml-kit: `C:\CLI\ml-kit\SKILL.md`
+   - ml-kit: `C:\CLI\ml-kit\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\ml-kit\skills\ml-train\SKILL.md`)
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
 5. 명령은 1번만 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]`, `[INFO]`, `[WARN]` 줄은 무시한다.
 6. JSON에 `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다(작은따옴표 `'...'`와 `\"`도 바꾸지 않는다). 명령을 새로 만들지 않는다.
@@ -48,8 +51,8 @@
 |---|---|
 | `VERIFIED:` | 성공. `preview`를 알리고 끝낸다. 같은 명령을 다시 실행하거나 결과를 다시 열어 보지 않는다. `confirm_commands`가 있으면 3장 6번대로 사용자에게 묻는다. |
 | `UNVERIFIED:` | 실행은 됐지만 도구가 결과를 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
-| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `VERIFIED:`/`UNVERIFIED:`가 나올 때까지 반복한다. `progress`가 바뀌는 동안(`약 N단계 남음`이 줄거나 글이 달라짐) 계속한다(느린 PC에서는 100번 넘게 걸릴 수 있음). 바로 앞과 같은 `progress`가 나오거나(2번 연속) 300번을 넘으면 멈추고 `progress`를 알린다. |
-| `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그 명령을 그대로 **1번만** 실행한다. 아니면 `[추천]` 뒤의 값으로 바꿔 **1번만** 다시 실행한다. 또 실패하면 message를 그대로 알린다. |
+| `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `CONTINUE:`가 아닌 결과가 나올 때까지 반복한다 (느린 PC에서는 100번 넘게 걸릴 수 있음). 횟수는 세지 않는다: 끝나지 않을 것 같으면 도구가 `STOP_RETRY:`로 멈춘다. |
+| `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤의 명령을 글자 그대로 **1번만** 실행한다. 또 실패하면 message를 그대로 알린다. |
 | `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). 고른 값으로 1번 실행한다. 후보가 `1) python ...` 같은 전체 명령이면 고른 번호의 `next_commands` 명령을 그대로 1번 실행한다. |
 | `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `error_type`이 `needs_user_decision`이면 사용자에게 묻고, 원할 때만 `next_commands[0].command`를 그대로 1번 실행한다 (없으면 directive가 말한 옵션을 붙여 1번, 5장). |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |

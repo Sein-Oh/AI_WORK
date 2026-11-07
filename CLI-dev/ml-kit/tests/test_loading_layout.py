@@ -236,7 +236,8 @@ def test_two_level_header_hint(tmp_path, layout):
     p = tmp_path / "merged.xlsx"
     wb.save(p)
     bad = run_fail("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "수율")
-    assert "[추천] --header-row 2" in bad["message"]                              # 2.9.12: no hint
+    _, rec = recommended_command(bad["message"])                                  # 2.9.12: no hint, 2.9.71: 전체 명령
+    assert rec[rec.index("--header-row") + 1] == "2" and rec.count("--header-row") == 1, rec
     v = run_tool("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "수율", "--header-row", "2")["version_dir"]
     ok = run_tool("ml_predict.py", "-m", v, "-f", str(p))                       # 2.9.53: [추천] --header-row 2
     assert ok["sample_count"] == 30 and ok["recovered"] == ["머리글 2행으로 읽음"], ok
@@ -440,7 +441,8 @@ def two_level(tmp_path_factory):
 
 def test_text_first_row_header_hint_has_no_unit_row(two_level):
     bad = run_fail("ml_train.py", "-f", two_level, "-x", "라인,설비,작업자,온도", "-y", "등급", "--task", "classification")
-    assert recommendation(bad["message"]) == "--header-row 2"     # 2.9.15: --header-row 2 --unit-row 3
+    _, rec = recommended_command(bad["message"])                  # 2.9.15: --header-row 2 --unit-row 3, 2.9.71: 전체 명령
+    assert rec[rec.index("--header-row") + 1] == "2" and "--unit-row" not in rec, rec
     assert "단위 행" not in bad["message"]
     res = run_tool("ml_train.py", "-f", two_level, "-x", "라인,설비,작업자,온도", "-y", "등급", "--task", "classification",
                    "--header-row", "2")
