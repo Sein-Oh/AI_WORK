@@ -332,6 +332,11 @@ if os.environ.get("FAKE_OC_DEAD"):
     sys.exit(1)
 sid = argv[argv.index("--session") + 1] if "--session" in argv else "ses_fake1"
 msg = argv[-1]
+model = argv[argv.index("--model") + 1] if "--model" in argv else ""
+if model and model in os.environ.get("FAKE_OC_LIMITED", "").split(","):     # 이 모델은 사용량 제한
+    sys.stdout.write(json.dumps({"type": "error", "timestamp": 1, "sessionID": sid,
+                                 "error": {"name": "APIError", "data": {"message": "429 Too Many Requests: rate limit exceeded"}}}) + "\n")
+    sys.exit(1)
 def ev(kind, part, ts):
     part = dict(part, sessionID=sid, messageID="msg_" + str(ts))
     sys.stdout.write(json.dumps({"type": kind, "timestamp": ts, "sessionID": sid, "part": part}, ensure_ascii=False) + "\n")
@@ -347,6 +352,11 @@ else:
 
 @pytest.fixture
 def fake_oc(tmp_path):
+    for tool, name in (("ml-kit", "make_beta_samples.py"), ("office-cli", "make_office_samples.py")):   # 러너가 직접 실행하는 준비 스크립트
+        script = tmp_path / tool / "tools" / name
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("import sys, os\nos.makedirs(sys.argv[1], exist_ok=True)\nopen(os.path.join(sys.argv[1], '%s.done'), 'w').close()\n"
+                          "print('{\"status\": \"ok\"}')\n" % name, encoding="utf-8")
     exe = tmp_path / "bin" / "opencode"
     exe.parent.mkdir()
     exe.write_text(FAKE_OPENCODE, encoding="utf-8")
@@ -368,19 +378,21 @@ def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc,
     assert code == 1                                            # 가짜는 S0만 맞게 답함
     _, by_id, order = rat._load_grader().load_scenarios()
     manual = [s for s in order if by_id[s].get("manual")]           # 사람이 준비해야 하는 요청 (O3, Outlook 메일)
+    setup = [s for s in order if by_id[s].get("setup")]             # 시험 자료 준비 (S0, S1): 러너가 직접 실행
     calls = _calls(fake_oc)
-    assert manual and len(calls) == len(order) - len(manual)
-    assert not any(c[-1].startswith(f"[{s}]") for c in calls for s in manual)
+    assert manual and setup == ["S0", "S1"] and len(calls) == len(order) - len(manual) - len(setup)
+    assert not any(c[-1].startswith(f"[{s}]") for c in calls for s in manual + setup)
+    assert (work / "make_beta_samples.py.done").exists() and (work / "make_office_samples.py.done").exists()
     assert calls[0][:3] == ["run", "--format", "json"] and "--session" not in calls[0]
     assert all(c[c.index("--session") + 1] == "ses_fake1" for c in calls[1:])      # 같은 세션에 이어서
-    assert calls[0][-1].startswith("[S0] ") and str(work) in calls[0][-1] and "{DIR}" not in calls[0][-1]
-    assert not work.exists() and any(p.name.startswith("gemma_old_") for p in work.parent.iterdir())   # 지우지 않고 옮김
+    assert calls[0][-1].startswith("[A1] ") and str(work) in calls[0][-1] and "{DIR}" not in calls[0][-1]
+    assert any(p.name.startswith("gemma_old_") for p in work.parent.iterdir())     # 옛 폴더는 지우지 않고 옮김
     runs = next(p for p in (iso / "work").iterdir() if p.name.startswith("gemma_runs_"))   # 시험 흔적은 모두 CLI-dev\work
-    assert {f"{s}.jsonl" for s in order if s not in manual} <= {p.name for p in runs.iterdir()}
+    assert {f"{s}.jsonl" for s in order if s not in manual + setup} <= {p.name for p in runs.iterdir()}
     assert any(p.name.startswith("grade_t_") and p.suffix == ".md" for p in runs.iterdir())
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
     assert "Gemma 종합 테스트" in text and "ses_fake1" in text and "채점 결과" in text
-    assert "[gemma] S0" not in text and "[gemma] A1" in text                     # S0 통과, A1 실패로 목록에
+    assert "[gemma] S0" not in text and "[gemma] A1" in text                     # S0은 세지 않음, A1 실패로 목록에
     for s in manual:                                                             # 수동 전용은 실패가 아니라 건너뜀
         assert text.count(f"[gemma] {s}: ") == 1 and f"[gemma] {s}: 수동 전용" in text
 
@@ -393,6 +405,56 @@ def test_gemma_stage_stops_when_opencode_gives_no_session(iso, fake_oc, monkeypa
     assert len(_calls(fake_oc)) == 1                            # 첫 요청에서 멈춤 (나머지 20개를 기다리지 않음)
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
     assert "opencode가 응답하지 않음" in text and "provider not found" in text
+
+
+@pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
+def test_gemma_only_sends_chosen_requests_with_model(iso, fake_oc, capsys):
+    """--gemma-only: 고른 요청만 시나리오 순서대로, --gemma-model: opencode --model, 요청별 모델을 models.json과 보고서에."""
+    work = iso / "work" / "gemma"
+    rat.main(["--only", "gemma", "--label", "t", "--opencode", str(fake_oc), "--gemma-dir", str(work),
+              "--gemma-only", "p1,A1", "--gemma-model", "or/gemma-4"])
+    calls = _calls(fake_oc)
+    assert [c[-1][:4] for c in calls] == ["[A1]", "[P1]"]                          # 준 순서가 아니라 시나리오 순서
+    assert (work / "make_beta_samples.py.done").exists()                           # 준비는 고르지 않아도 러너가 직접
+    assert all(c[c.index("--model") + 1] == "or/gemma-4" for c in calls)
+    runs = next(p for p in (iso / "work").iterdir() if p.name.startswith("gemma_runs_"))
+    assert json.loads((runs / "models.json").read_text(encoding="utf-8")) == {"A1": "or/gemma-4", "P1": "or/gemma-4"}
+    grade = next(p for p in runs.iterdir() if p.name.startswith("grade_t_") and p.suffix == ".md").read_text(encoding="utf-8")
+    assert "요청별 모델: A1=or/gemma-4, P1=or/gemma-4" in grade
+    text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
+    assert "[gemma] M1" not in text and "[gemma] S0" not in text                   # 고르지 않은 요청, 준비 요청은 세지 않음
+
+
+@pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
+def test_gemma_model_falls_back_on_rate_limit(iso, fake_oc, monkeypatch, capsys):
+    """사용량 제한이면 예비 모델로 같은 요청을 다시 보내고, 그 뒤 요청도 예비 모델로. 제한 기록은 이름을 바꿔 남김."""
+    monkeypatch.setenv("FAKE_OC_LIMITED", "main")
+    work = iso / "work" / "gemma"
+    rat.main(["--only", "gemma", "--label", "t", "--opencode", str(fake_oc), "--gemma-dir", str(work),
+              "--gemma-only", "A1,P1", "--gemma-model", "main,spare"])
+    calls = _calls(fake_oc)
+    assert [(c[-1][:4], c[c.index("--model") + 1]) for c in calls] == [("[A1]", "main"), ("[A1]", "spare"), ("[P1]", "spare")]
+    runs = next(p for p in (iso / "work").iterdir() if p.name.startswith("gemma_runs_"))
+    assert json.loads((runs / "models.json").read_text(encoding="utf-8")) == {"A1": "spare", "P1": "spare"}
+    assert (runs / "A1.limited1.jsonl").exists() and (runs / "A1.jsonl").exists()
+    grade = next(p for p in runs.iterdir() if p.name.startswith("grade_t_") and p.suffix == ".md").read_text(encoding="utf-8")
+    assert "429" not in grade.split("## 요청별 기록")[1].split("### P1")[0]             # 예비 모델의 답으로 채점
+
+
+@pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
+def test_gemma_rate_limit_without_spare_is_unverified_and_unknown_id_fails(iso, fake_oc, monkeypatch, capsys):
+    monkeypatch.setenv("FAKE_OC_LIMITED", "main")
+    work = iso / "work" / "gemma"
+    rat.main(["--only", "gemma", "--label", "t", "--opencode", str(fake_oc), "--gemma-dir", str(work),
+              "--gemma-only", "A1", "--gemma-model", "main"])
+    assert len(_calls(fake_oc)) == 1
+    text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
+    assert "사용량 제한에 걸렸고 예비 모델이 없음" in text
+    for f in _result_files(iso):
+        (iso / f).unlink()
+    assert rat.main(["--only", "gemma", "--opencode", str(fake_oc), "--gemma-dir", str(work), "--gemma-only", "A1,Z9"]) == 1
+    assert len(_calls(fake_oc)) == 1                                               # 모르는 ID면 아무것도 보내지 않음
+    assert "모르는 요청 ID: Z9" in (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
 
 
 def test_all_test_folders_default_under_cli_dev_work(iso):

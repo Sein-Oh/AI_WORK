@@ -12,6 +12,17 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.75] - 2026-11-08
+
+집 PC opencode 모델 비교(2026-11-07, Gemma 4 26B, solar-mini4, solar-pro4)에서 되풀이된 실수의 원인을 도구 쪽에서 줄임.
+
+### 수정
+- 학습 결과 `next_commands`에 한 건 예측 틀 `ml_predict -m <버전> -i "<입력1>=<값>,..."`(모델의 실제 입력 이름, `needs_input`, `placeholder: <값>`, 맨 뒤).
+  목표 미달일 때도 넣음. 전에는 `-f <새데이터.xlsx>` 틀(목표 달성 때만)과 재학습 `--eval "a = b * c"`만 있어, Gemma 4가 한 건 예측을
+  `--eval "반응온도=182; ..."`로 쓰고(2.9.73의 비슷한 옵션 `[후보]`에 되물음, 2.9.74에서 `-i` `[추천]`으로 고침), solar는 한 건을 파일로 만들려 함.
+- 예측 `-f`의 파일이 없고 같은 폴더에 이름이 비슷한 데이터 파일이 있으면 `[후보] 1) 2)`와 같은 번호의 `confirm_commands`(그 파일로 바꾼 전체 명령).
+  없으면 2.9.74처럼 `-i` 틀 (`next_commands`, 이제 `placeholder: <값>`도 줌).
+
 ## [2.9.74] - 2026-11-07
 
 집 PC opencode 시험(solar-mini4, solar-pro4, Gemma 4 26B)에서 한 건 예측(P1)이 막힌 곳.

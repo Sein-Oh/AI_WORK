@@ -295,6 +295,35 @@ def test_verify_runs_tool_help_and_imports(monkeypatch, tmp_path):
     assert any("opencode.exe: 없음" in f for f in rep.fails)
 
 
+def test_parse_jsonc_comments_and_trailing_commas():
+    text = '{\n  // 사내 LLM\n  "model": "a//b", /* 막음 */ "x": [1, 2,],\n  "s": "q\\"//",\n}'
+    assert su.parse_jsonc(text) == {"model": "a//b", "x": [1, 2], "s": 'q"//'}
+
+
+def test_opencode_config_warns_on_shell_instructions_and_permission(tmp_path, capsys):
+    """집 PC opencode 시험(2026-11-07)에서 결과를 흐린 설정: 셸 cmd, 옛 지침 instructions, 작업 폴더 밖 쓰기 거절."""
+    (tmp_path / "opencode.jsonc").write_text(
+        '{\n // 설정\n "shell": "cmd", "instructions": ["C:/old/AGENTS.md"],\n "permission": {"external_directory": "deny"},\n}',
+        encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    out = capsys.readouterr().out
+    assert rep.warn == 3 and rep.fails == [], out
+    assert '"shell"이 PowerShell이 아닙니다' in out and "C:/old/AGENTS.md" in out and "external_directory" in out
+    (tmp_path / "opencode.jsonc").write_text('{"shell": "powershell", "permission": {"external_directory": "allow"}}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    assert rep.warn == 0
+    (tmp_path / "opencode.jsonc").write_text('{"model": "x"}', encoding="utf-8")       # 권한이 없으면 INFO만 (세지 않음)
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    assert rep.warn == 0 and "[INFO] opencode.jsonc에 permission.external_directory가 없습니다" in capsys.readouterr().out
+    (tmp_path / "opencode.jsonc").write_text('{ 깨진', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    assert rep.warn == 1 and rep.fails == []                                       # 못 읽어도 설치를 실패로 보지 않음
+
+
 def test_setup_bat_is_ascii_crlf_and_uses_bundled_python():
     data = open(os.path.join(CLI, "setup.bat"), "rb").read()
     assert data.isascii() and b"chcp" not in data.lower()

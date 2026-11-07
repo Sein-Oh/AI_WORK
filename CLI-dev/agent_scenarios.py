@@ -15,6 +15,7 @@ grade_opencode.load_scenarios()가 이 파일을 경로로 읽어 SCENARIOS를 �
 # 시나리오 항목
 #   message       : 붙여넣을 요청 문장
 #   commands      : 실행한 명령 중에 하나라도 맞아야 하는 정규식 목록 (모두 필요, 대소문자 무시)
+#   setup         : 시험 자료 준비 요청. run_all_tests.py --gemma는 모델에 보내지 않고 message의 python 명령을 직접 실행 (메시지 팩에는 그대로)
 #   tool_ok       : 이 정규식에 맞는 마지막 명령의 결과 JSON status가 ok여야 함
 #   answer_all    : 최종 답변에 모두 있어야 하는 정규식. 최종 답변 = tool_ok/commands에 맞는 마지막 명령 뒤의 글 전부
 #                   (맞는 명령이 없으면 마지막 도우미 메시지의 마지막 명령 뒤 글)
@@ -111,11 +112,13 @@ GROUPS = [
         'scenarios': [
             {
                 'id': 'S0',
+                'setup': True,     # run_all_tests.py --gemma가 직접 실행 (모델에 보내지 않음: C:\CLI-dev 경로를 도구 위치로 따라 함, 2026-11-07)
                 'message': r'python "C:\CLI-dev\ml-kit\tools\make_beta_samples.py" "{DIR}" 를 실행해줘. 실행만 하고 결과 줄만 알려줘.',
                 'commands': [r'make_beta_samples\.py'],
             },
             {
                 'id': 'S1',
+                'setup': True,     # run_all_tests.py --gemma가 직접 실행 (모델에 보내지 않음: C:\CLI-dev 경로를 도구 위치로 따라 함, 2026-11-07)
                 'message': r'python "C:\CLI-dev\office-cli\tools\make_office_samples.py" "{DIR}" 를 실행해줘. 실행만 하고 결과 줄만 알려줘.',
                 'commands': [r'make_office_samples\.py'],
             },

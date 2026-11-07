@@ -1642,6 +1642,17 @@ def predict_next_command(final_dir: str, purpose: str) -> Dict[str, Any]:
             "needs_input": True, "placeholder": "<새데이터.xlsx>"}
 
 
+def predict_one_command(final_dir: str, inputs: List[str]) -> Dict[str, Any]:
+    """The one-case prediction command with the model's own input names (2.9.75, 집 PC opencode 2026-11-07: with only the
+    -f template and the retraining '--eval "a = b * c"' commands in front of them, Gemma 4 wrote '--eval "온도=182; ..."' and
+    solar wrote a file for one condition). <값> is the user's value for each input."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    pairs = ",".join(f"{c}=<값>" for c in inputs)
+    return {"purpose": "새 조건 한 건 예측 (<값>을 사용자가 준 값으로 바꿀 것, 파일을 만들지 않음)",
+            "command": f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} -m {quote_arg(final_dir)} -i {quote_arg(pairs)}",
+            "needs_input": True, "placeholder": "<값>"}
+
+
 def build_next_commands(
     args: argparse.Namespace, raw_file: str, task: str, positive_class: Optional[str],
     feature_names: List[str], created_features: List[str], applied_evals: List[str],
@@ -1696,6 +1707,8 @@ def build_next_commands(
         })
         cmds.append(predict_next_command(
             final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
+        if base_features and quotable(*base_features):
+            cmds.append(predict_one_command(final_dir, base_features))
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
@@ -1720,6 +1733,8 @@ def build_next_commands(
                             "--tag", quote_arg("교차항_추가")]
             cmds.append({"purpose": f"상위 피처 '{a}', '{b}' 교차항 추가 후 재학습", "command": " ".join(parts),
                          "needs_input": False})
+    if base_features and quotable(*base_features):        # 목표 전이라도 예측은 할 수 있음 (placeholder 명령은 늘 뒤에)
+        cmds.append(predict_one_command(final_dir, base_features))
     return cmds
 
 

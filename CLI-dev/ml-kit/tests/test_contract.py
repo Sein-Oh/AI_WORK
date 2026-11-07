@@ -644,6 +644,7 @@ def test_inline_values_in_wrong_option_recommend_i(p1_model, tmp_path):
     nxt = res["next_commands"][0]
     cmd = split_command(nxt["command"])
     assert nxt["needs_input"] is True and "-f" not in cmd and cmd[cmd.index("-i") + 1].startswith("온도(°C)=<값>"), nxt
+    assert nxt["placeholder"] == "<값>"                                    # 2.9.75: 다른 needs_input 명령과 같은 키
     assert not mp.looks_inline_input(str(tmp_path)) and not mp.looks_inline_input("a.csv")
     assert not mp.looks_inline_input("C:\\d\\a=1.csv") and mp.looks_inline_input("반응온도(°C)=182, 압력=3")
 
@@ -690,3 +691,15 @@ def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
     assert mp.unfinished_payload(mp.Unfinished("단계 9"))["error_type"] == "unfinished_limit"
     mp.continue_clear()
     assert mp._continue_state() == {}
+
+
+def test_missing_prediction_file_typo_gives_numbered_files(p1_model, tmp_path):
+    """2.9.75: 없는 -f가 같은 폴더 파일의 오타면 '-i로 예측' 안내가 아니라 그 파일들을 [후보] 1) 2)와 같은 번호의 전체 명령으로."""
+    shutil.copy(p1_model["f"], tmp_path / "새조건_1차.csv")
+    (tmp_path / "관계없음.txt").write_text("x", encoding="utf-8")
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-f", str(tmp_path / "새조건_1챠.csv"))
+    assert proc.returncode == 1 and "[후보] 1) " in res["message"] and "관계없음" not in res["message"], res
+    assert "next_commands" not in res, res
+    cmd = split_command(res["confirm_commands"][0]["command"])
+    assert cmd[cmd.index("-f") + 1] == str(tmp_path / "새조건_1차.csv"), cmd
+    assert run_tool("ml_predict.py", *cmd[2:])["status"] == "ok"

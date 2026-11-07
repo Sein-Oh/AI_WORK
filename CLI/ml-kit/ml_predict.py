@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.74"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.75"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -4736,12 +4736,23 @@ def _check_prediction_file(args: argparse.Namespace, model_items: List[Dict[str,
         cmd = f"{base} -i {quote_arg(inline_value(path))}" if base else None
         raise InputError("-f에는 데이터 파일 경로를 줍니다. '이름=값' 입력은 -i로 줍니다."
                          + (f" [추천] {cmd}" if cmd else ""))
+    # a typo of a file in the same folder: [후보] with numbered full commands (2.9.75), the user picks
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        names = [n for n in os.listdir(folder) if os.path.splitext(n)[1].lower() in (".csv", ".xlsx", ".xlsm", ".xls", ".tsv", ".txt")]
+    except OSError:
+        names = []
+    near = [os.path.join(folder, n) for n in difflib.get_close_matches(os.path.basename(path), names, n=5, cutoff=0.6)]
+    if near:
+        text, cmds = numbered(near, [command_replacing(str(args.file), c) for c in near], "-f {}")
+        raise InputError(f"입력 데이터 파일을 찾을 수 없습니다: {path}. 같은 폴더의 비슷한 파일: {text}. "
+                         "어느 파일인지 사용자에게 물으십시오.", extra={"confirm_commands": cmds} if cmds else None)
     needed, _ = _model_inputs(model_items)
     template = ",".join(f"{c}=<값>" for c in needed)
     extra = {}
     if base and needed:
         extra["next_commands"] = [{"purpose": "새 조건 한 건 예측 (<값>을 사용자가 준 값으로 바꿈)",
-                                   "command": f"{base} -i {quote_arg(template)}", "needs_input": True}]
+                                   "command": f"{base} -i {quote_arg(template)}", "needs_input": True, "placeholder": "<값>"}]
     raise InputError(f"입력 데이터 파일을 찾을 수 없습니다: {path}. 새 조건 몇 건은 파일을 만들지 않고 "
                      f"-i \"이름=값,...\"로 예측합니다 (모델 입력: {', '.join(needed)}). "
                      "next_commands[0]의 <값>을 사용자가 준 값으로 바꿔 실행하세요.", extra=extra)

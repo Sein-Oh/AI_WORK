@@ -16,6 +16,8 @@
     office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
     gemma   Gemma 종합 테스트: agent_scenarios.py의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
             grade_opencode.py로 채점 (20~60분). 기본 단계가 아니며 --gemma 또는 --only에 넣을 때만.
+            시험 자료 준비(setup: S0, S1)는 러너가 직접 실행 (모델에 보내지 않음). --gemma-only A1,P1: 그 요청만. --gemma-model <모델>[,<예비 모델>...]: opencode --model 값, 사용량 제한(429, rate limit,
+            quota)이면 다음 모델로 같은 요청을 다시 보냄. 요청별로 답한 모델은 기록 폴더 models.json과 채점 보고서에.
             사람이 준비해야 하는 요청(시나리오의 manual, 예: Outlook 메일이 필요한 O3)은 보내지 않고 건너뜀(수동 전용)으로 남깁니다.
             opencode는 --opencode, PATH, C:\\CLI\\opencode.exe 순서로 찾고, 없으면 ENV-SKIP.
             UAC로 권한을 올린 관리자 창이면 열린 문서를 못 보므로 일반 창에서 실행하세요 (UAC가 꺼진 PC는 상관없음).
@@ -952,6 +954,46 @@ def _read(path, limit=4000):
         return ""
 
 
+# 사용량 제한 (공급자 응답): 이 오류면 같은 요청을 예비 모델로 다시 보냄. 모델의 답 글은 보지 않음 (오류 사건과 stderr만)
+RATE_LIMIT = re.compile(r"(?i)\b429\b|rate[ _-]?limit|quota|too many requests|resource[ _-]?exhausted")
+
+
+def _gemma_models(spec):
+    """--gemma-model 'a,b,c' -> ['a', 'b', 'c'] (첫째가 기본, 나머지는 사용량 제한 때 차례로 쓰는 예비). 없으면 [None](opencode 설정의 모델)."""
+    models = [m.strip() for m in str(spec or "").split(",") if m.strip()]
+    return models or [None]
+
+
+def _gemma_ids(spec, order, by_id):
+    """--gemma-only 'S0,A1' -> 시나리오 순서대로 고른 요청 ID, 모르는 ID 목록."""
+    want = [x.strip().upper() for x in str(spec or "").split(",") if x.strip()]
+    unknown = [x for x in want if x not in by_id]
+    return [sid for sid in order if sid in want], unknown
+
+
+def _run_setup(sc, test_dir):
+    """setup 시나리오(S0, S1: 시험 자료 만들기)를 모델 대신 직접 실행합니다. message의 python "<스크립트>"에서 C:\\CLI-dev는 이 폴더.
+    (성공 여부, 기록 한 줄). 모델에 보내면 C:\\CLI-dev\\ml-kit\\tools 경로를 도구 위치로 따라 했음 (집 PC opencode 2026-11-07)."""
+    m = re.search(r'python\s+"([^"]+\.py)"', str(sc["message"]))
+    if not m:
+        return False, f"{sc['id']}: message에 python \"<스크립트>\"가 없음"
+    script = m.group(1)
+    head = "C:\\CLI-dev\\"
+    if script.lower().startswith(head.lower()):
+        script = os.path.join(HERE, *script[len(head):].split("\\"))
+    try:
+        p = subprocess.run([sys.executable, script, test_dir], capture_output=True, timeout=900, env=child_env())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"{sc['id']}: {os.path.basename(script)} 실행 실패 ({type(e).__name__})"
+    tail = (p.stdout.decode("utf-8", "replace").strip().splitlines() or [""])[-1][:200]
+    return p.returncode == 0, f"{sc['id']}: 러너가 직접 실행 {os.path.basename(script)} -> exit {p.returncode} {tail}"
+
+
+def _rate_limited(errors, err_path):
+    """opencode 오류 사건이나 stderr가 공급자의 사용량 제한이면 True."""
+    return bool(RATE_LIMIT.search(" ".join(errors) + " " + _read(err_path)))
+
+
 def step_gemma(stage, args, ctx):
     exe = find_opencode(args.opencode)
     if not exe:
@@ -977,23 +1019,71 @@ def step_gemma(stage, args, ctx):
     os.makedirs(runs, exist_ok=True)
     if is_elevated():
         stage.unverified.append("관리자 권한 창에서 실행함: opencode가 열린 Office 문서를 못 볼 수 있음 (일반 PowerShell 권장)")
-    sent, session, log = {}, None, []
+    sent, session, log, used = {}, None, [], {}
     auto = [sid for sid in order if not by_id[sid].get("manual")]       # manual: 사람이 준비해야 하는 요청 (보내지 않음)
+    only = getattr(args, "gemma_only", None)
+    if only:
+        picked, unknown = _gemma_ids(only, order, by_id)
+        if unknown or not picked:
+            stage.fail(f"--gemma-only의 모르는 요청 ID: {', '.join(unknown) or '(비어 있음)'} (가능: {', '.join(auto)})")
+            return
+        manual = [s for s in picked if s not in auto]
+        if manual:
+            stage.fail(f"--gemma-only의 {', '.join(manual)}은 수동 전용이라 자동으로 보내지 않습니다")
+            return
+        auto = picked
+    # 시험 자료 준비(setup)는 고른 요청과 상관없이 러너가 먼저 직접 실행하고 모델에는 보내지 않음
+    setup = [sid for sid in order if by_id[sid].get("setup") and not by_id[sid].get("manual")]
+    os.makedirs(test_dir, exist_ok=True)
+    for sid in setup:
+        ok, line = _run_setup(by_id[sid], test_dir)
+        log.append(line)
+        if not ok:
+            stage.fail(f"시험 자료를 만들지 못함 ({line})")
+            stage.details.append(("opencode run 실행 기록", "\n".join(log)))
+            return
+    auto = [sid for sid in auto if sid not in setup]
+    models = _gemma_models(getattr(args, "gemma_model", None))
+    cur = 0                                                      # 지금 쓰는 모델 (제한에 걸리면 다음 예비로 넘어가 계속 씀)
     say(f"Gemma 종합 테스트 시작: 요청 {len(auto)}개를 opencode run으로 한 세션에 보냅니다 (요청마다 최대 {args.gemma_timeout}초"
-        + (f", 수동 전용 {', '.join(s for s in order if s not in auto)}은 보내지 않음" if len(auto) < len(order) else "") + ").")
+        + (f", 모델 {' -> '.join(models)}" if models[0] else "")
+        + (f", 수동 전용 {', '.join(s for s in order if by_id[s].get('manual'))}은 보내지 않음" if not only and len(auto) < len(order) else "")
+        + ").")
     stop = False
     for i, sid in enumerate(auto, 1):
         msg = f"[{sid}] " + str(by_id[sid]["message"]).replace("{DIR}", test_dir)
         sent[sid] = msg
         with open(os.path.join(runs, go.RUN_MESSAGES), "w", encoding="utf-8") as f:
             json.dump(sent, f, ensure_ascii=False, indent=1)
-        cmd = [exe, "run", "--format", "json"] + (["--session", session] if session else []) + [msg]
         out_path, err_path = os.path.join(runs, f"{sid}.jsonl"), os.path.join(runs, f"{sid}.stderr.txt")
-        say(f"[{i}/{len(auto)}] {sid} 보내는 중")
-        code, sec, stop = run_to_files(cmd, CLI_DIR, args.gemma_timeout, out_path, err_path)
-        _, got, errors = go.read_run(out_path, sid, msg)
-        session = session or got
-        log.append(f"{sid}: exit {code}, {sec}초, 세션 {got or '없음'}" + (f", 오류 {'; '.join(errors)}" if errors else ""))
+        while True:
+            model = models[cur]
+            cmd = ([exe, "run", "--format", "json"] + (["--model", model] if model else [])
+                   + (["--session", session] if session else []) + [msg])
+            say(f"[{i}/{len(auto)}] {sid} 보내는 중" + (f" (모델 {model})" if model else ""))
+            code, sec, stop = run_to_files(cmd, CLI_DIR, args.gemma_timeout, out_path, err_path)
+            _, got, errors = go.read_run(out_path, sid, msg)
+            session = session or got
+            log.append(f"{sid}: 모델 {model or '(opencode 설정)'}, exit {code}, {sec}초, 세션 {got or '없음'}"
+                       + (f", 오류 {'; '.join(errors)}" if errors else ""))
+            if stop or not _rate_limited(errors, err_path):
+                break
+            if cur + 1 >= len(models):
+                log.append(f"{sid}: 사용량 제한 (예비 모델 없음)")
+                stage.unverified.append(f"{sid}: 모델 {model or '(opencode 설정)'}이 사용량 제한에 걸렸고 예비 모델이 없음 "
+                                        "(--gemma-model <모델>,<예비 모델>)")
+                break
+            # 제한에 걸린 기록은 이름을 바꿔 남기고(채점은 <ID>.jsonl만 봄) 다음 예비 모델로 같은 요청을 다시
+            for path, tail in ((out_path, ".jsonl"), (err_path, ".stderr.txt")):
+                try:
+                    os.replace(path, os.path.join(runs, f"{sid}.limited{cur + 1}{tail}"))
+                except OSError:
+                    pass
+            cur += 1
+            say(f"[WARN] {sid}: {model} 사용량 제한 -> 예비 모델 {models[cur]}로 다시 보냄")
+        used[sid] = model or "(opencode 설정)"
+        with open(os.path.join(runs, go.RUN_MODELS), "w", encoding="utf-8") as f:
+            json.dump(used, f, ensure_ascii=False, indent=1)
         if stop:
             break
         if not session:                                          # 첫 요청에서 세션이 안 생기면 나머지도 같음
@@ -1001,10 +1091,14 @@ def step_gemma(stage, args, ctx):
             stage.details.append((f"{sid} opencode 오류 출력", _read(err_path) or "(없음)"))
             break
     stage.details.append(("opencode run 실행 기록", "\n".join(log)))
+    if used:
+        stage.details.append(("요청별 모델", "\n".join(f"{k}: {v}" for k, v in used.items())))
     if session:
         meta, rows, detail = go.grade_runs(runs)
         report, npass, n = go.write_report(ctx["label"], meta, rows, detail, out_dir=runs)
         for r in rows:
+            if r["id"] in setup or (only and r["id"] not in auto):     # 러너가 직접 실행한 준비 요청, 고르지 않은 요청은 세지 않음
+                continue
             if r["결과"] in ("통과", "통과(참고)"):
                 stage.passed += 1
             elif r["결과"] == "실패(참고)":
@@ -1035,6 +1129,10 @@ def main(argv=None):
     p.add_argument("--opencode", help=r"opencode 실행 파일 (기본: PATH의 opencode, 없으면 C:\CLI\opencode.exe)")
     p.add_argument("--gemma-dir", help=r"gemma 단계 시험 폴더 (기본 C:\CLI-dev\work\gemma)")
     p.add_argument("--gemma-timeout", type=int, default=900, help="gemma 단계 요청 하나의 시간 상한(초, 기본 900)")
+    p.add_argument("--gemma-only", help="gemma 단계에서 이 요청만 보냄 (쉼표로, 예: S0,A1,P1. 시나리오 순서대로 보냄)")
+    p.add_argument("--gemma-model", help="gemma 단계 모델 (opencode --model 값, 쉼표로 예비 모델: "
+                                         "'openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4'. 사용량 제한(429, rate limit, quota)이면 "
+                                         "다음 모델로 같은 요청을 다시 보내고 그 뒤 요청도 그 모델로. 없으면 opencode 설정의 모델)")
     p.add_argument("--ask", action="store_true", help="office 단계의 눈 확인 질문(y/n)에 답하면서 진행 (기본: 질문 없음)")
     p.add_argument("--outlook", action="store_true", help="office 단계에서 Outlook(G그룹)도 시험 (기본: 건너뜀)")
     p.add_argument("--ml-dir", help=r"ml 단계 시험 폴더 (기본 C:\CLI-dev\work\ml 테스트)")

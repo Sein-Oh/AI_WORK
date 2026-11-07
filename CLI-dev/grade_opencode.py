@@ -474,6 +474,7 @@ def grade(paths, label, use_judge, model):
 
 
 RUN_MESSAGES = "messages.json"     # run_all_tests.py --gemma가 기록 폴더에 남기는 {요청 ID: 보낸 문장}
+RUN_MODELS = "models.json"         # 같은 기록 폴더의 {요청 ID: 답한 모델} (--gemma-model, 사용량 제한 때 예비 모델)
 
 
 def grade_runs(folder, use_judge=False, model="LLM42"):
@@ -494,6 +495,13 @@ def grade_runs(folder, use_judge=False, model="LLM42"):
         sessions.add(session or "?")
         found[sid] = [turn]
     meta = [f"opencode run 기록 {folder} ({len(found)}건, 세션 {', '.join(sorted(sessions)) or '없음'})"]
+    try:                                    # run_all_tests.py --gemma-model: 요청별로 실제로 답한 모델
+        with open(os.path.join(folder, RUN_MODELS), encoding="utf-8") as f:
+            models = json.load(f)
+        if models:
+            meta.append("요청별 모델: " + ", ".join(f"{k}={v}" for k, v in models.items()))
+    except (OSError, ValueError):
+        pass
     return meta, *score(found, spec, by_id, order, use_judge, model)
 
 

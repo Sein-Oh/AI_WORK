@@ -945,9 +945,25 @@ def test_next_commands_flag_placeholders_and_put_runnable_first(sample_model, tm
 
     cls = make_class_sample(str(tmp_path / "cls.csv"))                  # 목표 미달: 재학습 명령은 모두 바로 실행 가능
     payload = run_tool("ml_train.py", "-f", cls, "-x", "반응온도,촉매비율,수분함량", "-y", "품질등급", "--task", "classification")
-    if payload["mean_val_score"] < 0.9:
-        assert payload["next_commands"] and all(c["needs_input"] is False for c in payload["next_commands"])
+    if payload["mean_val_score"] < 0.9:                                  # 재학습 명령은 바로 실행 가능, 한 건 예측 틀만 맨 뒤 (2.9.75)
+        cmds = payload["next_commands"]
+        assert cmds and all(c["needs_input"] is False for c in cmds[:-1]), cmds
+        assert cmds[-1]["needs_input"] is True and " -i " in cmds[-1]["command"] and "<값>" in cmds[-1]["command"], cmds
     assert not any("성능예측표" in c["purpose"] for c in payload["next_commands"])   # 분류는 성능예측표 없음
+
+
+def test_next_commands_give_one_case_prediction_with_input_names(sample_model):
+    """2.9.75 집 PC opencode: 학습 결과에 -f 틀과 재학습 '--eval "a = b * c"'만 있어 Gemma 4가 한 건 예측을 '--eval "온도=182; ..."'로,
+    solar는 한 건을 파일로 만들려 했음 -> 모델 입력 이름의 '-i "이름=<값>,..."' 틀(맨 뒤). <값>을 채우면 그대로 실행됨."""
+    data, payload = sample_model
+    one = [c for c in payload["next_commands"] if " -i " in c["command"]]
+    assert len(one) == 1 and one[0] is payload["next_commands"][-1] and one[0]["placeholder"] == "<값>", payload["next_commands"]
+    cmd = split_command(one[0]["command"])
+    pairs = cmd[cmd.index("-i") + 1]
+    assert [p.split("(")[0] for p in pairs.split(",")] == ["반응온도", "소비전력", "압축압력", "촉매비율", "수분함량"], pairs
+    assert "반응온도(°C)=<값>" in pairs                                       # 모델의 실제 열 이름 (단위 포함)
+    filled = [a.replace("<값>", "1") for a in cmd[2:]]
+    assert run_tool("ml_predict.py", *filled)["status"] == "ok"
 
 
 def test_predict_next_commands_have_no_layout(tmp_path):
