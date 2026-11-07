@@ -243,14 +243,74 @@ def office_checks(env, book, work):
     check("O6", "--cards [추천]", o6)
 
 
+def _bom(path, rows):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "BOM"
+    ws.append(["제품 BOM"])
+    ws.append([])
+    ws.append(["Level", "Part No", "Description", "Qty", "Ref Des", "Maker"])
+    for r in rows:
+        ws.append(r)
+    wb.save(path)
+    return path
+
+
+def bom_checks(env, work):
+    """office-cli 1.4.80 excel compare (BOM 두 판 비교)."""
+    X = os.path.join(OC, "excel.py")
+    old = _bom(os.path.join(work, "BOM Rev.A.xlsx"), [
+        [0, "ASSY-100", "메인보드", 1, "", ""], [1, "R-0100", "저항 10k", 3, "R1-R3", "A사"],
+        [1, "C-0200", "콘덴서 1uF", 2, "C1,C2", "B사"], [1, "U-0300", "MCU", 1, "U1", "C사"],
+        [0, "ASSY-200", "전원보드", 1, "", ""], [1, "R-0100", "저항 10k", 1, "R10", "A사"], [1, "D-0500", "다이오드", 1, "D1", "F사"]])
+    new = _bom(os.path.join(work, "BOM Rev.B $(신규).xlsx"), [
+        [0, "ASSY-100", "메인보드", 1, "", ""], [1, "R-0100", "저항 10k", 4, "R1-R4", "A사"],
+        [1, "C-0200", "콘덴서 1uF", 2, "C2, C1", "D사"], [1, "U-0301", "MCU 개선", 1, "U1", "C사"],
+        [0, "ASSY-200", "전원보드", 1, "", ""], [1, "R-0100", "저항 10k", 1, "R10", "A사"], [1, "L-0400", "인덕터", 1, "L1", "E사"]])
+
+    def b1():
+        code, out = run_tool(env, X, "compare", "--target", old, "--target2", new)
+        c = (out or {}).get("counts") or {}
+        want = {"추가": 1, "삭제": 1, "수량 변경": 1, "위치 변경": 1, "속성 변경": 1, "대체 추정": 1}
+        record("B1", "BOM 다단 비교: 상위품번+품번 키, 수량·위치·메이커 변경, 위치 순서만 다름은 그대로, 품번 변경 추정", ok_(out) and c == want,
+               f"counts={c}, key={(out or {}).get('key_reason')}")
+        cmds = (out or {}).get("next_commands") or []
+        if ok_(out) and cmds and not WIN:
+            record("B2", "비교 결과의 next_commands[0](바뀐 칸 메모 미리보기)을 셸로 실행 (Excel 필요)", None, "Windows + Office에서만")
+        elif ok_(out) and cmds:
+            c2, out2 = run_shell(env, cmds[0]["command"])
+            record("B2", "비교 결과의 next_commands[0](바뀐 칸 메모 미리보기)을 셸로 실행", ok_(out2) and out2.get("dry_run") is True,
+                   "" if ok_(out2) else str((out2 or {}).get("message", ""))[:200])
+        out_file = (out or {}).get("output_file")
+        if out_file:
+            import openpyxl
+            names = openpyxl.load_workbook(out_file, read_only=True).sheetnames
+            record("B3", "결과 엑셀 시트 (요약, 추가, 삭제, 변경, 대체 추정)", all(n in names for n in ("요약", "추가", "삭제", "변경")), str(names))
+    check("B1", "BOM 비교", b1)
+
+    def b4():
+        code, out = run_tool(env, X, "compare", "--target", old, "--target2", old.replace("Rev.A", "Rev.A"))
+        record("B4", "같은 파일 두 번 -> 입력 오류", code != 0 and (out or {}).get("status") == "error", str((out or {}).get("message", ""))[:150])
+    check("B4", "같은 파일", b4)
+
+    def b5():
+        same = _bom(os.path.join(work, "BOM 사본.xlsx"), [[0, "ASSY-100", "메인보드", 1, "", ""], [1, "R-0100", "저항 10k", 3, "R3, R1-R2", "A사"]])
+        base = _bom(os.path.join(work, "BOM 원본.xlsx"), [[0, "ASSY-100", "메인보드", 1, "", ""], [1, "R-0100", "저항 10k", 3.0, "R1-R3", "A사"]])
+        code, out = run_tool(env, X, "compare", "--target", base, "--target2", same)
+        record("B5", "표기만 다른 판(3 = 3.0, R1-R3 = R3, R1-R2) -> 바뀐 것 없음 (count 0)", ok_(out) and out.get("count") == 0,
+               str((out or {}).get("preview", ""))[:200])
+    check("B5", "바뀐 것 없음", b5)
+
+
 def setup_checks():
     cfg = os.path.join(os.path.expanduser("~"), ".config", "opencode", "skills")
     if not os.path.isdir(cfg):
         return record("K1", "OpenCode 설정 폴더의 스킬 배치", None, f"{cfg} 없음 (setup.bat을 먼저 실행)")
-    want = ["ml-train", "ml-predict", "ml-report", "ml-map"]
+    want = ["ml-train", "ml-predict", "ml-report", "ml-map", "office-data"]
     missing = [n for n in want if not os.path.isfile(os.path.join(cfg, n, "SKILL.md"))]
     old = os.path.exists(os.path.join(cfg, "ml-kit"))
-    record("K1", "설정 폴더에 ml-kit 스킬 4개, 옛 skills\\ml-kit 없음 (setup.bat 뒤)", not missing and not old,
+    record("K1", "설정 폴더에 ml-kit 스킬 4개와 office-data, 옛 skills\\ml-kit 없음 (setup.py 뒤)", not missing and not old,
            f"없는 스킬 {missing}, 옛 폴더 남음={old}")
 
 
@@ -291,6 +351,8 @@ def main():
     ml_checks(env, data, titled)
     log("[INFO] office-cli 점검")
     office_checks(env, book, work)
+    log("[INFO] BOM 비교 점검")
+    bom_checks(env, work)
     setup_checks()
     path, n = write_report(args.label, work, started)
     log(f"[STATUS] PASS {n['PASS']}, FAIL {n['FAIL']}, SKIP {n['SKIP']} -> {path}")
