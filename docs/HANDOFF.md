@@ -1,10 +1,14 @@
-# 작업 인계 (2026-11-02, 클라우드 세션 -> 회사 PC)
+# 작업 인계 (2026-11-07, 클라우드 세션 -> 집 PC / 회사 PC)
 
-회사 PC에서 저장소 파일을 받은 뒤, 새 Claude Code(또는 OpenCode) 대화를 열고 맨 아래 "붙여넣을 첫 메시지"를 보내면 이어서 진행할 수 있습니다.
+PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열고 맨 아래 "붙여넣을 첫 메시지"(집 PC용 / 회사 PC용)를 보내면 이어서 진행할 수 있습니다.
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- main 기준 도구 버전: **ml-kit 2.9.71**, **office-cli 1.4.79**
+- 도구 버전: **ml-kit 2.9.71**, **office-cli 1.4.79** (작업 브랜치 `ccr-ecab210c-awib23`, 2026-11-07 기준 main에는 아직 없음: PR을 머지했으면 main)
+- 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
+  ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
+  ppt slide `--dest`, `--cards` 구분 `;`, 별칭·줄임말 제거. 클라우드 테스트: ml-kit 894 passed·1 skipped, office-cli+공통 3296 passed.
+  실기 확인 전: 고친 명령의 실제 PowerShell 5.1 따옴표, 스킬 4개 설치(setup.py), Gemma의 스킬 선택·번호 `[후보]` 처리
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
@@ -115,6 +119,16 @@
 | ml-kit 2.9.39 | 학습 결과에 타겟별 중요 입력 `top_features`(최고 모델의 순열 중요도 비중, 최대 5개, 원래 열 이름)와 preview의 "중요 입력". SKILL.md에 버전 비교(`--history`), 파일 예측 엑셀 저장(`--out`), 파생변수(`--eval`), 예측 범위·확률 열 추가. SKILL.md 옵션이 argparse에 있는지 검사하는 테스트 |
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
 
+## 3-0. 집 PC에서 할 일 (Gemma 없음, 공식 Python 3.13)
+상세: `docs/HOME_PC_CHECK.md`. 요약:
+1. 저장소를 받고(`git fetch origin` 후 `git checkout ccr-ecab210c-awib23`, 또는 머지 뒤 main) `python -c "import sys; print(sys.executable, sys.version)"`로 PATH의 python 확인.
+   저장소 폴더에서 바로 돌려도 됨 (점검 스크립트는 옆 폴더 `CLI/`의 도구를 씀). `C:\CLI`, `C:\CLI-dev`로 복사해서 돌려도 같음.
+2. `python CLI\setup.py --no-path` (setup.bat은 WinPython용이라 쓰지 않음): 스킬 4개 복사, 옛 `skills\ml-kit` 보관 후 삭제. `opencode.exe 없음` FAIL 1개는 환경 차이.
+3. `python CLI-dev\run_simplify_check.py --label 집PC` (5~10분): 틀린 명령 -> 도구가 준 고친 명령을 PowerShell 5.1로 그대로 실행 -> 성공하는지 17항목.
+   클라우드(리눅스 bash)에서는 13 PASS, Office가 필요한 O4~O6과 설치 확인 K1은 SKIP이었음.
+4. 시간이 되면 `python CLI-dev\run_all_tests.py --label 집PC --only diag,pytest,beta,ml,office` (1~2시간).
+5. 실패는 원인을 찾아 고치고(회귀 테스트와 함께), 해당 도구 테스트 + `CLI-dev/tests`를 돌린 뒤 같은 브랜치에 커밋·푸시. 결과 파일은 `docs/test_logs/`.
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
@@ -165,6 +179,19 @@
     이후 office-cli 묶음 O(S1 샘플, O1~O5)를 더해 자동 19개 + 수동 전용 O3(Outlook 메일). 회사 PC 오류 로그의 지어낸 office-cli 옵션은 공통 규칙 `no_fake_office`
 
 ## 6. 붙여넣을 첫 메시지
+집 PC용 (Claude Code, 저장소 폴더에서):
+```text
+AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md(특히 1장과 3-0장), docs/HOME_PC_CHECK.md를 읽어.
+지금은 집 PC(Windows, 공식 Python 3.13, Office 2007, Gemma 없음)야. 작업 브랜치는 ccr-ecab210c-awib23.
+1. 브랜치를 받고 PATH의 python이 3.13인지 확인한 뒤, HANDOFF 3-0장 2~3번(setup.py --no-path, run_simplify_check.py --label 집PC)을 실행해 줘.
+   명령은 python만 쓰고, 실행 전에 무엇을 할지 짧게 알려 줘.
+2. 결과 파일의 PASS/FAIL/SKIP을 표로 정리하고, FAIL은 원인과 고칠 곳(파일:줄)을 찾아 줘.
+3. 고칠 것은 회귀 테스트와 함께 고치고, 바꾼 도구의 테스트와 CLI-dev/tests를 돌린 뒤 같은 브랜치에 커밋·푸시해 줘.
+4. 시간이 되면 3-0장 4번 전체 회귀 점검도 돌려 줘.
+답변은 한국어로, 이모지 없이.
+```
+
+회사 PC용:
 ```text
 AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md를 읽고 지금 상태를 파악해.
 지금은 회사 PC(Windows 11, WinPython 3.13.13, Office 16, 문서 보안)에서 실기 테스트를 하려고 해.
