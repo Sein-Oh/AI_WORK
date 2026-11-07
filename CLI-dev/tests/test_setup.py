@@ -119,6 +119,8 @@ def test_changed_file_is_backed_up_and_check_fails_before_apply(monkeypatch, tmp
     assert "ml_train.py" not in out                     # 스킬 폴더의 .py는 알리지 않음
     test_skill = os.path.join(DEV, "office-cli", "tools", "office-cli-test", "SKILL.md")
     assert su.main(["--config-dir", str(cfg), "--no-path", "--test-skill", test_skill]) == 0
+    # 2026-11-07 집 PC: 복사한 뒤에 버전을 읽어 '다름 (1.4.82 -> 1.4.82)'로 보였음. 옛 버전은 복사 전 것
+    assert "office-excel 스킬: 다름 (1.0.0 -> " in capsys.readouterr().out
     kept = _backups(cli, "config/skills/office-excel/SKILL.md")
     assert len(kept) == 1 and "옛 내용" in kept[0].read_text(encoding="utf-8")
     assert old.read_bytes() == (cli / "office-cli" / "skills" / "office-excel" / "SKILL.md").read_bytes()

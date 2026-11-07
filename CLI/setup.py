@@ -218,8 +218,9 @@ def step_files(rep, config_dir, backup, check=False, test_skills=()):
         elif state == "지울 것":
             _remove_obsolete(name, dst, config_dir, backup, rep)
         else:
+            text = label(name, src, dst, state)          # 덮어쓰기 전에: 옛 버전 -> 새 버전
             ok = _copy(src, dst, config_dir, backup, state)
-            rep.line("OK" if ok else "FAIL", label(name, src, dst, state) + (" -> 복사함" if ok else " -> 복사 후 내용이 다름"))
+            rep.line("OK" if ok else "FAIL", text + (" -> 복사함" if ok else " -> 복사 후 내용이 다름"))
     src, dst, state = jsonc_state(config_dir)
     if state == "같음":
         rep.line("OK", f"opencode.jsonc: 같음  {dst}")
