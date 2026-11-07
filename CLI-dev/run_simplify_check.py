@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,12 @@ WIN = os.name == "nt"
 PS_PREFIX = ("$env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; "
              "[Console]::OutputEncoding=[Text.Encoding]::UTF8; ")
 RESULTS = []        # (id, title, status, detail)
+# 결과 파일은 GitHub에 올리므로 경로 안의 사용자 폴더 이름을 가림 (run_all_tests.mask_private와 같은 규칙)
+_USER_SEGMENT = re.compile(r"(?i)(\bUsers(?:\\\\|\\|/)+)(?!<사용자>)[^\\/\s\"'<>|:*?]+")
+
+
+def mask_private(text):
+    return _USER_SEGMENT.sub(lambda m: m.group(1) + "<사용자>", text)
 
 
 def log(msg):
@@ -389,7 +396,7 @@ def write_report(label, work, started):
     for tid, title, status, detail in RESULTS:
         lines.append(f"| {tid} | {title} | {status} | {detail.replace('|', '/')[:300]} |")
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+        f.write(mask_private("\n".join(lines) + "\n"))
     return path, n
 
 

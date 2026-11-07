@@ -420,3 +420,19 @@ def test_gemma_is_opt_in_and_env_skip_without_opencode(iso, monkeypatch, capsys)
     stage = rat.Stage("gemma")
     rat.step_gemma(stage, rat.argparse.Namespace(opencode=None, gemma_dir=None, gemma_timeout=5), {"stamp": "s", "label": "a"})
     assert stage.status == "ENV-SKIP" and "opencode 없음" in stage.note
+
+
+def test_result_file_masks_user_folder_names():
+    """2026-11-07 집 PC: 결과 파일을 올리기 전 사람이 가리다 잘린 출력('C:\\\\Users\\\\Joo...')을 놓쳤음. 러너가 쓸 때 가림."""
+    import importlib.util
+    dev = os.path.dirname(HERE)
+    for path in (os.path.join(dev, "run_all_tests.py"), os.path.join(dev, "run_simplify_check.py")):
+        spec = importlib.util.spec_from_file_location("mask_" + os.path.basename(path)[:-3], path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        m = mod.mask_private
+        assert m('"C:\\\\Users\\\\Joo...') == '"C:\\\\Users\\\\<사용자>'
+        assert m("C:\\Users\\kim\\AppData") == "C:\\Users\\<사용자>\\AppData"
+        assert m("C:/Users/kim/Desktop") == "C:/Users/<사용자>/Desktop"
+        assert m("C:\\Users\\<사용자>\\.config") == "C:\\Users\\<사용자>\\.config"
+        assert m("Users 수 3명, kim") == "Users 수 3명, kim"             # 경로 밖은 그대로
