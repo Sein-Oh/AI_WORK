@@ -631,7 +631,9 @@ def test_abbreviations_only_through_the_same_meaning_table(data_dir):
     """allow_abbrev=False: '--data-ro 2'는 --data-row로 몰래 읽지 않고 [후보], '--overwrit'는 어떤 후보도 주지 않음.
     예전에 줄임말로 되던 같은 뜻('--target' = --targets)도 읽지 않고 고친 전체 명령을 [추천] (2.9.71: 한 가지 사용법)."""
     proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--data-ro", "2")
-    assert proc.returncode == 2 and "[후보] --data-row" in res["message"] and "[추천]" not in res["message"], res
+    assert proc.returncode == 2 and "[후보] 1) --data-row" in res["message"] and "[추천]" not in res["message"], res
+    fixed = split_command(res["confirm_commands"][0]["command"])        # 2.9.73: 고른 번호의 전체 명령
+    assert fixed[fixed.index("--data-row") + 1] == "2" and "--data-ro" not in fixed, fixed
     proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--overwrit")
     assert proc.returncode == 2 and "[후보]" not in res["message"] and "--overwrite" not in res["message"], res
     proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "--target", "b")

@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.72"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.73"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1065,7 +1065,16 @@ class JsonArgumentParser(argparse.ArgumentParser):
             if near and near[0] in NO_FUZZY_OPTIONS:      # '--overwrit': never guessed (replaces files, retrains all)
                 hints.append(f"'{key}' 옵션은 없습니다. 무엇을 하려던 것인지 사용자에게 확인하세요.")
             elif near:
-                hints.append(f"'{key}' 옵션은 없습니다. [후보] {', '.join(o for o in near if o not in NO_FUZZY_OPTIONS)} (뜻이 같은지 사용자에게 확인)")
+                near = [o for o in near if o not in NO_FUZZY_OPTIONS]
+                # numbered full commands for one unknown option at a time (the next run asks for the next one)
+                cmds: List[Optional[str]] = []
+                for o in near:
+                    swapped = [o + a[len(key):] if a == key or a.startswith(key + "=") else a for a in given]
+                    cmds.append(command_text(argv=[sys.argv[0]] + swapped) if not self._confirm and self._parses(swapped)
+                                else None)
+                text, items = numbered(near, cmds, f"{key} 대신 {{}}")
+                self._confirm = self._confirm or items
+                hints.append(f"'{key}' 옵션은 없습니다. {text} (뜻이 같은지 사용자에게 확인)")
         return (" " + " ".join(hints)) if hints else ""
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
@@ -1087,18 +1096,21 @@ class JsonArgumentParser(argparse.ArgumentParser):
         if self._probing:
             raise _ProbeError(message)
         self.print_usage(sys.stderr)
+        self._confirm: List[Dict[str, Any]] = []
         try:
             hint = self._hint()
         except Exception:                 # a hint never breaks the one JSON line
-            hint = ""
+            hint, self._confirm = "", []
         payload = {
             "status": "error",
             "error_type": "input",
             "message": f"CLI 인자 오류: {message}.{hint}",
             "agent_directive": ("STOP_RETRY: 명령 인자가 잘못되었습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 "
-                                "실행하세요. 없으면 다시 실행하지 말고 message를 그대로 알리세요 ([후보]가 있으면 사용자에게 묻기, "
-                                "옵션 이름은 SKILL.md 기준)."),
+                                "실행하세요. [후보]가 있으면 후보를 사용자에게 보여 주고 고른 번호의 confirm_commands를 1번 실행하세요. "
+                                "둘 다 없으면 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준)."),
         }
+        if self._confirm:
+            payload["confirm_commands"] = self._confirm
         write_error_log(payload)
         emit_json_response(payload)
         sys.exit(2)
@@ -1220,10 +1232,11 @@ def check_same_column(given: List[str], resolved: List[str], option: str,
     for col, same in groups.items():
         if len(same) > 1:
             cands = [f"{g}={values[g]}" if values is not None and g in values else g for g in same]
+            text, cmds = numbered(cands, [command_dropping([o for o in same if o != g]) for g in same], "{} 하나만")
             raise InputError(
                 f"{option}의 이름 {', '.join(repr(g) for g in same)}은(는) 같은 열 '{col}'을(를) 가리킵니다 (단위 없는 "
-                f"이름은 단위 붙은 이름으로 자동 매칭). 값 하나만 주십시오. 사용자에게 어느 값인지 물으십시오: "
-                f"[후보] {', '.join(cands)}")
+                f"이름은 단위 붙은 이름으로 자동 매칭). 값 하나만 주십시오. 사용자에게 어느 값인지 물으십시오: {text}",
+                extra={"confirm_commands": cmds} if cmds else None)
 
 
 def _same_unit_name(given: str, column: str) -> bool:
@@ -1311,11 +1324,47 @@ def command_replacing(old: str, new: str) -> Optional[str]:
         if a.startswith("-") and i > 1:
             continue
         parts = _NAME_PART.split(a)
-        if old in [p.strip() for p in parts]:
+        hits = [p.strip() for p in parts].count(old)
+        if hits > 1:                       # '-i "라인=A,등급=A"': which A is meant is a guess
+            return None
+        if hits:
             argv[i] = "".join(new if p.strip() == old else p for p in parts)
             found = True
             break
     return command_text(argv=argv) if found else None
+
+
+def command_dropping(names: List[str]) -> Optional[str]:
+    """The running command with the list parts named `names` removed ('-i "온도=1,온도(°C)=2"' without '온도(°C)':
+    '-i "온도=1"'). A part is named by its text before '='. None when a name is in no argument or an argument would
+    become empty."""
+    argv = list(CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
+    left = set(names)
+    for i in range(1, len(argv)):
+        a = str(argv[i])
+        if a.startswith("-") and i > 1:
+            continue
+        items = re.split(r"\s*[,;]\s*", a)
+        keep = [x for x in items if x.split("=", 1)[0].strip() not in left]
+        if len(keep) == len(items):
+            continue
+        if not keep:
+            return None
+        left -= {x.split("=", 1)[0].strip() for x in items}
+        sep = ";" if ";" in a and "," not in a else ","
+        argv[i] = sep.join(keep)
+    return command_text(argv=argv) if not left else None
+
+
+def numbered(cands: List[str], cmds: List[Optional[str]], purpose: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """'[후보] 1) a 2) b' and the confirm_commands of the same numbers (AGENTS.md 사용법 단순성 2번), or the plain
+    '[후보] a, b' and no commands when a full command cannot be made for every candidate."""
+    if not cands or any(c is None for c in cmds):
+        return f"[후보] {', '.join(cands)}", []
+    risky = "--overwrite" in (CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
+    items = [{"purpose": purpose.format(c) + " (사용자가 고른 경우에만)", "command": cmd, **({"destructive": True} if risky else {})}
+             for c, cmd in zip(cands, cmds)]
+    return "[후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(cands, 1)) + " (사용자가 고른 번호의 confirm_commands를 실행)", items
 
 
 def candidate_commands(name: str, cands: List[str]) -> List[Dict[str, Any]]:
@@ -1377,11 +1426,17 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                 hints.append(unit_hint(m, s[0], kind))
             elif s:
                 shown = unit_marked(s, m, quote=True) if values else [repr(c) for c in s]
-                cmds = candidate_commands(m, s) if len(missing) == 1 and not values else []
-                if cmds:      # 2.9.71: numbered, the same number of next_commands is the full command (no splicing)
+                # 2.9.71: numbered, the same number of confirm_commands is the full command (no splicing). One name
+                # at a time (2.9.73): the first missing name; the next run asks for the next one. Not when a
+                # candidate has another unit (its value must be converted, not only the name)
+                same_unit = not (values and any(other_unit(m, c) for c in s))
+                cmds = candidate_commands(m, s) if not picks and same_unit else []
+                if cmds:
                     picks = cmds
                     hints.append(f"'{m}' -> [후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(shown, 1))
                                  + f"{used} (사용자가 고른 번호의 confirm_commands를 실행)")
+                elif picks:
+                    hints.append(f"'{m}'은(는) 위 이름을 고친 뒤 다음 실행에서 묻습니다")
                 else:
                     hints.append(f"'{m}' -> [후보] {', '.join(shown)}{used}")
             elif near_banned:

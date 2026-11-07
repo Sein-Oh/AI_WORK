@@ -25,7 +25,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,
     VERSION, SNAPSHOT_EXCL_PREFIX, _fmt, model_raw_inputs, check_time, mark_committed, resume_find, resume_save, resume_clear, save_failed_warning,
-    step_begin, step_end, step_label, option_retry, model_dir_from_data,
+    step_begin, step_end, step_label, option_retry, model_dir_from_data, numbered, command_replacing,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
@@ -861,7 +861,9 @@ def _check_known(names: List[str], all_inputs: Dict[str, List[str]], what: str) 
         if not any(_names_in([nm], ins, what) for ins in all_inputs.values()):
             # raises with a suggestion, never an input another given name already is ('압룍' next to '압력')
             resolve_column_names([nm], union, what, exclude=known_columns([n for n in names if n != nm], union))
-            raise InputError(f"{what} '{nm}'은(는) 어느 타겟의 입력도 아닙니다. [후보] {', '.join(union[:10])}")
+            text, cmds = numbered(union[:10], [command_replacing(nm, c) for c in union[:10]], f"'{nm}' 대신 '{{}}'")
+            raise InputError(f"{what} '{nm}'은(는) 어느 타겟의 입력도 아닙니다. {text}",
+                             extra={"confirm_commands": cmds} if cmds else None)
 
 
 def parse_inputs_spec(text: Optional[str], targets: List[str], all_inputs: Dict[str, List[str]]) -> Dict[str, List[str]]:

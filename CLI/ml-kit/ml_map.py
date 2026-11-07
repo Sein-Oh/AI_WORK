@@ -29,7 +29,7 @@ from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
     percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, mark_committed, avoid_overwrite, warn_long_path,
-    check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, CATEGORY_CANDIDATES_MAX, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, numbered, command_replacing, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, CATEGORY_CANDIDATES_MAX, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
 )
 
 setup_console()
@@ -246,7 +246,8 @@ def _filter(df: pd.DataFrame, categorical: Dict[str, str]) -> pd.DataFrame:
         vals = df[col].map(lambda s: "" if pd.isna(s) else str(s).strip())
         if not (vals == v).any():
             known = sorted(set(vals) - {""})[:CATEGORY_CANDIDATES_MAX]
-            raise InputError(f"'{col}' 열에 '{v}' 값이 없습니다. [후보] {', '.join(known)}")
+            text, cmds = numbered(known, [command_replacing(v, k) for k in known], f"'{v}' 대신 '{{}}'")
+            raise InputError(f"'{col}' 열에 '{v}' 값이 없습니다. {text}", extra={"confirm_commands": cmds} if cmds else None)
         df = df[vals == v]
     return df
 

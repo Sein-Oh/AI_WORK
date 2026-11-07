@@ -1,4 +1,4 @@
-# 집 PC 점검 (Gemma 없이, ml-kit 2.9.72 · office-cli 1.4.80)
+# 집 PC 점검 (Gemma 없이, ml-kit 2.9.73 · office-cli 1.4.81)
 
 집 PC에는 Gemma가 없으므로 Gemma가 고르는 일(맞는 스킬 고르기, 번호 `[후보]` 처리)은 회사 PC에서 본다.
 집 PC에서는 그 앞단을 확인한다: 도구가 준 고친 명령이 실제 PowerShell 5.1에서 그대로 실행되는지, 스킬 4개가 설치되는지, 기존 기능이 그대로인지.
@@ -45,6 +45,11 @@ python C:\CLI-dev\run_simplify_check.py --label 집PC
 | N3 | 한 건 예측의 입력별 영향 (`explain`, preview의 높인/낮춘 입력) |
 | N4 | 실측이 있는 새 데이터 -> `actual_check`와 재학습 알림, 재학습 명령 실행, 같은 데이터면 알림 없음 |
 | B1~B5 | office-cli 1.4.80 BOM 비교 `excel compare`: 다단 BOM(상위품번+품번 키), 수량·위치·메이커 변경, 품번 변경 추정, 결과 엑셀, 바뀐 칸 메모 미리보기(Excel), 같은 파일, 표기만 다른 판은 0건 |
+| C1 | ml-kit 2.9.73: 옵션 오타 `--data-ro` -> `[후보] 1) --data-row`와 같은 번호의 명령 -> 학습 |
+| C2 | office-cli 1.4.81: `reader search --query "A AND B"` -> 고친 전체 명령 `[추천]`(`A;B`) -> 검색 |
+| C3 | 닫힌 워드에 같은 제목 둘 -> `[후보] 1) 2)`와 `--occurrence 1` 명령 -> 읽기 |
+| E1 | 닫힌 엑셀 빈 범위 읽기 -> `count 0`과 "찾은 항목 없음" |
+| D1~D4 | `--dry-run` 미리보기: 엑셀 replace·시트 지우기, 워드 replace, PPT 슬라이드 지우기. 미리보기 뒤 파일이 그대로인지, `confirm_commands[0]`을 실행하면 실제로 바뀌는지 (Office) |
 | K1 | OpenCode 설정 폴더에 ml-kit 스킬 4개와 office-data, 옛 `skills\ml-kit` 없음 |
 
 결과: `C:\CLI-dev\result_simplify_집PC_<시각>.md`

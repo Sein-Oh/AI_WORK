@@ -555,7 +555,13 @@ def test_alias_pair_with_both_features_accepted(alias_models):
 def test_alias_pair_one_feature_refused(alias_models, inline):
     proc, res = _pred(alias_models["unit"], inline)
     assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:"), res
-    assert "같은 열 '온도(°C)'" in res["message"] and "[후보] 온도=180, 온도(°C)=182" in res["message"], res
+    assert "같은 열 '온도(°C)'" in res["message"], res
+    if inline.startswith("온도="):        # 2.9.73: 번호와 같은 번호의 전체 명령 (다른 이름 하나를 뺀 -i)
+        assert "[후보] 1) 온도=180 2) 온도(°C)=182" in res["message"], res
+        got = [split_command(c["command"])[-1] for c in res["confirm_commands"]]
+        assert got == ["온도=180,압력(bar)=3", "온도(°C)=182,압력(bar)=3"], got
+    else:                                 # JSON 형식은 목록을 나눌 수 없어 값 목록만
+        assert "[후보] 온도=180, 온도(°C)=182" in res["message"] and "confirm_commands" not in res, res
 
 
 @pytest.mark.parametrize("other", ["온도(C)", "온도(℃)", "온도( °C)"])
@@ -1015,3 +1021,28 @@ def test_column_candidate_has_numbered_full_command(tmp_path):
     argv = split_command(res["confirm_commands"][0]["command"])
     assert argv[argv.index("-x") + 1] == "반응온도,소비전력,압축압력(bar)", argv
     assert run_tool(os.path.basename(argv[1]), *argv[2:])["version"] == "v1"
+
+
+# ---- 2.9.73: 남은 [후보]도 번호와 같은 번호의 전체 명령 ------------------------------------
+
+
+def test_two_missing_names_numbered_one_at_a_time(name_files):
+    """없는 이름이 둘이면 첫 이름의 [후보]에 번호와 전체 명령, 둘째 이름은 다음 실행에서 물음 (명령을 섞어 만들지 않음)."""
+    proc, res = run_raw("ml_train.py", "-f", name_files["acc"], "-x", "속도,압룍", "-y", "진동")
+    msg = stop_msg(res, proc)
+    assert "[후보] 1) '가속도'" in msg and "다음 실행에서 묻습니다" in msg, msg
+    fixed = split_command(res["confirm_commands"][0]["command"])
+    assert fixed[fixed.index("-x") + 1] == "가속도,압룍", fixed
+
+
+def test_command_replacing_refuses_a_value_given_twice(monkeypatch):
+    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_map.py", "-f", "a.csv", "-i", "라인=A,등급=A"])
+    assert mp.command_replacing("A", "B") is None                   # 어느 A인지 추측하지 않음
+    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_map.py", "-f", "a.csv", "-i", "라인=A,등급=C"])
+    assert split_command(mp.command_replacing("A", "B"))[-1] == "라인=B,등급=C"
+
+
+def test_command_dropping_keeps_one_name(monkeypatch):
+    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_predict.py", "-m", "v1", "-i", "온도=1,온도(°C)=2,압력=3"])
+    assert split_command(mp.command_dropping(["온도(°C)"]))[-1] == "온도=1,압력=3"
+    assert mp.command_dropping(["없는이름"]) is None
