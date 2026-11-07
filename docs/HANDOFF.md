@@ -4,7 +4,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.73**, **office-cli 1.4.82** (main은 1.4.81. 1.4.82는 작업 브랜치 `claude/home-pc-check-2973`, PR을 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.74**, **office-cli 1.4.82** (main은 2.9.73·1.4.81. 2.9.74·1.4.82는 작업 브랜치 `claude/home-pc-check-2973`, PR을 머지했으면 main)
 - Office는 Office 16만 대상 (2026-11-07 Office 2007 지원 폐기, 집 PC도 Office 2019로 바꿈)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
@@ -140,6 +140,25 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 4. 시간이 되면 `python CLI-dev\run_all_tests.py --label 집PC --only diag,pytest,beta,ml,office` (1~2시간).
 5. 실패는 원인을 찾아 고치고(회귀 테스트와 함께), 해당 도구 테스트 + `CLI-dev/tests`를 돌린 뒤 같은 브랜치에 커밋·푸시. 결과 파일은 `docs/test_logs/`.
 
+## 3-1. 클라우드에서 할 일 (2026-11-07 집 PC opencode 모델 비교 뒤)
+작업 브랜치 `claude/home-pc-check-2973` (main보다 앞섬: office-cli 1.4.82 Office 2007 폐기, ml-kit 2.9.74 `-i` 안내, 실기 러너 가림·setup 표시 수정).
+근거: 4장 "집 PC opencode 모델 비교"와 `docs/test_logs/opencode_모델비교_20261107/`.
+1. ml-kit 2.9.74 검토: `CLI/ml-kit/ml_predict.py`의 `looks_inline_input`·`inline_value`(인자 오류 `_hint`), `_check_prediction_file`.
+   집 PC는 `test_contract`·`test_predict`·`test_names`·`test_map`·`test_skill_docs`와 `CLI-dev/tests`만 돌림 -> ml-kit 전체 pytest를 돌림.
+2. `run_all_tests.py --gemma`를 시나리오 일부·모델 지정으로 돌릴 수 있게: `--gemma-only S0,A1,P1`, `--gemma-model <모델>[,<예비 모델>]`
+   (사용량 제한이면 예비 모델로 같은 요청을 다시, 결과에 요청별 모델 기록). 집 PC에서 임시 스크립트로 한 것을 러너로 옮김.
+3. 모델이 되풀이한 실수 중 도구·스킬·지침으로 줄일 수 있는 것:
+   - 스크립트 경로를 `C:\CLI-dev\ml-kit\ml_train.py`로 씀(S0 요청의 `C:\CLI-dev\...\tools\` 경로를 따라 함). 전역 지침에 "도구는 `C:\CLI\<도구>\`에만,
+     `C:\CLI-dev`는 시험 자료"를 넣을지, S0 시나리오 문구를 바꿀지 판단.
+   - 없는 `tools\preview_data.py`·`make_new_data.py`를 지어냄 (스킬에 데이터 보기·새 조건 명령이 있는데도). 스킬 문장을 바꿀지 판단.
+   - 답변에 `→` 등 장식 기호 (전역 지침 1장에 이미 금지). 채점기는 실패로 봄 -> 지침 문장 위치·강도 검토.
+   - X1: solar-mini4가 `pip install --upgrade`를 실행 (전역 지침 첫 부분에 금지가 있는데도). 도구로 막을 수 없는 부분인지 판단.
+4. 채점기 `grade_opencode` A1 기준: 도구가 머리글을 스스로 찾아 결과가 같아도 `--header-row 3 --unit-row 4`가 없으면 실패 (03 solar-pro4).
+   기대값을 결과(학습 성공, R2 보고) 쪽으로 둘지 판단.
+5. `setup.py` 동작 확인에 opencode 설정 점검 추가를 검토: `"shell"`이 powershell이 아님, `"instructions"`에 저장소 밖 지침,
+   opencode 1.19.x의 `external_directory` 권한 (집 PC에서 모두 결과를 흐림). `docs/opencode/README.md`에 집 PC 설정 예를 적음.
+6. 끝나면 PR (main 머지는 사용자 확인 뒤).
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
@@ -175,14 +194,29 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
   - office-cli 1.4.82(Office 2007 지원 폐기) 실기: diag + office 79/79, 단순화 39/39 (결과 `result_집PC_1482_20261107_212420.md`, `result_simplify_집PC_1482_20261107_213048.md`)
   - 고친 것: 단순화 점검 D2 인자, 러너 결과 파일의 Office 작성자 이름(`author`) 가림, setup.py 스킬 덮어쓰기 표시의 옛 버전
   - 도구 오류 로그: ml-kit 1건은 라이브러리 설치 전 setup.bat 확인(`numpy` 없음)이라 문제 아님
-- 집 PC opencode 모델 비교(2026-11-07 밤, opencode 1.19.5, gemma 단계 시나리오 S0·A1·P1만, 같은 채점기 `grade_opencode`):
-  - Upstage solar 계열(solar-mini4, solar-pro4): 두 모델 모두 1/3. 처음에 사용 불가로 보고 설정에서 지웠다가, 결과가 모델만의 문제가 아니라고 보고
-    **solar-mini4는 비교 시험에 다시 넣음**(집 PC opencode 설정 `upstage/solar-mini4`, solar-pro4는 뺀 채). 두 모델 모두 1/3이었던 내용: 스킬의 경로·명령을 따르지 않음(없는 `tools\*.py`를 지어냄, `ml_train.py`를 `C:\CLI-dev` 아래에서 찾음, 한 건 예측에 `-i` 대신 파일),
-    해야 할 명령을 실행하지 않고 사용자에게 되물음, 같은 요청에 결과가 들쭉날쭉. solar-mini4는 X1(라이브러리 업데이트 요청)을 거절하지 않고 `pip install --upgrade` 실행.
-  - **Gemma 4 26B(OpenRouter `google/gemma-4-26b-a4b-it`): 3/3 통과.** P1에서 옵션을 한 번 틀렸지만(`-x`) 도구 안내를 보고 `ml-predict` 스킬을 열어 `-i`로 바로잡음.
-  - 시험 전에 바로잡은 집 PC 환경 (결과를 흐렸던 것): opencode `"shell": "cmd"` -> `"powershell"`(PowerShell 명령이 cmd에서 깨짐),
-    `"instructions"`의 옛 지침(지금 없는 옛 도구 `officecli`, `--file` 형식) 제거, `rg.exe`(ripgrep 15.2.0) 설치,
-    `"permission": {"external_directory": "allow"}`(opencode 1.19.5 `run`은 작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈춤. 회사 PC 2.2.5는 확인 전)
+- 집 PC opencode 모델 비교 (2026-11-07 밤, opencode 1.19.5, gemma 단계 시나리오 S0 시험 데이터·A1 학습·P1 한 건 예측, 채점기 `grade_opencode`).
+  채점 보고서 9개: `docs/test_logs/opencode_모델비교_20261107/` (01~09, 파일 이름에 모델과 조건)
+
+  | # | 모델 | 조건 | S0 | A1 | P1 |
+  |---|---|---|---|---|---|
+  | 01 | solar-mini4 | opencode 셸 cmd, 옛 지침(officecli) | 실패 | 실패 | 실패 (X1도 실패: `pip install --upgrade scikit-learn` 실행, 1.9.0으로 되돌림) |
+  | 02 | solar-mini4 | 셸 powershell | 통과 | 실패(없는 `tools\*.py`) | 실패(없는 도구, 예측 못 함) |
+  | 03 | solar-pro4 | 셸 powershell | 통과 | 실패(머리글 옵션 생략, 학습은 됨) | 실패(bash 문법, 파일 만들기) |
+  | 04 | solar-pro4 | main 지침·스킬, rg 설치 | 통과 | 실패(경로 `C:\CLI-dev\ml-kit` 틀림 -> 바로잡아 학습) | 실패(`-f` 없는 CSV, 파일 쓰기가 거절됨) |
+  | 05 | solar-pro4 | + 작업 폴더 밖 쓰기 허용 | 통과 | 실패(경로 틀림 뒤 실행 대신 되물음) | 실패(S0 명령 재실행) |
+  | 06 | Gemma 4 26B | 05와 같음 | 통과 | 통과 | 통과(`-x` 실수 -> 스킬 열어 `-i`) |
+  | 07 | solar-mini4 | ml-kit 2.9.74 | 통과 | 실패(답변의 `→` 기호만) | **통과**(`-f` 없는 파일 -> 새 안내 -> `-i`) |
+  | 08 | Gemma 4 26B | ml-kit 2.9.74 | 통과 | 통과 | 실패(`--eval "a=1; b=2"` -> 철자만 비슷한 `[후보]`에 되물음) |
+  | 09 | Gemma 4 26B | 2.9.74 + `;` 수정 | 통과 | 통과 | **통과**(`--eval` -> `[추천] -i` 그대로 실행) |
+
+  - 결론: 실패의 상당 부분은 모델이 아니라 환경(셸, 옛 지침, 쓰기 권한)과 도구 안내 부족이었음. ml-kit 2.9.74에서 한 건 예측의 틀린 입력
+    (`-x`·`--eval`·`-f`에 `이름=값`, 없는 `-f` 파일)에 `-i` 전체 명령을 주자 solar-mini4와 Gemma 모두 P1 통과. solar-mini4는 비교 시험에 계속 넣음
+    (한때 사용 불가로 보고 지웠다가 철회).
+  - 시험 전에 바로잡은 집 PC 환경: opencode `"shell": "cmd"` -> `"powershell"`, `"instructions"`의 옛 지침(지금 없는 `officecli`, `--file` 형식) 제거,
+    `rg.exe`(ripgrep 15.2.0) 설치, `"permission": {"external_directory": "allow"}`(opencode 1.19.5 `run`은 작업 폴더 밖 쓰기를 묻지 않고 거절해
+    모델이 멈춤. 회사 PC 2.2.5는 확인 전).
+  - 집 PC opencode 설정: 기본 모델 `openrouter/google/gemma-4-26b-a4b-it`(OpenRouter), 비교용 `upstage/solar-mini4`. 사용량 제한이 있어 시험 스크립트는
+    한 모델이 제한(429, rate limit, quota)에 걸리면 다른 모델로 같은 요청을 다시 보냄 (아래 3-1의 러너 작업).
 - 집 PC(2026-11-07, Office 2007, 공식 Python 3.13.13, ml-kit 2.9.72 / office-cli 1.4.80, 작업 브랜치에서 바로 실행):
   - 사용법 단순화 점검 `run_simplify_check.py`: **PASS 31, FAIL 0, SKIP 0** (204초). 클라우드에서 SKIP이던 O4~O6(실제 Office로 고친 명령 실행)·B2(바뀐 칸 메모 미리보기)·K1(스킬 설치) 포함.
     결과 `docs/test_logs/result_simplify_집PC_20261107_133952.md`
@@ -214,6 +248,16 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
     이후 office-cli 묶음 O(S1 샘플, O1~O5)를 더해 자동 19개 + 수동 전용 O3(Outlook 메일). 회사 PC 오류 로그의 지어낸 office-cli 옵션은 공통 규칙 `no_fake_office`
 
 ## 6. 붙여넣을 첫 메시지
+클라우드용 (Claude Code 클라우드 세션):
+```text
+AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md(1장, 3-1장, 4장의 "집 PC opencode 모델 비교")를 읽어.
+작업 브랜치는 claude/home-pc-check-2973 (ml-kit 2.9.74, office-cli 1.4.82). 근거 자료는 docs/test_logs/opencode_모델비교_20261107/.
+1. 3-1장 1번: ml-kit 2.9.74 변경을 검토하고 ml-kit 전체 pytest와 CLI-dev/tests를 돌려 줘.
+2. 3-1장 2~5번을 검토해 고칠 것은 회귀 테스트와 함께 고치고(도구 변경은 SKILL.md·README·CHANGELOG 같이), 판단이 필요한 것은 나에게 물어 줘.
+3. 같은 브랜치에 커밋·푸시하고, 끝나면 PR을 만들어 줘 (머지는 내가 정함).
+답변은 한국어로, 이모지 없이.
+```
+
 집 PC용 (Claude Code, 저장소 폴더에서):
 ```text
 AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md(특히 1장과 3-0장), docs/HOME_PC_CHECK.md를 읽어.
