@@ -396,8 +396,8 @@ def test_no_read_code_rule_searches_without_py():
 
 
 def test_no_read_code_allows_office_task_skills():
-    """office-cli 스킬은 작업별 4개(C:\\CLI\\office-cli\\skills\\<이름>\\SKILL.md): 읽기·검색은 위반이 아니고, 도구 폴더 검색은 그대로 위반."""
-    for name in ("office-excel", "office-doc", "office-mail", "office-spec"):
+    """office-cli 스킬은 작업별 5개(C:\\CLI\\office-cli\\skills\\<이름>\\SKILL.md): 읽기·검색은 위반이 아니고, 도구 폴더 검색은 그대로 위반."""
+    for name in ("office-excel", "office-doc", "office-mail", "office-spec", "office-data"):
         path = f"C:\\CLI\\office-cli\\skills\\{name}\\SKILL.md"
         for c in (f"Get-Content {path}", f'Select-String -Path "{path}" -Pattern check', f"findstr comment {path}",
                   f'[IO.File]::ReadAllText("{path}")'):
@@ -840,10 +840,16 @@ def test_no_fake_office_rule():
     """회사 PC 오류 로그에서 나온 지어낸 office-cli 명령·옵션은 어느 요청에서든 공통 규칙 위반."""
     for c in (f'{EX} write --range C6 --text ft', f'{EX} write --cell C6 --value ft', f'{OF} write --text "x"',
               f'{OF} transfer --source excel --to word', f'{OF} transfer --from word --to excel --text "x"',
-              f'{OF} undo --target "{G}\\a.xlsx"', f'{EX} list', 'cd C:\\CLI\\office-cli; python excel.py write --cell C6'):
+              f'{OF} undo --target "{G}\\a.xlsx"', f'{EX} list', 'cd C:\\CLI\\office-cli; python excel.py write --cell C6',
+              # 1.4.79: transfer --to/--from, ppt slide --to는 옛 이름 (지금은 --to-app/--from-app, --dest)
+              f'{OF} transfer --from excel --range A1:D10 --to word', f'{OF} transfer --from-app excel --range A1 --to word',
+              'python "C:\\CLI\\office-cli\\ppt.py" slide --action move --slide 1 --to 3'):
         assert _rule_hits("no_fake_office", c), c
     for c in (f'{EX} write --cells "C6=ft; C7=℃"', f'{EX} comment --action add --range B5 --text "의견"',
-              f'{WD} write --text "## 제목"', f'{OF} transfer --from excel --range A1:D10 --to word',
+              f'{WD} write --text "## 제목"', f'{OF} transfer --from-app excel --range A1:D10 --to-app word',
+              f'{OF} transfer --from-app word --from-target "{G}\\a.docx" --to-app excel --to-target active',
+              'python "C:\\CLI\\office-cli\\ppt.py" slide --action move --slide 1 --dest 3',
+              'python "C:\\CLI\\office-cli\\outlook.py" search --query x --from 홍길동',
               f'{OF} undo --list', f'{EX} write --cells C6=ft; {WD} write --text "x"', f'{EX} read --range A1:B2',
               'python "C:\\CLI\\ml-kit\\ml_train.py" -f a.xlsx'):
         assert not _rule_hits("no_fake_office", c), c

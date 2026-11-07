@@ -8,12 +8,12 @@ r"""C:\CLI 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\
 
 하는 일 (C:\CLI = 이 파일이 있는 폴더):
 1. OpenCode 설정 폴더(%USERPROFILE%\.config\opencode)로 복사 (바뀐 것만):
-       ml-kit\SKILL.md                     -> skills\ml-kit\SKILL.md
-       office-cli\skills\<이름>\SKILL.md   -> skills\<이름>\SKILL.md  (office-excel, office-doc, office-mail, office-spec)
+       ml-kit\skills\<이름>\SKILL.md       -> skills\<이름>\SKILL.md  (ml-train, ml-predict, ml-report, ml-map)
+       office-cli\skills\<이름>\SKILL.md   -> skills\<이름>\SKILL.md  (office-excel, office-doc, office-mail, office-spec, office-data)
        opencode\AGENTS.md                  -> AGENTS.md (전역 지침)
        opencode\opencode.jsonc             -> opencode.jsonc (있을 때만. 사내 LLM 주소가 들어 있어 사용자가 넣어 둠)
    덮어쓰는 파일은 data\setup_backup_<시각>\config\에 먼저 보관합니다.
-   옛 통합 스킬 폴더 skills\office-cli는 보관 후 지웁니다 (링크·정션이면 링크만 지움).
+   옛 통합 스킬 폴더 skills\office-cli, skills\ml-kit은 보관 후 지웁니다 (링크·정션이면 링크만 지움).
 2. 시스템 PATH(HKLM)에 <C:\CLI>\python, <C:\CLI>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
 3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep).
@@ -31,8 +31,10 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\CLI (배포 폴더)
-OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec")    # office-cli\skills\<이름>\SKILL.md
-OBSOLETE = (("옛 office-cli 스킬", os.path.join("skills", "office-cli")),)        # 설정 폴더에서 지울 옛 스킬 폴더
+OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data")    # office-cli\skills\<이름>\SKILL.md
+ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map")                     # ml-kit\skills\<이름>\SKILL.md
+OBSOLETE = (("옛 office-cli 스킬", os.path.join("skills", "office-cli")),           # 설정 폴더에서 지울 옛 스킬 폴더
+            ("옛 ml-kit 스킬", os.path.join("skills", "ml-kit")))
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
 # 도구가 쓰는 라이브러리 (AGENTS.md 사용자 환경 표): (배포 이름, import 이름)
 LIBS = (("numpy", "numpy"), ("pandas", "pandas"), ("scikit-learn", "sklearn"), ("scipy", "scipy"), ("joblib", "joblib"),
@@ -86,7 +88,8 @@ class Report:
 # ---------------------------------------------------------------------------
 def targets(test_skills=()):
     """(이름, 원본, 설정 폴더 기준 대상 상대 경로) 목록."""
-    items = [("ml-kit 스킬", os.path.join(HERE, "ml-kit", "SKILL.md"), os.path.join("skills", "ml-kit", "SKILL.md"))]
+    items = [(f"{name} 스킬", os.path.join(HERE, "ml-kit", "skills", name, "SKILL.md"), os.path.join("skills", name, "SKILL.md"))
+             for name in ML_SKILLS]
     items += [(f"{name} 스킬", os.path.join(HERE, "office-cli", "skills", name, "SKILL.md"), os.path.join("skills", name, "SKILL.md"))
               for name in OFFICE_SKILLS]
     items.append(("전역 지침", os.path.join(HERE, "opencode", "AGENTS.md"), "AGENTS.md"))

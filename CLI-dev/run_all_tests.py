@@ -125,6 +125,16 @@ def tool_versions():
     return ", ".join(out)
 
 
+
+# 결과 파일은 GitHub(docs/test_logs/)에 올리므로 사용자 폴더 이름을 가림 (AGENTS.md 작업 절차 4번).
+# 경로 안의 'Users\<이름>' 부분만 바꿈: 잘린 출력('C:\\Users\\Joo...'), JSON의 '\\', '/' 모두. 이름 자체가 흔한 낱말일 수 있어 경로 밖은 건드리지 않음.
+_USER_SEGMENT = re.compile(r"(?i)(\bUsers(?:\\\\|\\|/)+)(?!<사용자>)[^\\/\s\"'<>|:*?]+")
+
+
+def mask_private(text):
+    return _USER_SEGMENT.sub(lambda m: m.group(1) + "<사용자>", text)
+
+
 class Report:
     """결과 파일 하나 (markdown). 단계가 끝날 때마다 통째로 다시 씁니다 (요약 표가 맨 위에 있어야 하므로)."""
 
@@ -175,7 +185,7 @@ class Report:
     def write(self):
         try:
             with open(self.path, "w", encoding="utf-8") as f:
-                f.write(self.render())
+                f.write(mask_private(self.render()))
         except Exception as e:                                   # 결과 파일 문제로 점검을 멈추지 않음
             echo(f"[WARN] 결과 파일을 쓰지 못했습니다: {type(e).__name__}: {e}")
 

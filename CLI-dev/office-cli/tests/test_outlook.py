@@ -10,7 +10,7 @@ import pytest
 
 import _runtime as rt
 import outlook
-from office_helpers import error_log_text, run_fresh, run_main, run_outlook, SECRET
+from office_helpers import error_log_text, option_value, recommended_argv, run_fresh, run_main, run_outlook, SECRET
 
 
 class _DraftsFolder:
@@ -788,7 +788,7 @@ def test_attach_resolves_data_dir_and_missing_is_suggested(capsys, monkeypatch):
     code, out = run(capsys, monkeypatch, mail, "new", "--attach", "보고서_최종.pdf")
     assert code == 0 and mail.Attachments.added == [os.path.join(data, "보고서_최종.pdf")]
     code, out = run(capsys, monkeypatch, Mail(), "new", "--attach", "보고서_최종.docx")
-    assert code == 1 and "[후보] 보고서_최종.pdf" in out["message"] and "[추천]" not in out["message"]   # 다른 파일을 첨부해 발송하지 않게
+    assert code == 1 and "[후보] 1) 보고서_최종.pdf" in out["message"] and "[추천]" not in out["message"]   # 다른 파일을 첨부해 발송하지 않게
 
 
 def test_search_filter_has_single_prefix_and_grouping():
@@ -937,17 +937,19 @@ def test_restrict_refused_falls_back_and_filters(ol, capsys):
 
 
 @pytest.mark.parametrize("argv, rec", [
-    (["--since", "2026/10/01"], "[추천] 2026-10-01"),
-    (["--since", "20261001"], "[추천] 2026-10-01"),
-    (["--since", "2026년 10월 1일"], "[추천] 2026-10-01"),
-    (["--since", "2026-1-5"], "[추천] 2026-01-05"),
-    (["--days", "0"], "[추천] 1"),
-    (["--days", "-7"], "[추천] 7"),
+    (["--since", "2026/10/01"], "2026-10-01"),
+    (["--since", "20261001"], "2026-10-01"),
+    (["--since", "2026년 10월 1일"], "2026-10-01"),
+    (["--since", "2026-1-5"], "2026-01-05"),
+    (["--days", "0"], "1"),
+    (["--days", "-7"], "7"),
 ])
 def test_bad_date_recommends(ol, capsys, argv, rec):
     for cmd in ("list", "search"):
         code, out = run_main(outlook, capsys, cmd, *argv)
-        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and out["message"].endswith(rec), out
+        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+        got = recommended_argv(out["message"], "outlook")       # 1.4.79: [추천]은 전체 명령 (같은 명령, 그 옵션 값만 고침)
+        assert got == [cmd, argv[0], rec], got
     assert not ol["log"], ol["log"]          # Outlook에 묻기 전에 멈춤
 
 
@@ -1002,7 +1004,23 @@ def test_folder_candidates_match_leaf_names(mail, capsys, monkeypatch, isolated_
 
 def test_folder_same_name_recommends_full_path(mail, capsys, monkeypatch):
     code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", "zqx_보관")
-    assert code == 1 and out["message"].endswith(f"[추천] {ROOT_MAIL}\\ZQX보관"), out
+    assert code == 1 and f"'{ROOT_MAIL}\\zqx_보관'" in out["message"], out          # 메시지에는 전체 경로
+    # 1.4.79: [추천]은 전체 명령. --folder 값의 틀린 부분만 실제 폴더 이름으로 바꿈 (최상위 아래 폴더라 그대로 찾아짐)
+    assert recommended_argv(out["message"], "outlook") == ["list", "--folder", "ZQX보관"], out
+
+
+@pytest.mark.parametrize("folder, fixed, leaf", [
+    ("zqx프로젝트a\\zqx_회의록", "zqx프로젝트a\\ZQX회의록", "ZQX회의록"),             # 하위 폴더 경로의 끝 부분만 틀림
+    (f"{ROOT_MAIL}\\zqx_보관", f"{ROOT_MAIL}\\ZQX보관", "ZQX보관"),                   # 메일 계정 이름으로 시작한 경로
+])
+def test_folder_path_part_recommends_full_command(mail, capsys, monkeypatch, folder, fixed, leaf):
+    """1.4.79 회귀: --folder 값의 한 부분(경로 \\ 구분)만 틀려도 [추천]은 값만이 아니라 그 부분만 고친 전체 명령."""
+    code, out = run_fresh(outlook, capsys, monkeypatch, "list", "--folder", folder)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    argv = recommended_argv(out["message"], "outlook")
+    assert argv == ["list", "--folder", fixed] and folder not in argv, argv
+    # 가짜 폴더에는 메일 목록(Items)이 없어 list 전체는 다시 못 돌림: 고친 경로가 그 폴더로 찾아지는지만 확인
+    assert str(outlook.resolve_folder(_NS(), option_value(argv, "--folder")).Name) == leaf
 
 
 @pytest.mark.parametrize("folder", ["프로젝트", "회의", "zqx_보관", f"{ROOT_MAIL}\\없음"])
@@ -1308,7 +1326,8 @@ def test_engenius_data_dir_does_not_move_downloads_default(ol_env, capsys, monke
 
 def test_download_alias_recommends_attachments(ol_env, capsys):
     code, out = run_outlook(capsys, "download", "--id", "M1")
-    assert code == 2 and out["message"].endswith("[추천] attachments")
+    assert code == 2, out
+    assert recommended_argv(out["message"], "outlook") == ["attachments", "--id", "M1"], out     # 1.4.79: [추천]은 전체 명령
 
 
 # ---------------------------------------------------------------------------

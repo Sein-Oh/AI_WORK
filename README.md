@@ -39,7 +39,7 @@ AI_WORK/
 │   │   ├── ml_map.py          # 표 보간·반대 찾기 (모델 불필요)
 │   │   └── ml_export.py       # 성능예측표 (엑셀 계산기, 학습 PC용)
 │   └── office-cli/            # Office(Excel/Word/PPT/Outlook) 자동화 + 문서 읽기/검색
-│       ├── skills/<이름>/SKILL.md   # 작업별 스킬 4개: office-excel, office-doc, office-mail, office-spec
+│       ├── skills/<이름>/SKILL.md   # 작업별 스킬 5개: office-excel, office-doc, office-mail, office-spec, office-data
 │       ├── excel.py / word.py / ppt.py / outlook.py   # 앱별 진입점
 │       ├── reader.py          # PDF/HWP/Office 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
 │       ├── office.py          # 창 목록/전환, 앱 간 전달, 되돌리기

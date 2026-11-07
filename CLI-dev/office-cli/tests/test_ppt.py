@@ -7,7 +7,7 @@ import _office as off
 import ppt
 from fake_office import make_win32com
 from fake_ppt import FakePptWindowApp, FakePresentation, FakeShape
-from office_helpers import Bag, CODE_MD, EMPTY_FIND, run_main, run_ppt, set_active, stub_com, undo_points
+from office_helpers import Bag, CODE_MD, EMPTY_FIND, recommended_argv, run_main, run_ppt, set_active, stub_com, undo_points, split_command
 
 
 def live(slide):
@@ -193,7 +193,7 @@ def test_write_bad_slide_number_and_no_content(pp, capsys):
 
 
 def test_cards(pp, capsys):
-    code, out = run_ppt(capsys, "write", "--slide", "new", "--title", "핵심", "--cards", "안정성:무중단|확장성:모듈")
+    code, out = run_ppt(capsys, "write", "--slide", "new", "--title", "핵심", "--cards", "안정성:무중단; 확장성:모듈")
     cards = [s for s in live(pp["prs"].Slides(4)) if s.Name.startswith("Shape")]
     assert len(cards) == 2 and cards[0].TextFrame.TextRange.Text == "안정성\r무중단"
 
@@ -227,7 +227,7 @@ def test_read_does_not_move_view(pp, capsys):
 def test_slide_actions(pp, capsys):
     prs = pp["prs"]
     first = prs.Slides(1)
-    code, out = run_ppt(capsys, "slide", "--action", "move", "--slide", "1", "--to", "3")
+    code, out = run_ppt(capsys, "slide", "--action", "move", "--slide", "1", "--dest", "3")
     assert code == 0 and prs.Slides(3) is first and out["agent_directive"].startswith("VERIFIED:")
     code, out = run_ppt(capsys, "slide", "--action", "duplicate", "--slide", "3")
     assert out["slides_total"] == 4 and out["agent_directive"].startswith("VERIFIED:")     # 장 수를 다시 읽음 (R1)
@@ -257,6 +257,9 @@ def test_read_closed_pptx_uses_python_pptx(tmp_path, capsys, monkeypatch):
     assert "next_commands" not in out                                     # 넣기·옮기기는 confirm_commands (1.4.75)
     transfer = [c["command"] for c in out["confirm_commands"] if "transfer" in c["command"]][0]
     assert "--from-target" in transfer and str(p) in transfer, transfer
+    argv = split_command(transfer)[2:]                    # 1.4.79: 앱은 --from-app/--to-app (--from/--to는 outlook 전용)
+    assert argv[:3] == ["transfer", "--from-app", "ppt"] and argv[argv.index("--to-app") + 1] == "excel", argv
+    assert "--from" not in argv and "--to" not in argv, argv
 
 
 def test_export_pdf_passes_print_range_none(pp, capsys):
@@ -369,7 +372,7 @@ def test_same_heading_as_title_is_not_duplicated(pp, capsys, tmp_path):
 def test_cards_go_to_new_slide_when_no_space(pp, capsys):
     text = "\\n".join(f"- 줄 {i}" for i in range(1, 16))
     code, out = run_ppt(capsys, "write", "--slide", "new", "--title", "핵심", "--text", text,
-                        "--cards", "안정성:무중단|확장성:모듈")
+                        "--cards", "안정성:무중단; 확장성:모듈")
     assert code == 0, out
     prs = pp["prs"]
     H, W = float(prs.PageSetup.SlideHeight), float(prs.PageSetup.SlideWidth)
@@ -533,15 +536,29 @@ def test_ppt_clear_of_empty_slide_drops_point(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
+def test_slide_move_old_to_option_recommends_dest(pp, capsys):
+    """1.4.79: 옮길 위치는 --dest (excel range --dest와 같은 이름, --to는 outlook 받는 사람 뜻만). 옛 --to는 받지 않고 고친 전체 명령 [추천]."""
+    prs = pp["prs"]
+    first = prs.Slides(1)
+    code, out = run_ppt(capsys, "slide", "--action", "move", "--slide", "1", "--to", "3")
+    assert code == 2 and out["agent_directive"].startswith("STOP_RETRY:") and prs.Slides(1) is first, out
+    argv = recommended_argv(out["message"], "ppt")
+    assert argv == ["slide", "--action", "move", "--slide", "1", "--dest", "3"], argv
+    code, out = run_ppt(capsys, *argv)                          # [추천]대로 다시 실행하면 옮겨짐
+    assert code == 0 and prs.Slides(3) is first, out
+    code, out = run_ppt(capsys, "slide", "--action", "move", "--slide", "1")
+    assert code == 1 and "--dest" in out["message"], out        # 위치가 없다는 안내도 새 이름
+
+
 def test_ppt_move_to_same_position_keeps_previous_point(pp_prs, capsys):
     code, out = run_main(ppt, capsys, "notes", "--slide", "1", "--text", "실제 변경")
     assert code == 0, out
     before = undo_points("ppt")
     assert len(before) == 1
-    code, out = run_main(ppt, capsys, "slide", "--action", "move", "--slide", "2", "--to", "2")
+    code, out = run_main(ppt, capsys, "slide", "--action", "move", "--slide", "2", "--dest", "2")
     assert code == 0 and "바뀐 것 없음" in out["preview"], out
     assert undo_points("ppt") == before                         # 다음 undo는 notes를 되돌림
-    code, out = run_main(ppt, capsys, "slide", "--action", "move", "--slide", "2", "--to", "3")
+    code, out = run_main(ppt, capsys, "slide", "--action", "move", "--slide", "2", "--dest", "3")
     assert code == 0 and len(undo_points("ppt")) == 2, out      # 실제로 옮기면 지점이 남음
 
 
@@ -795,3 +812,15 @@ def test_ppt_slide_list_zero(pp, capsys):
 def test_ppt_slide_list_count(pp, capsys):
     code, out = run_ppt(capsys, "slide", "--action", "list")
     assert code == 0 and out["count"] == len(out["slides"]) > 0, out
+
+
+def test_cards_with_old_bar_separator_get_full_command(pp, capsys):
+    """1.4.79: 카드 사이는 ; (저장소 구분자 규칙). '|'만 쓰면 쓰지 않고 ;로 고친 전체 명령을 [추천]."""
+    before = pp["prs"].Slides.Count
+    code, out = run_ppt(capsys, "write", "--slide", "new", "--title", "핵심", "--cards", "안정성:무중단|확장성:모듈")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and pp["prs"].Slides.Count == before, out
+    rec = out["message"].split("[추천] ", 1)[1]
+    argv = split_command(rec)
+    assert argv[0] == "python" and argv[argv.index("--cards") + 1] == "안정성:무중단; 확장성:모듈", argv
+    code, out = run_ppt(capsys, *argv[2:])
+    assert code == 0, out

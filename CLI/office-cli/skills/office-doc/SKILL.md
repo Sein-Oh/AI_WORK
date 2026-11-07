@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 본문
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.77"
+  version: "1.4.80"
   platform: windows
 ---
 
@@ -12,7 +12,7 @@ metadata:
 
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
-2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄(`$env:PYTHONIOENCODING='utf-8'; ...`)을 붙인다.
+2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄을 붙인다.
 3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
 4. `--target`을 빼면 사용자가 보고 있는 문서다. 다른 열린 문서는 `--target "<이름>"`, 닫힌 파일은 `--target "<전체경로>"`.
 5. 여러 줄 글, 표, 큰따옴표가 든 값은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .md(.csv)를 만들고 `--file "<그 경로>"`로 넘긴다. .md의 코드는 ```로 감싼다.
@@ -32,13 +32,13 @@ metadata:
 | 워드 바꾸기 | `python "C:\CLI\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (`--replace` 없음) |
 | 워드 정보 / PDF | `python "C:\CLI\office-cli\word.py" info [--detail]` / `python "C:\CLI\office-cli\word.py" export --save "<보고서.pdf>" [--page-number]` |
 | PPT 읽기 | `python "C:\CLI\office-cli\ppt.py" read [--slides 1-3]` |
-| PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용|제목:내용"` |
+| PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용; 제목:내용"` |
 | PPT 발표자 노트 | 읽기 `python "C:\CLI\office-cli\ppt.py" notes [--slides 1-3]` / 쓰기 `python "C:\CLI\office-cli\ppt.py" notes --slide 3 --text "<노트>"` (있던 노트에 덧붙이기 `--append`, 여러 줄 `--file "<노트.md>"`) |
-| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action add|duplicate|delete|move --slide N [--to M] [--layout title|text|title_only|blank]` |
+| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action add|duplicate|delete|move --slide N [--dest M] [--layout title|text|title_only|blank]` |
 | PPT 기타 | `python "C:\CLI\office-cli\ppt.py" replace --find <A> --replace <B>` / `python "C:\CLI\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\CLI\office-cli\ppt.py" info --detail --slides N` |
-| 엑셀 차트를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from excel --chart "<차트이름>" --to word,ppt` |
-| 엑셀 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from excel --range A1:D10 --to word` |
-| 워드/PPT 내용을 엑셀로 | `python "C:\CLI\office-cli\office.py" transfer --from word --what text --to excel` (표는 `--what table --table 1`) |
+| 엑셀 차트를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` |
+| 엑셀 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --range A1:D10 --to-app word` |
+| 워드/PPT 내용을 엑셀로 | `python "C:\CLI\office-cli\office.py" transfer --from-app word --what text --to-app excel` (표는 `--what table --table 1`) |
 | 되돌리기 / 창 | `python "C:\CLI\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\CLI\office-cli\office.py" windows` / `python "C:\CLI\office-cli\office.py" focus --app word` |
 
 ## 결과 처리
@@ -47,5 +47,5 @@ metadata:
 - transfer는 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 준다.
 - `info --detail`의 `layout_warnings`가 있으면 `warnings`를 알린다.
 - 슬라이드 삭제, `slide --action clear --all-slides`, `--overwrite`(기존 노트·슬라이드 제목·표 칸 덮어쓰기)는 사용자가 요청했을 때만.
-- `replace`의 `--find`는 비우지 않는다. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
-- 잘못 고쳤으면 위 표의 되돌리기 명령으로 되돌린다. 저장한 적 없는 문서도 되돌린다.
+- `replace`의 `--find`는 비우지 않는다. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- 잘못 고쳤으면 `undo`로 되돌린다. 저장한 적 없는 문서도 되돌린다.

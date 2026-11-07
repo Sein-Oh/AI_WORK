@@ -664,3 +664,156 @@ def test_match_categories_ambiguous_not_fixed():
     assert fixes == {"b ": "B"} and unseen == ["x"]      # 'a'는 학습 범주 그대로 ('A'로 바꾸지 않음)
     fixes, unseen = mp.match_categories(["ａ"], ["A", "a"])
     assert fixes == {} and unseen == ["ａ"]          # 'A'와 'a' 둘 다 맞아 고를 수 없음
+
+
+def test_model_given_as_data_file_uses_best_version(p1_model, tmp_path):
+    """2.9.71: -m <데이터 파일>이면 도구가 best_version.json(학습이 원장마다 씀)의 최고 버전으로 예측 (LLM이 버전 폴더를 고르지 않음)."""
+    root = os.path.join(os.path.dirname(p1_model["f"]), "p1_ml_data")
+    pointer = json.load(open(os.path.join(root, "best_version.json"), encoding="utf-8"))
+    assert pointer["tasks"]["regression"]["version"] == "v1", pointer
+    res = run_tool("ml_predict.py", "-m", p1_model["f"], "-i", "온도=180,압력=3,속도=45")
+    by_dir = run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도=180,압력=3,속도=45")
+    assert res["predictions_summary"] == by_dir["predictions_summary"] and "v1" in res["model_chosen"], res
+    assert "model_chosen" not in by_dir
+    # 기록이 없으면 고르지 않고 버전 폴더를 [후보] 전체 명령으로
+    copy = tmp_path / "p1_ml_data"
+    shutil.copytree(root, copy)
+    os.remove(copy / "best_version.json")
+    shutil.copy(p1_model["f"], tmp_path / "p1.csv")
+    msg = run_fail("ml_predict.py", "-m", str(tmp_path / "p1.csv"), "-i", "온도=180,압력=3,속도=45")["message"]
+    first = msg.split("[후보] 1) ", 1)[1].split(" / ")[0]
+    argv = split_command(first)
+    assert argv[0] == "python" and argv[argv.index("-m") + 1] == str(copy / "v1"), msg
+
+
+# ---- 2.9.72: 다음 실험 제안(--suggest), 입력별 영향(explain), 실제값 비교와 재학습 알림(actual_check) -------------
+
+
+@pytest.fixture(scope="module")
+def lin(tmp_path_factory):
+    """수율 = 3*온도 - 2*압력 (+ 속도 영향 없음) 회귀 모델과, 새 데이터 두 개 (같은 관계 / 바뀐 관계)."""
+    tmp = str(tmp_path_factory.mktemp("lin"))
+    r = np.random.default_rng(1)
+    n, m = 80, 30
+    a, b, c = r.uniform(0, 10, n), r.uniform(0, 10, n), r.uniform(0, 10, n)
+    y = 3 * a - 2 * b + r.normal(0, 0.3, n)
+    f = write_df(os.path.join(tmp, "lin.csv"), pd.DataFrame({"온도": a.round(3), "압력": b.round(3), "속도": c.round(3),
+                                                             "수율": y.round(3)}))
+    run_tool("ml_train.py", "-f", f, "-x", "온도,압력,속도", "-y", "수율")
+    a2, b2, c2 = r.uniform(1, 9, m), r.uniform(1, 9, m), r.uniform(1, 9, m)
+    same = write_df(os.path.join(tmp, "new_same.csv"), pd.DataFrame(
+        {"온도": a2, "압력": b2, "속도": c2, "수율": 3 * a2 - 2 * b2 + r.normal(0, 0.3, m)}))
+    shift = write_df(os.path.join(tmp, "new_shift.csv"), pd.DataFrame(
+        {"온도": a2, "압력": b2, "속도": c2, "수율": 3 * a2 - 2 * b2 + 5 + c2 + r.normal(0, 0.3, m)}))
+    return {"f": f, "same": same, "shift": shift, "tmp": tmp, "ys": y}
+
+
+def _in_range(res):
+    for p in res["points"]:
+        for v, x in p["inputs"].items():
+            lo, hi = res["training_range"][v]
+            assert lo <= x <= hi, (v, x, lo, hi)
+
+
+def test_suggest_explore_in_range_and_saved(lin):
+    import openpyxl
+    res = run_tool("ml_predict.py", "-m", lin["f"], "--suggest", "4")
+    assert res["mode"] == "explore" and res["count"] == 4 and res["verified"] is True
+    assert res["vary"] == ["온도", "압력", "속도"]
+    _in_range(res)
+    pts = [tuple(p["inputs"].values()) for p in res["points"]]
+    assert len(set(pts)) == 4
+    assert all(p["nearest_distance"] > 0 and p["interval_width"]["수율"] > 0 for p in res["points"])
+    wb = openpyxl.load_workbook(res["output_file"], read_only=True)
+    assert wb.sheetnames == ["실험계획"]
+    rows = list(wb["실험계획"].iter_rows(values_only=True))
+    wb.close()
+    assert len(rows) == 5 and rows[0][:4] == ("번호", "온도", "압력", "속도")
+    assert "다음 실험 제안 4개" in res["preview"] and res["agent_directive"].startswith("VERIFIED:")
+
+
+def test_suggest_spreads_away_from_measured_rows(lin):
+    """제안 점은 실측 행끼리의 보통 거리보다 멀리 떨어진 곳 (빈 곳을 채움)."""
+    res = run_tool("ml_predict.py", "-m", lin["f"], "--suggest", "3", "--vary", "온도", "-i", "압력=3")
+    assert res["vary"] == ["온도"] and res["fixed"] == {"압력": 3.0} and "속도" in res["filled_defaults"]
+    assert any("중앙값" in w for w in res["warnings"])
+    xs = sorted(p["inputs"]["온도"] for p in res["points"])
+    assert min(np.diff(xs)) > 0.5
+    _in_range(res)
+
+
+def test_suggest_maximize_prefers_good_values(lin):
+    res = run_tool("ml_predict.py", "-m", lin["f"], "--suggest", "3", "--maximize", "수율")
+    assert res["mode"] == "maximize" and res["goal"] == "수율" and res["verified"] is True
+    _in_range(res)
+    assert min(p["predictions"]["수율"] for p in res["points"]) > np.quantile(lin["ys"], 0.9)
+    assert "수율 최대" in res["preview"]
+
+
+def test_suggest_count_limit_recommends_full_command(lin):
+    proc, res = run_raw("ml_predict.py", "-m", lin["f"], "--suggest", "50")
+    msg = stop_msg(res, proc)
+    rec = msg.split("[추천] ")[1].strip()
+    assert rec.startswith("python") and split_command(rec)[-2:] == ["--suggest", "30"]
+
+
+def test_explain_signs_on_linear_model(lin):
+    res = run_tool("ml_predict.py", "-m", lin["f"], "-i", "온도=8,압력=6,속도=5")
+    ex = res["predictions_summary"]["수율"]["explain"][0]
+    eff = {e["input"]: e["effect"] for e in ex["effects"]}
+    assert eff["온도"] > 0 and eff["압력"] < 0
+    assert abs(eff["속도"]) < 0.1 * abs(eff["온도"]) and abs(eff["속도"]) < 0.1 * abs(eff["압력"])
+    assert [e["input"] for e in ex["effects"]][:1] == ["온도"]                 # 가장 큰 영향이 먼저
+    med = {e["input"]: e["baseline"] for e in ex["effects"]}
+    assert abs(eff["온도"] - 3 * (8 - med["온도"])) < 1.0 and abs(eff["압력"] + 2 * (6 - med["압력"])) < 1.0
+    assert "높인 입력: 온도" in res["preview"] and "낮춘 입력: 압력" in res["preview"]
+    assert "explain" in res["agent_directive"]
+
+
+def test_explain_classification_probability(lin):
+    tmp = lin["tmp"]
+    df = pd.read_csv(lin["f"], encoding="utf-8-sig")
+    df["등급"] = np.where(df["수율"] > df["수율"].median(), "상", "하")
+    f = write_df(os.path.join(tmp, "lin_cls.csv"), df.drop(columns="수율"))
+    run_tool("ml_train.py", "-f", f, "-x", "온도,압력,속도", "-y", "등급", "--task", "classification")
+    res = run_tool("ml_predict.py", "-m", f, "-i", "온도=9,압력=1,속도=5")
+    ps = res["predictions_summary"]["등급"]
+    assert ps["predictions"] == ["상"]
+    ex = ps["explain"][0]
+    assert ex["class"] == "상"
+    eff = {e["input"]: e["effect"] for e in ex["effects"]}
+    assert eff["온도"] > 0 and eff["압력"] > 0                                  # 둘 다 '상' 확률을 높임
+    assert "'상' 확률" in res["preview"]
+
+
+def test_actual_check_similar_data_no_alert(lin):
+    res = run_tool("ml_predict.py", "-m", lin["f"], "-f", lin["same"])
+    chk = res["actual_check"]["수율"]
+    assert chk["rows"] == 30 and chk["judged"] is True and chk["worse"] is False
+    assert chk["rmse"] < 1.5 * chk["validation"]["rmse"]
+    assert res["retrain_recommended"] is False and "next_commands" not in res
+    assert "실제값 비교" in res["preview"] and "(비슷함)" in res["preview"]
+
+
+def test_actual_check_shifted_data_alerts_and_retrains(lin):
+    res = run_tool("ml_predict.py", "-m", lin["f"], "-f", lin["shift"])
+    chk = res["actual_check"]["수율"]
+    assert chk["worse"] is True and res["retrain_recommended"] is True
+    assert any("다시 학습" in w for w in res["warnings"])
+    assert "next_commands[0]" in res["agent_directive"] and "재학습 권장" in res["preview"]
+    nc = res["next_commands"][0]
+    assert nc["needs_input"] is False
+    args = split_command(nc["command"])
+    assert os.path.basename(args[1]) == "ml_train.py"
+    assert args[args.index("-f") + 1] == os.path.abspath(lin["shift"]) and args[args.index("-x") + 1] == "온도,압력,속도"
+    again = run_tool("ml_train.py", *args[2:])
+    assert again["targets"] == ["수율"] and again["verified"] is True
+    assert os.path.dirname(again["data_root"]) == os.path.dirname(os.path.abspath(lin["shift"]))
+
+
+def test_actual_check_few_rows_not_judged(lin, tmp_path):
+    df = pd.read_csv(lin["shift"], encoding="utf-8-sig").head(5)
+    f = write_df(os.path.join(str(tmp_path), "few.csv"), df)
+    res = run_tool("ml_predict.py", "-m", lin["f"], "-f", f)
+    chk = res["actual_check"]["수율"]
+    assert chk["judged"] is False and chk["worse"] is False and "note" in chk and "next_commands" not in res

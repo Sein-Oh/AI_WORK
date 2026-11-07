@@ -1503,7 +1503,7 @@ def test_cli_missing_file_suggests(samples, env, tmp_path):
     data.mkdir(exist_ok=True)
     (data / "보고서_최종.pdf").write_bytes(b"x")
     code, out = run_reader_env(env, "read", "--file", "보고서_최종.docx")
-    assert code == 1 and "[후보] 보고서_최종.pdf" in out["message"] and "[추천]" not in out["message"]
+    assert code == 1 and "[후보] 1) 보고서_최종.pdf" in out["message"] and "[추천]" not in out["message"]
 
 
 def test_cli_argument_error(env):

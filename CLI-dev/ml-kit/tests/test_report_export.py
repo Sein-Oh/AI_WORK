@@ -554,7 +554,7 @@ def test_keep_and_inputs_and_errors(export_version):
     assert "잡음" in k["targets"]["효율"]["inputs"] and k["title"] == "짧은 제목"
     i = run_tool("ml_export.py", "-m", vdir, "--inputs", "온도,유량")
     assert i["targets"]["효율"]["inputs"] == ["온도", "유량"] and len(i["targets"]["효율"]["candidates"]) == 1
-    assert "[후보] '온도'" in run_fail("ml_export.py", "-m", vdir, "--keep", "온도x")["message"]     # 2.9.33: was [추천]
+    assert "[후보] 1) '온도'" in run_fail("ml_export.py", "-m", vdir, "--keep", "온도x")["message"]     # 2.9.33: was [추천], 2.9.71: 번호
     assert "--keep" in run_fail("ml_export.py", "-m", vdir, "--keep", "잡음", "--inputs", "온도")["message"]
     proc, payload = run_raw("ml_export.py", "-h")
     assert proc.returncode == 0 and payload["command"] == "help"
@@ -741,8 +741,9 @@ def nine(tmp_path_factory):
 def test_more_than_eight_inputs_recommends_a_set(nine):
     bad = run_fail("ml_export.py", "-m", nine["v"], "--inputs", ",".join(nine["cols"]))
     assert bad["agent_directive"].startswith("STOP_RETRY") and "[추천]" in bad["message"]
-    rec = bad["message"].split("[추천]")[1].strip().split(",")
-    assert 1 <= len(rec) <= 8 and set(rec) <= set(nine["cols"])
+    argv = split_command(bad["message"].split("[추천] ")[1].strip())       # 2.9.71: 전체 명령
+    rec = argv[argv.index("--inputs") + 1].split(",")
+    assert argv[0] == "python" and argv.count("--inputs") == 1 and 1 <= len(rec) <= 8 and set(rec) <= set(nine["cols"])
 
 
 def test_automatic_search_stays_within_eight(nine):
@@ -777,7 +778,8 @@ def nine2(tmp_path_factory):
 def test_inputs_over_eight_recommends_every_target(nine2):
     spec = f"ya={','.join(nine2['cols'])};yb=x0,x1"
     bad = run_fail("ml_export.py", "-m", nine2["v"], "--inputs", spec)
-    rec = bad["message"].split("[추천] ")[1].strip()
+    argv = split_command(bad["message"].split("[추천] ")[1].strip())       # 2.9.71: 전체 명령
+    rec = argv[argv.index("--inputs") + 1]
     parts = dict(p.split("=", 1) for p in rec.split(";"))
     assert parts["yb"] == "x0,x1"                                              # 2.9.12: [추천] ya=... only
     assert 1 <= len(parts["ya"].split(",")) <= 8

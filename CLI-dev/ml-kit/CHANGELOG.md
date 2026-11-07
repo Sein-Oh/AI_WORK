@@ -12,6 +12,76 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.72] - 2026-11-07
+
+데이터 진단과 실험을 돕는 기능 넷 (도구가 판단하고 LLM은 결과만 알림).
+
+### 기능
+- `ml_train -x` 생략: 도구가 타겟을 뺀 모든 열에서 입력을 고르고 뺀 열마다 이유를 적음 (`features_auto`, `features_auto_count`,
+  `features_auto_file` = `vX/features_auto.txt`, `excluded_inputs`(`column`, `reason`), preview `입력 자동 선택 N개, 뺀 열 M개: ...`).
+  빼는 열: `제외` 표시 열, 빈 칸 50% 초과, 상수, 타겟 누수(숫자 타겟과 |상관| 0.98 이상, 이름이 같고 단위만 다르면 0.9 이상, 분류 타겟과 1:1),
+  ID·일련번호(모두 다르고 1씩 늘어나는 정수, 공백 없는 숫자 코드 `S-001`, 이름 `번호`·`ID`·`Lot` 등), 종류가 행마다 다른 글자 열(10개 이상이고 절반 초과, 또는 200개 초과).
+  날짜와 종류가 적은 글자 열은 입력. 원장 `input_selection`, `features_used`는 고른 입력이라 `--best`·`ml_report -f`가 그대로 다시 학습.
+  다시 학습 `next_commands`는 고른 입력을 `-x`로 적음(재현). 쓸 열이 없으면 `STOP_RETRY`. 스킬 학습 명령 틀에서 `-x`를 뺌(사용자가 입력을 말했을 때만 표의 한 줄).
+- `-x`를 주면 ID·타겟 누수로 보이는 입력을 `warnings`·`suspect_inputs`·preview `의심 입력`으로 알림 (빼지 않음).
+- `ml_predict --suggest N`(1~30): 학습 범위 안에서 예측 90% 범위가 넓고 실측 행과 먼 조건 N개(공간 채움), `--maximize/--minimize`와 함께면 좋은 예측값 +
+  불확실성(상한 신뢰 경계 모양). `--vary` 생략 시 고정하지 않은 모든 숫자 입력, `-i` 고정, 나머지는 학습 중앙값(알림). 90% 범위는 OOF 잔차 범위 x
+  가까운 학습 행의 잔차 비 x 실측과의 거리 보정(추정). 표 `suggest_<시각>.xlsx`의 `실험계획` 시트를 다시 읽고 제안 조건을 다시 예측해 `VERIFIED`.
+- 한 건 예측(`-i`, 5건 이하)의 입력별 영향 `explain`: 학습 기준값(중앙값, 글자는 가장 흔한 값)으로 바꿀 때의 예측 변화(두 점 대칭 추정), 분류는 예측 종류의 확률.
+  preview `입력별 영향 수율: 높인 입력: 온도 +7.81 / 낮춘 입력: 압력 -3.48`.
+- 파일 예측(`-f`)에 타겟 열의 실제값이 있으면 `actual_check`(회귀 RMSE·MAE·R2, 분류 정확도·Macro-F1, 학습 검증 값과 나란히). 10행 이상에서 RMSE가 검증의 1.5배 초과,
+  또는 R2가 0.1 넘게 낮고 RMSE가 1.2배 초과(분류: 정확도 0.1 넘게 낮음)이면 `warnings`, `retrain_recommended`, `next_commands[0]` = 새 파일로 같은 입력·타겟을 학습하는 전체 명령.
+
+### 구조
+- `normalize_labels`를 `ml_train.py`에서 `ml_predict.py` PART C로 옮김 (학습 라벨과 예측 파일 실제값의 라벨이 같게). `infer_feature_schema`의 유형 판별을 `column_kind`로 나눔(동작 같음).
+
+## [2.9.71] - 2026-11-07
+
+사용법 단순화 (AGENTS.md "사용법 단순성", 경량 LLM이 고르기·세기·조합을 하지 않게).
+
+### 구조
+- 스킬 하나(`CLI/ml-kit/SKILL.md`, 약 20KB)를 작업별 4개로 나눔: `skills/ml-train`(학습·개선·이력), `skills/ml-predict`(예측·반대 찾기·
+  조건별 예측·최적 조건), `skills/ml-report`(보고서·성능예측표), `skills/ml-map`(모델 없이 표 보간). 각 6KB 이하(3~5.5KB), 공통 규칙은
+  4개에서 같은 글(테스트로 확인). 단계마다 "알릴 키" 목록(63개)을 빼고 "preview와 agent_directive가 알리라고 한 값"으로: 도구의
+  `agent_directive`가 이미 알릴 값을 적음(학습 이력에 `preview`와 표로 알릴 열, 예측에 예측 범위·확률·결과 파일 안내를 더함).
+  결과 처리 표는 전역 지침 4장과 같아 빼고 "전역 지침 4장대로"로. `setup.py`는 4개를 설치하고 옛 `skills\ml-kit`을 보관 후 지움.
+  `-h`의 `skill_file`은 스크립트마다 맡은 스킬. 전역 지침 3장 표와 스킬 경로도 바꿈.
+
+### 기능
+- `ml_predict -m "<데이터 파일>"`(또는 `<이름>_ml_data` 폴더): 도구가 최고 버전을 골라 예측하고 `model_chosen`에 적음. 학습이 원장을 쓸 때마다
+  `<이름>_ml_data/best_version.json`(작업 유형마다 `--history`의 best_version과 같은 선택)을 씀. 회귀·분류가 함께 있어 정할 수 없거나
+  기록이 없으면 `STOP_RETRY` + `[후보]` 번호 붙은 전체 명령. `ml_export -m`도 같음. 스킬은 `-m "<데이터파일>"` 하나만 적음
+  (전에는 보고서의 `best_version_dir` / 마지막 `version_dir` / `--history` 중 LLM이 고름).
+- 개선 반복 횟수를 도구가 셈: 같은 작업·타겟 학습이 5번(`IMPROVE_ROUNDS`) 연속 이전 최고를 넘지 못하면 재학습 명령 대신 보고서 명령 하나와
+  `improve_stopped` (전에는 스킬이 "최대 5번 반복"을 LLM에게 세게 함).
+- `CONTINUE` 횟수를 도구가 셈: `<데이터 폴더>/continue_state.json`. 300번을 넘거나, 새로 저장한 것 없이 바로 앞과 같은 `progress`에서 멈추면
+  `STOP_RETRY`(`error_type: unfinished_limit`, exit 1). 다른 결과로 끝나면 기록을 지움. 스킬·전역 지침은 "CONTINUE가 아닐 때까지 다시 실행"만.
+
+### 수정
+- `[추천]`은 늘 전체 명령: 값만 주던 곳(`--header-row N`, `--dtypes "..."`, 성능예측표 `--inputs`, `--save` 확장자)을 실행 중인 명령에서 그
+  옵션만 바꾼 전체 명령으로 (`option_retry`). STOP_RETRY directive도 "`[추천]` 뒤의 명령을 그대로 1번".
+- 열 이름 하나가 틀린 `[후보]`: `[후보] 1) '압축압력(bar)'`처럼 번호를 붙이고 같은 번호의 `confirm_commands`가 그 이름을 넣은 전체 명령
+  (`candidate_commands`, `command_replacing`: `-x` 목록의 한 이름, `-i`의 `이름=값`도). 사용자가 고르면 LLM은 그 번호의 명령만 실행 (이름을 끼워 넣지 않음).
+  이름 여러 개가 함께 틀리면 아직 번호 없는 `[후보]`.
+- 한 가지 사용법: `--desc`/`--description` 별칭 -> `--desc` 하나 (`--description`은 같은 뜻 표로 `[추천]`). 예전 줄임말을 같은 뜻 표로 받아 주던
+  길(`--target` -> `--targets` 등, `[INFO]`만 남김)을 없앰: 인자 오류 + 고친 전체 명령 `[추천]`.
+- 스킬 규칙 5("같은 명령을 다시 실행하지 않는다")가 `CONTINUE`와 부딪히던 것: 예외를 같은 문장 안에.
+- 머리글 옵션 규칙이 단계마다 달랐음(학습·보간은 붙임, 예측은 붙이지 않음): "사용자가 머리글 행을 말했을 때만, 어느 명령이나 같음".
+
+## [2.9.70] - 2026-11-07
+
+클라우드 점검(두 도구 모든 진입점 일괄 점검, 남은 할 일).
+
+### 기능
+- `ml_train --dry-run`: 학습하지 않고 만들 버전과 `--overwrite`면 바꿀 기존 폴더의 파일을 보여 줌 (`dry_run`, `version`, `version_dir`, `replaces`,
+  `replaced_files`, `replaced_count`). `confirm_commands[0]`은 `--dry-run`을 뺀 실제 명령, 기존 폴더를 바꾸면 `destructive: true`(사용자에게 늘 물음).
+  `--best`·`--history`와 같이 주면 인자 오류. 성능예측표·보고서·예측·ml_map의 `--overwrite`는 도구가 만든 결과 파일만 바꾸므로 미리보기를 넣지 않음.
+
+### 수정
+- 이미 있는 `--version`을 `--overwrite` 없이 주면 `[추천] --version v3`(옵션 조각)이던 것을 다음 버전을 넣은 전체 명령으로 (R8).
+- 도움말을 만들다 실패해도(옵션 설명의 `%` 등) stdout JSON 1줄은 냄 (`JsonArgumentParser.print_help`). ml-kit에는 깨진 도움말이 없었고,
+  office-cli 1.4.78에서 같은 문제(`excel style -h`)를 찾아 함께 막음.
+
 ## [2.9.69] - 2026-11-06
 
 독립 검토와 감사의 발견 수정. 항목마다 회귀 테스트를 추가했습니다.
@@ -1855,9 +1925,11 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - 이전 이력 문서(ROADMAP 등)를 정리하고 이 CHANGELOG로 일원화. `requirements-dev.txt`, `install_offline.bat` 삭제.
 
 ## 남은 할 일
+- [ ] 사용법 단순성 남은 것: `[후보]`를 번호 붙은 전체 명령으로 (열 이름 후보 등은 아직 값 목록), 짧은 옵션(`-f -x -y -i -m`)과 긴 옵션 두 형태
+  (도구가 내는 명령과 스킬은 짧은 형태 하나로 맞춰 둠)
 - [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트.md` 4장 눈 확인 2번). 엑셀 재계산은 회사 PC 통과 (2.9.4)
-- [ ] `-x` 생략 시 피처 자동 선택 (ID/일련번호 배제 규칙)
 - [ ] 무거운 import 지연 로딩 (`--history` 응답 속도)
+- [ ] `--suggest`: 글자·날짜 입력은 `-i`로 고정만 됨(바꿔 보는 것은 숫자 입력), 분류 타겟의 불확실성(확률) 기준 제안
 - [ ] 260자 넘는 긴 경로
 - [ ] `--best`: 조건이 다른 타겟들이 같은 이름의 파생변수를 다른 수식으로 만들면 `model_dataset.csv`·`correlation.csv`에는 첫 수식 값만 들어감 (모델은 타겟별로 정확)
 - [ ] 회사 PC에서 6타겟 실제 데이터로 `ml_report.py -f` 소요 시간 확인
@@ -1865,5 +1937,5 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 ### 저장소 지침 반영 (AGENTS.md 2026-10-28, 우선순위 순)
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
-- [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 학습 `--overwrite`, 예측·보고서 `--overwrite` 대상
+- [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 예측·보고서 `--overwrite` 대상 (학습은 2.9.70, 결과 파일은 도구가 만든 것만 바뀌어 보류)
 - [ ] 테스트 보강: exit 130 롤백, 성공 경로 `VERIFIED:` 검사 확대, 빈 데이터 (덮어쓰기 차단은 2.3.0)

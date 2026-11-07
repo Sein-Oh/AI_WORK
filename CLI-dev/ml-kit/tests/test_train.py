@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
-from mlkit_helpers import recommendation, recommended_command, split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
+from mlkit_helpers import FEATURES, TARGET, recommendation, recommended_command, split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
 import ml_train as mt  # noqa: E402
 
@@ -1321,7 +1321,7 @@ def test_resolve_dtypes_names_and_types():
     assert mt.resolve_dtypes(None, cols) is None and mt.resolve_dtypes(" ", cols) is None
     with pytest.raises(mp.InputError) as e:
         mt.resolve_dtypes("설비코드:strr,일시:datetime", cols)
-    assert '[추천] --dtypes "설비코드:str,일시:datetime"' in str(e.value)
+    assert '[추천] --dtypes 설비코드:str,일시:datetime' in str(e.value)        # 함수 직접 호출: 옵션과 값 (명령으로 실행하면 전체 명령)
     with pytest.raises(mp.InputError) as e:
         mt.resolve_dtypes("설비코드:텍스트", cols)
     assert "[추천]" not in str(e.value) and "float, int, str, datetime" in str(e.value)
@@ -1339,7 +1339,7 @@ def test_train_dtypes_unitless_name_applies(tmp_path):
     res = run_tool("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:str")
     assert "설비코드(번호)" in res["feature_types"]["categorical"], res["feature_types"]    # 2.9.46: ignored (numeric)
     err = run_fail("ml_train.py", "-f", data, "-x", "설비코드(번호),온도", "-y", "수율", "--dtypes", "설비코드:strr")
-    assert err["agent_directive"].startswith("STOP_RETRY") and '[추천] --dtypes "설비코드:str"' in err["message"], err
+    assert err["agent_directive"].startswith("STOP_RETRY") and recommended_command(err["message"])[1][-2:] == ["--dtypes", "설비코드:str"], err
 
 
 # ---- JSON 목록 상한 + truncated (R2, 2.9.49) ---------------------------------------------------------------------
@@ -1418,7 +1418,7 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
     assert [h["version"] for h in hist] == ["v1"]
     assert not (root / ".resume_train").exists()                                       # cleaned after the commit
-    assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
+    assert sorted(os.listdir(root)) == [".train.lock", "best_version.json", "history.json", "history.jsonl", "v1"]
 
 
 def _assert_same_version(a, b):
@@ -2361,3 +2361,159 @@ def test_eval_dtypes_features_separator_slips_give_fixed_command(tmp_path):
     assert args[args.index("-x") + 1] == "온도,압력" and args.count("-x") == 1, args
     assert mt._eval_comma_fix("a = where(온도 > 1, 1, 0)") == "a = where(온도 > 1, 1, 0)"
     assert mt._eval_comma_fix("a = x == y, b = 1") == "a = x == y; b = 1"
+
+
+def test_dry_run_shows_version_and_replaced_folder_without_training(tmp_path):
+    """2.9.70: --dry-run은 학습하지 않고 만들 버전과 (--overwrite면) 바꿀 기존 폴더의 파일을 보여 주고 confirm_commands에 실제 명령."""
+    data = make_sample(str(tmp_path / "d.csv"))
+    root = tmp_path / "d_ml_data"
+    res = run_tool("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--dry-run")
+    assert res["dry_run"] is True and res["version"] == "v1" and res["replaces"] is False and not root.exists(), res
+    cmd = res["confirm_commands"][0]
+    assert cmd["destructive"] is False and "--dry-run" not in split_command(cmd["command"])
+    (root / "v1").mkdir(parents=True)
+    (root / "v1" / "model_a.joblib").write_text("x", encoding="utf-8")
+    msg = run_fail("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--version", "v1", "--dry-run")["message"]
+    rec = split_command(msg.split("[추천] ", 1)[1])
+    assert rec[rec.index("--version") + 1] == "v2" and rec[0] == "python", msg
+    res = run_tool("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--version", "v1", "--overwrite", "--dry-run")
+    assert res["replaces"] is True and res["replaced_files"] == ["model_a.joblib"] and res["confirm_commands"][0]["destructive"] is True
+    argv = split_command(res["confirm_commands"][0]["command"])
+    assert "--overwrite" in argv and "--dry-run" not in argv
+    assert sorted(os.listdir(root)) == ["v1"] and os.listdir(root / "v1") == ["model_a.joblib"]      # 아무것도 바꾸지 않음
+    assert run_fail("ml_train.py", "-f", data, "--best", "--dry-run")["error_type"] == "input"
+
+
+def test_tool_stops_offering_retraining_after_rounds_without_gain(tmp_path):
+    """2.9.71: 개선 반복 횟수는 도구가 센다. 같은 타겟 학습이 IMPROVE_ROUNDS(5)번 연속 이전 최고를 넘지 못하면
+    재학습 next_commands 대신 보고서 명령 하나와 improve_stopped (LLM이 5번을 세지 않음)."""
+    data = make_sample(str(tmp_path / "d.csv"))
+    x = "반응온도(°C),소비전력(kW),압축압력(bar)"
+    for i in range(mt.IMPROVE_ROUNDS):
+        res = run_tool("ml_train.py", "-f", data, "-x", x, "-y", TARGET)
+        assert res["goal_met"] is False and "improve_stopped" not in res, (i, res.get("improve_stopped"))
+    res = run_tool("ml_train.py", "-f", data, "-x", x, "-y", TARGET)
+    assert "improve_stopped" in res and len(res["next_commands"]) == 1, res
+    argv = split_command(res["next_commands"][0]["command"])
+    assert os.path.basename(argv[1]) == "ml_report.py" and argv[argv.index("-f") + 1] == data, argv
+
+
+# ---- 2.9.72: -x 생략 시 입력 자동 선택 (뺀 열과 이유), -x를 준 때의 의심 입력 경고 -------------------------------
+
+
+def _auto_rows(n=60, seed=0, noise=8.0):
+    """시료번호(ID), 일자, 숫자 입력 2개, 라인(범주), 설비(상수), 비고(메모), 측정자(빈 칸), 수율(%) 타겟,
+    수율(분율)(타겟을 다른 단위로 적은 열), 제외(표시 열)."""
+    r = np.random.default_rng(seed)
+    t, p = r.uniform(150, 200, n), r.uniform(1, 5, n)
+    line = r.choice(["A", "B"], n)
+    y = 0.3 * t + 5 * p + np.where(line == "A", 3, 0) + r.normal(0, noise, n)
+    return pd.DataFrame({
+        "시료번호": np.arange(1001, 1001 + n), "일자": pd.date_range("2026-01-01", periods=n).strftime("%Y-%m-%d"),
+        "반응온도(°C)": t.round(1), "압력(bar)": p.round(2), "라인": line, "설비": ["E1"] * n,
+        "비고": [f"메모 {i} 확인" for i in range(n)], "측정자": [None] * (n - 5) + ["김"] * 5,
+        "수율(%)": y.round(2), "수율(분율)": (y / 100).round(5), "제외": [""] * n})
+
+
+@pytest.fixture(scope="module")
+def auto_run(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("auto_x")
+    f = write_df(os.path.join(str(tmp), "auto.csv"), _auto_rows())
+    res = run_tool("ml_train.py", "-f", f, "-y", "수율(%)")
+    return {"f": f, "res": res}
+
+
+def test_auto_inputs_excluded_with_reasons(auto_run):
+    res = auto_run["res"]
+    assert res["features_auto"] == ["일자", "반응온도(°C)", "압력(bar)", "라인"]
+    assert res["features_auto_count"] == 4
+    why = {d["column"]: d["reason"] for d in res["excluded_inputs"]}
+    assert list(why) == ["시료번호", "설비", "비고", "측정자", "수율(분율)", "제외"]
+    assert "ID" in why["시료번호"] and "상수" in why["설비"] and "종류" in why["비고"]
+    assert "빈 칸" in why["측정자"] and "타겟 '수율(%)'" in why["수율(분율)"] and "단위" in why["수율(분율)"]
+    assert "표시" in why["제외"]
+    assert res["excluded_inputs_count"] == 6
+    assert "입력 자동 선택 4개" in res["preview"] and "시료번호(ID·일련번호)" in res["preview"]
+    assert "features_auto" in res["agent_directive"] and "excluded_inputs" in res["agent_directive"]
+    with open(res["features_auto_file"], encoding="utf-8") as fh:
+        assert fh.read().split() == res["features_auto"]
+    rec = mt.load_history_ledger(os.path.join(res["data_root"], "history.jsonl"))[-1]
+    assert rec["features_used"] == res["features_auto"]
+    assert rec["input_selection"]["auto"] is True and len(rec["input_selection"]["excluded"]) == 6
+
+
+def test_auto_inputs_next_commands_carry_x(auto_run):
+    """다시 학습 명령은 고른 입력을 -x로 적음: 같은 명령을 다시 실행하면 같은 입력 (재현)."""
+    res = auto_run["res"]
+    assert res["goal_met"] is False
+    train_cmds = [c["command"] for c in res["next_commands"] if "ml_train.py" in c["command"]]
+    assert train_cmds
+    for cmd in train_cmds:
+        args = split_command(cmd)
+        assert "-x" in args, cmd
+    args = split_command(train_cmds[-1])
+    x = args[args.index("-x") + 1]
+    names = open(x, encoding="utf-8").read().split() if os.path.isfile(x) else x.split(",")
+    assert set(names) <= set(res["features_auto"]) and "시료번호" not in names
+    again = run_tool(os.path.basename(args[1]), *args[2:])
+    assert "features_auto" not in again
+    rec = mt.load_history_ledger(os.path.join(again["data_root"], "history.jsonl"))[-1]
+    assert [f for f in rec["features_used"] if f in res["features_auto"]] == [f for f in res["features_auto"] if f in names]
+
+
+def test_auto_inputs_best_and_report(auto_run):
+    """입력을 자동으로 고른 학습이 있는 이력에서도 --best와 ml_report -f가 그 입력으로 다시 학습."""
+    best = run_tool("ml_train.py", "-f", auto_run["f"], "--best")
+    rec = mt.load_history_ledger(os.path.join(auto_run["res"]["data_root"], "history.jsonl"))[-1]
+    assert rec.get("best") and "시료번호" not in rec["features_used"] and "수율(분율)" not in rec["features_used"]
+    assert best["verified"] is True
+    if HAS_DOCX and HAS_MPL:
+        rep = run_tool("ml_report.py", "-f", auto_run["f"])
+        assert rep["agent_directive"].startswith("VERIFIED:")
+
+
+def test_explicit_x_warns_id_and_leak(tmp_path):
+    """-x를 주면 그대로 학습하고 ID·타겟 누수로 보이는 입력은 경고만 (빼지 않음)."""
+    f = write_df(os.path.join(str(tmp_path), "given.csv"), _auto_rows(noise=0.5))
+    res = run_tool("ml_train.py", "-f", f, "-y", "수율(%)", "-x", "시료번호,반응온도,압력,수율(분율)")
+    sus = {d["column"]: d["reason"] for d in res["suspect_inputs"]}
+    assert set(sus) == {"시료번호", "수율(분율)"} and "ID" in sus["시료번호"] and "타겟" in sus["수율(분율)"]
+    assert any("시료번호" in w and "입력으로 두었습니다" in w for w in res["warnings"])
+    assert "의심 입력" in res["preview"] and "suspect_inputs" in res["agent_directive"]
+    assert "features_auto" not in res
+    rec = mt.load_history_ledger(os.path.join(res["data_root"], "history.jsonl"))[-1]
+    assert "시료번호" in rec["features_used"] and "수율(분율)" in rec["features_used"]
+
+
+def test_auto_inputs_classification_leak_and_codes(tmp_path):
+    """분류: 타겟 종류와 1:1로 맞는 코드 열은 누수, 'S-001' 코드 열은 ID, 실측값이 모두 다른 숫자 열은 입력."""
+    r = np.random.default_rng(3)
+    n = 50
+    t = r.uniform(150, 200, n).round(2)
+    grade = np.where(t > 175, "상", "하")
+    df = pd.DataFrame({"코드": [f"S-{i:03d}" for i in range(n)], "반응온도": t, "압력": r.uniform(1, 5, n).round(2),
+                       "등급코드": np.where(grade == "상", 1, 2), "등급": grade})
+    f = write_df(os.path.join(str(tmp_path), "cls.csv"), df)
+    res = run_tool("ml_train.py", "-f", f, "-y", "등급", "--task", "classification")
+    why = {d["column"]: d["reason"] for d in res["excluded_inputs"]}
+    assert set(why) == {"코드", "등급코드"} and "ID" in why["코드"] and "1:1" in why["등급코드"]
+    assert res["features_auto"] == ["반응온도", "압력"]
+
+
+def test_auto_inputs_none_left_stops(tmp_path):
+    n = 20
+    df = pd.DataFrame({"번호": range(1, n + 1), "상수": [1] * n, "y": np.linspace(0, 1, n)})
+    f = write_df(os.path.join(str(tmp_path), "none.csv"), df)
+    res = run_fail("ml_train.py", "-f", f, "-y", "y")
+    assert res["agent_directive"].startswith("STOP_RETRY:") and "-x" in res["message"]
+    assert {d["column"] for d in res["excluded_inputs"]} == {"번호", "상수"}
+
+
+def test_diagnose_keeps_measured_unique_numbers_and_dates():
+    """실측값처럼 모두 다른 소수, 날짜, 종류가 적은 글자 열은 입력으로 남음 (판정 함수)."""
+    n = 40
+    r = np.random.default_rng(5)
+    df = pd.DataFrame({"두께": r.uniform(1, 2, n).round(4), "일자": pd.date_range("2026-01-01", periods=n),
+                       "라인": r.choice(["A", "B", "C"], n), "속도": np.arange(40, 40 + n) * 5,
+                       "y": r.normal(0, 1, n)})
+    assert mt.diagnose_inputs(df, ["두께", "일자", "라인", "속도"], ["y"], "regression") == []

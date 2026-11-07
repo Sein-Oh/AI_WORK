@@ -19,7 +19,7 @@ from fake_excel import FakeExcelWorkbook, FakeXlApp
 from fake_office import FakeExcelApp, FakePptApp, FakeWordDoc, FakeWorkbook, FakeWorkbooks, make_win32com
 from fake_ppt import FakePresentation
 from fake_word import FakeWordDocument
-from office_helpers import split_command, error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
+from office_helpers import option_value, split_command, error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
 
 
 @pytest.fixture
@@ -282,10 +282,10 @@ def env(monkeypatch, tmp_path):
     return holder
 
 
-CHART = ("transfer", "--from", "excel", "--chart", "차트", "--to", "word,ppt")
+CHART = ("transfer", "--from-app", "excel", "--chart", "차트", "--to-app", "word,ppt")
 
 
-RANGE = ("transfer", "--from", "excel", "--range", "A1:B2", "--to", "word,ppt")
+RANGE = ("transfer", "--from-app", "excel", "--range", "A1:B2", "--to-app", "word,ppt")
 
 
 def _check_target_not_open(out):
@@ -294,11 +294,11 @@ def _check_target_not_open(out):
     assert "--target " not in out["message"] + out["agent_directive"]          # transfer에 없는 옵션
     assert out["agent_directive"].startswith("STOP_RETRY:") and "실행하지 않았습니다" not in out["agent_directive"]
     argv = _recommended_argv(out["message"])
-    assert argv[argv.index("--to") + 1] == "word"
+    assert argv[argv.index("--to-app") + 1] == "word"
     return argv
 
 
-CH = ("transfer", "--from", "excel", "--chart", "차트")
+CH = ("transfer", "--from-app", "excel", "--chart", "차트")
 
 
 TWO_SAME = [{"name": "a.docx", "path": "C:\\x\\a.docx", "doc": object(), "app": None},
@@ -520,12 +520,12 @@ def test_method_order_uses_probe_result(monkeypatch):
 
 def test_transfer_method_option_removed(capsys):
     """사용자 결정(1.4.52): --method 없음. 방식은 자동 순서(--probe가 저장한 순서)만."""
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "word", "--method", "relay")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "c", "--to-app", "word", "--method", "relay")
     assert code == 2 and "--method" in out["message"], out
 
 
 def test_chart_transfer_falls_back_from_encrypted_export_to_redraw(chart_env, capsys):
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word,ppt")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "word,ppt")
     assert code == 0, out
     assert out["results"]["word"]["method"] == "redraw" and out["results"]["ppt"]["method"] == "redraw"
     assert chart_env["calls"].count("redraw") == 1                     # 한 번 그린 그림을 두 앱에 재사용
@@ -537,18 +537,18 @@ def test_chart_transfer_all_methods_fail_suggests_probe(chart_env, capsys, monke
         raise RuntimeError("실패")
     monkeypatch.setattr(office, "image_by_redraw", boom)
     monkeypatch.setattr(office, "relay_chart", boom)
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "ppt")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "ppt")
     assert code == 1 and "--probe" in out["message"]
 
 
 def test_transfer_argument_rules(capsys):
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--to", "word")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--to-app", "word")
     assert code == 1 and "--chart" in out["message"]
-    code, out = run_office(capsys, "transfer", "--from", "word", "--to", "ppt")
+    code, out = run_office(capsys, "transfer", "--from-app", "word", "--to-app", "ppt")
     assert code == 1 and "read --save" in out["message"]
-    code, out = run_office(capsys, "transfer", "--from", "엑셀", "--to", "엑셀", "--range", "A1")
+    code, out = run_office(capsys, "transfer", "--from-app", "엑셀", "--to-app", "엑셀", "--range", "A1")
     assert code == 1
-    code, out = run_office(capsys, "transfer", "--from", "hwp", "--to", "word")
+    code, out = run_office(capsys, "transfer", "--from-app", "hwp", "--to-app", "word")
     assert code == 1 and "[추천]" in out["message"] or "사용 가능한" in out["message"]
 
 
@@ -568,7 +568,7 @@ def test_word_text_to_new_excel_sheet_with_unique_name(monkeypatch, capsys):
     monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: None)
     rows = [["번호", "구분", "상위 제목", "내용"], [1, "제목1", "배경", "배경"], [2, "본문", "배경", "내용입니다"]]
     monkeypatch.setattr(office, "_word_rows", lambda args: (rows, "계획.docx"))
-    code, out = run_office(capsys, "transfer", "--from", "word", "--to", "excel")
+    code, out = run_office(capsys, "transfer", "--from-app", "word", "--to-app", "excel")
     assert code == 0 and out["sheet"] == "Word 내용 2" and out["rows"] == 3
     ws = wb.Worksheets("Word 내용 2")
     assert ws.values[(3, 4)] == "내용입니다"
@@ -585,7 +585,7 @@ def test_word_text_to_excel_stays_text(monkeypatch, capsys):
     monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: None)
     rows = [["코드", "기간", "손익", "식"], ["001", "1-2", "(100)", "=A1+1"]]
     monkeypatch.setattr(office, "_word_rows", lambda args: (rows, "표.docx"))
-    code, out = run_office(capsys, "transfer", "--from", "word", "--to", "excel")
+    code, out = run_office(capsys, "transfer", "--from-app", "word", "--to-app", "excel")
     ws = wb.Worksheets(out["sheet"])
     assert [ws.values[(2, c)] for c in range(1, 5)] == ["001", "1-2", "(100)", "=A1+1"]
     assert {(2, c) for c in range(1, 5)} <= ws.prefixed                    # written as text, not number/date/formula
@@ -603,12 +603,16 @@ def test_transfer_to_existing_excel_sheet_does_not_overwrite(monkeypatch, capsys
     monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: None)
     wb.Worksheets("결과").values[(1, 1)] = "기존"
     monkeypatch.setattr(office, "_word_rows", lambda args: ([["a", "b"], [1, 2]], "계획.docx"))
-    code, out = run_office(capsys, "transfer", "--from", "word", "--to", "excel", "--sheet", "결과")
-    assert code == 1 and out["message"].endswith("[추천] 결과 2") and "--overwrite" in out["message"]
+    code, out = run_office(capsys, "transfer", "--from-app", "word", "--to-app", "excel", "--sheet", "결과")
+    assert code == 1 and "--overwrite" in out["message"], out
+    argv = _recommended_argv(out["message"])                    # 1.4.79: [추천]은 전체 명령 (--sheet만 새 이름)
+    assert argv == ["transfer", "--from-app", "word", "--to-app", "excel", "--sheet", "결과 2"], argv
     assert wb.Worksheets("결과").values[(1, 1)] == "기존"
-    code, out = run_office(capsys, "transfer", "--from", "word", "--to", "excel", "--sheet", "결과", "--overwrite")
+    code, out = run_office(capsys, *argv)                       # [추천]대로 다시 실행하면 새 시트로 받음
+    assert code == 0 and out["sheet"] == "결과 2" and wb.Worksheets("결과").values[(1, 1)] == "기존", out
+    code, out = run_office(capsys, "transfer", "--from-app", "word", "--to-app", "excel", "--sheet", "결과", "--overwrite")
     assert code == 0 and out["sheet"] == "결과" and wb.Worksheets("결과").values[(1, 1)] == "a"
-    code, out = run_office(capsys, "transfer", "--from", "word", "--to", "excel", "--sheet", "새 결과")
+    code, out = run_office(capsys, "transfer", "--from-app", "word", "--to-app", "excel", "--sheet", "새 결과")
     assert code == 0 and out["sheet"] == "새 결과"                       # --sheet는 새 시트 이름: 없으면 만듦
 
 
@@ -619,7 +623,7 @@ def test_chart_transfer_stops_on_ambiguous_anchor_without_trying_other_methods(c
         calls.append(img)
         raise rt.ambiguous("'계획'이(가) 단락 2개에 있어 어느 곳인지 고를 수 없습니다.", ["1: 계획 A", "2: 계획 B"])
     monkeypatch.setattr(office, "insert_picture_word", ambiguous_anchor)
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word", "--anchor", "계획")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "word", "--anchor", "계획")
     assert code == 1 and out["error_type"] == "ambiguous" and out["candidates"] == ["1: 계획 A", "2: 계획 B"]
     assert len(calls) == 1                                                # 다른 방식으로 넘어가지 않음
 
@@ -648,7 +652,7 @@ def test_transfer_partial_failure_is_unverified(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(office, "insert_picture_word", lambda tgt, img, anchor, occurrence=None: {"app": "Word"})
     monkeypatch.setattr(office, "insert_picture_ppt", boom)
     monkeypatch.setattr(rt, "load_config", lambda: {})
-    code, out = run_main(office, capsys, "transfer", "--from", "excel", "--chart", "차트", "--to", "word,ppt")
+    code, out = run_main(office, capsys, "transfer", "--from-app", "excel", "--chart", "차트", "--to-app", "word,ppt")
     assert code == 0 and "word" in out["results"] and "ppt" in out["failures"]
     assert out["verified"] is False and out["agent_directive"].startswith("UNVERIFIED:")
 
@@ -797,7 +801,7 @@ def test_transfer_new_file_with_three_default_sheets(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# transfer --to word,ppt: 한 앱만 열려 있거나 한 앱만 실패할 때 (먼저 넣은 쪽을 다시 넣지 않게)
+# transfer --to-app word,ppt: 한 앱만 열려 있거나 한 앱만 실패할 때 (먼저 넣은 쪽을 다시 넣지 않게)
 # ---------------------------------------------------------------------------
 
 
@@ -818,6 +822,44 @@ def test_range_word_only_open_changes_nothing_and_recommends_word(env, capsys):
     assert code == 0 and list(out["results"]) == ["word"] and env["word"].text != before, out
 
 
+def test_app_typo_in_to_list_recommends_full_command(env, capsys):
+    """1.4.79 회귀: --to-app 목록(쉼표) 안의 앱 이름 하나만 틀려도 [추천]은 그 항목만 고친 전체 명령 (값 'word'만 주지 않음)."""
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--range", "A1:B2", "--to-app", "wrod,ppt")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    argv = _recommended_argv(out["message"])
+    assert argv == list(RANGE) and "wrod,ppt" not in argv, argv
+    env["prs"] = FakePresentation(1)
+    code, out = run_office(capsys, *argv)                       # [추천]대로 다시 실행하면 두 앱에 넣음
+    assert code == 0 and sorted(out["results"]) == ["ppt", "word"], out
+
+
+@pytest.mark.parametrize("old", [
+    ("transfer", "--from", "excel", "--range", "A1:B2", "--to", "word,ppt"),
+    ("transfer", "--from-app", "excel", "--range", "A1:B2", "--to", "word,ppt"),          # 하나만 옛 이름
+    ("transfer", "--from", "excel", "--range", "A1:B2", "--to-app", "word,ppt"),
+])
+def test_transfer_old_app_option_names_recommend_new_names(env, capsys, old):
+    """1.4.79: transfer의 앱은 --from-app/--to-app (--to/--from은 outlook의 받는 사람·보낸 사람 뜻만, 사용법 단순성 4번).
+    옛 이름은 받지 않고(별칭 없음) 인자 오류 + 고친 전체 명령 [추천]. 그대로 다시 실행하면 넣어짐."""
+    code, out = run_office(capsys, *old)
+    assert code == 2 and out["agent_directive"].startswith("STOP_RETRY:") and env["inserted"] == [], out
+    argv = _recommended_argv(out["message"])
+    assert argv == list(RANGE) and "--from" not in argv and "--to" not in argv, argv
+    env["prs"] = FakePresentation(1)
+    code, out = run_office(capsys, *argv)
+    assert code == 0 and sorted(out["results"]) == ["ppt", "word"], out
+
+
+def test_transfer_new_app_option_names_in_help_and_errors(capsys):
+    """1.4.79: 도움말·안내 글도 새 이름 (--from-app/--to-app). 옛 이름 --to/--from은 transfer 파서에 없음."""
+    p = office.build_cli()
+    sub = next(a for a in p._actions if a.__class__.__name__ == "_SubParsersAction").choices["transfer"]
+    names = {o for a in sub._actions for o in a.option_strings}
+    assert {"--from-app", "--to-app", "--from-target", "--to-target"} <= names and not {"--from", "--to"} & names
+    code, out = run_office(capsys, "transfer", "--chart", "c")
+    assert code == 1 and "--from-app" in out["message"] and "--to-app" in out["message"], out
+
+
 def test_no_receiver_open_names_to_target_for_all_apps(env, capsys):
     env["word"] = None
     code, out = run_office(capsys, *CHART)
@@ -827,10 +869,10 @@ def test_no_receiver_open_names_to_target_for_all_apps(env, capsys):
 
 
 def test_single_missing_target_and_source_name_transfer_options(env, capsys):
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--range", "A1:B2", "--to", "ppt")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--range", "A1:B2", "--to-app", "ppt")
     assert code == 1 and '--to-target "' in out["agent_directive"] and "--target " not in out["agent_directive"]
     env["word"] = None
-    code, out = run_office(capsys, "transfer", "--from", "word", "--to", "excel")
+    code, out = run_office(capsys, "transfer", "--from-app", "word", "--to-app", "excel")
     assert code == 1 and '--from-target "' in out["agent_directive"] and "--target " not in out["agent_directive"]
 
 
@@ -872,7 +914,7 @@ def test_chart_no_fallback_failure_after_word_is_unverified(env, capsys, monkeyp
     code, out = run_office(capsys, *CHART)
     assert code == 0 and out["verified"] is False and env["inserted"] == ["word"], out
     assert out["succeeded"] == ["word"] and out["failed"] == ["ppt"]
-    assert out["agent_directive"].startswith("UNVERIFIED:") and "--to ppt" in out["agent_directive"]
+    assert out["agent_directive"].startswith("UNVERIFIED:") and "--to-app ppt" in out["agent_directive"]
 
 
 def test_undo_points_after_partial_and_preflight_failure(env, capsys, monkeypatch):
@@ -910,8 +952,8 @@ def test_ambiguous_open_documents_name_transfer_options(env, capsys, monkeypatch
     env["prs"] = FakePresentation(1)
     monkeypatch.setattr(off, "list_open", lambda kind: TWO_SAME if kind == "word" else [])
     # 앱이 둘이면 넣기 전에 받는 문서를 모두 찾음(_probe_target). 보내는 쪽은 open_target(option=--from-target)
-    for argv, opt in (((*CH, "--to", "word,ppt", "--to-target", "a.docx"), "--to-target"),
-                      (("transfer", "--from", "word", "--from-target", "a.docx", "--to", "excel"), "--from-target")):
+    for argv, opt in (((*CH, "--to-app", "word,ppt", "--to-target", "a.docx"), "--to-target"),
+                      (("transfer", "--from-app", "word", "--from-target", "a.docx", "--to-app", "excel"), "--from-target")):
         code, out = run_main(office, capsys, *argv)
         assert code == 1 and "[후보]" in out["message"] and env["inserted"] == [], out
         assert f"{opt}에 전체 경로" in out["message"], out
@@ -932,9 +974,12 @@ def test_chart_target_recommend_stops_unchanged(chart_env, capsys, monkeypatch, 
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "ZQX_보고서.docx", "path": "", "app": None, "doc": None}])
     monkeypatch.setattr(office, "insert_picture_word", _real_insert_word)
     monkeypatch.setattr(rt, "CURRENT_ARGV", None)
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word",
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "word",
                            "--to-target", "zqx 보고서.docx")
-    assert code == 1 and out["message"].endswith("[추천] ZQX_보고서.docx"), out
+    assert code == 1, out
+    argv = _recommended_argv(out["message"])                    # 1.4.79: [추천]은 전체 명령 (--to-target만 열린 문서 이름)
+    assert option_value(argv, "--to-target") == "ZQX_보고서.docx" and "zqx 보고서.docx" not in argv, argv
+    assert option_value(argv, "--chart") == "사인 2주기" and option_value(argv, "--to-app") == "word", argv
     assert "relay" not in out["message"] and "--probe" not in out["message"] and "시도한 방식" not in out["message"]
     assert relay_spy == [] and chart_env["calls"] == ["export", "redraw"]       # 그림 문제(export)만 다음 방식으로
     log = error_log_text(isolated_dirs)
@@ -943,7 +988,7 @@ def test_chart_target_recommend_stops_unchanged(chart_env, capsys, monkeypatch, 
 
 def test_chart_target_bad_extension_stops(chart_env, capsys, monkeypatch, tmp_path, relay_spy):
     monkeypatch.setattr(office, "insert_picture_word", _real_insert_word)
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word",
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "word",
                            "--to-target", str(tmp_path / "새 문서.txt"))
     assert code == 1 and "확장자" in out["message"] and "relay" not in out["message"], out
     assert relay_spy == []
@@ -957,9 +1002,12 @@ def test_relay_resolves_target_before_clipboard(chart_env, capsys, monkeypatch):
     monkeypatch.setattr(office, "relay_chart", _real_relay)
     monkeypatch.setattr(office, "method_order", lambda kind: ["relay"])
     monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "ZQX_보고서.docx", "path": "", "app": None, "doc": None}])
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word",
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "word",
                            "--to-target", "zqx 보고서.docx")
-    assert code == 1 and out["message"].endswith("[추천] ZQX_보고서.docx"), out
+    assert code == 1, out
+    argv = _recommended_argv(out["message"])                    # 1.4.79: [추천]은 전체 명령 (--to-target만 열린 문서 이름)
+    assert option_value(argv, "--to-target") == "ZQX_보고서.docx" and "zqx 보고서.docx" not in argv, argv
+    assert option_value(argv, "--chart") == "사인 2주기" and option_value(argv, "--to-app") == "word", argv
     assert copied == []                                   # 사용자의 클립보드를 덮어쓰지 않음
 
 
@@ -1012,7 +1060,7 @@ def test_redraw_with_dollar_title_succeeds(chart_env, capsys, monkeypatch, relay
         {"type": 51, "title": "단가 $\\frac 와 $", "width": 300, "height": 180,
          "series": [{"name": "s", "values": [1, 2], "x": ["a", "b"]}]},
         rt.resolve_output_path(None, stem + "_redraw", ".png")))
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "ppt")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "ppt")
     assert code == 0 and out["results"]["ppt"]["method"] == "redraw" and relay_spy == [], out
 
 
@@ -1025,7 +1073,7 @@ def test_guard_chart_internal_error_text_not_logged(chart_env, capsys, monkeypat
     monkeypatch.setattr(office, "image_by_redraw", boom(ValueError))
     monkeypatch.setattr(office, "relay_chart", boom(KeyError))
     monkeypatch.setattr(rt, "CURRENT_ARGV", None)
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "word")
     assert code == 1 and SECRET in out["message"], out
     log = error_log_text(isolated_dirs)
     assert log and SECRET not in log, log
@@ -1039,7 +1087,7 @@ def test_guard_chart_internal_error_text_not_logged(chart_env, capsys, monkeypat
 
 @pytest.mark.parametrize("target", [None, "file"])
 def test_relay_ppt_bad_slide_before_clipboard(relay_env, capsys, tmp_path, target):
-    argv = ["transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "9"]
+    argv = ["transfer", "--from-app", "excel", "--chart", "c", "--to-app", "ppt", "--slide", "9"]
     if target == "file":
         p = tmp_path / "deck.pptx"
         p.write_bytes(b"x")
@@ -1050,7 +1098,7 @@ def test_relay_ppt_bad_slide_before_clipboard(relay_env, capsys, tmp_path, targe
 
 
 def test_relay_ppt_ok_after_slide_check(relay_env, capsys):
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", "ppt", "--slide", "2")
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "c", "--to-app", "ppt", "--slide", "2")
     assert code == 0 and out["results"]["ppt"]["method"] == "relay", out
     assert len(relay_env["copied"]) == 1 and relay_env["dispatch"] == ["Word.Application"]
     assert relay_env["prs"].Slides(2).Shapes.Count == 1 and relay_env["opened"] == [("ppt", "active")]
@@ -1064,7 +1112,7 @@ def test_relay_ppt_ok_after_slide_check(relay_env, capsys):
 @pytest.mark.parametrize("kind", ["word", "ppt"])
 def test_relay_empty_target_is_active(relay_env, capsys, kind):
     slide = ["--slide", "1"] if kind == "ppt" else []
-    code, out = run_office(capsys, "transfer", "--from", "excel", "--chart", "c", "--to", kind, "--to-target", "",
+    code, out = run_office(capsys, "transfer", "--from-app", "excel", "--chart", "c", "--to-app", kind, "--to-target", "",
                            *slide)
     assert code == 0 and out["results"][kind]["method"] == "relay", out["message"]
     assert "KeyError" not in json.dumps(out, ensure_ascii=False)

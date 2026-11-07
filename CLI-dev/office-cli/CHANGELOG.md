@@ -11,6 +11,75 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.80] - 2026-11-07
+
+엑셀 표 두 판 비교 (BOM 개정 비교)와 새 스킬 office-data.
+
+### 기능
+- `excel.py compare --target "<이전 판>" --target2 "<새 판>" [--sheet] [--sheet2] [--key] [--save] [--overwrite]`: 두 판의 표를 행 키로 짝지어
+  추가·삭제·수량 변경(차이)·위치 변경(더해진·빠진 위치)·속성 변경(열마다 이전 -> 새)과 대체 추정(같은 위치·상위에 품명이 비슷한 삭제·추가 짝,
+  "품번 변경 추정", 합치지 않고 따로)을 보고. Excel 없이 xlsx/xlsm(openpyxl)과 CSV/TSV를 읽음. 인자 순서는 `reader.py diff --file --file2`와 같은 이전 -> 새.
+- 도구가 정함 (사용법 단순성 5번): 제목 행 아래의 머리글 행, 열 역할(품번·상위품번·레벨·수량·단위·품명·규격·메이커·위치·비고, 한국어·영어 같은 뜻),
+  시트, 짝지을 키(품번 -> 같은 품번이 여러 행이면 상위품번 열·레벨로 찾은 상위·레벨 경로·위치를 더한 키). 그래도 정할 수 없으면 STOP_RETRY
+  `[후보] 1) .. 2) ..`와 같은 번호의 `confirm_commands`(`--key`를 넣은 전체 명령). `--key`에 열 문자를 주면 머리글 이름으로 고친 전체 명령 `[추천]`.
+- 정규화: 공백·전각/반각, 숫자 `1` = `1.0` = `"1"`, 코드 대소문자(앞자리 0 유지), 위치 목록은 집합·범위 펼치기(`R1-R3, R5` = `R1,R2,R3,R5`).
+- 결과: 구분별 수 `counts`와 앞 20개 목록(잘리면 `truncated`, `full_result_file`), 0건이면 "바뀐 것 없음". 결과 xlsx(요약, 추가, 삭제, 변경, 대체 추정)를
+  다시 열어 시트마다 행 수 확인(R1), 덮어쓰기는 `--overwrite`일 때만. 새 판 바뀐 칸 메모 파일과 `comment --dry-run` 미리보기 `next_commands`.
+- 긴 작업(R10): 새 판 읽기가 시간 제한을 넘을 것 같으면 읽은 이전 판을 캐시에 두고 `CONTINUE:`. 10만 행 두 판 약 25초(리눅스).
+- `_runtime.ambiguous(option=)`: 명령에 없던 옵션에 후보 값을 넣은 전체 명령(`--key`). `SAME_MEANING`에 `compare --file2` -> `--target2`.
+
+### 구조
+- 새 스킬 `office-data`(`CLI/office-cli/skills/office-data/SKILL.md`): 표 데이터 작업(두 판 비교, 앞으로 집계). `setup.py` `OFFICE_SKILLS`,
+  전역 지침 3장 표, `docs/opencode/README.md`·`실기테스트.md`, `AGENTS.md` 폴더 구조에 추가. office-excel 설명에 안내 한 마디.
+- 도움말·인자 오류의 스킬 안내는 명령별(`SKILL_OF_COMMAND`, `skill_name`): `excel compare -h`는 office-data.
+- 테스트 `tests/test_excel_compare.py`.
+
+## [1.4.79] - 2026-11-07
+
+사용법 단순화 (AGENTS.md "사용법 단순성").
+
+### 수정
+- `[추천]`은 늘 전체 명령 (값만 주어 LLM이 명령에 끼워 넣던 18곳): `excel` `--range`(범위가 큼, 수식 범위), `--formula`의 숫자 -> `--value`/`--values`,
+  `--where` 고친 식, `--axis` 빼기, 시트 이름(표기만 다름, 쓸 수 없는 글자), transfer 새 시트 이름, outlook `--days`/`--since`, word `--anchor`,
+  명령 오타, 표기만 다른 이름(`not_found`). 공통 함수 `retry_command`(옵션 값 바꾸기·빼기)와 `retry_replacing`(값 바꾸기: 인자 전체, `--opt=값`,
+  시트 주소 앞부분, 경로의 한 부분, 쉼표 목록의 한 값). `--append` 수식 행 이동 실패는 수식을 고쳐야 해서 `[추천]` 없이 멈춤.
+  전체 경로로 준 입력 파일은 그 폴더에서만 비슷한 이름을 찾음 (다른 폴더의 같은 이름 파일을 `[추천]`하지 않음).
+  STOP_RETRY directive도 "`[추천]` 뒤의 명령을 그대로 1회".
+- 비슷한 이름 `[후보]`(시트, 차트, 문서, 파일, 메일 폴더 등 `not_found`): `[후보] 1) 요약`처럼 번호를 붙이고 같은 번호의 `confirm_commands`가
+  그 이름을 넣은 전체 명령 (`ambiguous(replace=)`, 덮어쓰기·삭제·발송 명령이면 `destructive`). 고른 뒤에만 실행하므로 `next_commands`가 아님.
+- `ppt write --cards`: 카드 사이를 `|`에서 `;`로 (저장소 구분자 규칙). `|`만 쓰면 쓰지 않고 고친 전체 명령 `[추천]`.
+
+### 기능
+- `CONTINUE` 횟수를 도구가 셈 (`<데이터 폴더>/continue_state.json`): 300번을 넘거나 바로 앞과 같은 `progress`면 `STOP_RETRY`
+  (`error_type: unfinished_limit`, exit 1). 명령이 다른 결과로 끝나면 기록을 지움.
+
+### 기능 (인자 이름 변경)
+- 옵션 하나 = 뜻 하나 (AGENTS.md 사용법 단순성 4번): `--to`가 transfer의 받는 앱, outlook의 받는 사람, `ppt slide move`의 위치로,
+  `--from`이 transfer의 보내는 앱과 outlook의 보낸 사람으로 쓰였음. `office.py transfer`는 `--from-app`/`--to-app`
+  (`--from-target`/`--to-target`은 그대로), `ppt.py slide --action move`는 `--dest`(`excel.py range --dest`와 같은 이름). outlook `--to`/`--from`은 그대로.
+- 옛 이름은 받지 않고(별칭 없음) 인자 오류(exit 2)와 고친 전체 명령 `[추천]` (같은 뜻 표 `SAME_MEANING`, 명령별로 한정:
+  `transfer --to word` -> `--to-app word`, `slide --to 3` -> `--dest 3`).
+- 도구가 내는 transfer 명령(`excel chart`, `word read --save`, `ppt read --save`의 `confirm_commands`, 여러 앱 `[추천]`, 오류 안내)과 스킬 office-doc·office-excel,
+  README, 실기 러너, 에이전트 시나리오의 지어낸 옵션 규칙(`no_fake_office`: 옛 `transfer --to/--from`, `ppt slide --to`)을 새 이름으로.
+
+## [1.4.78] - 2026-11-07
+
+1.4.77 검토에서 남긴 것과 스킬 크기 여유.
+
+### 수정
+- `word fill`: 괄호 안 띄어쓰기만 다른 자리(`--slots "{{ 업체명 }}=..."`인데 문서는 `{{업체명}}`, 또는 그 반대)는 "문서에 없는 자리"로 멈췄음.
+  문서의 자리 중 띄어쓰기를 뺀 이름이 같은 것이 하나뿐이면 그 자리로 채우고 `recovered`·`[WARN]`으로 알림 (둘 이상이면 추측하지 않고 예전처럼 멈춤).
+- `word fill --slots "주소=서울\n강남구; 업체=..."`: 줄바꿈을 자리 구분으로 읽어 `강남구`가 잘못된 항목이라며 멈췄음. 다음 줄이 `자리=` 모양이 아니면
+  앞 값 안의 줄바꿈으로 읽음 (자리 안의 줄 바꿈은 Word 줄 바꿈, 단락은 나누지 않음).
+
+- `excel style -h`·`excel replace -h`: `--number-format` 설명의 `0.0%`가 argparse 서식으로 읽혀 JSON 없이 traceback만 냈음(exit 1).
+  `%%`로 고치고, 도움말을 만들다 실패해도 stdout JSON 1줄은 내도록 함(`JsonArgumentParser.print_help`). 찾은 방법: 두 도구 모든 진입점·하위 명령
+  455가지 잘못된 입력 일괄 점검(stdout 1줄 JSON, exit 코드, directive, CP949). 회귀 테스트 `test_contract.py::test_every_help_text_builds`.
+
+### 구조
+- 스킬 4개의 겹치는 문구를 줄임 (인코딩 줄 내용은 전역 지침에만, 되돌리기 안내 짧게): office-doc 6142 -> 6057, office-excel 6123 -> 6026,
+  office-spec 6138 -> 6080바이트 (한도 6144). `test_skill_size_limit`는 줄 끝을 LF로 세어 Windows CRLF 체크아웃에서도 같은 판정.
+
 ## [1.4.77] - 2026-11-06
 
 회사 PC 실기(2026-11-06, Gemma 종합 테스트 O1·O2·O5) 대응.
@@ -1838,6 +1907,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
+- [ ] 사용법 단순성 남은 것: reader `--query`의 `AND`/`OR`와 `--where`의 `;`/`|` 두 표기, outlook `--to` 받는 사람의 `;` 구분(Outlook 관례),
+  `--map` JSON 인자, `[후보]` 값 목록 -> 번호 붙은 전체 명령, 같은 뜻 표가 `--opt=값` 형태는 못 고침
 
 ### 1.0 제거 기능 (필요하면 다시 추가할 후보)
 - 스타일 DNA 추출 (`office_theme --action extract`). 테마 프리셋은 유지.

@@ -16,7 +16,7 @@ from office_helpers import DEV, TOOL_DIR
 
 SCRIPTS = {"excel.py": excel, "word.py": word, "ppt.py": ppt, "outlook.py": outlook, "office.py": office,
            "reader.py": reader}
-SKILL_NAMES = ("office-excel", "office-doc", "office-mail", "office-spec")
+SKILL_NAMES = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data")
 SKILLS_DIR = os.path.join(TOOL_DIR, "skills")
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
 TEST_SKILL = os.path.join(DEV, "tools", "office-cli-test", "SKILL.md")
@@ -95,7 +95,7 @@ def _frontmatter(path):
 
 
 # ---------------------------------------------------------------------------
-# 배치: 작업별 스킬 4개, 예전 통합 SKILL.md 없음
+# 배치: 작업별 스킬 5개, 예전 통합 SKILL.md 없음
 # ---------------------------------------------------------------------------
 
 
@@ -107,8 +107,10 @@ def test_skill_layout():
 
 
 def test_skill_size_limit():
+    # 줄 끝을 LF로 세어 잼: Windows에서 core.autocrlf=true로 받으면 CRLF가 되어 줄 수만큼 커짐 (집 PC 2026-11-06, 6123 -> 6173)
     for name, path in SKILL_FILES.items():
-        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            size = len(f.read().replace(b"\r\n", b"\n"))
         assert size <= MAX_SKILL_BYTES, (name, size)
 
 
@@ -139,6 +141,9 @@ def test_frontmatter_follows_opencode_rules():
 def test_runtime_help_points_to_task_skill():
     for tool, name in rt.SKILL_OF_TOOL.items():
         assert name in SKILL_NAMES and os.path.isfile(rt.skill_file(tool)), tool
+    for (tool, cmd), name in rt.SKILL_OF_COMMAND.items():     # 도구 파일과 다른 스킬에 있는 명령 (excel compare -> office-data)
+        assert name in SKILL_NAMES and cmd in PARSERS[f"{tool}.py"], (tool, cmd)
+        assert f'{tool}.py" {cmd}' in _read(SKILL_FILES[name]), (tool, cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +185,7 @@ def test_command_templates_are_full_commands():
 
 
 def test_every_command_is_in_some_skill():
-    """예전 통합 SKILL.md의 명령이 4개로 나뉘며 빠지지 않음: 모든 스크립트의 모든 하위 명령이 어느 스킬의 전체 명령에 있음."""
+    """예전 통합 SKILL.md의 명령이 작업별 스킬로 나뉘며 빠지지 않음: 모든 스크립트의 모든 하위 명령이 어느 스킬의 전체 명령에 있음."""
     seen = set()
     for path in SKILL_FILES.values():
         for _no, script, sub, _opt, _val in _skill_refs(path):
@@ -197,15 +202,17 @@ def test_skill_mentions_new_and_existing_features():
         "office-excel": ("sheet --action add|rename|copy|delete", "--new-name", "range --action freeze", "export --save",
                          "--number-format", "--all-sheets", "--type column|bar|line|pie|scatter|area", "--action insert|delete",
                          "--dry-run", "--action sort", "--by", "--where \"", "--formulas", "--cells", "comment --action add",
-                         "office.py\" undo", "transfer --from excel --chart"),
+                         "office.py\" undo", "transfer --from-app excel --chart"),
         "office-doc": ("slide --action add|duplicate|delete|move", "--toc", "--callout", "--highlight yellow", "fill --target", "--slots",
-                       "outline", "revisions", "notes --slide", "--page-number", "transfer --from word --what text",
+                       "outline", "revisions", "notes --slide", "--page-number", "transfer --from-app word --what text",
                        "office.py\" undo", "focus --app"),
         "office-mail": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
                         "--days 7", "--since 2026-11-01", "thread --id", "calendar --days", "attachments --id", "send --id"),
         "office-spec": ("reader.py\" index --folder", "--section", "search --query", "diff --file", "--file2", "list [--name",
                         "clear --name", "--missing", "synonyms.txt", "--regex", "excel.py\" check", "comment --action add",
                         "not_searched", "match_mode"),
+        "office-data": ("excel.py\" compare --target", "--target2", "--sheet2", "--key", "--save", "replaced_guess", "full_result_file",
+                        "confirm_commands"),
     }
     for name, needles in need.items():
         text = _read(SKILL_FILES[name])

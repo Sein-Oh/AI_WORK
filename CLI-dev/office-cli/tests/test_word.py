@@ -9,7 +9,7 @@ import fake_word as fw
 import word
 from fake_office import make_win32com
 from fake_word import FakeComment, FakeRange, FakeWordDocument
-from office_helpers import assert_not_logged, Bag, shell_sim, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, split_command, stub_com, undo_points
+from office_helpers import assert_not_logged, Bag, option_value, recommended_argv, shell_sim, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, split_command, stub_com, undo_points
 
 
 def doc_paras(doc):
@@ -286,8 +286,10 @@ def test_anchor_same_paragraph_twice_is_one_candidate(wd, capsys):
 
 def test_anchor_not_found_recommends_similar_text(wd, capsys):
     code, out = run_word(capsys, "write", "--text", "x", "--anchor", "2026 계획")
-    assert code == 1 and out["error_type"] == "input" and out["message"].endswith("[추천] 2026년 계획")
-    code, out = run_word(capsys, "write", "--text", "x", "--anchor", "2026년 계획")    # 추천대로 다시 하면 찾음
+    assert code == 1 and out["error_type"] == "input", out
+    argv = recommended_argv(out["message"], "word")             # 1.4.79: [추천]은 전체 명령
+    assert argv == ["write", "--text", "x", "--anchor", "2026년 계획"], argv
+    code, out = run_word(capsys, *argv)                         # 추천대로 다시 하면 찾음
     assert code == 0
 
 
@@ -387,11 +389,16 @@ def test_read_closed_docx_with_python_docx(tmp_path, capsys, monkeypatch):
     assert "next_commands" not in out                                     # 넣기·옮기기는 confirm_commands (1.4.75)
     transfer = [c["command"] for c in out["confirm_commands"] if "transfer" in c["command"]][0]
     assert "--from-target" in transfer and str(p) in transfer, transfer
+    argv = split_command(transfer)[2:]                    # 1.4.79: 앱은 --from-app/--to-app (--from/--to는 outlook 전용)
+    assert argv[:3] == ["transfer", "--from-app", "word"] and argv[argv.index("--to-app") + 1] == "excel", argv
+    assert "--from" not in argv and "--to" not in argv, argv
 
 
 def test_highlight_color_suggestion(wd, capsys):
     code, out = run_word(capsys, "replace", "--find", "계획", "--highlight", "yelow")
-    assert code == 1 and "[추천] yellow" in out["message"]
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "word")             # 1.4.79: [추천]은 전체 명령
+    assert argv == ["replace", "--find", "계획", "--highlight", "yellow"], argv
 
 
 # ---------------------------------------------------------------------------
@@ -1129,3 +1136,30 @@ def test_fill_reads_back(form_doc, capsys, tmp_path, monkeypatch):
                                                         lambda s, v: s.grid[s.r].__setitem__(s.c, v[:2])))
     code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "표2!R2C3,5.1 V\n"))
     assert code == 0 and out["verified"] is False and "표2!R2C3" in out["unverified"][0], out
+
+
+@pytest.mark.parametrize("doc_place, slot", [("{{업체명}}", "{{ 업체명 }}"), ("{{ 업체명 }}", "업체명"), ("{{업체 명}}", "{{업체명}}")])
+def test_fill_place_differing_only_in_spaces_is_filled_and_reported(wd, monkeypatch, capsys, doc_place, slot):
+    """괄호 안 띄어쓰기만 다른 자리는 문서의 자리 하나와만 맞으면 그 자리로 채우고 recovered로 알림 (검토 1.4.77에서 남긴 것)."""
+    doc = FakeWordDocument(f"업체: {doc_place}\r시험일: {{{{시험일}}}}")
+    wd["doc"] = doc
+    monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: None)
+    code, out = run_word(capsys, "fill", "--slots", f"{slot}=한빛전자; 시험일=2026-11-09")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out.get("message")
+    assert "업체: 한빛전자" in doc.text and doc_place in " ".join(out["recovered"]), out
+
+
+def test_fill_place_spaces_with_two_matches_is_not_guessed(wd, monkeypatch, capsys):
+    doc = FakeWordDocument("업체: {{ 업체명}}\r담당: {{업체명 }}")
+    wd["doc"] = doc
+    monkeypatch.setattr(off, "save_snapshot", lambda *a, **k: None)
+    code, out = run_word(capsys, "fill", "--slots", "업체명=한빛전자")
+    assert code == 1 and out["status"] == "error" and "{{ 업체명}}" in doc.text and "{{업체명 }}" in doc.text, out
+
+
+def test_fill_slots_newline_inside_value_is_kept(form_doc, capsys):
+    """'주소=서울\\n강남구': 다음 줄이 '자리='가 아니면 값 안의 줄바꿈 (예전: '강남구' 항목이 잘못되었다며 멈춤)."""
+    doc, _ = form_doc
+    code, out = run_word(capsys, "fill", "--slots", "업체명=한빛\\n전자; 시험일=2026-11-04")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "업체: 한빛\v전자" in doc.text and "시험일: 2026-11-04" in doc.text

@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlkit_helpers import split_command, recommendation, run_fail, run_raw, run_tool, write_book, write_csv, write_df  # noqa: E402
+from mlkit_helpers import split_command, recommendation, recommended_command, run_fail, run_raw, run_tool, write_book, write_csv, write_df  # noqa: E402
 import ml_predict as mp  # noqa: E402
 
 
@@ -222,7 +222,8 @@ def test_map_points_header_hint(tmp_path):
     pts = tmp_path / "pts.csv"
     pd.DataFrame({"A": [2.5, 3.5]}).to_csv(pts, index=False, encoding="utf-8-sig")
     bad = run_fail("ml_map.py", "-f", data, "--points", str(pts), "-y", "B")
-    assert recommendation(bad["message"]) == "--header-row 2"     # 2.9.15: no hint
+    _, rec = recommended_command(bad["message"])                  # 2.9.15: no hint, 2.9.71: 전체 명령
+    assert rec[rec.index("--header-row") + 1] == "2", rec
     ok = run_tool("ml_map.py", "-f", data, "--points", str(pts), "-y", "B", "--header-row", "2")
     assert ok["count"] == 2
 

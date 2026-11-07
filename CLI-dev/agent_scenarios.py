@@ -79,13 +79,16 @@ RULES = {
         'write': r'\.py$',
     },
     # 회사 PC 오류 로그에서 경량 LLM이 지어낸 office-cli 명령·옵션: excel.py write --text/--cell, office.py write,
-    # transfer --source/--text, undo --target, excel.py list (옵션은 명령 하나 안에서만 본다: ; | & 뒤는 다른 명령)
+    # transfer --source/--text, undo --target, excel.py list (옵션은 명령 하나 안에서만 본다: ; | & 뒤는 다른 명령).
+    # transfer --to/--from, ppt slide --to는 1.4.79에서 --to-app/--from-app, --dest로 바뀐 옛 이름 (--to-app·--to-target은 맞음)
     'no_fake_office': {
-        'title': 'office-cli에 없는 명령·옵션 없음 (excel write --text/--cell, office.py write, transfer --source/--text, undo --target, excel list)',
+        'title': 'office-cli에 없는 명령·옵션 없음 (excel write --text/--cell, office.py write, transfer --source/--text/--to/--from, '
+                 'ppt slide --to, undo --target, excel list)',
         'command': [
             r'excel\.py"?\s+write\b[^\n;|&]*\s--(text|cell)\b',
             r'office\.py"?\s+write\b',
-            r'office\.py"?\s+transfer\b[^\n;|&]*\s--(source|text)\b',
+            r'office\.py"?\s+transfer\b[^\n;|&]*\s--(source|text|to|from)(?![\w-])',
+            r'ppt\.py"?\s+slide\b[^\n;|&]*\s--to(?![\w-])',
             r'office\.py"?\s+undo\b[^\n;|&]*\s--target\b',
             r'excel\.py"?\s+list\b',
         ],

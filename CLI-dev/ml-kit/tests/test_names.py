@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlkit_helpers import data_file, data_path, ok_res, run_raw, stop_msg, write_rows  # noqa: E402
+from mlkit_helpers import data_file, data_path, ok_res, run_raw, run_tool, split_command, stop_msg, write_rows  # noqa: E402
 import ml_export  # noqa: E402
 import ml_map  # noqa: E402
 import ml_predict as mp  # noqa: E402
@@ -188,10 +188,10 @@ def test_train_accel_and_moisture_are_candidates(name_files):
     """'속도' -> '가속도', '수율' -> '함수율(%)'은 [후보]다 (2.9.32의 [추천]은 재시도에서 다른 양을 학습했음)."""
     proc, res = run_raw("ml_train.py", "-f", name_files["acc"], "-x", "속도,압력", "-y", "진동")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '가속도'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '가속도'" in msg, msg          # 2.9.71: 번호 + next_commands
     proc, res = run_raw("ml_train.py", "-f", name_files["acc"], "-x", "가속도,압력", "-y", "수율")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '함수율(%)'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '함수율(%)'" in msg, msg
 
 
 def test_degree_spelling_matches_in_train(name_files):
@@ -232,7 +232,7 @@ def test_train_x_typo_never_suggests_the_target(role_data):
     assert "[추천]" not in msg and "'생산량'" in msg, msg
     proc, res = run_raw("ml_train.py", "-f", role_data["two"], "-x", "온도,압력,수율", "-y", "수율(최종)")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '수율(1차)' (비슷한 '수율(최종)'" in msg, msg        # 2.9.33: no -y column
+    assert "[추천]" not in msg and "[후보] 1) '수율(1차)' (비슷한 '수율(최종)'" in msg, msg        # 2.9.33: no -y column
     # the reverse: a -y typo never suggests a feature
     proc, res = run_raw("ml_train.py", "-f", role_data["p"], "-x", "온도,압력", "-y", "압룍")
     msg = stop_msg(res, proc)
@@ -286,9 +286,9 @@ def humid_data(tmp_path_factory, two_model):
 def test_train_and_predict_other_word(humid_data):
     proc, res = run_raw("ml_train.py", "-f", humid_data["p"], "-x", "온도,압력,습두", "-y", "생산량")
     msg = stop_msg(res, proc)                                    # 2.9.32: one common syllable for another, [후보]
-    assert "[추천]" not in msg and "[후보] '습도'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '습도'" in msg, msg
     proc, res = run_raw("ml_train.py", "-f", humid_data["p"], "-x", "온도,압력,습돜", "-y", "생산량")
-    assert "[후보] '습도'" in stop_msg(res, proc)                               # 2.9.33: [추천] -> [후보]
+    assert "[후보] 1) '습도'" in stop_msg(res, proc)                               # 2.9.33: [추천] -> [후보]
     proc, res = run_raw("ml_predict.py", "-m", humid_data["two"], "-i", "온도=180,압력=2.5,농도=3")
     msg = stop_msg(res, proc)
     assert "[추천]" not in msg and "농도" in msg, msg
@@ -1003,3 +1003,15 @@ def test_export_labels_two_targets(humid_data):
     note = "\n".join(str(c.value) for row in wb["계산기"].iter_rows() for c in row if isinstance(c.value, str))
     assert "- 수율(1차):" in note and "- 수율(최종):" in note and "- 수율:" not in note, note
     assert {"표_수율(1차)", "표_수율(최종)"} <= set(wb.sheetnames), wb.sheetnames
+
+
+def test_column_candidate_has_numbered_full_command(tmp_path):
+    """2.9.71: 열 이름 하나가 틀리면 [후보]에 번호를 붙이고 같은 번호의 next_commands가 고친 전체 명령 (LLM이 이름을 끼워 넣지 않음)."""
+    from make_sample import make_sample
+    data = make_sample(str(tmp_path / "d.csv"))
+    proc, res = run_raw("ml_train.py", "-f", data, "-x", "반응온도,소비전력,압축압렬", "-y", "생산효율")
+    msg = stop_msg(res, proc)
+    assert "[후보] 1) '압축압력(bar)'" in msg and len(res["confirm_commands"]) == 1, res
+    argv = split_command(res["confirm_commands"][0]["command"])
+    assert argv[argv.index("-x") + 1] == "반응온도,소비전력,압축압력(bar)", argv
+    assert run_tool(os.path.basename(argv[1]), *argv[2:])["version"] == "v1"
