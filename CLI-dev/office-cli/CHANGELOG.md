@@ -31,6 +31,9 @@
 - `--dry-run` 미리보기 (R8, 문서를 바꾸지 않고 바뀔 곳과 확인 명령 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 지우기·바꾸기는 `destructive`),
   읽기 전용으로 열어 되돌리기 지점 없음, 바뀔 것이 없으면 `count 0`과 명령 없음, `planned` 50개까지 + `truncated`):
   `word replace`, `word write`(모든 `--pos`, `replace`는 지워질 단락), `ppt replace`, `ppt slide`(delete·clear, `--all-slides`, add·duplicate·move, list는 무시하고 warnings).
+  `excel replace`(수식 칸은 내용 유지로 따로 셈), `excel range` clear·move(대상에 값이 있으면 확인 명령에 `--overwrite`), `excel sheet --action delete`
+  (다른 시트의 수식 중 `#REF!`가 될 칸 수·주소), `excel chart --action delete`(`--all` 포함). excel의 다른 range·sheet·chart 동작에 주면 STOP_RETRY.
+  `write_session`은 `--dry-run`이면 읽기 전용(새 파일·스냅샷·화면 이동 없음, range insert/delete 미리보기 포함). 이동 대상 확인은 `_range_dest`·`_dest_conflicts`로 나눔(동작 같음).
   실제 실행과 같은 검사(없는 슬라이드, 앵커 없음·여러 곳 등)를 그대로 함.
 - 빈 결과 명시: `excel read`의 값이 없는 범위, `word read`의 빈 문서(필터 없이), `ppt read`의 슬라이드·글 없음이 `count: 0`, preview `0건:`,
   directive `VERIFIED: 0건. ... (찾은 항목 없음)` (전에는 빈 배열만).
@@ -1979,7 +1982,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] `recovered` 나머지: transfer 방식 대체, 오래된 스냅샷 정리 (잠금·기존 파일 새 이름 저장, 낡은 캐시는 1.4.0)
 - [ ] COM 내보내기(excel.py, word.py, ppt.py export)의 잠금 대비 `save_with_lock_fallback`. (1.4.0: 기존 출력 파일은 새 이름 저장 + `recovered` 완료)
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)
-- [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (excel range delete·insert는 1.4.37) (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
+- [ ] 쓰기 결과에 되돌리기 가능 여부 표시 (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`). (`--dry-run` 확대는 1.4.81) 스킬에 `--dry-run` 안내 (office-excel·office-doc는 6KB 한도 근처라 보류, README에만)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
 - [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`

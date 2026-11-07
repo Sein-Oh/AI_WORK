@@ -64,6 +64,12 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   읽기·저장 뒤 열린 문서에 넣기(`read --save` 뒤 `word.py`/`ppt.py`/`excel.py write`, `transfer`, `write` 뒤 `chart`, `chart` 뒤 `transfer`, 1.4.75).
   덮어쓰기·삭제·메일 발송(`--overwrite`가 든 명령, `range --action delete`, `comment --action delete`, `send`)에는 `"destructive": true`(1.4.75):
   전역 지침 3장 6번에서 사용자가 "묻지 말고 끝까지"라고 했어도 이 항목은 늘 묻습니다. 캐시 지우기(`reader.py clear`)는 원본이 그대로라 destructive가 아닙니다.
+- 미리보기 `--dry-run`(R8, 1.4.81 확대): 문서를 읽기 전용으로 열어 바꾸지 않고(되돌리기 지점 없음) 바뀔 곳 `planned`(50개까지, 넘으면 `truncated`),
+  `count`, 실제 실행 명령 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 실제 실행이 `--overwrite` 없이 멈출 곳이면 `--overwrite` 포함, `destructive`)을 줍니다.
+  바뀔 것이 없으면 `count: 0`과 명령 없음. 실제 실행과 같은 검사(없는 시트·슬라이드, 앵커 없음, 보호된 시트)를 그대로 합니다. 받는 명령:
+  excel `write --cells`, `replace`, `range`(insert, delete, clear, move), `sheet --action delete`(다른 시트의 `#REF!`가 될 수식 칸 수), `chart --action delete`(`--all` 포함),
+  `comment` add/delete, word `fill`, `replace`, `write`(모든 `--pos`, `replace`는 지워질 단락), ppt `replace`, `slide`(delete, clear, `--all-slides`, add, duplicate, move.
+  list는 무시하고 `warnings`), reader `clear`. excel의 다른 `range`·`sheet`·`chart` 동작에 주면 STOP_RETRY.
 - 오타 추천(1.4.75): 없는 명령 이름은 가장 비슷한 명령을 `[추천]`(LLM이 묻지 않고 1번 실행)으로 주지만, 되돌리기 어려운 명령(`send`, `clear`, `undo`)이면
   `[후보]`로 줍니다(`sent`, `sned`, `end` -> 사용자에게 물음).
 
