@@ -271,7 +271,7 @@ def test_header_hint_not_the_current_row(heads):
     # 2.9.33: '온도(C)' is '온도(°C)' (the same unit) and matches; a typo '온도x' is a [후보] (was [추천] for '온도(C)')
     bad = run_fail("ml_train.py", "-f", heads["u"], "-x", "온도x,압력", "-y", "y")
     assert "--header-row" not in bad["message"]                                 # 2.9.13: [추천] --header-row 1
-    assert "'온도x' -> [후보] '온도(°C)'" in bad["message"]
+    assert "'온도x' -> [후보] 1) '온도(°C)'" in bad["message"]          # 2.9.71: 번호
     bad = run_fail("ml_train.py", "-f", heads["u2"], "-x", "온도", "-y", "y")
     assert "--header-row" not in bad["message"] and "[후보]" in bad["message"]
     bad = run_fail("ml_train.py", "-f", heads["u3"], "-x", "온도,압력", "-y", "y")   # '압력' is a data value
