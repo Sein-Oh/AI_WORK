@@ -134,7 +134,8 @@ def _train(path, lid, opts):
 
 
 def _predict_command(train_res):
-    cmds = [c["command"] for c in train_res.get("next_commands", []) if "ml_predict.py" in c["command"]]
+    # 파일 예측 틀 (2.9.75부터 한 건 예측 -i 틀도 있음)
+    cmds = [c["command"] for c in train_res.get("next_commands", []) if "ml_predict.py" in c["command"] and " -f " in c["command"]]
     assert len(cmds) == 1, train_res.get("next_commands")
     return cmds[0]
 
