@@ -703,3 +703,26 @@ def test_missing_prediction_file_typo_gives_numbered_files(p1_model, tmp_path):
     cmd = split_command(res["confirm_commands"][0]["command"])
     assert cmd[cmd.index("-f") + 1] == str(tmp_path / "새조건_1차.csv"), cmd
     assert run_tool("ml_predict.py", *cmd[2:])["status"] == "ok"
+
+
+def test_placeholder_or_text_in_inline_numbers_stops(p1_model):
+    """2.9.76 검토: 학습 결과의 '-i "온도=<값>,..."' 틀을 그대로 실행하면 중앙값으로 채운 예측이 VERIFIED로 나갔음 -> 멈추고 값을 물으라고 함."""
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=<값>,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:") and "사용자에게 물은 뒤" in res["message"], res
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=170:190:10,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and "--sweep" in res["message"], res
+    assert run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=180,압력(bar)=3,속도=45")["status"] == "ok"
+
+
+def test_constant_eval_is_refused(p1_model):
+    """2.9.76 검토: '--eval "온도=182; 압력=3"'(한 건 예측 값을 학습 --eval에 넣은 실수)이 상수 파생변수로 학습되어 최고 버전이 됐음."""
+    proc, res = run_raw("ml_train.py", "-f", p1_model["f"], "-y", "생산량", "--eval", "온도=182; 압력=3")
+    assert proc.returncode == 1 and "상수식" in res["message"] and "ml_predict.py -i" in res["message"], res
+    proc, res = run_raw("ml_train.py", "-f", p1_model["f"], "-y", "생산량", "--eval", "온도 = 압력(bar) * 2")
+    assert proc.returncode == 1 and "데이터 열 '온도(°C)'과(와) 같습니다" in res["message"], res
+
+
+def test_find_goal_in_wrong_option_is_not_turned_into_inputs(p1_model):
+    """2.9.76 검토: '--goal "생산량=60" --vary 온도'가 [추천] -i 생산량=60으로 고쳐져 목표값이 입력으로 들어갔음."""
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "--goal", "생산량=600", "--vary", "온도(°C)")
+    assert proc.returncode == 2 and " -i " not in res["message"], res
