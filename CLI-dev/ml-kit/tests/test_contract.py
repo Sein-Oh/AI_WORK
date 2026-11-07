@@ -305,7 +305,7 @@ def test_help_is_stderr_text_and_one_json_line(script, data_dir):
 
 def test_stop_retry_directive_mentions_full_command():
     d = mp.error_payload(mp.InputError("x [추천] python a.py"))["agent_directive"]
-    assert "전체 명령" in d and "그대로 1번 실행" in d
+    assert "전체 명령" in d and "그대로 1번만 실행" in d and "confirm_commands" in d
 
 
 # ---- 오류 로그 <데이터 폴더>/logs/errors.txt (AGENTS.md 오류 로그 저장, CLI-dev/README.md R6) ----

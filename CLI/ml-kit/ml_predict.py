@@ -712,8 +712,9 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             **{k: v for k, v in getattr(exc, "extra", {}).items()
                if k not in ("status", "message", "agent_directive", "error_type")},
             "agent_directive": (
-                "STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 실행하세요. "
-                "없으면 다시 실행하지 말고 message를 그대로 알리세요."
+                "STOP_RETRY: 입력이나 데이터 문제로 멈췄습니다. message에 [추천]이 있으면 [추천] 뒤의 전체 명령을 그대로 1번만 실행하세요. "
+                "[후보]가 있으면 다시 실행하지 말고 후보를 사용자에게 보여 주고, 사용자가 고르면 같은 번호의 confirm_commands를 1번 실행하세요 "
+                "(confirm_commands가 없으면 고른 값으로 1번 실행). 둘 다 없으면 다시 실행하지 말고 message를 그대로 알리세요."
                 + (f" {hint}" if hint else "")
             ),
         }
@@ -1294,6 +1295,40 @@ def known_columns(names: List[str], columns: List[str]) -> List[str]:
     return [c for c in _match_names(names, columns) if c is not None]
 
 
+_NAME_PART = re.compile(r"(\s*[,;|=]\s*)")
+
+
+def command_replacing(old: str, new: str) -> Optional[str]:
+    """The running command with the name `old` replaced by `new` (a full command for [후보] next_commands, 2.9.71):
+    an argument equal to old, or one part of a list or a 'k=v' argument ('-x "온도,압력"', '-i "온도=1,압력=2"').
+    None when the running program is not an ml-kit command or old is in no argument."""
+    argv = list(CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
+    if not argv:
+        return None
+    found = False
+    for i in range(1, len(argv)):
+        a = str(argv[i])
+        if a.startswith("-") and i > 1:
+            continue
+        parts = _NAME_PART.split(a)
+        if old in [p.strip() for p in parts]:
+            argv[i] = "".join(new if p.strip() == old else p for p in parts)
+            found = True
+            break
+    return command_text(argv=argv) if found else None
+
+
+def candidate_commands(name: str, cands: List[str]) -> List[Dict[str, Any]]:
+    """confirm_commands for [후보] names (run only the one the user picks): the running command with `name` replaced by
+    each candidate (all or none). destructive when the command replaces something (--overwrite)."""
+    cmds = [command_replacing(name, c) for c in cands]
+    if not cmds or any(c is None for c in cmds):
+        return []
+    risky = "--overwrite" in (CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
+    return [{"purpose": f"'{name}' 대신 '{c}' (사용자가 고른 경우에만)", "command": cmd, **({"destructive": True} if risky else {})}
+            for c, cmd in zip(cands, cmds)]
+
+
 def resolve_column_names(names: List[str], columns: List[str], kind: str,
                          layout: Optional[Dict[str, Any]] = None, values: bool = False,
                          exclude: Optional[List[str]] = None) -> Tuple[List[str], Dict[str, str]]:
@@ -1327,6 +1362,7 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
             raise InputError(f"지정하신 {kind} 컬럼 {missing}을(를) 머리글에서 찾을 수 없습니다. {hint}"
                              f"\n[지금 머리글 컬럼 목록]: {col_list}")
         hints = []
+        picks: List[Dict[str, Any]] = []
         taken = set(resolved)
         banned = set(exclude or [])
         for m in missing:
@@ -1341,7 +1377,13 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                 hints.append(unit_hint(m, s[0], kind))
             elif s:
                 shown = unit_marked(s, m, quote=True) if values else [repr(c) for c in s]
-                hints.append(f"'{m}' -> [후보] {', '.join(shown)}{used}")
+                cmds = candidate_commands(m, s) if len(missing) == 1 and not values else []
+                if cmds:      # 2.9.71: numbered, the same number of next_commands is the full command (no splicing)
+                    picks = cmds
+                    hints.append(f"'{m}' -> [후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(shown, 1))
+                                 + f"{used} (사용자가 고른 번호의 confirm_commands를 실행)")
+                else:
+                    hints.append(f"'{m}' -> [후보] {', '.join(shown)}{used}")
             elif near_banned:
                 hints.append(f"'{m}' -> 비슷한 열 {', '.join(repr(c) for c in near_banned)}은(는) 이 명령에서 이미 다른 "
                              f"이름이나 옵션에 쓰인 열입니다")
@@ -1351,7 +1393,8 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                if any("[후보]" in h for h in hints) else "")
         raise ColumnNameError(
             f"지정하신 {kind} 컬럼 {missing}을(를) 데이터셋에서 찾을 수 없습니다. "
-            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {name_list(col_list)}"
+            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {name_list(col_list)}",
+            extra={"confirm_commands": picks} if picks else None,
         )
     for short, full in applied.items():
         sys.stderr.write(f"[INFO] 컬럼명 자동 매칭: '{short}' -> '{full}'\n")

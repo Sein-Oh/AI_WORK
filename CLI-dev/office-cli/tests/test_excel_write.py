@@ -798,7 +798,7 @@ def test_missing_sheet_without_new_sheet_option(xl, capsys, argv):
     code, out = run_main(excel, capsys, *argv)
     assert code == 1 and out["error_type"] != "needs_user_decision", out
     assert "--new-sheet" not in out["agent_directive"] and "--new-sheet" not in out["message"]
-    assert "[후보] 요약" in out["message"]
+    assert "[후보] 1) 요약" in out["message"]
 
 
 def test_excel_write_still_asks_about_new_sheet(xl, capsys):
@@ -1016,7 +1016,7 @@ def test_chart_delete_rules(xl, capsys):
     code, out = run_excel(capsys, "chart", "--action", "delete")
     assert code == 1
     code, out = run_excel(capsys, "chart", "--action", "delete", "--name", "매출차트")
-    assert code == 1 and "[후보] 매출" in out["message"] and "[추천]" not in out["message"]
+    assert code == 1 and "[후보] 1) 매출" in out["message"] and out["confirm_commands"][0]["destructive"] is True and "[추천]" not in out["message"]
     code, out = run_excel(capsys, "chart", "--action", "delete", "--name", "매출")
     assert code == 0 and ws.charts == []
 

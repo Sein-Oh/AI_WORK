@@ -127,12 +127,28 @@ def _omitted_candidates(n: int) -> str:
     return f" [후보 {n}개 생략]" if n else ""
 
 
-def ambiguous(message: str, candidates: Iterable[str], log_message: Optional[str] = None) -> InputError:
+def ambiguous(message: str, candidates: Iterable[str], log_message: Optional[str] = None,
+              replace: Optional[str] = None, values: Optional[Iterable[str]] = None) -> InputError:
     """후보가 둘 이상이라 고를 수 없음. message 끝에 '[후보] a, b, c'(최대 10개)를 붙입니다.
-    후보는 문서에서 가져온 글(제목, 단락, 시트·문서 이름)이라 오류 로그에는 개수만 남깁니다."""
+    후보는 문서에서 가져온 글(제목, 단락, 시트·문서 이름)이라 오류 로그에는 개수만 남깁니다.
+    replace: 실행한 명령에서 바꿀 값(틀린 이름). 후보마다 그 값을 바꾼 전체 명령을 만들 수 있으면 '[후보] 1) a 2) b'와 같은 번호의
+    confirm_commands (1.4.79, 사용법 단순성 2번: 사용자가 고르면 LLM이 명령에 끼워 넣지 않고 그 번호의 명령을 실행. 사용자가 고른
+    뒤에만 실행하므로 next_commands가 아님, 덮어쓰기·삭제·발송이면 destructive).
+    values: 명령에 넣을 값 (보이는 글 candidates와 다를 때, 예: 메일 폴더 전체 경로 대신 끝 이름)."""
     cands = [str(c) for c in candidates]
     shown = cands[:MAX_CANDIDATES]
-    tail = f" [후보] {', '.join(shown)}" + (f" 외 {len(cands) - len(shown)}개" if len(cands) > len(shown) else "")
+    more = f" 외 {len(cands) - len(shown)}개" if len(cands) > len(shown) else ""
+    vals = [str(v) for v in values][:len(shown)] if values is not None else shown
+    cmds = [retry_replacing(replace, v) for v in vals] if replace and len(vals) == len(shown) else []
+    if cmds and all(c.startswith("python ") for c in cmds):
+        tail = " [후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(shown, 1)) + more
+        argv = list(CURRENT_ARGV or [])
+        risky = "--overwrite" in argv or bool(set(argv) & {"delete", "clear", "send"}) or (argv[:1] and argv[0] in DESTRUCTIVE_COMMANDS)
+        nexts = [{"purpose": f"'{replace}' 대신 '{c}' (사용자가 고른 경우에만)", "command": cmd, **({"destructive": True} if risky else {})}
+                 for c, cmd in zip(shown, cmds)]
+        return InputError(message + tail, candidates=shown, fields={"confirm_commands": nexts},
+                          log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
+    tail = f" [후보] {', '.join(shown)}" + more
     return InputError(message + tail, candidates=shown,
                       log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
 
@@ -415,9 +431,15 @@ def _error_payload(exc: BaseException, tool: str = "", command: str = "") -> Dic
             base["candidates"] = exc.candidates
         return base
     if isinstance(exc, InputError) and exc.candidates:
+        nexts = exc.fields.get("confirm_commands") if exc.fields else None
         base.update(error_type="ambiguous", message=msg, candidates=exc.candidates,
-                    agent_directive="STOP_RETRY: 후보가 여러 개라 도구가 고를 수 없습니다. 재시도하지 말고 message의 "
-                                    "[후보]를 사용자에게 보여주고 고르게 한 뒤, 사용자가 고른 값으로 실행하세요.")
+                    agent_directive=("STOP_RETRY: 후보가 여러 개라 도구가 고를 수 없습니다. 재시도하지 말고 message의 [후보]를 "
+                                     "사용자에게 보여주고 고르게 한 뒤, 사용자가 고른 번호와 같은 번호의 confirm_commands(첫째 = "
+                                     "confirm_commands[0])를 그대로 1번 실행하세요." if nexts else
+                                     "STOP_RETRY: 후보가 여러 개라 도구가 고를 수 없습니다. 재시도하지 말고 message의 "
+                                     "[후보]를 사용자에게 보여주고 고르게 한 뒤, 사용자가 고른 값으로 실행하세요."))
+        if nexts:
+            base["confirm_commands"] = nexts
         return base
     if isinstance(exc, InputError) and (exc.directive or exc.error_type or exc.fields):
         base.update(error_type=exc.error_type or "input", message=msg,
@@ -1643,7 +1665,7 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
     hints = same or suggest(name, cands)
     if hints:
         tail = " 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요."
-        return ambiguous(head + tail, [show(c) for c in hints], log_message=log_head + tail)
+        return ambiguous(head + tail, [show(c) for c in hints], log_message=log_head + tail, replace=name, values=hints)
     if cands:
         shown = ", ".join(show(c) for c in cands[:15]) + (" ..." if len(cands) > 15 else "")
         return InputError(f"{head} 사용 가능한 {kind}: {shown}", log_message=f"{log_head} [사용 가능한 이름 {len(cands)}개 생략]")

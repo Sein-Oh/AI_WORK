@@ -788,7 +788,7 @@ def test_attach_resolves_data_dir_and_missing_is_suggested(capsys, monkeypatch):
     code, out = run(capsys, monkeypatch, mail, "new", "--attach", "보고서_최종.pdf")
     assert code == 0 and mail.Attachments.added == [os.path.join(data, "보고서_최종.pdf")]
     code, out = run(capsys, monkeypatch, Mail(), "new", "--attach", "보고서_최종.docx")
-    assert code == 1 and "[후보] 보고서_최종.pdf" in out["message"] and "[추천]" not in out["message"]   # 다른 파일을 첨부해 발송하지 않게
+    assert code == 1 and "[후보] 1) 보고서_최종.pdf" in out["message"] and "[추천]" not in out["message"]   # 다른 파일을 첨부해 발송하지 않게
 
 
 def test_search_filter_has_single_prefix_and_grouping():

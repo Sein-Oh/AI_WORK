@@ -194,7 +194,7 @@ def test_read_values_search_and_truncation(xl, capsys):
 
 def test_read_unknown_sheet_suggests(xl, capsys):
     code, out = run_excel(capsys, "read", "--sheet", "요약표")
-    assert code == 1 and "[후보] 요약" in out["message"] and "[추천]" not in out["message"]   # 부분 일치는 추측하지 않음
+    assert code == 1 and "[후보] 1) 요약" in out["message"] and "[추천]" not in out["message"]   # 부분 일치는 추측하지 않음
 
 
 def test_read_closed_xlsx_with_openpyxl(tmp_path, capsys, monkeypatch):
@@ -1401,3 +1401,12 @@ def test_check_layer_b_item_marks_reason(tmp_path):
     assert r["verdict"] == "일치" and r["match_mode"] == "exact_mixed" and excel.LAYER_B_NOTE in r["reason"], r
     r = excel._judge_row(docs, "SOI 2 전압", "4", "", "값(V)")       # 글자 그대로(층 A)는 그대로
     assert r["verdict"] == "불일치" and r["match_mode"] == "exact" and excel.LAYER_B_NOTE not in r["reason"], r
+
+
+def test_sheet_candidate_has_numbered_confirm_command(xl, capsys):
+    """1.4.79: 비슷한 이름 [후보]에 번호를 붙이고 같은 번호의 confirm_commands가 이름을 바꾼 전체 명령 (사용자가 고른 뒤에만 실행)."""
+    code, out = run_excel(capsys, "read", "--sheet", "요약표")
+    assert code == 1 and "[후보] 1) 요약" in out["message"] and "next_commands" not in out, out
+    assert "confirm_commands" in out["agent_directive"]
+    argv = split_command(out["confirm_commands"][0]["command"])
+    assert argv[0] == "python" and argv[2:] == ["read", "--sheet", "요약"], argv
