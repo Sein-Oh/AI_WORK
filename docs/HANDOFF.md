@@ -4,7 +4,8 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.73**, **office-cli 1.4.81** (작업 브랜치 `ccr-ecab210c-awib23`, 2026-11-07 기준 main에는 아직 없음: PR을 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.73**, **office-cli 1.4.82** (main은 1.4.81. 1.4.82는 작업 브랜치 `claude/home-pc-check-2973`, PR을 머지했으면 main)
+- Office는 Office 16만 대상 (2026-11-07 Office 2007 지원 폐기, 집 PC도 Office 2019로 바꿈)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
   ppt slide `--dest`, `--cards` 구분 `;`, 별칭·줄임말 제거. 클라우드 테스트: ml-kit 894 passed·1 skipped, office-cli+공통 3296 passed.
@@ -64,6 +65,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | office-cli 1.4.79 | 사용법 단순화: `[추천]`은 늘 전체 명령, transfer `--from-app`/`--to-app`, ppt slide `--dest`, `--cards` 구분 `;`, `CONTINUE` 횟수를 도구가 셈 |
 | office-cli 1.4.80 | `excel compare`(표 두 판 비교, BOM 개정 비교: 머리글·열 역할·짝지을 키를 도구가 정함, 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, 결과 xlsx와 새 판 칸 메모 미리보기)와 새 스킬 `office-data` |
 | office-cli 1.4.81 | 남은 `[후보]`에 번호와 같은 번호의 `confirm_commands`, `reader --query` 구분자 `;`(그리고)·`\|`(또는)(옛 AND/OR는 `[추천]`), 빈 결과 `count 0`, 파일 지우기 재시도, `--dry-run` 확대(excel replace·range clear/move·sheet delete·chart delete, word replace·write, ppt replace·slide) |
+| office-cli 1.4.82 | Office 2007 지원 폐기 (Office 16만): PDF 추가 기능 확인·PowerPoint 2007 E_FAIL 판정·Word `SaveAs` 대체·그림 글자 `/` 처리 삭제, 실기 러너 D1·D4의 PDF ENV-SKIP 삭제 |
 | office-cli 1.4.76 | 도구가 내는 명령(`next_commands`, `confirm_commands`, `[추천]` 전체 명령)의 따옴표를 실행 셸에 맞춤: OpenCode처럼 `pwsh`가 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1(`OFFICE_CLI_SHELL`로 강제). PowerShell은 작은따옴표(`$`·백틱·`{}`·`@`·`;` 글자 그대로), 5.1은 값 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈. 테스트에 셸 시뮬레이터(`CLI-dev/tests/shell_sim.py`) |
 | office-cli 1.4.75 | 11차 검토 수정: `confirm_commands`의 덮어쓰기·삭제·발송 항목에 `"destructive": true`("묻지 말고"라고 해도 늘 물음, 전역 지침 3장 6번), 문서를 바꾸는 이어 하기(`read --save` 뒤 write, write 뒤 chart, chart 뒤 transfer 등)는 `next_commands`에서 `confirm_commands`로, 파괴적 명령 오타는 `[후보]`, 발송 실패 초안은 다른 거부 문구, reader 층 A 허용 목록 완화(짝 따옴표·괄호, 전각 콜론, `±` 뒤 숫자, 단위 뒤 `(`) |
 | office-cli 1.4.72 | 9차 검토 수정: outlook 발송은 저장한 초안을 그 항목 그대로 보내는 `send --id <draft_id>` 하나로(`new`·`reply`·`forward`의 `--send` 없앰, 초안 결과의 `next_commands[0]`에 `needs_user_confirm: true`, 이미 보냈거나 지운 초안은 거부해 중복 발송 없음), 답장·전달은 보내지 않은 초안을 원본으로 쓰지 않음(열린 초안 창에 답장하던 위험). reader 층 A: `/` 값 구분은 양쪽 숫자+단위이고 `/` 뒤가 1·10^n이 아닐 때만(숫자만 앞이면 Hz·V 목록), AND 스니펫은 검색어마다 창(` / `로 이음), 단위 없는 검색어의 DC/AC 예외 없앰, 붙은 기호(천 단위 따옴표, U+2044·U+FF0F·U+2215, 곱하기, U+3161, 폭 없는 공백, 지수 `m-1`) 차단 |
@@ -126,12 +128,12 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | ml-kit 2.9.39 | 학습 결과에 타겟별 중요 입력 `top_features`(최고 모델의 순열 중요도 비중, 최대 5개, 원래 열 이름)와 preview의 "중요 입력". SKILL.md에 버전 비교(`--history`), 파일 예측 엑셀 저장(`--out`), 파생변수(`--eval`), 예측 범위·확률 열 추가. SKILL.md 옵션이 argparse에 있는지 검사하는 테스트 |
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
 
-## 3-0. 집 PC에서 할 일 (Gemma 없음, 공식 Python 3.13)
+## 3-0. 집 PC에서 할 일 (Gemma 없음, WinPython 3.13, Office 16)
 2026-11-07 아래 1~5를 모두 마침 (결과는 4장). 그 뒤 ml-kit 2.9.73 · office-cli 1.4.81이 나와 3·4를 다시 돌린다.
 상세: `docs/HOME_PC_CHECK.md`. 요약:
-1. 저장소를 받고(`git fetch origin` 후 `git checkout ccr-ecab210c-awib23`, 또는 머지 뒤 main) `python -c "import sys; print(sys.executable, sys.version)"`로 PATH의 python 확인.
-   저장소 폴더에서 바로 돌려도 됨 (점검 스크립트는 옆 폴더 `CLI/`의 도구를 씀). `C:\CLI`, `C:\CLI-dev`로 복사해서 돌려도 같음.
-2. `python CLI\setup.py --no-path` (setup.bat은 WinPython용이라 쓰지 않음): ml 스킬 4개와 office-data 포함 스킬 복사, 옛 `skills\ml-kit` 보관 후 삭제. `opencode.exe 없음` FAIL 1개는 환경 차이.
+1. main을 받아 `CLI`는 `C:\CLI`, `CLI-dev`는 `C:\CLI-dev`로 붙여넣음 (`C:\CLI\python`은 둠). 2026-11-07부터 집 PC도 WinPython 3.13(`C:\CLI\python`)과 Office 16(2019).
+2. `C:\CLI\setup.bat`을 관리자 권한으로 실행 -> 새 PowerShell 창에서 `python -c "import sys; print(sys.executable, sys.version)"`가 `C:\CLI\python`의 3.13.x인지 확인.
+   `C:\CLI\python`에 라이브러리가 없으면 `pip_install.txt` 2-1 명령을 그 python으로 실행. `opencode.exe 없음` FAIL 1개는 환경 차이.
 3. `python CLI-dev\run_simplify_check.py --label 집PC` (10~15분): 틀린 명령 -> 도구가 준 고친 명령을 PowerShell 5.1로 그대로 실행 -> 성공하는지,
    ml-kit 2.9.72 새 기능(N1~N4), office-cli 1.4.80 BOM 비교(B1~B5), 2.9.73·1.4.81(C1~C3 `[후보]` 번호·`--query`, E1 빈 결과, D1~D4 `--dry-run`). 모두 39항목.
    2026-11-07 집 PC는 31항목 PASS. 새 8항목 중 C1~C3·E1은 클라우드(bash) PASS, D1~D4는 Office가 필요해 집 PC에서 처음 봄.
@@ -199,8 +201,8 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 집 PC용 (Claude Code, 저장소 폴더에서):
 ```text
 AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md(특히 1장과 3-0장), docs/HOME_PC_CHECK.md를 읽어.
-지금은 집 PC(Windows, 공식 Python 3.13, Office 2007, Gemma 없음)야. 작업 브랜치는 ccr-ecab210c-awib23.
-1. 브랜치를 받고 PATH의 python이 3.13인지 확인한 뒤, HANDOFF 3-0장 2~3번(setup.py --no-path, run_simplify_check.py --label 집PC)을 실행해 줘.
+지금은 집 PC(Windows, WinPython 3.13, Office 16(2019), Gemma 없음)야. 작업 브랜치는 ccr-ecab210c-awib23.
+1. HANDOFF 3-0장 1~2번대로 준비(setup.bat 관리자 실행, PATH의 python이 C:\CLI\python 3.13인지)를 확인하고 3번(run_simplify_check.py --label 집PC)을 실행해 줘.
    명령은 python만 쓰고, 실행 전에 무엇을 할지 짧게 알려 줘.
 2. 결과 파일의 PASS/FAIL/SKIP을 표로 정리하고, FAIL은 원인과 고칠 곳(파일:줄)을 찾아 줘.
 3. 고칠 것은 회귀 테스트와 함께 고치고, 바꾼 도구의 테스트와 CLI-dev/tests를 돌린 뒤 같은 브랜치에 커밋·푸시해 줘.

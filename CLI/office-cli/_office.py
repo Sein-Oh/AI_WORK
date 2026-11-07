@@ -32,7 +32,7 @@ except ImportError:  # 비 Windows 환경(테스트)에서도 import는 되도�
 KINDS = ("excel", "word", "ppt")
 APP_LABEL = {"excel": "Excel", "word": "Word", "ppt": "PowerPoint"}
 PROG_ID = {"excel": "Excel.Application", "word": "Word.Application", "ppt": "PowerPoint.Application"}
-FRAME_CLASS = {"excel": ("XLMAIN",), "word": ("OpusApp",), "ppt": ("PPTFrameClass", "PP12FrameClass")}
+FRAME_CLASS = {"excel": ("XLMAIN",), "word": ("OpusApp",), "ppt": ("PPTFrameClass",)}
 DOC_CLASS = {"excel": "EXCEL7", "word": "_WwG", "ppt": "paneClassDC"}
 EXTENSIONS = {
     "excel": {".xlsx": 51, ".xlsm": 52, ".xlsb": 50, ".xls": 56},
@@ -861,7 +861,7 @@ def _open_file(kind: str, app: Any, path: str, readonly: bool) -> Any:
             return app.Workbooks.Open(path, UpdateLinks=0, ReadOnly=readonly, Password=_NO_PASSWORD,
                                       IgnoreReadOnlyRecommended=True, Notify=False, AddToMru=False)
         if kind == "word":
-            # Word 2007은 ReadOnly와 PasswordDocument를 함께 주면 암호 없는 파일도 열지 못하므로 암호가 없다고 확인된 파일에는 넘기지 않음
+            # 암호가 없다고 확인된 파일에는 PasswordDocument를 넘기지 않음 (암호 대화상자 대신 바로 열기)
             encrypted = _word_encrypted(path)
             password = {} if encrypted is False else {"PasswordDocument": _NO_PASSWORD}
             return app.Documents.Open(path, ConfirmConversions=False, ReadOnly=readonly, AddToRecentFiles=False,
@@ -870,7 +870,7 @@ def _open_file(kind: str, app: Any, path: str, readonly: bool) -> Any:
     except Exception as e:
         info = rt._com_error_info(e)
         text = (info[1] if info else str(e)).lower()
-        if encrypted is True or "암호" in text or "password" in text:    # Word 2007의 오류 문구에는 '암호'가 없음
+        if encrypted is True or "암호" in text or "password" in text:    # 오류 문구에 '암호'가 없어도 암호 파일이면 암호 오류
             raise _password_error(path)
         raise
 
@@ -883,12 +883,8 @@ def _opened_readonly(doc: Any) -> bool:
 
 
 def word_save_as(doc: Any, path: str, fmt: Optional[int] = None) -> None:
-    """Word SaveAs2(2010+)를 쓰고, 없는 버전(Word 2007)은 SaveAs로 저장합니다."""
-    try:
-        save = doc.SaveAs2
-    except AttributeError:
-        save = doc.SaveAs
-    save(path, FileFormat=fmt) if fmt is not None else save(path)
+    """Word 문서를 SaveAs2로 저장합니다 (Office 16)."""
+    doc.SaveAs2(path, FileFormat=fmt) if fmt is not None else doc.SaveAs2(path)
 
 
 def _create_file(kind: str, app: Any, path: str) -> Any:
@@ -1179,15 +1175,6 @@ def range_to_matrix(values: Any) -> List[List[Any]]:
     return [list(row) if isinstance(row, (tuple, list)) else [row] for row in values]
 
 
-def _office12_pdf_addin() -> bool:
-    """Office 2007은 'PDF/XPS로 저장' 추가 기능(EXP_PDF.DLL)이 있어야 PDF로 내보낼 수 있습니다 (SP2 이상은 기본 포함)."""
-    for env in ("CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432"):
-        base = os.environ.get(env)
-        if base and os.path.exists(os.path.join(base, "Microsoft Shared", "OFFICE12", "EXP_PDF.DLL")):
-            return True
-    return False
-
-
 def office_caps(app: Any) -> Dict[str, Any]:
     """Office 버전과 PDF 내보내기 가능 여부. pdf_export: True | False | None(알 수 없음)."""
     try:
@@ -1195,16 +1182,14 @@ def office_caps(app: Any) -> Dict[str, Any]:
         major = int(float(version))
     except Exception:
         return {"version": None, "major": None, "pdf_export": None}
-    pdf = True if major >= 14 else (_office12_pdf_addin() if major == 12 else False)
-    return {"version": version, "major": major, "pdf_export": pdf}
+    return {"version": version, "major": major, "pdf_export": major >= 14}    # 대상은 Office 16. 그보다 낮으면 PDF 없음으로 봄
 
 
 def require_pdf_export(app: Any, alt_ext: str) -> None:
     """PDF 내보내기 기능이 없는 Office면 시도하지 않고 입력 오류로 안내합니다 (버전을 모르면 시도)."""
     caps = office_caps(app)
     if caps["pdf_export"] is False:
-        hint = " (Office 2007은 'PDF/XPS로 저장' 추가 기능 필요)" if caps["major"] == 12 else ""
-        raise rt.InputError(f"이 PC의 Office {caps['version']}에는 PDF 내보내기 기능이 없습니다{hint}. "
+        raise rt.InputError(f"이 PC의 Office {caps['version']}에는 PDF 내보내기 기능이 없습니다. "
                             f"--save에 {alt_ext}를 쓰세요.")
 
 

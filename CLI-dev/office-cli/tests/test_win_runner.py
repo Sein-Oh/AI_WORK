@@ -100,7 +100,7 @@ class Desk:
     def modules(self):
         desk = self
         office = types.ModuleType("_office")
-        office.FRAME_CLASS = {"excel": ("XLMAIN",), "word": ("OpusApp",), "ppt": ("PPTFrameClass", "PP12FrameClass")}
+        office.FRAME_CLASS = {"excel": ("XLMAIN",), "word": ("OpusApp",), "ppt": ("PPTFrameClass",)}
         office.find_apps = lambda kind: [a for a in desk.apps if a.kind == kind]
         info = {}
 

@@ -965,7 +965,7 @@ def test_chart_numeric_x_becomes_scatter_and_offers_transfer(xl, capsys):
 
 @pytest.mark.parametrize("kind,expected", [("scatter", -4169), ("scatter_lines", 75), ("line", 75), ("column", 51)])
 def test_chart_type_survives_set_source_data(xl, capsys, kind, expected):
-    # 실기 I5: 종류를 SetSourceData 앞에서만 정하면 Excel 2007이 분산형을 74(선+표식)로 바꾸고,
+    # 실기 I5: 종류를 SetSourceData 앞에서만 정하면 Excel이 분산형을 74(선+표식)로 바꾸고,
     # 뒤에서만 정하면 첫 열(x)이 계열로 그려짐. 앞뒤로 모두 정해야 함. 'scatter' 상수도 74로 잘못돼 있었음
     app, wb = xl
     ws = ws_of(wb)

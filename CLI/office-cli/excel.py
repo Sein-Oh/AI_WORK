@@ -3347,7 +3347,7 @@ def _sort_fields(ws: Any, rng: Any, r1: int, c1: int, r2: int, order: List[Tuple
 
 def range_sort(args) -> Dict[str, Any]:
     """range --action sort: --by 열(이름 또는 열 문자, 쉼표로 여럿)로 정렬. 머리글 행은 도구가 정하고 결과에 알림.
-    기준 3개까지는 Range.Sort, 4개부터는 Worksheet.Sort.SortFields(엑셀 2007 이상)."""
+    기준 3개까지는 Range.Sort, 4개부터는 Worksheet.Sort.SortFields."""
     if not args.range:
         raise rt.InputError("range sort에는 --range가 필요합니다 (예: --range A1:E100, 머리글 행 포함).")
     if not args.by:
@@ -3718,7 +3718,7 @@ def cmd_chart(args) -> Dict[str, Any]:
         obj = ws.ChartObjects().Add(anchor.Left, anchor.Top, args.width, args.height)
         chart = obj.Chart
         # 종류 -> 데이터 -> 종류: 데이터 앞에 정해야 분산형이 첫 열을 x값으로 쓰고(뒤에만 정하면 x가 계열이 됨),
-        # 데이터 뒤에 다시 정해야 세부 종류가 유지됨 (Excel 2007은 SetSourceData 때 분산형을 선+표식으로 바꿈)
+        # 데이터 뒤에 다시 정해야 세부 종류가 유지됨 (SetSourceData가 분산형을 선+표식으로 바꿀 수 있음)
         chart.ChartType = XL_CHART[chart_type]
         chart.SetSourceData(rng)
         chart.ChartType = XL_CHART[chart_type]
@@ -3781,7 +3781,7 @@ def cmd_chart(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 10. comment (칸 메모: 이전 방식 메모, Office 2007+와 365 모두 Range.Comment / AddComment)
+# 10. comment (칸 메모: 이전 방식 메모, Range.Comment / AddComment)
 # ==============================================================================
 
 COMMENT_LIST_MAX = 100        # 목록 한 번에 보여 줄 메모 수 (넘으면 --start로 이어 보기)

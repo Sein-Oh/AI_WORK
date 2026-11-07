@@ -477,7 +477,7 @@ class SlideWriter:
                 bullet = tr.Paragraphs(i).ParagraphFormat.Bullet
                 bullet.Visible = -1 if kind else 0
                 if kind:
-                    # Visible만 켜면 PowerPoint 2007 글상자는 번호 목록이 됩니다. 종류를 명시합니다.
+                    # Visible만 켜면 글상자에 따라 번호 목록이 될 수 있어 종류를 명시합니다.
                     bullet.Type = PP_BULLET_NUMBERED if kind == "numbered" else PP_BULLET_UNNUMBERED
             except Exception:
                 pass
@@ -1064,15 +1064,6 @@ def cmd_replace(args) -> Dict[str, Any]:
 # 5. export
 # ==============================================================================
 
-def _ppt2007_without_pdf(app: Any, e: Exception) -> bool:
-    """PowerPoint 2007(12.x)은 PDF 추가 기능이 없으면 E_FAIL만 돌려줍니다. 다른 버전의 E_FAIL은 그대로 둡니다."""
-    try:
-        version = str(app.Version)
-    except Exception:
-        return False
-    return version.startswith("12.") and "-2147467259" in str(e)
-
-
 def cmd_export(args) -> Dict[str, Any]:
     ext = os.path.splitext(args.save)[1].lower() if args.save else ".pdf"
     if ext not in (".pdf", ".pptx", ".pptm", ".ppt"):
@@ -1086,9 +1077,8 @@ def cmd_export(args) -> Dict[str, Any]:
                 # PrintRange(개체 인자)를 생략하면 pywin32가 인자 변환에서 TypeError를 냅니다. None을 명시합니다.
                 prs.ExportAsFixedFormat(os.path.normpath(out), 2, PrintRange=None)   # ppFixedFormatTypePDF
             except Exception as e:
-                if "기능이 설치되어 있지 않아" in str(e) or _ppt2007_without_pdf(t.app, e):
-                    raise rt.InputError("PowerPoint PDF 내보내기 기능이 없습니다(Office 2007은 'PDF/XPS로 저장' 추가 기능 필요). "
-                                        "--save에 .pptx를 쓰세요.")
+                if "기능이 설치되어 있지 않아" in str(e):
+                    raise rt.InputError("PowerPoint PDF 내보내기 기능이 없습니다. --save에 .pptx를 쓰세요.")
                 raise
         else:
             src_ext = os.path.splitext(t.path)[1].lower() if t.path else ".pptx"

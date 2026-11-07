@@ -11,6 +11,18 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.82] - 2026-11-07
+
+Office 2007 지원 폐기. 대상은 Office 16만 (회사 PC 2021, 집 PC 2019).
+
+### 구조
+- 지운 것: Office 2007 'PDF/XPS로 저장' 추가 기능 확인(`_office12_pdf_addin`), PowerPoint 2007의 PDF E_FAIL 판정(`_ppt2007_without_pdf`),
+  Word `SaveAs2`가 없을 때의 `SaveAs` 대체(`word_save_as`는 `SaveAs2`만), Word 2007이 본문 그림을 `/`로 돌려주던 것의 처리(`\x01`만 `[그림]`),
+  PowerPoint 2007 창 종류 `PP12FrameClass`, PDF 없음 안내의 "Office 2007은 추가 기능 필요" 문구.
+- `office_caps`의 `pdf_export`는 Office 14 이상이면 True, 그 밖은 False (`windows`의 PDF 불가 안내와 `export` 거절은 그대로).
+- 실기 러너: D1(워드 PDF)·D4(PPT PDF)의 PDF 없음 ENV-SKIP을 없애 늘 PASS/FAIL로 판정, Word 2007 `SaveAs` 대체와 Office 2007 빈 창 제목("Microsoft Excel" 등) 삭제.
+- 어느 버전에서나 맞는 처리(차트 종류를 데이터 앞뒤로 정하기, 글머리 종류 명시, Word 암호 인자)는 그대로 두고 주석의 2007 언급만 지움.
+
 ## [1.4.81] - 2026-11-07
 
 사용법 단순성 남은 것과 지침 정리 (AGENTS.md "사용법 단순성" 2·3번, ACI 설계 권장 2번, JIT 자가복구).

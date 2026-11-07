@@ -93,9 +93,9 @@ PICTURE_MARK = "[그림]"
 
 
 def _replace_inline_pictures(rng: Any, raw: str) -> str:
-    """본문 그림(InlineShape)은 Range.Text에서 한 글자(Word 2007은 '/', 새 버전은 '\\x01')로 나옵니다.
-    그림의 실제 위치에 있는 글자만 [그림]으로 바꿉니다 (본문에 있는 진짜 '/'는 그대로)."""
-    if "\x01" not in raw and "/" not in raw:
+    """본문 그림(InlineShape)은 Range.Text에서 한 글자('\\x01')로 나옵니다.
+    그림의 실제 위치에 있는 그 글자만 [그림]으로 바꿉니다."""
+    if "\x01" not in raw:
         return raw
     try:
         shapes = rng.InlineShapes
@@ -108,7 +108,7 @@ def _replace_inline_pictures(rng: Any, raw: str) -> str:
         return raw
     chars = list(raw)
     for pos in offsets:
-        if 0 <= pos < len(chars) and chars[pos] in ("\x01", "/"):
+        if 0 <= pos < len(chars) and chars[pos] == "\x01":
             chars[pos] = PICTURE_MARK
     return "".join(chars)
 

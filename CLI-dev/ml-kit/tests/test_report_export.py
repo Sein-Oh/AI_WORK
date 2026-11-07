@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Word 보고서(ml_report.py)와 성능예측표(ml_export.py, 엑셀 계산기).
 
-보고서: 구성, 숫자 형식, Word 2007 스키마 순서, 손상된 템플릿 복구, 보고서와 성능예측표 세트.
+보고서: 구성, 숫자 형식, WordprocessingML 스키마 순서, 손상된 템플릿 복구, 보고서와 성능예측표 세트.
 성능예측표: 재학습으로 입력 고르기(상호작용 입력은 남김, --keep 존중, 8개까지), 수식만으로 보간하는 잠긴 엑셀,
 LibreOffice가 있으면 수식을 다시 계산해 Python 값과 비교.
 """
@@ -181,8 +181,8 @@ def _in_order(names, order):
 
 
 @needs_report
-def test_report_docx_follows_schema_for_word_2007(tmp_path):
-    """보고서 XML은 WordprocessingML 스키마의 순서와 이름을 따른다 (Word 2007은 w:start/w:end와 순서가 틀린 문서를 거부)."""
+def test_report_docx_follows_wordprocessingml_schema(tmp_path):
+    """보고서 XML은 WordprocessingML 스키마의 순서와 이름을 따른다 (Word는 w:start/w:end와 순서가 틀린 문서를 거부할 수 있음)."""
     data = tmp_path / "d.csv"
     make_sample(str(data))
     tr = run_tool("ml_train.py", "-f", str(data), "-x", "반응온도,촉매비율,수분함량", "-y", "생산효율")

@@ -216,7 +216,7 @@ def _style_font(style, size: float, bold: bool = False, color: str = C_INK) -> N
             del rfonts.attrib[qn(attr)]
 
 
-# Child order required by the WordprocessingML schema. Word 2007 refuses to open documents that break it,
+# Child order required by the WordprocessingML schema. Word may refuse to open documents that break it,
 # and it only knows w:left/w:right (w:start/w:end are Word 2010+ names).
 _TCPR_ORDER = ("cnfStyle", "tcW", "gridSpan", "hMerge", "vMerge", "tcBorders", "shd", "noWrap", "tcMar",
                "textDirection", "tcFitText", "vAlign", "hideMark")

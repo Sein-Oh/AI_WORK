@@ -289,13 +289,7 @@ def short(data, raw_out=""):
 # ---------------------------------------------------------------------------
 # 테스트 실행/기록
 # ---------------------------------------------------------------------------
-ENV_SKIP = "env-skip"   # 이 PC에 기능이 없어 시험할 수 없음 (예: Office 2007에 PDF 추가 기능 없음)
-
-
-def pdf_unavailable(data):
-    """도구가 'PDF 내보내기 기능 없음'을 STOP_RETRY 입력 오류로 정상 보고했는지."""
-    data = data or {}
-    return data.get("error_type") == "input" and "PDF 내보내기 기능이 없습니다" in data.get("message", "")
+ENV_SKIP = "env-skip"   # 이 PC에 기능이 없어 시험할 수 없음
 
 
 def _evidence(ctx):
@@ -512,12 +506,7 @@ def _save_workbook(wb, path):
 
 
 def _save_document(doc, path):
-    """SaveAs2는 Word 2010+에만 있으므로 Word 2007은 SaveAs로 저장합니다."""
-    try:
-        save = doc.SaveAs2
-    except AttributeError:
-        save = doc.SaveAs
-    save(path, FileFormat=16)  # wdFormatDocumentDefault
+    doc.SaveAs2(path, FileFormat=16)  # wdFormatDocumentDefault
 
 
 def isolate_tool_dirs(ctx):
@@ -948,10 +937,6 @@ def test_D(ctx):
         footer_after = com_retry(lambda: doc.Sections(1).Footers(1).PageNumbers.Count)
         saved_after = com_retry(lambda: bool(doc.Saved))
         pdf = (data or {}).get("output_file", "")
-        if pdf_unavailable(data) and footer_before == footer_after and saved_before == saved_after:
-            record(ctx, "D1", "PDF 쪽 번호, 원본 바닥글 미변경", ENV_SKIP,
-                   "이 PC의 Word에 PDF 내보내기 기능이 없음 (원본은 그대로)", data, code, raw, err)
-            return
         ok = (data or {}).get("status") == "ok" and os.path.exists(pdf) and footer_before == footer_after and saved_before == saved_after
         manual = None
         if ok and not ctx.auto:
@@ -981,9 +966,6 @@ def test_D(ctx):
     def d4():
         data, code, raw, err = run_cli("ppt.py", "export", "--save", "office_test_deck.pdf")
         fp = (data or {}).get("output_file", "")
-        if pdf_unavailable(data):
-            record(ctx, "D4", "PPT PDF 내보내기", ENV_SKIP, "이 PC의 PowerPoint에 PDF 내보내기 기능이 없음", data, code, raw, err)
-            return
         record(ctx, "D4", "PPT PDF 내보내기", (data or {}).get("status") == "ok" and os.path.exists(fp), fp, data, code, raw, err)
 
     run_test(ctx, "D1", "워드 PDF 쪽 번호", d1)
@@ -1077,7 +1059,7 @@ def test_E(ctx):
 
     def e7():
         activate_xl("A.xlsx", "E_TEST")
-        # 칸 메모: 달기 -> 같은 칸 다시 달기(확인 요청) -> 덧붙이기 -> 목록 -> 지우기 (Office 2007+ 이전 방식 메모)
+        # 칸 메모: 달기 -> 같은 칸 다시 달기(확인 요청) -> 덧붙이기 -> 목록 -> 지우기 (이전 방식 메모)
         d_add = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "검토 의견")[0] or {}
         d_ask = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "둘째 의견")[0] or {}
         d_app = run_cli("excel.py", "comment", "--action", "add", "--range", "D1", "--text", "둘째 의견", "--append")[0] or {}
@@ -2105,7 +2087,7 @@ def frame_windows():
     found = []
     if win32gui is None:
         return found
-    classes = _office.FRAME_CLASS["excel"] + _office.FRAME_CLASS["ppt"]    # PowerPoint 2007은 PP12FrameClass
+    classes = _office.FRAME_CLASS["excel"] + _office.FRAME_CLASS["ppt"]
     def cb(hwnd, _):
         try:
             cls = win32gui.GetClassName(hwnd)
