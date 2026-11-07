@@ -48,7 +48,8 @@ REPO = os.path.dirname(HERE)
 SCENARIOS_FILE = os.path.join(HERE, "agent_scenarios.py")      # 데이터만 담은 모듈 (회사 반입 시스템이 .yaml을 막음)
 PACK_DIR = os.path.join(REPO, "docs", "opencode", "자동테스트")
 TAG = re.compile(r"\[([A-Z]\d+)\]")
-EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2460-\u24FF\u2190-\u21FF]")
+EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2460-\u24FF\u2190-\u21FF]"
+                   r"|\\(?:right|left|up|down|Right|Left|Up|Down)arrow\b")      # LaTeX 화살표 ($\downarrow$, 집 PC 06)
 REPEAT = re.compile(r"(\S{1,10})(?:\s*\1){7,}")
 # python [옵션] <스크립트.py>: the script a python call runs (checked against no_adhoc_py.script_allow)
 PY_SCRIPT = re.compile(r"""(?<![\w.-])python(?:\.exe)?"?(?:\s+-(?:[XW]\s*\S+|[bBdEiIOPqsSuv]+))*\s+"""

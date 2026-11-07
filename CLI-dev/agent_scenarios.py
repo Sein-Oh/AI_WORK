@@ -131,7 +131,9 @@ GROUPS = [
             {
                 'id': 'A1',
                 'message': r'{DIR}\공정_다중출력.xlsx 로 생산효율, 불순물, 소비전력을 예측하는 모델 만들어줘. 입력은 반응온도, 압축압력, 촉매비율, 수분함량, 유량, 분진이야. 엑셀 위쪽에 제목이 있고 머리글은 3행, 단위는 4행이야.',
-                'commands': [r'ml_train\.py', r'--header-row\s+3', r'--unit-row\s+4'],
+                # 2026-11-08: 머리글 옵션은 요구하지 않음 (도구가 제목 아래 머리글·단위 행을 찾고 결과가 같음, 사용법 단순성 5번).
+                # 판정은 학습 성공(tool_ok)과 점수 보고. 집 PC 03(solar-pro4)이 옵션 없이 같은 결과인데 실패로 셌음
+                'commands': [r'ml_train\.py'],
                 'tool_ok': r'ml_train\.py',
                 'answer_any': ['R2|R²|점수'],
                 'judge': '버전, 검증 점수, 학습에서 뺀 행 수(직접 표시와 자동 이상치)를 알렸는가.',
@@ -189,7 +191,7 @@ GROUPS = [
             {
                 'id': 'P1',
                 'message': '방금 만든 모델로 반응온도 182, 압축압력 3, 촉매비율 1, 수분함량 20, 유량 10, 분진 0.5 일 때 생산효율, 불순물, 소비전력 예측해줘.',
-                'commands': [r'ml_predict\.py', r'-m\s', r'-i\s'],
+                'commands': [r'ml_predict\.py', r'(-m|--model)\s', r'(-i|--input)\s'],     # 긴 이름도 같은 옵션
                 'tool_ok': r'ml_predict\.py',
                 'answer_any': ['실측', '측정'],
                 'judge': '세 출력의 예측값과 90% 범위, 실측 비교값을 함께 알렸는가.',

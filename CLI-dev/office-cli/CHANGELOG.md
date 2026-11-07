@@ -31,6 +31,8 @@
 - `reader search --query`의 묶음에 `'a;b'`도 (excel `--where`와 같은 작은따옴표, 한 항목 전체일 때만).
 - `replace --dry-run`의 `formula_cells_kept`를 실제 실행과 같은 칸 주소 목록으로.
 - `retry_fs`는 마지막 시도 뒤에 기다리지 않음, `remove_file`은 실패를 오류 로그 '복구 시도'에 남기지 않음.
+- 스킬 템플릿의 고르기 표기 `--action freeze|unfreeze|...`를 `--action <freeze/unfreeze/...>`로 (따옴표 밖의 `|`는 PowerShell 파이프, `|`는 "또는" 구분자).
+  테스트 `test_no_pipe_alternatives_in_templates`.
 - 스킬: office-excel·office-doc의 "`[후보]`를 고르면 `--sheet 이름`/`--occurrence 번호`..."(값 끼워 넣기)를 지움. 전역 지침 4장 `[후보]`는
   "번호가 없으면 명령에서 그 값만 바꿔 1번", `needs_user_decision`은 `confirm_commands`(번호) 또는 `next_commands[0]`.
 

@@ -21,7 +21,7 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 목록 | `python "C:\CLI\office-cli\outlook.py" list [--unread] [--folder sent|drafts|"<폴더>"] [-n 20]` (기간 `--days 7`(오늘 포함) 또는 `--since 2026-11-01`) |
+| 목록 | `python "C:\CLI\office-cli\outlook.py" list [--unread] [--folder <sent/drafts/"폴더">] [-n 20]` (기간 `--days 7`(오늘 포함) 또는 `--since 2026-11-01`) |
 | 검색 | `python "C:\CLI\office-cli\outlook.py" search --query <말> [--from <이름>] [--folder sent] [--where subject]` (기간 `--days 7`, `--since 2026-11-01`) |
 | 읽기 | `python "C:\CLI\office-cli\outlook.py" read --id 3` / 보고 있는 메일 `python "C:\CLI\office-cli\outlook.py" current` |
 | 대화 전체 | `python "C:\CLI\office-cli\outlook.py" thread --id 3` |

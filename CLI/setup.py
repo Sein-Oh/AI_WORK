@@ -439,7 +439,16 @@ def parse_jsonc(text):
         else:
             out.append(c)
         i += 1
-    return json.loads(re.sub(r",(\s*[}\]])", r"\1", "".join(out)))
+    text, out, in_str = "".join(out), [], False
+    for i, c in enumerate(text):                      # 문자열 밖의, 닫는 괄호 앞 쉼표만 뺌 (문자열 안의 ", ]"는 그대로)
+        if in_str:
+            in_str = not (c == '"' and text[i - 1] != "\\")
+        elif c == '"':
+            in_str = True
+        elif c == "," and text[i + 1:].lstrip()[:1] in ("}", "]"):
+            continue
+        out.append(c)
+    return json.loads("".join(out))
 
 
 def step_opencode_config(rep, config_dir):
@@ -466,8 +475,10 @@ def step_opencode_config(rep, config_dir):
         names = ", ".join(str(x) for x in (extra if isinstance(extra, list) else [extra]))[:200]
         rep.line("WARN", f"opencode.jsonc의 \"instructions\"에 다른 지침이 있습니다 ({names}). 전역 지침(AGENTS.md)과 다른 옛 지침이 "
                          "섞이면 지금 없는 명령을 쓸 수 있습니다: 필요 없으면 지우세요")
-    perm = cfg.get("permission") if isinstance(cfg.get("permission"), dict) else {}
-    ext = perm.get("external_directory")
+    perm = cfg.get("permission")
+    ext = perm if isinstance(perm, str) else (perm or {}).get("external_directory") if isinstance(perm, dict) else None
+    if isinstance(ext, dict) and ext and all(v == "allow" for v in ext.values()):    # 경로 패턴별 허용 {"*": "allow"}
+        ext = "allow"
     if ext is None:
         rep.line("INFO", "opencode.jsonc에 permission.external_directory가 없습니다. opencode 버전에 따라 작업 폴더 밖 쓰기를 묻지 않고 "
                          "거절할 수 있습니다 (집 PC opencode 1.19.5 run). 그러면 \"permission\": {\"external_directory\": \"allow\"}")

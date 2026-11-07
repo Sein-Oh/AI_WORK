@@ -298,6 +298,7 @@ def test_verify_runs_tool_help_and_imports(monkeypatch, tmp_path):
 def test_parse_jsonc_comments_and_trailing_commas():
     text = '{\n  // 사내 LLM\n  "model": "a//b", /* 막음 */ "x": [1, 2,],\n  "s": "q\\"//",\n}'
     assert su.parse_jsonc(text) == {"model": "a//b", "x": [1, 2], "s": 'q"//'}
+    assert su.parse_jsonc('{"a": "x, ]", "b": [1,],}') == {"a": "x, ]", "b": [1]}          # 문자열 안의 쉼표는 그대로
 
 
 def test_opencode_config_warns_on_shell_instructions_and_permission(tmp_path, capsys):
@@ -314,6 +315,11 @@ def test_opencode_config_warns_on_shell_instructions_and_permission(tmp_path, ca
     rep = su.Report()
     su.step_opencode_config(rep, str(tmp_path))
     assert rep.warn == 0
+    for perm in ('"allow"', '{"external_directory": {"*": "allow"}}'):                 # 전체 허용, 경로 패턴별 허용
+        (tmp_path / "opencode.jsonc").write_text('{"permission": %s}' % perm, encoding="utf-8")
+        rep = su.Report()
+        su.step_opencode_config(rep, str(tmp_path))
+        assert rep.warn == 0, perm
     (tmp_path / "opencode.jsonc").write_text('{"model": "x"}', encoding="utf-8")       # 권한이 없으면 INFO만 (세지 않음)
     rep = su.Report()
     su.step_opencode_config(rep, str(tmp_path))

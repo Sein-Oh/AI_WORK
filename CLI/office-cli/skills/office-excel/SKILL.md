@@ -27,13 +27,13 @@ metadata:
 | 여러 칸에 각각 | `python "C:\CLI\office-cli\excel.py" write --cells "C6=ft; C7=20; 계산기!C11==A1*2"` (많으면 `--cells "칸값.csv"`(열: 칸, 값)) |
 | 표 쓰기 | `python "C:\CLI\office-cli\excel.py" write --range A1 --file "<표.csv>"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트 `--sheet 이름 --new-sheet`) |
 | 수식 쓰기 | `python "C:\CLI\office-cli\excel.py" write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
-| 차트 | `python "C:\CLI\office-cli\excel.py" chart --range A1:B101 --type line --title "<제목>"` (`--type column|bar|line|pie|scatter|area`, 목록 `--action list`, 지우기 `--action delete --name <제목>`) |
+| 차트 | `python "C:\CLI\office-cli\excel.py" chart --range A1:B101 --type line --title "<제목>"` (`--type <column/bar/line/pie/scatter/area>`, 목록 `--action list`, 지우기 `--action delete --name <제목>`) |
 | 서식 | `python "C:\CLI\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap`) |
-| 범위 작업 | `python "C:\CLI\office-cli\excel.py" range --action freeze|unfreeze|hide|unhide|width|height|autofit|clear|copy|move|merge --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`) |
-| 행·열 넣기·지우기 | `python "C:\CLI\office-cli\excel.py" range --action insert|delete --range 5:7` (열은 `--range B:C`. 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸) |
+| 범위 작업 | `python "C:\CLI\office-cli\excel.py" range --action <freeze/unfreeze/hide/unhide/width/height/autofit/clear/copy/move/merge> --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`) |
+| 행·열 넣기·지우기 | `python "C:\CLI\office-cli\excel.py" range --action <insert/delete> --range 5:7` (열은 `--range B:C`. 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸) |
 | 정렬 | `python "C:\CLI\office-cli\excel.py" range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
 | 칸 메모 | 목록 `python "C:\CLI\office-cli\excel.py" comment [--range B2:D20]` / 넣기 `python "C:\CLI\office-cli\excel.py" comment --action add --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`(열: 칸, 메모), 있던 메모 바꾸기 `--overwrite`, 덧붙이기 `--append`) / 지우기 `--action delete --range B2:D20` (먼저 `--dry-run`) |
-| 시트 | `python "C:\CLI\office-cli\excel.py" sheet --action add|rename|copy|delete --name <A> [--new-name <B>]` |
+| 시트 | `python "C:\CLI\office-cli\excel.py" sheet --action <add/rename/copy/delete> --name <A> [--new-name <B>]` |
 | 바꾸기 | `python "C:\CLI\office-cli\excel.py" replace --find <A> --replace <B> [--all-sheets]` (`--find`는 비우지 않는다. 빈 칸 채우기는 `write --range B2:B10 --value 0`) |
 | 내보내기 | `python "C:\CLI\office-cli\excel.py" export --save "<결과.csv|.xlsx|.pdf>" [--range A1:D20]` |
 | 정보 / 배치 확인 | `python "C:\CLI\office-cli\excel.py" info [--detail]` (`layout_warnings`가 있으면 `warnings`를 알림) |

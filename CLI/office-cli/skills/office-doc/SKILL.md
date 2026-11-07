@@ -34,7 +34,7 @@ metadata:
 | PPT 읽기 | `python "C:\CLI\office-cli\ppt.py" read [--slides 1-3]` |
 | PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용; 제목:내용"` |
 | PPT 발표자 노트 | 읽기 `python "C:\CLI\office-cli\ppt.py" notes [--slides 1-3]` / 쓰기 `python "C:\CLI\office-cli\ppt.py" notes --slide 3 --text "<노트>"` (있던 노트에 덧붙이기 `--append`, 여러 줄 `--file "<노트.md>"`) |
-| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action add|duplicate|delete|move --slide N [--dest M] [--layout title|text|title_only|blank]` |
+| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action <add/duplicate/delete/move> --slide N [--dest M] [--layout <title/text/title_only/blank>]` |
 | PPT 기타 | `python "C:\CLI\office-cli\ppt.py" replace --find <A> --replace <B>` / `python "C:\CLI\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\CLI\office-cli\ppt.py" info --detail --slides N` |
 | 엑셀 차트를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` |
 | 엑셀 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --range A1:D10 --to-app word` |
