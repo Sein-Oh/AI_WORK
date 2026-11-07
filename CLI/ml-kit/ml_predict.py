@@ -3538,15 +3538,6 @@ def apply_eval_expressions(
 
             columns = [str(c) for c in df.columns]
             transformed, token_to_col, canonical = compile_formula(formula, columns)
-            if strict and not token_to_col:
-                # 2.9.76: 열을 하나도 쓰지 않는 상수식('반응온도 = 182')은 파생변수가 아님: 한 건 예측 값을 --eval에 넣은 실수
-                # (그대로 학습하면 상수 열이 생기고 그 이름의 실제 입력이 무시됨)
-                raise InputError(f"--eval '{expr}'은(는) 데이터 열을 쓰지 않는 상수식이라 파생변수가 될 수 없습니다. 학습하지 않았습니다. "
-                                 "조건 하나를 예측하려는 것이면 학습이 아니라 ml_predict.py -i \"이름=값,...\"입니다 (ml-predict 스킬).")
-            same_col = [c for c in columns if c == new_col or _alias_key(c) == _alias_key(new_col)]
-            if strict and same_col:
-                raise InputError(f"--eval의 새 이름 '{new_col}'이(가) 데이터 열 '{same_col[0]}'과(와) 같습니다. 학습하지 않았습니다. "
-                                 "파생변수는 데이터에 없는 새 이름으로 지으십시오 (예: '{0}_변환').".format(strip_unit(new_col)))
 
             leaked = [c for c in token_to_col.values() if c in target_set]
             if leaked:
@@ -3564,6 +3555,15 @@ def apply_eval_expressions(
             for token, col in token_to_col.items():
                 eval_env[token] = coerce_numeric(df[col]).astype(float)
             _validate_eval_ast(tree, set(eval_env.keys()), columns, target_set)
+            if strict and not token_to_col:
+                # 2.9.76: 열을 하나도 쓰지 않는 상수식('반응온도 = 182')은 파생변수가 아님: 한 건 예측 값을 --eval에 넣은 실수
+                # (그대로 학습하면 상수 열이 생기고 그 이름의 실제 입력이 무시됨)
+                raise InputError(f"--eval '{expr}'은(는) 데이터 열을 쓰지 않는 상수식이라 파생변수가 될 수 없습니다. 학습하지 않았습니다. "
+                                 "조건 하나를 예측하려는 것이면 학습이 아니라 ml_predict.py -i \"이름=값,...\"입니다 (ml-predict 스킬).")
+            same_col = [c for c in columns if c == new_col or _alias_key(c) == _alias_key(new_col)]
+            if strict and same_col:
+                raise InputError(f"--eval의 새 이름 '{new_col}'이(가) 데이터 열 '{same_col[0]}'과(와) 같습니다. 학습하지 않았습니다. "
+                                 "파생변수는 데이터에 없는 새 이름으로 지으십시오 (예: '{0}_변환').".format(strip_unit(new_col)))
 
             with np.errstate(all="ignore"):
                 res_val = eval(compile(tree, "<eval>", "eval"), {"__builtins__": {}}, eval_env)
@@ -4745,8 +4745,8 @@ def check_inline_numbers(df_input: pd.DataFrame, numeric: List[str]) -> None:
             continue
         raw = df_input[col]
         text = raw.map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip())
-        wrong = (text == "") | coerce_numeric(raw).isna()
-        bad += [f"{col}={text[i]!r}" if text[i] else f"{col}=(빈 값)" for i in raw.index[wrong]]
+        wrong = (text != "") & coerce_numeric(raw).isna()     # 빈 값은 원래대로(중앙값 채우기 확인), 글자만
+        bad += [f"{col}={text[i]!r}" for i in raw.index[wrong]]
     if not bad:
         return
     placeholder = any("<" in b and ">" in b for b in bad)
