@@ -570,7 +570,7 @@ def test_alias_pair_with_degree_spelling_refused(alias_models, other):
     # (2.9.43: "'온도'은(는) 모델 입력이 아님")
     proc, res = _pred(alias_models["unit"], f"온도=180,{other}=182,압력(bar)=3")
     assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:"), res
-    assert "같은 열 '온도(°C)'" in res["message"] and f"[후보] 온도=180, {other}=182" in res["message"], res
+    assert "같은 열 '온도(°C)'" in res["message"] and f"[후보] 1) 온도=180 2) {other}=182" in res["message"], res
     assert "모델 입력이 아니" not in res["message"], res
     mp.check_inline_aliases(mp.parse_inline_input(f"{other}=182,압력(bar)=3"), ["온도(°C)", "압력(bar)"])   # one name: ok
 
@@ -580,7 +580,7 @@ def test_alias_pair_ml_map_and_find(alias_models):
     assert proc.returncode == 1 and "[후보] 온도=180, 온도(°C)=182" in res["message"], res
     proc, res = run_raw("ml_predict.py", "-m", alias_models["unit"], "--find", "수율=100", "--vary", "압력(bar)",
                         "-i", "온도=180,온도(°C)=182")
-    assert proc.returncode == 1 and "[후보] 온도=180, 온도(°C)=182" in res["message"], res
+    assert proc.returncode == 1 and "[후보] 1) 온도=180 2) 온도(°C)=182" in res["message"], res
 
 
 def test_json_repeated_key_refused(alias_models):
@@ -672,7 +672,7 @@ def test_same_unit_close_name_is_a_candidate(unit_models):
     assert "[후보]" in msg and "반응압력(bar)" in msg and "[추천]" not in msg and "단위가 다릅니다" not in msg, msg
     proc, res = run_raw("ml_map.py", "-f", unit_models["p4_f"], "-i", "반응압룍(bar)=3", "-y", "생산량")
     msg = stop_msg(res, proc)
-    assert "[후보] '반응압력(bar)'" in msg and "[추천]" not in msg, msg
+    assert "[후보] 1) '반응압력(bar)'" in msg and "[추천]" not in msg, msg
     # 2.9.31: the same unit spaced otherwise is the same name (resolve_column_names), no [추천] (was the test above)
     proc, res = run_raw("ml_map.py", "-f", unit_models["p4_f"], "-i", "반응압력( bar)=3", "-y", "생산량")
     assert proc.returncode == 0 and res["keys"] == ["반응압력(bar)"], res
@@ -711,7 +711,7 @@ def test_find_goal_other_unit_refused(unit_models):
 def test_map_inline_typo_is_a_candidate(name_files):
     proc, res = run_raw("ml_map.py", "-f", name_files["d"], "-i", "온도=180,압룍=3", "-y", "생산량")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '압력(bar)'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '압력(bar)'" in msg, msg
 
 
 def test_inline_keys_never_suggest_the_value_column(humid_data):
@@ -721,14 +721,14 @@ def test_inline_keys_never_suggest_the_value_column(humid_data):
     proc, res = run_raw("ml_map.py", "-f", humid_data["p"], "--find", "생산량=470", "--vary", "온도", "-i", "생산랑=3")
     assert "[추천] '생산량'" not in stop_msg(res, proc)
     proc, res = run_raw("ml_map.py", "-f", humid_data["p"], "-i", "온도=180,압룍(bar)=3", "-y", "생산량")
-    assert "[후보] '압력(bar)'" in stop_msg(res, proc)                       # 2.9.33: [추천] -> [후보]
+    assert "[후보] 1) '압력(bar)'" in stop_msg(res, proc)                       # 2.9.33: [추천] -> [후보]
 
 
 def test_inline_unitless_name_next_to_the_target_asks(role_data):
     proc, res = run_raw("ml_map.py", "-f", role_data["two"], "-i", "온도=180,수율=40", "-y", "수율(최종)")
     msg = stop_msg(res, proc)
     # 2.9.33: the excluded '수율(최종)' (the -y column) is never a [후보] (was "[후보] '수율(1차)', '수율(최종)'")
-    assert "[추천]" not in msg and "[후보] '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
     msg = _resolve_error(["수율"], ["온도", "수율(1차)", "수율(최종)"], exclude=["수율(최종)"])
     assert "[추천]" not in msg and "[후보] '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
 
@@ -769,7 +769,7 @@ def test_points_near_name_refused(points_map_data):
     p = _points_in(tmp, "sp.csv", ["온도", "반응압룍(bar)"], [[180, 2.0], [180, 4.0]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1.xlsx"))
     msg = stop_msg(res, proc)
-    assert "[후보] '반응압력(bar)'" in msg and "반응압룍(bar)" in msg and "[추천]" not in msg, msg     # 2.9.33: [추천]
+    assert "[후보] '반응압력(bar)'" in msg and "반응압룍(bar)" in msg and "[추천]" not in msg, msg     # 2.9.33: [추천]. 이름이 조회 파일 머리글에 있어 명령으로 고칠 수 없음 (번호 없음)
     # 2.9.31: '반응 압력(bar)' (the same name and unit spaced otherwise) is the key itself
     p = _points_in(tmp, "sp1.csv", ["온도", "반응 압력(bar)"], [[180, 2.0], [180, 4.0]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1b.xlsx"))

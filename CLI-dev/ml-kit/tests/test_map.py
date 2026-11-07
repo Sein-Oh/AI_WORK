@@ -124,7 +124,7 @@ def test_code_column_is_matched_exactly_not_interpolated(tmp_path):
         assert res["points"][0]["values"]["수율"] == pytest.approx(340 + off, abs=1e-6), res
         assert all(str(n["코드"]) in (c, c + ".0") for n in res["nearest_rows"]), res["nearest_rows"]
     bad = run_fail("ml_map.py", "-f", str(p), "-i", "온도=170,코드=07", "-y", "수율")
-    assert "[후보] 007, 12, 7" in bad["message"] and "[추천]" not in bad["message"], bad
+    assert "[후보] 1) 007 2) 12 3) 7" in bad["message"] and "[추천]" not in bad["message"], bad
 
 
 def test_two_digit_numbers_with_a_leading_zero_are_interpolated(tmp_path):
@@ -186,7 +186,7 @@ def test_points_file_saves_workbook(grid1, tmp_path):
 def test_errors_and_contract(grid1):
     assert run_tool("ml_map.py", *P(grid1, "-i", "a=10"))["keys"] == ["A"]                     # case only: matched
     miss = run_fail("ml_map.py", *P(grid1, "-i", "Ax=10"))
-    assert "[후보] 'A'" in miss["message"] and "[추천]" not in miss["message"]    # 2.9.31: short ASCII names of other length
+    assert "[후보] 1) 'A'" in miss["message"] and "[추천]" not in miss["message"]    # 2.9.31: short ASCII names of other length
     assert run_fail("ml_map.py", *P(grid1, "-i", "A=abc"))["error_type"] == "input"
     assert run_fail("ml_map.py", *P(grid1, "--find", "B=90", "--vary", "A", "-i", "A=3"))["error_type"] == "input"
     proc, payload = run_raw("ml_map.py", *P(grid1, "--find", "B=90"))                        # --vary missing

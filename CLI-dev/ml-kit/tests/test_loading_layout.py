@@ -277,7 +277,7 @@ def test_header_hint_not_the_current_row(heads):
     bad = run_fail("ml_train.py", "-f", heads["u3"], "-x", "온도,압력", "-y", "y")   # '압력' is a data value
     assert "--header-row" not in bad["message"]                                 # 2.9.13: [추천] --header-row 3
     bad = run_fail("ml_map.py", "-f", heads["u"], "-i", "온도x=0.5")
-    assert "--header-row" not in bad["message"] and "[후보] '온도(°C)'" in bad["message"]       # 2.9.33: 온도(C), [추천]
+    assert "--header-row" not in bad["message"] and "[후보] 1) '온도(°C)'" in bad["message"]       # 2.9.33: 온도(C), [추천]
 
 
 def test_find_header_layout_rules():
