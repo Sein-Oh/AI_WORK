@@ -4,7 +4,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.74**, **office-cli 1.4.82** (main은 2.9.73·1.4.81. 2.9.74·1.4.82는 작업 브랜치 `claude/home-pc-check-2973`, PR을 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.76**, **office-cli 1.4.83** (main은 2.9.73·1.4.81. 2.9.74~2.9.76·1.4.82~1.4.83은 작업 브랜치 `claude/home-pc-check-2973`, PR을 머지했으면 main)
 - Office는 Office 16만 대상 (2026-11-07 Office 2007 지원 폐기, 집 PC도 Office 2019로 바꿈)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
@@ -140,24 +140,24 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 4. 시간이 되면 `python CLI-dev\run_all_tests.py --label 집PC --only diag,pytest,beta,ml,office` (1~2시간).
 5. 실패는 원인을 찾아 고치고(회귀 테스트와 함께), 해당 도구 테스트 + `CLI-dev/tests`를 돌린 뒤 같은 브랜치에 커밋·푸시. 결과 파일은 `docs/test_logs/`.
 
-## 3-1. 클라우드에서 할 일 (2026-11-07 집 PC opencode 모델 비교 뒤)
-작업 브랜치 `claude/home-pc-check-2973` (main보다 앞섬: office-cli 1.4.82 Office 2007 폐기, ml-kit 2.9.74 `-i` 안내, 실기 러너 가림·setup 표시 수정).
-근거: 4장 "집 PC opencode 모델 비교"와 `docs/test_logs/opencode_모델비교_20261107/`.
-1. ml-kit 2.9.74 검토: `CLI/ml-kit/ml_predict.py`의 `looks_inline_input`·`inline_value`(인자 오류 `_hint`), `_check_prediction_file`.
-   집 PC는 `test_contract`·`test_predict`·`test_names`·`test_map`·`test_skill_docs`와 `CLI-dev/tests`만 돌림 -> ml-kit 전체 pytest를 돌림.
-2. `run_all_tests.py --gemma`를 시나리오 일부·모델 지정으로 돌릴 수 있게: `--gemma-only S0,A1,P1`, `--gemma-model <모델>[,<예비 모델>]`
-   (사용량 제한이면 예비 모델로 같은 요청을 다시, 결과에 요청별 모델 기록). 집 PC에서 임시 스크립트로 한 것을 러너로 옮김.
-3. 모델이 되풀이한 실수 중 도구·스킬·지침으로 줄일 수 있는 것:
-   - 스크립트 경로를 `C:\CLI-dev\ml-kit\ml_train.py`로 씀(S0 요청의 `C:\CLI-dev\...\tools\` 경로를 따라 함). 전역 지침에 "도구는 `C:\CLI\<도구>\`에만,
-     `C:\CLI-dev`는 시험 자료"를 넣을지, S0 시나리오 문구를 바꿀지 판단.
-   - 없는 `tools\preview_data.py`·`make_new_data.py`를 지어냄 (스킬에 데이터 보기·새 조건 명령이 있는데도). 스킬 문장을 바꿀지 판단.
-   - 답변에 `→` 등 장식 기호 (전역 지침 1장에 이미 금지). 채점기는 실패로 봄 -> 지침 문장 위치·강도 검토.
-   - X1: solar-mini4가 `pip install --upgrade`를 실행 (전역 지침 첫 부분에 금지가 있는데도). 도구로 막을 수 없는 부분인지 판단.
-4. 채점기 `grade_opencode` A1 기준: 도구가 머리글을 스스로 찾아 결과가 같아도 `--header-row 3 --unit-row 4`가 없으면 실패 (03 solar-pro4).
-   기대값을 결과(학습 성공, R2 보고) 쪽으로 둘지 판단.
-5. `setup.py` 동작 확인에 opencode 설정 점검 추가를 검토: `"shell"`이 powershell이 아님, `"instructions"`에 저장소 밖 지침,
-   opencode 1.19.x의 `external_directory` 권한 (집 PC에서 모두 결과를 흐림). `docs/opencode/README.md`에 집 PC 설정 예를 적음.
-6. 끝나면 PR (main 머지는 사용자 확인 뒤).
+## 3-1. 클라우드에서 한 일 (2026-11-08, 집 PC opencode 모델 비교 뒤)
+작업 브랜치 `claude/home-pc-check-2973`. 근거: 4장 "집 PC opencode 모델 비교"와 `docs/test_logs/opencode_모델비교_20261107/`.
+1. ml-kit 2.9.74 검토와 전체 pytest: 문제 없음. 같은 폴더 파일의 오타는 번호 `[후보]`로 보강(2.9.75).
+2. `run_all_tests.py --gemma-only A1,P1`, `--gemma-model <모델>,<예비 모델>`: 사용량 제한(아무것도 못 한 실행이고 429·rate limit·quota)이면
+   예비 모델로 같은 요청을 다시, 요청별 모델은 `models.json`·실행 기록·채점 보고서 머리에. 시험 자료 준비 S0·S1은 러너가 직접 실행(모델에 보내지 않음).
+3. 모델이 되풀이한 실수의 원인과 대응:
+   - `C:\CLI-dev\ml-kit\ml_train.py`: S0 요청의 `C:\CLI-dev\ml-kit\tools` 경로를 따라 함 -> S0을 러너가 실행, 전역 지침 3장 2번 "도구는 `C:\CLI`에만".
+   - 한 건 예측을 `--eval "온도=182; ..."`·`-x`·파일 만들기로: 학습 결과 `next_commands`에 `-f` 틀과 재학습 `--eval`만 있었음 ->
+     `-i "<입력>=<값>,..."` 틀(2.9.75), `--eval` 상수식 거절, `-i`의 `<값>`·글자는 멈춤(2.9.76).
+   - 없는 `tools\*.py`: 옛 지침 때(02)만. 전역 지침 3장 4번 "실행하는 .py는 스킬 표의 것뿐".
+   - 답변의 화살표 문자: 전역 지침 1장 2번에 화살표 모양 문자·LaTeX 기호를 적고 채점기도 LaTeX 화살표를 잡음.
+   - `pip install`(01, 옛 지침): 전역 지침에 이미 금지, 도구로는 막을 수 없음 (opencode `permission`의 bash 거부 규칙은 사내 설정이라 하지 않음).
+4. 채점 A1: 머리글 옵션을 요구하지 않음 (도구가 찾고 결과가 같음). P1은 `--model`/`--input`도 인정.
+5. `setup.py`: opencode.jsonc의 `"shell"`(PowerShell 아님), `"instructions"`(다른 지침), `permission.external_directory`를 WARN/INFO.
+6. 전체 검토 2회(office-cli 1.4.83, ml-kit 2.9.76): 철자만 비슷한 `--action` 값의 `[추천]`(시트 삭제를 묻지 않고 실행할 수 있었음) -> 번호 `[후보]`,
+   고친 명령이 다른 옵션 값까지 바꾸던 것, 없는 시트 `[후보]` 번호, 스킬 고르기 표기 `<a/b>`(`|`는 PowerShell 파이프), 첨부 내려받기는 확인 뒤에만 등.
+   남긴 것은 각 도구 CHANGELOG "남은 할 일".
+7. 다음 실기: 집 PC에서 `run_all_tests.py --gemma-only A1,P1 --gemma-model <모델>,<예비 모델>`로 같은 시험을 다시 (기대: S0 경로 실수 없음, P1 `-i`).
 
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
