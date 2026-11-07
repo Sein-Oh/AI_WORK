@@ -517,7 +517,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
 | `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`·`diff`·`excel.py check`와 같은 규칙: 공백을 하나로 보고 대소문자 무시, 장절 번호로 보이는 값(`2.1`, `3`, `A.1`)은 번호 경계를 지켜 `2.1`이 `2.1`·`2.1.3`(하위 절)에는 맞고 `2.10`·`12.1`에는 맞지 않음, 제목 글자는 부분 일치, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
 | `diff --file 이전판 --file2 새판 [--section "3"] [--save 차이.xlsx\|.csv]` | 두 판 비교. 아래 "diff". `--save`가 그 밖의 확장자(`.md` 등)면 `.xlsx`로 저장하고 `warnings`로 알림 |
-| `search --query "A AND B" \| "A OR B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
+| `search --query "A;B" \| "A|B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`confirm_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`). `applied`와 완료 CSV(`clear_done_...`, 20개를 넘을 때)는 지운 뒤 만들고, CSV의 `removed` 열이 실제로 지웠는지 |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
 
@@ -565,7 +565,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `read`는 `ocr_needed` 문서나 고른 쪽이 스캔 쪽뿐이면 `UNVERIFIED`(스캔 이미지라 OCR 필요)로 답합니다.
   `--save`도 같고, 도장·쪽 번호만 남은 스캔 쪽(`--pages 3`)도 고른 쪽이 모두 스캔 쪽이면 `UNVERIFIED`입니다. 그때와 0개 저장이면 다른 문서에 넣는 `confirm_commands`를 주지 않습니다.
   글이 없는 쪽의 장절은 바로 앞 글의 장절로 봅니다.
-- 검색어: `A AND B`, `A OR B`(대소문자 무관, AND가 먼저 묶임), `"설계 기준"`(따옴표는 구문, 검색어에 넣지 않음), 연산자 없이 이어진 단어는 한 구문.
+- 검색어: `A;B`(그리고), `A|B`(또는), `;`가 먼저 묶임 (저장소 구분자 규칙, `excel read --where`와 같음). 띄어 쓴 단어는 한 구문, `;`·`|`가 든 글은 `"a;b"`처럼 큰따옴표(따옴표는 검색어에 넣지 않음). 옛 `A AND B`·`A OR B`(대문자)는 받지 않고 고친 전체 명령 `[추천]` (1.4.81).
   띄어쓰기, 줄바꿈, 기호(`# - . : / ( )` 등)는 무시하고 비교합니다: `SOI 1` = `SOI #1` = `SOI-1`, `설계기준` = `설계 기준`, PDF 줄바꿈으로 갈라진 글.
   숫자 경계는 지킵니다: `SOI 1`은 `SOI #10`, `SOI 21`과 맞지 않고, `1.2`는 `11.2`, `3.1.2`와 맞지 않습니다.
   기호를 빼면 숫자만 남는 검색어(`#4`, `1.2`)는 기호까지 그대로 찾습니다. 더 복잡한 패턴은 `--regex`(예: `"SOI\s*#?\d"`). `--regex`의 빈 일치는 일치로 보지 않습니다.
@@ -823,7 +823,7 @@ python office.py transfer --from-app ppt --what text --to-app excel
 
 :: 문서 등록 -> 근거 검색 -> 엑셀로 저장 / 워드에 넣기
 python reader.py index --folder "C:\docs\규격"
-python reader.py search --query "내전압 AND 기준" --save "근거.xlsx"
+python reader.py search --query "내전압;기준" --save "근거.xlsx"
 python reader.py search --query "마일스톤" --file "C:\docs\기획" --save
 python word.py write --file "<결과의 output_file>"
 

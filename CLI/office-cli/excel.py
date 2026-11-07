@@ -834,6 +834,12 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
                           "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. " + rt.INTO_OTHER_DOC,
                           expected_rows=filled, delimiter=",", **result)
 
+    if not any(v is not None and str(v).strip() for row in values for v in row):
+        # 빈 결과 명시 (ACI 설계 권장 2번, 1.4.81): 빈 배열만 주면 LLM이 표를 지어내거나 범위를 바꿔 다시 읽음
+        result.update(values=values[:5], count=0, truncated=False)
+        return rt.ok(TOOL, "read", f"0건: {sheet}!{full_addr}에 값이 있는 칸이 없습니다 ({nrows}행 x {ncols}열 모두 빈 칸)",
+                     f"VERIFIED: 0건. {sheet}!{full_addr}의 칸이 모두 비어 있습니다 (찾은 항목 없음). 사용자에게 그대로 알리고 "
+                     "범위를 바꿔 다시 읽지 마세요.", **result)
     shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows(values, args.max_rows)
     truncated = rows_cut or cells_cut > 0 or cols_dropped > 0
     result.update(values=shown, truncated=truncated)
@@ -2787,7 +2793,8 @@ def _lines_spec(args) -> Tuple[Optional[str], str, int, int]:
             return sheet, "cols", c1, c2
         raise rt.ambiguous(f"--range {cells}이(가) 행인지 열인지 정할 수 없습니다. 행이면 --range {r1}:{r2}, "
                            f"열이면 --range {col_letter(c1)}:{col_letter(c2)}로 쓰거나 --axis를 붙이세요.",
-                           [f"--axis rows ({r1}~{r2}행)", f"--axis cols ({col_letter(c1)}~{col_letter(c2)}열)"])
+                           [f"--axis rows ({r1}~{r2}행)", f"--axis cols ({col_letter(c1)}~{col_letter(c2)}열)"],
+                           values=["rows", "cols"], option="--axis")
     if args.axis and args.axis != given:
         raise rt.InputError(f"--range {cells}은(는) {'행' if given == 'rows' else '열'} 주소인데 --axis {args.axis}를 주었습니다. "
                             f"--axis를 빼고 다시 실행하세요. [추천] {rt.retry_command({'--axis': None})}")
@@ -3079,7 +3086,8 @@ def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, w
         if len(exact) > 1:
             raise rt.ambiguous(f"머리글에 '{k}' 열이 여러 개입니다. 열 문자로 고르세요.",
                                [f"{col_letter(c0 + i)} ({names[i]})" for i in exact],
-                               log_message=f"머리글에 같은 이름의 {what}이 {len(exact)}개")
+                               log_message=f"머리글에 같은 이름의 {what}이 {len(exact)}개",
+                               replace=k, values=[col_letter(c0 + i) for i in exact])
     if _LETTERS.match(k):
         idx = col_number(k) - c0
         if 0 <= idx < ncols:
@@ -3088,8 +3096,9 @@ def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, w
     shown = [nm for nm in names if nm]
     if header is None or not shown:
         raise rt.InputError(f"{what} '{k}'을(를) 찾을 수 없습니다. 머리글 행이 없으면 열 문자(예: B)를 쓰세요.")
-    raise rt.ambiguous(f"{what} '{k}'을(를) 머리글에서 찾을 수 없습니다. 머리글 이름이나 열 문자(예: B)를 쓰세요.", shown,
-                       log_message=f"{what} 이름을 머리글에서 찾을 수 없음")
+    near = rt.suggest(k, shown, 5)
+    raise rt.ambiguous(f"{what} '{k}'을(를) 머리글에서 찾을 수 없습니다. 머리글 이름이나 열 문자(예: B)를 쓰세요.", near or shown,
+                       log_message=f"{what} 이름을 머리글에서 찾을 수 없음", replace=k)
 
 
 def _is_num(v: Any) -> bool:
@@ -3263,7 +3272,7 @@ def range_sort(args) -> Dict[str, Any]:
                 hit = [i for i, k in enumerate(keys) if rt._same_name_key(k) == rt._same_name_key(d)]
                 if not hit:
                     raise rt.ambiguous(f"--desc '{d}'이(가) --by에 없습니다. --by에 쓴 기준 중에서 고르세요.", keys,
-                                       log_message="--desc 기준이 --by에 없음")
+                                       log_message="--desc 기준이 --by에 없음", replace=d)
                 desc_keys.update(hit)
         order = [(idx, args.desc == "*" or (desc_keys is not None and i in desc_keys)) for i, (idx, _) in enumerate(cols)]
         data = matrix[1:] if has_header else matrix
@@ -3465,7 +3474,7 @@ def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = 
         labels = _chart_labels(hits)
         raise rt.ambiguous(
             f"'{name}'에 해당하는 차트가 {len(hits)}개입니다 (이름 또는 제목이 같음). 하나를 고르지 않았고 아무것도 바꾸지 않았습니다. "
-            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보를 글자 그대로 주세요.", labels)
+            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보를 글자 그대로 주세요.", labels, replace=str(name))
     if hits:
         return hits[0][0], hits[0][1]
     if not all_names:
@@ -4548,11 +4557,8 @@ def _cmp_save_cache(data: Dict[str, Any]) -> None:
 
 def _cmp_drop_cache(*tables: Dict[str, Any]) -> None:
     for t in tables:
-        try:
-            if t.get("cache") and os.path.exists(t["cache"]):
-                os.remove(t["cache"])
-        except OSError:
-            pass
+        if t.get("cache"):
+            rt.remove_file(t["cache"])
 
 
 def _cmp_table(data: Dict[str, Any], path: str) -> Dict[str, Any]:

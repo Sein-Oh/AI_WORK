@@ -3,6 +3,7 @@
 """
 import json
 import os
+import re
 
 import pytest
 
@@ -686,7 +687,8 @@ def test_delete_without_references_unchanged(xl_table, capsys):
 
 def test_cell_range_needs_axis(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "insert", "--range", "A2:C3")
-    assert code == 1 and "[후보]" in out["message"] and "--axis rows" in out["message"], out
+    assert code == 1 and "[후보] 1) --axis rows" in out["message"], out
+    assert [c["command"].split()[-2:] for c in out["confirm_commands"]] == [["--axis", "rows"], ["--axis", "cols"]], out
     code, out = run_main(excel, capsys, "range", "--action", "insert", "--range", "A2:C3", "--axis", "rows")
     assert code == 0 and _col(xl_table, 1, 1, 4) == ["이름", None, None, "가"], out
 
@@ -729,8 +731,9 @@ def test_sort_letter_header_no(xl_table, capsys):
 
 def test_sort_unknown_column_lists_headers(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "매출")
-    assert code == 1 and "[후보] 이름, 부서, 금액" in out["message"], out
-    assert "이름, 부서" not in _tool_log_text()                                         # 머리글은 문서 내용
+    assert code == 1 and "[후보] 1) 이름 2) 부서 3) 금액" in out["message"], out
+    assert [c["command"].split("--by ")[-1] for c in out["confirm_commands"]] == ["이름", "부서", "금액"], out   # 고른 번호의 전체 명령
+    assert "이름, 부서" not in _tool_log_text() and "1) 이름" not in _tool_log_text()                                        # 머리글은 문서 내용
     assert off.list_snapshots("excel") == []
 
 
@@ -763,6 +766,13 @@ def _wide_table(ws):
     for i, row in enumerate(rows, start=1):
         for j, v in enumerate(row, start=1):
             ws.values[(i, j)] = v
+
+
+def test_sort_desc_not_in_by_gives_numbered_commands(xl_table, capsys):
+    """--desc가 --by에 없음: [후보] 번호와 같은 번호의 전체 명령 (--desc 값만 바꿈)."""
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "부서,금액", "--desc", "급액")
+    assert code == 1 and "[후보] 1) 부서 2) 금액" in out["message"], out
+    assert [c["command"].split("--desc ")[-1] for c in out["confirm_commands"]] == ["부서", "금액"], out
 
 
 def test_sort_more_than_three_keys_uses_sort_fields(xl_table, capsys):
@@ -1146,8 +1156,8 @@ def test_literal_bang_chart_name_on_other_sheet(xl, capsys):
     code, out = run_main(excel, capsys, "chart", "--action", "delete", "--name", "Sheet1!x")
     assert code == 1 and "[후보]" in out["message"], out          # 둘 다 맞으면 고르지 않음
     assert _charts(wb) == {"Sheet1": [("x", "t2")], "요약": [("Sheet1!x", "t1")]}
-    cands = out["message"].split("[후보]")[1].strip().split(", ")
-    assert len(cands) == 2
+    cands = re.split(r"\s*\d+\) ", out["message"].split("[후보]")[1])[1:]
+    assert len(cands) == 2 and len(out["confirm_commands"]) == 2, out
     for cand in cands:                                       # 후보는 그대로 주면 그 차트 하나로 찾아짐
         excel.find_chart(_T(wb), cand)
     code, out = run_main(excel, capsys, "chart", "--action", "delete", "--name", "'Sheet1'!x")
@@ -1199,7 +1209,7 @@ def test_chart_labels_count_all_charts_on_sheet(xl, capsys):
     assert [n for n, _ in _charts(wb)["Sheet1"]] == ["Chart 1", "Chart 1", "Chart 3"]
     code, out = run_main(excel, capsys, "chart", "--action", "delete", "--name", "Sales")
     assert code == 1 and "[후보]" in out["message"], out
-    cands = out["message"].split("[후보]")[1].strip().split(", ")
+    cands = re.split(r"\s*\d+\) ", out["message"].split("[후보]")[1])[1:]
     assert cands == ["Sheet1!#1", "Sheet1!Chart 3"], cands
     found = [excel._chart_title(excel.find_chart(_T(wb), c)[1]) for c in cands]    # 후보마다 차트 하나로 찾아짐
     assert found == ["Sales", "Sales"]

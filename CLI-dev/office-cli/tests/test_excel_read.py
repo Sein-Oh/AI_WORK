@@ -1410,3 +1410,10 @@ def test_sheet_candidate_has_numbered_confirm_command(xl, capsys):
     assert "confirm_commands" in out["agent_directive"]
     argv = split_command(out["confirm_commands"][0]["command"])
     assert argv[0] == "python" and argv[2:] == ["read", "--sheet", "요약"], argv
+
+
+def test_read_empty_range_is_explicit_zero(xl_table, capsys):
+    """1.4.81 빈 결과 명시: 값이 없는 범위는 count 0과 '찾은 항목 없음'."""
+    code, out = run_main(excel, capsys, "read", "--range", "H10:I12")
+    assert code == 0 and out["count"] == 0 and out["preview"].startswith("0건:"), out
+    assert out["agent_directive"].startswith("VERIFIED: 0건.") and "찾은 항목 없음" in out["agent_directive"], out

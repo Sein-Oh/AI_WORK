@@ -271,6 +271,7 @@ def test_anchor_in_several_paragraphs_is_not_guessed(wd, capsys):
     code, out = run_word(capsys, "write", "--text", "새 문단", "--anchor", "계획", "--pos", "replace")
     assert code == 1 and out["error_type"] == "ambiguous" and out["agent_directive"].startswith("STOP_RETRY:")
     assert out["candidates"] == ["1: 계획 개요", "2: 세부 계획"] and "--occurrence" in out["message"]
+    assert [c["command"].split()[-2:] for c in out["confirm_commands"]] == [["--occurrence", "1"], ["--occurrence", "2"]]
     assert wd["doc"].text == before                                       # 어느 단락도 지우지 않음
     code, out = run_word(capsys, "write", "--text", "새 문단", "--anchor", "계획", "--pos", "replace", "--occurrence", "2")
     assert code == 0 and doc_paras(wd["doc"])[:4] == ["계획 개요", "본문", "새 문단", "끝"]
@@ -733,7 +734,8 @@ def test_read_section_matches_numbering_with_trailing_dot(wd_pages, capsys):
 def test_read_section_ambiguous_then_occurrence(wd_pages, capsys):
     wd_pages["doc"] = PageDoc([("1. 장비", 1), ("검증 방법", 2), ("장비 검증", 10), ("2. 소프트웨어", 1), ("검증 방법", 2), ("SW 검증", 10)])
     code, out = run_word(capsys, "read", "--section", "검증 방법")
-    assert code == 1 and "[후보]" in out["message"] and "--occurrence" in out["message"]
+    assert code == 1 and "[후보] 1) " in out["message"] and "--occurrence" in out["message"]
+    assert out["confirm_commands"][1]["command"].endswith("--occurrence 2"), out
     code, out = run_word(capsys, "read", "--section", "검증 방법", "--occurrence", "2")
     assert code == 0 and texts(out) == ["검증 방법", "SW 검증"]
 
@@ -1163,3 +1165,11 @@ def test_fill_slots_newline_inside_value_is_kept(form_doc, capsys):
     code, out = run_word(capsys, "fill", "--slots", "업체명=한빛\\n전자; 시험일=2026-11-04")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     assert "업체: 한빛\v전자" in doc.text and "시험일: 2026-11-04" in doc.text
+
+
+def test_read_empty_document_is_explicit_zero(wd_pages, capsys):
+    """1.4.81 빈 결과 명시: 필터 없이 읽은 빈 문서도 count 0 (전에는 빈 paragraphs만)."""
+    wd_pages["doc"] = PageDoc([("", 10), (" ", 10)])     # 빈 단락만 (실제 빈 문서도 빈 단락 하나)
+    code, out = run_word(capsys, "read")
+    assert code == 0 and out["count"] == 0 and out["paragraphs"] == [], (out.get("message"), out)
+    assert out["agent_directive"].startswith("VERIFIED: 0건.") and "찾은 항목 없음" in out["agent_directive"], out

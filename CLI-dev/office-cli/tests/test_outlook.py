@@ -1251,7 +1251,10 @@ def test_selector_without_match_gives_candidates(ol_env, capsys, tmp_path, argv)
     m = _attach_mail(ol_env, FakeAttachment("견적서.pdf"), FakeAttachment("단가표.xlsx"))
     code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "out"), *argv)
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
-    assert "[후보] 견적서.pdf, 단가표.xlsx" in out["message"]
+    assert "[후보] 1) 견적서.pdf 2) 단가표.xlsx" in out["message"], out
+    cmds = [c["command"] for c in out["confirm_commands"]]                # 고른 번호의 전체 명령 (값만 주지 않음)
+    want = ["견적서.pdf", "단가표.xlsx"] if argv[0] == "--name" else ["1", "2"]
+    assert len(cmds) == 2 and all(f'{argv[0]} ' in c and w in c for c, w in zip(cmds, want)), cmds
     assert all(a.saved_to == [] for a in m.Attachments.items) and not (tmp_path / "out").exists()
 
 
@@ -1375,7 +1378,8 @@ def test_missing_attach_stops_before_draft(ol_env, capsys, tmp_path, cmd):
     (tmp_path / "관계없음.txt").write_bytes(b"1")
     code, out = run_outlook(capsys, *cmd, "--attach", str(tmp_path / "보고서.pdf"))
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
-    assert f"[후보] {tmp_path / '보고서_최종.pdf'}" in out["message"] and "관계없음" not in out["message"]
+    assert f"[후보] 1) {tmp_path / '보고서_최종.pdf'}" in out["message"] and "관계없음" not in out["message"]
+    assert str(tmp_path / '보고서_최종.pdf') in out["confirm_commands"][0]["command"], out
     assert ol_env["calls"] == [] and m.drafts == [] and ol_env["app"].created == []      # Outlook에 연결하기 전에 멈춤
 
 

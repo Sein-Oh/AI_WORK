@@ -219,6 +219,12 @@ def cmd_read(args) -> Dict[str, Any]:
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. " + rt.INTO_OTHER_DOC,
                           **result)
     shown: List[Dict[str, Any]] = []
+    if not any(str(s["title"]).strip() or str(s["text"]).strip() for s in slides):
+        # 빈 결과 명시 (ACI 설계 권장 2번, 1.4.81): 슬라이드가 없거나 글이 하나도 없음
+        what = "슬라이드가 없습니다" if not slides else f"슬라이드 {len(slides)}장에 글이 없습니다 (그림·표만 있거나 빈 슬라이드)"
+        result.update(slides=slides[:20], truncated=False, count=0)
+        return rt.ok(TOOL, "read", f"0건: {source['name']}: {what}",
+                     f"VERIFIED: 0건. {what} (찾은 항목 없음). 사용자에게 그대로 알리세요.", **result)
     used = 0
     text_cut = 0
     for s in slides:

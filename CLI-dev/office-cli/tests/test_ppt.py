@@ -824,3 +824,10 @@ def test_cards_with_old_bar_separator_get_full_command(pp, capsys):
     assert argv[0] == "python" and argv[argv.index("--cards") + 1] == "안정성:무중단; 확장성:모듈", argv
     code, out = run_ppt(capsys, *argv[2:])
     assert code == 0, out
+
+
+def test_read_without_text_is_explicit_zero(pp, capsys):
+    """1.4.81 빈 결과 명시: 글이 없는 슬라이드만 있으면 count 0과 '찾은 항목 없음' (빈 배열만 주지 않음)."""
+    code, out = run_ppt(capsys, "read")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건."), out
+    assert "찾은 항목 없음" in out["agent_directive"] and out["preview"].startswith("0건:"), out

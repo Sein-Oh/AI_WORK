@@ -248,9 +248,10 @@ def _find_section(units: List[Dict[str, Any]], query: str, occurrence: Optional[
             raise rt.InputError(f"--occurrence는 1~{len(hits)} 사이여야 합니다 ('{query}' 제목 {len(hits)}개).")
         head = hits[occurrence - 1]
     elif len(hits) > 1:
-        raise rt.ambiguous(f"'{query}'이(가) 들어간 제목이 {len(hits)}개라 고를 수 없습니다. 사용자에게 번호를 고르게 한 뒤 "
-                           "--occurrence 번호를 붙이세요.",
-                           [f"{i}: 단락 {h['no']} {_preview(h['text'], 40)}" for i, h in enumerate(hits, 1)])
+        raise rt.ambiguous(f"'{query}'이(가) 들어간 제목이 {len(hits)}개라 고를 수 없습니다. 사용자에게 번호를 고르게 하세요 "
+                           "(고른 번호의 confirm_commands가 --occurrence를 붙인 명령).",
+                           [f"{i}: 단락 {h['no']} {_preview(h['text'], 40)}" for i, h in enumerate(hits, 1)],
+                           option="--occurrence", values=[str(i) for i in range(1, len(hits) + 1)])
     else:
         head = hits[0]
     i = units.index(head)
@@ -321,11 +322,13 @@ def cmd_read(args) -> Dict[str, Any]:
         return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. " + rt.INTO_OTHER_DOC,
                           **result)
-    if filtered and not selected:
-        result.update(paragraphs=[], truncated=False)
-        return rt.ok(TOOL, "read", f"{name}: {selection}에 글이 있는 단락 없음 (count 0)",
-                     f"VERIFIED: 0건. {selection}에는 글이 있는 단락이 없습니다 (표·그림만 있거나 빈 쪽). 사용자에게 그대로 알리세요.",
-                     **result)
+    if not selected:
+        # 빈 결과 명시 (ACI 설계 권장 2번): 필터 없이 읽은 빈 문서도 count 0 (1.4.81)
+        where = selection or ("문서" if not units else f"단락 {max(1, args.start)}부터")
+        result.update(paragraphs=[], truncated=False, count=0)
+        return rt.ok(TOOL, "read", f"{name}: {where}에 글이 있는 단락 없음 (count 0)",
+                     f"VERIFIED: 0건. {where}에는 글이 있는 단락이 없습니다 (찾은 항목 없음: 표·그림만 있거나 빈 문서·쪽). "
+                     "사용자에게 그대로 알리세요.", **result)
     shown: List[Dict[str, Any]] = []
     used = 0
     text_cut = 0
@@ -949,9 +952,10 @@ def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str
     if len(hits) > 1:
         more = "개 이상" if len(hits) >= ANCHOR_MAX_HITS else "개"
         raise rt.ambiguous(
-            f"'{anchor}'이(가) 단락 {len(hits)}{more}에 있어 어느 곳인지 고를 수 없습니다. 사용자에게 번호를 고르게 한 뒤 "
-            "--occurrence 번호를 붙이거나, 한 곳에만 있는 더 긴 문구를 --anchor로 쓰세요.",
-            [f"{i}: {_preview(str(h.Text))}" for i, h in enumerate(hits, 1)])
+            f"'{anchor}'이(가) 단락 {len(hits)}{more}에 있어 어느 곳인지 고를 수 없습니다. 사용자에게 번호를 고르게 하세요 "
+            "(고른 번호의 confirm_commands가 --occurrence를 붙인 명령). 한 곳에만 있는 더 긴 문구를 --anchor로 써도 됩니다.",
+            [f"{i}: {_preview(str(h.Text))}" for i, h in enumerate(hits, 1)],
+            option="--occurrence", values=[str(i) for i in range(1, len(hits) + 1)])
     return hits[0]
 
 
@@ -1661,11 +1665,8 @@ def cmd_export(args) -> Dict[str, Any]:
                     work.Close(SaveChanges=0)
                 except Exception:
                     pass
-            if tmp and os.path.exists(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+            if tmp:
+                rt.remove_file(tmp)
         resolved = t.resolved()
     return rt.ok_file(TOOL, "export", f"{resolved['name']}을(를) {ext[1:].upper()}로 저장: {out}", out,
                       "VERIFIED: 저장한 파일을 확인했습니다. 원본 문서는 바뀌지 않았습니다.", target_resolved=resolved, output_file=out,
