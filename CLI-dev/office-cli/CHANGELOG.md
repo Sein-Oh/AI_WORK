@@ -11,6 +11,35 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.81] - 2026-11-07
+
+사용법 단순성 남은 것과 지침 정리 (AGENTS.md "사용법 단순성" 2·3번, ACI 설계 권장 2번, JIT 자가복구).
+
+### 수정
+- 남은 `[후보]` 값 목록을 번호와 같은 번호의 `confirm_commands`(그 값을 넣은 전체 명령)로: 이름이 같은 열린 문서(전체 경로), 열린 문서 이름,
+  `range --range A5:C7`의 행/열(`--axis rows`/`cols`), 머리글에 같은 이름 열(열 문자), 머리글에 없는 열 이름(비슷한 이름 5개, 없으면 머리글),
+  `sort --desc`, 같은 이름·제목 차트, outlook 첨부 `--name`/`--index`, 없는 첨부 파일(같은 폴더의 비슷한 파일), reader 장절 `--section`,
+  word 제목·앵커가 여러 곳(`--occurrence 1`, `2` ...), 인자 오류의 비슷한 옵션·명령(되돌리기 어려운 명령은 `destructive`).
+  `retry_replacing`이 `;`·`,` 목록의 한 값 전체(전체 경로 포함)도 바꿈. 시트 보호의 잠기지 않은 칸 후보와 새 시트 만들기 확인은 사용자 결정이라 그대로.
+
+### 기능 (인자 형식 변경)
+- `reader.py search --query`: 그리고는 `;`, 또는은 `|` (`;`가 먼저 묶임, `excel read --where`·ml-kit `--where`와 같은 구분자 규칙).
+  `;`·`|`가 든 글은 큰따옴표. 옛 `A AND B`·`A OR B`(대문자 낱말)는 받지 않고 고친 전체 명령 `[추천]` (따옴표 안은 글자). 소문자 `and`/`or`는 글자 그대로.
+  스킬 office-spec 검색 줄에 `(; 그리고, | 또는)`.
+
+### 기능
+- `--dry-run` 미리보기 (R8, 문서를 바꾸지 않고 바뀔 곳과 확인 명령 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 지우기·바꾸기는 `destructive`),
+  읽기 전용으로 열어 되돌리기 지점 없음, 바뀔 것이 없으면 `count 0`과 명령 없음, `planned` 50개까지 + `truncated`):
+  `word replace`, `word write`(모든 `--pos`, `replace`는 지워질 단락), `ppt replace`, `ppt slide`(delete·clear, `--all-slides`, add·duplicate·move, list는 무시하고 warnings).
+  `excel replace`(수식 칸은 내용 유지로 따로 셈), `excel range` clear·move(대상에 값이 있으면 확인 명령에 `--overwrite`), `excel sheet --action delete`
+  (다른 시트의 수식 중 `#REF!`가 될 칸 수·주소), `excel chart --action delete`(`--all` 포함). excel의 다른 range·sheet·chart 동작에 주면 STOP_RETRY.
+  `write_session`은 `--dry-run`이면 읽기 전용(새 파일·스냅샷·화면 이동 없음, range insert/delete 미리보기 포함). 이동 대상 확인은 `_range_dest`·`_dest_conflicts`로 나눔(동작 같음).
+  실제 실행과 같은 검사(없는 슬라이드, 앵커 없음·여러 곳 등)를 그대로 함.
+- 빈 결과 명시: `excel read`의 값이 없는 범위, `word read`의 빈 문서(필터 없이), `ppt read`의 슬라이드·글 없음이 `count: 0`, preview `0건:`,
+  directive `VERIFIED: 0건. ... (찾은 항목 없음)` (전에는 빈 배열만).
+- `_runtime.remove_file`: 스냅샷·비교 캐시·내보내기 임시 파일·작업 폴더 정리를 백신의 일시적 잠금에 대비해 다시 시도 (`retry_fs`, 최대 약 1.2초,
+  실패해도 오류 없음). 전에는 `os.remove` 한 번이라 잠기면 파일이 남음.
+
 ## [1.4.80] - 2026-11-07
 
 엑셀 표 두 판 비교 (BOM 개정 비교)와 새 스킬 office-data.
@@ -1907,8 +1936,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
-- [ ] 사용법 단순성 남은 것: reader `--query`의 `AND`/`OR`와 `--where`의 `;`/`|` 두 표기, outlook `--to` 받는 사람의 `;` 구분(Outlook 관례),
-  `--map` JSON 인자, `[후보]` 값 목록 -> 번호 붙은 전체 명령, 같은 뜻 표가 `--opt=값` 형태는 못 고침
+- [ ] 사용법 단순성 남은 것: outlook `--to` 받는 사람의 `;` 구분(Outlook 관례), outlook 첨부 `--name`의 `;` 구분, `--map` JSON 인자,
+  같은 뜻 표가 `--opt=값` 형태는 못 고침 (`--query` 구분자와 `[후보]` 번호는 1.4.81)
 
 ### 1.0 제거 기능 (필요하면 다시 추가할 후보)
 - 스타일 DNA 추출 (`office_theme --action extract`). 테마 프리셋은 유지.
@@ -1951,11 +1980,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 ### 저장소 지침 반영 (AGENTS.md, 2026-10-28)
 상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현. 우선순위 순.
 - [ ] `recovered` 나머지: transfer 방식 대체, 오래된 스냅샷 정리 (잠금·기존 파일 새 이름 저장, 낡은 캐시는 1.4.0)
-- [ ] `remove_tree` 추가, `os.remove`(_office.py:314, _runtime.py:311, word.py:593)에 적용. (1.4.0: undo 복원 복사는 `retry_fs`, retry_fs는 일시적 오류만 재시도 완료)
 - [ ] COM 내보내기(excel.py, word.py, ppt.py export)의 잠금 대비 `save_with_lock_fallback`. (1.4.0: 기존 출력 파일은 새 이름 저장 + `recovered` 완료)
 - [ ] `--save`로 기존 파일을 덮어쓰기를 원할 때의 `--overwrite` 인자 (기존 파일 새 이름 저장은 1.4.0)
-- [ ] `--dry-run`: excel replace/range clear·move/sheet delete/chart delete --all, word replace/write --pos replace, ppt replace/slide delete·clear. (excel range delete·insert는 1.4.37) (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`. 쓰기 결과에도 표시하는 것은 남음)
-- [ ] 빈 결과 `count: 0` + "찾은 항목 없음": excel read 빈 범위, word/ppt read 0단위 (office windows·info --all·chart list·undo --list는 1.4.26, outlook list/search·ppt slide list는 1.4.27)
+- [ ] 쓰기 결과에 되돌리기 가능 여부 표시 (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`). (`--dry-run` 확대는 1.4.81) 스킬에 `--dry-run` 안내 (office-excel·office-doc는 6KB 한도 근처라 보류, README에만)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
 - [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`

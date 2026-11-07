@@ -312,7 +312,8 @@ def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = No
         raise rt.ambiguous(
             f"열린 {APP_LABEL[kind]} 문서 중 이름이 '{t}'인 문서가 {len(hits)}개입니다. "
             f"어느 문서인지 사용자에게 확인한 뒤 {option}에 전체 경로를 지정하세요.",
-            [d["path"] or f"{d['name']} (저장 안 됨)" for d in hits])
+            [d["path"] or f"{d['name']} (저장 안 됨)" for d in hits], replace=target, option=option,
+            values=[d["path"] for d in hits] if all(d["path"] for d in hits) else None)
     return hits[0] if hits else None
 
 
@@ -465,10 +466,7 @@ def save_barrier(kind: str, doc: Any, reason: str, tool: str = "", command: str 
 def delete_snapshot(meta_file: str) -> None:
     base = os.path.splitext(meta_file)[0]
     for f in glob.glob(glob.escape(base) + ".*"):
-        try:
-            os.remove(f)
-        except OSError:
-            pass
+        rt.remove_file(f)
 
 
 def _rotate_snapshots(kind: str, key: str) -> None:
@@ -953,7 +951,7 @@ def resolve_target(kind: str, target: str = "active", readonly: bool = True, cre
             # 파일 이름만 준 경우에만 열린 문서를 [후보]로 (전체 경로가 없는 것은 열린 문서 이름의 오타가 아님)
             if names and not is_abs and not err.candidates and "[추천]" not in str(err):
                 err = rt.ambiguous(f"{APP_LABEL[kind]} 문서 '{target}'을(를) 찾을 수 없습니다 (열린 문서 이름도 아니고 파일도 없음)."
-                                   f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names)
+                                   f"{tail} 열린 문서 중에서 사용자에게 고르게 하세요.", names, replace=target, option=option)
             raise err
         ext = os.path.splitext(path)[1].lower()
         if ext not in EXTENSIONS[kind]:

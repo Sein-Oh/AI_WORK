@@ -261,8 +261,33 @@ def _read_matrix_csv(path: str, address: Optional[str]) -> Tuple[str, int, int, 
 
 
 def write_session(args, command: str):
-    return off.open_target("excel", args.target, readonly=False, focus=not args.no_focus,
-                           create=True, tool=TOOL, command=command)
+    """쓰기 명령의 세션. --dry-run이면 읽기 세션 (저장·새 파일·되돌리기 지점·화면 이동 없음)."""
+    dry = bool(getattr(args, "dry_run", False))
+    return off.open_target("excel", args.target, readonly=dry, focus=not args.no_focus,
+                           create=not dry, tool=TOOL, command=command)
+
+
+DRY_DIRECTIVE = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
+                 "confirm_commands[0]을 그대로 실행하세요.")
+DRY_NOTHING = "VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건). 실행하지 말고 preview를 사용자에게 알리세요."
+DRY_SHOW = 50            # 미리보기 planned 목록 상한
+
+
+def dry_confirm(purpose: str, overwrite: bool = False) -> Dict[str, Any]:
+    """--dry-run을 뺀 같은 명령 (confirm_commands: 사용자 확인 뒤에만). overwrite: 실제 실행이 --overwrite 없이는 멈출 때 붙임."""
+    cmd = rt.retry_command({}, drop=("--dry-run", "--overwrite") if overwrite else ("--dry-run",))
+    return {"purpose": purpose, "command": cmd + (" --overwrite" if overwrite else ""), "destructive": True}
+
+
+def dry_result(command: str, preview: str, count: int, planned: List[str], confirm: Optional[Dict[str, Any]],
+               resolved: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
+    """--dry-run 결과 (바꾸지 않음). count 0이면 실행할 명령을 주지 않음."""
+    fields: Dict[str, Any] = {"dry_run": True, "count": count, "planned": planned[:DRY_SHOW], "target_resolved": resolved, **extra}
+    if len(planned) > DRY_SHOW:
+        fields["truncated"] = True
+    if count and confirm:
+        fields["confirm_commands"] = [confirm]
+    return rt.ok(TOOL, command, preview, DRY_DIRECTIVE if count and confirm else DRY_NOTHING, **fields)
 
 
 def target_range(t: off.OfficeTarget, ws: Any, address: Optional[str]) -> Any:
@@ -834,6 +859,12 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
                           "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. " + rt.INTO_OTHER_DOC,
                           expected_rows=filled, delimiter=",", **result)
 
+    if not any(v is not None and str(v).strip() for row in values for v in row):
+        # 빈 결과 명시 (ACI 설계 권장 2번, 1.4.81): 빈 배열만 주면 LLM이 표를 지어내거나 범위를 바꿔 다시 읽음
+        result.update(values=values[:5], count=0, truncated=False)
+        return rt.ok(TOOL, "read", f"0건: {sheet}!{full_addr}에 값이 있는 칸이 없습니다 ({nrows}행 x {ncols}열 모두 빈 칸)",
+                     f"VERIFIED: 0건. {sheet}!{full_addr}의 칸이 모두 비어 있습니다 (찾은 항목 없음). 사용자에게 그대로 알리고 "
+                     "범위를 바꿔 다시 읽지 마세요.", **result)
     shown, rows_cut, cells_cut, cols_dropped = rt.clamp_rows(values, args.max_rows)
     truncated = rows_cut or cells_cut > 0 or cols_dropped > 0
     result.update(values=shown, truncated=truncated)
@@ -1984,6 +2015,8 @@ def cmd_replace(args) -> Dict[str, Any]:
             if fmt and hits:
                 check_protection(ws, [ws.Cells(r0 + i, c0 + j) for i, j, *_ in hits], "format_cells")
             plans.append((rng, ws, formulas, r0, c0, hits))
+        if args.dry_run:
+            return _replace_dry(args, fmt, plans, t.resolved())
         with off.excel_batch(t.app):
             for rng, ws, formulas, r0, c0, hits in plans:
                 for i, j, v, s, new in hits:
@@ -2034,6 +2067,42 @@ def cmd_replace(args) -> Dict[str, Any]:
     if problems:
         return rt.ok_unverified(TOOL, "replace", preview, [f"다시 읽은 값이 다른 칸 {len(problems)}개: {', '.join(problems[:5])}"], **result)
     return rt.ok(TOOL, "replace", preview, "VERIFIED: 바꾼 칸을 다시 읽어 확인했습니다.", verified=True, **result)
+
+
+def _replace_dry(args, fmt: Dict[str, Any], plans: List[Any], resolved: Dict[str, Any]) -> Dict[str, Any]:
+    """replace --dry-run: 바꿀 칸과 바뀔 글만 보여 줌 (바꾸지 않음, 되돌리기 지점 없음). 세는 규칙은 실제 실행과 같음."""
+    planned: List[str] = []
+    kept = same = 0
+    for rng, ws, formulas, r0, c0, hits in plans:
+        for i, j, v, s, new in hits:
+            ref = f"{ws.Name}!{addr(r0 + i, c0 + j)}"
+            f = formulas[i][j]
+            if isinstance(f, str) and f.startswith("="):
+                if new != s:
+                    kept += 1
+                if fmt:
+                    planned.append(f"서식만(수식 유지): {ref}")
+            elif new != s:
+                planned.append(f"변경: {ref} ({_short(s)} -> {_short(new)})" + (" + 서식" if fmt else ""))
+            elif fmt:
+                planned.append(f"서식만: {ref}")
+            else:
+                same += 1
+    n = len(planned)
+    extra: Dict[str, Any] = {}
+    notes: List[str] = []
+    if kept:
+        extra["formula_cells_kept"] = kept
+        notes.append(f"수식 칸 {kept}개는 내용 유지")
+    if same:
+        extra["unchanged_same_text"] = same
+        notes.append(f"{same}칸은 바꿀 글이 찾는 글과 같음")
+    note = f", {', '.join(notes)}" if notes else ""
+    if n:
+        preview = f"미리보기: 칸 {n}개가 바뀝니다{note}: " + ", ".join(planned[:3]) + (" ..." if n > 3 else "") + " (바꾸지 않음)"
+    else:
+        preview = f"미리보기: 바뀔 것 없음 (0칸{note}) (바꾸지 않음)"
+    return dry_result("replace", preview, n, planned, dry_confirm("찾아 바꾸기 실행"), resolved, **extra)
 
 
 # ==============================================================================
@@ -2378,6 +2447,8 @@ def cmd_sheet(args) -> Dict[str, Any]:
                      sheets=names, active_sheet=active)
     if not args.name:
         raise rt.InputError(f"sheet {args.action}에는 --name이 필요합니다.")
+    if args.dry_run and args.action != "delete":
+        raise rt.InputError(f"--dry-run은 sheet --action delete에만 씁니다 (받은 동작: {args.action}).")
     with write_session(args, "sheet") as t:
         sheets = t.doc.Worksheets
         names = [str(sheets(i).Name) for i in range(1, sheets.Count + 1)]
@@ -2420,6 +2491,8 @@ def cmd_sheet(args) -> Dict[str, Any]:
             else:   # delete
                 if sheets.Count == 1:
                     raise rt.InputError("마지막 남은 시트는 삭제할 수 없습니다.")
+                if args.dry_run:
+                    return _sheet_delete_dry(t, ws, existing)
                 prev = t.app.DisplayAlerts
                 t.app.DisplayAlerts = False
                 try:
@@ -2437,6 +2510,26 @@ def cmd_sheet(args) -> Dict[str, Any]:
         return rt.ok_unverified(TOOL, "sheet", msg, [f"다시 읽은 시트 목록에 '{want[0]}'이(가) " + ("없음" if want[1] else "남아 있음")],
                                 target_resolved=resolved, sheets=names)
     return rt.ok(TOOL, "sheet", msg, "VERIFIED: 시트 목록을 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved, sheets=names)
+
+
+def _sheet_delete_dry(t: Any, ws: Any, name: str) -> Dict[str, Any]:
+    """sheet --action delete --dry-run: 지울 시트의 사용 범위·차트 수와 #REF!가 될 다른 시트의 수식 칸 (바꾸지 않음)."""
+    box = _used_box(ws)
+    used = addr(*box) if box else ""
+    charts = len(_chart_objects(ws))
+    refs, skipped = broken_refs(t.doc, ws, "rows", 1, XL_MAX_ROW)    # 시트 전체 = 모든 행
+    parts = [f"사용 범위 {used}" if used else "빈 시트"] + ([f"차트 {charts}개"] if charts else [])
+    preview = f"미리보기: 시트 '{name}'을(를) 삭제합니다 ({', '.join(parts)})"
+    if refs:
+        preview += f". 다른 시트의 수식 {len(refs)}개가 이 시트를 참조해 #REF! 오류가 됩니다: " + ", ".join(refs[:5]) + (" ..." if len(refs) > 5 else "")
+    extra: Dict[str, Any] = {"sheet": name, "used_range": used, "charts": charts, "broken_refs": len(refs),
+                             "broken_ref_cells": refs[:REF_SHOW]}
+    if len(refs) > REF_SHOW:
+        extra["broken_ref_cells_truncated"] = True
+    if skipped:
+        extra["warnings"] = [f"칸이 너무 많아 이 시트를 참조하는 수식을 확인하지 못한 시트: {', '.join(skipped[:10])}"]
+    return dry_result("sheet", preview + " (바꾸지 않음)", 1, [f"삭제: 시트 '{name}'"],
+                      dry_confirm(f"시트 '{name}' 삭제 실행"), t.resolved(), **extra)
 
 
 def _same_cell(want: Any, got: Any) -> bool:
@@ -2586,12 +2679,79 @@ def _check_range_protection(ws: Any, rng: Any, a: str, args: Any) -> None:
         check_protection(ws, [target], need)
 
 
+def _range_dest(t: Any, ws: Any, args) -> Tuple[Any, str, Any]:
+    """copy/move 목적지 (시트, 칸 주소, 범위). 붙여 넣을 시트가 보호되어 있으면 멈춤 (move의 원본 시트는 따로 확인)."""
+    if not args.dest:
+        raise rt.InputError(f"range {args.action}에는 --dest가 필요합니다 (예: --dest Sheet2!A1).")
+    dsheet, dcell = split_sheet(args.dest)
+    dws = t.sheet(dsheet) if dsheet else ws
+    dest = dws.Range(dcell)
+    check_protection(dws, [dest], "structure")
+    return dws, dcell, dest
+
+
+def _dest_conflicts(rng: Any, ws: Any, dws: Any, dcell: str) -> Tuple[List[Tuple[str, Any]], Tuple[int, int, int, int]]:
+    """copy/move로 덮어써질 대상의 값이 있는 칸 [(주소, 값)]과 (대상 행, 열, 행 수, 열 수). 원본과 겹치는 칸은 옮겨지는 값이라 뺌."""
+    dr, dc = parse_cell(dcell.replace("$", "").split(":")[0])
+    nr, nc = int(rng.Rows.Count), int(rng.Columns.Count)
+    block = dws.Range(dws.Cells(dr, dc), dws.Cells(dr + nr - 1, dc + nc - 1))
+    src = (int(rng.Row), int(rng.Column), int(rng.Row) + nr - 1, int(rng.Column) + nc - 1)
+    same_sheet = str(dws.Name) == str(ws.Name)
+    filled = [(c, v) for c, v in _filled_cells(block) if not (same_sheet and _inside(parse_cell(c), src))]
+    return filled, (dr, dc, nr, nc)
+
+
+def _range_dry(t: Any, ws: Any, rng: Any, a: str, args, noop: str) -> Dict[str, Any]:
+    """range --action clear|move --dry-run: 지울 값·옮길 칸과 덮어써질 칸만 보여 줌 (바꾸지 않음, 되돌리기 지점 없음)."""
+    where = f"{ws.Name}!{str(rng.Address).replace('$', '')}"
+    info: Dict[str, Any] = {"sheet": str(ws.Name), "range": str(rng.Address).replace("$", "")}
+    if a == "clear":
+        info["type"] = args.type
+        if noop:
+            return dry_result("range", f"미리보기: {where}에는 바뀔 것 없음 ({noop}) (바꾸지 않음)", 0, [], None, t.resolved(), **info)
+        filled: List[Tuple[str, Any]] = []
+        if args.type != "formats":
+            used = t.app.Intersect(rng, ws.UsedRange)        # 값이 있는 칸은 사용 범위 안에만 있음
+            filled = _filled_cells(used) if used is not None else []
+        planned = [f"지움: {ws.Name}!{c} ({_short(v)})" for c, v in filled[:DRY_SHOW + 1]]
+        if args.type == "formats":
+            count = int(rng.Rows.Count) * int(rng.Columns.Count)
+            preview = f"미리보기: {where}의 서식을 지웁니다 (칸 {count}개, 값은 그대로)"
+            planned = [f"서식 지움: {where}"]
+        elif filled:
+            count = len(filled)
+            preview = f"미리보기: {where}을(를) 지우면 값이 있는 칸 {count}개가 지워집니다: {_filled_preview(filled)}"
+            preview += " (서식도 지움)" if args.type == "all" else ""
+        else:
+            count = 1
+            preview = f"미리보기: {where}에는 값이 있는 칸이 없습니다. 서식만 지워집니다"
+            planned = [f"서식 지움: {where}"]
+        info["filled_cells"] = len(filled)
+        return dry_result("range", preview + " (바꾸지 않음)", count, planned,
+                          dry_confirm(f"{where} 지우기 실행"), t.resolved(), **info)
+    # move
+    dws, dcell, _ = _range_dest(t, ws, args)
+    filled, (dr, dc, nr, nc) = _dest_conflicts(rng, ws, dws, dcell)
+    to = f"{dws.Name}!{addr(dr, dc, dr + nr - 1, dc + nc - 1)}"
+    info["dest"] = to
+    if str(dws.Name) == str(ws.Name) and (dr, dc) == (int(rng.Row), int(rng.Column)):
+        return dry_result("range", f"미리보기: {where}은(는) 원본과 같은 자리라 바뀔 것 없음 (바꾸지 않음)", 0, [], None, t.resolved(), **info)
+    planned = [f"옮김: {where} -> {to}"] + [f"덮어쓰기: {dws.Name}!{c} ({_short(v)})" for c, v in filled[:DRY_SHOW]]
+    preview = f"미리보기: {where}(칸 {nr * nc}개)을(를) {to}(으)로 옮깁니다"
+    if filled:
+        preview += f". 대상에서 값이 있는 칸 {len(filled)}개가 덮어써집니다: {_filled_preview(filled)}"
+        info["overwrite_cells"] = len(filled)
+    return dry_result("range", preview + " (바꾸지 않음)", nr * nc, planned,
+                      dry_confirm(f"{where} 옮기기 실행" + (" (값이 있는 대상 칸 덮어쓰기)" if filled else ""), overwrite=bool(filled)),
+                      t.resolved(), **info)
+
+
 def cmd_range(args) -> Dict[str, Any]:
     a = args.action
     if a in ("insert", "delete"):
         return range_lines(args)
-    if args.dry_run:
-        raise rt.InputError(f"--dry-run은 range --action insert/delete에만 씁니다 (받은 동작: {a}).")
+    if args.dry_run and a not in ("clear", "move"):
+        raise rt.InputError(f"--dry-run은 range --action insert/delete/clear/move에만 씁니다 (받은 동작: {a}).")
     if a == "sort":
         return range_sort(args)
     if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear") and not args.range:
@@ -2608,7 +2768,9 @@ def cmd_range(args) -> Dict[str, Any]:
         # 바꾸지 않고 바뀐 것 없음으로 표시 (되돌리기 지점을 남기지 않음). 알 수 없으면 바꾼 것으로 봄
         noop = _range_noop(t, ws, rng, a, args)
         if not noop:
-            _check_range_protection(ws, rng, a, args)
+            _check_range_protection(ws, rng, a, args)         # 읽기만 함: 미리보기도 실제 실행과 같이 막힘을 알림
+        if args.dry_run:
+            return _range_dry(t, ws, rng, a, args, noop)
         if noop:
             detail = f"(바뀐 것 없음: {noop})"
         elif a == "autofit":
@@ -2657,20 +2819,9 @@ def cmd_range(args) -> Dict[str, Any]:
             {"contents": rng.ClearContents, "formats": rng.ClearFormats}.get(args.type, rng.Clear)()
             detail = args.type
         elif a in ("copy", "move"):
-            if not args.dest:
-                raise rt.InputError(f"range {a}에는 --dest가 필요합니다 (예: --dest Sheet2!A1).")
-            dsheet, dcell = split_sheet(args.dest)
-            dws = t.sheet(dsheet) if dsheet else ws
-            dest = dws.Range(dcell)
-            check_protection(dws, [dest], "structure")       # 붙여 넣을 시트가 보호되어 있으면 (move의 원본 시트는 위에서 확인)
+            dws, dcell, dest = _range_dest(t, ws, args)
             if not args.overwrite:
-                dr, dc = parse_cell(dcell.replace("$", "").split(":")[0])
-                nr, nc = int(rng.Rows.Count), int(rng.Columns.Count)
-                block = dws.Range(dws.Cells(dr, dc), dws.Cells(dr + nr - 1, dc + nc - 1))
-                src = (int(rng.Row), int(rng.Column), int(rng.Row) + nr - 1, int(rng.Column) + nc - 1)
-                same_sheet = str(dws.Name) == str(ws.Name)
-                filled = [(c, v) for c, v in _filled_cells(block)
-                          if not (same_sheet and _inside(parse_cell(c), src))]   # 원본과 겹치는 칸은 옮겨지는 값
+                filled, (dr, dc, nr, nc) = _dest_conflicts(rng, ws, dws, dcell)
                 if filled:
                     head = f"{addr(dr, dc, dr + nr - 1, dc + nc - 1)}에 값이 있는 칸 {len(filled)}개가 덮어써집니다: "
                     raise rt.UserDecisionError(
@@ -2787,7 +2938,8 @@ def _lines_spec(args) -> Tuple[Optional[str], str, int, int]:
             return sheet, "cols", c1, c2
         raise rt.ambiguous(f"--range {cells}이(가) 행인지 열인지 정할 수 없습니다. 행이면 --range {r1}:{r2}, "
                            f"열이면 --range {col_letter(c1)}:{col_letter(c2)}로 쓰거나 --axis를 붙이세요.",
-                           [f"--axis rows ({r1}~{r2}행)", f"--axis cols ({col_letter(c1)}~{col_letter(c2)}열)"])
+                           [f"--axis rows ({r1}~{r2}행)", f"--axis cols ({col_letter(c1)}~{col_letter(c2)}열)"],
+                           values=["rows", "cols"], option="--axis")
     if args.axis and args.axis != given:
         raise rt.InputError(f"--range {cells}은(는) {'행' if given == 'rows' else '열'} 주소인데 --axis {args.axis}를 주었습니다. "
                             f"--axis를 빼고 다시 실행하세요. [추천] {rt.retry_command({'--axis': None})}")
@@ -3079,7 +3231,8 @@ def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, w
         if len(exact) > 1:
             raise rt.ambiguous(f"머리글에 '{k}' 열이 여러 개입니다. 열 문자로 고르세요.",
                                [f"{col_letter(c0 + i)} ({names[i]})" for i in exact],
-                               log_message=f"머리글에 같은 이름의 {what}이 {len(exact)}개")
+                               log_message=f"머리글에 같은 이름의 {what}이 {len(exact)}개",
+                               replace=k, values=[col_letter(c0 + i) for i in exact])
     if _LETTERS.match(k):
         idx = col_number(k) - c0
         if 0 <= idx < ncols:
@@ -3088,8 +3241,9 @@ def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, w
     shown = [nm for nm in names if nm]
     if header is None or not shown:
         raise rt.InputError(f"{what} '{k}'을(를) 찾을 수 없습니다. 머리글 행이 없으면 열 문자(예: B)를 쓰세요.")
-    raise rt.ambiguous(f"{what} '{k}'을(를) 머리글에서 찾을 수 없습니다. 머리글 이름이나 열 문자(예: B)를 쓰세요.", shown,
-                       log_message=f"{what} 이름을 머리글에서 찾을 수 없음")
+    near = rt.suggest(k, shown, 5)
+    raise rt.ambiguous(f"{what} '{k}'을(를) 머리글에서 찾을 수 없습니다. 머리글 이름이나 열 문자(예: B)를 쓰세요.", near or shown,
+                       log_message=f"{what} 이름을 머리글에서 찾을 수 없음", replace=k)
 
 
 def _is_num(v: Any) -> bool:
@@ -3263,7 +3417,7 @@ def range_sort(args) -> Dict[str, Any]:
                 hit = [i for i, k in enumerate(keys) if rt._same_name_key(k) == rt._same_name_key(d)]
                 if not hit:
                     raise rt.ambiguous(f"--desc '{d}'이(가) --by에 없습니다. --by에 쓴 기준 중에서 고르세요.", keys,
-                                       log_message="--desc 기준이 --by에 없음")
+                                       log_message="--desc 기준이 --by에 없음", replace=d)
                 desc_keys.update(hit)
         order = [(idx, args.desc == "*" or (desc_keys is not None and i in desc_keys)) for i, (idx, _) in enumerate(cols)]
         data = matrix[1:] if has_header else matrix
@@ -3465,7 +3619,7 @@ def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = 
         labels = _chart_labels(hits)
         raise rt.ambiguous(
             f"'{name}'에 해당하는 차트가 {len(hits)}개입니다 (이름 또는 제목이 같음). 하나를 고르지 않았고 아무것도 바꾸지 않았습니다. "
-            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보를 글자 그대로 주세요.", labels)
+            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보를 글자 그대로 주세요.", labels, replace=str(name))
     if hits:
         return hits[0][0], hits[0][1]
     if not all_names:
@@ -3473,7 +3627,28 @@ def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = 
     raise rt.not_found("차트", str(name), sorted(set(all_names)), extra=f" ({where})" if where != "통합 문서" else "")
 
 
+def _chart_delete_dry(t: Any, args) -> Dict[str, Any]:
+    """chart --action delete --dry-run: 지울 차트 이름만 보여 줌 (바꾸지 않음). 보호 확인은 읽기만 해서 실제 실행과 같이 함."""
+    if args.all:
+        ws = t.sheet(args.sheet)
+        names = [str(o.Name) for o in _chart_objects(ws)]
+        if names:
+            check_protection(ws, [], "objects")
+            preview = f"미리보기: 시트 '{ws.Name}'의 차트 {len(names)}개를 삭제합니다: " + ", ".join(names[:5]) + (" ..." if len(names) > 5 else "")
+        else:
+            preview = f"미리보기: 시트 '{ws.Name}'에 차트가 없어 바뀔 것 없음 (0개)"
+    else:
+        ws, obj = find_chart(t, args.name, args.sheet)
+        check_protection(ws, [], "objects")
+        names = [str(obj.Name)]
+        preview = f"미리보기: 시트 '{ws.Name}'의 차트 '{names[0]}'을(를) 삭제합니다 (1개)"
+    return dry_result("chart", preview + " (바꾸지 않음)", len(names), [f"삭제: {ws.Name}!{n}" for n in names],
+                      dry_confirm("차트 삭제 실행"), t.resolved(), sheet=str(ws.Name))
+
+
 def cmd_chart(args) -> Dict[str, Any]:
+    if args.dry_run and args.action != "delete":
+        raise rt.InputError(f"--dry-run은 chart --action delete에만 씁니다 (받은 동작: {args.action}).")
     if args.action == "list":
         with off.open_target("excel", args.target, readonly=True) as t:
             wb = t.doc
@@ -3490,6 +3665,8 @@ def cmd_chart(args) -> Dict[str, Any]:
         if not args.name and not args.all:
             raise rt.InputError("삭제할 차트를 --name(이름 또는 제목)으로 지정하거나, 시트의 모든 차트를 지우려면 --all을 쓰세요.")
         with write_session(args, "chart") as t:
+            if args.dry_run:
+                return _chart_delete_dry(t, args)
             if args.all:
                 ws = t.sheet(args.sheet)
                 n = len(_chart_objects(ws))
@@ -4548,11 +4725,8 @@ def _cmp_save_cache(data: Dict[str, Any]) -> None:
 
 def _cmp_drop_cache(*tables: Dict[str, Any]) -> None:
     for t in tables:
-        try:
-            if t.get("cache") and os.path.exists(t["cache"]):
-                os.remove(t["cache"])
-        except OSError:
-            pass
+        if t.get("cache"):
+            rt.remove_file(t["cache"])
 
 
 def _cmp_table(data: Dict[str, Any], path: str) -> Dict[str, Any]:
@@ -5234,6 +5408,7 @@ def build_cli():
     p.add_argument("--range", "-r", help="범위 (생략 시 사용 범위)")
     p.add_argument("--whole", action="store_true", help="셀 전체가 일치할 때만")
     p.add_argument("--all-sheets", action="store_true", help="모든 시트")
+    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 칸과 바뀔 글만 보기")
     fmt_args(p)
 
     p = sub.add_parser("style", help="서식")
@@ -5257,6 +5432,7 @@ def build_cli():
     p.add_argument("--action", "-a", required=True, choices=["list", "add", "rename", "copy", "delete", "select"])
     p.add_argument("--name", "-n", help="대상 시트 이름")
     p.add_argument("--new-name", help="새 이름 (rename/copy)")
+    p.add_argument("--dry-run", action="store_true", help="delete: 지우지 않고 지울 시트의 사용 범위·차트 수와 #REF!가 될 수식만 보기")
 
     p = sub.add_parser("range", help="범위 조작")
     common(p, write=True)
@@ -5276,7 +5452,8 @@ def build_cli():
                    help="sort 내림차순: 값 없이 쓰면 모든 기준, 기준 이름을 주면 그것만 (예: --desc \"금액\")")
     p.add_argument("--header", choices=["auto", "yes", "no"], default="auto",
                    help="sort: 첫 행이 머리글인지 (기본 auto: --by가 머리글 이름이면 yes, 열 문자면 도구가 판단)")
-    p.add_argument("--dry-run", action="store_true", help="insert/delete: 바꾸지 않고 넣거나 지울 행·열과 값이 있는 칸 수만 보기")
+    p.add_argument("--dry-run", action="store_true",
+                   help="insert/delete/clear/move: 바꾸지 않고 넣거나 지울 행·열, 지울 값, 옮길 칸과 덮어써질 칸만 보기")
     p.add_argument("--overwrite", action="store_true",
                    help="merge: 왼쪽 위 밖의 값을 지우고 병합 / copy·move: 값이 있는 대상 칸을 덮어쓰기 / "
                         "delete: 값이 있는 행·열도 지우기 (사용자가 원할 때만)")
@@ -5295,6 +5472,7 @@ def build_cli():
     p.add_argument("--legend", choices=list(XL_LEGEND) + ["none"], help="범례 위치 (계열 1개면 기본 없음)")
     p.add_argument("--theme", help=f"색 테마: {', '.join(off.THEMES)}")
     p.add_argument("--all", action="store_true", help="delete: 시트의 모든 차트")
+    p.add_argument("--dry-run", action="store_true", help="delete: 지우지 않고 지울 차트만 보기")
 
     p = sub.add_parser("comment", help="칸 메모 (목록 / 달기 / 지우기)")
     common(p, write=True)

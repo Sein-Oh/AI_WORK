@@ -3,6 +3,7 @@
 """
 import json
 import os
+import re
 
 import pytest
 
@@ -686,13 +687,16 @@ def test_delete_without_references_unchanged(xl_table, capsys):
 
 def test_cell_range_needs_axis(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "insert", "--range", "A2:C3")
-    assert code == 1 and "[후보]" in out["message"] and "--axis rows" in out["message"], out
+    assert code == 1 and "[후보] 1) --axis rows" in out["message"], out
+    assert [c["command"].split()[-2:] for c in out["confirm_commands"]] == [["--axis", "rows"], ["--axis", "cols"]], out
     code, out = run_main(excel, capsys, "range", "--action", "insert", "--range", "A2:C3", "--axis", "rows")
     assert code == 0 and _col(xl_table, 1, 1, 4) == ["이름", None, None, "가"], out
 
 
-def test_dry_run_only_for_insert_delete(xl_table, capsys):
-    code, out = run_main(excel, capsys, "range", "--action", "clear", "--range", "A1", "--dry-run")
+def test_dry_run_only_for_insert_delete_clear_move(xl_table, capsys):
+    code, out = run_main(excel, capsys, "range", "--action", "merge", "--range", "A1:B1", "--dry-run")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    code, out = run_main(excel, capsys, "sheet", "--action", "rename", "--name", "Sheet1", "--new-name", "X", "--dry-run")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
 
 
@@ -729,8 +733,9 @@ def test_sort_letter_header_no(xl_table, capsys):
 
 def test_sort_unknown_column_lists_headers(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "매출")
-    assert code == 1 and "[후보] 이름, 부서, 금액" in out["message"], out
-    assert "이름, 부서" not in _tool_log_text()                                         # 머리글은 문서 내용
+    assert code == 1 and "[후보] 1) 이름 2) 부서 3) 금액" in out["message"], out
+    assert [c["command"].split("--by ")[-1] for c in out["confirm_commands"]] == ["이름", "부서", "금액"], out   # 고른 번호의 전체 명령
+    assert "이름, 부서" not in _tool_log_text() and "1) 이름" not in _tool_log_text()                                        # 머리글은 문서 내용
     assert off.list_snapshots("excel") == []
 
 
@@ -763,6 +768,13 @@ def _wide_table(ws):
     for i, row in enumerate(rows, start=1):
         for j, v in enumerate(row, start=1):
             ws.values[(i, j)] = v
+
+
+def test_sort_desc_not_in_by_gives_numbered_commands(xl_table, capsys):
+    """--desc가 --by에 없음: [후보] 번호와 같은 번호의 전체 명령 (--desc 값만 바꿈)."""
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "부서,금액", "--desc", "급액")
+    assert code == 1 and "[후보] 1) 부서 2) 금액" in out["message"], out
+    assert [c["command"].split("--desc ")[-1] for c in out["confirm_commands"]] == ["부서", "금액"], out
 
 
 def test_sort_more_than_three_keys_uses_sort_fields(xl_table, capsys):
@@ -1146,8 +1158,8 @@ def test_literal_bang_chart_name_on_other_sheet(xl, capsys):
     code, out = run_main(excel, capsys, "chart", "--action", "delete", "--name", "Sheet1!x")
     assert code == 1 and "[후보]" in out["message"], out          # 둘 다 맞으면 고르지 않음
     assert _charts(wb) == {"Sheet1": [("x", "t2")], "요약": [("Sheet1!x", "t1")]}
-    cands = out["message"].split("[후보]")[1].strip().split(", ")
-    assert len(cands) == 2
+    cands = re.split(r"\s*\d+\) ", out["message"].split("[후보]")[1])[1:]
+    assert len(cands) == 2 and len(out["confirm_commands"]) == 2, out
     for cand in cands:                                       # 후보는 그대로 주면 그 차트 하나로 찾아짐
         excel.find_chart(_T(wb), cand)
     code, out = run_main(excel, capsys, "chart", "--action", "delete", "--name", "'Sheet1'!x")
@@ -1199,7 +1211,7 @@ def test_chart_labels_count_all_charts_on_sheet(xl, capsys):
     assert [n for n, _ in _charts(wb)["Sheet1"]] == ["Chart 1", "Chart 1", "Chart 3"]
     code, out = run_main(excel, capsys, "chart", "--action", "delete", "--name", "Sales")
     assert code == 1 and "[후보]" in out["message"], out
-    cands = out["message"].split("[후보]")[1].strip().split(", ")
+    cands = re.split(r"\s*\d+\) ", out["message"].split("[후보]")[1])[1:]
     assert cands == ["Sheet1!#1", "Sheet1!Chart 3"], cands
     found = [excel._chart_title(excel.find_chart(_T(wb), c)[1]) for c in cands]    # 후보마다 차트 하나로 찾아짐
     assert found == ["Sales", "Sales"]
@@ -2084,3 +2096,113 @@ def test_write_cells_value_with_name_value_pairs_is_written_as_is(xl, capsys):
     code, out = run_excel(capsys, "write", "--cells", "C6=R1=10k,R2=4.7k")
     assert code == 0 and out["verified"] is True, out
     assert ws_of(wb).values.get((6, 3)) == "R1=10k,R2=4.7k" and (2, 18) not in ws_of(wb).values
+
+
+# ---------------------------------------------------------------------------
+# --dry-run: replace, range clear/move, sheet delete, chart delete (바꾸지 않고 미리보기 -> confirm_commands[0] 실행)
+# ---------------------------------------------------------------------------
+
+
+def _confirm_argv(out, argv):
+    """confirm_commands[0]이 python "<excel.py>" + (실행한 인자 - --dry-run)인지 확인하고 그 인자를 돌려줌."""
+    assert out["dry_run"] is True and out["agent_directive"].startswith("VERIFIED: 미리보기"), out
+    assert out["preview"].startswith("미리보기:") and out["preview"].endswith("(바꾸지 않음)"), out
+    assert "next_commands" not in out and out["confirm_commands"][0]["destructive"] is True, out
+    parts = split_command(out["confirm_commands"][0]["command"])
+    assert parts[0] == "python" and parts[1].endswith("excel.py"), parts
+    assert parts[2:] == [a for a in argv if a != "--dry-run"], parts
+    return parts[2:]
+
+
+def test_replace_dry_run_changes_nothing_then_confirm(xl_table, capsys):
+    argv = ["replace", "--find", "영업", "--replace", "판매", "--dry-run"]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["count"] == 2 and "칸 2개" in out["preview"], out
+    assert out["planned"] == ["변경: Sheet1!B2 (영업 -> 판매)", "변경: Sheet1!B4 (영업 -> 판매)"], out
+    real = _confirm_argv(out, argv)
+    assert _col(xl_table, 2) == ["부서", "영업", "개발", "영업", "기획"] and off.list_snapshots("excel") == []
+    code, out = run_excel(capsys, *real)
+    assert code == 0 and out["changed_cells"] == 2 and _col(xl_table, 2) == ["부서", "판매", "개발", "판매", "기획"], out
+    assert len(off.list_snapshots("excel")) == 1
+
+
+def test_replace_dry_run_no_match_says_nothing_changes(xl_table, capsys):
+    code, out = run_excel(capsys, "replace", "--find", "없는글", "--replace", "x", "--dry-run")
+    assert code == 0 and out["count"] == 0 and "바뀔 것 없음" in out["preview"], out
+    assert "confirm_commands" not in out and out["agent_directive"].startswith("VERIFIED:") and "0건" in out["agent_directive"], out
+
+
+def test_range_clear_dry_run_then_confirm(xl_table, capsys):
+    argv = ["range", "--action", "clear", "--range", "A2:B3", "--type", "contents", "--dry-run"]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["count"] == 4 and out["filled_cells"] == 4 and "값이 있는 칸 4개" in out["preview"], out
+    real = _confirm_argv(out, argv)
+    assert _col(xl_table, 1) == ["이름", "가", "나", "다", "라"] and off.list_snapshots("excel") == []
+    code, out = run_excel(capsys, *real)
+    assert code == 0 and _col(xl_table, 1) == ["이름", None, None, "다", "라"] and xl_table.values.get((2, 2)) is None, out
+
+
+def test_range_clear_dry_run_empty_range_is_zero(xl_table, capsys):
+    code, out = run_excel(capsys, "range", "--action", "clear", "--range", "H20:J30", "--type", "contents", "--dry-run")
+    assert code == 0 and out["count"] == 0 and "바뀔 것 없음" in out["preview"] and "confirm_commands" not in out, out
+
+
+def test_range_move_dry_run_adds_overwrite_when_dest_has_values(xl_table, capsys):
+    argv = ["range", "--action", "move", "--range", "A1:A2", "--dest", "C1", "--dry-run"]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["count"] == 2 and out["overwrite_cells"] == 2 and "덮어써집니다" in out["preview"], out
+    cmd = split_command(out["confirm_commands"][0]["command"])
+    assert cmd[2:] == [a for a in argv if a != "--dry-run"] + ["--overwrite"], cmd
+    assert xl_table.values[(1, 3)] == "금액" and off.list_snapshots("excel") == [] and not any(e[0] == "Cut" for e in xl_table.log)
+    code, out = run_excel(capsys, *cmd[2:])
+    assert code == 0 and ("Cut", "$A$1:$A$2", "$C$1") in xl_table.log, out
+
+
+def test_range_move_dry_run_to_empty_dest(xl_table, capsys):
+    argv = ["range", "--action", "move", "--range", "A1:B2", "--dest", "F1", "--dry-run"]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["count"] == 4 and "overwrite_cells" not in out, out
+    real = _confirm_argv(out, argv)
+    code, out = run_excel(capsys, *real)
+    assert code == 0 and ("Cut", "$A$1:$B$2", "$F$1") in xl_table.log, out
+
+
+def test_sheet_delete_dry_run_then_confirm(xl, capsys):
+    app, wb = xl
+    _formula(ws_of(wb), 1, 5, "=요약!A1*2")          # 지울 시트를 참조 -> #REF!
+    argv = ["sheet", "--action", "delete", "--name", "요약", "--dry-run"]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["count"] == 1 and out["broken_refs"] == 1 and out["broken_ref_cells"] == ["Sheet1!E1"], out
+    assert "'요약'" in out["preview"] and "#REF!" in out["preview"] and "A1*2" not in out["preview"], out
+    real = _confirm_argv(out, argv)
+    assert sheet_names(wb) == ["Sheet1", "요약"] and off.list_snapshots("excel") == []
+    code, out = run_excel(capsys, *real)
+    assert code == 0 and sheet_names(wb) == ["Sheet1"], out
+
+
+def test_chart_delete_dry_run_then_confirm(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    ws.set(1, 1, "a")
+    ws.set(2, 1, 1.0)
+    run_excel(capsys, "chart", "--range", "A1:A2", "--title", "매출")
+    run_excel(capsys, "chart", "--range", "A1:A2", "--title", "비용")
+    snaps = len(off.list_snapshots("excel"))
+    argv = ["chart", "--action", "delete", "--name", "매출", "--dry-run"]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["count"] == 1 and out["planned"] == ["삭제: Sheet1!매출"] and "'매출'" in out["preview"], out
+    real = _confirm_argv(out, argv)
+    assert _names(wb)["Sheet1"] == ["매출", "비용"] and len(off.list_snapshots("excel")) == snaps
+    code, out = run_excel(capsys, *real)
+    assert code == 0 and _names(wb)["Sheet1"] == ["비용"], out
+    argv = ["chart", "--action", "delete", "--all", "--dry-run"]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["count"] == 1 and "1개" in out["preview"], out
+    real = _confirm_argv(out, argv)
+    assert _names(wb)["Sheet1"] == ["비용"]
+    code, out = run_excel(capsys, *real)
+    assert code == 0 and _names(wb)["Sheet1"] == [], out
+    code, out = run_excel(capsys, "chart", "--action", "delete", "--all", "--dry-run")
+    assert code == 0 and out["count"] == 0 and "바뀔 것 없음" in out["preview"] and "confirm_commands" not in out, out
+    code, out = run_excel(capsys, "chart", "--action", "list", "--dry-run")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out

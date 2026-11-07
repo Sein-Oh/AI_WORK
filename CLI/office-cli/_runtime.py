@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.80"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.81"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -930,8 +930,8 @@ class JsonArgumentParser(argparse.ArgumentParser):
             best = alias or next(iter(difflib.get_close_matches(m.group(1), choices, n=1, cutoff=0.6)), None)
             if best in DESTRUCTIVE_COMMANDS:
                 return (f" '{best}'은(는) 되돌리기 어려운 명령이라 추천하지 않습니다. 사용자가 이 명령을 원했는지 물으세요."
-                        f" [후보] {best}")
-            return f" [추천] {retry_replacing(m.group(1), best)}" if best else f" [후보] {', '.join(choices)}"
+                        + self._numbered(m.group(1), [best], destructive=True))
+            return f" [추천] {retry_replacing(m.group(1), best)}" if best else self._numbered(m.group(1), choices)
         m = re.search(r"unrecognized arguments: (.+)$", message)
         req = re.search(r"the following arguments are required: (.+)$", message)
         if not m and not req:
@@ -974,11 +974,23 @@ class JsonArgumentParser(argparse.ArgumentParser):
                     if o not in NO_FUZZY_OPTIONS and o[2:5] == f[2:5]]
             if near:
                 # 철자만 비슷한 옵션은 뜻이 다를 수 있어 묻게 함 ([추천]이면 LLM이 묻지 않고 실행)
-                return f" '{cmd}' 명령에는 {f} 옵션이 없습니다. 비슷한 옵션이 맞는지 사용자에게 물으세요. [후보] {near[0]}"
+                return f" '{cmd}' 명령에는 {f} 옵션이 없습니다. 비슷한 옵션이 맞는지 사용자에게 물으세요." + self._numbered(f, near)
         if not flags:
             return " 띄어쓰기가 있는 경로나 값은 큰따옴표로 감싸세요 (예: --target \"C:\\폴더 이름\\파일.xlsx\")."
         opts = [o for o in opts if o != "--help"]
         return f" '{cmd}' 명령에는 {', '.join(flags)} 옵션이 없습니다. 옵션: {', '.join(opts)}" if opts else ""
+
+    def _numbered(self, old: str, cands: List[str], destructive: bool = False) -> str:
+        """' [후보] 1) a 2) b'와 같은 번호의 confirm_commands (old를 후보로 바꾼 전체 명령, 사용법 단순성 2번).
+        전체 명령을 만들 수 없으면 번호 없는 '[후보] a, b'."""
+        shown = [str(c) for c in cands][:MAX_CANDIDATES]
+        cmds = [retry_replacing(old, c) for c in shown]
+        if not shown or not all(c.startswith("python ") for c in cmds):
+            return f" [후보] {', '.join(shown)}"
+        self._confirm = [{"purpose": f"'{old}' 대신 '{c}' (사용자가 고른 경우에만)", "command": cmd,
+                          **({"destructive": True} if destructive or c in DESTRUCTIVE_COMMANDS else {})}
+                         for c, cmd in zip(shown, cmds)]
+        return " [후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(shown, 1)) + " (사용자가 고른 번호의 confirm_commands를 실행)"
 
     def _same_meaning(self, argv: List[str], flags: List[str], opts: List[str], known: set) -> Optional[str]:
         """지어낸 옵션을 모두 같은 뜻의 옵션으로 바꿀 수 있으면 '... [추천] <고친 전체 명령>', 하나라도 못 바꾸면 None."""
@@ -1013,15 +1025,20 @@ class JsonArgumentParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> None:  # type: ignore[override]
         self.print_usage(sys.stderr)
+        self._confirm: List[Dict[str, Any]] = []
+        hint = self._hint(message)
         payload = {
             "status": "error",
             "tool": self.tool_name,
             "command": "",
             "error_type": "input",
-            "message": f"CLI 인자 오류: {message}." + self._hint(message),
+            "message": f"CLI 인자 오류: {message}." + hint,
             "agent_directive": "STOP_RETRY: CLI 인자가 잘못되었습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 실행하고, "
-                               f"없으면 {skill_name(self.tool_name)} 스킬(SKILL.md)의 명령 형식을 확인해 사용자에게 보고하세요.",
+                               "[후보]가 있으면 후보를 사용자에게 보여 주고 고른 번호의 confirm_commands를 1번 실행하고, "
+                               f"둘 다 없으면 {skill_name(self.tool_name)} 스킬(SKILL.md)의 명령 형식을 확인해 사용자에게 보고하세요.",
         }
+        if self._confirm:
+            payload["confirm_commands"] = self._confirm
         write_error_log(self.tool_name, None, payload)
         emit_json(payload)
         sys.exit(2)
@@ -1103,8 +1120,7 @@ def cleanup_work_dir(days: int = WORK_RETENTION_DAYS) -> int:
         for name in os.listdir(work):
             p = os.path.join(work, name)
             try:
-                if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
-                    os.remove(p)
+                if os.path.isfile(p) and os.path.getmtime(p) < cutoff and remove_file(p):
                     removed += 1
             except OSError:
                 continue
@@ -1557,6 +1573,18 @@ def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5, deadl
     raise last
 
 
+def remove_file(path: str) -> bool:
+    """파일을 지웁니다 (백신·탐색기가 잠깐 잡고 있으면 retry_fs로 기다렸다 다시, 1.4.81). 없으면 그냥 넘어감.
+    지웠으면 True, 한도를 넘겨도 못 지웠으면 False (남은 임시 파일·스냅샷이 결과를 바꾸지 않는 곳에서 씀)."""
+    try:
+        retry_fs(lambda: os.remove(path), attempts=4, delay=0.2)      # 최대 약 1.2초 (정리 때문에 오래 멈추지 않게)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
 def safe_write_text(path: str, text: str, encoding: str = "utf-8", deadline: Optional[float] = None) -> None:
     """임시 파일에 쓴 뒤 교체해, 쓰다가 중단돼도 기존 파일이 깨지지 않게 합니다. deadline은 retry_fs와 같음."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -1879,6 +1907,7 @@ def retry_replacing(old: str, new: str, option: Optional[str] = None) -> str:
     argv = list(CURRENT_ARGV or [])
     found = False
     part_sep = re.compile(r"([\\/,])")          # 경로의 한 부분('보관\\회의록'), 쉼표 목록의 한 값('word,ppt')
+    list_sep = re.compile(r"(\s*[;,]\s*)")       # 목록의 한 값 전체 ('a.pdf;C:\\폴더\\b.pdf'의 전체 경로, 'A;B'의 B)
     sheet_ref = re.compile(r"^(?:'" + re.escape(old.replace("'", "''")) + r"'|" + re.escape(old) + r")!")
     quoted_new = f"'{new.replace(chr(39), chr(39) * 2)}'" if re.search(r"[^\w가-힣]", new) else new
     for i, a in enumerate(argv):
@@ -1889,6 +1918,10 @@ def retry_replacing(old: str, new: str, option: Optional[str] = None) -> str:
             argv[i] = f"{key}={new}"
         elif sheet_ref.match(a):
             argv[i] = sheet_ref.sub(lambda _m: quoted_new + "!", a, count=1)
+        elif old in [p.strip() for p in list_sep.split(val if eq and key.startswith("--") else a)]:
+            text = val if eq and key.startswith("--") else a
+            fixed = "".join(new if p.strip() == old else p for p in list_sep.split(text))
+            argv[i] = f"{key}={fixed}" if eq and key.startswith("--") else fixed
         elif old in part_sep.split(val if eq and key.startswith("--") else a):
             text = val if eq and key.startswith("--") else a
             fixed = "".join(new if p == old else p for p in part_sep.split(text))

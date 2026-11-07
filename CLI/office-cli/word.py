@@ -6,8 +6,8 @@
     comment  검토 메모 목록 (--action add: 기준 글에 메모 달기, --file CSV로 여러 개)
     revisions 변경 내용 추적(수정 기록) 목록
     info     문서 요약 (페이지/단어/글자 수, 표, 그림, 제목 목록). --all: 열린 문서 전체 목록
-    write    텍스트/마크다운/표/그림/요약상자/목차 넣기 (기본: 문서 끝, --anchor로 위치 지정)
-    replace  찾아 바꾸기 (+서식). 머리글/바닥글/글상자 포함
+    write    텍스트/마크다운/표/그림/요약상자/목차 넣기 (기본: 문서 끝, --anchor로 위치 지정, --dry-run)
+    replace  찾아 바꾸기 (+서식). 머리글/바닥글/글상자 포함 (--dry-run)
     fill     서식 문서 채우기: 값 파일(자리, 값)의 {{이름}} 자리와 표 칸(표2!R3C4)을 한 번에 (--dry-run, --overwrite)
     export   PDF / DOCX 사본 저장 (원본은 그대로, --page-number는 사본에만)
 
@@ -142,6 +142,7 @@ def _com_units(doc: Any, with_start: bool = False) -> List[Dict[str, Any]]:
 WD_PAGE_NUMBER = 3          # wdActiveEndPageNumber: 문서 처음부터 센 실제 쪽 (PDF 뷰어의 쪽과 같음)
 OUTLINE_MAX = 200           # outline 한 번에 보여 줄 제목 수
 LIST_MAX = 100              # comment/revisions 한 번에 보여 줄 항목 수
+PLAN_MAX = 50               # --dry-run 미리보기(planned)에 보여 줄 항목 수
 _SPEC_RE = re.compile(r"\d+(?:-\d*)?")
 
 
@@ -248,9 +249,10 @@ def _find_section(units: List[Dict[str, Any]], query: str, occurrence: Optional[
             raise rt.InputError(f"--occurrence는 1~{len(hits)} 사이여야 합니다 ('{query}' 제목 {len(hits)}개).")
         head = hits[occurrence - 1]
     elif len(hits) > 1:
-        raise rt.ambiguous(f"'{query}'이(가) 들어간 제목이 {len(hits)}개라 고를 수 없습니다. 사용자에게 번호를 고르게 한 뒤 "
-                           "--occurrence 번호를 붙이세요.",
-                           [f"{i}: 단락 {h['no']} {_preview(h['text'], 40)}" for i, h in enumerate(hits, 1)])
+        raise rt.ambiguous(f"'{query}'이(가) 들어간 제목이 {len(hits)}개라 고를 수 없습니다. 사용자에게 번호를 고르게 하세요 "
+                           "(고른 번호의 confirm_commands가 --occurrence를 붙인 명령).",
+                           [f"{i}: 단락 {h['no']} {_preview(h['text'], 40)}" for i, h in enumerate(hits, 1)],
+                           option="--occurrence", values=[str(i) for i in range(1, len(hits) + 1)])
     else:
         head = hits[0]
     i = units.index(head)
@@ -321,11 +323,13 @@ def cmd_read(args) -> Dict[str, Any]:
         return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. " + rt.INTO_OTHER_DOC,
                           **result)
-    if filtered and not selected:
-        result.update(paragraphs=[], truncated=False)
-        return rt.ok(TOOL, "read", f"{name}: {selection}에 글이 있는 단락 없음 (count 0)",
-                     f"VERIFIED: 0건. {selection}에는 글이 있는 단락이 없습니다 (표·그림만 있거나 빈 쪽). 사용자에게 그대로 알리세요.",
-                     **result)
+    if not selected:
+        # 빈 결과 명시 (ACI 설계 권장 2번): 필터 없이 읽은 빈 문서도 count 0 (1.4.81)
+        where = selection or ("문서" if not units else f"단락 {max(1, args.start)}부터")
+        result.update(paragraphs=[], truncated=False, count=0)
+        return rt.ok(TOOL, "read", f"{name}: {where}에 글이 있는 단락 없음 (count 0)",
+                     f"VERIFIED: 0건. {where}에는 글이 있는 단락이 없습니다 (찾은 항목 없음: 표·그림만 있거나 빈 문서·쪽). "
+                     "사용자에게 그대로 알리세요.", **result)
     shown: List[Dict[str, Any]] = []
     used = 0
     text_cut = 0
@@ -949,15 +953,19 @@ def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str
     if len(hits) > 1:
         more = "개 이상" if len(hits) >= ANCHOR_MAX_HITS else "개"
         raise rt.ambiguous(
-            f"'{anchor}'이(가) 단락 {len(hits)}{more}에 있어 어느 곳인지 고를 수 없습니다. 사용자에게 번호를 고르게 한 뒤 "
-            "--occurrence 번호를 붙이거나, 한 곳에만 있는 더 긴 문구를 --anchor로 쓰세요.",
-            [f"{i}: {_preview(str(h.Text))}" for i, h in enumerate(hits, 1)])
+            f"'{anchor}'이(가) 단락 {len(hits)}{more}에 있어 어느 곳인지 고를 수 없습니다. 사용자에게 번호를 고르게 하세요 "
+            "(고른 번호의 confirm_commands가 --occurrence를 붙인 명령). 한 곳에만 있는 더 긴 문구를 --anchor로 써도 됩니다.",
+            [f"{i}: {_preview(str(h.Text))}" for i, h in enumerate(hits, 1)],
+            option="--occurrence", values=[str(i) for i in range(1, len(hits) + 1)])
     return hits[0]
 
 
-def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Optional[int] = None) -> Tuple[int, str]:
+def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Optional[int] = None,
+                     preview: Optional[Dict[str, Any]] = None) -> Tuple[int, str]:
     """삽입 위치(문자 오프셋)와 설명. 앵커가 있으면 그 단락의 앞/뒤, replace면 앵커 단락을 지우고 그 자리.
-    앵커가 여러 단락에 있으면 occurrence(1부터)로 고른 단락, 없으면 오류 (첫 번째를 임의로 고르지 않음)."""
+    앵커가 여러 단락에 있으면 occurrence(1부터)로 고른 단락, 없으면 오류 (첫 번째를 임의로 고르지 않음).
+    preview(dict)를 주면 --dry-run: 문서를 바꾸지 않고(새 단락 만들기·앵커 단락 지우기 없음) 위치와 설명만,
+    replace면 지워질 단락 글을 preview['removed']에 담습니다."""
     if not anchor:
         end = doc.Content.End - 1
         last = doc.Range(end, end).Paragraphs(1).Range
@@ -966,7 +974,7 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
                 raise rt.InputError("문서가 표로 시작해 맨 앞에 넣으면 첫 칸 안에 들어갑니다. 표 뒤 단락의 글을 --anchor로 지정해 "
                                     "--pos before로 넣거나, Word에서 표 앞에 빈 줄을 만든 뒤 다시 실행하세요.", no_fallback=True)
             return 0, "문서 처음"
-        if str(last.Text).strip():                    # 마지막 단락에 내용이 있으면 새 단락에서 시작
+        if str(last.Text).strip() and preview is None:     # 마지막 단락에 내용이 있으면 새 단락에서 시작
             doc.Range(end, end).InsertAfter("\r")
             end = doc.Content.End - 1
         return end, "문서 끝"
@@ -983,12 +991,15 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
         return int(para.Start), f"'{anchor}' 단락 앞"
     if pos == "replace":
         start = int(para.Start)
+        if preview is not None:
+            preview["removed"] = str(para.Text)
+            return start, f"'{anchor}' 단락 자리"
         if int(para.End) < int(doc.Content.End):
             para.Delete()                                  # 단락 전체(단락 기호 포함)를 지우고 그 자리에 넣음
         else:
             doc.Range(para.Start, para.End - 1).Delete()  # 마지막 단락은 단락 기호를 남김
         return start, f"'{anchor}' 단락 자리"
-    if int(para.End) >= int(doc.Content.End):
+    if int(para.End) >= int(doc.Content.End) and preview is None:
         # 마지막 단락 뒤에는 글을 둘 수 없어 그대로 넣으면 앵커 단락에 붙고 스타일이 바뀜: 새 단락을 먼저 만듦
         end = int(doc.Content.End) - 1
         doc.Range(end, end).InsertAfter("\r")
@@ -1018,9 +1029,14 @@ def cmd_write(args) -> Dict[str, Any]:
             file_text = rt.read_text_file(path)
     image = rt.resolve_input_path(args.image, "그림 파일") if args.image else None
 
-    with off.open_target("word", args.target, readonly=False, focus=not args.no_focus, create=True,
+    with off.open_target("word", args.target, readonly=args.dry_run, focus=not args.no_focus, create=True,
                          tool=TOOL, command="write") as t:
         doc = t.doc
+        if args.dry_run:
+            # 바꾸지 않음: 읽기 세션이라 되돌리기 지점도 남지 않음
+            seen: Dict[str, Any] = {}
+            _, where = _insert_position(doc, args.anchor, args.pos, args.occurrence, preview=seen)
+            return _write_dry_run(args, t.resolved(), where, seen.get("removed"), text)
         start, where = _insert_position(doc, args.anchor, args.pos, args.occurrence)
         w = Writer(doc, start, theme)
         if args.page_break:
@@ -1063,6 +1079,41 @@ def cmd_write(args) -> Dict[str, Any]:
     return rt.ok(TOOL, "write", preview, "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
                  + (" 주의: warnings를 사용자에게 알리세요." if w.warnings else ""),
                  verified=True, target_resolved=resolved, inserted=w.created, **extra)
+
+
+def _confirm_without_dry_run(purpose: str, destructive: bool) -> Dict[str, Any]:
+    """confirm_commands 항목: 지금 실행한 명령에서 --dry-run만 뺀 전체 명령 (사용자가 '예'라고 하면 그대로 실행)."""
+    argv = [a for a in (rt.CURRENT_ARGV or []) if a != "--dry-run"]
+    return rt.next_command("word.py", argv, purpose, destructive=destructive)
+
+
+DRY_RUN_DIRECTIVE = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
+                     "confirm_commands[0]을 그대로 실행하세요.")
+
+
+def _write_dry_run(args, resolved: Dict[str, Any], where: str, removed: Optional[str], text: Optional[str]) -> Dict[str, Any]:
+    """write --dry-run: 넣을 위치와 넣을 것(그리고 --pos replace면 지워질 단락)만 알려 줌."""
+    parts: List[str] = []
+    if args.page_break:
+        parts.append("쪽 나누기")
+    if args.toc:
+        parts.append("목차")
+    if text is not None:
+        kind = "요약 상자" if args.callout else (f"제목{args.heading}" if args.heading else ("문서 제목" if args.title else "글"))
+        parts.append(f"{kind} '{_preview(text, 30)}'")
+    if args.file:
+        parts.append(f"파일 {os.path.basename(args.file.strip().strip(chr(34)))}")
+    if args.image:
+        parts.append(f"그림 {os.path.basename(args.image.strip().strip(chr(34)))}")
+    planned = ([f"지우기: 단락 '{_preview(removed, 40)}'"] if removed is not None else []) + [f"넣기: {p}" for p in parts]
+    preview = f"미리보기: {resolved['name']}의 {where}에 넣습니다: {', '.join(parts)}"
+    if removed is not None:
+        preview += f". 지워질 단락: '{_preview(removed, 40)}'"
+    replace = removed is not None
+    return rt.ok(TOOL, "write", preview + " (바꾸지 않음)", DRY_RUN_DIRECTIVE, dry_run=True, target_resolved=resolved,
+                 count=1, planned=planned, truncated=False,
+                 confirm_commands=[_confirm_without_dry_run("앵커 단락을 지우고 그 자리에 넣기 실행" if replace else "내용 넣기 실행",
+                                                            destructive=replace)])
 
 
 def _verify_inserted(doc: Any, start: int, end: int, contents: List[str], mode: str = "auto") -> List[str]:
@@ -1172,8 +1223,11 @@ def cmd_replace(args) -> Dict[str, Any]:
     counts: Dict[str, int] = {}
     same: Dict[str, int] = {}          # 바꿀 글이 찾는 글과 같고 서식도 없어 바꾸지 않은 문구: 찾은 곳 수
     limit_hit = False
-    with off.open_target("word", args.target, readonly=False, focus=not args.no_focus,
+    with off.open_target("word", args.target, readonly=args.dry_run, focus=not args.no_focus,
                          tool=TOOL, command="replace") as t:
+        if args.dry_run:
+            # 바꾸지 않음: 읽기 세션이라 되돌리기 지점도 남지 않음
+            return _replace_dry_run(t.doc, t.resolved(), mapping, formatting, args)
         for find, rep in mapping.items():
             if find == rep and not formatting:
                 # 바뀌는 것이 없음: 세기만 함 (바꾼 것으로 보고하지 않고 되돌리기 지점도 남기지 않음)
@@ -1249,6 +1303,93 @@ def cmd_replace(args) -> Dict[str, Any]:
     if problems:
         return rt.ok_unverified(TOOL, "replace", preview, problems, **result)
     return rt.ok(TOOL, "replace", preview, "VERIFIED: 문서를 다시 찾아 확인했습니다.", verified=True, **result)
+
+
+def _format_names(args) -> List[str]:
+    names = []
+    if args.bold is not None:
+        names.append("굵게")
+    if args.italic is not None:
+        names.append("기울임")
+    if args.color:
+        names.append(f"글자색 {args.color}")
+    if args.size:
+        names.append(f"크기 {args.size:g}")
+    if args.highlight:
+        names.append(f"형광펜 {args.highlight}")
+    return names
+
+
+def _replace_plan_line(rng: Any, find: str, rep: str, fmt: str) -> str:
+    """미리보기 한 줄: 찾은 곳 앞뒤 글의 바꾸기 전 -> 바꾼 뒤. 단락을 읽지 못하면 찾은 글만."""
+    head = f"'{_preview(find, 20)}'"
+    try:
+        found = str(rng.Text)
+        para = rng.Paragraphs(1).Range
+        ptext = str(para.Text)
+        at = int(rng.Start) - int(para.Start)
+        if not 0 <= at <= len(ptext) or ptext[at:at + len(found)] != found:
+            raise ValueError("위치가 맞지 않음")
+        lo, hi = max(0, at - 15), at + len(found) + 15
+        before = ("..." if lo else "") + ptext[lo:hi]
+        after = ("..." if lo else "") + ptext[lo:at] + rep + ptext[at + len(found):hi]
+        line = f"{head}: {_preview(before, 45)} -> {_preview(after, 45)}"
+    except Exception:
+        line = f"{head} -> '{_preview(rep, 20)}'"
+    return line + (f" ({fmt})" if fmt else "")
+
+
+def _replace_dry_run(doc: Any, resolved: Dict[str, Any], mapping: Dict[str, str], formatting: bool, args) -> Dict[str, Any]:
+    """replace --dry-run: 실제 바꾸기와 같은 규칙으로 바뀔 곳만 세고 보여 줌 (문서는 바꾸지 않음)."""
+    fmt = ", ".join(_format_names(args))
+    counts: Dict[str, int] = {}
+    same: Dict[str, int] = {}
+    planned: List[str] = []
+    limit_hit = False
+    for find, rep in mapping.items():
+        if find == rep and not formatting:
+            # 실제 바꾸기와 같이 세기만 함 (바뀌는 것이 없음)
+            hits = _count_text(doc, find, args.match_case, args.whole_word)
+            if hits:
+                same[find] = hits
+    for story in _stories(doc):
+        for find, rep in mapping.items():
+            if find == rep and not formatting:
+                continue
+            n = 0
+            rng = story.Duplicate
+            while _find(rng, find, args.match_case, args.whole_word):
+                if not formatting and str(rng.Text) == rep:
+                    same[find] = same.get(find, 0) + 1          # 이미 바꿀 글 그대로: 바뀌지 않음
+                else:
+                    n += 1
+                    if len(planned) <= PLAN_MAX:
+                        planned.append(_replace_plan_line(rng, find, rep, fmt))
+                    if n >= 5000:
+                        limit_hit = True
+                        break
+                rng.Collapse(0)
+            if n:
+                counts[find] = counts.get(find, 0) + n
+    total = sum(counts.values())
+    fields: Dict[str, Any] = {"dry_run": True, "target_resolved": resolved, "count": total, "by_text": counts,
+                              "planned": planned[:PLAN_MAX], "truncated": len(planned) > PLAN_MAX}
+    if same:
+        fields["unchanged_same_text"] = same
+    if not total:
+        found = sum(same.values())
+        why = f"찾은 {found}곳은 이미 바꿀 글과 같습니다" if found else "일치하는 문구가 없습니다"
+        return rt.ok(TOOL, "replace", f"미리보기: 바뀔 것 없음 (0곳), {why} (바꾸지 않음)",
+                     f"VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. count 0: 바뀔 것 없음({why}). "
+                     "실행하지 말고 검색어를 임의로 바꾸지도 말고 사용자에게 알리세요.", **fields)
+    if limit_hit:
+        fields["limit_reached"] = True
+    more = " 이상" if limit_hit else ""
+    preview = (f"미리보기: {total}곳{more} 바뀝니다: "
+               + ", ".join(f"'{_preview(k, 20)}' {v}곳 -> '{_preview(mapping[k], 20)}'" for k, v in counts.items())
+               + (f" ({fmt})" if fmt else "") + " (바꾸지 않음)")
+    fields["confirm_commands"] = [_confirm_without_dry_run(f"찾아 바꾸기 실행 ({total}곳{more})", destructive=True)]
+    return rt.ok(TOOL, "replace", preview, DRY_RUN_DIRECTIVE, **fields)
 
 
 def _count_text(doc: Any, text: str, match_case: bool, whole_word: bool, limit: int = 5000) -> int:
@@ -1661,11 +1802,8 @@ def cmd_export(args) -> Dict[str, Any]:
                     work.Close(SaveChanges=0)
                 except Exception:
                     pass
-            if tmp and os.path.exists(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+            if tmp:
+                rt.remove_file(tmp)
         resolved = t.resolved()
     return rt.ok_file(TOOL, "export", f"{resolved['name']}을(를) {ext[1:].upper()}로 저장: {out}", out,
                       "VERIFIED: 저장한 파일을 확인했습니다. 원본 문서는 바뀌지 않았습니다.", target_resolved=resolved, output_file=out,
@@ -1732,6 +1870,7 @@ def build_cli():
     p.add_argument("--pos", choices=["after", "before", "replace", "end", "start"], default="after",
                    help="앵커 기준 위치 (앵커 없으면 end/start만 의미, 기본: 문서 끝)")
     p.add_argument("--theme", help=f"표/요약 상자 색: {', '.join(off.THEMES)}")
+    p.add_argument("--dry-run", action="store_true", help="넣지 않고 넣을 위치와 내용만 미리 보기 (--pos replace면 지워질 단락도)")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)
@@ -1745,6 +1884,7 @@ def build_cli():
     p.add_argument("--color", help="글자색")
     p.add_argument("--size", type=float, help="글자 크기")
     p.add_argument("--highlight", help="형광펜 (yellow, green, pink, blue, red, gray, none)")
+    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 곳만 미리 보기")
 
     p = sub.add_parser("fill", help="서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 채우기")
     common(p, write=True)

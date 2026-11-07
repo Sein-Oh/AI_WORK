@@ -4,7 +4,7 @@ description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.80"
+  version: "1.4.81"
   platform: windows
 ---
 

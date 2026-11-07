@@ -543,7 +543,7 @@ def _select(infos: List[Dict[str, Any]], names: Optional[Sequence[str]],
         hits = [a for a in infos if part.casefold() in a["name"].casefold()]
         if not hits:
             raise rt.ambiguous(f"--name '{part}'에 맞는 첨부가 없습니다. 사용자에게 첨부를 고르게 하세요.", cands,
-                               log_message="--name 값에 맞는 첨부가 없습니다.")
+                               log_message="--name 값에 맞는 첨부가 없습니다.", replace=part)
         chosen.update((a["index"], a) for a in hits)
     for token in idx:
         m = re.fullmatch(r"(\d+)(?:-(\d+))?", token)
@@ -554,7 +554,8 @@ def _select(infos: List[Dict[str, Any]], names: Optional[Sequence[str]],
         if not hits:
             raise rt.ambiguous(f"--index {token}에 해당하는 첨부가 없습니다 (첨부 {len(infos)}개, 번호는 1부터). "
                                "사용자에게 첨부를 고르게 하세요.", cands,
-                               log_message=f"--index {token}에 해당하는 첨부가 없습니다 (첨부 {len(infos)}개).")
+                               log_message=f"--index {token}에 해당하는 첨부가 없습니다 (첨부 {len(infos)}개).",
+                               replace=token, values=[str(a["index"]) for a in infos])
         chosen.update((a["index"], a) for a in hits)
     return [chosen[k] for k in sorted(chosen)]
 
@@ -745,7 +746,8 @@ def _attach_file(spec: str) -> str:
     close = rt.suggest(name, files, 5)
     if close:
         raise rt.ambiguous(f"첨부 파일 '{name}'이(가) 없습니다 (폴더: {folder}). 아무것도 만들지 않았습니다. "
-                           "같은 폴더의 비슷한 파일 중에서 사용자에게 고르게 하세요.", [os.path.join(folder, c) for c in close])
+                           "같은 폴더의 비슷한 파일 중에서 사용자에게 고르게 하세요.", [os.path.join(folder, c) for c in close],
+                           replace=raw)
     raise rt.InputError(f"첨부 파일이 없습니다: {raw}. 아무것도 만들지 않았습니다. 사용자에게 파일의 전체 경로를 확인하세요.")
 
 

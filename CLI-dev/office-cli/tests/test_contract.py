@@ -361,6 +361,25 @@ def test_retry_fs_retries_only_transient_errors(monkeypatch):
     assert rt.retry_fs(locked_twice) == "ok" and state["n"] == 3
 
 
+def test_remove_file_waits_for_transient_lock(tmp_path, monkeypatch):
+    """1.4.81: 스냅샷·캐시·임시 파일 지우기는 백신이 잠깐 잡아도 다시 시도 (전에는 os.remove 한 번, 실패하면 파일이 남음)."""
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    f = tmp_path / "snap.tmp"
+    f.write_text("x", encoding="utf-8")
+    real, state = os.remove, {"n": 0}
+
+    def flaky(path):
+        state["n"] += 1
+        if state["n"] < 3:
+            raise PermissionError("잠김")
+        real(path)
+    monkeypatch.setattr(rt.os, "remove", flaky)
+    assert rt.remove_file(str(f)) is True and not f.exists() and state["n"] == 3
+    assert rt.remove_file(str(f)) is False                     # 없으면 그냥 넘어감 (오류 없음)
+    monkeypatch.setattr(rt.os, "remove", lambda p: (_ for _ in ()).throw(PermissionError("잠김")))
+    assert rt.remove_file(str(tmp_path / "x")) is False         # 한도를 넘겨도 오류를 올리지 않음
+
+
 def test_lock_fallback_reports_recovered(tmp_path, monkeypatch):
     monkeypatch.setattr(rt, "RECOVERED", [])
     monkeypatch.setattr(rt.time, "sleep", lambda s: None)
@@ -462,7 +481,9 @@ def test_destructive_command_typo_is_candidate_not_recommendation(argv, want):
                           encoding="utf-8")
     payload = json.loads([ln for ln in proc.stdout.splitlines() if ln.strip()][-1])
     assert proc.returncode == 2 and "[추천]" not in payload["message"], payload
-    assert f"[후보] {want}" in payload["message"], payload
+    assert f"[후보] 1) {want}" in payload["message"], payload
+    cmd = payload["confirm_commands"][0]                    # 고른 번호의 전체 명령, 되돌리기 어려운 명령 표시
+    assert cmd["command"].startswith("python ") and f" {want}" in cmd["command"] and cmd["destructive"] is True, payload
 
 
 def test_destructive_flag_marks_only_overwrite_delete_send():

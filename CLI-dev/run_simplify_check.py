@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""사용법 단순화(ml-kit 2.9.71, office-cli 1.4.79) 실기 점검. 사람이 실행 (Gemma 없이, 집 PC용).
+"""사용법 단순화(ml-kit 2.9.71~2.9.73, office-cli 1.4.79~1.4.81) 실기 점검. 사람이 실행 (Gemma 없이, 집 PC용).
 
     python run_simplify_check.py [--label 집PC] [--dir 시험폴더]
 
@@ -313,6 +313,108 @@ def office_checks(env, book, work):
     check("O6", "--cards [추천]", o6)
 
 
+def new_checks(env, data, book, work):
+    """ml-kit 2.9.73 · office-cli 1.4.81: 남은 [후보] 번호, --query 구분자, 빈 결과, --dry-run 미리보기."""
+    T = os.path.join(ML, "ml_train.py")
+    X, W, PP, R = (os.path.join(OC, f) for f in ("excel.py", "word.py", "ppt.py", "reader.py"))
+
+    def c1():
+        code, out = run_tool(env, T, "-f", data, "-x", "반응온도(°C),소비전력(kW)", "-y", "생산효율(%)", "--data-ro", "1")
+        follow(env, "C1", "ml-kit 옵션 오타 --data-ro -> [후보] 1) --data-row + confirm_commands[0] -> 학습", code, out, kind="후보",
+               need_code=2)
+    check("C1", "옵션 [후보] 번호", c1)
+
+    def c2():
+        txt = os.path.join(work, "규격 메모.txt")
+        with open(txt, "w", encoding="utf-8") as f:
+            f.write("정격 전압은 220 V이다.\n절연 저항은 100 MΩ 이상.\n")
+        code, out = run_tool(env, R, "search", "--query", "정격 AND 전압", "--file", txt)
+        out2 = follow(env, "C2", "reader --query 옛 AND -> [추천] ; 전체 명령 -> 검색 (1건 이상)", code, out, need_code=1)
+        if out2 is not None and not out2.get("count"):
+            record("C2b", "고친 --query로 찾은 건수", False, f"count={out2.get('count')}")
+    check("C2", "--query [추천]", c2)
+
+    def c3():
+        import docx
+        path = os.path.join(work, "장절 두 번.docx")
+        d = docx.Document()
+        for h, body in (("검증 방법", "장비 검증"), ("검증 방법", "SW 검증")):
+            d.add_heading(h, level=1)
+            d.add_paragraph(body)
+        d.save(path)
+        code, out = run_tool(env, W, "read", "--target", path, "--section", "검증 방법")
+        follow(env, "C3", "닫힌 워드 같은 제목 둘 -> [후보] 1) 2) + confirm_commands[0](--occurrence 1) -> 읽기", code, out,
+               kind="후보", need_code=1)
+    check("C3", "--occurrence [후보]", c3)
+
+    def e1():
+        code, out = run_tool(env, X, "read", "--target", book, "--sheet", "요약", "--range", "H10:I12")
+        good = code == 0 and out.get("count") == 0 and "찾은 항목 없음" in str(out.get("agent_directive"))
+        record("E1", "닫힌 엑셀 빈 범위 읽기 -> count 0 + '찾은 항목 없음'", good, str(out)[:200])
+    check("E1", "빈 결과", e1)
+
+    def dry(tid, title, script, path_src, name, argv, unchanged):
+        """--dry-run: 파일이 그대로인지 보고, confirm_commands[0]을 셸로 실행해 실제로 바뀌는지 (Office 필요)."""
+        if not WIN:
+            return record(tid, title, None, "Windows + Office에서만")
+        path = os.path.join(work, name)
+        shutil.copy(path_src, path) if path_src else None
+        before = unchanged(path)
+        code, out = run_tool(env, script, *[a.replace("{p}", path) for a in argv], "--dry-run")
+        cmds = (out or {}).get("confirm_commands") or []
+        if not (ok_(out) and out.get("dry_run") and cmds and "--dry-run" not in cmds[0]["command"]):
+            return record(tid, title, False, f"미리보기 응답: {str(out)[:200]}")
+        if unchanged(path) != before:
+            return record(tid, title, False, "미리보기인데 파일이 바뀜")
+        c2, out2 = run_shell(env, cmds[0]["command"])
+        record(tid, title, ok_(out2) and unchanged(path) != before,
+               "" if ok_(out2) else f"확인 명령 exit {c2}: {str((out2 or {}).get('message', ''))[:200]}")
+
+    def xl_state(path):
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        return [(ws.title, [[c.value for c in r] for r in ws.iter_rows()]) for ws in wb.worksheets]
+
+    def d1():
+        dry("D1", "닫힌 엑셀 replace --dry-run -> 그대로 -> confirm_commands[0] -> 바뀜 (Excel)", X, book, "바꾸기.xlsx",
+            ["replace", "--target", "{p}", "--sheet", "요약", "--find", "영업", "--replace", "영업1팀"], xl_state)
+    check("D1", "excel replace --dry-run", d1)
+
+    def d2():
+        dry("D2", "닫힌 엑셀 sheet delete --dry-run -> 그대로 -> confirm_commands[0] -> 시트 지움 (Excel)", X, book, "시트지우기.xlsx",
+            ["sheet", "--target", "{p}", "--action", "delete", "--sheet", "데이터"], xl_state)
+    check("D2", "excel sheet delete --dry-run", d2)
+
+    def d3():
+        if not WIN:
+            return record("D3", "닫힌 워드 replace --dry-run (Word)", None, "Windows + Office에서만")
+        import docx
+        src = os.path.join(work, "_원본.docx")
+        d = docx.Document()
+        d.add_paragraph("시험 온도는 25 도이다.")
+        d.save(src)
+        dry("D3", "닫힌 워드 replace --dry-run -> 그대로 -> confirm_commands[0] -> 바뀜 (Word)", W, src, "바꾸기.docx",
+            ["replace", "--target", "{p}", "--find", "25 도", "--replace", "23 도"],
+            lambda p: [x.text for x in docx.Document(p).paragraphs])
+    check("D3", "word replace --dry-run", d3)
+
+    def d4():
+        if not WIN:
+            return record("D4", "닫힌 PPT slide delete --dry-run (PowerPoint)", None, "Windows + Office에서만")
+        import pptx
+        src = os.path.join(work, "_원본.pptx")
+        try:
+            prs = pptx.Presentation()
+            for t in ("하나", "둘"):
+                prs.slides.add_slide(prs.slide_layouts[5]).shapes.title.text = t
+            prs.save(src)
+        except Exception as e:
+            return record("D4", "닫힌 PPT slide delete --dry-run", None, f"python-pptx 기본 템플릿 없음 ({type(e).__name__})")
+        dry("D4", "닫힌 PPT slide delete --dry-run -> 그대로 -> confirm_commands[0] -> 지움 (PowerPoint)", PP, src, "지우기.pptx",
+            ["slide", "--target", "{p}", "--action", "delete", "--slide", "2"], lambda p: len(pptx.Presentation(p).slides))
+    check("D4", "ppt slide delete --dry-run", d4)
+
+
 def _bom(path, rows):
     import openpyxl
     wb = openpyxl.Workbook()
@@ -425,6 +527,8 @@ def main():
     office_checks(env, book, work)
     log("[INFO] BOM 비교 점검")
     bom_checks(env, work)
+    log("[INFO] ml-kit 2.9.73 · office-cli 1.4.81 점검 ([후보] 번호, --query, 빈 결과, --dry-run)")
+    new_checks(env, data, book, work)
     setup_checks()
     path, n = write_report(args.label, work, started)
     log(f"[STATUS] PASS {n['PASS']}, FAIL {n['FAIL']}, SKIP {n['SKIP']} -> {path}")

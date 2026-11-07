@@ -16,7 +16,7 @@
 예:
     python reader.py index --folder "C:\\docs\\규격"
     python reader.py read --file "C:\\docs\\보고서.pdf" --pages 1-3
-    python reader.py search --query "마일스톤 AND 일정" --save "근거.xlsx"
+    python reader.py search --query "마일스톤;일정" --save "근거.xlsx"
     python reader.py search --query "단가" --file "C:\\docs\\견적" --pages 3-7 --section "SCOPE"
     python reader.py list --name 규격
 """
@@ -2091,8 +2091,8 @@ def _section_not_found(spec: str, units: List[Dict[str, Any]], pages: Optional[s
     near = rt.suggest(spec, names, n=5)
     if near:
         tail = " 비슷한 장절이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요."
-        return rt.ambiguous(head + tail, near)
-    return rt.ambiguous(head + " 비슷한 장절이 없습니다. 이 문서의 장절 중에서 사용자에게 고르게 하세요.", names)
+        return rt.ambiguous(head + tail, near, replace=spec)
+    return rt.ambiguous(head + " 비슷한 장절이 없습니다. 이 문서의 장절 중에서 사용자에게 고르게 하세요.", names, replace=spec)
 
 
 # ==============================================================================
@@ -2483,7 +2483,7 @@ def _bad_regex(query: str, e: "re.error", args: Any = None) -> rt.InputError:
 
 
 def build_matcher(query: str, regex: bool, args: Any = None):
-    """검색 조건을 함수로 만듭니다. 'A AND B', 'A OR B' 조합 지원 (AND가 OR보다 먼저 묶임).
+    """검색 조건을 함수로 만듭니다. 'A;B'(그리고), 'A|B'(또는) 조합 지원 (;가 |보다 먼저 묶임).
     반환: match_fn(text) -> 강조할 단어 목록 또는 None. 대소문자는 늘 무시."""
     flags = re.IGNORECASE
     if regex:
@@ -2523,29 +2523,32 @@ def build_matcher(query: str, regex: bool, args: Any = None):
     return match_terms
 
 
-def parse_query(query: str) -> List[List[str]]:
-    """'A AND B OR "C D"' -> [['A', 'B'], ['C D']]. AND/OR는 대소문자 무관(AND가 OR보다 먼저 묶임),
-    따옴표로 묶은 글은 구문 그대로(따옴표는 검색어가 아님), 연산자 없이 이어진 단어는 한 구문."""
-    groups: List[List[str]] = [[]]
-    words: List[str] = []
+_QUERY_PART = re.compile(r'"[^"]*"|\u201c[^\u201d]*\u201d|[;|]|[^;|"\u201c]+')
+_OLD_QUERY_OP = re.compile(r'"[^"]*"|\u201c[^\u201d]*\u201d|(?<!\S)(AND|OR)(?!\S)')
 
-    def push() -> None:
-        if words:
-            groups[-1].append(" ".join(words))
-            words.clear()
-    for tok in re.findall(r'"[^"]*"|\u201c[^\u201d]*\u201d|\S+', unicodedata.normalize("NFC", query or "")):
-        if tok.upper() == "AND":
-            push()
-        elif tok.upper() == "OR":
-            push()
+
+def parse_query(query: str) -> List[List[str]]:
+    """'A;B|C D' -> [['A', 'B'], ['C D']]. 저장소 구분자 규칙(AGENTS.md 사용법 단순성 3번): 그리고는 ;, 또는은 |
+    (;가 먼저 묶임, excel --where·ml-kit --where와 같음). 띄어 쓴 단어는 한 구문. ;나 |가 든 글은 큰따옴표로 묶음
+    (따옴표는 검색어가 아님). 1.4.81: 옛 'A AND B', 'A OR B'(대문자 낱말)는 받지 않고 고친 전체 명령 [추천]."""
+    text = unicodedata.normalize("NFC", query or "")
+    if any(m.group(1) for m in _OLD_QUERY_OP.finditer(text)):
+        fixed = _OLD_QUERY_OP.sub(lambda m: {"AND": ";", "OR": "|"}.get(m.group(1) or "", m.group(0)), text)
+        fixed = re.sub(r"\s*([;|])\s*", r"\1", fixed).strip()
+        raise rt.InputError(f"--query의 AND/OR는 쓰지 않습니다. 그리고는 ;, 또는은 |로 씁니다 (예: --query \"온도;습도|압력\"). "
+                            f"[추천] {rt.retry_replacing(query, fixed, '--query')}",
+                            log_message="--query에 옛 AND/OR 표기 [추천 명령 생략: 검색어 " + rt.DOC_OMITTED + "]")
+    groups: List[List[str]] = [[]]
+    for tok in _QUERY_PART.findall(text):
+        if tok == "|":
             groups.append([])
+        elif tok == ";":
+            continue
         elif tok[:1] in ('"', "\u201c") and len(tok) >= 2:
-            push()
             if tok[1:-1].strip():
                 groups[-1].append(tok[1:-1].strip())
-        else:
-            words.append(tok)
-    push()
+        elif " ".join(tok.split()):
+            groups[-1].append(" ".join(tok.split()))
     return [g for g in groups if g]
 
 
@@ -5006,7 +5009,7 @@ def build_cli():
                    help=f"이번에 새로 읽을 최대 파일 수 (기본 {MAX_FOLDER_FILES}, 이미 최신인 파일은 세지 않음)")
 
     s = sub.add_parser("search", help="캐시에 등록된 문서에서 검색 (--file이면 그 파일/폴더를 먼저 자동 등록)")
-    s.add_argument("--query", "-q", required=True, help="검색어. 'A AND B', 'A OR B' 사용 가능")
+    s.add_argument("--query", "-q", required=True, help="검색어. 그리고는 'A;B', 또는은 'A|B' (;가 먼저 묶임)")
     s.add_argument("--file", "-f", help="검색할 파일 또는 폴더 (미등록/바뀐 문서는 자동 등록). 생략 시 캐시 전체")
     s.add_argument("--pages", "-p", help="쪽 번호로 거르기. 예: 3-7 (쪽 정보가 없는 단위는 제외)")
     s.add_argument("--section", help="장절 경로 일부로 거르기 (대소문자 무시)")

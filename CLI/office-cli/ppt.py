@@ -4,9 +4,9 @@
     read     슬라이드 내용 읽기 (제목, 본문, 표, 노트). 사용자 화면은 움직이지 않음
     info     프레젠테이션 요약 (슬라이드별 제목, 도형/표/그림 수). --all: 열린 프레젠테이션 전체 목록
     write    제목/본문/표/그림/카드 넣기. --file의 마크다운은 제목(#, ##)마다 새 슬라이드
-    replace  찾아 바꾸기 (+서식). 표, 그룹 도형 포함
+    replace  찾아 바꾸기 (+서식). 표, 그룹 도형 포함. --dry-run: 바꾸지 않고 바뀔 곳만 미리 보기
     export   PDF / PPTX 사본 저장 (원본은 그대로)
-    slide    슬라이드 추가/복제/이동/삭제/비우기/목록
+    slide    슬라이드 추가/복제/이동/삭제/비우기/목록. --dry-run: 바꾸지 않고 미리 보기
     notes    발표자 노트 읽기 (--slide N --text/--file이면 그 슬라이드 노트 쓰기, --append는 덧붙이기)
 
 --target: active(기본, 지금 보고 있는 프레젠테이션) | 열린 프레젠테이션 이름 | 파일 경로
@@ -219,6 +219,12 @@ def cmd_read(args) -> Dict[str, Any]:
                           "VERIFIED: 저장한 파일을 다시 열어 확인했습니다. " + rt.INTO_OTHER_DOC,
                           **result)
     shown: List[Dict[str, Any]] = []
+    if not any(str(s["title"]).strip() or str(s["text"]).strip() for s in slides):
+        # 빈 결과 명시 (ACI 설계 권장 2번, 1.4.81): 슬라이드가 없거나 글이 하나도 없음
+        what = "슬라이드가 없습니다" if not slides else f"슬라이드 {len(slides)}장에 글이 없습니다 (그림·표만 있거나 빈 슬라이드)"
+        result.update(slides=slides[:20], truncated=False, count=0)
+        return rt.ok(TOOL, "read", f"0건: {source['name']}: {what}",
+                     f"VERIFIED: 0건. {what} (찾은 항목 없음). 사용자에게 그대로 알리세요.", **result)
     used = 0
     text_cut = 0
     for s in slides:
@@ -875,6 +881,112 @@ def replace_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[s
     return count, same
 
 
+def count_in_range(tr: Any, find: str, rep: str, match_case: bool, fmt: Dict[str, Any]) -> Tuple[int, int]:
+    """replace_in_range와 같은 규칙으로 세기만 합니다 (--dry-run: 글을 바꾸지 않음).
+
+    (바뀔 곳 수, 찾았지만 바꿀 글과 같아 그대로 둘 곳 수). 바꾼 뒤 바꾼 글 뒤부터 찾는 것은
+    바꾸기 전 글에서 찾은 글 뒤부터 찾는 것과 같습니다.
+    """
+    text = str(tr.Text)
+    hay, needle = (text, find) if match_case else (text.lower(), find.lower())
+    count = same = 0
+    after = 0
+    while count + same < 1000:
+        idx = hay.find(needle, after)
+        if idx < 0:
+            break
+        if not fmt and text[idx:idx + len(find)] == rep:
+            same += 1
+        else:
+            count += 1
+        after = idx + len(find)
+    return count, same
+
+
+def _num(v: float) -> str:
+    return f"{v:g}"
+
+
+def _replace_command(args) -> Dict[str, Any]:
+    """--dry-run을 뺀 같은 replace 명령 (confirm_commands용)."""
+    argv: List[Any] = ["replace", "--target", args.target]
+    if args.map:
+        argv += ["--map", args.map]
+    else:
+        argv += ["--find", args.find]
+        if args.replace is not None:
+            argv += ["--replace", args.replace]
+    if args.slide:
+        argv += ["--slide", args.slide]
+    for flag, on in (("--match-case", args.match_case), ("--bold", args.bold), ("--italic", args.italic)):
+        if on:
+            argv.append(flag)
+    if args.size:
+        argv += ["--size", _num(args.size)]
+    if args.color:
+        argv += ["--color", args.color]
+    if args.no_focus:
+        argv.append("--no-focus")
+    return rt.next_command("ppt.py", argv, "찾아 바꾸기 실행", destructive=True)
+
+
+DRY_RUN_DIRECTIVE = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
+                     "confirm_commands[0]을 그대로 실행하세요.")
+DRY_RUN_ZERO = "VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. 바뀔 것 없음(count 0)이라 실행할 명령이 없습니다. 사용자에게 그대로 알리세요."
+PLANNED_MAX = 50
+
+
+def _dry_run_fields(planned: List[str], count: int, confirm: Dict[str, Any]) -> Dict[str, Any]:
+    """미리보기 공통 키: planned(최대 PLANNED_MAX개), truncated, count, 바뀔 것이 있을 때만 confirm_commands."""
+    fields: Dict[str, Any] = {"dry_run": True, "count": count, "planned": planned[:PLANNED_MAX],
+                              "truncated": len(planned) > PLANNED_MAX}
+    if count:
+        fields["confirm_commands"] = [confirm]
+    return fields
+
+
+def _replace_dry_run(args, mapping: Dict[str, str], fmt: Dict[str, Any]) -> Dict[str, Any]:
+    """replace --dry-run: 읽기 세션으로 바뀔 곳만 셉니다 (되돌리기 지점 없음)."""
+    counts: Dict[str, int] = {}
+    same: Dict[str, int] = {}
+    planned: List[str] = []
+    slides: List[int] = []
+    with off.open_target("ppt", args.target, readonly=True) as t:
+        prs = t.doc
+        numbers = [int(args.slide)] if args.slide else list(range(1, prs.Slides.Count + 1))
+        for n in numbers:
+            if not 1 <= n <= prs.Slides.Count:
+                raise rt.InputError(f"슬라이드 {n}번이 없습니다 (전체 {prs.Slides.Count}장).")
+            slide = prs.Slides(n)
+            here: Dict[str, int] = {}
+            for k in range(1, slide.Shapes.Count + 1):
+                for tr in iter_text_ranges(slide.Shapes(k)):
+                    for find, rep in mapping.items():
+                        c, hits = count_in_range(tr, find, rep, args.match_case, fmt)
+                        if hits:
+                            same[find] = same.get(find, 0) + hits
+                        if c:
+                            here[find] = here.get(find, 0) + c
+            for find, c in here.items():
+                counts[find] = counts.get(find, 0) + c
+                rep = mapping[find]
+                what = "서식만" if rep == find else f"-> '{_preview_text(rep, 20)}'"
+                planned.append(f"슬라이드 {n}: '{_preview_text(find, 20)}' {what} {c}곳")
+            if here:
+                slides.append(n)
+        resolved = t.resolved()
+    total = sum(counts.values())
+    fields = _dry_run_fields(planned, total, _replace_command(args))
+    fields.update(target_resolved=resolved, by_text=counts, slides=slides)
+    if same:
+        fields["unchanged_same_text"] = same
+    if not total:
+        why = f"찾은 {sum(same.values())}곳은 바꿀 글이 찾는 글과 같아 " if same else "일치하는 문구가 없어 "
+        return rt.ok(TOOL, "replace", f"미리보기: {why}바뀔 것 없음 (바꾸지 않음)", DRY_RUN_ZERO, **fields)
+    return rt.ok(TOOL, "replace", f"미리보기: {total}곳이 바뀝니다 (슬라이드 {', '.join(map(str, slides))}) (바꾸지 않음)",
+                 DRY_RUN_DIRECTIVE, **fields)
+
+
 def cmd_replace(args) -> Dict[str, Any]:
     mapping = _load_map(args)
     fmt: Dict[str, Any] = {}
@@ -890,6 +1002,8 @@ def cmd_replace(args) -> Dict[str, Any]:
         # 바꿀 글도 서식도 없으면 아무것도 바뀌지 않는데 'N곳 처리'로 보고되던 문제 (excel/word replace와 같게)
         raise rt.InputError("--replace(바꿀 글)나 서식 옵션(--bold, --color 등)이 없어 바꿀 것이 없습니다. "
                             "사용자에게 무엇으로 바꿀지 확인하세요. 글을 지우려면 --replace \"\"를 씁니다.")
+    if args.dry_run:
+        return _replace_dry_run(args, mapping, fmt)
     counts: Dict[str, int] = {}
     same: Dict[str, int] = {}          # 바꿀 글이 찾는 글과 같고 서식도 없어 바꾸지 않은 문구: 찾은 곳 수
     slides_changed: List[int] = []
@@ -1110,9 +1224,88 @@ def _notes_read(args) -> Dict[str, Any]:
 # 6. slide
 # ==============================================================================
 
+def _slide_command(args) -> Dict[str, Any]:
+    """--dry-run을 뺀 같은 slide 명령 (confirm_commands용)."""
+    argv: List[Any] = ["slide", "--target", args.target, "--action", args.action]
+    if args.slide is not None:
+        argv += ["--slide", args.slide]
+    if args.dest is not None:
+        argv += ["--dest", args.dest]
+    if args.action == "add" and args.layout != "title_only":
+        argv += ["--layout", args.layout]
+    if args.all_slides:
+        argv.append("--all-slides")
+    if args.no_focus:
+        argv.append("--no-focus")
+    what = {"add": "추가", "duplicate": "복제", "move": "옮기기", "delete": "삭제", "clear": "비우기"}[args.action]
+    return rt.next_command("ppt.py", argv, f"슬라이드 {what} 실행", destructive=args.action in ("delete", "clear"))
+
+
+def _slide_dry_run(args) -> Dict[str, Any]:
+    """slide --dry-run: 읽기 세션으로 바뀔 것만 보여 줍니다 (되돌리기 지점 없음). 검사는 실제 실행과 같습니다."""
+    a = args.action
+    with off.open_target("ppt", args.target, readonly=True) as t:
+        prs = t.doc
+        count = int(prs.Slides.Count)
+
+        def need(n: Optional[int], what: str = "--slide") -> int:
+            if n is None:
+                raise rt.InputError(f"slide {a}에는 {what}가 필요합니다.")
+            if not 1 <= n <= count:
+                raise rt.InputError(f"슬라이드 {n}번이 없습니다 (전체 {count}장).")
+            return n
+
+        def label(n: int) -> str:
+            title = slide_units(prs.Slides(n), n)["title"]
+            return f"슬라이드 {n}" + (f"('{_preview_text(title, 30)}')" if title else "")
+
+        planned: List[str] = []
+        if a == "add":
+            pos = count + 1 if args.slide is None else min(max(1, args.slide), count + 1)
+            n_change, msg = 1, f"{pos}번 위치에 새 슬라이드를 추가합니다"
+            planned.append(f"추가: {pos}번 위치 (레이아웃 {args.layout})")
+        elif a == "duplicate":
+            n = need(args.slide)
+            n_change, msg = 1, f"{label(n)}을(를) 복제해 {n + 1}번에 넣습니다"
+            planned.append(f"복제: {label(n)} -> {n + 1}번")
+        elif a == "move":
+            n = need(args.slide)
+            dest = need(args.dest, "--dest")
+            if n == dest:
+                n_change, msg = 0, f"슬라이드 {n}은(는) 이미 {dest}번 위치라 바뀔 것 없음"
+            else:
+                n_change, msg = 1, f"{label(n)}을(를) {dest}번 위치로 옮깁니다"
+                planned.append(f"옮기기: {label(n)} -> {dest}번")
+        elif a == "delete":
+            n = need(args.slide)
+            if count == 1:
+                raise rt.InputError("마지막 남은 슬라이드는 삭제할 수 없습니다.")
+            shapes = int(prs.Slides(n).Shapes.Count)
+            n_change, msg = 1, f"{label(n)}을(를) 삭제합니다 (요소 {shapes}개, 남는 슬라이드 {count - 1}장)"
+            planned.append(f"삭제: {label(n)} (요소 {shapes}개)")
+        else:   # clear
+            if args.slide is None and not args.all_slides:
+                raise rt.InputError("clear에는 --slide가 필요합니다. 모든 슬라이드를 비우려면 --all-slides를 명시하세요 (사용자가 요청한 경우에만).")
+            numbers = list(range(1, count + 1)) if args.slide is None else [need(args.slide)]
+            n_change = 0
+            for n in numbers:
+                shapes = int(prs.Slides(n).Shapes.Count)
+                if shapes:
+                    n_change += shapes
+                    planned.append(f"비우기: {label(n)} 요소 {shapes}개")
+            where = f"슬라이드 {', '.join(map(str, numbers))}" if len(numbers) <= 10 else f"슬라이드 {len(numbers)}장"
+            msg = (f"{where}의 요소 {n_change}개를 지웁니다" if n_change else f"{where}에 지울 요소가 없어 바뀔 것 없음")
+        resolved = t.resolved()
+    fields = _dry_run_fields(planned, n_change, _slide_command(args))
+    return rt.ok(TOOL, "slide", f"미리보기: {msg} (바꾸지 않음)", DRY_RUN_DIRECTIVE if n_change else DRY_RUN_ZERO,
+                 target_resolved=resolved, slides_total=count, **fields)
+
+
 def cmd_slide(args) -> Dict[str, Any]:
     a = args.action
     if a == "list":
+        # list는 읽기만 하므로 --dry-run은 받고 무시 (그 사실을 warnings로)
+        extra = {"warnings": ["slide list는 읽기만 하므로 --dry-run을 무시했습니다"]} if args.dry_run else {}
         with off.open_target("ppt", args.target, readonly=True) as t:
             prs = t.doc
             items = [{"no": i, "title": slide_units(prs.Slides(i), i)["title"][:60]} for i in range(1, prs.Slides.Count + 1)]
@@ -1120,8 +1313,10 @@ def cmd_slide(args) -> Dict[str, Any]:
         if not items:      # R2 0건
             return rt.ok(TOOL, "slide", "0건: 슬라이드가 없습니다",
                          "VERIFIED: 0건. 이 프레젠테이션에는 슬라이드가 없습니다. 사용자에게 그대로 알리세요.",
-                         target_resolved=resolved, slides=[], count=0)
-        return rt.ok(TOOL, "slide", f"슬라이드 {len(items)}장", target_resolved=resolved, slides=items, count=len(items))
+                         target_resolved=resolved, slides=[], count=0, **extra)
+        return rt.ok(TOOL, "slide", f"슬라이드 {len(items)}장", target_resolved=resolved, slides=items, count=len(items), **extra)
+    if args.dry_run:
+        return _slide_dry_run(args)
     with off.open_target("ppt", args.target, readonly=False, focus=not args.no_focus, tool=TOOL, command="slide") as t:
         prs = t.doc
         count = int(prs.Slides.Count)
@@ -1233,6 +1428,7 @@ def build_cli():
     p.add_argument("--italic", action="store_true", default=None)
     p.add_argument("--size", type=float)
     p.add_argument("--color")
+    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 곳만 미리 보기")
 
     p = sub.add_parser("export", help="PDF/PPTX 사본 저장")
     common(p)
@@ -1254,6 +1450,7 @@ def build_cli():
     p.add_argument("--dest", type=int, help="move: 옮길 위치 (슬라이드 번호)")
     p.add_argument("--layout", choices=list(PP_LAYOUT), default="title_only", help="add 레이아웃 (기본 title_only)")
     p.add_argument("--all-slides", action="store_true", help="clear: 모든 슬라이드 (명시 필요)")
+    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 것만 미리 보기")
     return parser
 
 

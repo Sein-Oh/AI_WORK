@@ -824,3 +824,118 @@ def test_cards_with_old_bar_separator_get_full_command(pp, capsys):
     assert argv[0] == "python" and argv[argv.index("--cards") + 1] == "안정성:무중단; 확장성:모듈", argv
     code, out = run_ppt(capsys, *argv[2:])
     assert code == 0, out
+
+
+def test_read_without_text_is_explicit_zero(pp, capsys):
+    """1.4.81 빈 결과 명시: 글이 없는 슬라이드만 있으면 count 0과 '찾은 항목 없음' (빈 배열만 주지 않음)."""
+    code, out = run_ppt(capsys, "read")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건."), out
+    assert "찾은 항목 없음" in out["agent_directive"] and out["preview"].startswith("0건:"), out
+
+
+# ---------------------------------------------------------------------------
+# --dry-run: replace, slide delete·clear는 바꾸지 않고 미리 보기 (읽기 세션, 되돌리기 지점 없음)
+# confirm_commands[0]은 --dry-run만 뺀 같은 명령
+# ---------------------------------------------------------------------------
+
+
+def _confirm_argv(out):
+    cmd = out["confirm_commands"][0]
+    assert cmd.get("destructive") is True, cmd
+    argv = split_command(cmd["command"])
+    assert argv[0] == "python" and argv[1].endswith("ppt.py"), argv
+    assert not any("next_commands" in k for k in out), out
+    return argv[2:]
+
+
+def _assert_preview(out, count):
+    assert out["status"] == "ok" and out["dry_run"] is True and out["count"] == count, out
+    assert out["agent_directive"].startswith("VERIFIED: 미리보기만 했고"), out
+    assert out["preview"].startswith("미리보기:") and out["preview"].endswith("(바꾸지 않음)"), out
+
+
+def test_ppt_replace_dry_run_counts_without_changing(pp_prs, capsys):
+    tb = pp_prs.Slides(2).Shapes.AddTextbox(1, 0, 0, 100, 40)
+    tb.TextFrame.TextRange.Text = "초안 초안 진행중"
+    argv = ["replace", "--target", "active", "--find", "초안", "--replace", "확정", "--bold"]
+    code, out = run_main(ppt, capsys, *argv, "--dry-run")
+    assert code == 0, out
+    _assert_preview(out, 2)
+    assert out["slides"] == [2] and out["planned"] == ["슬라이드 2: '초안' -> '확정' 2곳"] and out["truncated"] is False, out
+    assert tb.TextFrame.TextRange.Text == "초안 초안 진행중" and undo_points("ppt") == []
+    assert _confirm_argv(out) == argv
+    code, out = run_main(ppt, capsys, *argv)               # confirm 명령대로 실행하면 바뀜
+    assert code == 0 and out["replaced"] == 2 and tb.TextFrame.TextRange.Text == "확정 확정 진행중", out
+    assert len(undo_points("ppt")) == 1
+
+
+def test_ppt_replace_dry_run_zero(pp_prs, capsys):
+    tb = pp_prs.Slides(1).Shapes.AddTextbox(1, 0, 0, 100, 40)
+    tb.TextFrame.TextRange.Text = "iPhone"
+    code, out = run_main(ppt, capsys, "replace", "--find", "없는글", "--replace", "x", "--dry-run")
+    assert code == 0, out
+    _assert_preview(out, 0)
+    assert "바뀔 것 없음" in out["preview"] and "confirm_commands" not in out and out["planned"] == [], out
+    code, out = run_main(ppt, capsys, "replace", "--find", "iphone", "--replace", "iPhone", "--dry-run")
+    assert code == 0 and out["count"] == 0 and out["unchanged_same_text"] == {"iphone": 1}, out
+    assert "바뀔 것 없음" in out["preview"] and undo_points("ppt") == []
+
+
+def test_ppt_replace_dry_run_map_matches_real_count(pp_prs, capsys):
+    tb = pp_prs.Slides(1).Shapes.AddTextbox(1, 0, 0, 100, 40)
+    tb.TextFrame.TextRange.Text = "iphone, iPhone, IPHONE, aa"
+    argv = ["replace", "--target", "active", "--map", '{"iphone": "iPhone", "a": "b"}']
+    code, out = run_main(ppt, capsys, *argv, "--dry-run")
+    assert code == 0 and out["count"] == 4 and out["by_text"] == {"iphone": 2, "a": 2}, out
+    assert _confirm_argv(out) == argv and tb.TextFrame.TextRange.Text == "iphone, iPhone, IPHONE, aa"
+    code, real = run_main(ppt, capsys, *argv)
+    assert code == 0 and real["replaced"] == out["count"] and real["by_text"] == out["by_text"], real
+
+
+def test_ppt_replace_dry_run_planned_capped(pp_prs, capsys):
+    pp_prs.Slides(1).Shapes.AddTextbox(1, 0, 0, 100, 40).TextFrame.TextRange.Text = " ".join(f"w{i:02d}" for i in range(60))
+    mapping = "{" + ", ".join(f'"w{i:02d}": "v"' for i in range(60)) + "}"
+    code, out = run_main(ppt, capsys, "replace", "--map", mapping, "--dry-run")
+    assert code == 0 and out["count"] == 60 and len(out["planned"]) == 50 and out["truncated"] is True, out
+
+
+def test_ppt_slide_delete_dry_run(pp_prs, capsys):
+    pp_prs.Slides(2).Shapes.Title.TextFrame.TextRange.Text = "둘째 장"
+    second = pp_prs.Slides(2)
+    argv = ["slide", "--target", "active", "--action", "delete", "--slide", "2"]
+    code, out = run_main(ppt, capsys, *argv, "--dry-run")
+    assert code == 0, out
+    _assert_preview(out, 1)
+    assert "둘째 장" in out["preview"] and out["planned"][0].startswith("삭제: 슬라이드 2('둘째 장')"), out
+    assert pp_prs.Slides.Count == 3 and pp_prs.Slides(2) is second and undo_points("ppt") == []
+    assert _confirm_argv(out) == argv
+    code, out = run_main(ppt, capsys, *argv)
+    assert code == 0 and pp_prs.Slides.Count == 2 and len(undo_points("ppt")) == 1, out
+    code, out = run_main(ppt, capsys, "slide", "--action", "delete", "--slide", "9", "--dry-run")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+
+
+def test_ppt_slide_clear_dry_run_one_and_all(pp_prs, capsys):
+    pp_prs.Slides(1).Shapes.add(FakeShape("a", text="가"))
+    pp_prs.Slides(3).Shapes.add(FakeShape("b", text="나"))
+    before = [int(pp_prs.Slides(n).Shapes.Count) for n in (1, 2, 3)]
+    argv = ["slide", "--target", "active", "--action", "clear", "--all-slides"]
+    code, out = run_main(ppt, capsys, *argv, "--dry-run")
+    assert code == 0, out
+    _assert_preview(out, sum(before))
+    assert len(out["planned"]) == sum(1 for b in before if b), out
+    assert [int(pp_prs.Slides(n).Shapes.Count) for n in (1, 2, 3)] == before and undo_points("ppt") == []
+    assert _confirm_argv(out) == argv
+    code, out = run_main(ppt, capsys, "slide", "--action", "clear", "--dry-run")
+    assert code == 1 and "--all-slides" in out["message"], out
+    code, out = run_main(ppt, capsys, *argv)
+    assert code == 0 and all(int(pp_prs.Slides(n).Shapes.Count) == 0 for n in (1, 2, 3)), out
+    code, out = run_main(ppt, capsys, "slide", "--action", "clear", "--slide", "2", "--dry-run")
+    assert code == 0, out
+    _assert_preview(out, 0)
+    assert "바뀔 것 없음" in out["preview"] and "confirm_commands" not in out, out
+
+
+def test_ppt_slide_list_ignores_dry_run_with_warning(pp_prs, capsys):
+    code, out = run_main(ppt, capsys, "slide", "--action", "list", "--dry-run")
+    assert code == 0 and out["count"] == 3 and "--dry-run" in out["warnings"][0], out

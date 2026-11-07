@@ -17,7 +17,7 @@ import _runtime as rt
 import office
 import reader
 import word
-from office_helpers import split_command, error_log_text, formula_xlsx, run_fresh, run_main, SECRET, set_cached_value, TOOL_DIR
+from office_helpers import recommended_argv, split_command, error_log_text, formula_xlsx, run_fresh, run_main, SECRET, set_cached_value, TOOL_DIR
 from sample_docs import new_docx, new_pptx
 
 
@@ -646,7 +646,7 @@ def test_old_office_format_is_redirected():
 
 
 def test_matcher_and_or_and_snippet():
-    m = reader.build_matcher("케이블카 AND 사파리 OR 단가", False)
+    m = reader.build_matcher("케이블카;사파리|단가", False)
     assert m("케이블카와 사파리") == ["케이블카", "사파리"]
     assert m("케이블카만") is None
     assert m("견적 단가") == ["단가"]
@@ -1470,7 +1470,7 @@ def test_cli_search_index_folder_save_and_no_match(samples, env, tmp_path):
     code, out = run_reader_env(env, "search", "--query", "케이블카")
     assert code == 0 and out["files_searched"] == 3 and out["total_matches"] == 1
     assert out["matches"][0]["file"] == "발표.pptx" and out["matches"][0]["loc"] == "슬라이드 3"
-    code, out = run_reader_env(env, "search", "--query", "cable OR 양산")
+    code, out = run_reader_env(env, "search", "--query", "cable|양산")
     assert out["total_matches"] == 2
 
     code, out = run_reader_env(env, "search", "--query", "마일스톤", "--save")
@@ -1651,7 +1651,7 @@ def test_search_save_xlsx_columns_and_md_evidence(docs, tmp_path):
     import openpyxl
     run_reader("index", "--folder", str(docs))
     out_path = tmp_path / "근거.xlsx"
-    code, out = run_reader("search", "--query", "내전압 OR Purpose", "--save", str(out_path), "--top", "1")
+    code, out = run_reader("search", "--query", "내전압|Purpose", "--save", str(out_path), "--top", "1")
     assert code == 0 and out["output_file"] == str(out_path) and out["saved"] == out["total_matches"] == 4
     wb = openpyxl.load_workbook(out["output_file"])
     ws = wb.active
@@ -1671,7 +1671,7 @@ def test_search_save_xlsx_columns_and_md_evidence(docs, tmp_path):
 
 def test_search_truncated_offers_full_save(docs):
     run_reader("index", "--folder", str(docs))
-    code, out = run_reader("search", "--query", "본문 OR body", "--top", "1")
+    code, out = run_reader("search", "--query", "본문|body", "--top", "1")
     assert out["truncated"] is True and out["shown"] == 1 and out["count"] > 1
     assert "--save" in out["next_commands"][-1]["command"]
 
@@ -1744,10 +1744,23 @@ def test_eml_is_unsupported_like_any_unknown_type(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_parse_query_quotes_case_insensitive_operators():
-    assert reader.parse_query('"설계 기준" and 온도 OR 습도') == [["설계 기준", "온도"], ["습도"]]
-    assert reader.parse_query("A AND B or C D") == [["A", "B"], ["C D"]]
+def test_parse_query_separators():
+    """1.4.81: 저장소 구분자 규칙 (그리고 ;, 또는 |, ;가 먼저 묶임). 따옴표 안의 ; |는 글자."""
+    assert reader.parse_query('"설계 기준";온도|습도') == [["설계 기준", "온도"], ["습도"]]
+    assert reader.parse_query("A ; B | C D") == [["A", "B"], ["C D"]]
+    assert reader.parse_query('"a;b|c";d') == [["a;b|c", "d"]]
+    assert reader.parse_query("terms and conditions") == [["terms and conditions"]]    # 소문자 낱말은 글자 그대로
     assert reader.parse_query('""') == []
+
+
+def test_old_and_or_query_gives_full_command(tmp_path, capsys):
+    """옛 'A AND B', 'A OR B'는 받지 않고 ;/|로 고친 전체 명령 [추천] (따옴표 안의 AND는 글자)."""
+    p = tmp_path / "a.txt"
+    p.write_text("x", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", '정격 전압 AND 절연 OR "AND 회로"', "--file", str(p))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[추천]" in out["message"], out
+    argv = recommended_argv(out["message"], "reader")
+    assert argv[argv.index("--query") + 1] == '정격 전압;절연|"AND 회로"', argv
 
 
 def test_matcher_ignores_spacing_and_empty_regex():
@@ -2337,7 +2350,8 @@ def test_read_section_not_found_gives_candidates_not_logged(tmp_path, capsys, mo
     assert code == 0 and out["units"], out           # 부분 일치는 그대로 읽힘
     code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "ZQX SCOPEE")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[후보]" in out["message"]
-    assert "1. ZQX SCOPE" in out["candidates"]
+    assert "1. ZQX SCOPE" in out["candidates"] and "[후보] 1) 1. ZQX SCOPE" in out["message"]
+    assert split_command(out["confirm_commands"][0]["command"])[-2:] == ["--section", "1. ZQX SCOPE"], out   # 고른 번호의 전체 명령
     assert_not_logged(out, isolated_dirs, marker="1. ZQX SCOPE")   # 장절 이름(문서 글)은 오류 로그에 남지 않음
     # 비슷한 장절이 없으면 문서의 장절 일부를 [후보]로
     code, out = run_fresh(reader, capsys, monkeypatch, "read", "--file", str(p), "--section", "warranty")
@@ -2377,11 +2391,11 @@ RECALL_TEXT = "\n\n".join([
 RECALL_CASES = [
     # 숫자가 든 검색어가 표기가 다른 곳(조사, 5V = 5.0 V, °C = ℃)에서만 맞으면 exact_mixed (층 B, 1.4.70)
     ("정격전압은 5V", {1}, "exact_mixed"),    # 검색어의 조사, 5V = 5.0 V
-    ("작동 온도 AND -20°C", {2}, "exact_mixed"),  # °C = ℃ (부호 없는 '20°C'는 음수 '-20℃'와 맞지 않음, 1.4.68)
+    ("작동 온도;-20°C", {2}, "exact_mixed"),  # °C = ℃ (부호 없는 '20°C'는 음수 '-20℃'와 맞지 않음, 1.4.68)
     ("PCB 두께", {3}, "exact"),               # 전각 ＰＣＢ (숫자 없는 검색어는 그대로)
     ("절연저항이 100MΩ", {4}, "exact_mixed"),  # 조사, 숫자와 단위 띄어쓰기
     ("접지-단자", {5}, "exact"),              # 대시 종류
-    ("정격 전압 AND 절연", {1, 4}, "partial"),  # 둘 다 든 단락 없음 -> 하나씩 든 단락
+    ("정격 전압;절연", {1, 4}, "partial"),  # 둘 다 든 단락 없음 -> 하나씩 든 단락
     ("케이불 피복", {7}, "fuzzy"),            # 오타 한 글자 (한글 4음절 이상, 첫·끝 음절 같음)
 ]
 
@@ -2422,7 +2436,7 @@ def test_search_recall_variants(tmp_path, capsys, query, want, mode):
 
 def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
     p = _recall_file(tmp_path)
-    code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압;절연", "--file", str(p))
     assert {tuple(m["missing_terms"]) for m in out["candidates"]} == {("절연",), ("정격 전압",)}
     assert {tuple(m["matched_terms"]) for m in out["candidates"]} == {("정격 전압",), ("절연",)}
     code, out = run_main(reader, capsys, "search", "--query", "케이불 피복", "--file", str(p))
@@ -2436,7 +2450,7 @@ def test_search_partial_lists_missing_terms_and_fuzzy_word(tmp_path, capsys):
 def test_search_widened_directive_keeps_notes(tmp_path, capsys):
     # 회귀: 넓혀 찾은 결과의 directive가 indexed_now·stale·clamp·text_cut 안내를 덮어씀
     p = _recall_file(tmp_path)
-    code, out = run_main(reader, capsys, "search", "--query", "정격 전압 AND 절연", "--file", str(p))
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압;절연", "--file", str(p))
     assert out["match_mode"] != "exact" and out["agent_directive"].startswith("UNVERIFIED:"), out
     assert "indexed_now" in out["agent_directive"] and "다시 실행하지 마세요" in out["agent_directive"]
 
@@ -3034,7 +3048,7 @@ def test_number_safety_net_candidates(tmp_path, capsys):
     assert c["number_words"] == {"0.5 mm": "±0.5mm"} and c["matched_terms"] == [] and "외경" in c["snippet"], c
     code, out = run_main(reader, capsys, "search", "--query", "20 ℃", "--file", str(p))   # 부호 없는 20은 -20과 다름
     assert out["match_mode"] == "number" and out["candidates"][0]["number_words"] == {"20 ℃": "-20℃"}, out
-    code, out = run_main(reader, capsys, "search", "--query", "보관 AND 20", "--file", str(p))  # 숫자 없는 검색어는 정확히
+    code, out = run_main(reader, capsys, "search", "--query", "보관;20", "--file", str(p))  # 숫자 없는 검색어는 정확히
     assert out["match_mode"] == "number" and out["candidates"][0]["matched_terms"] == ["보관"], out
     # 숫자 경계는 지킴: 느슨한 검색도 0건이면 그때만 0건 VERIFIED
     code, out = run_main(reader, capsys, "search", "--query", "0.05 mm", "--file", str(p))
@@ -3292,7 +3306,7 @@ def test_and_snippet_shows_far_number_term(tmp_path, capsys):
     text = "보관 온도 조건은 아래와 같다. " + "가" * 150 + " 동작 범위 - 40 ℃에서 시험한다."
     p = tmp_path / "규격.txt"
     p.write_text(text + "\n", encoding="utf-8")
-    code, out = run_main(reader, capsys, "search", "--query", "온도 AND 40 ℃", "--file", str(p), "-C", "20")
+    code, out = run_main(reader, capsys, "search", "--query", "온도;40 ℃", "--file", str(p), "-C", "20")
     assert code == 0 and out["count"] == 1, out
     snip = out["matches"][0]["snippet"]
     assert "**온도**" in snip and "- **40 ℃**에서" in snip and reader.SNIPPET_JOIN in snip, snip
