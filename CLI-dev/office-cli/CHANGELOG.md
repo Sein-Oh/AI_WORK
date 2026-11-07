@@ -1856,6 +1856,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
+- [ ] 사용법 단순성(AGENTS.md, 2026-11-07) 맞추기: `[추천] --range` 값 형태 4곳(excel) -> 전체 명령, `--to`가 받는 앱·받는 사람(`;` 구분)·옮길 위치로
+  세 뜻, `--cards`의 `|` 구분, reader `--query`의 `AND`/`OR`와 `--where`의 `;`/`|`, `--map` JSON 인자, `[후보]` 값 목록 -> 번호 붙은 전체 명령
 
 ### 1.0 제거 기능 (필요하면 다시 추가할 후보)
 - 스타일 DNA 추출 (`office_theme --action extract`). 테마 프리셋은 유지.

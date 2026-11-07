@@ -1869,6 +1869,9 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - 이전 이력 문서(ROADMAP 등)를 정리하고 이 CHANGELOG로 일원화. `requirements-dev.txt`, `install_offline.bat` 삭제.
 
 ## 남은 할 일
+- [ ] 사용법 단순성(AGENTS.md, 2026-11-07) 맞추기: SKILL.md 약 20KB -> 6KB(알릴 키 63개를 `preview` 중심으로), 규칙 5와 `CONTINUE` 모순,
+  `[추천]` 값 형태(`--header-row`, `--dtypes`) -> 전체 명령, 예전 줄임말을 같은 뜻 표로 받아 주는 길(`--target` -> `--targets`, 베타 호환 금지와도 충돌),
+  `--desc` 별칭, 예측 `--header-row` 예외, 예측 모델 폴더 고르기 3갈래, 3단계 5번·`CONTINUE` 300번을 LLM이 셈
 - [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트.md` 4장 눈 확인 2번). 엑셀 재계산은 회사 PC 통과 (2.9.4)
 - [ ] `-x` 생략 시 피처 자동 선택 (ID/일련번호 배제 규칙)
 - [ ] 무거운 import 지연 로딩 (`--history` 응답 속도)

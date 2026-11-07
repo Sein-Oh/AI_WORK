@@ -27,7 +27,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 | OS | Windows 11, **폐쇄망** (런타임 인터넷 접근 불가) |
 | Python | **WinPython**, Python 3.13.13, `C:\CLI\python`에 두고 시스템 PATH 등록 (`python`, `python\Scripts`) |
 | 실행 명령 | `python`, `python -m pip` 만 사용 (`py`, `python3`, 단독 `pip` 금지). 명령 예시·스킬·배치 파일 포함 |
-| 에이전트 | **OpenCode** + 26B~30B 경량 LLM, 도구는 OpenCode 스킬로 제공 |
+| 에이전트 | **OpenCode** CLI 2.2.5 + 26B~30B 경량 LLM(회사 PC: Gemma), 도구는 OpenCode 스킬로 제공. 명령 실행 도구의 시간 제한 120초 |
+| 셸 | Windows PowerShell 5.1 (회사 PC에 pwsh 없음). 도구가 내는 명령의 따옴표는 이 셸 기준 (`quote_arg`) |
+| Office | 회사 PC Office 16, 집 PC Office 2007 (실기 보조). 둘 다에서 동작해야 함 |
 | 주요 라이브러리 | pandas 3.0.5, scikit-learn 1.9.0, scipy 1.18.1, numpy/joblib(의존성), openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, matplotlib 3.11.1, seaborn 0.13.2, pymupdf 1.28.2, olefile 0.47, opencv-python 5.0.0.93, PyYAML 6.0.3, python-dateutil 2.9.0.post0, pywin32 312, pytest 9.1.1, pymupdf4llm 1.28.2, fastapi 0.141.1, fastmcp 3.4.7, mcp 1.28.1, langgraph 1.2.11, openai 2.54.0 |
 | 버전 기준 | 이 표. 상세 설명: `docs/ENVIRONMENT.md` |
 
@@ -56,7 +58,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 5. **인자 이름 일관성**: 도구 간 같은 개념은 같은 인자 이름을 쓴다 (`--file`, `--sheet`, `--save`, `--dry-run` 등). 새 인자는 기존 도구의 이름을 먼저 찾아본다.
 6. **미리보기와 되돌리기**: 덮어쓰기·삭제·일괄 수정 같은 파괴적 작업은 `--dry-run`(변경 없이 결과 미리보기)을 제공하고,
    가능하면 되돌리기 지점을 남긴다 (예: office-cli `undo`).
-7. **판단 대행**: 이름 자동 매칭, 기본값, 자동 상속, 오타 추천은 도구가 처리한다 (CLI-dev/README.md 공통 계약 4번).
+7. **판단 대행**: 이름 자동 매칭, 기본값, 자동 상속은 도구가 처리한다 (CLI-dev/README.md 공통 계약 4번).
+   오타는 같은 뜻 표(`SAME_MEANING`)로 고칠 수 있을 때만 `[추천]`, 철자만 비슷하면 `[후보]`(사용자에게 물음). 철자 비교만으로 `[추천]`하지 않는다
+   (회사 PC 감사 2026-11-06: `--cell` -> `--all`, `--text` -> `--target`처럼 뜻이 다른 옵션을 LLM이 묻지 않고 실행할 뻔했음).
 
 ## 사용법 단순성 (반드시 지킬 것)
 경량 LLM은 규칙이 많거나 예외가 있거나 고를 것이 있으면 틀린다. 사용법이 단순한 쪽을 기능보다 앞에 둔다.
@@ -137,7 +141,12 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 파일 저장·폴더 조작·텍스트 읽기는 JIT 자가복구 표의 공통 함수를 사용한다.
 - CLI/·CLI-dev/에 반입할 파일은 .py .md .txt .json .tsv .bat만 쓴다. .yaml/.yml/.jsonl/.toml 등은 회사 반입 시스템이 막으므로 쓰지 않는다(실행 중 PC에서 생기는 파일은 상관없음). 검사: `CLI-dev/tests/test_repo_files.py`.
 - 도구 폴더(`CLI/<tool>/`)는 단독 배포된다. 공통 런타임 함수는 도구마다 자기 폴더에 두고, 다른 도구 폴더를 import하지 않는다.
-- 테스트는 "사용자 환경" 표의 버전 기준으로 통과해야 한다.
+- 테스트는 "사용자 환경" 표의 버전 기준으로 통과해야 하고, 리눅스(클라우드)와 Windows(회사·집 PC)에서 같은 결과여야 한다. 실기에서 깨졌던 것:
+  - 도구가 낸 명령을 나눌 때 `shlex.split`(posix)은 Windows 경로의 `\`를 지운다 -> 테스트 공용 `split_command`(Windows 명령줄 규칙)를 쓴다.
+  - 파일 크기·내용 비교는 줄 끝과 무관하게 (`core.autocrlf=true`로 받으면 CRLF가 된다).
+  - 라이브러리 기본 템플릿(`pptx.Presentation()`, `docx.Document()`)에 기대지 않는다 (문서 보안 프로그램이 지우거나 바꾼다).
+  - 긴 매개변수 테스트 id는 자른다 (Windows 환경변수 32767자 한도). 경로는 260자를 넘을 수 있다고 본다.
+  - Office 2007은 UTF-8 BOM CSV를 CP949로 연다 (도구 결과는 정상, 알려진 한계로 둔다).
 
 ## 도구별 규칙
 ### ml-kit
@@ -147,16 +156,22 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - `ml_predict.py`는 다른 ml-kit 파일을 import하지 않는다 (모델 폴더와 함께 단독 배포). `ml_train.py`/`ml_report.py`가 `ml_predict.py`를 import한다.
 ### office-cli
 - 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`.
+- 세션(`open_target`/`write_session` with 블록) 밖에서 그 안의 COM 객체(시트, 범위, 문서)를 읽지 않는다. 닫힌 파일은 블록이 끝나면 문서와
+  백그라운드 Office가 닫혀 OLE 0x800a01a8로 실패하고, 저장은 끝났는데 실패를 보고한다 (회사 PC 2026-11-06 O2). 결과에 쓸 값은 블록 안에서
+  파이썬 값으로 꺼내 둔다. 가짜 COM은 이것을 흉내 내지 않으므로 `tests/test_session_scope.py`가 코드 모양으로 검사한다.
 ### 보관 도구 (`archive/`)
 - `archive/` 아래 도구는 수정하지 않는다. 지침 반영·검토·테스트 대상이 아니다 (doc-classifier: 다른 개발자 담당).
 
 ## 작업 절차
-1. 변경 전 `python -m pytest -q`로 기준선 확인.
+1. 변경 전 기준선: 바꿀 도구의 테스트(`python -m pytest -q CLI-dev/<tool>/tests`)와 공통 테스트(`CLI-dev/tests`). 전체(`python -m pytest -q`)는
+   ml-kit만 클라우드 30분·회사 PC 1시간 이상 걸리므로 PR 전 1번. 오래 걸리는 파일(`test_layout_matrix`, `test_loading_*`)은 그 영역을 바꿨을 때 꼭 돌린다.
 2. 리팩터링(동작 불변)과 기능 변경은 별도 커밋/PR.
 3. 버그 수정에는 회귀 테스트 추가. 동작이 바뀌면 `SKILL.md`, `README.md`, `CHANGELOG.md` 갱신.
-4. 남은 할 일은 각 도구 `CHANGELOG.md`(`CLI-dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
-5. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (상세는 README.md).
-6. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/SKILL.md`는 `ml-kit`,
+4. 실기 결과(`docs/test_logs/`)에는 회사 경로·사용자 이름이 들어 있다. 그 내용을 코드·테스트·문서·커밋 메시지에 옮기지 않는다
+   (요약은 `docs/HANDOFF.md` 4장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
+5. 남은 할 일은 각 도구 `CHANGELOG.md`(`CLI-dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
+6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (6KB, 상세는 README.md, 위 "사용법 단순성" 7번).
+7. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/SKILL.md`는 `ml-kit`,
    `CLI/office-cli/skills/office-excel/SKILL.md`는 `office-excel`), frontmatter는 name/description/license/compatibility/metadata만.
    보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `CLI/setup.py`
    (설치·옛 폴더 정리)와 전역 지침 `CLI/opencode/AGENTS.md` 3장 표를 함께 고친다.

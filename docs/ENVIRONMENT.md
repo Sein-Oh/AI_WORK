@@ -9,7 +9,9 @@
 | Python | **WinPython** 배포판, Python 3.13.13 |
 | 위치 | `C:\CLI\python` (WinPython의 `python` 폴더만 옮긴 것, `rg.exe` 포함. 2026-11-04) |
 | 실행 방식 | 시스템 환경변수 `PATH`에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 등록하여 `python` 명령으로 호출. 등록은 배포 설치 `C:\CLI\setup.bat`(`setup.py`)이 없을 때만 함 |
-| 에이전트 LLM | 26B~30B 경량 모델 (스킬로 도구 호출) |
+| 에이전트 LLM | 26B~30B 경량 모델 (회사 PC: Gemma), OpenCode CLI 2.2.5로 스킬 호출. 명령 실행 도구의 시간 제한 120초 |
+| 셸 | Windows PowerShell 5.1 (회사 PC에 pwsh 없음) |
+| Office | 회사 PC Office 16, 집 PC Office 2007 (실기 보조) |
 
 ## WinPython 사용 시 유의점
 
