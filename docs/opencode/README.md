@@ -18,6 +18,7 @@ OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md�
 | `skills\office-doc\` | `C:\CLI\office-cli\skills\office-doc\SKILL.md` (워드, PPT, 앱 사이 옮기기) |
 | `skills\office-mail\` | `C:\CLI\office-cli\skills\office-mail\SKILL.md` (Outlook) |
 | `skills\office-spec\` | `C:\CLI\office-cli\skills\office-spec\SKILL.md` (파일 읽기·근거 검색, 규격 대조) |
+| `skills\office-data\` | `C:\CLI\office-cli\skills\office-data\SKILL.md` (엑셀 표 두 판 비교, BOM 개정 비교) |
 | `skills\office-cli-test\` | `C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md` (실기 테스트를 맡길 때만) |
 
 SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신한 뒤 `C:\CLI\setup.bat`을 두 번 클릭(또는 `python C:\CLI\setup.py`)해 복사합니다

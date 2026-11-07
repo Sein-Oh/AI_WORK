@@ -11,6 +11,29 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.80] - 2026-11-07
+
+엑셀 표 두 판 비교 (BOM 개정 비교)와 새 스킬 office-data.
+
+### 기능
+- `excel.py compare --target "<이전 판>" --target2 "<새 판>" [--sheet] [--sheet2] [--key] [--save] [--overwrite]`: 두 판의 표를 행 키로 짝지어
+  추가·삭제·수량 변경(차이)·위치 변경(더해진·빠진 위치)·속성 변경(열마다 이전 -> 새)과 대체 추정(같은 위치·상위에 품명이 비슷한 삭제·추가 짝,
+  "품번 변경 추정", 합치지 않고 따로)을 보고. Excel 없이 xlsx/xlsm(openpyxl)과 CSV/TSV를 읽음. 인자 순서는 `reader.py diff --file --file2`와 같은 이전 -> 새.
+- 도구가 정함 (사용법 단순성 5번): 제목 행 아래의 머리글 행, 열 역할(품번·상위품번·레벨·수량·단위·품명·규격·메이커·위치·비고, 한국어·영어 같은 뜻),
+  시트, 짝지을 키(품번 -> 같은 품번이 여러 행이면 상위품번 열·레벨로 찾은 상위·레벨 경로·위치를 더한 키). 그래도 정할 수 없으면 STOP_RETRY
+  `[후보] 1) .. 2) ..`와 같은 번호의 `confirm_commands`(`--key`를 넣은 전체 명령). `--key`에 열 문자를 주면 머리글 이름으로 고친 전체 명령 `[추천]`.
+- 정규화: 공백·전각/반각, 숫자 `1` = `1.0` = `"1"`, 코드 대소문자(앞자리 0 유지), 위치 목록은 집합·범위 펼치기(`R1-R3, R5` = `R1,R2,R3,R5`).
+- 결과: 구분별 수 `counts`와 앞 20개 목록(잘리면 `truncated`, `full_result_file`), 0건이면 "바뀐 것 없음". 결과 xlsx(요약, 추가, 삭제, 변경, 대체 추정)를
+  다시 열어 시트마다 행 수 확인(R1), 덮어쓰기는 `--overwrite`일 때만. 새 판 바뀐 칸 메모 파일과 `comment --dry-run` 미리보기 `next_commands`.
+- 긴 작업(R10): 새 판 읽기가 시간 제한을 넘을 것 같으면 읽은 이전 판을 캐시에 두고 `CONTINUE:`. 10만 행 두 판 약 25초(리눅스).
+- `_runtime.ambiguous(option=)`: 명령에 없던 옵션에 후보 값을 넣은 전체 명령(`--key`). `SAME_MEANING`에 `compare --file2` -> `--target2`.
+
+### 구조
+- 새 스킬 `office-data`(`CLI/office-cli/skills/office-data/SKILL.md`): 표 데이터 작업(두 판 비교, 앞으로 집계). `setup.py` `OFFICE_SKILLS`,
+  전역 지침 3장 표, `docs/opencode/README.md`·`실기테스트.md`, `AGENTS.md` 폴더 구조에 추가. office-excel 설명에 안내 한 마디.
+- 도움말·인자 오류의 스킬 안내는 명령별(`SKILL_OF_COMMAND`, `skill_name`): `excel compare -h`는 office-data.
+- 테스트 `tests/test_excel_compare.py`.
+
 ## [1.4.79] - 2026-11-07
 
 사용법 단순화 (AGENTS.md "사용법 단순성").

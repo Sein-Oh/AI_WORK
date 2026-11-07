@@ -3,10 +3,11 @@
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
-- 에이전트용 스킬 (작업별 4개, 각 6KB 이하): [`office-excel`](../../CLI/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
+- 에이전트용 스킬 (작업별 5개, 각 6KB 이하): [`office-excel`](../../CLI/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
   [`office-doc`](../../CLI/office-cli/skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
   [`office-mail`](../../CLI/office-cli/skills/office-mail/SKILL.md) (outlook.py),
-  [`office-spec`](../../CLI/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment).
+  [`office-spec`](../../CLI/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment),
+  [`office-data`](../../CLI/office-cli/skills/office-data/SKILL.md) (excel.py compare: 표 두 판 비교, BOM 개정 비교. 앞으로 표 집계도 여기).
   공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`CLI/opencode/AGENTS.md`](../../CLI/opencode/AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
 - 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../docs/history/office-cli_WORK_PLAN_1.0.md)
@@ -15,8 +16,8 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 
 ```text
 CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
-├── skills/      에이전트용 스킬 4개: office-excel, office-doc, office-mail, office-spec (<이름>/SKILL.md)
-├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check
+├── skills/      에이전트용 스킬 5개: office-excel, office-doc, office-mail, office-spec, office-data (<이름>/SKILL.md)
+├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check / compare
 ├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
 ├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
@@ -197,6 +198,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border\|insert\|delete\|sort`(insert/delete/sort는 아래). `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `border`는 `--weight hairline\|thin\|medium\|thick\|none`(기본 thin, `none`은 테두리 지우기)과 `--box`(외곽선만, 안쪽 선은 그대로)이며 선 모양·굵기를 다시 읽어 비교(`style --border`는 격자만, 외곽선만은 `range --action border --box`). `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열. 이미 그 상태면(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 값이 없는 범위의 `clear --type contents`, 같은 자리로 `copy`/`move` 등) 바꾸지 않고 "바뀐 것 없음"(`unchanged: true`). `hide`/`unhide`와 `clear`(전체·서식)는 엑셀이 일부만 숨김·사용 범위 밖 유효성 검사를 알려 주지 않을 수 있어 늘 바꾼 것으로 봅니다 |
 | `comment` | 칸 메모(이전 방식 메모, `Range.Comment`/`AddComment`, Office 2007+와 365). `--action list`(기본): 시트(또는 `--range`)의 메모마다 `no, cell, author, text`(메모 하나 1,000자까지, 넘으면 `text_truncated`), 행·열 순서, 100개 또는 글자 상한까지 표시하고 넘으면 `truncated` + `--start`로 이어 보는 명령. 0개면 `VERIFIED: 0건`. `--action add --range B5 --text "의견"`(`--text`/`--file`이 있으면 `--action add`가 없어도 달기, `\n`은 줄바꿈, 범위를 주면 칸마다 같은 메모, 한 번에 500개까지): `--file 메모.csv`(`.csv/.tsv/.md 표`, 열: 칸, 메모. 첫 행이 `칸`·`셀`·`cell` 등이면 머리글. 칸에 `'요약'!C3`처럼 시트를 적을 수 있고 없으면 `--sheet`·활성 시트. 값은 글자 그대로. 셋째 열 이후에 글이 있으면 `write --cells` 칸값 파일과 같이 하나도 달지 않고 STOP_RETRY)로 여러 개를 한 번에 달며, 한 줄이라도 잘못되면(칸 주소가 아님, 메모 없음) 하나도 달지 않고 STOP_RETRY(파일 줄 번호, 오류 로그에는 줄 번호만). 같은 칸이 여러 줄이면 한 메모로 합치고 `warnings`. 이미 메모가 있는 칸이 있으면 아무것도 달지 않고 `needs_user_decision`(message에 칸과 기존 메모 앞부분, 오류 로그에는 칸 주소만): 사용자가 고르면 `--overwrite`(새 메모로 바꿈) 또는 `--append`(기존 메모 아래 줄에 덧붙임, 둘은 함께 쓸 수 없음). 이미 같은 메모가 있거나 `--append`인데 기존 메모 끝 줄이 붙일 메모와 같으면 그 칸은 그대로(`unchanged`, 같은 명령을 다시 실행해도 두 번 붙지 않음, 모두 그대로면 되돌리기 지점도 남기지 않음). `--action delete --range B2:D20`(`--range` 필수): 그 범위의 메모를 지움(0개면 바꾼 것 없음, 되돌리기 지점도 남기지 않음). add/delete 모두 `--dry-run`(`planned`, `confirm_commands`: 이미 메모가 있는데 `--overwrite`/`--append`가 없으면 두 명령을 모두 줌)과 되돌리기 지점(`office.py undo`), 단 뒤·지운 뒤 메모를 다시 읽어 확인(`applied`, 다르면 `UNVERIFIED:`). 엑셀이 메모 달기를 거절하면(보호된 시트 등) STOP_RETRY |
 | `check` | 표의 값을 등록된 규격서와 한 번에 대조: `--range B2:D50 --item-col B --value-col D [--section-col E] [--unit-col E] --spec "<파일 또는 폴더>" [--section "3.2"] [--save "대조결과.xlsx"]`. 아래 "check" |
+| `compare` | 표 두 판 비교(BOM 개정 비교, Excel 불필요): `--target "<이전 판>" --target2 "<새 판>" [--sheet <이전 시트>] [--sheet2 <새 시트>] [--key "<머리글 이름>[,<머리글 이름>]"] [--save "<결과.xlsx>"] [--overwrite]`. 아래 "compare" |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
@@ -272,6 +274,19 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     (행 번호 열은 넣지 않음)로 쓰고 다시 읽어 확인.
   - 고칠 수 있는 표기(`==`, `=>`, `=<`, `<>`, `AND`, `&&`, `OR`, `||`, `또는`, `contains`, `포함`)는 STOP_RETRY와 고친 식 `[추천]`. 읽을 수 없는 식은 형식과 예를 알리고
     `[추천]` 없이 STOP_RETRY. `--search`, `--formulas`와 함께 쓸 수 없습니다.
+- `compare`(표 두 판 비교, 읽기 전용: 두 파일을 바꾸지 않음. 1.4.80, 스킬 office-data):
+  - 입력: `.xlsx`, `.xlsm`(openpyxl, 값), `.csv`, `.tsv`(글자 그대로, 인코딩 자동 판별). `.xls`·DRM 파일은 STOP_RETRY(엑셀에서 .xlsx로 저장 안내). 엑셀에 열린 파일도 디스크의 파일을 읽고 `warnings`("저장하지 않은 변경은 빠짐"). 계산된 값이 없는 수식 칸이 있으면 UNVERIFIED.
+  - 시트: `--sheet`/`--sheet2` -> 새 판은 이전 판과 같은 이름의 시트 -> 시트 하나 -> 머리글로 열 역할을 가장 많이 알아본 시트(같으면 활성 시트).
+  - 머리글: 위쪽 30행 중 열 역할을 가장 많이 알아본 행(제목 행 아래의 머리글). 역할과 같은 뜻 머리글(괄호 안 단위·공백·기호 무시, 전각 -> 반각, 영문 소문자):
+    품번(품번, 자재코드, 품목코드, Part No, P/N, Item Code ...), 상위품번(상위품번, 모품번, Parent ...), 레벨(레벨, Level, Lvl), 수량(수량, 소요량, Qty, Q'ty, Quantity), 단위(Unit, UOM), 품명(품명, 품목명, Description, Name), 규격(규격, 사양, Spec, Value), 메이커(메이커, 제조사, Maker, Manufacturer, Vendor), 위치(위치, Ref Des, Reference, Designator, Location), 비고(Remark, Note). 알아본 열은 JSON `columns`와 `preview`.
+  - 열 짝: 역할이 같으면 머리글이 달라도 짝, 나머지는 머리글 비교값이 같은 열. 한쪽에만 있는 열은 비교하지 않고 `warnings`.
+  - 짝지을 키(도구가 정함): 품번이 두 판 모두 행마다 다르면 품번. 같은 품번이 여러 행(여러 단계 BOM)이면 상위품번 열 -> 레벨로 찾은 상위품번(레벨 열의 위 단계) -> 레벨로 찾은 상위 경로 -> 위치를 더한 키 중 두 판 모두 행마다 다른 첫 키(`key_columns`, `key_reason`). 그래도 없거나 품번 열을 알아보지 못하면 STOP_RETRY `[후보] 1) .. 2) ..`(열로 적을 수 있는 키, 같은 키 행 수가 적은 순서)와 같은 번호의 `confirm_commands`(`--key`를 넣은 전체 명령). `--key "상위품번,품번"`은 이전 판 머리글 이름(쉼표로 여럿), 열 문자(`B`)를 주면 머리글 이름으로 고친 전체 명령 `[추천]`. `--key`로 준 키가 같은 행은 나온 순서대로 짝짓고 `warnings`. 키 열이 빈 행(소계·구분 줄)은 비교하지 않고 `warnings`.
+  - 정규화: 앞뒤·여러 칸 공백, 전각/반각. 숫자는 `1` = `1.0` = `"1"` = `"1.00"`, `"1,000"` = 1000(앞자리 0이 있는 글 `007`은 글자 그대로). 품번·상위품번은 대소문자·공백도 무시하고 앞자리 0 유지(`0100` != `100`), 단위·메이커는 대소문자 무시. 위치는 집합: `R1-R3, R5` = `R1,R2,R3,R5` = `r5 r1~r3`(같은 머리글자 범위만 펼침, 2000개 넘는 범위는 펼치지 않음).
+  - 구분: 추가, 삭제, 수량 변경(이전 -> 새, 차이 `+1`), 위치 변경(더해진·빠진 위치), 속성 변경(바뀐 열마다 이전 -> 새), 대체 추정(삭제된 행과 추가된 행이 같은 위치(반 이상 겹침)이거나 같은 상위품번이고 품명이 비슷한 짝, 위치·상위 정보가 없는 표는 품명 유사도 0.85 이상: "품번 변경 추정", `guess: true`, 추가·삭제에서 빼서 따로 보고하고 합치지 않음). 한 행이 수량과 속성이 함께 바뀌면 두 구분에 모두 셈(`count`는 바뀐 행 수).
+  - JSON: `counts`(구분별 수), 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`, `replaced_guess`(각 앞 20개, 항목마다 `key`와 행 번호), `shown`, `truncated`, 잘렸으면 `full_result_file`. 0건이면 `count: 0`, `preview`와 directive에 "바뀐 것 없음".
+  - 결과 xlsx(`--save`, 생략하면 바뀐 것이 있을 때 작업 폴더): 시트 요약, 추가, 삭제, 변경(키, 구분, 열, 이전 값, 새 값, 차이, 이전·새 행), 대체 추정. 다시 열어 시트마다 행 수를 확인(R1). 같은 이름이 있으면 새 이름(`recovered`), `--overwrite`일 때만 덮어씀. 잠겨 있으면 `save_with_lock_fallback`.
+  - 메모: 새 판이 xlsx면 바뀐 칸(수량·위치·속성 칸, 추가·대체 추정 행의 품번 칸)의 메모 파일(`memo_file`, 칸, 메모, 500칸까지)과 `next_commands[0]` = `comment --target <새 판> --action add --file <메모> --dry-run`(미리보기). 실제로 다는 명령은 그 결과의 `confirm_commands`.
+  - 시간: 10만 행 BOM 두 판 약 25초(리눅스, 대부분 openpyxl 읽기). 이전 판을 읽은 뒤 새 판 읽기가 명령 시간 제한을 넘을 것 같으면 읽은 이전 판을 캐시(`<캐시 폴더>/compare/`)에 두고 `CONTINUE:`(R10), 같은 명령은 캐시를 다시 쓰고 끝나면 지움. 제한이 가까우면 대체 추정을 건너뛰고 `warnings`.
 - `check`(규격 대조, 읽기 전용: 문서를 바꾸지 않음):
   - 단위: 값 칸의 단위(`30 mm`) -> 행의 단위 열 -> 값 열 머리글(`값(mm)`) 순서. 단위 열은 `--unit-col`, 생략하면 값 열 바로 오른쪽 열의 머리글이 `단위`(`Unit`)일 때 그 열을 씁니다(JSON `unit_col`). 모두 없으면 규격 단위로 추정하지 않고 `판단필요`(`칸 단위 없음`).
   - 행: `--range`의 행(열은 무시)에서 `--item-col`(항목 글), `--value-col`(값), `--section-col`(행별 장절, 없으면 `--section`)을 읽습니다. 바로 위 행의 값 열 머리글에서 단위를 읽습니다(`측정값 [V]`, `전류(mA)`). 열린 문서·닫힌 xlsx·CSV 모두. 500행까지.

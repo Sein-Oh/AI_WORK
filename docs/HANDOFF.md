@@ -4,7 +4,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.71**, **office-cli 1.4.79** (작업 브랜치 `ccr-ecab210c-awib23`, 2026-11-07 기준 main에는 아직 없음: PR을 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.71**, **office-cli 1.4.80** (작업 브랜치 `ccr-ecab210c-awib23`, 2026-11-07 기준 main에는 아직 없음: PR을 머지했으면 main)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
   ppt slide `--dest`, `--cards` 구분 `;`, 별칭·줄임말 제거. 클라우드 테스트: ml-kit 894 passed·1 skipped, office-cli+공통 3296 passed.
@@ -59,6 +59,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | office-cli 1.4.77 | 회사 PC 실기(2026-11-06) 대응: 닫힌 파일에 쓴 뒤 닫힌 시트를 읽어 실패로 보고하던 문제(`write --cells`, `chart`, `comment list`), `--cells` 쉼표 구분은 `;`로 바꾼 명령을 `[추천]`, `check --unit-col`(값 열 오른쪽 `단위` 열 자동), `word fill --slots "자리=값; 자리=값"`(값 파일 없이) |
 | office-cli 1.4.78 | `word fill`: 괄호 안 띄어쓰기만 다른 자리(`{{ 업체명 }}`)는 문서의 자리 하나와 맞으면 채우고 `recovered`, `--slots` 값 안의 줄바꿈 유지. 스킬 크기 여유(각 64~118바이트) |
 | office-cli 1.4.79 | 사용법 단순화: `[추천]`은 늘 전체 명령, transfer `--from-app`/`--to-app`, ppt slide `--dest`, `--cards` 구분 `;`, `CONTINUE` 횟수를 도구가 셈 |
+| office-cli 1.4.80 | `excel compare`(표 두 판 비교, BOM 개정 비교: 머리글·열 역할·짝지을 키를 도구가 정함, 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, 결과 xlsx와 새 판 칸 메모 미리보기)와 새 스킬 `office-data` |
 | office-cli 1.4.76 | 도구가 내는 명령(`next_commands`, `confirm_commands`, `[추천]` 전체 명령)의 따옴표를 실행 셸에 맞춤: OpenCode처럼 `pwsh`가 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1(`OFFICE_CLI_SHELL`로 강제). PowerShell은 작은따옴표(`$`·백틱·`{}`·`@`·`;` 글자 그대로), 5.1은 값 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈. 테스트에 셸 시뮬레이터(`CLI-dev/tests/shell_sim.py`) |
 | office-cli 1.4.75 | 11차 검토 수정: `confirm_commands`의 덮어쓰기·삭제·발송 항목에 `"destructive": true`("묻지 말고"라고 해도 늘 물음, 전역 지침 3장 6번), 문서를 바꾸는 이어 하기(`read --save` 뒤 write, write 뒤 chart, chart 뒤 transfer 등)는 `next_commands`에서 `confirm_commands`로, 파괴적 명령 오타는 `[후보]`, 발송 실패 초안은 다른 거부 문구, reader 층 A 허용 목록 완화(짝 따옴표·괄호, 전각 콜론, `±` 뒤 숫자, 단위 뒤 `(`) |
 | office-cli 1.4.72 | 9차 검토 수정: outlook 발송은 저장한 초안을 그 항목 그대로 보내는 `send --id <draft_id>` 하나로(`new`·`reply`·`forward`의 `--send` 없앰, 초안 결과의 `next_commands[0]`에 `needs_user_confirm: true`, 이미 보냈거나 지운 초안은 거부해 중복 발송 없음), 답장·전달은 보내지 않은 초안을 원본으로 쓰지 않음(열린 초안 창에 답장하던 위험). reader 층 A: `/` 값 구분은 양쪽 숫자+단위이고 `/` 뒤가 1·10^n이 아닐 때만(숫자만 앞이면 Hz·V 목록), AND 스니펫은 검색어마다 창(` / `로 이음), 단위 없는 검색어의 DC/AC 예외 없앰, 붙은 기호(천 단위 따옴표, U+2044·U+FF0F·U+2215, 곱하기, U+3161, 폭 없는 공백, 지수 `m-1`) 차단 |
@@ -134,7 +135,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 
 1. 준비: `C:\CLI\ml-kit`, `C:\CLI\office-cli`, `C:\CLI\opencode\AGENTS.md`, `C:\CLI\setup.py`·`setup.bat`, `C:\CLI-dev`를 지우고 새로 붙여넣음
    (`C:\CLI\python`, `opencode.exe`, `C:\CLI\opencode\opencode.jsonc`는 둠). 시험 폴더는 모두 `C:\CLI-dev\work\` 아래라 함께 지워짐.
-   `C:\CLI\setup.bat` 두 번 클릭(또는 `python C:\CLI\setup.py`)으로 OpenCode 스킬(ml-kit, office 4개: office-excel·office-doc·office-mail·office-spec),
+   `C:\CLI\setup.bat` 두 번 클릭(또는 `python C:\CLI\setup.py`)으로 OpenCode 스킬(ml-kit, office 5개: office-excel·office-doc·office-mail·office-spec·office-data),
    전역 지침(`CLI/opencode/AGENTS.md`), `opencode.jsonc`를 적용하고 시스템 PATH 확인 -> 새 터미널·OpenCode 다시 시작 (옛 `skills\office-cli` 폴더는 보관 후 지워짐)
 2. 자동 점검 (명령 하나, 질문 없음, 40~70분):
    ```powershell

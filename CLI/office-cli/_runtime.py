@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.79"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.80"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -128,24 +128,32 @@ def _omitted_candidates(n: int) -> str:
 
 
 def ambiguous(message: str, candidates: Iterable[str], log_message: Optional[str] = None,
-              replace: Optional[str] = None, values: Optional[Iterable[str]] = None) -> InputError:
+              replace: Optional[str] = None, values: Optional[Iterable[str]] = None,
+              option: Optional[str] = None) -> InputError:
     """후보가 둘 이상이라 고를 수 없음. message 끝에 '[후보] a, b, c'(최대 10개)를 붙입니다.
     후보는 문서에서 가져온 글(제목, 단락, 시트·문서 이름)이라 오류 로그에는 개수만 남깁니다.
     replace: 실행한 명령에서 바꿀 값(틀린 이름). 후보마다 그 값을 바꾼 전체 명령을 만들 수 있으면 '[후보] 1) a 2) b'와 같은 번호의
     confirm_commands (1.4.79, 사용법 단순성 2번: 사용자가 고르면 LLM이 명령에 끼워 넣지 않고 그 번호의 명령을 실행. 사용자가 고른
     뒤에만 실행하므로 next_commands가 아님, 덮어쓰기·삭제·발송이면 destructive).
-    values: 명령에 넣을 값 (보이는 글 candidates와 다를 때, 예: 메일 폴더 전체 경로 대신 끝 이름)."""
+    values: 명령에 넣을 값 (보이는 글 candidates와 다를 때, 예: 메일 폴더 전체 경로 대신 끝 이름).
+    option: 명령에 없던 옵션에 후보 값을 넣을 때 (replace 없이, 예: excel compare의 짝지을 키 --key, 1.4.80)."""
     cands = [str(c) for c in candidates]
     shown = cands[:MAX_CANDIDATES]
     more = f" 외 {len(cands) - len(shown)}개" if len(cands) > len(shown) else ""
     vals = [str(v) for v in values][:len(shown)] if values is not None else shown
-    cmds = [retry_replacing(replace, v) for v in vals] if replace and len(vals) == len(shown) else []
+    if replace and len(vals) == len(shown):
+        cmds = [retry_replacing(replace, v, option) for v in vals]
+    elif option and len(vals) == len(shown):
+        cmds = [retry_command({option: v}) for v in vals]
+    else:
+        cmds = []
     if cmds and all(c.startswith("python ") for c in cmds):
         tail = " [후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(shown, 1)) + more
         argv = list(CURRENT_ARGV or [])
         risky = "--overwrite" in argv or bool(set(argv) & {"delete", "clear", "send"}) or (argv[:1] and argv[0] in DESTRUCTIVE_COMMANDS)
-        nexts = [{"purpose": f"'{replace}' 대신 '{c}' (사용자가 고른 경우에만)", "command": cmd, **({"destructive": True} if risky else {})}
-                 for c, cmd in zip(shown, cmds)]
+        nexts = [{"purpose": (f"'{replace}' 대신 '{c}'" if replace else f"{option} {v}") + " (사용자가 고른 경우에만)", "command": cmd,
+                  **({"destructive": True} if risky else {})}
+                 for c, v, cmd in zip(shown, vals, cmds)]
         return InputError(message + tail, candidates=shown, fields={"confirm_commands": nexts},
                           log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
     tail = f" [후보] {', '.join(shown)}" + more
@@ -828,6 +836,7 @@ SAME_MEANING = [
     ("reader", "*", "--target", ["--file"]), ("reader", "*", "--path", ["--file"]), ("reader", "*", "--input", ["--file"]),
     ("office", "undo", "--target", ["--app"]),
     ("*", "*", "--output", ["--save"]), ("*", "*", "--out", ["--save"]), ("*", "*", "--save-as", ["--save"]),
+    ("excel", "compare", "--file2", ["--target2"]), ("excel", "compare", "--path2", ["--target2"]),
     ("*", "*", "--sheet-name", ["--sheet"]), ("excel", "*", "--cell", ["--range"]), ("*", "*", "--rows", ["--max-rows"]),
     ("excel", "write", "--text", ["--value"]), ("excel", "read", "--text", ["--search"]),
     ("word", "write", "--append", ["--pos", "end"]), ("word", "write", "--position", ["--pos"]), ("word", "write", "--at", ["--pos"]),
@@ -856,12 +865,19 @@ OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply
 # 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
 SKILL_OF_TOOL = {"excel": "office-excel", "word": "office-doc", "ppt": "office-doc", "office": "office-doc",
                  "outlook": "office-mail", "reader": "office-spec"}
+# 도구 파일과 다른 스킬에 있는 명령 (1.4.80: 표 두 판 비교는 office-data)
+SKILL_OF_COMMAND = {("excel", "compare"): "office-data"}
+
+
+def skill_name(tool: str) -> str:
+    """지금 실행한 명령을 설명하는 스킬 이름 (도움말·인자 오류 안내). 모르는 도구(테스트용 등)는 office-doc."""
+    cmd = CURRENT_ARGV[0] if CURRENT_ARGV and CURRENT_TOOL == tool else ""
+    return SKILL_OF_COMMAND.get((tool, cmd)) or SKILL_OF_TOOL.get(tool, "office-doc")
 
 
 def skill_file(tool: str) -> str:
-    """도구의 스킬 파일 경로. 모르는 도구(테스트용 등)는 office-doc."""
-    name = SKILL_OF_TOOL.get(tool, "office-doc")
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills", name, "SKILL.md")
+    """도구(지금 실행한 명령)의 스킬 파일 경로."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills", skill_name(tool), "SKILL.md")
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -891,7 +907,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             sys.stderr.write(f"[WARN] 도움말을 만들지 못했습니다 ({type(e).__name__}). SKILL.md를 보세요.\n")
         emit_json({"status": "ok", "tool": self.tool_name, "command": "help", "verified": True,
                    "skill_file": skill_file(self.tool_name),
-                   "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} "
+                   "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {skill_name(self.tool_name)} "
                                       "스킬(SKILL.md)의 명령 템플릿을 그대로 사용하세요. "
                                       "도구 코드(.py)는 읽지 마세요. 방법을 모르겠으면 사용자에게 물어보세요."})
 
@@ -1004,7 +1020,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             "error_type": "input",
             "message": f"CLI 인자 오류: {message}." + self._hint(message),
             "agent_directive": "STOP_RETRY: CLI 인자가 잘못되었습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 실행하고, "
-                               f"없으면 {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} 스킬(SKILL.md)의 명령 형식을 확인해 사용자에게 보고하세요.",
+                               f"없으면 {skill_name(self.tool_name)} 스킬(SKILL.md)의 명령 형식을 확인해 사용자에게 보고하세요.",
         }
         write_error_log(self.tool_name, None, payload)
         emit_json(payload)

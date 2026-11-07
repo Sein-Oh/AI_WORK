@@ -12,7 +12,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 ## 폴더 구조
 - `CLI/<tool>/`: 사용자 PC의 `C:\CLI`로 그대로 복사되는 폴더. **실행에 필요한 .py와 스킬 파일(`SKILL.md`)만** 둔다.
   스킬은 작업별 `skills/<스킬 이름>/SKILL.md`(ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, office-cli: `office-excel`,
-  `office-doc`, `office-mail`, `office-spec`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
+  `office-doc`, `office-mail`, `office-spec`, `office-data`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
 - `CLI-dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
   `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
   `CLI-dev`의 테스트·러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험한다.

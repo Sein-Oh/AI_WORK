@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""CLI/setup.py (배포 설치): 스킬(ml-kit, office-cli 작업별 4개)·전역 AGENTS.md·opencode.jsonc를 OpenCode 설정 폴더로 복사
+"""CLI/setup.py (배포 설치): 스킬(ml-kit, office-cli 작업별 5개)·전역 AGENTS.md·opencode.jsonc를 OpenCode 설정 폴더로 복사
 (바뀐 것만, 덮어쓰기 전 CLI\\data\\setup_backup_<시각>에 보관), 옛 통합 스킬 폴더 정리, 시스템 PATH 등록(가짜 winreg),
 동작 확인, --check, setup.bat, run_all_tests.py diag의 스킬·PATH 확인."""
 import importlib.util
