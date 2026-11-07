@@ -4,7 +4,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.71**, **office-cli 1.4.80** (작업 브랜치 `ccr-ecab210c-awib23`, 2026-11-07 기준 main에는 아직 없음: PR을 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.72**, **office-cli 1.4.80** (작업 브랜치 `ccr-ecab210c-awib23`, 2026-11-07 기준 main에는 아직 없음: PR을 머지했으면 main)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
   ppt slide `--dest`, `--cards` 구분 `;`, 별칭·줄임말 제거. 클라우드 테스트: ml-kit 894 passed·1 skipped, office-cli+공통 3296 passed.
@@ -107,6 +107,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | ml-kit 2.9.69 | 저장(버전 원장 기록, 성능예측표, 보고서, 결과 파일) 뒤 시간 제한에 닿으면 CONTINUE 대신 ok + `UNVERIFIED:`(같은 명령 재실행으로 v2가 또 생기던 문제). CONTINUE 상한 300번(같은 progress 2번이면 멈춤). 구분자 실수(`--where`/`--exclude-where` 조건 사이 `,`, `-i` `k=v` 사이 `;`·띄어쓰기, `--eval` 식 사이 `,`, `--dtypes`/`-x`/`-y` 구분)는 고친 전체 명령 `[추천]`. 인자 오류: 줄임말 끔, 같은 뜻 옵션은 `[추천]` 전체 명령, 비슷한 철자는 `[후보]` |
 | ml-kit 2.9.70 | `ml_train --dry-run`(만들 버전, `--overwrite`면 바뀔 파일과 `confirm_commands`). 이미 있는 버전의 `[추천]`이 전체 명령. 도움말 실패에도 JSON 1줄 |
 | ml-kit 2.9.71 | 스킬 4개(ml-train, ml-predict, ml-report, ml-map), `-m <데이터 파일>`로 최고 버전 자동, 개선·`CONTINUE` 횟수를 도구가 셈, `[추천]` 전체 명령, `--description`·줄임말 제거 |
+| ml-kit 2.9.72 | `-x` 생략 시 입력 자동 선택(ID·상수·빈 열·메모·타겟 누수 열을 이유와 함께 뺌, `-x`를 주면 의심 입력 경고), `ml_predict --suggest N`(불확실하고 실측과 먼 다음 실험 조건, `--maximize/--minimize`면 좋은 쪽, 실험계획 표), 한 건 예측의 입력별 영향 `explain`, 새 파일에 실제값이 있으면 `actual_check`와 재학습 명령 |
 | ml-kit 2.9.67 | 검토 6차(10000행 x 1000열) 수정: 학습 전 준비(읽기·검증·상관행렬·타겟 준비)를 저장해 이어 실행이 다시 쓰고, 시계 없이 하는 첫 단계에 시작 표시를 남겨 2번 끊긴 단계는 `STOP_RETRY`(`[추천] ... --time-limit 570`), 제한 + 15초 감시 스레드가 1줄 JSON을 냄. CONTINUE 반복은 `progress`가 바뀌는 동안(같은 문구 2번 연속이면 멈춤, 최대 60번) |
 | ml-kit 2.9.66 | 학습 후보 모델 안에서도 교차검증 fold마다 저장하고 다음 fold 전에 시계를 봄(후보 하나가 120초를 넘어도 끝남, 한 번에 학습한 것과 같은 결과) |
 | ml-kit 2.9.65 | 검토 5차 수정: 순열 중요도는 둘째 열부터 시계를 보고 12초마다 끝낸 열을 저장(강제 종료돼도 진행이 남음), 대체 저장 정리는 `ml-kit-resume` 폴더의 도구 파일 이름만(사용자 파일 삭제 방지), 같은 수를 다른 표기로 쓴 코드 열(`01`/`001`), 중량 단위(`킬로그램중`), 1위 모델 전체 적합 시간 추정 |

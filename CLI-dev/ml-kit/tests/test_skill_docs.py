@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""작업별 스킬 4개(CLI/ml-kit/skills/<이름>/SKILL.md, 2.9.71)와 코드가 어긋나지 않는지: 버전, OpenCode 머리말, 백틱 명령의 --옵션,
+"""작업별 스킬 4개(CLI/ml-kit/skills/<이름>/SKILL.md, 2.9.71, 2.9.72: 입력 자동 선택, --suggest)와 코드가 어긋나지 않는지: 버전, OpenCode 머리말, 백틱 명령의 --옵션,
 크기(6KB), 공통 규칙이 4개에서 같음, 모든 스크립트가 어느 스킬에든 있음, 꼭 적어야 할 기능."""
 import os
 import re
@@ -100,9 +100,10 @@ def test_skill_mentions_features():
     """경량 LLM은 스킬에 없는 기능을 '지원 안 함'으로 답함: 기능마다 맡은 스킬에."""
     need = {
         "ml-train": ("--task classification", "--positive-class", "--dtypes", "--eval \"", "--exclude-where", "features.txt",
-                     "--history", "--dry-run", "goal_met", "improve_stopped", "delta_score"),
+                     "--history", "--dry-run", "goal_met", "improve_stopped", "delta_score",
+                     "입력 열(피처)은 묻지 않는다", "-x \"<피처1>,<피처2>\""),
         "ml-predict": ("-m \"<데이터파일>\"", "model_chosen", "-f \"<새데이터파일>\"", "--save", "--find", "--vary", "--sweep",
-                       "--maximize", "--minimize", "--where"),
+                       "--maximize", "--minimize", "--where", "--suggest <개수>", "실험계획", "실제값 비교"),
         "ml-report": ("ml_report.py\" -f", "--title", "--slots", "ml_export.py\" -m", "--keep", "candidates"),
         "ml-map": ("ml_map.py\" -f", "--find", "--vary", "--points", "extrapolated"),
     }
@@ -110,3 +111,10 @@ def test_skill_mentions_features():
         text = _read(name)
         for needle in needles:
             assert needle in text, (name, needle)
+
+
+def test_train_templates_have_no_x():
+    """2.9.72: -x는 사용자가 입력 열을 말했을 때만 (표의 한 줄). 학습 명령 틀에는 -x가 없어 도구가 입력을 고름 (한 가지 형태)."""
+    text = _read("ml-train")
+    templates = [b for b in re.findall(r"```powershell\n(.*?)```", text, flags=re.S) if "ml_train.py" in b]
+    assert templates and all(" -x " not in b for b in templates), templates

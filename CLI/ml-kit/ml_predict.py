@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.71"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.72"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1883,6 +1883,35 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
     # 큰 데이터: 칸마다 정규식과 replace를 따로 돌리면 학습 전 준비만 수십 초)
     s = pd.Series([_number_cell(v) for v in s.to_numpy()], index=s.index, name=s.name, dtype=object)
     return pd.to_numeric(s, errors="coerce").astype(float)
+
+
+def normalize_labels(series: pd.Series) -> pd.Series:
+    """
+    (학습 라벨과 예측 파일의 실측 라벨이 같게: ml_train, ml_predict 실측 비교가 함께 씀)
+    Converts class labels to stable strings so the same class never splits by storage type:
+    1, 1.0, '1' -> '1'; ' 양품 ' -> '양품'. Placeholder strings become missing.
+    """
+    def _norm(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return None
+        if isinstance(v, (bool, np.bool_)):
+            return str(bool(v))
+        if isinstance(v, (int, np.integer)):
+            return str(int(v))
+        if isinstance(v, (float, np.floating)):
+            return str(int(v)) if float(v).is_integer() else str(float(v))
+        t = str(v).strip()
+        if t in ("", "-", "N/A", "n/a", "NA", "null", "NULL", "None", "nan", "NaN", "미측정"):
+            return None
+        try:
+            f = float(t.replace(",", ""))
+            if f.is_integer() and re.fullmatch(r"[+-]?[\d,]+(\.0+)?", t):
+                return str(int(f))
+        except ValueError:
+            pass
+        return t
+
+    return series.astype("object").map(_norm)
 
 
 _CSV_ENCODINGS = ["utf-8-sig", "cp949", "euc-kr", "latin1"]
@@ -4921,6 +4950,277 @@ def _offer_median_fill(args: argparse.Namespace, df_input: pd.DataFrame, model_i
         error_type="needs_user_decision")
 
 
+# ------------------------------------------------------------------------------
+# Per-prediction explanation (2.9.72, -i with up to INLINE_SHOW_MAX records): the effect of each input on the
+# prediction, measured against a baseline record (training median; the most common value for text inputs). The
+# symmetric two-point estimate averages "take the input away from the record" (record -> its value replaced by the
+# baseline) and "give it to the baseline" (baseline -> the record's value), so effects of two inputs that act together
+# are split fairly. One batch prediction per model: 2 + 2 x inputs rows per record. Classification: the effect on the
+# probability of the predicted class.
+# ------------------------------------------------------------------------------
+EXPLAIN_SHOWN = 5        # inputs per record in the JSON (largest effects first)
+EXPLAIN_PREVIEW = 2      # raised / lowered inputs named in the preview line
+
+
+def explain_baseline(meta: Dict[str, Any], version_dir: str, cache: Dict[str, Any]) -> Dict[str, Any]:
+    """Baseline value of every raw model input: the training median (numbers), the most common training value
+    (text inputs, from model_dataset.csv; the first known kind without it), the median date (model_dataset.csv)."""
+    schema = meta.get("feature_schema") or {}
+    cats = schema.get("categorical") or {}
+    dates = schema.get("datetime") or {}
+    stats = meta.get("feature_stats") or {}
+    data = None
+    base: Dict[str, Any] = {}
+    for c in model_raw_inputs(meta):
+        if c in cats or c in dates:
+            if data is None:
+                data = _load_snapshot(version_dir, cache)
+            col = data[c] if data is not None and c in data.columns else None
+            if c in cats:
+                vals = normalize_category(col).dropna() if col is not None else pd.Series(dtype=object)
+                if len(vals):
+                    base[c] = vals.value_counts().index[0]
+                elif cats[c]:
+                    base[c] = cats[c][0]
+            elif col is not None:
+                dt = parse_datetime(col).dropna()
+                if len(dt):           # as text, the way a date cell or -i value is read ('YYYY-MM-DD[ HH:MM]')
+                    mid = dt.sort_values().iloc[len(dt) // 2]
+                    base[c] = mid.strftime("%Y-%m-%d %H:%M" if (mid.hour or mid.minute) else "%Y-%m-%d")
+        elif (stats.get(c) or {}).get("median") is not None:
+            base[c] = float(stats[c]["median"])
+    return base
+
+
+def _model_scores(item: Dict[str, Any], rows: pd.DataFrame, label: Optional[str] = None) -> np.ndarray:
+    """Predictions of rows (raw inputs): regression values, or the probability of `label` (classification)."""
+    meta = item["meta"]
+    df = apply_inference_evals(rows.copy(), meta.get("derived_evals", []))
+    X = prepare_features(df, meta["feature_schema"])
+    if label is None:
+        return np.asarray(item["pipeline"].predict(X), dtype=float)
+    classes = [str(c) for c in item["pipeline"].classes_]
+    return np.asarray(item["pipeline"].predict_proba(X)[:, classes.index(label)], dtype=float)
+
+
+def explain_predictions(item: Dict[str, Any], records: pd.DataFrame, base: Dict[str, Any],
+                        labels: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Per record: [{input, value, baseline, effect}] sorted by size (all inputs; the caller cuts)."""
+    names = [c for c in model_raw_inputs(item["meta"]) if c in base and c in records.columns]
+    out: List[Dict[str, Any]] = []
+    if not names:
+        return out
+    schema = item["meta"].get("feature_schema") or {}
+    records = records.copy()
+    for c in names:                        # -i values are text cells: numbers as numbers (a number baseline fits in)
+        if c not in (schema.get("categorical") or {}) and c not in (schema.get("datetime") or {}):
+            records[c] = coerce_numeric(records[c])
+    records = records.astype(object)
+    blocks = []
+    for i in range(len(records)):
+        x = records.iloc[[i]].reset_index(drop=True)
+        b = x.copy()
+        for c in names:
+            b.loc[0, c] = base[c]
+        rows = [x, b]
+        for c in names:
+            xb = x.copy()
+            xb.loc[0, c] = base[c]
+            bx = b.copy()
+            bx.loc[0, c] = x.loc[0, c]
+            rows += [xb, bx]
+        blocks.append(pd.concat(rows, ignore_index=True))
+    for i, block in enumerate(blocks):
+        f = _model_scores(item, block, labels[i] if labels else None)
+        fx, fb = f[0], f[1]
+        effects = []
+        for j, c in enumerate(names):
+            e = 0.5 * ((fx - f[2 + 2 * j]) + (f[3 + 2 * j] - fb))
+            effects.append({"input": c, "value": _cell(records.iloc[i][c]), "baseline": _cell(base[c]),
+                            "effect": round_pred(float(e))})
+        effects.sort(key=lambda r: -abs(float(r["effect"])))
+        out.append({"record": i + 1, "prediction": round_pred(float(fx)), "baseline_prediction": round_pred(float(fb)),
+                    **({"class": labels[i]} if labels else {}), "effects": effects})
+    return out
+
+
+def explain_brief(target: str, rec: Dict[str, Any]) -> str:
+    """One short line: '수율: 높인 입력: 온도 +3.2, 압력 +1.1 / 낮춘 입력: 속도 -0.8'."""
+    scale = max(abs(float(rec["prediction"])), abs(float(rec["baseline_prediction"])), 1e-12)
+    top = max((abs(float(r["effect"])) for r in rec["effects"]), default=0.0)
+    eff = [r for r in rec["effects"] if abs(float(r["effect"])) > max(1e-6 * scale, 0.01 * top)]
+    up = [r for r in eff if float(r["effect"]) > 0][:EXPLAIN_PREVIEW]
+    down = [r for r in eff if float(r["effect"]) < 0][:EXPLAIN_PREVIEW]
+    if not up and not down:
+        return ""
+    def _fx(r: Dict[str, Any]) -> str:
+        return f"{strip_unit(r['input'])} {float(r['effect']):+.3g}"
+    head = f"{strip_unit(target)}" + (f" '{rec['class']}' 확률" if rec.get("class") is not None else "")
+    parts = ([f"높인 입력: {', '.join(_fx(r) for r in up)}"] if up else []) + \
+            ([f"낮춘 입력: {', '.join(_fx(r) for r in down)}"] if down else [])
+    return f"{head}: " + " / ".join(parts)
+
+
+# ------------------------------------------------------------------------------
+# Retrain alert (2.9.72, -f): when the new file holds the measured values of a target, the prediction error on those
+# rows is compared with the validation score of training (model_<t>.json). Clearly worse -> a warning and
+# next_commands = ml_train on the new file with the same inputs and targets. Rule (at least ACTUAL_MIN_ROWS rows):
+# regression RMSE > ACTUAL_RMSE_RATIO x validation RMSE, or R2 more than ACTUAL_R2_DROP below validation R2 with RMSE
+# above ACTUAL_RMSE_SOFT x validation RMSE (a narrow range of new values lowers R2 alone without larger errors);
+# classification accuracy more than ACTUAL_ACC_DROP below validation accuracy.
+# ------------------------------------------------------------------------------
+ACTUAL_MIN_ROWS = 10
+ACTUAL_RMSE_RATIO = 1.5
+ACTUAL_RMSE_SOFT = 1.2
+ACTUAL_R2_DROP = 0.1
+ACTUAL_ACC_DROP = 0.1
+
+
+def _actual_column(df: pd.DataFrame, target: str, inputs: List[str]) -> Optional[str]:
+    cols = [str(c) for c in df.columns]
+    if target in cols:
+        return target
+    same = [c for c in cols if c not in inputs and not c.startswith(("pred_", "proba_", "conf_", "map_"))
+            and (strip_unit(c) == strip_unit(target) or _same_unit_name(c, target))]
+    return same[0] if len(same) == 1 else None
+
+
+def actual_check(item: Dict[str, Any], df_input: pd.DataFrame, df_result: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """The error of the predictions on the rows of the new file that hold the target's measured value, next to the
+    validation score of training. None when the file has no such column or no measured value."""
+    meta = item["meta"]
+    t = str(item["target"])
+    col = _actual_column(df_input, t, model_raw_inputs(meta))
+    if col is None or f"pred_{t}" not in df_result.columns:
+        return None
+    task = meta.get("task", "regression")
+    out: Dict[str, Any] = {"column": col}
+    if task == "classification":
+        actual = normalize_labels(df_input[col]).to_numpy(dtype=object)
+        pred = df_result[f"pred_{t}"].astype(str).to_numpy(dtype=object)
+        ok = np.array([a is not None for a in actual])
+        n = int(ok.sum())
+        if not n:
+            return None
+        a, p = actual[ok].astype(str), pred[ok]
+        acc = float(np.mean(a == p))
+        f1s = []
+        for c in sorted(set(a) | set(p)):
+            tp = float(np.sum((a == c) & (p == c)))
+            prec = tp / max(float(np.sum(p == c)), 1.0)
+            rec = tp / max(float(np.sum(a == c)), 1.0)
+            f1s.append(0.0 if prec + rec == 0 else 2 * prec * rec / (prec + rec))
+        out.update({"rows": n, "accuracy": round(acc, 4), "f1_macro": round(float(np.mean(f1s)), 4)})
+        val_acc = meta.get("accuracy")
+        out["validation"] = {"accuracy": val_acc, "f1_macro": meta.get("val_f1_macro")}
+        worse = n >= ACTUAL_MIN_ROWS and val_acc is not None and acc < float(val_acc) - ACTUAL_ACC_DROP
+        out["text"] = (f"{strip_unit(t)} 정확도 {acc:.3f} (학습 검증 {float(val_acc):.3f})" if val_acc is not None
+                       else f"{strip_unit(t)} 정확도 {acc:.3f}")
+    else:
+        actual = coerce_numeric(df_input[col]).to_numpy(dtype=float)
+        pred = coerce_numeric(df_result[f"pred_{t}"]).to_numpy(dtype=float)
+        ok = np.isfinite(actual) & np.isfinite(pred)
+        n = int(ok.sum())
+        if not n:
+            return None
+        err = pred[ok] - actual[ok]
+        rmse = float(np.sqrt(np.mean(err ** 2)))
+        mae = float(np.mean(np.abs(err)))
+        var = float(np.sum((actual[ok] - actual[ok].mean()) ** 2))
+        r2 = 1.0 - float(np.sum(err ** 2)) / var if n >= 2 and var > 0 else None
+        out.update({"rows": n, "rmse": round_pred(rmse), "mae": round_pred(mae),
+                    "r2": round(r2, 4) if r2 is not None else None})
+        v_rmse, v_r2 = meta.get("rmse"), meta.get("val_r2")
+        out["validation"] = {"rmse": v_rmse, "mae": meta.get("mae"), "r2": v_r2}
+        worse = n >= ACTUAL_MIN_ROWS and v_rmse is not None and (
+            rmse > ACTUAL_RMSE_RATIO * float(v_rmse)
+            or (r2 is not None and v_r2 is not None and r2 < float(v_r2) - ACTUAL_R2_DROP
+                and rmse > ACTUAL_RMSE_SOFT * float(v_rmse)))
+        out["text"] = (f"{strip_unit(t)} RMSE {rmse:.4g}" + (f" (학습 검증 {float(v_rmse):.4g})" if v_rmse is not None else "")
+                       + (f", R2 {r2:.3f}" + (f" (학습 검증 {float(v_r2):.3f})" if v_r2 is not None else "")
+                          if r2 is not None else ""))
+    out["worse"] = bool(worse)
+    out["judged"] = n >= ACTUAL_MIN_ROWS
+    if not out["judged"]:
+        out["note"] = f"실제값이 있는 행이 {n}개로 {ACTUAL_MIN_ROWS}개보다 적어 학습 때와 비교해 판단하지 않음"
+    return out
+
+
+def _ledger_record(version_dir: str, version: Optional[str]) -> Dict[str, Any]:
+    """The history.jsonl record of the version (its --dtypes, ...); {} when there is none (a copied version folder)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(version_dir)), "history.jsonl")
+    rec: Dict[str, Any] = {}
+    try:
+        for line in read_text_file(path).splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(r, dict) and r.get("version") == version:
+                rec = r
+    except OSError:
+        pass
+    return rec
+
+
+def retrain_commands(args: argparse.Namespace, items: List[Dict[str, Any]], checks: Dict[str, Dict[str, Any]],
+                     out_dir: str) -> List[Dict[str, Any]]:
+    """ml_train on the new file with the inputs and targets of the models whose actual error is clearly worse (one
+    command per training recipe; every target of that recipe with measured values in the file). Long input lists are
+    written to <out_dir>/<file>_retrain_features[_<n>].txt and passed by path (like ml_train's next_commands)."""
+    groups: Dict[Any, Dict[str, Any]] = {}
+    for it in items:
+        t = str(it["target"])
+        if t not in checks:
+            continue
+        meta = it["meta"]
+        evals = list(meta.get("derived_evals") or [])
+        derived = {e.split("=", 1)[0].strip() for e in evals if "=" in e}
+        feats = [f for f in meta.get("features_required", []) if f not in derived]
+        pos = (meta.get("decision_threshold") or {}).get("positive_class") if meta.get("task") == "classification" else None
+        key = (meta.get("task", "regression"), tuple(feats), tuple(evals), pos)
+        g = groups.setdefault(key, {"targets": [], "worse": False, "meta": meta, "dir": os.path.dirname(it["joblib_path"])})
+        g["targets"].append(checks[t]["column"])
+        g["worse"] = g["worse"] or checks[t]["worse"]
+    train_py = os.path.join(TOOL_DIR, "ml_train.py")
+    stem = os.path.splitext(os.path.basename(args.file))[0]
+    cmds: List[Dict[str, Any]] = []
+    for k, ((task, feats, evals, pos), g) in enumerate(groups.items()):
+        if not g["worse"]:
+            continue
+        texts = list(evals) + ([pos] if pos is not None else []) + list(g["targets"])
+        if any('"' in str(x) for x in texts):
+            continue                     # cannot be quoted on the command line
+        if len(feats) > 15 or any('"' in f for f in feats):
+            fpath = os.path.join(out_dir, f"{stem}_retrain_features{'' if k == 0 else f'_{k + 1}'}.txt")
+            atomic_write_text(fpath, "\n".join(feats) + "\n")
+            x_arg = quote_arg(fpath)
+        else:
+            x_arg = quote_arg(",".join(feats))
+        parts = [f"python {quote_arg(train_py)}", "-f", quote_arg(os.path.abspath(args.file)), "-x", x_arg,
+                 "-y", quote_arg(",".join(g["targets"]))]
+        for flag, val in (("--header-row", args.header_row), ("--unit-row", args.unit_row), ("--data-row", args.data_row)):
+            if val is not None:
+                parts += [flag, quote_arg(val)]
+        dtypes = _ledger_record(g["dir"], g["meta"].get("version")).get("dtypes")
+        if dtypes and '"' not in str(dtypes):
+            parts += ["--dtypes", quote_arg(dtypes)]
+        if evals:
+            parts += ["--eval", quote_arg("; ".join(evals))]
+        if task == "classification":
+            parts += ["--task", "classification"]
+            if pos is not None:
+                parts += ["--positive-class", quote_arg(pos)]
+        desc = str(g["meta"].get("description") or "").strip()
+        if desc and '"' not in desc and "\n" not in desc and len(desc) <= 300:
+            parts += ["--desc", quote_arg(desc)]
+        parts += ["--tag", quote_arg("새데이터_재학습")]
+        cmds.append({"purpose": f"새 데이터({os.path.basename(args.file)})로 같은 입력·타겟({', '.join(g['targets'])})을 다시 학습 "
+                                "(실제값으로 본 오차가 학습 때보다 커짐)",
+                     "command": " ".join(parts), "needs_input": False})
+    return cmds
+
+
 def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     """Orchestrates 1-Turn declarative inference."""
     # 1. Resolve Targets & Models
@@ -5163,6 +5463,39 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     if is_inline:
         check_inline_unknown(df_input, known_names, known_inputs)
 
+    # 3-B. Explanation of each record (-i, up to INLINE_SHOW_MAX records) and the actual error on a file that holds
+    # the measured target values (2.9.72). Neither may break the prediction.
+    explain_lines: List[str] = []
+    if is_inline and len(df_input) <= INLINE_SHOW_MAX:
+        for item in model_items:
+            t = str(item["target"])
+            try:
+                base = explain_baseline(item["meta"], os.path.dirname(item["joblib_path"]), snapshot_cache)
+                labels = (df_result[f"pred_{t}"].astype(str).tolist()
+                          if item["meta"].get("task") == "classification" else None)
+                recs = explain_predictions(item, df_input, base, labels)
+            except Exception as e:
+                map_notes.append(f"타겟 '{t}': 입력별 영향(explain) 계산 실패 ({type(e).__name__}: {str(e)[:80]})")
+                continue
+            if not recs:
+                continue
+            predictions_summary[t]["explain"] = [
+                {**{k: v for k, v in r.items() if k != "effects"}, "effects": r["effects"][:EXPLAIN_SHOWN],
+                 "effects_count": len(r["effects"])} for r in recs]
+            line = explain_brief(t, recs[0])
+            if line:
+                explain_lines.append(line)
+    actual_checks: Dict[str, Dict[str, Any]] = {}
+    if not is_inline:
+        for item in model_items:
+            try:
+                chk = actual_check(item, df_input, df_result)
+            except Exception as e:
+                map_notes.append(f"타겟 '{item['target']}': 실제값 비교(actual_check) 실패 ({type(e).__name__}: {str(e)[:80]})")
+                continue
+            if chk:
+                actual_checks[str(item["target"])] = chk
+
     # 4. Save Output if Requested or File-based
     inline_truncated = is_inline and len(df_result) > INLINE_SHOW_MAX
     out_path = args.save
@@ -5213,6 +5546,19 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         except Exception as e:
             unverified.append(f"저장한 결과 파일을 다시 읽지 못함: {type(e).__name__}: {e}")
 
+    # retrain alert: the new file's measured values are clearly worse predicted than in training
+    retrain_next: List[Dict[str, Any]] = []
+    worse = [t for t, c in actual_checks.items() if c["worse"]]
+    for t in worse:
+        file_warnings.append(f"타겟 '{t}': 새 파일의 실제값 {actual_checks[t]['rows']}행으로 본 오차가 학습 때보다 큽니다 "
+                             f"({actual_checks[t]['text']}). 데이터 경향이 바뀌었을 수 있어 새 데이터로 다시 학습하기를 권합니다")
+    if worse:
+        try:
+            retrain_next = retrain_commands(args, model_items, actual_checks,
+                                            os.path.dirname(saved_file) if saved_file else os.path.dirname(os.path.abspath(args.file)))
+        except Exception as e:
+            map_notes.append(f"다시 학습 명령을 만들지 못함 ({type(e).__name__}: {str(e)[:80]})")
+
     # 5. Build Response
     drift_warnings = list(dict.fromkeys(drift_warnings))  # same feature is checked once per target
     for w in drift_warnings[:WARNINGS_SHOW_MAX]:
@@ -5252,6 +5598,10 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + (f" | 결측 대치 {sum(missing_counts.values())}건" if missing_counts else "")
         + (f" | 미학습 범주 경고 {len(category_warnings)}건" if category_warnings else "")
         + (f" | 실측 비교 경고 {len(map_warnings)}건" if map_warnings else "")
+        + (" | 입력별 영향 " + " ; ".join(explain_lines) if explain_lines else "")
+        + (" | 실제값 비교: " + "; ".join(c["text"] + (" -> 학습 때보다 나쁨, 재학습 권장" if c["worse"] else
+                                                     " (비슷함)" if c["judged"] else " (행이 적어 판단 안 함)")
+                                       for c in actual_checks.values()) if actual_checks else "")
     )
     agent_directive = (
         ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
@@ -5272,6 +5622,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
            f"전체 결과는 output_file({os.path.basename(saved_file)})로 알리세요. "
            if inline_truncated and saved_file else
            f"결과 파일: {os.path.basename(saved_file)}. " if saved_file else "")
+        + ("preview의 입력별 영향(explain: 학습 기준값에서 바꿀 때 예측을 높인 입력과 낮춘 입력)을 알리세요. " if explain_lines else "")
+        + ("새 파일에 실제값이 있어 예측 오차를 학습 때와 비교했습니다 (actual_check). preview의 실제값 비교를 알리세요. "
+           if actual_checks else "")
+        + ("오차가 학습 때보다 크게 나빠졌습니다: warnings를 알리고, 새 데이터로 다시 학습하려면 next_commands[0]"
+           "(같은 입력·타겟으로 새 파일을 학습)을 실행합니다. " if retrain_next else "")
         + ("위 경고를 함께 알리세요." if (drift_warnings or low_conf_warnings or missing_counts or category_warnings or map_warnings)
            else "다음: 예측 결과를 사용자에게 알리세요.")
     )
@@ -5310,6 +5665,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             result["shown"] = 0
             if saved_file:
                 result["full_result_file"] = saved_file
+    if actual_checks:
+        result["actual_check"] = actual_checks
+        result["retrain_recommended"] = bool(worse)
+    if retrain_next:
+        result["next_commands"] = retrain_next
     if map_notes:
         result["map_check_notes"] = list(dict.fromkeys(map_notes))
     if column_aliases:
@@ -5795,8 +6155,13 @@ def _version_dir_of(items: List[Dict[str, Any]]) -> str:
     return os.path.dirname(os.path.abspath(items[0]["joblib_path"]))
 
 
-def _save_table(args: argparse.Namespace, df: pd.DataFrame, default_name: str, what: str) -> Tuple[str, List[str]]:
-    """Writes the result table (--save .xlsx/.csv, else <data folder>/<default_name>.xlsx) and reads it back (R1)."""
+SUGGEST_SHEET = "실험계획"
+
+
+def _save_table(args: argparse.Namespace, df: pd.DataFrame, default_name: str, what: str,
+                sheet: Optional[str] = None) -> Tuple[str, List[str]]:
+    """Writes the result table (--save .xlsx/.csv, else <data folder>/<default_name>.xlsx; `sheet`: the sheet name)
+    and reads it back (R1: rows, and the sheet name)."""
     if getattr(args, "save", None):
         path = os.path.abspath(args.save)
         if os.path.splitext(path)[1].lower() not in (".xlsx", ".csv"):
@@ -5809,13 +6174,21 @@ def _save_table(args: argparse.Namespace, df: pd.DataFrame, default_name: str, w
     if path.lower().endswith(".csv"):
         path = write_csv_excel_compatible(df, path)
     else:
-        path = save_with_lock_fallback(path, lambda p: df.to_excel(p, index=False), what=what)
+        path = save_with_lock_fallback(path, lambda p: df.to_excel(p, index=False, sheet_name=sheet or "Sheet1"), what=what)
     mark_committed(f"{what} {os.path.basename(path)}", output_file=path)
     unverified: List[str] = []
     try:
         back = load_data_file(path, header_row=1)
         if len(back) != len(df):
             unverified.append(f"저장한 표를 다시 읽으니 {len(back)}행 (기대 {len(df)}행)")
+        if sheet and path.lower().endswith(".xlsx"):
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True)
+            try:
+                if sheet not in wb.sheetnames:
+                    unverified.append(f"저장한 표에 '{sheet}' 시트가 없음 ({wb.sheetnames})")
+            finally:
+                wb.close()
     except Exception as e:
         unverified.append(f"저장한 표를 다시 읽지 못함: {type(e).__name__}: {e}")
     return path, unverified
@@ -6088,6 +6461,271 @@ def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 # ==============================================================================
+# 5-D. Next experiment suggestion: --suggest N (2.9.72)
+# ==============================================================================
+#
+# N input combinations inside the training range of the varied inputs (--vary, default every numeric model input not
+# fixed with -i; the other numeric inputs at -i or the training median) chosen from SUGGEST_POOL random candidates:
+#   - without --maximize/--minimize: where the 90% prediction interval is widest and measured rows are far (space
+#     filling): new experiments there add the most information;
+#   - with --maximize/--minimize: a good predicted value plus half the interval (an upper confidence bound), so the
+#     points are good and still informative.
+# The 90% interval of a point is the champion's out-of-fold residual interval scaled by the residuals of the nearest
+# training rows (SUGGEST_NEIGHBORS, ratio clipped to SUGGEST_LOCAL_CLIP) and by the distance to the nearest measured
+# row (sqrt((1 + (d / d_typ)^2) / 2), d_typ = the typical distance between training rows, so a point as far as two
+# measured rows usually are keeps the trained width). Points are picked one by one; a picked point counts as
+# measured for the next ones, so they spread out. Bounded work (pool x reference rows), no time limit split needed.
+
+SUGGEST_MAX = 30
+SUGGEST_POOL = 3000
+SUGGEST_REF_ROWS = 5000        # training rows (sampled) used for distances and local residuals
+SUGGEST_NEIGHBORS = 10
+SUGGEST_LOCAL_CLIP = (0.5, 3.0)
+SUGGEST_DIST_MAX = 5.0         # distance factor cap
+SUGGEST_MIN_GAP = 0.02         # picked points closer than this (inputs scaled to the training range) are one point
+SUGGEST_SHOWN = 10             # points in the JSON (the table holds all)
+
+
+def _suggest_step(span: float, whole: bool) -> float:
+    step = 10.0 ** np.floor(np.log10(span / 200.0)) if span > 0 else 1.0
+    return max(step, 1.0) if whole else step
+
+
+def _sq_dist(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    d = (A ** 2).sum(axis=1)[:, None] + (B ** 2).sum(axis=1)[None, :] - 2.0 * A @ B.T
+    return np.maximum(d, 0.0)
+
+
+def execute_suggest(args: argparse.Namespace) -> Dict[str, Any]:
+    n_want = int(args.suggest)
+    if n_want < 1 or n_want > SUGGEST_MAX:
+        fixed = str(min(max(n_want, 1), SUGGEST_MAX))
+        raise InputError(f"--suggest는 1~{SUGGEST_MAX}개입니다 (지금 {n_want}). [추천] {option_retry(fixed, '--suggest')}")
+    goal_text = args.maximize or args.minimize
+    sense = 1.0 if args.maximize else -1.0
+    filt = [t.strip() for t in args.targets.split(",") if t.strip()] if args.targets else None
+    items, skipped = _regression_items(args, filt)
+    names = [str(it["target"]) for it in items]
+    goal = None
+    if goal_text:
+        option = "--maximize" if args.maximize else "--minimize"
+        goal = resolve_column_names([str(goal_text).strip()], names, f"목표({option})")[0][0]
+    raw, numeric, cats, stats = _model_input_info(items)
+    if args.vary:
+        vary = _vary_names(args, args.vary, numeric, stats, "--vary")
+    else:     # the tool decides: every numeric input with a training range that -i does not fix
+        with contextlib.redirect_stderr(io.StringIO()):
+            given = _base_inputs(args, items, [])["fixed"] if args.input else {}
+        vary = [c for c in numeric if c in stats and c not in given and float(stats[c]["max"]) > float(stats[c]["min"])]
+        if not vary:
+            raise InputError("바꿔 볼 숫자 입력이 없습니다 (모든 숫자 입력이 -i로 고정되었거나 학습 범위가 한 값). "
+                             "-i에서 바꿔 볼 입력을 빼십시오.")
+    info = _base_inputs(args, items, vary)
+    conds = None
+    if args.where:
+        conds = resolve_where(parse_where(args.where, "--where"), names + raw, "--where")
+    vdir = _version_dir_of(items)
+    data = _load_snapshot(vdir, {})
+    keys = vary + [c for c in info["numeric"] if c not in vary and c in info["base"] and c in stats]
+    lows = np.array([float(stats[c]["min"]) for c in keys])
+    highs = np.array([float(stats[c]["max"]) for c in keys])
+    spans = np.maximum(highs - lows, 1e-12)
+    k = len(vary)
+    rng = np.random.default_rng(0)
+    warnings_out = list(info["warnings"])
+
+    # reference rows (measured, scaled) and the out-of-fold residuals of each target on them
+    ref = None
+    rows_no = None
+    resid: Dict[str, np.ndarray] = {}
+    if data is not None and all(c in data.columns for c in keys):
+        R = np.column_stack([coerce_numeric(data[c]).to_numpy(dtype=float) for c in keys])
+        ok = np.isfinite(R).all(axis=1)
+        idx = np.flatnonzero(ok)
+        if len(idx) > SUGGEST_REF_ROWS:
+            idx = np.sort(rng.choice(idx, SUGGEST_REF_ROWS, replace=False))
+        if len(idx) >= 2:
+            ref = (R[idx] - lows) / spans
+            rows_no = (coerce_numeric(data[SNAPSHOT_ROW_COL]).fillna(-1).astype(int).to_numpy()[idx]
+                       if SNAPSHOT_ROW_COL in data.columns else idx + 1)
+            for it in items:
+                t = str(it["target"])
+                path = os.path.join(vdir, f"oof_{it['meta'].get('target_safe_name', sanitize_filename(t))}.csv")
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    oof = load_data_file(path, header_row=1)
+                    pos = coerce_numeric(oof["data_row"]).to_numpy(dtype=float) - 1
+                    res = np.abs(coerce_numeric(oof["residual"]).to_numpy(dtype=float))
+                    full = np.full(len(data), np.nan)
+                    good = np.isfinite(pos) & (pos >= 0) & (pos < len(data))
+                    full[pos[good].astype(int)] = res[good]
+                    resid[t] = full[idx]
+                except Exception:
+                    pass
+    if ref is None:
+        warnings_out.append("학습 데이터(model_dataset.csv)를 읽지 못해 실측 행과의 거리 없이 제안끼리만 고르게 퍼뜨렸습니다 "
+                            "(90% 범위는 학습 때 폭 그대로)")
+    if ref is not None and len(ref) > 1:
+        probe = ref[rng.choice(len(ref), min(500, len(ref)), replace=False)]
+        dd = _sq_dist(probe, ref)
+        dd[dd <= 1e-18] = np.inf                     # itself (and exact duplicates)
+        nn = np.sqrt(dd.min(axis=1))
+        nn = nn[np.isfinite(nn)]
+        d_typ = float(np.median(nn)) if len(nn) else 0.0
+    else:
+        d_typ = 0.0
+    if d_typ <= 0:
+        d_typ = 1.0 / max(SUGGEST_POOL, 1) ** (1.0 / max(len(keys), 1))
+
+    # candidates: random inside the training range of the varied inputs, rounded to a readable step
+    whole = []
+    for c in vary:
+        w = False
+        if data is not None and c in data.columns:
+            v = coerce_numeric(data[c]).dropna().to_numpy(dtype=float)
+            w = bool(len(v)) and bool(np.all(np.isclose(v, np.round(v))))
+        whole.append(w)
+    steps = np.array([_suggest_step(float(spans[j]), whole[j]) for j in range(k)])
+    U = rng.random((SUGGEST_POOL, k))
+    pts = lows[:k] + U * spans[:k]
+    pts = np.clip(np.round(pts / steps) * steps, lows[:k], highs[:k])
+    pts = np.unique(pts, axis=0)
+    rows = pd.DataFrame({**{c: [v] * len(pts) for c, v in info["base"].items()}, **{v: pts[:, j] for j, v in enumerate(vary)}})
+    frame = rows.copy()
+    for it in items:
+        frame[str(it["target"])] = _predict_rows(it, rows)
+    feasible = where_mask(frame, conds) if conds else np.ones(len(pts), dtype=bool)
+    if not feasible.any():
+        raise InputError(f"학습 범위 안에서 --where 조건({where_text(conds)})을 만족하는 조합을 찾지 못했습니다. "
+                         "사용자에게 그대로 알리고 조건을 바꿀지 물으십시오.")
+    full = np.column_stack([(pts - lows[:k]) / spans[:k]]
+                           + [np.full((len(pts), 1), (float(info["base"][c]) - lows[j]) / spans[j])
+                              for j, c in enumerate(keys) if j >= k])
+
+    # distance to the nearest measured row and the local residual ratio of each target
+    d_ref = np.full(len(pts), np.inf)
+    near_i = np.zeros(len(pts), dtype=int)
+    ratio = {str(it["target"]): np.ones(len(pts)) for it in items}
+    if ref is not None:
+        nb = min(SUGGEST_NEIGHBORS, len(ref))
+        for s in range(0, len(pts), 500):
+            dd = _sq_dist(full[s:s + 500], ref)
+            near_i[s:s + 500] = np.argmin(dd, axis=1)
+            d_ref[s:s + 500] = np.sqrt(dd[np.arange(len(dd)), near_i[s:s + 500]])
+            part = np.argpartition(dd, nb - 1, axis=1)[:, :nb]
+            for t, r in resid.items():
+                g = np.nanquantile(r, 0.9) if np.isfinite(r).any() else np.nan
+                loc = np.nanquantile(np.where(np.isfinite(r[part]), r[part], np.nan), 0.9, axis=1) \
+                    if np.isfinite(r).any() else np.full(len(part), np.nan)
+                q = np.where(np.isfinite(loc) & (g > 0), loc / g if g > 0 else 1.0, 1.0)
+                ratio[t][s:s + 500] = np.clip(q, *SUGGEST_LOCAL_CLIP)
+
+    def dist_factor(d: np.ndarray) -> np.ndarray:
+        return np.minimum(np.sqrt((1.0 + (d / d_typ) ** 2) / 2.0), SUGGEST_DIST_MAX)
+
+    ivs = {str(it["target"]): it["meta"].get("prediction_interval") for it in items}
+    goal_half = None
+    if goal:
+        iv = ivs.get(goal)
+        goal_half = (float(iv["residual_upper"]) - float(iv["residual_lower"])) / 2.0 if iv else 0.0
+        if not goal_half or goal_half <= 0:
+            goal_half = float(np.std(frame[goal].to_numpy(dtype=float))) or 1.0
+    d_now = d_ref.copy() if ref is not None else np.full(len(pts), 1.0)
+    picked: List[int] = []
+    for _ in range(min(n_want, int(feasible.sum()))):
+        fac = dist_factor(d_now)
+        width = np.mean([ratio[t] for t in ratio], axis=0) * fac
+        if goal:
+            score = sense * frame[goal].to_numpy(dtype=float) / goal_half + ratio[goal] * fac
+        else:
+            score = width
+        score = np.where(feasible, score, -np.inf)
+        if picked:
+            gap = np.sqrt(_sq_dist(full, full[picked]).min(axis=1))
+            score = np.where(gap < SUGGEST_MIN_GAP, -np.inf, score)
+        i = int(np.argmax(score))
+        if not np.isfinite(score[i]):
+            break
+        picked.append(i)
+        d_now = np.minimum(d_now, np.sqrt(_sq_dist(full, full[[i]])[:, 0]))
+
+    points: List[Dict[str, Any]] = []
+    table_rows: List[Dict[str, Any]] = []
+    for n, i in enumerate(picked, 1):
+        fac = float(dist_factor(np.array([d_ref[i]]))[0]) if ref is not None else 1.0
+        p: Dict[str, Any] = {"no": n, "inputs": {v: _r6(pts[i, j]) for j, v in enumerate(vary)},
+                             "predictions": {t: round_pred(float(frame[t].iloc[i])) for t in names},
+                             "interval_90": {}, "interval_width": {}}
+        tr: Dict[str, Any] = {"번호": n, **{v: _r6(pts[i, j]) for j, v in enumerate(vary)},
+                              **{c: (_r6(v) if isinstance(v, (int, float, np.floating)) else v)
+                                 for c, v in info["base"].items()}}
+        for t in names:
+            iv = ivs.get(t)
+            y = float(frame[t].iloc[i])
+            tr[f"pred_{t}"] = round_pred(y)
+            if iv:
+                m = float(ratio[t][i]) * fac
+                lo, hi = y + float(iv["residual_lower"]) * m, y + float(iv["residual_upper"]) * m
+                p["interval_90"][t] = [round_pred(lo), round_pred(hi)]
+                p["interval_width"][t] = round_pred(hi - lo)
+                tr[f"pred_lo_{t}"], tr[f"pred_hi_{t}"], tr[f"폭_{t}"] = round_pred(lo), round_pred(hi), round_pred(hi - lo)
+        if ref is not None:
+            p["nearest_row"] = int(rows_no[near_i[i]])
+            p["nearest_distance"] = round(float(d_ref[i]), 4)
+            tr["가까운실측행"], tr["실측거리"] = p["nearest_row"], p["nearest_distance"]
+        points.append(p)
+        table_rows.append(tr)
+    table = pd.DataFrame(table_rows)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out, unverified = _save_table(args, table, f"suggest_{stamp}", "실험 계획 표", sheet=SUGGEST_SHEET)
+    unverified += _recheck_solutions(items, info["base"], vary, points, conds, goal or names[0])
+    if skipped:
+        warnings_out.append(f"분류 타겟 {skipped}은(는) 실험 제안에서 뺐습니다 (숫자 타겟만)")
+    if len(picked) < n_want:
+        warnings_out.append(f"서로 다른 조합을 {len(picked)}개만 찾았습니다 (요청 {n_want}개): 학습 범위가 좁거나 조건을 "
+                            "만족하는 조합이 적습니다")
+    mode = (f"{goal} {'최대' if sense > 0 else '최소'} 쪽 + 불확실성" if goal
+            else "불확실한 곳 (예측 90% 범위가 넓고 실측과 먼 곳)")
+    shown = points[:SUGGEST_SHOWN]
+    res: Dict[str, Any] = {
+        "status": "ok", "command": "suggest", "mode": "maximize" if goal and sense > 0 else "minimize" if goal else "explore",
+        "goal": goal, "vary": vary, "where": where_text(conds) if conds else None, "targets": names,
+        "fixed": {c: (float(v) if isinstance(v, (int, float, np.floating)) else v) for c, v in info["fixed"].items()},
+        "filled_defaults": {c: _r6(v) for c, v in info["filled"].items()},
+        "training_range": {v: [_r6(lows[j]), _r6(highs[j])] for j, v in enumerate(vary)},
+        "interval_method": "학습 OOF 잔차의 90% 범위 x 가까운 실측 행의 잔차 비 x 실측 행과의 거리 보정 (추정)",
+        "count": len(points), "shown": len(shown), "truncated": len(shown) < len(points), "points": shown,
+        "output_file": out, "verified": not unverified,
+    }
+    if len(shown) < len(points):
+        res["full_result_file"] = out
+    if warnings_out:
+        res["warnings"] = warnings_out
+    if unverified:
+        res["unverified"] = unverified
+
+    def _brief(p: Dict[str, Any]) -> str:
+        t = goal or names[0]
+        s = ", ".join(f"{strip_unit(v)}={_fmt(x)}" for v, x in p["inputs"].items())
+        s += f" -> {strip_unit(t)} {_fmt(p['predictions'][t])}"
+        if t in p["interval_width"]:
+            s += f" (90% 폭 {_fmt(p['interval_width'][t])})"
+        return s
+    res["preview"] = (f"다음 실험 제안 {len(points)}개 [{mode}]: "
+                      + " | ".join(f"{p['no']}) {_brief(p)}" for p in points[:3])
+                      + (f" | 외 {len(points) - 3}개" if len(points) > 3 else "") + f" | 표: {os.path.basename(out)}")
+    res["agent_directive"] = (
+        ("VERIFIED: 표를 다시 읽고 제안 조건을 다시 예측해 확인했습니다. " if not unverified else
+         f"UNVERIFIED: 확인하지 못한 것이 있습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
+        + "preview(제안 조건과 예측, 90% 범위 폭)와 output_file(실험계획 표) 경로를 알리세요. "
+        + (f"points는 {len(points)}개 중 {len(shown)}개이고 전체는 output_file에 있습니다. " if len(shown) < len(points) else "")
+        + ("warnings(중앙값으로 고정한 입력 등)도 알리세요. " if warnings_out else "")
+        + "실험으로 확인할 후보 조건이지 결과가 보장된 조건이 아니라는 점을 덧붙이세요.")
+    return res
+
+
+# ==============================================================================
 # 6. CLI Entry Point
 # ==============================================================================
 
@@ -6130,10 +6768,25 @@ def main():
     parser.add_argument("--maximize", help="조건 찾기: 이 숫자 타겟이 가장 커지는 --vary 입력 조합 (학습 범위 안)")
     parser.add_argument("--minimize", help="조건 찾기: 이 숫자 타겟이 가장 작아지는 --vary 입력 조합 (학습 범위 안)")
     parser.add_argument("--where", help="조건 찾기의 제약 (예: '불순물 <= 100; 반응온도 < 190'. ;는 그리고, |는 또는)")
+    parser.add_argument("--suggest", type=int,
+                        help=f"다음 실험 제안: 학습 범위 안에서 예측이 가장 불확실하고 실측과 먼 조건 N개 (1~{SUGGEST_MAX}). "
+                             "--maximize/--minimize와 함께 쓰면 좋은 예측값과 불확실성을 함께 봄. --vary 생략 시 모든 숫자 입력, "
+                             "-i로 고정, 표(실험계획 시트) 저장")
 
     args = parser.parse_args()
 
     search = args.maximize or args.minimize
+    if args.suggest is not None:
+        if args.find or args.sweep or args.file:
+            parser.error("실험 제안(--suggest)에는 --find, --sweep, -f를 함께 쓰지 않습니다.")
+        if args.maximize and args.minimize:
+            parser.error("--maximize와 --minimize는 하나만 주십시오.")
+        if args.where and not search:
+            parser.error("--where는 --maximize 또는 --minimize와 함께 씁니다.")
+        if search and args.targets:
+            parser.error("--suggest에 --maximize/--minimize를 주면 -y를 쓰지 않습니다 (목표 타겟은 --maximize/--minimize 값).")
+        run_cli(lambda: execute_suggest(resolve_model_arg(args)), hint="확인할 것: --vary, -i, 목표 타겟의 이름.")
+        return
     if args.where and not search:
         parser.error("--where는 --maximize 또는 --minimize와 함께 씁니다.")
     if args.maximize and args.minimize:

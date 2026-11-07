@@ -4,7 +4,7 @@ description: 학습한 모델로 새 조건이나 새 데이터의 값을 예측
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.71"
+  version: "2.9.72"
   platform: windows
 ---
 
@@ -30,6 +30,7 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<데이터파일>" -i "<피처1>=<값>,
 python "C:\CLI\ml-kit\ml_predict.py" -m "<데이터파일>" -f "<새데이터파일>"
 ```
 결과를 엑셀로 받고 싶다고 하면 파일 예측 끝에 `--save "<전체경로.xlsx>"`를 붙인다.
+입력별 영향(한 건 예측)과 실제값 비교(새 파일에 타겟 열이 있을 때, 나빠졌으면 재학습 명령)는 도구가 preview, warnings, `next_commands`에 적는다.
 - `-i`에는 모델 입력만 넣는다. 모델 입력이 아닌 이름이 있거나 숫자 입력이 빠지면 도구가 멈춘다: message를 보여 주고 사용자에게 묻는다.
 - 여러 건은 JSON 배열 파일(.json)로 준다: 파일 쓰기 도구로 `[{"온도": 180, "압력": 3}, ...]`(UTF-8)를 만들고 `-i "<그 경로>"`.
 
@@ -50,5 +51,12 @@ python "C:\CLI\ml-kit\ml_predict.py" -m "<데이터파일>" --sweep "<바꿀입�
 python "C:\CLI\ml-kit\ml_predict.py" -m "<데이터파일>" --maximize "<타겟>" --where "<타겟2> <= <값>" --vary "<바꿀입력1>,<바꿀입력2>" -i "<고정입력>=<값>"
 ```
 작게 하려면 `--minimize`. 제약이 없으면 `--where`를 뺀다.
+
+## 다음 실험 조건 제안
+```powershell
+python "C:\CLI\ml-kit\ml_predict.py" -m "<데이터파일>" --suggest <개수>
+```
+도구가 학습 범위 안에서 예측이 가장 불확실하고 실측과 먼 조건을 고르고 표(실험계획 시트)로 저장한다.
+좋은 결과 쪽으로 고르려면 끝에 `--maximize "<타겟>"`(작게는 `--minimize "<타겟>"`)를 붙인다. 사용자가 바꿀 입력을 말했으면 `--vary "<입력1>,<입력2>"`, 고정할 입력을 말했으면 `-i "<입력>=<값>"`를 붙인다.
 
 모든 예측은 모델이 예측한 값이지 보장된 값이 아니라고 덧붙인다.
