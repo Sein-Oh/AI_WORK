@@ -167,6 +167,14 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 시스템 PATH(`C:\CLI\python`, `C:\CLI\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
 
 ## 4. 지난 실기 결과 요약
+- 집 PC(2026-11-07 저녁, WinPython 3.13.13 `C:\CLI\python`, Office Professional Plus 2019 x64로 다시 설치, ml-kit 2.9.73):
+  - 준비: `C:\CLI\python`에 라이브러리가 없어 setup.bat의 동작 확인이 실패했음 -> `pip_install.txt` 2-1로 설치 (HOME_PC_CHECK 1장에 반영)
+  - 단순화 점검(office-cli 1.4.81): 38/39. D2는 점검 스크립트가 `sheet delete`에 `--name` 대신 `--sheet`를 넘긴 실수 -> 고친 뒤 39/39 (결과 `result_simplify_집PC_20261107_190152.md`, `..._190734.md`)
+  - 전체 회귀(office-cli 1.4.81): **모든 단계 PASS**. diag 18/18(`C:\CLI\python` FAIL 없음), pytest 4254 passed·9 skipped, beta 27/27,
+    ml-kit 실기 14/14(Office 2007에서 FAIL이던 M4 통과), office-cli 실기 79/79·ENV-SKIP 0(PDF 내보내기 D1·D4 실행). 결과 `result_집PC_20261107_201824.md`
+  - office-cli 1.4.82(Office 2007 지원 폐기) 실기: diag + office 79/79, 단순화 39/39 (결과 `result_집PC_1482_20261107_212420.md`, `result_simplify_집PC_1482_20261107_213048.md`)
+  - 고친 것: 단순화 점검 D2 인자, 러너 결과 파일의 Office 작성자 이름(`author`) 가림, setup.py 스킬 덮어쓰기 표시의 옛 버전
+  - 도구 오류 로그: ml-kit 1건은 라이브러리 설치 전 setup.bat 확인(`numpy` 없음)이라 문제 아님
 - 집 PC(2026-11-07, Office 2007, 공식 Python 3.13.13, ml-kit 2.9.72 / office-cli 1.4.80, 작업 브랜치에서 바로 실행):
   - 사용법 단순화 점검 `run_simplify_check.py`: **PASS 31, FAIL 0, SKIP 0** (204초). 클라우드에서 SKIP이던 O4~O6(실제 Office로 고친 명령 실행)·B2(바뀐 칸 메모 미리보기)·K1(스킬 설치) 포함.
     결과 `docs/test_logs/result_simplify_집PC_20261107_133952.md`
