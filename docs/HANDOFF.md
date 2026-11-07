@@ -125,9 +125,10 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 상세: `docs/HOME_PC_CHECK.md`. 요약:
 1. 저장소를 받고(`git fetch origin` 후 `git checkout ccr-ecab210c-awib23`, 또는 머지 뒤 main) `python -c "import sys; print(sys.executable, sys.version)"`로 PATH의 python 확인.
    저장소 폴더에서 바로 돌려도 됨 (점검 스크립트는 옆 폴더 `CLI/`의 도구를 씀). `C:\CLI`, `C:\CLI-dev`로 복사해서 돌려도 같음.
-2. `python CLI\setup.py --no-path` (setup.bat은 WinPython용이라 쓰지 않음): 스킬 4개 복사, 옛 `skills\ml-kit` 보관 후 삭제. `opencode.exe 없음` FAIL 1개는 환경 차이.
-3. `python CLI-dev\run_simplify_check.py --label 집PC` (5~10분): 틀린 명령 -> 도구가 준 고친 명령을 PowerShell 5.1로 그대로 실행 -> 성공하는지 17항목.
-   클라우드(리눅스 bash)에서는 13 PASS, Office가 필요한 O4~O6과 설치 확인 K1은 SKIP이었음.
+2. `python CLI\setup.py --no-path` (setup.bat은 WinPython용이라 쓰지 않음): ml 스킬 4개와 office-data 포함 스킬 복사, 옛 `skills\ml-kit` 보관 후 삭제. `opencode.exe 없음` FAIL 1개는 환경 차이.
+3. `python CLI-dev\run_simplify_check.py --label 집PC` (10~15분): 틀린 명령 -> 도구가 준 고친 명령을 PowerShell 5.1로 그대로 실행 -> 성공하는지,
+   ml-kit 2.9.72 새 기능(N1~N4: 입력 자동 선택, `--suggest`, 입력별 영향, 재학습 알림), office-cli 1.4.80 BOM 비교(B1~B5). 모두 31항목.
+   클라우드(리눅스 bash)에서는 26 PASS, Office가 필요한 O4~O6·B2와 설치 확인 K1은 SKIP이었음.
 4. 시간이 되면 `python CLI-dev\run_all_tests.py --label 집PC --only diag,pytest,beta,ml,office` (1~2시간).
 5. 실패는 원인을 찾아 고치고(회귀 테스트와 함께), 해당 도구 테스트 + `CLI-dev/tests`를 돌린 뒤 같은 브랜치에 커밋·푸시. 결과 파일은 `docs/test_logs/`.
 

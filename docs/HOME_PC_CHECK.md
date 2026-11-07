@@ -1,4 +1,4 @@
-# 집 PC 점검 (Gemma 없이, ml-kit 2.9.71 · office-cli 1.4.79)
+# 집 PC 점검 (Gemma 없이, ml-kit 2.9.72 · office-cli 1.4.80)
 
 집 PC에는 Gemma가 없으므로 Gemma가 고르는 일(맞는 스킬 고르기, 번호 `[후보]` 처리)은 회사 PC에서 본다.
 집 PC에서는 그 앞단을 확인한다: 도구가 준 고친 명령이 실제 PowerShell 5.1에서 그대로 실행되는지, 스킬 4개가 설치되는지, 기존 기능이 그대로인지.
@@ -17,11 +17,11 @@
    ```
    python C:\CLI\setup.py --no-path
    ```
-   `옛 ml-kit 스킬: 보관 후 지움`(예전에 설치했다면)과 `ml-train`, `ml-predict`, `ml-report`, `ml-map` 스킬 복사 줄이 보여야 한다.
+   `옛 ml-kit 스킬: 보관 후 지움`(예전에 설치했다면)과 `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `office-data`(새 BOM 비교 스킬) 복사 줄이 보여야 한다.
    `opencode.exe: 없음` `[FAIL]` 1개와 opencode.jsonc·rg(ripgrep) `[WARN]`은 집 PC 환경 차이라 무시한다. 그 밖의 `[FAIL]`이 있으면 결과와 함께 알린다.
 4. Excel, Word, PowerPoint 창은 모두 닫아 둔다.
 
-## 2. 사용법 단순화 점검 (명령 1개, 5~10분)
+## 2. 사용법 단순화 + 새 기능 점검 (명령 1개, 10~15분)
 PowerShell에서:
 ```
 python C:\CLI-dev\run_simplify_check.py --label 집PC
@@ -40,7 +40,12 @@ python C:\CLI-dev\run_simplify_check.py --label 집PC
 | O1 · O2 | 닫힌 엑셀의 없는 시트 `[후보]`, `--where` 쉼표 `[추천]` (경로에 띄어쓰기·`$`·괄호) |
 | O3 | `transfer` 옛 `--from`/`--to` -> `--from-app`/`--to-app` |
 | O4 · O5 · O6 | 닫힌 엑셀 `--cells`, 워드 `--slots`, PPT `--cards` 구분자 실수 -> 고친 명령을 실제 Office로 실행 |
-| K1 | OpenCode 설정 폴더에 ml-kit 스킬 4개, 옛 `skills\ml-kit` 없음 |
+| N1 | ml-kit 2.9.72: `-x` 없이 학습 -> 도구가 입력을 고름 (ID·상수·타겟 복사 열은 이유와 함께 뺌), 재학습 명령 실행 |
+| N2 | `--suggest` 다음 실험 조건 (불확실한 곳, `--maximize`), 실험계획 엑셀, 상한 넘음 `[추천]` |
+| N3 | 한 건 예측의 입력별 영향 (`explain`, preview의 높인/낮춘 입력) |
+| N4 | 실측이 있는 새 데이터 -> `actual_check`와 재학습 알림, 재학습 명령 실행, 같은 데이터면 알림 없음 |
+| B1~B5 | office-cli 1.4.80 BOM 비교 `excel compare`: 다단 BOM(상위품번+품번 키), 수량·위치·메이커 변경, 품번 변경 추정, 결과 엑셀, 바뀐 칸 메모 미리보기(Excel), 같은 파일, 표기만 다른 판은 0건 |
+| K1 | OpenCode 설정 폴더에 ml-kit 스킬 4개와 office-data, 옛 `skills\ml-kit` 없음 |
 
 결과: `C:\CLI-dev\result_simplify_집PC_<시각>.md`
 

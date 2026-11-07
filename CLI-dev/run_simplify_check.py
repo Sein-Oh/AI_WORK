@@ -185,6 +185,69 @@ def ml_checks(env, data, titled):
     check("M9", "ml_export", m9)
 
 
+def ml_new_checks(env, data, work):
+    """ml-kit 2.9.72: 입력 자동 선택, 다음 실험 제안, 입력별 영향, 실제값 비교와 재학습 알림."""
+    import pandas as pd
+    T, P = (os.path.join(ML, f) for f in ("ml_train.py", "ml_predict.py"))
+    df = pd.read_csv(data, encoding="utf-8-sig")
+    df.insert(0, "시료번호", [f"S-{i:03d}" for i in range(len(df))])
+    df["상수"] = 1
+    df["효율복사"] = df["생산효율(%)"] * 1.001
+    auto = os.path.join(work, "자동 선택 데이터.csv")
+    df.to_csv(auto, index=False, encoding="utf-8-sig")
+    shifted = df.sample(30, random_state=1).copy()
+    shifted["생산효율(%)"] += 15
+    shift = os.path.join(work, "새 데이터 (공정 변경).csv")
+    shifted.to_csv(shift, index=False, encoding="utf-8-sig")
+
+    def n1():
+        code, out = run_tool(env, T, "-f", auto, "-y", "생산효율(%)")
+        ex = {e.get("column") for e in (out or {}).get("excluded_inputs", [])}
+        good = ok_(out) and {"시료번호", "상수", "효율복사"} <= ex and "반응온도(°C)" in (out or {}).get("features_auto", [])
+        record("N1", "-x 없이 학습 -> 도구가 입력을 고름 (ID·상수·타겟 복사 열은 이유와 함께 뺌)", good,
+               f"제외={sorted(ex)}, 고른 입력={(out or {}).get('features_auto')}")
+        cmds = [c for c in (out or {}).get("next_commands", []) if not c.get("needs_input")]
+        if good and cmds:
+            c2, out2 = run_shell(env, cmds[0]["command"])
+            record("N1b", "학습 결과의 next_commands[0](-x가 적힌 재학습)을 셸로 실행", ok_(out2),
+                   "" if ok_(out2) else str((out2 or {}).get("message", ""))[:200])
+    check("N1", "입력 자동 선택", n1)
+
+    def n2():
+        code, out = run_tool(env, P, "-m", auto, "--suggest", "3")
+        f = (out or {}).get("output_file", "")
+        record("N2", "--suggest 3 -> 실험 조건 3개와 실험계획 엑셀", ok_(out) and len(out.get("points", [])) == 3 and os.path.isfile(f),
+               str((out or {}).get("preview") or (out or {}).get("message", ""))[:200])
+        code, out = run_tool(env, P, "-m", auto, "--suggest", "3", "--maximize", "생산효율")
+        record("N2b", "--suggest 3 --maximize -> 좋은 쪽 실험 조건", ok_(out) and len(out.get("points", [])) == 3,
+               str((out or {}).get("message", ""))[:200])
+        code, out = run_tool(env, P, "-m", auto, "--suggest", "99")
+        follow(env, "N2c", "--suggest 99(상한 넘음) -> [추천] 전체 명령 -> 실행", code, out, need_code=2) if code == 2 else \
+            follow(env, "N2c", "--suggest 99(상한 넘음) -> [추천] 전체 명령 -> 실행", code, out)
+    check("N2", "다음 실험 제안", n2)
+
+    def n3():
+        code, out = run_tool(env, P, "-m", auto, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함량=20")
+        ex = ((out or {}).get("predictions_summary") or {}).get("생산효율(%)", {}).get("explain")
+        record("N3", "한 건 예측 -> 입력별 영향(explain)과 preview의 '높인 입력/낮춘 입력'", ok_(out) and bool(ex) and "입력" in out.get("preview", ""),
+               str((out or {}).get("preview", ""))[:200])
+    check("N3", "입력별 영향", n3)
+
+    def n4():
+        code, out = run_tool(env, P, "-m", auto, "-f", shift)
+        cmds = (out or {}).get("next_commands") or []
+        good = ok_(out) and out.get("retrain_recommended") is True and cmds and "ml_train.py" in cmds[0]["command"]
+        record("N4", "실측이 있는 새 데이터(값이 크게 다름) -> actual_check와 재학습 알림", bool(good),
+               json.dumps((out or {}).get("actual_check"), ensure_ascii=False)[:200])
+        if good:
+            c2, out2 = run_shell(env, cmds[0]["command"])
+            record("N4b", "재학습 명령을 셸로 실행 -> 새 데이터로 학습", ok_(out2), "" if ok_(out2) else str((out2 or {}).get("message", ""))[:200])
+        code, out = run_tool(env, P, "-m", auto, "-f", auto)
+        record("N4c", "학습과 같은 데이터 -> 재학습 알림 없음", ok_(out) and not out.get("retrain_recommended"),
+               json.dumps((out or {}).get("actual_check"), ensure_ascii=False)[:200])
+    check("N4", "재학습 알림", n4)
+
+
 def office_checks(env, book, work):
     X, W, PP, O = (os.path.join(OC, f) for f in ("excel.py", "word.py", "ppt.py", "office.py"))
 
@@ -349,6 +412,8 @@ def main():
     data, titled, book = make_data(work)
     log("[INFO] ml-kit 점검 (학습이 여러 번 있어 몇 분 걸림)")
     ml_checks(env, data, titled)
+    log("[INFO] ml-kit 2.9.72 새 기능 점검")
+    ml_new_checks(env, data, work)
     log("[INFO] office-cli 점검")
     office_checks(env, book, work)
     log("[INFO] BOM 비교 점검")
