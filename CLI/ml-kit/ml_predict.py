@@ -3543,7 +3543,7 @@ def apply_eval_expressions(
                 # (그대로 학습하면 상수 열이 생기고 그 이름의 실제 입력이 무시됨)
                 raise InputError(f"--eval '{expr}'은(는) 데이터 열을 쓰지 않는 상수식이라 파생변수가 될 수 없습니다. 학습하지 않았습니다. "
                                  "조건 하나를 예측하려는 것이면 학습이 아니라 ml_predict.py -i \"이름=값,...\"입니다 (ml-predict 스킬).")
-            same_col = [c for c in columns if c == new_col or (_alias_key(c) == _alias_key(new_col) and strip_unit(new_col) == new_col)]
+            same_col = [c for c in columns if c == new_col or _alias_key(c) == _alias_key(new_col)]
             if strict and same_col:
                 raise InputError(f"--eval의 새 이름 '{new_col}'이(가) 데이터 열 '{same_col[0]}'과(와) 같습니다. 학습하지 않았습니다. "
                                  "파생변수는 데이터에 없는 새 이름으로 지으십시오 (예: '{0}_변환').".format(strip_unit(new_col)))
@@ -5455,6 +5455,10 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             check_comma_numbers(df_input.attrs.get("kv_pairs"), lambda k: column_aliases.get(k, k) in num_raw, "-i",
                                 lambda fixed: _predict_command(args, inline=kv_text(fixed)))
             check_inline_numbers(df_input, sorted(num_raw))
+            holders = [f"{c}={v}" for c in df_input.columns for v in df_input[c].astype(str) if re.fullmatch(r"\s*<[^<>]*>\s*", v)]
+            if holders:                       # 글자·날짜 입력의 <값>도 (2.9.76 2차 검토: 범주 입력은 VERIFIED로 나갔음)
+                raise InputError(f"-i에 자리표시자가 그대로 있습니다: {', '.join(holders[:10])}. 예측하지 않았습니다. "
+                                 "<값> 자리에 넣을 값을 사용자에게 물은 뒤 그 값으로 바꿔 실행하십시오.")
         missing_raw = [c for c in raw_needed if c not in df_input.columns]
         if missing_raw and any(c not in req_features for c in missing_raw):
             available_cols = [str(c) for c in df_input.columns]

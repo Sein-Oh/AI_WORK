@@ -1705,10 +1705,11 @@ def build_next_commands(
             "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
             "needs_input": False,
         })
+        # 방금 학습한 버전 폴더 (2.9.76 2차 검토: -m <데이터 파일>은 최고 버전·다른 작업으로 풀려 -i 틀의 입력과 어긋났음)
         cmds.append(predict_next_command(
-            raw_file, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
+            final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         if base_features and quotable(*base_features):
-            cmds.append(predict_one_command(raw_file, base_features))
+            cmds.append(predict_one_command(final_dir, base_features))
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
@@ -1739,7 +1740,7 @@ def build_next_commands(
                      "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
                      "needs_input": False, "no_retrain": True})
     if base_features and quotable(*base_features):        # 목표 전이라도 예측은 할 수 있음 (placeholder 명령은 늘 뒤에)
-        cmds.append(predict_one_command(raw_file, base_features))
+        cmds.append(predict_one_command(final_dir, base_features))
     return cmds
 
 
@@ -3230,7 +3231,7 @@ def build_best_next_commands(raw_file: str, final_dir: str, args: argparse.Names
         {"purpose": REPORT_PURPOSE.get(task, REPORT_PURPOSE[TASK_CLASSIFICATION]),
          "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
          "needs_input": False},
-        predict_next_command(raw_file, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
+        predict_next_command(final_dir, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
     ]
 
 

@@ -712,6 +712,7 @@ def test_placeholder_or_text_in_inline_numbers_stops(p1_model):
     proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=170:190:10,압력(bar)=3,속도=45")
     assert proc.returncode == 1 and "--sweep" in res["message"], res
     assert run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=180,압력(bar)=3,속도=45")["status"] == "ok"
+    assert mp.re.fullmatch(r"\s*<[^<>]*>\s*", "<값>")                                 # 글자 입력의 <값>도 막는 규칙
 
 
 def test_constant_eval_is_refused(p1_model):
