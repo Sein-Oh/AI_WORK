@@ -9,7 +9,7 @@ import fake_word as fw
 import word
 from fake_office import make_win32com
 from fake_word import FakeComment, FakeRange, FakeWordDocument
-from office_helpers import assert_not_logged, Bag, shell_sim, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, split_command, stub_com, undo_points
+from office_helpers import assert_not_logged, Bag, option_value, recommended_argv, shell_sim, CODE_MD, EMPTY_FIND, run_as_tool, run_main, run_word, set_active, split_command, stub_com, undo_points
 
 
 def doc_paras(doc):
@@ -286,8 +286,10 @@ def test_anchor_same_paragraph_twice_is_one_candidate(wd, capsys):
 
 def test_anchor_not_found_recommends_similar_text(wd, capsys):
     code, out = run_word(capsys, "write", "--text", "x", "--anchor", "2026 계획")
-    assert code == 1 and out["error_type"] == "input" and out["message"].endswith("[추천] 2026년 계획")
-    code, out = run_word(capsys, "write", "--text", "x", "--anchor", "2026년 계획")    # 추천대로 다시 하면 찾음
+    assert code == 1 and out["error_type"] == "input", out
+    argv = recommended_argv(out["message"], "word")             # 1.4.79: [추천]은 전체 명령
+    assert argv == ["write", "--text", "x", "--anchor", "2026년 계획"], argv
+    code, out = run_word(capsys, *argv)                         # 추천대로 다시 하면 찾음
     assert code == 0
 
 
@@ -387,11 +389,16 @@ def test_read_closed_docx_with_python_docx(tmp_path, capsys, monkeypatch):
     assert "next_commands" not in out                                     # 넣기·옮기기는 confirm_commands (1.4.75)
     transfer = [c["command"] for c in out["confirm_commands"] if "transfer" in c["command"]][0]
     assert "--from-target" in transfer and str(p) in transfer, transfer
+    argv = split_command(transfer)[2:]                    # 1.4.79: 앱은 --from-app/--to-app (--from/--to는 outlook 전용)
+    assert argv[:3] == ["transfer", "--from-app", "word"] and argv[argv.index("--to-app") + 1] == "excel", argv
+    assert "--from" not in argv and "--to" not in argv, argv
 
 
 def test_highlight_color_suggestion(wd, capsys):
     code, out = run_word(capsys, "replace", "--find", "계획", "--highlight", "yelow")
-    assert code == 1 and "[추천] yellow" in out["message"]
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "word")             # 1.4.79: [추천]은 전체 명령
+    assert argv == ["replace", "--find", "계획", "--highlight", "yellow"], argv
 
 
 # ---------------------------------------------------------------------------

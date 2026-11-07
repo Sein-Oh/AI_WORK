@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.78"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.79"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -54,6 +54,7 @@ WORK_RETENTION_DAYS = 7
 ERROR_LOG_MAX = 2 * 1024 * 1024
 # 실제 명령 인자. JsonArgumentParser.parse_args가 채웁니다 (인자 오류 기록에도 실제 명령을 남기려고)
 CURRENT_ARGV: Optional[List[str]] = None
+CURRENT_TOOL = ""          # 실행 중인 도구 (excel, word, ...): retry_command가 전체 명령을 만들 때 씀
 # JIT 복구가 한도를 넘겨 실패한 시도 (오류 로그의 '복구 시도:' 줄)
 RECOVERY_ATTEMPTS: List[str] = []
 
@@ -427,8 +428,8 @@ def _error_payload(exc: BaseException, tool: str = "", command: str = "") -> Dic
     if isinstance(exc, _STOP_RETRY_ERRORS):
         base.update(error_type="office_busy" if isinstance(exc, OfficeBusyError) else "input",
                     message=msg,
-                    agent_directive="STOP_RETRY: 인자나 대상 확인에 실패했습니다. message에 '[추천]'이 있으면 그 값으로 1회만 "
-                                    "다시 실행하고, 없으면 message를 사용자에게 그대로 보고하세요.")
+                    agent_directive="STOP_RETRY: 인자나 대상 확인에 실패했습니다. message에 '[추천]'이 있으면 [추천] 뒤의 명령을 "
+                                    "그대로 1회만 실행하고, 없으면 message를 사용자에게 그대로 보고하세요.")
         return base
     base.update(error_type="internal", message=f"{type(exc).__name__}: {msg}",
                 agent_directive="ERROR: 예상하지 못한 내부 오류입니다. 재시도하지 말고 message를 사용자에게 보고하세요.")
@@ -454,7 +455,8 @@ REDACT_OPTIONS = {"--body", "--text", "--subject", "--to", "--cc", "--bcc", "--f
                   "--search", "--new-name", "--map", "--section"}
 # 위 옵션의 짧은 이름 (모든 office-cli 파서에서 모음, 테스트로 확인): reader/outlook -q = --query
 REDACT_SHORT = {"-q": "--query"}
-# 도구마다 같은 이름이 내용이 아닌 옵션 (office.py transfer --from excel --to word, ppt.py slide --to 3)
+# 도구마다 같은 이름이 내용이 아닌 옵션: office.py·ppt.py의 --to·--from은 없는 옵션이지만 잘못 쓴 인자 오류도 로그에 남으므로
+# 앱 이름·슬라이드 번호(transfer --to word, slide --to 3)는 가리지 않음
 REDACT_KEEP = {"office": {"--from", "--to"}, "ppt": {"--to"}}
 # 도구마다 같은 이름이 내용인 옵션 (excel style --highlight '=완료:lightgreen'은 셀 값, word --highlight는 색 이름이라 남김)
 REDACT_EXTRA = {"excel": {"--highlight"}}
@@ -684,15 +686,67 @@ def time_up(reserve: float = TIME_RESERVE) -> bool:
     return limit != float("inf") and time.monotonic() - RUN_START > limit - reserve
 
 
+# 도구가 같은 명령의 CONTINUE 횟수를 셈 (1.4.79, AGENTS.md "사용법 단순성" 5: LLM은 세지 않음):
+# <데이터 폴더>/continue_state.json {명령 열쇠: {n, progress, t}}. CONTINUE_MAX번을 넘거나 바로 앞과 같은 progress면
+# CONTINUE 대신 STOP_RETRY. 명령이 다른 결과(ok, 오류)로 끝나면 그 항목을 지움. 하루 지난 항목은 버림.
+CONTINUE_MAX = 300
+CONTINUE_STATE_AGE = 24 * 3600.0
+
+
+def _continue_key(tool: str) -> str:
+    import hashlib
+    return hashlib.sha1((tool + " " + " ".join(CURRENT_ARGV or [])).encode("utf-8")).hexdigest()[:16]
+
+
+def _continue_state(update: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+    """CONTINUE 횟수를 읽고 (update가 있으면) 고쳐 씀. 실패하지 않음: 폴더에 못 쓰면 세지 않음."""
+    path = os.path.join(get_data_dir(), "continue_state.json")
+    try:
+        state = json.loads(read_text_file(path)) if os.path.isfile(path) else {}
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:
+        state = {}
+    now = time.time()
+    state = {k: v for k, v in state.items() if isinstance(v, dict) and now - float(v.get("t", 0)) < CONTINUE_STATE_AGE}
+    if update is not None:
+        update(state)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False)
+        except Exception:
+            pass
+    return state
+
+
+def continue_clear(tool: str) -> None:
+    key = _continue_key(tool)
+    if key in _continue_state():
+        _continue_state(lambda st: st.pop(key, None))
+
+
 def unfinished_payload(exc: "Unfinished", tool: str, command: str) -> Dict[str, Any]:
     argv = list(CURRENT_ARGV or [])
+    key = _continue_key(tool)
+    prev = _continue_state().get(key) or {}
+    n = int(prev.get("n", 0)) + 1
+    if n > CONTINUE_MAX or prev.get("progress") == exc.progress:
+        _continue_state(lambda st: st.pop(key, None))
+        why = (f"같은 명령을 {n - 1}번 이어서 실행했지만 끝나지 않았습니다" if n > CONTINUE_MAX else
+               "바로 앞 실행과 같은 곳에서 멈춰 더 이어서 해도 끝나지 않습니다")
+        return {"status": "error", "tool": tool, "command": command, "error_type": "unfinished_limit", "progress": exc.progress,
+                "message": f"{why} (진행: {exc.progress}). 지금까지 한 일은 저장되어 있습니다.",
+                "agent_directive": "STOP_RETRY: 다시 실행하지 말고 message와 progress를 사용자에게 그대로 알리세요."}
+    _continue_state(lambda st: st.__setitem__(key, {"n": n, "progress": exc.progress, "t": time.time()}))
     nexts = [next_command(f"{tool}.py", argv, "같은 명령으로 이어서 진행 (끝낸 부분은 저장됨, 묻지 않고 그대로 실행)")] if argv else []
     payload: Dict[str, Any] = {
         "status": "ok", "tool": tool, "command": command, "preview": f"진행 중: {exc.progress}",
-        "verified": False, "continue": True, "progress": exc.progress, "next_commands": nexts,
+        "verified": False, "continue": True, "progress": exc.progress, "next_commands": nexts, "continue_runs": n,
         "agent_directive": ("CONTINUE: 아직 끝나지 않았습니다. 명령 시간 제한 때문에 나눠서 진행하며, 지금까지 한 일은 저장되어 있습니다. "
                             + ("next_commands[0]의 command를" if nexts else "방금 실행한 명령을")
-                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음). 끝나면 VERIFIED 결과가 나옵니다."),
+                            + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음, 몇 번째인지 세지 않음: 멈출 때는 도구가 알림). "
+                            "끝나면 VERIFIED 결과가 나옵니다."),
     }
     _attach_recovered(payload)
     return payload
@@ -709,8 +763,11 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
         result = execute()
     except Unfinished as u:
         log("STATUS", f"시간 제한으로 여기서 멈춤 (저장됨, 같은 명령으로 이어서): {u.progress}")
-        emit_json(unfinished_payload(u, tool, command))
-        sys.exit(0)
+        payload = unfinished_payload(u, tool, command)
+        if payload["status"] != "ok":
+            write_error_log(tool, None, payload)
+        emit_json(payload)
+        sys.exit(0 if payload["status"] == "ok" else 1)
     except KeyboardInterrupt as e:
         log("ERROR", "실행 중단 (KeyboardInterrupt)")
         emit_json(error_payload(e, tool, command))
@@ -724,12 +781,14 @@ def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> N
         if _verbose():
             sys.stderr.write(trace)
         payload = error_payload(e, tool, command)
+        continue_clear(tool)
         # traceback은 내부 오류(ERROR:)일 때만 남깁니다
         internal = str(payload.get("agent_directive", "")).startswith("ERROR:")
         write_error_log(tool, None, payload, trace if internal else "", log_msg=_exc_log_message(e, payload))
         emit_json(payload)
         sys.exit(1)
     log_msg = result.pop(LOG_MESSAGE_KEY, None) if isinstance(result, dict) else None
+    continue_clear(tool)
     if result.get("status") != "ok":
         write_error_log(tool, None, result, log_msg=log_msg)
     emit_json(result)
@@ -751,6 +810,9 @@ SAME_MEANING = [
     ("excel", "write", "--text", ["--value"]), ("excel", "read", "--text", ["--search"]),
     ("word", "write", "--append", ["--pos", "end"]), ("word", "write", "--position", ["--pos"]), ("word", "write", "--at", ["--pos"]),
     ("outlook", "*", "--text", ["--body"]), ("outlook", "*", "--max", ["--limit"]),
+    # 옵션 하나 = 뜻 하나 (사용법 단순성 4번): --to·--from은 outlook의 받는 사람·보낸 사람만. 앱은 --to-app·--from-app, 위치는 --dest
+    ("office", "transfer", "--to", ["--to-app"]), ("office", "transfer", "--from", ["--from-app"]),
+    ("ppt", "slide", "--to", ["--dest"]),
     ("*", "*", "--json", []), ("*", "*", "--encoding", []),      # 출력은 늘 JSON, 인코딩은 자동 판별
 ]
 # 철자가 비슷해도 추천하지 않는 옵션 (뜻이 크게 다르거나 되돌리기 어려움: --cell -> --all이 캐시 전부 삭제·전체 답장이었음)
@@ -793,8 +855,9 @@ class JsonArgumentParser(argparse.ArgumentParser):
 
     def parse_args(self, args=None, namespace=None):  # type: ignore[override]
         # 최상위 파서만 parse_args를 부릅니다 (서브파서는 parse_known_args). 오류 로그에 남길 실제 인자를 기억합니다.
-        global CURRENT_ARGV
+        global CURRENT_ARGV, CURRENT_TOOL
         CURRENT_ARGV = [str(a) for a in args] if args is not None else sys.argv[1:]
+        CURRENT_TOOL = self.tool_name
         return super().parse_args(args, namespace)
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
@@ -830,7 +893,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             if best in DESTRUCTIVE_COMMANDS:
                 return (f" '{best}'은(는) 되돌리기 어려운 명령이라 추천하지 않습니다. 사용자가 이 명령을 원했는지 물으세요."
                         f" [후보] {best}")
-            return f" [추천] {best}" if best else f" [후보] {', '.join(choices)}"
+            return f" [추천] {retry_replacing(m.group(1), best)}" if best else f" [후보] {', '.join(choices)}"
         m = re.search(r"unrecognized arguments: (.+)$", message)
         req = re.search(r"the following arguments are required: (.+)$", message)
         if not m and not req:
@@ -918,7 +981,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             "command": "",
             "error_type": "input",
             "message": f"CLI 인자 오류: {message}." + self._hint(message),
-            "agent_directive": "STOP_RETRY: CLI 인자가 잘못되었습니다. message에 [추천]이 있으면 그 부분만 바꿔 1번만 다시 실행하고, "
+            "agent_directive": "STOP_RETRY: CLI 인자가 잘못되었습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 실행하고, "
                                f"없으면 {SKILL_OF_TOOL.get(self.tool_name, 'office-doc')} 스킬(SKILL.md)의 명령 형식을 확인해 사용자에게 보고하세요.",
         }
         write_error_log(self.tool_name, None, payload)
@@ -1031,7 +1094,8 @@ def resolve_input_path(path: str, kind: str = "입력 파일", exts: Optional[It
         if os.path.isfile(c):
             return os.path.abspath(c)
     names: List[str] = []
-    for folder in (get_data_dir(), get_work_dir()):
+    # 전체 경로로 준 파일은 그 폴더에서만 비슷한 이름을 찾음 (다른 폴더의 같은 이름 파일을 [추천]하지 않음)
+    for folder in ((os.path.dirname(raw),) if os.path.isabs(raw) else (get_data_dir(), get_work_dir())):
         try:
             names += [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))
                       and (exts is None or os.path.splitext(n)[1].lower() in exts)]
@@ -1574,7 +1638,7 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
                                         f"{extra if log_extra is None else log_extra}")
     # 오류 로그에는 후보 이름(시트·문서·제목·메일 폴더·파일 이름 목록)을 남기지 않음 (log_message)
     if len(same) == 1:
-        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {show(same[0])}",
+        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {retry_replacing(name, same[0])}",
                           log_message=f"{log_head} 표기만 다른 이름이 있습니다. [추천 생략]")
     hints = same or suggest(name, cands)
     if hints:
@@ -1734,6 +1798,71 @@ def quote_arg(value: Any, shell: Optional[str] = None) -> str:
 
 # 읽기·저장 뒤 열린 문서를 바꾸는 이어 하기 명령(confirm_commands, 1.4.75)의 directive 문구
 INTO_OTHER_DOC = "사용자가 다른 문서에 넣기를 원하면 confirm_commands에서 맞는 명령을 1번 실행하세요(열린 문서를 바꿈)."
+
+
+def retry_command(options: Dict[str, Any], drop: Sequence[str] = (), multi: Sequence[str] = ()) -> str:
+    """[추천]에 넣을 전체 명령: 지금 실행한 명령에서 options의 옵션 값을 바꾸고(None이면 뺌) drop의 옵션(값 없는 플래그)을 뺌.
+    multi: 값을 여러 개 받는 옵션(--formula A B)은 다음 옵션 앞까지 모두 뺌. 사용법 단순성 2번: 값만 주어 LLM이 끼워 넣게 하지 않음.
+    실행 중인 명령을 모르면(테스트에서 함수를 직접 부름) 옵션과 값만 돌려줌."""
+    argv = list(CURRENT_ARGV or [])
+    out: List[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        key = a.split("=", 1)[0]
+        if key in options:
+            i += 1
+            if "=" not in a:
+                if key in multi:
+                    while i < len(argv) and not argv[i].startswith("--"):
+                        i += 1
+                elif i < len(argv):
+                    i += 1
+            continue
+        if key in drop:
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    add: List[str] = []
+    for k, v in options.items():
+        if v is None:
+            continue
+        add += [k] + ([str(x) for x in v] if isinstance(v, (list, tuple)) else [str(v)])
+    if not argv or not CURRENT_TOOL:
+        return " ".join(quote_arg(x) for x in add)
+    return next_command(f"{CURRENT_TOOL}.py", out + add, "")["command"]
+
+
+def retry_replacing(old: str, new: str, option: Optional[str] = None) -> str:
+    """[추천]에 넣을 전체 명령: 지금 실행한 명령에서 값 old를 new로 바꿈. 인자가 old와 같거나(--opt old, --opt=old),
+    시트 주소의 앞부분('old!A1', "'old'!A1")일 때 바꿈. 못 찾으면 option이 있으면 그 옵션 값으로 넣고(retry_command), 없으면 new만.
+    사용법 단순성 2번: 값만 주어 LLM이 명령에 끼워 넣게 하지 않음."""
+    argv = list(CURRENT_ARGV or [])
+    found = False
+    part_sep = re.compile(r"([\\/,])")          # 경로의 한 부분('보관\\회의록'), 쉼표 목록의 한 값('word,ppt')
+    sheet_ref = re.compile(r"^(?:'" + re.escape(old.replace("'", "''")) + r"'|" + re.escape(old) + r")!")
+    quoted_new = f"'{new.replace(chr(39), chr(39) * 2)}'" if re.search(r"[^\w가-힣]", new) else new
+    for i, a in enumerate(argv):
+        key, eq, val = a.partition("=")
+        if a == old:
+            argv[i] = new
+        elif eq and key.startswith("--") and val == old:
+            argv[i] = f"{key}={new}"
+        elif sheet_ref.match(a):
+            argv[i] = sheet_ref.sub(lambda _m: quoted_new + "!", a, count=1)
+        elif old in part_sep.split(val if eq and key.startswith("--") else a):
+            text = val if eq and key.startswith("--") else a
+            fixed = "".join(new if p == old else p for p in part_sep.split(text))
+            argv[i] = f"{key}={fixed}" if eq and key.startswith("--") else fixed
+        else:
+            continue
+        found = True
+    if not found:
+        return retry_command({option: new}) if option else str(new)
+    if not CURRENT_TOOL:
+        return str(new)
+    return next_command(f"{CURRENT_TOOL}.py", argv, "")["command"]
 
 
 def next_command(script: str, args: Sequence[Any], purpose: str, destructive: bool = False) -> Dict[str, Any]:

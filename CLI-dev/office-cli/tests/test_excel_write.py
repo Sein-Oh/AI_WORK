@@ -12,7 +12,7 @@ import excel
 import office
 from fake_excel import FakeExcelWorkbook, FakeXlApp, SheetNameRefused
 from fake_office import make_win32com
-from office_helpers import shell_sim, split_command, EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
+from office_helpers import option_value, recommended_argv, shell_sim, split_command, EMPTY_FIND, run_excel, run_main, set_active, sheet_names, stub_com, undo_points, ws_of
 
 
 def _no_create_imperative(out):
@@ -89,13 +89,23 @@ def test_write_checks_everything_before_writing_the_header(xl, capsys):
     # 회사 PC 오류 로그: 헤더를 먼저 쓰고 수식 검사에서 실패해 A1:B1만 남았음. 추천 범위는 머리글 행부터
     app, wb = xl
     code, out = run_excel(capsys, "write", "--range", "A1", "--header", "x,sin(x)", "--formula", "=(ROW()-2)*0.1", "=SIN(A2)")
-    assert code == 1 and out["message"].endswith("[추천] --range A1:B101")
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
+    assert option_value(argv, "--range") == "A1:B101" and "A1" not in argv, argv
+    assert argv[argv.index("--formula") + 1:argv.index("--formula") + 3] == ["=(ROW()-2)*0.1", "=SIN(A2)"], argv
     assert (1, 1) not in ws_of(wb).values and (1, 2) not in ws_of(wb).values
+    code, out = run_excel(capsys, *argv)                         # 안내대로 다시 실행
+    assert code == 0, out
 
 
 def test_write_numbers_given_as_formulas_points_to_values(xl, capsys):
     code, out = run_excel(capsys, "write", "--range", "C6:C8", "--formula", "73.42", "49.97", "14.7")
-    assert code == 1 and "[추천] --values '[[73.42], [49.97], [14.7]]'" in out["message"]
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
+    assert option_value(argv, "--values") == "[[73.42], [49.97], [14.7]]" and "--formula" not in argv, argv
+    assert "73.42" not in argv and option_value(argv, "--range") == "C6:C8", argv
+    code, out = run_excel(capsys, *argv)
+    assert code == 0, out
 
 
 def test_write_over_existing_values_needs_overwrite(xl, capsys):
@@ -153,7 +163,9 @@ def test_write_missing_sheet_is_not_created_without_flag(xl, capsys):
 def test_write_sheet_differs_only_in_spacing_recommends_existing(xl, capsys):
     app, wb = xl
     code, out = run_excel(capsys, "write", "--sheet", "Sheet 1", "--value", "1")
-    assert code == 1 and out["error_type"] == "input" and out["message"].endswith("[추천] Sheet1")
+    assert code == 1 and out["error_type"] == "input", out
+    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
+    assert option_value(argv, "--sheet") == "Sheet1" and "Sheet 1" not in argv and option_value(argv, "--value") == "1", argv
     _no_create_imperative(out)
     assert sheet_names(wb) == ["Sheet1", "요약"]
 
@@ -218,6 +230,24 @@ def test_text_that_excel_would_reinterpret_is_kept_as_text(xl, capsys, tmp_path)
     assert [ws.values[(2, c)] for c in range(1, 7)] == ["01234", "1-2", "(100)", "12345678901234567890", "1E5", "2026-10-28"]
     assert {(2, c) for c in range(1, 6)} <= ws.prefixed and (2, 6) not in ws.prefixed     # 연도가 있는 날짜는 날짜로 변환되게 둠
     assert excel.coerce("12345678901234567890") == "12345678901234567890" and excel.coerce("1200") == 1200
+
+
+def test_file_absolute_path_lookalike_recommends_full_command(xl, capsys, tmp_path, isolated_dirs):
+    """1.4.79 회귀: 절대 경로 --file의 파일 이름만 표기가 다르면 같은 폴더의 파일로 고친 전체 명령을 [추천]
+    (값 'Data_A.csv'만 주지 않고, 데이터 폴더의 다른 파일을 고르지도 않음)."""
+    app, wb = xl
+    d = tmp_path / "입력"
+    d.mkdir()
+    (d / "Data_A.csv").write_text("품목,수량\n볼트,3\n", encoding="utf-8")
+    (isolated_dirs["data"] / "data_a.csv").write_text("다른,파일\n", encoding="utf-8")   # 데이터 폴더의 비슷한 이름은 후보 아님
+    given = str(d / "data a.csv")
+    code, out = run_excel(capsys, "write", "--file", given)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    argv = recommended_argv(out["message"], "excel")
+    assert argv == ["write", "--file", str(d / "Data_A.csv")] and given not in argv, argv
+    code, out = run_excel(capsys, *argv)                        # [추천]대로 다시 실행하면 그 파일을 씀
+    assert code == 0, out
+    assert [ws_of(wb).values[(1, 1)], ws_of(wb).values[(2, 2)]] == ["품목", 3]
 
 
 def test_replace_result_that_looks_numeric_stays_text(xl, capsys):
@@ -376,9 +406,12 @@ def test_new_sheet_is_not_created_when_input_check_fails(xl, capsys):
     assert code == 0, out
     before = undo_points()
     code, out = run_main(excel, capsys, "write", "--new-sheet", "--sheet", "새시트", "--formula", "5")
-    assert code == 1 and "[추천] --value 5" in out["message"], out
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
+    assert option_value(argv, "--value") == "5" and "--formula" not in argv and option_value(argv, "--sheet") == "새시트", argv
+    assert "--new-sheet" in argv
     assert "새시트" not in sheet_names(wb) and undo_points() == before
-    code, out = run_main(excel, capsys, "write", "--new-sheet", "--sheet", "새시트", "--value", "5")   # 안내대로 다시 실행
+    code, out = run_main(excel, capsys, *argv)                   # 안내대로 다시 실행
     assert code == 0 and out["sheet"] == "새시트", out
     assert len(undo_points()) == len(before) + 1
 
@@ -470,7 +503,9 @@ def test_style_theme_zebra_and_highlight(xl, capsys):
 
 def test_style_unknown_theme_and_color(xl, capsys):
     code, out = run_excel(capsys, "style", "--theme", "nvy")
-    assert code == 1 and "[추천] navy" in out["message"]
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
+    assert argv == ["style", "--theme", "navy"], argv
     code, out = run_excel(capsys, "style", "--bg", "노랑")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:")
 
@@ -566,8 +601,10 @@ def test_delete_with_values_needs_overwrite_and_hides_values(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "delete", "--range", "2:3")
     assert code == 1 and out["error_type"] == "needs_user_decision" and "--overwrite" in out["agent_directive"], out
     assert "6개" in out["message"] and "A2" in out["message"], out
+    # 오류 로그의 머리 줄(===== 시각 | 도구 | Python | OS)은 빼고 봄: OS 이름에 '300'이 들어 있는 기계가 있음 (예: ...-v300-x86_64)
+    log = "\n".join(ln for ln in _tool_log_text().splitlines() if not ln.startswith("====="))
     for v in ("영업", "300", "개발"):           # 값은 보이지 않음 (stdout, 오류 로그 모두)
-        assert v not in out["message"] and v not in _tool_log_text(), v
+        assert v not in out["message"] and v not in log, v
     assert _col(xl_table, 1) == ["이름", "가", "나", "다", "라"]                       # 바꾸지 않음
     assert off.list_snapshots("excel") == []                                     # 되돌리기 지점도 남기지 않음
 
@@ -785,17 +822,35 @@ def test_invalid_sheet_name_is_refused_before_any_change(xl, capsys, argv, rec):
     _, wb = xl
     code, out = run_main(excel, capsys, *argv)
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
-    assert f"[추천] {rec}" in out["message"], out
     assert sheet_names(wb) == ["Sheet1", "요약"] and undo_points() == []
+    _rerun_recommended_name(capsys, wb, argv, out, rec)
+
+
+def _name_option(argv):
+    """시트 이름을 받는 옵션: write는 --sheet, rename·copy는 --new-name, add는 --name."""
+    return "--sheet" if argv[0] == "write" else "--new-name" if "--new-name" in argv else "--name"
+
+
+def _rerun_recommended_name(capsys, wb, argv, out, rec):
+    """[추천] 전체 명령은 이름 옵션 값만 고친 이름으로 바꾸고, 그대로 다시 실행하면 그 이름의 시트가 생김 (1.4.79: [추천]은 전체 명령)."""
+    opt = _name_option(argv)
+    got = recommended_argv(out["message"], "excel")
+    bad = argv[argv.index(opt) + 1]
+    assert option_value(got, opt) == rec and bad not in got, got
+    assert [a for a in got if a != rec] == [a for a in argv if a != bad], got      # 다른 인자는 그대로
+    code, again = run_main(excel, capsys, *got)
+    assert code == 0 and rec in sheet_names(wb), again
 
 
 def test_recommended_name_avoids_existing_sheet(xl, capsys):
     code, out = run_main(excel, capsys, "sheet", "--action", "add", "--name", "Sheet[1]")
-    assert code == 1 and "[추천] Sheet_1_" in out["message"], out
+    assert code == 1, out
+    assert option_value(recommended_argv(out["message"], "excel"), "--name") == "Sheet_1_", out     # 1.4.79: 전체 명령
     _, wb = xl
     wb.Worksheets.Add().Name = "Sheet_1_"
     code, out = run_main(excel, capsys, "sheet", "--action", "add", "--name", "Sheet[1]")
-    assert code == 1 and "[추천] Sheet_1_ 2" in out["message"], out
+    assert code == 1, out
+    _rerun_recommended_name(capsys, wb, ["sheet", "--action", "add", "--name", "Sheet[1]"], out, "Sheet_1_ 2")
 
 
 def test_default_copy_name_of_long_sheet_fits_31_chars(xl, capsys):
@@ -836,17 +891,22 @@ def test_reserved_history_refused_before_any_change(xl_ab, capsys, argv):
     _, wb = xl_ab
     code, out = run_main(excel, capsys, *argv)
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
-    assert "예약" in out["message"] and "[추천] " in out["message"], out
-    assert out["message"].split("[추천] ")[1].strip().lower() == "history_", out
+    assert "예약" in out["message"], out
     assert sheet_names(wb) == ["Sheet1", "a_b"] and undo_points() == []        # 빈 시트·복사본이 남지 않음
+    opt = _name_option(argv)                                                    # 1.4.79: [추천]은 전체 명령
+    rec = option_value(recommended_argv(out["message"], "excel"), opt)
+    assert rec.lower() == "history_", out
+    _rerun_recommended_name(capsys, wb, argv, out, rec)
 
 
 def test_reserved_recommendation_avoids_existing_and_works(xl_ab, capsys):
     _, wb = xl_ab
     wb.Worksheets.Add().Name = "History_"
     code, out = run_main(excel, capsys, "sheet", "--action", "add", "--name", "History")
-    assert code == 1 and "[추천] History_ 2" in out["message"], out
-    code, out = run_main(excel, capsys, "sheet", "--action", "add", "--name", "History_ 2")    # [추천]대로 1회 재시도
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "excel")                            # 1.4.79: [추천]은 전체 명령
+    assert argv == ["sheet", "--action", "add", "--name", "History_ 2"], argv
+    code, out = run_main(excel, capsys, *argv)                                 # [추천]대로 1회 재시도
     assert code == 0 and sheet_names(wb)[-1] == "History_ 2", out
 
 
@@ -882,6 +942,9 @@ def test_chart_numeric_x_becomes_scatter_and_offers_transfer(xl, capsys):
     assert "next_commands" not in out                                     # 옮기기는 문서를 바꿈 (1.4.75)
     cmd = out["confirm_commands"][0]["command"]
     assert "transfer" in cmd and "'사인 2주기'" in cmd
+    argv = split_command(cmd)[2:]                                         # 1.4.79: 앱은 --from-app/--to-app (--from/--to는 outlook 전용)
+    assert argv[:3] == ["transfer", "--from-app", "excel"] and argv[argv.index("--chart") + 1] == "사인 2주기", argv
+    assert argv[argv.index("--to-app") + 1] in ("word", "ppt", "word,ppt") and "--to" not in argv, argv
     code, out = run_excel(capsys, "chart", "--range", "A1:B11", "--title", "사인 2주기")
     assert out["chart_name"] == "사인 2주기 2"                    # 이름 중복 방지
     code, out = run_excel(capsys, "chart", "--action", "list")

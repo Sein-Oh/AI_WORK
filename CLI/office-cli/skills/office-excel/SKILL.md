@@ -4,7 +4,7 @@ description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.78"
+  version: "1.4.79"
   platform: windows
 ---
 
@@ -37,8 +37,8 @@ metadata:
 | 바꾸기 | `python "C:\CLI\office-cli\excel.py" replace --find <A> --replace <B> [--all-sheets]` (`--find`는 비우지 않는다. 빈 칸 채우기는 `write --range B2:B10 --value 0`) |
 | 내보내기 | `python "C:\CLI\office-cli\excel.py" export --save "<결과.csv|.xlsx|.pdf>" [--range A1:D20]` |
 | 정보 / 배치 확인 | `python "C:\CLI\office-cli\excel.py" info [--detail]` (`layout_warnings`가 있으면 `warnings`를 알림) |
-| 차트를 워드/PPT로 | `python "C:\CLI\office-cli\office.py" transfer --from excel --chart "<차트이름>" --to word,ppt` |
-| 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from excel --range A1:D10 --to word` |
+| 차트를 워드/PPT로 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` |
+| 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --range A1:D10 --to-app word` |
 | 되돌리기 / 창 | `python "C:\CLI\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\CLI\office-cli\office.py" windows` / `python "C:\CLI\office-cli\office.py" focus --app excel` |
 
 ## 결과 처리

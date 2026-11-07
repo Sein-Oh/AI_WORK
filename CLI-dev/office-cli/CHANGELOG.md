@@ -11,6 +11,32 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.79] - 2026-11-07
+
+사용법 단순화 (AGENTS.md "사용법 단순성").
+
+### 수정
+- `[추천]`은 늘 전체 명령 (값만 주어 LLM이 명령에 끼워 넣던 18곳): `excel` `--range`(범위가 큼, 수식 범위), `--formula`의 숫자 -> `--value`/`--values`,
+  `--where` 고친 식, `--axis` 빼기, 시트 이름(표기만 다름, 쓸 수 없는 글자), transfer 새 시트 이름, outlook `--days`/`--since`, word `--anchor`,
+  명령 오타, 표기만 다른 이름(`not_found`). 공통 함수 `retry_command`(옵션 값 바꾸기·빼기)와 `retry_replacing`(값 바꾸기: 인자 전체, `--opt=값`,
+  시트 주소 앞부분, 경로의 한 부분, 쉼표 목록의 한 값). `--append` 수식 행 이동 실패는 수식을 고쳐야 해서 `[추천]` 없이 멈춤.
+  전체 경로로 준 입력 파일은 그 폴더에서만 비슷한 이름을 찾음 (다른 폴더의 같은 이름 파일을 `[추천]`하지 않음).
+  STOP_RETRY directive도 "`[추천]` 뒤의 명령을 그대로 1회".
+- `ppt write --cards`: 카드 사이를 `|`에서 `;`로 (저장소 구분자 규칙). `|`만 쓰면 쓰지 않고 고친 전체 명령 `[추천]`.
+
+### 기능
+- `CONTINUE` 횟수를 도구가 셈 (`<데이터 폴더>/continue_state.json`): 300번을 넘거나 바로 앞과 같은 `progress`면 `STOP_RETRY`
+  (`error_type: unfinished_limit`, exit 1). 명령이 다른 결과로 끝나면 기록을 지움.
+
+### 기능 (인자 이름 변경)
+- 옵션 하나 = 뜻 하나 (AGENTS.md 사용법 단순성 4번): `--to`가 transfer의 받는 앱, outlook의 받는 사람, `ppt slide move`의 위치로,
+  `--from`이 transfer의 보내는 앱과 outlook의 보낸 사람으로 쓰였음. `office.py transfer`는 `--from-app`/`--to-app`
+  (`--from-target`/`--to-target`은 그대로), `ppt.py slide --action move`는 `--dest`(`excel.py range --dest`와 같은 이름). outlook `--to`/`--from`은 그대로.
+- 옛 이름은 받지 않고(별칭 없음) 인자 오류(exit 2)와 고친 전체 명령 `[추천]` (같은 뜻 표 `SAME_MEANING`, 명령별로 한정:
+  `transfer --to word` -> `--to-app word`, `slide --to 3` -> `--dest 3`).
+- 도구가 내는 transfer 명령(`excel chart`, `word read --save`, `ppt read --save`의 `confirm_commands`, 여러 앱 `[추천]`, 오류 안내)과 스킬 office-doc·office-excel,
+  README, 실기 러너, 에이전트 시나리오의 지어낸 옵션 규칙(`no_fake_office`: 옛 `transfer --to/--from`, `ppt slide --to`)을 새 이름으로.
+
 ## [1.4.78] - 2026-11-07
 
 1.4.77 검토에서 남긴 것과 스킬 크기 여유.
@@ -1856,8 +1882,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
-- [ ] 사용법 단순성(AGENTS.md, 2026-11-07) 맞추기: `[추천] --range` 값 형태 4곳(excel) -> 전체 명령, `--to`가 받는 앱·받는 사람(`;` 구분)·옮길 위치로
-  세 뜻, `--cards`의 `|` 구분, reader `--query`의 `AND`/`OR`와 `--where`의 `;`/`|`, `--map` JSON 인자, `[후보]` 값 목록 -> 번호 붙은 전체 명령
+- [ ] 사용법 단순성 남은 것: reader `--query`의 `AND`/`OR`와 `--where`의 `;`/`|` 두 표기, outlook `--to` 받는 사람의 `;` 구분(Outlook 관례),
+  `--map` JSON 인자, `[후보]` 값 목록 -> 번호 붙은 전체 명령, 같은 뜻 표가 `--opt=값` 형태는 못 고침
 
 ### 1.0 제거 기능 (필요하면 다시 추가할 후보)
 - 스타일 DNA 추출 (`office_theme --action extract`). 테마 프리셋은 유지.

@@ -200,7 +200,7 @@ def date_period(days: Optional[int], since: Optional[str]) -> Optional[Dict[str,
     if days is not None:
         if days < 1:
             rec = 1 if days == 0 else -days
-            raise rt.InputError(f"--days는 1 이상이어야 합니다 (1 = 오늘, 7 = 오늘 포함 최근 7일). 받은 값: {days}. [추천] {rec}")
+            raise rt.InputError(f"--days는 1 이상이어야 합니다 (1 = 오늘, 7 = 오늘 포함 최근 7일). 받은 값: {days}. [추천] {rt.retry_command({'--days': rec})}")
         start = today - _dt.timedelta(days=days - 1)
     else:
         raw = str(since).strip()
@@ -219,7 +219,7 @@ def date_period(days: Optional[int], since: Optional[str]) -> Optional[Dict[str,
                 except ValueError:
                     fixed = None
             # 고칠 수 있는 표기만 [추천] (없는 날짜·알 수 없는 글은 도구가 날짜를 지어내지 않음)
-            tail = f" [추천] {fixed.isoformat()}" if fixed else f" (예: {today.isoformat()})"
+            tail = f" [추천] {rt.retry_command({'--since': fixed.isoformat()})}" if fixed else f" (예: {today.isoformat()})"
             raise rt.InputError(f"--since 날짜 '{raw}'을(를) 읽을 수 없습니다. YYYY-MM-DD 형식으로 쓰세요.{tail}")
         if start > today:
             raise rt.InputError(f"--since {start.isoformat()}은(는) 오늘({today.isoformat()})보다 뒤입니다. "

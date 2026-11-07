@@ -46,7 +46,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `agent_directive`:
   - `VERIFIED:` 완료
   - `UNVERIFIED:` 실행은 됐지만 결과를 확인하지 못함 (예: 검색하지 못한 부분 `not_searched`). 다시 실행하지 않고 `unverified`를 알림
-  - `STOP_RETRY:` 입력이나 대상 문제. `[추천]`이 있으면 그 값으로 1회만 다시 시도
+  - `STOP_RETRY:` 입력이나 대상 문제. `[추천]`이 있으면 그 뒤의 전체 명령을 그대로 1회만 실행
   - `STOP_RETRY:` + `[후보]`(`error_type: "ambiguous"`, `candidates` 목록): 후보가 둘 이상이라 도구가 고르지 않음. 사용자가 고른 값으로 다시 실행
   - `ERROR:` 내부 오류
   - `CONTINUE:` 긴 작업을 명령 시간 제한(에이전트 실행 도구 120초) 전에 멈춤 (R10). `status: ok`, `verified: false`, `continue: true`, `progress`,
@@ -134,7 +134,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     - 예: `시트 'Sheet9'이(가) 없습니다 (있는 시트: Sheet1). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. 이름이 비슷한 기존 시트에 쓸지, 새 시트를 만들지 사용자에게 물어보세요. [후보] Sheet1`
     - `--new-sheet`가 있는 명령은 `excel write`뿐입니다. 그 밖의 명령(`replace`, `style`, `range`, `chart` 등)의 없는 시트는 읽기와 같은 "찾을 수 없음"(`[추천]`/`[후보]`)이고 `--new-sheet`를 안내하지 않습니다.
   - 워드 `--anchor`가 여러 단락에 있으면 `[후보]`(번호와 단락 앞부분)로 오류. `--occurrence N`으로 고릅니다. 찾지 못하면 비슷한 문구를 안내합니다 (공백·대소문자 차이 등 확실할 때만 `[추천]`, `--pos replace`에서는 더 엄격).
-  - `office.py transfer --to excel --sheet 이름`은 새 시트 이름입니다(transfer는 새 시트에 받습니다. 방금 만든 새 파일만 예외, 아래). 이미 있으면 덮어쓰지 않고 비어 있는 이름을 `[추천]`, 덮어쓰기는 `--overwrite`.
+  - `office.py transfer --to-app excel --sheet 이름`은 새 시트 이름입니다(transfer는 새 시트에 받습니다. 방금 만든 새 파일만 예외, 아래). 이미 있으면 덮어쓰지 않고 비어 있는 이름을 `[추천]`, 덮어쓰기는 `--overwrite`.
     방금 만든 새 파일이면 기본 시트 이름(`Sheet1` 등)은 새 시트를 만들지 않고 그 빈 기본 시트에 받습니다(기본 시트가 여럿이어도).
   - 쓰기 `--target`에 파일 이름만 주었는데 열린 문서도 파일도 아니면 새 파일을 만들지 않고 "찾을 수 없음"(열린 문서가 있으면 `[후보]`). 새 파일은 전체 경로를 줄 때만 만듭니다.
     전체 경로인지는 `%USERPROFILE%`·`~`를 푼 뒤에 판단하고(`%USERPROFILE%\Desktop\새.xlsx`도 새로 만듦), 없는 전체 경로는 열린 문서를 `[후보]`로 주지 않습니다.
@@ -165,7 +165,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### 오류 로그
 - 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 `<data 폴더>\logs\errors.txt`에 덧붙습니다. `C:\CLI`에 배치했다면 `C:\CLI\office-cli\data\logs\errors.txt`(`config.json`의 `data_dir`나 `OFFICE_CLI_DATA_DIR`를 바꿨으면 그 폴더 아래).
 - 항목: 시각, 도구 버전, Python, OS / 실행한 명령과 인자 / `error_type`과 message / 재시도 한도를 넘긴 복구 시도(`복구 시도:`) / 내부 오류(`ERROR:`)일 때만 traceback. 문서 본문은 기록하지 않습니다.
-- 내용 옵션의 값은 `<N자 생략>`으로 남깁니다: `--body --text --subject --to --cc --bcc --from --query --find --replace --value --values --formula --header --title --cards --anchor --search --new-name --map --section`, `excel.py`의 `--highlight`(셀 값이 들어감)(`office.py`의 `--from/--to`, `ppt.py`의 `--to`는 앱 이름·위치, `word.py`의 `--highlight`는 색 이름이라 그대로). 경로와 그 밖의 인자는 그대로 남깁니다.
+- 내용 옵션의 값은 `<N자 생략>`으로 남깁니다: `--body --text --subject --to --cc --bcc --from --query --find --replace --value --values --formula --header --title --cards --anchor --search --new-name --map --section`, `excel.py`의 `--highlight`(셀 값이 들어감)(`word.py`의 `--highlight`는 색 이름이라 그대로. `--to`·`--from`은 outlook의 받는 사람·보낸 사람이고, `office.py`·`ppt.py`에 잘못 쓴 옛 이름 `--to`·`--from`(앱 이름·슬라이드 번호)은 가리지 않음). 경로와 그 밖의 인자는 그대로 남깁니다.
   짧은 이름(`-q` = `--query`, `-q값`)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다.
   `결과:` 줄의 message는 문서 글을 뺀 글입니다(stdout JSON의 message는 그대로).
   1. 문서에서 가져온 글(칸 값, 슬라이드 제목·노트, 시트·문서·파일·메일 폴더 이름 목록, 후보 단락·제목, 비슷한 문구, 메모 파일의 기준 글)을
@@ -220,7 +220,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   파일에 적힌 크기(`<dimension>`)가 서식만 있는 먼 칸(예: `Z300000`)까지라 그것으로도 넘으면 값을 훑어 실제로 값이 있는 끝을 찾습니다.
 - 읽기 미리보기의 잘림 표시: 500자보다 긴 값은 "긴 값 N칸 잘림", 첫 행이 표시 상한(약 8,000자)을 넘어 뺀 칸은 "뒤쪽 N열 생략"으로 따로 알립니다.
 - 닫힌 xlsx의 계산된 값이 없는 수식 칸(openpyxl 같은 프로그램이 쓰고 엑셀에서 한 번도 열지 않은 파일)은 값이 계산된 적이 없어 빈 칸으로 읽힙니다.
-  읽은 범위에 그런 칸이 있으면 `read`(`--search`, `--save` 포함), `export --save .csv`, `office.py transfer --from excel --range`가 `UNVERIFIED:`와
+  읽은 범위에 그런 칸이 있으면 `read`(`--search`, `--save` 포함), `export --save .csv`, `office.py transfer --from-app excel --range`가 `UNVERIFIED:`와
   `uncomputed_formulas`(칸 주소 20개까지), `uncomputed_count`, 20개를 넘으면 `uncomputed_truncated: true`로 답하고 엑셀에서 파일을 열어 저장한 뒤
   다시 실행하라고 알립니다. 빈 칸이 있거나 아래 `fullCalcOnLoad` 표시가 있을 때만 시트 XML의 수식 칸을 확인합니다.
   - 범위를 데이터로 정할 때(범위 생략, `B:B`·`5:7`, 200만 칸을 넘는 범위 줄이기)는 끝쪽 행·열을 자르기 전에 시트 전체의 그런 칸을 찾아
@@ -395,10 +395,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 |---|---|
 | `read` | `--slides 1-3`, `--save`(저장한 파일을 다시 열어 확인). 길어서 잘리면 고른 슬라이드 중 남은 번호로 이어 읽는 명령(`--slides 1,5,9` -> `5,9`) |
 | `info` | 슬라이드별 제목, 도형/표/그림 수. `--all`. `--detail [--slides 2-4]`: 도형별 위치·크기·글자 크기·목록 종류와 배치 경고(슬라이드 밖, 글자 넘침, 겹침) |
-| `write` | `--slide N\|new`, `--title`, `--text`(`-` 줄은 글머리표, `1.` 줄은 번호, 펜스 안 코드 줄은 글자 그대로), `--file (.md: 제목마다 새 슬라이드, .csv: 표)`, `--image`, `--cards "제목:내용\|..."`, `--theme`, `--overwrite`. 카드·그림은 앞 내용 아래에 80pt도 남지 않으면 새 슬라이드에 넣고 `warnings`로 알림, 이번에 넣은 도형이 슬라이드 밖으로 나가면 `UNVERIFIED:`. `--title`과 `.md`를 함께 주면 `--title`이 첫 슬라이드 제목(첫 절의 제목은 본문 첫 줄). 첫 절의 제목이 `--title`과 같으면(공백·대소문자 무시) 본문에 다시 넣지 않음. 기존 슬라이드의 제목 개체틀에 이미 다른 제목이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`, 새 슬라이드와 제목 개체틀이 없는 슬라이드는 해당 없음) |
+| `write` | `--slide N\|new`, `--title`, `--text`(`-` 줄은 글머리표, `1.` 줄은 번호, 펜스 안 코드 줄은 글자 그대로), `--file (.md: 제목마다 새 슬라이드, .csv: 표)`, `--image`, `--cards "제목:내용; ..."` (카드 사이 `;`, 1.4.79부터. `|`만 쓰면 고친 명령 `[추천]`), `--theme`, `--overwrite`. 카드·그림은 앞 내용 아래에 80pt도 남지 않으면 새 슬라이드에 넣고 `warnings`로 알림, 이번에 넣은 도형이 슬라이드 밖으로 나가면 `UNVERIFIED:`. `--title`과 `.md`를 함께 주면 `--title`이 첫 슬라이드 제목(첫 절의 제목은 본문 첫 줄). 첫 절의 제목이 `--title`과 같으면(공백·대소문자 무시) 본문에 다시 넣지 않음. 기존 슬라이드의 제목 개체틀에 이미 다른 제목이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`, 새 슬라이드와 제목 개체틀이 없는 슬라이드는 해당 없음) |
 | `replace` | `--find/--replace` 또는 `--map`, `--slide`, 서식 옵션. 표와 그룹 도형 포함. `--replace`도 서식 옵션도 없으면 STOP_RETRY, 바꿀 글이 찾는 글과 같고 서식이 없으면 바꾸지 않고 `replaced` 0(`unchanged_same_text`). 찾은 곳마다 비교해 이미 바꿀 글 그대로(대소문자까지)인 곳은 `unchanged_same_text`, 실제로 바뀐 곳만 `replaced`. 찾을 글이 빈 문자열이면 STOP_RETRY |
 | `export` | `--save 경로.pdf\|.pptx`. PDF 기능이 없는 Office(2007 기본 설치 등)는 `.pptx`로 저장하라는 STOP_RETRY를 돌려줍니다 |
-| `slide` | `--action list\|add\|duplicate\|move\|delete\|clear --slide --to --layout`. `clear`는 `--slide` 또는 `--all-slides`가 필요. 같은 자리로 `move`(`--slide 2 --to 2`)는 바꾸지 않고 "바뀐 것 없음". `list`는 `count`, 0장이면 `VERIFIED: 0건.` |
+| `slide` | `--action list\|add\|duplicate\|move\|delete\|clear --slide --dest --layout`. `clear`는 `--slide` 또는 `--all-slides`가 필요. 같은 자리로 `move`(`--slide 2 --dest 2`)는 바꾸지 않고 "바뀐 것 없음". `list`는 `count`, 0장이면 `VERIFIED: 0건.` |
 | `notes` | 발표자 노트. 읽기: `--slides 1-3`(생략 시 전체, `--slide 3`도 됨), 노트가 있는 슬라이드만 `no, title, notes`. 쓰기: `--slide N --text 노트`(줄바꿈 `\n`) 또는 `--file 노트.md`. 기존 노트가 있으면 `--append`(뒤에 덧붙이기) 또는 `--overwrite`(바꾸기)가 필요하고, 둘 다 없으면 지우지 않고 `needs_user_decision`. 노트 본문 개체틀이 없으면 쓰지 않음. 쓴 뒤 다시 읽어 확인(`verified`, `before`, `after`). 이미 같은 노트면 쓰지 않고 `unchanged: true` |
 
 ### outlook.py
@@ -738,9 +738,13 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 
 | 전달 | 명령 | 방식 |
 |---|---|---|
-| 엑셀 차트 -> 워드/PPT | `--from excel --chart 이름 --to word,ppt` | 그림 (아래 3방식) |
-| 엑셀 범위 -> 워드/PPT | `--from excel --range A1:D10 --to word` | 네이티브 표 (값 전달, 클립보드 없음) |
-| 워드/PPT -> 엑셀 | `--from word --what text\|table [--table N] --to excel` | 새 시트에 표로 |
+| 엑셀 차트 -> 워드/PPT | `--from-app excel --chart 이름 --to-app word,ppt` | 그림 (아래 3방식) |
+| 엑셀 범위 -> 워드/PPT | `--from-app excel --range A1:D10 --to-app word` | 네이티브 표 (값 전달, 클립보드 없음) |
+| 워드/PPT -> 엑셀 | `--from-app word --what text\|table [--table N] --to-app excel` | 새 시트에 표로 |
+
+앱은 `--from-app`/`--to-app`입니다(1.4.79, 전에는 `--from`/`--to`. `--to`·`--from`은 outlook의 받는 사람·보낸 사람 하나의 뜻만).
+옛 이름을 쓰면 인자 오류(exit 2)와 고친 전체 명령 `[추천] python ...office.py transfer --from-app ... --to-app ...`을 냅니다(같은 뜻 표 `SAME_MEANING`).
+`ppt.py slide --action move`의 옮길 위치도 `--dest`입니다(`excel.py range --dest`와 같은 이름, 옛 `--to`는 같은 `[추천]`).
 
 닫힌 docx의 `--table N`은 `reader.py read`·Word(COM)와 같은 번호입니다: 콘텐츠 컨트롤(`w:sdt`)·customXml 안의 표도 문서 순서로 셉니다
 . 글상자 안의 표는 세지 않습니다(Word `Tables`와 같음).
@@ -764,17 +768,17 @@ relay가 사용자의 클립보드를 덮어쓰고 `[추천]`이 `; relay: ...` 
 
 회사 PC에서 처음 한 번 `python office.py transfer --probe`를 실행하면, 세 방식을 실제로 시험해 대상 앱별로 되는 순서를 `config.json`에 저장합니다.
 
-여러 앱에 보낼 때(`--to word,ppt`):
+여러 앱에 보낼 때(`--to-app word,ppt`):
 - 무엇이든 넣기 전에 앱마다 받는 문서(각 앱의 활성 문서 또는 `--to-target`)와 앱별 인자(`--anchor`, `--slide`)를 확인합니다.
   못 찾은 문서가 있으면 아무것도 바꾸지 않고 STOP_RETRY(`error_type: target_not_open`)와 찾은 앱만으로 바꾼 같은 명령
-  `[추천] python ...office.py transfer ... --to word`를 냅니다. 에이전트는 그대로 1회 실행하고 못 넣은 앱을 사용자에게 알립니다.
-- `--to-target`은 `--to`의 모든 앱에 함께 쓰이므로 파일 경로를 줄 때는 `--to`에 앱 하나만 둡니다.
+  `[추천] python ...office.py transfer ... --to-app word`를 냅니다. 에이전트는 그대로 1회 실행하고 못 넣은 앱을 사용자에게 알립니다.
+- `--to-target`은 `--to-app`의 모든 앱에 함께 쓰이므로 파일 경로를 줄 때는 `--to-app`에 앱 하나만 둡니다.
   열린 문서가 없을 때 안내는 받는 쪽 `--to-target`, 보내는 쪽 `--from-target`입니다(transfer에는 `--target`이 없음).
 - `word.py read --save`/`ppt.py read --save`의 `confirm_commands` transfer 명령(1.4.75, 전에는 `next_commands`)은 `--target`으로 다른 문서를 읽었으면 그 문서를 `--from-target`(전체 경로가 있으면 그것)으로 줍니다.
 - 넣은 뒤 한 앱만 실패하면(늦게 드러난 대상 문제, COM 오류) 오류로 끝내지 않고 `UNVERIFIED`와 `succeeded`/`failed`/`failures`로 답합니다.
-  같은 명령을 다시 실행하면 넣은 앱에 또 들어가므로, 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 `--to <그 앱>`으로 실행합니다.
+  같은 명령을 다시 실행하면 넣은 앱에 또 들어가므로, 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 `--to-app <그 앱>`으로 실행합니다.
   되돌리기 지점은 실제로 바뀐 문서에만 남습니다.
-- `excel chart`의 `confirm_commands`(1.4.75, 전에는 `next_commands`) transfer 명령은 문서가 열린 받는 앱만 `--to`에 넣습니다(둘 다 열렸거나 둘 다 없으면 `word,ppt`).
+- `excel chart`의 `confirm_commands`(1.4.75, 전에는 `next_commands`) transfer 명령은 문서가 열린 받는 앱만 `--to-app`에 넣습니다(둘 다 열렸거나 둘 다 없으면 `word,ppt`).
   `--sheet <차트가 있는 시트>`도 넣습니다.
 
 차트 찾기(`--chart`, `chart --action delete --name`): 이름 또는 제목(대소문자 무시), 없으면 번호.
@@ -796,11 +800,11 @@ relay가 사용자의 클립보드를 덮어쓰고 `[추천]`이 `; relay: ...` 
 :: 사인 2주기 그래프 -> 워드/PPT
 python excel.py write --range A1:B101 --header "x,sin(x)" --formula "=(ROW()-2)*4*PI()/99" "=SIN(A2)"
 python excel.py chart --range A1:B101 --type line --title "사인 2주기"
-python office.py transfer --from excel --chart "사인 2주기" --to word,ppt
+python office.py transfer --from-app excel --chart "사인 2주기" --to-app word,ppt
 
 :: 워드/PPT 내용 -> 엑셀
-python office.py transfer --from word --what text --to excel     :: 새 시트에 받음 (--sheet 이름, 기존 시트에 덮어쓰기는 --overwrite)
-python office.py transfer --from ppt --what text --to excel
+python office.py transfer --from-app word --what text --to-app excel     :: 새 시트에 받음 (--sheet 이름, 기존 시트에 덮어쓰기는 --overwrite)
+python office.py transfer --from-app ppt --what text --to-app excel
 
 :: 문서 등록 -> 근거 검색 -> 엑셀로 저장 / 워드에 넣기
 python reader.py index --folder "C:\docs\규격"

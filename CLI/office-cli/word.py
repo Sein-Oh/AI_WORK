@@ -315,7 +315,7 @@ def cmd_read(args) -> Dict[str, Any]:
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
         result.update(output_file=out, confirm_commands=[
             rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기 (사용자가 원할 때만)"),
-            rt.next_command("office.py", ["transfer", "--from", "word", "--what", "text", "--to", "excel"]
+            rt.next_command("office.py", ["transfer", "--from-app", "word", "--what", "text", "--to-app", "excel"]
                             + _from_target(args, source),
                             "이 문서의 단락을 엑셀 표로 옮기기 (사용자가 원할 때만)")])
         return rt.ok_file(TOOL, "read", f"{name}: 단락 {len(save_units)}개를 저장했습니다 ({out})", out,
@@ -935,7 +935,7 @@ def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str
         similar = _similar_anchor(doc, anchor)
         hint = ""
         if similar and _safe_anchor_fix(anchor, similar, pos):
-            hint = f" [추천] {similar}"
+            hint = f" [추천] {rt.retry_command({'--anchor': similar})}"
         elif similar:
             hint = f" 비슷한 문구: '{similar}' (뜻이 같은지 사용자에게 확인한 뒤에만 쓰세요)"
         raise rt.InputError(f"문서에서 '{anchor}'을(를) 찾을 수 없습니다. word.py read로 정확한 문구를 확인하세요." + hint,

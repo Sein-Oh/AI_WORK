@@ -410,7 +410,7 @@ def _clip_closed_range(path: str, ws: Any, address: str, r1: int, c1: int, r2: i
     if (nr2 - r1 + 1) * width > CLOSED_MAX_CELLS:
         rec = addr(r1, c1, r1 + CLOSED_MAX_CELLS // width - 1, nc2)
         raise rt.InputError(f"범위 '{address}'가 너무 큽니다 (데이터가 있는 부분만도 {nr2 - r1 + 1}행 x {width}열, "
-                            f"한 번에 {CLOSED_MAX_CELLS:,}칸까지). 범위를 나눠 읽으세요. [추천] --range {rec}")
+                            f"한 번에 {CLOSED_MAX_CELLS:,}칸까지). 범위를 나눠 읽으세요. [추천] {rt.retry_command({'--range': rec})}")
     rt.note_recovered(f"범위 '{address}'가 {CLOSED_MAX_CELLS:,}칸을 넘음 -> 데이터가 있는 {addr(r1, c1, nr2, nc2)}까지만 읽음")
     return nr2, nc2
 
@@ -943,7 +943,7 @@ def parse_where(text: str) -> List[List[Cond]]:
         raise rt.InputError(f"--where 식 '{raw}'을(를) 읽을 수 없습니다. 형식: {WHERE_FORM}")
     if fixed != raw:
         raise rt.InputError(f"--where 식 '{raw}'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ; (쉼표 아님), 또는은 |). "
-                            f"형식: {WHERE_FORM}. [추천] {where_text(groups)}")
+                            f"형식: {WHERE_FORM}. [추천] {rt.retry_command({'--where': where_text(groups)})}")
     return groups
 
 
@@ -1184,8 +1184,8 @@ def _rebase_formula(app: Any, ws: Any, formula: str, from_row: int, from_col: in
         rt.debug(f"수식 변환 실패: {e}")
         raise rt.InputError(
             f"--append로 쓸 행이 {from_row}행에서 {to_row}행으로 옮겨졌는데 수식 {formula!r}의 상대 참조를 그 행 기준으로 바꾸지 못해 "
-            f"쓰지 않았습니다. --append를 빼고 {to_row}행 기준 수식과 --range로 다시 실행하세요. "
-            f"[추천] --range {addr(to_row, to_col)}")
+            f"쓰지 않았습니다. --append를 빼고 {to_row}행 기준 수식과 --range {addr(to_row, to_col)}로 다시 실행하세요 "
+            f"(수식을 고쳐야 하므로 [추천] 명령은 없음. 사용자에게 알리세요).")
 
 
 # ==============================================================================
@@ -1824,14 +1824,15 @@ def cmd_write(args) -> Dict[str, Any]:
                 nums = [float(f[1:].replace(",", "")) for f in formulas]
                 one_col = r2c2 is not None and r2c2[1] == c1
                 rows = [[x] for x in nums] if one_col else [nums]
-                rec = f"--value {formulas[0][1:]}" if len(nums) == 1 else f"--values '{json.dumps(rows)}'"
-                raise rt.InputError(f"--formula에 숫자만 있습니다. 값은 {rec.split()[0]}로 쓰세요. [추천] {rec}")
+                opt, val = ("--value", formulas[0][1:]) if len(nums) == 1 else ("--values", json.dumps(rows))
+                rec = rt.retry_command({"--formula": None, opt: val}, multi=("--formula",))
+                raise rt.InputError(f"--formula에 숫자만 있습니다. 값은 {opt}로 쓰세요. [추천] {rec}")
             if r2c2 is None:
                 if len(formulas) != 1:
                     rec = addr(top, c1, top + 100 if header else top + 99, c1 + len(formulas) - 1)
                     raise rt.InputError("수식이 여러 개면 --range로 범위를 지정하세요"
                                         + (f" (머리글이 있으면 머리글 행부터, 수식은 {top + 1}행 기준으로)" if header else "")
-                                        + f". [추천] --range {rec}")
+                                        + f". [추천] {rt.retry_command({'--range': rec})}")
                 r2, c2 = r1, c1
             else:
                 r2, c2 = r2c2
@@ -1847,7 +1848,7 @@ def cmd_write(args) -> Dict[str, Any]:
                 ops += [(r1, c1 + j, r2, c1 + j, "formula", f) for j, f in enumerate(formulas)]
             else:
                 raise rt.InputError(f"수식 {len(formulas)}개와 범위의 열 수 {ncols}가 다릅니다. 열마다 수식 1개씩 주세요. "
-                                    f"[추천] --range {addr(top, c1, r2, c1 + len(formulas) - 1)}")
+                                    f"[추천] {rt.retry_command({'--range': addr(top, c1, r2, c1 + len(formulas) - 1)})}")
         elif args.value is not None:
             v = xl_text(coerce(args.value))
             ops.append((r1, c1, *(r2c2 or (r1, c1)), "value", v))
@@ -2788,7 +2789,7 @@ def _lines_spec(args) -> Tuple[Optional[str], str, int, int]:
                            [f"--axis rows ({r1}~{r2}행)", f"--axis cols ({col_letter(c1)}~{col_letter(c2)}열)"])
     if args.axis and args.axis != given:
         raise rt.InputError(f"--range {cells}은(는) {'행' if given == 'rows' else '열'} 주소인데 --axis {args.axis}를 주었습니다. "
-                            f"--axis를 빼고 다시 실행하세요. [추천] {given}")
+                            f"--axis를 빼고 다시 실행하세요. [추천] {rt.retry_command({'--axis': None})}")
     return sheet, given, a, b
 
 
@@ -3590,11 +3591,11 @@ def cmd_chart(args) -> Dict[str, Any]:
     preview = f"차트 '{chart_name}' 생성 ({chart_type}, 데이터 {info['sheet']}!{info['range']})"
     to = _open_receivers()
     fields = dict(target_resolved=resolved, chart_name=chart_name, chart_type=chart_type, data_range=info,
-                  confirm_commands=[rt.next_command("office.py", ["transfer", "--from", "excel", "--from-target", tgt,
+                  confirm_commands=[rt.next_command("office.py", ["transfer", "--from-app", "excel", "--from-target", tgt,
                                                                "--sheet", sheet_name, "--chart", chart_name,
-                                                               "--to", ",".join(to)],
+                                                               "--to-app", ",".join(to)],
                                                  f"이 차트를 열린 {'와 '.join(off.APP_LABEL[k] for k in to)}에 그림으로 넣기"
-                                                 + (" (한쪽만이면 --to word 또는 --to ppt)" if len(to) > 1 else ""))])
+                                                 + (" (한쪽만이면 --to-app word 또는 --to-app ppt)" if len(to) > 1 else ""))])
     if problems:
         return rt.ok_unverified(TOOL, "chart", preview, problems, **fields)
     return rt.ok(TOOL, "chart", preview, "VERIFIED: 차트를 다시 읽어 확인했습니다. 사용자가 워드/PPT로 옮기기를 원하면 confirm_commands[0]을 1번 실행하세요(열린 문서를 바꿈).",

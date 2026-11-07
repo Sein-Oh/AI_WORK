@@ -331,7 +331,7 @@ def missing_sheet(name: str, names: List[str]) -> "rt.InputError":
     key = _sheet_key(name)
     same = [n for n in names if _sheet_key(n) == key]
     if len(same) == 1:
-        return rt.InputError(f"시트 '{name}'이(가) 없습니다. 표기(대소문자·공백·_-.)만 다른 기존 시트가 있습니다. [추천] {same[0]}",
+        return rt.InputError(f"시트 '{name}'이(가) 없습니다. 표기(대소문자·공백·_-.)만 다른 기존 시트가 있습니다. [추천] {rt.retry_replacing(name, same[0], '--sheet')}",
                              no_fallback=True, log_message=f"시트 '{name}'이(가) 없습니다. 표기만 다른 기존 시트가 있습니다. [추천 생략]")
     shown = ", ".join(names[:15]) + (" ..." if len(names) > 15 else "")
     similar = same or rt.suggest(name, names)
@@ -646,7 +646,7 @@ def check_sheet_name(name: Any, existing: Optional[List[str]] = None) -> None:
         rec = base[:31 - len(tail)] + tail
         k += 1
     raise rt.InputError(f"시트 이름 '{text}'은(는) 엑셀에서 쓸 수 없습니다 ({', '.join(problems)}). "
-                        f"아무것도 바꾸지 않았습니다. [추천] {rec}")
+                        f"아무것도 바꾸지 않았습니다. [추천] {rt.retry_replacing(text, rec)}")
 
 
 def _new_instance(kind: str) -> Any:

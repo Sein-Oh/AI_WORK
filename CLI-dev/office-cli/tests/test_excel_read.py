@@ -15,7 +15,7 @@ import office
 import reader
 from fake_excel import FakeExcelWorkbook, FakeRange, FakeXlApp
 from fake_office import make_win32com
-from office_helpers import split_command, error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
+from office_helpers import option_value, recommended_argv, split_command, error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
 
 
 def _strip_dimension(src, dst):
@@ -332,7 +332,11 @@ def test_range_too_big_even_after_clip_recommends_narrower(tmp_path, capsys, mon
     _grid_xlsx(p, 6, 5)
     monkeypatch.setattr(excel, "CLOSED_MAX_CELLS", 10, raising=False)
     code, out = run_main(excel, capsys, "read", "--target", str(p), "--range", "A1:Z100")
-    assert code == 1 and "[추천] --range A1:E2" in out["message"], out
+    assert code == 1, out
+    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
+    assert option_value(argv, "--range") == "A1:E2" and "A1:Z100" not in argv and option_value(argv, "--target") == str(p), argv
+    code, out = run_main(excel, capsys, *argv)
+    assert code == 0 and out["range"] == "A1:E2", out
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +509,16 @@ def test_where_operators(xl_table, capsys, expr, rows):
 ])
 def test_where_comma_between_conditions_gets_fixed_expression(xl_table, capsys, expr, fixed):
     code, out = run_main(excel, capsys, "read", "--where", expr)
-    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and out["message"].endswith(f"[추천] {fixed}"), out
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    _check_where_recommend(capsys, out, expr, fixed)
+
+
+def _check_where_recommend(capsys, out, expr, fixed):
+    """[추천] 전체 명령의 --where가 고친 식이고 옛 식은 없으며, 그대로 다시 실행하면 성공 (1.4.79: [추천]은 전체 명령)."""
+    argv = recommended_argv(out["message"], "excel")
+    assert argv[0] == "read" and option_value(argv, "--where") == fixed and expr not in argv, argv
+    code, again = run_main(excel, capsys, *argv)
+    assert code == 0 and again["where"] == fixed, again
 
 
 @pytest.mark.parametrize("expr, rows", [("금액 = 1,000", ["라"]), ("부서 = '영업, 기획'", [])])
@@ -524,9 +537,11 @@ def test_where_unknown_column_and_bad_expression(xl_table, capsys):
     code, out = run_main(excel, capsys, "read", "--where", "매출 > 1")
     assert code == 1 and "[후보] 이름, 부서, 금액" in out["message"], out
     code, out = run_main(excel, capsys, "read", "--where", "금액 == 100")
-    assert code == 1 and out["message"].endswith("[추천] 금액 = 100"), out
+    assert code == 1, out
+    _check_where_recommend(capsys, out, "금액 == 100", "금액 = 100")
     code, out = run_main(excel, capsys, "read", "--where", "금액 >= 100 AND 부서 <> 영업")
-    assert code == 1 and out["message"].endswith("[추천] 금액 >= 100; 부서 != 영업"), out
+    assert code == 1, out
+    _check_where_recommend(capsys, out, "금액 >= 100 AND 부서 <> 영업", "금액 >= 100; 부서 != 영업")
     code, out = run_main(excel, capsys, "read", "--where", "금액 100")
     assert code == 1 and "[추천]" not in out["message"] and "예:" in out["message"], out
     code, out = run_main(excel, capsys, "read", "--where", "금액 > 1", "--search", "가")
@@ -559,9 +574,11 @@ def test_where_quoted_value_with_separators(xl_table, capsys):
 
 def test_where_or_spellings_recommend(xl_table, capsys):
     code, out = run_main(excel, capsys, "read", "--where", "부서 = 개발 OR 부서 = 기획")
-    assert code == 1 and out["message"].endswith("[추천] 부서 = 개발 | 부서 = 기획"), out
+    assert code == 1, out
+    _check_where_recommend(capsys, out, "부서 = 개발 OR 부서 = 기획", "부서 = 개발 | 부서 = 기획")    # 1.4.79: 전체 명령
     code, out = run_main(excel, capsys, "read", "--where", "부서 = 개발 || 금액 > 500")
-    assert code == 1 and out["message"].endswith("[추천] 부서 = 개발 | 금액 > 500"), out
+    assert code == 1, out
+    _check_where_recommend(capsys, out, "부서 = 개발 || 금액 > 500", "부서 = 개발 | 금액 > 500")
     code, out = run_main(excel, capsys, "read", "--where", "| 부서 = 개발")
     assert code == 1 and "[추천]" not in out["message"], out
 

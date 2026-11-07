@@ -18,7 +18,7 @@
     python ppt.py write --file "검색결과.md"
     python ppt.py write --slide 3 --image chart.png
     python ppt.py write --slide new --title "핵심 가치" --cards "안정성:무중단|확장성:모듈 구조|보안:폐쇄망"
-    python ppt.py slide --action move --slide 1 --to 3
+    python ppt.py slide --action move --slide 1 --dest 3
 """
 import json
 import os
@@ -212,7 +212,7 @@ def cmd_read(args) -> Dict[str, Any]:
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
         result.update(output_file=out, confirm_commands=[
             rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기 (사용자가 원할 때만)"),
-            rt.next_command("office.py", ["transfer", "--from", "ppt", "--what", "text", "--to", "excel"]
+            rt.next_command("office.py", ["transfer", "--from-app", "ppt", "--what", "text", "--to-app", "excel"]
                             + _from_target(args, source),
                             "슬라이드 내용을 엑셀 표로 옮기기 (사용자가 원할 때만)")])
         return rt.ok_file(TOOL, "read", f"{source['name']}: 슬라이드 {len(slides)}장을 저장했습니다 ({out})", out,
@@ -610,14 +610,18 @@ def _text_lines(text: str) -> List[Tuple[str, str]]:
 
 
 def _parse_cards(raw: str) -> List[Tuple[str, str]]:
+    """'제목:내용; 제목:내용' (카드 사이는 ;, 저장소 구분자 규칙). 예전 구분자 '|'만 쓴 것은 ;로 고친 명령을 [추천] (1.4.79)."""
+    if "|" in raw and ";" not in raw:
+        fixed = "; ".join(p.strip() for p in raw.split("|") if p.strip())
+        raise rt.InputError(f"--cards의 카드 사이는 ; 로 나눕니다 ('|' 아님). [추천] {rt.retry_command({'--cards': fixed})}")
     cards = []
-    for part in raw.split("|"):
+    for part in raw.split(";"):
         if not part.strip():
             continue
         head, _, desc = part.partition(":")
         cards.append((head.strip(), desc.strip()))
     if not 1 <= len(cards) <= 5:
-        raise rt.InputError("--cards는 1~5개를 '제목:내용|제목:내용' 형식으로 주세요.")
+        raise rt.InputError("--cards는 1~5개를 '제목:내용; 제목:내용' 형식으로 주세요.")
     return cards
 
 
@@ -1139,7 +1143,7 @@ def cmd_slide(args) -> Dict[str, Any]:
             focus, msg = n + 1, f"슬라이드 {n}을(를) 복제해 {n + 1}번에 넣었습니다"
         elif a == "move":
             n = need(args.slide)
-            dest = need(args.to, "--to")
+            dest = need(args.dest, "--dest")
             moved_title = slide_units(prs.Slides(n), n)["title"]
             if n == dest:          # 같은 자리로 옮기기는 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
                 focus, msg = dest, f"슬라이드 {n}은(는) 이미 {dest}번 위치라 옮기지 않았습니다 (바뀐 것 없음)"
@@ -1214,7 +1218,7 @@ def build_cli():
     p.add_argument("--file", "-f", help="입력 파일 (.md: 제목마다 새 슬라이드, .csv: 표)")
     p.add_argument("--image", help="그림 파일 (남은 공간에 비율 유지로 맞춤)")
     p.add_argument("--width", type=float, help="그림 너비(pt)")
-    p.add_argument("--cards", help="카드 '제목:내용|제목:내용' (1~5개)")
+    p.add_argument("--cards", help="카드 '제목:내용; 제목:내용' (1~5개)")
     p.add_argument("--theme", help=f"색 테마: {', '.join(off.THEMES)} (기본 navy)")
     p.add_argument("--overwrite", action="store_true", help="기존 슬라이드의 제목을 바꾸기 (사용자가 원할 때만)")
 
@@ -1247,7 +1251,7 @@ def build_cli():
     common(p, write=True)
     p.add_argument("--action", "-a", required=True, choices=["list", "add", "duplicate", "move", "delete", "clear"])
     p.add_argument("--slide", type=int, help="대상 슬라이드 번호 (add는 넣을 위치)")
-    p.add_argument("--to", type=int, help="move 목적 위치")
+    p.add_argument("--dest", type=int, help="move: 옮길 위치 (슬라이드 번호)")
     p.add_argument("--layout", choices=list(PP_LAYOUT), default="title_only", help="add 레이아웃 (기본 title_only)")
     p.add_argument("--all-slides", action="store_true", help="clear: 모든 슬라이드 (명시 필요)")
     return parser

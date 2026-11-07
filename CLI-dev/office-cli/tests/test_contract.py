@@ -23,7 +23,7 @@ import word
 from fake_excel import FakeChartObject, FakeExcelWorkbook, FakeXlApp
 from fake_office import make_win32com
 from fake_word import FakeWordDocument
-from office_helpers import assert_not_logged, error_log_text, run_as_tool, run_main, SECRET, split_command, TOOL_DIR
+from office_helpers import assert_not_logged, error_log_text, recommended_argv, run_as_tool, run_main, SECRET, split_command, TOOL_DIR
 from sample_docs import new_docx, new_pptx
 
 
@@ -283,10 +283,10 @@ def test_clamp_rows_and_text():
 
 
 def test_next_command_quotes_paths():
-    cmd = rt.next_command("office.py", ["transfer", "--chart", "사인 2주기", "--to", "word,ppt"], "차트 전달")
+    cmd = rt.next_command("office.py", ["transfer", "--chart", "사인 2주기", "--to-app", "word,ppt"], "차트 전달")
     assert cmd["purpose"] == "차트 전달"
-    assert "'사인 2주기'" in cmd["command"] and " --to word,ppt" in cmd["command"]   # PowerShell 작은따옴표 (1.4.76)
-    assert split_command(cmd["command"])[2:] == ["transfer", "--chart", "사인 2주기", "--to", "word,ppt"]
+    assert "'사인 2주기'" in cmd["command"] and " --to-app word,ppt" in cmd["command"]   # PowerShell 작은따옴표 (1.4.76)
+    assert split_command(cmd["command"])[2:] == ["transfer", "--chart", "사인 2주기", "--to-app", "word,ppt"]
     assert "office.py" in cmd["command"]
 
 
@@ -388,9 +388,10 @@ def test_unescape_newlines_keeps_windows_paths():
     assert rt.unescape_newlines(r"저장: C:\a\b.xlsx\n다음") == "저장: C:\\a\\b.xlsx\n다음"
 
 
+# want가 목록이면 [추천] 전체 명령의 인자가 그것과 같아야 함 (1.4.79: [추천]은 전체 명령)
 @pytest.mark.parametrize("argv, want", [
-    (["excel.py", "list"], "[추천] info"),
-    (["excel.py", "raed"], "[추천] read"),
+    (["excel.py", "list"], ["info"]),
+    (["excel.py", "raed"], ["read"]),
     (["office.py", "undo", "--target", "excel"], "undo --app excel"),
     (["excel.py", "read", "--target", "C:\\a", "b.xlsx"], "큰따옴표"),
     (["excel.py", "write", "--cell", "K1", "--value", "3"], "write --range K1 --value 3"),          # 1.4.39
@@ -402,7 +403,11 @@ def test_argument_errors_from_real_logs_get_a_hint(argv, want):
     out = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     assert proc.returncode == 2 and len(out) == 1
     payload = json.loads(out[0])
-    assert want in payload["message"] and "[추천]" in payload["agent_directive"]
+    assert "[추천]" in payload["agent_directive"]
+    if isinstance(want, list):
+        assert recommended_argv(payload["message"], argv[0][:-3]) == want, payload
+    else:
+        assert want in payload["message"], payload
 
 
 @pytest.mark.parametrize("argv, fixed", [
@@ -469,7 +474,7 @@ def test_unsafe_next_commands_checker():
     """conftest의 next_commands 점검(모든 테스트에 자동 적용)이 문서를 바꾸는 명령을 잡는지."""
     from office_helpers import unsafe_next_commands   # conftest 이름은 ml-kit tests와 겹쳐 함께 돌 때 다른 모듈을 집음
     nxt = lambda *cmds: {"status": "ok", "next_commands": [{"command": f'python "C:\\CLI\\{c}"'} for c in cmds]}
-    assert unsafe_next_commands(nxt('word.py" write --file "a.md"', 'office.py" transfer --from excel'))
+    assert unsafe_next_commands(nxt('word.py" write --file "a.md"', 'office.py" transfer --from-app excel'))
     assert unsafe_next_commands(nxt('excel.py" chart --target active --range A1:B3'))
     assert not unsafe_next_commands(nxt('reader.py" read --file "a.pdf"', 'excel.py" comment --action add --dry-run',
                                         'excel.py" chart --action list', 'office.py" undo --list'))
@@ -545,7 +550,7 @@ def test_error_log_redacts_content_options(isolated_dirs):
     assert "--to <15자 생략>" in text and "--body <8자 생략>" in text and "--text=<5자 생략>" in text
     assert "C:\\docs\\a.pdf" in text                                     # 경로는 남김
     assert rt.redact_argv(["transfer", "--from", "excel", "--to", "word"], "office") == \
-        ["transfer", "--from", "excel", "--to", "word"]                      # office.py의 --from/--to는 앱 이름
+        ["transfer", "--from", "excel", "--to", "word"]        # office.py에 잘못 쓴 옛 이름 --from/--to도 앱 이름이라 가리지 않음 (1.4.79)
 
 
 # ---------------------------------------------------------------------------
@@ -1214,3 +1219,22 @@ def test_every_help_text_builds():
         except Exception as e:
             bad.append(f"{name}: {e}")
     assert not bad, bad
+
+
+def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
+    """1.4.79: CONTINUE 횟수는 도구가 셈. 바로 앞과 같은 progress면 STOP_RETRY(unfinished_limit), 끝난 명령은 기록을 지움."""
+    monkeypatch.setenv("OFFICE_CLI_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["index", "--folder", "x"])
+    first = rt.unfinished_payload(rt.Unfinished("문서 3/10개 등록"), "reader", "index")
+    second = rt.unfinished_payload(rt.Unfinished("문서 6/10개 등록"), "reader", "index")
+    assert first["continue"] and second["continue_runs"] == 2, second
+    stuck = rt.unfinished_payload(rt.Unfinished("문서 6/10개 등록"), "reader", "index")
+    assert stuck["status"] == "error" and stuck["error_type"] == "unfinished_limit" and stuck["agent_directive"].startswith("STOP_RETRY:")
+    again = rt.unfinished_payload(rt.Unfinished("문서 6/10개 등록"), "reader", "index")     # 기록을 지웠으므로 처음부터
+    assert again["continue_runs"] == 1
+    rt.continue_clear("reader")
+    assert rt._continue_state() == {}
+    monkeypatch.setattr(rt, "CONTINUE_MAX", 2)
+    for _ in range(2):
+        assert rt.unfinished_payload(rt.Unfinished(f"단계 {_}"), "reader", "index")["status"] == "ok"
+    assert rt.unfinished_payload(rt.Unfinished("단계 9"), "reader", "index")["error_type"] == "unfinished_limit"

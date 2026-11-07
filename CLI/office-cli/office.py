@@ -4,10 +4,10 @@
     windows   열린 Excel/Word/PowerPoint 문서 목록
     focus     특정 앱/문서 창을 화면 맨 앞으로
     transfer  앱 간 전달
-              - 엑셀 차트 -> 워드/PPT (그림)          --from excel --chart <이름> --to word,ppt
-              - 엑셀 범위 -> 워드/PPT (표)             --from excel --range A1:D10 --to word
-              - 워드/PPT 내용 -> 엑셀 (새 시트)        --from word --what text --to excel
-              - 워드/PPT 표 -> 엑셀                    --from word --what table --table 1 --to excel
+              - 엑셀 차트 -> 워드/PPT (그림)          --from-app excel --chart <이름> --to-app word,ppt
+              - 엑셀 범위 -> 워드/PPT (표)             --from-app excel --range A1:D10 --to-app word
+              - 워드/PPT 내용 -> 엑셀 (새 시트)        --from-app word --what text --to-app excel
+              - 워드/PPT 표 -> 엑셀                    --from-app word --what table --table 1 --to-app excel
     undo      직전 작업 되돌리기 (--list로 목록, --pick으로 선택)
 
 차트 그림 전달 방식 (회사 DRM 대응, 자동으로 순서대로 시도):
@@ -409,7 +409,7 @@ def method_order(kind: str) -> List[str]:
 # 4. transfer
 # ==============================================================================
 
-TO_TARGET_NOTE = " (--to-target은 --to의 모든 앱에 함께 쓰이므로 앱 하나에만 보낼 때 쓰세요)"
+TO_TARGET_NOTE = " (--to-target은 --to-app의 모든 앱에 함께 쓰이므로 앱 하나에만 보낼 때 쓰세요)"
 
 
 def _probe_target(kind: str, target: Optional[str]) -> Tuple[bool, Any, str]:
@@ -450,7 +450,7 @@ def _check_target_args(kind: str, doc: Any, args) -> None:
 
 
 def _with_option_value(argv: List[str], option: str, value: str) -> List[str]:
-    """argv에서 option의 값만 바꾼 목록 (--to word,ppt -> --to word)."""
+    """argv에서 option의 값만 바꾼 목록 (--to-app word,ppt -> --to-app word)."""
     out: List[str] = []
     skip = False
     for a in argv:
@@ -468,7 +468,7 @@ def _with_option_value(argv: List[str], option: str, value: str) -> List[str]:
 
 
 def _preflight_targets(args, targets: List[str]) -> None:
-    """여러 앱에 보낼 때(--to word,ppt) 무엇이든 넣기 전에 모든 받는 문서와 앱별 인자를 확인합니다.
+    """여러 앱에 보낼 때(--to-app word,ppt) 무엇이든 넣기 전에 모든 받는 문서와 앱별 인자를 확인합니다.
     워드에 넣은 뒤 PowerPoint가 없어 실패하면, 다시 실행할 때 워드에 두 번 들어가기 때문.
     못 찾은 문서가 있으면 아무것도 바꾸지 않고, 찾은 앱만으로 같은 명령을 [추천]합니다."""
     if len(targets) < 2:
@@ -497,17 +497,17 @@ def _preflight_targets(args, targets: List[str]) -> None:
         raise rt.UserDecisionError(
             f"받는 문서를 찾지 못해 아무것도 바꾸지 않았습니다: {reasons}.",
             f"실행하지 않았습니다. 사용자에게 {labels} 문서를 열어 달라고 한 뒤 같은 명령을 1번만 다시 실행하세요. "
-            "파일에 넣으려면 사용자에게 전체 경로를 물어 --to에 앱 하나와 --to-target \"<전체경로>\"로 실행하세요"
+            "파일에 넣으려면 사용자에게 전체 경로를 물어 --to-app에 앱 하나와 --to-target \"<전체경로>\"로 실행하세요"
             f"{TO_TARGET_NOTE}. 경로를 추측하지 마세요.")
     done = ", ".join(off.APP_LABEL[k] for k in found)
     explicit = (args.to_target or "active").strip().lower() != "active"
     argv = list(rt.CURRENT_ARGV or [])
-    cmd = rt.next_command("office.py", _with_option_value(argv, "--to", ",".join(found)), "")["command"] if argv else ""
+    cmd = rt.next_command("office.py", _with_option_value(argv, "--to-app", ",".join(found)), "")["command"] if argv else ""
     raise rt.InputError(
         f"{reasons}. 아무것도 바꾸지 않았습니다. {done}에만 넣을 수 있습니다." + (f" [추천] {cmd}" if cmd else ""),
         directive=(f"아무것도 바꾸지 않았습니다. message의 [추천] 명령을 글자 그대로 1번만 실행해 {done}에 넣고, "
                    f"{labels}에는 넣지 못했다고 사용자에게 알리세요. {labels}에도 넣으려면 사용자에게 {labels} 문서를 "
-                   f"열어 달라고 한 뒤 --to {','.join(missing)}로 따로 실행하세요" + (TO_TARGET_NOTE if explicit else "") + "."),
+                   f"열어 달라고 한 뒤 --to-app {','.join(missing)}로 따로 실행하세요" + (TO_TARGET_NOTE if explicit else "") + "."),
         error_type="target_not_open")
 
 
@@ -515,7 +515,7 @@ def _partial_note(results: Dict[str, Any], failed: List[str]) -> str:
     """R1: 일부 앱에만 넣었을 때 unverified 문구 (다시 실행하면 넣은 앱에 또 들어감)."""
     done = ", ".join(off.APP_LABEL[k] for k in results)
     return (f"{', '.join(off.APP_LABEL[k] for k in failed)}에는 넣지 못함 (failures). {done}에는 넣었으므로 같은 명령을 다시 실행하면 "
-            f"{done}에 한 번 더 들어감. 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 --to {','.join(failed)}로 실행")
+            f"{done}에 한 번 더 들어감. 실패한 앱에만 다시 넣으려면 원인을 고친 뒤 --to-app {','.join(failed)}로 실행")
 
 def _excel_chart_transfer(args, targets: List[str]) -> Dict[str, Any]:
     import excel
@@ -797,7 +797,7 @@ def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
                 free = f"{name[:27]} {k}"
                 k += 1
             raise rt.InputError(f"시트 '{existing}'이(가) 이미 있어 덮어쓰지 않았습니다. 새 이름으로 받거나, 기존 시트에 덮어쓰려면 "
-                                f"사용자 확인 후 --overwrite를 붙이세요. [추천] {free}")
+                                f"사용자 확인 후 --overwrite를 붙이세요. 새 이름으로 받는 명령: [추천] {rt.retry_command({'--sheet': free})}")
         ws = t.sheet(existing or name, create=existing is None)
         width = max(len(r) for r in rows)
         import excel
@@ -821,7 +821,7 @@ def cmd_transfer(args) -> Dict[str, Any]:
     if args.probe:
         return probe()
     if not args.source or not args.to:
-        raise rt.InputError("--from과 --to를 지정하세요 (예: --from excel --chart 차트이름 --to word,ppt).")
+        raise rt.InputError("--from-app과 --to-app을 지정하세요 (예: --from-app excel --chart 차트이름 --to-app word,ppt).")
     src = _app(args.source)
     targets = list(dict.fromkeys(_app(x) for x in args.to.split(",") if x.strip()))
     if src in targets:
@@ -833,7 +833,7 @@ def cmd_transfer(args) -> Dict[str, Any]:
             return _excel_range_transfer(args, targets)
         raise rt.InputError("엑셀에서 보낼 때는 --chart <차트 이름> 또는 --range <범위>를 지정하세요. 차트 이름은 excel.py chart --action list로 확인.")
     if targets != ["excel"]:
-        raise rt.InputError("워드/PPT의 내용은 엑셀로 보낼 수 있습니다 (--to excel). 워드<->PPT는 read --save 후 write --file을 쓰세요.")
+        raise rt.InputError("워드/PPT의 내용은 엑셀로 보낼 수 있습니다 (--to-app excel). 워드<->PPT는 read --save 후 write --file을 쓰세요.")
     rows, name = _word_rows(args) if src == "word" else _ppt_rows(args)
     if len(rows) <= 1 and args.what == "text":
         raise rt.InputError(f"'{name}'에서 옮길 내용이 없습니다.")
@@ -1215,9 +1215,9 @@ def build_cli():
     p.add_argument("--name", help="문서 이름 (생략 시 그 앱의 활성 문서)")
 
     p = sub.add_parser("transfer", help="앱 간 전달")
-    p.add_argument("--from", dest="source", help="보내는 앱: excel, word, ppt")
+    p.add_argument("--from-app", dest="source", help="보내는 앱: excel, word, ppt")
     p.add_argument("--from-target", default="active", help="보내는 문서 (active, 열린 문서 이름, 경로)")
-    p.add_argument("--to", help="받는 앱 (쉼표로 여러 개: word,ppt)")
+    p.add_argument("--to-app", dest="to", help="받는 앱 (쉼표로 여러 개: word,ppt)")
     p.add_argument("--to-target", default="active", help="받는 문서 (기본: 각 앱의 활성 문서)")
     p.add_argument("--chart", help="엑셀 차트 이름 또는 제목 (excel.py chart --action list로 확인)")
     p.add_argument("--range", help="엑셀 범위 (표로 전달)")

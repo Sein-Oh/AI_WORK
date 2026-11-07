@@ -1299,7 +1299,7 @@ def test_H(ctx):
     def h3():
         wd_before = com_retry(lambda: wd_doc("A.docx").InlineShapes.Count)
         pp_before = com_retry(lambda: pp_prs("A.pptx").Slides.Count)
-        data, code, raw, err = run_cli("office.py", "transfer", "--from", "excel", "--chart", "사인 2주기", "--to", "word,ppt")
+        data, code, raw, err = run_cli("office.py", "transfer", "--from-app", "excel", "--chart", "사인 2주기", "--to-app", "word,ppt")
         wd_after = com_retry(lambda: wd_doc("A.docx").InlineShapes.Count)
         pp_after = com_retry(lambda: pp_prs("A.pptx").Slides.Count)
         methods = {k: v.get("method") for k, v in ((data or {}).get("results") or {}).items()}
@@ -1310,8 +1310,8 @@ def test_H(ctx):
                data, code, raw, err)
 
     def h4():
-        d1, c1, r1, e1 = run_cli("office.py", "transfer", "--from", "word", "--what", "text", "--to", "excel")
-        d2, c2, r2, e2 = run_cli("office.py", "transfer", "--from", "ppt", "--what", "text", "--to", "excel")
+        d1, c1, r1, e1 = run_cli("office.py", "transfer", "--from-app", "word", "--what", "text", "--to-app", "excel")
+        d2, c2, r2, e2 = run_cli("office.py", "transfer", "--from-app", "ppt", "--what", "text", "--to-app", "excel")
         ok = (d1 or {}).get("status") == "ok" and (d2 or {}).get("status") == "ok"
         record(ctx, "H4", "워드/PPT 내용을 엑셀 새 시트로", ok,
                f"시트: {(d1 or {}).get('sheet')}, {(d2 or {}).get('sheet')}", d2, c2, r2, e2)
@@ -1603,7 +1603,7 @@ def test_I(ctx):
         record(ctx, "I15", "PPT 그림 슬라이드 (비율 유지, 슬라이드 안)", ok, f"그림(비율, 안쪽)={info}", d, c, r, e)
 
     def i16():
-        d, c, r, e = run_cli("ppt.py", "write", "--slide", "new", "--title", "카드", "--cards", "속도:빠름|품질:높음|비용:낮음")
+        d, c, r, e = run_cli("ppt.py", "write", "--slide", "new", "--title", "카드", "--cards", "속도:빠름; 품질:높음; 비용:낮음")
         s = com_retry(ppt_last_slide)
         cards = com_retry(lambda: [(s.Shapes(i).TextFrame.TextRange.Text.split("\r")[0], inside_slide(s.Shapes(i)))
                                    for i in range(1, s.Shapes.Count + 1) if s.Shapes(i).Type == 1])
@@ -1653,9 +1653,9 @@ def test_I(ctx):
         n1 = com_retry(lambda: pp_prs("A.pptx").Slides.Count)
         t2 = com_retry(lambda: slide_title(pp_prs("A.pptx").Slides(2)))
         last_title = com_retry(lambda: slide_title(ppt_last_slide()))
-        d2 = run_cli("ppt.py", "slide", "--action", "move", "--slide", str(n1), "--to", "1")[0]
+        d2 = run_cli("ppt.py", "slide", "--action", "move", "--slide", str(n1), "--dest", "1")[0]
         moved = com_retry(lambda: slide_title(pp_prs("A.pptx").Slides(1)))
-        run_cli("ppt.py", "slide", "--action", "move", "--slide", "1", "--to", str(n1))
+        run_cli("ppt.py", "slide", "--action", "move", "--slide", "1", "--dest", str(n1))
         d3 = run_cli("ppt.py", "slide", "--action", "delete", "--slide", "2")[0]
         n2 = com_retry(lambda: pp_prs("A.pptx").Slides.Count)
         d4, c, r, e = run_cli("ppt.py", "slide", "--action", "list")
@@ -1717,7 +1717,7 @@ def test_I(ctx):
         doc = wd_doc("A.docx")
         t0 = com_retry(lambda: doc.Tables.Count)
         n0 = com_retry(lambda: pp_prs("A.pptx").Slides.Count)
-        d, c, r, e = run_cli("office.py", "transfer", "--from", "excel", "--sheet", "I_DATA", "--range", "A1:C4", "--to", "word,ppt")
+        d, c, r, e = run_cli("office.py", "transfer", "--from-app", "excel", "--sheet", "I_DATA", "--range", "A1:C4", "--to-app", "word,ppt")
         doc = wd_doc("A.docx")
         t1 = com_retry(lambda: doc.Tables.Count)
         wcell = com_retry(lambda: doc.Tables(t1).Cell(4, 1).Range.Text.rstrip("\r\x07")) if t1 > t0 else None
@@ -1739,7 +1739,7 @@ def test_I(ctx):
 
     def i23():
         before = set(sheet_names())
-        d, c, r, e = run_cli("office.py", "transfer", "--from", "word", "--what", "table", "--table", "1", "--to", "excel")
+        d, c, r, e = run_cli("office.py", "transfer", "--from-app", "word", "--what", "table", "--table", "1", "--to-app", "excel")
         new = [s for s in sheet_names() if s not in before]
         vals = com_retry(lambda: xl_sheet(new[0]).Range("A1:C2").Value) if new else None
         ok = ok_(d) and len(new) == 1 and vals == (("품목", "수량", "금액"), ("사과", 3.0, 1500.0))
@@ -1754,7 +1754,7 @@ def test_I(ctx):
             json.dump({"transfer_method": {"word": ["redraw"]}}, f)
         RUN_ENV["OFFICE_CLI_CONFIG"] = cfg
         try:
-            d, c, r, e = run_cli("office.py", "transfer", "--from", "excel", "--chart", "I 막대", "--to", "word")
+            d, c, r, e = run_cli("office.py", "transfer", "--from-app", "excel", "--chart", "I 막대", "--to-app", "word")
         finally:
             RUN_ENV.pop("OFFICE_CLI_CONFIG", None)
         n1 = com_retry(lambda: wd_doc("A.docx").InlineShapes.Count)

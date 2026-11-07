@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 본문
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.78"
+  version: "1.4.79"
   platform: windows
 ---
 
@@ -32,13 +32,13 @@ metadata:
 | 워드 바꾸기 | `python "C:\CLI\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (`--replace` 없음) |
 | 워드 정보 / PDF | `python "C:\CLI\office-cli\word.py" info [--detail]` / `python "C:\CLI\office-cli\word.py" export --save "<보고서.pdf>" [--page-number]` |
 | PPT 읽기 | `python "C:\CLI\office-cli\ppt.py" read [--slides 1-3]` |
-| PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용|제목:내용"` |
+| PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용; 제목:내용"` |
 | PPT 발표자 노트 | 읽기 `python "C:\CLI\office-cli\ppt.py" notes [--slides 1-3]` / 쓰기 `python "C:\CLI\office-cli\ppt.py" notes --slide 3 --text "<노트>"` (있던 노트에 덧붙이기 `--append`, 여러 줄 `--file "<노트.md>"`) |
-| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action add|duplicate|delete|move --slide N [--to M] [--layout title|text|title_only|blank]` |
+| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action add|duplicate|delete|move --slide N [--dest M] [--layout title|text|title_only|blank]` |
 | PPT 기타 | `python "C:\CLI\office-cli\ppt.py" replace --find <A> --replace <B>` / `python "C:\CLI\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\CLI\office-cli\ppt.py" info --detail --slides N` |
-| 엑셀 차트를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from excel --chart "<차트이름>" --to word,ppt` |
-| 엑셀 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from excel --range A1:D10 --to word` |
-| 워드/PPT 내용을 엑셀로 | `python "C:\CLI\office-cli\office.py" transfer --from word --what text --to excel` (표는 `--what table --table 1`) |
+| 엑셀 차트를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` |
+| 엑셀 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --range A1:D10 --to-app word` |
+| 워드/PPT 내용을 엑셀로 | `python "C:\CLI\office-cli\office.py" transfer --from-app word --what text --to-app excel` (표는 `--what table --table 1`) |
 | 되돌리기 / 창 | `python "C:\CLI\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\CLI\office-cli\office.py" windows` / `python "C:\CLI\office-cli\office.py" focus --app word` |
 
 ## 결과 처리

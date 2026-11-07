@@ -51,6 +51,21 @@ def split_command(cmd):
     return shell_sim.split_command(cmd, "OFFICE_CLI_SHELL")
 
 
+def recommended_argv(message, tool):
+    """message의 '[추천] python "<도구 경로>" <인자>'를 나눠 인자만 돌려준다 (1.4.79: [추천]은 그대로 실행할 전체 명령).
+    python으로 시작하고 tool(.py)을 실행하는 명령인지도 확인한다. 명령은 message 끝까지."""
+    assert "[추천] " in message, message
+    parts = split_command(message.split("[추천] ", 1)[1])
+    assert len(parts) >= 2 and parts[0] == "python" and os.path.basename(parts[1]) == f"{tool}.py", (parts, message)
+    return parts[2:]
+
+
+def option_value(argv, option):
+    """argv에서 option 바로 뒤의 값 (option이 꼭 한 번만 있어야 함)."""
+    assert argv.count(option) == 1, (option, argv)
+    return argv[argv.index(option) + 1]
+
+
 def run_excel(capsys, *argv):
     return run_main(excel, capsys, *argv)
 
