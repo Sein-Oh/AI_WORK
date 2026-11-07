@@ -8,14 +8,16 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
   ppt slide `--dest`, `--cards` 구분 `;`, 별칭·줄임말 제거. 클라우드 테스트: ml-kit 894 passed·1 skipped, office-cli+공통 3296 passed.
-  실기 확인 전: 고친 명령의 실제 PowerShell 5.1 따옴표, 스킬 4개 설치(setup.py), Gemma의 스킬 선택·번호 `[후보]` 처리
+  집 PC 실기 확인 끝 (2026-11-07, 4장): 고친 명령의 실제 PowerShell 5.1 따옴표, 스킬 설치(setup.py), N1~N4·B1~B5 모두 통과.
+  남은 실기 확인: Gemma의 스킬 선택·번호 `[후보]` 처리 (회사 PC, 3장)
 - 저장소 규칙은 `AGENTS.md` 한 곳 (Claude Code는 `CLAUDE.md`가 불러옴). 특히:
   - 답변은 한국어, 이모지·장식 기호 금지 (CP949 안전 문자만)
   - 베타 단계: 이전 버전 호환 코드를 넣지 않음. CLI 인자·JSON 키는 바꿔도 되고, 바꾸면 SKILL.md·README·CHANGELOG·테스트를 같은 커밋에서
   - 리팩터링과 기능 변경은 별도 커밋/PR, 버그 수정에는 회귀 테스트
   - `archive/`는 수정하지 않음
 - 배포 파일에 사용자 이름이 든 전체 경로를 넣지 않음 (성능예측표 등은 `<데이터>_ml_data\vN`처럼 끝부분만)
-- 실기 로그는 사용자가 GitHub 웹으로 `docs/test_logs/`에 올림 (git 명령으로는 올리지 않음, `.gitignore` 처리). 프로젝트 마무리 때 저장소 이력에서 정리 예정
+- 실기 로그는 사용자가 GitHub 웹으로 `docs/test_logs/`에 올림 (`.gitignore` 처리). 사용자가 요청하면 에이전트가 사용자 이름이 든 경로를
+  `<저장소>`, `C:\Users\<사용자>`로 가린 뒤 `git add -f`로 올림 (2026-11-07 집 PC). 프로젝트 마무리 때 저장소 이력에서 정리 예정
 - 클라우드 점검: 17~25차 점검(검토 -> 수정 -> 재검사 반복) 완료 (2026-11-03). 마지막 차수의 회귀·높음 결함은 모두 수정, 경미·중간은 각 도구 CHANGELOG "남은 할 일"
 - 클라우드 테스트: 전체 pytest 1549 passed, 1 skipped (ml-kit 2.9.36, office-cli 1.4.32 기준). 회사 PC 수는 `run_all_tests.py`의 pytest 결과로 확인
 
@@ -122,6 +124,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
 
 ## 3-0. 집 PC에서 할 일 (Gemma 없음, 공식 Python 3.13)
+2026-11-07 아래 1~5를 모두 마침 (결과는 4장). 다음 집 PC 점검 때 같은 순서로 쓴다.
 상세: `docs/HOME_PC_CHECK.md`. 요약:
 1. 저장소를 받고(`git fetch origin` 후 `git checkout ccr-ecab210c-awib23`, 또는 머지 뒤 main) `python -c "import sys; print(sys.executable, sys.version)"`로 PATH의 python 확인.
    저장소 폴더에서 바로 돌려도 됨 (점검 스크립트는 옆 폴더 `CLI/`의 도구를 씀). `C:\CLI`, `C:\CLI-dev`로 복사해서 돌려도 같음.
@@ -159,6 +162,14 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 시스템 PATH(`C:\CLI\python`, `C:\CLI\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
 
 ## 4. 지난 실기 결과 요약
+- 집 PC(2026-11-07, Office 2007, 공식 Python 3.13.13, ml-kit 2.9.72 / office-cli 1.4.80, 작업 브랜치에서 바로 실행):
+  - 사용법 단순화 점검 `run_simplify_check.py`: **PASS 31, FAIL 0, SKIP 0** (204초). 클라우드에서 SKIP이던 O4~O6(실제 Office로 고친 명령 실행)·B2(바뀐 칸 메모 미리보기)·K1(스킬 설치) 포함.
+    결과 `docs/test_logs/result_simplify_집PC_20261107_133952.md`
+  - 전체 회귀 `--only diag,pytest,beta,ml,office` (1시간 24분): pytest 4223 passed·7 skipped(LibreOffice 없음, Linux 전용, 링크 불가), beta check 27/27,
+    office-cli 실기 PASS 77·ENV-SKIP 2(PDF 내보내기 없음), 도구 오류 로그 0건. ml-kit 실기 13/14: M4는 11-06과 같은 Excel 2007 UTF-8 BOM 한계(아래).
+    diag FAIL 1건은 `CLI\python`이 PATH에 없는 환경 차이. 결과 `docs/test_logs/result_집PC_20261107_134012.md`
+  - `setup.py --no-path`: 스킬 9개(ml 4, office 5)·전역 지침 복사, FAIL은 `opencode.exe 없음` 1개(환경 차이). 이 PC에는 옛 `skills\ml-kit`이 없어 정리 줄은 안 나옴
+  - 고친 코드 없음
 - 집 PC(2026-11-06, Office 2007, ml-kit 2.9.69 / office-cli 1.4.77, `--only diag,pytest,beta,ml,office`): 결과 `docs/test_logs/result_집PC_20261106_192244.md`.
   beta check 27/27, office-cli 실기 PASS 77·ENV-SKIP 2(PDF 추가 기능 없음), 새 항목 A2·A3·I26·I28~I31·E8·E10 모두 통과, 도구 오류 로그 0건.
   ml-kit 실기 13/14: M4(결과 CSV를 Excel로 열면 한글)는 Excel 2007이 UTF-8 BOM을 무시하는 한계로 기록 (실행 파일로 직접 열어도 같음, ml-kit README Q1).
