@@ -382,7 +382,7 @@ def new_checks(env, data, book, work):
 
     def d2():
         dry("D2", "닫힌 엑셀 sheet delete --dry-run -> 그대로 -> confirm_commands[0] -> 시트 지움 (Excel)", X, book, "시트지우기.xlsx",
-            ["sheet", "--target", "{p}", "--action", "delete", "--sheet", "데이터"], xl_state)
+            ["sheet", "--target", "{p}", "--action", "delete", "--name", "데이터"], xl_state)
     check("D2", "excel sheet delete --dry-run", d2)
 
     def d3():

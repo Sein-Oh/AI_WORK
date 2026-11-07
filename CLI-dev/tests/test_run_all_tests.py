@@ -436,3 +436,18 @@ def test_result_file_masks_user_folder_names():
         assert m("C:/Users/kim/Desktop") == "C:/Users/<사용자>/Desktop"
         assert m("C:\\Users\\<사용자>\\.config") == "C:\\Users\\<사용자>\\.config"
         assert m("Users 수 3명, kim") == "Users 수 3명, kim"             # 경로 밖은 그대로
+
+
+def test_simplify_dry_run_sheet_delete_uses_name():
+    """2026-11-07 집 PC D2: sheet delete에 --sheet를 넘겨 'sheet delete에는 --name이 필요합니다'로 실패.
+    D 항목은 Office가 필요해 리눅스에서 SKIP되므로, 실행하지 않고 dry()에 넘기는 인자 목록을 소스에서 확인한다."""
+    import ast
+    path = os.path.join(os.path.dirname(HERE), "run_simplify_check.py")
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    cases = [ast.literal_eval(n.args[5]) for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "dry" and len(n.args) >= 6]
+    sheet = [a for a in cases if a and a[0] == "sheet"]
+    assert sheet, "dry() 안의 sheet 점검을 찾지 못함"
+    for argv in sheet:
+        assert "--name" in argv and "--sheet" not in argv, argv
