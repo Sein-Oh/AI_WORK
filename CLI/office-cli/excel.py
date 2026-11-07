@@ -452,7 +452,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
         if sheet:
             found = rt.find_name(sheet, names)
             if found is None:
-                raise rt.not_found("시트", sheet, names)
+                raise rt.not_found("시트", sheet, names, option="--sheet")
             ws = wb[found]
         else:
             ws = wb[names[0]] if wb.active is None else wb.active
@@ -463,7 +463,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
             if sh:
                 found = rt.find_name(sh, names)
                 if found is None:
-                    raise rt.not_found("시트", sh, names)
+                    raise rt.not_found("시트", sh, names, option="--sheet")
                 ws = wb[found]
             r1, c1, r2, c2 = parse_area(cells, None, None)
             if r2 is None or c2 is None:
@@ -1745,6 +1745,10 @@ def write_cells(args) -> Dict[str, Any]:
             directive = "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요."
             preview = f"미리보기: 칸 {len(todo)}개" + (f" (값이 있어 덮어쓸 칸 {len(conflicts)}개: "
                                                      + _filled_preview(conflicts) + ")" if conflicts else "")
+            if not todo:                # 바뀔 것 없음 (1.4.83: 다른 미리보기처럼 실행할 명령을 주지 않음)
+                fields.pop("confirm_commands", None)
+                directive = DRY_NOTHING
+                preview = f"미리보기: 바뀔 것 없음 (0칸, 이미 같은 값 {len(same)}칸) (바꾸지 않음)"
             return rt.ok(TOOL, "write", preview, directive, **fields)
         if conflicts and not args.overwrite:
             head = f"값이 있는 칸 {len(conflicts)}개가 덮어써집니다: "
@@ -2072,14 +2076,15 @@ def cmd_replace(args) -> Dict[str, Any]:
 def _replace_dry(args, fmt: Dict[str, Any], plans: List[Any], resolved: Dict[str, Any]) -> Dict[str, Any]:
     """replace --dry-run: 바꿀 칸과 바뀔 글만 보여 줌 (바꾸지 않음, 되돌리기 지점 없음). 세는 규칙은 실제 실행과 같음."""
     planned: List[str] = []
-    kept = same = 0
+    kept_cells: List[str] = []
+    same = 0
     for rng, ws, formulas, r0, c0, hits in plans:
         for i, j, v, s, new in hits:
             ref = f"{ws.Name}!{addr(r0 + i, c0 + j)}"
             f = formulas[i][j]
             if isinstance(f, str) and f.startswith("="):
                 if new != s:
-                    kept += 1
+                    kept_cells.append(ref)
                 if fmt:
                     planned.append(f"서식만(수식 유지): {ref}")
             elif new != s:
@@ -2091,8 +2096,9 @@ def _replace_dry(args, fmt: Dict[str, Any], plans: List[Any], resolved: Dict[str
     n = len(planned)
     extra: Dict[str, Any] = {}
     notes: List[str] = []
+    kept = len(kept_cells)
     if kept:
-        extra["formula_cells_kept"] = kept
+        extra["formula_cells_kept"] = kept_cells[:30]          # 실제 실행과 같은 형식 (칸 주소 목록, 1.4.83)
         notes.append(f"수식 칸 {kept}개는 내용 유지")
     if same:
         extra["unchanged_same_text"] = same
@@ -2464,7 +2470,7 @@ def cmd_sheet(args) -> Dict[str, Any]:
             t.set_focus(sheet=ws, changed=not existing)     # 이미 있으면 바뀐 것 없음 (되돌리기 지점을 남기지 않음)
         else:
             if existing is None:
-                raise rt.not_found("시트", args.name, names)
+                raise rt.not_found("시트", args.name, names, option="--name")
             ws = sheets(existing)
             if args.action == "select":
                 t.set_focus(sheet=ws, changed=False)
@@ -3104,8 +3110,7 @@ def range_lines(args) -> Dict[str, Any]:
         ws = t.sheet(sheet) if sheet else t.sheet(args.sheet)
         block = ws.Range(_lines_addr(axis, n1, n2))
         lines = block.EntireRow if axis == "rows" else block.EntireColumn
-        if not args.dry_run:
-            check_protection(ws, [block], f"{a}_{'rows' if axis == 'rows' else 'columns'}")
+        check_protection(ws, [block], f"{a}_{'rows' if axis == 'rows' else 'columns'}")   # 미리보기도 실제와 같은 검사 (1.4.83)
         box = _used_box(ws)
         filled: List[Tuple[str, Any]] = []
         if a == "delete" and box is not None:
@@ -3619,12 +3624,12 @@ def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = 
         labels = _chart_labels(hits)
         raise rt.ambiguous(
             f"'{name}'에 해당하는 차트가 {len(hits)}개입니다 (이름 또는 제목이 같음). 하나를 고르지 않았고 아무것도 바꾸지 않았습니다. "
-            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보를 글자 그대로 주세요.", labels, replace=str(name))
+            "어느 차트인지 사용자에게 확인한 뒤 차트 이름 자리에 후보를 글자 그대로 주세요.", labels, replace=str(name), option="--name")
     if hits:
         return hits[0][0], hits[0][1]
     if not all_names:
         raise rt.InputError(f"{where}에 차트가 없습니다. excel.py chart --range ... 로 먼저 만드세요.")
-    raise rt.not_found("차트", str(name), sorted(set(all_names)), extra=f" ({where})" if where != "통합 문서" else "")
+    raise rt.not_found("차트", str(name), sorted(set(all_names)), extra=f" ({where})" if where != "통합 문서" else "", option="--name")
 
 
 def _chart_delete_dry(t: Any, args) -> Dict[str, Any]:
@@ -4660,7 +4665,7 @@ def _cmp_pick_sheet(wb: Any, sheet: Optional[str], prefer: Optional[str], option
     if sheet:
         found = rt.find_name(sheet, names)
         if found is None:
-            raise rt.not_found("시트", sheet, names, extra=f" ({option})")
+            raise rt.not_found("시트", sheet, names, extra=f" ({option})", option=option)
         return wb[found], f"{option}로 준 시트"
     if prefer and rt.find_name(prefer, names):
         return wb[rt.find_name(prefer, names)], "이전 판과 같은 이름의 시트"

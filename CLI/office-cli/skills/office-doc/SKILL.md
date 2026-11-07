@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 본문
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.82"
+  version: "1.4.83"
   platform: windows
 ---
 
@@ -43,7 +43,6 @@ metadata:
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
-- `[후보]`를 고르면: 앵커·장절은 `--occurrence 번호`, 문서는 message가 말한 옵션(`--target`, `--to-target`, `--from-target`)에 전체경로.
 - transfer는 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 준다.
 - `info --detail`의 `layout_warnings`가 있으면 `warnings`를 알린다.
 - 슬라이드 삭제, `slide --action clear --all-slides`, `--overwrite`(기존 노트·슬라이드 제목·표 칸 덮어쓰기)는 사용자가 요청했을 때만.

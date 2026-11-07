@@ -1677,6 +1677,10 @@ def cmd_fill(args) -> Dict[str, Any]:
                                       "target_resolved": t.resolved(), "truncated": len(planned) > 50}
             if conflicts:
                 fields["overwrite_cells"] = len(conflicts)
+            if not fields["count"]:          # 바뀔 것 없음 (1.4.83): 실행할 명령을 주지 않음
+                fields.pop("confirm_commands")
+                return rt.ok(TOOL, "fill", f"미리보기: 바뀔 것 없음 (0곳, 이미 같은 값 {len(same)}칸) (바꾸지 않음)",
+                             "VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건). 실행하지 말고 preview를 사용자에게 알리세요.", **fields)
             return rt.ok(TOOL, "fill", f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개"
                          + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else ""),
                          "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고(표 칸은 [행, 열] 글로 맞는 칸인지) 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.",

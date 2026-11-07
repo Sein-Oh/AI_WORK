@@ -11,6 +11,29 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.83] - 2026-11-08
+
+전체 검토(클라우드, 2026-11-08)에서 찾은 것. 경량 LLM이 묻지 않고 뜻이 다른 명령을 실행할 수 있던 곳부터.
+
+### 수정
+- 명령·`--action` 값의 오타: 철자만 비슷하면 `[추천]`하지 않고 `[후보] 1) ..`와 같은 번호의 `confirm_commands` (설계 권장 7번).
+  `sheet --action del`이 `[추천] delete`(시트 삭제를 묻지 않고 실행), `range --action erase`가 `merge`, `ppt slide --action remove`가 `move`였음.
+  같은 뜻 표(`COMMAND_ALIASES`)에 있거나 가장 가까운 것이 읽기만 하는 명령(`read`, `info`, `outline`, `list`, `search` 등, `raed`)일 때만 `[추천]`.
+  `delete`를 되돌리기 어려운 명령(`DESTRUCTIVE_COMMANDS`)에 넣음 (`destructive` 표시).
+- `retry_replacing`(고친 명령 만들기): 이름을 준 옵션이 명령에 있으면 그 옵션 값만 바꾸고, 값 전체가 같은 인자가 있으면 그것만 바꿈
+  (경로의 한 부분·목록의 한 값은 그런 인자가 없을 때 처음 한 곳만). `outlook attachments --id 2 --index 2`의 `[후보]`가 `--id 1 --index 1`이 되어
+  다른 메일의 첨부를 저장할 뻔했고, 시트 `[후보]`가 같은 이름의 폴더가 든 `--target` 경로까지 바꿨음. `not_found(option=)`.
+- 없는 시트(`needs_user_decision`): `[후보] 1) 기존 시트 '요약'에 쓰기 2) 새 시트 '결과' 만들기`와 같은 번호의 `confirm_commands`
+  (`--sheet`만 바꾼 명령, `--new-sheet`를 붙인 명령). 전에는 값만 주어 LLM이 옵션을 붙였음. `UserDecisionError(commands=)`.
+- `write --cells`·`word fill --dry-run`에서 바뀔 것이 없으면 `count 0`과 실행할 명령 없음 (다른 미리보기와 같게).
+- `range --action insert|delete --dry-run`도 시트 보호를 검사 (미리보기는 되는데 확인 명령이 `sheet_protected`로 실패했음).
+- `outlook` 첨부 내려받기 명령을 `next_commands`(묻지 않고 실행)에서 `confirm_commands`로. 첨부 목록은 모두(`[0]`)와 첨부 하나씩(`--index N`).
+- `reader search --query`의 묶음에 `'a;b'`도 (excel `--where`와 같은 작은따옴표, 한 항목 전체일 때만).
+- `replace --dry-run`의 `formula_cells_kept`를 실제 실행과 같은 칸 주소 목록으로.
+- `retry_fs`는 마지막 시도 뒤에 기다리지 않음, `remove_file`은 실패를 오류 로그 '복구 시도'에 남기지 않음.
+- 스킬: office-excel·office-doc의 "`[후보]`를 고르면 `--sheet 이름`/`--occurrence 번호`..."(값 끼워 넣기)를 지움. 전역 지침 4장 `[후보]`는
+  "번호가 없으면 명령에서 그 값만 바꿔 1번", `needs_user_decision`은 `confirm_commands`(번호) 또는 `next_commands[0]`.
+
 ## [1.4.82] - 2026-11-07
 
 Office 2007 지원 폐기. 대상은 Office 16만 (회사 PC 2021, 집 PC 2019).
@@ -1948,6 +1971,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
+- [ ] 1.4.83 검토에서 남긴 것: `excel read --where`의 열 이름 `[후보]`는 번호 없음(식 안의 이름 자리를 바꾼 명령 필요), `word write --dry-run`이
+  새 파일 경로에서 '문서 없음'으로 멈춤, 읽기 동작에 `--dry-run`을 주면 excel은 STOP_RETRY·ppt는 무시(규칙 4번), `--all`의 뜻이 도구마다 다름
+  (reply 전체 답장, chart 모든 차트, clear 캐시 전부), outlook `--to`/`--attach`/`--name`·word `--slots`의 `;` 구분(규칙 3번)
 - [ ] 사용법 단순성 남은 것: outlook `--to` 받는 사람의 `;` 구분(Outlook 관례), outlook 첨부 `--name`의 `;` 구분, `--map` JSON 인자,
   같은 뜻 표가 `--opt=값` 형태는 못 고침 (`--query` 구분자와 `[후보]` 번호는 1.4.81)
 

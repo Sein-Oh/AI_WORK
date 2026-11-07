@@ -461,7 +461,9 @@ def _mail_detail(item: Any, args, source: str) -> Dict[str, Any]:
         if names:
             result["attachment_names"] = names[:MAX_NAMES_SHOW]
             result["attachment_names_truncated"] = len(names) > MAX_NAMES_SHOW
-            nexts.append(rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save"], "첨부 내려받기"))
+            # 내려받기는 사용자가 원할 때만 (1.4.83: next_commands는 묻지 않고 실행하는 명령이라 confirm_commands로)
+            result.setdefault("confirm_commands", []).append(rt.next_command(
+                "outlook.py", ["attachments"] + _mail_id_args(item) + ["--save"], "첨부 내려받기 (사용자가 원할 때만)"))
     if nexts:
         result["next_commands"] = nexts
     return result
@@ -543,7 +545,7 @@ def _select(infos: List[Dict[str, Any]], names: Optional[Sequence[str]],
         hits = [a for a in infos if part.casefold() in a["name"].casefold()]
         if not hits:
             raise rt.ambiguous(f"--name '{part}'에 맞는 첨부가 없습니다. 사용자에게 첨부를 고르게 하세요.", cands,
-                               log_message="--name 값에 맞는 첨부가 없습니다.", replace=part)
+                               log_message="--name 값에 맞는 첨부가 없습니다.", replace=part, option="--name")
         chosen.update((a["index"], a) for a in hits)
     for token in idx:
         m = re.fullmatch(r"(\d+)(?:-(\d+))?", token)
@@ -555,7 +557,7 @@ def _select(infos: List[Dict[str, Any]], names: Optional[Sequence[str]],
             raise rt.ambiguous(f"--index {token}에 해당하는 첨부가 없습니다 (첨부 {len(infos)}개, 번호는 1부터). "
                                "사용자에게 첨부를 고르게 하세요.", cands,
                                log_message=f"--index {token}에 해당하는 첨부가 없습니다 (첨부 {len(infos)}개).",
-                               replace=token, values=[str(a["index"]) for a in infos])
+                               replace=token, values=[str(a["index"]) for a in infos], option="--index")
         chosen.update((a["index"], a) for a in hits)
     return [chosen[k] for k in sorted(chosen)]
 
@@ -625,13 +627,16 @@ def cmd_attachments(args) -> Dict[str, Any]:
         if not infos:      # R2 0건
             return rt.ok(TOOL, "attachments", f"0건: '{subject}' 메일에 첨부 없음",
                          "VERIFIED: 0건. 이 메일에는 첨부 없음. 사용자에게 그대로 알리고 다시 실행하지 마세요.", **base)
-        base["next_commands"] = [rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save"],
-                                                 "첨부 모두 내려받기 (다운로드 폴더)")]
+        # 내려받기는 사용자가 고른 것만 (1.4.83): [0] 모두, [1..] 첨부 하나씩 (번호 = attachments의 index, 값을 끼워 넣지 않음)
+        base["confirm_commands"] = [rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save"],
+                                                    "첨부 모두 내려받기 (다운로드 폴더)")] + [
+            rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save", "--index", str(a["index"])],
+                            f"'{a['name']}'만 내려받기") for a in shown]
         inline = sum(1 for a in infos if a["hidden_inline"])
         return rt.ok(TOOL, "attachments", f"'{subject}' 메일 첨부 {len(infos)}개"
                      + (f" (본문 삽입 이미지 {inline}개 포함)" if inline else ""),
-                     "VERIFIED: 첨부 목록을 읽었습니다. 사용자에게 이름을 알리고, 내려받기를 원하면 next_commands[0]을 실행하세요. "
-                     "일부만 원하면 그 명령 끝에 --name \"이름 일부\"를 붙이세요.", **base)
+                     "VERIFIED: 첨부 목록을 읽었습니다. 사용자에게 이름을 알리고, 내려받기를 원하면 confirm_commands에서 사용자가 "
+                     "고른 것(모두는 confirm_commands[0], 하나만이면 purpose에 그 이름이 있는 명령)을 그대로 1번 실행하세요.", **base)
     folder = _save_folder(args.save, subject)
     picked = _select(infos, args.name, args.index)
     saved, skipped, problems = _save_selected(infos, picked, folder)

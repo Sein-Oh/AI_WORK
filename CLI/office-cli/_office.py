@@ -338,19 +338,22 @@ def missing_sheet(name: str, names: List[str]) -> "rt.InputError":
     similar = same or rt.suggest(name, names)
     # 오류 로그에는 시트 이름 목록을 남기지 않음 (문서에서 가져온 이름)
     log_msg = f"시트 '{name}'이(가) 없습니다 (있는 시트 {len(names)}개 이름 생략). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다."
-    if similar:
-        return rt.UserDecisionError(
-            f"시트 '{name}'이(가) 없습니다 (있는 시트: {shown}). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. "
-            "이름이 비슷한 기존 시트에 쓸지, 새 시트를 만들지 사용자에게 물어보세요.",
-            "다시 실행하지 마세요. message를 사용자에게 그대로 보여 주고, [후보]의 기존 시트에 쓸지 "
-            f"새 시트 '{name}'을(를) 만들지 물어보세요. 사용자가 기존 시트를 고르면 --sheet를 그 이름으로 바꿔 실행하고, "
-            "사용자가 새 시트를 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.",
-            candidates=similar, log_message=log_msg)
+    # 고를 것마다 전체 명령 (1.4.83, 사용법 단순성 2번): 비슷한 기존 시트(--sheet만 바꿈)와 새 시트 만들기(--new-sheet).
+    # 모두 confirm_commands라 사용자가 고른 번호만 실행 (새 시트를 묻지 않고 만들지 않음)
+    new_cmd = rt.retry_command({"--new-sheet": []})
+    cmds = [rt.retry_replacing(name, c, "--sheet") for c in similar] + [new_cmd]
+    if all(c.startswith("python ") for c in cmds):
+        labels = [f"기존 시트 '{c}'에 쓰기" for c in similar] + [f"새 시트 '{name}' 만들기"]
+    else:                                   # 실행 중인 명령을 모름 (함수를 직접 부름): 이름만
+        labels, cmds = list(similar), []
+    head = (f"시트 '{name}'이(가) 없습니다 (있는 시트: {shown}). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. "
+            + ("이름이 비슷한 기존 시트에 쓸지, 새 시트를 만들지 사용자에게 물어보세요." if similar else "새 시트를 만들지 사용자에게 물어보세요."))
     return rt.UserDecisionError(
-        f"시트 '{name}'이(가) 없습니다 (있는 시트: {shown}). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. "
-        "새 시트를 만들지 사용자에게 물어보세요.",
-        f"다시 실행하지 마세요. message를 사용자에게 그대로 보여 주고, 새 시트 '{name}'을(를) 만들지 물어보세요. "
-        "사용자가 만들라고 답한 경우에만 같은 명령에 --new-sheet를 붙여 실행하세요.", log_message=log_msg)
+        head,
+        "다시 실행하지 마세요. message를 사용자에게 그대로 보여 주고 [후보] 중 무엇을 할지 물어보세요. 사용자가 고른 번호의 "
+        "confirm_commands를 1번 실행하세요 (번호가 없으면 기존 시트는 --sheet를 그 이름으로 바꾸고, 새 시트는 사용자가 만들라고 "
+        "답한 경우에만 같은 명령에 --new-sheet를 붙여 실행).",
+        candidates=labels, commands=cmds, log_message=log_msg)
 
 
 def shape_box(obj: Any) -> Dict[str, float]:
@@ -577,7 +580,7 @@ class OfficeTarget:
             self.changed = True
             return ws
         if self.readonly or not allow_create:
-            raise rt.not_found("시트", name, names)
+            raise rt.not_found("시트", name, names, option="--sheet")
         raise missing_sheet(name, names)
 
     def set_focus(self, sheet: Any = None, slide: Optional[int] = None, changed: bool = True) -> None:

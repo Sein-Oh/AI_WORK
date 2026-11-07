@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.82"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.83"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -166,10 +166,18 @@ class UserDecisionError(InputError):
     message에는 사실만 적고, 할 일(directive)은 사용자 동의를 조건으로 적습니다. 경량 LLM이 message의 명령문을 그대로 따르기 때문."""
 
     def __init__(self, message: str, directive: str, candidates: Optional[List[str]] = None,
-                 log_message: Optional[str] = None):
+                 log_message: Optional[str] = None, commands: Optional[List[str]] = None, destructive: bool = False):
+        """commands: candidates와 같은 순서의 전체 명령 (모두 python으로 시작하면 '[후보] 1) a'와 같은 번호의 confirm_commands, 1.4.83)."""
         cands = [str(c) for c in (candidates or [])][:MAX_CANDIDATES]
-        super().__init__(message + (f" [후보] {', '.join(cands)}" if cands else ""), candidates=cands, no_fallback=True,
-                         log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)))
+        cmds = list(commands or [])[:len(cands)]
+        numbered = bool(cands) and len(cmds) == len(cands) and all(str(c).startswith("python ") for c in cmds)
+        tail = (" [후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(cands, 1)) if numbered
+                else f" [후보] {', '.join(cands)}") if cands else ""
+        super().__init__(message + tail, candidates=cands, no_fallback=True,
+                         log_message=(message if log_message is None else log_message) + _omitted_candidates(len(cands)),
+                         fields={"confirm_commands": [{"purpose": f"{c} (사용자가 고른 경우에만)", "command": cmd,
+                                                       **({"destructive": True} if destructive else {})}
+                                                      for c, cmd in zip(cands, cmds)]} if numbered else None)
         self.directive = directive
 
 
@@ -437,6 +445,8 @@ def _error_payload(exc: BaseException, tool: str = "", command: str = "") -> Dic
         base.update(error_type=exc.error_type or "needs_user_decision", message=msg, agent_directive=f"STOP_RETRY: {exc.directive}")
         if exc.candidates:
             base["candidates"] = exc.candidates
+        for k, v in (exc.fields or {}).items():       # 1.4.83: 번호 [후보]의 confirm_commands
+            base.setdefault(k, v)
         return base
     if isinstance(exc, InputError) and exc.candidates:
         nexts = exc.fields.get("confirm_commands") if exc.fields else None
@@ -850,7 +860,9 @@ SAME_MEANING = [
 NO_FUZZY_OPTIONS = {"--all", "--overwrite", "--to", "--cc", "--bcc", "--attach", "--target", "--delete", "--send", "--app"}
 # 되돌리기 어려운 명령 (메일 발송, 캐시 지우기, 되돌리기): 오타 추천을 [추천](LLM이 묻지 않고 1번 실행)이 아니라
 # [후보](사용자에게 물음)로 줌 (1.4.75, 11차 검토: 'sent', 'sned', 'end' -> send)
-DESTRUCTIVE_COMMANDS = {"send", "clear", "undo"}
+DESTRUCTIVE_COMMANDS = {"send", "clear", "undo", "delete"}
+# 읽기만 하는 명령·동작: 오타가 이것과 가장 가까우면 [추천] (잘못 골라도 문서가 바뀌지 않음, 1.4.83)
+READ_ONLY_CHOICES = {"read", "info", "outline", "list", "search", "windows", "current", "revisions"}
 # 다른 파일의 명령이 맞는 경우: [추천]으로 값만 바꾸면 또 틀리므로 맞는 명령을 안내만 함
 _WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --text "내용", PPT는 ppt.py write --text "내용", '
                '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
@@ -927,11 +939,17 @@ class JsonArgumentParser(argparse.ArgumentParser):
                 return " " + other
             choices = list(subs) or re.findall(r"'([^']+)'", message.split("choose from", 1)[-1])
             alias = COMMAND_ALIASES.get(self.tool_name, {}).get(m.group(1).lower())
-            best = alias or next(iter(difflib.get_close_matches(m.group(1), choices, n=1, cutoff=0.6)), None)
-            if best in DESTRUCTIVE_COMMANDS:
-                return (f" '{best}'은(는) 되돌리기 어려운 명령이라 추천하지 않습니다. 사용자가 이 명령을 원했는지 물으세요."
-                        + self._numbered(m.group(1), [best], destructive=True))
-            return f" [추천] {retry_replacing(m.group(1), best)}" if best else self._numbered(m.group(1), choices)
+            if alias and alias not in DESTRUCTIVE_COMMANDS:       # 같은 뜻 표에 있을 때만 [추천] (설계 권장 7번)
+                return f" [추천] {retry_replacing(m.group(1), alias)}"
+            # 철자만 비슷하면 [후보] (1.4.83: 'sheet --action del' -> delete, 'range --action erase' -> merge를 묻지 않고 실행하게 했음).
+            # 가장 가까운 것이 읽기만 하는 명령이면 잘못 골라도 바뀌는 것이 없어 [추천] ('raed' -> read)
+            near = ([alias] if alias else []) + [c for c in difflib.get_close_matches(m.group(1), choices, n=3, cutoff=0.6)
+                                                 if c != alias]
+            if near and not alias and near[0] in READ_ONLY_CHOICES:
+                return f" [추천] {retry_replacing(m.group(1), near[0])}"
+            warn = (" 되돌리기 어려운 동작이 있으니" if any(c in DESTRUCTIVE_COMMANDS for c in near) else "")
+            return (f" 철자만 비슷한 값이라{warn} 무엇을 하려던 것인지 사용자에게 물으세요." if near else "") \
+                + self._numbered(m.group(1), near or choices)
         m = re.search(r"unrecognized arguments: (.+)$", message)
         req = re.search(r"the following arguments are required: (.+)$", message)
         if not m and not req:
@@ -1548,7 +1566,8 @@ def _transient_fs_error(e: OSError) -> bool:
     return isinstance(e, PermissionError) or getattr(e, "winerror", None) in (5, 32, 33)
 
 
-def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5, deadline: Optional[float] = None) -> Any:
+def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5, deadline: Optional[float] = None,
+             record: bool = True) -> Any:
     """백신/동기화 프로그램의 일시적 잠금에 대비해 파일 작업을 재시도합니다.
     deadline(time.monotonic() 기준 시각)을 주면 그 시각을 넘겨 기다리지 않습니다 (잠금을 쥔 채 오래 기다리지 않게).
     한도를 넘기면 오류 로그의 '복구 시도:' 줄에 남기고 마지막 예외를 올립니다."""
@@ -1560,6 +1579,8 @@ def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5, deadl
             if not _transient_fs_error(e):
                 raise                       # 없는 파일, 디스크 가득 참 등은 기다려도 소용없음
             last = e
+            if i + 1 >= attempts:           # 마지막 시도 뒤에는 기다리지 않음
+                break
             wait = delay * (i + 1)
             if deadline is not None:
                 wait = min(wait, deadline - time.monotonic())
@@ -1569,7 +1590,8 @@ def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5, deadl
             time.sleep(wait)
     assert last is not None
     name = os.path.basename(str(getattr(last, "filename", "") or ""))
-    record_recovery_attempt(f"파일 작업 {name} {attempts}회 재시도 실패 ({type(last).__name__})".replace("  ", " "))
+    if record:
+        record_recovery_attempt(f"파일 작업 {name} {attempts}회 재시도 실패 ({type(last).__name__})".replace("  ", " "))
     raise last
 
 
@@ -1577,7 +1599,7 @@ def remove_file(path: str) -> bool:
     """파일을 지웁니다 (백신·탐색기가 잠깐 잡고 있으면 retry_fs로 기다렸다 다시, 1.4.81). 없으면 그냥 넘어감.
     지웠으면 True, 한도를 넘겨도 못 지웠으면 False (남은 임시 파일·스냅샷이 결과를 바꾸지 않는 곳에서 씀)."""
     try:
-        retry_fs(lambda: os.remove(path), attempts=4, delay=0.2)      # 최대 약 1.2초 (정리 때문에 오래 멈추지 않게)
+        retry_fs(lambda: os.remove(path), attempts=4, delay=0.2, record=False)   # 최대 약 1.2초, 실패해도 오류 로그에 남기지 않음
         return True
     except FileNotFoundError:
         return False
@@ -1680,7 +1702,7 @@ def _same_name_key(s: Any) -> str:
 
 def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False,
               display: Optional[Callable[[str], str]] = None, log_name: Optional[str] = None,
-              log_extra: Optional[str] = None) -> InputError:
+              log_extra: Optional[str] = None, option: Optional[str] = None) -> InputError:
     """'찾을 수 없음' InputError (R8).
     - 표기만 다른(대소문자·공백·_-) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
     - 부분·유사 일치는 뜻이 다를 수 있어(2024 -> 2024_1분기, 견적서.pdf -> 견적서_구버전.pdf) [후보]: 사용자가 고릅니다.
@@ -1689,7 +1711,8 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
     display: 비교는 name·candidates(끝 이름)로 하고 message에 보일 때만 바꾸는 함수 (예: 메일 폴더 끝 이름 -> 전체 경로.
     전체 경로로 비교하면 같은 상위 경로 때문에 관계없는 폴더가 모두 비슷하게 나옴).
     log_name: 오류 로그 message에 name 대신 쓸 글 (예: 메일 계정 이름을 뺀 경로).
-    log_extra: 오류 로그 message에 extra 대신 쓸 글 (extra에 계정 이름·문서 글이 들어갈 때 반드시 줌)."""
+    log_extra: 오류 로그 message에 extra 대신 쓸 글 (extra에 계정 이름·문서 글이 들어갈 때 반드시 줌).
+    option: 이름을 준 옵션 (고친 명령에서 그 옵션 값만 바꿈, retry_replacing)."""
     show = display or (lambda c: c)
     cands = [str(c) for c in candidates]
     key = _same_name_key(name)
@@ -1704,12 +1727,13 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
                                         f"{extra if log_extra is None else log_extra}")
     # 오류 로그에는 후보 이름(시트·문서·제목·메일 폴더·파일 이름 목록)을 남기지 않음 (log_message)
     if len(same) == 1:
-        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {retry_replacing(name, same[0])}",
+        return InputError(f"{head} 표기만 다른 이름이 있습니다. [추천] {retry_replacing(name, same[0], option)}",
                           log_message=f"{log_head} 표기만 다른 이름이 있습니다. [추천 생략]")
     hints = same or suggest(name, cands)
     if hints:
         tail = " 비슷한 이름이 있지만 같은 것인지 도구가 정할 수 없습니다. 사용자에게 고르게 하세요."
-        return ambiguous(head + tail, [show(c) for c in hints], log_message=log_head + tail, replace=name, values=hints)
+        return ambiguous(head + tail, [show(c) for c in hints], log_message=log_head + tail, replace=name, values=hints,
+                         option=option)
     if cands:
         shown = ", ".join(show(c) for c in cands[:15]) + (" ..." if len(cands) > 15 else "")
         return InputError(f"{head} 사용 가능한 {kind}: {shown}", log_message=f"{log_head} [사용 가능한 이름 {len(cands)}개 생략]")
@@ -1901,34 +1925,43 @@ def retry_command(options: Dict[str, Any], drop: Sequence[str] = (), multi: Sequ
 
 
 def retry_replacing(old: str, new: str, option: Optional[str] = None) -> str:
-    """[추천]에 넣을 전체 명령: 지금 실행한 명령에서 값 old를 new로 바꿈. 인자가 old와 같거나(--opt old, --opt=old),
-    시트 주소의 앞부분('old!A1', "'old'!A1")일 때 바꿈. 못 찾으면 option이 있으면 그 옵션 값으로 넣고(retry_command), 없으면 new만.
-    사용법 단순성 2번: 값만 주어 LLM이 명령에 끼워 넣게 하지 않음."""
+    """[추천]·[후보]에 넣을 전체 명령: 지금 실행한 명령에서 값 old를 new로 바꿈. 사용법 단순성 2번: 값만 주어 LLM이 끼워 넣게 하지 않음.
+    option이 명령에 있으면 그 옵션의 값만 봄 (1.4.83: '--id 2 --index 2'의 --index만, '--sheet 매출 --name 매출'의 --name만).
+    값 전체가 old인 인자가 있으면 그것만 바꾸고(폴더 이름 '요약'이 든 경로는 그대로), 없을 때만 시트 주소의 앞부분('old!A1'),
+    ;·, 목록의 한 값, 경로의 한 부분 중 처음 찾은 한 곳을 바꿈. 못 찾으면 option이 있으면 그 옵션 값으로 넣고(retry_command), 없으면 new만."""
     argv = list(CURRENT_ARGV or [])
-    found = False
     part_sep = re.compile(r"([\\/,])")          # 경로의 한 부분('보관\\회의록'), 쉼표 목록의 한 값('word,ppt')
     list_sep = re.compile(r"(\s*[;,]\s*)")       # 목록의 한 값 전체 ('a.pdf;C:\\폴더\\b.pdf'의 전체 경로, 'A;B'의 B)
     sheet_ref = re.compile(r"^(?:'" + re.escape(old.replace("'", "''")) + r"'|" + re.escape(old) + r")!")
     quoted_new = f"'{new.replace(chr(39), chr(39) * 2)}'" if re.search(r"[^\w가-힣]", new) else new
-    for i, a in enumerate(argv):
+    scope = list(range(len(argv)))
+    if option:
+        own = [i + 1 for i, a in enumerate(argv) if a == option and i + 1 < len(argv)] + \
+              [i for i, a in enumerate(argv) if a.startswith(option + "=")]
+        scope = own or scope
+
+    def split_value(a: str) -> Tuple[str, str, str]:
         key, eq, val = a.partition("=")
-        if a == old:
-            argv[i] = new
-        elif eq and key.startswith("--") and val == old:
-            argv[i] = f"{key}={new}"
-        elif sheet_ref.match(a):
-            argv[i] = sheet_ref.sub(lambda _m: quoted_new + "!", a, count=1)
-        elif old in [p.strip() for p in list_sep.split(val if eq and key.startswith("--") else a)]:
-            text = val if eq and key.startswith("--") else a
+        return (key, eq, val) if eq and key.startswith("--") else ("", "", a)
+
+    exact = [i for i in scope if split_value(argv[i])[2] == old]
+    for i in exact:
+        key, eq, _ = split_value(argv[i])
+        argv[i] = f"{key}={new}" if eq else new
+    found = bool(exact)
+    for i in ([] if found else scope):
+        key, eq, text = split_value(argv[i])
+        if sheet_ref.match(text):
+            fixed = sheet_ref.sub(lambda _m: quoted_new + "!", text, count=1)
+        elif old in [p.strip() for p in list_sep.split(text)]:
             fixed = "".join(new if p.strip() == old else p for p in list_sep.split(text))
-            argv[i] = f"{key}={fixed}" if eq and key.startswith("--") else fixed
-        elif old in part_sep.split(val if eq and key.startswith("--") else a):
-            text = val if eq and key.startswith("--") else a
+        elif old in part_sep.split(text):
             fixed = "".join(new if p == old else p for p in part_sep.split(text))
-            argv[i] = f"{key}={fixed}" if eq and key.startswith("--") else fixed
         else:
             continue
+        argv[i] = f"{key}={fixed}" if eq else fixed
         found = True
+        break
     if not found:
         return retry_command({option: new}) if option else str(new)
     if not CURRENT_TOOL:

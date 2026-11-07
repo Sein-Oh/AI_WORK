@@ -1605,12 +1605,12 @@ def test_sheet_lookup_rules(fake_com):
         assert t.sheet().Name == "매출"
         with pytest.raises(rt.InputError) as ei:
             t.sheet("매출2", create=True)            # 읽기 세션은 만들지 않음
-        assert "[후보] 매출" in str(ei.value) and "[추천]" not in str(ei.value)
+        assert "[후보] 1) 매출" in str(ei.value) and "[추천]" not in str(ei.value)   # 1.4.83: 번호 + --sheet 전체 명령
     with off.open_target("excel", readonly=False, snapshot=False) as t:
         assert t.sheet("신규", create=True).Name == "신규"
         with pytest.raises(rt.InputError) as ei:
             t.sheet("신규2", allow_create=True)       # 쓰기 세션이어도 create 없이는 만들지 않음 (excel write)
-        assert ei.value.candidates == ["신규"] and "--new-sheet" not in str(ei.value)   # 새 시트 여부는 사용자에게 (시나리오 10)
+        assert ei.value.candidates[0] in ("신규", "기존 시트 '신규'에 쓰기") and "--new-sheet" not in str(ei.value)   # 새 시트 여부는 사용자에게 (시나리오 10)
         assert isinstance(ei.value, rt.UserDecisionError) and "--new-sheet" in ei.value.directive
         with pytest.raises(rt.InputError) as ei:
             t.sheet("신규2")                          # --new-sheet가 없는 명령: 찾을 수 없음 [후보], 새 시트 안내 없음 (1.4.12)

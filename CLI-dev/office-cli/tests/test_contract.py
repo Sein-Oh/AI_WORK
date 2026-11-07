@@ -1259,3 +1259,37 @@ def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
     for _ in range(2):
         assert rt.unfinished_payload(rt.Unfinished(f"단계 {_}"), "reader", "index")["status"] == "ok"
     assert rt.unfinished_payload(rt.Unfinished("단계 9"), "reader", "index")["error_type"] == "unfinished_limit"
+
+
+def test_action_typo_is_candidate_and_delete_is_destructive():
+    """1.4.83 검토: 'sheet --action del'을 철자만 보고 [추천] delete로 주어 시트 삭제를 묻지 않고 실행하게 했음 -> [후보], destructive.
+    'range --action erase'도 merge를 [추천]하지 않음. 읽기 명령에 가장 가까운 오타('raed')만 [추천]."""
+    tool_dir = os.path.dirname(rt.__file__)
+
+    def run(*argv):
+        proc = subprocess.run([sys.executable, os.path.join(tool_dir, "excel.py"), *argv], capture_output=True, text=True,
+                              encoding="utf-8")
+        return json.loads([ln for ln in proc.stdout.splitlines() if ln.strip()][-1])
+    out = run("sheet", "--action", "del", "--name", "Sheet1")
+    assert "[추천]" not in out["message"] and "[후보] 1) " in out["message"], out
+    dele = [c for c in out["confirm_commands"] if " delete" in c["command"]]
+    assert dele and dele[0]["destructive"] is True, out
+    out = run("range", "--action", "erase", "--range", "A1:B2")
+    assert "[추천]" not in out["message"] and "[후보]" in out["message"], out
+    out = run("raed")
+    assert "[추천]" in out["message"] and " read" in out["message"], out
+
+
+def test_retry_replacing_changes_only_the_named_option(monkeypatch):
+    """1.4.83 검토: '--id 2 --index 2'에서 --index만 바꿔야 함 (전에는 --id도 바뀌어 다른 메일의 첨부를 저장), 폴더 이름이 같은 경로는 그대로."""
+    monkeypatch.setattr(rt, "CURRENT_TOOL", "outlook")
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["attachments", "--id", "2", "--index", "2", "--save"])
+    got = split_command(rt.retry_replacing("2", "1", "--index"))[2:]
+    assert got == ["attachments", "--id", "2", "--index", "1", "--save"], got
+    monkeypatch.setattr(rt, "CURRENT_TOOL", "excel")
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["read", "--target", "C:\\보고\\요약\\요약.xlsx", "--sheet", "요약"])
+    got = split_command(rt.retry_replacing("요약", "요약표"))[2:]
+    assert got == ["read", "--target", "C:\\보고\\요약\\요약.xlsx", "--sheet", "요약표"], got    # 값 전체가 같은 인자만
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["chart", "--sheet", "매출", "--name", "매출"])
+    got = split_command(rt.retry_replacing("매출", "매출!#1", "--name"))[2:]
+    assert got == ["chart", "--sheet", "매출", "--name", "매출!#1"], got
