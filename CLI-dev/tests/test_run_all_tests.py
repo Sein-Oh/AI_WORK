@@ -259,6 +259,9 @@ def test_diag_template_damage_is_warn_when_tools_do_not_need_it(monkeypatch):
     monkeypatch.setattr(rat, "diag_new_files", lambda lines: lines.append("새로 쓴 xlsx 다시 열기: 정상"))
     monkeypatch.setattr(rat, "diag_system", lambda lines: None)
     monkeypatch.setattr(rat, "diag_skills", lambda stage, lines: None)
+    # 라이브러리 import는 이 시험 대상이 아님. 집 PC 저장소 전체 pytest에서 앞선 시험 뒤 같은 프로세스의 pymupdf import가
+    # "I/O operation on closed file"로 실패해 이 시험이 FAIL이 됐음 (따로 돌리면 통과, 러너는 새 프로세스라 영향 없음).
+    monkeypatch.setattr(rat, "PACKAGES", [])
     for report_ok, failed in ((True, 0), (False, 1)):
         monkeypatch.setattr(rat, "diag_report_docx", lambda lines, ok=report_ok: ok)
         st = rat.Stage("diag")

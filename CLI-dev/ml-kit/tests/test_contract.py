@@ -712,6 +712,24 @@ def test_model_path_underscore_and_made_up_model_folder_recommend_the_data_file(
     assert proc.returncode == 0, res
 
 
+def test_target_value_with_placeholder_input_recommends_find(p1_model):
+    """2.9.79 집 PC Gemma P3: '-i "불순물=100,반응온도=<값>,..."'(타겟 값 + 자리표시자 하나)로 실행해 '<값>을 물으라'만 받고
+    ml_map을 학습 데이터에 돌려 실패 -> 그 뜻 하나인 --find/--vary 명령을 [추천]. 타겟 없이 자리표시자만이면 원래대로 값을 물음."""
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,온도(°C)=<값>,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and "[추천]" in res["message"], res
+    name, fixed = recommended_command(res["message"])
+    assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "생산량=500", fixed
+    assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("-i") + 1] == "압력(bar)=3,속도=45", fixed
+    assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,압력(bar)=3,속도=45")   # 찾을 입력을 아예 뺌 (P3 세 번째)
+    name, fixed = recommended_command(res["message"])
+    assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("-i") + 1] == "압력(bar)=3,속도=45", res
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,속도=45")                 # 빈 입력 둘: 고르지 않음
+    assert proc.returncode == 1 and "[추천]" not in res["message"], res
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=<값>,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and "[추천]" not in res["message"] and "물은 뒤" in res["message"], res
+
+
 def test_leading_verb_and_x_y_cols_recommend_fixed_command(data_dir):
     """2.9.77 집 PC solar-mini4: 'ml_train.py train --x-cols ... --y-cols ...' -> 'unrecognized arguments: train'만 받아 헤맴."""
     proc, res = run_raw("ml_train.py", "train", "-f", "d.csv", "--x-cols", "a,b", "--y-cols", "y")

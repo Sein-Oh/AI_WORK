@@ -45,6 +45,10 @@ try:
 except ModuleNotFoundError as _exc:            # copied without the shared runtime: still 1 JSON line (ACI contract)
     if getattr(_exc, "name", "") != "_ml_runtime":
         raise
+    try:                                       # Windows 파이프 기본은 CP949: UTF-8로 (setup_console이 _ml_runtime에 있어 못 씀)
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     sys.stdout.write(json.dumps({"status": "error", "error_type": "missing_file",
                                  "message": "ml_predict.py와 같은 폴더에 _ml_runtime.py가 없습니다. ml-kit 폴더의 _ml_runtime.py를 함께 복사하십시오.",
                                  "agent_directive": "STOP_RETRY: 다시 실행하지 말고 message를 사용자에게 그대로 알리십시오."},
@@ -761,6 +765,32 @@ def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share > 0.5
 
 
+def _offer_find(args: argparse.Namespace, df_input: pd.DataFrame, model_items: List[Dict[str, Any]]) -> None:
+    """-i 한 건에 타겟의 숫자 값 하나가 있고 그 타겟 모델의 숫자 입력 중 하나만 '<값>'이거나 빠져 있으면 '타겟이 그 값이 되는 입력
+    찾기'라는 뜻 하나: --find "<타겟>=<값>" --vary "<입력>"과 나머지 -i로 [추천] (2.9.80 집 PC Gemma P3: '불순물=100,반응온도=<값>,...'
+    또는 반응온도를 뺀 '불순물=100,...'으로 실행해 멈춘 뒤 ml_map을 학습 데이터에 돌려 실패). 타겟이나 빈 입력이 둘 이상이면 원래 오류로."""
+    if len(df_input) != 1 or getattr(args, "find", None):
+        return
+    targets = {_alias_key(it["target"]): it for it in model_items}
+    row = {str(c): str(df_input[c].iloc[0]).strip() for c in df_input.columns}
+    goal = [(c, v) for c, v in row.items() if _alias_key(c) in targets and coerce_numeric(pd.Series([v], dtype=object)).notna().all()]
+    if len(goal) != 1:
+        return
+    meta = targets[_alias_key(goal[0][0])]["meta"]
+    schema = meta.get("feature_schema") or {}
+    numeric = [c for c in model_raw_inputs(meta) if c not in schema.get("categorical", {}) and c not in schema.get("datetime", {})]
+    given = {_alias_key(c): c for c in row}
+    holes = [given[_alias_key(c)] for c in numeric if _alias_key(c) in given and re.fullmatch(r"<[^<>]*>", row[given[_alias_key(c)]])]
+    holes += [c for c in numeric if _alias_key(c) not in given]
+    if len(holes) != 1:
+        return
+    (tcol, tval), hole = goal[0], holes[0]
+    rest = {c: v for c, v in row.items() if c not in (tcol, hole)}
+    cmd = (_predict_command(args, inline=kv_text(rest)) + f" --find {quote_arg(f'{tcol}={tval}')} --vary {quote_arg(hole)}")
+    raise InputError(f"-i에 타겟 '{tcol}={tval}'이 있고 입력 '{hole}'의 값이 없습니다. 예측하지 않았습니다. "
+                     f"'{tcol}'이(가) {tval}이 되는 '{hole}'을 찾는 명령: [추천] {cmd}")
+
+
 def _offer_median_fill(args: argparse.Namespace, df_input: pd.DataFrame, model_items: List[Dict[str, Any]]) -> None:
     """-i (one record, every key a model name) without some numeric model inputs: never filled by the tool (the user's
     value is a fact the tool cannot know). Stops with needs_user_decision and next_commands[0] = the same command with
@@ -1125,6 +1155,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     numeric_inputs: List[str] = []    # numbers written with '%' in these are read without it (percent_warning)
 
     if is_inline:
+        _offer_find(args, df_input, model_items)
         _offer_median_fill(args, df_input, model_items)
 
     # 3. Perform Inference per Target

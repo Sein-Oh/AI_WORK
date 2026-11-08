@@ -18,6 +18,24 @@ from mlkit_helpers import split_command, recommendation, recommended_command, ru
 import _ml_runtime as rt  # noqa: E402
 
 
+def test_find_with_too_many_inputs_recommends_the_trained_model(tmp_path):
+    """2.9.80 집 PC Gemma P3: 입력 6개로 ml_map --find를 돌려 '기준 열은 3개까지'만 받고 사용자에게 범위를 물음 ->
+    이 파일로 학습한 모델이 있으면 같은 질문의 ml_predict.py --find 명령을 [추천]. 학습 전에는 [추천] 없음."""
+    r = np.random.default_rng(3)
+    df = pd.DataFrame({k: r.uniform(0, 10, 80) for k in ("a", "b", "c", "d")})
+    df["y"] = 3 * df.a + df.b - df.c + 0.5 * df.d
+    f = str(tmp_path / "four.csv")
+    df.to_csv(f, index=False)
+    argv = ["-f", f, "--find", "y=15", "--vary", "a", "-i", "b=5,c=5,d=5"]
+    res = run_fail("ml_map.py", *argv)
+    assert "3개까지" in res["message"] and "[추천]" not in res["message"], res
+    assert run_tool("ml_train.py", "-f", f, "-x", "a,b,c,d", "-y", "y")["status"] == "ok"
+    res = run_fail("ml_map.py", *argv)
+    name, fixed = recommended_command(res["message"])
+    assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "y=15" and fixed[fixed.index("-m") + 1] == f, fixed
+    assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
+
+
 # ---- 정방향 보간 ----------------------------------------------------------------------------------------------------
 
 

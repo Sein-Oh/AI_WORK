@@ -294,6 +294,24 @@ def test_anchor_not_found_recommends_similar_text(wd, capsys):
     assert code == 0
 
 
+def test_anchor_position_word_recommends_end_or_start(wd, capsys):
+    """1.4.89 집 PC Gemma O4: '문서 끝에 덧붙여'를 --anchor "end"로 써서 '찾을 수 없음'으로 멈추고, 마지막 단락 글을 앵커로 다시 씀.
+    문서에 없는 위치 낱말은 --anchor를 뺀 명령(끝) 또는 --pos start(처음)를 [추천]. 문서에 그 글이 있으면 원래대로 그 단락."""
+    code, out = run_word(capsys, "write", "--text", "x", "--anchor", "end")
+    assert code == 1 and "[추천]" in out["message"], out
+    argv = recommended_argv(out["message"], "word")
+    assert argv == ["write", "--text", "x"], argv
+    code, out = run_word(capsys, *argv)
+    assert code == 0 and [p for p in doc_paras(wd["doc"]) if p][-1] == "x", doc_paras(wd["doc"])
+    code, out = run_word(capsys, "write", "--text", "y", "--anchor", "처음")
+    assert recommended_argv(out["message"], "word") == ["write", "--text", "y", "--pos", "start"], out
+    code, out = run_word(capsys, "write", "--text", "z", "--anchor", "end", "--pos", "replace")   # 뜻이 다른 위치는 [추천] 안 함
+    assert code == 1 and "[추천]" not in out["message"], out
+    wd["doc"] = FakeWordDocument("계획\r끝\r일정")
+    code, out = run_word(capsys, "write", "--text", "w", "--anchor", "끝")          # 문서에 있는 글이면 그 단락 뒤
+    assert code == 0 and doc_paras(wd["doc"])[:3] == ["계획", "끝", "w"], doc_paras(wd["doc"])
+
+
 def test_anchor_not_found_does_not_recommend_different_text(wd, capsys):
     """글자가 바뀐 문구('2027' -> '2026')는 뜻이 다를 수 있어 [추천]하지 않음. replace는 끼어든 글자도 [추천] 안 함."""
     before = wd["doc"].text

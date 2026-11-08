@@ -11,6 +11,13 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.89] - 2026-11-08
+
+### 수정
+- 집 PC Gemma O4: "문서 끝에 덧붙여"를 `word.py write --anchor "end"`로 써서 "문서에서 'end'을(를) 찾을 수 없습니다"로 멈추고, 마지막 단락 글을
+  앵커로 다시 씀. `write --anchor`에 문서에 없는 위치 낱말(`end`·`끝`·`마지막`, `start`·`처음`)을 주면 `--anchor`를 뺀 명령(처음이면 `--pos start`)을
+  `[추천]` (`--pos after`일 때만, 문서에 그 글이 있으면 원래대로 그 단락). 회귀 테스트 `test_anchor_position_word_recommends_end_or_start`.
+
 ## [1.4.88] - 2026-11-08
 
 ### 수정

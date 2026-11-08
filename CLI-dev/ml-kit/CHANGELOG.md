@@ -12,6 +12,22 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.80] - 2026-11-08
+
+집 PC(Windows) 확인에서 나온 것.
+
+### 수정
+- `_ml_runtime.py` 없이 `ml_predict.py`만 복사했을 때의 JSON 1줄이 CP949로 나가 UTF-8로 읽지 못했음
+  (`test_predict_without_runtime_is_one_json_line` 실패, Linux는 기본이 UTF-8이라 통과). 그 JSON을 쓰기 전에 stdout을 UTF-8로 바꿈.
+- 집 PC Gemma P3: `-i "불순물(ppm)=100,반응온도(°C)=<값>,..."`(타겟 값 + 자리표시자 하나)로 실행해 "<값>을 물으라"만 받고 `ml_map.py`를
+  학습 데이터에 돌려 실패. 타겟 숫자 값 하나가 있고 그 모델의 숫자 입력 중 하나만 `<값>`이거나 빠져 있으면(세 번째 시도는 반응온도를 뺌)
+  뜻이 하나(반대 찾기)라 `--find "<타겟>=<값>" --vary "<입력>"`과 나머지 `-i`로 고친 명령을 `[추천]` (`_offer_find`).
+  타겟·빈 입력이 둘 이상이거나 타겟이 없으면 원래대로.
+  회귀 테스트 `test_target_value_with_placeholder_input_recommends_find`.
+- 같은 P3를 다시 보냈을 때 Gemma가 `ml_map.py --find`에 입력 6개를 줘 "기준 열은 --vary 포함 3개까지"로 멈추고 사용자에게 범위를 물음.
+  그 데이터 파일로 학습한 모델이 있으면 같은 질문을 모델로 푸는 `ml_predict.py -m "<데이터 파일>" --find ... --vary ... -i ...`를
+  `[추천]` (예측은 읽기만 함, `_model_find_hint`). 회귀 테스트 `test_find_with_too_many_inputs_recommends_the_trained_model`.
+
 ## [2.9.79] - 2026-11-08
 
 구조 검토 반영: 공통 런타임을 `ml_predict.py`에서 떼어 냄, 학습 스레드, `[후보]` 번호와 전체 명령, 파일 재시도.

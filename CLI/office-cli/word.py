@@ -934,10 +934,22 @@ def _safe_anchor_fix(anchor: str, similar: str, pos: str) -> bool:
     return all(ch in it for ch in a)            # a가 b의 부분 수열 (끼어든 글자만 있음)
 
 
-def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str = "after") -> Any:
-    """앵커 단락 하나. 못 찾으면 비슷한 글을 안내 (확실할 때만 [추천]), 여러 단락에 있으면 고르지 않고 [후보]로 오류."""
+# write --anchor에 문서의 글 대신 위치 낱말을 준 경우 (집 PC Gemma O4 '--anchor "end"'): 문서에 그 글이 없으면 같은 뜻의 위치로 [추천]
+ANCHOR_END_WORDS = {"end", "끝", "문서 끝", "문서끝", "맨 끝", "맨끝", "마지막"}
+ANCHOR_START_WORDS = {"start", "처음", "문서 처음", "맨 앞", "맨앞", "시작"}
+
+
+def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str = "after",
+                      position_words: bool = False) -> Any:
+    """앵커 단락 하나. 못 찾으면 비슷한 글을 안내 (확실할 때만 [추천]), 여러 단락에 있으면 고르지 않고 [후보]로 오류.
+    position_words(write만): 앵커가 'end'·'끝' 같은 위치 낱말이고 문서에 없으면 --anchor를 뺀 명령(문서 끝, 처음은 --pos start)을 [추천]."""
     hits = _anchor_paragraphs(doc, anchor)
     if not hits:
+        word = anchor.strip().lower()
+        if position_words and pos == "after" and (word in ANCHOR_END_WORDS or word in ANCHOR_START_WORDS):
+            fix = rt.retry_command({"--anchor": None, "--pos": "start" if word in ANCHOR_START_WORDS else None})
+            raise rt.InputError(f"문서에서 '{anchor}'을(를) 찾을 수 없습니다. --anchor는 문서의 글을 받습니다. "
+                                f"문서 {'처음' if word in ANCHOR_START_WORDS else '끝'}에 넣는 명령: [추천] {fix}", no_fallback=True)
         similar = _similar_anchor(doc, anchor)
         hint = ""
         if similar and _safe_anchor_fix(anchor, similar, pos):
@@ -982,7 +994,7 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
         return end, "문서 끝"
     if _find_len(anchor) > FIND_MAX:
         raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앵커 단락의 앞부분 일부만 쓰세요.", no_fallback=True)
-    para = _anchor_paragraph(doc, anchor, occurrence, pos)
+    para = _anchor_paragraph(doc, anchor, occurrence, pos, position_words=True)
     if _in_table(para):
         # 셀 단락의 End는 다음 셀의 시작이라 그대로 넣으면 옆 칸에 들어감: 표 바깥(표 뒤)에 넣습니다
         if pos != "after":
