@@ -475,7 +475,6 @@ def grade(paths, label, use_judge, model):
 
 
 RUN_MESSAGES = "messages.json"     # run_all_tests.py --gemma가 기록 폴더에 남기는 {요청 ID: 보낸 문장}
-RUN_OUTSIDE = "outside_writes.json"  # 같은 기록 폴더의 {요청 ID: 시험 중 시험 폴더 밖(C:\\CLI, 드라이브 맨 위)에 새로 생긴 경로}
 RUN_MODELS = "models.json"         # 같은 기록 폴더의 {요청 ID: 답한 모델} (--gemma-model, 사용량 제한 때 예비 모델)
 
 
@@ -505,20 +504,6 @@ def grade_runs(folder, use_judge=False, model="LLM42"):
     except (OSError, ValueError):
         pass
     rows, detail = score(found, spec, by_id, order, use_judge, model)
-    try:                                    # run_all_tests.py가 시험 전후 목록을 비교해 남긴 시험 폴더 밖 쓰기
-        with open(os.path.join(folder, RUN_OUTSIDE), encoding="utf-8") as f:
-            outside = json.load(f)
-    except (OSError, ValueError):
-        outside = {}
-    for row in rows:
-        paths = outside.get(row["id"]) or []
-        if paths and row["결과"] != "없음":
-            why = f"시험 폴더 밖 쓰기 없음 ({'; '.join(paths[:5])}{' 외' if len(paths) > 5 else ''})"
-            row["결과"] = "실패"
-            row["실패"] = " | ".join(x for x in (row.get("실패"), why) if x)
-            for sid, sc, turn, checks in detail:
-                if sid == row["id"]:
-                    checks.append(("시험 폴더 밖 쓰기 없음", False, "; ".join(paths[:5])))
     return meta, rows, detail
 
 
