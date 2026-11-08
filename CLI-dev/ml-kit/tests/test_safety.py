@@ -54,7 +54,7 @@ def test_existing_version_refused_then_overwrite(work):
     assert proc.returncode == 1 and payload["agent_directive"].startswith("STOP_RETRY:")
     assert "--overwrite" in payload["message"]
     rec = split_command(payload["message"].split("[추천] ", 1)[1])      # 2.9.70: 전체 명령, '--version v2'는 빼고 --version v3
-    assert rec[0] == "python" and "--version" not in rec and rec[rec.index("--version") + 1] == "v3", rec
+    assert rec[0] == "python" and rec.count("--version") == 1 and rec[rec.index("--version") + 1] == "v3", rec
     assert (root / "v2" / "leaderboard.json").read_bytes() == before
     assert len(_ledger(root)) == 1
 
