@@ -1676,13 +1676,18 @@ def build_next_commands(
     train_py = quote_arg(os.path.join(here, "ml_train.py"))
     base = [f"python {train_py}", "-f", quote_arg(raw_file)]
     for flag, val in (("--header-row", args.header_row), ("--unit-row", args.unit_row),
-                      ("--data-row", args.data_row), ("--dtypes", args.dtypes), ("--exclude-where", exclude_where)):
+                      ("--data-row", args.data_row), ("--dtypes", args.dtypes)):
         if val is not None:
             base += [flag, quote_arg(val)]
+    no_where = list(base)                     # for the '<조건> 행을 빼고 다시 학습' template (exclude_command)
+    if exclude_where is not None:
+        base += ["--exclude-where", quote_arg(exclude_where)]
+    task_flags: List[str] = []
     if task == TASK_CLASSIFICATION:
-        base += ["--task", TASK_CLASSIFICATION]
+        task_flags = ["--task", TASK_CLASSIFICATION]
         if positive_class is not None:
-            base += ["--positive-class", quote_arg(positive_class)]
+            task_flags += ["--positive-class", quote_arg(positive_class)]
+    base += task_flags
 
     def names_arg(names: List[str], fname: str, limit: int = 15) -> str:
         if len(names) <= limit and not any('"' in n for n in names):
@@ -1697,8 +1702,23 @@ def build_next_commands(
     def quotable(*texts: Optional[str]) -> bool:
         return not any(t is not None and '"' in str(t) for t in texts)
 
-    base += ["-y", names_arg(target_names, "next_targets.txt", limit=10 ** 6)]
+    targets_arg = ["-y", names_arg(target_names, "next_targets.txt", limit=10 ** 6)]
+    base += targets_arg
     retrain_ok = quotable(args.dtypes, positive_class, exclude_where)
+
+    def exclude_command() -> Optional[Dict[str, Any]]:
+        """The same training (same inputs, -x written out) with rows matching <조건> left out (2.9.81 집 PC Gemma A3:
+        '생산효율이 80보다 큰 행은 빼고 다시 학습' -> the long command was written into the answer, not run). An earlier
+        --exclude-where is kept: '<before>; <조건>' (';' = and)."""
+        if not (retrain_ok and quotable(*base_features)) or not base_features:
+            return None
+        where = f"{exclude_where}; <조건>" if exclude_where else "<조건>"
+        parts = no_where + task_flags + targets_arg + ["-x", features_arg(base_features, "all"),
+                                                       "--exclude-where", quote_arg(where)]
+        if applied_evals and quotable(*applied_evals):
+            parts += ["--eval", quote_arg("; ".join(applied_evals))]
+        return {"purpose": "조건에 맞는 행을 빼고 다시 학습 (<조건>을 사용자가 말한 조건으로 바꿀 것, 예: 생산효율 > 80)",
+                "command": " ".join(parts), "needs_input": True, "placeholder": "<조건>"}
 
     base_features = [f for f in feature_names if f not in created_features]
     cmds: List[Dict[str, Any]] = []
@@ -1714,6 +1734,7 @@ def build_next_commands(
             final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         if base_features and quotable(*base_features):
             cmds.append(predict_one_command(final_dir, base_features))
+        cmds += [c for c in (exclude_command(),) if c]
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
@@ -1745,6 +1766,7 @@ def build_next_commands(
                      "needs_input": False, "no_retrain": True})
     if base_features and quotable(*base_features):        # 목표 전이라도 예측은 할 수 있음 (placeholder 명령은 늘 뒤에)
         cmds.append(predict_one_command(final_dir, base_features))
+    cmds += [c for c in (exclude_command(),) if c]
     return cmds
 
 

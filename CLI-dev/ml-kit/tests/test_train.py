@@ -951,8 +951,10 @@ def test_next_commands_flag_placeholders_and_put_runnable_first(sample_model, tm
     payload = run_tool("ml_train.py", "-f", cls, "-x", "반응온도,촉매비율,수분함량", "-y", "품질등급", "--task", "classification")
     if payload["mean_val_score"] < 0.9:                                  # 재학습 명령은 바로 실행 가능, 한 건 예측 틀만 맨 뒤 (2.9.75)
         cmds = payload["next_commands"]
-        assert cmds and all(c["needs_input"] is False for c in cmds[:-1]), cmds
-        assert cmds[-1]["needs_input"] is True and " -i " in cmds[-1]["command"] and "<값>" in cmds[-1]["command"], cmds
+        ready = [c for c in cmds if c["needs_input"] is False]                     # 틀(한 건 예측, 행 빼고 다시 학습)은 맨 뒤
+        assert cmds and cmds[:len(ready)] == ready and len(cmds) - len(ready) == 2, cmds
+        assert " -i " in cmds[len(ready)]["command"] and "<값>" in cmds[len(ready)]["command"], cmds
+        assert cmds[-1]["placeholder"] == "<조건>", cmds
     assert not any("성능예측표" in c["purpose"] for c in payload["next_commands"])   # 분류는 성능예측표 없음
 
 
@@ -961,7 +963,8 @@ def test_next_commands_give_one_case_prediction_with_input_names(sample_model):
     solar는 한 건을 파일로 만들려 했음 -> 모델 입력 이름의 '-i "이름=<값>,..."' 틀(맨 뒤). <값>을 채우면 그대로 실행됨."""
     data, payload = sample_model
     one = [c for c in payload["next_commands"] if " -i " in c["command"]]
-    assert len(one) == 1 and one[0] is payload["next_commands"][-1] and one[0]["placeholder"] == "<값>", payload["next_commands"]
+    assert len(one) == 1 and one[0]["placeholder"] == "<값>", payload["next_commands"]
+    assert all(c["needs_input"] for c in payload["next_commands"][payload["next_commands"].index(one[0]):])   # 틀은 뒤에
     cmd = split_command(one[0]["command"])
     pairs = cmd[cmd.index("-i") + 1]
     assert [p.split("(")[0] for p in pairs.split(",")] == ["반응온도", "소비전력", "압축압력", "촉매비율", "수분함량"], pairs
@@ -2476,7 +2479,7 @@ def test_auto_inputs_next_commands_carry_x(auto_run):
     """다시 학습 명령은 고른 입력을 -x로 적음: 같은 명령을 다시 실행하면 같은 입력 (재현)."""
     res = auto_run["res"]
     assert res["goal_met"] is False
-    train_cmds = [c["command"] for c in res["next_commands"] if "ml_train.py" in c["command"]]
+    train_cmds = [c["command"] for c in res["next_commands"] if "ml_train.py" in c["command"] and not c["needs_input"]]
     assert train_cmds
     for cmd in train_cmds:
         args = split_command(cmd)
@@ -2548,3 +2551,18 @@ def test_diagnose_keeps_measured_unique_numbers_and_dates():
                        "라인": r.choice(["A", "B", "C"], n), "속도": np.arange(40, 40 + n) * 5,
                        "y": r.normal(0, 1, n)})
     assert mt.diagnose_inputs(df, ["두께", "일자", "라인", "속도"], ["y"], "regression") == []
+
+
+def test_next_commands_offer_the_exclude_where_template(tmp_path):
+    """2.9.81 집 PC Gemma A3: '생산효율이 80보다 큰 행은 빼고 다시 학습해줘'에 긴 학습 명령을 답변에 적기만 하고 실행하지 않음 ->
+    학습 결과에 같은 학습의 --exclude-where '<조건>' 틀(needs_input, 맨 뒤). 앞의 조건이 있으면 '<앞 조건>; <조건>'으로 지킴."""
+    data = make_multi(str(tmp_path / "ex.csv"))
+    res = run_tool("ml_train.py", "-f", data, "-x", "온도,압력,속도", "-y", "수율")
+    tpl = [c for c in res["next_commands"] if c.get("placeholder") == "<조건>"]
+    assert len(tpl) == 1 and tpl[0]["needs_input"] is True and res["next_commands"][-1] is tpl[0], res["next_commands"]
+    argv = split_command(tpl[0]["command"].replace("<조건>", "수율 > 50"))
+    assert argv[argv.index("-x") + 1] == "온도(°C),압력(bar),속도(m/s)" and argv[argv.index("--exclude-where") + 1] == "수율 > 50", argv
+    again = run_tool("ml_train.py", *argv[2:])
+    tpl = [c for c in again["next_commands"] if c.get("placeholder") == "<조건>"][0]
+    argv = split_command(tpl["command"])
+    assert argv[argv.index("--exclude-where") + 1] == "수율(%) > 50; <조건>", argv     # 앞 조건은 도구가 맞춘 열 이름으로

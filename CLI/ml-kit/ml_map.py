@@ -19,6 +19,10 @@ The data file is never modified. Rows with text in the '제외' column (other th
 
 Shared runtime (data loading, column matching, CLI protocol) is imported from _ml_runtime.py.
 """
+import contextlib
+import glob
+import io
+import json
 import re
 import sys
 import os
@@ -30,22 +34,56 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, mark_committed, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, numbered, command_replacing, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, CATEGORY_CANDIDATES_MAX, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
-    _trained_data_files,
+    _trained_data_files, model_dir_from_data, model_raw_inputs, read_text_file, ask,
 )
 
 
-def _model_find_hint(args, goal_text: str) -> str:
-    """--find의 기준 열이 표 보간 상한(MAX_KEYS)을 넘을 때 이 데이터 파일로 학습한 모델이 있으면 같은 질문을 모델로 푸는
-    ml_predict.py --find 전체 명령을 [추천] (2.9.80 집 PC Gemma P3: 입력 6개로 ml_map을 돌려 멈추고 사용자에게 범위를 물음).
-    예측은 읽기만 해서 잘못 골라도 바뀌는 것이 없음. 학습한 모델이 없으면 빈 글."""
+def _model_find_hint(args, goal_col: str, goal_val, vary: str, fixed: dict) -> str:
+    """--find의 기준 열이 표 보간 상한(MAX_KEYS)을 넘을 때, 이 데이터 파일로 학습한 모델로 같은 질문을 푸는 ml_predict.py --find
+    전체 명령 (2.9.80 집 PC Gemma P3: 입력 6개로 ml_map을 돌려 멈추고 사용자에게 범위를 물음). 이름은 ml_map이 데이터 열로 맞춘
+    것을 씀 (사용자가 쓴 오타·단위 표기를 옮기지 않음). 예측은 읽기만 함.
+    - 목표가 모델의 회귀 타겟이고 --vary와 -i가 모두 모델 입력이면 [추천].
+    - -i에 모델 입력이 아닌 열이 있으면 그 열을 뺀 명령은 다른 질문일 수 있어 [후보] (사용자가 정함).
+    - 학습한 모델이 없거나, 목표가 타겟이 아니거나, --vary가 모델 입력이 아니면 빈 글."""
     ap = os.path.abspath(args.file)
     if ap not in _trained_data_files(os.path.dirname(ap)):
         return ""
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            vdir = model_dir_from_data(ap, [goal_col])
+    except Exception:  # noqa: BLE001  no single version to use: no hint (the usual message stays)
+        return ""
+    meta = None
+    for path in glob.glob(os.path.join(vdir, "model_*.json")):
+        try:
+            m = json.loads(read_text_file(path))
+        except (OSError, ValueError):
+            continue
+        if _alias_key(str(m.get("target", ""))) == _alias_key(goal_col):
+            meta = m
+    if meta is None or meta.get("task", "regression") != "regression":
+        return ""
+    inputs = {_alias_key(c) for c in model_raw_inputs(meta)}
+    if _alias_key(vary) not in inputs:
+        return ""
+    def show(v) -> str:
+        try:
+            return _fmt(float(v))
+        except (TypeError, ValueError):
+            return str(v)
+    keep = {c: v for c, v in fixed.items() if _alias_key(c) in inputs}
+    dropped = [c for c in fixed if c not in keep]
     parts = [f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_predict.py'))}",
-             "-m", quote_arg(ap), "--find", quote_arg(goal_text), "--vary", quote_arg(args.vary.strip())]
-    if args.input:
-        parts += ["-i", quote_arg(args.input)]
-    return f" 이 파일로 학습한 모델이 있어 모델로 찾는 명령: [추천] {' '.join(parts)}"
+             "-m", quote_arg(ap), "--find", quote_arg(f"{goal_col}={show(goal_val)}"), "--vary", quote_arg(vary)]
+    if keep:
+        parts += ["-i", quote_arg(kv_text({c: show(v) for c, v in keep.items()}))]
+    cmd = " ".join(parts)
+    if not dropped:
+        return f" 이 파일로 학습한 모델이 있어 모델로 찾는 명령: [추천] {cmd}"
+    return (f" 이 파일로 학습한 모델로 찾을 수 있지만 {', '.join(repr(c) for c in dropped)}은(는) 모델 입력이 아니라 빼야 합니다 "
+            f"(고정 조건이 달라짐). 사용자에게 물으십시오: "
+            + ask([f"{', '.join(dropped)}을(를) 빼고 모델로 찾기"], [cmd], "{}"))
+
 
 setup_console()
 
@@ -531,7 +569,7 @@ def execute_reverse(args) -> Dict[str, Any]:
     check_percent_mix(df, keys + [goal_col])
     if len(keys) > MAX_KEYS:
         raise InputError(f"기준 열은 --vary 포함 {MAX_KEYS}개까지입니다 (지금 {len(keys)}개)."
-                         + _model_find_hint(args, f"{goal_name}={goal_val}"))
+                         + _model_find_hint(args, goal_col, goal_val, vary, {**numeric, **categorical}))
     sub = _filter(df, categorical)
     t = Table(sub, keys, [goal_col], warnings)
     fixed = np.array([numeric[k] for k in keys[1:]])

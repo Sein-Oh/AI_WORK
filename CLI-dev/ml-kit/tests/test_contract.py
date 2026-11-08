@@ -240,6 +240,12 @@ def test_predict_without_runtime_is_one_json_line(tmp_path):
     payload = json.loads(proc.stdout)
     assert payload["status"] == "error" and "_ml_runtime.py" in payload["message"]
     assert payload["agent_directive"].startswith("STOP_RETRY:")
+    # Windows 파이프의 기본 CP949를 흉내 냄 (2.9.80 집 PC: 이 JSON이 CP949로 나가 UTF-8로 읽지 못함). -I는 PYTHONIOENCODING을 무시함
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONUTF8")}
+    env["PYTHONIOENCODING"] = "cp949"
+    proc = subprocess.run([sys.executable, str(tmp_path / "ml_predict.py"), "-m", "v1", "-i", "a=1"], env=env,
+                          capture_output=True, timeout=60, cwd=str(tmp_path))
+    assert json.loads(proc.stdout.decode("utf-8"))["error_type"] == "missing_file", proc.stdout
 
 
 def test_predict_standalone_deployment(trained, tmp_path):
@@ -721,9 +727,16 @@ def test_target_value_with_placeholder_input_recommends_find(p1_model):
     assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "생산량=500", fixed
     assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("-i") + 1] == "압력(bar)=3,속도=45", fixed
     assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,압력(bar)=3,속도=45")   # 찾을 입력을 아예 뺌 (P3 세 번째)
-    name, fixed = recommended_command(res["message"])
-    assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("-i") + 1] == "압력(bar)=3,속도=45", res
+    # 찾을 입력을 아예 뺌 (P3 세 번째): 한 행을 붙이다 빠뜨렸을 수도 있어 [후보] 1) 찾기 2) 타겟 값 빼고 중앙값으로 예측
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,압력(bar)=3,속도=45")
+    assert "[추천]" not in res["message"] and "[후보] 1) " in res["message"] and res["error_type"] == "needs_user_decision", res
+    find, fill = (split_command(c["command"]) for c in res["confirm_commands"])
+    assert find[find.index("--vary") + 1] == "온도(°C)" and find[find.index("-i") + 1] == "압력(bar)=3,속도=45", res
+    assert "--find" not in fill and "생산량" not in fill[fill.index("-i") + 1] and "온도(°C)=" in fill[fill.index("-i") + 1]
+    assert run_tool("ml_predict.py", *find[2:])["status"] == "ok" and run_tool("ml_predict.py", *fill[2:])["status"] == "ok"
+    # 모델이 모르는 이름(오타)이 있으면 빈 입력을 셀 수 없음: 찾기 명령 없이 원래 이름 안내
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,온돜=<값>,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and "--find" not in json.dumps(res, ensure_ascii=False), res
     proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,속도=45")                 # 빈 입력 둘: 고르지 않음
     assert proc.returncode == 1 and "[추천]" not in res["message"], res
     proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=<값>,압력(bar)=3,속도=45")

@@ -8,6 +8,8 @@ import itertools
 import os
 import sys
 
+import json
+
 import numpy as np
 import openpyxl
 import pandas as pd
@@ -35,6 +37,25 @@ def test_find_with_too_many_inputs_recommends_the_trained_model(tmp_path):
     assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "y=15" and fixed[fixed.index("-m") + 1] == f, fixed
     assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
 
+
+
+def test_model_find_hint_checks_the_model(tmp_path):
+    """--find 상한을 넘을 때의 모델 안내는 모델 정보로 판단: 이름은 ml_map이 맞춘 데이터 열 이름(단위 표기 그대로 옮기지 않음),
+    -i에 모델 입력이 아닌 열이 있으면 그 열을 뺀 명령을 [후보](고정 조건이 달라짐), 목표가 모델 타겟이 아니면 안내 없음."""
+    r = np.random.default_rng(4)
+    df = pd.DataFrame({k: r.uniform(0, 10, 80) for k in ("a(°C)", "b", "c", "e")})
+    df["y"] = 3 * df["a(°C)"] + df.b - df.c
+    df["z"] = df.b * 2
+    f = str(tmp_path / "five.csv")
+    df.to_csv(f, index=False)
+    assert run_tool("ml_train.py", "-f", f, "-x", "a(°C),b,c", "-y", "y")["status"] == "ok"
+    res = run_fail("ml_map.py", "-f", f, "--find", "y=15", "--vary", "a", "-i", "b=5,c=5,e=5")
+    assert "[추천]" not in res["message"] and "[후보] 1) " in res["message"] and res["error_type"] == "needs_user_decision", res
+    cmd = split_command(res["confirm_commands"][0]["command"])
+    assert cmd[cmd.index("--vary") + 1] == "a(°C)" and cmd[cmd.index("-i") + 1] == "b=5,c=5", cmd     # e는 모델 입력이 아님
+    assert run_tool("ml_predict.py", *cmd[2:])["status"] == "ok"
+    res = run_fail("ml_map.py", "-f", f, "--find", "z=8", "--vary", "a", "-i", "b=5,c=5,e=5")       # z는 모델 타겟이 아님
+    assert "ml_predict.py" not in json.dumps(res, ensure_ascii=False), res
 
 # ---- 정방향 보간 ----------------------------------------------------------------------------------------------------
 

@@ -766,9 +766,13 @@ def _first_row_is_text(df: pd.DataFrame, numeric: List[str]) -> bool:
 
 
 def _offer_find(args: argparse.Namespace, df_input: pd.DataFrame, model_items: List[Dict[str, Any]]) -> None:
-    """-i 한 건에 타겟의 숫자 값 하나가 있고 그 타겟 모델의 숫자 입력 중 하나만 '<값>'이거나 빠져 있으면 '타겟이 그 값이 되는 입력
-    찾기'라는 뜻 하나: --find "<타겟>=<값>" --vary "<입력>"과 나머지 -i로 [추천] (2.9.80 집 PC Gemma P3: '불순물=100,반응온도=<값>,...'
-    또는 반응온도를 뺀 '불순물=100,...'으로 실행해 멈춘 뒤 ml_map을 학습 데이터에 돌려 실패). 타겟이나 빈 입력이 둘 이상이면 원래 오류로."""
+    """-i 한 건에 회귀 타겟의 숫자 값 하나가 있고 그 타겟 모델의 숫자 입력 중 하나만 비어 있으면 '타겟이 그 값이 되는 입력 찾기'
+    (--find "<타겟>=<값>" --vary "<입력>", 나머지는 -i). 2.9.80 집 PC Gemma P3: '불순물=100,반응온도=<값>,...' 또는 반응온도를 뺀
+    '불순물=100,...'으로 실행해 멈춘 뒤 ml_map을 학습 데이터에 돌려 실패.
+    - 빈 입력이 '<값>' 자리표시자면 뜻이 하나: [추천].
+    - 빈 입력이 빠지기만 했으면 데이터 한 행을 붙이다 빠뜨렸을 수도 있음: [후보] 1) 찾기 2) 타겟 값을 빼고 빠진 입력은 학습 중앙값으로 예측.
+    - 원래 오류로 둠: 타겟 값이 없거나 둘 이상, 빈 숫자 입력이 없거나 둘 이상, 모델이 모르는 이름(오타), 다른 자리표시자, 빠진 글자·날짜
+      입력(찾기 명령도 멈춤), 분류 타겟, 그 타겟이 다른 타겟의 입력인 버전(입력 값일 수도 있음)."""
     if len(df_input) != 1 or getattr(args, "find", None):
         return
     targets = {_alias_key(it["target"]): it for it in model_items}
@@ -776,19 +780,37 @@ def _offer_find(args: argparse.Namespace, df_input: pd.DataFrame, model_items: L
     goal = [(c, v) for c, v in row.items() if _alias_key(c) in targets and coerce_numeric(pd.Series([v], dtype=object)).notna().all()]
     if len(goal) != 1:
         return
-    meta = targets[_alias_key(goal[0][0])]["meta"]
-    schema = meta.get("feature_schema") or {}
-    numeric = [c for c in model_raw_inputs(meta) if c not in schema.get("categorical", {}) and c not in schema.get("datetime", {})]
-    given = {_alias_key(c): c for c in row}
-    holes = [given[_alias_key(c)] for c in numeric if _alias_key(c) in given and re.fullmatch(r"<[^<>]*>", row[given[_alias_key(c)]])]
-    holes += [c for c in numeric if _alias_key(c) not in given]
-    if len(holes) != 1:
+    (tcol, tval), item = goal[0], targets[_alias_key(goal[0][0])]
+    meta = item["meta"]
+    if meta.get("task", "regression") != "regression":
         return
-    (tcol, tval), hole = goal[0], holes[0]
+    if any(_alias_key(tcol) in {_alias_key(c) for c in model_raw_inputs(it["meta"])} for it in model_items):
+        return
+    schema = meta.get("feature_schema") or {}
+    raw = model_raw_inputs(meta)
+    text_inputs = set(schema.get("categorical", {})) | set(schema.get("datetime", {}))
+    given = {_alias_key(c): c for c in row if c != tcol}
+    if set(given) - {_alias_key(c) for c in raw}:
+        return                                          # a name the model does not take: check_inline_unknown explains it
+    hole_text = re.compile(r"<[^<>]*>")
+    placeholders = [given[_alias_key(c)] for c in raw if _alias_key(c) in given and hole_text.fullmatch(row[given[_alias_key(c)]])]
+    missing = [c for c in raw if _alias_key(c) not in given]
+    empty = [c for c in raw if c in missing or (_alias_key(c) in given and given[_alias_key(c)] in placeholders)]   # model names
+    if len(empty) != 1 or empty[0] in text_inputs:      # a text / date input: the find command would stop too
+        return
+    hole = (placeholders + missing)[0]
     rest = {c: v for c, v in row.items() if c not in (tcol, hole)}
-    cmd = (_predict_command(args, inline=kv_text(rest)) + f" --find {quote_arg(f'{tcol}={tval}')} --vary {quote_arg(hole)}")
-    raise InputError(f"-i에 타겟 '{tcol}={tval}'이 있고 입력 '{hole}'의 값이 없습니다. 예측하지 않았습니다. "
-                     f"'{tcol}'이(가) {tval}이 되는 '{hole}'을 찾는 명령: [추천] {cmd}")
+    find = _predict_command(args, inline=kv_text(rest)) + f" --find {quote_arg(f'{tcol}={tval}')} --vary {quote_arg(hole)}"
+    head = f"-i에 타겟 '{tcol}={tval}'이 있고 입력 '{hole}'의 값이 없습니다. 예측하지 않았습니다."
+    if placeholders:
+        raise InputError(f"{head} '{tcol}'이(가) {tval}이 되는 '{hole}'을 찾는 명령: [추천] {find}")
+    median = ((meta.get("feature_stats") or {}).get(hole) or {}).get("median")
+    choices = [f"'{tcol}'이(가) {tval}이 되는 '{hole}' 찾기"]
+    cmds = [find]
+    if median is not None:
+        choices.append(f"'{tcol}' 값을 빼고 '{hole}'을 학습 중앙값 {float(median):g}로 채워 예측")
+        cmds.append(_predict_command(args, inline=kv_text({**rest, hole: f"{float(median):g}"})))
+    raise InputError(f"{head} 어느 뜻인지 사용자에게 물으십시오. " + ask(choices, cmds, "{}"))
 
 
 def _offer_median_fill(args: argparse.Namespace, df_input: pd.DataFrame, model_items: List[Dict[str, Any]]) -> None:
