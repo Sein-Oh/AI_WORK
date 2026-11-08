@@ -158,7 +158,7 @@ def test_unitless_name_against_unit_columns():
     assert "[추천]" not in msg and "[후보] 1) '온도(°C)'" in msg, msg           # 2.9.31: 유사 컬럼 없음
     assert "[후보] 1) '온도(°C)'" in _resolve_error(["온돜"], ["온도(°C)", "압력(bar)"])       # 2.9.33: [추천]
     hint = mp._typo_hints(["온도(°C)"], ["온두"], ["온도(°C)"], True)
-    assert len(hint) == 1 and "[후보] 온두" in hint[0], hint
+    assert len(hint) == 1 and "[후보] 1) 온두" in hint[0], hint
 
 
 def test_same_name_candidates_whatever_the_suffix():
@@ -308,7 +308,7 @@ def test_eval_unknown_name_wording():
     assert "-> [후보] 1) 온도 " in _formula_error("d = 온두 * 2", ["온도", "압력"])     # 2.9.32: [추천] -> [후보]
     assert "-> [후보] 1) 온도 " in _formula_error("d = 온돜 * 2", ["온도", "압력"])     # 2.9.33: [추천] -> [후보]
     msg = _formula_error("d = T3 - T1", ["T1", "T2"])
-    assert "[추천]" not in msg and "[후보] T2" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) T2" in msg, msg
 
 
 # ---- --eval 수식 속 숫자와 숫자 이름 열 ('2', '2(mm)', '0.5(mm)') --------------
@@ -464,7 +464,7 @@ def test_one_name_for_two_inputs(humid_data):
     hints = mp._typo_hints(["속도", "습도"], ["온도(°C)", "솔도"], ["온도(°C)", "속도", "습도"], False)
     assert len(hints) == 1 and "[후보] 1) 속도 2) 습도" in hints[0], hints
     assert mp._typo_hints(["속도"], ["속돜"], ["속도"], True) == \
-        ["'속도'이(가) 없습니다. -i의 [후보] 속돜 중 '속도'(으)로 고칠 이름을 사용자에게 물으십시오"]      # 2.9.33: [추천]
+        ["'속도'이(가) 없습니다. -i의 이름 중 '속도'(으)로 고칠 이름을 사용자에게 물으십시오: [후보] 1) 속돜"]      # 2.9.33: [추천]
     assert "[후보] 1) 속두" in mp._typo_hints(["속도"], ["속두"], ["속도"], True)[0]     # 2.9.32: [추천] -> [후보]
     assert "[추천]" not in mp._typo_hints(["속도"], ["습도"], ["속도"], True)[0]
 
@@ -596,7 +596,7 @@ def test_json_repeated_key_refused(alias_models):
         f.write('[{"온도(°C)":180,"압력(bar)":3,"압력(bar)":4}]')
     proc, res = _pred(alias_models["unit"], p)
     assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:"), res
-    assert "[후보] 압력(bar)=3, 압력(bar)=4" in res["message"], res
+    assert "[후보] 1) 압력(bar)=3 2) 압력(bar)=4" in res["message"], res
     # a plain JSON row still predicts
     assert _pred(alias_models["unit"], json.dumps({"온도(°C)": 180, "압력(bar)": 3}, ensure_ascii=False))[1]["status"] == "ok"
 
