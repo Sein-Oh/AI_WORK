@@ -1280,6 +1280,16 @@ def test_action_typo_is_candidate_and_delete_is_destructive():
     assert "[추천]" in out["message"] and " read" in out["message"], out
 
 
+def test_invalid_choice_values_read_with_or_without_quotes():
+    """1.4.84 집 PC: Python 3.13.13 argparse는 'choose from list, add'(따옴표 없음)라 값을 못 읽어 빈 '[후보] '를 냈음."""
+    want = ["list", "add", "rename", "copy", "delete", "select"]
+    new = "argument --action/-a: invalid choice: 'del' (choose from list, add, rename, copy, delete, select)"
+    old = "argument --action/-a: invalid choice: 'del' (choose from 'list', 'add', 'rename', 'copy', 'delete', 'select')"
+    assert rt.choices_in_message(new) == want
+    assert rt.choices_in_message(old) == want
+    assert rt.choices_in_message("argument --x: expected one argument") == []
+
+
 def test_retry_replacing_changes_only_the_named_option(monkeypatch):
     """1.4.83 검토: '--id 2 --index 2'에서 --index만 바꿔야 함 (전에는 --id도 바뀌어 다른 메일의 첨부를 저장), 폴더 이름이 같은 경로는 그대로."""
     monkeypatch.setattr(rt, "CURRENT_TOOL", "outlook")
