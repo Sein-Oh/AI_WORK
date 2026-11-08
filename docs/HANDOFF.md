@@ -205,6 +205,19 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
    A1은 묻지 않고 학습, P1 답변에 예측값·90% 범위·실측 비교값과 높인/낮춘 입력이 글 그대로 (r5의 실측 비교값 빠뜨림 해결). 같은 실행의 pytest 1건 실패
    (office-cli `--action` 오타에 빈 `[후보] `: Python 3.13.13 argparse가 값에 따옴표를 붙이지 않음) -> office-cli 1.4.84. 결과 `docs/test_logs/opencode_확인_20261108/`
 
+## 3-3. 클라우드에서 한 일 (2026-11-08 밤, 구조 검토, 브랜치 `ccr-ecab210c-awib23`)
+1. ml-kit 2.9.79: 공통 런타임을 `ml_predict.py`에서 `_ml_runtime.py`로 분리 (예측 단독 배포는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더).
+   학습·예측은 작은 표(2만 행 미만)에서 한 스레드 (학습 한 번 18초 -> 2.5초, 결과 같음). `[후보]`는 늘 번호, 만들 수 있으면 같은 번호의
+   `confirm_commands`. 타겟 누수 후보 명령은 `next_commands`가 아니라 `confirm_commands`. `retry_fs`는 winerror 32/33도 재시도.
+2. office-cli 1.4.85~1.4.88: 큰 파일을 내부 모듈로 (`_spec_check`, `_excel_compare`, `_xlsx_formula`, `_markdown`), `--dry-run` 규칙 하나
+   (미리보기 없는 쓰기 동작은 실행하지 않고 STOP_RETRY), 이름 비교 규칙 하나, 한 글자 옵션 삭제 (쓰면 긴 이름 `[추천]`).
+3. 보고서·성능예측표는 다른 로직이 마무리될 때까지 시험에서 뺌 (pytest `-m report`, beta `--only F`, 단순성 M9, Gemma R 묶음). 고칠 것은
+   ml-kit CHANGELOG 남은 할 일.
+4. 시험 폴더 밖 쓰기 감시(러너)는 폐기.
+5. 집 PC에서 다시 확인할 것: 모델이 보는 글이 바뀜(`[후보]` 번호, office 한 글자 옵션, 전역 지침 4장).
+   `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
+   (Gemma 먼저, solar-mini4 예비, R 묶음은 보내지 않음). 함께 `run_beta_check.py`(F 제외), `run_simplify_check.py`, pytest 전체 소요 시간.
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
