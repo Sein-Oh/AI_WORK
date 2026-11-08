@@ -218,6 +218,31 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
    `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
    (Gemma 먼저, solar-mini4 예비, R 묶음은 보내지 않음). 함께 `run_beta_check.py`(F 제외), `run_simplify_check.py`, pytest 전체 소요 시간.
 
+### 집 PC 확인 (2026-11-08 밤, ml-kit 2.9.79 -> 2.9.80, office-cli 1.4.88 -> 1.4.89)
+Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261108/`.
+
+| 시험 | 결과 | 걸린 시간 |
+|---|---|---|
+| 전체 pytest (저장소 폴더) | 4237 passed, 2 failed, 6 skipped | 33분 (회사 PC는 전에 1시간 넘음, 클라우드 22분) |
+| pytest `-m report` (ml-kit) | 74 passed, 4 skipped | 14분 |
+| beta 점검 (기본) | 통과 20, 실패 0, 건너뜀 1 (F) | 45초 |
+| beta 점검 `--only F` | 통과 12, 실패 0 (F7 엑셀 재계산 포함) | 3분 20초 |
+| 단순성 점검 | PASS 38, FAIL 0, SKIP 1 (M9). office `--dry-run`(D1~D4), 한 글자 옵션 `[추천]`, `[후보]` 번호 명령 통과 | 2분 52초 |
+| Gemma 실기 (`--only gemma`, R 묶음 뺌) | 15건 모두 Gemma가 답함, 통과 9, 실패 5 (X2는 참고), 건너뜀 R1·R2·O3·S0·S1 | 4분 |
+
+- pytest 실패 2건 (고침):
+  - `test_predict_without_runtime_is_one_json_line`: `_ml_runtime.py` 없이 낸 JSON이 Windows에서 CP949로 나감 -> stdout을 UTF-8로 (2.9.80).
+  - `test_diag_template_damage_is_warn_when_tools_do_not_need_it`: 저장소 전체 pytest에서만 앞선 시험 뒤 같은 프로세스의 pymupdf import가
+    "I/O operation on closed file"로 실패 (따로 돌리면 통과, 러너는 새 프로세스). 시험 대상이 아닌 라이브러리 import를 이 시험에서 뺌.
+- Gemma 실패와 처리:
+  - P3(반대 찾기): 세 번 보냈고 세 번 다른 길로 감. `-i "불순물=100,반응온도=<값>"`, `ml_map --find`에 입력 6개, 반응온도를 뺀 `-i "불순물=100,..."`.
+    도구가 셋 모두 `--find`/`--vary` 전체 명령을 `[추천]`하게 고침 (2.9.80 `_offer_find`, `ml_map`의 `_model_find_hint`). 네 번째는 Gemma가 처음부터 `--find`로 통과.
+  - O4(문서 끝에 문단): `--anchor "end"` -> 위치 낱말이면 `--anchor`를 뺀 명령을 `[추천]` (1.4.89). 다시 보낸 O4 통과.
+  - 모델 행동만 (기록, 고치지 않음): A3 명령을 답변에 적기만 하고 실행 안 함. O1 `excel.py check`에 `--target` 없이 실행하고 문서를 열어 달라고 함.
+    O5 필요 없는 `--overwrite`. X2 답변(참고).
+- `[후보]`: P3 세 번째에서 Gemma가 `[후보] 1) '불순물'`을 번호와 함께 보여 주고 물음 (실행하지 않음). 한 글자 옵션을 쓴 요청은 없었음 (단순성 점검으로 확인).
+- 다시 돌린 시험 (고친 곳만): ml-kit `test_contract`·`test_predict`·`test_names`·`test_safety`·`test_skill_docs`·`test_map`, `CLI-dev/tests`, office-cli 전체 모두 통과.
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
