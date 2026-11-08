@@ -158,6 +158,20 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
    고친 명령이 다른 옵션 값까지 바꾸던 것, 없는 시트 `[후보]` 번호, 스킬 고르기 표기 `<a/b>`(`|`는 PowerShell 파이프), 첨부 내려받기는 확인 뒤에만 등.
    남긴 것은 각 도구 CHANGELOG "남은 할 일".
 7. 다음 실기: 집 PC에서 `run_all_tests.py --gemma-only A1,P1 --gemma-model <모델>,<예비 모델>`로 같은 시험을 다시 (기대: S0 경로 실수 없음, P1 `-i`).
+   - 2026-11-08 집 PC 결과(ml-kit 2.9.76, office-cli 1.4.83): Gemma 4 26B 0/2(18초), solar-mini4 0/2(954초). 두 모델 결과가 같아
+     **집 PC 운영은 Gemma 먼저, 사용량이 다 되면 solar-mini4** (`--gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`, opencode 기본 모델도 Gemma).
+     결과 `docs/test_logs/result_집PC_gemma4_20261108_094921.md`, `result_집PC_solar-mini4_20261108_094940.md`. 경로 실수는 두 모델 모두 없었음.
+   - Gemma A1: 데이터를 읽은 뒤 `ml_train.py` 명령을 답변에 적기만 하고 실행하지 않음. 지난번(11-07)에는 S0을 먼저 모델에 보냈고 그때는 실행했음 ->
+     러너가 S0을 직접 실행해 A1이 세션의 첫 요청이 되자 "명령을 보여 주고 묻기"로 바뀐 것으로 보임 (전역 지침 4장의 "보여 주고 예를 받은 뒤" 문장이
+     덮어쓰기·삭제 외에도 적용된다고 읽었을 수 있음).
+   - Gemma P1: `--model_path "<시험 폴더>\models"`(없는 폴더, `-m` 없음)를 지어냄 -> `SAME_MEANING`에는 `--model-path`(하이픈)만 있어 `[후보]` -> 사용자에게 되물음.
+   - solar-mini4 A1: opencode `glob`이 Windows 경로를 못 찾자(`No files found`) `python -c`로 xlsx를 직접 풀다가 `C:\CLI-scratch\read_xlsx.py`를 만듦
+     (드라이브 맨 위에 폴더 생성). P1은 학습이 안 되어 실패.
+8. 클라우드에서 볼 것 (7의 결과):
+   - 전역 지침 4장: 사용자가 요청한 일의 명령은 묻지 않고 바로 실행한다는 문장과 "보여 주고 예를 받은 뒤"가 적용되는 범위(덮어쓰기·삭제·`confirm_commands`)를 분명히.
+   - 옵션 이름의 `_`를 `-`로 읽어 같은 뜻 표를 찾기(`--model_path` -> `--model`의 `[추천]`). 없는 모델 폴더면 학습 결과의 데이터 파일로 `-m` `[추천]`을 줄 수 있는지.
+   - 러너의 S0 직접 실행이 실제 사용(첫 요청이 바로 학습)과 같아졌으니, A1 실패가 실제 사용에서도 날 수 있음. 회사 PC Gemma와 비교.
+   - 시험 중 모델이 시험 폴더 밖(`C:\` 맨 위 등)에 파일을 만들면 러너가 알리기 (채점기 "시험 폴더 밖 쓰기 없음").
 
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
