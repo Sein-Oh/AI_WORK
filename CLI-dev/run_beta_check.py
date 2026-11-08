@@ -317,7 +317,7 @@ def run_groups(work, groups):
     st = {}
     if "H" in groups:
         group_h(work)
-    if groups & {"B", "D", "E"}:
+    if groups & {"B", "D", "E", "F"}:          # D·E·F는 B가 학습한 모델과 이력을 씀
         group_b(work, st)
     if "C" in groups:
         group_c(work)

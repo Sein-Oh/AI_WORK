@@ -87,7 +87,7 @@ def test_equivalence_is_not_unit_case_or_ambiguous():
 def test_excluded_column_never_listed():
     msg = _resolve_error(["수율"], ["온도", "수율(1차)", "수율(최종)"], exclude=["수율(최종)"])
     head = msg.split("(비슷한")[0]
-    assert "[후보] '수율(1차)'" in head and "수율(최종)" not in head and "[추천]" not in msg, msg
+    assert "[후보] 1) '수율(1차)'" in head and "수율(최종)" not in head and "[추천]" not in msg, msg
     assert "이 명령에서 이미 다른 이름이나 옵션에 쓰인 열" in msg, msg
     with pytest.raises(rt.InputError) as e:
         ml_export._check_known(["압력", "압룍"], {"y": ["압력", "온도"]}, "꼭 포함할 입력(--keep)")
@@ -999,7 +999,7 @@ def test_export_keep_typo_never_suggests_a_given_input():
     assert "[추천]" not in str(e.value), str(e.value)
     with pytest.raises(rt.InputError) as e:
         ml_export._check_known(["압룍"], {"t": ["압력(bar)", "온도"]}, "입력(--keep)")
-    assert "[후보] '압력(bar)'" in str(e.value), str(e.value)                  # 2.9.33: [추천]
+    assert "[후보] 1) '압력(bar)'" in str(e.value), str(e.value)                  # 2.9.33: [추천]
 
 
 @pytest.mark.report
