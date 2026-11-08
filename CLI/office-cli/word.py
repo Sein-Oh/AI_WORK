@@ -93,9 +93,9 @@ PICTURE_MARK = "[그림]"
 
 
 def _replace_inline_pictures(rng: Any, raw: str) -> str:
-    """본문 그림(InlineShape)은 Range.Text에서 한 글자(Word 2007은 '/', 새 버전은 '\\x01')로 나옵니다.
-    그림의 실제 위치에 있는 글자만 [그림]으로 바꿉니다 (본문에 있는 진짜 '/'는 그대로)."""
-    if "\x01" not in raw and "/" not in raw:
+    """본문 그림(InlineShape)은 Range.Text에서 한 글자('\\x01')로 나옵니다.
+    그림의 실제 위치에 있는 그 글자만 [그림]으로 바꿉니다."""
+    if "\x01" not in raw:
         return raw
     try:
         shapes = rng.InlineShapes
@@ -108,7 +108,7 @@ def _replace_inline_pictures(rng: Any, raw: str) -> str:
         return raw
     chars = list(raw)
     for pos in offsets:
-        if 0 <= pos < len(chars) and chars[pos] in ("\x01", "/"):
+        if 0 <= pos < len(chars) and chars[pos] == "\x01":
             chars[pos] = PICTURE_MARK
     return "".join(chars)
 
@@ -1677,6 +1677,10 @@ def cmd_fill(args) -> Dict[str, Any]:
                                       "target_resolved": t.resolved(), "truncated": len(planned) > 50}
             if conflicts:
                 fields["overwrite_cells"] = len(conflicts)
+            if not fields["count"]:          # 바뀔 것 없음 (1.4.83): 실행할 명령을 주지 않음
+                fields.pop("confirm_commands")
+                return rt.ok(TOOL, "fill", f"미리보기: 바뀔 것 없음 (0곳, 이미 같은 값 {len(same)}칸) (바꾸지 않음)",
+                             "VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건). 실행하지 말고 preview를 사용자에게 알리세요.", **fields)
             return rt.ok(TOOL, "fill", f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개"
                          + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else ""),
                          "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고(표 칸은 [행, 열] 글로 맞는 칸인지) 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.",

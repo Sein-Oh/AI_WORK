@@ -116,7 +116,7 @@ def test_write_new_slide_title_placeholder_and_bullets(pp, capsys):
 
 
 def test_write_bullets_set_type_explicitly(pp, capsys):
-    # Visible만 켜면 PowerPoint 2007 글상자는 번호 목록(Type=2)이 되므로 종류를 명시해야 함 (실기 F3)
+    # Visible만 켜면 글상자에 따라 번호 목록(Type=2)이 되므로 종류를 명시해야 함 (실기 F3)
     code, out = run_ppt(capsys, "write", "--slide", "new", "--title", "목록", "--text", "- 안정성\\n1. 확장성\\n설명")
     assert code == 0, out
     body = live(pp["prs"].Slides(4))[1]
@@ -276,21 +276,12 @@ def test_export_empty_file_is_unverified(pp, capsys):
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "0바이트" in out["unverified"][0]
 
 
-def test_export_pdf_ppt2007_without_addin_is_input_error(pp, capsys, monkeypatch):
-    # 추가 기능이 없는 Office 2007은 내보내기를 시도하지 않고 바로 안내
-    monkeypatch.setattr(off, "_office12_pdf_addin", lambda: False)
-    calls = _pdf_export(pp, com_error(*E_FAIL), version="12.0")
+def test_export_pdf_on_office_without_pdf_is_input_error(pp, capsys):
+    # PDF 내보내기가 없는 Office(16 미만)는 내보내기를 시도하지 않고 바로 안내
+    calls = _pdf_export(pp, com_error(*E_FAIL), version="11.0")
     code, out = run_ppt(capsys, "export", "--save", "deck.pdf")
     assert code == 1 and out["error_type"] == "input" and calls == []
-    assert out["agent_directive"].startswith("STOP_RETRY:") and ".pptx" in out["message"]
-
-
-def test_export_pdf_ppt2007_e_fail_with_addin_still_input_error(pp, capsys, monkeypatch):
-    # 추가 기능 파일이 있는데도 E_FAIL이면 시도 후 같은 안내 (설치가 깨진 경우)
-    monkeypatch.setattr(off, "_office12_pdf_addin", lambda: True)
-    calls = _pdf_export(pp, com_error(*E_FAIL), version="12.0")
-    code, out = run_ppt(capsys, "export", "--save", "deck.pdf")
-    assert code == 1 and out["error_type"] == "input" and len(calls) == 1
+    assert out["agent_directive"].startswith("STOP_RETRY:") and ".pptx" in out["message"] and "2007" not in out["message"]
 
 
 def test_export_pdf_e_fail_on_newer_office_is_not_relabelled(pp, capsys):

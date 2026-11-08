@@ -627,6 +627,28 @@ def test_same_meaning_option_gives_fixed_command(data_dir, script, args, want):
     assert not invented & set(fixed), fixed
 
 
+def test_inline_values_in_wrong_option_recommend_i(p1_model, tmp_path):
+    """2.9.74 집 PC opencode: 한 건 예측에서 ml_train의 -x를 쓰거나('-x "온도=180,..."') 값을 -f에 넣거나, 한 건을 파일로 만들려다
+    없는 파일을 -f로 줬을 때 '알 수 없는 옵션'/'파일 없음'만 받아 멈췄음 -> -i로 고친 전체 명령([추천]) 또는 -i 명령(next_commands)."""
+    vals = "온도=180,압력=3,속도=45"
+    # Gemma 4: '--eval "온도=180; 압력=3; ..."' (ml_train 옵션, ; 구분) -> 예전에는 철자만 비슷한 [후보] --vary/--model
+    for args in (["-x", vals], ["--features", vals], ["-f", vals], ["--eval", "온도=180; 압력=3; 속도=45"]):
+        proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], *args)
+        assert proc.returncode in (1, 2) and "[추천]" in res["message"] and "[후보]" not in res["message"], res
+        name, fixed = recommended_command(res["message"])
+        assert name == "ml_predict.py" and fixed[fixed.index("-i") + 1] == vals and args[0] not in fixed, fixed
+        assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
+    missing = str(tmp_path / "새조건.csv")
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-f", missing)
+    assert proc.returncode == 1 and "-i" in res["message"] and "[추천]" not in res["message"], res
+    nxt = res["next_commands"][0]
+    cmd = split_command(nxt["command"])
+    assert nxt["needs_input"] is True and "-f" not in cmd and cmd[cmd.index("-i") + 1].startswith("온도(°C)=<값>"), nxt
+    assert nxt["placeholder"] == "<값>"                                    # 2.9.75: 다른 needs_input 명령과 같은 키
+    assert not mp.looks_inline_input(str(tmp_path)) and not mp.looks_inline_input("a.csv")
+    assert not mp.looks_inline_input("C:\\d\\a=1.csv") and mp.looks_inline_input("반응온도(°C)=182, 압력=3")
+
+
 def test_abbreviations_only_through_the_same_meaning_table(data_dir):
     """allow_abbrev=False: '--data-ro 2'는 --data-row로 몰래 읽지 않고 [후보], '--overwrit'는 어떤 후보도 주지 않음.
     예전에 줄임말로 되던 같은 뜻('--target' = --targets)도 읽지 않고 고친 전체 명령을 [추천] (2.9.71: 한 가지 사용법)."""
@@ -669,3 +691,39 @@ def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
     assert mp.unfinished_payload(mp.Unfinished("단계 9"))["error_type"] == "unfinished_limit"
     mp.continue_clear()
     assert mp._continue_state() == {}
+
+
+def test_missing_prediction_file_typo_gives_numbered_files(p1_model, tmp_path):
+    """2.9.75: 없는 -f가 같은 폴더 파일의 오타면 '-i로 예측' 안내가 아니라 그 파일들을 [후보] 1) 2)와 같은 번호의 전체 명령으로."""
+    shutil.copy(p1_model["f"], tmp_path / "새조건_1차.csv")
+    (tmp_path / "관계없음.txt").write_text("x", encoding="utf-8")
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-f", str(tmp_path / "새조건_1챠.csv"))
+    assert proc.returncode == 1 and "[후보] 1) " in res["message"] and "관계없음" not in res["message"], res
+    assert "next_commands" not in res, res
+    cmd = split_command(res["confirm_commands"][0]["command"])
+    assert cmd[cmd.index("-f") + 1] == str(tmp_path / "새조건_1차.csv"), cmd
+    assert run_tool("ml_predict.py", *cmd[2:])["status"] == "ok"
+
+
+def test_placeholder_or_text_in_inline_numbers_stops(p1_model):
+    """2.9.76 검토: 학습 결과의 '-i "온도=<값>,..."' 틀을 그대로 실행하면 중앙값으로 채운 예측이 VERIFIED로 나갔음 -> 멈추고 값을 물으라고 함."""
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=<값>,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:") and "사용자에게 물은 뒤" in res["message"], res
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=170:190:10,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and "--sweep" in res["message"], res
+    assert run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=180,압력(bar)=3,속도=45")["status"] == "ok"
+    assert mp.re.fullmatch(r"\s*<[^<>]*>\s*", "<값>")                                 # 글자 입력의 <값>도 막는 규칙
+
+
+def test_constant_eval_is_refused(p1_model):
+    """2.9.76 검토: '--eval "온도=182; 압력=3"'(한 건 예측 값을 학습 --eval에 넣은 실수)이 상수 파생변수로 학습되어 최고 버전이 됐음."""
+    proc, res = run_raw("ml_train.py", "-f", p1_model["f"], "-y", "생산량", "--eval", "온도=182; 압력=3")
+    assert proc.returncode == 1 and "상수식" in res["message"] and "ml_predict.py -i" in res["message"], res
+    proc, res = run_raw("ml_train.py", "-f", p1_model["f"], "-y", "생산량", "--eval", "온도 = 압력(bar) * 2")
+    assert proc.returncode == 1 and "데이터 열 '온도(°C)'과(와) 같습니다" in res["message"], res
+
+
+def test_find_goal_in_wrong_option_is_not_turned_into_inputs(p1_model):
+    """2.9.76 검토: '--goal "생산량=60" --vary 온도'가 [추천] -i 생산량=60으로 고쳐져 목표값이 입력으로 들어갔음."""
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "--goal", "생산량=600", "--vary", "온도(°C)")
+    assert proc.returncode == 2 and " -i " not in res["message"], res

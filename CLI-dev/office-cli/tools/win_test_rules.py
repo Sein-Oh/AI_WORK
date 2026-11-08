@@ -11,8 +11,8 @@ import io
 # 러너가 화면에 열어 두고 모든 그룹이 쓰는 테스트 문서
 TEST_DOCS = {"excel": "A.xlsx", "word": "A.docx", "ppt": "A.pptx"}
 
-# 문서가 없는 Office 창의 제목 (Office 2007: "Microsoft Excel", Office 16: "Excel")
-EMPTY_TITLES = ("", "Microsoft Excel", "Excel", "Microsoft PowerPoint", "PowerPoint")
+# 문서가 없는 Office 창의 제목 (Office 16)
+EMPTY_TITLES = ("", "Excel", "PowerPoint")
 
 DISP_E_BADINDEX = 0x8002000B          # Workbooks("A.xlsx") 같은 이름 조회 실패 (문서가 닫힘)
 MK_E_UNAVAILABLE = 0x800401E3         # GetActiveObject 실패 (그 Office 앱이 아예 실행 중이 아님)

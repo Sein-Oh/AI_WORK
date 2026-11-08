@@ -151,10 +151,13 @@ def test_write_missing_sheet_is_not_created_without_flag(xl, capsys):
     code, out = run_excel(capsys, "write", "--sheet", "결과표", "--value", "1")
     assert code == 1 and out["error_type"] == "needs_user_decision"
     assert out["agent_directive"].startswith("STOP_RETRY: 다시 실행하지 마세요.")
-    assert "만들지 물어보세요" in out["agent_directive"]
+    assert "[후보] 중 무엇을 할지 물어보세요" in out["agent_directive"]
     assert "만들라고 답한 경우에만 같은 명령에 --new-sheet" in out["agent_directive"]   # 플래그는 사용자 동의 조건으로만
+    # 1.4.83: 고를 것(새 시트 만들기)도 번호와 전체 명령. 확인 뒤에만 실행하는 confirm_commands (next_commands 아님)
+    assert "[후보] 1) 새 시트 '결과표' 만들기" in out["message"], out
+    assert out["confirm_commands"][-1]["command"].endswith("--new-sheet") and "next_commands" not in out, out
     _no_create_imperative(out)
-    assert "[추천]" not in out["message"] and "[후보]" not in out["message"] and "candidates" not in out
+    assert "[추천]" not in out["message"]
     assert "있는 시트: Sheet1, 요약" in out["message"] and "사용자에게 물어보세요" in out["message"]
     assert sheet_names(wb) == ["Sheet1", "요약"]                       # 새 시트 없음
     code, out = run_excel(capsys, "write", "--range", "'결과표'!A1", "--value", "1")
@@ -175,8 +178,10 @@ def test_write_similar_but_different_sheet_asks_user(xl, capsys):
     # Sheet2를 Sheet1의 오타로 단정해 덮어쓰지 않음: [후보]는 실제 기존 시트만, 새 시트 여부는 사용자에게 물음
     app, wb = xl
     code, out = run_excel(capsys, "write", "--sheet", "Sheet2", "--value", "1")
-    assert code == 1 and out["error_type"] == "needs_user_decision" and out["message"].endswith("[후보] Sheet1")
-    assert out["candidates"] == ["Sheet1"]
+    assert code == 1 and out["error_type"] == "needs_user_decision"
+    assert out["message"].endswith("[후보] 1) 기존 시트 'Sheet1'에 쓰기 2) 새 시트 'Sheet2' 만들기"), out    # 1.4.83: 번호
+    first, new = (split_command(c["command"])[2:] for c in out["confirm_commands"])
+    assert first[first.index("--sheet") + 1] == "Sheet1" and "--new-sheet" not in first and new[-1] == "--new-sheet", out
     assert out["agent_directive"].startswith("STOP_RETRY: 다시 실행하지 마세요.")
     assert "만들라고 답한 경우에만" in out["agent_directive"]
     _no_create_imperative(out)
@@ -195,9 +200,9 @@ def test_scenario10_blank_workbook_sheet9_asks_user(capsys, monkeypatch):
     monkeypatch.setattr(off, "get_active", lambda kind: {"name": wb.Name, "path": "", "app": app, "doc": wb})
     code, out = run_excel(capsys, "write", "--sheet", "Sheet9", "--value", "테스트")
     assert code == 1 and out["error_type"] == "needs_user_decision"
-    assert out.get("candidates", []) == ["Sheet1"] and "[추천]" not in out["message"]
+    assert out.get("candidates", []) == ["기존 시트 'Sheet1'에 쓰기", "새 시트 'Sheet9' 만들기"] and "[추천]" not in out["message"]
     _no_create_imperative(out)
-    assert "Sheet9" in out["agent_directive"] and "물어보세요" in out["agent_directive"]
+    assert "Sheet9" in out["message"] and "물어보세요" in out["agent_directive"]
     assert sheet_names(wb) == ["Sheet1"]
 
 
@@ -965,7 +970,7 @@ def test_chart_numeric_x_becomes_scatter_and_offers_transfer(xl, capsys):
 
 @pytest.mark.parametrize("kind,expected", [("scatter", -4169), ("scatter_lines", 75), ("line", 75), ("column", 51)])
 def test_chart_type_survives_set_source_data(xl, capsys, kind, expected):
-    # 실기 I5: 종류를 SetSourceData 앞에서만 정하면 Excel 2007이 분산형을 74(선+표식)로 바꾸고,
+    # 실기 I5: 종류를 SetSourceData 앞에서만 정하면 Excel이 분산형을 74(선+표식)로 바꾸고,
     # 뒤에서만 정하면 첫 열(x)이 계열로 그려짐. 앞뒤로 모두 정해야 함. 'scatter' 상수도 74로 잘못돼 있었음
     app, wb = xl
     ws = ws_of(wb)
@@ -1787,6 +1792,11 @@ def test_write_cells_dry_run(xl, capsys):
     assert out["confirm_commands"][0]["destructive"] is True  # 11차 검토 (1.4.75): 덮어쓰기·삭제·발송은 destructive (묻지 말고 해도 늘 물음)
     code, out = run_excel(capsys, "write", "--cells", "C8=a; C9=b", "--dry-run")
     assert code == 0 and "destructive" not in out["confirm_commands"][0], out           # 빈 칸만: 덮어쓰기 아님
+    ws.set(8, 3, "a")
+    ws.set(9, 3, "b")
+    code, out = run_excel(capsys, "write", "--cells", "C8=a; C9=b", "--dry-run")    # 1.4.83: 모두 같은 값이면 실행할 명령 없음
+    assert code == 0 and out["count"] == 0 and "confirm_commands" not in out and "바뀔 것 없음" in out["preview"], out
+    assert out["agent_directive"].startswith("VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건)"), out
 
 
 @pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd", "bash"])

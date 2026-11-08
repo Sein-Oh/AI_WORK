@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.73"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.76"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -701,7 +701,8 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
             **{k: v for k, v in exc.extra.items() if k not in ("status", "message", "agent_directive", "error_type")},
             "agent_directive": (
                 "STOP_RETRY: 사용자가 정할 일이 있어 멈췄습니다. message를 그대로 알리고 사용자에게 물으세요. 스스로 실행하지 말고, "
-                "사용자가 그렇게 하라고 하면 next_commands[0].command를 글자 그대로 1번 실행하세요."),
+                "사용자가 그렇게 하라고 하면 next_commands[0].command를 글자 그대로 1번 실행하세요 "
+                "(needs_input: true이면 <...>만 사용자가 준 값으로 바꿔서)."),
         }
     if isinstance(exc, _STOP_RETRY_ERRORS):
         hint = getattr(exc, "hint", None) or hint
@@ -971,6 +972,21 @@ DROP_OPTIONS = {"--json": 0, "--encoding": 1, "--verbose": 0, "--quiet": 0}
 # Never given as a lookalike, even as [후보]: replaces files or retrains everything
 NO_FUZZY_OPTIONS = {"--overwrite", "--best", "--help"}
 _OPTION_TOKEN = re.compile(r"--?[A-Za-z][A-Za-z0-9_-]*")
+# '이름=값,이름=값' (the -i form): a value of this shape after an unknown option or in -f is the -i input (2.9.74, 집 PC
+# opencode: '-x "반응온도=182,..."' copied from ml_train, '-f "반응온도=182,..."')
+_INLINE_PAIRS = re.compile(r"\s*[^=,;\\/:*?\"<>|]+=[^=,;]*(\s*[,;]\s*[^=,;\\/:*?\"<>|]+=[^=,;]*)*\s*")
+
+
+def looks_inline_input(value: Any) -> bool:
+    """True for '이름=값[,이름=값...]' text that is not an existing path (the -i form; pairs split by ';' too, as
+    '--eval "온도=182; 압력=3"' from ml_train: the [추천] value uses ',', AGENTS.md 구분자 규칙)."""
+    text = str(value or "")
+    return bool(text) and "=" in text and not os.path.exists(text) and bool(_INLINE_PAIRS.fullmatch(text))
+
+
+def inline_value(value: str) -> str:
+    """The -i text of looks_inline_input value: pairs joined with ','."""
+    return ",".join(p.strip() for p in re.split(r"[,;]", value) if p.strip())
 
 
 # 스크립트 -> 그 명령을 설명하는 작업별 스킬 (skills/<이름>/SKILL.md, 2.9.71에 스킬 하나를 넷으로 나눔)
@@ -1051,6 +1067,18 @@ class JsonArgumentParser(argparse.ArgumentParser):
                     changes.append(f"{key} -> {real}")
                     fixed.append(real + eq + val)
                     i += 1
+                    continue
+                value = val if eq else (given[i + 1] if i + 1 < len(given) else "")
+                # 목표 찾기(--find/--vary)나 범위('200:280:10')는 -i가 아님 (2.9.76: 목표값·범위를 -i로 [추천]했음)
+                aimed = any(g in given for g in ("--vary", "--find", "--sweep")) or re.search(r"\d\s*:\s*\d", str(value))
+                if "-i" in opts and "-i" not in given and "--input" not in given and not aimed and looks_inline_input(value):
+                    changes.append(f"{key} -> -i ('이름=값' 입력은 -i, 사이는 ,)")  # one meaning: the value form is -i's
+                    if eq:
+                        fixed.append("-i=" + inline_value(val))
+                        i += 1
+                    else:
+                        fixed += ["-i", inline_value(value)]
+                        i += 2
                     continue
                 unknown.append(key)
             fixed.append(a)
@@ -3527,6 +3555,15 @@ def apply_eval_expressions(
             for token, col in token_to_col.items():
                 eval_env[token] = coerce_numeric(df[col]).astype(float)
             _validate_eval_ast(tree, set(eval_env.keys()), columns, target_set)
+            if strict and not token_to_col:
+                # 2.9.76: 열을 하나도 쓰지 않는 상수식('반응온도 = 182')은 파생변수가 아님: 한 건 예측 값을 --eval에 넣은 실수
+                # (그대로 학습하면 상수 열이 생기고 그 이름의 실제 입력이 무시됨)
+                raise InputError(f"--eval '{expr}'은(는) 데이터 열을 쓰지 않는 상수식이라 파생변수가 될 수 없습니다. 학습하지 않았습니다. "
+                                 "조건 하나를 예측하려는 것이면 학습이 아니라 ml_predict.py -i \"이름=값,...\"입니다 (ml-predict 스킬).")
+            same_col = [c for c in columns if c == new_col or _alias_key(c) == _alias_key(new_col)]
+            if strict and same_col:
+                raise InputError(f"--eval의 새 이름 '{new_col}'이(가) 데이터 열 '{same_col[0]}'과(와) 같습니다. 학습하지 않았습니다. "
+                                 "파생변수는 데이터에 없는 새 이름으로 지으십시오 (예: '{0}_변환').".format(strip_unit(new_col)))
 
             with np.errstate(all="ignore"):
                 res_val = eval(compile(tree, "<eval>", "eval"), {"__builtins__": {}}, eval_env)
@@ -4699,6 +4736,67 @@ def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share <= 0.5
 
 
+def check_inline_numbers(df_input: pd.DataFrame, numeric: List[str]) -> None:
+    """-i 숫자 입력의 값이 비었거나 숫자가 아니면 멈춤 (2.9.76): 그대로 두면 중앙값으로 채운 예측이 VERIFIED로 나가 사용자가 준 값처럼
+    보고됨 (학습 결과의 '-i "온도=<값>,..."' 틀을 <값> 그대로 실행, '온도=200:280:10' 같은 범위). 자리표시자면 값을 물으라고 함."""
+    bad: List[str] = []
+    for col in numeric:
+        if col not in df_input.columns:
+            continue
+        raw = df_input[col]
+        text = raw.map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip())
+        wrong = (text != "") & coerce_numeric(raw).isna()     # 빈 값은 원래대로(중앙값 채우기 확인), 글자만
+        bad += [f"{col}={text[i]!r}" for i in raw.index[wrong]]
+    if not bad:
+        return
+    placeholder = any("<" in b and ">" in b for b in bad)
+    sweep = any(re.search(r"\d\s*:\s*\d", b) for b in bad)
+    raise InputError(
+        f"-i의 숫자 입력 값이 숫자가 아닙니다: {', '.join(bad[:10])}. 예측하지 않았습니다 (중앙값으로 채우지 않음). "
+        + ("<값> 자리에 넣을 값을 사용자에게 물은 뒤 그 값으로 바꿔 실행하십시오." if placeholder else
+           "값 여러 개를 차례로 예측하려면 --vary \"<입력>\" --sweep \"<시작>:<끝>:<간격>\"을 쓰십시오 (ml-predict 스킬)." if sweep else
+           "사용자에게 숫자 값을 확인하십시오."))
+
+
+def _check_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, Any]]) -> None:
+    """-f that does not exist (2.9.74, 집 PC opencode): '이름=값' text -> [추천] the command with -i; a file the agent
+    meant to write for one condition -> say that a few conditions go in -i without a file, and give that command
+    (next_commands, needs_input: the model inputs with <값>)."""
+    path = str(args.file)
+    if os.path.exists(path):
+        return
+    base = command_text(drop={"-f": "", "--file": "", "-i": "", "--input": ""})
+    if looks_inline_input(path):
+        cmd = f"{base} -i {quote_arg(inline_value(path))}" if base else None
+        raise InputError("-f에는 데이터 파일 경로를 줍니다. '이름=값' 입력은 -i로 줍니다."
+                         + (f" [추천] {cmd}" if cmd else ""))
+    # a typo of a file in the same folder: [후보] with numbered full commands (2.9.75), the user picks
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        listing = os.listdir(folder)
+        # 학습 데이터(옆에 <이름>_ml_data가 있음)는 새 데이터 후보가 아님 (2.9.76: 학습 파일 전체를 예측하는 명령을 [후보]로 줬음)
+        names = [n for n in listing if os.path.splitext(n)[1].lower() in (".csv", ".xlsx", ".xlsm", ".xls", ".tsv", ".txt")
+                 and f"{os.path.splitext(n)[0]}_ml_data" not in listing]
+    except OSError:
+        names = []
+    near = [os.path.join(folder, n) for n in difflib.get_close_matches(os.path.basename(path), names, n=5, cutoff=0.6)]
+    if near:
+        text, cmds = numbered(near, [command_replacing(str(args.file), c) for c in near], "-f {}")
+        raise InputError(f"입력 데이터 파일을 찾을 수 없습니다: {path}. 같은 폴더의 비슷한 파일: {text}. "
+                         "어느 파일인지 사용자에게 물으십시오 (새 조건 몇 건이면 파일 없이 -i \"이름=값,...\"로 예측합니다).",
+                         extra={"confirm_commands": cmds} if cmds else None)
+    needed, _ = _model_inputs(model_items)
+    template = ",".join(f"{c}=<값>" for c in needed)
+    extra = {}
+    if base and needed:
+        extra["next_commands"] = [{"purpose": "새 조건 한 건 예측 (<값>을 사용자가 준 값으로 바꿈)",
+                                   "command": f"{base} -i {quote_arg(template)}", "needs_input": True, "placeholder": "<값>"}]
+    raise InputError(f"입력 데이터 파일을 찾을 수 없습니다: {path}. 새 조건 몇 건은 파일을 만들지 않고 "
+                     f"-i \"이름=값,...\"로 예측합니다 (모델 입력: {', '.join(needed)}). "
+                     "입력 값을 사용자에게 묻고 next_commands[0]의 <값>을 그 값으로 바꿔 실행하세요.", extra=extra,
+                     error_type="needs_user_decision" if extra else None)
+
+
 def _model_inputs(model_items: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
     """(every raw model input, the numeric ones) over all target models."""
     needed = list(dict.fromkeys(c for it in model_items for c in model_raw_inputs(it["meta"])))
@@ -5299,6 +5397,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         is_inline = True
         source_desc = f"직접 입력 {len(df_input)}건"
     elif args.file:
+        _check_prediction_file(args, model_items)
         df_input = _load_prediction_file(args, model_items)
         is_inline = False
         source_desc = os.path.basename(args.file)
@@ -5355,6 +5454,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                        and c not in meta["feature_schema"].get("datetime", {})}
             check_comma_numbers(df_input.attrs.get("kv_pairs"), lambda k: column_aliases.get(k, k) in num_raw, "-i",
                                 lambda fixed: _predict_command(args, inline=kv_text(fixed)))
+            check_inline_numbers(df_input, sorted(num_raw))
+            holders = [f"{c}={v}" for c in df_input.columns for v in df_input[c].astype(str) if re.fullmatch(r"\s*<[^<>]*>\s*", v)]
+            if holders:                       # 글자·날짜 입력의 <값>도 (2.9.76 2차 검토: 범주 입력은 VERIFIED로 나갔음)
+                raise InputError(f"-i에 자리표시자가 그대로 있습니다: {', '.join(holders[:10])}. 예측하지 않았습니다. "
+                                 "<값> 자리에 넣을 값을 사용자에게 물은 뒤 그 값으로 바꿔 실행하십시오.")
         missing_raw = [c for c in raw_needed if c not in df_input.columns]
         if missing_raw and any(c not in req_features for c in missing_raw):
             available_cols = [str(c) for c in df_input.columns]

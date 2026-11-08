@@ -4,7 +4,7 @@ description: 학습한 모델로 새 조건이나 새 데이터의 값을 예측
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.73"
+  version: "2.9.76"
   platform: windows
 ---
 
@@ -13,7 +13,7 @@ metadata:
 ## 규칙 (ml-kit 공통)
 1. 아래 명령을 그대로 쓰고 `<...>` 부분만 바꾼다. 옵션을 지어내지 않는다. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄을 붙인다.
 2. 명령은 1번 실행하고 마지막 1줄 JSON만 읽는다 (`[PROGRESS]` 줄은 무시). 결과 처리는 전역 지침 4장대로 한다: `CONTINUE:`이면 같은 명령을 다시 실행하고, 그 밖에는 같은 명령을 다시 실행하지 않는다.
-3. 사용자에게는 `preview`, `agent_directive`가 알리라고 한 값, `warnings`, `recovered`를 그대로 알린다. 이어서 할 일은 `next_commands`의 `command`를 글자 그대로 쓴다 (`needs_input: true`이면 `<...>`를 사용자가 준 경로로 바꾸고, 모르면 묻는다).
+3. 사용자에게는 `preview`, `agent_directive`가 알리라고 한 값, `warnings`, `recovered`를 그대로 알린다. 이어서 할 일은 `next_commands`의 `command`를 글자 그대로 쓴다 (`needs_input: true`이면 `<...>`만 사용자가 준 값(파일이면 경로)으로 바꾸고, 모르면 묻는다).
 4. 학습, 보고서, 성능예측표는 몇 분 걸린다. 명령 실행 도구에 시간 제한을 줄 수 있으면 600000으로 준다.
 5. 머리글이 1행이 아니라고 사용자가 말했을 때만 `--header-row <행>`(단위 행은 `--unit-row <행>`)을 붙인다. 그 밖에는 도구가 찾고, 필요하면 `[추천]` 명령을 준다.
 6. 여러 값을 적을 때: 이름 목록과 `이름=값`은 `,`로, 식과 조건 여러 개는 `;`로, 조건의 "또는"은 `|`로 나눈다. 숫자에 천 단위 쉼표를 쓰지 않는다.

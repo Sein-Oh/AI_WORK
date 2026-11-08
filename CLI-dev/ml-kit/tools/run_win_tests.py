@@ -8,7 +8,7 @@
 오프라인 pytest(tests/)가 다루지 못하는, 실제 Windows와 Office에서만 확인되는 항목을 시험합니다.
     - 진짜 Excel이 만든 xlsx(제목/단위 행, 날짜 셀)와 Excel이 저장한 CP949 CSV 입력
     - 입력/출력 파일이 Excel/Word에 열려 잠겨 있을 때
-    - 결과 CSV를 Excel 2007+에서 열 때 한글, 보고서 docx를 Word에서 열 때
+    - 결과 CSV를 Excel에서 열 때 한글, 보고서 docx를 Word에서 열 때
     - next_commands 명령을 cmd.exe / PowerShell에 그대로 넣었을 때 (따옴표, %)
     - 단독 배포 폴더, 학습 강제 종료 뒤 복구, 동시 학습 잠금, 2만 행 처리 시간
     - 모든 호출의 stdout 1줄 JSON / stderr 진행 로그 계약 (에이전트 서브프로세스 조건)

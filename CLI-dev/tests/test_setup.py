@@ -119,6 +119,8 @@ def test_changed_file_is_backed_up_and_check_fails_before_apply(monkeypatch, tmp
     assert "ml_train.py" not in out                     # 스킬 폴더의 .py는 알리지 않음
     test_skill = os.path.join(DEV, "office-cli", "tools", "office-cli-test", "SKILL.md")
     assert su.main(["--config-dir", str(cfg), "--no-path", "--test-skill", test_skill]) == 0
+    # 2026-11-07 집 PC: 복사한 뒤에 버전을 읽어 '다름 (1.4.82 -> 1.4.82)'로 보였음. 옛 버전은 복사 전 것
+    assert "office-excel 스킬: 다름 (1.0.0 -> " in capsys.readouterr().out
     kept = _backups(cli, "config/skills/office-excel/SKILL.md")
     assert len(kept) == 1 and "옛 내용" in kept[0].read_text(encoding="utf-8")
     assert old.read_bytes() == (cli / "office-cli" / "skills" / "office-excel" / "SKILL.md").read_bytes()
@@ -291,6 +293,41 @@ def test_verify_runs_tool_help_and_imports(monkeypatch, tmp_path):
     rep = su.Report()
     su.step_verify(rep)
     assert any("opencode.exe: 없음" in f for f in rep.fails)
+
+
+def test_parse_jsonc_comments_and_trailing_commas():
+    text = '{\n  // 사내 LLM\n  "model": "a//b", /* 막음 */ "x": [1, 2,],\n  "s": "q\\"//",\n}'
+    assert su.parse_jsonc(text) == {"model": "a//b", "x": [1, 2], "s": 'q"//'}
+    assert su.parse_jsonc('{"a": "x, ]", "b": [1,],}') == {"a": "x, ]", "b": [1]}          # 문자열 안의 쉼표는 그대로
+
+
+def test_opencode_config_warns_on_shell_instructions_and_permission(tmp_path, capsys):
+    """집 PC opencode 시험(2026-11-07)에서 결과를 흐린 설정: 셸 cmd, 옛 지침 instructions, 작업 폴더 밖 쓰기 거절."""
+    (tmp_path / "opencode.jsonc").write_text(
+        '{\n // 설정\n "shell": "cmd", "instructions": ["C:/old/AGENTS.md"],\n "permission": {"external_directory": "deny"},\n}',
+        encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    out = capsys.readouterr().out
+    assert rep.warn == 3 and rep.fails == [], out
+    assert '"shell"이 PowerShell이 아닙니다' in out and "C:/old/AGENTS.md" in out and "external_directory" in out
+    (tmp_path / "opencode.jsonc").write_text('{"shell": "powershell", "permission": {"external_directory": "allow"}}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    assert rep.warn == 0
+    for perm in ('"allow"', '{"external_directory": {"*": "allow"}}'):                 # 전체 허용, 경로 패턴별 허용
+        (tmp_path / "opencode.jsonc").write_text('{"permission": %s}' % perm, encoding="utf-8")
+        rep = su.Report()
+        su.step_opencode_config(rep, str(tmp_path))
+        assert rep.warn == 0, perm
+    (tmp_path / "opencode.jsonc").write_text('{"model": "x"}', encoding="utf-8")       # 권한이 없으면 INFO만 (세지 않음)
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    assert rep.warn == 0 and "[INFO] opencode.jsonc에 permission.external_directory가 없습니다" in capsys.readouterr().out
+    (tmp_path / "opencode.jsonc").write_text('{ 깨진', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    assert rep.warn == 1 and rep.fails == []                                       # 못 읽어도 설치를 실패로 보지 않음
 
 
 def test_setup_bat_is_ascii_crlf_and_uses_bundled_python():

@@ -33,8 +33,13 @@ RESULTS = []        # (id, title, status, detail)
 _USER_SEGMENT = re.compile(r"(?i)(\bUsers(?:\\\\|\\|/)+)(?!<사용자>)[^\\/\s\"'<>|:*?]+")
 
 
+# Office 변경 내용·메모의 작성자(Office 사용자 이름): 'author': '홍길동', "author": "홍길동"
+_AUTHOR_VALUE = re.compile(r"""((['"])author\\?\2\s*:\s*\\?['"])(?!<사용자>)[^'"\\]+""")
+
+
 def mask_private(text):
-    return _USER_SEGMENT.sub(lambda m: m.group(1) + "<사용자>", text)
+    text = _USER_SEGMENT.sub(lambda m: m.group(1) + "<사용자>", text)
+    return _AUTHOR_VALUE.sub(lambda m: m.group(1) + "<사용자>", text)
 
 
 def log(msg):
@@ -382,7 +387,7 @@ def new_checks(env, data, book, work):
 
     def d2():
         dry("D2", "닫힌 엑셀 sheet delete --dry-run -> 그대로 -> confirm_commands[0] -> 시트 지움 (Excel)", X, book, "시트지우기.xlsx",
-            ["sheet", "--target", "{p}", "--action", "delete", "--sheet", "데이터"], xl_state)
+            ["sheet", "--target", "{p}", "--action", "delete", "--name", "데이터"], xl_state)
     check("D2", "excel sheet delete --dry-run", d2)
 
     def d3():

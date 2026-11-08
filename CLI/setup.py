@@ -17,6 +17,7 @@ r"""C:\CLI 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\
 2. 시스템 PATH(HKLM)에 <C:\CLI>\python, <C:\CLI>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
 3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep).
+   설정 폴더 opencode.jsonc의 "shell"(PowerShell), "instructions"(다른 지침), permission.external_directory를 WARN/INFO로 알림.
 
 개발용: --test-skill <SKILL.md>  (실기 테스트 보조 스킬, 예: C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md)
 이 스크립트는 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다. exit 0 = 모두 OK, 1 = 실패(또는 --check에서 다름) 있음.
@@ -218,8 +219,9 @@ def step_files(rep, config_dir, backup, check=False, test_skills=()):
         elif state == "지울 것":
             _remove_obsolete(name, dst, config_dir, backup, rep)
         else:
+            text = label(name, src, dst, state)          # 덮어쓰기 전에: 옛 버전 -> 새 버전
             ok = _copy(src, dst, config_dir, backup, state)
-            rep.line("OK" if ok else "FAIL", label(name, src, dst, state) + (" -> 복사함" if ok else " -> 복사 후 내용이 다름"))
+            rep.line("OK" if ok else "FAIL", text + (" -> 복사함" if ok else " -> 복사 후 내용이 다름"))
     src, dst, state = jsonc_state(config_dir)
     if state == "같음":
         rep.line("OK", f"opencode.jsonc: 같음  {dst}")
@@ -411,6 +413,80 @@ def step_verify(rep):
         rep.line("WARN", f"이 폴더가 C:\\CLI가 아닙니다 ({HERE}). 스킬과 전역 지침의 명령은 C:\\CLI 기준입니다")
 
 
+def parse_jsonc(text):
+    """opencode.jsonc -> dict: 문자열 밖의 // 줄 주석, /* */ 주석, 닫는 괄호 앞 쉼표를 빼고 JSON으로 읽음. 못 읽으면 ValueError."""
+    out, i, n, in_str = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif text.startswith("//", i):
+            while i < n and text[i] not in "\r\n":
+                i += 1
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    text, out, in_str = "".join(out), [], False
+    for i, c in enumerate(text):                      # 문자열 밖의, 닫는 괄호 앞 쉼표만 뺌 (문자열 안의 ", ]"는 그대로)
+        if in_str:
+            in_str = not (c == '"' and text[i - 1] != "\\")
+        elif c == '"':
+            in_str = True
+        elif c == "," and text[i + 1:].lstrip()[:1] in ("}", "]"):
+            continue
+        out.append(c)
+    return json.loads("".join(out))
+
+
+def step_opencode_config(rep, config_dir):
+    """설정 폴더의 opencode.jsonc에서 도구 결과를 흐리는 설정을 알림 (집 PC opencode 시험 2026-11-07에서 모두 결과를 흐림). WARN만, 고치지 않음.
+    셸이 PowerShell이 아님(스킬·전역 지침의 명령과 따옴표는 PowerShell 기준), instructions의 다른 지침(전역 지침 AGENTS.md는 설정 폴더에서
+    따로 읽힘: 옛 지침이 섞이면 지금 없는 명령을 씀), 작업 폴더 밖 파일 권한(external_directory가 allow가 아니면 opencode run이
+    작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈춤)."""
+    path = os.path.join(config_dir, "opencode.jsonc")
+    if not os.path.isfile(path):
+        return
+    try:
+        cfg = parse_jsonc(_read(path).decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError) as e:
+        rep.line("WARN", f"opencode.jsonc를 읽지 못해 설정을 확인하지 않았습니다 ({type(e).__name__})  {path}")
+        return
+    if not isinstance(cfg, dict):
+        return
+    shell = cfg.get("shell")
+    if shell is not None and not re.search(r"(?i)powershell|pwsh", json.dumps(shell)):
+        rep.line("WARN", f"opencode.jsonc의 \"shell\"이 PowerShell이 아닙니다 ({json.dumps(shell, ensure_ascii=False)[:80]}). "
+                         "스킬과 전역 지침의 명령은 PowerShell 기준입니다: \"shell\": \"powershell\"로 바꾸세요")
+    extra = cfg.get("instructions")
+    if extra:
+        names = ", ".join(str(x) for x in (extra if isinstance(extra, list) else [extra]))[:200]
+        rep.line("WARN", f"opencode.jsonc의 \"instructions\"에 다른 지침이 있습니다 ({names}). 전역 지침(AGENTS.md)과 다른 옛 지침이 "
+                         "섞이면 지금 없는 명령을 쓸 수 있습니다: 필요 없으면 지우세요")
+    perm = cfg.get("permission")
+    ext = perm if isinstance(perm, str) else (perm or {}).get("external_directory") if isinstance(perm, dict) else None
+    if isinstance(ext, dict) and ext and all(v == "allow" for v in ext.values()):    # 경로 패턴별 허용 {"*": "allow"}
+        ext = "allow"
+    if ext is None:
+        rep.line("INFO", "opencode.jsonc에 permission.external_directory가 없습니다. opencode 버전에 따라 작업 폴더 밖 쓰기를 묻지 않고 "
+                         "거절할 수 있습니다 (집 PC opencode 1.19.5 run). 그러면 \"permission\": {\"external_directory\": \"allow\"}")
+    elif ext != "allow":
+        rep.line("WARN", f"opencode.jsonc의 permission.external_directory가 {json.dumps(ext, ensure_ascii=False)[:60]}입니다. "
+                         "작업 폴더 밖(예: 바탕 화면의 파일) 쓰기가 막혀 도구 결과 저장이 실패할 수 있습니다: \"allow\"를 검토하세요")
+
+
 # ---------------------------------------------------------------------------
 def main(argv=None):
     try:
@@ -437,6 +513,7 @@ def main(argv=None):
         step_path(rep, backup, args.check)
     print("[INFO] 3. 동작 확인", flush=True)
     step_verify(rep)
+    step_opencode_config(rep, cfg)
     if os.path.isdir(backup):
         print(f"[INFO] 이전 파일 보관: {backup}", flush=True)
     bad = len(rep.fails) + len(rep.diffs)

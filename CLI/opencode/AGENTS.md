@@ -2,7 +2,7 @@
 
 ## 1. 언어와 표기
 1. 답변, 설명, 코드 주석, 새로 만드는 문서는 모두 한국어로 쓴다. 명령어, 파일 경로, 옵션 이름은 원문 그대로 쓴다.
-2. 이모지를 쓰지 않는다. 표시가 필요하면 `[OK]`, `[주의]`, `->` 처럼 글자로 쓴다.
+2. 이모지와 장식 기호(화살표 모양 문자, 체크 표시, 별, LaTeX 기호 `$\downarrow$` 등)를 쓰지 않는다. 화살표는 `->`, 표시는 `[OK]`, `[주의]`처럼 글자로 쓴다. 도구 결과의 `->`도 그대로 옮긴다.
 
 ## 2. 이 PC 환경
 - Windows 11, 셸은 PowerShell이다.
@@ -32,14 +32,15 @@
 
 1. 위 작업은 스킬 명령으로만 한다. pandas, openpyxl, python-docx, win32com 등으로 파이썬 코드를 직접 짜서 하지 않는다.
    파일 내용이나 행 수 확인도 스킬로 한다: 엑셀/CSV는 `excel.py read --target "<파일>"`, 그 밖의 문서는 `reader.py read --file "<파일>"`.
-2. 도구는 `C:\CLI\ml-kit`, `C:\CLI\office-cli`에 있다. SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
+2. 도구는 `C:\CLI\ml-kit`, `C:\CLI\office-cli`에만 있다 (다른 폴더의 경로, 예: `C:\CLI-dev`는 데이터 위치일 뿐이다). SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
    - office-cli: `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\office-cli\skills\office-excel\SKILL.md`)
    - ml-kit: `C:\CLI\ml-kit\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\ml-kit\skills\ml-train\SKILL.md`)
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
+   실행하는 .py는 SKILL.md 표에 있는 것뿐이다 (`tools\` 같은 다른 스크립트는 없다. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py -i`).
 5. 명령은 1번만 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]`, `[INFO]`, `[WARN]` 줄은 무시한다.
-6. JSON에 `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다(작은따옴표 `'...'`와 `\"`도 바꾸지 않는다). 명령을 새로 만들지 않는다.
+6. JSON에 `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다(작은따옴표 `'...'`와 `\"`도 바꾸지 않는다, `needs_input: true`이면 `<...>`만 사용자가 준 값(파일이면 경로)으로 바꾼다). 명령을 새로 만들지 않는다.
    예외: `confirm_commands`(메일 발송, 미리보기 뒤 실제 변경, 다른 문서에 넣기)는 바로 실행하지 않는다. 무엇을 할지(받는 사람·제목, `planned`)를
    사용자에게 보여 주고 "예"를 받은 뒤에만 그 `command`를 글자 그대로 1번 실행한다. 사용자가 이번 요청에서 이미
    "묻지 말고 끝까지" 하라고 했으면 다시 묻지 않는다. 단 `"destructive": true`인 항목(덮어쓰기·삭제·메일 발송, 5장)은 그래도 늘 묻는다.
@@ -54,8 +55,8 @@
 | `UNVERIFIED:` | 실행은 됐지만 도구가 결과를 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
 | `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `CONTINUE:`가 아닌 결과가 나올 때까지 반복한다 (느린 PC에서는 100번 넘게 걸릴 수 있음). 횟수는 세지 않는다: 끝나지 않을 것 같으면 도구가 `STOP_RETRY:`로 멈춘다. |
 | `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤의 명령을 글자 그대로 **1번만** 실행한다. 또 실패하면 message를 그대로 알린다. |
-| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). `[후보] 1) a 2) b`처럼 번호가 있으면 사용자가 고른 번호의 `confirm_commands`(첫째 = `confirm_commands[0]`)를 글자 그대로 1번 실행한다. 번호가 없으면 스킬의 안내대로 고른 값으로 1번 실행한다. |
-| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `error_type`이 `needs_user_decision`이면 사용자에게 묻고, 원할 때만 `next_commands[0].command`를 그대로 1번 실행한다 (없으면 directive가 말한 옵션을 붙여 1번, 5장). |
+| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). `[후보] 1) a 2) b`처럼 번호가 있으면 사용자가 고른 번호의 `confirm_commands`(첫째 = `confirm_commands[0]`)를 글자 그대로 1번 실행한다. 번호가 없으면 명령에서 그 값만 사용자가 고른 값으로 바꿔 1번 실행한다. |
+| `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `error_type`이 `needs_user_decision`이면 사용자에게 묻고, 원할 때만 `confirm_commands`(번호가 있으면 고른 번호) 또는 `next_commands[0]`의 command를 그대로 1번 실행한다 (둘 다 없으면 directive가 말한 옵션을 붙여 1번, 5장). |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |
 
 - JSON에 `recovered`가 있으면 (예: 파일이 열려 있어 새 이름으로 저장) 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.

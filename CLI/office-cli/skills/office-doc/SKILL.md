@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 본문
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.81"
+  version: "1.4.83"
   platform: windows
 ---
 
@@ -34,7 +34,7 @@ metadata:
 | PPT 읽기 | `python "C:\CLI\office-cli\ppt.py" read [--slides 1-3]` |
 | PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용; 제목:내용"` |
 | PPT 발표자 노트 | 읽기 `python "C:\CLI\office-cli\ppt.py" notes [--slides 1-3]` / 쓰기 `python "C:\CLI\office-cli\ppt.py" notes --slide 3 --text "<노트>"` (있던 노트에 덧붙이기 `--append`, 여러 줄 `--file "<노트.md>"`) |
-| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action add|duplicate|delete|move --slide N [--dest M] [--layout title|text|title_only|blank]` |
+| PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action <add/duplicate/delete/move> --slide N [--dest M] [--layout <title/text/title_only/blank>]` |
 | PPT 기타 | `python "C:\CLI\office-cli\ppt.py" replace --find <A> --replace <B>` / `python "C:\CLI\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\CLI\office-cli\ppt.py" info --detail --slides N` |
 | 엑셀 차트를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` |
 | 엑셀 범위를 워드/PPT 표로 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --range A1:D10 --to-app word` |
@@ -43,7 +43,6 @@ metadata:
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
-- `[후보]`를 고르면: 앵커·장절은 `--occurrence 번호`, 문서는 message가 말한 옵션(`--target`, `--to-target`, `--from-target`)에 전체경로.
 - transfer는 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 준다.
 - `info --detail`의 `layout_warnings`가 있으면 `warnings`를 알린다.
 - 슬라이드 삭제, `slide --action clear --all-slides`, `--overwrite`(기존 노트·슬라이드 제목·표 칸 덮어쓰기)는 사용자가 요청했을 때만.

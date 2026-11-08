@@ -820,7 +820,7 @@ def test_resolve_folder_paths_and_suggestion():
     assert outlook.resolve_folder(ns, "받은 편지함 > 프로젝트").Name == "프로젝트"
     with pytest.raises(rt.InputError) as ei:
         outlook.resolve_folder(ns, "받은 편지함\\프로젝")
-    assert "[후보] 받은 편지함\\프로젝트" in str(ei.value) and "[추천]" not in str(ei.value)   # 후보도 전체 경로
+    assert re.search(r"\[후보\] (1\) )?받은 편지함\\프로젝트", str(ei.value)) and "[추천]" not in str(ei.value)   # 후보도 전체 경로 (실행 중인 명령이 있으면 번호)
     assert outlook.resolve_folder(ns, "inbox\\프로젝트").Name == "프로젝트"                   # 기본 폴더 별칭으로 시작
 
 
@@ -1042,8 +1042,8 @@ def test_read_shows_attachment_names_and_download_command(ol_env, capsys):
     code, out = run_outlook(capsys, "read", "--id", "M1")
     assert code == 0 and out["attachment_names"] == ["견적서.pdf"] and out["attachment_names_truncated"] is False
     assert out["inline_images"] == 1
-    assert [c["purpose"] for c in out["next_commands"]] == ["첨부 내려받기"]
-    assert out["next_commands"][0]["command"].endswith("attachments --id M1 --save")
+    assert [c["purpose"] for c in out["confirm_commands"]] == ["첨부 내려받기 (사용자가 원할 때만)"]  # 1.4.83: 내려받기는 확인 뒤에만
+    assert out["confirm_commands"][0]["command"].endswith("attachments --id M1 --save")
     assert "saved_attachments" not in out and not os.path.exists(_default_root(ol_env))   # 읽기만으로 저장하지 않음
 
 
@@ -1051,7 +1051,7 @@ def test_read_save_puts_word_command_first(ol_env, capsys):
     _attach_mail(ol_env, FakeAttachment("a.pdf"))
     code, out = run_outlook(capsys, "read", "--id", "M1", "--save")
     # 워드에 넣기는 열린 문서를 바꿈: confirm_commands, next_commands는 첨부 내려받기만 (1.4.75, 11차 검토)
-    assert code == 0 and [c["purpose"] for c in out["next_commands"]] == ["첨부 내려받기"]
+    assert code == 0 and [c["purpose"] for c in out["confirm_commands"]][-1] == "첨부 내려받기 (사용자가 원할 때만)"   # 워드 넣기 다음
     assert "word.py" in out["confirm_commands"][0]["command"] and "confirm_commands" in out["agent_directive"]
 
 
@@ -1059,7 +1059,7 @@ def test_current_caps_attachment_names(ol_env, capsys):
     _attach_mail(ol_env, *[FakeAttachment(f"f{i:02d}.pdf") for i in range(25)], entry="SEL")
     code, out = run_outlook(capsys, "current")
     assert code == 0 and len(out["attachment_names"]) == 20 and out["attachment_names_truncated"] is True
-    assert "attachments --id SEL --save" in out["next_commands"][0]["command"]
+    assert "attachments --id SEL --save" in out["confirm_commands"][0]["command"]
 
 
 def test_read_without_attachments_has_no_download(ol_env, capsys):
@@ -1161,7 +1161,7 @@ def test_list_attachments_with_index_size_inline(ol_env, capsys):
                                      "blocked": False}
     assert out["attachments"][1]["hidden_inline"] is True and out["attachments"][2]["blocked"] is True
     assert out["truncated"] is False and "saved" not in out
-    assert out["next_commands"][0]["command"].endswith("attachments --id M1 --save")
+    assert out["confirm_commands"][0]["command"].endswith("attachments --id M1 --save")
     assert not os.path.exists(_default_root(ol_env))                     # 목록만: 아무것도 저장하지 않음
 
 
@@ -1169,7 +1169,7 @@ def test_list_uses_selected_mail_without_id(ol_env, capsys):
     _attach_mail(ol_env, FakeAttachment("a.pdf"), entry="SEL")
     code, out = run_outlook(capsys, "attachments")
     assert code == 0 and out["count"] == 1 and out["mail"]["entry_id"] == "SEL"
-    assert "attachments --id SEL --save" in out["next_commands"][0]["command"]    # 다음 명령은 id로 고정
+    assert "attachments --id SEL --save" in out["confirm_commands"][0]["command"]    # 다음 명령은 id로 고정
 
 
 def test_zero_attachments_is_explicit(ol_env, capsys):

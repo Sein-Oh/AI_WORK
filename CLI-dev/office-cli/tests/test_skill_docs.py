@@ -162,8 +162,8 @@ def test_skill_commands_and_options_exist_in_argparse():
                 if act is None:
                     problems.append(f"{name} {no}행: {script} {sub}에 {opt} 없음")
                     continue
-                if act.choices and val and "|" in val:
-                    bad = [v for v in val.split("|") if v not in act.choices]
+                if act.choices and val and val.startswith("<") and "/" in val:      # 1.4.83: 고르기는 <a/b> (| 는 PowerShell 파이프)
+                    bad = [v for v in val.strip("<>").split("/") if v not in act.choices]
                     if bad:
                         problems.append(f"{name} {no}행: {script} {sub} {opt}의 선택지에 {bad} 없음")
             else:       # 스크립트·명령을 알 수 없는 옵션 (규칙 절의 `--target` 등): 어느 명령에든 있어야 함
@@ -199,11 +199,11 @@ def test_every_command_is_in_some_skill():
 def test_skill_mentions_new_and_existing_features():
     """스킬에 기존 기능과 새 기능이 모두 있음 (경량 LLM은 스킬에 없는 기능을 '지원 안 함'으로 답함). 기능마다 맡은 스킬에."""
     need = {
-        "office-excel": ("sheet --action add|rename|copy|delete", "--new-name", "range --action freeze", "export --save",
-                         "--number-format", "--all-sheets", "--type column|bar|line|pie|scatter|area", "--action insert|delete",
+        "office-excel": ("sheet --action <add/rename/copy/delete>", "--new-name", "range --action <freeze", "export --save",
+                         "--number-format", "--all-sheets", "--type <column/bar/line/pie/scatter/area>", "--action <insert/delete>",
                          "--dry-run", "--action sort", "--by", "--where \"", "--formulas", "--cells", "comment --action add",
                          "office.py\" undo", "transfer --from-app excel --chart"),
-        "office-doc": ("slide --action add|duplicate|delete|move", "--toc", "--callout", "--highlight yellow", "fill --target", "--slots",
+        "office-doc": ("slide --action <add/duplicate/delete/move>", "--toc", "--callout", "--highlight yellow", "fill --target", "--slots",
                        "outline", "revisions", "notes --slide", "--page-number", "transfer --from-app word --what text",
                        "office.py\" undo", "focus --app"),
         "office-mail": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
@@ -218,3 +218,14 @@ def test_skill_mentions_new_and_existing_features():
         text = _read(SKILL_FILES[name])
         for needle in needles:
             assert needle in text, (name, needle)
+
+
+def test_no_pipe_alternatives_in_templates():
+    """1.4.83 검토: 템플릿의 'freeze|unfreeze'를 그대로 베끼면 따옴표 밖의 |가 PowerShell 파이프가 됨 -> 고르기는 <a/b>."""
+    bad = []
+    for name, path in SKILL_FILES.items():
+        for no, line in enumerate(open(path, encoding="utf-8").read().splitlines(), 1):
+            for span in re.findall(r"`([^`]+)`", line):
+                if re.search(r"(--[a-z-]+\s+)[a-z_]+\|[a-z_]", _QUOTED.sub("", span)):
+                    bad.append(f"{name} {no}: {span[:80]}")
+    assert not bad, bad

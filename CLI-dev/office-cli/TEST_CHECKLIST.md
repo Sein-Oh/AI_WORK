@@ -17,7 +17,7 @@ python tools/run_win_tests.py --agent --skip-outlook    :: 에이전트용: --au
 - OpenCode 에이전트에게 맡기기: `C:\CLI-dev\office-cli\tools\office-cli-test` 폴더를 스킬 폴더의 `office-cli` 옆에 복사한 뒤 "office-cli 실기 테스트 돌려줘"라고 요청합니다. 에이전트는 Office 문서를 닫았는지 먼저 묻고, `--agent --skip-outlook`으로 실행해 결과와 `errors_*.txt` 경로를 알려 줍니다. `--agent`에서는 눈 확인 항목이 `MANUAL-SKIP`이 됩니다. 결과 JSON의 `unverified_count`는 도구가 결과를 다시 읽어 확인하지 못한 호출 수이며, 1 이상이면 `agent_directive`가 `UNVERIFIED:`로 시작합니다(통과 아님). `-h`와 인자 오류(없는 그룹 포함, 인자 오류는 exit 2)도 JSON 1줄이고, Ctrl+C는 exit 130입니다.
 - 도구의 캐시(스냅샷, 색인)와 data 폴더는 테스트 폴더의 `_cache`, `_data`를 쓰고, 캐시는 실행마다 비웁니다. 그래서 여러 번 실행해도 undo 결과가 이전 실행에 섞이지 않고, 도구 폴더의 `cache`/`data`도 건드리지 않습니다. (`config.json`의 `--probe` 결과는 도구 폴더에 그대로 저장됩니다.)
 - 끝나면 확인용 그림(A.pptx 슬라이드, A.xlsx 차트)을 테스트 폴더의 `shots\`에 저장하고, 테스트 문서는 저장하지 않고 닫습니다. 열어 두려면 `--keep-open`.
-- 판정: `PASS` / `FAIL` / `MANUAL-SKIP`(`--auto`라 눈 확인 생략) / `ENV-SKIP`(이 PC에 기능이 없음. 예: PDF 추가 기능이 없는 Office 2007의 D1, D4).
+- 판정: `PASS` / `FAIL` / `MANUAL-SKIP`(`--auto`라 눈 확인 생략) / `ENV-SKIP`(이 PC에 기능이 없음).
 
 ## 그룹
 | 그룹 | 확인 내용 |

@@ -149,16 +149,11 @@ def fake_com(monkeypatch):
     return state
 
 
-class _Doc2007:
-    """Word 2007 문서: SaveAs2가 없음 (pywin32 동적 디스패치는 AttributeError)."""
+class _Doc16:
+    """Word 16 문서: SaveAs2로 저장."""
     def __init__(self):
         self.calls = []
 
-    def SaveAs(self, path, **kw):
-        self.calls.append(("SaveAs", path, kw))
-
-
-class _Doc2010(_Doc2007):
     def SaveAs2(self, path, **kw):
         self.calls.append(("SaveAs2", path, kw))
 
@@ -774,7 +769,7 @@ def test_transfer_into_new_file_with_default_sheet_name(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 새 파일의 기본 시트가 여럿(Office 2007/2010: Sheet1~3)이어도 기본 시트 이름으로 받음
+# 새 파일의 기본 시트가 여럿(설정에 따라 Sheet1~3)이어도 기본 시트 이름으로 받음
 # ---------------------------------------------------------------------------
 
 
@@ -1323,10 +1318,10 @@ def test_windows_reports_office_version_and_missing_pdf(monkeypatch, capsys):
     monkeypatch.setattr(off, "open_documents_summary",
                         lambda: [{"app": "Word", "name": "a.docx", "path": "", "saved": True, "active": True}])
     monkeypatch.setattr(off, "running_office_caps",
-                        lambda: {"Word": {"version": "12.0", "major": 12, "pdf_export": False}})
+                        lambda: {"Word": {"version": "11.0", "major": 11, "pdf_export": False}})
     code, out = run_office(capsys, "windows")
     assert code == 0 and out["office"]["Word"]["pdf_export"] is False
-    assert "Office 12.0" in out["preview"] and "PDF 내보내기 불가: Word" in out["preview"]
+    assert "Office 11.0" in out["preview"] and "PDF 내보내기 불가: Word" in out["preview"]
 
 
 # ---------------------------------------------------------------------------
@@ -1530,29 +1525,24 @@ def test_excel_file_read_uses_dedicated_instance_readonly(tmp_path, fake_com):
     assert app.quit_called
 
 
-def test_word_save_as_falls_back_to_saveas_on_word2007():
-    old, new = _Doc2007(), _Doc2010()
-    off.word_save_as(old, "C:/x/a.docx", 16)
-    off.word_save_as(new, "C:/x/a.docx", 16)
-    off.word_save_as(new, "C:/x/b.docx")
-    assert old.calls == [("SaveAs", "C:/x/a.docx", {"FileFormat": 16})]
-    assert new.calls == [("SaveAs2", "C:/x/a.docx", {"FileFormat": 16}), ("SaveAs2", "C:/x/b.docx", {})]
+def test_word_save_as_uses_saveas2():
+    doc = _Doc16()
+    off.word_save_as(doc, "C:/x/a.docx", 16)
+    off.word_save_as(doc, "C:/x/b.docx")
+    assert doc.calls == [("SaveAs2", "C:/x/a.docx", {"FileFormat": 16}), ("SaveAs2", "C:/x/b.docx", {})]
 
 
-@pytest.mark.parametrize("version,addin,expected", [
-    ("16.0", False, True), ("14.0", False, True), ("12.0", False, False), ("12.0", True, True), ("11.0", True, False)])
-def test_office_caps_pdf_export(monkeypatch, version, addin, expected):
-    monkeypatch.setattr(off, "_office12_pdf_addin", lambda: addin)
+@pytest.mark.parametrize("version,expected", [("16.0", True), ("14.0", True), ("11.0", False)])
+def test_office_caps_pdf_export(version, expected):
     app = type("App", (), {"Version": version})()
     caps = off.office_caps(app)
     assert caps["version"] == version and caps["major"] == int(float(version)) and caps["pdf_export"] is expected
 
 
-def test_require_pdf_export(monkeypatch):
-    monkeypatch.setattr(off, "_office12_pdf_addin", lambda: False)
+def test_require_pdf_export():
     with pytest.raises(rt.InputError) as ei:
-        off.require_pdf_export(type("App", (), {"Version": "12.0"})(), ".docx")
-    assert "PDF 내보내기 기능이 없습니다" in str(ei.value) and ".docx" in str(ei.value) and "2007" in str(ei.value)
+        off.require_pdf_export(type("App", (), {"Version": "11.0"})(), ".docx")
+    assert "PDF 내보내기 기능이 없습니다" in str(ei.value) and ".docx" in str(ei.value) and "2007" not in str(ei.value)
     off.require_pdf_export(type("App", (), {"Version": "16.0"})(), ".docx")      # 가능: 예외 없음
     off.require_pdf_export(object(), ".docx")                                    # 버전 모름: 시도하도록 통과
 
@@ -1615,12 +1605,12 @@ def test_sheet_lookup_rules(fake_com):
         assert t.sheet().Name == "매출"
         with pytest.raises(rt.InputError) as ei:
             t.sheet("매출2", create=True)            # 읽기 세션은 만들지 않음
-        assert "[후보] 매출" in str(ei.value) and "[추천]" not in str(ei.value)
+        assert "[후보] 1) 매출" in str(ei.value) and "[추천]" not in str(ei.value)   # 1.4.83: 번호 + --sheet 전체 명령
     with off.open_target("excel", readonly=False, snapshot=False) as t:
         assert t.sheet("신규", create=True).Name == "신규"
         with pytest.raises(rt.InputError) as ei:
             t.sheet("신규2", allow_create=True)       # 쓰기 세션이어도 create 없이는 만들지 않음 (excel write)
-        assert ei.value.candidates == ["신규"] and "--new-sheet" not in str(ei.value)   # 새 시트 여부는 사용자에게 (시나리오 10)
+        assert ei.value.candidates[0] in ("신규", "기존 시트 '신규'에 쓰기") and "--new-sheet" not in str(ei.value)   # 새 시트 여부는 사용자에게 (시나리오 10)
         assert isinstance(ei.value, rt.UserDecisionError) and "--new-sheet" in ei.value.directive
         with pytest.raises(rt.InputError) as ei:
             t.sheet("신규2")                          # --new-sheet가 없는 명령: 찾을 수 없음 [후보], 새 시트 안내 없음 (1.4.12)
@@ -1796,7 +1786,7 @@ def test_password_error_becomes_input_error(tmp_path):
 
 
 def test_word_open_skips_password_for_plain_docx(tmp_path):
-    # Word 2007: ReadOnly + PasswordDocument 조합은 암호 없는 docx도 "명령을 정상적으로 종료할 수 없습니다"로 실패
+    # 암호가 없다고 확인된 docx에는 PasswordDocument를 넘기지 않음
     path = tmp_path / "a.docx"
     path.write_bytes(b"PK\x03\x04 zip")
     app = _WordApp()
@@ -1817,7 +1807,7 @@ def test_word_open_keeps_password_when_unknown_and_reports_office_error(tmp_path
 
 
 def test_word_encrypted_file_error_without_password_word_becomes_input_error(tmp_path, monkeypatch):
-    # Word 2007의 틀린 암호 오류 문구에는 '암호'가 없음
+    # 오류 문구에 '암호'가 없어도 암호 파일이면 암호 오류로 안내
     monkeypatch.setattr(off, "_word_encrypted", lambda p: True)
     with pytest.raises(rt.InputError) as ei:
         off._open_file("word", _WordApp(fail=RuntimeError("명령을 정상적으로 종료할 수 없습니다.")),

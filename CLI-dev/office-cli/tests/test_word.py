@@ -231,14 +231,14 @@ def _bold_texts(d):
 # ---------------------------------------------------------------------------
 
 
-def test_com_units_inline_picture_becomes_marker_not_slash():
-    # Word 2007은 본문 그림을 '/', 새 버전은 '\x01'로 돌려줌 (실기: 'Word 내용' 시트에 '/'가 본문으로 들어감)
+def test_com_units_inline_picture_becomes_marker():
+    # Word는 본문 그림을 '\x01'로 돌려줌. 그림 위치의 그 글자만 [그림]으로 바꾸고 본문의 '/'는 그대로
     doc = type("D", (), {"Paragraphs": [
         _Para(0, "첫 문단\r"),
-        _Para(5, "/\r", pictures=[0]),                     # Word 2007 그림만 있는 단락
-        _Para(7, "그래프 \x01 참고\r", pictures=[4]),        # 새 버전, 글 사이 그림
-        _Para(16, "A/B 비율\r"),                            # 그림 없는 진짜 '/'
-        _Para(23, "A/B /\r", pictures=[4]),                 # 진짜 '/'와 그림이 같은 단락
+        _Para(5, "\x01\r", pictures=[0]),                  # 그림만 있는 단락
+        _Para(7, "그래프 \x01 참고\r", pictures=[4]),        # 글 사이 그림
+        _Para(16, "A/B 비율\r"),                            # 그림 없는 '/'
+        _Para(23, "A/B \x01\r", pictures=[4]),              # '/'와 그림이 같은 단락
     ]})()
     texts = [u["text"] for u in word._com_units(doc)]
     assert texts == ["첫 문단", "[그림]", "그래프 [그림] 참고", "A/B 비율", "A/B [그림]"]

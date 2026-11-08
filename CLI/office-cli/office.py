@@ -788,7 +788,7 @@ def _to_excel(args, rows: List[List[Any]], sheet_base: str) -> Dict[str, Any]:
         existing = rt.find_name(name, names)
         if existing is not None and t.source == "new":
             # 방금 만든 새 파일의 기본 시트(Sheet1 등)와 이름이 같음: 그 빈 시트에 받음 (막으면 빈 새 파일만 남음).
-            # 기본 시트 수는 설정에 따라 여럿(Office 2007/2010은 Sheet1~3)이어도 모두 빈 시트
+            # 기본 시트 수는 설정에 따라 여럿(Sheet1~3 등)이어도 모두 빈 시트
             pass
         elif existing is not None and not args.overwrite:
             # --sheet는 "새 시트 이름": 이미 있는 시트에 A1부터 덮어쓰지 않습니다

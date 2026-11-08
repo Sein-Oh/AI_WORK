@@ -32,7 +32,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 | 실행 명령 | `python`, `python -m pip` 만 사용 (`py`, `python3`, 단독 `pip` 금지). 명령 예시·스킬·배치 파일 포함 |
 | 에이전트 | **OpenCode** CLI 2.2.5 + 26B~30B 경량 LLM(회사 PC: Gemma), 도구는 OpenCode 스킬로 제공. 명령 실행 도구의 시간 제한 120초 |
 | 셸 | Windows PowerShell 5.1 (회사 PC에 pwsh 없음). 도구가 내는 명령의 따옴표는 이 셸 기준 (`quote_arg`) |
-| Office | 회사 PC Office 16, 집 PC Office 2007 (실기 보조). 둘 다에서 동작해야 함 |
+| Office | Office 16만 대상 (회사 PC 2021, 집 PC 2019 실기 보조). 그보다 낮은 버전은 지원하지 않음 |
 | 주요 라이브러리 | pandas 3.0.5, scikit-learn 1.9.0, scipy 1.18.1, numpy/joblib(의존성), openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, matplotlib 3.11.1, seaborn 0.13.2, pymupdf 1.28.2, olefile 0.47, opencv-python 5.0.0.93, PyYAML 6.0.3, python-dateutil 2.9.0.post0, pywin32 312, pytest 9.1.1, pymupdf4llm 1.28.2, fastapi 0.141.1, fastmcp 3.4.7, mcp 1.28.1, langgraph 1.2.11, openai 2.54.0 |
 | 버전 기준 | 이 표. 상세 설명: `docs/ENVIRONMENT.md` |
 
@@ -63,6 +63,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    가능하면 되돌리기 지점을 남긴다 (예: office-cli `undo`).
 7. **판단 대행**: 이름 자동 매칭, 기본값, 자동 상속은 도구가 처리한다 (CLI-dev/README.md 공통 계약 4번).
    오타는 같은 뜻 표(`SAME_MEANING`)로 고칠 수 있을 때만 `[추천]`, 철자만 비슷하면 `[후보]`(사용자에게 물음). 철자 비교만으로 `[추천]`하지 않는다
+   (예외: 가장 가까운 것이 읽기만 하는 명령이면 `[추천]`, 잘못 골라도 바뀌는 것이 없음: office-cli `READ_ONLY_CHOICES`)
    (회사 PC 감사 2026-11-06: `--cell` -> `--all`, `--text` -> `--target`처럼 뜻이 다른 옵션을 LLM이 묻지 않고 실행할 뻔했음).
 
 ## 사용법 단순성 (반드시 지킬 것)
@@ -149,7 +150,6 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   - 파일 크기·내용 비교는 줄 끝과 무관하게 (`core.autocrlf=true`로 받으면 CRLF가 된다).
   - 라이브러리 기본 템플릿(`pptx.Presentation()`, `docx.Document()`)에 기대지 않는다 (문서 보안 프로그램이 지우거나 바꾼다).
   - 긴 매개변수 테스트 id는 자른다 (Windows 환경변수 32767자 한도). 경로는 260자를 넘을 수 있다고 본다.
-  - Office 2007은 UTF-8 BOM CSV를 CP949로 연다 (도구 결과는 정상, 알려진 한계로 둔다).
 
 ## 도구별 규칙
 ### ml-kit

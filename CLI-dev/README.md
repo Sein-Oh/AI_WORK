@@ -34,6 +34,12 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\CLI\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
   시험 폴더(기본 `C:\CLI-dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\CLI-dev\work\gemma_runs_<시각>`에 남깁니다.
   첫 요청에서 세션이 안 생기면 나머지를 보내지 않고 FAIL. 요청 하나의 시간 상한 `--gemma-timeout`(기본 900초). 관리자 권한 창이면 UNVERIFIED에 경고.
+  시험 자료 준비 요청(`setup: true`, S0·S1)은 모델에 보내지 않고 러너가 그 python 명령을 직접 실행합니다 (모델에 보내면 `C:\CLI-dev\ml-kit\tools` 경로를
+  도구 위치로 따라 해 다음 요청이 `C:\CLI-dev\ml-kit\ml_train.py`를 실행함, 집 PC 2026-11-07). 메시지 팩에는 그대로 있습니다.
+  `--gemma-only A1,P1`: 그 요청만 시나리오 순서대로 (준비는 늘 러너가 먼저, 고르지 않은 요청은 채점에서 세지 않음, 모르는 ID면 아무것도 보내지 않고 FAIL).
+  `--gemma-model <모델>[,<예비 모델>...]`: opencode `--model` 값(예: `openrouter/google/gemma-4-26b-a4b-it`). 공급자 오류가 사용량 제한(429, rate limit, quota)이면
+  제한 기록을 `<ID>.limited<N>.jsonl`로 남기고 다음 모델로 같은 요청을 다시 보내며, 그 뒤 요청도 그 모델로 보냄. 예비가 없으면 UNVERIFIED.
+  요청별로 답한 모델은 기록 폴더 `models.json`, 실행 기록의 "요청별 모델", 채점 보고서 머리에 남음.
   시나리오에 `manual`(사람이 준비할 것)이 있는 요청(O3, Outlook 메일)은 보내지 않고 건너뜀 "수동 전용"으로 남깁니다.
 - `pytest` 단계: 도구 하나의 시간 상한은 `--pytest-timeout`(기본 7200초, 회사 PC에서 ml-kit이 3600초를 넘음). 플러그인 `pytest_live_report.py`(`-p`)가
   실패·오류를 생기는 즉시 `[LIVE] FAILED <id> - <원인>` 줄로 내보내므로, 시간 상한에 끊겨도 그때까지의 실패 이름과 짧은 원인이 결과 파일 실패 목록에 남고

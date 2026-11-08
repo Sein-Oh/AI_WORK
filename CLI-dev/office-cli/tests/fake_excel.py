@@ -159,7 +159,7 @@ def _typed(ws, v):
 
 
 class FakeComment:
-    """칸 메모(이전 방식 메모, Office 2007+). Text(): 읽기, Text(Text=글): 바꾸기, Text(Text=글, Start=n): n번째 글자 앞에 넣기."""
+    """칸 메모(이전 방식 메모). Text(): 읽기, Text(Text=글): 바꾸기, Text(Text=글, Start=n): n번째 글자 앞에 넣기."""
 
     def __init__(self, ws, r, c, text, author="검토자"):
         self.ws = ws
@@ -546,7 +546,7 @@ class FakeChartObject:
             self.series = [Props() for _ in range(max(1, ncols - 1))]
             # 데이터를 넣을 때의 종류 (분산형은 이때 이미 분산형이어야 첫 열을 x값으로 씀)
             self.type_at_source = object.__getattribute__(chart, "_d").get("ChartType")
-            # 실제 Excel 2007: 종류를 먼저 정하고 SetSourceData를 하면 분산형 세부 종류가 74(선+표식)로 바뀜
+            # 실제 Excel(실기 I5): 종류를 먼저 정하고 SetSourceData를 하면 분산형 세부 종류가 74(선+표식)로 바뀜
             if self.type_at_source in (-4169, 75):
                 chart.ChartType = 74
         chart.SetSourceData = set_source
@@ -601,7 +601,7 @@ class FakeSortFields:
 
 
 class FakeSort:
-    """Worksheet.Sort (엑셀 2007 이상): SortFields, SetRange, Header, Apply."""
+    """Worksheet.Sort: SortFields, SetRange, Header, Apply."""
 
     def __init__(self, ws):
         self.ws = ws
