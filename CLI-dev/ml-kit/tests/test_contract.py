@@ -676,7 +676,8 @@ def test_same_meaning_option_gives_fixed_command(data_dir, script, args, want):
     assert proc.returncode == 2 and res["agent_directive"].startswith("STOP_RETRY:") and "[추천]" in res["agent_directive"]
     name, fixed = recommended_command(res["message"])
     assert name == script and all(o in fixed for o in want), fixed
-    invented = {a for a in args if a.startswith("--")} | {"cp949"}
+    real = {"--model", "--input", "--file", "--features", "--targets", "--save"}       # 그 명령의 진짜 옵션은 남음
+    invented = {a for a in args if a.startswith("--") and a not in real} | {"cp949"}
     assert not invented & set(fixed), fixed
 
 

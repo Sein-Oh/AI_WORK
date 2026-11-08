@@ -1936,7 +1936,7 @@ def score_with_excluded(task: str, pipe: Any, info: Dict[str, Any], oof_df: pd.D
     return round(score, 4), pred
 
 
-def _semicolon_names(names: List[str], option: str, long: str, columns: List[str]) -> None:
+def _semicolon_names(names: List[str], option: str, columns: List[str]) -> None:
     """--features '온도;압력' (names joined by ';' instead of ','): when a name with ';' is no column but every piece is one
     (exact or a unique name without its unit) -> STOP_RETRY [추천] the command with ',' (2.9.69). A column whose name
     has ';' is used as is."""
@@ -1952,7 +1952,7 @@ def _semicolon_names(names: List[str], option: str, long: str, columns: List[str
         else:
             fixed.append(n)
     raise InputError(f"{option} '{','.join(names)}'에서 열 이름 사이를 ';'로 나눴습니다. ','로 나눕니다. "
-                     f"[추천] {option_retry(','.join(fixed), option, long)}")
+                     f"[추천] {option_retry(','.join(fixed), option)}")
 
 
 # ------------------------------------------------------------------------------
@@ -2133,10 +2133,9 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     if not feature_names and not auto:
         raise InputError("학습에 투입할 독립변수 목록(--features)이 지정되지 않았거나 파일이 비어 있습니다.")
     columns = [str(c) for c in df_raw.columns]
-    for names, given, opt, long in ((feature_names, feats_in, "--features"),
-                                    (target_names, tgts_in, "--targets")):
+    for names, given, opt in ((feature_names, feats_in, "--features"), (target_names, tgts_in, "--targets")):
         if isinstance(given, str) and names:
-            _semicolon_names(names, opt, long, columns)
+            _semicolon_names(names, opt, columns)
     if not target_names:
         raise InputError("예측할 종속변수 목록(--targets)이 지정되지 않았거나 파일이 비어 있습니다.")
     # --dtypes names resolved like --features / --targets, types checked (the canonical list is what the ledger keeps)
