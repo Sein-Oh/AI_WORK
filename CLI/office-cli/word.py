@@ -1747,6 +1747,8 @@ def cmd_fill(args) -> Dict[str, Any]:
         fields["unchanged"] = len(same)
     if conflicts:
         fields["overwritten"] = len(conflicts)
+    elif args.overwrite:      # 사용법 단순성 4번: 쓰이지 않은 옵션은 받고 warnings로 알림 (집 PC Gemma O5)
+        fields["warnings"] = ["값이 있는 표 칸이 없어 --overwrite로 덮어쓴 칸은 없습니다 (빈 칸과 자리만 채움)"]
     preview = f"자리 {len(places)}개({sum(counts.values())}곳), 표 칸 {len(cells) - len(same)}개를 채웠습니다" \
         + (f" (이미 같은 값 {len(same)}칸은 그대로)" if same else "")
     if problems:

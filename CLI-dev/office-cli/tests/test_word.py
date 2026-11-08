@@ -985,6 +985,17 @@ def test_fill_nonempty_cell_needs_decision_then_overwrite(form_doc, capsys, tmp_
     assert code == 0 and doc.grid_tables[1].grid[2][2] == "2.5 A" and out["overwritten"] == 1, out
 
 
+
+def test_fill_unused_overwrite_is_a_warning(form_doc, capsys, tmp_path):
+    """1.4.90 집 PC Gemma O5: 값이 있는 표 칸이 없는데 --overwrite를 붙임 -> 그대로 채우고(바뀌는 것 없음) 쓰이지 않았다고 warnings."""
+    doc, _ = form_doc
+    f = _vals(tmp_path, "{{업체명}},한빛전자\n표2!R2C3,5.1 V\n")
+    code, out = run_word(capsys, "fill", "--file", f, "--overwrite")
+    assert code == 0 and doc.grid_tables[1].grid[1][2] == "5.1 V" and "overwritten" not in out, out
+    assert any("--overwrite" in w and "덮어쓴 칸은 없습니다" in w for w in out["warnings"]), out
+    code, out = run_word(capsys, "fill", "--file", _vals(tmp_path, "{{시험일}},2026-11-04\n", "b.csv"))
+    assert code == 0 and "warnings" not in out, out
+
 def test_fill_dry_run_changes_nothing(form_doc, capsys, tmp_path):
     doc, points = form_doc
     before = doc.text

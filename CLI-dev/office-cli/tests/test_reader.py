@@ -80,7 +80,7 @@ def make_xlsx(path):
 
 
 def make_pdf(path):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for text in ("Phu Quoc cable car 7.9km", "Safari tour schedule"):
         page = doc.new_page()
@@ -176,7 +176,7 @@ def by_text(units, start):
 
 def make_text_pdf(path, pages, font="korea"):
     """pages: [[(글, 크기, 굵게)], ...]. 표는 ("TABLE", rows) 항목으로 선을 그려 넣습니다."""
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for items in pages:
         page = doc.new_page()
@@ -326,7 +326,7 @@ def _old_cache(src, text="옛날 단락 내용"):
 
 def make_pdf_at(path, pages):
     """pages: [[(x, y, 글, 크기)], ...] 위치를 정해 글을 넣습니다 (A4 595x842)."""
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for items in pages:
         page = doc.new_page()
@@ -354,7 +354,7 @@ def _pixmap(pymupdf):
 
 def _pdf(path, pages):
     """pages: 쪽마다 'text'(본문), 'header'(머리글·쪽 번호만), 'image'(그림만)."""
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for i, kind in enumerate(pages, 1):
         page = doc.new_page()
@@ -414,7 +414,7 @@ def _pix(pymupdf):
 
 
 def _scan_pdf(tmp_path, stamp_page=None, pages=2, scan_all=True):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for i in range(1, pages + 1):
         p = doc.new_page()
@@ -1017,7 +1017,7 @@ def test_long_unit_is_marked_truncated_with_save_command(tmp_path, capsys):
 
 
 def test_partially_scanned_pdf_reports_pages_without_text(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     p = tmp_path / "부분스캔.pdf"
     doc = pymupdf.open()
     doc.new_page().insert_text((72, 72), "first page text", fontname="helv", fontsize=11)
@@ -1124,7 +1124,7 @@ def test_section_filter_uses_section_of_preceding_text():
 
 
 def test_scanned_page_with_bates_footer_is_flagged(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for i in range(1, 5):
         p = doc.new_page()
@@ -1140,7 +1140,7 @@ def test_scanned_page_with_bates_footer_is_flagged(tmp_path, capsys):
 
 
 def test_blank_page_with_recurring_logo_is_not_flagged(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for i in range(1, 5):
         p = doc.new_page()
@@ -1156,7 +1156,7 @@ def test_blank_page_with_recurring_logo_is_not_flagged(tmp_path, capsys):
 
 
 def test_ocr_text_layer_over_image_is_not_flagged(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for i in range(1, 3):
         p = doc.new_page()
@@ -1175,7 +1175,7 @@ def test_ocr_text_layer_over_image_is_not_flagged(tmp_path, capsys):
 
 
 def test_scanned_page_with_stamp_text_is_flagged(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for i in range(1, 5):
         p = doc.new_page()
@@ -1192,7 +1192,7 @@ def test_scanned_page_with_stamp_text_is_flagged(tmp_path, capsys):
 
 
 def test_single_page_scan_with_bates_number_needs_ocr(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     p = doc.new_page()
     p.insert_image(p.rect, pixmap=_pix(pymupdf))
@@ -1205,7 +1205,7 @@ def test_single_page_scan_with_bates_number_needs_ocr(tmp_path, capsys):
 
 
 def test_image_only_pdf_read_says_ocr_needed(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for _ in range(2):
         p = doc.new_page()
@@ -1219,7 +1219,7 @@ def test_image_only_pdf_read_says_ocr_needed(tmp_path, capsys):
 
 
 def test_ocr_layer_with_little_text_is_not_flagged(tmp_path, capsys):
-    import pymupdf
+    pymupdf = reader._import_pymupdf()           # 메시지는 그때의 stderr로 (1.4.90)
     doc = pymupdf.open()
     for i in range(1, 3):
         p = doc.new_page()
@@ -3333,3 +3333,18 @@ def test_number_safety_net_checks_time_every_unit(monkeypatch):
 def test_spec_number_comma_needs_three_digits(text, want):
     # 7차 검토 [경미]: 쉼표 뒤가 3자리 묶음이 아니면 수치로 보지 않음 ('1,5'가 1이나 5로 읽히지 않게)
     assert [c["lo"] for c in reader.spec_conditions(text)] == want
+
+
+def test_pymupdf_messages_follow_the_current_stderr():
+    """1.4.90: pymupdf는 메시지 출력 스트림 객체를 기억함. 그때의 sys.stderr를 주면 그것이 닫힌 뒤(같은 프로세스의 시험 캡처)
+    메시지를 쓰다 'I/O operation on closed file' (집 PC 저장소 전체 pytest에서 diag 시험의 pymupdf import가 실패했음)."""
+    import io
+    real, tmp = sys.stderr, io.StringIO()
+    sys.stderr = tmp
+    try:
+        pymupdf = reader._import_pymupdf()
+    finally:
+        sys.stderr = real
+    tmp.close()
+    pymupdf.message("closed stderr test")          # 닫힌 tmp가 아니라 지금의 stderr로 감
+
