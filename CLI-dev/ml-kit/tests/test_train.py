@@ -612,9 +612,9 @@ def test_exclude_where_in_retrain_commands(tmp_path):
         champion={"weak_features": ["c"], "top_features": [{"feature": "a"}, {"feature": "b"}]},
         schema={"numeric": ["a", "b", "c"]}, mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"),
         exclude_where="a > 1; 라인 = 'B|C'")
-    retrain = [c["command"] for c in cmds if "ml_train.py" in c["command"]]
-    assert retrain and all(split_command(c)[split_command(c).index("--exclude-where") + 1] == "a > 1; 라인 = 'B|C'"
-                           for c in retrain), retrain
+    retrain = [c["command"] for c in cmds if "ml_train.py" in c["command"] and not c["needs_input"]]   # 틀은 '<앞 조건>; <조건>'
+    assert len(retrain) == 2 and all(split_command(c)[split_command(c).index("--exclude-where") + 1] == "a > 1; 라인 = 'B|C'"
+                                     for c in retrain), retrain
 
 
 def test_exclude_where_errors(tmp_path):
