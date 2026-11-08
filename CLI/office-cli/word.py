@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _office as off  # noqa: E402
 import _runtime as rt  # noqa: E402
+import _markdown as md  # noqa: E402
 
 TOOL = "word"
 
@@ -142,7 +143,6 @@ def _com_units(doc: Any, with_start: bool = False) -> List[Dict[str, Any]]:
 WD_PAGE_NUMBER = 3          # wdActiveEndPageNumber: 문서 처음부터 센 실제 쪽 (PDF 뷰어의 쪽과 같음)
 OUTLINE_MAX = 200           # outline 한 번에 보여 줄 제목 수
 LIST_MAX = 100              # comment/revisions 한 번에 보여 줄 항목 수
-PLAN_MAX = 50               # --dry-run 미리보기(planned)에 보여 줄 항목 수
 _SPEC_RE = re.compile(r"\d+(?:-\d*)?")
 
 
@@ -656,6 +656,8 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
 def cmd_comment(args) -> Dict[str, Any]:
     # --action add를 빠뜨리고 메모 내용만 준 경우: 목록을 보여 주고 "완료"라고 하면 LLM이 메모를 단 것으로 오해합니다
     if args.action == "add" or args.anchor or args.text is not None or args.file:
+        if args.dry_run:
+            raise rt.dry_run_unsupported(TOOL, "comment --action add")
         with off.open_target("word", args.target, readonly=False, focus=not args.no_focus,
                              tool=TOOL, command="comment") as t:
             return _comment_add(args, t)
@@ -663,8 +665,8 @@ def cmd_comment(args) -> Dict[str, Any]:
         total = int(t.doc.Comments.Count)
         items = _read_comments(t.doc, _window(total, args.start))
         resolved = t.resolved()
-    return _list_result(resolved["name"], "comment", "검토 메모", items, total, args.start, args.target,
-                        target_resolved=resolved)
+    return rt.dry_run_read_only(_list_result(resolved["name"], "comment", "검토 메모", items, total, args.start, args.target,
+                                             target_resolved=resolved), args.dry_run, "comment list")
 
 
 WD_REVISION = {1: "삽입", 2: "삭제", 3: "서식 변경", 4: "단락 번호 변경", 5: "필드 표시 변경", 6: "조정", 7: "충돌",
@@ -730,11 +732,11 @@ class Writer:
         return para
 
     def text(self, text: str, style: Optional[int] = None) -> None:
-        plain, spans = rt.split_bold(text)
+        plain, spans = md.split_bold(text)
         self._para(plain, style, spans)
 
     def heading(self, level: int, text: str) -> None:
-        self._para(rt.plain_heading(text), heading_style(level))   # 제목은 모든 수준이 ** __를 뺀 글 (굵기가 섞이지 않음)
+        self._para(md.plain_heading(text), heading_style(level))   # 제목은 모든 수준이 ** __를 뺀 글 (굵기가 섞이지 않음)
         self.created.append(f"제목{level}")
 
     def items(self, items: List[str], numbered: bool) -> None:
@@ -834,7 +836,7 @@ class Writer:
         self.created.append("페이지 나누기")
 
     def markdown(self, text: str) -> None:
-        for kind, payload in rt.parse_markdown_blocks(text):
+        for kind, payload in md.parse_markdown_blocks(text):
             if kind == "heading":
                 self.heading(*payload)
             elif kind in ("paragraph", "code"):
@@ -851,7 +853,7 @@ class Writer:
             elif kind == "break":
                 self.rule()
             elif kind == "front_matter":
-                self.warnings.append(rt.front_matter_warning(payload))
+                self.warnings.append(md.front_matter_warning(payload))
                 rt.log("WARN", self.warnings[-1])
 
 
@@ -932,10 +934,22 @@ def _safe_anchor_fix(anchor: str, similar: str, pos: str) -> bool:
     return all(ch in it for ch in a)            # a가 b의 부분 수열 (끼어든 글자만 있음)
 
 
-def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str = "after") -> Any:
-    """앵커 단락 하나. 못 찾으면 비슷한 글을 안내 (확실할 때만 [추천]), 여러 단락에 있으면 고르지 않고 [후보]로 오류."""
+# write --anchor에 문서의 글 대신 위치 낱말을 준 경우 (집 PC Gemma O4 '--anchor "end"'): 문서에 그 글이 없으면 같은 뜻의 위치로 [추천]
+ANCHOR_END_WORDS = {"end", "끝", "문서 끝", "문서끝", "맨 끝", "맨끝", "마지막"}
+ANCHOR_START_WORDS = {"start", "처음", "문서 처음", "맨 앞", "맨앞", "시작"}
+
+
+def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str = "after",
+                      position_words: bool = False) -> Any:
+    """앵커 단락 하나. 못 찾으면 비슷한 글을 안내 (확실할 때만 [추천]), 여러 단락에 있으면 고르지 않고 [후보]로 오류.
+    position_words(write만): 앵커가 'end'·'끝' 같은 위치 낱말이고 문서에 없으면 --anchor를 뺀 명령(문서 끝, 처음은 --pos start)을 [추천]."""
     hits = _anchor_paragraphs(doc, anchor)
     if not hits:
+        word = anchor.strip().lower()
+        if position_words and pos == "after" and (word in ANCHOR_END_WORDS or word in ANCHOR_START_WORDS):
+            fix = rt.retry_command({"--anchor": None, "--pos": "start" if word in ANCHOR_START_WORDS else None})
+            raise rt.InputError(f"문서에서 '{anchor}'을(를) 찾을 수 없습니다. --anchor는 문서의 글을 받습니다. "
+                                f"문서 {'처음' if word in ANCHOR_START_WORDS else '끝'}에 넣는 명령: [추천] {fix}", no_fallback=True)
         similar = _similar_anchor(doc, anchor)
         hint = ""
         if similar and _safe_anchor_fix(anchor, similar, pos):
@@ -980,7 +994,7 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
         return end, "문서 끝"
     if _find_len(anchor) > FIND_MAX:
         raise rt.InputError(f"--anchor는 {FIND_MAX}자 이하여야 합니다(^는 2자로 셈). 앵커 단락의 앞부분 일부만 쓰세요.", no_fallback=True)
-    para = _anchor_paragraph(doc, anchor, occurrence, pos)
+    para = _anchor_paragraph(doc, anchor, occurrence, pos, position_words=True)
     if _in_table(para):
         # 셀 단락의 End는 다음 셀의 시작이라 그대로 넣으면 옆 칸에 들어감: 표 바깥(표 뒤)에 넣습니다
         if pos != "after":
@@ -1051,9 +1065,9 @@ def cmd_write(args) -> Dict[str, Any]:
             elif args.heading:
                 w.heading(args.heading, content.strip())
             elif args.title:
-                w._para(rt.plain_heading(content.strip()), WD_STYLE_TITLE)
+                w._para(md.plain_heading(content.strip()), WD_STYLE_TITLE)
                 w.created.append("문서 제목")
-            elif rt.looks_like_markdown(content):
+            elif md.looks_like_markdown(content):
                 w.markdown(content)
             else:
                 for para in [p for p in re.split(r"\n\s*\n|\n", content) if p.strip()]:
@@ -1081,16 +1095,6 @@ def cmd_write(args) -> Dict[str, Any]:
                  verified=True, target_resolved=resolved, inserted=w.created, **extra)
 
 
-def _confirm_without_dry_run(purpose: str, destructive: bool) -> Dict[str, Any]:
-    """confirm_commands 항목: 지금 실행한 명령에서 --dry-run만 뺀 전체 명령 (사용자가 '예'라고 하면 그대로 실행)."""
-    argv = [a for a in (rt.CURRENT_ARGV or []) if a != "--dry-run"]
-    return rt.next_command("word.py", argv, purpose, destructive=destructive)
-
-
-DRY_RUN_DIRECTIVE = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
-                     "confirm_commands[0]을 그대로 실행하세요.")
-
-
 def _write_dry_run(args, resolved: Dict[str, Any], where: str, removed: Optional[str], text: Optional[str]) -> Dict[str, Any]:
     """write --dry-run: 넣을 위치와 넣을 것(그리고 --pos replace면 지워질 단락)만 알려 줌."""
     parts: List[str] = []
@@ -1110,10 +1114,9 @@ def _write_dry_run(args, resolved: Dict[str, Any], where: str, removed: Optional
     if removed is not None:
         preview += f". 지워질 단락: '{_preview(removed, 40)}'"
     replace = removed is not None
-    return rt.ok(TOOL, "write", preview + " (바꾸지 않음)", DRY_RUN_DIRECTIVE, dry_run=True, target_resolved=resolved,
-                 count=1, planned=planned, truncated=False,
-                 confirm_commands=[_confirm_without_dry_run("앵커 단락을 지우고 그 자리에 넣기 실행" if replace else "내용 넣기 실행",
-                                                            destructive=replace)])
+    return rt.dry_run_result(TOOL, "write", preview + " (바꾸지 않음)", 1, planned,
+                             rt.dry_run_command(TOOL, "앵커 단락을 지우고 그 자리에 넣기 실행" if replace else "내용 넣기 실행",
+                                                destructive=replace), target_resolved=resolved)
 
 
 def _verify_inserted(doc: Any, start: int, end: int, contents: List[str], mode: str = "auto") -> List[str]:
@@ -1138,23 +1141,23 @@ def _first_inserted(content: str, mode: str) -> str:
     """넣은 글의 첫 글 (Writer가 넣는 모양 그대로: 마크다운 블록은 해석한 글, 코드 줄과 표 칸은 글자 그대로)."""
     if mode == "raw":
         return content.strip()
-    if mode == "auto" and rt.looks_like_markdown(content):
-        for kind, payload in rt.parse_markdown_blocks(content):
+    if mode == "auto" and md.looks_like_markdown(content):
+        for kind, payload in md.parse_markdown_blocks(content):
             if kind == "heading":
-                return rt.plain_heading(payload[1])
+                return md.plain_heading(payload[1])
             if kind == "paragraph":
-                return rt.split_bold(payload)[0]
+                return md.split_bold(payload)[0]
             if kind == "code":
                 return payload                      # 펜스 줄은 넣지 않고 코드는 글자 그대로
             if kind in ("bullets", "numbered"):
-                return rt.split_bold(payload[0])[0]
+                return md.split_bold(payload[0])[0]
             if kind == "table":
                 return "".join(str(c) for c in payload[0])     # 칸은 그대로 넣음 ('\|'는 이미 글자 '|')
         return ""                                   # 구분선(빈 단락)·머리말만 있음
     if mode == "bold":
-        return rt.plain_heading(content.strip())
+        return md.plain_heading(content.strip())
     first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
-    return rt.split_bold(first)[0]
+    return md.split_bold(first)[0]
 
 
 # ==============================================================================
@@ -1363,7 +1366,7 @@ def _replace_dry_run(doc: Any, resolved: Dict[str, Any], mapping: Dict[str, str]
                     same[find] = same.get(find, 0) + 1          # 이미 바꿀 글 그대로: 바뀌지 않음
                 else:
                     n += 1
-                    if len(planned) <= PLAN_MAX:
+                    if len(planned) <= rt.DRY_RUN_SHOW:
                         planned.append(_replace_plan_line(rng, find, rep, fmt))
                     if n >= 5000:
                         limit_hit = True
@@ -1372,24 +1375,21 @@ def _replace_dry_run(doc: Any, resolved: Dict[str, Any], mapping: Dict[str, str]
             if n:
                 counts[find] = counts.get(find, 0) + n
     total = sum(counts.values())
-    fields: Dict[str, Any] = {"dry_run": True, "target_resolved": resolved, "count": total, "by_text": counts,
-                              "planned": planned[:PLAN_MAX], "truncated": len(planned) > PLAN_MAX}
+    extra: Dict[str, Any] = {"target_resolved": resolved, "by_text": counts}
     if same:
-        fields["unchanged_same_text"] = same
+        extra["unchanged_same_text"] = same
     if not total:
         found = sum(same.values())
         why = f"찾은 {found}곳은 이미 바꿀 글과 같습니다" if found else "일치하는 문구가 없습니다"
-        return rt.ok(TOOL, "replace", f"미리보기: 바뀔 것 없음 (0곳), {why} (바꾸지 않음)",
-                     f"VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. count 0: 바뀔 것 없음({why}). "
-                     "실행하지 말고 검색어를 임의로 바꾸지도 말고 사용자에게 알리세요.", **fields)
+        return rt.dry_run_result(TOOL, "replace", f"미리보기: 바뀔 것 없음 (0곳), {why} (바꾸지 않음)", 0, planned, None, **extra)
     if limit_hit:
-        fields["limit_reached"] = True
+        extra["limit_reached"] = True
     more = " 이상" if limit_hit else ""
     preview = (f"미리보기: {total}곳{more} 바뀝니다: "
                + ", ".join(f"'{_preview(k, 20)}' {v}곳 -> '{_preview(mapping[k], 20)}'" for k, v in counts.items())
                + (f" ({fmt})" if fmt else "") + " (바꾸지 않음)")
-    fields["confirm_commands"] = [_confirm_without_dry_run(f"찾아 바꾸기 실행 ({total}곳{more})", destructive=True)]
-    return rt.ok(TOOL, "replace", preview, DRY_RUN_DIRECTIVE, **fields)
+    return rt.dry_run_result(TOOL, "replace", preview, total, planned,
+                             rt.dry_run_command(TOOL, f"찾아 바꾸기 실행 ({total}곳{more})"), **extra)
 
 
 def _count_text(doc: Any, text: str, match_case: bool, whole_word: bool, limit: int = 5000) -> int:
@@ -1428,7 +1428,7 @@ def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
     if ext in (".csv", ".tsv"):
         rows = rt.read_csv_rows(path)
     else:
-        table = next((payload for kind, payload in rt.parse_markdown_blocks(rt.read_text_file(path)) if kind == "table"), None)
+        table = next((payload for kind, payload in md.parse_markdown_blocks(rt.read_text_file(path)) if kind == "table"), None)
         if table is None:
             raise rt.InputError("값 파일에서 표를 찾지 못했습니다. CSV(열: 자리, 값)나 마크다운 표로 만드세요.")
         rows = table
@@ -1672,19 +1672,15 @@ def cmd_fill(args) -> Dict[str, Any]:
             else:
                 planned.append(f"채우기: {ref} (빈 칸 -> {_preview(v, 15)})")
         if args.dry_run:
-            fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(places) + len(cells) - len(same),
-                                      "confirm_commands": [_fill_command(args, ["--overwrite"] if conflicts else [])],
-                                      "target_resolved": t.resolved(), "truncated": len(planned) > 50}
+            count = len(places) + len(cells) - len(same)
+            extra: Dict[str, Any] = {"target_resolved": t.resolved()}
             if conflicts:
-                fields["overwrite_cells"] = len(conflicts)
-            if not fields["count"]:          # 바뀔 것 없음 (1.4.83): 실행할 명령을 주지 않음
-                fields.pop("confirm_commands")
-                return rt.ok(TOOL, "fill", f"미리보기: 바뀔 것 없음 (0곳, 이미 같은 값 {len(same)}칸) (바꾸지 않음)",
-                             "VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건). 실행하지 말고 preview를 사용자에게 알리세요.", **fields)
-            return rt.ok(TOOL, "fill", f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개"
-                         + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else ""),
-                         "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고(표 칸은 [행, 열] 글로 맞는 칸인지) 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.",
-                         **fields)
+                extra["overwrite_cells"] = len(conflicts)
+            preview = (f"미리보기: 자리 {len(places)}개, 표 칸 {len(cells)}개" + (f" (값이 있는 칸 {len(conflicts)}개)" if conflicts else "")
+                       if count else f"미리보기: 바뀔 것 없음 (0곳, 이미 같은 값 {len(same)}칸)")
+            return rt.dry_run_result(TOOL, "fill", preview + " (바꾸지 않음)", count, planned,
+                                     _fill_command(args, ["--overwrite"] if conflicts else []),
+                                     rt.DRY_RUN_DIRECTIVE + " 표 칸은 planned의 [행, 열] 글로 맞는 칸인지 함께 알리세요.", **extra)
         if conflicts and not args.overwrite:
             refs = [f"표{k[0]}!R{k[1]}C{k[2]}" for k, _ in conflicts]
             head = f"값이 있는 표 칸 {len(conflicts)}개가 덮어써집니다: "
@@ -1822,9 +1818,10 @@ def build_cli():
     parser, sub = rt.build_parser(TOOL, "워드 작업")
 
     def common(p, write=False):
-        p.add_argument("--target", "-t", default="active", help="active(기본) | 열린 문서 이름 | 파일 경로")
+        p.add_argument("--target", default="active", help="active(기본) | 열린 문서 이름 | 파일 경로")
         if write:
             p.add_argument("--no-focus", action="store_true", help="작업 후 화면 이동 안 함")
+            p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 것만 미리 보기 (미리보기가 없는 동작은 바꾸지 않고 멈춤, 목록은 그대로 읽음)")
 
     p = sub.add_parser("read", help="내용 읽기")
     common(p)
@@ -1841,10 +1838,10 @@ def build_cli():
 
     p = sub.add_parser("comment", help="검토 메모 목록 보기(list) / 메모 달기(add)")
     common(p, write=True)
-    p.add_argument("--action", "-a", choices=["list", "add"], default="list", help="list(기본): 메모 목록, add: 메모 달기")
+    p.add_argument("--action", choices=["list", "add"], default="list", help="list(기본): 메모 목록, add: 메모 달기")
     p.add_argument("--anchor", help="add: 메모를 달 글 (문서에 있는 그대로)")
     p.add_argument("--text", help="add: 메모 내용. 줄바꿈은 \\n")
-    p.add_argument("--file", "-f", help="add: 메모 내용 파일(.txt/.md) 또는 여러 메모 CSV (열: 기준 글, 메모 내용[, 몇 번째 단락])")
+    p.add_argument("--file", help="add: 메모 내용 파일(.txt/.md) 또는 여러 메모 CSV (열: 기준 글, 메모 내용[, 몇 번째 단락])")
     p.add_argument("--occurrence", type=int, help="add: --anchor가 여러 단락에 있을 때 몇 번째인지 (오류의 [후보] 번호)")
     p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
 
@@ -1860,7 +1857,7 @@ def build_cli():
     p = sub.add_parser("write", help="내용 넣기")
     common(p, write=True)
     p.add_argument("--text", help="넣을 글. 마크다운(# 제목, - 목록, | 표 |, **굵게**)은 Word 서식으로 변환. 줄바꿈은 \\n")
-    p.add_argument("--file", "-f", help="넣을 파일 (.md/.txt는 글, .csv는 표)")
+    p.add_argument("--file", help="넣을 파일 (.md/.txt는 글, .csv는 표)")
     p.add_argument("--image", help="넣을 그림 파일")
     p.add_argument("--width", type=float, help="그림 너비(pt). 생략 시 본문 폭에 맞춤")
     p.add_argument("--heading", type=int, choices=range(1, 7), help="--text를 이 수준의 제목으로")
@@ -1874,7 +1871,6 @@ def build_cli():
     p.add_argument("--pos", choices=["after", "before", "replace", "end", "start"], default="after",
                    help="앵커 기준 위치 (앵커 없으면 end/start만 의미, 기본: 문서 끝)")
     p.add_argument("--theme", help=f"표/요약 상자 색: {', '.join(off.THEMES)}")
-    p.add_argument("--dry-run", action="store_true", help="넣지 않고 넣을 위치와 내용만 미리 보기 (--pos replace면 지워질 단락도)")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)
@@ -1888,14 +1884,12 @@ def build_cli():
     p.add_argument("--color", help="글자색")
     p.add_argument("--size", type=float, help="글자 크기")
     p.add_argument("--highlight", help="형광펜 (yellow, green, pink, blue, red, gray, none)")
-    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 곳만 미리 보기")
 
     p = sub.add_parser("fill", help="서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 채우기")
     common(p, write=True)
     p.add_argument("--slots", help="채울 값 '자리=값; 자리=값' (예: \"업체명=한빛전자; 시험일=2026-11-04; 표2!R3C4=25\")")
-    p.add_argument("--file", "-f", help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25). 많을 때")
+    p.add_argument("--file", help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25). 많을 때")
     p.add_argument("--overwrite", action="store_true", help="값이 있는 표 칸도 덮어쓰기 (사용자가 확인했을 때만)")
-    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 채울 곳만 미리 보기")
 
     p = sub.add_parser("export", help="PDF/DOCX 사본 저장")
     common(p)

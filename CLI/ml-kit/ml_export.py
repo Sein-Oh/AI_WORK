@@ -20,7 +20,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, known_columns, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, quote_arg,

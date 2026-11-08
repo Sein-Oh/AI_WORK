@@ -40,8 +40,6 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   `--gemma-model <모델>[,<예비 모델>...]`: opencode `--model` 값(예: `openrouter/google/gemma-4-26b-a4b-it`). 공급자 오류가 사용량 제한(429, rate limit, quota)이면
   제한 기록을 `<ID>.limited<N>.jsonl`로 남기고 다음 모델로 같은 요청을 다시 보내며, 그 뒤 요청도 그 모델로 보냄. 예비가 없으면 UNVERIFIED.
   요청별로 답한 모델은 기록 폴더 `models.json`, 실행 기록의 "요청별 모델", 채점 보고서 머리에 남음.
-  시험 폴더 밖 쓰기: 요청마다 보내기 전후로 `C:\CLI`(아래 전부, 도구의 `data`·`__pycache__` 제외)와 드라이브 맨 위(바로 아래 이름만)의 목록을 비교해
-  새로 생긴 것만 지우고(시험 전부터 있던 것은 그대로), `outside_writes.json`과 결과 파일 "시험 폴더 밖 쓰기"에 적으며, 채점은 그 요청을 실패로 셈.
   합격 기준은 Gemma 4 26B 결과 (`docs/opencode/실기테스트.md` 3장).
   시나리오에 `manual`(사람이 준비할 것)이 있는 요청(O3, Outlook 메일)은 보내지 않고 건너뜀 "수동 전용"으로 남깁니다.
 - `pytest` 단계: 도구 하나의 시간 상한은 `--pytest-timeout`(기본 7200초, 회사 PC에서 ml-kit이 3600초를 넘음). 플러그인 `pytest_live_report.py`(`-p`)가
@@ -121,7 +119,7 @@ CLI-dev/<tool>/
 ## 공통 런타임 구현 규칙
 
 모든 도구가 같은 문제를 같은 모양으로 풀기 위한 규칙입니다. 도구 폴더는 단독 배포되므로 코드는 공유하지 않고,
-각 도구의 공통 런타임(`ml_predict.py` PART C, `_runtime.py`)에 **같은 이름·같은 동작**으로 구현합니다.
+각 도구의 공통 런타임(ml-kit `_ml_runtime.py`, office-cli `_runtime.py`)에 **같은 이름·같은 동작**으로 구현합니다.
 경량 LLM이 도구마다 다른 키나 문구를 만나지 않게 하는 것이 목적입니다. 키 이름과 directive 첫 단어는 바꾸지 마십시오.
 
 ### R1. 성공 응답과 사후 확인 (`ok()`)
@@ -191,10 +189,11 @@ CLI-dev/<tool>/
   `confirm_commands[0]` = `--dry-run`을 뺀 같은 명령(`next_commands`에 넣지 않음), directive `VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.`
 - 실제 실행은 수행한 파괴적 작업을 같은 형식의 `applied` 목록으로 보고한다.
 - `[추천] <전체 명령>`: 바로 다시 실행할 명령 **하나**. 늘 `python "<스크립트>" ...` 전체 명령이다 (값만 주지 않음, AGENTS.md "사용법 단순성" 2번).
-  LLM은 `[추천]` 뒤의 명령을 그대로 1회 실행한다. 만드는 함수: office-cli `retry_command`·`retry_replacing`(`_runtime.py`), ml-kit `option_retry`·`command_text`·`command_with_value`(`ml_predict.py` PART C).
+  LLM은 `[추천]` 뒤의 명령을 그대로 1회 실행한다. 만드는 함수: office-cli `retry_command`·`retry_replacing`(`_runtime.py`), ml-kit `option_retry`·`command_text`·`command_with_value`(`_ml_runtime.py`).
 - `[후보] 1) a 2) b`(최대 10개): 후보가 둘 이상이라 도구가 고를 수 없을 때. LLM은 재시도하지 않고 사용자에게 고르게 한다. 후보 값을 넣은 전체 명령은
   같은 번호의 `confirm_commands`(사용자가 고른 뒤에만 실행하므로 `next_commands`가 아님, 덮어쓰기·삭제·발송이면 `destructive`). 만드는 함수: office-cli `ambiguous(replace=)`,
-  ml-kit `candidate_commands`. 아직 명령을 만들지 못하는 곳(이름 여러 개가 함께 틀림 등)은 번호 없는 `[후보] a, b`이고 LLM은 스킬의 안내대로 고른 값으로 1번 실행한다 (줄여 갈 대상).
+  ml-kit `numbered`·`ask`(글만 만드는 도우미도 `ask`로 만든 `[후보]`가 든 오류가 같은 번호의 명령을 가짐). `[후보]`는 늘 번호를 붙인다.
+  명령을 만들 수 없는 후보(파일 머리글의 이름, 수식 안의 이름 등)는 번호만 있고 `confirm_commands`가 없으며, LLM은 고른 값으로 1번 실행한다 (줄여 갈 대상).
 - 인자 오류(없는 옵션, 필수 옵션 누락)에서 지어낸 옵션이 같은 뜻의 옵션으로 바꿀 수 있는 것(도구별 표 `SAME_MEANING`)이면 고친 전체 명령을 `[추천]`.
   철자만 비슷한 옵션은 뜻이 다를 수 있어 `[후보]`로만 주고, 되돌리기 어렵거나 뜻이 크게 다른 옵션(`--all`, `--overwrite`, `--to` 등)은 추천하지 않는다.
 - 여러 항목을 받는 인자(`--cells`, `--slots`, `--where`)를 정해진 구분자가 아닌 쉼표·공백 등으로 나눈 것이 분명하면 쓰지 않고 고친 값·명령을 `[추천]`

@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_sample  # noqa: E402
 from mlkit_helpers import shell_sim, split_command, FEATURES, HAS_DOCX, INLINE, KIT, TARGET, recommended_command, run_fail, run_raw, run_tool  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 
 
 # ---- 학습 -> 예측 -> 보고서 기본 흐름 (make_sample 데이터, 모듈에서 한 번 학습) --------
@@ -188,16 +188,18 @@ def test_predict_missing_inputs_offer_median_fill(trained):
     assert ok["predictions_summary"][TARGET]["predictions"] and not ok.get("missing_input_warning")
     # a misspelled key is not filled: the usual [후보] for the name
     bad = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함럄=20")
-    assert bad["error_type"] == "input" and "[후보]" in bad["message"], bad
+    assert bad["error_type"] == "needs_user_decision" and "[후보] 1) " in bad["message"] and bad["confirm_commands"], bad
 
 
 def test_train_target_in_features_offers_both_commands(trained):
-    """2.9.55: a target also in -x -> [후보] of two full commands (out of -y / out of -x), also in next_commands."""
+    """2.9.55: a target also in -x -> [후보] of two full commands (out of -y / out of -x). The user picks: they are
+    confirm_commands (needs_user_decision), never next_commands (run without asking)."""
     _, data, _ = trained
     payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
                        "-y", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
-    assert "타겟 누수:" in payload["message"] and "[후보] 1) python" in payload["message"]
-    one, two = (split_command(c["command"]) for c in payload["next_commands"])
+    assert "타겟 누수:" in payload["message"] and "[후보] 1) " in payload["message"] and " 2) " in payload["message"]
+    assert payload["error_type"] == "needs_user_decision" and "next_commands" not in payload, payload
+    one, two = (split_command(c["command"]) for c in payload["confirm_commands"])
     assert one[one.index("-y") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("-x") + 1]
     assert two[two.index("-x") + 1] == "반응온도(°C),소비전력(kW)" and two[two.index("-y") + 1] == "생산효율(%),수분함량(%)"
     assert "--desc" in one and "--desc" in two                                    # the other options are kept
@@ -220,16 +222,32 @@ def test_offered_commands_survive_each_shell(trained, monkeypatch, shell):
     payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
                        "-y", "생산효율(%),수분함량(%)", "--desc", desc, "--exclude-where", where)
     assert "타겟 누수:" in payload["message"], payload
-    for c in payload["next_commands"]:
+    for c in payload["confirm_commands"]:
         argv = shell_sim.run_shell(c["command"], shell)
         assert argv[argv.index("--desc") + 1] == desc and argv[argv.index("--exclude-where") + 1] == where, c["command"]
 
 
+DEPLOY_FILES = ("ml_predict.py", "_ml_runtime.py")      # 예측만 하는 PC에 복사할 파일 (README "단독 배포")
+
+
+def test_predict_without_runtime_is_one_json_line(tmp_path):
+    """ml_predict.py만 복사하고 _ml_runtime.py를 빠뜨리면 traceback 대신 JSON 1줄로 무엇을 복사할지 알린다."""
+    import shutil
+    shutil.copy(os.path.join(KIT, "ml_predict.py"), tmp_path / "ml_predict.py")
+    proc = subprocess.run([sys.executable, "-I", str(tmp_path / "ml_predict.py"), "-m", "v1", "-i", "a=1"],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=str(tmp_path))
+    assert proc.returncode == 1 and len(proc.stdout.strip().splitlines()) == 1, proc.stdout + proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error" and "_ml_runtime.py" in payload["message"]
+    assert payload["agent_directive"].startswith("STOP_RETRY:")
+
+
 def test_predict_standalone_deployment(trained, tmp_path):
-    """ml_predict.py와 버전 폴더만으로 예측이 된다 (단독 배포)."""
+    """ml_predict.py + _ml_runtime.py와 버전 폴더만으로 예측이 된다 (단독 배포)."""
     import shutil
     work, _, _ = trained
-    shutil.copy(os.path.join(KIT, "ml_predict.py"), tmp_path / "ml_predict.py")
+    for f in DEPLOY_FILES:
+        shutil.copy(os.path.join(KIT, f), tmp_path / f)
     shutil.copytree(work / "sample_ml_data" / "v1", tmp_path / "v1")
     proc = subprocess.run(
         [sys.executable, "-I", str(tmp_path / "ml_predict.py"), "-m", str(tmp_path / "v1"), "-i", INLINE],
@@ -243,6 +261,7 @@ def test_predict_standalone_deployment(trained, tmp_path):
 needs_docx = pytest.mark.skipif(not HAS_DOCX, reason="python-docx not installed in this environment")
 
 
+@pytest.mark.report
 @pytest.mark.skipif(HAS_DOCX, reason="only meaningful when python-docx is missing")
 def test_report_without_docx_returns_json(trained):
     work, _, _ = trained
@@ -251,6 +270,7 @@ def test_report_without_docx_returns_json(trained):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
@@ -259,6 +279,7 @@ def test_report(trained):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_unknown_version_fails(trained):
     work, _, _ = trained
     payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v99"))
@@ -267,6 +288,7 @@ def test_report_unknown_version_fails(trained):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_unknown_version_recommends_the_only_one(tmp_path):
     root = tmp_path / "y_ml_data"
     (root / "v1").mkdir(parents=True)
@@ -279,6 +301,7 @@ def test_report_unknown_version_recommends_the_only_one(tmp_path):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_unknown_version_lists_candidates(tmp_path):
     root = tmp_path / "x_ml_data"
     for v in ("v1", "v3"):
@@ -304,7 +327,7 @@ def test_help_is_stderr_text_and_one_json_line(script, data_dir):
 
 
 def test_stop_retry_directive_mentions_full_command():
-    d = mp.error_payload(mp.InputError("x [추천] python a.py"))["agent_directive"]
+    d = rt.error_payload(rt.InputError("x [추천] python a.py"))["agent_directive"]
     assert "전체 명령" in d and "그대로 1번만 실행" in d and "confirm_commands" in d
 
 
@@ -315,8 +338,8 @@ def test_stop_retry_directive_mentions_full_command():
 def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "data"
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(d))
-    monkeypatch.setattr(mp, "_RECOVERED", [])
-    monkeypatch.setattr(mp, "_RECOVERY_ATTEMPTS", [])
+    monkeypatch.setattr(rt, "_RECOVERED", [])
+    monkeypatch.setattr(rt, "_RECOVERY_ATTEMPTS", [])
     return d
 
 
@@ -329,7 +352,7 @@ def _run_inproc(capsys, body):
     """mp.run_cli를 같은 프로세스에서 실행하고 (exit 코드 또는 None, stdout JSON 1줄)을 돌려준다."""
     code = None
     try:
-        mp.run_cli(body)
+        rt.run_cli(body)
     except SystemExit as e:
         code = e.code
     lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
@@ -339,8 +362,8 @@ def _run_inproc(capsys, body):
 
 def test_default_data_dir_is_tool_folder(monkeypatch):
     monkeypatch.delenv("ML_KIT_DATA_DIR", raising=False)
-    assert mp.get_data_dir() == os.path.join(KIT, "data")
-    assert mp.error_log_path() == os.path.join(KIT, "data", "logs", "errors.txt")
+    assert rt.get_data_dir() == os.path.join(KIT, "data")
+    assert rt.error_log_path() == os.path.join(KIT, "data", "logs", "errors.txt")
 
 
 def test_input_error_exit1_logged_without_traceback(data_dir, tmp_path):
@@ -348,7 +371,7 @@ def test_input_error_exit1_logged_without_traceback(data_dir, tmp_path):
     assert proc.returncode == 1 and payload["agent_directive"].startswith("STOP_RETRY")
     log = _log(data_dir)
     head = log.splitlines()[0]
-    assert head.startswith("===== ") and f"| ml-kit {mp.VERSION} | Python " in head
+    assert head.startswith("===== ") and f"| ml-kit {rt.VERSION} | Python " in head
     assert "명령: ml_predict.py -m " in log and "없는폴더" in log
     assert "결과: input | " in log
     assert "traceback:" not in log and "복구 시도:" not in log
@@ -388,7 +411,7 @@ def test_recovery_attempt_line(data_dir, capsys):
     def body():
         def locked():
             raise PermissionError("locked")
-        mp.retry_fs(locked, attempts=2, delay=0)
+        rt.retry_fs(locked, attempts=2, delay=0)
     code, payload = _run_inproc(capsys, body)
     assert code == 1
     assert "복구 시도: 파일 작업 2회 재시도 실패" in _log(data_dir)
@@ -398,8 +421,8 @@ def test_rotation_at_size_limit(data_dir, monkeypatch):
     logs = data_dir / "logs"
     logs.mkdir(parents=True)
     (logs / "errors.txt").write_text("OLD ENTRY\n" * 10, encoding="utf-8")
-    monkeypatch.setattr(mp, "ERROR_LOG_MAX", 50)
-    mp.write_error_log({"error_type": "input", "message": "새 항목"}, argv=["ml_train.py", "-f", "a.csv"])
+    monkeypatch.setattr(rt, "ERROR_LOG_MAX", 50)
+    rt.write_error_log({"error_type": "input", "message": "새 항목"}, argv=["ml_train.py", "-f", "a.csv"])
     assert "OLD ENTRY" in (logs / "errors.old.txt").read_text(encoding="utf-8")
     new = (logs / "errors.txt").read_text(encoding="utf-8")
     assert "OLD ENTRY" not in new and "결과: input | 새 항목" in new and "명령: ml_train.py -f a.csv" in new
@@ -409,12 +432,12 @@ def test_rotation_failure_keeps_entry(data_dir, monkeypatch):
     logs = data_dir / "logs"
     logs.mkdir(parents=True)
     (logs / "errors.txt").write_text("OLD ENTRY\n" * 10, encoding="utf-8")
-    monkeypatch.setattr(mp, "ERROR_LOG_MAX", 50)
+    monkeypatch.setattr(rt, "ERROR_LOG_MAX", 50)
 
     def deny(*_a, **_k):
         raise PermissionError("rotation locked")
-    monkeypatch.setattr(mp.os, "replace", deny)
-    mp.write_error_log({"error_type": "input", "message": "회전 실패에도 기록"}, argv=["ml_report.py"])
+    monkeypatch.setattr(rt.os, "replace", deny)
+    rt.write_error_log({"error_type": "input", "message": "회전 실패에도 기록"}, argv=["ml_report.py"])
     assert "회전 실패에도 기록" in (logs / "errors.txt").read_text(encoding="utf-8")
 
 
@@ -424,7 +447,7 @@ def test_logging_failure_keeps_json_contract(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(blocker))
 
     def body():
-        raise mp.InputError("입력 오류")
+        raise rt.InputError("입력 오류")
     code, payload = _run_inproc(capsys, body)
     assert code == 1 and payload["status"] == "error" and payload["message"] == "입력 오류"
 
@@ -439,8 +462,8 @@ def test_logging_failure_keeps_json_contract(tmp_path, monkeypatch, capsys):
 
 PROBE = ("import sys\n"
          "sys.path.insert(0, sys.argv[1])\n"
-         "import ml_predict\n"
-         "print(ml_predict.get_data_dir())\n")
+         "import _ml_runtime\n"
+         "print(_ml_runtime.get_data_dir())\n")
 
 
 def _env(tmp_path, **extra):
@@ -487,33 +510,55 @@ def test_engenius_error_log_lands_in_fixed_folder(tmp_path):
     assert (tmp_path / "home" / "Documents" / "En-Genius" / "CLI-data" / "ml-kit" / "data" / "logs" / "errors.txt").is_file()
 
 
-# ---- 공통 런타임 (ml_predict.py PART C) ------------------------------------------------------
+# ---- 공통 런타임 (_ml_runtime.py) ----------------------------------------------------------------
 
 
 def test_json_safe_nan_and_numpy():
-    assert mp.dumps_json({"a": np.nan, "b": np.int64(3), "c": [np.float32(1.5)]}) == '{"a": null, "b": 3, "c": [1.5]}'
+    assert rt.dumps_json({"a": np.nan, "b": np.int64(3), "c": [np.float32(1.5)]}) == '{"a": null, "b": 3, "c": [1.5]}'
 
 
 def test_read_text_file_encodings(tmp_path):
     for enc in ("utf-8", "utf-8-sig", "utf-16", "cp949"):
         p = tmp_path / f"t_{enc}.txt"
         p.write_text("반응온도(°C)", encoding=enc)
-        assert mp.read_text_file(str(p)) == "반응온도(°C)"
+        assert rt.read_text_file(str(p)) == "반응온도(°C)"
+
+
+ENTRY_POINTS = ("ml_train.py", "ml_predict.py", "ml_report.py", "ml_export.py", "ml_map.py")
+
+
+def test_entry_points_import_only_the_runtime():
+    """진입점은 _ml_runtime만 공통으로 import한다. 아무도 ml_predict를 import하지 않고(예측 단독 배포), _ml_runtime은 어떤
+    진입점도 import하지 않는다. 학습을 다시 쓰는 곳만 예외: ml_export -> ml_train(같은 학습 경쟁), ml_report -> ml_train·ml_export
+    (보고서의 최고 버전·성능예측표). AGENTS.md ml-kit 규칙."""
+    allowed = {"ml_export.py": {"ml_train"}, "ml_report.py": {"ml_train", "ml_export"}}
+    bad = []
+    for name in ENTRY_POINTS + ("_ml_runtime.py",):
+        tree = ast.parse(open(os.path.join(KIT, name), encoding="utf-8").read())
+        for node in ast.walk(tree):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                [node.module or ""] if isinstance(node, ast.ImportFrom) else []
+            for m in mods:
+                if m.split(".")[0] + ".py" in ENTRY_POINTS and m not in allowed.get(name, ()):
+                    bad.append(f"{name}: import {m}")
+    assert not bad, bad
 
 
 def test_no_module_level_name_assigned_twice():
-    """ml_predict.py의 모듈 수준 이름은 한 번만 정의한다 (2.9.20: _THOUSANDS_RE를 두 번 정의해 소수점 쉼표 CSV 검사가
-    뒤의 정규식을 썼음).
+    """ml_predict.py와 _ml_runtime.py의 모듈 수준 이름은 두 파일을 합쳐 한 번만 정의한다 (2.9.20: _THOUSANDS_RE를 두 번
+    정의해 소수점 쉼표 CSV 검사가 뒤의 정규식을 썼음. 예측부가 공통 런타임의 이름을 다시 정의해도 같은 일이 남).
     """
-    tree = ast.parse(open(os.path.join(KIT, "ml_predict.py"), encoding="utf-8").read())
     seen, dup = set(), []
-    for node in tree.body:
-        targets = node.targets if isinstance(node, ast.Assign) else \
-            [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign)) else []
-        for t in targets:
-            for n in ast.walk(t):
-                if isinstance(n, ast.Name):
-                    (dup.append(n.id) if n.id in seen else seen.add(n.id))
+    for name in ("_ml_runtime.py", "ml_predict.py"):
+        tree = ast.parse(open(os.path.join(KIT, name), encoding="utf-8").read())
+        for node in tree.body:
+            targets = node.targets if isinstance(node, ast.Assign) else \
+                [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign)) else []
+            names = [n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)]
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                names.append(node.name)
+            for n in names:
+                (dup.append(f"{name}: {n}") if n in seen else seen.add(n))
     assert not dup, dup
 
 
@@ -541,7 +586,8 @@ def _run_without(tmp_path, fake, script, *args):
 
 @pytest.mark.parametrize("script,module,pip", [
     ("ml_predict.py", "numpy", "numpy"), ("ml_train.py", "sklearn", "scikit-learn"), ("ml_map.py", "pandas", "pandas"),
-    ("ml_report.py", "joblib", "joblib"), ("ml_export.py", "sklearn", "scikit-learn")])
+    pytest.param("ml_report.py", "joblib", "joblib", marks=pytest.mark.report),
+    pytest.param("ml_export.py", "sklearn", "scikit-learn", marks=pytest.mark.report)])
 def test_missing_library_is_one_json_line(tmp_path, script, module, pip):
     args = {"ml_predict.py": ["-m", str(tmp_path), "-i", "a=1"], "ml_train.py": ["-f", "x.csv", "-x", "a", "-y", "b"],
             "ml_map.py": ["-f", "x.csv", "-i", "a=1"], "ml_report.py": ["-m", str(tmp_path)],
@@ -557,9 +603,9 @@ def test_missing_library_is_one_json_line(tmp_path, script, module, pip):
 
 
 def test_import_error_inside_run_is_missing_library():
-    res = mp.error_payload(ModuleNotFoundError("No module named 'scipy.spatial'", name="scipy.spatial"))
+    res = rt.error_payload(ModuleNotFoundError("No module named 'scipy.spatial'", name="scipy.spatial"))
     assert res["error_type"] == "missing_library" and res["install_command"] == "python -m pip install scipy", res
-    res = mp.error_payload(ImportError("No module named docx"))
+    res = rt.error_payload(ImportError("No module named docx"))
     assert res["missing_package"] == "python-docx" and res["agent_directive"].startswith("STOP_RETRY:"), res
 
 
@@ -601,6 +647,7 @@ def test_old_option_names_are_argument_errors(data_dir, script, args):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_targets_and_save(trained):
     work, _, _ = trained
     out = work / "r_targets.docx"
@@ -645,8 +692,8 @@ def test_inline_values_in_wrong_option_recommend_i(p1_model, tmp_path):
     cmd = split_command(nxt["command"])
     assert nxt["needs_input"] is True and "-f" not in cmd and cmd[cmd.index("-i") + 1].startswith("온도(°C)=<값>"), nxt
     assert nxt["placeholder"] == "<값>"                                    # 2.9.75: 다른 needs_input 명령과 같은 키
-    assert not mp.looks_inline_input(str(tmp_path)) and not mp.looks_inline_input("a.csv")
-    assert not mp.looks_inline_input("C:\\d\\a=1.csv") and mp.looks_inline_input("반응온도(°C)=182, 압력=3")
+    assert not rt.looks_inline_input(str(tmp_path)) and not rt.looks_inline_input("a.csv")
+    assert not rt.looks_inline_input("C:\\d\\a=1.csv") and rt.looks_inline_input("반응온도(°C)=182, 압력=3")
 
 
 def test_model_path_underscore_and_made_up_model_folder_recommend_the_data_file(p1_model):
@@ -663,6 +710,24 @@ def test_model_path_underscore_and_made_up_model_folder_recommend_the_data_file(
         assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
     proc, res = run_raw("ml_predict.py", "-i", vals, "-m", p1_model["v"])          # 버전 폴더는 그대로
     assert proc.returncode == 0, res
+
+
+def test_target_value_with_placeholder_input_recommends_find(p1_model):
+    """2.9.79 집 PC Gemma P3: '-i "불순물=100,반응온도=<값>,..."'(타겟 값 + 자리표시자 하나)로 실행해 '<값>을 물으라'만 받고
+    ml_map을 학습 데이터에 돌려 실패 -> 그 뜻 하나인 --find/--vary 명령을 [추천]. 타겟 없이 자리표시자만이면 원래대로 값을 물음."""
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,온도(°C)=<값>,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and "[추천]" in res["message"], res
+    name, fixed = recommended_command(res["message"])
+    assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "생산량=500", fixed
+    assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("-i") + 1] == "압력(bar)=3,속도=45", fixed
+    assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,압력(bar)=3,속도=45")   # 찾을 입력을 아예 뺌 (P3 세 번째)
+    name, fixed = recommended_command(res["message"])
+    assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("-i") + 1] == "압력(bar)=3,속도=45", res
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,속도=45")                 # 빈 입력 둘: 고르지 않음
+    assert proc.returncode == 1 and "[추천]" not in res["message"], res
+    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=<값>,압력(bar)=3,속도=45")
+    assert proc.returncode == 1 and "[추천]" not in res["message"] and "물은 뒤" in res["message"], res
 
 
 def test_leading_verb_and_x_y_cols_recommend_fixed_command(data_dir):
@@ -690,7 +755,7 @@ def test_abbreviations_only_through_the_same_meaning_table(data_dir):
     proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--description", "설명")      # 별칭 없음
     _, fixed = recommended_command(res["message"])
     assert proc.returncode == 2 and fixed[fixed.index("--desc") + 1] == "설명" and "--description" not in fixed, fixed
-    p = mp.JsonArgumentParser()
+    p = rt.JsonArgumentParser()
     p.add_argument("--data-row", type=int)
     p.add_argument("--file")
     with pytest.raises(SystemExit):
@@ -702,20 +767,20 @@ def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
     """2.9.71: CONTINUE 횟수는 도구가 셈. 새로 저장한 것 없이 바로 앞과 같은 progress면 STOP_RETRY(unfinished_limit),
     새로 저장했으면 같은 글이어도 계속, CONTINUE_MAX를 넘으면 멈춤."""
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_train.py", "-f", "d.csv", "-x", "a", "-y", "b"])
-    mp.RUN_SAVED.clear()
-    assert mp.unfinished_payload(mp.Unfinished("학습 1/5"))["continue_runs"] == 1
-    mp.RUN_SAVED.append("x")
-    assert mp.unfinished_payload(mp.Unfinished("학습 1/5"))["continue_runs"] == 2      # 저장했으면 진행한 것
-    mp.RUN_SAVED.clear()
-    stuck = mp.unfinished_payload(mp.Unfinished("학습 1/5"))
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "-f", "d.csv", "-x", "a", "-y", "b"])
+    rt.RUN_SAVED.clear()
+    assert rt.unfinished_payload(rt.Unfinished("학습 1/5"))["continue_runs"] == 1
+    rt.RUN_SAVED.append("x")
+    assert rt.unfinished_payload(rt.Unfinished("학습 1/5"))["continue_runs"] == 2      # 저장했으면 진행한 것
+    rt.RUN_SAVED.clear()
+    stuck = rt.unfinished_payload(rt.Unfinished("학습 1/5"))
     assert stuck["status"] == "error" and stuck["error_type"] == "unfinished_limit", stuck
-    monkeypatch.setattr(mp, "CONTINUE_MAX", 2)
+    monkeypatch.setattr(rt, "CONTINUE_MAX", 2)
     for i in range(2):
-        assert mp.unfinished_payload(mp.Unfinished(f"단계 {i}"))["status"] == "ok"
-    assert mp.unfinished_payload(mp.Unfinished("단계 9"))["error_type"] == "unfinished_limit"
-    mp.continue_clear()
-    assert mp._continue_state() == {}
+        assert rt.unfinished_payload(rt.Unfinished(f"단계 {i}"))["status"] == "ok"
+    assert rt.unfinished_payload(rt.Unfinished("단계 9"))["error_type"] == "unfinished_limit"
+    rt.continue_clear()
+    assert rt._continue_state() == {}
 
 
 def test_missing_prediction_file_typo_gives_numbered_files(p1_model, tmp_path):
@@ -737,7 +802,7 @@ def test_placeholder_or_text_in_inline_numbers_stops(p1_model):
     proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=170:190:10,압력(bar)=3,속도=45")
     assert proc.returncode == 1 and "--sweep" in res["message"], res
     assert run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=180,압력(bar)=3,속도=45")["status"] == "ok"
-    assert mp.re.fullmatch(r"\s*<[^<>]*>\s*", "<값>")                                 # 글자 입력의 <값>도 막는 규칙
+    assert rt.re.fullmatch(r"\s*<[^<>]*>\s*", "<값>")                                 # 글자 입력의 <값>도 막는 규칙
 
 
 def test_constant_eval_is_refused(p1_model):
@@ -752,3 +817,44 @@ def test_find_goal_in_wrong_option_is_not_turned_into_inputs(p1_model):
     """2.9.76 검토: '--goal "생산량=60" --vary 온도'가 [추천] -i 생산량=60으로 고쳐져 목표값이 입력으로 들어갔음."""
     proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "--goal", "생산량=600", "--vary", "온도(°C)")
     assert proc.returncode == 2 and " -i " not in res["message"], res
+
+
+# ---- 2.9.79: 구조 정리 (스레드, [후보] 전체 명령, 파일 재시도) ------------------------------------------------------
+
+def test_small_tables_fit_with_one_thread():
+    """작은 표는 한 스레드가 더 빠름 (60행: 모든 코어 6.2초, 한 스레드 0.01초). 결과는 스레드 수와 무관."""
+    assert rt.model_jobs(100) == 1 and rt.model_jobs(rt.MANY_THREADS_ROWS) == -1
+    import ml_train
+    for m in ml_train.get_regression_models(n_rows=100).values():
+        assert getattr(m, "n_jobs", None) in (None, 1), m
+
+
+def test_numbered_candidates_carry_their_full_commands(monkeypatch):
+    """[후보]는 늘 번호. ask()로 만든 [후보]가 든 message의 InputError는 같은 번호의 confirm_commands를 가진다
+    (글만 돌려주는 도우미도 전체 명령을 준다: 사용법 단순성 2번)."""
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "-f", "d.csv", "-x", "온두,압력", "-y", "y"])
+    monkeypatch.setattr(rt, "_ASKED", [])
+    text = rt.ask(["온도", "온도2"], [rt.command_replacing("온두", c) for c in ("온도", "온도2")], "{}")
+    assert text.startswith("[후보] 1) 온도 2) 온도2")
+    e = rt.InputError(f"'온두' 없음: {text}")
+    assert e.error_type == "needs_user_decision" and len(e.extra["confirm_commands"]) == 2
+    assert "-x 온도2,압력" in e.extra["confirm_commands"][1]["command"]
+    assert "confirm_commands" not in rt.InputError("다른 오류").extra            # 그 글이 없는 오류에는 붙지 않음
+    assert rt.numbered(["a", "b"], [None, None], "{}") == ("[후보] 1) a 2) b", [])   # 명령이 없어도 번호
+
+
+def test_retry_fs_waits_for_windows_lock_errors(monkeypatch):
+    """winerror 32/33(공유·잠금 위반)도 재시도하고(office-cli와 같은 규칙), 없는 파일은 바로 올린다."""
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    calls = []
+
+    def locked():
+        calls.append(1)
+        if len(calls) < 3:
+            e = OSError("locked")
+            e.winerror = 32
+            raise e
+        return "ok"
+    assert rt.retry_fs(locked) == "ok" and len(calls) == 3
+    with pytest.raises(FileNotFoundError):
+        rt.retry_fs(lambda: (_ for _ in ()).throw(FileNotFoundError("x")))

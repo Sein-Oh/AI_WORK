@@ -17,20 +17,35 @@ Data shape is decided automatically from the numeric key columns (1-3):
 Every answer lists the rows it used (Excel row numbers) and their weights, plus the 5 nearest measured rows.
 The data file is never modified. Rows with text in the '제외' column (other than '포함') are not used.
 
-Shared runtime (data loading, column matching, CLI protocol) is imported from ml_predict.py.
+Shared runtime (data loading, column matching, CLI protocol) is imported from _ml_runtime.py.
 """
 import re
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
     percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, mark_committed, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, numbered, command_replacing, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, CATEGORY_CANDIDATES_MAX, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
+    _trained_data_files,
 )
+
+
+def _model_find_hint(args, goal_text: str) -> str:
+    """--find의 기준 열이 표 보간 상한(MAX_KEYS)을 넘을 때 이 데이터 파일로 학습한 모델이 있으면 같은 질문을 모델로 푸는
+    ml_predict.py --find 전체 명령을 [추천] (2.9.80 집 PC Gemma P3: 입력 6개로 ml_map을 돌려 멈추고 사용자에게 범위를 물음).
+    예측은 읽기만 해서 잘못 골라도 바뀌는 것이 없음. 학습한 모델이 없으면 빈 글."""
+    ap = os.path.abspath(args.file)
+    if ap not in _trained_data_files(os.path.dirname(ap)):
+        return ""
+    parts = [f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_predict.py'))}",
+             "-m", quote_arg(ap), "--find", quote_arg(goal_text), "--vary", quote_arg(args.vary.strip())]
+    if args.input:
+        parts += ["-i", quote_arg(args.input)]
+    return f" 이 파일로 학습한 모델이 있어 모델로 찾는 명령: [추천] {' '.join(parts)}"
 
 setup_console()
 
@@ -515,7 +530,8 @@ def execute_reverse(args) -> Dict[str, Any]:
     keys = [vary] + list(numeric)
     check_percent_mix(df, keys + [goal_col])
     if len(keys) > MAX_KEYS:
-        raise InputError(f"기준 열은 --vary 포함 {MAX_KEYS}개까지입니다 (지금 {len(keys)}개).")
+        raise InputError(f"기준 열은 --vary 포함 {MAX_KEYS}개까지입니다 (지금 {len(keys)}개)."
+                         + _model_find_hint(args, f"{goal_name}={goal_val}"))
     sub = _filter(df, categorical)
     t = Table(sub, keys, [goal_col], warnings)
     fixed = np.array([numeric[k] for k in keys[1:]])

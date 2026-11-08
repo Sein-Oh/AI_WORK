@@ -38,6 +38,7 @@ from xml.etree import ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _runtime as rt  # noqa: E402
+import _xlsx_formula as xf  # noqa: E402
 
 TOOL = "reader"
 SUPPORTED = {
@@ -1318,7 +1319,7 @@ def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         raise _encrypted_hint(path)
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "XLSX 읽기")
     try:
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
     except Exception:
         raise _encrypted_hint(path)
     b = UnitBuilder()
@@ -1346,7 +1347,7 @@ def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         meta["rows_truncated"] = True
         rt.log("WARN", f"시트당 {MAX_SHEET_ROWS}행까지만 읽었습니다.")
     # 계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 연 적 없는 파일): data_only로는 빈 칸이라 글이 없음
-    uncomputed = rt.xlsx_uncomputed_formulas(path)
+    uncomputed = xf.xlsx_uncomputed_formulas(path)
     _uncomputed_from_check(meta, uncomputed)           # 확인 실패도 남김: 캐시를 쓸 때 recheck_uncomputed가 다시 확인
     if uncomputed.get("unknown"):
         rt.log("WARN", f"수식 계산 여부를 확인하지 못함: {uncomputed.get('error')}")
@@ -1660,7 +1661,7 @@ def recheck_uncomputed(doc: Dict[str, Any], cache_file: Optional[str] = None) ->
     if not _recheck_allowed():
         rt.debug(f"수식 칸 다시 확인 상한/시간 초과로 건너뜀: {os.path.basename(path)}")
         return doc
-    again = rt.xlsx_uncomputed_formulas(path)
+    again = xf.xlsx_uncomputed_formulas(path)
     if again.get("unknown"):
         return doc
     _uncomputed_from_check(meta, again)
@@ -2060,7 +2061,7 @@ def write_xlsx_table(path: str, header: List[str], rows: List[List[Any]], widths
         wb.save(p)
 
     out = rt.save_with_lock_fallback(path, _write, "엑셀 파일")
-    wb = openpyxl.load_workbook(out, read_only=True)
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(out, read_only=True))
     try:
         n = sum(1 for _ in wb.active.iter_rows(values_only=True))
     finally:
@@ -2138,9 +2139,9 @@ def cmd_read(args) -> Dict[str, Any]:
         if meta.get("rows_truncated") else ""
     # 계산된 값이 없는 수식 칸: 빈 칸으로 읽혀 글에 없음 -> 읽기·저장 모두 UNVERIFIED (값이 계산된 적 없음)
     uncomputed = meta.get("uncomputed_formulas") or None
-    formula_reason = rt.uncomputed_note(uncomputed) if uncomputed else ""
+    formula_reason = xf.uncomputed_note(uncomputed) if uncomputed else ""
     if uncomputed:
-        result.update(rt.uncomputed_fields(uncomputed))
+        result.update(xf.uncomputed_fields(uncomputed))
     # 글자 없이 그림만 있는 쪽 (스캔 쪽): 읽으려는 범위 안의 쪽만 알림. 잘림이 아니라 주의 사항이라 notes에
     by_range = bool(args.units) or bool(sec_key)      # --section: 고른 단위의 첫 쪽~끝 쪽만
     blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, by_range)
@@ -5025,16 +5026,16 @@ def build_cli():
     parser, sub = rt.build_parser(TOOL, "문서 파일 읽기, 등록(캐시), 근거 검색 (Office 불필요)")
 
     p = sub.add_parser("read", help="파일 하나 읽기 (캐시에 등록)")
-    p.add_argument("--file", "-f", required=True, help="문서 경로 (파일명만 쓰면 data 폴더에서 찾음)")
-    p.add_argument("--pages", "-p", help="PDF 쪽/PPT 슬라이드 번호 (그 외 형식은 항목 번호). 예: 3, 1-3, 1,4")
+    p.add_argument("--file", required=True, help="문서 경로 (파일명만 쓰면 data 폴더에서 찾음)")
+    p.add_argument("--pages", help="PDF 쪽/PPT 슬라이드 번호 (그 외 형식은 항목 번호). 예: 3, 1-3, 1,4")
     p.add_argument("--units", help="항목(단위) 번호로 고르기. 예: 57-120 (이어 읽기 명령이 씀)")
     p.add_argument("--section", help="장절 경로 일부가 맞는 단위만 읽기 (대소문자 무시, search --section과 같음)")
     p.add_argument("--format", choices=["text", "summary"], default="text", help="text: 본문, summary: 요약 정보만")
     p.add_argument("--save", nargs="?", const=True, help="결과를 파일로 저장 (.md 기본, .csv/.xlsx 가능). 경로 생략 시 작업 폴더")
 
     x = sub.add_parser("index", help="폴더/파일의 문서를 내용 출력 없이 캐시에 등록")
-    x.add_argument("--folder", "-d", help="등록할 폴더")
-    x.add_argument("--file", "-f", help="등록할 파일 하나")
+    x.add_argument("--folder", help="등록할 폴더")
+    x.add_argument("--file", help="등록할 파일 하나")
     x.add_argument("--all", action="store_true", help="등록된 문서 전체를 다시 확인 (바뀐 파일, 이전 형식 캐시만 다시 읽음)")
     x.add_argument("--depth", type=int, default=MAX_FOLDER_DEPTH, help=f"하위 폴더 깊이 (기본 {MAX_FOLDER_DEPTH}, 0=그 폴더만)")
     x.add_argument("--recursive", action="store_true", help="하위 폴더 전체")
@@ -5042,13 +5043,13 @@ def build_cli():
                    help=f"이번에 새로 읽을 최대 파일 수 (기본 {MAX_FOLDER_FILES}, 이미 최신인 파일은 세지 않음)")
 
     s = sub.add_parser("search", help="캐시에 등록된 문서에서 검색 (--file이면 그 파일/폴더를 먼저 자동 등록)")
-    s.add_argument("--query", "-q", required=True, help="검색어. 그리고는 'A;B', 또는은 'A|B' (;가 먼저 묶임)")
-    s.add_argument("--file", "-f", help="검색할 파일 또는 폴더 (미등록/바뀐 문서는 자동 등록). 생략 시 캐시 전체")
-    s.add_argument("--pages", "-p", help="쪽 번호로 거르기. 예: 3-7 (쪽 정보가 없는 단위는 제외)")
+    s.add_argument("--query", required=True, help="검색어. 그리고는 'A;B', 또는은 'A|B' (;가 먼저 묶임)")
+    s.add_argument("--file", help="검색할 파일 또는 폴더 (미등록/바뀐 문서는 자동 등록). 생략 시 캐시 전체")
+    s.add_argument("--pages", help="쪽 번호로 거르기. 예: 3-7 (쪽 정보가 없는 단위는 제외)")
     s.add_argument("--section", help="장절 경로 일부로 거르기 (대소문자 무시)")
-    s.add_argument("--regex", "-r", action="store_true", help="정규식으로 검색")
-    s.add_argument("--top", "-n", type=int, default=10, help="표시할 최대 건수 (기본 10, --save 파일에는 전체)")
-    s.add_argument("--context", "-C", type=int, default=80, help="스니펫 앞뒤 글자 수 (기본 80)")
+    s.add_argument("--regex", action="store_true", help="정규식으로 검색")
+    s.add_argument("--top", type=int, default=10, help="표시할 최대 건수 (기본 10, --save 파일에는 전체)")
+    s.add_argument("--context", type=int, default=80, help="스니펫 앞뒤 글자 수 (기본 80)")
     s.add_argument("--full", action="store_true", help="스니펫 대신 일치한 단락/페이지 전체")
     s.add_argument("--max-files", type=int, default=MAX_FOLDER_FILES,
                    help=f"--file 폴더에서 이번에 새로 등록할 최대 파일 수 (기본 {MAX_FOLDER_FILES})")
@@ -5056,18 +5057,18 @@ def build_cli():
 
     lst = sub.add_parser("list", help="캐시에 등록된 문서 목록")
     lst.add_argument("--name", help="파일 이름/경로 일부로 거르기 (대소문자 무시)")
-    lst.add_argument("--folder", "-d", help="이 폴더 아래 문서만")
+    lst.add_argument("--folder", help="이 폴더 아래 문서만")
 
     d = sub.add_parser("diff", help="두 판의 문서 비교 (장절로 짝짓기, 삭제·추가·변경, 숫자 변경 표시)")
-    d.add_argument("--file", "-f", required=True, help="이전 판 문서")
+    d.add_argument("--file", required=True, help="이전 판 문서")
     d.add_argument("--file2", required=True, help="새 판 문서")
     d.add_argument("--section", help="이 장절 안만 비교 (장절 경로 일부, 대소문자 무시)")
     d.add_argument("--save", help="전체 차이를 저장 (.xlsx 기본, .csv 가능)")
 
     c = sub.add_parser("clear", help="캐시 지우기 (원본 문서는 그대로). 다시 검색하면 새로 읽음")
-    c.add_argument("--file", "-f", help="이 문서의 캐시만")
+    c.add_argument("--file", help="이 문서의 캐시만")
     c.add_argument("--name", help="파일 이름/경로 일부가 맞는 문서")
-    c.add_argument("--folder", "-d", help="이 폴더 아래 문서")
+    c.add_argument("--folder", help="이 폴더 아래 문서")
     c.add_argument("--missing", action="store_true", help="원본 파일이 없어진 문서만")
     c.add_argument("--all", action="store_true", help="캐시 전체")
     c.add_argument("--dry-run", action="store_true", help="지우지 않고 지울 목록만 보기")

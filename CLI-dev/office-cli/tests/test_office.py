@@ -11,6 +11,7 @@ import pytest
 
 import _office as off
 import _runtime as rt
+import _xlsx_formula as xf
 import excel
 import fake_office
 import office
@@ -1185,7 +1186,7 @@ def test_transfer_range_rows_report_uncomputed(tmp_path):
     args = types.SimpleNamespace(from_target=p, sheet=None, range="A1:B4")
     rows, sheet, info = office._excel_range_rows(args)
     assert sheet == "합계" and info["cells"] == ["합계!B4"]
-    payload = rt.with_uncomputed(rt.ok("office", "transfer", "x", "VERIFIED: 확인", verified=True, rows=4), info)
+    payload = xf.with_uncomputed(rt.ok("office", "transfer", "x", "VERIFIED: 확인", verified=True, rows=4), info)
     assert payload["agent_directive"].startswith("UNVERIFIED:") and payload["rows"] == 4 and payload["uncomputed_count"] == 1
     # 범위 전체가 계산된 값 없는 수식이면 '데이터 없음' 오류에 이유를 붙임
     args = types.SimpleNamespace(from_target=p, sheet=None, range="B4:B4")

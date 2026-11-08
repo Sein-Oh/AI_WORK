@@ -60,7 +60,7 @@
 | `UNVERIFIED:` | 실행은 됐지만 도구가 결과를 확인하지 못했다. 다시 실행하지 않고 `unverified` 내용을 그대로 알린다. |
 | `CONTINUE:` | 아직 끝나지 않았다 (명령 시간 제한 때문에 도구가 나눠서 진행, 한 일은 저장됨). 사용자에게 묻지 말고 `next_commands`의 명령을 그대로 다시 실행한다. `CONTINUE:`가 아닌 결과가 나올 때까지 반복한다 (느린 PC에서는 100번 넘게 걸릴 수 있음). 횟수는 세지 않는다: 끝나지 않을 것 같으면 도구가 `STOP_RETRY:`로 멈춘다. |
 | `STOP_RETRY:` + message에 `[추천]` | `[추천]` 뒤의 명령을 글자 그대로 **1번만** 실행한다. 또 실패하면 message를 그대로 알린다. |
-| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). `[후보] 1) a 2) b`처럼 번호가 있으면 사용자가 고른 번호의 `confirm_commands`(첫째 = `confirm_commands[0]`)를 글자 그대로 1번 실행한다. 번호가 없으면 명령에서 그 값만 사용자가 고른 값으로 바꿔 1번 실행한다. |
+| `STOP_RETRY:` + message에 `[후보]` | 다시 실행하지 않는다. `[후보]` 목록을 보여 주고 사용자가 고르게 한다 (후보가 하나여도 묻는다). 사용자가 고른 번호의 `confirm_commands`(1번 = `confirm_commands[0]`)를 글자 그대로 1번 실행한다. `confirm_commands`가 없으면 명령에서 그 값만 고른 값으로 바꿔 1번 실행한다. |
 | `STOP_RETRY:` (위 둘 없음) | 다시 실행하지 않는다. message를 그대로 알린다. `error_type`이 `needs_user_decision`이면 사용자에게 묻고, 원할 때만 `confirm_commands`(번호가 있으면 고른 번호) 또는 `next_commands[0]`의 command를 그대로 1번 실행한다 (둘 다 없으면 directive가 말한 옵션을 붙여 1번, 5장). |
 | `ERROR:` | 다시 실행하지 않는다. message를 그대로 알린다. |
 

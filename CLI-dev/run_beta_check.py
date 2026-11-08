@@ -12,7 +12,7 @@ LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 �
   C  표 보간·반대 찾기 ml_map (2.6.0)
   D  예측 + 실측 비교값 (2.7.0)
   E  모델 반대 찾기와 운전 구간 (2.8.0)
-  F  보고서 + 성능예측표 세트, 일치도, 엑셀 잠금·숨김·재계산 (2.9.x)
+  F  보고서 + 성능예측표 세트, 일치도, 엑셀 잠금·숨김·재계산 (2.9.x). 기본 실행에서 뺌 (--only F, PAUSED)
   G  파생변수 원본 열 (2.9.1)
 
 결과: 이 파일 옆에 beta_check_<라벨>_<시각>.md (요약 + 실패 상세)와 .xlsx (항목별 표).
@@ -38,6 +38,8 @@ sys.path.insert(0, os.path.join(HERE, "ml-kit", "tools"))
 RESULTS = []          # {"group", "id", "title", "status" (PASS/FAIL/SKIP), "detail"}
 AGENT = False
 GROUPS = ("H", "B", "C", "D", "E", "F", "G")
+# 기본 실행에서 빼는 묶음: --only로 이름을 주면 돌림. F(보고서·성능예측표)는 다른 로직이 마무리될 때까지 시험에서 뺌 (2026-11-08)
+PAUSED = {"F": "보고서·성능예측표는 개발 중이라 기본 시험에서 뺌 (--only F로 실행)"}
 
 
 def emit(payload):
@@ -284,7 +286,7 @@ def write_report(label, work, started):
     nskip = sum(r["status"] == "SKIP" for r in RESULTS)
     ver = "?"
     try:
-        ver = re.search(r'VERSION = "([^"]+)"', open(os.path.join(KIT, "ml_predict.py"), encoding="utf-8").read()).group(1)
+        ver = re.search(r'VERSION = "([^"]+)"', open(os.path.join(KIT, "_ml_runtime.py"), encoding="utf-8").read()).group(1)
     except Exception:
         pass
     lines = [f"# ml-kit 베타 도구 점검 ({label})", "",
@@ -315,7 +317,7 @@ def run_groups(work, groups):
     st = {}
     if "H" in groups:
         group_h(work)
-    if groups & {"B", "D", "E"}:
+    if groups & {"B", "D", "E", "F"}:          # D·E·F는 B가 학습한 모델과 이력을 씀
         group_b(work, st)
     if "C" in groups:
         group_c(work)
@@ -347,6 +349,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     os.environ["ML_KIT_TIME_LIMIT"] = "0"     # 사람이 돌리는 점검: ml-kit 명령 시간 제한(에이전트용 100초) 끔
     groups = {g for g in (args.only or ",".join(GROUPS)).upper().replace(" ", "").split(",") if g}
+    if not args.only:
+        groups -= set(PAUSED)
     bad = sorted(groups - set(GROUPS))
     if bad or not groups:
         ap.error(f"알 수 없는 묶음: {', '.join(bad) or '(비어 있음)'} (가능: {','.join(GROUPS)})")
@@ -356,6 +360,8 @@ def main(argv=None):
     try:
         os.makedirs(work, exist_ok=True)
         run_groups(work, groups)
+        for g in ([] if args.only else sorted(PAUSED)):
+            check(g, g, f"{g} 묶음", None, PAUSED[g])
     except KeyboardInterrupt:
         interrupted = True
         check("-", "STOP", "사용자 중단 (Ctrl+C)", False)

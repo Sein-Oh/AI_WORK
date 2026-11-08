@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlkit_helpers import KIT  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 
 SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map")
 MAX_SKILL_BYTES = 6 * 1024          # 경량 LLM 컨텍스트: 스킬 하나 6KB 이하 (AGENTS.md "사용법 단순성" 7)
@@ -34,7 +34,7 @@ def test_version_and_frontmatter():
         assert keys == ["name", "description", "license", "compatibility", "metadata"], (name, keys)
         assert re.search(rf"^name: {name}$", head, re.M), name
         m = re.search(r'^\s*version:\s*"?([0-9.]+)"?\s*$', head, re.M)
-        assert m and m.group(1) == mp.VERSION, name
+        assert m and m.group(1) == rt.VERSION, name
 
 
 def test_skill_size_limit():
@@ -93,7 +93,7 @@ def test_every_script_is_in_its_skill():
         text = _read(name)
         for s in scripts:
             assert f'python "C:\\CLI\\ml-kit\\{s}"' in text, (name, s)
-    assert set(mp.SKILL_OF_SCRIPT.values()) == set(SKILLS)
+    assert set(rt.SKILL_OF_SCRIPT.values()) == set(SKILLS)
 
 
 def test_skill_mentions_features():

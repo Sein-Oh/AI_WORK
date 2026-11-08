@@ -23,8 +23,13 @@ CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / diff / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
-├── _runtime.py  공통 런타임 (응답 계약, 경로, 입출력, 마크다운 해석)
-└── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
+├── _runtime.py  공통 런타임 (응답 계약, 인자 파서, 경로, 입출력, JIT 복구, 전체 명령 만들기)
+├── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
+├── _markdown.py      마크다운 블록 해석 (word.py·ppt.py 넣기, excel.py 표 파일)
+├── _xlsx_formula.py  닫힌 xlsx의 계산된 값이 없는 수식 칸 찾기 (excel.py·reader.py·office.py 읽기의 R1 확인)
+├── _spec_check.py    excel.py check 구현 (규격서 대조)
+└── _excel_compare.py excel.py compare 구현 (두 판 비교)
+   (_로 시작하는 파일은 진입점이 아닌 내부 모듈. 스킬에 적지 않고, 다른 도구 폴더를 import하지 않음)
 
 CLI-dev/office-cli/  개발·실기 테스트용 (사내 PC C:\CLI-dev\office-cli, C:\CLI와 나란히)
 ├── README.md / CHANGELOG.md / TEST_CHECKLIST.md / requirements.txt
@@ -64,12 +69,25 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   읽기·저장 뒤 열린 문서에 넣기(`read --save` 뒤 `word.py`/`ppt.py`/`excel.py write`, `transfer`, `write` 뒤 `chart`, `chart` 뒤 `transfer`, 1.4.75).
   덮어쓰기·삭제·메일 발송(`--overwrite`가 든 명령, `range --action delete`, `comment --action delete`, `send`)에는 `"destructive": true`(1.4.75):
   전역 지침 3장 6번에서 사용자가 "묻지 말고 끝까지"라고 했어도 이 항목은 늘 묻습니다. 캐시 지우기(`reader.py clear`)는 원본이 그대로라 destructive가 아닙니다.
-- 미리보기 `--dry-run`(R8, 1.4.81 확대): 문서를 읽기 전용으로 열어 바꾸지 않고(되돌리기 지점 없음) 바뀔 곳 `planned`(50개까지, 넘으면 `truncated`),
-  `count`, 실제 실행 명령 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 실제 실행이 `--overwrite` 없이 멈출 곳이면 `--overwrite` 포함, `destructive`)을 줍니다.
-  바뀔 것이 없으면 `count: 0`과 명령 없음. 실제 실행과 같은 검사(없는 시트·슬라이드, 앵커 없음, 보호된 시트)를 그대로 합니다. 받는 명령:
-  excel `write --cells`, `replace`, `range`(insert, delete, clear, move), `sheet --action delete`(다른 시트의 `#REF!`가 될 수식 칸 수), `chart --action delete`(`--all` 포함),
-  `comment` add/delete, word `fill`, `replace`, `write`(모든 `--pos`, `replace`는 지워질 단락), ppt `replace`, `slide`(delete, clear, `--all-slides`, add, duplicate, move.
-  list는 무시하고 `warnings`), reader `clear`. excel의 다른 `range`·`sheet`·`chart` 동작에 주면 STOP_RETRY.
+- 미리보기 `--dry-run`(R8, 1.4.86 규칙 하나): excel·word·ppt에서 문서를 바꾸는 명령(`--no-focus`가 있는 명령)은 모두 `--dry-run`을 받습니다.
+  공통 함수는 `_runtime.dry_run_result`·`dry_run_command`·`dry_run_read_only`·`dry_run_unsupported` 하나씩입니다.
+  1. 미리보기가 있는 동작: 문서를 읽기 전용으로 열어 바꾸지 않고(되돌리기 지점 없음) 늘 같은 키 `dry_run: true`, `count`, `planned`(50개까지),
+     `truncated`(늘 있음, 50개를 넘으면 true), 바뀔 것이 있을 때만 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 실제 실행이 `--overwrite` 없이
+     멈출 곳이면 `--overwrite` 포함, `destructive`). directive는 `DRY_RUN_DIRECTIVE` 하나(excel comment add의 바꾸기/덧붙이기 고르기와 word fill의
+     표 칸 확인만 한 줄 더함). 바뀔 것이 없으면 `count: 0`, 명령 없음, directive `DRY_RUN_NOTHING`("바뀔 것이 없습니다(0건, count 0)") 하나.
+     실제 실행과 같은 검사(없는 시트·슬라이드, 앵커 없음, 보호된 시트)를 그대로 합니다. 해당 동작: excel `write --cells`, `replace`,
+     `range`(insert, delete, clear, move), `sheet --action delete`(다른 시트의 `#REF!`가 될 수식 칸 수), `chart --action delete`(`--all` 포함),
+     `comment` add/delete, word `fill`, `replace`, `write`(모든 `--pos`, `replace`는 지워질 단락), ppt `replace`, `slide`(delete, clear,
+     `--all-slides`, add, duplicate, move). (reader `clear --dry-run`은 캐시 지우기라 이 규칙 밖)
+  2. 읽기만 하는 동작(excel `sheet`·`chart`·`comment`의 list, word `comment` list, ppt `slide list`, `notes` 읽기): 그대로 실행하고
+     `warnings`에 "읽기만 하므로 --dry-run을 무시했습니다".
+  3. 미리보기가 없는 쓰기 동작(excel `write --value/--values/--file/--formula`, `style`, `sheet` add/rename/copy/select, 그 밖의 `range` 동작,
+     `chart` create, word `comment` add, ppt `write`, `notes` 쓰기): 아무것도 바꾸지 않고 STOP_RETRY. 되돌릴 수 있는 변경(`office.py undo`)이면
+     message에 `[추천]` `--dry-run`만 뺀 같은 전체 명령, 명령에 `--overwrite`나 `delete`·`clear`가 들면 `needs_user_decision`과
+     `[후보] 1) 미리보기 없이 실행` + 같은 번호의 `confirm_commands`(`destructive`, 사용자가 고른 뒤에만).
+- 옵션은 긴 이름(`--file`, `--range` 등)만 있습니다(1.4.88, 한 글자 옵션 없음). 예전 한 글자 옵션(`-f`, `-r`, `-n` 등)을 쓰면 인자 오류(exit 2)와
+  긴 이름으로 고친 전체 명령 `[추천]`(같은 뜻 표 `SAME_MEANING`, 도구별 `SHORT_OPTIONS`: `-n`은 outlook `--limit`, reader `--top`,
+  excel `--name`, `-r`은 excel `--range`, reader `--regex`).
 - 오타 추천(1.4.75): 없는 명령 이름은 가장 비슷한 명령을 `[추천]`(LLM이 묻지 않고 1번 실행)으로 주지만, 되돌리기 어려운 명령(`send`, `clear`, `undo`)이면
   `[후보]`로 줍니다(`sent`, `sned`, `end` -> 사용자에게 물음).
 
@@ -135,12 +153,16 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - `--pick N`으로 되돌리면 같은 문서의 더 새 지점(스냅샷, 되돌릴 지점 없음 표식)도 함께 지웁니다(`removed_newer_points`). 남겨 두면 다음 `undo`가 되돌린 뒤의 상태로 앞으로 갑니다.
   - 열린 문서를 닫은 뒤 파일 복사가 실패하면(백신·잠금) 원본을 다시 열고 `undo_failed` 오류에 `pre_undo_backup`을 줍니다.
 - **읽기는 아무것도 만들거나 저장하지 않습니다.** 없는 시트나 파일을 지정하면 `[추천]`과 함께 오류를 냅니다.
+- **이름 비교 규칙은 하나입니다**(1.4.87, `_runtime.exact_key`·`name_key`): 시트, 열 머리글, 메일 폴더 등 모든 이름 찾기에서, 열린 문서(COM)와
+  닫힌 파일(openpyxl, CSV)이 같습니다. 같은 이름 = 앞뒤 공백·대소문자만 다름(그대로 씀). 표기만 다른 이름 = 대소문자·공백·`_`·`-`·`.`만 다름
+  (`Sheet.1`, `sheet 1`, `Sheet_1` = `Sheet1`): 하나뿐이면 시트·폴더는 `[추천]`, 열 머리글은 그 열을 씀. 그 밖에 비슷한 이름은 `[후보]`.
 - **추측해서 쓰지 않습니다.** 쓰기 위치가 확실하지 않으면 아무것도 바꾸지 않고 오류를 냅니다.
   - 엑셀 쓰기에서 없는 시트: 새로 만들지 않습니다. 표기만 다른 시트(`Sheet 1`과 `Sheet1`)가 있으면 `[추천]`. 그 밖에는 `error_type: "needs_user_decision"`으로 있는 시트 목록을 알리고, 비슷한 기존 시트(`Sheet2`와 `Sheet1`)가 있으면 그 이름만 `[후보]`에 넣습니다. 새 시트는 `--new-sheet`로만 만듭니다.
     - message와 `[후보]`에는 `--new-sheet`나 "만드세요" 같은 명령문을 넣지 않습니다. 경량 LLM이 그 문장을 따라 사용자에게 묻지 않고 새 시트를 만들었기 때문입니다. `--new-sheet`는 `agent_directive`에만 "사용자가 만들라고 답한 경우에만"이라는 조건과 함께 적습니다.
     - 예: `시트 'Sheet9'이(가) 없습니다 (있는 시트: Sheet1). 새 시트를 만들지 않았고 아무 데도 쓰지 않았습니다. 이름이 비슷한 기존 시트에 쓸지, 새 시트를 만들지 사용자에게 물어보세요. [후보] Sheet1`
     - `--new-sheet`가 있는 명령은 `excel write`뿐입니다. 그 밖의 명령(`replace`, `style`, `range`, `chart` 등)의 없는 시트는 읽기와 같은 "찾을 수 없음"(`[추천]`/`[후보]`)이고 `--new-sheet`를 안내하지 않습니다.
   - 워드 `--anchor`가 여러 단락에 있으면 `[후보]`(번호와 단락 앞부분)로 오류. `--occurrence N`으로 고릅니다. 찾지 못하면 비슷한 문구를 안내합니다 (공백·대소문자 차이 등 확실할 때만 `[추천]`, `--pos replace`에서는 더 엄격).
+    `write --anchor`에 문서에 없는 위치 낱말(`end`·`끝`·`마지막`, `start`·`처음`)을 주면 `--anchor`를 뺀 명령(문서 끝, 처음이면 `--pos start`)을 `[추천]` (1.4.89, `--pos after`일 때만).
   - `office.py transfer --to-app excel --sheet 이름`은 새 시트 이름입니다(transfer는 새 시트에 받습니다. 방금 만든 새 파일만 예외, 아래). 이미 있으면 덮어쓰지 않고 비어 있는 이름을 `[추천]`, 덮어쓰기는 `--overwrite`.
     방금 만든 새 파일이면 기본 시트 이름(`Sheet1` 등)은 새 시트를 만들지 않고 그 빈 기본 시트에 받습니다(기본 시트가 여럿이어도).
   - 쓰기 `--target`에 파일 이름만 주었는데 열린 문서도 파일도 아니면 새 파일을 만들지 않고 "찾을 수 없음"(열린 문서가 있으면 `[후보]`). 새 파일은 전체 경로를 줄 때만 만듭니다.
@@ -173,7 +195,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 `<data 폴더>\logs\errors.txt`에 덧붙습니다. `C:\CLI`에 배치했다면 `C:\CLI\office-cli\data\logs\errors.txt`(`config.json`의 `data_dir`나 `OFFICE_CLI_DATA_DIR`를 바꿨으면 그 폴더 아래).
 - 항목: 시각, 도구 버전, Python, OS / 실행한 명령과 인자 / `error_type`과 message / 재시도 한도를 넘긴 복구 시도(`복구 시도:`) / 내부 오류(`ERROR:`)일 때만 traceback. 문서 본문은 기록하지 않습니다.
 - 내용 옵션의 값은 `<N자 생략>`으로 남깁니다: `--body --text --subject --to --cc --bcc --from --query --find --replace --value --values --formula --header --title --cards --anchor --search --new-name --map --section`, `excel.py`의 `--highlight`(셀 값이 들어감)(`word.py`의 `--highlight`는 색 이름이라 그대로. `--to`·`--from`은 outlook의 받는 사람·보낸 사람이고, `office.py`·`ppt.py`에 잘못 쓴 옛 이름 `--to`·`--from`(앱 이름·슬라이드 번호)은 가리지 않음). 경로와 그 밖의 인자는 그대로 남깁니다.
-  짧은 이름(`-q` = `--query`, `-q값`)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다.
+  잘못 쓴 짧은 이름(`-q` = `--query`, `-q값`, 받지 않는 옵션이라도)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다.
   `결과:` 줄의 message는 문서 글을 뺀 글입니다(stdout JSON의 message는 그대로).
   1. 문서에서 가져온 글(칸 값, 슬라이드 제목·노트, 시트·문서·파일·메일 폴더 이름 목록, 후보 단락·제목, 비슷한 문구, 메모 파일의 기준 글)을
      message에 넣는 오류는 그 글을 뺀 `log_message`를 함께 만들고(`InputError`/`UserDecisionError`의 `log_message`, `ambiguous()`·`not_found()`는
@@ -239,7 +261,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 값이 있는 끝에서 1,000행(열) 넘게 떨어진 계산된 값이 없는 수식 칸(데이터 A1:C10과 `Z200000`)은 범위를 데이터로 정할 때 넣지 않습니다.
  이제 데이터 범위만 읽고,
     요청한 범위 안의 먼 칸은 `far_uncomputed_formulas`(20개까지), `far_uncomputed_count`, `UNVERIFIED:`와 그 칸만 읽는 명령(`next_commands` 끝,
-    `--range 시트!Z200000`)으로 알립니다(`read`, `export --save .csv`). 요청한 열 밖이면(`-r A:C`) 알리지 않습니다.
+    `--range 시트!Z200000`)으로 알립니다(`read`, `export --save .csv`). 요청한 열 밖이면(`--range A:C`) 알리지 않습니다.
     칸 위치는 10만 개까지 보고, 넘으면 전처럼 모두 범위에 넣습니다.
   - 배열 수식(`<f t="array" ref="C1:C3">`)은 파일에 왼쪽 위 칸에만 `<f>`가 있지만 `ref` 범위의 모든 칸을 수식 칸으로 셉니다. 다른 칸에
     계산된 값이 없거나(openpyxl은 왼쪽 위 칸만 씀) `fullCalcOnLoad`이면 계산된 값이 없는 칸입니다.
@@ -270,7 +292,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 확인(R1)은 다른 읽기와 같습니다: 읽은 결과가 확인이라 `VERIFIED:`. 수식 글은 문서 내용이라 오류 로그에 남기지 않습니다(수식 읽기 실패는 예외 종류만).
 - `read --where "<열> <연산자> <값>; ... | ..."`: 읽은 범위의 첫 행을 머리글로 보고, 조건에 맞는 행만 돌려줍니다. 열린 문서, 닫힌 xlsx, CSV 모두.
   - `;`는 그리고(AND), `|`는 또는(OR)이고 `;`가 먼저 묶입니다: `부서 = 영업; 금액 > 250 | 부서 = 기획`은 (영업이고 250 초과) 또는 기획. 두 묶음에 맞는 행도 한 번만.
-  - 열은 머리글 이름(대소문자·공백·`_-` 무시) 또는 열 문자(`B`). 이름을 찾지 못하면 머리글 이름 `[후보]`(오류 로그에는 남기지 않음).
+  - 열은 머리글 이름(대소문자·공백·`_-.` 무시, 위 이름 비교 규칙) 또는 열 문자(`B`). 이름을 찾지 못하면 머리글 이름 `[후보]`(오류 로그에는 남기지 않음).
   - 연산자 `>= <= > < = != ~`(`~`는 포함). 숫자 칸과 숫자 값은 숫자로(`1,000`도 숫자), 날짜 칸은 `YYYY-MM-DD`(시각 포함 가능) 값과 날짜로,
     그 밖은 앞뒤 공백을 뺀 글자로 대소문자 없이 비교합니다. 크기 비교인데 칸이 숫자가 아니면(빈 칸, 글자) 맞지 않습니다. `금액 = `은 빈 칸.
     값의 앞뒤 따옴표는 뺍니다. 값에 `;`나 `|`가 있으면 따옴표로 감쌉니다(`메모 = 'a;b'`, PowerShell에서는 작은따옴표). 따옴표 안은 나누거나 고치지 않습니다.
@@ -683,7 +705,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 결과 항목: `file`, `path`, `page`, `page_source`, `section`(목록), `section_text`(` > `로 이음), `number`, `loc`, `heading`, `evidence`, `snippet`, `score`, `matched_terms`, `--full`이면 `text`.
   공통: `total_matches`(= `count`), `matched`(= `shown`), `truncated`, `files_searched`, `output_file`, `next_commands`. 잘렸으면 `--save "근거.xlsx"`로 전체를 저장하는 명령을 줍니다
   (`--full`에서 엑셀 칸 상한 32,000자보다 긴 단락이 있으면 `--save "근거.md"`). directive는 저장 이름을 적지 않고 `next_commands`의 저장 명령을 가리킵니다.
-- `snippet`: 검색어마다 맞은 자리(숫자가 든 검색어는 층 A 자리 먼저) 앞 `max(-C, 15)`자 ~ 뒤 `-C`자. AND 검색어들이 멀어 창이 겹치지 않으면 조각을 ` / `로 이어
+- `snippet`: 검색어마다 맞은 자리(숫자가 든 검색어는 층 A 자리 먼저) 앞 `max(--context, 15)`자 ~ 뒤 `--context`자. AND 검색어들이 멀어 창이 겹치지 않으면 조각을 ` / `로 이어
   검색어마다 자리가 보입니다(1.4.72: 전에는 첫 검색어 창만이라 멀리 있는 숫자 검색어 자리가 빠짐). 맞은 곳은 `**강조**`, 숫자가 든 검색어의
   층 B 자리(표기가 다른 곳)는 `[[강조]]`(1.4.73, `보관 -[[40 ℃]]`, `1·[[5 V]]`).
 - `evidence` 형식: `규격서.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`. 쪽이 없으면 `loc`(예: `매출.xlsx 매출!12행`), Word 쪽을 쪽 나눔으로만 셌으면 `p.3(추정)`.

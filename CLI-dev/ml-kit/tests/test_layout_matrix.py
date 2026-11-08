@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlkit_helpers import split_command, FAMILIES, H, U, family_rows, run_raw, write_rows  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 
 N_TRAIN, N_PRED = 20, 5
 X, Y = "반응온도,압력,라인", "수율"
@@ -73,7 +73,7 @@ def _make(folder, lid, n, seed):
     path = write_rows(os.path.join(str(folder), lid + ext), [list(r) for r in top] + data, merges)
     rows = list(range(len(top) + 1, len(top) + n + 1))
     y = FAMILIES[fam]["cols"].index(FAMILIES[fam]["y"])
-    valid = [rw for rw, d in zip(rows, data) if FAMILIES[fam]["task"] or mp.coerce_numeric(pd.Series([d[y]])).notna().all()]
+    valid = [rw for rw, d in zip(rows, data) if FAMILIES[fam]["task"] or rt.coerce_numeric(pd.Series([d[y]])).notna().all()]
     return path, rows, valid
 
 
@@ -81,7 +81,7 @@ def _names(lid, with_units):
     fam, units = LAYOUTS[lid][0], LAYOUTS[lid][5]
     cols = FAMILIES[fam]["cols"]
     if with_units and units:
-        return [mp._with_unit(c, u) for c, u in zip(cols, units)]
+        return [rt._with_unit(c, u) for c, u in zip(cols, units)]
     return list(cols)
 
 
@@ -196,7 +196,7 @@ def _trained_layout(res):
     assert res["status"] == "ok" and res["agent_directive"].startswith("VERIFIED"), res
     ft = res["feature_types"]
     names = sorted(list(ft["numeric"]) + list(ft["categorical"]) + list(ft["datetime"]) + list(res["targets"]))
-    ds = mp.load_data_file(os.path.join(res["version_dir"], "model_dataset.csv"))
+    ds = rt.load_data_file(os.path.join(res["version_dir"], "model_dataset.csv"))
     tgt = ds[res["targets"][0]]
     used = ds.loc[tgt.notna() & (tgt.astype(str).str.strip() != ""), "원본행"]
     return names, sorted(ft["numeric"]), sorted(int(v) for v in used)
@@ -244,7 +244,7 @@ def test_predict_same_layout(matrix_basic, lid, kind, how):
     assert final["status"] == "ok" and final["agent_directive"].startswith("VERIFIED"), (first, final)
     rows = len(range(len(LAYOUTS[lid][1]) + 1, len(LAYOUTS[lid][1]) + N_PRED + 1))
     assert final["sample_count"] == rows, (first.get("message"), final.get("preview"))
-    assert len(mp.load_data_file(final["output_file"])) == rows
+    assert len(rt.load_data_file(final["output_file"])) == rows
 
 
 # ---- 첫 행 측정불가, 좁은 제목 CSV, 반복 머리글, 합계 행 ----------------------------------------------
@@ -299,14 +299,14 @@ def _make_b(folder, lid, n, seed):
         rows.append(d)
         src.append(len(rows))
     path = write_rows(os.path.join(str(folder), lid + ext), rows, [])
-    valid = [rw for rw, d in zip(src, data) if mp.coerce_numeric(pd.Series([d[3]])).notna().all()]
+    valid = [rw for rw, d in zip(src, data) if rt.coerce_numeric(pd.Series([d[3]])).notna().all()]
     return path, src, valid
 
 
 def _names_b(lid, with_units):
     units = LAYOUTS_B[lid][3]
     cols = FAMILIES["A"]["cols"]
-    return [mp._with_unit(c, u) for c, u in zip(cols, units)] if with_units and units else list(cols)
+    return [rt._with_unit(c, u) for c, u in zip(cols, units)] if with_units and units else list(cols)
 
 
 def _train_b(path, opts):
@@ -383,7 +383,7 @@ def test_marks_predict_same_layout(matrix_marks, lid, kind, how):
     assert final["status"] == "ok" and final["agent_directive"].startswith("VERIFIED"), (first, final)
     rows = N_PRED + (1 if lid == "S1_total_row" else 0)
     assert final["sample_count"] == rows, (first.get("message"), final.get("preview"))
-    assert len(mp.load_data_file(final["output_file"])) == rows
+    assert len(rt.load_data_file(final["output_file"])) == rows
     if lid == "R1_repeat_hdr_unit":
         assert any("5, 6행" in w for w in final.get("warnings", [])), final.get("warnings")
     if lid == "S1_total_row":
@@ -418,7 +418,7 @@ def _make_c(folder, lid, n, seed, top=None):
 def _names_c(lid, with_units):
     units = LAYOUTS_C[lid][2]
     cols = FAMILIES["A"]["cols"]
-    return [mp._with_unit(c, u) for c, u in zip(cols, units)] if with_units else list(cols)
+    return [rt._with_unit(c, u) for c, u in zip(cols, units)] if with_units else list(cols)
 
 
 def _train_c(path, opts):
@@ -517,7 +517,7 @@ def test_note_scale_predict_same_layout(matrix_note_scale, lid, kind, how):
     first, final = _result(matrix_note_scale, ("c", lid, kind, how))
     assert final["status"] == "ok" and final["agent_directive"].startswith("VERIFIED"), (first, final)
     assert final["sample_count"] == N_PRED, (first.get("message"), final.get("preview"))   # 2.9.18: 6 (unit row)
-    assert len(mp.load_data_file(final["output_file"])) == N_PRED
+    assert len(rt.load_data_file(final["output_file"])) == N_PRED
 
 
 @pytest.mark.parametrize("bid", list(NOTARGET))

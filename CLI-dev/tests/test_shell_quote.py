@@ -29,7 +29,7 @@ def _load(name, path):
 OFFICE = _load("office_runtime_for_quote", os.path.join(REPO, "CLI", "office-cli", "_runtime.py"))
 _grade = _load("grade_opencode_for_quote", os.path.join(REPO, "CLI-dev", "grade_opencode.py"))
 try:
-    ML = _load("ml_predict_for_quote", os.path.join(REPO, "CLI", "ml-kit", "ml_predict.py"))
+    ML = _load("ml_runtime_for_quote", os.path.join(REPO, "CLI", "ml-kit", "_ml_runtime.py"))
 except ImportError:                    # ml-kit 라이브러리가 없는 PC: office-cli만 확인
     ML = None
 TOOLS = [OFFICE] + ([ML] if ML else [])

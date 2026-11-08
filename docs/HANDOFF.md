@@ -181,12 +181,10 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
      합계 Gemma 8/10, solar-mini4 5/10. r1 뒤로는 고치는 것보다 모델이 회차마다 흔들리는 폭이 큼. 모델이 `C:\CLI`에 만든 파일은 지움.
 8. 클라우드에서 볼 것 (7의 결과):
    - solar-mini4가 SKILL.md를 읽고도 스크립트 경로를 바꿔 씀(`tools\`, `skills\office-excel\`) -> 경로를 줄이는 방법(스킬 맨 위에 한 줄로 전체 명령 1개)을 검토.
-   - 시험 중 모델이 `C:\CLI`(도구 폴더)나 `C:\` 맨 위에 파일을 만들면 러너가 결과에 적고 지우기 (r4·r5, 11-08 첫 시험).
    - Gemma P1의 "실측 비교값" 빠뜨림: 예측 지시문이 길어 뒤쪽 지시를 놓치는지 (지시문을 짧게, 꼭 알릴 것 먼저).
    - 전역 지침 4장: 사용자가 요청한 일의 명령은 묻지 않고 바로 실행한다는 문장과 "보여 주고 예를 받은 뒤"가 적용되는 범위(덮어쓰기·삭제·`confirm_commands`)를 분명히.
    - 옵션 이름의 `_`를 `-`로 읽어 같은 뜻 표를 찾기(`--model_path` -> `--model`의 `[추천]`). 없는 모델 폴더면 학습 결과의 데이터 파일로 `-m` `[추천]`을 줄 수 있는지.
    - 러너의 S0 직접 실행이 실제 사용(첫 요청이 바로 학습)과 같아졌으니, A1 실패가 실제 사용에서도 날 수 있음. 회사 PC Gemma와 비교.
-   - 시험 중 모델이 시험 폴더 밖(`C:\` 맨 위 등)에 파일을 만들면 러너가 알리기 (채점기 "시험 폴더 밖 쓰기 없음").
 
 ## 3-2. 클라우드에서 한 일 (2026-11-08 오후, 루프 r1~r5 뒤, 브랜치 `claude/gemma-loop-1108`)
 **합격 기준은 Gemma 4 26B 결과만.** solar-mini4는 Gemma 사용량이 다 됐을 때 이어 받는 예비 모델로만 쓴다
@@ -194,18 +192,56 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 나아지거나 지침·스킬이 짧아지는 수정일 때만 고친다 (지침·스킬 문장을 늘려야만 고쳐지는 것은 하지 않음).
 1. Gemma r5 P1(실측 비교값 빠뜨림): ml-kit 2.9.78. 한 건 예측의 알릴 값(예측값, 90% 범위, 실측 비교값, 입력별 영향)을 모두 `preview`에 넣고
    지시문은 "preview를 글 그대로"로 짧게 (약 350자 -> 160자 안팎). "높인/낮춘 입력 글 그대로"는 유지.
-2. 러너: 요청마다 `C:\CLI`(도구의 `data` 제외)와 드라이브 맨 위의 목록을 시험 전후로 비교해 새로 생긴 것만 지우고, 결과 파일 "시험 폴더 밖 쓰기"와
-   `outside_writes.json`에 적고, 채점은 그 요청을 실패("시험 폴더 밖 쓰기 없음")로 셈 (r4·r5·11-08 첫 시험의 solar-mini4 사례).
+2. 러너의 시험 폴더 밖 쓰기 감시(`C:\CLI`·드라이브 맨 위 목록 비교, 지우기, `outside_writes.json`, 채점 실패)는 넣었다가 폐기 (2026-11-08 밤).
+   도구 문제가 아니고, 지침이 위치를 정하지 않으며, r4·r5 사례는 "임의 파이썬"·".py 만들기" 규칙이 이미 실패로 셈.
 3. 전역 지침 3장 5번: 먼저 묻는 것은 셋뿐(`confirm_commands`, 5장의 일, 도구가 `[후보]`·`needs_user_decision`으로 멈춘 때)으로 한 문장에 모음
    (4장·5장과 같은 범위).
 4. 스킬 맨 위 "그대로 실행할 전체 명령 1줄"(solar-mini4의 경로 바꿔 쓰기): 하지 않음. 스킬 표가 이미 전체 경로 명령이라 한 줄을 더하면 길어지기만 하고
    (규칙 7: 짧게), Gemma는 r1~r5에서 경로 실수가 없었음.
 5. 집 PC에서 다시 확인할 것: `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma-only A1,P1 --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
    (Gemma 먼저, solar-mini4 예비). 기대: P1 답변에 예측값·90% 범위·실측 비교값과 높인/낮춘 입력이 글 그대로, A1은 묻지 않고 학습 실행.
-   결과 파일의 "요청별 모델"이 Gemma인 요청만 합격 판정에 씀. "시험 폴더 밖 쓰기"가 있으면 그 경로를 함께 올림.
-6. 집 PC 확인(2026-11-08 오후, ml-kit 2.9.78): Gemma 4 26B A1·P1 2/2 (두 요청 모두 Gemma, 43초, solar-mini4로 넘어간 요청 없음), 시험 폴더 밖 쓰기 없음.
+   결과 파일의 "요청별 모델"이 Gemma인 요청만 합격 판정에 씀.
+6. 집 PC 확인(2026-11-08 오후, ml-kit 2.9.78): Gemma 4 26B A1·P1 2/2 (두 요청 모두 Gemma, 43초, solar-mini4로 넘어간 요청 없음).
    A1은 묻지 않고 학습, P1 답변에 예측값·90% 범위·실측 비교값과 높인/낮춘 입력이 글 그대로 (r5의 실측 비교값 빠뜨림 해결). 같은 실행의 pytest 1건 실패
    (office-cli `--action` 오타에 빈 `[후보] `: Python 3.13.13 argparse가 값에 따옴표를 붙이지 않음) -> office-cli 1.4.84. 결과 `docs/test_logs/opencode_확인_20261108/`
+
+## 3-3. 클라우드에서 한 일 (2026-11-08 밤, 구조 검토, 브랜치 `ccr-ecab210c-awib23`)
+1. ml-kit 2.9.79: 공통 런타임을 `ml_predict.py`에서 `_ml_runtime.py`로 분리 (예측 단독 배포는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더).
+   학습·예측은 작은 표(2만 행 미만)에서 한 스레드 (학습 한 번 18초 -> 2.5초, 결과 같음). `[후보]`는 늘 번호, 만들 수 있으면 같은 번호의
+   `confirm_commands`. 타겟 누수 후보 명령은 `next_commands`가 아니라 `confirm_commands`. `retry_fs`는 winerror 32/33도 재시도.
+2. office-cli 1.4.85~1.4.88: 큰 파일을 내부 모듈로 (`_spec_check`, `_excel_compare`, `_xlsx_formula`, `_markdown`), `--dry-run` 규칙 하나
+   (미리보기 없는 쓰기 동작은 실행하지 않고 STOP_RETRY), 이름 비교 규칙 하나, 한 글자 옵션 삭제 (쓰면 긴 이름 `[추천]`).
+3. 보고서·성능예측표는 다른 로직이 마무리될 때까지 시험에서 뺌 (pytest `-m report`, beta `--only F`, 단순성 M9, Gemma R 묶음). 고칠 것은
+   ml-kit CHANGELOG 남은 할 일.
+4. 시험 폴더 밖 쓰기 감시(러너)는 폐기.
+5. 집 PC에서 다시 확인할 것: 모델이 보는 글이 바뀜(`[후보]` 번호, office 한 글자 옵션, 전역 지침 4장).
+   `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
+   (Gemma 먼저, solar-mini4 예비, R 묶음은 보내지 않음). 함께 `run_beta_check.py`(F 제외), `run_simplify_check.py`, pytest 전체 소요 시간.
+
+### 집 PC 확인 (2026-11-08 밤, ml-kit 2.9.79 -> 2.9.80, office-cli 1.4.88 -> 1.4.89)
+Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261108/`.
+
+| 시험 | 결과 | 걸린 시간 |
+|---|---|---|
+| 전체 pytest (저장소 폴더) | 4237 passed, 2 failed, 6 skipped | 33분 (회사 PC는 전에 1시간 넘음, 클라우드 22분) |
+| pytest `-m report` (ml-kit) | 74 passed, 4 skipped | 14분 |
+| beta 점검 (기본) | 통과 20, 실패 0, 건너뜀 1 (F) | 45초 |
+| beta 점검 `--only F` | 통과 12, 실패 0 (F7 엑셀 재계산 포함) | 3분 20초 |
+| 단순성 점검 | PASS 38, FAIL 0, SKIP 1 (M9). office `--dry-run`(D1~D4), 한 글자 옵션 `[추천]`, `[후보]` 번호 명령 통과 | 2분 52초 |
+| Gemma 실기 (`--only gemma`, R 묶음 뺌) | 15건 모두 Gemma가 답함, 통과 9, 실패 5 (X2는 참고), 건너뜀 R1·R2·O3·S0·S1 | 4분 |
+
+- pytest 실패 2건 (고침):
+  - `test_predict_without_runtime_is_one_json_line`: `_ml_runtime.py` 없이 낸 JSON이 Windows에서 CP949로 나감 -> stdout을 UTF-8로 (2.9.80).
+  - `test_diag_template_damage_is_warn_when_tools_do_not_need_it`: 저장소 전체 pytest에서만 앞선 시험 뒤 같은 프로세스의 pymupdf import가
+    "I/O operation on closed file"로 실패 (따로 돌리면 통과, 러너는 새 프로세스). 시험 대상이 아닌 라이브러리 import를 이 시험에서 뺌.
+- Gemma 실패와 처리:
+  - P3(반대 찾기): 세 번 보냈고 세 번 다른 길로 감. `-i "불순물=100,반응온도=<값>"`, `ml_map --find`에 입력 6개, 반응온도를 뺀 `-i "불순물=100,..."`.
+    도구가 셋 모두 `--find`/`--vary` 전체 명령을 `[추천]`하게 고침 (2.9.80 `_offer_find`, `ml_map`의 `_model_find_hint`). 네 번째는 Gemma가 처음부터 `--find`로 통과.
+  - O4(문서 끝에 문단): `--anchor "end"` -> 위치 낱말이면 `--anchor`를 뺀 명령을 `[추천]` (1.4.89). 다시 보낸 O4 통과.
+  - 모델 행동만 (기록, 고치지 않음): A3 명령을 답변에 적기만 하고 실행 안 함. O1 `excel.py check`에 `--target` 없이 실행하고 문서를 열어 달라고 함.
+    O5 필요 없는 `--overwrite`. X2 답변(참고).
+- `[후보]`: P3 세 번째에서 Gemma가 `[후보] 1) '불순물'`을 번호와 함께 보여 주고 물음 (실행하지 않음). 한 글자 옵션을 쓴 요청은 없었음 (단순성 점검으로 확인).
+- 다시 돌린 시험 (고친 곳만): ml-kit `test_contract`·`test_predict`·`test_names`·`test_safety`·`test_skill_docs`·`test_map`, `CLI-dev/tests`, office-cli 전체 모두 통과.
 
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).

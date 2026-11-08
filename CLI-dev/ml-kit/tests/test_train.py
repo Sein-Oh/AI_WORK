@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
 from mlkit_helpers import FEATURES, TARGET, recommendation, recommended_command, split_command, HAS_DOCX, HAS_MPL, KIT, run_fail, run_raw, run_tool, write_df, write_rows  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 import ml_train as mt  # noqa: E402
 
 try:
@@ -87,7 +87,8 @@ def test_predict_standalone_with_new_schema(mixed, tmp_path):
     """새 형식 파이프라인(ColumnTransformer)도 ml_predict.py만으로 불러 예측한다."""
     import shutil
     work, _, _ = mixed
-    shutil.copy(os.path.join(KIT, "ml_predict.py"), tmp_path / "ml_predict.py")
+    for f in ("ml_predict.py", "_ml_runtime.py"):
+        shutil.copy(os.path.join(KIT, f), tmp_path / f)
     shutil.copytree(work / "mixed_ml_data" / "v1", tmp_path / "v1")
     proc = subprocess.run([sys.executable, "-I", str(tmp_path / "ml_predict.py"), "-m", str(tmp_path / "v1"),
                            "-i", "일시=2025-02-01 15:00,라인=B라인,반응온도=240"],
@@ -304,6 +305,7 @@ def test_history_mixed_tasks_compare_within_task(multiclass):
     assert set(hist["best_by_task"]) == {"classification", "regression"}
 
 
+@pytest.mark.report
 def test_report_supports_classification(multiclass):
     """분류 버전도 통합 보고서를 만든다 (-m, -y)."""
     pytest.importorskip("docx")
@@ -633,47 +635,47 @@ def test_exclude_where_errors(tmp_path):
 def test_where_mask_rules():
     df = pd.DataFrame({"a": ["1,500", "20", "", "x"], "b": ["Line A", "line a", "B", "A;B"],
                        "d": ["2026-01-02", "2026-02-01", None, "2025-12-31"]})
-    g = mp.parse_where("a >= 20; b = line a | b ~ ';' | d < 2026-01-01")
-    assert mp.where_text(g) == "a >= 20; b = line a | b ~ ';' | d < 2026-01-01"
-    assert list(mp.where_mask(df, g)) == [True, True, False, True]
-    assert list(mp.where_mask(df, mp.parse_where("d < 2026-01-01"))) == [False, False, False, True]
-    assert list(mp.where_mask(df, mp.parse_where("a > 100"))) == [True, False, False, False]   # '1,500' is 1500
-    assert list(mp.where_mask(df, mp.parse_where("b != B"))) == [True, True, False, True]
+    g = rt.parse_where("a >= 20; b = line a | b ~ ';' | d < 2026-01-01")
+    assert rt.where_text(g) == "a >= 20; b = line a | b ~ ';' | d < 2026-01-01"
+    assert list(rt.where_mask(df, g)) == [True, True, False, True]
+    assert list(rt.where_mask(df, rt.parse_where("d < 2026-01-01"))) == [False, False, False, True]
+    assert list(rt.where_mask(df, rt.parse_where("a > 100"))) == [True, False, False, False]   # '1,500' is 1500
+    assert list(rt.where_mask(df, rt.parse_where("b != B"))) == [True, True, False, True]
 
 
 def test_where_words_inside_value_are_kept():
     """2.9.59: 값 안의 '포함'·'and'·'or'까지 바꿔 틀린 [추천](비고 ~ ...)을 냈다."""
-    g = mp.parse_where("비고 = 불량 포함 시료")
+    g = rt.parse_where("비고 = 불량 포함 시료")
     assert g == [[("비고", "=", "불량 포함 시료")]]
-    assert mp.parse_where("비고 = A and B | 라인 = C") == [[("비고", "=", "A and B")], [("라인", "=", "C")]]
-    with pytest.raises(mp.InputError) as e:                     # 진짜 표기 오류는 [추천], 값은 작은따옴표로
-        mp.parse_where("비고 == 불량 포함 시료 and 라인 = A")
+    assert rt.parse_where("비고 = A and B | 라인 = C") == [[("비고", "=", "A and B")], [("라인", "=", "C")]]
+    with pytest.raises(rt.InputError) as e:                     # 진짜 표기 오류는 [추천], 값은 작은따옴표로
+        rt.parse_where("비고 == 불량 포함 시료 and 라인 = A")
     msg = str(e.value)
     assert "작은따옴표" in msg and msg.split("[추천] ")[1] == "비고 = '불량 포함 시료'; 라인 = A", msg
-    assert mp.parse_where(msg.split("[추천] ")[1]) == [[("비고", "=", "불량 포함 시료"), ("라인", "=", "A")]]
-    with pytest.raises(mp.InputError) as e:                     # 열 다음의 '포함'은 연산자
-        mp.parse_where("비고 포함 불량 and 생산효율 > 3")
+    assert rt.parse_where(msg.split("[추천] ")[1]) == [[("비고", "=", "불량 포함 시료"), ("라인", "=", "A")]]
+    with pytest.raises(rt.InputError) as e:                     # 열 다음의 '포함'은 연산자
+        rt.parse_where("비고 포함 불량 and 생산효율 > 3")
     assert str(e.value).split("[추천] ")[1] == "비고 ~ 불량; 생산효율 > 3"
 
 
 def test_where_not_equal_keeps_blank_and_size_value_checked():
     df = pd.DataFrame({"c": [1.0, np.nan, 3.0], "t": ["A", "", "B"], "d": ["2026-01-01", None, "2026-01-02"]})
-    assert list(mp.where_mask(df, mp.parse_where("c != 1"))) == [False, False, True]     # 빈 칸은 빼지 않음
-    assert list(mp.where_mask(df, mp.parse_where("t != A"))) == [False, False, True]
-    assert list(mp.where_mask(df, mp.parse_where("d != 2026-01-01"))) == [False, False, True]
-    with pytest.raises(mp.InputError) as e:
-        mp.parse_where("c > 9 0")
+    assert list(rt.where_mask(df, rt.parse_where("c != 1"))) == [False, False, True]     # 빈 칸은 빼지 않음
+    assert list(rt.where_mask(df, rt.parse_where("t != A"))) == [False, False, True]
+    assert list(rt.where_mask(df, rt.parse_where("d != 2026-01-01"))) == [False, False, True]
+    with pytest.raises(rt.InputError) as e:
+        rt.parse_where("c > 9 0")
     assert str(e.value).split("[추천] ")[1] == "c > 90"
-    with pytest.raises(mp.InputError) as e:
-        mp.parse_where("c >= 높음")
+    with pytest.raises(rt.InputError) as e:
+        rt.parse_where("c >= 높음")
     assert "[추천]" not in str(e.value) and "숫자" in str(e.value)
 
 
 def test_where_code_text_column_compares_as_text():
     df = pd.DataFrame({"k": ["01", "1", "02"], "n": [1, 2, 1]})
-    assert list(mp.where_mask(df, mp.parse_where("k = 01"))) == [True, False, False]     # 글자 열: 글자 비교
-    assert list(mp.where_mask(df, mp.parse_where("k != 01"))) == [False, True, True]
-    assert list(mp.where_mask(df, mp.parse_where("n = 01"))) == [True, False, True]      # 숫자 열: 숫자 비교
+    assert list(rt.where_mask(df, rt.parse_where("k = 01"))) == [True, False, False]     # 글자 열: 글자 비교
+    assert list(rt.where_mask(df, rt.parse_where("k != 01"))) == [False, True, True]
+    assert list(rt.where_mask(df, rt.parse_where("n = 01"))) == [True, False, True]      # 숫자 열: 숫자 비교
 
 
 def _marked_pressure_frame(n=60):
@@ -691,29 +693,29 @@ def test_where_number_column_with_missing_mark_compares_numbers(tmp_path):
     행 수는 2.9.59와 같다 (결측 표시 칸은 '!='에 맞음, 빈 칸은 맞지 않음)."""
     df = _marked_pressure_frame()
     f = write_df(tmp_path / "w.csv", df)
-    raw = mp.load_data_file(f)
+    raw = rt.load_data_file(f)
     num = pd.to_numeric(df["압력"], errors="coerce")
     eq = int((num == 2).sum())
     assert 0 < eq < len(df)
     for cond, want in (("압력 = 2", eq), ("압력 != 2", len(df) - eq),
                        ("압력 != 2; 온도 > 180", int(((num != 2) & (df["온도"] > 180)).sum())),
                        ("압력 = 2.0", eq), ("압력 = 02", eq), ("압력 = 측정불가", 1)):
-        assert int(mp.where_mask(raw, mp.parse_where(cond)).sum()) == want, cond
+        assert int(rt.where_mask(raw, rt.parse_where(cond)).sum()) == want, cond
     res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력", "-y", "생산량", "--exclude-where", "압력 = 2")
     assert res["exclusions"]["생산량"]["condition"] == eq, res["exclusions"]
 
 
 def test_where_thousands_and_code_columns():
     df = pd.DataFrame({"a": ["1,000", "1000", "측정불가", "", "2,000.5"], "c": ["007", "7", "12", "007", None]})
-    assert list(mp.where_mask(df, mp.parse_where("a = 1000"))) == [True, True, False, False, False]
-    assert list(mp.where_mask(df, mp.parse_where("a = 1,000"))) == [True, True, False, False, False]
-    assert list(mp.where_mask(df, mp.parse_where("a != 1000"))) == [False, False, True, False, True]
-    assert list(mp.where_mask(df, mp.parse_where("c = 7"))) == [False, True, False, False, False]     # 코드 열: 글자
-    assert list(mp.where_mask(df, mp.parse_where("c = 007"))) == [True, False, False, True, False]
-    assert list(mp.where_mask(df, mp.parse_where("c != 7"))) == [True, False, True, True, False]
+    assert list(rt.where_mask(df, rt.parse_where("a = 1000"))) == [True, True, False, False, False]
+    assert list(rt.where_mask(df, rt.parse_where("a = 1,000"))) == [True, True, False, False, False]
+    assert list(rt.where_mask(df, rt.parse_where("a != 1000"))) == [False, False, True, False, True]
+    assert list(rt.where_mask(df, rt.parse_where("c = 7"))) == [False, True, False, False, False]     # 코드 열: 글자
+    assert list(rt.where_mask(df, rt.parse_where("c = 007"))) == [True, False, False, True, False]
+    assert list(rt.where_mask(df, rt.parse_where("c != 7"))) == [True, False, True, True, False]
     mix = pd.DataFrame({"c": ["01", "001", "02", "002"]})      # 5차 검토: '001'이 '01'까지 빼지 않게
-    assert list(mp.where_mask(mix, mp.parse_where("c = 001"))) == [False, True, False, False]
-    assert list(mp.where_mask(mix, mp.parse_where("c = 01"))) == [True, False, False, False]
+    assert list(rt.where_mask(mix, rt.parse_where("c = 001"))) == [False, True, False, False]
+    assert list(rt.where_mask(mix, rt.parse_where("c = 01"))) == [True, False, False, False]
 
 
 @pytest.mark.parametrize("cells,code", [
@@ -728,7 +730,7 @@ def test_where_thousands_and_code_columns():
     (["05", "10", "측정불가", "", None, "20"], False),  # 빈 값 표시는 세지 않음
 ])
 def test_code_column_judgment(cells, code):
-    assert mp.is_code_column(pd.Series(cells, dtype=object)) is code
+    assert rt.is_code_column(pd.Series(cells, dtype=object)) is code
 
 
 def test_where_on_code_column_warns_other_notation(tmp_path):
@@ -739,14 +741,14 @@ def test_where_on_code_column_warns_other_notation(tmp_path):
     x = r.uniform(0, 10, len(months)).round(3)
     df = pd.DataFrame({"월": months, "온도": x, "수율": (3 * x + r.normal(0, 0.1, len(months))).round(3)})
     f = write_df(tmp_path / "mo.csv", df)
-    raw = mp.load_data_file(f)
-    g = mp.parse_where("월 = 1")
-    assert mp.is_code_column(raw["월"]) and int(mp.where_mask(raw, g).sum()) == 6
-    variants = mp.where_notation_variants(raw, g)
+    raw = rt.load_data_file(f)
+    g = rt.parse_where("월 = 1")
+    assert rt.is_code_column(raw["월"]) and int(rt.where_mask(raw, g).sum()) == 6
+    variants = rt.where_notation_variants(raw, g)
     assert variants == [(("월", "=", "1"), {"01": 6})]
-    assert mp.where_text(mp.where_with_variants(g, variants)) == "월 = 1 | 월 = 01"
-    neg = mp.parse_where("월 != 1; 온도 > 3")
-    assert mp.where_text(mp.where_with_variants(neg, mp.where_notation_variants(raw, neg))) == "월 != 1; 온도 > 3; 월 != 01"
+    assert rt.where_text(rt.where_with_variants(g, variants)) == "월 = 1 | 월 = 01"
+    neg = rt.parse_where("월 != 1; 온도 > 3")
+    assert rt.where_text(rt.where_with_variants(neg, rt.where_notation_variants(raw, neg))) == "월 != 1; 온도 > 3; 월 != 01"
     res = run_tool("ml_train.py", "-f", f, "-x", "월,온도", "-y", "수율", "--exclude-where", "월 = 1")
     assert res["exclusions"]["수율"]["condition"] == 6
     w = [x for x in res.get("warnings", []) if "'01' 6행" in x]
@@ -763,22 +765,22 @@ def test_where_on_zero_padded_month_column_compares_numbers(tmp_path):
     학습에서 숫자로 읽는 열은 = / != 도 숫자 비교."""
     months = [f"{i:02d}" for i in range(1, 13)] * 2
     df = pd.DataFrame({"월": months, "y": np.arange(24.0)})
-    raw = mp.load_data_file(write_df(tmp_path / "mon.csv", df))
-    assert not mp.is_code_column(raw["월"])
+    raw = rt.load_data_file(write_df(tmp_path / "mon.csv", df))
+    assert not rt.is_code_column(raw["월"])
     for cond, want in (("월 = 1", 2), ("월 = 01", 2), ("월 != 1", 22), ("월 > 6", 12)):
-        g = mp.parse_where(cond)
-        assert int(mp.where_mask(raw, g).sum()) == want, cond
-        assert mp.where_notation_variants(raw, g) == []
+        g = rt.parse_where(cond)
+        assert int(rt.where_mask(raw, g).sum()) == want, cond
+        assert rt.where_notation_variants(raw, g) == []
 
 
 def test_where_on_two_digit_number_column_compares_numbers(tmp_path):
     """'05, 10, 15, 20' 열은 숫자 열: '온도 = 5'가 '05' 행에 맞는다 (경고 없음)."""
     df = pd.DataFrame({"온도": ["05", "10", "15", "20"] * 5, "y": np.arange(20.0)})
     f = write_df(tmp_path / "n.csv", df)
-    raw = mp.load_data_file(f)
-    g = mp.parse_where("온도 = 5")
-    assert not mp.is_code_column(raw["온도"]) and int(mp.where_mask(raw, g).sum()) == 5
-    assert mp.where_notation_variants(raw, g) == []
+    raw = rt.load_data_file(f)
+    g = rt.parse_where("온도 = 5")
+    assert not rt.is_code_column(raw["온도"]) and int(rt.where_mask(raw, g).sum()) == 5
+    assert rt.where_notation_variants(raw, g) == []
 
 
 def test_no_exclude_column_still_finds_outliers_and_clean_data_has_no_key(tmp_path):
@@ -831,6 +833,7 @@ def test_exclude_column_zero_and_false_are_not_marks():
         ["", "", "", "", "", "", "", "", "센서오류", "1", "포함"]
 
 
+@pytest.mark.report
 def test_report_shows_terms_and_excluded_rows(tmp_path):
     from docx import Document
     f = tmp_path / "d.xlsx"
@@ -853,15 +856,15 @@ def test_report_shows_terms_and_excluded_rows(tmp_path):
 
 def test_compile_formula_alias_and_canonical():
     cols = ["반응온도(°C)", "소비전력(kW)", "log(x)"]
-    tok, mapping, canon = mp.compile_formula("log(소비전력) / 반응온도(°C)", cols)
+    tok, mapping, canon = rt.compile_formula("log(소비전력) / 반응온도(°C)", cols)
     assert canon == "log(소비전력(kW)) / 반응온도(°C)"
     assert set(mapping.values()) == {"소비전력(kW)", "반응온도(°C)"}
 
 
 def test_eval_blocks_attribute_access():
     df = pd.DataFrame({"a": [1.0, 2.0]})
-    with pytest.raises(mp.InputError):
-        mp.apply_eval_expressions(df, ["b = a.__class__"])
+    with pytest.raises(rt.InputError):
+        rt.apply_eval_expressions(df, ["b = a.__class__"])
 
 
 # 파생 변수의 원본 열이 -x에 없어도(--eval "온도상한 = clip(온도, -1e12, 250)") 모델이 그 열을 입력으로 기록해
@@ -899,6 +902,7 @@ def test_prediction_uses_source_and_caps(capped):
     assert miss["error_type"] == "needs_user_decision"                                # 2.9.54: '원본 입력' only
 
 
+@pytest.mark.report
 def test_find_and_export_work_on_the_source(capped, tmp_path):
     _, vdir = capped
     f = run_tool("ml_predict.py", "-m", vdir, "--find", "효율=80", "--vary", "온도", "-i", "압력=2")
@@ -1065,7 +1069,7 @@ def ledger(data):
 
 
 def meta(version_dir, target):
-    from ml_predict import sanitize_filename  # noqa: E402
+    from _ml_runtime import sanitize_filename  # noqa: E402
     with open(os.path.join(version_dir, f"model_{sanitize_filename(target)}.json"), encoding="utf-8") as f:
         return json.load(f)
 
@@ -1134,6 +1138,7 @@ def test_history_lists_best_record(three_runs):
 
 
 @needs_report
+@pytest.mark.report
 def test_report_f_reuses_then_rebuilds(three_runs):
     work, data, _, best = three_runs
     rep = run_tool("ml_report.py", "-f", data)
@@ -1167,6 +1172,7 @@ def test_report_f_reuses_then_rebuilds(three_runs):
 
 
 @needs_report
+@pytest.mark.report
 def test_mixed_tasks_two_best_versions(tmp_path):
     data = make_multi(str(tmp_path / "mix.csv"))
     run_tool("ml_train.py", "-f", data, "-x", "온도,압력", "-y", "수율")
@@ -1197,12 +1203,18 @@ def test_mixed_tasks_two_best_versions(tmp_path):
 @needs_report
 def test_no_history_stops(tmp_path):
     data = make_multi(str(tmp_path / "empty.csv"))
-    for script, args in (("ml_train.py", ("-f", data, "--best")), ("ml_report.py", ("-f", data))):
-        err = run_fail(script, *args)
-        assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
+    err = run_fail("ml_train.py", "-f", data, "--best")
+    assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
+
+
+@pytest.mark.report
+def test_no_history_report_stops(tmp_path):
+    err = run_fail("ml_report.py", "-f", make_multi(str(tmp_path / "empty.csv")))
+    assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
 
 
 @needs_report
+@pytest.mark.report
 def test_report_m_path_unchanged(tmp_path):
     data = make_multi(str(tmp_path / "single.csv"))
     tr = run_tool("ml_train.py", "-f", data, "-x", "온도,압력,속도", "-y", "수율,두께")
@@ -1215,9 +1227,9 @@ def test_report_m_path_unchanged(tmp_path):
 
 
 def test_best_task_without_history_is_a_candidate():
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         mt._tasks_to_build([{"task": "regression"}], "classification", "h.jsonl")
-    assert "[추천]" not in str(e.value) and "[후보] --task regression" in str(e.value), str(e.value)
+    assert "[추천]" not in str(e.value) and "[후보] 1) regression" in str(e.value), str(e.value)
 
 
 # ---- 중요 입력 top_features ----------------------------------------------------------------------------
@@ -1335,16 +1347,16 @@ def test_resolve_dtypes_names_and_types():
     assert mt.resolve_dtypes("설비코드:str, 온도:float", cols) == "설비코드(번호):str,온도(°C):float"
     assert mt.resolve_dtypes("일시:date,수율:int64", cols) == "일시:datetime,수율:int"
     assert mt.resolve_dtypes(None, cols) is None and mt.resolve_dtypes(" ", cols) is None
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         mt.resolve_dtypes("설비코드:strr,일시:datetime", cols)
     assert '[추천] --dtypes 설비코드:str,일시:datetime' in str(e.value)        # 함수 직접 호출: 옵션과 값 (명령으로 실행하면 전체 명령)
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         mt.resolve_dtypes("설비코드:텍스트", cols)
     assert "[추천]" not in str(e.value) and "float, int, str, datetime" in str(e.value)
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         mt.resolve_dtypes("설비코드", cols)
     assert "형식이 없습니다" in str(e.value)
-    with pytest.raises(mp.ColumnNameError) as e:
+    with pytest.raises(rt.ColumnNameError) as e:
         mt.resolve_dtypes("설비코두:str", cols)                    # a close spelling is asked, never auto-picked
     assert "[후보]" in str(e.value) and "설비코드(번호)" in str(e.value)
 
@@ -1388,11 +1400,11 @@ def test_feature_types_capped():
 
 def test_message_column_list_capped():
     cols = [f"열{i}" for i in range(100)]
-    assert mp.name_list(cols[:3]) == "['열0', '열1', '열2']"
-    text = mp.name_list(cols)
+    assert rt.name_list(cols[:3]) == "['열0', '열1', '열2']"
+    text = rt.name_list(cols)
     assert "열39" in text and "'열40'" not in text and "외 60개 (전체 100개)" in text
-    with pytest.raises(mp.ColumnNameError) as e:                                # 2.9.48: all 100 names
-        mp.resolve_column_names(["없는열zz"], cols, "피처(-x)")
+    with pytest.raises(rt.ColumnNameError) as e:                                # 2.9.48: all 100 names
+        rt.resolve_column_names(["없는열zz"], cols, "피처(-x)")
     assert "외 60개" in str(e.value)
 
 
@@ -1524,7 +1536,7 @@ def _block(path):
 
 
 def _fallbacks(primary):
-    return mp.resume_places(str(primary))[1:]
+    return rt.resume_places(str(primary))[1:]
 
 
 @pytest.mark.parametrize("targets", ["생산효율(%)", "생산효율(%),수분함량(%)"])
@@ -1555,8 +1567,8 @@ def test_resume_saved_nowhere_stops_with_stop_retry(tmp_path, monkeypatch):
     temp = tmp_path / "temp"
     monkeypatch.setenv("TEMP", str(temp))
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
-    _block(tmp_path / "data" / mp.RESUME_FALLBACK_DIR)
-    _block(temp / mp.TEMP_RESUME_DIR)
+    _block(tmp_path / "data" / rt.RESUME_FALLBACK_DIR)
+    _block(temp / rt.TEMP_RESUME_DIR)
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
     t0 = time.monotonic()
     proc, out = run_raw("ml_train.py", "-f", data, "-x", SPLIT_X, "-y", "생산효율(%),수분함량(%)")
@@ -1570,74 +1582,74 @@ def test_resume_saved_nowhere_stops_with_stop_retry(tmp_path, monkeypatch):
 
 
 def test_resume_save_checks_the_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
-    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
-    monkeypatch.setattr(mp, "_RECOVERED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "_RESUME_PLACE", {})
+    monkeypatch.setattr(rt, "_RECOVERED", [])
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
-    assert mt._resume_save(str(tmp_path / "r" / "a.joblib"), (1, 2, 3, 4)) is True and not mp.SAVE_FAILED
-    assert mt._resume_load(str(tmp_path / "r" / "a.joblib")) == (1, 2, 3, 4) and not mp._RECOVERED
+    assert mt._resume_save(str(tmp_path / "r" / "a.joblib"), (1, 2, 3, 4)) is True and not rt.SAVE_FAILED
+    assert mt._resume_load(str(tmp_path / "r" / "a.joblib")) == (1, 2, 3, 4) and not rt._RECOVERED
     _block(tmp_path / "x")                                            # original blocked -> data folder
-    assert mt._resume_save(str(tmp_path / "x" / "a.joblib"), (1, 2, 3, 4)) is True and mp._RECOVERED
+    assert mt._resume_save(str(tmp_path / "x" / "a.joblib"), (1, 2, 3, 4)) is True and rt._RECOVERED
     data_fb, temp_fb = _fallbacks(tmp_path / "x")
     assert os.path.isfile(os.path.join(data_fb, "a.joblib"))
     assert mt._resume_load(str(tmp_path / "x" / "a.joblib")) == (1, 2, 3, 4)   # found in the fallback
     assert len(os.path.basename(data_fb)) == 12
     _block(tmp_path / "y")                                            # original and data folder blocked -> %TEMP%
-    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
-    _block(tmp_path / "data2" / mp.RESUME_FALLBACK_DIR)
+    monkeypatch.setattr(rt, "_RESUME_PLACE", {})
+    _block(tmp_path / "data2" / rt.RESUME_FALLBACK_DIR)
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data2"))
     assert mt._resume_save(str(tmp_path / "y" / "a.joblib"), (1, 2, 3, 4)) is True
     assert os.path.isfile(os.path.join(_fallbacks(tmp_path / "y")[1], "a.joblib"))
-    _block(tmp_path / "temp2" / mp.TEMP_RESUME_DIR)                   # every place blocked
+    _block(tmp_path / "temp2" / rt.TEMP_RESUME_DIR)                   # every place blocked
     monkeypatch.setenv("TEMP", str(tmp_path / "temp2"))
     assert mt._resume_save(str(tmp_path / "z" / "q" / "a.joblib"), (1,)) is True    # a plain new folder works
     _block(tmp_path / "w")
     assert mt._resume_save(str(tmp_path / "w" / "a.joblib"), (1, 2, 3, 4)) is False
-    assert mp.SAVE_FAILED and mp.save_failed_warning().startswith("중간 저장 실패")
+    assert rt.SAVE_FAILED and rt.save_failed_warning().startswith("중간 저장 실패")
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.001")
-    with pytest.raises(mp.InputError) as e:                           # stops where it would stop, as STOP_RETRY
-        mp.check_time(1000.0, "멈춤")
+    with pytest.raises(rt.InputError) as e:                           # stops where it would stop, as STOP_RETRY
+        rt.check_time(1000.0, "멈춤")
     assert "저장하지 못해" in str(e.value)
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
-    mp.check_time(1000.0, "제한 없음")                                 # no limit: goes on to the end
+    rt.check_time(1000.0, "제한 없음")                                 # no limit: goes on to the end
 
 
 def test_resume_find_newest_and_old_fallbacks_swept(tmp_path, monkeypatch):
     """4차 검토: (a) 같은 이름이 여러 위치에 있으면 가장 최근 것을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지운다
     (best_run.json 같은 고정 이름). (b) 실행 시작 때 대체 폴더 전체에서 보관 기한(3일)이 지난 항목을 지운다."""
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
-    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
-    monkeypatch.setattr(mp, "_RECOVERED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "_RESUME_PLACE", {})
+    monkeypatch.setattr(rt, "_RECOVERED", [])
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
     primary = str(tmp_path / "rt")
-    places = mp.resume_places(primary)
+    places = rt.resume_places(primary)
     for i, d in enumerate(places[:2]):
         os.makedirs(d)
         with open(os.path.join(d, "best_run.json"), "w", encoding="utf-8") as f:
             f.write(str(i))
     old = time.time() - 100
     os.utime(os.path.join(places[0], "best_run.json"), (old, old))
-    assert mp.resume_find(primary, "best_run.json") == os.path.join(places[1], "best_run.json")
+    assert rt.resume_find(primary, "best_run.json") == os.path.join(places[1], "best_run.json")
     os.utime(os.path.join(places[1], "best_run.json"), (old - 100, old - 100))
-    assert mp.resume_find(primary, "best_run.json") == os.path.join(places[0], "best_run.json")
-    mp._RESUME_PLACE[os.path.normcase(places[0])] = 1         # the original folder failed earlier in this command
-    path = mp.resume_save(primary, "best_run.json", lambda tmp: open(tmp, "w", encoding="utf-8").write("new"), "기록")
+    assert rt.resume_find(primary, "best_run.json") == os.path.join(places[0], "best_run.json")
+    rt._RESUME_PLACE[os.path.normcase(places[0])] = 1         # the original folder failed earlier in this command
+    path = rt.resume_save(primary, "best_run.json", lambda tmp: open(tmp, "w", encoding="utf-8").write("new"), "기록")
     assert path == os.path.join(places[1], "best_run.json")
     assert not os.path.exists(os.path.join(places[0], "best_run.json"))     # the older copy is not read again
-    assert mp.resume_find(primary, "best_run.json") == path
+    assert rt.resume_find(primary, "best_run.json") == path
     # (b) sweep: an old saved step of another data file in both fallback roots goes, a recent one stays
-    stale = [os.path.join(tmp_path / "data", mp.RESUME_FALLBACK_DIR, "aaaaaaaaaaaa", "0123456789abcdef.m0.joblib"),
-             os.path.join(tmp_path / "temp", mp.TEMP_RESUME_DIR, "bbbbbbbbbbbb", "0123456789abcdef.joblib")]
+    stale = [os.path.join(tmp_path / "data", rt.RESUME_FALLBACK_DIR, "aaaaaaaaaaaa", "0123456789abcdef.m0.joblib"),
+             os.path.join(tmp_path / "temp", rt.TEMP_RESUME_DIR, "bbbbbbbbbbbb", "0123456789abcdef.joblib")]
     for f in stale:
         os.makedirs(os.path.dirname(f))
         open(f, "wb").write(b"1")
-        t = time.time() - mp.RESUME_MAX_AGE - 60
+        t = time.time() - rt.RESUME_MAX_AGE - 60
         os.utime(f, (t, t))
-    mp.resume_sweep_old()
+    rt.resume_sweep_old()
     assert not any(os.path.exists(os.path.dirname(f)) for f in stale)
-    assert not os.path.exists(tmp_path / "temp" / mp.TEMP_RESUME_DIR)      # left empty -> removed
+    assert not os.path.exists(tmp_path / "temp" / rt.TEMP_RESUME_DIR)      # left empty -> removed
     assert os.path.isfile(path)                                              # recent: kept
 
 
@@ -1647,27 +1659,27 @@ def test_resume_sweep_never_touches_user_files(tmp_path, monkeypatch):
     docs = tmp_path / "docs"
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(docs))
     monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
-    old = time.time() - mp.RESUME_MAX_AGE - 3600
+    old = time.time() - rt.RESUME_MAX_AGE - 3600
     user = [docs / "resume" / "2025" / "cv.docx", docs / "resume" / "0123456789ab" / "0123456789abcdef.joblib",
-            docs / mp.RESUME_FALLBACK_DIR / "2025" / "cv.docx", docs / mp.RESUME_FALLBACK_DIR / "notes.txt",
-            docs / mp.RESUME_FALLBACK_DIR / "0123456789ab" / "cv.docx",
-            tmp_path / "temp" / mp.TEMP_RESUME_DIR / "0123456789ab" / "model.joblib"]
-    tool = [docs / mp.RESUME_FALLBACK_DIR / "0123456789ab" / n
+            docs / rt.RESUME_FALLBACK_DIR / "2025" / "cv.docx", docs / rt.RESUME_FALLBACK_DIR / "notes.txt",
+            docs / rt.RESUME_FALLBACK_DIR / "0123456789ab" / "cv.docx",
+            tmp_path / "temp" / rt.TEMP_RESUME_DIR / "0123456789ab" / "model.joblib"]
+    tool = [docs / rt.RESUME_FALLBACK_DIR / "0123456789ab" / n
             for n in ("0123456789abcdef.joblib", "0123456789abcdef.m3.joblib", "0123456789abcdef.fit.joblib",
                       "0123456789abcdef.imp.joblib.tmp", "best_run.json")]
     for f in user + tool:
         os.makedirs(f.parent, exist_ok=True)
         f.write_bytes(b"1")
         os.utime(f, (old, old))
-    mp.resume_sweep_old()
+    rt.resume_sweep_old()
     assert all(f.is_file() for f in user), [str(f) for f in user if not f.is_file()]
     assert not any(f.exists() for f in tool)
     primary = str(tmp_path / "rt")                            # resume_clear in a fallback place: only the tool's names
-    fb = mp.resume_places(primary)[1]
+    fb = rt.resume_places(primary)[1]
     os.makedirs(fb)
     for n in ("cv.docx", "0123456789abcdef.joblib"):
         open(os.path.join(fb, n), "wb").write(b"1")
-    mp.resume_clear(primary, lambda name, p: True, fallback_only=True)
+    rt.resume_clear(primary, lambda name, p: True, fallback_only=True)
     assert os.listdir(fb) == ["cv.docx"]
 
 
@@ -1678,7 +1690,7 @@ def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
     y = pd.Series(3 * X.a + X.b + r.normal(0, 0.05, 60))
     schema = {"numeric": ["a", "b"], "categorical": {}, "datetime": {}, "input_columns": ["a", "b"]}
     resume = str(tmp_path / "rt" / "k")
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
@@ -1688,17 +1700,17 @@ def test_full_fit_after_reused_candidates_is_checked(tmp_path, monkeypatch):
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
-    with pytest.raises(mp.Unfinished) as e:                   # first step (the fit) goes on, then stops (4차 검토)
+    with pytest.raises(rt.Unfinished) as e:                   # first step (the fit) goes on, then stops (4차 검토)
         mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "순열 중요도 0/2열" in e.value.progress, e.value.progress
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [5.0])        # another target was trained in this command
-    with pytest.raises(mp.Unfinished) as e:                   # the saved fit is reused: no stop before it
+    with pytest.raises(rt.Unfinished) as e:                   # the saved fit is reused: no stop before it
         mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "순열 중요도 0/2열" in e.value.progress, e.value.progress
-    os.remove(mp.resume_find(str(tmp_path / "rt"), "k.fit.joblib"))
-    with pytest.raises(mp.Unfinished) as e:
+    os.remove(rt.resume_find(str(tmp_path / "rt"), "k.fit.joblib"))
+    with pytest.raises(rt.Unfinished) as e:
         mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "1위 모델 전체 적합 전에 멈춤" in e.value.progress and "5/5개" in e.value.progress
 
@@ -1722,7 +1734,7 @@ def test_wide_target_last_step_is_split_and_matches_one_run(tmp_path, monkeypatc
         fn = mt.train_and_benchmark_classifiers
     else:
         fn = mt.train_and_benchmark_models
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     want = fn(X=X, y_series=y, target_name="y", schema=schema)
@@ -1736,7 +1748,7 @@ def test_wide_target_last_step_is_split_and_matches_one_run(tmp_path, monkeypatc
         try:
             got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
             break
-        except mp.Unfinished as e:
+        except rt.Unfinished as e:
             progress.append(e.progress)
     else:
         pytest.fail(f"끝나지 않음: {progress[-3:]}")
@@ -1787,7 +1799,7 @@ def _new_run(monkeypatch, fold=(), model=(), fit=()):
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", list(model))
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", list(fit))
     monkeypatch.setattr(mt, "RUN_PREP_SECONDS", [])
-    monkeypatch.setattr(mp, "CURRENT_STEP", {})
+    monkeypatch.setattr(rt, "CURRENT_STEP", {})
 
 
 @pytest.fixture(autouse=True)
@@ -1823,7 +1835,7 @@ def test_slow_candidate_is_split_by_fold_and_matches_one_run(tmp_path, monkeypat
     """2.9.66: 실행마다 fold 1개만 끝낼 시간이어도 fold를 저장하며 CONTINUE로 나아가 유한 횟수에 끝나고, 결과(리더보드·OOF·
     최종 모델 예측·중요도)는 한 번에 학습한 것과 같다. 회귀·분류(층화), 중복 행 묶음 fold 모두."""
     X, y, schema, fn = _fold_data(task, dup)
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     want = fn(X=X, y_series=y, target_name="y", schema=schema)
@@ -1836,7 +1848,7 @@ def test_slow_candidate_is_split_by_fold_and_matches_one_run(tmp_path, monkeypat
         try:
             got = fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
             break
-        except mp.Unfinished as e:
+        except rt.Unfinished as e:
             progress.append(e.progress)
             fold_files |= {n for n in os.listdir(tmp_path / "rt") if _FOLD_FILE.fullmatch(n)}
     else:
@@ -1855,7 +1867,7 @@ def test_killed_run_keeps_saved_folds_and_damaged_fold_is_trained_again(tmp_path
     """2.9.66: fold를 저장한 뒤 바깥에서 끊긴 실행(에이전트의 120초 강제 종료)도 끝낸 fold가 남아 다음 실행이 이어서 하고,
     손상된 fold 파일은 버리고 그 fold만 다시 학습한다 (JIT: 다시 생성). 결과는 한 번에 학습한 것과 같다."""
     X, y, schema, fn = _fold_data(task, False)
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     want = fn(X=X, y_series=y, target_name="y", schema=schema)
@@ -1892,13 +1904,13 @@ def test_fold_clock_check_estimates(tmp_path, monkeypatch):
     추정하고, 추정할 값이 없으면 진행한다. 이 실행에서 아무 단계도 안 했으면 멈추지 않는다 (R10: 실행마다 최소 1단계)."""
     import joblib
     X, y, schema, fn = _fold_data("regression", False)
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
-    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    monkeypatch.setattr(rt, "RUN_START", time.monotonic())
     resume = str(tmp_path / "rt" / "k")
     _new_run(monkeypatch, fold=[1000.0])                       # a slow fold of another candidate in this command
-    with pytest.raises(mp.Unfinished) as e:
+    with pytest.raises(rt.Unfinished) as e:
         fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "후보 모델 0/5개 끝남, 'HistGradientBoosting' 교차검증 fold 0/5개 끝남" in e.value.progress, e.value.progress
     assert "(fold 1 전에 멈춤, 약 27단계 남음)" in e.value.progress
@@ -1906,7 +1918,7 @@ def test_fold_clock_check_estimates(tmp_path, monkeypatch):
     joblib.dump({"model": "HistGradientBoosting", "folds": 5, "seconds": 1000.0,
                  "res": {"train": 0.0, "pred": np.zeros(14), "params": {}}}, tmp_path / "rt" / "k.m0.f1.joblib")
     _new_run(monkeypatch, fold=[0.01])
-    with pytest.raises(mp.Unfinished) as e:
+    with pytest.raises(rt.Unfinished) as e:
         fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤, 약 26단계 남음)" in e.value.progress, e.value.progress
     os.remove(tmp_path / "rt" / "k.m0.f1.joblib")
@@ -1917,9 +1929,9 @@ def test_fold_clock_check_estimates(tmp_path, monkeypatch):
     real = mt.fit_safe_model                                   # no step in this run: the first fold always goes
     monkeypatch.setattr(mt, "fit_safe_model", lambda est, y_train: time.sleep(0.2) or real(est, y_train))
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.1")
-    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    monkeypatch.setattr(rt, "RUN_START", time.monotonic())
     _new_run(monkeypatch)
-    with pytest.raises(mp.Unfinished) as e:
+    with pytest.raises(rt.Unfinished) as e:
         fn(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "'HistGradientBoosting' 교차검증 fold 1/5개 끝남, 저장됨 (fold 2 전에 멈춤, 약 26단계 남음)" in e.value.progress, e.value.progress
 
@@ -1931,7 +1943,7 @@ def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
     import joblib
     X, y, schema = _wide_frame(p=4)
     resume = str(tmp_path / "rt" / "k")
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
@@ -1946,14 +1958,14 @@ def test_last_step_estimate_uses_saved_candidate_times(tmp_path, monkeypatch):
     o_saved = joblib.load(other)
     joblib.dump(o_saved[:-1] + (1000.0,), other)              # a slow candidate that lost: not the final fit's time
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
-    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    monkeypatch.setattr(rt, "RUN_START", time.monotonic())
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [0.01])      # a fast step done in this run
     monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     res = mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert len(res[2]["feature_importances"]) == 4
     joblib.dump(saved[:-1] + (1000.0,), slow)                 # the champion was slow in an earlier run
-    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
-    with pytest.raises(mp.Unfinished) as e:
+    monkeypatch.setattr(rt, "RUN_START", time.monotonic())
+    with pytest.raises(rt.Unfinished) as e:
         mt.train_and_benchmark_models(X=X, y_series=y, target_name="y", schema=schema, resume=resume)
     assert "1위 모델 전체 적합 전에 멈춤" in e.value.progress
     joblib.dump(saved[:-1] + (0.01,), slow)
@@ -1980,8 +1992,8 @@ def _imp_setup(tmp_path, monkeypatch, p=40):
     X, y, schema = _wide_frame(p=p)
     from sklearn.linear_model import Ridge
     pipe = mt.build_pipeline(Ridge(), schema, "regressor").fit(X, y)
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
-    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "_RESUME_PLACE", {})
     monkeypatch.setattr(mt, "RUN_MODEL_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FOLD_SECONDS", [])
     monkeypatch.setattr(mt, "RUN_FIT_SECONDS", [])
@@ -1998,17 +2010,17 @@ def test_slow_wide_importance_stops_by_the_clock_from_the_second_column(tmp_path
     앞으로 나아가고, 나눠 계산한 값은 한 번에 계산한 것과 같다."""
     X, y, pipe, want, resume = _imp_setup(tmp_path, monkeypatch)
     slow = _SlowScore(pipe, delay=0.05)                       # one column ~0.25 s; 40 columns ~10 s
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", str(mp.TIME_RESERVE + 1.0))    # 1 s of work per run
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", str(rt.TIME_RESERVE + 1.0))    # 1 s of work per run
     done_before, runs = 0, 0
     while True:
         runs += 1
         assert runs <= 40, "끝나지 않음"
-        monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+        monkeypatch.setattr(rt, "RUN_START", time.monotonic())
         try:
             got = mt._permutation_means(slow, X, y, 42, None, resume, "y", "M", lambda: None)
             break
-        except mp.Unfinished as e:
-            assert time.monotonic() - mp.RUN_START < 1.0 + 0.5, e.progress          # within the budget (+ a column)
+        except rt.Unfinished as e:
+            assert time.monotonic() - rt.RUN_START < 1.0 + 0.5, e.progress          # within the budget (+ a column)
             k = int(e.progress.split("순열 중요도 ")[1].split("/")[0])
             assert k > done_before, e.progress                                          # every run moves on
             done_before = k
@@ -2026,7 +2038,7 @@ def test_killed_importance_keeps_columns_saved_on_the_way(tmp_path, monkeypatch)
     killed = _SlowScore(pipe, kill=1 + 5 * 4 + 2)             # base score, 4 columns, killed in the 5th
     with pytest.raises(KeyboardInterrupt):
         mt._permutation_means(killed, X, y, 42, None, resume, "y", "M", lambda: stops.append(1))
-    saved = joblib.load(mp.resume_find(os.path.dirname(resume), "k.imp.joblib"))
+    saved = joblib.load(rt.resume_find(os.path.dirname(resume), "k.imp.joblib"))
     assert sorted(saved["done"]) == [0, 1, 2, 3] and stops, saved
     again = _SlowScore(pipe)
     got = mt._permutation_means(again, X, y, 42, None, resume, "y", "M", lambda: None)
@@ -2046,10 +2058,10 @@ def test_best_run_record_is_removed_after_an_error(tmp_path, monkeypatch):
         calls.append(task)
         if len(calls) == 2:
             seen.append((root / ".resume_train" / mt.BEST_RUN_FILE).exists())     # the record of the first task
-            raise mp.InputError("시험용 오류")
+            raise rt.InputError("시험용 오류")
         return {"version": "v1"}
     monkeypatch.setattr(mt, "build_best_version", fail_second)
-    with pytest.raises(mp.InputError):
+    with pytest.raises(rt.InputError):
         mt.execute_make_best(argparse.Namespace(file=data, task=None))
     assert len(calls) == 2 and seen == [True]
     assert not (root / ".resume_train" / mt.BEST_RUN_FILE).exists()
@@ -2090,12 +2102,12 @@ def test_preparation_is_saved_and_reused_by_the_continued_run(tmp_path, monkeypa
     want = run_tool("ml_train.py", "-f", ref, "-x", SPLIT_X, "-y", "생산효율(%)")
     data = make_sample(str(tmp_path / "p.csv"))
     root = tmp_path / "p_ml_data"
-    monkeypatch.setattr(mp, "SAVE_FAILED", [])
-    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
+    monkeypatch.setattr(rt, "SAVE_FAILED", [])
+    monkeypatch.setattr(rt, "_RESUME_PLACE", {})
     monkeypatch.setattr(mt, "PREP_SAVE_SECONDS", 0.0)
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
-    monkeypatch.setattr(mp, "RUN_START", time.monotonic() - 80)       # the preparation ends past the limit - reserve
-    with pytest.raises(mp.Unfinished) as e:
+    monkeypatch.setattr(rt, "RUN_START", time.monotonic() - 80)       # the preparation ends past the limit - reserve
+    with pytest.raises(rt.Unfinished) as e:
         mt.execute_ml_train(_train_args(data, SPLIT_X, "생산효율(%)"))
     assert "학습 준비" in e.value.progress and "첫 학습 단계 전에 멈춤" in e.value.progress, e.value.progress
     assert "약 27단계 남음" in e.value.progress, e.value.progress
@@ -2108,7 +2120,7 @@ def test_preparation_is_saved_and_reused_by_the_continued_run(tmp_path, monkeypa
     monkeypatch.setattr(mt, "_prepare_run", no_second_preparation)
     _new_run(monkeypatch)
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
-    monkeypatch.setattr(mp, "RUN_START", time.monotonic())
+    monkeypatch.setattr(rt, "RUN_START", time.monotonic())
     got = mt.execute_ml_train(_train_args(data, SPLIT_X, "생산효율(%)"))
     assert got["version"] == "v1" and got["mean_val_score"] == want["mean_val_score"]
     assert got["top_features"] == want["top_features"]
@@ -2125,8 +2137,8 @@ def test_preparation_key_follows_data_and_arguments(tmp_path):
              "exclude_where": None}
     k1 = mt._prep_key(a, "regression", [group], data)
     assert k1 == mt._prep_key(a, "regression", [group], data) and re.fullmatch(r"[0-9a-f]{16}", k1)
-    assert mp._RESUME_FILE_RE.fullmatch(k1 + ".prep.joblib") and mp._RESUME_FILE_RE.fullmatch(k1 + ".prep.start")
-    assert mp._RESUME_FILE_RE.fullmatch(k1 + ".m2.f3.start") and mp._RESUME_FILE_RE.fullmatch(k1 + ".fit.start.tmp")
+    assert rt._RESUME_FILE_RE.fullmatch(k1 + ".prep.joblib") and rt._RESUME_FILE_RE.fullmatch(k1 + ".prep.start")
+    assert rt._RESUME_FILE_RE.fullmatch(k1 + ".m2.f3.start") and rt._RESUME_FILE_RE.fullmatch(k1 + ".fit.start.tmp")
     assert k1 != mt._prep_key(a, "classification", [group], data)
     assert k1 != mt._prep_key(_train_args(data, str(xfile), "생산효율(%)", header_row=1), "regression", [group], data)
     xfile.write_text("반응온도(°C)\n", encoding="utf-8")                               # the list file changed
@@ -2143,75 +2155,76 @@ def test_step_mark_stops_a_step_longer_than_the_limit(tmp_path, monkeypatch):
     시간 제한을 늘리면 다시 시도하고, 늘린 제한으로도 끊겼으면 [추천] 없이 멈춘다."""
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
-    monkeypatch.setattr(mp, "CURRENT_STEP", {})
-    monkeypatch.setattr(mp, "_RESUME_PLACE", {})
-    monkeypatch.setattr(mp, "CURRENT_ARGV", [os.path.join(KIT, "ml_train.py"), "-f", "big.csv", "-x", "a,b", "-y", "y"])
-    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [])
+    monkeypatch.setattr(rt, "CURRENT_STEP", {})
+    monkeypatch.setattr(rt, "_RESUME_PLACE", {})
+    monkeypatch.setattr(rt, "CURRENT_ARGV", [os.path.join(KIT, "ml_train.py"), "-f", "big.csv", "-x", "a,b", "-y", "y"])
+    monkeypatch.setattr(rt, "TIME_LIMIT_ARG", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
-    rt = str(tmp_path / "rt")
+    rdir = str(tmp_path / "rt")
     mark = tmp_path / "rt" / "0123456789abcdef.m1.f2.start"
-    mp.step_begin(rt, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+    rt.step_begin(rdir, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
     assert json.loads(mark.read_text(encoding="utf-8"))["tries"] == 1
-    mp.step_end()                                             # the step ended: no mark
+    rt.step_end()                                             # the step ended: no mark
     assert not mark.exists()
     for tries in (1, 2):                                      # two runs stopped inside the step (no step_end)
-        mp.step_begin(rt, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+        rt.step_begin(rdir, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
         assert json.loads(mark.read_text(encoding="utf-8"))["tries"] == tries
-    with pytest.raises(mp.InputError) as e:
-        mp.step_begin(rt, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+    with pytest.raises(rt.InputError) as e:
+        rt.step_begin(rdir, "0123456789abcdef.m1.f2", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
     msg = str(e.value)
     assert "한 단계(학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5)가 명령 시간 제한(100초) 안에 끝나지 않습니다" in msg, msg
     rec = msg.split("[추천] ")[1]
     assert rec.startswith("python ") and rec.endswith(" --time-limit 570") and '-x a,b -y y' in rec, rec
-    payload = mp.error_payload(e.value)
+    payload = rt.error_payload(e.value)
     assert payload["agent_directive"].startswith("STOP_RETRY:") and "timeout) 600000" in payload["agent_directive"]
-    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [570.0])      # the [추천] command: a larger limit tries again
-    mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
-    mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
-    with pytest.raises(mp.InputError) as e:
-        mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
+    monkeypatch.setattr(rt, "TIME_LIMIT_ARG", [570.0])      # the [추천] command: a larger limit tries again
+    rt.step_begin(rdir, "0123456789abcdef.m1.f2", "fold")
+    rt.step_begin(rdir, "0123456789abcdef.m1.f2", "fold")
+    with pytest.raises(rt.InputError) as e:
+        rt.step_begin(rdir, "0123456789abcdef.m1.f2", "fold")
     assert "[추천]" not in str(e.value) and "시간 제한을 늘려도 끝나지 않았습니다" in str(e.value), str(e.value)
-    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [0.0])        # no limit: no mark, never stopped
-    mp.step_begin(rt, "0123456789abcdef.m1.f2", "fold")
-    assert mp.CURRENT_STEP.get("name") is None
+    monkeypatch.setattr(rt, "TIME_LIMIT_ARG", [0.0])        # no limit: no mark, never stopped
+    rt.step_begin(rdir, "0123456789abcdef.m1.f2", "fold")
+    assert rt.CURRENT_STEP.get("name") is None
 
 
 def test_time_limit_argument_overrides_the_environment(monkeypatch):
-    monkeypatch.setattr(mp, "TIME_LIMIT_ARG", [])
+    monkeypatch.setattr(rt, "TIME_LIMIT_ARG", [])
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "100")
-    p = mp.JsonArgumentParser()
+    p = rt.JsonArgumentParser()
     p.add_argument("-f")
     ns = p.parse_args(["-f", "a.csv"])
-    assert not hasattr(ns, "time_limit") and mp.time_limit() == 100.0
+    assert not hasattr(ns, "time_limit") and rt.time_limit() == 100.0
     p.parse_args(["-f", "a.csv", "--time-limit", "570"])
-    assert mp.time_limit() == 570.0
+    assert rt.time_limit() == 570.0
     p.parse_args(["--time-limit", "0"])
-    assert mp.time_limit() == float("inf")
+    assert rt.time_limit() == float("inf")
 
 
 _WATCHDOG_SCRIPT = r'''
 import os, sys, time
 sys.path.insert(0, sys.argv[1])
 import ml_predict as mp
-mp.WATCHDOG_GRACE = 0.5
-p = mp.JsonArgumentParser()
+import _ml_runtime as rt
+rt.WATCHDOG_GRACE = 0.5
+p = rt.JsonArgumentParser()
 p.add_argument("--mode")
 p.add_argument("--rt")
 a = p.parse_args(sys.argv[2:])
 
 def body():
     if a.mode == "saved":
-        mp.resume_save(a.rt, "0123456789abcdef.m0.f1.joblib", lambda t: open(t, "w").write("x"), "fold")
-        mp.step_label("학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
+        rt.resume_save(a.rt, "0123456789abcdef.m0.f1.joblib", lambda t: open(t, "w").write("x"), "fold")
+        rt.step_label("학습: 타겟 'y' 'RandomForest' 교차검증 fold 2/5")
     elif a.mode == "marked":
-        mp.step_begin(a.rt, "0123456789abcdef.m0.f1", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 1/5")
+        rt.step_begin(a.rt, "0123456789abcdef.m0.f1", "학습: 타겟 'y' 'RandomForest' 교차검증 fold 1/5")
     elif a.mode == "fast":
         return {"status": "ok", "verified": True, "agent_directive": "VERIFIED: 끝"}
     time.sleep(30)                       # a slow step
     print("never", flush=True)
     return {"status": "ok", "verified": True, "agent_directive": "VERIFIED: 늦음"}
 
-mp.run_cli(body)
+rt.run_cli(body)
 '''
 
 
@@ -2259,13 +2272,14 @@ _FIRE_AFTER_COMMIT = r'''
 import os, sys, threading, time
 sys.path.insert(0, sys.argv[1])
 import ml_predict as mp
+import _ml_runtime as rt
 import ml_train as mt
 _verify = mt.verify_version_dir
 
 def slow_verify(*a, **k):                # the limit + grace timer elapses while the saved version is checked
-    t = threading.Thread(target=mp._watchdog_fire)
+    t = threading.Thread(target=rt._watchdog_fire)
     t.start()
-    time.sleep(mp.WATCHDOG_HOLD_SECONDS + 4)
+    time.sleep(rt.WATCHDOG_HOLD_SECONDS + 4)
     return _verify(*a, **k)
 
 mt.verify_version_dir = slow_verify
@@ -2299,18 +2313,18 @@ def test_watchdog_after_commit_answers_saved_not_continue(tmp_path, monkeypatch)
 def test_watchdog_payload_after_commit(monkeypatch):
     """저장한 결과가 같은 명령으로 다시 쓰이면(rerun_safe: ml_report -f의 최고 버전, --best의 best_run.json) CONTINUE 그대로,
     아니면 ok + UNVERIFIED. 아무것도 저장하지 않았으면 예전처럼 STOP_RETRY."""
-    monkeypatch.setattr(mp, "RUN_SAVED", [])
-    monkeypatch.setattr(mp, "RUN_COMMITTED", [])
-    monkeypatch.setattr(mp, "CURRENT_STEP", {"label": "보고서 작성"})
-    mp.mark_committed("학습 버전 v3", rerun_safe=True, version="v3")
-    out, code = mp._watchdog_payload()
+    monkeypatch.setattr(rt, "RUN_SAVED", [])
+    monkeypatch.setattr(rt, "RUN_COMMITTED", [])
+    monkeypatch.setattr(rt, "CURRENT_STEP", {"label": "보고서 작성"})
+    rt.mark_committed("학습 버전 v3", rerun_safe=True, version="v3")
+    out, code = rt._watchdog_payload()
     assert code == 0 and out["continue"] is True, out
-    mp.mark_committed("보고서 r.docx", report_file="r.docx")
-    out, code = mp._watchdog_payload()
+    rt.mark_committed("보고서 r.docx", report_file="r.docx")
+    out, code = rt._watchdog_payload()
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["report_file"] == "r.docx", out
     assert [s["what"] for s in out["saved"]] == ["학습 버전 v3", "보고서 r.docx"] and "continue" not in out
-    mp.RUN_COMMITTED.clear()
-    out, code = mp._watchdog_payload()
+    rt.RUN_COMMITTED.clear()
+    out, code = rt._watchdog_payload()
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
 
 
@@ -2351,13 +2365,13 @@ def test_exclude_where_with_comma_between_conditions_stops_with_fixed_command(tm
 
 def test_where_comma_detection_leaves_real_values():
     """','가 조건 사이일 때만 잡는다: 천 단위 숫자, 따옴표 값, 이름 없는 텍스트 값은 그대로."""
-    assert mp.parse_where("온도 > 1,500") == [[("온도", ">", "1,500")]]
-    assert mp.parse_where("비고 = 'A, B > 3'") == [[("비고", "=", "A, B > 3")]]
-    assert mp.parse_where("비고 = A, B") == [[("비고", "=", "A, B")]]
+    assert rt.parse_where("온도 > 1,500") == [[("온도", ">", "1,500")]]
+    assert rt.parse_where("비고 = 'A, B > 3'") == [[("비고", "=", "A, B > 3")]]
+    assert rt.parse_where("비고 = A, B") == [[("비고", "=", "A, B")]]
     for text, fixed in (("온도 <= 190, 압력 >= 1000", "온도 <= 190; 압력 >= 1000"),
                         ("온도 > 1,500, 2(mm) < 3 | 라인 = B", "온도 > 1,500; 2(mm) < 3 | 라인 = B")):
-        with pytest.raises(mp.InputError) as e:
-            mp.parse_where(text, "--where")
+        with pytest.raises(rt.InputError) as e:
+            rt.parse_where(text, "--where")
         assert "','로 나눴습니다" in str(e.value) and recommendation(str(e.value)) == fixed, str(e.value)
 
 
@@ -2477,6 +2491,7 @@ def test_auto_inputs_next_commands_carry_x(auto_run):
     assert [f for f in rec["features_used"] if f in res["features_auto"]] == [f for f in res["features_auto"] if f in names]
 
 
+@pytest.mark.report
 def test_auto_inputs_best_and_report(auto_run):
     """입력을 자동으로 고른 학습이 있는 이력에서도 --best와 ml_report -f가 그 입력으로 다시 학습."""
     best = run_tool("ml_train.py", "-f", auto_run["f"], "--best")

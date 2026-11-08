@@ -4,7 +4,7 @@ description: 학습한 모델로 새 조건이나 새 데이터의 값을 예측
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.78"
+  version: "2.9.80"
   platform: windows
 ---
 

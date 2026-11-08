@@ -874,7 +874,9 @@ def test_manual_scenario_is_marked_and_left_out_of_bulk(tmp_path, monkeypatch):
     single, bulk = text.split("## 한 번에 보내기")
     assert "수동 준비: Outlook" in single and f"{G}\\시험성적서.docx" in single and "[O3]" in single
     assert "[O3]" not in bulk and "[O1]" in bulk and "[O5]" in bulk
-    assert "S -> A -> M -> P -> R -> O -> X" in (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
+    readme = (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
+    assert "S -> A -> M -> P -> O -> X" in readme                    # 시험에서 뺀 묶음(R)은 순서·묶음 파일에 없음
+    assert "- R 보고서와 성능예측표: 뺌 (" in readme and not (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists()
 
 
 def test_office_samples_match_scenarios(tmp_path):

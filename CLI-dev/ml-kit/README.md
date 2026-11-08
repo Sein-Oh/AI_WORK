@@ -42,9 +42,12 @@ CLI/ml-kit/                 # 실행에 필요한 파일만 (사내 PC C:\CLI\ml
 ├── [1단계: 학습 엔진]
 │   └── ml_train.py         # 자동 헤더 스니핑, 방탄 AST 파생변수, 5대 회귀/분류 경쟁, 리더보드, SSOT 패키징
 │
-├── [2단계: 추론 엔진 + 공통 런타임]
-│   └── ml_predict.py       # 단독 배포 가능. 파생 수식 재현, 외삽/저확신 경고, 회귀·분류 자동 분기
-│                           # PART C: 데이터 로딩, 수치 변환, 수식 엔진, JSON 규약, Windows 파일 처리 (train/report가 import)
+├── [공통 런타임]
+│   └── _ml_runtime.py      # 진입점 아님. 데이터 로딩, 수치 변환, 수식 엔진, JSON 규약, Windows 파일 처리,
+│                           # 버전 고르기(-m <데이터 파일>), -i 해석 (모든 진입점이 import)
+│
+├── [2단계: 추론 엔진]
+│   └── ml_predict.py       # _ml_runtime.py와 함께 단독 배포 가능. 파생 수식 재현, 외삽/저확신 경고, 회귀·분류 자동 분기
 │
 ├── [3단계: ML 결과 보고서]
 │   └── ml_report.py        # 버전 폴더 1개 -> Word 문서 1개 (회귀·분류, 차트 포함, 소견 자동 작성)
@@ -139,6 +142,11 @@ flowchart TD
 
 단 1회의 명령으로 [데이터 로드 -> 비표준 헤더 스니핑 -> 결측치 대치 -> 방탄 파생변수 -> 5대 모델 5-Fold 경쟁 -> 리더보드 -> 챔피언 가중치 패키징 -> SSOT 원장 갱신]을 완전 무인으로 완결합니다.
 
+### 0) 스레드 (2.9.79)
+표가 2만 행(`MANY_THREADS_ROWS`)보다 작으면 학습·예측은 한 스레드로 합니다 (HistGradientBoosting의 OpenMP와 BLAS는 `threadpoolctl`,
+RandomForest·ExtraTrees는 `n_jobs=1`). 작은 표에서는 한 스레드가 더 빠르고, 다른 프로그램이 CPU를 쓸 때 여러 스레드가 서로 기다려
+학습이 수십 배 느려지는 일을 막습니다. 결과는 스레드 수와 상관없이 같습니다 (`random_state` 고정).
+
 ### 0-A) 입력 자동 선택 (`-x` 생략, 2.9.72)
 `-x`를 빼면 도구가 타겟(`-y`)을 뺀 모든 열에서 입력을 고르고, 뺀 열마다 이유를 적습니다 (`diagnose_inputs`, `auto_inputs`).
 날짜 열과 종류가 적은 글자 열(라인, 설비)은 입력으로 남습니다. 규칙(위에서부터 처음 맞는 것):
@@ -171,8 +179,8 @@ flowchart TD
 
 - 종류가 200개를 넘거나, 50개를 넘으면서 행의 절반 이상이 서로 다른 문자 컬럼은 ID로 보고 `STOP_RETRY`.
 - `--dtypes "설비코드:str,측정일:datetime,값:float"`로 유형을 강제할 수 있습니다. `:datetime`은 `YYYYMMDD` 8자리(숫자 또는 글자, 예: `20240103`)도 읽습니다.
-  학습과 예측은 `ml_predict.py` PART C의 같은 날짜 해석(`parse_datetime`)을 써서 결과가 같습니다.
-- 날짜 분해는 파이프라인 밖(`ml_predict.py` PART C)에서 하므로 모델 파일에 사용자 코드가 저장되지 않고, `ml_predict.py` 단독 배포가 유지됩니다.
+  학습과 예측은 `_ml_runtime.py`의 같은 날짜 해석(`parse_datetime`)을 써서 결과가 같습니다.
+- 날짜 분해는 파이프라인 밖(`_ml_runtime.py`)에서 하므로 모델 파일에 사용자 코드가 저장되지 않고, 예측 단독 배포(`ml_predict.py` + `_ml_runtime.py`)가 유지됩니다.
 
 ### 1) 5대 다중 회귀 모델 경쟁 풀 (Champion Selection)
 수학적 성격이 완전히 상이한 5대 핵심 알고리즘을 누수 방지 파이프라인(`Pipeline(ColumnTransformer[수치: SimpleImputer(median) -> StandardScaler(), 범주: OneHotEncoder] -> Regressor)`)에 탑재하여 동시 5-Fold 교차검증을 수행하고, 검증 결정계수($Val\ R^2$) 최상위 1개 모델을 타겟별 공식 챔피언으로 선정합니다:
@@ -259,6 +267,9 @@ python ml_train.py -f "공정.xlsx" -x "반응온도,촉매비율,수분함량" 
   예측 입력이면 기준값으로 채우고 `missing_input_warning`을 냅니다.
 - 같은 머리글이 여러 번 나오면 `_1`, `_2`를 붙이고, 붙인 이름이 이미 있으면 다음 번호를 씁니다 (`a, a, a_1` -> `a, a_2, a_1`).
 - 학습 결과 `next_commands`의 맨 뒤에는 한 건 예측 틀 `-m <버전> -i "<입력1>=<값>,..."`(모델 입력 이름, `needs_input`, `placeholder: <값>`)이 늘 있습니다 (2.9.75).
+  `-i` 한 건에 타겟의 숫자 값 하나와 `<값>` 입력 하나가 함께 있으면(`-i "불순물=100,반응온도=<값>,..."`) 반대 찾기라는 뜻 하나라
+  `--find "<타겟>=<값>" --vary "<입력>"`과 나머지 `-i`로 고친 명령을 `[추천]`합니다 (2.9.80).
+  `ml_map.py --find`의 기준 열이 3개를 넘고 그 파일로 학습한 모델이 있으면 같은 질문의 `ml_predict.py -m "<데이터 파일>" --find` 명령을 `[추천]`합니다 (2.9.80).
 - 예측 명령(`next_commands`, 보고서의 예측 명령)에는 레이아웃 옵션을 넣지 않습니다. 예측은 파일마다 머리글을 찾고, 레이아웃이 맞지 않으면
   **그 자리에서 고쳐 읽습니다**(JIT 복구): 모델 입력이 모두 든 레이아웃이 하나로 정해질 때만 그 레이아웃으로 다시 읽고 `status: ok`,
   `recovered: ["레이아웃 옵션이 이 파일과 달라 머리글 N행으로 읽음(, 단위 M행 / , 데이터 K행부터)"]`(레이아웃 옵션을 줬을 때) 또는
@@ -551,10 +562,12 @@ python ml_train.py -f sample.xlsx --best --task classification
 학습 단계에서 패키징된 아티팩트를 로드하여, 단일 레코드 인라인 추론(Zero-File) 또는 배치 파일 대량 예측을 0.1초 만에 수행합니다.
 
 ### 0) 단독 배포 (Standalone Deployment)
-`ml_predict.py`는 다른 ml-kit 파일을 import하지 않습니다. 예측 PC에는 아래 2가지만 복사하면 됩니다:
+`ml_predict.py`는 공통 런타임 `_ml_runtime.py`만 import합니다. 예측 PC에는 아래 3가지만 복사하면 됩니다
+(`_ml_runtime.py`를 빠뜨리면 `missing_file` 오류 JSON 1줄로 알림):
 ```text
 배포폴더/
 ├── ml_predict.py
+├── _ml_runtime.py
 └── v3/                 # 학습 결과 버전 폴더 (model_*.joblib, model_*.json)
 ```
 ```bat
@@ -1210,7 +1223,7 @@ Windows PowerShell 5.1(OpenCode 셸 도구와 같은 순서), 환경변수 `ML_K
 (괄호 밖, 뒤에 `<이름> =`; `max(a, b)`의 `,`는 그대로), `--dtypes` 쌍 사이 `;`, `-x`/`-y` 이름 사이 `;`(나눈 조각이 모두 열일 때만).
 
 인자 오류 (2.9.69): 줄여 쓴 옵션을 받지 않습니다(`allow_abbrev=False`: 예전에는 `--data x`가 `--data-row`로 읽혀 정수 오류). 경량 LLM이 지어내는
-같은 뜻 옵션(`SAME_MEANING`, PART C: `--model-dir`·`--dir` -> `-m`, `--inputs` -> `-i`(예측), `--input-file`·`--data`·`--input` -> `-f`,
+같은 뜻 옵션(`SAME_MEANING`, `_ml_runtime.py`: `--model-dir`·`--dir` -> `-m`, `--inputs` -> `-i`(예측), `--input-file`·`--data`·`--input` -> `-f`,
 `--target`·`--target-col` -> `-y`, `--columns` -> `-x`, `--query` -> `-i`(ml_map), `--output`·`--out` -> `--save`, `--json`·`--encoding`은 뺌)은
 `[추천] <고친 전체 명령>`(고친 명령이 실제로 읽히는지 먼저 확인, 필수 인자 빠짐 오류에도)을 붙입니다. 진짜 옵션의 앞부분인 것(`--target`,
 `--feature`, `--header` 등: 예전에 줄임말로 되던 것)도 읽지 않고 같은 `[추천]`을 줍니다(2.9.71, 옵션마다 쓰는 법 하나). 비슷한 철자는 `[후보]`로만 주고
@@ -1352,7 +1365,7 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     (2.9.65, 5차 검토: 전에는 열의 1/5을 시계 없이 계산해 600열 데이터에서 120초 강제 종료가 매번 반복), 끝낸 열은 멈출 때뿐 아니라
     `IMPORTANCE_SAVE_SECONDS`(12초)마다 저장하므로 명령이 밖에서 강제 종료되어도 다음 실행이 이어 갑니다(처음 저장할 때 전체 적합도 저장).
     열마다 난수를 따로 정하므로(시드, 열 번호) 나눠 계산해도 한 번에 계산한 중요도와 같습니다. 12초 안에 끝나면 전체 적합은 저장하지 않습니다.
-  - 중간 저장(`.resume_train`, `best_run.json`, 성능예측표 `_fits`)은 저장 뒤 파일이 있는지 확인합니다 (공통 `resume_save`/`resume_find`/`resume_clear`, PART C).
+  - 중간 저장(`.resume_train`, `best_run.json`, 성능예측표 `_fits`)은 저장 뒤 파일이 있는지 확인합니다 (공통 `resume_save`/`resume_find`/`resume_clear`, `_ml_runtime.py`).
     원래 위치에 저장하지 못하면(폴더 권한, 디스크 공간, 같은 이름의 파일, 경로 길이) JIT 복구로 대체 위치에 저장합니다: 데이터 폴더(`ML_KIT_DATA_DIR`
     또는 기본값) 아래 `ml-kit-resume\<원래 폴더 해시 12자>\`, 그다음 `%TEMP%\ml-kit-resume\<해시>\`. `[WARN]`과 `recovered`
     (`중간 저장 실패 (.resume_train) -> 대체 위치 데이터 폴더 ml-kit-resume\<해시>에 저장`). 이어 실행은 원래 위치와 대체 위치를 모두 찾고, 끝나면 대체 위치도
@@ -1375,7 +1388,7 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     (`progress`: `학습: 학습 준비(데이터 읽기, 검증, 상관행렬) 저장됨 (첫 학습 단계 전에 멈춤, 약 N단계 남음)`). 숫자 열 읽기(`coerce_numeric`)는 칸마다
     한 번에 처리해(정규식은 `%`가 있는 칸만) 준비 자체도 빨라졌습니다(같은 결과).
   - 단계 하나가 제한보다 긴 경우 (2.9.67): 실행의 첫 단계(준비, fold, 1위 전체 적합, 중요도 첫 열, 성능예측표 첫 후보: 시계 없이 함)는 시작 전에
-    시작 표시 `<단계>.start`(시도 횟수, 그때 제한)를 남기고 저장하면 지웁니다(`step_begin`/`step_end`, PART C; 실행이 오류로 끝나도 지움).
+    시작 표시 `<단계>.start`(시도 횟수, 그때 제한)를 남기고 저장하면 지웁니다(`step_begin`/`step_end`, `_ml_runtime.py`; 실행이 오류로 끝나도 지움).
     표시만 남은 단계를 다시 만나면 이전 실행이 그 단계 도중 밖에서 끊긴 것입니다: 2번째까지는 다시 시도하고(바쁜 PC에서 한 번 끊길 수 있음),
     같은 제한 이하에서 2번 끊긴 단계는 시작하지 않고 `STOP_RETRY`: `이 데이터는 한 단계(...)가 명령 시간 제한(100초) 안에 끝나지 않습니다 ...
     [추천] <같은 명령> --time-limit 570` (명령 실행 도구 timeout 600000으로). `--time-limit 초`는 모든 ml-kit 명령이 받는 인자(`JsonArgumentParser`,
@@ -1385,7 +1398,7 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     표시한 첫 단계의 첫 끊김이면 `CONTINUE`(`그 단계 다시 시도 1/2`), 아니면 위 `STOP_RETRY`(오류 로그 기록). stdout은 락과 표시(`emit_json_response`)로
     한 번만 쓰므로 두 줄이 나오지 않고, 버전 폴더를 커밋하는 중이면 4초 기다립니다. 제한이 없거나 ml-kit 명령이 아닌 실행(테스트의 같은 프로세스 호출)에는 감시가 없습니다.
   - 저장한 뒤의 감시 (2.9.69): 결과를 저장해 둔 뒤(학습 버전 커밋과 원장 기록, 성능예측표, 보고서, 예측·조건별 결과 파일, ml_map 결과 파일:
-    `mark_committed`, PART C)에 감시가 끝내면 `CONTINUE`가 아니라 `"status": "ok"`, `"verified": false`, `UNVERIFIED: 학습 버전 v1 저장됨, 확인하지 못함
+    `mark_committed`, `_ml_runtime.py`)에 감시가 끝내면 `CONTINUE`가 아니라 `"status": "ok"`, `"verified": false`, `UNVERIFIED: 학습 버전 v1 저장됨, 확인하지 못함
     (...)`, 저장한 것의 키(`version`, `version_dir`, `output_file`, `report_file`)와 `saved`, `unverified`를 냅니다(exit 0, `next_commands` 없음).
     예전에는 같은 명령을 다시 하라고 해서 처음부터 다시 학습해 같은 버전이 하나 더 생겼고(v2), 저장한 단계가 없으면 v1이 저장됐는데도 `STOP_RETRY`였습니다.
     같은 명령을 다시 실행해도 같은 일을 다시 하지 않는 저장(보고서 `-f`가 만든 최고 버전: `best_is_fresh`로 다시 씀, `--best`가 `best_run.json`에 적은 앞 작업 유형)은

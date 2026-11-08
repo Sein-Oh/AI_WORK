@@ -12,6 +12,56 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.80] - 2026-11-08
+
+집 PC(Windows) 확인에서 나온 것.
+
+### 수정
+- `_ml_runtime.py` 없이 `ml_predict.py`만 복사했을 때의 JSON 1줄이 CP949로 나가 UTF-8로 읽지 못했음
+  (`test_predict_without_runtime_is_one_json_line` 실패, Linux는 기본이 UTF-8이라 통과). 그 JSON을 쓰기 전에 stdout을 UTF-8로 바꿈.
+- 집 PC Gemma P3: `-i "불순물(ppm)=100,반응온도(°C)=<값>,..."`(타겟 값 + 자리표시자 하나)로 실행해 "<값>을 물으라"만 받고 `ml_map.py`를
+  학습 데이터에 돌려 실패. 타겟 숫자 값 하나가 있고 그 모델의 숫자 입력 중 하나만 `<값>`이거나 빠져 있으면(세 번째 시도는 반응온도를 뺌)
+  뜻이 하나(반대 찾기)라 `--find "<타겟>=<값>" --vary "<입력>"`과 나머지 `-i`로 고친 명령을 `[추천]` (`_offer_find`).
+  타겟·빈 입력이 둘 이상이거나 타겟이 없으면 원래대로.
+  회귀 테스트 `test_target_value_with_placeholder_input_recommends_find`.
+- 같은 P3를 다시 보냈을 때 Gemma가 `ml_map.py --find`에 입력 6개를 줘 "기준 열은 --vary 포함 3개까지"로 멈추고 사용자에게 범위를 물음.
+  그 데이터 파일로 학습한 모델이 있으면 같은 질문을 모델로 푸는 `ml_predict.py -m "<데이터 파일>" --find ... --vary ... -i ...`를
+  `[추천]` (예측은 읽기만 함, `_model_find_hint`). 회귀 테스트 `test_find_with_too_many_inputs_recommends_the_trained_model`.
+
+## [2.9.79] - 2026-11-08
+
+구조 검토 반영: 공통 런타임을 `ml_predict.py`에서 떼어 냄, 학습 스레드, `[후보]` 번호와 전체 명령, 파일 재시도.
+보고서(`ml_report.py`)·성능예측표(`ml_export.py`)는 다른 로직이 마무리될 때까지 시험에서 빼고 이번에 고치지 않음 (남은 할 일).
+
+### 수정
+- 학습·예측 스레드: 표가 `MANY_THREADS_ROWS`(2만 행)보다 작으면 HistGradientBoosting(OpenMP)·BLAS는 한 스레드, 숲 모델은 `n_jobs=1`
+  (`limit_threads`, `model_jobs`, threadpoolctl은 scikit-learn에 딸려 있음). 작은 표에서 모든 코어를 쓰면 더 느리고, 다른 프로그램이 CPU를
+  쓰면 OpenMP 스레드가 서로 기다려 한 번 학습이 수십 배 느려졌음 (60행: 6.2초 -> 0.01초, `ml_train.py` 한 번 18초 -> 2.5초).
+  리더보드·예측값은 그대로 (같은 데이터로 바꾸기 전후 비교). 예측은 늘 한 스레드.
+- `[후보]`는 늘 번호(`[후보] 1) a 2) b`). 후보마다 전체 명령을 만들 수 있으면 같은 번호의 `confirm_commands`(needs_user_decision):
+  `-i` 이름 오타·모델 입력이 아닌 이름, 같은 이름 하나가 여러 입력과 비슷함, 머리글 행 후보(`--header-row`), `--vary` 입력, 범주 값,
+  최고 버전 기록이 없을 때와 회귀·분류가 함께 있을 때의 버전, `--positive-class`, `--task`. 글만 만드는 도우미도 명령을 줄 수 있게
+  `ask()`가 이번 실행의 `[후보]` 글과 명령을 기억하고, 그 글이 든 `InputError`가 `confirm_commands`를 가짐.
+  명령을 만들 수 없는 후보(파일 머리글의 열 이름, 수식 안 이름, 값을 환산해야 하는 다른 단위)는 번호만.
+- 타겟 누수(`-x`와 `-y`에 같은 열)의 두 후보 명령을 `next_commands`(묻지 않고 실행)가 아니라 `confirm_commands`로 줌. 사용자가 골라야
+  하는 명령이 묻지 않고 실행될 수 있었음.
+- `retry_fs`가 `PermissionError`만이 아니라 winerror 5/32/33(접근 거부, 공유·잠금 위반)도 재시도 (office-cli와 같은 규칙, README R4).
+  다른 오류(없는 파일 등)는 바로 올림.
+- 전역 지침 4장 `[후보]`: 번호가 늘 있으므로 "번호가 없으면" 갈래를 "`confirm_commands`가 없으면"으로 줄임.
+
+### 구조
+
+### 구조
+- 새 파일 `_ml_runtime.py`(진입점 아님): 예전 `ml_predict.py` PART C 전체(데이터 로딩, 수치 변환, `--eval`, JSON 규약, 복구 함수)와,
+  다른 진입점이 `ml_predict`에서 가져다 쓰던 것(버전 고르기 `model_dir_from_data`·`resolve_target_models`, `-i` 해석
+  `parse_inline_input`·`kv_text`, `apply_inference_evals`, 스냅숏 열 이름). `ml_predict.py`는 예측 엔진만 (2,716줄, 공통 런타임 4,434줄).
+- 모든 진입점은 `_ml_runtime`을 import하고, 아무도 `ml_predict`를 import하지 않음. 공통 런타임이 예측부의 이름을 거꾸로 쓰던 곳
+  (`MODEL_CHOSEN`, `_near_trained_data`)도 함께 옮겨 없앰. 검사: `test_entry_points_import_only_the_runtime`, 두 파일을 합친 이름 중복 검사.
+
+### 배포
+- 예측만 하는 PC에는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더를 복사함 (README "단독 배포"). `_ml_runtime.py`를 빠뜨리면
+  traceback 대신 `missing_file` 오류 JSON 1줄(STOP_RETRY)로 알림. 도구 폴더 전체를 복사하는 `setup.bat`은 그대로.
+
 ## [2.9.78] - 2026-11-08
 
 집 PC opencode 루프 r5(Gemma 4 26B P1 실패: 답변에 실측 비교값 없음) 대응.
@@ -2010,9 +2060,13 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - 이전 이력 문서(ROADMAP 등)를 정리하고 이 CHANGELOG로 일원화. `requirements-dev.txt`, `install_offline.bat` 삭제.
 
 ## 남은 할 일
-- [ ] 2.9.76 검토에서 남긴 것: `-i` 이름 오타·모델 입력이 아닌 이름의 `[후보]` 번호(`_typo_hints`, `check_inline_unknown`), 천 단위로 보이는 쉼표
-  (`180,190`)의 `[추천]`을 `[후보]`로, `ml_export` 다른 입력 조합 명령을 `confirm_commands` 번호로, 머리글 행 후보(`--header-row 3, 5`) 번호,
-  `--find` 0건 directive 첫 문장, 학습 데이터 파일 옵션이 `-f`(학습)와 `-m`(예측)으로 다른 것, 학습 directive의 알릴 키 목록 줄이기
+- [ ] 보고서·성능예측표 (2026-11-08부터 시험에서 뺌: pytest `-m report`, beta `--only F`, 단순성 M9, Gemma R 묶음). 다른 로직이 마무리되면
+  함께 고칠 것: `ml_report.py`의 Word 만드는 부분(약 750줄)을 내부 모듈로 나누기, `_version_hint`의 번호 없는 `[후보]`와 값만 주는 `[추천]`,
+  `ml_report.load_version`·`ml_export.load_version`의 버전 판정을 공통 런타임 하나로, `ml_report.py -m`과 `-f` 두 사용법,
+  `ml_export` 다른 입력 조합의 `[후보]`를 `confirm_commands`로, 보고서 안에서 부르는 학습·성능예측표의 `[추천]`이 보고서 명령이 되는 것
+  (프로세스 안 호출이라 `command_text`가 보고서 명령을 돌려줌), 알릴 키 이름을 늘어놓는 directive
+- [ ] 2.9.76 검토에서 남긴 것: 천 단위로 보이는 쉼표(`180,190`)의 `[추천]`을 `[후보]`로, `--find` 0건 directive 첫 문장,
+  학습 데이터 파일 옵션이 `-f`(학습)와 `-m`(예측)으로 다른 것, 학습 directive의 알릴 키 목록 줄이기
 - [ ] 사용법 단순성 남은 것: 짧은 옵션(`-f -x -y -i -m`)과 긴 옵션 두 형태 (도구가 내는 명령과 스킬은 짧은 형태 하나로 맞춰 둠).
   JSON 형식 `-i`의 같은 열 두 이름 `[후보]`는 값 목록 (`[후보]` 번호는 2.9.73)
 - [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트.md` 4장 눈 확인 2번). 엑셀 재계산은 회사 PC 통과 (2.9.4)

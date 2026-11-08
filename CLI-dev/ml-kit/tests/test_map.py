@@ -15,7 +15,25 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlkit_helpers import split_command, recommendation, recommended_command, run_fail, run_raw, run_tool, write_book, write_csv, write_df  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
+
+
+def test_find_with_too_many_inputs_recommends_the_trained_model(tmp_path):
+    """2.9.80 집 PC Gemma P3: 입력 6개로 ml_map --find를 돌려 '기준 열은 3개까지'만 받고 사용자에게 범위를 물음 ->
+    이 파일로 학습한 모델이 있으면 같은 질문의 ml_predict.py --find 명령을 [추천]. 학습 전에는 [추천] 없음."""
+    r = np.random.default_rng(3)
+    df = pd.DataFrame({k: r.uniform(0, 10, 80) for k in ("a", "b", "c", "d")})
+    df["y"] = 3 * df.a + df.b - df.c + 0.5 * df.d
+    f = str(tmp_path / "four.csv")
+    df.to_csv(f, index=False)
+    argv = ["-f", f, "--find", "y=15", "--vary", "a", "-i", "b=5,c=5,d=5"]
+    res = run_fail("ml_map.py", *argv)
+    assert "3개까지" in res["message"] and "[추천]" not in res["message"], res
+    assert run_tool("ml_train.py", "-f", f, "-x", "a,b,c,d", "-y", "y")["status"] == "ok"
+    res = run_fail("ml_map.py", *argv)
+    name, fixed = recommended_command(res["message"])
+    assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "y=15" and fixed[fixed.index("-m") + 1] == f, fixed
+    assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
 
 
 # ---- 정방향 보간 ----------------------------------------------------------------------------------------------------
@@ -129,7 +147,7 @@ def test_code_column_is_matched_exactly_not_interpolated(tmp_path):
 
 def test_two_digit_numbers_with_a_leading_zero_are_interpolated(tmp_path):
     """3차 검토(2.9.63): '05, 10, 15, 20'의 '05' 하나로 숫자 열을 코드 열로 보아 보간 대신 틀린 [후보]를 냈다."""
-    p = tmp_path / "mp.csv"
+    p = tmp_path / "rt.csv"
     p.write_text("온도,압력,수율\n05,1,50\n10,1,60\n15,1,70\n20,1,80\n05,2,55\n10,2,65\n15,2,75\n20,2,85\n",
                  encoding="utf-8")
     res = run_tool("ml_map.py", "-f", str(p), "-i", "온도=12,압력=1", "-y", "수율")
@@ -265,11 +283,11 @@ def test_map_blank_in_other_value_column_keeps_row(tmp_path):
 
 
 def test_multitable_single_group_is_plain_table():
-    import ml_predict as mp
+    import _ml_runtime as rt
     df = pd.DataFrame({"A": [0.0, 1, 2, 3], "C": [0.0, 1, 4, 9], "__row": [2, 3, 4, 5]})
     w1, w2 = [], []
-    a = mp.MultiTable(df, ["A"], ["C"], w1).at(np.array([1.5]))
-    b = mp.Table(df, ["A"], ["C"], w2).at(np.array([1.5]))
+    a = rt.MultiTable(df, ["A"], ["C"], w1).at(np.array([1.5]))
+    b = rt.Table(df, ["A"], ["C"], w2).at(np.array([1.5]))
     assert a == b and w1 == w2 == []
     assert list(itertools.chain(a["values"])) == ["C"]
 
@@ -284,7 +302,7 @@ def _frame():
 
 def test_multitable_basis_per_column_and_sparse_column():
     w = []
-    t = mp.MultiTable(_frame(), ["A"], ["B", "C", "D"], w)                   # 2.9.12: InputError for D
+    t = rt.MultiTable(_frame(), ["A"], ["B", "C", "D"], w)                   # 2.9.12: InputError for D
     assert t.values == ["B", "C"] and any(w_.startswith("D:") for w_ in w)
     r = t.at(np.array([50.0]))
     rows_b = {b["row"] for b in r["basis_by_column"]["B"]}
@@ -299,7 +317,7 @@ def test_multitable_dedupes_table_warnings():
     df = pd.DataFrame({"A": [0.0, 0, 10, 20, 30], "B": [1.0, 2, 3, 4, np.nan], "C": [1.0, 3, 5, np.nan, 7],
                        "__row": [2, 3, 4, 5, 6]})
     w = []
-    mp.MultiTable(df, ["A"], ["B", "C"], w)
+    rt.MultiTable(df, ["A"], ["B", "C"], w)
     assert sum("평균" in x for x in w) == 1                                    # 2.9.12: once per column group
 
 
@@ -343,7 +361,7 @@ def test_multitable_range_from_kept_tables_and_out_of_range_per_group():
     df = pd.DataFrame({"A": A, "Y1": np.where(A <= 60, A * 2, np.nan), "Y2": np.where(A <= 40, A + 1, np.nan),
                        "Y3": np.where(A == 100, 5.0, np.nan), "__row": np.arange(2, 13)})
     w = []
-    t = mp.MultiTable(df, ["A"], ["Y1", "Y2", "Y3"], w)
+    t = rt.MultiTable(df, ["A"], ["Y1", "Y2", "Y3"], w)
     assert t.values == ["Y1", "Y2"]
     assert t.hi[0] == 60 and len(t.df) == 7                                   # 2.9.13: 100 (row of Y3 only)
     oor = t.at(np.array([80.0]))["out_of_range"]["A"]
@@ -396,8 +414,8 @@ def test_inline_input_joined_by_semicolon_or_space_gives_fixed_command(grid2):
         assert proc.returncode == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
         args = split_command(recommendation(out["message"]))
         assert args[args.index("-i") + 1] == "온도=12,압력=3", args
-    assert mp.parse_inline_input("비고=a b,온도=1,000").to_dict("records") == [{"비고": "a b", "온도": "1,000"}]
-    assert mp.parse_inline_input("온도 = 12, 압력 = 3").to_dict("records") == [{"온도": "12", "압력": "3"}]
-    with pytest.raises(mp.InputError) as e:                       # where a spaced name starts is not clear: no [추천]
-        mp.parse_inline_input("반응 온도=1 반응 압력=2")
+    assert rt.parse_inline_input("비고=a b,온도=1,000").to_dict("records") == [{"비고": "a b", "온도": "1,000"}]
+    assert rt.parse_inline_input("온도 = 12, 압력 = 3").to_dict("records") == [{"온도": "12", "압력": "3"}]
+    with pytest.raises(rt.InputError) as e:                       # where a spaced name starts is not clear: no [추천]
+        rt.parse_inline_input("반응 온도=1 반응 압력=2")
     assert "[추천]" not in str(e.value) and "','" in str(e.value)
