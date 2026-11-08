@@ -4,7 +4,7 @@ _ml_runtime.py - ml-kit shared runtime (not an entry point; the agent never runs
 
 Every ml-kit entry point (ml_train.py, ml_predict.py, ml_report.py, ml_export.py, ml_map.py) imports data loading,
 numeric coercion, the --eval formula engine, the Agent CLI Protocol, Windows-safe file helpers, model version
-selection (-m <data file>) and the inline input parser (-i) from here, so training and inference can never drift apart.
+selection (--model <data file>) and the inline input parser (--input) from here, so training and inference can never drift apart.
 
 DEPLOYMENT: a prediction-only PC needs ml_predict.py + this file + a trained version folder (vX/).
 """
@@ -53,7 +53,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.81"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.82"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -528,7 +528,7 @@ def step_too_long_error(label: str, limit: float, tries: int) -> InputError:
 # A result this command already saved for good (a version folder recorded in the ledger, a performance table, a report,
 # a result file): mark_committed. Running the same command again would do that work again (a second version, a second
 # file), so the watchdog no longer answers CONTINUE once such a result is saved: it answers ok + UNVERIFIED (saved, not
-# checked) with the saved paths (2.9.69). rerun_safe=True: the same command run again reuses it (ml_report -f reuses a
+# checked) with the saved paths (2.9.69). rerun_safe=True: the same command run again reuses it (ml_report --file reuses a
 # fresh best version, ml_train --best remembers the best versions it made), so CONTINUE stays right.
 RUN_COMMITTED: List[Dict[str, Any]] = []
 
@@ -748,7 +748,7 @@ def _with_recovered(payload: Dict[str, Any]) -> Dict[str, Any]:
         payload = {**payload, "recovered": list(_RECOVERED)}
     chosen = MODEL_CHOSEN
     if chosen and payload.get("status") == "ok" and "model_chosen" not in payload:
-        payload = {**payload, "model_chosen": chosen[-1]}      # -m <데이터 파일>: 도구가 고른 버전 (2.9.71)
+        payload = {**payload, "model_chosen": chosen[-1]}      # --model <데이터 파일>: 도구가 고른 버전 (2.9.71)
     return payload
 
 
@@ -972,6 +972,8 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--output": ["--save"], "--out": ["--save"], "--output-file": ["--save"], "-o": ["--save"],
     "--header": ["--header-row"], "--unit": ["--unit-row"], "--exclude": ["--exclude-where"],
     "--positive": ["--positive-class"], "--time": ["--time-limit"], "--description": ["--desc"],
+    # 한 글자 옵션은 없음 (2.9.82, 사용법 단순성 1번: 한 가지 일에 한 가지 사용법, office-cli 1.4.88과 같음). 받지 않고 긴 이름으로 [추천]
+    "-f": ["--file"], "-m": ["--model"], "-i": ["--input"], "-x": ["--features"], "-y": ["--targets"], "-v": ["--version"],
 }
 # Options with nothing to do in ml-kit: dropped in the [추천] command (value: how many arguments follow)
 DROP_OPTIONS = {"--json": 0, "--encoding": 1, "--verbose": 0, "--quiet": 0}
@@ -981,20 +983,20 @@ DROP_VERBS = {"train", "predict", "report", "map", "run", "fit", "export"}
 # Never given as a lookalike, even as [후보]: replaces files or retrains everything
 NO_FUZZY_OPTIONS = {"--overwrite", "--best", "--help"}
 _OPTION_TOKEN = re.compile(r"--?[A-Za-z][A-Za-z0-9_-]*")
-# '이름=값,이름=값' (the -i form): a value of this shape after an unknown option or in -f is the -i input (2.9.74, 집 PC
-# opencode: '-x "반응온도=182,..."' copied from ml_train, '-f "반응온도=182,..."')
+# '이름=값,이름=값' (the --input form): a value of this shape after an unknown option or in --file is the --input input (2.9.74, 집 PC
+# opencode: '--features "반응온도=182,..."' copied from ml_train, '--file "반응온도=182,..."')
 _INLINE_PAIRS = re.compile(r"\s*[^=,;\\/:*?\"<>|]+=[^=,;]*(\s*[,;]\s*[^=,;\\/:*?\"<>|]+=[^=,;]*)*\s*")
 
 
 def looks_inline_input(value: Any) -> bool:
-    """True for '이름=값[,이름=값...]' text that is not an existing path (the -i form; pairs split by ';' too, as
+    """True for '이름=값[,이름=값...]' text that is not an existing path (the --input form; pairs split by ';' too, as
     '--eval "온도=182; 압력=3"' from ml_train: the [추천] value uses ',', AGENTS.md 구분자 규칙)."""
     text = str(value or "")
     return bool(text) and "=" in text and not os.path.exists(text) and bool(_INLINE_PAIRS.fullmatch(text))
 
 
 def inline_value(value: str) -> str:
-    """The -i text of looks_inline_input value: pairs joined with ','."""
+    """The --input text of looks_inline_input value: pairs joined with ','."""
     return ",".join(p.strip() for p in re.split(r"[,;]", value) if p.strip())
 
 
@@ -1086,15 +1088,15 @@ class JsonArgumentParser(argparse.ArgumentParser):
                     i += 1
                     continue
                 value = val if eq else (given[i + 1] if i + 1 < len(given) else "")
-                # 목표 찾기(--find/--vary)나 범위('200:280:10')는 -i가 아님 (2.9.76: 목표값·범위를 -i로 [추천]했음)
+                # 목표 찾기(--find/--vary)나 범위('200:280:10')는 --input가 아님 (2.9.76: 목표값·범위를 --input로 [추천]했음)
                 aimed = any(g in given for g in ("--vary", "--find", "--sweep")) or re.search(r"\d\s*:\s*\d", str(value))
-                if "-i" in opts and "-i" not in given and "--input" not in given and not aimed and looks_inline_input(value):
-                    changes.append(f"{key} -> -i ('이름=값' 입력은 -i, 사이는 ,)")  # one meaning: the value form is -i's
+                if "--input" in opts and "--input" not in given and not aimed and looks_inline_input(value):
+                    changes.append(f"{key} -> --input ('이름=값' 입력은 --input, 사이는 ,)")  # one meaning: the value form is --input's
                     if eq:
-                        fixed.append("-i=" + inline_value(val))
+                        fixed.append("--input=" + inline_value(val))
                         i += 1
                     else:
-                        fixed += ["-i", inline_value(value)]
+                        fixed += ["--input", inline_value(value)]
                         i += 2
                     continue
                 unknown.append(key)
@@ -1126,14 +1128,14 @@ class JsonArgumentParser(argparse.ArgumentParser):
 
     @staticmethod
     def _fix_model_value(fixed: List[str], changes: List[str]) -> List[str]:
-        """In a [추천] command being built: an -m/--model value that is no model but has exactly one trained data file
+        """In a [추천] command being built: an --model value that is no model but has exactly one trained data file
         near it -> that data file, so the one [추천] runs (2.9.77: '--model_path <없는 폴더>' needed two [추천])."""
         out = list(fixed)
         for j in range(len(out) - 1):
-            if out[j] in ("-m", "--model"):
+            if out[j] in ("--model",):
                 found = _near_trained_data(os.path.abspath(str(out[j + 1]).strip().strip('"')))
                 if found and len(found) == 1:
-                    changes.append(f"-m {os.path.basename(found[0])} (학습한 데이터 파일)")
+                    changes.append(f"--model {os.path.basename(found[0])} (학습한 데이터 파일)")
                     out[j + 1] = found[0]
         return out
 
@@ -1364,7 +1366,7 @@ def _match_names(names: List[str], columns: List[str]) -> List[Optional[str]]:
 
 def known_columns(names: List[str], columns: List[str]) -> List[str]:
     """The columns the names match (resolve_column_names without errors or messages): the columns another option
-    takes, passed as exclude= when resolving this one (-x next to -y)."""
+    takes, passed as exclude= when resolving this one (--features next to --targets)."""
     return [c for c in _match_names(names, columns) if c is not None]
 
 
@@ -1373,7 +1375,7 @@ _NAME_PART = re.compile(r"(\s*[,;|=]\s*)")
 
 def command_replacing(old: str, new: str) -> Optional[str]:
     """The running command with the name `old` replaced by `new` (a full command for [후보] next_commands, 2.9.71):
-    an argument equal to old, or one part of a list or a 'k=v' argument ('-x "온도,압력"', '-i "온도=1,압력=2"').
+    an argument equal to old, or one part of a list or a 'k=v' argument ('--features "온도,압력"', '--input "온도=1,압력=2"').
     None when the running program is not an ml-kit command or old is in no argument."""
     argv = list(CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
     if not argv:
@@ -1385,7 +1387,7 @@ def command_replacing(old: str, new: str) -> Optional[str]:
             continue
         parts = _NAME_PART.split(a)
         hits = [p.strip() for p in parts].count(old)
-        if hits > 1:                       # '-i "라인=A,등급=A"': which A is meant is a guess
+        if hits > 1:                       # '--input "라인=A,등급=A"': which A is meant is a guess
             return None
         if hits:
             argv[i] = "".join(new if p.strip() == old else p for p in parts)
@@ -1395,8 +1397,8 @@ def command_replacing(old: str, new: str) -> Optional[str]:
 
 
 def command_dropping(names: List[str]) -> Optional[str]:
-    """The running command with the list parts named `names` removed ('-i "온도=1,온도(°C)=2"' without '온도(°C)':
-    '-i "온도=1"'). A part is named by its text before '='. None when a name is in no argument or an argument would
+    """The running command with the list parts named `names` removed ('--input "온도=1,온도(°C)=2"' without '온도(°C)':
+    '--input "온도=1"'). A part is named by its text before '='. None when a name is in no argument or an argument would
     become empty."""
     argv = list(CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
     left = set(names)
@@ -1439,14 +1441,14 @@ def ask(cands: List[Any], cmds: List[Optional[str]], purpose: str = "{}") -> str
 
 
 def command_with_pair(name: str, value: str) -> Optional[str]:
-    """The running command with 'name=value' added to its -i (or a new -i 'name=value')."""
+    """The running command with 'name=value' added to its --input (or a new --input 'name=value')."""
     argv = list(CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
     for j in range(1, len(argv) - 1):
-        if argv[j] in ("-i", "--input"):
+        if argv[j] in ("--input",):
             argv[j + 1] = f"{argv[j + 1]},{name}={value}"
             return command_text(argv=argv)
     cmd = command_text()
-    return f"{cmd} -i {quote_arg(f'{name}={value}')}" if cmd else None
+    return f"{cmd} --input {quote_arg(f'{name}={value}')}" if cmd else None
 
 
 def command_setting(option: str, value: str) -> Optional[str]:
@@ -1476,10 +1478,10 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     a close spelling may be another quantity ('속도' / '가속도', '수율' / '함수율'), never an automatic [추천].
     layout (df.attrs of load_data_file): when the missing names are all in another top row (two-level or merged
     header, title row), the suggestion is that row (header_layout_hint), with its unit row when the row below it is one.
-    values: the names carry values (-i '압력(MPa)=0.3'): one column of the same name with another unit ('압력(bar)')
+    values: the names carry values (--input '압력(MPa)=0.3'): one column of the same name with another unit ('압력(bar)')
     is no rename, the value must be converted (unit_hint).
     A column found for another given name is not suggested for a missing one (except the same name in another unit).
-    exclude: columns this command already uses elsewhere (ml_map -i next to -y / --find / --vary, -x next to -y,
+    exclude: columns this command already uses elsewhere (ml_map --input next to --targets / --find / --vary, --features next to --targets,
     the other names of ml_export --keep): matched when named, never listed as a candidate.
     """
     col_list = [str(c) for c in columns]
@@ -1737,7 +1739,7 @@ def parse_where(text: str, option: str = "--where") -> List[List[Cond]]:
 
 def resolve_where(groups: List[List[Cond]], columns: List[str], option: str = "--where",
                   layout: Optional[Dict[str, Any]] = None) -> List[List[Cond]]:
-    """Column names of the conditions resolved like -x / -y (resolve_column_names: exact, a unique name without its
+    """Column names of the conditions resolved like --features / --targets (resolve_column_names: exact, a unique name without its
     unit, a similar name -> [후보])."""
     names = list(dict.fromkeys(c for g in groups for c, _, _ in g))
     resolved = resolve_column_names(names, columns, f"조건({option})의 열", layout=layout)[0]
@@ -3165,7 +3167,7 @@ def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
 
 
 LAYOUT_OPTS = {"--header-row": "header_row", "--unit-row": "unit_row", "--data-row": "data_row"}
-PATH_OPTS = ("-f", "--file", "-m", "--model", "--save", "--points")
+PATH_OPTS = ("--file", "--model", "--save", "--points")
 
 
 def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
@@ -3361,7 +3363,7 @@ def match_categories(values: Any, known: List[Any]) -> Tuple[Dict[str, str], Lis
 
 def category_candidates(known: List[Any], col: Optional[str] = None, given: Optional[Any] = None) -> str:
     """'[후보] 1) A 2) B' of the training categories (at most CATEGORY_CANDIDATES_MAX, the rest counted) with the full
-    commands: `given` (a wrong value of col in -i) replaced by each, or 'col=<category>' added to -i when given is None."""
+    commands: `given` (a wrong value of col in --input) replaced by each, or 'col=<category>' added to --input when given is None."""
     known = [str(k) for k in known]
     shown = known[:CATEGORY_CANDIDATES_MAX]
     cmds = ([command_replacing(str(given), k) for k in shown] if given is not None else
@@ -3378,7 +3380,7 @@ def _category_recovered(col: str, fixes: Dict[str, str]) -> None:
 
 
 def align_categories(df: pd.DataFrame, schema: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Category inputs of df (file or -i) matched to the training categories in place (match_categories, reported with
+    """Category inputs of df (file or --input) matched to the training categories in place (match_categories, reported with
     note_recovered). Returns {column: values matching no training category} (the caller warns about them)."""
     left: Dict[str, List[str]] = {}
     for col, known in (schema.get("categorical") or {}).items():
@@ -3394,7 +3396,7 @@ def align_categories(df: pd.DataFrame, schema: Dict[str, Any]) -> Dict[str, List
     return left
 
 
-def fixed_category_value(col: str, value: Any, known: List[Any], option: str = "-i") -> str:
+def fixed_category_value(col: str, value: Any, known: List[Any], option: str = "--input") -> str:
     """One fixed category input (--sweep / --maximize / --find): the training category it means, or STOP_RETRY with the
     training categories as [후보] (an unseen category would be predicted as the baseline without a word)."""
     v = normalize_category(pd.Series([value])).iloc[0]
@@ -3623,7 +3625,7 @@ def apply_eval_expressions(
                 # 2.9.76: 열을 하나도 쓰지 않는 상수식('반응온도 = 182')은 파생변수가 아님: 한 건 예측 값을 --eval에 넣은 실수
                 # (그대로 학습하면 상수 열이 생기고 그 이름의 실제 입력이 무시됨)
                 raise InputError(f"--eval '{expr}'은(는) 데이터 열을 쓰지 않는 상수식이라 파생변수가 될 수 없습니다. 학습하지 않았습니다. "
-                                 "조건 하나를 예측하려는 것이면 학습이 아니라 ml_predict.py -i \"이름=값,...\"입니다 (ml-predict 스킬).")
+                                 "조건 하나를 예측하려는 것이면 학습이 아니라 ml_predict.py --input \"이름=값,...\"입니다 (ml-predict 스킬).")
             same_col = [c for c in columns if c == new_col or _alias_key(c) == _alias_key(new_col)]
             if strict and same_col:
                 raise InputError(f"--eval의 새 이름 '{new_col}'이(가) 데이터 열 '{same_col[0]}'과(와) 같습니다. 학습하지 않았습니다. "
@@ -3957,7 +3959,7 @@ class Table:
 
 
 class MultiTable:
-    """Several value columns, each interpolated on its own non-empty rows (ml_map.py without -y).
+    """Several value columns, each interpolated on its own non-empty rows (ml_map.py without --targets).
     Rows are dropped for an empty key, but a blank in one value column does not remove that row from the others:
     value columns with the same empty cells share one Table. A value column with too few values for a table is left
     out with a warning (error only when no column is left). Range (lo, hi, span) and rows (df, for nearest_rows) are
@@ -4120,15 +4122,15 @@ def apply_inference_evals(df: pd.DataFrame, eval_expressions: List[str]) -> pd.D
 # ==============================================================================
 
 # ml_train writes <data>_ml_data/best_version.json after every ledger change: per task the version a report or a
-# prediction should use (ml_train task_best_version). `-m <data file>` (or the _ml_data folder) reads it, so the agent
+# prediction should use (ml_train task_best_version). `--model <data file>` (or the _ml_data folder) reads it, so the agent
 # never chooses a version folder itself (2.9.71, AGENTS.md "사용법 단순성" 5).
 BEST_POINTER = "best_version.json"
 DATA_EXTS = (".xlsx", ".xls", ".xlsm", ".csv")
 MODEL_CHOSEN: List[str] = []
 
 
-def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: str = "-m") -> str:
-    """-m value -> model path: a version folder or .joblib as given; a data file or its _ml_data folder -> the best
+def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: str = "--model") -> str:
+    """--model value -> model path: a version folder or .joblib as given; a data file or its _ml_data folder -> the best
     version folder of best_version.json (one task, or the task holding `targets`). Several tasks with no way to tell
     -> STOP_RETRY [후보] full commands; no pointer -> STOP_RETRY [후보] the version folders as full commands."""
     ap = os.path.abspath(str(path).strip().strip('"'))
@@ -4167,7 +4169,7 @@ def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: 
     vdir = os.path.join(root, info["version"])
     msg = f"최고 버전 {info['version']} ({picks[0]}, best_version.json)으로 예측"
     if not info.get("complete", True):
-        msg += f". 이 버전에 없는 타겟 최고 모델: {', '.join(info.get('missing') or [])} (ml_report.py -f로 한 버전에 묶을 수 있음)"
+        msg += f". 이 버전에 없는 타겟 최고 모델: {', '.join(info.get('missing') or [])} (ml_report.py --file로 한 버전에 묶을 수 있음)"
     sys.stderr.write(f"[INFO] {option} {os.path.basename(ap)} -> {vdir}\n")
     MODEL_CHOSEN.append(msg)
     return vdir
@@ -4205,20 +4207,20 @@ def _near_trained_data(ap: str) -> Optional[List[str]]:
 
 
 def _model_path_near(given: str, ap: str) -> None:
-    """-m that is neither a model (version folder with model_*.joblib, .joblib) nor a data file (2.9.77, 집 PC Gemma:
-    '-m "<시험 폴더>\\models"' made up, '-m "<데이터 폴더>"'): the trained data file in that folder (or the nearest existing
-    folder above a missing path) -> STOP_RETRY [추천] the command with -m <data file>; several -> numbered [후보]."""
+    """--model that is neither a model (version folder with model_*.joblib, .joblib) nor a data file (2.9.77, 집 PC Gemma:
+    '--model "<시험 폴더>\\models"' made up, '--model "<데이터 폴더>"'): the trained data file in that folder (or the nearest existing
+    folder above a missing path) -> STOP_RETRY [추천] the command with --model <data file>; several -> numbered [후보]."""
     found = _near_trained_data(ap)
     if found is None:
         return
     what = "모델 경로를 찾을 수 없습니다" if not os.path.exists(ap) else "이 폴더에는 모델 파일(model_*.joblib)이 없습니다"
-    head = f"{what}: {ap}. -m에는 학습한 데이터 파일을 줍니다 (도구가 최고 버전을 고름)."
+    head = f"{what}: {ap}. --model에는 학습한 데이터 파일을 줍니다 (도구가 최고 버전을 고름)."
     if len(found) == 1:
         cmd = command_with_value(str(given), found[0])
         raise InputError(head + (f" [추천] {cmd}" if cmd else f" 학습한 데이터 파일: {found[0]}"))
     if found:
         cmds = [command_with_value(str(given), f) for f in found]
-        text, items = numbered([os.path.basename(f) for f in found], cmds, "-m {}")
+        text, items = numbered([os.path.basename(f) for f in found], cmds, "--model {}")
         raise InputError(f"{head} 학습한 데이터 파일이 여럿입니다. {text}", extra={"confirm_commands": items} if items else None)
 
 
@@ -4237,7 +4239,7 @@ def resolve_model_arg(args: argparse.Namespace) -> argparse.Namespace:
 def resolve_target_models(
     target_path: str,
     filter_targets: Optional[List[str]] = None,
-    kind: str = "타겟(-y)",
+    kind: str = "타겟(--targets)",
     values: bool = False
 ) -> List[Dict[str, Any]]:
     """
@@ -4354,11 +4356,11 @@ def resolve_target_models(
     return model_items
 
 # ==============================================================================
-# C10. Inline input (-i 'name=value,...'), shared by ml_predict.py and ml_map.py
+# C10. Inline input (--input 'name=value,...'), shared by ml_predict.py and ml_map.py
 # ==============================================================================
 
 def _no_repeated_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
-    """json object_pairs_hook for -i: a name given twice in one object ({"온도":180,"온도":190}) would silently keep
+    """json object_pairs_hook for --input: a name given twice in one object ({"온도":180,"온도":190}) would silently keep
     the last value (the same rule as 'k=v')."""
     out: Dict[str, Any] = {}
     for k, v in pairs:
@@ -4464,7 +4466,7 @@ def parse_inline_input(input_str: str) -> pd.DataFrame:
             if last_key in row_dict:
                 raise InputError(
                     f"입력 '{input_str}'에 '{last_key}='가 두 번 있습니다. 'k1=v1,k2=v2' 입력은 한 행입니다. 여러 행은 "
-                    f"JSON 배열(-i \"[{{...}},{{...}}]\")이나 .json 파일 경로로 주십시오. 한 행이면 사용자에게 값을 확인하십시오.")
+                    f"JSON 배열(--input \"[{{...}},{{...}}]\")이나 .json 파일 경로로 주십시오. 한 행이면 사용자에게 값을 확인하십시오.")
             row_dict[last_key] = v.strip()
         elif pair.strip():
             if last_key is None:
@@ -4485,7 +4487,7 @@ _KV_THOUSANDS_RE = re.compile(r"[+-]?[1-9]\d{0,2}(,\d{3})+(\.\d+)?")      # 'k=v
 
 def check_comma_numbers(pairs: Optional[Dict[str, Any]], numeric: Callable[[str], bool], option: str,
                         command_for: Callable[[Dict[str, str]], str]) -> None:
-    """'k=v' input (ml_predict -i/--find, ml_map -i/--find): a numeric value with a comma was split at the comma
+    """'k=v' input (ml_predict --input/--find, ml_map --input/--find): a numeric value with a comma was split at the comma
     and joined back, so '온도=180,190' could be 180190 or two values. Never accepted silently:
     thousands grouping (1,000 / 180,190) -> STOP_RETRY [추천] <full command with the value written without commas>,
     anything else (1,5) -> STOP_RETRY without a suggestion. Text values keep the joined text.

@@ -287,8 +287,8 @@ def test_all(ctx, only):
     xlsx_layout = ["--header-row", "3", "--unit-row", "4"]
 
     def m1():
-        d, c, o, e = run_tool("ml_train.py", "-f", s["xlsx"], *xlsx_layout,
-                              "-x", "일시,라인,반응온도,소비전력,압축압력,촉매비율,수분함량", "-y", "생산효율",
+        d, c, o, e = run_tool("ml_train.py", "--file", s["xlsx"], *xlsx_layout,
+                              "--features", "일시,라인,반응온도,소비전력,압축압력,촉매비율,수분함량", "--targets", "생산효율",
                               "--desc", "공정 효율 예측 (실기 테스트)", "--tag", "베이스라인")
         ft = (d or {}).get("feature_types") or {}
         s["m1"] = d
@@ -301,8 +301,8 @@ def test_all(ctx, only):
         xl = Office("Excel.Application")
         try:
             wb = xl.app.Workbooks.Open(s["xlsx"], ReadOnly=False)      # Excel이 파일을 쓰기 잠금
-            d, c, o, e = run_tool("ml_train.py", "-f", s["xlsx"], *xlsx_layout,
-                                  "-x", "반응온도,소비전력,촉매비율,수분함량,라인", "-y", "생산효율", "--tag", "엑셀에 열린 상태")
+            d, c, o, e = run_tool("ml_train.py", "--file", s["xlsx"], *xlsx_layout,
+                                  "--features", "반응온도,소비전력,촉매비율,수분함량,라인", "--targets", "생산효율", "--tag", "엑셀에 열린 상태")
             wb.Close(SaveChanges=False)
         finally:
             xl.quit()
@@ -317,7 +317,7 @@ def test_all(ctx, only):
             enc = "utf-8"
         except UnicodeDecodeError:
             enc = "cp949"
-        d, c, o, e = run_tool("ml_train.py", "-f", s["csv"], "-x", "반응온도,소비전력,촉매비율,수분함량", "-y", "생산효율",
+        d, c, o, e = run_tool("ml_train.py", "--file", s["csv"], "--features", "반응온도,소비전력,촉매비율,수분함량", "--targets", "생산효율",
                               "--desc", "CP949 CSV 입력")
         ok = ok_(d) and enc == "cp949" and (d or {}).get("mean_val_score", 0) >= 0.8
         record(ctx, "M3", "Excel이 저장한 CSV(CP949) 입력", ok,
@@ -325,7 +325,7 @@ def test_all(ctx, only):
 
     def m4():
         vd = (s.get("m1") or {}).get("version_dir")
-        d, c, o, e = run_tool("ml_predict.py", "-m", vd, "-f", s["xlsx"], *xlsx_layout)
+        d, c, o, e = run_tool("ml_predict.py", "--model", vd, "--file", s["xlsx"], *xlsx_layout)
         out = (d or {}).get("output_file")
         headers = None
         if out and os.path.exists(out):
@@ -349,7 +349,7 @@ def test_all(ctx, only):
         xl = Office("Excel.Application")
         try:
             wb = xl.app.Workbooks.Open(out, ReadOnly=False)            # 결과 CSV를 Excel이 잠금
-            d, c, o, e = run_tool("ml_predict.py", "-m", vd, "-f", s["xlsx"], *xlsx_layout, "--save", out, "--overwrite")
+            d, c, o, e = run_tool("ml_predict.py", "--model", vd, "--file", s["xlsx"], *xlsx_layout, "--save", out, "--overwrite")
             wb.Close(SaveChanges=False)
         finally:
             xl.quit()
@@ -361,7 +361,7 @@ def test_all(ctx, only):
 
     def m6():
         vdir = (s.get("m1") or {}).get("version_dir")
-        d, c, o, e = run_tool("ml_report.py", "-m", vdir)
+        d, c, o, e = run_tool("ml_report.py", "--model", vdir)
         rep = (d or {}).get("report_file")
         info = None
         if rep and os.path.exists(rep):
@@ -384,7 +384,7 @@ def test_all(ctx, only):
         wd = Office("Word.Application")
         try:
             doc = wd.app.Documents.Open(rep, ReadOnly=False, AddToRecentFiles=False, Visible=False)   # Word가 잠금
-            d, c, o, e = run_tool("ml_report.py", "-m", vdir, "--overwrite")
+            d, c, o, e = run_tool("ml_report.py", "--model", vdir, "--overwrite")
             doc.Close(SaveChanges=0)
         finally:
             wd.quit()
@@ -401,8 +401,8 @@ def test_all(ctx, only):
         for kind in kinds:
             os.environ["ML_KIT_SHELL"] = kind
             try:
-                d, c, o, e = run_tool("ml_train.py", "-f", ctx.path("품질 등급.csv"), "-x", "반응온도,촉매비율,수분함량",
-                                      "-y", "품질등급", "--task", "classification", "--desc", "등급 분류 $x 100% (A)")
+                d, c, o, e = run_tool("ml_train.py", "--file", ctx.path("품질 등급.csv"), "--features", "반응온도,촉매비율,수분함량",
+                                      "--targets", "품질등급", "--task", "classification", "--desc", "등급 분류 $x 100% (A)")
             finally:
                 os.environ.pop("ML_KIT_SHELL", None)
             nexts = (d or {}).get("next_commands", [])
@@ -426,8 +426,8 @@ def test_all(ctx, only):
         for f in ("ml_predict.py", "_ml_runtime.py"):
             shutil.copy2(os.path.join(ROOT, f), dep)
         shutil.copytree(vd, os.path.join(dep, "v1"), dirs_exist_ok=True)
-        d, c, o, e = run_tool(os.path.join(dep, "ml_predict.py"), "-m", "v1",
-                              "-i", "일시=2026-01-20 10:00,라인=B,반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함량=20",
+        d, c, o, e = run_tool(os.path.join(dep, "ml_predict.py"), "--model", "v1",
+                              "--input", "일시=2026-01-20 10:00,라인=B,반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함량=20",
                               cwd=dep, label="ml_predict.py (배포 폴더)")
         summary = ((d or {}).get("predictions_summary") or {}).get("생산효율(%)", {})
         ok = ok_(d) and summary.get("predictions") and summary.get("intervals")
@@ -436,12 +436,12 @@ def test_all(ctx, only):
 
     def m10():
         big = ctx.path("대용량 2만행.csv")
-        xargs = ["-x", "반응온도,소비전력,압축압력,촉매비율,수분함량", "-y", "생산효율"]
+        xargs = ["--features", "반응온도,소비전력,압축압력,촉매비율,수분함량", "--targets", "생산효율"]
         t0 = time.time()
-        d, c, o, e = run_tool("ml_train.py", "-f", big, *xargs, "--desc", "2만 행 성능")
+        d, c, o, e = run_tool("ml_train.py", "--file", big, *xargs, "--desc", "2만 행 성능")
         t_train = time.time() - t0
         t0 = time.time()
-        d2, c2, o2, e2 = run_tool("ml_predict.py", "-m", (d or {}).get("version_dir"), "-f", big)
+        d2, c2, o2, e2 = run_tool("ml_predict.py", "--model", (d or {}).get("version_dir"), "--file", big)
         t_pred = time.time() - t0
         s["big"] = d
         ok = ok_(d) and ok_(d2) and t_train < 300 and t_pred < 60
@@ -451,12 +451,12 @@ def test_all(ctx, only):
     def m11():
         big = ctx.path("대용량 2만행.csv")
         root = ((s.get("big") or {}).get("data_root")) or ctx.path("대용량 2만행_ml_data")
-        xargs = ["-x", "반응온도,소비전력,압축압력,촉매비율,수분함량", "-y", "생산효율"]
+        xargs = ["--features", "반응온도,소비전력,압축압력,촉매비율,수분함량", "--targets", "생산효율"]
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
-        a = subprocess.Popen([PY, os.path.join(ROOT, "ml_train.py"), "-f", big, *xargs, "--tag", "동시A"],
+        a = subprocess.Popen([PY, os.path.join(ROOT, "ml_train.py"), "--file", big, *xargs, "--tag", "동시A"],
                              cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         time.sleep(4)
-        d, c, o, e = run_tool("ml_train.py", "-f", big, *xargs, "--tag", "동시B")
+        d, c, o, e = run_tool("ml_train.py", "--file", big, *xargs, "--tag", "동시B")
         out_a, err_a = a.communicate(timeout=900)
         da = _parse(type("P", (), {"stdout": out_a, "stderr": err_a, "returncode": a.returncode})(), "ml_train.py (동시A)")[0]
         blocked = (d or {}).get("status") == "error" and (d or {}).get("agent_directive", "").startswith("STOP_RETRY")
@@ -469,16 +469,16 @@ def test_all(ctx, only):
     def m12():
         big = ctx.path("대용량 2만행.csv")
         root = s.get("big_root") or ctx.path("대용량 2만행_ml_data")
-        xargs = ["-x", "반응온도,소비전력,압축압력,촉매비율,수분함량", "-y", "생산효율"]
+        xargs = ["--features", "반응온도,소비전력,압축압력,촉매비율,수분함량", "--targets", "생산효율"]
         before = sorted(x for x in os.listdir(root) if x.startswith("v")) if os.path.isdir(root) else []
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
-        p = subprocess.Popen([PY, os.path.join(ROOT, "ml_train.py"), "-f", big, *xargs, "--tag", "강제종료"],
+        p = subprocess.Popen([PY, os.path.join(ROOT, "ml_train.py"), "--file", big, *xargs, "--tag", "강제종료"],
                              cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
         time.sleep(6)
         p.kill()                       # 작업 관리자 '작업 끝내기'와 같은 강제 종료 (자신이 띄운 학습 프로세스)
         p.communicate()
         leftovers = [x for x in os.listdir(root) if x.startswith(".tmp_")]
-        d, c, o, e = run_tool("ml_train.py", "-f", big, *xargs, "--tag", "종료 후 재학습")
+        d, c, o, e = run_tool("ml_train.py", "--file", big, *xargs, "--tag", "종료 후 재학습")
         after_tmp = [x for x in os.listdir(root) if x.startswith(".tmp_")]
         after = sorted(x for x in os.listdir(root) if x.startswith("v"))
         ok = ok_(d) and not after_tmp and (d or {}).get("version") not in before
@@ -488,8 +488,8 @@ def test_all(ctx, only):
 
     def m13():
         root = (s.get("m1") or {}).get("data_root")
-        d, c, o, e = run_tool("ml_train.py", "-f", s["xlsx"], "--history")
-        bad = run_tool("ml_train.py", "-f", s["xlsx"], "-x", "반응온두", "-y", "생산효율", *xlsx_layout)
+        d, c, o, e = run_tool("ml_train.py", "--file", s["xlsx"], "--history")
+        bad = run_tool("ml_train.py", "--file", s["xlsx"], "--features", "반응온두", "--targets", "생산효율", *xlsx_layout)
         arg = run_tool("ml_train.py", "--없는옵션")
         ok = ok_(d) and (bad[0] or {}).get("status") == "error" and "[후보]" in (bad[0] or {}).get("message", "") \
             and bad[1] == 1 and arg[1] == 2 and (arg[0] or {}).get("status") == "error"

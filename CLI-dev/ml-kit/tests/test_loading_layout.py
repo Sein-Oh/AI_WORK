@@ -105,7 +105,7 @@ def test_nanogram_unit_row(tmp_path):
     assert rt.load_data_file(only).attrs["unit_row_below"] == 2
     mixed = _ng_book(tmp_path / "p2.xlsx", ["ng", "°C", "%"])
     assert list(rt.load_data_file(mixed, unit_row=2).columns) == ["농도A(ng)", "농도B(°C)", "수율(%)"]
-    _, res = run_raw("ml_train.py", "-f", only, "-x", "농도A,농도B", "-y", "수율", "--unit-row", "2")
+    _, res = run_raw("ml_train.py", "--file", only, "--features", "농도A,농도B", "--targets", "수율", "--unit-row", "2")
     assert res["status"] == "ok", res
     # 'NG' (upper case) is still a missing mark
     raw = pd.DataFrame([["농도A", "농도B", "수율"], ["NG", "NG", None], [150.1, 2.0, 60.0], [151.0, 2.5, 61.0]],
@@ -161,7 +161,7 @@ def test_ragged_csv(tmp_path):
 def test_model_names_with_units_match_header_without_units():
     cells = ["반응온도", "압력", "라인", "수율"]
     assert rt.names_in_cells(["반응온도(°C)", "압력(bar)", "라인"], cells, model_names=True)
-    assert not rt.names_in_cells(["반응온도(°C)"], cells)              # user names (-x): a unit is part of the name
+    assert not rt.names_in_cells(["반응온도(°C)"], cells)              # user names (--features): a unit is part of the name
     assert not rt.names_in_cells(["온도(K)"], ["온도(°C)"], model_names=True)
     assert rt.names_in_cells(["온도(C)"], ["온도(°C)"], model_names=True)  # 2.9.33: '°C' / 'C' is one unit (was False)
 
@@ -201,7 +201,7 @@ def layout(tmp_path_factory):
         ws.append([float(v) for v in row])
     train = work / "train.xlsx"
     wb.save(train)
-    res = run_tool("ml_train.py", "-f", str(train), "-x", "a,b", "-y", "y", "--header-row", "2", "--unit-row", "3")
+    res = run_tool("ml_train.py", "--file", str(train), "--features", "a,b", "--targets", "y", "--header-row", "2", "--unit-row", "3")
     new = work / "new.csv"
     pd.DataFrame({"a(mm)": [1.0, 2.0], "b(kg)": [3.0, 4.0]}).to_csv(new, index=False)
     return {"work": work, "res": res, "new": new}
@@ -236,11 +236,11 @@ def test_two_level_header_hint(tmp_path, layout):
         ws.append([t, pr, 0.2 * t + 0.1 * pr])
     p = tmp_path / "merged.xlsx"
     wb.save(p)
-    bad = run_fail("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "수율")
+    bad = run_fail("ml_train.py", "--file", str(p), "--features", "온도,압력", "--targets", "수율")
     _, rec = recommended_command(bad["message"])                                  # 2.9.12: no hint, 2.9.71: 전체 명령
     assert rec[rec.index("--header-row") + 1] == "2" and rec.count("--header-row") == 1, rec
-    v = run_tool("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "수율", "--header-row", "2")["version_dir"]
-    ok = run_tool("ml_predict.py", "-m", v, "-f", str(p))                       # 2.9.53: [추천] --header-row 2
+    v = run_tool("ml_train.py", "--file", str(p), "--features", "온도,압력", "--targets", "수율", "--header-row", "2")["version_dir"]
+    ok = run_tool("ml_predict.py", "--model", v, "--file", str(p))                       # 2.9.53: [추천] --header-row 2
     assert ok["sample_count"] == 30 and ok["recovered"] == ["머리글 2행으로 읽음"], ok
 
 
@@ -250,10 +250,10 @@ def test_several_header_rows_with_every_input_stop_with_candidates(tmp_path):
     for _ in range(30):
         t, pr = float(r.uniform(100, 200)), float(r.uniform(10, 90))
         rows.append([t, pr, 0.2 * t + 0.1 * pr])
-    v = run_tool("ml_train.py", "-f", write_book(tmp_path / "t.xlsx", rows), "-x", "온도,압력", "-y", "수율")["version_dir"]
+    v = run_tool("ml_train.py", "--file", write_book(tmp_path / "t.xlsx", rows), "--features", "온도,압력", "--targets", "수율")["version_dir"]
     p = write_book(tmp_path / "two.xlsx", [["시험 기록", "작성자 홍"], ["온도", "압력"], ["비고"], ["온도", "압력"],
                                        [150, 30], [160, 31]])
-    bad = run_fail("ml_predict.py", "-m", v, "-f", p)
+    bad = run_fail("ml_predict.py", "--model", v, "--file", p)
     assert "[후보] 1) " in bad["message"] and bad["confirm_commands"][0]["command"].count("--header-row") == 1 and "recovered" not in bad, bad      # the tool does not guess
 
 
@@ -270,14 +270,14 @@ def heads(tmp_path_factory):
 
 def test_header_hint_not_the_current_row(heads):
     # 2.9.33: '온도(C)' is '온도(°C)' (the same unit) and matches; a typo '온도x' is a [후보] (was [추천] for '온도(C)')
-    bad = run_fail("ml_train.py", "-f", heads["u"], "-x", "온도x,압력", "-y", "y")
+    bad = run_fail("ml_train.py", "--file", heads["u"], "--features", "온도x,압력", "--targets", "y")
     assert "--header-row" not in bad["message"]                                 # 2.9.13: [추천] --header-row 1
     assert "'온도x' -> [후보] 1) '온도(°C)'" in bad["message"]          # 2.9.71: 번호
-    bad = run_fail("ml_train.py", "-f", heads["u2"], "-x", "온도", "-y", "y")
+    bad = run_fail("ml_train.py", "--file", heads["u2"], "--features", "온도", "--targets", "y")
     assert "--header-row" not in bad["message"] and "[후보]" in bad["message"]
-    bad = run_fail("ml_train.py", "-f", heads["u3"], "-x", "온도,압력", "-y", "y")   # '압력' is a data value
+    bad = run_fail("ml_train.py", "--file", heads["u3"], "--features", "온도,압력", "--targets", "y")   # '압력' is a data value
     assert "--header-row" not in bad["message"]                                 # 2.9.13: [추천] --header-row 3
-    bad = run_fail("ml_map.py", "-f", heads["u"], "-i", "온도x=0.5")
+    bad = run_fail("ml_map.py", "--file", heads["u"], "--input", "온도x=0.5")
     assert "--header-row" not in bad["message"] and "[후보] 1) '온도(°C)'" in bad["message"]       # 2.9.33: 온도(C), [추천]
 
 
@@ -304,16 +304,16 @@ def unit_layout(tmp_path_factory):
         ws.append([t, p, 0.3 * t + 2 * p + float(r.normal(0, 0.2))])
     path = work / "lay.xlsx"
     wb.save(path)
-    v = run_tool("ml_train.py", "-f", str(path), "-x", "온도,압력", "-y", "효율",
+    v = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "효율",
                  "--header-row", "3", "--unit-row", "4")["version_dir"]
     return {"path": str(path), "v": v}
 
 
 def test_layout_recovery_keeps_the_unit_row(unit_layout):
-    ok = run_tool("ml_predict.py", "-m", unit_layout["v"], "-f", unit_layout["path"], "--header-row", "2", "--unit-row", "4")
+    ok = run_tool("ml_predict.py", "--model", unit_layout["v"], "--file", unit_layout["path"], "--header-row", "2", "--unit-row", "4")
     assert ok["sample_count"] == 40 and not ok["missing_input_warning"]          # 2.9.53: STOP_RETRY [추천]
     assert ok["recovered"] == ["레이아웃 옵션이 이 파일과 달라 머리글 3행으로 읽음, 단위 4행"], ok
-    same = run_tool("ml_predict.py", "-m", unit_layout["v"], "-f", unit_layout["path"], "--header-row", "3", "--unit-row", "4")
+    same = run_tool("ml_predict.py", "--model", unit_layout["v"], "--file", unit_layout["path"], "--header-row", "3", "--unit-row", "4")
     assert "recovered" not in same                                               # options that fit are kept
 
 
@@ -339,13 +339,13 @@ def unit_book(tmp_path_factory):
         ws.append([round(t, 2), round(p, 3), round(0.3 * t + 2 * p + float(r.normal(0, 0.2)), 3)])
     path = work / "u.xlsx"
     wb.save(path)
-    v = run_tool("ml_train.py", "-f", str(path), "-x", "반응온도,압력", "-y", "효율",
+    v = run_tool("ml_train.py", "--file", str(path), "--features", "반응온도,압력", "--targets", "효율",
                  "--header-row", "3", "--unit-row", "4")["version_dir"]
     return {"work": work, "path": str(path), "v": v}
 
 
 def test_numeric_unit_row_refused(unit_book):
-    bad = run_fail("ml_train.py", "-f", unit_book["path"], "-x", "반응온도,압력", "-y", "효율",
+    bad = run_fail("ml_train.py", "--file", unit_book["path"], "--features", "반응온도,압력", "--targets", "효율",
                    "--header-row", "4", "--unit-row", "5")
     assert "단위 행(--unit-row 5)" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY")
     script, args = recommended_command(bad["message"])
@@ -357,7 +357,7 @@ def test_numeric_unit_row_refused(unit_book):
 
 def test_header_hint_carries_the_unit_row(unit_book):
     # --header-row 2 --unit-row 3 (both one row too high): the names are in row 3, the units in row 4
-    bad = run_fail("ml_train.py", "-f", unit_book["path"], "-x", "반응온도,압력", "-y", "효율",
+    bad = run_fail("ml_train.py", "--file", unit_book["path"], "--features", "반응온도,압력", "--targets", "효율",
                    "--header-row", "2", "--unit-row", "3")
     _, args = recommended_command(bad["message"])
     assert args[-4:] == ["--header-row", "3", "--unit-row", "4"]                  # 2.9.14: [추천] --header-row 3
@@ -376,7 +376,7 @@ def test_title_row_hint_carries_the_unit_row(tmp_path):
         ws.append([t, p, 0.3 * t + 2 * p])
     p = tmp_path / "t.xlsx"
     wb.save(p)
-    bad = run_fail("ml_train.py", "-f", str(p), "-x", "온도,압력", "-y", "효율")
+    bad = run_fail("ml_train.py", "--file", str(p), "--features", "온도,압력", "--targets", "효율")
     _, args = recommended_command(bad["message"])
     assert args[-4:] == ["--header-row", "2", "--unit-row", "3"]                  # 2.9.14: --header-row 2 only
 
@@ -391,7 +391,7 @@ def test_predict_finds_model_names_with_units_in_a_header_unit_pair(unit_book, t
     ws.append([185, 3.2])
     p = tmp_path / "t2c.xlsx"
     wb.save(p)
-    ok = run_tool("ml_predict.py", "-m", unit_book["v"], "-f", str(p))           # 2.9.53: [추천] --header-row 2 --unit-row 3
+    ok = run_tool("ml_predict.py", "--model", unit_book["v"], "--file", str(p))           # 2.9.53: [추천] --header-row 2 --unit-row 3
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
     assert ok["recovered"] == ["머리글 2행, 단위 3행으로 읽음"], ok
 
@@ -411,14 +411,14 @@ def test_predict_plain_template_on_a_unit_row_file(unit_book, tmp_path):
     ws.append([185, 3.2])
     p = tmp_path / "u2.xlsx"
     wb.save(p)
-    ok = run_tool("ml_predict.py", "-m", unit_book["v"], "-f", str(p))           # 2.9.14: unit row imputed; 2.9.53: [추천]
+    ok = run_tool("ml_predict.py", "--model", unit_book["v"], "--file", str(p))           # 2.9.14: unit row imputed; 2.9.53: [추천]
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
     assert ok["recovered"] == ["머리글 1행, 단위 2행으로 읽음"], ok
 
 
 def test_placeholder_first_row_is_not_a_unit_row(unit_book, tmp_path):
     df = pd.DataFrame({"반응온도": ["-", 180, 185], "압력": ["-", 3, 3.2]})
-    ok = run_tool("ml_predict.py", "-m", unit_book["v"], "-f", write_df(tmp_path / "ph.csv", df))
+    ok = run_tool("ml_predict.py", "--model", unit_book["v"], "--file", write_df(tmp_path / "ph.csv", df))
     assert ok["sample_count"] == 3
 
 
@@ -441,17 +441,17 @@ def two_level(tmp_path_factory):
 
 
 def test_text_first_row_header_hint_has_no_unit_row(two_level):
-    bad = run_fail("ml_train.py", "-f", two_level, "-x", "라인,설비,작업자,온도", "-y", "등급", "--task", "classification")
+    bad = run_fail("ml_train.py", "--file", two_level, "--features", "라인,설비,작업자,온도", "--targets", "등급", "--task", "classification")
     _, rec = recommended_command(bad["message"])                  # 2.9.15: --header-row 2 --unit-row 3, 2.9.71: 전체 명령
     assert rec[rec.index("--header-row") + 1] == "2" and "--unit-row" not in rec, rec
     assert "단위 행" not in bad["message"]
-    res = run_tool("ml_train.py", "-f", two_level, "-x", "라인,설비,작업자,온도", "-y", "등급", "--task", "classification",
+    res = run_tool("ml_train.py", "--file", two_level, "--features", "라인,설비,작업자,온도", "--targets", "등급", "--task", "classification",
                    "--header-row", "2")
     assert res["targets"] == ["등급"]
 
 
 def test_text_first_row_given_as_unit_row_is_refused(two_level):
-    bad = run_fail("ml_train.py", "-f", two_level, "-x", "라인,설비,작업자,온도", "-y", "등급", "--task", "classification",
+    bad = run_fail("ml_train.py", "--file", two_level, "--features", "라인,설비,작업자,온도", "--targets", "등급", "--task", "classification",
                    "--header-row", "2", "--unit-row", "3")             # 2.9.15: VERIFIED, '온도(182.8)', '등급(중)'
     assert "단위 행(--unit-row 3)" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY")
     script, args = recommended_command(bad["message"])
@@ -469,12 +469,12 @@ def plain_model(tmp_path_factory):
         t, p = float(r.uniform(150, 200)), float(r.uniform(1, 5))
         rows.append([round(t, 2), round(p, 3), round(0.3 * t + 2 * p + float(r.normal(0, 0.2)), 3)])
     path = write_book(work / "plain.xlsx", rows)
-    return run_tool("ml_train.py", "-f", path, "-x", "반응온도,압력", "-y", "효율")["version_dir"]
+    return run_tool("ml_train.py", "--file", path, "--features", "반응온도,압력", "--targets", "효율")["version_dir"]
 
 
 def test_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
     p = write_book(tmp_path / "u2.xlsx", [["반응온도", "압력"], ["°C", "bar"], [180, 3], [185, 3.2]])
-    ok = run_tool("ml_predict.py", "-m", plain_model, "-f", p)      # 2.9.15: unit row imputed; 2.9.53: [추천] --data-row 3
+    ok = run_tool("ml_predict.py", "--model", plain_model, "--file", p)      # 2.9.15: unit row imputed; 2.9.53: [추천] --data-row 3
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
     assert ok["recovered"] == ["머리글 1행, 데이터 3행부터로 읽음"], ok
 
@@ -482,7 +482,7 @@ def test_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
 def test_title_and_unit_row_file_for_a_unitless_model(plain_model, tmp_path):
     p = write_book(tmp_path / "t2c.xlsx", [["새 조건", "작성 2026-11-02"], ["반응온도", "압력"], ["°C", "bar"],
                                       [180, 3], [185, 3.2]])
-    ok = run_tool("ml_predict.py", "-m", plain_model, "-f", p)       # 2.9.53: [추천] --header-row 2 --data-row 4
+    ok = run_tool("ml_predict.py", "--model", plain_model, "--file", p)       # 2.9.53: [추천] --header-row 2 --data-row 4
     assert ok["sample_count"] == 2 and not ok["missing_input_warning"]
     assert ok["recovered"] == ["머리글 2행, 데이터 4행부터로 읽음"], ok
 
@@ -491,11 +491,11 @@ def test_first_data_row_with_text_marks_is_kept(p1_model, tmp_path):
     """2.9.59: 첫 데이터 행에 '점검중'·'센서고장'이 섞였다고 단위·메모 행으로 보고 그 데이터 행을 버렸다."""
     body = [[180.5, 3.1, 45.0], [185.0, 3.3, 47.5], [176.0, 2.6, 41.0]]
     p = write_book(tmp_path / "marks.xlsx", [["온도(°C)", "압력(bar)", "속도"], ["점검중", "센서고장", 45.0]] + body)
-    ok = run_tool("ml_predict.py", "-m", p1_model["v"], "-f", p)
+    ok = run_tool("ml_predict.py", "--model", p1_model["v"], "--file", p)
     assert ok["sample_count"] == 4 and "recovered" not in ok, ok          # 숫자가 든 행은 데이터
     assert ok["missing_input_warning"] is True, ok
     p = write_book(tmp_path / "marks2.xlsx", [["온도(°C)", "압력(bar)", "속도"], ["점검중", "센서고장", "점검중"]] + body)
-    ok = run_tool("ml_predict.py", "-m", p1_model["v"], "-f", p)
+    ok = run_tool("ml_predict.py", "--model", p1_model["v"], "--file", p)
     assert ok["sample_count"] == 4 and "recovered" not in ok, ok          # 단위 모양이 아닌 글자 행도 데이터
 
 
@@ -515,8 +515,8 @@ def test_korean_unit_words_in_named_unit_row(tmp_path, units):
     raw = rt.read_raw_table(f)
     assert rt.unit_row_verdict(raw, 1, 0, given=True)[0]
     assert not rt.unit_row_verdict(raw, 1, 0)[0]          # the tool's own guess keeps Hangul words as data
-    res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
-    ok = run_tool("ml_predict.py", "-m", res["version_dir"], "-f", f)
+    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력,시간", "--targets", "생산량", "--unit-row", "2")
+    ok = run_tool("ml_predict.py", "--model", res["version_dir"], "--file", f)
     assert ok["sample_count"] == n, ok
     assert ok["recovered"] == ["머리글 1행, 단위 2행으로 읽음"], ok
 
@@ -539,7 +539,7 @@ def test_data_row_given_as_unit_row_is_refused(tmp_path):
     raw = rt.read_raw_table(f)
     ok, why = rt.unit_row_verdict(raw, 1, 0, given=True)
     assert not ok and "한글 낱말" in why
-    bad = run_fail("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
+    bad = run_fail("ml_train.py", "--file", f, "--features", "온도,압력,시간", "--targets", "생산량", "--unit-row", "2")
     assert bad["agent_directive"].startswith("STOP_RETRY") and "단위 행이 아닙니다" in bad["message"], bad
     rec = bad["message"].split("[추천] ", 1)[1]
     assert rec.startswith("python ") and "--unit-row" not in rec, rec
@@ -567,18 +567,18 @@ def test_named_unit_row_with_korean_units_is_read(tmp_path, units):
 def test_some_odd_words_in_unit_row_are_read_with_a_warning(tmp_path):
     """단위 행의 일부 칸만 단위가 아닌 한글 낱말이면 받아들이되 warnings로 알린다."""
     f = _unit_rows_file(tmp_path, ["도씨", "점검중", "시간", "킬로그램"])
-    res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
+    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력,시간", "--targets", "생산량", "--unit-row", "2")
     w = [x for x in res.get("warnings", []) if x.startswith("2행을 단위로 읽음")]
     assert w and "압력(점검중)" in w[0] and "--unit-row를 빼세요" in w[0], res.get("warnings")
-    clean = run_tool("ml_train.py", "-f", _unit_rows_file(tmp_path, ["도씨", "기압", "시간", "킬로그램"], "c.csv"),
-                     "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
+    clean = run_tool("ml_train.py", "--file", _unit_rows_file(tmp_path, ["도씨", "기압", "시간", "킬로그램"], "c.csv"),
+                     "--features", "온도,압력,시간", "--targets", "생산량", "--unit-row", "2")
     assert not any("단위로 읽음" in x for x in clean.get("warnings", [])), clean.get("warnings")
 
 
 def test_skipped_unit_row_is_in_warnings(p1_model, tmp_path):
     body = [[180.5, 3.1, 45.0], [185.0, 3.3, 47.5]]
     p = write_book(tmp_path / "u.xlsx", [["온도", "압력", "속도"], ["kg/cm2 G", "kg/cm2 G", "m/s"]] + body)
-    ok = run_tool("ml_predict.py", "-m", p1_model["v"], "-f", p)
+    ok = run_tool("ml_predict.py", "--model", p1_model["v"], "--file", p)
     assert ok["sample_count"] == 2, ok
     assert ok["recovered"] == ["머리글 1행, 데이터 3행부터로 읽음"], ok             # 옵션을 주지 않았으니 '옵션이 달라'가 아님
     assert any("2행" in w and "건너" in w for w in ok.get("warnings", [])), ok
@@ -592,7 +592,7 @@ def test_named_empty_column_is_kept_and_unnamed_dropped(tmp_path):
     p.write_text("온도1,온도2,,y\n,1,,2\n,2,,4\n,3,,6\n", encoding="utf-8")
     df = rt.load_data_file(str(p))
     assert list(df.columns) == ["온도1", "온도2", "y"]
-    bad = run_fail("ml_train.py", "-f", str(p), "-x", "온도1", "-y", "y")
+    bad = run_fail("ml_train.py", "--file", str(p), "--features", "온도1", "--targets", "y")
     assert bad["agent_directive"].startswith("STOP_RETRY")
     assert "값이 하나도 없습니다" in bad["message"] and "[추천]" not in bad["message"]
 
@@ -639,10 +639,10 @@ def test_dtypes_datetime_yyyymmdd_predicts_without_imputation(tmp_path):
     df["y"] = 0.05 * np.arange(n) + 2 * df.a + r.normal(0, 0.05, n)
     p = tmp_path / "d.csv"
     df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "-f", str(p), "-x", "일자,a", "-y", "y", "--dtypes", "일자:datetime")["version_dir"]
+    v = run_tool("ml_train.py", "--file", str(p), "--features", "일자,a", "--targets", "y", "--dtypes", "일자:datetime")["version_dir"]
     meta = json.load(open(os.path.join(v, "model_y.json"), encoding="utf-8"))
     assert "일자" in meta["feature_schema"]["datetime"] and meta["datetime_stats"]["일자"]["min"].startswith("2024-01-01")
-    res = run_tool("ml_predict.py", "-m", v, "-f", str(p), "--save", str(tmp_path / "pred.csv"))
+    res = run_tool("ml_predict.py", "--model", v, "--file", str(p), "--save", str(tmp_path / "pred.csv"))
     assert res["missing_input_warning"] is False                    # before 2.9.11 every date was imputed
     assert not any("날짜" in w for w in res["extrapolation_warnings"])
 

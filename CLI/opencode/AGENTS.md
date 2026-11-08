@@ -41,7 +41,7 @@
    - ml-kit: `C:\CLI\ml-kit\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\ml-kit\skills\ml-train\SKILL.md`)
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
    실행하는 .py는 SKILL.md 표에 있는 것뿐이고, 경로는 SKILL.md에 적힌 전체 경로를 한 글자도 바꾸지 않고 쓴다
-   (`C:\CLI\office-cli\excel.py`, `C:\CLI\ml-kit\ml_train.py`처럼 도구 폴더 바로 아래. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py -i`).
+   (`C:\CLI\office-cli\excel.py`, `C:\CLI\ml-kit\ml_train.py`처럼 도구 폴더 바로 아래. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py --input`).
 5. 사용자가 요청한 일의 명령은 묻지 않고 바로 실행한다. 명령을 답변에 적어 보여 주기만 하고 끝내지 않는다. 먼저 묻는 것은 셋뿐이다: `confirm_commands`(6번), 5장의 일(삭제·덮어쓰기·발송·새 시트), 도구가 `[후보]`·`needs_user_decision`으로 멈춘 때(4장).
    명령은 1번만 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]`, `[INFO]`, `[WARN]` 줄은 무시한다.
    출력을 `python -c`, `findstr`, 파일 저장으로 다시 풀지 않는다. 명령 뒤에 `| tail`, `| head`, `| python ...`을 붙이지 않는다 (출력을 그대로 읽는다).

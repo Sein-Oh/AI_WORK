@@ -243,7 +243,7 @@ Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261
 - `[후보]`: P3 세 번째에서 Gemma가 `[후보] 1) '불순물'`을 번호와 함께 보여 주고 물음 (실행하지 않음). 한 글자 옵션을 쓴 요청은 없었음 (단순성 점검으로 확인).
 - 다시 돌린 시험 (고친 곳만): ml-kit `test_contract`·`test_predict`·`test_names`·`test_safety`·`test_skill_docs`·`test_map`, `CLI-dev/tests`, office-cli 전체 모두 통과.
 
-## 3-4. 클라우드에서 한 일 (2026-11-09, 집 PC 수정 검토와 Gemma 남은 것, ml-kit 2.9.81, office-cli 1.4.90)
+## 3-4. 클라우드에서 한 일 (2026-11-09, 집 PC 수정 검토와 Gemma 남은 것, ml-kit 2.9.81~2.9.82, office-cli 1.4.90)
 1. 집 PC에서 고친 것 검토 (리눅스):
    - `_offer_find`: 빈 입력이 `<값>`이면 `[추천]` 그대로. 빈 입력이 빠지기만 했으면 한 행을 붙이다 빠뜨렸을 수도 있어
      `[후보] 1) 찾기 2) 타겟 값을 빼고 학습 중앙값으로 예측`으로 바꿈. 오타 이름, 다른 자리표시자, 빠진 글자·날짜 입력, 분류 타겟,
@@ -265,13 +265,15 @@ Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261
      `[추천]`할 경로는 알 수 없어 그대로. 스킬 크기는 전역 지침과 같은 `exact_mixed` 줄을 빼 6009바이트.
    - O5: 필요 없는 `--overwrite`는 바뀌는 것이 없어 지금처럼 채우고, 쓰이지 않았다고 `warnings` (1.4.90).
    - O4: Gemma가 사용자 TEMP 폴더에 파일을 만들어 `--file`로 넘김. 결과는 맞음. 기록만 함 (시험 폴더 밖 쓰기 감시를 다시 넣을지는 사용자 결정).
-3. 정할 것 (사용자): ml-kit 옵션의 짧은 형태(`-f -m -i -x -y`)와 긴 형태 중 하나로 맞출지. office-cli는 긴 이름만.
+3. 사용자 결정 (2026-11-09): ml-kit 옵션은 긴 형태로 (ml-kit 2.9.82: 한 글자 옵션을 없앰, 쓰면 긴 이름으로 고친 전체 명령 `[추천]`.
+   도구가 내는 명령, 안내문, 스킬, 전역 지침, README, 채점 시나리오 정규식 모두 긴 이름). 시험 폴더 밖 쓰기 감시는 다시 넣지 않음.
 4. 집 PC에서 다시 확인할 것 (겹치지 않게):
    - `python -m pytest -q` (저장소 폴더): diag 시험 우회를 되돌렸으니 Windows 저장소 전체에서 `test_diag_template_damage_is_warn_when_tools_do_not_need_it`
      통과 확인. 보고서·성능예측표는 `python -m pytest -q -m report CLI-dev/ml-kit/tests`.
    - `python C:\CLI-dev\run_simplify_check.py --label 집PC` (실제 PowerShell에서 `[후보]` 번호 명령).
    - `python C:\CLI-dev\run_all_tests.py --label 집PC --only gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`:
-     A3이 `<조건>` 틀로 실행하는지, O1이 `--target`을 붙이는지, P3이 `[추천]`/`[후보]`대로 하는지.
+     A3이 `<조건>` 틀로 실행하는지, O1이 `--target`을 붙이는지, P3이 `[추천]`/`[후보]`대로 하는지,
+     ml-kit 명령을 긴 이름(`--file`, `--model`, `--input`, `--features`, `--targets`)으로 쓰는지 (짧은 이름을 쓰면 `[추천]`을 1번 실행하는지).
 
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).

@@ -30,7 +30,7 @@ def trained(tmp_path_factory):
     work = tmp_path_factory.mktemp("mlkit")
     data = make_sample(str(work / "sample.csv"))
     payload = run_tool(
-        "ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET,
+        "ml_train.py", "--file", data, "--features", FEATURES, "--targets", TARGET,
         "--desc", "smoke test", "--tag", "baseline",
         "--eval", "온도전력비 = 반응온도(°C) / (소비전력(kW) + 1e-6)",
     )
@@ -60,7 +60,7 @@ def test_train_unitless_names_and_eval_alias(trained):
     """단위를 뺀 이름(README 예시 B)도 전체 열 이름으로 맞추고, 수식은 전체 이름으로 저장해 예측 때 그대로 다시 계산한다."""
     work, data, _ = trained
     payload = run_tool(
-        "ml_train.py", "-f", data, "-x", "반응온도,소비전력,압축압력,촉매비율,수분함량", "-y", "생산효율",
+        "ml_train.py", "--file", data, "--features", "반응온도,소비전력,압축압력,촉매비율,수분함량", "--targets", "생산효율",
         "--eval", "에너지집중도 = 소비전력 / (반응온도 + 1e-6); 로그비 = log1p(에너지집중도)",
         "--tag", "alias",
     )
@@ -76,20 +76,20 @@ def test_train_unitless_names_and_eval_alias(trained):
 def test_train_column_typo_suggests(trained):
     _, data, _ = trained
     # 2.9.33: '반응온도(C)' is the same column (°C / C) and matches; a typo is a [후보] (never an automatic [추천])
-    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도x,소비전력(kW)", "-y", TARGET)
+    payload = run_fail("ml_train.py", "--file", data, "--features", "반응온도x,소비전력(kW)", "--targets", TARGET)
     assert payload["agent_directive"].startswith("STOP_RETRY")
     assert "[후보]" in payload["message"] and "[추천]" not in payload["message"] and "반응온도(°C)" in payload["message"]
 
 
 def test_train_eval_leakage_blocked(trained):
     _, data, _ = trained
-    payload = run_fail("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--eval", "누수 = 생산효율 * 2")
+    payload = run_fail("ml_train.py", "--file", data, "--features", FEATURES, "--targets", TARGET, "--eval", "누수 = 생산효율 * 2")
     assert "타겟 누수" in payload["message"]
 
 
 def test_train_eval_rejects_code(trained):
     _, data, _ = trained
-    payload = run_fail("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET,
+    payload = run_fail("ml_train.py", "--file", data, "--features", FEATURES, "--targets", TARGET,
                        "--eval", "x = __import__('os').getcwd()")
     assert payload["agent_directive"].startswith("STOP_RETRY")
 
@@ -105,7 +105,7 @@ def test_train_strings_with_commas_and_placeholders(tmp_path):
     df.loc[3, "수분함량(%)"] = "-"
     df["상수열"] = 1.0  # constant column -> NaN correlation must not break JSON
     df.to_csv(p, index=False, encoding="cp949")
-    payload = run_tool("ml_train.py", "-f", str(p), "-x", FEATURES + ",상수열", "-y", TARGET)
+    payload = run_tool("ml_train.py", "--file", str(p), "--features", FEATURES + ",상수열", "--targets", TARGET)
     hist = (tmp_path / "comma_ml_data" / "history.jsonl").read_text(encoding="utf-8")
     assert "NaN" not in hist
     assert payload["mean_val_score"] > 0.5 and "mean_val_r2" not in payload
@@ -113,13 +113,13 @@ def test_train_strings_with_commas_and_placeholders(tmp_path):
 
 def test_train_history_mode_is_json(trained):
     _, data, _ = trained
-    payload = run_tool("ml_train.py", "-f", data, "--history")
+    payload = run_tool("ml_train.py", "--file", data, "--history")
     assert payload["record_count"] >= 1 and payload["records"][0]["version"] == "v1"
 
 
 def test_history_without_records_is_ok_zero(tmp_path):
     # R2 (2.9.46): 0 records is a result (2.9.45: "status": "no_history", no verified key)
-    proc, res = run_raw("ml_train.py", "-f", str(tmp_path / "새데이터.csv"), "--history")
+    proc, res = run_raw("ml_train.py", "--file", str(tmp_path / "새데이터.csv"), "--history")
     assert proc.returncode == 0 and res["status"] == "ok" and res["verified"] is True, res
     assert res["record_count"] == 0 and res["count"] == 0 and res["records"] == [] and res["no_history"] is True, res
     assert res["agent_directive"].startswith("VERIFIED: 0건") and "next_commands" not in res, res
@@ -128,8 +128,8 @@ def test_history_without_records_is_ok_zero(tmp_path):
 def test_blank_rows_only_input_says_zero_rows(tmp_path):
     p = tmp_path / "blank.csv"
     p.write_text("온도,압력,수율\n,,\n,,\n", encoding="utf-8-sig")
-    for script, args in (("ml_train.py", ["-x", "온도,압력", "-y", "수율"]), ("ml_map.py", ["-i", "온도=1"])):
-        res = run_fail(script, "-f", str(p), *args)
+    for script, args in (("ml_train.py", ["--features", "온도,압력", "--targets", "수율"]), ("ml_map.py", ["--input", "온도=1"])):
+        res = run_fail(script, "--file", str(p), *args)
         assert "데이터가 0행" in res["message"] and res["agent_directive"].startswith("STOP_RETRY"), res
 
 
@@ -140,7 +140,7 @@ def test_bad_cli_args_emit_json():
 
 def test_predict_inline(trained):
     work, _, _ = trained
-    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-i", INLINE)
+    payload = run_tool("ml_predict.py", "--model", str(work / "sample_ml_data" / "v1"), "--input", INLINE)
     assert payload["agent_directive"].startswith("VERIFIED")
     assert payload["drift_warning"] is False
     assert len(payload["predictions_summary"][TARGET]["predictions"]) == 1
@@ -152,14 +152,14 @@ def test_predict_inline_json_file_and_unitless_keys(trained):
     # PowerShell 5 'Out-File' style: UTF-16 with BOM, keys without units
     f.write_text(json.dumps({"반응온도": 240, "소비전력": 65, "압축압력": 3, "촉매비율": 0.8, "수분함량": 20},
                             ensure_ascii=False), encoding="utf-16")
-    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-i", str(f))
+    payload = run_tool("ml_predict.py", "--model", str(work / "sample_ml_data" / "v1"), "--input", str(f))
     assert payload["column_aliases"]["반응온도"] == "반응온도(°C)"
 
 
 def test_predict_extrapolation_flag(trained):
     work, _, _ = trained
-    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"),
-                       "-i", INLINE.replace("반응온도(°C)=240", "반응온도(°C)=900"))
+    payload = run_tool("ml_predict.py", "--model", str(work / "sample_ml_data" / "v1"),
+                       "--input", INLINE.replace("반응온도(°C)=240", "반응온도(°C)=900"))
     assert payload["drift_warning"] is True
     assert payload["extrapolation_warnings"]
 
@@ -167,15 +167,15 @@ def test_predict_extrapolation_flag(trained):
 def test_predict_batch(trained):
     work, data, _ = trained
     out = work / "pred.csv"
-    payload = run_tool("ml_predict.py", "-m", str(work / "sample_ml_data" / "v1"), "-f", data, "--save", str(out))
+    payload = run_tool("ml_predict.py", "--model", str(work / "sample_ml_data" / "v1"), "--file", data, "--save", str(out))
     assert out.is_file() and payload["total_rows"] == 120
 
 
 def test_predict_missing_inputs_offer_median_fill(trained):
-    """2.9.55: -i without some numeric inputs -> needs_user_decision + a command that fills training medians (never run)."""
+    """2.9.55: --input without some numeric inputs -> needs_user_decision + a command that fills training medians (never run)."""
     work, _, _ = trained
     vdir = str(work / "sample_ml_data" / "v1")
-    payload = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65")    # 2.9.54: '누락' only
+    payload = run_fail("ml_predict.py", "--model", vdir, "--input", "반응온도=240,소비전력=65")    # 2.9.54: '누락' only
     assert payload["error_type"] == "needs_user_decision" and payload["agent_directive"].startswith("STOP_RETRY:")
     assert "next_commands[0]" in payload["agent_directive"] and "[추천]" not in payload["message"]
     assert set(payload["missing_inputs"]) == {"압축압력(bar)", "촉매비율(wt%)", "수분함량(%)"}, payload
@@ -187,40 +187,40 @@ def test_predict_missing_inputs_offer_median_fill(trained):
     ok = run_tool("ml_predict.py", *split_command(nxt["command"])[2:])               # the offered command works as given
     assert ok["predictions_summary"][TARGET]["predictions"] and not ok.get("missing_input_warning")
     # a misspelled key is not filled: the usual [후보] for the name
-    bad = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함럄=20")
+    bad = run_fail("ml_predict.py", "--model", vdir, "--input", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함럄=20")
     assert bad["error_type"] == "needs_user_decision" and "[후보] 1) " in bad["message"] and bad["confirm_commands"], bad
 
 
 def test_train_target_in_features_offers_both_commands(trained):
-    """2.9.55: a target also in -x -> [후보] of two full commands (out of -y / out of -x). The user picks: they are
+    """2.9.55: a target also in --features -> [후보] of two full commands (out of --targets / out of --features). The user picks: they are
     confirm_commands (needs_user_decision), never next_commands (run without asking)."""
     _, data, _ = trained
-    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
-                       "-y", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
+    payload = run_fail("ml_train.py", "--file", data, "--features", "반응온도(°C),소비전력(kW),수분함량(%)",
+                       "--targets", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
     assert "타겟 누수:" in payload["message"] and "[후보] 1) " in payload["message"] and " 2) " in payload["message"]
     assert payload["error_type"] == "needs_user_decision" and "next_commands" not in payload, payload
     one, two = (split_command(c["command"]) for c in payload["confirm_commands"])
-    assert one[one.index("-y") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("-x") + 1]
-    assert two[two.index("-x") + 1] == "반응온도(°C),소비전력(kW)" and two[two.index("-y") + 1] == "생산효율(%),수분함량(%)"
+    assert one[one.index("--targets") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("--features") + 1]
+    assert two[two.index("--features") + 1] == "반응온도(°C),소비전력(kW)" and two[two.index("--targets") + 1] == "생산효율(%),수분함량(%)"
     assert "--desc" in one and "--desc" in two                                    # the other options are kept
 
 
 @pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd", "bash"])
 def test_offered_commands_survive_each_shell(trained, monkeypatch, shell):
     """2.9.68: next_commands의 따옴표는 실행 셸에 맞춤 (ML_KIT_SHELL, 기본은 OpenCode처럼 pwsh > Windows PowerShell 5.1).
-    그 셸이 실행하면(shell_sim) -i·--exclude-where·--desc 값이 글자 그대로 도구에 들어간다."""
+    그 셸이 실행하면(shell_sim) --input·--exclude-where·--desc 값이 글자 그대로 도구에 들어간다."""
     work, data, _ = trained
     monkeypatch.setenv("ML_KIT_SHELL", shell)
     vdir = str(work / "sample_ml_data" / "v1")
-    payload = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65")
+    payload = run_fail("ml_predict.py", "--model", vdir, "--input", "반응온도=240,소비전력=65")
     nxt = payload["next_commands"][0]["command"]
     argv = shell_sim.run_shell(nxt, shell)
-    assert argv[argv.index("-m") + 1] == vdir and argv[argv.index("-i") + 1].startswith("반응온도=240,소비전력=65,"), nxt
+    assert argv[argv.index("--model") + 1] == vdir and argv[argv.index("--input") + 1].startswith("반응온도=240,소비전력=65,"), nxt
     assert run_tool("ml_predict.py", *argv[2:])["predictions_summary"][TARGET]["predictions"]
     desc = "누수 $x `t '시험' \"따옴표\" 100% {{a}} @b #c; C:\\a b\\"
     where = "반응온도(°C) > 9999 | 수분함량(%) > 9999; 소비전력(kW) > 9999"
-    payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
-                       "-y", "생산효율(%),수분함량(%)", "--desc", desc, "--exclude-where", where)
+    payload = run_fail("ml_train.py", "--file", data, "--features", "반응온도(°C),소비전력(kW),수분함량(%)",
+                       "--targets", "생산효율(%),수분함량(%)", "--desc", desc, "--exclude-where", where)
     assert "타겟 누수:" in payload["message"], payload
     for c in payload["confirm_commands"]:
         argv = shell_sim.run_shell(c["command"], shell)
@@ -234,7 +234,7 @@ def test_predict_without_runtime_is_one_json_line(tmp_path):
     """ml_predict.py만 복사하고 _ml_runtime.py를 빠뜨리면 traceback 대신 JSON 1줄로 무엇을 복사할지 알린다."""
     import shutil
     shutil.copy(os.path.join(KIT, "ml_predict.py"), tmp_path / "ml_predict.py")
-    proc = subprocess.run([sys.executable, "-I", str(tmp_path / "ml_predict.py"), "-m", "v1", "-i", "a=1"],
+    proc = subprocess.run([sys.executable, "-I", str(tmp_path / "ml_predict.py"), "--model", "v1", "--input", "a=1"],
                           capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=str(tmp_path))
     assert proc.returncode == 1 and len(proc.stdout.strip().splitlines()) == 1, proc.stdout + proc.stderr
     payload = json.loads(proc.stdout)
@@ -243,7 +243,7 @@ def test_predict_without_runtime_is_one_json_line(tmp_path):
     # Windows 파이프의 기본 CP949를 흉내 냄 (2.9.80 집 PC: 이 JSON이 CP949로 나가 UTF-8로 읽지 못함). -I는 PYTHONIOENCODING을 무시함
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONUTF8")}
     env["PYTHONIOENCODING"] = "cp949"
-    proc = subprocess.run([sys.executable, str(tmp_path / "ml_predict.py"), "-m", "v1", "-i", "a=1"], env=env,
+    proc = subprocess.run([sys.executable, str(tmp_path / "ml_predict.py"), "--model", "v1", "--input", "a=1"], env=env,
                           capture_output=True, timeout=60, cwd=str(tmp_path))
     assert json.loads(proc.stdout.decode("utf-8"))["error_type"] == "missing_file", proc.stdout
 
@@ -256,7 +256,7 @@ def test_predict_standalone_deployment(trained, tmp_path):
         shutil.copy(os.path.join(KIT, f), tmp_path / f)
     shutil.copytree(work / "sample_ml_data" / "v1", tmp_path / "v1")
     proc = subprocess.run(
-        [sys.executable, "-I", str(tmp_path / "ml_predict.py"), "-m", str(tmp_path / "v1"), "-i", INLINE],
+        [sys.executable, "-I", str(tmp_path / "ml_predict.py"), "--model", str(tmp_path / "v1"), "--input", INLINE],
         capture_output=True, text=True, encoding="utf-8", timeout=300, cwd=str(tmp_path),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -271,7 +271,7 @@ needs_docx = pytest.mark.skipif(not HAS_DOCX, reason="python-docx not installed 
 @pytest.mark.skipif(HAS_DOCX, reason="only meaningful when python-docx is missing")
 def test_report_without_docx_returns_json(trained):
     work, _, _ = trained
-    payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"))
+    payload = run_fail("ml_report.py", "--model", str(work / "sample_ml_data" / "v1"))
     assert payload["agent_directive"].startswith("STOP_RETRY") and "python-docx" in payload["message"]
 
 
@@ -280,7 +280,7 @@ def test_report_without_docx_returns_json(trained):
 def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
-    payload = run_tool("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"), "-y", TARGET, "--save", str(out))
+    payload = run_tool("ml_report.py", "--model", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
     assert out.is_file() and payload["best_version"]
 
 
@@ -288,7 +288,7 @@ def test_report(trained):
 @pytest.mark.report
 def test_report_unknown_version_fails(trained):
     work, _, _ = trained
-    payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v99"))
+    payload = run_fail("ml_report.py", "--model", str(work / "sample_ml_data" / "v99"))
     assert "v99" in payload["message"]
     assert "[후보] v1" in payload["message"] or "[추천] python" in payload["message"], payload     # 2.9.48
 
@@ -299,11 +299,11 @@ def test_report_unknown_version_recommends_the_only_one(tmp_path):
     root = tmp_path / "y_ml_data"
     (root / "v1").mkdir(parents=True)
     (root / "v1" / "leaderboard.json").write_text("{}", encoding="utf-8")
-    payload = run_fail("ml_report.py", "-m", str(root / "v5"), "--title", "제목")
-    # 2.9.48: the one trained version is recommended as a full command (-m), the other options kept
+    payload = run_fail("ml_report.py", "--model", str(root / "v5"), "--title", "제목")
+    # 2.9.48: the one trained version is recommended as a full command (--model), the other options kept
     rec = payload["message"].split("[추천] ")[1]
     assert rec.startswith("python ") and rec.endswith(str(root / "v1")) and "--title" in rec, rec
-    assert rec.count(" -m ") == 1, rec
+    assert rec.count(" --model ") == 1, rec
 
 
 @needs_docx
@@ -314,7 +314,7 @@ def test_report_unknown_version_lists_candidates(tmp_path):
         (root / v).mkdir(parents=True)
         (root / v / "leaderboard.json").write_text("{}", encoding="utf-8")
     (root / "v2").mkdir()                                            # no leaderboard.json: not a trained version
-    payload = run_fail("ml_report.py", "-m", str(root / "v9"))
+    payload = run_fail("ml_report.py", "--model", str(root / "v9"))
     assert "[후보] v1, v3" in payload["message"] and "[추천]" not in payload["message"], payload
 
 
@@ -373,12 +373,12 @@ def test_default_data_dir_is_tool_folder(monkeypatch):
 
 
 def test_input_error_exit1_logged_without_traceback(data_dir, tmp_path):
-    proc, payload = run_raw("ml_predict.py", "-m", str(tmp_path / "없는폴더"), "-i", "a=1")
+    proc, payload = run_raw("ml_predict.py", "--model", str(tmp_path / "없는폴더"), "--input", "a=1")
     assert proc.returncode == 1 and payload["agent_directive"].startswith("STOP_RETRY")
     log = _log(data_dir)
     head = log.splitlines()[0]
     assert head.startswith("===== ") and f"| ml-kit {rt.VERSION} | Python " in head
-    assert "명령: ml_predict.py -m " in log and "없는폴더" in log
+    assert "명령: ml_predict.py --model " in log and "없는폴더" in log
     assert "결과: input | " in log
     assert "traceback:" not in log and "복구 시도:" not in log
     assert log.endswith("\n\n")
@@ -386,10 +386,10 @@ def test_input_error_exit1_logged_without_traceback(data_dir, tmp_path):
 
 
 def test_argument_error_exit2_logged(data_dir):
-    proc, payload = run_raw("ml_predict.py", "-i", "a=1")  # --model missing
+    proc, payload = run_raw("ml_predict.py", "--input", "a=1")  # --model missing
     assert proc.returncode == 2 and payload["status"] == "error"
     log = _log(data_dir)
-    assert "명령: ml_predict.py -i a=1" in log and "결과: input | CLI 인자 오류" in log
+    assert "명령: ml_predict.py --input a=1" in log and "결과: input | CLI 인자 오류" in log
 
 
 def test_internal_error_logged_with_traceback(data_dir, capsys):
@@ -428,10 +428,10 @@ def test_rotation_at_size_limit(data_dir, monkeypatch):
     logs.mkdir(parents=True)
     (logs / "errors.txt").write_text("OLD ENTRY\n" * 10, encoding="utf-8")
     monkeypatch.setattr(rt, "ERROR_LOG_MAX", 50)
-    rt.write_error_log({"error_type": "input", "message": "새 항목"}, argv=["ml_train.py", "-f", "a.csv"])
+    rt.write_error_log({"error_type": "input", "message": "새 항목"}, argv=["ml_train.py", "--file", "a.csv"])
     assert "OLD ENTRY" in (logs / "errors.old.txt").read_text(encoding="utf-8")
     new = (logs / "errors.txt").read_text(encoding="utf-8")
-    assert "OLD ENTRY" not in new and "결과: input | 새 항목" in new and "명령: ml_train.py -f a.csv" in new
+    assert "OLD ENTRY" not in new and "결과: input | 새 항목" in new and "명령: ml_train.py --file a.csv" in new
 
 
 def test_rotation_failure_keeps_entry(data_dir, monkeypatch):
@@ -595,9 +595,9 @@ def _run_without(tmp_path, fake, script, *args):
     pytest.param("ml_report.py", "joblib", "joblib", marks=pytest.mark.report),
     pytest.param("ml_export.py", "sklearn", "scikit-learn", marks=pytest.mark.report)])
 def test_missing_library_is_one_json_line(tmp_path, script, module, pip):
-    args = {"ml_predict.py": ["-m", str(tmp_path), "-i", "a=1"], "ml_train.py": ["-f", "x.csv", "-x", "a", "-y", "b"],
-            "ml_map.py": ["-f", "x.csv", "-i", "a=1"], "ml_report.py": ["-m", str(tmp_path)],
-            "ml_export.py": ["-m", str(tmp_path)]}[script]
+    args = {"ml_predict.py": ["--model", str(tmp_path), "--input", "a=1"], "ml_train.py": ["--file", "x.csv", "--features", "a", "--targets", "b"],
+            "ml_map.py": ["--file", "x.csv", "--input", "a=1"], "ml_report.py": ["--model", str(tmp_path)],
+            "ml_export.py": ["--model", str(tmp_path)]}[script]
     proc, res = _run_without(tmp_path, _without(tmp_path, module), script, *args)
     assert proc.returncode == 1 and res["status"] == "error", res              # 2.9.44: traceback, no JSON
     assert res["error_type"] == "missing_library" and res["missing_package"] == pip, res
@@ -623,8 +623,8 @@ LOG_TAGS = ("[INFO]", "[PROGRESS]", "[WARN]", "[ERROR]", "[STATUS]")
 def test_stderr_uses_only_shared_log_tags(trained, tmp_path):
     import re
     work, data, _ = trained
-    proc, _ = run_raw("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW)", "-y", TARGET, "--tag", "tags")
-    hist, _ = run_raw("ml_train.py", "-f", data, "--history")
+    proc, _ = run_raw("ml_train.py", "--file", data, "--features", "반응온도(°C),소비전력(kW)", "--targets", TARGET, "--tag", "tags")
+    hist, _ = run_raw("ml_train.py", "--file", data, "--history")
     for err in (proc.stderr, hist.stderr):
         assert "\r" not in err.replace("\r\n", "\n")
         tagged = [ln for ln in err.splitlines() if re.match(r"\s*\[[A-Z]", ln)]
@@ -635,18 +635,18 @@ def test_stderr_uses_only_shared_log_tags(trained, tmp_path):
     assert "[STATUS] 실험 이력" in hist.stderr
 
 
-# ---- 인자 이름 통일 (AGENTS.md ACI 설계 권장 5, 2.9.51): 저장은 --save, 타겟은 --targets/-y. 옛 이름은 받지 않음 (베타) ----
+# ---- 인자 이름 통일 (AGENTS.md ACI 설계 권장 5, 2.9.51): 저장은 --save, 타겟은 --targets/--targets. 옛 이름은 받지 않음 (베타) ----
 
 
 @pytest.mark.parametrize("script,args", [
-    ("ml_predict.py", ["-m", "x", "-i", "a=1", "--out", "p.csv"]), ("ml_predict.py", ["-m", "x", "-i", "a=1", "-o", "p.csv"]),
-    ("ml_report.py", ["-m", "x", "--out", "r.docx"]), ("ml_report.py", ["-m", "x", "-o", "r.docx"]),
-    ("ml_report.py", ["-m", "x", "-t", "y"]),         # '--target' is argparse's abbreviation of --targets (same meaning)
+    ("ml_predict.py", ["--model", "x", "--input", "a=1", "--out", "p.csv"]), ("ml_predict.py", ["--model", "x", "--input", "a=1", "-o", "p.csv"]),
+    ("ml_report.py", ["--model", "x", "--out", "r.docx"]), ("ml_report.py", ["--model", "x", "-o", "r.docx"]),
+    ("ml_report.py", ["--model", "x", "-t", "y"]),         # '--target' is argparse's abbreviation of --targets (same meaning)
     # 2.9.52: removed options (user decision)
-    ("ml_predict.py", ["-m", "x", "-i", "a=1", "--meta", "m.json"]), ("ml_predict.py", ["-m", "x", "-i", "a=1", "--encoding", "cp949"]),
-    ("ml_train.py", ["-f", "x.csv", "-x", "a", "-y", "b", "--encoding", "cp949"]),
+    ("ml_predict.py", ["--model", "x", "--input", "a=1", "--meta", "m.json"]), ("ml_predict.py", ["--model", "x", "--input", "a=1", "--encoding", "cp949"]),
+    ("ml_train.py", ["--file", "x.csv", "--features", "a", "--targets", "b", "--encoding", "cp949"]),
     ("ml_report.py", ["-d", "x_ml_data"]), ("ml_report.py", ["--data-dir", "x_ml_data"]),
-    ("ml_report.py", ["-m", "x", "-v", "v1"]), ("ml_report.py", ["-m", "x", "--version", "v1"])])
+    ("ml_report.py", ["--model", "x", "--version", "v1"]), ("ml_report.py", ["--model", "x", "--version", "v1"])])
 def test_old_option_names_are_argument_errors(data_dir, script, args):
     proc, res = run_raw(script, *args)
     assert proc.returncode == 2 and res["status"] == "error", res              # 2.9.50: accepted
@@ -657,7 +657,7 @@ def test_old_option_names_are_argument_errors(data_dir, script, args):
 def test_report_targets_and_save(trained):
     work, _, _ = trained
     out = work / "r_targets.docx"
-    payload = run_tool("ml_report.py", "-m", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
+    payload = run_tool("ml_report.py", "--model", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
     assert out.is_file() and payload["report_file"] == str(out), payload
 
 
@@ -665,11 +665,11 @@ def test_report_targets_and_save(trained):
 
 
 @pytest.mark.parametrize("script,args,want", [
-    ("ml_predict.py", ["--model-dir", "v1", "-i", "a=1"], ["--model"]),                 # required 오류여도
-    ("ml_predict.py", ["-m", "v1", "--inputs", "a=1", "--json"], ["--input"]),
-    ("ml_predict.py", ["-m", "v1", "-i", "a=1", "--output", "p.csv", "--encoding", "cp949"], ["--save"]),
+    ("ml_predict.py", ["--model-dir", "v1", "--input", "a=1"], ["--model"]),                 # required 오류여도
+    ("ml_predict.py", ["--model", "v1", "--inputs", "a=1", "--json"], ["--input"]),
+    ("ml_predict.py", ["--model", "v1", "--input", "a=1", "--output", "p.csv", "--encoding", "cp949"], ["--save"]),
     ("ml_train.py", ["--data", "d.csv", "--columns", "a,b", "--target-col", "y"], ["--file", "--features", "--targets"]),
-    ("ml_map.py", ["-f", "d.csv", "--query", "a=1"], ["--input"]),
+    ("ml_map.py", ["--file", "d.csv", "--query", "a=1"], ["--input"]),
 ])
 def test_same_meaning_option_gives_fixed_command(data_dir, script, args, want):
     proc, res = run_raw(script, *args)
@@ -681,22 +681,22 @@ def test_same_meaning_option_gives_fixed_command(data_dir, script, args, want):
 
 
 def test_inline_values_in_wrong_option_recommend_i(p1_model, tmp_path):
-    """2.9.74 집 PC opencode: 한 건 예측에서 ml_train의 -x를 쓰거나('-x "온도=180,..."') 값을 -f에 넣거나, 한 건을 파일로 만들려다
-    없는 파일을 -f로 줬을 때 '알 수 없는 옵션'/'파일 없음'만 받아 멈췄음 -> -i로 고친 전체 명령([추천]) 또는 -i 명령(next_commands)."""
+    """2.9.74 집 PC opencode: 한 건 예측에서 ml_train의 --features를 쓰거나('--features "온도=180,..."') 값을 --file에 넣거나, 한 건을 파일로 만들려다
+    없는 파일을 --file로 줬을 때 '알 수 없는 옵션'/'파일 없음'만 받아 멈췄음 -> --input로 고친 전체 명령([추천]) 또는 --input 명령(next_commands)."""
     vals = "온도=180,압력=3,속도=45"
     # Gemma 4: '--eval "온도=180; 압력=3; ..."' (ml_train 옵션, ; 구분) -> 예전에는 철자만 비슷한 [후보] --vary/--model
-    for args in (["-x", vals], ["--features", vals], ["-f", vals], ["--eval", "온도=180; 압력=3; 속도=45"]):
-        proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], *args)
+    for args in (["--features", vals], ["--features", vals], ["--file", vals], ["--eval", "온도=180; 압력=3; 속도=45"]):
+        proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], *args)
         assert proc.returncode in (1, 2) and "[추천]" in res["message"] and "[후보]" not in res["message"], res
         name, fixed = recommended_command(res["message"])
-        assert name == "ml_predict.py" and fixed[fixed.index("-i") + 1] == vals and args[0] not in fixed, fixed
+        assert name == "ml_predict.py" and fixed[fixed.index("--input") + 1] == vals and args[0] not in fixed, fixed
         assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
     missing = str(tmp_path / "새조건.csv")
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-f", missing)
-    assert proc.returncode == 1 and "-i" in res["message"] and "[추천]" not in res["message"], res
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--file", missing)
+    assert proc.returncode == 1 and "--input" in res["message"] and "[추천]" not in res["message"], res
     nxt = res["next_commands"][0]
     cmd = split_command(nxt["command"])
-    assert nxt["needs_input"] is True and "-f" not in cmd and cmd[cmd.index("-i") + 1].startswith("온도(°C)=<값>"), nxt
+    assert nxt["needs_input"] is True and "--file" not in cmd and cmd[cmd.index("--input") + 1].startswith("온도(°C)=<값>"), nxt
     assert nxt["placeholder"] == "<값>"                                    # 2.9.75: 다른 needs_input 명령과 같은 키
     assert not rt.looks_inline_input(str(tmp_path)) and not rt.looks_inline_input("a.csv")
     assert not rt.looks_inline_input("C:\\d\\a=1.csv") and rt.looks_inline_input("반응온도(°C)=182, 압력=3")
@@ -704,48 +704,48 @@ def test_inline_values_in_wrong_option_recommend_i(p1_model, tmp_path):
 
 def test_model_path_underscore_and_made_up_model_folder_recommend_the_data_file(p1_model):
     """2.9.77 집 PC Gemma: '--model_path "<데이터 폴더>\\models"'(밑줄, 없는 폴더)에 철자만 비슷한 [후보]를 받아 되물었고,
-    없는 폴더·데이터 폴더를 -m에 주면 '찾을 수 없습니다'만 받았음 -> 그 폴더의 학습한 데이터 파일로 고친 [추천] 하나."""
+    없는 폴더·데이터 폴더를 --model에 주면 '찾을 수 없습니다'만 받았음 -> 그 폴더의 학습한 데이터 파일로 고친 [추천] 하나."""
     folder = os.path.dirname(p1_model["f"])
     vals = "온도=180,압력=3,속도=45"
-    for args in (["--model_path", os.path.join(folder, "models")], ["-m", os.path.join(folder, "models")], ["-m", folder]):
-        proc, res = run_raw("ml_predict.py", "-i", vals, *args)
+    for args in (["--model_path", os.path.join(folder, "models")], ["--model", os.path.join(folder, "models")], ["--model", folder]):
+        proc, res = run_raw("ml_predict.py", "--input", vals, *args)
         assert proc.returncode in (1, 2) and "[추천]" in res["message"] and "[후보]" not in res["message"], res
         name, fixed = recommended_command(res["message"])
-        k = fixed.index("--model") if "--model" in fixed else fixed.index("-m")
+        k = fixed.index("--model") if "--model" in fixed else fixed.index("--model")
         assert name == "ml_predict.py" and fixed[k + 1] == p1_model["f"] and "--model_path" not in fixed, fixed
         assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
-    proc, res = run_raw("ml_predict.py", "-i", vals, "-m", p1_model["v"])          # 버전 폴더는 그대로
+    proc, res = run_raw("ml_predict.py", "--input", vals, "--model", p1_model["v"])          # 버전 폴더는 그대로
     assert proc.returncode == 0, res
 
 
 def test_target_value_with_placeholder_input_recommends_find(p1_model):
-    """2.9.79 집 PC Gemma P3: '-i "불순물=100,반응온도=<값>,..."'(타겟 값 + 자리표시자 하나)로 실행해 '<값>을 물으라'만 받고
+    """2.9.79 집 PC Gemma P3: '--input "불순물=100,반응온도=<값>,..."'(타겟 값 + 자리표시자 하나)로 실행해 '<값>을 물으라'만 받고
     ml_map을 학습 데이터에 돌려 실패 -> 그 뜻 하나인 --find/--vary 명령을 [추천]. 타겟 없이 자리표시자만이면 원래대로 값을 물음."""
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,온도(°C)=<값>,압력(bar)=3,속도=45")
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--input", "생산량=500,온도(°C)=<값>,압력(bar)=3,속도=45")
     assert proc.returncode == 1 and "[추천]" in res["message"], res
     name, fixed = recommended_command(res["message"])
     assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "생산량=500", fixed
-    assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("-i") + 1] == "압력(bar)=3,속도=45", fixed
+    assert fixed[fixed.index("--vary") + 1] == "온도(°C)" and fixed[fixed.index("--input") + 1] == "압력(bar)=3,속도=45", fixed
     assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
     # 찾을 입력을 아예 뺌 (P3 세 번째): 한 행을 붙이다 빠뜨렸을 수도 있어 [후보] 1) 찾기 2) 타겟 값 빼고 중앙값으로 예측
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,압력(bar)=3,속도=45")
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--input", "생산량=500,압력(bar)=3,속도=45")
     assert "[추천]" not in res["message"] and "[후보] 1) " in res["message"] and res["error_type"] == "needs_user_decision", res
     find, fill = (split_command(c["command"]) for c in res["confirm_commands"])
-    assert find[find.index("--vary") + 1] == "온도(°C)" and find[find.index("-i") + 1] == "압력(bar)=3,속도=45", res
-    assert "--find" not in fill and "생산량" not in fill[fill.index("-i") + 1] and "온도(°C)=" in fill[fill.index("-i") + 1]
+    assert find[find.index("--vary") + 1] == "온도(°C)" and find[find.index("--input") + 1] == "압력(bar)=3,속도=45", res
+    assert "--find" not in fill and "생산량" not in fill[fill.index("--input") + 1] and "온도(°C)=" in fill[fill.index("--input") + 1]
     assert run_tool("ml_predict.py", *find[2:])["status"] == "ok" and run_tool("ml_predict.py", *fill[2:])["status"] == "ok"
     # 모델이 모르는 이름(오타)이 있으면 빈 입력을 셀 수 없음: 찾기 명령 없이 원래 이름 안내
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,온돜=<값>,압력(bar)=3,속도=45")
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--input", "생산량=500,온돜=<값>,압력(bar)=3,속도=45")
     assert proc.returncode == 1 and "--find" not in json.dumps(res, ensure_ascii=False), res
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "생산량=500,속도=45")                 # 빈 입력 둘: 고르지 않음
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--input", "생산량=500,속도=45")                 # 빈 입력 둘: 고르지 않음
     assert proc.returncode == 1 and "[추천]" not in res["message"], res
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=<값>,압력(bar)=3,속도=45")
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--input", "온도(°C)=<값>,압력(bar)=3,속도=45")
     assert proc.returncode == 1 and "[추천]" not in res["message"] and "물은 뒤" in res["message"], res
 
 
 def test_leading_verb_and_x_y_cols_recommend_fixed_command(data_dir):
     """2.9.77 집 PC solar-mini4: 'ml_train.py train --x-cols ... --y-cols ...' -> 'unrecognized arguments: train'만 받아 헤맴."""
-    proc, res = run_raw("ml_train.py", "train", "-f", "d.csv", "--x-cols", "a,b", "--y-cols", "y")
+    proc, res = run_raw("ml_train.py", "train", "--file", "d.csv", "--x-cols", "a,b", "--y-cols", "y")
     assert proc.returncode == 2 and "[추천]" in res["message"], res
     name, fixed = recommended_command(res["message"])
     assert name == "ml_train.py" and "train" not in fixed and fixed[fixed.index("--features") + 1] == "a,b"
@@ -755,17 +755,17 @@ def test_leading_verb_and_x_y_cols_recommend_fixed_command(data_dir):
 def test_abbreviations_only_through_the_same_meaning_table(data_dir):
     """allow_abbrev=False: '--data-ro 2'는 --data-row로 몰래 읽지 않고 [후보], '--overwrit'는 어떤 후보도 주지 않음.
     예전에 줄임말로 되던 같은 뜻('--target' = --targets)도 읽지 않고 고친 전체 명령을 [추천] (2.9.71: 한 가지 사용법)."""
-    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--data-ro", "2")
+    proc, res = run_raw("ml_train.py", "--file", "없음.csv", "--features", "a", "--targets", "b", "--data-ro", "2")
     assert proc.returncode == 2 and "[후보] 1) --data-row" in res["message"] and "[추천]" not in res["message"], res
     fixed = split_command(res["confirm_commands"][0]["command"])        # 2.9.73: 고른 번호의 전체 명령
     assert fixed[fixed.index("--data-row") + 1] == "2" and "--data-ro" not in fixed, fixed
-    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--overwrit")
+    proc, res = run_raw("ml_train.py", "--file", "없음.csv", "--features", "a", "--targets", "b", "--overwrit")
     assert proc.returncode == 2 and "[후보]" not in res["message"] and "--overwrite" not in res["message"], res
-    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "--target", "b")
+    proc, res = run_raw("ml_train.py", "--file", "없음.csv", "--features", "a", "--target", "b")
     assert proc.returncode == 2 and "[INFO] 옵션 --target" not in proc.stderr, res
     _, fixed = recommended_command(res["message"])
     assert fixed[fixed.index("--targets") + 1] == "b" and "--target" not in fixed, fixed
-    proc, res = run_raw("ml_train.py", "-f", "없음.csv", "-x", "a", "-y", "b", "--description", "설명")      # 별칭 없음
+    proc, res = run_raw("ml_train.py", "--file", "없음.csv", "--features", "a", "--targets", "b", "--description", "설명")      # 별칭 없음
     _, fixed = recommended_command(res["message"])
     assert proc.returncode == 2 and fixed[fixed.index("--desc") + 1] == "설명" and "--description" not in fixed, fixed
     p = rt.JsonArgumentParser()
@@ -780,7 +780,7 @@ def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
     """2.9.71: CONTINUE 횟수는 도구가 셈. 새로 저장한 것 없이 바로 앞과 같은 progress면 STOP_RETRY(unfinished_limit),
     새로 저장했으면 같은 글이어도 계속, CONTINUE_MAX를 넘으면 멈춤."""
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "-f", "d.csv", "-x", "a", "-y", "b"])
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "--file", "d.csv", "--features", "a", "--targets", "b"])
     rt.RUN_SAVED.clear()
     assert rt.unfinished_payload(rt.Unfinished("학습 1/5"))["continue_runs"] == 1
     rt.RUN_SAVED.append("x")
@@ -797,39 +797,39 @@ def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
 
 
 def test_missing_prediction_file_typo_gives_numbered_files(p1_model, tmp_path):
-    """2.9.75: 없는 -f가 같은 폴더 파일의 오타면 '-i로 예측' 안내가 아니라 그 파일들을 [후보] 1) 2)와 같은 번호의 전체 명령으로."""
+    """2.9.75: 없는 --file가 같은 폴더 파일의 오타면 '--input로 예측' 안내가 아니라 그 파일들을 [후보] 1) 2)와 같은 번호의 전체 명령으로."""
     shutil.copy(p1_model["f"], tmp_path / "새조건_1차.csv")
     (tmp_path / "관계없음.txt").write_text("x", encoding="utf-8")
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-f", str(tmp_path / "새조건_1챠.csv"))
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--file", str(tmp_path / "새조건_1챠.csv"))
     assert proc.returncode == 1 and "[후보] 1) " in res["message"] and "관계없음" not in res["message"], res
     assert "next_commands" not in res, res
     cmd = split_command(res["confirm_commands"][0]["command"])
-    assert cmd[cmd.index("-f") + 1] == str(tmp_path / "새조건_1차.csv"), cmd
+    assert cmd[cmd.index("--file") + 1] == str(tmp_path / "새조건_1차.csv"), cmd
     assert run_tool("ml_predict.py", *cmd[2:])["status"] == "ok"
 
 
 def test_placeholder_or_text_in_inline_numbers_stops(p1_model):
-    """2.9.76 검토: 학습 결과의 '-i "온도=<값>,..."' 틀을 그대로 실행하면 중앙값으로 채운 예측이 VERIFIED로 나갔음 -> 멈추고 값을 물으라고 함."""
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=<값>,압력(bar)=3,속도=45")
+    """2.9.76 검토: 학습 결과의 '--input "온도=<값>,..."' 틀을 그대로 실행하면 중앙값으로 채운 예측이 VERIFIED로 나갔음 -> 멈추고 값을 물으라고 함."""
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--input", "온도(°C)=<값>,압력(bar)=3,속도=45")
     assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:") and "사용자에게 물은 뒤" in res["message"], res
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=170:190:10,압력(bar)=3,속도=45")
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--input", "온도(°C)=170:190:10,압력(bar)=3,속도=45")
     assert proc.returncode == 1 and "--sweep" in res["message"], res
-    assert run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=180,압력(bar)=3,속도=45")["status"] == "ok"
+    assert run_tool("ml_predict.py", "--model", p1_model["v"], "--input", "온도(°C)=180,압력(bar)=3,속도=45")["status"] == "ok"
     assert rt.re.fullmatch(r"\s*<[^<>]*>\s*", "<값>")                                 # 글자 입력의 <값>도 막는 규칙
 
 
 def test_constant_eval_is_refused(p1_model):
     """2.9.76 검토: '--eval "온도=182; 압력=3"'(한 건 예측 값을 학습 --eval에 넣은 실수)이 상수 파생변수로 학습되어 최고 버전이 됐음."""
-    proc, res = run_raw("ml_train.py", "-f", p1_model["f"], "-y", "생산량", "--eval", "온도=182; 압력=3")
-    assert proc.returncode == 1 and "상수식" in res["message"] and "ml_predict.py -i" in res["message"], res
-    proc, res = run_raw("ml_train.py", "-f", p1_model["f"], "-y", "생산량", "--eval", "온도 = 압력(bar) * 2")
+    proc, res = run_raw("ml_train.py", "--file", p1_model["f"], "--targets", "생산량", "--eval", "온도=182; 압력=3")
+    assert proc.returncode == 1 and "상수식" in res["message"] and "ml_predict.py --input" in res["message"], res
+    proc, res = run_raw("ml_train.py", "--file", p1_model["f"], "--targets", "생산량", "--eval", "온도 = 압력(bar) * 2")
     assert proc.returncode == 1 and "데이터 열 '온도(°C)'과(와) 같습니다" in res["message"], res
 
 
 def test_find_goal_in_wrong_option_is_not_turned_into_inputs(p1_model):
-    """2.9.76 검토: '--goal "생산량=60" --vary 온도'가 [추천] -i 생산량=60으로 고쳐져 목표값이 입력으로 들어갔음."""
-    proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "--goal", "생산량=600", "--vary", "온도(°C)")
-    assert proc.returncode == 2 and " -i " not in res["message"], res
+    """2.9.76 검토: '--goal "생산량=60" --vary 온도'가 [추천] --input 생산량=60으로 고쳐져 목표값이 입력으로 들어갔음."""
+    proc, res = run_raw("ml_predict.py", "--model", p1_model["v"], "--goal", "생산량=600", "--vary", "온도(°C)")
+    assert proc.returncode == 2 and " --input " not in res["message"], res
 
 
 # ---- 2.9.79: 구조 정리 (스레드, [후보] 전체 명령, 파일 재시도) ------------------------------------------------------
@@ -845,13 +845,13 @@ def test_small_tables_fit_with_one_thread():
 def test_numbered_candidates_carry_their_full_commands(monkeypatch):
     """[후보]는 늘 번호. ask()로 만든 [후보]가 든 message의 InputError는 같은 번호의 confirm_commands를 가진다
     (글만 돌려주는 도우미도 전체 명령을 준다: 사용법 단순성 2번)."""
-    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "-f", "d.csv", "-x", "온두,압력", "-y", "y"])
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "--file", "d.csv", "--features", "온두,압력", "--targets", "y"])
     monkeypatch.setattr(rt, "_ASKED", [])
     text = rt.ask(["온도", "온도2"], [rt.command_replacing("온두", c) for c in ("온도", "온도2")], "{}")
     assert text.startswith("[후보] 1) 온도 2) 온도2")
     e = rt.InputError(f"'온두' 없음: {text}")
     assert e.error_type == "needs_user_decision" and len(e.extra["confirm_commands"]) == 2
-    assert "-x 온도2,압력" in e.extra["confirm_commands"][1]["command"]
+    assert "--features 온도2,압력" in e.extra["confirm_commands"][1]["command"]
     assert "confirm_commands" not in rt.InputError("다른 오류").extra            # 그 글이 없는 오류에는 붙지 않음
     assert rt.numbered(["a", "b"], [None, None], "{}") == ("[후보] 1) a 2) b", [])   # 명령이 없어도 번호
 
@@ -871,3 +871,20 @@ def test_retry_fs_waits_for_windows_lock_errors(monkeypatch):
     assert rt.retry_fs(locked) == "ok" and len(calls) == 3
     with pytest.raises(FileNotFoundError):
         rt.retry_fs(lambda: (_ for _ in ()).throw(FileNotFoundError("x")))
+
+
+@pytest.mark.parametrize("script,argv,want", [
+    ("ml_train.py", ["-f", "없음.csv", "-x", "a", "-y", "b"], {"--file": "없음.csv", "--features": "a", "--targets": "b"}),
+    ("ml_predict.py", ["-m", "v1", "-i", "a=1"], {"--model": "v1", "--input": "a=1"}),
+    ("ml_map.py", ["-f", "없음.csv", "-i", "a=1", "-y", "b"], {"--file": "없음.csv", "--input": "a=1", "--targets": "b"}),
+])
+def test_short_options_are_refused_with_the_long_command(script, argv, want):
+    """2.9.82: 한 글자 옵션은 없음 (사용법 단순성 1번, office-cli 1.4.88과 같음). 쓰면 실행하지 않고(exit 2) 긴 이름으로 고친 전체 명령을
+    [추천]. 필수 옵션(--file)을 한 글자로 쓴 경우도 같음."""
+    proc, res = run_raw(script, *argv)
+    assert proc.returncode == 2 and "[추천]" in res["message"], res
+    name, fixed = recommended_command(res["message"])
+    assert name == script and not any(a in fixed for a in ("-f", "-m", "-i", "-x", "-y")), fixed
+    for opt, val in want.items():                       # 경로 옵션(--file, --model)은 도구가 절대 경로로 넣음
+        got = fixed[fixed.index(opt) + 1]
+        assert (os.path.basename(got) if opt in ("--file", "--model") else got) == val, fixed

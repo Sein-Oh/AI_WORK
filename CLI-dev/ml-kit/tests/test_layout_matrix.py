@@ -130,12 +130,12 @@ def _job(fn, *a):
 
 def _train(path, lid, opts):
     fam = FAMILIES[LAYOUTS[lid][0]]
-    return _run_with_one_retry("ml_train.py", ["-f", path, "-x", fam["x"], "-y", fam["y"], *fam["task"], *opts])
+    return _run_with_one_retry("ml_train.py", ["--file", path, "--features", fam["x"], "--targets", fam["y"], *fam["task"], *opts])
 
 
 def _predict_command(train_res):
-    # 파일 예측 틀 (2.9.75부터 한 건 예측 -i 틀도 있음)
-    cmds = [c["command"] for c in train_res.get("next_commands", []) if "ml_predict.py" in c["command"] and " -f " in c["command"]]
+    # 파일 예측 틀 (2.9.75부터 한 건 예측 --input 틀도 있음)
+    cmds = [c["command"] for c in train_res.get("next_commands", []) if "ml_predict.py" in c["command"] and " --file " in c["command"]]
     assert len(cmds) == 1, train_res.get("next_commands")
     return cmds[0]
 
@@ -150,7 +150,7 @@ def _predict(folder, lid, kind, how, model_res):
         raise model_res
     trained = model_res[1]
     if how == "template":
-        args = ["-m", trained["version_dir"], "-f", path]
+        args = ["--model", trained["version_dir"], "--file", path]
     else:
         args = split_command(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
     return _run_with_one_retry("ml_predict.py", args)
@@ -310,7 +310,7 @@ def _names_b(lid, with_units):
 
 
 def _train_b(path, opts):
-    return _run_with_one_retry("ml_train.py", ["-f", path, "-x", X, "-y", Y, *opts])
+    return _run_with_one_retry("ml_train.py", ["--file", path, "--features", X, "--targets", Y, *opts])
 
 
 PRED_CASES_B = [(lid, kind, how) for lid in LAYOUTS_B for kind in ("units", "plain") for how in ("template", "next")
@@ -323,7 +323,7 @@ def _predict_b(folder, lid, how, model_res):
         raise model_res
     trained = model_res[1]
     if how == "template":
-        args = ["-m", trained["version_dir"], "-f", path]
+        args = ["--model", trained["version_dir"], "--file", path]
     else:
         args = split_command(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
     return _run_with_one_retry("ml_predict.py", args)
@@ -422,7 +422,7 @@ def _names_c(lid, with_units):
 
 
 def _train_c(path, opts):
-    return _run_with_one_retry("ml_train.py", ["-f", path, "-x", X, "-y", Y, *opts])
+    return _run_with_one_retry("ml_train.py", ["--file", path, "--features", X, "--targets", Y, *opts])
 
 
 PRED_CASES_C = [(lid, kind, how) for lid in LAYOUTS_C for kind in ("units", "plain") for how in ("template", "next")
@@ -431,7 +431,7 @@ PRED_CASES_C = [(lid, kind, how) for lid in LAYOUTS_C for kind in ("units", "pla
 
 def _predict_args(trained, path, how):
     if how == "template":
-        return ["-m", trained["version_dir"], "-f", path]
+        return ["--model", trained["version_dir"], "--file", path]
     return split_command(_predict_command(trained).replace("<새데이터.xlsx>", path))[2:]
 
 
@@ -460,7 +460,7 @@ def _predict_notarget(folder, bid, model_res):
     if isinstance(model_res, BaseException):
         raise model_res
     path = _make_notarget(folder, bid)
-    return run_raw("ml_predict.py", "-m", model_res[1]["version_dir"], "-f", path)[1]
+    return run_raw("ml_predict.py", "--model", model_res[1]["version_dir"], "--file", path)[1]
 
 
 @pytest.fixture(scope="module")

@@ -164,7 +164,7 @@ GROUPS = [
             {
                 'id': 'M1',
                 'message': r'{DIR}\맵.xlsx 에서 A가 12.5일 때 B와 C 값 알려줘.',
-                'commands': [r'ml_map\.py', r'''-i\s+['"]?A=12\.5'''],
+                'commands': [r'ml_map\.py', r'''--input\s+['"]?A=12\.5'''],
                 'tool_ok': r'ml_map\.py',
                 'answer_all': [r'(?<![\d.])16\.250*(?!\d|\.\d)', r'(?<![\d.])87\.50*(?!\d|\.\d)'],
             },
@@ -193,7 +193,7 @@ GROUPS = [
             {
                 'id': 'P1',
                 'message': '방금 만든 모델로 반응온도 182, 압축압력 3, 촉매비율 1, 수분함량 20, 유량 10, 분진 0.5 일 때 생산효율, 불순물, 소비전력 예측해줘.',
-                'commands': [r'ml_predict\.py', r'(-m|--model)\s', r'(-i|--input)\s'],     # 긴 이름도 같은 옵션
+                'commands': [r'ml_predict\.py', r'--model\s', r'--input\s'],
                 'tool_ok': r'ml_predict\.py',
                 'answer_any': ['실측', '측정'],
                 'judge': '세 출력의 예측값과 90% 범위, 실측 비교값을 함께 알렸는가.',
@@ -201,7 +201,7 @@ GROUPS = [
             {
                 'id': 'P2',
                 'message': r'{DIR}\새조건.xlsx 의 조건들로 예측해줘.',
-                'commands': [r'ml_predict\.py', r'-f\s'],
+                'commands': [r'ml_predict\.py', r'--file\s'],
                 'tool_ok': r'ml_predict\.py',
                 'answer_any': ['범위 밖', '범위를 벗어', '벗어', '참고용', '외삽', '초과'],
                 'judge': '결과 파일 경로를 알리고, 학습 범위 밖 입력(반응온도 200) 경고를 전달했는가.',

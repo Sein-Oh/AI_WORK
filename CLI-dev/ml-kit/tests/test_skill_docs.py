@@ -101,11 +101,11 @@ def test_skill_mentions_features():
     need = {
         "ml-train": ("--task classification", "--positive-class", "--dtypes", "--eval \"", "--exclude-where", "features.txt",
                      "--history", "--dry-run", "goal_met", "improve_stopped", "delta_score",
-                     "입력 열(피처)은 묻지 않는다", "-x \"<피처1>,<피처2>\""),
-        "ml-predict": ("-m \"<데이터파일>\"", "model_chosen", "-f \"<새데이터파일>\"", "--save", "--find", "--vary", "--sweep",
+                     "입력 열(피처)은 묻지 않는다", "--features \"<피처1>,<피처2>\""),
+        "ml-predict": ("--model \"<데이터파일>\"", "model_chosen", "--file \"<새데이터파일>\"", "--save", "--find", "--vary", "--sweep",
                        "--maximize", "--minimize", "--where", "--suggest <개수>", "실험계획", "실제값 비교"),
-        "ml-report": ("ml_report.py\" -f", "--title", "--slots", "ml_export.py\" -m", "--keep", "candidates"),
-        "ml-map": ("ml_map.py\" -f", "--find", "--vary", "--points", "extrapolated"),
+        "ml-report": ("ml_report.py\" --file", "--title", "--slots", "ml_export.py\" --model", "--keep", "candidates"),
+        "ml-map": ("ml_map.py\" --file", "--find", "--vary", "--points", "extrapolated"),
     }
     for name, needles in need.items():
         text = _read(name)
@@ -114,7 +114,7 @@ def test_skill_mentions_features():
 
 
 def test_train_templates_have_no_x():
-    """2.9.72: -x는 사용자가 입력 열을 말했을 때만 (표의 한 줄). 학습 명령 틀에는 -x가 없어 도구가 입력을 고름 (한 가지 형태)."""
+    """2.9.72: --features는 사용자가 입력 열을 말했을 때만 (표의 한 줄). 학습 명령 틀에는 --features가 없어 도구가 입력을 고름 (한 가지 형태)."""
     text = _read("ml-train")
     templates = [b for b in re.findall(r"```powershell\n(.*?)```", text, flags=re.S) if "ml_train.py" in b]
-    assert templates and all(" -x " not in b for b in templates), templates
+    assert templates and all(" --features " not in b for b in templates), templates

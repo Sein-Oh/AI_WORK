@@ -134,7 +134,7 @@ def test_shell_detection_follows_opencode(monkeypatch):
 def test_grader_splits_single_quoted_commands():
     """채점기 command_segments는 작은따옴표 안의 ; | & 와 ''를 한 명령으로 둔다."""
     cmds = ["python C:\\CLI\\office-cli\\excel.py write --cells 'C6=ft; C7=\u2103' --dry-run",
-            "python C:\\CLI\\ml-kit\\ml_train.py -f 'C:\\a b\\d.xlsx' --exclude-where '비고 = ''a;b''|x > 1'",
+            "python C:\\CLI\\ml-kit\\ml_train.py --file 'C:\\a b\\d.xlsx' --exclude-where '비고 = ''a;b''|x > 1'",
             "python C:\\CLI\\office-cli\\word.py fill --file 'C:\\값 $x (1)\\it''s.csv' --where '부서 = \\\"영업 & 기획\\\"'"]
     for cmd in cmds:
         assert _grade.command_segments(cmd) == [cmd]
