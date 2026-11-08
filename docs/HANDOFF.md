@@ -203,6 +203,9 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 5. 집 PC에서 다시 확인할 것: `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma-only A1,P1 --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
    (Gemma 먼저, solar-mini4 예비). 기대: P1 답변에 예측값·90% 범위·실측 비교값과 높인/낮춘 입력이 글 그대로, A1은 묻지 않고 학습 실행.
    결과 파일의 "요청별 모델"이 Gemma인 요청만 합격 판정에 씀. "시험 폴더 밖 쓰기"가 있으면 그 경로를 함께 올림.
+6. 집 PC 확인(2026-11-08 오후, ml-kit 2.9.78): Gemma 4 26B A1·P1 2/2 (두 요청 모두 Gemma, 43초, solar-mini4로 넘어간 요청 없음), 시험 폴더 밖 쓰기 없음.
+   A1은 묻지 않고 학습, P1 답변에 예측값·90% 범위·실측 비교값과 높인/낮춘 입력이 글 그대로 (r5의 실측 비교값 빠뜨림 해결). 같은 실행의 pytest 1건 실패
+   (office-cli `--action` 오타에 빈 `[후보] `: Python 3.13.13 argparse가 값에 따옴표를 붙이지 않음) -> office-cli 1.4.84. 결과 `docs/test_logs/opencode_확인_20261108/`
 
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
