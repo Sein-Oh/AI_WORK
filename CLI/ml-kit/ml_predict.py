@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.76"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.77"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -963,12 +963,16 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--target": ["--targets"], "--target-col": ["--targets"], "--target-cols": ["--targets"],
     "--target-column": ["--targets"], "--y": ["--targets"],
     "--feature": ["--features"], "--columns": ["--features"], "--feature-cols": ["--features"], "--x": ["--features"],
+    "--x-cols": ["--features"], "--y-cols": ["--targets"],      # 2.9.77 집 PC solar-mini4
     "--output": ["--save"], "--out": ["--save"], "--output-file": ["--save"], "-o": ["--save"],
     "--header": ["--header-row"], "--unit": ["--unit-row"], "--exclude": ["--exclude-where"],
     "--positive": ["--positive-class"], "--time": ["--time-limit"], "--description": ["--desc"],
 }
 # Options with nothing to do in ml-kit: dropped in the [추천] command (value: how many arguments follow)
 DROP_OPTIONS = {"--json": 0, "--encoding": 1, "--verbose": 0, "--quiet": 0}
+# A first word that names what the script does ('ml_train.py train ...', 2.9.77 집 PC solar-mini4): ml-kit commands take
+# no sub-command, so it is dropped in the [추천] command
+DROP_VERBS = {"train", "predict", "report", "map", "run", "fit", "export"}
 # Never given as a lookalike, even as [후보]: replaces files or retrains everything
 NO_FUZZY_OPTIONS = {"--overwrite", "--best", "--help"}
 _OPTION_TOKEN = re.compile(r"--?[A-Za-z][A-Za-z0-9_-]*")
@@ -1016,8 +1020,12 @@ class JsonArgumentParser(argparse.ArgumentParser):
         return {o for a in self._actions for o in a.option_strings}
 
     def _same_meaning(self, flag: str) -> Optional[str]:
+        """The real option for a same-meaning name; '_' read as '-' first (2.9.77, 집 PC Gemma: '--model_path')."""
         opts = self._options()
-        return next((o for o in SAME_MEANING.get(flag, []) if o in opts), None)
+        dashed = flag.replace("_", "-")
+        if dashed != flag and dashed in opts:
+            return dashed
+        return next((o for o in SAME_MEANING.get(flag, SAME_MEANING.get(dashed, [])) if o in opts), None)
 
     def parse_known_args(self, args=None, namespace=None):  # type: ignore[override]
         given = [str(a) for a in (sys.argv[1:] if args is None else args)]
@@ -1053,6 +1061,10 @@ class JsonArgumentParser(argparse.ArgumentParser):
         unknown: List[str] = []
         changes: List[str] = []
         i = 0
+        positional = any(not a.option_strings for a in self._actions)
+        if given and given[0].lower() in DROP_VERBS and not positional:
+            changes.append(f"앞의 '{given[0]}' 뺌 (ml-kit 명령에는 하위 명령이 없음)")
+            i = 1
         while i < len(given):
             a = given[i]
             key, eq, val = a.partition("=")
@@ -1083,6 +1095,8 @@ class JsonArgumentParser(argparse.ArgumentParser):
                 unknown.append(key)
             fixed.append(a)
             i += 1
+        if changes and not unknown:
+            fixed = self._fix_model_value(fixed, changes)
         if changes and not unknown and self._parses(fixed):
             cmd = command_text(argv=[sys.argv[0]] + fixed)
             if cmd:
@@ -1104,6 +1118,19 @@ class JsonArgumentParser(argparse.ArgumentParser):
                 self._confirm = self._confirm or items
                 hints.append(f"'{key}' 옵션은 없습니다. {text} (뜻이 같은지 사용자에게 확인)")
         return (" " + " ".join(hints)) if hints else ""
+
+    @staticmethod
+    def _fix_model_value(fixed: List[str], changes: List[str]) -> List[str]:
+        """In a [추천] command being built: an -m/--model value that is no model but has exactly one trained data file
+        near it -> that data file, so the one [추천] runs (2.9.77: '--model_path <없는 폴더>' needed two [추천])."""
+        out = list(fixed)
+        for j in range(len(out) - 1):
+            if out[j] in ("-m", "--model"):
+                found = _near_trained_data(os.path.abspath(str(out[j + 1]).strip().strip('"')))
+                if found and len(found) == 1:
+                    changes.append(f"-m {os.path.basename(found[0])} (학습한 데이터 파일)")
+                    out[j + 1] = found[0]
+        return out
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
         """R7: help text goes to stderr, stdout gets exactly 1 JSON line (argparse then exits 0). A help text that cannot
@@ -4116,6 +4143,7 @@ def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: 
     elif os.path.isdir(ap) and os.path.basename(ap.rstrip("\\/")).endswith("_ml_data"):
         root = ap
     else:
+        _model_path_near(path, ap)
         return path
     if not os.path.isdir(root):
         raise InputError(f"'{os.path.basename(ap)}'의 학습 결과 폴더가 없습니다 ({root}). 먼저 ml_train.py로 학습하십시오.")
@@ -4149,6 +4177,55 @@ def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: 
     sys.stderr.write(f"[INFO] {option} {os.path.basename(ap)} -> {vdir}\n")
     MODEL_CHOSEN.append(msg)
     return vdir
+
+
+def _trained_data_files(folder: str) -> List[str]:
+    """Data files in `folder` that have a <stem>_ml_data folder with a version folder (trained by ml_train)."""
+    out = []
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return out
+    for n in names:
+        stem, ext = os.path.splitext(n)
+        root = os.path.join(folder, stem + "_ml_data")
+        if ext.lower() in DATA_EXTS and os.path.isdir(root) and any(
+                re.match(r"^v\d+$", d) for d in os.listdir(root)):
+            out.append(os.path.join(folder, n))
+    return out
+
+
+def _near_trained_data(ap: str) -> Optional[List[str]]:
+    """None when `ap` is a model (.joblib, folder with model_*.joblib) or a data file; else the trained data files in
+    that folder (or the nearest existing folder above a missing path, 2 levels)."""
+    if os.path.isfile(ap) or (os.path.isdir(ap) and glob.glob(os.path.join(ap, "model_*.joblib"))):
+        return None
+    if os.path.isdir(ap) and os.path.basename(ap.rstrip("\\/")).endswith("_ml_data"):
+        return None
+    folder = ap if os.path.isdir(ap) else os.path.dirname(ap)
+    for _ in range(2):
+        if os.path.isdir(folder):
+            break
+        folder = os.path.dirname(folder)
+    return _trained_data_files(folder) if os.path.isdir(folder) else []
+
+
+def _model_path_near(given: str, ap: str) -> None:
+    """-m that is neither a model (version folder with model_*.joblib, .joblib) nor a data file (2.9.77, 집 PC Gemma:
+    '-m "<시험 폴더>\\models"' made up, '-m "<데이터 폴더>"'): the trained data file in that folder (or the nearest existing
+    folder above a missing path) -> STOP_RETRY [추천] the command with -m <data file>; several -> numbered [후보]."""
+    found = _near_trained_data(ap)
+    if found is None:
+        return
+    what = "모델 경로를 찾을 수 없습니다" if not os.path.exists(ap) else "이 폴더에는 모델 파일(model_*.joblib)이 없습니다"
+    head = f"{what}: {ap}. -m에는 학습한 데이터 파일을 줍니다 (도구가 최고 버전을 고름)."
+    if len(found) == 1:
+        cmd = command_with_value(str(given), found[0])
+        raise InputError(head + (f" [추천] {cmd}" if cmd else f" 학습한 데이터 파일: {found[0]}"))
+    if found:
+        cmds = [command_with_value(str(given), f) for f in found]
+        text, items = numbered([os.path.basename(f) for f in found], cmds, "-m {}")
+        raise InputError(f"{head} 학습한 데이터 파일이 여럿입니다. {text}", extra={"confirm_commands": items} if items else None)
 
 
 def resolve_model_arg(args: argparse.Namespace) -> argparse.Namespace:
@@ -5781,7 +5858,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
            f"전체 결과는 output_file({os.path.basename(saved_file)})로 알리세요. "
            if inline_truncated and saved_file else
            f"결과 파일: {os.path.basename(saved_file)}. " if saved_file else "")
-        + ("preview의 입력별 영향(explain: 학습 기준값에서 바꿀 때 예측을 높인 입력과 낮춘 입력)을 알리세요. " if explain_lines else "")
+        + ("preview의 입력별 영향(explain: 학습 기준값에서 바꿀 때 예측을 높인 입력과 낮춘 입력)을 '높인 입력'·'낮춘 입력' 글 그대로 알리세요 "
+           "(화살표 같은 기호로 바꾸지 않음). " if explain_lines else "")
         + ("새 파일에 실제값이 있어 예측 오차를 학습 때와 비교했습니다 (actual_check). preview의 실제값 비교를 알리세요. "
            if actual_checks else "")
         + ("오차가 학습 때보다 크게 나빠졌습니다: warnings를 알리고, 새 데이터로 다시 학습하려면 next_commands[0]"

@@ -32,14 +32,19 @@
 
 1. 위 작업은 스킬 명령으로만 한다. pandas, openpyxl, python-docx, win32com 등으로 파이썬 코드를 직접 짜서 하지 않는다.
    파일 내용이나 행 수 확인도 스킬로 한다: 엑셀/CSV는 `excel.py read --target "<파일>"`, 그 밖의 문서는 `reader.py read --file "<파일>"`.
+   `python -c`, `python -`(표준 입력), 직접 만든 .py로 파일을 열거나 풀지 않는다. 파일 찾기(glob)에 파일이 안 나와도 사용자가 준 경로로
+   스킬 명령을 그대로 실행한다 (파일이 없으면 도구가 알려 준다).
 2. 도구는 `C:\CLI\ml-kit`, `C:\CLI\office-cli`에만 있다 (다른 폴더의 경로, 예: `C:\CLI-dev`는 데이터 위치일 뿐이다). SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
    - office-cli: `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\office-cli\skills\office-excel\SKILL.md`)
    - ml-kit: `C:\CLI\ml-kit\skills\<스킬 이름>\SKILL.md` (예: `C:\CLI\ml-kit\skills\ml-train\SKILL.md`)
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
-   실행하는 .py는 SKILL.md 표에 있는 것뿐이다 (`tools\` 같은 다른 스크립트는 없다. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py -i`).
-5. 명령은 1번만 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]`, `[INFO]`, `[WARN]` 줄은 무시한다.
+   실행하는 .py는 SKILL.md 표에 있는 것뿐이고, 경로는 SKILL.md에 적힌 전체 경로를 한 글자도 바꾸지 않고 쓴다
+   (`C:\CLI\office-cli\excel.py`, `C:\CLI\ml-kit\ml_train.py`처럼 도구 폴더 바로 아래. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py -i`).
+5. 사용자가 요청한 일의 명령은 묻지 않고 바로 실행한다. 명령을 답변에 적어 보여 주기만 하고 끝내지 않는다 (먼저 묻는 것은 6번 `confirm_commands`와 5장뿐).
+   명령은 1번만 실행한다. 출력의 **마지막 1줄 JSON**만 읽는다. `[PROGRESS]`, `[INFO]`, `[WARN]` 줄은 무시한다.
+   출력을 `python -c`, `findstr`, 파일 저장으로 다시 풀지 않는다. 명령 뒤에 `| tail`, `| head`, `| python ...`을 붙이지 않는다 (출력을 그대로 읽는다).
 6. JSON에 `next_commands`가 있으면 다음 단계는 그 `command`를 글자 그대로 실행한다(작은따옴표 `'...'`와 `\"`도 바꾸지 않는다, `needs_input: true`이면 `<...>`만 사용자가 준 값(파일이면 경로)으로 바꾼다). 명령을 새로 만들지 않는다.
    예외: `confirm_commands`(메일 발송, 미리보기 뒤 실제 변경, 다른 문서에 넣기)는 바로 실행하지 않는다. 무엇을 할지(받는 사람·제목, `planned`)를
    사용자에게 보여 주고 "예"를 받은 뒤에만 그 `command`를 글자 그대로 1번 실행한다. 사용자가 이번 요청에서 이미

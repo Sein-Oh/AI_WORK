@@ -12,6 +12,24 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.77] - 2026-11-08
+
+집 PC opencode 시험(Gemma 4 26B, solar-mini4)의 P1(한 건 예측)에서 모델이 멈춘 곳.
+
+### 기능
+- 인자 오류의 같은 뜻 옵션: 옵션 이름의 `_`를 `-`로 읽음 (`--model_path` -> `--model-path` -> `--model`의 `[추천]`). 예전에는 철자만 비슷한
+  `[후보] --model`을 받아 사용자에게 되물음.
+- `-m`이 모델(버전 폴더, `.joblib`)도 데이터 파일도 아니면(지어낸 `"<데이터 폴더>\models"`, 데이터 폴더 자체): 그 폴더(없으면 2단계 위까지)에서
+  학습한 데이터 파일(`<이름>_ml_data\vN`이 있는 것)을 찾아 하나면 `-m <데이터 파일>`로 고친 `[추천]`, 여럿이면 번호 `[후보]`.
+  같은 뜻 옵션을 고친 `[추천]`에서도 `-m` 값을 함께 바로잡아 `[추천]` 한 번으로 실행되게 함.
+- 인자 오류: 맨 앞의 하위 명령 같은 낱말(`ml_train.py train ...`)은 뺀 `[추천]`, `--x-cols`/`--y-cols`는 같은 뜻 표에 넣음(-> `-x`/`-y`).
+- 전역 지침 3장 4·5번: SKILL.md의 전체 경로를 그대로 쓰기(예시 이름 `tools\`는 지움, solar-mini4가 그대로 따라 씀), 출력을 `python -c`·`findstr`·파일 저장으로
+  다시 풀거나 `| tail`·`| head`를 붙이지 않기.
+- 한 건 예측 지시문: 입력별 영향을 '높인 입력'·'낮춘 입력' 글 그대로 알리고 화살표 같은 기호로 바꾸지 않게 함 (Gemma가 `반응온도(↓)`로 줄여 씀).
+- 테스트: `test_contract.py::test_model_path_underscore_and_made_up_model_folder_recommend_the_data_file`, `test_predict.py::test_explain_signs_on_linear_model`.
+- 전역 지침(`CLI/opencode/AGENTS.md`) 3장 1·5번: 요청한 일의 명령은 묻지 않고 바로 실행(명령을 답에 적기만 하지 않음), `python -c`·표준 입력·직접 만든 .py 금지,
+  파일 찾기(glob)에 안 나와도 사용자가 준 경로로 스킬 명령 실행.
+
 ## [2.9.76] - 2026-11-08
 
 전체 검토(클라우드, 2026-11-08)에서 찾은 것: 경량 LLM이 실수해도 틀린 결과가 VERIFIED로 나가던 곳.

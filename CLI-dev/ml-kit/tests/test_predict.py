@@ -768,6 +768,8 @@ def test_explain_signs_on_linear_model(lin):
     assert abs(eff["온도"] - 3 * (8 - med["온도"])) < 1.0 and abs(eff["압력"] + 2 * (6 - med["압력"])) < 1.0
     assert "높인 입력: 온도" in res["preview"] and "낮춘 입력: 압력" in res["preview"]
     assert "explain" in res["agent_directive"]
+    # 2.9.77 집 PC Gemma: '반응온도(↓)'처럼 화살표로 줄여 써 채점 실패 -> 글 그대로 옮기라고 지시
+    assert "글 그대로" in res["agent_directive"] and "기호로 바꾸지 않음" in res["agent_directive"]
 
 
 def test_explain_classification_probability(lin):

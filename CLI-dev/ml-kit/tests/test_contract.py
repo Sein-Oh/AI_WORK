@@ -649,6 +649,31 @@ def test_inline_values_in_wrong_option_recommend_i(p1_model, tmp_path):
     assert not mp.looks_inline_input("C:\\d\\a=1.csv") and mp.looks_inline_input("반응온도(°C)=182, 압력=3")
 
 
+def test_model_path_underscore_and_made_up_model_folder_recommend_the_data_file(p1_model):
+    """2.9.77 집 PC Gemma: '--model_path "<데이터 폴더>\\models"'(밑줄, 없는 폴더)에 철자만 비슷한 [후보]를 받아 되물었고,
+    없는 폴더·데이터 폴더를 -m에 주면 '찾을 수 없습니다'만 받았음 -> 그 폴더의 학습한 데이터 파일로 고친 [추천] 하나."""
+    folder = os.path.dirname(p1_model["f"])
+    vals = "온도=180,압력=3,속도=45"
+    for args in (["--model_path", os.path.join(folder, "models")], ["-m", os.path.join(folder, "models")], ["-m", folder]):
+        proc, res = run_raw("ml_predict.py", "-i", vals, *args)
+        assert proc.returncode in (1, 2) and "[추천]" in res["message"] and "[후보]" not in res["message"], res
+        name, fixed = recommended_command(res["message"])
+        k = fixed.index("--model") if "--model" in fixed else fixed.index("-m")
+        assert name == "ml_predict.py" and fixed[k + 1] == p1_model["f"] and "--model_path" not in fixed, fixed
+        assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
+    proc, res = run_raw("ml_predict.py", "-i", vals, "-m", p1_model["v"])          # 버전 폴더는 그대로
+    assert proc.returncode == 0, res
+
+
+def test_leading_verb_and_x_y_cols_recommend_fixed_command(data_dir):
+    """2.9.77 집 PC solar-mini4: 'ml_train.py train --x-cols ... --y-cols ...' -> 'unrecognized arguments: train'만 받아 헤맴."""
+    proc, res = run_raw("ml_train.py", "train", "-f", "d.csv", "--x-cols", "a,b", "--y-cols", "y")
+    assert proc.returncode == 2 and "[추천]" in res["message"], res
+    name, fixed = recommended_command(res["message"])
+    assert name == "ml_train.py" and "train" not in fixed and fixed[fixed.index("--features") + 1] == "a,b"
+    assert fixed[fixed.index("--targets") + 1] == "y" and "--x-cols" not in fixed, fixed
+
+
 def test_abbreviations_only_through_the_same_meaning_table(data_dir):
     """allow_abbrev=False: '--data-ro 2'는 --data-row로 몰래 읽지 않고 [후보], '--overwrit'는 어떤 후보도 주지 않음.
     예전에 줄임말로 되던 같은 뜻('--target' = --targets)도 읽지 않고 고친 전체 명령을 [추천] (2.9.71: 한 가지 사용법)."""
