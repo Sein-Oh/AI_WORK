@@ -67,10 +67,10 @@ def test_totals_row_marked_in_exclude_column(tmp_path, mark, warn):
 
 def test_totals_row_marked_train_and_map(tmp_path):
     path = _totals_book(str(tmp_path / "a1.xlsx"), "합계")
-    _, res = run_raw("ml_train.py", "-f", path, "-x", X, "-y", Y, "--unit-row", "2")
+    _, res = run_raw("ml_train.py", "--file", path, "--features", X, "--targets", Y, "--unit-row", "2")
     assert res["status"] == "ok", res
     assert not any("합계" in w for w in res.get("warnings", [])), res.get("warnings")
-    _, res = run_raw("ml_map.py", "-f", path, "--unit-row", "2", "-i", "반응온도(°C)=180", "-y", "수율(%)")
+    _, res = run_raw("ml_map.py", "--file", path, "--unit-row", "2", "--input", "반응온도(°C)=180", "--targets", "수율(%)")
     assert res["status"] == "ok", res
     assert not any("합계·평균" in w for w in res.get("warnings", [])), res.get("warnings")
 
@@ -121,7 +121,7 @@ def test_shift_subtotal_rows_warned(tmp_path):
     path = write_rows(str(tmp_path / "s1.xlsx"), rows, [])
     df = rt.load_data_file(path)
     assert _pairs(df) == [(5 + 4 * d, "소계") for d in range(12)]           # 2.9.19: [] (25% of the column)
-    _, res = run_raw("ml_train.py", "-f", path, "-x", "반응온도,압력", "-y", "생산량")
+    _, res = run_raw("ml_train.py", "--file", path, "--features", "반응온도,압력", "--targets", "생산량")
     assert res["status"] == "ok" and any("합계·평균" in w for w in res.get("warnings", [])), res
 
 
@@ -283,7 +283,7 @@ def test_average_category_values_not_block_means(tmp_path):
 
 def test_shift_report_trains_with_warning(tmp_path):
     path = write_rows(str(tmp_path / "sj_train.xlsx"), _shift_rows(days=10), [])
-    _, res = run_raw("ml_train.py", "-f", path, "-x", "온도,구분", "-y", "수율")
+    _, res = run_raw("ml_train.py", "--file", path, "--features", "온도,구분", "--targets", "수율")
     assert res["status"] == "ok" and any("합계·평균" in w for w in res.get("warnings", [])), res
 
 
@@ -454,7 +454,7 @@ def test_loose_words_as_half_of_full_column_quiet(tmp_path):
 
 def test_category_column_train_has_no_totals_warning(tmp_path):
     f = write_rows(str(tmp_path / "l1.xlsx"), _category_rows("라인", ["A계", "B계"]), [])
-    _, res = run_raw("ml_train.py", "-f", f, "-x", "라인,온도,압력", "-y", "수율")
+    _, res = run_raw("ml_train.py", "--file", f, "--features", "라인,온도,압력", "--targets", "수율")
     assert res["status"] == "ok", res
     assert not any("합계·평균 행" in w for w in res.get("warnings", [])), res["warnings"]
 
@@ -475,7 +475,7 @@ def test_daily_report_totals_still_warned(tmp_path, word):
 
 def test_daily_report_totals_train_warned(tmp_path):
     f = write_rows(str(tmp_path / "w.xlsx"), _daily_rows("총 합계"), [])
-    _, res = run_raw("ml_train.py", "-f", f, "-x", "온도", "-y", "생산량")
+    _, res = run_raw("ml_train.py", "--file", f, "--features", "온도", "--targets", "생산량")
     assert res["status"] == "ok", res
     assert any("합계·평균 행" in w for w in res.get("warnings", [])), res.get("warnings")
 
@@ -632,7 +632,7 @@ def test_single_shift_daily_total_copy_quiet(tmp_path):
 def test_merged_date_daily_report_train_warned(tmp_path):
     rows, merges = _daily_merged("일합계", "월합계")
     f = write_rows(str(tmp_path / "t.xlsx"), rows, merges)
-    _, res = run_raw("ml_train.py", "-f", f, "-x", "온도", "-y", "생산량")
+    _, res = run_raw("ml_train.py", "--file", f, "--features", "온도", "--targets", "생산량")
     assert res["status"] == "ok", res
     assert any("합계·평균 행" in w and "외 6개" in w for w in res.get("warnings", [])), res.get("warnings")
 

@@ -207,7 +207,7 @@ DTYPE_WORDS = {"float": "float", "float64": "float", "num": "float", "int": "int
 
 
 def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """--dtypes 'col:type,...' with every column name resolved like -x / -y (resolve_column_names: exact name, a unique
+    """--dtypes 'col:type,...' with every column name resolved like --features / --targets (resolve_column_names: exact name, a unique
     name without its unit, else [후보]) and every type checked (a misspelt type -> [추천] the corrected --dtypes).
     Returns the canonical 'full column name:type' list (an unknown name or type stops the run, never silently ignored)."""
     if not dtypes_arg or not str(dtypes_arg).strip():
@@ -246,21 +246,21 @@ def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Option
 
 
 def leakage_error(overlap: List[str], features: List[str], targets: List[str]) -> InputError:
-    """A column given in both -x and -y: STOP_RETRY with [후보] of the two full commands (the column taken out of -y,
-    or out of -x) and the same commands in next_commands. Which one is meant is the user's choice."""
+    """A column given in both --features and --targets: STOP_RETRY with [후보] of the two full commands (the column taken out of --targets,
+    or out of --features) and the same commands in next_commands. Which one is meant is the user's choice."""
     names = ", ".join(f"'{t}'" for t in overlap)
-    cmd = command_text(drop={"-x": "features", "--features": "features", "-y": "targets", "--targets": "targets"})
+    cmd = command_text(drop={"--features": "features", "--features": "features", "--targets": "targets", "--targets": "targets"})
     cands: List[Dict[str, Any]] = []
     feats_wo = [f for f in features if f not in overlap]
     tgts_wo = [t for t in targets if t not in overlap]
     if cmd and not any('"' in n for n in features + targets):
         if tgts_wo:
-            cands.append({"purpose": f"{names}을(를) 타겟(-y)에서 빼고 입력으로만 쓰기",
-                          "command": f"{cmd} -x {quote_arg(','.join(features))} -y {quote_arg(','.join(tgts_wo))}"})
+            cands.append({"purpose": f"{names}을(를) 타겟(--targets)에서 빼고 입력으로만 쓰기",
+                          "command": f"{cmd} --features {quote_arg(','.join(features))} --targets {quote_arg(','.join(tgts_wo))}"})
         if feats_wo:
-            cands.append({"purpose": f"{names}을(를) 입력(-x)에서 빼고 타겟으로만 예측하기",
-                          "command": f"{cmd} -x {quote_arg(','.join(feats_wo))} -y {quote_arg(','.join(targets))}"})
-    msg = (f"타겟 누수: {names}이(가) 입력(-x)과 타겟(-y)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
+            cands.append({"purpose": f"{names}을(를) 입력(--features)에서 빼고 타겟으로만 예측하기",
+                          "command": f"{cmd} --features {quote_arg(','.join(feats_wo))} --targets {quote_arg(','.join(targets))}"})
+    msg = (f"타겟 누수: {names}이(가) 입력(--features)과 타겟(--targets)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
            f"어느 쪽에서 뺄지 사용자에게 물으십시오.")
     if cands:   # the user picks: confirm_commands (next_commands would run without asking)
         text, items = numbered([c["purpose"] for c in cands], [c["command"] for c in cands], "{}")
@@ -288,10 +288,10 @@ def validate_and_sanitize_data(
     all_available = [str(c) for c in df.columns]
 
     layout = dict(df.attrs)    # two-level / merged header, title row -> [추천] --header-row N (+ unit row)
-    # -y first; a -x typo never suggests a target (nor a -y typo a feature): the other option's columns are excluded
-    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(-y)", layout=layout,
+    # --targets first; a --features typo never suggests a target (nor a --targets typo a feature): the other option's columns are excluded
+    target_names, tgt_alias = resolve_column_names(target_names, all_available, "타겟(--targets)", layout=layout,
                                                    exclude=known_columns(feature_names, all_available))
-    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(-x)", layout=layout,
+    feature_names, feat_alias = resolve_column_names(feature_names, all_available, "피처(--features)", layout=layout,
                                                      exclude=target_names)
     feature_names = list(dict.fromkeys(feature_names))
     target_names = list(dict.fromkeys(target_names))
@@ -356,7 +356,7 @@ MAX_CATEGORIES = 200
 
 def column_kind(raw: pd.Series) -> str:
     """How a column without --dtypes enters the model: 'numeric', 'datetime' or 'categorical' (infer_feature_schema,
-    and the input diagnosis of a run without -x)."""
+    and the input diagnosis of a run without --features)."""
     non_null = raw.notna() & (raw.astype(str).str.strip() != "")
     n = int(non_null.sum())
     is_dt_obj = raw.map(lambda v: isinstance(v, (datetime, pd.Timestamp, np.datetime64)))
@@ -423,7 +423,7 @@ def infer_feature_schema(
             if len(uniq) > MAX_CATEGORIES or (len(uniq) > 50 and len(uniq) > 0.5 * max(n_valid, 1)):
                 raise InputError(
                     f"피처 '{col}'은(는) 문자형 값의 종류가 {len(uniq)}개로 너무 많아 ID/일련번호로 보입니다. "
-                    f"-x 목록에서 제외하십시오. 숫자 컬럼인데 잘못 판별되었다면 --dtypes '{col}:float'를 지정하십시오."
+                    f"--features 목록에서 제외하십시오. 숫자 컬럼인데 잘못 판별되었다면 --dtypes '{col}:float'를 지정하십시오."
                 )
             categorical[col] = uniq
             sys.stderr.write(f"[INFO] 범주형 피처 감지: '{col}' ({len(uniq)}개 범주, 원-핫 인코딩)\n")
@@ -1374,7 +1374,7 @@ class TransactionGuard:
                 raise InputError(
                     f"버전 폴더 '{self.version_str}'이(가) 이미 있어 덮어쓰지 않았습니다. "
                     f"기존 {self.version_str}를 바꾸는 것은 사용자가 요청한 경우에만 --overwrite로 합니다. "
-                    f"[추천] {option_retry(self._next_version(), '--version', '-v')}"
+                    f"[추천] {option_retry(self._next_version(), '--version', '--version')}"
                 )
         else:
             # Auto-infer next version (incomplete vN folders still take their number)
@@ -1536,7 +1536,7 @@ def append_history_ledger(ledger_path: str, record: Dict[str, Any],
 
 def write_best_pointer(data_root: str, records: List[Dict[str, Any]]) -> None:
     """<data_root>/best_version.json: per task the version every target should be predicted with (task_best_version,
-    the same choice as --history best_version and the report). ml_predict -m <data file> reads it (2.9.71). A failure
+    the same choice as --history best_version and the report). ml_predict --model <data file> reads it (2.9.71). A failure
     only warns: ml_predict then asks which version folder to use."""
     try:
         tasks: Dict[str, Any] = {}
@@ -1642,18 +1642,18 @@ def predict_next_command(model_ref: str, purpose: str) -> Dict[str, Any]:
     (a layout that does not fit the new file is recovered in place, so copying the training layout is not needed)."""
     here = os.path.dirname(os.path.abspath(__file__))
     return {"purpose": purpose,
-            "command": f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} -m {quote_arg(model_ref)} -f {quote_arg('<새데이터.xlsx>')}",
+            "command": f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} --model {quote_arg(model_ref)} --file {quote_arg('<새데이터.xlsx>')}",
             "needs_input": True, "placeholder": "<새데이터.xlsx>"}
 
 
 def predict_one_command(model_ref: str, inputs: List[str]) -> Dict[str, Any]:
     """The one-case prediction command with the model's own input names (2.9.75, 집 PC opencode 2026-11-07: with only the
-    -f template and the retraining '--eval "a = b * c"' commands in front of them, Gemma 4 wrote '--eval "온도=182; ..."' and
+    --file template and the retraining '--eval "a = b * c"' commands in front of them, Gemma 4 wrote '--eval "온도=182; ..."' and
     solar wrote a file for one condition). <값> is the user's value for each input."""
     here = os.path.dirname(os.path.abspath(__file__))
     pairs = ",".join(f"{c}=<값>" for c in inputs)
     return {"purpose": "새 조건 한 건 예측 (<값>을 사용자가 준 값으로 바꿀 것, 파일을 만들지 않음)",
-            "command": f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} -m {quote_arg(model_ref)} -i {quote_arg(pairs)}",
+            "command": f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} --model {quote_arg(model_ref)} --input {quote_arg(pairs)}",
             "needs_input": True, "placeholder": "<값>"}
 
 
@@ -1674,15 +1674,20 @@ def build_next_commands(
     """
     here = os.path.dirname(os.path.abspath(__file__))
     train_py = quote_arg(os.path.join(here, "ml_train.py"))
-    base = [f"python {train_py}", "-f", quote_arg(raw_file)]
+    base = [f"python {train_py}", "--file", quote_arg(raw_file)]
     for flag, val in (("--header-row", args.header_row), ("--unit-row", args.unit_row),
-                      ("--data-row", args.data_row), ("--dtypes", args.dtypes), ("--exclude-where", exclude_where)):
+                      ("--data-row", args.data_row), ("--dtypes", args.dtypes)):
         if val is not None:
             base += [flag, quote_arg(val)]
+    no_where = list(base)                     # for the '<조건> 행을 빼고 다시 학습' template (exclude_command)
+    if exclude_where is not None:
+        base += ["--exclude-where", quote_arg(exclude_where)]
+    task_flags: List[str] = []
     if task == TASK_CLASSIFICATION:
-        base += ["--task", TASK_CLASSIFICATION]
+        task_flags = ["--task", TASK_CLASSIFICATION]
         if positive_class is not None:
-            base += ["--positive-class", quote_arg(positive_class)]
+            task_flags += ["--positive-class", quote_arg(positive_class)]
+    base += task_flags
 
     def names_arg(names: List[str], fname: str, limit: int = 15) -> str:
         if len(names) <= limit and not any('"' in n for n in names):
@@ -1697,8 +1702,23 @@ def build_next_commands(
     def quotable(*texts: Optional[str]) -> bool:
         return not any(t is not None and '"' in str(t) for t in texts)
 
-    base += ["-y", names_arg(target_names, "next_targets.txt", limit=10 ** 6)]
+    targets_arg = ["--targets", names_arg(target_names, "next_targets.txt", limit=10 ** 6)]
+    base += targets_arg
     retrain_ok = quotable(args.dtypes, positive_class, exclude_where)
+
+    def exclude_command() -> Optional[Dict[str, Any]]:
+        """The same training (same inputs, --features written out) with rows matching <조건> left out (2.9.81 집 PC Gemma A3:
+        '생산효율이 80보다 큰 행은 빼고 다시 학습' -> the long command was written into the answer, not run). An earlier
+        --exclude-where is kept: '<before>; <조건>' (';' = and)."""
+        if not (retrain_ok and quotable(*base_features)) or not base_features:
+            return None
+        where = f"{exclude_where}; <조건>" if exclude_where else "<조건>"
+        parts = no_where + task_flags + targets_arg + ["--features", features_arg(base_features, "all"),
+                                                       "--exclude-where", quote_arg(where)]
+        if applied_evals and quotable(*applied_evals):
+            parts += ["--eval", quote_arg("; ".join(applied_evals))]
+        return {"purpose": "조건에 맞는 행을 빼고 다시 학습 (<조건>을 사용자가 말한 조건으로 바꿀 것, 예: 생산효율 > 80)",
+                "command": " ".join(parts), "needs_input": True, "placeholder": "<조건>"}
 
     base_features = [f for f in feature_names if f not in created_features]
     cmds: List[Dict[str, Any]] = []
@@ -1706,21 +1726,22 @@ def build_next_commands(
     if mean_score >= 0.90:  # caller passes the weakest target's score
         cmds.append({
             "purpose": REPORT_PURPOSE[task],
-            "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
+            "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --file {quote_arg(raw_file)}",
             "needs_input": False,
         })
-        # 방금 학습한 버전 폴더 (2.9.76 2차 검토: -m <데이터 파일>은 최고 버전·다른 작업으로 풀려 -i 틀의 입력과 어긋났음)
+        # 방금 학습한 버전 폴더 (2.9.76 2차 검토: --model <데이터 파일>은 최고 버전·다른 작업으로 풀려 --input 틀의 입력과 어긋났음)
         cmds.append(predict_next_command(
             final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         if base_features and quotable(*base_features):
             cmds.append(predict_one_command(final_dir, base_features))
+        cmds += [c for c in (exclude_command(),) if c]
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
     keep_base = [f for f in base_features if f not in weak]
     keep_evals = [e for e in applied_evals if e.split("=", 1)[0].strip() not in weak]
     if weak and keep_base and retrain_ok and quotable(*keep_evals):
-        parts = base + ["-x", features_arg(keep_base, "pruned")]
+        parts = base + ["--features", features_arg(keep_base, "pruned")]
         if keep_evals:
             parts += ["--eval", quote_arg("; ".join(keep_evals))]
         parts += ["--tag", quote_arg("저기여피처_제외")]
@@ -1734,17 +1755,18 @@ def build_next_commands(
         existing = set(feature_names) | {e.split("=", 1)[0].strip() for e in applied_evals}
         if new_name not in existing and retrain_ok and quotable(*applied_evals, a, b):
             evals = applied_evals + [f"{new_name} = {a} * {b}"]
-            parts = base + ["-x", features_arg(base_features, "all"), "--eval", quote_arg("; ".join(evals)),
+            parts = base + ["--features", features_arg(base_features, "all"), "--eval", quote_arg("; ".join(evals)),
                             "--tag", quote_arg("교차항_추가")]
             cmds.append({"purpose": f"상위 피처 '{a}', '{b}' 교차항 추가 후 재학습", "command": " ".join(parts),
                          "needs_input": False})
     if not cmds:
         # 2.9.76: 다시 학습할 후보가 없으면 첫 명령이 <값> 틀이 되어 "next_commands[0]으로 개선"이 예측을 실행했음 -> 보고서를 앞에
         cmds.append({"purpose": "다시 학습할 후보(약한 입력, 교차항)가 없음: " + REPORT_PURPOSE[task],
-                     "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
+                     "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --file {quote_arg(raw_file)}",
                      "needs_input": False, "no_retrain": True})
     if base_features and quotable(*base_features):        # 목표 전이라도 예측은 할 수 있음 (placeholder 명령은 늘 뒤에)
         cmds.append(predict_one_command(final_dir, base_features))
+    cmds += [c for c in (exclude_command(),) if c]
     return cmds
 
 
@@ -1914,8 +1936,8 @@ def score_with_excluded(task: str, pipe: Any, info: Dict[str, Any], oof_df: pd.D
     return round(score, 4), pred
 
 
-def _semicolon_names(names: List[str], option: str, long: str, columns: List[str]) -> None:
-    """-x '온도;압력' (names joined by ';' instead of ','): when a name with ';' is no column but every piece is one
+def _semicolon_names(names: List[str], option: str, columns: List[str]) -> None:
+    """--features '온도;압력' (names joined by ';' instead of ','): when a name with ';' is no column but every piece is one
     (exact or a unique name without its unit) -> STOP_RETRY [추천] the command with ',' (2.9.69). A column whose name
     has ';' is used as is."""
     if not any(";" in n and n not in columns for n in names):
@@ -1930,12 +1952,12 @@ def _semicolon_names(names: List[str], option: str, long: str, columns: List[str
         else:
             fixed.append(n)
     raise InputError(f"{option} '{','.join(names)}'에서 열 이름 사이를 ';'로 나눴습니다. ','로 나눕니다. "
-                     f"[추천] {option_retry(','.join(fixed), option, long)}")
+                     f"[추천] {option_retry(','.join(fixed), option)}")
 
 
 # ------------------------------------------------------------------------------
-# Input diagnosis (2.9.72): a run without -x chooses its inputs from every column except the targets and the '제외'
-# column, and every column it leaves out has a reason (excluded_inputs). A run with -x keeps the given inputs and
+# Input diagnosis (2.9.72): a run without --features chooses its inputs from every column except the targets and the '제외'
+# column, and every column it leaves out has a reason (excluded_inputs). A run with --features keeps the given inputs and
 # warns about ID-like and target-leaking ones (suspect_inputs, warnings): the user decides, nothing is removed silently.
 # Dates and text columns with few kinds (라인, 설비) stay inputs.
 # ------------------------------------------------------------------------------
@@ -2065,9 +2087,9 @@ def diagnose_inputs(df: pd.DataFrame, columns: List[str], targets: List[str], ta
 
 def auto_inputs(df_raw: pd.DataFrame, target_names: List[str], task: str,
                 dtypes: Optional[str]) -> Tuple[List[str], List[Dict[str, str]]]:
-    """A run without -x: (inputs, excluded [{column, kind, reason}]) over every column except the targets."""
+    """A run without --features: (inputs, excluded [{column, kind, reason}]) over every column except the targets."""
     columns = [str(c) for c in df_raw.columns]
-    targets, _ = resolve_column_names(target_names, columns, "타겟(-y)", layout=dict(df_raw.attrs))
+    targets, _ = resolve_column_names(target_names, columns, "타겟(--targets)", layout=dict(df_raw.attrs))
     excl_col = find_exclude_column(columns)
     excluded: List[Dict[str, str]] = []
     cands: List[str] = []
@@ -2088,9 +2110,9 @@ def auto_inputs(df_raw: pd.DataFrame, target_names: List[str], task: str,
     for d in excluded:
         sys.stderr.write(f"[INFO] 입력 자동 선택: '{d['column']}' 제외 - {d['reason']}\n")
     if not features:
-        raise InputError("입력(-x)을 주지 않아 도구가 입력 열을 고르려 했지만 쓸 수 있는 열이 없습니다 ("
+        raise InputError("입력(--features)을 주지 않아 도구가 입력 열을 고르려 했지만 쓸 수 있는 열이 없습니다 ("
                          + "; ".join(f"'{d['column']}': {INPUT_KIND_LABEL[d['kind']]}" for d in excluded[:10])
-                         + "). 입력으로 쓸 열을 사용자에게 묻고 -x로 주십시오.",
+                         + "). 입력으로 쓸 열을 사용자에게 묻고 --features로 주십시오.",
                          extra={"excluded_inputs": [{"column": d["column"], "reason": d["reason"]} for d in excluded]})
     sys.stderr.write(f"[INFO] 입력 자동 선택: {len(features)}개 사용 ({', '.join(features[:10])}"
                      f"{' 등' if len(features) > 10 else ''}), {len(excluded)}개 제외\n")
@@ -2103,26 +2125,25 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     A normal run has one group; a best run (--best) has one group per distinct recipe.
     """
     feats_in, tgts_in = group["features"], group["targets"]
-    # no -x (2.9.72): the tool chooses the inputs from every column except the targets (auto_inputs)
+    # no --features (2.9.72): the tool chooses the inputs from every column except the targets (auto_inputs)
     auto = feats_in is None or (isinstance(feats_in, str) and not feats_in.strip())
     feature_names = ([] if auto else parse_feature_or_target_list(feats_in, "features") if isinstance(feats_in, str)
                      else list(feats_in or []))
     target_names = parse_feature_or_target_list(tgts_in, "targets") if isinstance(tgts_in, str) else list(tgts_in or [])
     if not feature_names and not auto:
-        raise InputError("학습에 투입할 독립변수 목록(-x, --features)이 지정되지 않았거나 파일이 비어 있습니다.")
+        raise InputError("학습에 투입할 독립변수 목록(--features)이 지정되지 않았거나 파일이 비어 있습니다.")
     columns = [str(c) for c in df_raw.columns]
-    for names, given, opt, long in ((feature_names, feats_in, "-x", "--features"),
-                                    (target_names, tgts_in, "-y", "--targets")):
+    for names, given, opt in ((feature_names, feats_in, "--features"), (target_names, tgts_in, "--targets")):
         if isinstance(given, str) and names:
-            _semicolon_names(names, opt, long, columns)
+            _semicolon_names(names, opt, columns)
     if not target_names:
-        raise InputError("예측할 종속변수 목록(-y, --targets)이 지정되지 않았거나 파일이 비어 있습니다.")
-    # --dtypes names resolved like -x / -y, types checked (the canonical list is what the ledger keeps)
+        raise InputError("예측할 종속변수 목록(--targets)이 지정되지 않았거나 파일이 비어 있습니다.")
+    # --dtypes names resolved like --features / --targets, types checked (the canonical list is what the ledger keeps)
     dtypes = resolve_dtypes(group.get("dtypes"), [str(c) for c in df_raw.columns], dict(df_raw.attrs))
     excluded_inputs: List[Dict[str, str]] = []
     if auto:
         feature_names, excluded_inputs = auto_inputs(df_raw, target_names, task, dtypes)
-    # --exclude-where: column names resolved like -x / -y, the canonical text is what the ledger keeps
+    # --exclude-where: column names resolved like --features / --targets, the canonical text is what the ledger keeps
     where_txt: Optional[str] = None
     where_hit: Optional[np.ndarray] = None
     group_warnings_pre: List[str] = []
@@ -2157,21 +2178,21 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
         df=df_raw, feature_names=feature_names, target_names=target_names, dtypes_arg=dtypes, task=task)
     excl_col = find_exclude_column(list(df_raw.columns))
     if excl_col and excl_col in target_names:
-        raise InputError(f"'{excl_col}' 열은 학습에서 뺄 행을 표시하는 열이라 타겟(-y)으로 쓸 수 없습니다.")
+        raise InputError(f"'{excl_col}' 열은 학습에서 뺄 행을 표시하는 열이라 타겟(--targets)으로 쓸 수 없습니다.")
     if excl_col and excl_col in feature_names:
         feature_names = [f for f in feature_names if f != excl_col]
         sys.stderr.write(f"[WARN] '{excl_col}' 열은 뺄 행 표시용이라 피처에서 제외했습니다.\n")
         if not feature_names:
-            raise InputError(f"'{excl_col}' 열을 빼면 학습할 피처(-x)가 없습니다.")
+            raise InputError(f"'{excl_col}' 열을 빼면 학습할 피처(--features)가 없습니다.")
 
-    # -x given: ID-like and target-leaking inputs are said (the user decides; nothing is removed)
+    # --features given: ID-like and target-leaking inputs are said (the user decides; nothing is removed)
     suspect_inputs: List[Dict[str, str]] = []
     if not auto:
         suspect_inputs = [d for d in diagnose_inputs(df_raw, [f for f in feature_names if f in df_raw.columns],
                                                      target_names, task, dtypes) if d["kind"] in ("id", "leak")]
         for d in suspect_inputs:
             group_warnings_pre.append(f"입력 '{d['column']}': {d['reason']}. 입력으로 두었습니다 (빼려면 사용자에게 묻고 "
-                                      f"-x에서 빼고 다시 학습)")
+                                      f"--features에서 빼고 다시 학습)")
             sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
 
     # Feature Engineering (--eval): a string from the CLI or the canonical list stored in the ledger
@@ -2318,7 +2339,7 @@ def dry_run_train(args: argparse.Namespace) -> Dict[str, Any]:
                               "version_dir": version_dir, "replaces": bool(exists and args.overwrite)}
     if exists and not args.overwrite:
         raise InputError(f"버전 폴더 '{version}'이(가) 이미 있어 덮어쓰지 않습니다. 기존 {version}를 바꾸는 것은 사용자가 요청한 경우에만 "
-                         f"--overwrite로 합니다. [추천] {option_retry(f'v{max(nums, default=0) + 1}', '--version', '-v')}")
+                         f"--overwrite로 합니다. [추천] {option_retry(f'v{max(nums, default=0) + 1}', '--version', '--version')}")
     if exists:
         files = sorted(os.listdir(version_dir))
         fields["replaced_files"] = files[:20]
@@ -2362,7 +2383,7 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
 RESUME_DIR = ".resume_train"
 BEST_RUN_FILE = "best_run.json"    # in RESUME_DIR: the best versions a split --best run already made ({task: version})
 
-# Seconds of every target trained in this command (all tasks of --best, ml_report -f retraining): the clock check
+# Seconds of every target trained in this command (all tasks of --best, ml_report --file retraining): the clock check
 # before a new target uses them, so the first target of the second task is checked too.
 RUN_FIT_SECONDS: List[float] = []
 
@@ -2423,13 +2444,13 @@ PREP_LABEL = "학습 준비(데이터 읽기, 검증, 상관행렬)"
 RUN_PREP_SECONDS: List[float] = []        # a preparation saved in this command (a step: _step_done)
 STEPS_PER_TARGET = 5 * 5 + 2              # progress estimate: candidates x folds + final fit + importance
 TARGETS_AFTER: List[int] = [0]            # targets after the one being trained (the steps left in progress)
-COMMIT_RERUN_SAFE: List[bool] = []        # set by ensure_best_versions: ml_report -f run again reuses a fresh best version
+COMMIT_RERUN_SAFE: List[bool] = []        # set by ensure_best_versions: ml_report --file run again reuses a fresh best version
 
 
 def _prep_key(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]], raw_file: str) -> str:
     import hashlib
 
-    def spec(v: Any) -> Any:                 # a list given as a file (-x, -y, --eval, ...): its content
+    def spec(v: Any) -> Any:                 # a list given as a file (--features, --targets, --eval, ...): its content
         if isinstance(v, str) and len(v) < 1024 and os.path.isfile(v):
             with open(v, "rb") as f:
                 return ["file", hashlib.sha1(f.read()).hexdigest()]
@@ -2559,7 +2580,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                   best_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Trains every target of every group into ONE new version folder.
-    Normal runs: one group (all -y targets share the -x features). Best runs (--best): one group per
+    Normal runs: one group (all --targets targets share the --features features). Best runs (--best): one group per
     distinct recipe, so each target keeps its own features/--eval; each model_<t>.json carries its own
     features_required, so ml_predict.py needs no change.
     """
@@ -3007,7 +3028,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         if exclusion_summary:
             history_record["exclusions"] = exclusion_summary
         auto_groups = [g for g in prepared if g.get("auto")]
-        if auto_groups:      # no -x: the inputs the tool chose and why the other columns were left out (2.9.72)
+        if auto_groups:      # no --features: the inputs the tool chose and why the other columns were left out (2.9.72)
             history_record["input_selection"] = {
                 "auto": True, "features": [f for f in g0["features"] if f not in g0["created"]],
                 "excluded": [{"column": d["column"], "reason": d["reason"]} for d in g0["excluded_inputs"]]}
@@ -3056,7 +3077,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 improve_stopped = (f"최근 {IMPROVE_ROUNDS}번의 학습이 이전 최고 점수({max(scores[:-IMPROVE_ROUNDS]):.4f})를 넘지 못해 "
                                    f"재학습 제안을 멈춤. 지금까지의 최고 모델로 보고서를 만듭니다")
                 next_commands = [{"purpose": REPORT_PURPOSE[task], "needs_input": False,
-                                  "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} -f {quote_arg(raw_file)}"}]
+                                  "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} --file {quote_arg(raw_file)}"}]
         if not best_info:     # a plain run: the command again with the condition covering the other notations
             where_fixes = [g["where_fix"] for g in prepared if g.get("where_fix")]
             next_commands = [c for i, c in enumerate(where_fixes) if c not in where_fixes[:i]] + next_commands
@@ -3096,7 +3117,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             + ", ".join(f"{r['feature']} {r['importance']:.2f}" for r in top_features[t][:TOP_FEATURES_PREVIEW])
             for t in target_names if top_features[t])
 
-        # no -x: the chosen inputs and the left-out columns with their reasons (2.9.72)
+        # no --features: the chosen inputs and the left-out columns with their reasons (2.9.72)
         auto_brief = ""
         auto_keys: Dict[str, Any] = {}
         suspects = [d for g in prepared for d in g.get("suspect_inputs") or []]
@@ -3139,10 +3160,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             + ("학습에서 뺀 행이 있습니다. preview의 제외 행 수와 '제외 행 포함' 점수, excluded_reasons(이유별 행 수), "
                "excluded_preview(행, 직접/자동, 이유, 값)를 그대로, excluded_rows_file 경로도 알리세요. "
                "그 파일은 열지 말고 다른 이유를 짐작하지 마세요. " if excl_brief else "")
-            + ("입력(-x)을 주지 않아 도구가 입력을 골랐습니다. preview의 입력 자동 선택(features_auto)과 뺀 열과 이유"
+            + ("입력(--features)을 주지 않아 도구가 입력을 골랐습니다. preview의 입력 자동 선택(features_auto)과 뺀 열과 이유"
                "(excluded_inputs의 column, reason)를 알리세요. " if auto_groups else "")
             + ("ID·일련번호나 타겟과 같은 값으로 보이는 입력이 있습니다 (suspect_inputs): 그대로 알리고, 사용자가 빼라고 하면 "
-               "-x에서 빼고 다시 학습합니다. " if suspects else "")
+               "--features에서 빼고 다시 학습합니다. " if suspects else "")
             + ("preview의 중요 입력(top_features, 전체 입력 대비 비중)을 알리세요. " if top_brief else "")
             + ("warnings(중복 행, 반복된 머리글 행, 합계 행 등)를 빠짐없이 알리세요. " if train_warnings else "") +
             (f"{improve_stopped} (improve_stopped를 알리세요). " if improve_stopped else "") +
@@ -3218,7 +3239,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
 TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
 
 
-AUTO_FEATURES_FILE = "features_auto.txt"   # vX/: the inputs a run without -x chose, one per line (usable as -x)
+AUTO_FEATURES_FILE = "features_auto.txt"   # vX/: the inputs a run without --features chose, one per line (usable as --features)
 IMPROVE_ROUNDS = 5   # training runs in a row without a new best before the tool stops offering retraining (2.9.71)
 REPORT_PURPOSE = {  # a regression report also makes the performance calculator (ml_export.py)
     TASK_REGRESSION: "ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (모든 타겟, 입력을 줄이며 다시 학습해 몇 분 걸림. "
@@ -3233,7 +3254,7 @@ def build_best_next_commands(raw_file: str, final_dir: str, args: argparse.Names
     here = os.path.dirname(os.path.abspath(__file__))
     return [
         {"purpose": REPORT_PURPOSE.get(task, REPORT_PURPOSE[TASK_CLASSIFICATION]),
-         "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} -f {quote_arg(raw_file)}",
+         "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --file {quote_arg(raw_file)}",
          "needs_input": False},
         predict_next_command(final_dir, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
     ]
@@ -3493,7 +3514,7 @@ def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
     result["agent_directive"] = (
         head + f"타겟별 최고 학습 조건으로 모든 타겟을 다시 학습해 {vers}을(를) 만들었습니다.{multi} "
         f"best_targets의 타겟별 출처 버전과 점수를 사용자에게 알리세요. 보고서는 next_commands[0], "
-        f"예측은 ml_predict.py -m <best_version_dir>을 사용하세요."
+        f"예측은 ml_predict.py --model <best_version_dir>을 사용하세요."
     )
     return result
 
@@ -3581,7 +3602,7 @@ def task_best_version(records: List[Dict[str, Any]], data_root: str, task: str) 
 
 def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
     """
-    For ml_report.py -f: reuses each task's up-to-date best version, otherwise builds it (in-process).
+    For ml_report.py --file: reuses each task's up-to-date best version, otherwise builds it (in-process).
     Returns {"made_best", "best_versions": [...], "best_targets": {...}, "built": [training results]}.
     """
     raw_file = os.path.abspath(args.file)
@@ -3608,7 +3629,7 @@ def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
                 best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
                                    "new_score": _target_score(rec, t)}
             continue
-        COMMIT_RERUN_SAFE.append(True)       # ml_report -f run again finds this best version fresh (best_is_fresh)
+        COMMIT_RERUN_SAFE.append(True)       # ml_report --file run again finds this best version fresh (best_is_fresh)
         try:
             res = build_best_version(args, task, records)
         finally:
@@ -3714,7 +3735,7 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
              if not b["complete"]]
     if split:
         note = ("타겟별 최고 점수가 여러 버전에 나뉘어 있습니다 (" + "; ".join(split) + "). "
-                "모든 타겟의 최고 모델은 ml_report.py -f <데이터파일>이 한 버전으로 묶어 만듭니다.")
+                "모든 타겟의 최고 모델은 ml_report.py --file <데이터파일>이 한 버전으로 묶어 만듭니다.")
     shown = rows[-HISTORY_SHOWN:]
     cut = len(shown) < len(rows)
     return {
@@ -3747,10 +3768,10 @@ def main():
     parser = JsonArgumentParser(
         description="회귀/분류 모델 학습 (5개 모델 경쟁, 버전 관리)"
     )
-    parser.add_argument("--file", "-f", help="입력 데이터 파일 경로 (.xlsx, .csv)")
-    parser.add_argument("--features", "-x", help="독립변수(피처) 목록 (쉼표 구분 문자열 또는 파일 경로: .txt, .json, .csv). "
+    parser.add_argument("--file", help="입력 데이터 파일 경로 (.xlsx, .csv)")
+    parser.add_argument("--features", help="독립변수(피처) 목록 (쉼표 구분 문자열 또는 파일 경로: .txt, .json, .csv). "
                                                  "생략하면 타겟을 뺀 모든 열에서 도구가 고름 (ID·상수·빈 열·타겟 누수 열 제외)")
-    parser.add_argument("--targets", "-y", help="종속변수(타겟) 목록 (쉼표 구분 문자열 또는 파일 경로: .txt, .json, .csv)")
+    parser.add_argument("--targets", help="종속변수(타겟) 목록 (쉼표 구분 문자열 또는 파일 경로: .txt, .json, .csv)")
     parser.add_argument("--eval", help="방탄 AST 파생변수 생성 수식 (세미콜론 구분). 컬럼명은 전체 이름 또는 단위를 뺀 고유 이름")
     parser.add_argument("--tag", help="해당 회차 실험 의도 및 변경 사항 메모 태그 (예: '베이스라인_학습', '파생변수2종_추가')")
     parser.add_argument(
@@ -3764,7 +3785,7 @@ def main():
     parser.add_argument("--exclude-where", dest="exclude_where",
                         help="학습에서 뺄 행의 조건 (예: '생산효율 > 90; 라인 = B | 라인 = C'. ;는 그리고, |는 또는, "
                              "연산자 >= <= > < = != ~). 데이터 파일은 바꾸지 않음")
-    parser.add_argument("--version", "-v", help="버전 수동 지정 (미지정 시 자동 계산 v1, v2...)")
+    parser.add_argument("--version", help="버전 수동 지정 (미지정 시 자동 계산 v1, v2...)")
     parser.add_argument("--overwrite", action="store_true",
                         help="--version으로 지정한 버전 폴더가 이미 있으면 교체 (사용자 확인 후에만 사용)")
     parser.add_argument("--dry-run", dest="dry_run", action="store_true",
@@ -3782,11 +3803,11 @@ def main():
     args = parser.parse_args()
 
     if args.dry_run and (args.best or args.history):
-        parser.error("--dry-run은 -x/-y 학습에만 씁니다 (--best는 늘 새 버전을 만들어 기존 폴더를 바꾸지 않고, --history는 읽기만 함)")
+        parser.error("--dry-run은 --features/--targets 학습에만 씁니다 (--best는 늘 새 버전을 만들어 기존 폴더를 바꾸지 않고, --history는 읽기만 함)")
     if args.best and not args.history:
         if not args.file:
-            parser.error("--best에는 --file(-f) 인자가 필요합니다.")
-        ignored = [flag for flag, val in (("-x", args.features), ("-y", args.targets), ("--eval", args.eval),
+            parser.error("--best에는 --file 인자가 필요합니다.")
+        ignored = [flag for flag, val in (("--features", args.features), ("--targets", args.targets), ("--eval", args.eval),
                                           ("--version", args.version), ("--positive-class", args.positive_class),
                                           ("--dtypes", args.dtypes), ("--exclude-where", args.exclude_where)) if val]
         if ignored:
@@ -3806,7 +3827,7 @@ def main():
         return
 
     if not args.file or not args.targets:
-        parser.error("--file(-f)과 --targets(-y)는 모델 학습에 필수적인 인자입니다 (-x를 빼면 도구가 입력 열을 고름).")
+        parser.error("--file과 --targets는 모델 학습에 필수적인 인자입니다 (--features를 빼면 도구가 입력 열을 고름).")
 
     run_cli(lambda: execute_ml_train(args), hint="확인할 것: 열 이름과 --eval 식.")
 

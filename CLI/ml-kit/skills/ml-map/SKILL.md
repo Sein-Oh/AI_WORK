@@ -4,7 +4,7 @@ description: 모델 없이 표(Excel/CSV) 데이터에서 사잇값을 선형 �
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.80"
+  version: "2.9.82"
   platform: windows
 ---
 
@@ -22,17 +22,17 @@ metadata:
 
 ## 사잇값
 ```powershell
-python "C:\CLI\ml-kit\ml_map.py" -f "<데이터파일>" -i "<기준열>=<값>" -y "<구할열>"
+python "C:\CLI\ml-kit\ml_map.py" --file "<데이터파일>" --input "<기준열>=<값>" --targets "<구할열>"
 ```
-`-y`를 빼면 나머지 숫자 열을 모두 구한다. 기준 열이 여러 개면 `-i "<기준열1>=<값>,<기준열2>=<값>"`.
+`--targets`를 빼면 나머지 숫자 열을 모두 구한다. 기준 열이 여러 개면 `--input "<기준열1>=<값>,<기준열2>=<값>"`.
 
 ## 반대 찾기 (목표값이 되는 기준값)
 ```powershell
-python "C:\CLI\ml-kit\ml_map.py" -f "<데이터파일>" --find "<목표열>=<목표값>" --vary "<찾을기준열>" -i "<고정열>=<값>"
+python "C:\CLI\ml-kit\ml_map.py" --file "<데이터파일>" --find "<목표열>=<목표값>" --vary "<찾을기준열>" --input "<고정열>=<값>"
 ```
-고정할 열이 없으면 `-i`를 뺀다. 답이 여러 개면 모두 알린다 (하나만 고르지 않음).
+고정할 열이 없으면 `--input`를 뺀다. 답이 여러 개면 모두 알린다 (하나만 고르지 않음).
 
 ## 여러 점을 한 번에
-기준 열만 든 조회 파일을 만들어 `--points "<조회파일>"`로 준다. 조회 파일에 구할 열의 실측값 열(예: `생산량_실측`)이 있으면 `-y "<구할열>"`을 꼭 붙인다.
+기준 열만 든 조회 파일을 만들어 `--points "<조회파일>"`로 준다. 조회 파일에 구할 열의 실측값 열(예: `생산량_실측`)이 있으면 `--targets "<구할열>"`을 꼭 붙인다.
 
 범위 밖 값(`extrapolated: true`)과 `warnings`(흩어진 기록 등)는 반드시 함께 알린다.

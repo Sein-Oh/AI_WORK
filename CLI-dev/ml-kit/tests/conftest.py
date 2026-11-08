@@ -56,7 +56,7 @@ def p1_model(tmp_path_factory):
         t, p, s = round(r.uniform(170, 190), 1), round(r.uniform(2, 4), 2), round(r.uniform(40, 50), 1)
         rows.append([t, p, s, round(2 * t + 30 * p + 0.5 * s + r.uniform(-2, 2), 1)])
     f = write_rows(os.path.join(str(tmp), "p1.csv"), rows, [])
-    _, res = run_raw("ml_train.py", "-f", f, "-x", "온도(°C),압력(bar),속도", "-y", "생산량")
+    _, res = run_raw("ml_train.py", "--file", f, "--features", "온도(°C),압력(bar),속도", "--targets", "생산량")
     assert res["status"] == "ok", res
     return {"v": os.path.join(str(tmp), "p1_ml_data", "v1"), "f": f}
 
@@ -72,7 +72,7 @@ def coded(tmp_path_factory):
     df["y"] = 3 * df.a + 2 * df.b + np.select([df.코드 == "007", df.코드 == "012"], [20.0, 0.0], -20.0) + r.normal(0, 0.2, n)
     p = work / "coded.csv"
     df.to_csv(p, index=False)
-    res = run_tool("ml_train.py", "-f", str(p), "-x", "a,b,코드", "-y", "y", "--dtypes", "코드:str")
+    res = run_tool("ml_train.py", "--file", str(p), "--features", "a,b,코드", "--targets", "y", "--dtypes", "코드:str")
     return {"work": work, "file": str(p), "v": res["version_dir"], "train": res}
 
 
@@ -109,11 +109,11 @@ def name_files(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def percent_files(tmp_path_factory):
-    """-y 이름을 품은 열, % 숫자, %와 일반 숫자가 섞인 열, 숫자 이름 열 데이터 파일 (학습 없음; test_names,
+    """--targets 이름을 품은 열, % 숫자, %와 일반 숫자가 섞인 열, 숫자 이름 열 데이터 파일 (학습 없음; test_names,
     test_loading_numbers)."""
     tmp = tmp_path_factory.mktemp("percent")
     r = random.Random(11)
-    cool = [["냉각수온도", "유량", "온도"]]                          # -y 온도 옆의 냉각수온도
+    cool = [["냉각수온도", "유량", "온도"]]                          # --targets 온도 옆의 냉각수온도
     moist = [["온도", "함수율", "수율"]]
     moist_u = [["반응온도(°C)", "함수율(%)", "수율(최종)"]]
     d = [["온도(°C)", "압력(bar)", "수율(1차)", "수율(최종)", "생산량"]]

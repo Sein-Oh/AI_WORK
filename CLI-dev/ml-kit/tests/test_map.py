@@ -8,6 +8,8 @@ import itertools
 import os
 import sys
 
+import json
+
 import numpy as np
 import openpyxl
 import pandas as pd
@@ -26,15 +28,34 @@ def test_find_with_too_many_inputs_recommends_the_trained_model(tmp_path):
     df["y"] = 3 * df.a + df.b - df.c + 0.5 * df.d
     f = str(tmp_path / "four.csv")
     df.to_csv(f, index=False)
-    argv = ["-f", f, "--find", "y=15", "--vary", "a", "-i", "b=5,c=5,d=5"]
+    argv = ["--file", f, "--find", "y=15", "--vary", "a", "--input", "b=5,c=5,d=5"]
     res = run_fail("ml_map.py", *argv)
     assert "3개까지" in res["message"] and "[추천]" not in res["message"], res
-    assert run_tool("ml_train.py", "-f", f, "-x", "a,b,c,d", "-y", "y")["status"] == "ok"
+    assert run_tool("ml_train.py", "--file", f, "--features", "a,b,c,d", "--targets", "y")["status"] == "ok"
     res = run_fail("ml_map.py", *argv)
     name, fixed = recommended_command(res["message"])
-    assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "y=15" and fixed[fixed.index("-m") + 1] == f, fixed
+    assert name == "ml_predict.py" and fixed[fixed.index("--find") + 1] == "y=15" and fixed[fixed.index("--model") + 1] == f, fixed
     assert run_tool("ml_predict.py", *fixed)["status"] == "ok"
 
+
+
+def test_model_find_hint_checks_the_model(tmp_path):
+    """--find 상한을 넘을 때의 모델 안내는 모델 정보로 판단: 이름은 ml_map이 맞춘 데이터 열 이름(단위 표기 그대로 옮기지 않음),
+    --input에 모델 입력이 아닌 열이 있으면 그 열을 뺀 명령을 [후보](고정 조건이 달라짐), 목표가 모델 타겟이 아니면 안내 없음."""
+    r = np.random.default_rng(4)
+    df = pd.DataFrame({k: r.uniform(0, 10, 80) for k in ("a(°C)", "b", "c", "e")})
+    df["y"] = 3 * df["a(°C)"] + df.b - df.c
+    df["z"] = df.b * 2
+    f = str(tmp_path / "five.csv")
+    df.to_csv(f, index=False)
+    assert run_tool("ml_train.py", "--file", f, "--features", "a(°C),b,c", "--targets", "y")["status"] == "ok"
+    res = run_fail("ml_map.py", "--file", f, "--find", "y=15", "--vary", "a", "--input", "b=5,c=5,e=5")
+    assert "[추천]" not in res["message"] and "[후보] 1) " in res["message"] and res["error_type"] == "needs_user_decision", res
+    cmd = split_command(res["confirm_commands"][0]["command"])
+    assert cmd[cmd.index("--vary") + 1] == "a(°C)" and cmd[cmd.index("--input") + 1] == "b=5,c=5", cmd     # e는 모델 입력이 아님
+    assert run_tool("ml_predict.py", *cmd[2:])["status"] == "ok"
+    res = run_fail("ml_map.py", "--file", f, "--find", "z=8", "--vary", "a", "--input", "b=5,c=5,e=5")       # z는 모델 타겟이 아님
+    assert "ml_predict.py" not in json.dumps(res, ensure_ascii=False), res
 
 # ---- 정방향 보간 ----------------------------------------------------------------------------------------------------
 
@@ -75,36 +96,36 @@ def process(tmp_path):
 
 
 def P(path, *args):
-    return ["-f", path, *args]
+    return ["--file", path, *args]
 
 
 def test_grid_1d_matches_excel_forecast(grid1):
-    r = run_tool("ml_map.py", *P(grid1, "-i", "A=12.5"))
+    r = run_tool("ml_map.py", *P(grid1, "--input", "A=12.5"))
     pt = r["points"][0]
     assert r["mode"] == "grid" and pt["values"] == {"B": 16.25, "C": 87.5} and not pt["extrapolated"]
     assert pt["basis"] == [{"row": 4, "weight": 0.5}, {"row": 5, "weight": 0.5}]            # A=10 is Excel row 4
-    assert run_tool("ml_map.py", *P(grid1, "-i", "A=10"))["points"][0]["values"]["B"] == 10.0
-    up = run_tool("ml_map.py", *P(grid1, "-i", "A=103"))
+    assert run_tool("ml_map.py", *P(grid1, "--input", "A=10"))["points"][0]["values"]["B"] == 10.0
+    up = run_tool("ml_map.py", *P(grid1, "--input", "A=103"))
     assert up["points"][0]["values"] == {"B": 1058.5, "C": -3.0} and up["points"][0]["extrapolated"]
     assert "3 높음 (데이터 폭의 3%)" in up["points"][0]["out_of_range"]["A"] and up["warnings"]
     assert up["agent_directive"].startswith("VERIFIED:") and "extrapolated=true" in up["agent_directive"]
-    down = run_tool("ml_map.py", *P(grid1, "-i", "A=-2", "-y", "B"))
+    down = run_tool("ml_map.py", *P(grid1, "--input", "A=-2", "--targets", "B"))
     assert down["points"][0]["values"] == {"B": -1.0} and down["columns"] == ["B"]
 
 
 def test_grid_2d_bilinear(grid2):
-    r = run_tool("ml_map.py", *P(grid2, "-i", "온도=25,압력=2.5", "-y", "효율"))
+    r = run_tool("ml_map.py", *P(grid2, "--input", "온도=25,압력=2.5", "--targets", "효율"))
     pt = r["points"][0]
     assert r["mode"] == "grid" and pt["method"] == "격자 보간"
     assert pt["values"]["효율"] == pytest.approx(2 * 25 + 10 * 2.5 + 25 * 2.5)            # bilinear is exact on t*p
     assert len(pt["basis"]) == 4 and sum(b["weight"] for b in pt["basis"]) == pytest.approx(1.0)
-    ext = run_tool("ml_map.py", *P(grid2, "-i", "온도=110,압력=3"))["points"][0]
+    ext = run_tool("ml_map.py", *P(grid2, "--input", "온도=110,압력=3"))["points"][0]
     assert ext["extrapolated"] and ext["values"]["효율"] == pytest.approx(2 * 110 + 30 + 330)
 
 
 def test_scattered_two_keys_enclosing_rows_and_far_point(process):
-    args = ("--header-row", "3", "--unit-row", "4", "-y", "생산효율")
-    r = run_tool("ml_map.py", *P(process, "-i", "반응온도=240,소비전력=60", *args))
+    args = ("--header-row", "3", "--unit-row", "4", "--targets", "생산효율")
+    r = run_tool("ml_map.py", *P(process, "--input", "반응온도=240,소비전력=60", *args))
     pt = r["points"][0]
     assert r["mode"] == "scattered" and pt["method"].startswith("둘러싼 실측 3점")
     assert pt["values"]["생산효율(%)"] == pytest.approx(0.2 * 240 + 0.1 * 60, abs=1e-6)      # linear data: exact
@@ -112,7 +133,7 @@ def test_scattered_two_keys_enclosing_rows_and_far_point(process):
     assert len(r["nearest_rows"]) == 5 and r["nearest_rows"][0]["distance"] <= r["nearest_rows"][-1]["distance"]
     assert "센서오류" not in str(r) and any("제외" in w for w in r["warnings"])            # marked row not used
 
-    far = run_tool("ml_map.py", *P(process, "-i", "반응온도=30,소비전력=200", *args))
+    far = run_tool("ml_map.py", *P(process, "--input", "반응온도=30,소비전력=200", *args))
     fp = far["points"][0]
     assert fp["extrapolated"] and fp["method"].startswith("전체 추세선 외삽")
     assert abs(fp["values"]["생산효율(%)"]) < 100                                           # never the exploding end-point slope
@@ -120,10 +141,10 @@ def test_scattered_two_keys_enclosing_rows_and_far_point(process):
 
 
 def test_one_uneven_key_is_scattered_and_category_filter(process):
-    r = run_tool("ml_map.py", *P(process, "--header-row", "3", "--unit-row", "4", "-i", "반응온도=240,라인=B", "-y", "생산효율"))
+    r = run_tool("ml_map.py", *P(process, "--header-row", "3", "--unit-row", "4", "--input", "반응온도=240,라인=B", "--targets", "생산효율"))
     assert r["mode"] == "scattered" and r["points"][0]["method"] == "위아래 실측 2점 보간"
     assert r["points"][0]["input"]["라인"] == "B" and all(n["라인"] == "B" for n in r["nearest_rows"])
-    bad = run_fail("ml_map.py", *P(process, "--header-row", "3", "--unit-row", "4", "-i", "반응온도=240,라인=D"))
+    bad = run_fail("ml_map.py", *P(process, "--header-row", "3", "--unit-row", "4", "--input", "반응온도=240,라인=D"))
     assert "[후보]" in bad["message"]
 
 
@@ -137,11 +158,11 @@ def test_code_column_is_matched_exactly_not_interpolated(tmp_path):
     p = tmp_path / "c.csv"
     pd.DataFrame({"온도": t, "코드": code, "수율": y.round(2)}).to_csv(p, index=False)
     for c, off in (("7", 0.0), ("007", 100.0)):
-        res = run_tool("ml_map.py", "-f", str(p), "-i", f"온도=170,코드={c}", "-y", "수율")
+        res = run_tool("ml_map.py", "--file", str(p), "--input", f"온도=170,코드={c}", "--targets", "수율")
         assert res["keys"] == ["온도"] and res["points"][0]["input"]["코드"] == c, res
         assert res["points"][0]["values"]["수율"] == pytest.approx(340 + off, abs=1e-6), res
         assert all(str(n["코드"]) in (c, c + ".0") for n in res["nearest_rows"]), res["nearest_rows"]
-    bad = run_fail("ml_map.py", "-f", str(p), "-i", "온도=170,코드=07", "-y", "수율")
+    bad = run_fail("ml_map.py", "--file", str(p), "--input", "온도=170,코드=07", "--targets", "수율")
     assert "[후보] 1) 007 2) 12 3) 7" in bad["message"] and "[추천]" not in bad["message"], bad
 
 
@@ -150,7 +171,7 @@ def test_two_digit_numbers_with_a_leading_zero_are_interpolated(tmp_path):
     p = tmp_path / "rt.csv"
     p.write_text("온도,압력,수율\n05,1,50\n10,1,60\n15,1,70\n20,1,80\n05,2,55\n10,2,65\n15,2,75\n20,2,85\n",
                  encoding="utf-8")
-    res = run_tool("ml_map.py", "-f", str(p), "-i", "온도=12,압력=1", "-y", "수율")
+    res = run_tool("ml_map.py", "--file", str(p), "--input", "온도=12,압력=1", "--targets", "수율")
     assert res["keys"] == ["온도", "압력"] and res["points"][0]["values"]["수율"] == pytest.approx(64.0), res
 
 
@@ -170,15 +191,15 @@ def test_reverse_two_answers_and_none(tmp_path):
     a = np.arange(0, 101, 5)
     p = tmp_path / "hill.csv"
     pd.DataFrame({"A": a, "Y": 100 - (a - 50) ** 2 / 25}).to_csv(p, index=False)         # rises then falls, max 100
-    r = run_tool("ml_map.py", "-f", str(p), "--find", "Y=64", "--vary", "A")
+    r = run_tool("ml_map.py", "--file", str(p), "--find", "Y=64", "--vary", "A")
     assert [round(s["A"], 6) for s in r["solutions"] if not s["extrapolated"]] == [20.0, 80.0]
-    none = run_tool("ml_map.py", "-f", str(p), "--find", "Y=150", "--vary", "A")
+    none = run_tool("ml_map.py", "--file", str(p), "--find", "Y=150", "--vary", "A")
     assert none["count"] == 0 and none["reachable"]["max"] == pytest.approx(100) and "찾은 값 없음" in none["preview"]
 
 
 def test_reverse_scattered_with_fixed_key(process):
     r = run_tool("ml_map.py", *P(process, "--header-row", "3", "--unit-row", "4",
-                                 "--find", "생산효율=54", "--vary", "반응온도", "-i", "소비전력=60"))
+                                 "--find", "생산효율=54", "--vary", "반응온도", "--input", "소비전력=60"))
     assert r["mode"] == "scattered" and r["count"] >= 1
     assert r["solutions"][0]["반응온도(°C)"] == pytest.approx((54 - 6) / 0.2, abs=0.05)       # 240 on the exact plane
     assert r["fixed"] == {"소비전력(kW)": 60.0} and len(r["nearest_rows"]) == 5
@@ -202,11 +223,11 @@ def test_points_file_saves_workbook(grid1, tmp_path):
 
 
 def test_errors_and_contract(grid1):
-    assert run_tool("ml_map.py", *P(grid1, "-i", "a=10"))["keys"] == ["A"]                     # case only: matched
-    miss = run_fail("ml_map.py", *P(grid1, "-i", "Ax=10"))
+    assert run_tool("ml_map.py", *P(grid1, "--input", "a=10"))["keys"] == ["A"]                     # case only: matched
+    miss = run_fail("ml_map.py", *P(grid1, "--input", "Ax=10"))
     assert "[후보] 1) 'A'" in miss["message"] and "[추천]" not in miss["message"]    # 2.9.31: short ASCII names of other length
-    assert run_fail("ml_map.py", *P(grid1, "-i", "A=abc"))["error_type"] == "input"
-    assert run_fail("ml_map.py", *P(grid1, "--find", "B=90", "--vary", "A", "-i", "A=3"))["error_type"] == "input"
+    assert run_fail("ml_map.py", *P(grid1, "--input", "A=abc"))["error_type"] == "input"
+    assert run_fail("ml_map.py", *P(grid1, "--find", "B=90", "--vary", "A", "--input", "A=3"))["error_type"] == "input"
     proc, payload = run_raw("ml_map.py", *P(grid1, "--find", "B=90"))                        # --vary missing
     assert proc.returncode == 2 and payload["status"] == "error"
     proc, payload = run_raw("ml_map.py", "-h")
@@ -227,7 +248,7 @@ def grid_gap(tmp_path_factory):
 
 
 def test_points_basis_layout_once_and_numbers(grid_gap):
-    res = run_tool("ml_map.py", "-f", grid_gap["data"], "--points", grid_gap["pts"], "--save", "p.xlsx")
+    res = run_tool("ml_map.py", "--file", grid_gap["data"], "--points", grid_gap["pts"], "--save", "p.xlsx")
     sheet = pd.read_excel(res["output_file"], sheet_name="결과")
     assert "근거" not in sheet.columns and "근거_Y1" in sheet.columns            # 2.9.13: 근거 and 근거_<열> mixed
     assert sheet["근거_Y1"].notna().all()
@@ -239,10 +260,10 @@ def test_map_points_header_hint(tmp_path):
     data = write_book(tmp_path / "m.xlsx", rows)
     pts = tmp_path / "pts.csv"
     pd.DataFrame({"A": [2.5, 3.5]}).to_csv(pts, index=False, encoding="utf-8-sig")
-    bad = run_fail("ml_map.py", "-f", data, "--points", str(pts), "-y", "B")
+    bad = run_fail("ml_map.py", "--file", data, "--points", str(pts), "--targets", "B")
     _, rec = recommended_command(bad["message"])                  # 2.9.15: no hint, 2.9.71: 전체 명령
     assert rec[rec.index("--header-row") + 1] == "2", rec
-    ok = run_tool("ml_map.py", "-f", data, "--points", str(pts), "-y", "B", "--header-row", "2")
+    ok = run_tool("ml_map.py", "--file", data, "--points", str(pts), "--targets", "B", "--header-row", "2")
     assert ok["count"] == 2
 
 
@@ -250,21 +271,21 @@ def test_map_points_keep_data_decimal_comma(tmp_path):
     data = [["온도", "수율"]] + [[f"{170 + i},5", f"{80 + i},25"] for i in range(10)]
     path = write_csv(tmp_path / "grid.csv", data)
     pts = write_csv(tmp_path / "pts.csv", [["온도"], ["175"], ["170.500"]])                # 170.5 or 170500
-    _, res = run_raw("ml_map.py", "-f", path, "--points", pts)
+    _, res = run_raw("ml_map.py", "--file", path, "--points", pts)
     assert res["status"] == "error" and res["agent_directive"].startswith("STOP_RETRY:"), res     # 2.9.21: ok
     pts = write_csv(tmp_path / "pts2.csv", [["온도"], ["175"], ["176"]])
-    _, res = run_raw("ml_map.py", "-f", path, "--points", pts)
+    _, res = run_raw("ml_map.py", "--file", path, "--points", pts)
     assert res["status"] == "ok", res
 
 
 def test_map_comma_number_stops_with_command(tmp_path):
     A = np.arange(0, 2001, 500, dtype=float)
     p = write_df(tmp_path / "g.csv", pd.DataFrame({"A": A, "Y": A * 2}))
-    bad = run_fail("ml_map.py", "-f", p, "-i", "A=1,000", "-y", "Y")            # 2.9.13: '숫자가 아닙니다' without a fix
+    bad = run_fail("ml_map.py", "--file", p, "--input", "A=1,000", "--targets", "Y")            # 2.9.13: '숫자가 아닙니다' without a fix
     rec = bad["message"].split("[추천] ")[1].strip()
-    assert " -i A=1000" in rec
+    assert " --input A=1000" in rec
     assert run_tool("ml_map.py", *split_command(rec)[2:])["points"][0]["values"]["Y"] == 2000
-    bad = run_fail("ml_map.py", "-f", p, "--find", "Y=1,000", "--vary", "A")
+    bad = run_fail("ml_map.py", "--file", p, "--find", "Y=1,000", "--vary", "A")
     assert '--find Y=1000' in bad["message"]
 
 
@@ -277,7 +298,7 @@ def test_map_blank_in_other_value_column_keeps_row(tmp_path):
     df.loc[5, "B"] = np.nan                                  # the A=50 row has a blank B only
     p = tmp_path / "m.csv"
     df.to_csv(p, index=False)
-    res = run_tool("ml_map.py", "-f", str(p), "-i", "A=50")
+    res = run_tool("ml_map.py", "--file", str(p), "--input", "A=50")
     assert res["points"][0]["values"]["C"] == pytest.approx(250.0)      # 2.9.11: 260 (row dropped)
     assert res["points"][0]["values"]["B"] == pytest.approx(100.0)
 
@@ -325,7 +346,7 @@ def test_map_excel_basis_per_column(tmp_path):
     df = _frame().drop(columns=["__row", "D"])
     p = tmp_path / "m.csv"
     df.to_csv(p, index=False)
-    res = run_tool("ml_map.py", "-f", str(p), "-i", "A=50", "--save", "out.xlsx")
+    res = run_tool("ml_map.py", "--file", str(p), "--input", "A=50", "--save", "out.xlsx")
     assert res["columns"] == ["B", "C"]
     sheet = pd.read_excel(res["output_file"], sheet_name="결과")
     assert "근거_B" in sheet.columns and "근거_C" in sheet.columns
@@ -341,17 +362,17 @@ def lines(tmp_path_factory):
 
 
 def test_map_value_column_empty_after_text_filter(lines):
-    res = run_tool("ml_map.py", "-f", lines, "-i", "라인=L1,A=25", "-y", "Y1,Y2")  # 2.9.13: '숫자 열이 아닙니다'
+    res = run_tool("ml_map.py", "--file", lines, "--input", "라인=L1,A=25", "--targets", "Y1,Y2")  # 2.9.13: '숫자 열이 아닙니다'
     assert res["columns"] == ["Y1"] and any(w.startswith("Y2:") for w in res["warnings"])
-    res = run_tool("ml_map.py", "-f", lines, "-i", "라인=L1,A=25")                # 2.9.13: Y2 dropped silently
+    res = run_tool("ml_map.py", "--file", lines, "--input", "라인=L1,A=25")                # 2.9.13: Y2 dropped silently
     assert any(w.startswith("Y2:") for w in res["warnings"])
-    bad = run_fail("ml_map.py", "-f", lines, "-i", "라인=L1,A=25", "-y", "Y2")
+    bad = run_fail("ml_map.py", "--file", lines, "--input", "라인=L1,A=25", "--targets", "Y2")
     assert "숫자 열이 아닙니다" not in bad["message"] and "Y2" in bad["message"]
 
 
 def test_map_dropped_column_is_not_unused_input(tmp_path):
     df = pd.DataFrame({"A": [0.0, 7, 15, 31, 46, 60], "Y1": [1.0, 3, 2, 6, 4, 9], "Y2": [np.nan] * 5 + [1.0]})
-    res = run_tool("ml_map.py", "-f", write_df(tmp_path / "s.csv", df), "-i", "A=20")
+    res = run_tool("ml_map.py", "--file", write_df(tmp_path / "s.csv", df), "--input", "A=20")
     assert res["columns"] == ["Y1"]
     assert not any("기준으로 주지 않은 열" in w for w in res.get("warnings", []))   # 2.9.13: ['Y2'] as an input
 
@@ -372,7 +393,7 @@ def test_map_unused_columns_use_the_filtered_rows(tmp_path):
     df = pd.DataFrame({"라인": ["X"] * 6 + ["Y"] * 6, "A": [10, 10, 20, 20, 30, 30] * 2, "B": [1, 2] * 6,
                        "Y1": [20, 30, 30, 40, 40, 50, 120, 130, 130, 140, 140, 150],
                        "Y3": [None] * 6 + [9, 8, 19, 18, 29, 28]})
-    res = run_tool("ml_map.py", "-f", write_df(tmp_path / "g.csv", df), "-i", "라인=X,A=15", "-y", "Y1")
+    res = run_tool("ml_map.py", "--file", write_df(tmp_path / "g.csv", df), "--input", "라인=X,A=15", "--targets", "Y1")
     unused = [w for w in res.get("warnings", []) if "기준으로 주지 않은 열" in w]
     assert unused and "'B'" in unused[0] and "Y3" not in unused[0]                # 2.9.14: Y3 (empty for X) listed
 
@@ -388,32 +409,32 @@ def pct_mixed_grid(tmp_path):
 
 
 def test_map_without_y_skips_unasked_mixed_percent_column(pct_mixed_grid):
-    res = run_tool("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10")
+    res = run_tool("ml_map.py", "--file", pct_mixed_grid, "--input", "온도=160,함수율=10")
     assert res["columns"] == ["수율"], res
     assert res["points"][0]["values"]["수율"] == pytest.approx(22.0)
     assert any("['메모율']" in w and "섞여" in w for w in res["warnings"]), res
 
 
 def test_map_asked_mixed_percent_column_still_stops(pct_mixed_grid):
-    res = run_fail("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10", "-y", "메모율")
+    res = run_fail("ml_map.py", "--file", pct_mixed_grid, "--input", "온도=160,함수율=10", "--targets", "메모율")
     assert res["agent_directive"].startswith("STOP_RETRY") and "'메모율'" in res["message"], res
-    res = run_tool("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,함수율=10", "-y", "수율")
+    res = run_tool("ml_map.py", "--file", pct_mixed_grid, "--input", "온도=160,함수율=10", "--targets", "수율")
     assert not any("메모율" in w for w in res.get("warnings", [])), res
 
 
 def test_map_mixed_percent_key_column_still_stops(pct_mixed_grid):
-    res = run_fail("ml_map.py", "-f", pct_mixed_grid, "-i", "온도=160,메모율=0.1")
+    res = run_fail("ml_map.py", "--file", pct_mixed_grid, "--input", "온도=160,메모율=0.1")
     assert "'메모율'" in res["message"], res
 
 
 def test_inline_input_joined_by_semicolon_or_space_gives_fixed_command(grid2):
-    """회귀 (2.9.69): -i "온도=12; 압력=3"은 '온도' 하나(값 '12; 압력=3')로 읽혀 압력이 빠진 것으로 보였다 (ml_predict는
+    """회귀 (2.9.69): --input "온도=12; 압력=3"은 '온도' 하나(값 '12; 압력=3')로 읽혀 압력이 빠진 것으로 보였다 (ml_predict는
     중앙값으로 채울지 물음). 이제 STOP_RETRY + [추천] ','로 고친 전체 명령. 텍스트 값의 띄어쓰기, 천 단위 숫자는 그대로."""
     for given in ("온도=12; 압력=3", "온도=12 압력=3"):
-        proc, out = run_raw("ml_map.py", *P(grid2, "-i", given))
+        proc, out = run_raw("ml_map.py", *P(grid2, "--input", given))
         assert proc.returncode == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
         args = split_command(recommendation(out["message"]))
-        assert args[args.index("-i") + 1] == "온도=12,압력=3", args
+        assert args[args.index("--input") + 1] == "온도=12,압력=3", args
     assert rt.parse_inline_input("비고=a b,온도=1,000").to_dict("records") == [{"비고": "a b", "온도": "1,000"}]
     assert rt.parse_inline_input("온도 = 12, 압력 = 3").to_dict("records") == [{"온도": "12", "압력": "3"}]
     with pytest.raises(rt.InputError) as e:                       # where a spaced name starts is not clear: no [추천]

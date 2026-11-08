@@ -35,7 +35,7 @@ def work(tmp_path_factory):
     root = w / "safe_ml_data"
     (root / "v1").mkdir(parents=True)
     (root / "v1" / "내 메모.txt").write_text("사용자 파일", encoding="utf-8")
-    first = run_tool("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "--desc", "safety")
+    first = run_tool("ml_train.py", "--file", data, "--features", FEATURES, "--targets", TARGET, "--desc", "safety")
     return {"dir": w, "data": data, "root": root, "first": first}
 
 
@@ -50,15 +50,15 @@ def test_incomplete_version_folder_is_kept(work):
 def test_existing_version_refused_then_overwrite(work):
     root, data = work["root"], work["data"]
     before = (root / "v2" / "leaderboard.json").read_bytes()
-    proc, payload = run_raw("ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, "-v", "v2")
+    proc, payload = run_raw("ml_train.py", "--file", data, "--features", FEATURES, "--targets", TARGET, "--version", "v2")
     assert proc.returncode == 1 and payload["agent_directive"].startswith("STOP_RETRY:")
     assert "--overwrite" in payload["message"]
-    rec = split_command(payload["message"].split("[추천] ", 1)[1])      # 2.9.70: 전체 명령, '-v v2'는 빼고 --version v3
-    assert rec[0] == "python" and "-v" not in rec and rec[rec.index("--version") + 1] == "v3", rec
+    rec = split_command(payload["message"].split("[추천] ", 1)[1])      # 2.9.70: 전체 명령, '--version v2'는 빼고 --version v3
+    assert rec[0] == "python" and rec.count("--version") == 1 and rec[rec.index("--version") + 1] == "v3", rec
     assert (root / "v2" / "leaderboard.json").read_bytes() == before
     assert len(_ledger(root)) == 1
 
-    again = run_tool("ml_train.py", "-f", data, "-x", "반응온도,촉매비율", "-y", TARGET, "-v", "v2", "--overwrite")
+    again = run_tool("ml_train.py", "--file", data, "--features", "반응온도,촉매비율", "--targets", TARGET, "--version", "v2", "--overwrite")
     assert again["version"] == "v2" and again["verified"] is True
     meta = json.loads((root / "v2" / f"model_{TARGET}.json").read_text(encoding="utf-8"))
     assert meta["feature_count"] == 2                                 # replaced only with --overwrite
@@ -69,7 +69,7 @@ def test_existing_version_refused_then_overwrite(work):
     assert [r["version"] for r in ledger] == ["v2"], ledger
     assert ledger[0]["mean_val_score"] == again["mean_val_score"] and ledger[0]["delta_score"] == "base"
     assert ledger[0]["is_best"] is True
-    hist = run_tool("ml_train.py", "-f", data, "--history")
+    hist = run_tool("ml_train.py", "--file", data, "--history")
     assert hist["record_count"] == 1 and hist["best_version"] == "v2"
     synced = json.loads((root / "history.json").read_text(encoding="utf-8"))
     assert [r["version"] for r in synced] == ["v2"]
@@ -77,7 +77,7 @@ def test_existing_version_refused_then_overwrite(work):
 
 def _train_in_process(monkeypatch, capsys, data, *extra):
     import ml_train
-    monkeypatch.setattr(sys, "argv", ["ml_train.py", "-f", data, "-x", FEATURES, "-y", TARGET, *extra])
+    monkeypatch.setattr(sys, "argv", ["ml_train.py", "--file", data, "--features", FEATURES, "--targets", TARGET, *extra])
     with pytest.raises(SystemExit) as ex:
         ml_train.main()
     out = [x for x in capsys.readouterr().out.splitlines() if x.strip()]
@@ -108,7 +108,7 @@ def test_failed_ledger_write_rolls_back_and_restores_old_version(work, tmp_path,
     def broken_ledger(*a, **k):
         raise OSError("disk full")
     monkeypatch.setattr(ml_train, "append_history_ledger", broken_ledger)
-    code, payload = _train_in_process(monkeypatch, capsys, data, "-v", "v2", "--overwrite")
+    code, payload = _train_in_process(monkeypatch, capsys, data, "--version", "v2", "--overwrite")
     assert code == 1 and payload["status"] == "error"
     assert (root / "v2" / "leaderboard.json").read_bytes() == before   # old version restored
     assert not any(p.name.startswith((".bak_", ".tmp_")) for p in root.iterdir())
@@ -144,7 +144,7 @@ def test_leftover_backup_blocks_overwrite(work, tmp_path, monkeypatch, capsys):
     shutil.copytree(root / "v2", root / ".bak_v2")
     marker = root / ".bak_v2" / "leaderboard.json"
     before = marker.read_bytes()
-    code, payload = _train_in_process(monkeypatch, capsys, data, "-v", "v2", "--overwrite")
+    code, payload = _train_in_process(monkeypatch, capsys, data, "--version", "v2", "--overwrite")
     assert code == 1 and payload["agent_directive"].startswith("STOP_RETRY")
     assert ".bak_v2" in payload["message"] and marker.read_bytes() == before
 
@@ -180,13 +180,13 @@ def test_predict_out_is_not_overwritten(work):
     vd = work["first"]["version_dir"]
     out = work["dir"] / "pred.csv"
     out.write_text("사용자 결과\n", encoding="cp949")
-    p = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--save", str(out))
+    p = run_tool("ml_predict.py", "--model", vd, "--file", work["data"], "--save", str(out))
     assert os.path.normcase(p["output_file"]) != os.path.normcase(str(out))
     assert os.path.basename(p["output_file"]).startswith("pred_") and os.path.exists(p["output_file"])
     assert out.read_text(encoding="cp949") == "사용자 결과\n"
     assert any("pred.csv 이미 있음" in x for x in p["recovered"])
 
-    p2 = run_tool("ml_predict.py", "-m", vd, "-f", work["data"], "--save", str(out), "--overwrite")
+    p2 = run_tool("ml_predict.py", "--model", vd, "--file", work["data"], "--save", str(out), "--overwrite")
     assert os.path.normcase(p2["output_file"]) == os.path.normcase(str(out)) and "recovered" not in p2
     assert out.read_bytes() != "사용자 결과\n".encode("cp949")
 
@@ -194,12 +194,12 @@ def test_predict_out_is_not_overwritten(work):
 @pytest.mark.report
 def test_report_default_name_is_not_overwritten(work):
     vd = work["first"]["version_dir"]
-    r1 = run_tool("ml_report.py", "-m", vd)
+    r1 = run_tool("ml_report.py", "--model", vd)
     first_bytes = open(r1["report_file"], "rb").read()
-    r2 = run_tool("ml_report.py", "-m", vd)
+    r2 = run_tool("ml_report.py", "--model", vd)
     assert os.path.normcase(r2["report_file"]) != os.path.normcase(r1["report_file"])
     assert open(r1["report_file"], "rb").read() == first_bytes and any("이미 있음" in x for x in r2["recovered"])
-    r3 = run_tool("ml_report.py", "-m", vd, "--overwrite")
+    r3 = run_tool("ml_report.py", "--model", vd, "--overwrite")
     assert os.path.normcase(r3["report_file"]) == os.path.normcase(r1["report_file"])
 
 

@@ -493,10 +493,22 @@ def _drop_headers_footers(pages: List[Tuple[List[Any], float]]) -> int:
     return removed
 
 
+class _CurrentStderr:
+    """쓸 때마다 그때의 sys.stderr로 보내는 출력 대상. pymupdf는 받은 스트림 객체를 기억하므로, 그 순간의 sys.stderr를 주면
+    같은 프로세스에서 stderr가 바뀌고 닫힌 뒤(시험의 출력 캡처 등) 메시지를 쓰다 'I/O operation on closed file'로 실패함
+    (집 PC 저장소 전체 pytest, 1.4.90)."""
+
+    def write(self, text: str) -> int:
+        return sys.stderr.write(text)
+
+    def flush(self) -> None:
+        sys.stderr.flush()
+
+
 def _import_pymupdf():
     """pymupdf를 불러오고, 라이브러리 안내/경고가 stdout(1줄 JSON 자리)에 나오지 않게 stderr로 돌립니다."""
     pymupdf = rt.require_lib("pymupdf", "pymupdf", "PDF 읽기")
-    for fn, kwargs in (("set_messages", {"stream": sys.stderr}), ("set_log", {"stream": sys.stderr}),
+    for fn, kwargs in (("set_messages", {"stream": _CurrentStderr()}), ("set_log", {"stream": _CurrentStderr()}),
                        ("no_recommend_layout", {})):
         try:
             getattr(pymupdf, fn)(**kwargs)

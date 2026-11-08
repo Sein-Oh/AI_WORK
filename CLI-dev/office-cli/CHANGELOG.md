@@ -11,6 +11,18 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.90] - 2026-11-09
+
+### 수정
+- `reader.py`가 pymupdf 메시지·로그 출력 대상을 그 순간의 `sys.stderr` 객체로 정해, 같은 프로세스에서 stderr가 바뀌고 닫힌 뒤
+  pymupdf가 메시지를 쓰면 "I/O operation on closed file" (집 PC 저장소 전체 pytest에서 diag 시험의 pymupdf import가 실패한 원인).
+  쓸 때마다 그때의 `sys.stderr`로 보내는 출력 대상(`_CurrentStderr`)으로. 1.4.89에서 diag 시험의 라이브러리 목록을 비운 우회는 되돌림.
+  시험 도우미의 `import pymupdf`도 `reader._import_pymupdf()`로 (처음 import 때의 stdout을 기억하지 않게). 회귀 시험
+  `test_pymupdf_messages_follow_the_current_stderr`.
+- `word.py fill --overwrite`: 값이 있는 표 칸이 없어 덮어쓴 칸이 없으면 `warnings`로 알림 (집 PC Gemma O5, 바뀌는 것은 없음, 사용법 단순성 4번).
+- office-spec 스킬: `excel.py check`·`comment` 예시에 `--target "<엑셀 파일>"` (집 PC Gemma O1이 `--target` 없이 실행해 "열려 있는 Excel 문서가
+  없습니다"). 스킬 한 가지 형태: 다른 스킬·전역 지침처럼 파일은 `--target`. 전역 지침 4장과 같은 `exact_mixed` 줄은 스킬에서 뺌.
+
 ## [1.4.89] - 2026-11-08
 
 ### 수정

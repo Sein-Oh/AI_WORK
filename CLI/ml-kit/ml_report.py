@@ -10,9 +10,9 @@ training artifacts; an LLM may optionally override narrative paragraphs with --s
 Inputs (all written by ml_train.py):
   <data_root>/history.jsonl, <version_dir>/leaderboard.json, model_<t>.json, oof_<t>.csv, correlation.csv
 
-Select the version with -f <data file> (the best version of every target, built by
-ml_train.make_best when the history changed; one report per task), -m <version_dir>, or with
--d <data_root> [-v vN] (without -v: the best version of the latest experiment, i.e. same task and
+Select the version with --file <data file> (the best version of every target, built by
+ml_train.make_best when the history changed; one report per task), --model <version_dir>, or with
+-d <data_root> [--version vN] (without --version: the best version of the latest experiment, i.e. same task and
 target set as the latest training run).
 Requires python-docx and matplotlib (both in the standard environment).
 """
@@ -861,7 +861,7 @@ def _read_jsonl(path: str) -> List[Dict[str, Any]]:
 
 def _version_hint(vdir: str) -> str:
     """[추천] / [후보] for a version folder that does not exist: the versions of the same data folder that hold a
-    trained version (leaderboard.json). One -> [추천] the running command with that folder (-m, full command, R8);
+    trained version (leaderboard.json). One -> [추천] the running command with that folder (--model, full command, R8);
     several -> [후보] (the user picks: another version is another model)."""
     root = os.path.dirname(vdir)
     if not os.path.isdir(root):
@@ -872,9 +872,9 @@ def _version_hint(vdir: str) -> str:
     if not found:
         return " 이 데이터 폴더에 학습한 버전이 없습니다. 먼저 ml_train.py로 학습하십시오."
     if len(found) == 1:
-        cmd = command_text(drop={"--model": "model", "-m": "model"})
+        cmd = command_text(drop={"--model": "model", "--model": "model"})
         path = os.path.join(root, found[0])
-        return f" 있는 버전은 {found[0]} 하나입니다. [추천] " + (f"{cmd} -m {quote_arg(path)}" if cmd else f"-m {quote_arg(path)}")
+        return f" 있는 버전은 {found[0]} 하나입니다. [추천] " + (f"{cmd} --model {quote_arg(path)}" if cmd else f"--model {quote_arg(path)}")
     return f" 있는 버전 중에서 사용자에게 고르게 하십시오: [후보] {', '.join(found[-10:])}"
 
 
@@ -900,9 +900,9 @@ def load_version(version_dir: str, target_filter: Optional[List[str]] = None) ->
 
     names = list(record["targets"])
     if target_filter:
-        # like ml_predict -y: exact name, then a unique name without its unit ('수율' for '수율(1차)' and '수율(최종)'
+        # like ml_predict --targets: exact name, then a unique name without its unit ('수율' for '수율(1차)' and '수율(최종)'
         # -> [후보]; an exact '수율(1차)' takes that one only)
-        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(-y)")[0])
+        wanted = set(resolve_column_names(target_filter, names, f"버전 '{version}'의 타겟(--targets)")[0])
         names = [t for t in names if t in wanted]
 
     excluded_all = None
@@ -1381,7 +1381,7 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
                 overwrite: bool = False) -> Optional[Dict[str, Any]]:
     """The report and the performance calculator (ml_export.py) are made as a set (regression versions only).
     Made BEFORE the Word report so the report can state the calculator's agreement with the model.
-    targets: the report's -y targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
+    targets: the report's --targets targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
     A failure never fails the report: {"note": ...}."""
     if task != "regression" or os.environ.get("ML_KIT_SKIP_EXPORT") == "1":
         return None
@@ -1470,7 +1470,7 @@ def _numbered_out(out: Optional[str], version: str, many: bool) -> Optional[str]
 
 def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[str]]) -> Dict[str, Any]:
     """
-    -f <data file>: one report per task covering EVERY target of that task. The best version (each target
+    --file <data file>: one report per task covering EVERY target of that task. The best version (each target
     retrained with its best recipe from the history) is reused when up to date, otherwise built first.
     """
     import ml_train  # heavy (scikit-learn); only this mode needs it
@@ -1483,7 +1483,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
     picked = None
     if target_filter:   # resolved once over the targets of all best versions ('수율' for two of them -> [후보])
         all_names = list(dict.fromkeys(str(t) for bv in versions for t in bv["targets"]))
-        picked = resolve_column_names(target_filter, all_names, "타겟(-y)")[0]
+        picked = resolve_column_names(target_filter, all_names, "타겟(--targets)")[0]
     for bv in versions:
         flt = None
         if picked is not None:
@@ -1513,8 +1513,8 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                     for r in reports],
         "next_commands": [
             {"purpose": f"새 데이터 예측 ({bv['task']}, <새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-             "command": (f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} -m {quote_arg(bv['version_dir'])} "
-                         f"-f {quote_arg('<새데이터.xlsx>')}"),
+             "command": (f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} --model {quote_arg(bv['version_dir'])} "
+                         f"--file {quote_arg('<새데이터.xlsx>')}"),
              "needs_input": True, "placeholder": "<새데이터.xlsx>"} for bv in versions],
     })
     made = ("타겟별 최고 학습 조건으로 다시 학습한 " if info["made_best"] else "이미 최신인 ")
@@ -1524,7 +1524,7 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
                          f"종합 판정 " + ", ".join(f"{r['version']} {r['overall_verdict']}" for r in reports))
     multi = (f" 회귀와 분류 타겟이 섞여 있어 최고 버전과 보고서가 각각 {len(reports)}개입니다 (best_reports)."
              if len(reports) > 1 else "")
-    predict = "; ".join(f"{bv['task']}: ml_predict.py -m {quote_arg(bv['version_dir'])}" for bv in versions)
+    predict = "; ".join(f"{bv['task']}: ml_predict.py --model {quote_arg(bv['version_dir'])}" for bv in versions)
     bad = [u for r in reports for u in r.get("unverified", [])]
     result["verified"] = not bad
     if bad:
@@ -1540,26 +1540,26 @@ def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[s
 
 
 def main():
-    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (-f: 작업 유형마다 모든 타겟을 보고서 1개로)")
-    parser.add_argument("--model", "-m",
+    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (--file: 작업 유형마다 모든 타겟을 보고서 1개로)")
+    parser.add_argument("--model",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
-    parser.add_argument("--targets", "-y", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
+    parser.add_argument("--targets", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
     parser.add_argument("--save", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--slots", help="소견 덮어쓰기 JSON 파일 또는 문자열: summary, data, performance, features, lineage, "
                                         "correlation, operation, targets.{타겟}.{performance|features}")
-    parser.add_argument("--file", "-f",
+    parser.add_argument("--file",
                         help="학습한 데이터 파일. 모든 타겟을 타겟별 최고 학습 조건으로 묶은 최고 버전(필요하면 새로 학습)으로 보고서 작성")
     parser.add_argument("--task", choices=["regression", "classification"],
-                        help="-f와 함께: 이 작업 유형의 보고서만 (생략 시 이력에 있는 유형마다 1개)")
-    parser.add_argument("--header-row", type=int, help="-f와 함께: 최고 버전을 새로 학습할 때 헤더 행 (생략 시 이력 값)")
-    parser.add_argument("--unit-row", type=int, help="-f와 함께: 단위 행 (생략 시 이력 값)")
-    parser.add_argument("--data-row", type=int, help="-f와 함께: 데이터 시작 행 (생략 시 이력 값)")
+                        help="--file와 함께: 이 작업 유형의 보고서만 (생략 시 이력에 있는 유형마다 1개)")
+    parser.add_argument("--header-row", type=int, help="--file와 함께: 최고 버전을 새로 학습할 때 헤더 행 (생략 시 이력 값)")
+    parser.add_argument("--unit-row", type=int, help="--file와 함께: 단위 행 (생략 시 이력 값)")
+    parser.add_argument("--data-row", type=int, help="--file와 함께: 데이터 시작 행 (생략 시 이력 값)")
     parser.add_argument("--title", help="함께 만드는 성능예측표(엑셀)의 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
     args = parser.parse_args()
     if not args.model and not args.file:
-        parser.error("-f <데이터파일> 또는 -m <version_dir> 중 하나를 지정해야 합니다.")
+        parser.error("--file <데이터파일> 또는 --model <version_dir> 중 하나를 지정해야 합니다.")
     run_cli(lambda: execute_report(args), hint="확인할 것: 버전 폴더 경로 (학습 결과의 version_dir).")
 
 

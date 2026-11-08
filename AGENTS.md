@@ -153,7 +153,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 
 ## 도구별 규칙
 ### ml-kit
-- 공통 런타임(`run_cli`, `JsonArgumentParser`, 복구 함수, 데이터 로딩, 버전 고르기, `-i` 해석)은 `_ml_runtime.py`에 있다 (진입점 아님, 스킬에 적지 않음).
+- 공통 런타임(`run_cli`, `JsonArgumentParser`, 복구 함수, 데이터 로딩, 버전 고르기, `--input` 해석)은 `_ml_runtime.py`에 있다 (진입점 아님, 스킬에 적지 않음).
 - 산출물 레이아웃(`<stem>_ml_data/history.jsonl`, `vX/model_<target>.joblib|json`)과 원장 스키마는 바꿔도 된다 (베타). 바꾸면 이전 버전 폴더는 다시 학습해서 쓴다.
 - 학습과 추론이 같아야 하는 로직(데이터 로딩, 수치 변환, `--eval` 수식)은 `_ml_runtime.py` 한 곳에만 둔다.
 - 진입점(`ml_train.py`, `ml_predict.py`, `ml_report.py`, `ml_export.py`, `ml_map.py`)은 공통으로 `_ml_runtime.py`만 import한다. 아무도 `ml_predict.py`를

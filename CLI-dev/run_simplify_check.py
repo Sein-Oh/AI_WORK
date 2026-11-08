@@ -144,43 +144,43 @@ def ml_checks(env, data, titled):
     Y = "생산효율(%)"
 
     def m1():
-        code, out = run_tool(env, T, "-f", data, "-x", "반응온도,소비전력,압축압렬", "-y", "생산효율")
+        code, out = run_tool(env, T, "--file", data, "--features", "반응온도,소비전력,압축압렬", "--targets", "생산효율")
         follow(env, "M1", "열 이름 오타 -> [후보] 1) + confirm_commands[0]을 셸로 실행 -> 학습", code, out, kind="후보", need_code=1)
     check("M1", "열 이름 [후보]", m1)
 
     def m2():
-        code, out = run_tool(env, T, "-f", data, "-x", X, "--target", Y)
+        code, out = run_tool(env, T, "--file", data, "--features", X, "--target", Y)
         follow(env, "M2", "예전 줄임말 --target -> 인자 오류 + [추천] --targets 전체 명령 -> 학습", code, out, need_code=2)
     check("M2", "줄임말 [추천]", m2)
 
     def m3():
-        code, out = run_tool(env, T, "-f", data, "-x", X, "-y", Y, "--description", "공정 시험 데이터")
+        code, out = run_tool(env, T, "--file", data, "--features", X, "--targets", Y, "--description", "공정 시험 데이터")
         follow(env, "M3", "--description -> [추천] --desc 전체 명령 -> 학습", code, out, need_code=2)
     check("M3", "별칭 [추천]", m3)
 
     def m4():
-        code, out = run_tool(env, T, "-f", data, "-x", X, "-y", Y, "--dtypes", "반응온도(°C):floatt")
+        code, out = run_tool(env, T, "--file", data, "--features", X, "--targets", Y, "--dtypes", "반응온도(°C):floatt")
         follow(env, "M4", "--dtypes 형식 오타 -> [추천] 전체 명령 -> 학습", code, out, need_code=1)
     check("M4", "--dtypes [추천]", m4)
 
     def m5():
-        code, out = run_tool(env, T, "-f", titled, "-x", "온도,압력", "-y", "수율")
+        code, out = run_tool(env, T, "--file", titled, "--features", "온도,압력", "--targets", "수율")
         follow(env, "M5", "두 줄 머리글 엑셀 -> [추천] --header-row 2 전체 명령 -> 학습", code, out, need_code=1)
     check("M5", "머리글 [추천]", m5)
 
     def m6():
-        code, out = run_tool(env, P, "-m", data, "-i", "반응온도=240,소비전력=65,압축압력=3")
-        record("M6", "예측 -m <데이터 파일> -> 최고 버전 자동 (model_chosen)", ok_(out) and "model_chosen" in out,
+        code, out = run_tool(env, P, "--model", data, "--input", "반응온도=240,소비전력=65,압축압력=3")
+        record("M6", "예측 --model <데이터 파일> -> 최고 버전 자동 (model_chosen)", ok_(out) and "model_chosen" in out,
                str((out or {}).get("model_chosen") or (out or {}).get("message", ""))[:200])
-    check("M6", "-m 데이터 파일", m6)
+    check("M6", "--model 데이터 파일", m6)
 
     def m7():
-        code, out = run_tool(env, P, "-m", data, "-f", data, "--save", os.path.join(os.path.dirname(data), "예측 결과.txt"))
+        code, out = run_tool(env, P, "--model", data, "--file", data, "--save", os.path.join(os.path.dirname(data), "예측 결과.txt"))
         follow(env, "M7", "--save .txt -> [추천] .csv 전체 명령 -> 예측 저장", code, out, need_code=1)
     check("M7", "--save [추천]", m7)
 
     def m8():
-        code, out = run_tool(env, T, "-f", data, "-x", X, "-y", Y, "--version", "v1", "--overwrite", "--dry-run")
+        code, out = run_tool(env, T, "--file", data, "--features", X, "--targets", Y, "--version", "v1", "--overwrite", "--dry-run")
         cmds = (out or {}).get("confirm_commands") or []
         good = ok_(out) and out.get("replaces") is True and cmds and cmds[0].get("destructive") is True
         record("M8", "--dry-run: v1 교체 미리보기 (replaced_files, destructive)", bool(good),
@@ -192,9 +192,9 @@ def ml_checks(env, data, titled):
     check("M8", "--dry-run", m8)
 
     def m9():
-        code, out = run_tool(env, E, "-m", data, "--keep", "반응온도x", "--title", "점검")
-        follow(env, "M9", "성능예측표 -m <데이터 파일> + --keep 오타 -> [후보] 1) -> 셸로 실행", code, out, kind="후보", need_code=1)
-    record("M9", "성능예측표 -m <데이터 파일> + --keep 오타", None,
+        code, out = run_tool(env, E, "--model", data, "--keep", "반응온도x", "--title", "점검")
+        follow(env, "M9", "성능예측표 --model <데이터 파일> + --keep 오타 -> [후보] 1) -> 셸로 실행", code, out, kind="후보", need_code=1)
+    record("M9", "성능예측표 --model <데이터 파일> + --keep 오타", None,
            "보고서·성능예측표는 개발 중이라 시험에서 뺌 (2026-11-08)")   # m9는 다시 넣을 때 쓰도록 둠
 
 
@@ -214,40 +214,40 @@ def ml_new_checks(env, data, work):
     shifted.to_csv(shift, index=False, encoding="utf-8-sig")
 
     def n1():
-        code, out = run_tool(env, T, "-f", auto, "-y", "생산효율(%)")
+        code, out = run_tool(env, T, "--file", auto, "--targets", "생산효율(%)")
         ex = {e.get("column") for e in (out or {}).get("excluded_inputs", [])}
         good = ok_(out) and {"시료번호", "상수", "효율복사"} <= ex and "반응온도(°C)" in (out or {}).get("features_auto", [])
-        record("N1", "-x 없이 학습 -> 도구가 입력을 고름 (ID·상수·타겟 복사 열은 이유와 함께 뺌)", good,
+        record("N1", "--features 없이 학습 -> 도구가 입력을 고름 (ID·상수·타겟 복사 열은 이유와 함께 뺌)", good,
                f"제외={sorted(ex)}, 고른 입력={(out or {}).get('features_auto')}")
         cmds = [c for c in (out or {}).get("next_commands", []) if not c.get("needs_input")]
         if good and cmds:
             c2, out2 = run_shell(env, cmds[0]["command"])
-            record("N1b", "학습 결과의 next_commands[0](-x가 적힌 재학습)을 셸로 실행", ok_(out2),
+            record("N1b", "학습 결과의 next_commands[0](--features가 적힌 재학습)을 셸로 실행", ok_(out2),
                    "" if ok_(out2) else str((out2 or {}).get("message", ""))[:200])
     check("N1", "입력 자동 선택", n1)
 
     def n2():
-        code, out = run_tool(env, P, "-m", auto, "--suggest", "3")
+        code, out = run_tool(env, P, "--model", auto, "--suggest", "3")
         f = (out or {}).get("output_file", "")
         record("N2", "--suggest 3 -> 실험 조건 3개와 실험계획 엑셀", ok_(out) and len(out.get("points", [])) == 3 and os.path.isfile(f),
                str((out or {}).get("preview") or (out or {}).get("message", ""))[:200])
-        code, out = run_tool(env, P, "-m", auto, "--suggest", "3", "--maximize", "생산효율")
+        code, out = run_tool(env, P, "--model", auto, "--suggest", "3", "--maximize", "생산효율")
         record("N2b", "--suggest 3 --maximize -> 좋은 쪽 실험 조건", ok_(out) and len(out.get("points", [])) == 3,
                str((out or {}).get("message", ""))[:200])
-        code, out = run_tool(env, P, "-m", auto, "--suggest", "99")
+        code, out = run_tool(env, P, "--model", auto, "--suggest", "99")
         follow(env, "N2c", "--suggest 99(상한 넘음) -> [추천] 전체 명령 -> 실행", code, out, need_code=2) if code == 2 else \
             follow(env, "N2c", "--suggest 99(상한 넘음) -> [추천] 전체 명령 -> 실행", code, out)
     check("N2", "다음 실험 제안", n2)
 
     def n3():
-        code, out = run_tool(env, P, "-m", auto, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함량=20")
+        code, out = run_tool(env, P, "--model", auto, "--input", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함량=20")
         ex = ((out or {}).get("predictions_summary") or {}).get("생산효율(%)", {}).get("explain")
         record("N3", "한 건 예측 -> 입력별 영향(explain)과 preview의 '높인 입력/낮춘 입력'", ok_(out) and bool(ex) and "입력" in out.get("preview", ""),
                str((out or {}).get("preview", ""))[:200])
     check("N3", "입력별 영향", n3)
 
     def n4():
-        code, out = run_tool(env, P, "-m", auto, "-f", shift)
+        code, out = run_tool(env, P, "--model", auto, "--file", shift)
         cmds = (out or {}).get("next_commands") or []
         good = ok_(out) and out.get("retrain_recommended") is True and cmds and "ml_train.py" in cmds[0]["command"]
         record("N4", "실측이 있는 새 데이터(값이 크게 다름) -> actual_check와 재학습 알림", bool(good),
@@ -255,7 +255,7 @@ def ml_new_checks(env, data, work):
         if good:
             c2, out2 = run_shell(env, cmds[0]["command"])
             record("N4b", "재학습 명령을 셸로 실행 -> 새 데이터로 학습", ok_(out2), "" if ok_(out2) else str((out2 or {}).get("message", ""))[:200])
-        code, out = run_tool(env, P, "-m", auto, "-f", auto)
+        code, out = run_tool(env, P, "--model", auto, "--file", auto)
         record("N4c", "학습과 같은 데이터 -> 재학습 알림 없음", ok_(out) and not out.get("retrain_recommended"),
                json.dumps((out or {}).get("actual_check"), ensure_ascii=False)[:200])
     check("N4", "재학습 알림", n4)
@@ -325,7 +325,7 @@ def new_checks(env, data, book, work):
     X, W, PP, R = (os.path.join(OC, f) for f in ("excel.py", "word.py", "ppt.py", "reader.py"))
 
     def c1():
-        code, out = run_tool(env, T, "-f", data, "-x", "반응온도(°C),소비전력(kW)", "-y", "생산효율(%)", "--data-ro", "1")
+        code, out = run_tool(env, T, "--file", data, "--features", "반응온도(°C),소비전력(kW)", "--targets", "생산효율(%)", "--data-ro", "1")
         follow(env, "C1", "ml-kit 옵션 오타 --data-ro -> [후보] 1) --data-row + confirm_commands[0] -> 학습", code, out, kind="후보",
                need_code=2)
     check("C1", "옵션 [후보] 번호", c1)

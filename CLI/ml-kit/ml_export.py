@@ -103,7 +103,7 @@ def load_version(vdir: str, targets_arg: Optional[str]) -> Dict[str, Any]:
             metas[m.get("target", name[6:-5])] = m
     if not metas:
         raise InputError(f"버전 폴더에 모델 정보(model_*.json)가 없습니다: {vdir}")
-    # training order (leaderboard.json keeps the -y order); file-name order only as a fallback
+    # training order (leaderboard.json keeps the --targets order); file-name order only as a fallback
     try:
         with open(os.path.join(vdir, "leaderboard.json"), encoding="utf-8") as f:
             order = list(json.load(f).get("targets", {}))
@@ -111,7 +111,7 @@ def load_version(vdir: str, targets_arg: Optional[str]) -> Dict[str, Any]:
         order = []
     names = [t for t in order if t in metas] + [t for t in metas if t not in order]
     if targets_arg:
-        names, _ = resolve_column_names([t.strip() for t in targets_arg.split(",") if t.strip()], names, "타겟(-y)")
+        names, _ = resolve_column_names([t.strip() for t in targets_arg.split(",") if t.strip()], names, "타겟(--targets)")
     skipped = [t for t in names if metas[t].get("task", "regression") != "regression"]
     names = [t for t in names if t not in skipped]
     if not names:
@@ -1067,8 +1067,8 @@ def execute_export(args) -> Dict[str, Any]:
         choice = {q["target"]: (x["inputs"] if q is p else q["cand"]["inputs"]) for q in plans}
         if not spec_safe(choice, single):
             return None   # a name with ',', ';' or '=' cannot be written in --inputs: no command rather than a broken one
-        return (f"python {quote_arg(os.path.join(here, 'ml_export.py'))} -m {quote_arg(vinfo['dir'])}"
-                + (f" -y {quote_arg(args.targets)}" if args.targets else "")
+        return (f"python {quote_arg(os.path.join(here, 'ml_export.py'))} --model {quote_arg(vinfo['dir'])}"
+                + (f" --targets {quote_arg(args.targets)}" if args.targets else "")
                 + f" --inputs {quote_arg(inputs_arg(choice, single))} --title {quote_arg(title)}")
 
     out_targets = {}
@@ -1120,8 +1120,8 @@ def execute_export(args) -> Dict[str, Any]:
 def main():
     setup_console()
     parser = JsonArgumentParser(description="ml-kit 성능예측표 (엑셀, 수식만, 잠금) 내보내기")
-    parser.add_argument("--model", "-m", required=True, help="학습한 데이터 파일(도구가 최고 버전을 고름) 또는 버전 폴더 (예: 공정_ml_data/v3)")
-    parser.add_argument("--targets", "-y", help="표로 만들 숫자 타겟 (쉼표 구분, 생략 시 전부)")
+    parser.add_argument("--model", required=True, help="학습한 데이터 파일(도구가 최고 버전을 고름) 또는 버전 폴더 (예: 공정_ml_data/v3)")
+    parser.add_argument("--targets", help="표로 만들 숫자 타겟 (쉼표 구분, 생략 시 전부)")
     parser.add_argument("--keep", help="입력을 줄일 때 꼭 포함할 입력 (쉼표 구분)")
     parser.add_argument("--inputs", help=f"최적화 없이 이 입력 조합으로 바로 만들기 (쉼표 구분, 최대 {MAX_INPUTS}개). "
                                          "타겟마다 다르게: '<타겟>=입력1,입력2;<타겟2>=입력3'")

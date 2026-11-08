@@ -127,8 +127,8 @@ def group_h(work):
 def group_b(work, st):
     data = os.path.join(work, "공정_다중출력.xlsx")
     before = sha(data)
-    code, p, err, _ = run("ml_train.py", "-f", data, "--header-row", 3, "--unit-row", 4,
-                          "-x", "반응온도,압축압력,촉매비율,수분함량,유량,분진", "-y", "생산효율,불순물,소비전력",
+    code, p, err, _ = run("ml_train.py", "--file", data, "--header-row", 3, "--unit-row", 4,
+                          "--features", "반응온도,압축압력,촉매비율,수분함량,유량,분진", "--targets", "생산효율,불순물,소비전력",
                           "--desc", "반응 공정 시험 기록으로 생산효율, 불순물, 소비전력을 예측한다", cwd=work)
     st["train"] = p or {}
     safe("B", "B1", "학습 성공 (출력 3개, 보고서형 엑셀)", lambda: (code == 0 and bool(p) and p["status"] == "ok", f"exit {code} {err[-300:]}"))
@@ -149,23 +149,23 @@ def group_b(work, st):
 def group_c(work):
     m = os.path.join(work, "맵.xlsx")
     def c1():
-        _, p, _, _ = run("ml_map.py", "-f", m, "-i", "A=12.5", cwd=work)
+        _, p, _, _ = run("ml_map.py", "--file", m, "--input", "A=12.5", cwd=work)
         v = p["points"][0]["values"]
         return (p["mode"] == "grid" and abs(v["B"] - 16.25) < 1e-9 and abs(v["C"] - 87.5) < 1e-9), v
     safe("C", "C1", "격자 보간 A=12.5 -> B 16.25, C 87.5", c1)
     def c2():
-        _, p, _, _ = run("ml_map.py", "-f", m, "-i", "A=103", cwd=work)
+        _, p, _, _ = run("ml_map.py", "--file", m, "--input", "A=103", cwd=work)
         pt = p["points"][0]
         return (pt["extrapolated"] and abs(pt["values"]["B"] - 1058.5) < 1e-6 and p.get("warnings")), pt
     safe("C", "C2", "범위 밖 A=103 -> 외삽 1058.5 + 경고", c2)
     def c3():
-        _, p, _, _ = run("ml_map.py", "-f", m, "--find", "D=64", "--vary", "A", cwd=work)
+        _, p, _, _ = run("ml_map.py", "--file", m, "--find", "D=64", "--vary", "A", cwd=work)
         xs = [round(s["A"], 6) for s in p["solutions"] if not s["extrapolated"]]
         return (xs == [20.0, 80.0] and p["agent_directive"].startswith("VERIFIED")), p["preview"]
     safe("C", "C3", "반대 찾기 D=64 -> A 20, 80 (답 2개)", c3)
     def c4():
-        _, p, _, _ = run("ml_map.py", "-f", os.path.join(work, "공정_다중출력.xlsx"), "--header-row", 3, "--unit-row", 4,
-                         "-i", "반응온도=182,압축압력=3", "-y", "불순물", cwd=work)
+        _, p, _, _ = run("ml_map.py", "--file", os.path.join(work, "공정_다중출력.xlsx"), "--header-row", 3, "--unit-row", 4,
+                         "--input", "반응온도=182,압축압력=3", "--targets", "불순물", cwd=work)
         return (p["mode"] == "scattered" and len(p["nearest_rows"]) == 5 and p["points"][0]["basis"]), p["preview"]
     safe("C", "C4", "흩어진 기록 기준 2개 -> 둘러싼 실측 보간 + 가까운 실측 5행", c4)
 
@@ -176,12 +176,12 @@ def group_d(work, st):
         check("D", "D0", "학습 버전 없음 (B1 실패)", False)
         return
     def d1():
-        _, p, _, _ = run("ml_predict.py", "-m", vdir, "-i", "반응온도=182,압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5", cwd=work)
+        _, p, _, _ = run("ml_predict.py", "--model", vdir, "--input", "반응온도=182,압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5", cwd=work)
         mc = p["predictions_summary"]["불순물(ppm)"]["map_check"][0]
         return (mc["value"] is not None and all(b["row"] >= 5 for b in mc["basis"])), mc
     safe("D", "D1", "한 건 예측에 실측 비교값 (근거는 엑셀 행 번호)", d1)
     def d2():
-        _, p, _, _ = run("ml_predict.py", "-m", vdir, "-f", os.path.join(work, "새조건.xlsx"), cwd=work)
+        _, p, _, _ = run("ml_predict.py", "--model", vdir, "--file", os.path.join(work, "새조건.xlsx"), cwd=work)
         import pandas as pd
         out = pd.read_csv(p["output_file"], encoding="utf-8-sig")
         need = {"map_불순물(ppm)", "map_diff_불순물(ppm)", "map_방식_불순물(ppm)"}
@@ -194,24 +194,24 @@ def group_e(work, st):
     if not vdir:
         return
     def e1():
-        _, p, _, _ = run("ml_predict.py", "-m", vdir, "--find", "불순물=100", "--vary", "반응온도",
-                         "-i", "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5", cwd=work)
+        _, p, _, _ = run("ml_predict.py", "--model", vdir, "--find", "불순물=100", "--vary", "반응온도",
+                         "--input", "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5", cwd=work)
         return (p["count"] >= 1 and p["operating_windows"] and p["agent_directive"].startswith("VERIFIED")), p["preview"]
     safe("E", "E1", "모델 반대 찾기: 답 + 운전 구간 + 확인", e1)
     def e2():
-        _, p, _, _ = run("ml_predict.py", "-m", vdir, "--find", "불순물=9999", "--vary", "반응온도",
-                         "-i", "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5", cwd=work)
+        _, p, _, _ = run("ml_predict.py", "--model", vdir, "--find", "불순물=9999", "--vary", "반응온도",
+                         "--input", "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5", cwd=work)
         return (p["count"] == 0 and "찾은 값 없음" in p["preview"]), p["preview"]
     safe("E", "E2", "닿지 않는 목표 -> 찾은 값 없음 + 가능한 범위", e2)
     def e3():
-        _, p, _, _ = run("ml_predict.py", "-m", vdir, "--find", "불순물=100", "--vary", "반응온도", cwd=work)
+        _, p, _, _ = run("ml_predict.py", "--model", vdir, "--find", "불순물=100", "--vary", "반응온도", cwd=work)
         return (len(p["filled_defaults"]) == 5 and "중앙값" in p["warnings"][0]), p.get("filled_defaults")
     safe("E", "E3", "고정 입력 생략 -> 학습 중앙값으로 채우고 알림", e3)
 
 
 def group_f(work, st):
     data = os.path.join(work, "공정_다중출력.xlsx")
-    code, p, err, _ = run("ml_report.py", "-f", data, "--title", "반응 공정 성능 예측", cwd=work, timeout=3600)
+    code, p, err, _ = run("ml_report.py", "--file", data, "--title", "반응 공정 성능 예측", cwd=work, timeout=3600)
     st["report"] = p or {}
     safe("F", "F1", "보고서 + 성능예측표 생성", lambda: (code == 0 and bool(p) and bool(p.get("report_file") and p.get("export_file")),
                                                      f"exit {code} {err[-300:]}"))
@@ -262,13 +262,13 @@ def group_g(work):
     df["효율"] = 0.3 * np.minimum(df["온도(°C)"], 250) + 5 * df["압력"] + r.normal(0, 0.2, 300)
     path = os.path.join(work, "상한.csv")
     df.to_csv(path, index=False, encoding="utf-8-sig")
-    _, p, _, _ = run("ml_train.py", "-f", path, "-x", "압력", "--eval", "온도상한 = clip(온도, -1e12, 250)", "-y", "효율", cwd=work)
+    _, p, _, _ = run("ml_train.py", "--file", path, "--features", "압력", "--eval", "온도상한 = clip(온도, -1e12, 250)", "--targets", "효율", cwd=work)
     def g1():
-        a = run("ml_predict.py", "-m", p["version_dir"], "-i", "온도=280,압력=2", cwd=work)[1]
-        b = run("ml_predict.py", "-m", p["version_dir"], "-i", "온도=250,압력=2", cwd=work)[1]
+        a = run("ml_predict.py", "--model", p["version_dir"], "--input", "온도=280,압력=2", cwd=work)[1]
+        b = run("ml_predict.py", "--model", p["version_dir"], "--input", "온도=250,압력=2", cwd=work)[1]
         pa, pb = a["predictions_summary"]["효율"]["predictions"][0], b["predictions_summary"]["효율"]["predictions"][0]
         return abs(pa - pb) < 1e-6, f"280 -> {pa}, 250 -> {pb}"
-    safe("G", "G1", "원본 열을 -x에서 뺀 상한 파생변수: 예측 성공, 250 이상은 250과 같음", g1)
+    safe("G", "G1", "원본 열을 --features에서 뺀 상한 파생변수: 예측 성공, 250 이상은 250과 같음", g1)
 
 
 # ------------------------------------------------------------------------------------------------

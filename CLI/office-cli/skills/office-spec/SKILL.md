@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.89"
+  version: "1.4.90"
   platform: windows
 ---
 
@@ -25,8 +25,8 @@ metadata:
 | 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |
 | 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` (`;` 그리고, `|` 또는) |
 | 두 판 비교 | `python "C:\CLI\office-cli\reader.py" diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "<차이.xlsx>"]` |
-| 엑셀 표를 규격서와 대조 | `python "C:\CLI\office-cli\excel.py" check --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "<대조결과.xlsx>"]` |
-| 엑셀 칸 메모 | 목록 `python "C:\CLI\office-cli\excel.py" comment [--range B2:D20]` / 넣기 `python "C:\CLI\office-cli\excel.py" comment --action add --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`, 열: 칸, 메모) |
+| 엑셀 표를 규격서와 대조 | `python "C:\CLI\office-cli\excel.py" check --target "<엑셀 파일>" --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "<대조결과.xlsx>"]` |
+| 엑셀 칸 메모 | 목록 `python "C:\CLI\office-cli\excel.py" comment --target "<엑셀 파일>" [--range B2:D20]` / 넣기 `python "C:\CLI\office-cli\excel.py" comment --action add --target "<엑셀 파일>" --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`, 열: 칸, 메모) |
 | 캐시 목록 | `python "C:\CLI\office-cli\reader.py" list [--name <이름일부>] [--folder "<폴더>"]` |
 | 캐시 지우기 (원본은 그대로) | `python "C:\CLI\office-cli\reader.py" clear --name <이름일부> --dry-run` (`--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 목록을 보여 주고 확인받은 뒤 `confirm_commands[0]`) |
 | 되돌리기 (메모) | `python "C:\CLI\office-cli\office.py" undo` |
@@ -39,7 +39,6 @@ metadata:
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - 근거는 항목마다 `evidence`(예: `규격.pdf p.12, 1.1. Scope (1.1)`)를 그대로 쓴다. `page`가 null(엑셀, HWP 등)이면 장절 `section_text`, 번호 `number`, 위치 `loc`로 알린다.
 - `match_mode`가 `number`(숫자 값만 같은 곳, 실제 글 `number_words`), `partial`(일부 검색어만), `fuzzy`(한 글자 다른 낱말)이면 `count: 0`이고 결과는 `candidates`다. 근거로 쓰지 말고 "정확히 일치한 곳은 없고 비슷한 곳이 있다"고 알려 사용자에게 확인받는다. 부호·대시가 다른 숫자(`40 ℃`와 `-40 ℃`)도 `number`다.
-- `match_mode`가 `exact_mixed`이면 `literal: false`(표기가 다른 곳, `snippet`의 `[[ ]]`)는 근거로 확정하지 말고 `snippet`을 보여 주고 확인받는다.
 - `search`가 `UNVERIFIED:`이면 `not_searched`를 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서만 찾는다. `--file`을 주면 새 문서를 먼저 등록한다(`indexed_now`를 알림). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - `diff`는 숫자 변경 `number_changes`를 먼저, 삭제·추가·변경 항목마다 `old_evidence`·`new_evidence`를 붙여 알린다.

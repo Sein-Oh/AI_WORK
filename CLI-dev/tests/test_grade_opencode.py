@@ -58,7 +58,7 @@ def _export(tmp_path, turns, name="chat.json"):
 def test_pass_fail_and_forbidden_actions(tmp_path):
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     path = _export(tmp_path, [
-        ("[M1] 맵.xlsx 에서 A가 12.5일 때", [_bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+        ("[M1] 맵.xlsx 에서 A가 12.5일 때", [_bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"', ok),
                                          {"type": "text", "text": "B는 16.25, C는 87.5입니다."}]),
         ("[M2] D가 64가 되는 A", [_bash('python -c "import pandas"', ok), _bash('pip install scipy', ok),
                                 {"type": "tool", "tool": "read", "state": {"status": "completed", "input": {"filePath": "C:\\CLI\\ml-kit\\ml_map.py"}, "output": ""}},
@@ -83,8 +83,8 @@ def test_pass_fail_and_forbidden_actions(tmp_path):
 def test_bulk_message_grades_each_tag(tmp_path):
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     path = _export(tmp_path, [("순서대로 처리해줘\n[M1] A=12.5\n[M3] A=103", [
-        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
-        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=103"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=103"', ok),
         {"type": "text", "text": "B 16.25, C 87.5 / B 1058.5 (범위 밖 외삽값)"}])])
     meta, rows, detail = go.grade([path], "t", False, "LLM42")
     by = {r["id"]: r for r in rows}
@@ -101,8 +101,8 @@ def test_bulk_split_keeps_scenarios_apart(tmp_path):
     """A forbidden or repeated command in one bulk scenario must not fail the other, and each scenario's
     commands and answer come from its own part of the turn."""
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
-    m1 = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"'
-    m3 = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=103"'
+    m1 = 'python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"'
+    m3 = 'python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=103"'
     path = _export(tmp_path, [("순서대로\n[M1] A=12.5\n[M3] A=103", [
         {"type": "text", "text": "순서대로 처리하겠습니다."},
         _bash(m1, ok), {"type": "text", "text": "M1: B 16.25, C 87.5"},
@@ -120,7 +120,7 @@ def test_bulk_split_keeps_scenarios_apart(tmp_path):
 def test_bulk_unlocatable_scenario_uses_whole_turn(tmp_path):
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     path = _export(tmp_path, [("[A1] 학습\n[A2] 빠진 행", [
-        _bash('python "C:\\CLI\\ml-kit\\ml_train.py" -f x.xlsx --header-row 3 --unit-row 4', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_train.py" --file x.xlsx --header-row 3 --unit-row 4', ok),
         {"type": "text", "text": "R2 0.95, 센서오류 1행 제외"}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     by = {r["id"]: r for r in rows}
@@ -133,7 +133,7 @@ def test_final_answer_is_last_assistant_message(tmp_path):
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     path = _export(tmp_path, [
         ("[M1] A=12.5", [{"type": "text", "text": "16.25와 87.5를 찾아볼게요 \U0001F600"},
-                         _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok)]),
+                         _bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"', ok)]),
         ("계속", [{"type": "text", "text": "끝났습니다."}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     m1 = next(r for r in rows if r["id"] == "M1")
@@ -175,7 +175,7 @@ def test_export_errors_are_clear(tmp_path, capsys, monkeypatch):
 def _garbled_export(tmp_path, garble, enc="utf-8", bom=codecs.BOM_UTF8):
     """A pack export whose text went through garble (what PowerShell 5.1 does to opencode's UTF-8 output), saved as enc."""
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
-    clean = _export(tmp_path, [("[M1]", [_bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+    clean = _export(tmp_path, [("[M1]", [_bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"', ok),
                                          {"type": "text", "text": "B는 16.25, C는 87.5입니다."}])], name="clean.json")
     raw = open(clean, encoding="utf-8").read()
     path = tmp_path / f"garbled_{enc}.json"
@@ -212,8 +212,8 @@ def test_bulk_lead_in_is_not_first_answer(tmp_path):
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     path = _export(tmp_path, [("순서대로\n[M1] A=12.5\n[M3] A=103", [
         {"type": "text", "text": "두 요청을 차례로 처리하겠습니다."},
-        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
-        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=103"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=103"', ok),
         {"type": "text", "text": "M1: B 16.25, C 87.5 / M3: B 1058.5 (범위 밖 외삽값)"}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     by = {r["id"]: r for r in rows}
@@ -226,22 +226,22 @@ def test_bulk_retry_belongs_to_its_scenario(tmp_path):
     the previous scenario's tool_ok is not judged on it."""
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     stop = {"status": "error", "agent_directive": "STOP_RETRY: --vary가 필요합니다. [추천] --vary 반응온도"}
-    rest = '-i "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5"'
+    rest = '--input "압축압력=3,촉매비율=1,수분함량=20,유량=10,분진=0.5"'
     path = _export(tmp_path, [("[P2] 새조건\n[P3] 불순물 100", [
-        _bash('python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 -f "새조건.xlsx"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_predict.py" --model v1 --file "새조건.xlsx"', ok),
         {"type": "text", "text": "P2: 반응온도 200은 학습 범위를 벗어납니다."},
-        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 --find "불순물=100" {rest}', stop),
-        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" -m v1 --find "불순물=100" --vary 반응온도 {rest}', ok),
+        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" --model v1 --find "불순물=100" {rest}', stop),
+        _bash(f'python "C:\\CLI\\ml-kit\\ml_predict.py" --model v1 --find "불순물=100" --vary 반응온도 {rest}', ok),
         {"type": "text", "text": "P3: 반응온도 181, 운전 구간 175~188"}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     by = {r["id"]: r for r in rows}
     assert by["P2"]["결과"] == "통과" and by["P2"]["명령수"] == 1, by["P2"]["실패"]
     assert by["P3"]["결과"] == "통과" and by["P3"]["명령수"] == 2, by["P3"]["실패"]
     # the previous scenario's own retry stays with it: M1 fails, M1 retry, then M2
-    m1 = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"'
+    m1 = 'python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"'
     path = _export(tmp_path, [("[M1] A=12.5\n[M2] D=64", [
         _bash(m1, stop), _bash(m1, ok), {"type": "text", "text": "B 16.25, C 87.5"},
-        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" --find "D=64" --vary A', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --find "D=64" --vary A', ok),
         {"type": "text", "text": "A=20, A=80."}])], name="m.json")
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     by = {r["id"]: r for r in rows}
@@ -255,11 +255,11 @@ def test_bulk_retry_in_middle_scenario(tmp_path, first_try):
     at its own command (M3's only regex, ml_map.py, also matches M2's retry)."""
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     stop = {"status": "error", "agent_directive": "STOP_RETRY: --vary가 필요합니다. [추천] --vary A"}
-    mp = 'python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" '
+    mp = 'python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" '
     path = _export(tmp_path, [("순서대로\n[M1] A=12.5\n[M2] D=64\n[M3] A=103", [
-        _bash(mp + '-i "A=12.5" -y "B,C"', ok), {"type": "text", "text": "M1: B 16.25, C 87.5"},
+        _bash(mp + '--input "A=12.5" --targets "B,C"', ok), {"type": "text", "text": "M1: B 16.25, C 87.5"},
         _bash(mp + first_try, stop), _bash(mp + '--find "D=64" --vary A', ok), {"type": "text", "text": "M2: A 20, 80"},
-        _bash(mp + '-i "A=103" -y B', ok), {"type": "text", "text": "M3: B 1058.5 (범위 밖 외삽값)"}])])
+        _bash(mp + '--input "A=103" --targets B', ok), {"type": "text", "text": "M3: B 1058.5 (범위 밖 외삽값)"}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     by = {r["id"]: r for r in rows}
     assert by["M1"]["결과"] == "통과" and by["M1"]["명령수"] == 1, by["M1"]["실패"]
@@ -272,7 +272,7 @@ def test_single_request_answer_before_closing_tool(tmp_path):
     ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
     path = _export(tmp_path, [("[M1] A=12.5", [
         {"type": "text", "text": "맵 파일로 계산하겠습니다."},
-        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" -f "맵.xlsx" -i "A=12.5"', ok),
+        _bash('python "C:\\CLI\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"', ok),
         {"type": "text", "text": "B는 16.25, C는 87.5입니다."},
         _bash('Get-Item "C:\\CLI-dev\\work\\gemma\\맵.xlsx"', ok),
         {"type": "text", "text": "완료했습니다."}])])
@@ -300,12 +300,12 @@ def _rule_hits(rid, cmd=None, tool=None):
 
 
 def test_no_adhoc_py_rule():
-    ok_cmds = ['python "C:\\CLI\\ml-kit\\ml_train.py" -f a.xlsx',
-               'python "C:/CLI/ml-kit/ml_train.py" -f a.xlsx',
-               'cd C:\\CLI\\ml-kit; python ml_train.py -f a.xlsx',
-               'python .\\ml_predict.py -m v1',
+    ok_cmds = ['python "C:\\CLI\\ml-kit\\ml_train.py" --file a.xlsx',
+               'python "C:/CLI/ml-kit/ml_train.py" --file a.xlsx',
+               'cd C:\\CLI\\ml-kit; python ml_train.py --file a.xlsx',
+               'python .\\ml_predict.py --model v1',
                'python C:\\CLI\\office-cli\\excel.py read --file a.xlsx',
-               'python -u "C:\\CLI\\ml-kit\\ml_map.py" -f m.xlsx',
+               'python -u "C:\\CLI\\ml-kit\\ml_map.py" --file m.xlsx',
                'C:\\WPy64-313130\\python\\python.exe "C:\\CLI\\ml-kit\\ml_map.py" -h',
                'python "C:\\CLI-dev\\ml-kit\\tools\\make_beta_samples.py" "C:\\CLI-dev\\work\\gemma"',
                'python "C:\\CLI-dev\\run_beta_check.py" --agent',
@@ -317,7 +317,7 @@ def test_no_adhoc_py_rule():
                'cd C:\\CLI-dev\\ml-kit; python tools\\make_beta_samples.py "C:\\CLI-dev\\work\\gemma"',
                'python -m pytest -q',
                # 회사 PC 2026-11-06 R1: JSON 이스케이프 그대로 겹친 구분자 (Windows에서는 같은 파일)
-               'python "C:\\\\CLI\\\\ml-kit\\\\ml_report.py" -f "C:\\\\CLI-dev\\\\work\\\\a.xlsx"']
+               'python "C:\\\\CLI\\\\ml-kit\\\\ml_report.py" --file "C:\\\\CLI-dev\\\\work\\\\a.xlsx"']
     bad_cmds = ['python -c "import pandas"',
                 'python "C:\\\\CLI\\\\ml-kit\\\\helper.py"',
                 "python - <<'EOF'\nprint(1)\nEOF",
@@ -340,8 +340,8 @@ def test_no_read_code_rule():
               "findstr /n outlier C:\\CLI\\ml-kit\\ml_train.py", "head -50 ml_train.py", "sed -n 1,80p ml_train.py",
               "Select-String -Path C:\\CLI\\ml-kit\\*.py -Pattern iqr", "cat ml_train.py"):
         assert _rule_hits("no_read_code", c), c
-    for c in ('python "C:\\CLI\\ml-kit\\ml_train.py" -f a.xlsx --header-row 3 --unit-row 4',
-              'python "C:\\CLI\\ml-kit\\ml_train.py" --categorical x -y "detail"',
+    for c in ('python "C:\\CLI\\ml-kit\\ml_train.py" --file a.xlsx --header-row 3 --unit-row 4',
+              'python "C:\\CLI\\ml-kit\\ml_train.py" --categorical x --targets "detail"',
               "Get-Content C:\\CLI\\ml-kit\\SKILL.md"):
         assert not _rule_hits("no_read_code", c), c
     grep = {"tool": "grep", "input": {"pattern": "outlier", "path": "C:\\CLI\\ml-kit", "include": "*.py"}, "command": "", "path": ""}
@@ -371,8 +371,8 @@ def test_no_read_code_rule_searches_without_py():
               "python -m pydoc ml_train",
               'python -m pydoc "C:\\CLI\\ml-kit\\ml_train.py"'):
         assert _rule_hits("no_read_code", c), c
-    for c in ('python C:\\CLI\\ml-kit\\ml_train.py -f a.xlsx --header-row 3',
-              'python "C:\\CLI\\ml-kit\\ml_map.py" -f "C:\\data\\type a.xlsx" -i "A=1"',
+    for c in ('python C:\\CLI\\ml-kit\\ml_train.py --file a.xlsx --header-row 3',
+              'python "C:\\CLI\\ml-kit\\ml_map.py" --file "C:\\data\\type a.xlsx" --input "A=1"',
               "Get-Content C:\\CLI\\ml-kit\\SKILL.md",
               'Select-String -Path "C:\\CLI\\ml-kit\\SKILL.md" -Pattern 제외',
               "findstr 제외 C:\\CLI\\ml-kit\\SKILL.md",
@@ -431,7 +431,7 @@ def test_scenario_regexes():
     forbid = by_id["A3"]["forbid"][0]
     assert re.search(forbid, "del C:\\data\\x.xlsx", re.I)
     assert not re.search(forbid, 'python "C:\\CLI\\ml-kit\\ml_predict.py" --model v1', re.I)
-    for sid, cmd in (("M1", "ml_map.py -f m.xlsx -i 'A=12.5'"), ("M1", 'ml_map.py -i "A=12.5"'), ("M1", "ml_map.py -i A=12.5"),
+    for sid, cmd in (("M1", "ml_map.py --file m.xlsx --input 'A=12.5'"), ("M1", 'ml_map.py --input "A=12.5"'), ("M1", "ml_map.py --input A=12.5"),
                      ("P3", "ml_predict.py --find 불순물=100 --vary '반응온도'"), ("P3", 'ml_predict.py --find x --vary "반응온도"'),
                      ("R2", "ml_export.py --keep '반응온도,압축압력'"), ("R2", 'ml_export.py --keep "압축압력,반응온도"')):
         assert all(re.search(rx, cmd, re.I) for rx in by_id[sid]["commands"]), (sid, cmd)
@@ -717,7 +717,7 @@ def test_grade_runs_reads_folder_and_marks_missing(tmp_path):
 def test_reruns_asked_by_continue_are_not_repeats():
     """ml-kit가 시간 제한으로 CONTINUE(continue: true)를 내면 같은 명령을 다시 실행하는 것이 맞음 (R10): 반복 위반 아님.
     CONTINUE 없이 같은 명령을 3번 이상 실행하면 그대로 위반."""
-    cmd = 'python "C:\\CLI\\ml-kit\\ml_export.py" -m "C:\\x\\v1"'
+    cmd = 'python "C:\\CLI\\ml-kit\\ml_export.py" --model "C:\\x\\v1"'
     cont = {"status": "ok", "continue": True, "agent_directive": "CONTINUE: ..."}
     done = {"status": "ok", "agent_directive": "VERIFIED: ..."}
     rules = go.load_scenarios()[0]["rules"]
@@ -851,7 +851,7 @@ def test_no_fake_office_rule():
               'python "C:\\CLI\\office-cli\\ppt.py" slide --action move --slide 1 --dest 3',
               'python "C:\\CLI\\office-cli\\outlook.py" search --query x --from 홍길동',
               f'{OF} undo --list', f'{EX} write --cells C6=ft; {WD} write --text "x"', f'{EX} read --range A1:B2',
-              'python "C:\\CLI\\ml-kit\\ml_train.py" -f a.xlsx'):
+              'python "C:\\CLI\\ml-kit\\ml_train.py" --file a.xlsx'):
         assert not _rule_hits("no_fake_office", c), c
 
 

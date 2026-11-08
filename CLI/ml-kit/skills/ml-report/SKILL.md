@@ -4,7 +4,7 @@ description: 학습 결과로 Word ML 결과 보고서와 엑셀 성능예측표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.80"
+  version: "2.9.82"
   platform: windows
 ---
 
@@ -22,7 +22,7 @@ metadata:
 
 ## 보고서와 성능예측표 만들기
 ```powershell
-python "C:\CLI\ml-kit\ml_report.py" -f "<데이터파일>" --title "<제목>"
+python "C:\CLI\ml-kit\ml_report.py" --file "<데이터파일>" --title "<제목>"
 ```
 - `<제목>`은 학습 때 데이터 설명을 30자 안팎으로 정리한 짧은 제목이다 (예: "반응 공정 생산효율 예측").
 - 도구가 학습 이력에서 타겟마다 가장 좋았던 조건으로 최고 모델을 만들고(필요할 때만 다시 학습) 보고서 1개를 만든다. 버전이나 타겟을 고르지 않는다.
@@ -32,7 +32,7 @@ python "C:\CLI\ml-kit\ml_report.py" -f "<데이터파일>" --title "<제목>"
 ## 성능예측표를 다른 입력으로 다시 만들기
 사용자가 꼭 넣을 입력을 말하거나 다른 입력 조합을 원할 때만:
 ```powershell
-python "C:\CLI\ml-kit\ml_export.py" -m "<데이터파일>" --keep "<입력1>,<입력2>" --title "<제목>"
+python "C:\CLI\ml-kit\ml_export.py" --model "<데이터파일>" --keep "<입력1>,<입력2>" --title "<제목>"
 ```
 - 입력은 타겟마다 8개까지다. 같은 이름 파일이 있으면 새 이름으로 저장된다.
 - 다른 조합을 원하면 결과의 `candidates`를 표로 보여 주고, 사용자가 고른 안의 `command`를 그대로 실행한다.
