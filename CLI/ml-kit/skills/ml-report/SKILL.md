@@ -4,7 +4,7 @@ description: 학습 결과로 Word ML 결과 보고서와 엑셀 성능예측표
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.77"
+  version: "2.9.78"
   platform: windows
 ---
 

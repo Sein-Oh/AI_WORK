@@ -4,7 +4,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.76**, **office-cli 1.4.83** (main은 2.9.73·1.4.81. 2.9.74~2.9.76·1.4.82~1.4.83은 작업 브랜치 `claude/home-pc-check-2973`, PR을 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.78**, **office-cli 1.4.83** (main은 2.9.77·1.4.83. 2.9.78은 작업 브랜치 `claude/gemma-loop-1108`, PR을 머지했으면 main)
 - Office는 Office 16만 대상 (2026-11-07 Office 2007 지원 폐기, 집 PC도 Office 2019로 바꿈)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
@@ -187,6 +187,22 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
    - 옵션 이름의 `_`를 `-`로 읽어 같은 뜻 표를 찾기(`--model_path` -> `--model`의 `[추천]`). 없는 모델 폴더면 학습 결과의 데이터 파일로 `-m` `[추천]`을 줄 수 있는지.
    - 러너의 S0 직접 실행이 실제 사용(첫 요청이 바로 학습)과 같아졌으니, A1 실패가 실제 사용에서도 날 수 있음. 회사 PC Gemma와 비교.
    - 시험 중 모델이 시험 폴더 밖(`C:\` 맨 위 등)에 파일을 만들면 러너가 알리기 (채점기 "시험 폴더 밖 쓰기 없음").
+
+## 3-2. 클라우드에서 한 일 (2026-11-08 오후, 루프 r1~r5 뒤, 브랜치 `claude/gemma-loop-1108`)
+**합격 기준은 Gemma 4 26B 결과만.** solar-mini4는 Gemma 사용량이 다 됐을 때 이어 받는 예비 모델로만 쓴다
+(`--gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`). solar-mini4에서만 난 실패는 기록만 남기고, 도구 `[추천]`이
+나아지거나 지침·스킬이 짧아지는 수정일 때만 고친다 (지침·스킬 문장을 늘려야만 고쳐지는 것은 하지 않음).
+1. Gemma r5 P1(실측 비교값 빠뜨림): ml-kit 2.9.78. 한 건 예측의 알릴 값(예측값, 90% 범위, 실측 비교값, 입력별 영향)을 모두 `preview`에 넣고
+   지시문은 "preview를 글 그대로"로 짧게 (약 350자 -> 160자 안팎). "높인/낮춘 입력 글 그대로"는 유지.
+2. 러너: 요청마다 `C:\CLI`(도구의 `data` 제외)와 드라이브 맨 위의 목록을 시험 전후로 비교해 새로 생긴 것만 지우고, 결과 파일 "시험 폴더 밖 쓰기"와
+   `outside_writes.json`에 적고, 채점은 그 요청을 실패("시험 폴더 밖 쓰기 없음")로 셈 (r4·r5·11-08 첫 시험의 solar-mini4 사례).
+3. 전역 지침 3장 5번: 먼저 묻는 것은 셋뿐(`confirm_commands`, 5장의 일, 도구가 `[후보]`·`needs_user_decision`으로 멈춘 때)으로 한 문장에 모음
+   (4장·5장과 같은 범위).
+4. 스킬 맨 위 "그대로 실행할 전체 명령 1줄"(solar-mini4의 경로 바꿔 쓰기): 하지 않음. 스킬 표가 이미 전체 경로 명령이라 한 줄을 더하면 길어지기만 하고
+   (규칙 7: 짧게), Gemma는 r1~r5에서 경로 실수가 없었음.
+5. 집 PC에서 다시 확인할 것: `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma-only A1,P1 --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
+   (Gemma 먼저, solar-mini4 예비). 기대: P1 답변에 예측값·90% 범위·실측 비교값과 높인/낮춘 입력이 글 그대로, A1은 묻지 않고 학습 실행.
+   결과 파일의 "요청별 모델"이 Gemma인 요청만 합격 판정에 씀. "시험 폴더 밖 쓰기"가 있으면 그 경로를 함께 올림.
 
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).

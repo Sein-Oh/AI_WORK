@@ -60,7 +60,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.77"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.78"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -5825,11 +5825,34 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             return f"{t}({ps['predicted_class_counts']})"
         return f"{t}({ps['mean_pred']})"
 
+    def _case_lines() -> List[str]:
+        """직접 입력 몇 건(파일 저장 없음): 사용자에게 그대로 전할 건별 예측 글 (2.9.78, 집 PC r5: 지시문이 길어 Gemma가 뒤쪽의
+        '실측 비교값 함께'를 놓침 -> 알릴 값을 preview에 다 넣고 지시문은 'preview 그대로' 한 줄)."""
+        out: List[str] = []
+        for t, ps in predictions_summary.items():
+            preds = ps.get("predictions") or []
+            for k, pred in enumerate(preds):
+                tag = f"{t}" + (f" {k + 1}번" if len(preds) > 1 else "")
+                if ps.get("task") == "classification":
+                    probs = (ps.get("probabilities") or [{}])[k] if k < len(ps.get("probabilities") or []) else {}
+                    out.append(f"{tag} {pred}" + (f" (확률 {probs.get(pred)})" if probs.get(pred) is not None else ""))
+                    continue
+                text = f"{tag} {_fmt(float(pred))}"
+                iv = (ps.get("intervals") or [])[k] if k < len(ps.get("intervals") or []) else None
+                extra = [f"90% 범위 {_fmt(float(iv[0]))} ~ {_fmt(float(iv[1]))}"] if iv else []
+                mc = (ps.get("map_check") or [])[k] if k < len(ps.get("map_check") or []) else None
+                if mc and mc.get("value") is not None:
+                    extra.append(f"실측 비교값 {_fmt(float(mc['value']))} (차이 {float(mc['diff']):+.4g})")
+                out.append(text + (f" ({', '.join(extra)})" if extra else ""))
+        return out
+
+    case_lines = _case_lines() if is_inline and not saved_file and not inline_truncated else []
     targets_brief = ", ".join(_brief(t) for t in predictions_summary)
     preview = (
-        f"[예측 완료] 입력: {source_desc} | 예측 요약: [{targets_brief}]"
+        (f"[예측 완료] 입력: {source_desc} | 예측: " + "; ".join(case_lines) if case_lines else
+         f"[예측 완료] 입력: {source_desc} | 예측 요약: [{targets_brief}]")
         + (f" | 저장: {os.path.basename(saved_file)}" if saved_file else "")
-        + (f" | 외삽 경고 {len(drift_warnings)}건" if drift_warnings else "")
+        + (f" | 외삽 경고 {len(drift_warnings)}건 (학습 범위 밖 입력이라 예측은 참고용)" if drift_warnings else "")
         + (f" | 저확신 경고 {len(low_conf_warnings)}건" if low_conf_warnings else "")
         + (f" | 결측 대치 {sum(missing_counts.values())}건" if missing_counts else "")
         + (f" | 미학습 범주 경고 {len(category_warnings)}건" if category_warnings else "")
@@ -5839,7 +5862,19 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                                                      " (비슷함)" if c["judged"] else " (행이 적어 판단 안 함)")
                                        for c in actual_checks.values()) if actual_checks else "")
     )
-    agent_directive = (
+    warn_keys = ([k for k, on in (("extrapolation_warnings", drift_warnings), ("low_confidence_warnings", low_conf_warnings),
+                                   ("missing_input_warnings", missing_counts), ("unseen_category_warnings", category_warnings),
+                                   ("map_check_warnings", map_warnings), ("warnings", file_warnings)) if on])
+    short = (                        # 직접 입력 몇 건: 알릴 것은 preview에 다 있음, 지시문은 짧게 (2.9.78)
+        ("VERIFIED: " if not unverified else "UNVERIFIED: ")
+        + f"타겟 {len(model_items)}개를 예측했습니다. preview의 예측값, 90% 범위, 실측 비교값과 입력별 영향('높인 입력'·'낮춘 입력')을 "
+          "글 그대로 사용자에게 알리세요 (화살표 같은 기호로 바꾸지 않음)."
+        + (f" 경고({', '.join(warn_keys)})도 함께 알리세요." if warn_keys else "")
+        + (f" extrapolation_warnings는 {len(drift_warnings)}건 중 {WARNINGS_SHOW_MAX}건만 있으니 전체 건수도 알리세요."
+           if len(drift_warnings) > WARNINGS_SHOW_MAX else "")
+        + (f" 확인하지 못한 것: {'; '.join(unverified)}." if unverified else "")
+    ) if case_lines and not retrain_next else None
+    agent_directive = short or (
         ("VERIFIED: " if not unverified else "UNVERIFIED: 결과 파일 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + f"타겟 {len(model_items)}개를 예측했습니다. "
         + ("predictions_summary의 예측값과 회귀는 intervals(90% 예측 범위), 분류는 probabilities(종류별 확률)를 알리세요. "

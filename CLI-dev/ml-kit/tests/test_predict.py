@@ -767,7 +767,7 @@ def test_explain_signs_on_linear_model(lin):
     med = {e["input"]: e["baseline"] for e in ex["effects"]}
     assert abs(eff["온도"] - 3 * (8 - med["온도"])) < 1.0 and abs(eff["압력"] + 2 * (6 - med["압력"])) < 1.0
     assert "높인 입력: 온도" in res["preview"] and "낮춘 입력: 압력" in res["preview"]
-    assert "explain" in res["agent_directive"]
+    assert "입력별 영향" in res["agent_directive"] and "입력별 영향" in res["preview"]     # 2.9.78: 알릴 글은 preview에
     # 2.9.77 집 PC Gemma: '반응온도(↓)'처럼 화살표로 줄여 써 채점 실패 -> 글 그대로 옮기라고 지시
     assert "글 그대로" in res["agent_directive"] and "기호로 바꾸지 않음" in res["agent_directive"]
 
@@ -819,3 +819,15 @@ def test_actual_check_few_rows_not_judged(lin, tmp_path):
     res = run_tool("ml_predict.py", "-m", lin["f"], "-f", f)
     chk = res["actual_check"]["수율"]
     assert chk["judged"] is False and chk["worse"] is False and "note" in chk and "next_commands" not in res
+
+
+def test_one_case_preview_has_everything_to_tell_and_directive_is_short(p1_model):
+    """2.9.78 집 PC r5: 지시문이 길어(약 350자) Gemma가 뒤쪽 '실측 비교값 함께'를 놓침 -> 건별 예측값·90% 범위·실측 비교값은 preview에,
+    지시문은 'preview 그대로' 짧게 (높인/낮춘 입력 글 그대로는 유지)."""
+    res = run_tool("ml_predict.py", "-m", p1_model["v"], "-i", "온도(°C)=180,압력(bar)=3,속도=45")
+    pv, d = res["preview"], res["agent_directive"]
+    assert "생산량 " in pv and "90% 범위 " in pv and "실측 비교값 " in pv, pv
+    assert len(d) < 260 and d.startswith("VERIFIED: 타겟 1개를 예측했습니다. preview의 예측값, 90% 범위, 실측 비교값"), d
+    assert "글 그대로" in d and "화살표" in d, d
+    two = run_tool("ml_predict.py", "-m", p1_model["v"], "-i", '[{"온도(°C)":180,"압력(bar)":3,"속도":45},{"온도(°C)":185,"압력(bar)":3,"속도":45}]')
+    assert "생산량 1번 " in two["preview"] and "생산량 2번 " in two["preview"], two["preview"]

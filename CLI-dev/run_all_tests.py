@@ -32,6 +32,7 @@
 이 스크립트는 사람이 실행하는 테스트 도구입니다. 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다.
 """
 import argparse
+from typing import Dict, List
 import datetime as dt
 import glob
 import json
@@ -971,6 +972,54 @@ def _gemma_ids(spec, order, by_id):
     return [sid for sid in order if sid in want], unknown
 
 
+def _outside_roots():
+    """시험 중 모델이 쓰면 안 되는 곳: (폴더, 아래까지 볼지). 도구 폴더(C:\\CLI) 전체와 드라이브 맨 위(C:\\ 바로 아래 이름만).
+    (집 PC 2026-11-08: C:\\CLI에 임시 json 8개, C:\\CLI\\tmp_out.txt, C:\\CLI-scratch\\read_xlsx.py)"""
+    drive = os.path.splitdrive(os.path.abspath(CLI_DIR))[0]
+    return [(CLI_DIR, True), ((drive + os.sep) if drive else os.path.dirname(os.path.abspath(CLI_DIR)), False)]
+
+
+# 도구가 스스로 쓰는 곳 (오류 로그, 이어 하기 상태, 바이트코드)은 모델이 만든 것이 아님
+_OWN_WRITES = re.compile(r"(?i)[\\/](data|__pycache__)([\\/]|$)")
+
+
+def _snapshot_outside():
+    """감시하는 곳의 파일·폴더 목록 (경로 집합)."""
+    seen = set()
+    for root, deep in _outside_roots():
+        try:
+            if deep:
+                for d, dirs, files in os.walk(root):
+                    dirs[:] = [x for x in dirs if not _OWN_WRITES.search(os.sep + x)]
+                    seen.update(os.path.join(d, x) for x in dirs + files)
+            else:
+                seen.update(os.path.join(root, x) for x in os.listdir(root))
+        except OSError:
+            continue
+    return seen
+
+
+def _clean_outside(before, test_dir, runs):
+    """시험 중 새로 생긴 파일·폴더(시험 폴더·기록 폴더 제외)를 지우고 목록을 돌려줍니다. 시험 전부터 있던 것은 건드리지 않습니다."""
+    keep = [os.path.abspath(p) for p in (test_dir, runs, work_root())]      # 시험 폴더와 기록 폴더 (그 안·그 위 폴더)
+    new = sorted(p for p in _snapshot_outside() - before
+                 if os.path.abspath(p) != os.path.abspath(HERE)
+                 and not any(os.path.abspath(p) == k or os.path.abspath(p).startswith(k + os.sep) or k.startswith(os.path.abspath(p) + os.sep)
+                             for k in keep))
+    removed = []
+    for p in sorted(new, key=len, reverse=True):              # 안쪽부터 (새 폴더는 비면 지움)
+        try:
+            if os.path.isdir(p):
+                if not os.listdir(p):
+                    os.rmdir(p)
+            else:
+                os.remove(p)
+            removed.append(p)
+        except OSError:
+            pass
+    return new, removed
+
+
 def _run_setup(sc, test_dir):
     """setup 시나리오(S0, S1: 시험 자료 만들기)를 모델 대신 직접 실행합니다. message의 python "<스크립트>"에서 C:\\CLI-dev는 이 폴더.
     (성공 여부, 기록 한 줄). 모델에 보내면 C:\\CLI-dev\\ml-kit\\tools 경로를 도구 위치로 따라 했음 (집 PC opencode 2026-11-07)."""
@@ -1057,7 +1106,9 @@ def step_gemma(stage, args, ctx):
         + (f", 수동 전용 {', '.join(s for s in order if by_id[s].get('manual'))}은 보내지 않음" if not only and len(auto) < len(order) else "")
         + ").")
     stop = False
+    outside: Dict[str, List[str]] = {}
     for i, sid in enumerate(auto, 1):
+        before = _snapshot_outside()
         msg = f"[{sid}] " + str(by_id[sid]["message"]).replace("{DIR}", test_dir)
         sent[sid] = msg
         with open(os.path.join(runs, go.RUN_MESSAGES), "w", encoding="utf-8") as f:
@@ -1091,6 +1142,12 @@ def step_gemma(stage, args, ctx):
         used[sid] = model or "(opencode 설정)"
         with open(os.path.join(runs, go.RUN_MODELS), "w", encoding="utf-8") as f:
             json.dump(used, f, ensure_ascii=False, indent=1)
+        new, removed = _clean_outside(before, test_dir, runs)      # 모델이 도구 폴더·드라이브 맨 위에 만든 것
+        if new:
+            outside[sid] = [p + ("" if p in removed else " (지우지 못함)") for p in new]
+            with open(os.path.join(runs, go.RUN_OUTSIDE), "w", encoding="utf-8") as f:
+                json.dump(outside, f, ensure_ascii=False, indent=1)
+            say(f"[WARN] {sid}: 시험 폴더 밖에 새로 생긴 파일 {len(new)}개를 지움")
         if stop:
             break
         if not session:                                          # 첫 요청에서 세션이 안 생기면 나머지도 같음
@@ -1098,6 +1155,9 @@ def step_gemma(stage, args, ctx):
             stage.details.append((f"{sid} opencode 오류 출력", _read(err_path) or "(없음)"))
             break
     stage.details.append(("opencode run 실행 기록", "\n".join(log)))
+    if outside:
+        stage.details.append(("시험 폴더 밖 쓰기 (시험 중 새로 생긴 것, 러너가 지움)",
+                              "\n".join(f"{k}: {p}" for k, v in outside.items() for p in v)))
     if used:
         stage.details.append(("요청별 모델", "\n".join(f"{k}: {v}" for k, v in used.items())))
     if session:
