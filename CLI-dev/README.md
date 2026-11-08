@@ -40,6 +40,9 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   `--gemma-model <모델>[,<예비 모델>...]`: opencode `--model` 값(예: `openrouter/google/gemma-4-26b-a4b-it`). 공급자 오류가 사용량 제한(429, rate limit, quota)이면
   제한 기록을 `<ID>.limited<N>.jsonl`로 남기고 다음 모델로 같은 요청을 다시 보내며, 그 뒤 요청도 그 모델로 보냄. 예비가 없으면 UNVERIFIED.
   요청별로 답한 모델은 기록 폴더 `models.json`, 실행 기록의 "요청별 모델", 채점 보고서 머리에 남음.
+  시험 폴더 밖 쓰기: 요청마다 보내기 전후로 `C:\CLI`(아래 전부, 도구의 `data`·`__pycache__` 제외)와 드라이브 맨 위(바로 아래 이름만)의 목록을 비교해
+  새로 생긴 것만 지우고(시험 전부터 있던 것은 그대로), `outside_writes.json`과 결과 파일 "시험 폴더 밖 쓰기"에 적으며, 채점은 그 요청을 실패로 셈.
+  합격 기준은 Gemma 4 26B 결과 (`docs/opencode/실기테스트.md` 3장).
   시나리오에 `manual`(사람이 준비할 것)이 있는 요청(O3, Outlook 메일)은 보내지 않고 건너뜀 "수동 전용"으로 남깁니다.
 - `pytest` 단계: 도구 하나의 시간 상한은 `--pytest-timeout`(기본 7200초, 회사 PC에서 ml-kit이 3600초를 넘음). 플러그인 `pytest_live_report.py`(`-p`)가
   실패·오류를 생기는 즉시 `[LIVE] FAILED <id> - <원인>` 줄로 내보내므로, 시간 상한에 끊겨도 그때까지의 실패 이름과 짧은 원인이 결과 파일 실패 목록에 남고

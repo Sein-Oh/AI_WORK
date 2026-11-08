@@ -333,6 +333,11 @@ if os.environ.get("FAKE_OC_DEAD"):
 sid = argv[argv.index("--session") + 1] if "--session" in argv else "ses_fake1"
 msg = argv[-1]
 model = argv[argv.index("--model") + 1] if "--model" in argv else ""
+litter = os.environ.get("FAKE_OC_LITTER")                     # 모델이 도구 폴더에 임시 파일을 만드는 경우 (집 PC r4·r5)
+if litter and msg.startswith("[A1]"):
+    os.makedirs(os.path.join(litter, "tmpdir"), exist_ok=True)
+    open(os.path.join(litter, "tmp_out.txt"), "w").close()
+    open(os.path.join(litter, "tmpdir", "x.json"), "w").close()
 if model and model in os.environ.get("FAKE_OC_LIMITED", "").split(","):     # 이 모델은 사용량 제한
     sys.stdout.write(json.dumps({"type": "error", "timestamp": 1, "sessionID": sid,
                                  "error": {"name": "APIError", "data": {"message": "429 Too Many Requests: rate limit exceeded"}}}) + "\n")
@@ -455,6 +460,26 @@ def test_gemma_rate_limit_without_spare_is_unverified_and_unknown_id_fails(iso, 
     assert rat.main(["--only", "gemma", "--opencode", str(fake_oc), "--gemma-dir", str(work), "--gemma-only", "A1,Z9"]) == 1
     assert len(_calls(fake_oc)) == 1                                               # 모르는 ID면 아무것도 보내지 않음
     assert "모르는 요청 ID: Z9" in (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
+def test_gemma_writes_outside_test_folder_are_listed_failed_and_removed(iso, fake_oc, monkeypatch, capsys):
+    """집 PC 2026-11-08: 모델이 C:\\CLI에 임시 파일(tmp_out.txt, json 8개)을 남김 -> 러너가 시험 전후 목록을 비교해 새로 생긴 것만 지우고,
+    결과 파일에 적고, 그 요청은 채점에서 '시험 폴더 밖 쓰기 없음' 실패. 시험 전부터 있던 파일과 도구의 data 폴더는 그대로."""
+    cli = iso / "CLI"
+    (cli / "keep.txt").write_text("old", encoding="utf-8")
+    (cli / "ml-kit" / "data").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("FAKE_OC_LITTER", str(cli))
+    work = iso / "work" / "gemma"
+    rat.main(["--only", "gemma", "--label", "t", "--opencode", str(fake_oc), "--gemma-dir", str(work), "--gemma-only", "A1,P1"])
+    assert (cli / "keep.txt").exists() and not (cli / "tmp_out.txt").exists() and not (cli / "tmpdir").exists()
+    runs = next(p for p in (iso / "work").iterdir() if p.name.startswith("gemma_runs_"))
+    got = json.loads((runs / "outside_writes.json").read_text(encoding="utf-8"))
+    assert list(got) == ["A1"] and any(p.endswith("tmp_out.txt") for p in got["A1"]), got
+    text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
+    assert "시험 폴더 밖 쓰기" in text and "tmp_out.txt" in text
+    grade = next(p for p in runs.iterdir() if p.name.startswith("grade_t_") and p.suffix == ".md").read_text(encoding="utf-8")
+    assert "[FAIL] 시험 폴더 밖 쓰기 없음" in grade
 
 
 def test_all_test_folders_default_under_cli_dev_work(iso):

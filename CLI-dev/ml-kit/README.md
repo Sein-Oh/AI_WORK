@@ -632,6 +632,10 @@ python ml_predict.py -m v3 --find "생산효율=105" --vary 반응온도 -i "압
 - 확인(R1): 표를 다시 읽어 행 수와 시트 이름, 적힌 입력값으로 다시 예측해 `predictions`가 같은지(그리고 `--where`) 보면 `VERIFIED`.
 - 계산량이 정해져 있어(후보 3,000 x 표본 5,000행) 시간 제한 안에 끝남(나눠서 진행 없음).
 
+### 1-D2) 한 건 예측의 preview와 지시문 (2.9.78)
+직접 입력(`-i`, 5건 이하, `--save` 없음)은 알릴 값을 모두 `preview`에 넣습니다: 건마다 예측값, 90% 범위, 실측 비교값(차이), 입력별 영향, 경고 수.
+`agent_directive`는 "preview를 글 그대로 알리세요"와 경고 키 이름만 (지시문이 길면 경량 LLM이 뒤쪽 지시를 놓침, 집 PC r5).
+
 ### 1-E) 입력별 영향 (`explain`, `-i` 5건 이하, 2.9.72)
 `predictions_summary.<타겟>.explain`: 건마다 입력별 영향 `effects`(`input`, `value`, `baseline`, `effect`, 큰 순 5개, 전체 수 `effects_count`),
 `prediction`, `baseline_prediction`. 기준값은 학습 중앙값(글자 입력은 학습에서 가장 흔한 값, 날짜는 중앙 날짜: `model_dataset.csv`).
