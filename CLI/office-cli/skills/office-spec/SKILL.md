@@ -26,7 +26,7 @@ metadata:
 | 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` (`;` 그리고, `|` 또는) |
 | 두 판 비교 | `python "C:\CLI\office-cli\reader.py" diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "<차이.xlsx>"]` |
 | 엑셀 표를 규격서와 대조 | `python "C:\CLI\office-cli\excel.py" check --target "<엑셀 파일>" --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "<대조결과.xlsx>"]` |
-| 엑셀 칸 메모 | 목록 `python "C:\CLI\office-cli\excel.py" comment --target "<엑셀 파일>" [--range B2:D20]` / 넣기 `python "C:\CLI\office-cli\excel.py" comment --target "<엑셀 파일>" --action add --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`, 열: 칸, 메모) |
+| 엑셀 칸 메모 | 목록 `python "C:\CLI\office-cli\excel.py" comment --target "<엑셀 파일>" [--range B2:D20]` / 넣기 `python "C:\CLI\office-cli\excel.py" comment --action add --target "<엑셀 파일>" --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`, 열: 칸, 메모) |
 | 캐시 목록 | `python "C:\CLI\office-cli\reader.py" list [--name <이름일부>] [--folder "<폴더>"]` |
 | 캐시 지우기 (원본은 그대로) | `python "C:\CLI\office-cli\reader.py" clear --name <이름일부> --dry-run` (`--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 목록을 보여 주고 확인받은 뒤 `confirm_commands[0]`) |
 | 되돌리기 (메모) | `python "C:\CLI\office-cli\office.py" undo` |
