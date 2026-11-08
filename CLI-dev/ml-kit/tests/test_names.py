@@ -63,7 +63,7 @@ def test_no_sure_typo_function():
 ])
 def test_fuzzy_name_is_a_candidate(given, cols):
     msg = _resolve_error([given], cols)
-    assert "[추천]" not in msg and f"[후보] '{cols[0]}'" in msg and "사용자에게 물으십시오" in msg, msg
+    assert "[추천]" not in msg and f"[후보] 1) '{cols[0]}'" in msg and "사용자에게 물으십시오" in msg, msg
 
 
 @pytest.mark.parametrize("given,col", [
@@ -80,7 +80,7 @@ def test_equivalence_is_not_unit_case_or_ambiguous():
     msg = _resolve_error(["질량(mg)"], ["질량(Mg)"])                  # unit case counts: another unit
     assert "[추천]" not in msg and "[후보]" in msg, msg
     msg = _resolve_error(["온도(C)"], ["온도(°C)", "온도(℃)"])         # two equivalent columns: the user picks
-    assert "[추천]" not in msg and "[후보] '온도(°C)', '온도(℃)'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '온도(°C)' 2) '온도(℃)'" in msg, msg
 
 
 @pytest.mark.report
@@ -110,7 +110,7 @@ TYPOS = [("도핑농돜", "도핑농도"), ("생산량(kg)", "생산량")]
 def test_other_word_is_a_candidate(a, b):
     with pytest.raises(rt.InputError) as e:
         rt.resolve_column_names([a], [b, "생산량"], "피처(-x)")
-    assert "[추천]" not in str(e.value) and f"[후보] '{b}'" in str(e.value), str(e.value)
+    assert "[추천]" not in str(e.value) and f"[후보] 1) '{b}'" in str(e.value), str(e.value)
 
 
 @pytest.mark.parametrize("a,b", TYPOS)
@@ -118,7 +118,7 @@ def test_typo_is_a_candidate(a, b):
     # 2.9.33: a typo is a [후보] too (was [추천])
     with pytest.raises(rt.InputError) as e:
         rt.resolve_column_names([a], [b, "zzz"], "피처(-x)")
-    assert "[추천]" not in str(e.value) and f"[후보] '{b}'" in str(e.value), str(e.value)
+    assert "[추천]" not in str(e.value) and f"[후보] 1) '{b}'" in str(e.value), str(e.value)
 
 
 def test_typo_resolve_messages():
@@ -146,7 +146,7 @@ def test_close_word_is_a_candidate(a, b):
 @pytest.mark.parametrize("a,b", SURE)
 def test_former_sure_typo_is_a_candidate(a, b):
     msg = _resolve_error([a], [b, "zzz"])
-    assert "[추천]" not in msg and f"[후보] '{b}'" in msg, msg
+    assert "[추천]" not in msg and f"[후보] 1) '{b}'" in msg, msg
 
 
 def test_known_columns():
@@ -155,8 +155,8 @@ def test_known_columns():
 
 def test_unitless_name_against_unit_columns():
     msg = _resolve_error(["온두"], ["온도(°C)", "압력(bar)"])
-    assert "[추천]" not in msg and "[후보] '온도(°C)'" in msg, msg           # 2.9.31: 유사 컬럼 없음
-    assert "[후보] '온도(°C)'" in _resolve_error(["온돜"], ["온도(°C)", "압력(bar)"])       # 2.9.33: [추천]
+    assert "[추천]" not in msg and "[후보] 1) '온도(°C)'" in msg, msg           # 2.9.31: 유사 컬럼 없음
+    assert "[후보] 1) '온도(°C)'" in _resolve_error(["온돜"], ["온도(°C)", "압력(bar)"])       # 2.9.33: [추천]
     hint = mp._typo_hints(["온도(°C)"], ["온두"], ["온도(°C)"], True)
     assert len(hint) == 1 and "[후보] 온두" in hint[0], hint
 
@@ -248,7 +248,7 @@ def test_eval_never_suggests_a_target():
     assert "[추천]" not in str(e.value) and "타겟" in str(e.value), str(e.value)
     with pytest.raises(rt.InputError) as e:
         rt.apply_eval_expressions(df, ["d = 온돜 * 2"], target_cols=["생산량"])
-    assert "[후보] 온도" in str(e.value) and "[추천]" not in str(e.value), str(e.value)      # 2.9.33: [추천]
+    assert "[후보] 1) 온도" in str(e.value) and "[추천]" not in str(e.value), str(e.value)      # 2.9.33: [추천]
 
 
 def test_train_eval_typo_of_the_target(role_data):
@@ -261,7 +261,7 @@ def test_positive_class_candidates(role_data):
     proc, res = run_raw("ml_train.py", "-f", role_data["c"], "-x", "온도,압력", "-y", "판정", "--task", "classification",
                         "--positive-class", "불랑")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] 불량, 양품" in msg and "['" not in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) 불량 2) 양품" in msg and "['" not in msg, msg
 
 
 def _humid_rows(n=60, seed=1):
@@ -304,9 +304,9 @@ def _formula_error(expr, cols):
 
 def test_eval_unknown_name_wording():
     msg = _formula_error("d = 수율 * 2", ["수율(1차)", "수율(최종)", "온도"])
-    assert "[후보] 수율(1차), 수율(최종)" in msg and "['" not in msg.split("[사용 가능한")[0], msg
-    assert "-> [후보] 온도 " in _formula_error("d = 온두 * 2", ["온도", "압력"])     # 2.9.32: [추천] -> [후보]
-    assert "-> [후보] 온도 " in _formula_error("d = 온돜 * 2", ["온도", "압력"])     # 2.9.33: [추천] -> [후보]
+    assert "[후보] 1) 수율(1차) 2) 수율(최종)" in msg and "['" not in msg.split("[사용 가능한")[0], msg
+    assert "-> [후보] 1) 온도 " in _formula_error("d = 온두 * 2", ["온도", "압력"])     # 2.9.32: [추천] -> [후보]
+    assert "-> [후보] 1) 온도 " in _formula_error("d = 온돜 * 2", ["온도", "압력"])     # 2.9.33: [추천] -> [후보]
     msg = _formula_error("d = T3 - T1", ["T1", "T2"])
     assert "[추천]" not in msg and "[후보] T2" in msg, msg
 
@@ -430,11 +430,11 @@ def test_inline_typo_key_is_a_candidate(target_models):
     # a typo of a model input that is not given: [후보] (2.9.33, was [추천] '속도'; a close name may be another word)
     proc, res = run_raw("ml_predict.py", "-m", target_models["p1"], "-i", "압력=3,온도=180,속돜=45")
     msg = stop_msg(res, proc)
-    assert "[후보] 속돜 중 '속도'" in msg and "[추천]" not in msg, msg
+    assert "이름 중 '속도'(으)로 고칠 이름을 사용자에게 물으십시오: [후보] 1) 속돜" in msg and "[추천]" not in msg, msg
     # 2.9.32: '속두' (one common syllable for another) is [후보]
     proc, res = run_raw("ml_predict.py", "-m", target_models["p1"], "-i", "압력=3,온도=180,속두=45")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] 속두" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) 속두" in msg, msg
 
 
 def test_inline_exact_keys_ok_and_file_extra_columns_kept(target_models):
@@ -460,12 +460,12 @@ def test_one_name_for_two_inputs(humid_data):
     f = write_rows(os.path.join(str(humid_data["tmp"]), "sol.csv"), [["온도(°C)", "압력(bar)", "솔도"], [180, 3, 45]], [])
     proc, res = run_raw("ml_predict.py", "-m", humid_data["pm"], "-f", f, "--save", str(humid_data["tmp"] / "sol_out.csv"))
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and msg.count("[후보]") == 1 and "[후보] 속도, 습도" in msg, msg
+    assert "[추천]" not in msg and msg.count("[후보]") == 1 and "[후보] 1) 속도 2) 습도" in msg, msg
     hints = mp._typo_hints(["속도", "습도"], ["온도(°C)", "솔도"], ["온도(°C)", "속도", "습도"], False)
-    assert len(hints) == 1 and "[후보] 속도, 습도" in hints[0], hints
+    assert len(hints) == 1 and "[후보] 1) 속도 2) 습도" in hints[0], hints
     assert mp._typo_hints(["속도"], ["속돜"], ["속도"], True) == \
         ["'속도'이(가) 없습니다. -i의 [후보] 속돜 중 '속도'(으)로 고칠 이름을 사용자에게 물으십시오"]      # 2.9.33: [추천]
-    assert "[후보] 속두" in mp._typo_hints(["속도"], ["속두"], ["속도"], True)[0]     # 2.9.32: [추천] -> [후보]
+    assert "[후보] 1) 속두" in mp._typo_hints(["속도"], ["속두"], ["속도"], True)[0]     # 2.9.32: [추천] -> [후보]
     assert "[추천]" not in mp._typo_hints(["속도"], ["습도"], ["속도"], True)[0]
 
 
@@ -485,10 +485,10 @@ def test_spaced_unit_is_exact(humid_data):
 def test_common_syllable_typo_cli_is_a_candidate(role_data):
     proc, res = run_raw("ml_predict.py", "-m", role_data["pm"], "-i", "온도=180,압력=3,속도=45,습두=50")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] 습두" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) 습두" in msg, msg
     proc, res = run_raw("ml_predict.py", "-m", role_data["pm"], "-i", "온도=180,압력=3,속도=45,습돜=50")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] 습돜" in msg, msg                 # 2.9.33: was [추천] '습도'
+    assert "[추천]" not in msg and "[후보] 1) 습돜" in msg, msg                 # 2.9.33: was [추천] '습도'
 
 
 def test_find_inputs_never_suggest_each_other(role_data):
@@ -565,7 +565,7 @@ def test_alias_pair_one_feature_refused(alias_models, inline):
         got = [split_command(c["command"])[-1] for c in res["confirm_commands"]]
         assert got == ["온도=180,압력(bar)=3", "온도(°C)=182,압력(bar)=3"], got
     else:                                 # JSON 형식은 목록을 나눌 수 없어 값 목록만
-        assert "[후보] 온도=180, 온도(°C)=182" in res["message"] and "confirm_commands" not in res, res
+        assert "[후보] 1) 온도=180 2) 온도(°C)=182" in res["message"] and "confirm_commands" not in res, res
 
 
 @pytest.mark.parametrize("other", ["온도(C)", "온도(℃)", "온도( °C)"])
@@ -581,7 +581,7 @@ def test_alias_pair_with_degree_spelling_refused(alias_models, other):
 
 def test_alias_pair_ml_map_and_find(alias_models):
     proc, res = run_raw("ml_map.py", "-f", alias_models["unit_f"], "-i", '{"온도":180,"온도(°C)":182}', "-y", "수율")
-    assert proc.returncode == 1 and "[후보] 온도=180, 온도(°C)=182" in res["message"], res
+    assert proc.returncode == 1 and "[후보] 1) 온도=180 2) 온도(°C)=182" in res["message"], res
     proc, res = run_raw("ml_predict.py", "-m", alias_models["unit"], "--find", "수율=100", "--vary", "압력(bar)",
                         "-i", "온도=180,온도(°C)=182")
     assert proc.returncode == 1 and "[후보] 1) 온도=180 2) 온도(°C)=182" in res["message"], res
@@ -590,7 +590,7 @@ def test_alias_pair_ml_map_and_find(alias_models):
 def test_json_repeated_key_refused(alias_models):
     with pytest.raises(rt.InputError) as e:
         rt.parse_inline_input('{"온도(°C)":180,"온도(°C)":190}')
-    assert "두 번" in str(e.value) and "[후보] 온도(°C)=180, 온도(°C)=190" in str(e.value)
+    assert "두 번" in str(e.value) and "[후보] 1) 온도(°C)=180 2) 온도(°C)=190" in str(e.value)
     p = os.path.join(str(alias_models["tmp"]), "in.json")
     with open(p, "w", encoding="utf-8") as f:
         f.write('[{"온도(°C)":180,"압력(bar)":3,"압력(bar)":4}]')
@@ -685,7 +685,7 @@ def test_same_unit_close_name_is_a_candidate(unit_models):
 def test_candidates_marked(unit_models):
     proc, res = run_raw("ml_map.py", "-f", unit_models["p3_f"], "-i", "압력(MPa)=0.3", "-y", "생산량")
     msg = stop_msg(res, proc)
-    assert "[후보] '압력(bar)'(단위 다름: 값 환산 필요), '압력차(bar)'(단위 다름: 값 환산 필요)" in msg, msg
+    assert "[후보] 1) '압력(bar)'(단위 다름: 값 환산 필요) 2) '압력차(bar)'(단위 다름: 값 환산 필요)" in msg, msg
     proc, res = run_raw("ml_predict.py", "-m", unit_models["p3"], "--find", "생산량=530", "--vary", "온도",
                         "-i", "압력(MPa)=0.3")
     msg = stop_msg(res, proc)
@@ -734,7 +734,7 @@ def test_inline_unitless_name_next_to_the_target_asks(role_data):
     # 2.9.33: the excluded '수율(최종)' (the -y column) is never a [후보] (was "[후보] '수율(1차)', '수율(최종)'")
     assert "[추천]" not in msg and "[후보] 1) '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
     msg = _resolve_error(["수율"], ["온도", "수율(1차)", "수율(최종)"], exclude=["수율(최종)"])
-    assert "[추천]" not in msg and "[후보] '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '수율(1차)' (비슷한 '수율(최종)'" in msg, msg
 
 
 def test_map_find_vary_never_suggest_each_other(role_data):
@@ -773,7 +773,7 @@ def test_points_near_name_refused(points_map_data):
     p = _points_in(tmp, "sp.csv", ["온도", "반응압룍(bar)"], [[180, 2.0], [180, 4.0]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1.xlsx"))
     msg = stop_msg(res, proc)
-    assert "[후보] '반응압력(bar)'" in msg and "반응압룍(bar)" in msg and "[추천]" not in msg, msg     # 2.9.33: [추천]. 이름이 조회 파일 머리글에 있어 명령으로 고칠 수 없음 (번호 없음)
+    assert "[후보] 1) '반응압력(bar)'" in msg and "반응압룍(bar)" in msg and "[추천]" not in msg, msg     # 2.9.33: [추천]. 이름이 조회 파일 머리글에 있어 명령으로 고칠 수 없음 (번호 없음)
     # 2.9.31: '반응 압력(bar)' (the same name and unit spaced otherwise) is the key itself
     p = _points_in(tmp, "sp1.csv", ["온도", "반응 압력(bar)"], [[180, 2.0], [180, 4.0]])
     proc, res = run_raw("ml_map.py", "-f", data, "--points", p, "-y", "생산량", "--save", str(tmp / "o1b.xlsx"))
@@ -820,15 +820,15 @@ def test_points_other_word_is_no_recommendation(humid_data):
     pts = data_file(humid_data, "h2.csv", ["온도(°C)", "압력(bar)", "습도2"], [[180, 3, 1], [185, 3.5, 2]])
     proc, res = _map_points(humid_data, pts, "-y", "생산량")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '습도'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '습도'" in msg, msg
     pts = data_file(humid_data, "sp.csv", ["온도(°C)", "압력 (bar)", "속두"], [[180, 3, 45], [185, 3.5, 46]])
     proc, res = _map_points(humid_data, pts, "-y", "생산량")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '속도'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '속도'" in msg, msg
     pts = data_file(humid_data, "sp1.csv", ["온도(°C)", "압력 (bar)", "속돜"], [[180, 3, 45], [185, 3.5, 46]])
     proc, res = _map_points(humid_data, pts, "-y", "생산량")
     msg = stop_msg(res, proc)                                       # 2.9.33: every close name is [후보] (was [추천])
-    assert "[추천]" not in msg and "[후보] '속도'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '속도'" in msg, msg
     pts = data_file(humid_data, "sp2.csv", ["온도(°C)", "압력 (bar)", "속도"], [[180, 3, 45], [185, 3.5, 46]])
     ok_res(*reversed(_map_points(humid_data, pts, "-y", "생산량")))
 
@@ -847,7 +847,7 @@ def test_points_without_y_candidate_has_the_y_guidance(role_data):
     out = str(role_data["tmp"] / "h2_o.xlsx")
     proc, res = run_raw("ml_map.py", "-f", role_data["p"], "--points", pts, "--save", out, "--overwrite")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '습도'" in msg and "-y에 구할 열" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '습도'" in msg and "-y에 구할 열" in msg, msg
 
 
 @pytest.mark.parametrize("col", ["수율 실측", "수율_실측", "목표수율", "수율목표"])
@@ -864,7 +864,7 @@ def test_points_near_key_name_still_stops(name_files):
     pts = data_file(name_files, "p_near.csv", ["온도", "압력", "솎도"], [[170, 3, 20]])
     proc, res = run_raw("ml_map.py", "-f", name_files["d"], "--points", pts, "-y", "생산량")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] '속도'" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) '속도'" in msg, msg
 
 
 def test_points_without_y_guidance_only_for_names(name_files):
@@ -886,7 +886,7 @@ def test_points_key_column_with_target_name_stops(percent_files):
     pts = data_file(percent_files, "p_cool.csv", ["냉각수 온도(°C)", "유량"], [[20, 3], [28, 3]])
     proc, res = run_raw("ml_map.py", "-f", percent_files["cool"], "--points", pts, "-y", "온도", "--save", data_path(percent_files, "o1"))
     msg = stop_msg(res, proc)
-    assert "[후보] '냉각수온도'" in msg and "[추천]" not in msg, msg
+    assert "[후보] 1) '냉각수온도'" in msg and "[추천]" not in msg, msg
 
 
 @pytest.mark.parametrize("src,col,target,cand", [
@@ -898,7 +898,7 @@ def test_points_moisture_column_with_target_name_stops(percent_files, src, col, 
                 [[160, 6, "a"], [180, 14, "b"]])
     proc, res = run_raw("ml_map.py", "-f", percent_files[src], "--points", pts, "-y", target, "--save", data_path(percent_files, "o2"))
     msg = stop_msg(res, proc)
-    assert f"[후보] '{cand}'" in msg and "[추천]" not in msg, msg
+    assert f"[후보] 1) '{cand}'" in msg and "[추천]" not in msg, msg
 
 
 @pytest.mark.parametrize("col,target", [("수율_실측", "수율(최종)"), ("목표수율", "수율(최종)"),
@@ -937,13 +937,13 @@ def test_points_moisture_like_column_stops(near_name_files, col):
     proc, res = run_raw("ml_map.py", "-f", near_name_files["grid"], "--points", pts, "-y", "수율",
                         "--save", data_path(near_name_files, "o_s"))
     msg = stop_msg(res, proc)
-    assert "[후보] '함수율'" in msg and "[추천]" not in msg, msg
+    assert "[후보] 1) '함수율'" in msg and "[추천]" not in msg, msg
 
 
 def test_points_cooling_key_still_stops(near_name_files):
     pts = data_file(near_name_files, "p_cool.csv", ["시간", "냉각수 온도(°C)"], [[160, 25]])
     proc, res = run_raw("ml_map.py", "-f", near_name_files["cool"], "--points", pts, "-y", "온도", "--save", data_path(near_name_files, "o_c"))
-    assert "[후보] '냉각수온도'" in stop_msg(res, proc)
+    assert "[후보] 1) '냉각수온도'" in stop_msg(res, proc)
 
 
 # 위치·단 키 열('온도_1' / 데이터 '온도(1)', -y '온도(3)')은 구두점을 빼고 비교해 가깝다고 본다 (2.9.35는 버려서 VERIFIED).

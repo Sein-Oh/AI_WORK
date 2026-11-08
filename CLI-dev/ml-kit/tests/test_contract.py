@@ -188,16 +188,18 @@ def test_predict_missing_inputs_offer_median_fill(trained):
     assert ok["predictions_summary"][TARGET]["predictions"] and not ok.get("missing_input_warning")
     # a misspelled key is not filled: the usual [후보] for the name
     bad = run_fail("ml_predict.py", "-m", vdir, "-i", "반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함럄=20")
-    assert bad["error_type"] == "input" and "[후보]" in bad["message"], bad
+    assert bad["error_type"] == "needs_user_decision" and "[후보] 1) " in bad["message"] and bad["confirm_commands"], bad
 
 
 def test_train_target_in_features_offers_both_commands(trained):
-    """2.9.55: a target also in -x -> [후보] of two full commands (out of -y / out of -x), also in next_commands."""
+    """2.9.55: a target also in -x -> [후보] of two full commands (out of -y / out of -x). The user picks: they are
+    confirm_commands (needs_user_decision), never next_commands (run without asking)."""
     _, data, _ = trained
     payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
                        "-y", "생산효율(%),수분함량(%)", "--desc", "누수 시험")
-    assert "타겟 누수:" in payload["message"] and "[후보] 1) python" in payload["message"]
-    one, two = (split_command(c["command"]) for c in payload["next_commands"])
+    assert "타겟 누수:" in payload["message"] and "[후보] 1) " in payload["message"] and " 2) " in payload["message"]
+    assert payload["error_type"] == "needs_user_decision" and "next_commands" not in payload, payload
+    one, two = (split_command(c["command"]) for c in payload["confirm_commands"])
     assert one[one.index("-y") + 1] == "생산효율(%)" and "수분함량(%)" in one[one.index("-x") + 1]
     assert two[two.index("-x") + 1] == "반응온도(°C),소비전력(kW)" and two[two.index("-y") + 1] == "생산효율(%),수분함량(%)"
     assert "--desc" in one and "--desc" in two                                    # the other options are kept
@@ -220,7 +222,7 @@ def test_offered_commands_survive_each_shell(trained, monkeypatch, shell):
     payload = run_fail("ml_train.py", "-f", data, "-x", "반응온도(°C),소비전력(kW),수분함량(%)",
                        "-y", "생산효율(%),수분함량(%)", "--desc", desc, "--exclude-where", where)
     assert "타겟 누수:" in payload["message"], payload
-    for c in payload["next_commands"]:
+    for c in payload["confirm_commands"]:
         argv = shell_sim.run_shell(c["command"], shell)
         assert argv[argv.index("--desc") + 1] == desc and argv[argv.index("--exclude-where") + 1] == where, c["command"]
 
@@ -797,3 +799,44 @@ def test_find_goal_in_wrong_option_is_not_turned_into_inputs(p1_model):
     """2.9.76 검토: '--goal "생산량=60" --vary 온도'가 [추천] -i 생산량=60으로 고쳐져 목표값이 입력으로 들어갔음."""
     proc, res = run_raw("ml_predict.py", "-m", p1_model["v"], "--goal", "생산량=600", "--vary", "온도(°C)")
     assert proc.returncode == 2 and " -i " not in res["message"], res
+
+
+# ---- 2.9.79: 구조 정리 (스레드, [후보] 전체 명령, 파일 재시도) ------------------------------------------------------
+
+def test_small_tables_fit_with_one_thread():
+    """작은 표는 한 스레드가 더 빠름 (60행: 모든 코어 6.2초, 한 스레드 0.01초). 결과는 스레드 수와 무관."""
+    assert rt.model_jobs(100) == 1 and rt.model_jobs(rt.MANY_THREADS_ROWS) == -1
+    import ml_train
+    for m in ml_train.get_regression_models(n_rows=100).values():
+        assert getattr(m, "n_jobs", None) in (None, 1), m
+
+
+def test_numbered_candidates_carry_their_full_commands(monkeypatch):
+    """[후보]는 늘 번호. ask()로 만든 [후보]가 든 message의 InputError는 같은 번호의 confirm_commands를 가진다
+    (글만 돌려주는 도우미도 전체 명령을 준다: 사용법 단순성 2번)."""
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "-f", "d.csv", "-x", "온두,압력", "-y", "y"])
+    monkeypatch.setattr(rt, "_ASKED", [])
+    text = rt.ask(["온도", "온도2"], [rt.command_replacing("온두", c) for c in ("온도", "온도2")], "{}")
+    assert text.startswith("[후보] 1) 온도 2) 온도2")
+    e = rt.InputError(f"'온두' 없음: {text}")
+    assert e.error_type == "needs_user_decision" and len(e.extra["confirm_commands"]) == 2
+    assert "-x 온도2,압력" in e.extra["confirm_commands"][1]["command"]
+    assert "confirm_commands" not in rt.InputError("다른 오류").extra            # 그 글이 없는 오류에는 붙지 않음
+    assert rt.numbered(["a", "b"], [None, None], "{}") == ("[후보] 1) a 2) b", [])   # 명령이 없어도 번호
+
+
+def test_retry_fs_waits_for_windows_lock_errors(monkeypatch):
+    """winerror 32/33(공유·잠금 위반)도 재시도하고(office-cli와 같은 규칙), 없는 파일은 바로 올린다."""
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    calls = []
+
+    def locked():
+        calls.append(1)
+        if len(calls) < 3:
+            e = OSError("locked")
+            e.winerror = 32
+            raise e
+        return "ok"
+    assert rt.retry_fs(locked) == "ok" and len(calls) == 3
+    with pytest.raises(FileNotFoundError):
+        rt.retry_fs(lambda: (_ for _ in ()).throw(FileNotFoundError("x")))

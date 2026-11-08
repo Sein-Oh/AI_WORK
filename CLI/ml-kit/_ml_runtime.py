@@ -53,7 +53,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.78"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.79"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -3651,14 +3651,23 @@ def apply_eval_expressions(
 # C6. Windows-safe File Operations
 # ==============================================================================
 
+def _transient_fs_error(e: OSError) -> bool:
+    """An error that may clear after a short wait: access denied, sharing or lock violation (winerror 5/32/33),
+    the same rule as office-cli (CLI-dev/README.md R4)."""
+    return isinstance(e, PermissionError) or getattr(e, "winerror", None) in (5, 32, 33)
+
+
 def retry_fs(fn: Callable[[], Any], attempts: int = 6, delay: float = 0.5) -> Any:
-    """Retries a filesystem call that may transiently fail on Windows (antivirus/indexer/Explorer handles)."""
+    """Retries a filesystem call that may transiently fail on Windows (antivirus/indexer/Explorer handles).
+    Other errors (missing file, disk full) are raised at once; no wait after the last try."""
     for i in range(attempts):
         try:
             return fn()
-        except PermissionError:
+        except OSError as e:
+            if not _transient_fs_error(e):
+                raise
             if i == attempts - 1:
-                record_recovery_attempt(f"파일 작업 {attempts}회 재시도 실패")
+                record_recovery_attempt(f"파일 작업 {attempts}회 재시도 실패 ({type(e).__name__})")
                 raise
             time.sleep(delay * (i + 1))
 
@@ -4356,7 +4365,7 @@ def _no_repeated_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
         if k in out:
             vals = [f"{k}={json.dumps(x, ensure_ascii=False)}" for kk, x in pairs if kk == k]
             raise InputError(f"입력 JSON의 한 객체에 '{k}'가 두 번 있습니다. 한 객체는 한 행입니다. 사용자에게 어느 값인지 "
-                             f"물으십시오: [후보] {', '.join(vals)}")
+                             f"물으십시오: {ask(vals, [])}")
         out[k] = v
     return out
 

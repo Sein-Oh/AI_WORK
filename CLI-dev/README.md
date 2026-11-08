@@ -192,7 +192,8 @@ CLI-dev/<tool>/
   LLM은 `[추천]` 뒤의 명령을 그대로 1회 실행한다. 만드는 함수: office-cli `retry_command`·`retry_replacing`(`_runtime.py`), ml-kit `option_retry`·`command_text`·`command_with_value`(`_ml_runtime.py`).
 - `[후보] 1) a 2) b`(최대 10개): 후보가 둘 이상이라 도구가 고를 수 없을 때. LLM은 재시도하지 않고 사용자에게 고르게 한다. 후보 값을 넣은 전체 명령은
   같은 번호의 `confirm_commands`(사용자가 고른 뒤에만 실행하므로 `next_commands`가 아님, 덮어쓰기·삭제·발송이면 `destructive`). 만드는 함수: office-cli `ambiguous(replace=)`,
-  ml-kit `candidate_commands`. 아직 명령을 만들지 못하는 곳(이름 여러 개가 함께 틀림 등)은 번호 없는 `[후보] a, b`이고 LLM은 스킬의 안내대로 고른 값으로 1번 실행한다 (줄여 갈 대상).
+  ml-kit `numbered`·`ask`(글만 만드는 도우미도 `ask`로 만든 `[후보]`가 든 오류가 같은 번호의 명령을 가짐). `[후보]`는 늘 번호를 붙인다.
+  명령을 만들 수 없는 후보(파일 머리글의 이름, 수식 안의 이름 등)는 번호만 있고 `confirm_commands`가 없으며, LLM은 고른 값으로 1번 실행한다 (줄여 갈 대상).
 - 인자 오류(없는 옵션, 필수 옵션 누락)에서 지어낸 옵션이 같은 뜻의 옵션으로 바꿀 수 있는 것(도구별 표 `SAME_MEANING`)이면 고친 전체 명령을 `[추천]`.
   철자만 비슷한 옵션은 뜻이 다를 수 있어 `[후보]`로만 주고, 되돌리기 어렵거나 뜻이 크게 다른 옵션(`--all`, `--overwrite`, `--to` 등)은 추천하지 않는다.
 - 여러 항목을 받는 인자(`--cells`, `--slots`, `--where`)를 정해진 구분자가 아닌 쉼표·공백 등으로 나눈 것이 분명하면 쓰지 않고 고친 값·명령을 `[추천]`

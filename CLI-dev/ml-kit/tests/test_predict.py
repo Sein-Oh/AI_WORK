@@ -81,7 +81,7 @@ def test_kv_alias_and_full_name_refused():
     # (a model can have both '온도' and '온도(°C)'; test_names.py의 별칭 쌍 검사)
     with pytest.raises(rt.InputError) as e:
         rt.check_same_column(["온도", "온도(°C)"], ["온도(°C)", "온도(°C)"], "-i", {"온도": "180", "온도(°C)": "190"})
-    assert "[후보] 온도=180, 온도(°C)=190" in str(e.value)
+    assert "[후보] 1) 온도=180 2) 온도(°C)=190" in str(e.value)
     # two different units are two columns; a plain row still parses
     assert list(rt.parse_inline_input("온도(°C)=180,온도(K)=453").columns) == ["온도(°C)", "온도(K)"]
     assert rt.parse_inline_input("라인=A,B,온도=180").iloc[0].to_dict() == {"라인": "A,B", "온도": "180"}
@@ -111,10 +111,10 @@ def tiny(tmp_path_factory):
 def test_inline_typo_points_at_the_user_key(tiny):
     bad = run_fail("ml_predict.py", "-m", tiny["v"], "-i", "도핑농돜=5e-6,온도=5")
     # 2.9.33: [후보] (was "-i의 '도핑농돜' -> [추천] '도핑농도'"; 2.9.12: "'도핑농도' -> [추천] ['도핑농두']")
-    assert "-i의 [후보] 도핑농돜 중 '도핑농도'" in bad["message"] and "[추천]" not in bad["message"], bad["message"]
+    assert "-i의 이름 중 '도핑농도'(으)로 고칠 이름을 사용자에게 물으십시오: [후보] 1) 도핑농돜" in bad["message"] and "[추천]" not in bad["message"], bad["message"]
     # 2.9.32: '도핑농두' (one common syllable for another) is [후보], the user picks
     bad = run_fail("ml_predict.py", "-m", tiny["v"], "-i", "도핑농두=5e-6,온도=5")
-    assert "[추천]" not in bad["message"] and "-i의 [후보] 도핑농두 중 '도핑농도'" in bad["message"], bad["message"]
+    assert "[추천]" not in bad["message"] and "-i의 이름 중 '도핑농도'(으)로 고칠 이름을 사용자에게 물으십시오: [후보] 1) 도핑농두" in bad["message"], bad["message"]
 
 
 # ---- 예측 결과: 작은 값, 외삽 경고, 빈 입력, 결과 파일 --------------------------------------------------
@@ -275,7 +275,7 @@ def test_inputs_errors(hill):
     d, path, vdir = hill
     cat = run_tool("ml_train.py", "-f", str(path), "-x", "반응온도,압축압력,라인", "-y", "생산효율")
     miss = run_fail("ml_predict.py", "-m", cat["version_dir"], "--find", "생산효율=105", "--vary", "반응온도", "-i", "압축압력=3")
-    assert "[후보] A, B" in miss["message"]                                        # category never guessed
+    assert "[후보] 1) A 2) B" in miss["message"]                                        # category never guessed
     ok = run_tool("ml_predict.py", "-m", cat["version_dir"], "--find", "생산효율=105", "--vary", "반응온도",
                   "-i", "압축압력=3,라인=A")
     assert ok["status"] == "ok"
@@ -634,7 +634,7 @@ def test_whatif_unknown_category_stops_with_candidates(line_model):
     for opt in (["--sweep", "온도"], ["--maximize", "수율", "--vary", "온도"], ["--find", "수율=60", "--vary", "온도"]):
         bad = run_fail("ml_predict.py", "-m", line_model, *opt, "-i", "라인=라인C")
         assert bad["agent_directive"].startswith("STOP_RETRY"), bad
-        assert "[후보] A, B, C" in bad["message"] and "라인C" in bad["message"], bad["message"]
+        assert "[후보] 1) A 2) B 3) C" in bad["message"] and "라인C" in bad["message"], bad["message"]
 
 
 def test_whatif_category_case_width_space_recovered(line_model):
@@ -682,10 +682,10 @@ def test_model_given_as_data_file_uses_best_version(p1_model, tmp_path):
     shutil.copytree(root, copy)
     os.remove(copy / "best_version.json")
     shutil.copy(p1_model["f"], tmp_path / "p1.csv")
-    msg = run_fail("ml_predict.py", "-m", str(tmp_path / "p1.csv"), "-i", "온도=180,압력=3,속도=45")["message"]
-    first = msg.split("[후보] 1) ", 1)[1].split(" / ")[0]
-    argv = split_command(first)
-    assert argv[0] == "python" and argv[argv.index("-m") + 1] == str(copy / "v1"), msg
+    err = run_fail("ml_predict.py", "-m", str(tmp_path / "p1.csv"), "-i", "온도=180,압력=3,속도=45")
+    assert "[후보] 1) v1" in err["message"] and err["error_type"] == "needs_user_decision", err
+    argv = split_command(err["confirm_commands"][0]["command"])
+    assert argv[0] == "python" and argv[argv.index("-m") + 1] == str(copy / "v1"), err
 
 
 # ---- 2.9.72: 다음 실험 제안(--suggest), 입력별 영향(explain), 실제값 비교와 재학습 알림(actual_check) -------------

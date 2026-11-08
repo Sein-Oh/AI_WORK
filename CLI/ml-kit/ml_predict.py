@@ -372,8 +372,8 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
         elif cands:
             shown = unit_marked(cands, m)
             cmds = [command_replacing(c, m) for c in cands] if is_inline else []
-            out.append(f"'{m}'이(가) 없습니다. {where} {ask(shown, cmds, f'{{}}을(를) {m}(으)로')} 중 '{m}'(으)로 고칠 이름을 "
-                       f"사용자에게 물으십시오")
+            out.append(f"'{m}'이(가) 없습니다. {where} 이름 중 '{m}'(으)로 고칠 이름을 사용자에게 물으십시오: "
+                       f"{ask(shown, cmds, f'{{}}을(를) {m}(으)로')}")
     return out
 
 

@@ -254,7 +254,7 @@ def test_several_header_rows_with_every_input_stop_with_candidates(tmp_path):
     p = write_book(tmp_path / "two.xlsx", [["시험 기록", "작성자 홍"], ["온도", "압력"], ["비고"], ["온도", "압력"],
                                        [150, 30], [160, 31]])
     bad = run_fail("ml_predict.py", "-m", v, "-f", p)
-    assert "[후보] --header-row" in bad["message"] and "recovered" not in bad, bad      # the tool does not guess
+    assert "[후보] 1) " in bad["message"] and bad["confirm_commands"][0]["command"].count("--header-row") == 1 and "recovered" not in bad, bad      # the tool does not guess
 
 
 @pytest.fixture(scope="module")

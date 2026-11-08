@@ -1229,7 +1229,7 @@ def test_report_m_path_unchanged(tmp_path):
 def test_best_task_without_history_is_a_candidate():
     with pytest.raises(rt.InputError) as e:
         mt._tasks_to_build([{"task": "regression"}], "classification", "h.jsonl")
-    assert "[추천]" not in str(e.value) and "[후보] --task regression" in str(e.value), str(e.value)
+    assert "[추천]" not in str(e.value) and "[후보] 1) regression" in str(e.value), str(e.value)
 
 
 # ---- 중요 입력 top_features ----------------------------------------------------------------------------
