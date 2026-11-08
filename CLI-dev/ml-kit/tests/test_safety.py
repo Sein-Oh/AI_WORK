@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_sample  # noqa: E402
 from mlkit_helpers import DEV, FEATURES, TARGET, run_raw, run_tool, split_command  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 
 
 # ---- 학습 버전 폴더: 불완전한 폴더 보존, --overwrite, 트랜잭션 ----------------------------------
@@ -204,13 +204,13 @@ def test_report_default_name_is_not_overwritten(work):
 
 def test_timestamp_suffix_is_not_doubled(tmp_path):
     p = tmp_path / "a_pred_20260101_101010.csv"
-    alt = mp._timestamped(str(p))
+    alt = rt._timestamped(str(p))
     stem = os.path.splitext(os.path.basename(alt))[0]
     assert stem.startswith("a_pred_") and stem.count("_") == 3       # a_pred_<date>_<time>
 
 
 def test_lock_fallback_reports_recovered(tmp_path, monkeypatch):
-    monkeypatch.setattr(mp, "_RECOVERED", [])
+    monkeypatch.setattr(rt, "_RECOVERED", [])
     calls = []
 
     def writer(p):
@@ -218,9 +218,9 @@ def test_lock_fallback_reports_recovered(tmp_path, monkeypatch):
         if len(calls) == 1:
             raise PermissionError("locked")
         open(p, "w").close()
-    saved = mp.save_with_lock_fallback(str(tmp_path / "r.docx"), writer, what="Word 보고서")
+    saved = rt.save_with_lock_fallback(str(tmp_path / "r.docx"), writer, what="Word 보고서")
     assert saved != str(tmp_path / "r.docx") and os.path.exists(saved)
-    assert len(mp._RECOVERED) == 1 and "r.docx 잠김" in mp._RECOVERED[0]
+    assert len(rt._RECOVERED) == 1 and "r.docx 잠김" in rt._RECOVERED[0]
 
 
 # ---- 실기 러너 tools/run_win_tests.py (Windows 전용 모듈은 가짜로 채움) --------

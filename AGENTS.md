@@ -153,10 +153,12 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 
 ## 도구별 규칙
 ### ml-kit
-- 공통 런타임(`run_cli`, `JsonArgumentParser`, 복구 함수)은 `ml_predict.py` PART C에 있다.
+- 공통 런타임(`run_cli`, `JsonArgumentParser`, 복구 함수, 데이터 로딩, 버전 고르기, `-i` 해석)은 `_ml_runtime.py`에 있다 (진입점 아님, 스킬에 적지 않음).
 - 산출물 레이아웃(`<stem>_ml_data/history.jsonl`, `vX/model_<target>.joblib|json`)과 원장 스키마는 바꿔도 된다 (베타). 바꾸면 이전 버전 폴더는 다시 학습해서 쓴다.
-- 학습과 추론이 같아야 하는 로직(데이터 로딩, 수치 변환, `--eval` 수식)은 `ml_predict.py` PART C 한 곳에만 둔다.
-- `ml_predict.py`는 다른 ml-kit 파일을 import하지 않는다 (모델 폴더와 함께 단독 배포). `ml_train.py`/`ml_report.py`가 `ml_predict.py`를 import한다.
+- 학습과 추론이 같아야 하는 로직(데이터 로딩, 수치 변환, `--eval` 수식)은 `_ml_runtime.py` 한 곳에만 둔다.
+- 진입점(`ml_train.py`, `ml_predict.py`, `ml_report.py`, `ml_export.py`, `ml_map.py`)은 공통으로 `_ml_runtime.py`만 import한다. 아무도 `ml_predict.py`를
+  import하지 않고, `_ml_runtime.py`는 진입점을 import하지 않는다 (예외: 학습을 다시 쓰는 `ml_export` -> `ml_train`, `ml_report` -> `ml_train`·`ml_export`).
+  예측만 하는 PC에는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더를 복사한다. 검사: `tests/test_contract.py`.
 ### office-cli
 - 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`.
 - 세션(`open_target`/`write_session` with 블록) 밖에서 그 안의 COM 객체(시트, 범위, 문서)를 읽지 않는다. 닫힌 파일은 블록이 끝나면 문서와

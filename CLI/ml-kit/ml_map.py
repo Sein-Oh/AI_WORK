@@ -17,14 +17,14 @@ Data shape is decided automatically from the numeric key columns (1-3):
 Every answer lists the rows it used (Excel row numbers) and their weights, plus the 5 nearest measured rows.
 The data file is never modified. Rows with text in the '제외' column (other than '포함') are not used.
 
-Shared runtime (data loading, column matching, CLI protocol) is imported from ml_predict.py.
+Shared runtime (data loading, column matching, CLI protocol) is imported from _ml_runtime.py.
 """
 import re
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, ColumnNameError, resolve_column_names, coerce_numeric,
     percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,

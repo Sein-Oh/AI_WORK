@@ -54,7 +54,7 @@ EXPECT = {
     "M6": "보고서 status=ok, Word로 열림, 표 5개 이상, 문서 첫 문단에 '보고서' 포함",
     "M7": "보고서가 Word에 열려 있으면 (--overwrite를 줘도) status=ok, report_file이 기존 파일과 다른 새 파일, recovered에 '잠김'",
     "M8": "next_commands의 needs_input이 자리표시자('<') 유무와 일치, needs_input=false인 첫 명령을 cmd.exe와 PowerShell에 그대로 넣어 둘 다 status=ok",
-    "M9": "ml_predict.py + v1 폴더만 있는 배포 폴더에서 단건 예측 status=ok, predictions와 intervals 존재",
+    "M9": "ml_predict.py + _ml_runtime.py + v1 폴더만 있는 배포 폴더에서 단건 예측 status=ok, predictions와 intervals 존재",
     "M10": "2만 행 학습 300초 미만, 예측 60초 미만, 둘 다 status=ok",
     "M11": "같은 데이터 동시 학습: 두 번째는 status=error + STOP_RETRY + exit 1, 첫 번째는 status=ok",
     "M12": "학습 강제 종료 뒤 재학습 status=ok, .tmp_* 임시 폴더가 남지 않고 새 버전 생성",
@@ -233,7 +233,7 @@ DIR_MARKER = ".created_by_ml-kit-tests"
 def prepare_test_dir(path):
     """테스트 폴더를 새로 준비한다. 러너가 만든 폴더(표식 파일)나 빈 폴더만 지우고 쓴다.
     사용자의 다른 폴더를 --dir로 잘못 줘도 지우지 않는다."""
-    from ml_predict import remove_tree
+    from _ml_runtime import remove_tree
     if os.path.isdir(path) and os.listdir(path):
         if not os.path.exists(os.path.join(path, DIR_MARKER)):
             raise RuntimeError(
@@ -423,14 +423,15 @@ def test_all(ctx, only):
         vd = (s.get("m1") or {}).get("version_dir")
         dep = ctx.path("배포 폴더")
         os.makedirs(dep, exist_ok=True)
-        shutil.copy2(os.path.join(ROOT, "ml_predict.py"), dep)
+        for f in ("ml_predict.py", "_ml_runtime.py"):
+            shutil.copy2(os.path.join(ROOT, f), dep)
         shutil.copytree(vd, os.path.join(dep, "v1"), dirs_exist_ok=True)
         d, c, o, e = run_tool(os.path.join(dep, "ml_predict.py"), "-m", "v1",
                               "-i", "일시=2026-01-20 10:00,라인=B,반응온도=240,소비전력=65,압축압력=3,촉매비율=0.8,수분함량=20",
                               cwd=dep, label="ml_predict.py (배포 폴더)")
         summary = ((d or {}).get("predictions_summary") or {}).get("생산효율(%)", {})
         ok = ok_(d) and summary.get("predictions") and summary.get("intervals")
-        record(ctx, "M9", "단독 배포 폴더(ml_predict.py + v1만)에서 예측", ok,
+        record(ctx, "M9", "단독 배포 폴더(ml_predict.py + _ml_runtime.py + v1만)에서 예측", ok,
                f"예측={summary.get('predictions')}, 범위={summary.get('intervals')}", d, c, e)
 
     def m10():

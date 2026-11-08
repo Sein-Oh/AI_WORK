@@ -23,7 +23,7 @@ from make_sample import make_class_sample, make_sample  # noqa: E402
 from mlkit_helpers import (split_command, FEATURES, HAS_DOCX, HAS_MPL, KIT, TARGET, ok_res, run_fail, run_raw, run_tool,  # noqa: E402
                            stop_msg, write_df)
 import ml_export as mx  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 import ml_report as mr  # noqa: E402
 import ml_train as mt  # noqa: E402
 
@@ -277,7 +277,7 @@ def make_damaged_default(path):
 @pytest.fixture
 def recovered(monkeypatch):
     lst = []
-    monkeypatch.setattr(mp, "_RECOVERED", lst)
+    monkeypatch.setattr(rt, "_RECOVERED", lst)
     return lst
 
 
@@ -341,7 +341,7 @@ def test_both_templates_broken_is_stop_retry(tmp_path, monkeypatch, recovered):
     not_zip.write_bytes(b"DRM-ENCRYPTED\x00\x01")  # like pptx/templates/default.pptx on the company PC
     monkeypatch.setattr(docx.api, "_default_docx_path", lambda: str(not_zip))
     monkeypatch.setattr(mr, "docx_template_dir", lambda: str(tmp_path / "없는폴더"))
-    with pytest.raises(mp.InputError) as ei:
+    with pytest.raises(rt.InputError) as ei:
         mr.new_report_document()
     assert "python -m pip install --force-reinstall python-docx" in str(ei.value)
 
@@ -953,7 +953,7 @@ def test_export_blocked_fit_cache_continues_in_fallback(tmp_path, monkeypatch):
     os.makedirs(os.path.dirname(fits), exist_ok=True)
     with open(fits, "w", encoding="utf-8") as f:
         f.write("not a folder")
-    fb = mp.resume_places(fits)[1]
+    fb = rt.resume_places(fits)[1]
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
     runs = []
     for _ in range(10):
@@ -972,13 +972,13 @@ def test_export_blocked_fit_cache_continues_in_fallback(tmp_path, monkeypatch):
 def test_unfinished_passes_through_the_reports_optional_workbook(monkeypatch, with_export):
     """보고서는 성능예측표 실패를 note로 넘기지만(보고서는 성공), 시간 제한 멈춤은 삼키지 않고 CONTINUE로 끝낸다."""
     import ml_export
-    import ml_predict as mp
+    import _ml_runtime as rt
     import ml_report
 
     def stop(args):
-        raise mp.Unfinished("후보 2개 학습 저장됨")
+        raise rt.Unfinished("후보 2개 학습 저장됨")
     monkeypatch.setattr(ml_export, "execute_export", stop)
-    with pytest.raises(mp.Unfinished):
+    with pytest.raises(rt.Unfinished):
         ml_report.make_export("v", "regression", None)
 
 
@@ -988,7 +988,7 @@ def test_fit_subset_step_labels_are_unique(monkeypatch):
     seen = []
 
     def fake_train(**kw):
-        seen.append(mp.CURRENT_STEP.get("label"))
+        seen.append(rt.CURRENT_STEP.get("label"))
         return None, None, {"val_r2": 0.9, "rmse": 1.0, "champion_model": "Ridge"}, None
     monkeypatch.setattr(mx.mt, "train_and_benchmark_models", fake_train)
     monkeypatch.setattr(mx, "FIT_CACHE", None)
@@ -1003,16 +1003,16 @@ def test_fit_subset_step_labels_are_unique(monkeypatch):
 
 
 def test_time_limit_setting(monkeypatch):
-    import ml_predict as mp
-    for raw, want in (("", mp.DEFAULT_TIME_LIMIT), ("abc", mp.DEFAULT_TIME_LIMIT), ("0", float("inf")), ("250", 250.0)):
+    import _ml_runtime as rt
+    for raw, want in (("", rt.DEFAULT_TIME_LIMIT), ("abc", rt.DEFAULT_TIME_LIMIT), ("0", float("inf")), ("250", 250.0)):
         monkeypatch.setenv("ML_KIT_TIME_LIMIT", raw)
-        assert mp.time_limit() == want
+        assert rt.time_limit() == want
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
-    mp.check_time(10 ** 6, "x")                                   # 제한 없음: 멈추지 않음
+    rt.check_time(10 ** 6, "x")                                   # 제한 없음: 멈추지 않음
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "31")
-    monkeypatch.setattr(mp, "RUN_START", mp.time.monotonic() - 5)
-    with pytest.raises(mp.Unfinished):
-        mp.check_time(0, "x")
+    monkeypatch.setattr(rt, "RUN_START", rt.time.monotonic() - 5)
+    with pytest.raises(rt.Unfinished):
+        rt.check_time(0, "x")
 
 
 def test_report_best_retraining_continues(tmp_path, monkeypatch):

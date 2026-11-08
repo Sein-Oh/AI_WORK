@@ -12,6 +12,21 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.79] - 2026-11-08
+
+공통 런타임을 `ml_predict.py`에서 떼어 냄 (구조 검토: 7,094줄 한 파일에 공통 런타임과 예측 엔진이 섞여 있었음). 도구 출력은 그대로.
+
+### 구조
+- 새 파일 `_ml_runtime.py`(진입점 아님): 예전 `ml_predict.py` PART C 전체(데이터 로딩, 수치 변환, `--eval`, JSON 규약, 복구 함수)와,
+  다른 진입점이 `ml_predict`에서 가져다 쓰던 것(버전 고르기 `model_dir_from_data`·`resolve_target_models`, `-i` 해석
+  `parse_inline_input`·`kv_text`, `apply_inference_evals`, 스냅숏 열 이름). `ml_predict.py`는 예측 엔진만 (2,716줄, 공통 런타임 4,434줄).
+- 모든 진입점은 `_ml_runtime`을 import하고, 아무도 `ml_predict`를 import하지 않음. 공통 런타임이 예측부의 이름을 거꾸로 쓰던 곳
+  (`MODEL_CHOSEN`, `_near_trained_data`)도 함께 옮겨 없앰. 검사: `test_entry_points_import_only_the_runtime`, 두 파일을 합친 이름 중복 검사.
+
+### 배포
+- 예측만 하는 PC에는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더를 복사함 (README "단독 배포"). `_ml_runtime.py`를 빠뜨리면
+  traceback 대신 `missing_file` 오류 JSON 1줄(STOP_RETRY)로 알림. 도구 폴더 전체를 복사하는 `setup.bat`은 그대로.
+
 ## [2.9.78] - 2026-11-08
 
 집 PC opencode 루프 r5(Gemma 4 26B P1 실패: 답변에 실측 비교값 없음) 대응.

@@ -19,6 +19,7 @@ from mlkit_helpers import data_file, data_path, ok_res, run_raw, run_tool, split
 import ml_export  # noqa: E402
 import ml_map  # noqa: E402
 import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 import ml_report  # noqa: E402
 
 
@@ -41,13 +42,13 @@ def two_model(tmp_path_factory):
 
 
 def test_ambiguous_alias_not_resolved():
-    with pytest.raises(mp.InputError):
-        mp.resolve_column_names(["온도"], ["온도(°C)", "온도(K)"], "피처")
+    with pytest.raises(rt.InputError):
+        rt.resolve_column_names(["온도"], ["온도(°C)", "온도(K)"], "피처")
 
 
 def _resolve_error(names, cols, **kw):
-    with pytest.raises(mp.InputError) as e:
-        mp.resolve_column_names(names, cols, "피처(-x)", **kw)
+    with pytest.raises(rt.InputError) as e:
+        rt.resolve_column_names(names, cols, "피처(-x)", **kw)
     return str(e.value)
 
 
@@ -70,7 +71,7 @@ def test_fuzzy_name_is_a_candidate(given, cols):
     ("수율( 1차)", "수율(1차)"), ("반응 온도(C)", "반응온도(°C)"), ("생산효율", "생산효율(%)"),
 ])
 def test_same_column_written_otherwise_matches(given, col, capsys):
-    got, applied = mp.resolve_column_names([given], [col, "압력(MPa)"], "피처(-x)")
+    got, applied = rt.resolve_column_names([given], [col, "압력(MPa)"], "피처(-x)")
     assert got == [col] and applied == {given: col}
     assert "[INFO] 컬럼명 자동 매칭" in capsys.readouterr().err
 
@@ -87,7 +88,7 @@ def test_excluded_column_never_listed():
     head = msg.split("(비슷한")[0]
     assert "[후보] '수율(1차)'" in head and "수율(최종)" not in head and "[추천]" not in msg, msg
     assert "이 명령에서 이미 다른 이름이나 옵션에 쓰인 열" in msg, msg
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         ml_export._check_known(["압력", "압룍"], {"y": ["압력", "온도"]}, "꼭 포함할 입력(--keep)")
     msg = str(e.value)
     assert "[추천]" not in msg and "[후보] '압력'" not in msg and "이미 다른 이름이나 옵션에 쓰인 열" in msg, msg
@@ -106,22 +107,22 @@ TYPOS = [("도핑농돜", "도핑농도"), ("생산량(kg)", "생산량")]
 
 @pytest.mark.parametrize("a,b", OTHER_WORDS)
 def test_other_word_is_a_candidate(a, b):
-    with pytest.raises(mp.InputError) as e:
-        mp.resolve_column_names([a], [b, "생산량"], "피처(-x)")
+    with pytest.raises(rt.InputError) as e:
+        rt.resolve_column_names([a], [b, "생산량"], "피처(-x)")
     assert "[추천]" not in str(e.value) and f"[후보] '{b}'" in str(e.value), str(e.value)
 
 
 @pytest.mark.parametrize("a,b", TYPOS)
 def test_typo_is_a_candidate(a, b):
     # 2.9.33: a typo is a [후보] too (was [추천])
-    with pytest.raises(mp.InputError) as e:
-        mp.resolve_column_names([a], [b, "zzz"], "피처(-x)")
+    with pytest.raises(rt.InputError) as e:
+        rt.resolve_column_names([a], [b, "zzz"], "피처(-x)")
     assert "[추천]" not in str(e.value) and f"[후보] '{b}'" in str(e.value), str(e.value)
 
 
 def test_typo_resolve_messages():
     for a, b in (("반응 온도", "반응온도"), ("반응온도(C)", "반응온도(°C)")):        # 2.9.33: matched (was [추천])
-        assert mp.resolve_column_names([a], [b, "생산량"], "피처(-x)")[0] == [b]
+        assert rt.resolve_column_names([a], [b, "생산량"], "피처(-x)")[0] == [b]
 
 
 ASK = [("속두", "속도"), ("습두", "습도"), ("온두", "온도"), ("도핑농두", "도핑농도"), ("강도", "경도"), ("점도", "정도"),
@@ -148,7 +149,7 @@ def test_former_sure_typo_is_a_candidate(a, b):
 
 
 def test_known_columns():
-    assert mp.known_columns(["온도", "압력( bar)", "없음"], ["온도(°C)", "압력(bar)"]) == ["온도(°C)", "압력(bar)"]
+    assert rt.known_columns(["온도", "압력( bar)", "없음"], ["온도(°C)", "압력(bar)"]) == ["온도(°C)", "압력(bar)"]
 
 
 def test_unitless_name_against_unit_columns():
@@ -161,24 +162,24 @@ def test_unitless_name_against_unit_columns():
 
 def test_same_name_candidates_whatever_the_suffix():
     # difflib alone misses a long unit suffix ('수율' / '수율(최종공정)' ratio 0.4)
-    got = mp.suggest_columns("수율", ["수율(1차)", "수율(최종공정)", "온도"])
+    got = rt.suggest_columns("수율", ["수율(1차)", "수율(최종공정)", "온도"])
     assert set(got[:2]) == {"수율(1차)", "수율(최종공정)"}, got
-    with pytest.raises(mp.InputError) as e:
-        mp.resolve_column_names(["수율"], ["수율(1차)", "수율(최종공정)", "온도"], "목표(--find)", values=True)
+    with pytest.raises(rt.InputError) as e:
+        rt.resolve_column_names(["수율"], ["수율(1차)", "수율(최종공정)", "온도"], "목표(--find)", values=True)
     assert "[후보]" in str(e.value) and "수율(최종공정)" in str(e.value)
 
 
 def test_other_unit_rules():
-    assert mp.other_unit("압력(MPa)", "압력(bar)") and mp.other_unit("온도(°F)", "온도(°C)")
-    assert mp.other_unit("무게(mg)", "무게(Mg)")                    # case is a different unit
+    assert rt.other_unit("압력(MPa)", "압력(bar)") and rt.other_unit("온도(°F)", "온도(°C)")
+    assert rt.other_unit("무게(mg)", "무게(Mg)")                    # case is a different unit
     for a, b in (("온도(C)", "온도(°C)"), ("온도(℃)", "온도(°C)"), ("압력 [bar]", "압력( bar )"), ("온도", "온도(°C)")):
-        assert not mp.other_unit(a, b), (a, b)
+        assert not rt.other_unit(a, b), (a, b)
 
 
 def test_other_unit_rule():
-    assert mp.other_unit("압력(MPa)", "반응압력(bar)") and mp.other_unit("반응압력(bar)", "압력(MPa)")
-    assert not mp.other_unit("압력(bar)", "반응압력(bar)") and not mp.other_unit("압력(MPa)", "반응압력")
-    assert not mp.other_unit("온도(C)", "반응온도(℃)")
+    assert rt.other_unit("압력(MPa)", "반응압력(bar)") and rt.other_unit("반응압력(bar)", "압력(MPa)")
+    assert not rt.other_unit("압력(bar)", "반응압력(bar)") and not rt.other_unit("압력(MPa)", "반응압력")
+    assert not rt.other_unit("온도(C)", "반응온도(℃)")
 
 
 # ---- 학습 -x, -y, --positive-class, --eval 이름 ------------------------------------
@@ -241,11 +242,11 @@ def test_train_x_typo_never_suggests_the_target(role_data):
 
 def test_eval_never_suggests_a_target():
     df = pd.DataFrame({"온도": [1.0, 2.0], "압력": [1.0, 2.0], "생산량": [3.0, 4.0]})
-    with pytest.raises(mp.InputError) as e:
-        mp.apply_eval_expressions(df, ["d = 생산랑 * 2"], target_cols=["생산량"])
+    with pytest.raises(rt.InputError) as e:
+        rt.apply_eval_expressions(df, ["d = 생산랑 * 2"], target_cols=["생산량"])
     assert "[추천]" not in str(e.value) and "타겟" in str(e.value), str(e.value)
-    with pytest.raises(mp.InputError) as e:
-        mp.apply_eval_expressions(df, ["d = 온돜 * 2"], target_cols=["생산량"])
+    with pytest.raises(rt.InputError) as e:
+        rt.apply_eval_expressions(df, ["d = 온돜 * 2"], target_cols=["생산량"])
     assert "[후보] 온도" in str(e.value) and "[추천]" not in str(e.value), str(e.value)      # 2.9.33: [추천]
 
 
@@ -295,8 +296,8 @@ def test_train_and_predict_other_word(humid_data):
 
 
 def _formula_error(expr, cols):
-    with pytest.raises(mp.InputError) as e:
-        mp.apply_eval_expressions(pd.DataFrame({c: [1.0, 2.0] for c in cols}), [expr])
+    with pytest.raises(rt.InputError) as e:
+        rt.apply_eval_expressions(pd.DataFrame({c: [1.0, 2.0] for c in cols}), [expr])
     return str(e.value)
 
 
@@ -313,13 +314,13 @@ def test_eval_unknown_name_wording():
 
 
 def test_number_named_column_in_formula_stops(name_files):
-    with pytest.raises(mp.InputError) as e:
-        mp.compile_formula("온도*2", ["온도", "2", "수율"])
+    with pytest.raises(rt.InputError) as e:
+        rt.compile_formula("온도*2", ["온도", "2", "수율"])
     assert "숫자 이름의 열 '2'" in str(e.value)
     # 2.9.32: '2.5' became <column 2>.5; 2.9.33/2.9.34 stopped; 2.9.35: a number inside a larger number is no column
-    assert mp.compile_formula("온도*3 + 2.5", ["온도", "2"])[2] == "온도*3 + 2.5"
+    assert rt.compile_formula("온도*3 + 2.5", ["온도", "2"])[2] == "온도*3 + 2.5"
     # no collision: a formula without that number, or another number that holds its digit
-    assert mp.compile_formula("온도*3 + 12", ["온도", "2"])[1] == {"__COL_TOKEN_0__": "온도"}
+    assert rt.compile_formula("온도*3 + 12", ["온도", "2"])[1] == {"__COL_TOKEN_0__": "온도"}
     proc, res = run_raw("ml_train.py", "-f", name_files["num"], "-x", "온도", "-y", "수율", "--eval", "x2=온도*2")
     msg = stop_msg(res, proc)
     assert "숫자 이름의 열" in msg, msg
@@ -327,13 +328,13 @@ def test_number_named_column_in_formula_stops(name_files):
 
 @pytest.mark.parametrize("formula,col", [("온도*2", "2(mm)"), ("온도*0.5", "0.5(mm)")])   # '온도+2.5': 2.9.35 compiles
 def test_number_alias_in_formula_stops(formula, col):
-    with pytest.raises(mp.InputError) as e:
-        mp.compile_formula(formula, ["온도", "0.5(mm)", "2(mm)", "수율"])
+    with pytest.raises(rt.InputError) as e:
+        rt.compile_formula(formula, ["온도", "0.5(mm)", "2(mm)", "수율"])
     assert f"'{col}'" in str(e.value)
 
 
 def test_number_alias_never_a_formula_name():
-    tok, cols, canon = mp.compile_formula("온도*3", ["온도", "2(mm)", "수율"])
+    tok, cols, canon = rt.compile_formula("온도*3", ["온도", "2(mm)", "수율"])
     assert list(cols.values()) == ["온도"] and canon == "온도*3"
 
 
@@ -348,22 +349,22 @@ SIEVE = ["온도", "0.5(mm)", "2(mm)", "수율"]
 @pytest.mark.parametrize("formula,cols", [("0.5(mm)*2(mm)", ["0.5(mm)", "2(mm)"]), ("온도+2(mm)", ["온도", "2(mm)"]),
                                           ("2(mm)*2.5", ["2(mm)"])])
 def test_full_number_name_compiles(formula, cols):
-    tok, t2c, canon = mp.compile_formula(formula, SIEVE)
+    tok, t2c, canon = rt.compile_formula(formula, SIEVE)
     assert sorted(t2c.values()) == sorted(cols) and canon == formula, (tok, t2c)
 
 
 @pytest.mark.parametrize("formula,columns", [("온도*2.5", SIEVE), ("온도*0.5", ["온도", "5(mm)"]),
                                              ("온도*2.5", ["온도", "2"])])
 def test_number_inside_number_is_no_column(formula, columns):
-    tok, t2c, canon = mp.compile_formula(formula, columns)
+    tok, t2c, canon = rt.compile_formula(formula, columns)
     assert list(t2c.values()) == ["온도"] and canon == formula, (tok, t2c)
 
 
 @pytest.mark.parametrize("formula,columns,col", [("온도*2", SIEVE, "2(mm)"), ("온도*2", ["온도", "2"], "2"),
                                                  ("온도*0.5", SIEVE, "0.5(mm)")])
 def test_bare_number_of_column_still_stops(formula, columns, col):
-    with pytest.raises(mp.InputError) as e:
-        mp.compile_formula(formula, columns)
+    with pytest.raises(rt.InputError) as e:
+        rt.compile_formula(formula, columns)
     assert f"'{col}'" in str(e.value)
 
 
@@ -401,7 +402,7 @@ def test_predict_targets_filter(target_models):
 
 
 def test_report_target_filter(target_models):
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         ml_report.load_version(target_models["two"], ["수율"])
     assert "[후보]" in str(e.value) and "수율(1차)" in str(e.value) and "수율(최종)" in str(e.value)
     ctx = ml_report.load_version(target_models["two"], ["수율(1차)"])
@@ -471,11 +472,11 @@ def test_spaced_unit_is_exact(humid_data):
     assert [t["name"] for t in ctx["targets"]] == ["수율(1차)"]
     proc, res = run_raw("ml_predict.py", "-m", humid_data["two"], "-y", "수율( 1차)", "-i", "온도=180,압력=2.5")
     assert ok_res(res, proc)["targets_predicted"] == ["수율(1차)"]
-    assert mp.resolve_column_names(["압력 ( bar )"], ["압력(bar)", "온도"], "피처(-x)")[0] == ["압력(bar)"]
+    assert rt.resolve_column_names(["압력 ( bar )"], ["압력(bar)", "온도"], "피처(-x)")[0] == ["압력(bar)"]
     proc, res = run_raw("ml_predict.py", "-m", humid_data["pm"], "-i", "온도( °C)=180,압력 [bar]=3,속도=45,습도=50")
     assert ok_res(res, proc)["status"] == "ok"                                 # model inputs '온도(°C)', '압력(bar)'
     # 2.9.33: another spelling of the same unit matches too (was [추천])
-    assert mp.resolve_column_names(["온도(C)"], ["온도(°C)"], "피처(-x)")[0] == ["온도(°C)"]
+    assert rt.resolve_column_names(["온도(C)"], ["온도(°C)"], "피처(-x)")[0] == ["온도(°C)"]
 
 
 def test_common_syllable_typo_cli_is_a_candidate(role_data):
@@ -544,7 +545,7 @@ def test_other_unit_ml_map_and_find(alias_models):
 
 
 def test_alias_pair_with_both_features_accepted(alias_models):
-    assert mp.parse_inline_input("온도=180,온도(°C)=182").shape == (1, 2)
+    assert rt.parse_inline_input("온도=180,온도(°C)=182").shape == (1, 2)
     for inline in ("온도=180,온도(°C)=182,압력(bar)=3", '{"온도":180,"온도(°C)":182,"압력(bar)":3}'):
         proc, res = _pred(alias_models["both"], inline)
         assert res["status"] == "ok", res
@@ -572,7 +573,7 @@ def test_alias_pair_with_degree_spelling_refused(alias_models, other):
     assert proc.returncode == 1 and res["agent_directive"].startswith("STOP_RETRY:"), res
     assert "같은 열 '온도(°C)'" in res["message"] and f"[후보] 1) 온도=180 2) {other}=182" in res["message"], res
     assert "모델 입력이 아니" not in res["message"], res
-    mp.check_inline_aliases(mp.parse_inline_input(f"{other}=182,압력(bar)=3"), ["온도(°C)", "압력(bar)"])   # one name: ok
+    mp.check_inline_aliases(rt.parse_inline_input(f"{other}=182,압력(bar)=3"), ["온도(°C)", "압력(bar)"])   # one name: ok
 
 
 def test_alias_pair_ml_map_and_find(alias_models):
@@ -584,8 +585,8 @@ def test_alias_pair_ml_map_and_find(alias_models):
 
 
 def test_json_repeated_key_refused(alias_models):
-    with pytest.raises(mp.InputError) as e:
-        mp.parse_inline_input('{"온도(°C)":180,"온도(°C)":190}')
+    with pytest.raises(rt.InputError) as e:
+        rt.parse_inline_input('{"온도(°C)":180,"온도(°C)":190}')
     assert "두 번" in str(e.value) and "[후보] 온도(°C)=180, 온도(°C)=190" in str(e.value)
     p = os.path.join(str(alias_models["tmp"]), "in.json")
     with open(p, "w", encoding="utf-8") as f:
@@ -615,7 +616,7 @@ def _pressure_rows(cols, target, n=60, seed=1):
 
 def _train_pressure(tmp, name, cols, target="생산량"):
     f = write_rows(os.path.join(str(tmp), name), _pressure_rows(cols, target), [])
-    _, res = run_raw("ml_train.py", "-f", f, "-x", ",".join(cols), "-y", mp.strip_unit(target))
+    _, res = run_raw("ml_train.py", "-f", f, "-x", ",".join(cols), "-y", rt.strip_unit(target))
     assert res["status"] == "ok", res
     return os.path.join(str(tmp), os.path.splitext(name)[0] + "_ml_data", "v1"), f
 
@@ -687,11 +688,11 @@ def test_candidates_marked(unit_models):
     msg = stop_msg(res, proc)
     assert "'압력(bar)'(단위 다름: 값 환산 필요)" in msg and "'압력차(bar)'(단위 다름: 값 환산 필요)" in msg, msg
     # names without values (-y) are not marked; a same-unit candidate is not marked
-    with pytest.raises(mp.InputError) as e:
-        mp.resolve_column_names(["압력(MPa)"], ["압력(bar)", "압력차(bar)"], "구할 열(-y)")
+    with pytest.raises(rt.InputError) as e:
+        rt.resolve_column_names(["압력(MPa)"], ["압력(bar)", "압력차(bar)"], "구할 열(-y)")
     assert "단위 다름" not in str(e.value)
-    with pytest.raises(mp.InputError) as e:
-        mp.resolve_column_names(["압력(bar)"], ["압력차(bar)", "압력차2(bar)"], "기준(-i)", values=True)
+    with pytest.raises(rt.InputError) as e:
+        rt.resolve_column_names(["압력(bar)"], ["압력차(bar)", "압력차2(bar)"], "기준(-i)", values=True)
     assert "[후보]" in str(e.value) and "단위 다름" not in str(e.value)
 
 
@@ -911,7 +912,7 @@ def test_points_measured_column_passes_next_to_target_sibling(percent_files, col
 
 def test_check_near_points_both_directions():
     pts = pd.DataFrame({"냉각수 온도(°C)": [20.0], "유량": [3.0]})
-    with pytest.raises(mp.ColumnNameError):
+    with pytest.raises(rt.ColumnNameError):
         ml_map._check_near_points(pts, ["유량"], ["냉각수온도"], {}, used=["유량", "온도"])
     ok = pd.DataFrame({"온도": [170.0], "수율_실측": [60.0]})
     ml_map._check_near_points(ok, ["온도"], ["압력(bar)", "수율(1차)"], {}, used=["온도(°C)", "수율(최종)"])
@@ -989,10 +990,10 @@ def test_points_measured_column_passes_beside_positions(position_tmp, pcol):
 
 
 def test_export_keep_typo_never_suggests_a_given_input():
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         ml_export._check_known(["압력", "압룍"], {"t": ["압력(bar)", "온도"]}, "입력(--keep)")
     assert "[추천]" not in str(e.value), str(e.value)
-    with pytest.raises(mp.InputError) as e:
+    with pytest.raises(rt.InputError) as e:
         ml_export._check_known(["압룍"], {"t": ["압력(bar)", "온도"]}, "입력(--keep)")
     assert "[후보] '압력(bar)'" in str(e.value), str(e.value)                  # 2.9.33: [추천]
 
@@ -1036,13 +1037,13 @@ def test_two_missing_names_numbered_one_at_a_time(name_files):
 
 
 def test_command_replacing_refuses_a_value_given_twice(monkeypatch):
-    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_map.py", "-f", "a.csv", "-i", "라인=A,등급=A"])
-    assert mp.command_replacing("A", "B") is None                   # 어느 A인지 추측하지 않음
-    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_map.py", "-f", "a.csv", "-i", "라인=A,등급=C"])
-    assert split_command(mp.command_replacing("A", "B"))[-1] == "라인=B,등급=C"
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_map.py", "-f", "a.csv", "-i", "라인=A,등급=A"])
+    assert rt.command_replacing("A", "B") is None                   # 어느 A인지 추측하지 않음
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_map.py", "-f", "a.csv", "-i", "라인=A,등급=C"])
+    assert split_command(rt.command_replacing("A", "B"))[-1] == "라인=B,등급=C"
 
 
 def test_command_dropping_keeps_one_name(monkeypatch):
-    monkeypatch.setattr(mp, "CURRENT_ARGV", ["ml_predict.py", "-m", "v1", "-i", "온도=1,온도(°C)=2,압력=3"])
-    assert split_command(mp.command_dropping(["온도(°C)"]))[-1] == "온도=1,압력=3"
-    assert mp.command_dropping(["없는이름"]) is None
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_predict.py", "-m", "v1", "-i", "온도=1,온도(°C)=2,압력=3"])
+    assert split_command(rt.command_dropping(["온도(°C)"]))[-1] == "온도=1,압력=3"
+    assert rt.command_dropping(["없는이름"]) is None

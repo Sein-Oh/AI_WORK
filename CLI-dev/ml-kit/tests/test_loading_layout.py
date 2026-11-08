@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlkit_helpers import (split_command, H, U, family_rows, recommendation, recommended_command, run_fail, run_raw,  # noqa: E402
                            run_tool, write_book, write_csv_header, write_df, write_rows)
 import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 
 
 # ---- 단위 행 판정 규칙 --------------------------------------------------------------------------------------------
@@ -28,39 +29,39 @@ import ml_predict as mp  # noqa: E402
 def test_unit_row_majority_below():
     raw = pd.DataFrame([["반응온도", "압력", "수율"], ["°C", "bar", "%"], ["측정불가", 2.1, 50.0], [181.0, "NG", 51.0],
                         [182.0, 2.3, 52.0], [183.0, 2.4, 53.0]], dtype=object)
-    assert mp._looks_like_unit_row(raw, 1)                   # 2.9.16: one text value under a unit refused the row
+    assert rt._looks_like_unit_row(raw, 1)                   # 2.9.16: one text value under a unit refused the row
     raw = pd.DataFrame([["일자", "온도"], ["yyyy-mm-dd", "°C"], [datetime(2026, 1, 1), 180.0],
                         [datetime(2026, 1, 2), 181.0]], dtype=object)
-    assert mp._looks_like_unit_row(raw, 1)                   # dates are data
+    assert rt._looks_like_unit_row(raw, 1)                   # dates are data
     raw = pd.DataFrame([["라인", "온도", "등급"], ["B", 182.8, "중"], ["A", 193.7, "상"], ["A", 190.1, "중"]], dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)               # categories over categories
+    assert not rt._looks_like_unit_row(raw, 1)               # categories over categories
     raw = pd.DataFrame([["온도", "압력"], ["비고: 2026년 1월 측정", None], [180.0, 3.0]], dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)               # a notes row
+    assert not rt._looks_like_unit_row(raw, 1)               # a notes row
     raw = pd.DataFrame([["공정", "조건", "결과"], ["온도", "압력", "수율"], ["°C", "bar", "%"], [180.0, 3.0, 50.0],
                         [181.0, 3.1, 51.0]], dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)               # a header over a unit row
-    assert mp._looks_like_unit_row(raw, 2)
+    assert not rt._looks_like_unit_row(raw, 1)               # a header over a unit row
+    assert rt._looks_like_unit_row(raw, 2)
 
 
 def test_looks_like_unit_row():
     raw = pd.DataFrame([["라인", "온도", "등급"], ["B", 182.8, "중"], ["A", 193.7, "상"]], dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)                     # categories over categories
+    assert not rt._looks_like_unit_row(raw, 1)                     # categories over categories
     raw = pd.DataFrame([["라인", "온도", "등급"], ["-", "°C", None], ["A", 193.7, "상"]], dtype=object)
-    assert mp._looks_like_unit_row(raw, 1)                         # units over numbers, '-' is a blank mark
+    assert rt._looks_like_unit_row(raw, 1)                         # units over numbers, '-' is a blank mark
     raw = pd.DataFrame([["제목", None], ["온도", "압력"], ["°C", "bar"], [180, 3]], dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)                     # a header over a unit row
-    assert mp._looks_like_unit_row(raw, 2)
+    assert not rt._looks_like_unit_row(raw, 1)                     # a header over a unit row
+    assert rt._looks_like_unit_row(raw, 2)
     raw = pd.DataFrame([["온도", "압력"], [180, 3], [185, 3.2]], dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)                     # numbers
+    assert not rt._looks_like_unit_row(raw, 1)                     # numbers
 
 
 def test_unit_row_has_no_numbers():
     raw = pd.DataFrame([H, ["측정불가", "측정불가", "A", 61.66], [180.0, 3.91, "B", 73.39], [152.8, 2.1, "A", 59.83],
                         [157.5, 2.73, "B", 60.5]], dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)     # 2.9.17: accepted, names '반응온도(측정불가)'
+    assert not rt._looks_like_unit_row(raw, 1)     # 2.9.17: accepted, names '반응온도(측정불가)'
     raw = pd.DataFrame([H, U, [None, None, None, 61.66], [180.0, 3.91, "B", 73.39], [152.8, 2.1, "A", 59.83]],
                        dtype=object)
-    assert mp._looks_like_unit_row(raw, 1)
+    assert rt._looks_like_unit_row(raw, 1)
 
 
 def _raw(rows):
@@ -69,23 +70,23 @@ def _raw(rows):
 
 def test_unit_row_rules_per_cell():
     body = [[180.0, 3.91, "B", 73.39], [152.8, 2.1, "A", 59.83], [157.5, 2.73, "B", 60.5], [171.1, 3.53, "B", 68.68]]
-    assert not mp._looks_like_unit_row(_raw([H, ["측정불가", "측정불가", "A", None]] + body), 1)   # 'A' is a value below
-    assert not mp._looks_like_unit_row(_raw([H, ["NG", "NG", "A", None]] + body), 1)
-    assert not mp._looks_like_unit_row(_raw([H, ["측정불가", "측정불가", None, None]] + body), 1)  # missing values only
-    assert not mp._looks_like_unit_row(_raw([H[:2], ["측정불가", "측정불가"]] + [r[:2] for r in body]), 1)
-    assert mp._looks_like_unit_row(_raw([H, ["°C", 1000, None, "%"]] + body), 1)                  # a scale unit
-    assert not mp._looks_like_unit_row(_raw([H, [175.0, "bar", None, "%"]] + body), 1)            # a number in range
-    assert mp._looks_like_unit_row(_raw([H + [None], U + ["비고"]] + [r + [None] for r in body]), 1)
+    assert not rt._looks_like_unit_row(_raw([H, ["측정불가", "측정불가", "A", None]] + body), 1)   # 'A' is a value below
+    assert not rt._looks_like_unit_row(_raw([H, ["NG", "NG", "A", None]] + body), 1)
+    assert not rt._looks_like_unit_row(_raw([H, ["측정불가", "측정불가", None, None]] + body), 1)  # missing values only
+    assert not rt._looks_like_unit_row(_raw([H[:2], ["측정불가", "측정불가"]] + [r[:2] for r in body]), 1)
+    assert rt._looks_like_unit_row(_raw([H, ["°C", 1000, None, "%"]] + body), 1)                  # a scale unit
+    assert not rt._looks_like_unit_row(_raw([H, [175.0, "bar", None, "%"]] + body), 1)            # a number in range
+    assert rt._looks_like_unit_row(_raw([H + [None], U + ["비고"]] + [r + [None] for r in body]), 1)
     # a header under a title row of fewer cells is still not a unit row of the title
-    assert not mp._looks_like_unit_row(_raw([["시험 기록", "작성자", None, None], H] + body), 1)
-    assert not mp._looks_like_unit_row(_raw([["반응 공정 데이터", None, None, None], H] + body), 1)
+    assert not rt._looks_like_unit_row(_raw([["시험 기록", "작성자", None, None], H] + body), 1)
+    assert not rt._looks_like_unit_row(_raw([["반응 공정 데이터", None, None, None], H] + body), 1)
     # the unit row repeated on page breaks is not "a value below"
-    assert mp._looks_like_unit_row(_raw([H, U] + body[:2] + [H, U] + body[2:]), 1)
+    assert rt._looks_like_unit_row(_raw([H, U] + body[:2] + [H, U] + body[2:]), 1)
 
 
 def test_unit_row_note_column_with_data_is_still_refused():
     body = [[180.0, 3.91, "B", 73.39, 1.0], [152.8, 2.1, "A", 59.83, 2.0], [157.5, 2.73, "B", 60.5, 3.0]]
-    assert not mp._looks_like_unit_row(_raw([H + [None], U + ["비고"]] + body), 1)
+    assert not rt._looks_like_unit_row(_raw([H + [None], U + ["비고"]] + body), 1)
 
 
 def _ng_book(path, units):
@@ -99,17 +100,17 @@ def _ng_book(path, units):
 
 def test_nanogram_unit_row(tmp_path):
     only = _ng_book(tmp_path / "p2b.xlsx", ["ng", "ng", None])
-    df = mp.load_data_file(only, unit_row=2)                               # 2.9.19: refused (missing marks only)
+    df = rt.load_data_file(only, unit_row=2)                               # 2.9.19: refused (missing marks only)
     assert list(df.columns) == ["농도A(ng)", "농도B(ng)", "수율"] and len(df) == 20
-    assert mp.load_data_file(only).attrs["unit_row_below"] == 2
+    assert rt.load_data_file(only).attrs["unit_row_below"] == 2
     mixed = _ng_book(tmp_path / "p2.xlsx", ["ng", "°C", "%"])
-    assert list(mp.load_data_file(mixed, unit_row=2).columns) == ["농도A(ng)", "농도B(°C)", "수율(%)"]
+    assert list(rt.load_data_file(mixed, unit_row=2).columns) == ["농도A(ng)", "농도B(°C)", "수율(%)"]
     _, res = run_raw("ml_train.py", "-f", only, "-x", "농도A,농도B", "-y", "수율", "--unit-row", "2")
     assert res["status"] == "ok", res
     # 'NG' (upper case) is still a missing mark
     raw = pd.DataFrame([["농도A", "농도B", "수율"], ["NG", "NG", None], [150.1, 2.0, 60.0], [151.0, 2.5, 61.0]],
                        dtype=object)
-    assert not mp._looks_like_unit_row(raw, 1)
+    assert not rt._looks_like_unit_row(raw, 1)
 
 
 # ---- 제목 행과 머리글 + 단위 행 쌍 ----------------------------------------------------------------------------
@@ -118,25 +119,25 @@ def test_nanogram_unit_row(tmp_path):
 def test_title_row_is_not_a_header_over_units():
     raw = pd.DataFrame([["시험 기록", "작성자 홍길동", None], ["온도", "압력", "수율"], [175.2, 1.6, 55.7],
                         [171.8, 2.2, 56.2]], dtype=object)
-    assert mp._header_unit_pair(raw) is None                 # 2.9.16: (1, 2), two [추천] hops
+    assert rt._header_unit_pair(raw) is None                 # 2.9.16: (1, 2), two [추천] hops
     raw = pd.DataFrame([["새 조건", "작성 2026-11-02", None], ["반응온도", "압력", "유량"], ["°C", "bar", "L/min"],
                         [180.0, 3.0, 10.0]], dtype=object)
-    assert mp._header_unit_pair(raw) == (2, 3)
+    assert rt._header_unit_pair(raw) == (2, 3)
 
 
 def test_given_unit_row_blank_or_not_below_header(tmp_path):
     path = write_rows(str(tmp_path / "t.xlsx"), [["반응 공정 데이터"], [None], H, U] + family_rows("A", 12, 3), [])
     for bad in ("2", "3", "1"):                              # blank, the header row, above the header
-        with pytest.raises(mp.InputError) as e:
-            mp.load_data_file(path, unit_row=int(bad))
+        with pytest.raises(rt.InputError) as e:
+            rt.load_data_file(path, unit_row=int(bad))
         assert f"--unit-row {bad}" in str(e.value) and "--header-row 3 --unit-row 4" in str(e.value)
 
 
 def test_given_unit_row_is_the_header_under_a_title(tmp_path):
     rows = [["시험 기록", "작성자 홍길동", None], ["온도", "압력", "수율"]] + [[170.0 + i, 1.0 + i / 10, 50.0 + i] for i in range(12)]
     path = write_rows(str(tmp_path / "t2.xlsx"), rows, [])
-    with pytest.raises(mp.InputError) as e:
-        mp.load_data_file(path, unit_row=2)                  # 2.9.16: [추천] header 1 + unit 2, then a second hop
+    with pytest.raises(rt.InputError) as e:
+        rt.load_data_file(path, unit_row=2)                  # 2.9.16: [추천] header 1 + unit 2, then a second hop
     assert str(e.value).count("[추천]") == 1 and str(e.value).rstrip().endswith("[추천] --header-row 2")
 
 
@@ -144,41 +145,41 @@ def test_header_unit_pair_skips_text_data_rows(tmp_path):
     # a first data row with blank measurements, then a full one: categories over categories, not units
     rows = [["라인", "설비", "온도", "압력", "유량"], ["A", "M1", None, None, None], ["B", "M2", 181.0, 3.0, 5.0]]
     raw = pd.read_excel(write_book(tmp_path / "p.xlsx", rows), header=None)
-    assert mp._header_unit_pair(raw) is None                       # 2.9.15: (1, 2), a data row as the unit row
+    assert rt._header_unit_pair(raw) is None                       # 2.9.15: (1, 2), a data row as the unit row
     rows = [["제목"], [None], ["반응온도", "압력", "제외"], ["°C", "bar", None], [192.5, 3.0, None]]
     raw = pd.read_excel(write_book(tmp_path / "b.xlsx", rows), header=None)
-    assert mp._header_unit_pair(raw) == (3, 4)                     # beta sample layout
+    assert rt._header_unit_pair(raw) == (3, 4)                     # beta sample layout
 
 
 def test_ragged_csv(tmp_path):
     p = tmp_path / "t.csv"
     p.write_text("반응 공정 데이터\n반응온도,압력,라인,수율\n180,3,A,70\n181,3.1,B,71\n", encoding="cp949")
-    df = mp.load_data_file(str(p))                  # 2.9.17: "Expected 1 fields in line 2, saw 4"
+    df = rt.load_data_file(str(p))                  # 2.9.17: "Expected 1 fields in line 2, saw 4"
     assert list(df.columns) == ["반응온도", "압력", "라인", "수율"] and len(df) == 2
 
 
 def test_model_names_with_units_match_header_without_units():
     cells = ["반응온도", "압력", "라인", "수율"]
-    assert mp.names_in_cells(["반응온도(°C)", "압력(bar)", "라인"], cells, model_names=True)
-    assert not mp.names_in_cells(["반응온도(°C)"], cells)              # user names (-x): a unit is part of the name
-    assert not mp.names_in_cells(["온도(K)"], ["온도(°C)"], model_names=True)
-    assert mp.names_in_cells(["온도(C)"], ["온도(°C)"], model_names=True)  # 2.9.33: '°C' / 'C' is one unit (was False)
+    assert rt.names_in_cells(["반응온도(°C)", "압력(bar)", "라인"], cells, model_names=True)
+    assert not rt.names_in_cells(["반응온도(°C)"], cells)              # user names (-x): a unit is part of the name
+    assert not rt.names_in_cells(["온도(K)"], ["온도(°C)"], model_names=True)
+    assert rt.names_in_cells(["온도(C)"], ["온도(°C)"], model_names=True)  # 2.9.33: '°C' / 'C' is one unit (was False)
 
 
 def test_repeated_header_and_totals_rows(tmp_path):
     rows = [H, U] + [[170.0 + i, 2.0 + i / 10, "A", 60.0 + i] for i in range(4)] + [H, U] + \
         [[175.0 + i, 2.5, "B", 65.0 + i] for i in range(3)] + [[1220.0, 17.1, "합계", 435.0]]
     path = write_rows(str(tmp_path / "r.xlsx"), rows, [])
-    df = mp.load_data_file(path, unit_row=2)
+    df = rt.load_data_file(path, unit_row=2)
     assert len(df) == 8 and df.attrs["repeated_header_rows"] == [7, 8]
-    assert mp.coerce_numeric(df["반응온도(°C)"]).notna().all()
+    assert rt.coerce_numeric(df["반응온도(°C)"]).notna().all()
     assert df.attrs["summary_rows"] == [[12, "라인", "합계"]]
-    w = mp.layout_warnings(df, ["수율(%)"])
+    w = rt.layout_warnings(df, ["수율(%)"])
     assert "7, 8행" in w[0] and "'제외' 열" in w[1]
     cls = pd.DataFrame({"x": [1.0, 2.0], "등급": ["계", "상"]})
     cls.attrs["summary_rows"] = [[2, "등급", "계"]]
-    assert mp.layout_warnings(cls, ["등급"]) == []                     # a class label '계' of the target
-    assert len(mp.layout_warnings(cls, ["등급"], training=False)) == 0 and len(mp.layout_warnings(cls, [], False)) == 1
+    assert rt.layout_warnings(cls, ["등급"]) == []                     # a class label '계' of the target
+    assert len(rt.layout_warnings(cls, ["등급"], training=False)) == 0 and len(rt.layout_warnings(cls, [], False)) == 1
 
 
 # ---- 학습 레이아웃 옵션과 [추천] --------------------------------------------------------------------------------
@@ -282,10 +283,10 @@ def test_header_hint_not_the_current_row(heads):
 
 def test_find_header_layout_rules():
     cands = [[1, ["제목"]], [3, ["온도(°C)", "압력"]]]
-    assert mp.find_header_layout(cands, ["온도", "압력"]) == (3, None)
-    assert mp.find_header_layout(cands, ["온도(K)"]) is None                    # a different unit is not the same name
-    assert mp.find_header_layout(cands, ["온도(C)"]) == (3, None)               # '°C' / 'C' is one unit
-    assert mp.find_header_layout([[2, ["온도(C)", "온도(K)"]]], ["온도"]) is None   # ambiguous alias
+    assert rt.find_header_layout(cands, ["온도", "압력"]) == (3, None)
+    assert rt.find_header_layout(cands, ["온도(K)"]) is None                    # a different unit is not the same name
+    assert rt.find_header_layout(cands, ["온도(C)"]) == (3, None)               # '°C' / 'C' is one unit
+    assert rt.find_header_layout([[2, ["온도(C)", "온도(K)"]]], ["온도"]) is None   # ambiguous alias
 
 
 @pytest.fixture(scope="module")
@@ -320,7 +321,7 @@ def test_predict_command_absolute_quoted_paths():
     ns = argparse.Namespace(model="rel_dir", meta=None, targets=None, file="새 파일.xlsx", out=None, encoding=None,
                             overwrite=False)
     cmd = mp._predict_command(ns)
-    assert mp.quote_arg(os.path.abspath("rel_dir")) in cmd and mp.quote_arg(os.path.abspath("새 파일.xlsx")) in cmd
+    assert rt.quote_arg(os.path.abspath("rel_dir")) in cmd and rt.quote_arg(os.path.abspath("새 파일.xlsx")) in cmd
 
 
 @pytest.fixture(scope="module")
@@ -511,9 +512,9 @@ def test_korean_unit_words_in_named_unit_row(tmp_path, units):
         rows.append([round(t, 2), round(p, 3), round(h, 2), round(2 * t + 10 * p + 3 * h, 2)])
     f = str(tmp_path / "k.csv")
     write_rows(f, rows, [])
-    raw = mp.read_raw_table(f)
-    assert mp.unit_row_verdict(raw, 1, 0, given=True)[0]
-    assert not mp.unit_row_verdict(raw, 1, 0)[0]          # the tool's own guess keeps Hangul words as data
+    raw = rt.read_raw_table(f)
+    assert rt.unit_row_verdict(raw, 1, 0, given=True)[0]
+    assert not rt.unit_row_verdict(raw, 1, 0)[0]          # the tool's own guess keeps Hangul words as data
     res = run_tool("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
     ok = run_tool("ml_predict.py", "-m", res["version_dir"], "-f", f)
     assert ok["sample_count"] == n, ok
@@ -535,8 +536,8 @@ def test_data_row_given_as_unit_row_is_refused(tmp_path):
     """3차 검토(2.9.63): 데이터 행('점검중, 센서고장, 정지')을 --unit-row로 주면 받아 '온도(점검중)'이 되었다.
     단위가 아닌 한글 낱말이 글자 칸의 절반 이상이면 단위 행이 아니다 (STOP_RETRY [추천] --unit-row를 뺀 명령)."""
     f = _unit_rows_file(tmp_path, ["점검중", "센서고장", "정지", None])
-    raw = mp.read_raw_table(f)
-    ok, why = mp.unit_row_verdict(raw, 1, 0, given=True)
+    raw = rt.read_raw_table(f)
+    ok, why = rt.unit_row_verdict(raw, 1, 0, given=True)
     assert not ok and "한글 낱말" in why
     bad = run_fail("ml_train.py", "-f", f, "-x", "온도,압력,시간", "-y", "생산량", "--unit-row", "2")
     assert bad["agent_directive"].startswith("STOP_RETRY") and "단위 행이 아닙니다" in bad["message"], bad
@@ -554,11 +555,11 @@ def test_named_unit_row_with_korean_units_is_read(tmp_path, units):
     """4차 검토(2.9.63 회귀): --unit-row로 준 정상 한글 단위 행(세/백만원/cm, 억원, 킬로/km, 기가바이트/Mbps, 개수/EA, 초/센티,
     점/퍼센트포인트, 킬로 한 칸)을 낱말 목록에 없다고 거부했다. 아래 열이 숫자이고 짧은 낱말이면 단위다 (경고도 없음)."""
     f = _unit_rows_file(tmp_path, units)
-    raw = mp.read_raw_table(f)
-    ok, why = mp.unit_row_verdict(raw, 1, 0, given=True)
+    raw = rt.read_raw_table(f)
+    ok, why = rt.unit_row_verdict(raw, 1, 0, given=True)
     assert ok, why
-    df = mp.load_data_file(f, unit_row=2)
-    assert len(df) == 40 and not [w for w in mp.layout_warnings(df) if "단위로 읽음" in w]
+    df = rt.load_data_file(f, unit_row=2)
+    assert len(df) == 40 and not [w for w in rt.layout_warnings(df) if "단위로 읽음" in w]
     named = [c for c in df.columns if "(" in str(c)]
     assert len(named) == sum(u is not None for u in units), list(df.columns)
 
@@ -589,7 +590,7 @@ def test_skipped_unit_row_is_in_warnings(p1_model, tmp_path):
 def test_named_empty_column_is_kept_and_unnamed_dropped(tmp_path):
     p = tmp_path / "e.csv"
     p.write_text("온도1,온도2,,y\n,1,,2\n,2,,4\n,3,,6\n", encoding="utf-8")
-    df = mp.load_data_file(str(p))
+    df = rt.load_data_file(str(p))
     assert list(df.columns) == ["온도1", "온도2", "y"]
     bad = run_fail("ml_train.py", "-f", str(p), "-x", "온도1", "-y", "y")
     assert bad["agent_directive"].startswith("STOP_RETRY")
@@ -599,7 +600,7 @@ def test_named_empty_column_is_kept_and_unnamed_dropped(tmp_path):
 def test_duplicate_headers_become_unique(tmp_path):
     p = tmp_path / "dup.csv"
     p.write_text("a,a,a_1,a\n1,2,3,4\n", encoding="utf-8")
-    cols = list(mp.load_data_file(str(p)).columns)
+    cols = list(rt.load_data_file(str(p)).columns)
     assert len(set(cols)) == 4 and cols[0] == "a" and cols[2] == "a_1"
 
 
@@ -611,7 +612,7 @@ def test_year_headers_are_integers(tmp_path):
         ws.append([f"L{i}", i * 1.5, i * 2.5])
     p = tmp_path / "y.xlsx"
     wb.save(p)
-    assert list(mp.load_data_file(str(p)).columns) == ["구분", "2023", "2024"]   # 2.9.14: '2023.0'
+    assert list(rt.load_data_file(str(p)).columns) == ["구분", "2023", "2024"]   # 2.9.14: '2023.0'
 
 
 # ---- 날짜 ------------------------------------------------------------------------------------------------------------
@@ -619,14 +620,14 @@ def test_year_headers_are_integers(tmp_path):
 
 def test_parse_datetime_reads_yyyymmdd():
     s = pd.Series([20240103, "20240215", 20240301.0, "2024-04-05", "20241340", None, "abc"], dtype=object)
-    got = mp.parse_datetime(s)
+    got = rt.parse_datetime(s)
     assert list(got[:4]) == [pd.Timestamp("2024-01-03"), pd.Timestamp("2024-02-15"),
                              pd.Timestamp("2024-03-01"), pd.Timestamp("2024-04-05")]
     assert got[4:].isna().all()
 
 
 def test_parse_datetime_text_with_point_zero():
-    out = mp.parse_datetime(pd.Series(["20240103.0", 20240103.0, "20240103", "2024.01.03"], dtype=object))
+    out = rt.parse_datetime(pd.Series(["20240103.0", 20240103.0, "20240103", "2024.01.03"], dtype=object))
     assert all(d == pd.Timestamp("2024-01-03") for d in out)
 
 
@@ -661,15 +662,15 @@ def test_loader_keeps_source_row_numbers(tmp_path):
     ws.append([3, 4])               # row 6
     path = tmp_path / "s.xlsx"
     wb.save(path)
-    df = mp.load_data_file(str(path))
+    df = rt.load_data_file(str(path))
     assert list(df["a"]) == [1, 3] and df.attrs["source_rows"] == [4, 6]
 
 
 def test_source_rows_not_copied_per_operation(tmp_path):
     path = write_csv_header(tmp_path / "big.csv", ["a", "b"], [[str(i), str(i % 7)] for i in range(2000)], ",")
-    df = mp.load_data_file(path)
+    df = rt.load_data_file(path)
     rows = df.attrs["source_rows"]
     assert rows == list(range(2, 2002))
     assert df["a"].attrs["source_rows"] is rows                           # 2.9.19: a deep copy per Series
     assert copy.deepcopy(df.attrs)["source_rows"] is rows
-    assert mp.coerce_numeric(df["a"]).iloc[-1] == 1999.0
+    assert rt.coerce_numeric(df["a"]).iloc[-1] == 1999.0

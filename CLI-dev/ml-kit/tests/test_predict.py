@@ -16,13 +16,14 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlkit_helpers import split_command, KIT, run_fail, run_raw, run_tool, stop_msg, write_df, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 
 
 # ---- -i 값 읽기: 글자 그대로, 천 단위, 같은 이름 두 번, 키 오타 ------------------------------------
 
 
 def test_inline_pairs_stay_text():
-    df = mp.parse_inline_input("코드=007,a=1.5")
+    df = rt.parse_inline_input("코드=007,a=1.5")
     assert df.loc[0, "코드"] == "007" and df.loc[0, "a"] == "1.5"
 
 
@@ -36,11 +37,11 @@ def test_inline_category_code_with_leading_zero(coded):
 
 
 def test_inline_thousands_separator():
-    df = mp.parse_inline_input("온도=3,압력=500,000,라인=A")
+    df = rt.parse_inline_input("온도=3,압력=500,000,라인=A")
     assert df.iloc[0].to_dict() == {"온도": "3", "압력": "500,000", "라인": "A"}
-    assert float(mp.coerce_numeric(df["압력"]).iloc[0]) == 500000.0
-    with pytest.raises(mp.InputError):
-        mp.parse_inline_input("500,온도=3")
+    assert float(rt.coerce_numeric(df["압력"]).iloc[0]) == 500000.0
+    with pytest.raises(rt.InputError):
+        rt.parse_inline_input("500,온도=3")
 
 
 @pytest.fixture(scope="module")
@@ -68,22 +69,22 @@ def test_inline_comma_number_stops_with_command(small):
 
 
 def test_kv_repeated_name_refused():
-    with pytest.raises(mp.InputError) as e:
-        mp.parse_inline_input("온도=195,압력=3.8;온도=165,압력=2.1")
+    with pytest.raises(rt.InputError) as e:
+        rt.parse_inline_input("온도=195,압력=3.8;온도=165,압력=2.1")
     assert "두 번" in str(e.value) and "JSON 배열" in str(e.value)
-    with pytest.raises(mp.InputError):
-        mp.parse_inline_input("온도=195, 온도=165")
+    with pytest.raises(rt.InputError):
+        rt.parse_inline_input("온도=195, 온도=165")
 
 
 def test_kv_alias_and_full_name_refused():
     # 2.9.28: refused where the names are matched to the model / data columns (check_same_column), not while parsing
     # (a model can have both '온도' and '온도(°C)'; test_names.py의 별칭 쌍 검사)
-    with pytest.raises(mp.InputError) as e:
-        mp.check_same_column(["온도", "온도(°C)"], ["온도(°C)", "온도(°C)"], "-i", {"온도": "180", "온도(°C)": "190"})
+    with pytest.raises(rt.InputError) as e:
+        rt.check_same_column(["온도", "온도(°C)"], ["온도(°C)", "온도(°C)"], "-i", {"온도": "180", "온도(°C)": "190"})
     assert "[후보] 온도=180, 온도(°C)=190" in str(e.value)
     # two different units are two columns; a plain row still parses
-    assert list(mp.parse_inline_input("온도(°C)=180,온도(K)=453").columns) == ["온도(°C)", "온도(K)"]
-    assert mp.parse_inline_input("라인=A,B,온도=180").iloc[0].to_dict() == {"라인": "A,B", "온도": "180"}
+    assert list(rt.parse_inline_input("온도(°C)=180,온도(K)=453").columns) == ["온도(°C)", "온도(K)"]
+    assert rt.parse_inline_input("라인=A,B,온도=180").iloc[0].to_dict() == {"라인": "A,B", "온도": "180"}
 
 
 def test_kv_repeated_name_cli_stop_retry(tmp_path):
@@ -135,11 +136,11 @@ def test_small_inputs_keep_training_range(tiny):
 
 
 def test_round_pred_keeps_small_values():
-    import ml_predict as mp
-    assert mp.round_pred(5.123456e-6) == pytest.approx(5.123e-6)
-    assert mp.round_pred(123.456789) == 123.4568
-    assert mp.round_pred(0.0) == 0.0
-    arr = mp.round_pred(np.array([1.23456e-7, 2.5, np.nan]))
+    import _ml_runtime as rt
+    assert rt.round_pred(5.123456e-6) == pytest.approx(5.123e-6)
+    assert rt.round_pred(123.456789) == 123.4568
+    assert rt.round_pred(0.0) == 0.0
+    arr = rt.round_pred(np.array([1.23456e-7, 2.5, np.nan]))
     assert arr[0] == pytest.approx(1.235e-7) and arr[1] == 2.5 and np.isnan(arr[2])
 
 
@@ -463,7 +464,8 @@ def test_classification_has_no_map_check_and_standalone(mc_model, tmp_path):
 
     deploy = tmp_path / "deploy"
     deploy.mkdir()
-    shutil.copy(os.path.join(KIT, "ml_predict.py"), deploy / "ml_predict.py")
+    for f in ("ml_predict.py", "_ml_runtime.py"):
+        shutil.copy(os.path.join(KIT, f), deploy / f)
     shutil.copytree(vdir, deploy / "v1")
     import subprocess
     import json
@@ -486,11 +488,11 @@ def test_idw_comparison_converts_snapshot_once_and_keeps_values(tmp_path, monkey
     """IDW 비교는 입력 행마다 스냅숏 열을 다시 변환하지 않는다 (2만 행에서 15분이 넘던 문제), 값은 손 계산과 같다."""
     df = _snapshot(str(tmp_path))
     meta = {"feature_schema": {}, "input_columns_required": list("abcd")}
-    monkeypatch.setattr(mp, "model_raw_inputs", lambda m: list("abcd"))
+    monkeypatch.setattr(mp, "model_raw_inputs", lambda m: list("abcd"))   # compare_with_measured (ml_predict)
     rows = df[list("abcd")].iloc[:2000].reset_index(drop=True) + 0.001
 
     calls = {"n": 0}
-    real = mp.coerce_numeric
+    real = rt.coerce_numeric
 
     def counting(s):
         calls["n"] += 1
@@ -660,9 +662,9 @@ def test_predict_category_case_matched_like_whatif(line_model):
 
 
 def test_match_categories_ambiguous_not_fixed():
-    fixes, unseen = mp.match_categories(["a", "b ", "x"], ["A", "a", "B"])
+    fixes, unseen = rt.match_categories(["a", "b ", "x"], ["A", "a", "B"])
     assert fixes == {"b ": "B"} and unseen == ["x"]      # 'a'는 학습 범주 그대로 ('A'로 바꾸지 않음)
-    fixes, unseen = mp.match_categories(["ａ"], ["A", "a"])
+    fixes, unseen = rt.match_categories(["ａ"], ["A", "a"])
     assert fixes == {} and unseen == ["ａ"]          # 'A'와 'a' 둘 다 맞아 고를 수 없음
 
 

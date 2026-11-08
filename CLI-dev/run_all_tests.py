@@ -356,7 +356,7 @@ MIN_DOCX_BODY = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 # 도구가 라이브러리 기본 템플릿을 쓰는지 (diag 등급): office-cli는 쓰지 않음(있는 파일만 엶). python-pptx 기본 템플릿은
 # 어느 도구도 쓰지 않음 -> 손상돼도 참고(WARN). python-docx는 ml-kit 보고서(ml_report.new_report_document)가 폴더 템플릿을
 # 먼저 쓰고(빠진 파일은 빼고 복구) default.docx는 그다음 -> 보고서 문서를 실제로 만들 수 있으면 참고, 못 만들면 FAIL.
-REPORT_DOC_CHECK = ("import json, sys; sys.path.insert(0, sys.argv[1]); import ml_predict as p, ml_report as r; "
+REPORT_DOC_CHECK = ("import json, sys; sys.path.insert(0, sys.argv[1]); import _ml_runtime as p, ml_report as r; "
                     "d = r.new_report_document(); "
                     "print(json.dumps({'styles': len(d.styles), 'recovered': p._RECOVERED}, ensure_ascii=True))")
 

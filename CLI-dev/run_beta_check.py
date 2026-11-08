@@ -284,7 +284,7 @@ def write_report(label, work, started):
     nskip = sum(r["status"] == "SKIP" for r in RESULTS)
     ver = "?"
     try:
-        ver = re.search(r'VERSION = "([^"]+)"', open(os.path.join(KIT, "ml_predict.py"), encoding="utf-8").read()).group(1)
+        ver = re.search(r'VERSION = "([^"]+)"', open(os.path.join(KIT, "_ml_runtime.py"), encoding="utf-8").read()).group(1)
     except Exception:
         pass
     lines = [f"# ml-kit 베타 도구 점검 ({label})", "",

@@ -9,7 +9,7 @@ Atomic Version Packaging, and Single Source of Truth (SSOT) Ledger.
 
 --best                      : every target of the history retrained with its best recipe into one version per task
 
-Shared runtime (data loading, --eval engine, CLI protocol) is imported from ml_predict.py.
+Shared runtime (data loading, --eval engine, CLI protocol) is imported from _ml_runtime.py.
 
 Designed for lightweight 26B-30B LLM agents with 1-turn declarative execution.
 100% Standalone: Pure Python, Scikit-learn, Pandas, NumPy, and Joblib.
@@ -19,7 +19,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ml_predict import (  # noqa: E402  shared runtime lives in ml_predict.py
+from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library,
     setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path, normalize_labels,

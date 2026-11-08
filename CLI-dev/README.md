@@ -119,7 +119,7 @@ CLI-dev/<tool>/
 ## 공통 런타임 구현 규칙
 
 모든 도구가 같은 문제를 같은 모양으로 풀기 위한 규칙입니다. 도구 폴더는 단독 배포되므로 코드는 공유하지 않고,
-각 도구의 공통 런타임(`ml_predict.py` PART C, `_runtime.py`)에 **같은 이름·같은 동작**으로 구현합니다.
+각 도구의 공통 런타임(ml-kit `_ml_runtime.py`, office-cli `_runtime.py`)에 **같은 이름·같은 동작**으로 구현합니다.
 경량 LLM이 도구마다 다른 키나 문구를 만나지 않게 하는 것이 목적입니다. 키 이름과 directive 첫 단어는 바꾸지 마십시오.
 
 ### R1. 성공 응답과 사후 확인 (`ok()`)
@@ -189,7 +189,7 @@ CLI-dev/<tool>/
   `confirm_commands[0]` = `--dry-run`을 뺀 같은 명령(`next_commands`에 넣지 않음), directive `VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.`
 - 실제 실행은 수행한 파괴적 작업을 같은 형식의 `applied` 목록으로 보고한다.
 - `[추천] <전체 명령>`: 바로 다시 실행할 명령 **하나**. 늘 `python "<스크립트>" ...` 전체 명령이다 (값만 주지 않음, AGENTS.md "사용법 단순성" 2번).
-  LLM은 `[추천]` 뒤의 명령을 그대로 1회 실행한다. 만드는 함수: office-cli `retry_command`·`retry_replacing`(`_runtime.py`), ml-kit `option_retry`·`command_text`·`command_with_value`(`ml_predict.py` PART C).
+  LLM은 `[추천]` 뒤의 명령을 그대로 1회 실행한다. 만드는 함수: office-cli `retry_command`·`retry_replacing`(`_runtime.py`), ml-kit `option_retry`·`command_text`·`command_with_value`(`_ml_runtime.py`).
 - `[후보] 1) a 2) b`(최대 10개): 후보가 둘 이상이라 도구가 고를 수 없을 때. LLM은 재시도하지 않고 사용자에게 고르게 한다. 후보 값을 넣은 전체 명령은
   같은 번호의 `confirm_commands`(사용자가 고른 뒤에만 실행하므로 `next_commands`가 아님, 덮어쓰기·삭제·발송이면 `destructive`). 만드는 함수: office-cli `ambiguous(replace=)`,
   ml-kit `candidate_commands`. 아직 명령을 만들지 못하는 곳(이름 여러 개가 함께 틀림 등)은 번호 없는 `[후보] a, b`이고 LLM은 스킬의 안내대로 고른 값으로 1번 실행한다 (줄여 갈 대상).

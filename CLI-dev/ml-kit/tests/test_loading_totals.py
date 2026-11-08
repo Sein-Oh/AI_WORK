@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlkit_helpers import H, U, family_rows, run_raw, write_csv, write_rows  # noqa: E402
-import ml_predict as mp  # noqa: E402
+import _ml_runtime as rt  # noqa: E402
 
 N = 40
 X, Y = "반응온도,압력,라인", "수율"
@@ -28,17 +28,17 @@ X, Y = "반응온도,압력,라인", "수율"
 
 
 def _summary_warn(path):
-    df = mp.load_data_file(path)
-    return [(r[0], r[2]) for r in df.attrs["summary_rows"]], mp.layout_warnings(df)
+    df = rt.load_data_file(path)
+    return [(r[0], r[2]) for r in df.attrs["summary_rows"]], rt.layout_warnings(df)
 
 
 def _summary_pairs(path):
-    df = mp.load_data_file(path)
+    df = rt.load_data_file(path)
     return [(r[0], r[2]) for r in df.attrs["summary_rows"]]
 
 
 def _summary(tmp_path, name, rows, merges=()):
-    return mp.load_data_file(write_rows(str(tmp_path / name), rows, list(merges))).attrs["summary_rows"]
+    return rt.load_data_file(write_rows(str(tmp_path / name), rows, list(merges))).attrs["summary_rows"]
 
 
 def _pairs(df):
@@ -60,7 +60,7 @@ def _totals_book(path, mark):
 @pytest.mark.parametrize("mark,warn", [("합계", False), ("합계 행", False), (None, True), ("포함", True)])
 def test_totals_row_marked_in_exclude_column(tmp_path, mark, warn):
     path = _totals_book(str(tmp_path / "a1.xlsx"), mark)
-    df = mp.load_data_file(path, unit_row=2)
+    df = rt.load_data_file(path, unit_row=2)
     assert bool(df.attrs["summary_rows"]) is warn, df.attrs["summary_rows"]    # 2.9.18: warned for every mark
     assert all(r[1] != "제외" for r in df.attrs["summary_rows"])
 
@@ -79,33 +79,33 @@ def test_summary_rows_keep_exclude_marks():
     data = family_rows("A", 6, 3)
     df = pd.DataFrame([["소계"] + r + ["합계"] for r in data[:2]] + [["A"] + r + [None] for r in data[2:]],
                       columns=["구분"] + H + ["제외"])
-    assert mp._summary_rows(df, list(range(2, 8))) == []
+    assert rt._summary_rows(df, list(range(2, 8))) == []
     df["제외"] = [None] * 6
-    assert [r[0] for r in mp._summary_rows(df, list(range(2, 8)))] == [2, 3]
+    assert [r[0] for r in rt._summary_rows(df, list(range(2, 8)))] == [2, 3]
 
 
 def test_aggregation_category_is_not_a_totals_row():
     data = family_rows("A", 20, 3)
     agg = pd.DataFrame([r + ["평균" if i % 2 else "최대"] for i, r in enumerate(data)], columns=H + ["집계"])
-    assert mp._summary_rows(agg, list(range(3, 23))) == []                         # 2.9.18: 10 rows warned
+    assert rt._summary_rows(agg, list(range(3, 23))) == []                         # 2.9.18: 10 rows warned
     agg["집계"] = ["평균" if i < 3 else "최대" for i in range(20)]                  # a few, next to '최대'
-    assert mp._summary_rows(agg, list(range(3, 23))) == []
+    assert rt._summary_rows(agg, list(range(3, 23))) == []
     rows = []
     for g in ("A", "B"):                                                          # subtotals per group still warn
         sub = [r for r in data if r[2] == g]
         rows += [[g] + r for r in sub] + [["소계", 170.0, 3.0, g, 70.0]]
     sub = pd.DataFrame(rows, columns=["구분"] + H)
-    assert [r[2] for r in mp._summary_rows(sub, list(range(3, 3 + len(rows))))] == ["소계", "소계"]
+    assert [r[2] for r in rt._summary_rows(sub, list(range(3, 3 + len(rows))))] == ["소계", "소계"]
 
 
 def test_average_category_still_not_warned():
     data = family_rows("A", 20, 3)
     agg = pd.DataFrame([r + ["평균" if i % 2 else "최대"] for i, r in enumerate(data)], columns=H + ["집계"])
-    assert mp._summary_rows(agg, list(range(3, 23))) == []
+    assert rt._summary_rows(agg, list(range(3, 23))) == []
     agg["집계"] = ["평균" if i % 4 == 0 else "측정" for i in range(20)]        # 25%: a category of the column
-    assert mp._summary_rows(agg, list(range(3, 23))) == []
+    assert rt._summary_rows(agg, list(range(3, 23))) == []
     agg["집계"] = ["평균" if i < 3 else "최대" for i in range(20)]
-    assert mp._summary_rows(agg, list(range(3, 23))) == []
+    assert rt._summary_rows(agg, list(range(3, 23))) == []
 
 
 # ---- 소계·합계 행 (블록의 합) ----------------------------------------------------------------------------------
@@ -119,7 +119,7 @@ def test_shift_subtotal_rows_warned(tmp_path):
                 round(float(r.uniform(300, 450)), 1)] for s in ("주간", "야간", "심야")]
         rows += day + [[f"2026-10-{d + 1:02d}", "소계"] + [round(sum(x[c] for x in day), 2) for c in (2, 3, 4)]]
     path = write_rows(str(tmp_path / "s1.xlsx"), rows, [])
-    df = mp.load_data_file(path)
+    df = rt.load_data_file(path)
     assert _pairs(df) == [(5 + 4 * d, "소계") for d in range(12)]           # 2.9.19: [] (25% of the column)
     _, res = run_raw("ml_train.py", "-f", path, "-x", "반응온도,압력", "-y", "생산량")
     assert res["status"] == "ok" and any("합계·평균" in w for w in res.get("warnings", [])), res
@@ -132,17 +132,17 @@ def test_two_lines_and_total_rows_warned(tmp_path):
         a = [["1라인", round(float(r.uniform(150, 200)), 1), round(float(r.uniform(1, 5)), 2),
               round(float(r.uniform(80, 95)), 1)] for _ in range(2)]
         rows += a + [["합계"] + [a[0][c] + a[1][c] for c in (1, 2, 3)]]
-    df = mp.load_data_file(write_rows(str(tmp_path / "s3.xlsx"), rows, []))
+    df = rt.load_data_file(write_rows(str(tmp_path / "s3.xlsx"), rows, []))
     assert _pairs(df) == [(4 + 3 * k, "합계") for k in range(15)]           # 2.9.19: [] (33%)
 
 
 def test_lone_total_in_blank_column_warned(tmp_path):
     d = family_rows("A", N, 1)
     tot = ["합계", round(sum(x[0] for x in d), 1), round(sum(x[1] for x in d), 2), None, round(sum(x[3] for x in d), 2)]
-    df = mp.load_data_file(write_rows(str(tmp_path / "s2.xlsx"), [["비고"] + H] + [[None] + x for x in d] + [tot], []))
+    df = rt.load_data_file(write_rows(str(tmp_path / "s2.xlsx"), [["비고"] + H] + [[None] + x for x in d] + [tot], []))
     assert _pairs(df) == [(N + 2, "합계")]                                  # 2.9.19: [] (1 of 1 filled cells)
     avg = ["평균"] + tot[1:]
-    df = mp.load_data_file(write_rows(str(tmp_path / "s2b.xlsx"), [["비고"] + H] + [[None] + x for x in d] + [avg], []))
+    df = rt.load_data_file(write_rows(str(tmp_path / "s2b.xlsx"), [["비고"] + H] + [[None] + x for x in d] + [avg], []))
     assert _pairs(df) == [(N + 2, "평균")]
 
 
@@ -358,7 +358,7 @@ def _stat_file(path, n):
 def test_statistic_column_load_linear(tmp_path):
     # 2.9.21: 30k rows 11s, 100k rows 111s. A generous bound for a loaded machine that still catches quadratic growth.
     small, big = _stat_file(tmp_path / "s.csv", 5000), _stat_file(tmp_path / "b.csv", 40000)
-    mp.load_data_file(small)
+    rt.load_data_file(small)
     t0 = time.perf_counter()
     assert _summary_pairs(small) == []
     t_small = time.perf_counter() - t0
@@ -382,7 +382,7 @@ def test_daily_report_totals_wording_warned(tmp_path, word):
     for d in range(1, 8):
         a, b = [150 + d, 300 + d], [160 + d, 310 + d]
         rows += [[f"10/{d}", "주간", *a], [None, "야간", *b], [word, None, a[0] + b[0], a[1] + b[1]]]
-    got = mp.load_data_file(write_rows(str(tmp_path / "w.xlsx"), rows, [])).attrs["summary_rows"]
+    got = rt.load_data_file(write_rows(str(tmp_path / "w.xlsx"), rows, [])).attrs["summary_rows"]
     assert len(got) == 7, (word, got)
 
 
@@ -392,7 +392,7 @@ def test_average_wording_warned(tmp_path, word):
     for d in range(1, 8):
         rows += [[f"10/{d}", "주간", 150 + d, 300 + d], [None, "야간", 160 + d, 310 + d]]
     rows.append([word, None, 160, 310])
-    got = mp.load_data_file(write_rows(str(tmp_path / "a.xlsx"), rows, [])).attrs["summary_rows"]
+    got = rt.load_data_file(write_rows(str(tmp_path / "a.xlsx"), rows, [])).attrs["summary_rows"]
     assert [r[2] for r in got] == [word], got
 
 
@@ -402,19 +402,19 @@ def test_words_ending_with_gye_stay_categories(tmp_path):
     for i in range(40):
         rows.append([r.choice(["설계", "계측", "생산", "품질"]), r.choice(["1단계", "2단계", "3단계"]),
                      r.choice(["온도계", "압력계", "유량계", "하계", "동계"]), 150 + i, 70 + i / 2])
-    got = mp.load_data_file(write_rows(str(tmp_path / "c.xlsx"), rows, [])).attrs["summary_rows"]
+    got = rt.load_data_file(write_rows(str(tmp_path / "c.xlsx"), rows, [])).attrs["summary_rows"]
     assert got == [], got
 
 
 def test_word_kind_units():
-    k = mp._word_kind
+    k = rt._word_kind
     assert [k(w) for w in ("일계", "년계", "Sub Total", "sum", "평균(A조)", "Mean:", "최대")] == \
         ["total", "total", "total", "total", "avg", "avg", "agg"]
     assert [k(w) for w in ("설계", "계측", "summary", "통계", "2단계", "A조")] == [""] * 6
 
 
 def test_word_kind_split():
-    k = mp._word_kind
+    k = rt._word_kind
     assert [k(w) for w in ("합계", "소계(A)", "Total:", "Sub Total", "일계", "누계", "평균", "AVG.")] == \
         ["total", "total", "total", "total", "total", "total", "avg", "avg"]
     assert [k(w) for w in ("총 합계", "A계", "주간계", "Grand Line Total", "Sum A")] == ["total_loose"] * 5
@@ -608,7 +608,7 @@ def test_line_dept_gauge_categories_quiet(tmp_path, name, values):
     df = pd.DataFrame({name: rng.choice(values, 40), "온도": t, "압력": p, "수율": (0.3 * t + 5 * p).round(2)})
     path = str(tmp_path / "l.xlsx")
     df.to_excel(path, index=False)
-    assert mp.load_data_file(path).attrs["summary_rows"] == []
+    assert rt.load_data_file(path).attrs["summary_rows"] == []
 
 
 @pytest.mark.parametrize("word", ["일계", "총 합계", "일합계", "전체합계", "합계:", "Total:", "소계(A)", "주간계",
@@ -718,7 +718,7 @@ def test_category_rows_still_quiet(tmp_path):
 
 
 def test_mean_neutral_needs_a_sum(tmp_path):
-    a = mp._sums_match
+    a = rt._sums_match
     import numpy as np
     sums = np.array([[300.0, 30.0, 3000.0]])
     count = np.array([[10.0, 10.0, 10.0]])
@@ -744,7 +744,7 @@ def _const_rows(seed=3):
 @pytest.mark.parametrize("ext", ["csv", "xlsx"])
 def test_constant_columns_category_quiet(tmp_path, ext):
     f = write_rows(str(tmp_path / f"c.{ext}"), _const_rows(), [])
-    assert mp.load_data_file(f).attrs["summary_rows"] == []
+    assert rt.load_data_file(f).attrs["summary_rows"] == []
 
 
 def test_totals_with_varying_means_still_warned(tmp_path):
@@ -753,7 +753,7 @@ def test_totals_with_varying_means_still_warned(tmp_path):
           r.randint(280, 320)] for i in range(30)]
     avg = [round(sum(x[c] for x in d) / len(d), 2) for c in (1, 2, 3)]
     rows = [["일자", "온도", "압력", "속도", "생산량"]] + d + [["총 합계"] + avg + [sum(x[4] for x in d)]]
-    got = mp.load_data_file(write_rows(str(tmp_path / "t.xlsx"), rows, [])).attrs["summary_rows"]
+    got = rt.load_data_file(write_rows(str(tmp_path / "t.xlsx"), rows, [])).attrs["summary_rows"]
     assert [g[2] for g in got] == ["총 합계"], got
 
 
@@ -762,10 +762,10 @@ def test_sums_match_varies():
     sums = np.array([[300.0, 30.0, 3000.0]])
     count = np.array([[10.0, 10.0, 10.0]])
     row = np.array([[30.0, 3.0, 3000.0]])
-    assert mp._sums_match(row, sums, count, sums)[0]
-    assert mp._sums_match(row, sums, count, sums, np.array([[True, True, True]]))[0]
+    assert rt._sums_match(row, sums, count, sums)[0]
+    assert rt._sums_match(row, sums, count, sums, np.array([[True, True, True]]))[0]
     # the mean columns are constant in the block: only one sum of three cells
-    assert not mp._sums_match(row, sums, count, sums, np.array([[False, False, True]]))[0]
+    assert not rt._sums_match(row, sums, count, sums, np.array([[False, False, True]]))[0]
 
 
 def _setpoint_shift_rows(days=10, seed=11):
@@ -781,7 +781,7 @@ def _setpoint_shift_rows(days=10, seed=11):
 @pytest.mark.parametrize("ext", ["csv", "xlsx"])
 def test_shift_report_with_setpoints_warned(tmp_path, ext):
     f = write_rows(str(tmp_path / f"s.{ext}"), _setpoint_shift_rows(), [])
-    got = mp.load_data_file(f).attrs["summary_rows"]
+    got = rt.load_data_file(f).attrs["summary_rows"]
     assert [g[2] for g in got] == ["일합계"] * 10, got
 
 
@@ -794,7 +794,7 @@ FP_CONST = [  # r18 fp_const.csv: category rows 'A계' among '공통', constant 
 
 def test_constant_setpoints_category_still_quiet(tmp_path):
     rows = [["구분", "설정온도", "설정압력", "불량", "생산량"]] + [[g, 180, 3.5, b, q] for g, b, q in FP_CONST]
-    assert mp.load_data_file(write_rows(str(tmp_path / "fp.csv"), rows, [])).attrs["summary_rows"] == []
+    assert rt.load_data_file(write_rows(str(tmp_path / "fp.csv"), rows, [])).attrs["summary_rows"] == []
 
 
 def test_sums_match_constant_and_nonzero():
@@ -803,14 +803,14 @@ def test_sums_match_constant_and_nonzero():
     row = np.array([[185.0, 3.5, 1.0, 1080.0]])
     varies = np.array([[False, False, True, True]])
     # constant 185 / 3.5 leave the count: 1 sum (1080) of 2 cells; the flag 1 has one nonzero number (its own sum)
-    assert mp._sums_match(row, sums, count, sums, varies, np.array([[2.0, 2.0, 1.0, 2.0]]))[0]
-    assert not mp._sums_match(np.array([[185.0, 3.5, 1.0, 999.0]]), sums, count, sums, varies,
+    assert rt._sums_match(row, sums, count, sums, varies, np.array([[2.0, 2.0, 1.0, 2.0]]))[0]
+    assert not rt._sums_match(np.array([[185.0, 3.5, 1.0, 999.0]]), sums, count, sums, varies,
                               np.array([[2.0, 2.0, 1.0, 2.0]]))[0]
     # without nz the 2.9.29 rule (constant cells count as misses)
     sums0 = np.array([[370.0, 7.0, 4.0, 1080.0]])
     row0 = np.array([[185.0, 3.5, 0.0, 1080.0]])
-    assert mp._sums_match(row0, sums0, count, sums0, varies, np.full((1, 4), 2.0))[0]
-    assert not mp._sums_match(row0, sums0, count, sums0, varies)[0]
+    assert rt._sums_match(row0, sums0, count, sums0, varies, np.full((1, 4), 2.0))[0]
+    assert not rt._sums_match(row0, sums0, count, sums0, varies)[0]
 
 
 # ---- 알려진 거짓 경고 (그대로 둠) ------------------------------------------------------------------------------
@@ -823,5 +823,5 @@ CAT = [("일반", 1, 100), ("일반", 1, 104), ("A계", 2, 101), ("일반", 0, 9
 
 def test_known_false_warning_small_integer_sum(tmp_path):
     rows = [["라인", "설정온도", "불량수", "생산량"]] + [[g, 180, b, q] for g, b, q in CAT]
-    got = mp.load_data_file(write_rows(str(tmp_path / "cat.csv"), rows, [])).attrs["summary_rows"]
+    got = rt.load_data_file(write_rows(str(tmp_path / "cat.csv"), rows, [])).attrs["summary_rows"]
     assert got == [[4, "라인", "A계"]], got        # 불량수 2 = 1 + 1 and a constant setpoint: warned (documented)
