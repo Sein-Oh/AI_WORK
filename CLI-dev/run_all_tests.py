@@ -1009,7 +1009,7 @@ def step_gemma(stage, args, ctx):
         stage.env_skip(f"시나리오를 읽지 못함 ({type(e).__name__}: {e}). {HERE}에 agent_scenarios.py가 있는지"
                        f"(반입 누락) 확인하세요")
         return
-    auto = [sid for sid in order if not by_id[sid].get("manual")]       # manual: 사람이 준비해야 하는 요청 (보내지 않음)
+    auto = [sid for sid in order if not by_id[sid].get("manual") and not by_id[sid].get("paused")]   # 수동 전용·시험에서 뺀 요청은 보내지 않음
     only = getattr(args, "gemma_only", None)
     if only:
         picked, unknown = _gemma_ids(only, order, by_id)
@@ -1018,7 +1018,7 @@ def step_gemma(stage, args, ctx):
             return
         manual = [s for s in picked if s not in auto]
         if manual:
-            stage.fail(f"--gemma-only의 {', '.join(manual)}은 수동 전용이라 자동으로 보내지 않습니다")
+            stage.fail(f"--gemma-only의 {', '.join(manual)}은 수동 전용이거나 시험에서 뺀 요청이라 자동으로 보내지 않습니다")
             return
         auto = picked
     test_dir = args.gemma_dir or os.path.join(work_root(), "gemma")
@@ -1054,7 +1054,7 @@ def step_gemma(stage, args, ctx):
     cur = 0                                                      # 지금 쓰는 모델 (제한에 걸리면 다음 예비로 넘어가 계속 씀)
     say(f"Gemma 종합 테스트 시작: 요청 {len(auto)}개를 opencode run으로 한 세션에 보냅니다 (요청마다 최대 {args.gemma_timeout}초"
         + (f", 모델 {' -> '.join(models)}" if models[0] else "")
-        + (f", 수동 전용 {', '.join(s for s in order if by_id[s].get('manual'))}은 보내지 않음" if not only and len(auto) < len(order) else "")
+        + (f", 보내지 않는 요청 {', '.join(s for s in order if s not in auto)}(수동 전용·시험에서 뺌)" if not only and len(auto) < len(order) else "")
         + ").")
     stop = False
     for i, sid in enumerate(auto, 1):
@@ -1113,7 +1113,8 @@ def step_gemma(stage, args, ctx):
                 stage.skips.append(f"{r['id']}: 자유 문장 답이라 사람이 확인 (아래 '최종 답변')")
             elif r["결과"] == "없음":
                 stage.skipped += 1
-                stage.skips.append(f"{r['id']}: 수동 전용 (사람이 준비한 뒤 메시지 팩으로 보냄)" if by_id[r["id"]].get("manual")
+                stage.skips.append(f"{r['id']}: 시험에서 뺌 ({by_id[r['id']]['paused']})" if by_id[r["id"]].get("paused")
+                                   else f"{r['id']}: 수동 전용 (사람이 준비한 뒤 메시지 팩으로 보냄)" if by_id[r["id"]].get("manual")
                                    else f"{r['id']}: 보내지 못함 (중단 또는 앞 요청 문제)")
             else:
                 stage.fail(f"{r['id']}: {r['실패'][:200]}")

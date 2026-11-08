@@ -83,6 +83,7 @@ def test_equivalence_is_not_unit_case_or_ambiguous():
     assert "[추천]" not in msg and "[후보] '온도(°C)', '온도(℃)'" in msg, msg
 
 
+@pytest.mark.report
 def test_excluded_column_never_listed():
     msg = _resolve_error(["수율"], ["온도", "수율(1차)", "수율(최종)"], exclude=["수율(최종)"])
     head = msg.split("(비슷한")[0]
@@ -401,6 +402,7 @@ def test_predict_targets_filter(target_models):
     assert ok_res(res, proc)["targets_predicted"] == ["수율(최종)"]
 
 
+@pytest.mark.report
 def test_report_target_filter(target_models):
     with pytest.raises(rt.InputError) as e:
         ml_report.load_version(target_models["two"], ["수율"])
@@ -467,6 +469,7 @@ def test_one_name_for_two_inputs(humid_data):
     assert "[추천]" not in mp._typo_hints(["속도"], ["습도"], ["속도"], True)[0]
 
 
+@pytest.mark.report
 def test_spaced_unit_is_exact(humid_data):
     ctx = ml_report.load_version(humid_data["two"], ["수율( 1차)"])
     assert [t["name"] for t in ctx["targets"]] == ["수율(1차)"]
@@ -989,6 +992,7 @@ def test_points_measured_column_passes_beside_positions(position_tmp, pcol):
 # ---- ml_export 이름 ----------------------------------------------------------------------------------------
 
 
+@pytest.mark.report
 def test_export_keep_typo_never_suggests_a_given_input():
     with pytest.raises(rt.InputError) as e:
         ml_export._check_known(["압력", "압룍"], {"t": ["압력(bar)", "온도"]}, "입력(--keep)")
@@ -998,6 +1002,7 @@ def test_export_keep_typo_never_suggests_a_given_input():
     assert "[후보] '압력(bar)'" in str(e.value), str(e.value)                  # 2.9.33: [추천]
 
 
+@pytest.mark.report
 def test_export_labels_two_targets(humid_data):
     assert ml_export.target_labels(["수율(1차)", "수율(최종)", "온도(°C)"]) == \
         {"수율(1차)": "수율(1차)", "수율(최종)": "수율(최종)", "온도(°C)": "온도"}

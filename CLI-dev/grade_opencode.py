@@ -75,6 +75,10 @@ def load_scenarios():
     mod = importlib.util.module_from_spec(mod_spec)
     mod_spec.loader.exec_module(mod)
     spec = copy.deepcopy(mod.SCENARIOS)                  # 부르는 쪽이 고쳐도 다음 읽기에 섞이지 않게
+    for g in spec["groups"]:                             # 묶음의 paused(잠시 시험에서 뺌)는 그 요청마다 적어 둠
+        for s in g["scenarios"]:
+            if g.get("paused"):
+                s["paused"] = g["paused"]
     order = [s for g in spec["groups"] for s in g["scenarios"]]
     return spec, {s["id"]: s for s in order}, [s["id"] for s in order]
 
@@ -514,7 +518,8 @@ def score(found, spec, by_id, order, use_judge, model):
     for sid in order:
         sc = by_id[sid]
         if sid not in found:
-            why = "수동 전용 요청 (자동 실행에서는 보내지 않음)" if sc.get("manual") else "대화에 이 요청이 없음"
+            why = (f"시험에서 뺀 요청: {sc['paused']}" if sc.get("paused") else
+                   "수동 전용 요청 (자동 실행에서는 보내지 않음)" if sc.get("manual") else "대화에 이 요청이 없음")
             rows.append({"id": sid, "결과": "없음", "실패": why, "명령수": 0, "초": None, "보낸횟수": 0})
             continue
         turn = found[sid][-1]                            # graded on the last time the request was sent
@@ -630,7 +635,7 @@ def make_pack(test_dir):
              "   - 하나씩: 메시지 1개를 보내고 답을 받은 뒤 다음 메시지를 보냅니다 (권장).",
              "   - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때). "
              "요청이 한 턴에 섞이므로 채점은 명령 순서로 나눈 참고 결과입니다.",
-             "   - 묶음은 " + " -> ".join(g["id"] for g in spec["groups"]) + " 순서입니다. P와 R은 A에서 만든 모델을 씁니다. "
+             "   - 묶음은 " + " -> ".join(g["id"] for g in spec["groups"] if not g.get("paused")) + " 순서입니다. P와 R은 A에서 만든 모델을 씁니다. "
              "O는 S1이 만든 샘플을 닫힌 파일 경로로 쓰고 Excel·Word가 있어야 합니다.",
              *([f"   - 수동 준비가 필요한 요청({', '.join(s['id'] for s in manual)})은 묶음 파일의 '수동 준비'를 먼저 하고 하나씩 보냅니다. "
                 "`run_all_tests.py --gemma`는 이 요청을 보내지 않습니다."] if manual else []),
@@ -647,6 +652,9 @@ def make_pack(test_dir):
              "Gemma가 질문하면 답해도 됩니다. 표시([ID])가 없는 메시지는 앞 요청에 이어진 대화로 채점합니다.", "",
              "## 묶음", ""]
     for g in spec["groups"]:
+        if g.get("paused"):                              # 잠시 시험에서 뺀 묶음은 팩에 넣지 않음
+            index.append(f"- {g['id']} {g['title']}: 뺌 ({g['paused']})")
+            continue
         name = f"{g['id']}_{g['title'].split(' (')[0].replace(' ', '_')}.md"
         index.append(f"- [{g['id']} {g['title']}]({name}): " + ", ".join(s["id"] for s in g["scenarios"]))
         body = [f"# {g['id']} {g['title']}", "", "## 하나씩 보내기", ""]

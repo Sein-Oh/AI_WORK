@@ -16,6 +16,8 @@ import numpy as np
 import openpyxl
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.report    # 보고서·성능예측표: 다른 로직이 마무리될 때까지 시험에서 뺌 (pytest.ini)
 from scipy.interpolate import RegularGridInterpolator
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

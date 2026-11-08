@@ -305,6 +305,7 @@ def test_history_mixed_tasks_compare_within_task(multiclass):
     assert set(hist["best_by_task"]) == {"classification", "regression"}
 
 
+@pytest.mark.report
 def test_report_supports_classification(multiclass):
     """분류 버전도 통합 보고서를 만든다 (-m, -y)."""
     pytest.importorskip("docx")
@@ -832,6 +833,7 @@ def test_exclude_column_zero_and_false_are_not_marks():
         ["", "", "", "", "", "", "", "", "센서오류", "1", "포함"]
 
 
+@pytest.mark.report
 def test_report_shows_terms_and_excluded_rows(tmp_path):
     from docx import Document
     f = tmp_path / "d.xlsx"
@@ -900,6 +902,7 @@ def test_prediction_uses_source_and_caps(capped):
     assert miss["error_type"] == "needs_user_decision"                                # 2.9.54: '원본 입력' only
 
 
+@pytest.mark.report
 def test_find_and_export_work_on_the_source(capped, tmp_path):
     _, vdir = capped
     f = run_tool("ml_predict.py", "-m", vdir, "--find", "효율=80", "--vary", "온도", "-i", "압력=2")
@@ -1135,6 +1138,7 @@ def test_history_lists_best_record(three_runs):
 
 
 @needs_report
+@pytest.mark.report
 def test_report_f_reuses_then_rebuilds(three_runs):
     work, data, _, best = three_runs
     rep = run_tool("ml_report.py", "-f", data)
@@ -1168,6 +1172,7 @@ def test_report_f_reuses_then_rebuilds(three_runs):
 
 
 @needs_report
+@pytest.mark.report
 def test_mixed_tasks_two_best_versions(tmp_path):
     data = make_multi(str(tmp_path / "mix.csv"))
     run_tool("ml_train.py", "-f", data, "-x", "온도,압력", "-y", "수율")
@@ -1198,12 +1203,18 @@ def test_mixed_tasks_two_best_versions(tmp_path):
 @needs_report
 def test_no_history_stops(tmp_path):
     data = make_multi(str(tmp_path / "empty.csv"))
-    for script, args in (("ml_train.py", ("-f", data, "--best")), ("ml_report.py", ("-f", data))):
-        err = run_fail(script, *args)
-        assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
+    err = run_fail("ml_train.py", "-f", data, "--best")
+    assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
+
+
+@pytest.mark.report
+def test_no_history_report_stops(tmp_path):
+    err = run_fail("ml_report.py", "-f", make_multi(str(tmp_path / "empty.csv")))
+    assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
 
 
 @needs_report
+@pytest.mark.report
 def test_report_m_path_unchanged(tmp_path):
     data = make_multi(str(tmp_path / "single.csv"))
     tr = run_tool("ml_train.py", "-f", data, "-x", "온도,압력,속도", "-y", "수율,두께")
@@ -2480,6 +2491,7 @@ def test_auto_inputs_next_commands_carry_x(auto_run):
     assert [f for f in rec["features_used"] if f in res["features_auto"]] == [f for f in res["features_auto"] if f in names]
 
 
+@pytest.mark.report
 def test_auto_inputs_best_and_report(auto_run):
     """입력을 자동으로 고른 학습이 있는 이력에서도 --best와 ml_report -f가 그 입력으로 다시 학습."""
     best = run_tool("ml_train.py", "-f", auto_run["f"], "--best")

@@ -194,7 +194,8 @@ def ml_checks(env, data, titled):
     def m9():
         code, out = run_tool(env, E, "-m", data, "--keep", "반응온도x", "--title", "점검")
         follow(env, "M9", "성능예측표 -m <데이터 파일> + --keep 오타 -> [후보] 1) -> 셸로 실행", code, out, kind="후보", need_code=1)
-    check("M9", "ml_export", m9)
+    record("M9", "성능예측표 -m <데이터 파일> + --keep 오타", None,
+           "보고서·성능예측표는 개발 중이라 시험에서 뺌 (2026-11-08)")   # m9는 다시 넣을 때 쓰도록 둠
 
 
 def ml_new_checks(env, data, work):

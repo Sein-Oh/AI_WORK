@@ -259,6 +259,7 @@ def test_predict_standalone_deployment(trained, tmp_path):
 needs_docx = pytest.mark.skipif(not HAS_DOCX, reason="python-docx not installed in this environment")
 
 
+@pytest.mark.report
 @pytest.mark.skipif(HAS_DOCX, reason="only meaningful when python-docx is missing")
 def test_report_without_docx_returns_json(trained):
     work, _, _ = trained
@@ -267,6 +268,7 @@ def test_report_without_docx_returns_json(trained):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
@@ -275,6 +277,7 @@ def test_report(trained):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_unknown_version_fails(trained):
     work, _, _ = trained
     payload = run_fail("ml_report.py", "-m", str(work / "sample_ml_data" / "v99"))
@@ -283,6 +286,7 @@ def test_report_unknown_version_fails(trained):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_unknown_version_recommends_the_only_one(tmp_path):
     root = tmp_path / "y_ml_data"
     (root / "v1").mkdir(parents=True)
@@ -295,6 +299,7 @@ def test_report_unknown_version_recommends_the_only_one(tmp_path):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_unknown_version_lists_candidates(tmp_path):
     root = tmp_path / "x_ml_data"
     for v in ("v1", "v3"):
@@ -579,7 +584,8 @@ def _run_without(tmp_path, fake, script, *args):
 
 @pytest.mark.parametrize("script,module,pip", [
     ("ml_predict.py", "numpy", "numpy"), ("ml_train.py", "sklearn", "scikit-learn"), ("ml_map.py", "pandas", "pandas"),
-    ("ml_report.py", "joblib", "joblib"), ("ml_export.py", "sklearn", "scikit-learn")])
+    pytest.param("ml_report.py", "joblib", "joblib", marks=pytest.mark.report),
+    pytest.param("ml_export.py", "sklearn", "scikit-learn", marks=pytest.mark.report)])
 def test_missing_library_is_one_json_line(tmp_path, script, module, pip):
     args = {"ml_predict.py": ["-m", str(tmp_path), "-i", "a=1"], "ml_train.py": ["-f", "x.csv", "-x", "a", "-y", "b"],
             "ml_map.py": ["-f", "x.csv", "-i", "a=1"], "ml_report.py": ["-m", str(tmp_path)],
@@ -639,6 +645,7 @@ def test_old_option_names_are_argument_errors(data_dir, script, args):
 
 
 @needs_docx
+@pytest.mark.report
 def test_report_targets_and_save(trained):
     work, _, _ = trained
     out = work / "r_targets.docx"

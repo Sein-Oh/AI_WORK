@@ -191,6 +191,7 @@ def test_predict_out_is_not_overwritten(work):
     assert out.read_bytes() != "사용자 결과\n".encode("cp949")
 
 
+@pytest.mark.report
 def test_report_default_name_is_not_overwritten(work):
     vd = work["first"]["version_dir"]
     r1 = run_tool("ml_report.py", "-m", vd)

@@ -377,7 +377,7 @@ def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc,
     code = rat.main(["--only", "gemma", "--label", "t", "--opencode", str(fake_oc), "--gemma-dir", str(work)])
     assert code == 1                                            # 가짜는 S0만 맞게 답함
     _, by_id, order = rat._load_grader().load_scenarios()
-    manual = [s for s in order if by_id[s].get("manual")]           # 사람이 준비해야 하는 요청 (O3, Outlook 메일)
+    manual = [s for s in order if by_id[s].get("manual") or by_id[s].get("paused")]   # 수동 전용(O3)·시험에서 뺀 요청(R)
     setup = [s for s in order if by_id[s].get("setup")]             # 시험 자료 준비 (S0, S1): 러너가 직접 실행
     calls = _calls(fake_oc)
     assert manual and setup == ["S0", "S1"] and len(calls) == len(order) - len(manual) - len(setup)
@@ -394,7 +394,8 @@ def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc,
     assert "Gemma 종합 테스트" in text and "ses_fake1" in text and "채점 결과" in text
     assert "[gemma] S0" not in text and "[gemma] A1" in text                     # S0은 세지 않음, A1 실패로 목록에
     for s in manual:                                                             # 수동 전용은 실패가 아니라 건너뜀
-        assert text.count(f"[gemma] {s}: ") == 1 and f"[gemma] {s}: 수동 전용" in text
+        why = "시험에서 뺌" if by_id[s].get("paused") else "수동 전용"
+        assert text.count(f"[gemma] {s}: ") == 1 and f"[gemma] {s}: {why}" in text
 
 
 @pytest.mark.skipif(os.name == "nt", reason="가짜 opencode는 #! 스크립트 (Linux)")
