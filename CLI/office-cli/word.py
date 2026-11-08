@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _office as off  # noqa: E402
 import _runtime as rt  # noqa: E402
+import _markdown as md  # noqa: E402
 
 TOOL = "word"
 
@@ -730,11 +731,11 @@ class Writer:
         return para
 
     def text(self, text: str, style: Optional[int] = None) -> None:
-        plain, spans = rt.split_bold(text)
+        plain, spans = md.split_bold(text)
         self._para(plain, style, spans)
 
     def heading(self, level: int, text: str) -> None:
-        self._para(rt.plain_heading(text), heading_style(level))   # 제목은 모든 수준이 ** __를 뺀 글 (굵기가 섞이지 않음)
+        self._para(md.plain_heading(text), heading_style(level))   # 제목은 모든 수준이 ** __를 뺀 글 (굵기가 섞이지 않음)
         self.created.append(f"제목{level}")
 
     def items(self, items: List[str], numbered: bool) -> None:
@@ -834,7 +835,7 @@ class Writer:
         self.created.append("페이지 나누기")
 
     def markdown(self, text: str) -> None:
-        for kind, payload in rt.parse_markdown_blocks(text):
+        for kind, payload in md.parse_markdown_blocks(text):
             if kind == "heading":
                 self.heading(*payload)
             elif kind in ("paragraph", "code"):
@@ -851,7 +852,7 @@ class Writer:
             elif kind == "break":
                 self.rule()
             elif kind == "front_matter":
-                self.warnings.append(rt.front_matter_warning(payload))
+                self.warnings.append(md.front_matter_warning(payload))
                 rt.log("WARN", self.warnings[-1])
 
 
@@ -1051,9 +1052,9 @@ def cmd_write(args) -> Dict[str, Any]:
             elif args.heading:
                 w.heading(args.heading, content.strip())
             elif args.title:
-                w._para(rt.plain_heading(content.strip()), WD_STYLE_TITLE)
+                w._para(md.plain_heading(content.strip()), WD_STYLE_TITLE)
                 w.created.append("문서 제목")
-            elif rt.looks_like_markdown(content):
+            elif md.looks_like_markdown(content):
                 w.markdown(content)
             else:
                 for para in [p for p in re.split(r"\n\s*\n|\n", content) if p.strip()]:
@@ -1138,23 +1139,23 @@ def _first_inserted(content: str, mode: str) -> str:
     """넣은 글의 첫 글 (Writer가 넣는 모양 그대로: 마크다운 블록은 해석한 글, 코드 줄과 표 칸은 글자 그대로)."""
     if mode == "raw":
         return content.strip()
-    if mode == "auto" and rt.looks_like_markdown(content):
-        for kind, payload in rt.parse_markdown_blocks(content):
+    if mode == "auto" and md.looks_like_markdown(content):
+        for kind, payload in md.parse_markdown_blocks(content):
             if kind == "heading":
-                return rt.plain_heading(payload[1])
+                return md.plain_heading(payload[1])
             if kind == "paragraph":
-                return rt.split_bold(payload)[0]
+                return md.split_bold(payload)[0]
             if kind == "code":
                 return payload                      # 펜스 줄은 넣지 않고 코드는 글자 그대로
             if kind in ("bullets", "numbered"):
-                return rt.split_bold(payload[0])[0]
+                return md.split_bold(payload[0])[0]
             if kind == "table":
                 return "".join(str(c) for c in payload[0])     # 칸은 그대로 넣음 ('\|'는 이미 글자 '|')
         return ""                                   # 구분선(빈 단락)·머리말만 있음
     if mode == "bold":
-        return rt.plain_heading(content.strip())
+        return md.plain_heading(content.strip())
     first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
-    return rt.split_bold(first)[0]
+    return md.split_bold(first)[0]
 
 
 # ==============================================================================
@@ -1428,7 +1429,7 @@ def _fill_rows(path: str) -> List[Tuple[int, str, str]]:
     if ext in (".csv", ".tsv"):
         rows = rt.read_csv_rows(path)
     else:
-        table = next((payload for kind, payload in rt.parse_markdown_blocks(rt.read_text_file(path)) if kind == "table"), None)
+        table = next((payload for kind, payload in md.parse_markdown_blocks(rt.read_text_file(path)) if kind == "table"), None)
         if table is None:
             raise rt.InputError("값 파일에서 표를 찾지 못했습니다. CSV(열: 자리, 값)나 마크다운 표로 만드세요.")
         rows = table

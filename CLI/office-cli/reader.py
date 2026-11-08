@@ -38,6 +38,7 @@ from xml.etree import ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _runtime as rt  # noqa: E402
+import _xlsx_formula as xf  # noqa: E402
 
 TOOL = "reader"
 SUPPORTED = {
@@ -1346,7 +1347,7 @@ def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         meta["rows_truncated"] = True
         rt.log("WARN", f"시트당 {MAX_SHEET_ROWS}행까지만 읽었습니다.")
     # 계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 연 적 없는 파일): data_only로는 빈 칸이라 글이 없음
-    uncomputed = rt.xlsx_uncomputed_formulas(path)
+    uncomputed = xf.xlsx_uncomputed_formulas(path)
     _uncomputed_from_check(meta, uncomputed)           # 확인 실패도 남김: 캐시를 쓸 때 recheck_uncomputed가 다시 확인
     if uncomputed.get("unknown"):
         rt.log("WARN", f"수식 계산 여부를 확인하지 못함: {uncomputed.get('error')}")
@@ -1660,7 +1661,7 @@ def recheck_uncomputed(doc: Dict[str, Any], cache_file: Optional[str] = None) ->
     if not _recheck_allowed():
         rt.debug(f"수식 칸 다시 확인 상한/시간 초과로 건너뜀: {os.path.basename(path)}")
         return doc
-    again = rt.xlsx_uncomputed_formulas(path)
+    again = xf.xlsx_uncomputed_formulas(path)
     if again.get("unknown"):
         return doc
     _uncomputed_from_check(meta, again)
@@ -2138,9 +2139,9 @@ def cmd_read(args) -> Dict[str, Any]:
         if meta.get("rows_truncated") else ""
     # 계산된 값이 없는 수식 칸: 빈 칸으로 읽혀 글에 없음 -> 읽기·저장 모두 UNVERIFIED (값이 계산된 적 없음)
     uncomputed = meta.get("uncomputed_formulas") or None
-    formula_reason = rt.uncomputed_note(uncomputed) if uncomputed else ""
+    formula_reason = xf.uncomputed_note(uncomputed) if uncomputed else ""
     if uncomputed:
-        result.update(rt.uncomputed_fields(uncomputed))
+        result.update(xf.uncomputed_fields(uncomputed))
     # 글자 없이 그림만 있는 쪽 (스캔 쪽): 읽으려는 범위 안의 쪽만 알림. 잘림이 아니라 주의 사항이라 notes에
     by_range = bool(args.units) or bool(sec_key)      # --section: 고른 단위의 첫 쪽~끝 쪽만
     blank_pages = _read_blank_pages(meta.get("pages_without_text") or [], selected, req_pages, by_range)

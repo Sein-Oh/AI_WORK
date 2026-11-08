@@ -11,6 +11,13 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.85] - 2026-11-08
+
+### 구조
+- 큰 파일을 내부 모듈로 나눔 (동작 변경 없음, 진입점·인자·JSON 그대로): `excel.py check` -> `_spec_check.py`, `excel.py compare` -> `_excel_compare.py`
+  (`excel.py`에는 명령과 인자만 남고 그 모듈을 부름), `_runtime.py`의 닫힌 xlsx 계산 안 된 수식 칸 찾기 -> `_xlsx_formula.py`,
+  마크다운 블록 해석 -> `_markdown.py`. 도구 폴더를 통째로 복사하므로 배포 방법은 같음. 테스트도 새 모듈 이름으로 부름.
+
 ## [1.4.84] - 2026-11-08
 - 고칠 것: `--action` 같은 고르는 값의 오타(`sheet --action del`)에 빈 `[후보] `를 냄 (집 PC pytest `test_action_typo_is_candidate_and_delete_is_destructive`).
   Python 3.13.13 argparse는 오류 문장의 값에 따옴표를 붙이지 않는데(`choose from list, add`), 따옴표 안의 값만 읽었음.

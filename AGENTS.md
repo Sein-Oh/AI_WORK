@@ -158,7 +158,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 학습과 추론이 같아야 하는 로직(데이터 로딩, 수치 변환, `--eval` 수식)은 `ml_predict.py` PART C 한 곳에만 둔다.
 - `ml_predict.py`는 다른 ml-kit 파일을 import하지 않는다 (모델 폴더와 함께 단독 배포). `ml_train.py`/`ml_report.py`가 `ml_predict.py`를 import한다.
 ### office-cli
-- 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`.
+- 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`. 내부 모듈(진입점 아님, 스킬에 적지 않음): `_markdown.py`(마크다운 해석),
+  `_xlsx_formula.py`(닫힌 xlsx의 계산 안 된 수식 칸), `_spec_check.py`(excel check), `_excel_compare.py`(excel compare).
+  `_runtime.py`는 다른 office-cli 파일을 import하지 않는다. `_spec_check.py`·`_excel_compare.py`는 `excel.py`의 주소·읽기 도우미를 쓴다.
 - 세션(`open_target`/`write_session` with 블록) 밖에서 그 안의 COM 객체(시트, 범위, 문서)를 읽지 않는다. 닫힌 파일은 블록이 끝나면 문서와
   백그라운드 Office가 닫혀 OLE 0x800a01a8로 실패하고, 저장은 끝났는데 실패를 보고한다 (회사 PC 2026-11-06 O2). 결과에 쓸 값은 블록 안에서
   파이썬 값으로 꺼내 둔다. 가짜 COM은 이것을 흉내 내지 않으므로 `tests/test_session_scope.py`가 코드 모양으로 검사한다.

@@ -23,8 +23,13 @@ CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / diff / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
-├── _runtime.py  공통 런타임 (응답 계약, 경로, 입출력, 마크다운 해석)
-└── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
+├── _runtime.py  공통 런타임 (응답 계약, 인자 파서, 경로, 입출력, JIT 복구, 전체 명령 만들기)
+├── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
+├── _markdown.py      마크다운 블록 해석 (word.py·ppt.py 넣기, excel.py 표 파일)
+├── _xlsx_formula.py  닫힌 xlsx의 계산된 값이 없는 수식 칸 찾기 (excel.py·reader.py·office.py 읽기의 R1 확인)
+├── _spec_check.py    excel.py check 구현 (규격서 대조)
+└── _excel_compare.py excel.py compare 구현 (두 판 비교)
+   (_로 시작하는 파일은 진입점이 아닌 내부 모듈. 스킬에 적지 않고, 다른 도구 폴더를 import하지 않음)
 
 CLI-dev/office-cli/  개발·실기 테스트용 (사내 PC C:\CLI-dev\office-cli, C:\CLI와 나란히)
 ├── README.md / CHANGELOG.md / TEST_CHECKLIST.md / requirements.txt

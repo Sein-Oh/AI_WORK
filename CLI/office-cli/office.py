@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _office as off  # noqa: E402
 import _runtime as rt  # noqa: E402
+import _xlsx_formula as xf  # noqa: E402
 
 TOOL = "office"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -617,7 +618,7 @@ def _excel_range_rows(args) -> Tuple[List[List[Any]], str, Optional[Dict[str, An
     if not rows or not any(any(str(v).strip() for v in r) for r in rows):
         # 오류 로그에는 칸 주소(시트 이름)를 남기지 않음
         raise rt.InputError(f"범위 {args.range}에 데이터가 없습니다."
-                            + (f" {rt.uncomputed_note(uncomputed)}." if uncomputed else ""),
+                            + (f" {xf.uncomputed_note(uncomputed)}." if uncomputed else ""),
                             log_message=f"범위 {args.range}에 데이터가 없습니다."
                             + ((" (수식 계산 여부 확인 못함)" if uncomputed.get("unknown") else
                                 f" (계산된 값이 없는 수식 칸 {uncomputed['count']}개)") if uncomputed else ""))
@@ -672,8 +673,8 @@ def _excel_range_transfer(args, targets: List[str]) -> Dict[str, Any]:
         fields.update(failures=failures, succeeded=list(results), failed=failed)
         problems.append(_partial_note(results, failed))
     if problems:
-        return rt.with_uncomputed(rt.ok_unverified(TOOL, "transfer", preview, problems, **fields), uncomputed)
-    return rt.with_uncomputed(rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 표를 다시 읽어 확인했습니다.", verified=True,
+        return xf.with_uncomputed(rt.ok_unverified(TOOL, "transfer", preview, problems, **fields), uncomputed)
+    return xf.with_uncomputed(rt.ok(TOOL, "transfer", preview, "VERIFIED: 넣은 표를 다시 읽어 확인했습니다.", verified=True,
                                     **fields), uncomputed)
 
 

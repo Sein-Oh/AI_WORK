@@ -5,8 +5,8 @@ import os
 import openpyxl
 import pytest
 
+import _excel_compare
 import _runtime as rt
-import excel
 from office_helpers import recommended_argv, run_excel, split_command
 
 HEAD = ["Level", "Part No", "Description", "Qty", "Unit", "Ref Des", "Maker", "비고"]
@@ -155,22 +155,22 @@ def test_no_changes_says_zero_and_writes_no_file(tmp_path, capsys):
 
 
 def test_ref_designator_normalization():
-    assert excel._cmp_refs("R1-R3, R5") == excel._cmp_refs("R1,R2,R3,R5") == excel._cmp_refs("r5 r1~r3") == excel._cmp_refs("R1-3;R5")
-    assert excel._cmp_refs("C01-C03") == frozenset({"C01", "C02", "C03"})
-    assert excel._cmp_refs("R1-C3") == frozenset({"R1-C3"})              # 머리글자가 다른 범위는 펼치지 않음
-    assert len(excel._cmp_refs("R1-R99999")) == 1                        # 너무 큰 범위(오타)는 펼치지 않음
-    assert excel._cmp_ref_text(excel._cmp_refs("R10,R2,R1")) == "R1,R2,R10"
+    assert _excel_compare._cmp_refs("R1-R3, R5") == _excel_compare._cmp_refs("R1,R2,R3,R5") == _excel_compare._cmp_refs("r5 r1~r3") == _excel_compare._cmp_refs("R1-3;R5")
+    assert _excel_compare._cmp_refs("C01-C03") == frozenset({"C01", "C02", "C03"})
+    assert _excel_compare._cmp_refs("R1-C3") == frozenset({"R1-C3"})              # 머리글자가 다른 범위는 펼치지 않음
+    assert len(_excel_compare._cmp_refs("R1-R99999")) == 1                        # 너무 큰 범위(오타)는 펼치지 않음
+    assert _excel_compare._cmp_ref_text(_excel_compare._cmp_refs("R10,R2,R1")) == "R1,R2,R10"
 
 
 def test_value_and_code_normalization():
-    assert excel._cmp_value(1) == excel._cmp_value(1.0) == excel._cmp_value("1") == excel._cmp_value(" 1.0 ") == "1"
-    assert excel._cmp_value("1,000") == "1000" and excel._cmp_value("007") == "007"     # 앞자리 0 글은 그대로
-    assert excel._cmp_value("ＡＢＣ　１") == "ABC 1"                                      # 전각 -> 반각
-    assert excel._cmp_code("0012") == "0012" != excel._cmp_code(12) and excel._cmp_code(12.0) == "12"
-    assert excel._cmp_code(" ab-01 ") == excel._cmp_code("AB-01") == excel._cmp_code("ＡＢ－０１")
-    assert excel._cmp_header_key("Q'ty") == "qty" and excel._cmp_header_key("수량(EA)") == "수량"
-    assert excel._cmp_header_key("P/N") == "pn" and excel._cmp_header_key("Part No.") == "partno"
-    assert [excel._cmp_level(v) for v in (1, "2", ".3", "..3", "**", "1.2.3", "x")] == [1, 2, 3, 3, 2, 3, None]
+    assert _excel_compare._cmp_value(1) == _excel_compare._cmp_value(1.0) == _excel_compare._cmp_value("1") == _excel_compare._cmp_value(" 1.0 ") == "1"
+    assert _excel_compare._cmp_value("1,000") == "1000" and _excel_compare._cmp_value("007") == "007"     # 앞자리 0 글은 그대로
+    assert _excel_compare._cmp_value("ＡＢＣ　１") == "ABC 1"                                      # 전각 -> 반각
+    assert _excel_compare._cmp_code("0012") == "0012" != _excel_compare._cmp_code(12) and _excel_compare._cmp_code(12.0) == "12"
+    assert _excel_compare._cmp_code(" ab-01 ") == _excel_compare._cmp_code("AB-01") == _excel_compare._cmp_code("ＡＢ－０１")
+    assert _excel_compare._cmp_header_key("Q'ty") == "qty" and _excel_compare._cmp_header_key("수량(EA)") == "수량"
+    assert _excel_compare._cmp_header_key("P/N") == "pn" and _excel_compare._cmp_header_key("Part No.") == "partno"
+    assert [_excel_compare._cmp_level(v) for v in (1, "2", ".3", "..3", "**", "1.2.3", "x")] == [1, 2, 3, 3, 2, 3, None]
 
 
 def test_leading_zero_codes_and_csv_input(tmp_path, capsys):
@@ -248,7 +248,7 @@ def test_save_is_verified_and_never_overwrites_without_option(tmp_path, capsys):
 def test_unverified_when_result_file_does_not_read_back(tmp_path, capsys, monkeypatch):
     old = _xlsx(tmp_path / "old.xlsx", MULTI_OLD)
     new = _xlsx(tmp_path / "new.xlsx", MULTI_NEW)
-    monkeypatch.setattr(excel, "_cmp_check_xlsx", lambda path, expected: "결과 파일 '추가' 시트의 행 수가 다름 (기대 2, 읽은 1)")
+    monkeypatch.setattr(_excel_compare, "_cmp_check_xlsx", lambda path, expected: "결과 파일 '추가' 시트의 행 수가 다름 (기대 2, 읽은 1)")
     code, out = _compare(capsys, old, new)
     assert code == 0 and out["verified"] is False and out["agent_directive"].startswith("UNVERIFIED:") and "추가" in out["unverified"][0]
 
@@ -259,7 +259,7 @@ def test_truncated_lists_point_to_full_result_file(tmp_path, capsys):
     new = _xlsx(tmp_path / "b.xlsx", [[f"P{i:03d}", f"부품{i}", 1] for i in range(5)] +
                 [[f"N{i:03d}", f"새 부품 {i * 7}", 1] for i in range(30)], header=head, title=None)
     _, out = _compare(capsys, old, new)
-    assert out["counts"]["추가"] == 30 and len(out["added"]) == excel.COMPARE_SHOWN and out["truncated"] is True
+    assert out["counts"]["추가"] == 30 and len(out["added"]) == _excel_compare.COMPARE_SHOWN and out["truncated"] is True
     assert out["full_result_file"] == out["output_file"] and "full_result_file" in out["agent_directive"]
     assert len(_sheet_rows(out["full_result_file"], "추가")) == 31
 
@@ -331,8 +331,8 @@ def test_slow_first_file_continues_with_cache(tmp_path, capsys, monkeypatch):
     assert len(os.listdir(cache_dir)) == 1
     monkeypatch.setattr(rt, "check_time", real)
     read = []
-    orig = excel._cmp_read_file
-    monkeypatch.setattr(excel, "_cmp_read_file", lambda *a: read.append(a[0]) or orig(*a))
+    orig = _excel_compare._cmp_read_file
+    monkeypatch.setattr(_excel_compare, "_cmp_read_file", lambda *a: read.append(a[0]) or orig(*a))
     code, out = _compare(capsys, old, new)
     assert code == 0 and out["verified"] is True and out["counts"]["수량 변경"] == 1
     assert read == [new] and os.listdir(cache_dir) == []          # 이전 판은 캐시에서, 끝나면 캐시를 지움

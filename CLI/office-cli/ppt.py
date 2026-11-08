@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _office as off  # noqa: E402
 import _runtime as rt  # noqa: E402
+import _markdown as md  # noqa: E402
 
 TOOL = "ppt"
 
@@ -557,25 +558,25 @@ def _md_sections(text: str) -> List[Dict[str, Any]]:
     '---'(구분선)은 넣지 않고 슬라이드도 나누지 않음, 맨 앞 YAML 머리말도 넣지 않음 (cmd_write가 warnings에 남김)."""
     sections: List[Dict[str, Any]] = []
     cur: Optional[Dict[str, Any]] = None
-    for kind, payload in rt.parse_markdown_blocks(text):
+    for kind, payload in md.parse_markdown_blocks(text):
         if kind in ("break", "front_matter"):
             continue
         if kind == "heading" and payload[0] <= 2:
-            cur = {"title": rt.plain_heading(payload[1]), "lines": [], "tables": []}
+            cur = {"title": md.plain_heading(payload[1]), "lines": [], "tables": []}
             sections.append(cur)
             continue
         if cur is None:
             cur = {"title": "", "lines": [], "tables": []}
             sections.append(cur)
         if kind == "heading":
-            cur["lines"].append((rt.plain_heading(payload[1]), ""))   # 3단계 이하 제목: 1·2단계 제목과 같은 규칙 (** __를 뺀 글)
+            cur["lines"].append((md.plain_heading(payload[1]), ""))   # 3단계 이하 제목: 1·2단계 제목과 같은 규칙 (** __를 뺀 글)
         elif kind == "paragraph":
-            cur["lines"].append((rt.split_bold(payload)[0], ""))
+            cur["lines"].append((md.split_bold(payload)[0], ""))
         elif kind == "code":
             cur["lines"].append((payload, ""))          # 코드 줄은 글자 그대로 (** __를 굵게로 읽지 않음)
         elif kind in ("bullets", "numbered"):
             list_kind = "numbered" if kind == "numbered" else "bullet"
-            cur["lines"] += [(rt.split_bold(x)[0], list_kind) for x in payload]
+            cur["lines"] += [(md.split_bold(x)[0], list_kind) for x in payload]
         elif kind == "table":
             cur["tables"].append(payload)
     return [s for s in sections if s["title"] or s["lines"] or s["tables"]]
@@ -596,22 +597,22 @@ def _text_lines(text: str) -> List[Tuple[str, str]]:
             continue
         if not s:
             continue
-        m = rt._FENCE.match(s)
+        m = md._FENCE.match(s)
         if m:
             fence = m.group(1)                      # 펜스 줄은 넣지 않음
             continue
         m = re.match(r"^[-*+]\s+(.*)$", s)
-        n = None if m else rt.MD_NUMBERED.match(s)
+        n = None if m else md.MD_NUMBERED.match(s)
         if not n:
             numbered_as_text = False
         elif not numbered_as_text and not (lines and lines[-1][1] == "numbered"):
             # 번호 목록의 첫 줄: 1이 아닌 번호로 시작하면 자동 번호가 1부터 다시 매기므로 이 목록은 번호를 글로 둔 줄로 넣음
             numbered_as_text = int(n.group(1)) != 1
         if n and numbered_as_text:
-            lines.append((rt.split_bold(s)[0], ""))
+            lines.append((md.split_bold(s)[0], ""))
             continue
         body = m.group(1) if m else (s[n.end():] if n else s)
-        lines.append((rt.split_bold(body)[0], "bullet" if m else ("numbered" if n else "")))
+        lines.append((md.split_bold(body)[0], "bullet" if m else ("numbered" if n else "")))
     return lines
 
 
@@ -652,7 +653,7 @@ def cmd_write(args) -> Dict[str, Any]:
         raise rt.InputError("넣을 내용이 없습니다. --title, --text, --file, --image, --cards 중 하나 이상을 지정하세요.")
     theme = off.get_theme(args.theme or "navy")
     if args.title:
-        args.title = rt.plain_heading(args.title)   # 슬라이드 제목은 .md 제목·word --title과 같은 규칙 (** __를 뺀 글)
+        args.title = md.plain_heading(args.title)   # 슬라이드 제목은 .md 제목·word --title과 같은 규칙 (** __를 뺀 글)
     md_sections: List[Dict[str, Any]] = []
     md_warnings: List[str] = []
     table_rows: Optional[List[List[str]]] = None
@@ -665,8 +666,8 @@ def cmd_write(args) -> Dict[str, Any]:
         else:
             md_text = rt.read_text_file(path)
             md_sections = _md_sections(md_text)
-            if rt.front_matter_lines(md_text):
-                md_warnings.append(rt.front_matter_warning(rt.front_matter_lines(md_text)))
+            if md.front_matter_lines(md_text):
+                md_warnings.append(md.front_matter_warning(md.front_matter_lines(md_text)))
                 rt.log("WARN", md_warnings[-1])
             if len(md_sections) > MAX_NEW_SLIDES:
                 raise rt.InputError(f"파일 내용이 슬라이드 {len(md_sections)}장 분량입니다 (최대 {MAX_NEW_SLIDES}장). 내용을 줄여 주세요.")

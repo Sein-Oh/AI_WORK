@@ -14,6 +14,7 @@ import zipfile
 import pytest
 
 import _runtime as rt
+import _xlsx_formula as xf
 import office
 import reader
 import word
@@ -1314,12 +1315,12 @@ def test_ole_without_fileheader_is_input_error(tmp_path, capsys):
 def test_check_failure_is_not_reused_from_cache(tmp_path, capsys, monkeypatch):
     """24차 LOW-5 (1.4.42): 수식 칸 확인 실패(MemoryError 등)를 캐시에서 그대로 다시 쓰지 않음."""
     c = formula_xlsx(tmp_path / "c.xlsx", cached=True)
-    real = rt.xlsx_uncomputed_formulas
-    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas",
+    real = xf.xlsx_uncomputed_formulas
+    monkeypatch.setattr(xf, "xlsx_uncomputed_formulas",
                         lambda *a, **k: {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"})
     code, out = run_main(reader, capsys, "read", "--file", c)
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
-    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", real)          # 일시적 실패가 지나감 (파일은 그대로)
+    monkeypatch.setattr(xf, "xlsx_uncomputed_formulas", real)          # 일시적 실패가 지나감 (파일은 그대로)
     code, out = run_main(reader, capsys, "read", "--file", c)
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     cached = reader.load_cached_only(os.path.abspath(c))
@@ -1328,12 +1329,12 @@ def test_check_failure_is_not_reused_from_cache(tmp_path, capsys, monkeypatch):
 
 def test_check_failure_rechecked_in_index_search(tmp_path, capsys, monkeypatch):
     c = formula_xlsx(tmp_path / "c.xlsx", cached=True)
-    real = rt.xlsx_uncomputed_formulas
-    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas",
+    real = xf.xlsx_uncomputed_formulas
+    monkeypatch.setattr(xf, "xlsx_uncomputed_formulas",
                         lambda *a, **k: {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"})
     code, out = run_main(reader, capsys, "index", "--file", c)
     assert code == 0, out
-    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", real)
+    monkeypatch.setattr(xf, "xlsx_uncomputed_formulas", real)
     code, out = run_main(reader, capsys, "search", "--query", "없는글자ZQX")       # 색인(캐시)만 검색
     assert code == 0 and out["agent_directive"].startswith("VERIFIED: 0건."), out
 
@@ -1346,7 +1347,7 @@ def test_recheck_uncomputed_is_capped_per_run(tmp_path, capsys, monkeypatch):
     def failing(*a, **k):
         calls.append(1)
         return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": "MemoryError"}
-    monkeypatch.setattr(rt, "xlsx_uncomputed_formulas", failing)
+    monkeypatch.setattr(xf, "xlsx_uncomputed_formulas", failing)
     for f in files:
         run_main(reader, capsys, "index", "--file", f)
     calls.clear()
