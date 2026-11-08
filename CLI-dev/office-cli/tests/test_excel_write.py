@@ -1796,7 +1796,7 @@ def test_write_cells_dry_run(xl, capsys):
     ws.set(9, 3, "b")
     code, out = run_excel(capsys, "write", "--cells", "C8=a; C9=b", "--dry-run")    # 1.4.83: 모두 같은 값이면 실행할 명령 없음
     assert code == 0 and out["count"] == 0 and "confirm_commands" not in out and "바뀔 것 없음" in out["preview"], out
-    assert out["agent_directive"].startswith("VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건)"), out
+    assert out["agent_directive"] == rt.DRY_RUN_NOTHING, out          # 1.4.86: 미리보기 0건 문구는 하나
 
 
 @pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd", "bash"])
@@ -2214,5 +2214,5 @@ def test_chart_delete_dry_run_then_confirm(xl, capsys):
     assert code == 0 and _names(wb)["Sheet1"] == [], out
     code, out = run_excel(capsys, "chart", "--action", "delete", "--all", "--dry-run")
     assert code == 0 and out["count"] == 0 and "바뀔 것 없음" in out["preview"] and "confirm_commands" not in out, out
-    code, out = run_excel(capsys, "chart", "--action", "list", "--dry-run")
-    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    code, out = run_excel(capsys, "chart", "--action", "list", "--dry-run")      # 읽기만 하는 동작: 받고 warnings (1.4.86)
+    assert code == 0 and out["count"] == 0 and any("--dry-run을 무시" in w for w in out["warnings"]), out

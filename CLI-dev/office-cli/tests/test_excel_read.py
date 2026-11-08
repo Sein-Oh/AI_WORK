@@ -10,6 +10,8 @@ import pytest
 
 import _office as off
 import _runtime as rt
+import _spec_check
+import _xlsx_formula as xf
 import excel
 import office
 import reader
@@ -676,13 +678,13 @@ def test_preview_separates_long_values_and_dropped_columns(tmp_path, capsys):
 
 def test_detect_helper(tmp_path):
     p = formula_xlsx(tmp_path / "f.xlsx", n=25)
-    info = rt.xlsx_uncomputed_formulas(p)
-    assert info["count"] == 25 and info["cells"][0] == "합계!B4" and len(info["cells"]) == rt.UNCOMPUTED_SHOW
-    assert rt.xlsx_uncomputed_formulas(p, area=(1, 1, 3, 2))["count"] == 0        # 범위 밖
-    assert rt.xlsx_uncomputed_formulas(p, sheet="없음")["count"] == 0
-    fields = rt.uncomputed_fields(info)
+    info = xf.xlsx_uncomputed_formulas(p)
+    assert info["count"] == 25 and info["cells"][0] == "합계!B4" and len(info["cells"]) == xf.UNCOMPUTED_SHOW
+    assert xf.xlsx_uncomputed_formulas(p, area=(1, 1, 3, 2))["count"] == 0        # 범위 밖
+    assert xf.xlsx_uncomputed_formulas(p, sheet="없음")["count"] == 0
+    fields = xf.uncomputed_fields(info)
     assert fields["uncomputed_count"] == 25 and fields["uncomputed_truncated"] is True
-    assert rt.xlsx_uncomputed_formulas(formula_xlsx(tmp_path / "c.xlsx", cached=True))["count"] == 0
+    assert xf.xlsx_uncomputed_formulas(formula_xlsx(tmp_path / "c.xlsx", cached=True))["count"] == 0
 
 
 def _array_xlsx(path, cached_anchor=False):
@@ -703,20 +705,20 @@ def _array_xlsx(path, cached_anchor=False):
 
 def test_array_formula_counts_every_cell(tmp_path, capsys):
     """23차 L1 (1.4.43): 배열 수식은 ref 범위의 모든 칸이 수식 칸."""
-    info = rt.xlsx_uncomputed_formulas(_array_xlsx(tmp_path / "a.xlsx"))
+    info = xf.xlsx_uncomputed_formulas(_array_xlsx(tmp_path / "a.xlsx"))
     assert info["count"] == 3 and info["cells"] == ["배열!C1", "배열!C2", "배열!C3"] and info["bounds"] == [1, 3, 3, 3], info
     p = _array_xlsx(tmp_path / "b.xlsx", cached_anchor=True)
-    info = rt.xlsx_uncomputed_formulas(p)
+    info = xf.xlsx_uncomputed_formulas(p)
     assert info["count"] == 2 and info["cells"] == ["배열!C2", "배열!C3"], info
-    assert rt.xlsx_uncomputed_formulas(p, area=(1, 1, 2, 3))["count"] == 1         # 범위 안의 C2만
-    assert rt.xlsx_uncomputed_formulas(p, area=(1, 1, 3, 2))["count"] == 0         # C열 밖
+    assert xf.xlsx_uncomputed_formulas(p, area=(1, 1, 2, 3))["count"] == 1         # 범위 안의 C2만
+    assert xf.xlsx_uncomputed_formulas(p, area=(1, 1, 3, 2))["count"] == 0         # C열 밖
     code, out = run_main(excel, capsys, "read", "--target", p)
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["uncomputed_count"] == 2, out
 
 
 def test_array_formula_with_values_is_computed(tmp_path):
     p = tmp_path / "m.xlsx"
-    assert rt.xlsx_uncomputed_formulas(_mixed_xlsx(p))["count"] == 0               # 엑셀 저장: 다른 칸에 값이 있음
+    assert xf.xlsx_uncomputed_formulas(_mixed_xlsx(p))["count"] == 0               # 엑셀 저장: 다른 칸에 값이 있음
 
 
 def _far_xlsx(path):
@@ -866,9 +868,9 @@ def test_full_calc_on_load_cached_zero(tmp_path, capsys):
 
 def test_true_flag_and_excel_saved(tmp_path, capsys):
     t = _patch(_total_xlsx(tmp_path / "t.xlsx"), "<v></v>", "<v>600</v>", ' fullCalcOnLoad="true"')
-    assert rt.xlsx_uncomputed_formulas(t)["count"] == 1 and rt.xlsx_full_calc_on_load(t)
+    assert xf.xlsx_uncomputed_formulas(t)["count"] == 1 and xf.xlsx_full_calc_on_load(t)
     e = _patch(_total_xlsx(tmp_path / "e.xlsx"), "<v></v>", "<v>600</v>", "")         # 엑셀이 저장하면 표시가 지워짐
-    assert rt.xlsx_uncomputed_formulas(e)["count"] == 0 and not rt.xlsx_full_calc_on_load(e)
+    assert xf.xlsx_uncomputed_formulas(e)["count"] == 0 and not xf.xlsx_full_calc_on_load(e)
     code, out = run_main(excel, capsys, "read", "--target", e)
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["values"][4] == ["", 600], out
 
@@ -882,9 +884,9 @@ def test_scan_failure_is_unknown(tmp_path, capsys, monkeypatch):
     import xml.etree.ElementTree as ET
     p = _total_xlsx(tmp_path / "t.xlsx")
     monkeypatch.setattr(ET, "iterparse", _boom)
-    info = rt.xlsx_uncomputed_formulas(p)
-    assert info["unknown"] is True and info["error"] == "MemoryError" and rt.uncomputed_found(info)
-    assert rt.uncomputed_fields(info) == {"uncomputed_check": "unknown"}
+    info = xf.xlsx_uncomputed_formulas(p)
+    assert info["unknown"] is True and info["error"] == "MemoryError" and xf.uncomputed_found(info)
+    assert xf.uncomputed_fields(info) == {"uncomputed_check": "unknown"}
     code, out = run_main(excel, capsys, "read", "--target", p)
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
     assert out["uncomputed_check"] == "unknown" and "수식 계산 여부를 확인하지 못함" in out["agent_directive"]
@@ -896,9 +898,9 @@ def test_area_stops_after_last_row(tmp_path):
     p = _total_xlsx(tmp_path / "t.xlsx")
     # 범위 끝 행(3) 뒤의 XML이 깨져 있어도 범위 안만 확인하고 끝남
     _patch(p, '<row r="4"', '<row r="4"><broken')
-    info = rt.xlsx_uncomputed_formulas(p, "매출", (1, 1, 3, 2))
+    info = xf.xlsx_uncomputed_formulas(p, "매출", (1, 1, 3, 2))
     assert info["count"] == 0 and "unknown" not in info
-    assert rt.xlsx_uncomputed_formulas(p, "매출")["unknown"] is True
+    assert xf.xlsx_uncomputed_formulas(p, "매출")["unknown"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1226,7 +1228,7 @@ def test_check_long_serial_number_is_fast(tmp_path):
     p.write_text("시리얼 " + "1234567890" * 550 + " 정격 전압\n", encoding="utf-8")
     docs = [{"file": str(p), "units": reader.parse_txt(str(p))[0]}]
     t = time.monotonic()
-    r = excel._judge_row(docs, "정격 전압", "5", "", "값(V)")
+    r = _spec_check._judge_row(docs, "정격 전압", "5", "", "값(V)")
     assert time.monotonic() - t < 3.0 and r["verdict"] in ("판단필요", "근거없음"), r
 
 
@@ -1239,7 +1241,7 @@ def test_check_all_decided_is_still_unverified_and_save(check_env, capsys, tmp_p
                           "--value-col", "D", "--spec", str(spec), "--save", str(save))
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["verified"] is False, out
     assert "자동 판정은 참고용" in out["agent_directive"] and "condition" in out["agent_directive"]
-    assert out["unverified"][0] == excel.CHECK_ADVISORY and out["not_decided"] == 0
+    assert out["unverified"][0] == _spec_check.CHECK_ADVISORY and out["not_decided"] == 0
     assert out["counts"]["일치"] == 2 and out["output_file"] == str(save)
     import openpyxl
     rows = list(openpyxl.load_workbook(save, read_only=True).active.iter_rows(values_only=True))
@@ -1301,7 +1303,7 @@ CHECK_CORPUS = _load_check_corpus()
 def test_check_corpus_size_and_spread():
     # 표준 판정 말뭉치 (1.4.66): 규격 문장 + 측정값 + 기대 판정. 앞으로의 check 회귀를 막는 기준
     verdicts = [p.values[3] for p in CHECK_CORPUS]
-    assert len(verdicts) >= 60 and set(verdicts) == set(excel.VERDICTS)
+    assert len(verdicts) >= 60 and set(verdicts) == set(_spec_check.VERDICTS)
 
 
 @pytest.mark.parametrize("spec,item,value,verdict", CHECK_CORPUS)
@@ -1311,7 +1313,7 @@ def test_check_corpus(tmp_path, spec, item, value, verdict):
     path = tmp_path / "규격서.txt"
     path.write_text(spec + "\n", encoding="utf-8")
     docs = [{"file": str(path), "units": reader.parse_txt(str(path))[0]}]
-    r = excel._judge_row(docs, item, value, "", "값")
+    r = _spec_check._judge_row(docs, item, value, "", "값")
     assert r["verdict"] == verdict, r
 
 
@@ -1397,10 +1399,10 @@ def test_check_layer_b_item_marks_reason(tmp_path):
     p = tmp_path / "s.txt"
     p.write_text("SOI-1 전압은 5 V 이하\n\nSOI 2 전압은 3 V 이하\n", encoding="utf-8")
     docs = [{"file": str(p), "units": reader.parse_txt(str(p))[0]}]
-    r = excel._judge_row(docs, "SOI 1 전압", "4", "", "값(V)")
-    assert r["verdict"] == "일치" and r["match_mode"] == "exact_mixed" and excel.LAYER_B_NOTE in r["reason"], r
-    r = excel._judge_row(docs, "SOI 2 전압", "4", "", "값(V)")       # 글자 그대로(층 A)는 그대로
-    assert r["verdict"] == "불일치" and r["match_mode"] == "exact" and excel.LAYER_B_NOTE not in r["reason"], r
+    r = _spec_check._judge_row(docs, "SOI 1 전압", "4", "", "값(V)")
+    assert r["verdict"] == "일치" and r["match_mode"] == "exact_mixed" and _spec_check.LAYER_B_NOTE in r["reason"], r
+    r = _spec_check._judge_row(docs, "SOI 2 전압", "4", "", "값(V)")       # 글자 그대로(층 A)는 그대로
+    assert r["verdict"] == "불일치" and r["match_mode"] == "exact" and _spec_check.LAYER_B_NOTE not in r["reason"], r
 
 
 def test_sheet_candidate_has_numbered_confirm_command(xl, capsys):
@@ -1417,3 +1419,56 @@ def test_read_empty_range_is_explicit_zero(xl_table, capsys):
     code, out = run_main(excel, capsys, "read", "--range", "H10:I12")
     assert code == 0 and out["count"] == 0 and out["preview"].startswith("0건:"), out
     assert out["agent_directive"].startswith("VERIFIED: 0건.") and "찾은 항목 없음" in out["agent_directive"], out
+
+
+# 1.4.87: 이름 비교 규칙 하나 (rt.exact_key, rt.name_key). 열린 문서(COM)와 닫힌 파일(openpyxl)이 같은 [추천]을 냄
+
+def _two_sheet_xlsx(path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet1"
+    wb.active["A1"] = "a"
+    wb.create_sheet("요약")
+    wb.save(path)
+    return str(path)
+
+
+def test_name_key_is_one_rule():
+    assert rt.name_key("Sheet.1") == rt.name_key(" sheet_1 ") == rt.name_key("SHEET-1") == rt.name_key("Sheet1")
+    assert rt.find_name(" SHEET1 ", ["Sheet1"]) == "Sheet1" and rt.find_name("Sheet.1", ["Sheet1"]) is None
+    assert rt.suggest("Sheet.1", ["Sheet1", "요약"]) == ["Sheet1"]
+
+
+@pytest.mark.parametrize("argv", [
+    ["read", "--sheet", "Sheet.1"],                                     # 열린 문서 읽기 (not_found)
+    ["write", "--sheet", "Sheet.1", "--range", "A1", "--value", "x"],  # 열린 문서 쓰기 (missing_sheet)
+], ids=["open-read", "open-write"])
+def test_sheet_spelling_same_recommendation_open(xl, capsys, argv):
+    code, out = run_main(excel, capsys, *argv)
+    assert code == 1 and "표기" in out["message"], out
+    assert option_value(recommended_argv(out["message"], "excel"), "--sheet") == "Sheet1"
+
+
+def test_sheet_spelling_same_recommendation_closed(tmp_path, capsys):
+    path = _two_sheet_xlsx(tmp_path / "닫힌.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", path, "--sheet", "Sheet.1")
+    assert code == 1 and "표기" in out["message"], out
+    assert option_value(recommended_argv(out["message"], "excel"), "--sheet") == "Sheet1"
+
+
+def test_closed_xlsx_load_retries_transient_lock(tmp_path, capsys, monkeypatch):
+    """닫힌 xlsx를 여는 openpyxl.load_workbook도 retry_fs (백신·동기화 프로그램의 잠깐 잠금, JIT 복구 표)."""
+    import openpyxl
+    path = _two_sheet_xlsx(tmp_path / "잠김.xlsx")
+    real = openpyxl.load_workbook
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError(13, "잠김", path)
+        return real(*a, **k)
+    monkeypatch.setattr(openpyxl, "load_workbook", flaky)
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    code, out = run_main(excel, capsys, "read", "--target", path, "--sheet", "Sheet1")
+    assert code == 0 and out["values"][0][0] == "a" and len(calls) >= 2, out

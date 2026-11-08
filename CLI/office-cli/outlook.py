@@ -1581,15 +1581,15 @@ def build_cli():
     p = sub.add_parser("list", help="최근 메일 목록")
     p.add_argument("--folder", help=folder_help)
     p.add_argument("--unread", action="store_true", help="안 읽은 메일만")
-    p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
+    p.add_argument("--limit", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
     dated(p)
 
     p = sub.add_parser("search", help="메일 검색")
-    p.add_argument("--query", "-q", help="찾을 말")
+    p.add_argument("--query", help="찾을 말")
     p.add_argument("--from", dest="sender", help="보낸사람 이름/주소 일부")
     p.add_argument("--where", choices=["all", "subject", "body"], default="all", help="검색 범위 (기본 제목+본문)")
     p.add_argument("--folder", help=folder_help)
-    p.add_argument("--limit", "-n", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
+    p.add_argument("--limit", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
     dated(p)
 
     for name, hlp in (("read", "메일 읽기 (--id)"), ("current", "지금 보고 있거나 선택한 메일 읽기")):

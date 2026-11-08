@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.84"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.88"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -356,7 +356,7 @@ def check_saved_file(path: str, expected_rows: Optional[int] = None, delimiter: 
     try:
         if ext in (".xlsx", ".xlsm"):
             import openpyxl
-            wb = openpyxl.load_workbook(path, read_only=True)
+            wb = retry_fs(lambda: openpyxl.load_workbook(path, read_only=True))
             try:
                 if not wb.sheetnames:
                     return "저장한 엑셀 파일에 시트가 없음"
@@ -857,6 +857,24 @@ SAME_MEANING = [
     ("ppt", "slide", "--to", ["--dest"]),
     ("*", "*", "--json", []), ("*", "*", "--encoding", []),      # 출력은 늘 JSON, 인코딩은 자동 판별
 ]
+# 한 글자 옵션은 없음 (1.4.88, 사용법 단순성 1번: 한 가지 일에 한 가지 사용법). 받지 않고 긴 이름으로 고친 전체 명령을 [추천]
+# (같은 뜻 표). 도구마다 뜻이 달랐음: -n은 outlook --limit, reader --top, excel --name / -r은 excel --range, reader --regex
+SHORT_OPTIONS = {
+    "excel": {"-a": "--action", "-c": "--columns", "-f": "--file", "-n": "--name", "-r": "--range", "-s": "--sheet", "-t": "--target"},
+    "word": {"-a": "--action", "-f": "--file", "-t": "--target"},
+    "ppt": {"-a": "--action", "-f": "--file", "-t": "--target"},
+    "outlook": {"-n": "--limit", "-q": "--query"},
+    "reader": {"-C": "--context", "-d": "--folder", "-f": "--file", "-n": "--top", "-p": "--pages", "-q": "--query", "-r": "--regex"},
+}
+SAME_MEANING += [(tool, "*", short, [long]) for tool, opts in SHORT_OPTIONS.items() for short, long in opts.items()]
+_SHORT_FLAG = re.compile(r"^-[A-Za-z]$")
+
+
+def _is_flag(arg: str) -> bool:
+    """인자 오류에서 옵션으로 볼 것: --이름, 한 글자 -x (없앤 짧은 옵션을 같은 뜻 표로 고치려고. 음수 -5는 값)."""
+    return arg.startswith("--") or bool(_SHORT_FLAG.match(arg))
+
+
 # 철자가 비슷해도 추천하지 않는 옵션 (뜻이 크게 다르거나 되돌리기 어려움: --cell -> --all이 캐시 전부 삭제·전체 답장이었음)
 NO_FUZZY_OPTIONS = {"--all", "--overwrite", "--to", "--cc", "--bcc", "--attach", "--target", "--delete", "--send", "--app"}
 # 되돌리기 어려운 명령 (메일 발송, 캐시 지우기, 되돌리기): 오타 추천을 [추천](LLM이 묻지 않고 1번 실행)이 아니라
@@ -969,7 +987,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         opts = [o for a in (sub._actions if sub else []) for o in a.option_strings if o.startswith("--")]
         known = {o for a in (sub._actions if sub else []) for o in a.option_strings}
         argv = list(CURRENT_ARGV or [])
-        flags = [x for x in argv[1:] if x.startswith("--") and "=" not in x and x not in known]
+        flags = [x for x in argv[1:] if _is_flag(x) and "=" not in x and x not in known]
         if req:
             # 필수 옵션이 없다는 오류: 지어낸 옵션이 그 필수 옵션과 같은 뜻이면 고친 명령 (reader read --target a.pdf -> --file)
             fixed = self._same_meaning(argv, flags, opts, known) if flags else None
@@ -977,7 +995,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
                 return " " + fixed
             return ""
         extra = m.group(1).split()
-        flags = [x for x in extra if x.startswith("--")]
+        flags = [x for x in extra if _is_flag(x)]
         for f in flags:
             other = OTHER_COMMAND.get((self.tool_name, cmd, f))
             if other:
@@ -1035,7 +1053,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         while i < len(argv):
             a = argv[i]
             if a in plan:
-                has_value = i + 1 < len(argv) and not argv[i + 1].startswith("--") and argv[i + 1] not in known
+                has_value = i + 1 < len(argv) and not _is_flag(argv[i + 1]) and argv[i + 1] not in known
                 repl = plan[a]
                 if repl:
                     out += repl
@@ -1323,254 +1341,6 @@ def check_two_columns(path: str, rows: Sequence[Sequence[Any]], start: int, what
     raise InputError(head + hint + tail, log_message=head + hint + f" (고친 줄 {DOC_OMITTED})")
 
 
-UNCOMPUTED_POSITIONS = 100_000   # positions=True일 때 담는 칸 위치 수 상한 (넘으면 멀리 떨어진 칸을 가려내지 않음)
-UNCOMPUTED_SHOW = 20       # 계산된 값이 없는 수식 칸을 결과에 담는 개수 상한
-_XLSX_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
-_XLSX_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
-_XLSX_F_TAG = re.compile(rb"<(?:\w+:)?f[\s>/]")
-_CELL_REF = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+)$")
-
-
-def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
-    m = _CELL_REF.match(ref or "")
-    if not m:
-        return None
-    col = 0
-    for ch in m.group(1).upper():
-        col = col * 26 + ord(ch) - 64
-    return int(m.group(2)), col
-
-
-def _col_letters(n: int) -> str:
-    out = ""
-    while n:
-        n, r = divmod(n - 1, 26)
-        out = chr(65 + r) + out
-    return out
-
-
-def _array_box(ref: str) -> Optional[Tuple[int, int, int, int]]:
-    """배열 수식의 ref("C1:C3" 또는 "C1") -> (행1, 열1, 행2, 열2). 읽지 못하면 None."""
-    parts = ref.split(":")
-    a = _cell_rc(parts[0])
-    b = _cell_rc(parts[-1])
-    if a is None or b is None or len(parts) > 2:
-        return None
-    return min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])
-
-
-def _full_calc_on_load(wb_root: Any) -> bool:
-    """workbook.xml의 <calcPr fullCalcOnLoad="1"|"true">: 엑셀이 열 때 모든 수식을 다시 계산하라는 표시.
-    xlsxwriter·openpyxl 같은 프로그램이 쓰며 파일의 <v>(예: 0)는 계산된 값이 아님. 엑셀은 저장할 때 이 표시를 지웁니다."""
-    calc = wb_root.find(_XLSX_MAIN + "calcPr")
-    return calc is not None and (calc.get("fullCalcOnLoad") or "").strip().lower() in ("1", "true")
-
-
-def xlsx_full_calc_on_load(path: str) -> bool:
-    """파일의 workbook.xml에 fullCalcOnLoad 표시가 있는지. 읽지 못하면 True (수식 칸 검사를 건너뛰지 않게)."""
-    import zipfile
-    import xml.etree.ElementTree as ET
-    try:
-        with zipfile.ZipFile(path) as z:
-            return _full_calc_on_load(ET.fromstring(z.read("xl/workbook.xml")))
-    except Exception:
-        return True
-
-
-def xlsx_uncomputed_formulas(path: str, sheet: Optional[str] = None,
-                             area: Optional[Tuple[int, int, int, int]] = None,
-                             limit: int = UNCOMPUTED_SHOW, positions: bool = False) -> Dict[str, Any]:
-    """계산된 값이 저장되지 않은 수식 칸 (openpyxl 등이 쓰고 엑셀에서 한 번도 열지 않은 파일).
-    openpyxl data_only로 읽으면 이런 칸은 빈 칸(None)이라 값이 없는 것처럼 보입니다.
-    workbook.xml에 fullCalcOnLoad 표시가 있으면(xlsxwriter는 <v>0</v>을 씀) 모든 수식 칸을 계산되지 않은 칸으로 셉니다.
-    sheet: 이 시트만 (None이면 모든 시트), area: (시작 행, 시작 열, 끝 행, 끝 열) 안의 칸만 (끝 행 뒤는 해석하지 않음).
-    수식 태그(<f>)가 없는 시트는 XML을 해석하지 않습니다. 엑셀에서 저장한 파일은 값이 있어 0개입니다
-    (빈 글 결과(t="str")는 계산된 값).
-    반환: {"count": 전체 수, "cells": ["시트!A3", ...] (앞 limit개), "sheets": {시트: 수},
-    "bounds": [시작 행, 시작 열, 끝 행, 끝 열] (센 칸 전체를 감싸는 범위, 0개면 없음), "full_calc_on_load": True (표시가 있을 때만)}.
-    positions=True(시트 하나를 볼 때): "positions"(센 칸 (행, 열) 목록, UNCOMPUTED_POSITIONS개까지, 넘으면 "positions_truncated")와
-    "value_bounds"(값이 있는 칸(계산된 값이 없는 수식 칸 제외)을 감싸는 범위, 없으면 키 없음)도 줍니다 (멀리 떨어진 칸 가려내기용).
-    읽지 못하면(MemoryError 포함) {"count": 0, "unknown": True, "error": 예외 이름}: 확인하지 못한 것이라 호출하는 쪽은 UNVERIFIED."""
-    import posixpath
-    import zipfile
-    import xml.etree.ElementTree as ET
-    result: Dict[str, Any] = {"count": 0, "cells": [], "sheets": {}}
-    bounds: List[int] = []
-    vbounds: List[int] = []
-    pos: List[Tuple[int, int]] = []
-    pos_cut = False
-
-    def grow(box: List[int], r1: int, c1: int, r2: int, c2: int) -> List[int]:
-        return [r1, c1, r2, c2] if not box else [min(box[0], r1), min(box[1], c1), max(box[2], r2), max(box[3], c2)]
-
-    def keep_pos(rc: Tuple[int, int]) -> None:
-        nonlocal pos_cut
-        if len(pos) < UNCOMPUTED_POSITIONS:
-            pos.append(rc)
-        else:
-            pos_cut = True
-    try:
-        with zipfile.ZipFile(path) as z:
-            names = set(z.namelist())
-            wb = ET.fromstring(z.read("xl/workbook.xml"))
-            full = _full_calc_on_load(wb)
-            if full:
-                result["full_calc_on_load"] = True
-            rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
-            targets = {r.get("Id"): r.get("Target") or "" for r in rels}
-            for sh in wb.iter(_XLSX_MAIN + "sheet"):
-                title = sh.get("name") or ""
-                if sheet is not None and title != sheet:
-                    continue
-                target = targets.get(sh.get(_XLSX_REL + "id"), "")
-                part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
-                if part not in names:
-                    continue
-                data = z.read(part)
-                if not _XLSX_F_TAG.search(data):
-                    continue
-                n = 0
-                q = f"'{title}'" if re.search(r"[\s!']", title) else title
-                arrays: List[List[Any]] = []        # 배열 수식 [r1, c1, r2, c2, 왼쪽 위 (행, 열), 만난 다른 칸 set]
-
-                def count(rc: Optional[Tuple[int, int]], ref: str) -> None:
-                    nonlocal n, bounds
-                    n += 1
-                    if len(result["cells"]) < limit:
-                        result["cells"].append(f"{q}!{ref}")
-                    if rc is not None:
-                        bounds = grow(bounds, rc[0], rc[1], rc[0], rc[1])
-                        if positions:
-                            keep_pos(rc)
-
-                def in_area(rc: Optional[Tuple[int, int]]) -> bool:
-                    return area is None or rc is None or (area[0] <= rc[0] <= area[2] and area[1] <= rc[1] <= area[3])
-
-                for _, el in ET.iterparse(io.BytesIO(data), events=("end",)):
-                    if el.tag == _XLSX_MAIN + "row":
-                        r = el.get("r") or ""
-                        el.clear()
-                        if area is not None and r.isdigit() and int(r) >= area[2]:
-                            break                   # 행은 번호 순: 범위 끝 행 뒤는 해석하지 않음
-                        continue
-                    if el.tag != _XLSX_MAIN + "c":
-                        continue
-                    f = el.find(_XLSX_MAIN + "f")
-                    v = el.find(_XLSX_MAIN + "v")
-                    ref = el.get("r") or ""
-                    rc = _cell_rc(ref)
-                    if f is not None and f.get("t") == "array" and rc is not None:
-                        box = _array_box(f.get("ref") or "")
-                        if box is not None and box != (rc[0], rc[1], rc[0], rc[1]):
-                            arrays.append([box[0], box[1], box[2], box[3], rc, set()])
-                    counted_before = n
-                    if f is not None and (full or el.get("t") not in ("str", "inlineStr")):
-                        if (full or v is None or not (v.text or "")) and in_area(rc):
-                            count(rc, ref)
-                    elif f is None and rc is not None and arrays:
-                        # 배열 수식의 다른 칸: 파일에는 <f> 없이 값만 있음 (계산된 값이 없으면 수식 칸으로 셈, 23차 L1)
-                        for a in arrays:
-                            if a[0] <= rc[0] <= a[2] and a[1] <= rc[1] <= a[3]:
-                                a[5].add(rc)
-                                computed = el.get("t") in ("str", "inlineStr") or (v is not None and (v.text or ""))
-                                if (full or not computed) and in_area(rc):
-                                    count(rc, ref)
-                                break
-                    if positions and rc is not None and n == counted_before and (
-                            (v is not None and (v.text or "")) or el.find(_XLSX_MAIN + "is") is not None):
-                        vbounds = grow(vbounds, rc[0], rc[1], rc[0], rc[1])
-                    el.clear()
-                # 배열 수식의 다른 칸 중 파일에 아예 없는 칸 (openpyxl은 왼쪽 위 칸만 씀): 계산된 값이 없는 수식 칸
-                for r1, c1, r2, c2, anchor, seen in arrays:
-                    if area is not None:
-                        r1, c1, r2, c2 = max(r1, area[0]), max(c1, area[1]), min(r2, area[2]), min(c2, area[3])
-                    if r1 > r2 or c1 > c2:
-                        continue
-                    seen_in = sum(1 for x in seen if r1 <= x[0] <= r2 and c1 <= x[1] <= c2)
-                    anchor_in = 1 if (r1 <= anchor[0] <= r2 and c1 <= anchor[1] <= c2) else 0
-                    missing = (r2 - r1 + 1) * (c2 - c1 + 1) - seen_in - anchor_in
-                    if missing <= 0:
-                        continue
-                    shown = 0
-                    for rr in range(r1, r2 + 1):
-                        if shown >= missing or len(result["cells"]) >= limit:
-                            break
-                        for cc in range(c1, c2 + 1):
-                            if (rr, cc) in seen or (rr, cc) == anchor:
-                                continue
-                            if shown >= missing or len(result["cells"]) >= limit:
-                                break
-                            result["cells"].append(f"{q}!{_col_letters(cc)}{rr}")
-                            shown += 1
-                    n += missing
-                    bounds = grow(bounds, r1, c1, r2, c2)
-                    if positions:
-                        if missing > UNCOMPUTED_POSITIONS - len(pos):
-                            pos_cut = True
-                        else:
-                            pos.extend((rr, cc) for rr in range(r1, r2 + 1) for cc in range(c1, c2 + 1)
-                                       if (rr, cc) not in seen and (rr, cc) != anchor)
-                if n:
-                    result["count"] += n
-                    result["sheets"][title] = n
-    except Exception as e:                      # MemoryError 포함: 확인하지 못함 (0개로 보면 VERIFIED가 되어 버림)
-        debug(f"수식 값 확인 실패: {type(e).__name__}")
-        return {"count": 0, "cells": [], "sheets": {}, "unknown": True, "error": type(e).__name__}
-    if bounds:
-        result["bounds"] = bounds
-    if positions:
-        result["positions"] = pos
-        if pos_cut:
-            result["positions_truncated"] = True
-        if vbounds:
-            result["value_bounds"] = vbounds
-    return result
-
-
-def uncomputed_found(info: Optional[Dict[str, Any]]) -> bool:
-    """알려야 할 결과인지: 계산되지 않은 수식 칸이 있거나 확인하지 못함(unknown)."""
-    return bool(info) and bool(info.get("count") or info.get("unknown"))
-
-
-def uncomputed_note(info: Dict[str, Any]) -> str:
-    """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 10개)."""
-    if info.get("unknown"):
-        return (f"수식 계산 여부를 확인하지 못함 (파일의 시트 XML을 읽지 못함: {info.get('error') or '알 수 없음'}). "
-                "수식 칸이 있으면 빈 칸이나 계산되지 않은 값으로 읽혔을 수 있으니 사용자에게 그대로 알리세요")
-    cells = ", ".join(info["cells"][:10]) + (" 등" if info["count"] > 10 else "")
-    if info.get("full_calc_on_load"):
-        return (f"수식 칸 {info['count']}개({cells})는 파일이 '열 때 다시 계산'(fullCalcOnLoad)으로 저장되어 있어 파일에 적힌 값"
-                "(빈 칸이나 0)이 계산된 값이 아님 (엑셀에서 연 적 없이 프로그램이 만든 파일). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "
-                "다시 실행하도록 알리세요")
-    return (f"수식 칸 {info['count']}개({cells})는 계산된 값이 파일에 저장되어 있지 않아 빈 칸으로 읽힘 "
-            "(엑셀에서 연 적 없이 프로그램이 만든 파일이라 값이 계산된 적이 없음). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "
-            "다시 실행하도록 알리세요")
-
-
-def uncomputed_fields(info: Dict[str, Any]) -> Dict[str, Any]:
-    """결과 JSON 키: uncomputed_formulas(앞 UNCOMPUTED_SHOW개), uncomputed_count, 잘렸으면 uncomputed_truncated.
-    확인하지 못했으면 uncomputed_check: "unknown"만."""
-    if info.get("unknown"):
-        return {"uncomputed_check": "unknown"}
-    out: Dict[str, Any] = {"uncomputed_formulas": list(info["cells"]), "uncomputed_count": info["count"]}
-    if info["count"] > len(info["cells"]):
-        out["uncomputed_truncated"] = True
-    return out
-
-
-_PAYLOAD_BASE = ("status", "tool", "command", "preview", "verified", "unverified", "agent_directive", "recovered")
-
-
-def with_uncomputed(payload: Dict[str, Any], info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """R1: 계산된 값이 없는 수식 칸을 빈 칸으로 읽은 성공 응답은 VERIFIED가 아님 -> UNVERIFIED로 바꾸고 칸 목록을 붙입니다."""
-    if not uncomputed_found(info) or payload.get("status") != "ok":
-        return payload
-    fields = {k: v for k, v in payload.items() if k not in _PAYLOAD_BASE}
-    fields.update(uncomputed_fields(info))
-    return ok_unverified(payload["tool"], payload["command"], payload["preview"],
-                         [uncomputed_note(info)] + list(payload.get("unverified") or []), **fields)
-
-
 def _transient_fs_error(e: OSError) -> bool:
     """잠깐 기다리면 풀릴 수 있는 오류: 접근 거부, 공유 위반, 잠금 위반 (winerror 5/32/33)."""
     return isinstance(e, PermissionError) or getattr(e, "winerror", None) in (5, 32, 33)
@@ -1677,13 +1447,28 @@ def write_text(path: str, text: str) -> str:
 # 5. LLM 친화 도우미
 # ==============================================================================
 
+# 이름 비교 규칙 (시트·열 머리글·메일 폴더 등 모든 이름 찾기, 열린 문서(COM)와 닫힌 파일(openpyxl) 같음, 1.4.87):
+# - 같은 이름: exact_key (앞뒤 공백, 대소문자만 무시) -> 그 이름을 그대로 씀 (find_name)
+# - 표기만 다른 이름: name_key (대소문자, 공백, _ - . 무시) -> 하나뿐이면 [추천] (not_found, missing_sheet), 열 머리글은 그대로 씀
+# - 그 밖에 비슷한 이름: [후보] (suggest)
+
+def exact_key(s: Any) -> str:
+    """같은 이름인지 견주는 값: 앞뒤 공백과 대소문자만 무시."""
+    return str(s).strip().casefold()
+
+
+def name_key(s: Any) -> str:
+    """표기만 다른 이름인지 견주는 값: 대소문자, 공백, _ - . 를 무시 ('Sheet.1' = 'sheet 1' = 'Sheet1')."""
+    return re.sub(r"[\s_\-.]+", "", str(s)).casefold()
+
+
 def suggest(name: str, candidates: Iterable[str], n: int = 3) -> List[str]:
-    """오타로 보이는 이름에 대해 비슷한 후보를 찾습니다 (대소문자/공백 무시, 부분 일치 우선)."""
+    """오타로 보이는 이름에 대해 비슷한 후보를 찾습니다 (name_key로 견줌, 부분 일치 우선)."""
     cands = [str(c) for c in candidates]
-    key = str(name).strip().lower().replace(" ", "")
+    key = name_key(name)
     if not key:
         return []
-    norm = {c: c.strip().lower().replace(" ", "") for c in cands}
+    norm = {c: name_key(c) for c in cands}
     exact = [c for c in cands if norm[c] == key]
     if exact:
         return exact[:n]
@@ -1698,23 +1483,19 @@ def suggest(name: str, candidates: Iterable[str], n: int = 3) -> List[str]:
 
 
 def find_name(name: str, candidates: Iterable[str]) -> Optional[str]:
-    """대소문자/앞뒤 공백을 무시하고 정확히 같은 이름을 찾습니다."""
-    key = str(name).strip().lower()
+    """같은 이름(exact_key: 앞뒤 공백·대소문자만 무시)을 찾습니다. 없으면 None."""
+    key = exact_key(name)
     for c in candidates:
-        if str(c).strip().lower() == key:
+        if exact_key(c) == key:
             return str(c)
     return None
-
-
-def _same_name_key(s: Any) -> str:
-    return re.sub(r"[\s_\-]+", "", str(s)).casefold()
 
 
 def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False,
               display: Optional[Callable[[str], str]] = None, log_name: Optional[str] = None,
               log_extra: Optional[str] = None, option: Optional[str] = None) -> InputError:
     """'찾을 수 없음' InputError (R8).
-    - 표기만 다른(대소문자·공백·_-) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
+    - 표기만 다른(name_key: 대소문자·공백·_-.) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
     - 부분·유사 일치는 뜻이 다를 수 있어(2024 -> 2024_1분기, 견적서.pdf -> 견적서_구버전.pdf) [후보]: 사용자가 고릅니다.
     - vocab=True(도구가 정한 옵션 값: 색 이름, 테마 등): 오타로 보이는 가까운 값 하나도 [추천] (사용자 데이터가 아니라 뜻이 바뀌지 않음).
     - 비슷한 것도 없으면 사용 가능한 이름 일부.
@@ -1725,12 +1506,12 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
     option: 이름을 준 옵션 (고친 명령에서 그 옵션 값만 바꿈, retry_replacing)."""
     show = display or (lambda c: c)
     cands = [str(c) for c in candidates]
-    key = _same_name_key(name)
-    same = [c for c in cands if key and _same_name_key(c) == key]
+    key = name_key(name)
+    same = [c for c in cands if key and name_key(c) == key]
     if vocab and not same:
-        close = difflib.get_close_matches(key, [_same_name_key(c) for c in cands], n=2, cutoff=0.75)
+        close = difflib.get_close_matches(key, [name_key(c) for c in cands], n=2, cutoff=0.75)
         if len(close) == 1:
-            same = [c for c in cands if _same_name_key(c) == close[0]][:1]
+            same = [c for c in cands if name_key(c) == close[0]][:1]
     head = f"{kind} '{show(name)}'을(를) 찾을 수 없습니다.{extra}"
     masked = log_name is not None or log_extra is not None
     log_head = head if not masked else (f"{kind} '{name if log_name is None else log_name}'을(를) 찾을 수 없습니다."
@@ -2013,178 +1794,63 @@ def next_command(script: str, args: Sequence[Any], purpose: str, destructive: bo
 
 
 # ==============================================================================
-# 6. 마크다운 블록 해석 (word.py / ppt.py 공통)
+# 6. 미리보기(--dry-run) 공통 (excel.py, word.py, ppt.py의 쓰기 명령)
 # ==============================================================================
+# 규칙 하나 (사용법 단순성 4번): 문서를 바꾸는 명령은 모두 --dry-run을 받음.
+#   미리보기가 있는 동작 -> dry_run_result (키: dry_run, count, planned, truncated, 바뀔 것이 있을 때만 confirm_commands)
+#   읽기만 하는 동작(list 등) -> 그대로 실행하고 warnings에 무시했다고 적음 (dry_run_read_only)
+#   미리보기가 없는 쓰기 동작 -> 바꾸지 않고 STOP_RETRY (dry_run_unsupported): 되돌릴 수 있으면 [추천] --dry-run을 뺀 같은 명령,
+#   덮어쓰기·삭제가 들면(--overwrite, delete, clear) [후보] 1) 미리보기 없이 실행 + 같은 번호의 confirm_commands (사용자가 고른 뒤에만)
 
-# '__'는 CommonMark처럼 단어 안에서는 굵게 표시가 아님: 앞에 글자·숫자가 없을 때만 열고 뒤에 없을 때만 닫음
-# (report__2024__final.xlsx는 그대로, __init__ 메서드는 굵은 'init'). '**'는 단어 안에서도 굵게.
-_MD_BOLD = re.compile(r"\*\*(.+?)\*\*|(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)")
-# 번호 목록 기호: 1~3자리 숫자만 ('2026. 11. 3. 회의'의 연도는 목록 번호가 아님)
-MD_NUMBERED = re.compile(r"^\s*(\d{1,3})[.)]\s+")
-
-
-def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
-    """'가 **나** 다' -> ('가 나 다', [(2, 3)]). 굵게 표시 구간(시작, 끝 오프셋)을 돌려줍니다."""
-    plain: List[str] = []
-    spans: List[Tuple[int, int]] = []
-    pos = 0
-    length = 0
-    for m in _MD_BOLD.finditer(text):
-        before = text[pos:m.start()]
-        plain.append(before)
-        length += len(before)
-        inner = m.group(1) if m.group(1) is not None else m.group(2)
-        spans.append((length, length + len(inner)))
-        plain.append(inner)
-        length += len(inner)
-        pos = m.end()
-    plain.append(text[pos:])
-    return "".join(plain), spans
+DRY_RUN_SHOW = 50            # 미리보기 planned 목록 상한 (넘으면 truncated: true)
+DRY_RUN_DIRECTIVE = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
+                     "confirm_commands[0]을 그대로 실행하세요.")
+DRY_RUN_NOTHING = ("VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건, count 0). 실행할 명령이 없으니 실행하지 말고, 값을 바꿔 "
+                   "다시 미리 보지도 말고 preview를 사용자에게 그대로 알리세요.")
+DRY_RUN_DESTRUCTIVE = {"delete", "clear"}      # 미리보기 없이 실행하면 되돌리기 어려운 동작 (그리고 --overwrite)
 
 
-def plain_heading(text: str) -> str:
-    """제목·슬라이드 제목에 넣을 글: 굵게 표시(** __)를 뺀 글 (제목은 굵기가 섞인 글을 담지 않음. word·ppt 모든 수준 같은 규칙)."""
-    return split_bold(text)[0]
+def dry_run_command(tool: str, purpose: str, destructive: bool = True, overwrite: bool = False) -> Dict[str, Any]:
+    """confirm_commands 항목: 지금 실행한 명령에서 --dry-run만 뺀 전체 명령 (사용자가 '예'라고 한 뒤에만 실행).
+    overwrite: 실제 실행이 --overwrite 없이는 멈출 때 붙임 (값이 있는 칸 덮어쓰기 등)."""
+    argv = [a for a in (CURRENT_ARGV or []) if a != "--dry-run"]
+    if overwrite and "--overwrite" not in argv:
+        argv.append("--overwrite")
+    return next_command(f"{tool}.py", argv, purpose, destructive=destructive or overwrite)
 
 
-_TABLE_PIPE = re.compile(r"(?<!\\)\|")
-_FENCE = re.compile(r"^(`{3,}(?!.*`)|~{3,})")    # 백틱 펜스의 정보 글에는 백틱이 없음 (```x```는 인라인 코드)
+def dry_run_result(tool: str, command: str, preview: str, count: int, planned: Sequence[str],
+                   confirm: Any, directive: str = "", **extra: Any) -> Dict[str, Any]:
+    """--dry-run 결과 (바꾸지 않음). planned는 앞 DRY_RUN_SHOW개, truncated는 늘 있음.
+    count가 0이거나 confirm이 없으면 실행할 명령을 주지 않고 DRY_RUN_NOTHING.
+    confirm: confirm_commands 항목 하나 또는 목록 (고를 것이 둘 이상이면 directive로 고르는 법을 적음)."""
+    fields: Dict[str, Any] = {"dry_run": True, "count": count, "planned": list(planned[:DRY_RUN_SHOW]),
+                              "truncated": len(planned) > DRY_RUN_SHOW}
+    fields.update(extra)
+    confirms = [confirm] if isinstance(confirm, dict) else list(confirm or [])
+    if count and confirms:
+        fields["confirm_commands"] = confirms
+        return ok(tool, command, preview, directive or DRY_RUN_DIRECTIVE, **fields)
+    return ok(tool, command, preview, DRY_RUN_NOTHING, **fields)
 
 
-def parse_markdown_table(lines: List[str]) -> List[List[str]]:
-    """'|'로 나눈 표 (앞에 역슬래시가 있는 '\\|'는 칸 안의 글자 '|'). 정렬 줄(머리글 다음 줄은 ':-', '-:' 등 '-' 하나부터, 그 밖은 '---' 이상)은 뺍니다."""
-    rows: List[List[str]] = []
-    for no, ln in enumerate(lines):
-        s = ln.strip()
-        if s.startswith("|"):
-            s = s[1:]
-        if s.endswith("|") and not s.endswith("\\|"):
-            s = s[:-1]
-        cells = [c.strip().replace("\\|", "|") for c in _TABLE_PIPE.split(s)]
-        dash = r":?-+:?" if no == 1 else r":?-{3,}:?"   # 머리글 다음 줄은 '-' 하나부터 정렬 줄
-        if cells and any(cells) and all(re.fullmatch(dash, c) for c in cells if c):
-            continue
-        rows.append(cells)
-    width = max((len(r) for r in rows), default=0)
-    return [r + [""] * (width - len(r)) for r in rows]
+def dry_run_read_only(payload: Dict[str, Any], dry_run: bool, what: str) -> Dict[str, Any]:
+    """읽기만 하는 동작(list 등)에 --dry-run: 받고 그대로 실행한 결과(payload)의 warnings에 무시했다고 적음."""
+    if dry_run and payload.get("status") == "ok":
+        payload["warnings"] = list(payload.get("warnings") or []) + [f"{what}은(는) 읽기만 하므로 --dry-run을 무시했습니다"]
+    return payload
 
 
-_YAML_LINE = re.compile(r"^(?:\s|-\s|-$|#|[^\s:#][^:]{0,60}:(?:\s|$))")
-
-
-def front_matter_lines(text: str) -> int:
-    """맨 앞 YAML 머리말(1번째 줄 '---', 그 뒤 'key: 값' 줄들, '---' 또는 '...' 줄로 닫힘)의 줄 수 (닫는 줄 포함). 없으면 0.
-    닫는 줄이 없거나 사이에 'key:' 모양이 아닌 줄이 있으면 머리말이 아님 (첫 줄 '---'는 구분선)."""
-    lines = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    if not lines or lines[0].strip() != "---":
-        return 0
-    keys = 0
-    for i, ln in enumerate(lines[1:], 1):
-        s = ln.rstrip()
-        if s in ("---", "..."):
-            return i + 1 if keys else 0
-        if not s.strip():
-            continue
-        if not _YAML_LINE.match(s):
-            return 0
-        keys += bool(re.match(r"^[^\s:#-][^:]{0,60}:(?:\s|$)", s))
-    return 0
-
-
-def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
-    """마크다운을 블록 목록으로 바꿉니다.
-    ('heading', (레벨, 텍스트)), ('paragraph', 텍스트), ('bullets', [항목]), ('numbered', [항목]),
-    ('table', [[셀]]), ('code', 줄), ('break', None)  # '---' 구분선(thematic break)
-    ('front_matter', 줄 수): 맨 앞 YAML 머리말. 넣지 않는 블록 (쓰는 쪽이 warnings에 남김)
-    """
-    blocks: List[Tuple[str, Any]] = []
-    para: List[str] = []
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    skip = front_matter_lines(text)
-    if skip:
-        blocks.append(("front_matter", skip))
-        lines = lines[skip:]
-
-    def flush() -> None:
-        if para:
-            blocks.append(("paragraph", " ".join(s.strip() for s in para)))
-            para.clear()
-
-    i = 0
-    while i < len(lines):
-        s = lines[i].strip()
-        if not s:
-            flush()
-            i += 1
-            continue
-        fence = _FENCE.match(s)
-        if fence:                                   # 코드 블록: 줄마다 단락 하나, 글자 그대로 (제목·목록으로 읽지 않음)
-            flush()
-            mark = fence.group(1)
-            i += 1
-            while i < len(lines):
-                ln = lines[i].rstrip()
-                i += 1
-                if ln.strip().startswith(mark[0] * len(mark)) and not ln.strip().lstrip(mark[0]):
-                    break                           # 닫는 펜스 (닫지 않으면 끝까지 코드)
-                if ln.strip():
-                    blocks.append(("code", ln))     # 굵게(** __) 등 마크다운 기호를 해석하지 않고 그대로
-            continue
-        m = re.match(r"^(#{1,6})\s+(.*)$", s)
-        if m:
-            flush()
-            blocks.append(("heading", (len(m.group(1)), m.group(2).strip().rstrip("#").strip())))
-            i += 1
-            continue
-        if s.startswith("|"):
-            flush()
-            tbl = []
-            while i < len(lines) and lines[i].strip().startswith("|"):
-                tbl.append(lines[i])
-                i += 1
-            rows = parse_markdown_table(tbl)
-            if rows:
-                blocks.append(("table", rows))
-            continue
-        if re.match(r"^[-*+]\s+", s):
-            flush()
-            items = []
-            while i < len(lines) and re.match(r"^\s*[-*+]\s+", lines[i]):
-                items.append(re.sub(r"^\s*[-*+]\s+", "", lines[i]).strip())
-                i += 1
-            blocks.append(("bullets", items))
-            continue
-        num = MD_NUMBERED.match(s)
-        if num:
-            flush()
-            run = []
-            while i < len(lines) and MD_NUMBERED.match(lines[i]):
-                run.append(lines[i].strip())
-                i += 1
-            first = int(num.group(1))
-            if blocks and blocks[-1][0] == "numbered" and first == len(blocks[-1][1]) + 1:
-                blocks[-1][1].extend(MD_NUMBERED.sub("", x).strip() for x in run)   # 빈 줄로 띄운 같은 목록의 다음 번호
-            elif first == 1:
-                blocks.append(("numbered", [MD_NUMBERED.sub("", x).strip() for x in run]))
-            else:
-                # 1이 아닌 번호로 시작하는 목록: 자동 번호는 1부터 다시 매기므로 사용자 번호를 글로 둔 단락으로 넣음
-                blocks += [("paragraph", x) for x in run]
-            continue
-        if re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", s):
-            flush()
-            blocks.append(("break", None))
-            i += 1
-            continue
-        para.append(s)
-        i += 1
-    flush()
-    return blocks
-
-
-def looks_like_markdown(text: str) -> bool:
-    return bool(re.search(r"(?m)^\s*(#{1,6}\s|[-*+]\s|\d{1,3}[.)]\s|\|.*\||```|~~~)", text) or "**" in text
-                or front_matter_lines(text))
-
-
-def front_matter_warning(lines: int) -> str:
-    return f"맨 앞 YAML 머리말({lines}줄, '---'로 둘러싼 key: 값)은 문서 정보라 넣지 않았습니다."
+def dry_run_unsupported(tool: str, what: str) -> InputError:
+    """미리보기가 없는 쓰기 동작에 --dry-run: 아무것도 바꾸지 않고 멈춤 (raise로 씀).
+    되돌릴 수 있는 변경(office.py undo)이면 [추천] --dry-run을 뺀 같은 전체 명령,
+    덮어쓰기·삭제가 들면 [후보] 1) 미리보기 없이 실행과 같은 번호의 confirm_commands (destructive, 사용자가 고른 뒤에만)."""
+    argv = list(CURRENT_ARGV or [])
+    destructive = "--overwrite" in argv or bool(DRY_RUN_DESTRUCTIVE & set(argv))
+    cmd = dry_run_command(tool, f"{what} 미리보기 없이 실행", destructive)["command"]
+    head = f"{what}에는 미리보기(--dry-run)가 없어 아무것도 바꾸지 않았습니다."
+    if not destructive:
+        return InputError(head + " 되돌릴 수 있는 변경(office.py undo)이라 미리보기 없이 실행합니다. [추천] " + cmd)
+    return UserDecisionError(head + " 덮어쓰기·삭제가 들어 있어 미리보기 없이 실행할지 사용자 확인이 필요합니다.",
+                             "미리보기가 없는 동작입니다. 사용자에게 미리보기 없이 실행할지 묻고, '예'라고 하면 confirm_commands[0]을 "
+                             "1번 실행하세요.", candidates=["미리보기 없이 실행"], commands=[cmd], destructive=True)

@@ -11,6 +11,56 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.88] - 2026-11-08
+
+### 수정
+- 한 글자 옵션 47개(`-f`, `-r`, `-n`, `-a`, `-t`, `-s`, `-c`, `-q`, `-C`, `-d`, `-p`)를 모두 없앰 (사용법 단순성 1번: 한 가지 일에 한 가지 사용법).
+  같은 글자가 도구마다 뜻이 달랐음: `-n`은 outlook `--limit`, reader `--top`, excel `--name` / `-r`은 excel `--range`, reader `--regex`.
+  예전 한 글자 옵션을 쓰면 받지 않고 인자 오류(exit 2)와 긴 이름으로 고친 전체 명령 `[추천]` (같은 뜻 표 `SAME_MEANING`에 도구별
+  `SHORT_OPTIONS`를 더함, 필수 옵션을 한 글자로 쓴 경우도). 인자 오류의 옵션 찾기가 `--`로 시작하는 것만 보던 것을 한 글자 `-x`도 봄
+  (값을 받지 않는 옵션 뒤의 `-C 3`을 그 값으로 먹지 않게). 오류 로그의 `-q` 값 가림은 그대로.
+- office-mail 스킬의 `[-n 20]` -> `[--limit 20]`, README·테스트의 짧은 옵션을 긴 이름으로.
+- 회귀 테스트: `test_contract.py`의 `test_no_single_letter_options`, `test_removed_short_option_recommends_long_option`,
+  `test_short_option_value_is_still_hidden_in_error_log`.
+
+## [1.4.87] - 2026-11-08
+
+### 수정
+- 이름 비교 규칙이 셋이던 것(`_office._sheet_key`: 공백·`_-.`·대소문자 무시, `_runtime._same_name_key`: `.`은 무시하지 않음,
+  `find_name`: 앞뒤 공백·소문자)을 `_runtime`의 `exact_key`(같은 이름: 앞뒤 공백·대소문자) 와 `name_key`(표기만 다른 이름: 대소문자·공백·`_-.`)
+  하나씩으로. 시트·열 머리글(`--by`, `--desc`, `--where`)·차트 이름·메일 폴더 찾기가 모두 이것을 씀. 전에는 `--sheet "Sheet.1"`이 열린 문서
+  쓰기(`missing_sheet`)에서는 `[추천] Sheet1`, 열린 문서 읽기와 닫힌 파일 읽기(`not_found`)에서는 `[후보]`였음. `suggest`도 `name_key`로 견줌.
+- 닫힌 xlsx를 여는 `openpyxl.load_workbook`을 모두 `retry_fs`로 (닫힌 파일 읽기·수식 읽기, reader xlsx 읽기, 저장 뒤 확인, compare 결과 확인).
+  compare만 재시도하고 excel read 등은 백신·동기화 프로그램의 잠깐 잠금에 바로 실패했음.
+- 회귀 테스트: `test_excel_read.py`의 `test_name_key_is_one_rule`, `test_sheet_spelling_same_recommendation_open`·`_closed`,
+  `test_closed_xlsx_load_retries_transient_lock`.
+
+## [1.4.86] - 2026-11-08
+
+미리보기(`--dry-run`) 규칙을 하나로 (사용법 단순성 4번: 같은 옵션은 어느 명령에서나 같은 뜻, 같은 규칙).
+
+### 수정
+- 미리보기 결과를 세 곳(excel `dry_result`, ppt `_dry_run_fields`, word `_confirm_without_dry_run`)에서 따로 만들던 것을 `_runtime`의
+  `dry_run_result`·`dry_run_command` 하나로. 키는 어느 도구든 `dry_run`, `count`, `planned`(50개까지), `truncated`(늘 있음, excel은 넘칠 때만,
+  word write는 늘 false였음), 바뀔 것이 있을 때만 `confirm_commands`. 0건 directive가 셋(`DRY_NOTHING` "0건", `DRY_RUN_ZERO` "count 0",
+  word replace 따로)이던 것을 `DRY_RUN_NOTHING` 하나로, 바뀔 것이 있을 때는 `DRY_RUN_DIRECTIVE` 하나로 (excel write --cells, comment,
+  range insert/delete, word fill이 각자 문구를 썼음). range insert/delete 미리보기에도 `planned`.
+- `--dry-run`을 쓰기 명령마다 따로 정의해 어떤 명령은 받고(excel write·replace·sheet·range·chart·comment, word write·replace·fill,
+  ppt replace·slide) 어떤 명령은 인자 오류(excel style, word comment, ppt write·notes)였고, 받는 명령에서도 미리보기 없는 동작은
+  excel은 "--dry-run은 ...에만 씁니다" STOP_RETRY(읽기만 하는 list도), ppt slide list는 무시였음. 이제 문서를 바꾸는 명령은 모두 받고 도구가 정함:
+  미리보기가 있으면 미리보기, 읽기만 하는 동작(list, notes 읽기)은 그대로 실행하고 `warnings`, 미리보기가 없는 쓰기 동작은 아무것도 바꾸지 않고
+  STOP_RETRY: 되돌릴 수 있으면 `[추천]` `--dry-run`만 뺀 같은 전체 명령, `--overwrite`·delete·clear가 들면 `[후보] 1) 미리보기 없이 실행`과
+  같은 번호의 `confirm_commands`(destructive) (`dry_run_read_only`, `dry_run_unsupported`).
+- 회귀 테스트: `test_contract.py`의 `test_every_write_command_accepts_dry_run`, `test_dry_run_without_preview_*`,
+  `test_dry_run_on_read_only_action_is_ignored_with_warning`, `test_dry_run_results_share_keys`, `test_dry_run_zero_result_wording_is_one`.
+
+## [1.4.85] - 2026-11-08
+
+### 구조
+- 큰 파일을 내부 모듈로 나눔 (동작 변경 없음, 진입점·인자·JSON 그대로): `excel.py check` -> `_spec_check.py`, `excel.py compare` -> `_excel_compare.py`
+  (`excel.py`에는 명령과 인자만 남고 그 모듈을 부름), `_runtime.py`의 닫힌 xlsx 계산 안 된 수식 칸 찾기 -> `_xlsx_formula.py`,
+  마크다운 블록 해석 -> `_markdown.py`. 도구 폴더를 통째로 복사하므로 배포 방법은 같음. 테스트도 새 모듈 이름으로 부름.
+
 ## [1.4.84] - 2026-11-08
 - 고칠 것: `--action` 같은 고르는 값의 오타(`sheet --action del`)에 빈 `[후보] `를 냄 (집 PC pytest `test_action_typo_is_candidate_and_delete_is_destructive`).
   Python 3.13.13 argparse는 오류 문장의 값에 따옴표를 붙이지 않는데(`choose from list, add`), 따옴표 안의 값만 읽었음.
@@ -1982,7 +2032,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 
 ## 남은 할 일
 - [ ] 1.4.83 검토에서 남긴 것: `excel read --where`의 열 이름 `[후보]`는 번호 없음(식 안의 이름 자리를 바꾼 명령 필요), `word write --dry-run`이
-  새 파일 경로에서 '문서 없음'으로 멈춤, 읽기 동작에 `--dry-run`을 주면 excel은 STOP_RETRY·ppt는 무시(규칙 4번), `--all`의 뜻이 도구마다 다름
+  새 파일 경로에서 '문서 없음'으로 멈춤, `--all`의 뜻이 도구마다 다름
   (reply 전체 답장, chart 모든 차트, clear 캐시 전부), outlook `--to`/`--attach`/`--name`·word `--slots`의 `;` 구분(규칙 3번)
 - [ ] 사용법 단순성 남은 것: outlook `--to` 받는 사람의 `;` 구분(Outlook 관례), outlook 첨부 `--name`의 `;` 구분, `--map` JSON 인자,
   같은 뜻 표가 `--opt=값` 형태는 못 고침 (`--query` 구분자와 `[후보]` 번호는 1.4.81)
@@ -2033,4 +2083,4 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] 쓰기 결과에 되돌리기 가능 여부 표시 (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`). (`--dry-run` 확대는 1.4.81) 스킬에 `--dry-run` 안내 (office-excel·office-doc는 6KB 한도 근처라 보류, README에만)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
-- [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`
+- [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `--limit` 대 `--top`, `--pages` 대 `--slides` (한 글자 옵션 `-r`/`-c`/`-n` 충돌은 1.4.88에서 없앰)

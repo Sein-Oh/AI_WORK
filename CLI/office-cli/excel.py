@@ -29,11 +29,16 @@ import os
 import re
 import sys
 import zipfile
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _office as off  # noqa: E402
 import _runtime as rt  # noqa: E402
+import _markdown as md  # noqa: E402
+import _xlsx_formula as xf  # noqa: E402
+
+# 직접 실행(__main__)해도 내부 모듈(_spec_check, _excel_compare)의 'from excel import ...'가 이 모듈을 쓰게 함 (두 번 읽지 않음)
+sys.modules.setdefault("excel", sys.modules[__name__])
 
 TOOL = "excel"
 
@@ -193,7 +198,7 @@ def load_table_file(path: str, raw: bool = False) -> List[List[Any]]:
         return [[conv(c) for c in row] for row in rt.read_csv_rows(path)]
     text = rt.read_text_file(path)
     # word/ppt와 같은 마크다운 해석: 첫 번째 표만 (코드 블록 안의 '|' 줄, 두 번째 표 제외), 정렬 줄 제외, '\|'는 칸 안의 글자 '|'
-    table = next((payload for kind, payload in rt.parse_markdown_blocks(text) if kind == "table"), None)
+    table = next((payload for kind, payload in md.parse_markdown_blocks(text) if kind == "table"), None)
     if table:
         return [[conv(c) for c in row] for row in table]
     return [[ln.rstrip()] for ln in text.splitlines() if ln.strip()]
@@ -265,29 +270,6 @@ def write_session(args, command: str):
     dry = bool(getattr(args, "dry_run", False))
     return off.open_target("excel", args.target, readonly=dry, focus=not args.no_focus,
                            create=not dry, tool=TOOL, command=command)
-
-
-DRY_DIRECTIVE = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
-                 "confirm_commands[0]을 그대로 실행하세요.")
-DRY_NOTHING = "VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건). 실행하지 말고 preview를 사용자에게 알리세요."
-DRY_SHOW = 50            # 미리보기 planned 목록 상한
-
-
-def dry_confirm(purpose: str, overwrite: bool = False) -> Dict[str, Any]:
-    """--dry-run을 뺀 같은 명령 (confirm_commands: 사용자 확인 뒤에만). overwrite: 실제 실행이 --overwrite 없이는 멈출 때 붙임."""
-    cmd = rt.retry_command({}, drop=("--dry-run", "--overwrite") if overwrite else ("--dry-run",))
-    return {"purpose": purpose, "command": cmd + (" --overwrite" if overwrite else ""), "destructive": True}
-
-
-def dry_result(command: str, preview: str, count: int, planned: List[str], confirm: Optional[Dict[str, Any]],
-               resolved: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
-    """--dry-run 결과 (바꾸지 않음). count 0이면 실행할 명령을 주지 않음."""
-    fields: Dict[str, Any] = {"dry_run": True, "count": count, "planned": planned[:DRY_SHOW], "target_resolved": resolved, **extra}
-    if len(planned) > DRY_SHOW:
-        fields["truncated"] = True
-    if count and confirm:
-        fields["confirm_commands"] = [confirm]
-    return rt.ok(TOOL, command, preview, DRY_DIRECTIVE if count and confirm else DRY_NOTHING, **fields)
 
 
 def target_range(t: off.OfficeTarget, ws: Any, address: Optional[str]) -> Any:
@@ -373,7 +355,7 @@ def _uncomputed_extent(path: str, title: str) -> Optional[Tuple[int, int, int, i
         return None
     info = _SHEET_SCANS.get((path, title))
     if info is None:
-        info = _SHEET_SCANS[(path, title)] = rt.xlsx_uncomputed_formulas(path, title, positions=True)
+        info = _SHEET_SCANS[(path, title)] = xf.xlsx_uncomputed_formulas(path, title, positions=True)
     b = info.get("bounds")
     if not b:
         return None
@@ -417,7 +399,7 @@ def far_uncomputed(path: str, sheet: str, asked: Tuple[int, int, int, int],
     hits.sort()
     q = f"'{sheet}'" if re.search(r"[\s!']", sheet) else sheet
     b = _box(hits)
-    return {"count": len(hits), "cells": [f"{q}!{addr(r, c)}" for r, c in hits[:rt.UNCOMPUTED_SHOW]],
+    return {"count": len(hits), "cells": [f"{q}!{addr(r, c)}" for r, c in hits[:xf.UNCOMPUTED_SHOW]],
             "box": f"{q}!{addr(b[0], b[1], b[2], b[3])}"}
 
 
@@ -446,7 +428,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
     _SHEET_SCANS.clear()      # 이번 읽기에서 훑은 것만 closed_uncomputed가 다시 씀
     _FAR.clear()
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
     try:
         names = list(wb.sheetnames)
         if sheet:
@@ -504,15 +486,15 @@ def closed_uncomputed(path: str, sheet: str, r0: int, c0: int, matrix: List[List
     확인하지 못하면 unknown 정보(UNVERIFIED)."""
     if not path.lower().endswith((".xlsx", ".xlsm")):
         return None
-    if not any(v is None for row in matrix for v in row) and not rt.xlsx_full_calc_on_load(path):
+    if not any(v is None for row in matrix for v in row) and not xf.xlsx_full_calc_on_load(path):
         return None
     width = max((len(r) for r in matrix), default=0)
     area = (r0, c0, r0 + len(matrix) - 1, c0 + max(width, 1) - 1)
     info = _SHEET_SCANS.get((path, sheet))     # 범위를 정할 때 시트 전체를 이미 훑었고 그 칸이 모두 읽은 범위 안이면 다시 쓰기
     b = (info or {}).get("bounds")
     if info is None or info.get("unknown") or (b and not (area[0] <= b[0] and area[1] <= b[1] and b[2] <= area[2] and b[3] <= area[3])):
-        info = rt.xlsx_uncomputed_formulas(path, sheet, area)
-    return info if rt.uncomputed_found(info) else None
+        info = xf.xlsx_uncomputed_formulas(path, sheet, area)
+    return info if xf.uncomputed_found(info) else None
 
 
 def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: int = 50,
@@ -566,7 +548,7 @@ def _closed_formulas(path: str, sheet: str, r0: int, c0: int, matrix: List[List[
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일의 수식 읽기")
     from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
     out: List[Dict[str, Any]] = []
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=False))
     try:
         ws = wb[sheet]
         for i, row in enumerate(ws.iter_rows(min_row=r0, max_row=r0 + nrows - 1, min_col=c0, max_col=c0 + ncols - 1)):
@@ -671,7 +653,7 @@ def _with_formulas(payload: Dict[str, Any], info: Dict[str, Any]) -> Dict[str, A
         if f_cut or v_cut:
             e["value_truncated"] = True
         shown.append(e)
-    fields = {k: v for k, v in payload.items() if k not in rt._PAYLOAD_BASE}
+    fields = {k: v for k, v in payload.items() if k not in xf._PAYLOAD_BASE}
     fields.update(formulas=shown, formula_count=n, formulas_truncated=n > FORMULA_SHOW)
     if info.get("warnings"):
         fields["warnings"] = list(fields.get("warnings") or []) + info["warnings"]
@@ -731,7 +713,7 @@ def cmd_read(args) -> Dict[str, Any]:
     payload = _read(args, found)
     if args.formulas:
         payload = _with_formulas(payload, found["formulas"])
-    return _with_far(rt.with_uncomputed(payload, found.get("uncomputed")), found.get("far"), args.target)
+    return _with_far(xf.with_uncomputed(payload, found.get("uncomputed")), found.get("far"), args.target)
 
 
 def _far_for_read(path: str, sheet: str, address: Optional[str], r0: int, c0: int,
@@ -752,7 +734,7 @@ def _with_far(payload: Dict[str, Any], far: Optional[Dict[str, Any]], target: st
     """R1: 읽지 않은 먼 계산되지 않은 수식 칸이 있으면 UNVERIFIED와 그 칸을 따로 읽는 명령."""
     if not far or payload.get("status") != "ok":
         return payload
-    fields = {k: v for k, v in payload.items() if k not in rt._PAYLOAD_BASE}
+    fields = {k: v for k, v in payload.items() if k not in xf._PAYLOAD_BASE}
     cmd = rt.next_command("excel.py", ["read", "--target", target, "--range", far["box"]],
                           "데이터에서 멀리 떨어진 계산된 값이 없는 수식 칸만 따로 읽기")
     fields["next_commands"] = list(fields.get("next_commands") or []) + [cmd]
@@ -1731,25 +1713,19 @@ def write_cells(args) -> Dict[str, Any]:
                 planned.append(f"변경: {ref} (빈 칸 -> {_short(shown)})")
             todo.append((ws, r1, c1, r2, c2, kind, payload))
         if args.dry_run:
-            fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(todo),
-                                      "confirm_commands": [_cells_command(args, ["--overwrite"] if conflicts else [])],
-                                      "target_resolved": t.resolved()}
-            if len(planned) > 50:
-                fields["truncated"] = True
+            extra: Dict[str, Any] = {"target_resolved": t.resolved()}
             if conflicts:
-                fields["overwrite_cells"] = len(conflicts)
+                extra["overwrite_cells"] = len(conflicts)
             if same:
-                fields["unchanged"] = len(same)
+                extra["unchanged"] = len(same)
             if warnings:
-                fields["warnings"] = warnings
-            directive = "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요."
+                extra["warnings"] = warnings
             preview = f"미리보기: 칸 {len(todo)}개" + (f" (값이 있어 덮어쓸 칸 {len(conflicts)}개: "
                                                      + _filled_preview(conflicts) + ")" if conflicts else "")
-            if not todo:                # 바뀔 것 없음 (1.4.83: 다른 미리보기처럼 실행할 명령을 주지 않음)
-                fields.pop("confirm_commands", None)
-                directive = DRY_NOTHING
+            if not todo:                # 바뀔 것 없음: 실행할 명령을 주지 않음
                 preview = f"미리보기: 바뀔 것 없음 (0칸, 이미 같은 값 {len(same)}칸) (바꾸지 않음)"
-            return rt.ok(TOOL, "write", preview, directive, **fields)
+            return rt.dry_run_result(TOOL, "write", preview, len(todo), planned,
+                                     _cells_command(args, ["--overwrite"] if conflicts else []), **extra)
         if conflicts and not args.overwrite:
             head = f"값이 있는 칸 {len(conflicts)}개가 덮어써집니다: "
             raise rt.UserDecisionError(
@@ -1790,7 +1766,7 @@ def cmd_write(args) -> Dict[str, Any]:
     if args.cells:
         return write_cells(args)
     if args.dry_run:
-        raise rt.InputError("write --dry-run은 --cells(칸 여러 개)에만 씁니다.")
+        raise rt.dry_run_unsupported(TOOL, "write --value·--values·--file·--formula (미리보기는 --cells에만 있음)")
     sources = [x for x in (args.value is not None, args.values, args.file, args.formula) if x]
     if not sources:
         raise rt.InputError("쓸 내용이 없습니다. --value, --values, --file, --formula, --cells 중 하나를 지정하세요.")
@@ -2108,7 +2084,7 @@ def _replace_dry(args, fmt: Dict[str, Any], plans: List[Any], resolved: Dict[str
         preview = f"미리보기: 칸 {n}개가 바뀝니다{note}: " + ", ".join(planned[:3]) + (" ..." if n > 3 else "") + " (바꾸지 않음)"
     else:
         preview = f"미리보기: 바뀔 것 없음 (0칸{note}) (바꾸지 않음)"
-    return dry_result("replace", preview, n, planned, dry_confirm("찾아 바꾸기 실행"), resolved, **extra)
+    return rt.dry_run_result(TOOL, "replace", preview, n, planned, rt.dry_run_command(TOOL, "찾아 바꾸기 실행"), target_resolved=resolved, **extra)
 
 
 # ==============================================================================
@@ -2259,6 +2235,8 @@ def _parse_highlight(rule: str) -> Tuple[str, str, int]:
 
 
 def cmd_style(args) -> Dict[str, Any]:
+    if args.dry_run:
+        raise rt.dry_run_unsupported(TOOL, "style")
     fmt = _format_spec(args)
     theme = off.get_theme(args.theme)
     if not fmt and not theme and not args.highlight and not args.clear:
@@ -2372,7 +2350,7 @@ def cmd_export(args) -> Dict[str, Any]:
         out = rt.resolve_output_path(args.save, sheet, ".csv")
         out = rt.write_csv_rows(out, [[out_value(v) for v in r] for r in matrix], args.encoding)
         far = _far_for_read(closed, sheet, args.range, r0, c0, matrix)
-        return _with_far(rt.with_uncomputed(rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
+        return _with_far(xf.with_uncomputed(rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
                                                        "VERIFIED: 저장한 파일을 다시 읽어 행 수까지 확인했습니다.", delimiter=",",
                                                        expected_rows=_nonblank_rows(matrix), output_file=out,
                                                        rows=len(matrix)),
@@ -2449,12 +2427,12 @@ def cmd_sheet(args) -> Dict[str, Any]:
             names = [str(t.doc.Worksheets(i).Name) for i in range(1, t.doc.Worksheets.Count + 1)]
             active = str(t.doc.ActiveSheet.Name)
             resolved = t.resolved()
-        return rt.ok(TOOL, "sheet", f"시트 {len(names)}개: {', '.join(names)}", target_resolved=resolved,
-                     sheets=names, active_sheet=active)
+        return rt.dry_run_read_only(rt.ok(TOOL, "sheet", f"시트 {len(names)}개: {', '.join(names)}", target_resolved=resolved,
+                                          sheets=names, active_sheet=active), args.dry_run, "sheet list")
     if not args.name:
         raise rt.InputError(f"sheet {args.action}에는 --name이 필요합니다.")
     if args.dry_run and args.action != "delete":
-        raise rt.InputError(f"--dry-run은 sheet --action delete에만 씁니다 (받은 동작: {args.action}).")
+        raise rt.dry_run_unsupported(TOOL, f"sheet --action {args.action}")
     with write_session(args, "sheet") as t:
         sheets = t.doc.Worksheets
         names = [str(sheets(i).Name) for i in range(1, sheets.Count + 1)]
@@ -2534,8 +2512,8 @@ def _sheet_delete_dry(t: Any, ws: Any, name: str) -> Dict[str, Any]:
         extra["broken_ref_cells_truncated"] = True
     if skipped:
         extra["warnings"] = [f"칸이 너무 많아 이 시트를 참조하는 수식을 확인하지 못한 시트: {', '.join(skipped[:10])}"]
-    return dry_result("sheet", preview + " (바꾸지 않음)", 1, [f"삭제: 시트 '{name}'"],
-                      dry_confirm(f"시트 '{name}' 삭제 실행"), t.resolved(), **extra)
+    return rt.dry_run_result(TOOL, "sheet", preview + " (바꾸지 않음)", 1, [f"삭제: 시트 '{name}'"],
+                      rt.dry_run_command(TOOL, f"시트 '{name}' 삭제 실행"), target_resolved=t.resolved(), **extra)
 
 
 def _same_cell(want: Any, got: Any) -> bool:
@@ -2714,12 +2692,12 @@ def _range_dry(t: Any, ws: Any, rng: Any, a: str, args, noop: str) -> Dict[str, 
     if a == "clear":
         info["type"] = args.type
         if noop:
-            return dry_result("range", f"미리보기: {where}에는 바뀔 것 없음 ({noop}) (바꾸지 않음)", 0, [], None, t.resolved(), **info)
+            return rt.dry_run_result(TOOL, "range", f"미리보기: {where}에는 바뀔 것 없음 ({noop}) (바꾸지 않음)", 0, [], None, target_resolved=t.resolved(), **info)
         filled: List[Tuple[str, Any]] = []
         if args.type != "formats":
             used = t.app.Intersect(rng, ws.UsedRange)        # 값이 있는 칸은 사용 범위 안에만 있음
             filled = _filled_cells(used) if used is not None else []
-        planned = [f"지움: {ws.Name}!{c} ({_short(v)})" for c, v in filled[:DRY_SHOW + 1]]
+        planned = [f"지움: {ws.Name}!{c} ({_short(v)})" for c, v in filled[:rt.DRY_RUN_SHOW + 1]]
         if args.type == "formats":
             count = int(rng.Rows.Count) * int(rng.Columns.Count)
             preview = f"미리보기: {where}의 서식을 지웁니다 (칸 {count}개, 값은 그대로)"
@@ -2733,23 +2711,23 @@ def _range_dry(t: Any, ws: Any, rng: Any, a: str, args, noop: str) -> Dict[str, 
             preview = f"미리보기: {where}에는 값이 있는 칸이 없습니다. 서식만 지워집니다"
             planned = [f"서식 지움: {where}"]
         info["filled_cells"] = len(filled)
-        return dry_result("range", preview + " (바꾸지 않음)", count, planned,
-                          dry_confirm(f"{where} 지우기 실행"), t.resolved(), **info)
+        return rt.dry_run_result(TOOL, "range", preview + " (바꾸지 않음)", count, planned,
+                          rt.dry_run_command(TOOL, f"{where} 지우기 실행"), target_resolved=t.resolved(), **info)
     # move
     dws, dcell, _ = _range_dest(t, ws, args)
     filled, (dr, dc, nr, nc) = _dest_conflicts(rng, ws, dws, dcell)
     to = f"{dws.Name}!{addr(dr, dc, dr + nr - 1, dc + nc - 1)}"
     info["dest"] = to
     if str(dws.Name) == str(ws.Name) and (dr, dc) == (int(rng.Row), int(rng.Column)):
-        return dry_result("range", f"미리보기: {where}은(는) 원본과 같은 자리라 바뀔 것 없음 (바꾸지 않음)", 0, [], None, t.resolved(), **info)
-    planned = [f"옮김: {where} -> {to}"] + [f"덮어쓰기: {dws.Name}!{c} ({_short(v)})" for c, v in filled[:DRY_SHOW]]
+        return rt.dry_run_result(TOOL, "range", f"미리보기: {where}은(는) 원본과 같은 자리라 바뀔 것 없음 (바꾸지 않음)", 0, [], None, target_resolved=t.resolved(), **info)
+    planned = [f"옮김: {where} -> {to}"] + [f"덮어쓰기: {dws.Name}!{c} ({_short(v)})" for c, v in filled[:rt.DRY_RUN_SHOW]]
     preview = f"미리보기: {where}(칸 {nr * nc}개)을(를) {to}(으)로 옮깁니다"
     if filled:
         preview += f". 대상에서 값이 있는 칸 {len(filled)}개가 덮어써집니다: {_filled_preview(filled)}"
         info["overwrite_cells"] = len(filled)
-    return dry_result("range", preview + " (바꾸지 않음)", nr * nc, planned,
-                      dry_confirm(f"{where} 옮기기 실행" + (" (값이 있는 대상 칸 덮어쓰기)" if filled else ""), overwrite=bool(filled)),
-                      t.resolved(), **info)
+    return rt.dry_run_result(TOOL, "range", preview + " (바꾸지 않음)", nr * nc, planned,
+                      rt.dry_run_command(TOOL, f"{where} 옮기기 실행" + (" (값이 있는 대상 칸 덮어쓰기)" if filled else ""), overwrite=bool(filled)),
+                      target_resolved=t.resolved(), **info)
 
 
 def cmd_range(args) -> Dict[str, Any]:
@@ -2757,7 +2735,7 @@ def cmd_range(args) -> Dict[str, Any]:
     if a in ("insert", "delete"):
         return range_lines(args)
     if args.dry_run and a not in ("clear", "move"):
-        raise rt.InputError(f"--dry-run은 range --action insert/delete/clear/move에만 씁니다 (받은 동작: {a}).")
+        raise rt.dry_run_unsupported(TOOL, f"range --action {a}")
     if a == "sort":
         return range_sort(args)
     if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear") and not args.range:
@@ -3146,11 +3124,11 @@ def range_lines(args) -> Dict[str, Any]:
                 preview = f"미리보기: {what}에는 값이 있는 칸이 없지만 {refs_note} (바꾸지 않음)"
             else:
                 preview = f"미리보기: {what}에는 값이 있는 칸이 없습니다. 지우면 {'아래 행이 올라' if axis == 'rows' else '오른쪽 열이 당겨'}옵니다 (바꾸지 않음)"
-            info["confirm_commands"] = [_lines_command(args, axis, n1, n2, overwrite=bool(filled or refs))]
-            resolved = t.resolved()
-            return rt.ok(TOOL, "range", preview,
-                         "VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
-                         "confirm_commands[0]을 그대로 실행하세요.", dry_run=True, target_resolved=resolved, **info)
+            count = info.pop("count")
+            planned = [f"{'넣기' if a == 'insert' else '지우기'}: {ws.Name}!{_lines_addr(axis, n1, n2)} ({what})"]
+            return rt.dry_run_result(TOOL, "range", preview, count, planned,
+                                     _lines_command(args, axis, n1, n2, overwrite=bool(filled or refs)),
+                                     target_resolved=t.resolved(), **info)
         if (filled or refs) and not args.overwrite:
             head = f"{ws.Name}!{_lines_addr(axis, n1, n2)}({what})을(를) 지우면 "
             parts = [f"값이 있는 칸 {len(filled)}개가 함께 지워집니다: {cells_text} (값은 보이지 않음)"] if filled else []
@@ -3224,14 +3202,14 @@ _LETTERS = re.compile(r"^[A-Za-z]{1,3}$")
 def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, what: str = "열",
                    option: Any = None) -> Tuple[int, bool]:
     """--by/--where의 열 -> (범위 안 열 위치 0부터, 머리글 이름으로 찾았는지).
-    머리글(header)이 있으면 이름(대소문자·공백·_- 무시)을 먼저 찾고, 없으면 열 문자(B, AA). 찾지 못하면 [후보] 머리글 이름."""
+    머리글(header)이 있으면 이름(같은 이름, 없으면 rt.name_key로 표기만 다른 이름)을 먼저 찾고, 없으면 열 문자(B, AA). 찾지 못하면 [후보] 머리글 이름."""
     k = str(key).strip()
     names = [("" if v is None else str(out_value(v))).strip() for v in (header or [])]
     if header is not None:
-        exact = [i for i, nm in enumerate(names) if nm and nm.casefold() == k.casefold()]
+        exact = [i for i, nm in enumerate(names) if nm and rt.exact_key(nm) == rt.exact_key(k)]
         if not exact:
-            nk = rt._same_name_key(k)
-            exact = [i for i, nm in enumerate(names) if nm and rt._same_name_key(nm) == nk]
+            nk = rt.name_key(k)
+            exact = [i for i, nm in enumerate(names) if nm and rt.name_key(nm) == nk]
         if len(exact) == 1:
             return exact[0], True
         if len(exact) > 1:
@@ -3420,7 +3398,7 @@ def range_sort(args) -> Dict[str, Any]:
         if args.desc is not None and args.desc != "*":
             desc_keys = set()
             for d in [x.strip() for x in str(args.desc).split(",") if x.strip()]:
-                hit = [i for i, k in enumerate(keys) if rt._same_name_key(k) == rt._same_name_key(d)]
+                hit = [i for i, k in enumerate(keys) if rt.name_key(k) == rt.name_key(d)]
                 if not hit:
                     raise rt.ambiguous(f"--desc '{d}'이(가) --by에 없습니다. --by에 쓴 기준 중에서 고르세요.", keys,
                                        log_message="--desc 기준이 --by에 없음", replace=d)
@@ -3507,13 +3485,13 @@ def _chart_matches(ws: Any, key: str) -> Tuple[List[Tuple[Any, Any, int]], List[
     by_name: List[Tuple[Any, Any, int]] = []
     by_title: List[Tuple[Any, Any, int]] = []
     names: List[str] = []
-    k = key.strip().lower()
+    k = rt.exact_key(key)
     for idx, obj in enumerate(_chart_objects(ws), 1):
         nm, title = str(obj.Name), _chart_title(obj)
         names += [x for x in (nm, title) if x]
-        if nm.strip().lower() == k:
+        if rt.exact_key(nm) == k:
             by_name.append((ws, obj, idx))
-        elif title and title.strip().lower() == k:
+        elif title and rt.exact_key(title) == k:
             by_title.append((ws, obj, idx))
     return by_name, by_title, names
 
@@ -3568,7 +3546,7 @@ def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = 
         raise rt.InputError(f"{where}에 차트가 없습니다. excel.py chart --range ... 로 먼저 만드세요.")
 
     def sheet_by_name(n: str) -> Optional[Any]:
-        return next((ws for ws in all_sheets if str(ws.Name).lower() == n.lower()), None)
+        return next((ws for ws in all_sheets if rt.exact_key(ws.Name) == rt.exact_key(n)), None)
 
     def mismatch(left: str) -> rt.InputError:
         return rt.InputError(f"차트 '{name}'의 시트 '{left}'와 --sheet '{sheet}'가 다릅니다. 아무것도 바꾸지 않았습니다. "
@@ -3648,25 +3626,28 @@ def _chart_delete_dry(t: Any, args) -> Dict[str, Any]:
         check_protection(ws, [], "objects")
         names = [str(obj.Name)]
         preview = f"미리보기: 시트 '{ws.Name}'의 차트 '{names[0]}'을(를) 삭제합니다 (1개)"
-    return dry_result("chart", preview + " (바꾸지 않음)", len(names), [f"삭제: {ws.Name}!{n}" for n in names],
-                      dry_confirm("차트 삭제 실행"), t.resolved(), sheet=str(ws.Name))
+    return rt.dry_run_result(TOOL, "chart", preview + " (바꾸지 않음)", len(names), [f"삭제: {ws.Name}!{n}" for n in names],
+                      rt.dry_run_command(TOOL, "차트 삭제 실행"), target_resolved=t.resolved(), sheet=str(ws.Name))
+
+
+def _chart_list(args) -> Dict[str, Any]:
+    with off.open_target("excel", args.target, readonly=True) as t:
+        wb = t.doc
+        charts = [{"sheet": str(wb.Worksheets(i).Name), "name": str(o.Name), "title": _chart_title(o)}
+                  for i in range(1, wb.Worksheets.Count + 1) for o in _chart_objects(wb.Worksheets(i))]
+        resolved = t.resolved()
+    if not charts:
+        return rt.ok(TOOL, "chart", f"0건: {resolved['name']}에 차트가 없습니다",
+                     f"VERIFIED: 0건. {resolved['name']}에 차트가 없습니다. 사용자에게 그대로 알리세요.",
+                     target_resolved=resolved, charts=charts, count=0)
+    return rt.ok(TOOL, "chart", f"차트 {len(charts)}개", target_resolved=resolved, charts=charts, count=len(charts))
 
 
 def cmd_chart(args) -> Dict[str, Any]:
-    if args.dry_run and args.action != "delete":
-        raise rt.InputError(f"--dry-run은 chart --action delete에만 씁니다 (받은 동작: {args.action}).")
     if args.action == "list":
-        with off.open_target("excel", args.target, readonly=True) as t:
-            wb = t.doc
-            charts = [{"sheet": str(wb.Worksheets(i).Name), "name": str(o.Name), "title": _chart_title(o)}
-                      for i in range(1, wb.Worksheets.Count + 1) for o in _chart_objects(wb.Worksheets(i))]
-            resolved = t.resolved()
-        if not charts:
-            return rt.ok(TOOL, "chart", f"0건: {resolved['name']}에 차트가 없습니다",
-                         f"VERIFIED: 0건. {resolved['name']}에 차트가 없습니다. 사용자에게 그대로 알리세요.",
-                         target_resolved=resolved, charts=charts, count=0)
-        return rt.ok(TOOL, "chart", f"차트 {len(charts)}개", target_resolved=resolved, charts=charts, count=len(charts))
-
+        return rt.dry_run_read_only(_chart_list(args), args.dry_run, "chart list")
+    if args.dry_run and args.action != "delete":
+        raise rt.dry_run_unsupported(TOOL, f"chart --action {args.action}")
     if args.action == "delete":
         if not args.name and not args.all:
             raise rt.InputError("삭제할 차트를 --name(이름 또는 제목)으로 지정하거나, 시트의 모든 차트를 지우려면 --all을 쓰세요.")
@@ -3993,20 +3974,18 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
     taken_text = ", ".join(f"{ref}='{_short(old[(str(ws.Name), r, c)], 30)}'"
                            for ref, (ws, r, c, _) in zip(taken_refs[:5], taken[:5])) + (" ..." if len(taken) > 5 else "")
     if args.dry_run:
-        nexts = [_comment_command(args, ["--overwrite"]), _comment_command(args, ["--append"])] if taken and not mode \
+        choose = bool(taken and not mode)          # 이미 메모가 있는 칸: 바꿀지(0) 덧붙일지(1) 사용자가 고름
+        nexts = [_comment_command(args, ["--overwrite"]), _comment_command(args, ["--append"])] if choose \
             else [_comment_command(args)]
-        fields: Dict[str, Any] = {"dry_run": True, "planned": planned[:50], "count": len(plan), "confirm_commands": nexts,
-                                  "target_resolved": t.resolved()}
+        extra: Dict[str, Any] = {"target_resolved": t.resolved()}
         if taken:
-            fields["existing_notes"] = len(taken)
+            extra["existing_notes"] = len(taken)
         if warnings:
-            fields["warnings"] = warnings[:10]
-        directive = ("VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요."
-                     if not (taken and not mode) else
-                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고, 이미 메모가 있는 칸을 바꿀지(confirm_commands[0]) "
-                     "덧붙일지(confirm_commands[1]) 사용자가 고르면 그 명령을 실행하세요.")
+            extra["warnings"] = warnings[:10]
+        directive = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 이미 메모가 있는 칸을 "
+                     "바꿀지(confirm_commands[0]) 덧붙일지(confirm_commands[1]) 사용자가 고르면 그 명령을 실행하세요.") if choose else ""
         preview = f"미리보기: 메모 {len(plan)}개" + (f" (이미 메모가 있는 칸 {len(taken)}개: {taken_text})" if taken else "")
-        return rt.ok(TOOL, "comment", preview, directive, **fields)
+        return rt.dry_run_result(TOOL, "comment", preview + " (바꾸지 않음)", len(plan), planned, nexts, directive, **extra)
     if taken and not mode:
         head = f"이미 메모가 있는 칸 {len(taken)}개: "
         raise rt.UserDecisionError(
@@ -4074,17 +4053,15 @@ def _comment_delete(args, t: Any) -> Dict[str, Any]:
     planned = [f"메모 삭제: {sheet}!{addr(r, c)}" for r, c, _ in notes]
     if notes:
         check_protection(ws, [], "objects")
+    if args.dry_run:
+        preview = f"미리보기: {where}의 메모 {len(notes)}개를 지웁니다" if notes else f"미리보기: {where}에는 지울 메모가 없어 바뀔 것 없음"
+        return rt.dry_run_result(TOOL, "comment", preview + " (바꾸지 않음)", len(notes), planned, _comment_command(args),
+                                 target_resolved=t.resolved())
     if not notes:
-        if not args.dry_run:
-            t.set_focus(sheet=ws, changed=False)       # 바뀐 것 없음: 이번 되돌리기 지점은 지움
+        t.set_focus(sheet=ws, changed=False)       # 바뀐 것 없음: 이번 되돌리기 지점은 지움
         return rt.ok(TOOL, "comment", f"{where}: 지울 메모 없음 (count 0)",
                      f"VERIFIED: 0건. {where}에는 메모가 없어 바꾼 것이 없습니다. 사용자에게 그대로 알리세요.",
                      target_resolved=t.resolved(), count=0)
-    if args.dry_run:
-        return rt.ok(TOOL, "comment", f"미리보기: {where}의 메모 {len(notes)}개를 지웁니다 (바꾸지 않음)",
-                     "VERIFIED: 미리보기만 했습니다(변경 없음). planned를 사용자에게 보여주고 사용자가 '예'라고 한 뒤에만 confirm_commands[0]을 실행하세요.",
-                     dry_run=True, planned=planned[:50], count=len(notes), confirm_commands=[_comment_command(args)],
-                     target_resolved=t.resolved())
     for _, _, note in notes:
         note.Delete()
     t.set_focus(sheet=ws)
@@ -4106,9 +4083,7 @@ def cmd_comment(args) -> Dict[str, Any]:
     if args.action == "list" and (args.text is not None or args.file):
         args.action = "add"
     if args.action == "list":
-        if args.dry_run:
-            raise rt.InputError("--dry-run은 comment --action add/delete에만 씁니다.")
-        return _comment_list(args)
+        return rt.dry_run_read_only(_comment_list(args), args.dry_run, "comment list")
     if args.action == "delete":
         if not args.range:
             raise rt.InputError("지울 메모의 범위를 --range로 지정하세요 (예: --range B2:D20). 먼저 --dry-run으로 지울 메모를 볼 수 있습니다.")
@@ -4120,1235 +4095,20 @@ def cmd_comment(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 9-1. check: 엑셀 표의 값을 등록된 규격서와 한 번에 대조 (항목 찾기 -> 수치 조건 -> 판정 -> 메모 파일)
+# 9. check(규격서 대조)와 compare(두 판 비교): 내부 모듈 _spec_check.py, _excel_compare.py
+# (위의 주소·읽기 도우미를 쓰므로 여기서 불러옴)
 # ==============================================================================
 
-CHECK_MAX_ROWS = 500           # 한 번에 대조하는 행 수 상한
-CHECK_SHOWN = 20               # JSON에 담는 결과 수
-CHECK_SPEC_CHARS = 120         # 결과의 규격 문장 글자 수
-CHECK_MEMO_SPEC = 60           # 칸 메모에 넣는 규격 문장 앞부분 글자 수
-VERDICTS = ("일치", "불일치", "근거없음", "판단필요")
-_UNIT_IN_ITEM = re.compile(r"\s*[\(\[]\s*[^\)\]]{1,8}\s*[\)\]]\s*$")
-
-
-def _col_arg(text: Optional[str], what: str) -> Optional[int]:
-    if not text:
-        return None
-    t = text.strip().upper().replace("$", "")
-    if not re.fullmatch(r"[A-Z]{1,3}", t):
-        raise rt.InputError(f"{what}은(는) 열 문자로 적습니다 (예: B). 받은 값: {text}")
-    return col_number(t)
-
-
-def _check_rows(args, cols: List[int]) -> Tuple[str, int, List[List[Any]], Optional[List[Any]], Dict[str, Any]]:
-    """대조할 행: (시트 이름, 첫 행 번호, 행마다 [cols의 값], 머리글(첫 행 위 한 줄 또는 None), target_resolved)."""
-    sh, cells = split_sheet(args.range)
-    r1, _, r2, _ = parse_area(cells, None, None)
-    if r2 is None:
-        raise rt.InputError("--range는 행 범위가 있는 주소로 적습니다 (예: B2:D50).")
-    if r2 - r1 + 1 > CHECK_MAX_ROWS:
-        raise rt.InputError(f"한 번에 {CHECK_MAX_ROWS}행까지 대조합니다 (받은 {r2 - r1 + 1}행). --range를 나눠 실행하세요.")
-    c_lo, c_hi = min(cols), max(cols)
-    top = r1 - 1 if r1 > 1 else r1
-    head = getattr(args, "header_row", None)
-    if head == 0:
-        top = r1                                           # 0 = 머리글 없음 (남은 행 명령: 원래 범위가 1행부터, 1.4.71)
-    elif head is not None:
-        if not 1 <= head < r1:
-            raise rt.InputError(f"--header-row는 --range의 첫 행({r1})보다 위의 행 번호(머리글이 없으면 0)로 적습니다. "
-                                f"받은 값: {head}")
-        top = head
-    address = addr(top, c_lo, r2, c_hi)
-    sheet_arg = sh or args.sheet
-    closed = is_closed_xlsx(args.target)
-    csvp = closed_csv(args.target)
-    if closed or csvp:
-        ref = (f"'{sheet_arg}'!" if sheet_arg else "") + address
-        sheet, rr, cc, matrix, _ = (_read_matrix_closed(closed, sheet_arg, address) if closed
-                                    else _read_matrix_csv(csvp, address))
-        resolved = {"app": "file", "name": os.path.basename(closed or csvp), "path": closed or csvp, "sheet": sheet}
-    else:
-        with off.open_target("excel", args.target, readonly=True) as t:
-            ws = t.sheet(sheet_arg)
-            rng = ws.Range(ws.Cells(top, c_lo), ws.Cells(r2, c_hi))
-            matrix = off.range_to_matrix(rng.Value)
-            sheet = str(ws.Name)
-            resolved = t.resolved()
-    width = c_hi - c_lo + 1
-    matrix = [list(r) + [None] * (width - len(r)) for r in matrix]
-    pick = lambda row: [row[c - c_lo] for c in cols]  # noqa: E731
-    header = pick(matrix[0]) if top < r1 and matrix else None
-    body = [pick(r) for r in (matrix[r1 - top:] if top < r1 else matrix)]
-    body += [[None] * len(cols)] * max(0, (r2 - r1 + 1) - len(body))
-    return sheet, r1, body, header, resolved
-
-
-def _judge_row(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit_hint: Any) -> Dict[str, Any]:
-    """한 행 판정: {verdict, reason, evidence, spec_text, condition, match_mode}.
-    숫자가 든 항목 글을 표기가 다른 곳(층 B, literal False)에서만 찾았으면 reason에 표시하고 match_mode는 exact_mixed."""
-    out = _judge_row_core(docs, item, value, sec, unit_hint)
-    if out.pop("_literal", True) is False:
-        out["reason"] = (out["reason"] + " / " if out["reason"] else "") + LAYER_B_NOTE
-        out["match_mode"] = "exact_mixed"
-    return out
-
-
-LAYER_B_NOTE = "표기가 다른 곳에서 찾음 (항목 글이 글자 그대로는 없음: 부호·단위 확인)"
-
-
-def _judge_row_core(docs: List[Dict[str, Any]], item: str, value: Any, sec: str, unit_hint: Any) -> Dict[str, Any]:
-    import reader
-    out: Dict[str, Any] = {"verdict": "근거없음", "reason": "", "evidence": "", "spec_text": "", "match_mode": "exact"}
-    query = _UNIT_IN_ITEM.sub("", item).strip() or item
-    mode, hits = reader.find_item(docs, query, reader.section_key(sec))
-    out["match_mode"] = mode
-    if not hits:
-        if mode == "number":
-            # 숫자 안전망이 시간 상한으로 규격서를 끝까지 보지 못함: '근거없음'으로 단정하지 않음
-            out.update(verdict="판단필요", reason="숫자 안전망 검색이 시간 상한으로 규격서 일부만 확인함")
-            return out
-        out["reason"] = "규격서에서 항목을 찾지 못함" + (f" (장절 '{sec}' 안)" if sec else "")
-        return out
-    best = hits[0]
-    out["_literal"] = best.get("literal", True) if mode == "exact" else True
-    top = [h for h in hits if h["score"] == best["score"] and h.get("literal", True) == best.get("literal", True)][:5]
-    conds: List[Dict[str, Any]] = []
-    sentences: List[str] = []
-    for h in top:
-        cs, sent = reader.near_conditions(h["unit"]["text"], h["terms"])
-        sentences.append(sent)
-        for c in cs:
-            if not any(cond_same(c, x) for x in conds):
-                conds.append(c)
-    out["evidence"] = reader.evidence_text(best["doc"]["file"], best["unit"])
-    out["spec_text"] = re.sub(r"\s+", " ", sentences[0])[:CHECK_SPEC_CHARS]
-    qty = reader.quantity_of(value)
-    cell_unit = (qty[1] if qty else None) or reader.unit_of(unit_hint) or reader.unit_of(item)
-    # 보수적 판정: 같은 항목 절에 합치지 못한 공차(±N)나 % 조건이 있으면 기준 값과 어떻게 합칠지 확실하지 않음
-    # ('정격 전류 2 A, 허용 오차 5 %'에서 % 조건을 단위가 달라 버리면 2 A만 남아 2.05 A가 불일치로 단정됨)
-    loose = [c for c in conds if c["kind"] == "pm" or (c["base"] == "%" and not (cell_unit and cell_unit[0] == "%"))]
-    odd = next((c["ambiguous"] for c in conds if c.get("ambiguous")), "")
-    if odd and mode == "exact":
-        out.update(verdict="판단필요", reason=f"{odd}: 조건을 그대로 판정에 쓰지 않음", condition=_cond_list(conds))
-        return out
-    if loose and mode == "exact":
-        out.update(verdict="판단필요", reason=f"같은 항목에 합치는 규칙이 확실하지 않은 조건이 있음: {_cond_list(conds)}",
-                   condition=_cond_list(conds))
-        return out
-    if cell_unit and conds:
-        same = [c for c in conds if c["base"] == cell_unit[0]]
-        if not same:
-            out.update(verdict="판단필요", reason=f"단위가 다름 (칸 {cell_unit[2]}, 규격 {', '.join(sorted({c['unit'] for c in conds}))})")
-            return out
-        conds = same
-    if mode != "exact":
-        out.update(verdict="판단필요", reason={"partial": "검색어 일부만 맞음(partial)",
-                                              "number": "숫자 값만 같은 곳에서 찾음(number)"}.get(mode, "한 글자 다른 낱말로 찾음(fuzzy)"))
-        if conds:
-            out["condition"] = ", ".join(reader.cond_text(c) for c in conds[:3])
-        return out
-    if not conds:
-        out.update(verdict="판단필요", reason="근거 문장에서 단위가 있는 수치 조건을 찾지 못함")
-        return out
-    if len(conds) > 1:
-        out.update(verdict="판단필요", reason=f"같은 항목에 조건이 {len(conds)}개 (하나로 합치는 규칙이 확실하지 않음): {_cond_list(conds)}",
-                   condition=_cond_list(conds))
-        return out
-    c = conds[0]
-    out["condition"] = reader.cond_text(c)
-    if qty is None:
-        out.update(verdict="판단필요", reason="칸 값이 숫자가 아님")
-        return out
-    if not cell_unit:
-        # 칸 값·값 열 머리글·항목에 단위가 없으면 규격 단위로 추정하지 않음 (30이 mm인지 cm인지 모름)
-        out.update(verdict="판단필요", reason=f"칸 단위 없음 (규격은 {c['unit']}): 값 열 머리글에 단위를 적거나(예: 값({c['unit']})) 단위 열을 두세요(머리글 '단위' 또는 --unit-col)")
-        return out
-    v = qty[0] * cell_unit[1]
-    ok_ = reader.cond_holds(c, v)
-    alt = [a for a in c.get("alt") or [] if reader.cond_holds(a, v)]
-    if not ok_ and alt:
-        # 기준 값과 다르지만 같은 문장의 같은 단위 범위 안: 그 범위가 이 항목의 허용 범위일 수 있어 단정하지 않음
-        out.update(verdict="판단필요", reason=f"기준 값 {out['condition']}와 다르지만 같은 문장의 범위 {reader.cond_text(alt[0])} 안",
-                   condition=f"{out['condition']}, {reader.cond_text(alt[0])}")
-        return out
-    out.update(verdict="일치" if ok_ else "불일치", reason=out["condition"])
-    return out
-
-
-def _cond_list(conds: List[Dict[str, Any]]) -> str:
-    import reader
-    return ", ".join(reader.cond_text(c) for c in conds[:3]) + (" 등" if len(conds) > 3 else "")
-
-
-def cond_same(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
-    return (a["kind"] == "pm") == (b["kind"] == "pm") and all(a.get(k) == b.get(k)
-                                                              for k in ("base", "lo", "hi", "lo_strict", "hi_strict", "d"))
-
-
-def _check_command(args, extra: Sequence[str] = ()) -> List[str]:
-    argv = ["check", "--target", args.target, "--range", args.range, "--item-col", args.item_col,
-            "--value-col", args.value_col, "--spec", args.spec]
-    for flag, val in (("--section-col", args.section_col), ("--section", args.section), ("--sheet", args.sheet),
-                      ("--unit-col", getattr(args, "unit_col", None)),
-                      ("--header-row", str(args.header_row) if getattr(args, "header_row", None) is not None else None)):
-        if val:
-            argv += [flag, val]
-    return argv + list(extra)
-
-
-UNIT_HEADERS = ("단위", "unit", "units", "단위(unit)")
+import _excel_compare  # noqa: E402
+import _spec_check  # noqa: E402
 
 
 def cmd_check(args) -> Dict[str, Any]:
-    import reader
-    item_c = _col_arg(args.item_col, "--item-col")
-    value_c = _col_arg(args.value_col, "--value-col")
-    sec_c = _col_arg(args.section_col, "--section-col")
-    unit_c = _col_arg(getattr(args, "unit_col", None), "--unit-col")
-    if item_c is None or value_c is None:
-        raise rt.InputError("--item-col(항목 열)과 --value-col(값 열)을 열 문자로 지정하세요 (예: --item-col B --value-col D).")
-    cols = [item_c, value_c] + ([sec_c] if sec_c else [])
-    # 단위 열: --unit-col, 생략하면 값 열 바로 오른쪽 열의 머리글이 '단위'이면 그 열 (항목·값·단위 3열 표, 회사 PC 2026-11-06 O1)
-    auto_unit = unit_c is None and value_c + 1 not in cols
-    unit_try = unit_c if unit_c is not None else (value_c + 1 if auto_unit else None)
-    if unit_try is not None and unit_try in cols:
-        raise rt.InputError("--unit-col은 항목·값·장절 열과 다른 열로 적습니다.")
-    sheet, r1, body, header, resolved = _check_rows(args, cols + ([unit_try] if unit_try is not None else []))
-    unit_idx = None
-    if unit_try is not None:
-        head_text = re.sub(r"\s+", "", str(header[-1] if header else "") or "").lower()
-        if unit_c is not None or head_text in UNIT_HEADERS:
-            unit_idx = len(cols)
-            unit_c = unit_try
-        else:
-            unit_c = None
-    docs, info = reader.load_spec_docs(args.spec)       # 등록 안 된 규격서는 먼저 등록 (오래 걸리면 CONTINUE)
-    if not docs:
-        raise rt.InputError(f"--spec에서 읽을 수 있는 규격 문서가 없습니다: {args.spec} (지원 형식: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD).")
-    unit_hint = header[1] if header else None
-    sheet_ref = sheet if re.fullmatch(r"[\w가-힣]+", sheet) else f"'{sheet}'"
-    results: List[Dict[str, Any]] = []
-    late: List[str] = []              # 시간 상한으로 대조하지 못한 칸 (판단필요, 메모 없음)
-    late_row = 0                      # 대조하지 못한 첫 행 번호
-    for i, row in enumerate(body):
-        item, value = row[0], row[1]
-        if item is None or str(item).strip() == "":
-            continue
-        row_unit = row[unit_idx] if unit_idx is not None else None
-        hint = row_unit if row_unit is not None and str(row_unit).strip() else unit_hint   # 행의 단위 칸이 머리글보다 먼저
-        sec = str(row[2]).strip() if sec_c and row[2] is not None else (args.section or "")
-        if late or (results and rt.time_up()):
-            # 명령 시간 제한 전에 결과를 내려고 남은 행은 대조하지 않음 (대조는 저장할 중간 결과가 없어 CONTINUE가 아님)
-            late.append(f"{sheet_ref}!{addr(r1 + i, value_c)}")
-            late_row = late_row or r1 + i
-            j = {"verdict": "판단필요", "reason": "대조하지 못함 (명령 시간 제한)", "evidence": "", "spec_text": "",
-                 "match_mode": None}
-        else:
-            j = _judge_row(docs, str(item).strip(), value, sec, hint)
-        cell = f"{sheet_ref}!{addr(r1 + i, value_c)}"
-        results.append({"cell": cell, "item": str(item).strip()[:60], "value": out_value(value), **j})
-    counts = {v: sum(1 for r in results if r["verdict"] == v) for v in VERDICTS}
-    not_decided = counts["판단필요"]
-    # 메모 파일 (칸, 메모) -> excel.py comment --file로 칸 메모. 판정은 규격 문장을 기계로 읽은 참고 판정이라
-    # 메모에 '자동 판정(참고)'과 읽은 조건·근거를 함께 적어 사람이 확인할 수 있게 함
-    # 대조하지 못한 행(late)은 메모에 넣지 않음 (판정이 없는 칸에 '자동 판정' 메모가 달리지 않게)
-    memo_rows = [["칸", "메모"]] + [[r["cell"], check_memo(r)] for r in results if r["cell"] not in late]
-    memo = rt.write_csv_rows(rt.resolve_output_path(None, f"check_memo_{sheet}", ".csv"), memo_rows)
-    problems: List[str] = []
-    memo_problem = rt.check_saved_file(memo, len(memo_rows), delimiter=",")
-    if memo_problem:
-        problems.append(f"메모 파일: {memo_problem}")
-    fields: Dict[str, Any] = {"target_resolved": resolved, "count": len(results), "counts": counts,
-                              "results": [{k: r.get(k, "") for k in ("cell", "item", "value", "verdict", "reason", "condition",
-                                                                     "spec_text", "evidence", "match_mode")}
-                                          for r in results[:CHECK_SHOWN]],
-                              "truncated": len(results) > CHECK_SHOWN, "shown": min(len(results), CHECK_SHOWN),
-                              "needs_review": [r["cell"] for r in results if r["verdict"] == "판단필요"][:50],
-                              "not_decided": not_decided, "memo_file": memo}
-    if unit_c is not None:
-        fields["unit_col"] = col_letter(unit_c) + (" (머리글이 '단위'라 자동으로 씀)" if auto_unit else "")
-    if args.save:
-        header_row = ["칸", "항목", "값", "판정", "이유", "규격 조건", "근거", "규격 문장", "찾은 방식"]
-        rows = [[r["cell"], r["item"], r["value"], r["verdict"], r["reason"], r.get("condition", ""), r["evidence"],
-                 r["spec_text"], r["match_mode"]] for r in results]
-        out = rt.resolve_output_path(args.save, f"check_{sheet}", ".xlsx")
-        out, _ = reader.write_xlsx_table(out, header_row, rows, [12, 24, 10, 10, 30, 18, 40, 60, 10], "대조결과")
-        fields["output_file"] = out
-        if len(results) > CHECK_SHOWN:
-            fields["full_result_file"] = out
-    elif len(results) > CHECK_SHOWN:
-        fields["full_result_file"] = memo
-    if info.get("remaining"):
-        # 규격서 등록이 남음: 대조가 끝나지 않았으니 메모 미리보기 대신 같은 명령(이어서 등록하고 다시 대조)만 줌 (CONTINUE와 같은 흐름)
-        nexts = [rt.next_command("excel.py", _check_command(args), f"규격서 {info['remaining']}개가 아직 등록되지 않아 다시 대조 (같은 명령)")]
-        problems.append(f"규격 폴더의 문서 {info['remaining']}개를 아직 등록하지 못해 대조에 쓰지 않음")
-        action = ("대조가 끝나지 않았습니다: 사용자에게 지금까지의 결과를 알리고 next_commands[0](같은 명령)을 그대로 다시 실행해 "
-                  "남은 규격서를 등록하고 이어서 대조하세요. 메모는 대조를 마친 결과의 next_commands로 합니다.")
-    else:
-        nexts = [rt.next_command("excel.py", ["comment", "--target", args.target, "--action", "add", "--file", memo, "--dry-run"],
-                                 "자동 판정(참고)·읽은 조건·근거를 값 칸 메모로 달기 미리보기, 변경 없음 "
-                                 "(실제로 다는 명령은 그 결과의 confirm_commands, 사용자 확인 뒤에만)")]
-        action = ("사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자가 '예'라고 한 뒤에만 "
-                  "그 결과의 confirm_commands[0]을 실행하세요. 같은 check는 다시 실행하지 마세요.")
-    if late:
-        problems.append(f"명령 시간 제한으로 {len(late)}행({late[0]}부터)은 대조하지 못함 (판단필요로 두고 메모에서 뺌)")
-        if not info.get("remaining"):
-            # 남은 행만 대조하는 전체 명령 (머리글 행은 원래 범위 위 행으로 고정)
-            _, cells = split_sheet(args.range)
-            _, c1, r2, c2 = parse_area(cells, None, None)
-            rest = ((args.range.rsplit("!", 1)[0] + "!") if "!" in args.range else "") + \
-                addr(late_row, c1 or min(cols), r2, c2 or max(cols))
-            # 원래 범위가 1행부터면 머리글이 없었음: 0(머리글 없음)을 넘겨 남은 행 범위 위의 데이터 행을 머리글로 읽지 않게
-            head_row = getattr(args, "header_row", None)
-            head_row = head_row if head_row is not None else (r1 - 1 if r1 > 1 else 0)
-            rest_args = type(args)(**{**vars(args), "range": rest, "header_row": head_row})
-            nexts.append(rt.next_command("excel.py", _check_command(rest_args),
-                                         f"대조하지 못한 {len(late)}행({rest})만 다시 대조 (읽기 전용)"))
-            action += (f" 대조하지 못한 {len(late)}행은 사용자에게 알리고, 사용자에게 확인을 받은 뒤 "
-                       f"next_commands[{len(nexts) - 1}]을 그대로 실행하세요.")
-    if info.get("skipped"):
-        problems.append(f"읽지 못한 규격 문서 {len(info['skipped'])}개: " + ", ".join(os.path.basename(s["file"]) for s in info["skipped"][:5]))
-    fields["next_commands"] = nexts
-    preview = (f"{len(results)}행 대조(자동 판정, 참고용): 일치 {counts['일치']}, 불일치 {counts['불일치']}, "
-               f"근거없음 {counts['근거없음']}, 판단필요 {counts['판단필요']}")
-    if not results:
-        fields.pop("next_commands", None)
-        return rt.ok_unverified(TOOL, "check", "0건: 대조할 항목이 없습니다",
-                                [f"0건(찾은 항목 없음): {args.range}의 항목 열({args.item_col})이 비어 있음"], **fields)
-    # 판정은 자연어 규격 문장을 기계로 해석한 참고 판정 (해석은 휴리스틱): 늘 UNVERIFIED, 사용자 확인 뒤 메모
-    problems.insert(0, CHECK_ADVISORY)
-    if not_decided:
-        problems.insert(1, f"판단필요 {not_decided}행(needs_review)은 도구가 판정하지 못함: 사용자가 근거를 보고 정해야 함")
-    payload = rt.ok_unverified(TOOL, "check", preview, problems, **fields)
-    # 기본 문구('다시 실행하지 말고 그대로 알리세요')는 메모 미리보기·이어서 대조와 부딪혀 이 명령의 행동으로 바꿈
-    payload["agent_directive"] = "UNVERIFIED: 실행했지만 확인하지 못했습니다: " + "; ".join(problems) + ". " + action
-    return payload
-
-
-CHECK_ADVISORY = ("자동 판정은 참고용입니다(규격 문장을 기계로 해석함). 행마다 읽은 조건(condition)과 근거 문장(spec_text)을 "
-                  "사용자에게 보여 주고 확인을 받은 뒤 메모를 다세요")
-
-
-def check_memo(r: Dict[str, Any]) -> str:
-    """check 한 행의 칸 메모: '자동 판정(참고): 불일치 - 읽은 조건: 3 A 이하 - 근거: 규격서.txt 3.2절: 소비 전류는 ...'."""
-    cond = r.get("condition") or "없음"
-    memo = f"자동 판정(참고): {r['verdict']}"
-    if r.get("reason") and r["reason"] != r.get("condition"):
-        memo += f" ({r['reason']})"
-    memo += f" - 읽은 조건: {cond}"
-    memo += f" - 근거: {r['evidence']}: {r['spec_text'][:CHECK_MEMO_SPEC]}" if r.get("evidence") else " - 근거: 없음"
-    return memo
-
-
-# ==============================================================================
-# 9-2. 두 판 비교 (compare): 표 두 판을 행 키로 짝지어 비교. BOM(부품 목록) 개정 비교에 맞춤
-# 머리글 행·열 역할·짝지을 키는 도구가 정함 (사용법 단순성 5번: LLM은 고르지 않음). Excel 없이 파일만 읽음.
-# ==============================================================================
-
-COMPARE_EXTS = (".xlsx", ".xlsm", ".csv", ".tsv")
-COMPARE_SHOWN = 20             # 구분마다 JSON에 담는 항목 수 (넘으면 truncated, 전체는 결과 xlsx)
-COMPARE_HEADER_SCAN = 30       # 머리글 행을 찾을 때 보는 위쪽 행 수 (제목 행 아래의 머리글)
-COMPARE_TEXT = 60              # JSON 항목에 담는 값 하나의 글자 수
-COMPARE_REF_RANGE = 2000       # 위치 범위 하나(R1-R3)를 펼치는 최대 개수 (R1-R99999 같은 오타가 메모리를 쓰지 않게)
-COMPARE_GUESS_PAIRS = 300_000  # 대체 추정에서 이름을 견주는 쌍 수 상한 (넘으면 건너뛰고 warnings)
-COMPARE_NAME_SIM = 0.6         # 같은 위치·상위에서 대체로 볼 품명 유사도
-COMPARE_FLAT_SIM = 0.85        # 위치·상위 정보가 없는 표에서 대체로 볼 품명 유사도
-COMPARE_CANDIDATES = 10
-
-# 열 역할 (역할, 보일 이름, 머리글 같은 뜻 목록). 머리글은 _cmp_header_key로 견줌 (괄호 안 단위, 공백, 기호 무시, 영문 소문자)
-COMPARE_ROLES = (
-    ("part", "품번", ("품번", "부품번호", "품목번호", "자재번호", "자재코드", "품목코드", "부품코드", "품번코드", "partno", "partnumber",
-                     "pn", "itemno", "itemnumber", "itemcode", "materialno", "materialcode", "material", "partcode", "code", "코드")),
-    ("parent", "상위품번", ("상위품번", "모품번", "상위품목", "상위품목코드", "상위코드", "모품목", "모품목코드", "상위자재", "parent", "parentpart",
-                         "parentpartno", "parentpn", "parentitem", "parentcode", "assembly", "상위")),
-    ("level", "레벨", ("레벨", "level", "lvl", "lv", "단계", "bomlevel", "bom레벨", "차수")),
-    ("qty", "수량", ("수량", "소요량", "소요수량", "qty", "quantity", "usage", "사용량", "개수", "소요")),
-    ("unit", "단위", ("단위", "unit", "uom", "units")),
-    ("name", "품명", ("품명", "품목명", "부품명", "자재명", "명칭", "이름", "description", "desc", "name", "partname", "itemname")),
-    ("spec", "규격", ("규격", "사양", "spec", "specification", "specs", "value")),
-    ("maker", "메이커", ("메이커", "제조사", "제조업체", "제작사", "maker", "manufacturer", "mfr", "mfg", "vendor", "공급사")),
-    ("ref", "위치", ("위치", "위치번호", "부품위치", "실장위치", "refdes", "ref", "reference", "referencedesignator",
-                    "referencedesignators", "designator", "designators", "location", "loc")),
-    ("note", "비고", ("비고", "remark", "remarks", "note", "notes", "memo", "comment", "comments")),
-)
-_CMP_LABEL = {r: label for r, label, _ in COMPARE_ROLES}
-_CMP_CODE_ROLES = ("part", "parent")           # 코드: 대소문자·공백 무시, 앞자리 0 유지 (숫자로 바꾸지 않음)
-_CMP_NOCASE_ROLES = ("unit", "maker")          # 대소문자만 무시 (EA = ea)
-_CMP_SPLIT_REF = re.compile(r"[,;/\s]+")
-_CMP_REF_RANGE = re.compile(r"^([A-Z]+)(\d+)[-~]([A-Z]*)(\d+)$")
-_CMP_REF_ONE = re.compile(r"^([A-Z]*)(\d+)$")
-_CMP_NUM = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?$")
-
-
-def _cmp_nfkc(v: Any) -> str:
-    import unicodedata
-    return unicodedata.normalize("NFKC", str(v))
-
-
-def _cmp_header_key(v: Any) -> str:
-    """머리글 비교값: 전각 -> 반각, 괄호 안 단위 빼기, 영문 소문자, 글자·숫자만 ('Part No.' = 'partno', 'Q'ty' = 'qty', '수량(EA)' = '수량')."""
-    if v is None:
-        return ""
-    s = _cmp_nfkc(v).lower()
-    bare = re.sub(r"[\(\[][^\)\]]*[\)\]]", "", s)
-    key = re.sub(r"[^0-9a-z가-힣]", "", bare)
-    return key or re.sub(r"[^0-9a-z가-힣]", "", s)
-
-
-_CMP_ROLE_OF = {_cmp_header_key(w): role for role, _, words in COMPARE_ROLES for w in words}
-
-
-def _cmp_roles(row: Sequence[Any]) -> Dict[str, int]:
-    """머리글 행의 열 역할 {역할: 열 번호(0부터)}. 같은 역할이 여러 열이면 왼쪽 열 (나머지는 이름으로 견주는 열)."""
-    roles: Dict[str, int] = {}
-    for j, v in enumerate(row):
-        if v is None or isinstance(v, (int, float)):
-            continue
-        role = _CMP_ROLE_OF.get(_cmp_header_key(v))
-        if role and role not in roles:
-            roles[role] = j
-    return roles
-
-
-def _cmp_num_text(x: float) -> str:
-    if x == 0:
-        return "0"
-    if float(x).is_integer() and abs(x) < 1e15:
-        return str(int(x))
-    return format(x, ".12g")
-
-
-def _cmp_number(v: Any) -> Optional[float]:
-    """수량 비교값: 1 = 1.0 = "1" = "1,000"(1000). 숫자가 아니면 None."""
-    if isinstance(v, bool) or v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = _cmp_nfkc(v).strip()
-    if not s or not _CMP_NUM.match(s) or not re.search(r"\d", s):
-        return None
-    try:
-        return float(s.replace(",", ""))
-    except ValueError:
-        return None
-
-
-def _cmp_value(v: Any) -> str:
-    """속성 비교값: 앞뒤 공백·여러 칸 공백, 전각·반각을 무시. 숫자는 1 = 1.0 = "1" (앞자리 0이 있는 글 "007"은 글자 그대로)."""
-    if v is None:
-        return ""
-    if isinstance(v, bool):
-        return str(v)
-    if isinstance(v, (int, float)):
-        return _cmp_num_text(float(v))
-    s = re.sub(r"\s+", " ", _cmp_nfkc(v)).strip()
-    if s and re.search(r"\d", s) and _CMP_NUM.match(s) and not re.match(r"^[+-]?0\d", s):
-        n = _cmp_number(s)
-        if n is not None:
-            return _cmp_num_text(n)
-    return s
-
-
-def _cmp_code(v: Any) -> str:
-    """코드 비교값 (품번, 상위품번): 전각·반각, 대소문자, 공백 무시. 앞자리 0은 그대로 (숫자로 저장된 1234.0은 1234)."""
-    if v is None:
-        return ""
-    if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
-        v = int(v)
-    return re.sub(r"\s+", "", _cmp_nfkc(v)).upper()
-
-
-def _cmp_ref_key(d: str) -> Tuple[str, int, str]:
-    m = re.match(r"^([A-Z]*)(\d+)(.*)$", d)
-    return (m.group(1), int(m.group(2)), m.group(3)) if m else (d, -1, "")
-
-
-def _cmp_refs(v: Any) -> frozenset:
-    """위치(Ref Des) 목록을 집합으로: "R1-R3, R5" = "R1,R2,R3,R5" = "r5 r1~r3". 범위는 같은 머리글자일 때만 펼침."""
-    if v is None:
-        return frozenset()
-    if isinstance(v, float) and v.is_integer():
-        v = int(v)
-    s = _cmp_nfkc(v).upper()
-    s = re.sub(r"\s*([-~])\s*", r"\1", s)
-    out = set()
-    for tok in _CMP_SPLIT_REF.split(s):
-        tok = tok.strip()
-        if not tok:
-            continue
-        m = _CMP_REF_RANGE.match(tok)
-        if m and (not m.group(3) or m.group(3) == m.group(1)):
-            a, b = m.group(2), m.group(4)
-            lo, hi = int(a), int(b)
-            if lo <= hi and hi - lo < COMPARE_REF_RANGE:
-                width = len(a) if a.startswith("0") and len(a) == len(b) else 0
-                out.update(f"{m.group(1)}{str(i).zfill(width)}" for i in range(lo, hi + 1))
-                continue
-        out.add(tok)
-    return frozenset(out)
-
-
-def _cmp_ref_text(refs: Iterable[str]) -> str:
-    return ",".join(sorted(refs, key=_cmp_ref_key))
-
-
-def _cmp_show(v: Any) -> Any:
-    """JSON에 담는 원래 값 (긴 글은 자름)."""
-    v = out_value(v)
-    if isinstance(v, str) and len(v) > COMPARE_TEXT:
-        return v[:COMPARE_TEXT] + "..."
-    return v
-
-
-def _cmp_level(v: Any) -> Optional[int]:
-    """레벨 칸: 1, "2", ".3", "..3", "**"(별 개수), "1.2.3"(점으로 나눈 단계 수)."""
-    if v is None or isinstance(v, bool):
-        return None
-    if isinstance(v, (int, float)):
-        return int(v)
-    s = _cmp_nfkc(v).strip()
-    if not s:
-        return None
-    if re.fullmatch(r"\d+(?:\.0+)?", s):
-        return int(float(s))
-    m = re.fullmatch(r"[.\-*·\s]*(\d+)", s)
-    if m:
-        return int(m.group(1))
-    if re.fullmatch(r"[.*·+]+", s):
-        return len(s)
-    if re.fullmatch(r"\d+(?:\.\d+)+", s):
-        return s.count(".") + 1
-    return None
-
-
-def _cmp_find_header(rows: List[List[Any]]) -> Tuple[int, Dict[str, int]]:
-    """머리글 행(0부터)과 열 역할. 위쪽 COMPARE_HEADER_SCAN행 중 역할을 가장 많이 알아본 행 (품번 열이 있으면 더함).
-    알아본 열이 없으면 글자 칸이 둘 이상인 첫 행."""
-    best_i, best_roles, best_score = -1, {}, 0.0
-    for i, row in enumerate(rows[:COMPARE_HEADER_SCAN]):
-        roles = _cmp_roles(row)
-        score = len(roles) + (0.5 if "part" in roles else 0)
-        if score > best_score:
-            best_i, best_roles, best_score = i, roles, score
-    if best_i >= 0 and best_score >= 1.5:
-        return best_i, best_roles
-    for i, row in enumerate(rows[:COMPARE_HEADER_SCAN]):
-        filled = [v for v in row if v is not None and str(v).strip()]
-        if len(filled) >= 2 and all(isinstance(v, str) for v in filled):
-            return i, {}
-    for i, row in enumerate(rows):
-        if any(v is not None and str(v).strip() for v in row):
-            return i, {}
-    return 0, {}
-
-
-def _cmp_cell(v: Any) -> Any:
-    """읽은 값을 JSON에 담을 수 있는 값으로 (날짜는 글자, 빈 글은 None). 캐시에도 이 값을 씀."""
-    if v is None:
-        return None
-    if isinstance(v, str):
-        return v if v.strip() else None
-    if isinstance(v, (bool, int, float)):
-        return v
-    return out_value(v)
-
-
-def _cmp_cache_path(path: str, sheet: Optional[str]) -> str:
-    import hashlib
-    st = os.stat(path)
-    key = f"{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}|{sheet or ''}|{rt.VERSION}"
-    return os.path.join(rt.get_cache_dir(), "compare", hashlib.sha1(key.encode("utf-8")).hexdigest()[:24] + ".json")
-
-
-def _cmp_pick_sheet(wb: Any, sheet: Optional[str], prefer: Optional[str], option: str) -> Tuple[Any, str]:
-    """읽을 시트: 준 시트 -> 이전 판과 같은 이름(새 판) -> 시트 하나 -> 열 역할을 가장 많이 알아본 시트(같으면 활성 시트)."""
-    names = list(wb.sheetnames)
-    if sheet:
-        found = rt.find_name(sheet, names)
-        if found is None:
-            raise rt.not_found("시트", sheet, names, extra=f" ({option})", option=option)
-        return wb[found], f"{option}로 준 시트"
-    if prefer and rt.find_name(prefer, names):
-        return wb[rt.find_name(prefer, names)], "이전 판과 같은 이름의 시트"
-    if len(names) == 1:
-        return wb[names[0]], "시트가 하나뿐"
-    active = getattr(wb.active, "title", None)
-    best: Tuple[float, int] = (-1.0, 0)
-    pick = names[0]
-    for name in names:
-        top = [list(r) for r in wb[name].iter_rows(min_row=1, max_row=COMPARE_HEADER_SCAN, values_only=True)]
-        _, roles = _cmp_find_header(top)
-        score = (len(roles) + (0.5 if "part" in roles else 0), 1 if name == active else 0)
-        if score > best:
-            best, pick = score, name
-    return wb[pick], ("머리글로 표를 알아본 시트" if best[0] > 0 else "활성 시트")
-
-
-def _cmp_read_file(path: str, sheet: Optional[str], prefer: Optional[str], option: str) -> Dict[str, Any]:
-    """파일 하나를 읽음: {sheet, sheet_reason, rows(원래 행 전체, 값만), warnings}. xlsx는 openpyxl(값, 읽기 전용), CSV는 글자 그대로."""
-    ext = os.path.splitext(path)[1].lower()
-    warnings: List[str] = []
-    if ext in (".csv", ".tsv"):
-        if sheet:
-            warnings.append(f"{os.path.basename(path)}는 CSV라 시트가 없어 {option}를 쓰지 않음")
-        rows = [[_cmp_cell(v) for v in r] for r in rt.read_csv_rows(path)]
-        return {"sheet": os.path.splitext(os.path.basename(path))[0], "sheet_reason": "CSV", "rows": rows, "warnings": warnings}
-    openpyxl = rt.require_lib("openpyxl", "openpyxl", "엑셀 파일 두 판 비교")
-    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
-    try:
-        ws, reason = _cmp_pick_sheet(wb, sheet, prefer, option)
-        ws.reset_dimensions()          # 크기 정보가 틀린 파일(다른 프로그램이 만든 xlsx)도 끝까지 읽음
-        rows = [[_cmp_cell(v) for v in r] for r in ws.iter_rows(min_row=1, min_col=1, values_only=True)]
-        title = ws.title
-    finally:
-        wb.close()
-    info = rt.xlsx_uncomputed_formulas(path, title)
-    return {"sheet": title, "sheet_reason": reason, "rows": rows, "warnings": warnings,
-            "uncomputed": info if rt.uncomputed_found(info) else None}
-
-
-def _cmp_load(path: str, sheet: Optional[str], prefer: Optional[str], option: str) -> Dict[str, Any]:
-    """캐시(이전 실행이 시간 제한으로 멈추기 전에 저장한 것)가 있으면 그것을, 없으면 파일을 읽음."""
-    cache = _cmp_cache_path(path, sheet if sheet else (f"prefer:{prefer}" if prefer else None))
-    try:
-        with open(cache, encoding="utf-8") as f:
-            data = json.load(f)
-        data["cache"] = cache
-        data["from_cache"] = True
-        return data
-    except (OSError, ValueError):
-        pass
-    data = _cmp_read_file(path, sheet, prefer, option)
-    data["cache"] = cache
-    return data
-
-
-def _cmp_save_cache(data: Dict[str, Any]) -> None:
-    keep = {k: v for k, v in data.items() if k not in ("cache", "from_cache")}
-    os.makedirs(os.path.dirname(data["cache"]), exist_ok=True)
-    rt.safe_write_text(data["cache"], json.dumps(keep, ensure_ascii=False))
-
-
-def _cmp_drop_cache(*tables: Dict[str, Any]) -> None:
-    for t in tables:
-        if t.get("cache"):
-            rt.remove_file(t["cache"])
-
-
-def _cmp_table(data: Dict[str, Any], path: str) -> Dict[str, Any]:
-    """읽은 행에서 머리글을 찾아 표로: header(보일 이름), keys(머리글 비교값), roles, body[(행 번호, 값)], 레벨로 만든 상위·경로."""
-    rows = data["rows"]
-    hi, roles = _cmp_find_header(rows)
-    head = list(rows[hi]) if rows else []
-    width = max([len(head)] + [len(r) for r in rows[hi + 1:]]) if rows else 0
-    while width and all((r[width - 1] if len(r) >= width else None) is None for r in [head] + rows[hi + 1:]):
-        width -= 1
-    head = (head + [None] * width)[:width]
-    header = [str(v).strip() if v is not None and str(v).strip() else f"{col_letter(j + 1)}열" for j, v in enumerate(head)]
-    body = []
-    for i, r in enumerate(rows[hi + 1:], start=hi + 2):
-        r = (list(r) + [None] * width)[:width]
-        if any(v is not None for v in r):
-            body.append((i, r))
-    t = {"path": path, "name": os.path.basename(path), "sheet": data["sheet"], "sheet_reason": data.get("sheet_reason", ""),
-         "header_row": hi + 1, "header": header, "keys": [_cmp_header_key(v) for v in head], "roles": roles, "body": body,
-         "csv": os.path.splitext(path)[1].lower() in (".csv", ".tsv")}
-    if "level" in roles:
-        lv, pc = roles["level"], roles.get("part")
-        stack: List[Tuple[int, str]] = []
-        parents, paths = [], []
-        for _, r in body:
-            level = _cmp_level(r[lv])
-            code = _cmp_code(r[pc]) if pc is not None else ""
-            if level is None:
-                parents.append("")
-                paths.append("")
-                continue
-            while stack and stack[-1][0] >= level:
-                stack.pop()
-            parents.append(stack[-1][1] if stack else "")
-            paths.append(">".join(c for _, c in stack))
-            stack.append((level, code))
-        t["lv_parent"], t["lv_path"] = parents, paths
-    return t
-
-
-def _cmp_pair_columns(old: Dict[str, Any], new: Dict[str, Any]) -> Tuple[List[Tuple[int, int, str, Optional[str]]], List[str], List[str]]:
-    """두 판의 열 짝: [(이전 열, 새 열, 보일 이름, 역할)]. 역할이 같으면 머리글이 달라도 짝, 나머지는 머리글 비교값이 같은 열.
-    짝이 없는 열은 (이전 판에만, 새 판에만) 머리글 목록."""
-    pairs: List[Tuple[int, int, str, Optional[str]]] = []
-    used_o, used_n = set(), set()
-    for role, _label, _ in COMPARE_ROLES:
-        if role in old["roles"] and role in new["roles"]:
-            o, n = old["roles"][role], new["roles"][role]
-            pairs.append((o, n, old["header"][o], role))
-            used_o.add(o)
-            used_n.add(n)
-    for o, key in enumerate(old["keys"]):
-        if o in used_o:
-            continue
-        n = next((j for j, k in enumerate(new["keys"]) if j not in used_n and k and k == key), None)
-        if n is None and not key:
-            n = o if o < len(new["keys"]) and o not in used_n and not new["keys"][o] else None   # 머리글이 빈 열은 같은 자리끼리
-        if n is not None:
-            pairs.append((o, n, old["header"][o], None))
-            used_o.add(o)
-            used_n.add(n)
-    only_old = [old["header"][o] for o in range(len(old["header"])) if o not in used_o]
-    only_new = [new["header"][n] for n in range(len(new["header"])) if n not in used_n]
-    return pairs, only_old, only_new
-
-
-# 짝지을 키의 한 부분: ("col", 이전 열, 새 열, 보일 이름, 코드인지) / ("lv_parent",) 레벨로 만든 상위 품번 / ("lv_path",) 레벨로 만든 경로
-KeyPart = Tuple[Any, ...]
-
-
-def _cmp_key_values(t: Dict[str, Any], spec: Sequence[KeyPart], side: int) -> List[str]:
-    out = []
-    for i, (_, r) in enumerate(t["body"]):
-        parts = []
-        for p in spec:
-            if p[0] == "col":
-                v = r[p[side]]
-                parts.append(_cmp_code(v) if p[4] else (_cmp_ref_text(_cmp_refs(v)) if p[5] else _cmp_value(v)))
-            else:
-                parts.append(t[p[0]][i])
-        out.append("\x1f".join(parts))
-    return out
-
-
-def _cmp_dups(keys: Sequence[str]) -> int:
-    from collections import Counter
-    return sum(n for n in Counter(keys).values() if n > 1)
-
-
-def _cmp_spec_label(spec: Sequence[KeyPart]) -> str:
-    names = {"lv_parent": "상위품번(레벨로 찾음)", "lv_path": "상위 경로(레벨로 찾음)"}
-    return "+".join(p[3] if p[0] == "col" else names[p[0]] for p in spec)
-
-
-def _cmp_col_part(old: Dict[str, Any], new: Dict[str, Any], role: str) -> KeyPart:
-    return ("col", old["roles"][role], new["roles"][role], old["header"][old["roles"][role]], role in _CMP_CODE_ROLES, role == "ref")
-
-
-def _cmp_key_arg(args, old: Dict[str, Any], new: Dict[str, Any], pairs: List[Tuple[int, int, str, Optional[str]]]) -> List[KeyPart]:
-    """--key "상위품번,품번": 이전 판 머리글 이름(쉼표로 여럿). 열 문자(B)를 주면 그 열의 머리글 이름으로 고친 전체 명령을 [추천]."""
-    names = [s.strip() for s in str(args.key).split(",") if s.strip()]
-    if not names:
-        raise rt.InputError("--key에는 짝지을 열의 머리글 이름을 적습니다 (여럿이면 쉼표, 예: --key \"상위품번,품번\").")
-    spec: List[KeyPart] = []
-    for name in names:
-        o = next((j for j, h in enumerate(old["header"]) if h.strip().lower() == name.lower()), None)
-        if o is None:
-            o = next((j for j, k in enumerate(old["keys"]) if k and k == _cmp_header_key(name)), None)
-        if o is None and _LETTERS.match(name) and col_number(name.upper()) <= len(old["header"]):
-            fixed = ",".join(old["header"][col_number(n.upper()) - 1] if n == name else n for n in names)
-            raise rt.InputError(f"--key에는 열 문자가 아니라 머리글 이름을 적습니다 ({name}열의 머리글: {old['header'][col_number(name.upper()) - 1]}). "
-                                f"[추천] {rt.retry_replacing(args.key, fixed, '--key')}")
-        if o is None:
-            raise rt.not_found("키 열", name, old["header"], extra=f" (이전 판 {old['name']}의 머리글 {old['header_row']}행)")
-        pair = next((p for p in pairs if p[0] == o), None)
-        if pair is None:
-            raise rt.InputError(f"키 열 '{old['header'][o]}'이(가) 새 판 {new['name']}에 없습니다 (새 판 머리글: "
-                                f"{', '.join(new['header'][:15])}). 두 판에 모두 있는 열을 --key에 적으세요.")
-        role = pair[3]
-        spec.append(("col", pair[0], pair[1], old["header"][o], role in _CMP_CODE_ROLES, role == "ref"))
-    return spec
-
-
-def _cmp_choose_key(args, old: Dict[str, Any], new: Dict[str, Any],
-                    pairs: List[Tuple[int, int, str, Optional[str]]]) -> Tuple[List[KeyPart], str, bool]:
-    """짝지을 키 (부분 목록, 고른 까닭, 같은 키의 행을 나온 순서대로 짝지을지).
-    품번이 행마다 다르면 품번, 같은 품번이 여러 행(여러 단계 BOM)이면 상위품번 열 -> 레벨로 찾은 상위 -> 레벨 경로 -> 위치를 더한 키 중
-    두 판 모두에서 행마다 다른 첫 키. 그래도 없으면 [후보](번호와 같은 번호의 confirm_commands: --key를 넣은 전체 명령)."""
-    if args.key:
-        spec = _cmp_key_arg(args, old, new, pairs)
-        return spec, "--key로 준 열", True
-    both = [r for r in ("part", "parent", "level", "ref") if r in old["roles"] and r in new["roles"]]
-    if "part" in both:
-        part = _cmp_col_part(old, new, "part")
-        options: List[Tuple[List[KeyPart], str]] = [([part], "품번이 행마다 다름")]
-        if "parent" in both:
-            options.append(([_cmp_col_part(old, new, "parent"), part], "같은 품번이 여러 행이라 상위품번을 더함"))
-        if "level" in both:
-            options.append(([("lv_parent",), part], "같은 품번이 여러 행이라 레벨로 찾은 상위품번을 더함"))
-            options.append(([("lv_path",), part], "같은 품번이 여러 행이라 레벨로 찾은 상위 경로를 더함"))
-        if "ref" in both:
-            options.append(([part, _cmp_col_part(old, new, "ref")], "같은 품번이 여러 행이라 위치를 더함"))
-            if "parent" in both:
-                options.append(([_cmp_col_part(old, new, "parent"), part, _cmp_col_part(old, new, "ref")],
-                                "같은 품번이 여러 행이라 상위품번과 위치를 더함"))
-        for spec, why in options:
-            if not _cmp_dups(_cmp_key_values(old, spec, 1)) and not _cmp_dups(_cmp_key_values(new, spec, 2)):
-                return spec, why, False
-        # 열로 적을 수 있는 키만 후보 (레벨로 찾은 상위는 --key로 적을 수 없음). 남는 같은 키 행이 적은 순서
-        cands = []
-        for spec, _ in options:
-            if any(p[0] != "col" for p in spec):
-                continue
-            n = _cmp_dups(_cmp_key_values(old, spec, 1)) + _cmp_dups(_cmp_key_values(new, spec, 2))
-            cands.append((n, _cmp_spec_label(spec), ",".join(p[3] for p in spec)))
-        head = (f"같은 품번({old['header'][old['roles']['part']]})이 여러 행에 있어 두 판의 행을 짝지을 키를 도구가 정할 수 없습니다 "
-                f"(상위품번·레벨·위치를 더해도 같은 키의 행이 남음). 사용자에게 키를 고르게 하세요. 고른 키가 같은 행은 나온 순서대로 짝짓습니다.")
-    else:
-        cands = []
-        for o, n, label, _ in pairs:
-            spec = [("col", o, n, label, True, False)]
-            ko, kn = _cmp_key_values(old, spec, 1), _cmp_key_values(new, spec, 2)
-            if sum(1 for k in ko if k) < max(1, len(ko) // 2):
-                continue                                     # 반 넘게 빈 열은 키가 아님
-            cands.append((_cmp_dups(ko) + _cmp_dups(kn), label, label))
-        if not cands:
-            raise rt.InputError(f"두 판에 같은 머리글의 열이 없어 비교할 수 없습니다 (이전 판 머리글 {old['header_row']}행: "
-                                f"{', '.join(old['header'][:15])} / 새 판 {new['header_row']}행: {', '.join(new['header'][:15])}).")
-        head = ("품번 열(품번, Part No, 자재코드 등)을 알아보지 못해 두 판의 행을 짝지을 키 열을 도구가 정할 수 없습니다. "
-                "사용자에게 키 열을 고르게 하세요.")
-    cands.sort(key=lambda c: c[0])
-    cands = cands[:COMPARE_CANDIDATES]
-    shown = [f"{label} (같은 키 {n}행)" if n else label for n, label, _ in cands]
-    raise rt.ambiguous(head, shown, values=[v for _, _, v in cands], option="--key",
-                       log_message=head.split(" (", 1)[0] + ".")
-
-
-def _cmp_index(keys: List[str], ordered: bool) -> Tuple[Dict[str, int], int]:
-    """키 -> 행 순번. ordered면 같은 키의 n번째 행에 '#n'을 붙여 나온 순서대로 짝지음. (색인, 같은 키 행 수)."""
-    idx: Dict[str, int] = {}
-    seen: Dict[str, int] = {}
-    dup = 0
-    for i, k in enumerate(keys):
-        if not ordered:
-            idx[k] = i
-            continue
-        n = seen.get(k, 0) + 1
-        seen[k] = n
-        if n > 1:
-            dup += 1
-        idx[k if n == 1 else f"{k}\x1e{n}"] = i
-    return idx, dup
-
-
-def _cmp_key_text(t: Dict[str, Any], spec: Sequence[KeyPart], side: int, i: int) -> str:
-    """사람이 읽을 키: 'A-100 / B-200' (상위 / 품번)."""
-    _, r = t["body"][i]
-    parts = []
-    for p in spec:
-        if p[0] == "col":
-            v = out_value(r[p[side]])
-            parts.append(str(v) if v != "" else "(빈 칸)")
-        else:
-            parts.append(t[p[0]][i].replace(">", " > ") or "(최상위)")
-    return " / ".join(parts)
-
-
-def _cmp_ctx(t: Dict[str, Any], i: int) -> Tuple[str, frozenset, str]:
-    """대체 추정에 쓰는 행 정보: (상위품번, 위치 집합, 품명 비교값)."""
-    _, r = t["body"][i]
-    roles = t["roles"]
-    parent = _cmp_code(r[roles["parent"]]) if "parent" in roles else (t["lv_parent"][i] if "lv_parent" in t else "")
-    refs = _cmp_refs(r[roles["ref"]]) if "ref" in roles else frozenset()
-    name_col = roles.get("name", roles.get("spec"))
-    name = _cmp_value(r[name_col]).lower() if name_col is not None else ""
-    return parent, refs, name
-
-
-def _cmp_guess(old: Dict[str, Any], new: Dict[str, Any], removed: List[int], added: List[int],
-               warnings: List[str]) -> List[Tuple[int, int, str]]:
-    """대체 추정: 삭제된 행과 추가된 행 중 위치가 같거나(반 이상 겹침) 상위품번이 같고 품명이 비슷한 짝 (품번 변경 추정).
-    위치·상위 정보가 없는 표는 품명이 아주 비슷한 짝만. 한 행은 한 짝에만. 추정이라 합치지 않고 따로 보고. [(이전, 새, 근거)]."""
-    import difflib
-    if not removed or not added:
-        return []
-    octx = {i: _cmp_ctx(old, i) for i in removed}
-    nctx = {j: _cmp_ctx(new, j) for j in added}
-    by_parent: Dict[str, List[int]] = {}
-    by_ref: Dict[str, List[int]] = {}
-    for j, (parent, refs, _) in nctx.items():
-        if parent:
-            by_parent.setdefault(parent, []).append(j)
-        for d in refs:
-            by_ref.setdefault(d, []).append(j)
-    flat = not by_parent and not by_ref and not any(p or r for p, r, _ in octx.values())
-    if flat and len(removed) * len(added) > COMPARE_GUESS_PAIRS:
-        warnings.append(f"삭제 {len(removed)}행 x 추가 {len(added)}행이 많아 대체 추정(품번 변경 추정)을 하지 않음")
-        return []
-    found: List[Tuple[float, int, int, str]] = []
-    pairs = 0
-    for i, (parent, refs, name) in octx.items():
-        cand = set(added) if flat else set(by_parent.get(parent, []) if parent else [])
-        for d in refs:
-            cand.update(by_ref.get(d, []))
-        for j in cand:
-            pairs += 1
-            if pairs > COMPARE_GUESS_PAIRS:
-                warnings.append(f"대체 추정 비교가 {COMPARE_GUESS_PAIRS}쌍을 넘어 일부만 추정함")
-                break
-            nparent, nrefs, nname = nctx[j]
-            sm = difflib.SequenceMatcher(None, name, nname) if name and nname else None
-            sim = sm.ratio() if sm and sm.real_quick_ratio() >= 0.5 and sm.quick_ratio() >= 0.5 else (0.0 if sm else None)
-            ref_same = bool(refs and nrefs) and len(refs & nrefs) * 2 >= max(len(refs), len(nrefs))
-            parent_same = bool(parent) and parent == nparent
-            why = []
-            if ref_same and (sim is None or sim >= COMPARE_NAME_SIM - 0.1):
-                why.append(f"같은 위치 {_cmp_ref_text(refs & nrefs)[:40]}")
-            if parent_same and sim is not None and sim >= COMPARE_NAME_SIM:
-                why.append(f"같은 상위품번 {parent}")
-            if flat and sim is not None and sim >= COMPARE_FLAT_SIM:
-                why.append("위치·상위 정보 없음")
-            if not why:
-                continue
-            if sim is not None:
-                why.append(f"품명 유사도 {sim:.2f}")
-            found.append(((sim or 0.0) + (1.0 if ref_same else 0.0) + (0.5 if parent_same else 0.0), i, j, ", ".join(why)))
-        else:
-            continue
-        break
-    found.sort(key=lambda x: -x[0])
-    used_o, used_n = set(), set()
-    out = []
-    for _, i, j, why in found:
-        if i in used_o or j in used_n:
-            continue
-        used_o.add(i)
-        used_n.add(j)
-        out.append((i, j, why))
-    return out
-
-
-def _cmp_row_view(t: Dict[str, Any], spec: Sequence[KeyPart], side: int, i: int, which: str) -> Dict[str, Any]:
-    """추가·삭제 항목: 키, 행 번호, 알아본 역할 열 값."""
-    rown, r = t["body"][i]
-    item: Dict[str, Any] = {"key": _cmp_key_text(t, spec, side, i), which: rown}
-    for role in ("part", "name", "spec", "qty", "ref"):
-        if role in t["roles"]:
-            item[role] = _cmp_show(r[t["roles"][role]])
-    return item
-
-
-def _cmp_xlsx(path: str, sheets: List[Tuple[str, List[Any], List[List[Any]], List[int]]]) -> str:
-    """결과 xlsx (시트마다 머리글 굵게, 첫 행 고정). 큰 표도 빨리 쓰도록 write_only. 실제 저장 경로."""
-    openpyxl = rt.require_lib("openpyxl", "openpyxl", "비교 결과를 xlsx로 저장")
-    from openpyxl.cell import WriteOnlyCell
-    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-    from openpyxl.styles import Font
-    from openpyxl.utils import get_column_letter
-    bold = Font(bold=True)
-
-    def safe(v: Any) -> Any:
-        v = out_value(v) if not isinstance(v, str) else v
-        return ILLEGAL_CHARACTERS_RE.sub("", v)[:32000] if isinstance(v, str) else v
-
-    def write(p: str) -> None:
-        wb = openpyxl.Workbook(write_only=True)
-        for title, header, rows, widths in sheets:
-            ws = wb.create_sheet(title)
-            for k, w in enumerate(widths, start=1):
-                ws.column_dimensions[get_column_letter(k)].width = w
-            ws.freeze_panes = "A2"
-            cells = []
-            for v in header:
-                c = WriteOnlyCell(ws, value=safe(v))
-                c.font = bold
-                cells.append(c)
-            ws.append(cells)
-            for row in rows:
-                out = []
-                for v in row:
-                    v = safe(v)
-                    if isinstance(v, str) and v.startswith("="):
-                        c = WriteOnlyCell(ws, value=v)
-                        c.data_type = "s"            # 표의 글이 '='로 시작해도 수식이 아닌 글로
-                        out.append(c)
-                    else:
-                        out.append(v)
-                ws.append(out)
-        wb.save(p)
-
-    return rt.save_with_lock_fallback(path, write, "엑셀 파일")
-
-
-def _cmp_check_xlsx(path: str, expected: Dict[str, int]) -> Optional[str]:
-    """저장한 결과 xlsx를 다시 열어 시트마다 행 수(머리글 포함)를 확인 (R1). 문제가 없으면 None."""
-    problem = rt.check_saved_file(path)
-    if problem:
-        return problem
-    import openpyxl
-    wb = openpyxl.load_workbook(path, read_only=True)
-    try:
-        for title, n in expected.items():
-            if title not in wb.sheetnames:
-                return f"결과 파일에 '{title}' 시트가 없음"
-            got = sum(1 for _ in wb[title].iter_rows(values_only=True))
-            if got != n:
-                return f"결과 파일 '{title}' 시트의 행 수가 다름 (기대 {n}, 읽은 {got})"
-    finally:
-        wb.close()
-    return None
+    return _spec_check.cmd_check(args)
 
 
 def cmd_compare(args) -> Dict[str, Any]:
-    import time
-    old_path = rt.resolve_input_path(args.target, "이전 판 파일", exts=COMPARE_EXTS)
-    new_path = rt.resolve_input_path(args.target2, "새 판 파일", exts=COMPARE_EXTS)
-    for p, opt in ((old_path, "--target"), (new_path, "--target2")):
-        ext = os.path.splitext(p)[1].lower()
-        if ext not in COMPARE_EXTS:
-            raise rt.InputError(f"compare는 .xlsx, .xlsm, .csv, .tsv 파일을 읽습니다 ({opt}: {os.path.basename(p)}). "
-                                ".xls 등은 엑셀에서 .xlsx로 저장한 뒤 그 파일을 주세요.")
-        if ext in (".xlsx", ".xlsm") and not zipfile.is_zipfile(p):
-            raise rt.InputError(f"{os.path.basename(p)}를 엑셀 파일로 읽을 수 없습니다 (암호·문서 보안(DRM)이 걸렸거나 손상됨). "
-                                "엑셀에서 열어 보안이 없는 .xlsx로 저장한 뒤 그 파일을 주세요.")
-    if os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(new_path)) and \
-            (args.sheet or "") == (args.sheet2 or ""):
-        raise rt.InputError("--target과 --target2가 같은 파일입니다. 이전 판과 새 판 파일을 따로 주세요.")
-    warnings: List[str] = []
-    for p in (old_path, new_path):
-        try:
-            if off.win32com is not None and off.match_open("excel", p) is not None:
-                warnings.append(f"{os.path.basename(p)}는 엑셀에 열려 있어 디스크에 저장된 내용으로 비교함 (저장하지 않은 변경은 빠짐)")
-        except Exception:
-            pass
-    t0 = time.monotonic()
-    old_data = _cmp_load(old_path, args.sheet, None, "--sheet")
-    if not old_data.get("from_cache"):
-        # 새 판 읽기가 명령 시간 제한을 넘을 것 같으면 읽은 이전 판을 저장하고 CONTINUE (같은 명령 = 저장한 것을 다시 씀, R10)
-        spent = time.monotonic() - t0
-        ratio = os.path.getsize(new_path) / max(1, os.path.getsize(old_path))
-        try:
-            rt.check_time(spent * max(0.2, ratio) * 1.2 + 5, f"이전 판 {os.path.basename(old_path)}을 읽음 (1/2), 새 판 읽기 남음")
-        except rt.Unfinished:
-            _cmp_save_cache(old_data)
-            raise
-    new_data = _cmp_load(new_path, args.sheet2, None if args.sheet2 else old_data["sheet"], "--sheet2")
-    warnings += old_data.get("warnings", []) + new_data.get("warnings", [])
-    old, new = _cmp_table(old_data, old_path), _cmp_table(new_data, new_path)
-    if not old["body"] and not new["body"]:
-        _cmp_drop_cache(old_data, new_data)
-        raise rt.InputError(f"두 파일 모두 머리글 아래에 데이터 행이 없습니다 (이전 판 {old['name']} '{old['sheet']}', 새 판 {new['name']} '{new['sheet']}'). "
-                            "비교할 시트를 --sheet, --sheet2로 주세요.")
-    pairs, only_old, only_new = _cmp_pair_columns(old, new)
-    spec, key_why, ordered = _cmp_choose_key(args, old, new, pairs)
-    # 품번이 빈 행(소계, 구분 줄)은 짝짓지 않음
-    part_parts = [p for p in spec if p[0] == "col"]
-    first = next((p for p in part_parts if p[1] == old["roles"].get("part")), part_parts[0] if part_parts else None)
-    skip_o = {i for i, (_, r) in enumerate(old["body"]) if first and r[first[1]] is None}
-    skip_n = {i for i, (_, r) in enumerate(new["body"]) if first and r[first[2]] is None}
-    if skip_o or skip_n:
-        warnings.append(f"키 열({first[3]})이 빈 행은 비교하지 않음 (이전 판 {len(skip_o)}행, 새 판 {len(skip_n)}행)")
-    ko, kn = _cmp_key_values(old, spec, 1), _cmp_key_values(new, spec, 2)
-    oidx, odup = _cmp_index([k for i, k in enumerate(ko) if i not in skip_o], ordered)
-    nidx, ndup = _cmp_index([k for i, k in enumerate(kn) if i not in skip_n], ordered)
-    orows = [i for i in range(len(old["body"])) if i not in skip_o]
-    nrows = [i for i in range(len(new["body"])) if i not in skip_n]
-    oidx = {k: orows[v] for k, v in oidx.items()}
-    nidx = {k: nrows[v] for k, v in nidx.items()}
-    if odup or ndup:
-        warnings.append(f"키({_cmp_spec_label(spec)})가 같은 행은 나온 순서대로 짝지음 (이전 판 {odup}행, 새 판 {ndup}행)")
-    roles_pair = {p[3]: p for p in pairs if p[3]}
-    qty = roles_pair.get("qty")
-    ref = roles_pair.get("ref")
-    key_cols = {(p[1], p[2]) for p in spec if p[0] == "col"}
-    attrs = [p for p in pairs if (p[0], p[1]) not in key_cols and p[3] not in ("qty", "ref")]
-    removed = [oidx[k] for k in oidx if k not in nidx]
-    added = [nidx[k] for k in nidx if k not in oidx]
-    removed.sort()
-    added.sort()
-    qty_changed: List[Dict[str, Any]] = []
-    ref_changed: List[Dict[str, Any]] = []
-    attr_changed: List[Dict[str, Any]] = []
-    detail: List[List[Any]] = []          # 결과 xlsx '변경' 시트: 키, 구분, 열, 이전 값, 새 값, 차이, 이전 행, 새 행
-    memo: Dict[Tuple[int, int], List[str]] = {}   # 새 판 (행, 열) -> 메모 글
-
-    def note(rown: int, col: int, text: str) -> None:
-        memo.setdefault((rown, col), []).append(text)
-
-    changed_rows = 0
-    for k, i in oidx.items():
-        j = nidx.get(k)
-        if j is None:
-            continue
-        (orow, ro), (nrow, rn) = old["body"][i], new["body"][j]
-        hit = False
-        key_text = None
-        if qty:
-            a, b = ro[qty[0]], rn[qty[1]]
-            na, nb = _cmp_number(a), _cmp_number(b)
-            diff = None
-            if na is not None and nb is not None:
-                same = abs(na - nb) <= 1e-9 * max(1.0, abs(na), abs(nb))
-                diff = _cmp_num_text(nb - na) if not same else None
-            else:
-                same = _cmp_value(a) == _cmp_value(b)
-            if not same:
-                key_text = key_text or _cmp_key_text(new, spec, 2, j)
-                d = (("+" if not diff.startswith("-") else "") + diff) if diff else ""
-                qty_changed.append({"key": key_text, "old": _cmp_show(a), "new": _cmp_show(b), "diff": d,
-                                    "row_old": orow, "row_new": nrow})
-                detail.append([key_text, "수량 변경", qty[2], out_value(a), out_value(b), d, orow, nrow])
-                note(nrow, qty[1], f"비교: 수량 {out_value(a)} -> {out_value(b)}" + (f" ({d})" if d else ""))
-                hit = True
-        if ref:
-            sa, sb = _cmp_refs(ro[ref[0]]), _cmp_refs(rn[ref[1]])
-            if sa != sb:
-                key_text = key_text or _cmp_key_text(new, spec, 2, j)
-                plus, minus = _cmp_ref_text(sb - sa), _cmp_ref_text(sa - sb)
-                ref_changed.append({"key": key_text, "added": plus[:200], "removed": minus[:200],
-                                    "old": _cmp_show(ro[ref[0]]), "new": _cmp_show(rn[ref[1]]), "row_old": orow, "row_new": nrow})
-                what = "; ".join(x for x in ((f"추가 {plus}" if plus else ""), (f"삭제 {minus}" if minus else "")) if x)
-                detail.append([key_text, "위치 변경", ref[2], out_value(ro[ref[0]]), out_value(rn[ref[1]]), what, orow, nrow])
-                note(nrow, ref[1], f"비교: 위치 {what}")
-                hit = True
-        cols = []
-        for o, n, label, role in attrs:
-            a, b = ro[o], rn[n]
-            if role in _CMP_CODE_ROLES:
-                same = _cmp_code(a) == _cmp_code(b)
-            elif role in _CMP_NOCASE_ROLES:
-                same = _cmp_value(a).upper() == _cmp_value(b).upper()
-            else:
-                same = _cmp_value(a) == _cmp_value(b)
-            if same:
-                continue
-            key_text = key_text or _cmp_key_text(new, spec, 2, j)
-            cols.append({"column": label, "old": _cmp_show(a), "new": _cmp_show(b)})
-            detail.append([key_text, "속성 변경", label, out_value(a), out_value(b), "", orow, nrow])
-            note(nrow, n, f"비교: 이전 {label} {out_value(a) if out_value(a) != '' else '(빈 칸)'}")
-        if cols:
-            attr_changed.append({"key": key_text, "columns": cols[:10], "row_old": orow, "row_new": nrow,
-                                 **({"columns_truncated": True} if len(cols) > 10 else {})})
-            hit = True
-        changed_rows += hit
-    guesses: List[Tuple[int, int, str]] = []
-    if rt.time_up(reserve=20):
-        warnings.append("명령 시간 제한이 가까워 대체 추정(품번 변경 추정)을 하지 않음")
-    else:
-        guesses = _cmp_guess(old, new, removed, added, warnings)
-    gold, gnew = {i for i, _, _ in guesses}, {j for _, j, _ in guesses}
-    removed = [i for i in removed if i not in gold]
-    added = [j for j in added if j not in gnew]
-    part_col_new = new["roles"].get("part", first[2] if first else 0)
-    for j in added:
-        note(new["body"][j][0], part_col_new, "비교: 이전 판에 없는 행 (추가)")
-    guess_view = []
-    for i, j, why in guesses:
-        o_item = _cmp_row_view(old, spec, 1, i, "row_old")
-        n_item = _cmp_row_view(new, spec, 2, j, "row_new")
-        guess_view.append({"old_key": o_item["key"], "new_key": n_item["key"], "row_old": o_item["row_old"],
-                           "row_new": n_item["row_new"], "old_name": o_item.get("name", ""), "new_name": n_item.get("name", ""),
-                           "reason": why, "guess": True})
-        note(new["body"][j][0], part_col_new, f"비교(추정, 확인 필요): 이전 판의 {o_item['key']} 대신일 수 있음 ({why})")
-    counts = {"추가": len(added), "삭제": len(removed), "수량 변경": len(qty_changed), "위치 변경": len(ref_changed),
-              "속성 변경": len(attr_changed), "대체 추정": len(guesses)}
-    total = len(added) + len(removed) + changed_rows + len(guesses)
-    lists = {"added": [_cmp_row_view(new, spec, 2, j, "row_new") for j in added[:COMPARE_SHOWN]],
-             "removed": [_cmp_row_view(old, spec, 1, i, "row_old") for i in removed[:COMPARE_SHOWN]],
-             "qty_changed": qty_changed[:COMPARE_SHOWN], "ref_changed": ref_changed[:COMPARE_SHOWN],
-             "attr_changed": attr_changed[:COMPARE_SHOWN], "replaced_guess": guess_view[:COMPARE_SHOWN]}
-    full_n = {"added": len(added), "removed": len(removed), "qty_changed": len(qty_changed), "ref_changed": len(ref_changed),
-              "attr_changed": len(attr_changed), "replaced_guess": len(guesses)}
-    truncated = any(full_n[k] > len(v) for k, v in lists.items())
-    columns = []
-    for o, n, label, role in pairs:
-        if role:
-            columns.append({"role": _CMP_LABEL[role], "old": f"{col_letter(o + 1)} ({old['header'][o]})", "new": f"{col_letter(n + 1)} ({new['header'][n]})"})
-    if only_old:
-        warnings.append(f"이전 판에만 있는 열은 비교하지 않음: {', '.join(only_old[:10])}")
-    if only_new:
-        warnings.append(f"새 판에만 있는 열은 비교하지 않음: {', '.join(only_new[:10])}")
-    if not qty:
-        warnings.append("수량 열을 알아보지 못해 수량 변경을 따로 세지 않음 (같은 머리글의 열은 속성 변경으로 비교)")
-    problems: List[str] = []
-    for t, d in ((old, old_data), (new, new_data)):
-        if d.get("uncomputed"):
-            problems.append(f"{t['name']}: " + rt.uncomputed_note(d["uncomputed"]))
-    result: Dict[str, Any] = {
-        "old_file": old_path, "new_file": new_path,
-        "old_sheet": old["sheet"], "new_sheet": new["sheet"],
-        "header_row": {"old": old["header_row"], "new": new["header_row"]},
-        "rows": {"old": len(old["body"]), "new": len(new["body"])},
-        "key_columns": _cmp_spec_label(spec), "key_reason": key_why, "columns": columns,
-        "count": total, "counts": counts, **lists,
-        "shown": sum(len(v) for v in lists.values()), "truncated": truncated,
-    }
-    role_text = ", ".join(f"{c['role']} {c['new'].split(' ', 1)[0]}" for c in columns) or "없음 (머리글 이름이 같은 열끼리 비교)"
-    head = f"{old['name']}({len(old['body'])}행) -> {new['name']}({len(new['body'])}행)"
-    if args.save and os.path.splitext(str(args.save).strip().strip('"'))[1].lower() not in ("", ".xlsx"):
-        warnings.append(f"compare는 .xlsx로만 저장합니다: --save의 {os.path.splitext(str(args.save))[1]} 대신 .xlsx로 저장")
-    out = None
-    if total or args.save:
-        out = rt.resolve_output_path(args.save or None, f"compare_{os.path.splitext(new['name'])[0]}", ".xlsx",
-                                     overwrite=bool(args.overwrite))
-        summary = [["이전 판", f"{old_path} / 시트 {old['sheet']} / 머리글 {old['header_row']}행 / {len(old['body'])}행"],
-                   ["새 판", f"{new_path} / 시트 {new['sheet']} / 머리글 {new['header_row']}행 / {len(new['body'])}행"],
-                   ["짝짓기 키", f"{_cmp_spec_label(spec)} ({key_why})"]]
-        summary += [[f"열: {c['role']}", f"이전 {c['old']} / 새 {c['new']}"] for c in columns]
-        summary += [[k, v] for k, v in counts.items()]
-        summary += [["주의", w] for w in warnings]
-        ohead = ["이전 행"] + old["header"]
-        nhead = ["새 행"] + new["header"]
-        add_rows = [[new["body"][j][0]] + list(new["body"][j][1]) for j in added]
-        del_rows = [[old["body"][i][0]] + list(old["body"][i][1]) for i in removed]
-        guess_rows = [[g["old_key"], g["new_key"], g["row_old"], g["row_new"], g["old_name"], g["new_name"], g["reason"], "추정(확인 필요)"]
-                      for g in guess_view]
-        for i, j, why in guesses[COMPARE_SHOWN:]:
-            o_item, n_item = _cmp_row_view(old, spec, 1, i, "row_old"), _cmp_row_view(new, spec, 2, j, "row_new")
-            guess_rows.append([o_item["key"], n_item["key"], o_item["row_old"], n_item["row_new"], o_item.get("name", ""),
-                               n_item.get("name", ""), why, "추정(확인 필요)"])
-        sheets = [("요약", ["항목", "값"], summary, [16, 90]),
-                  ("추가", nhead, add_rows, [8] + [14] * len(new["header"])),
-                  ("삭제", ohead, del_rows, [8] + [14] * len(old["header"])),
-                  ("변경", ["키", "구분", "열", "이전 값", "새 값", "차이", "이전 행", "새 행"], detail, [24, 10, 14, 24, 24, 20, 8, 8]),
-                  ("대체 추정", ["이전 키", "새 키", "이전 행", "새 행", "이전 품명", "새 품명", "근거", "판단"], guess_rows,
-                   [22, 22, 8, 8, 24, 24, 40, 14])]
-        out = _cmp_xlsx(out, sheets)
-        problem = _cmp_check_xlsx(out, {s[0]: len(s[2]) + 1 for s in sheets})
-        if problem:
-            problems.append(f"결과 파일: {problem}")
-        result["output_file"] = out
-        if truncated:
-            result["full_result_file"] = out
-    nexts: List[Dict[str, Any]] = []
-    if memo and not new["csv"]:
-        sheet = new["sheet"]
-        sheet_ref = sheet if re.fullmatch(r"[\w가-힣]+", sheet) else "'" + sheet.replace("'", "''") + "'"
-        cells = sorted(memo.items())
-        if len(cells) > COMMENT_MAX_CELLS:
-            warnings.append(f"바뀐 칸이 {len(cells)}개라 메모 파일에는 앞 {COMMENT_MAX_CELLS}칸만 넣음 (전체는 결과 파일)")
-            cells = cells[:COMMENT_MAX_CELLS]
-        memo_rows = [["칸", "메모"]] + [[f"{sheet_ref}!{addr(r, c + 1)}", " / ".join(v)[:COMMENT_MAX_CHARS]] for (r, c), v in cells]
-        memo_file = rt.write_csv_rows(rt.resolve_output_path(None, f"compare_memo_{sheet}", ".csv"), memo_rows)
-        memo_problem = rt.check_saved_file(memo_file, len(memo_rows), delimiter=",")
-        if memo_problem:
-            problems.append(f"메모 파일: {memo_problem}")
-        result["memo_file"] = memo_file
-        nexts.append(rt.next_command("excel.py", ["comment", "--target", new_path, "--action", "add", "--file", memo_file, "--dry-run"],
-                                     "새 판의 바뀐 칸에 비교 메모 달기 미리보기, 변경 없음 (실제로 다는 명령은 그 결과의 confirm_commands, 사용자 확인 뒤에만)"))
-        result["next_commands"] = nexts
-    if warnings:
-        result["warnings"] = warnings
-    _cmp_drop_cache(old_data, new_data)
-    say_warn = " warnings도 그대로 알리세요." if warnings else ""
-    if not total:
-        preview = f"{head}: 바뀐 것 없음 (0건, 짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}"
-        if problems:
-            return rt.ok_unverified(TOOL, "compare", preview, problems, **result)
-        return rt.ok(TOOL, "compare", preview,
-                     f"VERIFIED: 0건. 바뀐 것 없음: 두 판을 키({_cmp_spec_label(spec)})로 짝지어 비교했고 추가·삭제·변경이 없습니다. "
-                     f"사용자에게 '바뀐 것 없음'과 preview를 그대로 알리고 다시 실행하지 마세요.{say_warn}", verified=True, **result)
-    preview = (f"{head}: 추가 {counts['추가']}, 삭제 {counts['삭제']}, 수량 변경 {counts['수량 변경']}, 위치 변경 {counts['위치 변경']}, "
-               f"속성 변경 {counts['속성 변경']}, 대체 추정 {counts['대체 추정']} (짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}")
-    action = ("preview를 알리고 구분별 목록(added, removed, qty_changed, ref_changed, attr_changed)을 key와 함께 사용자에게 보여 주세요."
-              + (" replaced_guess는 품번이 바뀐 것으로 보이는 추정(확인 필요)이라고 알리세요." if guesses else "")
-              + (" 목록은 구분마다 앞 20개만이라 전체는 full_result_file이라고 알리세요." if truncated else "")
-              + say_warn
-              + (" 사용자가 새 판의 바뀐 칸에 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자가 '예'라고 한 뒤에만 "
-                 "그 결과의 confirm_commands[0]을 실행하세요." if nexts else "")
-              + " 같은 compare는 다시 실행하지 마세요.")
-    if problems:
-        payload = rt.ok_unverified(TOOL, "compare", preview, problems, **result)
-        payload["agent_directive"] = "UNVERIFIED: 실행했지만 확인하지 못했습니다: " + "; ".join(problems) + ". " + action
-        return payload
-    return rt.ok(TOOL, "compare", preview, "VERIFIED: 두 판을 비교하고 결과 파일을 다시 열어 확인했습니다. " + action,
-                 verified=True, **result)
+    return _excel_compare.cmd_compare(args)
 
 
 # ==============================================================================
@@ -5359,10 +4119,11 @@ def build_cli():
     parser, sub = rt.build_parser(TOOL, "엑셀 작업")
 
     def common(p, write: bool = False):
-        p.add_argument("--target", "-t", default="active", help="active(기본) | 열린 통합문서 이름 | 파일 경로")
-        p.add_argument("--sheet", "-s", help="시트 이름 (생략 시 활성 시트)")
+        p.add_argument("--target", default="active", help="active(기본) | 열린 통합문서 이름 | 파일 경로")
+        p.add_argument("--sheet", help="시트 이름 (생략 시 활성 시트)")
         if write:
             p.add_argument("--no-focus", action="store_true", help="작업 후 화면을 고친 시트로 옮기지 않음")
+            p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 것만 미리 보기 (미리보기가 없는 동작은 바꾸지 않고 멈춤, 목록은 그대로 읽음)")
 
     def fmt_args(p):
         p.add_argument("--bg", help="배경색 (yellow, #FFF2CC, 노랑 등)")
@@ -5377,7 +4138,7 @@ def build_cli():
 
     p = sub.add_parser("read", help="내용 읽기")
     common(p)
-    p.add_argument("--range", "-r", help="읽을 범위 (생략 시 사용 범위 전체)")
+    p.add_argument("--range", help="읽을 범위 (생략 시 사용 범위 전체)")
     p.add_argument("--search", help="이 글자가 들어간 셀 찾기")
     p.add_argument("--max-rows", type=int, default=rt.DEFAULT_MAX_ROWS, help=f"표시할 최대 행 수 (기본 {rt.DEFAULT_MAX_ROWS})")
     p.add_argument("--save", nargs="?", const=True, help="CSV로 저장 (경로 생략 시 작업 폴더)")
@@ -5392,10 +4153,10 @@ def build_cli():
 
     p = sub.add_parser("write", help="값/표/수식 쓰기")
     common(p, write=True)
-    p.add_argument("--range", "-r", help="시작 셀 또는 범위 (기본 A1). 수식은 범위 전체에 채움")
+    p.add_argument("--range", help="시작 셀 또는 범위 (기본 A1). 수식은 범위 전체에 채움")
     p.add_argument("--value", help="값 하나 (범위를 주면 범위 전체에)")
     p.add_argument("--values", help='JSON 2차원 배열 (예: [["이름","값"],["가",1]])')
-    p.add_argument("--file", "-f", help="표 파일 (.csv, .md 표, .txt)")
+    p.add_argument("--file", help="표 파일 (.csv, .md 표, .txt)")
     p.add_argument("--formula", nargs="+", help="수식. 1개면 범위 전체, 여러 개면 열마다 (상대참조 자동 조정)")
     p.add_argument("--header", help="첫 행에 쓸 머리글 (쉼표 구분). 데이터/수식은 그 아래부터")
     p.add_argument("--append", action="store_true", help="기존 데이터 아래에 이어 쓰기 (같은 머리글은 생략)")
@@ -5404,22 +4165,20 @@ def build_cli():
                    help="--sheet(또는 --range '이름'!A1)의 시트를 새로 만들어 쓰기. 없으면 없는 시트는 오류")
     p.add_argument("--no-autofit", action="store_true", help="열 너비 자동 맞춤 안 함")
     p.add_argument("--cells", help="흩어진 칸 여러 개: \"C6=ft; C7=20; 계산기!C11==A1*2\" 또는 칸값 파일(.csv, 열: 칸, 값). =로 시작하는 값은 수식")
-    p.add_argument("--dry-run", action="store_true", help="--cells: 쓰지 않고 바뀔 칸만 미리 보기")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)
     p.add_argument("--find", help="찾을 글자")
     p.add_argument("--replace", help="바꿀 글자 (생략 시 서식만 적용)")
     p.add_argument("--map", help='여러 개 한 번에: JSON 객체 또는 JSON 파일 (예: {"초안":"최종"})')
-    p.add_argument("--range", "-r", help="범위 (생략 시 사용 범위)")
+    p.add_argument("--range", help="범위 (생략 시 사용 범위)")
     p.add_argument("--whole", action="store_true", help="셀 전체가 일치할 때만")
     p.add_argument("--all-sheets", action="store_true", help="모든 시트")
-    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 칸과 바뀔 글만 보기")
     fmt_args(p)
 
     p = sub.add_parser("style", help="서식")
     common(p, write=True)
-    p.add_argument("--range", "-r", help="범위 (생략 시 사용 범위)")
+    p.add_argument("--range", help="범위 (생략 시 사용 범위)")
     p.add_argument("--theme", help=f"표 테마: {', '.join(off.THEMES)}")
     p.add_argument("--no-zebra", action="store_true", help="테마 적용 시 줄무늬 없음")
     p.add_argument("--highlight", help="조건부 강조: '>=100:yellow', '=완료:lightgreen', '포함:지연:pink'")
@@ -5429,23 +4188,22 @@ def build_cli():
     p = sub.add_parser("export", help="CSV/XLSX/PDF로 저장")
     common(p)
     p.add_argument("--save", help="저장 경로 (.csv/.xlsx/.pdf, 생략 시 작업 폴더에 CSV)")
-    p.add_argument("--range", "-r", help="범위 (생략 시 사용 범위)")
-    p.add_argument("--columns", "-c", help="CSV로 뽑을 열만 (예: A,C,E)")
+    p.add_argument("--range", help="범위 (생략 시 사용 범위)")
+    p.add_argument("--columns", help="CSV로 뽑을 열만 (예: A,C,E)")
     p.add_argument("--encoding", default="utf-8-sig", choices=["utf-8-sig", "cp949", "utf-8"], help="CSV 인코딩")
 
     p = sub.add_parser("sheet", help="시트 관리")
     common(p, write=True)
-    p.add_argument("--action", "-a", required=True, choices=["list", "add", "rename", "copy", "delete", "select"])
-    p.add_argument("--name", "-n", help="대상 시트 이름")
+    p.add_argument("--action", required=True, choices=["list", "add", "rename", "copy", "delete", "select"])
+    p.add_argument("--name", help="대상 시트 이름")
     p.add_argument("--new-name", help="새 이름 (rename/copy)")
-    p.add_argument("--dry-run", action="store_true", help="delete: 지우지 않고 지울 시트의 사용 범위·차트 수와 #REF!가 될 수식만 보기")
 
     p = sub.add_parser("range", help="범위 조작")
     common(p, write=True)
-    p.add_argument("--action", "-a", required=True,
+    p.add_argument("--action", required=True,
                    choices=["autofit", "width", "height", "merge", "unmerge", "freeze", "unfreeze",
                             "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort"])
-    p.add_argument("--range", "-r", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
+    p.add_argument("--range", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
     p.add_argument("--dest", help="copy/move 목적지 (예: B2, 'Sheet2'!A1)")
     p.add_argument("--size", type=float, help="width/height 값")
     p.add_argument("--axis", choices=["rows", "cols"],
@@ -5458,16 +4216,14 @@ def build_cli():
                    help="sort 내림차순: 값 없이 쓰면 모든 기준, 기준 이름을 주면 그것만 (예: --desc \"금액\")")
     p.add_argument("--header", choices=["auto", "yes", "no"], default="auto",
                    help="sort: 첫 행이 머리글인지 (기본 auto: --by가 머리글 이름이면 yes, 열 문자면 도구가 판단)")
-    p.add_argument("--dry-run", action="store_true",
-                   help="insert/delete/clear/move: 바꾸지 않고 넣거나 지울 행·열, 지울 값, 옮길 칸과 덮어써질 칸만 보기")
     p.add_argument("--overwrite", action="store_true",
                    help="merge: 왼쪽 위 밖의 값을 지우고 병합 / copy·move: 값이 있는 대상 칸을 덮어쓰기 / "
                         "delete: 값이 있는 행·열도 지우기 (사용자가 원할 때만)")
 
     p = sub.add_parser("chart", help="차트")
     common(p, write=True)
-    p.add_argument("--action", "-a", default="create", choices=["create", "list", "delete"])
-    p.add_argument("--range", "-r", help="데이터 범위 (첫 행 머리글, 생략 시 사용 범위)")
+    p.add_argument("--action", default="create", choices=["create", "list", "delete"])
+    p.add_argument("--range", help="데이터 범위 (첫 행 머리글, 생략 시 사용 범위)")
     p.add_argument("--type", default="column", choices=list(XL_CHART), help="차트 종류 (기본 column)")
     p.add_argument("--title", help="차트 제목")
     p.add_argument("--name", help="차트 이름 (생략 시 제목). delete 대상 지정에도 사용")
@@ -5478,23 +4234,21 @@ def build_cli():
     p.add_argument("--legend", choices=list(XL_LEGEND) + ["none"], help="범례 위치 (계열 1개면 기본 없음)")
     p.add_argument("--theme", help=f"색 테마: {', '.join(off.THEMES)}")
     p.add_argument("--all", action="store_true", help="delete: 시트의 모든 차트")
-    p.add_argument("--dry-run", action="store_true", help="delete: 지우지 않고 지울 차트만 보기")
 
     p = sub.add_parser("comment", help="칸 메모 (목록 / 달기 / 지우기)")
     common(p, write=True)
-    p.add_argument("--action", "-a", choices=["list", "add", "delete"], default="list",
+    p.add_argument("--action", choices=["list", "add", "delete"], default="list",
                    help="list(기본): 메모 목록, add: 메모 달기 (--text나 --file이 있으면 add), delete: --range 안의 메모 지우기")
-    p.add_argument("--range", "-r", help="list: 이 범위의 메모만, add: 메모를 달 칸 (예: B5), delete: 메모를 지울 범위")
+    p.add_argument("--range", help="list: 이 범위의 메모만, add: 메모를 달 칸 (예: B5), delete: 메모를 지울 범위")
     p.add_argument("--text", help="add: 메모 내용. 줄바꿈은 \\n")
-    p.add_argument("--file", "-f", help="add: 여러 메모 파일 (.csv/.md 표, 열: 칸, 메모. 예: B5,규격과 다름)")
+    p.add_argument("--file", help="add: 여러 메모 파일 (.csv/.md 표, 열: 칸, 메모. 예: B5,규격과 다름)")
     p.add_argument("--overwrite", action="store_true", help="add: 이미 메모가 있는 칸은 새 메모로 바꾸기 (사용자가 확인했을 때만)")
     p.add_argument("--append", action="store_true", help="add: 이미 메모가 있는 칸은 기존 메모 아래 줄에 덧붙이기")
-    p.add_argument("--dry-run", action="store_true", help="add/delete: 바꾸지 않고 달거나 지울 메모만 보기")
     p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
 
     p = sub.add_parser("check", help="표의 값을 등록된 규격서와 한 번에 대조 (일치/불일치/근거없음/판단필요, 메모 파일)")
     common(p)
-    p.add_argument("--range", "-r", required=True, help="대조할 행 범위 (예: B2:D50). 바로 위 행은 머리글(값 열의 단위)로 읽음")
+    p.add_argument("--range", required=True, help="대조할 행 범위 (예: B2:D50). 바로 위 행은 머리글(값 열의 단위)로 읽음")
     p.add_argument("--item-col", required=True, help="항목 열 (예: B). 이 글로 규격서를 찾음")
     p.add_argument("--value-col", required=True, help="값 열 (예: D)")
     p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
@@ -5505,9 +4259,9 @@ def build_cli():
     p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
 
     p = sub.add_parser("compare", help="두 판의 표 비교 (BOM 개정: 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, Excel 불필요)")
-    p.add_argument("--target", "-t", required=True, help="이전 판 파일 (.xlsx, .xlsm, .csv, .tsv)")
+    p.add_argument("--target", required=True, help="이전 판 파일 (.xlsx, .xlsm, .csv, .tsv)")
     p.add_argument("--target2", required=True, help="새 판 파일")
-    p.add_argument("--sheet", "-s", help="이전 판 시트 (생략: 도구가 표를 알아본 시트)")
+    p.add_argument("--sheet", help="이전 판 시트 (생략: 도구가 표를 알아본 시트)")
     p.add_argument("--sheet2", help="새 판 시트 (생략: 이전 판과 같은 이름, 없으면 도구가 고름)")
     p.add_argument("--key", help="짝지을 열의 머리글 이름 (생략: 도구가 정함. 여럿이면 쉼표, 예: \"상위품번,품번\")")
     p.add_argument("--save", help="결과 xlsx (요약, 추가, 삭제, 변경, 대체 추정 시트. 생략: 바뀐 것이 있으면 작업 폴더에)")

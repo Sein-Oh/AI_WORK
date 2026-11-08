@@ -11,7 +11,7 @@ import os
 import pytest
 
 TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "CLI", "office-cli")
-FILES = ("excel.py", "word.py", "ppt.py", "office.py", "outlook.py", "reader.py")
+FILES = ("excel.py", "word.py", "ppt.py", "office.py", "outlook.py", "reader.py", "_spec_check.py", "_excel_compare.py")
 SESSION_CALLS = ("open_target", "write_session")
 # COM 객체에서 읽는 속성 (파이썬 객체의 속성 이름과 겹치지 않는 것)
 COM_ATTRS = {"Name", "Value", "Value2", "Formula", "Range", "Cells", "FullName", "Count", "Text", "Address", "Row",
