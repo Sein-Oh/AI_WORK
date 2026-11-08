@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.87"
+  version: "1.4.88"
   platform: windows
 ---
 

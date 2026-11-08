@@ -4119,8 +4119,8 @@ def build_cli():
     parser, sub = rt.build_parser(TOOL, "엑셀 작업")
 
     def common(p, write: bool = False):
-        p.add_argument("--target", "-t", default="active", help="active(기본) | 열린 통합문서 이름 | 파일 경로")
-        p.add_argument("--sheet", "-s", help="시트 이름 (생략 시 활성 시트)")
+        p.add_argument("--target", default="active", help="active(기본) | 열린 통합문서 이름 | 파일 경로")
+        p.add_argument("--sheet", help="시트 이름 (생략 시 활성 시트)")
         if write:
             p.add_argument("--no-focus", action="store_true", help="작업 후 화면을 고친 시트로 옮기지 않음")
             p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 것만 미리 보기 (미리보기가 없는 동작은 바꾸지 않고 멈춤, 목록은 그대로 읽음)")
@@ -4138,7 +4138,7 @@ def build_cli():
 
     p = sub.add_parser("read", help="내용 읽기")
     common(p)
-    p.add_argument("--range", "-r", help="읽을 범위 (생략 시 사용 범위 전체)")
+    p.add_argument("--range", help="읽을 범위 (생략 시 사용 범위 전체)")
     p.add_argument("--search", help="이 글자가 들어간 셀 찾기")
     p.add_argument("--max-rows", type=int, default=rt.DEFAULT_MAX_ROWS, help=f"표시할 최대 행 수 (기본 {rt.DEFAULT_MAX_ROWS})")
     p.add_argument("--save", nargs="?", const=True, help="CSV로 저장 (경로 생략 시 작업 폴더)")
@@ -4153,10 +4153,10 @@ def build_cli():
 
     p = sub.add_parser("write", help="값/표/수식 쓰기")
     common(p, write=True)
-    p.add_argument("--range", "-r", help="시작 셀 또는 범위 (기본 A1). 수식은 범위 전체에 채움")
+    p.add_argument("--range", help="시작 셀 또는 범위 (기본 A1). 수식은 범위 전체에 채움")
     p.add_argument("--value", help="값 하나 (범위를 주면 범위 전체에)")
     p.add_argument("--values", help='JSON 2차원 배열 (예: [["이름","값"],["가",1]])')
-    p.add_argument("--file", "-f", help="표 파일 (.csv, .md 표, .txt)")
+    p.add_argument("--file", help="표 파일 (.csv, .md 표, .txt)")
     p.add_argument("--formula", nargs="+", help="수식. 1개면 범위 전체, 여러 개면 열마다 (상대참조 자동 조정)")
     p.add_argument("--header", help="첫 행에 쓸 머리글 (쉼표 구분). 데이터/수식은 그 아래부터")
     p.add_argument("--append", action="store_true", help="기존 데이터 아래에 이어 쓰기 (같은 머리글은 생략)")
@@ -4171,14 +4171,14 @@ def build_cli():
     p.add_argument("--find", help="찾을 글자")
     p.add_argument("--replace", help="바꿀 글자 (생략 시 서식만 적용)")
     p.add_argument("--map", help='여러 개 한 번에: JSON 객체 또는 JSON 파일 (예: {"초안":"최종"})')
-    p.add_argument("--range", "-r", help="범위 (생략 시 사용 범위)")
+    p.add_argument("--range", help="범위 (생략 시 사용 범위)")
     p.add_argument("--whole", action="store_true", help="셀 전체가 일치할 때만")
     p.add_argument("--all-sheets", action="store_true", help="모든 시트")
     fmt_args(p)
 
     p = sub.add_parser("style", help="서식")
     common(p, write=True)
-    p.add_argument("--range", "-r", help="범위 (생략 시 사용 범위)")
+    p.add_argument("--range", help="범위 (생략 시 사용 범위)")
     p.add_argument("--theme", help=f"표 테마: {', '.join(off.THEMES)}")
     p.add_argument("--no-zebra", action="store_true", help="테마 적용 시 줄무늬 없음")
     p.add_argument("--highlight", help="조건부 강조: '>=100:yellow', '=완료:lightgreen', '포함:지연:pink'")
@@ -4188,22 +4188,22 @@ def build_cli():
     p = sub.add_parser("export", help="CSV/XLSX/PDF로 저장")
     common(p)
     p.add_argument("--save", help="저장 경로 (.csv/.xlsx/.pdf, 생략 시 작업 폴더에 CSV)")
-    p.add_argument("--range", "-r", help="범위 (생략 시 사용 범위)")
-    p.add_argument("--columns", "-c", help="CSV로 뽑을 열만 (예: A,C,E)")
+    p.add_argument("--range", help="범위 (생략 시 사용 범위)")
+    p.add_argument("--columns", help="CSV로 뽑을 열만 (예: A,C,E)")
     p.add_argument("--encoding", default="utf-8-sig", choices=["utf-8-sig", "cp949", "utf-8"], help="CSV 인코딩")
 
     p = sub.add_parser("sheet", help="시트 관리")
     common(p, write=True)
-    p.add_argument("--action", "-a", required=True, choices=["list", "add", "rename", "copy", "delete", "select"])
-    p.add_argument("--name", "-n", help="대상 시트 이름")
+    p.add_argument("--action", required=True, choices=["list", "add", "rename", "copy", "delete", "select"])
+    p.add_argument("--name", help="대상 시트 이름")
     p.add_argument("--new-name", help="새 이름 (rename/copy)")
 
     p = sub.add_parser("range", help="범위 조작")
     common(p, write=True)
-    p.add_argument("--action", "-a", required=True,
+    p.add_argument("--action", required=True,
                    choices=["autofit", "width", "height", "merge", "unmerge", "freeze", "unfreeze",
                             "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort"])
-    p.add_argument("--range", "-r", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
+    p.add_argument("--range", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
     p.add_argument("--dest", help="copy/move 목적지 (예: B2, 'Sheet2'!A1)")
     p.add_argument("--size", type=float, help="width/height 값")
     p.add_argument("--axis", choices=["rows", "cols"],
@@ -4222,8 +4222,8 @@ def build_cli():
 
     p = sub.add_parser("chart", help="차트")
     common(p, write=True)
-    p.add_argument("--action", "-a", default="create", choices=["create", "list", "delete"])
-    p.add_argument("--range", "-r", help="데이터 범위 (첫 행 머리글, 생략 시 사용 범위)")
+    p.add_argument("--action", default="create", choices=["create", "list", "delete"])
+    p.add_argument("--range", help="데이터 범위 (첫 행 머리글, 생략 시 사용 범위)")
     p.add_argument("--type", default="column", choices=list(XL_CHART), help="차트 종류 (기본 column)")
     p.add_argument("--title", help="차트 제목")
     p.add_argument("--name", help="차트 이름 (생략 시 제목). delete 대상 지정에도 사용")
@@ -4237,18 +4237,18 @@ def build_cli():
 
     p = sub.add_parser("comment", help="칸 메모 (목록 / 달기 / 지우기)")
     common(p, write=True)
-    p.add_argument("--action", "-a", choices=["list", "add", "delete"], default="list",
+    p.add_argument("--action", choices=["list", "add", "delete"], default="list",
                    help="list(기본): 메모 목록, add: 메모 달기 (--text나 --file이 있으면 add), delete: --range 안의 메모 지우기")
-    p.add_argument("--range", "-r", help="list: 이 범위의 메모만, add: 메모를 달 칸 (예: B5), delete: 메모를 지울 범위")
+    p.add_argument("--range", help="list: 이 범위의 메모만, add: 메모를 달 칸 (예: B5), delete: 메모를 지울 범위")
     p.add_argument("--text", help="add: 메모 내용. 줄바꿈은 \\n")
-    p.add_argument("--file", "-f", help="add: 여러 메모 파일 (.csv/.md 표, 열: 칸, 메모. 예: B5,규격과 다름)")
+    p.add_argument("--file", help="add: 여러 메모 파일 (.csv/.md 표, 열: 칸, 메모. 예: B5,규격과 다름)")
     p.add_argument("--overwrite", action="store_true", help="add: 이미 메모가 있는 칸은 새 메모로 바꾸기 (사용자가 확인했을 때만)")
     p.add_argument("--append", action="store_true", help="add: 이미 메모가 있는 칸은 기존 메모 아래 줄에 덧붙이기")
     p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
 
     p = sub.add_parser("check", help="표의 값을 등록된 규격서와 한 번에 대조 (일치/불일치/근거없음/판단필요, 메모 파일)")
     common(p)
-    p.add_argument("--range", "-r", required=True, help="대조할 행 범위 (예: B2:D50). 바로 위 행은 머리글(값 열의 단위)로 읽음")
+    p.add_argument("--range", required=True, help="대조할 행 범위 (예: B2:D50). 바로 위 행은 머리글(값 열의 단위)로 읽음")
     p.add_argument("--item-col", required=True, help="항목 열 (예: B). 이 글로 규격서를 찾음")
     p.add_argument("--value-col", required=True, help="값 열 (예: D)")
     p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
@@ -4259,9 +4259,9 @@ def build_cli():
     p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
 
     p = sub.add_parser("compare", help="두 판의 표 비교 (BOM 개정: 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, Excel 불필요)")
-    p.add_argument("--target", "-t", required=True, help="이전 판 파일 (.xlsx, .xlsm, .csv, .tsv)")
+    p.add_argument("--target", required=True, help="이전 판 파일 (.xlsx, .xlsm, .csv, .tsv)")
     p.add_argument("--target2", required=True, help="새 판 파일")
-    p.add_argument("--sheet", "-s", help="이전 판 시트 (생략: 도구가 표를 알아본 시트)")
+    p.add_argument("--sheet", help="이전 판 시트 (생략: 도구가 표를 알아본 시트)")
     p.add_argument("--sheet2", help="새 판 시트 (생략: 이전 판과 같은 이름, 없으면 도구가 고름)")
     p.add_argument("--key", help="짝지을 열의 머리글 이름 (생략: 도구가 정함. 여럿이면 쉼표, 예: \"상위품번,품번\")")
     p.add_argument("--save", help="결과 xlsx (요약, 추가, 삭제, 변경, 대체 추정 시트. 생략: 바뀐 것이 있으면 작업 폴더에)")

@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.87"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.88"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -857,6 +857,24 @@ SAME_MEANING = [
     ("ppt", "slide", "--to", ["--dest"]),
     ("*", "*", "--json", []), ("*", "*", "--encoding", []),      # 출력은 늘 JSON, 인코딩은 자동 판별
 ]
+# 한 글자 옵션은 없음 (1.4.88, 사용법 단순성 1번: 한 가지 일에 한 가지 사용법). 받지 않고 긴 이름으로 고친 전체 명령을 [추천]
+# (같은 뜻 표). 도구마다 뜻이 달랐음: -n은 outlook --limit, reader --top, excel --name / -r은 excel --range, reader --regex
+SHORT_OPTIONS = {
+    "excel": {"-a": "--action", "-c": "--columns", "-f": "--file", "-n": "--name", "-r": "--range", "-s": "--sheet", "-t": "--target"},
+    "word": {"-a": "--action", "-f": "--file", "-t": "--target"},
+    "ppt": {"-a": "--action", "-f": "--file", "-t": "--target"},
+    "outlook": {"-n": "--limit", "-q": "--query"},
+    "reader": {"-C": "--context", "-d": "--folder", "-f": "--file", "-n": "--top", "-p": "--pages", "-q": "--query", "-r": "--regex"},
+}
+SAME_MEANING += [(tool, "*", short, [long]) for tool, opts in SHORT_OPTIONS.items() for short, long in opts.items()]
+_SHORT_FLAG = re.compile(r"^-[A-Za-z]$")
+
+
+def _is_flag(arg: str) -> bool:
+    """인자 오류에서 옵션으로 볼 것: --이름, 한 글자 -x (없앤 짧은 옵션을 같은 뜻 표로 고치려고. 음수 -5는 값)."""
+    return arg.startswith("--") or bool(_SHORT_FLAG.match(arg))
+
+
 # 철자가 비슷해도 추천하지 않는 옵션 (뜻이 크게 다르거나 되돌리기 어려움: --cell -> --all이 캐시 전부 삭제·전체 답장이었음)
 NO_FUZZY_OPTIONS = {"--all", "--overwrite", "--to", "--cc", "--bcc", "--attach", "--target", "--delete", "--send", "--app"}
 # 되돌리기 어려운 명령 (메일 발송, 캐시 지우기, 되돌리기): 오타 추천을 [추천](LLM이 묻지 않고 1번 실행)이 아니라
@@ -969,7 +987,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         opts = [o for a in (sub._actions if sub else []) for o in a.option_strings if o.startswith("--")]
         known = {o for a in (sub._actions if sub else []) for o in a.option_strings}
         argv = list(CURRENT_ARGV or [])
-        flags = [x for x in argv[1:] if x.startswith("--") and "=" not in x and x not in known]
+        flags = [x for x in argv[1:] if _is_flag(x) and "=" not in x and x not in known]
         if req:
             # 필수 옵션이 없다는 오류: 지어낸 옵션이 그 필수 옵션과 같은 뜻이면 고친 명령 (reader read --target a.pdf -> --file)
             fixed = self._same_meaning(argv, flags, opts, known) if flags else None
@@ -977,7 +995,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
                 return " " + fixed
             return ""
         extra = m.group(1).split()
-        flags = [x for x in extra if x.startswith("--")]
+        flags = [x for x in extra if _is_flag(x)]
         for f in flags:
             other = OTHER_COMMAND.get((self.tool_name, cmd, f))
             if other:
@@ -1035,7 +1053,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         while i < len(argv):
             a = argv[i]
             if a in plan:
-                has_value = i + 1 < len(argv) and not argv[i + 1].startswith("--") and argv[i + 1] not in known
+                has_value = i + 1 < len(argv) and not _is_flag(argv[i + 1]) and argv[i + 1] not in known
                 repl = plan[a]
                 if repl:
                     out += repl

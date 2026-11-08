@@ -1368,7 +1368,7 @@ def build_cli():
     parser, sub = rt.build_parser(TOOL, "파워포인트 작업")
 
     def common(p, write=False):
-        p.add_argument("--target", "-t", default="active", help="active(기본) | 열린 프레젠테이션 이름 | 파일 경로")
+        p.add_argument("--target", default="active", help="active(기본) | 열린 프레젠테이션 이름 | 파일 경로")
         if write:
             p.add_argument("--no-focus", action="store_true", help="작업 후 화면을 고친 슬라이드로 옮기지 않음")
             p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 것만 미리 보기 (미리보기가 없는 동작은 바꾸지 않고 멈춤, 목록은 그대로 읽음)")
@@ -1390,7 +1390,7 @@ def build_cli():
     p.add_argument("--slide", help="슬라이드 번호 또는 new (기본: --file이면 new, 아니면 마지막 슬라이드)")
     p.add_argument("--title", help="슬라이드 제목")
     p.add_argument("--text", help="본문 (- 로 시작하는 줄은 글머리 기호, 줄바꿈은 \\n)")
-    p.add_argument("--file", "-f", help="입력 파일 (.md: 제목마다 새 슬라이드, .csv: 표)")
+    p.add_argument("--file", help="입력 파일 (.md: 제목마다 새 슬라이드, .csv: 표)")
     p.add_argument("--image", help="그림 파일 (남은 공간에 비율 유지로 맞춤)")
     p.add_argument("--width", type=float, help="그림 너비(pt)")
     p.add_argument("--cards", help="카드 '제목:내용; 제목:내용' (1~5개)")
@@ -1418,13 +1418,13 @@ def build_cli():
     p.add_argument("--slides", help="읽을 슬라이드 번호 (예: 3, 1-3, 1,4). 생략 시 전체")
     p.add_argument("--slide", type=int, help="노트를 쓸 슬라이드 번호")
     p.add_argument("--text", help="쓸 노트 내용 (기존 노트를 바꿈). 줄바꿈은 \\n")
-    p.add_argument("--file", "-f", help="쓸 노트 내용 파일 (.txt/.md)")
+    p.add_argument("--file", help="쓸 노트 내용 파일 (.txt/.md)")
     p.add_argument("--append", action="store_true", help="기존 노트 뒤에 덧붙이기")
     p.add_argument("--overwrite", action="store_true", help="기존 노트를 지우고 바꾸기 (사용자가 원할 때만)")
 
     p = sub.add_parser("slide", help="슬라이드 관리")
     common(p, write=True)
-    p.add_argument("--action", "-a", required=True, choices=["list", "add", "duplicate", "move", "delete", "clear"])
+    p.add_argument("--action", required=True, choices=["list", "add", "duplicate", "move", "delete", "clear"])
     p.add_argument("--slide", type=int, help="대상 슬라이드 번호 (add는 넣을 위치)")
     p.add_argument("--dest", type=int, help="move: 옮길 위치 (슬라이드 번호)")
     p.add_argument("--layout", choices=list(PP_LAYOUT), default="title_only", help="add 레이아웃 (기본 title_only)")

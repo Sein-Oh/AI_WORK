@@ -2288,7 +2288,7 @@ def test_reader_clear_applied_only_removed_and_done_csv(tmp_path, capsys, monkey
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("argv", [["search", "-q", "hello", "--file"], ["index", "--file"]])
+@pytest.mark.parametrize("argv", [["search", "--query", "hello", "--file"], ["index", "--file"]])
 def test_single_file_internal_error_is_internal(one_file, capsys, monkeypatch, isolated_dirs, argv):
     def bug(path, check_index=True):
         raise KeyError("heading")
@@ -2299,7 +2299,7 @@ def test_single_file_internal_error_is_internal(one_file, capsys, monkeypatch, i
     assert "traceback:" in error_log_text(isolated_dirs)
 
 
-@pytest.mark.parametrize("argv", [["search", "-q", "hello", "--file"], ["index", "--file"]])
+@pytest.mark.parametrize("argv", [["search", "--query", "hello", "--file"], ["index", "--file"]])
 def test_single_file_input_error_keeps_log_message(one_file, capsys, monkeypatch, isolated_dirs, argv):
     def bad(path, check_index=True):
         raise rt.InputError("문서를 읽을 수 없습니다: ZQX 본문", log_message="문서를 읽을 수 없습니다 (본문 생략)")
@@ -2319,7 +2319,7 @@ def test_folder_search_failure_reason_names_error_type(one_file, capsys, monkeyp
             raise KeyError("heading")
         return real(path, check_index=check_index)
     monkeypatch.setattr(reader, "load_document_status", bug)
-    code, out = run_fresh(reader, capsys, monkeypatch, "search", "-q", "hello", "--file", str(one_file.parent))
+    code, out = run_fresh(reader, capsys, monkeypatch, "search", "--query", "hello", "--file", str(one_file.parent))
     assert code == 0, out
     assert [s["reason"] for s in out["skipped"]] == ["KeyError: 'heading'"], out
 
@@ -3289,7 +3289,7 @@ def test_spaced_sign_is_layer_a_and_snippet_shows_it(tmp_path, capsys):
     p = tmp_path / "규격.txt"
     p.write_text("동작 온도: - 40 \u2103 ~ + 85 \u2103\n", encoding="utf-8")
     assert _layer("40 \u2103", "동작 온도: - 40 \u2103 ~ + 85 \u2103") == "A"
-    code, out = run_main(reader, capsys, "search", "--query", "40 \u2103", "--file", str(p), "-C", "3")
+    code, out = run_main(reader, capsys, "search", "--query", "40 \u2103", "--file", str(p), "--context", "3")
     assert code == 0 and out["count"] == out["literal_count"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
     snip = out["matches"][0]["snippet"]
     assert "- **40 \u2103**" in snip and snip.startswith("동작 온도: -"), snip
@@ -3310,7 +3310,7 @@ def test_and_snippet_shows_far_number_term(tmp_path, capsys):
     text = "보관 온도 조건은 아래와 같다. " + "가" * 150 + " 동작 범위 - 40 ℃에서 시험한다."
     p = tmp_path / "규격.txt"
     p.write_text(text + "\n", encoding="utf-8")
-    code, out = run_main(reader, capsys, "search", "--query", "온도;40 ℃", "--file", str(p), "-C", "20")
+    code, out = run_main(reader, capsys, "search", "--query", "온도;40 ℃", "--file", str(p), "--context", "20")
     assert code == 0 and out["count"] == 1, out
     snip = out["matches"][0]["snippet"]
     assert "**온도**" in snip and "- **40 ℃**에서" in snip and reader.SNIPPET_JOIN in snip, snip

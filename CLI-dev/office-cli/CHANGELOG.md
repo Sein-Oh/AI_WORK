@@ -11,6 +11,18 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.88] - 2026-11-08
+
+### 수정
+- 한 글자 옵션 47개(`-f`, `-r`, `-n`, `-a`, `-t`, `-s`, `-c`, `-q`, `-C`, `-d`, `-p`)를 모두 없앰 (사용법 단순성 1번: 한 가지 일에 한 가지 사용법).
+  같은 글자가 도구마다 뜻이 달랐음: `-n`은 outlook `--limit`, reader `--top`, excel `--name` / `-r`은 excel `--range`, reader `--regex`.
+  예전 한 글자 옵션을 쓰면 받지 않고 인자 오류(exit 2)와 긴 이름으로 고친 전체 명령 `[추천]` (같은 뜻 표 `SAME_MEANING`에 도구별
+  `SHORT_OPTIONS`를 더함, 필수 옵션을 한 글자로 쓴 경우도). 인자 오류의 옵션 찾기가 `--`로 시작하는 것만 보던 것을 한 글자 `-x`도 봄
+  (값을 받지 않는 옵션 뒤의 `-C 3`을 그 값으로 먹지 않게). 오류 로그의 `-q` 값 가림은 그대로.
+- office-mail 스킬의 `[-n 20]` -> `[--limit 20]`, README·테스트의 짧은 옵션을 긴 이름으로.
+- 회귀 테스트: `test_contract.py`의 `test_no_single_letter_options`, `test_removed_short_option_recommends_long_option`,
+  `test_short_option_value_is_still_hidden_in_error_log`.
+
 ## [1.4.87] - 2026-11-08
 
 ### 수정
@@ -2071,4 +2083,4 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] 쓰기 결과에 되돌리기 가능 여부 표시 (1.4.0: 스냅샷이 없는 쓰기는 undo가 건너뛰지 않음, `undo --list`의 `undo_available: false`). (`--dry-run` 확대는 1.4.81) 스킬에 `--dry-run` 안내 (office-excel·office-doc는 6KB 한도 근처라 보류, README에만)
 - [ ] 잘리는 결과에 `truncated` + 전체 결과 파일 경로: excel replace cells(30), undo --list(20), outlook list/search. `body_truncated` 옆에 `truncated` (excel read --search는 1.4.31)
 - [ ] tools/run_win_tests.py `--agent` 모드: JsonArgumentParser와 최상위 예외 처리, 로그 태그 `[준비]` `[주의]` `[확인]` -> `[INFO]` `[WARN]`
-- [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `-r`/`-c`/`-n` 충돌, `--limit` 대 `--top`, `--pages` 대 `--slides`
+- [ ] 인자 이름 정리 (베타라 별칭 없이 바꿈): `--limit` 대 `--top`, `--pages` 대 `--slides` (한 글자 옵션 `-r`/`-c`/`-n` 충돌은 1.4.88에서 없앰)

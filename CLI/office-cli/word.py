@@ -1806,7 +1806,7 @@ def build_cli():
     parser, sub = rt.build_parser(TOOL, "워드 작업")
 
     def common(p, write=False):
-        p.add_argument("--target", "-t", default="active", help="active(기본) | 열린 문서 이름 | 파일 경로")
+        p.add_argument("--target", default="active", help="active(기본) | 열린 문서 이름 | 파일 경로")
         if write:
             p.add_argument("--no-focus", action="store_true", help="작업 후 화면 이동 안 함")
             p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 바뀔 것만 미리 보기 (미리보기가 없는 동작은 바꾸지 않고 멈춤, 목록은 그대로 읽음)")
@@ -1826,10 +1826,10 @@ def build_cli():
 
     p = sub.add_parser("comment", help="검토 메모 목록 보기(list) / 메모 달기(add)")
     common(p, write=True)
-    p.add_argument("--action", "-a", choices=["list", "add"], default="list", help="list(기본): 메모 목록, add: 메모 달기")
+    p.add_argument("--action", choices=["list", "add"], default="list", help="list(기본): 메모 목록, add: 메모 달기")
     p.add_argument("--anchor", help="add: 메모를 달 글 (문서에 있는 그대로)")
     p.add_argument("--text", help="add: 메모 내용. 줄바꿈은 \\n")
-    p.add_argument("--file", "-f", help="add: 메모 내용 파일(.txt/.md) 또는 여러 메모 CSV (열: 기준 글, 메모 내용[, 몇 번째 단락])")
+    p.add_argument("--file", help="add: 메모 내용 파일(.txt/.md) 또는 여러 메모 CSV (열: 기준 글, 메모 내용[, 몇 번째 단락])")
     p.add_argument("--occurrence", type=int, help="add: --anchor가 여러 단락에 있을 때 몇 번째인지 (오류의 [후보] 번호)")
     p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
 
@@ -1845,7 +1845,7 @@ def build_cli():
     p = sub.add_parser("write", help="내용 넣기")
     common(p, write=True)
     p.add_argument("--text", help="넣을 글. 마크다운(# 제목, - 목록, | 표 |, **굵게**)은 Word 서식으로 변환. 줄바꿈은 \\n")
-    p.add_argument("--file", "-f", help="넣을 파일 (.md/.txt는 글, .csv는 표)")
+    p.add_argument("--file", help="넣을 파일 (.md/.txt는 글, .csv는 표)")
     p.add_argument("--image", help="넣을 그림 파일")
     p.add_argument("--width", type=float, help="그림 너비(pt). 생략 시 본문 폭에 맞춤")
     p.add_argument("--heading", type=int, choices=range(1, 7), help="--text를 이 수준의 제목으로")
@@ -1876,7 +1876,7 @@ def build_cli():
     p = sub.add_parser("fill", help="서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 채우기")
     common(p, write=True)
     p.add_argument("--slots", help="채울 값 '자리=값; 자리=값' (예: \"업체명=한빛전자; 시험일=2026-11-04; 표2!R3C4=25\")")
-    p.add_argument("--file", "-f", help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25). 많을 때")
+    p.add_argument("--file", help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25). 많을 때")
     p.add_argument("--overwrite", action="store_true", help="값이 있는 표 칸도 덮어쓰기 (사용자가 확인했을 때만)")
 
     p = sub.add_parser("export", help="PDF/DOCX 사본 저장")

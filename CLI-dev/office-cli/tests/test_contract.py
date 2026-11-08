@@ -1403,3 +1403,38 @@ def test_dry_run_zero_result_wording_is_one(request, capsys, tool):
     code, out = run_main(tool, capsys, "replace", "--find", "없는글", "--replace", "x", "--dry-run")
     assert code == 0 and out["count"] == 0 and out["agent_directive"] == rt.DRY_RUN_NOTHING, out
     assert "confirm_commands" not in out and out["truncated"] is False
+
+
+# 1.4.88: 한 글자 옵션 없음 (사용법 단순성 1번). 쓰면 받지 않고 긴 이름으로 고친 전체 명령을 [추천]
+
+def test_no_single_letter_options():
+    for mod in (excel, word, ppt, outlook, reader, office):
+        parser = mod.build_cli()
+        subs = next(a for a in parser._actions if a.__class__.__name__ == "_SubParsersAction").choices
+        for name, sub in subs.items():
+            short = [o for a in sub._actions for o in a.option_strings if not o.startswith("--") and o != "-h"]
+            assert not short, (mod.__name__, name, short)
+
+
+@pytest.mark.parametrize("tool,argv,fixed", [
+    (excel, ["read", "-r", "A1:B2", "-s", "Sheet1"], ["read", "--range", "A1:B2", "--sheet", "Sheet1"]),
+    (excel, ["sheet", "-a", "list"], ["sheet", "--action", "list"]),                      # 필수 옵션을 한 글자로
+    (excel, ["sheet", "--action", "delete", "-n", "요약"], ["sheet", "--action", "delete", "--name", "요약"]),
+    (word, ["write", "-f", "a.md", "-t", "보고.docx"], ["write", "--file", "a.md", "--target", "보고.docx"]),
+    (ppt, ["slide", "-a", "list"], ["slide", "--action", "list"]),
+    (outlook, ["list", "-n", "5"], ["list", "--limit", "5"]),                             # 같은 -n이 도구마다 뜻이 달랐음
+    (reader, ["search", "-q", "전압", "-n", "5", "-f", "a.pdf"], ["search", "--query", "전압", "--top", "5", "--file", "a.pdf"]),
+    (reader, ["search", "--query", "x", "-r", "-C", "3", "-p", "2"], ["search", "--query", "x", "--regex", "--context", "3", "--pages", "2"]),
+    (reader, ["list", "-d", "규격"], ["list", "--folder", "규격"]),
+], ids=lambda v: v.__name__ if hasattr(v, "__name__") else "")
+def test_removed_short_option_recommends_long_option(capsys, tool, argv, fixed):
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 2 and "같은 뜻으로 고쳤습니다" in out["message"], out
+    assert recommended_argv(out["message"], tool.__name__) == fixed
+
+
+def test_short_option_value_is_still_hidden_in_error_log(isolated_dirs, capsys):
+    """받지 않는 -q라도 검색어 값은 오류 로그에 남기지 않음 (REDACT_SHORT)."""
+    code, out = run_main(reader, capsys, "search", "-q", SECRET, "--file", "a.pdf")
+    assert code == 2
+    assert SECRET not in error_log_text(isolated_dirs)

@@ -85,6 +85,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
      `chart` create, word `comment` add, ppt `write`, `notes` 쓰기): 아무것도 바꾸지 않고 STOP_RETRY. 되돌릴 수 있는 변경(`office.py undo`)이면
      message에 `[추천]` `--dry-run`만 뺀 같은 전체 명령, 명령에 `--overwrite`나 `delete`·`clear`가 들면 `needs_user_decision`과
      `[후보] 1) 미리보기 없이 실행` + 같은 번호의 `confirm_commands`(`destructive`, 사용자가 고른 뒤에만).
+- 옵션은 긴 이름(`--file`, `--range` 등)만 있습니다(1.4.88, 한 글자 옵션 없음). 예전 한 글자 옵션(`-f`, `-r`, `-n` 등)을 쓰면 인자 오류(exit 2)와
+  긴 이름으로 고친 전체 명령 `[추천]`(같은 뜻 표 `SAME_MEANING`, 도구별 `SHORT_OPTIONS`: `-n`은 outlook `--limit`, reader `--top`,
+  excel `--name`, `-r`은 excel `--range`, reader `--regex`).
 - 오타 추천(1.4.75): 없는 명령 이름은 가장 비슷한 명령을 `[추천]`(LLM이 묻지 않고 1번 실행)으로 주지만, 되돌리기 어려운 명령(`send`, `clear`, `undo`)이면
   `[후보]`로 줍니다(`sent`, `sned`, `end` -> 사용자에게 물음).
 
@@ -191,7 +194,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 실패한 실행(exit 1, 인자 오류 exit 2)은 자동으로 `<data 폴더>\logs\errors.txt`에 덧붙습니다. `C:\CLI`에 배치했다면 `C:\CLI\office-cli\data\logs\errors.txt`(`config.json`의 `data_dir`나 `OFFICE_CLI_DATA_DIR`를 바꿨으면 그 폴더 아래).
 - 항목: 시각, 도구 버전, Python, OS / 실행한 명령과 인자 / `error_type`과 message / 재시도 한도를 넘긴 복구 시도(`복구 시도:`) / 내부 오류(`ERROR:`)일 때만 traceback. 문서 본문은 기록하지 않습니다.
 - 내용 옵션의 값은 `<N자 생략>`으로 남깁니다: `--body --text --subject --to --cc --bcc --from --query --find --replace --value --values --formula --header --title --cards --anchor --search --new-name --map --section`, `excel.py`의 `--highlight`(셀 값이 들어감)(`word.py`의 `--highlight`는 색 이름이라 그대로. `--to`·`--from`은 outlook의 받는 사람·보낸 사람이고, `office.py`·`ppt.py`에 잘못 쓴 옛 이름 `--to`·`--from`(앱 이름·슬라이드 번호)은 가리지 않음). 경로와 그 밖의 인자는 그대로 남깁니다.
-  짧은 이름(`-q` = `--query`, `-q값`)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다.
+  잘못 쓴 짧은 이름(`-q` = `--query`, `-q값`, 받지 않는 옵션이라도)과 줄여 쓴 이름(`--que`, `--bod=값`)도 가립니다.
   `결과:` 줄의 message는 문서 글을 뺀 글입니다(stdout JSON의 message는 그대로).
   1. 문서에서 가져온 글(칸 값, 슬라이드 제목·노트, 시트·문서·파일·메일 폴더 이름 목록, 후보 단락·제목, 비슷한 문구, 메모 파일의 기준 글)을
      message에 넣는 오류는 그 글을 뺀 `log_message`를 함께 만들고(`InputError`/`UserDecisionError`의 `log_message`, `ambiguous()`·`not_found()`는
@@ -257,7 +260,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 값이 있는 끝에서 1,000행(열) 넘게 떨어진 계산된 값이 없는 수식 칸(데이터 A1:C10과 `Z200000`)은 범위를 데이터로 정할 때 넣지 않습니다.
  이제 데이터 범위만 읽고,
     요청한 범위 안의 먼 칸은 `far_uncomputed_formulas`(20개까지), `far_uncomputed_count`, `UNVERIFIED:`와 그 칸만 읽는 명령(`next_commands` 끝,
-    `--range 시트!Z200000`)으로 알립니다(`read`, `export --save .csv`). 요청한 열 밖이면(`-r A:C`) 알리지 않습니다.
+    `--range 시트!Z200000`)으로 알립니다(`read`, `export --save .csv`). 요청한 열 밖이면(`--range A:C`) 알리지 않습니다.
     칸 위치는 10만 개까지 보고, 넘으면 전처럼 모두 범위에 넣습니다.
   - 배열 수식(`<f t="array" ref="C1:C3">`)은 파일에 왼쪽 위 칸에만 `<f>`가 있지만 `ref` 범위의 모든 칸을 수식 칸으로 셉니다. 다른 칸에
     계산된 값이 없거나(openpyxl은 왼쪽 위 칸만 씀) `fullCalcOnLoad`이면 계산된 값이 없는 칸입니다.
@@ -701,7 +704,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 결과 항목: `file`, `path`, `page`, `page_source`, `section`(목록), `section_text`(` > `로 이음), `number`, `loc`, `heading`, `evidence`, `snippet`, `score`, `matched_terms`, `--full`이면 `text`.
   공통: `total_matches`(= `count`), `matched`(= `shown`), `truncated`, `files_searched`, `output_file`, `next_commands`. 잘렸으면 `--save "근거.xlsx"`로 전체를 저장하는 명령을 줍니다
   (`--full`에서 엑셀 칸 상한 32,000자보다 긴 단락이 있으면 `--save "근거.md"`). directive는 저장 이름을 적지 않고 `next_commands`의 저장 명령을 가리킵니다.
-- `snippet`: 검색어마다 맞은 자리(숫자가 든 검색어는 층 A 자리 먼저) 앞 `max(-C, 15)`자 ~ 뒤 `-C`자. AND 검색어들이 멀어 창이 겹치지 않으면 조각을 ` / `로 이어
+- `snippet`: 검색어마다 맞은 자리(숫자가 든 검색어는 층 A 자리 먼저) 앞 `max(--context, 15)`자 ~ 뒤 `--context`자. AND 검색어들이 멀어 창이 겹치지 않으면 조각을 ` / `로 이어
   검색어마다 자리가 보입니다(1.4.72: 전에는 첫 검색어 창만이라 멀리 있는 숫자 검색어 자리가 빠짐). 맞은 곳은 `**강조**`, 숫자가 든 검색어의
   층 B 자리(표기가 다른 곳)는 `[[강조]]`(1.4.73, `보관 -[[40 ℃]]`, `1·[[5 V]]`).
 - `evidence` 형식: `규격서.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`. 쪽이 없으면 `loc`(예: `매출.xlsx 매출!12행`), Word 쪽을 쪽 나눔으로만 셌으면 `p.3(추정)`.
