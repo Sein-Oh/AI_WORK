@@ -20,7 +20,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
-    check_core_libraries, exit_missing_library,
+    check_core_libraries, exit_missing_library, limit_threads, model_jobs, ask, numbered, command_with_value,
     setup_console, dumps_json, run_cli, JsonArgumentParser,
     InputError, sanitize_filename, normalize_version, warn_long_path, normalize_labels,
     read_text_file, load_json_file, resolve_column_names, known_columns, coerce_numeric,
@@ -262,9 +262,9 @@ def leakage_error(overlap: List[str], features: List[str], targets: List[str]) -
                           "command": f"{cmd} -x {quote_arg(','.join(feats_wo))} -y {quote_arg(','.join(targets))}"})
     msg = (f"타겟 누수: {names}이(가) 입력(-x)과 타겟(-y)에 모두 있습니다. 맞힐 값을 입력으로 쓰면 학습이 의미가 없습니다. "
            f"어느 쪽에서 뺄지 사용자에게 물으십시오.")
-    if cands:
-        msg += " [후보] " + " / ".join(f"{i + 1}) {c['command']}" for i, c in enumerate(cands))
-        return InputError(msg, extra={"next_commands": cands})
+    if cands:   # the user picks: confirm_commands (next_commands would run without asking)
+        text, items = numbered([c["purpose"] for c in cands], [c["command"] for c in cands], "{}")
+        return InputError(f"{msg} {text}", extra={"confirm_commands": items}, error_type="needs_user_decision")
     return InputError(msg)
 
 
@@ -644,8 +644,8 @@ def get_regression_models(seed: int = 42, n_rows: int = 0) -> Dict[str, Any]:
     """
     return {
         "HistGradientBoosting": HistGradientBoostingRegressor(random_state=seed),
-        "RandomForest": RandomForestRegressor(n_estimators=100, random_state=seed, n_jobs=-1, **_bagging_kwargs(n_rows)),
-        "ExtraTrees": ExtraTreesRegressor(n_estimators=100, random_state=seed, n_jobs=-1, **_bagging_kwargs(n_rows)),
+        "RandomForest": RandomForestRegressor(n_estimators=100, random_state=seed, n_jobs=model_jobs(n_rows), **_bagging_kwargs(n_rows)),
+        "ExtraTrees": ExtraTreesRegressor(n_estimators=100, random_state=seed, n_jobs=model_jobs(n_rows), **_bagging_kwargs(n_rows)),
         "Ridge": RidgeCV(alphas=LINEAR_ALPHAS),
         "ElasticNet": ElasticNetCV(l1_ratio=[0.1, 0.5, 0.9], cv=3, max_iter=5000, random_state=seed),
     }
@@ -934,6 +934,7 @@ def train_and_benchmark_models(
         raise InputError(f"타겟 '{target_name}' 값이 모두 같아({float(f'{y[0]:.12g}')}) 학습할 수 없습니다. "
                          f"값이 변하는 타겟을 지정하십시오.")
 
+    limit_threads(len(y))                       # small table: one thread is faster (MANY_THREADS_ROWS)
     models = get_regression_models(seed=seed, n_rows=int(len(y) * 0.8))
     model_count = len(models)
     # Dynamic K-Fold split: adapts gracefully to small sample sizes (N < 25)
@@ -1077,9 +1078,9 @@ def get_classification_models(seed: int = 42, balanced: bool = False, n_rows: in
     cw = "balanced" if balanced else None
     models = {
         "HistGradientBoosting": HistGradientBoostingClassifier(random_state=seed, class_weight=cw),
-        "RandomForest": RandomForestClassifier(n_estimators=100, random_state=seed, n_jobs=-1, class_weight=cw,
+        "RandomForest": RandomForestClassifier(n_estimators=100, random_state=seed, n_jobs=model_jobs(n_rows), class_weight=cw,
                                                **_bagging_kwargs(n_rows)),
-        "ExtraTrees": ExtraTreesClassifier(n_estimators=100, random_state=seed, n_jobs=-1, class_weight=cw,
+        "ExtraTrees": ExtraTreesClassifier(n_estimators=100, random_state=seed, n_jobs=model_jobs(n_rows), class_weight=cw,
                                            **_bagging_kwargs(n_rows)),
         # make_scorer object (not the "f1_macro" string): the string fails for binary labels in scikit-learn 1.9
         # l1_ratios=(0.0,) (L2, 지금 기본과 같음)·use_legacy_attributes=False: scikit-learn 1.10에서 바뀌는 기본값을 미리 정함 (FutureWarning)
@@ -1165,7 +1166,9 @@ def train_and_benchmark_classifiers(
             raise InputError(f"--positive-class는 이진 분류(클래스 2개)에서만 사용할 수 있습니다. 타겟 '{target_name}' 클래스: {classes}")
         if positive_class not in classes:
             raise InputError(f"--positive-class '{positive_class}'가 타겟 '{target_name}'의 클래스에 없습니다. "
-                             f"놓치면 안 되는 클래스를 사용자에게 물으십시오: [후보] {', '.join(str(c) for c in classes)}")
+                             f"놓치면 안 되는 클래스를 사용자에게 물으십시오: "
+                             + ask(classes, [command_with_value(str(positive_class), str(c)) for c in classes],
+                                   "--positive-class {}"))
 
     min_ratio = min(class_counts.values()) / len(y)
     balanced = min_ratio < 0.20
@@ -1174,6 +1177,7 @@ def train_and_benchmark_classifiers(
             f"[WARN] 타겟 '{target_name}' 클래스 불균형 감지 (최소 클래스 비율 {min_ratio:.1%}) -> class_weight='balanced' 적용\n"
         )
 
+    limit_threads(len(y))                       # small table: one thread is faster (MANY_THREADS_ROWS)
     models = get_classification_models(seed=seed, balanced=balanced, n_rows=len(y))
     model_count = len(models)
     groups, n_dup = duplicate_groups(X, y)
@@ -3367,7 +3371,8 @@ def _tasks_to_build(records: List[Dict[str, Any]], task: Optional[str], ledger_p
         if task not in present:
             # the other task builds another best version than asked: the user decides ([후보], no automatic retry)
             raise InputError(f"학습 이력에 {task} 기록이 없어 그 최고 버전을 만들 수 없습니다. 이력에 있는 학습: "
-                             f"[후보] --task {', --task '.join(present)}. 이 학습의 최고 버전을 만들지 사용자에게 물으십시오.")
+                             + ask(present, [command_with_value(task, t) for t in present], "--task {}")
+                             + ". 이 학습의 최고 버전을 만들지 사용자에게 물으십시오.")
         return [task]
     return present
 

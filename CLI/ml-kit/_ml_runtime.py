@@ -132,6 +132,17 @@ class InputError(ValueError):
         super().__init__(message)
         self.extra = dict(extra or {})
         self.error_type = error_type
+        if "confirm_commands" not in self.extra:        # a numbered [후보] made by ask() in this message: its commands
+            for text, items in reversed(_ASKED):
+                if text in str(message):
+                    self.extra["confirm_commands"] = items
+                    self.error_type = self.error_type or "needs_user_decision"
+                    break
+
+
+# [후보] texts made by ask() in this run and their confirm_commands (InputError picks the ones its message holds, so a
+# helper that only returns text still gives the full commands: AGENTS.md 사용법 단순성 2번). Cleared by run_cli.
+_ASKED: List[Tuple[str, List[Dict[str, Any]]]] = []
 
 
 # ------------------------------------------------------------------------------
@@ -907,6 +918,7 @@ def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     RUN_SAVED.clear()
     RUN_COMMITTED.clear()
     MODEL_CHOSEN.clear()
+    _ASKED.clear()
     CURRENT_STEP.clear()
     WATCHDOG_HOLD.clear()
     _RESUME_PLACE.clear()
@@ -1405,14 +1417,42 @@ def command_dropping(names: List[str]) -> Optional[str]:
 
 
 def numbered(cands: List[str], cmds: List[Optional[str]], purpose: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """'[후보] 1) a 2) b' and the confirm_commands of the same numbers (AGENTS.md 사용법 단순성 2번), or the plain
-    '[후보] a, b' and no commands when a full command cannot be made for every candidate."""
-    if not cands or any(c is None for c in cmds):
-        return f"[후보] {', '.join(cands)}", []
+    """'[후보] 1) a 2) b' and the confirm_commands of the same numbers (AGENTS.md 사용법 단순성 2번). Always numbered;
+    no commands when a full command cannot be made for every candidate (the user's pick is then a value, not a command)."""
+    cands = [str(c) for c in cands]
+    listed = "[후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(cands, 1))
+    if not cands or len(cmds) != len(cands) or any(c is None for c in cmds):
+        return listed, []
     risky = "--overwrite" in (CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
     items = [{"purpose": purpose.format(c) + " (사용자가 고른 경우에만)", "command": cmd, **({"destructive": True} if risky else {})}
              for c, cmd in zip(cands, cmds)]
-    return "[후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(cands, 1)) + " (사용자가 고른 번호의 confirm_commands를 실행)", items
+    return listed + " (사용자가 고른 번호의 confirm_commands를 실행)", items
+
+
+def ask(cands: List[Any], cmds: List[Optional[str]], purpose: str = "{}") -> str:
+    """numbered() as text only, for messages built from several hints: the commands are kept for this run and the
+    InputError whose message holds the text carries them as confirm_commands (needs_user_decision)."""
+    text, items = numbered([str(c) for c in cands[:10]], list(cmds[:10]), purpose)
+    if items:
+        _ASKED.append((text, items))
+    return text
+
+
+def command_with_pair(name: str, value: str) -> Optional[str]:
+    """The running command with 'name=value' added to its -i (or a new -i 'name=value')."""
+    argv = list(CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
+    for j in range(1, len(argv) - 1):
+        if argv[j] in ("-i", "--input"):
+            argv[j + 1] = f"{argv[j + 1]},{name}={value}"
+            return command_text(argv=argv)
+    cmd = command_text()
+    return f"{cmd} -i {quote_arg(f'{name}={value}')}" if cmd else None
+
+
+def command_setting(option: str, value: str) -> Optional[str]:
+    """The running command with `option` given `value` (replaced, or added when the command has no such option)."""
+    cmd = command_text(drop={option: ""})
+    return f"{cmd} {option} {quote_arg(value)}" if cmd else None
 
 
 def candidate_commands(name: str, cands: List[str]) -> List[Dict[str, Any]]:
@@ -1486,17 +1526,17 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
                 elif picks:
                     hints.append(f"'{m}'은(는) 위 이름을 고친 뒤 다음 실행에서 묻습니다")
                 else:
-                    hints.append(f"'{m}' -> [후보] {', '.join(shown)}{used}")
+                    hints.append(f"'{m}' -> {ask(shown, [])}{used}")
             elif near_banned:
                 hints.append(f"'{m}' -> 비슷한 열 {', '.join(repr(c) for c in near_banned)}은(는) 이 명령에서 이미 다른 "
                              f"이름이나 옵션에 쓰인 열입니다")
             else:
                 hints.append(f"'{m}' -> 유사 컬럼 없음")
-        ask = (" 비슷한 이름은 다른 양일 수 있으니 어느 열인지 사용자에게 물으십시오."
-               if any("[후보]" in h for h in hints) else "")
+        note = (" 비슷한 이름은 다른 양일 수 있으니 어느 열인지 사용자에게 물으십시오."
+                if any("[후보]" in h for h in hints) else "")
         raise ColumnNameError(
             f"지정하신 {kind} 컬럼 {missing}을(를) 데이터셋에서 찾을 수 없습니다. "
-            f"{' / '.join(hints)}.{ask}\n[사용 가능한 컬럼 목록]: {name_list(col_list)}",
+            f"{' / '.join(hints)}.{note}\n[사용 가능한 컬럼 목록]: {name_list(col_list)}",
             extra={"confirm_commands": picks} if picks else None,
         )
     for short, full in applied.items():
@@ -3319,10 +3359,14 @@ def match_categories(values: Any, known: List[Any]) -> Tuple[Dict[str, str], Lis
     return fixes, unseen
 
 
-def category_candidates(known: List[Any]) -> str:
-    """'[후보] A, B, C' of the training categories (at most CATEGORY_CANDIDATES_MAX, the rest counted)."""
+def category_candidates(known: List[Any], col: Optional[str] = None, given: Optional[Any] = None) -> str:
+    """'[후보] 1) A 2) B' of the training categories (at most CATEGORY_CANDIDATES_MAX, the rest counted) with the full
+    commands: `given` (a wrong value of col in -i) replaced by each, or 'col=<category>' added to -i when given is None."""
     known = [str(k) for k in known]
-    text = f"[후보] {', '.join(known[:CATEGORY_CANDIDATES_MAX])}"
+    shown = known[:CATEGORY_CANDIDATES_MAX]
+    cmds = ([command_replacing(str(given), k) for k in shown] if given is not None else
+            [command_with_pair(col, k) for k in shown] if col else [])
+    text = ask(shown, cmds, f"{col or '범주'}={{}}")
     if len(known) > CATEGORY_CANDIDATES_MAX:
         text += f" (학습 범주 {len(known)}개 중 {CATEGORY_CANDIDATES_MAX}개)"
     return text
@@ -3360,7 +3404,7 @@ def fixed_category_value(col: str, value: Any, known: List[Any], option: str = "
             _category_recovered(col, fixes)
             return fixes.get(v, v)
     raise InputError(f"{option}의 '{col}={value}'은(는) 학습 때 없던 값이라 예측할 수 없습니다. "
-                     f"학습 범주 중 하나로 다시 지정하십시오. {category_candidates(known)}")
+                     f"학습 범주 중 하나로 다시 지정하십시오. {category_candidates(known, col, value)}")
 
 
 def prepare_features(df: pd.DataFrame, schema: Dict[str, Any]) -> pd.DataFrame:
@@ -3439,10 +3483,10 @@ def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: 
             near_t = [c for c in suggest_columns(node.id, columns) if c in banned]
             if near_t:
                 other = f"비슷한 {', '.join(near_t)}은(는) 타겟이라 수식에 쓸 수 없음"
-                hint = (f" -> [후보] {', '.join(s)} ({other}. 이름을 사용자에게 확인)" if s else
+                hint = (f" -> {ask(s, [])} ({other}. 이름을 사용자에게 확인)" if s else
                         f" ({other}. 이름을 사용자에게 확인)")
             else:
-                hint = f" -> [후보] {', '.join(s)} (어느 열인지 사용자에게 확인)" if s else ""
+                hint = f" -> {ask(s, [])} (어느 열인지 사용자에게 확인)" if s else ""
             raise InputError(
                 f"수식의 식별자 '{node.id}'에 해당하는 컬럼이 없습니다"
                 + hint
@@ -4026,6 +4070,33 @@ def _crossings(xs: np.ndarray, ys: np.ndarray, y0: float) -> List[float]:
 
 
 # ==============================================================================
+# C8-B. Threads for model fitting and prediction
+# ==============================================================================
+# HistGradientBoosting (OpenMP) and the forests (n_jobs=-1) take every core. On the small tables of this tool that is
+# slower than one thread, and when cores are busy (antivirus, Office, another fit) the OpenMP threads spin and one
+# fit takes seconds instead of milliseconds (60 rows: 6.2 s with all cores vs 0.01 s with one, 2026-11-08). Results
+# are the same with any thread count (random_state fixed), only the time changes.
+MANY_THREADS_ROWS = 20000          # from this many rows the fits use every core
+
+
+def model_jobs(n_rows: int) -> int:
+    """n_jobs for the forests: 1 below MANY_THREADS_ROWS rows, else -1 (every core)."""
+    return 1 if n_rows < MANY_THREADS_ROWS else -1
+
+
+def limit_threads(n_rows: int) -> None:
+    """Below MANY_THREADS_ROWS rows: native thread pools (OpenMP, BLAS) use one thread for the rest of this run.
+    threadpoolctl comes with scikit-learn; without it nothing changes (only slower)."""
+    if n_rows >= MANY_THREADS_ROWS:
+        return
+    try:
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(limits=1)
+    except Exception:  # noqa: BLE001  speed only: never fail a run for it
+        pass
+
+
+# ==============================================================================
 # C9. Derived Feature Replay at inference (shared AST sandbox, identical to training)
 # ==============================================================================
 
@@ -4070,19 +4141,19 @@ def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: 
                       key=lambda d: int(d[1:]))
         if not vers:
             raise InputError(f"'{os.path.basename(root)}'에 학습된 버전 폴더가 없습니다. 먼저 ml_train.py로 학습하십시오.")
-        cands = [command_with_value(str(path), os.path.join(root, v)) or os.path.join(root, v) for v in vers[-5:]]
-        raise InputError("최고 버전 기록(best_version.json)이 없어 쓸 버전을 정하지 못했습니다. 쓸 버전을 사용자에게 물으십시오. [후보] "
-                         + " / ".join(f"{i}) {c}" for i, c in enumerate(cands, 1)))
+        shown = vers[-5:]
+        raise InputError("최고 버전 기록(best_version.json)이 없어 쓸 버전을 정하지 못했습니다. 쓸 버전을 사용자에게 물으십시오. "
+                         + ask(shown, [command_with_value(str(path), os.path.join(root, v)) for v in shown], "버전 {}"))
     keys = {strip_unit(str(t)).strip() for t in (targets or []) if str(t).strip()}
     picks = list(tasks)
     if len(picks) > 1 and keys:
         hold = [t for t in picks if keys & {strip_unit(str(x)).strip() for x in tasks[t].get("targets", [])}]
         picks = hold or picks
     if len(picks) > 1:
-        cands = [command_with_value(str(path), os.path.join(root, tasks[t]["version"])) or os.path.join(root, tasks[t]["version"])
-                 for t in picks]
-        raise InputError("회귀와 분류 모델이 함께 있어 어느 버전으로 예측할지 정하지 못했습니다. 사용자에게 물으십시오. [후보] "
-                         + " / ".join(f"{i}) {c} ({t})" for i, (c, t) in enumerate(zip(cands, picks), 1)))
+        shown = [f"{tasks[t]['version']} ({t})" for t in picks]
+        raise InputError("회귀와 분류 모델이 함께 있어 어느 버전으로 예측할지 정하지 못했습니다. 사용자에게 물으십시오. "
+                         + ask(shown, [command_with_value(str(path), os.path.join(root, tasks[t]["version"])) for t in picks],
+                               "버전 {}"))
     info = tasks[picks[0]]
     vdir = os.path.join(root, info["version"])
     msg = f"최고 버전 {info['version']} ({picks[0]}, best_version.json)으로 예측"

@@ -28,11 +28,11 @@ from typing import Dict, Any, List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
-        Cond, InputError, JsonArgumentParser, MAX_KEYS, NEAREST_N, SNAPSHOT_EXCL_PREFIX, SNAPSHOT_ROW_COL, TOOL_DIR,
+        Cond, InputError, JsonArgumentParser, ask, command_setting, layout_retry, MAX_KEYS, NEAREST_N, SNAPSHOT_EXCL_PREFIX, SNAPSHOT_ROW_COL, TOOL_DIR,
         Table, _alias_key, _blank_mark, _cell, _cell_text, _crossings, _fmt, _is_data_value, _layout_frame,
         _looks_like_unit_row, _row_cells, _same_unit_name, _unit_shaped, _unit_text, align_categories,
         apply_inference_evals, atomic_write_text, avoid_overwrite, build_alias_map, category_candidates,
-        check_comma_numbers, check_core_libraries, check_percent_mix, check_same_column, coerce_numeric,
+        check_comma_numbers, check_core_libraries, limit_threads, check_percent_mix, check_same_column, coerce_numeric,
         command_replacing, command_text, find_header_layout, fixed_category_value, inline_value, input_column_owner,
         known_columns, kv_text, layout_warnings, load_data_file, looks_inline_input, mark_committed, model_raw_inputs,
         name_list, nearest_rows, normalize_category, normalize_labels, note_recovered, np, numbered, option_retry,
@@ -102,7 +102,8 @@ def check_inline_unknown(df: pd.DataFrame, known: List[str], inputs: List[str]) 
             hints.append(unit_hint(c, s[0], "-i의 입력") + (f". '{s[0]}' 값도 -i에 있습니다: 어느 값을 쓸지 사용자에게 물으십시오"
                                                           if s[0] in present else ""))
         elif s:
-            hints.append(f"-i의 '{c}'에 가까운 모델 입력: [후보] {', '.join(unit_marked(s, c))}. 어느 것인지 사용자에게 물으십시오")
+            hints.append(f"-i의 '{c}'에 가까운 모델 입력: {ask(unit_marked(s, c), [command_replacing(c, x) for x in s], f'-i의 {c} 대신 {{}}')}. "
+                         f"어느 것인지 사용자에게 물으십시오")
         else:
             hints.append(f"-i의 '{c}'과(와) 비슷한 모델 입력이 없습니다")
     raise InputError(f"-i의 {', '.join(repr(c) for c in unknown)}은(는) 모델 입력이 아니라 예측에 쓰이지 않습니다. "
@@ -360,8 +361,9 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
             wanted.setdefault(c, []).append(m)
     shared = {c: ms for c, ms in wanted.items() if len(ms) > 1}
     for c, ms in shared.items():
+        cmds = [command_replacing(c, m) for m in ms] if is_inline else []
         out.append(f"{where} '{c}'은(는) 여러 모델 입력과 비슷합니다. '{c}'을(를) 어느 이름으로 고칠지 사용자에게 물으십시오: "
-                   f"[후보] {', '.join(unit_marked(ms, c))}")
+                   f"{ask(unit_marked(ms, c), cmds, f'{c} 대신 {{}}')}")
     for m in missing:
         cands = [c for c in found[m] if c not in shared]
         if len(cands) == 1 and other_unit(cands[0], m):
@@ -369,7 +371,9 @@ def _typo_hints(missing: List[str], available: List[str], model_names: List[str]
             out.append(unit_hint(cands[0], m, where))
         elif cands:
             shown = unit_marked(cands, m)
-            out.append(f"'{m}'이(가) 없습니다. {where} [후보] {', '.join(shown)} 중 '{m}'(으)로 고칠 이름을 사용자에게 물으십시오")
+            cmds = [command_replacing(c, m) for c in cands] if is_inline else []
+            out.append(f"'{m}'이(가) 없습니다. {where} {ask(shown, cmds, f'{{}}을(를) {m}(으)로')} 중 '{m}'(으)로 고칠 이름을 "
+                       f"사용자에게 물으십시오")
     return out
 
 
@@ -603,7 +607,7 @@ def _skipped_rows_warning(args: argparse.Namespace, df: pd.DataFrame) -> Optiona
 
 def _layout_candidates_text(rows: List[int]) -> str:
     return (f"모델 입력 열이 모두 들어 있는 행이 파일에 여러 개 있습니다 ({', '.join(map(str, rows))}행). 어느 행이 머리글인지 "
-            f"사용자에게 물으십시오. [후보] " + ", ".join(f"--header-row {r}" for r in rows[:10]))
+            f"사용자에게 물으십시오. " + ask([f"{r}행" for r in rows], [layout_retry(r, None) for r in rows], "머리글 {}"))
 
 
 def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df_input: Optional[pd.DataFrame] = None,
@@ -1665,7 +1669,8 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     vary = resolve_column_names([args.vary.strip()], raw_inputs, "바꿀 입력(--vary)",
                                 exclude=known_columns([str(k) for k in given], raw_inputs))[0][0]
     if vary not in numeric_in or vary not in stats:
-        raise InputError(f"'{vary}'은(는) 숫자 입력이 아니라 반대 찾기로 바꿀 수 없습니다. [후보] {', '.join(numeric_in)}")
+        raise InputError(f"'{vary}'은(는) 숫자 입력이 아니라 반대 찾기로 바꿀 수 없습니다. "
+                         + ask(numeric_in, [command_setting("--vary", n) for n in numeric_in], "--vary {}"))
     names, _ = (resolve_column_names([str(k) for k in given], raw_inputs, "고정 입력(-i)", values=True,
                                      exclude=[vary]) if given else ([], {}))
     check_same_column([str(k) for k in given], names, "-i", {str(k): v for k, v in given.items()})
@@ -1685,7 +1690,7 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
             filled[f] = float(stats[f]["median"])
         elif f in schema.get("categorical", {}):
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오. "
-                             f"{category_candidates(schema['categorical'][f])}")
+                             f"{category_candidates(schema['categorical'][f], f)}")
         else:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
     warnings: List[str] = []
@@ -1922,7 +1927,7 @@ def _base_inputs(args: argparse.Namespace, items: List[Dict[str, Any]], vary: Li
             filled[f] = float(stats[f]["median"])
         elif f in cats:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오. "
-                             f"{category_candidates(cats[f])}")
+                             f"{category_candidates(cats[f], f)}")
         else:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. -i에 '{f}=<값>'을 넣어 주십시오.")
     if filled:
@@ -1941,11 +1946,14 @@ def _predict_rows(item: Dict[str, Any], rows: pd.DataFrame) -> np.ndarray:
 def _vary_names(args: argparse.Namespace, text: str, numeric: List[str], stats: Dict[str, Any], option: str) -> List[str]:
     given = [v.strip() for v in str(text).split(",") if v.strip()]
     if not given:
-        raise InputError(f"{option}에 바꿔 볼 숫자 입력을 주십시오. [후보] {', '.join(numeric[:10])}")
+        raise InputError(f"{option}에 바꿔 볼 숫자 입력을 주십시오. "
+                         + ask(numeric, [command_setting(option, n) for n in numeric], f"{option} {{}}"))
     names = resolve_column_names(given, numeric, f"바꿔 볼 입력({option})")[0]
     bad = [n for n in names if n not in stats]
     if bad:
-        raise InputError(f"{bad}의 학습 범위가 모델 정보에 없어 바꿔 볼 수 없습니다. [후보] {', '.join([c for c in numeric if c in stats][:10])}")
+        ok = [c for c in numeric if c in stats]
+        raise InputError(f"{bad}의 학습 범위가 모델 정보에 없어 바꿔 볼 수 없습니다. "
+                         + ask(ok, [command_replacing(bad[0], c) if len(bad) == 1 else None for c in ok], f"{bad[0]} 대신 {{}}"))
     if len(set(names)) != len(names):
         raise InputError(f"{option}에 같은 입력이 두 번 있습니다: {given}")
     return names
@@ -2229,7 +2237,8 @@ def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
     goal = resolve_column_names([str(goal_text).strip()], names, f"목표({option})")[0][0]
     raw, numeric, _, stats = _model_input_info(items)
     if not args.vary:
-        raise InputError(f"{option}에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다. [후보] {', '.join(numeric[:10])}")
+        raise InputError(f"{option}에는 바꿔 볼 입력 --vary \"<입력1>,<입력2>\"가 필요합니다. "
+                         + ask(numeric, [command_setting("--vary", n) for n in numeric], "--vary {}"))
     vary = _vary_names(args, args.vary, numeric, stats, "--vary")
     if len(vary) > SEARCH_MAX_VARY:
         raise InputError(f"--vary 입력은 {SEARCH_MAX_VARY}개까지입니다 (지금 {len(vary)}개). 영향이 큰 입력만 고르도록 사용자에게 물으십시오.")
@@ -2626,6 +2635,7 @@ def execute_suggest(args: argparse.Namespace) -> Dict[str, Any]:
 def main():
     setup_console()
     check_core_libraries("예측")
+    limit_threads(0)             # prediction: one thread is enough even for a large file (MANY_THREADS_ROWS)
     parser = JsonArgumentParser(
         description="학습한 모델로 예측 (한 건, 파일, 반대 찾기, 조건별 예측, 조건 찾기)"
     )
