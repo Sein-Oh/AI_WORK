@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.83"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.84"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -863,6 +863,15 @@ NO_FUZZY_OPTIONS = {"--all", "--overwrite", "--to", "--cc", "--bcc", "--attach",
 # [후보](사용자에게 물음)로 줌 (1.4.75, 11차 검토: 'sent', 'sned', 'end' -> send)
 DESTRUCTIVE_COMMANDS = {"send", "clear", "undo", "delete"}
 # 읽기만 하는 명령·동작: 오타가 이것과 가장 가까우면 [추천] (잘못 골라도 문서가 바뀌지 않음, 1.4.83)
+def choices_in_message(message: str) -> list:
+    """argparse 'invalid choice' 오류의 고를 수 있는 값. Python 3.13.13은 값에 따옴표를 붙이지 않음
+    ('choose from list, add'), 그 전 판은 붙임 ("choose from 'list', 'add'"). 둘 다 읽음 (1.4.84)."""
+    m = re.search(r"choose from (.+?)\)?\s*$", message)
+    if not m:
+        return []
+    return [c.strip().strip("'\"") for c in m.group(1).split(",") if c.strip().strip("'\"")]
+
+
 READ_ONLY_CHOICES = {"read", "info", "outline", "list", "search", "windows", "current", "revisions"}
 # 다른 파일의 명령이 맞는 경우: [추천]으로 값만 바꾸면 또 틀리므로 맞는 명령을 안내만 함
 _WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --text "내용", PPT는 ppt.py write --text "내용", '
@@ -938,7 +947,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
             other = OTHER_COMMAND.get((self.tool_name, m.group(1).lower()))
             if other:
                 return " " + other
-            choices = list(subs) or re.findall(r"'([^']+)'", message.split("choose from", 1)[-1])
+            choices = list(subs) or choices_in_message(message)
             alias = COMMAND_ALIASES.get(self.tool_name, {}).get(m.group(1).lower())
             if alias and alias not in DESTRUCTIVE_COMMANDS:       # 같은 뜻 표에 있을 때만 [추천] (설계 권장 7번)
                 return f" [추천] {retry_replacing(m.group(1), alias)}"

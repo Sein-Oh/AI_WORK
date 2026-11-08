@@ -11,6 +11,11 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.84] - 2026-11-08
+- 고칠 것: `--action` 같은 고르는 값의 오타(`sheet --action del`)에 빈 `[후보] `를 냄 (집 PC pytest `test_action_typo_is_candidate_and_delete_is_destructive`).
+  Python 3.13.13 argparse는 오류 문장의 값에 따옴표를 붙이지 않는데(`choose from list, add`), 따옴표 안의 값만 읽었음.
+  `choices_in_message`가 두 형식을 모두 읽어 번호 `[후보]`와 `confirm_commands`를 다시 냄. 회귀 테스트 `test_invalid_choice_values_read_with_or_without_quotes`.
+
 ## [1.4.83] - 2026-11-08
 
 전체 검토(클라우드, 2026-11-08)에서 찾은 것. 경량 LLM이 묻지 않고 뜻이 다른 명령을 실행할 수 있던 곳부터.
