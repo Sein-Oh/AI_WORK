@@ -317,20 +317,15 @@ def match_open(kind: str, target: str, docs: Optional[List[Dict[str, Any]]] = No
     return hits[0] if hits else None
 
 
-def _sheet_key(name: str) -> str:
-    """대소문자, 공백, _ - . 를 무시한 시트 이름 비교값."""
-    return re.sub(r"[\s_\-.]+", "", str(name)).lower()
-
-
 def missing_sheet(name: str, names: List[str]) -> "rt.InputError":
     """쓰기 대상 시트가 없을 때의 오류. 새 시트는 만들지 않습니다.
-    - 표기만 다른 시트(대소문자·공백·_-. 차이)가 하나면 [추천]으로 그 이름 (바로 재시도 가능)
+    - 표기만 다른 시트(rt.name_key: 대소문자·공백·_-. 차이)가 하나면 [추천]으로 그 이름 (바로 재시도 가능)
     - 그 밖에는 needs_user_decision: 새 시트를 만들지(또는 비슷한 기존 시트에 쓸지) 사용자가 정함.
       message에는 사실만 적고 --new-sheet나 '만드세요' 같은 명령문을 넣지 않습니다
       (경량 LLM이 message의 명령문이나 [후보]의 '새 시트' 항목을 그대로 골라 묻지 않고 만든 사례: 시나리오 10).
       --new-sheet는 agent_directive에만, 사용자가 만들라고 답한 경우라는 조건과 함께 적습니다."""
-    key = _sheet_key(name)
-    same = [n for n in names if _sheet_key(n) == key]
+    key = rt.name_key(name)
+    same = [n for n in names if rt.name_key(n) == key]
     if len(same) == 1:
         return rt.InputError(f"시트 '{name}'이(가) 없습니다. 표기(대소문자·공백·_-.)만 다른 기존 시트가 있습니다. [추천] {rt.retry_replacing(name, same[0], '--sheet')}",
                              no_fallback=True, log_message=f"시트 '{name}'이(가) 없습니다. 표기만 다른 기존 시트가 있습니다. [추천 생략]")

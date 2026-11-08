@@ -428,7 +428,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
     _SHEET_SCANS.clear()      # 이번 읽기에서 훑은 것만 closed_uncomputed가 다시 씀
     _FAR.clear()
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
     try:
         names = list(wb.sheetnames)
         if sheet:
@@ -548,7 +548,7 @@ def _closed_formulas(path: str, sheet: str, r0: int, c0: int, matrix: List[List[
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일의 수식 읽기")
     from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
     out: List[Dict[str, Any]] = []
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=False))
     try:
         ws = wb[sheet]
         for i, row in enumerate(ws.iter_rows(min_row=r0, max_row=r0 + nrows - 1, min_col=c0, max_col=c0 + ncols - 1)):
@@ -3202,14 +3202,14 @@ _LETTERS = re.compile(r"^[A-Za-z]{1,3}$")
 def resolve_column(key: str, header: Optional[List[Any]], c0: int, ncols: int, what: str = "열",
                    option: Any = None) -> Tuple[int, bool]:
     """--by/--where의 열 -> (범위 안 열 위치 0부터, 머리글 이름으로 찾았는지).
-    머리글(header)이 있으면 이름(대소문자·공백·_- 무시)을 먼저 찾고, 없으면 열 문자(B, AA). 찾지 못하면 [후보] 머리글 이름."""
+    머리글(header)이 있으면 이름(같은 이름, 없으면 rt.name_key로 표기만 다른 이름)을 먼저 찾고, 없으면 열 문자(B, AA). 찾지 못하면 [후보] 머리글 이름."""
     k = str(key).strip()
     names = [("" if v is None else str(out_value(v))).strip() for v in (header or [])]
     if header is not None:
-        exact = [i for i, nm in enumerate(names) if nm and nm.casefold() == k.casefold()]
+        exact = [i for i, nm in enumerate(names) if nm and rt.exact_key(nm) == rt.exact_key(k)]
         if not exact:
-            nk = rt._same_name_key(k)
-            exact = [i for i, nm in enumerate(names) if nm and rt._same_name_key(nm) == nk]
+            nk = rt.name_key(k)
+            exact = [i for i, nm in enumerate(names) if nm and rt.name_key(nm) == nk]
         if len(exact) == 1:
             return exact[0], True
         if len(exact) > 1:
@@ -3398,7 +3398,7 @@ def range_sort(args) -> Dict[str, Any]:
         if args.desc is not None and args.desc != "*":
             desc_keys = set()
             for d in [x.strip() for x in str(args.desc).split(",") if x.strip()]:
-                hit = [i for i, k in enumerate(keys) if rt._same_name_key(k) == rt._same_name_key(d)]
+                hit = [i for i, k in enumerate(keys) if rt.name_key(k) == rt.name_key(d)]
                 if not hit:
                     raise rt.ambiguous(f"--desc '{d}'이(가) --by에 없습니다. --by에 쓴 기준 중에서 고르세요.", keys,
                                        log_message="--desc 기준이 --by에 없음", replace=d)
@@ -3485,13 +3485,13 @@ def _chart_matches(ws: Any, key: str) -> Tuple[List[Tuple[Any, Any, int]], List[
     by_name: List[Tuple[Any, Any, int]] = []
     by_title: List[Tuple[Any, Any, int]] = []
     names: List[str] = []
-    k = key.strip().lower()
+    k = rt.exact_key(key)
     for idx, obj in enumerate(_chart_objects(ws), 1):
         nm, title = str(obj.Name), _chart_title(obj)
         names += [x for x in (nm, title) if x]
-        if nm.strip().lower() == k:
+        if rt.exact_key(nm) == k:
             by_name.append((ws, obj, idx))
-        elif title and title.strip().lower() == k:
+        elif title and rt.exact_key(title) == k:
             by_title.append((ws, obj, idx))
     return by_name, by_title, names
 
@@ -3546,7 +3546,7 @@ def find_chart(t: off.OfficeTarget, name: Optional[str], sheet: Optional[str] = 
         raise rt.InputError(f"{where}에 차트가 없습니다. excel.py chart --range ... 로 먼저 만드세요.")
 
     def sheet_by_name(n: str) -> Optional[Any]:
-        return next((ws for ws in all_sheets if str(ws.Name).lower() == n.lower()), None)
+        return next((ws for ws in all_sheets if rt.exact_key(ws.Name) == rt.exact_key(n)), None)
 
     def mismatch(left: str) -> rt.InputError:
         return rt.InputError(f"차트 '{name}'의 시트 '{left}'와 --sheet '{sheet}'가 다릅니다. 아무것도 바꾸지 않았습니다. "

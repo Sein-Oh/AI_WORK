@@ -1419,3 +1419,56 @@ def test_read_empty_range_is_explicit_zero(xl_table, capsys):
     code, out = run_main(excel, capsys, "read", "--range", "H10:I12")
     assert code == 0 and out["count"] == 0 and out["preview"].startswith("0건:"), out
     assert out["agent_directive"].startswith("VERIFIED: 0건.") and "찾은 항목 없음" in out["agent_directive"], out
+
+
+# 1.4.87: 이름 비교 규칙 하나 (rt.exact_key, rt.name_key). 열린 문서(COM)와 닫힌 파일(openpyxl)이 같은 [추천]을 냄
+
+def _two_sheet_xlsx(path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet1"
+    wb.active["A1"] = "a"
+    wb.create_sheet("요약")
+    wb.save(path)
+    return str(path)
+
+
+def test_name_key_is_one_rule():
+    assert rt.name_key("Sheet.1") == rt.name_key(" sheet_1 ") == rt.name_key("SHEET-1") == rt.name_key("Sheet1")
+    assert rt.find_name(" SHEET1 ", ["Sheet1"]) == "Sheet1" and rt.find_name("Sheet.1", ["Sheet1"]) is None
+    assert rt.suggest("Sheet.1", ["Sheet1", "요약"]) == ["Sheet1"]
+
+
+@pytest.mark.parametrize("argv", [
+    ["read", "--sheet", "Sheet.1"],                                     # 열린 문서 읽기 (not_found)
+    ["write", "--sheet", "Sheet.1", "--range", "A1", "--value", "x"],  # 열린 문서 쓰기 (missing_sheet)
+], ids=["open-read", "open-write"])
+def test_sheet_spelling_same_recommendation_open(xl, capsys, argv):
+    code, out = run_main(excel, capsys, *argv)
+    assert code == 1 and "표기" in out["message"], out
+    assert option_value(recommended_argv(out["message"], "excel"), "--sheet") == "Sheet1"
+
+
+def test_sheet_spelling_same_recommendation_closed(tmp_path, capsys):
+    path = _two_sheet_xlsx(tmp_path / "닫힌.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", path, "--sheet", "Sheet.1")
+    assert code == 1 and "표기" in out["message"], out
+    assert option_value(recommended_argv(out["message"], "excel"), "--sheet") == "Sheet1"
+
+
+def test_closed_xlsx_load_retries_transient_lock(tmp_path, capsys, monkeypatch):
+    """닫힌 xlsx를 여는 openpyxl.load_workbook도 retry_fs (백신·동기화 프로그램의 잠깐 잠금, JIT 복구 표)."""
+    import openpyxl
+    path = _two_sheet_xlsx(tmp_path / "잠김.xlsx")
+    real = openpyxl.load_workbook
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError(13, "잠김", path)
+        return real(*a, **k)
+    monkeypatch.setattr(openpyxl, "load_workbook", flaky)
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    code, out = run_main(excel, capsys, "read", "--target", path, "--sheet", "Sheet1")
+    assert code == 0 and out["values"][0][0] == "a" and len(calls) >= 2, out

@@ -1319,7 +1319,7 @@ def parse_xlsx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         raise _encrypted_hint(path)
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "XLSX 읽기")
     try:
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
     except Exception:
         raise _encrypted_hint(path)
     b = UnitBuilder()
@@ -2061,7 +2061,7 @@ def write_xlsx_table(path: str, header: List[str], rows: List[List[Any]], widths
         wb.save(p)
 
     out = rt.save_with_lock_fallback(path, _write, "엑셀 파일")
-    wb = openpyxl.load_workbook(out, read_only=True)
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(out, read_only=True))
     try:
         n = sum(1 for _ in wb.active.iter_rows(values_only=True))
     finally:

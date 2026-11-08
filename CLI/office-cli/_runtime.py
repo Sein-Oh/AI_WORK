@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.86"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.87"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -356,7 +356,7 @@ def check_saved_file(path: str, expected_rows: Optional[int] = None, delimiter: 
     try:
         if ext in (".xlsx", ".xlsm"):
             import openpyxl
-            wb = openpyxl.load_workbook(path, read_only=True)
+            wb = retry_fs(lambda: openpyxl.load_workbook(path, read_only=True))
             try:
                 if not wb.sheetnames:
                     return "저장한 엑셀 파일에 시트가 없음"
@@ -1429,13 +1429,28 @@ def write_text(path: str, text: str) -> str:
 # 5. LLM 친화 도우미
 # ==============================================================================
 
+# 이름 비교 규칙 (시트·열 머리글·메일 폴더 등 모든 이름 찾기, 열린 문서(COM)와 닫힌 파일(openpyxl) 같음, 1.4.87):
+# - 같은 이름: exact_key (앞뒤 공백, 대소문자만 무시) -> 그 이름을 그대로 씀 (find_name)
+# - 표기만 다른 이름: name_key (대소문자, 공백, _ - . 무시) -> 하나뿐이면 [추천] (not_found, missing_sheet), 열 머리글은 그대로 씀
+# - 그 밖에 비슷한 이름: [후보] (suggest)
+
+def exact_key(s: Any) -> str:
+    """같은 이름인지 견주는 값: 앞뒤 공백과 대소문자만 무시."""
+    return str(s).strip().casefold()
+
+
+def name_key(s: Any) -> str:
+    """표기만 다른 이름인지 견주는 값: 대소문자, 공백, _ - . 를 무시 ('Sheet.1' = 'sheet 1' = 'Sheet1')."""
+    return re.sub(r"[\s_\-.]+", "", str(s)).casefold()
+
+
 def suggest(name: str, candidates: Iterable[str], n: int = 3) -> List[str]:
-    """오타로 보이는 이름에 대해 비슷한 후보를 찾습니다 (대소문자/공백 무시, 부분 일치 우선)."""
+    """오타로 보이는 이름에 대해 비슷한 후보를 찾습니다 (name_key로 견줌, 부분 일치 우선)."""
     cands = [str(c) for c in candidates]
-    key = str(name).strip().lower().replace(" ", "")
+    key = name_key(name)
     if not key:
         return []
-    norm = {c: c.strip().lower().replace(" ", "") for c in cands}
+    norm = {c: name_key(c) for c in cands}
     exact = [c for c in cands if norm[c] == key]
     if exact:
         return exact[:n]
@@ -1450,23 +1465,19 @@ def suggest(name: str, candidates: Iterable[str], n: int = 3) -> List[str]:
 
 
 def find_name(name: str, candidates: Iterable[str]) -> Optional[str]:
-    """대소문자/앞뒤 공백을 무시하고 정확히 같은 이름을 찾습니다."""
-    key = str(name).strip().lower()
+    """같은 이름(exact_key: 앞뒤 공백·대소문자만 무시)을 찾습니다. 없으면 None."""
+    key = exact_key(name)
     for c in candidates:
-        if str(c).strip().lower() == key:
+        if exact_key(c) == key:
             return str(c)
     return None
-
-
-def _same_name_key(s: Any) -> str:
-    return re.sub(r"[\s_\-]+", "", str(s)).casefold()
 
 
 def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", vocab: bool = False,
               display: Optional[Callable[[str], str]] = None, log_name: Optional[str] = None,
               log_extra: Optional[str] = None, option: Optional[str] = None) -> InputError:
     """'찾을 수 없음' InputError (R8).
-    - 표기만 다른(대소문자·공백·_-) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
+    - 표기만 다른(name_key: 대소문자·공백·_-.) 이름이 하나뿐이면 [추천]: 뜻이 같아 LLM이 바로 1회 재시도해도 됩니다.
     - 부분·유사 일치는 뜻이 다를 수 있어(2024 -> 2024_1분기, 견적서.pdf -> 견적서_구버전.pdf) [후보]: 사용자가 고릅니다.
     - vocab=True(도구가 정한 옵션 값: 색 이름, 테마 등): 오타로 보이는 가까운 값 하나도 [추천] (사용자 데이터가 아니라 뜻이 바뀌지 않음).
     - 비슷한 것도 없으면 사용 가능한 이름 일부.
@@ -1477,12 +1488,12 @@ def not_found(kind: str, name: str, candidates: Iterable[str], extra: str = "", 
     option: 이름을 준 옵션 (고친 명령에서 그 옵션 값만 바꿈, retry_replacing)."""
     show = display or (lambda c: c)
     cands = [str(c) for c in candidates]
-    key = _same_name_key(name)
-    same = [c for c in cands if key and _same_name_key(c) == key]
+    key = name_key(name)
+    same = [c for c in cands if key and name_key(c) == key]
     if vocab and not same:
-        close = difflib.get_close_matches(key, [_same_name_key(c) for c in cands], n=2, cutoff=0.75)
+        close = difflib.get_close_matches(key, [name_key(c) for c in cands], n=2, cutoff=0.75)
         if len(close) == 1:
-            same = [c for c in cands if _same_name_key(c) == close[0]][:1]
+            same = [c for c in cands if name_key(c) == close[0]][:1]
     head = f"{kind} '{show(name)}'을(를) 찾을 수 없습니다.{extra}"
     masked = log_name is not None or log_extra is not None
     log_head = head if not masked else (f"{kind} '{name if log_name is None else log_name}'을(를) 찾을 수 없습니다."

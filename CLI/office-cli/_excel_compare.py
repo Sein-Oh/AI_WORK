@@ -645,7 +645,7 @@ def _cmp_check_xlsx(path: str, expected: Dict[str, int]) -> Optional[str]:
     if problem:
         return problem
     import openpyxl
-    wb = openpyxl.load_workbook(path, read_only=True)
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True))
     try:
         for title, n in expected.items():
             if title not in wb.sheetnames:

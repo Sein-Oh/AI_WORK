@@ -11,6 +11,18 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.87] - 2026-11-08
+
+### 수정
+- 이름 비교 규칙이 셋이던 것(`_office._sheet_key`: 공백·`_-.`·대소문자 무시, `_runtime._same_name_key`: `.`은 무시하지 않음,
+  `find_name`: 앞뒤 공백·소문자)을 `_runtime`의 `exact_key`(같은 이름: 앞뒤 공백·대소문자) 와 `name_key`(표기만 다른 이름: 대소문자·공백·`_-.`)
+  하나씩으로. 시트·열 머리글(`--by`, `--desc`, `--where`)·차트 이름·메일 폴더 찾기가 모두 이것을 씀. 전에는 `--sheet "Sheet.1"`이 열린 문서
+  쓰기(`missing_sheet`)에서는 `[추천] Sheet1`, 열린 문서 읽기와 닫힌 파일 읽기(`not_found`)에서는 `[후보]`였음. `suggest`도 `name_key`로 견줌.
+- 닫힌 xlsx를 여는 `openpyxl.load_workbook`을 모두 `retry_fs`로 (닫힌 파일 읽기·수식 읽기, reader xlsx 읽기, 저장 뒤 확인, compare 결과 확인).
+  compare만 재시도하고 excel read 등은 백신·동기화 프로그램의 잠깐 잠금에 바로 실패했음.
+- 회귀 테스트: `test_excel_read.py`의 `test_name_key_is_one_rule`, `test_sheet_spelling_same_recommendation_open`·`_closed`,
+  `test_closed_xlsx_load_retries_transient_lock`.
+
 ## [1.4.86] - 2026-11-08
 
 미리보기(`--dry-run`) 규칙을 하나로 (사용법 단순성 4번: 같은 옵션은 어느 명령에서나 같은 뜻, 같은 규칙).
