@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.85"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.86"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1762,3 +1762,66 @@ def next_command(script: str, args: Sequence[Any], purpose: str, destructive: bo
     if destructive:
         item["destructive"] = True
     return item
+
+
+# ==============================================================================
+# 6. 미리보기(--dry-run) 공통 (excel.py, word.py, ppt.py의 쓰기 명령)
+# ==============================================================================
+# 규칙 하나 (사용법 단순성 4번): 문서를 바꾸는 명령은 모두 --dry-run을 받음.
+#   미리보기가 있는 동작 -> dry_run_result (키: dry_run, count, planned, truncated, 바뀔 것이 있을 때만 confirm_commands)
+#   읽기만 하는 동작(list 등) -> 그대로 실행하고 warnings에 무시했다고 적음 (dry_run_read_only)
+#   미리보기가 없는 쓰기 동작 -> 바꾸지 않고 STOP_RETRY (dry_run_unsupported): 되돌릴 수 있으면 [추천] --dry-run을 뺀 같은 명령,
+#   덮어쓰기·삭제가 들면(--overwrite, delete, clear) [후보] 1) 미리보기 없이 실행 + 같은 번호의 confirm_commands (사용자가 고른 뒤에만)
+
+DRY_RUN_SHOW = 50            # 미리보기 planned 목록 상한 (넘으면 truncated: true)
+DRY_RUN_DIRECTIVE = ("VERIFIED: 미리보기만 했고 문서는 바꾸지 않았습니다. preview를 사용자에게 알리고, 사용자가 실행을 원하면('예') "
+                     "confirm_commands[0]을 그대로 실행하세요.")
+DRY_RUN_NOTHING = ("VERIFIED: 미리보기만 했고 바뀔 것이 없습니다(0건, count 0). 실행할 명령이 없으니 실행하지 말고, 값을 바꿔 "
+                   "다시 미리 보지도 말고 preview를 사용자에게 그대로 알리세요.")
+DRY_RUN_DESTRUCTIVE = {"delete", "clear"}      # 미리보기 없이 실행하면 되돌리기 어려운 동작 (그리고 --overwrite)
+
+
+def dry_run_command(tool: str, purpose: str, destructive: bool = True, overwrite: bool = False) -> Dict[str, Any]:
+    """confirm_commands 항목: 지금 실행한 명령에서 --dry-run만 뺀 전체 명령 (사용자가 '예'라고 한 뒤에만 실행).
+    overwrite: 실제 실행이 --overwrite 없이는 멈출 때 붙임 (값이 있는 칸 덮어쓰기 등)."""
+    argv = [a for a in (CURRENT_ARGV or []) if a != "--dry-run"]
+    if overwrite and "--overwrite" not in argv:
+        argv.append("--overwrite")
+    return next_command(f"{tool}.py", argv, purpose, destructive=destructive or overwrite)
+
+
+def dry_run_result(tool: str, command: str, preview: str, count: int, planned: Sequence[str],
+                   confirm: Any, directive: str = "", **extra: Any) -> Dict[str, Any]:
+    """--dry-run 결과 (바꾸지 않음). planned는 앞 DRY_RUN_SHOW개, truncated는 늘 있음.
+    count가 0이거나 confirm이 없으면 실행할 명령을 주지 않고 DRY_RUN_NOTHING.
+    confirm: confirm_commands 항목 하나 또는 목록 (고를 것이 둘 이상이면 directive로 고르는 법을 적음)."""
+    fields: Dict[str, Any] = {"dry_run": True, "count": count, "planned": list(planned[:DRY_RUN_SHOW]),
+                              "truncated": len(planned) > DRY_RUN_SHOW}
+    fields.update(extra)
+    confirms = [confirm] if isinstance(confirm, dict) else list(confirm or [])
+    if count and confirms:
+        fields["confirm_commands"] = confirms
+        return ok(tool, command, preview, directive or DRY_RUN_DIRECTIVE, **fields)
+    return ok(tool, command, preview, DRY_RUN_NOTHING, **fields)
+
+
+def dry_run_read_only(payload: Dict[str, Any], dry_run: bool, what: str) -> Dict[str, Any]:
+    """읽기만 하는 동작(list 등)에 --dry-run: 받고 그대로 실행한 결과(payload)의 warnings에 무시했다고 적음."""
+    if dry_run and payload.get("status") == "ok":
+        payload["warnings"] = list(payload.get("warnings") or []) + [f"{what}은(는) 읽기만 하므로 --dry-run을 무시했습니다"]
+    return payload
+
+
+def dry_run_unsupported(tool: str, what: str) -> InputError:
+    """미리보기가 없는 쓰기 동작에 --dry-run: 아무것도 바꾸지 않고 멈춤 (raise로 씀).
+    되돌릴 수 있는 변경(office.py undo)이면 [추천] --dry-run을 뺀 같은 전체 명령,
+    덮어쓰기·삭제가 들면 [후보] 1) 미리보기 없이 실행과 같은 번호의 confirm_commands (destructive, 사용자가 고른 뒤에만)."""
+    argv = list(CURRENT_ARGV or [])
+    destructive = "--overwrite" in argv or bool(DRY_RUN_DESTRUCTIVE & set(argv))
+    cmd = dry_run_command(tool, f"{what} 미리보기 없이 실행", destructive)["command"]
+    head = f"{what}에는 미리보기(--dry-run)가 없어 아무것도 바꾸지 않았습니다."
+    if not destructive:
+        return InputError(head + " 되돌릴 수 있는 변경(office.py undo)이라 미리보기 없이 실행합니다. [추천] " + cmd)
+    return UserDecisionError(head + " 덮어쓰기·삭제가 들어 있어 미리보기 없이 실행할지 사용자 확인이 필요합니다.",
+                             "미리보기가 없는 동작입니다. 사용자에게 미리보기 없이 실행할지 묻고, '예'라고 하면 confirm_commands[0]을 "
+                             "1번 실행하세요.", candidates=["미리보기 없이 실행"], commands=[cmd], destructive=True)

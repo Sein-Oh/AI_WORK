@@ -11,6 +11,25 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.86] - 2026-11-08
+
+미리보기(`--dry-run`) 규칙을 하나로 (사용법 단순성 4번: 같은 옵션은 어느 명령에서나 같은 뜻, 같은 규칙).
+
+### 수정
+- 미리보기 결과를 세 곳(excel `dry_result`, ppt `_dry_run_fields`, word `_confirm_without_dry_run`)에서 따로 만들던 것을 `_runtime`의
+  `dry_run_result`·`dry_run_command` 하나로. 키는 어느 도구든 `dry_run`, `count`, `planned`(50개까지), `truncated`(늘 있음, excel은 넘칠 때만,
+  word write는 늘 false였음), 바뀔 것이 있을 때만 `confirm_commands`. 0건 directive가 셋(`DRY_NOTHING` "0건", `DRY_RUN_ZERO` "count 0",
+  word replace 따로)이던 것을 `DRY_RUN_NOTHING` 하나로, 바뀔 것이 있을 때는 `DRY_RUN_DIRECTIVE` 하나로 (excel write --cells, comment,
+  range insert/delete, word fill이 각자 문구를 썼음). range insert/delete 미리보기에도 `planned`.
+- `--dry-run`을 쓰기 명령마다 따로 정의해 어떤 명령은 받고(excel write·replace·sheet·range·chart·comment, word write·replace·fill,
+  ppt replace·slide) 어떤 명령은 인자 오류(excel style, word comment, ppt write·notes)였고, 받는 명령에서도 미리보기 없는 동작은
+  excel은 "--dry-run은 ...에만 씁니다" STOP_RETRY(읽기만 하는 list도), ppt slide list는 무시였음. 이제 문서를 바꾸는 명령은 모두 받고 도구가 정함:
+  미리보기가 있으면 미리보기, 읽기만 하는 동작(list, notes 읽기)은 그대로 실행하고 `warnings`, 미리보기가 없는 쓰기 동작은 아무것도 바꾸지 않고
+  STOP_RETRY: 되돌릴 수 있으면 `[추천]` `--dry-run`만 뺀 같은 전체 명령, `--overwrite`·delete·clear가 들면 `[후보] 1) 미리보기 없이 실행`과
+  같은 번호의 `confirm_commands`(destructive) (`dry_run_read_only`, `dry_run_unsupported`).
+- 회귀 테스트: `test_contract.py`의 `test_every_write_command_accepts_dry_run`, `test_dry_run_without_preview_*`,
+  `test_dry_run_on_read_only_action_is_ignored_with_warning`, `test_dry_run_results_share_keys`, `test_dry_run_zero_result_wording_is_one`.
+
 ## [1.4.85] - 2026-11-08
 
 ### 구조
@@ -1989,7 +2008,7 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 
 ## 남은 할 일
 - [ ] 1.4.83 검토에서 남긴 것: `excel read --where`의 열 이름 `[후보]`는 번호 없음(식 안의 이름 자리를 바꾼 명령 필요), `word write --dry-run`이
-  새 파일 경로에서 '문서 없음'으로 멈춤, 읽기 동작에 `--dry-run`을 주면 excel은 STOP_RETRY·ppt는 무시(규칙 4번), `--all`의 뜻이 도구마다 다름
+  새 파일 경로에서 '문서 없음'으로 멈춤, `--all`의 뜻이 도구마다 다름
   (reply 전체 답장, chart 모든 차트, clear 캐시 전부), outlook `--to`/`--attach`/`--name`·word `--slots`의 `;` 구분(규칙 3번)
 - [ ] 사용법 단순성 남은 것: outlook `--to` 받는 사람의 `;` 구분(Outlook 관례), outlook 첨부 `--name`의 `;` 구분, `--map` JSON 인자,
   같은 뜻 표가 `--opt=값` 형태는 못 고침 (`--query` 구분자와 `[후보]` 번호는 1.4.81)

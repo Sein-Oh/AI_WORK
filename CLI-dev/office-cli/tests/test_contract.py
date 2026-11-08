@@ -1317,3 +1317,89 @@ def test_retry_replacing_changes_only_the_named_option(monkeypatch):
     monkeypatch.setattr(rt, "CURRENT_ARGV", ["search", "--query", "보관", "--folder", "받은 편지함\\보관"])
     got = split_command(rt.retry_replacing("보관", "보관함", "--folder"))[2:]
     assert got == ["search", "--query", "보관", "--folder", "받은 편지함\\보관함"], got
+
+
+# --dry-run 규칙 하나 (1.4.86, 사용법 단순성 4번): 문서를 바꾸는 명령은 모두 --dry-run을 받음.
+# 미리보기가 있으면 미리 보고, 읽기만 하면 warnings, 미리보기가 없으면 바꾸지 않고 [추천](되돌릴 수 있음) 또는 [후보](덮어쓰기·삭제)
+
+def test_every_write_command_accepts_dry_run():
+    for mod in (excel, word, ppt):
+        parser = mod.build_cli()
+        subs = next(a for a in parser._actions if a.__class__.__name__ == "_SubParsersAction").choices
+        for name, sub in subs.items():
+            opts = {o for a in sub._actions for o in a.option_strings}
+            if "--no-focus" in opts:              # 쓰기 명령 (common(write=True))
+                assert "--dry-run" in opts, (mod.__name__, name)
+
+
+def test_dry_run_without_preview_recommends_same_command(xl, capsys):
+    app, wb = xl
+    ws = wb.Worksheets("Sheet1")
+    ws.set(1, 1, "a")
+    argv = ["style", "--range", "A1", "--bold", "--dry-run"]
+    code, out = run_main(excel, capsys, *argv)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "미리보기(--dry-run)가 없어" in out["message"], out
+    assert recommended_argv(out["message"], "excel") == argv[:-1]          # --dry-run만 뺀 같은 전체 명령
+    assert "confirm_commands" not in out
+    assert ws.Range("A1").Font.Bold is not True                               # 바꾸지 않음
+
+
+def test_dry_run_without_preview_asks_when_destructive(xl, capsys):
+    argv = ["range", "--action", "merge", "--range", "A1:B1", "--overwrite", "--dry-run"]
+    code, out = run_main(excel, capsys, *argv)
+    assert code == 1 and out["error_type"] == "needs_user_decision" and "[추천]" not in out["message"], out
+    assert "[후보] 1) 미리보기 없이 실행" in out["message"]
+    item = out["confirm_commands"][0]
+    assert item["destructive"] is True and split_command(item["command"])[2:] == argv[:-1], out
+
+
+@pytest.mark.parametrize("tool,argv", [
+    (excel, ["write", "--range", "A1", "--value", "x", "--dry-run"]),
+    (excel, ["chart", "--range", "A1:B2", "--dry-run"]),
+    (excel, ["sheet", "--action", "add", "--name", "새시트", "--dry-run"]),
+    (word, ["comment", "--action", "add", "--anchor", "일정", "--text", "확인", "--dry-run"]),
+    (ppt, ["write", "--title", "제목", "--dry-run"]),
+    (ppt, ["notes", "--slide", "1", "--text", "노트", "--dry-run"]),
+], ids=lambda v: v if isinstance(v, str) else "")
+def test_dry_run_without_preview_changes_nothing(request, capsys, tool, argv):
+    request.getfixturevalue({"excel": "xl", "word": "wd", "ppt": "pp"}[tool.__name__])
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 1 and "미리보기(--dry-run)가 없어 아무것도 바꾸지 않았습니다" in out["message"], out
+    assert recommended_argv(out["message"], tool.__name__) == argv[:-1]
+
+
+@pytest.mark.parametrize("tool,argv", [
+    (excel, ["sheet", "--action", "list", "--dry-run"]),
+    (excel, ["comment", "--dry-run"]),
+    (word, ["comment", "--dry-run"]),
+    (ppt, ["notes", "--dry-run"]),
+    (ppt, ["slide", "--action", "list", "--dry-run"]),
+], ids=lambda v: v if isinstance(v, str) else "")
+def test_dry_run_on_read_only_action_is_ignored_with_warning(request, capsys, tool, argv):
+    request.getfixturevalue({"excel": "xl", "word": "wd", "ppt": "pp"}[tool.__name__])
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 0 and any("읽기만 하므로 --dry-run을 무시했습니다" in w for w in out["warnings"]), out
+
+
+@pytest.mark.parametrize("tool,argv", [
+    (excel, ["replace", "--find", "초안", "--replace", "최종", "--dry-run"]),
+    (word, ["replace", "--find", "일정", "--replace", "계획", "--dry-run"]),
+    (ppt, ["slide", "--action", "add", "--dry-run"]),
+], ids=lambda v: v if isinstance(v, str) else "")
+def test_dry_run_results_share_keys(request, capsys, tool, argv):
+    """미리보기 결과는 어느 도구든 dry_run, count, planned, truncated(늘 있음), 바뀔 것이 있으면 같은 directive."""
+    held = request.getfixturevalue({"excel": "xl", "word": "wd", "ppt": "pp"}[tool.__name__])
+    if tool is excel:
+        held[1].Worksheets("Sheet1").set(1, 1, "초안")
+    code, out = run_main(tool, capsys, *argv)
+    assert code == 0 and out["dry_run"] is True and out["count"] >= 1 and out["truncated"] is False, out
+    assert out["agent_directive"] == rt.DRY_RUN_DIRECTIVE and "--dry-run" not in out["confirm_commands"][0]["command"]
+
+
+@pytest.mark.parametrize("tool", [excel, word, ppt], ids=lambda m: m.__name__)
+def test_dry_run_zero_result_wording_is_one(request, capsys, tool):
+    """0건 미리보기 문구는 하나 (DRY_RUN_NOTHING), 실행할 명령 없음."""
+    request.getfixturevalue({"excel": "xl", "word": "wd", "ppt": "pp"}[tool.__name__])
+    code, out = run_main(tool, capsys, "replace", "--find", "없는글", "--replace", "x", "--dry-run")
+    assert code == 0 and out["count"] == 0 and out["agent_directive"] == rt.DRY_RUN_NOTHING, out
+    assert "confirm_commands" not in out and out["truncated"] is False

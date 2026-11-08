@@ -69,12 +69,22 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   읽기·저장 뒤 열린 문서에 넣기(`read --save` 뒤 `word.py`/`ppt.py`/`excel.py write`, `transfer`, `write` 뒤 `chart`, `chart` 뒤 `transfer`, 1.4.75).
   덮어쓰기·삭제·메일 발송(`--overwrite`가 든 명령, `range --action delete`, `comment --action delete`, `send`)에는 `"destructive": true`(1.4.75):
   전역 지침 3장 6번에서 사용자가 "묻지 말고 끝까지"라고 했어도 이 항목은 늘 묻습니다. 캐시 지우기(`reader.py clear`)는 원본이 그대로라 destructive가 아닙니다.
-- 미리보기 `--dry-run`(R8, 1.4.81 확대): 문서를 읽기 전용으로 열어 바꾸지 않고(되돌리기 지점 없음) 바뀔 곳 `planned`(50개까지, 넘으면 `truncated`),
-  `count`, 실제 실행 명령 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 실제 실행이 `--overwrite` 없이 멈출 곳이면 `--overwrite` 포함, `destructive`)을 줍니다.
-  바뀔 것이 없으면 `count: 0`과 명령 없음. 실제 실행과 같은 검사(없는 시트·슬라이드, 앵커 없음, 보호된 시트)를 그대로 합니다. 받는 명령:
-  excel `write --cells`, `replace`, `range`(insert, delete, clear, move), `sheet --action delete`(다른 시트의 `#REF!`가 될 수식 칸 수), `chart --action delete`(`--all` 포함),
-  `comment` add/delete, word `fill`, `replace`, `write`(모든 `--pos`, `replace`는 지워질 단락), ppt `replace`, `slide`(delete, clear, `--all-slides`, add, duplicate, move.
-  list는 무시하고 `warnings`), reader `clear`. excel의 다른 `range`·`sheet`·`chart` 동작에 주면 STOP_RETRY.
+- 미리보기 `--dry-run`(R8, 1.4.86 규칙 하나): excel·word·ppt에서 문서를 바꾸는 명령(`--no-focus`가 있는 명령)은 모두 `--dry-run`을 받습니다.
+  공통 함수는 `_runtime.dry_run_result`·`dry_run_command`·`dry_run_read_only`·`dry_run_unsupported` 하나씩입니다.
+  1. 미리보기가 있는 동작: 문서를 읽기 전용으로 열어 바꾸지 않고(되돌리기 지점 없음) 늘 같은 키 `dry_run: true`, `count`, `planned`(50개까지),
+     `truncated`(늘 있음, 50개를 넘으면 true), 바뀔 것이 있을 때만 `confirm_commands[0]`(`--dry-run`만 뺀 전체 명령, 실제 실행이 `--overwrite` 없이
+     멈출 곳이면 `--overwrite` 포함, `destructive`). directive는 `DRY_RUN_DIRECTIVE` 하나(excel comment add의 바꾸기/덧붙이기 고르기와 word fill의
+     표 칸 확인만 한 줄 더함). 바뀔 것이 없으면 `count: 0`, 명령 없음, directive `DRY_RUN_NOTHING`("바뀔 것이 없습니다(0건, count 0)") 하나.
+     실제 실행과 같은 검사(없는 시트·슬라이드, 앵커 없음, 보호된 시트)를 그대로 합니다. 해당 동작: excel `write --cells`, `replace`,
+     `range`(insert, delete, clear, move), `sheet --action delete`(다른 시트의 `#REF!`가 될 수식 칸 수), `chart --action delete`(`--all` 포함),
+     `comment` add/delete, word `fill`, `replace`, `write`(모든 `--pos`, `replace`는 지워질 단락), ppt `replace`, `slide`(delete, clear,
+     `--all-slides`, add, duplicate, move). (reader `clear --dry-run`은 캐시 지우기라 이 규칙 밖)
+  2. 읽기만 하는 동작(excel `sheet`·`chart`·`comment`의 list, word `comment` list, ppt `slide list`, `notes` 읽기): 그대로 실행하고
+     `warnings`에 "읽기만 하므로 --dry-run을 무시했습니다".
+  3. 미리보기가 없는 쓰기 동작(excel `write --value/--values/--file/--formula`, `style`, `sheet` add/rename/copy/select, 그 밖의 `range` 동작,
+     `chart` create, word `comment` add, ppt `write`, `notes` 쓰기): 아무것도 바꾸지 않고 STOP_RETRY. 되돌릴 수 있는 변경(`office.py undo`)이면
+     message에 `[추천]` `--dry-run`만 뺀 같은 전체 명령, 명령에 `--overwrite`나 `delete`·`clear`가 들면 `needs_user_decision`과
+     `[후보] 1) 미리보기 없이 실행` + 같은 번호의 `confirm_commands`(`destructive`, 사용자가 고른 뒤에만).
 - 오타 추천(1.4.75): 없는 명령 이름은 가장 비슷한 명령을 `[추천]`(LLM이 묻지 않고 1번 실행)으로 주지만, 되돌리기 어려운 명령(`send`, `clear`, `undo`)이면
   `[후보]`로 줍니다(`sent`, `sned`, `end` -> 사용자에게 물음).
 
