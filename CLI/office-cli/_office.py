@@ -1166,11 +1166,35 @@ def excel_batch(app: Any) -> Iterator[None]:
                     pass
 
 
+# Excel 오류 값: pywin32는 오류 칸을 정수(0x800A0000 + xlErr 번호)로 줌
+XL_ERRORS = {-2146826288: "#NULL!", -2146826281: "#DIV/0!", -2146826273: "#VALUE!", -2146826265: "#REF!", -2146826259: "#NAME?", -2146826252: "#NUM!", -2146826246: "#N/A", -2146826245: "#GETTING_DATA", -2146826243: "#SPILL!", -2146826241: "#BLOCKED!", -2146826238: "#CALC!"}
+
+
+def xl_error(v: Any) -> Optional[str]:
+    """칸 값이 Excel 오류 값이면 그 표시(#NAME? 등), 아니면 None."""
+    if isinstance(v, int) and not isinstance(v, bool) and v in XL_ERRORS:
+        return XL_ERRORS[v]
+    if isinstance(v, str) and v.strip() in XL_ERRORS.values():
+        return v.strip()
+    return None
+
+
+def com_value(v: Any) -> Any:
+    """COM 칸 값 하나: 통화 서식 칸(VT_CY)은 pywin32가 decimal.Decimal로 주므로 float로 (숫자 비교·정렬·조건 검색에서 숫자로 보게,
+    2026-11-09 검토 A7: 통화 열 정렬이 '이미 정렬됨', --where '금액 >= 10'이 0건이었음)."""
+    if type(v).__name__ == "Decimal":
+        try:
+            return float(v)
+        except Exception:
+            return v
+    return v
+
+
 def range_to_matrix(values: Any) -> List[List[Any]]:
-    """Range.Value/Formula 결과를 항상 2차원 리스트로 (단일 셀은 스칼라, 여러 셀은 한 행이어도 튜플의 튜플)."""
+    """Range.Value/Formula 결과를 항상 2차원 리스트로 (단일 셀은 스칼라, 여러 셀은 한 행이어도 튜플의 튜플). 통화 값은 float로."""
     if not isinstance(values, (tuple, list)):
-        return [[values]]
-    return [list(row) if isinstance(row, (tuple, list)) else [row] for row in values]
+        return [[com_value(values)]]
+    return [[com_value(v) for v in row] if isinstance(row, (tuple, list)) else [com_value(row)] for row in values]
 
 
 def office_caps(app: Any) -> Dict[str, Any]:

@@ -11,6 +11,20 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.94] - 2026-11-09
+
+전체 검토 1장 A7~A9: 열린 엑셀 문서에서 틀린 결과를 `VERIFIED:`로 내던 결함 (가짜 COM을 실제 동작에 맞게 고쳐 시험, 실기 항목은 3장 묶음에서).
+
+### 수정
+- A7 통화 서식 칸: pywin32는 통화(VT_CY) 값을 `decimal.Decimal`로 주는데 숫자로 보지 않아 정렬이 "이미 정렬되어 있음", 머리글 판별 실패,
+  `--where "금액 >= 10"`이 0건이었음. `_office.range_to_matrix`(`com_value`)가 `float`로 바꿈. 가짜 COM 정렬도 Decimal을 숫자로.
+- A8 `+ - @ =`로 시작하는 글(`+82-10-1234-5678`, `-007`, `- 검토 필요`)은 앞에 `'`를 붙여 글자 그대로 씀 (Excel이 수식으로 계산해 -6840, `#NAME?`).
+  수식은 `--formula`와 `--cells`의 `==`로만. 다시 읽기 확인(`_same_cell`)은 글을 썼는데 글이 아닌 값이면 날짜 모양 글이 날짜가 된 것과
+  true/false가 논리값이 된 것만 인정하고, 그 밖(숫자, 오류 값)은 UNVERIFIED (전에는 비어 있지만 않으면 인정).
+- A9 수식: 수식 글만 다시 읽던 것에 칸 값도 읽어 오류 값(`#NAME?`, `#REF!`, `#VALUE!`, `#DIV/0!`, `#N/A` 등, `_office.xl_error`)이면
+  `UNVERIFIED:`(어느 칸이 어떤 오류). 동적 배열 함수(`UNIQUE`, `FILTER`, `SORT`, `SEQUENCE`, `XLOOKUP` 등)는 `Range.Formula2`로 씀
+  (Formula로 쓰면 Office 2021에서 `@` 암시적 교차로 펼쳐지지 않음). Formula2가 없는 Office(2019)는 Formula로.
+
 ## [1.4.93] - 2026-11-09
 
 전체 검토 2장 B1~B6: 계약 위반·실행 못 하는 `[추천]`.

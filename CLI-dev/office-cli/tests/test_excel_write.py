@@ -2250,3 +2250,64 @@ def test_multi_formula_single_cell_recommends_table_rows(xl_table, capsys):
     assert option_value(rec, "--range") == "D2:E5", rec
     code, out = run_main(excel, capsys, "write", "--range", "H2", "--formula", "=B2*2", "=C2*3")
     assert code == 1 and "[추천]" not in out["message"] and "마지막 행" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A7: 통화 서식 칸(pywin32가 decimal.Decimal로 줌)도 숫자로 (정렬, 머리글 판별, --where)
+# ---------------------------------------------------------------------------
+
+
+def test_currency_cells_are_numbers(xl_table, capsys):
+    from decimal import Decimal
+    for r, v in ((2, "10"), (3, "100"), (4, "9"), (5, "1000")):
+        xl_table.values[(r, 3)] = Decimal(v)
+    code, out = run_main(excel, capsys, "read", "--where", "금액 >= 10")
+    assert code == 0 and out["count"] == 3, out
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "C")
+    assert code == 0 and "이미 정렬" not in out["preview"], out
+    assert [float(xl_table.values[(r, 3)]) for r in range(2, 6)] == [9, 10, 100, 1000], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A8: + - @ = 로 시작하는 글은 글자 그대로, 글을 썼는데 글이 아닌 값이 되면 UNVERIFIED
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text", ["+82-10-1234-5678", "-007", "- 검토 필요", "@담당", "=아님"])
+def test_text_starting_with_formula_marks_stays_text(xl, capsys, text):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.typing = True                         # 실제 Excel처럼 대입한 글을 해석
+    code, out = run_excel(capsys, "write", "--range", "A1", "--value", text)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert ws.values[(1, 1)] == text and (1, 1) in ws.prefixed, ws.values
+
+
+def test_text_changed_by_excel_is_not_verified():
+    assert excel._same_cell("+82-10-1234-5678", -6840) is False
+    assert excel._same_cell("- 검토", -2146826259) is False
+    assert excel._same_cell("2026-01-05", 46027.0) is True and excel._same_cell("true", True) is True
+    assert excel._same_cell("abc", 5) is False and excel._same_cell(5, 5.0) is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A9: 수식은 글자만이 아니라 값도 확인 (오류 값이면 UNVERIFIED), 동적 배열 함수는 Formula2
+# ---------------------------------------------------------------------------
+
+
+def test_formula_with_error_value_is_unverified(xl_table, capsys):
+    code, out = run_main(excel, capsys, "write", "--range", "D2", "--formula", "=합계(B2:B3)")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "#NAME?" in out["agent_directive"], out
+    code, out = run_main(excel, capsys, "write", "--cells", "E2==합계(C2:C3)")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "#NAME?" in out["agent_directive"], out
+    code, out = run_main(excel, capsys, "write", "--range", "F2", "--formula", "=SUM(C2:C3)")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+
+
+def test_dynamic_array_formula_uses_formula2(xl_table, capsys):
+    code, out = run_main(excel, capsys, "write", "--range", "E2", "--formula", "=UNIQUE(B2:B5)")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert any(e[0] == "Formula2" for e in xl_table.log), xl_table.log[-5:]
+    xl_table.no_formula2 = True                       # Office 2019: Formula2 없음 -> Formula
+    code, out = run_main(excel, capsys, "write", "--range", "F2", "--formula", "=SORT(B2:B5)")
+    assert code == 0 and xl_table.formulas[(2, 6)] == "=SORT(B2:B5)", out

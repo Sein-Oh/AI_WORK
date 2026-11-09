@@ -175,8 +175,10 @@ _REINTERPRETED = re.compile(r"^(?:0\d+(?:\.\d+)?|[+-]?\d{16,}(?:\.\d+)?|\d{1,2}\
 
 
 def xl_text(v: Any) -> Any:
-    """셀에 쓸 값. 글자인데 Excel이 숫자/날짜로 바꿔 버릴 모양이면 앞에 '를 붙여 글자 그대로 둡니다 ('는 셀 값에 남지 않음)."""
-    if isinstance(v, str) and _REINTERPRETED.match(v.strip()):
+    """셀에 쓸 값. 글자인데 Excel이 숫자/날짜로 바꿔 버릴 모양이면 앞에 '를 붙여 글자 그대로 둡니다 ('는 셀 값에 남지 않음).
+    + - @ = 로 시작하는 글도 (Excel이 수식으로 계산: '+82-10-1234-5678' -> -6840, '- 검토 필요' -> #NAME?, 2026-11-09 검토 A8).
+    수식은 --formula와 --cells의 == 경로로만 씁니다."""
+    if isinstance(v, str) and (_REINTERPRETED.match(v.strip()) or v.lstrip()[:1] in ("+", "-", "@", "=")):
         return "'" + v
     return v
 
@@ -1476,6 +1478,22 @@ def _restore(rng: Any, saved: Tuple[List[List[Any]], List[List[Any]], List[List[
                for ra, rb in zip(a, b) for x, y in zip(ra, rb)) and len(forms) == len(forms2)
 
 
+# 동적 배열 함수: Range.Formula로 쓰면 Office 2021에서 암시적 교차(@)로 들어가 펼쳐지지 않음 -> Formula2 (2026-11-09 검토 A9)
+DYNAMIC_ARRAY = re.compile(r"\b(?:UNIQUE|FILTER|SORT|SORTBY|SEQUENCE|RANDARRAY|XLOOKUP|XMATCH|TEXTSPLIT|VSTACK|HSTACK|TOCOL|TOROW|"
+                           r"TAKE|DROP|CHOOSECOLS|CHOOSEROWS|EXPAND|WRAPROWS|WRAPCOLS|LET|LAMBDA)\s*\(", re.IGNORECASE)
+
+
+def _set_formula2(rng: Any, formula: Any) -> bool:
+    """Formula2로 씀 (Office 2021 이상). 없는 버전(2019)이면 False (호출하는 쪽이 Formula로)."""
+    try:
+        if not hasattr(rng, "Formula2"):
+            return False
+        rng.Formula2 = formula
+        return True
+    except AttributeError:
+        return False
+
+
 def apply_writes(t: Any, items: Sequence[Tuple[Any, int, int, int, int, str, Any]], new_sheet: Any = None) -> None:
     """값·수식을 씁니다 [(시트, r1, c1, r2, c2, value|values|formula, 값)]. 엑셀이 하나라도 받지 않으면(잘못된 수식 등)
     이미 쓴 칸을 원래대로 되돌리고, 이 명령이 만든 새 시트(new_sheet)는 지운 뒤 STOP_RETRY (반쯤 쓴 채로 남기지 않음)."""
@@ -1494,7 +1512,8 @@ def apply_writes(t: Any, items: Sequence[Tuple[Any, int, int, int, int, str, Any
                 prior = None
             try:
                 if kind == "formula":
-                    rng.Formula = payload
+                    if not (DYNAMIC_ARRAY.search(str(payload)) and _set_formula2(rng, payload)):
+                        rng.Formula = payload
                 else:
                     rng.Value = payload
             except Exception as e:
@@ -2708,7 +2727,20 @@ def _same_cell(want: Any, got: Any) -> bool:
             return False
     if isinstance(got, str):
         return got == str(want)
-    return got is not None and got != ""
+    if got is None or got == "" or off.xl_error(got):
+        return False
+    if isinstance(want, str):
+        # 글을 썼는데 글이 아닌 값: Excel이 바꾼 것. 날짜 모양 글이 날짜가 되고 true/false가 논리값이 되는 것만 인정
+        # (전에는 비어 있지만 않으면 인정해 '+82-10-...'이 -6840이 되어도 VERIFIED, 2026-11-09 검토 A8)
+        w = want.strip()
+        if isinstance(got, bool):
+            return w.lower() in ("true", "false")
+        return bool(_DATE_LIKE.match(w)) and (hasattr(got, "year") or isinstance(got, (int, float)))
+    return True
+
+
+# Excel이 날짜·시각으로 바꾸는 글 (2026-01-05, 2024-01, 2026/1/5, 10:30)
+_DATE_LIKE = re.compile(r"^\d{4}\s*[-/.]\s*\d{1,2}(?:\s*[-/.]\s*\d{1,2})?(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$|^\d{1,2}:\d{2}(?::\d{2})?$")
 
 
 def _verify_written(ws: Any, ops: List[Tuple[int, int, int, int, str, Any]]) -> List[str]:
@@ -2719,8 +2751,15 @@ def _verify_written(ws: Any, ops: List[Tuple[int, int, int, int, str, Any]]) -> 
         try:
             if kind == "formula":
                 got = ws.Cells(a, b).Formula
-                if norm(got) != norm(payload):
+                if norm(got).replace("@", "") != norm(payload).replace("@", ""):
                     problems.append(f"{addr(a, b)} 수식이 {got!r} (쓴 수식 {payload!r})")
+                    continue
+                # 수식 글이 같아도 값이 오류면 확인한 것이 아님 (함수 이름 오타 '=합계(B2:B3)' -> #NAME?, 2026-11-09 검토 A9)
+                vals = off.range_to_matrix(ws.Range(ws.Cells(a, b), ws.Cells(c, d)).Value)
+                errs = [(addr(a + i, b + j), off.xl_error(v)) for i, row in enumerate(vals) for j, v in enumerate(row) if off.xl_error(v)]
+                if errs:
+                    problems.append(f"수식 칸 {len(errs)}개의 값이 오류: " + ", ".join(f"{c_} {e}" for c_, e in errs[:5])
+                                    + " (함수 이름·참조·인수 확인)")
                 continue
             got_rows = off.range_to_matrix(ws.Range(ws.Cells(a, b), ws.Cells(c, d)).Value)
             want_rows = payload if kind == "values" else [[payload] * (d - b + 1) for _ in range(c - a + 1)]

@@ -155,6 +155,14 @@ def _typed(ws, v):
         return int(num) if num.is_integer() and abs(num) < 1e15 else num
     if _TYPED_DATE.match(t):
         return 46000.0                             # 날짜 일련번호
+    if t[:1] in ("+", "-", "@"):                   # Excel은 수식으로 계산 (+82-10-1234-5678 -> -6840), 못 하면 #NAME?
+        if re.fullmatch(r"[+\-]?[\d.\s+\-*/()]+", t):
+            try:
+                num = float(eval(t, {"__builtins__": {}}))      # noqa: S307  시험용 산술식만
+                return int(num) if num.is_integer() else num
+            except Exception:
+                pass
+        return -2146826259                         # #NAME? (pywin32는 오류 칸을 정수로 줌)
     return v
 
 
@@ -379,10 +387,26 @@ class FakeRange:
                     self.ws.set(r, c, _typed(self.ws, v))
             self.ws.log.append(("Formula", self.Address, v))
             return
+        # 실제 Excel: 모르는 함수 이름(영어 Formula에 한글 함수 '합계(' 등)는 받아 두고 칸 값이 #NAME? (pywin32는 오류를 정수로 줌)
+        bad_name = bool(re.search(r"[\uac00-\ud7a3]+\s*\(", v)) or bool(getattr(self.ws, "error_formula", None) and self.ws.error_formula(v))
         for r, c in self.cells():
             self.ws.formulas[(r, c)] = v
-            self.ws.values[(r, c)] = f"<{v}>"
+            self.ws.values[(r, c)] = -2146826259 if bad_name else f"<{v}>"
         self.ws.log.append(("Formula", self.Address, v))
+
+    @property
+    def Formula2(self):
+        """동적 배열 수식 (Office 2021 이상). ws.no_formula2면 없는 속성 (Office 2019)."""
+        if getattr(self.ws, "no_formula2", False):
+            raise AttributeError("Formula2")
+        return self.Formula
+
+    @Formula2.setter
+    def Formula2(self, v):
+        if getattr(self.ws, "no_formula2", False):
+            raise AttributeError("Formula2")
+        self.Formula = v
+        self.ws.log.append(("Formula2", self.Address, v))
 
     @property
     def FormulaR1C1(self):
@@ -407,7 +431,7 @@ class FakeRange:
         raise AttributeError(name)
 
     def __setattr__(self, k, v):
-        if k in ("ws", "areas", "Value", "Value2", "Formula"):
+        if k in ("ws", "areas", "Value", "Value2", "Formula", "Formula2"):
             object.__setattr__(self, k, v)
         else:
             if k == "WrapText":
@@ -489,7 +513,7 @@ class FakeRange:
         def cls(v):
             if isinstance(v, bool):
                 return (2, v)
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) or type(v).__name__ == "Decimal":    # 통화 칸은 Excel에서 숫자 (pywin32가 Decimal로 줌)
                 return (0, float(v))
             return (1, str(v).casefold())
         for key, order in reversed(keys):
