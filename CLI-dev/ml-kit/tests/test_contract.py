@@ -537,7 +537,7 @@ def test_entry_points_import_only_the_runtime():
     """진입점은 _ml_runtime만 공통으로 import한다. 아무도 ml_predict를 import하지 않고(예측 단독 배포), _ml_runtime은 어떤
     진입점도 import하지 않는다. 학습을 다시 쓰는 곳만 예외: ml_export -> ml_train(같은 학습 경쟁), ml_report -> ml_train·ml_export
     (보고서의 최고 버전·성능예측표). AGENTS.md ml-kit 규칙."""
-    allowed = {"ml_export.py": {"ml_train"}, "ml_report.py": {"ml_train", "ml_export"}}
+    allowed = {"ml_export.py": {"ml_train"}, "ml_report.py": {"ml_export"}}
     bad = []
     for name in ENTRY_POINTS + ("_ml_runtime.py",):
         tree = ast.parse(open(os.path.join(KIT, name), encoding="utf-8").read())

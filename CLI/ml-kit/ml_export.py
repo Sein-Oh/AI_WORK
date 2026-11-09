@@ -3,10 +3,12 @@
 ml-kit 성능예측표 내보내기 (ml_export.py)
 
 Turns a trained version into ONE Excel workbook that predicts with plain formulas (no Python, no macros):
-  1. input selection : the model's raw numeric inputs (derived features follow their source inputs) are reduced
-                       by backward elimination with real retraining (the same 5-model competition), never by
-                       importance order (interacting inputs look unimportant alone). --keep inputs are never dropped.
-                       Recommended set = fewest inputs whose validation R2 is within RECOMMEND_TOL of the best.
+  1. inputs        : every raw numeric input of the version (the inputs the user trained with are always in the table,
+                       2.9.83; derived features follow their source inputs). The version's own model is used when no
+                       input has to be left out; an input with one value in the data (no table axis) is left out and
+                       the rest retrained once. More than MAX_INPUTS inputs: STOP_RETRY [후보] a set of MAX_INPUTS found by
+                       backward elimination with retraining (the user decides which inputs to leave out). --inputs: the
+                       user's own set.
   2. grid table      : the chosen model evaluated on an evenly spaced grid over the training range
                        (points per axis = min(41, MAX_ROWS ** (1/k))), with the distance of every grid node to the
                        nearest training row (scaled inputs) for the "no measured data" warning.
@@ -155,7 +157,7 @@ def evals_for(subset: List[str], evals: List[str], raw: List[str]) -> List[str]:
 # Every retrained candidate is saved in <version>/export/_fits (or a fallback place when it cannot be written:
 # resume_save, removed when the command ends) (key = data, target, inputs, formulas, seed,
 # versions). A command stopped at the time limit (check_time) or killed by the agent's 120 s limit continues where it
-# stopped when it is run again, and a later export with other --keep reuses the same candidates.
+# stopped when it is run again, and a later export reuses the same candidates.
 FIT_CACHE: Optional[str] = None
 _FIT_SECONDS: List[float] = []
 _FIT_STATS = {"reused": 0, "trained": 0}
@@ -236,6 +238,17 @@ def fit_subset(data: pd.DataFrame, target: str, subset: List[str], evals: List[s
     _save_fit(key, res)
     step_end()
     return dict(res)
+
+
+def version_candidate(vdir: str, meta: Dict[str, Any], inputs: List[str], evals: List[str]) -> Dict[str, Any]:
+    """The version's own model as the table's model (every input kept: nothing to retrain, 2.9.83)."""
+    safe = meta.get("target_safe_name") or re.sub(r'[\\/*?:"<>|]', "_", str(meta.get("target")))
+    pipe = joblib.load(os.path.join(vdir, f"model_{safe}.joblib"))
+    if isinstance(pipe, dict) and "pipeline" in pipe:
+        pipe = pipe["pipeline"]
+    return {"inputs": list(inputs), "evals": list(evals), "schema": meta["feature_schema"], "pipe": pipe,
+            "val_r2": float(meta["val_r2"]), "rmse": float(meta["rmse"]), "model": meta.get("champion_model"),
+            "interval": meta.get("prediction_interval")}
 
 
 def search(data: pd.DataFrame, target: str, inputs: List[str], keep: List[str], evals: List[str],
@@ -855,7 +868,7 @@ def _names_in(names: List[str], inputs: List[str], what: str) -> List[str]:
 
 def _check_known(names: List[str], all_inputs: Dict[str, List[str]], what: str) -> None:
     """A name no target has is an input error (with the [후보] of resolve_column_names; the other names of the same
-    option are never listed: '압룍' next to '압력' in --keep "압력,압룍")."""
+    option are never listed: '압룍' next to '압력' in --inputs "압력,압룍")."""
     union = list(dict.fromkeys(c for ins in all_inputs.values() for c in ins))
     for nm in names:
         if not any(_names_in([nm], ins, what) for ins in all_inputs.values()):
@@ -905,7 +918,7 @@ def inputs_arg(choice: Dict[str, List[str]], single: bool) -> str:
 
 def execute_export(args) -> Dict[str, Any]:
     global FIT_CACHE
-    args.model = model_dir_from_data(args.model, [t for t in str(args.targets or "").split(",") if t.strip()])
+    args.model = model_dir_from_data(args.model)
     vinfo = load_version(args.model, args.targets)
     FIT_CACHE = os.path.join(vinfo["dir"], "export", "_fits")
     data_all = vinfo["data"]
@@ -914,15 +927,13 @@ def execute_export(args) -> Dict[str, Any]:
         warnings.append(f"분류 타겟 {vinfo['skipped']}은(는) 성능예측표에서 뺐습니다 (숫자 타겟만 가능)")
     target_inputs = {t: raw_inputs(vinfo["metas"][t]) for t in vinfo["targets"]}
     in_lists = {t: v[0] for t, v in target_inputs.items()}
-    keep_names = [s.strip() for s in (args.keep or "").split(",") if s.strip()]
-    _check_known(keep_names, in_lists, "꼭 포함할 입력(--keep)")
     spec = parse_inputs_spec(args.inputs, vinfo["targets"], in_lists)
     if args.inputs:
         auto = [t for t in vinfo["targets"] if t not in spec]
         if auto:
-            warnings.append(f"--inputs의 입력이 없는 타겟 {auto}은(는) 입력을 자동으로 골랐습니다")
+            warnings.append(f"--inputs의 입력이 없는 타겟 {auto}은(는) 그 버전의 입력을 모두 넣었습니다")
     plans = []
-    over: Dict[str, Dict[str, Any]] = {}     # --inputs over MAX_INPUTS: target -> best candidate with <= MAX_INPUTS
+    over: Dict[str, Dict[str, Any]] = {}     # more than MAX_INPUTS inputs: target -> best candidate with <= MAX_INPUTS
     over_n: Dict[str, int] = {}
     for target in vinfo["targets"]:
         inputs, evals = target_inputs[target]
@@ -934,10 +945,6 @@ def execute_export(args) -> Dict[str, Any]:
         if excl in data.columns:
             data = data[coerce_numeric(data[excl]).fillna(0) != 1]
         data = data[coerce_numeric(data[target]).notna()].reset_index(drop=True)
-        keep = _names_in(keep_names, inputs, "꼭 포함할 입력(--keep)")
-        if len(keep) > MAX_INPUTS:
-            raise InputError(f"'{target}': --keep 입력이 {len(keep)}개라 성능예측표 상한 {MAX_INPUTS}개를 넘습니다. "
-                             f"꼭 넣을 입력을 {MAX_INPUTS}개 이하로 줄여 주십시오.")
         # an input with a single value carries no information and cannot be a table axis
         const = [c for c in inputs if coerce_numeric(data[c]).nunique(dropna=True) <= 1]
         if const:
@@ -945,41 +952,31 @@ def execute_export(args) -> Dict[str, Any]:
         usable = [c for c in inputs if c not in const]
         if not usable:
             raise InputError(f"'{target}': 학습 데이터에서 값이 변하는 입력이 없어 성능예측표를 만들 수 없습니다.")
-        keep = [c for c in keep if c not in const]
+        chosen_inputs = [c for c in spec[target] if c not in const] if target in spec else usable
+        if target in spec and not chosen_inputs:
+            # the user chose these inputs: another set is the user's choice too ([후보], never an automatic retry
+            # that would also drop the --inputs of the other targets)
+            raise InputError(f"'{target}': --inputs의 입력 {spec[target]}이(가) 모두 학습 데이터에서 값이 하나뿐이라 표를 "
+                             f"만들 수 없습니다. 값이 변하는 입력: {numbered(usable, [], '{}')[0]}. 어느 입력으로 만들지 "
+                             f"사용자에게 물으십시오 (--inputs 없이 실행하면 버전의 입력을 모두 넣습니다).")
+        if len(chosen_inputs) > MAX_INPUTS:
+            progress(f"'{target}': 입력이 {len(chosen_inputs)}개라 {MAX_INPUTS}개 이하 추천 안을 찾는 중")
+            cands = search(data, target, chosen_inputs, [], evals, inputs, stop_at=MAX_INPUTS)
+            over[target] = recommend([c for c in cands if len(c["inputs"]) <= MAX_INPUTS])
+            over_n[target] = len(chosen_inputs)
+            continue          # every target over the limit is collected first: one [후보] for all of them
+        if over:
+            continue          # an error follows anyway: skip the slow work
         if target in spec:
-            chosen_inputs = [c for c in spec[target] if c not in const]
-            if not chosen_inputs:
-                # the user chose these inputs: another set is the user's choice too ([후보], never an automatic retry
-                # that would also drop the --inputs of the other targets)
-                raise InputError(f"'{target}': --inputs의 입력 {spec[target]}이(가) 모두 학습 데이터에서 값이 하나뿐이라 표를 "
-                                 f"만들 수 없습니다. 값이 변하는 입력: [후보] {', '.join(usable)}. 어느 입력으로 만들지 사용자에게 "
-                                 f"물으십시오 (--inputs 없이 실행하면 입력을 자동으로 고릅니다).")
-            missing_keep = [k for k in keep if k not in chosen_inputs]
-            if missing_keep:
-                raise InputError(f"--inputs에 --keep 입력 {missing_keep}이(가) 빠져 있습니다.")
-            if len(chosen_inputs) > MAX_INPUTS:
-                progress(f"'{target}': --inputs가 {len(chosen_inputs)}개라 {MAX_INPUTS}개 이하 추천 안을 찾는 중")
-                cands = search(data, target, chosen_inputs, keep, evals, inputs, stop_at=MAX_INPUTS)
-                over[target] = recommend([c for c in cands if len(c["inputs"]) <= MAX_INPUTS])
-                over_n[target] = len(chosen_inputs)
-                continue          # every target over the limit is collected first: one [추천] for all of them
-            if over:
-                continue          # an error follows anyway: skip the slow work
-            progress(f"'{target}': 입력 {len(chosen_inputs)}개로 학습 (최적화 없음)")
-            cands = [fit_subset(data, target, chosen_inputs, evals, inputs)]
-            cand, reason = cands[0], "지정한 입력 (--inputs)"
+            progress(f"'{target}': 입력 {len(chosen_inputs)}개로 학습 (--inputs)")
+            cand, reason = fit_subset(data, target, chosen_inputs, evals, inputs), "지정한 입력 (--inputs)"
+        elif not const:
+            progress(f"'{target}': 버전의 모델 그대로 (입력 {len(inputs)}개 모두)")
+            cand, reason = version_candidate(vinfo["dir"], vinfo["metas"][target], inputs, evals), "버전의 입력 모두 (학습한 모델 그대로)"
         else:
-            if over:
-                continue
-            cands = search(data, target, usable, keep, evals, inputs)
-            eligible = [c for c in cands if len(c["inputs"]) <= MAX_INPUTS]
-            cand = recommend(eligible)
-            best = max(c["val_r2"] for c in eligible)
-            reason = (f"최고 검증 R² {best:.4f}와 {RECOMMEND_TOL} 이내에서 입력 수가 가장 적은 안"
-                      + (f" (꼭 포함: {', '.join(keep)})" if keep else "")
-                      + (f" (입력 {MAX_INPUTS}개 이하 안 중에서)" if len(usable) > MAX_INPUTS else ""))
-            if len(usable) > MAX_INPUTS:
-                warnings.append(f"'{target}': 입력이 {len(usable)}개라 성능예측표 상한 {MAX_INPUTS}개 이하 안 중에서 골랐습니다")
+            progress(f"'{target}': 값이 하나뿐인 입력을 빼고 입력 {len(usable)}개로 학습")
+            cand, reason = fit_subset(data, target, usable, evals, inputs), "버전의 입력 모두 (값이 하나뿐인 입력만 뺌)"
+        cands = [cand]
         progress(f"'{target}': 후보별 표 정확도 계산")
         for c in cands:
             if len(c["inputs"]) > MAX_INPUTS:
@@ -993,19 +990,25 @@ def execute_export(args) -> Dict[str, Any]:
             warnings.append(f"'{target}': 입력이 {len(cand['inputs'])}개라 표가 축마다 {cand['table']['n']}점뿐입니다. "
                             f"보간 오차 {cand['interp_rmse']} (모델 RMSE {_sig(cand['rmse'])})")
         plans.append({"target": target, "cand": cand, "cands": cands, "table": cand["table"], "all_inputs": inputs,
-                      "reason": reason, "keep": keep, "data": data})
+                      "reason": reason, "data": data})
 
     progress(f"후보 학습: 새로 {_FIT_STATS['trained']}개, 저장된 것 재사용 {_FIT_STATS['reused']}개")
     if over:
-        # the suggestion keeps the --inputs of every other target, so running it does not change them
+        # leaving out inputs the user trained with is the user's choice ([후보], 2.9.83). The suggestion keeps the --inputs
+        # of every other target; a target without --inputs keeps every input
         choice = {**spec, **{t: c["inputs"] for t, c in over.items()}}
-        what = ", ".join(f"'{t}' {over_n[t]}개 -> {len(c['inputs'])}개 (검증 R² {c['val_r2']:.4f})" for t, c in over.items())
-        head = (f"--inputs가 성능예측표 상한 {MAX_INPUTS}개를 넘습니다 (입력이 많으면 표와 수식이 엑셀 한도를 넘음). "
+        what = ", ".join(f"'{t}' {over_n[t]}개 -> {len(c['inputs'])}개 (뺄 입력: "
+                         f"{', '.join(x for x in target_inputs[t][0] if x not in c['inputs'])}, 검증 R² {c['val_r2']:.4f})"
+                         for t, c in over.items())
+        head = (f"입력이 성능예측표 상한 {MAX_INPUTS}개를 넘어 만들지 않았습니다 (입력이 많으면 표와 수식이 엑셀 한도를 넘음). "
                 f"입력을 줄여 다시 학습한 안: {what}.")
         if not spec_safe(choice, len(vinfo["targets"]) == 1):
             raise InputError(f"{head} 줄인 입력: {choice}. 타겟이나 입력 이름에 ',' ';' '='가 있어 --inputs로 쓸 수 없습니다. "
-                             f"--inputs 없이 실행하면 입력을 자동으로 고릅니다 (--keep으로 꼭 넣을 입력 지정).")
-        raise InputError(f"{head} [추천] {option_retry(inputs_arg(choice, len(vinfo['targets']) == 1), '--inputs')}")
+                             f"넣을 입력 {MAX_INPUTS}개를 사용자에게 물으십시오.")
+        text, items = numbered([f"입력을 {MAX_INPUTS}개 이하로 줄인 안으로 만들기 ({what})"],
+                               [option_retry(inputs_arg(choice, len(vinfo["targets"]) == 1), "--inputs")], "{}")
+        raise InputError(f"{head} 어느 입력을 뺄지 사용자에게 물으십시오. {text}", extra={"confirm_commands": items},
+                         error_type="needs_user_decision")
 
     # retrained models and the candidate table next to the version (never inside the version files)
     exp_dir = os.path.join(vinfo["dir"], "export")
@@ -1088,7 +1091,7 @@ def execute_export(args) -> Dict[str, Any]:
                                                  + (", 다른 타겟은 지금 입력 유지)" if not single else ")"),
                                       "command": cmd, "needs_input": False})
         out_targets[p["target"]] = {
-            "inputs": c["inputs"], "dropped": [x for x in p["all_inputs"] if x not in c["inputs"]], "keep": p["keep"],
+            "inputs": c["inputs"], "dropped": [x for x in p["all_inputs"] if x not in c["inputs"]],
             "val_r2": round(c["val_r2"], 4), "rmse": _sig(c["rmse"]), "model": c["model"], "reason": p["reason"],
             "table_rows": c["rows"], "points_per_axis": c["table"]["n"], "interp_rmse": c["interp_rmse"], "total_rmse": c["total_rmse"],
             "uncovered_dist": round(c["table"]["uncovered_dist"], 4), "agreement": c["table"]["agreement"],
@@ -1110,20 +1113,17 @@ def execute_export(args) -> Dict[str, Any]:
         res["unverified"] = unverified
     res["agent_directive"] = (
         ("VERIFIED: " if not unverified else "UNVERIFIED: 성능예측표 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
-        + "output_file 경로, 타겟별 입력(inputs)과 뺀 입력(dropped), 검증 R², 모델 대비 일치도(agreement.agreement_pct, p95_diff_pct)를 알리세요. "
-        + "다른 입력 조합을 원하면 targets.<타겟>.candidates를 보여 주고, 사용자가 고른 안의 command를 그대로 실행하세요"
-        + (f" (next_commands는 {SHOW_COMMANDS}개만 담았습니다. 모든 안의 명령은 candidates[].command)." if len(next_commands) > SHOW_COMMANDS else ".")
-        + (" warnings도 알리세요." if warnings else ""))
+        + "preview(타겟별 입력, 검증 R², 모델과 일치도)와 output_file 경로를 그대로 알리세요."
+        + (" warnings도 그대로 알리세요." if warnings else ""))
     return res
 
 
 def main():
     setup_console()
     parser = JsonArgumentParser(description="ml-kit 성능예측표 (엑셀, 수식만, 잠금) 내보내기")
-    parser.add_argument("--model", required=True, help="학습한 데이터 파일(도구가 최고 버전을 고름) 또는 버전 폴더 (예: 공정_ml_data/v3)")
+    parser.add_argument("--model", required=True, help="학습한 데이터 파일(도구가 최종 버전, 곧 마지막 학습을 씀) 또는 버전 폴더 (예: 공정_ml_data/v3)")
     parser.add_argument("--targets", help="표로 만들 숫자 타겟 (쉼표 구분, 생략 시 전부)")
-    parser.add_argument("--keep", help="입력을 줄일 때 꼭 포함할 입력 (쉼표 구분)")
-    parser.add_argument("--inputs", help=f"최적화 없이 이 입력 조합으로 바로 만들기 (쉼표 구분, 최대 {MAX_INPUTS}개). "
+    parser.add_argument("--inputs", help=f"이 입력 조합으로 만들기 (생략 시 버전의 입력 전부, 쉼표 구분, 최대 {MAX_INPUTS}개). "
                                          "타겟마다 다르게: '<타겟>=입력1,입력2;<타겟2>=입력3'")
     parser.add_argument("--title", help="계산기 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
     parser.add_argument("--save", help="저장 경로 (.xlsx, 생략 시 보고서와 같은 <데이터>_ml_data 폴더에 성능예측표_<데이터>_<버전>.xlsx)")

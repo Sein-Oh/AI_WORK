@@ -10,10 +10,8 @@ training artifacts; an LLM may optionally override narrative paragraphs with --s
 Inputs (all written by ml_train.py):
   <data_root>/history.jsonl, <version_dir>/leaderboard.json, model_<t>.json, oof_<t>.csv, correlation.csv
 
-Select the version with --file <data file> (the best version of every target, built by
-ml_train.make_best when the history changed; one report per task), --model <version_dir>, or with
--d <data_root> [--version vN] (without --version: the best version of the latest experiment, i.e. same task and
-target set as the latest training run).
+Select the version with --file <data file> (the final version: the latest training run, any task; 2.9.83) or
+--model <version_dir> (that version).
 Requires python-docx and matplotlib (both in the standard environment).
 """
 
@@ -26,7 +24,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library, MissingLibraryError,
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, mark_committed, warn_long_path, avoid_overwrite,
-    strip_unit, note_recovered, read_text_file, resolve_column_names,
+    strip_unit, note_recovered, read_text_file, resolve_column_names, model_dir_from_data, final_version,
     command_text, quote_arg, name_list,
 )
 
@@ -1121,13 +1119,6 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     for t in targets:
         verdicts[t["name"]] = verdict_of(t["champ"].get("val_score"), t["champ"].get("overfit_gap"), metric_label)
     overall = worst_verdict([v[0] for v in verdicts.values()])
-    best_src = (rec.get("best_source") or {}) if rec.get("best") else {}
-
-    def source_line(t: Dict[str, Any]) -> str:
-        src = best_src.get(t["name"]) or {}
-        old = src.get("score")
-        return (f"학습 조건 출처: {src.get('version', '-')} (당시 검증 {metric_label} {old:.4f}), 이번 검증 {metric_label} {t['champ']['val_score']:.4f}"
-                if isinstance(old, (int, float)) else f"학습 조건 출처: {src.get('version', '-')}, 이번 검증 {metric_label} {t['champ']['val_score']:.4f}")
     better = max((r for r in ctx["lineage"] if (r.get("mean_val_score") or -1) > rec["mean_val_score"] + 1e-9),
                  key=lambda r: r["mean_val_score"], default=None)
 
@@ -1141,9 +1132,6 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
             + (f"  ·  메모: {rec['tag']}" if rec.get("tag") else "") + f"  ·  작성 {datetime.now():%Y-%m-%d}")
     p = R.para(head, size=8.5, color=C_MUTED, space_after=6)
     _para_border_bottom(p, color=C_ACCENT, size=12)
-    if best_src:
-        R.para(f"이 버전은 타겟마다 점수가 가장 높았던 학습 조건(피처, 파생변수)으로 {len(best_src)}개 타겟을 현재 데이터로 다시 학습한 통합 버전입니다.",
-               size=9, color=C_MUTED, space_after=4)
 
     # -- 1. 요약 ------------------------------------------------------------------
     R.h1("1. 요약")
@@ -1293,8 +1281,6 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         v, why = verdicts[t["name"]]
         R.para(f"판정: {v}  ({why})", size=9.5, bold=True, color=VERDICT_STYLE[v][0],
                space_after=1).paragraph_format.keep_with_next = True
-        if best_src:
-            R.para(source_line(t), size=9, color=C_INK, space_after=1).paragraph_format.keep_with_next = True
         if exclusion_line(t, metric_label):
             R.para(exclusion_line(t, metric_label), size=9, color=C_INK, space_after=1).paragraph_format.keep_with_next = True
         if task == "regression":
@@ -1340,7 +1326,6 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     return {
         "status": "ok",
         "report_file": saved,
-        "best_version": version,
         "version": version,
         "task": task,
         "targets": [t["name"] for t in targets],
@@ -1388,7 +1373,7 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
     try:
         import ml_export  # heavy (retraining); only when a report is made
         return {"result": ml_export.execute_export(argparse.Namespace(
-            model=version_dir, targets=",".join(targets) if targets else None, keep=None, inputs=None, title=title,
+            model=version_dir, targets=",".join(targets) if targets else None, inputs=None, title=title,
             save=None, overwrite=overwrite))}
     except Exception as e:
         note = f"성능예측표를 만들지 못했습니다 (보고서는 정상): {type(e).__name__}: {str(e)[:200]}"
@@ -1436,111 +1421,66 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
                 + result["agent_directive"][len("VERIFIED: "):])
     if res.get("warnings"):
         result["export_warnings"] = res["warnings"]
-    result["preview"] += f" | 성능예측표: {os.path.basename(res['output_file'])}"
-    result["agent_directive"] += (" 성능예측표(엑셀 계산기) export_file도 함께 만들었습니다: 경로, 타겟별 남긴 입력(export.<타겟>.inputs), "
-                                  "모델 대비 일치도(export.<타겟>.agreement.agreement_pct)를 알리세요."
+    result["preview"] += f" | {res['preview']} ({os.path.basename(res['output_file'])})"
+    result["agent_directive"] += (" 성능예측표(엑셀 계산기) export_file도 함께 만들었습니다: preview의 성능예측표 내용과 export_file 경로를 "
+                                  "그대로 알리세요."
                                   + (" export_unverified 내용도 그대로 알리세요." if res.get("unverified") else "")
                                   + (" export_warnings(성능예측표 주의 사항)도 그대로 알리세요." if res.get("warnings") else ""))
 
 
+def history_warnings(info: Dict[str, Any], targets: List[str]) -> List[str]:
+    """--file: what the history holds beyond the final version (2.9.83: the report uses the latest training run).
+    Targets trained earlier but not in the final version, and an earlier version of the same targets with a higher
+    score: warnings only, the report is made with the final version."""
+    rec, out = info["record"], []
+    here = os.path.dirname(os.path.abspath(__file__))
+    seen = list(dict.fromkeys(str(t) for r in info["records"] for t in r.get("targets", [])))
+    gone = [t for t in seen if t not in rec.get("targets", [])]
+    if gone:
+        out.append(f"최종 버전 {info['version']}(마지막 학습)에 없는 타겟 {', '.join(gone)}은(는) 보고서에 넣지 않았습니다 "
+                   f"(넣으려면 그 타겟을 --targets에 넣어 다시 학습한 뒤 보고서를 만듭니다)")
+    same = [r for r in info["records"] if sorted(r.get("targets", [])) == sorted(targets)
+            and r.get("task") == rec.get("task") and str(r.get("version")) != info["version"]
+            and isinstance(r.get("mean_val_score"), (int, float))]
+    score = rec.get("mean_val_score")
+    better = max(same, key=lambda r: r["mean_val_score"], default=None)
+    if better and isinstance(score, (int, float)) and better["mean_val_score"] > score + 1e-9:
+        vdir = os.path.join(os.path.dirname(info["version_dir"]), str(better["version"]))
+        out.append(f"같은 타겟의 {better['version']}이(가) 점수가 더 높았습니다 ({better['mean_val_score']} > 최종 버전 {score}). "
+                   f"그 버전으로 만들려면: python {quote_arg(os.path.join(here, 'ml_report.py'))} --model {quote_arg(vdir)}")
+    return out
+
+
 def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
+    """--file <data file>: the final version (the latest training run, any task). --model <version folder>: that version."""
     for err, pkg in ((_DOCX_IMPORT_ERROR, "python-docx"), (_MPL_IMPORT_ERROR, "matplotlib")):
         if err is not None:
             raise MissingLibraryError(pkg, "보고서(Word)")
     target_filter = None
     if args.targets and args.targets.strip().lower() != "all":
         target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
-    if not args.model:
-        return execute_best_report(args, target_filter)
-    vdir = args.model
+    history = None
+    if args.model:
+        vdir = args.model
+    else:
+        if not os.path.isfile(os.path.abspath(args.file)):
+            raise FileNotFoundError(f"입력 파일이 존재하지 않습니다: {os.path.abspath(args.file)}")
+        vdir = model_dir_from_data(args.file, "--file")
+        history = final_version(os.path.dirname(vdir))
     ctx = load_version(vdir, target_filter)
     export = make_export(vdir, ctx["record"]["task"], getattr(args, "title", None),
                          [t["name"] for t in ctx["targets"]] if target_filter else None, overwrite=args.overwrite)
     result = build_report(ctx, parse_slots(args.slots), args.save, overwrite=args.overwrite, export=export)
     attach_export(result, export)
-    return result
-
-
-def _numbered_out(out: Optional[str], version: str, many: bool) -> Optional[str]:
-    if not out or not many:
-        return out
-    stem, ext = os.path.splitext(out)
-    return f"{stem}_{version}{ext or '.docx'}"
-
-
-def execute_best_report(args: argparse.Namespace, target_filter: Optional[List[str]]) -> Dict[str, Any]:
-    """
-    --file <data file>: one report per task covering EVERY target of that task. The best version (each target
-    retrained with its best recipe from the history) is reused when up to date, otherwise built first.
-    """
-    import ml_train  # heavy (scikit-learn); only this mode needs it
-    info = ml_train.ensure_best_versions(args)
-    slots = parse_slots(args.slots)
-    here = os.path.dirname(os.path.abspath(__file__))
-    versions = info["best_versions"]
-    reports: List[Dict[str, Any]] = []
-    export = None
-    picked = None
-    if target_filter:   # resolved once over the targets of all best versions ('수율' for two of them -> [후보])
-        all_names = list(dict.fromkeys(str(t) for bv in versions for t in bv["targets"]))
-        picked = resolve_column_names(target_filter, all_names, "타겟(--targets)")[0]
-    for bv in versions:
-        flt = None
-        if picked is not None:
-            flt = [t for t in dict.fromkeys(picked) if t in bv["targets"]]
-            if not flt:
-                continue
-        ctx = load_version(bv["version_dir"], flt)
-        ex = (make_export(bv["version_dir"], bv["task"], getattr(args, "title", None),
-                          [t["name"] for t in ctx["targets"]] if flt else None, overwrite=args.overwrite)
-              if export is None else None)
-        export = export or ex
-        reports.append(build_report(ctx, slots, _numbered_out(args.save, bv["version"], len(versions) > 1),
-                                    overwrite=args.overwrite, export=ex))
-    if not reports:
-        all_targets = [t for bv in versions for t in bv["targets"]]
-        raise InputError(f"지정한 타겟 {target_filter}이(가) 최고 버전에 없습니다. [후보] {', '.join(all_targets[:10])}")
-
-    result = dict(reports[0])
-    result.update({
-        "made_best": info["made_best"],
-        "best_version": reports[0]["version"],
-        "best_version_dir": next(bv["version_dir"] for bv in versions if bv["version"] == reports[0]["version"]),
-        "best_versions": versions,
-        "best_targets": info["best_targets"],
-        "report_count": len(reports),
-        "best_reports": [{k: r[k] for k in ("report_file", "version", "task", "targets", "overall_verdict", "verdicts")}
-                    for r in reports],
-        "next_commands": [
-            {"purpose": f"새 데이터 예측 ({bv['task']}, <새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)",
-             "command": (f"python {quote_arg(os.path.join(here, 'ml_predict.py'))} --model {quote_arg(bv['version_dir'])} "
-                         f"--file {quote_arg('<새데이터.xlsx>')}"),
-             "needs_input": True, "placeholder": "<새데이터.xlsx>"} for bv in versions],
-    })
-    made = ("타겟별 최고 학습 조건으로 다시 학습한 " if info["made_best"] else "이미 최신인 ")
-    vers = ", ".join(f"{bv['version']}({bv['task']}, 타겟 {len(bv['targets'])}개)" for bv in versions)
-    files = ", ".join(os.path.basename(r["report_file"]) for r in reports)
-    result["preview"] = (f"[보고서 완료] {made}최고 버전 {vers} / 보고서 {len(reports)}개: {files} / "
-                         f"종합 판정 " + ", ".join(f"{r['version']} {r['overall_verdict']}" for r in reports))
-    multi = (f" 회귀와 분류 타겟이 섞여 있어 최고 버전과 보고서가 각각 {len(reports)}개입니다 (best_reports)."
-             if len(reports) > 1 else "")
-    predict = "; ".join(f"{bv['task']}: ml_predict.py --model {quote_arg(bv['version_dir'])}" for bv in versions)
-    bad = [u for r in reports for u in r.get("unverified", [])]
-    result["verified"] = not bad
-    if bad:
-        result["unverified"] = bad
-    result["agent_directive"] = (
-        ("VERIFIED: " if not bad else "UNVERIFIED: 보고서 확인 실패 (" + "; ".join(bad) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
-        + f"{made}최고 버전 {vers}으로 ML 결과 보고서 {len(reports)}개를 저장했습니다 ({files}).{multi} "
-        f"report_file 경로, overall_verdict, best_targets의 타겟별 출처 버전과 점수를 사용자에게 알리세요. "
-        f"이후 예측에는 best_version_dir을 쓰세요 ({predict})."
-    )
-    attach_export(result, export)
+    notes = history_warnings(history, [t["name"] for t in ctx["targets"]]) if history and not target_filter else []
+    if notes:
+        result["warnings"] = list(result.get("warnings", [])) + notes
+        result["agent_directive"] += " warnings도 그대로 알리세요."
     return result
 
 
 def main():
-    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (--file: 작업 유형마다 모든 타겟을 보고서 1개로)")
+    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (--file: 최종 버전, 곧 마지막 학습으로)")
     parser.add_argument("--model",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
     parser.add_argument("--targets", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
@@ -1549,13 +1489,7 @@ def main():
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--slots", help="소견 덮어쓰기 JSON 파일 또는 문자열: summary, data, performance, features, lineage, "
                                         "correlation, operation, targets.{타겟}.{performance|features}")
-    parser.add_argument("--file",
-                        help="학습한 데이터 파일. 모든 타겟을 타겟별 최고 학습 조건으로 묶은 최고 버전(필요하면 새로 학습)으로 보고서 작성")
-    parser.add_argument("--task", choices=["regression", "classification"],
-                        help="--file와 함께: 이 작업 유형의 보고서만 (생략 시 이력에 있는 유형마다 1개)")
-    parser.add_argument("--header-row", type=int, help="--file와 함께: 최고 버전을 새로 학습할 때 헤더 행 (생략 시 이력 값)")
-    parser.add_argument("--unit-row", type=int, help="--file와 함께: 단위 행 (생략 시 이력 값)")
-    parser.add_argument("--data-row", type=int, help="--file와 함께: 데이터 시작 행 (생략 시 이력 값)")
+    parser.add_argument("--file", help="학습한 데이터 파일. 최종 버전(마지막 학습)으로 보고서 작성")
     parser.add_argument("--title", help="함께 만드는 성능예측표(엑셀)의 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
     args = parser.parse_args()
     if not args.model and not args.file:

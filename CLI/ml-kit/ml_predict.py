@@ -2693,7 +2693,7 @@ def main():
         description="학습한 모델로 예측 (한 건, 파일, 반대 찾기, 조건별 예측, 조건 찾기)"
     )
     parser.add_argument("--model", required=True,
-        help="학습한 데이터 파일(도구가 최고 버전을 고름), 버전 폴더(예: sample_ml_data/v1) 또는 .joblib 파일"
+        help="학습한 데이터 파일(도구가 최종 버전, 곧 마지막 학습을 씀), 버전 폴더(예: sample_ml_data/v1) 또는 .joblib 파일"
     )
     parser.add_argument("--targets",
         help="예측할 특정 타겟 목록 (쉼표 구분, 폴더 모드에서 생략 시 폴더 내 모든 타겟 모델 자동 추론)"

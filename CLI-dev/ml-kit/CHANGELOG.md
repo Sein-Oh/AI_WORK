@@ -12,6 +12,27 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.83] - 2026-11-09
+
+보고서·성능예측표·예측은 최종 버전(마지막 학습)으로 (사용자 결정 2026-11-09). 성능예측표에는 사용자가 학습에 준 입력이 모두 들어감.
+
+### 바뀜
+- 최종 버전 = 회귀·분류 상관없이 `history.jsonl`의 마지막 학습 기록 (`final_version`, 폴더가 없거나 손상되면 그 앞의 온전한 버전, `recovered`).
+  `ml_report.py --file`, `ml_export.py --model <데이터 파일>`, `ml_predict.py --model <데이터 파일>`이 씀 (`model_chosen: 최종 버전 vN (마지막 학습)`).
+  집 PC 사용 중: v1(타겟 yield, purity, speed) 뒤 speed를 빼고 v2를 학습했는데 보고서가 최고 버전 v3를 다시 학습하며 speed를 v1 조건으로 다시 넣었음.
+- 최고 버전(`ml_train.py --best`, 보고서 `--file`의 최고 버전 다시 학습, `best_version.json`)을 없앰. `ml_train.py`에서 약 470줄 줄어듦.
+  보고서가 다시 학습하지 않으므로 빨라짐 (보고서 `--task`, `--header-row`, `--unit-row`, `--data-row`도 없앰: 다시 학습할 때만 쓰던 것).
+- 보고서 `--file`: 최종 버전으로 보고서 1개. `warnings`로 알림: 이력에는 있지만 최종 버전에 없는 타겟(넣으려면 다시 학습), 같은 타겟으로 점수가
+  더 높았던 예전 버전과 그 버전으로 만드는 `--model` 명령. `--model <버전 폴더>`는 그대로 (예전 버전으로 만들 때).
+- `--history`: `best_version`·`best_by_task` 대신 `latest_version`·`latest_version_dir` (최종 버전).
+- 성능예측표 입력은 그 버전의 입력 전부 (뒤에서부터 빼며 다시 학습해 입력이 가장 적은 안을 고르던 것과 `--keep`을 없앰). 값이 하나뿐인 입력만 빼고
+  `warnings`. 아무 입력도 빼지 않으면 버전의 모델을 그대로 써서 다시 학습하지 않음. 입력이 8개를 넘으면 만들지 않고 줄인 안(뺄 입력과 점수)을
+  `[후보]` + 같은 번호의 `confirm_commands`(`--inputs`, needs_user_decision)로 줌 (사용자가 학습에 준 입력을 빼는 일이라 사용자가 정함,
+  2.9.82까지 `--inputs` 9개 이상은 `[추천]`). `--inputs`(사용자가 정한 입력)는 그대로.
+- 성능예측표·보고서의 성능예측표 안내는 알릴 키 목록 대신 preview를 그대로 알리게 줄임 (사용법 단순성 6번).
+- 보고서·성능예측표를 다시 기본 시험에 넣음 (pytest 기본, beta F, 단순성 M9는 `--inputs` 오타 `[후보]`, Gemma R 묶음).
+- 스킬 ml-report·ml-predict: 최종 버전, 성능예측표 입력 전부, `--keep` 대신 `--inputs`.
+
 ## [2.9.82] - 2026-11-09
 
 ### 바뀜
@@ -2094,11 +2115,9 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - 이전 이력 문서(ROADMAP 등)를 정리하고 이 CHANGELOG로 일원화. `requirements-dev.txt`, `install_offline.bat` 삭제.
 
 ## 남은 할 일
-- [ ] 보고서·성능예측표 (2026-11-08부터 시험에서 뺌: pytest `-m report`, beta `--only F`, 단순성 M9, Gemma R 묶음). 다른 로직이 마무리되면
-  함께 고칠 것: `ml_report.py`의 Word 만드는 부분(약 750줄)을 내부 모듈로 나누기, `_version_hint`의 번호 없는 `[후보]`와 값만 주는 `[추천]`,
-  `ml_report.load_version`·`ml_export.load_version`의 버전 판정을 공통 런타임 하나로, `ml_report.py -m`과 `-f` 두 사용법,
-  `ml_export` 다른 입력 조합의 `[후보]`를 `confirm_commands`로, 보고서 안에서 부르는 학습·성능예측표의 `[추천]`이 보고서 명령이 되는 것
-  (프로세스 안 호출이라 `command_text`가 보고서 명령을 돌려줌), 알릴 키 이름을 늘어놓는 directive
+- [ ] 보고서·성능예측표 남은 것: `ml_report.py`의 Word 만드는 부분(약 750줄)을 내부 모듈로 나누기, `_version_hint`의 번호 없는 `[후보]`와
+  값만 주는 `[추천]`, 보고서 안에서 부르는 성능예측표의 `[추천]`이 보고서 명령이 되는 것 (프로세스 안 호출이라 `command_text`가 보고서
+  명령을 돌려줌)
 - [ ] 2.9.76 검토에서 남긴 것: 천 단위로 보이는 쉼표(`180,190`)의 `[추천]`을 `[후보]`로, `--find` 0건 directive 첫 문장,
   학습 데이터 파일 옵션이 `-f`(학습)와 `-m`(예측)으로 다른 것, 학습 directive의 알릴 키 목록 줄이기
 - [ ] 성능예측표 엑셀을 문서 보안 아래에서 파이썬 없는 PC로 열기 (`docs/opencode/실기테스트.md` 4장 눈 확인 2번). 엑셀 재계산은 회사 PC 통과 (2.9.4)

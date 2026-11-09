@@ -170,7 +170,7 @@ def ml_checks(env, data, titled):
 
     def m6():
         code, out = run_tool(env, P, "--model", data, "--input", "반응온도=240,소비전력=65,압축압력=3")
-        record("M6", "예측 --model <데이터 파일> -> 최고 버전 자동 (model_chosen)", ok_(out) and "model_chosen" in out,
+        record("M6", "예측 --model <데이터 파일> -> 최종 버전 자동 (model_chosen)", ok_(out) and "model_chosen" in out,
                str((out or {}).get("model_chosen") or (out or {}).get("message", ""))[:200])
     check("M6", "--model 데이터 파일", m6)
 
@@ -192,10 +192,9 @@ def ml_checks(env, data, titled):
     check("M8", "--dry-run", m8)
 
     def m9():
-        code, out = run_tool(env, E, "--model", data, "--keep", "반응온도x", "--title", "점검")
-        follow(env, "M9", "성능예측표 --model <데이터 파일> + --keep 오타 -> [후보] 1) -> 셸로 실행", code, out, kind="후보", need_code=1)
-    record("M9", "성능예측표 --model <데이터 파일> + --keep 오타", None,
-           "보고서·성능예측표는 개발 중이라 시험에서 뺌 (2026-11-08)")   # m9는 다시 넣을 때 쓰도록 둠
+        code, out = run_tool(env, E, "--model", data, "--inputs", "반응온도x,압축압력", "--title", "점검")
+        follow(env, "M9", "성능예측표 --model <데이터 파일> + --inputs 오타 -> [후보] 1) -> 셸로 실행", code, out, kind="후보", need_code=1)
+    check("M9", "ml_export", m9)
 
 
 def ml_new_checks(env, data, work):

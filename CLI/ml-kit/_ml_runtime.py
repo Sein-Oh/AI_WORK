@@ -53,7 +53,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.82"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.83"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -528,8 +528,7 @@ def step_too_long_error(label: str, limit: float, tries: int) -> InputError:
 # A result this command already saved for good (a version folder recorded in the ledger, a performance table, a report,
 # a result file): mark_committed. Running the same command again would do that work again (a second version, a second
 # file), so the watchdog no longer answers CONTINUE once such a result is saved: it answers ok + UNVERIFIED (saved, not
-# checked) with the saved paths (2.9.69). rerun_safe=True: the same command run again reuses it (ml_report --file reuses a
-# fresh best version, ml_train --best remembers the best versions it made), so CONTINUE stays right.
+# checked) with the saved paths (2.9.69). rerun_safe=True: the same command run again reuses it, so CONTINUE stays right.
 RUN_COMMITTED: List[Dict[str, Any]] = []
 
 
@@ -539,7 +538,7 @@ def mark_committed(what: str, rerun_safe: bool = False, **keys: Any) -> None:
 
 
 def committed_rerun_safe() -> None:
-    """The results saved so far are reused by the same command run again (e.g. ml_train --best saved best_run.json)."""
+    """The results saved so far are reused by the same command run again."""
     for c in RUN_COMMITTED:
         c["rerun_safe"] = True
 
@@ -981,7 +980,7 @@ DROP_OPTIONS = {"--json": 0, "--encoding": 1, "--verbose": 0, "--quiet": 0}
 # no sub-command, so it is dropped in the [추천] command
 DROP_VERBS = {"train", "predict", "report", "map", "run", "fit", "export"}
 # Never given as a lookalike, even as [후보]: replaces files or retrains everything
-NO_FUZZY_OPTIONS = {"--overwrite", "--best", "--help"}
+NO_FUZZY_OPTIONS = {"--overwrite", "--help"}
 _OPTION_TOKEN = re.compile(r"--?[A-Za-z][A-Za-z0-9_-]*")
 # '이름=값,이름=값' (the --input form): a value of this shape after an unknown option or in --file is the --input input (2.9.74, 집 PC
 # opencode: '--features "반응온도=182,..."' copied from ml_train, '--file "반응온도=182,..."')
@@ -1482,7 +1481,7 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
     is no rename, the value must be converted (unit_hint).
     A column found for another given name is not suggested for a missing one (except the same name in another unit).
     exclude: columns this command already uses elsewhere (ml_map --input next to --targets / --find / --vary, --features next to --targets,
-    the other names of ml_export --keep): matched when named, never listed as a candidate.
+    the other names of ml_export --inputs): matched when named, never listed as a candidate.
     """
     col_list = [str(c) for c in columns]
     resolved: List[str] = []
@@ -4121,18 +4120,49 @@ def apply_inference_evals(df: pd.DataFrame, eval_expressions: List[str]) -> pd.D
 # 4. Target Model Resolution (Directory Mode vs Specific File Mode)
 # ==============================================================================
 
-# ml_train writes <data>_ml_data/best_version.json after every ledger change: per task the version a report or a
-# prediction should use (ml_train task_best_version). `--model <data file>` (or the _ml_data folder) reads it, so the agent
-# never chooses a version folder itself (2.9.71, AGENTS.md "사용법 단순성" 5).
-BEST_POINTER = "best_version.json"
+# The final version is the version of the latest training run (any task): ml_report.py --file, ml_export.py and
+# ml_predict.py --model <data file> use it, so a column or target left out of the last training never comes back
+# (2.9.83; until 2.9.82 a best version gathered the best recipe of every target in the history).
+LEDGER_NAME = "history.jsonl"
 DATA_EXTS = (".xlsx", ".xls", ".xlsm", ".csv")
 MODEL_CHOSEN: List[str] = []
 
 
-def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: str = "--model") -> str:
-    """--model value -> model path: a version folder or .joblib as given; a data file or its _ml_data folder -> the best
-    version folder of best_version.json (one task, or the task holding `targets`). Several tasks with no way to tell
-    -> STOP_RETRY [후보] full commands; no pointer -> STOP_RETRY [후보] the version folders as full commands."""
+def _version_ok(root: str, version: str) -> bool:
+    vdir = os.path.join(root, version)
+    return os.path.isfile(os.path.join(vdir, "leaderboard.json")) and bool(glob.glob(os.path.join(vdir, "model_*.json")))
+
+
+def final_version(root: str) -> Optional[Dict[str, Any]]:
+    """The latest training record of <data>_ml_data whose version folder is intact: {version, version_dir, record,
+    records, skipped} (skipped: later records whose folder is missing or damaged), or None without a ledger."""
+    try:
+        text = read_text_file(os.path.join(root, LEDGER_NAME))
+    except OSError:
+        return None
+    records = []
+    for line in text.splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("version"):
+            records.append(rec)
+    skipped: List[str] = []
+    for rec in reversed(records):
+        ver = str(rec["version"])
+        if _version_ok(root, ver):
+            return {"version": ver, "version_dir": os.path.join(root, ver), "record": rec, "records": records,
+                    "skipped": skipped}
+        if ver not in skipped:
+            skipped.append(ver)
+    return None
+
+
+def model_dir_from_data(path: str, option: str = "--model") -> str:
+    """--model value -> model path: a version folder or .joblib as given; a data file or its _ml_data folder -> the final
+    version (the latest training run, final_version). A later version whose folder is missing or damaged is skipped
+    (recovered). No ledger -> STOP_RETRY [후보] the version folders as full commands."""
     ap = os.path.abspath(str(path).strip().strip('"'))
     if os.path.isfile(ap) and os.path.splitext(ap)[1].lower() in DATA_EXTS:
         root = os.path.join(os.path.dirname(ap), os.path.splitext(os.path.basename(ap))[0] + "_ml_data")
@@ -4143,36 +4173,20 @@ def model_dir_from_data(path: str, targets: Optional[List[str]] = None, option: 
         return path
     if not os.path.isdir(root):
         raise InputError(f"'{os.path.basename(ap)}'의 학습 결과 폴더가 없습니다 ({root}). 먼저 ml_train.py로 학습하십시오.")
-    try:
-        tasks = (json.loads(read_text_file(os.path.join(root, BEST_POINTER))) or {}).get("tasks") or {}
-    except (OSError, ValueError):
-        tasks = {}
-    if not tasks:
-        vers = sorted((d for d in os.listdir(root) if re.match(r"^v\d+$", d) and os.path.isdir(os.path.join(root, d))),
+    info = final_version(root)
+    if info is None:
+        vers = sorted((d for d in os.listdir(root) if re.match(r"^v\d+$", d) and _version_ok(root, d)),
                       key=lambda d: int(d[1:]))
         if not vers:
             raise InputError(f"'{os.path.basename(root)}'에 학습된 버전 폴더가 없습니다. 먼저 ml_train.py로 학습하십시오.")
         shown = vers[-5:]
-        raise InputError("최고 버전 기록(best_version.json)이 없어 쓸 버전을 정하지 못했습니다. 쓸 버전을 사용자에게 물으십시오. "
+        raise InputError(f"학습 기록({LEDGER_NAME})이 없어 최종 버전을 정하지 못했습니다. 쓸 버전을 사용자에게 물으십시오. "
                          + ask(shown, [command_with_value(str(path), os.path.join(root, v)) for v in shown], "버전 {}"))
-    keys = {strip_unit(str(t)).strip() for t in (targets or []) if str(t).strip()}
-    picks = list(tasks)
-    if len(picks) > 1 and keys:
-        hold = [t for t in picks if keys & {strip_unit(str(x)).strip() for x in tasks[t].get("targets", [])}]
-        picks = hold or picks
-    if len(picks) > 1:
-        shown = [f"{tasks[t]['version']} ({t})" for t in picks]
-        raise InputError("회귀와 분류 모델이 함께 있어 어느 버전으로 예측할지 정하지 못했습니다. 사용자에게 물으십시오. "
-                         + ask(shown, [command_with_value(str(path), os.path.join(root, tasks[t]["version"])) for t in picks],
-                               "버전 {}"))
-    info = tasks[picks[0]]
-    vdir = os.path.join(root, info["version"])
-    msg = f"최고 버전 {info['version']} ({picks[0]}, best_version.json)으로 예측"
-    if not info.get("complete", True):
-        msg += f". 이 버전에 없는 타겟 최고 모델: {', '.join(info.get('missing') or [])} (ml_report.py --file로 한 버전에 묶을 수 있음)"
-    sys.stderr.write(f"[INFO] {option} {os.path.basename(ap)} -> {vdir}\n")
-    MODEL_CHOSEN.append(msg)
-    return vdir
+    if info["skipped"]:
+        note_recovered(f"최종 버전 {', '.join(info['skipped'])}의 폴더가 없거나 손상돼 그 앞의 {info['version']}을(를) 씀")
+    sys.stderr.write(f"[INFO] {option} {os.path.basename(ap)} -> {info['version_dir']}\n")
+    MODEL_CHOSEN.append(f"최종 버전 {info['version']} (마지막 학습)")
+    return info["version_dir"]
 
 
 def _trained_data_files(folder: str) -> List[str]:
@@ -4214,7 +4228,7 @@ def _model_path_near(given: str, ap: str) -> None:
     if found is None:
         return
     what = "모델 경로를 찾을 수 없습니다" if not os.path.exists(ap) else "이 폴더에는 모델 파일(model_*.joblib)이 없습니다"
-    head = f"{what}: {ap}. --model에는 학습한 데이터 파일을 줍니다 (도구가 최고 버전을 고름)."
+    head = f"{what}: {ap}. --model에는 학습한 데이터 파일을 줍니다 (도구가 최종 버전, 곧 마지막 학습을 씀)."
     if len(found) == 1:
         cmd = command_with_value(str(given), found[0])
         raise InputError(head + (f" [추천] {cmd}" if cmd else f" 학습한 데이터 파일: {found[0]}"))
@@ -4225,14 +4239,8 @@ def _model_path_near(given: str, ap: str) -> None:
 
 
 def resolve_model_arg(args: argparse.Namespace) -> argparse.Namespace:
-    """args.model: a data file -> its best version folder (model_dir_from_data), before any work."""
-    names = []
-    for v in (getattr(args, "targets", None), getattr(args, "maximize", None), getattr(args, "minimize", None)):
-        if v:
-            names += [x for x in str(v).split(",") if x.strip()]
-    if getattr(args, "find", None):
-        names.append(str(args.find).split("=", 1)[0])
-    args.model = model_dir_from_data(args.model, names)
+    """args.model: a data file -> its final version folder (model_dir_from_data), before any work."""
+    args.model = model_dir_from_data(args.model)
     return args
 
 
