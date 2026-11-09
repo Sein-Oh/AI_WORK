@@ -2216,3 +2216,24 @@ def test_chart_delete_dry_run_then_confirm(xl, capsys):
     assert code == 0 and out["count"] == 0 and "바뀔 것 없음" in out["preview"] and "confirm_commands" not in out, out
     code, out = run_excel(capsys, "chart", "--action", "list", "--dry-run")      # 읽기만 하는 동작: 받고 warnings (1.4.86)
     assert code == 0 and out["count"] == 0 and any("--dry-run을 무시" in w for w in out["warnings"]), out
+
+
+def test_style_many_cells_in_one_command(xl, capsys):
+    """1.4.91: 행마다 다른 칸을 칠할 때 칸마다 명령을 따로 실행하던 것 -> --range "B2;D5;F7"(칸 여러 개는 ;) 명령 한 번으로,
+    칸마다 다시 읽어 확인. ','로 이으면 ';'로 고친 전체 명령 [추천], 떨어진 칸에 --theme은 받지 않음."""
+    app, wb = xl
+    ws = ws_of(wb)
+    for r in range(1, 21):
+        for c in range(1, 9):
+            ws.set(r, c, float(r * c))
+    code, out = run_excel(capsys, "style", "--range", "B2;D5;F7", "--bg", "red")
+    assert code == 0 and out["verified"] is True and out["areas"] == 3 and out["range"] == "B2;D5;F7", out["message"] if code else out
+    colored = {k[0] for k in ws.styles if k[1] == "Interior"}
+    assert any(a.replace("$", "") == "B2,D5,F7" for a in colored), colored        # Excel에는 한 번 (B2,D5,F7)
+    many = ";".join(f"{c}{r}" for c in "EFGH" for r in range(1, 21))
+    code, out = run_excel(capsys, "style", "--range", many, "--bold")
+    assert code == 0 and out["verified"] is True and out["areas"] == 80, out["message"] if code else out          # 255자 넘는 목록은 나눠서 적용
+    code, out = run_excel(capsys, "style", "--range", "B2,D5", "--bg", "red")
+    assert code == 1 and "[추천]" in out["message"] and '--range "B2;D5"' in out["message"].replace("'", '"'), out
+    code, out = run_excel(capsys, "style", "--range", "B2;D5", "--theme", "navy")
+    assert code == 1 and "--theme" in out["message"], out

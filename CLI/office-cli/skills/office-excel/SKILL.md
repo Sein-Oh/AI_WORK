@@ -4,7 +4,7 @@ description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.90"
+  version: "1.4.91"
   platform: windows
 ---
 
@@ -28,7 +28,7 @@ metadata:
 | 표 쓰기 | `python "C:\CLI\office-cli\excel.py" write --range A1 --file "<표.csv>"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트 `--sheet 이름 --new-sheet`) |
 | 수식 쓰기 | `python "C:\CLI\office-cli\excel.py" write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
 | 차트 | `python "C:\CLI\office-cli\excel.py" chart --range A1:B101 --type line --title "<제목>"` (`--type <column/bar/line/pie/scatter/area>`, 목록 `--action list`, 지우기 `--action delete --name <제목>`) |
-| 서식 | `python "C:\CLI\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap`) |
+| 서식 | `python "C:\CLI\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap`). 떨어진 칸 여러 개는 한 번에 `--range "B2;D5;F7"` |
 | 범위 작업 | `python "C:\CLI\office-cli\excel.py" range --action <freeze/unfreeze/hide/unhide/width/height/autofit/clear/copy/move/merge> --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`) |
 | 행·열 넣기·지우기 | `python "C:\CLI\office-cli\excel.py" range --action <insert/delete> --range 5:7` (열은 `--range B:C`. 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸) |
 | 정렬 | `python "C:\CLI\office-cli\excel.py" range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |

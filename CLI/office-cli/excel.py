@@ -2234,6 +2234,35 @@ def _parse_highlight(rule: str) -> Tuple[str, str, int]:
     return "contains", cond, off.parse_color(color)
 
 
+STYLE_AREA_CHARS = 240     # Excel의 Range("B2,D5,...") 주소 글자 한도(255) 아래로 나눠 적용
+
+
+def _style_areas(address: Optional[str]) -> Tuple[Optional[str], List[str]]:
+    """--range "B2;D5;F7"(칸 여러 개는 ;, 사용법 단순성 3번) -> (시트 접두, 칸 목록). 칸 하나면 목록이 하나.
+    ','로 이으면 받지 않고 ';'로 고친 전체 명령을 [추천] (1.4.91, 행마다 다른 칸을 칠할 때 칸마다 명령을 따로 실행하던 것)."""
+    if not address:
+        return None, []
+    sheet, cells = split_sheet(address)
+    prefix = (address[:len(address) - len(cells)]) if sheet else ""
+    if "," in cells:
+        fixed = prefix + ";".join(p.strip() for p in cells.split(",") if p.strip())
+        raise rt.InputError(f"--range의 칸 여러 개는 ';'로 나눕니다: '{address}'. [추천] {rt.retry_command({'--range': fixed})}",
+                            no_fallback=True)
+    parts = [p.strip() for p in cells.split(";") if p.strip()]
+    return prefix, parts
+
+
+def _style_chunks(prefix: str, parts: List[str]) -> List[str]:
+    """칸 목록 -> Range 주소 묶음 ('Sheet1'!B2,D5 ...), 묶음마다 STYLE_AREA_CHARS 글자 이하."""
+    out: List[List[str]] = []
+    for p in parts:
+        if out and len(",".join(out[-1] + [p])) <= STYLE_AREA_CHARS:
+            out[-1].append(p)
+        else:
+            out.append([p])
+    return [prefix + ",".join(c) for c in out]
+
+
 def cmd_style(args) -> Dict[str, Any]:
     if args.dry_run:
         raise rt.dry_run_unsupported(TOOL, "style")
@@ -2243,6 +2272,12 @@ def cmd_style(args) -> Dict[str, Any]:
         raise rt.InputError("적용할 서식이 없습니다. --theme, --bg, --color, --bold, --number-format, --border, --highlight 등을 지정하세요.")
     # 모든 입력 확인은 문서를 열기 전에 (서식을 지운 뒤 --highlight 오류로 멈추면 지운 서식이 되돌리기 지점 없이 남았음)
     rule = _parse_highlight(args.highlight) if args.highlight else None
+    prefix, parts = _style_areas(args.range)
+    if len(parts) > 1 and theme:
+        raise rt.InputError("--theme(표 모양)은 범위 하나에만 씁니다. 떨어진 칸 여러 개(--range \"B2;D5\")에는 --bg, --color, --bold 같은 "
+                            "서식을 씁니다.", no_fallback=True)
+    if len(parts) > 1:
+        return _style_many(args, fmt, rule, prefix, parts)
     with write_session(args, "style") as t:
         ws = t.sheet(args.sheet)
         rng = target_range(t, ws, args.range)
@@ -2280,6 +2315,57 @@ def cmd_style(args) -> Dict[str, Any]:
     if problems:
         return rt.ok_unverified(TOOL, "style", preview, problems, target_resolved=resolved, applied=applied, **info)
     return rt.ok(TOOL, "style", preview, "VERIFIED: 적용한 서식을 다시 읽어 확인했습니다.", verified=True,
+                 target_resolved=resolved, applied=applied, **info)
+
+
+def _apply_rule(rng: Any, rule: Tuple[str, str, Any]) -> None:
+    """--highlight 조건부 강조 하나 (cmd_style과 같은 식)."""
+    op, val, color = rule
+    if op == "contains":
+        top_left = str(rng.Cells(1, 1).Address).replace("$", "")
+        lit = re.sub(r"([~?*])", r"~\1", val).replace('"', '""')
+        fc = rng.FormatConditions.Add(Type=2, Formula1=f'=ISNUMBER(SEARCH("{lit}",{top_left}))')
+    else:
+        is_num = bool(re.fullmatch(r"[+-]?\d+(\.\d+)?", val))
+        formula = val if is_num else '="' + val.replace('"', '""') + '"'
+        fc = rng.FormatConditions.Add(Type=1, Operator=XL_OPERATOR[op], Formula1=f"={formula}" if is_num else formula)
+    fc.Interior.Color = color
+
+
+def _style_many(args: Any, fmt: Dict[str, Any], rule: Optional[Tuple[str, str, Any]], prefix: str,
+                parts: List[str]) -> Dict[str, Any]:
+    """--range "B2;D5;F7": 떨어진 칸 여러 개에 같은 서식을 명령 한 번으로 (1.4.91). 되돌리기 지점 하나, 칸마다 다시 읽어 확인."""
+    with write_session(args, "style") as t:
+        ws = t.sheet(args.sheet)
+        rngs = [target_range(t, ws, a) for a in _style_chunks(prefix, parts)]
+        ws = rngs[0].Worksheet
+        check_protection(ws, rngs, "format_cells")
+        applied: Dict[str, Any] = {}
+        with off.excel_batch(t.app):
+            for rng in rngs:
+                if args.clear:
+                    rng.ClearFormats()
+                    rng.FormatConditions.Delete()
+                if fmt:
+                    _apply_format(rng, fmt)
+                if rule is not None:
+                    _apply_rule(rng, rule)
+        if args.clear:
+            applied["cleared"] = True
+        if fmt:
+            applied["format"] = sorted(fmt)
+        if rule is not None:
+            applied["highlight"] = args.highlight
+        problems = [p for rng in rngs for p in _verify_style(ws, rng, fmt, None, bool(args.highlight))]
+        t.set_focus(sheet=ws)
+        sheet = str(ws.Name)
+        resolved = t.resolved()
+    shown = ";".join(parts[:20]) + (f" 외 {len(parts) - 20}곳" if len(parts) > 20 else "")
+    preview = f"{sheet}!{shown} ({len(parts)}곳)에 서식 적용: {', '.join(map(str, applied))}"
+    info = {"sheet": sheet, "range": ";".join(parts), "areas": len(parts)}
+    if problems:
+        return rt.ok_unverified(TOOL, "style", preview, problems[:10], target_resolved=resolved, applied=applied, **info)
+    return rt.ok(TOOL, "style", preview, f"VERIFIED: {len(parts)}곳에 적용한 서식을 다시 읽어 확인했습니다.", verified=True,
                  target_resolved=resolved, applied=applied, **info)
 
 
