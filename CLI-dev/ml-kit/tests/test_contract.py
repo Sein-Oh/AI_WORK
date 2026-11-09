@@ -281,7 +281,7 @@ def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
     payload = run_tool("ml_report.py", "--model", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
-    assert out.is_file() and payload["best_version"]
+    assert out.is_file() and payload["version"] == "v1" and "best_version" not in payload
 
 
 @needs_docx

@@ -30,7 +30,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text, quote_arg,
     parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
-    RESUME_MAX_AGE, option_retry, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed,
+    RESUME_MAX_AGE, option_retry, time_limit, final_version, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed,
 )
 
 setup_console()
@@ -3257,6 +3257,7 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
 
     out.write("=" * 125 + "\n\n")
 
+    final = final_version(data_root)      # the same choice as the report and prediction (a damaged latest folder is skipped)
     shown = rows[-HISTORY_SHOWN:]
     cut = len(shown) < len(rows)
     return {
@@ -3268,11 +3269,14 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
         "shown": len(shown),
         "truncated": cut,
         **({"full_result_file": os.path.join(data_root, "history.json")} if cut else {}),
-        "latest_version": rows[-1]["version"],          # the final version: the report and prediction use it (2.9.83)
-        "latest_version_dir": os.path.join(data_root, rows[-1]["version"]),
+        "latest_version": final["version"] if final else None,     # the final version the report and prediction use (2.9.83)
+        "latest_version_dir": final["version_dir"] if final else None,
+        **({"latest_version_note": f"마지막 학습 {', '.join(final['skipped'])}의 폴더가 없거나 손상돼 그 앞의 {final['version']}을(를) 씀"}
+           if final and final["skipped"] else {}),
         "records": shown,
         "verified": True,
-        "preview": f"학습 기록 {len(rows)}건, 최종 버전 {rows[-1]['version']} (보고서·예측이 쓰는 버전)",
+        "preview": (f"학습 기록 {len(rows)}건, 최종 버전 {final['version'] if final else '없음'} (보고서·예측이 쓰는 버전)"
+                    + (f". 마지막 학습 {', '.join(final['skipped'])}의 폴더가 없거나 손상돼 그 앞 버전을 씀" if final and final["skipped"] else "")),
         "agent_directive": ("VERIFIED: 학습 이력입니다. records의 version, mean_val_score, delta_score, tag를 표로 알리세요. "
                             "history.jsonl을 다시 읽지 마세요."
                             + (f" records에는 최근 {len(shown)}건만 있습니다 (전체 {len(rows)}건: full_result_file)." if cut else "")),

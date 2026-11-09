@@ -696,7 +696,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     acc.sheet_view.showGridLines = False
     row = 2
     for p in plans:
-        style(acc.cell(row=row, column=2, value=f"{p['target']}: 입력 수별 후보 (선택: 입력 {len(p['cand']['inputs'])}개)"),
+        style(acc.cell(row=row, column=2, value=f"{p['target']}: 표 정확도 (입력 {len(p['cand']['inputs'])}개)"),
               size=12, bold=True, color=NAVY, border=False)
         row += 1
         hdr = ("입력 수", "입력", "검증 R²", "RMSE", "모델", "표 행 수", "표 보간 오차(RMSE)", "예상 최종 오차", "선택")

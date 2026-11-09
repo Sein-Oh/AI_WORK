@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Word 보고서(ml_report.py)와 성능예측표(ml_export.py, 엑셀 계산기).
 
-보고서: 구성, 숫자 형식, WordprocessingML 스키마 순서, 손상된 템플릿 복구, 보고서와 성능예측표 세트.
-성능예측표: 재학습으로 입력 고르기(상호작용 입력은 남김, --keep 존중, 8개까지), 수식만으로 보간하는 잠긴 엑셀,
-LibreOffice가 있으면 수식을 다시 계산해 Python 값과 비교.
+보고서: 구성, 숫자 형식, WordprocessingML 스키마 순서, 손상된 템플릿 복구, --file은 최종 버전(마지막 학습), 보고서와 성능예측표 세트.
+성능예측표: 버전의 입력 전부(다시 학습하지 않고 버전의 모델), 값이 하나뿐인 입력만 뺌, 8개를 넘으면 [후보], --inputs,
+수식만으로 보간하는 잠긴 엑셀, LibreOffice가 있으면 수식을 다시 계산해 Python 값과 비교.
 """
 import argparse
 import json
@@ -17,7 +17,7 @@ import openpyxl
 import pandas as pd
 import pytest
 
-pytestmark = pytest.mark.report    # 보고서·성능예측표: 다른 로직이 마무리될 때까지 시험에서 뺌 (pytest.ini)
+pytestmark = pytest.mark.report    # 보고서·성능예측표 (오래 걸림: 빼려면 -m "not report", pytest.ini)
 from scipy.interpolate import RegularGridInterpolator
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -229,7 +229,8 @@ def test_report_fmt_significant_digits():
     assert mr.fmt(0.0009876) == "0.0009876" and mr.fmt(0.001234) == "0.001234"
 
 
-def test_report_reuses_single_best_version(tmp_path):
+def test_report_file_uses_final_version(tmp_path):
+    """2.9.83: --file은 최종 버전(마지막 학습)으로 보고서 1개. 다시 학습하지 않고 새 버전을 만들지 않는다."""
     pytest.importorskip("docx")
     pytest.importorskip("matplotlib")
     import docx
@@ -242,11 +243,61 @@ def test_report_reuses_single_best_version(tmp_path):
     data = write_df(tmp_path / "multi.csv", df)
     tr = run_tool("ml_train.py", "--file", data, "--features", "a,b", "--targets", "y1,y2")
     rep = run_tool("ml_report.py", "--file", data)
-    assert rep["made_best"] is False and rep["best_version"] == tr["version"] == "v1"   # 2.9.13: rebuilt v2
-    assert not os.path.isdir(os.path.join(tr["data_root"], "v2"))
-    assert rep["best_targets"]["y1"]["source_version"] == "v1"
+    assert rep["version"] == tr["version"] == "v1" and rep["targets"] == ["y1", "y2"]
+    assert not os.path.isdir(os.path.join(tr["data_root"], "v2")) and "warnings" not in rep
+    for gone in ("best_version", "made_best", "best_versions", "best_targets", "best_reports"):
+        assert gone not in rep, gone
     text = "\n".join(p.text for p in docx.Document(rep["report_file"]).paragraphs)
     assert "중복 행 4개" in text                                                 # 2.9.13: not in the report
+
+
+def _three_target_data(tmp_path):
+    r = np.random.default_rng(16)
+    n = 60
+    df = pd.DataFrame({"a": r.uniform(0, 10, n), "b": r.uniform(0, 5, n), "c": r.uniform(0, 1, n)})
+    df["A"] = 2 * df.a + r.normal(0, 0.2, n)
+    df["B"] = 3 * df.b + r.normal(0, 0.2, n)
+    df["S"] = df.a + df.b + r.normal(0, 0.2, n)
+    return write_df(tmp_path / "hist.csv", df)
+
+
+@needs_report
+def test_report_file_uses_latest_run_and_warns_targets_left_out(tmp_path):
+    """집 PC(2.9.82): v1(타겟 A, B, S) 뒤 S를 빼고 v2를 학습했는데 보고서가 최고 버전을 다시 학습하며 S를 다시 넣었다.
+    이제 보고서는 v2(A, B)이고, 이력에만 있는 S는 warnings로 알린다."""
+    data = _three_target_data(tmp_path)
+    run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B,S")
+    run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B")
+    rep = run_tool("ml_report.py", "--file", data)
+    assert rep["version"] == "v2" and rep["targets"] == ["A", "B"], rep
+    gone = [w for w in rep["warnings"] if "S" in w and "v2" in w and "다시 학습" in w]
+    assert len(gone) == 1, rep["warnings"]
+    assert "warnings" in rep["agent_directive"]
+    heads = _headings(rep["report_file"])[1]
+    assert "4.1. A" in heads and "4.2. B" in heads and not any(h.endswith(". S") for h in heads)
+    assert not os.path.isdir(tmp_path / "hist_ml_data" / "v3")                 # 다시 학습하지 않음
+    # 타겟을 골라 만들면(--targets) 이력 안내는 없음
+    only = run_tool("ml_report.py", "--file", data, "--targets", "A", "--save", str(tmp_path / "a.docx"))
+    assert only["version"] == "v2" and only["targets"] == ["A"] and "warnings" not in only
+
+
+@needs_report
+def test_report_file_warns_about_an_earlier_version_with_a_higher_score(tmp_path):
+    """같은 타겟의 예전 버전 점수가 더 높으면 warnings에 그 버전과 그 버전으로 만드는 --model 명령 (그대로 실행됨).
+    다른 타겟 묶음(v1: A, B, S)은 비교하지 않는다."""
+    data = _three_target_data(tmp_path)
+    run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B,S")
+    v2 = run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B")
+    v3 = run_tool("ml_train.py", "--file", data, "--features", "c", "--targets", "A,B")          # 나쁜 입력: 점수가 낮음
+    assert v2["mean_val_score"] > v3["mean_val_score"]
+    rep = run_tool("ml_report.py", "--file", data, "--save", str(tmp_path / "r3.docx"))
+    assert rep["version"] == "v3", rep
+    better = [w for w in rep["warnings"] if "점수가 더 높았습니다" in w]
+    assert len(better) == 1 and "v2" in better[0] and "v1" not in better[0], rep["warnings"]
+    argv = split_command(better[0].split("그 버전으로 만들려면: ", 1)[1])
+    assert argv[0] == "python" and argv[argv.index("--model") + 1] == v2["version_dir"], argv
+    old = run_tool(os.path.basename(argv[1]), *argv[2:])
+    assert old["version"] == "v2" and old["targets"] == ["A", "B"] and "warnings" not in old
 
 
 # ---- 손상된 Word 템플릿 (회사 PC 문서 보안) ------------------------------------------------------------
@@ -415,7 +466,7 @@ def test_report_makes_calculator_in_the_same_folder(tmp_path, with_export):
     root = os.path.dirname(tr["version_dir"])
     assert os.path.dirname(rep["report_file"]) == root and os.path.isfile(os.path.join(root, "history.jsonl"))
     assert rep["export_file"] == os.path.join(root, "성능예측표_p_v1.xlsx") and os.path.isfile(rep["export_file"])
-    assert rep["export"]["효율"]["inputs"] == ["온도", "압력"] and "성능예측표" in rep["preview"]
+    assert rep["export"]["효율"]["inputs"] == ["온도", "압력", "잡음"] and "성능예측표" in rep["preview"]   # 2.9.83: 입력 전부
     assert "export_file" in rep["agent_directive"]
     a = rep["export"]["효율"]["agreement"]                                       # 2.9.4: agreement with the model
     assert 95 < a["agreement_pct"] <= 100 and a["p95_diff_pct"] >= 0
@@ -447,15 +498,16 @@ def test_calculator_failure_keeps_the_report(tmp_path, with_export):
 
 def test_report_unverified_when_calculator_unverified():
     result = {"preview": "p", "verified": True, "agent_directive": "VERIFIED: 보고서 저장."}
-    ex = {"result": {"output_file": "x.xlsx", "targets": {}, "verified": False,
+    ex = {"result": {"output_file": "x.xlsx", "targets": {}, "verified": False, "preview": "성능예측표 생성: y",
                      "unverified": ["엑셀이 없는 환경이라 엑셀에서 수식 계산은 확인하지 못함"]}}
     mr.attach_export(result, ex)
     assert result["verified"] is False and result["export_verified"] is False      # 2.9.14: VERIFIED
     assert result["agent_directive"].startswith("UNVERIFIED:")
     assert result["unverified"] == ["성능예측표: 엑셀이 없는 환경이라 엑셀에서 수식 계산은 확인하지 못함"]
     ok = {"preview": "p", "verified": True, "agent_directive": "VERIFIED: r."}
-    mr.attach_export(ok, {"result": {"output_file": "x.xlsx", "targets": {}, "verified": True}})
+    mr.attach_export(ok, {"result": {"output_file": "x.xlsx", "targets": {}, "verified": True, "preview": "성능예측표 생성: y"}})
     assert ok["verified"] is True and ok["agent_directive"].startswith("VERIFIED:")
+    assert ok["preview"] == "p | 성능예측표 생성: y (x.xlsx)"                     # 2.9.83: 성능예측표 preview를 이어 붙임
 
 
 def test_report_passes_overwrite_and_targets(monkeypatch, tmp_path):
@@ -464,17 +516,17 @@ def test_report_passes_overwrite_and_targets(monkeypatch, tmp_path):
 
     def fake(args):
         seen.update(vars(args))
-        return {"output_file": "x.xlsx", "targets": {}, "verified": True, "warnings": ["w1"]}
+        return {"output_file": "x.xlsx", "targets": {}, "verified": True, "warnings": ["w1"], "preview": "성능예측표 생성: y"}
     monkeypatch.delenv("ML_KIT_SKIP_EXPORT", raising=False)
     monkeypatch.setattr(ml_export, "execute_export", fake)
     ex = mr.make_export(str(tmp_path), "regression", None, ["생산효율"], overwrite=True)
-    assert seen["overwrite"] is True and seen["targets"] == "생산효율"
+    assert seen["overwrite"] is True and seen["targets"] == "생산효율" and seen["inputs"] is None and "keep" not in seen
     result = {"preview": "p", "agent_directive": "VERIFIED: r."}
     mr.attach_export(result, ex)                                          # E7
     assert result["export_warnings"] == ["w1"] and "export_warnings" in result["agent_directive"]
 
 
-# ---- 성능예측표: 입력 고르기, 잠긴 엑셀, 수식 다시 계산 ----------------------------------------------------
+# ---- 성능예측표: 버전의 입력 전부, 잠긴 엑셀, 수식 다시 계산 ----------------------------------------------------
 
 
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
@@ -482,7 +534,7 @@ SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
 
 @pytest.fixture(scope="module")
 def export_version(tmp_path_factory):
-    """유량 x 농도가 상호작용(유량 혼자는 덜 중요해 보임), 잡음은 무관한 데이터의 버전."""
+    """유량 x 농도가 상호작용, 잡음은 무관한 데이터의 버전 (입력 4개)."""
     d = tmp_path_factory.mktemp("exp")
     r = np.random.default_rng(21)
     n = 500
@@ -511,14 +563,24 @@ def _recalc(path, tmp):
     return openpyxl.load_workbook(out / "o" / "t.xlsx", data_only=True)
 
 
-def test_search_keeps_interacting_input_and_builds_locked_workbook(export_version, tmp_path):
+def test_export_uses_every_input_and_the_version_model(export_version):
+    """2.9.83: 입력은 버전의 입력 전부(잡음 포함). 아무 입력도 빼지 않으면 다시 학습하지 않고 버전의 모델을 쓴다."""
     _, _, vdir = export_version
-    r = run_tool("ml_export.py", "--model", vdir)
+    proc, r = run_raw("ml_export.py", "--model", vdir)
+    ok_res(r, proc)
     t = r["targets"]["효율"]
-    assert t["inputs"] == ["온도", "유량", "농도"] and t["dropped"] == ["잡음"]          # 유량 kept despite low importance
-    assert [c["count"] for c in t["candidates"]] == [4, 3, 2, 1] and "0.005" in t["reason"]
+    assert t["inputs"] == ["온도", "유량", "농도", "잡음"] and t["dropped"] == [], t
+    assert "후보 학습: 새로 0개, 저장된 것 재사용 0개" in proc.stderr                     # 다시 학습하지 않음
+    assert not os.path.isdir(os.path.join(vdir, "export", "_fits")) or not os.listdir(os.path.join(vdir, "export", "_fits"))
+    champ = json.load(open(os.path.join(vdir, "leaderboard.json"), encoding="utf-8"))["targets"]["효율"]["champion"]
+    assert t["model"] == champ["champion_model"] and t["val_r2"] == round(champ["val_r2"], 4), (t, champ)
+    assert "그대로" in t["reason"] and len(t["candidates"]) == 1 and "command" not in t["candidates"][0]
+    assert r["next_commands"] == [] and r["next_commands_count"] == 0
+    cands = pd.read_csv(os.path.join(r["export_model_dir"], "candidates.csv"), encoding="utf-8-sig")
+    assert len(cands) == 1 and cands["선택"].tolist() == ["선택"]
     assert os.path.isfile(os.path.join(r["export_model_dir"], "model_효율.joblib"))
-    assert r["title"] == "시험용 공정 효율 데이터." and r["next_commands"][0]["command"].count("--inputs") == 1
+    assert r["title"] == "시험용 공정 효율 데이터."
+    assert "preview" in r["agent_directive"] and r["preview"].startswith("성능예측표 생성: 효율: 입력 4개")
     wb = openpyxl.load_workbook(r["output_file"])
     assert wb.sheetnames == ["계산기", "일괄계산", "사용법", "표_효율", "정확도", "정보"]
     assert all(wb[n].protection.sheet for n in wb.sheetnames) and wb.security.lockStructure
@@ -526,9 +588,9 @@ def test_search_keeps_interacting_input_and_builds_locked_workbook(export_versio
     assert all(wb[n].sheet_state == "visible" for n in wb.sheetnames if not n.startswith("표_"))
     calc = wb["계산기"]
     unlocked = [c.coordinate for row in calc.iter_rows() for c in row if not c.protection.locked]
-    assert unlocked == ["C6", "C7", "C8"] and calc["B6"].value == "온도"
+    assert unlocked == ["C6", "C7", "C8", "C9"] and calc["B6"].value == "온도" and calc["B9"].value == "잡음"
     batch = wb["일괄계산"]
-    assert not batch["A3"].protection.locked and batch["E3"].protection.locked
+    assert not batch["A3"].protection.locked and not batch["D3"].protection.locked and batch["E3"].protection.locked
     assert wb["표_효율"].max_row - 1 == t["table_rows"]
     a = t["agreement"]
     assert a["points"] == 2000 and a["agreement_pct"] > 90 and a["max_diff_pct"] >= a["p95_diff_pct"]
@@ -550,14 +612,15 @@ def test_status_cells_have_visible_colors(export_version):
         assert all(d.fill.bgColor.rgb.endswith("FCE4D6") and d.font.color.rgb.endswith("C2410C") for d in warn)
 
 
-def test_keep_and_inputs_and_errors(export_version):
+def test_inputs_and_title_and_errors(export_version):
+    """--inputs는 사용자가 정한 입력으로 한 번 학습, --title은 계산기 제목. --keep은 없앰 (2.9.83, 인자 오류)."""
     _, _, vdir = export_version
-    k = run_tool("ml_export.py", "--model", vdir, "--keep", "잡음", "--title", "짧은 제목")
-    assert "잡음" in k["targets"]["효율"]["inputs"] and k["title"] == "짧은 제목"
-    i = run_tool("ml_export.py", "--model", vdir, "--inputs", "온도,유량")
+    i = run_tool("ml_export.py", "--model", vdir, "--inputs", "온도,유량", "--title", "짧은 제목")
     assert i["targets"]["효율"]["inputs"] == ["온도", "유량"] and len(i["targets"]["효율"]["candidates"]) == 1
-    assert "[후보] 1) '온도'" in run_fail("ml_export.py", "--model", vdir, "--keep", "온도x")["message"]     # 2.9.33: was [추천], 2.9.71: 번호
-    assert "--keep" in run_fail("ml_export.py", "--model", vdir, "--keep", "잡음", "--inputs", "온도")["message"]
+    assert i["targets"]["효율"]["dropped"] == ["농도", "잡음"] and i["title"] == "짧은 제목"
+    assert "[후보] 1) '온도'" in run_fail("ml_export.py", "--model", vdir, "--inputs", "온도x")["message"]   # 2.9.33: was [추천], 2.9.71: 번호
+    proc, payload = run_raw("ml_export.py", "--model", vdir, "--keep", "잡음")
+    assert proc.returncode == 2 and payload["status"] == "error", payload
     proc, payload = run_raw("ml_export.py", "-h")
     assert proc.returncode == 0 and payload["command"] == "help"
 
@@ -612,7 +675,7 @@ def test_derived_features_stay_inside_the_model(tmp_path):
 
 
 def test_several_inputs_and_outputs(tmp_path):
-    """출력마다 자기 입력(학습 순서)을 쓴다. 계산기는 입력의 합집합을 받고, 출력은 자기 입력이 다 차면 계산한다."""
+    """출력마다 자기 입력(학습 순서)을 쓴다 (--inputs 타겟마다). 계산기는 입력의 합집합을 받고, 출력은 자기 입력이 다 차면 계산한다."""
     r = np.random.default_rng(31)
     n = 300
     df = pd.DataFrame({"온도": r.uniform(0, 1, n), "압력": r.uniform(0, 1, n), "유량": r.uniform(0, 1, n), "분진": r.uniform(0, 1, n)})
@@ -621,12 +684,12 @@ def test_several_inputs_and_outputs(tmp_path):
     p = tmp_path / "m.csv"
     df.to_csv(p, index=False)
     v = run_tool("ml_train.py", "--file", str(p), "--features", "온도,압력,유량,분진", "--targets", "효율,전력")["version_dir"]
-    res = run_tool("ml_export.py", "--model", v, "--save", str(tmp_path / "m.xlsx"))
+    res = run_tool("ml_export.py", "--model", v, "--inputs", "효율=온도;전력=압력,유량", "--save", str(tmp_path / "m.xlsx"))
     assert list(res["targets"]) == ["효율", "전력"]                                       # --targets order
     assert res["targets"]["효율"]["inputs"] == ["온도"] and res["targets"]["전력"]["inputs"] == ["압력", "유량"]
     wb = openpyxl.load_workbook(res["output_file"])
     calc = wb["계산기"]
-    assert [calc[f"B{r}"].value for r in (6, 7, 8)] == ["온도", "압력", "유량"]          # union, 분진 dropped everywhere
+    assert [calc[f"B{r}"].value for r in (6, 7, 8)] == ["온도", "압력", "유량"]          # union in training order, 분진 not given
     assert [calc[f"B{r}"].value for r in (11, 12)] == ["효율", "전력"]
     assert "COUNT($C$6)=1" in calc["C11"].value and "COUNT($C$7,$C$8)=2" in calc["C12"].value
     assert wb.sheetnames[3:5] == ["표_효율", "표_전력"]
@@ -678,7 +741,7 @@ def test_calculator_range_ignores_excluded_rows_and_constant_input(tmp_path):
     assert "2000" not in text and "1999" not in text                       # range / out-of-range checks use 150~200
 
 
-def test_inputs_and_keep_drop_constant_with_hint(tmp_path):
+def test_constant_input_is_dropped_with_hint(tmp_path):
     r = np.random.default_rng(6)
     df = pd.DataFrame({"a": r.uniform(0, 1, 200), "k": 1.0})
     df["y"] = 3 * df.a + r.normal(0, 0.05, 200)
@@ -687,9 +750,13 @@ def test_inputs_and_keep_drop_constant_with_hint(tmp_path):
     v = run_tool("ml_train.py", "--file", str(p), "--features", "a,k", "--targets", "y")["version_dir"]
     bad = run_fail("ml_export.py", "--model", v, "--inputs", "k")
     # 2.9.33: [후보] (another input set is the user's choice), was "[추천] a"
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "[후보] a" in bad["message"] and "[추천]" not in bad["message"]
-    ok = run_tool("ml_export.py", "--model", v, "--keep", "k", "--save", str(tmp_path / "k.xlsx"))
-    assert ok["targets"]["y"]["inputs"] == ["a"]
+    assert bad["agent_directive"].startswith("STOP_RETRY") and "[후보] 1) a" in bad["message"] and "[추천]" not in bad["message"]
+    # 입력을 정하지 않으면 값이 하나뿐인 k만 빼고(warnings) 나머지로 한 번 다시 학습
+    proc, ok = run_raw("ml_export.py", "--model", v, "--save", str(tmp_path / "k.xlsx"))
+    ok_res(ok, proc)
+    t = ok["targets"]["y"]
+    assert t["inputs"] == ["a"] and t["dropped"] == ["k"] and "값이 하나뿐인 입력만 뺌" in t["reason"], t
+    assert any("k" in w for w in ok["warnings"]) and "후보 학습: 새로 1개" in proc.stderr
 
 
 @pytest.mark.skipif(SOFFICE is None, reason="LibreOffice not installed")
@@ -724,7 +791,7 @@ def test_export_constant_inputs_candidates(name_files):
     ok_res(res, proc)
     proc, res = run_raw("ml_export.py", "--model", os.path.join(str(name_files["tmp"]), "const_ml_data", "v1"), "--inputs", "라인")
     msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] 온도, 압력" in msg, msg
+    assert "[추천]" not in msg and "[후보] 1) 온도 2) 압력" in msg, msg
 
 
 @pytest.fixture(scope="module")
@@ -740,27 +807,28 @@ def nine(tmp_path_factory):
     return {"work": work, "v": v, "cols": cols}
 
 
-def test_more_than_eight_inputs_recommends_a_set(nine):
-    bad = run_fail("ml_export.py", "--model", nine["v"], "--inputs", ",".join(nine["cols"]))
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "[추천]" in bad["message"]
-    argv = split_command(bad["message"].split("[추천] ")[1].strip())       # 2.9.71: 전체 명령
-    rec = argv[argv.index("--inputs") + 1].split(",")
-    assert argv[0] == "python" and argv.count("--inputs") == 1 and 1 <= len(rec) <= 8 and set(rec) <= set(nine["cols"])
+def _run_confirm(item):
+    argv = split_command(item["command"])
+    assert argv[0] == "python" and os.path.basename(argv[1]) == "ml_export.py", argv
+    return argv, run_raw(os.path.basename(argv[1]), *argv[2:])
 
 
-def test_automatic_search_stays_within_eight(nine):
-    keep = ",".join(nine["cols"][2:])                        # 7 kept: only two candidates to try
-    res = run_tool("ml_export.py", "--model", nine["v"], "--keep", keep, "--save", str(nine["work"] / "n.xlsx"))
-    t = res["targets"]["y"]
-    assert len(t["inputs"]) <= 8
-    big = [c for c in t["candidates"] if c["count"] == 9][0]
-    assert "command" not in big and big["table_rows"] is None and "note" in big
-    assert any("8개" in w for w in res["warnings"])
-
-
-def test_keep_over_eight_is_refused(nine):
-    bad = run_fail("ml_export.py", "--model", nine["v"], "--keep", ",".join(nine["cols"]))
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "8개" in bad["message"]
+def test_more_than_eight_inputs_asks_with_candidates(nine):
+    """2.9.83: 입력이 8개를 넘으면 만들지 않고 줄인 안을 [후보] + 같은 번호의 confirm_commands(--inputs)로 준다
+    (사용자가 학습에 준 입력을 빼는 일이라 사용자가 정함, 2.9.82까지 [추천]). 그 명령은 그대로 실행된다."""
+    for extra in ((), ("--inputs", ",".join(nine["cols"]))):
+        bad = run_fail("ml_export.py", "--model", nine["v"], *extra)
+        msg = bad["message"]
+        assert bad["agent_directive"].startswith("STOP_RETRY") and bad["error_type"] == "needs_user_decision", bad
+        assert "[후보] 1) " in msg and "[추천]" not in msg and "9개 -> 8개" in msg and "뺄 입력: " in msg, msg
+        assert len(bad["confirm_commands"]) == 1
+        argv = split_command(bad["confirm_commands"][0]["command"])
+        rec = argv[argv.index("--inputs") + 1].split(",")
+        assert argv.count("--inputs") == 1 and len(rec) == 8 and set(rec) < set(nine["cols"]), argv
+        assert not list(nine["work"].glob("nine_ml_data/*.xlsx"))
+    argv, (proc, res) = _run_confirm(bad["confirm_commands"][0])
+    ok_res(res, proc)
+    assert res["targets"]["y"]["inputs"] == rec and "후보 학습: 새로 0개" in proc.stderr          # 찾을 때 학습한 안을 다시 씀
 
 
 @pytest.fixture(scope="module")
@@ -777,14 +845,21 @@ def nine2(tmp_path_factory):
     return {"work": work, "v": v, "cols": cols}
 
 
-def test_inputs_over_eight_recommends_every_target(nine2):
+def test_inputs_over_eight_asks_for_every_target(nine2):
     spec = f"ya={','.join(nine2['cols'])};yb=x0,x1"
     bad = run_fail("ml_export.py", "--model", nine2["v"], "--inputs", spec)
-    argv = split_command(bad["message"].split("[추천] ")[1].strip())       # 2.9.71: 전체 명령
+    assert "[후보] 1) " in bad["message"] and "[추천]" not in bad["message"] and bad["error_type"] == "needs_user_decision"
+    argv = split_command(bad["confirm_commands"][0]["command"])
     rec = argv[argv.index("--inputs") + 1]
     parts = dict(p.split("=", 1) for p in rec.split(";"))
-    assert parts["yb"] == "x0,x1"                                              # 2.9.12: [추천] ya=... only
+    assert parts["yb"] == "x0,x1"                                              # 2.9.12: ya=... only
     assert 1 <= len(parts["ya"].split(",")) <= 8
+    # --inputs 없이: 두 타겟 모두 입력 9개라 한 [후보]에 둘 다 줄인 안
+    both = run_fail("ml_export.py", "--model", nine2["v"])
+    assert "'ya' 9개 -> 8개" in both["message"] and "'yb' 9개 -> 8개" in both["message"], both["message"]
+    argv = split_command(both["confirm_commands"][0]["command"])
+    parts = dict(p.split("=", 1) for p in argv[argv.index("--inputs") + 1].split(";"))
+    assert set(parts) == {"ya", "yb"} and all(len(v.split(",")) == 8 for v in parts.values()), parts
 
 
 def test_inputs_spec_safe():
@@ -803,7 +878,7 @@ def test_spec_safe_single_target_ignores_target_name():
 
 @pytest.fixture(scope="module")
 def two_export(tmp_path_factory):
-    """ya는 a,b, yb는 a,c를 쓰는 최고 버전."""
+    """ya = a, b / yb = a, c인 데이터를 입력 a, b, c로 학습한 버전 (타겟 2개)."""
     work = tmp_path_factory.mktemp("two")
     r = np.random.default_rng(2)
     n = 150
@@ -812,33 +887,26 @@ def two_export(tmp_path_factory):
     df["yb"] = 2 * df.a + 4 * df.c + r.normal(0, 0.02, n)
     p = work / "two.csv"
     df.to_csv(p, index=False)
-    run_tool("ml_train.py", "--file", str(p), "--features", "a,b", "--targets", "ya")
-    run_tool("ml_train.py", "--file", str(p), "--features", "a,c", "--targets", "yb")
-    best = run_tool("ml_train.py", "--file", str(p), "--best")
-    return {"work": work, "v": best["best_version_dir"]}
+    tr = run_tool("ml_train.py", "--file", str(p), "--features", "a,b,c", "--targets", "ya,yb")
+    return {"work": work, "v": tr["version_dir"]}
 
 
-def test_keep_and_inputs_apply_to_targets_that_have_them(two_export):
-    res = run_tool("ml_export.py", "--model", two_export["v"], "--keep", "b", "--save", str(two_export["work"] / "k.xlsx"))
-    assert "b" in res["targets"]["ya"]["inputs"] and res["targets"]["ya"]["keep"] == ["b"]
-    assert res["targets"]["yb"]["keep"] == []
-    bad = run_fail("ml_export.py", "--model", two_export["v"], "--keep", "zzz")
-    assert bad["agent_directive"].startswith("STOP_RETRY")
-    # rebuild commands keep the other target's inputs (per-target --inputs), no single --targets
-    cmds = [c["command"] for c in res["next_commands"]]
-    assert cmds and all(" --targets " not in c and "ya=" in c and "yb=" in c for c in cmds)
-    assert res["truncated"] is False and res["next_commands_count"] == len(cmds)
-    alt = [c for c in res["targets"]["ya"]["candidates"] if "command" in c][0]
-    argv = split_command(alt["command"])
-    spec = argv[argv.index("--inputs") + 1]
-    again = run_tool("ml_export.py", "--model", two_export["v"], "--inputs", spec, "--save", str(two_export["work"] / "k2.xlsx"))
-    assert again["targets"]["ya"]["inputs"] == alt["inputs"]
-    assert again["targets"]["yb"]["inputs"] == res["targets"]["yb"]["inputs"]
+def test_inputs_for_one_target_keeps_every_input_of_the_other(two_export):
+    """--inputs에 한 타겟만 적으면 다른 타겟은 버전의 입력을 모두 넣고(버전의 모델 그대로) warnings로 알린다."""
+    proc, res = run_raw("ml_export.py", "--model", two_export["v"], "--inputs", "ya=a,b", "--save", str(two_export["work"] / "k.xlsx"))
+    ok_res(res, proc)
+    assert res["targets"]["ya"]["inputs"] == ["a", "b"] and res["targets"]["yb"]["inputs"] == ["a", "b", "c"]
+    assert any("yb" in w and "모두" in w for w in res["warnings"]), res["warnings"]
+    assert "그대로" in res["targets"]["yb"]["reason"] and "후보 학습: 새로 1개" in proc.stderr       # ya만 학습
+    assert res["next_commands"] == [] and res["truncated"] is False
 
 
 def test_plain_inputs_list_per_target(two_export):
+    """타겟 이름 없는 목록은 모든 타겟에 같은 입력."""
     res = run_tool("ml_export.py", "--model", two_export["v"], "--inputs", "a,c", "--save", str(two_export["work"] / "p.xlsx"))
-    assert res["targets"]["ya"]["inputs"] == ["a"] and res["targets"]["yb"]["inputs"] == ["a", "c"]
+    assert res["targets"]["ya"]["inputs"] == ["a", "c"] and res["targets"]["yb"]["inputs"] == ["a", "c"]
+    bad = run_fail("ml_export.py", "--model", two_export["v"], "--inputs", "zzz")
+    assert bad["agent_directive"].startswith("STOP_RETRY")
 
 
 def test_export_and_map_overwrite(two_export, tmp_path):
@@ -918,56 +986,70 @@ def test_sheet_names_unique_without_case():
 
 # ---- 명령 시간 제한 (2.9.40): 나눠서 진행 ---------------------------------------------------------------------------
 # OpenCode는 명령을 120초에 끊는다 (회사 PC Gemma 시험 R1, R2: 보고서와 성능예측표가 결과 JSON 없이 끊김).
-# 성능예측표의 입력 고르기는 후보 학습을 하나씩 저장하고, 시간 제한(ML_KIT_TIME_LIMIT, 기본 100초)에 닿기 전에
-# CONTINUE 결과로 멈춘다. 같은 명령을 다시 실행하면 저장된 후보를 쓰고 이어서 학습한다.
+# 성능예측표가 다시 학습할 때(입력이 8개를 넘어 줄인 안 찾기, 2.9.83) 후보 학습을 하나씩 저장하고, 시간 제한
+# (ML_KIT_TIME_LIMIT, 기본 100초)에 닿기 전에 CONTINUE 결과로 멈춘다. 같은 명령을 다시 실행하면 저장된 후보를 쓰고 이어서 학습한다.
+
+
+def _nine_inputs_version(tmp_path, n=80):
+    """입력 9개 버전 (성능예측표가 8개 이하 안을 찾느라 후보를 여러 개 학습함)."""
+    r = np.random.default_rng(19)
+    cols = [f"x{i}" for i in range(9)]
+    df = pd.DataFrame(r.uniform(0, 1, (n, 9)), columns=cols)
+    df["y"] = 4 * df.x0 + 3 * df.x1 + 2 * df.x2 + r.normal(0, 0.05, n)
+    p = tmp_path / "t9.csv"
+    df.to_csv(p, index=False)
+    return run_tool("ml_train.py", "--file", str(p), "--features", ",".join(cols), "--targets", "y")
+
+
+def _continue_runs(vdir, limit=20):
+    runs = []
+    for _ in range(limit):
+        proc, out = run_raw("ml_export.py", "--model", vdir)
+        runs.append((proc, out))
+        if not out.get("continue"):
+            break
+    return runs
 
 
 def test_export_stops_at_time_limit_and_the_same_command_continues(tmp_path, monkeypatch):
-    path = _calc_data(tmp_path)
-    tr = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력,잡음", "--targets", "효율")
+    tr = _nine_inputs_version(tmp_path)
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 여유 30초를 빼면 0.5초: 실행마다 후보 1개만 학습
-    runs = []
-    for _ in range(10):
-        proc, out = run_raw("ml_export.py", "--model", tr["version_dir"])
-        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
-        runs.append(out)
-        if not out.get("continue"):
-            break
-    first, last = runs[0], runs[-1]
-    assert len(runs) >= 3 and all(r.get("continue") for r in runs[:-1])
+    runs = _continue_runs(tr["version_dir"])
+    (_, first), (lproc, last) = runs[0], runs[-1]
+    assert len(runs) >= 3 and all(o.get("continue") and p.returncode == 0 for p, o in runs[:-1]), [o.get("progress") for _, o in runs]
     assert first["agent_directive"].startswith("CONTINUE:") and first["verified"] is False and "1개 학습 저장됨" in first["progress"]
     cmd = first["next_commands"][0]
     assert cmd.startswith("python ") and "ml_export.py" in cmd and os.path.abspath(tr["version_dir"]) in cmd
-    assert not last.get("continue") and last["agent_directive"].startswith(("VERIFIED", "UNVERIFIED")) and last["output_file"]
+    # 찾기가 끝나면 줄인 안을 [후보]로 (만들지 않음)
+    assert lproc.returncode == 1 and not last.get("continue") and last["error_type"] == "needs_user_decision", last
+    assert "[후보] 1) " in last["message"] and last["confirm_commands"]
     assert len(os.listdir(os.path.join(tr["version_dir"], "export", "_fits"))) >= len(runs)   # 후보마다 저장
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
     proc, again = run_raw("ml_export.py", "--model", tr["version_dir"])
     assert "새로 0개" in proc.stderr                              # 모든 후보를 저장된 것으로
-    assert again["targets"]["효율"]["inputs"] == last["targets"]["효율"]["inputs"]
+    assert again["confirm_commands"] == last["confirm_commands"]
 
 
 def test_export_blocked_fit_cache_continues_in_fallback(tmp_path, monkeypatch):
     """3차 검토(2.9.63): _fits에 저장하지 못하면 나누지 않고 끝까지 진행해 120초를 넘겼다. 이제 대체 위치에 저장하고
     CONTINUE로 이어 가며(recovered), 끝나면 대체 위치를 지운다."""
-    path = _calc_data(tmp_path)
-    tr = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력,잡음", "--targets", "효율")
+    tr = _nine_inputs_version(tmp_path)
     fits = os.path.join(tr["version_dir"], "export", "_fits")
     os.makedirs(os.path.dirname(fits), exist_ok=True)
     with open(fits, "w", encoding="utf-8") as f:
         f.write("not a folder")
     fb = rt.resume_places(fits)[1]
     monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
-    runs = []
-    for _ in range(10):
-        proc, out = run_raw("ml_export.py", "--model", tr["version_dir"])
-        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
-        runs.append(out)
-        if not out.get("continue"):
-            break
-    first, last = runs[0], runs[-1]
-    assert len(runs) >= 2 and first["agent_directive"].startswith("CONTINUE:"), [r.get("progress") for r in runs]
+    runs = _continue_runs(tr["version_dir"])
+    first, (lproc, last) = runs[0][1], runs[-1]
+    assert len(runs) >= 2 and first["agent_directive"].startswith("CONTINUE:"), [o.get("progress") for _, o in runs]
     assert any("대체 위치" in r and os.path.basename(fb) in r for r in first.get("recovered", [])), first
-    assert last["output_file"] and not last.get("continue")
+    assert not last.get("continue") and last["error_type"] == "needs_user_decision", last
+    # 줄인 안의 명령(--inputs)으로 만들면 끝날 때 대체 위치를 지운다
+    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
+    proc, made = _run_confirm(last["confirm_commands"][0])[1]
+    ok_res(made, proc)
+    assert made["output_file"] and not made.get("continue")
     assert not os.path.exists(fb) and os.path.isfile(fits)
 
 
@@ -1015,26 +1097,3 @@ def test_time_limit_setting(monkeypatch):
     monkeypatch.setattr(rt, "RUN_START", rt.time.monotonic() - 5)
     with pytest.raises(rt.Unfinished):
         rt.check_time(0, "x")
-
-
-def test_report_best_retraining_continues(tmp_path, monkeypatch):
-    """2.9.57: the best-version retraining of ml_report.py --file is split like training (CONTINUE, same command)."""
-    pytest.importorskip("docx")
-    pytest.importorskip("matplotlib")
-    data = make_sample(str(tmp_path / "p.csv"))
-    run_tool("ml_train.py", "--file", data, "--features", "반응온도,소비전력,촉매비율", "--targets", "생산효율")
-    run_tool("ml_train.py", "--file", data, "--features", "반응온도,압축압력", "--targets", "수분함량")
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
-    runs = []
-    for _ in range(80):         # 2.9.61: split by candidate model too, 2.9.66 by fold: more runs
-        proc, out = run_raw("ml_report.py", "--file", data, "--save", str(tmp_path / "r.docx"))
-        assert proc.returncode == 0 and out["status"] == "ok", proc.stderr
-        runs.append(out)
-        if not out.get("continue"):
-            break
-    assert len(runs) >= 2 and runs[0]["agent_directive"].startswith("CONTINUE:"), runs[0]
-    assert "ml_report.py" in runs[0]["next_commands"][0]
-    last = runs[-1]
-    assert last["made_best"] is True and os.path.isfile(last["report_file"]), last
-    hist = [json.loads(ln) for ln in open(tmp_path / "p_ml_data" / "history.jsonl", encoding="utf-8")]
-    assert [h["version"] for h in hist] == ["v1", "v2", "v3"] and hist[-1].get("best") is True    # written once

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """학습(ml_train.py): 피처 유형, 분류, 작은 데이터와 중복 행의 교차검증, 학습 제외 행, --eval, next_commands, --history,
---best, 중요 입력(top_features).
+최종 버전(마지막 학습), 중요 입력(top_features).
 """
 import argparse
 import json
@@ -24,7 +24,7 @@ import ml_train as mt  # noqa: E402
 
 try:
     import docx
-except ImportError:          # --best 보고서 검사(needs_report)는 건너뜀
+except ImportError:          # 보고서 검사(needs_report)는 건너뜀
     docx = None
 
 needs_report = pytest.mark.skipif(not (HAS_DOCX and HAS_MPL), reason="python-docx/matplotlib not installed")
@@ -302,7 +302,8 @@ def test_history_mixed_tasks_compare_within_task(multiclass):
     hist = run_tool("ml_train.py", "--file", data, "--history")
     tasks = {r["version"]: r["task"] for r in hist["records"]}
     assert tasks["v1"] == "classification" and tasks["v9"] == "regression"
-    assert set(hist["best_by_task"]) == {"classification", "regression"}
+    # 2.9.83: 최종 버전 = 작업 유형과 상관없이 마지막 학습 (작업 유형마다의 최고 버전 best_by_task는 없앰)
+    assert hist["latest_version"] == "v9" and "best_by_task" not in hist and "best_version" not in hist
 
 
 @pytest.mark.report
@@ -339,7 +340,8 @@ def test_delta_compares_same_targets_only(tmp_path):
     third = run_tool("ml_train.py", "--file", data, "--features", FEATS, "--targets", "품질등급", "--task", "classification", "--seed", "7")
     assert isinstance(third["delta_score"], float)
     hist = run_tool("ml_train.py", "--file", data, "--history")
-    assert hist["best_version"] in ("v2", "v3")  # never v1 (other target)
+    assert hist["latest_version"] == "v3"                                     # 2.9.83: 마지막 학습
+    assert [r["delta_score"] for r in ledger(data)] == ["base", "base", third["delta_score"]]   # v2가 v1(다른 타겟)과 비교되지 않음
 
 
 # ---- 작은 데이터, 중복 행, 교차검증 ----------------------------------------------------------------------------
@@ -594,14 +596,6 @@ def test_exclude_where_leaves_out_matching_rows(where_run):
     assert hist[-1]["exclude_where"] == "생산효율(%) > 112; 라인 = B | 라인 = C"
     snap = pd.read_csv(os.path.join(res["version_dir"], "model_dataset.csv"), encoding="utf-8-sig")
     assert int(snap["학습제외_생산효율(%)"].sum()) == ex["manual"] + ex["auto"] + ex["condition"]
-
-
-def test_exclude_where_is_inherited_by_best(where_run):
-    _, f, _, res = where_run
-    best = run_tool("ml_train.py", "--file", str(f), "--best")
-    assert best["exclusions"]["생산효율(%)"]["condition"] == res["exclusions"]["생산효율(%)"]["condition"], best
-    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
-    assert hist[-1]["target_recipes"]["생산효율(%)"]["exclude_where"] == "생산효율(%) > 112; 라인 = B | 라인 = C"
 
 
 def test_exclude_where_in_retrain_commands(tmp_path):
@@ -981,8 +975,6 @@ def test_predict_next_commands_have_no_layout(tmp_path):
         mean_score=0.99, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"))
     pred = [c for c in cmds if "ml_predict.py" in c["command"]][0]
     assert pred["command"].endswith("--file '<새데이터.xlsx>'")                     # 2.9.53: --header-row 3 --unit-row 4
-    best = mt.build_best_next_commands(str(tmp_path / "d.xlsx"), str(tmp_path / "v2"), args)
-    assert best[1]["command"].endswith("--file '<새데이터.xlsx>'") and "--unit-row" not in best[1]["command"]
 
 
 def test_quoted_names_go_through_files(tmp_path):
@@ -1006,43 +998,24 @@ def test_history_has_verified(coded):
     assert res["verified"] is True and res["agent_directive"].startswith("VERIFIED")
 
 
-def test_history_best_version_covers_every_target(tmp_path):
+def test_history_latest_version_is_the_last_run(tmp_path):
+    """2.9.83: --history의 latest_version은 마지막 학습 (점수가 더 낮고 타겟이 줄었어도). 최고 버전 키는 없음."""
     r = np.random.default_rng(7)
     n = 80
     df = pd.DataFrame({"a": r.uniform(0, 1, n), "b": r.uniform(0, 1, n), "z": r.uniform(0, 1, n)})
     df["A"] = 5 * df.a + r.normal(0, 0.05, n)
     df["B"] = 3 * df.b + r.normal(0, 0.05, n)
     data = write_df(tmp_path / "h.csv", df)
-    v1 = run_tool("ml_train.py", "--file", data, "--features", "a,b", "--targets", "A,B")
-    run_tool("ml_train.py", "--file", data, "--features", "z", "--targets", "A")                       # later, worse, one target
+    run_tool("ml_train.py", "--file", data, "--features", "a,b", "--targets", "A,B")
+    v2 = run_tool("ml_train.py", "--file", data, "--features", "z", "--targets", "A")                  # later, worse, one target
     hist = run_tool("ml_train.py", "--file", data, "--history")
-    assert hist["best_version"] == "v1" and hist["best_version_dir"] == v1["version_dir"]   # 2.9.14: v2
-    assert hist["best_by_task"]["regression"]["complete"] is True and "best_version_note" not in hist
+    assert hist["latest_version"] == "v2" and hist["latest_version_dir"] == v2["version_dir"]     # 2.9.82: best_version v1
+    for gone in ("best_version", "best_version_dir", "best_by_task", "best_version_note"):
+        assert gone not in hist, gone
+    assert not os.path.exists(os.path.join(v2["data_root"], "best_version.json"))
 
 
-def _fake_version(root, ver, targets):
-    d = root / ver
-    d.mkdir(parents=True)
-    for name in ["leaderboard.json", "model_dataset.csv"] + [f"model_{t}.json" for t in targets]:
-        (d / name).write_text("{}", encoding="utf-8")
-
-
-def test_task_best_version_split_bests(tmp_path):
-    def rec(ver, scores):
-        return {"version": ver, "task": "regression", "targets": list(scores),
-                "targets_benchmark": {t: {"champion": {"val_score": s}} for t, s in scores.items()},
-                "mean_val_score": sum(scores.values()) / len(scores)}
-    records = [rec("v1", {"A": 0.9, "B": 0.8}), rec("v2", {"A": 0.95})]
-    for r_ in records:
-        _fake_version(tmp_path, r_["version"], r_["targets"])
-    info = mt.task_best_version(records, str(tmp_path), "regression")
-    assert info["version"] == "v1" and info["complete"] is False and info["missing"] == ["A"]
-    records.append(rec("v3", {"A": 0.99, "B": 0.99}))
-    _fake_version(tmp_path, "v3", ["A", "B"])
-    assert mt.task_best_version(records, str(tmp_path), "regression")["complete"] is True
-
-
-# ---- --best: 타겟마다 이력의 최고 조건으로 다시 학습해 작업 종류마다 버전 하나, ml_report.py --file ----
+# ---- 최종 버전 (2.9.83): 마지막 학습으로 보고서, --best는 없음 -------------------------------------------
 
 
 Y1, Y2, Y3, LABEL = "수율(%)", "강도(MPa)", "두께(mm)", "등급"
@@ -1077,143 +1050,36 @@ def meta(version_dir, target):
         return json.load(f)
 
 
-@pytest.fixture(scope="module")
-def three_runs(tmp_path_factory):
-    work = tmp_path_factory.mktemp("best")
-    data = make_multi(str(work / "proc.csv"))
-    v1 = run_tool("ml_train.py", "--file", data, "--features", "온도", "--targets", "수율", "--desc", "다중 타겟")
-    v2 = run_tool("ml_train.py", "--file", data, "--features", "압력,속도", "--targets", "수율")      # worse recipe, later run
-    v3 = run_tool("ml_train.py", "--file", data, "--features", "압력,속도", "--targets", "강도", "--eval", "압속 = 압력 * 속도")
-    v4 = run_tool("ml_train.py", "--file", data, "--features", "온도,압력", "--targets", "두께")
-    assert v1["mean_val_score"] > v2["mean_val_score"]
-    best = run_tool("ml_train.py", "--file", data, "--best")
-    return work, data, [v1, v2, v3, v4], best
-
-
-@needs_report
-def test_best_builds_one_version_with_every_target(three_runs):
-    _, data, runs, best = three_runs
-    assert best["version"] == best["best_version"] == "v5" and best["made_best"] is True
-    assert best["targets"] == [Y1, Y2, Y3] and best["tag"] == "best"
-    assert best["agent_directive"].startswith("VERIFIED:") and best["verified"] is True
-    assert len(best["best_versions"]) == 1 and best["best_versions"][0]["version_dir"] == best["version_dir"]
-    bt = best["best_targets"]
-    assert bt[Y1]["source_version"] == "v1"           # best is not the latest run of that target
-    assert bt[Y1]["source_score"] == runs[0]["mean_val_score"]
-    assert bt[Y2]["source_version"] == "v3" and bt[Y3]["source_version"] == "v4"
-    for t in (Y1, Y2, Y3):
-        assert isinstance(bt[t]["new_score"], float) and bt[t]["task"] == "regression"
-    assert "ml_report.py" in best["next_commands"][0]["command"] and " --file " in best["next_commands"][0]["command"]
-    assert "성능예측표" in best["next_commands"][0]["purpose"]                         # 회귀: 보고서와 성능예측표 세트
-
-    vdir = best["version_dir"]
-    assert meta(vdir, Y1)["features_required"] == ["온도(°C)"]
-    m2 = meta(vdir, Y2)
-    assert m2["features_required"] == ["압력(bar)", "속도(m/s)", "압속"]
-    assert m2["derived_evals"] and m2["derived_evals"][0].startswith("압속 = ")
-    assert m2["best_source"]["version"] == "v3"
-    assert meta(vdir, Y3)["features_required"] == ["온도(°C)", "압력(bar)"]
-
-    rec = ledger(data)[-1]
-    assert rec["version"] == "v5" and rec["best"] is True and rec["tag"] == "best"
-    assert rec["best_source"][Y1] == {"version": "v1", "score": runs[0]["mean_val_score"]}
-    assert rec["target_recipes"][Y2]["features"] == ["압력(bar)", "속도(m/s)"]
-    assert rec["data_fingerprint"]["sha256"]
-    assert set(rec["features_used"]) == {"온도(°C)", "압력(bar)", "속도(m/s)", "압속"}
-
-
-@needs_report
-def test_best_version_predicts_every_target(three_runs):
-    _, _, _, best = three_runs
-    pred = run_tool("ml_predict.py", "--model", best["version_dir"], "--input", "온도=5,압력=2,속도=2")
-    assert set(pred["targets_predicted"]) == {Y1, Y2, Y3}
-    assert pred["predictions_summary"][Y1]["features_used"] == ["온도(°C)"]
-    for t in (Y1, Y2, Y3):
-        assert len(pred["predictions_summary"][t]["predictions"]) == 1
-
-
-@needs_report
-def test_history_lists_best_record(three_runs):
-    _, data, _, _ = three_runs
-    hist = run_tool("ml_train.py", "--file", data, "--history")
-    assert hist["records"][-1]["best"] is True and hist["latest_version"] == "v5"
-    assert "best" not in hist["records"][0]
+def test_best_option_is_gone(tmp_path):
+    """2.9.83: --best(타겟마다 이력의 최고 조건으로 다시 학습)를 없앰. 주면 인자 오류이고 학습하지 않는다."""
+    data = make_multi(str(tmp_path / "b.csv"))
+    run_tool("ml_train.py", "--file", data, "--features", "온도", "--targets", "수율")
+    proc, err = run_raw("ml_train.py", "--file", data, "--best")
+    assert proc.returncode == 2 and err["status"] == "error", err
+    assert [r["version"] for r in ledger(data)] == ["v1"]
+    assert sorted(os.listdir(os.path.splitext(data)[0] + "_ml_data")) == [".train.lock", "history.json", "history.jsonl", "v1"]
 
 
 @needs_report
 @pytest.mark.report
-def test_report_f_reuses_then_rebuilds(three_runs):
-    work, data, _, best = three_runs
-    rep = run_tool("ml_report.py", "--file", data)
-    assert rep["made_best"] is False and rep["best_version"] == "v5" and rep["version"] == "v5"
-    assert rep["report_count"] == 1 and len(rep["best_reports"]) == 1
-    assert rep["best_version_dir"] == best["version_dir"] and best["version_dir"] in rep["agent_directive"]
-    assert set(rep["targets"]) == {Y1, Y2, Y3} and rep["best_targets"][Y1]["source_version"] == "v1"
-    d = docx.Document(rep["report_file"])
-    text = "\n".join(p.text for p in d.paragraphs)
-    heads = [p.text for p in d.paragraphs if p.style.name.startswith("Heading")]
-    for i, t in enumerate((Y1, Y2, Y3), 1):
-        assert f"4.{i}. {t}" in heads
-    assert f"학습 조건 출처: v1 (당시 검증 R² {best['best_targets'][Y1]['source_score']:.4f}), 이번 검증 R²" in text
-
-    again = run_tool("ml_report.py", "--file", data)
-    assert again["made_best"] is False and again["best_version"] == "v5"
-
-    # v6: a later training that beats nothing -> v5 still holds every best and is used as is (2.9.14)
-    run_tool("ml_train.py", "--file", data, "--features", "온도,속도", "--targets", "두께")
-    third = run_tool("ml_report.py", "--file", data)
-    assert third["made_best"] is False and third["best_version"] == "v5"
-
-    # Changed data file content -> rebuilt even without a new training run
-    df = pd.read_csv(data, encoding="utf-8-sig")
-    pd.concat([df, df.iloc[:3]]).to_csv(data, index=False, encoding="utf-8-sig")
-    fourth = run_tool("ml_report.py", "--file", data)
-    assert fourth["made_best"] is True and fourth["best_version"] == "v7"
-    assert set(fourth["targets"]) == {Y1, Y2, Y3}
-    rec = ledger(data)[-1]
-    assert rec["version"] == "v7" and rec["best"] is True
-
-
-@needs_report
-@pytest.mark.report
-def test_mixed_tasks_two_best_versions(tmp_path):
+def test_report_file_uses_the_last_run_of_any_task(tmp_path):
+    """회귀 다음에 분류를 학습하면 보고서 --file은 분류(v2) 보고서 1개. 이력에만 있는 회귀 타겟은 warnings로 알림."""
     data = make_multi(str(tmp_path / "mix.csv"))
     run_tool("ml_train.py", "--file", data, "--features", "온도,압력", "--targets", "수율")
     run_tool("ml_train.py", "--file", data, "--features", "온도,속도", "--targets", "등급", "--task", "classification")
     rep = run_tool("ml_report.py", "--file", data)
-    # each task has one training run that holds its best: used as is, no retraining (2.9.14)
-    assert rep["made_best"] is False and rep["report_count"] == 2
-    assert [b["version"] for b in rep["best_versions"]] == ["v1", "v2"]
-    assert [r["task"] for r in rep["best_reports"]] == ["regression", "classification"]
-    assert [b["task"] for b in rep["best_versions"]] == ["regression", "classification"]
-    assert rep["best_targets"][LABEL]["task"] == "classification"
-    assert len({r["report_file"] for r in rep["best_reports"]}) == 2 and all(os.path.isfile(r["report_file"]) for r in rep["best_reports"])
-    assert "2개" in rep["agent_directive"]
-    assert rep["version"] == rep["best_reports"][0]["version"] and rep["report_file"] == rep["best_reports"][0]["report_file"]
-
-    only = run_tool("ml_report.py", "--file", data, "--task", "classification")
-    assert only["report_count"] == 1 and only["task"] == "classification" and only["made_best"] is False
-
-    tr = run_tool("ml_train.py", "--file", data, "--best", "--task", "regression")
-    assert [b["task"] for b in tr["best_versions"]] == ["regression"] and tr["targets"] == [Y1]
-
-    # bests in two different runs -> the report builds one best version first
-    run_tool("ml_train.py", "--file", data, "--features", "온도,압력", "--targets", "두께")
-    built = run_tool("ml_report.py", "--file", data, "--task", "regression")
-    assert built["made_best"] is True and set(built["targets"]) == {Y1, Y3}
-
-
-@needs_report
-def test_no_history_stops(tmp_path):
-    data = make_multi(str(tmp_path / "empty.csv"))
-    err = run_fail("ml_train.py", "--file", data, "--best")
-    assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
+    assert rep["version"] == "v2" and rep["task"] == "classification" and rep["targets"] == [LABEL], rep
+    assert os.path.isfile(rep["report_file"]) and "report_count" not in rep
+    assert any(Y1 in w and "v2" in w for w in rep["warnings"]), rep.get("warnings")
+    assert "warnings" in rep["agent_directive"]
+    assert [r["version"] for r in ledger(data)] == ["v1", "v2"]                                  # 다시 학습하지 않음
 
 
 @pytest.mark.report
 def test_no_history_report_stops(tmp_path):
     err = run_fail("ml_report.py", "--file", make_multi(str(tmp_path / "empty.csv")))
-    assert err["agent_directive"].startswith("STOP_RETRY") and "학습 이력이 없습니다" in err["message"]
+    assert err["agent_directive"].startswith("STOP_RETRY") and "학습 결과 폴더가 없습니다" in err["message"]
+    assert "ml_train.py" in err["message"]
 
 
 @needs_report
@@ -1221,18 +1087,13 @@ def test_no_history_report_stops(tmp_path):
 def test_report_m_path_unchanged(tmp_path):
     data = make_multi(str(tmp_path / "single.csv"))
     tr = run_tool("ml_train.py", "--file", data, "--features", "온도,압력,속도", "--targets", "수율,두께")
+    run_tool("ml_train.py", "--file", data, "--features", "온도", "--targets", "수율")              # later run: --model ignores it
     rep = run_tool("ml_report.py", "--model", tr["version_dir"])
-    assert rep["version"] == rep["best_version"] == tr["version"]
-    for key in ("made_best", "best_reports", "best_targets", "best_version_dir"):
-        assert key not in rep
-    rec = ledger(data)[-1]
-    assert "best" not in rec and rec["data_fingerprint"]["size"] > 0
-
-
-def test_best_task_without_history_is_a_candidate():
-    with pytest.raises(rt.InputError) as e:
-        mt._tasks_to_build([{"task": "regression"}], "classification", "h.jsonl")
-    assert "[추천]" not in str(e.value) and "[후보] 1) regression" in str(e.value), str(e.value)
+    assert rep["version"] == tr["version"] == "v1" and set(rep["targets"]) == {Y1, Y3}
+    for key in ("best_version", "made_best", "best_reports", "best_targets", "best_version_dir", "warnings"):
+        assert key not in rep, key
+    rec = ledger(data)[0]
+    assert "best" not in rec and "best_source" not in rec
 
 
 # ---- 중요 입력 top_features ----------------------------------------------------------------------------
@@ -1386,7 +1247,7 @@ def test_history_records_capped(tmp_path):
     assert res["record_count"] == 35 and res["count"] == 35 and res["shown"] == mt.HISTORY_SHOWN
     assert res["truncated"] is True and res["full_result_file"].endswith("history.json")
     assert [r["version"] for r in res["records"]][-1] == "v35" and res["records"][0]["version"] == "v6"
-    assert res["latest_version"] == "v35"
+    assert res["latest_version"] is None          # 기록만 있고 버전 폴더가 없음: 보고서·예측이 쓸 최종 버전 없음 (2.9.83)
     (root / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs[:3]), encoding="utf-8")
     res = mt.print_history_summary(str(root))
     assert res["truncated"] is False and res["shown"] == 3 and "full_result_file" not in res
@@ -1449,7 +1310,7 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
     assert [h["version"] for h in hist] == ["v1"]
     assert not (root / ".resume_train").exists()                                       # cleaned after the commit
-    assert sorted(os.listdir(root)) == [".train.lock", "best_version.json", "history.json", "history.jsonl", "v1"]
+    assert sorted(os.listdir(root)) == [".train.lock", "history.json", "history.jsonl", "v1"]
 
 
 def _assert_same_version(a, b):
@@ -1501,34 +1362,6 @@ def test_single_target_is_split_by_candidate_model(tmp_path, monkeypatch):
     last = runs[-1]
     assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
     assert last["mean_val_score"] == pytest.approx(want["mean_val_score"], abs=1e-9)   # the same models as one run
-    assert not (root / ".resume_train").exists()
-
-
-def test_best_continue_skips_finished_task_and_checks_time(tmp_path, monkeypatch):
-    """2.9.59: --best를 CONTINUE로 나누면 이미 만든 회귀 최고 버전을 다시 만들어 원장에 중복되었고,
-    두 번째 작업 유형의 첫 타겟은 시간 확인 없이 학습했다. 2.9.66: 나눠 만든 최고 버전은 한 번에 만든 것과 같다."""
-    ref_best = None
-    for stem in ("ref", "b"):
-        data = make_class_sample(str(tmp_path / f"{stem}.csv"))
-        run_tool("ml_train.py", "--file", data, "--features", "촉매비율(wt%)", "--targets", "수분함량(%),반응온도(°C)")
-        run_tool("ml_train.py", "--file", data, "--features", "반응온도(°C),촉매비율(wt%),수분함량(%)", "--targets", "품질등급,불량여부",
-                 "--task", "classification")
-        if stem == "ref":
-            ref_best = run_tool("ml_train.py", "--file", data, "--best")          # no limit: one run
-    root = tmp_path / "b_ml_data"
-    runs = _split_runs(monkeypatch, "--file", data, "--best", limit=120)
-    progress = [r.get("progress") or "" for r in runs]
-    # the first classification target waits for the clock too (it was trained without a check)
-    assert any("'품질등급' 후보 모델" in t or "'불량여부' 후보 모델" in t for t in progress), progress
-    hist = [json.loads(ln) for ln in open(root / "history.jsonl", encoding="utf-8")]
-    assert [h["version"] for h in hist] == ["v1", "v2", "v3", "v4"], [h["version"] for h in hist]
-    assert [mt._record_task(h) for h in hist if h.get("best")] == ["regression", "classification"]
-    last = runs[-1]
-    assert last["agent_directive"].startswith("VERIFIED") and last["made_best"] is True
-    assert [b["version"] for b in last["best_versions"]] == ["v3", "v4"], last["best_versions"]
-    for v in ("v3", "v4"):
-        _assert_same_version(str(tmp_path / "ref_ml_data" / v), str(root / v))
-    assert ref_best["made_best"] is True
     assert not (root / ".resume_train").exists()
 
 
@@ -1620,7 +1453,7 @@ def test_resume_save_checks_the_file(tmp_path, monkeypatch):
 
 def test_resume_find_newest_and_old_fallbacks_swept(tmp_path, monkeypatch):
     """4차 검토: (a) 같은 이름이 여러 위치에 있으면 가장 최근 것을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지운다
-    (best_run.json 같은 고정 이름). (b) 실행 시작 때 대체 폴더 전체에서 보관 기한(3일)이 지난 항목을 지운다."""
+    (run.json 같은 고정 이름). (b) 실행 시작 때 대체 폴더 전체에서 보관 기한(3일)이 지난 항목을 지운다."""
     monkeypatch.setattr(rt, "SAVE_FAILED", [])
     monkeypatch.setattr(rt, "_RESUME_PLACE", {})
     monkeypatch.setattr(rt, "_RECOVERED", [])
@@ -1630,18 +1463,18 @@ def test_resume_find_newest_and_old_fallbacks_swept(tmp_path, monkeypatch):
     places = rt.resume_places(primary)
     for i, d in enumerate(places[:2]):
         os.makedirs(d)
-        with open(os.path.join(d, "best_run.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(d, "run.json"), "w", encoding="utf-8") as f:
             f.write(str(i))
     old = time.time() - 100
-    os.utime(os.path.join(places[0], "best_run.json"), (old, old))
-    assert rt.resume_find(primary, "best_run.json") == os.path.join(places[1], "best_run.json")
-    os.utime(os.path.join(places[1], "best_run.json"), (old - 100, old - 100))
-    assert rt.resume_find(primary, "best_run.json") == os.path.join(places[0], "best_run.json")
+    os.utime(os.path.join(places[0], "run.json"), (old, old))
+    assert rt.resume_find(primary, "run.json") == os.path.join(places[1], "run.json")
+    os.utime(os.path.join(places[1], "run.json"), (old - 100, old - 100))
+    assert rt.resume_find(primary, "run.json") == os.path.join(places[0], "run.json")
     rt._RESUME_PLACE[os.path.normcase(places[0])] = 1         # the original folder failed earlier in this command
-    path = rt.resume_save(primary, "best_run.json", lambda tmp: open(tmp, "w", encoding="utf-8").write("new"), "기록")
-    assert path == os.path.join(places[1], "best_run.json")
-    assert not os.path.exists(os.path.join(places[0], "best_run.json"))     # the older copy is not read again
-    assert rt.resume_find(primary, "best_run.json") == path
+    path = rt.resume_save(primary, "run.json", lambda tmp: open(tmp, "w", encoding="utf-8").write("new"), "기록")
+    assert path == os.path.join(places[1], "run.json")
+    assert not os.path.exists(os.path.join(places[0], "run.json"))     # the older copy is not read again
+    assert rt.resume_find(primary, "run.json") == path
     # (b) sweep: an old saved step of another data file in both fallback roots goes, a recent one stays
     stale = [os.path.join(tmp_path / "data", rt.RESUME_FALLBACK_DIR, "aaaaaaaaaaaa", "0123456789abcdef.m0.joblib"),
              os.path.join(tmp_path / "temp", rt.TEMP_RESUME_DIR, "bbbbbbbbbbbb", "0123456789abcdef.joblib")]
@@ -1669,7 +1502,7 @@ def test_resume_sweep_never_touches_user_files(tmp_path, monkeypatch):
             tmp_path / "temp" / rt.TEMP_RESUME_DIR / "0123456789ab" / "model.joblib"]
     tool = [docs / rt.RESUME_FALLBACK_DIR / "0123456789ab" / n
             for n in ("0123456789abcdef.joblib", "0123456789abcdef.m3.joblib", "0123456789abcdef.fit.joblib",
-                      "0123456789abcdef.imp.joblib.tmp", "best_run.json")]
+                      "0123456789abcdef.imp.joblib.tmp")]
     for f in user + tool:
         os.makedirs(f.parent, exist_ok=True)
         f.write_bytes(b"1")
@@ -2049,27 +1882,6 @@ def test_killed_importance_keeps_columns_saved_on_the_way(tmp_path, monkeypatch)
     assert np.allclose(got, want)
 
 
-def test_best_run_record_is_removed_after_an_error(tmp_path, monkeypatch):
-    """오류로 끝난 --best 실행 뒤에 나눠 진행 기록(best_run.json)이 남아 나중 실행이 쓰지 않게."""
-    data = make_class_sample(str(tmp_path / "e.csv"))
-    root = tmp_path / "e_ml_data"
-    run_tool("ml_train.py", "--file", data, "--features", "촉매비율(wt%)", "--targets", "수분함량(%)")
-    run_tool("ml_train.py", "--file", data, "--features", "반응온도(°C),촉매비율(wt%)", "--targets", "불량여부", "--task", "classification")
-    calls, seen = [], []
-
-    def fail_second(args, task, records):
-        calls.append(task)
-        if len(calls) == 2:
-            seen.append((root / ".resume_train" / mt.BEST_RUN_FILE).exists())     # the record of the first task
-            raise rt.InputError("시험용 오류")
-        return {"version": "v1"}
-    monkeypatch.setattr(mt, "build_best_version", fail_second)
-    with pytest.raises(rt.InputError):
-        mt.execute_make_best(argparse.Namespace(file=data, task=None))
-    assert len(calls) == 2 and seen == [True]
-    assert not (root / ".resume_train" / mt.BEST_RUN_FILE).exists()
-
-
 def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):
     data = make_sample(str(tmp_path / "d.csv"))
     root = tmp_path / "d_ml_data"
@@ -2314,7 +2126,7 @@ def test_watchdog_after_commit_answers_saved_not_continue(tmp_path, monkeypatch)
 
 
 def test_watchdog_payload_after_commit(monkeypatch):
-    """저장한 결과가 같은 명령으로 다시 쓰이면(rerun_safe: ml_report --file의 최고 버전, --best의 best_run.json) CONTINUE 그대로,
+    """저장한 결과가 같은 명령으로 다시 쓰이면(rerun_safe) CONTINUE 그대로,
     아니면 ok + UNVERIFIED. 아무것도 저장하지 않았으면 예전처럼 STOP_RETRY."""
     monkeypatch.setattr(rt, "RUN_SAVED", [])
     monkeypatch.setattr(rt, "RUN_COMMITTED", [])
@@ -2414,7 +2226,6 @@ def test_dry_run_shows_version_and_replaced_folder_without_training(tmp_path):
     argv = split_command(res["confirm_commands"][0]["command"])
     assert "--overwrite" in argv and "--dry-run" not in argv
     assert sorted(os.listdir(root)) == ["v1"] and os.listdir(root / "v1") == ["model_a.joblib"]      # 아무것도 바꾸지 않음
-    assert run_fail("ml_train.py", "--file", data, "--best", "--dry-run")["error_type"] == "input"
 
 
 def test_tool_stops_offering_retraining_after_rounds_without_gain(tmp_path):
@@ -2494,16 +2305,15 @@ def test_auto_inputs_next_commands_carry_x(auto_run):
     assert [f for f in rec["features_used"] if f in res["features_auto"]] == [f for f in res["features_auto"] if f in names]
 
 
+@needs_report
 @pytest.mark.report
-def test_auto_inputs_best_and_report(auto_run):
-    """입력을 자동으로 고른 학습이 있는 이력에서도 --best와 ml_report --file가 그 입력으로 다시 학습."""
-    best = run_tool("ml_train.py", "--file", auto_run["f"], "--best")
-    rec = mt.load_history_ledger(os.path.join(auto_run["res"]["data_root"], "history.jsonl"))[-1]
-    assert rec.get("best") and "시료번호" not in rec["features_used"] and "수율(분율)" not in rec["features_used"]
-    assert best["verified"] is True
-    if HAS_DOCX and HAS_MPL:
-        rep = run_tool("ml_report.py", "--file", auto_run["f"])
-        assert rep["agent_directive"].startswith("VERIFIED:")
+def test_auto_inputs_report_uses_the_last_run(auto_run):
+    """입력을 자동으로 고른 학습이 있는 이력에서도 ml_report --file은 다시 학습하지 않고 마지막 학습으로 보고서를 만든다."""
+    path = os.path.join(auto_run["res"]["data_root"], "history.jsonl")
+    before = mt.load_history_ledger(path)
+    rep = run_tool("ml_report.py", "--file", auto_run["f"])
+    assert rep["version"] == before[-1]["version"] and rep["agent_directive"].startswith("VERIFIED:"), rep
+    assert len(mt.load_history_ledger(path)) == len(before)
 
 
 def test_explicit_x_warns_id_and_leak(tmp_path):
@@ -2566,3 +2376,15 @@ def test_next_commands_offer_the_exclude_where_template(tmp_path):
     tpl = [c for c in again["next_commands"] if c.get("placeholder") == "<조건>"][0]
     argv = split_command(tpl["command"])
     assert argv[argv.index("--exclude-where") + 1] == "수율(%) > 50; <조건>", argv     # 앞 조건은 도구가 맞춘 열 이름으로
+
+
+def test_history_latest_version_skips_a_damaged_folder(tmp_path):
+    """2.9.83: --history의 latest_version은 보고서·예측과 같은 최종 버전 (마지막 학습 폴더가 손상되면 그 앞 버전, latest_version_note)."""
+    data = make_multi(str(tmp_path / "h.csv"))
+    run_tool("ml_train.py", "--file", data, "--features", "온도,압력", "--targets", "수율")
+    v2 = run_tool("ml_train.py", "--file", data, "--features", "온도,압력,속도", "--targets", "수율")
+    os.remove(os.path.join(v2["version_dir"], "leaderboard.json"))
+    h = run_tool("ml_train.py", "--file", data, "--history")
+    assert h["latest_version"] == "v1" and "v2" in h["latest_version_note"] and "v2" in h["preview"], h
+    p = run_tool("ml_predict.py", "--model", data, "--input", "온도=200,압력=3")
+    assert "v1" in p["model_chosen"] and "v2" in p["model_chosen"] and "손상" in p["model_chosen"], p

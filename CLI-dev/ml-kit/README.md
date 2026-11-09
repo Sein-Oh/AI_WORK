@@ -428,7 +428,7 @@ python ml_train.py --file "공정.xlsx" --features "반응온도,촉매비율,�
 | `--dtypes` | 선택 | 데이터 타입 수동 오버라이드 (예: `일시:datetime,코드:str`). 형식은 `float`, `int`, `str`, `datetime`(`date`, `category` 등 같은 뜻의 말도 받음). 열 이름은 `--features`/`--targets`처럼 맞춤(정확한 이름, 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`), 형식 오타는 `[추천] --dtypes "<고친 값>"`, `int`는 숫자 열(빈 칸을 0으로 채우지 않음) |
 | `--version` | 선택 | 버전 폴더 수동 지정 (미지정 시 `v1`, `v2`, ... 자동 채번). 이미 있는 버전이면 `STOP_RETRY` + `[추천] --version v<다음>` |
 | `--overwrite` | 선택 | `--version` 폴더가 이미 있을 때 교체 (사용자 확인 후에만). 새 버전이 원장에 기록될 때까지 기존 폴더를 `.bak_vX`로 보관했다가 실패하면 되돌림. 원장(`history.jsonl`, `history.json`)의 그 버전 기록도 새 기록으로 바꿔 버전마다 기록 하나 |
-| `--dry-run` | 선택 | 학습하지 않고 만들 버전(`version`, `version_dir`)과 `--overwrite`면 바꿀 기존 폴더의 파일(`replaces`, `replaced_files` 20개까지, `replaced_count`)만 보여 줌. `confirm_commands[0]`은 `--dry-run`을 뺀 실제 명령(교체면 `destructive: true`). 이미 있는 버전을 `--overwrite` 없이 주면 `STOP_RETRY` + 다음 버전 `[추천]` 전체 명령. `--best`·`--history`와는 같이 쓰지 않음(인자 오류) |
+| `--dry-run` | 선택 | 학습하지 않고 만들 버전(`version`, `version_dir`)과 `--overwrite`면 바꿀 기존 폴더의 파일(`replaces`, `replaced_files` 20개까지, `replaced_count`)만 보여 줌. `confirm_commands[0]`은 `--dry-run`을 뺀 실제 명령(교체면 `destructive: true`). 이미 있는 버전을 `--overwrite` 없이 주면 `STOP_RETRY` + 다음 버전 `[추천]` 전체 명령. `--history`와는 같이 쓰지 않음(인자 오류) |
 | `--task` | 선택 | 학습 유형 `regression`(기본값) / `classification` |
 | `--positive-class` | 선택 | 이진 분류 양성 클래스. 지정 시 판정 기준 확률 자동 조정 |
 | `--seed` | 선택 | 교차검증 난수 시드 (기본값: 42) |
@@ -1332,7 +1332,7 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     (2.9.65, 5차 검토: 전에는 열의 1/5을 시계 없이 계산해 600열 데이터에서 120초 강제 종료가 매번 반복), 끝낸 열은 멈출 때뿐 아니라
     `IMPORTANCE_SAVE_SECONDS`(12초)마다 저장하므로 명령이 밖에서 강제 종료되어도 다음 실행이 이어 갑니다(처음 저장할 때 전체 적합도 저장).
     열마다 난수를 따로 정하므로(시드, 열 번호) 나눠 계산해도 한 번에 계산한 중요도와 같습니다. 12초 안에 끝나면 전체 적합은 저장하지 않습니다.
-  - 중간 저장(`.resume_train`, `best_run.json`, 성능예측표 `_fits`)은 저장 뒤 파일이 있는지 확인합니다 (공통 `resume_save`/`resume_find`/`resume_clear`, `_ml_runtime.py`).
+  - 중간 저장(`.resume_train`, 성능예측표 `_fits`)은 저장 뒤 파일이 있는지 확인합니다 (공통 `resume_save`/`resume_find`/`resume_clear`, `_ml_runtime.py`).
     원래 위치에 저장하지 못하면(폴더 권한, 디스크 공간, 같은 이름의 파일, 경로 길이) JIT 복구로 대체 위치에 저장합니다: 데이터 폴더(`ML_KIT_DATA_DIR`
     또는 기본값) 아래 `ml-kit-resume\<원래 폴더 해시 12자>\`, 그다음 `%TEMP%\ml-kit-resume\<해시>\`. `[WARN]`과 `recovered`
     (`중간 저장 실패 (.resume_train) -> 대체 위치 데이터 폴더 ml-kit-resume\<해시>에 저장`). 이어 실행은 원래 위치와 대체 위치를 모두 찾고, 끝나면 대체 위치도
@@ -1341,10 +1341,10 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     오류 로그의 `복구 시도:`에 남음). 제한 전에 끝나면 결과는 정상이고 `warnings`에 `중간 저장 실패: ...` (2.9.63; 2.9.62의 "나누지 않고 끝까지"는 없앰:
     큰 데이터에서 120초를 넘겨 JSON 없이 끊겼음). 그래서 `progress`의 `저장됨`은 늘 사실이고, 무응답으로 끊기지 않습니다.
     이 `STOP_RETRY`의 directive는 학습 기본 안내(열 이름과 `--eval` 식) 대신 쓰기 권한·디스크·경로 길이를 확인하라고 합니다 (2.9.64).
-    같은 이름이 여러 위치에 있으면 가장 최근 파일을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지웁니다(`best_run.json` 같은 고정 이름, 2.9.64).
+    같은 이름이 여러 위치에 있으면 가장 최근 파일을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지웁니다(2.9.64).
     명령을 시작할 때 대체 폴더 전체(데이터 폴더 `ml-kit-resume\*`, `%TEMP%\ml-kit-resume\*`)에서 3일 넘은 저장 파일과 빈 폴더를 지웁니다 (`resume_sweep_old`, 2.9.64).
     지우는 것은 도구가 만든 것뿐입니다(2.9.65, 5차 검토: `ML_KIT_DATA_DIR`를 사용자 폴더로 두면 그 아래 `resume` 폴더의 사용자 파일을 지웠음):
-    해시 12자 이름의 하위 폴더 안의 도구 파일 이름(`<키>.joblib`, `<키>.m<번호>.joblib`, `<키>.m<번호>.f<fold>.joblib`, `<키>.fit.joblib`, `<키>.imp.joblib`, `<키>.prep.joblib`, 시작 표시 `<단계>.start`, `best_run.json`, 각 `.tmp`)과
+    해시 12자 이름의 하위 폴더 안의 도구 파일 이름(`<키>.joblib`, `<키>.m<번호>.joblib`, `<키>.m<번호>.f<fold>.joblib`, `<키>.fit.joblib`, `<키>.imp.joblib`, `<키>.prep.joblib`, 시작 표시 `<단계>.start`, 각 `.tmp`)과
     비게 된 그 폴더. 그 밖의 파일·폴더는 손대지 않고, 끝난 실행의 대체 위치 정리(`resume_clear`)도 같은 이름만 지웁니다. 2.9.64까지의 `resume` 폴더는 쓰지도 지우지도 않습니다.
   - 학습 전 준비도 한 단계입니다 (2.9.67, 6차 검토: 10000행 x 1000열에서 읽기·검증·상관행렬·타겟 준비가 실행마다 50~94초 걸려 첫 fold를 더하면
     120초를 넘겨 JSON 없이 끊기고 진행이 없었음). 첫 모델 전에 하는 일(파일 읽기, 검증과 타입 정제, 피처 판별, 상관행렬, `%` 검사, 학습 제외 행,

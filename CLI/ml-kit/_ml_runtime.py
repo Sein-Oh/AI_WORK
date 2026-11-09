@@ -191,9 +191,9 @@ RESUME_FALLBACK_DIR = "ml-kit-resume"      # a name of its own: ML_KIT_DATA_DIR 
 TEMP_RESUME_DIR = "ml-kit-resume"
 # Only what resume_places/resume_save make is ever swept: <hash> folders and the saved step files
 # (<key>.joblib, <key>.m<k>.joblib, <key>.m<k>.f<fold>.joblib, <key>.fit.joblib, <key>.imp.joblib, <key>.prep.joblib,
-# the start markers <step>.start (step_begin), best_run.json, each also with .tmp).
+# the start markers <step>.start (step_begin), each also with .tmp).
 _RESUME_SUB_RE = re.compile(r"[0-9a-f]{12}")
-_RESUME_FILE_RE = re.compile(r"(?:[0-9a-f]{16}(?:\.m\d+(?:\.f\d+)?|\.fit|\.imp|\.prep)?\.(?:joblib|start)|best_run\.json)"
+_RESUME_FILE_RE = re.compile(r"(?:[0-9a-f]{16}(?:\.m\d+(?:\.f\d+)?|\.fit|\.imp|\.prep)?\.(?:joblib|start))"
                              r"(?:\.tmp)?")
 RESUME_MAX_AGE = 3 * 24 * 3600             # saved steps of runs never continued are removed after this many seconds
 SAVE_FAILED: List[str] = []                # finished steps no place could hold in this command
@@ -4185,7 +4185,8 @@ def model_dir_from_data(path: str, option: str = "--model") -> str:
     if info["skipped"]:
         note_recovered(f"최종 버전 {', '.join(info['skipped'])}의 폴더가 없거나 손상돼 그 앞의 {info['version']}을(를) 씀")
     sys.stderr.write(f"[INFO] {option} {os.path.basename(ap)} -> {info['version_dir']}\n")
-    MODEL_CHOSEN.append(f"최종 버전 {info['version']} (마지막 학습)")
+    MODEL_CHOSEN.append(f"최종 버전 {info['version']} (마지막 학습)" if not info["skipped"] else
+                        f"최종 버전 {info['version']} (마지막 학습 {', '.join(info['skipped'])}의 폴더가 없거나 손상돼 그 앞 버전)")
     return info["version_dir"]
 
 
