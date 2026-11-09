@@ -39,3 +39,26 @@ def test_raw_cp949_header_and_plain_body(tmp_path):
     info = trial.parse_eml(_eml(tmp_path, "b.eml", raw))
     assert info["subject"] == "회의 안내" and info["from_addr"] == "a@b.kr"
     assert info["text"].strip() == "내일 10시" and info["date"] is None and info["attachments"] == []
+
+
+def test_read_trial_writes_a_result_without_mail_contents(tmp_path, monkeypatch):
+    """eml_read_trial.py: 폴더의 eml을 읽고 첨부(.txt) 안의 글까지 office-cli reader로 읽음, 검색은 어디서 맞았는지만.
+    결과 파일에는 제목·주소·본문을 쓰지 않음."""
+    _spec2 = importlib.util.spec_from_file_location("eml_read_trial", os.path.join(HERE, "..", "tools", "eml_read_trial.py"))
+    rd = importlib.util.module_from_spec(_spec2)
+    _spec2.loader.exec_module(rd)
+    folder = tmp_path / "mails"
+    folder.mkdir()
+    (folder / "1.eml").write_bytes(("Subject: =?UTF-8?B?7Iuc7ZeYIOqysOqzvA==?=\r\nFrom: a@b.kr\r\nTo: c@d.kr\r\n"
+                                    "Date: Mon, 09 Nov 2026 10:30:00 +0900\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n"
+                                    "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n비밀 과제 일정\r\n"
+                                    "--B\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=note.txt\r\n\r\n"
+                                    "첨부 안의 글\r\n--B--\r\n").encode("utf-8"))
+    (folder / "2.eml").write_bytes("Subject: 회의\r\nFrom: x@y.kr\r\n\r\n내용 없음\r\n".encode("cp949"))
+    monkeypatch.setattr(rd, "HERE", str(tmp_path))
+    assert rd.main(["--folder", str(folder), "--query", "과제;일정"]) == 0
+    out = next(tmp_path.glob("eml_read_trial_*.md")).read_text(encoding="utf-8")
+    assert "| 1 | " in out and "OK 8자 (글)" in out and ".txt:7자" in out and "| 본문 |" in out
+    assert "맞은 메일 1통" in out and "받는 사람" in out
+    for secret in ("비밀", "시험 결과", "a@b.kr", "회의"):
+        assert secret not in out, secret
