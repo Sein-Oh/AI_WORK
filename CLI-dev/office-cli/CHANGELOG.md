@@ -2064,6 +2064,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
+- [ ] EML -> Outlook 가져오기 (사용자 요청 2026-11-09: 일반망에서 받은 .eml을 Outlook에 연결하는 것이 느림, 모두 eml, 답장 불필요).
+  시험 스크립트 `tools/eml_import_trial.py`(방법 셋: OpenSharedItem 그대로 / 상태·시각 속성 / 게시물을 메일로)를 회사 PC에서 돌려 결과로
+  `outlook.py import --folder` 설계. 안 되면 Outlook 없이 reader.py가 .eml을 읽는 방식 (옛 `parse_eml`, 커밋 f2e6737 이전).
 - [ ] 1.4.83 검토에서 남긴 것: `excel read --where`의 열 이름 `[후보]`는 번호 없음(식 안의 이름 자리를 바꾼 명령 필요), `word write --dry-run`이
   새 파일 경로에서 '문서 없음'으로 멈춤, `--all`의 뜻이 도구마다 다름
   (reply 전체 답장, chart 모든 차트, clear 캐시 전부), outlook `--to`/`--attach`/`--name`·word `--slots`의 `;` 구분(규칙 3번)
