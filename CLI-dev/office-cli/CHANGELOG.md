@@ -2064,6 +2064,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
+- [ ] 2026-11-09 전체 검토(1.4.91)에서 찾은 것: `docs/history/office-cli_REVIEW_2026-11-09.md`. 틀린 결과를 VERIFIED로 내는 결함(1장 A1~A13),
+  계약 위반·실행 못 하는 `[추천]`(2장 B1~B13), 실기 확인이 필요한 추정(3장 C1~C18), 부족한 기능(4장), 경량 모델 운용(5장). 순서와 방법은 그 문서 0장.
+  처리한 항목은 그 문서 제목에 버전을 적고, 전부 끝나면 이 줄을 지움
 - [ ] EML -> Outlook 가져오기 (사용자 요청 2026-11-09: 일반망에서 받은 .eml을 Outlook에 연결하는 것이 느림, 모두 eml, 답장 불필요).
   시험 스크립트 `tools/eml_import_trial.py`(방법 셋: OpenSharedItem 그대로 / 상태·시각 속성 / 게시물을 메일로)를 회사 PC에서 돌려 결과로
   `outlook.py import --folder` 설계. 안 되면 Outlook 없이 reader.py가 .eml을 읽는 방식 (옛 `parse_eml`, 커밋 f2e6737 이전).
