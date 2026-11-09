@@ -34,6 +34,10 @@
   그 값을 넣어야 함).
 - 전역 지침 3장 표에 `ml-dataset`, 4장 "학습에서 행을 빼 달라고 하면"을 데이터셋으로. `setup.py`가 `ml-dataset` 스킬도 설치. ml-train 스킬 5979 -> 5815바이트.
 - 진입점 목록(AGENTS.md, `test_contract.py`)에 `ml_dataset.py` (`_ml_runtime.py`만 import).
+- 성능예측표의 엑셀 확인(Windows + 엑셀): 조건마다 통합문서 전체를 다시 계산하던 것(타겟마다 약 11번 `CalculateFull`)을 일괄계산 행에
+  무작위 50개와 경계값 위·아래 조건을 한 번에 넣고 계산기 한 조건과 함께 한 번(`Calculate`)만 다시 계산. 회사 PC 2026-11-09: run_all_tests 73분 중
+  pytest 62분(아침 2.9.82 전체 24분), 성능예측표를 만드는 시험마다 엑셀을 열었음. 시험에서는 `ML_KIT_SKIP_EXCEL_CHECK=1`(conftest)로 끄고
+  `test_excel_recalculates_like_the_model` 하나만 엑셀로 확인 (실기 beta F7은 그대로 엑셀로 확인).
 
 ## [2.9.84] - 2026-11-09
 

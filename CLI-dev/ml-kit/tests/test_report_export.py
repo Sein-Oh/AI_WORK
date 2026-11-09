@@ -6,6 +6,7 @@
 16자리 경계값, 파생변수 수식 칸, 잠긴 엑셀, LibreOffice가 있으면 다시 계산해 모델 예측과 비교.
 """
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -590,6 +591,15 @@ def test_export_moves_the_version_model_as_it_is(export_version):
         assert "SUMPRODUCT(" in calc["C12"].value and wb["모델_효율"]["A1"].value.endswith("하한(초과)")
     assert any("같은지 확인" in str(c.value) for row in wb["정확도"].iter_rows() for c in row)
     assert any("엑셀" in u for u in r.get("unverified", [])) or r["verified"]          # Excel check only on Windows
+
+
+@pytest.mark.skipif(not (sys.platform == "win32" and importlib.util.find_spec("win32com")), reason="Windows + Excel only")
+def test_excel_recalculates_like_the_model(export_version, monkeypatch):
+    """Windows + 엑셀: 일괄계산에 무작위 조건과 경계값 위·아래 조건을 한 번에 넣고 한 번 다시 계산한 값 = 모델 (그 밖의 시험은 이 확인을 끔)."""
+    _, _, vdir = export_version
+    monkeypatch.delenv("ML_KIT_SKIP_EXCEL_CHECK", raising=False)
+    r = run_tool("ml_export.py", "--model", vdir)
+    assert r["verified"] is True and not r.get("unverified"), r
 
 
 def test_status_cells_have_visible_colors(export_version):

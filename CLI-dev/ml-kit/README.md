@@ -873,8 +873,8 @@ python ml_export.py --model 공정.xlsx --targets 생산효율                  
 - **크기**: 잎이 모두 400,000개(`MAX_LEAVES`, 약 25MB)를 넘으면 만들지 않고 `STOP_RETRY`. 잎 수는 RandomForest·ExtraTrees에서 대략 학습 행 수 x 100입니다
   (학습 800행, 타겟 3개면 잎 24만 개, 15MB, 클라우드 약 30초).
 - **확인**: 무작위 조건 2,000개 + 학습 데이터 모든 행에서 옮긴 수식(파이썬 사본)과 모델 예측을 비교하고, 다르면 만들지 않습니다. 저장 뒤 다시 읽어
-  시트·잠금·입력 칸·예측 수식과 잎 값이 옮긴 값과 같은지 봅니다. Windows + 엑셀이면 계산기에 무작위 조건과 경계값 바로 위·아래 조건을 넣어 엑셀로 다시 계산해
-  모델과 비교합니다(엑셀이 없으면 `UNVERIFIED`로 알림). 결과 JSON `check`(`points`, `max_diff`, `max_rel_pct`), 정확도 시트.
+  시트·잠금·입력 칸·예측 수식과 잎 값이 옮긴 값과 같은지 봅니다. Windows + 엑셀이면 일괄계산 행에 무작위 조건 50개와 경계값 바로 위·아래 조건을, 계산기에 한 조건을 넣고 한 번만 다시 계산해
+  모델과 비교합니다(엑셀이 없으면 `UNVERIFIED`로 알림, `ML_KIT_SKIP_EXCEL_CHECK=1`이면 끔: 시험용). 결과 JSON `check`(`points`, `max_diff`, `max_rel_pct`), 정확도 시트.
 - `--overwrite`: 같은 이름 파일을 덮어씀 (생략 시 시각을 붙인 새 이름, `recovered`).
 - 데이터: 버전 폴더의 `model_dataset.csv` (원본 데이터 불필요, `학습제외_<타겟>` 행은 학습 범위·실측 거리에서 뺌). 숫자 타겟만 (분류는 건너뜀). 글자·날짜 입력 모델은 `STOP_RETRY`.
 - **보고서와 세트**: `ml_report.py`가 회귀 버전이면 이 도구를 함께 실행합니다 (`--title`, 결과 `export_file`, 실패해도 보고서는 정상, `export_note`).

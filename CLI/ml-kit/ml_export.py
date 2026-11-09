@@ -50,7 +50,7 @@ UNCOVERED_DIST = 0.15     # nearest training row farther than this (inputs scale
 UNCOVERED_Q = 0.95        #   than this share of training rows are from their own nearest row (sparse data, many inputs)
 BATCH_ROWS = 500          # pre-filled rows on the 일괄계산 sheet
 CHECK_POINTS = 2000       # random conditions of the model check (plus every training row)
-EXCEL_CHECKS = 5          # random conditions recalculated in Excel itself (Windows)
+EXCEL_CHECKS = 50         # random conditions recalculated in Excel itself (Windows, one recalculation for all)
 TITLE_MAX = 40
 OPEN = 1e300              # bound of a leaf box that has no limit on a feature
 TREE_MODELS = ("RandomForestRegressor", "ExtraTreesRegressor")
@@ -654,6 +654,8 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     res_cols = []
     for p in plans:
         tn = short[p["target"]]
+        p["batch_inputs"] = {c: all_inputs.index(c) + 1 for c in p["cand"]["inputs"]}     # for the Excel check
+        p["batch_pred_col"] = col
         for h in (f"예측 {tn}", f"{tn} 하한(90%)", f"{tn} 상한(90%)", f"{tn} 판단"):
             style(batch.cell(row=2, column=col, value=h), bold=True, fill=HEAD, align="center")
             batch.column_dimensions[_col(col)].width = 16
@@ -927,9 +929,13 @@ def edge_points(p: Dict[str, Any]) -> pd.DataFrame:
 
 
 def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
-    """Windows with Excel: opens the file (not saved), puts random conditions in the calculator, recalculates and
-    compares with the model. None = checked OK, 'skip' = Excel not available, otherwise a problem."""
+    """Windows with Excel: opens the file (not saved), puts the check conditions (random ones and the ones on a split
+    bound) in the 일괄계산 rows at once and one condition in the calculator, recalculates once per target and compares
+    with the model (2.9.85: was one full recalculation per condition, minutes for a big workbook).
+    None = checked OK, 'skip' = Excel not available, 'off' = turned off (ML_KIT_SKIP_EXCEL_CHECK=1, tests), otherwise a problem."""
     import importlib.util
+    if os.environ.get("ML_KIT_SKIP_EXCEL_CHECK") == "1":
+        return "off"
     if importlib.util.find_spec("win32com") is None:
         return "skip"
     try:
@@ -942,18 +948,22 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
         xl.Visible = False
         xl.DisplayAlerts = False
         wb = xl.Workbooks.Open(os.path.abspath(path), ReadOnly=True)
-        ws = wb.Worksheets("계산기")
+        calc, batch = wb.Worksheets("계산기"), wb.Worksheets("일괄계산")
         problems = []
         for p in plans:
             P = pd.concat([p["points"].sample(EXCEL_CHECKS, random_state=1), edge_points(p)], ignore_index=True)
             want = predict_frame(p["cand"], P)
-            for i in range(len(P)):
-                for c in p["cand"]["inputs"]:
-                    ws.Range(p["input_cells"][c]).Value = float(P.at[i, c])
-                xl.CalculateFull()
-                got = ws.Range(p["calc_cell"]).Value
-                if not isinstance(got, (int, float)) or abs(float(got) - want[i]) > 1e-9 * (abs(want[i]) + 1.0):
-                    problems.append(f"'{p['target']}' 엑셀 계산 {got} != 모델 {want[i]:.10g}")
+            n = len(P)
+            for c, col in p["batch_inputs"].items():
+                batch.Range(batch.Cells(3, col), batch.Cells(2 + n, col)).Value = tuple((float(v),) for v in P[c])
+            for c in p["cand"]["inputs"]:
+                calc.Range(p["input_cells"][c]).Value = float(P.at[0, c])
+            xl.Calculate()
+            got = [r[0] for r in batch.Range(batch.Cells(3, p["batch_pred_col"]), batch.Cells(2 + n, p["batch_pred_col"])).Value]
+            got.append(calc.Range(p["calc_cell"]).Value)
+            for g, w, where in zip(got, list(want) + [want[0]], [f"일괄계산 {i + 3}행" for i in range(n)] + ["계산기"]):
+                if not isinstance(g, (int, float)) or abs(float(g) - w) > 1e-9 * (abs(w) + 1.0):
+                    problems.append(f"'{p['target']}' 엑셀 계산({where}) {g} != 모델 {w:.10g}")
                     break
         return "; ".join(problems) or None
     except Exception as e:
@@ -1044,7 +1054,9 @@ def execute_export(args) -> Dict[str, Any]:
     problems = verify_workbook(real, plans)
     xl = excel_check(real, plans)
     unverified = list(problems)
-    if xl == "skip":
+    if xl == "off":
+        unverified.append("엑셀 계산 확인을 껐음 (ML_KIT_SKIP_EXCEL_CHECK=1, 파일 구조, 잠금, 저장한 값으로 한 계산은 확인함)")
+    elif xl == "skip":
         unverified.append("엑셀이 없는 환경이라 엑셀에서 수식 계산은 확인하지 못함 (파일 구조, 잠금, 저장한 값으로 한 계산은 확인함)")
     elif xl:
         unverified.append(xl)
