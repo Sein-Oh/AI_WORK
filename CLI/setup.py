@@ -506,6 +506,8 @@ def main(argv=None):
     print(f"[INFO] 설치 폴더: {HERE}" + ("  (--check: 바꾸지 않음)" if args.check else ""), flush=True)
     print("[INFO] 1. OpenCode 스킬, 전역 지침, opencode.jsonc", flush=True)
     step_files(rep, cfg, backup, args.check, args.test_skill)
+    if not args.check:      # 스킬로 안 되는 일의 파이썬 스크립트를 두는 곳 (전역 지침 8장)
+        os.makedirs(os.path.join(data_dir(), "scripts"), exist_ok=True)
     print("[INFO] 2. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)

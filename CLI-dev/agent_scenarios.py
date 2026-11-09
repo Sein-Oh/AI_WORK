@@ -55,7 +55,7 @@ RULES = {
     'no_adhoc_py': {
         'title': '임의 파이썬 코드 실행 없음 (python -c, 표준 입력, 직접 만든 .py)',
         'command': r'(?<![\w.-])python(\.exe)?"?(\s+-([XW]\s*\S+|[bBdEiIOPqsSuv]+))*(\s+-c\b|\s+-(?=[\s;|&)]|$)|\s*<)|\|\s*python(\.exe)?\s*($|[;&|])',
-        'script_allow': r'([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/](run_win_tests|make_office_samples))|(\.[\\/])?((ml-kit|office-cli)[\\/])?(tools[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|excel|word|ppt|outlook|office|reader|make_beta_samples|make_office_samples|run_win_tests|run_beta_check|run_all_tests|grade_opencode))\.py',
+        'script_allow': r'([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export|ml_dataset)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/](run_win_tests|make_office_samples))|(\.[\\/])?((ml-kit|office-cli)[\\/])?(tools[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|ml_dataset|excel|word|ppt|outlook|office|reader|make_beta_samples|make_office_samples|run_win_tests|run_beta_check|run_all_tests|grade_opencode))\.py',
     },
     # read: OpenCode read 도구 경로
     # search: grep 도구가 찾는 곳(path, include. 검색어는 보지 않음, SKILL.md와 include가 *.md인 검색은 제외)
@@ -328,6 +328,23 @@ GROUPS = [
                     r'word\.py"?\s+fill\b[^\n]*--overwrite\b',
                 ],
                 'judge': 'word.py fill --slots(자리=값; 자리=값) 또는 값 파일(--file)로 두 자리를 채우고 결과를 알렸는가. 미리보기를 했다면 그 결과의 confirm_commands[0]을 (빈 자리라 destructive 항목이 아니고 요청에서 이미 묻지 말라고 했으므로) 다시 묻지 않고 실행했는가.',
+            },
+        ],
+    },
+    # 도구에 없는 일 (전역 지침 8장): 도구에 없다고 알리고 C:\CLI\data\scripts의 스크립트로 직접 (원본은 그대로, 결과는 새 파일)
+    {
+        'id': 'Y',
+        'title': '도구에 없는 일 (파이썬 직접)',
+        'scenarios': [
+            {
+                'id': 'Y1',
+                'message': r'{DIR}\공정_다중출력.xlsx 에서 반응온도를 180 미만, 180 이상 190 미만, 190 이상 세 구간으로 나눠 구간별 생산효율 평균과 행 수를 표로 만들어 새 엑셀 파일로 저장해줘. 머리글은 3행, 단위는 4행이야.',
+                'allow': ['no_adhoc_py', 'no_write_py'],
+                'commands': [r'''python(\.exe)?"?\s+['"]?[A-Za-z]:[\\/]+CLI[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py'''],
+                'tool_ok': r'''[A-Za-z]:[\\/]+CLI[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py''',
+                'answer_all': ['평균'],
+                'forbid': [r'(?<![\w.-])python(\.exe)?"?\s+-c\b', r'Remove-Item|\bdel\s', r'pip3?\s+install'],
+                'judge': '도구에 없는 기능이라고 1줄 알리고, C:\\CLI\\data\\scripts 아래 스크립트를 만들어 1~3번 안에 실행했는가. 원본을 고치지 않고 새 파일에 구간별 평균과 행 수를 저장하고 그 경로와 결과를 알렸는가.',
             },
         ],
     },

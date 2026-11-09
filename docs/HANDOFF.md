@@ -299,7 +299,9 @@ Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261
 3. office-cli 1.4.91: `excel style --range "B2;D5;F7"`로 떨어진 칸 여러 개를 명령 한 번에 칠함 (행마다 최대 차이 칸을 하나씩 칠하던 것).
 4. ml-kit 2.9.85: 데이터셋 만들기를 `ml_dataset.py`(스킬 `ml-dataset`)로 떼어 냄. `pick`(맞는 행만), `exclude`(`제외` 열에 이유), CSV 기본,
    다음 학습 명령은 원본의 마지막 학습과 같은 타겟·입력. `ml_train.py --exclude-where`는 없앰. `--eval`(파생변수)은 학습에 그대로.
-5. 회사 PC에서 확인할 것: Gemma A3("생산효율이 80보다 큰 행은 빼고 다시 학습") -> `ml_dataset.py exclude` 뒤 그 결과의 학습 명령. 성능예측표를 엑셀로 열어 계산이 되는지(결과 `export_verified`, 경계값 위·아래 조건 포함), 파일 열기·계산 속도
+5. 전역 지침 8장: 도구에 없는 일은 알리고 `C:\CLI\data\scripts`의 파이썬 스크립트로 직접 (Office COM은 한 번 잡고 범위를 배열로). Gemma Y1.
+   run_all_tests의 pytest 단계는 테스트 파일마다 병렬(코어 수 - 1개, 클라우드 25분 -> 10분).
+6. 회사 PC에서 확인할 것: Gemma Y1(도구에 없는 구간별 평균을 스크립트로), A3("생산효율이 80보다 큰 행은 빼고 다시 학습") -> `ml_dataset.py exclude` 뒤 그 결과의 학습 명령. 성능예측표를 엑셀로 열어 계산이 되는지(결과 `export_verified`, 경계값 위·아래 조건 포함), 파일 열기·계산 속도
    (계산기 한 줄, 일괄계산 500행), 문서 보안 아래에서 열리는지. 실제 데이터의 잎 수(상한 40만 개에 걸리는지).
 
 ## 3. 회사 PC에서 할 일

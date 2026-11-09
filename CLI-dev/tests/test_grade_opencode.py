@@ -875,7 +875,7 @@ def test_manual_scenario_is_marked_and_left_out_of_bulk(tmp_path, monkeypatch):
     assert "수동 준비: Outlook" in single and f"{G}\\시험성적서.docx" in single and "[O3]" in single
     assert "[O3]" not in bulk and "[O1]" in bulk and "[O5]" in bulk
     readme = (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
-    assert "S -> A -> M -> P -> R -> O -> X" in readme               # 2.9.83: R(보고서·성능예측표)을 다시 시험에 넣음
+    assert "S -> A -> M -> P -> R -> O -> Y -> X" in readme               # 2.9.83: R(보고서·성능예측표)을 다시 시험에 넣음
     assert (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists() and ": 뺌 (" not in readme
 
 
@@ -896,7 +896,7 @@ def test_paused_group_is_left_out_of_pack(tmp_path, monkeypatch):
     monkeypatch.setattr(go, "PACK_DIR", str(tmp_path / "pack"))
     go.make_pack(None)
     readme = (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
-    assert "S -> A -> M -> P -> O -> X" in readme
+    assert "S -> A -> M -> P -> O -> Y -> X" in readme
     assert "- R 보고서와 성능예측표: 뺌 (시험용 이유)" in readme and not (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists()
 
 
