@@ -668,24 +668,39 @@ def test_match_categories_ambiguous_not_fixed():
     assert fixes == {} and unseen == ["ａ"]          # 'A'와 'a' 둘 다 맞아 고를 수 없음
 
 
-def test_model_given_as_data_file_uses_best_version(p1_model, tmp_path):
-    """2.9.71: --model <데이터 파일>이면 도구가 best_version.json(학습이 원장마다 씀)의 최고 버전으로 예측 (LLM이 버전 폴더를 고르지 않음)."""
-    root = os.path.join(os.path.dirname(p1_model["f"]), "p1_ml_data")
-    pointer = json.load(open(os.path.join(root, "best_version.json"), encoding="utf-8"))
-    assert pointer["tasks"]["regression"]["version"] == "v1", pointer
-    res = run_tool("ml_predict.py", "--model", p1_model["f"], "--input", "온도=180,압력=3,속도=45")
-    by_dir = run_tool("ml_predict.py", "--model", p1_model["v"], "--input", "온도=180,압력=3,속도=45")
-    assert res["predictions_summary"] == by_dir["predictions_summary"] and "v1" in res["model_chosen"], res
-    assert "model_chosen" not in by_dir
-    # 기록이 없으면 고르지 않고 버전 폴더를 [후보] 전체 명령으로
-    copy = tmp_path / "p1_ml_data"
-    shutil.copytree(root, copy)
-    os.remove(copy / "best_version.json")
-    shutil.copy(p1_model["f"], tmp_path / "p1.csv")
-    err = run_fail("ml_predict.py", "--model", str(tmp_path / "p1.csv"), "--input", "온도=180,압력=3,속도=45")
-    assert "[후보] 1) v1" in err["message"] and err["error_type"] == "needs_user_decision", err
+def test_model_given_as_data_file_uses_final_version(tmp_path):
+    """2.9.83: --model <데이터 파일>이면 도구가 최종 버전(history.jsonl의 마지막 학습, 회귀·분류 상관없이)으로 예측
+    (LLM이 버전 폴더를 고르지 않음). 마지막 버전 폴더가 손상되면 그 앞의 온전한 버전 (recovered), 기록이 없으면 [후보]."""
+    r = np.random.default_rng(5)
+    n = 80
+    a, b = r.uniform(0, 10, n).round(3), r.uniform(0, 10, n).round(3)
+    y = 3 * a - 2 * b + r.normal(0, 0.3, n)
+    f = write_df(str(tmp_path / "fin.csv"), pd.DataFrame({"a": a, "b": b, "수율": y.round(3),
+                                                           "등급": np.where(a > 5, "상", "하")}))
+    root = tmp_path / "fin_ml_data"
+    run_tool("ml_train.py", "--file", f, "--features", "a,b", "--targets", "수율")
+    res = run_tool("ml_predict.py", "--model", f, "--input", "a=7,b=2")
+    by_dir = run_tool("ml_predict.py", "--model", str(root / "v1"), "--input", "a=7,b=2")
+    assert res["predictions_summary"] == by_dir["predictions_summary"], res
+    assert res["model_chosen"] == "최종 버전 v1 (마지막 학습)" and "model_chosen" not in by_dir, res
+    assert not (root / "best_version.json").exists()
+    # 회귀 다음에 분류를 학습하면 분류(v2)가 최종 버전
+    run_tool("ml_train.py", "--file", f, "--features", "a,b", "--targets", "등급", "--task", "classification")
+    res = run_tool("ml_predict.py", "--model", f, "--input", "a=7,b=2")
+    assert res["model_chosen"] == "최종 버전 v2 (마지막 학습)" and list(res["predictions_summary"]) == ["등급"], res
+    assert "recovered" not in res
+    # 마지막 버전 폴더가 손상되면 그 앞의 온전한 버전으로 (recovered에 알림)
+    os.remove(root / "v2" / "leaderboard.json")
+    res = run_tool("ml_predict.py", "--model", f, "--input", "a=7,b=2")
+    assert res["model_chosen"] == "최종 버전 v1 (마지막 학습 v2의 폴더가 없거나 손상돼 그 앞 버전)" and list(res["predictions_summary"]) == ["수율"], res
+    assert any("v2" in m and "v1" in m for m in res["recovered"]), res
+    # 기록이 없으면 고르지 않고 온전한 버전 폴더를 [후보] 전체 명령으로
+    os.remove(root / "history.jsonl")
+    err = run_fail("ml_predict.py", "--model", f, "--input", "a=7,b=2")
+    assert "[후보] 1) v1" in err["message"] and "v2" not in err["message"].split("[후보]", 1)[1], err
+    assert err["error_type"] == "needs_user_decision", err
     argv = split_command(err["confirm_commands"][0]["command"])
-    assert argv[0] == "python" and argv[argv.index("--model") + 1] == str(copy / "v1"), err
+    assert argv[0] == "python" and argv[argv.index("--model") + 1] == str(root / "v1"), err
 
 
 # ---- 2.9.72: 다음 실험 제안(--suggest), 입력별 영향(explain), 실제값 비교와 재학습 알림(actual_check) -------------

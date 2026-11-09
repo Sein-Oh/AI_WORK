@@ -56,7 +56,7 @@ CLI/ml-kit/                 # 실행에 필요한 파일만 (사내 PC C:\CLI\ml
 │   └── ml_map.py           # 모델 없이 표 선형 보간 (격자/흩어진 기록 자동 판단), 반대 찾기
 │
 └── [성능예측표]
-    └── ml_export.py        # 입력 최적화 -> 엑셀 계산기 (수식만, 잠금)
+    └── ml_export.py        # 최종 버전의 모델을 엑셀 수식으로 그대로 -> 엑셀 계산기 (잠금)
 
 data/logs/errors.txt        # 실패한 실행의 오류 로그 (자동 생성, git 제외, 8장 4) 참고)
 
@@ -102,7 +102,6 @@ OpenCode는 `skills/<name>/SKILL.md` 를 찾으며 **폴더 이름이 스킬 이
     ├── oof_<타겟>.csv          # 챔피언의 교차검증 예측값 (실측·예측·잔차 또는 클래스별 확률, 보고서 그림 원본)
     ├── next_features_*.txt    # next_commands용 피처 목록 (피처 15개 초과이거나 이름에 큰따옴표가 있을 때. 타겟은 next_targets.txt)
     ├── excluded_rows.csv      # 학습에서 뺀 행 (원본 행, 구분, 이유, 실제값, 예측값)
-    ├── export/                # 성능예측표용으로 다시 학습한 모델과 후보 표. _fits/: 후보 학습 저장 (나눠서 진행)
     └── model_dataset.csv      # 학습 당시 헤더 정제, 결측치 대치, 파생변수가 완료된 스냅샷 (UTF-8 BOM)
 ```
 
@@ -162,7 +161,7 @@ RandomForest·ExtraTrees는 `n_jobs=1`). 작은 표에서는 한 스레드가 �
 
 - 결과 JSON: `features_auto`(고른 입력, 50개까지)와 `features_auto_count`, `features_auto_file`(`vX/features_auto.txt`, 한 줄에 하나: 그대로 `--features` 파일로 쓸 수 있음),
   `excluded_inputs`(`column`, `reason`, 50개까지)와 `excluded_inputs_count`. preview에 `입력 자동 선택 N개, 뺀 열 M개: 시료번호(ID·일련번호), ...`.
-  원장에는 `features_used`(고른 입력)와 `input_selection`(`auto`, `features`, `excluded`). `--best`·`ml_report --file`는 이 `features_used`로 다시 학습합니다.
+  원장에는 `features_used`(고른 입력)와 `input_selection`(`auto`, `features`, `excluded`).
 - 다시 학습하는 `next_commands`(저기여 피처 제외, 교차항)는 고른 입력을 `--features`로 적습니다 (15개를 넘으면 `next_features_*.txt` 파일 경로). 같은 데이터면 `--features` 없이 다시 실행해도 같은 입력을 고릅니다.
 - 쓸 열이 하나도 없으면 `STOP_RETRY`(`excluded_inputs` 포함, `--features`로 입력을 주라는 안내).
 - `--features`를 주면 그대로 학습하고, 준 입력 가운데 ID·타겟 누수로 보이는 열은 `warnings`와 `suspect_inputs`(`column`, `reason`), preview `의심 입력: ...`로만 알립니다 (빼지 않음).
@@ -428,12 +427,11 @@ python ml_train.py --file "공정.xlsx" --features "반응온도,촉매비율,�
 | `--dtypes` | 선택 | 데이터 타입 수동 오버라이드 (예: `일시:datetime,코드:str`). 형식은 `float`, `int`, `str`, `datetime`(`date`, `category` 등 같은 뜻의 말도 받음). 열 이름은 `--features`/`--targets`처럼 맞춤(정확한 이름, 단위 없는 고유한 이름, 비슷한 이름은 `[후보]`), 형식 오타는 `[추천] --dtypes "<고친 값>"`, `int`는 숫자 열(빈 칸을 0으로 채우지 않음) |
 | `--version` | 선택 | 버전 폴더 수동 지정 (미지정 시 `v1`, `v2`, ... 자동 채번). 이미 있는 버전이면 `STOP_RETRY` + `[추천] --version v<다음>` |
 | `--overwrite` | 선택 | `--version` 폴더가 이미 있을 때 교체 (사용자 확인 후에만). 새 버전이 원장에 기록될 때까지 기존 폴더를 `.bak_vX`로 보관했다가 실패하면 되돌림. 원장(`history.jsonl`, `history.json`)의 그 버전 기록도 새 기록으로 바꿔 버전마다 기록 하나 |
-| `--dry-run` | 선택 | 학습하지 않고 만들 버전(`version`, `version_dir`)과 `--overwrite`면 바꿀 기존 폴더의 파일(`replaces`, `replaced_files` 20개까지, `replaced_count`)만 보여 줌. `confirm_commands[0]`은 `--dry-run`을 뺀 실제 명령(교체면 `destructive: true`). 이미 있는 버전을 `--overwrite` 없이 주면 `STOP_RETRY` + 다음 버전 `[추천]` 전체 명령. `--best`·`--history`와는 같이 쓰지 않음(인자 오류) |
-| `--task` | 선택 | 학습 유형 `regression`(기본값) / `classification`. `--best`와 함께 쓰면 그 유형의 최고 버전만 |
+| `--dry-run` | 선택 | 학습하지 않고 만들 버전(`version`, `version_dir`)과 `--overwrite`면 바꿀 기존 폴더의 파일(`replaces`, `replaced_files` 20개까지, `replaced_count`)만 보여 줌. `confirm_commands[0]`은 `--dry-run`을 뺀 실제 명령(교체면 `destructive: true`). 이미 있는 버전을 `--overwrite` 없이 주면 `STOP_RETRY` + 다음 버전 `[추천]` 전체 명령. `--history`와는 같이 쓰지 않음(인자 오류) |
+| `--task` | 선택 | 학습 유형 `regression`(기본값) / `classification` |
 | `--positive-class` | 선택 | 이진 분류 양성 클래스. 지정 시 판정 기준 확률 자동 조정 |
 | `--seed` | 선택 | 교차검증 난수 시드 (기본값: 42) |
-| `--history` | 선택 | 누적 실험 원장 조회 (요약 표는 stderr, 버전별 요약 JSON은 stdout). `best_version`·`best_version_dir`: 가장 최근 학습의 작업 유형에서 보고서가 쓰는 것과 같은 규칙으로 고른 버전 (최고 버전 기록, 아니면 모든 타겟의 최고 점수가 있는 버전, 나뉘어 있으면 최고 타겟이 가장 많은 버전 + `best_version_note`). `best_by_task`는 유형별 같은 값 (`version`, `version_dir`, `mean_val_score`, `complete`, `missing_targets`) 학습 기록이 없으면 `status: ok`, `record_count: 0`, `count: 0`, `records: []`, `no_history: true`, `VERIFIED: 0건. ...`. `records`는 최근 30건까지(`shown`, `count`, `truncated`, 잘렸으면 `full_result_file` = `history.json`) |
-| `--best` | 선택 | 최고 버전 만들기 (아래 8) 참고). `--file`만 필요. `--features`, `--targets`, `--eval`, `--dtypes`, `--version`, `--positive-class`는 무시 |
+| `--history` | 선택 | 누적 실험 원장 조회 (요약 표는 stderr, 버전별 요약 JSON은 stdout). `latest_version`·`latest_version_dir`: 최종 버전(마지막 학습, 보고서·예측이 쓰는 버전) |
 
 ### 7) 실행 예시
 
@@ -468,37 +466,18 @@ python ml_train.py \
   --tag "4대타겟_독립경쟁"
 ```
 
-### 8) 최고 버전 (`--best`)
+### 8) 최종 버전 (2.9.83)
 
-실제 사용에서 경량 LLM이 타겟을 하나씩, 조건을 바꿔 가며 학습해 v1~v7이 타겟별로 흩어졌습니다. 사용자는 항상 모든 타겟이 들어간
-보고서 1개를 원하고, LLM이 타겟·버전을 고르기를 원하지 않습니다. `--best`는 이 정리를 도구가 합니다.
+보고서(`ml_report.py --file`), 성능예측표(`ml_export.py --model <데이터 파일>`), 예측(`ml_predict.py --model <데이터 파일>`)은
+**마지막 학습 버전**(최종 버전, 회귀·분류 상관없이 `history.jsonl`의 마지막 기록)을 씁니다. 사용자가 빼고 학습한 열이나 타겟은
+다시 들어오지 않습니다. 그 버전 폴더가 없거나 손상됐으면 그 앞의 온전한 버전을 쓰고 `recovered`로 알립니다.
+2.9.82까지의 최고 버전(`--best`: 이력에서 타겟마다 점수가 가장 좋았던 조건으로 다시 학습해 모은 버전)은 없앴습니다
+(일부러 뺀 타겟이 다시 들어왔음, 2026-11-09 사용자 결정).
 
-```bat
-python ml_train.py --file sample.xlsx --best
-python ml_train.py --file sample.xlsx --best --task classification
-```
-
-1. 원장(`history.jsonl`)에서 타겟마다 검증 점수(회귀 `val_r2`, 분류 `val_f1_macro`)가 가장 높은 기록을 고릅니다. 같은 점수면 나중 기록.
-   버전 폴더가 없거나 불완전한(`leaderboard.json`, `model_dataset.csv`, `model_<타겟>.json` 없음) 기록은 제외합니다.
-2. 그 기록의 학습 조건(피처, `--eval` 수식, `--dtypes`, 양성 클래스)으로 **현재 데이터 파일**에서 모든 타겟을 다시 학습해
-   새 버전 1개(`vN`, 태그 `best`)에 담습니다. 모델 종류는 평소처럼 5개 모델 경쟁으로 다시 고릅니다.
-   타겟마다 피처가 달라도 됩니다: `model_<타겟>.json`의 `features_required`, `feature_schema`, `derived_evals`가 타겟별이므로
-   `ml_predict.py --model vN`은 모든 타겟의 피처를 합친 입력으로 그대로 예측합니다.
-3. 작업 유형마다 버전 1개입니다. 이력에 회귀와 분류가 모두 있으면 최고 버전도 2개가 됩니다 (`best_versions`).
-4. 헤더/단위/데이터 행은 주지 않으면 그 유형의 마지막 기록 값을 씁니다.
-5. 이력이 없으면 `STOP_RETRY`(먼저 학습). 점수가 내려가도 경고하지 않고, 타겟별 원래 점수와 이번 점수를 함께 보고합니다.
-
-결과 JSON에는 평소 학습 키(첫 번째 버전 기준)에 더해 다음이 들어갑니다.
-
-| 키 | 의미 |
-|---|---|
-| `made_best` | 이번 실행에서 다시 학습했는지 (`--best`는 항상 `true`) |
-| `best_version`, `best_version_dir` | 최고 버전 (유형이 2개면 회귀 쪽) |
-| `best_versions` | `[{task, version, version_dir, targets, mean_val_score, made}]` |
-| `best_targets` | `{타겟: {task, source_version, source_score, new_score}}` 학습 조건 출처 버전, 그때 점수, 이번 점수 |
-
-원장 기록에는 `best: true`, `best_source: {타겟: {"version", "score"[, "selected_version"]}}`, `target_recipes`(타겟별 조건)가 추가됩니다.
-이전 최고 버전의 조건이 다시 뽑히면 `best_source`는 원래 버전을 가리킵니다 (`selected_version`에 실제로 고른 최고 버전).
+- 보고서는 최종 버전 1개로 만듭니다 (`warnings`로 알림: 이력에는 있지만 최종 버전에 없는 타겟, 같은 타겟으로 점수가 더 높았던 버전과
+  그 버전으로 만드는 `--model` 명령). 예전 버전으로 만들려면 `ml_report.py --model <버전 폴더>`.
+- 필요한 타겟·입력이 빠졌으면 이력을 보고 그것을 넣어 다시 학습한 뒤(그 학습이 최종 버전) 보고서를 만듭니다.
+- `--history`의 `latest_version`, `latest_version_dir`이 최종 버전입니다.
 
 ---
 
@@ -532,7 +511,7 @@ python ml_train.py --file sample.xlsx --best --task classification
     `exclusions.<타겟>.condition`(행 수)·`condition_text`, 원장 `exclude_where`. `제외` 열에 이유를 적은 행은 그 이유로(직접 표시) 셉니다.
   - `제외` 열이 `포함`인 행은 조건에 맞아도 학습에 넣고 `warnings`에 그 행을 적습니다 (사용자가 행마다 적은 표시가 우선).
   - 조건으로 빼서 학습 행이 10개 미만이 되면 `STOP_RETRY`(남는 행 수와 함께).
-  - 개선 `next_commands`의 재학습 명령과 `--best`(타겟별 학습 조건 `target_recipes.<타겟>.exclude_where`)가 같은 조건을 이어받습니다.
+  - 개선 `next_commands`의 재학습 명령이 같은 조건을 이어받습니다. `next_commands` 맨 뒤의 `--exclude-where '<조건>'` 틀은 `'<앞 조건>; <조건>'` (2.9.81).
 
 | `제외` 열 값 (열 이름 고정, 단위 무시) | 처리 |
 |---|---|
@@ -706,11 +685,9 @@ python ml_predict.py --model v3 --find "생산효율=105" --vary 반응온도 --
   단위 없는 이름은 단위를 뺀 열 이름과도 비교해 `[후보]`를 만듭니다(`온두`/`온도(°C)`). 단위가 다른 이름 하나(`압력(MPa)`/`압력(bar)`)는 값 환산 안내.
   열·피처·타겟 이름, 예측 `--input`와 입력 열, `--eval` 수식 이름, `ml_map.py`, `ml_export.py`, `ml_report.py`가 모두 같습니다.
   `[추천]`이 남은 곳은 다시 실행해 확인한 값 하나뿐입니다: `--header-row`/`--unit-row`/`--data-row` 명령, 쉼표를 뺀 `--input` 명령, `--version <다음>`,
-  `--save <이름>.csv`, 8개를 넘는 `--inputs`의 줄인 안. `--best --task`에 이력이 없는 학습(다른 학습의 최고 버전이 됨)과
-  `ml_export.py --inputs`의 입력이 모두 값이 하나뿐일 때(다른 입력 조합이 됨)는 `[후보]`입니다.
+  `--save <이름>.csv`.
 - **다른 옵션이 쓰는 열은 후보가 아님**: 한 명령에서 이미 다른 이름이나 옵션이 쓰는 열은 `[후보]`에도 넣지 않고, 그 열이 비슷하면 "이 명령에서 이미 다른 이름이나 옵션에 쓰인 열"이라고 알립니다: `ml_train.py`의 `--features`와 `--targets`, 예측 `--find`의
-  `--vary`와 `--input`, `ml_map.py`의 `--find` 목표·`--vary`·`--input`·`--targets`, `--points`의 기준·구할 열, `--eval`과 타겟, `ml_export.py --keep`/`--inputs`의
-  다른 이름(`--keep "압력,압룍"`의 `압력`). 예: `--targets 수율(최종)` 옆의 `--input 수율=40`(데이터는 `수율(1차)`, `수율(최종)`)은 `[후보] '수율(1차)'`와 그 안내입니다.
+  `--vary`와 `--input`, `ml_map.py`의 `--find` 목표·`--vary`·`--input`·`--targets`, `--points`의 기준·구할 열, `--eval`과 타겟. 예: `--targets 수율(최종)` 옆의 `--input 수율=40`(데이터는 `수율(1차)`, `수율(최종)`)은 `[후보] '수율(1차)'`와 그 안내입니다.
   남은 위험: 이름 맞추기는 이제 묻기만 하므로 다른 양으로 말없이 바뀌는 일은 없지만, `[후보]`가 하나여도 사용자에게 물어야 해서 오타 하나에 한 번 더 묻습니다.
   단위 없이 쓴 고유한 이름(`온도` -> `온도(°C)`)은 자동으로 맞춥니다.
 - 주어진 이름 하나가 빠진 모델 입력 여럿과 비슷하면(`솔도`, 모델은 `속도`, `습도`) 주어진 이름마다 묶어 `[후보] 속도, 습도` 하나입니다.
@@ -802,11 +779,9 @@ MAE, 표준편차, 90% 예측 범위, 카드와 표의 값 모두 같은 규칙�
 
 | 옵션 | 설명 |
 |---|---|
-| `--file`, `--file` | 데이터 파일 (**권장**). 이력의 모든 타겟을 담은 최고 버전(`ml_train.py --best`와 같음)으로 작업 유형마다 보고서 1개 |
-| `--task` | `--file`와 함께: 이 작업 유형의 보고서만 |
-| `--header-row`, `--unit-row`, `--data-row` | `--file`와 함께: 최고 버전을 새로 학습할 때 표 구조 (생략 시 이력 값) |
-| `--model`, `--model` | 버전 폴더 (학습 결과의 `version_dir`). 그 버전 그대로. 없는 폴더면 같은 데이터 폴더에 학습한 버전이 하나일 때 `[추천] <그 버전 폴더를 --model으로 준 전체 명령>`, 여럿이면 `[후보] v1, v3` |
-| `--targets`, `--targets` | 문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 `all` = 전체). 학습·예측과 같은 이름 |
+| `--file` | 데이터 파일 (**권장**). 최종 버전(마지막 학습, 위 8))으로 보고서 1개 |
+| `--model` | 버전 폴더 (학습 결과의 `version_dir`). 그 버전 그대로. 없는 폴더면 같은 데이터 폴더에 학습한 버전이 하나일 때 `[추천] <그 버전 폴더를 --model으로 준 전체 명령>`, 여럿이면 `[후보] v1, v3` |
+| `--targets` | 문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 `all` = 전체). 학습·예측과 같은 이름 |
 | `--title` | 성능예측표 계산기 맨 위 제목 (30자 안팎, 생략 시 학습 때 데이터 설명에서) |
 | `--slots` | 소견 덮어쓰기 JSON (파일 또는 문자열) |
 | `--save` | 저장 경로 (생략 시 데이터 폴더의 `ML결과보고서_<데이터>_<버전>.docx`). 이미 있으면 `<이름>_<시각>.docx`로 저장하고 `recovered`에 기록 |
@@ -818,17 +793,8 @@ python ml_report.py --model sample_ml_data\v3
 python ml_report.py --model sample_ml_data\v3 --slots slots.json
 ```
 
-`--file` 동작: 작업 유형마다 마지막 최고 버전(`best: true` 기록)을 확인해 아래가 모두 맞으면 그대로 쓰고(`made_best: false`),
-아니면 먼저 최고 버전을 새로 만듭니다(`made_best: true`, 같은 프로세스 안에서 학습하므로 몇 분 걸릴 수 있음).
-- 그 최고 버전 뒤에 같은 유형의 다른 학습 기록이 없다.
-- 버전 폴더가 온전하다.
-- 데이터 파일 내용이 그때와 같다 (원장 `data_fingerprint`의 SHA-256, 없으면 크기와 수정 시각).
-
-최고 버전이 최신이 아니어도, 타겟마다 점수가 가장 높은 버전이 모두 같은 한 버전(예: 모든 타겟을 한 번에 학습한 v1)이고 데이터 파일 내용이 그때와 같으면
-그 버전을 그대로 씁니다 (`made_best: false`). 같은 조건을 같은 데이터로 다시 학습하면 같은 모델이라 새 버전을 만들지 않습니다.
-
-최고 버전 보고서에는 제목 아래 최고 버전 안내 한 줄과, 타겟마다 "학습 조건 출처: vK (당시 점수 x.xxxx), 이번 점수 y.yyyy"가 들어갑니다.
-입력 피처 구성과 예측 필수 입력은 모든 타겟의 합집합입니다.
+`--file` 동작: 최종 버전(마지막 학습, 회귀·분류 상관없음)을 그대로 씁니다 (다시 학습하지 않음, 2.9.83). 이력에는 있지만 최종 버전에
+없는 타겟과, 같은 타겟으로 점수가 더 높았던 예전 버전(그 버전으로 만드는 `--model` 명령)은 `warnings`로 알립니다.
 `oof_<타겟>.csv`가 없는 버전은 다시 학습해야 보고서를 만들 수 있습니다 (`STOP_RETRY`로 안내).
 
 ### 2) 문서 구성
@@ -918,44 +884,35 @@ python ml_map.py --file 공정.xlsx --points 조회.xlsx [--save 결과.xlsx]   
 
 ## 6-C. 성능예측표 (`ml_export.py`)
 
-학습한 버전을 **엑셀 파일 하나**로 만듭니다. 받는 PC에는 엑셀(2016 이상)만 있으면 되고, 파이썬과 매크로는 필요 없습니다.
+학습한 버전의 모델을 **엑셀 수식으로 그대로 옮긴 파일 하나**로 만듭니다 (2.9.84). 받는 PC에는 엑셀(2016 이상)만 있으면 되고,
+파이썬과 매크로는 필요 없습니다. 값은 모델 예측과 같습니다 (근사가 아님, 합산 순서에 따른 부동소수점 끝자리 차이만).
 ```bat
-python ml_export.py --model 공정_ml_data\v3 --title "반응 공정 생산효율 예측"          :: 입력 최적화 -> 추천 조합으로 생성
-python ml_export.py --model 공정_ml_data\v3 --keep "반응온도,압축압력"                 :: 꼭 포함할 입력
-python ml_export.py --model 공정_ml_data\v3 --inputs "반응온도,소비전력,촉매비율"     :: 최적화 없이 이 조합
-python ml_export.py --model 공정_ml_data\v3 --inputs "생산효율=반응온도,촉매비율;소비전력=반응온도"  :: 타겟마다 다른 조합
+python ml_export.py --model 공정.xlsx --title "반응 공정 생산효율 예측"                :: 최종 버전
+python ml_export.py --model 공정_ml_data\v3 --title "반응 공정 생산효율 예측"          :: 이 버전으로
+python ml_export.py --model 공정.xlsx --targets 생산효율                                :: 이 타겟만
 ```
-- **입력은 타겟마다 최대 8개**: 꼭짓점 항이 2^입력 수라 9개부터 엑셀 열·메모리 한도를 넘습니다. 자동 최적화는 8개 이하 안 중에서 고르고
-  (`warnings`), `--inputs`에 9개 이상이면 줄여서 다시 학습한 8개 이하 안을 `STOP_RETRY` + `[추천]`으로 줍니다. `--keep`이 8개를 넘으면 `STOP_RETRY`.
-- `--keep`/`--inputs`의 이름은 그 입력이 있는 타겟에만 적용합니다 (최고 버전은 타겟마다 입력이 다를 수 있음). 어느 타겟에도 없는 이름만 오류.
-  `--inputs`의 입력이 하나도 없는 타겟은 자동으로 고르고 `warnings`로 알립니다. 타겟별 형식 `<타겟>=입력,입력;<타겟2>=입력`도 됩니다.
-- 8개를 넘는 `--inputs`의 `[추천]`은 모든 타겟의 `--inputs`를 담습니다 (넘은 타겟은 줄인 안, 나머지는 준 그대로).
-- 제한: `--inputs`는 `,` `;` `=`로 나누므로 이 글자가 든 타겟·입력 이름은 쓸 수 없습니다 (타겟이 하나면 `--inputs`에 타겟 이름을 쓰지 않으므로 입력 이름만 봄). 그런 이름이 있으면 후보 `command`를 만들지 않고(`note`),
-  `[추천]` 대신 줄인 입력 목록을 알립니다. 이 경우 `--inputs` 없이 실행(자동 선택, `--keep`으로 꼭 넣을 입력 지정)하거나 열 이름을 바꿔 다시 학습합니다.
+- **모델 그대로**: 다시 학습하지 않습니다. 입력은 그 버전의 입력 전부(값이 하나뿐인 입력도 모델 입력이라 남기고 `warnings`), 파생변수(`--eval`)는
+  계산 칸의 엑셀 수식(나누기 0 등 오류는 모델처럼 학습 중앙값). 2.9.83까지의 격자 표와 보간(평균 98~99% 일치), 입력 8개 상한과 `[후보]`, `--inputs`는 없앴습니다.
+- **나무 모델**(RandomForest, ExtraTrees, HistGradientBoosting): 잎마다 그 잎에 닿는 입력 범위(입력별 하한 초과·상한 이하)와 잎 값을 숨김 시트
+  `모델_<타겟>`에 한 줄씩 넣고, 예측은 `SUMPRODUCT(범위 안인지 x 잎 값)` 하나입니다(나무마다 정확히 잎 하나가 맞음). 모델의 표준화와 scikit-learn의
+  float32 비교를 경계값에 미리 반영해(입력 단위의 경계: `cast((r-평균)/표준편차) <= 기준`인 가장 큰 double r) 엑셀은 입력값을 그대로 비교합니다.
+  경계값과 잎 값은 모든 자리(repr)로 씁니다 (openpyxl은 16자리로 줄여 경계가 끝자리에서 움직임). **선형 모델**(Ridge, ElasticNet): 계수식 한 줄.
+- **크기**: 잎이 모두 400,000개(`MAX_LEAVES`, 약 25MB)를 넘으면 만들지 않고 `STOP_RETRY`. 잎 수는 RandomForest·ExtraTrees에서 대략 학습 행 수 x 100입니다
+  (학습 800행, 타겟 3개면 잎 24만 개, 15MB, 클라우드 약 30초).
+- **확인**: 무작위 조건 2,000개 + 학습 데이터 모든 행에서 옮긴 수식(파이썬 사본)과 모델 예측을 비교하고, 다르면 만들지 않습니다. 저장 뒤 다시 읽어
+  시트·잠금·입력 칸·예측 수식과 잎 값이 옮긴 값과 같은지 봅니다. Windows + 엑셀이면 계산기에 무작위 조건과 경계값 바로 위·아래 조건을 넣어 엑셀로 다시 계산해
+  모델과 비교합니다(엑셀이 없으면 `UNVERIFIED`로 알림). 결과 JSON `check`(`points`, `max_diff`, `max_rel_pct`), 정확도 시트.
 - `--overwrite`: 같은 이름 파일을 덮어씀 (생략 시 시각을 붙인 새 이름, `recovered`).
-- 데이터: 버전 폴더의 `model_dataset.csv` (원본 데이터 불필요, `학습제외_<타겟>` 행은 뺌). 숫자 타겟만 (분류는 건너뜀). 글자·날짜 입력 모델은 `STOP_RETRY`.
-- **입력 최적화**: 원본 숫자 입력만 대상 (파생변수는 원본 입력이 모두 남을 때 모델 안에서 그대로 계산). 단계마다 `--keep`이 아닌 입력을 하나씩 빼고
-  **다시 학습**해 검증 R²가 가장 덜 떨어지는 입력을 뺍니다 (기여도 순서가 아님: 함께 작용하는 입력은 혼자서는 기여도가 낮게 나옴).
-  추천 = 최고 검증 R²에서 0.005 이내인 안 중 입력 수가 가장 적은 안. 후보마다 표 크기, 표 보간 오차, 예상 최종 오차 = √(RMSE² + 보간 오차²).
-  후보(`targets.<타겟>.candidates`)마다 그 안으로 다시 만드는 `command`가 있고, 다른 타겟은 지금 고른 입력을 그대로 씁니다.
-  `next_commands`는 처음 8개만 담고 `next_commands_count`, `truncated`로 알립니다.
-- **표**: 축마다 min(41, 200,000^(1/입력 수))점, 학습 범위를 고른 간격으로. 격자 점마다 가장 가까운 학습 행까지 거리(입력 0~1).
-- **모델 대비 일치도**: 학습 범위 안 무작위 조건 2,000개에서 성능예측표 값과 모델 예측값을 비교. `agreement` =
-  `agreement_pct`(100 - 평균 상대 차이), `p95_diff_pct`(95% 조건의 차이), `max_diff_pct`, `within_interval_pct`(차이가 모델 90% 범위 안인 비율),
-  `basis`(예측값 대비, 출력이 0 근처를 지나면 출력 범위 대비). 계산기 하단·정확도·정보 시트, 결과 JSON, 함께 만든 보고서 요약에 표시.
+- 데이터: 버전 폴더의 `model_dataset.csv` (원본 데이터 불필요, `학습제외_<타겟>` 행은 학습 범위·실측 거리에서 뺌). 숫자 타겟만 (분류는 건너뜀). 글자·날짜 입력 모델은 `STOP_RETRY`.
 - **보고서와 세트**: `ml_report.py`가 회귀 버전이면 이 도구를 함께 실행합니다 (`--title`, 결과 `export_file`, 실패해도 보고서는 정상, `export_note`).
-  `ml_export.py`를 직접 부르는 것은 `--keep`/`--inputs`로 다시 만들 때입니다.
+  `ml_export.py`를 직접 부르는 것은 성능예측표만 다시 만들 때입니다.
 - **엑셀** (`성능예측표_<데이터>_<버전>.xlsx`, 보고서·history와 같은 `<데이터>_ml_data` 폴더): 시트 `계산기`(노란 입력 칸 -> 예측값, 90% 범위, 상태/판단), `일괄계산`(500행),
-  `사용법`, `표_<타겟>`, `정확도`(후보 표), `정보`(원래 모델과 표 모델, 입력, 뺀 입력과 학습 범위, 파생변수, 생성일).
-  머리글·시트 이름·일치도 문장의 타겟은 단위를 뺀 이름(`수율`)이고, 단위를 뺀 이름이 같은 타겟이 둘 이상이면(`수율(1차)`, `수율(최종)`) 전체 이름입니다
-.
-  수식은 INDEX/MATCH만: 축마다 MATCH로 위치(1~n-1로 제한)와 비율, 꼭짓점 2^k개의 비율 합 (범위 밖은 직선 연장 + "참고용 (학습 범위 밖)").
-  쓰인 꼭짓점의 실측 거리 가중합이 기준(`uncovered_dist` = 0.15 + 0.5 × 표 칸 대각선 √k/(n-1))보다 크면 "참고용 (실측 없는 영역)".
-  격자 점 사이를 보간한 거리라 입력이 많아 표가 성기면 학습 행 위에서도 거리가 커지므로 칸 크기만큼 기준을 늘립니다 (입력 6개면 0.35, 8개면 0.62).
-- **값 자리수**: 표에는 예측값을 유효숫자 12자리로 넣고(일치도도 저장한 값으로 계산), 예측값·90% 범위 표시 형식은 타겟 크기에 맞춰
-  유효숫자 약 4자리 (기본 `0.00`, 작은 타겟은 소수 자리를 늘리고 1e-5 아래는 `0.000E+00`). RMSE 등 결과 JSON 숫자도 유효숫자로 반올림.
-- **잠금과 숨김**: 모든 시트 보호(암호 없음), 노란 입력 칸만 수정 가능, 통합문서 구조 잠금. `표_<타겟>` 시트는 완전히 숨김(veryHidden: "숨기기 취소" 목록에도 안 나옴). 그 밖의 시트와 수식은 볼 수 있음.
-- 산출물: `<버전>\export\model_<타겟>.joblib|json`(표를 만든 모델), `candidates.csv`. 원래 모델은 바꾸지 않음.
+  `사용법`, `모델_<타겟>`(잎과 학습 데이터 점), `정확도`(모델 점수, 계산 방식, 같은 값 확인), `정보`(모델, 입력, 파생변수, 생성일).
+  머리글·시트 이름의 타겟은 단위를 뺀 이름(`수율`)이고, 단위를 뺀 이름이 같은 타겟이 둘 이상이면(`수율(1차)`, `수율(최종)`) 전체 이름입니다.
+  입력이 학습 범위 밖이면 "참고용 (학습 범위 밖)". 가장 가까운 학습 행까지 거리(입력 0~1 환산, 배열 수식 MIN)가 기준보다 크면 "참고용 (실측 없는 영역)":
+  기준은 학습 행끼리 가장 가까운 거리의 95%가 드는 값(최소 0.15)이라 입력이 많아 데이터가 성겨도 학습 행 근처는 표시하지 않습니다(학습 행 20,000개 넘으면 표본).
+- **값 자리수**: 예측값·90% 범위 표시 형식은 타겟 크기에 맞춰 유효숫자 약 4자리 (기본 `0.00`, 작은 타겟은 소수 자리를 늘리고 1e-5 아래는 `0.000E+00`).
+- **잠금과 숨김**: 모든 시트 보호(암호 없음), 노란 입력 칸만 수정 가능, 통합문서 구조 잠금. `모델_<타겟>` 시트는 완전히 숨김(veryHidden). 버전 폴더는 바꾸지 않음.
 - 확인: 다시 열어 시트·잠금·입력 칸·표 행 수, 같은 계산을 파이썬으로 재현해 보간과 비교. 엑셀이 설치된 Windows에서는 엑셀로 다시 계산해 비교
   (없으면 `unverified`에 "엑셀에서 수식 계산은 확인하지 못함"). 개발 테스트는 LibreOffice로 다시 계산해 비교합니다.
 
@@ -1023,8 +980,7 @@ python ml_export.py --model 공정_ml_data\v3 --inputs "생산효율=반응온�
 }
 ```
 
-기록에 `data_fingerprint`(`size`, `mtime`, `sha256`)와, 지정했을 때 `dtypes`, `positive_class`가 추가됩니다 (`--best`가 학습 조건을 다시 쓰기 위함).
-`--best` 기록에는 `best: true`, `best_source`, `target_recipes`가 더 있습니다. `--history`의 `records`에서는 `best: true`로 표시됩니다.
+지정했을 때 `dtypes`, `positive_class`, `exclude_where`가 기록에 추가됩니다.
 
 ---
 
@@ -1078,7 +1034,7 @@ python ml_export.py --model 공정_ml_data\v3 --inputs "생산효율=반응온�
   순열 중요도는 모델 종류와 관계없이 같은 방법이라 선형 모델(Ridge, ElasticNet)도 값이 있습니다. 글자 입력(라인)은 원-핫 열이 아니라 원래 열
   하나로 섞어 재고, 날짜 열의 연·월·요일 부분은 날짜 열 하나로 합칩니다. `--eval` 파생변수는 그 이름 그대로 한 입력입니다.
   계산에 실패했거나 모든 입력의 중요도가 0이면 그 타겟은 `[]`이고 `warnings`에 이유가 들어갑니다. `preview`에는 타겟마다 위 3개를
-  `중요 입력: 온도 0.41, 압력 0.22, ...`로 적습니다 (타겟이 여럿이면 `중요 입력(<타겟>): ...`). `--best`의 결과는 모든 작업 유형의 타겟을 합칩니다.
+  `중요 입력: 온도 0.41, 압력 0.22, ...`로 적습니다 (타겟이 여럿이면 `중요 입력(<타겟>): ...`).
 - `truncated`: 학습 결과의 `feature_types`는 종류마다 30개까지이고, 넘으면 `truncated: true`, `feature_count`(전체 입력 수),
   `full_result_file`(`history.json`, 이 버전 기록의 `feature_types`에 전체). 오류 메시지의 열 목록(`[사용 가능한 컬럼 목록]`, `[모델 입력 목록]`)은
   40개까지 적고 `외 N개 (전체 M개)`.
@@ -1189,7 +1145,6 @@ python ml_export.py --model 공정_ml_data\v3 --inputs "생산효율=반응온�
   "status": "ok",
   "report_file": "C:\\path\\sample_ml_data\\ML결과보고서_sample_v3.docx",
   "verified": true,
-  "best_version": "v3",
   "version": "v3",
   "task": "regression",
   "targets": ["생산효율(%)", "인장강도(MPa)"],
@@ -1202,16 +1157,13 @@ python ml_export.py --model 공정_ml_data\v3 --inputs "생산효율=반응온�
   "agent_directive": "VERIFIED: v3 ML 결과 보고서(타겟 2개)를 'ML결과보고서_sample_v3.docx'에 저장했습니다. 종합 판정 적합. report_file 경로를 사용자에게 알리세요."
 }
 ```
-`best_version`은 문서에 사용한 버전입니다 (`version`과 같음). `verified`는 저장한 Word 파일을 다시 열어 버전 표기와 표 수를 확인했는지, 아니면 `unverified`에 이유가 있고 `agent_directive`가 `UNVERIFIED:`입니다.
+`version`은 문서에 사용한 버전입니다. `verified`는 저장한 Word 파일을 다시 열어 버전 표기와 표 수를 확인했는지, 아니면 `unverified`에 이유가 있고 `agent_directive`가 `UNVERIFIED:`입니다.
 
-`--file`로 만들면 위 키는 첫 번째 보고서(회귀가 있으면 회귀) 기준이고, 다음 키가 추가됩니다:
-`made_best`, `best_version_dir`(예측에 쓸 폴더), `best_versions`, `best_targets`(`--best`와 같은 형식), `report_count`,
-`best_reports`(`[{report_file, version, task, targets, overall_verdict, verdicts}]`, 회귀와 분류가 섞이면 2개), `next_commands`(최고 버전 예측 명령).
-회귀 보고서면 성능예측표 키도 추가됩니다: `export_file`(성능예측표 경로), `export`(타겟별 `inputs`, `dropped`, `val_r2`, `table_rows`, `agreement`),
+`--file`로 만들면 최종 버전의 보고서이고, 이력에만 있는 타겟·점수가 더 높았던 예전 버전은 `warnings`에 있습니다 (`model_chosen`: 쓴 버전).
+회귀 보고서면 성능예측표 키도 추가됩니다: `export_file`(성능예측표 경로), `export`(타겟별 `inputs`, `model`, `val_r2`, `method`, `check`),
 `export_verified`(엑셀로 재계산 확인), `export_unverified`(확인하지 못한 것), `export_warnings`(성능예측표 주의 사항), 실패하면 `export_note`(보고서는 정상).
 성능예측표를 다 확인하지 못하면(엑셀이 없는 PC 등) 결과 전체가 `verified: false`, `unverified`에 `성능예측표: <내용>`, `agent_directive`가 `UNVERIFIED:`입니다 (R1).
 보고서 `--targets`로 타겟을 고르면 성능예측표도 그 타겟만, `--overwrite`면 성능예측표도 덮어씁니다.
-`agent_directive`에 `ml_predict.py --model <best_version_dir>`이 들어갑니다.
 
 보고서 서식 템플릿: python-docx의 `templates/default-docx-template` 폴더(XML 파일)를 먼저 쓰고, 없으면 `default.docx`를 씁니다.
 폴더에서 일부 파일이 빠져 있으면(회사 PC: `docProps/thumbnail.jpeg`) 그 파일을 가리키는 관계만 빼고 엽니다.
@@ -1232,7 +1184,7 @@ Windows PowerShell 5.1(OpenCode 셸 도구와 같은 순서), 환경변수 `ML_K
 `--target`·`--target-col` -> `--targets`, `--columns` -> `--features`, `--query` -> `--input`(ml_map), `--output`·`--out` -> `--save`, `--json`·`--encoding`은 뺌)은
 `[추천] <고친 전체 명령>`(고친 명령이 실제로 읽히는지 먼저 확인, 필수 인자 빠짐 오류에도)을 붙입니다. 진짜 옵션의 앞부분인 것(`--target`,
 `--feature`, `--header` 등: 예전에 줄임말로 되던 것)도 읽지 않고 같은 `[추천]`을 줍니다(2.9.71, 옵션마다 쓰는 법 하나). 비슷한 철자는 `[후보]`로만 주고
-`--overwrite`·`--best`는 후보로도 주지 않습니다. directive: `[추천]`이 있으면 그 명령을 1번 실행, 없으면 보고.
+`--overwrite`는 후보로도 주지 않습니다. directive: `[추천]`이 있으면 그 명령을 1번 실행, 없으면 보고.
 옵션 이름의 `_`는 `-`로 읽어 같은 뜻 표를 찾습니다(2.9.77, `--model_path` -> `--model`). `--model`이 모델도 데이터 파일도 아니면 그 폴더의 학습한 데이터 파일로 `--model`을 바꾼 `[추천]`(여럿이면 번호 `[후보]`).
 `이름=값` 입력(2.9.74): `--input`가 있는 명령(예측, ml_map)에서 모르는 옵션의 값이 `이름=값,...` 꼴이면(학습의 `--features`를 그대로 쓴 `--features "온도=180,..."` 등)
 그 옵션을 `--input`로 바꾼 `[추천]` 전체 명령. 예측의 `--file`에 `이름=값,...`을 주면 같은 `[추천]`, 없는 파일을 주면 "몇 건은 파일 없이 `--input`" 안내와
@@ -1339,7 +1291,7 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
 - **나눠서 진행 (`CONTINUE:`, CLI-dev/README.md R10)**: 에이전트의 명령 실행 도구는 명령을 120초에 끊습니다. 도구는 명령 시간
   (`ML_KIT_TIME_LIMIT`, 기본 100초, 0 = 제한 없음)에서 여유 30초를 뺀 시각을 넘을 것 같으면 멈추고 `status: ok`, `continue: true`,
   `progress`, `next_commands: [같은 명령]`, `CONTINUE:` directive를 냅니다. 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행합니다.
-  - 학습(`ml_train.py`, `--best`, 보고서 `--file`의 최고 버전 다시 학습): 타겟이 2개 이상이면 5개 모델 경쟁을 마친 타겟마다
+  - 학습(`ml_train.py`): 타겟이 2개 이상이면 5개 모델 경쟁을 마친 타겟마다
     `<데이터>_ml_data/.resume_train/<키>.joblib`에 저장하고, 다음 타겟 전에 시계를 봅니다 (이번 실행에서 가장 오래 걸린 타겟 시간 x 1.2).
     키는 학습 입력 그 자체(데이터, 스키마, 작업 유형, 시드, 도구·scikit-learn 버전)의 해시라 데이터나 조건이 바뀌면 다시 학습합니다.
     멈춘 실행은 버전 폴더(스테이징은 지움)와 원장 기록을 남기지 않습니다: 버전 번호와 `history.jsonl`은 끝나는 실행이 한 번만 씁니다(원자적 커밋).
@@ -1370,19 +1322,19 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     (2.9.65, 5차 검토: 전에는 열의 1/5을 시계 없이 계산해 600열 데이터에서 120초 강제 종료가 매번 반복), 끝낸 열은 멈출 때뿐 아니라
     `IMPORTANCE_SAVE_SECONDS`(12초)마다 저장하므로 명령이 밖에서 강제 종료되어도 다음 실행이 이어 갑니다(처음 저장할 때 전체 적합도 저장).
     열마다 난수를 따로 정하므로(시드, 열 번호) 나눠 계산해도 한 번에 계산한 중요도와 같습니다. 12초 안에 끝나면 전체 적합은 저장하지 않습니다.
-  - 중간 저장(`.resume_train`, `best_run.json`, 성능예측표 `_fits`)은 저장 뒤 파일이 있는지 확인합니다 (공통 `resume_save`/`resume_find`/`resume_clear`, `_ml_runtime.py`).
+  - 중간 저장(`.resume_train`)은 저장 뒤 파일이 있는지 확인합니다 (공통 `resume_save`/`resume_find`/`resume_clear`, `_ml_runtime.py`).
     원래 위치에 저장하지 못하면(폴더 권한, 디스크 공간, 같은 이름의 파일, 경로 길이) JIT 복구로 대체 위치에 저장합니다: 데이터 폴더(`ML_KIT_DATA_DIR`
     또는 기본값) 아래 `ml-kit-resume\<원래 폴더 해시 12자>\`, 그다음 `%TEMP%\ml-kit-resume\<해시>\`. `[WARN]`과 `recovered`
     (`중간 저장 실패 (.resume_train) -> 대체 위치 데이터 폴더 ml-kit-resume\<해시>에 저장`). 이어 실행은 원래 위치와 대체 위치를 모두 찾고, 끝나면 대체 위치도
-    지웁니다(성능예측표 `_fits`는 원래 위치만 다음 내보내기용으로 남김). 저장 파일 이름은 키 해시 16자(`<키>.joblib`, `<키>.m<번호>.joblib`)라 깊은 폴더에서도
+    지웁니다. 저장 파일 이름은 키 해시 16자(`<키>.joblib`, `<키>.m<번호>.joblib`)라 깊은 폴더에서도
     MAX_PATH(260자) 여유가 있습니다. 어디에도 저장하지 못하면 제한을 넘겨 계속하지 않고 `check_time`이 멈출 지점에서 `STOP_RETRY`(원인: 쓰기 권한·디스크·경로 길이,
     오류 로그의 `복구 시도:`에 남음). 제한 전에 끝나면 결과는 정상이고 `warnings`에 `중간 저장 실패: ...` (2.9.63; 2.9.62의 "나누지 않고 끝까지"는 없앰:
     큰 데이터에서 120초를 넘겨 JSON 없이 끊겼음). 그래서 `progress`의 `저장됨`은 늘 사실이고, 무응답으로 끊기지 않습니다.
     이 `STOP_RETRY`의 directive는 학습 기본 안내(열 이름과 `--eval` 식) 대신 쓰기 권한·디스크·경로 길이를 확인하라고 합니다 (2.9.64).
-    같은 이름이 여러 위치에 있으면 가장 최근 파일을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지웁니다(`best_run.json` 같은 고정 이름, 2.9.64).
+    같은 이름이 여러 위치에 있으면 가장 최근 파일을 읽고, 대체 위치에 저장하면 앞 위치의 옛 파일을 지웁니다(2.9.64).
     명령을 시작할 때 대체 폴더 전체(데이터 폴더 `ml-kit-resume\*`, `%TEMP%\ml-kit-resume\*`)에서 3일 넘은 저장 파일과 빈 폴더를 지웁니다 (`resume_sweep_old`, 2.9.64).
     지우는 것은 도구가 만든 것뿐입니다(2.9.65, 5차 검토: `ML_KIT_DATA_DIR`를 사용자 폴더로 두면 그 아래 `resume` 폴더의 사용자 파일을 지웠음):
-    해시 12자 이름의 하위 폴더 안의 도구 파일 이름(`<키>.joblib`, `<키>.m<번호>.joblib`, `<키>.m<번호>.f<fold>.joblib`, `<키>.fit.joblib`, `<키>.imp.joblib`, `<키>.prep.joblib`, 시작 표시 `<단계>.start`, `best_run.json`, 각 `.tmp`)과
+    해시 12자 이름의 하위 폴더 안의 도구 파일 이름(`<키>.joblib`, `<키>.m<번호>.joblib`, `<키>.m<번호>.f<fold>.joblib`, `<키>.fit.joblib`, `<키>.imp.joblib`, `<키>.prep.joblib`, 시작 표시 `<단계>.start`, 각 `.tmp`)과
     비게 된 그 폴더. 그 밖의 파일·폴더는 손대지 않고, 끝난 실행의 대체 위치 정리(`resume_clear`)도 같은 이름만 지웁니다. 2.9.64까지의 `resume` 폴더는 쓰지도 지우지도 않습니다.
   - 학습 전 준비도 한 단계입니다 (2.9.67, 6차 검토: 10000행 x 1000열에서 읽기·검증·상관행렬·타겟 준비가 실행마다 50~94초 걸려 첫 fold를 더하면
     120초를 넘겨 JSON 없이 끊기고 진행이 없었음). 첫 모델 전에 하는 일(파일 읽기, 검증과 타입 정제, 피처 판별, 상관행렬, `%` 검사, 학습 제외 행,
@@ -1392,7 +1344,7 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     준비를 저장한 실행은 그것이 한 단계라 다음 단계 전에 시계를 보고, 이미 제한 - 여유를 넘었으면 첫 학습 단계 전에 멈춥니다
     (`progress`: `학습: 학습 준비(데이터 읽기, 검증, 상관행렬) 저장됨 (첫 학습 단계 전에 멈춤, 약 N단계 남음)`). 숫자 열 읽기(`coerce_numeric`)는 칸마다
     한 번에 처리해(정규식은 `%`가 있는 칸만) 준비 자체도 빨라졌습니다(같은 결과).
-  - 단계 하나가 제한보다 긴 경우 (2.9.67): 실행의 첫 단계(준비, fold, 1위 전체 적합, 중요도 첫 열, 성능예측표 첫 후보: 시계 없이 함)는 시작 전에
+  - 단계 하나가 제한보다 긴 경우 (2.9.67): 실행의 첫 단계(준비, fold, 1위 전체 적합, 중요도 첫 열: 시계 없이 함)는 시작 전에
     시작 표시 `<단계>.start`(시도 횟수, 그때 제한)를 남기고 저장하면 지웁니다(`step_begin`/`step_end`, `_ml_runtime.py`; 실행이 오류로 끝나도 지움).
     표시만 남은 단계를 다시 만나면 이전 실행이 그 단계 도중 밖에서 끊긴 것입니다: 2번째까지는 다시 시도하고(바쁜 PC에서 한 번 끊길 수 있음),
     같은 제한 이하에서 2번 끊긴 단계는 시작하지 않고 `STOP_RETRY`: `이 데이터는 한 단계(...)가 명령 시간 제한(100초) 안에 끝나지 않습니다 ...
@@ -1406,17 +1358,11 @@ OpenCode, Glimmer-30B, CI 파이프라인 등 무인 서브프로세스 환경�
     `mark_committed`, `_ml_runtime.py`)에 감시가 끝내면 `CONTINUE`가 아니라 `"status": "ok"`, `"verified": false`, `UNVERIFIED: 학습 버전 v1 저장됨, 확인하지 못함
     (...)`, 저장한 것의 키(`version`, `version_dir`, `output_file`, `report_file`)와 `saved`, `unverified`를 냅니다(exit 0, `next_commands` 없음).
     예전에는 같은 명령을 다시 하라고 해서 처음부터 다시 학습해 같은 버전이 하나 더 생겼고(v2), 저장한 단계가 없으면 v1이 저장됐는데도 `STOP_RETRY`였습니다.
-    같은 명령을 다시 실행해도 같은 일을 다시 하지 않는 저장(보고서 `--file`가 만든 최고 버전: `best_is_fresh`로 다시 씀, `--best`가 `best_run.json`에 적은 앞 작업 유형)은
-    그대로 `CONTINUE`입니다. 학습은 버전을 쓰기 직전에도 시계를 봅니다: 이 실행이 새로 학습했고 제한 - 여유를 넘었고 모든 타겟이 저장돼 있으면
+    같은 명령을 다시 실행해도 같은 일을 다시 하지 않는 저장(`rerun_safe`)은 그대로 `CONTINUE`입니다. 학습은 버전을 쓰기 직전에도 시계를 봅니다: 이 실행이 새로 학습했고 제한 - 여유를 넘었고 모든 타겟이 저장돼 있으면
     버전을 쓰지 않고 멈춥니다(`학습: 타겟 N/N개 끝남, 저장됨 (버전 저장 전에 멈춤, 약 1단계 남음)`, 다음 실행은 저장한 타겟으로 버전만 씀).
-  - 성능예측표 입력 고르기의 단계 이름에는 후보 번호가 붙습니다(`후보 3번째 ('수율' 입력 2개) 학습`, 2.9.69): 같은 개수의 다른 조합도 진행 문구가 다릅니다.
   - 진행 문구에는 남은 단계 수 추정(`약 N단계 남음`: 후보 x fold + 전체 적합 + 중요도, 뒤 타겟은 27단계씩)이 붙습니다. LLM은 `CONTINUE:`가 아닌 결과가 나올 때까지
     같은 명령을 다시 실행하고, 횟수는 도구가 셉니다(2.9.71: 300번을 넘거나 같은 `progress`에서 새로 저장한 것 없이 멈추면 `STOP_RETRY:` `unfinished_limit`; 2.9.66까지는 최대 20번, 2.9.68까지는 60번 - 느린 회사 PC에서 실행마다 1단계씩 진행되어 타겟 2개에 약 55번이 걸렸으므로 타겟 3개(약 82번)나 `--best`가 60번을 넘었음).
-  - 타겟 학습 시간 기록은 명령 단위입니다(`RUN_FIT_SECONDS`): `--best`·보고서 `--file`에서 두 번째 작업 유형의 첫 타겟도 시계를 봅니다.
-  - `--best`가 작업 유형(회귀, 분류) 사이에서 멈추면 이미 만든 최고 버전을 `.resume_train/best_run.json`에 적어 두고, 같은 명령을 다시 실행하면
-    그 버전이 아직 최신(`best_is_fresh`: 뒤에 다른 학습 없음, 폴더 온전, 데이터 같음)일 때 다시 만들지 않고 결과에 넣습니다(원장 중복 없음).
-    보고서 `--file`는 원래 최신 최고 버전을 다시 쓰므로 같습니다. 오류로 끝난 `--best` 실행은 이 기록을 지웁니다 (2.9.62).
-  - 성능예측표의 입력 고르기(`ml_export.py`, 보고서가 함께 만드는 것 포함): 후보 학습마다 `<버전>/export/_fits`에 저장.
+  - 타겟 학습 시간 기록은 명령 단위입니다(`RUN_FIT_SECONDS`).
 
 ---
 

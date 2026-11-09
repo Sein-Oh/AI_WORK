@@ -12,7 +12,7 @@ LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 �
   C  표 보간·반대 찾기 ml_map (2.6.0)
   D  예측 + 실측 비교값 (2.7.0)
   E  모델 반대 찾기와 운전 구간 (2.8.0)
-  F  보고서 + 성능예측표 세트, 일치도, 엑셀 잠금·숨김·재계산 (2.9.x). 기본 실행에서 뺌 (--only F, PAUSED)
+  F  보고서 + 성능예측표 세트, 모델과 같은 값, 엑셀 잠금·숨김·재계산 (2.9.x)
   G  파생변수 원본 열 (2.9.1)
 
 결과: 이 파일 옆에 beta_check_<라벨>_<시각>.md (요약 + 실패 상세)와 .xlsx (항목별 표).
@@ -38,8 +38,8 @@ sys.path.insert(0, os.path.join(HERE, "ml-kit", "tools"))
 RESULTS = []          # {"group", "id", "title", "status" (PASS/FAIL/SKIP), "detail"}
 AGENT = False
 GROUPS = ("H", "B", "C", "D", "E", "F", "G")
-# 기본 실행에서 빼는 묶음: --only로 이름을 주면 돌림. F(보고서·성능예측표)는 다른 로직이 마무리될 때까지 시험에서 뺌 (2026-11-08)
-PAUSED = {"F": "보고서·성능예측표는 개발 중이라 기본 시험에서 뺌 (--only F로 실행)"}
+# 기본 실행에서 빼는 묶음 (이름: 이유). --only로 이름을 주면 돌림
+PAUSED: dict = {}
 
 
 def emit(payload):
@@ -222,22 +222,21 @@ def group_f(work, st):
     safe("F", "F2", "보고서·성능예측표·history가 같은 폴더", lambda: (
         same(os.path.dirname(p["export_file"]), root) and os.path.isfile(os.path.join(root, "history.jsonl")),
         f"보고서 {p['report_file']} / 성능예측표 {p['export_file']} / history 있음 {os.path.isfile(os.path.join(root, 'history.jsonl'))}"))
-    expect = {"생산효율(%)": {"반응온도(°C)", "촉매비율(wt%)", "수분함량(%)"}, "불순물(ppm)": {"반응온도(°C)", "압축압력(bar)"},
-              "소비전력(kW)": {"압축압력(bar)", "유량(L/min)"}}
-    safe("F", "F3", "출력별로 실제 영향 입력만 남김 (분진 제외)", lambda: (
-        all(set(p["export"][t]["inputs"]) == s for t, s in expect.items()), {t: v["inputs"] for t, v in p["export"].items()}))
-    safe("F", "F4", "모델 대비 일치도 95% 이상", lambda: (
-        all(v["agreement"]["agreement_pct"] >= 95 for v in p["export"].values()),
-        {t: v["agreement"]["agreement_pct"] for t, v in p["export"].items()}))
+    given = {"반응온도(°C)", "압축압력(bar)", "촉매비율(wt%)", "수분함량(%)", "유량(L/min)", "분진(mg)"}   # B1 학습에 준 입력 (2.9.83: 모두 넣음)
+    safe("F", "F3", "출력마다 학습에 준 입력이 모두 들어감 (분진 포함)", lambda: (
+        all(set(v["inputs"]) == given for v in p["export"].values()), {t: v["inputs"] for t, v in p["export"].items()}))
+    safe("F", "F4", "성능예측표 = 모델 예측 (모델을 수식으로 그대로, 2.9.84)", lambda: (
+        all(v["check"]["max_diff"] < 1e-9 and "그대로" in v["method"] for v in p["export"].values()),
+        {t: (v["method"], v["check"]) for t, v in p["export"].items()}))
     def f5():
         from docx import Document
         text = "\n".join(x.text for x in Document(p["report_file"]).paragraphs)
-        return ("성능예측표 (엑셀 계산기)" in text and "점수 용어" in text and "% 일치" in text), "보고서 문구 확인"
-    safe("F", "F5", "보고서에 성능예측표 일치도 줄과 점수 용어", f5)
+        return ("성능예측표 (엑셀 계산기)" in text and "점수 용어" in text and "모델과 같은 값 확인" in text), "보고서 문구 확인"
+    safe("F", "F5", "보고서에 성능예측표 확인 줄과 점수 용어", f5)
     def f6():
         import openpyxl
         wb = openpyxl.load_workbook(p["export_file"])
-        hidden = [n for n in wb.sheetnames if n.startswith("표_")]
+        hidden = [n for n in wb.sheetnames if n.startswith("모델_")]
         ok = (all(wb[n].protection.sheet for n in wb.sheetnames) and wb.security.lockStructure
               and hidden and all(wb[n].sheet_state == "veryHidden" for n in hidden)
               and all(wb[n].sheet_state == "visible" for n in wb.sheetnames if n not in hidden))
@@ -245,8 +244,8 @@ def group_f(work, st):
         unlocked = [c.coordinate for row in calc.iter_rows() for c in row if not c.protection.locked]
         texts = " ".join(str(c.value) for ws in wb.worksheets for row in ws.iter_rows() for c in row if isinstance(c.value, str))
         no_path = os.path.dirname(root) not in texts
-        return (ok and unlocked == [f"C{r}" for r in range(6, 6 + 5)] and no_path), f"잠금/숨김 {ok}, 입력칸 {unlocked}, 경로 없음 {no_path}"
-    safe("F", "F6", "엑셀: 모든 시트 잠금, 표_ 완전 숨김, 입력 칸 5개만 열림, 전체 경로 없음", f6)
+        return (ok and unlocked == [f"C{r}" for r in range(6, 6 + 6)] and no_path), f"잠금/숨김 {ok}, 입력칸 {unlocked}, 경로 없음 {no_path}"
+    safe("F", "F6", "엑셀: 모든 시트 잠금, 모델_ 완전 숨김, 입력 칸 6개만 열림, 전체 경로 없음", f6)
     if p.get("export_verified"):
         check("F", "F7", "엑셀로 수식 재계산 확인 (export_verified)", True)
     else:

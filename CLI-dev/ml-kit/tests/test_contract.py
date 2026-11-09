@@ -281,7 +281,7 @@ def test_report(trained):
     work, _, _ = trained
     out = work / "report.docx"
     payload = run_tool("ml_report.py", "--model", str(work / "sample_ml_data" / "v1"), "--targets", TARGET, "--save", str(out))
-    assert out.is_file() and payload["best_version"]
+    assert out.is_file() and payload["version"] == "v1" and "best_version" not in payload
 
 
 @needs_docx
@@ -535,9 +535,9 @@ ENTRY_POINTS = ("ml_train.py", "ml_predict.py", "ml_report.py", "ml_export.py", 
 
 def test_entry_points_import_only_the_runtime():
     """진입점은 _ml_runtime만 공통으로 import한다. 아무도 ml_predict를 import하지 않고(예측 단독 배포), _ml_runtime은 어떤
-    진입점도 import하지 않는다. 학습을 다시 쓰는 곳만 예외: ml_export -> ml_train(같은 학습 경쟁), ml_report -> ml_train·ml_export
-    (보고서의 최고 버전·성능예측표). AGENTS.md ml-kit 규칙."""
-    allowed = {"ml_export.py": {"ml_train"}, "ml_report.py": {"ml_train", "ml_export"}}
+    진입점도 import하지 않는다. 예외는 보고서와 함께 성능예측표를 만드는 ml_report -> ml_export 하나
+    (2.9.84: 성능예측표는 다시 학습하지 않아 ml_train을 쓰지 않음). AGENTS.md ml-kit 규칙."""
+    allowed = {"ml_report.py": {"ml_export"}}
     bad = []
     for name in ENTRY_POINTS + ("_ml_runtime.py",):
         tree = ast.parse(open(os.path.join(KIT, name), encoding="utf-8").read())

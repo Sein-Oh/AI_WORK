@@ -215,7 +215,7 @@ CLI-dev/<tool>/
   `progress`에서 멈췄으면(ml-kit은 이번 실행에서 새로 저장한 것도 없을 때) `CONTINUE:` 대신 `STOP_RETRY:`(`error_type: unfinished_limit`, exit 1).
   명령이 다른 결과로 끝나면 그 기록을 지운다. 회사 PC에서 타겟 2개에 약 55번이 걸렸으므로(2.9.69) 상한은 300. `progress`는 실행마다 달라지게(끝낸 단계 수, `약 N단계 남음`) 쓴다.
 - 사람이 돌리는 점검 러너(`run_beta_check.py`, 실기 러너)와 테스트는 `ML_KIT_TIME_LIMIT=0`(제한 없음).
-- 적용: ml-kit(`ML_KIT_TIME_LIMIT`, `ml_train.py` 여러 타겟 학습(`--best`, `ml_report --file` 재학습 포함), 성능예측표 입력 고르기와 그것을 부르는 `ml_report.py`), office-cli(`OFFICE_CLI_TIME_LIMIT`, `reader.py index`와 `search --file` 폴더 등록). 새 긴 작업도 같은 이름·같은 키로 구현한다.
+- 적용: ml-kit(`ML_KIT_TIME_LIMIT`, `ml_train.py` 여러 타겟 학습), office-cli(`OFFICE_CLI_TIME_LIMIT`, `reader.py index`와 `search --file` 폴더 등록). 새 긴 작업도 같은 이름·같은 키로 구현한다.
 - 나누는 단위는 한 실행에 반드시 끝낼 수 있을 만큼 작게: ml-kit 학습은 학습 전 준비(2.9.67) -> 타겟 -> 후보 모델 -> 교차검증 fold(2.9.66) -> 1위 전체 적합 -> 순열 중요도 열 단위로 저장한다.
   실행마다 다시 하는 고정 비용(파일 읽기, 검증 등)이 크면 그것도 저장해 이어 실행이 다시 쓴다 (고정 비용 + 첫 단계가 제한을 넘으면 진행이 없음).
 - 단계 하나가 제한보다 긴 경우 (ml-kit 2.9.67): 실행의 첫 단계(시계 없이 함)는 시작 표시(`<단계>.start`, 시도 횟수와 제한)를 남기고 저장하면 지운다.

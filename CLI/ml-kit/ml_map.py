@@ -50,7 +50,7 @@ def _model_find_hint(args, goal_col: str, goal_val, vary: str, fixed: dict) -> s
         return ""
     try:
         with contextlib.redirect_stderr(io.StringIO()):
-            vdir = model_dir_from_data(ap, [goal_col])
+            vdir = model_dir_from_data(ap)
     except Exception:  # noqa: BLE001  no single version to use: no hint (the usual message stays)
         return ""
     meta = None

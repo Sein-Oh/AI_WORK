@@ -7,7 +7,7 @@ Atomic Version Packaging, and Single Source of Truth (SSOT) Ledger.
 --task regression (default) : champion by Out-of-Fold R2
 --task classification       : champion by Out-of-Fold Macro-F1 (Stratified K-Fold)
 
---best                      : every target of the history retrained with its best recipe into one version per task
+The latest training version is the final version: ml_report.py --file and ml_predict.py --model <data file> use it.
 
 Shared runtime (data loading, --eval engine, CLI protocol) is imported from _ml_runtime.py.
 
@@ -30,7 +30,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text, quote_arg,
     parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
-    RESUME_MAX_AGE, option_retry, BEST_POINTER, time_limit, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed, committed_rerun_safe,
+    RESUME_MAX_AGE, option_retry, time_limit, final_version, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed,
 )
 
 setup_console()
@@ -1510,7 +1510,7 @@ def append_history_ledger(ledger_path: str, record: Dict[str, Any],
     os.makedirs(data_root, exist_ok=True)
 
     # 1. Append to history.jsonl (streaming ledger). A version replaced with --overwrite keeps one record: the old
-    # record of that version is removed (the ledger is rewritten atomically), so the report's best version and the
+    # record of that version is removed (the ledger is rewritten atomically), so the final version and the
     # is_best / delta comparisons never see the replaced folder's scores.
     ver = record.get("version")
     existing = load_history_ledger(ledger_path) if ver else []
@@ -1531,23 +1531,6 @@ def append_history_ledger(ledger_path: str, record: Dict[str, Any],
         atomic_write_text(json_path, dumps_json(all_records, indent=2))
     except OSError as e:
         sys.stderr.write(f"[WARN] history.json 동기화 실패 (history.jsonl은 정상 기록됨): {e}\n")
-    write_best_pointer(data_root, all_records)
-
-
-def write_best_pointer(data_root: str, records: List[Dict[str, Any]]) -> None:
-    """<data_root>/best_version.json: per task the version every target should be predicted with (task_best_version,
-    the same choice as --history best_version and the report). ml_predict --model <data file> reads it (2.9.71). A failure
-    only warns: ml_predict then asks which version folder to use."""
-    try:
-        tasks: Dict[str, Any] = {}
-        for task in TASK_ORDER:
-            if any(_record_task(r) == task for r in records):
-                info = task_best_version(records, data_root, task)
-                if info:
-                    tasks[task] = {k: info[k] for k in ("version", "mean_val_score", "targets", "complete", "missing")}
-        atomic_write_text(os.path.join(data_root, BEST_POINTER), dumps_json({"tasks": tasks}, indent=2))
-    except Exception as e:      # the ledger itself is written; the pointer is a convenience for ml_predict
-        sys.stderr.write(f"[WARN] best_version.json 쓰기 실패 ({type(e).__name__}): {e}\n")
 
 
 def load_history_ledger(ledger_path: str) -> List[Dict[str, Any]]:
@@ -1729,7 +1712,7 @@ def build_next_commands(
             "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --file {quote_arg(raw_file)}",
             "needs_input": False,
         })
-        # 방금 학습한 버전 폴더 (2.9.76 2차 검토: --model <데이터 파일>은 최고 버전·다른 작업으로 풀려 --input 틀의 입력과 어긋났음)
+        # 방금 학습한 버전 폴더 (그 버전의 입력 이름과 같은 --input 틀)
         cmds.append(predict_next_command(
             final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         if base_features and quotable(*base_features):
@@ -1777,18 +1760,6 @@ def build_next_commands(
 def _same_experiment(record: Dict[str, Any], task: str, targets: List[str]) -> bool:
     """Ledger records are comparable (delta_score, is_best) only for the same task and target set."""
     return record.get("task", TASK_REGRESSION) == task and sorted(record.get("targets", [])) == sorted(targets)
-
-
-def data_fingerprint(path: str) -> Dict[str, Any]:
-    """Size, modification time and SHA-256 of the data file (best-version freshness check)."""
-    import hashlib
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    st = os.stat(path)
-    return {"size": int(st.st_size), "mtime": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-            "sha256": h.hexdigest()}
 
 
 # ==============================================================================
@@ -2122,7 +2093,7 @@ def auto_inputs(df_raw: pd.DataFrame, target_names: List[str], task: str,
 def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Dict[str, Any]:
     """
     One feature recipe (features, --eval formulas, --dtypes, positive class) applied to the loaded data.
-    A normal run has one group; a best run (--best) has one group per distinct recipe.
+    A run has one group.
     """
     feats_in, tgts_in = group["features"], group["targets"]
     # no --features (2.9.72): the tool chooses the inputs from every column except the targets (auto_inputs)
@@ -2381,10 +2352,8 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
 # reuses the saved targets and goes on; the version folder and history.jsonl are written once, by the run that ends.
 # ------------------------------------------------------------------------------
 RESUME_DIR = ".resume_train"
-BEST_RUN_FILE = "best_run.json"    # in RESUME_DIR: the best versions a split --best run already made ({task: version})
 
-# Seconds of every target trained in this command (all tasks of --best, ml_report --file retraining): the clock check
-# before a new target uses them, so the first target of the second task is checked too.
+# Seconds of every target trained in this command: the clock check before a new target uses them.
 RUN_FIT_SECONDS: List[float] = []
 
 
@@ -2444,7 +2413,6 @@ PREP_LABEL = "학습 준비(데이터 읽기, 검증, 상관행렬)"
 RUN_PREP_SECONDS: List[float] = []        # a preparation saved in this command (a step: _step_done)
 STEPS_PER_TARGET = 5 * 5 + 2              # progress estimate: candidates x folds + final fit + importance
 TARGETS_AFTER: List[int] = [0]            # targets after the one being trained (the steps left in progress)
-COMMIT_RERUN_SAFE: List[bool] = []        # set by ensure_best_versions: ml_report --file run again reuses a fresh best version
 
 
 def _prep_key(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]], raw_file: str) -> str:
@@ -2576,13 +2544,10 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
                          "decimal_comma": bool(df_raw.attrs.get("decimal_comma"))}}
 
 
-def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]],
-                  best_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Trains every target of every group into ONE new version folder.
-    Normal runs: one group (all --targets targets share the --features features). Best runs (--best): one group per
-    distinct recipe, so each target keeps its own features/--eval; each model_<t>.json carries its own
-    features_required, so ml_predict.py needs no change.
+    One group: all --targets targets share the --features features.
     """
     start_time = time.time()
     primary_metric = PRIMARY_METRIC[task]
@@ -2940,8 +2905,6 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 "sklearn_version": sklearn.__version__,
                 "python_version": sys.version.split()[0]
             })
-            if best_info:
-                meta_json["best_source"] = best_info["best_source"].get(target_name)
             with open(os.path.join(staging_dir, f"model_{safe_target}.json"), "w", encoding="utf-8") as f:
                 f.write(dumps_json(meta_json, indent=2))
 
@@ -2993,7 +2956,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "layout": {"header_row": args.header_row, "unit_row": args.unit_row, "data_row": args.data_row},
         }
 
-        run_tag = getattr(args, "tag", None) or ("best" if best_info else "")
+        run_tag = getattr(args, "tag", None) or ""
         history_record = {
             "version": current_version,
             "timestamp": datetime.now().isoformat(),
@@ -3034,7 +2997,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 "excluded": [{"column": d["column"], "reason": d["reason"]} for d in g0["excluded_inputs"]]}
             with open(os.path.join(staging_dir, AUTO_FEATURES_FILE), "w", encoding="utf-8") as f:
                 f.write("\n".join(history_record["input_selection"]["features"]) + "\n")
-        # Recipe inputs that ml_train --best needs to replay a run
+        # the training conditions, kept in the record (--history, the report's history)
         if len(prepared) == 1:
             if g0["dtypes"]:
                 history_record["dtypes"] = g0["dtypes"]
@@ -3042,23 +3005,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 history_record["positive_class"] = g0["positive_class"]
             if g0["where"]:
                 history_record["exclude_where"] = g0["where"]
-        try:
-            history_record["data_fingerprint"] = data_fingerprint(raw_file)
-        except OSError as e:
-            sys.stderr.write(f"[WARN] 데이터 파일 지문 계산 실패 (보고서가 최고 버전을 다시 만들 수 있음): {e}\n")
-        if best_info:
-            history_record["best"] = True
-            history_record["best_source"] = best_info["best_source"]
-            history_record["target_recipes"] = {
-                t: {"features": [f for f in target_group[t]["features"] if f not in target_group[t]["created"]],
-                    "derived_evals": target_group[t]["evals"],
-                    "dtypes": target_group[t]["dtypes"],
-                    "positive_class": target_group[t]["positive_class"],
-                    "exclude_where": target_group[t]["where"]}
-                for t in target_names
-            }
-            next_commands = build_best_next_commands(raw_file, guard.final_dir, args, task)
-        else:
+        if True:
             next_commands = build_next_commands(
                 args=args, raw_file=raw_file, task=task, positive_class=g0["positive_class"],
                 feature_names=g0["features"], created_features=g0["created"], applied_evals=g0["evals"],
@@ -3069,7 +3016,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # runs of this task and targets (this one included) did not beat the best score before them, it stops offering
         # more retraining and offers the report instead
         improve_stopped = None
-        if not best_info and min_score < 0.90:
+        if min_score < 0.90:
             scores = [float(h["mean_val_score"]) for h in history_records
                       if _same_experiment(h, task, target_names) and isinstance(h.get("mean_val_score"), (int, float))]
             scores.append(float(mean_val_score))
@@ -3078,7 +3025,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                                    f"재학습 제안을 멈춤. 지금까지의 최고 모델로 보고서를 만듭니다")
                 next_commands = [{"purpose": REPORT_PURPOSE[task], "needs_input": False,
                                   "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} --file {quote_arg(raw_file)}"}]
-        if not best_info:     # a plain run: the command again with the condition covering the other notations
+        if True:              # the command again with the condition covering the other notations
             where_fixes = [g["where_fix"] for g in prepared if g.get("where_fix")]
             next_commands = [c for i, c in enumerate(where_fixes) if c not in where_fixes[:i]] + next_commands
         history_record["next_commands"] = next_commands
@@ -3094,8 +3041,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         final_version_dir = guard.commit()
         append_history_ledger(ledger_path, history_record, on_recorded=guard.finalize)
         # saved for good: a stop from now on answers ok + UNVERIFIED, never CONTINUE (the same command would train again)
-        mark_committed(f"학습 버전 {current_version}", rerun_safe=bool(COMMIT_RERUN_SAFE),
-                       version=current_version, version_dir=final_version_dir)
+        mark_committed(f"학습 버전 {current_version}", version=current_version, version_dir=final_version_dir)
         _resume_cleanup(resume_dir, resume_used)
         unverified = verify_version_dir(final_version_dir, target_names, ledger_path, current_version)
         for u in unverified:
@@ -3195,12 +3141,6 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "preview": preview,
             "agent_directive": agent_directive
         }
-        if best_info:
-            result["best_targets"] = {
-                t: {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
-                    "new_score": target_champions[t]["info"]["val_score"]}
-                for t, src in best_info["best_source"].items()
-            }
         if train_warnings:
             result["warnings"] = train_warnings
         if exclusion_summary:
@@ -3232,414 +3172,14 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         run_lock.release()
 
 
-# ==============================================================================
-# 8-B. Best Version (--best): every target retrained with its best recipe, one version per task
-# ==============================================================================
-
 TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
-
-
 AUTO_FEATURES_FILE = "features_auto.txt"   # vX/: the inputs a run without --features chose, one per line (usable as --features)
 IMPROVE_ROUNDS = 5   # training runs in a row without a new best before the tool stops offering retraining (2.9.71)
-REPORT_PURPOSE = {  # a regression report also makes the performance calculator (ml_export.py)
-    TASK_REGRESSION: "ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (모든 타겟, 입력을 줄이며 다시 학습해 몇 분 걸림. "
-                     "성능예측표 제목은 학습 때 데이터 설명에서 자동으로 정함)",
-    TASK_CLASSIFICATION: "ML 결과 보고서(Word) 생성 (이 데이터의 모든 타겟을 1개 문서로)",
+REPORT_PURPOSE = {  # the report and the calculator use the latest training version (2.9.83); regression also makes the calculator
+    TASK_REGRESSION: "방금 학습한 버전으로 ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (성능예측표 입력은 그 버전의 입력 전부, "
+                     "제목은 학습 때 데이터 설명에서 자동으로 정함)",
+    TASK_CLASSIFICATION: "방금 학습한 버전으로 ML 결과 보고서(Word) 생성",
 }
-
-
-def build_best_next_commands(raw_file: str, final_dir: str, args: argparse.Namespace,
-                             task: str = TASK_REGRESSION) -> List[Dict[str, Any]]:
-    """args carries the data layout (build_best_version fills it from the latest record of the task)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    return [
-        {"purpose": REPORT_PURPOSE.get(task, REPORT_PURPOSE[TASK_CLASSIFICATION]),
-         "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --file {quote_arg(raw_file)}",
-         "needs_input": False},
-        predict_next_command(final_dir, "새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"),
-    ]
-
-
-def _record_task(rec: Dict[str, Any]) -> str:
-    return rec.get("task", TASK_REGRESSION)
-
-
-def _target_score(rec: Dict[str, Any], target: str) -> Optional[float]:
-    champ = ((rec.get("targets_benchmark") or {}).get(target) or {}).get("champion") or {}
-    v = champ.get("val_score")
-    return float(v) if isinstance(v, (int, float)) else None
-
-
-def _target_recipe(rec: Dict[str, Any], target: str) -> Dict[str, Any]:
-    """Training conditions of one target in one ledger record (features before --eval, formulas, dtypes)."""
-    stored = (rec.get("target_recipes") or {}).get(target)
-    if stored:
-        return {"features": list(stored.get("features") or []), "derived_evals": list(stored.get("derived_evals") or []),
-                "dtypes": stored.get("dtypes"), "positive_class": stored.get("positive_class"),
-                "exclude_where": stored.get("exclude_where")}
-    evals = list(rec.get("derived_evals") or [])
-    derived = {e.split("=", 1)[0].strip() for e in evals if "=" in e}
-    pos = rec.get("positive_class")
-    if pos is None and _record_task(rec) == TASK_CLASSIFICATION:
-        champ = ((rec.get("targets_benchmark") or {}).get(target) or {}).get("champion") or {}
-        pos = (champ.get("decision_threshold") or {}).get("positive_class")
-    return {"features": [f for f in rec.get("features_used", []) if f not in derived], "derived_evals": evals,
-            "dtypes": rec.get("dtypes"), "positive_class": pos if _record_task(rec) == TASK_CLASSIFICATION else None,
-            "exclude_where": rec.get("exclude_where")}
-
-
-def _version_intact(data_root: str, rec: Dict[str, Any]) -> bool:
-    vdir = os.path.join(data_root, str(rec.get("version", "")))
-    if not rec.get("version") or not os.path.isdir(vdir):
-        return False
-    need = ["leaderboard.json", "model_dataset.csv"] + [f"model_{sanitize_filename(t)}.json" for t in rec.get("targets", [])]
-    return all(os.path.isfile(os.path.join(vdir, n)) for n in need)
-
-
-def _unique_records(records: List[Dict[str, Any]]) -> List[Tuple[int, Dict[str, Any]]]:
-    """(ledger index, record) with the last record per version (an --overwrite run replaces the folder)."""
-    last: Dict[str, int] = {}
-    for i, r in enumerate(records):
-        last[str(r.get("version"))] = i
-    return [(i, r) for i, r in enumerate(records) if last.get(str(r.get("version"))) == i]
-
-
-def select_best_recipes(records: List[Dict[str, Any]], data_root: str, task: str) -> Dict[str, Dict[str, Any]]:
-    """
-    Per target: the record with the highest validation score (ties -> the later record) among versions
-    whose folder is intact. A best record's recipe traces back to its original version (best_source).
-    Returns {target: {recipe, selected_version, selected_score, source_version, source_score}} in
-    first-appearance order.
-    """
-    chosen: Dict[str, Dict[str, Any]] = {}
-    intact: Dict[str, bool] = {}
-    for _, rec in _unique_records(records):
-        if _record_task(rec) != task:
-            continue
-        ver = str(rec.get("version"))
-        if ver not in intact:
-            intact[ver] = _version_intact(data_root, rec)
-            if not intact[ver]:
-                sys.stderr.write(f"[WARN] 버전 폴더 {ver}이(가) 없거나 불완전해 최고 조건 후보에서 제외했습니다\n")
-        if not intact[ver]:
-            continue
-        for t in rec.get("targets", []):
-            s = _target_score(rec, t)
-            if s is None:
-                continue
-            if t not in chosen or s >= chosen[t]["selected_score"]:
-                src = (rec.get("best_source") or {}).get(t) if rec.get("best") else None
-                chosen[t] = {
-                    "recipe": _target_recipe(rec, t),
-                    "selected_version": ver, "selected_score": s,
-                    "source_version": (src or {}).get("version") or ver,
-                    "source_score": (src or {}).get("score") if src and src.get("score") is not None else s,
-                }
-    return chosen
-
-
-def _latest_layout(records: List[Dict[str, Any]], task: str) -> Dict[str, Any]:
-    for rec in reversed(records):
-        if _record_task(rec) == task:
-            return (rec.get("data_profile") or {}).get("layout") or {}
-    return {}
-
-
-def build_best_version(args: argparse.Namespace, task: str, records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    raw_file = os.path.abspath(args.file)
-    data_root = os.path.join(os.path.dirname(raw_file), f"{os.path.splitext(os.path.basename(raw_file))[0]}_ml_data")
-    chosen = select_best_recipes(records, data_root, task)
-    if not chosen:
-        raise InputError(f"{task} 학습 기록 중 버전 폴더가 온전한 기록이 없어 최고 버전을 만들 수 없습니다. "
-                         f"먼저 ml_train.py로 학습하십시오.")
-    groups: Dict[str, Dict[str, Any]] = {}
-    for t, c in chosen.items():
-        r = c["recipe"]
-        key = dumps_json([r["features"], r["derived_evals"], r["dtypes"], r["positive_class"], r.get("exclude_where")])
-        g = groups.setdefault(key, {"features": r["features"], "targets": [], "eval": r["derived_evals"],
-                                    "dtypes": r["dtypes"], "positive_class": r["positive_class"],
-                                    "exclude_where": r.get("exclude_where")})
-        g["targets"].append(t)
-        sys.stderr.write(f"[INFO] 최고 조건: '{t}' <- {c['selected_version']} (점수 {c['selected_score']:.4f}, "
-                         f"원래 출처 {c['source_version']}), 피처 {len(r['features'])}개\n")
-    layout = _latest_layout(records, task)
-    run_args = argparse.Namespace(**vars(args))
-    for k, default in (("seed", 42), ("description", None), ("tag", None)):
-        if getattr(run_args, k, None) is None:
-            setattr(run_args, k, default)
-    for k in ("header_row", "unit_row", "data_row"):
-        if getattr(run_args, k, None) is None:
-            setattr(run_args, k, layout.get(k))
-    run_args.version, run_args.overwrite = None, False
-    best_source = {t: {"version": c["source_version"], "score": c["source_score"]} for t, c in chosen.items()}
-    for t, c in chosen.items():
-        if c["selected_version"] != c["source_version"]:
-            best_source[t]["selected_version"] = c["selected_version"]
-    log_progress(3, f"최고 버전 만들기 ({task}): 타겟 {len(chosen)}개, 학습 조건 {len(groups)}종을 현재 데이터로 다시 학습")
-    return train_version(run_args, task, list(groups.values()), best_info={"best_source": best_source})
-
-
-def _ledger_for(raw_file: str) -> Tuple[str, List[Dict[str, Any]]]:
-    data_root = os.path.join(os.path.dirname(raw_file), f"{os.path.splitext(os.path.basename(raw_file))[0]}_ml_data")
-    return data_root, load_history_ledger(os.path.join(data_root, "history.jsonl"))
-
-
-def _tasks_to_build(records: List[Dict[str, Any]], task: Optional[str], ledger_path: str) -> List[str]:
-    if not records:
-        raise InputError(f"학습 이력이 없습니다 ({ledger_path}). 먼저 ml_train.py로 학습한 뒤 다시 실행하십시오.")
-    present = [t for t in TASK_ORDER if any(_record_task(r) == t for r in records)]
-    if task:
-        if task not in present:
-            # the other task builds another best version than asked: the user decides ([후보], no automatic retry)
-            raise InputError(f"학습 이력에 {task} 기록이 없어 그 최고 버전을 만들 수 없습니다. 이력에 있는 학습: "
-                             + ask(present, [command_with_value(task, t) for t in present], "--task {}")
-                             + ". 이 학습의 최고 버전을 만들지 사용자에게 물으십시오.")
-        return [task]
-    return present
-
-
-def best_summary(version_result: Dict[str, Any]) -> Dict[str, Any]:
-    return {"task": version_result["task"], "version": version_result["version"],
-            "version_dir": version_result["version_dir"], "targets": version_result["targets"],
-            "mean_val_score": version_result.get("mean_val_score"), "made": True,
-            **({"warnings": version_result["warnings"]} if version_result.get("warnings") else {})}
-
-
-def _best_run_load(data_root: str, raw_file: str) -> Dict[str, str]:
-    """{task: version} of the best versions an earlier run of this --best command made before it stopped (CONTINUE)."""
-    path = resume_find(os.path.join(data_root, RESUME_DIR), BEST_RUN_FILE)
-    if not path:
-        return {}
-    try:
-        if time.time() - os.path.getmtime(path) > RESUME_MAX_AGE:
-            return {}
-        info = load_json_file(path)
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(info, dict) or info.get("file") != os.path.normcase(raw_file):
-        return {}
-    return {str(k): str(v) for k, v in (info.get("done") or {}).items()}
-
-
-def _best_run_save(data_root: str, raw_file: str, done: Dict[str, str]) -> None:
-    """Saved nowhere: a continued run would build that task again, so check_time stops with STOP_RETRY."""
-    text = dumps_json({"file": os.path.normcase(raw_file), "done": done})
-
-    def write(tmp: str) -> None:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(text)
-    resume_save(os.path.join(data_root, RESUME_DIR), BEST_RUN_FILE, write, "나눠 진행 기록")
-
-
-def _best_run_clear(data_root: str) -> None:
-    resume_clear(os.path.join(data_root, RESUME_DIR), lambda name, p: name == BEST_RUN_FILE)
-
-
-def _best_record_summary(data_root: str, rec: Dict[str, Any], task: str) -> Dict[str, Any]:
-    """The --best result entry of a best version an earlier run of the same command made (not built again)."""
-    sources = rec.get("best_source") or {}
-    best_targets = {}
-    for t in rec.get("targets", []):
-        src = sources.get(t) or {"version": rec["version"], "score": _target_score(rec, t)}
-        best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
-                           "new_score": _target_score(rec, t)}
-    return {"task": task, "version": rec["version"], "version_dir": os.path.join(data_root, rec["version"]),
-            "targets": list(rec.get("targets", [])), "mean_val_score": rec.get("mean_val_score"),
-            "best_targets": best_targets, "reused_best": True}
-
-
-def execute_make_best(args: argparse.Namespace) -> Dict[str, Any]:
-    """ml_train.py --best: builds one best version per task (always retrains). A run split by the time limit (R10)
-    remembers the best versions it made (.resume_train/best_run.json); the same command run again keeps those that
-    are still fresh (best_is_fresh) and goes on with the next task, so no best version is made twice."""
-    raw_file = os.path.abspath(args.file)
-    if not os.path.exists(raw_file):
-        raise FileNotFoundError(f"입력 파일이 존재하지 않습니다: {raw_file}")
-    data_root, records = _ledger_for(raw_file)
-    tasks = _tasks_to_build(records, getattr(args, "task", None), os.path.join(data_root, "history.jsonl"))
-    done = _best_run_load(data_root, raw_file) if len(tasks) > 1 else {}
-    built = []
-    try:
-        for i, task in enumerate(tasks):
-            rec = best_is_fresh(records, data_root, raw_file, task) if task in done else None
-            if rec is not None and str(rec.get("version")) == done[task]:
-                sys.stderr.write(f"[INFO] 이전 실행에서 만든 최고 버전 {rec['version']} ({task})을(를) 그대로 씁니다 (나눠서 진행)\n")
-                built.append(_best_record_summary(data_root, rec, task))
-                continue
-            built.append(build_best_version(args, task, records))
-            records = load_history_ledger(os.path.join(data_root, "history.jsonl"))
-            if i < len(tasks) - 1:
-                done[task] = str(built[-1]["version"])
-                _best_run_save(data_root, raw_file, done)
-                committed_rerun_safe()     # remembered in best_run.json: the same command run again keeps it
-    except Exception:
-        # an error: no record left for a later run to reuse (a split run, Unfinished, keeps it: the same command run
-        # again goes on from it; so does a stop by the user, so running it again makes no best version twice)
-        _best_run_clear(data_root)
-        raise
-    _best_run_clear(data_root)
-    return combine_best_results(built)
-
-
-def combine_best_results(built: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Result JSON of --best: the first built version's training keys plus best_* keys covering every task (a best
-    version kept from an earlier run of a split command has only its summary)."""
-    result = dict(next((b for b in built if not b.get("reused_best")), built[0]))
-    summaries = [best_summary(b) for b in built]
-    best_targets: Dict[str, Any] = {}
-    top_features: Dict[str, Any] = {}
-    for b in built:
-        best_targets.update(b.get("best_targets", {}))
-        top_features.update(b.get("top_features", {}))
-    unverified = [u for b in built for u in b.get("unverified", [])]
-    result.update({
-        "made_best": True,
-        "best_version": built[0]["version"],
-        "best_version_dir": built[0]["version_dir"],
-        "best_versions": summaries,
-        "best_targets": best_targets,
-        "top_features": top_features,
-        "verified": not unverified,
-    })
-    if unverified:
-        result["unverified"] = unverified
-    brief = "; ".join(f"{t}: {v['source_version']}({v['source_score']:.4f}) -> {v['new_score']:.4f}"
-                      for t, v in best_targets.items() if isinstance(v.get("source_score"), (int, float)))
-    vers = ", ".join(f"{s['version']}({s['task']}, 타겟 {len(s['targets'])}개)" for s in summaries)
-    result["preview"] = f"[최고 버전 완료] {vers} | 타겟별 출처 -> 이번 점수: {brief}"
-    multi = (f" 작업 유형이 {len(built)}가지라 최고 버전도 {len(built)}개입니다 (best_versions). 보고서도 {len(built)}개가 됩니다."
-             if len(built) > 1 else "")
-    head = (f"UNVERIFIED: 저장 결과를 확인하지 못했습니다 ({'; '.join(unverified)}). 다시 실행하지 말고 unverified를 그대로 알리세요. "
-            if unverified else "VERIFIED: ")
-    result["agent_directive"] = (
-        head + f"타겟별 최고 학습 조건으로 모든 타겟을 다시 학습해 {vers}을(를) 만들었습니다.{multi} "
-        f"best_targets의 타겟별 출처 버전과 점수를 사용자에게 알리세요. 보고서는 next_commands[0], "
-        f"예측은 ml_predict.py --model <best_version_dir>을 사용하세요."
-    )
-    return result
-
-
-def best_is_fresh(records: List[Dict[str, Any]], data_root: str, raw_file: str, task: str) -> Optional[Dict[str, Any]]:
-    """
-    The latest best record of the task is reusable when no other training of that task was recorded after
-    it, its version folder is intact, and the data file content is unchanged (SHA-256, else size + mtime).
-    """
-    idx = next((i for i in range(len(records) - 1, -1, -1)
-                if records[i].get("best") and _record_task(records[i]) == task), None)
-    if idx is None:
-        return None
-    best = records[idx]
-    if any(_record_task(r) == task and not r.get("best") for r in records[idx + 1:]):
-        sys.stderr.write(f"[INFO] {best.get('version')} 이후 새 학습 기록이 있어 최고 버전을 다시 만듭니다 ({task})\n")
-        return None
-    if not _version_intact(data_root, best):
-        return None
-    if not _fingerprint_same(best, raw_file):
-        sys.stderr.write(f"[INFO] 데이터 파일 내용이 {best.get('version')} 때와 달라 최고 버전을 다시 만듭니다 ({task})\n")
-        return None
-    return best
-
-
-def _fingerprint_same(rec: Dict[str, Any], raw_file: str) -> bool:
-    fp_old = rec.get("data_fingerprint") or {}
-    if not fp_old:
-        return False
-    try:
-        fp_new = data_fingerprint(raw_file)
-    except OSError:
-        return False
-    return (fp_old.get("sha256") == fp_new["sha256"]) if fp_old.get("sha256") else (
-        fp_old.get("size") == fp_new["size"] and fp_old.get("mtime") == fp_new["mtime"])
-
-
-def single_best_version(records: List[Dict[str, Any]], data_root: str, raw_file: str, task: str) -> Optional[Dict[str, Any]]:
-    """
-    The version that already holds the best of EVERY target of the task (one training run, or the latest best
-    version when later runs beat nothing), trained on the current data file content. Retraining its recipes on the
-    same data would give the same models, so the report uses it as is.
-    """
-    chosen = select_best_recipes(records, data_root, task)
-    versions = {c["selected_version"] for c in chosen.values()}
-    if len(versions) != 1:
-        return None
-    ver = versions.pop()
-    rec = next((r for _, r in reversed(_unique_records(records)) if str(r.get("version")) == ver), None)
-    if rec is None or not _fingerprint_same(rec, raw_file):
-        return None
-    return rec
-
-
-def task_best_version(records: List[Dict[str, Any]], data_root: str, task: str) -> Optional[Dict[str, Any]]:
-    """
-    The version to use for every target of a task (--history best_version, ml_report -d), chosen like the report's
-    reuse (ensure_best_versions) without the data file check:
-    1. the latest --best record when no other training of the task came after it and its folder is intact;
-    2. else the one version that holds the best score of every target (select_best_recipes);
-    3. else (bests split over versions) the version holding the most per-target bests (ties -> more of the task's
-       targets, then later), complete=False.
-    Returns {version, mean_val_score, targets, complete, missing} or None (no intact record of the task).
-    """
-    idx = next((i for i in range(len(records) - 1, -1, -1)
-                if records[i].get("best") and _record_task(records[i]) == task), None)
-    if (idx is not None and not any(_record_task(r) == task and not r.get("best") for r in records[idx + 1:])
-            and _version_intact(data_root, records[idx])):
-        rec = records[idx]
-        return {"version": rec["version"], "mean_val_score": rec.get("mean_val_score"),
-                "targets": list(rec.get("targets", [])), "complete": True, "missing": []}
-    chosen = select_best_recipes(records, data_root, task)
-    if not chosen:
-        return None
-    holders: Dict[str, List[str]] = {}
-    for t, c in chosen.items():
-        holders.setdefault(c["selected_version"], []).append(t)
-    latest = {str(r.get("version")): (i, r) for i, r in _unique_records(records)}
-    ver = max(holders, key=lambda v: (len(holders[v]), len(set(latest[v][1].get("targets", [])) & set(chosen)),
-                                      latest[v][0]))
-    rec = latest[ver][1]
-    return {"version": ver, "mean_val_score": rec.get("mean_val_score"), "targets": list(rec.get("targets", [])),
-            "complete": len(holders) == 1, "missing": [t for t in chosen if t not in holders[ver]]}
-
-
-def ensure_best_versions(args: argparse.Namespace) -> Dict[str, Any]:
-    """
-    For ml_report.py --file: reuses each task's up-to-date best version, otherwise builds it (in-process).
-    Returns {"made_best", "best_versions": [...], "best_targets": {...}, "built": [training results]}.
-    """
-    raw_file = os.path.abspath(args.file)
-    if not os.path.exists(raw_file):
-        raise FileNotFoundError(f"입력 파일이 존재하지 않습니다: {raw_file}")
-    data_root, records = _ledger_for(raw_file)
-    tasks = _tasks_to_build(records, getattr(args, "task", None), os.path.join(data_root, "history.jsonl"))
-    versions, best_targets, built = [], {}, []
-    for task in tasks:
-        rec = best_is_fresh(records, data_root, raw_file, task)
-        if rec is not None:
-            sys.stderr.write(f"[INFO] 최신 최고 버전 {rec['version']} ({task})을(를) 그대로 사용합니다\n")
-        else:
-            rec = single_best_version(records, data_root, raw_file, task)
-            if rec is not None:
-                sys.stderr.write(f"[INFO] {rec['version']}에 모든 타겟의 최고 점수가 있어 다시 학습하지 않고 그대로 사용합니다 ({task})\n")
-        if rec is not None:
-            versions.append({"task": task, "version": rec["version"],
-                             "version_dir": os.path.join(data_root, rec["version"]), "targets": rec.get("targets", []),
-                             "mean_val_score": rec.get("mean_val_score"), "made": False})
-            sources = rec.get("best_source") if rec.get("best") else None
-            for t in rec.get("targets", []):
-                src = (sources or {}).get(t) or {"version": rec["version"], "score": _target_score(rec, t)}
-                best_targets[t] = {"task": task, "source_version": src.get("version"), "source_score": src.get("score"),
-                                   "new_score": _target_score(rec, t)}
-            continue
-        COMMIT_RERUN_SAFE.append(True)       # ml_report --file run again finds this best version fresh (best_is_fresh)
-        try:
-            res = build_best_version(args, task, records)
-        finally:
-            COMMIT_RERUN_SAFE.clear()
-        built.append(res)
-        versions.append(best_summary(res))
-        best_targets.update(res.get("best_targets", {}))
-        records = load_history_ledger(os.path.join(data_root, "history.jsonl"))
-    return {"made_best": bool(built), "best_versions": versions, "best_targets": best_targets, "built": built,
-            "data_root": data_root}
 
 
 # ==============================================================================
@@ -3672,8 +3212,7 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
     if not records:     # 0 records is a result, not an error (R2)
         return {
             "status": "ok", "verified": True, "no_history": True, "data_root": data_root,
-            "record_count": 0, "count": 0, "shown": 0, "truncated": False, "records": [], "best_version": None,
-            "latest_version": None,
+            "record_count": 0, "count": 0, "shown": 0, "truncated": False, "records": [], "latest_version": None,
             "preview": "학습 기록 0건",
             "agent_directive": ("VERIFIED: 0건. 이 데이터 파일의 학습 기록(history.jsonl)이 없습니다. "
                                 "사용자에게 학습 기록이 없다고 그대로 알리세요."),
@@ -3703,8 +3242,6 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
             "mean_val_score": score, "delta_score": delta,
             "is_best": bool(r.get("is_best")), "targets": r.get("targets", []),
         }
-        if r.get("best"):
-            row["best"] = True  # built by --best (every target with its best recipe)
         rows.append(row)
 
         tag_s = tag if len(tag) <= 15 else tag[:13] + ".."
@@ -3720,22 +3257,7 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
 
     out.write("=" * 125 + "\n\n")
 
-    # best_version: the version the report would use for every target of the latest run's task (task_best_version)
-    best_by_task: Dict[str, Dict[str, Any]] = {}
-    for task in TASK_ORDER:
-        if any(x["task"] == task for x in rows):
-            info = task_best_version(records, data_root, task)
-            if info:
-                best_by_task[task] = {"version": info["version"], "version_dir": os.path.join(data_root, info["version"]),
-                                      "mean_val_score": info["mean_val_score"], "complete": info["complete"],
-                                      **({"missing_targets": info["missing"]} if info["missing"] else {})}
-    best = best_by_task.get(rows[-1]["task"])
-    note = None
-    split = [f"{t}: {b['version']}에 {b['missing_targets']}의 최고 모델이 없음" for t, b in best_by_task.items()
-             if not b["complete"]]
-    if split:
-        note = ("타겟별 최고 점수가 여러 버전에 나뉘어 있습니다 (" + "; ".join(split) + "). "
-                "모든 타겟의 최고 모델은 ml_report.py --file <데이터파일>이 한 버전으로 묶어 만듭니다.")
+    final = final_version(data_root)      # the same choice as the report and prediction (a damaged latest folder is skipped)
     shown = rows[-HISTORY_SHOWN:]
     cut = len(shown) < len(rows)
     return {
@@ -3747,20 +3269,17 @@ def print_history_summary(data_root: str) -> Dict[str, Any]:
         "shown": len(shown),
         "truncated": cut,
         **({"full_result_file": os.path.join(data_root, "history.json")} if cut else {}),
-        "best_version": best["version"] if best else None,
-        "best_version_dir": best["version_dir"] if best else None,
-        "best_mean_val_score": best["mean_val_score"] if best else None,
-        "best_by_task": best_by_task,
-        **({"best_version_note": note} if note else {}),
-        "latest_version": rows[-1]["version"],
+        "latest_version": final["version"] if final else None,     # the final version the report and prediction use (2.9.83)
+        "latest_version_dir": final["version_dir"] if final else None,
+        **({"latest_version_note": f"마지막 학습 {', '.join(final['skipped'])}의 폴더가 없거나 손상돼 그 앞의 {final['version']}을(를) 씀"}
+           if final and final["skipped"] else {}),
         "records": shown,
         "verified": True,
-        "preview": (f"학습 기록 {len(rows)}건, 마지막 {rows[-1]['version']}"
-                    + (f", 최고 {best['version']} (점수 {best['mean_val_score']})" if best else "")),
+        "preview": (f"학습 기록 {len(rows)}건, 최종 버전 {final['version'] if final else '없음'} (보고서·예측이 쓰는 버전)"
+                    + (f". 마지막 학습 {', '.join(final['skipped'])}의 폴더가 없거나 손상돼 그 앞 버전을 씀" if final and final["skipped"] else "")),
         "agent_directive": ("VERIFIED: 학습 이력입니다. records의 version, mean_val_score, delta_score, tag를 표로 알리세요. "
                             "history.jsonl을 다시 읽지 마세요."
-                            + (f" records에는 최근 {len(shown)}건만 있습니다 (전체 {len(rows)}건: full_result_file)." if cut else "")
-                            + (f" 사용자에게 알리세요: {note}" if note else "")),
+                            + (f" records에는 최근 {len(shown)}건만 있습니다 (전체 {len(rows)}건: full_result_file)." if cut else "")),
     }
 
 
@@ -3791,32 +3310,16 @@ def main():
     parser.add_argument("--dry-run", dest="dry_run", action="store_true",
                         help="학습하지 않고 만들 버전 폴더와 (--overwrite면) 바꿀 기존 폴더만 보여 줌 (confirm_commands에 실제 명령)")
     parser.add_argument("--task", choices=[TASK_REGRESSION, TASK_CLASSIFICATION], default=None,
-                        help="학습 유형: regression(기본값, 연속 수치 예측) 또는 classification(범주/라벨 예측). "
-                             "--best와 함께 쓰면 그 작업 유형만")
+                        help="학습 유형: regression(기본값, 연속 수치 예측) 또는 classification(범주/라벨 예측)")
     parser.add_argument("--positive-class", dest="positive_class",
                         help="이진 분류의 양성 클래스 (예: 불량). 지정 시 양성 F1이 최대가 되도록 판정 기준 확률을 자동 조정")
     parser.add_argument("--seed", type=int, default=42, help="재현용 난수 시드 (기본값: 42)")
     parser.add_argument("--history", action="store_true", help="누적 실험 이력 조회 모드 (표는 stderr, 요약 JSON은 stdout)")
-    parser.add_argument("--best", action="store_true",
-                        help="이력에서 타겟별 최고 점수의 학습 조건으로 모든 타겟을 현재 데이터로 다시 학습해 새 버전 1개(작업 유형별)를 만듦")
 
     args = parser.parse_args()
 
-    if args.dry_run and (args.best or args.history):
-        parser.error("--dry-run은 --features/--targets 학습에만 씁니다 (--best는 늘 새 버전을 만들어 기존 폴더를 바꾸지 않고, --history는 읽기만 함)")
-    if args.best and not args.history:
-        if not args.file:
-            parser.error("--best에는 --file 인자가 필요합니다.")
-        ignored = [flag for flag, val in (("--features", args.features), ("--targets", args.targets), ("--eval", args.eval),
-                                          ("--version", args.version), ("--positive-class", args.positive_class),
-                                          ("--dtypes", args.dtypes), ("--exclude-where", args.exclude_where)) if val]
-        if ignored:
-            sys.stderr.write(f"[WARN] --best는 이력의 학습 조건을 쓰므로 {ignored}을(를) 무시합니다\n")
-            args.features = args.targets = args.eval = args.version = args.positive_class = args.dtypes = None
-            args.exclude_where = None
-        run_cli(lambda: execute_make_best(args), hint="확인할 것: --best 전에 ml_train.py로 1번 이상 학습했는지.")
-        return
-
+    if args.dry_run and args.history:
+        parser.error("--dry-run은 --features/--targets 학습에만 씁니다 (--history는 읽기만 함)")
     if args.history:
         if not args.file:
             parser.error("--history 조회 시 --file 인자가 필요합니다.")

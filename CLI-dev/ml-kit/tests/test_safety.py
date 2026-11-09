@@ -70,7 +70,7 @@ def test_existing_version_refused_then_overwrite(work):
     assert ledger[0]["mean_val_score"] == again["mean_val_score"] and ledger[0]["delta_score"] == "base"
     assert ledger[0]["is_best"] is True
     hist = run_tool("ml_train.py", "--file", data, "--history")
-    assert hist["record_count"] == 1 and hist["best_version"] == "v2"
+    assert hist["record_count"] == 1 and hist["latest_version"] == "v2"
     synced = json.loads((root / "history.json").read_text(encoding="utf-8"))
     assert [r["version"] for r in synced] == ["v2"]
 

@@ -4,7 +4,7 @@ description: 학습한 모델로 새 조건이나 새 데이터의 값을 예측
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.82"
+  version: "2.9.84"
   platform: windows
 ---
 
@@ -21,7 +21,7 @@ metadata:
 8. 경로는 결과 JSON의 값을 그대로 1번만 쓴다. 도구 코드(.py)는 읽지 않고 데이터 파일은 고치지 않는다. 방법이 없으면 하려던 일과 막힌 곳을 알리고 멈춘다.
 
 ## 모델 고르기
-`--model`에는 학습한 데이터 파일을 그대로 준다. 도구가 그 파일의 최고 버전을 골라 쓰고 `model_chosen`에 적는다 (알린다).
+`--model`에는 학습한 데이터 파일을 그대로 준다. 도구가 그 파일의 최종 버전(마지막 학습)을 쓰고 `model_chosen`에 적는다 (알린다).
 사용자가 버전을 말했을 때만(예: "v2로") 그 버전 폴더(`<데이터파일 이름>_ml_data\v2`)를 준다.
 
 ## 한 건, 파일 전체 예측

@@ -433,7 +433,7 @@ def test_scenario_regexes():
     assert not re.search(forbid, 'python "C:\\CLI\\ml-kit\\ml_predict.py" --model v1', re.I)
     for sid, cmd in (("M1", "ml_map.py --file m.xlsx --input 'A=12.5'"), ("M1", 'ml_map.py --input "A=12.5"'), ("M1", "ml_map.py --input A=12.5"),
                      ("P3", "ml_predict.py --find 불순물=100 --vary '반응온도'"), ("P3", 'ml_predict.py --find x --vary "반응온도"'),
-                     ("R2", "ml_export.py --keep '반응온도,압축압력'"), ("R2", 'ml_export.py --keep "압축압력,반응온도"')):
+                     ("R2", 'ml_export.py --model "공정.xlsx" --title "반응 공정"'), ("R2", "ml_export.py --model 공정.xlsx")):   # 2.9.83: --keep 없음
         assert all(re.search(rx, cmd, re.I) for rx in by_id[sid]["commands"]), (sid, cmd)
     x2 = by_id["X2"]["answer_all"]
     assert all(re.search(rx, "이상치 기준을 바꾸는 옵션은 없습니다. 엑셀의 '제외' 열에 이유를 적으세요.") for rx in x2)
@@ -875,8 +875,29 @@ def test_manual_scenario_is_marked_and_left_out_of_bulk(tmp_path, monkeypatch):
     assert "수동 준비: Outlook" in single and f"{G}\\시험성적서.docx" in single and "[O3]" in single
     assert "[O3]" not in bulk and "[O1]" in bulk and "[O5]" in bulk
     readme = (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
-    assert "S -> A -> M -> P -> O -> X" in readme                    # 시험에서 뺀 묶음(R)은 순서·묶음 파일에 없음
-    assert "- R 보고서와 성능예측표: 뺌 (" in readme and not (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists()
+    assert "S -> A -> M -> P -> R -> O -> X" in readme               # 2.9.83: R(보고서·성능예측표)을 다시 시험에 넣음
+    assert (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists() and ": 뺌 (" not in readme
+
+
+def test_paused_group_is_left_out_of_pack(tmp_path, monkeypatch):
+    """묶음의 paused(잠시 시험에서 뺌): 순서와 묶음 파일에서 빠지고 README에 뺀 이유가 남음. 지금 뺀 묶음이 없으니 R을 빼 본다."""
+    real = go.load_scenarios
+
+    def paused_r():
+        spec, by_id, order = real()
+        for g in spec["groups"]:
+            if g["id"] == "R":
+                g["paused"] = "시험용 이유"
+                for s in g["scenarios"]:
+                    s["paused"] = g["paused"]
+        return spec, by_id, order
+
+    monkeypatch.setattr(go, "load_scenarios", paused_r)
+    monkeypatch.setattr(go, "PACK_DIR", str(tmp_path / "pack"))
+    go.make_pack(None)
+    readme = (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
+    assert "S -> A -> M -> P -> O -> X" in readme
+    assert "- R 보고서와 성능예측표: 뺌 (시험용 이유)" in readme and not (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists()
 
 
 def test_office_samples_match_scenarios(tmp_path):
