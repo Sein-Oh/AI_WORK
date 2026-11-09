@@ -4,6 +4,7 @@
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1438,3 +1439,106 @@ def test_short_option_value_is_still_hidden_in_error_log(isolated_dirs, capsys):
     code, out = run_main(reader, capsys, "search", "-q", SECRET, "--file", "a.pdf")
     assert code == 2
     assert SECRET not in error_log_text(isolated_dirs)
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B1·B9: 데이터 폴더를 만들 수 없거나 출력에 반쪽 이모지가 있어도 stdout에 JSON 1줄
+# ---------------------------------------------------------------------------
+
+
+def _run_tool(script, args, env):
+    import subprocess
+    import sys as _sys
+    proc = subprocess.run([_sys.executable, os.path.join(TOOL_DIR, script), *args], capture_output=True, timeout=120, env=env)
+    lines = [ln for ln in proc.stdout.decode("utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 1, proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")
+    return proc.returncode, json.loads(lines[0])
+
+
+def test_data_dir_that_is_a_file_still_gives_one_json_line(tmp_path):
+    import openpyxl
+    x = tmp_path / "x.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = 1
+    wb.save(x)
+    blocker = tmp_path / "data_is_file"
+    blocker.write_text("x", encoding="utf-8")
+    env = dict(os.environ, OFFICE_CLI_DATA_DIR=str(blocker), OFFICE_CLI_CACHE_DIR=str(tmp_path / "cache"))
+    code, out = _run_tool("excel.py", ["read", "--target", str(x), "--range", "A1:B2"], env)
+    assert code == 0 and out["status"] == "ok", out
+    code, out = _run_tool("excel.py", ["read", "--target", str(tmp_path / "없음.xlsx")], env)      # 실패 + 오류 로그도 못 씀
+    assert code == 1 and out["status"] == "error", out
+
+
+def test_lone_surrogate_with_utf8_io_encoding(tmp_path):
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", OFFICE_CLI_DATA_DIR=str(tmp_path / "d"), OFFICE_CLI_CACHE_DIR=str(tmp_path / "c"))
+    p = tmp_path / "a.txt"
+    p.write_text("본문", encoding="utf-8")
+    # 반쪽 surrogate가 든 인자 (Linux는 바이트를 surrogateescape로 읽음: 짝 없는 \udcXX가 결과의 query에 그대로 들어감)
+    code, out = _run_tool("reader.py", ["search", "--query", b"x\xed\xa0\xbd", "--file", str(p)], env)
+    assert out["status"] == "ok" and out["count"] == 0, out
+
+
+def _recommend_literals():
+    """도구 소스의 문자열에서 '[추천] ' 바로 뒤가 글자인 곳 (뒤가 {식} 이거나 문자열 끝(+ 명령)이면 전체 명령). docstring 제외."""
+    import ast
+    bad = []
+    for name in sorted(os.listdir(TOOL_DIR)):
+        if not name.endswith(".py"):
+            continue
+        tree = ast.parse(open(os.path.join(TOOL_DIR, name), encoding="utf-8").read())
+        docs = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)) and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                    docs.add(id(first.value))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+                for m in re.finditer(r"\[추천\] (\S*)", node.value):
+                    word = m.group(1)
+                    if word and not word.startswith(("뒤", "명령", "{cmd}")):     # .format으로 채우는 {cmd}와 '[추천] 뒤의 명령을'처럼 [추천]을 설명하는 글은 제외
+                        bad.append(f"{name}:{node.lineno}: [추천] {word}")
+    return bad
+
+
+def test_every_recommend_is_followed_by_a_full_command():
+    """2026-11-09 검토 B2: '[추천] 7', '[추천] utf-8-sig', '[추천] 같은 명령 끝에 --save를'처럼 실행할 수 없는 글이 없음 (사용법 단순성 2번)."""
+    assert _recommend_literals() == []
+
+
+def test_fixed_recommends_run(monkeypatch, capsys):
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["calendar", "--days", "0"])
+    monkeypatch.setattr(rt, "CURRENT_TOOL", "outlook")
+    assert rt.retry_command({"--days": 7}).endswith("outlook.py\" calendar --days 7") or rt.retry_command({"--days": 7}).endswith("calendar --days 7")
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["attachments", "--id", "3", "--name", "a"])
+    assert rt.retry_command({"--save": True}).endswith("attachments --id 3 --name a --save")
+
+
+@pytest.mark.parametrize("argv, gone", [(["read", "--rows"], "--rows"), (["read", "rows"], "rows")])
+def test_rows_without_value_recommends_command_without_it(tmp_path, capsys, argv, gone):
+    """2026-11-09 검토 B3: 값 없는 --rows를 값이 필요한 --max-rows로 [추천]하면 실행해도 인자 오류. 결과 키를 쓴 것이라 빼고 [추천]."""
+    import openpyxl
+    p = tmp_path / "s.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = 1
+    wb.save(p)
+    full = [argv[0], "--target", str(p)] + argv[1:]
+    code, out = run_main(excel, capsys, *full)
+    assert code == 2 and "[추천]" in out["message"] and "결과의 rows" in out["message"], out
+    rec = recommended_argv(out["message"], "excel")
+    assert gone not in rec and "--max-rows" not in rec, rec
+    code, again = run_main(excel, capsys, *rec)
+    assert code == 0 and again["rows"] == 1, again
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--rows", "5")
+    assert code == 2 and "--max-rows 5" in out["message"], out
+
+
+def test_dash_starting_text_value_is_taken_as_value(tmp_path, capsys):
+    """2026-11-09 검토 B5: '--query -40℃', '--body -확인'이 'expected one argument'였음. 도구 옵션 이름이면 그대로 옵션."""
+    p = tmp_path / "a.txt"
+    p.write_text("온도 -40℃ 에서 동작", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "-40℃", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["query"] == "-40℃", out
+    code, out = run_main(reader, capsys, "search", "--query", "--file", str(p))      # 옵션 이름은 값으로 붙이지 않음
+    assert code == 2, out

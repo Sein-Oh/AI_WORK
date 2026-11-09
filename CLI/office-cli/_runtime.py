@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.92"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.93"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -67,7 +67,9 @@ def setup_console() -> None:
     """stdout/stderr를 UTF-8로 고정합니다 (Windows 콘솔과 파이프의 기본값은 CP949)."""
     for stream in (sys.stdout, sys.stderr):
         try:
-            if stream is not None and (stream.encoding or "").lower() != "utf-8":
+            # 이미 UTF-8이어도 errors="replace"로 (PYTHONIOENCODING=utf-8은 strict라 반쪽 이모지(lone surrogate) 하나로
+            # UnicodeEncodeError, stdout에 JSON이 없던 것, 2026-11-09 검토 B9)
+            if stream is not None and ((stream.encoding or "").lower() != "utf-8" or getattr(stream, "errors", "") != "replace"):
                 stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
@@ -736,12 +738,16 @@ CONTINUE_STATE_AGE = 24 * 3600.0
 
 def _continue_key(tool: str) -> str:
     import hashlib
-    return hashlib.sha1((tool + " " + " ".join(CURRENT_ARGV or [])).encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1((tool + " " + " ".join(CURRENT_ARGV or [])).encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def _continue_state(update: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
-    """CONTINUE 횟수를 읽고 (update가 있으면) 고쳐 씀. 실패하지 않음: 폴더에 못 쓰면 세지 않음."""
-    path = os.path.join(get_data_dir(), "continue_state.json")
+    """CONTINUE 횟수를 읽고 (update가 있으면) 고쳐 씀. 실패하지 않음: 폴더에 못 쓰면 세지 않음
+    (데이터 폴더를 만들 수 없어도: 파일 경로이거나 읽기 전용이면 전에는 traceback만 나고 stdout에 JSON이 없었음, 2026-11-09 검토 B1)."""
+    try:
+        path = os.path.join(get_data_dir(), "continue_state.json")
+    except Exception:
+        return {}
     try:
         state = json.loads(read_text_file(path)) if os.path.isfile(path) else {}
         if not isinstance(state, dict):
@@ -762,9 +768,12 @@ def _continue_state(update: Optional[Callable[[Dict[str, Any]], None]] = None) -
 
 
 def continue_clear(tool: str) -> None:
-    key = _continue_key(tool)
-    if key in _continue_state():
-        _continue_state(lambda st: st.pop(key, None))
+    try:
+        key = _continue_key(tool)
+        if key in _continue_state():
+            _continue_state(lambda st: st.pop(key, None))
+    except Exception:
+        pass
 
 
 def unfinished_payload(exc: "Unfinished", tool: str, command: str) -> Dict[str, Any]:
@@ -796,7 +805,25 @@ def unfinished_payload(exc: "Unfinished", tool: str, command: str) -> Dict[str, 
 def run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> None:
     """도구 본문을 실행하고, 어떤 경우에도 stdout 1줄 JSON과 종료 코드(0/1/130)를 보장합니다.
     실패(exit 1)는 <데이터 폴더>/logs/errors.txt에 자동 기록합니다 (사용자 중단 130과 성공은 기록하지 않음).
-    시간 제한으로 멈춘 긴 작업(Unfinished)은 CONTINUE 결과(exit 0, 오류 로그 없음, R10)."""
+    시간 제한으로 멈춘 긴 작업(Unfinished)은 CONTINUE 결과(exit 0, 오류 로그 없음, R10).
+    뒷정리(CONTINUE 횟수, 오류 로그, 출력)가 실패해도 가장 바깥에서 한 번 더 막아 JSON 1줄을 냅니다 (2026-11-09 검토 B1)."""
+    try:
+        _run_cli(tool, command, execute)
+    except SystemExit:
+        raise
+    except BaseException as e:                  # noqa: BLE001  마지막 방어선
+        try:
+            sys.stdout.write(json.dumps({"status": "error", "tool": tool, "command": command, "error_type": "internal",
+                                         "message": f"출력 중 내부 오류: {type(e).__name__}",
+                                         "agent_directive": "ERROR: 내부 오류입니다. 다시 실행하지 말고 사용자에게 알리세요."},
+                                        ensure_ascii=True) + "\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
+        sys.exit(130 if isinstance(e, KeyboardInterrupt) else 1)
+
+
+def _run_cli(tool: str, command: str, execute: Callable[[], Dict[str, Any]]) -> None:
     global RUN_START
     RUN_START = time.monotonic()
     setup_console()
@@ -920,6 +947,11 @@ def skill_file(tool: str) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills", skill_name(tool), "SKILL.md")
 
 
+# 글 값을 받는 옵션: 값이 '-'로 시작해도 값으로 받음 (JsonArgumentParser._join_dash_values)
+DASH_VALUE_OPTIONS = {"--query", "--body", "--value", "--text", "--find", "--replace", "--subject", "--title", "--search",
+                      "--note", "--anchor", "--callout", "--header", "--where", "--from", "--sender"}
+
+
 class JsonArgumentParser(argparse.ArgumentParser):
     """인자 오류를 텍스트 대신 JSON(exit 2)으로 응답하는 ArgumentParser. 서브파서에도 그대로 상속됩니다."""
 
@@ -936,7 +968,33 @@ class JsonArgumentParser(argparse.ArgumentParser):
         global CURRENT_ARGV, CURRENT_TOOL
         CURRENT_ARGV = [str(a) for a in args] if args is not None else sys.argv[1:]
         CURRENT_TOOL = self.tool_name
-        return super().parse_args(args, namespace)
+        return super().parse_args(self._join_dash_values(list(CURRENT_ARGV)), namespace)
+
+    def _option_names(self) -> set:
+        names = set()
+        for act in self._actions:
+            names.update(act.option_strings)
+            if isinstance(act, argparse._SubParsersAction):
+                for sub in act.choices.values():
+                    names.update(o for a in sub._actions for o in a.option_strings)
+        return names
+
+    def _join_dash_values(self, argv: List[str]) -> List[str]:
+        """글 값을 받는 옵션 바로 뒤의 '-'로 시작하는 값('--query -40℃', '--body -확인')을 '--query=-40℃'로 붙임.
+        argparse는 그 값을 옵션으로 보고 'expected one argument'로 멈췄음 (2026-11-09 검토 B5). 도구의 옵션 이름이면 붙이지 않음."""
+        names = self._option_names()
+        out: List[str] = []
+        i = 0
+        while i < len(argv):
+            a = argv[i]
+            if (a in DASH_VALUE_OPTIONS and a in names and i + 1 < len(argv) and argv[i + 1].startswith("-")
+                    and len(argv[i + 1]) > 1 and argv[i + 1].split("=", 1)[0] not in names):
+                out.append(f"{a}={argv[i + 1]}")
+                i += 2
+                continue
+            out.append(a)
+            i += 1
+        return out
 
     def print_help(self, file=None) -> None:  # type: ignore[override]
         """R7: 도움말 텍스트는 stderr로, stdout에는 JSON 1줄 (argparse가 이어서 exit 0).
@@ -986,6 +1044,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         sub = subs.get(cmd) if subs else self
         opts = [o for a in (sub._actions if sub else []) for o in a.option_strings if o.startswith("--")]
         known = {o for a in (sub._actions if sub else []) for o in a.option_strings}
+        self._valued = {o for a in (sub._actions if sub else []) for o in a.option_strings if a.nargs not in (0, "?")}
         argv = list(CURRENT_ARGV or [])
         flags = [x for x in argv[1:] if _is_flag(x) and "=" not in x and x not in known]
         if req:
@@ -1021,6 +1080,11 @@ class JsonArgumentParser(argparse.ArgumentParser):
             if near:
                 # 철자만 비슷한 옵션은 뜻이 다를 수 있어 묻게 함 ([추천]이면 LLM이 묻지 않고 실행)
                 return f" '{cmd}' 명령에는 {f} 옵션이 없습니다. 비슷한 옵션이 맞는지 사용자에게 물으세요." + self._numbered(f, near)
+        if extra and all(x in RESULT_WORDS for x in extra):
+            # 'read ... rows': 스킬의 '행 수는 결과의 rows'를 인자로 읽음 -> 그 글을 뺀 같은 명령 (2026-11-09 검토 B3)
+            rest = [a for a in argv if a not in extra]
+            return (f" {', '.join(extra)}은(는) 옵션이 아니라 결과 JSON의 키입니다 (행 수는 결과의 rows). "
+                    f"[추천] {next_command(f'{self.tool_name}.py', rest, '')['command']}")
         if not flags:
             return " 띄어쓰기가 있는 경로나 값은 큰따옴표로 감싸세요 (예: --target \"C:\\폴더 이름\\파일.xlsx\")."
         opts = [o for o in opts if o != "--help"]
@@ -1055,6 +1119,13 @@ class JsonArgumentParser(argparse.ArgumentParser):
             if a in plan:
                 has_value = i + 1 < len(argv) and not _is_flag(argv[i + 1]) and argv[i + 1] not in known
                 repl = plan[a]
+                if len(repl) == 1 and not has_value and repl[0] in getattr(self, "_valued", set()):
+                    # 값이 필요한 옵션으로 바꾸는데 값이 없음 ('read --rows' -> '--max-rows'는 실행하면 인자 오류, 검토 B3)
+                    if a not in VALUELESS_DROP:
+                        return None
+                    i += 1                      # 결과 키를 옵션처럼 쓴 것: 빼고 같은 명령
+                    plan[a] = []
+                    continue
                 if repl:
                     out += repl
                     if has_value and len(repl) == 1:
@@ -1066,6 +1137,8 @@ class JsonArgumentParser(argparse.ArgumentParser):
             out.append(a)
             i += 1
         what = ", ".join(f"{f} -> {' '.join(r) if r else '(뺌)'}" for f, r in plan.items())
+        if any(f in VALUELESS_DROP and not r for f, r in plan.items()):
+            what += ". 행 수는 결과의 rows 값"
         return (f"'{cmd}' 명령에는 {', '.join(plan)} 옵션이 없어 같은 뜻으로 고쳤습니다 ({what}). "
                 f"[추천] {next_command(f'{self.tool_name}.py', out, '')['command']}")
 
@@ -1088,6 +1161,11 @@ class JsonArgumentParser(argparse.ArgumentParser):
         write_error_log(self.tool_name, None, payload)
         emit_json(payload)
         sys.exit(2)
+
+
+# 결과 JSON의 키를 옵션·인자처럼 쓴 것 (스킬의 "행 수는 결과의 rows"): 값 없이 오면 빼고 [추천] (2026-11-09 검토 B3)
+VALUELESS_DROP = {"--rows", "--count"}
+RESULT_WORDS = {"rows", "count", "values", "cols"}
 
 
 def build_parser(tool: str, description: str):
@@ -1709,7 +1787,7 @@ def retry_command(options: Dict[str, Any], drop: Sequence[str] = (), multi: Sequ
     for k, v in options.items():
         if v is None:
             continue
-        add += [k] + ([str(x) for x in v] if isinstance(v, (list, tuple)) else [str(v)])
+        add += [k] + ([] if v is True else [str(x) for x in v] if isinstance(v, (list, tuple)) else [str(v)])   # True: 값 없는 플래그
     if not argv or not CURRENT_TOOL:
         return " ".join(quote_arg(x) for x in add)
     return next_command(f"{CURRENT_TOOL}.py", out + add, "")["command"]
@@ -1781,7 +1859,8 @@ def retry_replacing(old: str, new: str, option: Any = None) -> str:
     return next_command(f"{CURRENT_TOOL}.py", argv, "")["command"]
 
 
-def next_command(script: str, args: Sequence[Any], purpose: str, destructive: bool = False) -> Dict[str, Any]:
+def next_command(script: str, args: Sequence[Any], purpose: str, destructive: bool = False,
+                 needs_input: bool = False) -> Dict[str, Any]:
     """next_commands·confirm_commands 항목 하나를 만듭니다. script는 도구 폴더 기준 파일명 (예: 'office.py').
 
     destructive=True(덮어쓰기·삭제·메일 발송, confirm_commands에만)이면 "destructive": true를 붙입니다 (1.4.75): 사용자가
@@ -1790,6 +1869,8 @@ def next_command(script: str, args: Sequence[Any], purpose: str, destructive: bo
     item: Dict[str, Any] = {"purpose": purpose, "command": " ".join(parts)}
     if destructive:
         item["destructive"] = True
+    if needs_input:
+        item["needs_input"] = True          # <...> 자리를 사용자 값으로 바꿔야 함 (전역 지침 3장 6번)
     return item
 
 

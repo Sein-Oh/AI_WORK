@@ -11,6 +11,28 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.93] - 2026-11-09
+
+전체 검토 2장 B1~B6: 계약 위반·실행 못 하는 `[추천]`.
+
+### 수정
+- B1 데이터 폴더를 만들 수 없으면(`OFFICE_CLI_DATA_DIR`가 파일, 읽기 전용 폴더) CONTINUE 횟수 정리에서 traceback만 나고 stdout에 JSON이 없던 것:
+  `_continue_state`·`continue_clear`가 예외를 삼키고, `run_cli`가 가장 바깥에서 한 번 더 막아 JSON 1줄을 냄.
+- B9 `PYTHONIOENCODING=utf-8`(strict)에서 결과·인자에 반쪽 이모지(lone surrogate)가 있으면 `UnicodeEncodeError`로 JSON이 없던 것:
+  `setup_console`이 늘 `errors="replace"`로, CONTINUE 열쇠도 `encode("utf-8", "replace")`. (B 묶음에 함께: 같은 출력 계약)
+- B2 `[추천]` 뒤가 실행할 수 없는 글이던 곳: `outlook calendar --days 0`(`[추천] 7`), `attachments --name`(--save 없음), `excel export --encoding cp949`
+  (`[추천] utf-8-sig`)를 고친 전체 명령으로. reader `index`의 `search --query '<검색어>'` 다음 명령에 `needs_input: true`.
+  `test_contract`에 도구 소스의 `[추천] ` 뒤가 글자인 곳을 찾는 정적 검사. `retry_command`의 값 `True`는 값 없는 플래그.
+- B3 `excel read --rows`(값 없음)·`read ... rows`: 스킬의 "행 수 `rows`"를 옵션으로 읽은 것. 같은 뜻 표가 값이 필요한 `--max-rows`로 `[추천]`해
+  실행하면 인자 오류였음. 결과 키(`--rows`, `--count`, `rows`, `count` 등)를 값 없이 쓰면 그것을 뺀 같은 명령을 `[추천]`, 값이 필요한 옵션으로
+  바꾸는데 값이 없으면 `[추천]`하지 않음(일반 규칙). office-excel 스킬은 "행 수는 결과의 `rows` 값".
+- B4 `excel write --range D2 --formula A B`(칸 하나에 수식 여러 개)의 `[추천]`이 100행 범위를 지어내던 것: 옆 열 데이터의 마지막 행까지.
+  옆 열이 비었으면 `[추천]` 없이 사용자에게 마지막 행을 묻게 함.
+- B5 `--query -40℃`, `--body "-확인"`처럼 `-`로 시작하는 글 값이 "expected one argument"이던 것: 글 값을 받는 옵션 바로 뒤의 `-` 값은
+  도구의 옵션 이름이 아니면 값으로 붙임(`--query=-40℃`). 사용법은 그대로 한 가지.
+- B6 차트 시트가 있는 통합문서: 차트 시트가 활성이거나 `--sheet`로 준 `read`, 시트를 주지 않은 `compare`가 `ERROR:`(`Chartsheet`에 `max_row` 없음).
+  워크시트만 보고, 차트 시트를 직접 주면 STOP_RETRY(차트 시트라 칸이 없음, 워크시트 `[후보]`).
+
 ## [1.4.92] - 2026-11-09
 
 전체 검토(`docs/history/office-cli_REVIEW_2026-11-09.md`) 1장 A1~A6, A10~A13: 틀린 결과를 `VERIFIED:`로 내던 결함.

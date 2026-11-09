@@ -235,17 +235,21 @@ def _cmp_cache_path(path: str, sheet: Optional[str]) -> str:
 
 def _cmp_pick_sheet(wb: Any, sheet: Optional[str], prefer: Optional[str], option: str) -> Tuple[Any, str]:
     """읽을 시트: 준 시트 -> 이전 판과 같은 이름(새 판) -> 시트 하나 -> 열 역할을 가장 많이 알아본 시트(같으면 활성 시트)."""
-    names = list(wb.sheetnames)
+    names = [ws.title for ws in wb.worksheets]     # 차트 시트 제외 (2026-11-09 검토 B6)
+    if not names:
+        raise rt.InputError(f"칸이 있는 워크시트가 없습니다 (차트 시트만 있음, {option}).")
     if sheet:
         found = rt.find_name(sheet, names)
         if found is None:
-            raise rt.not_found("시트", sheet, names, extra=f" ({option})", option=option)
+            charts = [c.title for c in getattr(wb, "chartsheets", [])]
+            note = " (차트 시트라 칸이 없음)" if charts and rt.find_name(sheet, charts) else ""
+            raise rt.not_found("시트", sheet, names, extra=f" ({option}){note}", option=option)
         return wb[found], f"{option}로 준 시트"
     if prefer and rt.find_name(prefer, names):
         return wb[rt.find_name(prefer, names)], "이전 판과 같은 이름의 시트"
     if len(names) == 1:
         return wb[names[0]], "시트가 하나뿐"
-    active = getattr(wb.active, "title", None)
+    active = getattr(wb.active, "title", None) if getattr(wb.active, "title", None) in names else None
     best: Tuple[float, int] = (-1.0, 0)
     pick = names[0]
     for name in names:

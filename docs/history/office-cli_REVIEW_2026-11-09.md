@@ -135,37 +135,38 @@
 
 ## 2. 계약 위반·내부 오류·실행 못 하는 추천
 
-### B1. 데이터 폴더를 만들 수 없으면 stdout에 JSON이 없음 (재현, 높음)
+### B1. 데이터 폴더를 만들 수 없으면 stdout에 JSON이 없음 (재현, 높음) (1.4.93에서 수정)
 - 위치: `_runtime.py:825`, `832` (`continue_clear` -> `_continue_state:744` -> `get_data_dir` -> `os.makedirs:1139`)
 - 재현: `OFFICE_CLI_DATA_DIR`를 파일 경로로 주고 `excel.py read --target x.xlsx --range A1:B2` -> traceback, stdout 0줄. 읽기 전용 `data` 폴더도 같은 경로.
 - 고칠 방향: `_continue_state`/`continue_clear`가 예외를 삼키고, `run_cli`가 어떤 경우에도 JSON 1줄을 내게 가장 바깥에서 한 번 더 막는다.
 
-### B2. `[추천]` 뒤가 실행할 수 없는 글 (재현, 중간)
+### B2. `[추천]` 뒤가 실행할 수 없는 글 (재현, 중간) (1.4.93에서 수정)
 - `outlook.py:1434`: `calendar --days 0` -> `[추천] 7`. 고칠 방향: `rt.retry_command({'--days': 7})`.
 - `outlook.py:617`: `attachments --name a`(--save 없음) -> `[추천] 같은 명령 끝에 --save를 붙이세요.` 고칠 방향: 지금 인자에 `--save`를 붙인 전체 명령.
 - `excel.py:2424-2425`: `export --encoding cp949` + CP949로 못 쓰는 글자 -> `[추천] utf-8-sig`. 고칠 방향: `rt.retry_command({'--encoding': 'utf-8-sig'})`.
 - `reader.py:2397`: index 결과 `next_commands`의 `search --query '<검색어>'`가 `needs_input` 없이 나가 그대로 실행하면 `VERIFIED: 0건`. 고칠 방향: `needs_input: true`.
 - 함께: 저장소 전체에서 `[추천]` 뒤가 `python `으로 시작하지 않는 곳을 찾는 테스트를 `test_contract.py`에 추가한다 (소스의 `"[추천] "` 뒤 글을 정적 검사).
 
-### B3. `--rows`를 주면 값 없는 `--max-rows`를 추천 (재현, 중간)
+### B3. `--rows`를 주면 값 없는 `--max-rows`를 추천 (재현, 중간) (1.4.93에서 수정)
 - 위치: `_runtime.py:851` (`SAME_MEANING`의 `--rows` -> `--max-rows`), 원인 제공은 office-excel 스킬의 "(행 수 `rows`, 수식 보기 `--formulas`)" 표기
 - 재현: `excel.py read --target sales.xlsx --rows` -> `[추천] ... read --target sales.xlsx --max-rows` -> 실행하면 "expected one argument".
   `read ... rows`(스킬 표기를 인자로 읽은 경우)는 `[추천]` 없이 인자 오류.
 - 고칠 방향: 값 없는 `--rows`와 따로 떨어진 `rows`는 "행 수는 결과의 `rows`"라는 뜻이므로 그 인자를 뺀 전체 명령을 `[추천]`. 같은 뜻 표의 일반 규칙으로
   "값이 필요한 옵션으로 바꿀 때 값이 없으면 추천하지 않음"도 넣는다. 스킬 문구는 "행 수는 결과의 `rows` 값"처럼 옵션으로 읽히지 않게.
 
-### B4. 수식 여러 개를 칸 하나에 주면 `[추천]`이 100행 범위를 지어냄 (재현, 중간)
+### B4. 수식 여러 개를 칸 하나에 주면 `[추천]`이 100행 범위를 지어냄 (재현, 중간) (1.4.93에서 수정)
 - 위치: `excel.py:1844`
 - 재현: 데이터 2행인 표에 `write --range D2 --formula "=B2*2" "=C2*3"` -> `[추천] ... --range D2:E101` -> 그대로 실행하면 수식 200개, VERIFIED.
 - 고칠 방향: 옆 열의 사용 범위에서 마지막 행을 구해 그 범위로 추천. 못 구하면 `[후보]`(사용자에게 범위를 물음).
+- 처리(1.4.93): 못 구하면 `[후보]` 대신 `[추천]` 없이 "사용자에게 마지막 행을 물어" (고를 값 목록이 없는 질문이라 `[후보]`·`confirm_commands`를 만들 수 없음).
 
-### B5. `-`로 시작하는 값이 `[추천]` 없는 인자 오류 (재현, 중간)
+### B5. `-`로 시작하는 값이 `[추천]` 없는 인자 오류 (재현, 중간) (1.4.93에서 수정)
 - 위치: `_runtime.py` 인자 오류 처리, `reader.py:5058` 등
 - 재현: `reader.py search --query "-40℃" --file a.txt`, `outlook.py reply --id 3 --body "-확인"` -> "expected one argument". `--query=-40℃`나 `"-40 ℃"`(띄어 씀)는 동작.
 - 고칠 방향: 파싱 전에, 글 값을 받는 옵션(`--query`, `--body`, `--value`, `--text`, `--find`, `--replace`, `--subject` 등) 바로 뒤 토큰이 `-`로 시작하고
   그 도구의 옵션 이름이 아니면 `--opt=<값>`으로 합친다 (도구가 스스로 고침. 사용법은 그대로 한 가지).
 
-### B6. 차트 시트가 있는 통합문서에서 `ERROR:` (재현, 중간)
+### B6. 차트 시트가 있는 통합문서에서 `ERROR:` (재현, 중간) (1.4.93에서 수정)
 - 위치: `excel.py:438-440` (`'Chartsheet' object has no attribute 'max_row'`), `_excel_compare.py:251-252` (`iter_rows`)
 - 재현: openpyxl `wb.create_chartsheet()`가 든 xlsx. 차트 시트가 활성이거나 `--sheet`로 지정한 `read`, 시트 지정 없는 `compare`.
 - 고칠 방향: `wb.worksheets`만 돈다. 차트 시트를 직접 지정하면 `STOP_RETRY`(워크시트 `[후보]`).
@@ -180,7 +181,7 @@
 - 재현: `style --target <없는 경로>.xlsx --range A1:C3 --bold` -> 빈 파일 생성, "서식 적용" VERIFIED (`replace`, `range sort/freeze`, `sheet add`, `chart delete`도).
 - 고칠 방향: `create=True`는 `write`(와 엑셀로 보내는 `transfer`)만. 나머지는 "파일 없음" + 비슷한 이름 `[후보]`. word.py·ppt.py도 같은지 확인.
 
-### B9. 출력에 반쪽 이모지(lone surrogate)가 있으면 JSON 없이 죽음 (재현, 중간)
+### B9. 출력에 반쪽 이모지(lone surrogate)가 있으면 JSON 없이 죽음 (재현, 중간) (1.4.93에서 수정)
 - 위치: `_runtime.py:66-73` (`setup_console`이 이미 UTF-8이면 `reconfigure`를 건너뜀), `305-309`, `739` (`_continue_key`)
 - 재현: `PYTHONIOENCODING=utf-8`(전역 지침의 인코딩 줄)에서 payload나 argv에 `\ud83d` -> `UnicodeEncodeError`, stdout 0줄. cp949에서는 `?`로 나가 정상.
 - 고칠 방향: 늘 `reconfigure(errors="replace")`. `_continue_key`는 `encode("utf-8", "replace")`.

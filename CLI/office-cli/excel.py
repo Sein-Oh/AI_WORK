@@ -432,6 +432,18 @@ def _clip_closed_range(path: str, ws: Any, address: str, r1: int, c1: int, r2: i
     return nr2, nc2
 
 
+def worksheet_names(wb: Any) -> List[str]:
+    """openpyxl 통합문서의 워크시트 이름 (차트 시트 제외)."""
+    return [ws.title for ws in wb.worksheets]
+
+
+def chart_sheet_note(wb: Any, name: str) -> str:
+    """준 이름이 차트 시트면 그 설명 (not_found의 extra)."""
+    charts = [c.title for c in getattr(wb, "chartsheets", [])]
+    hit = rt.find_name(name, charts) if charts else None
+    return f" ('{hit}'은(는) 차트 시트라 칸이 없음, 워크시트를 고르세요)" if hit else ""
+
+
 def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str]) -> Tuple[str, int, int, List[List[Any]], List[str]]:
     """닫힌 파일을 openpyxl로 읽습니다. (시트명, 시작행, 시작열, 값, 전체 시트명)"""
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
@@ -439,14 +451,17 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
     _FAR.clear()
     wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
     try:
-        names = list(wb.sheetnames)
+        names = worksheet_names(wb)            # 차트 시트는 칸이 없어 뺌 (2026-11-09 검토 B6: 'Chartsheet'에 max_row가 없어 ERROR)
+        if not names:
+            raise rt.InputError(f"{os.path.basename(path)}에 칸이 있는 워크시트가 없습니다 (차트 시트만 있음).")
         if sheet:
             found = rt.find_name(sheet, names)
             if found is None:
-                raise rt.not_found("시트", sheet, names, option="--sheet")
+                raise rt.not_found("시트", sheet, names, option="--sheet", extra=chart_sheet_note(wb, sheet))
             ws = wb[found]
         else:
-            ws = wb[names[0]] if wb.active is None else wb.active
+            act = wb.active
+            ws = act if act is not None and getattr(act, "title", None) in names else wb[names[0]]
         # 데이터 범위(_closed_bounds, 크기 정보 없는 파일은 시트 전체를 훑음)는 범위를 생략했거나
         # 열·행 전체(B:B, 5:7)일 때만, 그리고 Sheet!A1의 시트로 바꾼 뒤에 셉니다 (작은 범위 읽기마다 전체를 훑지 않게)
         if address:
@@ -454,7 +469,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
             if sh:
                 found = rt.find_name(sh, names)
                 if found is None:
-                    raise rt.not_found("시트", sh, names, option="--sheet")
+                    raise rt.not_found("시트", sh, names, option="--sheet", extra=chart_sheet_note(wb, sh))
                 ws = wb[found]
             r1, c1, r2, c2 = parse_area(cells, None, None)
             if r2 is None or c2 is None:
@@ -1913,10 +1928,16 @@ def cmd_write(args) -> Dict[str, Any]:
                 raise rt.InputError(f"--formula에 숫자만 있습니다. 값은 {opt}로 쓰세요. [추천] {rec}")
             if r2c2 is None:
                 if len(formulas) != 1:
-                    rec = addr(top, c1, top + 100 if header else top + 99, c1 + len(formulas) - 1)
-                    raise rt.InputError("수식이 여러 개면 --range로 범위를 지정하세요"
-                                        + (f" (머리글이 있으면 머리글 행부터, 수식은 {top + 1}행 기준으로)" if header else "")
-                                        + f". [추천] {rt.retry_command({'--range': rec})}")
+                    # 옆 열(왼쪽) 표의 마지막 행까지 (전에는 100행을 지어내 데이터 2행 표에 수식 200개를 썼음, 2026-11-09 검토 B4)
+                    data_end = _last_used_row(ws, c1 - 1) if c1 > 1 else 0
+                    first = top + 1 if header else top
+                    head = ("수식이 여러 개면 --range로 범위를 지정하세요"
+                            + (f" (머리글이 있으면 머리글 행부터, 수식은 {top + 1}행 기준으로)" if header else ""))
+                    if data_end < first:
+                        raise rt.InputError(head + ". 옆 열에 데이터가 없어 몇 행까지 쓸지 정할 수 없습니다. 사용자에게 마지막 행을 물어 "
+                                            f"--range {addr(top, c1)}:<끝 열><끝 행> 꼴로 다시 실행하세요.")
+                    rec = addr(top, c1, data_end, c1 + len(formulas) - 1)
+                    raise rt.InputError(head + f". 옆 열 데이터가 {data_end}행까지라 그 범위로. [추천] {rt.retry_command({'--range': rec})}")
                 r2, c2 = r1, c1
             else:
                 r2, c2 = r2c2
@@ -2494,7 +2515,7 @@ def _check_encodable(matrix: List[List[Any]], encoding: str, r0: int, cols: List
     if bad:
         more = f" 외 {len(bad) - 5}개" if len(bad) > 5 else ""
         raise rt.InputError(f"--encoding {encoding}로 쓸 수 없는 글자(이모지·일부 기호)가 있는 칸: {', '.join(bad[:5])}{more}. "
-                            f"값을 바꾸지 않고 저장하려면 UTF-8로 저장하세요. [추천] utf-8-sig")
+                            f"값을 바꾸지 않고 저장하려면 UTF-8로 저장하세요. [추천] {rt.retry_command({'--encoding': 'utf-8-sig'})}")
 
 
 def cmd_export(args) -> Dict[str, Any]:

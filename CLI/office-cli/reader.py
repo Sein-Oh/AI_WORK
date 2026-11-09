@@ -2495,7 +2495,7 @@ def cmd_index(args) -> Dict[str, Any]:
         nexts.append(rt.next_command("reader.py", same, f"남은 {res['remaining']}개 파일 이어서 등록 (읽기 전용)"))
     search_target = ["--file", target] if (args.folder or args.file) else []
     nexts.append(rt.next_command("reader.py", ["search", "--query", "<검색어>"] + search_target,
-                                 "등록한 문서에서 검색 (<검색어>를 사용자 검색어로 바꿈)"))
+                                 "등록한 문서에서 검색 (<검색어>를 사용자 검색어로 바꿈)", needs_input=True))
     result["next_commands"] = nexts
     if not files:
         what = "폴더에 지원 형식 문서가 없습니다" if args.folder else "등록된 문서가 없습니다"

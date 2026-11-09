@@ -668,7 +668,7 @@ def cmd_attachments(args) -> Dict[str, Any]:
     listing = args.save is None
     if listing and (args.name or args.index):
         raise rt.InputError("--name/--index는 --save와 함께 씁니다. 목록만 보려면 둘 다 빼세요. "
-                            "[추천] 같은 명령 끝에 --save를 붙이세요.")
+                            f"[추천] {rt.retry_command({'--save': True})}")
     item = _target_item(get_outlook(), args, "첨부를 볼 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.",
                         original=False)
     subject = _text(getattr(item, "Subject", ""))
@@ -1504,7 +1504,7 @@ def _when(v: Any) -> str:
 
 def cmd_calendar(args) -> Dict[str, Any]:
     if args.days < 1 or args.days > 92:
-        raise rt.InputError(f"--days는 1~92입니다 (1 = 오늘, 7 = 오늘부터 7일). 받은 값: {args.days}. [추천] 7")
+        raise rt.InputError(f"--days는 1~92입니다 (1 = 오늘, 7 = 오늘부터 7일). 받은 값: {args.days}. [추천] {rt.retry_command({'--days': 7})}")
     start = _dt.datetime.combine(_today(), _dt.time())
     end = start + _dt.timedelta(days=args.days)
     ns = get_namespace(get_outlook())

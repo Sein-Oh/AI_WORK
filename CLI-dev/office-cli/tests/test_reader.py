@@ -3511,3 +3511,11 @@ def test_diff_with_partly_scanned_pdf_is_unverified(tmp_path, capsys):
         paths.append(str(q))
     code, out = run_main(reader, capsys, "diff", "--file", paths[0], "--file2", paths[1])
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "스캔 쪽" in out["agent_directive"], out
+
+
+def test_index_search_template_needs_input(tmp_path, capsys):
+    """2026-11-09 검토 B2: index 뒤의 search '<검색어>' 명령은 그대로 실행하면 0건이라 needs_input."""
+    (tmp_path / "a.txt").write_text("본문", encoding="utf-8")
+    code, out = run_main(reader, capsys, "index", "--folder", str(tmp_path))
+    item = [c for c in out["next_commands"] if "<검색어>" in c["command"]][0]
+    assert code == 0 and item["needs_input"] is True, out

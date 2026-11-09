@@ -1807,7 +1807,7 @@ def test_calendar_lists_events_read_only(monkeypatch, capsys):
     assert out["period"] == {"since": "2026-11-04", "until": "2026-11-10", "days": 7}
     assert any("[Start] < '2026-11-11 00:00'" in x for x in log if isinstance(x, str))
     code, out = run_outlook(capsys, "calendar", "--days", "0")
-    assert code == 1 and "[추천] 7" in out["message"]
+    assert code == 1 and recommended_argv(out["message"], "outlook")[-2:] == ["--days", "7"], out
 
 
 def _calendar_env(monkeypatch, evs, refuse=False):

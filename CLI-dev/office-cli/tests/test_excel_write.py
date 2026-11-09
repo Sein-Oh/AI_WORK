@@ -91,11 +91,10 @@ def test_write_checks_everything_before_writing_the_header(xl, capsys):
     app, wb = xl
     code, out = run_excel(capsys, "write", "--range", "A1", "--header", "x,sin(x)", "--formula", "=(ROW()-2)*0.1", "=SIN(A2)")
     assert code == 1, out
-    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
-    assert option_value(argv, "--range") == "A1:B101" and "A1" not in argv, argv
-    assert argv[argv.index("--formula") + 1:argv.index("--formula") + 3] == ["=(ROW()-2)*0.1", "=SIN(A2)"], argv
+    # 1.4.93 (검토 B4): 옆에 데이터가 없으면 행 수를 지어내지 않고(전에는 [추천] A1:B101) 사용자에게 마지막 행을 묻게 함
+    assert "[추천]" not in out["message"] and "마지막 행" in out["message"] and "머리글 행부터" in out["message"], out
     assert (1, 1) not in ws_of(wb).values and (1, 2) not in ws_of(wb).values
-    code, out = run_excel(capsys, *argv)                         # 안내대로 다시 실행
+    code, out = run_excel(capsys, "write", "--range", "A1:B101", "--header", "x,sin(x)", "--formula", "=(ROW()-2)*0.1", "=SIN(A2)")
     assert code == 0, out
 
 
@@ -1730,7 +1729,7 @@ def test_export_csv_cp949_unencodable_is_input_error(xl, capsys, tmp_path):
     out_path = tmp_path / "out.csv"
     code, out = run_excel(capsys, "export", "--save", str(out_path), "--encoding", "cp949")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
-    assert "A2" in out["message"] and "[추천] utf-8-sig" in out["message"], out
+    assert "A2" in out["message"] and recommended_argv(out["message"], "excel")[-2:] == ["--encoding", "utf-8-sig"], out
     assert not out_path.exists()
 
 
@@ -2237,3 +2236,17 @@ def test_style_many_cells_in_one_command(xl, capsys):
     assert code == 1 and "[추천]" in out["message"] and '--range "B2;D5"' in out["message"].replace("'", '"'), out
     code, out = run_excel(capsys, "style", "--range", "B2;D5", "--theme", "navy")
     assert code == 1 and "--theme" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B4: 칸 하나에 수식 여러 개면 [추천] 범위는 옆 열 데이터의 끝까지 (100행을 지어내지 않음)
+# ---------------------------------------------------------------------------
+
+
+def test_multi_formula_single_cell_recommends_table_rows(xl_table, capsys):
+    code, out = run_main(excel, capsys, "write", "--range", "D2", "--formula", "=B2*2", "=C2*3")
+    assert code == 1 and "[추천]" in out["message"], out
+    rec = recommended_argv(out["message"], "excel")
+    assert option_value(rec, "--range") == "D2:E5", rec
+    code, out = run_main(excel, capsys, "write", "--range", "H2", "--formula", "=B2*2", "=C2*3")
+    assert code == 1 and "[추천]" not in out["message"] and "마지막 행" in out["message"], out

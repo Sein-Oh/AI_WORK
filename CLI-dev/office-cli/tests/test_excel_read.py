@@ -1564,3 +1564,37 @@ def test_reader_reads_rows_past_small_dimension(tmp_path, capsys):
     p = _small_dimension_xlsx(tmp_path, "A1:B5")
     units, _ = reader.parse_xlsx(p)
     assert any("n10" in u["text"] for u in units) and len(units) == 11, units
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B6: 차트 시트가 있는 통합문서 (활성 시트·--sheet·compare)
+# ---------------------------------------------------------------------------
+
+
+def _chartsheet_xlsx(path, active_chart=True):
+    import openpyxl
+    from openpyxl.chart import BarChart, Reference
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "데이터"
+    for r in [["품번", "값"], ["A1", 1], ["A2", 2]]:
+        ws.append(r)
+    cs = wb.create_chartsheet("차트")
+    ch = BarChart()
+    ch.add_data(Reference(ws, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+    cs.add_chart(ch)
+    if active_chart:
+        wb.active = 1
+    wb.save(path)
+    return str(path)
+
+
+def test_chartsheet_is_skipped_or_refused(tmp_path, capsys):
+    p = _chartsheet_xlsx(tmp_path / "c.xlsx")
+    code, out = run_excel(capsys, "read", "--target", p)
+    assert code == 0 and out["values"][0] == ["품번", "값"], out
+    code, out = run_excel(capsys, "read", "--target", p, "--sheet", "차트")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "차트 시트" in out["message"], out
+    q = _chartsheet_xlsx(tmp_path / "d.xlsx")
+    code, out = run_excel(capsys, "compare", "--target", p, "--target2", q)
+    assert code == 0 and out["status"] == "ok", out
