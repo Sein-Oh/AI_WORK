@@ -12,6 +12,29 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.85] - 2026-11-09
+
+학습 데이터셋 만들기를 학습에서 떼어 냄 (사용자 결정 2026-11-09: 버전 폴더가 데이터 파일마다 생겨 조건을 바꿀 때마다 손으로 파일 이름을 바꿔
+학습하고 있었음. ml-train 스킬 용량 확보).
+
+### 기능
+- `ml_dataset.py` + 스킬 `ml-dataset` (원본은 바꾸지 않음):
+  - `pick --where "<조건>"` 또는 `--rows "15,27"`: 맞는 행만 담은 새 파일.
+  - `exclude ... [--reason "<이유>"]`: 모든 행 + 맞는 행의 `제외` 열에 이유를 적은 새 파일 (학습은 그 행을 빼고 따로 채점). 이미 표시한 행은 그대로.
+  - 저장은 CSV(BOM 붙은 UTF-8) 기본 `<원본>_뽑기<N>.csv` / `<원본>_제외<N>.csv`, `--save <이름>.xlsx`도 됨. 저장 뒤 학습과 같은 방식으로 다시 읽어 비교.
+  - 0행이면 파일을 만들지 않음(`count: 0`). `--dry-run`, `--overwrite`, `--header-row`/`--unit-row`/`--data-row`.
+  - `next_commands[0]`: 원본의 마지막 학습과 같은 타겟·입력·`--eval`로 새 파일을 학습하는 전체 명령 (학습한 적이 없으면 `<타겟>` 틀).
+  - 조건 식은 `ml_predict.py --where`와 같음 (코드 열의 다른 표기는 `warnings` + `[추천]`, `,`로 나눈 조건은 `[추천]`).
+
+### 바뀜
+- `ml_train.py --exclude-where`를 없앰 (한 가지 일에 한 가지 사용법). 학습 결과 맨 뒤의 `<조건>` 틀은 `ml_dataset.py exclude --file <데이터>
+  --where "<조건>"`. 학습 결과·원장·보고서의 `condition`/`condition_text`/`exclude_where`와 `excluded_rows.csv`의 구분 `조건`도 없앰
+  (조건으로 뺀 행은 `제외` 열의 이유로 "직접 표시"로 셈).
+- 파생변수(`--eval`)는 학습에 그대로 둠: 수식이 모델에 저장되어 예측·성능예측표가 원래 입력만 받음 (데이터셋에 열로 미리 만들면 예측 때 사용자가
+  그 값을 넣어야 함).
+- 전역 지침 3장 표에 `ml-dataset`, 4장 "학습에서 행을 빼 달라고 하면"을 데이터셋으로. `setup.py`가 `ml-dataset` 스킬도 설치. ml-train 스킬 5979 -> 5815바이트.
+- 진입점 목록(AGENTS.md, `test_contract.py`)에 `ml_dataset.py` (`_ml_runtime.py`만 import).
+
 ## [2.9.84] - 2026-11-09
 
 성능예측표를 모델 그대로 옮긴 계산기로 (사용자 결정 2026-11-09: 성능이 예민해 모델 오차에 표 보간 오차가 더해지는 것이 문제,

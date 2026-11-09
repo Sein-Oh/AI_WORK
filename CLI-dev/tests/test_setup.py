@@ -94,7 +94,7 @@ def test_sources_exist_in_repo_layout():
 def test_apply_copies_new_then_reports_same(monkeypatch, tmp_path, capsys):
     cli, cfg = _iso(monkeypatch, tmp_path)
     assert su.main(["--config-dir", str(cfg), "--no-path"]) == 0
-    for name in ("ml-train", "ml-predict", "ml-report", "ml-map"):
+    for name in su.ML_SKILLS:
         assert (cfg / "skills" / name / "SKILL.md").read_bytes() == (cli / "ml-kit" / "skills" / name / "SKILL.md").read_bytes()
     assert (cfg / "AGENTS.md").read_bytes() == (cli / "opencode" / "AGENTS.md").read_bytes()
     assert not (cfg / "skills" / "office-cli-test").exists()

@@ -484,10 +484,10 @@ def setup_checks():
     cfg = os.path.join(os.path.expanduser("~"), ".config", "opencode", "skills")
     if not os.path.isdir(cfg):
         return record("K1", "OpenCode 설정 폴더의 스킬 배치", None, f"{cfg} 없음 (setup.bat을 먼저 실행)")
-    want = ["ml-train", "ml-predict", "ml-report", "ml-map", "office-data"]
+    want = ["ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset", "office-data"]
     missing = [n for n in want if not os.path.isfile(os.path.join(cfg, n, "SKILL.md"))]
     old = os.path.exists(os.path.join(cfg, "ml-kit"))
-    record("K1", "설정 폴더에 ml-kit 스킬 4개와 office-data, 옛 skills\\ml-kit 없음 (setup.py 뒤)", not missing and not old,
+    record("K1", "설정 폴더에 ml-kit 스킬 5개와 office-data, 옛 skills\\ml-kit 없음 (setup.py 뒤)", not missing and not old,
            f"없는 스킬 {missing}, 옛 폴더 남음={old}")
 
 

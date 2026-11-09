@@ -985,11 +985,10 @@ def _metric_label(task: str) -> str:
 def exclusion_line(t: Dict[str, Any], metric: str) -> str:
     """'학습 제외 3행 (직접 1, 자동 이상치 2) | 검증 R²(제외 행 포함) 0.81' or '' when nothing was left out."""
     e = t.get("excluded") or {}
-    n = int(e.get("manual", 0)) + int(e.get("auto", 0)) + int(e.get("condition", 0))
+    n = int(e.get("manual", 0)) + int(e.get("auto", 0))
     parts = []
     if n:
-        cond = f"조건({e.get('condition_text')}) {e['condition']}, " if e.get("condition") else ""
-        parts.append(f"학습 제외 {n}행 (직접 표시 {e.get('manual', 0)}, {cond}자동 이상치 {e.get('auto', 0)})")
+        parts.append(f"학습 제외 {n}행 (직접 표시 {e.get('manual', 0)}, 자동 이상치 {e.get('auto', 0)})")
         if isinstance(e.get("all_rows_score"), (int, float)):
             parts.append(f"검증 {metric}(제외 행 포함) {e['all_rows_score']:.4f}")
     if e.get("forced_include"):
@@ -1204,8 +1203,6 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     if excl_lines:
         R.para("학습 제외 행: 데이터의 '제외' 열에 글자가 있는 행(직접 표시)과, 값이 중앙값에서 크게 벗어난 행"
                "(중앙값·절대편차 기준 3.5배 초과, 자동 이상치)은 학습에서 뺐습니다. "
-               + ("학습 때 준 조건(--exclude-where)에 맞는 행도 뺐습니다. "
-                  if any((t.get("excluded") or {}).get("condition") for t in targets) else "")
                + "'제외' 열에 '포함'이라고 쓴 행은 자동으로 빼지 않습니다. "
                "뺀 행 목록은 버전 폴더의 excluded_rows.csv에 있습니다.\n" + "\n".join(excl_lines),
                size=9, space_after=4)

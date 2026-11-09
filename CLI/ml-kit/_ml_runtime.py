@@ -53,7 +53,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.84"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.85"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -969,7 +969,7 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--feature": ["--features"], "--columns": ["--features"], "--feature-cols": ["--features"], "--x": ["--features"],
     "--x-cols": ["--features"], "--y-cols": ["--targets"],      # 2.9.77 집 PC solar-mini4
     "--output": ["--save"], "--out": ["--save"], "--output-file": ["--save"], "-o": ["--save"],
-    "--header": ["--header-row"], "--unit": ["--unit-row"], "--exclude": ["--exclude-where"],
+    "--header": ["--header-row"], "--unit": ["--unit-row"],
     "--positive": ["--positive-class"], "--time": ["--time-limit"], "--description": ["--desc"],
     # 한 글자 옵션은 없음 (2.9.82, 사용법 단순성 1번: 한 가지 일에 한 가지 사용법, office-cli 1.4.88과 같음). 받지 않고 긴 이름으로 [추천]
     "-f": ["--file"], "-m": ["--model"], "-i": ["--input"], "-x": ["--features"], "-y": ["--targets"], "-v": ["--version"],
@@ -1001,7 +1001,7 @@ def inline_value(value: str) -> str:
 
 # 스크립트 -> 그 명령을 설명하는 작업별 스킬 (skills/<이름>/SKILL.md, 2.9.71에 스킬 하나를 넷으로 나눔)
 SKILL_OF_SCRIPT = {"ml_train.py": "ml-train", "ml_predict.py": "ml-predict", "ml_report.py": "ml-report",
-                   "ml_export.py": "ml-report", "ml_map.py": "ml-map"}
+                   "ml_export.py": "ml-report", "ml_map.py": "ml-map", "ml_dataset.py": "ml-dataset"}
 
 
 class _ProbeError(Exception):
@@ -1546,7 +1546,7 @@ def resolve_column_names(names: List[str], columns: List[str], kind: str,
 
 
 # ==============================================================================
-# C3-B. Row conditions: ml_train.py --exclude-where, ml_predict.py --where (constrained search)
+# C3-B. Row conditions: ml_dataset.py --where (rows of a new data file), ml_predict.py --where (constrained search)
 # ==============================================================================
 # The syntax of office-cli excel.py read --where: '<column> <op> <value>' joined by ';' (AND) and '|' (OR, ';' binds
 # first), operators >= <= != > < = ~ (~ = contains), a value with ; or | in single or double quotes.
@@ -1753,7 +1753,7 @@ _FIXED_CODE_RE = re.compile(r"\d{3,}")    # a fixed-width code ('001' ~ '120'); 
 
 def is_code_column(series: pd.Series) -> bool:
     """A category / code column, matched as exact text ('007' is not '7', not a number to interpolate) by
-    --where / --exclude-where and ml_map keys. Only when some cell has a leading zero ('007') and
+    --where and ml_map keys. Only when some cell has a leading zero ('007') and
     (a) the same number is written in two ways ('007' and '7', '01' and '001'), or
     (b) every filled cell is a code of the same width of 3 or more digits ('001' ~ '120').
     Otherwise the column is read as numbers, as training reads it: months '01' ~ '12' and '05, 10, 15, 20' are

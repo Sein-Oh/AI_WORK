@@ -149,11 +149,11 @@ GROUPS = [
             {
                 'id': 'A3',
                 'message': '생산효율이 80보다 큰 행은 빼고 다시 학습해줘.',
-                'commands': [r'ml_train\.py', r'''--exclude-where\s+['"]?생산효율\S*\s*>\s*80'''],
+                'commands': [r'''ml_dataset\.py"?\s+exclude''', r'''--where\s+['"]?생산효율\S*\s*>\s*80''', r'ml_train\.py'],
                 'tool_ok': r'ml_train\.py',
                 'answer_all': ['제외|뺀|빼'],
                 'forbid': [r'Remove-Item|\bdel\s|Set-Content|Export-Csv|to_excel|to_csv'],
-                'judge': '데이터 파일을 직접 고치지 않고 --exclude-where 조건으로 다시 학습했는가. 조건으로 뺀 행 수와 새 검증 점수를 알렸는가.',
+                'judge': '데이터 파일을 직접 고치지 않고 ml_dataset.py exclude로 새 데이터셋을 만들어 그 파일로 다시 학습했는가. 뺀 행 수와 새 검증 점수를 알렸는가.',
             },
         ],
     },
