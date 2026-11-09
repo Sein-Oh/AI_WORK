@@ -35,3 +35,4 @@ python "C:\CLI\ml-kit\ml_report.py" --file "<데이터파일>" --title "<제목>
 python "C:\CLI\ml-kit\ml_export.py" --model "<데이터파일>" --title "<제목>"
 ```
 - 최종 버전의 모델을 그대로 옮긴다. 입력은 고르지 않는다 (입력을 바꾸려면 먼저 다시 학습한다, ml-train). 같은 이름 파일이 있으면 새 이름으로 저장된다.
+- 사용자가 계산기 시트만 있는 최소판을 원하면 명령 끝에 `--minimal`을 붙인다.

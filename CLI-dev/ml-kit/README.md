@@ -863,6 +863,7 @@ python ml_map.py --file 공정.xlsx --points 조회.xlsx [--save 결과.xlsx]   
 python ml_export.py --model 공정.xlsx --title "반응 공정 생산효율 예측"                :: 최종 버전
 python ml_export.py --model 공정_ml_data\v3 --title "반응 공정 생산효율 예측"          :: 이 버전으로
 python ml_export.py --model 공정.xlsx --targets 생산효율                                :: 이 타겟만
+python ml_export.py --model 공정.xlsx --minimal                                         :: 최소판 (계산기 시트만)
 ```
 - **모델 그대로**: 다시 학습하지 않습니다. 입력은 그 버전의 입력 전부(값이 하나뿐인 입력도 모델 입력이라 남기고 `warnings`), 파생변수(`--eval`)는
   계산 칸의 엑셀 수식(나누기 0 등 오류는 모델처럼 학습 중앙값). 2.9.83까지의 격자 표와 보간(평균 98~99% 일치), 입력 8개 상한과 `[후보]`, `--inputs`는 없앴습니다.
@@ -876,6 +877,8 @@ python ml_export.py --model 공정.xlsx --targets 생산효율                  
   시트·잠금·입력 칸·예측 수식과 잎 값이 옮긴 값과 같은지 봅니다. Windows + 엑셀이면 일괄계산 행에 무작위 조건 50개와 경계값 바로 위·아래 조건을, 계산기에 한 조건을 넣고 한 번만 다시 계산해
   모델과 비교합니다(엑셀이 없으면 `UNVERIFIED`로 알림, `ML_KIT_SKIP_EXCEL_CHECK=1`이면 끔: 시험용). 결과 JSON `check`(`points`, `max_diff`, `max_rel_pct`), 정확도 시트.
 - `--overwrite`: 같은 이름 파일을 덮어씀 (생략 시 시각을 붙인 새 이름, `recovered`).
+- `--minimal` (2.9.85): 최소판. 시트는 `계산기`와 그 수식이 읽는 숨김 `모델_<타겟>`뿐(일괄계산·사용법·정확도·정보 없음), 이름은 `성능예측표_<데이터>_<버전>_최소.xlsx`,
+  결과 `minimal: true`. 엑셀 확인은 계산기에 경계값 조건부터 10개를 하나씩 넣어 다시 계산. 보고서와 함께 만드는 것은 늘 전체판입니다.
 - 데이터: 버전 폴더의 `model_dataset.csv` (원본 데이터 불필요, `학습제외_<타겟>` 행은 학습 범위·실측 거리에서 뺌). 숫자 타겟만 (분류는 건너뜀). 글자·날짜 입력 모델은 `STOP_RETRY`.
 - **보고서와 세트**: `ml_report.py`가 회귀 버전이면 이 도구를 함께 실행합니다 (`--title`, 결과 `export_file`, 실패해도 보고서는 정상, `export_note`).
   `ml_export.py`를 직접 부르는 것은 성능예측표만 다시 만들 때입니다.

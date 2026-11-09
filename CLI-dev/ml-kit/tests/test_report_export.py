@@ -602,6 +602,23 @@ def test_excel_recalculates_like_the_model(export_version, monkeypatch):
     assert r["verified"] is True and not r.get("unverified"), r
 
 
+def test_minimal_workbook_has_only_the_calculator(export_version, tmp_path):
+    """--minimal: 계산기 시트와 그 수식이 읽는 숨김 모델 시트만 (일괄계산, 사용법, 정확도, 정보 없음). 이름 끝에 _최소."""
+    _, _, vdir = export_version
+    r = run_tool("ml_export.py", "--model", vdir, "--minimal")
+    assert r["minimal"] is True and r["output_file"].endswith("_v1_최소.xlsx") and "최소판" in r["preview"], r
+    assert not [u for u in r.get("unverified", []) if "엑셀" not in u], r
+    wb = openpyxl.load_workbook(r["output_file"])
+    assert wb.sheetnames == ["계산기", "모델_효율"] and wb["모델_효율"].sheet_state == "veryHidden"
+    assert all(wb[n].protection.sheet for n in wb.sheetnames) and wb.security.lockStructure
+    note = " ".join(str(c.value) for row in wb["계산기"].iter_rows() for c in row if isinstance(c.value, str))
+    assert "사용법" not in note and "같은 계산" in note
+    if SOFFICE:
+        out = _recalc(r["output_file"], tmp_path)
+        x = [out["계산기"][f"C{i}"].value for i in (6, 7, 8, 9)]
+        assert out["계산기"]["C12"].value == pytest.approx(_model_predict(vdir, "효율", [x])[0], rel=1e-12, abs=1e-12)
+
+
 def test_status_cells_have_visible_colors(export_version):
     # conditional formats: Excel reads bgColor for a solid fill, so fgColor alone shows no color
     _, _, vdir = export_version
