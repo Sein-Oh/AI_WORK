@@ -1184,9 +1184,8 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         ex = export["result"]
         lines = [f"성능예측표 (엑셀 계산기): {os.path.basename(ex['output_file'])}"]
         for t, v in ex["targets"].items():
-            a = v["agreement"]
             lines.append(f"- {t}: 입력 {len(v['inputs'])}개 ({', '.join(strip_unit(i) for i in v['inputs'])}), "
-                         f"모델 예측과 평균 {a['agreement_pct']:.1f}% 일치, 95% 조건에서 차이 {a['p95_diff_pct']:.1f}% 이내")
+                         f"모델을 엑셀 수식으로 그대로 옮김 ({v['method']}, 조건 {v['check']['points']:,}개에서 모델과 같은 값 확인)")
         R.para("\n".join(lines), size=8.5, color=C_INK, space_after=4)
 
     # -- 2. 데이터와 피처 -----------------------------------------------------------------
@@ -1371,9 +1370,9 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
     if task != "regression" or os.environ.get("ML_KIT_SKIP_EXPORT") == "1":
         return None
     try:
-        import ml_export  # heavy (retraining); only when a report is made
+        import ml_export  # only when a report is made
         return {"result": ml_export.execute_export(argparse.Namespace(
-            model=version_dir, targets=",".join(targets) if targets else None, inputs=None, title=title,
+            model=version_dir, targets=",".join(targets) if targets else None, title=title,
             save=None, overwrite=overwrite))}
     except Exception as e:
         note = f"성능예측표를 만들지 못했습니다 (보고서는 정상): {type(e).__name__}: {str(e)[:200]}"
@@ -1406,7 +1405,7 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
         return
     res = export["result"]
     result["export_file"] = res["output_file"]
-    result["export"] = {t: {k: v[k] for k in ("inputs", "dropped", "val_r2", "table_rows", "agreement")}
+    result["export"] = {t: {k: v[k] for k in ("inputs", "model", "val_r2", "method", "check")}
                         for t, v in res["targets"].items()}
     result["export_verified"] = res["verified"]
     if res.get("unverified"):

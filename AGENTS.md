@@ -157,7 +157,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 산출물 레이아웃(`<stem>_ml_data/history.jsonl`, `vX/model_<target>.joblib|json`)과 원장 스키마는 바꿔도 된다 (베타). 바꾸면 이전 버전 폴더는 다시 학습해서 쓴다.
 - 학습과 추론이 같아야 하는 로직(데이터 로딩, 수치 변환, `--eval` 수식)은 `_ml_runtime.py` 한 곳에만 둔다.
 - 진입점(`ml_train.py`, `ml_predict.py`, `ml_report.py`, `ml_export.py`, `ml_map.py`)은 공통으로 `_ml_runtime.py`만 import한다. 아무도 `ml_predict.py`를
-  import하지 않고, `_ml_runtime.py`는 진입점을 import하지 않는다 (예외: 학습을 다시 쓰는 `ml_export` -> `ml_train`, 보고서와 함께 성능예측표를 만드는 `ml_report` -> `ml_export`).
+  import하지 않고, `_ml_runtime.py`는 진입점을 import하지 않는다 (예외: 보고서와 함께 성능예측표를 만드는 `ml_report` -> `ml_export`).
   예측만 하는 PC에는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더를 복사한다. 검사: `tests/test_contract.py`.
 ### office-cli
 - 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`. 내부 모듈(진입점 아님, 스킬에 적지 않음): `_markdown.py`(마크다운 해석),

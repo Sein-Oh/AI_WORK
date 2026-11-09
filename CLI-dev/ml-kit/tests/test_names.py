@@ -89,10 +89,6 @@ def test_excluded_column_never_listed():
     head = msg.split("(비슷한")[0]
     assert "[후보] 1) '수율(1차)'" in head and "수율(최종)" not in head and "[추천]" not in msg, msg
     assert "이 명령에서 이미 다른 이름이나 옵션에 쓰인 열" in msg, msg
-    with pytest.raises(rt.InputError) as e:
-        ml_export._check_known(["압력", "압룍"], {"y": ["압력", "온도"]}, "꼭 포함할 입력(--keep)")
-    msg = str(e.value)
-    assert "[추천]" not in msg and "[후보] '압력'" not in msg and "이미 다른 이름이나 옵션에 쓰인 열" in msg, msg
 
 
 OTHER_WORDS = [("습도", "속도"), ("온도", "농도"), ("T1", "T2"), ("온도1", "온도2"), ("반응온도", "반응농도"),
@@ -993,28 +989,18 @@ def test_points_measured_column_passes_beside_positions(position_tmp, pcol):
 
 
 @pytest.mark.report
-def test_export_keep_typo_never_suggests_a_given_input():
-    with pytest.raises(rt.InputError) as e:
-        ml_export._check_known(["압력", "압룍"], {"t": ["압력(bar)", "온도"]}, "입력(--keep)")
-    assert "[추천]" not in str(e.value), str(e.value)
-    with pytest.raises(rt.InputError) as e:
-        ml_export._check_known(["압룍"], {"t": ["압력(bar)", "온도"]}, "입력(--keep)")
-    assert "[후보] 1) '압력(bar)'" in str(e.value), str(e.value)                  # 2.9.33: [추천]
-
-
-@pytest.mark.report
 def test_export_labels_two_targets(humid_data):
     assert ml_export.target_labels(["수율(1차)", "수율(최종)", "온도(°C)"]) == \
         {"수율(1차)": "수율(1차)", "수율(최종)": "수율(최종)", "온도(°C)": "온도"}
     out = str(humid_data["tmp"] / "exp.xlsx")
-    proc, res = run_raw("ml_export.py", "--model", humid_data["two"], "--inputs", "온도,압력", "--save", out)
+    proc, res = run_raw("ml_export.py", "--model", humid_data["two"], "--save", out)
     res = ok_res(res, proc)
     wb = openpyxl.load_workbook(res["output_file"])
     heads = [c.value for c in wb["일괄계산"][2] if c.value]
     assert "예측 수율(1차)" in heads and "예측 수율(최종)" in heads and "예측 수율" not in heads, heads
-    note = "\n".join(str(c.value) for row in wb["계산기"].iter_rows() for c in row if isinstance(c.value, str))
-    assert "- 수율(1차):" in note and "- 수율(최종):" in note and "- 수율:" not in note, note
-    assert {"표_수율(1차)", "표_수율(최종)"} <= set(wb.sheetnames), wb.sheetnames
+    names = [wb["계산기"][f"B{r}"].value for r in range(6, 20)]
+    assert "수율(1차)" in names and "수율(최종)" in names and "수율" not in names, names
+    assert {"모델_수율(1차)", "모델_수율(최종)"} <= set(wb.sheetnames), wb.sheetnames
 
 
 def test_column_candidate_has_numbered_full_command(tmp_path):

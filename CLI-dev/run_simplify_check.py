@@ -192,8 +192,8 @@ def ml_checks(env, data, titled):
     check("M8", "--dry-run", m8)
 
     def m9():
-        code, out = run_tool(env, E, "--model", data, "--inputs", "반응온도x,압축압력", "--title", "점검")
-        follow(env, "M9", "성능예측표 --model <데이터 파일> + --inputs 오타 -> [후보] 1) -> 셸로 실행", code, out, kind="후보", need_code=1)
+        code, out = run_tool(env, E, "--model", data, "--targets", "생산효율x", "--title", "점검")
+        follow(env, "M9", "성능예측표 --model <데이터 파일> + --targets 오타 -> [후보] 1) -> 셸로 실행", code, out, kind="후보", need_code=1)
     check("M9", "ml_export", m9)
 
 

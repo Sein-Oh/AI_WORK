@@ -901,8 +901,8 @@ def test_find_and_export_work_on_the_source(capped, tmp_path):
     _, vdir = capped
     f = run_tool("ml_predict.py", "--model", vdir, "--find", "효율=80", "--vary", "온도", "--input", "압력=2")
     assert f["count"] >= 1 and abs(f["solutions"][0]["온도(°C)"] - (80 - 10) / 0.3) < 2
-    e = run_tool("ml_export.py", "--model", vdir, "--inputs", "온도,압력", "--save", str(tmp_path / "c.xlsx"))
-    assert e["targets"]["효율"]["inputs"] == ["온도(°C)", "압력"]
+    e = run_tool("ml_export.py", "--model", vdir, "--save", str(tmp_path / "c.xlsx"))
+    assert e["targets"]["효율"]["inputs"] == ["온도(°C)", "압력"] and e["targets"]["효율"]["check"]["max_diff"] < 1e-9
 
 
 # ---- next_commands --------------------------------------------------------------------------------------

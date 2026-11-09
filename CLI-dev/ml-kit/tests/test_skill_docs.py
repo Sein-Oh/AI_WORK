@@ -104,8 +104,7 @@ def test_skill_mentions_features():
                      "입력 열(피처)은 묻지 않는다", "--features \"<피처1>,<피처2>\""),
         "ml-predict": ("--model \"<데이터파일>\"", "model_chosen", "--file \"<새데이터파일>\"", "--save", "--find", "--vary", "--sweep",
                        "--maximize", "--minimize", "--where", "--suggest <개수>", "실험계획", "실제값 비교"),
-        "ml-report": ("ml_report.py\" --file", "--title", "--slots", "ml_export.py\" --model",
-                      "--inputs \"<입력1>,<입력2>\"", "최종 버전", "[후보]"),
+        "ml-report": ("ml_report.py\" --file", "--title", "--slots", "ml_export.py\" --model", "최종 버전"),
         "ml-map": ("ml_map.py\" --file", "--find", "--vary", "--points", "extrapolated"),
     }
     for name, needles in need.items():
@@ -115,10 +114,10 @@ def test_skill_mentions_features():
 
 
 def test_removed_options_are_not_in_skills():
-    """2.9.83: 최고 버전(--best)과 성능예측표 --keep을 없앰. 스킬에 남으면 경량 LLM이 없는 옵션을 씀."""
+    """2.9.83: 최고 버전(--best)과 성능예측표 --keep, 2.9.84: 성능예측표 --inputs를 없앰. 스킬에 남으면 경량 LLM이 없는 옵션을 씀."""
     for name in SKILLS:
         text = _read(name)
-        for gone in ("--best", "--keep", "best_version", "최고 버전"):
+        for gone in ("--best", "--keep", "best_version", "최고 버전", "--inputs"):
             assert gone not in text, (name, gone)
 
 

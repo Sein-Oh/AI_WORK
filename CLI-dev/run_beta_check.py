@@ -12,7 +12,7 @@ LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 �
   C  표 보간·반대 찾기 ml_map (2.6.0)
   D  예측 + 실측 비교값 (2.7.0)
   E  모델 반대 찾기와 운전 구간 (2.8.0)
-  F  보고서 + 성능예측표 세트, 일치도, 엑셀 잠금·숨김·재계산 (2.9.x)
+  F  보고서 + 성능예측표 세트, 모델과 같은 값, 엑셀 잠금·숨김·재계산 (2.9.x)
   G  파생변수 원본 열 (2.9.1)
 
 결과: 이 파일 옆에 beta_check_<라벨>_<시각>.md (요약 + 실패 상세)와 .xlsx (항목별 표).
@@ -225,18 +225,18 @@ def group_f(work, st):
     given = {"반응온도(°C)", "압축압력(bar)", "촉매비율(wt%)", "수분함량(%)", "유량(L/min)", "분진(mg)"}   # B1 학습에 준 입력 (2.9.83: 모두 넣음)
     safe("F", "F3", "출력마다 학습에 준 입력이 모두 들어감 (분진 포함)", lambda: (
         all(set(v["inputs"]) == given for v in p["export"].values()), {t: v["inputs"] for t, v in p["export"].items()}))
-    safe("F", "F4", "모델 대비 일치도 95% 이상", lambda: (
-        all(v["agreement"]["agreement_pct"] >= 95 for v in p["export"].values()),
-        {t: v["agreement"]["agreement_pct"] for t, v in p["export"].items()}))
+    safe("F", "F4", "성능예측표 = 모델 예측 (모델을 수식으로 그대로, 2.9.84)", lambda: (
+        all(v["check"]["max_diff"] < 1e-9 and "그대로" in v["method"] for v in p["export"].values()),
+        {t: (v["method"], v["check"]) for t, v in p["export"].items()}))
     def f5():
         from docx import Document
         text = "\n".join(x.text for x in Document(p["report_file"]).paragraphs)
-        return ("성능예측표 (엑셀 계산기)" in text and "점수 용어" in text and "% 일치" in text), "보고서 문구 확인"
-    safe("F", "F5", "보고서에 성능예측표 일치도 줄과 점수 용어", f5)
+        return ("성능예측표 (엑셀 계산기)" in text and "점수 용어" in text and "모델과 같은 값 확인" in text), "보고서 문구 확인"
+    safe("F", "F5", "보고서에 성능예측표 확인 줄과 점수 용어", f5)
     def f6():
         import openpyxl
         wb = openpyxl.load_workbook(p["export_file"])
-        hidden = [n for n in wb.sheetnames if n.startswith("표_")]
+        hidden = [n for n in wb.sheetnames if n.startswith("모델_")]
         ok = (all(wb[n].protection.sheet for n in wb.sheetnames) and wb.security.lockStructure
               and hidden and all(wb[n].sheet_state == "veryHidden" for n in hidden)
               and all(wb[n].sheet_state == "visible" for n in wb.sheetnames if n not in hidden))
@@ -245,7 +245,7 @@ def group_f(work, st):
         texts = " ".join(str(c.value) for ws in wb.worksheets for row in ws.iter_rows() for c in row if isinstance(c.value, str))
         no_path = os.path.dirname(root) not in texts
         return (ok and unlocked == [f"C{r}" for r in range(6, 6 + 6)] and no_path), f"잠금/숨김 {ok}, 입력칸 {unlocked}, 경로 없음 {no_path}"
-    safe("F", "F6", "엑셀: 모든 시트 잠금, 표_ 완전 숨김, 입력 칸 6개만 열림, 전체 경로 없음", f6)
+    safe("F", "F6", "엑셀: 모든 시트 잠금, 모델_ 완전 숨김, 입력 칸 6개만 열림, 전체 경로 없음", f6)
     if p.get("export_verified"):
         check("F", "F7", "엑셀로 수식 재계산 확인 (export_verified)", True)
     else:

@@ -2,8 +2,8 @@
 """Word 보고서(ml_report.py)와 성능예측표(ml_export.py, 엑셀 계산기).
 
 보고서: 구성, 숫자 형식, WordprocessingML 스키마 순서, 손상된 템플릿 복구, --file은 최종 버전(마지막 학습), 보고서와 성능예측표 세트.
-성능예측표: 버전의 입력 전부(다시 학습하지 않고 버전의 모델), 값이 하나뿐인 입력만 뺌, 8개를 넘으면 [후보], --inputs,
-수식만으로 보간하는 잠긴 엑셀, LibreOffice가 있으면 수식을 다시 계산해 Python 값과 비교.
+성능예측표: 버전의 모델을 엑셀 수식으로 그대로 옮김(나무는 잎마다 입력 범위, 선형은 식), 모델 다섯 가지 모두 같은 값,
+16자리 경계값, 파생변수 수식 칸, 잠긴 엑셀, LibreOffice가 있으면 다시 계산해 모델 예측과 비교.
 """
 import argparse
 import json
@@ -18,12 +18,11 @@ import pandas as pd
 import pytest
 
 pytestmark = pytest.mark.report    # 보고서·성능예측표 (오래 걸림: 빼려면 -m "not report", pytest.ini)
-from scipy.interpolate import RegularGridInterpolator
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
 from mlkit_helpers import (split_command, FEATURES, HAS_DOCX, HAS_MPL, KIT, TARGET, ok_res, run_fail, run_raw, run_tool,  # noqa: E402
-                           stop_msg, write_df)
+                           write_df)
 import ml_export as mx  # noqa: E402
 import _ml_runtime as rt  # noqa: E402
 import ml_report as mr  # noqa: E402
@@ -468,16 +467,16 @@ def test_report_makes_calculator_in_the_same_folder(tmp_path, with_export):
     assert rep["export_file"] == os.path.join(root, "성능예측표_p_v1.xlsx") and os.path.isfile(rep["export_file"])
     assert rep["export"]["효율"]["inputs"] == ["온도", "압력", "잡음"] and "성능예측표" in rep["preview"]   # 2.9.83: 입력 전부
     assert "export_file" in rep["agent_directive"]
-    a = rep["export"]["효율"]["agreement"]                                       # 2.9.4: agreement with the model
-    assert 95 < a["agreement_pct"] <= 100 and a["p95_diff_pct"] >= 0
+    ex = rep["export"]["효율"]                                                   # 2.9.84: the model as formulas
+    assert "그대로" in ex["method"] and ex["check"]["max_diff"] < 1e-9
     import openpyxl
     wb = openpyxl.load_workbook(rep["export_file"])
     assert wb["계산기"]["B2"].value == "시험 효율 예측"
     notes = " ".join(str(c.value) for row in wb["계산기"].iter_rows() for c in row if isinstance(c.value, str))
-    assert f"평균 {a['agreement_pct']:.1f}% 일치" in notes
+    assert "학습한 모델과 같은 계산" in notes
     from docx import Document
     text = "\n".join(p.text for p in Document(rep["report_file"]).paragraphs)
-    assert "성능예측표 (엑셀 계산기): 성능예측표_p_v1.xlsx" in text and f"평균 {a['agreement_pct']:.1f}% 일치" in text
+    assert "성능예측표 (엑셀 계산기): 성능예측표_p_v1.xlsx" in text and "모델과 같은 값 확인" in text
 
 
 def test_classification_report_has_no_calculator(tmp_path, with_export):
@@ -520,13 +519,13 @@ def test_report_passes_overwrite_and_targets(monkeypatch, tmp_path):
     monkeypatch.delenv("ML_KIT_SKIP_EXPORT", raising=False)
     monkeypatch.setattr(ml_export, "execute_export", fake)
     ex = mr.make_export(str(tmp_path), "regression", None, ["생산효율"], overwrite=True)
-    assert seen["overwrite"] is True and seen["targets"] == "생산효율" and seen["inputs"] is None and "keep" not in seen
+    assert seen["overwrite"] is True and seen["targets"] == "생산효율" and "inputs" not in seen and "keep" not in seen
     result = {"preview": "p", "agent_directive": "VERIFIED: r."}
     mr.attach_export(result, ex)                                          # E7
     assert result["export_warnings"] == ["w1"] and "export_warnings" in result["agent_directive"]
 
 
-# ---- 성능예측표: 버전의 입력 전부, 잠긴 엑셀, 수식 다시 계산 ----------------------------------------------------
+# ---- 성능예측표 (2.9.84): 버전의 모델을 엑셀 수식으로 그대로 옮김 (나무는 잎마다 입력 범위, 선형은 식) ----------------
 
 
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
@@ -547,13 +546,6 @@ def export_version(tmp_path_factory):
     return d, path, res["version_dir"]
 
 
-def _grid(wb, sheet, k):
-    ws = wb[sheet]
-    A = np.array([r for r in ws.iter_rows(min_row=2, max_col=k + 1, values_only=True)], dtype=float)
-    axes = [np.unique(A[:, j]) for j in range(k)]
-    return RegularGridInterpolator(axes, A[:, k].reshape([len(a) for a in axes]))
-
-
 def _recalc(path, tmp):
     out = tmp / "calc"
     out.mkdir(exist_ok=True)
@@ -563,39 +555,40 @@ def _recalc(path, tmp):
     return openpyxl.load_workbook(out / "o" / "t.xlsx", data_only=True)
 
 
-def test_export_uses_every_input_and_the_version_model(export_version):
-    """2.9.83: 입력은 버전의 입력 전부(잡음 포함). 아무 입력도 빼지 않으면 다시 학습하지 않고 버전의 모델을 쓴다."""
+def _model_predict(vdir, target, rows):
+    meta = json.load(open(os.path.join(vdir, f"model_{target}.json"), encoding="utf-8"))
+    cand = {"inputs": meta["input_columns_required"], "evals": meta.get("derived_evals") or [], "schema": meta["feature_schema"],
+            "pipe": mx.load_pipe(vdir, meta)}
+    return mx.predict_frame(cand, pd.DataFrame(rows, columns=cand["inputs"]))
+
+
+def test_export_moves_the_version_model_as_it_is(export_version):
+    """2.9.84: 다시 학습하지 않고 버전의 모델을 그대로 옮긴다 (입력 전부, 잎 시트, 모델과 같은 값 확인)."""
     _, _, vdir = export_version
     proc, r = run_raw("ml_export.py", "--model", vdir)
     ok_res(r, proc)
     t = r["targets"]["효율"]
-    assert t["inputs"] == ["온도", "유량", "농도", "잡음"] and t["dropped"] == [], t
-    assert "후보 학습: 새로 0개, 저장된 것 재사용 0개" in proc.stderr                     # 다시 학습하지 않음
-    assert not os.path.isdir(os.path.join(vdir, "export", "_fits")) or not os.listdir(os.path.join(vdir, "export", "_fits"))
+    assert t["inputs"] == ["온도", "유량", "농도", "잡음"], t
     champ = json.load(open(os.path.join(vdir, "leaderboard.json"), encoding="utf-8"))["targets"]["효율"]["champion"]
     assert t["model"] == champ["champion_model"] and t["val_r2"] == round(champ["val_r2"], 4), (t, champ)
-    assert "그대로" in t["reason"] and len(t["candidates"]) == 1 and "command" not in t["candidates"][0]
-    assert r["next_commands"] == [] and r["next_commands_count"] == 0
-    cands = pd.read_csv(os.path.join(r["export_model_dir"], "candidates.csv"), encoding="utf-8-sig")
-    assert len(cands) == 1 and cands["선택"].tolist() == ["선택"]
-    assert os.path.isfile(os.path.join(r["export_model_dir"], "model_효율.joblib"))
-    assert r["title"] == "시험용 공정 효율 데이터."
+    assert "그대로" in t["method"] and t["check"]["points"] >= 2000 + 400 and t["check"]["max_diff"] < 1e-9, t
+    assert not os.path.isdir(os.path.join(vdir, "export"))                       # 버전 폴더는 바뀌지 않음
+    assert r["title"] == "시험용 공정 효율 데이터." and "next_commands" not in r
     assert "preview" in r["agent_directive"] and r["preview"].startswith("성능예측표 생성: 효율: 입력 4개")
+    assert "모델과 같은 계산" in r["preview"]
     wb = openpyxl.load_workbook(r["output_file"])
-    assert wb.sheetnames == ["계산기", "일괄계산", "사용법", "표_효율", "정확도", "정보"]
+    assert wb.sheetnames == ["계산기", "일괄계산", "사용법", "모델_효율", "정확도", "정보"]
     assert all(wb[n].protection.sheet for n in wb.sheetnames) and wb.security.lockStructure
-    assert wb["표_효율"].sheet_state == "veryHidden"                                    # grid not shown (2.9.3)
-    assert all(wb[n].sheet_state == "visible" for n in wb.sheetnames if not n.startswith("표_"))
+    assert wb["모델_효율"].sheet_state == "veryHidden"
+    assert all(wb[n].sheet_state == "visible" for n in wb.sheetnames if not n.startswith("모델_"))
     calc = wb["계산기"]
     unlocked = [c.coordinate for row in calc.iter_rows() for c in row if not c.protection.locked]
     assert unlocked == ["C6", "C7", "C8", "C9"] and calc["B6"].value == "온도" and calc["B9"].value == "잡음"
     batch = wb["일괄계산"]
     assert not batch["A3"].protection.locked and not batch["D3"].protection.locked and batch["E3"].protection.locked
-    assert wb["표_효율"].max_row - 1 == t["table_rows"]
-    a = t["agreement"]
-    assert a["points"] == 2000 and a["agreement_pct"] > 90 and a["max_diff_pct"] >= a["p95_diff_pct"]
-    assert any("일치도" in str(c.value) for row in wb["정확도"].iter_rows() for c in row)
-    assert any(str(c.value).startswith("모델 예측과 평균") for row in wb["정보"].iter_rows() for c in row if c.value)
+    if t["leaves"]:
+        assert "SUMPRODUCT(" in calc["C12"].value and wb["모델_효율"]["A1"].value.endswith("하한(초과)")
+    assert any("같은지 확인" in str(c.value) for row in wb["정확도"].iter_rows() for c in row)
     assert any("엑셀" in u for u in r.get("unverified", [])) or r["verified"]          # Excel check only on Windows
 
 
@@ -612,15 +605,14 @@ def test_status_cells_have_visible_colors(export_version):
         assert all(d.fill.bgColor.rgb.endswith("FCE4D6") and d.font.color.rgb.endswith("C2410C") for d in warn)
 
 
-def test_inputs_and_title_and_errors(export_version):
-    """--inputs는 사용자가 정한 입력으로 한 번 학습, --title은 계산기 제목. --keep은 없앰 (2.9.83, 인자 오류)."""
+def test_title_and_removed_options(export_version):
+    """--title은 계산기 제목. --inputs(입력 고르기, 다시 학습)는 없앰 (2.9.84: 모델 그대로라 입력 수 상한도 없음)."""
     _, _, vdir = export_version
-    i = run_tool("ml_export.py", "--model", vdir, "--inputs", "온도,유량", "--title", "짧은 제목")
-    assert i["targets"]["효율"]["inputs"] == ["온도", "유량"] and len(i["targets"]["효율"]["candidates"]) == 1
-    assert i["targets"]["효율"]["dropped"] == ["농도", "잡음"] and i["title"] == "짧은 제목"
-    assert "[후보] 1) '온도'" in run_fail("ml_export.py", "--model", vdir, "--inputs", "온도x")["message"]   # 2.9.33: was [추천], 2.9.71: 번호
-    proc, payload = run_raw("ml_export.py", "--model", vdir, "--keep", "잡음")
-    assert proc.returncode == 2 and payload["status"] == "error", payload
+    i = run_tool("ml_export.py", "--model", vdir, "--title", "짧은 제목")
+    assert i["title"] == "짧은 제목"
+    for opt in (("--inputs", "온도,유량"), ("--keep", "잡음")):
+        proc, payload = run_raw("ml_export.py", "--model", vdir, *opt)
+        assert proc.returncode == 2 and payload["status"] == "error", payload
     proc, payload = run_raw("ml_export.py", "-h")
     assert proc.returncode == 0 and payload["command"] == "help"
 
@@ -632,73 +624,118 @@ def test_classification_only_version_is_stopped(export_version):
 
 
 @pytest.mark.skipif(SOFFICE is None, reason="LibreOffice not installed")
-def test_formulas_recalculate_to_the_python_values(export_version, tmp_path):
+def test_formulas_recalculate_to_the_model(export_version, tmp_path):
+    """LibreOffice로 다시 계산한 계산기·일괄계산 값 = 모델 예측 (부동소수점 끝자리까지)."""
     _, _, vdir = export_version
-    r = run_tool("ml_export.py", "--model", vdir, "--inputs", "온도,유량,농도", "--save", str(tmp_path / "f.xlsx"))
+    r = run_tool("ml_export.py", "--model", vdir, "--save", str(tmp_path / "f.xlsx"))
     src = openpyxl.load_workbook(r["output_file"])
-    interp = _grid(src, "표_효율", 3)
-    # calculator at default inputs (medians) + 3 batch rows, one of them outside the training range
-    src["일괄계산"]["A3"], src["일괄계산"]["B3"], src["일괄계산"]["C3"] = 0.21, 0.73, 0.4
-    src["일괄계산"]["A4"], src["일괄계산"]["B4"], src["일괄계산"]["C4"] = 0.9, 0.1, 0.95
-    src["일괄계산"]["A5"], src["일괄계산"]["B5"], src["일괄계산"]["C5"] = 1.05, 0.5, 0.5          # out of range
+    rows = [(0.21, 0.73, 0.4, 0.5), (0.9, 0.1, 0.95, 0.05), (0.33333333333333, 0.5, 0.25, 0.75)]
+    for i, xs in enumerate(rows + [(1.05, 0.5, 0.5, 0.5)]):
+        for j, v in enumerate(xs):
+            src["일괄계산"].cell(row=3 + i, column=1 + j, value=v)
     mod = tmp_path / "m.xlsx"
     src.save(mod)
     out = _recalc(mod, tmp_path)
     calc = out["계산기"]
-    x = [calc[f"C{r}"].value for r in (6, 7, 8)]
-    assert calc["C11"].value == pytest.approx(float(interp([x])[0]), abs=1e-9)                # result row = 5 + inputs + 3
-    assert calc["F11"].value == "정상" and calc["F6"].value == "정상"
+    x = [calc[f"C{r}"].value for r in (6, 7, 8, 9)]
+    want = _model_predict(vdir, "효율", [x] + rows)
+    assert calc["C12"].value == pytest.approx(want[0], rel=1e-12, abs=1e-12)          # result row = 5 + inputs + 3
+    assert calc["F12"].value == "정상" and calc["F6"].value == "정상"
     b = out["일괄계산"]
-    for row, xs in ((3, (0.21, 0.73, 0.4)), (4, (0.9, 0.1, 0.95))):
-        assert b[f"D{row}"].value == pytest.approx(float(interp([xs])[0]), abs=1e-9)
-        assert b[f"E{row}"].value < b[f"D{row}"].value < b[f"F{row}"].value
-    assert b["G5"].value == "참고용 (학습 범위 밖)" and b["D6"].value in (None, "")
+    for i in range(3):
+        assert b[f"E{3 + i}"].value == pytest.approx(want[1 + i], rel=1e-12, abs=1e-12)
+        assert b[f"F{3 + i}"].value < b[f"E{3 + i}"].value < b[f"G{3 + i}"].value
+    assert b["H6"].value == "참고용 (학습 범위 밖)" and b["E7"].value in (None, "")
+
+
+def _pipe(est, cols):
+    schema = {"input_columns": cols, "categorical": {}, "numeric": cols, "datetime": {}}
+    return mt.build_pipeline(est, schema, "regressor")
+
+
+@pytest.mark.parametrize("kind", ["ExtraTrees", "RandomForest", "HistGradientBoosting", "Ridge", "ElasticNet"])
+def test_every_regression_model_moves_exactly(kind):
+    """ml-kit의 회귀 모델 다섯 가지 모두 옮긴 수식 = 모델 예측. 경계값과 바로 위·아래 수, 15자리로 줄인 값 포함."""
+    r = np.random.default_rng(7)
+    cols = ["a", "b", "c"]
+    X = pd.DataFrame(np.round(r.uniform(0, 100, (300, 3)), 2), columns=cols)
+    y = np.sin(X.a / 10) * 5 + X.b * X.c / 100 + r.normal(0, 0.1, 300)
+    est = mt.get_regression_models(seed=0, n_rows=300)[kind]
+    pipe = _pipe(est, cols).fit(X, y)
+    form = mx.model_formula(pipe)
+    pts = [r.uniform(-10, 110, (500, 3)), X.to_numpy()]
+    if form["kind"] == "trees":
+        b = np.unique(form["hi"][form["hi"] < mx.OPEN])[:200]
+        for f in range(3):
+            for edge in (b, np.nextafter(b, np.inf), np.nextafter(b, -np.inf), np.array([float("%.15g" % v) for v in b])):
+                P = np.tile(X.median().to_numpy(), (len(edge), 1))
+                P[:, f] = edge
+                pts.append(P)
+    P = pd.DataFrame(np.vstack(pts), columns=cols)
+    want = pipe.predict(P)
+    got = mx.mirror(form, P.to_numpy(dtype=float))
+    np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12)
+
+
+def test_bounds_are_written_with_every_digit(tmp_path):
+    """openpyxl은 숫자를 16자리로 써서 갈림 경계가 움직인다: 잎 시트는 모든 자리(repr)로 써서 다시 읽으면 같은 double."""
+    blocks = [np.array([[194.44514502053806, -1e300], [0.1 + 0.2, 1e300]]), np.full((2, 1), np.nan), np.array([[1 / 3]])]
+    xml = mx._rows_xml(blocks).decode("ascii")
+    assert "194.44514502053806" in xml and "0.30000000000000004" in xml and 'r="C2"' not in xml and 'r="D3"' not in xml
+    assert '<c r="D2" t="n"><v>0.3333333333333333</v></c>' in xml
 
 
 @pytest.mark.skipif(SOFFICE is None, reason="LibreOffice not installed")
-def test_derived_features_stay_inside_the_model(tmp_path):
+def test_derived_features_become_cell_formulas(tmp_path):
+    """파생변수(--eval)는 엑셀 수식 칸으로 계산된다 (함수·거듭제곱·나누기 0이면 모델처럼 중앙값)."""
     r = np.random.default_rng(4)
     n = 300
     df = pd.DataFrame({"a": r.uniform(1, 2, n), "b": r.uniform(1, 2, n)})
-    df["y"] = 3 * df.a * df.b + r.normal(0, 0.05, n)
+    df["y"] = 3 * df.a * df.b + np.log(df.a) + r.normal(0, 0.05, n)
     p = tmp_path / "e.csv"
     df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "--file", str(p), "--features", "a,b", "--targets", "y", "--eval", "ab = a * b")["version_dir"]
-    res = run_tool("ml_export.py", "--model", v, "--inputs", "a,b", "--save", str(tmp_path / "e.xlsx"))
-    t = res["targets"]["y"]
-    assert t["inputs"] == ["a", "b"]                                                     # raw inputs only on the sheet
-    wb = openpyxl.load_workbook(res["output_file"])
-    assert [wb["계산기"][f"B{r}"].value for r in (6, 7)] == ["a", "b"]
-    out = _recalc(res["output_file"], tmp_path)
-    x = [out["계산기"]["C6"].value, out["계산기"]["C7"].value]
-    assert out["계산기"]["C10"].value == pytest.approx(3 * x[0] * x[1], abs=0.15)
+    v = run_tool("ml_train.py", "--file", str(p), "--features", "a,b", "--targets", "y",
+                 "--eval", "ab = a * b; q = log(a) - b ** 2 / (a - 1.5)")["version_dir"]
+    res = run_tool("ml_export.py", "--model", v, "--save", str(tmp_path / "e.xlsx"))
+    assert res["targets"]["y"]["inputs"] == ["a", "b"]                                   # raw inputs only on the sheet
+    src = openpyxl.load_workbook(res["output_file"])
+    assert [src["계산기"][f"B{r}"].value for r in (6, 7)] == ["a", "b"]
+    rows = [(1.2, 1.7), (1.5, 1.3), (1.9, 1.1)]                                          # a = 1.5: division by 0
+    for i, xs in enumerate(rows):
+        src["일괄계산"].cell(row=3 + i, column=1, value=xs[0])
+        src["일괄계산"].cell(row=3 + i, column=2, value=xs[1])
+    src.save(tmp_path / "m.xlsx")
+    out = _recalc(tmp_path / "m.xlsx", tmp_path)
+    want = _model_predict(v, "y", rows)
+    for i in range(3):
+        assert out["일괄계산"][f"C{3 + i}"].value == pytest.approx(want[i], rel=1e-9, abs=1e-9), i
 
 
-def test_several_inputs_and_outputs(tmp_path):
-    """출력마다 자기 입력(학습 순서)을 쓴다 (--inputs 타겟마다). 계산기는 입력의 합집합을 받고, 출력은 자기 입력이 다 차면 계산한다."""
+def test_several_outputs_share_the_inputs(tmp_path):
     r = np.random.default_rng(31)
     n = 300
-    df = pd.DataFrame({"온도": r.uniform(0, 1, n), "압력": r.uniform(0, 1, n), "유량": r.uniform(0, 1, n), "분진": r.uniform(0, 1, n)})
+    df = pd.DataFrame({"온도": r.uniform(0, 1, n), "압력": r.uniform(0, 1, n), "유량": r.uniform(0, 1, n)})
     df["효율"] = 10 * np.sin(3 * df.온도) + r.normal(0, 0.1, n)
     df["전력"] = 5 * df.압력 * df.유량 + 2 * df.유량 + r.normal(0, 0.05, n)
     p = tmp_path / "m.csv"
     df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "--file", str(p), "--features", "온도,압력,유량,분진", "--targets", "효율,전력")["version_dir"]
-    res = run_tool("ml_export.py", "--model", v, "--inputs", "효율=온도;전력=압력,유량", "--save", str(tmp_path / "m.xlsx"))
+    v = run_tool("ml_train.py", "--file", str(p), "--features", "온도,압력,유량", "--targets", "효율,전력")["version_dir"]
+    res = run_tool("ml_export.py", "--model", v, "--save", str(tmp_path / "m.xlsx"))
     assert list(res["targets"]) == ["효율", "전력"]                                       # --targets order
-    assert res["targets"]["효율"]["inputs"] == ["온도"] and res["targets"]["전력"]["inputs"] == ["압력", "유량"]
     wb = openpyxl.load_workbook(res["output_file"])
     calc = wb["계산기"]
-    assert [calc[f"B{r}"].value for r in (6, 7, 8)] == ["온도", "압력", "유량"]          # union in training order, 분진 not given
+    assert [calc[f"B{r}"].value for r in (6, 7, 8)] == ["온도", "압력", "유량"]
     assert [calc[f"B{r}"].value for r in (11, 12)] == ["효율", "전력"]
-    assert "COUNT($C$6)=1" in calc["C11"].value and "COUNT($C$7,$C$8)=2" in calc["C12"].value
-    assert wb.sheetnames[3:5] == ["표_효율", "표_전력"]
+    assert "COUNT($C$6,$C$7,$C$8)=3" in calc["C11"].value
+    assert wb.sheetnames[3:5] == ["모델_효율", "모델_전력"]
+    one = run_tool("ml_export.py", "--model", v, "--targets", "전력", "--save", str(tmp_path / "one.xlsx"))
+    assert list(one["targets"]) == ["전력"]
 
 
 def test_workbook_has_no_full_paths(export_version):
     """<데이터>_ml_data 앞의 폴더 경로(사용자 이름, 회사 폴더)는 개인 정보다: 통합 문서에 넣지 않는다."""
     d, _, vdir = export_version
-    res = run_tool("ml_export.py", "--model", vdir, "--inputs", "온도,유량,농도")
+    res = run_tool("ml_export.py", "--model", vdir)
     wb = openpyxl.load_workbook(res["output_file"])
     parent = os.path.dirname(os.path.dirname(vdir))
     texts = [str(c.value) for ws in wb.worksheets for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
@@ -706,25 +743,12 @@ def test_workbook_has_no_full_paths(export_version):
     assert any(t == os.path.join("s_ml_data", "v1") for t in texts)
 
 
-def test_agreement_basis_near_zero():
-    """0 근처를 지나는 출력은 범위 대비로 비교한다 (아주 작은 값의 %는 의미가 없음)."""
-    import ml_export as ex
-    model = np.linspace(-1, 1, 101)
-    a = ex.agreement(model + 0.02, model, {"residual_lower": -0.1, "residual_upper": 0.1})
-    assert a["basis"] == "출력 범위 대비" and a["agreement_pct"] == pytest.approx(99.0)
-    assert a["within_interval_pct"] == 100.0
-    b = ex.agreement(np.full(10, 101.0), np.full(10, 100.0) + np.arange(10) * 0.0, None)
-    assert b["basis"] == "예측값 대비" and b["agreement_pct"] == pytest.approx(99.0) and b["within_interval_pct"] is None
-
-
-# ---- 성능예측표: 학습 범위, 일정한 입력, 8개 이하 입력, 파생 입력 --------------------------------------
-
-
 def _strings(wb, sheet):
     return " ".join(str(c.value) for row in wb[sheet].iter_rows() for c in row if c.value is not None)
 
 
-def test_calculator_range_ignores_excluded_rows_and_constant_input(tmp_path):
+def test_calculator_range_ignores_excluded_rows_and_keeps_a_constant_input(tmp_path):
+    """학습에서 뺀 행(이상치)은 학습 범위에 넣지 않는다. 값이 하나뿐인 입력도 모델 입력이라 계산기에 남고 warnings로 알린다."""
     r = np.random.default_rng(5)
     n = 300
     df = pd.DataFrame({"반응온도": r.uniform(150, 200, n), "압력": r.uniform(1, 3, n), "pH": 7.0})
@@ -735,192 +759,36 @@ def test_calculator_range_ignores_excluded_rows_and_constant_input(tmp_path):
     v = run_tool("ml_train.py", "--file", str(p), "--features", "반응온도,압력,pH", "--targets", "효율")["version_dir"]
     res = run_tool("ml_export.py", "--model", v, "--save", str(tmp_path / "c.xlsx"))
     t = res["targets"]["효율"]
-    assert "pH" not in t["inputs"] and any("pH" in w for w in res["warnings"])
+    assert t["inputs"] == ["반응온도", "압력", "pH"] and any("pH" in w and "하나뿐" in w for w in res["warnings"])
     wb = openpyxl.load_workbook(res["output_file"])
     text = _strings(wb, "계산기") + _strings(wb, "일괄계산") + _strings(wb, "정보")
     assert "2000" not in text and "1999" not in text                       # range / out-of-range checks use 150~200
+    assert wb["계산기"]["C8"].value == 7.0
 
 
-def test_constant_input_is_dropped_with_hint(tmp_path):
-    r = np.random.default_rng(6)
-    df = pd.DataFrame({"a": r.uniform(0, 1, 200), "k": 1.0})
-    df["y"] = 3 * df.a + r.normal(0, 0.05, 200)
-    p = tmp_path / "k.csv"
-    df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "--file", str(p), "--features", "a,k", "--targets", "y")["version_dir"]
-    bad = run_fail("ml_export.py", "--model", v, "--inputs", "k")
-    # 2.9.33: [후보] (another input set is the user's choice), was "[추천] a"
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "[후보] 1) a" in bad["message"] and "[추천]" not in bad["message"]
-    # 입력을 정하지 않으면 값이 하나뿐인 k만 빼고(warnings) 나머지로 한 번 다시 학습
-    proc, ok = run_raw("ml_export.py", "--model", v, "--save", str(tmp_path / "k.xlsx"))
-    ok_res(ok, proc)
-    t = ok["targets"]["y"]
-    assert t["inputs"] == ["a"] and t["dropped"] == ["k"] and "값이 하나뿐인 입력만 뺌" in t["reason"], t
-    assert any("k" in w for w in ok["warnings"]) and "후보 학습: 새로 1개" in proc.stderr
-
-
-@pytest.mark.skipif(SOFFICE is None, reason="LibreOffice not installed")
-def test_eight_inputs_use_range_sums_and_recalculate(tmp_path):
-    r = np.random.default_rng(8)
-    n = 400
-    cols = [f"x{i}" for i in range(8)]
-    df = pd.DataFrame({c: r.uniform(0, 1, n) for c in cols})
-    df["y"] = sum((i + 1) * df[c] for i, c in enumerate(cols)) + r.normal(0, 0.05, n)
-    p = tmp_path / "e.csv"
-    df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "--file", str(p), "--features", ",".join(cols), "--targets", "y")["version_dir"]
-    res = run_tool("ml_export.py", "--model", v, "--inputs", ",".join(cols), "--save", str(tmp_path / "e.xlsx"))
-    wb = openpyxl.load_workbook(res["output_file"])
-    sums = [c.value for row in wb["계산기"].iter_rows() for c in row if isinstance(c.value, str) and "SUM(" in c.value]
-    assert sums and all(s.count(",") < 255 for s in sums)
-    out = _recalc(res["output_file"], tmp_path)
-    x = [out["계산기"][f"C{6 + i}"].value for i in range(8)]
-    want = float(_grid(openpyxl.load_workbook(res["output_file"]), "표_y", 8)([x])[0])
-    assert out["계산기"][f"C{5 + 8 + 3}"].value == pytest.approx(want, abs=1e-9)
-
-
-def test_derived_sources_are_whole_names_and_chains_drop_together():
-    raw = ["온도", "반응온도", "압력"]
-    evals = ["t2 = 반응온도 * 반응온도", "tp = t2 * 압력"]
-    assert mx.evals_for(["반응온도", "압력"], evals, raw) == evals            # '온도' is not inside '반응온도'
-    assert mx.evals_for(["온도", "압력"], evals, raw) == []                    # t2 dropped -> tp dropped
-
-
-def test_export_constant_inputs_candidates(name_files):
-    proc, res = run_raw("ml_train.py", "--file", name_files["const"], "--features", "온도,압력,라인", "--targets", "수율")
-    ok_res(res, proc)
-    proc, res = run_raw("ml_export.py", "--model", os.path.join(str(name_files["tmp"]), "const_ml_data", "v1"), "--inputs", "라인")
-    msg = stop_msg(res, proc)
-    assert "[추천]" not in msg and "[후보] 1) 온도 2) 압력" in msg, msg
-
-
-@pytest.fixture(scope="module")
-def nine(tmp_path_factory):
-    work = tmp_path_factory.mktemp("nine")
-    r = np.random.default_rng(9)
-    cols = [f"x{i}" for i in range(9)]
-    df = pd.DataFrame(r.uniform(0, 1, (120, 9)), columns=cols)
-    df["y"] = sum((i + 1) * df[c] for i, c in enumerate(cols)) + r.normal(0, 0.05, 120)
-    p = work / "nine.csv"
-    df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "--file", str(p), "--features", ",".join(cols), "--targets", "y")["version_dir"]
-    return {"work": work, "v": v, "cols": cols}
-
-
-def _run_confirm(item):
-    argv = split_command(item["command"])
-    assert argv[0] == "python" and os.path.basename(argv[1]) == "ml_export.py", argv
-    return argv, run_raw(os.path.basename(argv[1]), *argv[2:])
-
-
-def test_more_than_eight_inputs_asks_with_candidates(nine):
-    """2.9.83: 입력이 8개를 넘으면 만들지 않고 줄인 안을 [후보] + 같은 번호의 confirm_commands(--inputs)로 준다
-    (사용자가 학습에 준 입력을 빼는 일이라 사용자가 정함, 2.9.82까지 [추천]). 그 명령은 그대로 실행된다."""
-    for extra in ((), ("--inputs", ",".join(nine["cols"]))):
-        bad = run_fail("ml_export.py", "--model", nine["v"], *extra)
-        msg = bad["message"]
-        assert bad["agent_directive"].startswith("STOP_RETRY") and bad["error_type"] == "needs_user_decision", bad
-        assert "[후보] 1) " in msg and "[추천]" not in msg and "9개 -> 8개" in msg and "뺄 입력: " in msg, msg
-        assert len(bad["confirm_commands"]) == 1
-        argv = split_command(bad["confirm_commands"][0]["command"])
-        rec = argv[argv.index("--inputs") + 1].split(",")
-        assert argv.count("--inputs") == 1 and len(rec) == 8 and set(rec) < set(nine["cols"]), argv
-        assert not list(nine["work"].glob("nine_ml_data/*.xlsx"))
-    argv, (proc, res) = _run_confirm(bad["confirm_commands"][0])
-    ok_res(res, proc)
-    assert res["targets"]["y"]["inputs"] == rec and "후보 학습: 새로 0개" in proc.stderr          # 찾을 때 학습한 안을 다시 씀
-
-
-@pytest.fixture(scope="module")
-def nine2(tmp_path_factory):
-    work = tmp_path_factory.mktemp("nine2")
-    r = np.random.default_rng(9)
-    cols = [f"x{i}" for i in range(9)]
-    df = pd.DataFrame(r.uniform(0, 1, (120, 9)), columns=cols)
-    df["ya"] = sum((i + 1) * df[c] for i, c in enumerate(cols)) + r.normal(0, 0.05, 120)
-    df["yb"] = 3 * df.x0 + 2 * df.x1 + r.normal(0, 0.05, 120)
-    p = work / "nine2.csv"
-    df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "--file", str(p), "--features", ",".join(cols), "--targets", "ya,yb")["version_dir"]
-    return {"work": work, "v": v, "cols": cols}
-
-
-def test_inputs_over_eight_asks_for_every_target(nine2):
-    spec = f"ya={','.join(nine2['cols'])};yb=x0,x1"
-    bad = run_fail("ml_export.py", "--model", nine2["v"], "--inputs", spec)
-    assert "[후보] 1) " in bad["message"] and "[추천]" not in bad["message"] and bad["error_type"] == "needs_user_decision"
-    argv = split_command(bad["confirm_commands"][0]["command"])
-    rec = argv[argv.index("--inputs") + 1]
-    parts = dict(p.split("=", 1) for p in rec.split(";"))
-    assert parts["yb"] == "x0,x1"                                              # 2.9.12: ya=... only
-    assert 1 <= len(parts["ya"].split(",")) <= 8
-    # --inputs 없이: 두 타겟 모두 입력 9개라 한 [후보]에 둘 다 줄인 안
-    both = run_fail("ml_export.py", "--model", nine2["v"])
-    assert "'ya' 9개 -> 8개" in both["message"] and "'yb' 9개 -> 8개" in both["message"], both["message"]
-    argv = split_command(both["confirm_commands"][0]["command"])
-    parts = dict(p.split("=", 1) for p in argv[argv.index("--inputs") + 1].split(";"))
-    assert set(parts) == {"ya", "yb"} and all(len(v.split(",")) == 8 for v in parts.values()), parts
-
-
-def test_inputs_spec_safe():
-    assert mx.spec_safe({"y": ["a", "b"]})
-    assert not mx.spec_safe({"y": ["a,b", "c"]}) and not mx.spec_safe({"y=1": ["a"]}) and not mx.spec_safe({"y": ["a;b"]})
-
-
-def test_spec_safe_single_target_ignores_target_name():
-    assert mx.spec_safe({"y=1,a": ["a", "b"]}, single=True)                    # 2.9.13: False
-    assert not mx.spec_safe({"y": ["a,b"]}, single=True) and not mx.spec_safe({"y": ["a=b"]}, single=True)
-    assert not mx.spec_safe({"y=1": ["a"]}) and not mx.spec_safe({"y": ["a;b"]})
-
-
-# ---- 성능예측표: 타겟마다 입력, --overwrite, 작은 값의 정밀도, 시트 이름 ----------------------
-
-
-@pytest.fixture(scope="module")
-def two_export(tmp_path_factory):
-    """ya = a, b / yb = a, c인 데이터를 입력 a, b, c로 학습한 버전 (타겟 2개)."""
-    work = tmp_path_factory.mktemp("two")
-    r = np.random.default_rng(2)
-    n = 150
-    df = pd.DataFrame({"a": r.uniform(0, 1, n), "b": r.uniform(0, 1, n), "c": r.uniform(0, 1, n)})
-    df["ya"] = 3 * df.a + 2 * df.b + r.normal(0, 0.02, n)
-    df["yb"] = 2 * df.a + 4 * df.c + r.normal(0, 0.02, n)
-    p = work / "two.csv"
-    df.to_csv(p, index=False)
-    tr = run_tool("ml_train.py", "--file", str(p), "--features", "a,b,c", "--targets", "ya,yb")
-    return {"work": work, "v": tr["version_dir"]}
-
-
-def test_inputs_for_one_target_keeps_every_input_of_the_other(two_export):
-    """--inputs에 한 타겟만 적으면 다른 타겟은 버전의 입력을 모두 넣고(버전의 모델 그대로) warnings로 알린다."""
-    proc, res = run_raw("ml_export.py", "--model", two_export["v"], "--inputs", "ya=a,b", "--save", str(two_export["work"] / "k.xlsx"))
-    ok_res(res, proc)
-    assert res["targets"]["ya"]["inputs"] == ["a", "b"] and res["targets"]["yb"]["inputs"] == ["a", "b", "c"]
-    assert any("yb" in w and "모두" in w for w in res["warnings"]), res["warnings"]
-    assert "그대로" in res["targets"]["yb"]["reason"] and "후보 학습: 새로 1개" in proc.stderr       # ya만 학습
-    assert res["next_commands"] == [] and res["truncated"] is False
-
-
-def test_plain_inputs_list_per_target(two_export):
-    """타겟 이름 없는 목록은 모든 타겟에 같은 입력."""
-    res = run_tool("ml_export.py", "--model", two_export["v"], "--inputs", "a,c", "--save", str(two_export["work"] / "p.xlsx"))
-    assert res["targets"]["ya"]["inputs"] == ["a", "c"] and res["targets"]["yb"]["inputs"] == ["a", "c"]
-    bad = run_fail("ml_export.py", "--model", two_export["v"], "--inputs", "zzz")
-    assert bad["agent_directive"].startswith("STOP_RETRY")
-
-
-def test_export_and_map_overwrite(two_export, tmp_path):
-    save = str(two_export["work"] / "ow.xlsx")
-    first = run_tool("ml_export.py", "--model", two_export["v"], "--inputs", "a", "--save", save)
-    second = run_tool("ml_export.py", "--model", two_export["v"], "--inputs", "a", "--save", save)
+def test_export_and_map_overwrite(export_version, tmp_path):
+    d, _, vdir = export_version
+    save = str(d / "ow.xlsx")
+    first = run_tool("ml_export.py", "--model", vdir, "--save", save)
+    second = run_tool("ml_export.py", "--model", vdir, "--save", save)
     assert second["output_file"] != first["output_file"] and second.get("recovered")
-    third = run_tool("ml_export.py", "--model", two_export["v"], "--inputs", "a", "--save", save, "--overwrite")
+    third = run_tool("ml_export.py", "--model", vdir, "--save", save, "--overwrite")
     assert third["output_file"] == first["output_file"] and not third.get("recovered")
     p = tmp_path / "g.csv"
     pd.DataFrame({"A": [0.0, 10, 20], "C": [1.0, 2, 3]}).to_csv(p, index=False)
     m1 = run_tool("ml_map.py", "--file", str(p), "--input", "A=5", "--save", "out.xlsx")
     m2 = run_tool("ml_map.py", "--file", str(p), "--input", "A=5", "--save", "out.xlsx", "--overwrite")
     assert m1["output_file"] == m2["output_file"]
+
+
+def test_too_many_leaves_is_stopped(export_version, monkeypatch):
+    _, _, vdir = export_version
+    monkeypatch.setattr(mx, "MAX_LEAVES", 10)
+    form = mx.model_formula(mx.load_pipe(vdir, json.load(open(os.path.join(vdir, "model_효율.json"), encoding="utf-8"))))
+    if form["kind"] != "trees":
+        pytest.skip("champion is a linear model")
+    with pytest.raises(rt.InputError, match="잎"):
+        mx.execute_export(argparse.Namespace(model=vdir, targets=None, title=None, save=None, overwrite=False))
 
 
 def test_value_format_follows_magnitude():
@@ -940,117 +808,40 @@ def test_tiny_target_calculator_keeps_precision(tmp_path):
     v = run_tool("ml_train.py", "--file", str(p), "--features", "a,b", "--targets", "y")["version_dir"]
     meta = json.load(open(os.path.join(v, "model_y.json"), encoding="utf-8"))
     assert meta["prediction_interval"]["residual_upper"] != 0                     # was rounded to 6 decimals
-    res = run_tool("ml_export.py", "--model", v, "--inputs", "a,b", "--save", str(tmp_path / "tiny.xlsx"))
+    res = run_tool("ml_export.py", "--model", v, "--save", str(tmp_path / "tiny.xlsx"))
     t = res["targets"]["y"]
-    assert t["rmse"] > 0 and t["agreement"]["agreement_pct"] > 99
-    wb = openpyxl.load_workbook(res["output_file"])
-    grid = np.array([row[2] for row in wb["표_y"].iter_rows(min_row=2, max_col=3, values_only=True)], dtype=float)
-    assert grid.min() > 1e-6 and len(np.unique(grid)) > 100                     # not rounded to 0.000002 steps
-    calc = wb["계산기"]
+    assert t["rmse"] > 0 and t["check"]["max_rel_pct"] < 1e-6
+    calc = openpyxl.load_workbook(res["output_file"])["계산기"]
     cells = [c for row in calc.iter_rows() for c in row if isinstance(c.value, str) and c.value.startswith("=IF(COUNT(")]
     assert any(c.number_format == "0.000E+00" for c in cells)
     assert any('TEXT(' in str(c.value) and '"0.000E+00"' in str(c.value) for row in calc.iter_rows() for c in row)
 
 
-class _SumModel:
-    def predict(self, X):
-        return np.asarray(X, dtype=float).sum(axis=1)
-
-
-@pytest.mark.parametrize("k", [6, 8])
-def test_uncovered_threshold_does_not_flag_training_rows(k):
+@pytest.mark.parametrize("k", [2, 6])
+def test_uncovered_threshold_follows_the_data(k):
+    """'실측 없는 영역' 기준은 학습 행끼리의 간격에 맞춘다: 학습 행 근처는 거의 표시하지 않고(입력이 많아 데이터가 성겨도),
+    학습 범위 안이지만 실측이 없는 구석은 표시한다."""
+    from scipy.spatial import cKDTree
     r = np.random.default_rng(k)
     cols = [f"x{i}" for i in range(k)]
     data = pd.DataFrame(r.uniform(0, 1, (400, k)), columns=cols)
     data.iloc[:, 0] *= 0.5                                   # no measured data for x0 > 0.5 ...
     data.iloc[:3, :] = 0.0
     data.iloc[:3, 0] = 1.0                                   # ... except one corner, so the range of x0 is 0~1
-    cand = {"inputs": cols, "evals": [], "pipe": _SumModel(), "interval": None,
-            "schema": {"numeric": cols, "categorical": {}, "datetime": {}, "input_columns": cols}}
-    tab = mx.build_grid(cand, data)
-    f = RegularGridInterpolator(tab["axes"], tab["dist"].reshape([tab["n"]] * k))
-    lo, span = tab["lo"], tab["hi"] - tab["lo"]
-    at_rows = f(np.clip(data.to_numpy(), lo, tab["hi"]))
-    assert (at_rows > tab["uncovered_dist"]).mean() < 0.05             # 2.9.11: 75-100% of training rows flagged
-    q = r.uniform(0, 1, (500, k)) * span + lo
-    q[:, 0] = 0.9 + 0.1 * r.uniform(0, 1, 500)                # x0 0.9~1: inside the range, no measured rows near
-    assert (f(q) > tab["uncovered_dist"]).mean() > 0.9
+    T = data.to_numpy()
+    th = mx.uncovered_distance(T, data, cols)
+    near = T[3:] + r.normal(0, 0.01, T[3:].shape)
+    assert (cKDTree(T).query(near)[0] > th).mean() < 0.1
+    q = 0.3 + 0.7 * r.uniform(0, 1, (500, k))               # away from the corner rows (x0 = 1, others 0)
+    q[:, 0] = 0.9 + 0.1 * r.uniform(0, 1, 500)
+    assert (cKDTree(T).query(q)[0] > th).mean() > 0.9
 
 
 def test_sheet_names_unique_without_case():
     used = {"계산기"}
-    a = mx._sheet_name("표_", "Temp", used)
-    b = mx._sheet_name("표_", "TEMP", used)
+    a = mx._sheet_name("모델_", "Temp", used)
+    b = mx._sheet_name("모델_", "TEMP", used)
     assert a.lower() != b.lower()
-
-
-# ---- 명령 시간 제한 (2.9.40): 나눠서 진행 ---------------------------------------------------------------------------
-# OpenCode는 명령을 120초에 끊는다 (회사 PC Gemma 시험 R1, R2: 보고서와 성능예측표가 결과 JSON 없이 끊김).
-# 성능예측표가 다시 학습할 때(입력이 8개를 넘어 줄인 안 찾기, 2.9.83) 후보 학습을 하나씩 저장하고, 시간 제한
-# (ML_KIT_TIME_LIMIT, 기본 100초)에 닿기 전에 CONTINUE 결과로 멈춘다. 같은 명령을 다시 실행하면 저장된 후보를 쓰고 이어서 학습한다.
-
-
-def _nine_inputs_version(tmp_path, n=80):
-    """입력 9개 버전 (성능예측표가 8개 이하 안을 찾느라 후보를 여러 개 학습함)."""
-    r = np.random.default_rng(19)
-    cols = [f"x{i}" for i in range(9)]
-    df = pd.DataFrame(r.uniform(0, 1, (n, 9)), columns=cols)
-    df["y"] = 4 * df.x0 + 3 * df.x1 + 2 * df.x2 + r.normal(0, 0.05, n)
-    p = tmp_path / "t9.csv"
-    df.to_csv(p, index=False)
-    return run_tool("ml_train.py", "--file", str(p), "--features", ",".join(cols), "--targets", "y")
-
-
-def _continue_runs(vdir, limit=20):
-    runs = []
-    for _ in range(limit):
-        proc, out = run_raw("ml_export.py", "--model", vdir)
-        runs.append((proc, out))
-        if not out.get("continue"):
-            break
-    return runs
-
-
-def test_export_stops_at_time_limit_and_the_same_command_continues(tmp_path, monkeypatch):
-    tr = _nine_inputs_version(tmp_path)
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")         # 여유 30초를 빼면 0.5초: 실행마다 후보 1개만 학습
-    runs = _continue_runs(tr["version_dir"])
-    (_, first), (lproc, last) = runs[0], runs[-1]
-    assert len(runs) >= 3 and all(o.get("continue") and p.returncode == 0 for p, o in runs[:-1]), [o.get("progress") for _, o in runs]
-    assert first["agent_directive"].startswith("CONTINUE:") and first["verified"] is False and "1개 학습 저장됨" in first["progress"]
-    cmd = first["next_commands"][0]
-    assert cmd.startswith("python ") and "ml_export.py" in cmd and os.path.abspath(tr["version_dir"]) in cmd
-    # 찾기가 끝나면 줄인 안을 [후보]로 (만들지 않음)
-    assert lproc.returncode == 1 and not last.get("continue") and last["error_type"] == "needs_user_decision", last
-    assert "[후보] 1) " in last["message"] and last["confirm_commands"]
-    assert len(os.listdir(os.path.join(tr["version_dir"], "export", "_fits"))) >= len(runs)   # 후보마다 저장
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
-    proc, again = run_raw("ml_export.py", "--model", tr["version_dir"])
-    assert "새로 0개" in proc.stderr                              # 모든 후보를 저장된 것으로
-    assert again["confirm_commands"] == last["confirm_commands"]
-
-
-def test_export_blocked_fit_cache_continues_in_fallback(tmp_path, monkeypatch):
-    """3차 검토(2.9.63): _fits에 저장하지 못하면 나누지 않고 끝까지 진행해 120초를 넘겼다. 이제 대체 위치에 저장하고
-    CONTINUE로 이어 가며(recovered), 끝나면 대체 위치를 지운다."""
-    tr = _nine_inputs_version(tmp_path)
-    fits = os.path.join(tr["version_dir"], "export", "_fits")
-    os.makedirs(os.path.dirname(fits), exist_ok=True)
-    with open(fits, "w", encoding="utf-8") as f:
-        f.write("not a folder")
-    fb = rt.resume_places(fits)[1]
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "30.5")
-    runs = _continue_runs(tr["version_dir"])
-    first, (lproc, last) = runs[0][1], runs[-1]
-    assert len(runs) >= 2 and first["agent_directive"].startswith("CONTINUE:"), [o.get("progress") for _, o in runs]
-    assert any("대체 위치" in r and os.path.basename(fb) in r for r in first.get("recovered", [])), first
-    assert not last.get("continue") and last["error_type"] == "needs_user_decision", last
-    # 줄인 안의 명령(--inputs)으로 만들면 끝날 때 대체 위치를 지운다
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
-    proc, made = _run_confirm(last["confirm_commands"][0])[1]
-    ok_res(made, proc)
-    assert made["output_file"] and not made.get("continue")
-    assert not os.path.exists(fb) and os.path.isfile(fits)
 
 
 def test_unfinished_passes_through_the_reports_optional_workbook(monkeypatch, with_export):
@@ -1064,26 +855,6 @@ def test_unfinished_passes_through_the_reports_optional_workbook(monkeypatch, wi
     monkeypatch.setattr(ml_export, "execute_export", stop)
     with pytest.raises(rt.Unfinished):
         ml_report.make_export("v", "regression", None)
-
-
-def test_fit_subset_step_labels_are_unique(monkeypatch):
-    """2.9.69 회귀: 같은 타겟의 같은 개수 다른 입력 조합도 진행 문구(감시가 내는 progress)가 서로 다르다 (후보 번호).
-    예전에는 둘 다 'y' 입력 2개 학습이라 CONTINUE 반복이 같은 progress 2번으로 보여 멈출 수 있었다."""
-    seen = []
-
-    def fake_train(**kw):
-        seen.append(rt.CURRENT_STEP.get("label"))
-        return None, None, {"val_r2": 0.9, "rmse": 1.0, "champion_model": "Ridge"}, None
-    monkeypatch.setattr(mx.mt, "train_and_benchmark_models", fake_train)
-    monkeypatch.setattr(mx, "FIT_CACHE", None)
-    monkeypatch.setattr(mx, "_FIT_STATS", {"reused": 0, "trained": 0})
-    monkeypatch.setattr(mx, "_FIT_SECONDS", [])
-    monkeypatch.setenv("ML_KIT_TIME_LIMIT", "0")
-    data = pd.DataFrame({"a": [1.0, 2, 3, 4], "b": [2.0, 1, 4, 3], "c": [5.0, 3, 1, 2], "y": [1.0, 2, 3, 4]})
-    mx.fit_subset(data, "y", ["a", "b"], [], ["a", "b", "c"])
-    mx.fit_subset(data, "y", ["a", "c"], [], ["a", "b", "c"])
-    assert len(seen) == 2 and seen[0] != seen[1], seen
-    assert "후보 1번째" in seen[0] and "후보 2번째" in seen[1]
 
 
 def test_time_limit_setting(monkeypatch):
