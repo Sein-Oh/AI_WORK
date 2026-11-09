@@ -51,7 +51,6 @@ UNCOVERED_Q = 0.95        #   than this share of training rows are from their ow
 BATCH_ROWS = 500          # pre-filled rows on the 일괄계산 sheet
 CHECK_POINTS = 2000       # random conditions of the model check (plus every training row)
 EXCEL_CHECKS = 50         # random conditions recalculated in Excel itself (Windows, one recalculation for all)
-EXCEL_MIN_CHECKS = 10     # --minimal (no 일괄계산 sheet): conditions put in the calculator one at a time
 TITLE_MAX = 40
 OPEN = 1e300              # bound of a leaf box that has no limit on a feature
 TREE_MODELS = ("RandomForestRegressor", "ExtraTreesRegressor")
@@ -437,8 +436,7 @@ def method_text(form: Dict[str, Any]) -> str:
     return f"{form['model_class']} 나무 {form['trees']}개의 잎 {len(form['value']):,}개 그대로"
 
 
-def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dict[str, Any]], minimal: bool = False) -> str:
-    """minimal (--minimal): only 계산기 and the hidden model sheets (no 일괄계산, 사용법, 정확도, 정보)."""
+def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dict[str, Any]]) -> str:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
     from openpyxl.formatting.rule import FormulaRule
@@ -633,8 +631,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     calc[f"B{note_row}"].alignment = Alignment(wrap_text=True, vertical="top")
     calc[f"B{note_row}"].value = ("예측값은 학습한 모델과 같은 계산입니다 (모델을 수식으로 그대로 옮김). "
                                   "90% 범위: 실제 값이 이 범위에 들 가능성이 약 90%입니다. "
-                                  "학습 범위 밖이거나 실측 데이터가 없는 영역의 값은 참고용입니다."
-                                  + ("" if minimal else " 자세한 내용은 '사용법' 시트를 보세요."))
+                                  "학습 범위 밖이거나 실측 데이터가 없는 영역의 값은 참고용입니다.")
     calc.print_area = f"B2:F{note_row + 3}"
     calc.sheet_properties.pageSetUpPr.fitToPage = True
     calc.page_setup.fitToWidth = 1
@@ -754,12 +751,6 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         style(info.cell(row=i, column=3, value=b), border=False)
     info.column_dimensions["B"].width = 24
     info.column_dimensions["C"].width = 100
-
-    if minimal:                               # the calculator alone (the model sheets stay: its formulas read them)
-        for ws in (batch, howto, acc, info):
-            wb.remove(ws)
-        for p in plans:
-            p.pop("batch_inputs", None)
 
     # -- protection (no password): only the yellow cells are editable; structure fixed --------------
     for ws in wb.worksheets:
@@ -883,8 +874,7 @@ def verify_workbook(path: str, plans: List[Dict[str, Any]]) -> List[str]:
     except Exception as e:
         return [f"저장한 파일을 다시 열지 못함: {e}"]
     try:
-        names = (["계산기"] if "batch_inputs" not in plans[0] else ["계산기", "일괄계산", "사용법", "정확도", "정보"]) \
-            + [p["sheet"] for p in plans]
+        names = ["계산기", "일괄계산", "사용법", "정확도", "정보"] + [p["sheet"] for p in plans]
         problems += [f"'{n}' 시트 없음" for n in names if n not in wb.sheetnames]
         with zipfile.ZipFile(path) as z:        # openpyxl writes the i-th sheet as sheet<i>.xml
             for i, n in enumerate(wb.sheetnames, 1):
@@ -957,32 +947,20 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
         xl.Visible = False
         xl.DisplayAlerts = False
         wb = xl.Workbooks.Open(os.path.abspath(path), ReadOnly=True)
-        calc = wb.Worksheets("계산기")
-        batch = wb.Worksheets("일괄계산") if any("batch_inputs" in p for p in plans) else None
+        calc, batch = wb.Worksheets("계산기"), wb.Worksheets("일괄계산")
         problems = []
         for p in plans:
             P = pd.concat([p["points"].sample(EXCEL_CHECKS, random_state=1), edge_points(p)], ignore_index=True)
             want = predict_frame(p["cand"], P)
             n = len(P)
-            if "batch_inputs" in p:
-                for c, col in p["batch_inputs"].items():
-                    batch.Range(batch.Cells(3, col), batch.Cells(2 + n, col)).Value = tuple((float(v),) for v in P[c])
-                for c in p["cand"]["inputs"]:
-                    calc.Range(p["input_cells"][c]).Value = float(P.at[0, c])
-                xl.Calculate()
-                got = [r[0] for r in batch.Range(batch.Cells(3, p["batch_pred_col"]), batch.Cells(2 + n, p["batch_pred_col"])).Value]
-                got.append(calc.Range(p["calc_cell"]).Value)
-                wants, wheres = list(want) + [want[0]], [f"일괄계산 {i + 3}행" for i in range(n)] + ["계산기"]
-            else:                             # --minimal: the calculator alone, one condition at a time (few)
-                got, k = [], min(n, EXCEL_MIN_CHECKS)
-                order = list(range(EXCEL_CHECKS, n)) + list(range(min(EXCEL_CHECKS, n)))   # the bound conditions first
-                for i in order[:k]:
-                    for c in p["cand"]["inputs"]:
-                        calc.Range(p["input_cells"][c]).Value = float(P.at[i, c])
-                    xl.Calculate()
-                    got.append(calc.Range(p["calc_cell"]).Value)
-                wants, wheres = [want[i] for i in order[:k]], ["계산기"] * k
-            for g, w, where in zip(got, wants, wheres):
+            for c, col in p["batch_inputs"].items():
+                batch.Range(batch.Cells(3, col), batch.Cells(2 + n, col)).Value = tuple((float(v),) for v in P[c])
+            for c in p["cand"]["inputs"]:
+                calc.Range(p["input_cells"][c]).Value = float(P.at[0, c])
+            xl.Calculate()
+            got = [r[0] for r in batch.Range(batch.Cells(3, p["batch_pred_col"]), batch.Cells(2 + n, p["batch_pred_col"])).Value]
+            got.append(calc.Range(p["calc_cell"]).Value)
+            for g, w, where in zip(got, list(want) + [want[0]], [f"일괄계산 {i + 3}행" for i in range(n)] + ["계산기"]):
                 if not isinstance(g, (int, float)) or abs(float(g) - w) > 1e-9 * (abs(w) + 1.0):
                     problems.append(f"'{p['target']}' 엑셀 계산({where}) {g} != 모델 {w:.10g}")
                     break
@@ -1061,8 +1039,7 @@ def execute_export(args) -> Dict[str, Any]:
     # same folder as the report and history.jsonl (<data>_ml_data), name paired with ML결과보고서_<data>_<version>.docx
     data_root = os.path.dirname(vinfo["dir"])
     stem = re.sub(r"_ml_data$", "", os.path.basename(data_root)) or "모델"
-    minimal = bool(getattr(args, "minimal", False))
-    default = os.path.join(data_root, f"성능예측표_{stem}_{os.path.basename(vinfo['dir'])}{'_최소' if minimal else ''}.xlsx")
+    default = os.path.join(data_root, f"성능예측표_{stem}_{os.path.basename(vinfo['dir'])}.xlsx")
     path = args.save if args.save else default
     if args.save and not os.path.isabs(path):
         path = os.path.join(data_root, path)
@@ -1070,7 +1047,7 @@ def execute_export(args) -> Dict[str, Any]:
         path += ".xlsx"
     path = avoid_overwrite(os.path.abspath(path), getattr(args, "overwrite", False), what="성능예측표")
     progress("엑셀 파일 작성")
-    real = write_workbook(path, title, vinfo, plans, minimal)
+    real = write_workbook(path, title, vinfo, plans)
     mark_committed(f"성능예측표 {os.path.basename(real)}", output_file=real)   # a stop now: saved, not CONTINUE
     progress("저장한 파일 확인")
     problems = verify_workbook(real, plans)
@@ -1094,9 +1071,7 @@ def execute_export(args) -> Dict[str, Any]:
     brief = "; ".join(f"{t}: 입력 {len(v['inputs'])}개 ({', '.join(strip_unit(i) for i in v['inputs'])}), {v['model']}, "
                       f"검증 R² {v['val_r2']}, 모델과 같은 계산 (조건 {v['check']['points']:,}개 확인)"
                       for t, v in out_targets.items())
-    if minimal:
-        brief += " | 최소판 (계산기 시트만)"
-    res = {"status": "ok", "output_file": real, "title": title, "targets": out_targets, "minimal": minimal,
+    res = {"status": "ok", "output_file": real, "title": title, "targets": out_targets,
            "verified": not unverified, "preview": f"성능예측표 생성: {brief}"}
     if warnings:
         res["warnings"] = warnings
@@ -1118,8 +1093,6 @@ def main():
     parser.add_argument("--save", help="저장 경로 (.xlsx, 생략 시 보고서와 같은 <데이터>_ml_data 폴더에 성능예측표_<데이터>_<버전>.xlsx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
-    parser.add_argument("--minimal", action="store_true",
-                        help="최소판: 계산기 시트만 (일괄계산, 사용법, 정확도, 정보 시트 없음). 이름 끝에 _최소")
     args = parser.parse_args()
     run_cli(lambda: execute_export(args), hint="확인할 것: 버전 폴더 경로.")
 
