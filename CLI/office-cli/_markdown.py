@@ -80,6 +80,44 @@ def front_matter_lines(text: str) -> int:
     return 0
 
 
+# 줄 머리 기호를 글자 그대로 쓰는 표기 (CommonMark 역슬래시): '\# 글', '\- 글', '\| a', '1\. 글'
+_ESCAPED = re.compile(r"^\\([#\-*+|>`~_])|^(\d{1,3})\\(?=[.)])")
+_NEEDS_ESCAPE = re.compile(r"^(?:#{1,6}(?:\s|$)|[-*+](?:\s|$)|\||>|`{3}|~{3}|(?:-{3,}|\*{3,}|_{3,})$)")
+
+
+def escape_line(text: str) -> str:
+    """글 한 줄을 마크다운으로 쓸 때 줄 머리 기호가 제목·목록·표·구분선으로 읽히지 않게 (parse_markdown_blocks가 되돌림)."""
+    s = text.strip()
+    m = MD_NUMBERED.match(s)
+    if m:
+        k = m.end(1)
+        return s[:k] + "\\" + s[k:]
+    return "\\" + s if _NEEDS_ESCAPE.match(s) else s
+
+
+def document_markdown(blocks: List[Tuple[str, Any]]) -> str:
+    """('heading', (수준, 글)), ('paragraph', 글), ('table', [[칸]])을 parse_markdown_blocks가 같은 블록으로 되읽는 마크다운으로
+    (word.py·ppt.py read --save -> write --file 왕복: 제목은 # 수준, 단락은 빈 줄로 나눈 한 줄, 표는 마크다운 표, 2026-11-09 검토 A12)."""
+    out: List[str] = []
+    for kind, value in blocks:
+        if kind == "heading":
+            level, text = value
+            out += ["#" * max(1, min(6, int(level))) + " " + " ".join(str(text).split()), ""]
+        elif kind == "table":
+            rows = [[str(c).replace("|", "\\|").replace("\n", " ").strip() for c in r] for r in value]
+            width = max(len(r) for r in rows)
+            rows = [r + [""] * (width - len(r)) for r in rows]
+            out.append("| " + " | ".join(rows[0]) + " |")
+            out.append("|" + "---|" * width)
+            out += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+            out.append("")
+        else:
+            text = " ".join(str(value).split())
+            if text:
+                out += [escape_line(text), ""]
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
 def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
     """마크다운을 블록 목록으로 바꿉니다.
     ('heading', (레벨, 텍스트)), ('paragraph', 텍스트), ('bullets', [항목]), ('numbered', [항목]),
@@ -104,6 +142,11 @@ def parse_markdown_blocks(text: str) -> List[Tuple[str, Any]]:
         s = lines[i].strip()
         if not s:
             flush()
+            i += 1
+            continue
+        esc = _ESCAPED.match(s)
+        if esc:                                     # '\# 글', '1\. 글': 기호를 글자 그대로 (제목·목록·표로 읽지 않음)
+            para.append((esc.group(1) or esc.group(2)) + s[esc.end():])
             i += 1
             continue
         fence = _FENCE.match(s)

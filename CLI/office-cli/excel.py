@@ -294,12 +294,21 @@ def range_info(rng: Any) -> Dict[str, Any]:
 # 3. read / info
 # ==============================================================================
 
-def _closed_bounds(ws: Any) -> Tuple[int, int, int, int]:
+def _closed_bounds(ws: Any, path: Optional[str] = None) -> Tuple[int, int, int, int]:
     """닫힌 시트의 데이터 범위 (첫 행, 첫 열, 끝 행, 끝 열). 빈 시트는 (1, 1, 0, 0).
     크기 정보(<dimension>)가 없는 파일(다른 프로그램이 만든 xlsx)은 칸을 훑어 실제 범위를 셉니다
-    (B:B가 B:D로, 5:7이 끝 열 없이 읽히지 않게)."""
+    (B:B가 B:D로, 5:7이 끝 열 없이 읽히지 않게). 크기 정보가 실제보다 작은 파일(A1:B5인데 11행까지 있음)은 시트 XML에서
+    내용이 있는 마지막 칸까지 넓힙니다 (전에는 앞 5행만 읽고 VERIFIED, 2026-11-09 검토 A3)."""
     if ws.max_row is not None and ws.max_column is not None:
-        return int(ws.min_row), int(ws.min_column), int(ws.max_row), int(ws.max_column)
+        r1, c1, r2, c2 = int(ws.min_row), int(ws.min_column), int(ws.max_row), int(ws.max_column)
+        if path and path.lower().endswith((".xlsx", ".xlsm")):
+            ext = xf.xlsx_value_extent(path, ws.title)
+            if ext and (ext[0] > r2 or ext[1] > c2):
+                rt.debug(f"시트 크기 정보가 실제보다 작음: {r2}행 {c2}열 -> {ext[0]}행 {ext[1]}열")
+                r2, c2 = max(r2, ext[0]), max(c2, ext[1])
+                if r1 > r2 or c1 > c2 or r1 < 1:
+                    r1, c1 = 1, 1
+        return r1, c1, r2, c2
     r1 = c1 = None
     r2 = c2 = 0
     for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
@@ -374,7 +383,7 @@ def _uncomputed_extent(path: str, title: str) -> Optional[Tuple[int, int, int, i
 def _data_end(path: str, ws: Any) -> Tuple[int, int]:
     """닫힌 시트의 데이터 끝 (행, 열): 파일에 적힌 크기(서식만 있는 칸 포함)에 가까운 계산되지 않은 수식 칸까지.
     먼 칸이 있으면(파일 크기가 그 칸까지라) 값이 있는 끝과 가까운 수식 칸까지만."""
-    _, _, mr2, mc2 = _closed_bounds(ws)
+    _, _, mr2, mc2 = _closed_bounds(ws, path)
     ext = _uncomputed_extent(path, ws.title)
     far = _FAR.get((path, ws.title))
     if far:
@@ -453,7 +462,7 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
                 r1, c1, r2, c2 = parse_area(cells, mr2, mc2)
         else:
             # 열린 문서의 UsedRange처럼 데이터가 시작하는 칸부터 (A1부터 읽으면 rows가 열린 문서와 달랐음)
-            r1, c1, r2, c2 = _closed_bounds(ws)
+            r1, c1, r2, c2 = _closed_bounds(ws, path)
             ext = _uncomputed_extent(path, ws.title)
             if (path, ws.title) in _FAR:          # 먼 칸 때문에 커진 파일 크기 대신 값이 있는 끝까지
                 r2, c2 = _FAR[(path, ws.title)]["data_end"]
@@ -961,15 +970,45 @@ def parse_where(text: str) -> List[List[Cond]]:
     return groups
 
 
+_WHERE_LOOSE_NUM = re.compile(r"^([+-]?(?:\d[\d,]*\.?\d*|\.\d+))\s*(%|[^\W\d_]{1,4})?$")
+_WHERE_DATE = re.compile(r"^(\d{4})\s*(?:[-/.]|년)\s*(\d{1,2})\s*(?:[-/.]|월)\s*(\d{1,2})\s*일?\.?"
+                         r"(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$")
+_LEADING_ZERO = re.compile(r"^[+-]?0\d")
+
+
 def _where_num(v: Any) -> Optional[float]:
+    """숫자 칸, 또는 숫자로 읽히는 글 ('1,500', '50%' -> 0.5, '1500원'처럼 숫자 뒤 단위 글자)."""
     if isinstance(v, bool):
         return None
     if _is_num(v):
         return float(v)
     if isinstance(v, str):
-        s = v.strip().replace(",", "")
-        if _WHERE_NUM.match(s):
-            return float(s)
+        m = _WHERE_LOOSE_NUM.match(v.strip())
+        if m and re.search(r"\d", m.group(1)):
+            try:
+                n = float(m.group(1).replace(",", ""))
+            except ValueError:
+                return None
+            return n / 100 if m.group(2) == "%" else n
+    return None
+
+
+def _where_date(v: Any) -> Optional[Tuple[_dt.datetime, bool]]:
+    """날짜 칸, 또는 날짜로 읽히는 글 (2026-1-10, 2026/01/10, 2026.1.10, 2026년 1월 10일, 시각 붙어도 됨) -> (일시, 날짜만인지)."""
+    if isinstance(v, bool) or v is None:
+        return None
+    if _is_date(v):
+        d = v if isinstance(v, _dt.datetime) else _dt.datetime(v.year, v.month, v.day)
+        d = d.replace(tzinfo=None)
+        return d, not (d.hour or d.minute or d.second)
+    if isinstance(v, str):
+        m = _WHERE_DATE.match(v.strip())
+        if m:
+            try:
+                parts = [int(x) for x in m.groups(default="0")]
+                return _dt.datetime(*parts), m.group(4) is None
+            except ValueError:
+                return None
     return None
 
 
@@ -977,31 +1016,59 @@ def _where_text(v: Any) -> str:
     return "" if v is None else str(out_value(v)).strip()
 
 
-def _where_match(cell: Any, op: str, val: str) -> bool:
-    """숫자끼리는 숫자로, 날짜 칸은 YYYY-MM-DD 값과 날짜로, 그 밖은 앞뒤 공백을 뺀 글자로(대소문자 무시) 비교. ~는 포함."""
+def _where_kind(val: str) -> str:
+    """조건 값의 종류: num(숫자, %, 단위 꼬리), date(느슨한 날짜), text."""
+    s = val.strip()
+    if _where_date(s) is not None:
+        return "date"
+    if _where_num(s) is not None:
+        return "num"
+    return "text"
+
+
+def _where_match(cell: Any, op: str, val: str) -> Optional[bool]:
+    """숫자끼리는 숫자로(조건 값의 %·단위 꼬리 해석), 날짜끼리는 날짜로(느슨한 날짜 표기), 그 밖은 앞뒤 공백을 뺀 글자로(대소문자 무시).
+    ~는 포함. = 와 != 에서 앞자리 0이 있는 글('010')은 글자 그대로 비교. 비교할 수 없으면(크기 비교인데 칸이 숫자·날짜가 아님) None."""
     if op == "~":
         return val.strip().casefold() in _where_text(cell).casefold()
-    cn, vn = _where_num(cell), _where_num(val)
+    kind = _where_kind(val)
     a: Any
     b: Any
-    if cn is not None and vn is not None:
-        a, b = cn, vn
-    elif _is_date(cell) and cell is not None and re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?", val.strip()):
-        try:
-            vd = _dt.datetime.fromisoformat(val.strip())
-        except ValueError:
-            return False
-        cd = cell if isinstance(cell, _dt.datetime) else _dt.datetime(cell.year, cell.month, cell.day)
-        cd = cd.replace(tzinfo=None)
-        if len(val.strip()) == 10:      # 날짜만 주면 날짜끼리
-            a, b = cd.date(), vd.date()
+    if op in ("=", "!=") and (_LEADING_ZERO.match(val.strip()) or (isinstance(cell, str) and _LEADING_ZERO.match(cell.strip()))):
+        a, b = _where_text(cell).casefold(), val.strip().casefold()
+    elif kind == "date" and _where_date(cell) is not None:
+        (cd, _), (vd, date_only) = _where_date(cell), _where_date(val)
+        a, b = (cd.date(), vd.date()) if date_only else (cd, vd)
+    elif op in ("=", "!=") and isinstance(cell, str):
+        cs, vs = cell.strip().replace(",", ""), val.strip().replace(",", "")
+        if _WHERE_NUM.match(cs) and _WHERE_NUM.match(vs):     # 글 칸끼리 같음은 둘 다 숫자 모양일 때만 숫자로 ('1A'와 '1B'는 다름)
+            a, b = float(cs), float(vs)
         else:
-            a, b = cd, vd
-    elif vn is not None and op not in ("=", "!="):
-        return False                    # 크기 비교인데 칸이 숫자가 아님 (빈 칸, 글자)
+            a, b = _where_text(cell).casefold(), val.strip().casefold()
+    elif kind == "num" and _where_num(cell) is not None and not _is_date(cell):
+        a, b = _where_num(cell), _where_num(val)
+    elif op not in ("=", "!="):
+        if kind != "text" or cell is None or _where_text(cell) == "" or _is_num(cell) or _is_date(cell):
+            return None                 # 크기 비교인데 칸을 조건 값과 같은 종류로 읽을 수 없음 (빈 칸, 글자, 숫자 칸에 글 조건)
+        a, b = _where_text(cell).casefold(), val.strip().casefold()
     else:
         a, b = _where_text(cell).casefold(), val.strip().casefold()
     return {"=": a == b, "!=": a != b, ">": a > b, "<": a < b, ">=": a >= b, "<=": a <= b}[op]
+
+
+def _where_unreadable(matrix: List[List[Any]], groups: List[List[Tuple[int, str, str]]], names: Dict[int, str]) -> Optional[str]:
+    """크기 비교 조건인데 그 열의 값이 있는 칸을 하나도 비교할 수 없으면 그 이유 (0건 VERIFIED로 답하지 않게)."""
+    for g in groups:
+        for j, op, val in g:
+            if op not in (">", "<", ">=", "<="):
+                continue
+            filled = [r[j] for r in matrix[1:] if j < len(r) and r[j] is not None and _where_text(r[j]) != ""]
+            if filled and all(_where_match(c, op, val) is None for c in filled):
+                kind = {"num": "숫자", "date": "날짜", "text": "글자"}[_where_kind(val)]
+                sample = _where_text(filled[0])[:30]
+                return (f"조건 '{names[j]} {op} {val}'을(를) 비교할 수 없습니다: 조건 값은 {kind}로 읽었는데 열 '{names[j]}'의 값(예: {sample})은 "
+                        f"{kind}로 읽을 수 없습니다. 숫자는 1500, 1,500, 50%, 1500원처럼, 날짜는 2026-01-10처럼 쓰세요.")
+    return None
 
 
 def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: str, r0: int, c0: int,
@@ -1015,6 +1082,11 @@ def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: s
 
     def cell(i: int, j: int) -> Any:
         return matrix[i][j] if j < len(matrix[i]) else None
+    names = {j: str(out_value(header[j])) if j < len(header) and _where_text(header[j]) else col
+             for g, cg in zip(groups, conds) for (j, _, _), (col, _, _) in zip(g, cg)}
+    bad = _where_unreadable(matrix, groups, names)
+    if bad:
+        raise rt.InputError(bad + f" 형식: {WHERE_FORM}")
     hits = [i for i in range(1, len(matrix))
             if any(all(_where_match(cell(i, j), op, val) for j, op, val in g) for g in groups)]
     values = [[out_value(v) for v in matrix[i]] for i in [0] + hits] if matrix else []

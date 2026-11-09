@@ -33,7 +33,7 @@
 
 경량 LLM은 `VERIFIED:`를 보면 그대로 사용자에게 전하고 다시 확인하지 않는다.
 
-### A1. `read --where`의 크기 비교가 문자열 비교로 떨어짐 (재현, 높음)
+### A1. `read --where`의 크기 비교가 문자열 비교로 떨어짐 (재현, 높음) (1.4.92에서 수정)
 - 위치: `excel.py:1000-1004` (조건 비교), `964` (`_where_num`)
 - 재현: 머리글 `날짜, 비율, 코드`, 값 (2026-01-05 날짜 칸, 0.5 `0%` 서식, "010") / (2026-01-15, 0.75, "10") / (2026-01-25, 0.2, "0010")인 xlsx.
   - `read --target w.xlsx --where "비율 >= 50%"` -> `VERIFIED: 0건` (기대: 2행)
@@ -42,26 +42,28 @@
 - 고칠 방향: `> < >= <=`에서 조건 값의 `%`(0.5와 50% 맞춤), 단위 꼬리(원, 개 등 숫자 뒤 글자), 느슨한 날짜(`2026-1-10`, `2026/01/10`, `2026.1.10`)를 해석한다.
   해석하지 못한 값으로 크기 비교를 하게 되면 문자열 비교로 답하지 말고 `STOP_RETRY`(무엇을 해석 못 했는지 + 가능하면 고친 전체 명령 `[추천]`).
 - 테스트: 위 세 경우 + 해석 불가 값이 0건 VERIFIED가 아닌 것.
+- 처리(1.4.92): 글 열끼리의 크기 비교(`이름 >= 다`, 기존 테스트)는 의도된 동작이라 남김. 그래서 '해석 못 한 값이면 STOP_RETRY' 대신 '그 열에 조건 값과 같은 종류로 읽히는 칸이 하나도 없으면 STOP_RETRY'로 함 (날짜 열에 `지난달`, 글 열에 숫자 조건). `[추천]`은 고칠 값을 도구가 알 수 없어 넣지 않음.
 
-### A2. `--where "코드 = 010"`이 `010`, `10`, `0010`을 모두 같다고 봄 (재현, 중간)
+### A2. `--where "코드 = 010"`이 `010`, `10`, `0010`을 모두 같다고 봄 (재현, 중간) (1.4.92에서 수정)
 - 위치: `excel.py:984-988`
 - 재현: A1의 파일에서 `--where "코드 = 010"` -> 3행 (기대: 1행). office-data 스킬은 "품번의 앞자리 0은 그대로 다른 값"이라고 적고 있다.
 - 고칠 방향: `=`/`!=`에서 조건 값이나 칸 값이 앞자리 0이 있는 글이면 글자 그대로 비교. 칸이 숫자형이면 지금처럼 숫자 비교.
 
-### A3. 시트 XML의 `<dimension>`이 실제보다 작으면 앞부분만 읽음 (재현, 높음)
+### A3. 시트 XML의 `<dimension>`이 실제보다 작으면 앞부분만 읽음 (재현, 높음) (1.4.92에서 수정)
 - 위치: `excel.py:301-302` (`_closed_bounds`). `read`, `export`, `check`가 씀
 - 재현: 11행 xlsx의 `xl/worksheets/sheet1.xml`에서 `<dimension ref="A1:B11"/>`를 `A1:B5`(또는 `A1`)로 바꿔 다시 압축 (Excel이 아닌 프로그램이 만든 파일에 흔함).
   `read` -> 5행 VERIFIED, `--where "값 >= 50"`·`--search n9` -> `VERIFIED: 0건`, `export` -> 5행 "행 수 확인". `--range A1:B11`을 주면 정상.
 - 고칠 방향: `_excel_compare.py:273`처럼 `ws.reset_dimensions()` 뒤 실제 범위를 구한다.
 
-### A4. `search --pages`가 쪽 정보 없는 문서에서 `VERIFIED: 0건` (재현, 높음)
+### A4. `search --pages`가 쪽 정보 없는 문서에서 `VERIFIED: 0건` (재현, 높음) (1.4.92에서 수정)
 - 위치: `reader.py:3801-3806`, `4012-4020`
 - 재현: `정격 전압은 5 V 이다.`가 든 TXT에 `reader.py search --query "정격 전압" --pages 1-3 --file a.txt` -> `count: 0`, `page_unknown_skipped: 2`, VERIFIED.
   TXT, CSV, XLSX, HWP, 쪽 나눔 없는 DOCX 모두 해당. `read --pages`는 같은 파일에서 항목 번호로 동작해 뜻도 다르다.
 - 고칠 방향: `page_unknown_skipped > 0`이면 `not_searched`에 넣고 `UNVERIFIED:`. (쪽 없는 문서는 `--pages`를 무시하고 찾은 뒤 `warnings`로 알리는 쪽이
   "사용법 단순성 4번: 필요 없는 명령에서는 받고 무시"에 더 맞다. 둘 중 하나로 정하고 `read --pages`와 뜻을 맞춘다.)
+- 처리(1.4.92): 무시하는 쪽은 `read --pages`(쪽 없는 문서는 항목 번호, 도구의 이어 읽기 명령도 그렇게 냄)와 뜻이 달라져, `search --pages`도 쪽 없는 문서는 항목 번호로 보고 `warnings`로 알림 (한 옵션 한 뜻). 쪽 문서 안의 쪽 모르는 단위만 `not_searched`.
 
-### A5. 머리글 없는 표의 첫 행을 머리글로 써서 근거가 틀림 (재현, 높음)
+### A5. 머리글 없는 표의 첫 행을 머리글로 써서 근거가 틀림 (재현, 높음) (1.4.92에서 수정)
 - 위치: `reader.py:318-364` (`table_rows`, `_looks_like_header`)
 - 재현 a: DOCX 2열 표 (모델명|PSU-100 / 입력 전압|220 V / 출력 전압|5.0 V)를 `read` -> 단위가 `모델명: 입력 전압 | PSU-100: 220 V`,
   `모델명: 출력 전압 | PSU-100: 5.0 V` 두 개뿐 (첫 행은 단위로 나오지 않음).
@@ -71,7 +73,7 @@
   (3) 앞 쪽 표와 열 수가 같은 이어진 표는 앞 표의 머리글을 다시 쓴다.
 - 주의: 클라우드 기본 pymupdf가 사용자 환경(1.28.2)과 다르면 표 칸 글이 다르게 읽힌다. 표 테스트 전에 `python -m pip install pymupdf==1.28.2`.
 
-### A6. PDF 본문의 줄바꿈된 줄이 장절 제목이 됨 (재현, 높음)
+### A6. PDF 본문의 줄바꿈된 줄이 장절 제목이 됨 (재현, 높음) (1.4.92에서 수정)
 - 위치: `reader.py:585-590`, `classify_number` `177-187`, `_UNIT_AFTER` `117`
 - 재현: "3. ELECTRICAL" > "3.2 Output" 아래 한 단락(같은 블록, 본문 글꼴) 안에 줄이 `1.5 times the rated current for`,
   `5.0 VDC nominal with decoupling of`, `0.1 uF capacitors placed near`, `1.5 N-m applied to each screw`로 시작하게 줄바꿈된 PDF를 `read`.
@@ -101,17 +103,17 @@
 - 고칠 방향: 쓴 뒤 값(`Value`)도 읽어 오류 값(`#NAME?`, `#REF!`, `#VALUE!` 등)이면 `UNVERIFIED:` + 어느 칸이 어떤 오류인지. `Formula2`가 있으면 그것으로 쓴다
   (없는 버전 대비 `try`). 가짜 COM에 오류 값 흉내를 넣는다.
 
-### A10. Outlook `list`/`search`가 항목 읽기 실패를 조용히 건너뛰고 "0건" (가짜 재현, 높음)
+### A10. Outlook `list`/`search`가 항목 읽기 실패를 조용히 건너뛰고 "0건" (가짜 재현, 높음) (1.4.92에서 수정)
 - 위치: `outlook.py:153-161` (`_collect`의 `except Exception: continue`)
 - 재현: 모든 항목에서 `SenderEmailAddress`가 예외(Outlook 보안 창에서 "거부"를 누른 경우와 같음) -> `VERIFIED: 0건`, 다시 실행하지 말라고 함.
 - 고칠 방향: `cmd_calendar`의 `bad`처럼 실패 수를 세어 일부 실패면 `UNVERIFIED:`(읽지 못한 메일 N개), 전부 실패면 오류.
 
-### A11. 참조(CC) 수신자가 발송 전 확인 화면에 나오지 않음 (재현, 중간. 메일 오발송 위험)
+### A11. 참조(CC) 수신자가 발송 전 확인 화면에 나오지 않음 (재현, 중간. 메일 오발송 위험) (1.4.92에서 수정)
 - 위치: `outlook.py:870` (`_finalize`), `956` (`cmd_send`)
 - 재현: 초안에 CC가 있는 `reply --all --body ok`, 또는 `new --cc c@x.com` -> 결과·`preview`에 `to`만. 사용자는 그것만 보고 "예".
 - 고칠 방향: 결과와 `preview`, `send`의 확인 글에 `cc`(있으면 `bcc`)를 넣는다. office-mail 스킬 발송 순서 2번은 "받는 사람·참조·제목"으로.
 
-### A12. `read --save` -> `write --file` 왕복이 내용을 망가뜨림 (재현, 높음)
+### A12. `read --save` -> `write --file` 왕복이 내용을 망가뜨림 (재현, 높음) (1.4.92에서 수정)
 - 위치: `word.py:312-325`, `ppt.py:209-221` (둘 다 `reader.units_to_markdown`, `reader.py:2001`), `_markdown.py:94` (단락 잇기)
 - 재현 a: 5단락 docx를 `word.py read --target small.docx --save`, 결과의 `ppt.py write --file <md>` -> 슬라이드 6장, 제목이 "단락 N - <제목>". 30단락을 넘으면 "슬라이드 N장 분량"으로 멈춤.
 - 재현 b: 같은 md를 `word.py write --file` -> 단락마다 "단락 N" 제목 2가 붙고, 실제 제목 "1. 개요"는 목록 항목 "개요"(번호 사라짐), "2. 결론"은 글자 그대로.
@@ -120,7 +122,7 @@
 - 고칠 방향: `--save`가 만드는 md를 `_markdown.py`가 그대로 되읽는 형식으로 쓴다: 실제 제목은 `#` 수준으로, 본문 단락은 빈 줄로 나눈 한 줄씩, 표는 마크다운 표,
   "단락 N" 같은 위치 표지는 제목으로 넣지 않는다. 회귀 테스트는 "저장 -> 다시 쓰기 -> 단락 수·제목·표 모양이 같음"으로.
 
-### A13. 검색 범위가 빠졌는데 VERIFIED (재현, 중간)
+### A13. 검색 범위가 빠졌는데 VERIFIED (재현, 중간) (1.4.92에서 수정)
 - 위치: `reader.py:4096` (`_search_gaps`), `3729-3731`, `477`, `1203`, `4987`
 - 경우:
   1. 원본이 지워진 문서의 캐시 결과가 "VERIFIED: 검색 완료" (항목의 `file_missing: true`와 `missing_file_count`뿐). 폴더에 새로 넣은 파일은 `--file` 없이는 검색되지 않는다.
@@ -129,6 +131,7 @@
   4. 쪽 경계에 걸친 문장(`humidity shall not exceed 95`가 p.1/p.2로 나뉨)은 `VERIFIED: 0건`.
   5. `diff`: 일부 쪽만 스캔인 PDF(`pages_without_text`)도 VERIFIED (`search`는 UNVERIFIED). `ocr_needed`만 본다.
 - 고칠 방향: 1·2·5는 `not_searched`에 넣어 `UNVERIFIED:`. 3은 각주·머리글을 읽어 단위로 넣거나(권장) 읽지 않은 사실을 `not_searched`에. 4는 쪽 끝·다음 쪽 첫 단위를 이어 붙여 한 번 더 찾는다.
+- 처리(1.4.92): 1의 '폴더에 새로 넣은 파일'은 `--file` 없는 검색이 색인만 보는 설계라 그대로 둠 (색인에 폴더 목록이 없어 새 파일을 알 수 없음, 스킬은 `--file 폴더`를 씀). 2는 문서 형식(.doc .xls .ppt .rtf .xlsb .odt .ods .odp)만 `not_searched` (그림·압축 파일까지 넣으면 모든 폴더 검색이 UNVERIFIED). 3은 단위로 넣음 (PDF 반복 머리글은 글마다 한 번).
 
 ## 2. 계약 위반·내부 오류·실행 못 하는 추천
 

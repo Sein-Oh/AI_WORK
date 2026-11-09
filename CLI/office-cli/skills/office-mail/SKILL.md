@@ -4,7 +4,7 @@ description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.91"
+  version: "1.4.92"
   platform: windows
 ---
 
@@ -41,7 +41,7 @@ metadata:
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - `new`·`reply`·`forward`는 보내지 않는다. 초안을 저장하고 작성 창만 띄운다. 발송 순서:
   1. `new`·`reply`·`forward`를 1번 실행한다 (답장·전달은 `--id`로 원본을 지정).
-  2. 결과의 `original`(제목·보낸사람)과 받는 사람·제목을 사용자에게 보여 주고 "이 메일이 맞는지, 보낼지" 확인을 받는다.
+  2. 결과의 `original`(제목·보낸사람)과 받는 사람·참조·제목을 사용자에게 보여 주고 "이 메일이 맞는지, 보낼지" 확인을 받는다.
   3. 사용자가 "예"(보내라)라고 하면 `confirm_commands[0]`(`send --id <draft_id>`)을 글자 그대로 1번 실행한다. 확인 전에는 실행하지 않는다.
   4. 사용자가 작성 창에서 직접 보냈으면 `send`를 실행하지 않는다. 같은 `new`·`reply`·`forward`를 다시 실행하지 않는다(초안이 하나 더 생김).
   5. `send`가 "발송하지 않았습니다"(이 도구가 만든 초안이 아님, 이미 보냄, 임시 보관함에 없음)면 다시 실행하지 않고 message를 알린다.

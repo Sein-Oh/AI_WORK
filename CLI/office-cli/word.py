@@ -313,7 +313,8 @@ def cmd_read(args) -> Dict[str, Any]:
         import reader
         save_units = selected if filtered else units
         out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(name)[0], ".md")
-        out = rt.write_text(out, reader.units_to_markdown(name, save_units))
+        out = rt.write_text(out, md.document_markdown(
+            [("heading", (u["level"], u["text"])) if u.get("level") else ("paragraph", u["text"]) for u in save_units]))
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
         result.update(output_file=out, confirm_commands=[
             rt.next_command("ppt.py", ["write", "--file", out], "저장한 내용을 열린 PPT에 넣기 (사용자가 원할 때만)"),

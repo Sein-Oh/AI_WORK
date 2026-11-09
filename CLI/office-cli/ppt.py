@@ -126,6 +126,32 @@ def slide_units(slide: Any, idx: int) -> Dict[str, Any]:
     return {"no": idx, "title": title or (lines[0] if lines else ""), "text": "\n".join(lines), "notes": _notes_text(slide)}
 
 
+def slide_blocks(slide: Dict[str, Any]) -> List[Tuple[str, Any]]:
+    """슬라이드 하나 -> 마크다운 블록 (제목은 # 제목, 글은 줄마다 단락, ' | '로 나눈 줄이 이어지면 표). read --save가 쓰고
+    word.py·ppt.py write --file이 같은 모양으로 되읽음 (전에는 줄이 한 단락으로 합쳐지고 표 행이 1x1 표, 2026-11-09 검토 A12)."""
+    blocks: List[Tuple[str, Any]] = []
+    title = str(slide.get("title") or "").strip()
+    lines = [ln for ln in str(slide.get("text") or "").split("\n") if ln.strip()]
+    if title:
+        blocks.append(("heading", (1, title)))
+        if lines and lines[0].strip() == title:
+            lines = lines[1:]                     # 제목 개체틀이 없는 슬라이드는 첫 줄이 제목
+    table: List[List[str]] = []
+    for ln in lines + [""]:
+        cells = ln.split(" | ") if " | " in ln else None
+        if cells is not None and (not table or len(cells) == len(table[0])):
+            table.append(cells)
+            continue
+        if table:
+            blocks.append(("table", table) if len(table) >= 2 else ("paragraph", " | ".join(table[0])))
+            table = []
+        if cells is not None:
+            table.append(cells)
+        elif ln.strip():
+            blocks.append(("paragraph", ln))
+    return blocks
+
+
 def _notes_body(slide: Any) -> Optional[Any]:
     """발표자 노트 본문 개체틀 (ppPlaceholderBody). 없으면 None."""
     try:
@@ -207,9 +233,8 @@ def cmd_read(args) -> Dict[str, Any]:
         slides = [slides[n - 1] for n in numbers]
     result: Dict[str, Any] = {"target_resolved": source, "slides_total": total}
     if args.save:
-        units = [{"loc": f"슬라이드 {s['no']}", "heading": s["title"], "text": s["text"]} for s in slides]
         out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(source["name"])[0], ".md")
-        out = rt.write_text(out, reader.units_to_markdown(source["name"], units))
+        out = rt.write_text(out, md.document_markdown([b for s in slides for b in slide_blocks(s)]))
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
         result.update(output_file=out, confirm_commands=[
             rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기 (사용자가 원할 때만)"),

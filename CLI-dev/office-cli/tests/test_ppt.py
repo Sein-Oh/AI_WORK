@@ -930,3 +930,18 @@ def test_ppt_slide_clear_dry_run_one_and_all(pp_prs, capsys):
 def test_ppt_slide_list_ignores_dry_run_with_warning(pp_prs, capsys):
     code, out = run_main(ppt, capsys, "slide", "--action", "list", "--dry-run")
     assert code == 0 and out["count"] == 3 and "--dry-run" in out["warnings"][0], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A12: ppt read --save의 .md는 슬라이드 줄을 단락으로, 표 줄을 표로 (word write --file이 같은 모양으로 읽음)
+# ---------------------------------------------------------------------------
+
+
+def test_slide_blocks_keep_lines_and_tables():
+    import _markdown as md
+    s = {"no": 1, "title": "결과", "text": "첫 줄\n둘째 줄\n항목 | 값\n | v\n끝"}
+    text = md.document_markdown(ppt.slide_blocks(s))
+    assert md.parse_markdown_blocks(text) == [("heading", (1, "결과")), ("paragraph", "첫 줄"), ("paragraph", "둘째 줄"),
+                                             ("table", [["항목", "값"], ["", "v"]]), ("paragraph", "끝")], text
+    s = {"no": 2, "title": "제목 줄", "text": "제목 줄\n| 막대"}
+    assert md.parse_markdown_blocks(md.document_markdown(ppt.slide_blocks(s))) == [("heading", (1, "제목 줄")), ("paragraph", "| 막대")]

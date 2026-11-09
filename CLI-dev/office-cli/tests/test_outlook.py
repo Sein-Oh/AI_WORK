@@ -1903,3 +1903,51 @@ def test_thread_collects_conversation_in_time_order(monkeypatch, capsys, refuse)
     assert bool(out.get("recovered")) is refuse
     code, out2 = run_outlook(capsys, "read", "--id", "2")                     # thread 목록 번호로 읽기
     assert code == 0 and out2["mail"]["entry_id"] == "s1"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A10: 항목 읽기 실패를 조용히 건너뛰고 'VERIFIED: 0건'으로 내지 않음
+# ---------------------------------------------------------------------------
+
+
+class _DeniedMail(_OneMail):
+    @property
+    def Class(self):                      # Outlook 보안 창에서 '거부': 항목 속성마다 예외
+        raise RuntimeError("access denied")
+
+
+class _NoAddressMail(_OneMail):
+    @property
+    def SenderEmailAddress(self):
+        raise RuntimeError("access denied")
+
+
+@pytest.mark.parametrize("argv", [["list"], ["search", "--query", "견적"]])
+def test_list_and_search_do_not_hide_unreadable_items(monkeypatch, capsys, argv):
+    _outlook_mails(monkeypatch, [_DeniedMail(), _DeniedMail()])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "허용" in out["message"], out
+    m = _OneMail()
+    m.Class = 43
+    _outlook_mails(monkeypatch, [m, _DeniedMail()])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("UNVERIFIED:") and "1개를 읽지 못함" in out["agent_directive"], out
+    _outlook_mails(monkeypatch, [_NoAddressMail()])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 0 and out["count"] == 1 and out["mails"][0]["from"] == "홍길동", out
+    assert out["agent_directive"].startswith("UNVERIFIED:") and "SenderEmailAddress" in out["agent_directive"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A11: 참조(CC)·숨은 참조가 발송 전 확인 결과와 preview에 나옴
+# ---------------------------------------------------------------------------
+
+
+def test_compose_result_shows_cc(capsys, monkeypatch):
+    mail = Mail([Recip("a@x.com", True), Recip("c@x.com", True)])
+    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--cc", "c@x.com", "--subject", "보고", "--body", "ok")
+    assert code == 0 and out["to"] == "a@x.com" and out["cc"] == "c@x.com", out
+    assert "참조 c@x.com" in out["preview"] and "참조" in out["agent_directive"], out
+    mail = Mail([Recip("a@x.com", True)])
+    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
+    assert code == 0 and "cc" not in out and "참조" not in out["preview"], out

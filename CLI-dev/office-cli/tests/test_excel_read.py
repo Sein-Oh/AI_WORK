@@ -1472,3 +1472,95 @@ def test_closed_xlsx_load_retries_transient_lock(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(rt.time, "sleep", lambda s: None)
     code, out = run_main(excel, capsys, "read", "--target", path, "--sheet", "Sheet1")
     assert code == 0 and out["values"][0][0] == "a" and len(calls) >= 2, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A1·A2: --where의 %·단위·느슨한 날짜, 앞자리 0, 비교할 수 없는 조건은 0건이 아니라 STOP_RETRY
+# ---------------------------------------------------------------------------
+
+
+def _where_review_xlsx(path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["날짜", "비율", "코드", "금액", "메모"])
+    for d, r, c, m, memo in [(dt.datetime(2026, 1, 5), 0.5, "010", 1000, "a"), (dt.datetime(2026, 1, 15), 0.75, "10", 1500, "b"),
+                             (dt.datetime(2026, 1, 25), 0.2, "0010", 2000, "c")]:
+        ws.append([d, r, c, m, memo])
+    for row in ws.iter_rows(min_row=2, min_col=2, max_col=2):
+        row[0].number_format = "0%"
+    wb.save(path)
+    return str(path)
+
+
+@pytest.mark.parametrize("expr, rows", [
+    ("비율 >= 50%", [2, 3]), ("비율 < 50%", [4]), ("비율 = 75%", [3]),
+    ("날짜 >= 2026-1-10", [3, 4]), ("날짜 > 2026/01/10", [3, 4]), ("날짜 < 2026.1.10", [2]), ("날짜 >= 2026년 1월 15일", [3, 4]),
+    ("금액 >= 1500원", [3, 4]), ("금액 <= 1,500", [2, 3]),
+    ("코드 = 010", [2]), ("코드 = 10", [3]), ("코드 != 010", [3, 4]),
+])
+def test_where_percent_units_loose_dates_and_leading_zero(tmp_path, capsys, expr, rows):
+    p = _where_review_xlsx(tmp_path / "w.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p, "--where", expr)
+    assert code == 0 and out["row_numbers"][1:] == rows, out
+
+
+@pytest.mark.parametrize("expr", ["날짜 >= 지난달", "금액 > 많음", "메모 > 5"])
+def test_where_uncomparable_condition_is_not_zero_verified(tmp_path, capsys, expr):
+    p = _where_review_xlsx(tmp_path / "w.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p, "--where", expr)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "비교할 수 없습니다" in out["message"], out
+
+
+def test_where_text_columns_compare_as_text_and_text_codes_stay_distinct(tmp_path, capsys):
+    csv_path = tmp_path / "c.csv"
+    csv_path.write_text("품번,비율,수량\n1A,50%,10개\n1B,20%,3개\n", encoding="utf-8")
+    code, out = run_main(excel, capsys, "read", "--target", str(csv_path), "--where", "품번 = 1A")
+    assert code == 0 and out["row_numbers"][1:] == [2], out
+    code, out = run_main(excel, capsys, "read", "--target", str(csv_path), "--where", "비율 >= 30%; 수량 > 5")
+    assert code == 0 and out["row_numbers"][1:] == [2], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A3: 시트 XML의 <dimension>이 실제보다 작아도 끝까지 읽음 (read, --where, --search, export)
+# ---------------------------------------------------------------------------
+
+
+def _small_dimension_xlsx(tmp_path, ref):
+    import openpyxl
+    src = tmp_path / "src.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["이름", "값"])
+    for i in range(1, 11):
+        ws.append([f"n{i}", i * 10])
+    wb.save(src)
+    dst = tmp_path / "small.xlsx"
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.startswith("xl/worksheets/sheet"):
+                data = re.sub(rb'<dimension ref="[^"]*"/>', f'<dimension ref="{ref}"/>'.encode(), data)
+            zout.writestr(item, data)
+    return str(dst)
+
+
+@pytest.mark.parametrize("ref", ["A1:B5", "A1"])
+def test_small_dimension_reads_every_row(tmp_path, capsys, ref):
+    p = _small_dimension_xlsx(tmp_path, ref)
+    code, out = run_excel(capsys, "read", "--target", p)
+    assert code == 0 and out["rows"] == 11 and out["values"][-1] == ["n10", 100], out
+    code, out = run_excel(capsys, "read", "--target", p, "--where", "값 >= 50")
+    assert code == 0 and out["count"] == 6, out
+    code, out = run_excel(capsys, "read", "--target", p, "--search", "n9")
+    assert code == 0 and out["count"] == 1, out
+    code, out = run_excel(capsys, "read", "--target", p, "--range", "B:B")
+    assert code == 0 and out["rows"] == 11, out
+    code, out = run_excel(capsys, "export", "--target", p, "--save", str(tmp_path / "o.csv"))
+    assert code == 0 and len(rt.read_csv_rows(out["output_file"])) == 11, out
+
+
+def test_reader_reads_rows_past_small_dimension(tmp_path, capsys):
+    p = _small_dimension_xlsx(tmp_path, "A1:B5")
+    units, _ = reader.parse_xlsx(p)
+    assert any("n10" in u["text"] for u in units) and len(units) == 11, units

@@ -588,9 +588,10 @@ def test_docx_order_heading_and_merged_cells(samples):
     units, meta = reader.parse_docx(samples["docx"])
     assert texts(units)[0] == "추진 배경"
     rows = [u for u in units if u["loc"].startswith("표 1")]
-    assert [u["kind"] for u in rows] == ["row"]                  # 1.3.0: 표는 행 단위 (첫 행은 머리글)
-    assert rows[0]["text"] == "병합 헤더: 가 | 병합 헤더: 나 | 값: 100"   # 가로 병합 머리글은 이어 씀
-    assert rows[0]["heading"] == "추진 배경"
+    assert [u["kind"] for u in rows] == ["row", "row"]           # 1.3.0: 표는 행 단위 (1.4.92: 머리글 행도 단위)
+    assert rows[0]["text"] == "병합 헤더 | 값"
+    assert rows[1]["text"] == "병합 헤더: 가 | 병합 헤더: 나 | 값: 100"   # 가로 병합 머리글은 이어 씀
+    assert rows[1]["heading"] == "추진 배경"
     assert [u for u in units if u["text"] == "3분기 양산 적용"][0]["heading"] == "일정"
     assert meta["tables"] == 1
 
@@ -764,9 +765,9 @@ def test_table_rows_header_labels_merged_and_multiline():
                               ["내전압", "1.5 kV", "1분", "KS C\n1234"],
                               ["", "", "", ""],
                               ["절연저항", "100 MΩ 이상", None, "메거"]])
-    assert [r["row"] for r in rows] == [2, 3]
-    assert rows[0]["text"] == "항목: 내전압 | 기준: 1.5 kV | 기준: 1분 | 시험방법: KS C 1234"
-    assert rows[1]["text"] == "항목: 절연저항 | 기준: 100 MΩ 이상 | 시험방법: 메거"
+    assert [r["row"] for r in rows] == [1, 2, 3] and rows[0]["text"] == "항목 | 기준 | 시험방법"   # 1.4.92: 머리글 행도 단위
+    assert rows[1]["text"] == "항목: 내전압 | 기준: 1.5 kV | 기준: 1분 | 시험방법: KS C 1234"
+    assert rows[2]["text"] == "항목: 절연저항 | 기준: 100 MΩ 이상 | 시험방법: 메거"
 
 
 def test_table_rows_without_header_and_row_number():
@@ -927,7 +928,10 @@ def test_pdf_repeated_header_and_page_number_do_not_break_sections(tmp_path):
     ])
     units, meta = reader.parse_pdf(str(p))
     assert meta["header_footer_removed"] == 6
-    assert not [u for u in units if "시스템 요구사항" in u["text"] or u["text"].startswith("- ")]
+    assert not [u for u in units if u["text"].startswith("- ")]
+    # 1.4.92: 반복 머리글은 장절을 끊지 않고, 문서 번호처럼 검색되게 한 번만 따로 단위로 (2026-11-09 검토 A13)
+    hdr = [u for u in units if "시스템 요구사항" in u["text"]]
+    assert len(hdr) == 1 and hdr[0]["section"] == ["머리글·바닥글"] and hdr[0]["loc"] == "p.1 머리글·바닥글", hdr
     cur = by_text(units, "정격 전류는")
     assert cur["section"] == ["2.1 전기 요구사항", "2.1.1 정격"] and cur["page"] == 2      # 머리글이 장절을 끊지 않음
     kv = by_text(units, "10.5 kV")
@@ -3348,3 +3352,162 @@ def test_pymupdf_messages_follow_the_current_stderr():
     tmp.close()
     pymupdf.message("closed stderr test")          # 닫힌 tmp가 아니라 지금의 stderr로 감
 
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A4: 쪽 정보가 없는 문서의 search --pages는 read --pages처럼 항목 번호 (전에는 모두 빼고 VERIFIED 0건)
+# ---------------------------------------------------------------------------
+
+
+def test_search_pages_on_document_without_pages_uses_item_numbers(tmp_path, capsys):
+    p = tmp_path / "a.txt"
+    p.write_text("첫 줄 안내.\n\n정격 전압은 5 V 이다.\n\n끝.\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--pages", "2")
+    assert code == 0 and "정격 전압" in out["units"][0]["text"], out
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--pages", "1-3", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert any("항목 번호" in w for w in out["warnings"]) and "page_unknown_skipped" not in out, out
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--pages", "3", "--file", str(p))
+    assert code == 0 and out["count"] == 0, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A5: 2열 표는 머리글 추정 없음, 머리글 행도 단위, 다음 쪽으로 이어진 PDF 표는 앞 표의 머리글
+# ---------------------------------------------------------------------------
+
+
+def test_two_column_table_has_no_guessed_header(tmp_path):
+    import docx
+    p = tmp_path / "t.docx"
+    d = new_docx()
+    t = d.add_table(rows=3, cols=2)
+    for i, (k, v) in enumerate([("모델명", "PSU-100"), ("입력 전압", "220 V"), ("출력 전압", "5.0 V")]):
+        t.cell(i, 0).text, t.cell(i, 1).text = k, v
+    d.save(str(p))
+    units, _ = reader.parse_docx(str(p))
+    assert [u["text"] for u in units if u["kind"] == "row"] == ["모델명 | PSU-100", "입력 전압 | 220 V", "출력 전압 | 5.0 V"]
+
+
+def test_pdf_table_continued_on_next_page_keeps_first_header(tmp_path, capsys):
+    p = tmp_path / "c.pdf"
+    head = ["Item", "Condition", "Limit"]
+    make_text_pdf(str(p), font="helv", pages=[[("TABLE", [head, ["Efficiency", "230 Vac", "90 %"], ["Hold-up", "100 Vac", "10 ms"]])],
+                           [("TABLE", [["Ripple", "20 MHz BW", "50 mVp-p"], ["Noise", "20 MHz BW", "100 mVp-p"]])]])
+    units, _ = reader.parse_pdf(str(p))
+    rows = [u["text"] for u in units if u["kind"] == "row"]
+    assert "Item: Ripple | Condition: 20 MHz BW | Limit: 50 mVp-p" in rows, rows
+    assert not any(t.startswith("Ripple: ") for t in rows), rows
+    code, out = run_main(reader, capsys, "search", "--query", "Ripple;50 mVp-p", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["matches"][0]["snippet"].startswith("Item: **Ripple**"), out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A6: PDF 단락 안에서 줄바꿈된 줄('1.5 times ...', '5.0 VDC ...')은 장절 제목이 아님
+# ---------------------------------------------------------------------------
+
+
+def test_pdf_wrapped_lines_starting_with_numbers_stay_in_paragraph(tmp_path, capsys):
+    pymupdf = reader._import_pymupdf()
+    p = tmp_path / "wrap.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+
+    def put(y, t, size=10, font="helv"):
+        page.insert_text((72, y), t, fontname=font, fontsize=size)
+    put(72, "3. ELECTRICAL", 14, "hebo")
+    put(100, "3.2 Output", 12, "hebo")
+    y = 124
+    for line in ["The output current shall not exceed a limit of", "1.5 times the rated current for 10 s. The supply is",
+                 "5.0 VDC nominal with decoupling of", "0.1 uF capacitors placed near each load. Screws are torqued to",
+                 "1.5 N-m applied to each screw at assembly time."]:
+        put(y, line)
+        y += 12
+    put(y + 20, "3.3 Protection", 12, "hebo")
+    put(y + 44, "Over current protection is provided.")
+    put(y + 64, "Body text for size statistics here and more words to dominate.")
+    doc.save(str(p))
+    doc.close()
+    units, _ = reader.parse_pdf(str(p))
+    heads = [u["text"] for u in units if u["kind"] == "heading"]
+    assert heads == ["3. ELECTRICAL", "3.2 Output", "3.3 Protection"], heads
+    prot = [u for u in units if u["text"].startswith("Over current")][0]
+    assert prot["section"] == ["3. ELECTRICAL", "3.3 Protection"], prot
+    code, out = run_main(reader, capsys, "search", "--query", "limit of 1.5 times", "--file", str(p), "--section", "3.2")
+    assert code == 0 and out["count"] == 1, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A13: 검색 범위가 빠졌으면 VERIFIED로 내지 않음, DOCX 머리글·각주, 쪽 경계 문장, diff의 스캔 쪽
+# ---------------------------------------------------------------------------
+
+
+def test_search_deleted_source_and_legacy_files_are_not_searched(tmp_path, capsys):
+    folder = tmp_path / "d"
+    folder.mkdir()
+    (folder / "a.txt").write_text("정격 전압 5 V", encoding="utf-8")
+    (folder / "b.txt").write_text("다른 글", encoding="utf-8")
+    (folder / "old.doc").write_bytes(b"\xd0\xcf\x11\xe0" + b"\0" * 64)
+    (folder / "그림.png").write_bytes(b"\x89PNG")
+    code, out = run_main(reader, capsys, "search", "--query", "없는말", "--file", str(folder))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert any(".doc 1개" in g for g in out["not_searched"]) and not any(".png" in g for g in out["not_searched"]), out
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0
+    os.remove(folder / "b.txt")
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압")
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert any("원본이 지워졌거나" in g for g in out["not_searched"]), out
+
+
+def test_docx_header_footer_and_footnotes_are_searchable(tmp_path, capsys):
+    from sample_docs import new_docx
+    p = tmp_path / "h.docx"
+    d = new_docx()
+    d.sections[0].header.paragraphs[0].text = "문서번호 QP-123 Rev. C"
+    d.sections[0].footer.paragraphs[0].text = "사내 한정 배포"
+    d.add_paragraph("본문 단락입니다.")
+    d.save(str(p))
+    units, _ = reader.parse_docx(str(p))
+    extra = [(u["loc"], u["text"], u["section"]) for u in units if u.get("extra")]
+    assert extra == [("머리글", "문서번호 QP-123 Rev. C", ["머리글·바닥글"]), ("바닥글", "사내 한정 배포", ["머리글·바닥글"])], extra
+    code, out = run_main(reader, capsys, "search", "--query", "QP-123", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
+    # 각주 (python-docx로는 만들 수 없어 XML을 넣음)
+    import zipfile as zf
+    q = tmp_path / "f.docx"
+    with zf.ZipFile(p) as zin, zf.ZipFile(q, "w") as zout:
+        for item in zin.infolist():
+            zout.writestr(item, zin.read(item.filename))
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        zout.writestr("word/footnotes.xml", f'<w:footnotes {w}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:t>-</w:t></w:r></w:p>'
+                      f'</w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>시험 온도는 23 </w:t></w:r><w:r><w:t>°C 기준</w:t></w:r></w:p>'
+                      '</w:footnote></w:footnotes>')
+    units, _ = reader.parse_docx(str(q))
+    assert [(u["loc"], u["text"]) for u in units if u["loc"].startswith("각주")] == [("각주 1", "시험 온도는 23 °C 기준")]
+
+
+def test_search_finds_sentence_split_across_pages(tmp_path, capsys):
+    pymupdf = reader._import_pymupdf()
+    p = tmp_path / "seam.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 700), "The relative humidity shall not exceed", fontname="helv", fontsize=10)
+    doc.new_page().insert_text((72, 72), "95 % at 40 C during storage.", fontname="helv", fontsize=10)
+    doc.save(str(p))
+    doc.close()
+    code, out = run_main(reader, capsys, "search", "--query", "humidity shall not exceed 95", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["matches"][0]["loc"] == "p.1~p.2", out
+
+
+def test_diff_with_partly_scanned_pdf_is_unverified(tmp_path, capsys):
+    pymupdf = reader._import_pymupdf()
+    paths = []
+    for name, second in (("old.pdf", "image"), ("new.pdf", "image")):
+        q = tmp_path / name
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 72), f"first page text {name}", fontname="helv", fontsize=11)
+        doc.new_page().insert_image(pymupdf.Rect(40, 40, 560, 800), pixmap=_pixmap(pymupdf))
+        doc.save(str(q))
+        doc.close()
+        paths.append(str(q))
+    code, out = run_main(reader, capsys, "diff", "--file", paths[0], "--file2", paths[1])
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "스캔 쪽" in out["agent_directive"], out

@@ -1275,3 +1275,32 @@ def test_write_dry_run_anchor_errors_same_as_real_run(wd, capsys):
     assert code == 1 and "표 안에" in out["message"], out
     code, out = run_main(word, capsys, "write", "--text", "x", "--anchor", "없는문구", "--pos", "replace", "--dry-run")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A12: read --save -> write --file 왕복 (단락 수·제목·번호가 그대로)
+# ---------------------------------------------------------------------------
+
+
+def test_read_save_then_write_file_keeps_structure(wd, capsys, tmp_path):
+    import _markdown as md
+    from sample_docs import new_docx
+    src = tmp_path / "small.docx"
+    d = new_docx()
+    d.add_heading("1. 개요", level=1)
+    for t in ["첫 단락입니다.", "- 대시로 시작하는 글", "1. 번호처럼 보이는 문장입니다.", "| 막대로 시작"]:
+        d.add_paragraph(t)
+    d.add_heading("2. 결론", level=1)
+    d.add_paragraph("끝 단락입니다.")
+    d.save(str(src))
+    code, out = run_word(capsys, "read", "--target", str(src), "--save", str(tmp_path / "s.md"))
+    assert code == 0, out
+    blocks = md.parse_markdown_blocks(open(out["output_file"], encoding="utf-8").read())
+    assert blocks == [("heading", (1, "1. 개요")), ("paragraph", "첫 단락입니다."), ("paragraph", "- 대시로 시작하는 글"),
+                      ("paragraph", "1. 번호처럼 보이는 문장입니다."), ("paragraph", "| 막대로 시작"), ("heading", (1, "2. 결론")),
+                      ("paragraph", "끝 단락입니다.")], blocks
+    code, out = run_word(capsys, "write", "--file", out["output_file"])
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    paras = [p for p in doc_paras(wd["doc"]) if p.strip()]
+    assert "1. 개요" in paras and "2. 결론" in paras and "1. 번호처럼 보이는 문장입니다." in paras, paras
+    assert not any(p.startswith("단락 ") for p in paras), paras

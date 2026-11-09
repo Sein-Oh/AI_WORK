@@ -1435,9 +1435,9 @@ def test_closed_bounds_only_when_needed(tmp_path, monkeypatch):
     calls = []
     real = excel._closed_bounds
 
-    def counting(ws):
+    def counting(ws, path=None):
         calls.append(ws.title)
-        return real(ws)
+        return real(ws, path)
     monkeypatch.setattr(excel, "_closed_bounds", counting)
     excel._read_matrix_closed(str(p), None, "A1:B2")
     assert calls == []

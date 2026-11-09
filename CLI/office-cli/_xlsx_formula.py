@@ -17,6 +17,58 @@ _XLSX_F_TAG = re.compile(rb"<(?:\w+:)?f[\s>/]")
 _CELL_REF = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+)$")
 
 
+_XLSX_CELL_OPEN = re.compile(rb"<(?:\w+:)?c\s[^>]*?\br=\"([A-Za-z]{1,3})(\d+)\"[^>]*?(/?)>")
+
+
+def _sheet_part(z: Any, title: str) -> Optional[str]:
+    """통합문서 zip에서 시트 이름 -> 시트 XML 경로 (없으면 None)."""
+    import posixpath
+    import xml.etree.ElementTree as ET
+    wb = ET.fromstring(z.read("xl/workbook.xml"))
+    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+    targets = {r.get("Id"): r.get("Target") or "" for r in rels}
+    for sh in wb.iter(_XLSX_MAIN + "sheet"):
+        if (sh.get("name") or "") == title:
+            target = targets.get(sh.get(_XLSX_REL + "id"), "")
+            part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
+            return part if part in set(z.namelist()) else None
+    return None
+
+
+def xlsx_value_extent(path: str, sheet: str) -> Optional[Tuple[int, int]]:
+    """시트 XML에서 내용이 있는 칸(<c ...>...</c>, 서식만 있는 <c .../>는 뺌)의 끝 (행, 열). 파일에 적힌 크기(<dimension>)가
+    실제보다 작은 파일(Excel이 아닌 프로그램이 만든 xlsx)도 끝까지 읽기 위해 씁니다. 칸이 없으면 (0, 0), 읽지 못하면 None.
+    XML을 조각으로 읽어 정규식으로 훑습니다 (openpyxl로 한 번 더 읽는 것보다 빠름)."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            part = _sheet_part(z, sheet)
+            if part is None:
+                return None
+            r2 = c2 = 0
+            tail = b""
+            with z.open(part) as f:
+                while True:
+                    chunk = f.read(4 << 20)
+                    buf = tail + chunk
+                    cut = len(buf) if not chunk else max(buf.rfind(b"<"), 0)
+                    for m in _XLSX_CELL_OPEN.finditer(buf, 0, cut):
+                        if m.group(3):
+                            continue
+                        r = int(m.group(2))
+                        col = 0
+                        for ch in m.group(1).upper():
+                            col = col * 26 + ch - 64
+                        r2, c2 = max(r2, r), max(c2, col)
+                    tail = buf[cut:]
+                    if not chunk:
+                        break
+            return r2, c2
+    except Exception as e:                      # noqa: BLE001  확인 못 하면 파일에 적힌 크기를 씀
+        rt.debug(f"시트 끝 확인 실패: {type(e).__name__}")
+        return None
+
+
 def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
     m = _CELL_REF.match(ref or "")
     if not m:
