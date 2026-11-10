@@ -360,9 +360,10 @@ def test_marks_train_with_correct_options(matrix_marks, lid):
     names, numeric, used = _trained_layout(final)
     assert (names, numeric) == _expect_b(lid, True)
     data_rows = matrix_marks["files"][lid][2]
-    if lid == "S1_total_row":       # the totals row is kept (its values are the user's decision), with a warning
-        assert used in (data_rows, data_rows + [data_rows[-1] + 1])     # it may be an automatic outlier
-        assert any("합계" in w and "'제외' 열" in w for w in final.get("warnings", [])), final.get("warnings")
+    if lid == "S1_total_row":       # 2026-11-10 결정 1-3: the '합계' row is left out of training, said with its Excel row
+        assert used == data_rows[:-1], used
+        assert any("합계" in w and "학습에서 뺐습니다" in w and f"{data_rows[-1]}행" in w
+                   for w in final.get("warnings", [])), final.get("warnings")
     else:
         assert used == data_rows
     if lid == "R1_repeat_hdr_unit":

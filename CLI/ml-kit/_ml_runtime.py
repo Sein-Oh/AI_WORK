@@ -2161,6 +2161,22 @@ def normalize_labels(series: pd.Series) -> pd.Series:
     return series.astype("object").map(_norm)
 
 
+def label_variant_note(labels: Any) -> Optional[str]:
+    """'같은 뜻으로 보이는 라벨: OK 28건, ok 2건' when class labels differ only in letter case, width or spaces ('OK'/'ok',
+    '양품'/'양 품'), else None. The labels are never merged (a change of data values, AGENTS.md 복구 금지): the user fixes
+    the file (2026-11-10 결정 1-4). Up to 5 groups, the most frequent label first."""
+    counts = pd.Series(list(labels), dtype=object).dropna().astype(str).value_counts()
+    groups: Dict[str, List[Tuple[str, int]]] = {}
+    for lab, n in counts.items():
+        key = "".join(unicodedata.normalize("NFKC", str(lab)).casefold().split())
+        groups.setdefault(key, []).append((str(lab), int(n)))
+    alike = [g for g in groups.values() if len(g) > 1]
+    if not alike:
+        return None
+    return "같은 뜻으로 보이는 라벨: " + "; ".join(", ".join(f"{lab} {n}건" for lab, n in g) for g in alike[:5]) \
+        + (f" 외 {len(alike) - 5}묶음" if len(alike) > 5 else "")
+
+
 _CSV_ENCODINGS = ["utf-8-sig", "cp949", "euc-kr", "latin1"]
 
 
@@ -3180,9 +3196,15 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
     rep = df.attrs.get("repeated_header_rows") or []
     if rep:
         out.append(f"{_row_list(rep)}행은 머리글(단위) 행과 같아(페이지마다 반복된 머리글) 데이터에서 뺐습니다")
+    dropped = df.attrs.get("summary_dropped") or []
+    if dropped and training:
+        where = ", ".join(f"{r[0]}행 '{r[2]}'" for r in dropped[:5]) + (f" 외 {len(dropped) - 5}개" if len(dropped) > 5 else "")
+        out.append(f"합계·평균 행 {len(dropped)}행을 학습에서 뺐습니다 ({where}). 데이터 행이면 데이터 파일의 '제외' 열에 "
+                   f"'포함'을 적고 다시 실행하십시오")
+    gone = {r[0] for r in dropped}
     first = str(df.columns[0]) if len(df.columns) else None
     rows = [r for r in df.attrs.get("summary_rows") or []
-            if not targets or r[1] not in targets or r[1] == first]
+            if (not targets or r[1] not in targets or r[1] == first) and r[0] not in gone]
     if rows:
         where = ", ".join(f"{r[0]}행 '{r[2]}'" for r in rows[:5]) + (f" 외 {len(rows) - 5}개" if len(rows) > 5 else "")
         if training:
@@ -3190,6 +3212,47 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
                        f"이유(예: 합계)를 적고 다시 실행하십시오")
         else:
             out.append(f"합계·평균 행으로 보이는 행이 있습니다 ({where}). 이 행의 예측값은 데이터 행의 예측이 아닙니다")
+    return out
+
+
+# Cell texts (trimmed, case ignored) of a totals / average row that training leaves out by itself (2026-11-10 결정 1-3):
+# exact words only. A wider word ('총 합계', '일합계', '평균값') is only warned (it can be a category value).
+SUMMARY_DROP_WORDS = {"합계", "총계", "평균", "소계", "계", "total", "sum", "average"}
+
+
+def drop_summary_rows(df: pd.DataFrame, targets: Optional[List[str]] = None) -> pd.DataFrame:
+    """Training data without the totals / average rows (summary_rows) whose cell text is exactly one of
+    SUMMARY_DROP_WORDS: a row written '합계' is never a measurement. The rule of layout_warnings applies (a word in a
+    target column counts only in the first column: a class label '계'); a row marked '포함' in the '제외' column stays.
+    Rows of numbers only are never dropped (no word). attrs: source_rows of the rows left, summary_dropped =
+    [source row, column, text] of the dropped rows (layout_warnings says them, the training profile records them)."""
+    rows = df.attrs.get("summary_rows") or []
+    first = str(df.columns[0]) if len(df.columns) else None
+    hit = [r for r in rows if str(r[2]).strip().casefold() in SUMMARY_DROP_WORDS
+           and (not targets or r[1] not in targets or r[1] == first)]
+    if not hit or df.empty:
+        return df
+    source_rows = list(df.attrs.get("source_rows") or range(1, len(df) + 1))
+    k_excl = next((c for c in df.columns if strip_unit(str(c)) == EXCLUDE_COL), None)
+    pos_of = {int(r): i for i, r in enumerate(source_rows)}
+    drop, kept = [], []
+    for r in hit:
+        i = pos_of.get(int(r[0]))
+        if i is None:
+            continue
+        if k_excl is not None and exclude_mark(df[k_excl].iloc[i]) == INCLUDE_MARK:
+            continue
+        drop.append(i)
+        kept.append(list(r))
+    if not drop:
+        return df
+    attrs = dict(df.attrs)
+    keep = np.ones(len(df), dtype=bool)
+    keep[drop] = False
+    out = df.loc[keep].reset_index(drop=True)
+    attrs["source_rows"] = _SharedList([s for s, k in zip(source_rows, keep) if k])
+    attrs["summary_dropped"] = _SharedList(kept)
+    out.attrs = attrs
     return out
 
 
