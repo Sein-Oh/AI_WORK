@@ -25,11 +25,44 @@ import shutil
 import threading
 import difflib
 import functools
+import unicodedata
 import argparse
 import warnings
 from datetime import datetime
 from itertools import product
 from typing import Dict, Any, List, Optional, Tuple, Callable
+
+
+def _process_age() -> float:
+    """Seconds since this Python process started (best effort, 0.0 when the OS does not say): the agent's command
+    timeout (120 s) counts from the process start, including the interpreter start and the heavy imports below."""
+    try:
+        if sys.platform.startswith("linux"):
+            with open("/proc/self/stat", "rb") as f:
+                fields = f.read().rsplit(b")", 1)[1].split()
+            with open("/proc/uptime", "rb") as f:
+                uptime = float(f.read().split()[0])
+            return max(0.0, uptime - int(fields[19]) / os.sysconf("SC_CLK_TCK"))
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.windll.kernel32
+            times = [wintypes.FILETIME() for _ in range(4)]
+            now = wintypes.FILETIME()
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            if not k32.GetProcessTimes(k32.GetCurrentProcess(), *(ctypes.byref(t) for t in times)):
+                return 0.0
+            k32.GetSystemTimeAsFileTime(ctypes.byref(now))
+
+            def ticks(ft: Any) -> int:
+                return (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+            return max(0.0, (ticks(now) - ticks(times[0])) / 1e7)
+    except Exception:
+        pass
+    return 0.0
+
+
+PROCESS_START = time.monotonic() - min(_process_age(), 60.0)   # the clock of the first command of this process
 
 # R5: the core libraries are imported guarded so that a missing one still answers with 1 JSON line
 # (missing_library + install_command) instead of a traceback. Every entry point calls check_core_libraries().
@@ -173,7 +206,9 @@ def _numbered_list(cands: List[str], start: int = 1) -> str:
 TIME_LIMIT_ENV = "ML_KIT_TIME_LIMIT"       # seconds for one command; 0 = no limit (human test runners set 0)
 DEFAULT_TIME_LIMIT = 100.0                 # below OpenCode's 120 s, with room for the JSON and file writes
 TIME_RESERVE = 30.0                        # kept free after the last slow step (table, workbook, Excel check, report)
-RUN_START = time.monotonic()               # reset by run_cli for each command
+RUN_START = time.monotonic()               # reset by run_cli for each command (the clock of check_time)
+WATCH_START = RUN_START                    # the watchdog's clock: PROCESS_START for the first command of a process (B7)
+_RUN_STARTED: List[bool] = []              # run_cli was called in this process
 
 
 TIME_LIMIT_ARG: List[float] = []            # --time-limit of this command (JsonArgumentParser), over the env value
@@ -444,11 +479,14 @@ def unfinished_payload(exc: "Unfinished") -> Dict[str, Any]:
                 "message": f"{why} (진행: {exc.progress}). 지금까지 한 일은 저장되어 있습니다.",
                 "agent_directive": "STOP_RETRY: 다시 실행하지 말고 message와 progress를 사용자에게 그대로 알리세요."}
     _continue_state(lambda st: st.__setitem__(key, {"n": n, "progress": exc.progress, "t": time.time()}))
+    # next_commands: the same {purpose, command, needs_input} items as every other result (office-cli has the same shape)
+    nexts = ([{"purpose": "같은 명령으로 이어서 진행 (끝낸 부분은 저장됨, 묻지 않고 그대로 실행)", "command": cmd,
+               "needs_input": False}] if cmd else [])
     return {
         "status": "ok", "verified": False, "continue": True, "progress": exc.progress, "continue_runs": n,
-        "next_commands": [cmd] if cmd else [],
+        "preview": f"진행 중: {exc.progress}", "next_commands": nexts,
         "agent_directive": ("CONTINUE: 아직 끝나지 않았습니다. 명령 시간 제한 때문에 나눠서 진행하며, 지금까지 한 일은 저장되어 있습니다. "
-                            + ("next_commands의 명령을" if cmd else "방금 실행한 명령을")
+                            + ("next_commands[0]의 command를" if cmd else "방금 실행한 명령을")
                             + " 바꾸지 말고 그대로 다시 실행하세요 (사용자에게 묻지 않음, 몇 번째인지 세지 않음: 멈출 때는 도구가 알림). "
                             "끝나면 VERIFIED 결과가 나옵니다."),
     }
@@ -625,13 +663,18 @@ def _watchdog_fire() -> None:
         os._exit(code)
 
 
+def watchdog_delay() -> float:
+    """Seconds from now until the watchdog answers: the limit + WATCHDOG_GRACE after WATCH_START (B7)."""
+    return max(time_limit() + WATCHDOG_GRACE - (time.monotonic() - WATCH_START), 0.0)
+
+
 def start_watchdog() -> Optional[threading.Timer]:
     """run_cli: the time limit watchdog of an ml-kit command (none without a limit, or when the program is not an
     ml-kit command: in-process use such as tests)."""
     limit = time_limit()
     if limit == float("inf") or command_text() is None:
         return None
-    t = threading.Timer(max(limit + WATCHDOG_GRACE - (time.monotonic() - RUN_START), 0.0), _watchdog_fire)
+    t = threading.Timer(watchdog_delay(), _watchdog_fire)
     t.daemon = True
     t.start()
     return t
@@ -936,8 +979,13 @@ def write_error_log(payload: Dict[str, Any], trace: str = "", argv: Optional[Lis
 def run_cli(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
     """Runs a tool body, guaranteeing exactly one JSON line on stdout and exit code 0/1/130.
     Failures (exit 1) are appended to <data>/logs/errors.txt; interruptions (130) are not."""
-    global RUN_START
+    global RUN_START, WATCH_START
     RUN_START = time.monotonic()
+    # B7: the watchdog of the first command of an ml-kit process counts from the process start (the interpreter start,
+    # the imports of pandas / scikit-learn and the argument parsing are inside the agent's 120 s too: the JSON line must
+    # come before it). The steps' clock checks (check_time) keep RUN_START: their 30 s reserve covers the start.
+    WATCH_START = PROCESS_START if not _RUN_STARTED and command_text() is not None else RUN_START
+    _RUN_STARTED.append(True)
     SAVE_FAILED.clear()
     RUN_SAVED.clear()
     RUN_COMMITTED.clear()
@@ -1205,10 +1253,10 @@ class JsonArgumentParser(argparse.ArgumentParser):
 
 def sanitize_filename(name: str) -> str:
     r"""
-    Replaces characters forbidden in Windows filenames (\ / : * ? " < > |).
+    Replaces characters forbidden in Windows filenames (\ / : * ? " < > | and control characters: a line break).
     Guarantees targets like '유속(m/s)' or '비용(원/kg)' save safely on Windows filesystem.
     """
-    return re.sub(r'[\\/*?:"<>|]', "_", str(name))
+    return re.sub(r'[\\/*?:"<>|\x00-\x1f\x7f]', "_", str(name))
 
 
 def normalize_version(v: Optional[str]) -> Optional[str]:
@@ -1958,6 +2006,29 @@ def decimal_comma_text_share(series: pd.Series) -> Tuple[int, int, int, List[str
     return int(filled.sum()), int(dc.sum()), int(num.sum()), ex
 
 
+_UNIT_NUMBER_RE = re.compile(r"[+-]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?\s*([^\d\s.,+%-][^\d\s]{0,9}(?:\s?[^\d\s]{1,5})?\d?)")
+UNIT_NUMBER_SHARE = 0.9       # this share of the filled cells written '<number><the same unit>' ('187.3℃', '2.45 bar')
+
+
+def unit_number_cells(series: pd.Series) -> Tuple[int, int, str, List[str]]:
+    """(filled cells, cells written as a number with the most common unit after it, that unit, examples) of a text
+    column (A6): '187.3℃', '2.45 bar', '1,873원' are numbers the reader cannot read (coerce_numeric does not cut
+    units: '12호기' or '3A' may be codes), so such a column would train as a category of every value."""
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return 0, 0, "", []
+    text = [v.strip() for v in series.astype("object") if isinstance(v, str) and v.strip() and v.strip() not in MISSING_MARKS]
+    filled = int(series.notna().sum())
+    units: Dict[str, List[str]] = {}
+    for t in text:
+        m = _UNIT_NUMBER_RE.fullmatch(t)
+        if m:
+            units.setdefault(m.group(4).strip(), []).append(t)
+    if not units:
+        return filled, 0, "", []
+    unit, cells = max(units.items(), key=lambda kv: len(kv[1]))
+    return filled, len(cells), unit, list(dict.fromkeys(cells))[:3]
+
+
 _PERCENT_RE = re.compile(r"([+-]?(\d[\d,]*\.?\d*|\.\d+)([eE][-+]?\d+)?)\s*%")
 
 
@@ -2032,6 +2103,8 @@ def _number_cell(v: Any) -> Any:
     if not isinstance(v, str):
         return v
     t = v.strip()
+    if not t.isascii():   # pasted from the web / Word: '−5' (minus sign), full-width digits and '%' (C8)
+        t = unicodedata.normalize("NFKC", t.replace("−", "-"))
     if "%" in t:
         t = _strip_percent(t)
     t = _strip_thousands(t)
@@ -2043,8 +2116,11 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
     Converts a column to float regardless of its storage dtype (object in pandas 2,
     'str' in pandas 3). Strips thousands separators, a trailing '%' ('64.4%' -> 64.4, the number as written:
     the column name usually says (%) already; percent_cells tells the user) and placeholder NaN strings.
-    Numeric and datetime columns are returned unchanged.
+    Numeric and datetime columns are returned unchanged. Infinity ('inf', 'Infinity', '1e400' text, B2) is a missing
+    number: the models cannot read it (ValueError 'Input contains infinity' was an internal error).
     """
+    if pd.api.types.is_float_dtype(series) and np.isinf(series.to_numpy(dtype=float)).any():
+        return series.replace([np.inf, -np.inf], np.nan)
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
         return series
     s = series.astype("object").where(series.notna(), None)
@@ -2052,7 +2128,8 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
     # 지우지 않음 -> 숫자로 못 읽은 값(결측 경고)이 됨 (1756으로 조용히 바뀌지 않게). 칸마다 한 번에 (열이 많은
     # 큰 데이터: 칸마다 정규식과 replace를 따로 돌리면 학습 전 준비만 수십 초)
     s = pd.Series([_number_cell(v) for v in s.to_numpy()], index=s.index, name=s.name, dtype=object)
-    return pd.to_numeric(s, errors="coerce").astype(float)
+    out = pd.to_numeric(s, errors="coerce").astype(float)
+    return out.replace([np.inf, -np.inf], np.nan)
 
 
 def normalize_labels(series: pd.Series) -> pd.Series:
@@ -2250,7 +2327,8 @@ def _read_csv_fast(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
         sep = _sniff_delimiter("\n".join(sample.splitlines()[:50]))
         df = None
         try:
-            df = pd.read_csv(file_path, header=None, sep=sep, encoding=enc, dtype=str, low_memory=False)
+            df = pd.read_csv(file_path, header=None, sep=sep, encoding=enc, dtype=str, low_memory=False,
+                             skip_blank_lines=False)
         except UnicodeDecodeError as e:
             last_err = e
             continue
@@ -2261,7 +2339,7 @@ def _read_csv_fast(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
                 with open(file_path, "r", encoding=enc, newline="") as f:
                     width = max((len(r) for r in csv.reader(f, delimiter=sep)), default=1)
                 df = pd.read_csv(file_path, header=None, names=list(range(width)), sep=sep, encoding=enc,
-                                 dtype=str, engine="python")
+                                 dtype=str, engine="python", skip_blank_lines=False)
             except Exception as e:
                 last_err = e
                 continue
@@ -2282,15 +2360,18 @@ def load_data_file(
     header_row: Optional[int] = None,
     unit_row: Optional[int] = None,
     data_row: Optional[int] = None,
-    decimal_comma: bool = False
+    decimal_comma: bool = False,
+    sheet: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Loads tabular data from CSV (multi-encoding, auto delimiter) or Excel (.xlsx).
     Handles non-standard header, unit, and data row specifications.
     Includes Auto-Header Sniffing: skips blank/title top rows automatically if header_row is not explicit.
     decimal_comma: the model / data file this file goes with was read with decimal commas (_decimal_commas).
+    sheet: the sheet of an .xlsx (--sheet); None = the first sheet, or the only sheet with data when the first has none
+    (read_raw_table). Ignored for a CSV (the caller says so: sheet_ignored_warning).
     """
-    df_raw = read_raw_table(file_path, decimal_comma)
+    df_raw = read_raw_table(file_path, decimal_comma, sheet)
     total_rows = len(df_raw)
     if total_rows == 0:
         raise InputError("입력 데이터 파일이 비어 있습니다.")
@@ -2306,8 +2387,103 @@ def load_data_file(
     return _layout_frame(df_raw, header_idx, unit_row, data_row)
 
 
-def read_raw_table(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
-    """The sheet / CSV as read, without a header (cells as stored; CSV cells as text)."""
+# ------------------------------------------------------------------------------
+# Sheets of an .xlsx (A3): every command reads one sheet. Without --sheet it is the first sheet, or the only sheet with
+# data when the first has none (a cover page). The other sheets with data are said (layout_warnings: [후보] --sheet
+# commands when the running command takes --sheet), and a name missing from the sheet read but found in another sheet's
+# top rows gives [추천] --sheet (header_layout_hint).
+# ------------------------------------------------------------------------------
+SHEET_ARG: List[bool] = []      # the running command takes --sheet (add_sheet_argument)
+SHEET_SCAN_ROWS = HEADER_SCAN_ROWS + 5     # top rows of each sheet read for the overview
+SHEET_DATA_ROWS = 2                         # rows of 2+ filled cells that make a sheet one with data
+
+
+def add_sheet_argument(parser: argparse.ArgumentParser) -> None:
+    """--sheet: the same name and meaning as office-cli's --sheet (a sheet name of an .xlsx)."""
+    parser.add_argument("--sheet", help="읽을 시트 이름 (.xlsx, 생략 시 첫 시트. 첫 시트에 데이터가 없으면 데이터가 있는 시트)")
+    SHEET_ARG.append(True)
+
+
+def _sheet_overview(file_path: str) -> List[Tuple[str, bool, List[List[str]]]]:
+    """(name, has data, cells of the top rows) of every sheet, in workbook order (read-only, top rows only)."""
+    from openpyxl import load_workbook
+    wb = load_workbook(file_path, read_only=True, data_only=True, keep_links=False)
+    out = []
+    try:
+        for ws in wb.worksheets:
+            rows: List[List[str]] = []
+            filled = 0
+            try:
+                for row in ws.iter_rows(max_row=SHEET_SCAN_ROWS, values_only=True):
+                    cells = [t for t in (_cell_text(v) for v in row) if t]
+                    rows.append(cells)
+                    filled += len(cells) >= 2
+            except Exception:            # a chart sheet or an odd sheet: no rows
+                pass
+            out.append((str(ws.title), filled >= SHEET_DATA_ROWS, rows))
+    finally:
+        wb.close()
+    return out
+
+
+def _choose_sheet(file_path: str, sheet: Optional[str]) -> Tuple[str, Dict[str, Any]]:
+    """(sheet to read, attrs about the sheets) of an .xlsx (see SHEET_ARG)."""
+    sheets = _sheet_overview(file_path)
+    names = [n for n, _, _ in sheets]
+    if not names:
+        raise InputError(f"엑셀 파일에 시트가 없습니다: {file_path}")
+    note = None
+    if sheet is not None:
+        want = str(sheet).strip()
+        hit = [n for n in names if n == want] or [n for n in names if n.strip().casefold() == want.casefold()]
+        if len(hit) != 1:
+            cmds = [command_setting("--sheet", n) if SHEET_ARG else None for n in names]
+            raise InputError(f"--sheet '{sheet}' 시트가 없습니다. 이 파일의 시트: {name_list(names)}. 어느 시트인지 사용자에게 "
+                             f"물으십시오: " + ask(names, cmds, "--sheet {}"))
+        chosen = hit[0]
+    else:
+        chosen = names[0]
+        data = [n for n, d, _ in sheets if d]
+        if not sheets[0][1] and len(data) == 1:
+            chosen = data[0]
+            note = f"첫 시트 '{names[0]}'에 데이터가 없어 데이터가 있는 시트 '{chosen}'을(를) 읽었습니다"
+    others = [[n, rows] for n, d, rows in sheets if d and n != chosen]
+    return chosen, {"sheet": chosen, "sheet_given": sheet is not None, "sheet_note": note,
+                    "other_sheets": _SharedList(others if sheet is None else []), "sheet_names": _SharedList(names),
+                    "other_sheet_rows": _SharedList([n, rows] for n, _, rows in sheets if n != chosen)}
+
+
+def sheet_note(attrs: Dict[str, Any], commands: bool = True) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """(warning, confirm_commands) about the sheets of an .xlsx read without --sheet: the sheet chosen for a cover page,
+    and the other sheets with data ([후보] --sheet commands when the running command takes --sheet and commands)."""
+    parts: List[str] = []
+    items: List[Dict[str, Any]] = []
+    if attrs.get("sheet_note"):
+        parts.append(attrs["sheet_note"])
+    others = [n for n, _ in attrs.get("other_sheets") or []]
+    if others:
+        total = len(attrs.get("sheet_names") or []) or len(others) + 1
+        said = f"시트 {total}개 중 '{attrs.get('sheet')}'만 읽었습니다 (데이터가 있는 다른 시트: {', '.join(repr(n) for n in others[:10])})"
+        if SHEET_ARG and commands:
+            text, items = numbered(others[:10], [command_setting("--sheet", n) for n in others[:10]], "시트 '{}'로 다시 실행")
+            said += f". 다른 시트를 쓰려면 사용자에게 물으십시오: {text}"
+        elif SHEET_ARG:
+            said += ". 다른 시트를 쓰려면 --sheet <시트 이름>을 붙입니다"
+        else:
+            said += ". 다른 시트를 쓰려면 그 시트만 따로 저장한 파일로 실행하십시오"
+        parts.append(said)
+    return ("; ".join(parts) if parts else None), items
+
+
+def sheet_ignored_warning(file_path: str, sheet: Optional[str]) -> Optional[str]:
+    """--sheet given for a CSV (one table, no sheets): read anyway, said (AGENTS.md 사용법 단순성 4)."""
+    if sheet is not None and os.path.splitext(file_path)[1].lower() not in (".xlsx", ".xlsm"):
+        return f"--sheet '{sheet}'은(는) .xlsx에만 씁니다. CSV 파일이라 쓰지 않았습니다"
+    return None
+
+
+def read_raw_table(file_path: str, decimal_comma: bool = False, sheet: Optional[str] = None) -> pd.DataFrame:
+    """The sheet / CSV as read, without a header (cells as stored; CSV cells as text). sheet: see load_data_file."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"입력 데이터 파일을 찾을 수 없습니다: {file_path}")
 
@@ -2315,8 +2491,10 @@ def read_raw_table(file_path: str, decimal_comma: bool = False) -> pd.DataFrame:
 
     if ext in [".xlsx", ".xlsm"]:
         try:
-            df_raw = pd.read_excel(file_path, header=None)
-            df_raw = _excel_percent_cells(file_path, df_raw)
+            chosen, sheet_attrs = _choose_sheet(file_path, sheet)
+            df_raw = pd.read_excel(file_path, header=None, sheet_name=chosen)
+            df_raw = _excel_percent_cells(file_path, df_raw, chosen)
+            df_raw.attrs.update(sheet_attrs)
         except ImportError:
             raise InputError("openpyxl 패키지가 설치되어 있지 않아 .xlsx를 읽을 수 없습니다. `python -m pip install openpyxl`로 설치하십시오.")
         except PermissionError:
@@ -2345,8 +2523,8 @@ def _percent_text(v: float) -> str:
     return f"{float(v) * 100:.15g}%"
 
 
-def _excel_percent_cells(file_path: str, df_raw: pd.DataFrame) -> pd.DataFrame:
-    """The number cells of the first sheet (the one pd.read_excel read) with a percent number format, written as the
+def _excel_percent_cells(file_path: str, df_raw: pd.DataFrame, sheet: Optional[str] = None) -> pd.DataFrame:
+    """The number cells of the sheet pd.read_excel read (sheet; None = the first) with a percent number format, written as the
     text Excel shows ('11.9%' for 0.119): read_excel gives the stored fraction, a CSV export of the same
     sheet gives '11.9%' (read as 11.9), so the same data would differ by 100x between the two file formats.
     Sheets without a percent format in their styles are returned unchanged (one cheap style check, no second read)."""
@@ -2362,7 +2540,7 @@ def _excel_percent_cells(file_path: str, df_raw: pd.DataFrame) -> pd.DataFrame:
                 return df_raw
         except Exception:
             pass
-        ws = wb.worksheets[0]
+        ws = wb[sheet] if sheet is not None else wb.worksheets[0]
         if getattr(ws, "reset_dimensions", None):
             ws.reset_dimensions()
         hits: Dict[int, Dict[int, str]] = {}
@@ -2406,6 +2584,49 @@ class _SharedList(list):
         return self
 
 
+def _column_letter(k: int) -> str:
+    """0 -> 'A', 26 -> 'AA' (the Excel column of a 0-based position)."""
+    out = ""
+    k += 1
+    while k:
+        k, r = divmod(k - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def _two_level_header(df_raw: pd.DataFrame, header_idx: int) -> Optional[List[str]]:
+    """Column names of a two-row merged header, or None (A9). The header row has group names merged across ('1차' over
+    B blank, '2차' over D blank) and the row below names the columns ('온도, 압력, 온도, 압력'); a column merged down has
+    its name in the header row only ('수율' over a blank). Read as one header only when the second row is needed: a
+    column named only in the header row has data below, or the second row repeats a name. Then a repeated name is joined
+    with its group ('1차_온도'), any other second-row name is used as is, and a name of the header row alone stays.
+    The second row is text only (no number or date) and no unit row. Otherwise the usual hints apply ([추천] --header-row)."""
+    i1 = header_idx + 1
+    if i1 + 1 >= len(df_raw):
+        return None
+    upper = [_cell_text(v) for v in df_raw.iloc[header_idx].tolist()]
+    lower = [_cell_text(v) for v in df_raw.iloc[i1].tolist()]
+    lower = [t if not _blank_mark(t) else "" for t in lower]
+    filled = [t for t in lower if t]
+    if len(filled) < 2 or any(_is_data_value(t) for t in filled) or _looks_like_unit_row(df_raw, i1, header_idx):
+        return None
+    below = df_raw.iloc[i1 + 1:]
+    has_data = [bool(below.iloc[:, k].notna().any()) for k in range(df_raw.shape[1])]
+    gap = [k for k in range(len(upper)) if not upper[k] and lower[k] and has_data[k] and any(upper[:k])]
+    down = [k for k in range(len(upper)) if upper[k] and not lower[k] and has_data[k]]
+    repeated = {t for t in filled if filled.count(t) > 1}
+    if not gap or not (down or repeated):
+        return None
+    names, group = [], ""
+    for up, low in zip(upper, lower):
+        group = up or group
+        if low:
+            names.append(f"{group}_{low}" if low in repeated and group else low)
+        else:
+            names.append(up)
+    return names
+
+
 def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int],
                   data_row: Optional[int]) -> pd.DataFrame:
     """The data frame of load_data_file from the raw table and the 0-based header row."""
@@ -2413,6 +2634,11 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     raw_headers = df_raw.iloc[header_idx].values
     headers = [_cell_text(c) or f"col_{i}" for i, c in enumerate(raw_headers)]
     auto_named = [not _cell_text(c) for c in raw_headers]   # header cell was blank
+    # a two-row merged header ('1차' over '온도, 압력', '수율' merged down): one name per column from both rows (A9)
+    two_level = _two_level_header(df_raw, header_idx) if unit_row is None and data_row is None else None
+    if two_level:
+        headers = [n or f"col_{i}" for i, n in enumerate(two_level)]
+        auto_named = [not n for n in two_level]
 
     # Handle unit row if provided. A row that is not a unit row (numbers, text data, a blank row, the header itself or
     # a row above it) would rename every column ('반응온도(192.58)') or turn the real unit row into data: refused, with
@@ -2451,7 +2677,8 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     used = set(headers)
     seen_headers: Dict[str, int] = {}
     unique_headers: List[str] = []
-    for h in headers:
+    renamed: List[List[str]] = []      # [name in the file, name read, column letter]: said in layout_warnings (C4)
+    for k, h in enumerate(headers):
         if h not in seen_headers:
             seen_headers[h] = 0
             unique_headers.append(h)
@@ -2465,13 +2692,16 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
         seen_headers[h] = n
         used.add(cand)
         unique_headers.append(cand)
+        if not auto_named[k]:
+            renamed.append([h, cand, _column_letter(k)])
     headers = unique_headers
 
-    # Determine data start row
+    # Determine data start row (below the second header row of a two-row header)
+    top_idx = header_idx + 1 if two_level else header_idx
     if data_row is not None:
         start_idx = max(0, data_row - 1)
     else:
-        start_idx = max(header_idx, unit_row - 1 if unit_row is not None else header_idx) + 1
+        start_idx = max(top_idx, unit_row - 1 if unit_row is not None else top_idx) + 1
 
     if start_idx >= total_rows:
         raise InputError(f"데이터 시작 행 ({start_idx + 1}) 이후에 유효한 데이터 행이 없습니다.")
@@ -2487,13 +2717,15 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
                          f"데이터가 채워진 파일인지, 머리글·데이터 시작 행(--header-row, --data-row)이 맞는지 확인하십시오.")
     # The header (and unit) row repeated inside the data (page breaks of an exported report) carries no values:
     # dropped, with the row numbers in attrs (layout_warnings), so numeric columns stay numeric.
-    repeated = _repeated_header_rows(df_raw, df_data, header_idx, unit_row, start_idx)
+    repeated = _repeated_header_rows(df_raw, df_data, top_idx, unit_row, start_idx)
     if repeated:
         df_data = df_data.drop(index=repeated)
     empty_auto = [h for h, auto in zip(headers, auto_named) if auto and df_data[h].isna().all()]
     if empty_auto:
         df_data = df_data.drop(columns=empty_auto)
-    # 1-based row number in the source file for each data row (exact for .xlsx; CSV blank lines are skipped by the reader)
+    blank_named = [h for h, auto in zip(headers, auto_named) if auto and h not in empty_auto]
+    # 1-based row number in the source file for each data row: the Excel row of .xlsx, the line of a CSV (blank lines are
+    # read as blank rows, A8: a cell with a line break inside quotes still shifts the lines after it)
     source_rows = [int(i) + 1 for i in df_data.index]
     df_data = df_data.reset_index(drop=True)
     df_data.attrs["source_rows"] = _SharedList(source_rows)
@@ -2503,7 +2735,7 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     # Each candidate: [row, cells, unit row below it or None, cells joined with that unit row ('반응온도(°C)')]
     candidates = []
     for i in range(min(HEADER_SCAN_ROWS, total_rows)):
-        if i == header_idx:
+        if i == header_idx or (two_level and i == top_idx):
             continue
         cells = _row_cells(df_raw, i)
         if cells and (i < start_idx or _numeric_share(cells) < 0.5):
@@ -2517,11 +2749,18 @@ def _layout_frame(df_raw: pd.DataFrame, header_idx: int, unit_row: Optional[int]
     df_data.attrs["unit_row"] = unit_row
     df_data.attrs["data_row"] = data_row
     # read without layout options: is the row right below the header a unit row (predicted as data otherwise)?
-    df_data.attrs["unit_row_below"] = (header_idx + 2 if unit_row is None and data_row is None
+    df_data.attrs["unit_row_below"] = (header_idx + 2 if unit_row is None and data_row is None and not two_level
                                        and header_idx + 1 < total_rows and _looks_like_unit_row(df_raw, header_idx + 1, header_idx)
                                        else None)
     df_data.attrs["repeated_header_rows"] = [int(i) + 1 for i in repeated]
     df_data.attrs["odd_unit_names"] = odd_units
+    df_data.attrs["two_level_header"] = ([header_idx + 1, header_idx + 2, [h for h in headers if h not in empty_auto][:5]]
+                                         if two_level else None)
+    df_data.attrs["renamed_columns"] = renamed
+    df_data.attrs["blank_header_columns"] = blank_named
+    for key in ("sheet", "sheet_given", "sheet_note", "other_sheets", "sheet_names", "other_sheet_rows"):
+        v = df_raw.attrs.get(key)
+        df_data.attrs[key] = _SharedList(v) if isinstance(v, list) else v
     df_data.attrs["summary_rows"] = _SharedList(_summary_rows(df_data, source_rows))
     df_data.attrs["decimal_comma"] = df_raw.attrs.get("decimal_comma")
     return df_data
@@ -2602,12 +2841,17 @@ AGGREGATE_WORDS = {"최대", "최소", "최고", "최저", "중앙값", "중간�
 SUMMARY_SHARE = 0.2       # average words in this share of a column's filled cells (3+ cells) make it a category
 
 
+# '제외' cells that say "no" (B3): N / No / 아니오 flags and the blank marks '-', 'N/A' are not marks, like an empty cell
+EXCLUDE_NO_WORDS = {"FALSE", "N", "NO", "아니오", "아니요", "-", "N/A", "NA"}
+
+
 def exclude_mark(v: Any) -> str:
-    """A '제외' cell as text; 0 / FALSE (0-1 or TRUE/FALSE flags) mean "not marked", like an empty cell."""
+    """A '제외' cell as text; 0 / FALSE / N / No / 아니오 / '-' / N/A (EXCLUDE_NO_WORDS) mean "not marked", like an
+    empty cell. Other flags (Y, O, X) are marks; a column filled with them stops the training (check_exclude_marks)."""
     if v is None or (not isinstance(v, str) and pd.isna(v)) or isinstance(v, (bool, np.bool_)) and not v:
         return ""
     t = str(v).strip()
-    if t.upper() == "FALSE":
+    if t.upper() in EXCLUDE_NO_WORDS:
         return ""
     try:
         return "" if float(t) == 0 else t
@@ -2912,6 +3156,18 @@ def layout_warnings(df: pd.DataFrame, targets: Optional[List[str]] = None, train
     training and ml_map; prediction only notes them). A totals word in a target column counts only in the first
     column (a class label '계' is not a totals row)."""
     out: List[str] = []
+    sheet_text, _ = sheet_note(df.attrs)
+    if sheet_text:
+        out.append(sheet_text)
+    two = df.attrs.get("two_level_header")
+    if two:
+        out.append(f"{two[0]}~{two[1]}행을 두 줄 머리글(병합 머리글)로 읽어 열 이름을 합쳤습니다 "
+                   f"(예: {', '.join(repr(n) for n in two[2])})")
+    renamed = df.attrs.get("renamed_columns") or []
+    if renamed:
+        out.append("같은 이름의 열이 있어 이름을 바꿔 읽었습니다: " + ", ".join(
+            f"{r[2]}열 '{r[0]}' -> '{r[1]}'" for r in renamed[:5]) + (" 등" if len(renamed) > 5 else "")
+            + ". 이름만으로는 첫 열을 씁니다. 다른 열이면 데이터 파일의 머리글을 고치십시오")
     dec = df.attrs.get("decimal_comma")
     if dec:
         out.append(f"CSV(구분 기호 '{dec[2]}')의 숫자 쉼표를 소수점으로 읽었습니다 ({dec[1]}칸, 예: {dec[0]})")
@@ -2941,18 +3197,29 @@ def _row_list(rows: List[int]) -> str:
     return ", ".join(str(r) for r in rows[:10]) + (f" 외 {len(rows) - 10}개" if len(rows) > 10 else "")
 
 
+_SPACES_RE = re.compile(r"\s+")
+
+
 def _cell_text(v: Any) -> str:
-    """Header / unit cell as text: blank -> '', a whole-number Excel cell (year 2023 read as 2023.0) -> '2023'."""
+    """Header / unit cell as text: blank -> '', a whole-number Excel cell (year 2023 read as 2023.0) -> '2023'.
+    A line break (Alt+Enter in Excel) and a run of spaces become one space ('수율\\n(%)' -> '수율 (%)'): a column name with
+    a line break gave a model file the prediction could not find and commands of two lines (A1)."""
     if v is None or (not isinstance(v, str) and pd.isna(v)):
         return ""
     if isinstance(v, (float, np.floating)) and float(v).is_integer():
         return str(int(v))
-    return str(v).strip()
+    return _SPACES_RE.sub(" ", str(v)).strip()
 
 
 def _with_unit(header: str, unit: Any) -> str:
+    """'압력' + 'bar' -> '압력(bar)'; a header that already ends with the same unit ('압력(bar)' over a unit row 'bar')
+    keeps its name (B1: '압력(bar)(bar)' made the tool's own [추천] --unit-row fail)."""
     u = _cell_text(unit)
-    return f"{header}({u})" if not _blank_mark(u) else header
+    if _blank_mark(u):
+        return header
+    if unit_of(header) and not other_unit(header, f"x({u})"):
+        return header
+    return f"{header}({u})"
 
 
 def _row_cells(df_raw: pd.DataFrame, i: int) -> List[str]:
@@ -3274,6 +3541,22 @@ def find_header_layout(candidates: Optional[List[List[Any]]], names: List[str],
     return None
 
 
+def _other_sheet_hint(layout: Dict[str, Any], names: List[str]) -> str:
+    """'시트 '측정'에 이 이름들이 있습니다. [추천] <--sheet 측정 명령>' when the names are in the top rows of another sheet
+    of the .xlsx (A3); [후보] when several sheets have them; text only when the command takes no --sheet."""
+    if layout.get("sheet_given"):
+        return ""
+    hits = [n for n, rows in layout.get("other_sheet_rows") or [] if any(names_in_cells(names, cells) for cells in rows)]
+    if not hits:
+        return ""
+    if not SHEET_ARG:
+        return f"시트 {', '.join(repr(n) for n in hits)}에 이 이름들이 있습니다 (이 명령은 첫 시트를 읽음). 그 시트만 따로 저장한 파일로 실행하십시오."
+    if len(hits) == 1:
+        return f"시트 '{hits[0]}'에 이 이름들이 있습니다 (읽은 시트: '{layout.get('sheet')}'). [추천] {command_setting('--sheet', hits[0])}"
+    return (f"여러 시트에 이 이름들이 있습니다 (읽은 시트: '{layout.get('sheet')}'). 어느 시트인지 사용자에게 물으십시오: "
+            + ask(hits, [command_setting("--sheet", n) for n in hits], "시트 '{}' 읽기"))
+
+
 def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> str:
     """'파일 N행에 이 이름들이 있습니다 ... [추천] ...' for names found in another top row, else ''.
     [추천] --header-row N alone when no unit row is involved; with a unit row below N, or when the run gave
@@ -3281,7 +3564,7 @@ def header_layout_hint(layout: Optional[Dict[str, Any]], names: List[str]) -> st
     layout = layout or {}
     found = find_header_layout(layout.get("header_candidates"), names)
     if not found:
-        return ""
+        return _other_sheet_hint(layout, names)
     row, unit = found
     where = f"파일 {row}행에 이 이름들이 있습니다 (두 줄 머리글, 병합된 머리글이나 제목 행)"
     if unit:
@@ -3487,6 +3770,13 @@ SAFE_MATH: Dict[str, Any] = {
     "degrees": np.degrees,
 } if np is not None else {}      # numpy missing: check_core_libraries answers before any formula (R5)
 
+EVAL_ALLOWED = ("쓸 수 있는 것: 열 이름, 숫자, + - * / // % ** (거듭제곱은 **), 괄호, 함수 "
+                + ", ".join(sorted(k for k in SAFE_MATH if callable(SAFE_MATH[k]))) + " (예: clip(a, 0, 1)). "
+                "조건식(if), 비교(>, ==), and/or는 쓸 수 없습니다") if SAFE_MATH else ""
+# functions that read |x| (log, sqrt of a negative value): the formula means something else for those rows (B5)
+_ABS_FUNCS = ("log", "log10", "log1p", "sqrt")
+EVAL_WARNINGS: List[str] = []    # warnings of the formulas applied with strict=True in this run (training)
+
 _NUMBER_NAME_RE = re.compile(r"(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")    # a column name that reads as a number
 _NAME_BOUNDARY_L = r"(?<![가-힣a-zA-Z0-9_])"
 _NAME_BOUNDARY_R = r"(?![가-힣a-zA-Z0-9_])"
@@ -3502,7 +3792,7 @@ def _validate_eval_ast(formula_ast: ast.AST, allowed_identifiers: set, columns: 
     banned = set(targets or [])
     for node in ast.walk(formula_ast):
         if not isinstance(node, _ALLOWED_AST_NODES):
-            raise InputError(f"보안 위반: 허용되지 않은 문법 노드 감지: {type(node).__name__}")
+            raise InputError(f"수식에 쓸 수 없는 문법입니다 ({type(node).__name__}). {EVAL_ALLOWED}")
         if isinstance(node, ast.Call) and not (isinstance(node.func, ast.Name) and node.func.id in SAFE_MATH):
             raise InputError(f"허용되지 않은 함수 호출입니다. 사용 가능 함수: {sorted(k for k in SAFE_MATH if callable(SAFE_MATH[k]))}")
         if isinstance(node, ast.Name) and node.id not in allowed_identifiers:
@@ -3658,6 +3948,16 @@ def apply_eval_expressions(
 
             with np.errstate(all="ignore"):
                 res_val = eval(compile(tree, "<eval>", "eval"), {"__builtins__": {}}, eval_env)
+                if strict:
+                    for node in ast.walk(tree):    # log / sqrt of negative values read |x|: said (B5)
+                        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _ABS_FUNCS
+                                and node.args):
+                            arg = eval(compile(ast.Expression(node.args[0]), "<eval>", "eval"), {"__builtins__": {}}, eval_env)
+                            neg = int(np.sum(np.asarray(arg, dtype=float) < 0))
+                            if neg:
+                                EVAL_WARNINGS.append(
+                                    f"--eval '{new_col} = {canonical}': {node.func.id}() 안의 값이 음수인 행 {neg}개는 절댓값으로 "
+                                    f"계산했습니다 (예: log(-2) -> log(2)). 뜻이 맞는지 사용자에게 확인하십시오")
             if not isinstance(res_val, (pd.Series, np.ndarray, int, float)):
                 raise InputError("수식 결과가 숫자형 배열이 아닙니다.")
             ser = pd.Series(res_val, index=df.index, dtype=float).replace([np.inf, -np.inf], np.nan)

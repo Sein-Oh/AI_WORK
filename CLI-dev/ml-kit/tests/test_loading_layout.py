@@ -674,3 +674,148 @@ def test_source_rows_not_copied_per_operation(tmp_path):
     assert df["a"].attrs["source_rows"] is rows                           # 2.9.19: a deep copy per Series
     assert copy.deepcopy(df.attrs)["source_rows"] is rows
     assert rt.coerce_numeric(df["a"]).iloc[-1] == 1999.0
+
+
+# ---- 검토 A (2026-11-10): 머리글 줄바꿈, 시트 여러 개, 두 줄 병합 머리글, 단위 두 번, 같은 이름 열 ---------------------------
+
+from mlkit_helpers import base_rows, ok_res, stop_msg  # noqa: E402
+
+
+def _book(path, sheets, merges=(), active=0):
+    """[(시트 이름, 행 목록)]을 .xlsx로 (첫 시트가 맨 앞)."""
+    wb = openpyxl.Workbook()
+    for k, (name, rows) in enumerate(sheets):
+        ws = wb.active if k == 0 else wb.create_sheet(name)
+        ws.title = name
+        for row in rows:
+            ws.append(row)
+        if k == 0:
+            for m in merges:
+                ws.merge_cells(m)
+    wb.active = active
+    wb.save(path)
+    return str(path)
+
+
+def test_header_line_breaks_fold_and_the_model_predicts(tmp_path):
+    """A1: 머리글 칸의 줄바꿈(Alt+Enter)과 겹친 빈칸은 빈칸 하나로 읽는다: 모델 파일 이름·명령에 줄바꿈이 없고 그 모델로 예측된다."""
+    r = np.random.default_rng(3)
+    rows = [["반응온도\n(°C)", " 압력  (bar) ", "라인\n구분", "수율\n(%)"]]
+    rows += [[t, p, str(r.choice(["A", "B"])), y] for t, p, y in base_rows(30, 3)]
+    f = write_book(tmp_path / "nl.xlsx", rows)
+    res = run_tool("ml_train.py", "--file", f, "--targets", "수율")
+    assert res["targets"] == ["수율 (%)"] and res["features_auto"] == ["반응온도 (°C)", "압력 (bar)", "라인 구분"], res
+    assert "\n" not in res["preview"]
+    assert not any("\n" in c["command"] for c in res["next_commands"]), res["next_commands"]
+    assert not any("\n" in n for n in os.listdir(res["version_dir"]))
+    p = run_tool("ml_predict.py", "--model", res["version_dir"], "--input", "반응온도=180,압력=3,라인구분=A")
+    assert p["status"] == "ok"
+    assert run_tool("ml_predict.py", "--model", res["version_dir"], "--file", f)["sample_count"] == 30
+
+
+def test_sanitize_filename_replaces_control_characters():
+    assert rt.sanitize_filename("수율\n(%)\t/a") == "수율_(%)__a"
+
+
+def _months(path, active=2):
+    sheets = [(m, [["온도", "압력", "수율"]] + base_rows(20, k)) for k, m in enumerate(["1월", "2월", "3월"])]
+    return _book(path, sheets, active=active)
+
+
+def test_several_data_sheets_read_the_first_and_say_so(tmp_path):
+    """A3: 데이터가 있는 시트가 여럿이면 첫 시트를 읽고(활성 시트와 무관) warnings에 다른 시트와 번호 붙인 --sheet 명령."""
+    f = _months(tmp_path / "months.xlsx")
+    res = run_tool("ml_train.py", "--file", f, "--targets", "수율")
+    w = " ".join(res.get("warnings", []))
+    assert "'1월'" in w and "'2월'" in w and "'3월'" in w and "[후보] 1) 2월 2) 3월" in w, res
+    cmds = [c["command"] for c in res["confirm_commands"]]
+    assert len(cmds) == 2 and all("--sheet" in c for c in cmds), cmds
+    parts = split_command(cmds[0])
+    assert parts[parts.index("--sheet") + 1] == "2월"
+    res2 = run_tool(os.path.basename(parts[1]), *parts[2:])
+    snap = pd.read_csv(os.path.join(res2["version_dir"], "model_dataset.csv"), encoding="utf-8-sig")
+    assert len(snap) == 20 and snap["온도"].iloc[0] == base_rows(20, 1)[0][0]
+    assert not any("시트" in x for x in res2.get("warnings", [])), res2.get("warnings")
+    hist = [json.loads(ln) for ln in open(os.path.join(res2["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert hist[-1]["data_profile"]["layout"]["sheet"] == "2월"
+
+
+def test_cover_sheet_first_reads_the_only_data_sheet(tmp_path):
+    """A3: 첫 시트가 표지(데이터 없음)이고 데이터 시트가 하나면 그 시트를 읽고 알린다 (예측·지도도 같은 읽기 함수)."""
+    f = _book(tmp_path / "cover.xlsx", [("표지", [["보고서", "작성자"]]), ("데이터", [["온도", "압력", "수율"]] + base_rows(30, 2))])
+    df = rt.load_data_file(f)
+    assert list(df.columns) == ["온도", "압력", "수율"] and len(df) == 30 and df.attrs["sheet"] == "데이터"
+    res = run_tool("ml_train.py", "--file", f, "--targets", "수율")
+    assert any("'데이터'" in x and "'표지'" in x for x in res.get("warnings", [])), res
+
+
+def test_target_on_another_sheet_recommends_sheet(tmp_path):
+    """A3: 첫 시트에 데이터가 있지만 타겟이 다른 시트 머리글에만 있으면 [추천] --sheet 전체 명령 (그대로 실행하면 ok)."""
+    f = _book(tmp_path / "two.xlsx", [("요약", [["라인", "생산량"], ["A", 10], ["B", 20], ["C", 30]]),
+                                     ("측정", [["온도", "압력", "수율"]] + base_rows(30, 4))])
+    proc, res = run_raw("ml_train.py", "--file", f, "--targets", "수율")
+    msg = stop_msg(res, proc)
+    name, args = recommended_command(msg)
+    assert args[args.index("--sheet") + 1] == "측정", msg
+    assert run_tool(name, *args)["targets"] == ["수율"]
+
+
+def test_unknown_sheet_lists_the_sheets(tmp_path):
+    f = _months(tmp_path / "m.xlsx")
+    proc, res = run_raw("ml_train.py", "--file", f, "--targets", "수율", "--sheet", "4월")
+    msg = stop_msg(res, proc)
+    assert "'1월', '2월', '3월'" in msg and "[후보]" in msg and len(res["confirm_commands"]) == 3, res
+
+
+def test_sheet_option_on_csv_is_ignored_with_a_warning(tmp_path):
+    f = write_csv_header(tmp_path / "a.csv", ["온도", "압력", "수율"], base_rows(30, 5), ",")
+    res = run_tool("ml_train.py", "--file", f, "--targets", "수율", "--sheet", "1월")
+    assert any("--sheet" in x for x in res.get("warnings", [])), res
+
+
+def test_two_level_merged_header_joins_names(tmp_path):
+    """A9: 두 줄 병합 머리글(1차/2차 아래 온도·압력, 수율은 세로 병합)은 '1차_온도'처럼 이름을 합쳐 읽는다 (col_1 아님)."""
+    r = np.random.default_rng(6)
+    rows = [["1차", None, "2차", None, "수율"], ["온도", "압력", "온도", "압력", None]]
+    for _ in range(40):
+        t1, p1, t2, p2 = (round(float(v), 2) for v in (r.uniform(150, 200), r.uniform(1, 5), r.uniform(150, 200), r.uniform(1, 5)))
+        rows.append([t1, p1, t2, p2, round(0.1 * t1 + 2 * p1 + 0.1 * t2 + p2 + float(r.normal(0, 0.5)), 2)])
+    f = _book(tmp_path / "h2.xlsx", [("Sheet", rows)], merges=["A1:B1", "C1:D1", "E1:E2"])
+    df = rt.load_data_file(f)
+    assert list(df.columns) == ["1차_온도", "1차_압력", "2차_온도", "2차_압력", "수율"] and len(df) == 40
+    assert df.attrs["source_rows"][0] == 3
+    res = run_tool("ml_train.py", "--file", f, "--targets", "수율")
+    assert res["features_auto"] == ["1차_온도", "1차_압력", "2차_온도", "2차_압력"], res
+    assert any("두 줄 머리글" in w for w in res.get("warnings", [])), res
+
+
+def test_blank_header_name_input_is_warned(tmp_path):
+    """A9: 머리글이 빈 열(col_<i>)을 입력으로 쓰면 늘 warnings."""
+    rows = [["온도", None, "수율"]] + [[t, p, y] for t, p, y in base_rows(30, 7)]
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "blank.xlsx", rows), "--targets", "수율")
+    assert "col_1" in res["features_auto"] and any("col_1" in w and "머리글" in w for w in res.get("warnings", [])), res
+
+
+def test_unit_row_recommendation_does_not_double_units(tmp_path):
+    """B1: 머리글에 이미 단위가 있고 그 아래 단위 행도 있으면 [추천]을 그대로 실행해 ok ('(%)(%)' 이름 아님)."""
+    rows = [["공정 조건 표", "작성: 홍길동"], [None], ["반응 온도", "압력(bar)", "촉매 종류", "생산 효율(%)", "강도"],
+            ["°C", "bar", None, "%", "MPa"]]
+    r = np.random.default_rng(11)
+    for t, p, y in base_rows(40, 11):
+        rows.append([t, p, str(r.choice(["X", "Y"])), y, round(y * 2 + float(r.normal(0, 1)), 2)])
+    f = write_book(tmp_path / "공정 데이터 (1).xlsx", rows)
+    proc, res = run_raw("ml_train.py", "--file", f, "--targets", "생산 효율")
+    name, args = recommended_command(stop_msg(res, proc))
+    done = run_tool(name, *args)
+    assert done["targets"] == ["생산 효율(%)"], done
+    assert "압력(bar)" in done["features_auto"] and "반응 온도(°C)" in done["features_auto"], done
+    assert rt._with_unit("압력(bar)", "bar") == "압력(bar)" and rt._with_unit("압력", "bar") == "압력(bar)"
+
+
+def test_duplicate_column_names_are_warned(tmp_path):
+    """C4: 같은 이름의 열은 '온도_1'로 읽고 warnings에 알린다."""
+    rows = [["온도", "온도", "압력", "수율"]] + [[t, t + 1, p, y] for t, p, y in base_rows(30, 8)]
+    df = rt.load_data_file(write_book(tmp_path / "dup.xlsx", rows))
+    assert list(df.columns) == ["온도", "온도_1", "압력", "수율"]
+    w = rt.layout_warnings(df, ["수율"])
+    assert any("같은 이름" in x and "'온도_1'" in x and "B열" in x for x in w), w

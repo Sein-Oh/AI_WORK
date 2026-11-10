@@ -648,3 +648,85 @@ def test_excel_percent_map_matches_csv(tmp_path):
     b = ok_res(b, proc)
     assert a["points"][0]["values"] == b["points"][0]["values"]
     assert a["points"][0]["values"]["수율"] == pytest.approx(0.2 * 160 - 10)
+
+
+# ---- 검토 A (2026-11-10): 무한대 글자, 글자 표시가 섞인 숫자 열, 단위가 붙은 숫자, 유니코드 빼기·전각 숫자 ----------------
+
+from mlkit_helpers import base_rows, run_tool, write_book  # noqa: E402
+
+
+def test_infinity_text_is_a_missing_number():
+    """B2: 'inf'/'Infinity'/'1e400' 글자는 무한대가 아니라 읽지 못한 숫자(빈 값)."""
+    got = rt.coerce_numeric(pd.Series(["inf", "-Infinity", "1e400", "INF", "5"], dtype=object))
+    assert got.iloc[:4].isna().all() and got.iloc[4] == 5.0
+    assert rt.coerce_numeric(pd.Series([1.0, np.inf, -np.inf])).iloc[1:].isna().all()
+
+
+def test_infinity_cells_train_with_a_warning(tmp_path):
+    """B2: 입력·타겟 칸의 'inf' 글자는 내부 오류(ERROR)가 아니라 경고와 함께 학습."""
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 1)]
+    rows[5][0] = "inf"
+    rows[7][2] = "Inf"
+    proc, res = run_raw("ml_train.py", "--file", write_book(tmp_path / "inf.xlsx", rows), "--targets", "수율")
+    res = ok_res(res, proc)
+    w = " ".join(res.get("warnings", []))
+    assert "'inf'" in w and "'Inf'" in w, res
+
+
+def _with_mark(n_marks, mark, seed=2):
+    r = np.random.default_rng(seed)
+    rows = [["온도", "압력", "농도", "수율"]]
+    for i, (t, p, y) in enumerate(base_rows(30, seed)):
+        c = round(float(r.uniform(0, 1)), 3)
+        rows.append([t, p, mark if i < n_marks else c, round(y + 10 * c, 2)])
+    return rows
+
+
+@pytest.mark.parametrize("mark", ["측정불가", "재측정"])
+def test_a_few_text_marks_keep_a_number_column_numeric(tmp_path, mark):
+    """A5: 숫자 열에 글자 표시(4칸 = 13%)가 섞여도 범주(원-핫)·'비고' 열이 아니라 숫자 열 (글자 칸은 빈 값 + 경고)."""
+    f = write_book(tmp_path / "mark.xlsx", _with_mark(4, mark))
+    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력,농도", "--targets", "수율")
+    assert "농도" in res["feature_types"]["numeric"], res["feature_types"]
+    assert any("'농도'" in w and mark in w for w in res.get("warnings", [])), res
+    auto = run_tool("ml_train.py", "--file", f, "--targets", "수율")
+    assert "농도" in auto["features_auto"], auto
+
+
+def test_text_marks_with_many_kinds_stay_categorical():
+    s = pd.Series(["A", "B", "C", 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+    import ml_train as mt
+    assert mt.column_kind(s) == "categorical"
+
+
+def _unit_rows(seed=3):
+    rows = [["온도", "압력", "비용", "수율"]]
+    for t, p, y in base_rows(40, seed):
+        rows.append([f"{t}℃", f"{p} bar", f"{int(t * 10):,}원", y])
+    return rows
+
+
+def test_numbers_with_units_stop_with_the_reason(tmp_path):
+    """A6: '187.3℃', '2.45 bar'처럼 단위를 붙인 숫자 글자 열은 범주로 학습하지 않고 원인(단위)을 말한다."""
+    f = write_book(tmp_path / "unit.xlsx", _unit_rows())
+    proc, res = run_raw("ml_train.py", "--file", f, "--features", "온도,압력,비용", "--targets", "수율")
+    msg = stop_msg(res, proc)
+    assert "단위" in msg and "'℃'" in msg and "온도" in msg, msg
+    proc, res = run_raw("ml_train.py", "--file", f, "--targets", "수율")
+    msg = stop_msg(res, proc)
+    assert "단위" in msg, msg
+    reasons = {d["column"]: d["reason"] for d in res["excluded_inputs"]}
+    assert "'℃'" in reasons["온도"] and "'bar'" in reasons["압력"] and "'원'" in reasons["비용"], reasons
+
+
+def test_target_with_units_says_so(tmp_path):
+    rows = [["온도", "압력", "수율"]] + [[t, p, f"{y}kg"] for t, p, y in base_rows(30, 4)]
+    proc, res = run_raw("ml_train.py", "--file", write_book(tmp_path / "ty.xlsx", rows), "--targets", "수율")
+    msg = stop_msg(res, proc)
+    assert "단위" in msg and "'kg'" in msg, msg
+
+
+def test_unicode_minus_and_full_width_numbers():
+    """C8: 유니코드 빼기 기호, 전각 숫자·전각 %는 반각으로 바꿔 읽는다. 괄호 음수는 읽지 않는다 (뜻이 둘)."""
+    got = rt.coerce_numeric(pd.Series(["−5.5", "１２３", "１２.５％", "(1,234)"], dtype=object))
+    assert got.iloc[0] == -5.5 and got.iloc[1] == 123 and got.iloc[2] == 12.5 and pd.isna(got.iloc[3])

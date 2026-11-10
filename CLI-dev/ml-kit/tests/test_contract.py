@@ -796,6 +796,32 @@ def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
     assert rt._continue_state() == {}
 
 
+def test_continue_next_commands_have_the_common_shape(monkeypatch, tmp_path):
+    """C3: CONTINUE의 next_commands도 다른 결과처럼 {command, needs_input} (스킬 규칙 'next_commands의 command'), preview는 진행."""
+    monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["ml_train.py", "--file", "d.csv", "--targets", "b"])
+    rt.RUN_SAVED.clear()
+    out = rt.unfinished_payload(rt.Unfinished("학습 2/5"))
+    nxt = out["next_commands"][0]
+    assert nxt["needs_input"] is False and nxt["command"].startswith("python ") and "ml_train.py" in nxt["command"], out
+    assert out["preview"] == "진행 중: 학습 2/5" and "next_commands[0]의 command" in out["agent_directive"], out
+    rt.continue_clear()
+
+
+def test_time_limit_clock_starts_with_the_process():
+    """B7: 시간 제한 감시(1줄 JSON을 직접 내는 시각)는 run_cli가 아니라 프로세스 시작부터 잰다 (무거운 import 시간 포함,
+    에이전트의 120초와 같은 기준). 단계의 시계 확인(check_time)은 run_cli부터 (여유 30초가 시작 시간을 덮음)."""
+    code = ("import sys, os, time; time.sleep(1.5); sys.path.insert(0, sys.argv[1]); sys.argv = ['ml_x.py']; "
+            "os.environ['ML_KIT_TIME_LIMIT'] = '100'; import _ml_runtime as rt; "
+            "rt.run_cli(lambda: {'status': 'ok', 'agent_directive': 'VERIFIED: x', "
+            "'delay': round(rt.watchdog_delay(), 2), 'run': round(time.monotonic() - rt.RUN_START, 2)})")
+    proc = subprocess.run([sys.executable, "-c", code, KIT], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    if sys.platform.startswith(("linux", "win")):
+        assert out["delay"] <= 100 + rt.WATCHDOG_GRACE - 1.4, (out, proc.stderr)
+    assert out["run"] < 1.0, out
+
+
 def test_missing_prediction_file_typo_gives_numbered_files(p1_model, tmp_path):
     """2.9.75: 없는 --file가 같은 폴더 파일의 오타면 '--input로 예측' 안내가 아니라 그 파일들을 [후보] 1) 2)와 같은 번호의 전체 명령으로."""
     shutil.copy(p1_model["f"], tmp_path / "새조건_1차.csv")
