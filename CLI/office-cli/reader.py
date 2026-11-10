@@ -2597,6 +2597,44 @@ def cmd_read(args) -> Dict[str, Any]:
     return rt.ok(TOOL, "read", preview, directive, **result)
 
 
+OUTLINE_MAX = 200    # outline 한 번에 담는 제목 수 (넘으면 --start로 이어서)
+
+
+def cmd_outline(args) -> Dict[str, Any]:
+    """문서의 장절 목록(제목 단위만): 제목마다 units(read --units 번호), page, level, number, text. 큰 문서를 8,000자씩 이어 읽지 않고
+    필요한 장절만 read --section으로 읽게 (2026-11-09 검토 4장 6번)."""
+    path = rt.resolve_input_path(args.file, "문서 파일")
+    doc = load_document(path)
+    units = doc["units"]
+    heads = [(i, u) for i, u in enumerate(units, 1) if u.get("kind") == "heading"]
+    start = max(1, args.start)
+    shown = heads[start - 1:start - 1 + OUTLINE_MAX]
+    items = []
+    for k, (i, u) in enumerate(shown):
+        nxt = heads[start - 1 + k + 1][0] if start - 1 + k + 1 < len(heads) else len(units) + 1
+        item = {"units": f"{i}-{nxt - 1}" if nxt - 1 > i else str(i), "level": len(u.get("section") or []) or 1,
+                "text": rt.clamp_text(u["text"], 200)[0]}
+        if u.get("page") is not None:
+            item["page"] = u["page"]
+        if u.get("number"):
+            item["number"] = u["number"]
+        items.append(item)
+    name = os.path.basename(path)
+    result: Dict[str, Any] = {"file": path, "type": doc["type"], "count": len(heads), "shown": len(items),
+                              "units_total": len(units), "headings": items, "truncated": start - 1 + len(items) < len(heads)}
+    if result["truncated"]:
+        result["next_commands"] = [rt.next_command("reader.py", ["outline", "--file", path, "--start", str(start + len(items))],
+                                                   "다음 제목 이어서 보기 (읽기 전용)")]
+    if not heads:
+        return rt.ok(TOOL, "outline", f"{name}: 제목(장절)이 없음 (count 0, 단위 {len(units)}개)",
+                     "VERIFIED: 0건. 이 문서에서 장절 제목을 찾지 못했습니다. 내용은 reader.py read --file로 읽으세요.", **result)
+    preview = f"{name}: 제목 {len(heads)}개" + (f" (제목 {start}~{start + len(items) - 1} 표시)" if result["truncated"] or start > 1 else "")
+    return rt.ok(TOOL, "outline", preview,
+                 "VERIFIED: 장절 목록을 읽었습니다. 장절 하나를 읽으려면 reader.py read --file \"<같은 파일>\" --section \"<제목 일부>\" "
+                 "또는 그 제목의 units 값으로 --units를 쓰세요." + (" 나머지 제목은 next_commands[0]." if result["truncated"] else ""),
+                 **result)
+
+
 def _read_pages(doc: Dict[str, Any], selected: List[Dict[str, Any]], req_pages: Optional[set], by_units: bool) -> set:
     """읽으려는 쪽: --pages면 그 쪽들, --units면 고른 단위의 첫 쪽~끝 쪽, 아니면 문서 전체 쪽."""
     if req_pages is not None:
@@ -5368,6 +5406,33 @@ def _change(kind: str, old_doc: Any, ou: Any, new_doc: Any, nu: Any) -> Dict[str
     return item
 
 
+def _pair_moves(changes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """남은 삭제·추가 중 글이 같거나 비슷한 것을 '이동'으로 짝지음 (다른 자리·장절로 옮긴 단락을 삭제+추가로만 내고 그 안의 숫자 변경을
+    놓치던 것, 2026-11-09 검토 4장 7번). 비슷하면 숫자 변경도 적음."""
+    removed = [c for c in changes if c["kind"] == "삭제"]
+    added = [c for c in changes if c["kind"] == "추가"]
+    if not removed or not added:
+        return changes
+    used_r: set = set()
+    used_a: set = set()
+    moves: List[Dict[str, Any]] = []
+    pairs = sorted(((_ratio(r["old_text"], a["new_text"]), i, j) for i, r in enumerate(removed) for j, a in enumerate(added)
+                    if r["old_text"] == a["new_text"] or _similar(r["old_text"], a["new_text"])), reverse=True)
+    for _, i, j in pairs:
+        if i in used_r or j in used_a:
+            continue
+        used_r.add(i)
+        used_a.add(j)
+        r, a = removed[i], added[j]
+        nums = number_changes(r["old_text"], a["new_text"]) if r["old_text"] != a["new_text"] else []
+        moves.append({"kind": "이동", "numeric": bool(nums), "number_changes": nums[:10], "old_text": r["old_text"],
+                      "new_text": a["new_text"], "old_evidence": r["old_evidence"], "new_evidence": a["new_evidence"],
+                      "summary": ("옮겨졌고 숫자 변경: " + ", ".join(nums[:3]) + (" 등" if len(nums) > 3 else "")) if nums
+                      else ("옮겨짐 (글 같음)" if r["old_text"] == a["new_text"] else "옮겨졌고 글 변경")})
+    gone = {id(removed[i]) for i in used_r} | {id(added[j]) for j in used_a}
+    return [c for c in changes if id(c) not in gone] + moves
+
+
 def _diff_units(old_doc: Any, a: List[Any], new_doc: Any, b: List[Any]) -> List[Dict[str, Any]]:
     import difflib
     at, bt = [_norm_text(u["text"]) for u in a], [_norm_text(u["text"]) for u in b]
@@ -5405,9 +5470,10 @@ def cmd_diff(args) -> Dict[str, Any]:
         changes += [_change("removed", old_doc, u, new_doc, None) for u in og[k]]
     for k in only_new:
         changes += [_change("added", old_doc, None, new_doc, u) for u in ng[k]]
-    order = {"변경": 1, "삭제": 2, "추가": 3}
+    changes = _pair_moves(changes)
+    order = {"변경": 1, "이동": 2, "삭제": 3, "추가": 4}
     changes.sort(key=lambda c: (0 if c["numeric"] else order[c["kind"]]))      # 숫자 변경 먼저 (같으면 문서 순서)
-    counts = {k: sum(1 for c in changes if c["kind"] == k) for k in ("변경", "삭제", "추가")}
+    counts = {k: sum(1 for c in changes if c["kind"] == k) for k in ("변경", "이동", "삭제", "추가")}
     numeric = sum(1 for c in changes if c["numeric"])
     shown = changes[:DIFF_SHOWN]
     view = []
@@ -5465,7 +5531,7 @@ def cmd_diff(args) -> Dict[str, Any]:
         return rt.ok(TOOL, "diff", f"{old_name}와 {new_name}: 차이 0건",
                      "VERIFIED: 0건. 두 문서" + (f"의 장절 '{args.section}'" if args.section else "") + "에서 글이 다른 곳을 찾지 못했습니다 "
                      "(띄어쓰기 차이는 무시). 사용자에게 그대로 알리고 다시 실행하지 마세요.", verified=True, **result)
-    preview = (f"{old_name}와 {new_name}: 변경 {counts['변경']}, 삭제 {counts['삭제']}, 추가 {counts['추가']}"
+    preview = (f"{old_name}와 {new_name}: 변경 {counts['변경']}, 이동 {counts['이동']}, 삭제 {counts['삭제']}, 추가 {counts['추가']}"
                + (f" (숫자가 바뀐 곳 {numeric})" if numeric else ""))
     if problems:
         return rt.ok_unverified(TOOL, "diff", preview, problems, **result)
@@ -5489,6 +5555,10 @@ def build_cli():
     p.add_argument("--section", help="장절 경로 일부가 맞는 단위만 읽기 (대소문자 무시, search --section과 같음)")
     p.add_argument("--format", choices=["text", "summary"], default="text", help="text: 본문, summary: 요약 정보만")
     p.add_argument("--save", nargs="?", const=True, help="결과를 파일로 저장 (.md 기본, .csv/.xlsx 가능). 경로 생략 시 작업 폴더")
+
+    o = sub.add_parser("outline", help="문서의 장절(제목) 목록: 제목마다 units·page·level (큰 문서에서 필요한 장절만 읽기)")
+    o.add_argument("--file", required=True, help="문서 경로")
+    o.add_argument("--start", type=int, default=1, help="몇 번째 제목부터 (이어 보기, 기본 1)")
 
     x = sub.add_parser("index", help="폴더/파일의 문서를 내용 출력 없이 캐시에 등록")
     x.add_argument("--folder", help="등록할 폴더")
@@ -5535,7 +5605,7 @@ def build_cli():
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_cli().parse_args(argv)
     handlers = {"read": cmd_read, "index": cmd_index, "search": cmd_search, "list": cmd_list, "clear": cmd_clear,
-                "diff": cmd_diff}
+                "diff": cmd_diff, "outline": cmd_outline}
     rt.run_cli(TOOL, args.command, lambda: handlers[args.command](args))
 
 

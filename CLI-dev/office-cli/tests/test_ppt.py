@@ -961,3 +961,13 @@ def test_c8_footer_placeholders_do_not_push_new_box_off_slide(pp, capsys):
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     box = [sh for sh in s.Shapes._live() if sh.HasTextFrame and sh.TextFrame.TextRange.Text == "추가 본문"][0]
     assert box.Top + box.Height <= 540, (box.Top, box.Height)
+
+
+def test_markdown_table_bold_cells_in_ppt(pp, capsys, tmp_path):
+    code, out = _ppt_md(capsys, tmp_path, "# 결과\n\n| 항목 | 값 |\n|---|---|\n| a | 1 |\n| **합계** | **1** |\n")
+    assert code == 0, out
+    prs = pp["prs"]
+    s = prs.Slides(prs.Slides.Count)
+    tbl = [sh for sh in live(s) if getattr(sh, "HasTable", False)][0].Table
+    cell = tbl.Cell(3, 1).Shape.TextFrame.TextRange
+    assert cell.Text == "합계" and cell.Font.Bold is True, (cell.Text, getattr(cell.Font, "Bold", None))

@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.5.0"
+  version: "1.5.1"
   platform: windows
 ---
 
@@ -22,6 +22,7 @@ metadata:
 |---|---|
 | 폴더 등록 | `python "C:\CLI\office-cli\reader.py" index --folder "<폴더>"` |
 | 파일 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` |
+| 장절 목록 (큰 문서) | `python "C:\CLI\office-cli\reader.py" outline --file "<파일>"` |
 | 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |
 | 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` (`;` 그리고, `|` 또는) |
 | 두 판 비교 | `python "C:\CLI\office-cli\reader.py" diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "<차이.xlsx>"]` |

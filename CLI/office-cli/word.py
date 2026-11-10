@@ -765,8 +765,11 @@ class Writer:
         except Exception:
             pass
 
-    def table(self, rows: List[List[Any]]) -> Any:
+    def table(self, rows: List[List[Any]], markdown: bool = False) -> Any:
         self._after_table()
+        bold_cells: List[Tuple[int, int]] = []
+        if markdown:
+            rows, bold_cells = md.table_cells(rows)
         width = max(len(r) for r in rows)
         lines = ["\t".join(str("" if v is None else v).replace("\t", " ").replace("\r", " ").replace("\n", " ")
                            for v in (list(r) + [""] * (width - len(r)))) for r in rows]
@@ -780,6 +783,11 @@ class Writer:
             tbl.AutoFitBehavior(2)            # 창 너비에 맞춤
         except Exception:
             pass
+        for i, j in bold_cells:                       # 칸 전체가 **굵게**인 칸 (합계 행 등)
+            try:
+                tbl.Cell(i + 1, j + 1).Range.Font.Bold = True
+            except Exception:
+                pass
         head = tbl.Rows(1)
         head.Range.Font.Bold = True
         head.Shading.BackgroundPatternColor = off.parse_color(self.theme["header_bg"])
@@ -890,7 +898,7 @@ class Writer:
             elif kind in ("bullets", "numbered"):
                 self.items(payload, kind == "numbered")
             elif kind == "table":
-                self.table(payload)
+                self.table(payload, markdown=True)
             elif kind == "break":
                 self.rule()
             elif kind == "front_matter":

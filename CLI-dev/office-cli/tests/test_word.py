@@ -1368,3 +1368,9 @@ def test_c7_replace_removes_anchor_only_after_insert(wd, capsys, monkeypatch):
     monkeypatch.setattr(word.Writer, "text", real)
     code, out = run_word(capsys, "write", "--anchor", "지울 단락", "--pos", "replace", "--text", "새 글")
     assert code == 0 and "지울 단락" not in doc.text and doc.text.split("\r")[:3] == ["가", "새 글", "나"], (out, doc.text)
+
+
+def test_markdown_table_bold_cells_have_no_stars(wd, capsys):
+    code, out = run_word(capsys, "write", "--text", "| 항목 | 값 |\n|---|---|\n| a | 1 |\n| **합계** | **1** |")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "**" not in wd["doc"].text and "합계\t1" in wd["doc"].text.replace("\r", "\n"), wd["doc"].text

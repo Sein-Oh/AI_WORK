@@ -11,6 +11,21 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.5.1] - 2026-11-10
+
+전체 검토 4장 6번 일부(reader `outline`), 7번(diff 이동), 3장 끝 마크다운(표 칸 굵게).
+
+### 기능
+- `reader.py outline --file <문서> [--start N]`: 장절(제목) 목록. 제목마다 `units`(그 장절의 단위 번호 범위, `read --units`에 그대로), `page`, `level`,
+  `number`. 200개씩, 넘으면 `--start`로 이어 보는 `next_commands`. 제목이 없으면 count 0. 큰 문서를 8,000자씩 이어 읽지 않고 필요한 장절만 읽게.
+  office-spec 스킬 "장절 목록" 한 줄.
+- `reader.py diff`: 남은 삭제·추가 중 글이 같거나 비슷한 것을 `이동`으로 짝지음 (다른 자리·장절로 옮긴 단락이 삭제+추가로만 나오고 그 안의 숫자 변경을
+  놓치던 것). 비슷하면 숫자 변경(`number_changes`)도. `counts`와 `preview`에 이동 수.
+
+### 수정
+- 마크다운 표 칸의 `**굵게**`가 워드·PPT 표에 별표 그대로 들어가던 것: 표시를 빼고, 칸 전체가 굵게면 그 칸을 굵게 (`_markdown.table_cells`).
+  마크다운의 나머지 작은 것(기울임, 백틱, 링크, 중첩 목록)은 보류 (사용자 결정 2026-11-10).
+
 ## [1.5.0] - 2026-11-10
 
 EML 읽기·검색 (사용자 결정 2026-11-10: Outlook 가져오기 대신 reader로, 헤더·본문·첨부 이름만 캐시, 원본은 사용자가 eml을 열어 봄).

@@ -4,7 +4,7 @@ description: 엑셀·CSV 표 데이터 작업. 표 두 판(이전 판, 새 판) 
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.5.0"
+  version: "1.5.1"
   platform: windows
 ---
 

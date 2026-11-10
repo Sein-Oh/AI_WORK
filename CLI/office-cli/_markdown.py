@@ -31,6 +31,23 @@ def split_bold(text: str) -> Tuple[str, List[Tuple[int, int]]]:
     return "".join(plain), spans
 
 
+def table_cells(rows: List[List[str]]) -> Tuple[List[List[str]], List[Tuple[int, int]]]:
+    """마크다운 표 칸의 ** __ 굵게 표시를 뺀 칸 글과, 칸 전체가 굵게인 칸 [(행, 열)] (0부터). 표 칸에 '**합계**'가 별표 그대로
+    들어가던 것 (2026-11-09 검토 3장 끝). 일부만 굵게면 표시만 빼고 칸은 굵게 하지 않음."""
+    out: List[List[str]] = []
+    bold: List[Tuple[int, int]] = []
+    for i, row in enumerate(rows):
+        line = []
+        for j, cell in enumerate(row):
+            text = "" if cell is None else str(cell)
+            plain, spans = split_bold(text)
+            if spans and plain.strip() and sum(b - a for a, b in spans) >= len(plain.strip()):
+                bold.append((i, j))
+            line.append(plain)
+        out.append(line)
+    return out, bold
+
+
 def plain_heading(text: str) -> str:
     """제목·슬라이드 제목에 넣을 글: 굵게 표시(** __)를 뺀 글 (제목은 굵기가 섞인 글을 담지 않음. word·ppt 모든 수준 같은 규칙)."""
     return split_bold(text)[0]

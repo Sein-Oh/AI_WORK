@@ -112,3 +112,10 @@ def test_front_matter_lines():
     blocks = md.parse_markdown_blocks("---\ntitle: x\n---\n# 제목\n\n---\n\n끝")
     assert blocks == [("front_matter", 3), ("heading", (1, "제목")), ("break", None), ("paragraph", "끝")]
     assert md.looks_like_markdown("---\ntitle: x\n---\n본문")
+
+
+def test_table_cells_strip_bold_marks_and_report_whole_bold_cells():
+    """검토 3장 끝 (1.5.1): 표 칸의 **굵게**가 워드·PPT 표에 별표 그대로 들어가던 것."""
+    import _markdown as md
+    rows, bold = md.table_cells([["항목", "값"], ["a", "1"], ["**합계**", "**3**"], ["부분 **굵게** 글", "x"]])
+    assert rows[2] == ["합계", "3"] and rows[3][0] == "부분 굵게 글" and bold == [(2, 0), (2, 1)], (rows, bold)

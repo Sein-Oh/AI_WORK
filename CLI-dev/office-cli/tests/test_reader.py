@@ -3653,3 +3653,36 @@ def test_eml_folder_search_one_result_per_mail_newest_first(mails, capsys):
     assert out["count"] == 1 and out["matches"][0]["loc"] == "첨부", out
     code, out = run_main(reader, capsys, "search", "--query", "2월 20일", "--file", str(mails))      # 전달된 메일 본문 (하위 폴더)
     assert out["count"] == 1 and out["matches"][0]["loc"] == "전달된 메일 본문 1", out
+
+
+def test_outline_lists_headings_with_units_and_pages(tmp_path, capsys, monkeypatch):
+    """검토 4장 6번 (1.5.1): 큰 문서를 8,000자씩 이어 읽지 않고 장절 목록 -> 필요한 장절만 read --section/--units."""
+    p = tmp_path / "k.pdf"
+    korean_pdf(p)
+    code, out = run_main(reader, capsys, "outline", "--file", str(p))
+    assert code == 0 and out["count"] >= 5 and out["agent_directive"].startswith("VERIFIED:"), out
+    first = out["headings"][0]
+    assert first["text"] == "III. 개발 내용" and first["page"] == 1 and first["level"] == 1, first
+    lv2 = [h for h in out["headings"] if h["text"].startswith("1. 개발 내용 종합")][0]
+    assert lv2["level"] == 2, lv2
+    code, part = run_main(reader, capsys, "read", "--file", str(p), "--units", lv2["units"])
+    assert code == 0 and part["units"][0]["text"].startswith("1. 개발 내용 종합"), part
+    monkeypatch.setattr(reader, "OUTLINE_MAX", 2)
+    code, out = run_main(reader, capsys, "outline", "--file", str(p))
+    assert out["truncated"] is True and out["shown"] == 2 and out["next_commands"][0]["command"].endswith("--start 3"), out
+    t = tmp_path / "plain.txt"
+    t.write_text("제목 없는 글입니다.\n\n둘째 단락입니다.", encoding="utf-8")
+    code, out = run_main(reader, capsys, "outline", "--file", str(t))
+    assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
+
+
+def test_diff_pairs_moved_paragraph_and_keeps_its_number_change(tmp_path, capsys):
+    """검토 4장 7번 (1.5.1): 다른 장절로 옮긴 단락이 삭제+추가로만 나오고 그 안의 숫자 변경을 놓치던 것 -> '이동'."""
+    old = tmp_path / "old.txt"
+    new = tmp_path / "new.txt"
+    old.write_text("# 1. 개요\n\n정격 전압은 5 V 이하이어야 하며 시험은 상온에서 한다.\n\n# 2. 시험\n\n시험 장비는 교정된 것을 쓴다.", encoding="utf-8")
+    new.write_text("# 1. 개요\n\n# 2. 시험\n\n시험 장비는 교정된 것을 쓴다.\n\n정격 전압은 5.5 V 이하이어야 하며 시험은 상온에서 한다.", encoding="utf-8")
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
+    assert code == 0 and out["counts"]["이동"] == 1 and out["counts"]["삭제"] == 0 and out["counts"]["추가"] == 0, out
+    mv = [c for c in out["changes"] if c["kind"] == "이동"][0]
+    assert mv["numeric"] and "5 V에서 5.5 V로" in mv["number_changes"][0] and "이동" in out["preview"], mv

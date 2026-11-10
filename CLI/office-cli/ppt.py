@@ -520,7 +520,11 @@ class SlideWriter:
                 pass
         self.created.append(f"본문 {len(lines)}줄")
 
-    def table(self, rows: List[List[Any]]) -> None:
+    def table(self, rows: List[List[Any]], markdown: bool = False) -> None:
+        bold_cells: set = set()
+        if markdown:
+            rows, cells = md.table_cells(rows)
+            bold_cells = {(i + 1, j + 1) for i, j in cells}
         nrows, ncols = len(rows), max(len(r) for r in rows)
         top = self.next_top()
         height = min(self.H - MARGIN - top, 26.0 * nrows)
@@ -541,6 +545,8 @@ class SlideWriter:
                     tr.Font.Bold = True
                     tr.Font.Color.RGB = header_fg
                     cell.Fill.ForeColor.RGB = header_bg
+                elif (r, c) in bold_cells:
+                    tr.Font.Bold = True
         self.created.append(f"표 {nrows}x{ncols}")
 
     def image(self, path: str, width: Optional[float]) -> None:
@@ -768,7 +774,7 @@ def cmd_write(args) -> Dict[str, Any]:
                 if sec["lines"]:
                     w.body(sec["lines"])
                 for tb in sec["tables"]:
-                    w.table(tb)
+                    w.table(tb, markdown=True)
                 placed += [(no, x) for x in w.shapes]
                 created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         if table_rows:
