@@ -31,7 +31,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
     RESUME_MAX_AGE, option_retry, time_limit, final_version, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed,
     MISSING_MARKS, unit_number_cells, UNIT_NUMBER_SHARE, add_sheet_argument, sheet_note, sheet_ignored_warning,
-    EVAL_WARNINGS, EVAL_ALLOWED, command_setting, resolve_target_models, name_list,
+    EVAL_WARNINGS, EVAL_ALLOWED, command_setting, resolve_target_models, name_list, drop_summary_rows, label_variant_note,
 )
 
 setup_console()
@@ -1191,9 +1191,12 @@ def train_and_benchmark_classifiers(
                "연속형 수치라면 --task regression을 사용하십시오. 등급·종류라면 사용자에게 클래스를 묶을지 물으십시오.")
         )
     if rare:
+        alike = label_variant_note(y)       # 'ok' 1건 next to 'OK': a typo of the same class is the likely cause (결정 1-4)
         raise InputError(
             f"타겟 '{target_name}'에 샘플이 1개뿐인 클래스 {name_list(rare)}이(가) 있습니다. "
             f"클래스별 최소 2개 이상 필요합니다. 해당 행을 제외하거나 클래스를 병합하십시오. "
+            + (f"{alike} (대소문자·띄어쓰기만 다름: 같은 종류이면 사용자에게 알려 데이터 파일에서 같은 글자로 고치십시오). "
+               if alike else "") +
             f"[클래스별 건수]: {name_list([f'{c}: {class_counts[c]}' for c in classes])}"
         )
     if len(y) < 10:
@@ -1683,11 +1686,51 @@ def predict_one_command(model_ref: str, inputs: List[str]) -> Dict[str, Any]:
             "needs_input": True, "placeholder": "<값>"}
 
 
+# The improvement loop (2026-11-10 결정 1-1, A영역 C1: following next_commands[0] stacked 온도x온도x...x압력 and reported
+# the noise of 10 picks on the same 60 rows as the best model). The tool counts and stops; the LLM never does.
+IMPROVE_MIN_GAIN = 0.01   # a score gain below this (R2 / Macro-F1) is "not improved": folds alone move a score this much
+IMPROVE_PATIENCE = 2      # runs in a row without such a gain over the best before them: retraining is no longer offered
+IMPROVE_MAX_ROUNDS = 5    # runs of the same task and targets after the first: retraining is no longer offered at all
+
+
+def improve_stop_reason(scores: List[float]) -> Optional[str]:
+    """Why the tool stops offering retraining (improve_stopped), or None. scores: mean validation scores of the runs of
+    the same task and targets, oldest first, this run last."""
+    rounds = len(scores) - 1
+    if rounds >= IMPROVE_MAX_ROUNDS:
+        return (f"같은 타겟으로 {len(scores)}번 학습해 개선 반복 상한({IMPROVE_MAX_ROUNDS}회)에 닿아 재학습 제안을 멈춤 "
+                f"(최고 점수 {max(scores):.4f}). 지금까지의 최고 모델로 보고서를 만듭니다")
+    if len(scores) > IMPROVE_PATIENCE:
+        best = max(scores[:-IMPROVE_PATIENCE])
+        if max(scores[-IMPROVE_PATIENCE:]) - best < IMPROVE_MIN_GAIN - 1e-9:
+            return (f"최근 {IMPROVE_PATIENCE}번의 학습이 이전 최고 점수({best:.4f})보다 {IMPROVE_MIN_GAIN} 이상 나아지지 않아 "
+                    f"재학습 제안을 멈춤 ({IMPROVE_MIN_GAIN} 미만의 차이는 검증을 나누는 방법만 바꿔도 생기는 크기). "
+                    "지금까지의 최고 모델로 보고서를 만듭니다")
+    return None
+
+
+def cross_term_candidate(numeric_top: List[str], base_features: List[str], applied_evals: List[str],
+                         tried: Any) -> Optional[Tuple[str, str, str]]:
+    """(a, b, name) of the next interaction term to offer, or None: a product of two ORIGINAL numeric inputs among the
+    most important ones (never a derived feature: no 온도x온도x압력), each pair at most once (either order, and not a
+    pair an earlier run of the same experiment already tried: `tried` holds those names and the input names)."""
+    origs = [f for f in numeric_top if f in base_features]
+    used = set(tried) | {e.split("=", 1)[0].strip() for e in applied_evals}
+    for i in range(len(origs)):
+        for j in range(i + 1, len(origs)):
+            a, b = origs[i], origs[j]
+            name, other = f"{strip_unit(a)}x{strip_unit(b)}", f"{strip_unit(b)}x{strip_unit(a)}"
+            if name in used or other in used:
+                continue
+            return a, b, name
+    return None
+
+
 def build_next_commands(
     args: argparse.Namespace, raw_file: str, task: str, positive_class: Optional[str],
     feature_names: List[str], created_features: List[str], applied_evals: List[str],
     target_names: List[str], champion: Dict[str, Any], schema: Dict[str, Any],
-    mean_score: float, staging_dir: str, final_dir: str,
+    mean_score: float, staging_dir: str, final_dir: str, tried_evals: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Ready-to-run follow-up commands so a small LLM does not have to compose arguments:
@@ -1766,11 +1809,10 @@ def build_next_commands(
                      "needs_input": False})
 
     numeric_top = [r["feature"] for r in champion.get("top_features", []) if r["feature"] in schema["numeric"]]
-    if len(numeric_top) >= 2:
-        a, b = numeric_top[0], numeric_top[1]
-        new_name = f"{strip_unit(a)}x{strip_unit(b)}"
-        existing = set(feature_names) | {e.split("=", 1)[0].strip() for e in applied_evals}
-        if new_name not in existing and retrain_ok and quotable(*applied_evals, a, b):
+    pair = cross_term_candidate(numeric_top, base_features, applied_evals, set(tried_evals or ()) | set(feature_names))
+    if pair:
+        a, b, new_name = pair
+        if retrain_ok and quotable(*applied_evals, a, b):
             evals = applied_evals + [f"{new_name} = {a} * {b}"]
             parts = base + ["--features", features_arg(base_features, "all"), "--eval", quote_arg("; ".join(evals)),
                             "--tag", quote_arg("교차항_추가")]
@@ -1812,6 +1854,8 @@ INCLUDE_MARK = "포함"
 SNAPSHOT_ROW_COL = "원본행"              # model_dataset.csv: Excel row number of each row
 SNAPSHOT_EXCL_PREFIX = "학습제외_"       # model_dataset.csv: 1 = left out of training for that target
 OUTLIER_Z = 3.5               # robust z-score (median / MAD) above which a value is an outlier
+INPUT_OUTLIER_Z = 10.0        # ... of an input column: only a typo-level value (18.5 written 185) is left out; values
+                              # from OUTLIER_Z up to this are rare input conditions, kept and said (2026-11-10 결정 1-2)
 OUTLIER_MAX_FRACTION = 0.10   # more candidates than this is a skewed distribution, not outliers: exclude none
 MIN_TRAIN_ROWS = 10
 SMALL_TRAIN_ROWS = 20         # fewer training rows than this: the result warns that the score is unsteady (C8)
@@ -1824,8 +1868,9 @@ def find_exclude_column(columns: List[Any]) -> Optional[str]:
     return None
 
 
-def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
-    """Robust outlier flags: |0.6745 (x - median) / MAD| > 3.5; IQR fences (3 x IQR) when MAD is 0."""
+def _outlier_flags(values: pd.Series, z: float = OUTLIER_Z) -> Tuple[np.ndarray, Optional[float]]:
+    """Robust outlier flags: |0.6745 (x - median) / MAD| > z (3.5); IQR fences (3 x IQR, scaled with z / 3.5) when MAD
+    is 0."""
     x = pd.to_numeric(values, errors="coerce").astype(float)
     ok = x.notna()
     if ok.sum() < MIN_TRAIN_ROWS:
@@ -1833,20 +1878,24 @@ def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
     med = float(x[ok].median())
     mad = float((x[ok] - med).abs().median())
     if mad > 0:
-        flag = ok & ((0.6745 * (x - med) / mad).abs() > OUTLIER_Z)
+        flag = ok & ((0.6745 * (x - med) / mad).abs() > z)
     else:
         q1, q3 = float(x[ok].quantile(0.25)), float(x[ok].quantile(0.75))
         iqr = q3 - q1
         if iqr <= 0:
             return np.zeros(len(x), dtype=bool), med
-        flag = ok & ((x < q1 - 3 * iqr) | (x > q3 + 3 * iqr))
+        k = 3 * z / OUTLIER_Z
+        flag = ok & ((x < q1 - k * iqr) | (x > q3 + k * iqr))
     return flag.to_numpy(dtype=bool), med
 
 
 def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, schema: Dict[str, Any],
                     created: List[str], task: str, target_name: str) -> Dict[str, Any]:
     """Rows to leave out of training for one target: the user's '제외' marks plus automatic outliers ('포함' keeps a row
-    in). Rows by a condition are marked in '제외' by ml_dataset.py exclude (2.9.85, was --exclude-where)."""
+    in). Rows by a condition are marked in '제외' by ml_dataset.py exclude (2.9.85, was --exclude-where).
+    Automatic: a target value beyond OUTLIER_Z, an input value beyond INPUT_OUTLIER_Z (a typo). An input value between
+    the two is a rare condition (the high dose of a designed experiment, the most informative row): kept in training,
+    returned in rare / rare_cols for the warning (2026-11-10 결정 1-2)."""
     n = len(y)
     valid = y.notna().to_numpy()
     text = (marks.map(_exclude_mark).to_numpy() if marks is not None else np.array([""] * n, dtype=object))
@@ -1859,9 +1908,14 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
     auto = np.zeros(n, dtype=bool)
     reasons = [""] * n
     auto_cols: List[List[str]] = [[] for _ in range(n)]
+    rare_flags: Dict[str, np.ndarray] = {}
     for col in check_cols:
         series = y if col == target_name else X[col]
-        flags, med = _outlier_flags(series.where(candidate))
+        flags, med = _outlier_flags(series.where(candidate), OUTLIER_Z if col == target_name else INPUT_OUTLIER_Z)
+        if col != target_name:
+            wide, _ = _outlier_flags(series.where(candidate))
+            if (wide & ~flags).any():
+                rare_flags[col] = wide & ~flags
         for i in np.flatnonzero(flags):
             auto[i] = True
             auto_cols[i].append(strip_unit(col))
@@ -1883,8 +1937,15 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
             in_cls = valid & (y_arr == cls)
             if (in_cls & ~manual & ~auto).sum() < 2:
                 auto[in_cls] = False   # never remove a class from training
+    rare = np.zeros(n, dtype=bool)
+    rare_cols: Dict[str, np.ndarray] = {}
+    for col, fl in rare_flags.items():
+        fl = fl & ~auto
+        if fl.any():
+            rare_cols[strip_unit(col)] = fl
+            rare |= fl
     return {"manual": manual, "auto": auto, "forced": forced, "mask": manual | auto, "text": text, "reasons": reasons, "auto_cols": auto_cols, "note": note,
-            "checked_columns": check_cols}
+            "checked_columns": check_cols, "rare": rare, "rare_cols": rare_cols}
 
 
 EXCLUDED_PREVIEW_MAX = 20    # excluded rows listed in the training JSON; excluded_rows.csv holds all
@@ -2581,6 +2642,18 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
         data_row=args.data_row,
         sheet=getattr(args, "sheet", None),
     )
+    # 2026-11-10 결정 1-3: rows written '합계' / '평균' / 'Total' ... are no measurements: left out of training before
+    # anything reads the data (not a category value '합계' of 라인, no row of the all-rows score); said in warnings
+    # (layout_warnings) and preview with the Excel rows
+    guess_targets: List[str] = []
+    for g in groups:
+        t = g["targets"]
+        try:
+            names = parse_feature_or_target_list(t, "targets") if isinstance(t, str) else list(t or [])
+        except InputError:
+            names = []
+        guess_targets += known_columns(names, [str(c) for c in df_raw.columns])
+    df_raw = drop_summary_rows(df_raw, guess_targets)
 
     prepared = [_prepare_group(df_raw, g, task) for g in groups]
     excl_col = find_exclude_column(list(df_raw.columns))
@@ -2617,9 +2690,21 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
     corr_frame = _union_frame(corr_parts) if len(prepared) > 1 else pd.concat(corr_parts, axis=1)
     corr_full = corr_frame.corr().round(4)
 
-    # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader),
-    # totals / average rows (kept: the '제외' column is the user's decision)
+    # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader), totals / average
+    # rows (exact words left out above, wider words kept: the '제외' column is the user's decision), the unit row
+    # below the header (C영역 A4: not counted as a data row in the profile)
     train_warnings: List[str] = layout_warnings(df_raw, target_names)
+    unit_below = df_raw.attrs.get("unit_row_below")
+    if unit_below:
+        train_warnings.append(f"{unit_below}행은 머리글 아래의 단위 행으로 보여 데이터 행으로 세지 않았습니다 "
+                              "(학습에도 쓰지 않음, 행 수와 빈 칸 수에서 뺌)")
+    if task == TASK_CLASSIFICATION:      # 2026-11-10 결정 1-4: 'OK'/'ok' stay two classes, said (never merged)
+        for t in target_names:
+            note = label_variant_note(v for v, r in zip(target_group[t]["df"][t].to_numpy(), source_rows)
+                                      if r != unit_below)
+            if note:
+                train_warnings.append(f"타겟 '{t}': {note}. 서로 다른 종류로 학습했습니다 (도구는 합치지 않음). 같은 종류이면 "
+                                      "사용자에게 알려 데이터 파일에서 같은 글자로 고친 뒤 다시 학습하십시오")
     ignored = sheet_ignored_warning(raw_file, getattr(args, "sheet", None))
     if ignored:
         train_warnings.append(ignored)
@@ -2640,11 +2725,11 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
     # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the
     # header (target empty), rows marked in '제외' or rows without a target
     unparsed: Dict[str, Dict[str, Any]] = {}
-    unit_below = df_raw.attrs.get("unit_row_below")
     unit_pos = [i for i, r in enumerate(source_rows) if r == unit_below] if unit_below else []
     data_rows = np.ones(len(df_raw), dtype=bool)
     data_rows[unit_pos] = False
     targets: Dict[str, Dict[str, Any]] = {}
+    rare_rows: Dict[str, set] = {}
     for target_name in target_names:
         g = target_group[target_name]
         extra = {"positive_class": g["positive_class"]} if task == TASK_CLASSIFICATION else {}
@@ -2675,13 +2760,37 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
         y_train = y_full.mask(plan["mask"])
         targets[target_name] = {"plan": plan, "key": _resume_key(task, target_name, g["X"], y_train, g["schema"],
                                                                  args.seed, extra), "target_text": targets_text}
+        for col, fl in plan["rare_cols"].items():
+            rare_rows.setdefault(col, set()).update(int(source_rows[i]) if i < len(source_rows) else i + 1
+                                                    for i in np.flatnonzero(fl))
+    # 2026-11-10 결정 1-2: input values far from the others but below the typo level stay in training, said apart from
+    # the target outliers (warnings and preview)
+    rare_brief = ""
+    if rare_rows:
+        every = sorted(set().union(*rare_rows.values()))
+        cols = sorted(rare_rows, key=lambda c: min(rare_rows[c]))
+        w = (f"드문 입력 조건 {len(every)}행: " + ", ".join(
+            f"{c} {len(rare_rows[c])}행({_row_numbers(sorted(rare_rows[c]))}행)" for c in cols[:5])
+            + (f" 외 {len(cols) - 5}개 열" if len(cols) > 5 else "")
+            + ". 다른 행과 값이 많이 다르지만 이상치로 보지 않고 학습에 썼습니다 (일부러 넣은 실험 조건이면 그대로 두면 됨). "
+              "잘못 적은 값이면 사용자에게 알려 그 행의 '제외' 열에 이유를 적고 다시 실행하십시오")
+        train_warnings.append(w)
+        sys.stderr.write(f"[WARN] {w}\n")
+        rare_brief = f"드문 입력 조건 {len(every)}행(학습에 씀: {_row_numbers(every)}행)"
     return {"version": VERSION, "prepared": prepared, "target_names": target_names, "excl_col": excl_col,
             "source_rows": source_rows, "column_aliases": column_aliases, "feature_names": feature_names,
             "applied_evals": applied_evals, "feature_schema": feature_schema, "X_all": X_all, "df_clean": df_clean,
             "target_numeric": target_numeric, "corr_full": corr_full, "warnings": train_warnings,
-            "unparsed": unparsed, "targets": targets, "sheet_confirm": sheet_confirm,
+            "unparsed": unparsed, "targets": targets, "sheet_confirm": sheet_confirm, "rare_brief": rare_brief,
             "raw_info": {"rows": int(len(df_raw)), "columns": int(df_raw.shape[1]), "data_rows": int(data_rows.sum()),
+                         "unit_pos": unit_pos, "unit_row_below": unit_below if unit_pos else None,
+                         "summary_dropped": [int(r[0]) for r in df_raw.attrs.get("summary_dropped") or []],
                          "decimal_comma": bool(df_raw.attrs.get("decimal_comma")), "sheet": df_raw.attrs.get("sheet")}}
+
+
+def _row_numbers(rows: List[int], limit: int = 10) -> str:
+    """'62, 63, 64' (the first `limit` Excel rows, ' 외 N개' for the rest)."""
+    return ", ".join(str(r) for r in rows[:limit]) + (f" 외 {len(rows) - limit}개" if len(rows) > limit else "")
 
 
 def _mark_counts(df: pd.DataFrame, excl_col: Optional[str]) -> str:
@@ -2936,6 +3045,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                                     + (f"(데이터 {raw_info.get('data_rows', raw_info['rows'])}행 중 " + ", ".join(detail) + " 뺌)"
                                        if detail else ""))
         rows_brief = "학습 " + ", ".join(rows_brief_parts)
+        if raw_info.get("summary_dropped"):       # 결정 1-3: the totals / average rows left out, with their Excel rows
+            rows_brief += (f" | 합계·평균 행 {len(raw_info['summary_dropped'])}행 학습 제외"
+                           f"({_row_numbers(raw_info['summary_dropped'])}행)")
 
         # Check Previous History (same task only) for Delta
         log_progress(85, f"이전 이력 대조 및 성능 변화(Delta {metric_label}) 산출 중...")
@@ -3135,12 +3247,15 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # 4. Append Record to history.jsonl (SSOT)
         duration_sec = round(time.time() - start_time, 2)
         # Missing feature cells (incl. unparseable strings) that SimpleImputer(median) fills
-        missing_imputed = int(X_all.isna().sum().sum())
+        # (not the unit row below the header: its '°C', 'bar' cells are no missing data, C영역 A4)
+        data_mask = np.ones(len(X_all), dtype=bool)
+        data_mask[[i for i in raw_info.get("unit_pos") or [] if i < len(X_all)]] = False
+        missing_imputed = int(X_all[data_mask].isna().sum().sum())
         prescription = recommendations[0] if recommendations else "모델 경쟁 학습 및 평가 완료"
 
         owner = input_column_owner(feature_schema)
         feature_missing: Dict[str, int] = {}
-        for col, n_miss in X_all.isna().sum().items():
+        for col, n_miss in X_all[data_mask].isna().sum().items():
             raw_col = owner.get(col, col)
             feature_missing[raw_col] = max(feature_missing.get(raw_col, 0), int(n_miss))
         for w in _unparsed_number_warnings(unparsed):
@@ -3148,12 +3263,15 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             sys.stderr.write(f"[WARN] {w}\n")
         data_profile = {
             "source_file": os.path.basename(raw_file),
-            "rows_loaded": raw_info["rows"],
+            "rows_loaded": raw_info.get("data_rows", raw_info["rows"]),
             "columns_loaded": raw_info["columns"],
             "rows_used": {t: int(target_benchmarks[t]["sample_count"]) for t in target_names},
-            "target_missing_rows": {t: int(target_group[t]["df"][t].isna().sum()) for t in target_names},
+            "target_missing_rows": {t: int(target_group[t]["df"][t].isna().to_numpy()[data_mask].sum())
+                                    for t in target_names},
             "feature_missing": feature_missing,
             "missing_imputed_cells": missing_imputed,
+            **({"unit_row_below": raw_info["unit_row_below"]} if raw_info.get("unit_row_below") else {}),
+            **({"summary_rows_excluded": raw_info["summary_dropped"]} if raw_info.get("summary_dropped") else {}),
             "layout": {"header_row": args.header_row, "unit_row": args.unit_row, "data_row": args.data_row,
                        "sheet": raw_info.get("sheet")},
         }
@@ -3166,7 +3284,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "description": project_desc,
             "duration_sec": duration_sec,
             "data_hygiene": {
-                "total_rows": len(df_clean),
+                "total_rows": data_profile["rows_loaded"],
                 "total_features": len(feature_names),
                 "missing_imputed": missing_imputed
             },
@@ -3211,18 +3329,18 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 feature_names=g0["features"], created_features=g0["created"], applied_evals=g0["evals"],
                 target_names=target_names, champion={**prim_champ, "weak_features": weak_feats}, schema=g0["schema"],
                 mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir,
+                tried_evals=[str(e).split("=", 1)[0].strip() for h in same_task for e in h.get("derived_evals") or []],
             )
-        # 2.9.71: the tool counts the improvement rounds (AGENTS.md "사용법 단순성" 5): when the last IMPROVE_ROUNDS
-        # runs of this task and targets (this one included) did not beat the best score before them, it stops offering
-        # more retraining and offers the report instead
+        # the tool counts the improvement rounds (AGENTS.md "사용법 단순성" 5, 2026-11-10 결정 1-1): IMPROVE_PATIENCE runs
+        # without a gain of IMPROVE_MIN_GAIN, or IMPROVE_MAX_ROUNDS runs after the first, stop the retraining offers and
+        # offer the report instead (improve_stop_reason)
         improve_stopped = None
         if min_score < 0.90:
             scores = [float(h["mean_val_score"]) for h in history_records
                       if _same_experiment(h, task, target_names) and isinstance(h.get("mean_val_score"), (int, float))]
             scores.append(float(mean_val_score))
-            if len(scores) > IMPROVE_ROUNDS and max(scores[-IMPROVE_ROUNDS:]) <= max(scores[:-IMPROVE_ROUNDS]) + 1e-4:
-                improve_stopped = (f"최근 {IMPROVE_ROUNDS}번의 학습이 이전 최고 점수({max(scores[:-IMPROVE_ROUNDS]):.4f})를 넘지 못해 "
-                                   f"재학습 제안을 멈춤. 지금까지의 최고 모델로 보고서를 만듭니다")
+            improve_stopped = improve_stop_reason(scores)
+            if improve_stopped:
                 next_commands = [{"purpose": REPORT_PURPOSE[task], "needs_input": False,
                                   "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} --file {quote_arg(raw_file)}"}]
         history_record["next_commands"] = next_commands
@@ -3311,6 +3429,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         preview = (
             f"[{current_version} 완료 / {task}] 타겟: [{target_brief}] | {rows_brief} | "
             + (f"{excl_brief} | " if excl_brief else "")
+            + (f"{P['rare_brief']} | " if P.get("rare_brief") else "")
             + (f"{auto_brief} | " if auto_brief else "") +
             f"평균 {metric_label}={mean_val_score:.4f} (변화: {delta_txt}) | "
             + (f"{top_brief} | " if top_brief else "") +
@@ -3403,7 +3522,6 @@ TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
 TASK_SAME_MEANING = {w: TASK_CLASSIFICATION for w in ("clf", "class", "classify", "classifier", "cls", "분류", "categorical")}
 TASK_SAME_MEANING.update({w: TASK_REGRESSION for w in ("reg", "regress", "regressor", "회귀", "numeric")})
 AUTO_FEATURES_FILE = "features_auto.txt"   # vX/: the inputs a run without --features chose, one per line (usable as --features)
-IMPROVE_ROUNDS = 5   # training runs in a row without a new best before the tool stops offering retraining (2.9.71)
 REPORT_PURPOSE = {  # the report and the calculator use the latest training version (2.9.83); regression also makes the calculator
     TASK_REGRESSION: "방금 학습한 버전으로 ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (성능예측표 입력은 그 버전의 입력 전부, "
                      "제목은 학습 때 데이터 설명에서 자동으로 정함)",

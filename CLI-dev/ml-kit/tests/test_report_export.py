@@ -1080,7 +1080,8 @@ def test_report_rows_count_without_the_unit_row(tmp_path):
     card = " ".join(c.text for row in doc.tables[0].rows for c in row.cells)
     assert "60행" in card and "61행" not in card, card
     text = "\n".join(p.text for p in doc.paragraphs)
-    assert "읽은 행 61행" in text and "학습 데이터 기준값으로 대치" not in text, text
+    # 1-9 (C영역 A4 뿌리, 2026-11-10): 학습 프로파일이 단위 행을 행 수·결측 수에서 뺀다 (예전 61행)
+    assert "읽은 행 60행" in text and "61행" not in text and "학습 데이터 기준값으로 대치" not in text, text
 
 
 @needs_report
