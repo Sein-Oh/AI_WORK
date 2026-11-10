@@ -55,6 +55,8 @@ def _argparse_options(script):
     opts = set()
     for call in re.findall(r"add_argument\(([^)]*)", src):
         opts.update(re.findall(r"[\"'](--[a-z][a-z0-9-]*)[\"']", call))
+    if "add_sheet_argument(parser)" in src:          # 공통 런타임이 붙이는 --sheet (2.9.88)
+        opts.add("--sheet")
     return opts
 
 

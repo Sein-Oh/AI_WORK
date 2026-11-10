@@ -77,10 +77,13 @@ def test_predict_with_categories_dates_and_warnings(mixed):
     lo, hi = ps["intervals"][0]
     assert lo < ps["predictions"][0] < hi and ps["interval_level"] == 0.9
 
-    warn = run_tool("ml_predict.py", "--model", vdir, "--input", "일시=2027-01-01 10:00,라인=Z라인,반응온도=")
-    assert warn["unseen_category_warning"] is True and "Z라인" in warn["unseen_category_warnings"][0]
-    assert warn["missing_input_counts"] == {"반응온도(°C)": 1}
-    assert any("학습 기간" in w for w in warn["extrapolation_warnings"])
+    # 2.9.88 (검토 B영역 B1·D1): 빈 숫자 입력은 중앙값으로 채울지 묻고, 학습 때 없던 종류는 학습한 종류를 [후보]로 멈춤
+    ask = run_fail("ml_predict.py", "--model", vdir, "--input", "일시=2025-02-01 15:00,라인=C라인,반응온도=")
+    assert ask["error_type"] == "needs_user_decision" and ask["missing_inputs"] == ["반응온도(°C)"], ask
+    unseen = run_fail("ml_predict.py", "--model", vdir, "--input", "일시=2025-02-01 15:00,라인=Z라인,반응온도=250")
+    assert "Z라인" in unseen["message"] and "[후보]" in unseen["message"], unseen
+    warn = run_tool("ml_predict.py", "--model", vdir, "--input", "일시=2027-01-01 10:00,라인=C라인,반응온도=250")
+    assert any("학습 기간" in w for w in warn["extrapolation_warnings"]), warn
 
 
 def test_predict_standalone_with_new_schema(mixed, tmp_path):

@@ -209,7 +209,7 @@ CLI-dev/<tool>/
 ### R10. 긴 작업은 나눠서 진행 (`CONTINUE:`)
 - 에이전트의 명령 실행 도구는 명령을 시간 제한(OpenCode 120초)에 끊는다. 끊기면 결과 JSON이 없어 LLM이 같은 명령을 반복한다 (2026-11-04 회사 PC Gemma 시험 R1, R2).
 - 오래 걸리는 단계(재학습 등)는 끝낸 결과를 디스크에 저장하고, 다음 단계 전에 시계를 본다 (`check_time`). 제한(`ML_KIT_TIME_LIMIT`, 기본 100초)에서 여유 30초를 뺀 시각을 넘을 것 같으면
-  `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [같은 명령]`,
+  `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [{"purpose", "command": 같은 명령, "needs_input": false}]`(다른 결과와 같은 모양),
   `agent_directive` = `CONTINUE: ...`(exit 0)을 낸다. 오류 로그에는 남기지 않는다.
 - 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행한다. 실행마다 새 단계를 최소 1개는 하므로 반복하면 반드시 끝난다.
 - LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `CONTINUE:`가 아닌 결과가 나올 때까지. 횟수는 LLM이 세지 않는다.
