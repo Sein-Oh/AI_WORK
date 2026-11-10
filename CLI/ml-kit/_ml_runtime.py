@@ -3928,7 +3928,10 @@ class Table:
             try:
                 self._tri = Delaunay((self.PK - self.lo) / self.span)
             except Exception as e:  # degenerate layout (all points on a line, too few points)
-                raise InputError(f"실측 점이 한 줄로 놓여 있거나 너무 적어 둘러싼 점을 찾을 수 없습니다: {e}")
+                # the qhull text (10+ lines of options) tells the user nothing: stderr only (검토 B B5)
+                sys.stderr.write(f"[WARN] Delaunay 실패: {str(e).splitlines()[0] if str(e) else type(e).__name__}\n")
+                raise InputError("실측 점이 한 줄로 놓여 있거나 너무 적어 둘러싼 점을 찾을 수 없습니다 "
+                                 f"(기준 열 {', '.join(self.keys)}의 값이 함께 움직임). 기준 열을 하나로 줄여 다시 실행하십시오.")
         q = (x - self.lo) / self.span
         s = int(self._tri.find_simplex(q))
         if s < 0:
