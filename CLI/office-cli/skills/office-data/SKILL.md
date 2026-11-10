@@ -4,7 +4,7 @@ description: 엑셀·CSV 표 데이터 작업. 표 두 판(이전 판, 새 판) 
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.1"
+  version: "1.6.2"
   platform: windows
 ---
 
@@ -44,3 +44,4 @@ metadata:
 - `[후보] 1) ... 2) ...`(짝지을 키를 도구가 못 정함)이면 후보를 보여 주고 사용자가 고른 번호의 `confirm_commands`를 1번 실행한다.
 - 사용자가 새 판에 바뀐 칸 메모를 원하면 `next_commands[0]`(미리보기, 변경 없음)을 실행해 `planned`를 보여 주고, "예" 뒤에만 그 결과의 `confirm_commands[0]`.
 - `recovered`(새 이름으로 저장 등)는 그대로 알리고 `output_file`의 실제 경로를 쓴다.
+- `error_type: not_supported`(도구에 없는 기능)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

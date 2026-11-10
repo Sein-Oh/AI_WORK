@@ -104,6 +104,9 @@
 도구가 할 수 있는 일은 3장 표와 각 SKILL.md 명령 표에 있는 것뿐이다. 그 밖의 일(예: 피벗 표, 여러 파일 합치기, 그래프 그림 파일, 통계 계산,
 글 정리·변환)은 LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다.
 1. 먼저 3장 표와 해당 SKILL.md 명령 표를 본다. 있는 일은 늘 스킬로 한다. 없을 때만 사용자에게 "도구에 없는 기능이라 파이썬으로 직접 처리합니다"라고 1줄 알리고 진행한다.
+   예외: 다음은 파이썬으로도 하지 않고 사용자에게 그 앱에서 직접 하라고 알린다 (도구 결과 `error_type: not_supported`도 같음): 변경 내용 수락·거부(Word 검토 탭),
+   인쇄 설정(파일 > 인쇄), 피벗 테이블(Excel 삽입 탭), 데이터 유효성(Excel 데이터 탭), 기존 차트 고치기(차트 디자인 탭),
+   회의 요청(Outlook 새 모임), 메일 이동·분류·플래그(Outlook에서 직접).
 2. 스크립트는 파일 쓰기 도구로 `C:\CLI\data\scripts\<짧은 영문 이름>.py`(UTF-8)에 만들고, 2장의 인코딩 줄을 붙여 `python "C:\CLI\data\scripts\<이름>.py"`로 실행한다.
    `python -c`와 `python -`(표준 입력)은 쓰지 않는다 (PowerShell에서 따옴표와 한글이 깨진다). 스크립트는 이 폴더에만 만든다.
 3. 설치된 라이브러리를 쓴다: pandas, numpy, scipy, scikit-learn, openpyxl, python-docx, python-pptx, matplotlib, seaborn, pymupdf, pywin32(win32com) 등.

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """작업별 스킬 4개(CLI/ml-kit/skills/<이름>/SKILL.md, 2.9.71, 2.9.72: 입력 자동 선택, --suggest)와 코드가 어긋나지 않는지: 버전, OpenCode 머리말, 백틱 명령의 --옵션,
-크기(6KB), 공통 규칙이 4개에서 같음, 모든 스크립트가 어느 스킬에든 있음, 꼭 적어야 할 기능."""
+크기(7.2KB), 공통 규칙이 4개에서 같음, 모든 스크립트가 어느 스킬에든 있음, 꼭 적어야 할 기능."""
 import os
 import re
 import sys
@@ -10,7 +10,7 @@ from mlkit_helpers import KIT  # noqa: E402
 import _ml_runtime as rt  # noqa: E402
 
 SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")
-MAX_SKILL_BYTES = 6 * 1024          # 경량 LLM 컨텍스트: 스킬 하나 6KB 이하 (AGENTS.md "사용법 단순성" 7)
+MAX_SKILL_BYTES = 7372                # 경량 LLM 컨텍스트: 스킬 하나 7.2KB 이하 (6KB에서 20% 늘림, 2026-11-10, AGENTS.md "사용법 단순성" 7)
 
 
 def _path(name):

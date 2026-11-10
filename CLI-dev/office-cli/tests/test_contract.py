@@ -1551,3 +1551,31 @@ def test_error_log_hides_mail_account_and_stray_text(capsys, isolated_dirs):
     code, out = run_main(outlook, capsys, "list", "--folder", "hong@corp.com\\받은 편지함", "--limit", "x")
     text = error_log_text(isolated_dirs)
     assert "확인했습니다 비밀" not in text and "hong@corp.com" not in text, text
+
+
+# ---------------------------------------------------------------------------
+# 1.6.1: 하지 않기로 한 기능은 사용자가 직접 하라고 안내 (사용자 결정 2026-11-10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mod, argv, what", [
+    ("word", ["revisions", "--action", "accept"], "변경 내용 수락"),
+    ("excel", ["pivot", "--range", "A1:D9"], "피벗"),
+    ("excel", ["chart", "--action", "edit", "--name", "c"], "기존 차트"),
+    ("excel", ["range", "--action", "validation", "--range", "A1"], "데이터 유효성"),
+    ("ppt", ["print"], "인쇄"),
+    ("outlook", ["event", "--subject", "s", "--start", "2026-11-12 10:00", "--attendees", "a@x.com"], "회의 요청"),
+    ("outlook", ["move", "--id", "3", "--folder", "보관"], "메일 이동"),
+    ("outlook", ["flag", "--id", "3"], "플래그"),
+])
+def test_not_supported_features_tell_user_to_do_it(capsys, mod, argv, what):
+    import importlib
+    code, out = run_main(importlib.import_module(mod), capsys, *argv)
+    assert code == 2 and out["error_type"] == "not_supported" and what in out["message"], out
+    assert "직접" in out["message"] and "파이썬" in out["agent_directive"], out
+
+
+def test_search_word_in_value_is_not_a_feature_request(capsys):
+    import outlook
+    code, out = run_main(outlook, capsys, "search", "--query", "회의", "--bogus")
+    assert code == 2 and out["error_type"] == "input", out        # 값의 '회의'는 기능 요청이 아님

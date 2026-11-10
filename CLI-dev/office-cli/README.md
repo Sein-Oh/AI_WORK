@@ -3,7 +3,7 @@
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
-- 에이전트용 스킬 (작업별 5개, 각 6KB 이하): [`office-excel`](../../CLI/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
+- 에이전트용 스킬 (작업별 5개, 각 7.2KB 이하): [`office-excel`](../../CLI/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
   [`office-doc`](../../CLI/office-cli/skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
   [`office-mail`](../../CLI/office-cli/skills/office-mail/SKILL.md) (outlook.py),
   [`office-spec`](../../CLI/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment),
@@ -61,6 +61,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     해당 작업: `reader.py index`와 `search --file 폴더`의 문서 등록(새 파일을 읽기 전마다), `search`의 바뀐 캐시 다시 읽기.
 - 필요한 라이브러리가 없으면(openpyxl, python-docx, python-pptx, pymupdf, olefile) `STOP_RETRY:`와 `error_type: "missing_library"`, `missing_package`,
   `install_command`(`python -m pip install <패키지>`). LLM은 직접 설치하지 않고 설치 명령을 사용자에게 전달합니다(R5 `require_lib`). pywin32는 그대로 `input`.
+- 도구에 넣지 않기로 한 기능(1.6.2, 사용자 결정 2026-11-10: 변경 내용 수락·거부, 인쇄 설정, 피벗, 데이터 유효성, 기존 차트 고치기, 회의 요청,
+  메일 이동·분류·플래그)을 찾는 명령은 인자 오류(exit 2) 대신 `error_type: "not_supported"`와 "사용자가 직접 하세요: <앱의 메뉴>" message,
+  `STOP_RETRY:`(다시 실행하거나 파이썬으로 대신하지 말 것). 명령 이름·옵션 이름·`--action`/`--type` 값으로만 알아보고 검색어 같은 값은 보지 않음
+  (`_runtime.NOT_SUPPORTED`). 전역 지침 8장도 같은 목록을 사용자에게 직접 하라고 안내합니다.
 - 공통 키: `status`, `tool`, `command`, `preview`, `agent_directive`. 오류 시 `error_type`, `message`가 추가됩니다. COM 오류는 `hresult`도 들어갑니다.
 - `target_resolved`: 실제로 작업한 문서(앱, 이름, 경로, 시트/슬라이드)
 - `next_commands`: 이어서 실행할 명령 `[{purpose, command}]`. 완성된 형태라 그대로 실행하면 됩니다. 묻지 않고 실행해도 안전한 것(읽기, 미리보기 `--dry-run`,
