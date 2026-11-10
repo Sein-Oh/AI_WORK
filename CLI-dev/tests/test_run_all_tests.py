@@ -17,8 +17,9 @@ spec.loader.exec_module(rat)
 
 def test_silent_hung_child_is_killed_at_timeout(capsys):
     t0 = time.time()
+    # 상한 5초 (1초면 바쁜 회사 PC에서 파이썬이 'start'를 찍기 전에 끊김, 2026-11-10)
     code, out, sec, stop = rat.run_capture([sys.executable, "-c", "import time; print('start', flush=True); time.sleep(60)"],
-                                           HERE, timeout=1, poll=0.2)
+                                           HERE, timeout=5, poll=0.2)
     assert time.time() - t0 < 20 and not stop and code is not None and code != 0
     assert out.splitlines()[0] == "start" and "시간 초과" in out
 
@@ -519,3 +520,21 @@ def test_simplify_dry_run_sheet_delete_uses_name():
     assert sheet, "dry() 안의 sheet 점검을 찾지 못함"
     for argv in sheet:
         assert "--name" in argv and "--sheet" not in argv, argv
+
+
+def test_pytest_workers_default_is_capped_by_cores_and_memory(monkeypatch):
+    """회사 PC 2026-11-10: 코어 수 - 1개로 돌리자 메모리가 모자라 pytest가 89분, 시간 초과 18건. 기본은 최대 3개, 메모리 4GB마다 1개."""
+    args = type("A", (), {"pytest_workers": 0})()
+    monkeypatch.setattr(rat.os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(rat, "total_memory_gb", lambda: 64.0)
+    assert rat.pytest_workers(args) == 3
+    monkeypatch.setattr(rat, "total_memory_gb", lambda: 8.0)
+    assert rat.pytest_workers(args) == 2
+    monkeypatch.setattr(rat, "total_memory_gb", lambda: 3.0)
+    assert rat.pytest_workers(args) == 1
+    monkeypatch.setattr(rat.os, "cpu_count", lambda: 2)
+    monkeypatch.setattr(rat, "total_memory_gb", lambda: None)
+    assert rat.pytest_workers(args) == 1
+    args.pytest_workers = 6
+    assert rat.pytest_workers(args) == 6
+    assert rat.total_memory_gb() is None or rat.total_memory_gb() > 0

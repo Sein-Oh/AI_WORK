@@ -4,7 +4,7 @@ description: 학습용 데이터셋 파일을 만든다 (ml_dataset.py, 원본�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.85"
+  version: "2.9.86"
   platform: windows
 ---
 

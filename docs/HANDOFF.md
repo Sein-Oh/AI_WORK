@@ -320,6 +320,12 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
 - 남은 것: 3장 끝 마크다운 작은 것, 4장 새 기능, 5장 (사용자와 순서·범위를 정한 뒤)
 - 클라우드 테스트: office-cli+공통 3481 passed
 
+## 3-9. 회사 PC 실기 결과 (2026-11-10 아침, office-cli 1.4.91·ml-kit 2.9.85)와 조치 (ml-kit 2.9.86)
+- office-cli: 실기 러너 79건 모두 PASS, pytest 모두 PASS. eml_read_trial은 잘 읽힘, eml_import_trial은 예외 (사용자: 가져오기는 맡지 않음, 읽기·검색으로)
+- ml-kit: F7 성능예측표 엑셀 확인 실패(엑셀이 1ulp 차이를 같다고 비교, 확인 조건만 고침) / pytest 실패 18건은 병렬 실행으로 메모리가 모자란 시간 초과
+  (동시 실행 기본을 최대 3개·메모리 4GB마다 1개로). 다음 반입 때 run_all_tests 전체와 `run_win_tests.py --only L,M`
+- 사용자 결정 순서: ml-kit 두 문제(끝) -> office-cli 검토 4장·5장. EML 읽기·검색은 그 뒤 (CHANGELOG 남은 할 일)
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 

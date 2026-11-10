@@ -897,3 +897,13 @@ def test_time_limit_setting(monkeypatch):
     monkeypatch.setattr(rt, "RUN_START", rt.time.monotonic() - 5)
     with pytest.raises(rt.Unfinished):
         rt.check_time(0, "x")
+
+
+def test_excel_edge_point_is_beyond_excel_comparison_precision():
+    """회사 PC 2026-11-10 F7: 엑셀은 15자리쯤까지 같은 두 수를 같다고 비교 -> 경계값 바로 다음 double은 엑셀에서 경계값 쪽 잎.
+    엑셀 확인의 '경계 바로 위' 조건은 엑셀이 구분하는 가장 작은 걸음 위 (모델도 그 값은 오른쪽 잎)."""
+    import ml_export
+    for v in (76.5671, 180.49999237060547, -3.25, 0.0, 1e-7, 12345678.9):
+        up = ml_export.above_for_excel(v)
+        assert up > v and float("%.15g" % up) != float("%.15g" % v), (v, up)
+        assert up - v <= max(abs(v), 1.0) * 1e-12, (v, up)

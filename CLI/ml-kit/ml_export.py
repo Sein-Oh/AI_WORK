@@ -905,9 +905,19 @@ def verify_workbook(path: str, plans: List[Dict[str, Any]]) -> List[str]:
     return problems
 
 
+EXCEL_EPS = 1e-13           # Excel compares numbers that agree to about 15 significant digits as equal (=0.1+0.2=0.3 is TRUE)
+
+
+def above_for_excel(v: float) -> float:
+    """The smallest step above a split bound that Excel still tells apart from the bound (2026-11-10 company PC F7:
+    the next double above a bound compared as equal in Excel, so the row landed in the left leaf; LibreOffice was exact)."""
+    return float(v + max(abs(v) * EXCEL_EPS, EXCEL_EPS))
+
+
 def edge_points(p: Dict[str, Any]) -> pd.DataFrame:
-    """Conditions exactly on a split bound of a raw input and the next number above it: Excel must read the bounds
-    with all their digits for these to land on the model's side."""
+    """Conditions exactly on a split bound of a raw input and just above it: Excel must read the bounds with all their
+    digits for these to land on the model's side. 'Just above' is the smallest step Excel tells apart (above_for_excel):
+    numbers closer to a bound than about 1e-15 of its size are the bound itself for Excel."""
     form, cand = p["cand"]["form"], p["cand"]
     if form["kind"] != "trees":
         return pd.DataFrame(columns=cand["inputs"])
@@ -921,7 +931,7 @@ def edge_points(p: Dict[str, Any]) -> pd.DataFrame:
         b = hi[hi < OPEN]
         if b.size:
             v = float(b[len(b) // 2])
-            rows += [dict(med, **{name: v}), dict(med, **{name: float(np.nextafter(v, np.inf))})]
+            rows += [dict(med, **{name: v}), dict(med, **{name: above_for_excel(v)})]
         if len(rows) >= 6:
             break
     return pd.DataFrame(rows, columns=cand["inputs"])

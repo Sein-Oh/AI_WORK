@@ -9,7 +9,7 @@
 
 단계 (이 순서로 실행. --only로 고르면 고른 단계만 같은 순서로):
     diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
-    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (테스트 파일마다 python -m pytest, 코어 수 - 1개씩 동시에(--pytest-workers),
+    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (테스트 파일마다 python -m pytest, 코어 수 - 1·메모리 4GB마다 1개·최대 3개씩 동시에(--pytest-workers),
             파일마다 상한 --pytest-timeout 7200초,
             실패는 pytest_live_report 플러그인이 [LIVE] 줄로 바로 남겨 끊겨도 이름이 남음)
     beta    ml-kit 베타 점검 (run_beta_check.py, F7 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
@@ -616,11 +616,41 @@ def merge_live(fails, live):
     return out
 
 
+PYTEST_WORKERS_MAX = 3     # 기본 동시 실행 상한 (회사 PC 2026-11-10: 코어 수 - 1개로 돌리자 메모리가 모자라 파일마다 4,600~5,300초,
+                           # 'ml_export.py -h'도 600초 시간 초과. 순차일 때 전체 73분 -> pytest만 89분)
+GB_PER_WORKER = 4          # 동시 실행 하나에 잡는 메모리 (성능예측표 시험이 무거움)
+
+
+def total_memory_gb():
+    """이 PC의 물리 메모리(GB). 모르면 None."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class _Mem(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = _Mem()
+            m.dwLength = ctypes.sizeof(_Mem)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                return m.ullTotalPhys / 2 ** 30
+            return None
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 30
+    except Exception:
+        return None
+
+
 def pytest_workers(args):
-    """동시에 돌릴 pytest 수: --pytest-workers, 0(기본)이면 코어 수 - 1 (최대 8). 테스트의 학습은 작은 데이터라 스레드 1개만 씀
-    (ml-kit limit_threads), 하나는 화면·Office에 남김."""
+    """동시에 돌릴 pytest 수: --pytest-workers, 0(기본)이면 코어 수 - 1, 메모리 GB_PER_WORKER GB마다 1개, 최대 PYTEST_WORKERS_MAX개.
+    테스트의 학습은 작은 데이터라 스레드 1개만 씀 (ml-kit limit_threads), 하나는 화면·Office에 남김."""
     n = int(getattr(args, "pytest_workers", 0) or 0)
-    return n if n > 0 else max(1, min(8, (os.cpu_count() or 2) - 1))
+    if n > 0:
+        return n
+    mem = total_memory_gb()
+    by_mem = int(mem // GB_PER_WORKER) if mem else PYTEST_WORKERS_MAX
+    return max(1, min(PYTEST_WORKERS_MAX, (os.cpu_count() or 2) - 1, by_mem))
 
 
 def pytest_files(folder):
@@ -644,7 +674,11 @@ def step_pytest(stage, args, ctx):
         if os.path.isdir(folder):
             jobs += [(tool, folder, f) for f in pytest_files(folder)]
     workers = pytest_workers(args)
-    say(f"오프라인 테스트 시작: 파일 {len(jobs)}개를 {workers}개씩 동시에 (파일마다 상한 {args.pytest_timeout}초)")
+    mem = total_memory_gb()
+    how = (f"{workers}개씩 동시에 (코어 {os.cpu_count()}개, 메모리 {mem:.0f}GB" if mem else f"{workers}개씩 동시에 (코어 {os.cpu_count()}개")
+    how += ", --pytest-workers로 바꿀 수 있음)" if not getattr(args, "pytest_workers", 0) else ", --pytest-workers)"
+    say(f"오프라인 테스트 시작: 파일 {len(jobs)}개를 {how} (파일마다 상한 {args.pytest_timeout}초)")
+    stage.note = f"동시 실행 {how}"                       # 결과 표의 비고 (느릴 때 원인을 보게)
     procs, results, started = [], {}, time.time()
 
     def one(job):
@@ -1200,7 +1234,7 @@ def main(argv=None):
     p.add_argument("--pytest-timeout", type=int, default=7200,
                    help="pytest 단계에서 테스트 파일 하나의 시간 상한(초, 기본 7200)")
     p.add_argument("--pytest-workers", type=int, default=0,
-                   help="pytest 단계에서 동시에 돌릴 테스트 파일 수 (기본 0: 코어 수 - 1, 최대 8. 1이면 하나씩)")
+                   help="pytest 단계에서 동시에 돌릴 테스트 파일 수 (기본 0: 코어 수 - 1, 메모리 4GB마다 1개, 최대 3. 1이면 하나씩)")
     args = p.parse_args(argv)
     chosen = [s.strip().lower() for s in (args.only or ",".join(DEFAULT_STAGES)).split(",") if s.strip()]
     if (args.gemma or args.gemma_only or args.gemma_model) and "gemma" not in chosen:   # gemma 옵션을 주면 gemma 단계도
