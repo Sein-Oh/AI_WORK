@@ -1453,3 +1453,66 @@ def test_table_errors(wd, capsys):
     assert code == 1 and "1~1" in out["message"], out
     code, out = run_word(capsys, "table", "--action", "delete-row")
     assert code == 1 and "--row" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.1: 메모 답글·지우기
+# ---------------------------------------------------------------------------
+
+
+def _memo_doc(wd):
+    doc = FakeWordDocument("규격 4.2항 값\r다음 단락")
+    for start, text in ((0, "값 확인"), (12, "오타")):
+        c = FakeComment(FakeRange(doc, start, start + 3), text, author="김검토")
+        c.coll = doc.Comments
+        doc.Comments.items.append(c)
+    wd["doc"] = doc
+    return doc
+
+
+def test_comment_reply_and_delete_with_replies(wd, capsys):
+    doc = _memo_doc(wd)
+    code, out = run_word(capsys, "comment", "--action", "reply", "--no", "1", "--text", "확인했습니다")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and doc.Comments.Count == 3, out
+    assert doc.Comments.items[1].Ancestor is doc.Comments.items[0] and doc.Comments.items[1].Range.Text == "확인했습니다"
+    code, out = run_word(capsys, "comment", "--action", "delete", "--no", "1", "--dry-run")
+    assert code == 0 and out["count"] == 2 and "답글 1개" in out["preview"] and doc.Comments.Count == 3, out
+    code, out = run_word(capsys, "comment", "--action", "delete", "--no", "1")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert [c.Range.Text for c in doc.Comments.items] == ["오타"], [c.Range.Text for c in doc.Comments.items]
+
+
+def test_comment_reply_delete_errors(wd, capsys):
+    doc = _memo_doc(wd)
+    code, out = run_word(capsys, "comment", "--action", "delete")
+    assert code == 1 and "--no" in out["message"], out
+    code, out = run_word(capsys, "comment", "--action", "reply", "--no", "5", "--text", "x")
+    assert code == 1 and "1~2" in out["message"], out
+    doc.no_replies = True
+    code, out = run_word(capsys, "comment", "--action", "reply", "--no", "1", "--text", "x")
+    assert code == 1 and "Word 2013" in out["message"] and doc.Comments.Count == 2, out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.1: 단락 서식 (word.py format, README에만)
+# ---------------------------------------------------------------------------
+
+
+def test_format_paragraphs_align_font_style(wd, capsys):
+    doc = FakeWordDocument("제목 줄\r본문 하나\r본문 둘")
+    doc.format_cache, doc.styles_at = {}, {}
+    wd["doc"] = doc
+    code, out = run_word(capsys, "format", "--paragraphs", "2-3", "--align", "center", "--size", "12", "--bold", "--dry-run")
+    assert code == 0 and out["count"] == 2 and not any(getattr(v, "Alignment", None) == 1 for v in doc.format_cache.values()), out
+    code, out = run_word(capsys, "format", "--paragraphs", "2-3", "--align", "center", "--font", "맑은 고딕", "--size", "12", "--bold")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert doc.format_cache[("pf", 5, 11)].Alignment == 1 and doc.format_cache[("font", 11, 16)].Name == "맑은 고딕", doc.format_cache.keys()
+    code, out = run_word(capsys, "format", "--paragraphs", "1", "--style", "제목 1")
+    assert code == 0 and doc.styles_at[0] == "제목 1" and out["agent_directive"].startswith("VERIFIED:"), out
+
+
+def test_format_needs_paragraphs_and_options(wd, capsys):
+    code, out = run_word(capsys, "format", "--align", "center")
+    assert code == 1 and "--paragraphs" in out["message"], out
+    code, out = run_word(capsys, "format", "--paragraphs", "1")
+    assert code == 1 and "--align" in out["message"], out

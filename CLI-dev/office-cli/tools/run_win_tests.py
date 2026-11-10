@@ -3179,8 +3179,56 @@ def test_N(ctx):
         record(ctx, "N8", "메일 --until(그날까지만), --with-attachments(첨부 있는 메일만)", _ok(d1) and not late and _ok(d) and not none,
                f"--until {until}: {d1.get('count')}통, 넘은 메일 {late}; 첨부 없는데 나온 메일 {none}", d, c, r, e)
 
+    def n9():     # ppt shape (옮기기·크기)
+        prs = pp_prs("A.pptx")
+
+        def make():
+            sl = prs.Slides.Add(prs.Slides.Count + 1, 12)           # ppLayoutBlank
+            box = sl.Shapes.AddTextbox(1, 40, 40, 200, 50)
+            box.TextFrame.TextRange.Text = f"N옮김 {tag}"
+            return int(sl.SlideIndex), str(box.Name)
+        no, name = com_retry(make)
+        d, c, r, e = run_cli("ppt.py", "shape", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name,
+                             "--left", "120", "--top", "150", "--width", "300")
+        got = com_retry(lambda: tuple(round(float(getattr(prs.Slides(no).Shapes(name), k))) for k in ("Left", "Top", "Width")))
+        out = run_cli("ppt.py", "shape", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name, "--left", "5000")[0] or {}
+        record(ctx, "N9", "PPT 도형 옮기기·크기, 슬라이드 밖이면 거절", _verified(d) and got == (120, 150, 300) and out.get("status") == "error",
+               f"위치·너비={got}, 밖으로={out.get('status')}", d, c, r, e)
+
+    def n10():    # word comment reply / delete
+        doc = wd_doc("A.docx")
+        anchor = f"N메모 {tag}"
+        run_cli("word.py", "write", "--target", ctx.path("A.docx"), "--text", anchor)
+        run_cli("word.py", "comment", "--target", ctx.path("A.docx"), "--action", "add", "--anchor", anchor, "--text", "확인 바람")
+        n = com_retry(lambda: next(i for i in range(int(doc.Comments.Count), 0, -1)
+                                   if anchor in str(doc.Comments(i).Scope.Text)))
+        before = com_retry(lambda: int(doc.Comments.Count))
+        d1 = run_cli("word.py", "comment", "--target", ctx.path("A.docx"), "--action", "reply", "--no", str(n), "--text", "확인함")[0] or {}
+        mid = com_retry(lambda: int(doc.Comments.Count))
+        d, c, r, e = run_cli("word.py", "comment", "--target", ctx.path("A.docx"), "--action", "delete", "--no", str(n))
+        after = com_retry(lambda: int(doc.Comments.Count))
+        record(ctx, "N10", "워드 메모 답글, 메모 지우기(답글도 함께)", _verified(d1) and mid == before + 1 and _verified(d) and after == before - 1,
+               f"메모 수 {before} -> 답글 뒤 {mid} -> 지운 뒤 {after}", d, c, r, e)
+
+    def n11():    # word format
+        doc = wd_doc("A.docx")
+        text = f"N서식 {tag}"
+        run_cli("word.py", "write", "--target", ctx.path("A.docx"), "--text", text)
+        total = int((run_cli("word.py", "read", "--target", ctx.path("A.docx"))[0] or {}).get("units_total") or 1)
+        d, c, r, e = run_cli("word.py", "format", "--target", ctx.path("A.docx"), "--paragraphs", str(total), "--align", "center",
+                             "--size", "14", "--bold")
+
+        def last():
+            p = doc.Paragraphs(doc.Paragraphs.Count)
+            while not str(p.Range.Text).strip():
+                p = p.Previous()
+            return str(p.Range.Text).strip(), int(p.Alignment), float(p.Range.Font.Size), bool(p.Range.Font.Bold)
+        got = com_retry(last)
+        record(ctx, "N11", "워드 단락 서식: 가운데, 14pt, 굵게", _verified(d) and got == (text, 1, 14.0, True), f"마지막 단락={got}", d, c, r, e)
+
     for tid, title, fn in (("N1", "수식을 값으로", n1), ("N2", "저장", n2), ("N3", "중복", n3), ("N4", "단락 지우기", n4),
-                           ("N5", "표 행", n5), ("N6", "PPT 도형 글", n6)):
+                           ("N5", "표 행", n5), ("N6", "PPT 도형 글", n6), ("N9", "PPT 도형 옮기기", n9),
+                           ("N10", "메모 답글·지우기", n10), ("N11", "단락 서식", n11)):
         run_test(ctx, tid, title, fn)
     if ctx.args.skip_outlook:
         return

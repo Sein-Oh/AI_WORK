@@ -44,8 +44,13 @@ class FakeRange:
         self.doc = doc
         self.Start = start
         self.End = end
-        self.Font = Props(doc.log, ("font", start, end))
-        self.ParagraphFormat = Props(doc.log, ("pf", start, end))
+        cache = getattr(doc, "format_cache", None)      # 켜면 같은 위치의 Range가 서식을 기억 (실제 Word처럼 다시 읽힘)
+        if cache is not None:
+            self.Font = cache.setdefault(("font", start, end), Props(doc.log, ("font", start, end)))
+            self.ParagraphFormat = cache.setdefault(("pf", start, end), Props(doc.log, ("pf", start, end)))
+        else:
+            self.Font = Props(doc.log, ("font", start, end))
+            self.ParagraphFormat = Props(doc.log, ("pf", start, end))
         live = getattr(doc, "live_ranges", None)
         if live is not None:
             live.add(self)
@@ -87,11 +92,13 @@ class FakeRange:
 
     @property
     def Style(self):
-        return None
+        return getattr(self.doc, "styles_at", {}).get(self.Start)
 
     @Style.setter
     def Style(self, value):
         self.doc.log.append(("style", self.doc.text[self.Start:self.End], value))
+        if hasattr(self.doc, "styles_at"):
+            self.doc.styles_at[self.Start] = value
 
     def Information(self, kind):
         if kind == 12:                                   # wdWithInTable
@@ -275,6 +282,32 @@ class FakeComment:
         self.Date = "2026-10-28 10:00"
         self.Done = done
         self.Ancestor = None
+        self.coll = None                                     # FakeComments (번호·답글·지우기)
+
+    @property
+    def Index(self):
+        return self.coll.items.index(self) + 1
+
+    @property
+    def Replies(self):
+        parent = self
+
+        class _Replies:
+            def Add(self, Range=None, Text=""):
+                if getattr(parent.coll.doc, "no_replies", False):        # Word 2010 이하: 답글 없음
+                    raise AttributeError("Replies")
+                r = FakeComment(parent.Scope, Text, author="나")
+                r.Ancestor, r.coll = parent, parent.coll
+                at = parent.coll.items.index(parent) + 1
+                while at < len(parent.coll.items) and parent.coll.items[at].Ancestor is parent:
+                    at += 1
+                parent.coll.items.insert(at, r)
+                return r
+        return _Replies()
+
+    def Delete(self):
+        """실제 Word처럼: 메모를 지우면 그 답글도 지워짐."""
+        self.coll.items = [c for c in self.coll.items if c is not self and c.Ancestor is not self]
 
 
 class FakeComments:
@@ -287,10 +320,13 @@ class FakeComments:
         return len(self.items)
 
     def __call__(self, i):
-        return self.items[i - 1]
+        c = self.items[i - 1]
+        c.coll = self
+        return c
 
     def Add(self, Range=None, Text=""):
         c = FakeComment(FakeRange(self.doc, Range.Start, Range.End), Text)
+        c.coll = self
         self.items.append(c)
         self.items.sort(key=lambda x: x.Scope.Start)      # Word도 문서 순서로 번호를 매김
         self.doc.Saved = False

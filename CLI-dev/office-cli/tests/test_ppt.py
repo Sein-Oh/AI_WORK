@@ -1012,3 +1012,29 @@ def test_write_shape_dry_run_empty_shape_and_errors(pp, capsys):
     assert code == 1 and "글을 넣을 수 없는" in out["message"], out
     code, out = run_ppt(capsys, "write", "--slide", "new", "--shape", "내용 개체 틀 2", "--text", "x")
     assert code == 1 and "--slide 3" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.1: 도형 옮기기·크기 (ppt.py shape)
+# ---------------------------------------------------------------------------
+
+
+def test_shape_move_resize_and_keep_inside(pp, capsys):
+    sl, sh = _slide_with_body(pp)
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2", "--left", "100", "--width", "400", "--dry-run")
+    assert code == 0 and out["dry_run"] and sh.Left == 36, out
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2", "--left", "100", "--width", "400")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and (sh.Left, sh.Width, sh.Top) == (100, 400, 100), out
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2", "--left", "900")
+    assert code == 1 and sh.Left == 100 and recommended_argv(out["message"], "ppt")[-2:] == ["--left", "560.0"], out
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2")
+    assert code == 1 and "--left" in out["message"], out
+
+
+def test_shape_locked_picture_keeps_ratio(pp, capsys):
+    sl, _ = _slide_with_body(pp)
+    pic = sl.Shapes(sl.Shapes.Count)                  # '그림 3' 100x100
+    pic.LockAspectRatio = -1
+    pic.Height = 50
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "그림 3", "--width", "200", "--dry-run")
+    assert code == 0 and out["after"]["height"] == 100.0, out

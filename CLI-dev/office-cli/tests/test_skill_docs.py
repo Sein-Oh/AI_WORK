@@ -192,8 +192,19 @@ def test_every_command_is_in_some_skill():
             seen.add((script, sub))
         for m in re.finditer(r'python "C:\\CLI\\office-cli\\(\w+\.py)" (\w+)', _read(path)):
             seen.add((m.group(1), m.group(2)))
-    missing = [f"{s} {c}" for s, subs in PARSERS.items() for c in subs if (s, c) not in seen]
+    missing = [f"{s} {c}" for s, subs in PARSERS.items() for c in subs if (s, c) not in seen and (s, c) not in README_ONLY]
     assert not missing, missing
+
+
+# 경량 LLM에게는 알리지 않는 명령 (README에만): 범위를 고르기 어려워 잘못 쓰기 쉬움 (사용자 결정 2026-11-10)
+README_ONLY = {("word.py", "format")}
+
+
+def test_readme_only_commands_are_not_in_skills_but_in_readme():
+    readme = _read(os.path.join(os.path.dirname(os.path.dirname(__file__)), "README.md"))
+    for script, sub in README_ONLY:
+        assert all(f"{script}\" {sub}" not in _read(p) for p in SKILL_FILES.values()), (script, sub)
+        assert f"| `{sub}` |" in readme, (script, sub)
 
 
 def test_skill_mentions_new_and_existing_features():

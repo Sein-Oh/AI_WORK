@@ -654,7 +654,73 @@ def _comment_add(args, t: Any) -> Dict[str, Any]:
                  verified=True, **fields)
 
 
+def _comment_reply_delete(args) -> Dict[str, Any]:
+    """comment --action reply --no N --text (답글, Word 2013+) / --action delete --no N (메모와 그 답글을 지움, --dry-run)."""
+    if not args.no:
+        raise rt.InputError(f"메모 번호를 --no로 주세요 (word.py comment 목록의 no). 예: --action {args.action} --no 2")
+    if args.action == "reply" and not (args.text or "").strip():
+        raise rt.InputError("답글 내용을 --text로 주세요.")
+    with off.open_target("word", args.target, readonly=bool(args.dry_run), focus=not args.no_focus,
+                         tool=TOOL, command="comment") as t:
+        doc = t.doc
+        total = int(doc.Comments.Count)
+        if not 1 <= args.no <= total:
+            raise rt.InputError(f"메모 {args.no}이(가) 없습니다 (1~{total}). 번호는 word.py comment 목록의 no입니다." if total
+                                else "문서에 검토 메모가 없습니다.")
+        c = doc.Comments(args.no)
+        head = _read_comments(doc, [args.no])[0]
+        try:
+            root = c.Ancestor if c.Ancestor is not None else c
+        except Exception:
+            root = c
+        replies = [i for i in range(1, total + 1) if i != args.no and _is_reply_of(doc.Comments(i), c)]
+        info: Dict[str, Any] = {"no": args.no, "author": head["author"], "text": _preview(head["text"], 80),
+                                "target_text": head.get("target_text", "")}
+        if args.action == "delete":
+            desc = f"메모 {args.no}({head['author']}: {_preview(head['text'], 40)})" + (f"와 답글 {len(replies)}개" if replies else "")
+            if args.dry_run:
+                return rt.dry_run_result(TOOL, "comment", f"미리보기: {desc}을(를) 지웁니다 (바꾸지 않음)", 1 + len(replies), [desc],
+                                         rt.dry_run_command(TOOL, f"{desc} 지우기"), target_resolved=t.resolved(), **info)
+            c.Delete()
+            left = int(doc.Comments.Count)
+            t.set_focus()
+            resolved = t.resolved()
+            preview = f"{desc}을(를) 지웠습니다"
+            if left != total - 1 - len(replies):
+                return rt.ok_unverified(TOOL, "comment", preview, [f"메모 수가 {left} (지우기 전 {total})"], target_resolved=resolved, **info)
+            return rt.ok(TOOL, "comment", preview, "VERIFIED: 메모 수를 다시 세어 확인했습니다. 같은 명령을 다시 실행하지 마세요 (번호가 바뀜). "
+                         "잘못 지웠으면 office.py undo로 되돌립니다.", verified=True, target_resolved=resolved, **info)
+        if args.dry_run:
+            raise rt.dry_run_unsupported(TOOL, "comment --action reply")
+        text = rt.unescape_newlines(args.text)
+        try:
+            root.Replies.Add(Range=root.Scope, Text=text)
+        except Exception as e:
+            raise rt.InputError(f"이 Word에서는 메모 답글을 달 수 없습니다 ({type(e).__name__}, Word 2013 이상 필요). "
+                                "새 메모로 달려면 comment --action add를 쓰세요.", no_fallback=True)
+        after = int(doc.Comments.Count)
+        found = any(_clean(doc.Comments(i).Range.Text).strip() == text.strip() and _is_reply_of(doc.Comments(i), root)
+                    for i in range(1, after + 1))
+        t.set_focus()
+        resolved = t.resolved()
+    preview = f"메모 {args.no}({info['author']})에 답글을 달았습니다: {_preview(text, 40)}"
+    if not found:
+        return rt.ok_unverified(TOOL, "comment", preview, ["단 답글을 다시 찾지 못함"], target_resolved=resolved, **info)
+    return rt.ok(TOOL, "comment", preview, "VERIFIED: 답글을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요 (답글이 하나 더 생김).",
+                 verified=True, target_resolved=resolved, **info)
+
+
+def _is_reply_of(c: Any, parent: Any) -> bool:
+    try:
+        a = c.Ancestor
+        return a is not None and int(a.Index) == int(parent.Index)
+    except Exception:
+        return False
+
+
 def cmd_comment(args) -> Dict[str, Any]:
+    if args.action in ("reply", "delete"):
+        return _comment_reply_delete(args)
     # --action add를 빠뜨리고 메모 내용만 준 경우: 목록을 보여 주고 "완료"라고 하면 LLM이 메모를 단 것으로 오해합니다
     if args.action == "add" or args.anchor or args.text is not None or args.file:
         if args.dry_run:
@@ -1774,6 +1840,89 @@ def cmd_delete(args) -> Dict[str, Any]:
                  "다른 단락이 지워짐). 잘못 지웠으면 office.py undo로 되돌립니다.", verified=True, target_resolved=resolved, **info)
 
 
+WD_ALIGN = {"left": 0, "center": 1, "right": 2, "justify": 3}
+FORMAT_MAX = 500
+
+
+def _style_name(rng: Any) -> str:
+    try:
+        st = rng.Style
+        return str(getattr(st, "NameLocal", st) or "")
+    except Exception:
+        return ""
+
+
+def cmd_format(args) -> Dict[str, Any]:
+    """--paragraphs(read의 단락 번호)의 정렬·글꼴·크기·굵게·기울임·스타일을 바꿈 (README에만, 스킬에는 적지 않음: 범위 고르기가 어려움).
+    스타일을 먼저 적용하고 그 위에 글꼴 옵션. 바꾼 뒤 단락마다 다시 읽어 확인, 되돌리기 지점."""
+    if not args.paragraphs:
+        raise rt.InputError("바꿀 단락 번호를 --paragraphs로 주세요 (예: --paragraphs 3-5). 번호는 word.py read의 no입니다.")
+    if not any([args.align, args.font, args.size, args.bold, args.italic, args.style]):
+        raise rt.InputError("바꿀 서식이 없습니다. --align, --font, --size, --bold, --italic, --style 중 하나 이상을 주세요.")
+    if args.size is not None and not 1 <= args.size <= 400:
+        raise rt.InputError(f"--size는 1~400pt입니다 (받은 값 {args.size}).")
+    with off.open_target("word", args.target, readonly=bool(args.dry_run), focus=not args.no_focus, tool=TOOL, command="format") as t:
+        doc = t.doc
+        units = _com_units(doc, with_start=True)
+        if not units:
+            raise rt.InputError("문서에 글이 있는 단락이 없습니다.")
+        nums = _spec_numbers(args.paragraphs, len(units), "--paragraphs")
+        if len(nums) > FORMAT_MAX:
+            raise rt.InputError(f"한 번에 {FORMAT_MAX}개 단락까지 바꿉니다 (받은 범위 {len(nums)}개).")
+        picked = [units[n - 1] for n in nums]
+        style = None
+        if args.style:
+            try:
+                style = doc.Styles(args.style)
+            except Exception:
+                raise rt.InputError(f"스타일 '{args.style}'이(가) 이 문서에 없습니다. Word 스타일 이름 그대로 쓰세요 (예: 표준, 제목 1).")
+        what = ", ".join(x for x in (args.style and f"스타일 {args.style}", args.align and f"정렬 {args.align}", args.font and f"글꼴 {args.font}",
+                                     args.size and f"크기 {args.size:g}", args.bold and "굵게", args.italic and "기울임") if x)
+        planned = [f"단락 {n}: {_preview(u['text'], 50)}" for n, u in zip(nums, picked)]
+        info: Dict[str, Any] = {"paragraphs": args.paragraphs, "count": len(nums), "format": what}
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "format", f"미리보기: 단락 {len(nums)}개에 {what} (바꾸지 않음)", len(nums), planned,
+                                     rt.dry_run_command(TOOL, f"단락 {len(nums)}개 서식 바꾸기", destructive=False), target_resolved=t.resolved())
+        problems: List[str] = []
+        for n, u in zip(nums, picked):
+            rng = doc.Range(u["start"], u["end"])
+            if style is not None:
+                rng.Style = style
+            if args.align:
+                rng.ParagraphFormat.Alignment = WD_ALIGN[args.align]
+            if args.font:
+                rng.Font.Name = args.font
+            if args.size:
+                rng.Font.Size = float(args.size)
+            if args.bold:
+                rng.Font.Bold = True
+            if args.italic:
+                rng.Font.Italic = True
+            chk = doc.Range(u["start"], u["end"])
+            bad = []
+            if args.align and int(chk.ParagraphFormat.Alignment) != WD_ALIGN[args.align]:
+                bad.append("정렬")
+            if args.font and str(chk.Font.Name) != args.font:
+                bad.append("글꼴")
+            if args.size and abs(float(chk.Font.Size or 0) - float(args.size)) > 0.01:
+                bad.append("크기")
+            if args.bold and chk.Font.Bold not in (True, -1, 1):
+                bad.append("굵게")
+            if args.italic and chk.Font.Italic not in (True, -1, 1):
+                bad.append("기울임")
+            if args.style and _style_name(chk).casefold() != str(getattr(style, "NameLocal", args.style)).casefold():
+                bad.append("스타일")
+            if bad:
+                problems.append(f"단락 {n}: {', '.join(bad)}이(가) 다르게 읽힘")
+        t.set_focus()
+        resolved = t.resolved()
+    preview = f"단락 {len(nums)}개에 {what}을(를) 적용했습니다"
+    if problems:
+        return rt.ok_unverified(TOOL, "format", preview, problems[:5], target_resolved=resolved, **info)
+    return rt.ok(TOOL, "format", preview, "VERIFIED: 단락마다 서식을 다시 읽어 확인했습니다. 잘못 바꿨으면 office.py undo로 되돌립니다.",
+                 verified=True, target_resolved=resolved, **info)
+
+
 def _row_cells(row: Any) -> List[str]:
     return [c for c in str(row.Range.Text).split("\r\x07")[:-1]][: int(row.Cells.Count)]
 
@@ -2105,7 +2254,9 @@ def build_cli():
 
     p = sub.add_parser("comment", help="검토 메모 목록 보기(list) / 메모 달기(add)")
     common(p, write=True)
-    p.add_argument("--action", choices=["list", "add"], default="list", help="list(기본): 메모 목록, add: 메모 달기")
+    p.add_argument("--action", choices=["list", "add", "reply", "delete"], default="list",
+                   help="list(기본): 메모 목록, add: 메모 달기, reply: --no 메모에 답글, delete: --no 메모 지우기(답글 포함)")
+    p.add_argument("--no", type=int, help="reply/delete: 메모 번호 (목록의 no)")
     p.add_argument("--anchor", help="add: 메모를 달 글 (문서에 있는 그대로)")
     p.add_argument("--text", help="add: 메모 내용. 줄바꿈은 \\n")
     p.add_argument("--file", help="add: 메모 내용 파일(.txt/.md) 또는 여러 메모 CSV (열: 기준 글, 메모 내용[, 몇 번째 단락])")
@@ -2156,6 +2307,16 @@ def build_cli():
     common(p, write=True)
     p.add_argument("--paragraphs", help="지울 단락 번호 (예: 12, 12-14, 3,7). word.py read의 no")
 
+    p = sub.add_parser("format", help="단락 서식: 정렬·글꼴·크기·굵게·기울임·스타일 (--paragraphs)")
+    common(p, write=True)
+    p.add_argument("--paragraphs", help="바꿀 단락 번호 (예: 3, 3-5, 1,4). word.py read의 no")
+    p.add_argument("--align", choices=list(WD_ALIGN), help="정렬")
+    p.add_argument("--font", help="글꼴 이름 (예: 맑은 고딕)")
+    p.add_argument("--size", type=float, help="글자 크기 (pt)")
+    p.add_argument("--bold", action="store_true", help="굵게")
+    p.add_argument("--italic", action="store_true", help="기울임")
+    p.add_argument("--style", help="Word 스타일 이름 (예: 표준, 제목 1)")
+
     p = sub.add_parser("table", help="워드 표의 행 넣기·지우기")
     common(p, write=True)
     p.add_argument("--table", type=int, default=1, help="표 번호 (word.py info의 tables no, 기본 1)")
@@ -2178,7 +2339,7 @@ def build_cli():
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "export": cmd_export,
             "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions, "fill": cmd_fill,
-            "delete": cmd_delete, "table": cmd_table}
+            "delete": cmd_delete, "table": cmd_table, "format": cmd_format}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
