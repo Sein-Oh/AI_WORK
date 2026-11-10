@@ -907,3 +907,44 @@ def test_excel_edge_point_is_beyond_excel_comparison_precision():
         up = ml_export.above_for_excel(v)
         assert up > v and float("%.15g" % up) != float("%.15g" % v), (v, up)
         assert up - v <= max(abs(v), 1.0) * 1e-12, (v, up)
+
+
+def test_excel_check_lost_excel_connection_is_reported_not_raised(monkeypatch):
+    """회사 PC 2026-11-10 beta F1: 엑셀 연결이 끊겨 xl.Quit 속성 찾기가 AttributeError -> finally 밖으로 올라가 성능예측표 전체 실패.
+    닫기 실패는 삼키고 확인 실패만 알림."""
+    import types
+    import importlib.machinery
+    import ml_export
+
+    class LostExcel:
+        Visible = DisplayAlerts = False
+
+        @property
+        def Workbooks(self):
+            raise RuntimeError("RPC 서버를 사용할 수 없습니다")
+
+        def __getattr__(self, name):
+            raise AttributeError(f"Excel.Application.{name}")
+    client = types.ModuleType("win32com.client")
+    client.DispatchEx = lambda prog: LostExcel()
+    pkg = types.ModuleType("win32com")
+    pkg.__spec__ = importlib.machinery.ModuleSpec("win32com", None)
+    pkg.client = client
+    monkeypatch.setitem(sys.modules, "win32com", pkg)
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+    monkeypatch.delenv("ML_KIT_SKIP_EXCEL_CHECK", raising=False)
+    got = ml_export.excel_check("없는파일.xlsx", [])
+    assert got.startswith("엑셀로 계산 확인 실패: RuntimeError"), got
+
+
+def test_excel_check_passes_within_one_percent():
+    """사용자 결정 2026-11-10: 성능예측표 엑셀 확인은 99% 일치(차이 1% 이내)면 통과, 다르면 warnings로 알림, 1%를 넘으면 실패."""
+    import ml_export
+    w = ["일괄계산 3행", "일괄계산 4행", "계산기"]
+    assert ml_export.compare_excel("y", [1.0, 2.0, 1.0], [1.0, 2.0, 1.0], w) == (None, None)
+    problem, note = ml_export.compare_excel("y", [76.5689, 2.0, 1.0], [76.5671, 2.0, 1.0], w)     # 회사 PC F7 (0.0024%)
+    assert problem is None and "일괄계산 3행" in note and "허용 1%" in note, note
+    problem, note = ml_export.compare_excel("y", [1.02, 2.0, 1.0], [1.0, 2.0, 1.0], w)
+    assert note is None and "2.00% 다름" in problem, problem
+    problem, _ = ml_export.compare_excel("y", ["#VALUE!", 2.0, 1.0], [1.0, 2.0, 1.0], w)
+    assert "숫자가 아님" in problem

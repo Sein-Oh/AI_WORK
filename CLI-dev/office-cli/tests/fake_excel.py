@@ -507,6 +507,8 @@ class FakeRange:
         """Excel처럼 행 단위 정렬: 숫자 < 글자(대소문자 무시) < 논리값, 빈 칸은 오름·내림 모두 맨 뒤, 같은 값은 순서 유지."""
         keys = [(k, o) for k, o in ((Key1, Order1), (Key2, Order2), (Key3, Order3)) if k is not None]
         self.ws.log.append(("Sort", self.Address, Header, [(k.Column, o) for k, o in keys]))
+        if getattr(self.ws, "sort_ignores_header", False):
+            Header = 2       # 회사 PC 2026-11-10 L1: Header=xlYes를 줘도 실제 엑셀이 머리글 행까지 정렬한 일을 흉내
         self._sort_rows(keys, Header)
 
     def _sort_rows(self, keys, Header):

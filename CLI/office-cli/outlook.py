@@ -1002,11 +1002,15 @@ def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
     except Exception as e:
         # Outlook에 대화 상자가 떠 있으면 작성 창을 못 띄움. 초안은 이미 저장됐으므로 일반 오류로 끝내면 다시 실행할 때마다
         # 초안이 늘어남 (2026-11-09 검토 C17): 초안 정보와 함께 UNVERIFIED
-        where = "임시 보관함에 초안으로 저장했지만" if eid else "초안 저장도 확인하지 못했고"
-        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄우지 못했습니다: '{extra['subject']}'{note}",
-                                [f"{where} 작성 창을 띄우지 못함 ({type(e).__name__}, Outlook에 열린 대화 상자가 있는지 확인)",
-                                 "이 명령을 다시 실행하지 말고(초안이 하나 더 생김) 사용자에게 Outlook의 임시 보관함에서 초안을 열어 확인하라고 알리세요"],
-                                **extra)
+        # 대화 상자를 닫으면 Outlook이 미뤄 둔 작성 창을 띄우기도 함. 저장하지 못했으면 임시 보관함에 없음 (회사 PC 2026-11-10 M4)
+        if eid:
+            why = [f"임시 보관함에 초안으로 저장했지만 작성 창을 띄우지 못함 ({type(e).__name__}, Outlook에 열린 대화 상자가 있는지 확인)",
+                   "이 명령을 다시 실행하지 말고(초안이 하나 더 생김) 사용자에게 Outlook 대화 상자를 닫고 임시 보관함에서 초안을 열어 확인하라고 알리세요"]
+        else:
+            why = [f"초안을 임시 보관함에 저장하지 못했고 작성 창도 띄우지 못함 ({type(e).__name__}, Outlook에 열린 대화 상자가 있는지 확인)",
+                   "이 명령을 다시 실행하지 말고(창이 하나 더 뜰 수 있음) 사용자에게 Outlook 대화 상자를 닫으면 작성 창이 뜰 수 있으니 "
+                   "그 창에서 확인해 직접 보내거나 저장하라고 알리세요. 창이 뜨지 않으면 대화 상자를 닫은 뒤 다시 요청하라고 알리세요"]
+        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄우지 못했습니다: '{extra['subject']}'{note}", why, **extra)
     if attach_problems or not eid:
         # 첨부를 확인하지 못했거나 초안을 저장하지 못했으면 보내는 명령을 주지 않음 (첨부가 빠진 메일은 되돌릴 수 없음)
         why = attach_problems + ([] if eid else ["초안을 임시 보관함에 저장하지 못해 보내는 명령을 만들지 못함"])

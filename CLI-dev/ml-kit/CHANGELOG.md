@@ -12,6 +12,25 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.87] - 2026-11-10
+
+회사 PC 실기(2026-11-10 낮, 2.9.86) 결과.
+
+### 수정
+- 성능예측표 엑셀 확인(beta F1)이 "성능예측표를 만들지 못했습니다: AttributeError: Excel.Application.Quit"로 성능예측표 전체를 실패로 보고하던 문제.
+  엑셀을 닫는 `xl.Quit` 속성 찾기가 오류를 삼키는 자리 밖에 있어, 엑셀 연결이 끊기면 확인 결과 대신 그 오류가 올라갔음. 닫기 실패는 삼키고
+  확인하지 못한 것만 `UNVERIFIED`로 알림 (`test_excel_check_lost_excel_connection_is_reported_not_raised`).
+- 성능예측표 엑셀 확인의 합격 기준 (사용자 결정 2026-11-10): 엑셀이 다시 계산한 값이 모델과 상대 1% 안(99% 일치)이면 통과(`EXCEL_TOL`).
+  0보다 크고 1% 안이면 `warnings`에 최대 차이와 자리, 1%를 넘으면 지금처럼 `UNVERIFIED`. 파이썬 사본 확인(`check`)은 그대로 모델과 같아야 함.
+- `run_all_tests.py`: 시간 초과로 끊은 하위 프로세스가 바쁜 PC에서 `taskkill` 뒤에도 남으면 종료 코드 없이(None) 돌아오던 것
+  (`test_silent_hung_child_is_killed_at_timeout`): 직접 한 번 더 끝내고, 그래도 남으면 -1과 `[ERROR]` 줄.
+- `run_all_tests.py` pytest 단계: 회사 PC 2026-11-10 낮에 프로세스를 띄우는 시험 파일 셋(office-cli `test_reader`·`test_contract`, `test_setup`)이
+  같은 시간대에 아침보다 25~180배 느려 pytest가 100분 (원인: 회사 PC의 파일 정리 작업 시간과 겹침, 사용자 확인).
+  1분마다 `python -c pass` 시간을 재서 처음보다 5배(최소 2초) 넘게 느린 시간대를 경고로, 파일마다 시작 시각과 `--durations=5`,
+  도구와 관계없이 평소 오래 걸리는 파일부터 시작 (`EXPECTED_SECONDS`).
+- 실기 시험 샘플 `공정_다중출력.xlsx`(`tools/make_beta_samples.py`, beta·Gemma A1)를 800행에서 300행으로 (사용자 결정 2026-11-10: 실제 학습은
+  300행 이하). 클라우드 학습 12 -> 7초, 보고서·성능예측표 31 -> 13초, 성능예측표 15 -> 4MB. beta 판정은 그대로 통과(26/27, F7은 엑셀 없음).
+
 ## [2.9.86] - 2026-11-10
 
 회사 PC 실기(2026-11-10, 2.9.85) 결과.

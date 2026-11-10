@@ -11,6 +11,30 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.5.2] - 2026-11-10
+
+회사 PC 실기(2026-11-10 낮, 1.5.1) L·M 그룹 결과. 가짜 COM을 실제 Office 동작에 맞춘 뒤 수정 (고치기 전 가짜로 실패 재현).
+
+### 수정
+- `excel.py range --action sort`가 실제 엑셀에서 머리글 행을 데이터에 섞던 문제 (L1, 통화 서식 열, `UNVERIFIED: 머리글 행이 바뀜`):
+  `Header=xlYes`에 기대지 않고 머리글 행을 뺀 데이터 행만 `Header=xlNo`로 정렬 (`Range.Sort`, 기준 4개 이상 `Worksheet.Sort` 모두).
+  가짜 Excel에 `Header`를 무시하는 모드 (`test_sort_keeps_header_even_if_excel_ignores_header_flag`).
+- `word.py write --anchor <표 바로 위 단락>`이 실제 Word에서 여전히 표 첫 칸에 넣던 문제 (L4, 1.4.95 C1 수정이 가짜에서만 통과):
+  빈 단락을 넣으면 실제 Word는 앵커 단락 Range를 늘려 `End`가 다시 표 첫 칸이 됨 -> 넣기 전 위치를 씀.
+  가짜 Word의 Range가 실제처럼 편집을 따라 움직이게 함 (앞에 넣으면 밀리고 안에 넣으면 늘어남).
+- 새 번호 목록이 실제 Word에서 앞 목록에 이어 `3.`으로 매겨지던 문제 (L5, 1.4.95 C2): `ApplyListTemplate`의 `ApplyTo` 기본값(목록 전체)은
+  앞 목록까지 한 목록으로 봄 -> 넣은 단락만(`ApplyTo=1`), 안 되면 여기부터(`2`). 첫 번호(`ListString`)를 다시 읽어 `1.`이 아니면 `warnings`.
+- 변경 추적이 켜진 문서의 `word.py replace`가 바꾼 뒤에도 "옛 글이 1곳 남아 있음"으로 `UNVERIFIED`이던 문제 (L9, C6 확인): Find가 삭제 표시 글도
+  찾음 -> 다시 셀 때 삭제 표시(`Revisions` 종류 삭제) 안의 글은 세지 않음. `read`는 이미 새 글만 보여 줌.
+- Outlook에 대화 상자가 떠 있을 때 `new`·`reply`·`forward` (M4, C17): 저장도 하지 못했는데 "임시 보관함에서 초안을 열어 확인"이라고 안내하던 것.
+  저장하지 못했으면 "대화 상자를 닫으면 작성 창이 뜰 수 있으니 그 창에서 확인"으로 (실기: 대화 상자를 닫자 작성 창이 뜨고 임시 보관함에는 없었음).
+
+### 실기 러너 (`tools/run_win_tests.py`)
+- G5가 `read --id 1`로 고정해 앞 시험의 초안을 읽고 FAIL: 번호는 목록마다 이어서 늘어나므로 목록의 첫 `id`를 씀.
+- 사람에게 묻던 Outlook 정리·준비를 러너가 함: G1·G2·M4 초안과 작성 창 정리, M1 받은 시각은 Outlook에서 직접 읽어 비교, M2 메일 창 열기와
+  목록 선택, M5 본문 그림(cid) 메일 찾기. 남은 질문은 G1(작성 창이 떴는지), M4(옵션 창 띄우기·닫기)뿐.
+- M4는 러너가 `new`를 실행하고 "저장했다"는 말과 임시 보관함의 초안 수가 맞는지 봄.
+
 ## [1.5.1] - 2026-11-10
 
 전체 검토 4장 6번 일부(reader `outline`), 7번(diff 이동), 3장 끝 마크다운(표 칸 굵게).

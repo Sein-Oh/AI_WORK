@@ -905,6 +905,8 @@ def verify_workbook(path: str, plans: List[Dict[str, Any]]) -> List[str]:
     return problems
 
 
+EXCEL_TOL = 0.01            # 엑셀 다시 계산이 모델과 이만큼(상대 1%, 99% 일치)까지 달라도 통과 (사용자 결정 2026-11-10)
+EXCEL_NOTES: List[str] = []  # 허용 안에서 다른 곳 (결과 warnings로 알림)
 EXCEL_EPS = 1e-13           # Excel compares numbers that agree to about 15 significant digits as equal (=0.1+0.2=0.3 is TRUE)
 
 
@@ -935,6 +937,25 @@ def edge_points(p: Dict[str, Any]) -> pd.DataFrame:
         if len(rows) >= 6:
             break
     return pd.DataFrame(rows, columns=cand["inputs"])
+
+
+def compare_excel(target: str, got: List[Any], want: List[float], wheres: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    """엑셀이 다시 계산한 값과 모델 예측 비교 -> (문제, 알림). 상대 차이가 EXCEL_TOL(1%, 99% 일치)을 넘으면 문제,
+    0보다 크고 그 안이면 알림 (사용자 결정 2026-11-10: 99%쯤 일치하면 통과)."""
+    worst = (0.0, "", 0.0, 0.0)
+    for g, w, where in zip(got, want, wheres):
+        if not isinstance(g, (int, float)) or isinstance(g, bool):
+            return f"'{target}' 엑셀 계산({where})이 숫자가 아님: {g}", None
+        diff = abs(float(g) - w)
+        rel = diff / max(abs(w), 1e-12) if diff > 1e-9 * (abs(w) + 1.0) else 0.0
+        if rel > worst[0]:
+            worst = (rel, where, float(g), float(w))
+    if worst[0] > EXCEL_TOL:
+        return (f"'{target}' 엑셀 계산({worst[1]}) {worst[2]:.10g}이 모델 {worst[3]:.10g}과 {worst[0] * 100:.2f}% 다름 "
+                f"(허용 {EXCEL_TOL * 100:g}%)"), None
+    if worst[0] > 0:
+        return None, f"'{target}' 엑셀 계산이 모델과 최대 {worst[0] * 100:.3g}% 다름({worst[1]}, 허용 {EXCEL_TOL * 100:g}% 안)"
+    return None, None
 
 
 def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
@@ -970,15 +991,19 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
             xl.Calculate()
             got = [r[0] for r in batch.Range(batch.Cells(3, p["batch_pred_col"]), batch.Cells(2 + n, p["batch_pred_col"])).Value]
             got.append(calc.Range(p["calc_cell"]).Value)
-            for g, w, where in zip(got, list(want) + [want[0]], [f"일괄계산 {i + 3}행" for i in range(n)] + ["계산기"]):
-                if not isinstance(g, (int, float)) or abs(float(g) - w) > 1e-9 * (abs(w) + 1.0):
-                    problems.append(f"'{p['target']}' 엑셀 계산({where}) {g} != 모델 {w:.10g}")
-                    break
+            problem, note = compare_excel(p["target"], got, list(want) + [want[0]],
+                                          [f"일괄계산 {i + 3}행" for i in range(n)] + ["계산기"])
+            if problem:
+                problems.append(problem)
+            elif note:
+                EXCEL_NOTES.append(note)
         return "; ".join(problems) or None
     except Exception as e:
         return f"엑셀로 계산 확인 실패: {type(e).__name__}: {e}"
     finally:
-        for close in ((lambda: wb.Close(SaveChanges=False)) if wb is not None else None, xl.Quit):
+        # xl.Quit도 lambda 안에서 찾음: 엑셀 연결이 끊기면 속성 찾기(xl.Quit)부터 AttributeError가 나는데, 여기서 나면 try 밖이라
+        # 확인 결과 대신 그 오류가 올라가 성능예측표 전체가 실패로 보고됨 (회사 PC 2026-11-10 beta F1)
+        for close in ((lambda: wb.Close(SaveChanges=False)) if wb is not None else None, lambda: xl.Quit()):
             try:
                 if close:
                     close()
@@ -1061,7 +1086,9 @@ def execute_export(args) -> Dict[str, Any]:
     mark_committed(f"성능예측표 {os.path.basename(real)}", output_file=real)   # a stop now: saved, not CONTINUE
     progress("저장한 파일 확인")
     problems = verify_workbook(real, plans)
+    EXCEL_NOTES.clear()
     xl = excel_check(real, plans)
+    warnings += EXCEL_NOTES
     unverified = list(problems)
     if xl == "off":
         unverified.append("엑셀 계산 확인을 껐음 (ML_KIT_SKIP_EXCEL_CHECK=1, 파일 구조, 잠금, 저장한 값으로 한 계산은 확인함)")

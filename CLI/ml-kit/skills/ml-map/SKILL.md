@@ -4,7 +4,7 @@ description: 모델 없이 표(Excel/CSV) 데이터에서 사잇값을 선형 �
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.86"
+  version: "2.9.87"
   platform: windows
 ---
 

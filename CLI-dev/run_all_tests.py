@@ -11,7 +11,8 @@
     diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
     pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (테스트 파일마다 python -m pytest, 코어 수 - 1·메모리 4GB마다 1개·최대 3개씩 동시에(--pytest-workers),
             파일마다 상한 --pytest-timeout 7200초,
-            실패는 pytest_live_report 플러그인이 [LIVE] 줄로 바로 남겨 끊겨도 이름이 남음)
+            실패는 pytest_live_report 플러그인이 [LIVE] 줄로 바로 남겨 끊겨도 이름이 남음. 오래 걸리는 파일부터 시작,
+            1분마다 파이썬 시작 시간을 재서 PC가 느려진 시간대(파일 정리·백신 검사 등)를 경고로 남김)
     beta    ml-kit 베타 점검 (run_beta_check.py, F7 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
     ml      ml-kit 실기 러너 (ml-kit/tools/run_win_tests.py, 10~20분). 기본 단계가 아니며 --only에 넣을 때만
     office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
@@ -246,7 +247,12 @@ def kill_tree(proc):
     try:
         proc.wait(timeout=10)
     except Exception:
-        pass
+        # taskkill이 바쁜 PC에서 늦거나 실패하면 종료 코드 없이(None) 남음 (회사 PC 2026-11-10): 직접 한 번 더 끝냄
+        try:
+            proc.kill()
+            proc.wait(timeout=10)
+        except Exception:
+            pass
 
 
 def run_capture(args, cwd, timeout, poll=1.0, env_extra=None, show=None, procs=None):
@@ -288,7 +294,11 @@ def run_capture(args, cwd, timeout, poll=1.0, env_extra=None, show=None, procs=N
         kill_tree(proc)
         lines.append("[ERROR] 사용자가 중단했습니다 (Ctrl+C).")
     reader.join(5)
-    return proc.returncode, "\n".join(lines), round(time.time() - start, 1), interrupted
+    code = proc.returncode
+    if code is None:                                 # 끝내지 못한 프로세스: 성공(0)이나 '종료 코드 없음'으로 보이지 않게
+        code = -1
+        lines.append("[ERROR] 하위 프로세스를 끝내지 못했습니다 (작업 관리자에서 확인).")
+    return code, "\n".join(lines), round(time.time() - start, 1), interrupted
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +672,52 @@ def pytest_files(folder):
     return sorted(out, key=lambda f: (-os.path.getsize(f), f))
 
 
+# 평소 걸리는 시간(초, 회사 PC 2026-11-10 낮 결과에서 느려지지 않은 파일과 아침 결과). 오래 걸리는 것부터 시작해
+# 끝에 긴 파일이 몰려 혼자 도는 시간을 줄임. 표에 없는 파일은 크기로 어림 (1KB = 1초)
+EXPECTED_SECONDS = {
+    "ml-kit/tests/test_train.py": 1130, "ml-kit/tests/test_layout_matrix.py": 585, "ml-kit/tests/test_map.py": 540,
+    "ml-kit/tests/test_names.py": 520, "ml-kit/tests/test_predict.py": 505, "ml-kit/tests/test_contract.py": 490,
+    "ml-kit/tests/test_dataset.py": 390, "ml-kit/tests/test_report_export.py": 350, "ml-kit/tests/test_loading_numbers.py": 260,
+    "ml-kit/tests/test_loading_layout.py": 250, "office-cli/tests/test_reader.py": 160, "ml-kit/tests/test_safety.py": 140,
+    "tests/test_run_all_tests.py": 135, "office-cli/tests/test_contract.py": 85}
+
+
+def job_seconds(tool, folder, path):
+    rel = f"{tool}/{os.path.relpath(path, folder).replace(os.sep, '/')}"
+    return EXPECTED_SECONDS.get(rel, os.path.getsize(path) / 1000)
+
+
+PROBE_EVERY = 60          # 초. pytest가 도는 동안 파이썬 시작 시간을 잼 (PC 쪽 작업으로 느려진 시간대를 결과에 남김)
+PROBE_SLOW = 5            # 처음보다 이 배수 넘게 느리면 경고 (최소 2초)
+
+
+def probe_python():
+    """'python -c pass' 한 번에 걸린 초 (실패하면 None)."""
+    t0 = time.time()
+    try:
+        subprocess.run([sys.executable, "-c", "pass"], capture_output=True, timeout=120)
+    except Exception:
+        return None
+    return round(time.time() - t0, 2)
+
+
+def slow_windows(samples):
+    """[(시각, 초)] -> 느린 구간 글 목록 ('12:10~13:20 파이썬 시작 35초 (처음 0.4초)'). 첫 측정을 기준으로."""
+    if not samples or samples[0][1] is None:
+        return []
+    base = samples[0][1]
+    limit = max(base * PROBE_SLOW, 2.0)
+    out, run = [], []
+    for at, sec in samples + [("", None)]:
+        if sec is not None and sec > limit:
+            run.append((at, sec))
+            continue
+        if run:
+            out.append(f"{run[0][0]}~{run[-1][0]} 파이썬 시작 최대 {max(x[1] for x in run)}초 (처음 {base}초)")
+            run = []
+    return out
+
+
 def step_pytest(stage, args, ctx):
     """도구마다의 테스트 파일을 하나씩 따로 pytest로, pytest_workers개씩 동시에 (2.9.85: 회사 PC ml-kit 62분, 클라우드 22분 ->
     4코어 약 8분). 결과는 도구별로 모읍니다."""
@@ -673,24 +729,37 @@ def step_pytest(stage, args, ctx):
         folder = os.path.join(HERE, tool)
         if os.path.isdir(folder):
             jobs += [(tool, folder, f) for f in pytest_files(folder)]
+    jobs.sort(key=lambda j: -job_seconds(*j))              # 도구와 관계없이 오래 걸리는 것부터
     workers = pytest_workers(args)
     mem = total_memory_gb()
     how = (f"{workers}개씩 동시에 (코어 {os.cpu_count()}개, 메모리 {mem:.0f}GB" if mem else f"{workers}개씩 동시에 (코어 {os.cpu_count()}개")
     how += ", --pytest-workers로 바꿀 수 있음)" if not getattr(args, "pytest_workers", 0) else ", --pytest-workers)"
     say(f"오프라인 테스트 시작: 파일 {len(jobs)}개를 {how} (파일마다 상한 {args.pytest_timeout}초)")
     stage.note = f"동시 실행 {how}"                       # 결과 표의 비고 (느릴 때 원인을 보게)
-    procs, results, started = [], {}, time.time()
+    procs, results, started, clock = [], {}, time.time(), {}
 
     def one(job):
         tool, folder, path = job
         rel = os.path.relpath(path, folder)
-        res = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", LIVE_PLUGIN, "-rfEs", rel],
+        clock[job] = time.strftime("%H:%M")
+        # --durations=5: 가장 오래 걸린 시험 5개 (파일이 평소보다 수십 배 느렸던 원인을 보게, 회사 PC 2026-11-10)
+        res = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", LIVE_PLUGIN, "-rfEs",
+                           "--durations=5", rel],
                           folder, args.pytest_timeout, env_extra=env, show=lambda line: "[LIVE] " in line, procs=procs)
         results[job] = res
         npass, nfail = parse_pytest(res[1])[:2]
         say(f"  [{len(results)}/{len(jobs)}] {tool}/{rel.replace(os.sep, '/')}: 통과 {npass}, 실패 {nfail} ({res[2]}초)")
         return res
 
+    samples, done = [], threading.Event()
+
+    def sampler():
+        while True:
+            samples.append((time.strftime("%H:%M"), probe_python()))
+            if done.wait(PROBE_EVERY):
+                return
+    probe = threading.Thread(target=sampler, daemon=True)
+    probe.start()
     pool = ThreadPoolExecutor(max_workers=workers)
     futures = [pool.submit(one, j) for j in jobs]
     try:
@@ -702,7 +771,14 @@ def step_pytest(stage, args, ctx):
         pool.shutdown(wait=False, cancel_futures=True)
         raise
     pool.shutdown(wait=True)
+    done.set()
+    probe.join(130)
     say(f"오프라인 테스트 끝: {round(time.time() - started)}초")
+    for w in slow_windows(samples):
+        # 회사 PC 2026-11-10 낮: 파일 정리 작업과 겹쳐 프로세스를 띄우는 시험 파일 셋이 25~180배 느려짐
+        stage.warnings.append(f"PC가 느려진 시간대: {w}. PC 쪽 작업(파일 정리, 백신 검사 등) 때문일 수 있음. "
+                              "이때의 시간 초과·느린 파일은 도구 결함이 아닐 수 있음")
+    stage.details.append(("파이썬 시작 시간 (1분마다)", "\n".join(f"{a} {b}초" for a, b in samples)))
     for tool in PYTEST_TARGETS:
         mine = [j for j in jobs if j[0] == tool]
         for job in mine:
@@ -721,7 +797,7 @@ def step_pytest(stage, args, ctx):
             elif code not in (0, 5, None) and not nfail and not fails:      # 5: no test in the file
                 stage.fail(f"{tool}/{rel}: pytest exit {code} (실패 항목 없이 끝남, 상세 참고)")
             stage.skips += [f"{tool}: {x[:200]}" for x in skips]
-            stage.details.append((f"pytest {tool}/{rel} (exit {code}, {sec}초)", f"cwd={job[1]}\n{out}"))
+            stage.details.append((f"pytest {tool}/{rel} (exit {code}, {sec}초, {clock.get(job, '?')} 시작)", f"cwd={job[1]}\n{out}"))
 
 
 # ---------------------------------------------------------------------------

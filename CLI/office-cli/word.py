@@ -670,6 +670,7 @@ def cmd_comment(args) -> Dict[str, Any]:
                                              target_resolved=resolved), args.dry_run, "comment list")
 
 
+WD_REVISION_DELETE = 2
 WD_REVISION = {1: "삽입", 2: "삭제", 3: "서식 변경", 4: "단락 번호 변경", 5: "필드 표시 변경", 6: "조정", 7: "충돌",
                8: "스타일 변경", 9: "바꾸기", 10: "단락 서식 변경", 11: "표 서식 변경", 12: "구역 서식 변경",
                13: "스타일 정의 변경", 14: "이동(원래 자리)", 15: "이동(새 자리)", 16: "셀 삽입", 17: "셀 삭제",
@@ -705,6 +706,9 @@ def cmd_revisions(args) -> Dict[str, Any]:
 # ==============================================================================
 # 2. write
 # ==============================================================================
+
+WD_LIST_APPLY_SELECTION, WD_LIST_APPLY_FORWARD = 1, 2     # ListFormat.ApplyListTemplate ApplyTo
+
 
 class Writer:
     """문서의 한 위치(pos)부터 블록을 차례로 넣는 도우미. 넣은 뒤 pos는 다음 삽입 위치로 이동합니다."""
@@ -746,11 +750,24 @@ class Writer:
             self.text(it, WD_STYLE_LIST_NUMBER if numbered else WD_STYLE_LIST_BULLET)
         if numbered and items:
             # 목록 번호 스타일만 쓰면 문서의 앞 번호 목록에 이어 4, 5로 매겨짐: 새 목록은 1부터 (2026-11-09 검토 C2, 실기 확인)
-            try:
-                lf = self.doc.Range(first, self.pos).ListFormat
-                lf.ApplyListTemplate(ListTemplate=lf.ListTemplate, ContinuePreviousList=False)
-            except Exception as e:                    # noqa: BLE001
-                self.warnings.append(f"번호 목록을 1부터 다시 매기지 못함 ({type(e).__name__}): 앞 목록에 이어 번호가 매겨졌을 수 있음")
+            # ApplyTo 기본값(목록 전체)은 앞 목록까지 한 목록으로 보아 다시 1부터가 되지 않음 (회사 PC 2026-11-10 L5):
+            # 넣은 단락만(1), 안 되면 여기부터(2). 첫 번호를 다시 읽어 확인
+            why = ""
+            for apply_to in (WD_LIST_APPLY_SELECTION, WD_LIST_APPLY_FORWARD):
+                try:
+                    lf = self.doc.Range(first, self.pos).ListFormat
+                    lf.ApplyListTemplate(ListTemplate=lf.ListTemplate, ContinuePreviousList=False, ApplyTo=apply_to)
+                    got = str(self.doc.Range(first, first).ListFormat.ListString or "").strip()
+                except Exception as e:                # noqa: BLE001
+                    why = type(e).__name__
+                    continue
+                if got.rstrip(".)") == "1":
+                    why = ""
+                    break
+                why = f"첫 번호 '{got}'"
+            if why:
+                self.warnings.append(f"번호 목록을 1부터 다시 매기지 못함 ({why}): 앞 목록에 이어 번호가 매겨졌을 수 있음. "
+                                     "Word에서 첫 번호를 오른쪽 클릭 > '1에서 다시 시작'을 누르라고 알리세요")
         self.created.append(f"{'번호' if numbered else '글머리'} 목록 {len(items)}개")
 
     def _after_table(self) -> None:
@@ -1087,8 +1104,11 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
         _PENDING_REPLACE.update(preview_sink)
         return start, f"'{anchor}' 단락 자리"
     if before_table and preview is None:
-        doc.Range(int(para.End) - 1, int(para.End) - 1).InsertAfter("\r")     # 앵커 단락과 표 사이에 빈 단락을 만들고 거기에
-        return int(para.End), f"'{anchor}' 단락 뒤 (표 앞)"
+        # 앵커 단락과 표 사이에 빈 단락을 만들고 거기에. 넣기 전 끝 위치를 씀: 실제 Word는 안에 글이 들어간 para Range를
+        # 늘려 para.End가 다시 표 첫 칸이 됨 (회사 PC 2026-11-10 L4)
+        end = int(para.End)
+        doc.Range(end - 1, end - 1).InsertAfter("\r")
+        return end, f"'{anchor}' 단락 뒤 (표 앞)"
     if int(para.End) >= int(doc.Content.End) and preview is None:
         # 마지막 단락 뒤에는 글을 둘 수 없어 그대로 넣으면 앵커 단락에 붙고 스타일이 바뀜: 새 단락을 먼저 만듦
         end = int(doc.Content.End) - 1
@@ -1507,12 +1527,32 @@ def _count_text(doc: Any, text: str, match_case: bool, whole_word: bool, limit: 
             hay = str(story.Text) if match_case else str(story.Text).lower()
             n += hay.count(needle)
         return min(n, limit)
+    tracked = _has_revisions(doc)
     for story in _stories(doc):
         rng = story.Duplicate
         while n < limit and _find(rng, text, match_case, whole_word):
-            n += 1
+            if not (tracked and _deleted_revision(rng)):
+                n += 1
             rng.Collapse(0)
     return n
+
+
+def _has_revisions(doc: Any) -> bool:
+    try:
+        return int(doc.Revisions.Count) > 0
+    except Exception:
+        return False
+
+
+def _deleted_revision(rng: Any) -> bool:
+    """찾은 글이 변경 추적의 삭제 표시 글인지. Find는 삭제 표시 글도 찾아, 변경 추적 문서에서 바꾼 옛 글을 '남아 있음'으로
+    세던 것 (회사 PC 2026-11-10 L9: read에는 새 글만 나오는데 replace가 UNVERIFIED)."""
+    try:
+        revs = rng.Revisions
+        count = int(revs.Count)
+        return count > 0 and all(int(revs(i).Type) == WD_REVISION_DELETE for i in range(1, count + 1))
+    except Exception:
+        return False
 
 
 # ==============================================================================

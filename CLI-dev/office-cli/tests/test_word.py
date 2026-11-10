@@ -1332,7 +1332,29 @@ def test_c1_anchor_right_above_table_does_not_write_into_first_cell(wd, capsys, 
 
 def test_c2_new_numbered_list_restarts(wd, capsys):
     code, out = run_word(capsys, "write", "--text", "1. 하나\n2. 둘")
-    assert code == 0 and any(e[0] == "list_restart" and e[2] is False for e in wd["doc"].log), wd["doc"].log
+    restarts = [e for e in wd["doc"].log if e[0] == "list_restart"]
+    # 목록 전체(ApplyTo=0)가 아니라 넣은 단락만(1): 실제 Word에서 0은 앞 목록에 이어 3.이 됨 (회사 PC 2026-11-10 L5)
+    assert code == 0 and restarts and restarts[0][2] is False and restarts[0][3] == 1, wd["doc"].log
+    assert "warnings" not in out, out
+
+
+@pytest.mark.parametrize("works, tries, warned", [({2}, 2, False), (set(), 2, True)])
+def test_c2_list_restart_checks_first_number(wd, capsys, works, tries, warned):
+    wd["doc"].list_restart_works = works
+    code, out = run_word(capsys, "write", "--text", "1. 하나\n2. 둘")
+    restarts = [e for e in wd["doc"].log if e[0] == "list_restart"]
+    assert code == 0 and [e[3] for e in restarts] == [1, 2][:tries], restarts
+    assert ("1부터 다시 매기지 못함" in str(out.get("warnings"))) is warned, out
+
+
+def test_c6_tracked_replace_ignores_deleted_revision_text(wd, capsys):
+    # 변경 추적 문서: 바꾼 옛 글은 삭제 표시로 남고 Find도 찾음. 그것을 '남아 있음'으로 세지 않음 (회사 PC 2026-11-10 L9)
+    doc = FakeWordDocument("앞 글\r추적 옛말\r뒤 글")
+    doc.TrackRevisions = True
+    wd["doc"] = doc
+    code, out = run_word(capsys, "replace", "--find", "추적 옛말", "--replace", "추적 새말")
+    assert code == 0 and doc.deleted_spans and "추적 옛말" in doc.text, doc.text
+    assert out["replaced"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
 
 
 def test_c3_table_after_table_gets_separating_paragraph(wd, capsys, tmp_path):

@@ -2020,6 +2020,21 @@ def test_c17_display_failure_after_saved_draft_is_unverified(capsys, monkeypatch
     code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "다시 실행하지 말고" in out["agent_directive"], out
     assert mail.saved and not mail.sent, out
+    assert "임시 보관함에서 초안을 열어" in str(out["unverified"]), out
+
+
+def test_c17_dialog_blocks_save_too_does_not_point_to_drafts(capsys, monkeypatch):
+    # 대화 상자 때문에 저장도 안 되면 임시 보관함에 초안이 없음: 대화 상자를 닫으면 뜨는 작성 창을 보라고 (회사 PC 2026-11-10 M4)
+    mail = Mail([Recip("a@x.com", True)])
+
+    def boom():
+        raise RuntimeError("dialog open")
+    mail.Display = mail.Save = boom
+    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
+    text = str(out["unverified"])
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "다시 실행하지 말고" in out["agent_directive"], out
+    assert "저장하지 못했고" in text and "임시 보관함에서 초안을 열어" not in text and "작성 창" in text, out
+    assert "confirm_commands" not in out and not mail.sent, out
 
 
 # ---------------------------------------------------------------------------
