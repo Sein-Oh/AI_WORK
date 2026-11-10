@@ -201,13 +201,57 @@ class FakeCellRange:
 class FakeGridTable:
     """칸 글만 있는 표 (word.py fill의 doc.Tables(i).Cell(r, c).Range.Text). None 칸은 병합으로 없는 칸."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, merged_rows=False):
         self.grid = [list(r) for r in rows]
+        self.merged_rows = merged_rows                       # 세로 병합: Rows(i) 접근이 COM 오류
+        self.Rows = _GridRows(self)
 
     def Cell(self, r, c):
         if not (1 <= r <= len(self.grid) and 1 <= c <= len(self.grid[r - 1])) or self.grid[r - 1][c - 1] is None:
             raise RuntimeError("요청한 구성원이 컬렉션에 없습니다")
         return type("Cell", (), {"Range": FakeCellRange(self.grid, r - 1, c - 1)})()
+
+
+class _GridRow:
+    def __init__(self, table, i):
+        self.table, self.i = table, i
+
+    @property
+    def Cells(self):
+        return type("Cells", (), {"Count": len(self.table.grid[self.i - 1])})()
+
+    @property
+    def Range(self):
+        row = self.table.grid[self.i - 1]
+        return type("R", (), {"Text": "".join((c or "") + "\r\x07" for c in row) + "\r\x07"})()
+
+    def Delete(self):
+        if self.table.merged_rows:
+            raise RuntimeError("세로로 병합된 칸이 있어 이 컬렉션의 개별 행에 액세스할 수 없습니다")
+        del self.table.grid[self.i - 1]
+
+
+class _GridRows:
+    def __init__(self, table):
+        self.table = table
+
+    @property
+    def Count(self):
+        return len(self.table.grid)
+
+    def __call__(self, i):
+        if self.table.merged_rows:
+            raise RuntimeError("세로로 병합된 칸이 있어 이 컬렉션의 개별 행에 액세스할 수 없습니다")
+        if not 1 <= i <= len(self.table.grid):
+            raise RuntimeError("요청한 구성원이 컬렉션에 없습니다")
+        return _GridRow(self.table, i)
+
+    def Add(self, BeforeRow=None):
+        """실제 Word처럼: BeforeRow 앞(없으면 끝)에 빈 행, 칸 수는 이웃 행과 같음."""
+        width = len(self.table.grid[-1]) if self.table.grid else 1
+        at = len(self.table.grid) if BeforeRow is None else BeforeRow.i - 1
+        self.table.grid.insert(at, [""] * width)
+        return _GridRow(self.table, at + 1)
 
 
 class FakeTables:
@@ -344,3 +388,15 @@ class FakeWordDocument:
     @property
     def paragraphs(self):
         return [p for p in self.text.split("\r")]
+
+    @property
+    def Paragraphs(self):
+        """문서 단락 (Range는 단락 기호 포함). OutlineLevel은 heading_at(시작 위치 -> 수준)에 있으면 그 수준, 아니면 본문(10)."""
+        out, pos = [], 0
+        levels = getattr(self, "heading_at", {})
+        for part in self.text.split("\r")[:-1]:
+            para = FakeParagraph(FakeRange(self, pos, pos + len(part) + 1))
+            para.OutlineLevel = levels.get(part, 10)
+            out.append(para)
+            pos += len(part) + 1
+        return out

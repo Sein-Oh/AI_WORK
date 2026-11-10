@@ -11,6 +11,31 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.6.0] - 2026-11-10
+
+검토(2026-11-09) 4장 3·4·5번의 추천 기능 (사용자 결정 2026-11-10: 추천 항목만, 미룬 것은 사용자가 따로 판단). 실기 러너 N 그룹으로 실제 Office 확인.
+
+### 기능
+- `ppt.py write --slide N --shape "<도형 이름>" --text`: 기존 도형(글상자·본문·제목 개체 틀)의 글을 바꿈 (지금은 쓸 때마다 새 글상자).
+  글이 있던 도형은 `--overwrite`가 있을 때만, `--dry-run`, 같은 글이면 `unchanged`, 다시 읽어 확인.
+- `word.py delete --paragraphs 12-14`: 단락 지우기 (표 안 단락은 거절, `--dry-run`, 남은 단락을 다시 읽어 확인, 되돌리기).
+- `word.py table --action add-row|delete-row`: 워드 표에 행 넣기(`--row` 뒤, `--values "칸; 칸"`)·지우기 (세로 병합 표는 거절, `--dry-run`).
+- `excel.py save [--save "<경로.xlsx>"]`: 열린 통합문서 저장·다른 이름으로 저장 (같은 이름 파일은 `--overwrite`, 매크로 문서는 `.xlsm`).
+- `excel.py duplicates [--columns 품번,규격]`: 중복 행 찾기 (읽기만, 닫힌 xlsx·CSV는 Excel 없이, 엑셀 행 번호).
+- `excel.py range --action values --range A1:D20`: 수식을 지금 값으로 (`--dry-run`으로 수식 칸 확인, 되돌리기).
+- `outlook.py list|search --until YYYY-MM-DD`(받은 날짜 끝, 그날 포함), `--with-attachments`(본문 삽입 그림만 있는 메일은 뺌).
+- `outlook.py event --subject --start "YYYY-MM-DD HH:MM" [--minutes] [--location]`: 내 일정 만들기 (참석자·회의 요청 없음, 같은 일정이 있으면
+  새로 만들지 않음, 다시 읽어 확인, 겹치는 일정은 `warnings`).
+
+### 스킬
+- office-excel(저장, 수식을 값으로), office-data(중복 찾기), office-doc(단락 지우기, 표 행, PPT 도형 글), office-mail(기간 끝, 첨부 있는 메일, 일정 만들기).
+  6KB 한도 안에 넣으려고 겹치는 줄(transfer 두 줄 -> 한 줄 등)과 긴 괄호 설명을 줄임.
+
+### 테스트
+- 가짜 Word: 문서 단락(`doc.Paragraphs`), 표 행(`Rows.Add`, `Rows(i).Delete`, 세로 병합이면 COM 오류). 가짜 Excel: `Save`, `SaveAs`(덮어쓰기 확인 창 흉내).
+- 실기 러너 N 그룹(N1~N8): 위 기능을 실제 Office에서 자동 판정 (질문 없음, Outlook 일정은 만든 뒤 러너가 지움).
+- L15(OneDrive) 항목을 뺌: 사용자 환경에서 OneDrive를 쓰지 않음 (검토 C13 닫음).
+
 ## [1.5.2] - 2026-11-10
 
 회사 PC 실기(2026-11-10 낮, 1.5.1) L·M 그룹 결과. 가짜 COM을 실제 Office 동작에 맞춘 뒤 수정 (고치기 전 가짜로 실패 재현).
@@ -2300,8 +2325,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 
 ## 남은 할 일
 - [ ] 2026-11-09 전체 검토(1.4.91)에서 찾은 것: `docs/history/office-cli_REVIEW_2026-11-09.md`. 1장·2장·3장은 1.4.92~1.4.96에서 처리
-  (3장과 A7~A9는 회사 PC 실기 러너 L·M 그룹으로 확인할 것, C6·C12·C13·C18은 실기 결과를 보고 고침). 남은 것: 3장 끝의 마크다운 작은 것(사용자와 범위),
-  4장 새 기능, 5장 경량 모델 운용(5장 3번 옵션 이름 통일은 사용자 결정). 전부 끝나면 이 줄을 지움
+  (3장 C1~C18은 실기에서 끝남: C6 수정, C12·C18 문제없음, C13 OneDrive는 쓰지 않아 닫음). 남은 것: 3장 끝의 마크다운 작은 것(보류),
+  4장 3·4·5번의 미룬 기능(도형 옮기기, 변경 내용 수락·거부, 메모 답글, 글꼴·정렬 / 피벗, 데이터 유효성, 인쇄 설정, 기존 차트 고치기 /
+  메일 이동·분류, 회의 요청, 플래그: 사용자가 할지 정함), 4장 6번 나머지(OCR 등)
 - [ ] 메일 분류(폴더로 옮기기)는 보류 (2026-11-09 사용자 결정, EML 검색을 먼저 써 봄). Outlook 가져오기(`tools/eml_import_trial.py`)는 하지 않음
 - [ ] 1.4.83 검토에서 남긴 것: `excel read --where`의 열 이름 `[후보]`는 번호 없음(식 안의 이름 자리를 바꾼 명령 필요), `word write --dry-run`이
   새 파일 경로에서 '문서 없음'으로 멈춤, `--all`의 뜻이 도구마다 다름

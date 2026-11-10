@@ -690,7 +690,86 @@ def _resolve_slide(prs: Any, value: Optional[str], default_new: bool) -> Tuple[O
     return n, False
 
 
+def _new_text_lines(text: str) -> List[str]:
+    """새 글의 줄: '- '·'* '로 시작하면 그 표시는 빼고 (도형의 글머리 서식을 그대로 씀), **굵게**는 글만."""
+    out = []
+    for line in rt.unescape_newlines(text).replace("\r\n", "\n").split("\n"):
+        t = line.rstrip()
+        m = re.match(r"^\s*[-*]\s+(.*)$", t)
+        out.append(md.split_bold(m.group(1) if m else t)[0])
+    while out and not out[-1].strip():
+        out.pop()
+    return out
+
+
+def _find_shape(slide: Any, slide_no: int, name: str) -> Any:
+    """슬라이드의 도형을 이름으로 (대소문자·앞뒤 공백 무시). 없으면 글이 있는 도형 이름을 [후보]로."""
+    want = name.strip().casefold()
+    names = []
+    for k in range(1, slide.Shapes.Count + 1):
+        sh = slide.Shapes(k)
+        if str(sh.Name).strip().casefold() == want:
+            return sh
+        if _has(sh, "HasTextFrame"):
+            names.append(str(sh.Name))
+    raise rt.ambiguous(f"슬라이드 {slide_no}에 '{name}' 도형이 없습니다. 도형 이름은 ppt.py info --detail --slides {slide_no}의 "
+                       "shape_detail name입니다.", names, log_message="도형 이름을 찾지 못함", replace=name)
+
+
+def _write_shape(args) -> Dict[str, Any]:
+    """write --slide N --shape <이름>: 그 도형(글상자·본문 개체 틀)의 글을 새 글로 바꿈. 새 글상자를 만들지 않음.
+    글이 있던 도형은 --overwrite가 있을 때만 (사용자 확인). 도형의 글꼴·글머리 서식은 그대로."""
+    if any([args.title, args.image, args.cards]):
+        raise rt.InputError("--shape는 그 도형의 글만 바꿉니다. --title·--image·--cards는 함께 쓰지 않습니다 (제목 개체 틀도 --shape로).")
+    if args.text is None and not args.file:
+        raise rt.InputError("--shape에 넣을 글이 없습니다. --text \"<새 글>\" 또는 --file \"<글.md>\"를 주세요.")
+    if not args.slide or not str(args.slide).isdigit():
+        raise rt.InputError("--shape에는 기존 슬라이드 번호가 필요합니다 (--slide 3). 도형 이름은 ppt.py info --detail --slides <번호>로 봅니다.")
+    text = rt.read_text_file(rt.resolve_input_path(args.file, "입력 파일")) if args.file else args.text
+    lines = _new_text_lines(text or "")
+    slide_no = int(args.slide)
+    with off.open_target("ppt", args.target, readonly=bool(args.dry_run), focus=not args.no_focus,
+                         tool=TOOL, command="write") as t:
+        prs = t.doc
+        if slide_no < 1 or slide_no > int(prs.Slides.Count):
+            raise rt.InputError(f"슬라이드 {slide_no}이(가) 없습니다 (1~{prs.Slides.Count}).")
+        sh = _find_shape(prs.Slides(slide_no), slide_no, args.shape)
+        if not _has(sh, "HasTextFrame"):
+            raise rt.InputError(f"'{sh.Name}'은(는) 글을 넣을 수 없는 도형입니다 (그림·표·차트). 글상자나 본문 개체 틀 이름을 쓰세요.")
+        old = str(sh.TextFrame.TextRange.Text).replace("\r", "\n").strip() if _has(sh.TextFrame, "HasText") else ""
+        new = "\n".join(lines)
+        info: Dict[str, Any] = {"slide": slide_no, "shape": str(sh.Name), "old_text": _preview_text(old, 200), "new_text": _preview_text(new, 200)}
+        if old == new:
+            t.set_focus(slide=slide_no, changed=False)
+            return rt.ok(TOOL, "write", f"슬라이드 {slide_no} '{sh.Name}': 이미 같은 글이라 바꾸지 않았습니다",
+                         "VERIFIED: 바뀐 것 없음. 다시 실행하지 마세요.", verified=True, target_resolved=t.resolved(), unchanged=True, **info)
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "write", f"미리보기: 슬라이드 {slide_no} '{sh.Name}'의 글을 바꿉니다: "
+                                     f"'{_preview_text(old, 40)}' -> '{_preview_text(new, 40)}' (바꾸지 않음)", 1,
+                                     [f"슬라이드 {slide_no} '{sh.Name}': {_preview_text(old, 60)} -> {_preview_text(new, 60)}"],
+                                     rt.dry_run_command(TOOL, f"슬라이드 {slide_no} '{sh.Name}' 글 바꾸기", overwrite=bool(old)),
+                                     target_resolved=t.resolved(), **info)
+        if old and not args.overwrite:
+            raise rt.UserDecisionError(
+                f"슬라이드 {slide_no} '{sh.Name}'에 글이 있습니다 ({_preview_text(old, 80)}). 바꾸면 이 글이 없어집니다. 아무것도 바꾸지 않았습니다.",
+                "지금 글과 새 글을 사용자에게 보여 주고, 바꾸라고 하면 같은 번호의 confirm_commands를 1번 실행하세요.",
+                candidates=[f"'{sh.Name}'의 글을 새 글로 바꾸기"], commands=[rt.retry_command({"--overwrite": True})],
+                log_message=f"슬라이드 {slide_no} 도형에 글이 있음 ({rt.DOC_OMITTED})", destructive=True)
+        sh.TextFrame.TextRange.Text = "\r".join(lines)
+        t.set_focus(slide=slide_no)
+        got = str(sh.TextFrame.TextRange.Text).replace("\r", "\n").strip()
+        resolved = t.resolved()
+    preview = f"슬라이드 {slide_no} '{info['shape']}'의 글을 바꿨습니다 ({len(lines)}줄)"
+    if got != new.strip():
+        return rt.ok_unverified(TOOL, "write", preview, [f"다시 읽은 글이 넣은 글과 다름 ({_preview_text(got, 60)})"],
+                                target_resolved=resolved, **info)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 도형의 글을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요. "
+                 "잘못 바꿨으면 office.py undo로 되돌립니다.", verified=True, target_resolved=resolved, **info)
+
+
 def cmd_write(args) -> Dict[str, Any]:
+    if args.shape:
+        return _write_shape(args)
     if args.dry_run:
         raise rt.dry_run_unsupported(TOOL, "write")
     if not any([args.title, args.text, args.file, args.image, args.cards]):
@@ -1445,7 +1524,8 @@ def build_cli():
     p.add_argument("--width", type=float, help="그림 너비(pt)")
     p.add_argument("--cards", help="카드 '제목:내용; 제목:내용' (1~5개)")
     p.add_argument("--theme", help=f"색 테마: {', '.join(off.THEMES)} (기본 navy)")
-    p.add_argument("--overwrite", action="store_true", help="기존 슬라이드의 제목을 바꾸기 (사용자가 원할 때만)")
+    p.add_argument("--shape", help="이 도형의 글을 --text로 바꾸기 (새 글상자를 만들지 않음). 이름은 info --detail의 name")
+    p.add_argument("--overwrite", action="store_true", help="기존 슬라이드의 제목·도형의 글을 바꾸기 (사용자가 원할 때만)")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)

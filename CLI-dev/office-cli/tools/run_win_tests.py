@@ -2881,21 +2881,10 @@ def test_L(ctx):
         got = openpyxl.load_workbook(path).active.freeze_panes
         record(ctx, "L14", "C12(확인만) 닫힌 파일 freeze가 파일에 저장됨", _verified(d) and got == "A2", f"파일의 freeze_panes={got}", d, c, r, e)
 
-    def l15():    # C13 OneDrive (확인만): 열린 https 통합문서가 있을 때만 묻고, 없으면 묻지 않고 건너뜀 (폐쇄망은 보통 없음)
-        def web_books():
-            return [str(b.FullName) for b in xl_app().Workbooks if str(b.FullName).lower().startswith("http")]
-        if not com_retry(web_books):
-            record(ctx, "L15", "C13(확인만) OneDrive 통합문서 undo", ENV_SKIP, "열린 OneDrive/SharePoint 통합문서 없음")
-            return
-        manual = ask(ctx, "OneDrive/SharePoint에서 연 통합문서(주소가 https://...)에 excel.py write 후 office.py undo를 하면 "
-                          "저장 없이 닫히지 않고 되돌려지나요?")
-        record(ctx, "L15", "C13(확인만) OneDrive 통합문서 undo", manual, "")
-
     for tid, title, fn in (("L1", "통화 열", l1), ("L2", "+/- 글", l2), ("L3", "수식 값", l3), ("L4", "표 위 앵커", l4),
                            ("L5", "번호 목록", l5), ("L6", "표 뒤 표", l6), ("L7", "그림 스타일", l7), ("L8", "목차", l8),
                            ("L9", "변경 추적", l9), ("L10", "바닥글 개체틀", l10), ("L11", "제한된 보기", l11),
-                           ("L12", "열린 문서 undo", l12), ("L13", "숨은 행 append", l13), ("L14", "닫힌 파일 freeze", l14),
-                           ("L15", "OneDrive", l15)):
+                           ("L12", "열린 문서 undo", l12), ("L13", "숨은 행 append", l13), ("L14", "닫힌 파일 freeze", l14)):
         run_test(ctx, tid, title, fn)
 
 
@@ -3056,8 +3045,156 @@ def test_M(ctx):
         run_test(ctx, tid, title, fn)
 
 
+# ---------------------------------------------------------------------------
+# N. 1.6.0 새 기능 (실제 Office, 질문 없음): 수식을 값으로, 저장, 중복, 워드 단락·표 행, PPT 도형 글, 일정, 메일 기간·첨부
+# ---------------------------------------------------------------------------
+def test_N(ctx):
+    tag = time.strftime("%H%M%S")
+
+    def n1():     # excel range --action values
+        activate_xl("A.xlsx", "Sheet1")
+        run_cli("excel.py", "write", "--sheet", "N_VAL", "--new-sheet", "--range", "A1", "--values", '[["a","b"],[2,3]]')
+        com_retry(lambda: setattr(xl_sheet("N_VAL").Range("C2"), "Formula", "=A2*B2"))
+        d0 = run_cli("excel.py", "range", "--sheet", "N_VAL", "--action", "values", "--range", "A1:C2", "--dry-run")[0] or {}
+        d, c, r, e = run_cli("excel.py", "range", "--sheet", "N_VAL", "--action", "values", "--range", "A1:C2")
+        got = com_retry(lambda: (bool(xl_sheet("N_VAL").Range("C2").HasFormula), xl_sheet("N_VAL").Range("C2").Value))
+        record(ctx, "N1", "수식을 값으로: 미리보기 1칸, 실행 뒤 수식 없고 값 6", d0.get("count") == 1 and _verified(d) and got == (False, 6.0),
+               f"미리보기 count={d0.get('count')}, C2 수식/값={got}", d, c, r, e)
+
+    def n2():     # excel save / save --save (새 통합문서에서: A.xlsx는 그대로)
+        p1, p2 = ctx.path("N_save.xlsx"), ctx.path("N_save2.xlsx")
+        for p in (p1, p2):
+            old = _open_doc("excel", os.path.basename(p))
+            if old is not None:
+                com_retry(lambda: old.Close(SaveChanges=False))
+            if os.path.exists(p):
+                os.remove(p)
+        wb = com_retry(lambda: xl_app().Workbooks.Add())
+        _save_workbook(wb, p1)
+        com_retry(lambda: setattr(wb.Worksheets(1).Range("A1"), "Value", f"N저장 {tag}"))
+        d1 = run_cli("excel.py", "save", "--target", "N_save.xlsx")[0] or {}
+        saved = com_retry(lambda: bool(wb.Saved))
+        d, c, r, e = run_cli("excel.py", "save", "--target", "N_save.xlsx", "--save", p2)
+        now = com_retry(lambda: str(wb.FullName))
+        try:
+            com_retry(lambda: wb.Close(SaveChanges=False))
+        except Exception:
+            pass
+        import openpyxl
+        val = openpyxl.load_workbook(p2).active["A1"].value if os.path.exists(p2) else None
+        record(ctx, "N2", "열린 통합문서 저장, 다른 이름으로 저장 (열린 문서가 새 파일)",
+               _verified(d1) and saved and _verified(d) and os.path.normcase(now) == os.path.normcase(p2) and val == f"N저장 {tag}",
+               f"저장={saved}, 지금 경로={now}, 새 파일 A1={val}", d, c, r, e)
+
+    def n3():     # excel duplicates (CSV, Office 없이)
+        p = ctx.path("N_dup.csv")
+        with open(p, "w", encoding="utf-8-sig") as f:
+            f.write("품번,규격\n0102,M3\n0102 ,m3\n102,M3\n")
+        d, c, r, e = run_cli("excel.py", "duplicates", "--target", p, "--columns", "품번,규격")
+        rows = [g.get("rows") for g in (d or {}).get("groups") or []]
+        record(ctx, "N3", "중복 행 찾기: 공백·대소문자 무시, 앞자리 0은 다른 값", _verified(d) and rows == [[2, 3]], f"묶음={rows}", d, c, r, e)
+
+    def n4():     # word delete
+        doc = wd_doc("A.docx")
+        texts = [f"N지움 {k} {tag}" for k in ("가", "나", "다")]
+        for t_ in texts:
+            run_cli("word.py", "write", "--target", ctx.path("A.docx"), "--text", t_)
+        total = int((run_cli("word.py", "read", "--target", ctx.path("A.docx"))[0] or {}).get("units_total") or 1)
+        d_read = run_cli("word.py", "read", "--target", ctx.path("A.docx"), "--start", str(max(1, total - 5)))[0] or {}
+        nos = {p.get("text"): p.get("no") for p in d_read.get("paragraphs") or []}
+        no = nos.get(texts[1])
+        if not no:
+            record(ctx, "N4", "워드 단락 지우기", None, "지울 단락 번호를 읽지 못함 (문서가 길어 잘렸을 수 있음)")
+            return
+        d, c, r, e = run_cli("word.py", "delete", "--target", ctx.path("A.docx"), "--paragraphs", str(no))
+        body = com_retry(lambda: str(doc.Content.Text))
+        record(ctx, "N4", "워드 단락 지우기: 가운데 단락만 사라짐", _verified(d) and texts[1] not in body and texts[0] in body and texts[2] in body,
+               f"단락 {no} 지움", d, c, r, e)
+
+    def n5():     # word table add-row / delete-row
+        doc = wd_doc("A.docx")
+
+        def make():
+            rng = doc.Content
+            rng.InsertParagraphAfter()
+            end = doc.Content.End - 1
+            tb = doc.Tables.Add(doc.Range(end, end), 2, 2)
+            tb.Cell(1, 1).Range.Text, tb.Cell(1, 2).Range.Text = "항목", "값"
+            tb.Cell(2, 1).Range.Text, tb.Cell(2, 2).Range.Text = "가", "1"
+            return int(doc.Tables.Count)
+        n = com_retry(make)
+        d1 = run_cli("word.py", "table", "--target", ctx.path("A.docx"), "--table", str(n), "--action", "add-row", "--row", "1",
+                     "--values", f"N행 {tag}; 9")[0] or {}
+        mid = com_retry(lambda: str(doc.Tables(n).Cell(2, 1).Range.Text).rstrip("\r\x07"))
+        d, c, r, e = run_cli("word.py", "table", "--target", ctx.path("A.docx"), "--table", str(n), "--action", "delete-row", "--row", "3")
+        rows = com_retry(lambda: int(doc.Tables(n).Rows.Count))
+        record(ctx, "N5", "워드 표 행 넣기(1행 뒤)·지우기(3행)", _verified(d1) and mid == f"N행 {tag}" and _verified(d) and rows == 2,
+               f"넣은 행 첫 칸={mid!r}, 지운 뒤 행 수={rows}", d, c, r, e)
+
+    def n6():     # ppt write --shape
+        prs = pp_prs("A.pptx")
+
+        def make():
+            sl = prs.Slides.Add(prs.Slides.Count + 1, 2)            # ppLayoutText: 제목 + 본문 개체 틀
+            body = sl.Shapes(2)
+            body.TextFrame.TextRange.Text = "기존 항목"
+            return int(sl.SlideIndex), str(body.Name)
+        no, name = com_retry(make)
+        d0 = run_cli("ppt.py", "write", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name, "--text", f"새 항목 {tag}")[0] or {}
+        n_before = com_retry(lambda: int(prs.Slides(no).Shapes.Count))
+        d, c, r, e = run_cli("ppt.py", "write", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name,
+                             "--text", f"- 새 항목 {tag}\n- 둘째", "--overwrite")
+        got = com_retry(lambda: str(prs.Slides(no).Shapes(name).TextFrame.TextRange.Text))
+        n_after = com_retry(lambda: int(prs.Slides(no).Shapes.Count))
+        record(ctx, "N6", "PPT 도형 글 바꾸기: 글이 있으면 먼저 확인, --overwrite로 바꾸고 새 글상자 없음",
+               (d0 or {}).get("status") == "error" and _verified(d) and got.replace("\r", "|") == f"새 항목 {tag}|둘째" and n_after == n_before,
+               f"도형 '{name}' 글={got!r}, 도형 수 {n_before}->{n_after}", d, c, r, e)
+
+    def n7():     # outlook event (만든 뒤 지움)
+        import datetime as _d
+        day = (_d.date.today() + _d.timedelta(days=1)).isoformat()
+        subject = f"[office-cli 테스트] 일정 {tag}"
+        d, c, r, e = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30", "--location", "시험")
+        again = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30")[0] or {}
+
+        def find():
+            items = ol_ns().GetDefaultFolder(9).Items
+            hits = [it for it in items.Restrict(f"[Start] >= '{day} 00:00'") if str(it.Subject or "") == subject]
+            out = [(_ol_time(h.Start), _ol_time(h.End), str(h.Location or "")) for h in hits]
+            for h in hits:
+                h.Delete()                                              # 러너가 만든 일정은 지움
+            return out
+        found = com_retry(find)
+        record(ctx, "N7", "일정 만들기: 다시 읽어 확인, 두 번 실행해도 하나 (확인 뒤 러너가 지움)",
+               _verified(d) and again.get("created") is False and found == [(f"{day} 23:00:00", f"{day} 23:30:00", "시험")],
+               f"Outlook에서 찾은 일정={found}", d, c, r, e)
+
+    def n8():     # outlook list --until / --with-attachments
+        import datetime as _d
+        until = (_d.date.today() - _d.timedelta(days=1)).isoformat()
+        d1 = run_cli("outlook.py", "list", "--until", until, "--limit", "5")[0] or {}
+        late = [m.get("received") for m in d1.get("mails") or [] if str(m.get("received", ""))[:10] > until]
+        d, c, r, e = run_cli("outlook.py", "list", "--with-attachments", "--limit", "5")
+        none = [m.get("subject") for m in (d or {}).get("mails") or [] if not m.get("attachments")]
+        record(ctx, "N8", "메일 --until(그날까지만), --with-attachments(첨부 있는 메일만)", _ok(d1) and not late and _ok(d) and not none,
+               f"--until {until}: {d1.get('count')}통, 넘은 메일 {late}; 첨부 없는데 나온 메일 {none}", d, c, r, e)
+
+    for tid, title, fn in (("N1", "수식을 값으로", n1), ("N2", "저장", n2), ("N3", "중복", n3), ("N4", "단락 지우기", n4),
+                           ("N5", "표 행", n5), ("N6", "PPT 도형 글", n6)):
+        run_test(ctx, tid, title, fn)
+    if ctx.args.skip_outlook:
+        return
+    ready, why = outlook_ready()
+    if not ready:
+        for tid, title in (("N7", "일정 만들기"), ("N8", "메일 기간·첨부")):
+            record(ctx, tid, title, ENV_SKIP, f"Outlook 준비 안 됨: {why}")
+        return
+    run_test(ctx, "N7", "일정 만들기", n7)
+    run_test(ctx, "N8", "메일 기간·첨부", n8)
+
+
 GROUPS = [("A", test_A), ("B", test_B), ("C", test_C), ("D", test_D), ("E", test_E), ("F", test_F), ("G", test_G),
-          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K), ("L", test_L), ("M", test_M)]
+          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K), ("L", test_L), ("M", test_M), ("N", test_N)]
 
 
 def agent_summary(problems, counts, path, err_path, shots, closed, unverified):

@@ -1728,6 +1728,126 @@ FILL_HOWTO = ("값은 --slots \"<자리>=<값>; <자리>=<값>\" (자리는 양�
               "또는 --file 값.csv(열: 자리, 값)")
 
 
+# ==============================================================================
+# 3-2. delete (단락 지우기), table (표 행 넣기·지우기)
+# ==============================================================================
+
+DELETE_MAX = 200
+
+
+def cmd_delete(args) -> Dict[str, Any]:
+    """--paragraphs(read·outline의 단락 번호)의 단락을 지움. 표 안 단락은 지우지 않음 (표 행은 word.py table).
+    --dry-run이면 지울 단락 글만 보여 줌. 지운 뒤 다시 읽어 남은 단락이 예상과 같은지 확인. office.py undo로 되돌림."""
+    if not args.paragraphs:
+        raise rt.InputError("지울 단락 번호를 --paragraphs로 주세요 (예: --paragraphs 12-14). 번호는 word.py read의 no입니다.")
+    with off.open_target("word", args.target, readonly=bool(args.dry_run), focus=not args.no_focus,
+                         tool=TOOL, command="delete") as t:
+        doc = t.doc
+        units = _com_units(doc, with_start=True)
+        if not units:
+            raise rt.InputError("문서에 글이 있는 단락이 없습니다.")
+        nums = _spec_numbers(args.paragraphs, len(units), "--paragraphs")
+        if len(nums) > DELETE_MAX:
+            raise rt.InputError(f"한 번에 {DELETE_MAX}개 단락까지 지웁니다 (받은 범위 {len(nums)}개). 나눠서 지우세요.")
+        picked = [units[n - 1] for n in nums]
+        in_table = [n for n, u in zip(nums, picked) if _in_table(doc.Range(u["start"], u["start"]))]
+        if in_table:
+            raise rt.InputError(f"단락 {', '.join(map(str, in_table[:10]))}은(는) 표 안에 있어 지우지 않았습니다. 표의 행은 "
+                                "word.py table --action delete-row로, 칸 글은 word.py fill로 바꾸세요.")
+        planned = [f"단락 {n}: {_preview(u['text'], 60)}" for n, u in zip(nums, picked)]
+        info: Dict[str, Any] = {"paragraphs": args.paragraphs, "count": len(nums), "deleted": planned[:rt.DRY_RUN_SHOW]}
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "delete", f"미리보기: 단락 {len(nums)}개를 지웁니다: " + " / ".join(planned[:3])
+                                     + (f" 외 {len(nums) - 3}개" if len(nums) > 3 else "") + " (바꾸지 않음)", len(nums), planned,
+                                     rt.dry_run_command(TOOL, f"단락 {len(nums)}개 지우기"), target_resolved=t.resolved())
+        expect = [u["text"] for i, u in enumerate(units, 1) if i not in set(nums)]
+        for u in sorted(picked, key=lambda x: -x["start"]):          # 뒤에서부터 (앞 위치가 밀리지 않게)
+            doc.Range(u["start"], u["end"]).Delete()
+        t.set_focus()
+        left = [u["text"] for u in _com_units(doc)]
+        resolved = t.resolved()
+    preview = f"단락 {len(nums)}개를 지웠습니다: " + " / ".join(planned[:3]) + (f" 외 {len(nums) - 3}개" if len(nums) > 3 else "")
+    if left != expect:
+        return rt.ok_unverified(TOOL, "delete", preview, ["지운 뒤 남은 단락이 예상과 다름 (office.py undo로 되돌릴 수 있음)"],
+                                target_resolved=resolved, **info)
+    return rt.ok(TOOL, "delete", preview, "VERIFIED: 남은 단락을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요 (번호가 바뀌어 "
+                 "다른 단락이 지워짐). 잘못 지웠으면 office.py undo로 되돌립니다.", verified=True, target_resolved=resolved, **info)
+
+
+def _row_cells(row: Any) -> List[str]:
+    return [c for c in str(row.Range.Text).split("\r\x07")[:-1]][: int(row.Cells.Count)]
+
+
+def cmd_table(args) -> Dict[str, Any]:
+    """워드 표의 행 넣기(add-row: --row 행 뒤, 생략하면 끝, --values '칸; 칸')와 지우기(delete-row: --row).
+    표 번호는 word.py info의 tables no. 세로 병합된 표는 행 단위로 다룰 수 없어 멈춤."""
+    if args.action == "delete-row" and not args.row:
+        raise rt.InputError("지울 행 번호를 --row로 주세요 (1 = 첫 행, 머리글 포함).")
+    values = [v.strip() for v in args.values.split(";")] if args.values is not None else []
+    if args.action == "delete-row" and args.values is not None:
+        raise rt.InputError("--values는 add-row(행 넣기)에만 씁니다. [추천] " + rt.retry_command({"--values": None}))
+    with off.open_target("word", args.target, readonly=bool(args.dry_run), focus=not args.no_focus,
+                         tool=TOOL, command="table") as t:
+        doc = t.doc
+        count = int(doc.Tables.Count)
+        if count == 0:
+            raise rt.InputError("문서에 표가 없습니다.")
+        if not 1 <= args.table <= count:
+            raise rt.InputError(f"표 {args.table}이(가) 없습니다 (1~{count}). 표 번호는 word.py info의 tables no입니다.")
+        tb = doc.Tables(args.table)
+        rows = int(tb.Rows.Count)
+        try:
+            if args.row is not None and not 1 <= args.row <= rows:
+                raise rt.InputError(f"표 {args.table}에 {args.row}행이 없습니다 (1~{rows}).")
+            ref = tb.Rows(args.row or rows)
+            width = int(ref.Cells.Count)
+            ref_text = _row_cells(ref)
+        except rt.InputError:
+            raise
+        except Exception as e:
+            raise rt.InputError(f"표 {args.table}은(는) 세로로 병합된 칸이 있어 행을 하나씩 다룰 수 없습니다 ({type(e).__name__}). "
+                                "Word에서 병합을 풀거나 직접 고치라고 사용자에게 알리세요.", no_fallback=True)
+        if len(values) > width:
+            raise rt.InputError(f"--values가 {len(values)}칸인데 표 {args.table}의 행은 {width}칸입니다. 칸은 ; 로 나눕니다.")
+        where = f"표 {args.table}"
+        if args.action == "delete-row":
+            desc = f"{where} {args.row}행 지우기: {_preview(' | '.join(ref_text), 60)}"
+        else:
+            pos = args.row if args.row else rows
+            desc = f"{where} {pos}행 뒤에 행 넣기" + (f": {' | '.join(values)}" if values else " (빈 행)")
+        info: Dict[str, Any] = {"table": args.table, "action": args.action, "rows_before": rows}
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "table", f"미리보기: {desc} (바꾸지 않음)", 1, [desc],
+                                     rt.dry_run_command(TOOL, desc), target_resolved=t.resolved(), **info)
+        problems: List[str] = []
+        if args.action == "delete-row":
+            ref.Delete()
+            got_rows = int(tb.Rows.Count)
+            if got_rows != rows - 1:
+                problems.append(f"행 수가 {got_rows} (지우기 전 {rows})")
+        else:
+            before = tb.Rows(args.row + 1) if args.row and args.row < rows else None
+            new = tb.Rows.Add(before) if before is not None else tb.Rows.Add()
+            new_no = (args.row + 1) if before is not None else rows + 1
+            for j, v in enumerate(values, 1):
+                tb.Cell(new_no, j).Range.Text = v
+            got_rows = int(tb.Rows.Count)
+            got = _row_cells(tb.Rows(new_no))
+            if got_rows != rows + 1:
+                problems.append(f"행 수가 {got_rows} (넣기 전 {rows})")
+            if [g.strip() for g in got[:len(values)]] != values:
+                problems.append(f"새 행의 글이 다름 ({' | '.join(got)})")
+            info["row"] = new_no
+        info["rows_after"] = got_rows
+        t.set_focus()
+        resolved = t.resolved()
+    preview = desc.replace("지우기:", "을(를) 지웠습니다:").replace("행 넣기", "행을 넣었습니다")
+    if problems:
+        return rt.ok_unverified(TOOL, "table", preview, problems, target_resolved=resolved, **info)
+    return rt.ok(TOOL, "table", preview, "VERIFIED: 표를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요. "
+                 "잘못 바꿨으면 office.py undo로 되돌립니다.", verified=True, target_resolved=resolved, **info)
+
+
 def cmd_fill(args) -> Dict[str, Any]:
     if bool(args.slots) == bool(args.file):
         raise rt.InputError(("--slots와 --file 중 하나만 씁니다. " if args.slots else "채울 값이 없습니다. ") + FILL_HOWTO +
@@ -2032,6 +2152,17 @@ def build_cli():
     p.add_argument("--size", type=float, help="글자 크기")
     p.add_argument("--highlight", help="형광펜 (yellow, green, pink, blue, red, gray, none)")
 
+    p = sub.add_parser("delete", help="단락 지우기 (--paragraphs: read의 단락 번호, --dry-run으로 먼저 확인)")
+    common(p, write=True)
+    p.add_argument("--paragraphs", help="지울 단락 번호 (예: 12, 12-14, 3,7). word.py read의 no")
+
+    p = sub.add_parser("table", help="워드 표의 행 넣기·지우기")
+    common(p, write=True)
+    p.add_argument("--table", type=int, default=1, help="표 번호 (word.py info의 tables no, 기본 1)")
+    p.add_argument("--action", required=True, choices=["add-row", "delete-row"])
+    p.add_argument("--row", type=int, help="add-row: 이 행 뒤에 (생략 시 끝) / delete-row: 지울 행 (1 = 첫 행)")
+    p.add_argument("--values", help="add-row: 새 행의 칸 글 '칸; 칸; 칸'")
+
     p = sub.add_parser("fill", help="서식 문서의 자리({{이름}})와 표 칸(표2!R3C4)을 값 파일로 한 번에 채우기")
     common(p, write=True)
     p.add_argument("--slots", help="채울 값 '자리=값; 자리=값' (예: \"업체명=한빛전자; 시험일=2026-11-04; 표2!R3C4=25\")")
@@ -2046,7 +2177,8 @@ def build_cli():
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "export": cmd_export,
-            "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions, "fill": cmd_fill}
+            "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions, "fill": cmd_fill,
+            "delete": cmd_delete, "table": cmd_table}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

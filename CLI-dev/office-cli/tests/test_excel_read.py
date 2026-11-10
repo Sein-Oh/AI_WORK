@@ -1760,3 +1760,30 @@ def test_where_finds_header_below_title_and_not_contains(tmp_path, capsys):
     assert code == 0 and out["count"] == 1 and out["values"][1][0] == "P2", out
     code, out = run_excel(capsys, "read", "--target", str(p), "--where", "상태 ~ 완료; 수량 < 2")
     assert code == 0 and [r[0] for r in out["values"][1:]] == ["P3"], out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.0 (검토 4장 4번): 중복 찾기 (읽기만)
+# ---------------------------------------------------------------------------
+
+
+def test_duplicates_by_columns_and_whole_row(tmp_path, capsys):
+    p = tmp_path / "부품.csv"
+    p.write_text("품번,규격,수량\n0102,M3,10\n0102 ,m3,5\n102,M3,1\n0105,M4,2\n0105,M4,2\n,,\n", encoding="utf-8-sig")
+    code, out = run_excel(capsys, "duplicates", "--target", str(p), "--columns", "품번,규격")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["group_count"] == 2, out
+    assert out["groups"][0]["rows"] == [2, 3] and out["groups"][1]["rows"] == [5, 6], out      # 공백·대소문자 무시, 앞자리 0은 다른 값
+    assert out["duplicate_rows"] == 2 and "2, 3행" in out["preview"], out
+    code, out = run_excel(capsys, "duplicates", "--target", str(p))                           # 모든 열이 같은 행
+    assert code == 0 and [g["rows"] for g in out["groups"]] == [[5, 6]], out
+    code, out = run_excel(capsys, "duplicates", "--target", str(p), "--columns", "수량,품번")
+    assert code == 0 and [g["rows"] for g in out["groups"]] == [[5, 6]], out
+
+
+def test_duplicates_zero_and_open_document(tmp_path, capsys, xl_table):
+    p = tmp_path / "목록.csv"
+    p.write_text("이름,값\n가,1\n나,2\n", encoding="utf-8-sig")
+    code, out = run_excel(capsys, "duplicates", "--target", str(p))
+    assert code == 0 and out["group_count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
+    code, out = run_main(excel, capsys, "duplicates", "--columns", "부서")                    # 열린 문서 (가짜 COM)
+    assert code == 0 and out["group_count"] >= 1, out
