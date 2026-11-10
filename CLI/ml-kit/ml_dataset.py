@@ -21,7 +21,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     setup_console, run_cli, JsonArgumentParser, InputError, load_data_file, quote_arg, avoid_overwrite,
     save_with_lock_fallback, parse_where, resolve_where, where_mask, where_text, where_notation_variants,
     where_with_variants, where_retry,
-    exclude_mark, final_version, strip_unit, EXCLUDE_COL, VERSION,
+    exclude_mark, final_version, strip_unit, EXCLUDE_COL, VERSION, add_sheet_argument, sheet_note, sheet_ignored_warning,
 )
 check_core_libraries("데이터셋")
 setup_console()
@@ -203,9 +203,13 @@ def execute(args) -> Dict[str, Any]:
         raise InputError("--where(조건) 또는 --rows(행 번호) 중 하나만 주십시오.")
     data_file = os.path.abspath(args.file)
     progress(f"데이터 읽기: {os.path.basename(data_file)}")
-    df = load_data_file(data_file, header_row=args.header_row, unit_row=args.unit_row, data_row=args.data_row)
+    df = load_data_file(data_file, header_row=args.header_row, unit_row=args.unit_row, data_row=args.data_row,
+                        sheet=args.sheet)
     source_rows = list(df.attrs.get("source_rows") or range(1, len(df) + 1))
     mask, chosen_by, warnings = select_rows(df, args)
+    # the sheet read (A3): another sheet with data or --sheet on a CSV is said; [후보] --sheet commands to choose
+    sheet_text, sheet_confirm = sheet_note(df.attrs, commands=not args.dry_run)
+    warnings[:0] = [w for w in (sheet_text, sheet_ignored_warning(data_file, args.sheet)) if w]
     hit = int(mask.sum())
     hit_rows = [source_rows[i] for i in np.flatnonzero(mask)]
     kind = args.action
@@ -216,6 +220,7 @@ def execute(args) -> Dict[str, Any]:
             "chosen_by": chosen_by, "rows": hit_rows[:PREVIEW_ROWS], "rows_truncated": hit > PREVIEW_ROWS}
     if hit == 0:
         return {**base, "verified": True, "next_commands": [], **({"warnings": warnings} if warnings else {}),
+                **({"confirm_commands": sheet_confirm} if sheet_confirm else {}),
                 "preview": f"{chosen_by}에 맞는 행이 없습니다 (0행). 파일을 만들지 않았습니다.",
                 "agent_directive": (f"VERIFIED: 찾은 행 없음 (count 0). {chosen_by}에 맞는 행이 없어 파일을 만들지 않았습니다. "
                                     "preview를 그대로 알리고 조건을 사용자에게 확인하세요.")}
@@ -245,6 +250,7 @@ def execute(args) -> Dict[str, Any]:
         cmd = " ".join([f"python {quote_arg(os.path.abspath(__file__))} {kind} --file {quote_arg(data_file)}"]
                        + (["--where", quote_arg(args.where)] if args.where else ["--rows", quote_arg(args.rows)])
                        + (["--reason", quote_arg(args.reason)] if args.reason and kind == "exclude" else [])
+                       + (["--sheet", quote_arg(args.sheet)] if args.sheet else [])
                        + ["--save", quote_arg(path)])
         return {**base, "verified": True, "dry_run": True, "output_file": path, **({"warnings": warnings} if warnings else {}),
                 "confirm_commands": [{"purpose": "미리보기대로 저장", "command": cmd}],
@@ -261,6 +267,8 @@ def execute(args) -> Dict[str, Any]:
         res["marked"] = hit - kept_marks
     if warnings:
         res["warnings"] = warnings
+    if sheet_confirm:
+        res["confirm_commands"] = sheet_confirm
     if problems:
         res["unverified"] = problems
     res["agent_directive"] = (
@@ -287,6 +295,7 @@ def main():
     parser.add_argument("--header-row", type=int, help="데이터 머리글 행 번호 (생략 시 자동)")
     parser.add_argument("--unit-row", type=int, help="데이터 단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
+    add_sheet_argument(parser)
     args = parser.parse_args()
     run_cli(lambda: execute(args), hint="확인할 것: 데이터 파일 경로, 조건의 열 이름, 행 번호.")
 

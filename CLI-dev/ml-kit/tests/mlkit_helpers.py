@@ -191,3 +191,15 @@ def family_rows(fam, n, seed):
         else:
             out.append([datetime(2026, 1, 1) + timedelta(days=i + 40 * seed), t, p, line, y])
     return out
+
+
+# ---- 검토 A(2026-11-10)의 기본 표: 온도 150~200, 압력 1~5, 수율 = 30 + 0.2*온도 + 3*압력 + 잡음 ----------------------------
+
+def base_rows(n=30, seed=0):
+    """[온도, 압력, 수율] 행 n개 (그대로 학습하면 검증 R2 0.9 안팎)."""
+    r = np.random.default_rng(seed)
+    out = []
+    for _ in range(n):
+        t, p = round(float(r.uniform(150, 200)), 1), round(float(r.uniform(1, 5)), 2)
+        out.append([t, p, round(30 + 0.2 * t + 3 * p + float(r.normal(0, 1)), 2)])
+    return out

@@ -825,3 +825,34 @@ def test_known_false_warning_small_integer_sum(tmp_path):
     rows = [["라인", "설정온도", "불량수", "생산량"]] + [[g, 180, b, q] for g, b, q in CAT]
     got = rt.load_data_file(write_rows(str(tmp_path / "cat.csv"), rows, [])).attrs["summary_rows"]
     assert got == [[4, "라인", "A계"]], got        # 불량수 2 = 1 + 1 and a constant setpoint: warned (documented)
+
+
+# ---- 검토 A (2026-11-10): 입력 자동 선택은 학습에 쓰는 행으로만 판단 ---------------------------------------------------------
+
+from mlkit_helpers import base_rows, run_tool, write_book  # noqa: E402
+
+
+def _with_totals(seed=5, mark=False):
+    r = np.random.default_rng(seed)
+    head = ["라인", "온도", "압력", "수율"] + (["제외"] if mark else [])
+    data = [[str(r.choice(["A", "B"])), t, p, y] + ([None] if mark else []) for t, p, y in base_rows(40, seed)]
+    s = [sum(row[k] for row in data) for k in (1, 2, 3)]
+    rows = [head] + data + [["합계"] + s + (["합계"] if mark else []),
+                            ["평균"] + [round(v / 40, 3) for v in s] + (["평균"] if mark else [])]
+    return rows
+
+
+@pytest.mark.parametrize("mark", [False, True])
+def test_totals_row_does_not_make_every_input_a_leak(tmp_path, mark):
+    """A2: 합계·평균 행 하나 때문에 숫자 입력이 모두 '타겟 누수'로 빠지지 않는다 (합계 행·'제외' 표시 행·타겟 이상치는 판단에서 뺌)."""
+    f = write_book(tmp_path / f"tot{int(mark)}.xlsx", _with_totals(mark=mark))
+    res = run_tool("ml_train.py", "--file", f, "--targets", "수율")
+    assert {"온도", "압력"} <= set(res["features_auto"]), res
+    assert res["mean_val_score"] > 0.6, res
+
+
+def test_totals_without_words_and_numbers_only(tmp_path):
+    data = [list(r) for r in base_rows(40, 6)]
+    rows = [["온도", "압력", "수율"]] + data + [[sum(r[k] for r in data) for k in range(3)]]
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "num.xlsx", rows), "--targets", "수율")
+    assert res["features_auto"] == ["온도", "압력"], res

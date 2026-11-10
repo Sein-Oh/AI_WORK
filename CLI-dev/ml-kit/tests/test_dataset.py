@@ -126,3 +126,20 @@ def test_saved_file_reads_back_like_the_source(tmp_path, ext):
         df.to_excel(f, index=False)
     res = run_tool("ml_dataset.py", "pick", "--file", str(f), "--where", "y >= 2")
     assert res["verified"] is True and res["rows_saved"] == 5, res
+
+
+def test_csv_blank_lines_keep_file_line_numbers(tmp_path):
+    """A8: CSV의 빈 줄도 행 번호로 센다: 학습이 보고한 행 번호 = 파일(엑셀) 행 번호, --rows는 그 행에 표시한다."""
+    import csv
+    from mlkit_helpers import base_rows
+    data = [[t, p, round(60 + 0.1 * t + p, 2)] for t, p, _ in base_rows(30, 9)]     # 고른 분포: 이상치는 9999 하나
+    data[10][2] = 9999                             # 11번째 데이터 행: 파일 15번째 줄 (제목, 빈 줄, 머리글, 5행, 빈 줄 다음)
+    lines = [["공정 데이터 2026"], [], ["온도", "압력", "수율"]] + data[:5] + [[]] + data[5:]
+    f = tmp_path / "blank.csv"
+    with open(f, "w", newline="", encoding="utf-8-sig") as fh:
+        csv.writer(fh).writerows(lines)
+    res = run_tool("ml_train.py", "--file", str(f), "--targets", "수율")
+    assert [e["row"] for e in res["excluded_preview"]] == [15], res["excluded_preview"]
+    out = run_tool("ml_dataset.py", "exclude", "--file", str(f), "--rows", "15")
+    got = pd.read_csv(out["output_file"], encoding="utf-8-sig")
+    assert got.loc[got["제외"].notna(), "수율"].tolist() == [9999], got
