@@ -1396,3 +1396,132 @@ def test_markdown_table_bold_cells_have_no_stars(wd, capsys):
     code, out = run_word(capsys, "write", "--text", "| 항목 | 값 |\n|---|---|\n| a | 1 |\n| **합계** | **1** |")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     assert "**" not in wd["doc"].text and "합계\t1" in wd["doc"].text.replace("\r", "\n"), wd["doc"].text
+
+
+# ---------------------------------------------------------------------------
+# 1.6.0 (검토 4장 3번): 단락 지우기, 표 행 넣기·지우기
+# ---------------------------------------------------------------------------
+
+
+def test_delete_paragraphs_preview_then_delete(wd, capsys):
+    doc = FakeWordDocument("가 단락\r나 단락\r다 단락\r라 단락")
+    wd["doc"] = doc
+    code, out = run_word(capsys, "delete", "--paragraphs", "2-3", "--dry-run")
+    assert code == 0 and out["count"] == 2 and "나 단락" in out["preview"] and "나 단락" in doc.text, out
+    assert "--dry-run" not in out["confirm_commands"][0]["command"], out
+    code, out = run_word(capsys, "delete", "--paragraphs", "2-3")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert doc.text == "가 단락\r라 단락\r", repr(doc.text)
+
+
+def test_delete_refuses_table_paragraphs_and_needs_numbers(wd, capsys):
+    doc = FakeWordDocument("앞\r칸1\r칸2\r뒤")
+    doc.table_spans = [(2, 8)]
+    wd["doc"] = doc
+    code, out = run_word(capsys, "delete", "--paragraphs", "2")
+    assert code == 1 and "표 안" in out["message"] and "칸1" in doc.text, out
+    code, out = run_word(capsys, "delete")
+    assert code == 1 and "--paragraphs" in out["message"], out
+    code, out = run_word(capsys, "delete", "--paragraphs", "9")
+    assert code == 1, out
+
+
+def test_table_add_and_delete_rows(wd, capsys):
+    doc = wd["doc"]
+    doc.grid_tables = [fw.FakeGridTable([["항목", "값"], ["가", "1"], ["나", "2"]])]
+    tb = doc.grid_tables[0]
+    code, out = run_word(capsys, "table", "--action", "add-row", "--row", "1", "--values", "새; 9")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["row"] == 2, out
+    assert tb.grid == [["항목", "값"], ["새", "9"], ["가", "1"], ["나", "2"]], tb.grid
+    code, out = run_word(capsys, "table", "--action", "add-row", "--values", "끝")
+    assert code == 0 and tb.grid[-1] == ["끝", ""] and out["rows_after"] == 5, tb.grid
+    code, out = run_word(capsys, "table", "--action", "delete-row", "--row", "3", "--dry-run")
+    assert code == 0 and "가 | 1" in out["preview"] and len(tb.grid) == 5, out
+    code, out = run_word(capsys, "table", "--action", "delete-row", "--row", "3")
+    assert code == 0 and ["가", "1"] not in tb.grid and out["rows_after"] == 4, out
+
+
+def test_table_errors(wd, capsys):
+    doc = wd["doc"]
+    doc.grid_tables = [fw.FakeGridTable([["a", "b"], ["c", "d"]], merged_rows=True)]
+    code, out = run_word(capsys, "table", "--action", "delete-row", "--row", "1")
+    assert code == 1 and "병합" in out["message"], out
+    doc.grid_tables = [fw.FakeGridTable([["a", "b"], ["c", "d"]])]
+    code, out = run_word(capsys, "table", "--action", "add-row", "--values", "1; 2; 3")
+    assert code == 1 and "2칸" in out["message"], out
+    code, out = run_word(capsys, "table", "--table", "3", "--action", "add-row")
+    assert code == 1 and "1~1" in out["message"], out
+    code, out = run_word(capsys, "table", "--action", "delete-row")
+    assert code == 1 and "--row" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.1: 메모 답글·지우기
+# ---------------------------------------------------------------------------
+
+
+def _memo_doc(wd):
+    doc = FakeWordDocument("규격 4.2항 값\r다음 단락")
+    for start, text in ((0, "값 확인"), (12, "오타")):
+        c = FakeComment(FakeRange(doc, start, start + 3), text, author="김검토")
+        c.coll = doc.Comments
+        doc.Comments.items.append(c)
+    wd["doc"] = doc
+    return doc
+
+
+def test_comment_reply_and_delete_with_replies(wd, capsys):
+    doc = _memo_doc(wd)
+    code, out = run_word(capsys, "comment", "--action", "reply", "--no", "1", "--text", "확인했습니다")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and doc.Comments.Count == 3, out
+    assert doc.Comments.items[1].Ancestor is doc.Comments.items[0] and doc.Comments.items[1].Range.Text == "확인했습니다"
+    code, out = run_word(capsys, "comment", "--action", "delete", "--no", "1", "--dry-run")
+    assert code == 0 and out["count"] == 2 and "답글 1개" in out["preview"] and doc.Comments.Count == 3, out
+    code, out = run_word(capsys, "comment", "--action", "delete", "--no", "1")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert [c.Range.Text for c in doc.Comments.items] == ["오타"], [c.Range.Text for c in doc.Comments.items]
+
+
+def test_comment_reply_delete_errors(wd, capsys):
+    doc = _memo_doc(wd)
+    code, out = run_word(capsys, "comment", "--action", "delete")
+    assert code == 1 and "--no" in out["message"], out
+    code, out = run_word(capsys, "comment", "--action", "reply", "--no", "5", "--text", "x")
+    assert code == 1 and "1~2" in out["message"], out
+    doc.no_replies = True
+    code, out = run_word(capsys, "comment", "--action", "reply", "--no", "1", "--text", "x")
+    assert code == 1 and "Word 2013" in out["message"] and doc.Comments.Count == 2, out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.1: 단락 서식 (word.py format, README에만)
+# ---------------------------------------------------------------------------
+
+
+def test_format_paragraphs_align_font_style(wd, capsys):
+    doc = FakeWordDocument("제목 줄\r본문 하나\r본문 둘")
+    doc.format_cache, doc.styles_at = {}, {}
+    wd["doc"] = doc
+    code, out = run_word(capsys, "format", "--paragraphs", "2-3", "--align", "center", "--size", "12", "--bold", "--dry-run")
+    assert code == 0 and out["count"] == 2 and not any(getattr(v, "Alignment", None) == 1 for v in doc.format_cache.values()), out
+    code, out = run_word(capsys, "format", "--paragraphs", "2-3", "--align", "center", "--font", "맑은 고딕", "--size", "12", "--bold")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert doc.format_cache[("pf", 5, 11)].Alignment == 1 and doc.format_cache[("font", 11, 16)].Name == "맑은 고딕", doc.format_cache.keys()
+    code, out = run_word(capsys, "format", "--paragraphs", "1", "--style", "제목 1")
+    assert code == 0 and doc.styles_at[0] == "제목 1" and out["agent_directive"].startswith("VERIFIED:"), out
+
+
+def test_format_needs_paragraphs_and_options(wd, capsys):
+    code, out = run_word(capsys, "format", "--align", "center")
+    assert code == 1 and "--paragraphs" in out["message"], out
+    code, out = run_word(capsys, "format", "--paragraphs", "1")
+    assert code == 1 and "--align" in out["message"], out
+
+
+def test_format_font_also_sets_korean_font(wd, capsys):
+    doc = FakeWordDocument("한글 단락")
+    doc.format_cache, doc.styles_at = {}, {}
+    wd["doc"] = doc
+    code, out = run_word(capsys, "format", "--paragraphs", "1", "--font", "맑은 고딕")
+    font = doc.format_cache[("font", 0, 6)]
+    assert code == 0 and font.Name == "맑은 고딕" and font.NameFarEast == "맑은 고딕", out    # 한글은 NameFarEast로 그려짐

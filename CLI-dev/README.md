@@ -12,7 +12,7 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 | [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`office-excel`](../CLI/office-cli/skills/office-excel/SKILL.md), [`office-doc`](../CLI/office-cli/skills/office-doc/SKILL.md), [`office-mail`](../CLI/office-cli/skills/office-mail/SKILL.md), [`office-spec`](../CLI/office-cli/skills/office-spec/SKILL.md), [`office-data`](../CLI/office-cli/skills/office-data/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
-(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<스킬 이름>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `CLI/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 6KB 이하를 목표로 합니다.
+(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<스킬 이름>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `CLI/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
 
 ## 실기 자동 점검 (`run_all_tests.py`)
 
@@ -28,7 +28,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 ```
 
 - 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `CLI-dev\tests`)
-  -> `beta`(`run_beta_check.py --agent`, F7 엑셀 재계산 포함) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
+  -> `beta`(`run_beta_check.py --agent`, F7~F9 엑셀 재계산 포함: F8 파생변수, F9 글자 입력) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
 - `pytest` 단계는 테스트 파일마다 따로 실행하고 동시에 `코어 수 - 1`개, 메모리 4GB마다 1개, 최대 3개씩 돌립니다(2026-11-10: 회사 PC에서 코어 수만큼 돌리자 메모리가 모자라 89분, 시간 초과 18건. 결과 표 비고에 동시 실행 수·코어·메모리) (`--pytest-workers N`, 1이면 하나씩.
   2.9.85: 회사 PC에서 하나씩 돌리면 62분). 화면에는 파일이 끝날 때마다 한 줄과 실패(`[LIVE]`)만 나오고, 결과 파일 상세에는 파일마다의 출력이 들어갑니다.
@@ -209,7 +209,7 @@ CLI-dev/<tool>/
 ### R10. 긴 작업은 나눠서 진행 (`CONTINUE:`)
 - 에이전트의 명령 실행 도구는 명령을 시간 제한(OpenCode 120초)에 끊는다. 끊기면 결과 JSON이 없어 LLM이 같은 명령을 반복한다 (2026-11-04 회사 PC Gemma 시험 R1, R2).
 - 오래 걸리는 단계(재학습 등)는 끝낸 결과를 디스크에 저장하고, 다음 단계 전에 시계를 본다 (`check_time`). 제한(`ML_KIT_TIME_LIMIT`, 기본 100초)에서 여유 30초를 뺀 시각을 넘을 것 같으면
-  `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [같은 명령]`,
+  `Unfinished`로 멈추고 `run_cli`가 `"status": "ok"`, `"verified": false`, `"continue": true`, `"progress"`, `"next_commands": [{"purpose", "command": 같은 명령, "needs_input": false}]`(다른 결과와 같은 모양),
   `agent_directive` = `CONTINUE: ...`(exit 0)을 낸다. 오류 로그에는 남기지 않는다.
 - 같은 명령을 다시 실행하면 저장된 결과를 다시 쓰고 이어서 진행한다. 실행마다 새 단계를 최소 1개는 하므로 반복하면 반드시 끝난다.
 - LLM 행동: 사용자에게 묻지 않고 `next_commands`를 그대로 다시 실행, `CONTINUE:`가 아닌 결과가 나올 때까지. 횟수는 LLM이 세지 않는다.

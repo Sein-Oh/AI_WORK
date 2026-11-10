@@ -44,8 +44,13 @@ class FakeRange:
         self.doc = doc
         self.Start = start
         self.End = end
-        self.Font = Props(doc.log, ("font", start, end))
-        self.ParagraphFormat = Props(doc.log, ("pf", start, end))
+        cache = getattr(doc, "format_cache", None)      # 켜면 같은 위치의 Range가 서식을 기억 (실제 Word처럼 다시 읽힘)
+        if cache is not None:
+            self.Font = cache.setdefault(("font", start, end), Props(doc.log, ("font", start, end)))
+            self.ParagraphFormat = cache.setdefault(("pf", start, end), Props(doc.log, ("pf", start, end)))
+        else:
+            self.Font = Props(doc.log, ("font", start, end))
+            self.ParagraphFormat = Props(doc.log, ("pf", start, end))
         live = getattr(doc, "live_ranges", None)
         if live is not None:
             live.add(self)
@@ -87,11 +92,13 @@ class FakeRange:
 
     @property
     def Style(self):
-        return None
+        return getattr(self.doc, "styles_at", {}).get(self.Start)
 
     @Style.setter
     def Style(self, value):
         self.doc.log.append(("style", self.doc.text[self.Start:self.End], value))
+        if hasattr(self.doc, "styles_at"):
+            self.doc.styles_at[self.Start] = value
 
     def Information(self, kind):
         if kind == 12:                                   # wdWithInTable
@@ -201,13 +208,57 @@ class FakeCellRange:
 class FakeGridTable:
     """칸 글만 있는 표 (word.py fill의 doc.Tables(i).Cell(r, c).Range.Text). None 칸은 병합으로 없는 칸."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, merged_rows=False):
         self.grid = [list(r) for r in rows]
+        self.merged_rows = merged_rows                       # 세로 병합: Rows(i) 접근이 COM 오류
+        self.Rows = _GridRows(self)
 
     def Cell(self, r, c):
         if not (1 <= r <= len(self.grid) and 1 <= c <= len(self.grid[r - 1])) or self.grid[r - 1][c - 1] is None:
             raise RuntimeError("요청한 구성원이 컬렉션에 없습니다")
         return type("Cell", (), {"Range": FakeCellRange(self.grid, r - 1, c - 1)})()
+
+
+class _GridRow:
+    def __init__(self, table, i):
+        self.table, self.i = table, i
+
+    @property
+    def Cells(self):
+        return type("Cells", (), {"Count": len(self.table.grid[self.i - 1])})()
+
+    @property
+    def Range(self):
+        row = self.table.grid[self.i - 1]
+        return type("R", (), {"Text": "".join((c or "") + "\r\x07" for c in row) + "\r\x07"})()
+
+    def Delete(self):
+        if self.table.merged_rows:
+            raise RuntimeError("세로로 병합된 칸이 있어 이 컬렉션의 개별 행에 액세스할 수 없습니다")
+        del self.table.grid[self.i - 1]
+
+
+class _GridRows:
+    def __init__(self, table):
+        self.table = table
+
+    @property
+    def Count(self):
+        return len(self.table.grid)
+
+    def __call__(self, i):
+        if self.table.merged_rows:
+            raise RuntimeError("세로로 병합된 칸이 있어 이 컬렉션의 개별 행에 액세스할 수 없습니다")
+        if not 1 <= i <= len(self.table.grid):
+            raise RuntimeError("요청한 구성원이 컬렉션에 없습니다")
+        return _GridRow(self.table, i)
+
+    def Add(self, BeforeRow=None):
+        """실제 Word처럼: BeforeRow 앞(없으면 끝)에 빈 행, 칸 수는 이웃 행과 같음."""
+        width = len(self.table.grid[-1]) if self.table.grid else 1
+        at = len(self.table.grid) if BeforeRow is None else BeforeRow.i - 1
+        self.table.grid.insert(at, [""] * width)
+        return _GridRow(self.table, at + 1)
 
 
 class FakeTables:
@@ -231,6 +282,32 @@ class FakeComment:
         self.Date = "2026-10-28 10:00"
         self.Done = done
         self.Ancestor = None
+        self.coll = None                                     # FakeComments (번호·답글·지우기)
+
+    @property
+    def Index(self):
+        return self.coll.items.index(self) + 1
+
+    @property
+    def Replies(self):
+        parent = self
+
+        class _Replies:
+            def Add(self, Range=None, Text=""):
+                if getattr(parent.coll.doc, "no_replies", False):        # Word 2010 이하: 답글 없음
+                    raise AttributeError("Replies")
+                r = FakeComment(parent.Scope, Text, author="나")
+                r.Ancestor, r.coll = parent, parent.coll
+                at = parent.coll.items.index(parent) + 1
+                while at < len(parent.coll.items) and parent.coll.items[at].Ancestor is parent:
+                    at += 1
+                parent.coll.items.insert(at, r)
+                return r
+        return _Replies()
+
+    def Delete(self):
+        """실제 Word처럼: 메모를 지우면 그 답글도 지워짐."""
+        self.coll.items = [c for c in self.coll.items if c is not self and c.Ancestor is not self]
 
 
 class FakeComments:
@@ -243,10 +320,13 @@ class FakeComments:
         return len(self.items)
 
     def __call__(self, i):
-        return self.items[i - 1]
+        c = self.items[i - 1]
+        c.coll = self
+        return c
 
     def Add(self, Range=None, Text=""):
         c = FakeComment(FakeRange(self.doc, Range.Start, Range.End), Text)
+        c.coll = self
         self.items.append(c)
         self.items.sort(key=lambda x: x.Scope.Start)      # Word도 문서 순서로 번호를 매김
         self.doc.Saved = False
@@ -344,3 +424,15 @@ class FakeWordDocument:
     @property
     def paragraphs(self):
         return [p for p in self.text.split("\r")]
+
+    @property
+    def Paragraphs(self):
+        """문서 단락 (Range는 단락 기호 포함). OutlineLevel은 heading_at(시작 위치 -> 수준)에 있으면 그 수준, 아니면 본문(10)."""
+        out, pos = [], 0
+        levels = getattr(self, "heading_at", {})
+        for part in self.text.split("\r")[:-1]:
+            para = FakeParagraph(FakeRange(self, pos, pos + len(part) + 1))
+            para.OutlineLevel = levels.get(part, 10)
+            out.append(para)
+            pos += len(part) + 1
+        return out

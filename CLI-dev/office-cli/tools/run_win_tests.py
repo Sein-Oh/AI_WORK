@@ -376,6 +376,14 @@ def _lookup_doc(kind, name):
     raise last
 
 
+def _open_doc(kind, name):
+    """열려 있으면 그 문서, 없으면 None (없는 이름은 _lookup_doc가 COM 오류 0x8002000B를 올림, 회사 PC 2026-11-10 L11·L12)."""
+    try:
+        return _lookup_doc(kind, name)
+    except Exception:
+        return None
+
+
 def _note_recovery(msg):
     log(f"[WARN] {msg}")
     if CTX is not None:
@@ -468,6 +476,56 @@ def pp_prs(name):
 
 def pp_app():
     return office_app("ppt")
+
+
+class WindowWatch:
+    """도구가 도는 동안 사용자 창(hwnd)이 닫히거나 숨거나 최소화되는지 0.05초마다 봄 (눈 확인 대신, 2026-11-10 사용자 요청).
+    with WindowWatch(hwnd) as w: ... 뒤 w.problems (빈 목록이면 그대로 있었음). hwnd를 모르면 w.known = False."""
+
+    def __init__(self, hwnd):
+        self.hwnd, self.problems, self.known = int(hwnd or 0), [], bool(hwnd)
+
+    def __enter__(self):
+        import threading
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+        if self.known:
+            self._t.start()
+        return self
+
+    def _run(self):
+        import win32gui
+        while not self._stop.is_set():
+            try:
+                if not win32gui.IsWindow(self.hwnd):
+                    self.problems.append("창이 닫힘")
+                elif not win32gui.IsWindowVisible(self.hwnd):
+                    self.problems.append("창이 숨겨짐")
+                elif win32gui.IsIconic(self.hwnd):
+                    self.problems.append("창이 최소화됨")
+            except Exception:
+                pass
+            if self.problems:
+                return
+            self._stop.wait(0.05)
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self.known:
+            self._t.join(2)
+        return False
+
+
+def app_hwnd(kind, name=None):
+    """사용자 창 hwnd (모르면 0)."""
+    try:
+        if kind == "excel":
+            return int(com_retry(lambda: xl_app().Hwnd))
+        if kind == "word":
+            return int(com_retry(lambda: wd_doc(name).ActiveWindow.Hwnd))
+        return int(com_retry(lambda: pp_app().HWND))
+    except Exception:
+        return 0
 
 
 def activate_xl(name, sheet=None):
@@ -657,36 +715,37 @@ def test_A(ctx):
         activate_xl("A.xlsx")
         before = process_count("EXCEL.EXE")
         b_mtime = mtime(ctx.path("B.xlsx"))
-        data, code, raw, err = run_cli("excel.py", "write", "--target", ctx.path("B.xlsx"), "--range", "C1", "--value", "닫힌파일쓰기")
+        with WindowWatch(app_hwnd("excel")) as watch:
+            data, code, raw, err = run_cli("excel.py", "write", "--target", ctx.path("B.xlsx"), "--range", "C1", "--value", "닫힌파일쓰기")
         after = _settled_count("EXCEL.EXE", before)
         still_open = bool(wait_for(lambda: xl_wb("A.xlsx"), timeout=5))
         visible = com_retry(lambda: bool(xl_app().Visible))
         ok = (data or {}).get("status") == "ok" and still_open and visible and after <= before \
             and mtime(ctx.path("B.xlsx")) != b_mtime
-        manual = ask(ctx, "실행 중 A.xlsx 창이 닫히거나 깜빡이지 않고 그대로 있었나요?")
-        record(ctx, "A2", "닫힌 엑셀 파일 쓰기 시 사용자 창 유지", ok and manual is not False,
-               f"EXCEL.EXE {before}->{after}, A.xlsx 열림={still_open}, Visible={visible}", data, code, raw, err)
+        record(ctx, "A2", "닫힌 엑셀 파일 쓰기 시 사용자 창 유지", ok and not watch.problems,
+               f"EXCEL.EXE {before}->{after}, A.xlsx 열림={still_open}, Visible={visible}, 실행 중 창={watch.problems or '그대로'}",
+               data, code, raw, err)
 
     def a3():
         before = process_count("WINWORD.EXE")
-        data, code, raw, err = run_cli("word.py", "write", "--target", ctx.path("B.docx"), "--text", "닫힌 문서에 추가")
+        with WindowWatch(app_hwnd("word", "A.docx")) as watch:
+            data, code, raw, err = run_cli("word.py", "write", "--target", ctx.path("B.docx"), "--text", "닫힌 문서에 추가")
         after = _settled_count("WINWORD.EXE", before)
         still_open = bool(wait_for(lambda: wd_doc("A.docx"), timeout=5))
         ok = (data or {}).get("status") == "ok" and still_open and after <= before
-        manual = ask(ctx, "실행 중 A.docx 창이 그대로 있었나요?")
-        record(ctx, "A3", "닫힌 워드 파일 쓰기 시 사용자 창 유지", ok and manual is not False,
-               f"WINWORD.EXE {before}->{after}, A.docx 열림={still_open}", data, code, raw, err)
+        record(ctx, "A3", "닫힌 워드 파일 쓰기 시 사용자 창 유지", ok and not watch.problems,
+               f"WINWORD.EXE {before}->{after}, A.docx 열림={still_open}, 실행 중 창={watch.problems or '그대로'}", data, code, raw, err)
 
     def a4():
         b_mtime = mtime(ctx.path("B.pptx"))
-        data, code, raw, err = run_cli("ppt.py", "info", "--target", ctx.path("B.pptx"))
+        with WindowWatch(app_hwnd("ppt")) as watch:
+            data, code, raw, err = run_cli("ppt.py", "info", "--target", ctx.path("B.pptx"))
         time.sleep(1)
         state = com_retry(lambda: pp_app().WindowState)
         unchanged = mtime(ctx.path("B.pptx")) == b_mtime
         ok = (data or {}).get("status") == "ok" and unchanged and state != 2
-        manual = ask(ctx, "PowerPoint 창이 최소화되거나 깜빡이지 않았나요?")
-        record(ctx, "A4", "닫힌 PPT 파일 조회 시 창 유지 / 파일 미변경", ok and manual is not False,
-               f"B.pptx 수정시각 불변={unchanged}, WindowState={state}", data, code, raw, err)
+        record(ctx, "A4", "닫힌 PPT 파일 조회 시 창 유지 / 파일 미변경", ok and not watch.problems,
+               f"B.pptx 수정시각 불변={unchanged}, WindowState={state}, 실행 중 창={watch.problems or '그대로'}", data, code, raw, err)
 
     def a5():
         c_path = ctx.path("C_second_instance.xlsx")
@@ -717,7 +776,13 @@ def test_A(ctx):
         wait_for(lambda: process_count("EXCEL.EXE") <= before, timeout=15)
         if not wait_for(lambda: _lookup_doc("excel", "A.xlsx"), timeout=5):
             log("[WARN] A5 정리 뒤 A.xlsx가 보이지 않습니다. 다음 그룹 시작 전에 다시 엽니다.")
-        ask(ctx, "두 번째 Excel 창(C_second_instance.xlsx)이 닫혔나요? 남아 있으면 저장하지 않고 직접 닫은 뒤 y를 누르세요")
+        left = _open_doc("excel", "C_second_instance.xlsx")         # 남았으면 러너가 저장하지 않고 닫음 (사람에게 묻지 않음)
+        if left is not None:
+            try:
+                com_retry(lambda: left.Close(SaveChanges=False))
+                log("    [정리] 남은 C_second_instance.xlsx를 저장하지 않고 닫음")
+            except Exception as e:
+                log(f"[WARN] C_second_instance.xlsx를 닫지 못함: {describe_com_error(e)}")
 
     run_test(ctx, "A1", "닫힌 엑셀 읽기", a1)
     run_test(ctx, "A2", "닫힌 엑셀 쓰기와 사용자 창", a2)
@@ -938,12 +1003,21 @@ def test_D(ctx):
         saved_after = com_retry(lambda: bool(doc.Saved))
         pdf = (data or {}).get("output_file", "")
         ok = (data or {}).get("status") == "ok" and os.path.exists(pdf) and footer_before == footer_after and saved_before == saved_after
-        manual = None
-        if ok and not ctx.auto:
-            os.startfile(pdf)
-            manual = ask(ctx, "방금 열린 PDF 아래쪽 가운데에 쪽 번호가 보이나요? (확인 후 PDF 창은 닫아 주세요)")
-        record(ctx, "D1", "PDF 쪽 번호, 원본 바닥글 미변경", ok and manual is not False,
-               f"원본 쪽번호 수 {footer_before}->{footer_after}, 저장상태 {saved_before}->{saved_after}", data, code, raw, err)
+        # 쪽 번호는 러너가 PDF 글자로 확인: 첫 쪽 아래 15% 안, 가운데쯤에 '1' (PDF 창을 열어 묻지 않음)
+        bottom = []
+        if ok:
+            try:
+                import fitz
+                with fitz.open(pdf) as pd_doc:
+                    page = pd_doc[0]
+                    w, h = page.rect.width, page.rect.height
+                    bottom = [x[4] for x in page.get_text("words")
+                              if x[1] > h * 0.85 and w * 0.3 < (x[0] + x[2]) / 2 < w * 0.7]
+            except Exception as e:
+                bottom = [f"PDF를 읽지 못함 {type(e).__name__}"]
+        record(ctx, "D1", "PDF 쪽 번호, 원본 바닥글 미변경", ok and "1" in bottom,
+               f"원본 쪽번호 수 {footer_before}->{footer_after}, 저장상태 {saved_before}->{saved_after}, 첫 쪽 아래 가운데 글={bottom[:5]}",
+               data, code, raw, err)
 
     def d2():
         doc = wd_doc("A.docx")
@@ -1176,9 +1250,20 @@ def test_F(ctx):
         n1 = com_retry(lambda: pp_prs("A.pptx").Slides.Count)
         cur = com_retry(lambda: pp_app().ActiveWindow.View.Slide.SlideIndex)
         ok = (data or {}).get("status") == "ok" and n1 == n0 + 1 and cur == n1
-        manual = ask(ctx, "새 슬라이드에 '추진 전략' 제목과 글머리 2줄이 보기 좋게 들어갔나요?")
-        record(ctx, "F3", "새 슬라이드 쓰기 + 고친 슬라이드로 이동", ok and manual is not False,
-               f"슬라이드 {n0}->{n1}, 화면={cur}", data, code, raw, err)
+        def texts():
+            sl = pp_prs("A.pptx").Slides(n1)
+            out = []
+            for i in range(1, sl.Shapes.Count + 1):
+                sh = sl.Shapes(i)
+                if sh.HasTextFrame and sh.TextFrame.HasText:
+                    out.append(str(sh.TextFrame.TextRange.Text))
+            return out
+        got = com_retry(texts) if n1 == n0 + 1 else []
+        title_ok = any(t.strip() == "추진 전략" for t in got)
+        lines = [ln.strip() for t in got for ln in t.replace("\r", "\n").split("\n") if ln.strip()]
+        bullets_ok = "안정성" in lines and "확장성" in lines
+        record(ctx, "F3", "새 슬라이드 쓰기(제목, 글머리 2줄) + 고친 슬라이드로 이동", ok and title_ok and bullets_ok,
+               f"슬라이드 {n0}->{n1}, 화면={cur}, 글={got}", data, code, raw, err)
 
     run_test(ctx, "F1", "clear 보호", f1)
     run_test(ctx, "F2", "clear --slide 2", f2)
@@ -1202,6 +1287,12 @@ def ol_drafts(subject):
         items = ol_ns().GetDefaultFolder(OL_DRAFTS).Items
         return sum(1 for i in range(1, items.Count + 1) if str(items.Item(i).Subject or "") == subject)
     return com_retry(count)
+
+
+def ol_inspector_open(subject):
+    """제목이 subject인 작성 창(Inspector)이 열려 있는지."""
+    insp = win32com.client.Dispatch("Outlook.Application").Inspectors
+    return any(str(insp.Item(i).CurrentItem.Subject or "") == subject for i in range(1, insp.Count + 1))
 
 
 def ol_cleanup(subject):
@@ -1232,6 +1323,90 @@ def _ol_time(t):
     return f"{t.year:04d}-{t.month:02d}-{t.day:02d} {t.hour:02d}:{t.minute:02d}:{t.second:02d}"
 
 
+OUTLOOK_READY_WAIT = 120     # 초. Outlook이 받은 편지함을 읽을 수 있을 때까지 기다리는 상한
+
+
+def outlook_ready():
+    """Outlook을 화면에 띄우고 받은 편지함을 읽을 수 있을 때까지 기다림. (준비됨, 이유).
+    러너가 같은 프로세스에서 COM을 부르다 Outlook의 숨은 창(프로필·보안 확인)에서 멈추던 것 (회사 PC 2026-11-10 M1):
+    확인은 별도 프로세스에서 시간 상한을 두고 하고, 안 되면 M 그룹을 건너뜀."""
+    probe = ("import win32com.client as w; ns = w.Dispatch('Outlook.Application').GetNamespace('MAPI'); "
+             "print(ns.GetDefaultFolder(6).Items.Count)")
+    if not process_count("OUTLOOK.EXE"):
+        log("    [준비] Outlook이 꺼져 있어 화면에 띄웁니다 (받은 편지함이 뜰 때까지 기다림)")
+        subprocess.Popen(["cmd", "/c", "start", "", "outlook.exe"])
+    end = time.time() + OUTLOOK_READY_WAIT
+    why = "Outlook 프로세스가 뜨지 않음"
+    while time.time() < end:
+        if process_count("OUTLOOK.EXE"):
+            try:
+                out = subprocess.run([PY, "-c", probe], capture_output=True, text=True, timeout=30)
+                if out.returncode == 0 and out.stdout.strip().isdigit():
+                    return True, ""
+                why = (out.stderr.strip().splitlines() or ["받은 편지함을 읽지 못함"])[-1][:200]
+            except subprocess.TimeoutExpired:
+                why = "Outlook이 30초 안에 답하지 않음 (프로필 선택·보안 확인 창이 떠 있을 수 있음)"
+        time.sleep(3)
+    return False, why
+
+
+def _ol_windows():
+    """Outlook 프로세스의 보이는 최상위 창 {hwnd: (클래스, 제목)} (Outlook 창 클래스 rctrl_renwnd32로 프로세스를 찾음)."""
+    import win32gui
+    import win32process
+    found, pids = {}, set()
+
+    def each(h, _):
+        if win32gui.IsWindowVisible(h):
+            found[h] = (win32gui.GetClassName(h), win32gui.GetWindowText(h), win32process.GetWindowThreadProcessId(h)[1])
+        return True
+    win32gui.EnumWindows(each, None)
+    pids = {pid for cls, _t, pid in found.values() if cls == "rctrl_renwnd32"}
+    return {h: (cls, title) for h, (cls, title, pid) in found.items() if pid in pids}
+
+
+def ol_open_options():
+    """Outlook 옵션 창(모달 대화 상자)을 러너가 띄움. 띄운 창 hwnd 목록 (못 띄우면 빈 목록).
+    ExecuteMso는 대화 상자가 닫힐 때까지 돌아오지 않으므로 별도 스레드(자기 COM 아파트)에서 부름."""
+    import threading
+    before = set(_ol_windows())
+
+    def opener():
+        pythoncom.CoInitialize()
+        try:
+            app = win32com.client.Dispatch("Outlook.Application")
+            exp = app.ActiveExplorer()
+            if exp is None:
+                app.GetNamespace("MAPI").GetDefaultFolder(OL_INBOX).Display()
+                exp = app.ActiveExplorer()
+            exp.CommandBars.ExecuteMso("ApplicationOptionsDialog")
+        except Exception as e:
+            log(f"    [WARN] 옵션 창 띄우기 실패: {describe_com_error(e)}")
+        finally:
+            pythoncom.CoUninitialize()
+    threading.Thread(target=opener, daemon=True).start()
+    for _ in range(30):
+        time.sleep(0.5)
+        new = [h for h in _ol_windows() if h not in before]
+        if new:
+            time.sleep(1)                                   # 대화 상자가 다 그려지도록
+            return [h for h in _ol_windows() if h not in before]
+    return []
+
+
+def ol_close_windows(hwnds):
+    """러너가 띄운 창을 닫음 (WM_CLOSE = 취소와 같음, 옵션은 바뀌지 않음)."""
+    import win32con
+    import win32gui
+    for h in hwnds:
+        try:
+            if win32gui.IsWindow(h):
+                win32gui.PostMessage(h, win32con.WM_CLOSE, 0, 0)
+        except Exception:
+            pass
+    time.sleep(2)
+
+
 def test_G(ctx):
     me = ctx.args.self_email
 
@@ -1244,8 +1419,8 @@ def test_G(ctx):
         ok = ((data or {}).get("status") == "ok" and (data or {}).get("sent") is False and bool((data or {}).get("draft_id"))
               and "next_commands" not in (data or {}) and " send --id " in nxt.get("command", "")
               and nxt.get("destructive") is True)           # 1.4.75: 발송은 '묻지 말고'라고 해도 늘 물음
-        manual = ask(ctx, "메일 작성 창이 떴나요? (서명을 등록해 두었다면 본문 아래 서명도 보여야 합니다. "
-                          "창은 그대로 두세요. 답하면 러너가 닫고 초안도 지웁니다)")
+        # 작성 창이 떴는지는 러너가 Outlook의 열린 작성 창(Inspectors)에서 제목으로 확인 (질문 없음)
+        manual = com_retry(lambda: ol_inspector_open("[office-cli 테스트] 표시 전용"))
         ol_cleanup("[office-cli 테스트] 표시 전용")
         record(ctx, "G1", "기본 동작: 초안 저장·작성 창만 표시, 미발송, send 명령은 confirm_commands로", ok and manual is not False, "",
                data, code, raw, err)
@@ -1298,6 +1473,12 @@ def test_G(ctx):
                f"목록 {len(mails)}통, {first}번 읽기 같은 메일={same}, 대화 {d_thread.get('count')}통, 일정 {(data or {}).get('count')}개",
                data, code, raw, err)
 
+    ready, why = outlook_ready()
+    if not ready:
+        log(f"[WARN] Outlook이 준비되지 않아 G 그룹을 건너뜁니다: {why}")
+        for tid, title in (("G1", "표시 전용"), ("G2", "잘못된 수신자"), ("G3", "실제 발송"), ("G4", "메일 목록"), ("G5", "짧은 번호·대화·일정")):
+            record(ctx, tid, title, ENV_SKIP, f"Outlook 준비 안 됨: {why}")
+        return
     run_test(ctx, "G1", "표시 전용", g1)
     run_test(ctx, "G2", "잘못된 수신자", g2)
     run_test(ctx, "G3", "실제 발송", g3)
@@ -1317,9 +1498,20 @@ def test_H(ctx):
         data, code, raw, err = run_cli("excel.py", "chart", "--sheet", "사인", "--range", "A1:B101", "--type", "line",
                                        "--title", "사인 2주기")
         ok = (d1 or {}).get("status") == "ok" and (data or {}).get("status") == "ok" and (data or {}).get("chart_name") == "사인 2주기"
-        manual = ask(ctx, "엑셀 '사인' 시트에 사인 곡선 2주기 차트가 그려졌나요?")
-        record(ctx, "H1", "사인 2주기 그래프 (쓰기 2회)", ok and manual is not False,
-               f"chart_type={(data or {}).get('chart_type')}", data, code, raw, err)
+        def series():
+            ws = xl_wb("A.xlsx").Worksheets("사인")
+            ch = ws.ChartObjects("사인 2주기").Chart
+            sc = ch.SeriesCollection()
+            return [[float(v) for v in sc.Item(i).Values] for i in range(1, sc.Count + 1)]
+        try:
+            all_ys = com_retry(series)
+        except Exception:
+            all_ys = []
+        # x 열이 계열로 들어갔을 수도 있어 sin 계열(값이 -1~1)을 고름. 2주기면 0을 3~4번 지남 (끝 값 sin(4π)는 아주 작은 음수)
+        ys = next((v for v in all_ys if v and max(map(abs, v)) <= 1.0 + 1e-9), all_ys[0] if all_ys else [])
+        crossings = sum(1 for a, b in zip(ys, ys[1:]) if (a < 0) != (b < 0))
+        record(ctx, "H1", "사인 2주기 그래프 (쓰기 2회): 차트 값 100개, 0을 3번 안팎 지남", ok and len(ys) == 100 and 3 <= crossings <= 4,
+               f"chart_type={(data or {}).get('chart_type')}, 값 {len(ys)}개, 0 지남 {crossings}번", data, code, raw, err)
 
     def h2():
         data, code, raw, err = run_cli("office.py", "transfer", "--probe")
@@ -1334,9 +1526,15 @@ def test_H(ctx):
         pp_after = com_retry(lambda: pp_prs("A.pptx").Slides.Count)
         methods = {k: v.get("method") for k, v in ((data or {}).get("results") or {}).items()}
         ok = (data or {}).get("status") == "ok" and wd_after == wd_before + 1 and pp_after == pp_before + 1
-        manual = ask(ctx, "워드 문서 끝과 PPT 새 슬라이드에 사인 그래프 그림이 들어갔나요?")
-        record(ctx, "H3", "차트를 워드와 PPT에 그림으로", ok and manual is not False,
-               f"사용 방식={methods}, 워드 그림 {wd_before}->{wd_after}, PPT 슬라이드 {pp_before}->{pp_after}",
+        def pictures():
+            ws = wd_doc("A.docx").InlineShapes
+            last_word = int(ws(ws.Count).Type) if ws.Count else 0          # 3 = wdInlineShapePicture
+            sl = pp_prs("A.pptx").Slides(pp_prs("A.pptx").Slides.Count)
+            kinds = [int(sl.Shapes(i).Type) for i in range(1, sl.Shapes.Count + 1)]   # 13 = msoPicture
+            return last_word, kinds
+        last_word, kinds = com_retry(pictures) if ok else (0, [])
+        record(ctx, "H3", "차트를 워드와 PPT에 그림으로", ok and last_word == 3 and 13 in kinds,
+               f"사용 방식={methods}, 워드 그림 {wd_before}->{wd_after}(마지막 종류 {last_word}), PPT 슬라이드 {pp_before}->{pp_after}(도형 종류 {kinds})",
                data, code, raw, err)
 
     def h4():
@@ -2599,13 +2797,56 @@ def test_L(ctx):
         record(ctx, "L10", "C8 바닥글·슬라이드 번호가 있는 슬라이드에 쓴 글상자가 슬라이드 안", _verified(d) and inside,
                f"글상자(top, height)={boxes}, 슬라이드 높이={h}", d, c, r, e)
 
-    def l11():    # C9 제한된 보기 (눈 확인)
-        manual = ask(ctx, "인터넷에서 받은 xlsx 하나를 제한된 보기로 연 상태에서(편집 사용을 누르지 않음) "
-                          "'python excel.py write --range A1 --value x'를 실행하면 '편집 사용' 안내로 멈추나요? (다른 통합문서에 쓰이지 않아야 함)")
-        record(ctx, "L11", "C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않음", manual, "")
+    def l11():    # C9 제한된 보기: 러너가 '인터넷에서 받은 파일' 표시(Zone.Identifier)를 붙인 xlsx를 제한된 보기로 엶 (질문 없음)
+        # 폐쇄망이라 사람이 인터넷에서 파일을 받을 수 없음 (회사 PC 2026-11-10): 표시를 직접 붙이고 ProtectedViewWindows.Open
+        path = ctx.path("L_pv.xlsx")
+        marker = f"L제한 {tag}"
+        old = _open_doc("excel", "L_pv.xlsx")
+        if old is not None:
+            com_retry(lambda: old.Close(SaveChanges=False))
+        if os.path.exists(path):
+            os.remove(path)
+        wb = com_retry(lambda: xl_app().Workbooks.Add())
+        _save_workbook(wb, path)
+        com_retry(lambda: wb.Close(SaveChanges=False))
+        try:
+            with open(path + ":Zone.Identifier", "w", encoding="ascii") as f:      # NTFS 대체 스트림 (인터넷 영역 3)
+                f.write("[ZoneTransfer]\r\nZoneId=3\r\n")
+            pvw = com_retry(lambda: xl_app().ProtectedViewWindows.Open(path))
+            com_retry(lambda: pvw.Activate())
+        except Exception as e:
+            record(ctx, "L11", "C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않음", ENV_SKIP,
+                   f"제한된 보기로 열지 못함: {describe_com_error(e)}")
+            return
+        time.sleep(1)
+        d, c, r, e = run_cli("excel.py", "write", "--range", "A1", "--value", marker)
+
+        def leaked():
+            hits = []
+            for i in range(1, xl_app().Workbooks.Count + 1):
+                b = xl_app().Workbooks(i)
+                for k in range(1, b.Worksheets.Count + 1):
+                    if str(b.Worksheets(k).Range("A1").Value or "") == marker:
+                        hits.append(f"{b.Name}!{b.Worksheets(k).Name}")
+            return hits
+        hits = com_retry(leaked)
+        try:
+            com_retry(lambda: pvw.Close())
+        except Exception:
+            pass
+        text = json.dumps(d or {}, ensure_ascii=False)
+        record(ctx, "L11", "C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않고 '편집 사용' 안내",
+               (d or {}).get("status") == "error" and "편집 사용" in text and not hits,
+               f"다른 통합문서에 쓰인 곳 {hits or '없음'}", d, c, r, e)
 
     def l12():    # C10 열린 저장된 통합문서 undo
         path = ctx.path("L_undo.xlsx")
+        # 앞 실행이 남긴 같은 이름 파일을 먼저 지움: 있으면 엑셀이 '바꾸시겠습니까?'를 띄우고 러너가 멈춤 (회사 PC 2026-11-10 L12)
+        old = _open_doc("excel", "L_undo.xlsx")
+        if old is not None:
+            com_retry(lambda: old.Close(SaveChanges=False))
+        if os.path.exists(path):
+            os.remove(path)
         wb = com_retry(lambda: xl_app().Workbooks.Add())
         com_retry(lambda: wb.SaveAs(path))
         run_cli("excel.py", "write", "--target", path, "--range", "A1", "--value", f"L되돌림 {tag}")
@@ -2640,16 +2881,10 @@ def test_L(ctx):
         got = openpyxl.load_workbook(path).active.freeze_panes
         record(ctx, "L14", "C12(확인만) 닫힌 파일 freeze가 파일에 저장됨", _verified(d) and got == "A2", f"파일의 freeze_panes={got}", d, c, r, e)
 
-    def l15():    # C13 OneDrive (확인만)
-        manual = ask(ctx, "OneDrive/SharePoint에서 연 통합문서(주소가 https://...)에 excel.py write 후 office.py undo를 하면 "
-                          "저장 없이 닫히지 않고 되돌려지나요? (OneDrive 문서가 없으면 s)")
-        record(ctx, "L15", "C13(확인만) OneDrive 통합문서 undo", manual, "")
-
     for tid, title, fn in (("L1", "통화 열", l1), ("L2", "+/- 글", l2), ("L3", "수식 값", l3), ("L4", "표 위 앵커", l4),
                            ("L5", "번호 목록", l5), ("L6", "표 뒤 표", l6), ("L7", "그림 스타일", l7), ("L8", "목차", l8),
                            ("L9", "변경 추적", l9), ("L10", "바닥글 개체틀", l10), ("L11", "제한된 보기", l11),
-                           ("L12", "열린 문서 undo", l12), ("L13", "숨은 행 append", l13), ("L14", "닫힌 파일 freeze", l14),
-                           ("L15", "OneDrive", l15)):
+                           ("L12", "열린 문서 undo", l12), ("L13", "숨은 행 append", l13), ("L14", "닫힌 파일 freeze", l14)):
         run_test(ctx, tid, title, fn)
 
 
@@ -2683,17 +2918,32 @@ def test_M(ctx):
             a, b = items.GetFirst(), items.GetNext()
             if a is None or b is None:
                 return False
+            exp = app.ActiveExplorer()
+            if exp is None:
+                inbox.Display()
+                exp = app.ActiveExplorer()
+            exp.CurrentFolder = inbox
+            try:
+                exp.ClearSelection()
+                exp.AddToSelection(b)
+            except Exception:
+                # 대화 보기에서는 선택을 바꾸는 메서드가 거부됨 (회사 PC 2026-11-10 M2): 지금 선택된 메일을 기준으로,
+                # 창으로 열 메일은 그와 다른 메일
+                sel = exp.Selection
+                if not sel.Count:
+                    return False
+                b = sel.Item(1)
+                a = next((m for m in (items.GetFirst(), items.GetNext(), items.GetNext())
+                          if m is not None and str(m.EntryID) != str(b.EntryID)), None)
+                if a is None:
+                    return False
             a.Display()                                    # 메일 창(Inspector)
             state["inspector"] = app.Inspectors.Item(app.Inspectors.Count)
-            exp = app.ActiveExplorer() or inbox.GetExplorer()
-            exp.CurrentFolder = inbox
-            exp.ClearSelection()
-            exp.AddToSelection(b)
             exp.Activate()                                 # 목록 창을 맨 앞으로
             state.update(opened=str(a.EntryID), selected=str(b.EntryID), subject=str(b.Subject or ""))
             return True
         if not com_retry(prepare):
-            record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)", ENV_SKIP, "받은 편지함에 메일이 2통 미만")
+            record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)", ENV_SKIP, "받은 편지함 메일이 2통 미만이거나 (대화 보기에서) 선택된 메일이 없음")
             return
         time.sleep(1)
         d, c, r, e = run_cli("outlook.py", "current")
@@ -2718,13 +2968,21 @@ def test_M(ctx):
                _ok(d) and (d or {}).get("count", 0) >= 1, f"count={(d or {}).get('count')}", d, c, r, e)
 
     def m4():     # C17 대화 상자가 떠 있을 때: 사람은 대화 상자만 띄우고, 실행·판정·정리는 러너
+        # 러너가 옵션 창을 띄우고 닫음 (사람에게 묻지 않음, 2026-11-10 사용자 요청). 못 띄우면 사람에게 부탁
         subject = f"[office-cli 테스트] 대화 상자 {time.strftime('%H%M%S')}"
-        ready = ask(ctx, "Outlook에서 파일 > 옵션을 눌러 옵션 창을 띄워 두세요 (닫지 마세요). 띄웠나요?")
-        if ready is not True:
-            record(ctx, "M4", "C17 작성 창을 못 띄우면 초안 정보와 함께 UNVERIFIED", None, "옵션 창을 띄우지 않음")
-            return
+        dialog = ol_open_options()
+        if not dialog:
+            ready = ask(ctx, "러너가 옵션 창을 띄우지 못했습니다. Outlook에서 파일 > 옵션을 눌러 옵션 창을 띄워 두세요 (닫지 마세요). 띄웠나요?")
+            if ready is not True:
+                record(ctx, "M4", "C17 작성 창을 못 띄우면 초안 정보와 함께 UNVERIFIED", None, "옵션 창을 띄우지 못함")
+                return
+        else:
+            log(f"    [준비] 옵션 창을 띄움: {[_ol_windows().get(h) for h in dialog]}")
         d, c, r, e = run_cli("outlook.py", "new", "--to", "office-test@example.com", "--subject", subject, "--body", "대화 상자 시험")
-        ask(ctx, "이제 옵션 창을 닫아 주세요 (작성 창이 뜨면 그대로 두세요). 닫았나요?")
+        if dialog:
+            ol_close_windows(dialog)
+        else:
+            ask(ctx, "이제 옵션 창을 닫아 주세요 (작성 창이 뜨면 그대로 두세요). 닫았나요?")
         time.sleep(2)
         drafts = ol_drafts(subject)
         text = json.dumps(d or {}, ensure_ascii=False)
@@ -2775,13 +3033,216 @@ def test_M(ctx):
                _ok(d) and set(inline) <= set(marked),
                f"'{subject}': 본문 그림 첨부 번호 {inline}, 도구가 본문 그림으로 표시 {marked}", d, c, r, e)
 
-    for tid, title, fn in (("M1", "받은 시각", m1), ("M2", "맨 앞 창", m2), ("M3", "SMTP 보낸 사람", m3),
-                           ("M4", "대화 상자", m4), ("M5", "서명 로고", m5)):
+    ready, why = outlook_ready()
+    tests = (("M1", "받은 시각", m1), ("M2", "맨 앞 창", m2), ("M3", "SMTP 보낸 사람", m3),
+             ("M4", "대화 상자", m4), ("M5", "서명 로고", m5))
+    if not ready:
+        log(f"[WARN] Outlook이 준비되지 않아 M 그룹을 건너뜁니다: {why}. Outlook을 실행해 받은 편지함이 뜬 뒤 --only M으로 다시 실행하세요.")
+        for tid, title, _fn in tests:
+            record(ctx, tid, title, ENV_SKIP, f"Outlook 준비 안 됨: {why}")
+        return
+    for tid, title, fn in tests:
         run_test(ctx, tid, title, fn)
 
 
+# ---------------------------------------------------------------------------
+# N. 1.6.0 새 기능 (실제 Office, 질문 없음): 수식을 값으로, 저장, 중복, 워드 단락·표 행, PPT 도형 글, 일정, 메일 기간·첨부
+# ---------------------------------------------------------------------------
+def test_N(ctx):
+    tag = time.strftime("%H%M%S")
+
+    def n1():     # excel range --action values
+        activate_xl("A.xlsx", "Sheet1")
+        run_cli("excel.py", "write", "--sheet", "N_VAL", "--new-sheet", "--range", "A1", "--values", '[["a","b"],[2,3]]')
+        com_retry(lambda: setattr(xl_sheet("N_VAL").Range("C2"), "Formula", "=A2*B2"))
+        d0 = run_cli("excel.py", "range", "--sheet", "N_VAL", "--action", "values", "--range", "A1:C2", "--dry-run")[0] or {}
+        d, c, r, e = run_cli("excel.py", "range", "--sheet", "N_VAL", "--action", "values", "--range", "A1:C2")
+        got = com_retry(lambda: (bool(xl_sheet("N_VAL").Range("C2").HasFormula), xl_sheet("N_VAL").Range("C2").Value))
+        record(ctx, "N1", "수식을 값으로: 미리보기 1칸, 실행 뒤 수식 없고 값 6", d0.get("count") == 1 and _verified(d) and got == (False, 6.0),
+               f"미리보기 count={d0.get('count')}, C2 수식/값={got}", d, c, r, e)
+
+    def n2():     # excel save / save --save (새 통합문서에서: A.xlsx는 그대로)
+        p1, p2 = ctx.path("N_save.xlsx"), ctx.path("N_save2.xlsx")
+        for p in (p1, p2):
+            old = _open_doc("excel", os.path.basename(p))
+            if old is not None:
+                com_retry(lambda: old.Close(SaveChanges=False))
+            if os.path.exists(p):
+                os.remove(p)
+        wb = com_retry(lambda: xl_app().Workbooks.Add())
+        _save_workbook(wb, p1)
+        com_retry(lambda: setattr(wb.Worksheets(1).Range("A1"), "Value", f"N저장 {tag}"))
+        d1 = run_cli("excel.py", "save", "--target", "N_save.xlsx")[0] or {}
+        saved = com_retry(lambda: bool(wb.Saved))
+        d, c, r, e = run_cli("excel.py", "save", "--target", "N_save.xlsx", "--save", p2)
+        now = com_retry(lambda: str(wb.FullName))
+        try:
+            com_retry(lambda: wb.Close(SaveChanges=False))
+        except Exception:
+            pass
+        import openpyxl
+        val = openpyxl.load_workbook(p2).active["A1"].value if os.path.exists(p2) else None
+        record(ctx, "N2", "열린 통합문서 저장, 다른 이름으로 저장 (열린 문서가 새 파일)",
+               _verified(d1) and saved and _verified(d) and os.path.normcase(now) == os.path.normcase(p2) and val == f"N저장 {tag}",
+               f"저장={saved}, 지금 경로={now}, 새 파일 A1={val}", d, c, r, e)
+
+    def n3():     # excel duplicates (CSV, Office 없이)
+        p = ctx.path("N_dup.csv")
+        with open(p, "w", encoding="utf-8-sig") as f:
+            f.write("품번,규격\n0102,M3\n0102 ,m3\n102,M3\n")
+        d, c, r, e = run_cli("excel.py", "duplicates", "--target", p, "--columns", "품번,규격")
+        rows = [g.get("rows") for g in (d or {}).get("groups") or []]
+        record(ctx, "N3", "중복 행 찾기: 공백·대소문자 무시, 앞자리 0은 다른 값", _verified(d) and rows == [[2, 3]], f"묶음={rows}", d, c, r, e)
+
+    def n4():     # word delete
+        doc = wd_doc("A.docx")
+        texts = [f"N지움 {k} {tag}" for k in ("가", "나", "다")]
+        for t_ in texts:
+            run_cli("word.py", "write", "--target", ctx.path("A.docx"), "--text", t_)
+        total = int((run_cli("word.py", "read", "--target", ctx.path("A.docx"))[0] or {}).get("units_total") or 1)
+        d_read = run_cli("word.py", "read", "--target", ctx.path("A.docx"), "--start", str(max(1, total - 5)))[0] or {}
+        nos = {p.get("text"): p.get("no") for p in d_read.get("paragraphs") or []}
+        no = nos.get(texts[1])
+        if not no:
+            record(ctx, "N4", "워드 단락 지우기", None, "지울 단락 번호를 읽지 못함 (문서가 길어 잘렸을 수 있음)")
+            return
+        d, c, r, e = run_cli("word.py", "delete", "--target", ctx.path("A.docx"), "--paragraphs", str(no))
+        body = com_retry(lambda: str(doc.Content.Text))
+        record(ctx, "N4", "워드 단락 지우기: 가운데 단락만 사라짐", _verified(d) and texts[1] not in body and texts[0] in body and texts[2] in body,
+               f"단락 {no} 지움", d, c, r, e)
+
+    def n5():     # word table add-row / delete-row
+        doc = wd_doc("A.docx")
+
+        def make():
+            rng = doc.Content
+            rng.InsertParagraphAfter()
+            end = doc.Content.End - 1
+            tb = doc.Tables.Add(doc.Range(end, end), 2, 2)
+            tb.Cell(1, 1).Range.Text, tb.Cell(1, 2).Range.Text = "항목", "값"
+            tb.Cell(2, 1).Range.Text, tb.Cell(2, 2).Range.Text = "가", "1"
+            return int(doc.Tables.Count)
+        n = com_retry(make)
+        d1 = run_cli("word.py", "table", "--target", ctx.path("A.docx"), "--table", str(n), "--action", "add-row", "--row", "1",
+                     "--values", f"N행 {tag}; 9")[0] or {}
+        mid = com_retry(lambda: str(doc.Tables(n).Cell(2, 1).Range.Text).rstrip("\r\x07"))
+        d, c, r, e = run_cli("word.py", "table", "--target", ctx.path("A.docx"), "--table", str(n), "--action", "delete-row", "--row", "3")
+        rows = com_retry(lambda: int(doc.Tables(n).Rows.Count))
+        record(ctx, "N5", "워드 표 행 넣기(1행 뒤)·지우기(3행)", _verified(d1) and mid == f"N행 {tag}" and _verified(d) and rows == 2,
+               f"넣은 행 첫 칸={mid!r}, 지운 뒤 행 수={rows}", d, c, r, e)
+
+    def n6():     # ppt write --shape
+        prs = pp_prs("A.pptx")
+
+        def make():
+            sl = prs.Slides.Add(prs.Slides.Count + 1, 2)            # ppLayoutText: 제목 + 본문 개체 틀
+            body = sl.Shapes(2)
+            body.TextFrame.TextRange.Text = "기존 항목"
+            return int(sl.SlideIndex), str(body.Name)
+        no, name = com_retry(make)
+        d0 = run_cli("ppt.py", "write", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name, "--text", f"새 항목 {tag}")[0] or {}
+        n_before = com_retry(lambda: int(prs.Slides(no).Shapes.Count))
+        d, c, r, e = run_cli("ppt.py", "write", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name,
+                             "--text", f"- 새 항목 {tag}\n- 둘째", "--overwrite")
+        got = com_retry(lambda: str(prs.Slides(no).Shapes(name).TextFrame.TextRange.Text))
+        n_after = com_retry(lambda: int(prs.Slides(no).Shapes.Count))
+        record(ctx, "N6", "PPT 도형 글 바꾸기: 글이 있으면 먼저 확인, --overwrite로 바꾸고 새 글상자 없음",
+               (d0 or {}).get("status") == "error" and _verified(d) and got.replace("\r", "|") == f"새 항목 {tag}|둘째" and n_after == n_before,
+               f"도형 '{name}' 글={got!r}, 도형 수 {n_before}->{n_after}", d, c, r, e)
+
+    def n7():     # outlook event (만든 뒤 지움)
+        import datetime as _d
+        day = (_d.date.today() + _d.timedelta(days=1)).isoformat()
+        subject = f"[office-cli 테스트] 일정 {tag}"
+        d, c, r, e = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30", "--location", "시험")
+        again = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30")[0] or {}
+
+        def find():
+            items = ol_ns().GetDefaultFolder(9).Items
+            hits = [it for it in items.Restrict(f"[Start] >= '{day} 00:00'") if str(it.Subject or "") == subject]
+            out = [(_ol_time(h.Start), _ol_time(h.End), str(h.Location or "")) for h in hits]
+            for h in hits:
+                h.Delete()                                              # 러너가 만든 일정은 지움
+            return out
+        found = com_retry(find)
+        record(ctx, "N7", "일정 만들기: 다시 읽어 확인, 두 번 실행해도 하나 (확인 뒤 러너가 지움)",
+               _verified(d) and again.get("created") is False and found == [(f"{day} 23:00:00", f"{day} 23:30:00", "시험")],
+               f"Outlook에서 찾은 일정={found}", d, c, r, e)
+
+    def n8():     # outlook list --until / --with-attachments
+        import datetime as _d
+        until = (_d.date.today() - _d.timedelta(days=1)).isoformat()
+        d1 = run_cli("outlook.py", "list", "--until", until, "--limit", "5")[0] or {}
+        late = [m.get("received") for m in d1.get("mails") or [] if str(m.get("received", ""))[:10] > until]
+        d, c, r, e = run_cli("outlook.py", "list", "--with-attachments", "--limit", "5")
+        none = [m.get("subject") for m in (d or {}).get("mails") or [] if not m.get("attachments")]
+        record(ctx, "N8", "메일 --until(그날까지만), --with-attachments(첨부 있는 메일만)", _ok(d1) and not late and _ok(d) and not none,
+               f"--until {until}: {d1.get('count')}통, 넘은 메일 {late}; 첨부 없는데 나온 메일 {none}", d, c, r, e)
+
+    def n9():     # ppt shape (옮기기·크기)
+        prs = pp_prs("A.pptx")
+
+        def make():
+            sl = prs.Slides.Add(prs.Slides.Count + 1, 12)           # ppLayoutBlank
+            box = sl.Shapes.AddTextbox(1, 40, 40, 200, 50)
+            box.TextFrame.TextRange.Text = f"N옮김 {tag}"
+            return int(sl.SlideIndex), str(box.Name)
+        no, name = com_retry(make)
+        d, c, r, e = run_cli("ppt.py", "shape", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name,
+                             "--left", "120", "--top", "150", "--width", "300")
+        got = com_retry(lambda: tuple(round(float(getattr(prs.Slides(no).Shapes(name), k))) for k in ("Left", "Top", "Width")))
+        out = run_cli("ppt.py", "shape", "--target", ctx.path("A.pptx"), "--slide", str(no), "--shape", name, "--left", "5000")[0] or {}
+        record(ctx, "N9", "PPT 도형 옮기기·크기, 슬라이드 밖이면 거절", _verified(d) and got == (120, 150, 300) and out.get("status") == "error",
+               f"위치·너비={got}, 밖으로={out.get('status')}", d, c, r, e)
+
+    def n10():    # word comment reply / delete
+        doc = wd_doc("A.docx")
+        anchor = f"N메모 {tag}"
+        run_cli("word.py", "write", "--target", ctx.path("A.docx"), "--text", anchor)
+        run_cli("word.py", "comment", "--target", ctx.path("A.docx"), "--action", "add", "--anchor", anchor, "--text", "확인 바람")
+        n = com_retry(lambda: next(i for i in range(int(doc.Comments.Count), 0, -1)
+                                   if anchor in str(doc.Comments(i).Scope.Text)))
+        before = com_retry(lambda: int(doc.Comments.Count))
+        d1 = run_cli("word.py", "comment", "--target", ctx.path("A.docx"), "--action", "reply", "--no", str(n), "--text", "확인함")[0] or {}
+        mid = com_retry(lambda: int(doc.Comments.Count))
+        d, c, r, e = run_cli("word.py", "comment", "--target", ctx.path("A.docx"), "--action", "delete", "--no", str(n))
+        after = com_retry(lambda: int(doc.Comments.Count))
+        record(ctx, "N10", "워드 메모 답글, 메모 지우기(답글도 함께)", _verified(d1) and mid == before + 1 and _verified(d) and after == before - 1,
+               f"메모 수 {before} -> 답글 뒤 {mid} -> 지운 뒤 {after}", d, c, r, e)
+
+    def n11():    # word format
+        doc = wd_doc("A.docx")
+        text = f"N서식 {tag}"
+        run_cli("word.py", "write", "--target", ctx.path("A.docx"), "--text", text)
+        total = int((run_cli("word.py", "read", "--target", ctx.path("A.docx"))[0] or {}).get("units_total") or 1)
+        d, c, r, e = run_cli("word.py", "format", "--target", ctx.path("A.docx"), "--paragraphs", str(total), "--align", "center",
+                             "--size", "14", "--bold")
+
+        def last():
+            p = doc.Paragraphs(doc.Paragraphs.Count)
+            while not str(p.Range.Text).strip():
+                p = p.Previous()
+            return str(p.Range.Text).strip(), int(p.Alignment), float(p.Range.Font.Size), bool(p.Range.Font.Bold)
+        got = com_retry(last)
+        record(ctx, "N11", "워드 단락 서식: 가운데, 14pt, 굵게", _verified(d) and got == (text, 1, 14.0, True), f"마지막 단락={got}", d, c, r, e)
+
+    for tid, title, fn in (("N1", "수식을 값으로", n1), ("N2", "저장", n2), ("N3", "중복", n3), ("N4", "단락 지우기", n4),
+                           ("N5", "표 행", n5), ("N6", "PPT 도형 글", n6), ("N9", "PPT 도형 옮기기", n9),
+                           ("N10", "메모 답글·지우기", n10), ("N11", "단락 서식", n11)):
+        run_test(ctx, tid, title, fn)
+    if ctx.args.skip_outlook:
+        return
+    ready, why = outlook_ready()
+    if not ready:
+        for tid, title in (("N7", "일정 만들기"), ("N8", "메일 기간·첨부")):
+            record(ctx, tid, title, ENV_SKIP, f"Outlook 준비 안 됨: {why}")
+        return
+    run_test(ctx, "N7", "일정 만들기", n7)
+    run_test(ctx, "N8", "메일 기간·첨부", n8)
+
+
 GROUPS = [("A", test_A), ("B", test_B), ("C", test_C), ("D", test_D), ("E", test_E), ("F", test_F), ("G", test_G),
-          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K), ("L", test_L), ("M", test_M)]
+          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K), ("L", test_L), ("M", test_M), ("N", test_N)]
 
 
 def agent_summary(problems, counts, path, err_path, shots, closed, unverified):

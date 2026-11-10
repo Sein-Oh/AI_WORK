@@ -690,7 +690,149 @@ def _resolve_slide(prs: Any, value: Optional[str], default_new: bool) -> Tuple[O
     return n, False
 
 
+def _new_text_lines(text: str) -> List[str]:
+    """새 글의 줄: '- '·'* '로 시작하면 그 표시는 빼고 (도형의 글머리 서식을 그대로 씀), **굵게**는 글만."""
+    out = []
+    for line in rt.unescape_newlines(text).replace("\r\n", "\n").split("\n"):
+        t = line.rstrip()
+        m = re.match(r"^\s*[-*]\s+(.*)$", t)
+        out.append(md.split_bold(m.group(1) if m else t)[0])
+    while out and not out[-1].strip():
+        out.pop()
+    return out
+
+
+def _find_shape(slide: Any, slide_no: int, name: str) -> Any:
+    """슬라이드의 도형을 이름으로 (대소문자·앞뒤 공백 무시). 없으면 글이 있는 도형 이름을 [후보]로."""
+    want = name.strip().casefold()
+    names = []
+    for k in range(1, slide.Shapes.Count + 1):
+        sh = slide.Shapes(k)
+        if str(sh.Name).strip().casefold() == want:
+            return sh
+        if _has(sh, "HasTextFrame"):
+            names.append(str(sh.Name))
+    raise rt.ambiguous(f"슬라이드 {slide_no}에 '{name}' 도형이 없습니다. 도형 이름은 ppt.py info --detail --slides {slide_no}의 "
+                       "shape_detail name입니다.", names, log_message="도형 이름을 찾지 못함", replace=name)
+
+
+def cmd_shape(args) -> Dict[str, Any]:
+    """기존 도형 옮기기·크기 (pt): --left --top --width --height 중 준 것만 바꿈. 슬라이드 밖으로 나가면 바꾸지 않고
+    슬라이드 안으로 맞춘 값을 [추천]. 그림처럼 비율이 잠긴 도형은 너비만 주면 높이가 따라감."""
+    want = {k: getattr(args, k) for k in ("left", "top", "width", "height") if getattr(args, k) is not None}
+    if not want:
+        raise rt.InputError("바꿀 위치·크기가 없습니다. --left, --top, --width, --height(pt) 중 하나 이상을 주세요. "
+                            f"지금 위치는 ppt.py info --detail --slides {args.slide}의 shape_detail입니다.")
+    if any(v < 0 for k, v in want.items()) or any(want.get(k, 1) <= 0 for k in ("width", "height")):
+        raise rt.InputError("위치는 0 이상, 너비·높이는 0보다 커야 합니다 (단위 pt).")
+    with off.open_target("ppt", args.target, readonly=bool(args.dry_run), focus=not args.no_focus, tool=TOOL, command="shape") as t:
+        prs = t.doc
+        if args.slide < 1 or args.slide > int(prs.Slides.Count):
+            raise rt.InputError(f"슬라이드 {args.slide}이(가) 없습니다 (1~{prs.Slides.Count}).")
+        sh = _find_shape(prs.Slides(args.slide), args.slide, args.shape)
+        sw, shh = float(prs.PageSetup.SlideWidth), float(prs.PageSetup.SlideHeight)
+        before = off.shape_box(sh)
+        box = {**before, **{k: float(v) for k, v in want.items()}}
+        locked = bool(getattr(sh, "LockAspectRatio", 0))
+        if locked and ("width" in want) != ("height" in want) and before["width"] and before["height"]:
+            ratio = before["height"] / before["width"]
+            if "width" in want:
+                box["height"] = round(box["width"] * ratio, 1)
+            else:
+                box["width"] = round(box["height"] / ratio, 1)
+        if off.outside_area(box, sw, shh):
+            fit = dict(box)
+            fit["width"], fit["height"] = min(fit["width"], sw), min(fit["height"], shh)
+            fit["left"] = max(0.0, min(fit["left"], sw - fit["width"]))
+            fit["top"] = max(0.0, min(fit["top"], shh - fit["height"]))
+            rec = {f"--{k}": round(fit[k], 1) for k in want}
+            raise rt.InputError(f"'{sh.Name}'이(가) 슬라이드({sw:g} x {shh:g}pt) 밖으로 나갑니다 (바꾸지 않음). "
+                                f"[추천] {rt.retry_command(rec)}")
+        info: Dict[str, Any] = {"slide": args.slide, "shape": str(sh.Name), "before": before, "after": {k: round(v, 1) for k, v in box.items()}}
+        desc = ", ".join(f"{k} {before[k]:g}->{box[k]:g}" for k in ("left", "top", "width", "height") if abs(before[k] - box[k]) > 0.05)
+        if not desc:
+            return rt.ok(TOOL, "shape", f"슬라이드 {args.slide} '{sh.Name}': 이미 그 위치·크기라 바꾸지 않았습니다",
+                         "VERIFIED: 바뀐 것 없음.", verified=True, target_resolved=t.resolved(), unchanged=True, **info)
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "shape", f"미리보기: 슬라이드 {args.slide} '{sh.Name}' {desc} (바꾸지 않음)", 1,
+                                     [f"'{sh.Name}': {desc}"], rt.dry_run_command(TOOL, f"'{sh.Name}' 옮기기·크기"),
+                                     target_resolved=t.resolved(), **info)
+        both = locked and "width" in want and "height" in want
+        if both:
+            sh.LockAspectRatio = 0                           # 너비·높이를 둘 다 주면 비율 잠금을 잠시 풂 (잠긴 채면 서로를 다시 바꿈)
+        try:
+            for k in ("width", "height", "left", "top"):      # 크기 먼저 (비율 잠금 도형이 위치를 다시 잡지 않게)
+                if k in want:
+                    setattr(sh, k.capitalize(), float(want[k]))
+        finally:
+            if both:
+                sh.LockAspectRatio = -1
+        t.set_focus(slide=args.slide)
+        got = off.shape_box(sh)
+        resolved = t.resolved()
+    bad = [f"{k} {got[k]:g}(준 값 {box[k]:g})" for k in want if abs(got[k] - box[k]) > 1.0]
+    preview = f"슬라이드 {args.slide} '{info['shape']}': {desc}"
+    info["after"] = got
+    if bad:
+        return rt.ok_unverified(TOOL, "shape", preview, ["다시 읽은 위치·크기가 다름: " + ", ".join(bad)], target_resolved=resolved, **info)
+    return rt.ok(TOOL, "shape", preview, "VERIFIED: 위치·크기를 다시 읽어 확인했습니다. 잘못 옮겼으면 office.py undo로 되돌립니다.",
+                 verified=True, target_resolved=resolved, **info)
+
+
+def _write_shape(args) -> Dict[str, Any]:
+    """write --slide N --shape <이름>: 그 도형(글상자·본문 개체 틀)의 글을 새 글로 바꿈. 새 글상자를 만들지 않음.
+    글이 있던 도형은 --overwrite가 있을 때만 (사용자 확인). 도형의 글꼴·글머리 서식은 그대로."""
+    if any([args.title, args.image, args.cards]):
+        raise rt.InputError("--shape는 그 도형의 글만 바꿉니다. --title·--image·--cards는 함께 쓰지 않습니다 (제목 개체 틀도 --shape로).")
+    if args.text is None and not args.file:
+        raise rt.InputError("--shape에 넣을 글이 없습니다. --text \"<새 글>\" 또는 --file \"<글.md>\"를 주세요.")
+    if not args.slide or not str(args.slide).isdigit():
+        raise rt.InputError("--shape에는 기존 슬라이드 번호가 필요합니다 (--slide 3). 도형 이름은 ppt.py info --detail --slides <번호>로 봅니다.")
+    text = rt.read_text_file(rt.resolve_input_path(args.file, "입력 파일")) if args.file else args.text
+    lines = _new_text_lines(text or "")
+    slide_no = int(args.slide)
+    with off.open_target("ppt", args.target, readonly=bool(args.dry_run), focus=not args.no_focus,
+                         tool=TOOL, command="write") as t:
+        prs = t.doc
+        if slide_no < 1 or slide_no > int(prs.Slides.Count):
+            raise rt.InputError(f"슬라이드 {slide_no}이(가) 없습니다 (1~{prs.Slides.Count}).")
+        sh = _find_shape(prs.Slides(slide_no), slide_no, args.shape)
+        if not _has(sh, "HasTextFrame"):
+            raise rt.InputError(f"'{sh.Name}'은(는) 글을 넣을 수 없는 도형입니다 (그림·표·차트). 글상자나 본문 개체 틀 이름을 쓰세요.")
+        old = str(sh.TextFrame.TextRange.Text).replace("\r", "\n").strip() if _has(sh.TextFrame, "HasText") else ""
+        new = "\n".join(lines)
+        info: Dict[str, Any] = {"slide": slide_no, "shape": str(sh.Name), "old_text": _preview_text(old, 200), "new_text": _preview_text(new, 200)}
+        if old == new:
+            t.set_focus(slide=slide_no, changed=False)
+            return rt.ok(TOOL, "write", f"슬라이드 {slide_no} '{sh.Name}': 이미 같은 글이라 바꾸지 않았습니다",
+                         "VERIFIED: 바뀐 것 없음. 다시 실행하지 마세요.", verified=True, target_resolved=t.resolved(), unchanged=True, **info)
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "write", f"미리보기: 슬라이드 {slide_no} '{sh.Name}'의 글을 바꿉니다: "
+                                     f"'{_preview_text(old, 40)}' -> '{_preview_text(new, 40)}' (바꾸지 않음)", 1,
+                                     [f"슬라이드 {slide_no} '{sh.Name}': {_preview_text(old, 60)} -> {_preview_text(new, 60)}"],
+                                     rt.dry_run_command(TOOL, f"슬라이드 {slide_no} '{sh.Name}' 글 바꾸기", overwrite=bool(old)),
+                                     target_resolved=t.resolved(), **info)
+        if old and not args.overwrite:
+            raise rt.UserDecisionError(
+                f"슬라이드 {slide_no} '{sh.Name}'에 글이 있습니다 ({_preview_text(old, 80)}). 바꾸면 이 글이 없어집니다. 아무것도 바꾸지 않았습니다.",
+                "지금 글과 새 글을 사용자에게 보여 주고, 바꾸라고 하면 같은 번호의 confirm_commands를 1번 실행하세요.",
+                candidates=[f"'{sh.Name}'의 글을 새 글로 바꾸기"], commands=[rt.retry_command({"--overwrite": True})],
+                log_message=f"슬라이드 {slide_no} 도형에 글이 있음 ({rt.DOC_OMITTED})", destructive=True)
+        sh.TextFrame.TextRange.Text = "\r".join(lines)
+        t.set_focus(slide=slide_no)
+        got = str(sh.TextFrame.TextRange.Text).replace("\r", "\n").strip()
+        resolved = t.resolved()
+    preview = f"슬라이드 {slide_no} '{info['shape']}'의 글을 바꿨습니다 ({len(lines)}줄)"
+    if got != new.strip():
+        return rt.ok_unverified(TOOL, "write", preview, [f"다시 읽은 글이 넣은 글과 다름 ({_preview_text(got, 60)})"],
+                                target_resolved=resolved, **info)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 도형의 글을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요. "
+                 "잘못 바꿨으면 office.py undo로 되돌립니다.", verified=True, target_resolved=resolved, **info)
+
+
 def cmd_write(args) -> Dict[str, Any]:
+    if args.shape:
+        return _write_shape(args)
     if args.dry_run:
         raise rt.dry_run_unsupported(TOOL, "write")
     if not any([args.title, args.text, args.file, args.image, args.cards]):
@@ -1445,7 +1587,8 @@ def build_cli():
     p.add_argument("--width", type=float, help="그림 너비(pt)")
     p.add_argument("--cards", help="카드 '제목:내용; 제목:내용' (1~5개)")
     p.add_argument("--theme", help=f"색 테마: {', '.join(off.THEMES)} (기본 navy)")
-    p.add_argument("--overwrite", action="store_true", help="기존 슬라이드의 제목을 바꾸기 (사용자가 원할 때만)")
+    p.add_argument("--shape", help="이 도형의 글을 --text로 바꾸기 (새 글상자를 만들지 않음). 이름은 info --detail의 name")
+    p.add_argument("--overwrite", action="store_true", help="기존 슬라이드의 제목·도형의 글을 바꾸기 (사용자가 원할 때만)")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)
@@ -1472,6 +1615,15 @@ def build_cli():
     p.add_argument("--append", action="store_true", help="기존 노트 뒤에 덧붙이기")
     p.add_argument("--overwrite", action="store_true", help="기존 노트를 지우고 바꾸기 (사용자가 원할 때만)")
 
+    p = sub.add_parser("shape", help="도형 옮기기·크기 (pt, info --detail의 위치를 보고)")
+    common(p, write=True)
+    p.add_argument("--slide", type=int, required=True, help="슬라이드 번호")
+    p.add_argument("--shape", required=True, help="도형 이름 (info --detail의 name)")
+    p.add_argument("--left", type=float, help="왼쪽 위치 (pt)")
+    p.add_argument("--top", type=float, help="위쪽 위치 (pt)")
+    p.add_argument("--width", type=float, help="너비 (pt, 비율이 잠긴 그림은 높이가 따라감)")
+    p.add_argument("--height", type=float, help="높이 (pt)")
+
     p = sub.add_parser("slide", help="슬라이드 관리")
     common(p, write=True)
     p.add_argument("--action", required=True, choices=["list", "add", "duplicate", "move", "delete", "clear"])
@@ -1483,7 +1635,7 @@ def build_cli():
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace,
-            "export": cmd_export, "slide": cmd_slide, "notes": cmd_notes}
+            "export": cmd_export, "slide": cmd_slide, "notes": cmd_notes, "shape": cmd_shape}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

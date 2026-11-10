@@ -4,7 +4,7 @@ description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.5.2"
+  version: "1.6.2"
   platform: windows
 ---
 
@@ -21,11 +21,11 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 목록 | `python "C:\CLI\office-cli\outlook.py" list [--unread] [--folder <sent/drafts/"폴더">] [--limit 20]` (기간 `--days 7`(오늘 포함) 또는 `--since 2026-11-01`) |
-| 검색 | `python "C:\CLI\office-cli\outlook.py" search --query <말> [--from <이름>] [--folder sent] [--where subject]` (기간 `--days 7`, `--since 2026-11-01`) |
+| 목록 | `python "C:\CLI\office-cli\outlook.py" list [--unread] [--with-attachments] [--folder <sent/drafts/"폴더">] [--limit 20]` (기간 `--days 7`(오늘 포함) 또는 `--since 2026-11-01 [--until 2026-11-05]`, 검색도 같음) |
+| 검색 | `python "C:\CLI\office-cli\outlook.py" search --query <말> [--from <이름>] [--folder sent] [--where subject]` |
 | 읽기 | `python "C:\CLI\office-cli\outlook.py" read --id 3` / 보고 있는 메일 `python "C:\CLI\office-cli\outlook.py" current` |
 | 대화 전체 | `python "C:\CLI\office-cli\outlook.py" thread --id 3` |
-| 일정 | `python "C:\CLI\office-cli\outlook.py" calendar --days 7` |
+| 일정 보기 / 만들기 | `python "C:\CLI\office-cli\outlook.py" calendar --days 7` / `python "C:\CLI\office-cli\outlook.py" event --subject "<제목>" --start "2026-11-12 14:00" [--minutes 60] [--location "<장소>"]` (종일은 `--start 2026-11-12`, 내 일정에만 저장. 회의 요청은 없음) |
 | 폴더 목록 | `python "C:\CLI\office-cli\outlook.py" folders` |
 | 첨부 목록 | `python "C:\CLI\office-cli\outlook.py" attachments --id <id>` |
 | 첨부 저장 | `python "C:\CLI\office-cli\outlook.py" attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>`) |
@@ -50,5 +50,6 @@ metadata:
 - "보내지 않은 초안이라 원본으로 쓸 수 없습니다"면 `next_commands[0]`으로 목록을 보고 원본 메일의 `id`로 다시 실행한다.
 - `reply`·`forward`·`attachments` 결과의 `original`(또는 `mail`)의 제목·보낸사람을 사용자에게 알린다.
 - `elevated_process`이면 다시 실행하지 않고 message를 그대로 알린다.
-- 목록·검색이 0건(`count: 0`)이면 "찾은 메일 없음"과 찾은 조건(폴더, 기간)을 알린다.
-- `recovered`와 `warnings`가 있으면 그대로 알린다.
+- 0건(`count: 0`)이면 "찾은 메일 없음"과 조건(폴더, 기간)을 알린다.
+- `recovered`와 `warnings`(겹치는 일정 등)가 있으면 그대로 알린다.
+- `error_type: not_supported`(도구에 없는 기능)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

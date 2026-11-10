@@ -30,6 +30,8 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text, quote_arg,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
     RESUME_MAX_AGE, option_retry, time_limit, final_version, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed,
+    MISSING_MARKS, unit_number_cells, UNIT_NUMBER_SHARE, add_sheet_argument, sheet_note, sheet_ignored_warning,
+    EVAL_WARNINGS, EVAL_ALLOWED, command_setting, resolve_target_models, name_list, drop_summary_rows, label_variant_note,
 )
 
 setup_console()
@@ -135,7 +137,13 @@ def run_safe_eval(df: pd.DataFrame, eval_str: str, target_cols: List[str]) -> Tu
     fixed = _eval_comma_fix(eval_str.strip())
     if fixed != eval_str.strip():
         raise InputError(f"--eval '{eval_str.strip()}'에서 식 사이를 ','로 나눴습니다. 식은 ';'로 나눕니다 "
-                         f"(','는 max(a, b) 같은 함수 안에서만). [추천] {option_retry(fixed, '--eval')}")
+                         f"(','는 clip(a, 0, 1) 같은 함수 안에서만). [추천] {option_retry(fixed, '--eval')}")
+    # B5: '^' is the power a light LLM writes ('온도^2'); Python reads it as XOR. One meaning: [추천] '**' (unless a column
+    # name has '^')
+    if "^" in eval_str and not any("^" in str(c) for c in df.columns):
+        fixed = eval_str.strip().replace("^", "**")
+        raise InputError(f"--eval '{eval_str.strip()}'의 '^'는 거듭제곱 기호가 아닙니다. 거듭제곱은 '**'로 씁니다 "
+                         f"(예: 온도**2). [추천] {option_retry(fixed, '--eval')}")
     expressions = [e.strip() for e in eval_str.split(";") if e.strip()]
     return apply_eval_expressions(df, expressions, target_cols=target_cols, strict=True)
 
@@ -334,6 +342,18 @@ def validate_and_sanitize_data(
             df_clean[col] = normalize_labels(df_clean[col])
 
     all_nan = [c for c in numeric_cols if df_clean[c].notna().sum() == 0]
+    for c in all_nan:
+        why = unit_number_reason(df[c])          # '85.2kg' cells (A6): the cause is the unit, not the header row
+        if why:
+            raise InputError(f"타겟 '{c}': {why}. 학습하지 않았습니다. 사용자에게 알려 데이터 파일을 고친 뒤 다시 실행하십시오.")
+    texts = [c for c in all_nan if normalize_labels(df[c]).notna().sum() > 0]
+    if texts and len(texts) == len(target_names):
+        # C2: every target cell is text (양품/불량): a class target, one meaning -> the same command with --task classification
+        cmd = command_setting("--task", TASK_CLASSIFICATION)
+        if cmd:
+            ex = ", ".join(repr(v) for v in normalize_labels(df[texts[0]]).dropna().unique()[:3])
+            raise InputError(f"타겟 {texts}의 값이 숫자가 아니라 글자(예: {ex})입니다. 글자 값은 분류(--task classification)로 "
+                             f"학습합니다. [추천] {cmd}")
     if all_nan:
         raise InputError(
             f"컬럼 {all_nan}에 숫자로 변환 가능한 값이 하나도 없습니다. 헤더/데이터 시작 행(--header-row, --data-row)을 확인하십시오."
@@ -351,6 +371,7 @@ def validate_and_sanitize_data(
 # ==============================================================================
 
 MAX_CATEGORIES = 200
+NUMERIC_WITH_MARKS_SHARE = 0.7    # numbers in this share of the filled cells + 1-2 kinds of text marks: a number column
 
 
 def column_kind(raw: pd.Series) -> str:
@@ -363,10 +384,20 @@ def column_kind(raw: pd.Series) -> str:
         return "datetime"  # Excel date cells arrive as datetime objects
     if n == 0 or pd.api.types.is_numeric_dtype(raw):
         return "numeric"
-    if coerce_numeric(raw).notna().sum() >= 0.9 * n:
+    nums = int(coerce_numeric(raw).notna().sum())
+    if nums >= 0.9 * n:
         return "numeric"
     if parse_datetime(raw).notna().sum() >= 0.9 * n:
         return "datetime"
+    # A5: a number column with a few text marks ('측정불가' in 4 of 30 cells, '재측정'): missing marks do not count, and
+    # one or two kinds of other text next to numbers in most cells are marks, not categories (the text cells are read
+    # as missing numbers, with the unparsed-number warning)
+    text = raw[non_null & coerce_numeric(raw).isna()].astype(str).str.strip()
+    marks = text[~text.isin(MISSING_MARKS)]
+    if nums and nums >= 0.9 * (nums + len(marks)):
+        return "numeric"
+    if nums >= NUMERIC_WITH_MARKS_SHARE * n and marks.nunique() <= 2:
+        return "numeric"
     return "categorical"
 
 
@@ -1149,14 +1180,24 @@ def train_and_benchmark_classifiers(
     if len(classes) < 2:
         raise InputError(f"타겟 '{target_name}'의 클래스가 {len(classes)}개뿐입니다. 분류에는 2개 이상의 클래스가 필요합니다.")
     rare = [c for c in classes if class_counts[c] < 2]
-    if rare:
+    # B4: the class count first (a continuous target has a class per row: the rare-class message listed them all)
+    numeric_labels = bool(coerce_numeric(pd.Series(classes, dtype=object)).notna().all())
+    if len(classes) > 50 or (numeric_labels and len(classes) > 10 and len(rare) * 2 > len(classes)):
+        cmd = command_text(drop={"--task": "", "--positive-class": ""}) if numeric_labels else None
         raise InputError(
-            f"타겟 '{target_name}'에 샘플이 1개뿐인 클래스 {rare}이(가) 있습니다. "
-            f"클래스별 최소 2개 이상 필요합니다. 해당 행을 제외하거나 클래스를 병합하십시오. [클래스별 건수]: {class_counts}"
+            f"타겟 '{target_name}'의 클래스가 {len(classes)}개로 너무 많습니다 (1건뿐인 클래스 {len(rare)}개"
+            + (", 값이 모두 숫자" if numeric_labels else "") + "). "
+            + (f"연속 수치는 회귀로 학습합니다. [추천] {cmd}" if cmd else
+               "연속형 수치라면 --task regression을 사용하십시오. 등급·종류라면 사용자에게 클래스를 묶을지 물으십시오.")
         )
-    if len(classes) > 50:
+    if rare:
+        alike = label_variant_note(y)       # 'ok' 1건 next to 'OK': a typo of the same class is the likely cause (결정 1-4)
         raise InputError(
-            f"타겟 '{target_name}'의 클래스가 {len(classes)}개로 너무 많습니다. 연속형 수치라면 --task regression을 사용하십시오."
+            f"타겟 '{target_name}'에 샘플이 1개뿐인 클래스 {name_list(rare)}이(가) 있습니다. "
+            f"클래스별 최소 2개 이상 필요합니다. 해당 행을 제외하거나 클래스를 병합하십시오. "
+            + (f"{alike} (대소문자·띄어쓰기만 다름: 같은 종류이면 사용자에게 알려 데이터 파일에서 같은 글자로 고치십시오). "
+               if alike else "") +
+            f"[클래스별 건수]: {name_list([f'{c}: {class_counts[c]}' for c in classes])}"
         )
     if len(y) < 10:
         raise InputError(f"타겟 '{target_name}'의 유효 학습 샘플 수가 너무 적습니다 ({len(y)}개). 최소 10개 이상 필요합니다.")
@@ -1487,6 +1528,12 @@ def verify_version_dir(version_dir: str, target_names: List[str], ledger_path: s
                 problems.append(f"model_{safe}.json의 version/target 불일치")
         except Exception as e:
             problems.append(f"model_{safe}.json 읽기 실패: {type(e).__name__}")
+    try:      # A1: the folder as prediction finds its models (a model file the prediction skips is no model)
+        found = sorted(str(m["target"]) for m in resolve_target_models(version_dir))
+        if found != sorted(target_names):
+            problems.append(f"예측이 찾는 모델 {found}이(가) 학습한 타겟 {sorted(target_names)}과(와) 다름")
+    except Exception as e:
+        problems.append(f"예측용 모델 찾기 실패: {type(e).__name__}")
     records = load_history_ledger(ledger_path)
     if not records or records[-1].get("version") != version:
         problems.append(f"history.jsonl 마지막 기록이 {version}이 아님")
@@ -1639,11 +1686,51 @@ def predict_one_command(model_ref: str, inputs: List[str]) -> Dict[str, Any]:
             "needs_input": True, "placeholder": "<값>"}
 
 
+# The improvement loop (2026-11-10 결정 1-1, A영역 C1: following next_commands[0] stacked 온도x온도x...x압력 and reported
+# the noise of 10 picks on the same 60 rows as the best model). The tool counts and stops; the LLM never does.
+IMPROVE_MIN_GAIN = 0.01   # a score gain below this (R2 / Macro-F1) is "not improved": folds alone move a score this much
+IMPROVE_PATIENCE = 2      # runs in a row without such a gain over the best before them: retraining is no longer offered
+IMPROVE_MAX_ROUNDS = 5    # runs of the same task and targets after the first: retraining is no longer offered at all
+
+
+def improve_stop_reason(scores: List[float]) -> Optional[str]:
+    """Why the tool stops offering retraining (improve_stopped), or None. scores: mean validation scores of the runs of
+    the same task and targets, oldest first, this run last."""
+    rounds = len(scores) - 1
+    if rounds >= IMPROVE_MAX_ROUNDS:
+        return (f"같은 타겟으로 {len(scores)}번 학습해 개선 반복 상한({IMPROVE_MAX_ROUNDS}회)에 닿아 재학습 제안을 멈춤 "
+                f"(최고 점수 {max(scores):.4f}). 지금까지의 최고 모델로 보고서를 만듭니다")
+    if len(scores) > IMPROVE_PATIENCE:
+        best = max(scores[:-IMPROVE_PATIENCE])
+        if max(scores[-IMPROVE_PATIENCE:]) - best < IMPROVE_MIN_GAIN - 1e-9:
+            return (f"최근 {IMPROVE_PATIENCE}번의 학습이 이전 최고 점수({best:.4f})보다 {IMPROVE_MIN_GAIN} 이상 나아지지 않아 "
+                    f"재학습 제안을 멈춤 ({IMPROVE_MIN_GAIN} 미만의 차이는 검증을 나누는 방법만 바꿔도 생기는 크기). "
+                    "지금까지의 최고 모델로 보고서를 만듭니다")
+    return None
+
+
+def cross_term_candidate(numeric_top: List[str], base_features: List[str], applied_evals: List[str],
+                         tried: Any) -> Optional[Tuple[str, str, str]]:
+    """(a, b, name) of the next interaction term to offer, or None: a product of two ORIGINAL numeric inputs among the
+    most important ones (never a derived feature: no 온도x온도x압력), each pair at most once (either order, and not a
+    pair an earlier run of the same experiment already tried: `tried` holds those names and the input names)."""
+    origs = [f for f in numeric_top if f in base_features]
+    used = set(tried) | {e.split("=", 1)[0].strip() for e in applied_evals}
+    for i in range(len(origs)):
+        for j in range(i + 1, len(origs)):
+            a, b = origs[i], origs[j]
+            name, other = f"{strip_unit(a)}x{strip_unit(b)}", f"{strip_unit(b)}x{strip_unit(a)}"
+            if name in used or other in used:
+                continue
+            return a, b, name
+    return None
+
+
 def build_next_commands(
     args: argparse.Namespace, raw_file: str, task: str, positive_class: Optional[str],
     feature_names: List[str], created_features: List[str], applied_evals: List[str],
     target_names: List[str], champion: Dict[str, Any], schema: Dict[str, Any],
-    mean_score: float, staging_dir: str, final_dir: str,
+    mean_score: float, staging_dir: str, final_dir: str, tried_evals: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Ready-to-run follow-up commands so a small LLM does not have to compose arguments:
@@ -1722,11 +1809,10 @@ def build_next_commands(
                      "needs_input": False})
 
     numeric_top = [r["feature"] for r in champion.get("top_features", []) if r["feature"] in schema["numeric"]]
-    if len(numeric_top) >= 2:
-        a, b = numeric_top[0], numeric_top[1]
-        new_name = f"{strip_unit(a)}x{strip_unit(b)}"
-        existing = set(feature_names) | {e.split("=", 1)[0].strip() for e in applied_evals}
-        if new_name not in existing and retrain_ok and quotable(*applied_evals, a, b):
+    pair = cross_term_candidate(numeric_top, base_features, applied_evals, set(tried_evals or ()) | set(feature_names))
+    if pair:
+        a, b, new_name = pair
+        if retrain_ok and quotable(*applied_evals, a, b):
             evals = applied_evals + [f"{new_name} = {a} * {b}"]
             parts = base + ["--features", features_arg(base_features, "all"), "--eval", quote_arg("; ".join(evals)),
                             "--tag", quote_arg("교차항_추가")]
@@ -1768,8 +1854,11 @@ INCLUDE_MARK = "포함"
 SNAPSHOT_ROW_COL = "원본행"              # model_dataset.csv: Excel row number of each row
 SNAPSHOT_EXCL_PREFIX = "학습제외_"       # model_dataset.csv: 1 = left out of training for that target
 OUTLIER_Z = 3.5               # robust z-score (median / MAD) above which a value is an outlier
+INPUT_OUTLIER_Z = 10.0        # ... of an input column: only a typo-level value (18.5 written 185) is left out; values
+                              # from OUTLIER_Z up to this are rare input conditions, kept and said (2026-11-10 결정 1-2)
 OUTLIER_MAX_FRACTION = 0.10   # more candidates than this is a skewed distribution, not outliers: exclude none
 MIN_TRAIN_ROWS = 10
+SMALL_TRAIN_ROWS = 20         # fewer training rows than this: the result warns that the score is unsteady (C8)
 
 
 def find_exclude_column(columns: List[Any]) -> Optional[str]:
@@ -1779,8 +1868,9 @@ def find_exclude_column(columns: List[Any]) -> Optional[str]:
     return None
 
 
-def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
-    """Robust outlier flags: |0.6745 (x - median) / MAD| > 3.5; IQR fences (3 x IQR) when MAD is 0."""
+def _outlier_flags(values: pd.Series, z: float = OUTLIER_Z) -> Tuple[np.ndarray, Optional[float]]:
+    """Robust outlier flags: |0.6745 (x - median) / MAD| > z (3.5); IQR fences (3 x IQR, scaled with z / 3.5) when MAD
+    is 0."""
     x = pd.to_numeric(values, errors="coerce").astype(float)
     ok = x.notna()
     if ok.sum() < MIN_TRAIN_ROWS:
@@ -1788,20 +1878,24 @@ def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
     med = float(x[ok].median())
     mad = float((x[ok] - med).abs().median())
     if mad > 0:
-        flag = ok & ((0.6745 * (x - med) / mad).abs() > OUTLIER_Z)
+        flag = ok & ((0.6745 * (x - med) / mad).abs() > z)
     else:
         q1, q3 = float(x[ok].quantile(0.25)), float(x[ok].quantile(0.75))
         iqr = q3 - q1
         if iqr <= 0:
             return np.zeros(len(x), dtype=bool), med
-        flag = ok & ((x < q1 - 3 * iqr) | (x > q3 + 3 * iqr))
+        k = 3 * z / OUTLIER_Z
+        flag = ok & ((x < q1 - k * iqr) | (x > q3 + k * iqr))
     return flag.to_numpy(dtype=bool), med
 
 
 def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, schema: Dict[str, Any],
                     created: List[str], task: str, target_name: str) -> Dict[str, Any]:
     """Rows to leave out of training for one target: the user's '제외' marks plus automatic outliers ('포함' keeps a row
-    in). Rows by a condition are marked in '제외' by ml_dataset.py exclude (2.9.85, was --exclude-where)."""
+    in). Rows by a condition are marked in '제외' by ml_dataset.py exclude (2.9.85, was --exclude-where).
+    Automatic: a target value beyond OUTLIER_Z, an input value beyond INPUT_OUTLIER_Z (a typo). An input value between
+    the two is a rare condition (the high dose of a designed experiment, the most informative row): kept in training,
+    returned in rare / rare_cols for the warning (2026-11-10 결정 1-2)."""
     n = len(y)
     valid = y.notna().to_numpy()
     text = (marks.map(_exclude_mark).to_numpy() if marks is not None else np.array([""] * n, dtype=object))
@@ -1814,9 +1908,14 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
     auto = np.zeros(n, dtype=bool)
     reasons = [""] * n
     auto_cols: List[List[str]] = [[] for _ in range(n)]
+    rare_flags: Dict[str, np.ndarray] = {}
     for col in check_cols:
         series = y if col == target_name else X[col]
-        flags, med = _outlier_flags(series.where(candidate))
+        flags, med = _outlier_flags(series.where(candidate), OUTLIER_Z if col == target_name else INPUT_OUTLIER_Z)
+        if col != target_name:
+            wide, _ = _outlier_flags(series.where(candidate))
+            if (wide & ~flags).any():
+                rare_flags[col] = wide & ~flags
         for i in np.flatnonzero(flags):
             auto[i] = True
             auto_cols[i].append(strip_unit(col))
@@ -1838,8 +1937,15 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
             in_cls = valid & (y_arr == cls)
             if (in_cls & ~manual & ~auto).sum() < 2:
                 auto[in_cls] = False   # never remove a class from training
+    rare = np.zeros(n, dtype=bool)
+    rare_cols: Dict[str, np.ndarray] = {}
+    for col, fl in rare_flags.items():
+        fl = fl & ~auto
+        if fl.any():
+            rare_cols[strip_unit(col)] = fl
+            rare |= fl
     return {"manual": manual, "auto": auto, "forced": forced, "mask": manual | auto, "text": text, "reasons": reasons, "auto_cols": auto_cols, "note": note,
-            "checked_columns": check_cols}
+            "checked_columns": check_cols, "rare": rare, "rare_cols": rare_cols}
 
 
 EXCLUDED_PREVIEW_MAX = 20    # excluded rows listed in the training JSON; excluded_rows.csv holds all
@@ -1885,6 +1991,8 @@ def score_with_excluded(task: str, pipe: Any, info: Dict[str, Any], oof_df: pd.D
         actual = np.concatenate([oof_df["actual"].astype(str).to_numpy(), y.iloc[idx].astype(str).to_numpy()])
         score = float(f1_score(actual, np.concatenate([oof_df["predicted"].astype(str).to_numpy(), pred]),
                                labels=info["classes"], average="macro", zero_division=0))
+    if not np.isfinite(score):     # B6: a prediction of an excluded row beyond float range (an input of 1e308): no score
+        return None, pred
     return round(score, 4), pred
 
 
@@ -1916,20 +2024,28 @@ def _semicolon_names(names: List[str], option: str, columns: List[str]) -> None:
 AUTO_MISSING_SHARE = 0.5       # more empty cells than this share of the rows: left out
 AUTO_TEXT_UNIQUE_SHARE = 0.5   # a text column with more kinds than this share of its filled cells ...
 AUTO_TEXT_MIN_KINDS = 10       # ... and at least this many kinds is a notes / memo column
-AUTO_LEAK_CORR = 0.98          # |correlation| with a numeric target from which a column counts as the target itself
+AUTO_LEAK_CORR = 0.999         # |correlation| with a numeric target from which a column is the target itself (a copy in
+                               # another unit or scale): left out. 0.98 left out true predictors (a calibration curve, A4)
+AUTO_SUSPECT_CORR = 0.98       # ... from this one up to AUTO_LEAK_CORR: kept as an input and said (suspect_inputs)
 AUTO_LEAK_NAME_CORR = 0.9      # the same name as a target in another unit ('온도(K)' for '온도(°C)') from this one
 AUTO_MIN_PAIRS = 8             # leakage is judged on at least this many rows holding both values
 AUTO_ID_MIN_ROWS = 5           # a column needs this many filled cells to be called an ID
+AUTO_ID_RELATED = 0.3          # a counting column (1, 2, 3, ...) related to a target this much is an input (경과일, 회차)
 AUTO_SHOWN = 50                # names of features_auto / excluded_inputs in the JSON (all in the version folder file)
 INPUT_KIND_LABEL = {"marker": "제외 표시 열", "empty": "빈 칸 많음", "constant": "상수", "leak": "타겟 누수",
-                    "id": "ID·일련번호", "text": "글자 종류 많음"}
+                    "id": "ID·일련번호", "text": "글자 종류 많음", "unit": "숫자에 단위가 붙음",
+                    "suspect_leak": "타겟과 상관 매우 높음", "suspect_id": "1씩 늘어나는 번호"}
+SUSPECT_KINDS = ("suspect_leak", "suspect_id")     # kept as inputs, said in suspect_inputs and warnings
 _ID_NAME_RE = re.compile(r"번호|순번|일련|로트|(?<![A-Za-z])(id|no|lot|serial)(?![A-Za-z])", re.I)
 
 
 def _leak_reason(col: str, num: Optional[pd.Series], labels: pd.Series, targets: List[str],
-                 tvals: Dict[str, Any], task: str) -> Optional[str]:
-    """Why `col` is a target written another way (None when it is not): nearly the same numbers as a numeric target
-    (another unit, a scaled copy, a value computed from it), or labels that match a class target one to one."""
+                 tvals: Dict[str, Any], task: str) -> Optional[Tuple[str, str]]:
+    """(kind, reason) when `col` is a target written another way, else None: 'leak' for nearly the same numbers as a
+    numeric target (another unit, a scaled copy: |r| >= AUTO_LEAK_CORR, or the same name in another unit) or labels that
+    match a class target one to one; 'suspect_leak' (kept as an input) for |r| from AUTO_SUSPECT_CORR (a strong true
+    predictor and a value computed from the target look alike: the user decides)."""
+    suspect: Optional[Tuple[str, str]] = None
     for t in targets:
         if task == TASK_REGRESSION:
             if num is None:
@@ -1940,10 +2056,16 @@ def _leak_reason(col: str, num: Optional[pd.Series], labels: pd.Series, targets:
                 continue
             r = float(np.corrcoef(x[ok], y[ok])[0, 1])
             same_name = strip_unit(col) == strip_unit(t)
+            others = [o for o in targets if o != t]
             if abs(r) >= AUTO_LEAK_CORR or (same_name and abs(r) >= AUTO_LEAK_NAME_CORR):
-                return (f"타겟 '{t}'과(와) " + ("이름이 같고 단위만 다르며 " if same_name else "")
-                        + f"값이 거의 같음 (상관계수 {r:.3f}): 타겟을 다른 단위로 적었거나 타겟에서 계산한 열로 보여 "
-                        "입력으로 쓰면 결과가 의미 없음")
+                return "leak", (f"타겟 '{t}'과(와) " + ("이름이 같고 단위만 다르며 " if same_name else "")
+                                + f"값이 거의 같음 (상관계수 {r:.4f}): 타겟을 다른 단위로 적었거나 타겟에서 계산한 열로 보여 "
+                                "입력으로 쓰면 결과가 의미 없음"
+                                + (f". 타겟 {', '.join(repr(o) for o in others)}도 이 열 없이 학습됨 (그 타겟에 쓰려면 "
+                                   "타겟을 나눠 학습)" if others else ""))
+            if abs(r) >= AUTO_SUSPECT_CORR and suspect is None:
+                suspect = ("suspect_leak", f"타겟 '{t}'과(와) 상관계수가 {r:.3f}로 매우 높음: 타겟에서 계산한 값이면 "
+                                           "빼야 하고, 실제로 타겟을 정하는 조건이면 그대로 씀")
         else:
             y = tvals[t]
             both = labels.notna().to_numpy() & y.notna().to_numpy()
@@ -1952,14 +2074,41 @@ def _leak_reason(col: str, num: Optional[pd.Series], labels: pd.Series, targets:
             pairs = pd.DataFrame({"x": labels[both].astype(str).to_numpy(), "y": y[both].astype(str).to_numpy()})
             if (pairs["y"].nunique() >= 2 and pairs.groupby("x")["y"].nunique().max() == 1
                     and pairs.groupby("y")["x"].nunique().max() == 1):
-                return (f"값이 타겟 '{t}'의 종류와 1:1로 맞음: 타겟을 다른 이름·코드로 적은 열로 보여 "
-                        "입력으로 쓰면 결과가 의미 없음")
-    return None
+                return "leak", (f"값이 타겟 '{t}'의 종류와 1:1로 맞음: 타겟을 다른 이름·코드로 적은 열로 보여 "
+                                "입력으로 쓰면 결과가 의미 없음")
+    return suspect
 
 
-def _id_reason(col: str, kind: str, num: Optional[pd.Series], vals: pd.Series, forced: bool) -> Optional[str]:
-    """Why `col` is an ID / serial number (None when it is not). Its filled cells are all different and it is a run
-    of whole numbers counting by 1 (1001, 1002, ...), a code with digits ('S-001') or named like one ('시료번호', 'ID').
+def _target_relation(num: Optional[pd.Series], targets: List[str], tvals: Dict[str, Any], task: str) -> float:
+    """How much a number column goes with the targets (0..1, the largest): |correlation| with a numeric target, or the
+    correlation ratio (eta) with a class target."""
+    if num is None:
+        return 0.0
+    x = num.to_numpy(dtype=float)
+    best = 0.0
+    for t in targets:
+        if task == TASK_REGRESSION:
+            y = tvals[t]
+            ok = np.isfinite(x) & np.isfinite(y)
+            if ok.sum() >= AUTO_MIN_PAIRS and np.std(x[ok]) > 0 and np.std(y[ok]) > 0:
+                best = max(best, abs(float(np.corrcoef(x[ok], y[ok])[0, 1])))
+        else:
+            lab = tvals[t].to_numpy()
+            ok = np.isfinite(x) & pd.notna(lab)
+            if ok.sum() < AUTO_MIN_PAIRS or np.std(x[ok]) == 0:
+                continue
+            g = pd.DataFrame({"x": x[ok], "y": lab[ok].astype(str)})
+            means = g.groupby("y")["x"].transform("mean").to_numpy()
+            total = float(((g["x"] - g["x"].mean()) ** 2).sum())
+            best = max(best, float(np.sqrt(((means - g["x"].mean()) ** 2).sum() / total)) if total else 0.0)
+    return best
+
+
+def _id_reason(col: str, kind: str, num: Optional[pd.Series], vals: pd.Series, forced: bool,
+               related: float = 0.0) -> Optional[Tuple[str, str]]:
+    """(kind, reason) when `col` is an ID / serial number, else None. Its filled cells are all different and it is a
+    code with digits ('S-001'), named like one ('시료번호', 'ID') or a run of whole numbers counting by 1 (1001, 1002, ...).
+    A counting column related to a target (|r| >= AUTO_ID_RELATED: 경과일, 회차, 사용 횟수) is an input: 'suspect_id' (A4).
     Measured numbers that are all different (175.3, 182.1, ...) are inputs."""
     n = len(vals)
     if kind == "datetime" or n < AUTO_ID_MIN_ROWS or int(vals.nunique()) != n:
@@ -1972,8 +2121,12 @@ def _id_reason(col: str, kind: str, num: Optional[pd.Series], vals: pd.Series, f
         whole = bool(np.all(np.isclose(v, np.round(v))))
         d = np.diff(np.sort(v))
         counting = whole and len(d) > 0 and float(np.median(d)) == 1.0 and (v.max() - v.min() + 1) <= 1.5 * len(v)
+        if counting and not named and related >= AUTO_ID_RELATED:
+            return "suspect_id", (f"1씩 늘어나는 번호 모양이지만 타겟과 관계가 있어(상관 {related:.2f}) 입력으로 둠: "
+                                  "경과일·회차처럼 결과를 좌우하는 값이면 그대로, 행 번호·ID면 빼야 함")
         if counting or named:
-            return "행마다 다른 번호 (ID·일련번호로 보임" + (", 1씩 늘어남" if counting else "") + "): 측정값이 아니라 입력으로 배울 것이 없음"
+            return "id", ("행마다 다른 번호 (ID·일련번호로 보임" + (", 1씩 늘어남" if counting else "")
+                          + "): 측정값이 아니라 입력으로 배울 것이 없음")
         return None
     if forced:
         return None
@@ -1982,16 +2135,54 @@ def _id_reason(col: str, kind: str, num: Optional[pd.Series], vals: pd.Series, f
                   & (text.str.len() <= 30)).mean())      # 'S-001', 'LOT2026-01' (a sentence with a number is a note)
     if code >= 0.9 or named:
         ex = ", ".join(repr(str(x)) for x in vals.astype(str).head(2))
-        return f"행마다 다른 코드 (ID·일련번호로 보임, 예: {ex}): 새 데이터의 값은 학습에 없는 값이라 배울 것이 없음"
+        return "id", f"행마다 다른 코드 (ID·일련번호로 보임, 예: {ex}): 새 데이터의 값은 학습에 없는 값이라 배울 것이 없음"
     return None
+
+
+def unit_number_reason(raw: pd.Series) -> Optional[str]:
+    """Why a text column is numbers with a unit after them ('187.3℃', '2.45 bar', A6), else None: UNIT_NUMBER_SHARE of
+    its filled cells are '<number><the same unit>' with AUTO_TEXT_MIN_KINDS kinds or more ('1호기'..'3호기' is a code)."""
+    filled, hits, unit, ex = unit_number_cells(raw)
+    if not hits or hits < UNIT_NUMBER_SHARE * filled or raw.astype(str).nunique() < AUTO_TEXT_MIN_KINDS:
+        return None
+    return (f"채운 칸 {filled}개 중 {hits}개가 숫자 뒤에 단위 '{unit}'를 붙인 글자라(예: {', '.join(repr(v) for v in ex)}) "
+            f"숫자로 읽지 못함. 엑셀에서 단위를 떼고 숫자만 남기면(단위는 머리글에, 예: '{strip_unit(str(raw.name))}({unit})') "
+            "숫자 입력으로 씀")
+
+
+def training_rows(df: pd.DataFrame, targets: List[str], task: str) -> np.ndarray:
+    """Rows the input diagnosis looks at (A2): the rows the models learn from, not the rows marked in '제외', the
+    totals / average rows (summary_rows) or the target outliers (a totals row made every number column look like a copy
+    of the target: correlation 0.999 from one point). All rows when too few are left."""
+    n = len(df)
+    keep = np.ones(n, dtype=bool)
+    excl = find_exclude_column(list(df.columns))
+    if excl:
+        marks = np.array([_exclude_mark(v) for v in df[excl].to_numpy()], dtype=object)
+        keep &= ~((marks != "") & (marks != INCLUDE_MARK))
+    summary = {int(r[0]) for r in df.attrs.get("summary_rows") or []}
+    src = list(df.attrs.get("source_rows") or [])
+    if summary and len(src) == n:
+        keep &= ~np.isin(np.asarray(src), list(summary))
+    if task == TASK_REGRESSION:
+        for t in targets:
+            y = coerce_numeric(df[t]).where(keep)
+            flags, _ = _outlier_flags(y)
+            if flags.any() and flags.sum() <= OUTLIER_MAX_FRACTION * max(int(y.notna().sum()), 1):
+                keep &= ~flags
+    return keep if keep.sum() >= max(AUTO_MIN_PAIRS, MIN_TRAIN_ROWS) else np.ones(n, dtype=bool)
 
 
 def diagnose_inputs(df: pd.DataFrame, columns: List[str], targets: List[str], task: str,
                     dtypes: Optional[str] = None) -> List[Dict[str, str]]:
     """[{column, kind, reason}] of the columns that should not be model inputs (kind: INPUT_KIND_LABEL keys), in
-    column order. Rules, the first that holds: more than AUTO_MISSING_SHARE empty, one value (constant), a target
-    written another way (_leak_reason), an ID (_id_reason), a text column whose kinds are nearly one per row
-    (notes). Columns forced with --dtypes keep their type; a forced text column is never called notes or a code."""
+    column order; kinds SUSPECT_KINDS are inputs to say. Rules, the first that holds: more than AUTO_MISSING_SHARE empty,
+    one value (constant), a target written another way (_leak_reason), an ID (_id_reason), numbers with a unit
+    (unit_number_reason), a text column whose kinds are nearly one per row (notes). Judged on the rows training uses
+    (training_rows). Columns forced with --dtypes keep their type; a forced text column is never called notes or a code."""
+    keep = training_rows(df, targets, task)
+    if not keep.all():
+        df = df[keep]
     forced = {p.split(":", 1)[0].strip(): p.split(":", 1)[1].strip()
               for p in str(dtypes or "").split(",") if ":" in p}
     kinds_of = {"str": "categorical", "datetime": "datetime", "float": "numeric", "int": "numeric"}
@@ -2024,22 +2215,30 @@ def diagnose_inputs(df: pd.DataFrame, columns: List[str], targets: List[str], ta
             "numeric" if pd.api.types.is_numeric_dtype(raw) and not pd.api.types.is_bool_dtype(raw) else column_kind(raw))
         num = coerce_numeric(raw) if kind == "numeric" else None
         leak = _leak_reason(c, num, labels, targets, tvals, task)
-        if leak:
-            add("leak", leak)
+        if leak and leak[0] == "leak":
+            add(*leak)
             continue
-        ident = _id_reason(c, kind, num, vals, c in forced)
-        if ident:
-            add("id", ident)
+        ident = _id_reason(c, kind, num, vals, c in forced, _target_relation(num, targets, tvals, task))
+        if ident and ident[0] == "id":
+            add(*ident)
             continue
-        if kind == "categorical" and c not in forced and (
-                kinds > MAX_CATEGORIES or (kinds >= AUTO_TEXT_MIN_KINDS and kinds > AUTO_TEXT_UNIQUE_SHARE * n)):
-            add("text", f"글자 값의 종류가 {kinds}개로 거의 행마다 달라 (비고·메모 같은 열) 입력으로 배울 수 없음")
+        if leak or ident:            # kept as an input, said (suspect_leak / suspect_id)
+            add(*(leak or ident))
+            continue
+        if kind == "categorical" and c not in forced:
+            unit = unit_number_reason(raw)
+            if unit:
+                add("unit", unit)
+                continue
+            if kinds > MAX_CATEGORIES or (kinds >= AUTO_TEXT_MIN_KINDS and kinds > AUTO_TEXT_UNIQUE_SHARE * n):
+                add("text", f"글자 값의 종류가 {kinds}개로 거의 행마다 달라 (비고·메모 같은 열) 입력으로 배울 수 없음")
     return out
 
 
 def auto_inputs(df_raw: pd.DataFrame, target_names: List[str], task: str,
-                dtypes: Optional[str]) -> Tuple[List[str], List[Dict[str, str]]]:
-    """A run without --features: (inputs, excluded [{column, kind, reason}]) over every column except the targets."""
+                dtypes: Optional[str]) -> Tuple[List[str], List[Dict[str, str]], List[Dict[str, str]]]:
+    """A run without --features: (inputs, excluded [{column, kind, reason}], suspects kept as inputs) over every column
+    except the targets."""
     columns = [str(c) for c in df_raw.columns]
     targets, _ = resolve_column_names(target_names, columns, "타겟(--targets)", layout=dict(df_raw.attrs))
     excl_col = find_exclude_column(columns)
@@ -2054,6 +2253,8 @@ def auto_inputs(df_raw: pd.DataFrame, target_names: List[str], task: str,
             continue
         cands.append(c)
     diag = diagnose_inputs(df_raw, cands, targets, task, dtypes)
+    suspects = [d for d in diag if d["kind"] in SUSPECT_KINDS]
+    diag = [d for d in diag if d["kind"] not in SUSPECT_KINDS]
     left = {d["column"] for d in diag}
     excluded += diag
     order = {c: i for i, c in enumerate(columns)}
@@ -2064,11 +2265,13 @@ def auto_inputs(df_raw: pd.DataFrame, target_names: List[str], task: str,
     if not features:
         raise InputError("입력(--features)을 주지 않아 도구가 입력 열을 고르려 했지만 쓸 수 있는 열이 없습니다 ("
                          + "; ".join(f"'{d['column']}': {INPUT_KIND_LABEL[d['kind']]}" for d in excluded[:10])
-                         + "). 입력으로 쓸 열을 사용자에게 묻고 --features로 주십시오.",
+                         + "). " + ("숫자에 단위가 붙은 열은 엑셀에서 단위를 떼고 숫자만 남긴 뒤 다시 실행하십시오. "
+                                    if any(d["kind"] == "unit" for d in excluded) else "")
+                         + "입력으로 쓸 열을 사용자에게 묻고 --features로 주십시오.",
                          extra={"excluded_inputs": [{"column": d["column"], "reason": d["reason"]} for d in excluded]})
     sys.stderr.write(f"[INFO] 입력 자동 선택: {len(features)}개 사용 ({', '.join(features[:10])}"
                      f"{' 등' if len(features) > 10 else ''}), {len(excluded)}개 제외\n")
-    return features, excluded
+    return features, excluded, suspects
 
 
 def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Dict[str, Any]:
@@ -2093,8 +2296,9 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     # --dtypes names resolved like --features / --targets, types checked (the canonical list is what the ledger keeps)
     dtypes = resolve_dtypes(group.get("dtypes"), [str(c) for c in df_raw.columns], dict(df_raw.attrs))
     excluded_inputs: List[Dict[str, str]] = []
+    auto_suspects: List[Dict[str, str]] = []
     if auto:
-        feature_names, excluded_inputs = auto_inputs(df_raw, target_names, task, dtypes)
+        feature_names, excluded_inputs, auto_suspects = auto_inputs(df_raw, target_names, task, dtypes)
     group_warnings_pre: List[str] = []
 
     # Fail-Fast Validation & Type Sanitization
@@ -2111,19 +2315,37 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
             raise InputError(f"'{excl_col}' 열을 빼면 학습할 피처(--features)가 없습니다.")
 
     # --features given: ID-like and target-leaking inputs are said (the user decides; nothing is removed)
-    suspect_inputs: List[Dict[str, str]] = []
+    # without --features: inputs kept although they look like a target copy or a counter (A4), said the same way
+    suspect_inputs: List[Dict[str, str]] = list(auto_suspects)
     if not auto:
         suspect_inputs = [d for d in diagnose_inputs(df_raw, [f for f in feature_names if f in df_raw.columns],
-                                                     target_names, task, dtypes) if d["kind"] in ("id", "leak")]
-        for d in suspect_inputs:
-            group_warnings_pre.append(f"입력 '{d['column']}': {d['reason']}. 입력으로 두었습니다 (빼려면 사용자에게 묻고 "
-                                      f"--features에서 빼고 다시 학습)")
-            sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
+                                                     target_names, task, dtypes)
+                          if d["kind"] in ("id", "leak") + SUSPECT_KINDS]
+    for d in suspect_inputs:
+        group_warnings_pre.append(f"입력 '{d['column']}': {d['reason']}. 입력으로 두었습니다 (빼려면 사용자에게 묻고 "
+                                  f"--features에서 빼고 다시 학습)")
+        sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
+    # inputs whose header cell is blank (read as col_<i>, A9): the name means nothing to the user
+    blank = [f for f in feature_names if f in (df_raw.attrs.get("blank_header_columns") or [])]
+    if blank:
+        group_warnings_pre.append(f"입력 {', '.join(repr(f) for f in blank)}은(는) 머리글 칸이 비어 있어 도구가 붙인 이름입니다. "
+                                  "데이터 파일의 머리글에 열 이름을 적으면 그 이름으로 학습합니다")
+    # numbers with a unit after them ('187.3℃') in a given input would train as a category of every value (A6)
+    if not auto:
+        forced = {p.split(":", 1)[0].strip() for p in str(dtypes or "").split(",") if ":" in p}
+        for f in feature_names:
+            if f in df_raw.columns and f not in forced and column_kind(df_raw[f]) == "categorical":
+                why = unit_number_reason(df_raw[f])
+                if why:
+                    raise InputError(f"피처 '{f}': {why}. 지금은 종류(범주) 값으로 학습하게 되어 학습하지 않았습니다. "
+                                     f"사용자에게 알려 데이터 파일을 고친 뒤 다시 실행하십시오. 숫자가 아닌 코드이면 "
+                                     f"--dtypes \"{f}:str\"를 붙이십시오.")
 
     # Feature Engineering (--eval): a string from the CLI or the canonical list stored in the ledger
     applied_evals: List[str] = []
     created_features: List[str] = []
     evals = group.get("eval")
+    EVAL_WARNINGS.clear()
     if evals:
         log_progress(15, "방탄 AST 파생변수 연산 중 (--eval)...")
         if isinstance(evals, str):
@@ -2139,14 +2361,19 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     feature_schema = infer_feature_schema(df_clean, feature_names, created_features, dtypes_arg=dtypes)
     X_all = prepare_features(df_clean, feature_schema)
     empty_numeric = [c for c in feature_schema["numeric"] if X_all[c].notna().sum() == 0]
+    empty_made = [c for c in empty_numeric if c in created_features]
+    if empty_made:      # B5: a formula with no value in any row (0으로 나누기), not a header problem
+        made = [e for e in applied_evals if e.split("=", 1)[0].strip() in empty_made]
+        raise InputError(f"--eval 파생변수 {empty_made}의 수식 결과가 모든 행에서 계산되지 않았습니다 ({'; '.join(made)}: 0으로 "
+                         "나누기, 무한대 등). 학습하지 않았습니다. 수식을 사용자에게 확인하십시오.")
     if empty_numeric:
         raise InputError(
             f"컬럼 {empty_numeric}에 숫자로 변환 가능한 값이 하나도 없습니다. 헤더/데이터 시작 행(--header-row, --data-row)을 확인하십시오."
         )
     for col in feature_schema["numeric"]:
         df_clean[col] = X_all[col]
-    group_warnings = group_warnings_pre + _decimal_comma_category_check(df_raw, feature_schema, feature_names,
-                                                                        created_features, dtypes)
+    group_warnings = group_warnings_pre + list(EVAL_WARNINGS) + _decimal_comma_category_check(
+        df_raw, feature_schema, feature_names, created_features, dtypes)
     # Columns the user must provide at prediction time: own raw features + sources of derived features
     sources = eval_source_columns(applied_evals, [str(c) for c in df_raw.columns])
     raw_required = [f for f in feature_names if f not in created_features]
@@ -2378,7 +2605,8 @@ def _prep_key(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]],
 
     h = hashlib.sha1()
     for part in (VERSION, sklearn.__version__, pd.__version__, np.__version__, task, args.header_row, args.unit_row,
-                 args.data_row, args.seed, dumps_json([{k: spec(v) for k, v in sorted(g.items())} for g in groups])):
+                 args.data_row, getattr(args, "sheet", None), args.seed,
+                 dumps_json([{k: spec(v) for k, v in sorted(g.items())} for g in groups])):
         h.update(str(part).encode("utf-8") + b"\x1e")
     with open(raw_file, "rb") as f:
         for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
@@ -2411,11 +2639,25 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
         file_path=raw_file,
         header_row=args.header_row,
         unit_row=args.unit_row,
-        data_row=args.data_row
+        data_row=args.data_row,
+        sheet=getattr(args, "sheet", None),
     )
+    # 2026-11-10 결정 1-3: rows written '합계' / '평균' / 'Total' ... are no measurements: left out of training before
+    # anything reads the data (not a category value '합계' of 라인, no row of the all-rows score); said in warnings
+    # (layout_warnings) and preview with the Excel rows
+    guess_targets: List[str] = []
+    for g in groups:
+        t = g["targets"]
+        try:
+            names = parse_feature_or_target_list(t, "targets") if isinstance(t, str) else list(t or [])
+        except InputError:
+            names = []
+        guess_targets += known_columns(names, [str(c) for c in df_raw.columns])
+    df_raw = drop_summary_rows(df_raw, guess_targets)
 
     prepared = [_prepare_group(df_raw, g, task) for g in groups]
     excl_col = find_exclude_column(list(df_raw.columns))
+    check_exclude_marks(df_raw, excl_col)
     source_rows = df_raw.attrs.get("source_rows") or list(range(1, len(df_raw) + 1))
     column_aliases: Dict[str, str] = {}
     target_group: Dict[str, Dict[str, Any]] = {}
@@ -2448,9 +2690,25 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
     corr_frame = _union_frame(corr_parts) if len(prepared) > 1 else pd.concat(corr_parts, axis=1)
     corr_full = corr_frame.corr().round(4)
 
-    # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader),
-    # totals / average rows (kept: the '제외' column is the user's decision)
+    # rows of the file that are not ordinary data rows: repeated header rows (dropped by the loader), totals / average
+    # rows (exact words left out above, wider words kept: the '제외' column is the user's decision), the unit row
+    # below the header (C영역 A4: not counted as a data row in the profile)
     train_warnings: List[str] = layout_warnings(df_raw, target_names)
+    unit_below = df_raw.attrs.get("unit_row_below")
+    if unit_below:
+        train_warnings.append(f"{unit_below}행은 머리글 아래의 단위 행으로 보여 데이터 행으로 세지 않았습니다 "
+                              "(학습에도 쓰지 않음, 행 수와 빈 칸 수에서 뺌)")
+    if task == TASK_CLASSIFICATION:      # 2026-11-10 결정 1-4: 'OK'/'ok' stay two classes, said (never merged)
+        for t in target_names:
+            note = label_variant_note(v for v, r in zip(target_group[t]["df"][t].to_numpy(), source_rows)
+                                      if r != unit_below)
+            if note:
+                train_warnings.append(f"타겟 '{t}': {note}. 서로 다른 종류로 학습했습니다 (도구는 합치지 않음). 같은 종류이면 "
+                                      "사용자에게 알려 데이터 파일에서 같은 글자로 고친 뒤 다시 학습하십시오")
+    ignored = sheet_ignored_warning(raw_file, getattr(args, "sheet", None))
+    if ignored:
+        train_warnings.append(ignored)
+    _, sheet_confirm = sheet_note(df_raw.attrs)     # [후보] other sheets with data: the commands of the same numbers
     for g in prepared:
         train_warnings.extend(w for w in g["warnings"] if w not in train_warnings)
     # numbers written with '%' ('64.4%' of an Excel CSV export) are read as 64.4: said, never silent; '%' cells
@@ -2467,15 +2725,30 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
     # text cells of numeric inputs in the rows a model learns from (median-imputed): not the unit row below the
     # header (target empty), rows marked in '제외' or rows without a target
     unparsed: Dict[str, Dict[str, Any]] = {}
-    unit_below = df_raw.attrs.get("unit_row_below")
     unit_pos = [i for i, r in enumerate(source_rows) if r == unit_below] if unit_below else []
+    data_rows = np.ones(len(df_raw), dtype=bool)
+    data_rows[unit_pos] = False
     targets: Dict[str, Dict[str, Any]] = {}
+    rare_rows: Dict[str, set] = {}
     for target_name in target_names:
         g = target_group[target_name]
         extra = {"positive_class": g["positive_class"]} if task == TASK_CLASSIFICATION else {}
         y_full = g["df"][target_name]
         plan = plan_exclusions(g["df"][excl_col] if excl_col else None, y_full, g["X"], g["schema"],
                                g["created"], task, target_name)
+        left = int((y_full.notna().to_numpy() & ~plan["manual"]).sum())
+        if left < MIN_TRAIN_ROWS and plan["manual"].any():     # B3: the '제외' marks are the cause, said so
+            raise InputError(f"'{excl_col}' 열에 표시한 {int(plan['manual'].sum())}행을 빼면 타겟 '{target_name}'의 학습 행이 "
+                             f"{left}행뿐입니다 (최소 {MIN_TRAIN_ROWS}행). {_mark_counts(df_raw, excl_col)} 빈 칸, 0, N, 아니오, "
+                             f"'-'는 표시가 아닙니다. 사용자에게 알려 뺄 행에만 이유를 적고 나머지 칸은 비운 뒤 다시 실행하십시오.")
+        # A7: target cells that are text ('불량', '85.2 (재측정)') leave their rows out of training: said with the rows
+        t_rows: List[int] = []
+        t_ex: List[str] = []
+        if task == TASK_REGRESSION and target_name in df_raw.columns:
+            pos, t_ex = unparsed_number_cells(df_raw[target_name], data_rows & ~plan["manual"])
+            t_rows = [source_rows[i] if i < len(source_rows) else i + 1 for i in pos]
+        targets_text = {"rows": t_rows, "examples": t_ex,
+                        "missing": int((~y_full.notna().to_numpy() & data_rows).sum()) - len(t_rows)}
         trained = np.array(y_full.notna(), dtype=bool) & ~np.asarray(plan["mask"], dtype=bool)
         trained[unit_pos] = False
         for c in _numeric_input_columns(g):
@@ -2486,14 +2759,82 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
                 entry["examples"] += [v for v in ex if v not in entry["examples"]]
         y_train = y_full.mask(plan["mask"])
         targets[target_name] = {"plan": plan, "key": _resume_key(task, target_name, g["X"], y_train, g["schema"],
-                                                                 args.seed, extra)}
+                                                                 args.seed, extra), "target_text": targets_text}
+        for col, fl in plan["rare_cols"].items():
+            rare_rows.setdefault(col, set()).update(int(source_rows[i]) if i < len(source_rows) else i + 1
+                                                    for i in np.flatnonzero(fl))
+    # 2026-11-10 결정 1-2: input values far from the others but below the typo level stay in training, said apart from
+    # the target outliers (warnings and preview)
+    rare_brief = ""
+    if rare_rows:
+        every = sorted(set().union(*rare_rows.values()))
+        cols = sorted(rare_rows, key=lambda c: min(rare_rows[c]))
+        w = (f"드문 입력 조건 {len(every)}행: " + ", ".join(
+            f"{c} {len(rare_rows[c])}행({_row_numbers(sorted(rare_rows[c]))}행)" for c in cols[:5])
+            + (f" 외 {len(cols) - 5}개 열" if len(cols) > 5 else "")
+            + ". 다른 행과 값이 많이 다르지만 이상치로 보지 않고 학습에 썼습니다 (일부러 넣은 실험 조건이면 그대로 두면 됨). "
+              "잘못 적은 값이면 사용자에게 알려 그 행의 '제외' 열에 이유를 적고 다시 실행하십시오")
+        train_warnings.append(w)
+        sys.stderr.write(f"[WARN] {w}\n")
+        rare_brief = f"드문 입력 조건 {len(every)}행(학습에 씀: {_row_numbers(every)}행)"
     return {"version": VERSION, "prepared": prepared, "target_names": target_names, "excl_col": excl_col,
             "source_rows": source_rows, "column_aliases": column_aliases, "feature_names": feature_names,
             "applied_evals": applied_evals, "feature_schema": feature_schema, "X_all": X_all, "df_clean": df_clean,
             "target_numeric": target_numeric, "corr_full": corr_full, "warnings": train_warnings,
-            "unparsed": unparsed, "targets": targets,
-            "raw_info": {"rows": int(len(df_raw)), "columns": int(df_raw.shape[1]),
-                         "decimal_comma": bool(df_raw.attrs.get("decimal_comma"))}}
+            "unparsed": unparsed, "targets": targets, "sheet_confirm": sheet_confirm, "rare_brief": rare_brief,
+            "raw_info": {"rows": int(len(df_raw)), "columns": int(df_raw.shape[1]), "data_rows": int(data_rows.sum()),
+                         "unit_pos": unit_pos, "unit_row_below": unit_below if unit_pos else None,
+                         "summary_dropped": [int(r[0]) for r in df_raw.attrs.get("summary_dropped") or []],
+                         "decimal_comma": bool(df_raw.attrs.get("decimal_comma")), "sheet": df_raw.attrs.get("sheet")}}
+
+
+def _row_numbers(rows: List[int], limit: int = 10) -> str:
+    """'62, 63, 64' (the first `limit` Excel rows, ' 외 N개' for the rest)."""
+    return ", ".join(str(r) for r in rows[:limit]) + (f" 외 {len(rows) - limit}개" if len(rows) > limit else "")
+
+
+def _mark_counts(df: pd.DataFrame, excl_col: Optional[str]) -> str:
+    """'제외 열의 값 종류: 'X' 28칸, 'O' 2칸.' (the marks, most first, at most 5 kinds)."""
+    if not excl_col:
+        return ""
+    marks = pd.Series([_exclude_mark(v) for v in df[excl_col].to_numpy()], dtype=object)
+    counts = marks[(marks != "") & (marks != INCLUDE_MARK)].value_counts()
+    return (f"'{excl_col}' 열의 표시 값: " + ", ".join(f"'{k}' {int(v)}칸" for k, v in counts.head(5).items())
+            + (" 등" if len(counts) > 5 else "") + ".")
+
+
+EXCLUDE_FILLED_SHARE = 0.9     # marks in this share of the rows: the column is a flag column, not reasons (B3)
+
+
+def check_exclude_marks(df: pd.DataFrame, excl_col: Optional[str]) -> None:
+    """STOP_RETRY when the '제외' column marks nearly every row (O/X or Y flags in every cell, B3): every mark leaves its
+    row out, so the training would learn from almost nothing. 0, FALSE, N, No, 아니오, '-' and N/A are no marks."""
+    if not excl_col or len(df) < MIN_TRAIN_ROWS:
+        return
+    marks = [_exclude_mark(v) for v in df[excl_col].to_numpy()]
+    marked = sum(1 for t in marks if t and t != INCLUDE_MARK)
+    if marked >= EXCLUDE_FILLED_SHARE * len(df):
+        raise InputError(f"'{excl_col}' 열이 {len(df)}행 중 {marked}행에 표시되어 있어 그 행을 모두 학습에서 빼게 됩니다. "
+                         f"{_mark_counts(df, excl_col)} 빈 칸, 0, N, 아니오, '-'만 표시가 아닙니다 (O/X·Y 같은 표시는 모두 뺄 "
+                         "행으로 읽음). 사용자에게 알려 뺄 행에만 이유를 적고 나머지 칸은 비운 뒤 다시 실행하십시오.")
+
+
+def _drop_empty_root(data_root: str, created: bool) -> None:
+    """A failed run that made <data>_ml_data removes it again when nothing but its lock file and empty folders is in it
+    (C6: a typo in --targets left an empty folder next to the data file). A folder that was there is never touched."""
+    if not created:
+        return
+    try:
+        for name in os.listdir(data_root):
+            path = os.path.join(data_root, name)
+            if os.path.isdir(path) and not os.listdir(path):
+                os.rmdir(path)
+        if os.listdir(data_root) == [".train.lock"]:
+            os.remove(os.path.join(data_root, ".train.lock"))
+        if not os.listdir(data_root):
+            os.rmdir(data_root)
+    except OSError:
+        pass
 
 
 def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2515,6 +2856,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
     ledger_path = os.path.join(data_root, "history.jsonl")
 
     # One training run per dataset at a time (OS lock is released automatically if the process dies)
+    created_root = not os.path.exists(data_root)     # C6: a failed first run leaves no empty <data>_ml_data folder
     run_lock = RunLock(data_root)
     run_lock.acquire()
 
@@ -2525,8 +2867,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         current_version = guard.setup()
     except BaseException:
         run_lock.release()
+        _drop_empty_root(data_root, created_root)
         raise
 
+    failed = False
     try:
         resume_dir = os.path.join(data_root, RESUME_DIR)
         resume_used: List[str] = []
@@ -2624,6 +2968,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
             all_score, excl_pred = score_with_excluded(task, champion_pipe, champion_info, oof_df,
                                                        g["X"], y_full, plan["mask"])
+            if all_score is None and plan["mask"].any():
+                train_warnings.append(f"타겟 '{target_name}': 학습에서 뺀 행의 예측이 숫자 범위를 넘어 '제외 행 포함' 점수를 "
+                                      "계산하지 못했습니다 (뺀 행의 입력 값이 아주 큼). 뺀 행의 값을 확인하십시오")
+                sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
             excl_info: Dict[str, Any] = {
                 "column": excl_col,
                 "manual": int(plan["manual"].sum()),
@@ -2674,6 +3022,32 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 }
 
         mean_val_score = float(np.mean(all_champion_scores))
+
+        # A7: how many rows each target learned from (preview), the target cells read as no number (warnings), and a
+        # caution for a small training (C8)
+        rows_brief_parts: List[str] = []
+        for t in target_names:
+            n_used = int(target_benchmarks[t]["sample_count"])
+            tt = P["targets"][t].get("target_text") or {}
+            if tt.get("rows"):
+                ex = ", ".join(repr(v) for v in tt["examples"][:3])
+                rows_txt = ", ".join(str(r) for r in tt["rows"][:10]) + (f" 외 {len(tt['rows']) - 10}개" if len(tt["rows"]) > 10 else "")
+                train_warnings.append(f"타겟 '{t}'의 {len(tt['rows'])}칸({ex})은 숫자로 읽지 못해 그 행({rows_txt}행)을 학습에서 "
+                                      "뺐습니다. 값을 고치거나 그 행을 '제외' 열에 표시하세요")
+                sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
+            if n_used < SMALL_TRAIN_ROWS:
+                train_warnings.append(f"타겟 '{t}'의 학습 행이 {n_used}행뿐이라 검증 점수가 몇 행에 따라 크게 달라질 수 있습니다 "
+                                      f"({SMALL_TRAIN_ROWS}행 이상이면 믿을 만해짐)")
+                sys.stderr.write(f"[WARN] {train_warnings[-1]}\n")
+            detail = [f"{k} {v}행" for k, v in (("타겟 빈 칸", tt.get("missing", 0)), ("타겟 글자", len(tt.get("rows") or [])),
+                                                  ("학습 제외", int(exclusions[t]["mask"].sum()))) if v]
+            rows_brief_parts.append(("" if len(target_names) == 1 else f"{t} ") + f"{n_used}행"
+                                    + (f"(데이터 {raw_info.get('data_rows', raw_info['rows'])}행 중 " + ", ".join(detail) + " 뺌)"
+                                       if detail else ""))
+        rows_brief = "학습 " + ", ".join(rows_brief_parts)
+        if raw_info.get("summary_dropped"):       # 결정 1-3: the totals / average rows left out, with their Excel rows
+            rows_brief += (f" | 합계·평균 행 {len(raw_info['summary_dropped'])}행 학습 제외"
+                           f"({_row_numbers(raw_info['summary_dropped'])}행)")
 
         # Check Previous History (same task only) for Delta
         log_progress(85, f"이전 이력 대조 및 성능 변화(Delta {metric_label}) 산출 중...")
@@ -2873,12 +3247,15 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # 4. Append Record to history.jsonl (SSOT)
         duration_sec = round(time.time() - start_time, 2)
         # Missing feature cells (incl. unparseable strings) that SimpleImputer(median) fills
-        missing_imputed = int(X_all.isna().sum().sum())
+        # (not the unit row below the header: its '°C', 'bar' cells are no missing data, C영역 A4)
+        data_mask = np.ones(len(X_all), dtype=bool)
+        data_mask[[i for i in raw_info.get("unit_pos") or [] if i < len(X_all)]] = False
+        missing_imputed = int(X_all[data_mask].isna().sum().sum())
         prescription = recommendations[0] if recommendations else "모델 경쟁 학습 및 평가 완료"
 
         owner = input_column_owner(feature_schema)
         feature_missing: Dict[str, int] = {}
-        for col, n_miss in X_all.isna().sum().items():
+        for col, n_miss in X_all[data_mask].isna().sum().items():
             raw_col = owner.get(col, col)
             feature_missing[raw_col] = max(feature_missing.get(raw_col, 0), int(n_miss))
         for w in _unparsed_number_warnings(unparsed):
@@ -2886,13 +3263,17 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             sys.stderr.write(f"[WARN] {w}\n")
         data_profile = {
             "source_file": os.path.basename(raw_file),
-            "rows_loaded": raw_info["rows"],
+            "rows_loaded": raw_info.get("data_rows", raw_info["rows"]),
             "columns_loaded": raw_info["columns"],
             "rows_used": {t: int(target_benchmarks[t]["sample_count"]) for t in target_names},
-            "target_missing_rows": {t: int(target_group[t]["df"][t].isna().sum()) for t in target_names},
+            "target_missing_rows": {t: int(target_group[t]["df"][t].isna().to_numpy()[data_mask].sum())
+                                    for t in target_names},
             "feature_missing": feature_missing,
             "missing_imputed_cells": missing_imputed,
-            "layout": {"header_row": args.header_row, "unit_row": args.unit_row, "data_row": args.data_row},
+            **({"unit_row_below": raw_info["unit_row_below"]} if raw_info.get("unit_row_below") else {}),
+            **({"summary_rows_excluded": raw_info["summary_dropped"]} if raw_info.get("summary_dropped") else {}),
+            "layout": {"header_row": args.header_row, "unit_row": args.unit_row, "data_row": args.data_row,
+                       "sheet": raw_info.get("sheet")},
         }
 
         run_tag = getattr(args, "tag", None) or ""
@@ -2903,7 +3284,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             "description": project_desc,
             "duration_sec": duration_sec,
             "data_hygiene": {
-                "total_rows": len(df_clean),
+                "total_rows": data_profile["rows_loaded"],
                 "total_features": len(feature_names),
                 "missing_imputed": missing_imputed
             },
@@ -2948,18 +3329,18 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 feature_names=g0["features"], created_features=g0["created"], applied_evals=g0["evals"],
                 target_names=target_names, champion={**prim_champ, "weak_features": weak_feats}, schema=g0["schema"],
                 mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir,
+                tried_evals=[str(e).split("=", 1)[0].strip() for h in same_task for e in h.get("derived_evals") or []],
             )
-        # 2.9.71: the tool counts the improvement rounds (AGENTS.md "사용법 단순성" 5): when the last IMPROVE_ROUNDS
-        # runs of this task and targets (this one included) did not beat the best score before them, it stops offering
-        # more retraining and offers the report instead
+        # the tool counts the improvement rounds (AGENTS.md "사용법 단순성" 5, 2026-11-10 결정 1-1): IMPROVE_PATIENCE runs
+        # without a gain of IMPROVE_MIN_GAIN, or IMPROVE_MAX_ROUNDS runs after the first, stop the retraining offers and
+        # offer the report instead (improve_stop_reason)
         improve_stopped = None
         if min_score < 0.90:
             scores = [float(h["mean_val_score"]) for h in history_records
                       if _same_experiment(h, task, target_names) and isinstance(h.get("mean_val_score"), (int, float))]
             scores.append(float(mean_val_score))
-            if len(scores) > IMPROVE_ROUNDS and max(scores[-IMPROVE_ROUNDS:]) <= max(scores[:-IMPROVE_ROUNDS]) + 1e-4:
-                improve_stopped = (f"최근 {IMPROVE_ROUNDS}번의 학습이 이전 최고 점수({max(scores[:-IMPROVE_ROUNDS]):.4f})를 넘지 못해 "
-                                   f"재학습 제안을 멈춤. 지금까지의 최고 모델로 보고서를 만듭니다")
+            improve_stopped = improve_stop_reason(scores)
+            if improve_stopped:
                 next_commands = [{"purpose": REPORT_PURPOSE[task], "needs_input": False,
                                   "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} --file {quote_arg(raw_file)}"}]
         history_record["next_commands"] = next_commands
@@ -3021,11 +3402,34 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         delta_txt = delta_score if delta_score == "base" else f"{delta_score:+.4f}"
         excl_brief = "; ".join(
             f"{t}: 학습 제외 {e['manual'] + e['auto']}행(직접 {e['manual']}, 자동 {e['auto']}), "
-            f"검증 {short}(제외 행 포함)={e['all_rows_score'] if e['all_rows_score'] is not None else '-'}"
+            f"검증 {short}(제외 행 포함)={e['all_rows_score'] if e['all_rows_score'] is not None else '계산 불가'}"
             for t, e in exclusion_summary.items() if e["manual"] or e["auto"])
+        # commands the user may choose (run only after a yes, AGENTS.md 사용법 단순성 2): another sheet (A3), the left-out
+        # ID / leak columns back as inputs (A4), classification for a 0/1 target (C2)
+        confirm: List[Dict[str, Any]] = list(P.get("sheet_confirm") or [])
+        if auto_groups:
+            back = [d["column"] for d in g0["excluded_inputs"] if d["kind"] in ("id", "leak")]
+            cmd = command_text(drop={"--features": ""})
+            with_back = [f for f in g0["features"] if f not in g0["created"]] + back
+            if back and cmd and not any('"' in c for c in with_back):
+                confirm.append({"purpose": f"뺀 열 {', '.join(repr(c) for c in back[:5])}도 입력으로 넣어 다시 학습 "
+                                           "(사용자가 원한 경우에만)",
+                                "command": f"{cmd} --features {quote_arg(','.join(with_back))}"})
+        if task == TASK_REGRESSION:
+            for t in target_names:
+                vals = target_group[t]["df"][t].dropna().unique()
+                if len(vals) == 2:
+                    cmd = command_setting("--task", TASK_CLASSIFICATION)
+                    two = ", ".join(f"{float(v):g}" for v in sorted(float(v) for v in vals))
+                    train_warnings.append(f"타겟 '{t}'의 값이 {two} 두 가지뿐입니다. 여부·등급이면 회귀가 "
+                                          "아니라 분류(--task classification)가 맞습니다. 사용자에게 물으십시오 (confirm_commands)")
+                    if cmd and not any(c["command"] == cmd for c in confirm):
+                        confirm.append({"purpose": "분류(--task classification)로 다시 학습 (사용자가 분류라고 한 경우에만)",
+                                        "command": cmd})
         preview = (
-            f"[{current_version} 완료 / {task}] 타겟: [{target_brief}] | "
+            f"[{current_version} 완료 / {task}] 타겟: [{target_brief}] | {rows_brief} | "
             + (f"{excl_brief} | " if excl_brief else "")
+            + (f"{P['rare_brief']} | " if P.get("rare_brief") else "")
             + (f"{auto_brief} | " if auto_brief else "") +
             f"평균 {metric_label}={mean_val_score:.4f} (변화: {delta_txt}) | "
             + (f"{top_brief} | " if top_brief else "") +
@@ -3046,6 +3450,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             + ("preview의 중요 입력(top_features, 전체 입력 대비 비중)을 알리세요. " if top_brief else "")
             + ("warnings(중복 행, 반복된 머리글 행, 합계 행 등)를 빠짐없이 알리세요. " if train_warnings else "") +
             (f"{improve_stopped} (improve_stopped를 알리세요). " if improve_stopped else "") +
+            ("confirm_commands는 사용자가 고르거나 '예'라고 한 경우에만 그 명령을 실행합니다. " if confirm else "") +
             "다음: 사용자가 원하면 next_commands[0]을 실행하거나 예측으로 넘어갑니다. "
             "needs_input=true인 명령의 자리표시자(<...>)만 사용자가 준 값(파일이면 경로)으로 바꾸고, 모르면 먼저 물으세요."
         )
@@ -3076,6 +3481,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         }
         if train_warnings:
             result["warnings"] = train_warnings
+        if confirm:
+            result["confirm_commands"] = confirm
         if exclusion_summary:
             result["exclusions"] = exclusion_summary
             if excluded_rows_file:
@@ -3100,14 +3507,21 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         # leaves no version folder and no ledger record: the finished targets wait in .resume_train (or a fallback
         # place) for the next run.
         guard.rollback(quiet=isinstance(exc, Unfinished))
+        failed = not isinstance(exc, Unfinished)
+        if failed:
+            step_end()          # the step ended with the error (run_cli would remove its mark too)
         raise
     finally:
         run_lock.release()
+        if failed:
+            _drop_empty_root(data_root, created_root)
 
 
 TASK_ORDER = [TASK_REGRESSION, TASK_CLASSIFICATION]
+# --task words a light LLM writes for the two tasks (one meaning each): [추천] the real word (AGENTS.md 판단 대행)
+TASK_SAME_MEANING = {w: TASK_CLASSIFICATION for w in ("clf", "class", "classify", "classifier", "cls", "분류", "categorical")}
+TASK_SAME_MEANING.update({w: TASK_REGRESSION for w in ("reg", "regress", "regressor", "회귀", "numeric")})
 AUTO_FEATURES_FILE = "features_auto.txt"   # vX/: the inputs a run without --features chose, one per line (usable as --features)
-IMPROVE_ROUNDS = 5   # training runs in a row without a new best before the tool stops offering retraining (2.9.71)
 REPORT_PURPOSE = {  # the report and the calculator use the latest training version (2.9.83); regression also makes the calculator
     TASK_REGRESSION: "방금 학습한 버전으로 ML 결과 보고서(Word)와 성능예측표(엑셀 계산기) 생성 (성능예측표 입력은 그 버전의 입력 전부, "
                      "제목은 학습 때 데이터 설명에서 자동으로 정함)",
@@ -3239,8 +3653,9 @@ def main():
                         help="--version으로 지정한 버전 폴더가 이미 있으면 교체 (사용자 확인 후에만 사용)")
     parser.add_argument("--dry-run", dest="dry_run", action="store_true",
                         help="학습하지 않고 만들 버전 폴더와 (--overwrite면) 바꿀 기존 폴더만 보여 줌 (confirm_commands에 실제 명령)")
-    parser.add_argument("--task", choices=[TASK_REGRESSION, TASK_CLASSIFICATION], default=None,
+    parser.add_argument("--task", default=None,
                         help="학습 유형: regression(기본값, 연속 수치 예측) 또는 classification(범주/라벨 예측)")
+    add_sheet_argument(parser)
     parser.add_argument("--positive-class", dest="positive_class",
                         help="이진 분류의 양성 클래스 (예: 불량). 지정 시 양성 F1이 최대가 되도록 판정 기준 확률을 자동 조정")
     parser.add_argument("--seed", type=int, default=42, help="재현용 난수 시드 (기본값: 42)")
@@ -3248,6 +3663,14 @@ def main():
 
     args = parser.parse_args()
 
+    if args.task is not None and args.task not in TASK_ORDER:
+        # C2: a word of the same meaning ('clf', '분류', 'reg') -> [추천] the full command with the real word; other words
+        # are listed (the user says which)
+        word = str(args.task).strip().lower()
+        real = word if word in TASK_ORDER else TASK_SAME_MEANING.get(word)
+        cmd = command_setting("--task", real) if real else None
+        parser.error(f"--task '{args.task}'은(는) 없는 값입니다. 쓸 수 있는 값: {', '.join(TASK_ORDER)}"
+                     + (f". 같은 뜻의 값으로 고친 명령: [추천] {cmd}\n" if cmd else ""))
     if args.dry_run and args.history:
         parser.error("--dry-run은 --features/--targets 학습에만 씁니다 (--history는 읽기만 함)")
     if args.history:

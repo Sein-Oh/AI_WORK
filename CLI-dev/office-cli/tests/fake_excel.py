@@ -312,6 +312,9 @@ class FakeRange:
         if isinstance(v, tuple):
             for i, row in enumerate(v):
                 for j, x in enumerate(row):
+                    if getattr(self.ws, "typing", False) and isinstance(x, str) and x.startswith("="):
+                        FakeRange(self.ws, [(r1 + i, c1 + j, r1 + i, c1 + j)]).Formula = x     # 실제 Excel: =로 시작하는 글은 수식
+                        continue
                     self.ws.set(r1 + i, c1 + j, _typed(self.ws, x))
         else:
             for r, c in self.cells():
@@ -794,6 +797,19 @@ class FakeExcelWorkbook:
 
     def SaveCopyAs(self, path):
         open(path, "wb").close()
+
+    def Save(self):
+        self.app.saves = getattr(self.app, "saves", 0) + 1
+        self.Saved = True
+
+    def SaveAs(self, path, fmt=None):
+        """실제 Excel처럼: 새 파일을 쓰고 열린 문서가 그 파일이 됨 (DisplayAlerts가 켜져 있고 파일이 있으면 확인 창 = 오류로 흉내)."""
+        import os
+        if os.path.exists(path) and self.app.DisplayAlerts:
+            raise Exception("SaveAs: '바꾸시겠습니까?' 창")
+        open(path, "wb").close()
+        self.FullName, self.Name, self.Saved = path, os.path.basename(path), True
+        self.app.saved_as = (path, fmt)
 
 
 class FakeXlApp:

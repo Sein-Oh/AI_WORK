@@ -2403,3 +2403,89 @@ def test_c11_append_does_not_overwrite_filtered_rows(xl, capsys):
     ws.hidden_rows = {4}
     code, out = run_excel(capsys, "write", "--range", "A1", "--append", "--value", "새")
     assert code == 0 and ws.values[(4, 1)] == "숨은 c" and ws.values[(5, 1)] == "새", ws.values
+
+
+# ---------------------------------------------------------------------------
+# 1.6.0 (검토 4장 4번): 수식을 값으로 (range --action values)
+# ---------------------------------------------------------------------------
+
+
+def test_range_values_preview_then_replace_formulas(xl_table, capsys):
+    xl_table.formulas[(2, 4)] = "=C2*2"
+    xl_table.values[(2, 4)] = 200
+    xl_table.formulas[(3, 4)] = "=C3*2"
+    xl_table.values[(3, 4)] = 400
+    code, out = run_excel(capsys, "range", "--action", "values", "--range", "D1:D5", "--dry-run")
+    assert code == 0 and out["count"] == 2 and out["formula_cells"] == 2 and (2, 4) in xl_table.formulas, out
+    assert "values" in out["confirm_commands"][0]["command"] and "--dry-run" not in out["confirm_commands"][0]["command"], out
+    code, out = run_excel(capsys, "range", "--action", "values", "--range", "D1:D5")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert not xl_table.formulas and xl_table.values[(2, 4)] == 200 and xl_table.values[(3, 4)] == 400, xl_table.formulas
+    code, out = run_excel(capsys, "range", "--action", "values", "--range", "D1:D5")
+    assert code == 0 and out.get("unchanged") is True and "수식 칸이 없음" in out["preview"], out
+
+
+def test_range_values_needs_range(xl, capsys):
+    code, out = run_excel(capsys, "range", "--action", "values")
+    assert code == 1 and "--range" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.0 (검토 4장 4번): 열린 통합문서 저장·다른 이름으로 저장
+# ---------------------------------------------------------------------------
+
+
+def test_save_open_workbook_and_already_saved(xl, capsys, tmp_path):
+    app, wb = xl
+    wb.FullName = str(tmp_path / "보고.xlsx")
+    wb.Saved = False
+    code, out = run_excel(capsys, "save")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and wb.Saved and app.saves == 1, out
+    code, out = run_excel(capsys, "save")
+    assert code == 0 and out["unchanged"] is True and app.saves == 1 and "이미 저장된" in out["preview"], out
+
+
+def test_save_as_new_path_overwrite_and_format(xl, capsys, tmp_path):
+    app, wb = xl
+    wb.FullName = str(tmp_path / "보고.xlsx")
+    dest = tmp_path / "보고_v2.xlsx"
+    code, out = run_excel(capsys, "save", "--save", str(dest))
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and dest.exists() and wb.FullName == str(dest), out
+    assert app.saved_as == (str(dest), 51) and out["previous_file"].endswith("보고.xlsx") and app.DisplayAlerts, out
+    other = tmp_path / "있는파일.xlsx"
+    other.write_bytes(b"x")
+    code, out = run_excel(capsys, "save", "--save", str(other))
+    assert code == 1 and other.read_bytes() == b"x" and "--overwrite" in out["confirm_commands"][0]["command"], out
+    assert out["confirm_commands"][0].get("destructive") is True, out
+    code, out = run_excel(capsys, "save", "--save", str(other), "--overwrite")
+    assert code == 0 and wb.FullName == str(other), out
+    code, out = run_excel(capsys, "save", "--save", str(tmp_path / "보고.csv"))
+    assert code == 1 and recommended_argv(out["message"], "excel")[-2:] == ["--save", str(tmp_path / "보고.xlsx")], out
+
+
+def test_save_unsaved_new_workbook_asks_for_path(xl, capsys):
+    app, wb = xl
+    wb.FullName = "통합 문서1"
+    code, out = run_excel(capsys, "save")
+    assert code == 1 and "--save" in out["message"] and "전체 경로" in out["message"], out
+
+
+def test_range_values_keeps_text_and_error_cells(xl_table, capsys):
+    # 실제 Excel처럼 대입한 글을 입력으로 해석(typing): 글자 결과 '01234'는 글자 그대로, 오류(#NAME?) 칸은 수식 그대로 (숫자 코드가 들어가지 않게)
+    xl_table.typing = True
+    xl_table.formulas[(2, 4)] = '=TEXT(C2,"00000")'
+    xl_table.values[(2, 4)] = "00300"
+    xl_table.formulas[(3, 4)] = "=합계(C3)"
+    xl_table.values[(3, 4)] = -2146826259
+    code, out = run_excel(capsys, "range", "--action", "values", "--range", "D2:D3")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert xl_table.values[(2, 4)] == "00300" and (2, 4) not in xl_table.formulas, xl_table.values
+    assert xl_table.formulas.get((3, 4)) == "=합계(C3)" and "오류 값 칸 1개" in out["warnings"][0], out
+
+
+def test_save_read_only_workbook_asks_for_new_path(xl, capsys, tmp_path):
+    app, wb = xl
+    wb.FullName = str(tmp_path / "보고.xlsx")
+    wb.ReadOnly, wb.Saved = True, False
+    code, out = run_excel(capsys, "save")
+    assert code == 1 and "읽기 전용" in out["message"] and getattr(app, "saves", 0) == 0, out

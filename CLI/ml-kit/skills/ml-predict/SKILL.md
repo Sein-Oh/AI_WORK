@@ -4,7 +4,7 @@ description: 학습한 모델로 새 조건이나 새 데이터의 값을 예측
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.87"
+  version: "2.9.89"
   platform: windows
 ---
 
@@ -30,6 +30,7 @@ python "C:\CLI\ml-kit\ml_predict.py" --model "<데이터파일>" --input "<피�
 python "C:\CLI\ml-kit\ml_predict.py" --model "<데이터파일>" --file "<새데이터파일>"
 ```
 결과를 엑셀로 받고 싶다고 하면 파일 예측 끝에 `--save "<전체경로.xlsx>"`를 붙인다.
+엑셀 파일의 다른 시트는 사용자가 말했을 때만 파일 예측 끝에 `--sheet "<시트 이름>"`을 붙인다.
 입력별 영향(한 건 예측)과 실제값 비교(새 파일에 타겟 열이 있을 때, 나빠졌으면 재학습 명령)는 도구가 preview, warnings, `next_commands`에 적는다.
 - `--input`에는 모델 입력만 넣는다. 모델 입력이 아닌 이름이 있거나 숫자 입력이 빠지면 도구가 멈춘다: message를 보여 주고 사용자에게 묻는다.
 - 여러 건은 JSON 배열 파일(.json)로 준다: 파일 쓰기 도구로 `[{"온도": 180, "압력": 3}, ...]`(UTF-8)를 만들고 `--input "<그 경로>"`.

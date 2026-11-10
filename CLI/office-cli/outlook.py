@@ -152,7 +152,8 @@ def summary(item: Any, failed: Optional[List[str]] = None) -> Dict[str, Any]:
 
 
 def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = None,
-             since: Optional[_dt.datetime] = None, stats: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+             since: Optional[_dt.datetime] = None, stats: Optional[Dict[str, Any]] = None,
+             until: Optional[_dt.datetime] = None) -> List[Dict[str, Any]]:
     """since: 받은 시각이 이보다 이른 메일은 뺍니다 (Restrict 날짜 조건을 다시 확인. 받은 시각 내림차순이라 처음 만나면 멈춤).
     stats: 읽지 못한 항목 수('unreadable')와 일부 칸을 읽지 못한 메일 수('partial', 칸 이름은 'fields'). 조용히 건너뛰면
     모든 항목이 실패해도 'VERIFIED: 0건'이 되어 (2026-11-09 검토 A10) 호출하는 쪽이 UNVERIFIED나 오류로 냅니다."""
@@ -165,10 +166,12 @@ def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = Non
         if len(out) >= limit:
             break
         try:
-            if since is not None:
+            if since is not None or until is not None:
                 got = _received(item)
-                if got is not None and got < since:
+                if since is not None and got is not None and got < since:
                     break
+                if until is not None and got is not None and got >= until:      # --until 다음 날 이후 메일 (내림차순이라 앞쪽)
+                    continue
             if int(item.Class) == OL_MAIL and (keep is None or keep(item)):
                 failed: List[str] = []
                 out.append(summary(item, failed))
@@ -218,11 +221,45 @@ def _today() -> _dt.date:
     return _dt.date.today()
 
 
-def date_period(days: Optional[int], since: Optional[str]) -> Optional[Dict[str, Any]]:
-    """--days N(오늘 포함 최근 N일) 또는 --since YYYY-MM-DD -> {'since': 날짜, 'until': 오늘, 'days': 일수}. 둘 다 없으면 None."""
-    if days is None and since is None:
+def _parse_day(raw: str, option: str) -> _dt.date:
+    """YYYY-MM-DD (2026.11.1, 2026/11/01 같은 표기는 고친 명령을 [추천])."""
+    raw = str(raw).strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        try:
+            return _dt.date.fromisoformat(raw)
+        except ValueError:
+            pass
+    m = _DATE_PARTS.match(raw)
+    fixed = None
+    if m:
+        try:
+            fixed = _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            fixed = None
+    # 고칠 수 있는 표기만 [추천] (없는 날짜·알 수 없는 글은 도구가 날짜를 지어내지 않음)
+    tail = f" [추천] {rt.retry_command({option: fixed.isoformat()})}" if fixed else f" (예: {_today().isoformat()})"
+    raise rt.InputError(f"{option} 날짜 '{raw}'을(를) 읽을 수 없습니다. YYYY-MM-DD 형식으로 쓰세요.{tail}")
+
+
+def date_period(days: Optional[int], since: Optional[str], until: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """--days N(오늘 포함 최근 N일) 또는 --since YYYY-MM-DD, 끝은 --until YYYY-MM-DD(그날 포함, 없으면 오늘)
+    -> {'since': 날짜, 'until': 날짜, 'days': 일수}. 셋 다 없으면 None. --until만 주면 그날까지 전부 (since 없음)."""
+    if days is None and since is None and until is None:
         return None
     today = _today()
+    if until is not None:
+        end = _parse_day(until, "--until")
+        if days is not None:
+            raise rt.InputError("--until은 --since와 함께 씁니다 (--days는 오늘까지의 최근 N일). 기간이면 --since YYYY-MM-DD --until YYYY-MM-DD.")
+        if end > today:
+            end = today
+        if since is None:
+            return {"since": None, "until": end.isoformat(), "days": None}
+        start = _parse_day(since, "--since")
+        if start > end:
+            raise rt.InputError(f"--since {start.isoformat()}이(가) --until {end.isoformat()}보다 뒤입니다. 두 날짜를 바꿔 쓰세요. "
+                                f"[추천] {rt.retry_command({'--since': end.isoformat(), '--until': start.isoformat()})}")
+        return {"since": start.isoformat(), "until": end.isoformat(), "days": (end - start).days + 1}
     if days is not None and since is not None:
         raise rt.InputError("--days와 --since는 함께 쓸 수 없습니다. 최근 N일이면 --days N, 특정 날짜부터면 --since YYYY-MM-DD "
                             "하나만 쓰세요.")
@@ -256,11 +293,22 @@ def date_period(days: Optional[int], since: Optional[str]) -> Optional[Dict[str,
     return {"since": start.isoformat(), "until": today.isoformat(), "days": (today - start).days + 1}
 
 
-def _period_start(period: Dict[str, Any]) -> _dt.datetime:
+def _period_start(period: Dict[str, Any]) -> Optional[_dt.datetime]:
+    if not period.get("since"):
+        return None
     return _dt.datetime.combine(_dt.date.fromisoformat(period["since"]), _dt.time())
 
 
+def _period_end(period: Optional[Dict[str, Any]]) -> Optional[_dt.datetime]:
+    """--until이 오늘보다 앞이면 그다음 날 0시 (그 시각 전에 받은 메일만), 아니면 None (끝 없음)."""
+    if not period or period["until"] >= _today().isoformat():
+        return None
+    return _dt.datetime.combine(_dt.date.fromisoformat(period["until"]), _dt.time()) + _dt.timedelta(days=1)
+
+
 def _period_text(period: Dict[str, Any]) -> str:
+    if not period.get("since"):
+        return f"{period['until']}까지"
     return f"{period['since']} ~ {period['until']} ({period['days']}일)"
 
 
@@ -311,9 +359,21 @@ def _all_unreadable(mails: List[Dict[str, Any]], stats: Dict[str, Any], folder: 
                             "창이 없으면 Outlook이 응답하는지 확인하세요.")
 
 
+def _with_attachments(item: Any) -> bool:
+    """본문 삽입 그림(서명 로고 등)이 아닌 첨부가 하나라도 있는지."""
+    return any(not a["hidden_inline"] for a in _attachment_infos(item))
+
+
+def _both(a: Optional[Callable[[Any], bool]], b: Optional[Callable[[Any], bool]]) -> Optional[Callable[[Any], bool]]:
+    if a is None or b is None:
+        return a or b
+    return lambda item: a(item) and b(item)
+
+
 def cmd_list(args) -> Dict[str, Any]:
-    period = date_period(args.days, args.since)        # 날짜 오류는 Outlook에 연결하기 전에
+    period = date_period(args.days, args.since, args.until)        # 날짜 오류는 Outlook에 연결하기 전에
     start = _period_start(period) if period else None
+    end = _period_end(period)
     ns = get_namespace(get_outlook())
     folder = resolve_folder(ns, args.folder)
     items = folder.Items
@@ -321,10 +381,13 @@ def cmd_list(args) -> Dict[str, Any]:
         items = items.Restrict("[UnRead] = True")
     if start is not None:
         items = _restrict_dated(items, jet_date_filter(start), None, "list")
+    if end is not None:
+        items = _restrict_dated(items, f"[ReceivedTime] < '{end.strftime('%Y-%m-%d %H:%M')}'", None, "list")
     items.Sort("[ReceivedTime]", True)                 # 거른 뒤 정렬해야 순서가 보장됨
     warnings: List[str] = []
     stats: Dict[str, Any] = {}
-    mails = _collect(items, _check_limit(args.limit, warnings), since=start, stats=stats)
+    mails = _collect(items, _check_limit(args.limit, warnings), _with_attachments if args.with_attachments else None,
+                     since=start, stats=stats, until=end)
     _all_unreadable(mails, stats, folder)
     problems = collect_problems(stats, "항목")
     id_warn = remember_listing(mails, "list")          # 짧은 번호 (이어서 늘어남, --id 3)
@@ -332,7 +395,8 @@ def cmd_list(args) -> Dict[str, Any]:
     if id_warn:
         warnings.append(id_warn)
     extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
-    what = "안 읽은 메일" if args.unread else "메일"
+    what = ("안 읽은 메일" if args.unread else "메일") if not args.with_attachments else (
+        "첨부 있는 안 읽은 메일" if args.unread else "첨부 있는 메일")
     when = ""
     if period:
         extra["period"] = period
@@ -344,7 +408,7 @@ def cmd_list(args) -> Dict[str, Any]:
         return rt.ok(TOOL, "list", f"0건: '{folder.Name}' 폴더에 {what}이 없습니다{when}",
                      f"VERIFIED: 0건. '{folder.Name}' 폴더에 {what}이 없습니다{when}. 사용자에게 그대로 알리고 조건을 바꿔 "
                      "다시 실행하지 마세요.", folder=str(folder.Name), mails=[], count=0, **extra)
-    return rt.ok(TOOL, "list", f"'{folder.Name}' 폴더 최근 메일 {len(mails)}통" + (" (안 읽은 메일)" if args.unread else "") + when,
+    return rt.ok(TOOL, "list", f"'{folder.Name}' 폴더 최근 메일 {len(mails)}통" + (f" ({what})" if what != "메일" else "") + when,
                  folder=str(folder.Name), mails=mails, count=len(mails), **extra)
 
 
@@ -388,7 +452,7 @@ PR_SENDER_SMTP = "http://schemas.microsoft.com/mapi/proptag/0x5D01001F"   # PR_S
 
 
 def build_search_filter(query: Optional[str], sender: Optional[str], where: str,
-                        since: Optional[_dt.datetime] = None) -> str:
+                        since: Optional[_dt.datetime] = None, until: Optional[_dt.datetime] = None) -> str:
     """DASL 필터: @SQL= 접두어는 한 번만, 조건마다 괄호로 묶어 AND로 연결. since: 받은 시각 하한 (현지 시각)."""
     clauses = []
     if query:
@@ -401,18 +465,25 @@ def build_search_filter(query: Optional[str], sender: Optional[str], where: str,
         clauses.append(_dasl_like(["urn:schemas:httpmail:fromname", "urn:schemas:httpmail:fromemail", PR_SENDER_SMTP], sender))
     if since is not None:
         clauses.append("(" + dasl_date_clause(since) + ")")
+    if until is not None:
+        clauses.append("(" + dasl_date_clause(until).replace(" >= ", " < ") + ")")
     if not clauses:
-        raise rt.InputError("--query, --from, --days, --since 중 하나는 지정하세요.")
+        raise rt.InputError("--query, --from, --days, --since, --until 중 하나는 지정하세요.")
     return "@SQL=" + " AND ".join(clauses)
 
 
 def cmd_search(args) -> Dict[str, Any]:
-    period = date_period(args.days, args.since)        # 날짜·인자 오류는 Outlook에 연결하기 전에
+    period = date_period(args.days, args.since, args.until)        # 날짜·인자 오류는 Outlook에 연결하기 전에
     start = _period_start(period) if period else None
-    flt = build_search_filter(args.query, args.sender, args.where, start)
+    end = _period_end(period)
+    if not (args.query or args.sender or period) and args.with_attachments:
+        # 첨부 조건만: Outlook의 '첨부 있음'으로 거르고, 본문 삽입 그림만 있는 메일은 _with_attachments가 다시 뺌
+        flt = '@SQL=("urn:schemas:httpmail:hasattachment" = 1)'
+    else:
+        flt = build_search_filter(args.query, args.sender, args.where, start, end)
     ns = get_namespace(get_outlook())
     folder = resolve_folder(ns, args.folder)
-    if start is not None:
+    if start is not None or end is not None:
         plain = build_search_filter(args.query, args.sender, args.where) if (args.query or args.sender) else None
         items = _restrict_dated(folder.Items, flt, plain, "search")
     else:
@@ -420,8 +491,8 @@ def cmd_search(args) -> Dict[str, Any]:
     items.Sort("[ReceivedTime]", True)
     warnings: List[str] = []
     stats: Dict[str, Any] = {}
-    mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where), since=start,
-                     stats=stats)
+    keep = _both(_literal_keep(args.query, args.sender, args.where), _with_attachments if args.with_attachments else None)
+    mails = _collect(items, _check_limit(args.limit, warnings), keep, since=start, stats=stats, until=end)
     _all_unreadable(mails, stats, folder)
     problems = collect_problems(stats, "찾은 항목")
     id_warn = remember_listing(mails, "search")
@@ -429,7 +500,8 @@ def cmd_search(args) -> Dict[str, Any]:
     if id_warn:
         warnings.append(id_warn)
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'",
-                                  period and f"받은 날짜 {_period_text(period)}") if x)
+                                  period and f"받은 날짜 {_period_text(period)}",
+                                  args.with_attachments and "첨부 있는 메일") if x)
     result: Dict[str, Any] = {"folder": str(folder.Name), "mails": mails, "matched": len(mails), "count": len(mails)}
     if period:
         result["period"] = period
@@ -1637,6 +1709,121 @@ def cmd_calendar(args) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------
+# 일정 만들기 (event): 내 일정에만 저장. 참석자·회의 요청은 없음 (보내는 것이 없음)
+# ------------------------------------------------------------------------------
+
+OL_APPOINTMENT = 1
+EVENT_MAX_MINUTES = 24 * 60 * 14
+_EVENT_TIME = re.compile(r"^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$")
+
+
+def _event_start(raw: str) -> Tuple[_dt.datetime, bool]:
+    """'YYYY-MM-DD HH:MM' -> (시작, False), 'YYYY-MM-DD' -> (그날 0시, True=종일). 못 읽으면 예시와 함께 오류."""
+    m = _EVENT_TIME.match(str(raw).strip())
+    try:
+        if m:
+            day = _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if m.group(4) is None:
+                return _dt.datetime.combine(day, _dt.time()), True
+            return _dt.datetime.combine(day, _dt.time(int(m.group(4)), int(m.group(5)))), False
+    except ValueError:
+        pass
+    raise rt.InputError(f"--start '{raw}'을(를) 읽을 수 없습니다. 'YYYY-MM-DD HH:MM'(예: {_today().isoformat()} 14:00) 또는 "
+                        "종일 일정은 'YYYY-MM-DD'로 쓰세요.")
+
+
+def _same_event(folder: Any, subject: str, start: _dt.datetime) -> Optional[Any]:
+    """같은 제목·같은 시작의 일정 (다시 실행해도 일정이 둘이 되지 않게)."""
+    end = start + _dt.timedelta(minutes=1)
+    try:
+        items = folder.Items.Restrict(f"[Start] >= '{start.strftime('%Y-%m-%d %H:%M')}' AND [Start] < '{end.strftime('%Y-%m-%d %H:%M')}'")
+        for it in items:
+            if _text(getattr(it, "Subject", "")) == subject:
+                return it
+    except Exception:
+        return None
+    return None
+
+
+def _overlaps(folder: Any, start: _dt.datetime, end: _dt.datetime, skip: str) -> List[str]:
+    """겹치는 다른 일정 (제목 시작~끝), 최대 5개. 읽지 못하면 빈 목록."""
+    out: List[str] = []
+    try:
+        items = folder.Items
+        items.Sort("[Start]")
+        items.IncludeRecurrences = True
+        for it in items.Restrict(f"[Start] < '{end.strftime('%Y-%m-%d %H:%M')}' AND [End] > '{start.strftime('%Y-%m-%d %H:%M')}'"):
+            if _text(getattr(it, "EntryID", "")) == skip:
+                continue
+            out.append(f"{_text(getattr(it, 'Subject', ''))} {_when(it.Start)}~{_when(it.End)[-5:]}")
+            if len(out) >= 5:
+                break
+    except Exception:
+        return []
+    return out
+
+
+def cmd_event(args) -> Dict[str, Any]:
+    subject = (args.subject or "").strip()
+    if not subject:
+        raise rt.InputError("--subject(일정 제목)를 주세요.")
+    start, all_day = _event_start(args.start or "")
+    minutes = 24 * 60 if all_day and args.minutes is None else (args.minutes if args.minutes is not None else 60)
+    if minutes < 1 or minutes > EVENT_MAX_MINUTES:
+        raise rt.InputError(f"--minutes는 1~{EVENT_MAX_MINUTES}입니다 (받은 값: {minutes}). [추천] {rt.retry_command({'--minutes': 60})}")
+    end = start + _dt.timedelta(minutes=minutes)
+    body = _body_arg(args)                              # 메모 파일 확인은 Outlook에 연결하기 전에
+    warnings: List[str] = []
+    if start.date() < _today():
+        warnings.append(f"지난 날짜({start.date().isoformat()})의 일정입니다")
+    ns = get_namespace(get_outlook())
+    folder = ns.GetDefaultFolder(OL_FOLDER_CALENDAR)
+    when = f"{start.strftime('%Y-%m-%d')} 종일" if all_day and minutes == 24 * 60 else f"{_when(start)} ~ {_when(end)[-5:]}"
+    old = _same_event(folder, subject, start)
+    if old is not None:
+        return rt.ok(TOOL, "event", f"이미 있는 일정: '{subject}' {when} (새로 만들지 않음)",
+                     "VERIFIED: 같은 제목·시작 시각의 일정이 이미 있어 새로 만들지 않았습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요.",
+                     verified=True, created=False, subject=subject, start=_when(old.Start), end=_when(old.End))
+    app = get_outlook()
+    item = app.CreateItem(OL_APPOINTMENT)
+    item.Subject = subject
+    item.Start = start
+    item.Duration = minutes
+    if all_day and minutes % (24 * 60) == 0:
+        item.AllDayEvent = True
+    if args.location:
+        item.Location = args.location
+    if body:
+        item.Body = body
+    item.ReminderSet = True
+    item.Save()
+    eid = _text(getattr(item, "EntryID", ""))
+    # R1: 저장한 일정을 다시 찾아 제목·시작·끝 확인
+    problems: List[str] = []
+    try:
+        got = ns.GetItemFromID(eid)
+        g_start, g_end = got.Start.replace(tzinfo=None), got.End.replace(tzinfo=None)
+        if _text(got.Subject) != subject:
+            problems.append("다시 읽은 제목이 다름")
+        if g_start != start or g_end != end:
+            problems.append(f"다시 읽은 시각이 다름 ({_when(g_start)} ~ {_when(g_end)})")
+    except Exception as e:
+        problems.append(f"저장한 일정을 다시 읽지 못함 ({type(e).__name__})")
+    fields: Dict[str, Any] = {"created": True, "subject": subject, "start": _when(start), "end": _when(end), "all_day": bool(all_day),
+                              "location": args.location or ""}
+    busy = _overlaps(folder, start, end, eid)
+    if busy:
+        warnings.append("겹치는 일정: " + ", ".join(busy))
+    if warnings:
+        fields["warnings"] = warnings
+    preview = f"일정을 만들었습니다: '{subject}' {when}" + (f" ({args.location})" if args.location else "")
+    if problems:
+        return rt.ok_unverified(TOOL, "event", preview, problems + ["다시 실행하지 말고(일정이 둘이 됨) Outlook 일정에서 확인하라고 알리세요"], **fields)
+    return rt.ok(TOOL, "event", preview, "VERIFIED: 일정을 저장하고 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요. "
+                 "warnings(겹치는 일정 등)가 있으면 함께 알리세요.", verified=True, **fields)
+
+
+# ------------------------------------------------------------------------------
 # 대화 묶음 (thread, 읽기 전용): 같은 대화 제목의 메일을 받은 편지함과 보낸 편지함에서 시간 순으로
 # ------------------------------------------------------------------------------
 
@@ -1724,6 +1911,8 @@ def build_cli():
     def dated(p):
         p.add_argument("--days", type=int, help="오늘 포함 최근 N일에 받은 메일만 (1 = 오늘)")
         p.add_argument("--since", help="이 날짜(YYYY-MM-DD)부터 받은 메일만 (--days와 함께 쓰지 않음)")
+        p.add_argument("--until", help="이 날짜(YYYY-MM-DD, 그날 포함)까지 받은 메일만 (--since와 함께 쓰면 기간)")
+        p.add_argument("--with-attachments", action="store_true", help="첨부가 있는 메일만 (본문 삽입 그림은 첨부로 세지 않음)")
 
     p = sub.add_parser("list", help="최근 메일 목록")
     p.add_argument("--folder", help=folder_help)
@@ -1758,6 +1947,14 @@ def build_cli():
     p = sub.add_parser("calendar", help="일정 (읽기만)")
     p.add_argument("--days", type=int, default=7, help="오늘부터 N일 (기본 7, 1 = 오늘, 최대 92)")
 
+    p = sub.add_parser("event", help="내 일정 만들기 (참석자·회의 요청 없음, 보내는 것 없음)")
+    p.add_argument("--subject", required=True, help="일정 제목")
+    p.add_argument("--start", required=True, help="시작 'YYYY-MM-DD HH:MM' (종일 일정은 'YYYY-MM-DD')")
+    p.add_argument("--minutes", type=int, help="길이(분, 기본 60, 종일은 하루)")
+    p.add_argument("--location", help="장소")
+    p.add_argument("--body", help="메모 (줄바꿈은 \\n)")
+    p.add_argument("--body-file", help="메모 파일 (.txt/.md)")
+
     p = sub.add_parser("folders", help="폴더 구조")
     p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2, 최대 5, 폴더 150개까지)")
 
@@ -1789,7 +1986,7 @@ def build_cli():
 
 HANDLERS = {"list": cmd_list, "search": cmd_search, "read": cmd_read, "current": cmd_current, "folders": cmd_folders,
             "attachments": cmd_attachments, "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward, "send": cmd_send,
-            "thread": cmd_thread, "calendar": cmd_calendar}
+            "thread": cmd_thread, "calendar": cmd_calendar, "event": cmd_event}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

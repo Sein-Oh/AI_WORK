@@ -27,6 +27,7 @@ import datetime as _dt
 import json
 import os
 import re
+import unicodedata
 import sys
 import zipfile
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -1413,6 +1414,140 @@ def cmd_stats(args) -> Dict[str, Any]:
     directive = ("VERIFIED: 도구가 읽은 값으로 집계했습니다. preview의 숫자를 그대로 알리세요 (직접 더하거나 다시 계산하지 마세요)."
                  + (" 묶음이 많아 일부만 담았습니다: 전체는 full_result_file." if fields["truncated"] else ""))
     payload = rt.ok(TOOL, "stats", preview, directive, **fields)
+    return xf.with_uncomputed(payload, unc) if unc else payload
+
+
+XL_SAVE_FORMATS = {".xlsx": 51, ".xlsm": 52}
+
+
+def cmd_save(args) -> Dict[str, Any]:
+    """열린 통합문서를 저장 (Ctrl+S). --save <경로>면 다른 이름으로 저장 (그 뒤로는 새 파일이 열린 문서).
+    같은 이름 파일은 --overwrite가 있을 때만 덮어씀. 닫힌 파일은 이미 저장되어 있어 할 일이 없음."""
+    new_path = None
+    if args.save:
+        raw = os.path.abspath(os.path.expandvars(os.path.expanduser(str(args.save).strip().strip('"'))))
+        ext = os.path.splitext(raw)[1].lower()
+        if ext not in XL_SAVE_FORMATS:
+            fixed = os.path.splitext(raw)[0] + ".xlsx"
+            raise rt.InputError(f"--save는 .xlsx 또는 .xlsm 파일입니다 (받은 값 '{os.path.basename(raw)}'). CSV·PDF 사본은 excel.py export. "
+                                f"[추천] {rt.retry_command({'--save': fixed})}")
+        new_path = raw
+    with off.open_target("excel", args.target, readonly=True, tool=TOOL, command="save") as t:
+        if t.source not in ("active", "open"):
+            raise rt.InputError(f"'{t.name}'은(는) 열려 있지 않은 파일이라 저장할 것이 없습니다 (파일은 이미 저장되어 있음). "
+                                "다른 이름의 사본이 필요하면 excel.py export를 쓰세요.")
+        wb = t.doc
+        old = t.path
+        if new_path is None:
+            if bool(getattr(wb, "ReadOnly", False)):
+                raise rt.InputError(f"'{t.name}'은(는) 읽기 전용으로 열려 있어 그대로 저장할 수 없습니다 (Excel이 확인 창을 띄움). 사용자에게 "
+                                    "다른 이름으로 저장할 전체 경로를 묻고 --save \"<전체경로.xlsx>\"로 다시 실행하세요.")
+            if not old:
+                raise rt.InputError(f"'{t.name}'은(는) 한 번도 저장하지 않은 새 통합문서라 저장할 위치가 없습니다. 사용자에게 저장할 "
+                                    "전체 경로를 묻고 --save \"<전체경로.xlsx>\"로 다시 실행하세요.")
+            was_saved = bool(wb.Saved)
+            if not was_saved:
+                wb.Save()
+            ok = bool(wb.Saved)
+            resolved = t.resolved()
+            preview = f"'{t.name}'을(를) 저장했습니다" if not was_saved else f"'{t.name}'은(는) 바뀐 것이 없어 이미 저장된 상태입니다"
+            if not ok:
+                return rt.ok_unverified(TOOL, "save", preview, ["저장 뒤에도 '저장 안 됨' 상태 (Excel이 편집 중이거나 읽기 전용)"],
+                                        target_resolved=resolved, output_file=old)
+            return rt.ok(TOOL, "save", preview, "VERIFIED: 저장 상태를 다시 확인했습니다. 같은 명령을 다시 실행하지 마세요.",
+                         verified=True, target_resolved=resolved, output_file=old, unchanged=was_saved)
+        if os.path.normcase(new_path) == os.path.normcase(old or ""):
+            raise rt.InputError(f"--save 경로가 지금 파일과 같습니다. 그대로 저장은 --save 없이: [추천] {rt.retry_command({'--save': None})}")
+        if os.path.exists(new_path) and not args.overwrite:
+            raise rt.UserDecisionError(
+                f"'{new_path}' 파일이 이미 있습니다. 다른 이름으로 저장하면 그 파일이 바뀝니다.",
+                "저장하지 않았습니다. 사용자에게 덮어쓸지 묻고, 덮어쓴다고 하면 같은 번호의 confirm_commands를 1번 실행하세요. "
+                "아니면 사용자에게 다른 경로를 받으세요.",
+                candidates=["같은 이름 파일을 덮어써 저장"], commands=[rt.retry_command({"--overwrite": True})], destructive=True)
+        ext = os.path.splitext(new_path)[1].lower()
+        try:
+            macros = bool(wb.HasVBProject)
+        except Exception:
+            macros = False
+        if macros and ext == ".xlsx":
+            raise rt.InputError("이 통합문서에는 매크로가 있어 .xlsx로 저장하면 매크로가 없어집니다. "
+                                f"[추천] {rt.retry_command({'--save': os.path.splitext(new_path)[0] + '.xlsm'})}")
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+        prev = t.app.DisplayAlerts
+        t.app.DisplayAlerts = False                     # '바꾸시겠습니까?' 창 (덮어쓰기는 위에서 확인함)
+        try:
+            wb.SaveAs(new_path, XL_SAVE_FORMATS[ext])
+        finally:
+            t.app.DisplayAlerts = prev
+        got = str(getattr(wb, "FullName", "") or "")
+        resolved = t.resolved()
+    preview = f"'{os.path.basename(new_path)}'(으)로 저장했습니다. 지금 열린 문서는 이 새 파일입니다" + (f" (원래 파일 '{os.path.basename(old)}'은 그대로)" if old else "")
+    if os.path.normcase(got) != os.path.normcase(new_path) or not os.path.isfile(new_path):
+        return rt.ok_unverified(TOOL, "save", preview, [f"저장 뒤 파일·열린 문서 경로를 확인하지 못함 ({got or '경로 없음'})"],
+                                target_resolved=resolved, output_file=new_path)
+    return rt.ok(TOOL, "save", preview, "VERIFIED: 새 파일이 생기고 열린 문서가 그 파일로 바뀐 것을 확인했습니다. 같은 명령을 다시 실행하지 마세요.",
+                 verified=True, target_resolved=resolved, output_file=new_path, previous_file=old)
+
+
+DUP_GROUPS_MAX = 30       # JSON에 담는 중복 묶음 수 (넘으면 전체는 CSV)
+
+
+def _dup_key(v: Any) -> str:
+    """중복 비교 값: 앞뒤 공백·전각/반각·대소문자 무시, 숫자는 1 = 1.0 (품번의 앞자리 0은 그대로 다른 값)."""
+    t = unicodedata.normalize("NFKC", _where_text(v)).casefold()
+    if re.fullmatch(r"-?\d+\.0+", t):
+        t = t.split(".")[0]
+    return t
+
+
+def cmd_duplicates(args) -> Dict[str, Any]:
+    """첫 행을 머리글로 보고 --columns(생략하면 모든 열)의 값이 같은 행 묶음을 찾음 (읽기만). 닫힌 xlsx·CSV는 Office 없이.
+    엑셀 행 번호와 값을 알려 주고 지우지는 않음 (지우기는 사용자가 행을 확인한 뒤 range --action delete)."""
+    sheet, r0, c0, matrix, source, unc = _load_table(args)
+    if len(matrix) < 2:
+        raise rt.InputError(f"{sheet}에 머리글 아래 데이터 행이 없습니다. --range로 표 범위를 주세요 (첫 행은 머리글).")
+    header = matrix[0]
+    ncols = max(len(r) for r in matrix)
+    names = [_where_text(header[j]) if j < len(header) and _where_text(header[j]) else f"{col_letter(c0 + j)}열" for j in range(ncols)]
+    cols = ([resolve_column(c.strip(), header, c0, ncols, "비교할 열", option="--columns")[0] for c in args.columns.split(",") if c.strip()]
+            if args.columns else list(range(ncols)))
+
+    def cell(i: int, j: int) -> Any:
+        return matrix[i][j] if j < len(matrix[i]) else None
+    buckets: Dict[Tuple[str, ...], List[int]] = {}
+    for i in range(1, len(matrix)):
+        key = tuple(_dup_key(cell(i, j)) for j in cols)
+        if all(k == "" for k in key):
+            continue                                    # 빈 행은 중복으로 보지 않음
+        buckets.setdefault(key, []).append(i)
+    groups = [{"values": {names[j]: out_value(cell(idx[0], j)) for j in cols}, "rows": [r0 + i for i in idx], "count": len(idx)}
+              for idx in buckets.values() if len(idx) > 1]
+    groups.sort(key=lambda g: (-g["count"], g["rows"][0]))
+    where = f"{sheet}!{addr(r0, c0, r0 + len(matrix) - 1, c0 + ncols - 1)}"
+    by = ", ".join(names[j] for j in cols) if args.columns else "모든 열"
+    extra_rows = sum(g["count"] - 1 for g in groups)
+    fields: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": where.split("!")[-1], "data_rows": len(matrix) - 1,
+                              "columns": [names[j] for j in cols], "group_count": len(groups), "duplicate_rows": extra_rows}
+    if not groups:
+        payload = rt.ok(TOOL, "duplicates", f"0건: {where}에서 {by} 값이 같은 행이 없습니다 ({len(matrix) - 1}행 비교)",
+                        f"VERIFIED: 0건. {by} 값이 같은 행이 없습니다. 사용자에게 그대로 알리세요.", groups=[], **fields)
+        return xf.with_uncomputed(payload, unc) if unc else payload
+    shown = groups[:DUP_GROUPS_MAX]
+    fields.update(groups=shown, shown=len(shown), truncated=len(groups) > len(shown))
+    if args.save or fields["truncated"]:
+        table = [["묶음", "엑셀 행", "같은 행 수"] + [names[j] for j in cols]]
+        for n, g in enumerate(groups, 1):
+            for r in g["rows"]:
+                table.append([n, r, g["count"]] + [out_value(cell(r - r0, j)) for j in cols])
+        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_중복", ".csv")
+        out = rt.write_csv_rows(out, table)
+        fields["output_file" if args.save else "full_result_file"] = out
+    lines = [", ".join(str(v) for v in g["values"].values()) + f": {', '.join(map(str, g['rows'][:6]))}행" for g in shown[:5]]
+    preview = (f"{where}에서 {by} 값이 같은 묶음 {len(groups)}개 (남기고 지울 수 있는 행 {extra_rows}개). "
+               + " / ".join(lines) + (f" / ... 외 {len(groups) - 5}묶음" if len(groups) > 5 else ""))
+    directive = ("VERIFIED: 중복을 찾았습니다(읽기만, 지우지 않음). preview의 묶음과 엑셀 행 번호를 그대로 알리세요. "
+                 "지우기는 사용자가 지울 행을 말한 뒤에만 합니다." + (" 묶음이 많아 일부만 담았습니다: 전체는 full_result_file." if fields["truncated"] else ""))
+    payload = rt.ok(TOOL, "duplicates", preview, directive, **fields)
     return xf.with_uncomputed(payload, unc) if unc else payload
 
 
@@ -3161,6 +3296,32 @@ def _filled_preview(filled: List[Tuple[str, Any]], log: bool = False) -> str:
     return ", ".join(f"{c}={_short(v)}" for c, v in filled[:5]) + more
 
 
+def _formula_cells(rng: Any) -> List[Tuple[str, str]]:
+    """범위 안의 수식 칸 [(주소, 수식)] (사용 범위 밖은 비어 있으므로 사용 범위와 겹친 부분만 읽음)."""
+    try:
+        used = rng.Application.Intersect(rng, rng.Worksheet.UsedRange)
+    except Exception:
+        used = rng
+    if used is None:
+        return []
+    out: List[Tuple[str, str]] = []
+    for area in _areas(used):
+        r1, c1 = int(area.Row), int(area.Column)
+        for i, row in enumerate(off.range_to_matrix(area.Formula)):
+            for j, f in enumerate(row):
+                if isinstance(f, str) and f.startswith("="):
+                    out.append((addr(r1 + i, c1 + j), f))
+    return out
+
+
+def _areas(rng: Any) -> List[Any]:
+    try:
+        n = int(rng.Areas.Count)
+        return [rng.Areas(i) for i in range(1, n + 1)]
+    except Exception:
+        return [rng]
+
+
 def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
     """range 명령이 바꿀 것이 없는지 COM 속성으로 싸게 확인합니다. 바꿀 것이 없으면 그 이유, 아니면(모르면) ""."""
     try:
@@ -3180,6 +3341,9 @@ def _range_noop(t: Any, ws: Any, rng: Any, a: str, args: Any) -> str:
             got = rng.ColumnWidth if a == "width" else rng.RowHeight     # 섞여 있으면 None
             if got is not None and float(got) == float(args.size):
                 return f"이미 {'너비' if a == 'width' else '높이'}가 {args.size}"
+        elif a == "values":
+            if not _formula_cells(rng):
+                return "수식 칸이 없음"
         elif a == "clear":
             area = rng if rng is not None else ws.UsedRange
             used = t.app.Intersect(area, ws.UsedRange)           # 값·서식이 있는 칸은 UsedRange 안에 있음
@@ -3256,9 +3420,20 @@ def _dest_conflicts(rng: Any, ws: Any, dws: Any, dcell: str) -> Tuple[List[Tuple
 
 
 def _range_dry(t: Any, ws: Any, rng: Any, a: str, args, noop: str) -> Dict[str, Any]:
-    """range --action clear|move --dry-run: 지울 값·옮길 칸과 덮어써질 칸만 보여 줌 (바꾸지 않음, 되돌리기 지점 없음)."""
+    """range --action clear|move|values --dry-run: 지울 값·옮길 칸과 덮어써질 칸·값으로 바뀔 수식만 보여 줌 (바꾸지 않음, 되돌리기 지점 없음)."""
     where = f"{ws.Name}!{str(rng.Address).replace('$', '')}"
     info: Dict[str, Any] = {"sheet": str(ws.Name), "range": str(rng.Address).replace("$", "")}
+    if a == "values":
+        forms = _formula_cells(rng)
+        if not forms:
+            return rt.dry_run_result(TOOL, "range", f"미리보기: {where}에는 수식 칸이 없어 바뀔 것 없음 (바꾸지 않음)", 0, [], None,
+                                     target_resolved=t.resolved(), **info)
+        planned = [f"값으로: {ws.Name}!{c} ({_short(f)})" for c, f in forms[:rt.DRY_RUN_SHOW + 1]]
+        info["formula_cells"] = len(forms)
+        return rt.dry_run_result(TOOL, "range", f"미리보기: {where}의 수식 칸 {len(forms)}개를 지금 값으로 바꿉니다 "
+                                 "(수식은 없어지고 값은 그대로, 바꾸지 않음)", len(forms), planned,
+                                 rt.dry_run_command(TOOL, f"{where} 수식 {len(forms)}개를 값으로 바꾸기"),
+                                 target_resolved=t.resolved(), **info)
     if a == "clear":
         info["type"] = args.type
         if noop:
@@ -3304,11 +3479,11 @@ def cmd_range(args) -> Dict[str, Any]:
     a = args.action
     if a in ("insert", "delete"):
         return range_lines(args)
-    if args.dry_run and a not in ("clear", "move"):
+    if args.dry_run and a not in ("clear", "move", "values"):
         raise rt.dry_run_unsupported(TOOL, f"range --action {a}")
     if a == "sort":
         return range_sort(args)
-    if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear") and not args.range:
+    if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear", "values") and not args.range:
         raise rt.InputError(f"range {a}에는 --range가 필요합니다." + (
             " 시트 전체를 지우려면 사용자에게 확인한 뒤 excel.py info로 사용 범위를 보고 그 범위를 --range로 지정하세요."
             if a == "clear" else ""))
@@ -3408,6 +3583,34 @@ def cmd_range(args) -> Dict[str, Any]:
         elif a == "border":
             _apply_border(rng if rng is not None else ws.UsedRange, args.weight, box=args.box)
             detail = args.weight + (" (외곽만)" if args.box else "")
+        elif a == "values":
+            # 수식을 지금 값으로 (Value2: 날짜·통화를 바꾸지 않고 그대로). 영역마다 따로 (여러 영역 범위는 한 번에 못 씀)
+            # 글자 결과는 앞에 '를 붙여 그대로 (붙이지 않으면 '01234'·'1-2'가 숫자·날짜로 바뀜), 오류 값(#N/A 등)은 숫자 코드가
+            # 들어가지 않게 그 칸만 수식 그대로 둠 (실제 Excel의 Value2는 오류를 음수 정수로 줌)
+            forms = _formula_cells(rng)
+            before_vals, kept_errors = [], []
+            for area in _areas(rng):
+                vals = off.range_to_matrix(area.Value2)
+                fml = off.range_to_matrix(area.Formula)
+                r1_, c1_ = int(area.Row), int(area.Column)
+                out_rows = []
+                for i, row in enumerate(vals):
+                    line = []
+                    for j, v in enumerate(row):
+                        f = fml[i][j] if i < len(fml) and j < len(fml[i]) else None
+                        if off.xl_error(v) and isinstance(f, str) and f.startswith("="):
+                            kept_errors.append(addr(r1_ + i, c1_ + j))
+                            line.append(f)
+                        elif isinstance(v, str):
+                            line.append("'" + v)
+                        else:
+                            line.append(v)
+                    out_rows.append(tuple(line))
+                area.Value2 = tuple(out_rows)
+                before_vals.append((area, vals))
+            detail = f"(수식 {len(forms) - len(kept_errors)}개를 값으로)"
+            if kept_errors:
+                values_warn = f"오류 값 칸 {len(kept_errors)}개는 수식 그대로 둠: {', '.join(kept_errors[:5])}"
         # R1: 결과를 다시 읽어 확인 (autofit은 Excel이 정하는 너비라 비교할 값이 없음)
         problems: List[str] = []
         try:
@@ -3442,12 +3645,26 @@ def cmd_range(args) -> Dict[str, Any]:
                 problems.append("틀 고정 상태가 다름")
             elif a == "border":
                 problems += _verify_border(rng if rng is not None else ws.UsedRange, args.weight, args.box)
+            elif a == "values" and not noop:
+                left = [x for x in _formula_cells(rng) if x[0] not in set(kept_errors)]
+                if left:
+                    problems.append(f"수식이 남은 칸 {len(left)}개: {', '.join(c for c, _ in left[:5])}")
+                for area, vals in before_vals:
+                    got = off.range_to_matrix(area.Value2)
+                    r1_, c1_ = int(area.Row), int(area.Column)
+                    bad = [addr(r1_ + i, c1_ + j) for i, row in enumerate(vals) for j, v in enumerate(row)
+                           if addr(r1_ + i, c1_ + j) not in kept_errors
+                           and not _same_cell(v, got[i][j] if i < len(got) and j < len(got[i]) else None)]
+                    if bad:
+                        problems.append(f"값이 바뀐 칸 {len(bad)}개: {', '.join(bad[:5])}")
         except Exception as e:
             problems.append(f"결과를 다시 읽지 못함: {type(e).__name__}")
         t.set_focus(sheet=ws, changed=not noop)
         info = range_info(rng) if rng is not None else {"sheet": str(ws.Name)}
         if noop:
             info["unchanged"] = True
+        if a == "values" and not noop and kept_errors:
+            info["warnings"] = [values_warn]
         resolved = t.resolved()
     where = f"{info['sheet']}!{info.get('range', '')}".rstrip("!")
     preview = f"{a} 완료: {where} {detail}".strip()
@@ -4734,6 +4951,17 @@ def build_cli():
     p.add_argument("--top", type=int, help="--by 묶음을 첫 집계 열의 합계가 큰 순으로 N개만")
     p.add_argument("--save", nargs="?", const=True, help="집계 결과를 CSV로 저장")
 
+    p = sub.add_parser("save", help="열린 통합문서 저장 (--save <경로>면 다른 이름으로 저장)")
+    p.add_argument("--target", default="active", help="active(기본) | 열린 통합문서 이름")
+    p.add_argument("--save", help="다른 이름으로 저장할 전체 경로 (.xlsx/.xlsm)")
+    p.add_argument("--overwrite", action="store_true", help="같은 이름 파일이 있어도 저장 (사용자가 원할 때만)")
+
+    p = sub.add_parser("duplicates", help="중복 행 찾기 (읽기만): --columns 값이 같은 행 묶음과 엑셀 행 번호")
+    common(p)
+    p.add_argument("--range", help="표 범위 (첫 행 머리글, 생략 시 사용 범위)")
+    p.add_argument("--columns", help="비교할 열 (쉼표로, 생략 시 모든 열이 같은 행)")
+    p.add_argument("--save", nargs="?", const=True, help="중복 행 목록을 CSV로 저장")
+
     p = sub.add_parser("info", help="통합문서 요약")
     common(p)
     p.add_argument("--all", action="store_true", help="열린 통합문서 전체 목록")
@@ -4790,7 +5018,8 @@ def build_cli():
     common(p, write=True)
     p.add_argument("--action", required=True,
                    choices=["autofit", "width", "height", "merge", "unmerge", "freeze", "unfreeze",
-                            "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort"])
+                            "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort", "values"],
+                   help="values: 수식을 지금 값으로 바꿈 (--dry-run으로 먼저 확인)")
     p.add_argument("--range", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
     p.add_argument("--dest", help="copy/move 목적지 (예: B2, 'Sheet2'!A1)")
     p.add_argument("--size", type=float, help="width/height 값")
@@ -4859,7 +5088,8 @@ def build_cli():
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
             "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
-            "comment": cmd_comment, "check": cmd_check, "compare": cmd_compare, "stats": cmd_stats}
+            "comment": cmd_comment, "check": cmd_check, "compare": cmd_compare, "stats": cmd_stats,
+            "duplicates": cmd_duplicates, "save": cmd_save}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

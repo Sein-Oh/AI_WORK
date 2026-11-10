@@ -133,11 +133,16 @@ def test_scattered_two_keys_enclosing_rows_and_far_point(process):
     assert len(r["nearest_rows"]) == 5 and r["nearest_rows"][0]["distance"] <= r["nearest_rows"][-1]["distance"]
     assert "센서오류" not in str(r) and any("제외" in w for w in r["warnings"])            # marked row not used
 
+    out = run_tool("ml_map.py", *P(process, "--input", "반응온도=290,소비전력=60", *args))
+    op = out["points"][0]
+    assert op["extrapolated"] and op["method"].startswith("전체 추세선 외삽")
+    assert op["values"]["생산효율(%)"] == pytest.approx(0.2 * 290 + 0.1 * 60, abs=0.5)     # trend line, not the end-point slope
+    assert "높음 (데이터 폭의 1" in op["out_of_range"]["반응온도(°C)"], op
+    # 3-5 (2026-11-10 결정): 데이터 폭의 30%보다 먼 점은 --find처럼 값을 내지 않는다 (전에는 폭의 2배 밖도 외삽값)
     far = run_tool("ml_map.py", *P(process, "--input", "반응온도=30,소비전력=200", *args))
-    fp = far["points"][0]
-    assert fp["extrapolated"] and fp["method"].startswith("전체 추세선 외삽")
-    assert abs(fp["values"]["생산효율(%)"]) < 100                                           # never the exploding end-point slope
-    assert "낮음 (데이터 폭의 2." in fp["out_of_range"]["반응온도(°C)"] and "높음" in fp["out_of_range"]["소비전력(kW)"]
+    assert far["count"] == 0 and far["points"] == [] and "값 없음" in far["preview"], far
+    w = " ".join(far["warnings"])
+    assert "30%" in w and "낮음 (데이터 폭의 2." in w and "높음" in w, w
 
 
 def test_one_uneven_key_is_scattered_and_category_filter(process):
@@ -393,9 +398,9 @@ def test_map_unused_columns_use_the_filtered_rows(tmp_path):
     df = pd.DataFrame({"라인": ["X"] * 6 + ["Y"] * 6, "A": [10, 10, 20, 20, 30, 30] * 2, "B": [1, 2] * 6,
                        "Y1": [20, 30, 30, 40, 40, 50, 120, 130, 130, 140, 140, 150],
                        "Y3": [None] * 6 + [9, 8, 19, 18, 29, 28]})
-    res = run_tool("ml_map.py", "--file", write_df(tmp_path / "g.csv", df), "--input", "라인=X,A=15", "--targets", "Y1")
-    unused = [w for w in res.get("warnings", []) if "기준으로 주지 않은 열" in w]
-    assert unused and "'B'" in unused[0] and "Y3" not in unused[0]                # 2.9.14: Y3 (empty for X) listed
+    res = run_fail("ml_map.py", "--file", write_df(tmp_path / "g.csv", df), "--input", "라인=X,A=15", "--targets", "Y1")
+    # 검토 B A2: A x B 격자에서 B를 주지 않으면 평균하지 않고 멈춤 (전에는 경고만 하고 VERIFIED)
+    assert "'B'" in res["message"] and "Y3" not in res["message"], res                # 2.9.14: Y3 (empty for X) listed
 
 
 # ---- 묻지 않은 값 열의 섞인 % (24차 확인 검사 LOW-3, 2.9.42) ------------------------------------------------------
@@ -440,3 +445,249 @@ def test_inline_input_joined_by_semicolon_or_space_gives_fixed_command(grid2):
     with pytest.raises(rt.InputError) as e:                       # where a spaced name starts is not clear: no [추천]
         rt.parse_inline_input("반응 온도=1 반응 압력=2")
     assert "[추천]" not in str(e.value) and "','" in str(e.value)
+
+
+# ---- 검토 B (2026-11-10, 2.9.87): 틀린 값을 VERIFIED로 내던 경우, 단위 행, 날짜 열, 평평한 구간 ----------------------
+
+
+def _xlsx(path, df):
+    df.to_excel(path, index=False)
+    return str(path)
+
+
+def test_forward_with_two_valued_key_asks_for_find(tmp_path):
+    """A1: 산 모양 열(수율)을 기준으로 주면 수율 순으로 이웃한 두 행(온도 30과 75)을 보간해 온도 50.5를 VERIFIED로 냈다.
+    수율 80이 되는 온도는 두 곳이므로 같은 질문의 --find 전체 명령을 [추천]. 오르기만 하는 열은 그대로 사잇값."""
+    T = np.arange(0, 101, 5)
+    f = _xlsx(tmp_path / "nm.xlsx", pd.DataFrame({"온도": T, "수율": 100 - (T - 50) ** 2 / 25 + np.linspace(0, 0.2, len(T))}))
+    res = run_fail("ml_map.py", "--file", f, "--input", "수율=80")
+    assert res["agent_directive"].startswith("STOP_RETRY") and "50.5" not in json.dumps(res, ensure_ascii=False), res
+    name, cmd = recommended_command(res["message"])
+    assert name == "ml_map.py" and cmd[cmd.index("--find") + 1] == "수율=80" and cmd[cmd.index("--vary") + 1] == "온도", cmd
+    ok = run_tool("ml_map.py", *cmd)
+    assert ok["count"] == 2, ok
+    res = run_fail("ml_map.py", "--file", f, "--input", "수율=75", "--targets", "온도")
+    assert "[추천]" in res["message"], res
+    mono = _xlsx(tmp_path / "mono.xlsx", pd.DataFrame({"온도": T, "수율": T ** 1.5 / 10}))
+    ok = run_tool("ml_map.py", "--file", mono, "--input", "수율=50")
+    assert ok["points"][0]["values"]["온도"] == pytest.approx(500 ** (2 / 3), abs=0.3), ok
+
+
+def test_forward_without_a_level_key_stops(tmp_path):
+    """A2: 격자에서 압력을 주지 않으면 압력 1~3을 평균한 값(31)과 '압력 2'를 VERIFIED로 냈다. 글자 열(라인)을 주지 않아도
+    A·B 평균. 빠진 기준 열을 알리고 값을 묻는다 (next_commands의 <값>)."""
+    rows = [{"온도(°C)": a, "압력(bar)": b, "출력(kW)": 0.1 * a + 5 * b + 0.01 * a * b} for a in (100, 150, 200, 250) for b in (1, 2, 3)]
+    g2 = _xlsx(tmp_path / "g2.xlsx", pd.DataFrame(rows))
+    res = run_fail("ml_map.py", "--file", g2, "--input", "온도=175")
+    assert "압력(bar)" in res["message"] and "31" not in res["message"], res
+    assert res["error_type"] == "needs_user_decision" and res["next_commands"][0]["needs_input"], res
+    cmd = split_command(res["next_commands"][0]["command"])
+    assert cmd[cmd.index("--input") + 1] == "온도=175,압력(bar)=<값>", cmd
+    assert "next_commands" in res["agent_directive"], res
+    res = run_fail("ml_map.py", "--file", g2, "--input", "온도=175", "--targets", "출력")
+    assert "압력(bar)" in res["message"], res
+    g = pd.DataFrame(rows)
+    gb = g.assign(라인="B")
+    gb["출력(kW)"] *= 2
+    cat = _xlsx(tmp_path / "g2_cat.xlsx", pd.concat([g.assign(라인="A"), gb]))
+    res = run_fail("ml_map.py", "--file", cat, "--input", "온도=175,압력=2.5")
+    assert "'라인'" in res["message"] and "A, B" in res["message"] and "51.75" not in res["message"], res
+    ok = run_tool("ml_map.py", "--file", cat, "--input", "온도=175,압력=2.5,라인=A")
+    assert ok["points"][0]["values"]["출력(kW)"] == pytest.approx(34.375), ok
+    pts = tmp_path / "pts.csv"
+    pd.DataFrame({"온도": [175, 120]}).to_csv(pts, index=False)
+    res = run_fail("ml_map.py", "--file", g2, "--points", str(pts))
+    assert "압력(bar)" in res["message"], res
+
+
+def test_single_value_key_is_dropped_or_refused_without_qhull_text(tmp_path):
+    """B5: 값이 하나뿐인 기준 열을 함께 주면 qhull 오류 글 10여 줄이 message에 그대로 나왔다."""
+    f = _xlsx(tmp_path / "const.xlsx", pd.DataFrame({"온도": [10, 10, 10, 10], "압력": [1, 2, 3, 4], "값": [1, 2, 3, 4]}))
+    ok = run_tool("ml_map.py", "--file", f, "--input", "온도=10,압력=2.5")
+    assert ok["keys"] == ["압력"] and ok["points"][0]["values"]["값"] == pytest.approx(2.5), ok
+    assert any("'온도'" in w and "10 하나뿐" in w for w in ok["warnings"]), ok
+    bad = run_fail("ml_map.py", "--file", f, "--input", "온도=12,압력=2.5")
+    assert "10 하나뿐" in bad["message"] and "qhull" not in bad["message"].lower(), bad
+    line = _xlsx(tmp_path / "line.xlsx", pd.DataFrame({"온도": [1, 2, 3, 4], "압력": [1, 2, 3, 4], "값": [1, 2, 3, 4]}))
+    bad = run_fail("ml_map.py", "--file", line, "--input", "온도=2.5,압력=2.5")
+    assert "qhull" not in bad["message"].lower() and "QH" not in bad["message"], bad
+
+
+def test_unit_row_below_header_is_read_as_units(tmp_path):
+    """C1: 머리글 아래 단위 행을 데이터로 읽어 작은 표는 '숫자 기준 열이 하나 이상 필요합니다'로 멈추고, 큰 표는 이름에
+    단위가 붙지 않아 '유량(L/min)'을 받지 못했다. 단위 행으로 읽는다 (warnings에 알림)."""
+    def pump(name, k):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["유량", "양정", "효율"])
+        ws.append(["L/min", "m", "%"])
+        for i in range(k):
+            q = 10 + 5 * i
+            ws.append([q, 50 - 0.5 * q, 30 + q])
+        wb.save(tmp_path / name)
+        return str(tmp_path / name)
+    p2, p3 = pump("pump2.xlsx", 6), pump("pump3.xlsx", 12)
+    ok = run_tool("ml_map.py", "--file", p2, "--input", "유량=35")
+    assert ok["keys"] == ["유량(L/min)"] and ok["points"][0]["values"]["효율(%)"] == pytest.approx(65), ok
+    assert any("단위 행" in w for w in ok["warnings"]), ok
+    rev = run_tool("ml_map.py", "--file", p2, "--find", "효율=60", "--vary", "유량")
+    assert rev["solutions"][0]["유량(L/min)"] == pytest.approx(30), rev
+    assert run_tool("ml_map.py", "--file", p3, "--input", "유량(L/min)=37")["points"][0]["values"]["효율(%)"] == pytest.approx(67)
+
+
+def test_date_column_filter_reads_dates(tmp_path):
+    """C2: 날짜 열은 '2026-01-06 00:00:00'으로 적어야 걸렀다."""
+    d = pd.to_datetime(["2026-01-05"] * 3 + ["2026-01-06"] * 3)
+    f = _xlsx(tmp_path / "dt.xlsx", pd.DataFrame({"날짜": d, "온도": [20, 25, 30] * 2, "값": [1, 2, 3, 11, 12, 13]}))
+    ok = run_tool("ml_map.py", "--file", f, "--input", "날짜=2026-01-06,온도=27.5", "--targets", "값")
+    assert ok["points"][0]["values"]["값"] == pytest.approx(12.5), ok
+    bad = run_fail("ml_map.py", "--file", f, "--input", "날짜=2026-01-09,온도=27.5", "--targets", "값")
+    assert "[후보] 1) 2026-01-05 2) 2026-01-06" in bad["message"] and "00:00" not in bad["message"], bad
+    cmd = split_command(bad["confirm_commands"][1]["command"])
+    assert run_tool("ml_map.py", *cmd[2:])["points"][0]["values"]["값"] == pytest.approx(12.5)
+
+
+def test_flat_stretch_is_one_span(tmp_path):
+    """D3: 평평한 구간(10~30 전체가 답)을 마디 값 10, 20, 30으로 나열했다."""
+    f = _xlsx(tmp_path / "flat.xlsx", pd.DataFrame({"x": [0, 10, 20, 30, 40], "y": [1, 5, 5, 5, 9]}))
+    res = run_tool("ml_map.py", "--file", f, "--find", "y=5", "--vary", "x")
+    assert res["count"] == 1 and res["solutions"][0]["from"] == 10 and res["solutions"][0]["to"] == 30, res
+    assert "10~30" in res["preview"], res
+
+
+def test_points_preview_counts_failed_rows(tmp_path):
+    """D4: 계산하지 못한 조회도 '보간' 건수에 넣고, 글자 값도 '빈칸'이라고 했다."""
+    a = np.arange(0, 101, 10)
+    f = write_df(tmp_path / "g.csv", pd.DataFrame({"A": a, "B": a * 2}))
+    pts = tmp_path / "q.csv"
+    pd.DataFrame({"메모": ["a", "b", "c", "d"], "A": ["15", "", "abc", "25"]}).to_csv(pts, index=False)
+    res = run_tool("ml_map.py", "--file", f, "--points", str(pts))
+    assert "조회 4건 중 2건 보간" in res["preview"] and "2건 계산 불가" in res["preview"], res
+    assert any("빈칸인 조회 1건" in w for w in res["warnings"]) and any("숫자가 아닌 조회 1건" in w for w in res["warnings"]), res
+    sheet = pd.read_excel(res["output_file"], sheet_name="결과")
+    assert sheet["방식"][2] == "계산 불가 (기준 값이 숫자가 아님)" and sheet["방식"][1] == "계산 불가 (기준 값 빈칸)", sheet
+
+
+def test_reverse_far_extrapolation_is_no_answer(tmp_path):
+    """A7: 데이터 폭의 1.6배 밖 답(온도 -137.6)을 VERIFIED 답으로 냈다. 가까운 외삽(폭의 5%)은 그대로 답."""
+    f = _xlsx(tmp_path / "k1.xlsx", pd.DataFrame({"온도": [10, 20, 35, 50, 70, 100], "값": [5, 9, 12, 9, 5, 1]}))
+    res = run_tool("ml_map.py", "--file", f, "--find", "값=20", "--vary", "온도")
+    assert res["count"] == 0 and "찾은 값 없음" in res["preview"] and "-137" not in res["preview"], res
+    assert any("-137" in w for w in res["warnings"]), res
+    a = np.arange(0, 101, 5)
+    g = _xlsx(tmp_path / "g1.xlsx", pd.DataFrame({"A": a, "B": a * a / 10}))
+    assert run_tool("ml_map.py", "--file", g, "--find", "B=5000", "--vary", "A")["count"] == 0
+    near = run_tool("ml_map.py", "--file", g, "--find", "B=1100", "--vary", "A")
+    assert near["count"] == 1 and near["solutions"][0]["extrapolated"], near
+
+
+def test_reverse_with_many_noisy_answers_gives_model_command(tmp_path):
+    """D5: 흩어진 기록에서 답이 많으면 글로만 '예측 모델로 보라'고 했다. 학습한 모델이 있으면 그 명령을 next_commands로."""
+    r = np.random.default_rng(2)
+    x = r.uniform(0, 100, 120)
+    f = write_df(tmp_path / "noisy.csv", pd.DataFrame({"x": x.round(3), "y": (x + r.normal(0, 8, 120)).round(3)}))
+    assert run_tool("ml_train.py", "--file", f, "--features", "x", "--targets", "y")["status"] == "ok"
+    res = run_tool("ml_map.py", "--file", f, "--find", "y=50", "--vary", "x")
+    assert res["count"] > 3 and "모델로 찾기" in res["preview"], res
+    nxt = split_command(res["next_commands"][0]["command"])
+    assert os.path.basename(nxt[1]) == "ml_predict.py" and nxt[nxt.index("--find") + 1] == "y=50", nxt
+    assert run_tool("ml_predict.py", *nxt[2:])["count"] >= 1
+    assert "next_commands" in res["agent_directive"], res
+
+
+def test_nan_and_percent_values(tmp_path):
+    """D2·A3(ml_map): --find 목표의 '%'는 떼고 읽고(경고), 'nan'·'inf'는 숫자가 아님."""
+    a = np.arange(0, 101, 10)
+    f = write_df(tmp_path / "g.csv", pd.DataFrame({"A": a, "B": a * 2}))
+    res = run_tool("ml_map.py", "--file", f, "--find", "B=60%", "--vary", "A")
+    assert res["solutions"][0]["A"] == pytest.approx(30) and any("%" in w for w in res["warnings"]), res
+    for bad in ("B=nan", "B=inf"):
+        assert run_fail("ml_map.py", "--file", f, "--find", bad, "--vary", "A")["error_type"] == "input"
+    assert run_fail("ml_map.py", "--file", f, "--input", "A=nan")["error_type"] == "input"
+
+
+# ---- 3-5(2026-11-10 결정): 한 건 사잇값도 --find처럼 데이터 폭의 30%까지만 외삽 -----------------------------
+
+
+def test_forward_far_extrapolation_gives_no_value(grid1, tmp_path):
+    """3-5: A 0~100 표에 A=500을 주면 직선 연장 값이 나왔다. 데이터 폭의 30% 안(A=125)은 [외삽] 값, 더 멀면(A=140) 값 없음(count 0)."""
+    near = run_tool("ml_map.py", *P(grid1, "--input", "A=125"))
+    assert near["count"] == 1 and near["points"][0]["extrapolated"] and "[외삽]" in near["preview"], near
+    far = run_tool("ml_map.py", *P(grid1, "--input", "A=140", "--save", str(tmp_path / "far.xlsx")))
+    assert far["count"] == 0 and far["points"] == [] and far["data_range"] == {"A": [0.0, 100.0]}, far
+    assert "값 없음" in far["preview"] and "0~100" in far["preview"], far
+    assert far["agent_directive"].startswith("VERIFIED:") and "count 0" in far["agent_directive"], far
+    assert any("30%" in w and "40 높음" in w for w in far["warnings"]), far
+    assert "output_file" not in far and not os.path.exists(tmp_path / "far.xlsx"), far
+    assert len(far["nearest_rows"]) == 5
+
+
+def test_points_far_extrapolation_is_not_computed(grid1, tmp_path):
+    q = tmp_path / "far_points.xlsx"
+    pd.DataFrame({"A": [12.5, 125, 140]}).to_excel(q, index=False)
+    r = run_tool("ml_map.py", *P(grid1, "--points", str(q)))
+    assert r["count"] == 3 and r["computed_count"] == 2 and r["failed_count"] == 1 and r["extrapolated_count"] == 1, r
+    sheet = pd.read_excel(r["output_file"], sheet_name="결과")
+    assert sheet["방식"][2].startswith("계산 불가 (데이터 범위에서 너무 멂") and pd.isna(sheet["보간_B"][2]), sheet
+    assert sheet["외삽"][1] == "예" and any("30%" in w for w in r["warnings"]), r
+
+
+def test_reverse_far_fixed_key_gives_no_answer(grid2):
+    """3-5: --find의 고정 기준(--input)도 같은 한도 (압력 1~5 표에 압력=10을 고정하면 직선 연장으로 찾은 답이 나왔음)."""
+    ok = run_tool("ml_map.py", *P(grid2, "--find", "효율=100", "--vary", "온도", "--input", "압력=5.5"))
+    assert ok["count"] == 1, ok
+    far = run_tool("ml_map.py", *P(grid2, "--find", "효율=100", "--vary", "온도", "--input", "압력=10"))
+    assert far["count"] == 0 and "너무 멂" in far["preview"] and any("30%" in w for w in far["warnings"]), far
+
+
+def test_table_far_field_uses_the_find_limit():
+    df = pd.DataFrame({"A": np.arange(0, 101, 5), "B": np.arange(0, 101, 5) * 2.0})
+    df["__row"] = np.arange(2, 2 + len(df))
+    t = rt.Table(df, ["A"], ["B"], [])
+    assert rt.FAR_FIND == 0.3
+    assert not t.at(np.array([129.0]))["far"] and "A" in t.at(np.array([131.0]))["far"]
+    assert "A" in t.at(np.array([-31.0]))["far"]
+
+
+# ---- 2-1(2026-11-10 결정): 표 파일의 --sheet --------------------------------------------------------------
+
+
+def _months_book(path):
+    wb = openpyxl.Workbook()
+    for k, m in enumerate(["1월", "2월", "3월"]):
+        ws = wb.active if k == 0 else wb.create_sheet(m)
+        ws.title = m
+        ws.append(["온도", "압력", "수율"])
+        r = np.random.default_rng(k)
+        for _ in range(20):
+            t, p = round(float(r.uniform(150, 200)), 1), round(float(r.uniform(1, 5)), 2)
+            ws.append([t, p, round(30 + 0.2 * t + 3 * p + 10 * k, 2)])
+    wb.save(path)
+    return str(path)
+
+
+def test_map_reads_the_named_sheet(tmp_path):
+    """2-1: ml_map --file은 첫 시트만 읽었다. --sheet로 고른 시트, 생략하면 첫 시트 + 다른 시트 [후보] 전체 명령."""
+    f = _months_book(tmp_path / "months.xlsx")
+    res = run_tool("ml_map.py", "--file", f, "--input", "온도=175", "--targets", "수율")
+    assert "[후보] 1) 2월 2) 3월" in " ".join(res.get("warnings", [])), res
+    cmds = [split_command(c["command"]) for c in res["confirm_commands"]]
+    assert [c[c.index("--sheet") + 1] for c in cmds] == ["2월", "3월"], cmds
+    picked = run_tool(os.path.basename(cmds[1][1]), *cmds[1][2:])
+    assert not any("시트" in w for w in picked.get("warnings", [])), picked
+    first = res["points"][0]["values"]["수율"]
+    assert picked["points"][0]["values"]["수율"] != first                    # 3월 rows (+20)
+    bad = run_fail("ml_map.py", "--file", f, "--input", "온도=175", "--sheet", "4월")
+    assert "[후보]" in bad["message"] and len(bad["confirm_commands"]) == 3, bad
+    csv = write_df(tmp_path / "g.csv", pd.DataFrame({"A": np.arange(0, 101, 10), "B": np.arange(0, 101, 10) * 2}))
+    res = run_tool("ml_map.py", "--file", csv, "--input", "A=15", "--sheet", "1월")
+    assert any("--sheet" in w for w in res.get("warnings", [])), res
+
+
+def test_map_built_commands_keep_the_sheet():
+    import argparse
+    import ml_map
+    ns = argparse.Namespace(file="표.xlsx", header_row=None, unit_row=None, data_row=None, input="온도=1", targets=None,
+                            find=None, vary=None, save=None, overwrite=False, sheet="2월")
+    cmd = split_command(ml_map._map_command(ns, input="온도=2"))
+    assert cmd[cmd.index("--sheet") + 1] == "2월" and cmd[cmd.index("--input") + 1] == "온도=2", cmd

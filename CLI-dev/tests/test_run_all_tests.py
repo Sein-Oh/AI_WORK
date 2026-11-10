@@ -558,8 +558,11 @@ def test_pytest_workers_default_is_capped_by_cores_and_memory(monkeypatch):
 def test_slow_python_start_windows_are_reported():
     # 회사 PC 2026-11-10 낮: 파일 정리 작업 시간대에 프로세스를 띄우는 시험이 수십 배 느려짐 -> 그 시간대를 결과에 남김
     s = [("12:00", 0.4), ("12:01", 0.5), ("12:02", 9.0), ("12:03", 30.0), ("12:04", 0.6), ("12:05", 3.0)]
-    assert rat.slow_windows(s) == ["12:02~12:03 파이썬 시작 최대 30.0초 (처음 0.4초)", "12:05~12:05 파이썬 시작 최대 3.0초 (처음 0.4초)"]
+    assert rat.slow_windows(s) == ["12:02~12:03 파이썬 시작 최대 30.0초 (평소 0.4초)", "12:05~12:05 파이썬 시작 최대 3.0초 (평소 0.4초)"]
     assert rat.slow_windows([("12:00", 0.4), ("12:01", 1.9)]) == [] and rat.slow_windows([]) == []
+    # 재부팅 직후처럼 첫 측정부터 느리면: 가장 빠른 측정이 평소 (회사 PC 2026-11-10 15:07 2.4초, 15:29 이후 1초)
+    late = [("15:07", 2.36), ("15:12", 16.1), ("15:29", 1.05), ("15:41", 0.59)]
+    assert rat.slow_windows(late) == ["15:12~15:12 파이썬 시작 최대 16.1초 (평소 0.59초)"]
     assert rat.probe_python() is not None
 
 

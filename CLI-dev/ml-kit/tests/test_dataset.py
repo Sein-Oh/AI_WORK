@@ -126,3 +126,134 @@ def test_saved_file_reads_back_like_the_source(tmp_path, ext):
         df.to_excel(f, index=False)
     res = run_tool("ml_dataset.py", "pick", "--file", str(f), "--where", "y >= 2")
     assert res["verified"] is True and res["rows_saved"] == 5, res
+
+
+# ---- 2.9.88 검토 C: 데이터셋 결함 (재현 -> 수정) ---------------------------------------------------------------------
+
+
+def _unit_book(path, n=40, seed=3):
+    """1행 머리글, 2행 단위(°C, bar, %), 3행부터 데이터인 엑셀."""
+    r = np.random.default_rng(seed)
+    rows = [["반응온도", "압력", "수율"], ["°C", "bar", "%"]]
+    for _ in range(n):
+        t, p = round(float(r.uniform(160, 200)), 1), round(float(r.uniform(1, 3)), 2)
+        rows.append([t, p, round(0.3 * t + 5 * p, 2)])
+    from mlkit_helpers import write_book
+    return write_book(str(path), rows)
+
+
+def test_save_into_a_new_folder(tmp_path):
+    """B3: 없는 폴더로 --save는 'ERROR: 도구 내부 오류'(OSError)였다 -> 폴더를 만들어 저장. 다른 확장자는 [추천] .csv 전체 명령."""
+    f = tmp_path / "d.csv"
+    _data(f)
+    res = run_tool("ml_dataset.py", "pick", "--file", str(f), "--where", "라인 = A", "--save", os.path.join("새폴더", "x.xlsx"))
+    assert res["output_file"] == str(tmp_path / "새폴더" / "x.xlsx") and res["verified"] is True, res
+    proc, bad = run_raw("ml_dataset.py", "pick", "--file", str(f), "--where", "라인 = A", "--save", "x.txt")
+    rec = bad["message"].split("[추천] ", 1)[1]
+    argv = split_command(rec)
+    assert proc.returncode == 1 and argv[argv.index("--save") + 1] == str(tmp_path / "x.csv"), bad
+
+
+def test_dry_run_confirm_command_keeps_the_layout_options(tmp_path):
+    """B4: --dry-run의 '미리보기대로 저장' 명령이 --header-row/--unit-row/--data-row/--overwrite를 빠뜨려 다르게 읽었다.
+    B6: --dry-run은 저장하지 않으므로 '이미 있음 -> 새 이름으로 저장'(recovered)을 쓰지 않는다."""
+    f = _unit_book(tmp_path / "u.xlsx")
+    first = run_tool("ml_dataset.py", "exclude", "--file", f, "--where", "반응온도 >= 190", "--unit-row", "2", "--save", "o.csv")
+    assert first["rows_saved"] == 40
+    dry = run_tool("ml_dataset.py", "exclude", "--file", f, "--where", "반응온도 >= 190", "--header-row", "1", "--unit-row", "2",
+                   "--data-row", "3", "--save", "o.csv", "--overwrite", "--dry-run")
+    assert "recovered" not in dry, dry
+    argv = split_command(dry["confirm_commands"][0]["command"])
+    assert argv[argv.index("--header-row") + 1] == "1" and argv[argv.index("--unit-row") + 1] == "2"
+    assert argv[argv.index("--data-row") + 1] == "3" and "--overwrite" in argv and "--dry-run" not in argv
+    done = run_tool("ml_dataset.py", *argv[2:])
+    assert done["output_file"] == first["output_file"] == dry["output_file"] and done["rows_saved"] == 40 and done["count"] == dry["count"]
+    again = run_tool("ml_dataset.py", "exclude", "--file", f, "--where", "반응온도 >= 190", "--unit-row", "2", "--save", "o.csv",
+                     "--dry-run")
+    assert "recovered" not in again and again["output_file"] != first["output_file"]
+
+
+def test_unit_row_is_not_a_row_number(tmp_path):
+    """D3: --unit-row 없이 읽으면 단위 행(2행)이 데이터 행으로 남아 --rows 2를 받고 '1행에 제외 표시'라고 했다."""
+    f = _unit_book(tmp_path / "u.xlsx")
+    bad = run_fail("ml_dataset.py", "exclude", "--file", f, "--rows", "2")
+    assert "단위 행" in bad["message"] and "3~42행" in bad["message"], bad
+    ok = run_tool("ml_dataset.py", "exclude", "--file", f, "--rows", "3")
+    assert ok["marked"] == 1
+
+
+def test_chained_dataset_keeps_the_training_and_description(tmp_path):
+    """C4: '그 행도 빼줘'로 만든 데이터셋(<원본>_제외1.csv)에서 다시 만들면 학습 명령이 <타겟> 틀로 돌아갔고, --desc가 늘 빠졌다."""
+    f = tmp_path / "t.csv"
+    _data(f)
+    run_tool("ml_train.py", "--file", str(f), "--features", "반응온도,압력", "--targets", "수율", "--desc", "반응 시험 수율")
+    one = run_tool("ml_dataset.py", "exclude", "--file", str(f), "--rows", "5")
+    argv = split_command(one["next_commands"][0]["command"])
+    assert argv[argv.index("--desc") + 1] == "반응 시험 수율", argv
+    two = run_tool("ml_dataset.py", "exclude", "--file", one["output_file"], "--rows", "6")
+    nxt = two["next_commands"][0]
+    assert nxt["needs_input"] is False and "t.csv의 v1" in nxt["purpose"], nxt
+    argv = split_command(nxt["command"])
+    assert argv[argv.index("--file") + 1] == two["output_file"] and argv[argv.index("--targets") + 1] == "수율(%)"
+    assert argv[argv.index("--desc") + 1] == "반응 시험 수율"
+
+
+def test_formula_like_reason_is_refused(tmp_path):
+    """D6: --reason '=고온'은 xlsx에 수식으로 저장돼 다시 읽으면 0이었다 (UNVERIFIED, 원인 없음) -> STOP_RETRY + [추천] '고온'."""
+    f = tmp_path / "r.csv"
+    _data(f)
+    bad = run_fail("ml_dataset.py", "exclude", "--file", str(f), "--rows", "3", "--reason", "=고온", "--save", "u.xlsx")
+    argv = split_command(bad["message"].split("[추천] ", 1)[1])
+    assert argv[argv.index("--reason") + 1] == "고온" and argv[argv.index("--save") + 1] == str(tmp_path / "u.xlsx"), argv
+    done = run_tool("ml_dataset.py", *argv[2:])
+    assert done["verified"] is True and done["marked"] == 1 and done["output_file"] == str(tmp_path / "u.xlsx")
+
+
+def test_csv_blank_lines_keep_file_line_numbers(tmp_path):
+    """A8: CSV의 빈 줄도 행 번호로 센다: 학습이 보고한 행 번호 = 파일(엑셀) 행 번호, --rows는 그 행에 표시한다."""
+    import csv
+    from mlkit_helpers import base_rows
+    data = [[t, p, round(60 + 0.1 * t + p, 2)] for t, p, _ in base_rows(30, 9)]     # 고른 분포: 이상치는 9999 하나
+    data[10][2] = 9999                             # 11번째 데이터 행: 파일 15번째 줄 (제목, 빈 줄, 머리글, 5행, 빈 줄 다음)
+    lines = [["공정 데이터 2026"], [], ["온도", "압력", "수율"]] + data[:5] + [[]] + data[5:]
+    f = tmp_path / "blank.csv"
+    with open(f, "w", newline="", encoding="utf-8-sig") as fh:
+        csv.writer(fh).writerows(lines)
+    res = run_tool("ml_train.py", "--file", str(f), "--targets", "수율")
+    assert [e["row"] for e in res["excluded_preview"]] == [15], res["excluded_preview"]
+    out = run_tool("ml_dataset.py", "exclude", "--file", str(f), "--rows", "15")
+    got = pd.read_csv(out["output_file"], encoding="utf-8-sig")
+    assert got.loc[got["제외"].notna(), "수율"].tolist() == [9999], got
+
+
+def test_relative_save_of_a_recommended_command_stays_next_to_the_data(tmp_path):
+    """결정 1-6: 상대 --save는 보고서·성능예측표·데이터셋 모두 원본 데이터 파일 옆. 도구가 낸 [추천] 명령(공통 command_text)은
+    상대 --save를 현재 폴더 기준 절대 경로로 바꿔, 추천 명령을 실행하면 처음 명령과 다른 곳에 저장됐다."""
+    f = tmp_path / "d.csv"
+    _data(f)
+    proc, bad = run_raw("ml_dataset.py", "pick", "--data-file", str(f), "--where", "라인 = A", "--save", os.path.join("결과", "a.csv"))
+    argv = split_command(bad["message"].split("[추천] ", 1)[1])
+    assert proc.returncode == 2 and argv[argv.index("--save") + 1] == str(tmp_path / "결과" / "a.csv"), bad
+    done = run_tool("ml_dataset.py", *argv[2:])
+    assert done["output_file"] == str(tmp_path / "결과" / "a.csv"), done
+
+
+def test_command_text_resolves_relative_save_like_the_tool(tmp_path):
+    """결정 1-6: command_text의 상대 --save 기준 = 도구의 기준 (보고서·성능예측표·데이터셋: 원본 데이터 옆, 그 밖: 현재 폴더)."""
+    import _ml_runtime as rt
+    from mlkit_helpers import KIT
+    data = tmp_path / "공정.xlsx"
+    vdir = tmp_path / "공정_ml_data" / "v2"
+    vdir.mkdir(parents=True)
+
+    def save_of(script, *args):
+        argv = split_command(rt.command_text(argv=[os.path.join(KIT, script), *args]))
+        return argv[argv.index("--save") + 1]
+    want = str(tmp_path / "out" / "r.docx")
+    assert save_of("ml_report.py", "--file", str(data), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_report.py", "--model", str(vdir), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_export.py", "--model", str(vdir), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_export.py", "--model", str(data), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_dataset.py", "pick", "--file", str(data), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_export.py", "--model", str(vdir), "--save", str(tmp_path / "abs.xlsx")) == str(tmp_path / "abs.xlsx")
+    assert save_of("ml_predict.py", "--model", str(vdir), "--save", "p.csv") == os.path.abspath("p.csv")   # 예측: 현재 폴더 그대로

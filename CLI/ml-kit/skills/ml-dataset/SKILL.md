@@ -4,7 +4,7 @@ description: 학습용 데이터셋 파일을 만든다 (ml_dataset.py, 원본�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.87"
+  version: "2.9.89"
   platform: windows
 ---
 
@@ -31,5 +31,6 @@ python "C:\CLI\ml-kit\ml_dataset.py" exclude --file "<데이터파일>" --where 
 ```
 - 조건 대신 행 번호를 말하면 `--where "<조건>"` 자리에 `--rows "<행1>,<행2>"`(엑셀 행 번호)를 쓴다. 이유를 말하지 않았으면 `--reason`을 뺀다.
 - 조건: `반응온도 >= 180`, `라인 = B | 라인 = C`, `생산효율 > 90; 라인 = A` (연산자 `>= <= > < = != ~`(포함), 값에 띄어쓰기가 있으면 `'불량 포함 시료'`).
+- 엑셀 파일의 다른 시트는 사용자가 말했을 때만 `--sheet "<시트 이름>"`을 붙인다.
 - 새 파일은 원본 옆에 `<원본>_뽑기<N>.csv`, `<원본>_제외<N>.csv`로 저장된다. 엑셀로 원하면 `--save "<이름>.xlsx"`를 붙인다.
 - 학습은 사용자가 원할 때 `next_commands[0]`을 그대로 실행한다 (원본의 마지막 학습과 같은 타겟·입력). 0행이면 파일을 만들지 않으니 조건을 사용자에게 확인한다.

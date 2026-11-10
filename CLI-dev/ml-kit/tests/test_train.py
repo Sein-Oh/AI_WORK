@@ -77,10 +77,13 @@ def test_predict_with_categories_dates_and_warnings(mixed):
     lo, hi = ps["intervals"][0]
     assert lo < ps["predictions"][0] < hi and ps["interval_level"] == 0.9
 
-    warn = run_tool("ml_predict.py", "--model", vdir, "--input", "일시=2027-01-01 10:00,라인=Z라인,반응온도=")
-    assert warn["unseen_category_warning"] is True and "Z라인" in warn["unseen_category_warnings"][0]
-    assert warn["missing_input_counts"] == {"반응온도(°C)": 1}
-    assert any("학습 기간" in w for w in warn["extrapolation_warnings"])
+    # 2.9.88 (검토 B영역 B1·D1): 빈 숫자 입력은 중앙값으로 채울지 묻고, 학습 때 없던 종류는 학습한 종류를 [후보]로 멈춤
+    ask = run_fail("ml_predict.py", "--model", vdir, "--input", "일시=2025-02-01 15:00,라인=C라인,반응온도=")
+    assert ask["error_type"] == "needs_user_decision" and ask["missing_inputs"] == ["반응온도(°C)"], ask
+    unseen = run_fail("ml_predict.py", "--model", vdir, "--input", "일시=2025-02-01 15:00,라인=Z라인,반응온도=250")
+    assert "Z라인" in unseen["message"] and "[후보]" in unseen["message"], unseen
+    warn = run_tool("ml_predict.py", "--model", vdir, "--input", "일시=2027-01-01 10:00,라인=C라인,반응온도=250")
+    assert any("학습 기간" in w for w in warn["extrapolation_warnings"]), warn
 
 
 def test_predict_standalone_with_new_schema(mixed, tmp_path):
@@ -406,7 +409,9 @@ def test_class_with_one_distinct_row_falls_back(tmp_path):
 def test_regression_too_few_distinct_rows_stops(tmp_path):
     df = pd.DataFrame({"a": [1.0] * 8 + [2, 3, 4, 5], "b": [1.0] * 8 + [2, 1, 5, 3], "y": [1.0] * 8 + [2, 3, 4, 2]})
     bad = run_fail("ml_train.py", "--file", write_df(tmp_path / "d2.csv", df), "--features", "a,b", "--targets", "y")
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "입력+타겟이 다른 행이 5개뿐" in bad["message"]
+    # 2026-11-10 결정 1-2: 입력 극단값이 자동 이상치 후보에서 빠져 후보가 10% 이하가 되고, 타겟 이상치(y=4) 1행이 자동 제외됨
+    # (예전: 입력 후보까지 합쳐 10% 초과 -> 아무 행도 빼지 않아 5개)
+    assert bad["agent_directive"].startswith("STOP_RETRY") and "입력+타겟이 다른 행이 4개뿐" in bad["message"]
 
 
 def test_regression_ten_distinct_rows_with_many_copies(tmp_path):
@@ -1305,8 +1310,10 @@ def test_training_stops_at_time_limit_and_the_same_command_continues(tmp_path, m
     # every target is split by candidate model (2.9.60) and the run stops before the next one
     assert "후보 모델" in first["progress"] and "5개 끝남" in first["progress"], progress
     assert any("'수분함량(%)'" in t for t in progress) and any("'촉매비율(wt%)'" in t for t in progress), progress
-    cmd = first["next_commands"][0]
-    assert cmd.startswith("python ") and "ml_train.py" in cmd and "--desc" in cmd
+    nxt = first["next_commands"][0]                      # C3: 다른 결과와 같은 {command, needs_input} 모양
+    cmd = nxt["command"]
+    assert cmd.startswith("python ") and "ml_train.py" in cmd and "--desc" in cmd and nxt["needs_input"] is False
+    assert first["preview"] == f"진행 중: {first['progress']}" and "next_commands[0]의 command" in first["agent_directive"]
     assert last["version"] == "v1" and last["agent_directive"].startswith("VERIFIED")
     assert last["resumed_targets"] == ["생산효율(%)", "수분함량(%)"]
     assert last["mean_val_score"] == pytest.approx(want["mean_val_score"], abs=1e-9)   # the same models as one run
@@ -2070,7 +2077,7 @@ def test_watchdog_writes_one_json_line_at_the_limit(tmp_path, monkeypatch):
     proc, out = run("saved")
     assert proc.returncode == 0 and out["continue"] is True and out["agent_directive"].startswith("CONTINUE:"), out
     assert "'RandomForest' 교차검증 fold 2/5 도중 시간 제한(1초)에 닿아 멈춤" in out["progress"], out
-    assert out["next_commands"][0].endswith("--time-limit 1") and "[STATUS]" in proc.stderr
+    assert out["next_commands"][0]["command"].endswith("--time-limit 1") and "[STATUS]" in proc.stderr
     proc, out = run("marked")
     assert proc.returncode == 0 and out["continue"] is True and "다시 시도 1/2" in out["progress"], out
     proc, out = run("marked")
@@ -2232,11 +2239,11 @@ def test_dry_run_shows_version_and_replaced_folder_without_training(tmp_path):
 
 
 def test_tool_stops_offering_retraining_after_rounds_without_gain(tmp_path):
-    """2.9.71: 개선 반복 횟수는 도구가 센다. 같은 타겟 학습이 IMPROVE_ROUNDS(5)번 연속 이전 최고를 넘지 못하면
-    재학습 next_commands 대신 보고서 명령 하나와 improve_stopped (LLM이 5번을 세지 않음)."""
+    """2.9.71: 개선 반복 횟수는 도구가 센다. 같은 타겟 학습이 IMPROVE_PATIENCE(2)번 연속 이전 최고보다 0.01 이상
+    나아지지 않으면(2026-11-10 결정 1-1, 이전에는 5번 연속 0.0001) 재학습 next_commands 대신 보고서 명령 하나와 improve_stopped."""
     data = make_sample(str(tmp_path / "d.csv"))
     x = "반응온도(°C),소비전력(kW),압축압력(bar)"
-    for i in range(mt.IMPROVE_ROUNDS):
+    for i in range(mt.IMPROVE_PATIENCE):
         res = run_tool("ml_train.py", "--file", data, "--features", x, "--targets", TARGET)
         assert res["goal_met"] is False and "improve_stopped" not in res, (i, res.get("improve_stopped"))
     res = run_tool("ml_train.py", "--file", data, "--features", x, "--targets", TARGET)
@@ -2396,3 +2403,352 @@ def test_history_latest_version_skips_a_damaged_folder(tmp_path):
     assert h["latest_version"] == "v1" and "v2" in h["latest_version_note"] and "v2" in h["preview"], h
     p = run_tool("ml_predict.py", "--model", data, "--input", "온도=200,압력=3")
     assert "v1" in p["model_chosen"] and "v2" in p["model_chosen"] and "손상" in p["model_chosen"], p
+
+
+# ---- 검토 A (2026-11-10): 입력 자동 선택, 타겟 글자 칸, '제외' 표시, 분류 타겟, --eval, 점수 표시, 빈 폴더 ------------------
+
+from mlkit_helpers import base_rows, ok_res, stop_msg, write_book  # noqa: E402
+
+
+def test_counting_column_related_to_target_stays_an_input(tmp_path):
+    """A4(a): 1씩 늘어나는 정수 열(경과일)이라도 타겟과 관계가 있으면 ID로 빼지 않는다."""
+    r = np.random.default_rng(1)
+    rows = [["경과일(일)", "보관온도", "잔존율(%)"]]
+    for d in range(1, 31):
+        t = round(float(r.uniform(5, 30)), 1)
+        rows.append([d, t, round(100 - 1.2 * d - 0.3 * t + float(r.normal(0, 3)), 2)])
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "days.xlsx", rows), "--targets", "잔존율")
+    assert "경과일(일)" in res["features_auto"], res
+    assert res["mean_val_score"] > 0.5, res
+
+
+def test_named_id_column_is_still_left_out(tmp_path):
+    rows = [["시료번호", "온도", "압력", "수율"]] + [[1000 + i, t, p, y] for i, (t, p, y) in enumerate(base_rows(30, 2))]
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "id.xlsx", rows), "--targets", "수율")
+    assert res["features_auto"] == ["온도", "압력"], res
+    # 뺀 열을 넣어 학습하는 전체 명령 (사용자가 원할 때만)
+    cmds = [c["command"] for c in res.get("confirm_commands", [])]
+    assert any("--features" in c and "시료번호" in c for c in cmds), res
+
+
+def _three_targets(path, n=200, seed=4):
+    r = np.random.default_rng(seed)
+    rows = [["온도", "압력", "라인", "수율", "강도", "점도"]]
+    for _ in range(n):
+        t, p = float(r.uniform(150, 200)), float(r.uniform(1, 5))
+        rows.append([round(t, 2), round(p, 3), str(r.choice(["A", "B"])), round(30 + 0.2 * t + 3 * p + float(r.normal(0, 1)), 3),
+                     round(t * p / 10 + float(r.normal(0, 2)), 3), round(100 - t / 3 + float(r.normal(0, 1)), 3)])
+    return write_book(path, rows)
+
+
+def test_strongly_related_input_is_kept_and_flagged(tmp_path):
+    """A4(b)(c): 상관 0.98이 넘어도 타겟의 사본(사실상 1)이 아니면 입력으로 두고 의심 입력으로 알린다 (다른 타겟에서도 빠지지 않음)."""
+    res = run_tool("ml_train.py", "--file", _three_targets(tmp_path / "m.xlsx"), "--targets", "수율,강도,점도")
+    assert "온도" in res["features_auto"], res
+    assert any(d["column"] == "온도" for d in res.get("suspect_inputs", [])), res
+    assert res["mean_val_score"] > 0.8, res["preview"]
+
+
+def test_exact_copy_of_target_is_still_left_out(tmp_path):
+    rows = [["온도", "압력", "수율(K)", "수율"]] + [[t, p, y * 10, y] for t, p, y in base_rows(30, 3)]
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "copy.xlsx", rows), "--targets", "수율")
+    assert res["features_auto"] == ["온도", "압력"], res
+
+
+def test_target_text_cells_are_said_with_rows_and_preview_has_row_count(tmp_path):
+    """A7: 타겟 칸을 숫자로 못 읽은 행은 warnings에 행 번호·값으로 알리고, preview에 학습 행 수가 늘 있다."""
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 5)]
+    rows[3][2], rows[8][2], rows[12][2] = "불량", "불량", "85.2 (재측정)"
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "ty.xlsx", rows), "--targets", "수율")
+    w = " ".join(res.get("warnings", []))
+    assert "'불량'" in w and "4, 9, 13행" in w, res.get("warnings")
+    assert "학습 27행" in res["preview"], res["preview"]
+
+
+def test_small_training_is_flagged(tmp_path):
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(12, 6)]
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "small.xlsx", rows), "--targets", "수율")
+    assert "학습 12행" in res["preview"] and any("12행" in w for w in res.get("warnings", [])), res
+
+
+def _marked(path, marks):
+    rows = [["온도", "압력", "수율", "제외"]] + [[t, p, y, m] for (t, p, y), m in zip(base_rows(30, 7), marks)]
+    return write_book(path, rows)
+
+
+def test_exclude_column_no_words_are_not_marks(tmp_path):
+    """B3: '제외' 열의 N, No, -, 아니오, N/A는 표시가 없는 것 (Y 2칸만 뺀다)."""
+    marks = ["N", "No", "-", "아니오", "N/A"] * 6
+    marks[4], marks[9] = "Y", "Y"
+    res = run_tool("ml_train.py", "--file", _marked(tmp_path / "yn.xlsx", marks), "--targets", "수율")
+    assert res["exclusions"]["수율"]["manual"] == 2, res["exclusions"]
+
+
+def test_exclude_column_filled_with_flags_stops_with_the_counts(tmp_path):
+    """B3: O/X처럼 뜻이 갈리는 표시로 열을 다 채우면 전 행을 빼지 않고 값 종류와 칸 수를 알린다."""
+    marks = ["X"] * 28 + ["O", "O"]
+    proc, res = run_raw("ml_train.py", "--file", _marked(tmp_path / "ox.xlsx", marks), "--targets", "수율")
+    msg = stop_msg(res, proc)
+    assert "'X' 28칸" in msg and "'O' 2칸" in msg and "제외" in msg, msg
+
+
+def test_too_few_rows_after_marks_names_the_marks(tmp_path):
+    marks = ["이상"] * 25 + [None] * 5
+    proc, res = run_raw("ml_train.py", "--file", _marked(tmp_path / "many.xlsx", marks), "--targets", "수율")
+    msg = stop_msg(res, proc)
+    assert "'제외' 열" in msg and "25행" in msg, msg
+
+
+def test_continuous_target_as_classification_is_short_and_recommends_regression(tmp_path):
+    """B4: 연속 수치 타겟에 --task classification: 메시지는 짧고(클래스 목록 전체 아님) 회귀 전체 명령을 [추천]."""
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(200, 8)]
+    f = write_book(tmp_path / "c.xlsx", rows)
+    proc, res = run_raw("ml_train.py", "--file", f, "--targets", "수율", "--task", "classification")
+    msg = stop_msg(res, proc)
+    assert len(json.dumps(res, ensure_ascii=False)) < 2000, len(json.dumps(res, ensure_ascii=False))
+    name, args = recommended_command(msg)
+    assert "--task" not in args and run_tool(name, *args)["task"] == "regression"
+
+
+def test_eval_caret_recommends_power(tmp_path):
+    """B5: '^'는 거듭제곱 '**'로 고친 전체 명령을 [추천]; 쓸 수 없는 문법은 '보안 위반'이 아니라 쓸 수 있는 것을 알림."""
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 9)]
+    f = write_book(tmp_path / "e.xlsx", rows)
+    proc, res = run_raw("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "수율", "--eval", "제곱 = 온도^2")
+    name, args = recommended_command(stop_msg(res, proc))
+    assert args[args.index("--eval") + 1] == "제곱 = 온도**2"
+    assert run_tool(name, *args)["status"] == "ok"
+    proc, res = run_raw("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "수율", "--eval", "x = 온도 if 압력 else 0")
+    msg = stop_msg(res, proc)
+    assert "보안" not in msg and "**" in msg and "clip" in msg, msg
+    proc, res = run_raw("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "수율", "--eval", "a = 온도/압력, b = 온도*2")
+    assert "max(a, b)" not in stop_msg(res, proc)
+
+
+def test_eval_log_of_negative_values_is_warned(tmp_path):
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 10)]
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "l.xlsx", rows), "--features", "온도,압력", "--targets", "수율",
+                   "--eval", "로그 = log(온도 - 180)")
+    assert any("log" in w and "음수" in w and "절댓값" in w for w in res.get("warnings", [])), res.get("warnings")
+
+
+def test_eval_without_any_value_says_the_formula(tmp_path):
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 11)]
+    proc, res = run_raw("ml_train.py", "--file", write_book(tmp_path / "z.xlsx", rows), "--features", "온도,압력", "--targets", "수율",
+                        "--eval", "비 = 온도 / (압력 - 압력)")
+    msg = stop_msg(res, proc)
+    assert "수식" in msg and "헤더" not in msg, msg
+
+
+def test_all_rows_score_never_shows_infinity(tmp_path):
+    """B6: 제외 행의 예측이 넘쳐 점수를 못 내면 preview에 -inf가 아니라 '계산 불가'."""
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 12)]
+    rows[4][0] = 1e308
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "big.xlsx", rows), "--features", "온도,압력", "--targets", "수율")
+    assert "inf" not in res["preview"], res["preview"]
+
+
+def test_two_value_target_suggests_classification(tmp_path):
+    """C2: 회귀 타겟 값이 0/1 두 가지면 warnings와 분류 학습 전체 명령(confirm_commands)."""
+    rows = [["온도", "압력", "불량여부"]] + [[t, p, int(y > 70)] for t, p, y in base_rows(40, 13)]
+    res = run_tool("ml_train.py", "--file", write_book(tmp_path / "b.xlsx", rows), "--targets", "불량여부")
+    assert any("--task classification" in w for w in res.get("warnings", [])), res
+    assert any("--task classification" in c["command"] for c in res.get("confirm_commands", [])), res
+
+
+def test_text_target_regression_recommends_classification(tmp_path):
+    rows = [["온도", "압력", "판정"]] + [[t, p, "양품" if y > 70 else "불량"] for t, p, y in base_rows(40, 14)]
+    proc, res = run_raw("ml_train.py", "--file", write_book(tmp_path / "t.xlsx", rows), "--targets", "판정")
+    name, args = recommended_command(stop_msg(res, proc))
+    assert args[args.index("--task") + 1] == "classification" and run_tool(name, *args)["task"] == "classification"
+
+
+def test_task_word_of_same_meaning_recommends_the_real_word(tmp_path):
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 15)]
+    proc, res = run_raw("ml_train.py", "--file", write_book(tmp_path / "w.xlsx", rows), "--targets", "수율", "--task", "reg")
+    assert proc.returncode == 2 and "[추천]" in res["message"], res
+    name, args = recommended_command(res["message"])
+    assert args[args.index("--task") + 1] == "regression"
+
+
+def test_failed_training_leaves_no_empty_data_folder(tmp_path):
+    """C6: 실패한 학습은 빈 <파일>_ml_data 폴더를 남기지 않는다 (있던 폴더는 그대로)."""
+    rows = [["온도", "압력", "수율"]] + [list(r) for r in base_rows(30, 16)]
+    f = write_book(tmp_path / "fail.xlsx", rows)
+    run_fail("ml_train.py", "--file", f, "--targets", "없는타겟")
+    assert not (tmp_path / "fail_ml_data").exists()
+    run_tool("ml_train.py", "--file", f, "--targets", "수율")
+    run_fail("ml_train.py", "--file", f, "--targets", "없는타겟")
+    assert (tmp_path / "fail_ml_data" / "v1").is_dir()
+
+
+# ---- 2026-11-10 결정 1-1: 성능 개선 루프 (교차항은 원본 입력끼리 한 쌍에 1번, 0.01 미만 개선은 "나아지지 않음", 회차 상한) ----
+
+
+def test_improve_stop_rule_counts_small_gains_as_none():
+    """개선 폭이 IMPROVE_MIN_GAIN(0.01) 미만이면 나아지지 않은 것으로 센다 (300행 이하에서는 fold 나누기만 바꿔도 나는 차이)."""
+    assert mt.IMPROVE_MIN_GAIN == 0.01 and mt.IMPROVE_PATIENCE == 2 and mt.IMPROVE_MAX_ROUNDS == 5
+    assert mt.improve_stop_reason([0.5]) is None
+    assert mt.improve_stop_reason([0.5, 0.505]) is None                    # 1번은 아직
+    assert mt.improve_stop_reason([0.5, 0.505, 0.509]) is not None         # 2번 연속 0.01 미만 -> 멈춤
+    assert mt.improve_stop_reason([0.5, 0.52, 0.53]) is None               # 0.01 이상씩 오름
+    assert mt.improve_stop_reason([0.5, 0.52, 0.525, 0.54]) is None        # 마지막이 이전 최고(0.52)보다 0.02 높음
+
+
+def test_improve_stop_rule_has_absolute_round_cap():
+    scores = [0.30 + 0.05 * i for i in range(mt.IMPROVE_MAX_ROUNDS)]       # 늘 0.05씩 오름
+    assert mt.improve_stop_reason(scores) is None
+    reason = mt.improve_stop_reason(scores + [scores[-1] + 0.05])
+    assert reason is not None and str(mt.IMPROVE_MAX_ROUNDS) in reason
+
+
+def test_cross_term_candidate_only_original_inputs_once_per_pair():
+    base = ["반응온도(°C)", "압력(bar)", "유속"]
+    # 상위 입력에 파생변수가 있어도 재료로 쓰지 않는다
+    got = mt.cross_term_candidate(["반응온도x압력", "반응온도(°C)", "압력(bar)"], base,
+                                  ["반응온도x압력 = 반응온도(°C) * 압력(bar)"], set())
+    assert got is None, got                                                # 원본 쌍(반응온도, 압력)은 이미 씀
+    got = mt.cross_term_candidate(["반응온도(°C)", "압력(bar)", "유속"], base, [], set())
+    assert got == ("반응온도(°C)", "압력(bar)", "반응온도x압력"), got
+    # 같은 쌍은 순서가 바뀌어도, 이전 회차에 썼다가 빠졌어도 다시 내지 않는다 -> 다음 쌍
+    got = mt.cross_term_candidate(["압력(bar)", "반응온도(°C)", "유속"], base, [], {"반응온도x압력"})
+    assert got == ("압력(bar)", "유속", "압력x유속"), got
+    assert mt.cross_term_candidate(["반응온도(°C)"], base, [], set()) is None
+
+
+def test_improve_loop_does_not_stack_cross_terms(tmp_path):
+    """A영역 C1: next_commands[0]을 따라가도 교차항이 파생변수를 다시 곱하지 않고, 회차 상한 안에서 improve_stopped로 끝난다."""
+    r = np.random.default_rng(1)
+    n = 60
+    t, p, v = r.uniform(150, 200, n), r.uniform(1, 5, n), r.uniform(0.5, 2, n)
+    y = 30 + 0.1 * t + p + r.normal(0, 3, n)
+    f = write_df(tmp_path / "weak.csv", pd.DataFrame({"반응온도(°C)": t.round(1), "압력 (bar)": p.round(2),
+                                                      "유속(m/s)": v.round(2), "수율(%)": y.round(2)}))
+    res = run_tool("ml_train.py", "--file", f, "--features", "반응온도,압력,유속", "--targets", "수율")
+    originals = ("반응온도(°C)", "압력 (bar)", "유속(m/s)")
+    for _ in range(mt.IMPROVE_MAX_ROUNDS + 1):
+        if "improve_stopped" in res or res["goal_met"] or res["next_commands"][0].get("no_retrain"):
+            break
+        cmd = res["next_commands"][0]
+        assert cmd["needs_input"] is False, cmd
+        argv = split_command(cmd["command"])
+        if "--eval" in argv:
+            evals = [e.strip() for e in argv[argv.index("--eval") + 1].split(";")]
+            pairs = [tuple(sorted(s.strip() for s in e.split("=", 1)[1].split("*"))) for e in evals]
+            assert all(len(pr) == 2 and all(s in originals for s in pr) for pr in pairs), evals
+            assert len(pairs) == len(set(pairs)), evals
+        res = run_tool(os.path.basename(argv[1]), *argv[2:])
+    assert "improve_stopped" in res or res["goal_met"] or res["next_commands"][0].get("no_retrain"), res
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert len(hist) <= mt.IMPROVE_MAX_ROUNDS + 1, len(hist)
+
+
+# ---- 2026-11-10 결정 1-2: 입력 열의 극단값은 아주 심할 때(robust z > 10, 입력 오타)만 자동 제외, 나머지는 "드문 입력 조건" ----
+
+
+def test_rare_input_conditions_kept_and_warned(tmp_path):
+    df = _excl_frame()
+    df.loc[[60, 61, 62], "촉매비율"] = 4.2          # robust z 약 4.5: 드문 조건 (빼지 않음)
+    df.loc[[60, 61, 62], "생산효율"] -= 3 * (4.2 - 2.5)
+    f = tmp_path / "rare.xlsx"
+    df.to_excel(f, index=False)
+    res = run_tool("ml_train.py", "--file", str(f), "--features", "반응온도,압축압력,촉매비율", "--targets", "생산효율")
+    rows = {p["row"] for p in res["excluded_preview"]}
+    assert {62, 63, 64}.isdisjoint(rows), res["excluded_preview"]
+    assert 32 in rows and 7 in rows, res["excluded_preview"]                # 반응온도 400(z 약 24, 오타 수준)과 타겟 이상치는 뺌
+    assert res["excluded_reasons"].get("자동 이상치: 반응온도") == 1, res["excluded_reasons"]
+    warn = [w for w in res.get("warnings", []) if "드문 입력 조건" in w]
+    assert len(warn) == 1 and "3행" in warn[0] and "촉매비율" in warn[0] and "62" in warn[0], res.get("warnings")
+    assert "드문 입력 조건 3행" in res["preview"], res["preview"]
+    assert res["preview"].index("자동") < res["preview"].index("드문 입력 조건"), res["preview"]
+
+
+# ---- 2026-11-10 결정 1-3: 합계·평균 글자 행은 학습에서 자동으로 뺀다 (preview·warnings에 엑셀 행 번호) ------------------
+
+
+def test_total_and_average_rows_left_out_of_training(tmp_path):
+    data = base_rows(40, 21)
+    rows = [["라인", "온도", "압력", "수율"]] + [["A" if i % 2 else "B", t, p, y] for i, (t, p, y) in enumerate(data)]
+    rows.append(["합계", sum(r[0] for r in data), sum(r[1] for r in data), sum(r[2] for r in data)])
+    rows.append([" 평균 ", sum(r[0] for r in data) / 40, sum(r[1] for r in data) / 40, sum(r[2] for r in data) / 40])
+    f = write_book(tmp_path / "tot.xlsx", rows)
+    res = run_tool("ml_train.py", "--file", f, "--features", "라인,온도,압력", "--targets", "수율")
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    prof = hist[-1]["data_profile"]
+    assert prof["rows_used"]["수율"] == 40 and prof["rows_loaded"] == 40, prof
+    assert prof["summary_rows_excluded"] == [42, 43], prof
+    meta = json.load(open(os.path.join(res["version_dir"], "model_수율.json"), encoding="utf-8"))
+    assert "합계" not in json.dumps(meta, ensure_ascii=False), "합계가 범주 값으로 학습됨"
+    warn = [w for w in res.get("warnings", []) if "합계·평균 행" in w]
+    assert len(warn) == 1 and "학습에서 뺐습니다" in warn[0] and "42행" in warn[0] and "43행" in warn[0], warn
+    assert "합계·평균 행 2행" in res["preview"] and "42, 43행" in res["preview"], res["preview"]
+    assert not res.get("excluded_preview"), res.get("excluded_preview")      # 제외 행 점수에도 넣지 않음
+
+
+def test_total_row_marked_include_stays(tmp_path):
+    data = base_rows(30, 22)
+    rows = [["구분", "온도", "압력", "수율", "제외"]] + [["측정", t, p, y, None] for t, p, y in data]
+    rows.append(["합계", 160.0, 2.0, 70.0, "포함"])
+    rows.append(["Total", 160.0, 2.0, 70.0, None])
+    f = write_book(tmp_path / "inc.xlsx", rows)
+    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "수율")
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert hist[-1]["data_profile"]["summary_rows_excluded"] == [33], hist[-1]["data_profile"]
+
+
+def test_loose_total_word_rows_only_warned(tmp_path):
+    """정확한 낱말이 아닌 '총 합계'는 지금처럼 경고만 (학습에서 빼지 않음)."""
+    data = base_rows(30, 23)
+    rows = [["구분", "온도", "압력", "수율"]] + [["측정", t, p, y] for t, p, y in data]
+    rows.append(["총 합계", sum(r[0] for r in data), sum(r[1] for r in data), sum(r[2] for r in data)])
+    f = write_book(tmp_path / "loose.xlsx", rows)
+    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "수율")
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    assert not hist[-1]["data_profile"].get("summary_rows_excluded"), hist[-1]["data_profile"]
+    assert any("합계·평균 행" in w and "'제외' 열" in w for w in res.get("warnings", [])), res.get("warnings")
+
+
+# ---- 2026-11-10 결정 1-4: 대소문자·공백만 다른 분류 라벨은 합치지 않고 알린다 ----------------------------------------
+
+
+def test_label_variants_warned_not_merged(tmp_path):
+    data = base_rows(40, 24)
+    labels = ["OK" if y > 70 else "NG" for _, _, y in data]
+    labels[0], labels[1] = "ok", "ok"
+    labels[labels.index("NG")] = "N G"
+    labels[labels.index("NG")] = "N G"
+    rows = [["온도", "압력", "판정"]] + [[t, p, lab] for (t, p, _), lab in zip(data, labels)]
+    f = write_book(tmp_path / "lab.xlsx", rows)
+    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "판정", "--task", "classification")
+    warn = [w for w in res.get("warnings", []) if "같은 뜻으로 보이는 라벨" in w]
+    assert len(warn) == 1, res.get("warnings")
+    assert f"OK {labels.count('OK')}건, ok 2건" in warn[0] and "N G 2건" in warn[0], warn
+    meta = json.load(open(os.path.join(res["version_dir"], "model_판정.json"), encoding="utf-8"))
+    assert {"OK", "ok", "NG", "N G"} <= set(meta["classes"]), meta["classes"]     # 합치지 않음
+
+
+def test_rare_class_error_names_label_variant(tmp_path):
+    data = base_rows(40, 25)
+    labels = ["OK" if y > 70 else "NG" for _, _, y in data]
+    labels[0] = "ok"
+    rows = [["온도", "압력", "판정"]] + [[t, p, lab] for (t, p, _), lab in zip(data, labels)]
+    res = run_fail("ml_train.py", "--file", write_book(tmp_path / "r.xlsx", rows), "--features", "온도,압력",
+                   "--targets", "판정", "--task", "classification")
+    assert "같은 뜻으로 보이는 라벨" in res["message"] and "ok 1건" in res["message"], res["message"]
+
+
+# ---- 2026-11-10 결정 1-9 (C영역 A4): 머리글 아래 단위 행은 데이터 행 수·결측 칸 수에 세지 않는다 -------------------------
+
+
+def test_unit_row_below_not_counted_in_profile(tmp_path):
+    data = base_rows(30, 26)
+    rows = [["온도", "압력", "수율"], ["°C", "bar", "%"]] + [list(r) for r in data]
+    f = write_book(tmp_path / "unit.xlsx", rows)
+    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "수율")
+    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
+    prof = hist[-1]["data_profile"]
+    assert prof["rows_loaded"] == 30 and prof["unit_row_below"] == 2, prof
+    assert prof["missing_imputed_cells"] == 0 and set(prof["feature_missing"].values()) == {0}, prof
+    assert prof["target_missing_rows"] == {"수율": 0}, prof
+    assert hist[-1]["data_hygiene"]["total_rows"] == 30, hist[-1]["data_hygiene"]
+    assert any("2행" in w and "단위 행" in w for w in res.get("warnings", [])), res.get("warnings")

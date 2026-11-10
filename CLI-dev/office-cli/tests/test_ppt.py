@@ -971,3 +971,78 @@ def test_markdown_table_bold_cells_in_ppt(pp, capsys, tmp_path):
     tbl = [sh for sh in live(s) if getattr(sh, "HasTable", False)][0].Table
     cell = tbl.Cell(3, 1).Shape.TextFrame.TextRange
     assert cell.Text == "합계" and cell.Font.Bold is True, (cell.Text, getattr(cell.Font, "Bold", None))
+
+
+# ---------------------------------------------------------------------------
+# 1.6.0 (검토 4장 3번): 기존 도형의 글 바꾸기 (write --shape)
+# ---------------------------------------------------------------------------
+
+
+def _slide_with_body(pp, text="- 기존 항목 1\r- 기존 항목 2"):
+    from fake_ppt import FakeShape
+    sl = pp["prs"].Slides(2)
+    sh = sl.Shapes.add(FakeShape("내용 개체 틀 2", 36, 100, 600, 300, text=text, kind=14, ph_type=7))
+    sl.Shapes.add(FakeShape("그림 3", 400, 100, 100, 100))
+    return sl, sh
+
+
+def test_write_shape_replaces_text_after_confirm(pp, capsys):
+    sl, sh = _slide_with_body(pp)
+    n0 = sl.Shapes.Count
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--shape", "내용 개체 틀 2", "--text", "- 안정성\\n- 확장성")
+    assert code == 1 and "기존 항목 1" in sh.TextFrame.TextRange.Text, out                  # 글이 있으면 사용자 확인
+    cmd = out["confirm_commands"][0]
+    assert "--overwrite" in cmd["command"] and cmd.get("destructive") is True, out
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--shape", "내용 개체 틀 2", "--text", "- 안정성\\n- 확장성", "--overwrite")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert sh.TextFrame.TextRange.Text == "안정성\r확장성" and sl.Shapes.Count == n0, sh.TextFrame.TextRange.Text   # 새 글상자 없음
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--shape", "내용 개체 틀 2", "--text", "- 안정성\\n- 확장성", "--overwrite")
+    assert code == 0 and out["unchanged"] is True, out
+
+
+def test_write_shape_dry_run_empty_shape_and_errors(pp, capsys):
+    sl, sh = _slide_with_body(pp, text="")
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--shape", "내용 개체 틀 2", "--text", "새 글", "--dry-run")
+    assert code == 0 and out["dry_run"] and sh.TextFrame.TextRange.Text == "", out
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--shape", "내용 개체 틀 2", "--text", "새 글")
+    assert code == 0 and sh.TextFrame.TextRange.Text == "새 글", out                       # 빈 도형은 확인 없이
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--shape", "없는 도형", "--text", "x")
+    assert code == 1 and "내용 개체 틀 2" in out["message"], out
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--shape", "그림 3", "--text", "x")
+    assert code == 1 and "글을 넣을 수 없는" in out["message"], out
+    code, out = run_ppt(capsys, "write", "--slide", "new", "--shape", "내용 개체 틀 2", "--text", "x")
+    assert code == 1 and "--slide 3" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 1.6.1: 도형 옮기기·크기 (ppt.py shape)
+# ---------------------------------------------------------------------------
+
+
+def test_shape_move_resize_and_keep_inside(pp, capsys):
+    sl, sh = _slide_with_body(pp)
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2", "--left", "100", "--width", "400", "--dry-run")
+    assert code == 0 and out["dry_run"] and sh.Left == 36, out
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2", "--left", "100", "--width", "400")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and (sh.Left, sh.Width, sh.Top) == (100, 400, 100), out
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2", "--left", "900")
+    assert code == 1 and sh.Left == 100 and recommended_argv(out["message"], "ppt")[-2:] == ["--left", "560.0"], out
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "내용 개체 틀 2")
+    assert code == 1 and "--left" in out["message"], out
+
+
+def test_shape_locked_picture_keeps_ratio(pp, capsys):
+    sl, _ = _slide_with_body(pp)
+    pic = sl.Shapes(sl.Shapes.Count)                  # '그림 3' 100x100
+    pic.Height = 50                                   # 100x50으로 만든 뒤 비율 잠금
+    pic.LockAspectRatio = -1
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "그림 3", "--width", "200", "--dry-run")
+    assert code == 0 and out["after"]["height"] == 100.0, out
+
+
+def test_shape_locked_picture_both_sizes_unlocks_briefly(pp, capsys):
+    sl, _ = _slide_with_body(pp)
+    pic = sl.Shapes(sl.Shapes.Count)
+    pic.LockAspectRatio = -1
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "그림 3", "--width", "200", "--height", "80")
+    assert code == 0 and (pic.Width, pic.Height) == (200, 80) and pic.LockAspectRatio == -1, out

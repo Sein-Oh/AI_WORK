@@ -62,6 +62,17 @@ class FakeShape:
     def Delete(self):
         self.deleted = True
 
+    def __setattr__(self, k, v):
+        """실제 PowerPoint처럼: 비율이 잠긴 도형은 너비를 바꾸면 높이가, 높이를 바꾸면 너비가 따라감."""
+        d = self.__dict__
+        if k in ("Width", "Height") and d.get("LockAspectRatio") and d.get("Width") and d.get("Height"):
+            ratio = d["Height"] / d["Width"]
+            if k == "Width":
+                d["Height"] = v * ratio
+            else:
+                d["Width"] = v / ratio
+        d[k] = v
+
 
 class FakeCell:
     def __init__(self):

@@ -2054,3 +2054,134 @@ def test_folders_output_is_capped(monkeypatch, capsys):
     code, out = run_main(outlook, capsys, "folders", "--depth", "9")
     assert code == 0 and out["truncated"] is True and out["folder_count"] == outlook.FOLDERS_MAX, out["folder_count"]
     assert any("5로 줄임" in w for w in out["warnings"]) and len(json.dumps(out, ensure_ascii=False)) < 20000
+
+
+# ---------------------------------------------------------------------------
+# 1.6.0 (검토 4장 5번): --until, --with-attachments, event
+# ---------------------------------------------------------------------------
+
+
+def test_list_since_until_is_a_closed_period(ol, capsys):
+    code, out = run_main(outlook, capsys, "list", "--since", "2026-10-01", "--until", "2026-10-28")
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["c", "d"], out
+    assert out["period"] == {"since": "2026-10-01", "until": "2026-10-28", "days": 28}, out
+    assert "[ReceivedTime] < '2026-10-29 00:00'" in ol["log"], ol["log"]
+
+
+def test_until_alone_and_search_until_clause(ol, capsys):
+    code, out = run_main(outlook, capsys, "list", "--until", "2026-11-03")
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["b", "c", "d"], out
+    assert "2026-11-03까지" in out["preview"], out
+    code, out = run_main(outlook, capsys, "search", "--query", "견적", "--until", "2026-10-30")
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["c", "d"], out
+    assert '"urn:schemas:httpmail:datereceived" < ' in ol["log"][-1], ol["log"]
+
+
+def test_until_errors_recommend_full_commands(ol, capsys):
+    code, out = run_main(outlook, capsys, "list", "--since", "2026-11-03", "--until", "2026-10-01")
+    assert code == 1 and recommended_argv(out["message"], "outlook")[-4:] == ["--since", "2026-10-01", "--until", "2026-11-03"], out
+    code, out = run_main(outlook, capsys, "list", "--days", "3", "--until", "2026-11-01")
+    assert code == 1 and "--since" in out["message"], out
+    code, out = run_main(outlook, capsys, "list", "--until", "2026.10.5")
+    assert code == 1 and recommended_argv(out["message"], "outlook")[-2:] == ["--until", "2026-10-05"], out
+
+
+class _AttMail(_DatedMail):
+    def __init__(self, eid, received, atts):
+        super().__init__(eid, f"메일 {eid}", received)
+        self.Attachments = Attachments(atts)
+
+
+def test_with_attachments_skips_inline_only_mails(ol, capsys):
+    ol["state"]["mails"] = [_AttMail("file", dt.datetime(2026, 11, 4, 9), [Att("보고서.pdf")]),
+                            _AttMail("logo", dt.datetime(2026, 11, 4, 8), [Att("image001.png", hidden=True)]),
+                            _AttMail("none", dt.datetime(2026, 11, 4, 7), [])]
+    code, out = run_main(outlook, capsys, "list", "--with-attachments")
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["file"], out
+    assert "첨부 있는 메일" in out["preview"], out
+    code, out = run_main(outlook, capsys, "search", "--with-attachments")
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["file"], out
+    assert "hasattachment" in ol["log"][-1], ol["log"]
+
+
+class _Appt:
+    def __init__(self, store):
+        self.store, self.EntryID = store, ""
+        self.Subject = self.Location = self.Body = ""
+        self.AllDayEvent = self.ReminderSet = False
+        self.Start, self.Duration = None, 30
+
+    @property
+    def End(self):
+        return self.Start + dt.timedelta(minutes=self.Duration)
+
+    def Save(self):
+        self.EntryID = f"E{len(self.store) + 1}"
+        self.store.append(self)
+
+
+class _ApptItems:
+    def __init__(self, store, log):
+        self.store, self.log, self.IncludeRecurrences = store, log, False
+
+    def Sort(self, *a):
+        pass
+
+    def Restrict(self, flt):
+        self.log.append(flt)
+        lo = re.search(r"\[Start\] >= '([^']+)'", flt)
+        hi = re.search(r"\[Start\] < '([^']+)'", flt)
+        end_gt = re.search(r"\[End\] > '([^']+)'", flt)
+        p = lambda m: dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M")
+        out = [a for a in self.store if (not lo or a.Start >= p(lo)) and (not hi or a.Start < p(hi))
+               and (not end_gt or a.End > p(end_gt))]
+        return out
+
+
+@pytest.fixture
+def cal(monkeypatch):
+    store, log = [], []
+
+    class _Folder:
+        @property
+        def Items(self):
+            return _ApptItems(store, log)
+
+    class _NS:
+        def GetDefaultFolder(self, n):
+            assert n == outlook.OL_FOLDER_CALENDAR
+            return _Folder()
+
+        def GetItemFromID(self, eid):
+            return next(a for a in store if a.EntryID == eid)
+
+    class _App:
+        def CreateItem(self, kind):
+            assert kind == outlook.OL_APPOINTMENT
+            return _Appt(store)
+
+    monkeypatch.setattr(outlook, "_today", lambda: TODAY)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: _App())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
+    return store
+
+
+def test_event_is_saved_checked_and_not_duplicated(cal, capsys):
+    argv = ["event", "--subject", "설계 검토", "--start", "2026-11-12 14:00", "--minutes", "90", "--location", "3층"]
+    code, out = run_outlook(capsys, *argv)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["created"] is True, out
+    assert (out["start"], out["end"], out["location"]) == ("2026-11-12 14:00", "2026-11-12 15:30", "3층"), out
+    assert len(cal) == 1 and cal[0].ReminderSet and "warnings" not in out, out
+    code, out = run_outlook(capsys, *argv)                    # 다시 실행해도 일정이 둘이 되지 않음
+    assert code == 0 and out["created"] is False and len(cal) == 1, out
+
+
+def test_event_all_day_overlap_and_bad_time(cal, capsys):
+    code, out = run_outlook(capsys, "event", "--subject", "출장", "--start", "2026-11-12")
+    assert code == 0 and out["all_day"] is True and cal[0].AllDayEvent and out["end"] == "2026-11-13 00:00", out
+    code, out = run_outlook(capsys, "event", "--subject", "회의", "--start", "2026-11-12 10:00")
+    assert code == 0 and any("겹치는 일정: 출장" in w for w in out["warnings"]), out
+    code, out = run_outlook(capsys, "event", "--subject", "회의", "--start", "다음주 화요일")
+    assert code == 1 and "YYYY-MM-DD HH:MM" in out["message"] and len(cal) == 2, out
+    code, out = run_outlook(capsys, "event", "--subject", "지난 일", "--start", "2026-11-01 09:00")
+    assert code == 0 and any("지난 날짜" in w for w in out["warnings"]), out
