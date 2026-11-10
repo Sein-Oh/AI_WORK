@@ -91,11 +91,10 @@ def test_write_checks_everything_before_writing_the_header(xl, capsys):
     app, wb = xl
     code, out = run_excel(capsys, "write", "--range", "A1", "--header", "x,sin(x)", "--formula", "=(ROW()-2)*0.1", "=SIN(A2)")
     assert code == 1, out
-    argv = recommended_argv(out["message"], "excel")             # 1.4.79: [추천]은 전체 명령
-    assert option_value(argv, "--range") == "A1:B101" and "A1" not in argv, argv
-    assert argv[argv.index("--formula") + 1:argv.index("--formula") + 3] == ["=(ROW()-2)*0.1", "=SIN(A2)"], argv
+    # 1.4.93 (검토 B4): 옆에 데이터가 없으면 행 수를 지어내지 않고(전에는 [추천] A1:B101) 사용자에게 마지막 행을 묻게 함
+    assert "[추천]" not in out["message"] and "마지막 행" in out["message"] and "머리글 행부터" in out["message"], out
     assert (1, 1) not in ws_of(wb).values and (1, 2) not in ws_of(wb).values
-    code, out = run_excel(capsys, *argv)                         # 안내대로 다시 실행
+    code, out = run_excel(capsys, "write", "--range", "A1:B101", "--header", "x,sin(x)", "--formula", "=(ROW()-2)*0.1", "=SIN(A2)")
     assert code == 0, out
 
 
@@ -1435,9 +1434,9 @@ def test_closed_bounds_only_when_needed(tmp_path, monkeypatch):
     calls = []
     real = excel._closed_bounds
 
-    def counting(ws):
+    def counting(ws, path=None):
         calls.append(ws.title)
-        return real(ws)
+        return real(ws, path)
     monkeypatch.setattr(excel, "_closed_bounds", counting)
     excel._read_matrix_closed(str(p), None, "A1:B2")
     assert calls == []
@@ -1730,7 +1729,7 @@ def test_export_csv_cp949_unencodable_is_input_error(xl, capsys, tmp_path):
     out_path = tmp_path / "out.csv"
     code, out = run_excel(capsys, "export", "--save", str(out_path), "--encoding", "cp949")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
-    assert "A2" in out["message"] and "[추천] utf-8-sig" in out["message"], out
+    assert "A2" in out["message"] and recommended_argv(out["message"], "excel")[-2:] == ["--encoding", "utf-8-sig"], out
     assert not out_path.exists()
 
 
@@ -2237,3 +2236,161 @@ def test_style_many_cells_in_one_command(xl, capsys):
     assert code == 1 and "[추천]" in out["message"] and '--range "B2;D5"' in out["message"].replace("'", '"'), out
     code, out = run_excel(capsys, "style", "--range", "B2;D5", "--theme", "navy")
     assert code == 1 and "--theme" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B4: 칸 하나에 수식 여러 개면 [추천] 범위는 옆 열 데이터의 끝까지 (100행을 지어내지 않음)
+# ---------------------------------------------------------------------------
+
+
+def test_multi_formula_single_cell_recommends_table_rows(xl_table, capsys):
+    code, out = run_main(excel, capsys, "write", "--range", "D2", "--formula", "=B2*2", "=C2*3")
+    assert code == 1 and "[추천]" in out["message"], out
+    rec = recommended_argv(out["message"], "excel")
+    assert option_value(rec, "--range") == "D2:E5", rec
+    code, out = run_main(excel, capsys, "write", "--range", "H2", "--formula", "=B2*2", "=C2*3")
+    assert code == 1 and "[추천]" not in out["message"] and "마지막 행" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A7: 통화 서식 칸(pywin32가 decimal.Decimal로 줌)도 숫자로 (정렬, 머리글 판별, --where)
+# ---------------------------------------------------------------------------
+
+
+def test_currency_cells_are_numbers(xl_table, capsys):
+    from decimal import Decimal
+    for r, v in ((2, "10"), (3, "100"), (4, "9"), (5, "1000")):
+        xl_table.values[(r, 3)] = Decimal(v)
+    code, out = run_main(excel, capsys, "read", "--where", "금액 >= 10")
+    assert code == 0 and out["count"] == 3, out
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "C")
+    assert code == 0 and "이미 정렬" not in out["preview"], out
+    assert [float(xl_table.values[(r, 3)]) for r in range(2, 6)] == [9, 10, 100, 1000], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A8: + - @ = 로 시작하는 글은 글자 그대로, 글을 썼는데 글이 아닌 값이 되면 UNVERIFIED
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text", ["+82-10-1234-5678", "-007", "- 검토 필요", "@담당", "=아님"])
+def test_text_starting_with_formula_marks_stays_text(xl, capsys, text):
+    _, wb = xl
+    ws = ws_of(wb)
+    ws.typing = True                         # 실제 Excel처럼 대입한 글을 해석
+    code, out = run_excel(capsys, "write", "--range", "A1", "--value", text)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert ws.values[(1, 1)] == text and (1, 1) in ws.prefixed, ws.values
+
+
+def test_text_changed_by_excel_is_not_verified():
+    assert excel._same_cell("+82-10-1234-5678", -6840) is False
+    assert excel._same_cell("- 검토", -2146826259) is False
+    assert excel._same_cell("2026-01-05", 46027.0) is True and excel._same_cell("true", True) is True
+    assert excel._same_cell("abc", 5) is False and excel._same_cell(5, 5.0) is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A9: 수식은 글자만이 아니라 값도 확인 (오류 값이면 UNVERIFIED), 동적 배열 함수는 Formula2
+# ---------------------------------------------------------------------------
+
+
+def test_formula_with_error_value_is_unverified(xl_table, capsys):
+    code, out = run_main(excel, capsys, "write", "--range", "D2", "--formula", "=합계(B2:B3)")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "#NAME?" in out["agent_directive"], out
+    code, out = run_main(excel, capsys, "write", "--cells", "E2==합계(C2:C3)")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "#NAME?" in out["agent_directive"], out
+    code, out = run_main(excel, capsys, "write", "--range", "F2", "--formula", "=SUM(C2:C3)")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+
+
+def test_dynamic_array_formula_uses_formula2(xl_table, capsys):
+    code, out = run_main(excel, capsys, "write", "--range", "E2", "--formula", "=UNIQUE(B2:B5)")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert any(e[0] == "Formula2" for e in xl_table.log), xl_table.log[-5:]
+    xl_table.no_formula2 = True                       # Office 2019: Formula2 없음 -> Formula
+    code, out = run_main(excel, capsys, "write", "--range", "F2", "--formula", "=SORT(B2:B5)")
+    assert code == 0 and xl_table.formulas[(2, 6)] == "=SORT(B2:B5)", out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B8: write가 아닌 쓰기 명령은 경로 오타면 빈 새 파일을 만들지 않음
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("argv", [["style", "--range", "A1:C3", "--bold"], ["replace", "--find", "a", "--replace", "b"],
+                                  ["sheet", "--action", "add", "--name", "새"], ["range", "--action", "freeze", "--range", "A2"]])
+def test_non_write_commands_do_not_create_missing_file(xl, capsys, tmp_path, argv):
+    missing = tmp_path / "보고서_오타.xlsx"
+    code, out = run_excel(capsys, argv[0], "--target", str(missing), *argv[1:])
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and not missing.exists(), out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B12: 잘못된 주소는 바꾸기 전에 STOP_RETRY (ERROR가 아님)
+# ---------------------------------------------------------------------------
+
+
+def test_bad_addresses_are_input_errors_before_change(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    ws.values[(1, 1)], ws.values[(2, 1)] = "a", 1
+    code, out = run_excel(capsys, "range", "--action", "copy", "--range", "A1:A2", "--dest", "요약")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert option_value(recommended_argv(out["message"], "excel"), "--dest") == "요약!A1", out
+    code, out = run_excel(capsys, "chart", "--range", "A1:A2", "--at", "요약!E1")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--at" in out["message"], out
+    app.ActiveWindow.FreezePanes = True
+    code, out = run_excel(capsys, "range", "--action", "freeze", "--range", "3:3")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert option_value(recommended_argv(out["message"], "excel"), "--range") == "A3" and app.ActiveWindow.FreezePanes is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B13 (엑셀 쓰기): 뒤집힌 범위, --align·--border 확인, 닫힌 파일 select, --append 시작 열
+# ---------------------------------------------------------------------------
+
+
+def test_b13_excel_write_small_fixes(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "write", "--range", "C5:A1", "--value", "x")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and "-" not in out["preview"].split("(")[-1], out
+    assert ws.values[(1, 1)] == "x" and ws.values[(5, 3)] == "x"
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--align", "center")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--border", "thin")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+
+
+def test_append_without_range_starts_at_table_column(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([("이름", "값"), ("a", 1), ("b", 2)], start=3):
+        for c, v in enumerate(row, start=2):
+            ws.values[(r, c)] = v
+    code, out = run_excel(capsys, "write", "--append", "--values", '[["c", 3]]')
+    assert code == 0 and ws.values.get((6, 2)) == "c" and ws.values.get((6, 3)) == 3 and (6, 1) not in ws.values, ws.values
+
+
+def test_select_sheet_in_closed_file_is_refused(xl, capsys, tmp_path, monkeypatch):
+    import openpyxl
+    from fake_office import FakeExcelApp
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakeExcelApp())
+    p = tmp_path / "닫힘.xlsx"
+    w = openpyxl.Workbook()
+    w.create_sheet("둘")
+    w.save(p)
+    code, out = run_excel(capsys, "sheet", "--target", str(p), "--action", "select", "--name", "Sheet2")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "열린 통합문서" in out["message"], out
+
+
+def test_c11_append_does_not_overwrite_filtered_rows(xl, capsys):
+    """2026-11-09 검토 C11: End(xlUp)은 필터로 숨긴 행을 건너뜀 -> --append가 숨은 데이터 행에 쓰던 것."""
+    _, wb = xl
+    ws = ws_of(wb)
+    for r, v in enumerate(["이름", "a", "b", "숨은 c"], start=1):
+        ws.values[(r, 1)] = v
+    ws.hidden_rows = {4}
+    code, out = run_excel(capsys, "write", "--range", "A1", "--append", "--value", "새")
+    assert code == 0 and ws.values[(4, 1)] == "숨은 c" and ws.values[(5, 1)] == "새", ws.values

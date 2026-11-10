@@ -17,6 +17,58 @@ _XLSX_F_TAG = re.compile(rb"<(?:\w+:)?f[\s>/]")
 _CELL_REF = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+)$")
 
 
+_XLSX_CELL_OPEN = re.compile(rb"<(?:\w+:)?c\s[^>]*?\br=\"([A-Za-z]{1,3})(\d+)\"[^>]*?(/?)>")
+
+
+def _sheet_part(z: Any, title: str) -> Optional[str]:
+    """통합문서 zip에서 시트 이름 -> 시트 XML 경로 (없으면 None)."""
+    import posixpath
+    import xml.etree.ElementTree as ET
+    wb = ET.fromstring(z.read("xl/workbook.xml"))
+    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+    targets = {r.get("Id"): r.get("Target") or "" for r in rels}
+    for sh in wb.iter(_XLSX_MAIN + "sheet"):
+        if (sh.get("name") or "") == title:
+            target = targets.get(sh.get(_XLSX_REL + "id"), "")
+            part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
+            return part if part in set(z.namelist()) else None
+    return None
+
+
+def xlsx_value_extent(path: str, sheet: str) -> Optional[Tuple[int, int]]:
+    """시트 XML에서 내용이 있는 칸(<c ...>...</c>, 서식만 있는 <c .../>는 뺌)의 끝 (행, 열). 파일에 적힌 크기(<dimension>)가
+    실제보다 작은 파일(Excel이 아닌 프로그램이 만든 xlsx)도 끝까지 읽기 위해 씁니다. 칸이 없으면 (0, 0), 읽지 못하면 None.
+    XML을 조각으로 읽어 정규식으로 훑습니다 (openpyxl로 한 번 더 읽는 것보다 빠름)."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            part = _sheet_part(z, sheet)
+            if part is None:
+                return None
+            r2 = c2 = 0
+            tail = b""
+            with z.open(part) as f:
+                while True:
+                    chunk = f.read(4 << 20)
+                    buf = tail + chunk
+                    cut = len(buf) if not chunk else max(buf.rfind(b"<"), 0)
+                    for m in _XLSX_CELL_OPEN.finditer(buf, 0, cut):
+                        if m.group(3):
+                            continue
+                        r = int(m.group(2))
+                        col = 0
+                        for ch in m.group(1).upper():
+                            col = col * 26 + ch - 64
+                        r2, c2 = max(r2, r), max(c2, col)
+                    tail = buf[cut:]
+                    if not chunk:
+                        break
+            return r2, c2
+    except Exception as e:                      # noqa: BLE001  확인 못 하면 파일에 적힌 크기를 씀
+        rt.debug(f"시트 끝 확인 실패: {type(e).__name__}")
+        return None
+
+
 def _cell_rc(ref: str) -> Optional[Tuple[int, int]]:
     m = _CELL_REF.match(ref or "")
     if not m:
@@ -219,11 +271,13 @@ def uncomputed_found(info: Optional[Dict[str, Any]]) -> bool:
 
 
 def uncomputed_note(info: Dict[str, Any]) -> str:
-    """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 10개)."""
+    """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 3개)."""
     if info.get("unknown"):
         return (f"수식 계산 여부를 확인하지 못함 (파일의 시트 XML을 읽지 못함: {info.get('error') or '알 수 없음'}). "
                 "수식 칸이 있으면 빈 칸이나 계산되지 않은 값으로 읽혔을 수 있으니 사용자에게 그대로 알리세요")
-    cells = ", ".join(info["cells"][:10]) + (" 등" if info["count"] > 10 else "")
+    # 칸 목록은 결과의 uncomputed_formulas에 한 번만: 문구에는 앞 3개 (unverified·agent_directive에 같은 목록이 세 번 들어가던 것,
+    # 2026-11-09 검토 5장 4번)
+    cells = ", ".join(info["cells"][:3]) + (" 등, 목록은 uncomputed_formulas" if info["count"] > 3 else "")
     if info.get("full_calc_on_load"):
         return (f"수식 칸 {info['count']}개({cells})는 파일이 '열 때 다시 계산'(fullCalcOnLoad)으로 저장되어 있어 파일에 적힌 값"
                 "(빈 칸이나 0)이 계산된 값이 아님 (엑셀에서 연 적 없이 프로그램이 만든 파일). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "

@@ -550,7 +550,8 @@ def test_marks_auto_outliers_and_all_rows_score(tmp_path):
     assert hist[-1]["data_profile"]["rows_used"]["생산효율"] == N - 3
 
 
-# ---- --exclude-where: 조건으로 학습에서 뺄 행 (2.9.56, office-cli excel.py read --where와 같은 식) ----------------
+# ---- 조건으로 학습에서 뺄 행: ml_dataset.py exclude (2.9.85, 2.9.56~2.9.84는 ml_train.py --exclude-where) -------------
+# 조건에 맞는 행의 '제외' 열에 이유를 적은 새 데이터셋을 만들고 그 파일로 학습한다 (원본은 그대로). 이미 표시한 행은 그대로.
 
 WHERE = "생산효율 > 112; 라인 = B | 라인 = C"
 
@@ -558,8 +559,8 @@ WHERE = "생산효율 > 112; 라인 = B | 라인 = C"
 def _where_frame():
     df = _excl_frame(_excl_marks())
     df["라인"] = ["A", "B"] * (N // 2)
-    df.loc[17, "라인"] = "C"            # matches the condition but is marked '포함' -> kept, with a warning
-    df.loc[50, "라인"] = "C"            # matches the condition and is marked '센서오류' -> the user's reason wins
+    df.loc[17, "라인"] = "C"            # matches the condition but is marked '포함' -> kept
+    df.loc[50, "라인"] = "C"            # matches the condition and is marked '센서오류' -> the user's reason stays
     df = df.rename(columns={"생산효율": "생산효율(%)"})
     return df
 
@@ -576,54 +577,57 @@ def where_run(tmp_path_factory):
     f = work / "d.xlsx"
     df = _where_frame()
     df.to_excel(f, index=False)
-    res = run_tool("ml_train.py", "--file", str(f), "--features", "반응온도,압축압력,촉매비율", "--targets", "생산효율",
-                   "--exclude-where", WHERE)
-    return work, f, df, res
+    before = f.read_bytes()
+    ds = run_tool("ml_dataset.py", "exclude", "--file", str(f), "--where", WHERE)
+    assert f.read_bytes() == before                                                          # the source file is never changed
+    res = run_tool("ml_train.py", "--file", ds["output_file"], "--features", "반응온도,압축압력,촉매비율", "--targets", "생산효율")
+    return work, f, df, ds, res
 
 
-def test_exclude_where_leaves_out_matching_rows(where_run):
-    _, f, df, res = where_run
+def test_dataset_exclude_then_training_leaves_out_matching_rows(where_run):
+    _, f, df, ds, res = where_run
     want = _where_expected(df)
     assert 0 < want.sum() < 60
+    assert ds["marked"] == int(want.sum()) and ds["count"] == int(want.sum()) + 2, ds        # 2 rows already marked
+    assert any("이미 표시" in w for w in ds["warnings"]), ds
     ex = res["exclusions"]["생산효율(%)"]
-    assert ex["condition"] == int(want.sum()) and ex["manual"] == 1, ex
-    text = "조건: 생산효율(%) > 112; 라인 = B | 라인 = C"                    # column names resolved (unit added)
+    assert ex["manual"] == 1 + int(want.sum()), ex
+    text = "조건 생산효율(%) > 112; 라인 = B | 라인 = C"                                    # column names resolved (unit added)
     assert res["excluded_reasons"][text] == int(want.sum())
-    rows = {p["row"] for p in res["excluded_preview"] if p["kind"] == "조건"}
+    rows = {p["row"] for p in res["excluded_preview"] if p["reason"] == text}
     assert rows <= {i + 2 for i in np.flatnonzero(want.to_numpy())} and rows
-    assert any("포함" in w and "--exclude-where" in w for w in res["warnings"]), res.get("warnings")
-    hist = [json.loads(ln) for ln in open(os.path.join(res["data_root"], "history.jsonl"), encoding="utf-8")]
-    assert hist[-1]["exclude_where"] == "생산효율(%) > 112; 라인 = B | 라인 = C"
     snap = pd.read_csv(os.path.join(res["version_dir"], "model_dataset.csv"), encoding="utf-8-sig")
-    assert int(snap["학습제외_생산효율(%)"].sum()) == ex["manual"] + ex["auto"] + ex["condition"]
+    assert int(snap["학습제외_생산효율(%)"].sum()) == ex["manual"] + ex["auto"]
 
 
-def test_exclude_where_in_retrain_commands(tmp_path):
+def test_retrain_commands_offer_the_dataset_exclude_template(tmp_path):
     args = argparse.Namespace(header_row=None, unit_row=None, data_row=None, dtypes=None)
     cmds = mt.build_next_commands(
         args=args, raw_file=str(tmp_path / "d.xlsx"), task=mt.TASK_REGRESSION, positive_class=None,
         feature_names=["a", "b", "c"], created_features=[], applied_evals=[], target_names=["y"],
         champion={"weak_features": ["c"], "top_features": [{"feature": "a"}, {"feature": "b"}]},
-        schema={"numeric": ["a", "b", "c"]}, mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"),
-        exclude_where="a > 1; 라인 = 'B|C'")
-    retrain = [c["command"] for c in cmds if "ml_train.py" in c["command"] and not c["needs_input"]]   # 틀은 '<앞 조건>; <조건>'
-    assert len(retrain) == 2 and all(split_command(c)[split_command(c).index("--exclude-where") + 1] == "a > 1; 라인 = 'B|C'"
-                                     for c in retrain), retrain
+        schema={"numeric": ["a", "b", "c"]}, mean_score=0.5, staging_dir=str(tmp_path), final_dir=str(tmp_path / "v1"))
+    tpl = cmds[-1]
+    argv = split_command(tpl["command"])
+    assert tpl["placeholder"] == "<조건>" and tpl["needs_input"] is True
+    assert os.path.basename(argv[1]) == "ml_dataset.py" and argv[2] == "exclude" and argv[argv.index("--where") + 1] == "<조건>"
+    assert not any("--exclude-where" in c["command"] for c in cmds)
 
 
-def test_exclude_where_errors(tmp_path):
+def test_dataset_where_errors(tmp_path):
     f = tmp_path / "d.csv"
     _where_frame().to_csv(f, index=False)
-    base = ["--file", str(f), "--features", "반응온도,압축압력,촉매비율", "--targets", "생산효율"]
-    bad = run_fail("ml_train.py", *base, "--exclude-where", "생산효율 > 0")             # every row
-    assert bad["agent_directive"].startswith("STOP_RETRY") and "1행만 남습니다" in bad["message"], bad   # the '포함' row
-    bad = run_fail("ml_train.py", *base, "--exclude-where", "라인x = B")               # unknown column -> [후보]
+    base = ["exclude", "--file", str(f)]
+    bad = run_fail("ml_dataset.py", *base, "--where", "라인x = B")               # unknown column -> [후보]
     assert "[후보]" in bad["message"] and "라인" in bad["message"], bad
-    bad = run_fail("ml_train.py", *base, "--exclude-where", "라인 == B")               # fixable notation -> [추천] command
+    bad = run_fail("ml_dataset.py", *base, "--where", "라인 == B")               # fixable notation -> [추천] command
     rec = bad["message"].split("[추천] ")[1]
-    assert rec.startswith("python ") and "--exclude-where '라인 = B'" in rec, rec
-    bad = run_fail("ml_train.py", *base, "--exclude-where", "생산효율 >")              # unreadable
-    assert "--exclude-where" in bad["message"] and "형식" in bad["message"], bad
+    assert rec.startswith("python ") and "--where '라인 = B'" in rec and " exclude " in rec, rec
+    bad = run_fail("ml_dataset.py", *base, "--where", "생산효율 >")              # unreadable
+    assert "--where" in bad["message"] and "형식" in bad["message"], bad
+    proc, out = run_raw("ml_train.py", "--file", str(f), "--features", "반응온도", "--targets", "생산효율",
+                        "--exclude-where", "라인 = B")                            # 2.9.85: the option is gone
+    assert proc.returncode == 2 and out["status"] == "error", out
 
 
 def test_where_mask_rules():
@@ -695,8 +699,8 @@ def test_where_number_column_with_missing_mark_compares_numbers(tmp_path):
                        ("압력 != 2; 온도 > 180", int(((num != 2) & (df["온도"] > 180)).sum())),
                        ("압력 = 2.0", eq), ("압력 = 02", eq), ("압력 = 측정불가", 1)):
         assert int(rt.where_mask(raw, rt.parse_where(cond)).sum()) == want, cond
-    res = run_tool("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "생산량", "--exclude-where", "압력 = 2")
-    assert res["exclusions"]["생산량"]["condition"] == eq, res["exclusions"]
+    res = run_tool("ml_dataset.py", "pick", "--file", f, "--where", "압력 = 2")
+    assert res["count"] == eq and res["rows_saved"] == eq, res
 
 
 def test_where_thousands_and_code_columns():
@@ -743,15 +747,15 @@ def test_where_on_code_column_warns_other_notation(tmp_path):
     assert rt.where_text(rt.where_with_variants(g, variants)) == "월 = 1 | 월 = 01"
     neg = rt.parse_where("월 != 1; 온도 > 3")
     assert rt.where_text(rt.where_with_variants(neg, rt.where_notation_variants(raw, neg))) == "월 != 1; 온도 > 3; 월 != 01"
-    res = run_tool("ml_train.py", "--file", f, "--features", "월,온도", "--targets", "수율", "--exclude-where", "월 = 1")
-    assert res["exclusions"]["수율"]["condition"] == 6
+    res = run_tool("ml_dataset.py", "exclude", "--file", f, "--where", "월 = 1")
+    assert res["count"] == 6
     w = [x for x in res.get("warnings", []) if "'01' 6행" in x]
-    assert w and "빼지 않음" in w[0] and "[추천] python " in w[0], res.get("warnings")
-    cmd = res["next_commands"][0]["command"]
-    assert "--exclude-where '월 = 1 | 월 = 01'" in cmd and cmd.count("--exclude-where") == 1, cmd
+    assert w and "고르지 않음" in w[0] and "[추천] python " in w[0], res.get("warnings")
+    cmd = w[0].split("[추천] ")[1]
+    assert "--where '월 = 1 | 월 = 01'" in cmd and cmd.count("--where") == 1 and " exclude " in cmd, cmd
     proc = subprocess.run([sys.executable] + split_command(cmd)[1:], capture_output=True, text=True, encoding="utf-8")
     again = json.loads(proc.stdout)
-    assert again["exclusions"]["수율"]["condition"] == 12 and not any("'01'" in x for x in again.get("warnings", []))
+    assert again["count"] == 12 and not any("'01'" in x for x in again.get("warnings", []))
 
 
 def test_where_on_zero_padded_month_column_compares_numbers(tmp_path):
@@ -945,7 +949,7 @@ def test_next_commands_flag_placeholders_and_put_runnable_first(sample_model, tm
     payload = run_tool("ml_train.py", "--file", cls, "--features", "반응온도,촉매비율,수분함량", "--targets", "품질등급", "--task", "classification")
     if payload["mean_val_score"] < 0.9:                                  # 재학습 명령은 바로 실행 가능, 한 건 예측 틀만 맨 뒤 (2.9.75)
         cmds = payload["next_commands"]
-        ready = [c for c in cmds if c["needs_input"] is False]                     # 틀(한 건 예측, 행 빼고 다시 학습)은 맨 뒤
+        ready = [c for c in cmds if c["needs_input"] is False]                     # 틀(한 건 예측, 행 뺀 데이터셋)은 맨 뒤
         assert cmds and cmds[:len(ready)] == ready and len(cmds) - len(ready) == 2, cmds
         assert " --input " in cmds[len(ready)]["command"] and "<값>" in cmds[len(ready)]["command"], cmds
         assert cmds[-1]["placeholder"] == "<조건>", cmds
@@ -1903,7 +1907,7 @@ def test_damaged_saved_target_is_trained_again(tmp_path, monkeypatch):
 # (fold 1개, 시계 없음)를 더하면 120초를 넘어 JSON 없이 끊기고 진행도 없어 같은 명령을 끝없이 반복했다.
 
 def _train_args(data, x, y, **kw):
-    base = dict(file=data, features=x, targets=y, eval=None, dtypes=None, exclude_where=None, task=None,
+    base = dict(file=data, features=x, targets=y, eval=None, dtypes=None, task=None,
                 positive_class=None, header_row=None, unit_row=None, data_row=None, seed=42, version=None,
                 overwrite=False, description=None, tag=None)
     base.update(kw)
@@ -1948,8 +1952,7 @@ def test_preparation_key_follows_data_and_arguments(tmp_path):
     xfile = tmp_path / "x.txt"
     xfile.write_text("반응온도(°C)\n소비전력(kW)\n", encoding="utf-8")
     a = _train_args(data, str(xfile), "생산효율(%)")
-    group = {"features": str(xfile), "targets": "생산효율(%)", "eval": None, "dtypes": None, "positive_class": None,
-             "exclude_where": None}
+    group = {"features": str(xfile), "targets": "생산효율(%)", "eval": None, "dtypes": None, "positive_class": None}
     k1 = mt._prep_key(a, "regression", [group], data)
     assert k1 == mt._prep_key(a, "regression", [group], data) and re.fullmatch(r"[0-9a-f]{16}", k1)
     assert rt._RESUME_FILE_RE.fullmatch(k1 + ".prep.joblib") and rt._RESUME_FILE_RE.fullmatch(k1 + ".prep.start")
@@ -2166,16 +2169,16 @@ def _sep_data(tmp_path):
     return str(path)
 
 
-def test_exclude_where_with_comma_between_conditions_stops_with_fixed_command(tmp_path):
-    """회귀: --exclude-where "라인 = A, 온도 > 180"은 조건 하나(라인 = 'A, 온도 > 180')로 읽혀 0행을 빼고 VERIFIED로 학습했다.
-    이제 STOP_RETRY + [추천] ';'로 고친 전체 명령. 그 명령은 그대로 실행되어 조건대로 행을 뺀다."""
+def test_where_with_comma_between_conditions_stops_with_fixed_command(tmp_path):
+    """회귀: "라인 = A, 온도 > 180"은 조건 하나(라인 = 'A, 온도 > 180')로 읽혀 0행을 빼고 VERIFIED로 학습했다 (2.9.84까지
+    --exclude-where). 이제 STOP_RETRY + [추천] ';'로 고친 전체 명령. 그 명령은 그대로 실행되어 조건대로 행을 고른다."""
     data = _sep_data(tmp_path)
-    proc, out = run_raw("ml_train.py", "--file", data, "--features", "온도,압력", "--targets", "수율", "--exclude-where", "라인 = A, 온도 > 180")
+    proc, out = run_raw("ml_dataset.py", "exclude", "--file", data, "--where", "라인 = A, 온도 > 180")
     assert proc.returncode == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
     rec = recommended_command(out["message"])
-    assert rec[0] == "ml_train.py" and rec[1][rec[1].index("--exclude-where") + 1] == "라인 = A; 온도 > 180", rec
+    assert rec[0] == "ml_dataset.py" and rec[1][rec[1].index("--where") + 1] == "라인 = A; 온도 > 180", rec
     res = run_tool(rec[0], *rec[1])
-    assert res["exclusions"]["수율"]["condition"] > 0, res
+    assert res["count"] > 0 and res["marked"] == res["count"], res
 
 
 def test_where_comma_detection_leaves_real_values():
@@ -2363,19 +2366,24 @@ def test_diagnose_keeps_measured_unique_numbers_and_dates():
     assert mt.diagnose_inputs(df, ["두께", "일자", "라인", "속도"], ["y"], "regression") == []
 
 
-def test_next_commands_offer_the_exclude_where_template(tmp_path):
+def test_next_commands_offer_the_dataset_exclude_template(tmp_path):
     """2.9.81 집 PC Gemma A3: '생산효율이 80보다 큰 행은 빼고 다시 학습해줘'에 긴 학습 명령을 답변에 적기만 하고 실행하지 않음 ->
-    학습 결과에 같은 학습의 --exclude-where '<조건>' 틀(needs_input, 맨 뒤). 앞의 조건이 있으면 '<앞 조건>; <조건>'으로 지킴."""
+    학습 결과에 '<조건>' 틀(needs_input, 맨 뒤). 2.9.85: 그 행을 '제외' 열에 표시한 데이터셋(ml_dataset.py exclude)을 만들고,
+    그 결과의 next_commands[0]이 같은 타겟·입력으로 새 파일을 학습한다."""
     data = make_multi(str(tmp_path / "ex.csv"))
     res = run_tool("ml_train.py", "--file", data, "--features", "온도,압력,속도", "--targets", "수율")
     tpl = [c for c in res["next_commands"] if c.get("placeholder") == "<조건>"]
     assert len(tpl) == 1 and tpl[0]["needs_input"] is True and res["next_commands"][-1] is tpl[0], res["next_commands"]
-    argv = split_command(tpl[0]["command"].replace("<조건>", "수율 > 50"))
-    assert argv[argv.index("--features") + 1] == "온도(°C),압력(bar),속도(m/s)" and argv[argv.index("--exclude-where") + 1] == "수율 > 50", argv
+    top = float(pd.read_csv(data, encoding="utf-8-sig").filter(like="수율").iloc[:, 0].quantile(0.9))
+    argv = split_command(tpl[0]["command"].replace("<조건>", f"수율 > {top}"))
+    assert os.path.basename(argv[1]) == "ml_dataset.py" and argv[argv.index("--where") + 1] == f"수율 > {top}", argv
+    ds = run_tool("ml_dataset.py", *argv[2:])
+    nxt = ds["next_commands"][0]
+    assert nxt["needs_input"] is False, nxt
+    argv = split_command(nxt["command"])
+    assert argv[argv.index("--file") + 1] == ds["output_file"] and argv[argv.index("--features") + 1] == "온도(°C),압력(bar),속도(m/s)"
     again = run_tool("ml_train.py", *argv[2:])
-    tpl = [c for c in again["next_commands"] if c.get("placeholder") == "<조건>"][0]
-    argv = split_command(tpl["command"])
-    assert argv[argv.index("--exclude-where") + 1] == "수율(%) > 50; <조건>", argv     # 앞 조건은 도구가 맞춘 열 이름으로
+    assert again["exclusions"]["수율(%)"]["manual"] == ds["marked"] > 0, again["exclusions"]
 
 
 def test_history_latest_version_skips_a_damaged_folder(tmp_path):

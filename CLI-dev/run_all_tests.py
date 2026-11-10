@@ -9,7 +9,8 @@
 
 단계 (이 순서로 실행. --only로 고르면 고른 단계만 같은 순서로):
     diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
-    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (python -m pytest, 도구마다 상한 --pytest-timeout 7200초,
+    pytest  각 도구의 오프라인 테스트와 CLI-dev/tests (테스트 파일마다 python -m pytest, 코어 수 - 1·메모리 4GB마다 1개·최대 3개씩 동시에(--pytest-workers),
+            파일마다 상한 --pytest-timeout 7200초,
             실패는 pytest_live_report 플러그인이 [LIVE] 줄로 바로 남겨 끊겨도 이름이 남음)
     beta    ml-kit 베타 점검 (run_beta_check.py, F7 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
     ml      ml-kit 실기 러너 (ml-kit/tools/run_win_tests.py, 10~20분). 기본 단계가 아니며 --only에 넣을 때만
@@ -248,20 +249,24 @@ def kill_tree(proc):
         pass
 
 
-def run_capture(args, cwd, timeout, poll=1.0, env_extra=None):
-    """하위 프로세스를 실행해 (종료코드, 출력 전체, 걸린 초, Ctrl+C 여부)를 돌려줍니다. 출력은 화면에도 그대로 보여 줍니다.
+def run_capture(args, cwd, timeout, poll=1.0, env_extra=None, show=None, procs=None):
+    """하위 프로세스를 실행해 (종료코드, 출력 전체, 걸린 초, Ctrl+C 여부)를 돌려줍니다. 출력은 화면에도 그대로 보여 줍니다
+    (show: 화면에 보일 줄을 고르는 함수, 병렬 pytest는 [LIVE] 줄만). procs: 실행 중인 프로세스를 넣어 둘 목록 (Ctrl+C 때 모두 끔).
     출력은 별도 스레드가 읽으므로, 아무것도 출력하지 않고 멈춘 프로세스도 timeout초가 지나면 끝냅니다."""
     start = time.time()
     lines = []
     interrupted = False
     proc = subprocess.Popen(args, cwd=cwd, env=child_env(env_extra), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if procs is not None:
+        procs.append(proc)
 
     def pump():
         try:
             for raw in proc.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
                 lines.append(line)
-                echo(line)
+                if show is None or show(line):
+                    echo(line)
         except Exception:
             pass
 
@@ -611,32 +616,112 @@ def merge_live(fails, live):
     return out
 
 
+PYTEST_WORKERS_MAX = 3     # 기본 동시 실행 상한 (회사 PC 2026-11-10: 코어 수 - 1개로 돌리자 메모리가 모자라 파일마다 4,600~5,300초,
+                           # 'ml_export.py -h'도 600초 시간 초과. 순차일 때 전체 73분 -> pytest만 89분)
+GB_PER_WORKER = 4          # 동시 실행 하나에 잡는 메모리 (성능예측표 시험이 무거움)
+
+
+def total_memory_gb():
+    """이 PC의 물리 메모리(GB). 모르면 None."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class _Mem(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = _Mem()
+            m.dwLength = ctypes.sizeof(_Mem)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                return m.ullTotalPhys / 2 ** 30
+            return None
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 30
+    except Exception:
+        return None
+
+
+def pytest_workers(args):
+    """동시에 돌릴 pytest 수: --pytest-workers, 0(기본)이면 코어 수 - 1, 메모리 GB_PER_WORKER GB마다 1개, 최대 PYTEST_WORKERS_MAX개.
+    테스트의 학습은 작은 데이터라 스레드 1개만 씀 (ml-kit limit_threads), 하나는 화면·Office에 남김."""
+    n = int(getattr(args, "pytest_workers", 0) or 0)
+    if n > 0:
+        return n
+    mem = total_memory_gb()
+    by_mem = int(mem // GB_PER_WORKER) if mem else PYTEST_WORKERS_MAX
+    return max(1, min(PYTEST_WORKERS_MAX, (os.cpu_count() or 2) - 1, by_mem))
+
+
+def pytest_files(folder):
+    """folder 아래 test_*.py (pytest가 cwd에서 찾는 것과 같게: 숨김 폴더·__pycache__ 제외), 큰 파일부터 (오래 걸리는 것을 먼저)."""
+    out = []
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if not d.startswith((".", "__"))]
+        out += [os.path.join(root, f) for f in files if f.startswith("test_") and f.endswith(".py")]
+    return sorted(out, key=lambda f: (-os.path.getsize(f), f))
+
+
 def step_pytest(stage, args, ctx):
+    """도구마다의 테스트 파일을 하나씩 따로 pytest로, pytest_workers개씩 동시에 (2.9.85: 회사 PC ml-kit 62분, 클라우드 22분 ->
+    4코어 약 8분). 결과는 도구별로 모읍니다."""
+    from concurrent.futures import ThreadPoolExecutor
     env = {"PYTHONUNBUFFERED": "1",                              # 끊겨도 그때까지의 출력이 남게
            "PYTHONPATH": os.pathsep.join([HERE] + [p for p in [os.environ.get("PYTHONPATH")] if p])}
+    jobs = []
     for tool in PYTEST_TARGETS:
         folder = os.path.join(HERE, tool)
-        if not os.path.isdir(folder):
-            continue
-        say(f"{tool} 오프라인 테스트 시작 (몇 분 걸릴 수 있습니다, 상한 {args.pytest_timeout}초)")
-        code, out, sec, stop = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", LIVE_PLUGIN,
-                                            "-rfEs"], folder, args.pytest_timeout, env_extra=env)
-        npass, nfail, nskip, fails, skips = parse_pytest(out)
-        fails = merge_live(fails, parse_live(out))
-        timed_out = TIMEOUT_MARK in (out.rstrip().splitlines() or [""])[-1]
-        stage.passed += npass
-        stage.skipped += nskip
-        stage.failures += [f"{tool}: {x[:200]}" for x in fails]
-        stage.failed += max(nfail, len(fails))
-        if timed_out:
-            stage.fail(f"{tool}: 시간 상한 {args.pytest_timeout}초로 중단 (그때까지 실패 {len(fails)}건은 위 목록, "
-                       f"나머지 테스트는 실행 안 됨. --pytest-timeout으로 늘릴 수 있음)")
-        elif code not in (0, None) and not nfail and not fails:
-            stage.fail(f"{tool}: pytest exit {code} (실패 항목 없이 끝남, 상세 참고)")
-        stage.skips += [f"{tool}: {x[:200]}" for x in skips]
-        stage.details.append((f"pytest {tool} (exit {code}, {sec}초)", f"cwd={folder}\n{out}"))
-        if stop:
-            raise KeyboardInterrupt
+        if os.path.isdir(folder):
+            jobs += [(tool, folder, f) for f in pytest_files(folder)]
+    workers = pytest_workers(args)
+    mem = total_memory_gb()
+    how = (f"{workers}개씩 동시에 (코어 {os.cpu_count()}개, 메모리 {mem:.0f}GB" if mem else f"{workers}개씩 동시에 (코어 {os.cpu_count()}개")
+    how += ", --pytest-workers로 바꿀 수 있음)" if not getattr(args, "pytest_workers", 0) else ", --pytest-workers)"
+    say(f"오프라인 테스트 시작: 파일 {len(jobs)}개를 {how} (파일마다 상한 {args.pytest_timeout}초)")
+    stage.note = f"동시 실행 {how}"                       # 결과 표의 비고 (느릴 때 원인을 보게)
+    procs, results, started = [], {}, time.time()
+
+    def one(job):
+        tool, folder, path = job
+        rel = os.path.relpath(path, folder)
+        res = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", LIVE_PLUGIN, "-rfEs", rel],
+                          folder, args.pytest_timeout, env_extra=env, show=lambda line: "[LIVE] " in line, procs=procs)
+        results[job] = res
+        npass, nfail = parse_pytest(res[1])[:2]
+        say(f"  [{len(results)}/{len(jobs)}] {tool}/{rel.replace(os.sep, '/')}: 통과 {npass}, 실패 {nfail} ({res[2]}초)")
+        return res
+
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures = [pool.submit(one, j) for j in jobs]
+    try:
+        while not all(f.done() for f in futures):        # short waits: Ctrl+C is seen
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        for proc in procs:
+            kill_tree(proc)
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    say(f"오프라인 테스트 끝: {round(time.time() - started)}초")
+    for tool in PYTEST_TARGETS:
+        mine = [j for j in jobs if j[0] == tool]
+        for job in mine:
+            code, out, sec, stop = results.get(job, (None, "", 0, False))
+            rel = os.path.relpath(job[2], job[1]).replace(os.sep, "/")
+            npass, nfail, nskip, fails, skips = parse_pytest(out)
+            fails = merge_live(fails, parse_live(out))
+            timed_out = TIMEOUT_MARK in (out.rstrip().splitlines() or [""])[-1]
+            stage.passed += npass
+            stage.skipped += nskip
+            stage.failures += [f"{tool}: {x[:200]}" for x in fails]
+            stage.failed += max(nfail, len(fails))
+            if timed_out:
+                stage.fail(f"{tool}/{rel}: 시간 상한 {args.pytest_timeout}초로 중단 (그때까지 실패 {len(fails)}건은 위 목록, "
+                           f"나머지 테스트는 실행 안 됨. --pytest-timeout으로 늘릴 수 있음)")
+            elif code not in (0, 5, None) and not nfail and not fails:      # 5: no test in the file
+                stage.fail(f"{tool}/{rel}: pytest exit {code} (실패 항목 없이 끝남, 상세 참고)")
+            stage.skips += [f"{tool}: {x[:200]}" for x in skips]
+            stage.details.append((f"pytest {tool}/{rel} (exit {code}, {sec}초)", f"cwd={job[1]}\n{out}"))
 
 
 # ---------------------------------------------------------------------------
@@ -1147,7 +1232,9 @@ def main(argv=None):
     p.add_argument("--office-dir", help=r"office 단계 시험 폴더 (기본 C:\CLI-dev\work\office)")
     p.add_argument("--timeout", type=int, default=3600, help="단계별 시간 상한(초, 기본 3600)")
     p.add_argument("--pytest-timeout", type=int, default=7200,
-                   help="pytest 단계에서 도구 하나의 시간 상한(초, 기본 7200. 회사 PC에서 ml-kit이 3600초를 넘음)")
+                   help="pytest 단계에서 테스트 파일 하나의 시간 상한(초, 기본 7200)")
+    p.add_argument("--pytest-workers", type=int, default=0,
+                   help="pytest 단계에서 동시에 돌릴 테스트 파일 수 (기본 0: 코어 수 - 1, 메모리 4GB마다 1개, 최대 3. 1이면 하나씩)")
     args = p.parse_args(argv)
     chosen = [s.strip().lower() for s in (args.only or ",".join(DEFAULT_STAGES)).split(",") if s.strip()]
     if (args.gemma or args.gemma_only or args.gemma_model) and "gemma" not in chosen:   # gemma 옵션을 주면 gemma 단계도

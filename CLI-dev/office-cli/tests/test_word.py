@@ -1275,3 +1275,102 @@ def test_write_dry_run_anchor_errors_same_as_real_run(wd, capsys):
     assert code == 1 and "표 안에" in out["message"], out
     code, out = run_main(word, capsys, "write", "--text", "x", "--anchor", "없는문구", "--pos", "replace", "--dry-run")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A12: read --save -> write --file 왕복 (단락 수·제목·번호가 그대로)
+# ---------------------------------------------------------------------------
+
+
+def test_read_save_then_write_file_keeps_structure(wd, capsys, tmp_path):
+    import _markdown as md
+    from sample_docs import new_docx
+    src = tmp_path / "small.docx"
+    d = new_docx()
+    d.add_heading("1. 개요", level=1)
+    for t in ["첫 단락입니다.", "- 대시로 시작하는 글", "1. 번호처럼 보이는 문장입니다.", "| 막대로 시작"]:
+        d.add_paragraph(t)
+    d.add_heading("2. 결론", level=1)
+    d.add_paragraph("끝 단락입니다.")
+    d.save(str(src))
+    code, out = run_word(capsys, "read", "--target", str(src), "--save", str(tmp_path / "s.md"))
+    assert code == 0, out
+    blocks = md.parse_markdown_blocks(open(out["output_file"], encoding="utf-8").read())
+    assert blocks == [("heading", (1, "1. 개요")), ("paragraph", "첫 단락입니다."), ("paragraph", "- 대시로 시작하는 글"),
+                      ("paragraph", "1. 번호처럼 보이는 문장입니다."), ("paragraph", "| 막대로 시작"), ("heading", (1, "2. 결론")),
+                      ("paragraph", "끝 단락입니다.")], blocks
+    code, out = run_word(capsys, "write", "--file", out["output_file"])
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    paras = [p for p in doc_paras(wd["doc"]) if p.strip()]
+    assert "1. 개요" in paras and "2. 결론" in paras and "1. 번호처럼 보이는 문장입니다." in paras, paras
+    assert not any(p.startswith("단락 ") for p in paras), paras
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 3장 C1~C5, C7 (가짜 COM을 실제 Word 동작에 맞춤, 실기 러너 L 그룹에서 확인)
+# ---------------------------------------------------------------------------
+
+
+def _doc_table_after_anchor(wd):
+    doc = FakeWordDocument("앞 단락\r칸1\r칸2\r뒤 단락")
+    s = doc.text.index("칸1")
+    doc.table_spans = [(s, doc.text.index("뒤 단락"))]
+    wd["doc"] = doc
+    return doc
+
+
+@pytest.mark.parametrize("pos", ["after", "replace"])
+def test_c1_anchor_right_above_table_does_not_write_into_first_cell(wd, capsys, pos):
+    doc = _doc_table_after_anchor(wd)
+    code, out = run_word(capsys, "write", "--anchor", "앞 단락", "--pos", pos, "--text", "새 글")
+    assert code == 0, out
+    s, e = doc.table_spans[0]
+    pos_new = doc.text.index("새 글")
+    assert not (s <= pos_new < e) and doc.text[s:].startswith("칸1"), (doc.text, doc.table_spans)
+    assert ("앞 단락" in doc.text) == (pos == "after"), doc.text
+
+
+def test_c2_new_numbered_list_restarts(wd, capsys):
+    code, out = run_word(capsys, "write", "--text", "1. 하나\n2. 둘")
+    assert code == 0 and any(e[0] == "list_restart" and e[2] is False for e in wd["doc"].log), wd["doc"].log
+
+
+def test_c3_table_after_table_gets_separating_paragraph(wd, capsys, tmp_path):
+    doc = FakeWordDocument("표 위")
+    wd["doc"] = doc
+    run_word(capsys, "write", "--text", "| a | b |\n|---|---|\n| 1 | 2 |")
+    run_word(capsys, "write", "--text", "| c | d |\n|---|---|\n| 3 | 4 |")
+    (a1, b1), (a2, b2) = sorted(doc.table_spans)[:2]
+    assert a2 > b1, (doc.text, doc.table_spans)            # 사이에 단락이 없으면 Word는 두 표를 합침
+
+
+def test_c5_toc_is_updated_after_the_content(wd, capsys, tmp_path):
+    p = tmp_path / "r.md"
+    p.write_text("# 1장\n본문\n## 1.1 절\n세부", encoding="utf-8")
+    code, out = run_word(capsys, "write", "--toc", "--file", str(p))
+    assert code == 0, out
+    snaps = [e[1] for e in wd["doc"].log if e[0] == "toc_update"]
+    assert snaps and "1.1 절" in snaps[-1], wd["doc"].log
+
+
+def test_c7_replace_removes_anchor_only_after_insert(wd, capsys, monkeypatch):
+    doc = FakeWordDocument("가\r지울 단락\r나")
+    wd["doc"] = doc
+    calls = []
+    real = word.Writer.text
+
+    def boom(self, text, style=None):
+        calls.append(text)
+        raise RuntimeError("COM 실패")
+    monkeypatch.setattr(word.Writer, "text", boom)
+    code, out = run_word(capsys, "write", "--anchor", "지울 단락", "--pos", "replace", "--text", "새 글")
+    assert code == 1 and "지울 단락" in doc.text, (out, doc.text)        # 넣다가 실패하면 앵커 단락은 그대로
+    monkeypatch.setattr(word.Writer, "text", real)
+    code, out = run_word(capsys, "write", "--anchor", "지울 단락", "--pos", "replace", "--text", "새 글")
+    assert code == 0 and "지울 단락" not in doc.text and doc.text.split("\r")[:3] == ["가", "새 글", "나"], (out, doc.text)
+
+
+def test_markdown_table_bold_cells_have_no_stars(wd, capsys):
+    code, out = run_word(capsys, "write", "--text", "| 항목 | 값 |\n|---|---|\n| a | 1 |\n| **합계** | **1** |")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert "**" not in wd["doc"].text and "합계\t1" in wd["doc"].text.replace("\r", "\n"), wd["doc"].text

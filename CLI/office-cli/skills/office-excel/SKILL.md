@@ -4,7 +4,7 @@ description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.91"
+  version: "1.5.1"
   platform: windows
 ---
 
@@ -16,13 +16,13 @@ metadata:
 3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
 4. `--target`을 빼면 사용자가 보고 있는 통합문서다. 다른 열린 문서는 `--target "<이름>"`, 닫힌 파일은 `--target "<전체경로>"`.
 5. 표와 여러 줄 값은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .csv를 만들고 `--file "<그 경로>"`로 넘긴다. `$`가 든 값(수식 `=$A$1`)은 작은따옴표 `'...'`로 감싼다.
-6. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.
+6. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장(파이썬 직접)대로 한다.
 
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 읽기 / 행 수 / 셀 찾기 | `python "C:\CLI\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수 `rows`, 수식 보기 `--formulas`) |
-| 조건에 맞는 행 | `python "C:\CLI\office-cli\excel.py" read --where "금액 >= 100; 부서 = 영업"` (`;` 그리고, `|` 또는, `>= <= > < = != ~`(포함), 값에 `;` `|`가 있으면 `'a;b'`) |
+| 읽기 / 행 수 / 셀 찾기 | `python "C:\CLI\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows` 값, 수식 보기는 `--formulas`) |
+| 조건에 맞는 행 | `python "C:\CLI\office-cli\excel.py" read --where "금액 >= 100; 부서 = 영업"` (`;` 그리고, `|` 또는, `>= <= > < = != ~`(포함) `!~`(포함 안 함), 값에 `;` `|`가 있으면 `'a;b'`) |
 | 칸 하나에 값 | `python "C:\CLI\office-cli\excel.py" write --range A2 --value "반가워"` |
 | 여러 칸에 각각 | `python "C:\CLI\office-cli\excel.py" write --cells "C6=ft; C7=20; 계산기!C11==A1*2"` (많으면 `--cells "칸값.csv"`(열: 칸, 값)) |
 | 표 쓰기 | `python "C:\CLI\office-cli\excel.py" write --range A1 --file "<표.csv>"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트 `--sheet 이름 --new-sheet`) |

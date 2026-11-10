@@ -127,26 +127,40 @@ def _text(v: Any) -> str:
     return "" if v is None else str(v)
 
 
-def summary(item: Any) -> Dict[str, Any]:
-    sender = _text(getattr(item, "SenderName", ""))
-    addr = _text(getattr(item, "SenderEmailAddress", ""))
+def _field(item: Any, name: str, failed: Optional[List[str]]) -> Any:
+    """항목 속성 하나 (읽지 못하면 ''이고 failed에 이름을 남김: Outlook 보안 창에서 '거부'를 누르면 주소 속성이 예외)."""
     try:
-        received = rt.json_safe(item.ReceivedTime)
+        return getattr(item, name, "")
     except Exception:
-        received = ""
+        if failed is not None:
+            failed.append(name)
+        return ""
+
+
+def summary(item: Any, failed: Optional[List[str]] = None) -> Dict[str, Any]:
+    sender = _text(_field(item, "SenderName", failed))
+    addr = _text(_field(item, "SenderEmailAddress", failed))
+    got = _received(item)   # pywin32는 현지 벽시계 시각에 UTC 표시를 붙여 '+00:00'으로 나왔음: 현지 시각 그대로 (2026-11-09 검토 C14)
+    received = got.strftime("%Y-%m-%d %H:%M:%S") if got is not None else ""
     try:
         attach = int(item.Attachments.Count)
     except Exception:
         attach = 0
-    return {"entry_id": _text(getattr(item, "EntryID", "")), "subject": _text(getattr(item, "Subject", "")),
+    return {"entry_id": _text(_field(item, "EntryID", failed)), "subject": _text(_field(item, "Subject", failed)),
             "from": f"{sender} <{addr}>" if addr and "@" in addr else sender, "received": received,
-            "unread": bool(getattr(item, "UnRead", False)), "attachments": attach}
+            "unread": bool(_field(item, "UnRead", failed)), "attachments": attach}
 
 
 def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = None,
-             since: Optional[_dt.datetime] = None) -> List[Dict[str, Any]]:
-    """since: 받은 시각이 이보다 이른 메일은 뺍니다 (Restrict 날짜 조건을 다시 확인. 받은 시각 내림차순이라 처음 만나면 멈춤)."""
+             since: Optional[_dt.datetime] = None, stats: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """since: 받은 시각이 이보다 이른 메일은 뺍니다 (Restrict 날짜 조건을 다시 확인. 받은 시각 내림차순이라 처음 만나면 멈춤).
+    stats: 읽지 못한 항목 수('unreadable')와 일부 칸을 읽지 못한 메일 수('partial', 칸 이름은 'fields'). 조용히 건너뛰면
+    모든 항목이 실패해도 'VERIFIED: 0건'이 되어 (2026-11-09 검토 A10) 호출하는 쪽이 UNVERIFIED나 오류로 냅니다."""
     out: List[Dict[str, Any]] = []
+    st = stats if stats is not None else {}
+    st.setdefault("unreadable", 0)
+    st.setdefault("partial", 0)
+    st.setdefault("fields", [])
     for item in items:
         if len(out) >= limit:
             break
@@ -156,9 +170,24 @@ def _collect(items: Any, limit: int, keep: Optional[Callable[[Any], bool]] = Non
                 if got is not None and got < since:
                     break
             if int(item.Class) == OL_MAIL and (keep is None or keep(item)):
-                out.append(summary(item))
+                failed: List[str] = []
+                out.append(summary(item, failed))
+                if failed:
+                    st["partial"] += 1
+                    st["fields"] = sorted(set(st["fields"]) | set(failed))
         except Exception:
+            st["unreadable"] += 1
             continue
+    return out
+
+
+def collect_problems(stats: Dict[str, Any], what: str) -> List[str]:
+    """_collect의 stats -> UNVERIFIED 이유 목록. 하나도 읽지 못했으면 오류 (Outlook 보안 창 거부 등)."""
+    out: List[str] = []
+    if stats.get("unreadable"):
+        out.append(f"{what} {stats['unreadable']}개를 읽지 못함 (빠진 메일이 있을 수 있음, Outlook 보안 확인 창이 떴으면 '허용' 후 다시 실행)")
+    if stats.get("partial"):
+        out.append(f"메일 {stats['partial']}통의 일부 칸({', '.join(stats['fields'])})을 읽지 못함")
     return out
 
 
@@ -274,6 +303,14 @@ def _check_limit(limit: int, warnings: List[str]) -> int:
 # 2. 조회
 # ==============================================================================
 
+def _all_unreadable(mails: List[Dict[str, Any]], stats: Dict[str, Any], folder: Any) -> None:
+    """항목은 있는데 하나도 읽지 못했으면 오류 (0건으로 답하지 않음)."""
+    if not mails and stats.get("unreadable"):
+        raise rt.InputError(f"'{folder.Name}' 폴더의 항목 {stats['unreadable']}개를 하나도 읽지 못했습니다. Outlook에 보안 확인 창"
+                            "(프로그램이 메일에 접근하려 함)이 떠 있으면 '허용'을 누른 뒤 같은 명령을 1번만 다시 실행하세요. "
+                            "창이 없으면 Outlook이 응답하는지 확인하세요.")
+
+
 def cmd_list(args) -> Dict[str, Any]:
     period = date_period(args.days, args.since)        # 날짜 오류는 Outlook에 연결하기 전에
     start = _period_start(period) if period else None
@@ -286,8 +323,12 @@ def cmd_list(args) -> Dict[str, Any]:
         items = _restrict_dated(items, jet_date_filter(start), None, "list")
     items.Sort("[ReceivedTime]", True)                 # 거른 뒤 정렬해야 순서가 보장됨
     warnings: List[str] = []
-    mails = _collect(items, _check_limit(args.limit, warnings), since=start)
+    stats: Dict[str, Any] = {}
+    mails = _collect(items, _check_limit(args.limit, warnings), since=start, stats=stats)
+    _all_unreadable(mails, stats, folder)
+    problems = collect_problems(stats, "항목")
     id_warn = remember_listing(mails, "list")          # 짧은 번호 (이어서 늘어남, --id 3)
+    compact_listing(mails)
     if id_warn:
         warnings.append(id_warn)
     extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
@@ -296,6 +337,9 @@ def cmd_list(args) -> Dict[str, Any]:
     if period:
         extra["period"] = period
         when = f" (받은 날짜 {_period_text(period)})"
+    if problems:
+        return rt.ok_unverified(TOOL, "list", f"'{folder.Name}' 폴더 메일 {len(mails)}통{when} (일부 항목을 읽지 못함)", problems,
+                                folder=str(folder.Name), mails=mails, count=len(mails), **extra)
     if not mails:      # R2 0건
         return rt.ok(TOOL, "list", f"0건: '{folder.Name}' 폴더에 {what}이 없습니다{when}",
                      f"VERIFIED: 0건. '{folder.Name}' 폴더에 {what}이 없습니다{when}. 사용자에게 그대로 알리고 조건을 바꿔 "
@@ -340,6 +384,9 @@ def _literal_keep(query: Optional[str], sender: Optional[str], where: str) -> Op
     return keep
 
 
+PR_SENDER_SMTP = "http://schemas.microsoft.com/mapi/proptag/0x5D01001F"   # PR_SENDER_SMTP_ADDRESS_W
+
+
 def build_search_filter(query: Optional[str], sender: Optional[str], where: str,
                         since: Optional[_dt.datetime] = None) -> str:
     """DASL 필터: @SQL= 접두어는 한 번만, 조건마다 괄호로 묶어 AND로 연결. since: 받은 시각 하한 (현지 시각)."""
@@ -350,7 +397,8 @@ def build_search_filter(query: Optional[str], sender: Optional[str], where: str,
                   "all": ["urn:schemas:httpmail:subject", "urn:schemas:httpmail:textdescription"]}[where]
         clauses.append(_dasl_like(fields, query))
     if sender:
-        clauses.append(_dasl_like(["urn:schemas:httpmail:fromname", "urn:schemas:httpmail:fromemail"], sender))
+        # 사내 Exchange 보낸 사람의 fromemail은 X.500 주소라 SMTP 주소로 못 찾음: 보낸 사람 SMTP 주소 속성도 대조 (2026-11-09 검토 C16, 실기 확인)
+        clauses.append(_dasl_like(["urn:schemas:httpmail:fromname", "urn:schemas:httpmail:fromemail", PR_SENDER_SMTP], sender))
     if since is not None:
         clauses.append("(" + dasl_date_clause(since) + ")")
     if not clauses:
@@ -371,8 +419,13 @@ def cmd_search(args) -> Dict[str, Any]:
         items = folder.Items.Restrict(flt)
     items.Sort("[ReceivedTime]", True)
     warnings: List[str] = []
-    mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where), since=start)
+    stats: Dict[str, Any] = {}
+    mails = _collect(items, _check_limit(args.limit, warnings), _literal_keep(args.query, args.sender, args.where), since=start,
+                     stats=stats)
+    _all_unreadable(mails, stats, folder)
+    problems = collect_problems(stats, "찾은 항목")
     id_warn = remember_listing(mails, "search")
+    compact_listing(mails)
     if id_warn:
         warnings.append(id_warn)
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'",
@@ -382,6 +435,10 @@ def cmd_search(args) -> Dict[str, Any]:
         result["period"] = period
     if warnings:
         result["warnings"] = warnings
+    if problems:
+        if mails:
+            result["next_commands"] = [rt.next_command("outlook.py", ["read", "--id", str(mails[0]["id"])], "첫 번째 메일 본문 읽기")]
+        return rt.ok_unverified(TOOL, "search", f"{desc}: '{folder.Name}'에서 {len(mails)}통 (일부 항목을 읽지 못함)", problems, **result)
     if not mails:      # R2 0건
         return rt.ok(TOOL, "search", f"0건: {desc}: '{folder.Name}'에서 일치하는 메일 없음",
                      f"VERIFIED: 0건. '{folder.Name}' 폴더에 {desc}에 맞는 메일이 없습니다. "
@@ -394,6 +451,13 @@ def _safe_name(text: str, limit: int, default: str = "메일") -> str:
     """파일·폴더 이름에 쓸 수 없는 글자(\\ / : * ? \" < > |, 제어 문자)를 _로, 끝의 점·공백은 뺍니다.
     (RE: 같은 제목이 NTFS 대체 스트림 이름이 되거나 저장에 실패하던 문제)"""
     return rt.safe_filename(text, limit, default)
+
+
+def _blocked_name(name: str) -> bool:
+    """실행 파일 형식 첨부인지. 이름 끝의 공백·점을 지운 뒤 확장자로 봄 (Windows는 저장할 때 끝의 공백·점을 지워
+    'evil.exe '와 'a.js.'가 실행 파일이 되는데 검사를 통과하던 것, 2026-11-09 검토 B13)."""
+    clean = name.rstrip(" .\t")
+    return os.path.splitext(clean)[1].lower() in BLOCKED_ATTACH
 
 
 def _attachment_infos(item: Any) -> List[Dict[str, Any]]:
@@ -419,7 +483,7 @@ def _attachment_infos(item: Any) -> List[Dict[str, Any]]:
         except Exception:
             hidden = False
         infos.append({"index": i, "name": name, "size": size, "hidden_inline": hidden,
-                      "blocked": os.path.splitext(name)[1].lower() in BLOCKED_ATTACH, "_att": att})
+                      "blocked": _blocked_name(name), "_att": att})
     return infos
 
 
@@ -615,7 +679,7 @@ def cmd_attachments(args) -> Dict[str, Any]:
     listing = args.save is None
     if listing and (args.name or args.index):
         raise rt.InputError("--name/--index는 --save와 함께 씁니다. 목록만 보려면 둘 다 빼세요. "
-                            "[추천] 같은 명령 끝에 --save를 붙이세요.")
+                            f"[추천] {rt.retry_command({'--save': True})}")
     item = _target_item(get_outlook(), args, "첨부를 볼 메일이 없습니다. Outlook에서 메일을 선택하거나 --id를 지정하세요.",
                         original=False)
     subject = _text(getattr(item, "Subject", ""))
@@ -665,7 +729,23 @@ def cmd_attachments(args) -> Dict[str, Any]:
                  f"사용자에게 저장 폴더(folder)와 파일 이름을 그대로 알리세요.{tail}", verified=True, **base)
 
 
+OL_CLASS_EXPLORER, OL_CLASS_INSPECTOR = 34, 35
+
+
 def current_item(app: Any) -> Tuple[Optional[Any], str]:
+    """사용자가 지금 보는 메일. 맨 앞 창(ActiveWindow)이 목록(Explorer)이면 선택한 메일, 메일 창(Inspector)이면 그 메일.
+    ActiveInspector()부터 보면 뒤에 열어 둔 메일 창을 골랐음 (2026-11-09 검토 C15, 실기 확인)."""
+    try:
+        win = app.ActiveWindow()
+        cls = int(win.Class)
+        if cls == OL_CLASS_EXPLORER:
+            sel = win.Selection
+            if sel.Count > 0:
+                return sel.Item(1), "목록에서 선택"
+        elif cls == OL_CLASS_INSPECTOR and win.CurrentItem is not None:
+            return win.CurrentItem, "열린 창"
+    except Exception:
+        pass
     try:
         insp = app.ActiveInspector()
         if insp is not None and insp.CurrentItem is not None:
@@ -689,15 +769,25 @@ def cmd_current(args) -> Dict[str, Any]:
     return _detail_response("current", f"{source} 메일: '{result['mail']['subject']}' ({result['mail']['from']})", result)
 
 
-def _folder_tree(folder: Any, depth: int) -> Dict[str, Any]:
+FOLDERS_MAX = 150   # folders 결과에 담는 폴더 수 상한 (상한 없이 수백 개가 나오던 것, 2026-11-09 검토 5장 4번)
+DEPTH_MAX = 5
+
+
+def _folder_tree(folder: Any, depth: int, budget: Dict[str, int]) -> Dict[str, Any]:
     node: Dict[str, Any] = {"name": str(folder.Name)}
+    budget["n"] += 1
     try:
         node["unread"] = int(folder.UnReadItemCount)
     except Exception:
         pass
     if depth > 0:
         try:
-            subs = [_folder_tree(f, depth - 1) for f in folder.Folders]
+            subs = []
+            for f in folder.Folders:
+                if budget["n"] >= FOLDERS_MAX:
+                    budget["cut"] = 1
+                    break
+                subs.append(_folder_tree(f, depth - 1, budget))
             if subs:
                 node["folders"] = subs
         except Exception:
@@ -707,8 +797,23 @@ def _folder_tree(folder: Any, depth: int) -> Dict[str, Any]:
 
 def cmd_folders(args) -> Dict[str, Any]:
     ns = get_namespace(get_outlook())
-    stores = [_folder_tree(store, args.depth) for store in ns.Folders]
-    return rt.ok(TOOL, "folders", f"계정/저장소 {len(stores)}개의 폴더 구조", accounts=stores)
+    depth = max(0, min(args.depth, DEPTH_MAX))
+    budget = {"n": 0, "cut": 0}
+    stores = []
+    for store in ns.Folders:
+        if budget["n"] >= FOLDERS_MAX:
+            budget["cut"] = 1
+            break
+        stores.append(_folder_tree(store, depth, budget))
+    extra: Dict[str, Any] = {"folder_count": budget["n"], "truncated": bool(budget["cut"])}
+    warnings = [f"--depth {args.depth}은 {DEPTH_MAX}로 줄임"] if args.depth > DEPTH_MAX else []
+    if budget["cut"]:
+        warnings.append(f"폴더가 많아 {FOLDERS_MAX}개까지만 담음: 찾는 폴더가 없으면 --depth를 줄이거나 search·list의 --folder에 상위 폴더 경로를 주세요")
+    if warnings:
+        extra["warnings"] = warnings
+    return rt.ok(TOOL, "folders", f"계정/저장소 {len(stores)}개의 폴더 구조 (폴더 {budget['n']}개" + (", 일부만" if budget["cut"] else "") + ")",
+                 "VERIFIED: 폴더 구조를 읽었습니다." + (" 일부만 담았습니다(truncated, warnings)." if budget["cut"] else ""),
+                 accounts=stores, **extra)
 
 
 # ==============================================================================
@@ -860,6 +965,25 @@ def _draft_id(eid: str, subject: str, warnings: List[str]) -> str:
     return str(m["id"])
 
 
+def _recipients(mail: Any) -> Dict[str, str]:
+    """받는 사람(to)과, 있으면 참조(cc)·숨은 참조(bcc). 발송 전 확인 화면에 참조가 빠지면 사용자가 모르는 사람에게 나감 (2026-11-09 검토 A11)."""
+    out = {"to": _text(_field(mail, "To", None))}
+    for key, prop in (("cc", "CC"), ("bcc", "BCC")):
+        v = _text(_field(mail, prop, None))
+        if v.strip():
+            out[key] = v
+    return out
+
+
+def _recipients_text(r: Dict[str, str]) -> str:
+    text = r.get("to") or "(받는 사람 미입력)"
+    if r.get("cc"):
+        text += f", 참조 {r['cc']}"
+    if r.get("bcc"):
+        text += f", 숨은 참조 {r['bcc']}"
+    return text
+
+
 def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
               original: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """작성한 메일을 초안으로 저장하고 작성 창을 띄움. 보내지 않고, 이 초안(같은 항목)을 보내는 send 명령을 confirm_commands에
@@ -867,13 +991,22 @@ def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
     new/reply/forward에 --send가 없음 (1.4.72): 초안 창이 열린 채 같은 메일을 또 만들어 보내거나(중복 발송),
     --id 없는 두 번째 명령이 열린 초안을 원본으로 잡아 초안에 답장·전달하는 일(엉뚱한 대상)이 구조적으로 생기지 않게."""
     attached, attach_problems = attach
-    extra: Dict[str, Any] = {"to": _text(getattr(mail, "To", "")), "subject": _text(getattr(mail, "Subject", "")),
+    extra: Dict[str, Any] = {**_recipients(mail), "subject": _text(getattr(mail, "Subject", "")),
                              "attached": attached, "sent": False}
     note = _original_note(original)
     if original is not None:
         extra["original"] = original
     eid = _save_draft(mail)
-    mail.Display()
+    try:
+        mail.Display()
+    except Exception as e:
+        # Outlook에 대화 상자가 떠 있으면 작성 창을 못 띄움. 초안은 이미 저장됐으므로 일반 오류로 끝내면 다시 실행할 때마다
+        # 초안이 늘어남 (2026-11-09 검토 C17): 초안 정보와 함께 UNVERIFIED
+        where = "임시 보관함에 초안으로 저장했지만" if eid else "초안 저장도 확인하지 못했고"
+        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄우지 못했습니다: '{extra['subject']}'{note}",
+                                [f"{where} 작성 창을 띄우지 못함 ({type(e).__name__}, Outlook에 열린 대화 상자가 있는지 확인)",
+                                 "이 명령을 다시 실행하지 말고(초안이 하나 더 생김) 사용자에게 Outlook의 임시 보관함에서 초안을 열어 확인하라고 알리세요"],
+                                **extra)
     if attach_problems or not eid:
         # 첨부를 확인하지 못했거나 초안을 저장하지 못했으면 보내는 명령을 주지 않음 (첨부가 빠진 메일은 되돌릴 수 없음)
         why = attach_problems + ([] if eid else ["초안을 임시 보관함에 저장하지 못해 보내는 명령을 만들지 못함"])
@@ -892,12 +1025,13 @@ def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
     # 발송은 next_commands가 아니라 confirm_commands로 (1.4.73): next_commands는 '그대로 실행'하는 다음 단계라
     # 경량 LLM이 기계적으로 실행해도 메일이 나가지 않게, 사용자 '예' 뒤에만 실행하는 명령은 키를 나눔
     extra["confirm_commands"] = [rt.next_command("outlook.py", ["send", "--id", extra["draft_id"]],
-                                                 "사용자가 받는 사람·제목을 보고 보내라고 한 뒤에만 이 초안을 보내기",
+                                                 "사용자가 받는 사람·참조·제목을 보고 보내라고 한 뒤에만 이 초안을 보내기",
                                                  destructive=True)]
     tell = " original(원본 메일의 제목·보낸사람)," if original is not None else ""
     return rt.ok(TOOL, command,
-                 f"메일 작성 창을 띄웠습니다(초안 저장): '{extra['subject']}' -> {extra['to'] or '(받는 사람 미입력)'}{note}",
-                 f"VERIFIED: 초안을 저장하고 작성 창의 받는 사람과 제목을 다시 읽었습니다. 아직 보내지 않았습니다. 받는 사람·제목,{tell} "
+                 f"메일 작성 창을 띄웠습니다(초안 저장): '{extra['subject']}' -> {_recipients_text(extra)}{note}",
+                 f"VERIFIED: 초안을 저장하고 작성 창의 받는 사람·참조와 제목을 다시 읽었습니다. 아직 보내지 않았습니다. "
+                 f"받는 사람·참조(cc, bcc)·제목,{tell} "
                  "첨부를 사용자에게 보여 주고 보낼지 물으세요. 사용자가 '예'라고 한 뒤에만 confirm_commands[0](send)을 1번 실행하세요. "
                  "확인 전에는 대신 발송하지 마세요. 사용자가 작성 창에서 직접 보냈으면 실행하지 마세요. "
                  "이 명령을 다시 실행하지 마세요(초안이 하나 더 생김).",
@@ -953,7 +1087,7 @@ def cmd_send(args) -> Dict[str, Any]:
         raise _send_refused("이 초안은 임시 보관함에 없어(지웠거나 다른 폴더로 옮김) 보내지 않았습니다. "
                             "사용자에게 그 메일을 직접 확인하라고 알리세요.")
     _draft_record(eid, claim=False)                  # 이 도구가 만든 초안인지, 이미 보냈는지 (작성 창을 띄우기 전에)
-    extra: Dict[str, Any] = {"to": _text(getattr(mail, "To", "")), "subject": _text(getattr(mail, "Subject", "")),
+    extra: Dict[str, Any] = {**_recipients(mail), "subject": _text(getattr(mail, "Subject", "")),
                              "draft_id": str(args.id), "sent": False}
     unresolved = _unresolved(mail)
     if unresolved:
@@ -972,7 +1106,7 @@ def cmd_send(args) -> Dict[str, Any]:
                             "사용자에게 작성 창과 보낸 편지함을 확인하고 필요하면 직접 [보내기]를 누르라고 알리세요.") from None
     extra["sent"] = True
     # R1: 발송은 Outlook이 처리하므로 실제로 나갔는지는 여기서 확인할 수 없음 (보낸 편지함 확인은 사용자 몫)
-    return rt.ok_unverified(TOOL, "send", f"메일 발송을 Outlook에 맡겼습니다: '{extra['subject']}' -> {extra['to']}",
+    return rt.ok_unverified(TOOL, "send", f"메일 발송을 Outlook에 맡겼습니다: '{extra['subject']}' -> {_recipients_text(extra)}",
                             ["실제 발송 여부(보낸 편지함)는 확인하지 않음. 사용자에게 보낸 편지함을 확인하라고 알리세요"], **extra)
 
 
@@ -1265,6 +1399,14 @@ def remember_listing(mails: List[Dict[str, Any]], what: str) -> Optional[str]:
     return None
 
 
+def compact_listing(mails: List[Dict[str, Any]]) -> None:
+    """목록 결과에서 짧은 번호(id)가 붙은 메일의 긴 EntryID(140자쯤)를 뺌 (2026-11-09 검토 5장 4번: 목록 출력 크기).
+    번호를 붙이지 못해 id가 EntryID면 그대로."""
+    for m in mails:
+        if m.get("id") != m.get("entry_id"):
+            m.pop("entry_id", None)
+
+
 # ------------------------------------------------------------------------------
 # 발송 원장 (1.4.73): new/reply/forward가 만든 초안의 EntryID와 send로 보낸 시각. send는 원장에 있고 아직 보내지 않은
 # 초안만 보냄 (사용자가 쓰다 둔 초안·이미 보낸 초안 거부). 번호 기억 파일과 같은 잠금(_IdsLock)으로 묶음.
@@ -1431,7 +1573,7 @@ def _when(v: Any) -> str:
 
 def cmd_calendar(args) -> Dict[str, Any]:
     if args.days < 1 or args.days > 92:
-        raise rt.InputError(f"--days는 1~92입니다 (1 = 오늘, 7 = 오늘부터 7일). 받은 값: {args.days}. [추천] 7")
+        raise rt.InputError(f"--days는 1~92입니다 (1 = 오늘, 7 = 오늘부터 7일). 받은 값: {args.days}. [추천] {rt.retry_command({'--days': 7})}")
     start = _dt.datetime.combine(_today(), _dt.time())
     end = start + _dt.timedelta(days=args.days)
     ns = get_namespace(get_outlook())
@@ -1553,6 +1695,7 @@ def cmd_thread(args) -> Dict[str, Any]:
         s.update(body=body, body_truncated=cut)
         out.append(s)
     id_warn = remember_listing(out, f"thread {topic[:40]}")
+    compact_listing(out)
     fields = {"topic": topic, "mails": out, "count": len(uniq), "shown": len(out), "truncated": len(uniq) > len(out)}
     if id_warn:
         fields["warnings"] = [id_warn]
@@ -1612,7 +1755,7 @@ def build_cli():
     p.add_argument("--days", type=int, default=7, help="오늘부터 N일 (기본 7, 1 = 오늘, 최대 92)")
 
     p = sub.add_parser("folders", help="폴더 구조")
-    p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2)")
+    p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2, 최대 5, 폴더 150개까지)")
 
     def compose(p, to=True):
         if to:

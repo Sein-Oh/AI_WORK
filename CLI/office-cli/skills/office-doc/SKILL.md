@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 본문
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.91"
+  version: "1.5.1"
   platform: windows
 ---
 
@@ -17,7 +17,7 @@ metadata:
 4. `--target`을 빼면 사용자가 보고 있는 문서다. 다른 열린 문서는 `--target "<이름>"`, 닫힌 파일은 `--target "<전체경로>"`.
 5. 여러 줄 글, 표, 큰따옴표가 든 값은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .md(.csv)를 만들고 `--file "<그 경로>"`로 넘긴다. .md의 코드는 ```로 감싼다.
 6. 문서 내용을 다른 문서로 옮길 때는 `--save`로 파일을 만들고 결과의 `output_file`을 `--file`로 넘긴다.
-7. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.
+7. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장(파이썬 직접)대로 한다.
 
 ## 명령
 | 할 일 | 명령 |

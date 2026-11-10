@@ -6,6 +6,7 @@
 16자리 경계값, 파생변수 수식 칸, 잠긴 엑셀, LibreOffice가 있으면 다시 계산해 모델 예측과 비교.
 """
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -592,6 +593,34 @@ def test_export_moves_the_version_model_as_it_is(export_version):
     assert any("엑셀" in u for u in r.get("unverified", [])) or r["verified"]          # Excel check only on Windows
 
 
+@pytest.mark.skipif(not (sys.platform == "win32" and importlib.util.find_spec("win32com")), reason="Windows + Excel only")
+def test_excel_recalculates_like_the_model(export_version, monkeypatch):
+    """Windows + 엑셀: 일괄계산에 무작위 조건과 경계값 위·아래 조건을 한 번에 넣고 한 번 다시 계산한 값 = 모델 (그 밖의 시험은 이 확인을 끔)."""
+    _, _, vdir = export_version
+    monkeypatch.delenv("ML_KIT_SKIP_EXCEL_CHECK", raising=False)
+    r = run_tool("ml_export.py", "--model", vdir)
+    assert r["verified"] is True and not r.get("unverified"), r
+
+
+def test_calculator_works_after_the_other_sheets_are_deleted(export_version, tmp_path):
+    """최소판은 사용자가 만든다: 일괄계산·사용법·정확도·정보 시트를 지워도 계산기는 숨김 모델 시트만 읽어 그대로 계산 (안내문에 '사용법' 없음)."""
+    _, _, vdir = export_version
+    r = run_tool("ml_export.py", "--model", vdir)
+    wb = openpyxl.load_workbook(r["output_file"])
+    note = " ".join(str(c.value) for row in wb["계산기"].iter_rows() for c in row if isinstance(c.value, str))
+    assert "사용법" not in note and "같은 계산" in note
+    for name in ("일괄계산", "사용법", "정확도", "정보"):
+        sheet = f"'{name}'!"
+        assert not any(sheet in str(c.value) for row in wb["계산기"].iter_rows() for c in row), name
+    if SOFFICE:
+        for name in ("일괄계산", "사용법", "정확도", "정보"):
+            wb.remove(wb[name])
+        wb.save(tmp_path / "min.xlsx")
+        out = _recalc(tmp_path / "min.xlsx", tmp_path)
+        x = [out["계산기"][f"C{i}"].value for i in (6, 7, 8, 9)]
+        assert out["계산기"]["C12"].value == pytest.approx(_model_predict(vdir, "효율", [x])[0], rel=1e-12, abs=1e-12)
+
+
 def test_status_cells_have_visible_colors(export_version):
     # conditional formats: Excel reads bgColor for a solid fill, so fgColor alone shows no color
     _, _, vdir = export_version
@@ -868,3 +897,13 @@ def test_time_limit_setting(monkeypatch):
     monkeypatch.setattr(rt, "RUN_START", rt.time.monotonic() - 5)
     with pytest.raises(rt.Unfinished):
         rt.check_time(0, "x")
+
+
+def test_excel_edge_point_is_beyond_excel_comparison_precision():
+    """회사 PC 2026-11-10 F7: 엑셀은 15자리쯤까지 같은 두 수를 같다고 비교 -> 경계값 바로 다음 double은 엑셀에서 경계값 쪽 잎.
+    엑셀 확인의 '경계 바로 위' 조건은 엑셀이 구분하는 가장 작은 걸음 위 (모델도 그 값은 오른쪽 잎)."""
+    import ml_export
+    for v in (76.5671, 180.49999237060547, -3.25, 0.0, 1e-7, 12345678.9):
+        up = ml_export.above_for_excel(v)
+        assert up > v and float("%.15g" % up) != float("%.15g" % v), (v, up)
+        assert up - v <= max(abs(v), 1.0) * 1e-12, (v, up)

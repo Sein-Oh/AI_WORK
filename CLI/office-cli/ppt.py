@@ -126,6 +126,32 @@ def slide_units(slide: Any, idx: int) -> Dict[str, Any]:
     return {"no": idx, "title": title or (lines[0] if lines else ""), "text": "\n".join(lines), "notes": _notes_text(slide)}
 
 
+def slide_blocks(slide: Dict[str, Any]) -> List[Tuple[str, Any]]:
+    """슬라이드 하나 -> 마크다운 블록 (제목은 # 제목, 글은 줄마다 단락, ' | '로 나눈 줄이 이어지면 표). read --save가 쓰고
+    word.py·ppt.py write --file이 같은 모양으로 되읽음 (전에는 줄이 한 단락으로 합쳐지고 표 행이 1x1 표, 2026-11-09 검토 A12)."""
+    blocks: List[Tuple[str, Any]] = []
+    title = str(slide.get("title") or "").strip()
+    lines = [ln for ln in str(slide.get("text") or "").split("\n") if ln.strip()]
+    if title:
+        blocks.append(("heading", (1, title)))
+        if lines and lines[0].strip() == title:
+            lines = lines[1:]                     # 제목 개체틀이 없는 슬라이드는 첫 줄이 제목
+    table: List[List[str]] = []
+    for ln in lines + [""]:
+        cells = ln.split(" | ") if " | " in ln else None
+        if cells is not None and (not table or len(cells) == len(table[0])):
+            table.append(cells)
+            continue
+        if table:
+            blocks.append(("table", table) if len(table) >= 2 else ("paragraph", " | ".join(table[0])))
+            table = []
+        if cells is not None:
+            table.append(cells)
+        elif ln.strip():
+            blocks.append(("paragraph", ln))
+    return blocks
+
+
 def _notes_body(slide: Any) -> Optional[Any]:
     """발표자 노트 본문 개체틀 (ppPlaceholderBody). 없으면 None."""
     try:
@@ -207,9 +233,8 @@ def cmd_read(args) -> Dict[str, Any]:
         slides = [slides[n - 1] for n in numbers]
     result: Dict[str, Any] = {"target_resolved": source, "slides_total": total}
     if args.save:
-        units = [{"loc": f"슬라이드 {s['no']}", "heading": s["title"], "text": s["text"]} for s in slides]
         out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(source["name"])[0], ".md")
-        out = rt.write_text(out, reader.units_to_markdown(source["name"], units))
+        out = rt.write_text(out, md.document_markdown([b for s in slides for b in slide_blocks(s)]))
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
         result.update(output_file=out, confirm_commands=[
             rt.next_command("word.py", ["write", "--file", out], "저장한 내용을 열린 워드 문서에 넣기 (사용자가 원할 때만)"),
@@ -399,6 +424,9 @@ def cmd_info(args) -> Dict[str, Any]:
 # 3. write
 # ==============================================================================
 
+PP_FOOTER_PLACEHOLDERS = {13, 14, 15, 16}   # ppPlaceholderSlideNumber, Header, Footer, Date
+
+
 class SlideWriter:
     """슬라이드 하나에 요소를 위에서 아래로 쌓습니다 (슬라이드 경계 안에서)."""
 
@@ -417,11 +445,19 @@ class SlideWriter:
         except Exception:
             return False
 
+    def _footer_placeholder(self, sh: Any) -> bool:
+        """바닥글·날짜·슬라이드 번호·머리글 개체틀: 슬라이드 바닥에 있어 그 아래를 기준으로 쌓으면 새 글상자가 슬라이드 밖에 놓임
+        (2026-11-09 검토 C8)."""
+        try:
+            return sh.Type == MSO_PLACEHOLDER and int(sh.PlaceholderFormat.Type) in PP_FOOTER_PLACEHOLDERS
+        except Exception:
+            return False
+
     def next_top(self) -> float:
         bottom = MARGIN
         for i in range(1, self.slide.Shapes.Count + 1):
             sh = self.slide.Shapes(i)
-            if self._empty_placeholder(sh):
+            if self._empty_placeholder(sh) or self._footer_placeholder(sh):
                 continue
             try:
                 bottom = max(bottom, float(sh.Top) + float(sh.Height))
@@ -484,7 +520,11 @@ class SlideWriter:
                 pass
         self.created.append(f"본문 {len(lines)}줄")
 
-    def table(self, rows: List[List[Any]]) -> None:
+    def table(self, rows: List[List[Any]], markdown: bool = False) -> None:
+        bold_cells: set = set()
+        if markdown:
+            rows, cells = md.table_cells(rows)
+            bold_cells = {(i + 1, j + 1) for i, j in cells}
         nrows, ncols = len(rows), max(len(r) for r in rows)
         top = self.next_top()
         height = min(self.H - MARGIN - top, 26.0 * nrows)
@@ -505,6 +545,8 @@ class SlideWriter:
                     tr.Font.Bold = True
                     tr.Font.Color.RGB = header_fg
                     cell.Fill.ForeColor.RGB = header_bg
+                elif (r, c) in bold_cells:
+                    tr.Font.Bold = True
         self.created.append(f"표 {nrows}x{ncols}")
 
     def image(self, path: str, width: Optional[float]) -> None:
@@ -732,7 +774,7 @@ def cmd_write(args) -> Dict[str, Any]:
                 if sec["lines"]:
                     w.body(sec["lines"])
                 for tb in sec["tables"]:
-                    w.table(tb)
+                    w.table(tb, markdown=True)
                 placed += [(no, x) for x in w.shapes]
                 created.append(f"슬라이드 {no}: " + ", ".join(w.created))
         if table_rows:
@@ -752,6 +794,14 @@ def cmd_write(args) -> Dict[str, Any]:
             if args.title and not table_rows and not md_sections:
                 w.title(args.title)
             if args.text:
+                if w._body_placeholder() is None and w.space_left() < MIN_BLOCK_HEIGHT:
+                    # 앞 내용 아래 공간이 없으면 새 슬라이드에 (높이 40pt로 슬라이드 밖에 놓이던 것, 검토 C8)
+                    placed += [(no, x) for x in w.shapes]
+                    created.append(f"슬라이드 {no}: " + ", ".join(w.created))
+                    s, no = open_slide(False)
+                    w = SlideWriter(prs, s, theme)
+                    warnings.append(f"앞 내용 아래에 공간이 부족해 본문을 새 슬라이드 {no}에 넣었습니다.")
+                    rt.log("WARN", warnings[-1])
                 w.body(_text_lines(args.text))
             for kind in (["cards"] if cards else []) + (["image"] if image else []):
                 if w.space_left() < MIN_BLOCK_HEIGHT:   # 공간이 부족하면 다음 새 슬라이드에 (슬라이드 밖으로 나가지 않게)

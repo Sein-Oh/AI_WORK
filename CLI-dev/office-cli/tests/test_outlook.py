@@ -842,7 +842,7 @@ def test_search_wildcard_query_keeps_only_literal_matches(monkeypatch, capsys):
     assert code == 0 and "견적서_v2" in folder.Items.filter
     assert [m["subject"] for m in out["mails"]] == ["견적서_v2 송부"]      # '_' 와일드카드로 더 찾은 메일은 뺌
     code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--where", "body")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["id3"]
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["id3"]
 
 
 def test_limit_upper_bound_and_zero(monkeypatch, capsys):
@@ -883,7 +883,7 @@ def test_outlook_count(capsys, monkeypatch, argv):
 
 def test_list_days_includes_today(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out
     assert out["period"] == {"since": "2026-11-03", "until": "2026-11-04", "days": 2}, out
     assert "2026-11-03 ~ 2026-11-04" in out["preview"], out
     assert "[ReceivedTime] >= '2026-11-03 00:00'" in ol["log"], ol["log"]       # 지역 설정과 무관한 YYYY-MM-DD
@@ -891,18 +891,18 @@ def test_list_days_includes_today(ol, capsys):
 
 def test_list_days_one_is_today_only(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "1")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a"], out
 
 
 def test_list_since_with_unread(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--since", "2026-10-28", "--unread")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "c"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "c"], out
     assert out["period"]["days"] == 8 and ol["log"][0] == "[UnRead] = True", (out, ol["log"])
 
 
 def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
     flt = ol["log"][-1]
     assert flt.startswith("@SQL=") and flt.count("@SQL=") == 1 and "견적" in flt, flt
     assert '"urn:schemas:httpmail:datereceived" >= ' in flt and ") AND (" in flt, flt
@@ -913,7 +913,7 @@ def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
 
 def test_search_date_only_is_allowed(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--since", "2026-11-03")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out
 
 
 def test_zero_result_states_period(ol, capsys):
@@ -927,11 +927,11 @@ def test_zero_result_states_period(ol, capsys):
 def test_restrict_refused_falls_back_and_filters(ol, capsys):
     ol["state"]["refuse"] = True
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out
     assert out["agent_directive"].startswith("VERIFIED:") and out["recovered"], out
     rt.RECOVERED.clear()
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"] and out["recovered"], out
     assert "datereceived" not in ol["log"][-1] and "견적" in ol["log"][-1], ol["log"]
     rt.RECOVERED.clear()
 
@@ -1492,9 +1492,11 @@ def test_list_gives_short_ids_and_read_accepts_them(ol_short, capsys):
     code, out = run_outlook(capsys, "list", "--limit", "3")
     assert code == 0 and [m["id"] for m in out["mails"]] == [1, 2, 3], out
     second = out["mails"][1]
+    assert "entry_id" not in second                                   # 짧은 번호가 있으면 긴 EntryID는 빼서 출력 크기를 줄임 (1.4.97)
+    long_id = outlook.entry_id("2")
     code, out2 = run_outlook(capsys, "read", "--id", "2")
-    assert code == 0 and out2["mail"]["entry_id"] == second["entry_id"] and out2["mail"]["subject"] == second["subject"]
-    code, out3 = run_outlook(capsys, "read", "--id", second["entry_id"])          # 긴 id도 그대로
+    assert code == 0 and out2["mail"]["entry_id"] == long_id and out2["mail"]["subject"] == second["subject"]
+    code, out3 = run_outlook(capsys, "read", "--id", long_id)                      # 긴 id도 그대로
     assert code == 0 and out3["mail"]["subject"] == second["subject"]
     code, bad = run_outlook(capsys, "read", "--id", "9")
     assert code == 1 and "없는 번호" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
@@ -1807,7 +1809,7 @@ def test_calendar_lists_events_read_only(monkeypatch, capsys):
     assert out["period"] == {"since": "2026-11-04", "until": "2026-11-10", "days": 7}
     assert any("[Start] < '2026-11-11 00:00'" in x for x in log if isinstance(x, str))
     code, out = run_outlook(capsys, "calendar", "--days", "0")
-    assert code == 1 and "[추천] 7" in out["message"]
+    assert code == 1 and recommended_argv(out["message"], "outlook")[-2:] == ["--days", "7"], out
 
 
 def _calendar_env(monkeypatch, evs, refuse=False):
@@ -1898,8 +1900,142 @@ def test_thread_collects_conversation_in_time_order(monkeypatch, capsys, refuse)
     monkeypatch.setattr(outlook, "get_outlook", lambda: object())
     monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
     code, out = run_outlook(capsys, "thread", "--id", "i2")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["i1", "s1", "i2"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["i1", "s1", "i2"], out
     assert [m["id"] for m in out["mails"]] == [1, 2, 3] and out["mails"][1]["body"] == "둘째(보냄)"
     assert bool(out.get("recovered")) is refuse
     code, out2 = run_outlook(capsys, "read", "--id", "2")                     # thread 목록 번호로 읽기
     assert code == 0 and out2["mail"]["entry_id"] == "s1"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A10: 항목 읽기 실패를 조용히 건너뛰고 'VERIFIED: 0건'으로 내지 않음
+# ---------------------------------------------------------------------------
+
+
+class _DeniedMail(_OneMail):
+    @property
+    def Class(self):                      # Outlook 보안 창에서 '거부': 항목 속성마다 예외
+        raise RuntimeError("access denied")
+
+
+class _NoAddressMail(_OneMail):
+    @property
+    def SenderEmailAddress(self):
+        raise RuntimeError("access denied")
+
+
+@pytest.mark.parametrize("argv", [["list"], ["search", "--query", "견적"]])
+def test_list_and_search_do_not_hide_unreadable_items(monkeypatch, capsys, argv):
+    _outlook_mails(monkeypatch, [_DeniedMail(), _DeniedMail()])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "허용" in out["message"], out
+    m = _OneMail()
+    m.Class = 43
+    _outlook_mails(monkeypatch, [m, _DeniedMail()])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("UNVERIFIED:") and "1개를 읽지 못함" in out["agent_directive"], out
+    _outlook_mails(monkeypatch, [_NoAddressMail()])
+    code, out = run_main(outlook, capsys, *argv)
+    assert code == 0 and out["count"] == 1 and out["mails"][0]["from"] == "홍길동", out
+    assert out["agent_directive"].startswith("UNVERIFIED:") and "SenderEmailAddress" in out["agent_directive"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A11: 참조(CC)·숨은 참조가 발송 전 확인 결과와 preview에 나옴
+# ---------------------------------------------------------------------------
+
+
+def test_compose_result_shows_cc(capsys, monkeypatch):
+    mail = Mail([Recip("a@x.com", True), Recip("c@x.com", True)])
+    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--cc", "c@x.com", "--subject", "보고", "--body", "ok")
+    assert code == 0 and out["to"] == "a@x.com" and out["cc"] == "c@x.com", out
+    assert "참조 c@x.com" in out["preview"] and "참조" in out["agent_directive"], out
+    mail = Mail([Recip("a@x.com", True)])
+    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
+    assert code == 0 and "cc" not in out and "참조" not in out["preview"], out
+
+
+def test_blocked_attachment_check_ignores_trailing_space_and_dot():
+    """2026-11-09 검토 B13: 'evil.exe ', 'a.js.'는 Windows가 저장할 때 끝의 공백·점을 지워 실행 파일이 됨."""
+    assert outlook._blocked_name("evil.exe ") and outlook._blocked_name("a.js.") and outlook._blocked_name("b.EXE")
+    assert not outlook._blocked_name("보고서.pdf") and not outlook._blocked_name("표.xlsx. ")
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 C14·C15·C16·C17 (가짜 COM, 실기 러너 M 그룹에서 확인)
+# ---------------------------------------------------------------------------
+
+
+def test_c14_received_is_local_time_without_utc_mark():
+    class M:
+        ReceivedTime = dt.datetime(2026, 11, 3, 10, 0, tzinfo=dt.timezone.utc)   # pywin32: 현지 벽시계 + UTC 표시
+        SenderName = "a"
+        SenderEmailAddress = "a@x.com"
+        EntryID, Subject, UnRead = "1", "s", False
+    assert outlook.summary(M())["received"] == "2026-11-03 10:00:00"
+
+
+def test_c15_current_prefers_front_window():
+    class Item:
+        def __init__(self, s):
+            self.Subject = s
+
+    class Sel:
+        Count = 1
+
+        def Item(self, i):
+            return Item("목록에서 고른 메일")
+
+    class Exp:
+        Class = 34
+        Selection = Sel()
+
+    class Insp:
+        CurrentItem = Item("뒤에 열어 둔 메일 창")
+
+    class App:
+        def ActiveWindow(self):
+            return Exp()
+
+        def ActiveInspector(self):
+            return Insp()
+
+        def ActiveExplorer(self):
+            return Exp()
+    item, src = outlook.current_item(App())
+    assert item.Subject == "목록에서 고른 메일" and src == "목록에서 선택"
+
+
+def test_c16_sender_filter_includes_smtp_property():
+    flt = outlook.build_search_filter(None, "kim@corp.com", "all")
+    assert "0x5D01001F" in flt and "fromemail" in flt, flt
+
+
+def test_c17_display_failure_after_saved_draft_is_unverified(capsys, monkeypatch):
+    mail = Mail([Recip("a@x.com", True)])
+
+    def boom():
+        raise RuntimeError("dialog open")
+    mail.Display = boom
+    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "다시 실행하지 말고" in out["agent_directive"], out
+    assert mail.saved and not mail.sent, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 5장 4번: 출력 크기 (목록의 긴 EntryID, folders 상한)
+# ---------------------------------------------------------------------------
+
+
+def test_folders_output_is_capped(monkeypatch, capsys):
+    class F:
+        def __init__(self, name, n=0, depth=0):
+            self.Name = name
+            self.UnReadItemCount = 0
+            self.Folders = [F(f"{name}/{i}", n, depth - 1) for i in range(n)] if depth > 0 else []
+    ns = type("NS", (), {"Folders": [F("계정", 12, 3)]})()
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: ns)
+    code, out = run_main(outlook, capsys, "folders", "--depth", "9")
+    assert code == 0 and out["truncated"] is True and out["folder_count"] == outlook.FOLDERS_MAX, out["folder_count"]
+    assert any("5로 줄임" in w for w in out["warnings"]) and len(json.dumps(out, ensure_ascii=False)) < 20000

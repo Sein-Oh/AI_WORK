@@ -4,7 +4,7 @@ description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.91"
+  version: "1.5.1"
   platform: windows
 ---
 
@@ -15,13 +15,14 @@ metadata:
 2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄을 붙인다.
 3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
 4. 검색한 내용을 다른 문서에 넣을 때는 내용을 복사해 인자로 넣지 않는다. `--save`로 파일을 만들고 결과의 `output_file`을 office-doc·office-excel 명령의 `--file`로 넘긴다.
-5. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 방법이 없으면 사용자에게 알리고 멈춘다.
+5. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장(파이썬 직접)대로 한다.
 
 ## 명령
 | 할 일 | 명령 |
 |---|---|
 | 폴더 등록 | `python "C:\CLI\office-cli\reader.py" index --folder "<폴더>"` |
 | 파일 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` |
+| 장절 목록 (큰 문서) | `python "C:\CLI\office-cli\reader.py" outline --file "<파일>"` |
 | 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |
 | 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` (`;` 그리고, `|` 또는) |
 | 두 판 비교 | `python "C:\CLI\office-cli\reader.py" diff --file "<이전 판>" --file2 "<새 판>" [--section "3"] [--save "<차이.xlsx>"]` |

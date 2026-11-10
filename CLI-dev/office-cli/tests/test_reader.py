@@ -304,7 +304,7 @@ def docs(tmp_path):
     korean_pdf(folder / "계획서.pdf")
     english_pdf(folder / "spec.pdf")
     spec_docx(folder / "sub" / "규격.docx")
-    (folder / "메일.eml").write_bytes(b"Subject: x\r\n\r\nbody")
+    (folder / "메일.msg").write_bytes(b"\xd0\xcf\x11\xe0")          # 지원하지 않는 형식 (1.5.0부터 .eml은 읽음)
     (folder / "그림.png").write_bytes(b"\x89PNG")
     return folder
 
@@ -588,9 +588,10 @@ def test_docx_order_heading_and_merged_cells(samples):
     units, meta = reader.parse_docx(samples["docx"])
     assert texts(units)[0] == "추진 배경"
     rows = [u for u in units if u["loc"].startswith("표 1")]
-    assert [u["kind"] for u in rows] == ["row"]                  # 1.3.0: 표는 행 단위 (첫 행은 머리글)
-    assert rows[0]["text"] == "병합 헤더: 가 | 병합 헤더: 나 | 값: 100"   # 가로 병합 머리글은 이어 씀
-    assert rows[0]["heading"] == "추진 배경"
+    assert [u["kind"] for u in rows] == ["row", "row"]           # 1.3.0: 표는 행 단위 (1.4.92: 머리글 행도 단위)
+    assert rows[0]["text"] == "병합 헤더 | 값"
+    assert rows[1]["text"] == "병합 헤더: 가 | 병합 헤더: 나 | 값: 100"   # 가로 병합 머리글은 이어 씀
+    assert rows[1]["heading"] == "추진 배경"
     assert [u for u in units if u["text"] == "3분기 양산 적용"][0]["heading"] == "일정"
     assert meta["tables"] == 1
 
@@ -764,9 +765,9 @@ def test_table_rows_header_labels_merged_and_multiline():
                               ["내전압", "1.5 kV", "1분", "KS C\n1234"],
                               ["", "", "", ""],
                               ["절연저항", "100 MΩ 이상", None, "메거"]])
-    assert [r["row"] for r in rows] == [2, 3]
-    assert rows[0]["text"] == "항목: 내전압 | 기준: 1.5 kV | 기준: 1분 | 시험방법: KS C 1234"
-    assert rows[1]["text"] == "항목: 절연저항 | 기준: 100 MΩ 이상 | 시험방법: 메거"
+    assert [r["row"] for r in rows] == [1, 2, 3] and rows[0]["text"] == "항목 | 기준 | 시험방법"   # 1.4.92: 머리글 행도 단위
+    assert rows[1]["text"] == "항목: 내전압 | 기준: 1.5 kV | 기준: 1분 | 시험방법: KS C 1234"
+    assert rows[2]["text"] == "항목: 절연저항 | 기준: 100 MΩ 이상 | 시험방법: 메거"
 
 
 def test_table_rows_without_header_and_row_number():
@@ -927,7 +928,10 @@ def test_pdf_repeated_header_and_page_number_do_not_break_sections(tmp_path):
     ])
     units, meta = reader.parse_pdf(str(p))
     assert meta["header_footer_removed"] == 6
-    assert not [u for u in units if "시스템 요구사항" in u["text"] or u["text"].startswith("- ")]
+    assert not [u for u in units if u["text"].startswith("- ")]
+    # 1.4.92: 반복 머리글은 장절을 끊지 않고, 문서 번호처럼 검색되게 한 번만 따로 단위로 (2026-11-09 검토 A13)
+    hdr = [u for u in units if "시스템 요구사항" in u["text"]]
+    assert len(hdr) == 1 and hdr[0]["section"] == ["머리글·바닥글"] and hdr[0]["loc"] == "p.1 머리글·바닥글", hdr
     cur = by_text(units, "정격 전류는")
     assert cur["section"] == ["2.1 전기 요구사항", "2.1.1 정격"] and cur["page"] == 2      # 머리글이 장절을 끊지 않음
     kv = by_text(units, "10.5 kV")
@@ -1585,7 +1589,7 @@ def test_index_folder_counts_and_unsupported_skipped(docs):
     code, out = run_reader("index", "--folder", str(docs))
     assert code == 0 and out["status"] == "ok"
     assert (out["count"], out["indexed"], out["updated"], out["unchanged"], out["failed"]) == (3, 3, 0, 0, 0)
-    assert out["skipped_types"] == {".eml": 1, ".png": 1} and out["truncated"] is False
+    assert out["skipped_types"] == {".msg": 1, ".png": 1} and out["truncated"] is False
     code, out = run_reader("index", "--folder", str(docs))
     assert (out["indexed"], out["unchanged"]) == (0, 3)
     os.utime(docs / "spec.pdf", (1, 1))
@@ -1625,7 +1629,7 @@ def test_search_file_auto_caches_then_uses_cache(docs):
     code, out = run_reader("search", "--query", "Purpose", "--file", str(docs / "spec.pdf"))
     assert out["indexed_now"] == [] and out["from_cache"] == 1
     code, out = run_reader("search", "--query", "내전압", "--file", str(docs))           # 폴더: 남은 2개만 새로 등록
-    assert out["indexed_now_count"] == 2 and out["from_cache"] == 1 and out["skipped_types"][".eml"] == 1
+    assert out["indexed_now_count"] == 2 and out["from_cache"] == 1 and out["skipped_types"][".msg"] == 1
     code, out = run_reader("list", "--name", "SPEC")
     assert out["count"] == 1 and out["documents"][0]["file"] == "spec.pdf"
 
@@ -1727,17 +1731,16 @@ def test_read_shows_page_section_number_and_page_filter(docs):
     code, out = run_reader("read", "--file", str(docs / "계획서.pdf"), "--save", str(docs / "out.md"))
     assert "근거: 계획서.pdf p.1, III. 개발 내용" in open(out["output_file"], encoding="utf-8").read()
     code, out = run_reader("list")
-    assert out["documents"][0]["pages"] == 2 and out["documents"][0]["parser_version"] == reader.PARSER_VERSION
+    assert out["documents"][0]["pages"] == 2 and "parser_version" not in out["documents"][0]      # 현재 형식이면 넣지 않음 (1.4.97)
 
 
-def test_eml_is_unsupported_like_any_unknown_type(tmp_path):
-    f = tmp_path / "메일.eml"
-    f.write_bytes(b"Subject: x\r\n\r\nbody")
+def test_msg_is_unsupported_like_any_unknown_type(tmp_path):
+    f = tmp_path / "메일.msg"
+    f.write_bytes(b"\xd0\xcf\x11\xe0")
     for args in (("read", "--file", str(f)), ("search", "--query", "x", "--file", str(f)), ("index", "--file", str(f))):
         code, out = run_reader(*args)
         assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:")
-        assert "지원하지 않는 형식입니다: .eml" in out["message"] and ".pdf" in out["message"]
-    assert not hasattr(reader, "parse_eml") and ".eml" not in reader.SUPPORTED
+        assert "지원하지 않는 형식입니다: .msg" in out["message"] and ".eml" in out["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -3348,3 +3351,338 @@ def test_pymupdf_messages_follow_the_current_stderr():
     tmp.close()
     pymupdf.message("closed stderr test")          # 닫힌 tmp가 아니라 지금의 stderr로 감
 
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A4: 쪽 정보가 없는 문서의 search --pages는 read --pages처럼 항목 번호 (전에는 모두 빼고 VERIFIED 0건)
+# ---------------------------------------------------------------------------
+
+
+def test_search_pages_on_document_without_pages_uses_item_numbers(tmp_path, capsys):
+    p = tmp_path / "a.txt"
+    p.write_text("첫 줄 안내.\n\n정격 전압은 5 V 이다.\n\n끝.\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--pages", "2")
+    assert code == 0 and "정격 전압" in out["units"][0]["text"], out
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--pages", "1-3", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert any("항목 번호" in w for w in out["warnings"]) and "page_unknown_skipped" not in out, out
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압", "--pages", "3", "--file", str(p))
+    assert code == 0 and out["count"] == 0, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A5: 2열 표는 머리글 추정 없음, 머리글 행도 단위, 다음 쪽으로 이어진 PDF 표는 앞 표의 머리글
+# ---------------------------------------------------------------------------
+
+
+def test_two_column_table_has_no_guessed_header(tmp_path):
+    import docx
+    p = tmp_path / "t.docx"
+    d = new_docx()
+    t = d.add_table(rows=3, cols=2)
+    for i, (k, v) in enumerate([("모델명", "PSU-100"), ("입력 전압", "220 V"), ("출력 전압", "5.0 V")]):
+        t.cell(i, 0).text, t.cell(i, 1).text = k, v
+    d.save(str(p))
+    units, _ = reader.parse_docx(str(p))
+    assert [u["text"] for u in units if u["kind"] == "row"] == ["모델명 | PSU-100", "입력 전압 | 220 V", "출력 전압 | 5.0 V"]
+
+
+def test_pdf_table_continued_on_next_page_keeps_first_header(tmp_path, capsys):
+    p = tmp_path / "c.pdf"
+    head = ["Item", "Condition", "Limit"]
+    make_text_pdf(str(p), font="helv", pages=[[("TABLE", [head, ["Efficiency", "230 Vac", "90 %"], ["Hold-up", "100 Vac", "10 ms"]])],
+                           [("TABLE", [["Ripple", "20 MHz BW", "50 mVp-p"], ["Noise", "20 MHz BW", "100 mVp-p"]])]])
+    units, _ = reader.parse_pdf(str(p))
+    rows = [u["text"] for u in units if u["kind"] == "row"]
+    assert "Item: Ripple | Condition: 20 MHz BW | Limit: 50 mVp-p" in rows, rows
+    assert not any(t.startswith("Ripple: ") for t in rows), rows
+    code, out = run_main(reader, capsys, "search", "--query", "Ripple;50 mVp-p", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["matches"][0]["snippet"].startswith("Item: **Ripple**"), out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A6: PDF 단락 안에서 줄바꿈된 줄('1.5 times ...', '5.0 VDC ...')은 장절 제목이 아님
+# ---------------------------------------------------------------------------
+
+
+def test_pdf_wrapped_lines_starting_with_numbers_stay_in_paragraph(tmp_path, capsys):
+    pymupdf = reader._import_pymupdf()
+    p = tmp_path / "wrap.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+
+    def put(y, t, size=10, font="helv"):
+        page.insert_text((72, y), t, fontname=font, fontsize=size)
+    put(72, "3. ELECTRICAL", 14, "hebo")
+    put(100, "3.2 Output", 12, "hebo")
+    y = 124
+    for line in ["The output current shall not exceed a limit of", "1.5 times the rated current for 10 s. The supply is",
+                 "5.0 VDC nominal with decoupling of", "0.1 uF capacitors placed near each load. Screws are torqued to",
+                 "1.5 N-m applied to each screw at assembly time."]:
+        put(y, line)
+        y += 12
+    put(y + 20, "3.3 Protection", 12, "hebo")
+    put(y + 44, "Over current protection is provided.")
+    put(y + 64, "Body text for size statistics here and more words to dominate.")
+    doc.save(str(p))
+    doc.close()
+    units, _ = reader.parse_pdf(str(p))
+    heads = [u["text"] for u in units if u["kind"] == "heading"]
+    assert heads == ["3. ELECTRICAL", "3.2 Output", "3.3 Protection"], heads
+    prot = [u for u in units if u["text"].startswith("Over current")][0]
+    assert prot["section"] == ["3. ELECTRICAL", "3.3 Protection"], prot
+    code, out = run_main(reader, capsys, "search", "--query", "limit of 1.5 times", "--file", str(p), "--section", "3.2")
+    assert code == 0 and out["count"] == 1, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A13: 검색 범위가 빠졌으면 VERIFIED로 내지 않음, DOCX 머리글·각주, 쪽 경계 문장, diff의 스캔 쪽
+# ---------------------------------------------------------------------------
+
+
+def test_search_deleted_source_and_legacy_files_are_not_searched(tmp_path, capsys):
+    folder = tmp_path / "d"
+    folder.mkdir()
+    (folder / "a.txt").write_text("정격 전압 5 V", encoding="utf-8")
+    (folder / "b.txt").write_text("다른 글", encoding="utf-8")
+    (folder / "old.doc").write_bytes(b"\xd0\xcf\x11\xe0" + b"\0" * 64)
+    (folder / "그림.png").write_bytes(b"\x89PNG")
+    code, out = run_main(reader, capsys, "search", "--query", "없는말", "--file", str(folder))
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert any(".doc 1개" in g for g in out["not_searched"]) and not any(".png" in g for g in out["not_searched"]), out
+    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    assert code == 0
+    os.remove(folder / "b.txt")
+    code, out = run_main(reader, capsys, "search", "--query", "정격 전압")
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert any("원본이 지워졌거나" in g for g in out["not_searched"]), out
+
+
+def test_docx_header_footer_and_footnotes_are_searchable(tmp_path, capsys):
+    from sample_docs import new_docx
+    p = tmp_path / "h.docx"
+    d = new_docx()
+    d.sections[0].header.paragraphs[0].text = "문서번호 QP-123 Rev. C"
+    d.sections[0].footer.paragraphs[0].text = "사내 한정 배포"
+    d.add_paragraph("본문 단락입니다.")
+    d.save(str(p))
+    units, _ = reader.parse_docx(str(p))
+    extra = [(u["loc"], u["text"], u["section"]) for u in units if u.get("extra")]
+    assert extra == [("머리글", "문서번호 QP-123 Rev. C", ["머리글·바닥글"]), ("바닥글", "사내 한정 배포", ["머리글·바닥글"])], extra
+    code, out = run_main(reader, capsys, "search", "--query", "QP-123", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["agent_directive"].startswith("VERIFIED:"), out
+    # 각주 (python-docx로는 만들 수 없어 XML을 넣음)
+    import zipfile as zf
+    q = tmp_path / "f.docx"
+    with zf.ZipFile(p) as zin, zf.ZipFile(q, "w") as zout:
+        for item in zin.infolist():
+            zout.writestr(item, zin.read(item.filename))
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        zout.writestr("word/footnotes.xml", f'<w:footnotes {w}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:t>-</w:t></w:r></w:p>'
+                      f'</w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>시험 온도는 23 </w:t></w:r><w:r><w:t>°C 기준</w:t></w:r></w:p>'
+                      '</w:footnote></w:footnotes>')
+    units, _ = reader.parse_docx(str(q))
+    assert [(u["loc"], u["text"]) for u in units if u["loc"].startswith("각주")] == [("각주 1", "시험 온도는 23 °C 기준")]
+
+
+def test_search_finds_sentence_split_across_pages(tmp_path, capsys):
+    pymupdf = reader._import_pymupdf()
+    p = tmp_path / "seam.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 700), "The relative humidity shall not exceed", fontname="helv", fontsize=10)
+    doc.new_page().insert_text((72, 72), "95 % at 40 C during storage.", fontname="helv", fontsize=10)
+    doc.save(str(p))
+    doc.close()
+    code, out = run_main(reader, capsys, "search", "--query", "humidity shall not exceed 95", "--file", str(p))
+    assert code == 0 and out["count"] == 1 and out["matches"][0]["loc"] == "p.1~p.2", out
+
+
+def test_diff_with_partly_scanned_pdf_is_unverified(tmp_path, capsys):
+    pymupdf = reader._import_pymupdf()
+    paths = []
+    for name, second in (("old.pdf", "image"), ("new.pdf", "image")):
+        q = tmp_path / name
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 72), f"first page text {name}", fontname="helv", fontsize=11)
+        doc.new_page().insert_image(pymupdf.Rect(40, 40, 560, 800), pixmap=_pixmap(pymupdf))
+        doc.save(str(q))
+        doc.close()
+        paths.append(str(q))
+    code, out = run_main(reader, capsys, "diff", "--file", paths[0], "--file2", paths[1])
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "스캔 쪽" in out["agent_directive"], out
+
+
+def test_index_search_template_needs_input(tmp_path, capsys):
+    """2026-11-09 검토 B2: index 뒤의 search '<검색어>' 명령은 그대로 실행하면 0건이라 needs_input."""
+    (tmp_path / "a.txt").write_text("본문", encoding="utf-8")
+    code, out = run_main(reader, capsys, "index", "--folder", str(tmp_path))
+    item = [c for c in out["next_commands"] if "<검색어>" in c["command"]][0]
+    assert code == 0 and item["needs_input"] is True, out
+
+
+def test_regex_with_nested_repeat_is_refused_quickly(tmp_path, capsys):
+    """2026-11-09 검토 B10: '(\\w+\\s?)+$X'는 끝나지 않아 120초 제한에 JSON 없이 끊겼음. 구분 글자가 있는 반복은 그대로."""
+    p = tmp_path / "a.txt"
+    p.write_text("word " * 40 + "\n\n1,234,567 원", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", r"(\w+\s?)+$X", "--regex", "--file", str(p))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "반복 안의 반복" in out["message"], out
+    code, out = run_main(reader, capsys, "search", "--query", r"(?:\d{1,3},)+\d{3}", "--regex", "--file", str(p))
+    assert code == 0 and out["count"] == 1, out
+
+
+def test_pptx_shape_of_unknown_kind_does_not_fail_the_file(tmp_path):
+    """2026-11-09 검토 B11: prstGeom도 txBox도 없는 p:sp는 shape_type이 NotImplementedError라 파일 전체가 ERROR였음."""
+    prs = new_pptx()
+    layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
+    s = prs.slides.add_slide(layout)
+    s.shapes.add_textbox(0, 0, 100, 100).text_frame.text = "보통 글"
+    sp = s.shapes.add_shape(1, 0, 0, 100, 100)
+    sp.text_frame.text = "이상한 도형 글"
+    for g in list(sp._element.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}prstGeom")):
+        g.getparent().remove(g)
+    p = tmp_path / "odd.pptx"
+    prs.save(str(p))
+    units, _ = reader.parse_pptx(str(p))
+    assert "이상한 도형 글" in units[0]["text"], units
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B13 (reader): --save 확장자, 이어 읽기 범위, 같은 이름 파일 근거, 스캔 PDF index
+# ---------------------------------------------------------------------------
+
+
+def test_b13_reader_small_fixes(tmp_path, capsys):
+    a, b = tmp_path / "A", tmp_path / "B"
+    a.mkdir()
+    b.mkdir()
+    (a / "spec.txt").write_text("전압 5 V", encoding="utf-8")
+    (b / "spec.txt").write_text("전압 12 V", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "전압", "--file", str(tmp_path))
+    ev = sorted(m["evidence"] for m in out["matches"])
+    assert code == 0 and ev[0].startswith("A\\spec.txt") and ev[1].startswith("B\\spec.txt"), ev
+    code, out = run_main(reader, capsys, "read", "--file", str(a / "spec.txt"), "--save", str(tmp_path / "x.docx"))
+    assert code == 0 and out["output_file"].endswith("x.md") and out.get("recovered"), out
+    p = tmp_path / "long.txt"
+    p.write_text("\n\n".join("단락 %d " % i + "가" * 3000 for i in range(1, 15)), encoding="utf-8")
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--pages", "2,3,4,5,6,13")
+    nxt = [c["command"] for c in out.get("next_commands", []) if "이어서" in c["purpose"] or "--pages" in c["command"]]
+    assert nxt and "13" in nxt[0] and "7" not in nxt[0].split("--pages")[1].split("--")[0], nxt
+    scan = _scan_pdf(tmp_path)
+    code, out = run_main(reader, capsys, "index", "--file", str(scan))
+    assert code == 0 and any("스캔 PDF" in w for w in out.get("warnings", [])), out
+
+
+# ---------------------------------------------------------------------------
+# 1.5.0 EML 읽기·검색 (사용자 결정 2026-11-10: Outlook 가져오기 대신, 헤더·본문·첨부 이름만 캐시, 메일 한 통 = 결과 하나)
+# ---------------------------------------------------------------------------
+
+
+def _eml(path, subject, sender, when, body, html=False, attach=(), forward=None, raw_cp949_subject=False):
+    from email.message import EmailMessage
+    from email.utils import format_datetime
+    m = EmailMessage()
+    m["Subject"] = subject
+    m["From"] = sender
+    m["To"] = "나 <me@corp.com>"
+    m["Date"] = format_datetime(when)
+    if html:
+        m.set_content(body, subtype="html")
+    else:
+        m.set_content(body)
+    for name in attach:
+        m.add_attachment(b"%PDF-1.4 x", maintype="application", subtype="pdf", filename=name)
+    if forward is not None:
+        m.add_attachment(forward)
+    data = bytes(m)
+    if raw_cp949_subject:            # 인코딩 표시 없는 CP949 제목 (사내 메일 서버에서 흔함)
+        data = re.sub(rb"(?m)^Subject: .*$", b"Subject: " + subject.encode("cp949"), data, count=1)
+    path.write_bytes(data)
+    return path
+
+
+@pytest.fixture
+def mails(tmp_path):
+    import datetime as _dt
+    from email.message import EmailMessage
+    from email.utils import format_datetime
+    kst = _dt.timezone(_dt.timedelta(hours=9))
+    folder = tmp_path / "메일"
+    (folder / "2025").mkdir(parents=True)
+    _eml(folder / "a.eml", "견적 요청 (모터 200대)", "김철수 <kim@vendor.com>", _dt.datetime(2026, 3, 2, 14, 5, tzinfo=kst),
+         "안녕하세요.\n\n모터 200대 견적을 부탁드립니다.\n\n납기는 4월 말입니다.", attach=["견적서_v2.pdf"])
+    _eml(folder / "b.eml", "회의록 공유", "이영희 <lee@corp.com>", _dt.datetime(2026, 3, 5, 9, 0, tzinfo=kst),
+         "<html><body><p>회의록을 <b>공유</b>합니다.</p><p>다음 회의는 3월 12일.</p></body></html>", html=True)
+    inner = EmailMessage()
+    inner["Subject"] = "원래 메일: 시험 일정"
+    inner["From"] = "박민수 <park@lab.com>"
+    inner["Date"] = format_datetime(_dt.datetime(2026, 2, 1, 10, 0, tzinfo=kst))
+    inner.set_content("시험은 2월 20일에 합니다.")
+    _eml(folder / "2025" / "c.eml", "FW: 시험 일정", "최지훈 <choi@corp.com>", _dt.datetime(2025, 12, 1, 8, 0, tzinfo=kst),
+         "아래 메일 참고하세요.", forward=inner)
+    _eml(folder / "d.eml", "견적 회신", "정수진 <jung@vendor.com>", _dt.datetime(2026, 1, 10, 9, 0, tzinfo=kst), "견적을 보냅니다.",
+         raw_cp949_subject=True)
+    return folder
+
+
+def test_eml_units_headers_body_attachments_and_forwarded(mails):
+    units, meta = reader.parse_eml(str(mails / "2025" / "c.eml"))
+    assert [u["loc"] for u in units] == ["제목", "헤더", "본문 1", "전달된 메일 제목", "전달된 메일 헤더", "전달된 메일 본문 1"]
+    assert units[0]["section"] == ["FW: 시험 일정 (2025-12-01 08:00, 최지훈)"] and meta["mail"]["forwarded"] == 1
+    assert units[5]["text"] == "시험은 2월 20일에 합니다." and units[5]["section"][0].startswith("전달된 메일 원래 메일: 시험 일정")
+    units, meta = reader.parse_eml(str(mails / "a.eml"))
+    assert units[-1]["text"] == "첨부: 견적서_v2.pdf" and meta["mail"]["attachments"] == ["견적서_v2.pdf"]
+    assert "보낸 사람: 김철수 <kim@vendor.com>" in units[1]["text"] and "날짜: 2026-03-02 14:05" in units[1]["text"]
+    units, _ = reader.parse_eml(str(mails / "b.eml"))
+    assert [u["text"] for u in units if u["loc"].startswith("본문")] == ["회의록을 공유 합니다.", "다음 회의는 3월 12일."], units
+    units, _ = reader.parse_eml(str(mails / "d.eml"))
+    assert units[0]["text"] == "견적 회신"
+
+
+def test_eml_folder_search_one_result_per_mail_newest_first(mails, capsys):
+    code, out = run_main(reader, capsys, "index", "--folder", str(mails))
+    assert code == 0 and out["count"] == 4 and out["indexed"] == 4, out
+    code, out = run_main(reader, capsys, "search", "--query", "견적", "--file", str(mails))
+    assert code == 0 and out["count"] == 2 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert [m["file"] for m in out["matches"]] == ["a.eml", "d.eml"]                 # 메일 한 통 = 결과 하나, 최신순
+    first = out["matches"][0]
+    assert first["mail_hits"] >= 2 and first["mail"]["subject"] == "견적 요청 (모터 200대)" and first["path"].endswith("a.eml"), first
+    assert first["evidence"].startswith("a.eml 제목, 견적 요청 (모터 200대) (2026-03-02 14:05, 김철수)"), first
+    code, out = run_main(reader, capsys, "search", "--query", "견적;김철수", "--file", str(mails))    # 제목과 보낸 사람에 나뉨
+    assert out["count"] == 1 and out["matches"][0]["loc"] == "메일 전체", out
+    code, out = run_main(reader, capsys, "search", "--query", "견적서_v2", "--file", str(mails))      # 첨부 이름
+    assert out["count"] == 1 and out["matches"][0]["loc"] == "첨부", out
+    code, out = run_main(reader, capsys, "search", "--query", "2월 20일", "--file", str(mails))      # 전달된 메일 본문 (하위 폴더)
+    assert out["count"] == 1 and out["matches"][0]["loc"] == "전달된 메일 본문 1", out
+
+
+def test_outline_lists_headings_with_units_and_pages(tmp_path, capsys, monkeypatch):
+    """검토 4장 6번 (1.5.1): 큰 문서를 8,000자씩 이어 읽지 않고 장절 목록 -> 필요한 장절만 read --section/--units."""
+    p = tmp_path / "k.pdf"
+    korean_pdf(p)
+    code, out = run_main(reader, capsys, "outline", "--file", str(p))
+    assert code == 0 and out["count"] >= 5 and out["agent_directive"].startswith("VERIFIED:"), out
+    first = out["headings"][0]
+    assert first["text"] == "III. 개발 내용" and first["page"] == 1 and first["level"] == 1, first
+    lv2 = [h for h in out["headings"] if h["text"].startswith("1. 개발 내용 종합")][0]
+    assert lv2["level"] == 2, lv2
+    code, part = run_main(reader, capsys, "read", "--file", str(p), "--units", lv2["units"])
+    assert code == 0 and part["units"][0]["text"].startswith("1. 개발 내용 종합"), part
+    monkeypatch.setattr(reader, "OUTLINE_MAX", 2)
+    code, out = run_main(reader, capsys, "outline", "--file", str(p))
+    assert out["truncated"] is True and out["shown"] == 2 and out["next_commands"][0]["command"].endswith("--start 3"), out
+    t = tmp_path / "plain.txt"
+    t.write_text("제목 없는 글입니다.\n\n둘째 단락입니다.", encoding="utf-8")
+    code, out = run_main(reader, capsys, "outline", "--file", str(t))
+    assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
+
+
+def test_diff_pairs_moved_paragraph_and_keeps_its_number_change(tmp_path, capsys):
+    """검토 4장 7번 (1.5.1): 다른 장절로 옮긴 단락이 삭제+추가로만 나오고 그 안의 숫자 변경을 놓치던 것 -> '이동'."""
+    old = tmp_path / "old.txt"
+    new = tmp_path / "new.txt"
+    old.write_text("# 1. 개요\n\n정격 전압은 5 V 이하이어야 하며 시험은 상온에서 한다.\n\n# 2. 시험\n\n시험 장비는 교정된 것을 쓴다.", encoding="utf-8")
+    new.write_text("# 1. 개요\n\n# 2. 시험\n\n시험 장비는 교정된 것을 쓴다.\n\n정격 전압은 5.5 V 이하이어야 하며 시험은 상온에서 한다.", encoding="utf-8")
+    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
+    assert code == 0 and out["counts"]["이동"] == 1 and out["counts"]["삭제"] == 0 and out["counts"]["추가"] == 0, out
+    mv = [c for c in out["changes"] if c["kind"] == "이동"][0]
+    assert mv["numeric"] and "5 V에서 5.5 V로" in mv["number_changes"][0] and "이동" in out["preview"], mv

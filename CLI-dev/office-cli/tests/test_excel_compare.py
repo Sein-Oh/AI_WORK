@@ -1,5 +1,6 @@
 """excel.py compare: 두 판의 표(BOM) 비교. 머리글·열 역할·키를 도구가 정함, 정규화, 구분별 결과, 결과 xlsx 확인, 메모 미리보기, [후보]."""
 import csv
+import json
 import os
 
 import openpyxl
@@ -205,15 +206,25 @@ def test_ambiguous_key_gives_numbered_candidates_that_run(tmp_path, capsys):
     assert any("나온 순서대로 짝지음" in w for w in out["warnings"])
 
 
-def test_unknown_part_column_asks_for_key_column(tmp_path, capsys):
+def test_unknown_part_column_uses_the_only_unique_column(tmp_path, capsys):
+    """1.4.99 (검토 4장 2번): 품번 열을 몰라도 두 판 모두 행마다 값이 다른 열이 하나뿐이면 그 열로 짝지음 (1, 2처럼 행 번호 열은 제외)."""
     head = ["항목", "값", "메모"]
     old = _xlsx(tmp_path / "a.xlsx", [["x", 1, ""], ["y", 2, ""]], header=head, title=None)
     new = _xlsx(tmp_path / "b.xlsx", [["x", 1, ""], ["y", 3, ""]], header=head, title=None)
     code, out = _compare(capsys, old, new)
+    assert code == 0 and out["count"] == 1 and "유일한 열 '항목'" in json.dumps(out, ensure_ascii=False), out
+    assert out["attr_changed"][0]["columns"][0]["column"] == "값", out
+
+
+def test_unknown_part_column_asks_for_key_column(tmp_path, capsys):
+    head = ["항목", "이름", "메모"]                       # 행마다 값이 다른 열이 둘이라 도구가 고르지 않음
+    old = _xlsx(tmp_path / "a.xlsx", [["x", "가", "a"], ["y", "나", "a"]], header=head, title=None)
+    new = _xlsx(tmp_path / "b.xlsx", [["x", "가", "a"], ["y", "나", "b"]], header=head, title=None)
+    code, out = _compare(capsys, old, new)
     assert code == 1 and "품번 열" in out["message"] and out["candidates"][0] == "항목", out
     argv = split_command(out["confirm_commands"][0]["command"])[2:]
     code, out = run_excel(capsys, *argv)
-    assert code == 0 and out["count"] == 1 and out["attr_changed"][0]["columns"][0]["column"] == "값"
+    assert code == 0 and out["count"] == 1 and out["attr_changed"][0]["columns"][0]["column"] == "메모"
 
 
 def test_key_given_as_column_letter_recommends_header_name(tmp_path, capsys):
@@ -357,3 +368,20 @@ def test_large_bom_is_fast(tmp_path, capsys):
     code, out = _compare(capsys, old, new)
     assert code == 0 and out["counts"]["수량 변경"] == 20 and out["count"] == 20, out["counts"]
     assert time.monotonic() - t < 60
+
+
+def test_title_row_with_two_cells_is_not_the_header(tmp_path, capsys):
+    """검토 4장 2번: 알아본 열이 없을 때 제목 행 두 칸('설비 목록', '2026-11')을 머리글로 잡던 것 -> 글자 칸이 가장 많은 행."""
+    def book(path, rows):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["설비 목록", "2026-11"])
+        ws.append(["설비", "위치", "담당", "상태"])
+        for r in rows:
+            ws.append(r)
+        wb.save(path)
+        return str(path)
+    old = book(tmp_path / "a.xlsx", [["S1", "1층", "김", "가동"], ["S2", "2층", "이", "가동"]])
+    new = book(tmp_path / "b.xlsx", [["S1", "1층", "김", "가동"], ["S2", "2층", "이", "정지"]])
+    code, out = run_excel(capsys, "compare", "--target", old, "--target2", new, "--key", "설비")
+    assert code == 0 and out["count"] == 1 and out["header_row"] == {"old": 2, "new": 2}, out

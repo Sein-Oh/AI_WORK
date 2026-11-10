@@ -14,7 +14,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 
 ## 폴더 구조
 - `CLI/<tool>/`: 사용자 PC의 `C:\CLI`로 그대로 복사되는 폴더. **실행에 필요한 .py와 스킬 파일(`SKILL.md`)만** 둔다.
-  스킬은 작업별 `skills/<스킬 이름>/SKILL.md`(ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, office-cli: `office-excel`,
+  스킬은 작업별 `skills/<스킬 이름>/SKILL.md`(ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `office-excel`,
   `office-doc`, `office-mail`, `office-spec`, `office-data`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
 - `CLI-dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
   `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
@@ -156,7 +156,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 공통 런타임(`run_cli`, `JsonArgumentParser`, 복구 함수, 데이터 로딩, 버전 고르기, `--input` 해석)은 `_ml_runtime.py`에 있다 (진입점 아님, 스킬에 적지 않음).
 - 산출물 레이아웃(`<stem>_ml_data/history.jsonl`, `vX/model_<target>.joblib|json`)과 원장 스키마는 바꿔도 된다 (베타). 바꾸면 이전 버전 폴더는 다시 학습해서 쓴다.
 - 학습과 추론이 같아야 하는 로직(데이터 로딩, 수치 변환, `--eval` 수식)은 `_ml_runtime.py` 한 곳에만 둔다.
-- 진입점(`ml_train.py`, `ml_predict.py`, `ml_report.py`, `ml_export.py`, `ml_map.py`)은 공통으로 `_ml_runtime.py`만 import한다. 아무도 `ml_predict.py`를
+- 진입점(`ml_train.py`, `ml_predict.py`, `ml_report.py`, `ml_export.py`, `ml_map.py`, `ml_dataset.py`)은 공통으로 `_ml_runtime.py`만 import한다. 아무도 `ml_predict.py`를
   import하지 않고, `_ml_runtime.py`는 진입점을 import하지 않는다 (예외: 보고서와 함께 성능예측표를 만드는 `ml_report` -> `ml_export`).
   예측만 하는 PC에는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더를 복사한다. 검사: `tests/test_contract.py`.
 ### office-cli

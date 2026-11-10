@@ -55,7 +55,7 @@ RULES = {
     'no_adhoc_py': {
         'title': '임의 파이썬 코드 실행 없음 (python -c, 표준 입력, 직접 만든 .py)',
         'command': r'(?<![\w.-])python(\.exe)?"?(\s+-([XW]\s*\S+|[bBdEiIOPqsSuv]+))*(\s+-c\b|\s+-(?=[\s;|&)]|$)|\s*<)|\|\s*python(\.exe)?\s*($|[;&|])',
-        'script_allow': r'([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/](run_win_tests|make_office_samples))|(\.[\\/])?((ml-kit|office-cli)[\\/])?(tools[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|excel|word|ppt|outlook|office|reader|make_beta_samples|make_office_samples|run_win_tests|run_beta_check|run_all_tests|grade_opencode))\.py',
+        'script_allow': r'([A-Za-z]:[\\/]CLI[\\/](ml-kit[\\/](ml_train|ml_predict|ml_report|ml_map|ml_export|ml_dataset)|office-cli[\\/](excel|word|ppt|outlook|office|reader))|[A-Za-z]:[\\/]CLI-dev[\\/](run_beta_check|run_all_tests|grade_opencode|ml-kit[\\/]tools[\\/](make_beta_samples|run_win_tests)|office-cli[\\/]tools[\\/](run_win_tests|make_office_samples))|(\.[\\/])?((ml-kit|office-cli)[\\/])?(tools[\\/])?(ml_train|ml_predict|ml_report|ml_map|ml_export|ml_dataset|excel|word|ppt|outlook|office|reader|make_beta_samples|make_office_samples|run_win_tests|run_beta_check|run_all_tests|grade_opencode))\.py',
     },
     # read: OpenCode read 도구 경로
     # search: grep 도구가 찾는 곳(path, include. 검색어는 보지 않음, SKILL.md와 include가 *.md인 검색은 제외)
@@ -149,11 +149,11 @@ GROUPS = [
             {
                 'id': 'A3',
                 'message': '생산효율이 80보다 큰 행은 빼고 다시 학습해줘.',
-                'commands': [r'ml_train\.py', r'''--exclude-where\s+['"]?생산효율\S*\s*>\s*80'''],
+                'commands': [r'''ml_dataset\.py"?\s+exclude''', r'''--where\s+['"]?생산효율\S*\s*>\s*80''', r'ml_train\.py'],
                 'tool_ok': r'ml_train\.py',
                 'answer_all': ['제외|뺀|빼'],
                 'forbid': [r'Remove-Item|\bdel\s|Set-Content|Export-Csv|to_excel|to_csv'],
-                'judge': '데이터 파일을 직접 고치지 않고 --exclude-where 조건으로 다시 학습했는가. 조건으로 뺀 행 수와 새 검증 점수를 알렸는가.',
+                'judge': '데이터 파일을 직접 고치지 않고 ml_dataset.py exclude로 새 데이터셋을 만들어 그 파일로 다시 학습했는가. 뺀 행 수와 새 검증 점수를 알렸는가.',
             },
         ],
     },
@@ -328,6 +328,56 @@ GROUPS = [
                     r'word\.py"?\s+fill\b[^\n]*--overwrite\b',
                 ],
                 'judge': 'word.py fill --slots(자리=값; 자리=값) 또는 값 파일(--file)로 두 자리를 채우고 결과를 알렸는가. 미리보기를 했다면 그 결과의 confirm_commands[0]을 (빈 자리라 destructive 항목이 아니고 요청에서 이미 묻지 말라고 했으므로) 다시 묻지 않고 실행했는가.',
+            },
+            # 6. 조건 검색 (2026-11-09 검토 1장 A1·A2): 느슨한 날짜와 %로 --where 한 번. 0건이면 실패 (전에는 '2026-1-10', '5%'가 0건 VERIFIED)
+            {
+                'id': 'O6',
+                'message': r'{DIR}\납품기록.xlsx 에서 납품일이 2026-1-10 이후이고 불량률이 5% 이상인 행의 품번을 알려줘.',
+                'commands': [r'''excel\.py"?\s+read\b(?=[^\n]*납품기록\.xlsx)(?=[^\n]*--where\b)'''],
+                'tool_ok': r'excel\.py"?\s+read\b(?=[^\n]*--where)',
+                'answer_all': ['0102', '0105'],
+                'forbid': [r'excel\.py"?\s+(write|style)\b'],
+                'judge': '조건에 맞는 두 행(품번 0102, 0105)을 앞자리 0까지 그대로 알렸는가. 0104(4.9%)를 넣지 않았는가.',
+            },
+            # 7. 규격 검색 (검토 2장 B5): 음수 값 검색어 '-20 ℃'가 인자 오류 없이
+            {
+                'id': 'O7',
+                'message': r'{DIR}\규격서.txt 에서 -20 ℃ 조건이 어느 장절에 있는지 찾아서 근거와 함께 알려줘.',
+                'commands': [r'''reader\.py"?\s+search\b(?=[^\n]*규격서\.txt)(?=[^\n]*-20)'''],
+                'tool_ok': r'reader\.py"?\s+search\b',
+                'answer_all': [r'3\.3'],
+                'answer_any': ['동작 ?온도'],
+                'judge': '3.3 동작 온도 조건(-20 ℃ 이상 60 ℃ 이하)을 근거(규격서.txt, 장절 3.3)와 함께 알렸는가.',
+            },
+            # 8. 문서 왕복 (검토 1장 A12): word read --save -> 저장한 .md로 ppt write --file (제목이 슬라이드 제목, '단락 N'이 제목이 아님)
+            {
+                'id': 'O8',
+                'message': r'{DIR}\주간보고.docx 내용을 {DIR}\주간보고_발표.pptx 새 발표 자료의 슬라이드로 옮겨줘.',
+                'commands': [
+                    r'''word\.py"?\s+read\b(?=[^\n]*주간보고\.docx)(?=[^\n]*--save\b)''',
+                    r'''ppt\.py"?\s+write\b(?=[^\n]*주간보고_발표\.pptx)(?=[^\n]*--file\b)''',
+                ],
+                'tool_ok': r'ppt\.py"?\s+write\b',
+                'answer_any': ['슬라이드'],
+                'forbid': [r'office\.py"?\s+transfer\b[^\n]*--what\s+text'],
+                'judge': '워드 내용을 .md로 저장하고 그 파일로 PPT에 썼는가. 만든 슬라이드 수와 파일 경로를 알렸는가.',
+            },
+        ],
+    },
+    # 도구에 없는 일 (전역 지침 8장): 도구에 없다고 알리고 C:\CLI\data\scripts의 스크립트로 직접 (원본은 그대로, 결과는 새 파일)
+    {
+        'id': 'Y',
+        'title': '도구에 없는 일 (파이썬 직접)',
+        'scenarios': [
+            {
+                'id': 'Y1',
+                'message': r'{DIR}\공정_다중출력.xlsx 에서 반응온도를 180 미만, 180 이상 190 미만, 190 이상 세 구간으로 나눠 구간별 생산효율 평균과 행 수를 표로 만들어 새 엑셀 파일로 저장해줘. 머리글은 3행, 단위는 4행이야.',
+                'allow': ['no_adhoc_py', 'no_write_py'],
+                'commands': [r'''python(\.exe)?"?\s+['"]?[A-Za-z]:[\\/]+CLI[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py'''],
+                'tool_ok': r'''[A-Za-z]:[\\/]+CLI[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py''',
+                'answer_all': ['평균'],
+                'forbid': [r'(?<![\w.-])python(\.exe)?"?\s+-c\b', r'Remove-Item|\bdel\s', r'pip3?\s+install'],
+                'judge': '도구에 없는 기능이라고 1줄 알리고, C:\\CLI\\data\\scripts 아래 스크립트를 만들어 1~3번 안에 실행했는가. 원본을 고치지 않고 새 파일에 구간별 평균과 행 수를 저장하고 그 경로와 결과를 알렸는가.',
             },
         ],
     },

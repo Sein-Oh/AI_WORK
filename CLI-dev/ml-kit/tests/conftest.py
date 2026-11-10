@@ -37,6 +37,9 @@ def _mlkit_data_dir(tmp_path_factory):
     os.environ["ML_KIT_DATA_DIR"] = str(tmp_path_factory.mktemp("mlkit_data"))
     # ml_report.py가 성능예측표(재학습, 몇 분)까지 만들지 않게 한다: test_report_export.py의 성능예측표 검사만 켠다
     os.environ["ML_KIT_SKIP_EXPORT"] = "1"
+    # 성능예측표의 엑셀 다시 계산 확인(Windows + 엑셀)은 test_excel_recalculates_like_the_model 하나만 (회사 PC 2026-11-09:
+    # 성능예측표를 만드는 시험마다 엑셀을 열어 pytest가 62분)
+    os.environ["ML_KIT_SKIP_EXCEL_CHECK"] = "1"
     # 명령 시간 제한(2.9.40)은 끔: 세션이 길어도 학습이 멈추지 않게. 시간 제한 테스트는 값을 직접 줌
     os.environ["ML_KIT_TIME_LIMIT"] = "0"
     yield os.environ["ML_KIT_DATA_DIR"]

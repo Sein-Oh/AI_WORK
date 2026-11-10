@@ -667,8 +667,9 @@ def test_preview_separates_long_values_and_dropped_columns(tmp_path, capsys):
     wb.save(p)
     code, out = run_main(excel, capsys, "read", "--target", str(p))
     assert code == 0 and out["truncated"], out
-    assert "긴 값 15칸 잘림" in out["preview"] and "뒤쪽 25열 생략" in out["preview"], out["preview"]
-    assert "25열" in out["truncated_reason"]
+    m = re.search(r"긴 값 (\d+)칸 잘림.*뒤쪽 (\d+)열 생략", out["preview"])       # 상한(1.4.97: 6000자) 안에 든 칸은 잘리고, 나머지 열은 생략
+    assert m and int(m.group(1)) + int(m.group(2)) == 40 and int(m.group(1)) >= 5, out["preview"]
+    assert f"{m.group(2)}열" in out["truncated_reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -1472,3 +1473,290 @@ def test_closed_xlsx_load_retries_transient_lock(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(rt.time, "sleep", lambda s: None)
     code, out = run_main(excel, capsys, "read", "--target", path, "--sheet", "Sheet1")
     assert code == 0 and out["values"][0][0] == "a" and len(calls) >= 2, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A1·A2: --where의 %·단위·느슨한 날짜, 앞자리 0, 비교할 수 없는 조건은 0건이 아니라 STOP_RETRY
+# ---------------------------------------------------------------------------
+
+
+def _where_review_xlsx(path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["날짜", "비율", "코드", "금액", "메모"])
+    for d, r, c, m, memo in [(dt.datetime(2026, 1, 5), 0.5, "010", 1000, "a"), (dt.datetime(2026, 1, 15), 0.75, "10", 1500, "b"),
+                             (dt.datetime(2026, 1, 25), 0.2, "0010", 2000, "c")]:
+        ws.append([d, r, c, m, memo])
+    for row in ws.iter_rows(min_row=2, min_col=2, max_col=2):
+        row[0].number_format = "0%"
+    wb.save(path)
+    return str(path)
+
+
+@pytest.mark.parametrize("expr, rows", [
+    ("비율 >= 50%", [2, 3]), ("비율 < 50%", [4]), ("비율 = 75%", [3]),
+    ("날짜 >= 2026-1-10", [3, 4]), ("날짜 > 2026/01/10", [3, 4]), ("날짜 < 2026.1.10", [2]), ("날짜 >= 2026년 1월 15일", [3, 4]),
+    ("금액 >= 1500원", [3, 4]), ("금액 <= 1,500", [2, 3]),
+    ("코드 = 010", [2]), ("코드 = 10", [3]), ("코드 != 010", [3, 4]),
+])
+def test_where_percent_units_loose_dates_and_leading_zero(tmp_path, capsys, expr, rows):
+    p = _where_review_xlsx(tmp_path / "w.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p, "--where", expr)
+    assert code == 0 and out["row_numbers"][1:] == rows, out
+
+
+@pytest.mark.parametrize("expr", ["날짜 >= 지난달", "금액 > 많음", "메모 > 5"])
+def test_where_uncomparable_condition_is_not_zero_verified(tmp_path, capsys, expr):
+    p = _where_review_xlsx(tmp_path / "w.xlsx")
+    code, out = run_main(excel, capsys, "read", "--target", p, "--where", expr)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "비교할 수 없습니다" in out["message"], out
+
+
+def test_where_text_columns_compare_as_text_and_text_codes_stay_distinct(tmp_path, capsys):
+    csv_path = tmp_path / "c.csv"
+    csv_path.write_text("품번,비율,수량\n1A,50%,10개\n1B,20%,3개\n", encoding="utf-8")
+    code, out = run_main(excel, capsys, "read", "--target", str(csv_path), "--where", "품번 = 1A")
+    assert code == 0 and out["row_numbers"][1:] == [2], out
+    code, out = run_main(excel, capsys, "read", "--target", str(csv_path), "--where", "비율 >= 30%; 수량 > 5")
+    assert code == 0 and out["row_numbers"][1:] == [2], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 A3: 시트 XML의 <dimension>이 실제보다 작아도 끝까지 읽음 (read, --where, --search, export)
+# ---------------------------------------------------------------------------
+
+
+def _small_dimension_xlsx(tmp_path, ref):
+    import openpyxl
+    src = tmp_path / "src.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["이름", "값"])
+    for i in range(1, 11):
+        ws.append([f"n{i}", i * 10])
+    wb.save(src)
+    dst = tmp_path / "small.xlsx"
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.startswith("xl/worksheets/sheet"):
+                data = re.sub(rb'<dimension ref="[^"]*"/>', f'<dimension ref="{ref}"/>'.encode(), data)
+            zout.writestr(item, data)
+    return str(dst)
+
+
+@pytest.mark.parametrize("ref", ["A1:B5", "A1"])
+def test_small_dimension_reads_every_row(tmp_path, capsys, ref):
+    p = _small_dimension_xlsx(tmp_path, ref)
+    code, out = run_excel(capsys, "read", "--target", p)
+    assert code == 0 and out["rows"] == 11 and out["values"][-1] == ["n10", 100], out
+    code, out = run_excel(capsys, "read", "--target", p, "--where", "값 >= 50")
+    assert code == 0 and out["count"] == 6, out
+    code, out = run_excel(capsys, "read", "--target", p, "--search", "n9")
+    assert code == 0 and out["count"] == 1, out
+    code, out = run_excel(capsys, "read", "--target", p, "--range", "B:B")
+    assert code == 0 and out["rows"] == 11, out
+    code, out = run_excel(capsys, "export", "--target", p, "--save", str(tmp_path / "o.csv"))
+    assert code == 0 and len(rt.read_csv_rows(out["output_file"])) == 11, out
+
+
+def test_reader_reads_rows_past_small_dimension(tmp_path, capsys):
+    p = _small_dimension_xlsx(tmp_path, "A1:B5")
+    units, _ = reader.parse_xlsx(p)
+    assert any("n10" in u["text"] for u in units) and len(units) == 11, units
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B6: 차트 시트가 있는 통합문서 (활성 시트·--sheet·compare)
+# ---------------------------------------------------------------------------
+
+
+def _chartsheet_xlsx(path, active_chart=True):
+    import openpyxl
+    from openpyxl.chart import BarChart, Reference
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "데이터"
+    for r in [["품번", "값"], ["A1", 1], ["A2", 2]]:
+        ws.append(r)
+    cs = wb.create_chartsheet("차트")
+    ch = BarChart()
+    ch.add_data(Reference(ws, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+    cs.add_chart(ch)
+    if active_chart:
+        wb.active = 1
+    wb.save(path)
+    return str(path)
+
+
+def test_chartsheet_is_skipped_or_refused(tmp_path, capsys):
+    p = _chartsheet_xlsx(tmp_path / "c.xlsx")
+    code, out = run_excel(capsys, "read", "--target", p)
+    assert code == 0 and out["values"][0] == ["품번", "값"], out
+    code, out = run_excel(capsys, "read", "--target", p, "--sheet", "차트")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "차트 시트" in out["message"], out
+    q = _chartsheet_xlsx(tmp_path / "d.xlsx")
+    code, out = run_excel(capsys, "compare", "--target", p, "--target2", q)
+    assert code == 0 and out["status"] == "ok", out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B7: XFD1048576에 떠돌이 칸(공백)이 있어도 read·compare가 데이터 범위만 (MemoryError, 140초 넘게 멈춤)
+# ---------------------------------------------------------------------------
+
+
+def test_stray_far_cell_does_not_blow_up_read_or_compare(tmp_path, capsys):
+    import time
+    import openpyxl
+    paths = []
+    for name, extra in (("old.xlsx", 1), ("new.xlsx", 2)):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["품번", "수량"])
+        for i in range(1, 11):
+            ws.append([f"P{i}", i * extra])
+        ws["XFD1048576"] = " "
+        p = tmp_path / name
+        wb.save(p)
+        paths.append(str(p))
+    t0 = time.time()
+    code, out = run_excel(capsys, "read", "--target", paths[0])
+    assert code == 0 and out["rows"] == 11 and len(out["values"][0]) == 2, out
+    code, out = run_excel(capsys, "compare", "--target", paths[0], "--target2", paths[1], "--key", "품번")
+    assert code == 0 and out["status"] == "ok", out
+    assert time.time() - t0 < 30
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B13 (엑셀 읽기): --save 확장자, 표시 형식 숫자 검색, B:B 행 수, 기간 칸, 깨진 파일, compare 자기 자신, CSV check
+# ---------------------------------------------------------------------------
+
+
+def test_b13_excel_read_small_fixes(tmp_path, capsys):
+    import openpyxl
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["항목", "금액", "비율", "시간"])
+    ws.append(["가", 1000, 0.25, dt.timedelta(days=1, hours=6)])
+    ws.append(["나", 20, 0.5, dt.timedelta(hours=2, minutes=30)])
+    for r in range(4, 40):
+        ws.cell(r, 2).number_format = "0.00"          # 서식만 있는 끝 행
+    wb.save(p)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--save", str(tmp_path / "res.xlsx"))
+    assert code == 0 and out["output_file"].endswith("res.csv") and any(".xlsx" in r for r in out["recovered"]), out
+    for q, cell in (("1,000", "B2"), ("25%", "C2")):
+        code, out = run_excel(capsys, "read", "--target", str(p), "--search", q)
+        assert code == 0 and out["count"] == 1 and out["matches"][0]["cell"] == cell, (q, out)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--range", "B:B")
+    assert code == 0 and out["rows"] == 3, out
+    code, out = run_excel(capsys, "read", "--target", str(p))
+    assert out["values"][1][3] == "30:00:00" and out["values"][2][3] == "2:30:00", out
+    z = tmp_path / "z.xlsx"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("hello.txt", "not excel")
+    code, out = run_excel(capsys, "read", "--target", str(z))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    code, out = run_excel(capsys, "compare", "--target", str(p), "--target2", str(p), "--sheet", "Sheet")
+    assert code == 1 and "같은 파일" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 5장 5번: 큰 닫힌 파일을 읽다 시간 제한이 오면 JSON 없이 끊기지 않음 (read는 UNVERIFIED, export는 STOP_RETRY)
+# ---------------------------------------------------------------------------
+
+
+def test_big_closed_file_stops_before_time_limit(tmp_path, capsys, monkeypatch):
+    import openpyxl
+    p = tmp_path / "큰.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["번호", "값"])
+    for i in range(1, 6001):
+        ws.append([i, i * 2])
+    wb.save(p)
+    monkeypatch.setattr(rt, "time_up", lambda reserve=rt.TIME_RESERVE: True)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "값 >= 0")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["time_limited"]["rows"] == 1999, out
+    assert "--range" in out["agent_directive"] and out["count"] == 1998, out
+    code, out = run_excel(capsys, "export", "--target", str(p), "--save", str(tmp_path / "o.csv"))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--range" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 4장 1번 (1.4.98): stats 표 집계 (닫힌 xlsx·CSV는 Office 없이, 열린 문서는 COM)
+# ---------------------------------------------------------------------------
+
+
+def _sales_csv(tmp_path):
+    p = tmp_path / "매출.csv"
+    p.write_text("부서,품번,금액,수량\n영업,0101,1000,2\n영업,0102,3000,1\n개발,0103,500,4\n개발,0104,1500,1\n기획,0105,200,3\n",
+                 encoding="utf-8")
+    return str(p)
+
+
+def test_stats_totals_groups_where_and_top(tmp_path, capsys):
+    p = _sales_csv(tmp_path)
+    code, out = run_excel(capsys, "stats", "--target", p)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["columns"] == ["금액", "수량"], out    # 품번(앞자리 0)은 코드
+    st = out["groups"][0]["stats"]["금액"]
+    assert (st["sum"], st["mean"], st["min"], st["max"], st["count"]) == (6200, 1240, 200, 3000, 5), st
+    assert "금액: 합계 6,200, 평균 1,240, 최소 200, 최대 3,000 (5개)" in out["preview"], out["preview"]
+    code, out = run_excel(capsys, "stats", "--target", p, "--by", "부서", "--columns", "금액")
+    assert [g["by"]["부서"] for g in out["groups"]] == ["개발", "기획", "영업"] and out["groups"][2]["stats"]["금액"]["sum"] == 4000, out
+    code, out = run_excel(capsys, "stats", "--target", p, "--by", "부서", "--columns", "금액", "--top", "1")
+    assert out["group_count"] == 1 and out["groups"][0]["by"]["부서"] == "영업", out
+    code, out = run_excel(capsys, "stats", "--target", p, "--where", "금액 >= 1000", "--columns", "수량")
+    assert out["rows_used"] == 3 and out["groups"][0]["stats"]["수량"]["sum"] == 4, out
+    code, out = run_excel(capsys, "stats", "--target", p, "--columns", "부서")
+    st = out["groups"][0]["stats"]["부서"]
+    assert st["kind"] == "text" and st["unique"] == 3 and st["top"][0] == {"value": "개발", "count": 2}, st
+    code, out = run_excel(capsys, "stats", "--target", p, "--where", "금액 > 99999")
+    assert code == 0 and out["groups"] == [] and "0건" in out["agent_directive"], out
+    code, out = run_excel(capsys, "stats", "--target", p, "--by", "부서", "--save", str(tmp_path / "집계.csv"))
+    rows = rt.read_csv_rows(out["output_file"])
+    assert rows[0][:3] == ["부서", "행 수", "금액 합계"] and len(rows) == 4, rows
+
+
+def test_stats_closed_xlsx_and_open_document(tmp_path, capsys, xl_table):
+    p = _table_xlsx(tmp_path / "목록.xlsx")
+    code, out = run_excel(capsys, "stats", "--target", p, "--columns", "금액")
+    assert code == 0 and out["groups"][0]["stats"]["금액"]["count"] >= 4, out
+    code, out = run_main(excel, capsys, "stats", "--by", "부서", "--columns", "금액")      # 열린 문서 (가짜 COM)
+    assert code == 0 and {g["by"]["부서"]: g["stats"]["금액"]["sum"] for g in out["groups"]} == {"영업": 500, "개발": 100, "기획": 1000}, out
+
+
+def test_info_of_closed_xlsx_needs_no_office(tmp_path, capsys, monkeypatch):
+    """2026-11-09 검토 4장 1번: 닫힌 파일의 시트 목록 (전에는 info가 늘 Excel을 띄움)."""
+    p = _chartsheet_xlsx(tmp_path / "c.xlsx")
+    monkeypatch.setattr(excel.off, "open_target", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Office를 열면 안 됨")))
+    code, out = run_excel(capsys, "info", "--target", p)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert out["sheets"][0] == {"name": "데이터", "used_range": "A1:B3", "rows": 3, "cols": 2, "hidden": False}, out
+    assert out["sheets"][1] == {"name": "차트", "kind": "chart"} and out["active_sheet"] == "차트", out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 4장 2번 (1.4.99): --where 제목 행 아래의 머리글, 포함하지 않음 !~
+# ---------------------------------------------------------------------------
+
+
+def test_where_finds_header_below_title_and_not_contains(tmp_path, capsys):
+    import openpyxl
+    p = tmp_path / "기록.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "부품 검사 기록 (2026년 11월)"
+    ws.append([])
+    ws.append(["품번", "상태", "수량"])
+    for r in [("P1", "완료", 3), ("P2", "검토 중", 5), ("P3", "완료(재검)", 1)]:
+        ws.append(list(r))
+    wb.save(p)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "수량 >= 2")
+    assert code == 0 and out["header_row_found"] == 3 and out["values"][0] == ["품번", "상태", "수량"], out
+    assert out["row_numbers"] == [3, 4, 5] and out["count"] == 2, out
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "상태 !~ 완료")
+    assert code == 0 and out["count"] == 1 and out["values"][1][0] == "P2", out
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "상태 ~ 완료; 수량 < 2")
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["P3"], out

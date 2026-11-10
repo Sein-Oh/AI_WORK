@@ -208,7 +208,7 @@ def test_train_target_in_features_offers_both_commands(trained):
 @pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd", "bash"])
 def test_offered_commands_survive_each_shell(trained, monkeypatch, shell):
     """2.9.68: next_commands의 따옴표는 실행 셸에 맞춤 (ML_KIT_SHELL, 기본은 OpenCode처럼 pwsh > Windows PowerShell 5.1).
-    그 셸이 실행하면(shell_sim) --input·--exclude-where·--desc 값이 글자 그대로 도구에 들어간다."""
+    그 셸이 실행하면(shell_sim) --input·--desc 값이 글자 그대로 도구에 들어간다."""
     work, data, _ = trained
     monkeypatch.setenv("ML_KIT_SHELL", shell)
     vdir = str(work / "sample_ml_data" / "v1")
@@ -218,13 +218,12 @@ def test_offered_commands_survive_each_shell(trained, monkeypatch, shell):
     assert argv[argv.index("--model") + 1] == vdir and argv[argv.index("--input") + 1].startswith("반응온도=240,소비전력=65,"), nxt
     assert run_tool("ml_predict.py", *argv[2:])["predictions_summary"][TARGET]["predictions"]
     desc = "누수 $x `t '시험' \"따옴표\" 100% {{a}} @b #c; C:\\a b\\"
-    where = "반응온도(°C) > 9999 | 수분함량(%) > 9999; 소비전력(kW) > 9999"
     payload = run_fail("ml_train.py", "--file", data, "--features", "반응온도(°C),소비전력(kW),수분함량(%)",
-                       "--targets", "생산효율(%),수분함량(%)", "--desc", desc, "--exclude-where", where)
+                       "--targets", "생산효율(%),수분함량(%)", "--desc", desc)
     assert "타겟 누수:" in payload["message"], payload
     for c in payload["confirm_commands"]:
         argv = shell_sim.run_shell(c["command"], shell)
-        assert argv[argv.index("--desc") + 1] == desc and argv[argv.index("--exclude-where") + 1] == where, c["command"]
+        assert argv[argv.index("--desc") + 1] == desc, c["command"]
 
 
 DEPLOY_FILES = ("ml_predict.py", "_ml_runtime.py")      # 예측만 하는 PC에 복사할 파일 (README "단독 배포")
@@ -530,7 +529,7 @@ def test_read_text_file_encodings(tmp_path):
         assert rt.read_text_file(str(p)) == "반응온도(°C)"
 
 
-ENTRY_POINTS = ("ml_train.py", "ml_predict.py", "ml_report.py", "ml_export.py", "ml_map.py")
+ENTRY_POINTS = ("ml_train.py", "ml_predict.py", "ml_report.py", "ml_export.py", "ml_map.py", "ml_dataset.py")
 
 
 def test_entry_points_import_only_the_runtime():

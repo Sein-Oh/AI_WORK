@@ -8,7 +8,7 @@ r"""C:\CLI 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\
 
 하는 일 (C:\CLI = 이 파일이 있는 폴더):
 1. OpenCode 설정 폴더(%USERPROFILE%\.config\opencode)로 복사 (바뀐 것만):
-       ml-kit\skills\<이름>\SKILL.md       -> skills\<이름>\SKILL.md  (ml-train, ml-predict, ml-report, ml-map)
+       ml-kit\skills\<이름>\SKILL.md       -> skills\<이름>\SKILL.md  (ml-train, ml-predict, ml-report, ml-map, ml-dataset)
        office-cli\skills\<이름>\SKILL.md   -> skills\<이름>\SKILL.md  (office-excel, office-doc, office-mail, office-spec, office-data)
        opencode\AGENTS.md                  -> AGENTS.md (전역 지침)
        opencode\opencode.jsonc             -> opencode.jsonc (있을 때만. 사내 LLM 주소가 들어 있어 사용자가 넣어 둠)
@@ -33,7 +33,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\CLI (배포 폴더)
 OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data")    # office-cli\skills\<이름>\SKILL.md
-ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map")                     # ml-kit\skills\<이름>\SKILL.md
+ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # ml-kit\skills\<이름>\SKILL.md
 OBSOLETE = (("옛 office-cli 스킬", os.path.join("skills", "office-cli")),           # 설정 폴더에서 지울 옛 스킬 폴더
             ("옛 ml-kit 스킬", os.path.join("skills", "ml-kit")))
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
@@ -506,6 +506,8 @@ def main(argv=None):
     print(f"[INFO] 설치 폴더: {HERE}" + ("  (--check: 바꾸지 않음)" if args.check else ""), flush=True)
     print("[INFO] 1. OpenCode 스킬, 전역 지침, opencode.jsonc", flush=True)
     step_files(rep, cfg, backup, args.check, args.test_skill)
+    if not args.check:      # 스킬로 안 되는 일의 파이썬 스크립트를 두는 곳 (전역 지침 8장)
+        os.makedirs(os.path.join(data_dir(), "scripts"), exist_ok=True)
     print("[INFO] 2. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)

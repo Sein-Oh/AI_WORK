@@ -28,7 +28,6 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     parse_datetime, normalize_category, prepare_features, date_part_column, input_column_owner, DATE_PARTS,
     strip_unit, layout_warnings, exclude_mark as _exclude_mark, unparsed_number_cells, decimal_comma_text_share, percent_warning, check_percent_mix,
     retry_fs, remove_tree, atomic_write_text, write_csv_excel_compatible, command_text, quote_arg,
-    parse_where, resolve_where, where_text, where_mask, where_notation_variants, where_with_variants, where_retry,
     check_time, time_would_pass, Unfinished, VERSION, resume_find, resume_save, resume_clear, save_failed_warning,
     RESUME_MAX_AGE, option_retry, time_limit, final_version, step_begin, step_end, step_label, WATCHDOG_HOLD, mark_committed,
 )
@@ -1644,7 +1643,7 @@ def build_next_commands(
     args: argparse.Namespace, raw_file: str, task: str, positive_class: Optional[str],
     feature_names: List[str], created_features: List[str], applied_evals: List[str],
     target_names: List[str], champion: Dict[str, Any], schema: Dict[str, Any],
-    mean_score: float, staging_dir: str, final_dir: str, exclude_where: Optional[str] = None,
+    mean_score: float, staging_dir: str, final_dir: str,
 ) -> List[Dict[str, Any]]:
     """
     Ready-to-run follow-up commands so a small LLM does not have to compose arguments:
@@ -1662,9 +1661,6 @@ def build_next_commands(
                       ("--data-row", args.data_row), ("--dtypes", args.dtypes)):
         if val is not None:
             base += [flag, quote_arg(val)]
-    no_where = list(base)                     # for the '<조건> 행을 빼고 다시 학습' template (exclude_command)
-    if exclude_where is not None:
-        base += ["--exclude-where", quote_arg(exclude_where)]
     task_flags: List[str] = []
     if task == TASK_CLASSIFICATION:
         task_flags = ["--task", TASK_CLASSIFICATION]
@@ -1687,21 +1683,15 @@ def build_next_commands(
 
     targets_arg = ["--targets", names_arg(target_names, "next_targets.txt", limit=10 ** 6)]
     base += targets_arg
-    retrain_ok = quotable(args.dtypes, positive_class, exclude_where)
+    retrain_ok = quotable(args.dtypes, positive_class)
 
-    def exclude_command() -> Optional[Dict[str, Any]]:
-        """The same training (same inputs, --features written out) with rows matching <조건> left out (2.9.81 집 PC Gemma A3:
-        '생산효율이 80보다 큰 행은 빼고 다시 학습' -> the long command was written into the answer, not run). An earlier
-        --exclude-where is kept: '<before>; <조건>' (';' = and)."""
-        if not (retrain_ok and quotable(*base_features)) or not base_features:
-            return None
-        where = f"{exclude_where}; <조건>" if exclude_where else "<조건>"
-        parts = no_where + task_flags + targets_arg + ["--features", features_arg(base_features, "all"),
-                                                       "--exclude-where", quote_arg(where)]
-        if applied_evals and quotable(*applied_evals):
-            parts += ["--eval", quote_arg("; ".join(applied_evals))]
-        return {"purpose": "조건에 맞는 행을 빼고 다시 학습 (<조건>을 사용자가 말한 조건으로 바꿀 것, 예: 생산효율 > 80)",
-                "command": " ".join(parts), "needs_input": True, "placeholder": "<조건>"}
+    def exclude_command() -> Dict[str, Any]:
+        """Rows matching <조건> left out of training (2.9.81 집 PC Gemma A3: the long command was written into the answer,
+        not run): 2.9.85 the data file with those rows marked in '제외' (ml_dataset.py exclude), then its training."""
+        return {"purpose": "조건에 맞는 행을 학습에서 뺀 데이터셋 만들기 (<조건>을 사용자가 말한 조건으로 바꿀 것, 예: 생산효율 > 80. "
+                           "결과의 next_commands로 학습)",
+                "command": (f"python {quote_arg(os.path.join(here, 'ml_dataset.py'))} exclude --file {quote_arg(raw_file)} "
+                            "--where \"<조건>\""), "needs_input": True, "placeholder": "<조건>"}
 
     base_features = [f for f in feature_names if f not in created_features]
     cmds: List[Dict[str, Any]] = []
@@ -1717,7 +1707,7 @@ def build_next_commands(
             final_dir, "목표 성능 달성: 새 데이터 예측 (<새데이터.xlsx>를 사용자가 준 실제 파일 경로로 바꿀 것)"))
         if base_features and quotable(*base_features):
             cmds.append(predict_one_command(final_dir, base_features))
-        cmds += [c for c in (exclude_command(),) if c]
+        cmds.append(exclude_command())
         return cmds
 
     weak = [w for w in champion.get("weak_features", []) if w in feature_names]
@@ -1749,7 +1739,7 @@ def build_next_commands(
                      "needs_input": False, "no_retrain": True})
     if base_features and quotable(*base_features):        # 목표 전이라도 예측은 할 수 있음 (placeholder 명령은 늘 뒤에)
         cmds.append(predict_one_command(final_dir, base_features))
-    cmds += [c for c in (exclude_command(),) if c]
+    cmds.append(exclude_command())
     return cmds
 
 
@@ -1809,23 +1799,15 @@ def _outlier_flags(values: pd.Series) -> Tuple[np.ndarray, Optional[float]]:
 
 
 def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, schema: Dict[str, Any],
-                    created: List[str], task: str, target_name: str,
-                    cond: Optional[np.ndarray] = None, cond_text: str = "") -> Dict[str, Any]:
-    """Rows to leave out of training for one target: the user's '제외' marks, the rows meeting --exclude-where
-    (cond, unless the row is marked: '포함' keeps it, a written reason wins) plus automatic outliers."""
+                    created: List[str], task: str, target_name: str) -> Dict[str, Any]:
+    """Rows to leave out of training for one target: the user's '제외' marks plus automatic outliers ('포함' keeps a row
+    in). Rows by a condition are marked in '제외' by ml_dataset.py exclude (2.9.85, was --exclude-where)."""
     n = len(y)
     valid = y.notna().to_numpy()
     text = (marks.map(_exclude_mark).to_numpy() if marks is not None else np.array([""] * n, dtype=object))
     forced = text == INCLUDE_MARK
     manual = (text != "") & ~forced & valid
-    cond_all = np.asarray(cond, dtype=bool) if cond is not None else np.zeros(n, dtype=bool)
-    by_cond = cond_all & valid & ~forced & ~manual
-    cond_forced = cond_all & valid & forced
-    left = int((valid & ~manual & ~by_cond).sum())
-    if by_cond.any() and left < MIN_TRAIN_ROWS:
-        raise InputError(f"--exclude-where 조건({cond_text})에 맞는 {int(by_cond.sum())}행과 '제외' 표시 행을 빼면 타겟 "
-                         f"'{target_name}'의 학습 행이 {left}행만 남습니다 (최소 {MIN_TRAIN_ROWS}행). 조건을 사용자와 확인하십시오.")
-    candidate = valid & ~manual & ~forced & ~by_cond
+    candidate = valid & ~manual & ~forced
 
     check_cols = ([target_name] if task == TASK_REGRESSION else []) + \
         [c for c in schema["numeric"] if c not in created and c in X.columns]
@@ -1847,7 +1829,7 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
             note = (f"이상치 후보가 {int(auto.sum())}행({auto.sum() / max(candidate.sum(), 1):.0%})으로 많아 자동 제외하지 않았습니다 "
                     f"(값이 넓게 퍼진 데이터일 수 있음)")
             auto[:] = False
-        elif (valid & ~manual & ~by_cond & ~auto).sum() < MIN_TRAIN_ROWS:
+        elif (valid & ~manual & ~auto).sum() < MIN_TRAIN_ROWS:
             note = f"자동 제외하면 학습 행이 {MIN_TRAIN_ROWS}개 미만이 되어 자동 제외하지 않았습니다"
             auto[:] = False
     if task == TASK_CLASSIFICATION and auto.any():
@@ -1856,8 +1838,7 @@ def plan_exclusions(marks: Optional[pd.Series], y: pd.Series, X: pd.DataFrame, s
             in_cls = valid & (y_arr == cls)
             if (in_cls & ~manual & ~auto).sum() < 2:
                 auto[in_cls] = False   # never remove a class from training
-    return {"manual": manual, "auto": auto, "forced": forced, "mask": manual | auto | by_cond, "cond": by_cond,
-            "cond_forced": cond_forced, "text": text, "reasons": reasons, "auto_cols": auto_cols, "note": note,
+    return {"manual": manual, "auto": auto, "forced": forced, "mask": manual | auto, "text": text, "reasons": reasons, "auto_cols": auto_cols, "note": note,
             "checked_columns": check_cols}
 
 
@@ -2114,34 +2095,7 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
     excluded_inputs: List[Dict[str, str]] = []
     if auto:
         feature_names, excluded_inputs = auto_inputs(df_raw, target_names, task, dtypes)
-    # --exclude-where: column names resolved like --features / --targets, the canonical text is what the ledger keeps
-    where_txt: Optional[str] = None
-    where_hit: Optional[np.ndarray] = None
     group_warnings_pre: List[str] = []
-    where_fix: Optional[Dict[str, Any]] = None
-    if group.get("exclude_where"):
-        conds = resolve_where(parse_where(group["exclude_where"], "--exclude-where"), [str(c) for c in df_raw.columns],
-                              "--exclude-where", dict(df_raw.attrs))
-        where_txt = where_text(conds)
-        where_hit = where_mask(df_raw, conds)
-        sys.stderr.write(f"[INFO] --exclude-where 조건({where_txt})에 맞는 행: {int(where_hit.sum())}개\n")
-        if not where_hit.any():
-            group_warnings_pre.append(f"--exclude-where 조건({where_txt})에 맞는 행이 없어 조건으로 뺀 행은 0개입니다")
-            sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
-        variants = where_notation_variants(df_raw, conds)
-        if variants:
-            # a code column compared as text: '월 = 1' leaves the '01' rows (the same number in training) in
-            fixed = where_text(where_with_variants(conds, variants))
-            cmd = where_retry("--exclude-where", fixed)
-            for (c, o, v), cnt in variants:
-                notes = ", ".join(f"'{t}' {n}행" for t, n in cnt.items())
-                group_warnings_pre.append(
-                    f"--exclude-where '{c} {o} {v}': {notes}은(는) 표기가 달라 " + ("빼지 않음" if o == "=" else "함께 뺌")
-                    + f" ('{c}' 열은 앞자리 0을 구분하는 코드 열이라 글자 그대로 비교). 같은 값으로 보려면 [추천] {cmd}")
-                sys.stderr.write(f"[WARN] {group_warnings_pre[-1]}\n")
-            if cmd.startswith("python "):
-                where_fix = {"purpose": f"--exclude-where를 표기가 다른 같은 값까지 포함한 조건({fixed})으로 다시 학습 "
-                                        "(사용자가 원할 때만)", "command": cmd, "needs_input": False}
 
     # Fail-Fast Validation & Type Sanitization
     log_progress(10, "컬럼 유효성 검증 및 타입 정제 중...")
@@ -2204,7 +2158,6 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
             "raw_required": raw_required,
             "evals": applied_evals, "created": created_features, "schema": feature_schema, "X": X_all,
             "dtypes": dtypes, "positive_class": group.get("positive_class"), "warnings": group_warnings,
-            "where": where_txt, "where_hit": where_hit, "where_fix": where_fix,
             "auto": auto, "excluded_inputs": excluded_inputs, "suspect_inputs": suspect_inputs}
 
 
@@ -2338,8 +2291,7 @@ def execute_ml_train(args: argparse.Namespace) -> Dict[str, Any]:
     if getattr(args, "dry_run", False):
         return dry_run_train(args)
     group = {"features": args.features, "targets": args.targets, "eval": args.eval,
-             "dtypes": args.dtypes, "positive_class": positive_class,
-             "exclude_where": getattr(args, "exclude_where", None)}
+             "dtypes": args.dtypes, "positive_class": positive_class}
     return train_version(args, task, [group])
 
 
@@ -2523,7 +2475,7 @@ def _prepare_run(args: argparse.Namespace, task: str, groups: List[Dict[str, Any
         extra = {"positive_class": g["positive_class"]} if task == TASK_CLASSIFICATION else {}
         y_full = g["df"][target_name]
         plan = plan_exclusions(g["df"][excl_col] if excl_col else None, y_full, g["X"], g["schema"],
-                               g["created"], task, target_name, cond=g["where_hit"], cond_text=g["where"] or "")
+                               g["created"], task, target_name)
         trained = np.array(y_full.notna(), dtype=bool) & ~np.asarray(plan["mask"], dtype=bool)
         trained[unit_pos] = False
         for c in _numeric_input_columns(g):
@@ -2631,16 +2583,8 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             plan = P["targets"][target_name]["plan"]
             if plan["mask"].any():
                 sys.stderr.write(f"[INFO] 타겟 '{target_name}': 학습에서 뺀 행 {int(plan['mask'].sum())}개 "
-                                 f"(직접 표시 {int(plan['manual'].sum())}, 조건 {int(plan['cond'].sum())}, "
+                                 f"(직접 표시 {int(plan['manual'].sum())}, "
                                  f"자동 이상치 {int(plan['auto'].sum())})\n")
-            if plan["cond_forced"].any():
-                rows_kept = [source_rows[i] if i < len(source_rows) else i + 1 for i in np.flatnonzero(plan["cond_forced"])]
-                w = (f"타겟 '{target_name}': '{excl_col}' 열에 '{INCLUDE_MARK}'으로 표시한 {len(rows_kept)}행(원본 행 "
-                     f"{', '.join(map(str, rows_kept[:10]))}{' 등' if len(rows_kept) > 10 else ''})은 --exclude-where 조건에 맞지만 "
-                     f"학습에 넣었습니다 ('{INCLUDE_MARK}' 표시가 우선)")
-                if w not in train_warnings:
-                    train_warnings.append(w)
-                    sys.stderr.write(f"[WARN] {w}\n")
             if plan["note"]:
                 sys.stderr.write(f"[WARN] 타겟 '{target_name}': {plan['note']}\n")
             y_train = y_full.mask(plan["mask"])
@@ -2688,9 +2632,6 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 "auto_note": plan["note"],
                 "all_rows_score": all_score,
             }
-            if g["where"]:
-                excl_info["condition"] = int(plan["cond"].sum())
-                excl_info["condition_text"] = g["where"]
             champion_info["excluded"] = excl_info
             if all_score is not None:
                 champion_info["all_rows_score"] = all_score
@@ -2700,12 +2641,10 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 excluded_rows_out.append({
                     "타겟": target_name,
                     "원본 행": source_rows[i] if i < len(source_rows) else i + 1,
-                    "구분": "직접 표시" if plan["manual"][i] else ("조건" if plan["cond"][i] else "자동 이상치"),
-                    "이유": (plan["text"][i] if plan["manual"][i]
-                           else (f"조건: {g['where']}" if plan["cond"][i] else plan["reasons"][i])),
+                    "구분": "직접 표시" if plan["manual"][i] else "자동 이상치",
+                    "이유": plan["text"][i] if plan["manual"][i] else plan["reasons"][i],
                     "_key": (plan["text"][i] if plan["manual"][i]
-                             else (f"조건: {g['where']}" if plan["cond"][i]
-                                   else "자동 이상치: " + ", ".join(plan["auto_cols"][i]))),
+                             else "자동 이상치: " + ", ".join(plan["auto_cols"][i])),
                     "실제값": actual if task == TASK_CLASSIFICATION else round(float(actual), 6),
                     "예측값": (str(excl_pred[k]) if task == TASK_CLASSIFICATION else round(float(excl_pred[k]), 6)),
                 })
@@ -2929,7 +2868,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                                                  os.path.join(staging_dir, "excluded_rows.csv"))
             excluded_rows_file = os.path.join(guard.final_dir, os.path.basename(ex_path))
         exclusion_summary = {t: {k: v for k, v in e.items() if k != "mask"} for t, e in exclusions.items()
-                             if e["manual"] or e["auto"] or e["forced_include"] or e["auto_note"] or e.get("condition")}
+                             if e["manual"] or e["auto"] or e["forced_include"] or e["auto_note"]}
 
         # 4. Append Record to history.jsonl (SSOT)
         duration_sec = round(time.time() - start_time, 2)
@@ -3003,14 +2942,12 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                 history_record["dtypes"] = g0["dtypes"]
             if g0["positive_class"] is not None:
                 history_record["positive_class"] = g0["positive_class"]
-            if g0["where"]:
-                history_record["exclude_where"] = g0["where"]
         if True:
             next_commands = build_next_commands(
                 args=args, raw_file=raw_file, task=task, positive_class=g0["positive_class"],
                 feature_names=g0["features"], created_features=g0["created"], applied_evals=g0["evals"],
                 target_names=target_names, champion={**prim_champ, "weak_features": weak_feats}, schema=g0["schema"],
-                mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir, exclude_where=g0["where"],
+                mean_score=min_score, staging_dir=staging_dir, final_dir=guard.final_dir,
             )
         # 2.9.71: the tool counts the improvement rounds (AGENTS.md "사용법 단순성" 5): when the last IMPROVE_ROUNDS
         # runs of this task and targets (this one included) did not beat the best score before them, it stops offering
@@ -3025,9 +2962,6 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
                                    f"재학습 제안을 멈춤. 지금까지의 최고 모델로 보고서를 만듭니다")
                 next_commands = [{"purpose": REPORT_PURPOSE[task], "needs_input": False,
                                   "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} --file {quote_arg(raw_file)}"}]
-        if True:              # the command again with the condition covering the other notations
-            where_fixes = [g["where_fix"] for g in prepared if g.get("where_fix")]
-            next_commands = [c for i, c in enumerate(where_fixes) if c not in where_fixes[:i]] + next_commands
         history_record["next_commands"] = next_commands
 
         # Commit Transaction: atomic rename .tmp_vX -> vX, then record it in the ledger.
@@ -3086,10 +3020,9 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
         target_brief = ", ".join([f"{t}({target_champions[t]['info']['champion_model']}: 검증 {short}={target_champions[t]['info']['val_score']:.4f})" for t in target_names])
         delta_txt = delta_score if delta_score == "base" else f"{delta_score:+.4f}"
         excl_brief = "; ".join(
-            f"{t}: 학습 제외 {e['manual'] + e['auto'] + e.get('condition', 0)}행(직접 {e['manual']}, "
-            + (f"조건 {e['condition']}, " if e.get("condition") else "") + f"자동 {e['auto']}), "
+            f"{t}: 학습 제외 {e['manual'] + e['auto']}행(직접 {e['manual']}, 자동 {e['auto']}), "
             f"검증 {short}(제외 행 포함)={e['all_rows_score'] if e['all_rows_score'] is not None else '-'}"
-            for t, e in exclusion_summary.items() if e["manual"] or e["auto"] or e.get("condition"))
+            for t, e in exclusion_summary.items() if e["manual"] or e["auto"])
         preview = (
             f"[{current_version} 완료 / {task}] 타겟: [{target_brief}] | "
             + (f"{excl_brief} | " if excl_brief else "")
@@ -3301,9 +3234,6 @@ def main():
     parser.add_argument("--unit-row", type=int, help="단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
     parser.add_argument("--dtypes", help="데이터 타입 수동 오버라이드 (예: '일시:datetime,설비코드:str')")
-    parser.add_argument("--exclude-where", dest="exclude_where",
-                        help="학습에서 뺄 행의 조건 (예: '생산효율 > 90; 라인 = B | 라인 = C'. ;는 그리고, |는 또는, "
-                             "연산자 >= <= > < = != ~). 데이터 파일은 바꾸지 않음")
     parser.add_argument("--version", help="버전 수동 지정 (미지정 시 자동 계산 v1, v2...)")
     parser.add_argument("--overwrite", action="store_true",
                         help="--version으로 지정한 버전 폴더가 이미 있으면 교체 (사용자 확인 후에만 사용)")

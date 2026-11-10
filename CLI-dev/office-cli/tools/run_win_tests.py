@@ -2423,8 +2423,230 @@ def tool_error_log_lines():
     return head + text.rstrip().splitlines()
 
 
+# ---------------------------------------------------------------------------
+# L. 2026-11-09 검토 실기 확인 (엑셀·워드·PPT): 가짜 COM으로 고친 것(A7~A9, C1~C5, C8~C11)과 추정만 한 것(C6, C12, C13)
+# ---------------------------------------------------------------------------
+def _ok(d):
+    return (d or {}).get("status") == "ok"
+
+
+def _verified(d):
+    return str((d or {}).get("agent_directive", "")).startswith("VERIFIED:")
+
+
+def test_L(ctx):
+    tag = time.strftime("%H%M%S")
+    docx, pptx = ctx.path("A.docx"), ctx.path("A.pptx")
+
+    def l1():     # A7 통화 서식 열 정렬
+        activate_xl("A.xlsx", "Sheet1")
+        run_cli("excel.py", "write", "--sheet", "L_CUR", "--new-sheet", "--range", "A1", "--values", '[["품목","금액"],["a",10],["b",100],["c",9]]')
+        com_retry(lambda: setattr(xl_sheet("L_CUR").Range("B2:B4"), "NumberFormat", "$#,##0.00"))   # 통화 서식: Value가 VT_CY
+        d, c, r, e = run_cli("excel.py", "range", "--sheet", "L_CUR", "--action", "sort", "--range", "A1:B4", "--by", "금액")
+        vals = com_retry(lambda: [float(v[0]) for v in xl_sheet("L_CUR").Range("B2:B4").Value])
+        d2 = run_cli("excel.py", "read", "--sheet", "L_CUR", "--where", "금액 >= 10")[0]
+        record(ctx, "L1", "A7 통화 서식 열: 정렬·--where가 숫자로 (pywin32 Decimal)", _verified(d) and vals == [9.0, 10.0, 100.0]
+               and (d2 or {}).get("count") == 2, f"정렬 뒤 B2:B4={vals}, --where count={(d2 or {}).get('count')}", d, c, r, e)
+
+    def l2():     # A8 + - 로 시작하는 글
+        d, c, r, e = run_cli("excel.py", "write", "--sheet", "L_CUR", "--range", "D1", "--value", "+82-10-1234-5678")
+        d2 = run_cli("excel.py", "write", "--sheet", "L_CUR", "--range", "D2", "--value", "- 검토 필요")[0]
+        got = com_retry(lambda: (xl_sheet("L_CUR").Range("D1").Value, xl_sheet("L_CUR").Range("D2").Value))
+        record(ctx, "L2", "A8 '+82-...'·'- 검토'를 글자 그대로 쓰고 VERIFIED", _verified(d) and _verified(d2)
+               and got == ("+82-10-1234-5678", "- 검토 필요"), f"D1, D2={got}", d, c, r, e)
+
+    def l3():     # A9 수식 오류 값, 동적 배열
+        d, c, r, e = run_cli("excel.py", "write", "--sheet", "L_CUR", "--range", "E1", "--formula", "=합계(B2:B3)")
+        bad = str((d or {}).get("agent_directive", "")).startswith("UNVERIFIED:") and "#NAME?" in json.dumps(d or {}, ensure_ascii=False)
+        d2 = run_cli("excel.py", "write", "--sheet", "L_CUR", "--range", "F1", "--formula", "=SORT(B2:B4)")[0]
+        spill = com_retry(lambda: xl_sheet("L_CUR").Range("F2").Value)
+        version = com_retry(lambda: float(xl_app().Version))
+        record(ctx, "L3", "A9 '=합계(...)'는 #NAME?로 UNVERIFIED, '=SORT(...)'는 펼쳐짐(Office 2021 이상)", bad and _ok(d2) and spill is not None,
+               f"오류 수식 directive={(d or {}).get('agent_directive', '')[:80]}, F2(펼친 값)={spill}, Office {version}", d, c, r, e)
+
+    def l4():     # C1 표 바로 위 단락 뒤에 쓰기
+        doc = wd_doc("A.docx")
+
+        def make():
+            end = doc.Content.End - 1
+            doc.Range(end, end).InsertAfter(f"\rL 표 위 {tag}\r")
+            rng = doc.Range(doc.Content.End - 1, doc.Content.End - 1)
+            t = doc.Tables.Add(rng, 2, 2)
+            t.Cell(1, 1).Range.Text = f"L칸 {tag}"
+            return doc.Tables.Count
+        n = com_retry(make)
+        d, c, r, e = run_cli("word.py", "write", "--target", docx, "--anchor", f"L 표 위 {tag}", "--text", f"L 새 글 {tag}")
+        cell = com_retry(lambda: str(wd_doc("A.docx").Tables(n).Cell(1, 1).Range.Text).rstrip("\r\x07"))
+        record(ctx, "L4", "C1 표 바로 위 단락 뒤에 쓴 글이 표 첫 칸에 들어가지 않음", _ok(d) and cell == f"L칸 {tag}",
+               f"표 첫 칸={cell!r}", d, c, r, e)
+
+    def l5():     # C2 두 번째 번호 목록은 1부터
+        run_cli("word.py", "write", "--target", docx, "--text", f"1. L첫목록 가 {tag}\n2. L첫목록 나 {tag}")
+        run_cli("word.py", "write", "--target", docx, "--text", f"L 사이 단락 {tag}")
+        d, c, r, e = run_cli("word.py", "write", "--target", docx, "--text", f"1. L둘째목록 가 {tag}")
+        doc = wd_doc("A.docx")
+
+        def list_string():
+            rng = doc.Content
+            f = rng.Find
+            return str(rng.ListFormat.ListString) if f.Execute(FindText=f"L둘째목록 가 {tag}") else None
+        got = com_retry(list_string)
+        record(ctx, "L5", "C2 새 번호 목록은 앞 목록에 이어지지 않고 1부터", _ok(d) and got in ("1.", "1)"), f"번호={got!r}", d, c, r, e)
+
+    def l6():     # C3 표 뒤에 표
+        n0 = com_retry(lambda: wd_doc("A.docx").Tables.Count)
+        run_cli("word.py", "write", "--target", docx, "--text", "| a | b |\n|---|---|\n| 1 | 2 |")
+        d, c, r, e = run_cli("word.py", "write", "--target", docx, "--text", "| c | d |\n|---|---|\n| 3 | 4 |")
+        n1 = com_retry(lambda: wd_doc("A.docx").Tables.Count)
+        record(ctx, "L6", "C3 표 바로 뒤에 쓴 표가 앞 표와 합쳐지지 않음 (표 2개 늘어남)", _ok(d) and n1 == n0 + 2, f"표 {n0}->{n1}", d, c, r, e)
+
+    def l7():     # C4 제목 뒤 그림 단락 스타일
+        png = make_png(ctx.path("l_img.png"))
+        run_cli("word.py", "write", "--target", docx, "--heading", "2", "--text", f"L 그림 제목 {tag}")
+        d, c, r, e = run_cli("word.py", "write", "--target", docx, "--image", png)
+        doc = wd_doc("A.docx")
+        level = com_retry(lambda: int(doc.InlineShapes(doc.InlineShapes.Count).Range.Paragraphs(1).OutlineLevel))
+        record(ctx, "L7", "C4 제목 뒤에 넣은 그림 단락은 본문 수준 (outline에 [그림]이 나오지 않음)", _ok(d) and level == 10,
+               f"그림 단락 OutlineLevel={level} (10이 본문)", d, c, r, e)
+
+    def l8():     # C5 --toc --file
+        md = ctx.path("l_toc.md")
+        with open(md, "w", encoding="utf-8") as f:
+            f.write(f"# L목차장 {tag}\n본문\n## L목차절 {tag}\n세부\n")
+        d, c, r, e = run_cli("word.py", "write", "--target", docx, "--toc", "--file", md)
+        doc = wd_doc("A.docx")
+        toc = com_retry(lambda: str(doc.TablesOfContents(doc.TablesOfContents.Count).Range.Text))
+        record(ctx, "L8", "C5 --toc --file: 목차에 넣은 제목이 들어 있음", _ok(d) and f"L목차절 {tag}" in toc, f"목차 글={toc[:120]!r}", d, c, r, e)
+
+    def l9():     # C6 변경 추적 켜진 문서에서 replace (추정 60%: 코드 고치지 않음)
+        doc = wd_doc("A.docx")
+        run_cli("word.py", "write", "--target", docx, "--text", f"L추적 옛말 {tag}")
+        com_retry(lambda: setattr(doc, "TrackRevisions", True))
+        try:
+            d, c, r, e = run_cli("word.py", "replace", "--target", docx, "--find", f"L추적 옛말 {tag}", "--replace", f"L추적 새말 {tag}")
+            d2 = run_cli("word.py", "read", "--target", docx)[0]
+        finally:
+            com_retry(lambda: setattr(doc, "TrackRevisions", False))
+        text = json.dumps(d2 or {}, ensure_ascii=False)
+        record(ctx, "L9", "C6(확인만) 변경 추적 문서 replace: VERIFIED이고 read에 옛말·새말이 붙어 나오지 않음",
+               _verified(d) and f"L추적 옛말 {tag}L추적 새말" not in text, f"replace={(d or {}).get('agent_directive', '')[:100]}", d, c, r, e)
+        com_retry(lambda: wd_doc("A.docx").Revisions.AcceptAll())
+
+    def l10():    # C8 바닥글 개체틀이 있는 슬라이드
+        d, c, r, e = run_cli("ppt.py", "write", "--target", pptx, "--slide", "new", "--title", f"L 바닥글 {tag}")
+        no = int(((d or {}).get("slides_written") or [0])[-1])
+        prs = pp_prs("A.pptx")
+
+        def footer():
+            s = prs.Slides(no)
+            s.HeadersFooters.SlideNumber.Visible = True
+            s.HeadersFooters.Footer.Visible = True
+            s.HeadersFooters.Footer.Text = "사내 한정"
+        com_retry(footer)
+        d, c, r, e = run_cli("ppt.py", "write", "--target", pptx, "--slide", str(no), "--text", f"L 본문 {tag}")
+        h = com_retry(lambda: float(prs.PageSetup.SlideHeight))
+        boxes = com_retry(lambda: [(float(sh.Top), float(sh.Height)) for sh in prs.Slides(no).Shapes
+                                   if sh.HasTextFrame and f"L 본문 {tag}" in str(sh.TextFrame.TextRange.Text)])
+        inside = bool(boxes) and all(t + hh <= h + 1 for t, hh in boxes)
+        record(ctx, "L10", "C8 바닥글·슬라이드 번호가 있는 슬라이드에 쓴 글상자가 슬라이드 안", _verified(d) and inside,
+               f"글상자(top, height)={boxes}, 슬라이드 높이={h}", d, c, r, e)
+
+    def l11():    # C9 제한된 보기 (눈 확인)
+        manual = ask(ctx, "인터넷에서 받은 xlsx 하나를 제한된 보기로 연 상태에서(편집 사용을 누르지 않음) "
+                          "'python excel.py write --range A1 --value x'를 실행하면 '편집 사용' 안내로 멈추나요? (다른 통합문서에 쓰이지 않아야 함)")
+        record(ctx, "L11", "C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않음", manual, "")
+
+    def l12():    # C10 열린 저장된 통합문서 undo
+        path = ctx.path("L_undo.xlsx")
+        wb = com_retry(lambda: xl_app().Workbooks.Add())
+        com_retry(lambda: wb.SaveAs(path))
+        run_cli("excel.py", "write", "--target", path, "--range", "A1", "--value", f"L되돌림 {tag}")
+        d, c, r, e = run_cli("office.py", "undo", "--app", "excel")
+        disk = (d or {}).get("pre_undo_disk_backup", "")
+        record(ctx, "L12", "C10 열린 저장된 통합문서 undo: 디스크 파일 백업(pre_undo_disk_backup)과 preview 안내", _ok(d) and disk and os.path.isfile(disk)
+               and "디스크" in (d or {}).get("preview", ""), f"pre_undo_disk_backup={disk}", d, c, r, e)
+        try:
+            off_wb = _lookup_doc("excel", "L_undo.xlsx")
+            if off_wb is not None:
+                off_wb.Close(SaveChanges=False)
+        except Exception:
+            pass
+
+    def l13():    # C11 필터로 숨긴 행이 있는 표에 --append
+        run_cli("excel.py", "write", "--sheet", "L_FLT", "--new-sheet", "--range", "A1", "--values", '[["이름","값"],["a",1],["b",2],["c",3]]')
+        ws = xl_sheet("L_FLT")
+        com_retry(lambda: ws.Range("A1:B4").AutoFilter(Field=2, Criteria1="<3"))
+        d, c, r, e = run_cli("excel.py", "write", "--sheet", "L_FLT", "--range", "A1", "--append", "--values", '[["d",4]]')
+        com_retry(lambda: ws.ShowAllData() if ws.FilterMode else None)
+        vals = com_retry(lambda: ws.Range("A4:A5").Value)
+        record(ctx, "L13", "C11 필터로 숨긴 행이 있어도 --append는 숨은 행을 덮지 않고 그 아래에", _ok(d) and vals == (("c",), ("d",)),
+               f"A4:A5={vals}", d, c, r, e)
+
+    def l14():    # C12 닫힌 파일 freeze가 저장되는지 (추정 55%: 확인만)
+        import openpyxl
+        path = ctx.path("L_freeze.xlsx")
+        wb = openpyxl.Workbook()
+        wb.active["A1"] = "머리"
+        wb.save(path)
+        d, c, r, e = run_cli("excel.py", "range", "--target", path, "--action", "freeze", "--range", "A2")
+        got = openpyxl.load_workbook(path).active.freeze_panes
+        record(ctx, "L14", "C12(확인만) 닫힌 파일 freeze가 파일에 저장됨", _verified(d) and got == "A2", f"파일의 freeze_panes={got}", d, c, r, e)
+
+    def l15():    # C13 OneDrive (확인만)
+        manual = ask(ctx, "OneDrive/SharePoint에서 연 통합문서(주소가 https://...)에 excel.py write 후 office.py undo를 하면 "
+                          "저장 없이 닫히지 않고 되돌려지나요? (OneDrive 문서가 없으면 s)")
+        record(ctx, "L15", "C13(확인만) OneDrive 통합문서 undo", manual, "")
+
+    for tid, title, fn in (("L1", "통화 열", l1), ("L2", "+/- 글", l2), ("L3", "수식 값", l3), ("L4", "표 위 앵커", l4),
+                           ("L5", "번호 목록", l5), ("L6", "표 뒤 표", l6), ("L7", "그림 스타일", l7), ("L8", "목차", l8),
+                           ("L9", "변경 추적", l9), ("L10", "바닥글 개체틀", l10), ("L11", "제한된 보기", l11),
+                           ("L12", "열린 문서 undo", l12), ("L13", "숨은 행 append", l13), ("L14", "닫힌 파일 freeze", l14),
+                           ("L15", "OneDrive", l15)):
+        run_test(ctx, tid, title, fn)
+
+
+# ---------------------------------------------------------------------------
+# M. 2026-11-09 검토 실기 확인 (Outlook, --skip-outlook이면 건너뜀): C14~C18
+# ---------------------------------------------------------------------------
+def test_M(ctx):
+    def m1():     # C14 받은 시각 표기
+        d, c, r, e = run_cli("outlook.py", "list", "--limit", "1")
+        got = ((d or {}).get("mails") or [{}])[0].get("received", "")
+        manual = ask(ctx, f"받은 편지함 맨 위 메일의 받은 시각이 Outlook 화면과 같은 현지 시각인가요? (도구: {got})")
+        record(ctx, "M1", "C14 received가 현지 시각이고 '+00:00'이 붙지 않음", _ok(d) and "+00:00" not in got and manual is not False,
+               f"received={got}", d, c, r, e)
+
+    def m2():     # C15 맨 앞 창
+        ask(ctx, "Outlook에서 메일 하나를 새 창으로 열어 두고, 목록에서 다른 메일을 선택한 뒤 목록 창을 맨 앞에 두세요. 준비됐나요?")
+        d, c, r, e = run_cli("outlook.py", "current")
+        manual = ask(ctx, f"도구가 고른 메일이 목록에서 선택한 메일인가요? (제목: {((d or {}).get('mail') or {}).get('subject')})")
+        record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)", manual, "", d, c, r, e)
+
+    def m3():     # C16 SMTP 주소로 보낸 사람 찾기
+        me = ctx.args.self_email
+        if not me:
+            record(ctx, "M3", "C16 search --from <SMTP 주소> (사내 Exchange 보낸 사람)", ENV_SKIP, "--self-email 없음")
+            return
+        d, c, r, e = run_cli("outlook.py", "search", "--from", me, "--folder", "sent", "--limit", "3")
+        record(ctx, "M3", "C16 search --from <SMTP 주소>가 사내 Exchange 보낸 사람(보낸 편지함의 내 메일)을 찾음",
+               _ok(d) and (d or {}).get("count", 0) >= 1, f"count={(d or {}).get('count')}", d, c, r, e)
+
+    def m4():     # C17 대화 상자가 떠 있을 때 (눈 확인)
+        manual = ask(ctx, "Outlook에 대화 상자(예: 옵션 창)를 띄운 채 'python outlook.py new --to a@x.com --subject t --body b'를 실행하면 "
+                          "UNVERIFIED와 '다시 실행하지 말고' 안내가 나오고 임시 보관함에 초안이 하나만 있나요?")
+        record(ctx, "M4", "C17 작성 창을 못 띄우면 초안 정보와 함께 UNVERIFIED", manual, "")
+
+    def m5():     # C18 서명 로고 (확인만)
+        manual = ask(ctx, "서명에 로고 그림이 있는 받은 메일에 'outlook.py attachments --id <번호>'를 하면 로고가 첨부로 나오지 않나요? (해당 메일이 없으면 s)")
+        record(ctx, "M5", "C18(확인만) 본문 그림(서명 로고)은 첨부로 세지 않음", manual, "")
+
+    for tid, title, fn in (("M1", "받은 시각", m1), ("M2", "맨 앞 창", m2), ("M3", "SMTP 보낸 사람", m3),
+                           ("M4", "대화 상자", m4), ("M5", "서명 로고", m5)):
+        run_test(ctx, tid, title, fn)
+
+
 GROUPS = [("A", test_A), ("B", test_B), ("C", test_C), ("D", test_D), ("E", test_E), ("F", test_F), ("G", test_G),
-          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K)]
+          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K), ("L", test_L), ("M", test_M)]
 
 
 def agent_summary(problems, counts, path, err_path, shots, closed, unverified):
@@ -2496,6 +2718,7 @@ def main():
         selected = set(known)
     if args.skip_outlook:
         selected.discard("G")
+        selected.discard("M")
     require_pywin32()
 
     pythoncom.CoInitialize()

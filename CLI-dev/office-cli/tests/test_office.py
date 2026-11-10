@@ -2247,3 +2247,69 @@ def test_open_timeout_env(monkeypatch):
     assert off.open_timeout() == 30.0
     monkeypatch.setenv("OFFICE_CLI_OPEN_TIMEOUT", "0")
     assert off.open_timeout() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 C9: 활성 통합문서가 없으면(제한된 보기, 숨은 PERSONAL.XLSB만) 쓰기는 다른 통합문서로 넘어가지 않음
+# ---------------------------------------------------------------------------
+
+
+def test_c9_write_without_active_workbook_does_not_fall_back(monkeypatch):
+    class _Win:
+        def __init__(self, visible):
+            self.Visible = visible
+
+    class _Wins:
+        def __init__(self, visible):
+            self.items = [_Win(visible)]
+            self.Count = 1
+
+        def __call__(self, i):
+            return self.items[i - 1]
+
+    class _Wb:
+        def __init__(self, name, visible=True):
+            self.Name, self.FullName, self.Windows = name, "C:\\x\\" + name, _Wins(visible)
+
+    class _Books:
+        def __init__(self, books):
+            self.books, self.Count = books, len(books)
+
+        def __call__(self, i):
+            return self.books[i - 1]
+
+    class _App:
+        ActiveWorkbook = None
+
+        def __init__(self, books):
+            self.Workbooks = _Books(books)
+    app = _App([_Wb("PERSONAL.XLSB", visible=False), _Wb("보호보기.xlsx")])
+    monkeypatch.setattr(off, "find_apps", lambda kind: [app])
+    info = off.get_active("excel")
+    assert info["name"] == "보호보기.xlsx" and info.get("fallback") is True, info     # 읽기는 보이는 첫 문서 (숨은 PERSONAL 제외)
+    with pytest.raises(rt.UserDecisionError) as ei:
+        off.resolve_target("excel", "active", readonly=False)
+    assert "편집 사용" in str(ei.value)
+    assert off.resolve_target("excel", "active", readonly=True)["doc"].Name == "보호보기.xlsx"
+
+
+def test_c10_undo_of_open_document_keeps_disk_file_and_says_so(tmp_path, monkeypatch, capsys):
+    """2026-11-09 검토 C10: 열린 문서를 되돌리면 스냅샷이 디스크 파일을 덮음. 덮기 전 디스크 파일을 남기고 preview에 알림."""
+    fake, _ = make_win32com()
+    monkeypatch.setattr(off, "win32com", fake)
+    monkeypatch.setattr(off, "pythoncom", None)
+    orig = tmp_path / "a.xlsx"
+    orig.write_bytes(b"disk-version")
+    wb = FakeWorkbook(str(orig))
+    off.save_snapshot("excel", wb, "excel", "write")
+    opened = []
+
+    class _Books:
+        def Open(self, p):
+            opened.append(p)
+    app = type("A", (), {"Workbooks": _Books()})()
+    monkeypatch.setattr(off, "match_open", lambda kind, target, docs=None, option="--target": {"app": app, "doc": wb})
+    code, out = run_office(capsys, "undo")
+    assert code == 0 and out["restored_as"] == "reopened_in_office", out
+    assert open(out["pre_undo_disk_backup"], "rb").read() == b"disk-version" and "디스크" in out["preview"], out
+    assert orig.read_bytes() == b"snapshot-of-a.xlsx" and opened, out

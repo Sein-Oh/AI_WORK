@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlkit_helpers import KIT  # noqa: E402
 import _ml_runtime as rt  # noqa: E402
 
-SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map")
+SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")
 MAX_SKILL_BYTES = 6 * 1024          # 경량 LLM 컨텍스트: 스킬 하나 6KB 이하 (AGENTS.md "사용법 단순성" 7)
 
 
@@ -88,7 +88,7 @@ def test_skill_options_exist_in_argparse():
 
 def test_every_script_is_in_its_skill():
     want = {"ml-train": ["ml_train.py"], "ml-predict": ["ml_predict.py"], "ml-report": ["ml_report.py", "ml_export.py"],
-            "ml-map": ["ml_map.py"]}
+            "ml-map": ["ml_map.py"], "ml-dataset": ["ml_dataset.py"]}
     for name, scripts in want.items():
         text = _read(name)
         for s in scripts:
@@ -99,13 +99,15 @@ def test_every_script_is_in_its_skill():
 def test_skill_mentions_features():
     """경량 LLM은 스킬에 없는 기능을 '지원 안 함'으로 답함: 기능마다 맡은 스킬에."""
     need = {
-        "ml-train": ("--task classification", "--positive-class", "--dtypes", "--eval \"", "--exclude-where", "features.txt",
+        "ml-train": ("--task classification", "--positive-class", "--dtypes", "--eval \"", "ml-dataset", "features.txt",
                      "--history", "--dry-run", "goal_met", "improve_stopped", "delta_score",
                      "입력 열(피처)은 묻지 않는다", "--features \"<피처1>,<피처2>\""),
         "ml-predict": ("--model \"<데이터파일>\"", "model_chosen", "--file \"<새데이터파일>\"", "--save", "--find", "--vary", "--sweep",
                        "--maximize", "--minimize", "--where", "--suggest <개수>", "실험계획", "실제값 비교"),
         "ml-report": ("ml_report.py\" --file", "--title", "--slots", "ml_export.py\" --model", "최종 버전"),
         "ml-map": ("ml_map.py\" --file", "--find", "--vary", "--points", "extrapolated"),
+        "ml-dataset": ("ml_dataset.py\" pick --file", "ml_dataset.py\" exclude --file", "--where \"<조건>\"", "--rows", "--reason",
+                       "next_commands[0]", "--save"),
     }
     for name, needles in need.items():
         text = _read(name)
@@ -117,7 +119,7 @@ def test_removed_options_are_not_in_skills():
     """2.9.83: 최고 버전(--best)과 성능예측표 --keep, 2.9.84: 성능예측표 --inputs를 없앰. 스킬에 남으면 경량 LLM이 없는 옵션을 씀."""
     for name in SKILLS:
         text = _read(name)
-        for gone in ("--best", "--keep", "best_version", "최고 버전", "--inputs"):
+        for gone in ("--best", "--keep", "best_version", "최고 버전", "--inputs", "--exclude-where"):
             assert gone not in text, (name, gone)
 
 

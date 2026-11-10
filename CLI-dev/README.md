@@ -8,7 +8,7 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 
 | 도구 | 설명 | 스킬 |
 |---|---|---|
-| [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`CLI/ml-kit/skills/`](../CLI/ml-kit/skills/) (ml-train, ml-predict, ml-report, ml-map) |
+| [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`CLI/ml-kit/skills/`](../CLI/ml-kit/skills/) (ml-train, ml-predict, ml-report, ml-map, ml-dataset) |
 | [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`office-excel`](../CLI/office-cli/skills/office-excel/SKILL.md), [`office-doc`](../CLI/office-cli/skills/office-doc/SKILL.md), [`office-mail`](../CLI/office-cli/skills/office-mail/SKILL.md), [`office-spec`](../CLI/office-cli/skills/office-spec/SKILL.md), [`office-data`](../CLI/office-cli/skills/office-data/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
@@ -30,6 +30,8 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 - 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `CLI-dev\tests`)
   -> `beta`(`run_beta_check.py --agent`, F7 엑셀 재계산 포함) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
+- `pytest` 단계는 테스트 파일마다 따로 실행하고 동시에 `코어 수 - 1`개, 메모리 4GB마다 1개, 최대 3개씩 돌립니다(2026-11-10: 회사 PC에서 코어 수만큼 돌리자 메모리가 모자라 89분, 시간 초과 18건. 결과 표 비고에 동시 실행 수·코어·메모리) (`--pytest-workers N`, 1이면 하나씩.
+  2.9.85: 회사 PC에서 하나씩 돌리면 62분). 화면에는 파일이 끝날 때마다 한 줄과 실패(`[LIVE]`)만 나오고, 결과 파일 상세에는 파일마다의 출력이 들어갑니다.
 - `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.py`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\CLI\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
   시험 폴더(기본 `C:\CLI-dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\CLI-dev\work\gemma_runs_<시각>`에 남깁니다.

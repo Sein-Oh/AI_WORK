@@ -85,6 +85,17 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
      `chart` create, word `comment` add, ppt `write`, `notes` 쓰기): 아무것도 바꾸지 않고 STOP_RETRY. 되돌릴 수 있는 변경(`office.py undo`)이면
      message에 `[추천]` `--dry-run`만 뺀 같은 전체 명령, 명령에 `--overwrite`나 `delete`·`clear`가 들면 `needs_user_decision`과
      `[후보] 1) 미리보기 없이 실행` + 같은 번호의 `confirm_commands`(`destructive`, 사용자가 고른 뒤에만).
+- 출력 크기(1.4.97): 표 읽기 글자 상한 6000자. 닫힌 큰 xlsx를 읽다 명령 시간 제한 전에 닿으면 `read`는 읽은 데까지 `UNVERIFIED:`(`time_limited`), `export`·`check`·`transfer`는 STOP_RETRY(`--range`로 나눠). outlook 목록은 짧은 `id`만(긴 `entry_id`는 번호를 못 붙였을 때만), `folders`는 150개·깊이 5까지, reader `list`는 40개.
+- 활성 문서(1.4.96): `--target` 없는 쓰기는 앱에 활성 문서가 없으면(제한된 보기, 숨은 PERSONAL.XLSB만) 다른 문서로 넘어가지 않고 "편집 사용" 안내로 멈춥니다. 읽기는 보이는 첫 문서(숨은 문서 제외). 열린 저장된 문서의 `undo`는 덮기 전 디스크 파일을 `pre_undo_disk_backup`에 남깁니다.
+- 새 파일(1.4.95): 없는 `--target` 경로를 새로 만드는 것은 `excel write`, `word write`, `ppt write`뿐입니다. 그 밖의 쓰기 명령은 STOP_RETRY(비슷한 이름 `[후보]`).
+- `--save` 확장자(1.4.95): 그 명령이 쓰지 않는 확장자(`read --save a.xlsx`가 CSV만 씀)는 쓰는 형식으로 바꿔 저장하고 `recovered`로 알립니다.
+- 오류 로그(1.4.95): 명령·결과의 메일 주소는 `<메일 계정>`, 옵션 이름 없이 준 글은 `<N자 생략>`.
+- JSON 1줄 보장(1.4.93): 데이터 폴더를 만들 수 없어도(파일 경로, 읽기 전용) CONTINUE 횟수·오류 로그는 건너뛰고 JSON을 냅니다. 뒷정리에서
+  예외가 나도 `run_cli`가 가장 바깥에서 `ERROR:` JSON 1줄을 냅니다. stdout/stderr는 늘 `errors="replace"`(반쪽 이모지에도 죽지 않음).
+- `-`로 시작하는 글 값(1.4.93): `--query`, `--body`, `--value`, `--text`, `--find`, `--replace`, `--subject`, `--title`, `--search`, `--where` 등
+  글 값을 받는 옵션 바로 뒤의 `-40℃`, `-확인`은 도구의 옵션 이름이 아니면 값으로 받습니다(`--query=-40℃`와 같음).
+- 결과 키를 옵션처럼 쓴 것(1.4.93): `read --rows`(값 없음), `read ... rows`는 그것을 뺀 같은 명령을 `[추천]`(행 수는 결과의 `rows`). 같은 뜻 표로
+  바꿀 옵션이 값을 받아야 하는데 값이 없으면 `[추천]`하지 않습니다. `[추천]` 뒤는 늘 `python "<도구>" ...` 전체 명령입니다(`test_contract` 정적 검사).
 - 옵션은 긴 이름(`--file`, `--range` 등)만 있습니다(1.4.88, 한 글자 옵션 없음). 예전 한 글자 옵션(`-f`, `-r`, `-n` 등)을 쓰면 인자 오류(exit 2)와
   긴 이름으로 고친 전체 명령 `[추천]`(같은 뜻 표 `SAME_MEANING`, 도구별 `SHORT_OPTIONS`: `-n`은 outlook `--limit`, reader `--top`,
   excel `--name`, `-r`은 excel `--range`, reader `--regex`).
@@ -215,9 +226,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### excel.py
 | 명령 | 주요 옵션 |
 |---|---|
-| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--formulas`(수식 칸 목록, 아래), `--where "금액 >= 100; 부서 = 영업 | 부서 = 개발"`(조건에 맞는 행만, `;` 그리고, `|` 또는, 아래), `--max-rows`, `--save [경로.csv]`(저장한 CSV를 다시 읽어 빈 행을 뺀 행 수 확인). `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지(시트를 훑는 것은 범위 생략·`B:B`·`5:7`일 때만) |
-| `info` | 시트별 사용 범위와 차트. `--all`: 열린 통합문서 전체. `--detail`: 차트 종류·계열 수·위치와 데이터를 가리는 차트 경고 |
-| `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`(`.md`는 word·ppt와 같은 마크다운 해석으로 첫 번째 표만: 코드 블록 안 `|` 줄과 두 번째 표는 빼고 정렬 줄 `|--|`는 빼며 `\|`는 칸 글자 `|`. 표가 없으면 한 줄 = 한 행), `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략. `--formula`의 상대 참조는 실제로 쓴 행 기준으로 옮기고 `$` 참조는 그대로, 옮기지 못하면 쓰지 않고 STOP_RETRY), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이나 수식(빈 글을 내는 수식 포함)이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`). `--append`도 쓸 칸을 확인하고, `--formula`/`--value`도 쓸 열 수만큼 가장 아래 행을 찾습니다. 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 표(`--file`, `--values`)나 `--header`를 쓰면 쓴 열의 너비를 자동으로 맞춥니다(`--no-autofit`이면 너비 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`)는 글자 그대로 씁니다 |
+| `read` | `--range`, `--sheet`, `--search 글자`(셀 주소 반환), `--formulas`(수식 칸 목록, 아래), `--where "금액 >= 100; 부서 = 영업 | 부서 = 개발"`(조건에 맞는 행만, `;` 그리고, `|` 또는, 아래), `--max-rows`, `--save [경로.csv]`(저장한 CSV를 다시 읽어 빈 행을 뺀 행 수 확인). `--target`이 CSV/TSV 파일이면 Excel 없이 읽음(인코딩 자동 판별, 숫자 변환, `source: file(csv)`). 닫힌 xlsx도 열린 문서와 같게 읽음: 범위를 생략하면 데이터가 시작하는 칸부터(UsedRange처럼), 거꾸로 준 범위(`C5:A1`)는 `A1:C5`, 크기 정보가 없는 파일도 실제 데이터 끝까지(시트를 훑는 것은 범위 생략·`B:B`·`5:7`일 때만), 크기 정보(`<dimension>`)가 실제보다 작은 파일은 시트 XML에서 내용이 있는 마지막 칸까지 넓힘(1.4.92), 차트 시트는 읽지 않고(활성이면 첫 워크시트) `--sheet`로 주면 STOP_RETRY(1.4.93). 1.4.95: 크기가 칸 수 상한을 넘는 파일(떠돌이 `XFD1048576` 등)은 값이 있는 칸만으로 범위를 셈, `B:B`·`5:7`도 끝쪽 빈 행을 뺌, `--search "1,000"`·`"25%"`는 숫자 칸(1000, 0.25)도 찾음, 기간 칸은 `30:00:00`, xlsx가 아닌 zip·깨진 시트는 STOP_RETRY |
+| `info` | 시트별 사용 범위와 차트. `--all`: 열린 통합문서 전체. `--detail`: 차트 종류·계열 수·위치와 데이터를 가리는 차트 경고. 닫힌 xlsx는 Office 없이 시트 목록(`used_range`, `rows`, `cols`, `hidden`, 차트 시트는 `kind: chart`, 1.4.98, `--detail`은 Excel) |
+| `write` | `--range` 시작 셀 또는 범위. 입력은 `--value`, `--values JSON`, `--file (.csv/.md 표/.txt)`(`.md`는 word·ppt와 같은 마크다운 해석으로 첫 번째 표만: 코드 블록 안 `|` 줄과 두 번째 표는 빼고 정렬 줄 `|--|`는 빼며 `\|`는 칸 글자 `|`. 표가 없으면 한 줄 = 한 행), `--formula F1 [F2 ...]` 중 하나. `--header "a,b"`, `--append`(쓸 열 전체에서 가장 아래 행 다음에, 시작 행의 머리글과 같으면 생략. `--formula`의 상대 참조는 실제로 쓴 행 기준으로 옮기고 `$` 참조는 그대로, 옮기지 못하면 쓰지 않고 STOP_RETRY), `--sheet`, `--new-sheet`(없는 시트를 새로 만들 때만). 쓸 칸에 값이나 수식(빈 글을 내는 수식 포함)이 있으면 아무것도 쓰지 않고 `needs_user_decision`(사용자가 원하면 `--overwrite`). `--append`도 쓸 칸을 확인하고, `--formula`/`--value`도 쓸 열 수만큼 가장 아래 행을 찾습니다. 모든 검사를 마친 뒤에 씁니다(실패하면 시트는 그대로). 표(`--file`, `--values`)나 `--header`를 쓰면 쓴 열의 너비를 자동으로 맞춥니다(`--no-autofit`이면 너비 그대로). 쓴 뒤 칸을 다시 읽어 비교합니다(같으면 `VERIFIED:`, 다르면 `UNVERIFIED:` + 다른 칸). 숫자만 `--formula`로 주면 `--values`를 `[추천]`. 칸 하나에 수식 여러 개면 옆 열 데이터의 마지막 행까지 범위를 `[추천]`하고, 옆 열이 비었으면 사용자에게 마지막 행을 묻게 합니다(1.4.93, 전에는 100행을 지어냄). Excel이 다른 값으로 바꿔 버릴 글자(앞자리 0 코드 `01234`, 15자리 초과 숫자, `1-2`·`3/4`, `(100)`, `1E5`, `+ - @ =`로 시작하는 글(1.4.94))는 글자 그대로 씁니다. 글을 썼는데 다시 읽은 값이 글이 아니면 날짜 모양 글·true/false만 인정하고 그 밖은 `UNVERIFIED:`. 수식은 칸 값도 읽어 오류 값(`#NAME?` 등)이면 `UNVERIFIED:`, 동적 배열 함수(`UNIQUE`, `FILTER`, `SORT` 등)는 `Formula2`로 씁니다(없으면 `Formula`). 통화 서식 칸(pywin32의 Decimal)은 숫자로 읽습니다 |
 | `write --cells` | 흩어진 칸 여러 개에 각각 다른 값을 한 번에: `--cells "C6=ft; C7=℃; 계산기!C11=20"`(항목은 `;` 또는 줄바꿈으로 구분, 값에 `;`가 있으면 `'a;b'`처럼 따옴표. 따옴표 묶음은 같은 따옴표로 닫히고 바로 뒤가 `;`/끝일 때만이라 `C6='007; C7=5`의 `'007`은 엑셀 글자 표시로 값 `'007`(글자 007). `=`로 시작하는 값(수식)은 큰따옴표·괄호 안의 `;`를 나누지 않음: `=IF(A1="a;b",1,2)`, `=SUM(A1;A2)`는 엑셀이 받지 않으면 `,`로 고친 명령을 `[추천]`) 또는 칸값 파일 `--cells "칸값.csv"`(`.csv/.tsv/.md 표/.txt`, 열: 칸, 값. 첫 행이 `칸`·`셀`·`cell` 등이면 머리글. `excel.py comment --file`과 같은 모양. 셋째 열 이후에 글이 있으면(값의 쉼표가 열을 나눔: `C7,1,500`) 하나도 쓰지 않고 STOP_RETRY: 줄 번호와 "값을 큰따옴표로 감싸세요", "고친 줄: 3번째 줄 `C7,"1,500"`"(`[추천]`은 쓰지 않음: 인자 값으로 읽히지 않게)). 칸에 `'요약'!C3`처럼 시트를 적을 수 있고 없으면 `--sheet`·활성 시트(없는 시트는 만들지 않고 `[추천]`/`[후보]`). 범위(`C6:C8=0`)는 그 칸 모두에 같은 값. `=`로 시작하는 값은 수식(`C8==C6*2`), 그 밖은 `--value`처럼 숫자는 숫자, 앞자리 0 코드 등은 글자 그대로. 하나라도 잘못되면(칸 주소 아님, `=` 없음, 같은 칸에 다른 값 두 번) 하나도 쓰지 않고 STOP_RETRY(항목 번호, 오류 로그에는 수만). 값이 있는 칸은 모두 모아 `needs_user_decision` 하나(칸과 기존 값 5개까지, 빈 칸도 쓰지 않음) -> 사용자가 원하면 `--overwrite` 한 번. 이미 같은 값인 칸은 바꾸지 않음(`unchanged`). `--dry-run`: `planned`(변경/덮어쓰기/그대로)와 `confirm_commands[0]`(사용자 확인 뒤에만)(덮어쓸 칸이 있으면 `--overwrite` 포함). 되돌리기 지점 하나, 쓴 칸을 모두 다시 읽어 확인(`count`, `cells` 30개까지와 `truncated`, `applied`). 한 번에 500칸까지. `--value`, `--values`, `--file`, `--formula`, `--header`, `--append`, `--new-sheet`, `--range`와 함께 쓰지 않음. `write --file`에 머리글이 `칸, 값`인 파일을 주면 표로 쓰지 않고 `--cells` 전체 명령을 `[추천]` |
 | `replace` | `--find/--replace` 또는 `--map JSON`, `--whole`, `--all-sheets`, 서식 옵션. 수식 셀은 내용 보존. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 찾은 칸이 있어도 바꿀 글이 같고 서식이 없으면(수식 칸 포함) 바꾼 칸으로 세지 않음(`changed_cells` 0, `unchanged_same_text`). `--range '요약'!A1:D9`처럼 시트를 주면 그 시트에서 읽고 씀. `--all-sheets`와 시트 이름이 든 `--range`는 함께 쓸 수 없음. 찾을 글이 빈 문자열(`--find ""`, `--map` 키 `""`)이면 STOP_RETRY(빈 칸 채우기는 `write`). 서식 옵션은 `style`과 같음 |
 | `style` | `--theme navy\|slate\|teal\|emerald`(머리글 색·숫자 열 서식·합계 행·줄무늬, `--no-zebra`면 줄무늬 없음), `--bg`, `--color`, `--bold`, `--italic`(기울임), `--size`, `--align left\|center\|right`, `--number-format`, `--border hairline\|thin\|medium\|thick\|none`(격자), `--wrap`(자동 줄바꿈 켜기), `--highlight ">=100:pink"`(조건부 서식. 값의 `"`와 `포함:` 규칙의 `~ ? *`는 글자 그대로 찾음), `--clear`. 적용 뒤 준 서식(배경·글자색·굵게·기울임·크기·숫자 서식·줄바꿈, 테마 머리글 색, 조건부 서식 수)을 다시 읽어 비교(R1) 떨어진 칸 여러 개는 `--range "B2;D5;F7"`(`;`, 시트 접두는 맨 앞 한 번) 명령 한 번으로 칠하고 칸마다 다시 읽어 확인. `,`로 이으면 `;`로 고친 명령 `[추천]`, 여러 칸에 `--theme`은 받지 않음 |
@@ -226,7 +237,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border\|insert\|delete\|sort`(insert/delete/sort는 아래). `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `border`는 `--weight hairline\|thin\|medium\|thick\|none`(기본 thin, `none`은 테두리 지우기)과 `--box`(외곽선만, 안쪽 선은 그대로)이며 선 모양·굵기를 다시 읽어 비교(`style --border`는 격자만, 외곽선만은 `range --action border --box`). `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열. 이미 그 상태면(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 값이 없는 범위의 `clear --type contents`, 같은 자리로 `copy`/`move` 등) 바꾸지 않고 "바뀐 것 없음"(`unchanged: true`). `hide`/`unhide`와 `clear`(전체·서식)는 엑셀이 일부만 숨김·사용 범위 밖 유효성 검사를 알려 주지 않을 수 있어 늘 바꾼 것으로 봅니다 |
 | `comment` | 칸 메모(이전 방식 메모, `Range.Comment`/`AddComment`). `--action list`(기본): 시트(또는 `--range`)의 메모마다 `no, cell, author, text`(메모 하나 1,000자까지, 넘으면 `text_truncated`), 행·열 순서, 100개 또는 글자 상한까지 표시하고 넘으면 `truncated` + `--start`로 이어 보는 명령. 0개면 `VERIFIED: 0건`. `--action add --range B5 --text "의견"`(`--text`/`--file`이 있으면 `--action add`가 없어도 달기, `\n`은 줄바꿈, 범위를 주면 칸마다 같은 메모, 한 번에 500개까지): `--file 메모.csv`(`.csv/.tsv/.md 표`, 열: 칸, 메모. 첫 행이 `칸`·`셀`·`cell` 등이면 머리글. 칸에 `'요약'!C3`처럼 시트를 적을 수 있고 없으면 `--sheet`·활성 시트. 값은 글자 그대로. 셋째 열 이후에 글이 있으면 `write --cells` 칸값 파일과 같이 하나도 달지 않고 STOP_RETRY)로 여러 개를 한 번에 달며, 한 줄이라도 잘못되면(칸 주소가 아님, 메모 없음) 하나도 달지 않고 STOP_RETRY(파일 줄 번호, 오류 로그에는 줄 번호만). 같은 칸이 여러 줄이면 한 메모로 합치고 `warnings`. 이미 메모가 있는 칸이 있으면 아무것도 달지 않고 `needs_user_decision`(message에 칸과 기존 메모 앞부분, 오류 로그에는 칸 주소만): 사용자가 고르면 `--overwrite`(새 메모로 바꿈) 또는 `--append`(기존 메모 아래 줄에 덧붙임, 둘은 함께 쓸 수 없음). 이미 같은 메모가 있거나 `--append`인데 기존 메모 끝 줄이 붙일 메모와 같으면 그 칸은 그대로(`unchanged`, 같은 명령을 다시 실행해도 두 번 붙지 않음, 모두 그대로면 되돌리기 지점도 남기지 않음). `--action delete --range B2:D20`(`--range` 필수): 그 범위의 메모를 지움(0개면 바꾼 것 없음, 되돌리기 지점도 남기지 않음). add/delete 모두 `--dry-run`(`planned`, `confirm_commands`: 이미 메모가 있는데 `--overwrite`/`--append`가 없으면 두 명령을 모두 줌)과 되돌리기 지점(`office.py undo`), 단 뒤·지운 뒤 메모를 다시 읽어 확인(`applied`, 다르면 `UNVERIFIED:`). 엑셀이 메모 달기를 거절하면(보호된 시트 등) STOP_RETRY |
 | `check` | 표의 값을 등록된 규격서와 한 번에 대조: `--range B2:D50 --item-col B --value-col D [--section-col E] [--unit-col E] --spec "<파일 또는 폴더>" [--section "3.2"] [--save "대조결과.xlsx"]`. 아래 "check" |
-| `compare` | 표 두 판 비교(BOM 개정 비교, Excel 불필요): `--target "<이전 판>" --target2 "<새 판>" [--sheet <이전 시트>] [--sheet2 <새 시트>] [--key "<머리글 이름>[,<머리글 이름>]"] [--save "<결과.xlsx>"] [--overwrite]`. 아래 "compare" |
+| `stats` | 표 집계(1.4.98, 닫힌 xlsx·CSV는 Excel 불필요): 첫 행은 머리글. 숫자 열은 `sum`, `mean`, `min`, `max`, `count`(숫자로 읽지 못한 칸은 `not_number`), 글자 열은 `count`, `unique`, `top`(많이 나온 값 10개). `--columns 금액,수량`(생략 시 숫자 열 전부, 앞자리 0 코드는 글자), `--by 부서`(묶음별, 이름순), `--where`(read와 같은 식), `--top N`(첫 집계 열 합계가 큰 묶음 N개), `--save [경로.csv]`. 결과 `groups`(묶음마다 `by`, `rows`, `stats`), `rows_used`, `group_count`, 묶음 50개를 넘으면 `truncated`와 `full_result_file`. `preview`에 숫자를 글로 |
+| `compare` | 표 두 판 비교(BOM 개정 비교, Excel 불필요, 차트 시트는 보지 않음): `--target "<이전 판>" --target2 "<새 판>" [--sheet <이전 시트>] [--sheet2 <새 시트>] [--key "<머리글 이름>[,<머리글 이름>]"] [--save "<결과.xlsx>"] [--overwrite]`. 아래 "compare" |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
@@ -293,8 +305,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - `read --where "<열> <연산자> <값>; ... | ..."`: 읽은 범위의 첫 행을 머리글로 보고, 조건에 맞는 행만 돌려줍니다. 열린 문서, 닫힌 xlsx, CSV 모두.
   - `;`는 그리고(AND), `|`는 또는(OR)이고 `;`가 먼저 묶입니다: `부서 = 영업; 금액 > 250 | 부서 = 기획`은 (영업이고 250 초과) 또는 기획. 두 묶음에 맞는 행도 한 번만.
   - 열은 머리글 이름(대소문자·공백·`_-.` 무시, 위 이름 비교 규칙) 또는 열 문자(`B`). 이름을 찾지 못하면 머리글 이름 `[후보]`(오류 로그에는 남기지 않음).
-  - 연산자 `>= <= > < = != ~`(`~`는 포함). 숫자 칸과 숫자 값은 숫자로(`1,000`도 숫자), 날짜 칸은 `YYYY-MM-DD`(시각 포함 가능) 값과 날짜로,
-    그 밖은 앞뒤 공백을 뺀 글자로 대소문자 없이 비교합니다. 크기 비교인데 칸이 숫자가 아니면(빈 칸, 글자) 맞지 않습니다. `금액 = `은 빈 칸.
+  - 머리글(1.4.99): 조건의 열 이름이 첫 행에 없으면 위 10행 안에서 모든 조건 열 이름이 있는 행을 머리글로 씁니다(제목 행 아래의 표, `header_row_found`). 범위는 `금액 >= 100; 금액 <= 500`, 여러 값 중 하나는 `부서 = 영업 | 부서 = 개발`.
+  - 연산자 `>= <= > < = != ~ !~`(`~`는 포함, `!~`는 포함하지 않음). 숫자 칸과 숫자 값은 숫자로(`1,000`, `50%`(0.5), `1500원`처럼 숫자 뒤 단위 글자도 숫자, 글 칸도 같음),
+    날짜는 `2026-01-10`, `2026-1-10`, `2026/01/10`, `2026.1.10`, `2026년 1월 10일`(시각 포함 가능)과 날짜 칸·날짜 글 칸을 날짜로,
+    그 밖은 앞뒤 공백을 뺀 글자로 대소문자 없이 비교합니다. `=`/`!=`에서 앞자리 0이 있는 글(`010`)은 글자 그대로(`10`과 다름), 글 칸끼리는 둘 다 숫자 모양일 때만 숫자로.
+    크기 비교인데 칸이 조건 값과 같은 종류가 아니면(빈 칸, 글자) 맞지 않고, 그 열에 비교할 수 있는 칸이 하나도 없으면 0건이 아니라 `STOP_RETRY`(1.4.92). `금액 = `은 빈 칸.
     값의 앞뒤 따옴표는 뺍니다. 값에 `;`나 `|`가 있으면 따옴표로 감쌉니다(`메모 = 'a;b'`, PowerShell에서는 작은따옴표). 따옴표 안은 나누거나 고치지 않습니다.
   - 결과: `values`(첫 행은 머리글, 다음은 맞는 행), `row_numbers`(`values`와 같은 순서의 시트 행 번호, 첫 값은 머리글 행), `count`(맞는 행 수),
     `data_rows`(머리글 밖 행 수), `where`. 0건이면 `count: 0`, `values`는 머리글만, `VERIFIED: 0건.`(R2).
@@ -411,6 +426,12 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `replace` | `--find/--replace`(빈 문자열은 삭제) 또는 `--map`, `--match-case`, `--whole-word`, `--bold`, `--color`, `--highlight`. 머리글/바닥글/글상자 포함. 문구당 5,000곳 상한에 닿으면 남은 곳을 확인하지 못해 `UNVERIFIED:`(`limit_reached`). `--match-case`가 없으면 대소문자만 바꾸는 치환(`office` -> `Office`)도 확인됨. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 바꿀 글이 찾는 글과 같고 서식이 없으면 바꾸지 않고 `replaced` 0, 찾은 곳 수는 `unchanged_same_text`. 대소문자만 다른 치환(`iphone` -> `iPhone`)에서 이미 바꿀 글 그대로인 곳은 바꾸지 않고 `unchanged_same_text`로 셈. 찾을 글이 빈 문자열이면 STOP_RETRY |
 | `export` | `--save 경로.pdf\|.docx`, `--page-number`(사본에만) |
 
+word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단락을 `--anchor`로 주면 앵커와 표 사이에 빈 단락을 만들어 넣고(표 첫 칸에 들어가지 않게), `--pos replace`는 내용을 넣은 뒤 앵커 단락을 지웁니다. 새 번호 목록은 1부터, 표 뒤에 넣는 표·요약 상자 앞에는 빈 단락, 그림·목차 단락은 본문 스타일, `--toc`은 내용을 넣은 뒤 갱신하고 제목을 넣는 쓰기는 문서의 목차도 갱신합니다. PPT `write`는 바닥글·날짜·슬라이드 번호 개체틀을 쌓는 기준에서 빼고 `--text`도 공간이 없으면 새 슬라이드에 넣습니다.
+
+`word.py read --save`·`ppt.py read --save`의 .md(1.4.92)는 `write --file`이 같은 모양으로 되읽는 형식입니다: 제목은 `#` 수준(슬라이드 제목은 `#`),
+단락은 빈 줄로 나눈 한 줄, 슬라이드의 ` | ` 줄이 둘 이상 이어지면 마크다운 표. 위치 표지("단락 N")는 넣지 않습니다. 줄 머리의 `#`, `-`, `*`, `+`, `|`, `>`,
+`1.`은 역슬래시로 써서(`\#`, `1\.`) 제목·목록·표가 되지 않게 하고, 되읽을 때 역슬래시를 뺍니다. reader `read --save`는 근거 줄이 있는 그대로입니다.
+
 마크다운(`word write`의 `.md`·`--text`, `ppt write`의 `.md`) 해석(코드 줄의 `**`·`__`를 굵게로 읽지 않음): 펜스 코드 블록(백틱 3개 또는 `~~~`, 닫지 않으면 끝까지)은 줄마다 단락 하나로
 글자 그대로 넣고(들여쓰기 유지, 빈 줄 생략, 안의 `#`·`-`·`1.`을 제목·목록으로 읽지 않음, 펜스 줄은 넣지 않음).
 `ppt write --text`는 마크다운 블록 해석 없이 줄마다 한 줄(`-`/`1.` 목록, `**` 굵게 표시 제거)이고, 펜스 안 코드 줄만 위와 같이 글자 그대로입니다.
@@ -426,6 +447,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - word 굵게 위치는 Word처럼 UTF-16 단위로 셉니다(앞에 이모지 같은 BMP 밖 글자가 있어도 굵게가 밀리지 않음).
 
 굵게 표시와 목록 번호:
+- 표 칸(1.5.1): 마크다운 표 칸의 `**x**`는 표시를 빼고, 칸 전체가 굵게면 그 칸을 굵게 씁니다(워드·PPT).
 - 본문의 `**x**`, `__x__`는 굵은 x. `__`는 CommonMark처럼 앞에 글자·숫자가 없을 때만 열고 뒤에 없을 때만 닫습니다(`report__2024__final.xlsx`는 그대로,
   `__init__ 메서드`는 굵은 `init`. 코드 이름은 코드 블록이나 `--callout`으로 넣으면 글자 그대로). `**`는 단어 안에서도 굵게입니다.
 - 제목(word 모든 수준, `--heading`, `--title`)과 PowerPoint 슬라이드 제목(`.md`의 `#`·`##`, `ppt write --title`, 3단계 이하 제목 줄)은 같은 규칙으로
@@ -445,6 +467,10 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `notes` | 발표자 노트. 읽기: `--slides 1-3`(생략 시 전체, `--slide 3`도 됨), 노트가 있는 슬라이드만 `no, title, notes`. 쓰기: `--slide N --text 노트`(줄바꿈 `\n`) 또는 `--file 노트.md`. 기존 노트가 있으면 `--append`(뒤에 덧붙이기) 또는 `--overwrite`(바꾸기)가 필요하고, 둘 다 없으면 지우지 않고 `needs_user_decision`. 노트 본문 개체틀이 없으면 쓰지 않음. 쓴 뒤 다시 읽어 확인(`verified`, `before`, `after`). 이미 같은 노트면 쓰지 않고 `unchanged: true` |
 
 ### outlook.py
+- 항목 읽기 실패(1.4.92): `list`/`search`가 항목을 읽지 못하면 건너뛰지 않고 셉니다. 일부면 `UNVERIFIED:`(읽지 못한 수, 일부 칸을 못 읽은 메일 수),
+  하나도 못 읽었으면 `STOP_RETRY`(Outlook 보안 확인 창에서 '허용'). 보낸 사람 주소처럼 칸 하나만 못 읽은 메일은 목록에 남깁니다.
+- 1.4.96: `received`는 현지 시각(`+00:00` 없음). `--id` 없는 `current`·`reply`·`forward`·`attachments`는 맨 앞 창이 목록이면 선택한 메일. `search --from`은 보낸 사람 SMTP 주소 속성도 대조(사내 Exchange). 작성 창을 못 띄우면(대화 상자) 초안 정보와 UNVERIFIED.
+- 작성 결과(1.4.92): `new`/`reply`/`forward`/`send`의 결과와 `preview`에 `to`와 있으면 `cc`·`bcc`.
 - 조회: `list [--folder --unread --limit --days --since]`, `search --query [--from --where all|subject|body --days --since]`, `read --id [--save]`, `current [--save]`, `folders`
 - 받은 날짜: `--days N`은 오늘 포함 최근 N일(1 = 오늘), `--since YYYY-MM-DD`는 그 날짜 0시부터. 함께 쓰면 STOP_RETRY. 결과에 `period`
   (`since`, `until`, `days`)와 preview의 기간. `list`는 Jet `[ReceivedTime] >= 'YYYY-MM-DD HH:MM'`(현지 시각, 월/일 순서가 지역 설정에 따라
@@ -544,6 +570,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `index --folder 폴더 [--depth 3 \| --recursive] [--max-files 300]` | 폴더의 문서를 내용 출력 없이 캐시에 등록. 결과: `count`, `indexed`, `updated`, `unchanged`, `failed`, `failures`(20개까지), `remaining`, `truncated`, `skipped_types`(지원하지 않는 확장자별 개수) |
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
 | `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`·`diff`·`excel.py check`와 같은 규칙: 공백을 하나로 보고 대소문자 무시, 장절 번호로 보이는 값(`2.1`, `3`, `A.1`)은 번호 경계를 지켜 `2.1`이 `2.1`·`2.1.3`(하위 절)에는 맞고 `2.10`·`12.1`에는 맞지 않음, 제목 글자는 부분 일치, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
+| `outline --file 파일 [--start N]` | 장절(제목) 목록(1.5.1): 제목마다 `units`(그 장절의 단위 번호 범위, `read --units`에 그대로), `page`, `level`, `number`. 200개씩, 넘으면 `next_commands`(`--start`) |
 | `diff --file 이전판 --file2 새판 [--section "3"] [--save 차이.xlsx\|.csv]` | 두 판 비교. 아래 "diff". `--save`가 그 밖의 확장자(`.md` 등)면 `.xlsx`로 저장하고 `warnings`로 알림 |
 | `search --query "A;B" \| "A|B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`confirm_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`). `applied`와 완료 CSV(`clear_done_...`, 20개를 넘을 때)는 지운 뒤 만들고, CSV의 `removed` 열이 실제로 지웠는지 |
@@ -552,7 +579,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 - 손상된 파일(깨진 XML, 압축 해제 실패, OLE 구조 오류)은 내부 오류가 아니라 STOP_RETRY "손상된 파일이라 읽을 수 없습니다".
   FileHeader가 없는 OLE 파일(이름만 `.hwp`인 `.doc`/`.xls` 등)은 STOP_RETRY "HWP 5.0 문서가 아닙니다".
 - `--pages`/`--units`(ppt `--slides`)의 범위는 문서 크기로 먼저 줄입니다(`1-999999999`도 바로 끝남).
-- 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD. 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY). EML은 지원하지 않습니다.
+- 지원 형식: PDF, HWP, HWPX, DOCX/DOCM, PPTX/PPTM, XLSX/XLSM, CSV, TXT, MD, EML(1.5.0). 그 밖의 확장자는 "지원하지 않는 형식입니다"(STOP_RETRY).
+- EML(1.5.0): 제목, 헤더(보낸 사람·받는 사람·참조·날짜), 본문 단락(글 본문, 없으면 HTML에서 뽑은 글), 첨부 이름을 단위로 읽고 첨부 안의 글은 읽지 않습니다. 전달된 메일은 "전달된 메일 ..." 단위(2단계까지). 장절은 `제목 (날짜, 보낸 사람)`. 검색은 메일 한 통에 결과 하나(`mail_hits`), 모두 메일이면 날짜 최신순, 검색어가 메일 안의 여러 곳에 나뉘어 있어도 맞음(`loc: 메일 전체`), 결과에 `mail`(제목·보낸 사람·날짜·첨부 이름)과 원본 `path`.
 - 문서가 많아 등록이 오래 걸리면 시간 제한(약 70초) 전에 `CONTINUE:`로 멈춥니다(R10, 위 출력 계약). 읽은 문서는 캐시에 저장되어 같은 명령을 다시 실행하면 건너뜁니다.
 - 읽지 못한 파일은 `<캐시 폴더>/index_failures.json`에 (경로, 수정 시각, 크기, 파서 버전, 사유)로 기록해, 파일이 그대로면 다음 실행(폴더 등록, `index --all`,
   검색 때 원본이 바뀐 캐시 다시 읽기)에서 다시 읽지 않고 `failures`(검색은 `skipped`, 바뀐 캐시는 `refresh_failures`)에 "이전 실행에서 읽지 못함"으로 보고합니다.
@@ -560,6 +588,11 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `clear --all`은 이 기록도 지웁니다. `progress`의 "새로 등록 N개"는 실제로 등록한 수, 실패는 "읽지 못함 N개"로 따로 셉니다.
 - `--max-files`는 이번 실행에서 **새로 읽는** 파일 수의 상한입니다. 이미 최신인 파일은 세지 않으므로 같은 명령을 다시 실행하면 남은 파일부터 이어서 등록합니다(`next_commands[0]`). 등록은 원본을 바꾸지 않는 읽기 전용 작업입니다.
 - DRM으로 암호화된 Office 파일은 라이브러리로 열 수 없으므로, `excel.py`/`word.py`/`ppt.py read --target 경로`로 Office에서 읽으라고 안내합니다.
+- 표(1.4.92): 머리글로 쓴 첫 행도 단위입니다(머리글 칸 글을 ` | `로 이음). 2열 표(항목 | 값)는 첫 행을 머리글로 보지 않습니다.
+  PDF에서 쪽 맨 앞의 표가 앞 쪽 끝 표와 열 수가 같으면 이어진 표로 보고 앞 표의 머리글을 씁니다(첫 행이 같은 머리글이면 그 행은 머리글 행).
+- 본문 밖의 글(1.4.92): DOCX 머리글·바닥글(구역마다, 같은 글은 한 번)과 각주·미주(`각주 N`, `미주 N`), PDF의 반복 머리글·바닥글(쪽 번호만인 줄은 빼고
+  글마다 처음 나온 쪽에 한 번, `p.N 머리글·바닥글`)을 본문 뒤에 단위로 넣습니다(장절 `머리글·바닥글`·`각주`). 검색 `--pages`와 상관없이 찾습니다.
+  PDF 블록 안의 둘째 줄부터는 큰 글씨·굵게이거나 앞 줄이 문장 끝일 때만 제목·새 항목입니다(줄바꿈된 `1.5 times ...`가 장절 제목이 되지 않게). 파서 버전 11.
 - DOCX 글상자(`w:txbxContent`)의 글은 그 글상자가 든 단락(표) 바로 뒤에 `글상자 N`(여러 단락이면 `글상자 N 단락 M`) 단위로 넣습니다. Word 2010 이후
   파일은 같은 글상자를 DrawingML과 VML(`mc:Fallback`) 두 벌로 저장하므로 `mc:Fallback` 쪽은 읽지 않습니다(한 번만). 단락 번호(`단락 N`)는 글상자가
   없는 문서와 같습니다. 닫힌 파일의 `word.py read`도 같습니다.
@@ -570,17 +603,21 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 #### diff (두 판 비교)
 - 두 문서를 읽어(캐시에 등록) 장절 경로가 같은 묶음끼리 짝짓고, 경로가 다르면 마지막 제목(번호 뺌)이 비슷하거나 한쪽이 다른 쪽을 품을 때(`표시` / `표시 방법`) 짝짓습니다.
   짝이 없는 장절은 `unpaired_sections`(`old`, `new`)에 따로 적고 그 단락은 모두 삭제·추가로 셉니다. `--section`이면 그 장절 안만.
+- 이동(1.5.1): 남은 삭제·추가 중 글이 같거나 비슷한 것은 `이동`(다른 자리·장절로 옮긴 단락, 비슷하면 숫자 변경도)으로 짝짓습니다.
 - 짝지은 묶음 안에서 단락 순서대로 비교해 `삭제` / `추가` / `변경`(글이 75% 이상 같거나, 첫 낱말이 같고 절반 이상 같음)으로 나눕니다. 띄어쓰기 차이는 같은 글.
 - 숫자 변경: 단위까지 같은 값으로 비교해(`5V` = `5.0 V`) 바뀐 숫자를 말로 적습니다(`number_changes`: `5 V에서 5.5 V로`, `숫자 추가: 2 A`, 화살표 기호 없음). `numeric: true`인 변경을 맨 앞에.
 - 결과: `count`, `counts`(변경·삭제·추가), `numeric_changes`, `changes`(20개까지: `kind`, `numeric`, `number_changes`, `summary`, `old_text`/`new_text` 200자, `old_evidence`/`new_evidence`),
   `shown`, `truncated`. 넘으면 `<데이터 폴더>/results/diff_<시각>.xlsx`를 `full_result_file`로(R2). `--save`는 전체를 xlsx/csv로 저장하고 다시 열어 확인.
-  0건이면 `VERIFIED: 0건`, 스캔 PDF(글자 없음)가 있으면 `UNVERIFIED:`.
+  0건이면 `VERIFIED: 0건`, 스캔 PDF(글자 없음)나 일부 쪽만 스캔인 PDF(`pages_without_text`, `--section` 안의 쪽)가 있으면 `UNVERIFIED:`.
 
 #### 검색과 캐시
 - 검색은 늘 대소문자를 무시합니다(`--regex` 포함). 대소문자를 가리는 옵션은 없습니다.
 - `--file` 없음: 캐시에 등록된 문서 전체만 검색합니다. 등록된 문서가 없으면 `error_type: not_indexed`(STOP_RETRY).
   원본이 바뀌었거나 이전 파서 형식인 캐시는 그 자리에서 다시 읽고(20개까지, `recovered`로 알림) 검색합니다. 원본이 바뀌었는데 다시 읽지 못한 캐시(한도 초과, 읽기 실패)는
-  옛 내용으로 검색하고 결과 항목에 `stale: true`, `stale_cache_count`와 `index --all` 명령. 원본이 지워진 문서는 `file_missing: true`.
+  옛 내용으로 검색하고 결과 항목에 `stale: true`, `stale_cache_count`와 `index --all` 명령. 원본이 지워진 문서는 `file_missing: true`이고
+  마지막 캐시로 찾았으므로 `not_searched`에 넣어 `UNVERIFIED:`(1.4.92). 폴더 검색에서 읽지 않는 옛 형식 문서(.doc .xls .ppt .rtf .xlsb .odt .ods .odp)가
+  있으면 `not_searched`(그림 등 다른 형식은 `skipped_types`에만). 쪽 경계에 걸친 문장(앞 쪽 끝 단락이 문장 끝 없이 다음 쪽 첫 단락으로 이어짐)은 둘을 붙여
+  한 번 더 찾고 근거는 `p.1~p.2`입니다.
 - 이전 파서 형식의 캐시는 단위 키가 달라 다시 읽지 못하면 검색하지 않고 `skipped`로만 알립니다(`stale`에는 세지 않음). 이유는 셋입니다:
   검색 때 다시 읽는 상한 20개를 넘음 / 다시 읽기 실패 -> `index --all` 명령, 원본이 없어 다시 읽을 수 없음 -> `clear --missing --dry-run` 명령(`index --all`로는 다시 읽을 수 없어 같은 안내가 반복됨).
   캐시 파일이 없거나 손상됐는데 원본도 없는 문서도 같습니다(`missing_file_count`에 세고 `clear --missing --dry-run`).
@@ -593,6 +630,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   `read`는 `ocr_needed` 문서나 고른 쪽이 스캔 쪽뿐이면 `UNVERIFIED`(스캔 이미지라 OCR 필요)로 답합니다.
   `--save`도 같고, 도장·쪽 번호만 남은 스캔 쪽(`--pages 3`)도 고른 쪽이 모두 스캔 쪽이면 `UNVERIFIED`입니다. 그때와 0개 저장이면 다른 문서에 넣는 `confirm_commands`를 주지 않습니다.
   글이 없는 쪽의 장절은 바로 앞 글의 장절로 봅니다.
+- 1.4.95: `--regex`의 반복 안의 반복(구분 글자 없음, `(a+)+`, `(\w+\s?)+`)은 실행 전에 STOP_RETRY. 다른 폴더의 같은 이름 파일은 근거에 상위 폴더 이름. `index`는 글자 없는 스캔 PDF를 `warnings`·`ocr_needed`로 알림. 이어 읽기 명령은 고른 쪽·단위 중 남은 번호만.
 - 검색어: `A;B`(그리고), `A|B`(또는), `;`가 먼저 묶임 (저장소 구분자 규칙, `excel read --where`와 같음). 띄어 쓴 단어는 한 구문, `;`·`|`가 든 글은 `'a;b'`(excel `--where`와 같은 작은따옴표, 1.4.83) 또는 `"a;b"`처럼 묶음(따옴표는 검색어에 넣지 않음). 옛 `A AND B`·`A OR B`(대문자)는 받지 않고 고친 전체 명령 `[추천]` (1.4.81).
   띄어쓰기, 줄바꿈, 기호(`# - . : / ( )` 등)는 무시하고 비교합니다: `SOI 1` = `SOI #1` = `SOI-1`, `설계기준` = `설계 기준`, PDF 줄바꿈으로 갈라진 글.
   숫자 경계는 지킵니다: `SOI 1`은 `SOI #10`, `SOI 21`과 맞지 않고, `1.2`는 `11.2`, `3.1.2`와 맞지 않습니다.
@@ -701,7 +739,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   오류입니다(입력 문제는 `STOP_RETRY:`, 파서 내부 오류는 `ERROR:`와 traceback, `index --file`도 같음). 폴더의 실패한 파일은 `skipped`의
   `reason`(내부 오류는 `KeyError: ...`처럼 예외 종류와 함께). `--file 폴더`: 폴더(기본 3단계 하위)의 미등록/변경 문서를 `--max-files`까지 등록한 뒤 그 폴더 문서만 검색합니다.
   결과에 `indexed_now`(새로 등록한 파일 이름, 20개까지), `indexed_now_count`, `from_cache`, 남은 파일이 있으면 `not_indexed_remaining`과 `index --folder` 명령.
-- 거르기: `--pages 3-7`(쪽 정보가 없는 단위는 빼고 `page_unknown_skipped`로 개수 보고), `--section "SCOPE"`(장절 경로 일부, 대소문자 무시).
+- 거르기: `--pages 3-7`(PDF·PPT·쪽 경계가 저장된 문서는 쪽 번호, 쪽 정보가 없는 문서(TXT, CSV, XLSX, HWP 등)는 `read --pages`처럼 항목 번호이고 `warnings`로 알림. 쪽 문서 안에서 쪽 번호를 모르는 단위는 `page_unknown_skipped`로 세고 `not_searched`에 넣어 UNVERIFIED), `--section "SCOPE"`(장절 경로 일부, 대소문자 무시).
 - 결과 항목: `file`, `path`, `page`, `page_source`, `section`(목록), `section_text`(` > `로 이음), `number`, `loc`, `heading`, `evidence`, `snippet`, `score`, `matched_terms`, `--full`이면 `text`.
   공통: `total_matches`(= `count`), `matched`(= `shown`), `truncated`, `files_searched`, `output_file`, `next_commands`. 잘렸으면 `--save "근거.xlsx"`로 전체를 저장하는 명령을 줍니다
   (`--full`에서 엑셀 칸 상한 32,000자보다 긴 단락이 있으면 `--save "근거.md"`). directive는 저장 이름을 적지 않고 `next_commands`의 저장 명령을 가리킵니다.
