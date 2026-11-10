@@ -3466,7 +3466,7 @@ LINES_SCAN = 1000        # 넣기·지우기 확인용 기준 칸을 찾을 때 
 SORT_RANGE_KEYS = 3      # Range.Sort가 받는 기준 수 (Key1~Key3). 넘으면 Worksheet.Sort.SortFields
 SORT_MAX_KEYS = 64       # 엑셀 정렬 기준 상한 (정렬 대화상자의 수준 64개)
 XL_ASC, XL_DESC = 1, 2
-XL_YES, XL_NO = 1, 2     # Range.Sort Header (xlGuess는 쓰지 않음: 도구가 정해 결과에 알림)
+XL_NO = 2     # Range.Sort Header: 머리글은 정렬 범위에서 빼고 늘 xlNo (xlYes·xlGuess에 기대지 않음)
 
 
 def _lines_spec(args) -> Tuple[Optional[str], str, int, int]:
@@ -3880,16 +3880,16 @@ def _adjacent_filled(ws: Any, r1: int, r2: int, col: int) -> bool:
     return bool(_filled_cells(ws.Range(ws.Cells(r1, col), ws.Cells(r2, col))))
 
 
-def _sort_fields(ws: Any, rng: Any, r1: int, c1: int, r2: int, order: List[Tuple[int, bool]], has_header: bool) -> None:
-    """기준 4개 이상: Worksheet.Sort.SortFields에 기준 열(데이터 행)을 차례로 넣고 Apply. 시트에 남는 정렬 기준은 지웁니다."""
+def _sort_fields(ws: Any, rng: Any, top: int, c1: int, r2: int, order: List[Tuple[int, bool]]) -> None:
+    """기준 4개 이상: Worksheet.Sort.SortFields에 기준 열(데이터 행)을 차례로 넣고 Apply. rng는 머리글을 뺀 데이터 행.
+    시트에 남는 정렬 기준은 지웁니다."""
     srt = ws.Sort
     srt.SortFields.Clear()
-    top = r1 + 1 if has_header else r1
     for idx, desc in order:
         col = ws.Range(ws.Cells(top, c1 + idx), ws.Cells(r2, c1 + idx))
         srt.SortFields.Add(Key=col, SortOn=0, Order=XL_DESC if desc else XL_ASC, DataOption=0)   # xlSortOnValues, 보통 비교
     srt.SetRange(rng)
-    srt.Header = XL_YES if has_header else XL_NO
+    srt.Header = XL_NO
     srt.MatchCase = False
     srt.Orientation = 1                     # xlTopToBottom (행 단위)
     try:
@@ -3987,14 +3987,18 @@ def range_sort(args) -> Dict[str, Any]:
             resolved = t.resolved()
             return rt.ok(TOOL, "range", f"{where}: 이미 정렬되어 있어 바꾸지 않았습니다 ({len(data)}행)",
                          "VERIFIED: 정렬 순서를 다시 읽어 확인했고 바뀐 것이 없습니다.", target_resolved=resolved, **info)
+        # 머리글 행을 빼고 데이터 행만 정렬 (Header=xlNo): Header=xlYes를 줘도 실제 엑셀이 머리글을 데이터에 섞은 일
+        # (회사 PC 2026-11-10 L1, 통화 서식 열). 머리글을 범위에 넣지 않으면 엑셀의 머리글 판단과 무관
+        top = r1 + 1 if has_header else r1
+        data_rng = ws.Range(ws.Cells(top, c1), ws.Cells(r2, c2))
         if len(order) <= SORT_RANGE_KEYS:
             kw: Dict[str, Any] = {}
             for i, (idx, desc) in enumerate(order, start=1):
-                kw[f"Key{i}"] = ws.Cells(r1, c1 + idx)
+                kw[f"Key{i}"] = ws.Cells(top, c1 + idx)
                 kw[f"Order{i}"] = XL_DESC if desc else XL_ASC
-            rng.Sort(Header=XL_YES if has_header else XL_NO, MatchCase=False, Orientation=1, **kw)
+            data_rng.Sort(Header=XL_NO, MatchCase=False, Orientation=1, **kw)
         else:
-            _sort_fields(ws, rng, r1, c1, r2, order, has_header)
+            _sort_fields(ws, data_rng, top, c1, r2, order)
         t.set_focus(sheet=ws)
         # R1: 다시 읽어 행 수·머리글·행 묶음이 그대로이고 기준 열이 정렬됐는지
         problems: List[str] = []

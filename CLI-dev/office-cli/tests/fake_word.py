@@ -46,6 +46,9 @@ class FakeRange:
         self.End = end
         self.Font = Props(doc.log, ("font", start, end))
         self.ParagraphFormat = Props(doc.log, ("pf", start, end))
+        live = getattr(doc, "live_ranges", None)
+        if live is not None:
+            live.add(self)
 
     @property
     def Text(self):
@@ -53,8 +56,26 @@ class FakeRange:
 
     @Text.setter
     def Text(self, value):
-        self.doc.replace(self.Start, self.End, value)
+        if getattr(self.doc, "TrackRevisions", False) and self.End > self.Start:
+            # 변경 추적: 옛 글은 삭제 표시로 남고 새 글이 그 뒤에 들어감 (Find는 삭제 표시 글도 찾음)
+            self.doc.deleted_spans.append((self.Start, self.End))
+            old_end = self.End
+            self.doc.replace(old_end, old_end, value, owner=self)
+            self.Start, self.End = old_end, old_end + len(value)
+            return
+        self.doc.replace(self.Start, self.End, value, owner=self)
         self.End = self.Start + len(value)
+
+    @property
+    def Revisions(self):
+        hit = [(a, b) for a, b in getattr(self.doc, "deleted_spans", []) if a <= self.Start and self.End <= b]
+
+        class _Revs:
+            Count = len(hit)
+
+            def __call__(self, i):
+                return type("Rev", (), {"Type": 2})()
+        return _Revs()
 
     @property
     def Find(self):
@@ -82,7 +103,7 @@ class FakeRange:
         return type("T", (), {"Range": FakeRange(self.doc, s, e)})()
 
     def InsertAfter(self, s):
-        self.doc.replace(self.End, self.End, s)
+        self.doc.replace(self.End, self.End, s, owner=self)
         self.End += len(s)
 
     def InsertBreak(self, kind):
@@ -95,7 +116,7 @@ class FakeRange:
             self.End = self.Start
 
     def Delete(self):
-        self.doc.replace(self.Start, self.End, "")
+        self.doc.replace(self.Start, self.End, "", owner=self)
         self.End = self.Start
 
     def Select(self):
@@ -121,8 +142,16 @@ class FakeRange:
         class _LF:
             ListTemplate = "번호 목록"
 
-            def ApplyListTemplate(self, ListTemplate=None, ContinuePreviousList=True, **kw):
-                doc.log.append(("list_restart", start, ContinuePreviousList))
+            def ApplyListTemplate(self, ListTemplate=None, ContinuePreviousList=True, ApplyTo=0, **kw):
+                doc.log.append(("list_restart", start, ContinuePreviousList, ApplyTo))
+
+            @property
+            def ListString(self):
+                # 실제 Word: 목록 번호 스타일은 문서의 앞 목록에 이어짐. ApplyTo=0(목록 전체)은 앞 목록까지 한 목록이라
+                # 다시 1부터가 되지 않음 (회사 PC 2026-11-10 L5). 어떤 ApplyTo가 먹히는지는 doc.list_restart_works
+                works = getattr(doc, "list_restart_works", {1, 2})
+                ok = any(e[0] == "list_restart" and e[1] == start and e[2] is False and e[3] in works for e in doc.log)
+                return "1." if ok else "3."
         return _LF()
 
 
@@ -243,11 +272,27 @@ class FakeWordDocument:
         self.table_spans = []        # 표 영역 [(시작, 끝)] (끝 = 표 다음 단락의 시작)
         self.grid_tables = []        # fill용 표 (FakeGridTable): doc.Tables(i).Cell(r, c)
         self.Tables = FakeTables(self)
+        # 실제 Word처럼 만들어 둔 Range가 문서 편집을 따라 움직임: 앞에 넣으면 밀리고, 안에 넣으면 늘어남
+        # (끝 위치에 넣은 것은 그 Range에 들어가지 않음). 넣은 Range 자신(owner)은 각자 메서드가 맞춤
+        import weakref
+        self.live_ranges = weakref.WeakSet()
+        self.deleted_spans = []      # 변경 추적의 삭제 표시 글 [(시작, 끝)] (TrackRevisions = True일 때 Text 바꾸기가 만듦)
 
-    def replace(self, s, e, v):
+    @property
+    def Revisions(self):
+        return type("Revs", (), {"Count": len(self.deleted_spans)})()
+
+    def replace(self, s, e, v, owner=None):
         self.text = self.text[:s] + v + self.text[e:]
         self.Saved = False
         d = len(v) - (e - s)
+        for r in list(getattr(self, "live_ranges", ())):
+            if r is owner:
+                continue
+            if r.Start >= e and not (s == e and r.Start == s and r.End == s):
+                r.Start, r.End = r.Start + d, r.End + d
+            elif r.End > s and r.Start <= s:
+                r.End = max(s, r.End + d) if r.End >= e else s + len(v)
         # 표 영역도 실제 Word처럼 옮김: 앞에 넣으면 밀리고, 안(표 첫 칸의 시작 포함)에 넣으면 늘어남
         self.table_spans = [(a + d, b + d) if s < a else ((a, b + d) if s < b else (a, b)) for a, b in self.table_spans]
 

@@ -717,6 +717,15 @@ def test_sort_by_header_name_desc(xl_table, capsys):
     assert len(off.list_snapshots("excel")) == 1
 
 
+def test_sort_keeps_header_even_if_excel_ignores_header_flag(xl_table, capsys):
+    # 머리글 행은 정렬 범위에서 뺌: 엑셀이 Header 값을 무시해도 머리글이 데이터에 섞이지 않음 (회사 PC 2026-11-10 L1)
+    xl_table.sort_ignores_header = True
+    code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "금액")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert _col(xl_table, 3) == ["금액", 100, 200, 300, 1000], _col(xl_table, 3)
+    assert [x[1:3] for x in xl_table.log if x[0] == "Sort"] == [("$A$2:$C$5", excel.XL_NO)], xl_table.log
+
+
 def test_sort_multi_key_desc_one(xl_table, capsys):
     code, out = run_main(excel, capsys, "range", "--action", "sort", "--range", "A1:C5", "--by", "부서,금액", "--desc", "금액")
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
@@ -789,7 +798,7 @@ def test_sort_more_than_three_keys_uses_sort_fields(xl_table, capsys):
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and len(out["keys"]) == 5, out
     assert _col(xl_table, 5, 1, 6) == ["이름", "라", "나", "마", "다", "가"], _col(xl_table, 5, 1, 6)
     applied = [x for x in xl_table.log if x[0] == "SortApply"]
-    assert applied and applied[0][2] == excel.XL_YES and len(applied[0][3]) == 5, xl_table.log
+    assert applied and applied[0][1:3] == ("$A$2:$E$6", excel.XL_NO) and len(applied[0][3]) == 5, xl_table.log   # 머리글 뺀 데이터 행만
     assert xl_table.Sort.SortFields.Count == 0                                     # 시트에 정렬 기준을 남기지 않음
     assert not [x for x in xl_table.log if x[0] == "Sort"]
 

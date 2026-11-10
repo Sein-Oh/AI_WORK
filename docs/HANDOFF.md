@@ -329,6 +329,16 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
   1.4.99(`--where` 제목 아래 머리글·`!~`, compare 키 자동), 1.5.0(reader `.eml` 읽기·검색: 헤더·본문·첨부 이름 캐시, 메일 한 통 = 결과 하나),
   1.5.1(reader `outline`, diff `이동`, 표 칸 굵게). 사용자 결정: 4장 3·4·5번은 회사 PC 실기 결과를 본 뒤, 옵션 이름 통일 안 함, 마크다운 나머지와 메일 분류 보류
 
+## 3-10. 회사 PC 실기 결과 (2026-11-10 낮, office-cli 1.5.1·ml-kit 2.9.86)와 조치 (office-cli 1.5.2, ml-kit 2.9.87)
+- run_all_tests 1시간 52분: diag 18/18, pytest 4416 passed·2 failed, beta 20/21, office 실기 88/92. 이어서 run_win_tests 전체(눈 확인 포함) PASS 93·FAIL 5·ERROR 1
+- 사용 중 겪었을 것 (고침): 엑셀 정렬이 머리글을 데이터에 섞음(L1), 표 바로 위 단락 뒤 글이 표 첫 칸에(L4), 새 번호 목록이 3.부터(L5),
+  변경 추적 문서 replace가 UNVERIFIED(L9), 대화 상자가 떠 있을 때 저장 안 된 초안을 임시 보관함에서 보라고 안내(M4),
+  성능예측표가 엑셀을 닫다 AttributeError로 전체 실패(beta F1). L4·L5는 1.4.95 수정이 가짜 COM에서만 통과했던 것 -> 가짜 Word Range가 편집을 따라 움직이게
+- 시험 쪽 (고침): G5 러너가 번호 1로 고정, run_all_tests 시간 초과 후 종료 코드 None, Outlook 질문 정리(G1·M4만 사람이 답함)
+- 확인 못 한 것: pytest에서 test_reader·office test_contract·test_setup 세 파일이 같은 때 아침보다 25~180배 느림(4334·4121·3728초, 아침 154·81·21초),
+  그중 reader index 하나가 120초 시간 초과. 원인 미확인 -> 다음 결과에 파일별 시작 시각과 느린 시험 5개(`--durations=5`)가 남음
+- 다음 반입: `run_all_tests.bat` 뒤 `python tools\run_win_tests.py --only L,M` (L1·L4·L5·L9·M4 확인), beta F
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 

@@ -1188,6 +1188,50 @@ def test_F(ctx):
 # ---------------------------------------------------------------------------
 # G. Outlook
 # ---------------------------------------------------------------------------
+OL_INBOX, OL_DRAFTS = 6, 16          # Outlook 기본 폴더 (받은 편지함, 임시 보관함)
+
+
+def ol_ns():
+    """러너가 직접 보는 Outlook MAPI (도구 결과와 비교하고, 시험이 만든 초안·작성 창을 정리)."""
+    return win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+
+
+def ol_drafts(subject):
+    """임시 보관함에서 제목이 subject인 항목 수."""
+    def count():
+        items = ol_ns().GetDefaultFolder(OL_DRAFTS).Items
+        return sum(1 for i in range(1, items.Count + 1) if str(items.Item(i).Subject or "") == subject)
+    return com_retry(count)
+
+
+def ol_cleanup(subject):
+    """시험이 만든 작성 창(저장 안 하고 닫음)과 임시 보관함 초안을 지웁니다. 사람에게 지우라고 묻지 않음."""
+    done = []
+    try:
+        app = win32com.client.Dispatch("Outlook.Application")
+        insp = app.Inspectors
+        for i in range(insp.Count, 0, -1):
+            try:
+                if str(insp.Item(i).CurrentItem.Subject or "") == subject:
+                    insp.Item(i).Close(1)            # olDiscard
+                    done.append("작성 창 닫음")
+            except Exception:
+                pass
+        items = app.GetNamespace("MAPI").GetDefaultFolder(OL_DRAFTS).Items
+        for i in range(items.Count, 0, -1):
+            if str(items.Item(i).Subject or "") == subject:
+                items.Item(i).Delete()
+                done.append("초안 지움")
+    except Exception as e:
+        done.append(f"정리 실패 {type(e).__name__}")
+    log(f"    [정리] '{subject}': {', '.join(done) or '없음'}")
+
+
+def _ol_time(t):
+    """COM 날짜를 도구와 같은 'YYYY-MM-DD HH:MM:SS' (pywin32는 현지 시각에 UTC 표시를 붙여 줌: 숫자만 씀)."""
+    return f"{t.year:04d}-{t.month:02d}-{t.day:02d} {t.hour:02d}:{t.minute:02d}:{t.second:02d}"
+
+
 def test_G(ctx):
     me = ctx.args.self_email
 
@@ -1201,7 +1245,8 @@ def test_G(ctx):
               and "next_commands" not in (data or {}) and " send --id " in nxt.get("command", "")
               and nxt.get("destructive") is True)           # 1.4.75: 발송은 '묻지 말고'라고 해도 늘 물음
         manual = ask(ctx, "메일 작성 창이 떴나요? (서명을 등록해 두었다면 본문 아래 서명도 보여야 합니다. "
-                          "확인 후 창을 닫고 임시 보관함의 '[office-cli 테스트] 표시 전용' 초안을 지워 주세요)")
+                          "창은 그대로 두세요. 답하면 러너가 닫고 초안도 지웁니다)")
+        ol_cleanup("[office-cli 테스트] 표시 전용")
         record(ctx, "G1", "기본 동작: 초안 저장·작성 창만 표시, 미발송, send 명령은 confirm_commands로", ok and manual is not False, "",
                data, code, raw, err)
 
@@ -1210,7 +1255,7 @@ def test_G(ctx):
                         "--subject", "[office-cli 테스트] 잘못된 수신자", "--body", "발송되면 안 됨")[0] or {}
         data, code, raw, err = run_cli("outlook.py", "send", "--id", str(d_new.get("draft_id", "")))
         ok = (data or {}).get("status") == "error" and (data or {}).get("sent") is False
-        ask(ctx, "작성 창이 떴다면 닫고 임시 보관함의 '[office-cli 테스트] 잘못된 수신자' 초안을 지워 주세요. 지웠나요?")
+        ol_cleanup("[office-cli 테스트] 잘못된 수신자")
         record(ctx, "G2", "잘못된 수신자 초안 send -> 발송 안 됨", ok,
                f"unresolved={(data or {}).get('unresolved_recipients')}", data, code, raw, err)
 
@@ -1240,14 +1285,17 @@ def test_G(ctx):
         # 짧은 번호(list 결과 id 1)로 읽기, 같은 메일의 대화, 일정 7일 (모두 읽기 전용)
         d_list = run_cli("outlook.py", "list", "--limit", "3")[0] or {}
         mails = d_list.get("mails") or []
-        d_read = run_cli("outlook.py", "read", "--id", "1")[0] or {} if mails else {}
-        d_thread = run_cli("outlook.py", "thread", "--id", "1")[0] or {} if mails else {}
+        # 번호는 목록마다 이어서 늘어남 (1부터 다시 매기지 않음): 이 목록의 첫 id를 씀 (회사 PC 2026-11-10 G5에서 1로 고정해 초안을 읽음)
+        first = str(mails[0].get("id", "")) if mails else ""
+        d_read = run_cli("outlook.py", "read", "--id", first)[0] or {} if mails else {}
+        d_thread = run_cli("outlook.py", "thread", "--id", first)[0] or {} if mails else {}
         data, code, raw, err = run_cli("outlook.py", "calendar", "--days", "7")
-        same = (d_read.get("mail") or {}).get("entry_id") == (mails[0].get("entry_id") if mails else None)
-        ok = (not mails or (mails[0].get("id") == 1 and same and d_thread.get("status") == "ok")) \
+        got = d_read.get("mail") or {}
+        same = bool(mails) and (got.get("subject"), got.get("received")) == (mails[0].get("subject"), mails[0].get("received"))
+        ok = (not mails or (same and d_thread.get("status") == "ok")) \
             and str((data or {}).get("agent_directive", "")).startswith("VERIFIED")
         record(ctx, "G5", "짧은 번호로 읽기, 대화 묶음, 일정 7일 (읽기 전용)", ok,
-               f"목록 {len(mails)}통, 1번 읽기 같은 메일={same}, 대화 {d_thread.get('count')}통, 일정 {(data or {}).get('count')}개",
+               f"목록 {len(mails)}통, {first}번 읽기 같은 메일={same}, 대화 {d_thread.get('count')}통, 일정 {(data or {}).get('count')}개",
                data, code, raw, err)
 
     run_test(ctx, "G1", "표시 전용", g1)
@@ -2609,18 +2657,56 @@ def test_L(ctx):
 # M. 2026-11-09 검토 실기 확인 (Outlook, --skip-outlook이면 건너뜀): C14~C18
 # ---------------------------------------------------------------------------
 def test_M(ctx):
-    def m1():     # C14 받은 시각 표기
+    def m1():     # C14 받은 시각 표기: Outlook에서 직접 읽은 받은 시각과 비교 (질문 없음)
         d, c, r, e = run_cli("outlook.py", "list", "--limit", "1")
-        got = ((d or {}).get("mails") or [{}])[0].get("received", "")
-        manual = ask(ctx, f"받은 편지함 맨 위 메일의 받은 시각이 Outlook 화면과 같은 현지 시각인가요? (도구: {got})")
-        record(ctx, "M1", "C14 received가 현지 시각이고 '+00:00'이 붙지 않음", _ok(d) and "+00:00" not in got and manual is not False,
-               f"received={got}", d, c, r, e)
+        top = ((d or {}).get("mails") or [{}])[0]
+        got = top.get("received", "")
 
-    def m2():     # C15 맨 앞 창
-        ask(ctx, "Outlook에서 메일 하나를 새 창으로 열어 두고, 목록에서 다른 메일을 선택한 뒤 목록 창을 맨 앞에 두세요. 준비됐나요?")
+        def newest():
+            items = ol_ns().GetDefaultFolder(OL_INBOX).Items
+            items.Sort("[ReceivedTime]", True)
+            first = items.GetFirst()
+            return (str(first.Subject or ""), _ol_time(first.ReceivedTime)) if first is not None else ("", "")
+        subject, want = com_retry(newest)
+        record(ctx, "M1", "C14 received가 Outlook의 현지 시각과 같고 '+00:00'이 붙지 않음",
+               _ok(d) and "+00:00" not in got and got == want and top.get("subject") == subject,
+               f"도구={got}, Outlook={want}", d, c, r, e)
+
+    def m2():     # C15 맨 앞 창: 러너가 메일 하나를 창으로 열고 목록에서 다른 메일을 선택 (질문 없음)
+        state = {}
+
+        def prepare():
+            app = win32com.client.Dispatch("Outlook.Application")
+            inbox = app.GetNamespace("MAPI").GetDefaultFolder(OL_INBOX)
+            items = inbox.Items
+            items.Sort("[ReceivedTime]", True)
+            a, b = items.GetFirst(), items.GetNext()
+            if a is None or b is None:
+                return False
+            a.Display()                                    # 메일 창(Inspector)
+            state["inspector"] = app.Inspectors.Item(app.Inspectors.Count)
+            exp = app.ActiveExplorer() or inbox.GetExplorer()
+            exp.CurrentFolder = inbox
+            exp.ClearSelection()
+            exp.AddToSelection(b)
+            exp.Activate()                                 # 목록 창을 맨 앞으로
+            state.update(opened=str(a.EntryID), selected=str(b.EntryID), subject=str(b.Subject or ""))
+            return True
+        if not com_retry(prepare):
+            record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)", ENV_SKIP, "받은 편지함에 메일이 2통 미만")
+            return
+        time.sleep(1)
         d, c, r, e = run_cli("outlook.py", "current")
-        manual = ask(ctx, f"도구가 고른 메일이 목록에서 선택한 메일인가요? (제목: {((d or {}).get('mail') or {}).get('subject')})")
-        record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)", manual, "", d, c, r, e)
+        try:
+            state["inspector"].Close(1)                    # 러너가 연 메일 창만 닫음 (받은 메일은 그대로)
+        except Exception:
+            pass
+        picked = ((d or {}).get("mail") or {}).get("entry_id")
+        record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)",
+               _ok(d) and picked == state["selected"],
+               f"목록에서 선택한 메일='{state['subject']}', 도구가 고른 것=" + ("선택한 메일" if picked == state["selected"] else
+                                                                       "창으로 연 메일" if picked == state["opened"] else "다른 메일"),
+               d, c, r, e)
 
     def m3():     # C16 SMTP 주소로 보낸 사람 찾기
         me = ctx.args.self_email
@@ -2631,14 +2717,63 @@ def test_M(ctx):
         record(ctx, "M3", "C16 search --from <SMTP 주소>가 사내 Exchange 보낸 사람(보낸 편지함의 내 메일)을 찾음",
                _ok(d) and (d or {}).get("count", 0) >= 1, f"count={(d or {}).get('count')}", d, c, r, e)
 
-    def m4():     # C17 대화 상자가 떠 있을 때 (눈 확인)
-        manual = ask(ctx, "Outlook에 대화 상자(예: 옵션 창)를 띄운 채 'python outlook.py new --to a@x.com --subject t --body b'를 실행하면 "
-                          "UNVERIFIED와 '다시 실행하지 말고' 안내가 나오고 임시 보관함에 초안이 하나만 있나요?")
-        record(ctx, "M4", "C17 작성 창을 못 띄우면 초안 정보와 함께 UNVERIFIED", manual, "")
+    def m4():     # C17 대화 상자가 떠 있을 때: 사람은 대화 상자만 띄우고, 실행·판정·정리는 러너
+        subject = f"[office-cli 테스트] 대화 상자 {time.strftime('%H%M%S')}"
+        ready = ask(ctx, "Outlook에서 파일 > 옵션을 눌러 옵션 창을 띄워 두세요 (닫지 마세요). 띄웠나요?")
+        if ready is not True:
+            record(ctx, "M4", "C17 작성 창을 못 띄우면 초안 정보와 함께 UNVERIFIED", None, "옵션 창을 띄우지 않음")
+            return
+        d, c, r, e = run_cli("outlook.py", "new", "--to", "office-test@example.com", "--subject", subject, "--body", "대화 상자 시험")
+        ask(ctx, "이제 옵션 창을 닫아 주세요 (작성 창이 뜨면 그대로 두세요). 닫았나요?")
+        time.sleep(2)
+        drafts = ol_drafts(subject)
+        text = json.dumps(d or {}, ensure_ascii=False)
+        said_saved = "임시 보관함에 초안으로 저장했지만" in text
+        directive = str((d or {}).get("agent_directive", ""))
+        ok = _ok(d) and drafts <= 1 and "confirm_commands" not in (d or {}) and (
+            (directive.startswith("UNVERIFIED:") and "다시 실행하지 말고" in directive and said_saved == (drafts == 1))
+            or directive.startswith("VERIFIED:"))         # 대화 상자가 막지 않은 Outlook이면 그냥 VERIFIED
+        ol_cleanup(subject)
+        record(ctx, "M4", "C17 작성 창을 못 띄우면 UNVERIFIED, 저장했다는 말과 임시 보관함이 일치",
+               ok, f"{directive[:40]}, 도구 '저장함'={said_saved}, 임시 보관함 초안 {drafts}개", d, c, r, e)
 
-    def m5():     # C18 서명 로고 (확인만)
-        manual = ask(ctx, "서명에 로고 그림이 있는 받은 메일에 'outlook.py attachments --id <번호>'를 하면 로고가 첨부로 나오지 않나요? (해당 메일이 없으면 s)")
-        record(ctx, "M5", "C18(확인만) 본문 그림(서명 로고)은 첨부로 세지 않음", manual, "")
+    def m5():     # C18 본문 그림(서명 로고): 러너가 본문에서 cid:로 쓰는 첨부가 있는 받은 메일을 찾아 시험 (질문 없음)
+        cid_tag = "http://schemas.microsoft.com/mapi/proptag/0x3712001F"     # PR_ATTACH_CONTENT_ID
+
+        def find():
+            items = ol_ns().GetDefaultFolder(OL_INBOX).Items
+            items.Sort("[ReceivedTime]", True)
+            for i in range(1, min(items.Count, 200) + 1):
+                m = items.Item(i)
+                try:
+                    html = str(m.HTMLBody or "").lower()
+                    if not int(m.Attachments.Count) or "cid:" not in html:
+                        continue
+                    inline = []
+                    for k in range(1, m.Attachments.Count + 1):
+                        a = m.Attachments.Item(k)
+                        try:
+                            cid = str(a.PropertyAccessor.GetProperty(cid_tag) or "").strip("<>").lower()
+                        except Exception:
+                            cid = ""
+                        if cid and f"cid:{cid}" in html:
+                            inline.append(k)
+                    if inline:
+                        return str(m.EntryID), str(m.Subject or ""), inline
+                except Exception:
+                    continue
+            return None
+        hit = com_retry(find)
+        if not hit:
+            record(ctx, "M5", "C18 본문 그림(서명 로고)은 첨부로 세지 않음", ENV_SKIP, "최근 받은 메일 200통에 본문 그림 메일 없음")
+            return
+        eid, subject, inline = hit
+        d, c, r, e = run_cli("outlook.py", "attachments", "--id", eid)
+        atts = (d or {}).get("attachments") or []
+        marked = sorted(int(a.get("index", 0)) for a in atts if a.get("hidden_inline"))
+        record(ctx, "M5", "C18 본문 그림(서명 로고)을 본문 삽입 이미지(hidden_inline)로 표시",
+               _ok(d) and set(inline) <= set(marked),
+               f"'{subject}': 본문 그림 첨부 번호 {inline}, 도구가 본문 그림으로 표시 {marked}", d, c, r, e)
 
     for tid, title, fn in (("M1", "받은 시각", m1), ("M2", "맨 앞 창", m2), ("M3", "SMTP 보낸 사람", m3),
                            ("M4", "대화 상자", m4), ("M5", "서명 로고", m5)):
