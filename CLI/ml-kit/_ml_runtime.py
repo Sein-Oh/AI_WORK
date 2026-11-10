@@ -129,20 +129,40 @@ class InputError(ValueError):
     for a choice only the user can make (the directive then says to ask and run next_commands[0] only if they agree)."""
 
     def __init__(self, message: str = "", extra: Optional[Dict[str, Any]] = None, error_type: Optional[str] = None):
-        super().__init__(message)
+        message = str(message)
         self.extra = dict(extra or {})
         self.error_type = error_type
-        if "confirm_commands" not in self.extra:        # a numbered [후보] made by ask() in this message: its commands
-            for text, items in reversed(_ASKED):
-                if text in str(message):
-                    self.extra["confirm_commands"] = items
-                    self.error_type = self.error_type or "needs_user_decision"
-                    break
+        if "confirm_commands" not in self.extra:        # numbered [후보] made by ask() in this message: their commands
+            found: List[Tuple[int, str, List[Dict[str, Any]], List[str]]] = []
+            for text, items, cands in reversed(_ASKED):
+                at = message.find(text)
+                if at >= 0 and all(at != f[0] for f in found):
+                    found.append((at, text, items, cands))
+            found.sort(key=lambda f: f[0])
+            if len(found) > 1:
+                # several [후보] groups in one message (a typo per missing input, 검토 B B2): numbered on from group to group,
+                # so every number shown has the confirm_commands entry of the same number
+                commands: List[Dict[str, Any]] = []
+                for _, text, items, cands in found:
+                    renum = _numbered_list(cands, len(commands) + 1)
+                    message = message.replace(text, renum + text[len(_numbered_list(cands)):], 1)
+                    commands += items
+                self.extra["confirm_commands"] = commands
+                self.error_type = self.error_type or "needs_user_decision"
+            elif found:
+                self.extra["confirm_commands"] = found[0][2]
+                self.error_type = self.error_type or "needs_user_decision"
+        super().__init__(message)
 
 
-# [후보] texts made by ask() in this run and their confirm_commands (InputError picks the ones its message holds, so a
-# helper that only returns text still gives the full commands: AGENTS.md 사용법 단순성 2번). Cleared by run_cli.
-_ASKED: List[Tuple[str, List[Dict[str, Any]]]] = []
+# [후보] texts made by ask() in this run, their confirm_commands and candidates (InputError picks the ones its message holds, so
+# a helper that only returns text still gives the full commands: AGENTS.md 사용법 단순성 2번). Cleared by run_cli.
+_ASKED: List[Tuple[str, List[Dict[str, Any]], List[str]]] = []
+
+
+def _numbered_list(cands: List[str], start: int = 1) -> str:
+    """'[후보] 1) a 2) b': the list part of numbered()."""
+    return "[후보] " + " ".join(f"{start + i}) {c}" for i, c in enumerate(cands))
 
 
 # ------------------------------------------------------------------------------
@@ -697,15 +717,20 @@ def error_payload(exc: BaseException, hint: str = "") -> Dict[str, Any]:
                                 "install_command를 사용자에게 전달하세요. 직접 설치하지 마세요."),
         }
     if isinstance(exc, InputError) and getattr(exc, "error_type", None) == "needs_user_decision":
+        # the directive names only the keys the JSON holds (검토 B B2: it named next_commands[0] next to confirm_commands only)
+        has_next, has_confirm = bool(exc.extra.get("next_commands")), bool(exc.extra.get("confirm_commands"))
+        run_next = ("사용자가 그렇게 하라고 하면 next_commands[0].command를 글자 그대로 1번 실행하세요 "
+                    "(needs_input: true이면 <...>만 사용자가 준 값으로 바꿔서)")
+        run_pick = "사용자가 [후보]에서 번호를 고르면 같은 번호의 confirm_commands[번호-1].command를 글자 그대로 1번 실행하세요"
+        how = (f"{run_pick}. [후보]를 고르지 않고 message의 다른 안내를 따르기로 하면 {run_next}" if has_next and has_confirm
+               else run_pick if has_confirm else run_next)
         return {
             "status": "error",
             "error_type": "needs_user_decision",
             "message": msg,
             **{k: v for k, v in exc.extra.items() if k not in ("status", "message", "agent_directive", "error_type")},
             "agent_directive": (
-                "STOP_RETRY: 사용자가 정할 일이 있어 멈췄습니다. message를 그대로 알리고 사용자에게 물으세요. 스스로 실행하지 말고, "
-                "사용자가 그렇게 하라고 하면 next_commands[0].command를 글자 그대로 1번 실행하세요 "
-                "(needs_input: true이면 <...>만 사용자가 준 값으로 바꿔서)."),
+                f"STOP_RETRY: 사용자가 정할 일이 있어 멈췄습니다. message를 그대로 알리고 사용자에게 물으세요. 스스로 실행하지 말고, {how}."),
         }
     if isinstance(exc, _STOP_RETRY_ERRORS):
         hint = getattr(exc, "hint", None) or hint
@@ -1165,7 +1190,8 @@ class JsonArgumentParser(argparse.ArgumentParser):
         payload = {
             "status": "error",
             "error_type": "input",
-            "message": f"CLI 인자 오류: {message}.{hint}",
+            # a message ending in a [추천] command gets no '.' (it would stick to the command's last argument)
+            "message": f"CLI 인자 오류: {message}{'' if '[추천] ' in message else '.'}{hint}",
             "agent_directive": ("STOP_RETRY: 명령 인자가 잘못되었습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 "
                                 "실행하세요. [후보]가 있으면 후보를 사용자에게 보여 주고 고른 번호의 confirm_commands를 1번 실행하세요. "
                                 "둘 다 없으면 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준)."),
@@ -1421,7 +1447,7 @@ def numbered(cands: List[str], cmds: List[Optional[str]], purpose: str) -> Tuple
     """'[후보] 1) a 2) b' and the confirm_commands of the same numbers (AGENTS.md 사용법 단순성 2번). Always numbered;
     no commands when a full command cannot be made for every candidate (the user's pick is then a value, not a command)."""
     cands = [str(c) for c in cands]
-    listed = "[후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(cands, 1))
+    listed = _numbered_list(cands)
     if not cands or len(cmds) != len(cands) or any(c is None for c in cmds):
         return listed, []
     risky = "--overwrite" in (CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv)
@@ -1435,7 +1461,7 @@ def ask(cands: List[Any], cmds: List[Optional[str]], purpose: str = "{}") -> str
     InputError whose message holds the text carries them as confirm_commands (needs_user_decision)."""
     text, items = numbered([str(c) for c in cands[:10]], list(cmds[:10]), purpose)
     if items:
-        _ASKED.append((text, items))
+        _ASKED.append((text, items, [str(c) for c in cands[:10]]))
     return text
 
 

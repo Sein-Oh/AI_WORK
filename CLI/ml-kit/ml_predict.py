@@ -28,7 +28,7 @@ from typing import Dict, Any, List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
-        Cond, InputError, JsonArgumentParser, ask, command_setting, layout_retry, MAX_KEYS, NEAREST_N, SNAPSHOT_EXCL_PREFIX, SNAPSHOT_ROW_COL, TOOL_DIR,
+        Cond, InputError, JsonArgumentParser, ask, command_dropping, command_setting, layout_retry, MAX_KEYS, NEAREST_N, SNAPSHOT_EXCL_PREFIX, SNAPSHOT_ROW_COL, TOOL_DIR,
         Table, _alias_key, _blank_mark, _cell, _cell_text, _crossings, _fmt, _is_data_value, _layout_frame,
         _looks_like_unit_row, _row_cells, _same_unit_name, _unit_shaped, _unit_text, align_categories,
         apply_inference_evals, atomic_write_text, avoid_overwrite, build_alias_map, category_candidates,
@@ -199,6 +199,11 @@ def compare_with_measured(meta: Dict[str, Any], target: str, version_dir: str, d
     raw = model_raw_inputs(meta)
     cats = [c for c in schema.get("categorical", {}) if c in raw]
     keys = [c for c in raw if c not in cats and c not in schema.get("datetime", {}) and c not in derived]
+    dates = [c for c in raw if c in schema.get("datetime", {})]
+    if dates:
+        # 검토 B A5: 날짜를 빼고 숫자 입력만으로 이웃 행을 고르면 다른 날짜의 실측과 비교해 좋은 모델에도 '많이 다름' 경고가 남
+        return {"note": f"타겟 '{target}': 날짜 입력({', '.join(dates)})이 있어 실측 비교값을 계산하지 않았습니다 "
+                        "(표 보간은 날짜를 기준으로 쓰지 못함)"}
     if not keys:
         return {"note": f"타겟 '{target}': 숫자 입력이 없어 실측 비교값을 계산하지 않았습니다"}
     if len(df_evaled) > MAP_CHECK_MAX_ROWS:
@@ -443,26 +448,111 @@ def _first_row_numeric(df: pd.DataFrame, numeric: List[str]) -> bool:
     return share is not None and share <= 0.5
 
 
-def check_inline_numbers(df_input: pd.DataFrame, numeric: List[str]) -> None:
+def check_inline_numbers(df_input: pd.DataFrame, numeric: List[str], args: Optional[argparse.Namespace] = None) -> None:
     """--input 숫자 입력의 값이 비었거나 숫자가 아니면 멈춤 (2.9.76): 그대로 두면 중앙값으로 채운 예측이 VERIFIED로 나가 사용자가 준 값처럼
-    보고됨 (학습 결과의 '--input "온도=<값>,..."' 틀을 <값> 그대로 실행, '온도=200:280:10' 같은 범위). 자리표시자면 값을 물으라고 함."""
+    보고됨 (학습 결과의 '--input "온도=<값>,..."' 틀을 <값> 그대로 실행, '온도=200:280:10' 같은 범위). 자리표시자면 값을 물으라고 함.
+    nan·inf도 숫자가 아님. 범위 하나('온도=150:210:10', 한 건 'k=v')는 같은 조건의 --sweep 전체 명령을 [추천] (검토 B B4: 거절되는
+    '--vary ... --sweep' 사용법을 안내했음)."""
     bad: List[str] = []
     for col in numeric:
         if col not in df_input.columns:
             continue
         raw = df_input[col]
         text = raw.map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip())
-        wrong = (text != "") & coerce_numeric(raw).isna()     # 빈 값은 원래대로(중앙값 채우기 확인), 글자만
+        wrong = (text != "") & ~np.isfinite(coerce_numeric(raw).to_numpy(dtype=float))   # 빈 값은 원래대로(중앙값 채우기 확인)
         bad += [f"{col}={text[i]!r}" for i in raw.index[wrong]]
     if not bad:
         return
     placeholder = any("<" in b and ">" in b for b in bad)
     sweep = any(re.search(r"\d\s*:\s*\d", b) for b in bad)
+    rec = _sweep_from_input(df_input) if sweep and not placeholder else None
     raise InputError(
         f"--input의 숫자 입력 값이 숫자가 아닙니다: {', '.join(bad[:10])}. 예측하지 않았습니다 (중앙값으로 채우지 않음). "
         + ("<값> 자리에 넣을 값을 사용자에게 물은 뒤 그 값으로 바꿔 실행하십시오." if placeholder else
-           "값 여러 개를 차례로 예측하려면 --vary \"<입력>\" --sweep \"<시작>:<끝>:<간격>\"을 쓰십시오 (ml-predict 스킬)." if sweep else
+           f"값 여러 개를 차례로 예측하는 명령: [추천] {rec}" if rec else
+           "값 여러 개를 차례로 예측하려면 --sweep \"<입력>=<시작>:<끝>:<간격>\"을 쓰십시오 (ml-predict 스킬)." if sweep else
            "사용자에게 숫자 값을 확인하십시오."))
+
+
+def _sweep_from_input(df_input: pd.DataFrame) -> Optional[str]:
+    """The running prediction with its one range value ('온도=150:210:10') moved to --sweep and the rest kept in --input
+    (one 'k=v' record only); None otherwise."""
+    kv = df_input.attrs.get("kv_pairs")
+    if len(df_input) != 1 or not kv:
+        return None
+    ranges = [k for k, v in kv.items() if re.fullmatch(r"\s*[-+.\d]+\s*:\s*[-+.\d]+(\s*:\s*[-+.\d]+)?\s*", str(v))]
+    base = command_text(drop={"--input": ""})
+    if len(ranges) != 1 or not base:
+        return None
+    name = ranges[0]
+    rest = {k: v for k, v in kv.items() if k != name}
+    spec = re.sub(r"\s+", "", str(kv[name]))
+    return f"{base} --sweep {quote_arg(f'{name}={spec}')}" + (f" --input {quote_arg(kv_text(rest))}" if rest else "")
+
+
+def check_inline_dates(df_input: pd.DataFrame, dates: List[str]) -> None:
+    """--input 날짜 입력이 날짜로 읽히지 않으면 멈춤 (검토 B A3: '측정일=3월 1일'을 학습 기준값으로 채워 VERIFIED, 숫자 입력은 2.9.76부터 멈춤)."""
+    bad: List[str] = []
+    for col in dates:
+        if col not in df_input.columns:
+            continue
+        raw = df_input[col]
+        text = raw.map(lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip())
+        wrong = (text != "") & parse_datetime(raw).isna().to_numpy()
+        bad += [f"{col}={text[i]!r}" for i in raw.index[wrong]]
+    if bad:
+        raise InputError(f"--input의 날짜 입력 값을 날짜로 읽을 수 없습니다: {', '.join(bad[:10])}. 예측하지 않았습니다 (기준값으로 채우지 않음). "
+                         "날짜는 '2026-03-01'처럼 적습니다. 사용자에게 날짜를 확인하십시오.")
+
+
+def check_inline_blanks(df_input: pd.DataFrame, inputs: List[str]) -> None:
+    """--input 여러 건(JSON 배열·.json 파일)에서 빈 값(null, 빠진 키, 빈 글)이 있는 모델 입력이면 멈춤 (검토 B B1: 내부 오류였고, 고치면
+    학습 기준값으로 조용히 채워짐). 한 건은 _offer_median_fill이 먼저 물음. 몇 번째 건의 어느 입력인지 알림."""
+    blanks: List[str] = []
+    for i in range(len(df_input)):
+        for c in inputs:
+            v = df_input[c].iloc[i]
+            if v is None or (isinstance(v, float) and np.isnan(v)) or str(v).strip() == "":
+                blanks.append(f"{i + 1}번 건 '{c}'")
+    if blanks:
+        raise InputError(f"--input에 빈 값이 있어 예측하지 않았습니다 (학습 기준값으로 채우지 않음): {', '.join(blanks[:10])}"
+                         + (f" 외 {len(blanks) - 10}개" if len(blanks) > 10 else "")
+                         + ". 사용자에게 값을 확인한 뒤 넣어 다시 실행하십시오.")
+
+
+def check_inline_derived(df_input: pd.DataFrame, model_items: List[Dict[str, Any]]) -> None:
+    """--input에 파생변수(--eval로 학습 때 만든 열) 값을 주면 멈춤 (검토 B A4: 받아 놓고 원본 입력에서 다시 계산해 덮어써 쓰지 않았음).
+    값이 쓰이지 않으므로 그 이름을 뺀 같은 명령을 [추천] (결과가 같음)."""
+    derived: Dict[str, str] = {}
+    raw: set = set()
+    for it in model_items:
+        raw |= set(model_raw_inputs(it["meta"]))
+        for e in it["meta"].get("derived_evals", []):
+            if "=" in e:
+                d = e.split("=", 1)[0].strip()
+                derived[_alias_key(d)] = d
+    given = [str(c) for c in df_input.columns if str(c) not in raw and _alias_key(str(c)) in derived]
+    if not given:
+        return
+    cmd = command_dropping(given)
+    names = ", ".join(repr(c) for c in given)
+    raise InputError(f"--input의 {names}은(는) 모델이 원본 입력에서 계산하는 값(파생변수)이라 줄 수 없습니다 (주어도 예측에 쓰이지 않음). "
+                     + (f"그 이름을 뺀 명령 (결과가 같음): [추천] {cmd}" if cmd else f"--input에서 {names}을(를) 빼고 다시 실행하십시오."))
+
+
+def _ask_missing_category(df_input: pd.DataFrame, missing: List[str], schema: Dict[str, Any], known: set) -> None:
+    """--input에 글자 입력(범주)이 없으면 학습 범주를 [후보]로 물음 (검토 B D1: --find는 묻는데 예측은 '필수 피처 누락'만 냈음). 모르는
+    이름(오타)이 있으면 그 안내가 먼저라 그냥 둠. 한 건 'k=v'만 전체 명령(그 범주를 --input에 더함)."""
+    cats = [c for c in missing if c in schema.get("categorical", {})]
+    if not cats or any(str(c) not in known for c in df_input.columns):
+        return
+    col = cats[0]
+    kinds = schema["categorical"][col]
+    if len(df_input) == 1 and df_input.attrs.get("kv_pairs"):
+        text = category_candidates(kinds, col)
+    else:
+        text = f"[학습 범주]: {', '.join(str(k) for k in kinds[:10])}"
+    raise InputError(f"모델 입력 '{col}' 값이 필요합니다 (글자 입력은 기준값으로 채우지 않음). --input에 '{col}=<값>'을 넣어 주십시오. {text}")
 
 
 def _check_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, Any]]) -> None:
@@ -839,14 +929,18 @@ def _offer_median_fill(args: argparse.Namespace, df_input: pd.DataFrame, model_i
     needed = list(dict.fromkeys(needed))
     probe = df_input.copy()
     with contextlib.redirect_stderr(io.StringIO()):
-        align_input_columns(probe, list(dict.fromkeys(known)), [])
+        renamed = align_input_columns(probe, list(dict.fromkeys(known)), [])
     if any(str(c) not in set(known) for c in probe.columns):
         return                                  # a misspelled / unknown key: check_inline_unknown explains it
-    missing = [c for c in needed if c not in probe.columns]
+    blank = [c for c in probe.columns if pd.isna(probe[c].iloc[0]) or str(probe[c].iloc[0]).strip() == ""]
+    given_as = {feat: src for src, feat in renamed.items()}
+    missing = [c for c in needed if c not in probe.columns or c in blank]     # 'k=' / null counts as not given
     if not missing or any(c in text_inputs or c not in medians for c in missing):
         return
     fill = {c: float(f"{medians[c]:.6g}") for c in missing}
     pairs = dict(df_input.attrs.get("kv_pairs") or {str(k): v for k, v in df_input.iloc[0].to_dict().items()})
+    for c in blank:
+        pairs.pop(given_as.get(c, c), None)
     pairs.update({c: f"{v:g}" for c, v in fill.items()})
     shown = ", ".join(f"{c}={v:g}" for c, v in fill.items())
     raise InputError(
@@ -1170,6 +1264,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     missing_counts: Dict[str, int] = {}
     column_aliases: Dict[str, str] = {}
     map_warnings: List[str] = []
+    map_warn_rows = 0                 # rows whose measured comparison is outside the 90% interval (all targets)
     map_notes: List[str] = []
     snapshot_cache: Dict[str, Any] = {}
     known_names: List[str] = []       # every name a model takes (--input keys beyond these are refused)
@@ -1177,8 +1272,13 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     numeric_inputs: List[str] = []    # numbers written with '%' in these are read without it (percent_warning)
 
     if is_inline:
+        check_inline_derived(df_input, model_items)
         _offer_find(args, df_input, model_items)
         _offer_median_fill(args, df_input, model_items)
+    all_known = set()                 # every name some model takes (an --input key outside these is explained later)
+    for it in model_items:
+        all_known |= set(model_raw_inputs(it["meta"])) | set(it["meta"].get("features_required", [])) | {
+            e.split("=", 1)[0].strip() for e in it["meta"].get("derived_evals", []) if "=" in e}
 
     # 3. Perform Inference per Target
     for item in model_items:
@@ -1210,12 +1310,18 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                        and c not in meta["feature_schema"].get("datetime", {})}
             check_comma_numbers(df_input.attrs.get("kv_pairs"), lambda k: column_aliases.get(k, k) in num_raw, "--input",
                                 lambda fixed: _predict_command(args, inline=kv_text(fixed)))
-            check_inline_numbers(df_input, sorted(num_raw))
-            holders = [f"{c}={v}" for c in df_input.columns for v in df_input[c].astype(str) if re.fullmatch(r"\s*<[^<>]*>\s*", v)]
+            check_inline_numbers(df_input, sorted(num_raw), args)
+            check_inline_dates(df_input, [c for c in raw_needed if c in meta["feature_schema"].get("datetime", {})])
+            # 빈 값(None/NaN)은 글자로 바꾸지 않음 (검토 B B1: pandas 3의 astype(str)은 NaN을 그대로 두어 re.fullmatch가 TypeError)
+            holders = [f"{c}={v}" for c in df_input.columns for v in df_input[c].map(lambda x: "" if pd.isna(x) else str(x))
+                       if re.fullmatch(r"\s*<[^<>]*>\s*", v)]
             if holders:                       # 글자·날짜 입력의 <값>도 (2.9.76 2차 검토: 범주 입력은 VERIFIED로 나갔음)
                 raise InputError(f"--input에 자리표시자가 그대로 있습니다: {', '.join(holders[:10])}. 예측하지 않았습니다. "
                                  "<값> 자리에 넣을 값을 사용자에게 물은 뒤 그 값으로 바꿔 실행하십시오.")
         missing_raw = [c for c in raw_needed if c not in df_input.columns]
+        if is_inline:
+            _ask_missing_category(df_input, missing_raw, meta["feature_schema"], all_known)
+            check_inline_blanks(df_input, [c for c in raw_needed if c in df_input.columns])
         if missing_raw and any(c not in req_features for c in missing_raw):
             available_cols = [str(c) for c in df_input.columns]
             hint = "" if is_inline else _layout_hint(args, model_items, df_input, missing_raw)
@@ -1226,7 +1332,12 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         # '11.9%' next to '0.119' in one numeric input: no scale is sure (the same check as training)
         check_percent_mix(df_input, [c for c in numeric_inputs if c in df_input.columns], "입력 데이터 ")
         # 'c' / ' C ' / full-width for the training category 'C' (match_categories, the same as --sweep / --find)
-        align_categories(df_input, meta["feature_schema"])
+        unseen_in = align_categories(df_input, meta["feature_schema"])
+        if is_inline and unseen_in:
+            # 검토 B D1: a kind never seen in training is no input to predict from (--find / --sweep stop the same way);
+            # a file keeps the warning (unseen_category_warnings)
+            col, vals = next(iter(unseen_in.items()))
+            fixed_category_value(col, vals[0], meta["feature_schema"]["categorical"][col])
         df_evaled = apply_inference_evals(df_input, derived_evals)
 
         # Check required features
@@ -1371,6 +1482,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                      "method": m, "basis": b, "extrapolated": e, "outside_interval": bool(o)}
                     for v, d, m, b, e, o in zip(vals, diff, mc["method"], mc["basis"], mc["extrapolated"], outside)]
             if outside.any():
+                map_warn_rows += int(outside.sum())
                 map_warnings.append(
                     f"타겟 '{target_name}': 실측 비교값이 90% 예측 범위 밖인 건 {int(outside.sum())}건 "
                     f"(모델 예측과 실측 데이터가 많이 다름, 해당 조건의 가까운 실측 행 확인 필요)")
@@ -1520,7 +1632,10 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                 iv = (ps.get("intervals") or [])[k] if k < len(ps.get("intervals") or []) else None
                 extra = [f"90% 범위 {_fmt(float(iv[0]))} ~ {_fmt(float(iv[1]))}"] if iv else []
                 mc = (ps.get("map_check") or [])[k] if k < len(ps.get("map_check") or []) else None
-                if mc and mc.get("value") is not None:
+                if mc and mc.get("value") is not None and mc.get("extrapolated"):
+                    # 검토 B A5: 실측 범위 밖은 추세선을 늘인 값이라 실측이 아님 (수율 129%가 '실측'으로 전달됨)
+                    extra.append("실측 비교값 없음(실측 범위 밖)")
+                elif mc and mc.get("value") is not None:
                     extra.append(f"실측 비교값 {_fmt(float(mc['value']))} (차이 {float(mc['diff']):+.4g})")
                 out.append(text + (f" ({', '.join(extra)})" if extra else ""))
         return out
@@ -1535,7 +1650,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + (f" | 저확신 경고 {len(low_conf_warnings)}건" if low_conf_warnings else "")
         + (f" | 결측 대치 {sum(missing_counts.values())}건" if missing_counts else "")
         + (f" | 미학습 범주 경고 {len(category_warnings)}건" if category_warnings else "")
-        + (f" | 실측 비교 경고 {len(map_warnings)}건" if map_warnings else "")
+        + (f" | 실측 비교 경고 {map_warn_rows}건" if map_warnings else "")
         + (" | 입력별 영향 " + " ; ".join(explain_lines) if explain_lines else "")
         + (" | 실제값 비교: " + "; ".join(c["text"] + (" -> 학습 때보다 나쁨, 재학습 권장" if c["worse"] else
                                                      " (비슷함)" if c["judged"] else " (행이 적어 판단 안 함)")
@@ -1566,8 +1681,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + ("학습 때 없던 종류가 있습니다 (unseen_category_warnings). " if category_warnings else "")
         + ("실측 비교값이 예측 범위 밖입니다 (map_check_warnings). " if map_warnings else "")
         + ("warnings(데이터가 아닌 행, '%' 없이 읽은 숫자)를 빠짐없이 알리세요. " if file_warnings else "")
-        + ("예측값마다 실측 비교값(map_check의 value, diff, method)을 '실측 비교값'으로 함께 알리세요. "
-           if any("map_check_keys" in p for p in predictions_summary.values()) else "")
+        + ("예측값마다 실측 비교값(map_check의 value, diff, method)을 '실측 비교값'으로 함께 알리세요 "
+           "(extrapolated가 true인 값은 실측 범위 밖이라 실측이 아닙니다). "
+           if any("map_check" in p for p in predictions_summary.values()) else
+           "실측 비교값은 결과 파일의 map_ 열에 있습니다. "
+           if saved_file and any("map_check_keys" in p for p in predictions_summary.values()) else "")
         + (f"직접 입력이 {len(df_result)}건으로 {INLINE_SHOW_MAX}건보다 많아 건별 예측은 JSON에 없습니다 (truncated). "
            f"전체 결과는 output_file({os.path.basename(saved_file)})로 알리세요. "
            if inline_truncated and saved_file else
@@ -1693,10 +1811,8 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
     check_comma_numbers(goal_df.attrs.get("kv_pairs"), lambda k: True, "--find",
                         lambda fixed: _find_command(args, find=kv_text(fixed)))
     (goal_name, goal_val), = goal.items()
-    try:
-        y0 = float(goal_val)
-    except (TypeError, ValueError):
-        raise InputError(f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.")
+    warnings: List[str] = []
+    y0 = _number_value(goal_val, f"목표 값 '{goal_val}'이(가) 숫자가 아닙니다.", "--find ", str(goal_name), warnings)
     # the goal is resolved like ml_map --find: exact name, then a unique name without its unit ('수율' for '수율(1차)'
     # and '수율(최종)' -> [후보]); a different unit -> unit_hint
     items = resolve_target_models(target_path=args.model, filter_targets=[str(goal_name)],
@@ -1746,20 +1862,11 @@ def execute_find(args: argparse.Namespace) -> Dict[str, Any]:
                              f"{category_candidates(schema['categorical'][f], f)}")
         else:
             raise InputError(f"모델 입력 '{f}' 값이 필요합니다. --input에 '{f}=<값>'을 넣어 주십시오.")
-    warnings: List[str] = []
     for f, v in fixed.items():
         if f in schema.get("categorical", {}):
             fixed[f] = fixed_category_value(f, v, schema["categorical"][f])
-        if f not in numeric_in:
-            continue
-        st = stats.get(f)
-        try:
-            fv = float(v)
-        except (TypeError, ValueError):
-            raise InputError(f"고정 입력 '{f}'의 값 '{v}'이(가) 숫자가 아닙니다. --input에 '{f}=<숫자>'로 다시 지정하십시오.")
-        fixed[f] = fv
-        if st and (fv < st["min"] or fv > st["max"]):
-            warnings.append(f"고정 입력 '{f}'={_fmt(fv)}이(가) 학습 범위({_fmt(st['min'])}~{_fmt(st['max'])}) 밖이라 답을 믿기 어렵습니다")
+    check_fixed_inputs(fixed, numeric_in, list(schema.get("datetime", {})), stats, meta.get("datetime_stats") or {},
+                       warnings, "답을 믿기 어렵습니다")
     base = {**fixed, **filled}
 
     lo, hi = float(stats[vary]["min"]), float(stats[vary]["max"])
@@ -1939,6 +2046,44 @@ def _whatif_command(args: argparse.Namespace, inline: str) -> Optional[str]:
     return f"{cmd} --input {quote_arg(inline)}" if cmd else None
 
 
+def _number_value(v: Any, error: str, where: str, name: str, warnings: List[str]) -> float:
+    """A number of --find / a fixed --input value read like a one-record prediction (검토 B A3·B6·D2): '%' taken off and said
+    (percent_warning), nan / inf and text are no numbers (nan was imputed with the training median, inf an internal error)."""
+    text = "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip()
+    num = float(coerce_numeric(pd.Series([text], dtype=object)).iloc[0]) if text else float("nan")
+    if not np.isfinite(num):
+        raise InputError(error)
+    warnings.extend(w for w in percent_warning(pd.DataFrame({name: [text]}), [name], where) if w not in warnings)
+    return num
+
+
+def check_fixed_inputs(fixed: Dict[str, Any], numeric: List[str], dates: List[str], stats: Dict[str, Any],
+                       date_stats: Dict[str, Any], warnings: List[str], word: str) -> None:
+    """The fixed inputs of --find / --sweep / --maximize / --suggest, in place: numbers must be finite numbers, dates must read as
+    dates (검토 B A3: '측정일=어제' was predicted as another date and VERIFIED); values outside the training range or period
+    are warned (`word`: what is hard to trust)."""
+    for f in list(fixed):
+        v = fixed[f]
+        if f in dates:
+            ts = parse_datetime(pd.Series([v], dtype=object)).iloc[0]
+            if pd.isna(ts):
+                raise InputError(f"고정 입력 '{f}'의 값 '{v}'을(를) 날짜로 읽을 수 없습니다 (날짜는 '2026-03-01'처럼 적음). "
+                                 f"사용자에게 날짜를 확인한 뒤 --input에 '{f}=<날짜>'로 다시 지정하십시오.")
+            rng = date_stats.get(f) or {}
+            if rng.get("min") and rng.get("max"):
+                lo, hi = pd.Timestamp(rng["min"]), pd.Timestamp(rng["max"])
+                if ts < lo or ts > hi:
+                    warnings.append(f"고정 입력 '{f}'={ts.date()}이(가) 학습 기간({lo.date()} ~ {hi.date()}) 밖이라 {word}")
+            continue
+        if f not in numeric:
+            continue
+        fixed[f] = _number_value(v, f"고정 입력 '{f}'의 값 '{v}'이(가) 숫자가 아닙니다. --input에 '{f}=<숫자>'로 다시 지정하십시오.",
+                                 "--input ", f, warnings)
+        st = stats.get(f)
+        if st and (fixed[f] < st["min"] or fixed[f] > st["max"]):
+            warnings.append(f"고정 입력 '{f}'={_fmt(fixed[f])}이(가) 학습 범위({_fmt(st['min'])}~{_fmt(st['max'])}) 밖이라 {word}")
+
+
 def _base_inputs(args: argparse.Namespace, items: List[Dict[str, Any]], vary: List[str]) -> Dict[str, Any]:
     """The fixed inputs (--input, one record) and the training medians of the numeric inputs not given (not the varied ones).
     A missing text / date input stops (STOP_RETRY [후보]): no value of it is neutral."""
@@ -1962,16 +2107,12 @@ def _base_inputs(args: argparse.Namespace, items: List[Dict[str, Any]], vary: Li
     for f in list(fixed):
         if f in cats:
             fixed[f] = fixed_category_value(f, fixed[f], cats[f])
-        if f not in numeric:
-            continue
-        try:
-            fixed[f] = float(fixed[f])
-        except (TypeError, ValueError):
-            raise InputError(f"고정 입력 '{f}'의 값 '{fixed[f]}'이(가) 숫자가 아닙니다. --input에 '{f}=<숫자>'로 다시 지정하십시오.")
-        st = stats.get(f)
-        if st and (fixed[f] < st["min"] or fixed[f] > st["max"]):
-            warnings.append(f"고정 입력 '{f}'={_fmt(fixed[f])}이(가) 학습 범위({_fmt(st['min'])}~{_fmt(st['max'])}) 밖이라 "
-                            f"예측을 믿기 어렵습니다 (외삽)")
+    date_stats: Dict[str, Any] = {}
+    for it in items:
+        for c, rng in (it["meta"].get("datetime_stats") or {}).items():
+            date_stats.setdefault(c, rng)
+    dates = [c for c in raw if c not in numeric and c not in cats]
+    check_fixed_inputs(fixed, numeric, dates, stats, date_stats, warnings, "예측을 믿기 어렵습니다 (외삽)")
     filled: Dict[str, float] = {}
     for f in raw:
         if f in vary or f in fixed:
@@ -2295,10 +2436,22 @@ def execute_search(args: argparse.Namespace) -> Dict[str, Any]:
     vary = _vary_names(args, args.vary, numeric, stats, "--vary")
     if len(vary) > SEARCH_MAX_VARY:
         raise InputError(f"--vary 입력은 {SEARCH_MAX_VARY}개까지입니다 (지금 {len(vary)}개). 영향이 큰 입력만 고르도록 사용자에게 물으십시오.")
-    info = _base_inputs(args, items, vary)
     conds = None
     if args.where:
         conds = resolve_where(parse_where(args.where, "--where"), names + raw, "--where")
+    info = _base_inputs(args, items, vary)
+    # 검토 B A6: an input of --where that is neither varied nor fixed would sit at its training median, so a condition on it
+    # ('압력 >= 4' with the median 2.8) can never hold and the answer was 'no combination' -> it is varied too (판단 대행, warned)
+    where_free = list(dict.fromkeys(c for g in (conds or []) for c, _, _ in g if c in info["filled"] and c in stats))
+    if where_free:
+        if len(vary) + len(where_free) > SEARCH_MAX_VARY:
+            raise InputError(f"--where의 {where_free}은(는) --vary에도 --input에도 없어 학습 중앙값으로 고정되면 조건이 맞지 않습니다. "
+                             f"--vary에 더하면 {len(vary) + len(where_free)}개로 {SEARCH_MAX_VARY}개를 넘습니다. "
+                             "바꿔 볼 입력을 줄이도록 사용자에게 물으십시오.")
+        vary = vary + where_free
+        info = _base_inputs(args, items, vary)
+        info["warnings"].insert(0, f"--where에 쓴 입력 {', '.join(where_free)}은(는) --vary에도 --input에도 없어 --vary에 더해 함께 "
+                                   f"바꿔 가며 찾았습니다 (중앙값에 고정하면 조건을 만족할 수 없음)")
     lows = np.array([float(stats[v]["min"]) for v in vary])
     highs = np.array([float(stats[v]["max"]) for v in vary])
     spans = np.maximum(highs - lows, 1e-12)
@@ -2748,7 +2901,12 @@ def main():
         if args.find or search or args.file:
             parser.error("조건별 예측(--sweep)에는 --find, --maximize, --minimize, --file를 함께 쓰지 않습니다.")
         if args.vary:
-            parser.error("--sweep에는 바꿀 입력을 --sweep 값에 씁니다 (예: --sweep \"반응온도=170:200:5\"). --vary를 빼십시오.")
+            # 검토 B B4: 고친 전체 명령을 [추천] (--vary 이름을 --sweep 값 앞에 붙이고 --vary를 뺌)
+            spec = str(args.sweep).strip()
+            fixed = spec if "=" in spec or "," in str(args.vary) else f"{str(args.vary).strip()}={spec}"
+            base = command_text(drop={"--vary": "", "--sweep": ""})
+            parser.error("--sweep에는 바꿀 입력을 --sweep 값에 씁니다 (예: --sweep \"반응온도=170:200:5\"). --vary를 빼십시오"
+                         + (f". [추천] {base} --sweep {quote_arg(fixed)}" if base and "," not in str(args.vary) else ""))
         run_cli(lambda: execute_sweep(resolve_model_arg(args)), hint="확인할 것: 입력 이름과 --sweep 범위.")
         return
     if search:
