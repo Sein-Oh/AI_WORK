@@ -1038,7 +1038,7 @@ def test_pretty_formula_keeps_slash_and_star_in_column_names():
 @needs_report
 def test_report_save_must_be_a_word_file_and_relative_paths_go_to_the_data_folder(three_targets):
     """A5: --save out.pdf에 Word 파일을 저장하고 VERIFIED였다 -> STOP_RETRY + [추천] .docx 전체 명령. 확장자가 없으면 .docx.
-    B3: 상대 경로는 성능예측표처럼 <데이터>_ml_data 폴더 기준 (없는 폴더는 만듦)."""
+    B3: 상대 경로는 성능예측표처럼 한 기준 (없는 폴더는 만듦). 결정 1-6: 그 기준은 원본 데이터 파일 옆, [추천] 명령도 같은 곳."""
     d, data, tr = three_targets
     proc, res = run_raw("ml_report.py", "--model", tr["version_dir"], "--targets", "A", "--save", str(d / "out.pdf"))
     msg = stop_msg(res, proc)
@@ -1049,7 +1049,11 @@ def test_report_save_must_be_a_word_file_and_relative_paths_go_to_the_data_folde
     assert run_tool("ml_report.py", "--model", tr["version_dir"], "--targets", "A",
                     "--save", str(d / "noext"))["report_file"] == str(d / "noext.docx")
     rel = run_tool("ml_report.py", "--model", tr["version_dir"], "--targets", "A", "--save", os.path.join("새폴더", "rel.docx"))
-    assert rel["report_file"] == os.path.join(os.path.dirname(tr["version_dir"]), "새폴더", "rel.docx"), rel["report_file"]
+    # 결정 1-6: 상대 경로는 원본 데이터 파일 옆 (성능예측표·데이터셋과 같음, 2.9.88은 <데이터>_ml_data)
+    assert rel["report_file"] == os.path.join(os.path.dirname(str(data)), "새폴더", "rel.docx"), rel["report_file"]
+    proc, res = run_raw("ml_report.py", "--model-dir", tr["version_dir"], "--targets", "A", "--save", "추천.docx")
+    script, argv = recommended_command(res["message"])
+    assert proc.returncode == 2 and argv[argv.index("--save") + 1] == os.path.join(os.path.dirname(str(data)), "추천.docx"), argv
 
 
 def _fake_tree(**champ):
@@ -1170,6 +1174,12 @@ def test_export_save_folder_extension_and_missing_version(export_version, tmp_pa
     script, argv = recommended_command(stop_msg(res, proc))
     assert script == "ml_export.py" and argv[argv.index("--save") + 1] == str(tmp_path / "my.xlsx"), argv
     assert not list(tmp_path.glob("my.xls*"))
+    # 결정 1-6: 상대 --save는 원본 데이터 파일 옆 (보고서·데이터셋과 같음), 다른 확장자의 [추천]도 같은 곳
+    rel = run_tool("ml_export.py", "--model", vdir, "--save", os.path.join("표", "rel"))
+    assert rel["output_file"] == str(d / "표" / "rel.xlsx"), rel["output_file"]
+    proc, res = run_raw("ml_export.py", "--model", vdir, "--save", "rel.xls")
+    script, argv = recommended_command(stop_msg(res, proc))
+    assert argv[argv.index("--save") + 1] == str(d / "rel.xlsx"), argv
     root = tmp_path / "s_ml_data"                     # 학습한 버전이 v1 하나인 데이터 폴더 (다른 테스트가 버전을 더 만들어도)
     shutil.copytree(vdir, root / "v1")
     proc, res = run_raw("ml_export.py", "--model", str(root / "v9"))

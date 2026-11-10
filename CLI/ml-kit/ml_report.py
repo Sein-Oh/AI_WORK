@@ -25,6 +25,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, mark_committed, warn_long_path, avoid_overwrite,
     strip_unit, note_recovered, read_text_file, resolve_column_names, model_dir_from_data, final_version,
+    data_folder_of, resolve_save,
     command_text, quote_arg, name_list, version_hint, compile_formula,
 )
 import _ml_runtime  # noqa: E402  (RUN_COMMITTED, WATCHDOG_HOLD: read at the time, never a stale list)
@@ -1607,14 +1608,14 @@ def history_warnings(info: Dict[str, Any], targets: List[str]) -> List[str]:
     return out
 
 
-def report_save_path(save: Optional[str], data_root: str) -> Optional[str]:
+def report_save_path(save: Optional[str], data_folder: str) -> Optional[str]:
     """--save -> the report path. Only Word (.docx): no extension -> .docx added; another extension (out.pdf) ->
     STOP_RETRY + [추천] the same command with .docx (2.9.88 A5: a Word file was saved as out.pdf and VERIFIED).
-    A relative path is under the default folder <데이터>_ml_data (2.9.88 B3: like ml_export; ml_dataset: next to the data)."""
+    A relative path is next to the original data file (결정 1-6: like ml_export and ml_dataset, and the [추천] commands
+    of command_text)."""
     if not save or not save.strip():
         return None
-    save = save.strip()
-    path = save if os.path.isabs(save) else os.path.join(data_root, save)
+    path = resolve_save(save, data_folder)
     ext = os.path.splitext(path)[1]
     if not ext:
         return path + ".docx"
@@ -1645,7 +1646,7 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
         vdir = model_dir_from_data(args.file, "--file")
         history = final_version(os.path.dirname(vdir))
     ctx = load_version(vdir, target_filter)
-    out_path = report_save_path(args.save, ctx["data_root"])
+    out_path = report_save_path(args.save, data_folder_of(vdir))
     task = ctx["record"]["task"]
     title = getattr(args, "title", None)
     names = [t["name"] for t in ctx["targets"]] if target_filter else None
@@ -1674,7 +1675,7 @@ def main():
     parser.add_argument("--model",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
     parser.add_argument("--targets", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
-    parser.add_argument("--save", help="저장할 .docx 경로 (상대 경로와 이름만은 <데이터>_ml_data 폴더 기준, 생략 시 그 폴더에 "
+    parser.add_argument("--save", help="저장할 .docx 경로 (상대 경로와 이름만은 원본 데이터 파일 옆, 생략 시 <데이터>_ml_data 폴더에 "
                                        "ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")

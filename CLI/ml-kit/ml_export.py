@@ -26,7 +26,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, compile_formula,
     VERSION, SNAPSHOT_EXCL_PREFIX, model_raw_inputs, mark_committed, model_dir_from_data, version_hint, saved_as,
-    command_text, quote_arg,
+    command_text, quote_arg, data_folder_of, resolve_save,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command); the saved models need it
@@ -1141,7 +1141,7 @@ def execute_export(args) -> Dict[str, Any]:
     data_root = os.path.dirname(vinfo["dir"])
     stem = re.sub(r"_ml_data$", "", os.path.basename(data_root)) or "모델"
     default = os.path.join(data_root, f"성능예측표_{stem}_{os.path.basename(vinfo['dir'])}.xlsx")
-    path = save_path(args.save, data_root) if args.save else default
+    path = save_path(args.save, data_folder_of(vinfo["dir"])) if args.save else default
     # the 'recovered' note of a new name waits for the saved file (B6: a run stopped before saving reported a file
     # that was never written)
     path = avoid_overwrite(os.path.abspath(path), getattr(args, "overwrite", False), what="성능예측표", defer=True)
@@ -1196,12 +1196,12 @@ def export_brief(out_targets: Dict[str, Dict[str, Any]]) -> str:
     return head + "; ".join(one(t, v) for t, v in items)
 
 
-def save_path(save: str, data_root: str) -> str:
-    """--save -> the workbook path. A relative path is under <데이터>_ml_data (with the report); no extension -> .xlsx;
-    another extension -> STOP_RETRY + [추천] the same command with .xlsx (2.9.88 B3: 'my.xls' was saved as 'my.xls.xlsx').
-    A folder that does not exist is made; one that cannot be made is STOP_RETRY."""
-    save = save.strip()
-    path = os.path.abspath(save if os.path.isabs(save) else os.path.join(data_root, save))
+def save_path(save: str, data_folder: str) -> str:
+    """--save -> the workbook path. A relative path is next to the original data file (결정 1-6: like the report, the
+    dataset and the [추천] commands); no extension -> .xlsx; another extension -> STOP_RETRY + [추천] the same command
+    with .xlsx (2.9.88 B3: 'my.xls' was saved as 'my.xls.xlsx'). A folder that does not exist is made; one that cannot
+    be made is STOP_RETRY."""
+    path = resolve_save(save, data_folder)
     ext = os.path.splitext(path)[1]
     if not ext:
         path += ".xlsx"
@@ -1224,7 +1224,7 @@ def main():
     parser.add_argument("--model", required=True, help="학습한 데이터 파일(도구가 최종 버전, 곧 마지막 학습을 씀) 또는 버전 폴더 (예: 공정_ml_data/v3)")
     parser.add_argument("--targets", help="표로 만들 숫자 타겟 (쉼표 구분, 생략 시 전부)")
     parser.add_argument("--title", help="계산기 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
-    parser.add_argument("--save", help="저장 경로 (.xlsx, 상대 경로와 이름만은 <데이터>_ml_data 폴더 기준, 없는 폴더는 만듦. "
+    parser.add_argument("--save", help="저장 경로 (.xlsx, 상대 경로와 이름만은 원본 데이터 파일 옆, 없는 폴더는 만듦. "
                                        "생략 시 보고서와 같은 <데이터>_ml_data 폴더에 성능예측표_<데이터>_<버전>.xlsx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
