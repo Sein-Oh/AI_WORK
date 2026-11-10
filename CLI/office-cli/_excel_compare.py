@@ -275,7 +275,14 @@ def _cmp_read_file(path: str, sheet: Optional[str], prefer: Optional[str], optio
     try:
         ws, reason = _cmp_pick_sheet(wb, sheet, prefer, option)
         ws.reset_dimensions()          # 크기 정보가 틀린 파일(다른 프로그램이 만든 xlsx)도 끝까지 읽음
-        rows = [[_cmp_cell(v) for v in r] for r in ws.iter_rows(min_row=1, min_col=1, values_only=True)]
+        rows = []
+        for r in ws.iter_rows(min_row=1, min_col=1, values_only=True):
+            row = [_cmp_cell(v) for v in r] if r else []
+            while row and row[-1] is None:     # 행마다 값이 있는 끝까지만 (XFD1048576의 떠돌이 칸 하나로 모든 행을 16384열로
+                row.pop()                      # 채워 멈추던 것, 2026-11-09 검토 B7)
+            rows.append(row)
+        while rows and not rows[-1]:
+            rows.pop()
         title = ws.title
     finally:
         wb.close()
@@ -696,6 +703,11 @@ def cmd_compare(args) -> Dict[str, Any]:
             _cmp_save_cache(old_data)
             raise
     new_data = _cmp_load(new_path, args.sheet2, None if args.sheet2 else old_data["sheet"], "--sheet2")
+    if os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(new_path)) and \
+            old_data["sheet"] == new_data["sheet"]:
+        # 같은 파일의 같은 시트를 자기 자신과 비교해 'VERIFIED: 0건. 바뀐 것 없음'이던 것 (2026-11-09 검토 B13)
+        raise rt.InputError(f"--target과 --target2가 같은 파일이고 비교할 시트도 같습니다('{old_data['sheet']}'). 같은 파일의 두 시트를 비교하려면 "
+                            "--sheet와 --sheet2에 서로 다른 시트를 주세요.")
     warnings += old_data.get("warnings", []) + new_data.get("warnings", [])
     old, new = _cmp_table(old_data, old_path), _cmp_table(new_data, new_path)
     if not old["body"] and not new["body"]:

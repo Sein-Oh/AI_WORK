@@ -1542,3 +1542,12 @@ def test_dash_starting_text_value_is_taken_as_value(tmp_path, capsys):
     assert code == 0 and out["count"] == 1 and out["query"] == "-40℃", out
     code, out = run_main(reader, capsys, "search", "--query", "--file", str(p))      # 옵션 이름은 값으로 붙이지 않음
     assert code == 2, out
+
+
+def test_error_log_hides_mail_account_and_stray_text(capsys, isolated_dirs):
+    """2026-11-09 검토 B13: --folder의 계정 주소, 옵션 이름 없이 준 본문이 오류 로그에 남던 것. 안내도 '옵션 이름과 함께'."""
+    code, out = run_main(outlook, capsys, "reply", "--id", "3", "확인했습니다 비밀")
+    assert code == 2 and "--body" in out["message"] and "큰따옴표" not in out["message"], out
+    code, out = run_main(outlook, capsys, "list", "--folder", "hong@corp.com\\받은 편지함", "--limit", "x")
+    text = error_log_text(isolated_dirs)
+    assert "확인했습니다 비밀" not in text and "hong@corp.com" not in text, text

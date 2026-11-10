@@ -11,6 +11,38 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.95] - 2026-11-10
+
+전체 검토 2장 B7, B8, B10~B13: 내부 오류·멈춤·작은 계약 위반.
+
+### 수정
+- B7 `XFD1048576`에 떠돌이 칸(공백)이 있는 xlsx: 범위 없는 `read`가 MemoryError, `compare`가 140초 넘게 멈추던 것. 닫힌 시트의 크기가
+  칸 수 상한을 넘으면 값이 있는 칸(공백만인 글 제외)으로 범위를 다시 셈, `compare`는 행마다 값이 있는 끝까지만 담음.
+- B8 `excel style/replace/range/sheet/chart --target <없는 경로>`가 빈 새 파일을 만들고 VERIFIED이던 것: 새 파일은 `write`만 만듦 (나머지는 STOP_RETRY와 비슷한 이름 `[후보]`).
+- B10 reader `search --regex`: 반복 안의 반복이 있고 구분 글자가 없는 정규식(`(\w+\s?)+`, `(a+)+`)은 끝나지 않을 수 있어 실행 전에 STOP_RETRY
+  (120초 제한에 JSON 없이 끊기던 것). `(\d{1,3},)+`처럼 구분 글자가 있으면 그대로.
+- B11 reader PPTX: 종류를 알 수 없는 도형(`shape_type`이 NotImplementedError) 하나로 파일 전체가 ERROR이던 것. 그룹은 하위 도형으로 알아보고 도형마다 따로.
+- B12 `range --action copy --dest 요약`(시트 이름만), `chart --at 요약!E1`, `range --action freeze --range 3:3`이 ERROR(freeze는 기존 고정을 먼저 풂)이던 것:
+  바꾸기 전에 주소를 확인해 STOP_RETRY. `--dest`가 있는 시트 이름이면 `[추천] --dest 요약!A1`, freeze의 행·열 전체는 첫 칸(`A3`)으로 `[추천]`.
+- B13 그 밖:
+  - `--save`의 확장자를 말없이 바꾸던 것(`read --save res.xlsx` -> `res.csv`, reader `--save x.docx` -> `.md`): `recovered`로 알림 (`resolve_output_path` 한 곳).
+  - `excel read --search "1,000"`, `"25%"`가 숫자 칸(1000, 0.25)을 찾음.
+  - `read --range B:B`의 `rows`가 서식만 있는 끝 행까지 세던 것: 끝쪽 빈 행을 뺌.
+  - 기간 칸(`[h]:mm`)은 `30:00:00`(전에는 `1 day, 6:00:00`).
+  - xlsx가 아닌 zip·깨진 시트 XML이 ERROR(KeyError/ParseError)이던 것: STOP_RETRY.
+  - `compare`가 같은 파일의 같은 시트를 자기 자신과 비교해 "바뀐 것 없음" VERIFIED이던 것: 거절.
+  - `check --target x.csv`가 CSV에 메모를 다는 다음 명령을 내던 것: 내지 않음.
+  - `write --range C5:A1`(뒤집힌 범위)은 `A1:C5`로.
+  - `style --align`·`--border`만 주면 다시 읽지 않고 VERIFIED이던 것: 가로 맞춤·테두리도 다시 읽음.
+  - 닫힌 파일의 `sheet --action select`가 남는 것 없이 VERIFIED이던 것: 열린 통합문서에서만 (STOP_RETRY).
+  - 범위 없는 `--append`가 표가 A열에서 시작하지 않으면(B3:C5) A열에 쓰던 것: 사용 범위의 첫 칸 기준.
+  - reader `read --pages 2,3,4,5,6,300`의 이어 읽기가 `--units 10-600`(고르지 않은 쪽 포함)이던 것: 남은 번호만.
+  - outlook 첨부 차단 확장자 검사가 `evil.exe `, `a.js.`(끝의 공백·점)로 우회되던 것.
+  - 오류 로그: 명령·결과의 메일 주소(`--folder 'hong@corp.com\받은 편지함'`)는 `<메일 계정>`, 옵션 이름 없이 준 글(`reply --id 3 "확인했습니다"`)은
+    `<N자 생략>`. 그때의 안내는 "따옴표로"가 아니라 "글은 옵션 이름과 함께(--body)".
+  - reader 검색: 다른 폴더의 같은 이름 파일은 근거·`file`에 상위 폴더 이름(`A\spec.txt 단락 2`).
+  - reader `index`: 글자 없는 스캔 PDF는 `warnings`와 `ocr_needed`로 알림 (전에는 "등록 완료, 검색 가능"만).
+
 ## [1.4.94] - 2026-11-09
 
 전체 검토 1장 A7~A9: 열린 엑셀 문서에서 틀린 결과를 `VERIFIED:`로 내던 결함 (가짜 COM을 실제 동작에 맞게 고쳐 시험, 실기 항목은 3장 묶음에서).

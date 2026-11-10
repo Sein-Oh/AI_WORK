@@ -449,6 +449,13 @@ def _safe_name(text: str, limit: int, default: str = "메일") -> str:
     return rt.safe_filename(text, limit, default)
 
 
+def _blocked_name(name: str) -> bool:
+    """실행 파일 형식 첨부인지. 이름 끝의 공백·점을 지운 뒤 확장자로 봄 (Windows는 저장할 때 끝의 공백·점을 지워
+    'evil.exe '와 'a.js.'가 실행 파일이 되는데 검사를 통과하던 것, 2026-11-09 검토 B13)."""
+    clean = name.rstrip(" .\t")
+    return os.path.splitext(clean)[1].lower() in BLOCKED_ATTACH
+
+
 def _attachment_infos(item: Any) -> List[Dict[str, Any]]:
     """메일의 첨부 목록: index(1부터), name, size(Outlook이 알려 주면 바이트), hidden_inline(본문 삽입 이미지), blocked(실행 파일 형식)."""
     infos: List[Dict[str, Any]] = []
@@ -472,7 +479,7 @@ def _attachment_infos(item: Any) -> List[Dict[str, Any]]:
         except Exception:
             hidden = False
         infos.append({"index": i, "name": name, "size": size, "hidden_inline": hidden,
-                      "blocked": os.path.splitext(name)[1].lower() in BLOCKED_ATTACH, "_att": att})
+                      "blocked": _blocked_name(name), "_att": att})
     return infos
 
 

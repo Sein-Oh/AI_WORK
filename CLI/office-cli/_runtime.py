@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.94"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.95"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -503,6 +503,8 @@ REDACT_SHORT = {"-q": "--query"}
 REDACT_KEEP = {"office": {"--from", "--to"}, "ppt": {"--to"}}
 # 도구마다 같은 이름이 내용인 옵션 (excel style --highlight '=완료:lightgreen'은 셀 값, word --highlight는 색 이름이라 남김)
 REDACT_EXTRA = {"excel": {"--highlight"}}
+# 오류 로그의 명령·결과에 남은 메일 주소 (outlook --folder 'hong@corp.com\받은 편지함'의 계정 이름, 2026-11-09 검토 B13)
+_MAIL_ADDR = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 
 _REDACTED = re.compile(r"^(?:-{1,2}[\w-]+=)?<\d+자 생략>$")
@@ -658,12 +660,13 @@ def write_error_log(tool: str, argv: Optional[Sequence[str]], payload: Dict[str,
         if argv is None:
             argv = CURRENT_ARGV if CURRENT_ARGV is not None else sys.argv[1:]
         script = f"{tool}.py" if tool else os.path.basename(sys.argv[0] or "")
-        args = " ".join([script] + [a if _REDACTED.match(a) else quote_arg(a) for a in redact_argv(argv, tool)]).strip()
+        args = " ".join([script] + [a if _REDACTED.match(a) else quote_arg(_MAIL_ADDR.sub("<메일 계정>", a))
+                                    for a in redact_argv(argv, tool)]).strip()
         lines = [f"===== {_dt.datetime.now().isoformat(timespec='seconds')} | {TOOL_NAME} {VERSION} | "
                  f"Python {platform.python_version()} | {platform.platform()}",
                  f"명령: {args}",
                  f"결과: {payload.get('error_type')} | "
-                 f"{log_message(payload.get('message') if log_msg is None else log_msg, argv, tool)}"]
+                 f"{_MAIL_ADDR.sub('<메일 계정>', log_message(payload.get('message') if log_msg is None else log_msg, argv, tool))}"]
         if RECOVERY_ATTEMPTS:
             lines.append("복구 시도: " + "; ".join(RECOVERY_ATTEMPTS))
         if trace:
@@ -1086,6 +1089,11 @@ class JsonArgumentParser(argparse.ArgumentParser):
             return (f" {', '.join(extra)}은(는) 옵션이 아니라 결과 JSON의 키입니다 (행 수는 결과의 rows). "
                     f"[추천] {next_command(f'{self.tool_name}.py', rest, '')['command']}")
         if not flags:
+            text_opts = [o for o in ("--body", "--query", "--text", "--value") if o in opts]
+            if text_opts and not any(re.search(r"[\\/:]", x) for x in extra):
+                # 'reply --id 3 "확인했습니다"': 빠진 것은 따옴표가 아니라 옵션 이름 (검토 B13)
+                return (f" 옵션 이름 없이 준 글이 있습니다. 글은 옵션 이름과 함께 주세요: {', '.join(text_opts)} \"<글>\" "
+                        f"(예: {text_opts[0]} \"확인했습니다\").")
             return " 띄어쓰기가 있는 경로나 값은 큰따옴표로 감싸세요 (예: --target \"C:\\폴더 이름\\파일.xlsx\")."
         opts = [o for o in opts if o != "--help"]
         return f" '{cmd}' 명령에는 {', '.join(flags)} 옵션이 없습니다. 옵션: {', '.join(opts)}" if opts else ""
@@ -1158,7 +1166,15 @@ class JsonArgumentParser(argparse.ArgumentParser):
         }
         if self._confirm:
             payload["confirm_commands"] = self._confirm
-        write_error_log(self.tool_name, None, payload)
+        # 옵션 이름 없이 준 글(본문·검색어일 수 있음)은 오류 로그의 명령·결과에 남기지 않음 (검토 B13)
+        m_un = re.search(r"unrecognized arguments: (.+)$", message)
+        unrec = f" {m_un.group(1)} " if m_un else ""
+        stray = [a for a in (CURRENT_ARGV or [])[1:] if a and not a.startswith("-") and f" {a} " in unrec]
+        argv = [f"<{len(a)}자 생략>" if a in stray else a for a in (CURRENT_ARGV or [])]
+        log_msg = payload["message"]
+        for x in stray:
+            log_msg = log_msg.replace(x, f"<{len(x)}자 생략>")
+        write_error_log(self.tool_name, argv if stray else None, payload, log_msg=log_msg if stray else None)
         emit_json(payload)
         sys.exit(2)
 
@@ -1320,6 +1336,8 @@ def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwr
     raw = os.path.expandvars(os.path.expanduser(str(path).strip().strip('"')))
     base, cur_ext = os.path.splitext(raw)
     if cur_ext.lower() != ext.lower():
+        if cur_ext:      # 말없이 확장자를 바꾸던 것 (read --save res.xlsx -> res.csv, 2026-11-09 검토 B13): 결과가 달라진 일이라 recovered
+            note_recovered(f"{os.path.basename(raw)}의 {cur_ext} 형식으로는 저장하지 않음 -> {os.path.basename(base + ext)}({ext})로 저장")
         raw = (base if cur_ext else raw) + ext
     if not os.path.isabs(raw) and not os.path.dirname(raw):
         raw = os.path.join(get_data_dir(), raw)

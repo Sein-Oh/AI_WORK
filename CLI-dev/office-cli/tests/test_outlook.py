@@ -1951,3 +1951,9 @@ def test_compose_result_shows_cc(capsys, monkeypatch):
     mail = Mail([Recip("a@x.com", True)])
     code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
     assert code == 0 and "cc" not in out and "참조" not in out["preview"], out
+
+
+def test_blocked_attachment_check_ignores_trailing_space_and_dot():
+    """2026-11-09 검토 B13: 'evil.exe ', 'a.js.'는 Windows가 저장할 때 끝의 공백·점을 지워 실행 파일이 됨."""
+    assert outlook._blocked_name("evil.exe ") and outlook._blocked_name("a.js.") and outlook._blocked_name("b.EXE")
+    assert not outlook._blocked_name("보고서.pdf") and not outlook._blocked_name("표.xlsx. ")

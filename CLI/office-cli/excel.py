@@ -123,6 +123,14 @@ def split_sheet(address: str) -> Tuple[Optional[str], str]:
     return sheet, cells.strip()
 
 
+_CELL_ADDR = re.compile(r"^\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?$")
+
+
+def is_cell_address(text: str) -> bool:
+    """'A1', '$B$2', 'A1:C5' 꼴인지 (열·행 전체 'B:B', '3:3'은 아님)."""
+    return bool(_CELL_ADDR.match((text or "").strip()))
+
+
 def addr(r1: int, c1: int, r2: Optional[int] = None, c2: Optional[int] = None) -> str:
     a = f"{col_letter(c1)}{r1}"
     if r2 is None or (r2 == r1 and c2 == c1):
@@ -131,11 +139,15 @@ def addr(r1: int, c1: int, r2: Optional[int] = None, c2: Optional[int] = None) -
 
 
 def out_value(v: Any) -> Any:
-    """Excel 값 -> JSON/CSV용 값 (정수형 실수는 정수로, 날짜는 ISO 문자열로)."""
+    """Excel 값 -> JSON/CSV용 값 (정수형 실수는 정수로, 날짜는 ISO 문자열로, 기간([h]:mm 칸)은 '30:00:00')."""
     if v is None:
         return ""
     if isinstance(v, bool):
         return v
+    if isinstance(v, _dt.timedelta):          # '1 day, 6:00:00'으로 나오던 것 (2026-11-09 검토 B13)
+        total = int(round(v.total_seconds()))
+        sign, total = ("-", -total) if total < 0 else ("", total)
+        return f"{sign}{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}"
     if isinstance(v, float):
         return int(v) if v.is_integer() and abs(v) < 1e15 else v
     if hasattr(v, "isoformat") and hasattr(v, "year"):
@@ -268,10 +280,11 @@ def _read_matrix_csv(path: str, address: Optional[str]) -> Tuple[str, int, int, 
 
 
 def write_session(args, command: str):
-    """쓰기 명령의 세션. --dry-run이면 읽기 세션 (저장·새 파일·되돌리기 지점·화면 이동 없음)."""
+    """쓰기 명령의 세션. --dry-run이면 읽기 세션 (저장·새 파일·되돌리기 지점·화면 이동 없음).
+    없는 파일을 새로 만드는 것은 write뿐 (style·replace·range·sheet·chart는 경로 오타면 빈 새 파일을 만들고 VERIFIED였음, 2026-11-09 검토 B8)."""
     dry = bool(getattr(args, "dry_run", False))
     return off.open_target("excel", args.target, readonly=dry, focus=not args.no_focus,
-                           create=not dry, tool=TOOL, command=command)
+                           create=not dry and command == "write", tool=TOOL, command=command)
 
 
 def target_range(t: off.OfficeTarget, ws: Any, address: Optional[str]) -> Any:
@@ -310,11 +323,23 @@ def _closed_bounds(ws: Any, path: Optional[str] = None) -> Tuple[int, int, int, 
                 r2, c2 = max(r2, ext[0]), max(c2, ext[1])
                 if r1 > r2 or c1 > c2 or r1 < 1:
                     r1, c1 = 1, 1
+        if (r2 - r1 + 1) * (c2 - c1 + 1) > CLOSED_MAX_CELLS:
+            # 떠돌이 먼 칸(XFD1048576의 공백 등)으로 크기가 커진 파일: 값이 있는 칸만으로 다시 셈 (전에는 MemoryError, 검토 B7)
+            return _scan_bounds(ws)
         return r1, c1, r2, c2
+    return _scan_bounds(ws)
+
+
+def _scan_bounds(ws: Any) -> Tuple[int, int, int, int]:
+    """칸을 훑어 값이 있는(공백만인 글 제외) 범위. 빈 시트는 (1, 1, 0, 0). 읽기 전용 시트는 크기 정보를 지우고 행마다 있는 칸만 훑음."""
+    if hasattr(ws, "reset_dimensions"):
+        ws.reset_dimensions()
     r1 = c1 = None
     r2 = c2 = 0
     for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
-        cols = [j for j, v in enumerate(row, start=1) if v is not None and v != ""]
+        if not row:
+            continue
+        cols = [j for j, v in enumerate(row, start=1) if v is not None and not (isinstance(v, str) and not v.strip())]
         if not cols:
             continue
         r1 = i if r1 is None else r1
@@ -451,59 +476,78 @@ def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str])
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
     _SHEET_SCANS.clear()      # 이번 읽기에서 훑은 것만 closed_uncomputed가 다시 씀
     _FAR.clear()
-    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
+    wb = _load_closed(openpyxl, path)
     try:
-        names = worksheet_names(wb)            # 차트 시트는 칸이 없어 뺌 (2026-11-09 검토 B6: 'Chartsheet'에 max_row가 없어 ERROR)
-        if not names:
-            raise rt.InputError(f"{os.path.basename(path)}에 칸이 있는 워크시트가 없습니다 (차트 시트만 있음).")
-        if sheet:
-            found = rt.find_name(sheet, names)
-            if found is None:
-                raise rt.not_found("시트", sheet, names, option="--sheet", extra=chart_sheet_note(wb, sheet))
-            ws = wb[found]
-        else:
-            act = wb.active
-            ws = act if act is not None and getattr(act, "title", None) in names else wb[names[0]]
-        # 데이터 범위(_closed_bounds, 크기 정보 없는 파일은 시트 전체를 훑음)는 범위를 생략했거나
-        # 열·행 전체(B:B, 5:7)일 때만, 그리고 Sheet!A1의 시트로 바꾼 뒤에 셉니다 (작은 범위 읽기마다 전체를 훑지 않게)
-        if address:
-            sh, cells = split_sheet(address)
-            if sh:
-                found = rt.find_name(sh, names)
-                if found is None:
-                    raise rt.not_found("시트", sh, names, option="--sheet", extra=chart_sheet_note(wb, sh))
-                ws = wb[found]
-            r1, c1, r2, c2 = parse_area(cells, None, None)
-            if r2 is None or c2 is None:
-                mr2, mc2 = _data_end(path, ws)   # 계산된 값이 없는 수식 칸(빈 칸으로 읽힘)의 행·열도 데이터 범위에 넣음
-                r1, c1, r2, c2 = parse_area(cells, mr2, mc2)
-        else:
-            # 열린 문서의 UsedRange처럼 데이터가 시작하는 칸부터 (A1부터 읽으면 rows가 열린 문서와 달랐음)
-            r1, c1, r2, c2 = _closed_bounds(ws, path)
-            ext = _uncomputed_extent(path, ws.title)
-            if (path, ws.title) in _FAR:          # 먼 칸 때문에 커진 파일 크기 대신 값이 있는 끝까지
-                r2, c2 = _FAR[(path, ws.title)]["data_end"]
-            if ext:   # 계산된 값이 없는 수식 칸은 빈 칸으로 읽혀도 자르지 않고 남김 (합계 행 등이 있다는 것을 보이게)
-                r1, c1, r2, c2 = (ext if r2 < r1 or c2 < c1 else
-                                  (min(r1, ext[0]), min(c1, ext[1]), max(r2, ext[2]), max(c2, ext[3])))
-        if address and r2 >= r1 and c2 >= c1 and (r2 - r1 + 1) * (c2 - c1 + 1) > CLOSED_MAX_CELLS:
-            r2, c2 = _clip_closed_range(path, ws, address, r1, c1, r2, c2)
-        if r2 < r1 or c2 < c1:
-            rows = []
-        else:
-            rows = [list(r) for r in ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True)]
-            width = c2 - c1 + 1
-            rows = [r + [None] * (width - len(r)) for r in rows]
-            if address:
-                # 읽기 전용 openpyxl은 데이터 끝 뒤의 빈 행을 주지 않음: 준 범위(A1:C5)만큼 채워 열린 문서와 같은 rows로
-                rows += [[None] * width for _ in range(r2 - r1 + 1 - len(rows))]
-        if not address:   # 끝쪽 빈 행 제거 (계산된 값이 없는 수식 칸이 있는 행까지는 남김)
-            keep = ext[2] if ext else 0
-            while rows and r1 + len(rows) - 1 > keep and all(v is None for v in rows[-1]):
-                rows.pop()
-        return ws.title, r1, c1, rows, names
+        return _read_matrix_open_wb(wb, path, sheet, address)
+    except (KeyError, SyntaxError, zipfile.BadZipFile) as e:     # ParseError는 SyntaxError (깨진 시트 XML, 2026-11-09 검토 B13)
+        raise rt.InputError(f"{os.path.basename(path)}을(를) 읽을 수 없습니다: 손상되었거나 엑셀 파일 구조가 아닙니다 ({type(e).__name__}). "
+                            "엑셀에서 열어 다시 저장한 뒤 시도하세요.") from None
     finally:
         wb.close()
+
+
+def _load_closed(openpyxl: Any, path: str) -> Any:
+    """닫힌 xlsx 열기. xlsx가 아닌 zip·깨진 파일은 내부 오류가 아니라 STOP_RETRY."""
+    try:
+        return rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True, data_only=True))
+    except (KeyError, SyntaxError, zipfile.BadZipFile, ValueError, TypeError) as e:
+        raise rt.InputError(f"{os.path.basename(path)}을(를) 열 수 없습니다: 엑셀 파일(.xlsx)이 아니거나 손상되었습니다 ({type(e).__name__}).") from None
+
+
+def _read_matrix_open_wb(wb: Any, path: str, sheet: Optional[str], address: Optional[str]) -> Tuple[str, int, int, List[List[Any]], List[str]]:
+    whole = False
+    ext: Optional[Tuple[int, int, int, int]] = None
+    names = worksheet_names(wb)            # 차트 시트는 칸이 없어 뺌 (2026-11-09 검토 B6: 'Chartsheet'에 max_row가 없어 ERROR)
+    if not names:
+        raise rt.InputError(f"{os.path.basename(path)}에 칸이 있는 워크시트가 없습니다 (차트 시트만 있음).")
+    if sheet:
+        found = rt.find_name(sheet, names)
+        if found is None:
+            raise rt.not_found("시트", sheet, names, option="--sheet", extra=chart_sheet_note(wb, sheet))
+        ws = wb[found]
+    else:
+        act = wb.active
+        ws = act if act is not None and getattr(act, "title", None) in names else wb[names[0]]
+    # 데이터 범위(_closed_bounds, 크기 정보 없는 파일은 시트 전체를 훑음)는 범위를 생략했거나
+    # 열·행 전체(B:B, 5:7)일 때만, 그리고 Sheet!A1의 시트로 바꾼 뒤에 셉니다 (작은 범위 읽기마다 전체를 훑지 않게)
+    if address:
+        sh, cells = split_sheet(address)
+        if sh:
+            found = rt.find_name(sh, names)
+            if found is None:
+                raise rt.not_found("시트", sh, names, option="--sheet", extra=chart_sheet_note(wb, sh))
+            ws = wb[found]
+        r1, c1, r2, c2 = parse_area(cells, None, None)
+        if r2 is None or c2 is None:
+            whole = True
+            mr2, mc2 = _data_end(path, ws)   # 계산된 값이 없는 수식 칸(빈 칸으로 읽힘)의 행·열도 데이터 범위에 넣음
+            r1, c1, r2, c2 = parse_area(cells, mr2, mc2)
+            ext = _uncomputed_extent(path, ws.title)
+    else:
+        # 열린 문서의 UsedRange처럼 데이터가 시작하는 칸부터 (A1부터 읽으면 rows가 열린 문서와 달랐음)
+        r1, c1, r2, c2 = _closed_bounds(ws, path)
+        ext = _uncomputed_extent(path, ws.title)
+        if (path, ws.title) in _FAR:          # 먼 칸 때문에 커진 파일 크기 대신 값이 있는 끝까지
+            r2, c2 = _FAR[(path, ws.title)]["data_end"]
+        if ext:   # 계산된 값이 없는 수식 칸은 빈 칸으로 읽혀도 자르지 않고 남김 (합계 행 등이 있다는 것을 보이게)
+            r1, c1, r2, c2 = (ext if r2 < r1 or c2 < c1 else
+                              (min(r1, ext[0]), min(c1, ext[1]), max(r2, ext[2]), max(c2, ext[3])))
+    if address and r2 >= r1 and c2 >= c1 and (r2 - r1 + 1) * (c2 - c1 + 1) > CLOSED_MAX_CELLS:
+        r2, c2 = _clip_closed_range(path, ws, address, r1, c1, r2, c2)
+    if r2 < r1 or c2 < c1:
+        rows = []
+    else:
+        rows = [list(r) for r in ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True)]
+        width = c2 - c1 + 1
+        rows = [r + [None] * (width - len(r)) for r in rows]
+        if address:
+            # 읽기 전용 openpyxl은 데이터 끝 뒤의 빈 행을 주지 않음: 준 범위(A1:C5)만큼 채워 열린 문서와 같은 rows로
+            rows += [[None] * width for _ in range(r2 - r1 + 1 - len(rows))]
+    if not address or whole:   # 끝쪽 빈 행 제거 (계산된 값이 없는 수식 칸이 있는 행까지는 남김). B:B도 (서식만 있는 끝 행까지 세던 것, 검토 B13)
+        keep = ext[2] if ext else 0
+        while rows and r1 + len(rows) - 1 > keep and all(v is None for v in rows[-1]):
+            rows.pop()
+    return ws.title, r1, c1, rows, names
 
 
 def closed_uncomputed(path: str, sheet: str, r0: int, c0: int, matrix: List[List[Any]]) -> Optional[Dict[str, Any]]:
@@ -531,12 +575,15 @@ def _search_matrix(matrix: List[List[Any]], r0: int, c0: int, text: str, limit: 
     total = cut_n = 0
     key = text.lower()
     formulas = formulas or {}
+    # 표시 형식 숫자('1,000', '25%', '1500원')는 숫자 칸의 값(1000, 0.25)과도 맞춤 (원시 값만 찾아 0건이던 것, 2026-11-09 검토 B13)
+    want = _where_num(text) if re.search(r"[,%]|\d\s*[^\W\d_]+$", text.strip()) else None
     for i, row in enumerate(matrix):
         for j, v in enumerate(row):
             f = formulas.get((i, j))
             if v is None and f is None:
                 continue
-            if key in str(out_value(v)).lower() or (f is not None and key in f.lower()):
+            num_hit = want is not None and _is_num(v) and abs(float(v) - want) <= 1e-9 * max(1.0, abs(want))
+            if num_hit or key in str(out_value(v)).lower() or (f is not None and key in f.lower()):
                 total += 1
                 if len(hits) < limit:
                     value, cut = rt.clamp_cell(out_value(v))
@@ -1897,10 +1944,20 @@ def cmd_write(args) -> Dict[str, Any]:
     parts = cells.replace("$", "").split(":")
     r1, c1 = parse_cell(parts[0])
     r2c2 = parse_cell(parts[1]) if len(parts) > 1 else None
+    if r2c2 is not None:     # 뒤집힌 범위(C5:A1)는 Excel처럼 A1:C5로 ('-3행 x -1열'로 보고하고 확인하지 않던 것, 2026-11-09 검토 B13)
+        r1, c1, r2c2 = min(r1, r2c2[0]), min(c1, r2c2[1]), (max(r1, r2c2[0]), max(c1, r2c2[1]))
 
     with write_session(args, "write") as t:
         # 시트·칸 확인과 쓸 내용 계획을 모두 마친 뒤에만 문서를 바꿈 (새 시트도 쓰기 직전에 만듦)
         ws = _write_sheet(t, sh or args.sheet, args.new_sheet)   # --new-sheet면 None (아직 만들지 않음, 빈 시트로 봄)
+        if args.append and not args.range and ws is not None:
+            # 범위 없이 --append: 표가 A열에서 시작하지 않으면(B3:C5) A6에 머리글과 함께 쓰던 것 -> 사용 범위의 첫 칸 기준 (검토 B13)
+            try:
+                used = ws.UsedRange
+                if int(used.Rows.Count) * int(used.Columns.Count) > 1 or not _cell_empty(used):
+                    r1, c1 = int(used.Row), int(used.Column)
+            except Exception:
+                pass
         authored_row = r1 + (1 if header else 0)                 # 사용자가 준 수식이 가리키는 첫 수식 행 (--append 전)
 
         if args.append and ws is not None:
@@ -2501,6 +2558,13 @@ def _verify_style(ws: Any, rng: Any, fmt: Dict[str, Any], theme: Optional[Dict[s
                 problems.append(f"테마 머리글 배경색이 {got!r}")
         if fmt.get("wrap") and not bool(rng.WrapText):     # 여러 칸 중 일부만 켜졌으면 None
             problems.append(f"서식 'wrap'(자동 줄바꿈)이 {rng.WrapText!r}")
+        # 가로 맞춤·테두리도 다시 읽음 (--align·--border만 주면 아무것도 확인하지 않고 VERIFIED였음, 2026-11-09 검토 B13)
+        if "align" in fmt:
+            got = rng.HorizontalAlignment
+            if got is None or int(got) != int(fmt["align"]):
+                problems.append(f"서식 'align'(가로 맞춤)이 {got!r} (준 값 {fmt['align']!r})")
+        if "border" in fmt:
+            problems += _verify_border(rng, fmt["border"])
         if highlight and int(rng.FormatConditions.Count) < 1:
             problems.append("조건부 강조가 없음")
     except Exception as e:
@@ -2649,6 +2713,10 @@ def cmd_sheet(args) -> Dict[str, Any]:
                 raise rt.not_found("시트", args.name, names, option="--name")
             ws = sheets(existing)
             if args.action == "select":
+                if t.source in ("file", "new"):
+                    # 닫힌 파일은 백그라운드로 열었다 저장 없이 닫혀 남는 것이 없음 ('선택했습니다' VERIFIED였음, 2026-11-09 검토 B13)
+                    raise rt.InputError(f"sheet --action select는 화면에 열린 통합문서에서만 씁니다 ({os.path.basename(str(args.target))}는 열려 있지 "
+                                        "않음). 시트 내용을 보려면 excel.py read --sheet로 읽으세요.")
                 t.set_focus(sheet=ws, changed=False)
                 msg = f"시트 '{existing}'을(를) 선택했습니다"
             elif args.action == "rename":
@@ -2881,11 +2949,31 @@ def _check_range_protection(ws: Any, rng: Any, a: str, args: Any) -> None:
         check_protection(ws, [target], need)
 
 
+def _freeze_cell_check(cell: str) -> None:
+    """range --action freeze의 칸: 칸 주소만. 행·열 전체('3:3', 'C:C')는 그 행·열의 첫 칸으로 [추천]."""
+    body = split_sheet(cell)[1]
+    if is_cell_address(body):
+        return
+    m = re.fullmatch(r"\$?(\d+):\$?(\d+)", body.strip()) or re.fullmatch(r"\$?([A-Za-z]{1,3}):\$?[A-Za-z]{1,3}", body.strip())
+    rec = ""
+    if m:
+        first = m.group(1)
+        rec = " [추천] " + rt.retry_command({"--range": f"A{first}" if first.isdigit() else f"{first.upper()}1"})
+    raise rt.InputError(f"freeze의 --range '{cell}'은(는) 칸 주소가 아닙니다: 그 칸의 위 행과 왼쪽 열을 고정합니다 (예: A2는 1행, B3은 1~2행과 A열). "
+                        f"아무것도 바꾸지 않았습니다.{rec}")
+
+
 def _range_dest(t: Any, ws: Any, args) -> Tuple[Any, str, Any]:
     """copy/move 목적지 (시트, 칸 주소, 범위). 붙여 넣을 시트가 보호되어 있으면 멈춤 (move의 원본 시트는 따로 확인)."""
     if not args.dest:
         raise rt.InputError(f"range {args.action}에는 --dest가 필요합니다 (예: --dest Sheet2!A1).")
     dsheet, dcell = split_sheet(args.dest)
+    if not is_cell_address(dcell):
+        # '--dest 요약'(시트 이름만) -> ERROR였음 (2026-11-09 검토 B12). 그런 시트가 있으면 그 시트 A1
+        names = [str(t.doc.Worksheets(i).Name) for i in range(1, t.doc.Worksheets.Count + 1)] if not dsheet else []
+        hit = rt.find_name(dcell, names) if names else None
+        rec = f" [추천] {rt.retry_command({'--dest': f'{hit}!A1'})}" if hit else ""
+        raise rt.InputError(f"--dest '{args.dest}'은(는) 칸 주소가 아닙니다 (예: --dest A20, --dest 'Sheet2'!A1). 아무것도 바꾸지 않았습니다.{rec}")
     dws = t.sheet(dsheet) if dsheet else ws
     dest = dws.Range(dcell)
     check_protection(dws, [dest], "structure")
@@ -3003,11 +3091,13 @@ def cmd_range(args) -> Dict[str, Any]:
             finally:
                 t.app.DisplayAlerts = prev
         elif a in ("freeze", "unfreeze"):
+            cell = args.range or "A2"               # 기본: 1행(머리글) 고정
+            if a == "freeze":
+                _freeze_cell_check(cell)            # 기존 고정을 풀기 전에 (전에는 '3:3'에서 이미 풀고 ERROR, 검토 B12)
             ws.Activate()
             win = t.app.ActiveWindow
             win.FreezePanes = False
             if a == "freeze":
-                cell = args.range or "A2"           # 기본: 1행(머리글) 고정
                 win.ScrollRow = 1
                 win.ScrollColumn = 1
                 ws.Range(split_sheet(cell)[1].split(":")[0]).Select()
@@ -3910,6 +4000,9 @@ def cmd_chart(args) -> Dict[str, Any]:
             if first_col and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in first_col):
                 chart_type = "scatter_lines"
         if args.at:
+            if not is_cell_address(args.at):
+                raise rt.InputError(f"--at '{args.at}'은(는) 칸 주소가 아닙니다. 차트는 데이터가 있는 시트에 만들며 --at에는 그 시트의 칸만 씁니다 "
+                                    "(예: --at E1). 아무것도 바꾸지 않았습니다.")
             anchor = ws.Range(args.at)
         else:
             # 기본 위치: 데이터 범위 오른쪽, 단 시트의 다른 데이터도 가리지 않도록 사용 범위 오른쪽 끝 다음 열

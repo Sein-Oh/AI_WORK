@@ -2311,3 +2311,75 @@ def test_dynamic_array_formula_uses_formula2(xl_table, capsys):
     xl_table.no_formula2 = True                       # Office 2019: Formula2 없음 -> Formula
     code, out = run_main(excel, capsys, "write", "--range", "F2", "--formula", "=SORT(B2:B5)")
     assert code == 0 and xl_table.formulas[(2, 6)] == "=SORT(B2:B5)", out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B8: write가 아닌 쓰기 명령은 경로 오타면 빈 새 파일을 만들지 않음
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("argv", [["style", "--range", "A1:C3", "--bold"], ["replace", "--find", "a", "--replace", "b"],
+                                  ["sheet", "--action", "add", "--name", "새"], ["range", "--action", "freeze", "--range", "A2"]])
+def test_non_write_commands_do_not_create_missing_file(xl, capsys, tmp_path, argv):
+    missing = tmp_path / "보고서_오타.xlsx"
+    code, out = run_excel(capsys, argv[0], "--target", str(missing), *argv[1:])
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and not missing.exists(), out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B12: 잘못된 주소는 바꾸기 전에 STOP_RETRY (ERROR가 아님)
+# ---------------------------------------------------------------------------
+
+
+def test_bad_addresses_are_input_errors_before_change(xl, capsys):
+    app, wb = xl
+    ws = ws_of(wb)
+    ws.values[(1, 1)], ws.values[(2, 1)] = "a", 1
+    code, out = run_excel(capsys, "range", "--action", "copy", "--range", "A1:A2", "--dest", "요약")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert option_value(recommended_argv(out["message"], "excel"), "--dest") == "요약!A1", out
+    code, out = run_excel(capsys, "chart", "--range", "A1:A2", "--at", "요약!E1")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--at" in out["message"], out
+    app.ActiveWindow.FreezePanes = True
+    code, out = run_excel(capsys, "range", "--action", "freeze", "--range", "3:3")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert option_value(recommended_argv(out["message"], "excel"), "--range") == "A3" and app.ActiveWindow.FreezePanes is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B13 (엑셀 쓰기): 뒤집힌 범위, --align·--border 확인, 닫힌 파일 select, --append 시작 열
+# ---------------------------------------------------------------------------
+
+
+def test_b13_excel_write_small_fixes(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    code, out = run_excel(capsys, "write", "--range", "C5:A1", "--value", "x")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and "-" not in out["preview"].split("(")[-1], out
+    assert ws.values[(1, 1)] == "x" and ws.values[(5, 3)] == "x"
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--align", "center")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    code, out = run_excel(capsys, "style", "--range", "A1:B2", "--border", "thin")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+
+
+def test_append_without_range_starts_at_table_column(xl, capsys):
+    _, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([("이름", "값"), ("a", 1), ("b", 2)], start=3):
+        for c, v in enumerate(row, start=2):
+            ws.values[(r, c)] = v
+    code, out = run_excel(capsys, "write", "--append", "--values", '[["c", 3]]')
+    assert code == 0 and ws.values.get((6, 2)) == "c" and ws.values.get((6, 3)) == 3 and (6, 1) not in ws.values, ws.values
+
+
+def test_select_sheet_in_closed_file_is_refused(xl, capsys, tmp_path, monkeypatch):
+    import openpyxl
+    from fake_office import FakeExcelApp
+    monkeypatch.setattr(off, "_new_instance", lambda kind: FakeExcelApp())
+    p = tmp_path / "닫힘.xlsx"
+    w = openpyxl.Workbook()
+    w.create_sheet("둘")
+    w.save(p)
+    code, out = run_excel(capsys, "sheet", "--target", str(p), "--action", "select", "--name", "Sheet2")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "열린 통합문서" in out["message"], out

@@ -3519,3 +3519,55 @@ def test_index_search_template_needs_input(tmp_path, capsys):
     code, out = run_main(reader, capsys, "index", "--folder", str(tmp_path))
     item = [c for c in out["next_commands"] if "<검색어>" in c["command"]][0]
     assert code == 0 and item["needs_input"] is True, out
+
+
+def test_regex_with_nested_repeat_is_refused_quickly(tmp_path, capsys):
+    """2026-11-09 검토 B10: '(\\w+\\s?)+$X'는 끝나지 않아 120초 제한에 JSON 없이 끊겼음. 구분 글자가 있는 반복은 그대로."""
+    p = tmp_path / "a.txt"
+    p.write_text("word " * 40 + "\n\n1,234,567 원", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", r"(\w+\s?)+$X", "--regex", "--file", str(p))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "반복 안의 반복" in out["message"], out
+    code, out = run_main(reader, capsys, "search", "--query", r"(?:\d{1,3},)+\d{3}", "--regex", "--file", str(p))
+    assert code == 0 and out["count"] == 1, out
+
+
+def test_pptx_shape_of_unknown_kind_does_not_fail_the_file(tmp_path):
+    """2026-11-09 검토 B11: prstGeom도 txBox도 없는 p:sp는 shape_type이 NotImplementedError라 파일 전체가 ERROR였음."""
+    prs = new_pptx()
+    layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
+    s = prs.slides.add_slide(layout)
+    s.shapes.add_textbox(0, 0, 100, 100).text_frame.text = "보통 글"
+    sp = s.shapes.add_shape(1, 0, 0, 100, 100)
+    sp.text_frame.text = "이상한 도형 글"
+    for g in list(sp._element.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}prstGeom")):
+        g.getparent().remove(g)
+    p = tmp_path / "odd.pptx"
+    prs.save(str(p))
+    units, _ = reader.parse_pptx(str(p))
+    assert "이상한 도형 글" in units[0]["text"], units
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B13 (reader): --save 확장자, 이어 읽기 범위, 같은 이름 파일 근거, 스캔 PDF index
+# ---------------------------------------------------------------------------
+
+
+def test_b13_reader_small_fixes(tmp_path, capsys):
+    a, b = tmp_path / "A", tmp_path / "B"
+    a.mkdir()
+    b.mkdir()
+    (a / "spec.txt").write_text("전압 5 V", encoding="utf-8")
+    (b / "spec.txt").write_text("전압 12 V", encoding="utf-8")
+    code, out = run_main(reader, capsys, "search", "--query", "전압", "--file", str(tmp_path))
+    ev = sorted(m["evidence"] for m in out["matches"])
+    assert code == 0 and ev[0].startswith("A\\spec.txt") and ev[1].startswith("B\\spec.txt"), ev
+    code, out = run_main(reader, capsys, "read", "--file", str(a / "spec.txt"), "--save", str(tmp_path / "x.docx"))
+    assert code == 0 and out["output_file"].endswith("x.md") and out.get("recovered"), out
+    p = tmp_path / "long.txt"
+    p.write_text("\n\n".join("단락 %d " % i + "가" * 3000 for i in range(1, 15)), encoding="utf-8")
+    code, out = run_main(reader, capsys, "read", "--file", str(p), "--pages", "2,3,4,5,6,13")
+    nxt = [c["command"] for c in out.get("next_commands", []) if "이어서" in c["purpose"] or "--pages" in c["command"]]
+    assert nxt and "13" in nxt[0] and "7" not in nxt[0].split("--pages")[1].split("--")[0], nxt
+    scan = _scan_pdf(tmp_path)
+    code, out = run_main(reader, capsys, "index", "--file", str(scan))
+    assert code == 0 and any("스캔 PDF" in w for w in out.get("warnings", [])), out

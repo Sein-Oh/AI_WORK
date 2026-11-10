@@ -173,37 +173,39 @@
 - 재현: openpyxl `wb.create_chartsheet()`가 든 xlsx. 차트 시트가 활성이거나 `--sheet`로 지정한 `read`, 시트 지정 없는 `compare`.
 - 고칠 방향: `wb.worksheets`만 돈다. 차트 시트를 직접 지정하면 `STOP_RETRY`(워크시트 `[후보]`).
 
-### B7. `XFD1048576`에 떠돌이 칸이 있으면 멈추거나 MemoryError (재현, 중간)
+### B7. `XFD1048576`에 떠돌이 칸이 있으면 멈추거나 MemoryError (재현, 중간) (1.4.95에서 수정)
 - 위치: `_excel_compare.py:317` (끝 열 자르기가 너비 x 행), `323` (모든 행을 전체 너비로 채움), `excel.py:463` (`CLOSED_MAX_CELLS` 자르기가 `--range`를 줄 때만)
 - 재현: 데이터 10행 + `XFD1048576`에 `" "`. `compare`는 140초 넘게 JSON 없음, 범위 없는 `read`는 MemoryError.
 - 고칠 방향: 행마다 마지막 채워진 열을 한 번에 구한다. 범위 없는 읽기에도 칸 수 상한을 적용. 빈 값뿐인 끝 행·열은 범위에서 뺀다.
 
-### B8. 쓰기가 아닌 명령도 경로 오타면 빈 새 파일을 만들고 VERIFIED (가짜 재현, 중간)
+### B8. 쓰기가 아닌 명령도 경로 오타면 빈 새 파일을 만들고 VERIFIED (가짜 재현, 중간) (1.4.95에서 수정)
 - 위치: `excel.py:268-272` (`write_session`이 모든 쓰기 명령에 `create=True`), `_office.py:938`
 - 재현: `style --target <없는 경로>.xlsx --range A1:C3 --bold` -> 빈 파일 생성, "서식 적용" VERIFIED (`replace`, `range sort/freeze`, `sheet add`, `chart delete`도).
 - 고칠 방향: `create=True`는 `write`(와 엑셀로 보내는 `transfer`)만. 나머지는 "파일 없음" + 비슷한 이름 `[후보]`. word.py·ppt.py도 같은지 확인.
+- 처리(1.4.95): word.py·ppt.py는 이미 `write`만 `create=True`라 고칠 것 없음 (`transfer`는 office.py가 따로 엶).
 
 ### B9. 출력에 반쪽 이모지(lone surrogate)가 있으면 JSON 없이 죽음 (재현, 중간) (1.4.93에서 수정)
 - 위치: `_runtime.py:66-73` (`setup_console`이 이미 UTF-8이면 `reconfigure`를 건너뜀), `305-309`, `739` (`_continue_key`)
 - 재현: `PYTHONIOENCODING=utf-8`(전역 지침의 인코딩 줄)에서 payload나 argv에 `\ud83d` -> `UnicodeEncodeError`, stdout 0줄. cp949에서는 `?`로 나가 정상.
 - 고칠 방향: 늘 `reconfigure(errors="replace")`. `_continue_key`는 `encode("utf-8", "replace")`.
 
-### B10. `--regex`에 시간 보호 없음 (재현, 낮음~중간)
+### B10. `--regex`에 시간 보호 없음 (재현, 낮음~중간) (1.4.95에서 수정)
 - 위치: `reader.py:2509`
 - 재현: 5쪽 PDF에 `search --query "(\w+\s?)+$X" --regex` -> 25초가 지나도 끝나지 않음. 120초 제한에 걸리면 JSON 없음.
 - 고칠 방향: 중첩 수량자(`(...+)+`, `(...*)+`)를 사전에 거절(`STOP_RETRY`)하거나, 단위별 시한을 두고 넘으면 `UNVERIFIED:`.
+- 처리(1.4.95): 파이썬 `re`는 한 번의 일치를 중간에 멈출 수 없어 단위별 시한은 효과가 없음. 사전 거절로 하되, 바깥 반복 안에 반드시 나오는 한 글자(구분 글자)가 있으면(`(\d{1,3},)+`) 되추적이 커지지 않아 받음.
 
-### B11. 종류를 알 수 없는 PPTX 도형 하나로 파일 전체가 `ERROR:` (재현, 낮음~중간)
+### B11. 종류를 알 수 없는 PPTX 도형 하나로 파일 전체가 `ERROR:` (재현, 낮음~중간) (1.4.95에서 수정)
 - 위치: `reader.py:1272` (`shape.shape_type`이 `NotImplementedError`)
 - 재현: `prstGeom`도 `txBox`도 없는 `p:sp`가 든 pptx를 `read`.
 - 고칠 방향: `shape_type` 대신 `hasattr(shape, "shapes")`, 또는 도형 단위 `try`. ppt.py의 닫힌 파일 읽기도 같은 코드를 쓰는지 확인.
 
-### B12. 잘못된 주소가 `ERROR:`(내부 오류) (가짜 재현, 낮음~중간)
+### B12. 잘못된 주소가 `ERROR:`(내부 오류) (가짜 재현, 낮음~중간) (1.4.95에서 수정)
 - 위치: `excel.py:2758`, `3781`, `2881`
 - 재현: `range --action copy --dest 요약`, `chart --at 요약!E1`, `range --action freeze --range 3:3`(실패 전에 기존 고정을 이미 풂).
 - 고칠 방향: 주소 검사를 변경 전에 하고 `STOP_RETRY`.
 
-### B13. 그 밖 (모두 재현, 낮음)
+### B13. 그 밖 (모두 재현, 낮음) (1.4.95에서 수정)
 - `read --save res.xlsx`가 경고 없이 `res.csv`로 저장 (`excel.py:832`). reader `search`/`read --save x.docx`도 경고 없이 .md. (`compare`·`diff`는 `warnings`로 알림. 같게 맞춘다)
 - `read --search "1,000"`, `"25%"`가 표시 형식 숫자를 못 찾고 `VERIFIED: 0건` (`excel.py:513`, 원시 값만 찾음).
 - `read --range B:B`의 `rows`가 서식만 있는 끝 행까지(1048576) 셈. 범위 없는 읽기는 자름. 스킬은 행 수를 `rows`로 알리라고 함.
@@ -218,6 +220,7 @@
 - `read --pages 2,3,4,5,6,300`의 이어 읽기 `next_commands`가 `--units '10-600'`(요청하지 않은 쪽 포함) (`reader.py:2275-2291`).
 - 첨부 차단 확장자 검사가 이름 끝의 공백·점으로 우회됨: `evil.exe `, `a.js.` (`outlook.py:422`와 `_unique_dest:566-568`). 정리한 뒤의 이름으로 검사.
 - 오류 로그에 `--folder 'hong@corp.com\받은 편지함'`의 계정 주소가 그대로 남음 (`REDACT_OPTIONS:494`에 `--folder` 없음).
+  - 처리(1.4.95): `--folder`를 통째로 가리면 기존 설계(기본 폴더 별칭 경로 `inbox\없음`은 남겨 원인을 보게 함, 시험 있음)가 깨져, 로그의 명령·결과에서 메일 주소 모양만 `<메일 계정>`으로 바꿈.
   옵션 없이 준 본문·검색어(`reply --id 3 "확인했습니다"`)도 `명령:`·`결과:`에 남고, 그때의 안내("띄어쓰기... 큰따옴표로")도 틀림(빠진 것은 `--body`).
 - 다른 폴더의 같은 이름 파일은 evidence가 같아 구분되지 않음 (`spec.txt 단락 2`).
 - 전부 스캔인 PDF를 index해도 경고 없이 "등록 완료, 검색 가능" (`total_units: 0`).

@@ -1598,3 +1598,64 @@ def test_chartsheet_is_skipped_or_refused(tmp_path, capsys):
     q = _chartsheet_xlsx(tmp_path / "d.xlsx")
     code, out = run_excel(capsys, "compare", "--target", p, "--target2", q)
     assert code == 0 and out["status"] == "ok", out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B7: XFD1048576에 떠돌이 칸(공백)이 있어도 read·compare가 데이터 범위만 (MemoryError, 140초 넘게 멈춤)
+# ---------------------------------------------------------------------------
+
+
+def test_stray_far_cell_does_not_blow_up_read_or_compare(tmp_path, capsys):
+    import time
+    import openpyxl
+    paths = []
+    for name, extra in (("old.xlsx", 1), ("new.xlsx", 2)):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["품번", "수량"])
+        for i in range(1, 11):
+            ws.append([f"P{i}", i * extra])
+        ws["XFD1048576"] = " "
+        p = tmp_path / name
+        wb.save(p)
+        paths.append(str(p))
+    t0 = time.time()
+    code, out = run_excel(capsys, "read", "--target", paths[0])
+    assert code == 0 and out["rows"] == 11 and len(out["values"][0]) == 2, out
+    code, out = run_excel(capsys, "compare", "--target", paths[0], "--target2", paths[1], "--key", "품번")
+    assert code == 0 and out["status"] == "ok", out
+    assert time.time() - t0 < 30
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 B13 (엑셀 읽기): --save 확장자, 표시 형식 숫자 검색, B:B 행 수, 기간 칸, 깨진 파일, compare 자기 자신, CSV check
+# ---------------------------------------------------------------------------
+
+
+def test_b13_excel_read_small_fixes(tmp_path, capsys):
+    import openpyxl
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["항목", "금액", "비율", "시간"])
+    ws.append(["가", 1000, 0.25, dt.timedelta(days=1, hours=6)])
+    ws.append(["나", 20, 0.5, dt.timedelta(hours=2, minutes=30)])
+    for r in range(4, 40):
+        ws.cell(r, 2).number_format = "0.00"          # 서식만 있는 끝 행
+    wb.save(p)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--save", str(tmp_path / "res.xlsx"))
+    assert code == 0 and out["output_file"].endswith("res.csv") and any(".xlsx" in r for r in out["recovered"]), out
+    for q, cell in (("1,000", "B2"), ("25%", "C2")):
+        code, out = run_excel(capsys, "read", "--target", str(p), "--search", q)
+        assert code == 0 and out["count"] == 1 and out["matches"][0]["cell"] == cell, (q, out)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--range", "B:B")
+    assert code == 0 and out["rows"] == 3, out
+    code, out = run_excel(capsys, "read", "--target", str(p))
+    assert out["values"][1][3] == "30:00:00" and out["values"][2][3] == "2:30:00", out
+    z = tmp_path / "z.xlsx"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("hello.txt", "not excel")
+    code, out = run_excel(capsys, "read", "--target", str(z))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    code, out = run_excel(capsys, "compare", "--target", str(p), "--target2", str(p), "--sheet", "Sheet")
+    assert code == 1 and "같은 파일" in out["message"], out

@@ -695,6 +695,17 @@ def _page_image_cover(page: Any) -> float:
         return 0.0
 
 
+def _number_ranges(nums: List[int]) -> str:
+    """[2,3,4,9,10] -> '2-4,9-10' (--pages·--units 값)."""
+    runs: List[List[int]] = []
+    for n in sorted(set(int(x) for x in nums)):
+        if runs and n == runs[-1][1] + 1:
+            runs[-1][1] = n
+        else:
+            runs.append([n, n])
+    return ",".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
+
+
 def _page_list(pages: List[int], limit: int = 10) -> str:
     shown = ",".join(str(p) for p in pages[:limit])
     return shown + (f" 외 {len(pages) - limit}쪽" if len(pages) > limit else "")
@@ -1366,8 +1377,9 @@ def parse_docx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
 def _pptx_shape_lines(shape, out: List[str]) -> None:
     """도형 하나의 텍스트를 줄 단위로 모읍니다 (그룹은 재귀, 표는 행 단위)."""
-    from pptx.enum.shapes import MSO_SHAPE_TYPE
-    if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+    # 그룹은 shape_type 대신 하위 도형(shapes)이 있는지로: 종류를 알 수 없는 도형(prstGeom도 txBox도 없는 p:sp)은
+    # shape_type이 NotImplementedError라 파일 전체가 ERROR였음 (2026-11-09 검토 B11)
+    if hasattr(shape, "shapes"):
         for sub in shape.shapes:
             _pptx_shape_lines(sub, out)
     elif getattr(shape, "has_table", False):
@@ -1397,7 +1409,10 @@ def parse_pptx(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         for shape in slide.shapes:
             if title_shape is not None and shape.shape_id == title_shape.shape_id:
                 continue
-            _pptx_shape_lines(shape, lines)
+            try:
+                _pptx_shape_lines(shape, lines)
+            except Exception as e:                   # noqa: BLE001  도형 하나 때문에 파일 전체를 못 읽지 않게
+                rt.debug(f"슬라이드 {idx} 도형을 읽지 못함: {type(e).__name__}")
         if not title and lines:
             title = lines[0]
         notes = ""
@@ -2087,9 +2102,29 @@ def where_text(unit: Dict[str, Any]) -> str:
     return str(unit.get("loc", ""))
 
 
+_SAME_NAMES: set = set()     # 이번 검색에서 이름이 같은 파일 (다른 폴더): 근거에 상위 폴더 이름을 붙임
+
+
+def evidence_name(file: str) -> str:
+    """근거에 쓸 파일 이름. 다른 폴더의 같은 이름 파일이 함께 검색되면 '상위 폴더\\이름' (구분되지 않던 것, 2026-11-09 검토 B13)."""
+    name = os.path.basename(file)
+    if name.lower() in _SAME_NAMES:
+        parent = os.path.basename(os.path.dirname(os.path.abspath(file)))
+        return f"{parent}\\{name}" if parent else name
+    return name
+
+
+def note_same_names(files: List[str]) -> None:
+    """검색할 문서 경로들 중 이름이 겹치는 것을 기억 (evidence_name이 씀)."""
+    from collections import Counter as _C
+    _SAME_NAMES.clear()
+    counts = _C(os.path.basename(f).lower() for f in set(os.path.abspath(x) for x in files))
+    _SAME_NAMES.update(n for n, k in counts.items() if k > 1)
+
+
 def evidence_text(file: str, unit: Dict[str, Any]) -> str:
     """'규격서.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)' 형식의 근거 문구."""
-    s = f"{os.path.basename(file)} {where_text(unit)}".strip()
+    s = f"{evidence_name(file)} {where_text(unit)}".strip()
     sec = section_text(unit)
     if sec:
         s += f", {sec}"
@@ -2376,12 +2411,14 @@ def cmd_read(args) -> Dict[str, Any]:
         nxt_i = len(shown)
         nxt, last = numbers[nxt_i], numbers[-1]
         cut = selected[nxt_i]
+        # 남은 번호만 (고르지 않은 쪽·단위를 넣지 않음: '--pages 2,3,4,5,6,300'의 이어 읽기가 '--units 10-600'이던 것, 2026-11-09 검토 B13)
+        rest_pages = sorted({u.get("page") for u in selected[nxt_i:] if u.get("page") is not None})
         if not by_page:
-            cont = ["--pages", f"{nxt}-{last}"]
-        elif cut.get("page") != selected[nxt_i - 1].get("page") and not args.units:
-            cont = ["--pages", f"{cut.get('page')}-{selected[-1].get('page')}"]
+            cont = ["--pages", _number_ranges(numbers[nxt_i:])]
+        elif cut.get("page") != selected[nxt_i - 1].get("page") and not args.units and rest_pages:
+            cont = ["--pages", _number_ranges(rest_pages)]
         else:                                    # 쪽 중간에서 잘림 -> 단위 번호로 이어 읽기
-            cont = ["--units", f"{nxt}-{last}"]
+            cont = ["--units", _number_ranges(numbers[nxt_i:])]
         nexts.append(rt.next_command("reader.py", ["read", "--file", path] + cont + sec_args, f"나머지 {unit_name} 이어서 읽기"))
     if dropped or cut_units:
         # 잘린 긴 글도 .md에는 전부 들어감 (.xlsx는 셀당 32000자 상한). 시트 행 상한으로 읽지 않은 부분은 저장해도 없음
@@ -2517,12 +2554,17 @@ def cmd_index(args) -> Dict[str, Any]:
         result["cache_failed"] = unsaved[:MAX_LIST_ITEMS]
         return rt.ok_unverified(TOOL, "index", preview,
                                 [f"캐시에 저장하지 못한 파일 {len(unsaved)}개 (다음 검색 때 다시 읽음): {', '.join(unsaved[:5])}"], **result)
+    scans = [os.path.basename(d["file"]) for d in res["docs"] if (d.get("meta") or {}).get("ocr_needed")]
+    if scans:
+        # 글자 없는 스캔 PDF를 '등록 완료, 검색 가능'으로만 알리던 것 (2026-11-09 검토 B13)
+        result["ocr_needed"] = scans[:MAX_LIST_ITEMS]
+        result.setdefault("warnings", []).append(f"글자가 없는 스캔 PDF {len(scans)}개는 검색되지 않음 (OCR 필요): {', '.join(scans[:5])}")
     if res["remaining"]:
         directive = ("VERIFIED: 일부만 등록했습니다(캐시에 저장 확인). 남은 파일은 next_commands[0]을 그대로 실행해 이어서 등록하세요 "
                      "(문서를 바꾸지 않는 읽기 전용 작업). 실패한 파일은 failures를 사용자에게 알리세요.")
     else:
         directive = ("VERIFIED: 등록 완료(캐시에 저장 확인). 이제 reader.py search로 검색할 수 있습니다. "
-                     "실패한 파일이 있으면 failures를 사용자에게 알리세요.")
+                     "실패한 파일이 있으면 failures를, warnings(스캔 PDF 등)가 있으면 그것도 사용자에게 알리세요.")
     return rt.ok(TOOL, "index", preview, directive, **result)
 
 
@@ -2596,6 +2638,58 @@ def _bad_regex(query: str, e: "re.error", args: Any = None) -> rt.InputError:
     return rt.InputError(f"{head} 정규식을 고쳐 다시 실행하세요 (기호를 글자로 찾으려면 앞에 \\를 붙임).")
 
 
+def _nested_repeat(query: str) -> bool:
+    """정규식에 '여러 번 반복' 안에 다시 '여러 번 반복'이 있고, 바깥 반복 안에 반드시 나오는 한 글자(구분 글자)가 없는지
+    (파국적 되추적의 흔한 모양: (a+)+, (\\w+\\s?)+). '(\\d{1,3},)+'처럼 구분 글자가 있으면 괜찮음. 해석하지 못하면 False."""
+    try:
+        import re._parser as sre               # 파이썬 3.11+
+    except Exception:                          # noqa: BLE001
+        return False
+    repeats = {sre.MAX_REPEAT, sre.MIN_REPEAT}
+    single = {sre.LITERAL, sre.NOT_LITERAL, sre.IN, sre.ANY}
+
+    def has_many(items: Any) -> bool:
+        for op, av in items:
+            if op in repeats and (av[1] is sre.MAXREPEAT or av[1] > 1):
+                return True
+            if op in repeats and has_many(av[2]):
+                return True
+            if op is sre.SUBPATTERN and has_many(av[-1]):
+                return True
+            if op is sre.BRANCH and any(has_many(b) for b in av[1]):
+                return True
+        return False
+
+    def flat(items: Any) -> List[Any]:
+        out: List[Any] = []
+        for op, av in items:
+            if op is sre.SUBPATTERN:
+                out += flat(av[-1])
+            else:
+                out.append((op, av))
+        return out
+
+    def walk(items: Any) -> bool:
+        for op, av in items:
+            if op in repeats:
+                lo, hi, sub = av
+                if (hi is sre.MAXREPEAT or hi > 1) and has_many(sub) and not any(o in single for o, _ in flat(sub)):
+                    return True
+                if walk(sub):
+                    return True
+            elif op is sre.SUBPATTERN and walk(av[-1]):
+                return True
+            elif op is sre.BRANCH and any(walk(b) for b in av[1]):
+                return True
+            elif op in (sre.ASSERT, sre.ASSERT_NOT) and walk(av[1]):
+                return True
+        return False
+    try:
+        return walk(sre.parse(query))
+    except Exception:                          # noqa: BLE001
+        return False
+
+
 def build_matcher(query: str, regex: bool, args: Any = None):
     """검색 조건을 함수로 만듭니다. 'A;B'(그리고), 'A|B'(또는) 조합 지원 (;가 |보다 먼저 묶임).
     반환: match_fn(text) -> 강조할 단어 목록 또는 None. 대소문자는 늘 무시."""
@@ -2605,6 +2699,10 @@ def build_matcher(query: str, regex: bool, args: Any = None):
             pat = re.compile(query, flags)
         except re.error as e:
             raise _bad_regex(query, e, args)
+        if _nested_repeat(query):
+            # 파이썬 re는 중간에 멈출 수 없어 '(\w+\s?)+$X'처럼 반복 안의 반복은 몇 분씩 걸려 120초 제한에 JSON 없이 끊김 (2026-11-09 검토 B10)
+            raise rt.InputError(f"정규식 '{query}'에 반복 안의 반복(예: (a+)+, (\\w+\\s?)*)이 있어 검색이 끝나지 않을 수 있어 실행하지 않았습니다. "
+                                "안쪽이나 바깥쪽 반복 하나를 빼거나, --regex 없이 낱말 검색어(A;B, A|B)로 찾으세요.")
 
         def match_regex(text: str):
             m = next((m for m in pat.finditer(text) if m.group(0)), None)   # 빈 일치('a*')는 일치로 보지 않음
@@ -3915,6 +4013,7 @@ def cmd_search(args) -> Dict[str, Any]:
     pages = page_set(args.pages)
     sec_filter = section_key(args.section)
     docs, info = _search_targets(args)
+    note_same_names([d["file"] for d in docs])
     hits: List[Dict[str, Any]] = []
     page_unknown = 0
     pool: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []      # 조건(--pages, --section) 안의 단위 (넓혀 찾기용)
@@ -4063,7 +4162,7 @@ def cmd_search(args) -> Dict[str, Any]:
     text_cut = 0
     for h in shown:
         u, doc = h["unit"], h["doc"]
-        item = {"file": os.path.basename(doc["file"]), "path": doc["file"], "page": u.get("page"),
+        item = {"file": evidence_name(doc["file"]), "path": doc["file"], "page": u.get("page"),
                 "page_source": u.get("page_source"), "section": u.get("section") or [],
                 "section_text": section_text(u), "number": u.get("number"), "loc": u["loc"],
                 "heading": u.get("heading", ""), "evidence": evidence_text(doc["file"], u), "snippet": h["snippet"],
