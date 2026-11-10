@@ -2599,10 +2599,47 @@ def test_L(ctx):
         record(ctx, "L10", "C8 바닥글·슬라이드 번호가 있는 슬라이드에 쓴 글상자가 슬라이드 안", _verified(d) and inside,
                f"글상자(top, height)={boxes}, 슬라이드 높이={h}", d, c, r, e)
 
-    def l11():    # C9 제한된 보기 (눈 확인)
-        manual = ask(ctx, "인터넷에서 받은 xlsx 하나를 제한된 보기로 연 상태에서(편집 사용을 누르지 않음) "
-                          "'python excel.py write --range A1 --value x'를 실행하면 '편집 사용' 안내로 멈추나요? (다른 통합문서에 쓰이지 않아야 함)")
-        record(ctx, "L11", "C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않음", manual, "")
+    def l11():    # C9 제한된 보기: 러너가 '인터넷에서 받은 파일' 표시(Zone.Identifier)를 붙인 xlsx를 제한된 보기로 엶 (질문 없음)
+        # 폐쇄망이라 사람이 인터넷에서 파일을 받을 수 없음 (회사 PC 2026-11-10): 표시를 직접 붙이고 ProtectedViewWindows.Open
+        path = ctx.path("L_pv.xlsx")
+        marker = f"L제한 {tag}"
+        old = _lookup_doc("excel", "L_pv.xlsx")
+        if old is not None:
+            com_retry(lambda: old.Close(SaveChanges=False))
+        if os.path.exists(path):
+            os.remove(path)
+        wb = com_retry(lambda: xl_app().Workbooks.Add())
+        _save_workbook(wb, path)
+        com_retry(lambda: wb.Close(SaveChanges=False))
+        try:
+            with open(path + ":Zone.Identifier", "w", encoding="ascii") as f:      # NTFS 대체 스트림 (인터넷 영역 3)
+                f.write("[ZoneTransfer]\r\nZoneId=3\r\n")
+            pvw = com_retry(lambda: xl_app().ProtectedViewWindows.Open(path))
+            com_retry(lambda: pvw.Activate())
+        except Exception as e:
+            record(ctx, "L11", "C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않음", ENV_SKIP,
+                   f"제한된 보기로 열지 못함: {describe_com_error(e)}")
+            return
+        time.sleep(1)
+        d, c, r, e = run_cli("excel.py", "write", "--range", "A1", "--value", marker)
+
+        def leaked():
+            hits = []
+            for i in range(1, xl_app().Workbooks.Count + 1):
+                b = xl_app().Workbooks(i)
+                for k in range(1, b.Worksheets.Count + 1):
+                    if str(b.Worksheets(k).Range("A1").Value or "") == marker:
+                        hits.append(f"{b.Name}!{b.Worksheets(k).Name}")
+            return hits
+        hits = com_retry(leaked)
+        try:
+            com_retry(lambda: pvw.Close())
+        except Exception:
+            pass
+        text = json.dumps(d or {}, ensure_ascii=False)
+        record(ctx, "L11", "C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않고 '편집 사용' 안내",
+               (d or {}).get("status") == "error" and "편집 사용" in text and not hits,
+               f"다른 통합문서에 쓰인 곳 {hits or '없음'}", d, c, r, e)
 
     def l12():    # C10 열린 저장된 통합문서 undo
         path = ctx.path("L_undo.xlsx")
