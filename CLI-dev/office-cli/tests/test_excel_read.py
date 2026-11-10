@@ -1735,3 +1735,28 @@ def test_info_of_closed_xlsx_needs_no_office(tmp_path, capsys, monkeypatch):
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     assert out["sheets"][0] == {"name": "데이터", "used_range": "A1:B3", "rows": 3, "cols": 2, "hidden": False}, out
     assert out["sheets"][1] == {"name": "차트", "kind": "chart"} and out["active_sheet"] == "차트", out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 4장 2번 (1.4.99): --where 제목 행 아래의 머리글, 포함하지 않음 !~
+# ---------------------------------------------------------------------------
+
+
+def test_where_finds_header_below_title_and_not_contains(tmp_path, capsys):
+    import openpyxl
+    p = tmp_path / "기록.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "부품 검사 기록 (2026년 11월)"
+    ws.append([])
+    ws.append(["품번", "상태", "수량"])
+    for r in [("P1", "완료", 3), ("P2", "검토 중", 5), ("P3", "완료(재검)", 1)]:
+        ws.append(list(r))
+    wb.save(p)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "수량 >= 2")
+    assert code == 0 and out["header_row_found"] == 3 and out["values"][0] == ["품번", "상태", "수량"], out
+    assert out["row_numbers"] == [3, 4, 5] and out["count"] == 2, out
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "상태 !~ 완료")
+    assert code == 0 and out["count"] == 1 and out["values"][1][0] == "P2", out
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "상태 ~ 완료; 수량 < 2")
+    assert code == 0 and [r[0] for r in out["values"][1:]] == ["P3"], out

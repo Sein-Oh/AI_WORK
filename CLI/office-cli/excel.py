@@ -987,7 +987,7 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
 
 # --- read --where: 조건에 맞는 행만 ---
 
-_WHERE_HEAD = re.compile(r"\s*([^;|]+?)\s*(>=|<=|!=|>|<|=|~)[ \t]*", re.S)
+_WHERE_HEAD = re.compile(r"\s*([^;|]+?)\s*(>=|<=|!=|!~|>|<|=|~)[ \t]*", re.S)
 # 고쳐서 [추천]할 수 있는 표기 (뜻이 하나뿐인 것만, 따옴표 밖에서만)
 _WHERE_FIXES = (("==", "="), ("=>", ">="), ("=<", "<="), ("<>", "!="), ("=!", "!="))
 _WHERE_AND = re.compile(r"\s+(?:and|AND|And|그리고)\s+|\s*&&\s*")
@@ -997,7 +997,7 @@ _WHERE_CONTAINS = re.compile(r"\s+(?:contains|CONTAINS|포함)\s+")
 _WHERE_COMMA = re.compile(r",\s*(?=[^,;|=<>!~'\"]+?\s*(?:>=|<=|!=|=|>|<|~))")
 _WHERE_QUOTED = re.compile(r"(\"[^\"]*\"|'[^']*')")
 _WHERE_NUM = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
-WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~, ~는 포함. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
+WHERE_FORM = ("'<열> <연산자> <값>' (연산자 >= <= > < = != ~ !~, ~는 포함, !~는 포함하지 않음. 그리고는 ;, 또는은 | (;가 먼저 묶임), "
               "값에 ; | 가 있으면 작은따옴표로 감쌈. 예: 금액 >= 100; 부서 = 영업 | 부서 = 개발)")
 
 Cond = Tuple[str, str, str]
@@ -1025,7 +1025,7 @@ def _where_parts(text: str) -> Optional[List[List[Cond]]]:
             val, pos = text[pos:stop].strip(), stop
             if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
                 val = val[1:-1]
-        if op in (">", "<", ">=", "<=", "~") and val == "":
+        if op in (">", "<", ">=", "<=", "~", "!~") and val == "":
             return None
         groups[-1].append((col, op, val))
         if pos < n:
@@ -1134,6 +1134,8 @@ def _where_match(cell: Any, op: str, val: str) -> Optional[bool]:
     ~는 포함. = 와 != 에서 앞자리 0이 있는 글('010')은 글자 그대로 비교. 비교할 수 없으면(크기 비교인데 칸이 숫자·날짜가 아님) None."""
     if op == "~":
         return val.strip().casefold() in _where_text(cell).casefold()
+    if op == "!~":                      # 포함하지 않음 (1.4.99, 검토 4장 2번: 전에는 '상태 !'를 열 이름으로 읽음)
+        return val.strip().casefold() not in _where_text(cell).casefold()
     kind = _where_kind(val)
     a: Any
     b: Any
@@ -1174,11 +1176,30 @@ def _where_unreadable(matrix: List[List[Any]], groups: List[List[Tuple[int, str,
     return None
 
 
+def _where_header_row(matrix: List[List[Any]], cols: List[str], scan: int = 10) -> int:
+    """조건의 열 이름이 첫 행에 없으면 위 scan행 안에서 모든 조건 열 이름이 있는 행 (0이면 첫 행 그대로). 열 문자(B)는 이름이 아님."""
+    def names(row: List[Any]) -> set:
+        return {rt.name_key(_where_text(v)) for v in row if _where_text(v)}
+    keys = [rt.name_key(c) for c in cols if not re.fullmatch(r"[A-Za-z]{1,3}", c.strip())]
+    if not keys or not matrix or all(k in names(matrix[0]) for k in keys):
+        return 0
+    for i in range(1, min(scan, len(matrix) - 1)):
+        if all(k in names(matrix[i]) for k in keys):
+            return i
+    return 0
+
+
 def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: str, r0: int, c0: int,
                 full_addr: str, result: Dict[str, Any], save_cmd: Dict[str, str]) -> Dict[str, Any]:
     """첫 행을 머리글로 보고 조건에 맞는 행만 돌려줍니다 (또는 묶음 중 하나라도 묶음 안의 조건이 모두 맞으면).
     values[0]은 머리글, row_numbers는 values와 같은 순서의 시트 행 번호."""
     ncols = max((len(r) for r in matrix), default=0)
+    hi = _where_header_row(matrix, [col for g in conds for col, _, _ in g])
+    if hi:
+        # 제목 행 아래의 머리글 (검토 4장 2번: 제목을 머리글로 보고 열 이름 [후보]를 내던 것). 그 위 행은 결과에 넣지 않음
+        matrix, r0 = matrix[hi:], r0 + hi
+        result["header_row_found"] = r0
+        full_addr = addr(r0, c0, r0 + len(matrix) - 1, c0 + max(ncols, 1) - 1)
     header = matrix[0] if matrix else []
     groups = [[(resolve_column(col, header if matrix else None, c0, ncols, "조건 열")[0], op, val) for col, op, val in g]
               for g in conds]

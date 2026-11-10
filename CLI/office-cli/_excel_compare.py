@@ -205,10 +205,15 @@ def _cmp_find_header(rows: List[List[Any]]) -> Tuple[int, Dict[str, int]]:
             best_i, best_roles, best_score = i, roles, score
     if best_i >= 0 and best_score >= 1.5:
         return best_i, best_roles
+    # 알아본 열이 없으면: 글자 칸만 있는 행 중 칸이 가장 많은 행 (같으면 위쪽). 제목 행 두 칸('부품 목록', '2026-11')을
+    # 머리글로 잡던 것 (2026-11-09 검토 4장 2번)
+    best, best_n = -1, 1
     for i, row in enumerate(rows[:COMPARE_HEADER_SCAN]):
         filled = [v for v in row if v is not None and str(v).strip()]
-        if len(filled) >= 2 and all(isinstance(v, str) for v in filled):
-            return i, {}
+        if len(filled) > best_n and all(isinstance(v, str) for v in filled):
+            best, best_n = i, len(filled)
+    if best >= 0:
+        return best, {}
     for i, row in enumerate(rows):
         if any(v is not None and str(v).strip() for v in row):
             return i, {}
@@ -482,6 +487,20 @@ def _cmp_choose_key(args, old: Dict[str, Any], new: Dict[str, Any],
             if sum(1 for k in ko if k) < max(1, len(ko) // 2):
                 continue                                     # 반 넘게 빈 열은 키가 아님
             cands.append((_cmp_dups(ko) + _cmp_dups(kn), label, label))
+        # 행마다 값이 다른(두 판 모두) 열이 하나뿐이고 1, 2, 3...처럼 행 번호 열이 아니면 그 열로 짝지음 (검토 4장 2번: 품번 열이 없으면
+        # 늘 --key를 물었음). 두 판의 값이 절반 넘게 겹쳐야 함 (겹치지 않으면 모두 추가·삭제가 됨)
+        unique = [c for c in cands if c[0] == 0]
+        auto = []
+        for _, label, _v in unique:
+            o, n = next((o, n) for o, n, lb, _ in pairs if lb == label)
+            spec = [("col", o, n, label, True, False)]
+            ko, kn = [k for k in _cmp_key_values(old, spec, 1) if k], [k for k in _cmp_key_values(new, spec, 2) if k]
+            if _cmp_row_numbers(ko) or _cmp_row_numbers(kn):
+                continue
+            if ko and kn and len(set(ko) & set(kn)) * 2 >= min(len(set(ko)), len(set(kn))):
+                auto.append((spec, label))
+        if len(auto) == 1:
+            return auto[0][0], f"품번 열을 알아보지 못해 두 판 모두 행마다 값이 다른 유일한 열 '{auto[0][1]}'로 짝지음", False
         if not cands:
             raise rt.InputError(f"두 판에 같은 머리글의 열이 없어 비교할 수 없습니다 (이전 판 머리글 {old['header_row']}행: "
                                 f"{', '.join(old['header'][:15])} / 새 판 {new['header_row']}행: {', '.join(new['header'][:15])}).")
@@ -492,6 +511,15 @@ def _cmp_choose_key(args, old: Dict[str, Any], new: Dict[str, Any],
     shown = [f"{label} (같은 키 {n}행)" if n else label for n, label, _ in cands]
     raise rt.ambiguous(head, shown, values=[v for _, _, v in cands], option="--key",
                        log_message=head.split(" (", 1)[0] + ".")
+
+
+def _cmp_row_numbers(keys: List[str]) -> bool:
+    """1, 2, 3... 처럼 행 번호로 보이는 열 (행을 넣거나 빼면 번호가 밀려 키가 될 수 없음)."""
+    try:
+        nums = sorted(int(float(k)) for k in keys)
+    except ValueError:
+        return False
+    return bool(nums) and nums == list(range(nums[0], nums[0] + len(nums)))
 
 
 def _cmp_index(keys: List[str], ordered: bool) -> Tuple[Dict[str, int], int]:
