@@ -1891,7 +1891,12 @@ def cmd_format(args) -> Dict[str, Any]:
             if args.align:
                 rng.ParagraphFormat.Alignment = WD_ALIGN[args.align]
             if args.font:
+                # 한글은 동아시아 글꼴(NameFarEast)로 그려짐: Name만 바꾸면 영문만 바뀌고 한글은 그대로
                 rng.Font.Name = args.font
+                try:
+                    rng.Font.NameFarEast = args.font
+                except Exception:
+                    pass
             if args.size:
                 rng.Font.Size = float(args.size)
             if args.bold:
@@ -1902,7 +1907,7 @@ def cmd_format(args) -> Dict[str, Any]:
             bad = []
             if args.align and int(chk.ParagraphFormat.Alignment) != WD_ALIGN[args.align]:
                 bad.append("정렬")
-            if args.font and str(chk.Font.Name) != args.font:
+            if args.font and (str(chk.Font.Name) != args.font or str(getattr(chk.Font, "NameFarEast", args.font) or args.font) != args.font):
                 bad.append("글꼴")
             if args.size and abs(float(chk.Font.Size or 0) - float(args.size)) > 0.01:
                 bad.append("크기")

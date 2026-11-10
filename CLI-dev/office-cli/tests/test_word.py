@@ -1516,3 +1516,12 @@ def test_format_needs_paragraphs_and_options(wd, capsys):
     assert code == 1 and "--paragraphs" in out["message"], out
     code, out = run_word(capsys, "format", "--paragraphs", "1")
     assert code == 1 and "--align" in out["message"], out
+
+
+def test_format_font_also_sets_korean_font(wd, capsys):
+    doc = FakeWordDocument("한글 단락")
+    doc.format_cache, doc.styles_at = {}, {}
+    wd["doc"] = doc
+    code, out = run_word(capsys, "format", "--paragraphs", "1", "--font", "맑은 고딕")
+    font = doc.format_cache[("font", 0, 6)]
+    assert code == 0 and font.Name == "맑은 고딕" and font.NameFarEast == "맑은 고딕", out    # 한글은 NameFarEast로 그려짐

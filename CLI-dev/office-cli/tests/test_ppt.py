@@ -1034,7 +1034,15 @@ def test_shape_move_resize_and_keep_inside(pp, capsys):
 def test_shape_locked_picture_keeps_ratio(pp, capsys):
     sl, _ = _slide_with_body(pp)
     pic = sl.Shapes(sl.Shapes.Count)                  # '그림 3' 100x100
+    pic.Height = 50                                   # 100x50으로 만든 뒤 비율 잠금
     pic.LockAspectRatio = -1
-    pic.Height = 50
     code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "그림 3", "--width", "200", "--dry-run")
     assert code == 0 and out["after"]["height"] == 100.0, out
+
+
+def test_shape_locked_picture_both_sizes_unlocks_briefly(pp, capsys):
+    sl, _ = _slide_with_body(pp)
+    pic = sl.Shapes(sl.Shapes.Count)
+    pic.LockAspectRatio = -1
+    code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "그림 3", "--width", "200", "--height", "80")
+    assert code == 0 and (pic.Width, pic.Height) == (200, 80) and pic.LockAspectRatio == -1, out

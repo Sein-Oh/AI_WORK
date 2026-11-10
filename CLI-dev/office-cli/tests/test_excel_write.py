@@ -2468,3 +2468,24 @@ def test_save_unsaved_new_workbook_asks_for_path(xl, capsys):
     wb.FullName = "통합 문서1"
     code, out = run_excel(capsys, "save")
     assert code == 1 and "--save" in out["message"] and "전체 경로" in out["message"], out
+
+
+def test_range_values_keeps_text_and_error_cells(xl_table, capsys):
+    # 실제 Excel처럼 대입한 글을 입력으로 해석(typing): 글자 결과 '01234'는 글자 그대로, 오류(#NAME?) 칸은 수식 그대로 (숫자 코드가 들어가지 않게)
+    xl_table.typing = True
+    xl_table.formulas[(2, 4)] = '=TEXT(C2,"00000")'
+    xl_table.values[(2, 4)] = "00300"
+    xl_table.formulas[(3, 4)] = "=합계(C3)"
+    xl_table.values[(3, 4)] = -2146826259
+    code, out = run_excel(capsys, "range", "--action", "values", "--range", "D2:D3")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert xl_table.values[(2, 4)] == "00300" and (2, 4) not in xl_table.formulas, xl_table.values
+    assert xl_table.formulas.get((3, 4)) == "=합계(C3)" and "오류 값 칸 1개" in out["warnings"][0], out
+
+
+def test_save_read_only_workbook_asks_for_new_path(xl, capsys, tmp_path):
+    app, wb = xl
+    wb.FullName = str(tmp_path / "보고.xlsx")
+    wb.ReadOnly, wb.Saved = True, False
+    code, out = run_excel(capsys, "save")
+    assert code == 1 and "읽기 전용" in out["message"] and getattr(app, "saves", 0) == 0, out

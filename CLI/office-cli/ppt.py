@@ -757,9 +757,16 @@ def cmd_shape(args) -> Dict[str, Any]:
             return rt.dry_run_result(TOOL, "shape", f"미리보기: 슬라이드 {args.slide} '{sh.Name}' {desc} (바꾸지 않음)", 1,
                                      [f"'{sh.Name}': {desc}"], rt.dry_run_command(TOOL, f"'{sh.Name}' 옮기기·크기"),
                                      target_resolved=t.resolved(), **info)
-        for k in ("width", "height", "left", "top"):          # 크기 먼저 (비율 잠금 도형이 위치를 다시 잡지 않게)
-            if k in want:
-                setattr(sh, k.capitalize(), float(want[k]))
+        both = locked and "width" in want and "height" in want
+        if both:
+            sh.LockAspectRatio = 0                           # 너비·높이를 둘 다 주면 비율 잠금을 잠시 풂 (잠긴 채면 서로를 다시 바꿈)
+        try:
+            for k in ("width", "height", "left", "top"):      # 크기 먼저 (비율 잠금 도형이 위치를 다시 잡지 않게)
+                if k in want:
+                    setattr(sh, k.capitalize(), float(want[k]))
+        finally:
+            if both:
+                sh.LockAspectRatio = -1
         t.set_focus(slide=args.slide)
         got = off.shape_box(sh)
         resolved = t.resolved()

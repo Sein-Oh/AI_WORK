@@ -1439,6 +1439,9 @@ def cmd_save(args) -> Dict[str, Any]:
         wb = t.doc
         old = t.path
         if new_path is None:
+            if bool(getattr(wb, "ReadOnly", False)):
+                raise rt.InputError(f"'{t.name}'은(는) 읽기 전용으로 열려 있어 그대로 저장할 수 없습니다 (Excel이 확인 창을 띄움). 사용자에게 "
+                                    "다른 이름으로 저장할 전체 경로를 묻고 --save \"<전체경로.xlsx>\"로 다시 실행하세요.")
             if not old:
                 raise rt.InputError(f"'{t.name}'은(는) 한 번도 저장하지 않은 새 통합문서라 저장할 위치가 없습니다. 사용자에게 저장할 "
                                     "전체 경로를 묻고 --save \"<전체경로.xlsx>\"로 다시 실행하세요.")
@@ -3582,11 +3585,32 @@ def cmd_range(args) -> Dict[str, Any]:
             detail = args.weight + (" (외곽만)" if args.box else "")
         elif a == "values":
             # 수식을 지금 값으로 (Value2: 날짜·통화를 바꾸지 않고 그대로). 영역마다 따로 (여러 영역 범위는 한 번에 못 씀)
+            # 글자 결과는 앞에 '를 붙여 그대로 (붙이지 않으면 '01234'·'1-2'가 숫자·날짜로 바뀜), 오류 값(#N/A 등)은 숫자 코드가
+            # 들어가지 않게 그 칸만 수식 그대로 둠 (실제 Excel의 Value2는 오류를 음수 정수로 줌)
             forms = _formula_cells(rng)
-            before_vals = [(area, off.range_to_matrix(area.Value2)) for area in _areas(rng)]
-            for area, vals in before_vals:
-                area.Value2 = tuple(tuple(row) for row in vals)
-            detail = f"(수식 {len(forms)}개를 값으로)"
+            before_vals, kept_errors = [], []
+            for area in _areas(rng):
+                vals = off.range_to_matrix(area.Value2)
+                fml = off.range_to_matrix(area.Formula)
+                r1_, c1_ = int(area.Row), int(area.Column)
+                out_rows = []
+                for i, row in enumerate(vals):
+                    line = []
+                    for j, v in enumerate(row):
+                        f = fml[i][j] if i < len(fml) and j < len(fml[i]) else None
+                        if off.xl_error(v) and isinstance(f, str) and f.startswith("="):
+                            kept_errors.append(addr(r1_ + i, c1_ + j))
+                            line.append(f)
+                        elif isinstance(v, str):
+                            line.append("'" + v)
+                        else:
+                            line.append(v)
+                    out_rows.append(tuple(line))
+                area.Value2 = tuple(out_rows)
+                before_vals.append((area, vals))
+            detail = f"(수식 {len(forms) - len(kept_errors)}개를 값으로)"
+            if kept_errors:
+                values_warn = f"오류 값 칸 {len(kept_errors)}개는 수식 그대로 둠: {', '.join(kept_errors[:5])}"
         # R1: 결과를 다시 읽어 확인 (autofit은 Excel이 정하는 너비라 비교할 값이 없음)
         problems: List[str] = []
         try:
@@ -3622,14 +3646,15 @@ def cmd_range(args) -> Dict[str, Any]:
             elif a == "border":
                 problems += _verify_border(rng if rng is not None else ws.UsedRange, args.weight, args.box)
             elif a == "values" and not noop:
-                left = _formula_cells(rng)
+                left = [x for x in _formula_cells(rng) if x[0] not in set(kept_errors)]
                 if left:
                     problems.append(f"수식이 남은 칸 {len(left)}개: {', '.join(c for c, _ in left[:5])}")
                 for area, vals in before_vals:
                     got = off.range_to_matrix(area.Value2)
                     r1_, c1_ = int(area.Row), int(area.Column)
                     bad = [addr(r1_ + i, c1_ + j) for i, row in enumerate(vals) for j, v in enumerate(row)
-                           if not _same_cell(v, got[i][j] if i < len(got) and j < len(got[i]) else None)]
+                           if addr(r1_ + i, c1_ + j) not in kept_errors
+                           and not _same_cell(v, got[i][j] if i < len(got) and j < len(got[i]) else None)]
                     if bad:
                         problems.append(f"값이 바뀐 칸 {len(bad)}개: {', '.join(bad[:5])}")
         except Exception as e:
@@ -3638,6 +3663,8 @@ def cmd_range(args) -> Dict[str, Any]:
         info = range_info(rng) if rng is not None else {"sheet": str(ws.Name)}
         if noop:
             info["unchanged"] = True
+        if a == "values" and not noop and kept_errors:
+            info["warnings"] = [values_warn]
         resolved = t.resolved()
     where = f"{info['sheet']}!{info.get('range', '')}".rstrip("!")
     preview = f"{a} 완료: {where} {detail}".strip()

@@ -312,6 +312,9 @@ class FakeRange:
         if isinstance(v, tuple):
             for i, row in enumerate(v):
                 for j, x in enumerate(row):
+                    if getattr(self.ws, "typing", False) and isinstance(x, str) and x.startswith("="):
+                        FakeRange(self.ws, [(r1 + i, c1 + j, r1 + i, c1 + j)]).Formula = x     # 실제 Excel: =로 시작하는 글은 수식
+                        continue
                     self.ws.set(r1 + i, c1 + j, _typed(self.ws, x))
         else:
             for r, c in self.cells():
