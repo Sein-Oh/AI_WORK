@@ -2606,6 +2606,12 @@ def test_L(ctx):
 
     def l12():    # C10 열린 저장된 통합문서 undo
         path = ctx.path("L_undo.xlsx")
+        # 앞 실행이 남긴 같은 이름 파일을 먼저 지움: 있으면 엑셀이 '바꾸시겠습니까?'를 띄우고 러너가 멈춤 (회사 PC 2026-11-10 L12)
+        old = _lookup_doc("excel", "L_undo.xlsx")
+        if old is not None:
+            com_retry(lambda: old.Close(SaveChanges=False))
+        if os.path.exists(path):
+            os.remove(path)
         wb = com_retry(lambda: xl_app().Workbooks.Add())
         com_retry(lambda: wb.SaveAs(path))
         run_cli("excel.py", "write", "--target", path, "--range", "A1", "--value", f"L되돌림 {tag}")
