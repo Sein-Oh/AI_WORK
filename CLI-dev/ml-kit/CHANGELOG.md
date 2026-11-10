@@ -12,6 +12,19 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.87] - 2026-11-10
+
+회사 PC 실기(2026-11-10 낮, 2.9.86) 결과.
+
+### 수정
+- 성능예측표 엑셀 확인(beta F1)이 "성능예측표를 만들지 못했습니다: AttributeError: Excel.Application.Quit"로 성능예측표 전체를 실패로 보고하던 문제.
+  엑셀을 닫는 `xl.Quit` 속성 찾기가 오류를 삼키는 자리 밖에 있어, 엑셀 연결이 끊기면 확인 결과 대신 그 오류가 올라갔음. 닫기 실패는 삼키고
+  확인하지 못한 것만 `UNVERIFIED`로 알림 (`test_excel_check_lost_excel_connection_is_reported_not_raised`).
+- 성능예측표 엑셀 확인의 합격 기준 (사용자 결정 2026-11-10): 엑셀이 다시 계산한 값이 모델과 상대 1% 안(99% 일치)이면 통과(`EXCEL_TOL`).
+  0보다 크고 1% 안이면 `warnings`에 최대 차이와 자리, 1%를 넘으면 지금처럼 `UNVERIFIED`. 파이썬 사본 확인(`check`)은 그대로 모델과 같아야 함.
+- `run_all_tests.py`: 시간 초과로 끊은 하위 프로세스가 바쁜 PC에서 `taskkill` 뒤에도 남으면 종료 코드 없이(None) 돌아오던 것
+  (`test_silent_hung_child_is_killed_at_timeout`): 직접 한 번 더 끝내고, 그래도 남으면 -1과 `[ERROR]` 줄.
+
 ## [2.9.86] - 2026-11-10
 
 회사 PC 실기(2026-11-10, 2.9.85) 결과.
@@ -24,8 +37,6 @@
 - `run_all_tests.py`의 pytest 동시 실행: 코어 수 - 1개(최대 8)로 돌리자 회사 PC에서 메모리가 모자라 ml-kit 파일마다 4,600~5,300초,
   `ml_export.py -h`도 600초 시간 초과(실패 18건, pytest만 89분). 기본을 코어 수 - 1, 메모리 4GB마다 1개, 최대 3개로. 결과 표 비고에
   동시 실행 수·코어·메모리. 바쁜 PC에서 1초 상한 시험이 파이썬 시작 전에 끊기던 `test_silent_hung_child_is_killed_at_timeout`은 5초.
-- 성능예측표 엑셀 확인의 합격 기준 (사용자 결정 2026-11-10): 엑셀이 다시 계산한 값이 모델과 상대 1% 안(99% 일치)이면 통과(`EXCEL_TOL`).
-  0보다 크고 1% 안이면 `warnings`에 최대 차이와 자리, 1%를 넘으면 지금처럼 `UNVERIFIED`. 파이썬 사본 확인(`check`)은 그대로 모델과 같아야 함.
 
 ## [2.9.85] - 2026-11-09
 

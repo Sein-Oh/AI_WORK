@@ -1001,7 +1001,9 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
     except Exception as e:
         return f"엑셀로 계산 확인 실패: {type(e).__name__}: {e}"
     finally:
-        for close in ((lambda: wb.Close(SaveChanges=False)) if wb is not None else None, xl.Quit):
+        # xl.Quit도 lambda 안에서 찾음: 엑셀 연결이 끊기면 속성 찾기(xl.Quit)부터 AttributeError가 나는데, 여기서 나면 try 밖이라
+        # 확인 결과 대신 그 오류가 올라가 성능예측표 전체가 실패로 보고됨 (회사 PC 2026-11-10 beta F1)
+        for close in ((lambda: wb.Close(SaveChanges=False)) if wb is not None else None, lambda: xl.Quit()):
             try:
                 if close:
                     close()

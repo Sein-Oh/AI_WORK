@@ -4,7 +4,7 @@ description: 표(Excel/CSV) 데이터로 수치(회귀) 또는 종류(분류)를
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "2.9.86"
+  version: "2.9.87"
   platform: windows
 ---
 

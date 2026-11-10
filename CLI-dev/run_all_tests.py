@@ -246,7 +246,12 @@ def kill_tree(proc):
     try:
         proc.wait(timeout=10)
     except Exception:
-        pass
+        # taskkill이 바쁜 PC에서 늦거나 실패하면 종료 코드 없이(None) 남음 (회사 PC 2026-11-10): 직접 한 번 더 끝냄
+        try:
+            proc.kill()
+            proc.wait(timeout=10)
+        except Exception:
+            pass
 
 
 def run_capture(args, cwd, timeout, poll=1.0, env_extra=None, show=None, procs=None):
@@ -288,7 +293,11 @@ def run_capture(args, cwd, timeout, poll=1.0, env_extra=None, show=None, procs=N
         kill_tree(proc)
         lines.append("[ERROR] 사용자가 중단했습니다 (Ctrl+C).")
     reader.join(5)
-    return proc.returncode, "\n".join(lines), round(time.time() - start, 1), interrupted
+    code = proc.returncode
+    if code is None:                                 # 끝내지 못한 프로세스: 성공(0)이나 '종료 코드 없음'으로 보이지 않게
+        code = -1
+        lines.append("[ERROR] 하위 프로세스를 끝내지 못했습니다 (작업 관리자에서 확인).")
+    return code, "\n".join(lines), round(time.time() - start, 1), interrupted
 
 
 # ---------------------------------------------------------------------------
@@ -679,12 +688,15 @@ def step_pytest(stage, args, ctx):
     how += ", --pytest-workers로 바꿀 수 있음)" if not getattr(args, "pytest_workers", 0) else ", --pytest-workers)"
     say(f"오프라인 테스트 시작: 파일 {len(jobs)}개를 {how} (파일마다 상한 {args.pytest_timeout}초)")
     stage.note = f"동시 실행 {how}"                       # 결과 표의 비고 (느릴 때 원인을 보게)
-    procs, results, started = [], {}, time.time()
+    procs, results, started, clock = [], {}, time.time(), {}
 
     def one(job):
         tool, folder, path = job
         rel = os.path.relpath(path, folder)
-        res = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", LIVE_PLUGIN, "-rfEs", rel],
+        clock[job] = time.strftime("%H:%M")
+        # --durations=5: 가장 오래 걸린 시험 5개 (파일이 평소보다 수십 배 느렸던 원인을 보게, 회사 PC 2026-11-10)
+        res = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", LIVE_PLUGIN, "-rfEs",
+                           "--durations=5", rel],
                           folder, args.pytest_timeout, env_extra=env, show=lambda line: "[LIVE] " in line, procs=procs)
         results[job] = res
         npass, nfail = parse_pytest(res[1])[:2]
@@ -721,7 +733,7 @@ def step_pytest(stage, args, ctx):
             elif code not in (0, 5, None) and not nfail and not fails:      # 5: no test in the file
                 stage.fail(f"{tool}/{rel}: pytest exit {code} (실패 항목 없이 끝남, 상세 참고)")
             stage.skips += [f"{tool}: {x[:200]}" for x in skips]
-            stage.details.append((f"pytest {tool}/{rel} (exit {code}, {sec}초)", f"cwd={job[1]}\n{out}"))
+            stage.details.append((f"pytest {tool}/{rel} (exit {code}, {sec}초, {clock.get(job, '?')} 시작)", f"cwd={job[1]}\n{out}"))
 
 
 # ---------------------------------------------------------------------------

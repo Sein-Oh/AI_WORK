@@ -20,8 +20,23 @@ def test_silent_hung_child_is_killed_at_timeout(capsys):
     # 상한 5초 (1초면 바쁜 회사 PC에서 파이썬이 'start'를 찍기 전에 끊김, 2026-11-10)
     code, out, sec, stop = rat.run_capture([sys.executable, "-c", "import time; print('start', flush=True); time.sleep(60)"],
                                            HERE, timeout=5, poll=0.2)
-    assert time.time() - t0 < 20 and not stop and code is not None and code != 0
+    # 회사 PC 2026-11-10: taskkill이 늦어 18초 만에 종료 코드 없이(None) 돌아옴 -> 직접 한 번 더 끝냄 (최대 약 25초 더)
+    assert time.time() - t0 < 45 and not stop and code is not None and code != 0
     assert out.splitlines()[0] == "start" and "시간 초과" in out
+
+
+def test_child_that_cannot_be_stopped_is_not_reported_as_no_code(monkeypatch):
+    # 끝내지 못한 프로세스는 종료 코드 None 대신 -1과 [ERROR] 줄 (성공처럼 보이거나 판정이 깨지지 않게)
+    monkeypatch.setattr(rat, "kill_tree", lambda proc: None)
+    procs = []
+    try:
+        code, out, sec, stop = rat.run_capture([sys.executable, "-c", "import time; time.sleep(60)"], HERE,
+                                               timeout=1, poll=0.2, procs=procs)
+        assert code == -1 and "끝내지 못했습니다" in out, out
+    finally:
+        for p in procs:
+            p.kill()
+            p.wait(timeout=10)
 
 
 def test_normal_child_output_and_exit_code(capsys):

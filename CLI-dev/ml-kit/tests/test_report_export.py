@@ -909,6 +909,34 @@ def test_excel_edge_point_is_beyond_excel_comparison_precision():
         assert up - v <= max(abs(v), 1.0) * 1e-12, (v, up)
 
 
+def test_excel_check_lost_excel_connection_is_reported_not_raised(monkeypatch):
+    """회사 PC 2026-11-10 beta F1: 엑셀 연결이 끊겨 xl.Quit 속성 찾기가 AttributeError -> finally 밖으로 올라가 성능예측표 전체 실패.
+    닫기 실패는 삼키고 확인 실패만 알림."""
+    import types
+    import importlib.machinery
+    import ml_export
+
+    class LostExcel:
+        Visible = DisplayAlerts = False
+
+        @property
+        def Workbooks(self):
+            raise RuntimeError("RPC 서버를 사용할 수 없습니다")
+
+        def __getattr__(self, name):
+            raise AttributeError(f"Excel.Application.{name}")
+    client = types.ModuleType("win32com.client")
+    client.DispatchEx = lambda prog: LostExcel()
+    pkg = types.ModuleType("win32com")
+    pkg.__spec__ = importlib.machinery.ModuleSpec("win32com", None)
+    pkg.client = client
+    monkeypatch.setitem(sys.modules, "win32com", pkg)
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+    monkeypatch.delenv("ML_KIT_SKIP_EXCEL_CHECK", raising=False)
+    got = ml_export.excel_check("없는파일.xlsx", [])
+    assert got.startswith("엑셀로 계산 확인 실패: RuntimeError"), got
+
+
 def test_excel_check_passes_within_one_percent():
     """사용자 결정 2026-11-10: 성능예측표 엑셀 확인은 99% 일치(차이 1% 이내)면 통과, 다르면 warnings로 알림, 1%를 넘으면 실패."""
     import ml_export
