@@ -553,3 +553,26 @@ def test_pytest_workers_default_is_capped_by_cores_and_memory(monkeypatch):
     args.pytest_workers = 6
     assert rat.pytest_workers(args) == 6
     assert rat.total_memory_gb() is None or rat.total_memory_gb() > 0
+
+
+def test_slow_python_start_windows_are_reported():
+    # 회사 PC 2026-11-10 낮: 파일 정리 작업 시간대에 프로세스를 띄우는 시험이 수십 배 느려짐 -> 그 시간대를 결과에 남김
+    s = [("12:00", 0.4), ("12:01", 0.5), ("12:02", 9.0), ("12:03", 30.0), ("12:04", 0.6), ("12:05", 3.0)]
+    assert rat.slow_windows(s) == ["12:02~12:03 파이썬 시작 최대 30.0초 (처음 0.4초)", "12:05~12:05 파이썬 시작 최대 3.0초 (처음 0.4초)"]
+    assert rat.slow_windows([("12:00", 0.4), ("12:01", 1.9)]) == [] and rat.slow_windows([]) == []
+    assert rat.probe_python() is not None
+
+
+def test_long_files_start_first_across_tools(tmp_path):
+    # 오래 걸리는 파일을 도구와 관계없이 먼저 (끝에 긴 파일 셋이 함께 몰리던 것)
+    ml, oc = tmp_path / "ml-kit" / "tests", tmp_path / "office-cli" / "tests"
+    for d, names in ((ml, ["test_train.py", "test_skill_docs.py"]), (oc, ["test_reader.py", "test_word.py"])):
+        d.mkdir(parents=True)
+        for n in names:
+            (d / n).write_text("x" * 100, encoding="utf-8")
+    jobs = [("ml-kit", str(tmp_path / "ml-kit"), str(ml / "test_skill_docs.py")),
+            ("office-cli", str(tmp_path / "office-cli"), str(oc / "test_word.py")),
+            ("office-cli", str(tmp_path / "office-cli"), str(oc / "test_reader.py")),
+            ("ml-kit", str(tmp_path / "ml-kit"), str(ml / "test_train.py"))]
+    jobs.sort(key=lambda j: -rat.job_seconds(*j))
+    assert [os.path.basename(j[2]) for j in jobs[:2]] == ["test_train.py", "test_reader.py"]

@@ -336,7 +336,9 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
   성능예측표가 엑셀을 닫다 AttributeError로 전체 실패(beta F1). L4·L5는 1.4.95 수정이 가짜 COM에서만 통과했던 것 -> 가짜 Word Range가 편집을 따라 움직이게
 - 시험 쪽 (고침): G5 러너가 번호 1로 고정, run_all_tests 시간 초과 후 종료 코드 None, Outlook 질문 정리(G1·M4만 사람이 답함)
 - 확인 못 한 것: pytest에서 test_reader·office test_contract·test_setup 세 파일이 같은 때 아침보다 25~180배 느림(4334·4121·3728초, 아침 154·81·21초),
-  그중 reader index 하나가 120초 시간 초과. 원인 미확인 -> 다음 결과에 파일별 시작 시각과 느린 시험 5개(`--durations=5`)가 남음
+  그중 reader index 하나가 120초 시간 초과. 원인: 그 시간대(12:10~13:20쯤)에 회사 PC의 파일 정리 작업이 돎 (사용자 확인).
+  run_all_tests가 1분마다 파이썬 시작 시간을 재서 느린 시간대를 경고로 남기고, 파일별 시작 시각·`--durations=5`, 오래 걸리는 파일부터 시작.
+  회사 PC에서는 파일 정리 시간을 피해 돌리는 것이 좋음
 - 다음 반입: `run_all_tests.bat` 뒤 `python tools\run_win_tests.py --only L,M` (L1·L4·L5·L9·M4 확인), beta F
 
 ## 3. 회사 PC에서 할 일

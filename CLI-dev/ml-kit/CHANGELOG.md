@@ -24,6 +24,10 @@
   0보다 크고 1% 안이면 `warnings`에 최대 차이와 자리, 1%를 넘으면 지금처럼 `UNVERIFIED`. 파이썬 사본 확인(`check`)은 그대로 모델과 같아야 함.
 - `run_all_tests.py`: 시간 초과로 끊은 하위 프로세스가 바쁜 PC에서 `taskkill` 뒤에도 남으면 종료 코드 없이(None) 돌아오던 것
   (`test_silent_hung_child_is_killed_at_timeout`): 직접 한 번 더 끝내고, 그래도 남으면 -1과 `[ERROR]` 줄.
+- `run_all_tests.py` pytest 단계: 회사 PC 2026-11-10 낮에 프로세스를 띄우는 시험 파일 셋(office-cli `test_reader`·`test_contract`, `test_setup`)이
+  같은 시간대에 아침보다 25~180배 느려 pytest가 100분 (원인: 회사 PC의 파일 정리 작업 시간과 겹침, 사용자 확인).
+  1분마다 `python -c pass` 시간을 재서 처음보다 5배(최소 2초) 넘게 느린 시간대를 경고로, 파일마다 시작 시각과 `--durations=5`,
+  도구와 관계없이 평소 오래 걸리는 파일부터 시작 (`EXPECTED_SECONDS`).
 
 ## [2.9.86] - 2026-11-10
 
