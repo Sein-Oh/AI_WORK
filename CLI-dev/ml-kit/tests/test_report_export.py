@@ -480,6 +480,46 @@ def test_report_makes_calculator_in_the_same_folder(tmp_path, with_export):
     assert "성능예측표 (엑셀 계산기): 성능예측표_p_v1.xlsx" in text and "모델과 같은 값 확인" in text
 
 
+def test_report_again_reuses_the_checked_calculator_of_the_same_model(tmp_path, with_export):
+    """결정 1-7 (C영역 D6-3): 문장만 바꿔 보고서를 다시 만들면 같은 내용의 성능예측표가 시각 붙은 새 이름으로 하나씩 더 생겼다.
+    같은 모델(파일 해시)·같은 제목·타겟의 성능예측표가 있고 다시 열어 확인되면 재사용한다 (preview '기존 성능예측표 사용').
+    파일이 바뀌었거나 모델이 바뀌었으면 다시 만든다."""
+    path = _calc_data(tmp_path)
+    tr = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "효율")
+    first = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    root = os.path.dirname(tr["version_dir"])
+    assert "기존 성능예측표 사용" not in first["preview"]
+    again = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert again["export_file"] == first["export_file"] and "기존 성능예측표 사용" in again["preview"], again["preview"]
+    assert again["report_file"] != first["report_file"]                                  # 보고서는 새로 (시각 붙은 이름)
+    assert len([n for n in os.listdir(root) if n.endswith(".xlsx")]) == 1
+    assert again["export_verified"] == first["export_verified"] and again["export"] == first["export"]
+    assert not [m for m in again.get("recovered", []) if "성능예측표" in m], again.get("recovered")
+    from docx import Document
+    text = "\n".join(p.text for p in Document(again["report_file"]).paragraphs)
+    assert "기존 파일 사용" in text
+    other = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "다른 제목")      # 제목이 다르면 새로
+    assert other["export_file"] != first["export_file"] and "기존 성능예측표 사용" not in other["preview"]
+    wb = openpyxl.load_workbook(first["export_file"])                                     # 사용자가 열어 고치고 저장
+    wb.save(first["export_file"])
+    third = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert third["export_file"] not in (first["export_file"], other["export_file"]) and "기존 성능예측표 사용" not in third["preview"]
+    fourth = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert fourth["export_file"] == third["export_file"] and "기존 성능예측표 사용" in fourth["preview"]
+    vinfo = mx.load_version(tr["version_dir"], None)                                     # 그때는 엑셀 확인을 껐고 지금은 엑셀이 있음
+    made = {"ml_kit": rt.VERSION, "title": "효율 계산", "targets": vinfo["targets"],
+            "models": mx.model_hashes(vinfo["dir"], vinfo["metas"], vinfo["targets"])}
+    assert mx.reusable(mx.default_export_path(vinfo["dir"]), made)[0] == third["export_file"]
+    import unittest.mock
+    with unittest.mock.patch.object(mx, "excel_state", lambda: "can"):
+        assert mx.reusable(mx.default_export_path(vinfo["dir"]), made) is None
+    meta = os.path.join(tr["version_dir"], "model_효율.json")                              # 같은 버전 번호로 모델이 바뀜
+    with open(meta, "a", encoding="utf-8") as f:
+        f.write("\n")
+    fifth = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert fifth["export_file"] != third["export_file"] and "기존 성능예측표 사용" not in fifth["preview"]
+
+
 def test_classification_report_has_no_calculator(tmp_path, with_export):
     path = _calc_data(tmp_path)
     tr = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "등급", "--task", "classification")
@@ -706,6 +746,29 @@ def test_every_regression_model_moves_exactly(kind):
     np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.parametrize("kind", ["ExtraTrees", "RandomForest", "HistGradientBoosting", "Ridge", "ElasticNet"])
+def test_every_regression_model_with_a_text_input_moves_exactly(kind):
+    """결정 2-2: 글자 입력(원-핫)이 있는 모델 다섯 가지 모두 옮긴 수식(0/1 칸) = 모델 예측. 종류마다, 학습에 없던 종류(모두 0),
+    빈 칸('__missing__'를 학습한 모델은 그 칸), 앞뒤 공백, 숫자 모양의 종류 포함."""
+    r = np.random.default_rng(9)
+    n = 300
+    X = pd.DataFrame({"a": np.round(r.uniform(0, 100, n), 2), "라인": r.choice(["A", "B", "C", "7"], n).astype(object)})
+    X.loc[:9, "라인"] = np.nan                                              # 빈 칸도 학습: '__missing__' 종류
+    y = np.sin(X.a / 10) * 5 + X.라인.map({"A": 3.0, "B": 0.0, "C": -2.0, "7": 1.0}).fillna(0.5) + r.normal(0, 0.1, n)
+    schema = {"input_columns": ["a", "라인"], "numeric": ["a"], "datetime": {},
+              "categorical": {"라인": ["7", "A", "B", "C"]}}
+    est = mt.get_regression_models(seed=0, n_rows=n)[kind]
+    pipe = mt.build_pipeline(est, schema, "regressor").fit(rt.prepare_features(X, schema), y)
+    form = mx.model_formula(pipe)
+    assert {o["category"] for o in form["onehot"]} == {"7", "A", "B", "C", mx.MISSING}
+    cand = {"inputs": ["a", "라인"], "evals": [], "schema": schema, "pipe": pipe, "form": form}
+    P = mx.check_points(cand, X)
+    assert P.attrs["edge"] == 4 + 3
+    extra = pd.DataFrame({"a": [10.0, 50.0, 90.0, 20.0, 30.0], "라인": ["Z", None, "  B ", 7, "-"]})
+    P = pd.concat([P, extra], ignore_index=True)
+    np.testing.assert_allclose(mx.mirror(form, mx.model_features(cand, P)), mx.predict_frame(cand, P), rtol=1e-12, atol=1e-12)
+
+
 def test_bounds_are_written_with_every_digit(tmp_path):
     """openpyxl은 숫자를 16자리로 써서 갈림 경계가 움직인다: 잎 시트는 모든 자리(repr)로 써서 다시 읽으면 같은 double."""
     blocks = [np.array([[194.44514502053806, -1e300], [0.1 + 0.2, 1e300]]), np.full((2, 1), np.nan), np.array([[1 / 3]])]
@@ -738,6 +801,53 @@ def test_derived_features_become_cell_formulas(tmp_path):
     want = _model_predict(v, "y", rows)
     for i in range(3):
         assert out["일괄계산"][f"C{3 + i}"].value == pytest.approx(want[i], rel=1e-9, abs=1e-9), i
+
+
+@pytest.mark.skipif(SOFFICE is None, reason="LibreOffice not installed")
+def test_derived_power_and_chained_errors_match_the_model(tmp_path):
+    """결정 1-8 (C영역 D5): 파이썬은 음수 밑의 분수 거듭제곱이 빈 값(-> 학습 중앙값), 0 ** 0은 1인데 엑셀(LibreOffice도)은
+    (-1)^(1/3) = -1, 엑셀은 0^0 = #NUM!. 앞 파생변수가 빈 값이면 그것을 쓰는 뒤 파생변수도 빈 값(-> 그 중앙값)인데 엑셀은 앞 칸의
+    중앙값으로 뒤 칸을 계산했다. 이제 IF로 감싸고, 뒤 파생변수는 채우기 전 값(오류 그대로)을 읽는다."""
+    r = np.random.default_rng(5)
+    n = 300
+    df = pd.DataFrame({"a": r.uniform(-1, 2, n), "b": r.uniform(0.2, 0.8, n)})
+    df.loc[:4, ["a", "b"]] = 0.0                                                          # 0 ** 0 행
+    pp = np.where(df.a >= 0, np.abs(df.a) ** df.b, 0.0)
+    df["y"] = 4 * pp + 0.5 * df.a + r.normal(0, 0.05, n)
+    p = tmp_path / "pw.csv"
+    df.to_csv(p, index=False)
+    v = run_tool("ml_train.py", "--file", str(p), "--features", "b", "--targets", "y",
+                 "--eval", "p = a ** b; q = p * 3 + a")["version_dir"]
+    res = run_tool("ml_export.py", "--model", v, "--save", str(tmp_path / "pw.xlsx"))
+    src = openpyxl.load_workbook(res["output_file"])
+    texts = _strings(src, "일괄계산")
+    assert "INT(" in texts and "NA()" in texts, texts[:400]                               # 음수 밑 분수 지수 -> 빈 값
+    inputs = res["targets"]["y"]["inputs"]
+    assert sorted(inputs) == ["a", "b"]
+    conds = [{"a": -1.0, "b": 1 / 3}, {"a": 0.0, "b": 0.0}, {"a": 0.0, "b": -1.0}, {"a": 1.5, "b": 0.5}, {"a": -0.5, "b": 0.7}]
+    rows = [[c[k] for k in inputs] for c in conds]
+    for i, xs in enumerate(rows):
+        for j, x in enumerate(xs):
+            src["일괄계산"].cell(row=3 + i, column=1 + j, value=x)
+    src.save(tmp_path / "m.xlsx")
+    out = _recalc(tmp_path / "m.xlsx", tmp_path)
+    want = _model_predict(v, "y", rows)
+    pred_col = 3
+    for i in range(len(rows)):
+        got = out["일괄계산"].cell(row=3 + i, column=pred_col).value
+        assert got == pytest.approx(want[i], rel=1e-9, abs=1e-9), (rows[i], got, want[i])
+    assert "파생변수" in res["preview"] and "엑셀" in res["preview"], res["preview"]       # 파이썬 확인 밖이라는 정직한 문구
+
+
+def test_excel_check_adds_zero_and_negative_conditions_for_derived_features():
+    """결정 1-8: 파생변수 수식은 엑셀에서만 확인되므로 엑셀 확인 조건에 0과 음수 입력을 더한다 (파생변수가 없으면 더하지 않음)."""
+    data = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0]})
+    p = {"cand": {"inputs": ["a", "b"], "evals": ["p = a ** b"]}, "data": data}
+    pts = mx.derived_points(p)
+    assert len(pts) == 6 and (pts.iloc[0] == 0).all() and (pts.iloc[1] == -1.5).all()
+    assert pts.iloc[3].tolist() == [-3.0, 5.0] and pts.iloc[4].tolist() == [2.0, 0.0]
+    assert mx.derived_points({"cand": {"inputs": ["a"], "evals": []}, "data": data}).empty
+    assert "엑셀이 있는 PC에서만" in mx.derived_note(2, False) and "엑셀에서 다시 계산해 확인" in mx.derived_note(2, True)
 
 
 def test_several_outputs_share_the_inputs(tmp_path):
@@ -938,16 +1048,29 @@ def test_excel_check_lost_excel_connection_is_reported_not_raised(monkeypatch):
 
 
 def test_excel_check_passes_within_one_percent():
-    """사용자 결정 2026-11-10: 성능예측표 엑셀 확인은 99% 일치(차이 1% 이내)면 통과, 다르면 warnings로 알림, 1%를 넘으면 실패."""
+    """사용자 결정 2026-11-10: 성능예측표 엑셀 확인은 99% 일치(차이 1% 이내)면 통과, 다르면 warnings로 알림, 1%를 넘으면 실패.
+    결정 1-5 (C영역 C3): 1%의 기준은 확인한 조건들의 예측 범위(최대 - 최소). 예측값 크기 기준이면 1000 근처 타겟은
+    범위의 절반만큼 틀려도 통과하고, 0 근처 타겟은 아주 작은 차이로 실패했다."""
     import ml_export
     w = ["일괄계산 3행", "일괄계산 4행", "계산기"]
     assert ml_export.compare_excel("y", [1.0, 2.0, 1.0], [1.0, 2.0, 1.0], w) == (None, None)
-    problem, note = ml_export.compare_excel("y", [76.5689, 2.0, 1.0], [76.5671, 2.0, 1.0], w)     # 회사 PC F7 (0.0024%)
-    assert problem is None and "일괄계산 3행" in note and "허용 1%" in note, note
-    problem, note = ml_export.compare_excel("y", [1.02, 2.0, 1.0], [1.0, 2.0, 1.0], w)
-    assert note is None and "2.00% 다름" in problem, problem
+    problem, note = ml_export.compare_excel("y", [76.5689, 2.0, 1.0], [76.5671, 2.0, 1.0], w)     # 회사 PC F7 (범위 75.6의 0.0024%)
+    assert problem is None and "일괄계산 3행" in note and "허용 1%" in note and "예측 범위" in note, note
+    problem, note = ml_export.compare_excel("y", [1.02, 2.0, 1.0], [1.0, 2.0, 1.0], w)      # 범위 1의 2%
+    assert note is None and "2.00% 다름" in problem and "예측 범위" in problem, problem
     problem, _ = ml_export.compare_excel("y", ["#VALUE!", 2.0, 1.0], [1.0, 2.0, 1.0], w)
     assert "숫자가 아님" in problem
+    # 1000 근처에서 990~1010만 움직이는 타겟: 값의 1%(10)가 아니라 범위 20의 1%(0.2)까지만
+    problem, _ = ml_export.compare_excel("y", [1005.0, 990.0, 1010.0], [1000.0, 990.0, 1010.0], w)
+    assert problem and "25.00% 다름" in problem, problem
+    # 0 근처 타겟: 범위 2의 0.05%는 통과 (값 기준이면 0.001 / 0.002 = 50%로 실패)
+    problem, note = ml_export.compare_excel("y", [0.003, -1.0, 1.0], [0.002, -1.0, 1.0], w)
+    assert problem is None and note, (problem, note)
+    # 모든 조건의 예측이 같음 (범위 0): 예측값 크기의 1%로
+    problem, _ = ml_export.compare_excel("y", [5.0, 5.0, 5.0], [5.0, 5.0, 5.0], w)
+    assert problem is None
+    problem, _ = ml_export.compare_excel("y", [5.2, 5.0, 5.0], [5.0, 5.0, 5.0], w)
+    assert problem and "4.00% 다름" in problem, problem
 
 
 # ---- 2.9.88 검토 C: 보고서·성능예측표 결함 (재현 -> 수정) ------------------------------------------------------------
@@ -1025,7 +1148,7 @@ def test_pretty_formula_keeps_slash_and_star_in_column_names():
 @needs_report
 def test_report_save_must_be_a_word_file_and_relative_paths_go_to_the_data_folder(three_targets):
     """A5: --save out.pdf에 Word 파일을 저장하고 VERIFIED였다 -> STOP_RETRY + [추천] .docx 전체 명령. 확장자가 없으면 .docx.
-    B3: 상대 경로는 성능예측표처럼 <데이터>_ml_data 폴더 기준 (없는 폴더는 만듦)."""
+    B3: 상대 경로는 성능예측표처럼 한 기준 (없는 폴더는 만듦). 결정 1-6: 그 기준은 원본 데이터 파일 옆, [추천] 명령도 같은 곳."""
     d, data, tr = three_targets
     proc, res = run_raw("ml_report.py", "--model", tr["version_dir"], "--targets", "A", "--save", str(d / "out.pdf"))
     msg = stop_msg(res, proc)
@@ -1036,7 +1159,11 @@ def test_report_save_must_be_a_word_file_and_relative_paths_go_to_the_data_folde
     assert run_tool("ml_report.py", "--model", tr["version_dir"], "--targets", "A",
                     "--save", str(d / "noext"))["report_file"] == str(d / "noext.docx")
     rel = run_tool("ml_report.py", "--model", tr["version_dir"], "--targets", "A", "--save", os.path.join("새폴더", "rel.docx"))
-    assert rel["report_file"] == os.path.join(os.path.dirname(tr["version_dir"]), "새폴더", "rel.docx"), rel["report_file"]
+    # 결정 1-6: 상대 경로는 원본 데이터 파일 옆 (성능예측표·데이터셋과 같음, 2.9.88은 <데이터>_ml_data)
+    assert rel["report_file"] == os.path.join(os.path.dirname(str(data)), "새폴더", "rel.docx"), rel["report_file"]
+    proc, res = run_raw("ml_report.py", "--model-dir", tr["version_dir"], "--targets", "A", "--save", "추천.docx")
+    script, argv = recommended_command(res["message"])
+    assert proc.returncode == 2 and argv[argv.index("--save") + 1] == os.path.join(os.path.dirname(str(data)), "추천.docx"), argv
 
 
 def _fake_tree(**champ):
@@ -1158,6 +1285,12 @@ def test_export_save_folder_extension_and_missing_version(export_version, tmp_pa
     script, argv = recommended_command(stop_msg(res, proc))
     assert script == "ml_export.py" and argv[argv.index("--save") + 1] == str(tmp_path / "my.xlsx"), argv
     assert not list(tmp_path.glob("my.xls*"))
+    # 결정 1-6: 상대 --save는 원본 데이터 파일 옆 (보고서·데이터셋과 같음), 다른 확장자의 [추천]도 같은 곳
+    rel = run_tool("ml_export.py", "--model", vdir, "--save", os.path.join("표", "rel"))
+    assert rel["output_file"] == str(d / "표" / "rel.xlsx"), rel["output_file"]
+    proc, res = run_raw("ml_export.py", "--model", vdir, "--save", "rel.xls")
+    script, argv = recommended_command(stop_msg(res, proc))
+    assert argv[argv.index("--save") + 1] == str(d / "rel.xlsx"), argv
     root = tmp_path / "s_ml_data"                     # 학습한 버전이 v1 하나인 데이터 폴더 (다른 테스트가 버전을 더 만들어도)
     shutil.copytree(vdir, root / "v1")
     proc, res = run_raw("ml_export.py", "--model", str(root / "v9"))
@@ -1202,20 +1335,88 @@ def _train_csv(tmp_path, name, df, features, target):
     return p, run_tool("ml_train.py", "--file", str(p), "--features", features, "--targets", target)
 
 
-@needs_report
-def test_text_input_report_says_why_there_is_no_calculator(tmp_path, with_export):
-    """C1: 글자 입력이 있는 모델은 성능예측표를 만들 수 없는데 요약 소견에 '성능예측표도 함께 만들어집니다'가 남았고,
-    export_note는 오류 글이었다. 이제 만들지 않은 까닭을 보고서와 export_note에 분명히 쓰고, 그 권고 문장은 뺀다."""
-    r = np.random.default_rng(8)
-    n = 150
+def _cat_data(n=150, seed=8):
+    r = np.random.default_rng(seed)
     df = pd.DataFrame({"온도": r.uniform(150, 200, n), "압력": r.uniform(1, 5, n), "라인": r.choice(["A", "B", "C"], n)})
-    df["강도"] = 0.5 * df.온도 + 3 * df.압력 + np.where(df.라인 == "A", 5.0, 0.0) + r.normal(0, 0.1, n)
-    p, tr = _train_csv(tmp_path, "cat.csv", df, "온도,압력,라인", "강도")
+    df["강도"] = 0.5 * df.온도 + 3 * df.압력 + df.라인.map({"A": 5.0, "B": 0.0, "C": -3.0}) + r.normal(0, 0.1, n)
+    return df
+
+
+@needs_report
+def test_text_input_report_makes_the_calculator_and_date_input_says_why_not(tmp_path, with_export):
+    """C1 / 결정 2-2: 글자(범주) 입력 모델도 성능예측표를 만든다 (드롭다운 + 숨김 0/1 칸). 날짜 입력은 여전히 만들지 않고 까닭을
+    보고서와 export_note에 쓴다 (학습 권고의 '함께 만들어집니다' 문장은 뺌)."""
+    df = _cat_data()
+    _, tr = _train_csv(tmp_path, "cat.csv", df, "온도,압력,라인", "강도")
     rep = run_tool("ml_report.py", "--model", tr["version_dir"])
-    assert "export_file" not in rep and rep["export_note"].startswith("성능예측표(엑셀 계산기)는 만들지 않았습니다"), rep
-    assert "라인" in rep["export_note"] and "숫자 입력만" in rep["export_note"] and "Error" not in rep["export_note"]
-    text = _doc_text(rep["report_file"])
+    assert os.path.isfile(rep["export_file"]) and "export_note" not in rep, rep
+    assert rep["export"]["강도"]["inputs"] == ["온도", "압력", "라인"]
+    dd = df.copy()
+    dd["일자"] = pd.date_range("2024-01-01", periods=len(dd), freq="D").strftime("%Y-%m-%d")
+    _, tr2 = _train_csv(tmp_path, "date.csv", dd, "온도,압력,일자", "강도")
+    rep2 = run_tool("ml_report.py", "--model", tr2["version_dir"])
+    assert "export_file" not in rep2 and rep2["export_note"].startswith("성능예측표(엑셀 계산기)는 만들지 않았습니다"), rep2
+    assert "일자" in rep2["export_note"] and "날짜" in rep2["export_note"] and "Error" not in rep2["export_note"]
+    text = _doc_text(rep2["report_file"])
     assert "함께 만들어집니다" not in text and "성능예측표 (엑셀 계산기): 만들지 않음" in text
+
+
+def test_text_input_calculator_has_a_dropdown_and_matches_the_model(tmp_path):
+    """결정 2-2: 글자(범주) 입력은 계산기에 드롭다운(학습 종류 목록) + 숨김 0/1 칸으로 옮긴다. 파이썬 사본 확인은 종류마다,
+    학습에 없던 종류, 빈 칸 조건을 포함하고, 학습에 없던 종류·빈 칸은 모델처럼 계산하되 판단은 '참고용'."""
+    df = _cat_data()
+    _, tr = _train_csv(tmp_path, "cat2.csv", df, "온도,압력,라인", "강도")
+    v = tr["version_dir"]
+    res = run_tool("ml_export.py", "--model", v)
+    t = res["targets"]["강도"]
+    assert t["inputs"] == ["온도", "압력", "라인"] and t["check"]["max_diff"] < 1e-9, t
+    assert all("엑셀 계산 확인을 껐음" in u for u in res["unverified"]), res["unverified"]     # 구조·목록·드롭다운 확인은 통과
+    meta = json.load(open(os.path.join(v, "model_강도.json"), encoding="utf-8"))
+    cand = {"inputs": t["inputs"], "evals": [], "schema": meta["feature_schema"], "pipe": mx.load_pipe(v, meta)}
+    cand["form"] = mx.model_formula(cand["pipe"])
+    P = mx.check_points(cand, pd.read_csv(os.path.join(v, "model_dataset.csv")))
+    labels = set(P["라인"].map(lambda x: "" if not isinstance(x, str) else x))
+    assert {"A", "B", "C", ""} <= labels and any(x not in ("A", "B", "C", "") for x in labels), labels
+    wb = openpyxl.load_workbook(res["output_file"])
+    assert "목록" in wb.sheetnames and wb["목록"].sheet_state == "veryHidden"
+    calc = wb["계산기"]
+    row = next(i for i in range(6, 9) if calc.cell(row=i, column=2).value == "라인")
+    cell = calc.cell(row=row, column=3)
+    assert cell.value in ("A", "B", "C") and not cell.protection.locked and cell.number_format == "@"
+    lists = [dv for dv in calc.data_validations.dataValidation if dv.type == "list"]
+    assert lists and cell.coordinate in str(lists[0].sqref) and "목록" in lists[0].formula1, lists
+    assert "종류 3개" in str(calc.cell(row=row, column=5).value)
+    batch_lists = [dv for dv in wb["일괄계산"].data_validations.dataValidation if dv.type == "list"]
+    assert batch_lists, "일괄계산의 글자 열에도 드롭다운"
+    assert "학습에 없던 종류" in _strings(wb, "계산기") and "학습에 없던 종류" in _strings(wb, "일괄계산")
+    if SOFFICE is None:
+        return
+    inputs = t["inputs"]
+    conds = [{"온도": 170.0, "압력": 2.0, "라인": "A"}, {"온도": 180.0, "압력": 3.0, "라인": "B"},
+             {"온도": 190.0, "압력": 4.0, "라인": "C"}, {"온도": 175.0, "압력": 2.5, "라인": "Z"},
+             {"온도": 185.0, "압력": 1.5, "라인": None}, {"온도": 160.0, "압력": 4.5, "라인": " C "}]
+    for i, c in enumerate(conds):
+        for j, k in enumerate(inputs):
+            wb["일괄계산"].cell(row=3 + i, column=1 + j, value=c[k])
+    wb.save(tmp_path / "m.xlsx")
+    out = _recalc(tmp_path / "m.xlsx", tmp_path)
+    want = _model_predict(v, "강도", [[c[k] for k in inputs] for c in conds])
+    for i in range(len(conds)):
+        got = out["일괄계산"].cell(row=3 + i, column=4).value
+        assert got == pytest.approx(want[i], rel=1e-9, abs=1e-9), (conds[i], got, want[i])
+    judge = [out["일괄계산"].cell(row=3 + i, column=7).value for i in range(len(conds))]
+    assert judge[0] == "정상" and judge[3].startswith("참고용") and judge[4].startswith("참고용") and judge[5] == "정상", judge
+
+
+def test_text_input_with_many_categories_respects_the_formula_limit(tmp_path, monkeypatch):
+    """결정 2-2: 종류가 많으면 수식이 길어진다 -> 수식 길이 한도 검사(C영역 B2)를 그대로 지킨다 (저장 전 STOP_RETRY)."""
+    df = _cat_data(n=120, seed=3)
+    _, tr = _train_csv(tmp_path, "cat3.csv", df, "온도,압력,라인", "강도")
+    monkeypatch.setattr(mx, "FORMULA_MAX", 120)
+    save = tmp_path / "lim.xlsx"
+    with pytest.raises(rt.InputError, match="한도"):
+        mx.execute_export(argparse.Namespace(model=tr["version_dir"], targets=None, title=None, save=str(save), overwrite=False))
+    assert not save.exists()
 
 
 def test_low_score_calculator_says_reference_only(tmp_path):

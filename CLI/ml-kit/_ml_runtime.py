@@ -3523,6 +3523,54 @@ def _header_unit_pair(df_raw: pd.DataFrame) -> Optional[Tuple[int, int]]:
 
 LAYOUT_OPTS = {"--header-row": "header_row", "--unit-row": "unit_row", "--data-row": "data_row"}
 PATH_OPTS = ("--file", "--model", "--save", "--points")
+# tools whose relative --save is next to the original data file (결정 1-6, 2026-11-10: the user looks for the results there;
+# the <데이터>_ml_data folder is the tool's own folder). The other tools keep the current folder.
+SAVE_NEXT_TO_DATA = ("ml_report.py", "ml_export.py", "ml_dataset.py")
+
+
+def data_folder_of(path: str) -> str:
+    """The folder of the original data file of a --file / --model value: a data file -> its folder; a <stem>_ml_data
+    folder or a path inside one (version folder, model file) -> the folder that holds <stem>_ml_data; else the folder
+    itself (or the folder of a file)."""
+    ap = os.path.abspath(str(path).strip().strip('"').rstrip("\\/") or str(path))
+    if os.path.splitext(ap)[1].lower() in (".xlsx", ".xls", ".xlsm", ".csv"):
+        return os.path.dirname(ap)
+    p = ap
+    for _ in range(3):
+        if os.path.basename(p).endswith("_ml_data"):
+            return os.path.dirname(p)
+        p = os.path.dirname(p)
+    return ap if os.path.isdir(ap) else os.path.dirname(ap)
+
+
+def _option_value(argv: List[str], option: str) -> Optional[str]:
+    for i, a in enumerate(argv[1:], 1):
+        a = str(a)
+        if a == option and i + 1 < len(argv):
+            return str(argv[i + 1])
+        if a.startswith(option + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def save_base(argv: Optional[List[str]] = None) -> Optional[str]:
+    """The folder a relative --save is read against for SAVE_NEXT_TO_DATA tools (the data file's folder from --file,
+    else from --model); None for the other tools (current folder)."""
+    if argv is None:
+        argv = CURRENT_ARGV if CURRENT_ARGV is not None else list(sys.argv)
+    if not argv or os.path.basename(str(argv[0] or "")) not in SAVE_NEXT_TO_DATA:
+        return None
+    for option in ("--file", "--model"):
+        value = _option_value(argv, option)
+        if value and value.strip():
+            return data_folder_of(value)
+    return None
+
+
+def resolve_save(save: str, base: Optional[str]) -> str:
+    """--save -> absolute path: an absolute path as given, a relative one under `base` (the current folder when None)."""
+    save = str(save).strip().strip('"')
+    return os.path.abspath(save if os.path.isabs(save) or not base else os.path.join(base, save))
 
 
 def layout_retry(header_row: int, unit_row: Optional[int]) -> str:
@@ -3543,6 +3591,7 @@ def command_text(drop: Optional[Dict[str, str]] = None, argv: Optional[List[str]
     if not (script.startswith("ml_") and script.endswith(".py")):
         return None
     out: List[str] = []
+    base = save_base(argv)
     i = 1
     while i < len(argv):
         a = str(argv[i])
@@ -3550,6 +3599,10 @@ def command_text(drop: Optional[Dict[str, str]] = None, argv: Optional[List[str]
         hit = [o for o in (drop or {}) if o == key or (key.startswith("--") and len(key) > 3 and o.startswith(key))]
         if len(hit) == 1:
             i += 1 if has_eq else 2
+            continue
+        if key == "--save" and not has_eq and i + 1 < len(argv):      # the tool's own base (결정 1-6)
+            out += [a, quote_arg(resolve_save(argv[i + 1], base))]
+            i += 2
             continue
         if key in PATH_OPTS and not has_eq and i + 1 < len(argv):
             out += [a, quote_arg(os.path.abspath(str(argv[i + 1]).rstrip("\\/") or str(argv[i + 1])))]

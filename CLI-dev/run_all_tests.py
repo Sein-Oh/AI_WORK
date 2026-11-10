@@ -13,7 +13,7 @@
             파일마다 상한 --pytest-timeout 7200초,
             실패는 pytest_live_report 플러그인이 [LIVE] 줄로 바로 남겨 끊겨도 이름이 남음. 오래 걸리는 파일부터 시작,
             1분마다 파이썬 시작 시간을 재서 PC가 느려진 시간대(파일 정리·백신 검사 등)를 경고로 남김)
-    beta    ml-kit 베타 점검 (run_beta_check.py, F7 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
+    beta    ml-kit 베타 점검 (run_beta_check.py, F7~F9 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
     ml      ml-kit 실기 러너 (ml-kit/tools/run_win_tests.py, 10~20분). 기본 단계가 아니며 --only에 넣을 때만
     office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
     gemma   Gemma 종합 테스트: agent_scenarios.py의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고

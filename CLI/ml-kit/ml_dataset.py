@@ -21,7 +21,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     setup_console, run_cli, JsonArgumentParser, InputError, load_data_file, quote_arg, avoid_overwrite,
     save_with_lock_fallback, parse_where, resolve_where, where_mask, where_text, where_notation_variants,
     where_with_variants, where_retry,
-    exclude_mark, final_version, strip_unit, EXCLUDE_COL, VERSION, saved_as, command_text,
+    exclude_mark, final_version, strip_unit, EXCLUDE_COL, VERSION, saved_as, command_text, resolve_save,
     add_sheet_argument, sheet_note, sheet_ignored_warning,
 )
 check_core_libraries("데이터셋")
@@ -109,7 +109,7 @@ def output_path(data_file: str, kind: str, save: Optional[str], overwrite: bool)
     folder = os.path.dirname(os.path.abspath(data_file))
     stem = os.path.splitext(os.path.basename(data_file))[0]
     if save:
-        path = save if os.path.isabs(save) else os.path.join(folder, save)
+        path = resolve_save(save, folder)
         ext = os.path.splitext(path)[1].lower()
         if ext not in OUTPUT_EXTS:
             if ext:
@@ -283,7 +283,7 @@ def execute(args) -> Dict[str, Any]:
         if reason == INCLUDE_MARK:
             raise InputError(f"--reason '{INCLUDE_MARK}'은(는) 학습에 넣으라는 표시라 뺄 이유로 쓸 수 없습니다. 이유를 다른 말로 주십시오.")
         if reason.startswith(FORMULA_START):
-            reason_error(args, reason)
+            reason_error(reason)
         new = mask & ~already
         out[col] = [reason if new[i] else out[col].iloc[i] for i in range(len(out))]
         if kept_marks:
@@ -328,21 +328,15 @@ def execute(args) -> Dict[str, Any]:
     return res
 
 
-def reason_error(args, reason: str) -> None:
+def reason_error(reason: str) -> None:
     """--reason starting with = + - @: Excel reads it as a formula (an xlsx saved it as one and it read back as 0,
     2.9.88 D6). STOP_RETRY with [추천] the same command with those leading signs left out (the same words)."""
     plain = reason.lstrip("".join(FORMULA_START) + " ")
     msg = (f"--reason '{reason}'은(는) {', '.join(FORMULA_START)}로 시작해 엑셀이 수식으로 읽습니다 (저장하면 이유 대신 계산 값이 됨). "
            "이 기호로 시작하지 않는 이유를 주십시오.")
-    # --save goes back as its full path: command_text would make a relative --save absolute from the current folder,
-    # while this tool reads it next to the data file
-    cmd = command_text(drop={"--reason": "reason", "--save": "save"})
-    save = ""
-    if args.save:
-        folder = os.path.dirname(os.path.abspath(args.file))
-        save = f" --save {quote_arg(os.path.abspath(args.save if os.path.isabs(args.save) else os.path.join(folder, args.save)))}"
+    cmd = command_text(drop={"--reason": "reason"})      # a relative --save stays next to the data (결정 1-6)
     if plain and cmd:
-        msg += f" [추천] {cmd} --reason {quote_arg(plain)}{save}"
+        msg += f" [추천] {cmd} --reason {quote_arg(plain)}"
     raise InputError(msg)
 
 

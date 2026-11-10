@@ -25,6 +25,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, mark_committed, warn_long_path, avoid_overwrite,
     strip_unit, note_recovered, read_text_file, resolve_column_names, model_dir_from_data, final_version,
+    data_folder_of, resolve_save,
     command_text, quote_arg, name_list, version_hint, compile_formula,
 )
 import _ml_runtime  # noqa: E402  (RUN_COMMITTED, WATCHDOG_HOLD: read at the time, never a stale list)
@@ -1398,7 +1399,7 @@ def export_line_text(export: Optional[Dict[str, Any]]) -> str:
     if export and export.get("result"):
         import ml_export     # loaded already: it made the workbook
         ex = export["result"]
-        lines = [f"성능예측표 (엑셀 계산기): {os.path.basename(ex['output_file'])}"]
+        lines = [f"성능예측표 (엑셀 계산기): {os.path.basename(ex['output_file'])}" + (" (같은 모델로 만든 기존 파일 사용)" if ex.get("reused") else "")]
         items = list(ex["targets"].items())
         same = len(items) > 1 and all(v["inputs"] == items[0][1]["inputs"] for _, v in items)
         if same:     # B7: the same inputs once, not once per target
@@ -1406,7 +1407,8 @@ def export_line_text(export: Optional[Dict[str, Any]]) -> str:
             lines.append(f"- 입력 {len(ins)}개 ({ml_export.names_brief(ins)}), 모든 타겟 공통")
         for t, v in items:
             head = f"- {t}: " + ("" if same else f"입력 {len(v['inputs'])}개 ({ml_export.names_brief(v['inputs'])}), ")
-            lines.append(head + f"모델을 엑셀 수식으로 그대로 옮김 ({v['method']}, 조건 {v['check']['points']:,}개에서 모델과 같은 값 확인)")
+            lines.append(head + f"모델을 엑셀 수식으로 그대로 옮김 ({v['method']}, 조건 {v['check']['points']:,}개에서 모델과 같은 값 확인"
+                         + (f", {v['derived_note']})" if v.get("derived_note") else ")"))
         return "\n".join(lines)
     if export and export.get("note"):
         return f"성능예측표 (엑셀 계산기): {export['note']}"
@@ -1493,7 +1495,7 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
         import ml_export  # only when a report is made
         return {"result": ml_export.execute_export(argparse.Namespace(
             model=version_dir, targets=",".join(targets) if targets else None, title=title,
-            save=None, overwrite=overwrite))}
+            save=None, overwrite=overwrite, reuse=True))}
     except Exception as e:
         note = f"성능예측표를 만들지 못했습니다 (보고서는 정상): {type(e).__name__}: {str(e)[:200]}"
         sys.stderr.write(f"[WARN] {note}\n")
@@ -1501,15 +1503,16 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
 
 
 def export_skip_reason(ctx: Dict[str, Any]) -> Optional[str]:
-    """Why the calculator cannot be made for these targets, before trying (C1): text or date inputs."""
+    """Why the calculator cannot be made for these targets, before trying (C1): date inputs (text inputs are a
+    dropdown in the calculator since 결정 2-2)."""
     import ml_export
     bad: List[str] = []
     for t in ctx["targets"]:
-        bad += [c for c in ml_export.text_date_inputs(t["meta"]) if c not in bad]
+        bad += [c for c in ml_export.date_inputs(t["meta"]) if c not in bad]
     if not bad:
         return None
-    return (f"글자·날짜 입력 {name_list(bad, 10)}이(가) 있는 모델은 엑셀 수식으로 옮길 수 없습니다 "
-            f"(성능예측표는 숫자 입력만 가능)")
+    return (f"날짜 입력 {name_list(bad, 10)}이(가) 있는 모델은 엑셀 수식으로 옮길 수 없습니다 "
+            f"(성능예측표는 숫자·글자 입력만 가능)")
 
 
 def export_command(vdir: str, targets: Optional[List[str]], title: Optional[str]) -> str:
@@ -1544,7 +1547,7 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
         return
     res = export["result"]
     result["export_file"] = res["output_file"]
-    result["export"] = {t: {k: v[k] for k in ("inputs", "model", "val_r2", "method", "check")}
+    result["export"] = {t: {k: v[k] for k in ("inputs", "model", "val_r2", "method", "check", "derived_note") if k in v}
                         for t, v in res["targets"].items()}
     result["export_verified"] = res["verified"]
     if res.get("unverified"):
@@ -1607,14 +1610,14 @@ def history_warnings(info: Dict[str, Any], targets: List[str]) -> List[str]:
     return out
 
 
-def report_save_path(save: Optional[str], data_root: str) -> Optional[str]:
+def report_save_path(save: Optional[str], data_folder: str) -> Optional[str]:
     """--save -> the report path. Only Word (.docx): no extension -> .docx added; another extension (out.pdf) ->
     STOP_RETRY + [추천] the same command with .docx (2.9.88 A5: a Word file was saved as out.pdf and VERIFIED).
-    A relative path is under the default folder <데이터>_ml_data (2.9.88 B3: like ml_export; ml_dataset: next to the data)."""
+    A relative path is next to the original data file (결정 1-6: like ml_export and ml_dataset, and the [추천] commands
+    of command_text)."""
     if not save or not save.strip():
         return None
-    save = save.strip()
-    path = save if os.path.isabs(save) else os.path.join(data_root, save)
+    path = resolve_save(save, data_folder)
     ext = os.path.splitext(path)[1]
     if not ext:
         return path + ".docx"
@@ -1645,7 +1648,7 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
         vdir = model_dir_from_data(args.file, "--file")
         history = final_version(os.path.dirname(vdir))
     ctx = load_version(vdir, target_filter)
-    out_path = report_save_path(args.save, ctx["data_root"])
+    out_path = report_save_path(args.save, data_folder_of(vdir))
     task = ctx["record"]["task"]
     title = getattr(args, "title", None)
     names = [t["name"] for t in ctx["targets"]] if target_filter else None
@@ -1674,7 +1677,7 @@ def main():
     parser.add_argument("--model",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
     parser.add_argument("--targets", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
-    parser.add_argument("--save", help="저장할 .docx 경로 (상대 경로와 이름만은 <데이터>_ml_data 폴더 기준, 생략 시 그 폴더에 "
+    parser.add_argument("--save", help="저장할 .docx 경로 (상대 경로와 이름만은 원본 데이터 파일 옆, 생략 시 <데이터>_ml_data 폴더에 "
                                        "ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")

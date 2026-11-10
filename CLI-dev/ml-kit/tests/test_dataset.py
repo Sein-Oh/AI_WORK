@@ -224,3 +224,36 @@ def test_csv_blank_lines_keep_file_line_numbers(tmp_path):
     out = run_tool("ml_dataset.py", "exclude", "--file", str(f), "--rows", "15")
     got = pd.read_csv(out["output_file"], encoding="utf-8-sig")
     assert got.loc[got["제외"].notna(), "수율"].tolist() == [9999], got
+
+
+def test_relative_save_of_a_recommended_command_stays_next_to_the_data(tmp_path):
+    """결정 1-6: 상대 --save는 보고서·성능예측표·데이터셋 모두 원본 데이터 파일 옆. 도구가 낸 [추천] 명령(공통 command_text)은
+    상대 --save를 현재 폴더 기준 절대 경로로 바꿔, 추천 명령을 실행하면 처음 명령과 다른 곳에 저장됐다."""
+    f = tmp_path / "d.csv"
+    _data(f)
+    proc, bad = run_raw("ml_dataset.py", "pick", "--data-file", str(f), "--where", "라인 = A", "--save", os.path.join("결과", "a.csv"))
+    argv = split_command(bad["message"].split("[추천] ", 1)[1])
+    assert proc.returncode == 2 and argv[argv.index("--save") + 1] == str(tmp_path / "결과" / "a.csv"), bad
+    done = run_tool("ml_dataset.py", *argv[2:])
+    assert done["output_file"] == str(tmp_path / "결과" / "a.csv"), done
+
+
+def test_command_text_resolves_relative_save_like_the_tool(tmp_path):
+    """결정 1-6: command_text의 상대 --save 기준 = 도구의 기준 (보고서·성능예측표·데이터셋: 원본 데이터 옆, 그 밖: 현재 폴더)."""
+    import _ml_runtime as rt
+    from mlkit_helpers import KIT
+    data = tmp_path / "공정.xlsx"
+    vdir = tmp_path / "공정_ml_data" / "v2"
+    vdir.mkdir(parents=True)
+
+    def save_of(script, *args):
+        argv = split_command(rt.command_text(argv=[os.path.join(KIT, script), *args]))
+        return argv[argv.index("--save") + 1]
+    want = str(tmp_path / "out" / "r.docx")
+    assert save_of("ml_report.py", "--file", str(data), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_report.py", "--model", str(vdir), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_export.py", "--model", str(vdir), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_export.py", "--model", str(data), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_dataset.py", "pick", "--file", str(data), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_export.py", "--model", str(vdir), "--save", str(tmp_path / "abs.xlsx")) == str(tmp_path / "abs.xlsx")
+    assert save_of("ml_predict.py", "--model", str(vdir), "--save", "p.csv") == os.path.abspath("p.csv")   # 예측: 현재 폴더 그대로
