@@ -907,3 +907,16 @@ def test_excel_edge_point_is_beyond_excel_comparison_precision():
         up = ml_export.above_for_excel(v)
         assert up > v and float("%.15g" % up) != float("%.15g" % v), (v, up)
         assert up - v <= max(abs(v), 1.0) * 1e-12, (v, up)
+
+
+def test_excel_check_passes_within_one_percent():
+    """사용자 결정 2026-11-10: 성능예측표 엑셀 확인은 99% 일치(차이 1% 이내)면 통과, 다르면 warnings로 알림, 1%를 넘으면 실패."""
+    import ml_export
+    w = ["일괄계산 3행", "일괄계산 4행", "계산기"]
+    assert ml_export.compare_excel("y", [1.0, 2.0, 1.0], [1.0, 2.0, 1.0], w) == (None, None)
+    problem, note = ml_export.compare_excel("y", [76.5689, 2.0, 1.0], [76.5671, 2.0, 1.0], w)     # 회사 PC F7 (0.0024%)
+    assert problem is None and "일괄계산 3행" in note and "허용 1%" in note, note
+    problem, note = ml_export.compare_excel("y", [1.02, 2.0, 1.0], [1.0, 2.0, 1.0], w)
+    assert note is None and "2.00% 다름" in problem, problem
+    problem, _ = ml_export.compare_excel("y", ["#VALUE!", 2.0, 1.0], [1.0, 2.0, 1.0], w)
+    assert "숫자가 아님" in problem
