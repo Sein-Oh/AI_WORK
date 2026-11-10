@@ -12,7 +12,7 @@ LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 �
   C  표 보간·반대 찾기 ml_map (2.6.0)
   D  예측 + 실측 비교값 (2.7.0)
   E  모델 반대 찾기와 운전 구간 (2.8.0)
-  F  보고서 + 성능예측표 세트, 모델과 같은 값, 엑셀 잠금·숨김·재계산 (2.9.x)
+  F  보고서 + 성능예측표 세트, 모델과 같은 값, 엑셀 잠금·숨김·재계산 (2.9.x), 파생변수 표의 엑셀 재계산 (F8)
   G  파생변수 원본 열 (2.9.1)
 
 결과: 이 파일 옆에 beta_check_<라벨>_<시각>.md (요약 + 실패 상세)와 .xlsx (항목별 표).
@@ -253,6 +253,36 @@ def group_f(work, st):
         check("F", "F7", "엑셀로 수식 재계산 확인 (export_verified)", None if "엑셀이 없는 환경" in un else False, un)
 
 
+def excel_item(cid, title, code, p, err):
+    """A calculator made by ml_export, recalculated in Excel: PASS when verified, SKIP without Excel, FAIL otherwise."""
+    if code != 0 or not p or p.get("status") != "ok":
+        check("F", cid, title, False, f"exit {code} {(p or {}).get('message', '')} {err[-300:]}")
+        return
+    if p.get("verified"):
+        check("F", cid, title, True)
+        return
+    un = " ".join(p.get("unverified") or [])
+    check("F", cid, title, None if "엑셀이 없는 환경" in un else False, un)
+
+
+def group_f_excel(work):
+    """F8 파생변수(거듭제곱의 0과 음수 밑, 연쇄 파생변수): 엑셀에서만 확인되는 성능예측표 수식 (결정 1-8)."""
+    import numpy as np
+    import pandas as pd
+    r = np.random.default_rng(11)
+    n = 200
+    df = pd.DataFrame({"a": r.uniform(-1, 2, n), "b": r.uniform(0.2, 0.8, n)})
+    df.loc[:4, ["a", "b"]] = 0.0
+    df["y"] = 4 * np.where(df.a >= 0, np.abs(df.a) ** df.b, 0.0) + 0.5 * df.a + r.normal(0, 0.05, n)
+    path = os.path.join(work, "파생_거듭제곱.csv")
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    code, p, err, _ = run("ml_train.py", "--file", path, "--features", "b", "--eval", "p = a ** b; q = p * 3 + a",
+                          "--targets", "y", cwd=work)
+    if code == 0:
+        code, p, err, _ = run("ml_export.py", "--model", path, cwd=work)
+    excel_item("F8", "파생변수(음수 밑 거듭제곱, 0^0, 연쇄) 성능예측표를 엑셀로 재계산 확인", code, p, err)
+
+
 def group_g(work):
     import numpy as np
     import pandas as pd
@@ -326,6 +356,7 @@ def run_groups(work, groups):
         group_e(work, st)
     if "F" in groups:
         group_f(work, st)
+        group_f_excel(work)
     if "G" in groups:
         group_g(work)
 

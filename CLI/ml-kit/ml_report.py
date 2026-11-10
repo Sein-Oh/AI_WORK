@@ -1407,7 +1407,8 @@ def export_line_text(export: Optional[Dict[str, Any]]) -> str:
             lines.append(f"- 입력 {len(ins)}개 ({ml_export.names_brief(ins)}), 모든 타겟 공통")
         for t, v in items:
             head = f"- {t}: " + ("" if same else f"입력 {len(v['inputs'])}개 ({ml_export.names_brief(v['inputs'])}), ")
-            lines.append(head + f"모델을 엑셀 수식으로 그대로 옮김 ({v['method']}, 조건 {v['check']['points']:,}개에서 모델과 같은 값 확인)")
+            lines.append(head + f"모델을 엑셀 수식으로 그대로 옮김 ({v['method']}, 조건 {v['check']['points']:,}개에서 모델과 같은 값 확인"
+                         + (f", {v['derived_note']})" if v.get("derived_note") else ")"))
         return "\n".join(lines)
     if export and export.get("note"):
         return f"성능예측표 (엑셀 계산기): {export['note']}"
@@ -1545,7 +1546,7 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
         return
     res = export["result"]
     result["export_file"] = res["output_file"]
-    result["export"] = {t: {k: v[k] for k in ("inputs", "model", "val_r2", "method", "check")}
+    result["export"] = {t: {k: v[k] for k in ("inputs", "model", "val_r2", "method", "check", "derived_note") if k in v}
                         for t, v in res["targets"].items()}
     result["export_verified"] = res["verified"]
     if res.get("unverified"):

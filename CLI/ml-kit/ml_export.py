@@ -357,8 +357,12 @@ def excel_expr(node: ast.AST, refs: Dict[str, str]) -> str:
     if isinstance(node, ast.BinOp):
         a, b = excel_expr(node.left, refs), excel_expr(node.right, refs)
         op = type(node.op)
-        if op in (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow):
-            sym = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "^"}[op]
+        if op is ast.Pow:
+            # the model's (Python) power: 0 ** 0 = 1 (Excel #NUM!), a negative base with a fractional exponent is no
+            # number (-> the imputer's median) where Excel gives the odd root ((-8)^(1/3) = -2) (결정 1-8)
+            return f"IF(AND(({a})=0,({b})=0),1,IF(AND(({a})<0,({b})<>INT({b})),NA(),(({a})^({b}))))"
+        if op in (ast.Add, ast.Sub, ast.Mult, ast.Div):
+            sym = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}[op]
             return f"(({a}){sym}({b}))"
         if op is ast.FloorDiv:
             return f"INT(({a})/({b}))"
@@ -369,9 +373,11 @@ def excel_expr(node: ast.AST, refs: Dict[str, str]) -> str:
     raise _unsupported(f"파생변수 수식을 엑셀 수식으로 바꾸지 못함 ({type(node).__name__})")
 
 
-def derived_formulas(cand: Dict[str, Any]) -> List[Tuple[str, Any]]:
-    """[(name, function(refs by name) -> Excel formula)] of the derived features in order (later ones may use
-    earlier ones). A formula error (division by 0, ...) gives the imputer's median, like the model."""
+def derived_formulas(cand: Dict[str, Any]) -> List[Tuple[str, Any, float]]:
+    """[(name, function(refs by name) -> Excel formula, median)] of the derived features in order (later ones may use
+    earlier ones). The formula is the value before filling: an error (division by 0, a negative base with a fractional
+    exponent) stays an error, so a later formula that reads it is an error too, like the model's empty value. The model
+    reads the filled cell IFERROR(value, median): the imputer's median of that feature (결정 1-8)."""
     known = list(cand["inputs"])
     med = dict(zip(cand["form"]["features"], cand["form"]["median"]))
     out = []
@@ -379,11 +385,10 @@ def derived_formulas(cand: Dict[str, Any]) -> List[Tuple[str, Any]]:
         lhs, rhs = (x.strip() for x in e.split("=", 1))
         tokens, tok2col, _ = compile_formula(rhs, known)
         tree = ast.parse(tokens, mode="eval")
-        fill = med.get(lhs, 0.0)
 
-        def make(refs: Dict[str, str], tree=tree, tok2col=tok2col, fill=fill) -> str:
-            return f"IFERROR({excel_expr(tree, {t: refs[c] for t, c in tok2col.items()})},{num(fill)})"
-        out.append((lhs, make))
+        def make(refs: Dict[str, str], tree=tree, tok2col=tok2col) -> str:
+            return excel_expr(tree, {t: refs[c] for t, c in tok2col.items()})
+        out.append((lhs, make, float(med.get(lhs, 0.0))))
         known.append(lhs)
     return out
 
@@ -561,13 +566,16 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         """Writes the helper cells of one prediction (derived features, distance to the nearest training row)
         starting at col0. Returns (prediction formula, distance cell, next free column)."""
         cand, form = p["cand"], p["cand"]["form"]
-        refs = dict(x_refs)
+        refs = dict(x_refs)          # what a formula reads: inputs, the derived values before filling
+        filled = dict(x_refs)        # what the model reads: inputs, the derived values filled with the median
         c = col0
-        for name, make in p["derived"]:
+        for name, make, fill in p["derived"]:
             ws.cell(row=row, column=c, value=f"={make(refs)}")
+            ws.cell(row=row, column=c + 1, value=f"=IFERROR({_col(c)}{row},{num(fill)})")
             refs[name] = f"${_col(c)}{row}"
-            c += 1
-        feats = [refs[f] for f in form["features"]]
+            filled[name] = f"${_col(c + 1)}{row}"
+            c += 2
+        feats = [filled[f] for f in form["features"]]
         if form["kind"] == "linear":
             pred = num(form["intercept"]) + "".join(
                 f"+{num(w)}*(({x})-{num(m)})/{num(s)}" for x, w, m, s in zip(feats, form["coef"], form["mean"], form["scale"]))
@@ -995,6 +1003,23 @@ def edge_points(p: Dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=cand["inputs"])
 
 
+DERIVED_POINTS = 12          # conditions for the derived formulas in the Excel check (0 and negative inputs)
+
+
+def derived_points(p: Dict[str, Any]) -> pd.DataFrame:
+    """Conditions where the derived formulas meet 0 and negative values (0 ** 0, a negative base with a fractional
+    exponent, division by 0): all inputs 0, all -1.5, and each input 0 or negative with the others at the median
+    (결정 1-8: Excel and the model's Python differ there unless the formula says what Python does)."""
+    cand = p["cand"]
+    if not cand["evals"]:
+        return pd.DataFrame(columns=cand["inputs"])
+    med = {c: float(coerce_numeric(p["data"][c]).median()) for c in cand["inputs"]}
+    rows = [{c: 0.0 for c in cand["inputs"]}, {c: -1.5 for c in cand["inputs"]}]
+    for c in cand["inputs"]:
+        rows += [dict(med, **{c: 0.0}), dict(med, **{c: -abs(med[c]) - 1.0})]
+    return pd.DataFrame(rows[:DERIVED_POINTS], columns=cand["inputs"])
+
+
 def compare_excel(target: str, got: List[Any], want: List[float], wheres: List[str]) -> Tuple[Optional[str], Optional[str]]:
     """엑셀이 다시 계산한 값과 모델 예측 비교 -> (문제, 알림). 차이가 확인한 조건들의 예측 범위(최대 - 최소)의
     EXCEL_TOL(1%, 99% 일치)을 넘으면 문제, 0보다 크고 그 안이면 알림 (사용자 결정 2026-11-10: 99%쯤 일치하면 통과,
@@ -1043,7 +1068,8 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
         calc, batch = wb.Worksheets("계산기"), wb.Worksheets("일괄계산")
         problems = []
         for p in plans:
-            P = pd.concat([p["points"].sample(EXCEL_CHECKS, random_state=1), edge_points(p)], ignore_index=True)
+            P = pd.concat([p["points"].sample(EXCEL_CHECKS, random_state=1), edge_points(p), derived_points(p)],
+                          ignore_index=True)
             want = predict_frame(p["cand"], P)
             n = len(P)
             for c, col in p["batch_inputs"].items():
@@ -1170,6 +1196,8 @@ def execute_export(args) -> Dict[str, Any]:
             "method": method_text(c["form"]), "leaves": len(c["form"]["value"]) if c["form"]["kind"] == "trees" else None,
             "check": {"points": chk["points"], "max_diff": _sig(chk["max_diff"], 3), "max_rel_pct": _sig(chk["max_rel_pct"], 2)},
         }
+        if c["evals"]:     # D5: the check above computes derived features in Python; their Excel formulas only in Excel
+            out_targets[p["target"]]["derived_note"] = derived_note(len(c["evals"]), xl is None)
     res = {"status": "ok", "output_file": real, "title": title, "targets": out_targets,
            "verified": not unverified, "preview": f"성능예측표 생성: {export_brief(out_targets)}"}
     if warnings:
@@ -1183,6 +1211,14 @@ def execute_export(args) -> Dict[str, Any]:
     return res
 
 
+def derived_note(n: int, excel_ok: bool) -> str:
+    """What was checked of the derived features' Excel formulas (결정 1-8, C영역 D5: the model check computes them in
+    Python, so only Excel itself checks the formulas)."""
+    if excel_ok:
+        return f"파생변수 수식 {n}개는 엑셀에서 다시 계산해 확인"
+    return f"파생변수 수식 {n}개는 엑셀이 있는 PC에서만 확인됨 (이번에는 엑셀로 확인 못 함)"
+
+
 def export_brief(out_targets: Dict[str, Dict[str, Any]]) -> str:
     """The preview text: the inputs once when every target has the same ones (B7), names shortened (names_brief)."""
     items = list(out_targets.items())
@@ -1191,7 +1227,8 @@ def export_brief(out_targets: Dict[str, Dict[str, Any]]) -> str:
     def one(t: str, v: Dict[str, Any]) -> str:
         low = " (정확도 낮음: 참고용)" if isinstance(v.get("val_r2"), (int, float)) and v["val_r2"] < LOW_R2 else ""
         return ((f"{t}: " if same else f"{t}: 입력 {len(v['inputs'])}개 ({names_brief(v['inputs'])}), ")
-                + f"{v['model']}, 검증 R² {v['val_r2']}{low}, 모델과 같은 계산 (조건 {v['check']['points']:,}개 확인)")
+                + f"{v['model']}, 검증 R² {v['val_r2']}{low}, 모델과 같은 계산 (조건 {v['check']['points']:,}개 확인"
+                + (f", {v['derived_note']})" if v.get("derived_note") else ")"))
     head = f"입력 {len(items[0][1]['inputs'])}개 ({names_brief(items[0][1]['inputs'])}), 모든 타겟 공통; " if same else ""
     return head + "; ".join(one(t, v) for t, v in items)
 

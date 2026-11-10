@@ -740,6 +740,53 @@ def test_derived_features_become_cell_formulas(tmp_path):
         assert out["일괄계산"][f"C{3 + i}"].value == pytest.approx(want[i], rel=1e-9, abs=1e-9), i
 
 
+@pytest.mark.skipif(SOFFICE is None, reason="LibreOffice not installed")
+def test_derived_power_and_chained_errors_match_the_model(tmp_path):
+    """결정 1-8 (C영역 D5): 파이썬은 음수 밑의 분수 거듭제곱이 빈 값(-> 학습 중앙값), 0 ** 0은 1인데 엑셀(LibreOffice도)은
+    (-1)^(1/3) = -1, 엑셀은 0^0 = #NUM!. 앞 파생변수가 빈 값이면 그것을 쓰는 뒤 파생변수도 빈 값(-> 그 중앙값)인데 엑셀은 앞 칸의
+    중앙값으로 뒤 칸을 계산했다. 이제 IF로 감싸고, 뒤 파생변수는 채우기 전 값(오류 그대로)을 읽는다."""
+    r = np.random.default_rng(5)
+    n = 300
+    df = pd.DataFrame({"a": r.uniform(-1, 2, n), "b": r.uniform(0.2, 0.8, n)})
+    df.loc[:4, ["a", "b"]] = 0.0                                                          # 0 ** 0 행
+    pp = np.where(df.a >= 0, np.abs(df.a) ** df.b, 0.0)
+    df["y"] = 4 * pp + 0.5 * df.a + r.normal(0, 0.05, n)
+    p = tmp_path / "pw.csv"
+    df.to_csv(p, index=False)
+    v = run_tool("ml_train.py", "--file", str(p), "--features", "b", "--targets", "y",
+                 "--eval", "p = a ** b; q = p * 3 + a")["version_dir"]
+    res = run_tool("ml_export.py", "--model", v, "--save", str(tmp_path / "pw.xlsx"))
+    src = openpyxl.load_workbook(res["output_file"])
+    texts = _strings(src, "일괄계산")
+    assert "INT(" in texts and "NA()" in texts, texts[:400]                               # 음수 밑 분수 지수 -> 빈 값
+    inputs = res["targets"]["y"]["inputs"]
+    assert sorted(inputs) == ["a", "b"]
+    conds = [{"a": -1.0, "b": 1 / 3}, {"a": 0.0, "b": 0.0}, {"a": 0.0, "b": -1.0}, {"a": 1.5, "b": 0.5}, {"a": -0.5, "b": 0.7}]
+    rows = [[c[k] for k in inputs] for c in conds]
+    for i, xs in enumerate(rows):
+        for j, x in enumerate(xs):
+            src["일괄계산"].cell(row=3 + i, column=1 + j, value=x)
+    src.save(tmp_path / "m.xlsx")
+    out = _recalc(tmp_path / "m.xlsx", tmp_path)
+    want = _model_predict(v, "y", rows)
+    pred_col = 3
+    for i in range(len(rows)):
+        got = out["일괄계산"].cell(row=3 + i, column=pred_col).value
+        assert got == pytest.approx(want[i], rel=1e-9, abs=1e-9), (rows[i], got, want[i])
+    assert "파생변수" in res["preview"] and "엑셀" in res["preview"], res["preview"]       # 파이썬 확인 밖이라는 정직한 문구
+
+
+def test_excel_check_adds_zero_and_negative_conditions_for_derived_features():
+    """결정 1-8: 파생변수 수식은 엑셀에서만 확인되므로 엑셀 확인 조건에 0과 음수 입력을 더한다 (파생변수가 없으면 더하지 않음)."""
+    data = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0]})
+    p = {"cand": {"inputs": ["a", "b"], "evals": ["p = a ** b"]}, "data": data}
+    pts = mx.derived_points(p)
+    assert len(pts) == 6 and (pts.iloc[0] == 0).all() and (pts.iloc[1] == -1.5).all()
+    assert pts.iloc[3].tolist() == [-3.0, 5.0] and pts.iloc[4].tolist() == [2.0, 0.0]
+    assert mx.derived_points({"cand": {"inputs": ["a"], "evals": []}, "data": data}).empty
+    assert "엑셀이 있는 PC에서만" in mx.derived_note(2, False) and "엑셀에서 다시 계산해 확인" in mx.derived_note(2, True)
+
+
 def test_several_outputs_share_the_inputs(tmp_path):
     r = np.random.default_rng(31)
     n = 300
