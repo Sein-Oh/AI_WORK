@@ -20,7 +20,7 @@ SKILL_NAMES = ("office-excel", "office-doc", "office-mail", "office-spec", "offi
 SKILLS_DIR = os.path.join(TOOL_DIR, "skills")
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
 TEST_SKILL = os.path.join(DEV, "tools", "office-cli-test", "SKILL.md")
-MAX_SKILL_BYTES = 7372                # 경량 LLM 컨텍스트: 스킬 하나 7.2KB 이하 (6KB에서 20% 늘림, 2026-11-10, AGENTS.md "사용법 단순성" 7)
+MAX_SKILL_BYTES = 8192                # 경량 LLM 컨텍스트: 스킬 하나 8KB 이하 (6KB -> 7.2KB -> 8KB, 사용자 결정 2026-11-10, AGENTS.md "사용법 단순성" 7)
 
 
 def _subparsers(mod):

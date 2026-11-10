@@ -81,7 +81,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    기본값·`next_commands`로 준다. 반복 상한은 도구가 세고, 끝나면 `next_commands`를 비운다.
 6. **사용자에게 알릴 글은 도구가 만든다**: 결과마다 `preview`(그대로 전할 짧은 한국어)를 주고, 스킬은 "preview와 warnings를 알린다"를 기본으로 한다.
    스킬에 "알릴 키" 목록을 길게 적지 않는다 (키 이름을 많이 외우게 하면 빠뜨리거나 지어낸다).
-7. **스킬은 짧고 모순이 없게**: 스킬 하나 7.2KB(7372바이트, LF 기준, 2026-11-10 6KB에서 20% 늘림) 이하. 넘으면 작업별로 나눈다. 규칙에 예외가 있으면 그 규칙 문장 안에 적는다
+7. **스킬은 짧고 모순이 없게**: 스킬 하나 8KB(8192바이트, LF 기준, 2026-11-10 사용자 결정) 이하. 넘으면 작업별로 나눈다. 규칙에 예외가 있으면 그 규칙 문장 안에 적는다
    (다른 줄의 예외는 놓친다). 전역 지침(`CLI/opencode/AGENTS.md`)과 스킬이 같은 일을 다르게 말하지 않는다.
 8. **옵션을 늘리기 전에**: 기본값, 자동 판단, 기존 옵션으로 안 되는지 먼저 본다. 꼭 필요한 옵션만 스킬에 적고 나머지는 README에만.
 
@@ -177,7 +177,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 4. 실기 결과(`docs/test_logs/`)에는 회사 경로·사용자 이름이 들어 있다. 그 내용을 코드·테스트·문서·커밋 메시지에 옮기지 않는다
    (요약은 `docs/HANDOFF.md` 4장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
 5. 남은 할 일은 각 도구 `CHANGELOG.md`(`CLI-dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
-6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (7.2KB, 상세는 README.md, 위 "사용법 단순성" 7번).
+6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (8KB, 상세는 README.md, 위 "사용법 단순성" 7번).
 7. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/skills/ml-train/SKILL.md`는 `ml-train`,
    `CLI/office-cli/skills/office-excel/SKILL.md`는 `office-excel`), frontmatter는 name/description/license/compatibility/metadata만.
    보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `CLI/setup.py`

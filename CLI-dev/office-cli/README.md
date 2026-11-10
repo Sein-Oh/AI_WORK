@@ -3,7 +3,7 @@
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
-- 에이전트용 스킬 (작업별 5개, 각 7.2KB 이하): [`office-excel`](../../CLI/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
+- 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`office-excel`](../../CLI/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
   [`office-doc`](../../CLI/office-cli/skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
   [`office-mail`](../../CLI/office-cli/skills/office-mail/SKILL.md) (outlook.py),
   [`office-spec`](../../CLI/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment),

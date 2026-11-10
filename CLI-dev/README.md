@@ -12,7 +12,7 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 | [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`office-excel`](../CLI/office-cli/skills/office-excel/SKILL.md), [`office-doc`](../CLI/office-cli/skills/office-doc/SKILL.md), [`office-mail`](../CLI/office-cli/skills/office-mail/SKILL.md), [`office-spec`](../CLI/office-cli/skills/office-spec/SKILL.md), [`office-data`](../CLI/office-cli/skills/office-data/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
-(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<스킬 이름>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `CLI/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 7.2KB(7372바이트) 이하를 목표로 합니다.
+(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\CLI\<tool>\`에 두고, OpenCode 스킬 폴더(`C:\Users\<사용자>\.config\opencode\skills\<스킬 이름>\`)에는 SKILL.md만 복사합니다 ([`docs/opencode/README.md`](../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\CLI\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `CLI/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
 
 ## 실기 자동 점검 (`run_all_tests.py`)
 
