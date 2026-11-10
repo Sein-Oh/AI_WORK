@@ -938,16 +938,29 @@ def test_excel_check_lost_excel_connection_is_reported_not_raised(monkeypatch):
 
 
 def test_excel_check_passes_within_one_percent():
-    """사용자 결정 2026-11-10: 성능예측표 엑셀 확인은 99% 일치(차이 1% 이내)면 통과, 다르면 warnings로 알림, 1%를 넘으면 실패."""
+    """사용자 결정 2026-11-10: 성능예측표 엑셀 확인은 99% 일치(차이 1% 이내)면 통과, 다르면 warnings로 알림, 1%를 넘으면 실패.
+    결정 1-5 (C영역 C3): 1%의 기준은 확인한 조건들의 예측 범위(최대 - 최소). 예측값 크기 기준이면 1000 근처 타겟은
+    범위의 절반만큼 틀려도 통과하고, 0 근처 타겟은 아주 작은 차이로 실패했다."""
     import ml_export
     w = ["일괄계산 3행", "일괄계산 4행", "계산기"]
     assert ml_export.compare_excel("y", [1.0, 2.0, 1.0], [1.0, 2.0, 1.0], w) == (None, None)
-    problem, note = ml_export.compare_excel("y", [76.5689, 2.0, 1.0], [76.5671, 2.0, 1.0], w)     # 회사 PC F7 (0.0024%)
-    assert problem is None and "일괄계산 3행" in note and "허용 1%" in note, note
-    problem, note = ml_export.compare_excel("y", [1.02, 2.0, 1.0], [1.0, 2.0, 1.0], w)
-    assert note is None and "2.00% 다름" in problem, problem
+    problem, note = ml_export.compare_excel("y", [76.5689, 2.0, 1.0], [76.5671, 2.0, 1.0], w)     # 회사 PC F7 (범위 75.6의 0.0024%)
+    assert problem is None and "일괄계산 3행" in note and "허용 1%" in note and "예측 범위" in note, note
+    problem, note = ml_export.compare_excel("y", [1.02, 2.0, 1.0], [1.0, 2.0, 1.0], w)      # 범위 1의 2%
+    assert note is None and "2.00% 다름" in problem and "예측 범위" in problem, problem
     problem, _ = ml_export.compare_excel("y", ["#VALUE!", 2.0, 1.0], [1.0, 2.0, 1.0], w)
     assert "숫자가 아님" in problem
+    # 1000 근처에서 990~1010만 움직이는 타겟: 값의 1%(10)가 아니라 범위 20의 1%(0.2)까지만
+    problem, _ = ml_export.compare_excel("y", [1005.0, 990.0, 1010.0], [1000.0, 990.0, 1010.0], w)
+    assert problem and "25.00% 다름" in problem, problem
+    # 0 근처 타겟: 범위 2의 0.05%는 통과 (값 기준이면 0.001 / 0.002 = 50%로 실패)
+    problem, note = ml_export.compare_excel("y", [0.003, -1.0, 1.0], [0.002, -1.0, 1.0], w)
+    assert problem is None and note, (problem, note)
+    # 모든 조건의 예측이 같음 (범위 0): 예측값 크기의 1%로
+    problem, _ = ml_export.compare_excel("y", [5.0, 5.0, 5.0], [5.0, 5.0, 5.0], w)
+    assert problem is None
+    problem, _ = ml_export.compare_excel("y", [5.2, 5.0, 5.0], [5.0, 5.0, 5.0], w)
+    assert problem and "4.00% 다름" in problem, problem
 
 
 # ---- 2.9.88 검토 C: 보고서·성능예측표 결함 (재현 -> 수정) ------------------------------------------------------------

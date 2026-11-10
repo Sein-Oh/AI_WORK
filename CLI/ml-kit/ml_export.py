@@ -961,7 +961,7 @@ def verify_workbook(path: str, plans: List[Dict[str, Any]]) -> List[str]:
     return problems
 
 
-EXCEL_TOL = 0.01            # 엑셀 다시 계산이 모델과 이만큼(상대 1%, 99% 일치)까지 달라도 통과 (사용자 결정 2026-11-10)
+EXCEL_TOL = 0.01            # 엑셀 다시 계산이 모델과 이만큼(예측 범위의 1%, 99% 일치)까지 달라도 통과 (사용자 결정 2026-11-10)
 EXCEL_NOTES: List[str] = []  # 허용 안에서 다른 곳 (결과 warnings로 알림)
 EXCEL_EPS = 1e-13           # Excel compares numbers that agree to about 15 significant digits as equal (=0.1+0.2=0.3 is TRUE)
 
@@ -996,21 +996,27 @@ def edge_points(p: Dict[str, Any]) -> pd.DataFrame:
 
 
 def compare_excel(target: str, got: List[Any], want: List[float], wheres: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    """엑셀이 다시 계산한 값과 모델 예측 비교 -> (문제, 알림). 상대 차이가 EXCEL_TOL(1%, 99% 일치)을 넘으면 문제,
-    0보다 크고 그 안이면 알림 (사용자 결정 2026-11-10: 99%쯤 일치하면 통과)."""
-    worst = (0.0, "", 0.0, 0.0)
-    for g, w, where in zip(got, want, wheres):
+    """엑셀이 다시 계산한 값과 모델 예측 비교 -> (문제, 알림). 차이가 확인한 조건들의 예측 범위(최대 - 최소)의
+    EXCEL_TOL(1%, 99% 일치)을 넘으면 문제, 0보다 크고 그 안이면 알림 (사용자 결정 2026-11-10: 99%쯤 일치하면 통과,
+    결정 1-5: 기준은 예측값 크기가 아니라 타겟이 움직이는 폭. 모든 조건의 예측이 같으면(범위 0) 예측값 크기)."""
+    for g, where in zip(got, wheres):
         if not isinstance(g, (int, float)) or isinstance(g, bool):
             return f"'{target}' 엑셀 계산({where})이 숫자가 아님: {g}", None
+    w_arr = np.asarray(want, dtype=float)
+    span = float(np.ptp(w_arr)) if w_arr.size else 0.0
+    size = float(np.max(np.abs(w_arr))) if w_arr.size else 0.0
+    base, what = (span, f"예측 범위 {span:.6g}") if span > 1e-12 * (size + 1.0) else (max(size, 1e-12), f"예측값 {size:.6g}")
+    worst = (0.0, "", 0.0, 0.0)
+    for g, w, where in zip(got, want, wheres):
         diff = abs(float(g) - w)
-        rel = diff / max(abs(w), 1e-12) if diff > 1e-9 * (abs(w) + 1.0) else 0.0
+        rel = diff / base if diff > 1e-9 * (abs(w) + span + 1.0) else 0.0
         if rel > worst[0]:
             worst = (rel, where, float(g), float(w))
     if worst[0] > EXCEL_TOL:
-        return (f"'{target}' 엑셀 계산({worst[1]}) {worst[2]:.10g}이 모델 {worst[3]:.10g}과 {worst[0] * 100:.2f}% 다름 "
+        return (f"'{target}' 엑셀 계산({worst[1]}) {worst[2]:.10g}이 모델 {worst[3]:.10g}과 {what}의 {worst[0] * 100:.2f}% 다름 "
                 f"(허용 {EXCEL_TOL * 100:g}%)"), None
     if worst[0] > 0:
-        return None, f"'{target}' 엑셀 계산이 모델과 최대 {worst[0] * 100:.3g}% 다름({worst[1]}, 허용 {EXCEL_TOL * 100:g}% 안)"
+        return None, f"'{target}' 엑셀 계산이 모델과 최대 {what}의 {worst[0] * 100:.3g}% 다름({worst[1]}, 허용 {EXCEL_TOL * 100:g}% 안)"
     return None, None
 
 
