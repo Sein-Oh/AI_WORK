@@ -1261,11 +1261,9 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
     bound) in the 일괄계산 rows at once and one condition in the calculator, recalculates once per target and compares
     with the model (2.9.85: was one full recalculation per condition, minutes for a big workbook).
     None = checked OK, 'skip' = Excel not available, 'off' = turned off (ML_KIT_SKIP_EXCEL_CHECK=1, tests), otherwise a problem."""
-    import importlib.util
-    if os.environ.get("ML_KIT_SKIP_EXCEL_CHECK") == "1":
-        return "off"
-    if importlib.util.find_spec("win32com") is None:
-        return "skip"
+    state = excel_state()
+    if state != "can":
+        return state
     try:
         import win32com.client as w32
         xl = w32.DispatchEx("Excel.Application")
@@ -1315,7 +1313,106 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
 
 
 # ==============================================================================
-# 5. Command
+# 5. Reuse (결정 1-7): the report made again uses the checked workbook of the same model
+# ==============================================================================
+
+def _sha256(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def stamp_path(xlsx: str) -> str:
+    """The small check record next to a workbook: <name>.json."""
+    return os.path.splitext(xlsx)[0] + ".json"
+
+
+def model_hashes(vdir: str, metas: Dict[str, Any], targets: List[str]) -> Dict[str, str]:
+    """What the workbook was made from: the model files of the targets and the training data copy (a version trained
+    again under the same number with --overwrite has other hashes)."""
+    out = {"model_dataset.csv": _sha256(os.path.join(vdir, "model_dataset.csv"))}
+    for t in targets:
+        safe = metas[t].get("target_safe_name") or re.sub(r'[\\/*?:"<>|]', "_", str(t))
+        for name in (f"model_{safe}.joblib", f"model_{safe}.json"):
+            out[name] = _sha256(os.path.join(vdir, name))
+    return out
+
+
+def excel_state() -> str:
+    """'off' (ML_KIT_SKIP_EXCEL_CHECK=1), 'skip' (no Excel connection library) or 'can' (the check would open Excel)."""
+    import importlib.util
+    if os.environ.get("ML_KIT_SKIP_EXCEL_CHECK") == "1":
+        return "off"
+    return "skip" if importlib.util.find_spec("win32com") is None else "can"
+
+
+def write_stamp(xlsx: str, made_from: Dict[str, Any], res: Dict[str, Any], excel: str) -> None:
+    """Records a checked workbook for reuse. A failure only means no reuse next time ([WARN])."""
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(xlsx, read_only=True)
+        try:
+            sheets = list(wb.sheetnames)
+        finally:
+            wb.close()
+        keep = {k: v for k, v in res.items() if k not in ("agent_directive", "output_file", "preview")}
+        with open(stamp_path(xlsx), "w", encoding="utf-8") as f:
+            json.dump({**made_from, "sheets": sheets, "workbook_sha256": _sha256(xlsx), "excel": excel, "result": keep,
+                       "brief": res["preview"]}, f, ensure_ascii=False)
+    except Exception as e:
+        sys.stderr.write(f"[WARN] 성능예측표 확인 기록을 남기지 못함 (다음 보고서 때 다시 만듦): {type(e).__name__}: {e}\n")
+
+
+def reusable(default: str, made_from: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(workbook, its record) of a workbook made from the same model files, title, targets and ml-kit version whose
+    file is the one checked (hash) and opens with the same sheets; the newest of the default name and its timestamped
+    siblings. None = make a new one."""
+    from openpyxl import load_workbook
+    folder = os.path.dirname(default)
+    stem = os.path.splitext(os.path.basename(default))[0]
+    pattern = re.compile(re.escape(stem) + r"(_\d{8}_\d{6}(_\d+)?)?\.xlsx")
+    try:
+        names = [n for n in os.listdir(folder) if pattern.fullmatch(n)]
+    except OSError:
+        return None
+    for name in sorted(names, key=lambda n: os.path.getmtime(os.path.join(folder, n)), reverse=True):
+        xlsx = os.path.join(folder, name)
+        try:
+            with open(stamp_path(xlsx), encoding="utf-8") as f:
+                rec = json.load(f)
+            if any(rec.get(k) != v for k, v in made_from.items()) or rec.get("workbook_sha256") != _sha256(xlsx):
+                continue
+            if rec.get("excel") != "ok" and excel_state() == "can":     # not checked in Excel then, Excel here now
+                continue
+            wb = load_workbook(xlsx, read_only=True)
+            try:
+                ok = list(wb.sheetnames) == rec.get("sheets") and str(wb["계산기"]["B2"].value) == made_from["title"]
+            finally:
+                wb.close()
+            if ok:
+                return xlsx, rec
+        except Exception:
+            continue
+    return None
+
+
+def reused_result(xlsx: str, rec: Dict[str, Any]) -> Dict[str, Any]:
+    res = dict(rec["result"])
+    res.update(output_file=xlsx, reused=True,
+               preview="기존 성능예측표 사용 (같은 모델, 다시 열어 확인함): " + rec["brief"].split(": ", 1)[-1])
+    unverified = res.get("unverified") or []
+    warnings = res.get("warnings") or []
+    res["agent_directive"] = (
+        ("VERIFIED: " if not unverified else "UNVERIFIED: 성능예측표 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
+        + "preview와 output_file 경로를 그대로 알리세요." + (" warnings도 그대로 알리세요." if warnings else ""))
+    return res
+
+
+# ==============================================================================
+# 6. Command
 # ==============================================================================
 
 def execute_export(args) -> Dict[str, Any]:
@@ -1323,6 +1420,18 @@ def execute_export(args) -> Dict[str, Any]:
     vinfo = load_version(args.model, args.targets)
     data_all = vinfo["data"]
     warnings: List[str] = []
+    reuse = getattr(args, "reuse", False) and not args.save
+    if reuse:      # 결정 1-7: the report made again uses the checked workbook of the same model (no new copy)
+        title = (args.title or "").strip() or default_title(vinfo["metas"][vinfo["targets"][0]])
+        title = title if len(title) <= TITLE_MAX else title[:TITLE_MAX - 3].rstrip() + "..."
+        for target in vinfo["targets"]:
+            raw_inputs(vinfo["metas"][target])          # a date input: the same STOP_RETRY as a new workbook
+        made_from = {"ml_kit": VERSION, "title": title, "targets": list(vinfo["targets"]),
+                     "models": model_hashes(vinfo["dir"], vinfo["metas"], vinfo["targets"])}
+        found = reusable(default_export_path(vinfo["dir"]), made_from)
+        if found:
+            progress(f"기존 성능예측표 사용: {os.path.basename(found[0])}")
+            return reused_result(*found)
     if vinfo["skipped"]:
         warnings.append(f"분류 타겟 {vinfo['skipped']}은(는) 성능예측표에서 뺐습니다 (숫자 타겟만 가능)")
     plans = []
@@ -1382,10 +1491,7 @@ def execute_export(args) -> Dict[str, Any]:
     if len(title) > TITLE_MAX:
         warnings.append(f"제목이 {len(title)}자로 길어 {TITLE_MAX}자로 줄였습니다")
         title = title[:TITLE_MAX - 3].rstrip() + "..."
-    # same folder as the report and history.jsonl (<data>_ml_data), name paired with ML결과보고서_<data>_<version>.docx
-    data_root = os.path.dirname(vinfo["dir"])
-    stem = re.sub(r"_ml_data$", "", os.path.basename(data_root)) or "모델"
-    default = os.path.join(data_root, f"성능예측표_{stem}_{os.path.basename(vinfo['dir'])}.xlsx")
+    default = default_export_path(vinfo["dir"])
     path = save_path(args.save, data_folder_of(vinfo["dir"])) if args.save else default
     # the 'recovered' note of a new name waits for the saved file (B6: a run stopped before saving reported a file
     # that was never written)
@@ -1427,7 +1533,18 @@ def execute_export(args) -> Dict[str, Any]:
         ("VERIFIED: " if not unverified else "UNVERIFIED: 성능예측표 확인 실패 (" + "; ".join(unverified) + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ")
         + "preview와 output_file 경로를 그대로 알리세요."
         + (" warnings도 그대로 알리세요." if warnings else ""))
+    if not problems and xl in (None, "skip", "off") and not args.save:    # checked: a record for reuse (결정 1-7)
+        write_stamp(real, {"ml_kit": VERSION, "title": title, "targets": [p["target"] for p in plans],
+                           "models": model_hashes(vinfo["dir"], vinfo["metas"], [p["target"] for p in plans])}, res,
+                    xl or "ok")
     return res
+
+
+def default_export_path(vdir: str) -> str:
+    """Same folder as the report and history.jsonl (<data>_ml_data), name paired with ML결과보고서_<data>_<version>.docx."""
+    data_root = os.path.dirname(vdir)
+    stem = re.sub(r"_ml_data$", "", os.path.basename(data_root)) or "모델"
+    return os.path.join(data_root, f"성능예측표_{stem}_{os.path.basename(vdir)}.xlsx")
 
 
 def derived_note(n: int, excel_ok: bool) -> str:

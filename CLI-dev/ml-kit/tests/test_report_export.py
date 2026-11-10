@@ -480,6 +480,46 @@ def test_report_makes_calculator_in_the_same_folder(tmp_path, with_export):
     assert "성능예측표 (엑셀 계산기): 성능예측표_p_v1.xlsx" in text and "모델과 같은 값 확인" in text
 
 
+def test_report_again_reuses_the_checked_calculator_of_the_same_model(tmp_path, with_export):
+    """결정 1-7 (C영역 D6-3): 문장만 바꿔 보고서를 다시 만들면 같은 내용의 성능예측표가 시각 붙은 새 이름으로 하나씩 더 생겼다.
+    같은 모델(파일 해시)·같은 제목·타겟의 성능예측표가 있고 다시 열어 확인되면 재사용한다 (preview '기존 성능예측표 사용').
+    파일이 바뀌었거나 모델이 바뀌었으면 다시 만든다."""
+    path = _calc_data(tmp_path)
+    tr = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "효율")
+    first = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    root = os.path.dirname(tr["version_dir"])
+    assert "기존 성능예측표 사용" not in first["preview"]
+    again = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert again["export_file"] == first["export_file"] and "기존 성능예측표 사용" in again["preview"], again["preview"]
+    assert again["report_file"] != first["report_file"]                                  # 보고서는 새로 (시각 붙은 이름)
+    assert len([n for n in os.listdir(root) if n.endswith(".xlsx")]) == 1
+    assert again["export_verified"] == first["export_verified"] and again["export"] == first["export"]
+    assert not [m for m in again.get("recovered", []) if "성능예측표" in m], again.get("recovered")
+    from docx import Document
+    text = "\n".join(p.text for p in Document(again["report_file"]).paragraphs)
+    assert "기존 파일 사용" in text
+    other = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "다른 제목")      # 제목이 다르면 새로
+    assert other["export_file"] != first["export_file"] and "기존 성능예측표 사용" not in other["preview"]
+    wb = openpyxl.load_workbook(first["export_file"])                                     # 사용자가 열어 고치고 저장
+    wb.save(first["export_file"])
+    third = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert third["export_file"] not in (first["export_file"], other["export_file"]) and "기존 성능예측표 사용" not in third["preview"]
+    fourth = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert fourth["export_file"] == third["export_file"] and "기존 성능예측표 사용" in fourth["preview"]
+    vinfo = mx.load_version(tr["version_dir"], None)                                     # 그때는 엑셀 확인을 껐고 지금은 엑셀이 있음
+    made = {"ml_kit": rt.VERSION, "title": "효율 계산", "targets": vinfo["targets"],
+            "models": mx.model_hashes(vinfo["dir"], vinfo["metas"], vinfo["targets"])}
+    assert mx.reusable(mx.default_export_path(vinfo["dir"]), made)[0] == third["export_file"]
+    import unittest.mock
+    with unittest.mock.patch.object(mx, "excel_state", lambda: "can"):
+        assert mx.reusable(mx.default_export_path(vinfo["dir"]), made) is None
+    meta = os.path.join(tr["version_dir"], "model_효율.json")                              # 같은 버전 번호로 모델이 바뀜
+    with open(meta, "a", encoding="utf-8") as f:
+        f.write("\n")
+    fifth = run_tool("ml_report.py", "--model", tr["version_dir"], "--title", "효율 계산")
+    assert fifth["export_file"] != third["export_file"] and "기존 성능예측표 사용" not in fifth["preview"]
+
+
 def test_classification_report_has_no_calculator(tmp_path, with_export):
     path = _calc_data(tmp_path)
     tr = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "등급", "--task", "classification")

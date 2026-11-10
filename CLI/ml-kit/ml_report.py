@@ -1399,7 +1399,7 @@ def export_line_text(export: Optional[Dict[str, Any]]) -> str:
     if export and export.get("result"):
         import ml_export     # loaded already: it made the workbook
         ex = export["result"]
-        lines = [f"성능예측표 (엑셀 계산기): {os.path.basename(ex['output_file'])}"]
+        lines = [f"성능예측표 (엑셀 계산기): {os.path.basename(ex['output_file'])}" + (" (같은 모델로 만든 기존 파일 사용)" if ex.get("reused") else "")]
         items = list(ex["targets"].items())
         same = len(items) > 1 and all(v["inputs"] == items[0][1]["inputs"] for _, v in items)
         if same:     # B7: the same inputs once, not once per target
@@ -1495,7 +1495,7 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
         import ml_export  # only when a report is made
         return {"result": ml_export.execute_export(argparse.Namespace(
             model=version_dir, targets=",".join(targets) if targets else None, title=title,
-            save=None, overwrite=overwrite))}
+            save=None, overwrite=overwrite, reuse=True))}
     except Exception as e:
         note = f"성능예측표를 만들지 못했습니다 (보고서는 정상): {type(e).__name__}: {str(e)[:200]}"
         sys.stderr.write(f"[WARN] {note}\n")
