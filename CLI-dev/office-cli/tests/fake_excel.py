@@ -448,8 +448,10 @@ class FakeRange:
         return self.ws.fcs.setdefault(self.Address, FakeFormatConditions())
 
     def End(self, direction):
+        """xlUp: 그 열의 마지막 값 칸. 실제 Excel처럼 필터로 숨긴 행(ws.hidden_rows)은 건너뜀."""
         r1, c1, _, _ = self.areas[0]
-        filled = [r for (r, c) in self.ws.values if c == c1 and self.ws.values[(r, c)] is not None]
+        hidden = getattr(self.ws, "hidden_rows", set())
+        filled = [r for (r, c) in self.ws.values if c == c1 and self.ws.values[(r, c)] is not None and r not in hidden]
         last = max(filled) if filled else 1
         return FakeRange(self.ws, [(last, c1, last, c1)])
 

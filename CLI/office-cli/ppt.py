@@ -424,6 +424,9 @@ def cmd_info(args) -> Dict[str, Any]:
 # 3. write
 # ==============================================================================
 
+PP_FOOTER_PLACEHOLDERS = {13, 14, 15, 16}   # ppPlaceholderSlideNumber, Header, Footer, Date
+
+
 class SlideWriter:
     """슬라이드 하나에 요소를 위에서 아래로 쌓습니다 (슬라이드 경계 안에서)."""
 
@@ -442,11 +445,19 @@ class SlideWriter:
         except Exception:
             return False
 
+    def _footer_placeholder(self, sh: Any) -> bool:
+        """바닥글·날짜·슬라이드 번호·머리글 개체틀: 슬라이드 바닥에 있어 그 아래를 기준으로 쌓으면 새 글상자가 슬라이드 밖에 놓임
+        (2026-11-09 검토 C8)."""
+        try:
+            return sh.Type == MSO_PLACEHOLDER and int(sh.PlaceholderFormat.Type) in PP_FOOTER_PLACEHOLDERS
+        except Exception:
+            return False
+
     def next_top(self) -> float:
         bottom = MARGIN
         for i in range(1, self.slide.Shapes.Count + 1):
             sh = self.slide.Shapes(i)
-            if self._empty_placeholder(sh):
+            if self._empty_placeholder(sh) or self._footer_placeholder(sh):
                 continue
             try:
                 bottom = max(bottom, float(sh.Top) + float(sh.Height))
@@ -777,6 +788,14 @@ def cmd_write(args) -> Dict[str, Any]:
             if args.title and not table_rows and not md_sections:
                 w.title(args.title)
             if args.text:
+                if w._body_placeholder() is None and w.space_left() < MIN_BLOCK_HEIGHT:
+                    # 앞 내용 아래 공간이 없으면 새 슬라이드에 (높이 40pt로 슬라이드 밖에 놓이던 것, 검토 C8)
+                    placed += [(no, x) for x in w.shapes]
+                    created.append(f"슬라이드 {no}: " + ", ".join(w.created))
+                    s, no = open_slide(False)
+                    w = SlideWriter(prs, s, theme)
+                    warnings.append(f"앞 내용 아래에 공간이 부족해 본문을 새 슬라이드 {no}에 넣었습니다.")
+                    rt.log("WARN", warnings[-1])
                 w.body(_text_lines(args.text))
             for kind in (["cards"] if cards else []) + (["image"] if image else []):
                 if w.space_left() < MIN_BLOCK_HEIGHT:   # 공간이 부족하면 다음 새 슬라이드에 (슬라이드 밖으로 나가지 않게)

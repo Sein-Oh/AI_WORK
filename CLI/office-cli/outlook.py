@@ -140,10 +140,8 @@ def _field(item: Any, name: str, failed: Optional[List[str]]) -> Any:
 def summary(item: Any, failed: Optional[List[str]] = None) -> Dict[str, Any]:
     sender = _text(_field(item, "SenderName", failed))
     addr = _text(_field(item, "SenderEmailAddress", failed))
-    try:
-        received = rt.json_safe(item.ReceivedTime)
-    except Exception:
-        received = ""
+    got = _received(item)   # pywin32는 현지 벽시계 시각에 UTC 표시를 붙여 '+00:00'으로 나왔음: 현지 시각 그대로 (2026-11-09 검토 C14)
+    received = got.strftime("%Y-%m-%d %H:%M:%S") if got is not None else ""
     try:
         attach = int(item.Attachments.Count)
     except Exception:
@@ -385,6 +383,9 @@ def _literal_keep(query: Optional[str], sender: Optional[str], where: str) -> Op
     return keep
 
 
+PR_SENDER_SMTP = "http://schemas.microsoft.com/mapi/proptag/0x5D01001F"   # PR_SENDER_SMTP_ADDRESS_W
+
+
 def build_search_filter(query: Optional[str], sender: Optional[str], where: str,
                         since: Optional[_dt.datetime] = None) -> str:
     """DASL 필터: @SQL= 접두어는 한 번만, 조건마다 괄호로 묶어 AND로 연결. since: 받은 시각 하한 (현지 시각)."""
@@ -395,7 +396,8 @@ def build_search_filter(query: Optional[str], sender: Optional[str], where: str,
                   "all": ["urn:schemas:httpmail:subject", "urn:schemas:httpmail:textdescription"]}[where]
         clauses.append(_dasl_like(fields, query))
     if sender:
-        clauses.append(_dasl_like(["urn:schemas:httpmail:fromname", "urn:schemas:httpmail:fromemail"], sender))
+        # 사내 Exchange 보낸 사람의 fromemail은 X.500 주소라 SMTP 주소로 못 찾음: 보낸 사람 SMTP 주소 속성도 대조 (2026-11-09 검토 C16, 실기 확인)
+        clauses.append(_dasl_like(["urn:schemas:httpmail:fromname", "urn:schemas:httpmail:fromemail", PR_SENDER_SMTP], sender))
     if since is not None:
         clauses.append("(" + dasl_date_clause(since) + ")")
     if not clauses:
@@ -725,7 +727,23 @@ def cmd_attachments(args) -> Dict[str, Any]:
                  f"사용자에게 저장 폴더(folder)와 파일 이름을 그대로 알리세요.{tail}", verified=True, **base)
 
 
+OL_CLASS_EXPLORER, OL_CLASS_INSPECTOR = 34, 35
+
+
 def current_item(app: Any) -> Tuple[Optional[Any], str]:
+    """사용자가 지금 보는 메일. 맨 앞 창(ActiveWindow)이 목록(Explorer)이면 선택한 메일, 메일 창(Inspector)이면 그 메일.
+    ActiveInspector()부터 보면 뒤에 열어 둔 메일 창을 골랐음 (2026-11-09 검토 C15, 실기 확인)."""
+    try:
+        win = app.ActiveWindow()
+        cls = int(win.Class)
+        if cls == OL_CLASS_EXPLORER:
+            sel = win.Selection
+            if sel.Count > 0:
+                return sel.Item(1), "목록에서 선택"
+        elif cls == OL_CLASS_INSPECTOR and win.CurrentItem is not None:
+            return win.CurrentItem, "열린 창"
+    except Exception:
+        pass
     try:
         insp = app.ActiveInspector()
         if insp is not None and insp.CurrentItem is not None:
@@ -952,7 +970,16 @@ def _finalize(mail: Any, command: str, attach: Tuple[List[str], List[str]],
     if original is not None:
         extra["original"] = original
     eid = _save_draft(mail)
-    mail.Display()
+    try:
+        mail.Display()
+    except Exception as e:
+        # Outlook에 대화 상자가 떠 있으면 작성 창을 못 띄움. 초안은 이미 저장됐으므로 일반 오류로 끝내면 다시 실행할 때마다
+        # 초안이 늘어남 (2026-11-09 검토 C17): 초안 정보와 함께 UNVERIFIED
+        where = "임시 보관함에 초안으로 저장했지만" if eid else "초안 저장도 확인하지 못했고"
+        return rt.ok_unverified(TOOL, command, f"메일 작성 창을 띄우지 못했습니다: '{extra['subject']}'{note}",
+                                [f"{where} 작성 창을 띄우지 못함 ({type(e).__name__}, Outlook에 열린 대화 상자가 있는지 확인)",
+                                 "이 명령을 다시 실행하지 말고(초안이 하나 더 생김) 사용자에게 Outlook의 임시 보관함에서 초안을 열어 확인하라고 알리세요"],
+                                **extra)
     if attach_problems or not eid:
         # 첨부를 확인하지 못했거나 초안을 저장하지 못했으면 보내는 명령을 주지 않음 (첨부가 빠진 메일은 되돌릴 수 없음)
         why = attach_problems + ([] if eid else ["초안을 임시 보관함에 저장하지 못해 보내는 명령을 만들지 못함"])

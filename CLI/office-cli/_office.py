@@ -192,7 +192,20 @@ def _collection(app: Any, kind: str) -> Any:
     return getattr(app, {"excel": "Workbooks", "word": "Documents", "ppt": "Presentations"}[kind])
 
 
-def _active_doc(app: Any, kind: str) -> Optional[Any]:
+def _hidden_doc(doc: Any) -> bool:
+    """숨은 문서 (개인용 매크로 통합문서 PERSONAL.XLSB 등): 창이 모두 숨겨져 있음."""
+    try:
+        if str(doc.Name).upper().startswith("PERSONAL."):
+            return True
+        wins = doc.Windows
+        return int(wins.Count) > 0 and not any(bool(wins(i).Visible) for i in range(1, int(wins.Count) + 1))
+    except Exception:
+        return False
+
+
+def _active_doc(app: Any, kind: str, fallback: bool = True) -> Optional[Any]:
+    """앱의 활성 문서. 없으면(제한된 보기, 숨은 PERSONAL.XLSB만 있음) fallback이면 보이는 첫 문서.
+    쓰기는 fallback=False: 사용자가 보는 문서가 아닌 곳(Workbooks(1))에 쓰던 것 (2026-11-09 검토 C9, 실기 확인)."""
     attr = {"excel": "ActiveWorkbook", "word": "ActiveDocument", "ppt": "ActivePresentation"}[kind]
     try:
         doc = getattr(app, attr)
@@ -200,10 +213,13 @@ def _active_doc(app: Any, kind: str) -> Optional[Any]:
             return doc
     except Exception:
         pass
+    if not fallback:
+        return None
     try:
         coll = _collection(app, kind)
-        if coll.Count > 0:
-            return coll(1)
+        for i in range(1, int(coll.Count) + 1):
+            if not _hidden_doc(coll(i)):
+                return coll(i)
     except Exception:
         pass
     return None
@@ -256,13 +272,27 @@ def open_untitled(kind: str, name: str) -> List[Dict[str, Any]]:
 
 
 def get_active(kind: str) -> Dict[str, Any]:
-    """사용자가 보고 있는 문서. 포그라운드 앱의 활성 문서를 우선합니다."""
-    for app in find_apps(kind):
-        doc = _active_doc(app, kind)
+    """사용자가 보고 있는 문서. 포그라운드 앱의 활성 문서를 우선합니다. 앱에 활성 문서가 없어(제한된 보기, 숨은 PERSONAL.XLSB만)
+    보이는 첫 문서로 넘어갔으면 "fallback": True (쓰기 세션은 그 문서에 쓰지 않음, 2026-11-09 검토 C9)."""
+    apps = find_apps(kind)
+    for app in apps:
+        doc = _active_doc(app, kind, fallback=False)
         if doc is not None:
             full = str(getattr(doc, "FullName", "") or doc.Name)
             return {"name": str(doc.Name), "path": full if os.path.isabs(full) else "", "app": app, "doc": doc}
+    for app in apps:
+        doc = _active_doc(app, kind)
+        if doc is not None:
+            full = str(getattr(doc, "FullName", "") or doc.Name)
+            return {"name": str(doc.Name), "path": full if os.path.isabs(full) else "", "app": app, "doc": doc, "fallback": True}
     raise no_open_doc(kind)
+
+
+def not_viewing_error(kind: str) -> "rt.UserDecisionError":
+    return rt.UserDecisionError(
+        f"보고 있는 {APP_LABEL[kind]} 문서를 알 수 없습니다 (제한된 보기로 열렸거나 숨은 문서만 있음). 문서 위쪽 노란 줄의 [편집 사용]을 "
+        "누르거나 쓸 문서를 클릭한 뒤 다시 실행하세요.",
+        "실행하지 않았습니다. message를 사용자에게 그대로 알리고, 사용자가 [편집 사용]을 누르거나 문서를 클릭했다고 하면 같은 명령을 1번만 다시 실행하세요.")
 
 
 ELEVATED_DIRECTIVE = ("실행하지 않았습니다. 다시 실행하지 말고 message의 관리자 권한 안내를 사용자에게 그대로 전하세요. "
@@ -923,6 +953,8 @@ def resolve_target(kind: str, target: str = "active", readonly: bool = True, cre
                 if option == "--target":
                     raise
                 raise no_open_doc(kind, option) from None        # 이 명령에 없는 --target을 안내하지 않음
+            if info.get("fallback") and not readonly:
+                raise not_viewing_error(kind)
             return {"source": "active", "app": info["app"], "doc": info["doc"]}
         docs = list_open(kind)
         hit = match_open(kind, target, docs, option)

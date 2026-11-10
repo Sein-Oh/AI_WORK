@@ -225,30 +225,30 @@
 - 다른 폴더의 같은 이름 파일은 evidence가 같아 구분되지 않음 (`spec.txt 단락 2`).
 - 전부 스캔인 PDF를 index해도 경고 없이 "등록 완료, 검색 가능" (`total_units: 0`).
 
-## 3. 실제 Office 동작에서 추정한 결함 (실기 확인 필요)
+## 3. 실제 Office 동작에서 추정한 결함 (실기 확인 필요) (1.4.96에서 처리: 표 끝 열 참고)
 
 클라우드에서는 가짜 COM을 실제 동작에 가깝게 고치고 테스트를 쓴 뒤, 실기 러너에 확인 항목을 넣는다.
 
 | # | 증상 | 위치 | 확신 |
 |---|---|---|---|
-| C1 | 워드 `write --anchor "<표 바로 위 단락>" --pos after`(또는 `replace`)가 표의 첫 칸 안에 씀. `para.End`가 표 첫 칸의 시작이라서. 마크다운 표면 표 안에 표. `_verify_inserted`는 통과 | `word.py:1021`, `1006-1015` | 90% |
-| C2 | 두 번째 번호 목록이 앞 목록에 이어 4, 5로 매겨짐 (`WD_STYLE_LIST_NUMBER`만 씀). `ListFormat.ApplyListTemplate(..., ContinuePreviousList=False)` 필요 | `word.py:742-745` | 90% |
-| C3 | 기존 표 바로 뒤에 쓴 표·요약 상자가 앞 표와 합쳐지고, 머리글 서식이 사용자 표의 첫 행을 바꿈. 표 뒤면 빈 단락을 먼저 | `word.py:747-773`, `775-790` | 80% |
-| C4 | `image()`, `toc()`, `callout()`이 단락 스타일을 되돌리지 않아 그림 단락이 제목·글머리 기호가 됨 (`outline`·목차에 "[그림]") | `word.py:792-819`, `775` | 80% |
-| C5 | `write --toc --file report.md`가 본문을 넣기 전에 목차를 만들고 갱신해 빈 목차인데 VERIFIED. 이후 쓰기·`export`도 목차를 갱신하지 않음 (코드 순서로 확인) | `word.py:1056-1077`, `812-818` | 코드 |
-| C6 | 변경 추적이 켜진 문서에서 `replace`/`fill`: 지운 글이 Find에 계속 걸려 "N곳 남아 있음" UNVERIFIED, 다시 실행하면 중복 치환. `read`는 옛 글과 새 글이 붙어 나옴 | `word.py:1280`, `1733` | 60% |
-| C7 | `--pos replace`가 내용을 넣기 전에 앵커 단락을 지움. 뒤에서 COM이 실패하면 단락만 사라짐 | `word.py:1012` | 코드 |
-| C8 | PPT 새 글상자가 슬라이드 밖에 놓임: `next_top()`이 모든 도형의 가장 아래를 기준으로 삼는데 슬라이드 번호·바닥글·날짜 개체가 바닥에 있음. `body()`·`table()`은 공간 확인 없음 (가짜 재현: Top 500 개체 -> 540 슬라이드에 top 542) | `ppt.py:420-430`, `467`, `489` | 가짜 재현 |
-| C9 | `--target` 없는 쓰기가 다른 통합문서에 씀: 제한된 보기(ActiveWorkbook 없음)나 숨은 PERSONAL.XLSB만 있을 때 `Workbooks(1)`로 넘어감. 쓰기 세션은 넘어가지 말고 "편집 사용" 안내 | `_office.py:195-209` | 70% |
-| C10 | undo: 저장된 경로의 열린 통합문서를 되돌리면 스냅샷(사용자의 저장 안 한 편집 포함)을 디스크 파일에 덮어씀. "저장하지 않고 닫기"로 원래 파일을 되찾을 수 없고 `preview`에 그 말이 없음 | `office.py:1059-1073` | 코드 |
-| C11 | `--append`의 `End(xlUp)`이 필터·숨긴 행을 건너뛰어 숨은 데이터 행을 대상으로 잡음 | `excel.py:1147` | 75% |
-| C12 | 닫힌 파일 `range --action freeze`가 VERIFIED인데 저장되지 않을 수 있음 (dirty일 때만 저장) | `_office.py:1063` | 55% |
-| C13 | OneDrive/SharePoint 통합문서(FullName이 URL)를 제목 없는 문서로 봐서 undo가 저장 없이 닫음 | `_office.py:408`, `office.py:979` | 낮음 |
-| C14 | Outlook `received`가 현지 시각인데 `+00:00`으로 표기 (pywin32가 현지 벽시계에 UTC tzinfo를 붙임). `_when()`으로 표기 | `outlook.py:134` | 85% |
-| C15 | `--id` 없는 `current`/`reply`/`forward`/`attachments`가 뒤에 열어 둔 메일 창을 고름 (`ActiveInspector()`). `app.ActiveWindow()`가 Explorer인지 먼저 확인 | `outlook.py:668-681` | 85% |
-| C16 | `search --from <smtp 주소>`가 사내 Exchange 보낸 사람을 못 찾음 (X.500 DN). `PR_SMTP_ADDRESS`도 대조 | `outlook.py:353`, `337` | 70% |
-| C17 | `Display()` 실패(Outlook에 대화 상자가 떠 있음) 때 초안은 이미 저장됐는데 일반 오류. 다시 실행할 때마다 초안이 늘어남. 초안 정보와 함께 `UNVERIFIED:` | `outlook.py:875-876` | 코드 |
-| C18 | 서명 로고 같은 본문 그림이 첨부로 셈 (`PR_ATTACHMENT_HIDDEN`만 봄, Content-ID만 있는 경우) | `outlook.py` 첨부 목록 | 낮음 |
+| C1 | 워드 `write --anchor "<표 바로 위 단락>" --pos after`(또는 `replace`)가 표의 첫 칸 안에 씀. `para.End`가 표 첫 칸의 시작이라서. 마크다운 표면 표 안에 표. `_verify_inserted`는 통과 | `word.py:1021`, `1006-1015` | 90% (1.4.96에서 수정, 실기 L4) |
+| C2 | 두 번째 번호 목록이 앞 목록에 이어 4, 5로 매겨짐 (`WD_STYLE_LIST_NUMBER`만 씀). `ListFormat.ApplyListTemplate(..., ContinuePreviousList=False)` 필요 | `word.py:742-745` | 90% (1.4.96에서 수정, 실기 L5) |
+| C3 | 기존 표 바로 뒤에 쓴 표·요약 상자가 앞 표와 합쳐지고, 머리글 서식이 사용자 표의 첫 행을 바꿈. 표 뒤면 빈 단락을 먼저 | `word.py:747-773`, `775-790` | 80% (1.4.96에서 수정, 실기 L6) |
+| C4 | `image()`, `toc()`, `callout()`이 단락 스타일을 되돌리지 않아 그림 단락이 제목·글머리 기호가 됨 (`outline`·목차에 "[그림]") | `word.py:792-819`, `775` | 80% (1.4.96에서 수정, 실기 L7) |
+| C5 | `write --toc --file report.md`가 본문을 넣기 전에 목차를 만들고 갱신해 빈 목차인데 VERIFIED. 이후 쓰기·`export`도 목차를 갱신하지 않음 (코드 순서로 확인) | `word.py:1056-1077`, `812-818` | 코드 (1.4.96에서 수정, 실기 L8) |
+| C6 | 변경 추적이 켜진 문서에서 `replace`/`fill`: 지운 글이 Find에 계속 걸려 "N곳 남아 있음" UNVERIFIED, 다시 실행하면 중복 치환. `read`는 옛 글과 새 글이 붙어 나옴 | `word.py:1280`, `1733` | 60% (코드 그대로, 실기 L9만) |
+| C7 | `--pos replace`가 내용을 넣기 전에 앵커 단락을 지움. 뒤에서 COM이 실패하면 단락만 사라짐 | `word.py:1012` | 코드 (1.4.96에서 수정) |
+| C8 | PPT 새 글상자가 슬라이드 밖에 놓임: `next_top()`이 모든 도형의 가장 아래를 기준으로 삼는데 슬라이드 번호·바닥글·날짜 개체가 바닥에 있음. `body()`·`table()`은 공간 확인 없음 (가짜 재현: Top 500 개체 -> 540 슬라이드에 top 542) | `ppt.py:420-430`, `467`, `489` | 가짜 재현 (1.4.96에서 수정, 실기 L10) |
+| C9 | `--target` 없는 쓰기가 다른 통합문서에 씀: 제한된 보기(ActiveWorkbook 없음)나 숨은 PERSONAL.XLSB만 있을 때 `Workbooks(1)`로 넘어감. 쓰기 세션은 넘어가지 말고 "편집 사용" 안내 | `_office.py:195-209` | 70% (1.4.96에서 수정, 실기 L11) |
+| C10 | undo: 저장된 경로의 열린 통합문서를 되돌리면 스냅샷(사용자의 저장 안 한 편집 포함)을 디스크 파일에 덮어씀. "저장하지 않고 닫기"로 원래 파일을 되찾을 수 없고 `preview`에 그 말이 없음 | `office.py:1059-1073` | 코드 (1.4.96에서 수정, 실기 L12) |
+| C11 | `--append`의 `End(xlUp)`이 필터·숨긴 행을 건너뛰어 숨은 데이터 행을 대상으로 잡음 | `excel.py:1147` | 75% (1.4.96에서 수정, 실기 L13) |
+| C12 | 닫힌 파일 `range --action freeze`가 VERIFIED인데 저장되지 않을 수 있음 (dirty일 때만 저장) | `_office.py:1063` | 55% (코드 그대로, 실기 L14만) |
+| C13 | OneDrive/SharePoint 통합문서(FullName이 URL)를 제목 없는 문서로 봐서 undo가 저장 없이 닫음 | `_office.py:408`, `office.py:979` | 낮음 (코드 그대로, 실기 L15만) |
+| C14 | Outlook `received`가 현지 시각인데 `+00:00`으로 표기 (pywin32가 현지 벽시계에 UTC tzinfo를 붙임). `_when()`으로 표기 | `outlook.py:134` | 85% (1.4.96에서 수정, 실기 M1) |
+| C15 | `--id` 없는 `current`/`reply`/`forward`/`attachments`가 뒤에 열어 둔 메일 창을 고름 (`ActiveInspector()`). `app.ActiveWindow()`가 Explorer인지 먼저 확인 | `outlook.py:668-681` | 85% (1.4.96에서 수정, 실기 M2) |
+| C16 | `search --from <smtp 주소>`가 사내 Exchange 보낸 사람을 못 찾음 (X.500 DN). `PR_SMTP_ADDRESS`도 대조 | `outlook.py:353`, `337` | 70% (1.4.96에서 수정, 실기 M3) |
+| C17 | `Display()` 실패(Outlook에 대화 상자가 떠 있음) 때 초안은 이미 저장됐는데 일반 오류. 다시 실행할 때마다 초안이 늘어남. 초안 정보와 함께 `UNVERIFIED:` | `outlook.py:875-876` | 코드 (1.4.96에서 수정, 실기 M4) |
+| C18 | 서명 로고 같은 본문 그림이 첨부로 셈 (`PR_ATTACHMENT_HIDDEN`만 봄, Content-ID만 있는 경우) | `outlook.py` 첨부 목록 | 낮음 (코드 그대로, 실기 M5만) |
 
 마크다운 처리의 작은 것 (재현, 낮음. 사용자와 범위를 정한 뒤):
 - 표 칸의 `**굵게**`가 워드·PPT 표에 별표 그대로 (`word.py:749`, `ppt.py:502`). LLM은 합계 행을 굵게 쓰는 일이 잦다.

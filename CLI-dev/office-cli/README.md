@@ -85,6 +85,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
      `chart` create, word `comment` add, ppt `write`, `notes` 쓰기): 아무것도 바꾸지 않고 STOP_RETRY. 되돌릴 수 있는 변경(`office.py undo`)이면
      message에 `[추천]` `--dry-run`만 뺀 같은 전체 명령, 명령에 `--overwrite`나 `delete`·`clear`가 들면 `needs_user_decision`과
      `[후보] 1) 미리보기 없이 실행` + 같은 번호의 `confirm_commands`(`destructive`, 사용자가 고른 뒤에만).
+- 활성 문서(1.4.96): `--target` 없는 쓰기는 앱에 활성 문서가 없으면(제한된 보기, 숨은 PERSONAL.XLSB만) 다른 문서로 넘어가지 않고 "편집 사용" 안내로 멈춥니다. 읽기는 보이는 첫 문서(숨은 문서 제외). 열린 저장된 문서의 `undo`는 덮기 전 디스크 파일을 `pre_undo_disk_backup`에 남깁니다.
 - 새 파일(1.4.95): 없는 `--target` 경로를 새로 만드는 것은 `excel write`, `word write`, `ppt write`뿐입니다. 그 밖의 쓰기 명령은 STOP_RETRY(비슷한 이름 `[후보]`).
 - `--save` 확장자(1.4.95): 그 명령이 쓰지 않는 확장자(`read --save a.xlsx`가 CSV만 씀)는 쓰는 형식으로 바꿔 저장하고 `recovered`로 알립니다.
 - 오류 로그(1.4.95): 명령·결과의 메일 주소는 `<메일 계정>`, 옵션 이름 없이 준 글은 `<N자 생략>`.
@@ -422,6 +423,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `replace` | `--find/--replace`(빈 문자열은 삭제) 또는 `--map`, `--match-case`, `--whole-word`, `--bold`, `--color`, `--highlight`. 머리글/바닥글/글상자 포함. 문구당 5,000곳 상한에 닿으면 남은 곳을 확인하지 못해 `UNVERIFIED:`(`limit_reached`). `--match-case`가 없으면 대소문자만 바꾸는 치환(`office` -> `Office`)도 확인됨. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 바꿀 글이 찾는 글과 같고 서식이 없으면 바꾸지 않고 `replaced` 0, 찾은 곳 수는 `unchanged_same_text`. 대소문자만 다른 치환(`iphone` -> `iPhone`)에서 이미 바꿀 글 그대로인 곳은 바꾸지 않고 `unchanged_same_text`로 셈. 찾을 글이 빈 문자열이면 STOP_RETRY |
 | `export` | `--save 경로.pdf\|.docx`, `--page-number`(사본에만) |
 
+word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단락을 `--anchor`로 주면 앵커와 표 사이에 빈 단락을 만들어 넣고(표 첫 칸에 들어가지 않게), `--pos replace`는 내용을 넣은 뒤 앵커 단락을 지웁니다. 새 번호 목록은 1부터, 표 뒤에 넣는 표·요약 상자 앞에는 빈 단락, 그림·목차 단락은 본문 스타일, `--toc`은 내용을 넣은 뒤 갱신하고 제목을 넣는 쓰기는 문서의 목차도 갱신합니다. PPT `write`는 바닥글·날짜·슬라이드 번호 개체틀을 쌓는 기준에서 빼고 `--text`도 공간이 없으면 새 슬라이드에 넣습니다.
+
 `word.py read --save`·`ppt.py read --save`의 .md(1.4.92)는 `write --file`이 같은 모양으로 되읽는 형식입니다: 제목은 `#` 수준(슬라이드 제목은 `#`),
 단락은 빈 줄로 나눈 한 줄, 슬라이드의 ` | ` 줄이 둘 이상 이어지면 마크다운 표. 위치 표지("단락 N")는 넣지 않습니다. 줄 머리의 `#`, `-`, `*`, `+`, `|`, `>`,
 `1.`은 역슬래시로 써서(`\#`, `1\.`) 제목·목록·표가 되지 않게 하고, 되읽을 때 역슬래시를 뺍니다. reader `read --save`는 근거 줄이 있는 그대로입니다.
@@ -462,6 +465,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 ### outlook.py
 - 항목 읽기 실패(1.4.92): `list`/`search`가 항목을 읽지 못하면 건너뛰지 않고 셉니다. 일부면 `UNVERIFIED:`(읽지 못한 수, 일부 칸을 못 읽은 메일 수),
   하나도 못 읽었으면 `STOP_RETRY`(Outlook 보안 확인 창에서 '허용'). 보낸 사람 주소처럼 칸 하나만 못 읽은 메일은 목록에 남깁니다.
+- 1.4.96: `received`는 현지 시각(`+00:00` 없음). `--id` 없는 `current`·`reply`·`forward`·`attachments`는 맨 앞 창이 목록이면 선택한 메일. `search --from`은 보낸 사람 SMTP 주소 속성도 대조(사내 Exchange). 작성 창을 못 띄우면(대화 상자) 초안 정보와 UNVERIFIED.
 - 작성 결과(1.4.92): `new`/`reply`/`forward`/`send`의 결과와 `preview`에 `to`와 있으면 `cc`·`bcc`.
 - 조회: `list [--folder --unread --limit --days --since]`, `search --query [--from --where all|subject|body --days --since]`, `read --id [--save]`, `current [--save]`, `folders`
 - 받은 날짜: `--days N`은 오늘 포함 최근 N일(1 = 오늘), `--since YYYY-MM-DD`는 그 날짜 0시부터. 함께 쓰면 STOP_RETRY. 결과에 `period`

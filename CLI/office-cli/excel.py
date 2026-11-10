@@ -1278,15 +1278,26 @@ def cmd_info(args) -> Dict[str, Any]:
 # ==============================================================================
 
 def _last_used_row(ws: Any, col: int) -> int:
-    """해당 열 기준 마지막 사용 행 (없으면 0)."""
+    """해당 열 기준 마지막 사용 행 (없으면 0). End(xlUp)은 필터·숨긴 행을 건너뛰어 숨은 데이터 위를 끝으로 잡으므로
+    (--append가 숨은 행을 덮어씀, 2026-11-09 검토 C11) 사용 범위 끝까지 값을 한 번 더 읽어 확인합니다."""
     try:
         cell = ws.Cells(ws.Rows.Count, col).End(-4162)   # xlUp
-        if cell.Row == 1 and _cell_empty(ws.Cells(1, col)):
-            return 0
-        return int(cell.Row)
+        last = 0 if (cell.Row == 1 and _cell_empty(ws.Cells(1, col))) else int(cell.Row)
     except Exception:
         used = ws.UsedRange
         return int(used.Row + used.Rows.Count - 1)
+    try:
+        used = ws.UsedRange
+        bottom = int(used.Row) + int(used.Rows.Count) - 1
+        if bottom > last:
+            vals = off.range_to_matrix(ws.Range(ws.Cells(last + 1, col), ws.Cells(bottom, col)).Value)
+            for i in range(len(vals) - 1, -1, -1):
+                v = vals[i][0] if vals[i] else None
+                if v is not None and str(v) != "":
+                    return last + 1 + i
+    except Exception:
+        pass
+    return last
 
 
 def _cell_empty(cell: Any) -> bool:

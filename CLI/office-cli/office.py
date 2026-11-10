@@ -937,10 +937,10 @@ def probe() -> Dict[str, Any]:
 # 6. undo
 # ==============================================================================
 
-def _backup_path(kind: str, ext: str) -> str:
+def _backup_path(kind: str, ext: str, tag: str = "") -> str:
     folder = os.path.join(rt.get_cache_dir(), "snapshots", "undo_backups")
     os.makedirs(folder, exist_ok=True)
-    return os.path.normpath(os.path.join(folder, f"{kind}_{rt.timestamp()}_{os.getpid()}{ext}"))
+    return os.path.normpath(os.path.join(folder, f"{kind}_{rt.timestamp()}_{os.getpid()}{tag}{ext}"))
 
 
 def _word_from_flat_xml(app: Any, xml_path: str, dest: str) -> Any:
@@ -1028,6 +1028,15 @@ def _restore_untitled(snap: Dict[str, Any]) -> Dict[str, Any]:
                       + (" (바뀐 문서는 그대로 열려 있습니다)" if hits else "")}
 
 
+def _reopened(backup: str, disk_backup: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"restored_as": "reopened_in_office", "pre_undo_backup": backup}
+    if disk_backup:
+        out["pre_undo_disk_backup"] = disk_backup
+        out["detail"] = ("디스크의 원본 파일도 되돌린 내용으로 바뀌었습니다 (Office에서 '저장하지 않고 닫기'로는 이전 파일로 돌아가지 않음). "
+                         f"되돌리기 전 디스크 파일은 {os.path.basename(disk_backup)}에 보관했습니다")
+    return out
+
+
 def restore_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
     import shutil
     kind = snap["app"]
@@ -1046,6 +1055,15 @@ def restore_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
     if open_item is not None:
         app, doc = open_item["app"], open_item["doc"]
         opener = {"word": lambda: app.Documents, "excel": lambda: app.Workbooks, "ppt": lambda: app.Presentations}[kind]
+        # 열린 문서를 되돌리면 스냅샷(그때 화면 상태, 저장 안 한 편집 포함)이 디스크 파일을 덮어씀: '저장하지 않고 닫기'로 원래 파일을
+        # 되찾을 수 없으므로 덮기 전의 디스크 파일도 남기고 알림 (2026-11-09 검토 C10)
+        disk_backup = ""
+        if os.path.exists(orig):
+            disk_backup = _backup_path(kind, ext, "_disk")
+            try:
+                rt.retry_fs(lambda: shutil.copy2(orig, disk_backup))
+            except OSError:
+                disk_backup = ""
         if kind == "word":
             backup = _backup_path(kind, ".xml")
             with open(backup, "w", encoding="utf-8") as f:
@@ -1053,7 +1071,7 @@ def restore_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
             doc.Close(SaveChanges=0)
             if snap.get("snapshot_format") == "flat_xml":
                 _word_from_flat_xml(app, data, orig)
-                return {"restored_as": "reopened_in_office", "pre_undo_backup": backup}
+                return _reopened(backup, disk_backup)
         else:
             backup = _backup_path(kind, ext)
             doc.SaveCopyAs(backup)
@@ -1071,7 +1089,7 @@ def restore_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
                                 directive="되돌리지 못했습니다. message와 pre_undo_backup 경로를 사용자에게 그대로 알리세요.",
                                 error_type="undo_failed", fields={"pre_undo_backup": backup})
         opener().Open(os.path.normpath(orig))
-        return {"restored_as": "reopened_in_office", "pre_undo_backup": backup}
+        return _reopened(backup, disk_backup)
     backup = ""
     if os.path.exists(orig):
         backup = _backup_path(kind, ext)

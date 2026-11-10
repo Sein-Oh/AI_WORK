@@ -1957,3 +1957,64 @@ def test_blocked_attachment_check_ignores_trailing_space_and_dot():
     """2026-11-09 검토 B13: 'evil.exe ', 'a.js.'는 Windows가 저장할 때 끝의 공백·점을 지워 실행 파일이 됨."""
     assert outlook._blocked_name("evil.exe ") and outlook._blocked_name("a.js.") and outlook._blocked_name("b.EXE")
     assert not outlook._blocked_name("보고서.pdf") and not outlook._blocked_name("표.xlsx. ")
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 C14·C15·C16·C17 (가짜 COM, 실기 러너 M 그룹에서 확인)
+# ---------------------------------------------------------------------------
+
+
+def test_c14_received_is_local_time_without_utc_mark():
+    class M:
+        ReceivedTime = dt.datetime(2026, 11, 3, 10, 0, tzinfo=dt.timezone.utc)   # pywin32: 현지 벽시계 + UTC 표시
+        SenderName = "a"
+        SenderEmailAddress = "a@x.com"
+        EntryID, Subject, UnRead = "1", "s", False
+    assert outlook.summary(M())["received"] == "2026-11-03 10:00:00"
+
+
+def test_c15_current_prefers_front_window():
+    class Item:
+        def __init__(self, s):
+            self.Subject = s
+
+    class Sel:
+        Count = 1
+
+        def Item(self, i):
+            return Item("목록에서 고른 메일")
+
+    class Exp:
+        Class = 34
+        Selection = Sel()
+
+    class Insp:
+        CurrentItem = Item("뒤에 열어 둔 메일 창")
+
+    class App:
+        def ActiveWindow(self):
+            return Exp()
+
+        def ActiveInspector(self):
+            return Insp()
+
+        def ActiveExplorer(self):
+            return Exp()
+    item, src = outlook.current_item(App())
+    assert item.Subject == "목록에서 고른 메일" and src == "목록에서 선택"
+
+
+def test_c16_sender_filter_includes_smtp_property():
+    flt = outlook.build_search_filter(None, "kim@corp.com", "all")
+    assert "0x5D01001F" in flt and "fromemail" in flt, flt
+
+
+def test_c17_display_failure_after_saved_draft_is_unverified(capsys, monkeypatch):
+    mail = Mail([Recip("a@x.com", True)])
+
+    def boom():
+        raise RuntimeError("dialog open")
+    mail.Display = boom
+    code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "다시 실행하지 말고" in out["agent_directive"], out
+    assert mail.saved and not mail.sent, out

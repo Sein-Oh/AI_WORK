@@ -111,7 +111,19 @@ class FakeRange:
     def ConvertToTable(self, Separator=1, NumRows=1, NumColumns=1):
         rows = self.Text.split("\r")
         self.doc.tables.append(rows)
+        self.doc.table_spans.append((self.Start, self.End + 1))
         return FakeTable(self.doc, FakeRange(self.doc, self.Start, self.End + 1))
+
+    @property
+    def ListFormat(self):
+        doc, start = self.doc, self.Start
+
+        class _LF:
+            ListTemplate = "번호 목록"
+
+            def ApplyListTemplate(self, ListTemplate=None, ContinuePreviousList=True, **kw):
+                doc.log.append(("list_restart", start, ContinuePreviousList))
+        return _LF()
 
 
 class FakeParagraph:
@@ -235,6 +247,37 @@ class FakeWordDocument:
     def replace(self, s, e, v):
         self.text = self.text[:s] + v + self.text[e:]
         self.Saved = False
+        d = len(v) - (e - s)
+        # 표 영역도 실제 Word처럼 옮김: 앞에 넣으면 밀리고, 안(표 첫 칸의 시작 포함)에 넣으면 늘어남
+        self.table_spans = [(a + d, b + d) if s < a else ((a, b + d) if s < b else (a, b)) for a, b in self.table_spans]
+
+    @property
+    def TablesOfContents(self):
+        doc = self
+
+        class _Toc:
+            def __init__(self, rng):
+                self.Range = rng
+
+            def Update(self):
+                doc.log.append(("toc_update", doc.text))
+
+        class _Tocs:
+            items = doc.__dict__.setdefault("_tocs", [])
+
+            @property
+            def Count(self):
+                return len(self.items)
+
+            def __call__(self, i):
+                return self.items[i - 1]
+
+            def Add(self, Range=None, **kw):
+                Range.InsertAfter("[목차]")
+                t = _Toc(FakeRange(doc, Range.Start, Range.End))
+                self.items.append(t)
+                return t
+        return _Tocs()
 
     def Range(self, s=0, e=None):
         return FakeRange(self, s, len(self.text) if e is None else e)

@@ -741,11 +741,32 @@ class Writer:
         self.created.append(f"제목{level}")
 
     def items(self, items: List[str], numbered: bool) -> None:
+        first = self.pos
         for it in items:
             self.text(it, WD_STYLE_LIST_NUMBER if numbered else WD_STYLE_LIST_BULLET)
+        if numbered and items:
+            # 목록 번호 스타일만 쓰면 문서의 앞 번호 목록에 이어 4, 5로 매겨짐: 새 목록은 1부터 (2026-11-09 검토 C2, 실기 확인)
+            try:
+                lf = self.doc.Range(first, self.pos).ListFormat
+                lf.ApplyListTemplate(ListTemplate=lf.ListTemplate, ContinuePreviousList=False)
+            except Exception as e:                    # noqa: BLE001
+                self.warnings.append(f"번호 목록을 1부터 다시 매기지 못함 ({type(e).__name__}): 앞 목록에 이어 번호가 매겨졌을 수 있음")
         self.created.append(f"{'번호' if numbered else '글머리'} 목록 {len(items)}개")
 
+    def _after_table(self) -> None:
+        """넣을 자리 바로 앞이 표면 빈 단락을 먼저 (표·요약 상자가 앞 표와 합쳐지고 머리글 서식이 사용자 표의 첫 행을 바꾸던 것, 검토 C3)."""
+        if self.pos > 0 and _in_table(self.doc.Range(self.pos - 1, self.pos - 1)):
+            self._para("")
+
+    def _normal_paragraph(self, start: int) -> None:
+        """새로 만든 단락(그림·목차 자리)의 스타일을 본문으로 (앞 단락의 제목·글머리 스타일을 물려받던 것, 검토 C4)."""
+        try:
+            self.doc.Range(start, start).Paragraphs(1).Style = self.doc.Styles(WD_STYLE_NORMAL)
+        except Exception:
+            pass
+
     def table(self, rows: List[List[Any]]) -> Any:
+        self._after_table()
         width = max(len(r) for r in rows)
         lines = ["\t".join(str("" if v is None else v).replace("\t", " ").replace("\r", " ").replace("\n", " ")
                            for v in (list(r) + [""] * (width - len(r)))) for r in rows]
@@ -774,9 +795,14 @@ class Writer:
         return tbl
 
     def callout(self, text: str) -> None:
+        self._after_table()
         r = self.doc.Range(self.pos, self.pos)
         r.InsertAfter(text.replace("\n", "\v") + "\r")
         body = self.doc.Range(r.Start, r.End - 1)
+        try:
+            body.Style = self.doc.Styles(WD_STYLE_NORMAL)
+        except Exception:
+            pass
         tbl = body.ConvertToTable(Separator=1, NumRows=1, NumColumns=1)
         cell = tbl.Cell(1, 1)
         cell.Shading.BackgroundPatternColor = off.parse_color(self.theme["light"])
@@ -793,6 +819,7 @@ class Writer:
     def image(self, path: str, width: Optional[float]) -> None:
         r = self.doc.Range(self.pos, self.pos)
         r.InsertAfter("\r")
+        self._normal_paragraph(r.Start)
         anchor = self.doc.Range(r.Start, r.Start)
         pic = self.doc.InlineShapes.AddPicture(FileName=path, LinkToFile=False, SaveWithDocument=True, Range=anchor)
         setup = self.doc.PageSetup
@@ -813,11 +840,24 @@ class Writer:
     def toc(self) -> None:
         r = self.doc.Range(self.pos, self.pos)
         r.InsertAfter("\r")
+        self._normal_paragraph(r.Start)
         anchor = self.doc.Range(r.Start, r.Start)
-        toc = self.doc.TablesOfContents.Add(Range=anchor, UseHeadingStyles=True, UpperHeadingLevel=1, LowerHeadingLevel=3)
-        toc.Update()
-        self.pos = toc.Range.End + 1
+        self._toc = self.doc.TablesOfContents.Add(Range=anchor, UseHeadingStyles=True, UpperHeadingLevel=1, LowerHeadingLevel=3)
+        self.pos = self._toc.Range.End + 1
         self.created.append("목차")
+
+    def toc_update(self) -> None:
+        """넣을 내용을 모두 넣은 뒤 목차 갱신 (--toc --file: 본문 전에 갱신해 빈 목차인데 VERIFIED였음, 검토 C5).
+        갱신으로 목차 길이가 바뀌면 그만큼 끝 위치를 옮김."""
+        toc = getattr(self, "_toc", None)
+        if toc is None:
+            return
+        try:
+            before = int(toc.Range.End)
+            toc.Update()
+            self.pos += int(toc.Range.End) - before
+        except Exception as e:                        # noqa: BLE001
+            self.problems.append(f"목차를 갱신하지 못함 ({type(e).__name__})")
 
     def rule(self) -> None:
         """마크다운 '---'(구분선): 아래 테두리만 있는 빈 단락 (페이지 나누기가 아님. 페이지 나누기는 --page-break)."""
@@ -975,6 +1015,27 @@ def _anchor_paragraph(doc: Any, anchor: str, occurrence: Optional[int], pos: str
     return hits[0]
 
 
+_PENDING_REPLACE: Dict[str, Any] = {}   # --pos replace: 내용을 넣은 뒤 지울 앵커 단락 (_finish_replace)
+
+
+def _finish_replace(doc: Any, inserted_len: int) -> Optional[str]:
+    """--pos replace의 앵커 단락을 내용을 넣은 뒤에 지움. 넣은 글 만큼 뒤로 밀린 위치. 실패하면 이유."""
+    if not _PENDING_REPLACE:
+        return None
+    a, b = _PENDING_REPLACE["replace_range"]
+    last = _PENDING_REPLACE.get("last")
+    _PENDING_REPLACE.clear()
+    try:
+        a, b = a + inserted_len, b + inserted_len
+        if not last:
+            doc.Range(a, b).Delete()
+        else:
+            doc.Range(a, b - 1).Delete()            # 마지막 단락은 단락 기호를 남김
+        return None
+    except Exception as e:                          # noqa: BLE001
+        return f"넣은 뒤 앵커 단락을 지우지 못함 ({type(e).__name__}): 앵커 단락이 남아 있음"
+
+
 def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Optional[int] = None,
                      preview: Optional[Dict[str, Any]] = None) -> Tuple[int, str]:
     """삽입 위치(문자 오프셋)와 설명. 앵커가 있으면 그 단락의 앞/뒤, replace면 앵커 단락을 지우고 그 자리.
@@ -1004,16 +1065,22 @@ def _insert_position(doc: Any, anchor: Optional[str], pos: str, occurrence: Opti
         return int(para.Tables(1).Range.End), f"'{anchor}'이(가) 있는 표 뒤"
     if pos == "before":
         return int(para.Start), f"'{anchor}' 단락 앞"
+    # 표 바로 위 단락: 그 End는 표 첫 칸의 시작이라 그대로 넣으면 표 첫 칸 안에 들어감 (2026-11-09 검토 C1, 실기 확인)
+    before_table = int(para.End) < int(doc.Content.End) and _in_table(doc.Range(int(para.End), int(para.End)))
     if pos == "replace":
         start = int(para.Start)
         if preview is not None:
             preview["removed"] = str(para.Text)
+            preview["replace_range"] = (start, int(para.End))
             return start, f"'{anchor}' 단락 자리"
-        if int(para.End) < int(doc.Content.End):
-            para.Delete()                                  # 단락 전체(단락 기호 포함)를 지우고 그 자리에 넣음
-        else:
-            doc.Range(para.Start, para.End - 1).Delete()  # 마지막 단락은 단락 기호를 남김
+        # 지우기는 내용을 넣은 뒤에 (먼저 지우면 넣다가 COM이 실패할 때 단락만 사라짐, 검토 C7): 앵커 단락 앞에 넣고 끝나면 지움
+        preview_sink = {"replace_range": (start, int(para.End)), "last": int(para.End) >= int(doc.Content.End)}
+        _PENDING_REPLACE.clear()
+        _PENDING_REPLACE.update(preview_sink)
         return start, f"'{anchor}' 단락 자리"
+    if before_table and preview is None:
+        doc.Range(int(para.End) - 1, int(para.End) - 1).InsertAfter("\r")     # 앵커 단락과 표 사이에 빈 단락을 만들고 거기에
+        return int(para.End), f"'{anchor}' 단락 뒤 (표 앞)"
     if int(para.End) >= int(doc.Content.End) and preview is None:
         # 마지막 단락 뒤에는 글을 둘 수 없어 그대로 넣으면 앵커 단락에 붙고 스타일이 바뀜: 새 단락을 먼저 만듦
         end = int(doc.Content.End) - 1
@@ -1027,6 +1094,27 @@ def _in_table(rng: Any) -> bool:
         return bool(rng.Information(12))          # wdWithInTable
     except Exception:
         return False
+
+
+def _refresh_tocs(doc: Any, start: int, w: "Writer") -> int:
+    """문서에 이미 있는 목차를 갱신. 넣은 범위 앞의 목차 길이가 바뀌면 넣은 범위(start, w.pos)를 그만큼 옮김. 새 start를 돌려줌."""
+    try:
+        tocs = doc.TablesOfContents
+        n = int(tocs.Count)
+    except Exception:
+        return start
+    for i in range(1, n + 1):
+        try:
+            toc = tocs(i)
+            before_start, before_end = int(toc.Range.Start), int(toc.Range.End)
+            toc.Update()
+            delta = int(toc.Range.End) - before_end
+            if before_start < start:
+                start += delta
+                w.pos += delta
+        except Exception as e:                        # noqa: BLE001
+            w.warnings.append(f"문서의 목차 {i}을(를) 갱신하지 못함 ({type(e).__name__}): Word에서 목차를 눌러 [필드 업데이트]")
+    return start
 
 
 def cmd_write(args) -> Dict[str, Any]:
@@ -1052,6 +1140,7 @@ def cmd_write(args) -> Dict[str, Any]:
             seen: Dict[str, Any] = {}
             _, where = _insert_position(doc, args.anchor, args.pos, args.occurrence, preview=seen)
             return _write_dry_run(args, t.resolved(), where, seen.get("removed"), text)
+        _PENDING_REPLACE.clear()
         start, where = _insert_position(doc, args.anchor, args.pos, args.occurrence)
         w = Writer(doc, start, theme)
         if args.page_break:
@@ -1078,6 +1167,13 @@ def cmd_write(args) -> Dict[str, Any]:
             w.table(file_rows)
         if image:
             w.image(image, args.width)
+        if args.toc:
+            w.toc_update()                              # 목차는 내용을 넣은 뒤에 갱신 (먼저 갱신하면 빈 목차, 검토 C5)
+        elif any(c and re.search(r"(?m)^#{1,3}\s", c) for c in (text, file_text)) or args.heading:
+            start = _refresh_tocs(doc, start, w)        # 문서에 있던 목차도 새 제목을 넣으면 갱신 (검토 C5)
+        gone = _finish_replace(doc, w.pos - start)
+        if gone:
+            w.problems.append(gone)
         mode = "raw" if args.callout else ("bold" if args.heading or args.title else "auto")
         problems = w.problems + _verify_inserted(doc, start, w.pos, [c for c in (text, file_text) if c], mode)
         t.set_focus()

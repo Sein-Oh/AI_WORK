@@ -2383,3 +2383,14 @@ def test_select_sheet_in_closed_file_is_refused(xl, capsys, tmp_path, monkeypatc
     w.save(p)
     code, out = run_excel(capsys, "sheet", "--target", str(p), "--action", "select", "--name", "Sheet2")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "열린 통합문서" in out["message"], out
+
+
+def test_c11_append_does_not_overwrite_filtered_rows(xl, capsys):
+    """2026-11-09 검토 C11: End(xlUp)은 필터로 숨긴 행을 건너뜀 -> --append가 숨은 데이터 행에 쓰던 것."""
+    _, wb = xl
+    ws = ws_of(wb)
+    for r, v in enumerate(["이름", "a", "b", "숨은 c"], start=1):
+        ws.values[(r, 1)] = v
+    ws.hidden_rows = {4}
+    code, out = run_excel(capsys, "write", "--range", "A1", "--append", "--value", "새")
+    assert code == 0 and ws.values[(4, 1)] == "숨은 c" and ws.values[(5, 1)] == "새", ws.values

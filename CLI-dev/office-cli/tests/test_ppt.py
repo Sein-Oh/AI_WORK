@@ -945,3 +945,19 @@ def test_slide_blocks_keep_lines_and_tables():
                                              ("table", [["항목", "값"], ["", "v"]]), ("paragraph", "끝")], text
     s = {"no": 2, "title": "제목 줄", "text": "제목 줄\n| 막대"}
     assert md.parse_markdown_blocks(md.document_markdown(ppt.slide_blocks(s))) == [("heading", (1, "제목 줄")), ("paragraph", "| 막대")]
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 C8: 바닥글·날짜·슬라이드 번호 개체틀은 쌓는 기준에서 빼고, 공간이 없으면 새 슬라이드
+# ---------------------------------------------------------------------------
+
+
+def test_c8_footer_placeholders_do_not_push_new_box_off_slide(pp, capsys):
+    prs = pp["prs"]
+    s = prs.Slides(2)
+    s.Shapes.add(FakeShape("슬라이드 번호", 860, 500, 60, 30, text="2", kind=14, ph_type=13))
+    s.Shapes.add(FakeShape("바닥글", 300, 505, 300, 25, text="사내 한정", kind=14, ph_type=15))
+    code, out = run_ppt(capsys, "write", "--slide", "2", "--text", "추가 본문")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    box = [sh for sh in s.Shapes._live() if sh.HasTextFrame and sh.TextFrame.TextRange.Text == "추가 본문"][0]
+    assert box.Top + box.Height <= 540, (box.Top, box.Height)
