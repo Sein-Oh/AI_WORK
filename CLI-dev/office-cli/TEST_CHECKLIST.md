@@ -6,7 +6,7 @@
 python tools/run_win_tests.py
 python tools/run_win_tests.py --self-email 본인주소     :: G3 실제 발송 테스트 포함
 python tools/run_win_tests.py --only H                  :: 일부 그룹만
-python tools/run_win_tests.py --only L,M                :: 2026-11-09 검토 실기 확인만 (M은 Outlook, 눈 확인 항목 있음)
+python tools/run_win_tests.py --only L,M                :: 2026-11-09 검토 실기 확인만 (M은 Outlook, 질문 없이 러너가 판정)
 python tools/run_win_tests.py --skip-outlook --auto     :: Outlook 제외, 질문 없이 자동 판정 항목만
 python tools/run_win_tests.py --agent --skip-outlook    :: 에이전트용: --auto + 로그는 stderr, stdout은 결과 JSON 1줄
 ```
