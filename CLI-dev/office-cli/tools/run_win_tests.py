@@ -1315,6 +1315,33 @@ def _ol_time(t):
     return f"{t.year:04d}-{t.month:02d}-{t.day:02d} {t.hour:02d}:{t.minute:02d}:{t.second:02d}"
 
 
+OUTLOOK_READY_WAIT = 120     # 초. Outlook이 받은 편지함을 읽을 수 있을 때까지 기다리는 상한
+
+
+def outlook_ready():
+    """Outlook을 화면에 띄우고 받은 편지함을 읽을 수 있을 때까지 기다림. (준비됨, 이유).
+    러너가 같은 프로세스에서 COM을 부르다 Outlook의 숨은 창(프로필·보안 확인)에서 멈추던 것 (회사 PC 2026-11-10 M1):
+    확인은 별도 프로세스에서 시간 상한을 두고 하고, 안 되면 M 그룹을 건너뜀."""
+    probe = ("import win32com.client as w; ns = w.Dispatch('Outlook.Application').GetNamespace('MAPI'); "
+             "print(ns.GetDefaultFolder(6).Items.Count)")
+    if not process_count("OUTLOOK.EXE"):
+        log("    [준비] Outlook이 꺼져 있어 화면에 띄웁니다 (받은 편지함이 뜰 때까지 기다림)")
+        subprocess.Popen(["cmd", "/c", "start", "", "outlook.exe"])
+    end = time.time() + OUTLOOK_READY_WAIT
+    why = "Outlook 프로세스가 뜨지 않음"
+    while time.time() < end:
+        if process_count("OUTLOOK.EXE"):
+            try:
+                out = subprocess.run([PY, "-c", probe], capture_output=True, text=True, timeout=30)
+                if out.returncode == 0 and out.stdout.strip().isdigit():
+                    return True, ""
+                why = (out.stderr.strip().splitlines() or ["받은 편지함을 읽지 못함"])[-1][:200]
+            except subprocess.TimeoutExpired:
+                why = "Outlook이 30초 안에 답하지 않음 (프로필 선택·보안 확인 창이 떠 있을 수 있음)"
+        time.sleep(3)
+    return False, why
+
+
 def _ol_windows():
     """Outlook 프로세스의 보이는 최상위 창 {hwnd: (클래스, 제목)} (Outlook 창 클래스 rctrl_renwnd32로 프로세스를 찾음)."""
     import win32gui
@@ -1438,6 +1465,12 @@ def test_G(ctx):
                f"목록 {len(mails)}통, {first}번 읽기 같은 메일={same}, 대화 {d_thread.get('count')}통, 일정 {(data or {}).get('count')}개",
                data, code, raw, err)
 
+    ready, why = outlook_ready()
+    if not ready:
+        log(f"[WARN] Outlook이 준비되지 않아 G 그룹을 건너뜁니다: {why}")
+        for tid, title in (("G1", "표시 전용"), ("G2", "잘못된 수신자"), ("G3", "실제 발송"), ("G4", "메일 목록"), ("G5", "짧은 번호·대화·일정")):
+            record(ctx, tid, title, ENV_SKIP, f"Outlook 준비 안 됨: {why}")
+        return
     run_test(ctx, "G1", "표시 전용", g1)
     run_test(ctx, "G2", "잘못된 수신자", g2)
     run_test(ctx, "G3", "실제 발송", g3)
@@ -2988,8 +3021,15 @@ def test_M(ctx):
                _ok(d) and set(inline) <= set(marked),
                f"'{subject}': 본문 그림 첨부 번호 {inline}, 도구가 본문 그림으로 표시 {marked}", d, c, r, e)
 
-    for tid, title, fn in (("M1", "받은 시각", m1), ("M2", "맨 앞 창", m2), ("M3", "SMTP 보낸 사람", m3),
-                           ("M4", "대화 상자", m4), ("M5", "서명 로고", m5)):
+    ready, why = outlook_ready()
+    tests = (("M1", "받은 시각", m1), ("M2", "맨 앞 창", m2), ("M3", "SMTP 보낸 사람", m3),
+             ("M4", "대화 상자", m4), ("M5", "서명 로고", m5))
+    if not ready:
+        log(f"[WARN] Outlook이 준비되지 않아 M 그룹을 건너뜁니다: {why}. Outlook을 실행해 받은 편지함이 뜬 뒤 --only M으로 다시 실행하세요.")
+        for tid, title, _fn in tests:
+            record(ctx, tid, title, ENV_SKIP, f"Outlook 준비 안 됨: {why}")
+        return
+    for tid, title, fn in tests:
         run_test(ctx, tid, title, fn)
 
 
