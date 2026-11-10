@@ -23,7 +23,7 @@ import argparse
 import warnings
 import contextlib
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -40,7 +40,7 @@ try:
         read_raw_table, read_text_file, resolve_column_names, resolve_model_arg, resolve_target_models, resolve_where,
         round_pred, run_cli, sanitize_filename, save_with_lock_fallback, setup_console, sniff_header_index, strip_unit,
         suggest_columns, unit_hint, unit_marked, unit_row_verdict, warn_long_path, where_mask, where_text,
-        write_csv_excel_compatible,
+        write_csv_excel_compatible, add_sheet_argument, sheet_note, sheet_ignored_warning,
     )
 except ModuleNotFoundError as _exc:            # copied without the shared runtime: still 1 JSON line (ACI contract)
     if getattr(_exc, "name", "") != "_ml_runtime":
@@ -397,6 +397,8 @@ def _predict_command(args: argparse.Namespace, layout: str = "", inline: Optiona
         parts += ["--input", quote_arg(inline)]
     else:
         parts += ["--file", quote_arg(os.path.abspath(args.file))]
+        if getattr(args, "sheet", None) is not None:
+            parts += ["--sheet", quote_arg(args.sheet)]
     if layout:
         parts.append(layout.strip())
     if getattr(args, "save", None):
@@ -562,7 +564,7 @@ def _check_prediction_file(args: argparse.Namespace, model_items: List[Dict[str,
     path = str(args.file)
     if os.path.exists(path):
         return
-    base = command_text(drop={"--file": "", "--file": "", "--input": "", "--input": ""})
+    base = command_text(drop={"--file": "", "--input": "", "--sheet": ""})    # --input commands: no file, no sheet
     if looks_inline_input(path):
         cmd = f"{base} --input {quote_arg(inline_value(path))}" if base else None
         raise InputError("--file에는 데이터 파일 경로를 줍니다. '이름=값' 입력은 --input로 줍니다."
@@ -607,6 +609,11 @@ def _has_layout(args: argparse.Namespace) -> bool:
     return any(getattr(args, k, None) is not None for k in ("header_row", "unit_row", "data_row"))
 
 
+def _sheet(args: argparse.Namespace) -> Optional[str]:
+    """The --sheet of the prediction file (2-1, 2026-11-10 결정: the same option and meaning as ml_train)."""
+    return getattr(args, "sheet", None)
+
+
 def _layout_fix(args: argparse.Namespace, model_items: List[Dict[str, Any]],
                 df_input: Optional[pd.DataFrame] = None) -> Tuple[Optional[str], List[int]]:
     """The layout of a prediction file whose layout options (often copied from training) or automatic reading miss
@@ -622,11 +629,12 @@ def _layout_fix(args: argparse.Namespace, model_items: List[Dict[str, Any]],
     read_ok = df_input is not None and _inputs_present(needed, [str(c) for c in df_input.columns])
     if has_layout and not read_ok:      # options that read the file with every model input are kept as given
         try:
-            auto = load_data_file(args.file)
+            auto = load_data_file(args.file, sheet=_sheet(args))
         except Exception:
             auto = None
         if auto is not None and _inputs_present(needed, [str(c) for c in auto.columns]):
-            layout = _fit_unit_layout(args.file, needed, None, int(auto.attrs.get("header_row", 1)) + 1, numeric)
+            layout = _fit_unit_layout(args.file, needed, None, int(auto.attrs.get("header_row", 1)) + 1, numeric,
+                                      sheet=_sheet(args))
             if layout:
                 return layout, []
             if not auto.attrs.get("unit_row_below") and (_first_row_numeric(auto, numeric) or _row_has_data(auto, 0)):
@@ -644,12 +652,14 @@ def _layout_fix(args: argparse.Namespace, model_items: List[Dict[str, Any]],
             layout = f"--header-row {row}"
             if unit:
                 # a model trained without units needs the unit row skipped (--data-row), not joined to the names
-                layout = _fit_unit_layout(args.file, needed, row, unit, numeric) or f"{layout} --unit-row {unit}"
+                layout = (_fit_unit_layout(args.file, needed, row, unit, numeric, sheet=_sheet(args))
+                          or f"{layout} --unit-row {unit}")
             return layout, []
         return None, []
     if not has_layout and not df_input.empty and (df_input.attrs.get("unit_row_below")
                                                   or _first_row_is_text(df_input, numeric)):
-        layout = _fit_unit_layout(args.file, needed, None, int(df_input.attrs.get("header_row", 1)) + 1, numeric)
+        layout = _fit_unit_layout(args.file, needed, None, int(df_input.attrs.get("header_row", 1)) + 1, numeric,
+                                  sheet=_sheet(args))
         if layout:
             return layout, []
     return None, []
@@ -691,8 +701,8 @@ def _skipped_rows_warning(args: argparse.Namespace, df: pd.DataFrame) -> Optiona
     if not rows:
         return None
     try:
-        raw = read_raw_table(args.file)
-        shown = " / ".join(", ".join(c for c in _row_cells(raw, r - 1))[:60] for r in rows[:3] if r - 1 < len(raw))
+        raw = read_raw_table(args.file, sheet=_sheet(args))
+        shown =" / ".join(", ".join(c for c in _row_cells(raw, r - 1))[:60] for r in rows[:3] if r - 1 < len(raw))
     except Exception:
         shown = ""
     return (f"파일 {', '.join(map(str, rows))}행은 데이터가 아닌 단위·메모 행으로 보고 건너뛰었습니다 (예측하지 않음)"
@@ -723,7 +733,8 @@ def _layout_hint(args: argparse.Namespace, model_items: List[Dict[str, Any]], df
             layout = f"--header-row {row}"
             if unit:
                 where += f", {unit}행은 단위 행입니다"
-                layout = (_fit_unit_layout(args.file, needed, row, unit, numeric) if getattr(args, "file", None)
+                layout = (_fit_unit_layout(args.file, needed, row, unit, numeric, sheet=_sheet(args))
+                          if getattr(args, "file", None)
                           else "") or f"{layout} --unit-row {unit}"
             return f"{where}. [추천] " + _predict_command(args, layout=layout)
     return ""
@@ -739,7 +750,7 @@ def _load_prediction_file(args: argparse.Namespace, model_items: List[Dict[str, 
 
     def _read() -> pd.DataFrame:
         return load_data_file(file_path=args.file, header_row=args.header_row, unit_row=args.unit_row,
-                              data_row=args.data_row, decimal_comma=decimal_comma)
+                              data_row=args.data_row, decimal_comma=decimal_comma, sheet=_sheet(args))
     try:
         df = _read()
     except InputError as e:
@@ -794,8 +805,8 @@ def _text_input_row(df: pd.DataFrame, i: int, numeric: List[str]) -> bool:
 
 
 def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], unit_row: int,
-                     numeric: Optional[List[str]] = None) -> str:
-    """Layout options for a file whose row `unit_row` (1-based, below the header) is not data: '--unit-row M'
+                     numeric: Optional[List[str]] = None, sheet: Optional[str] = None) -> str:
+    """Layout options for a file (its `sheet`, --sheet) whose row `unit_row` (1-based, below the header) is not data: '--unit-row M'
     (a unit row by _looks_like_unit_row, model trained with units '반응온도(°C)'), else '--data-row M+1' (the row
     skipped: a unit row with the unit-less names of a model trained without units, a notes row, or a row of text in the
     numeric inputs `numeric` (_text_input_row) over a first data row of numbers), else '' (the row is data: numbers in
@@ -803,7 +814,7 @@ def _fit_unit_layout(path: str, needed: List[str], header_row: Optional[int], un
     column. `header_row` (or None) is put in front."""
     head = f"--header-row {header_row} " if header_row else ""
     try:
-        raw = read_raw_table(path)
+        raw = read_raw_table(path, sheet=sheet)
     except Exception:
         return ""
     hdr = header_row - 1 if header_row and header_row > 1 else sniff_header_index(raw)
@@ -1201,6 +1212,8 @@ def retrain_commands(args: argparse.Namespace, items: List[Dict[str, Any]], chec
             x_arg = quote_arg(",".join(feats))
         parts = [f"python {quote_arg(train_py)}", "--file", quote_arg(os.path.abspath(args.file)), "--features", x_arg,
                  "--targets", quote_arg(",".join(g["targets"]))]
+        if _sheet(args) is not None:
+            parts += ["--sheet", quote_arg(_sheet(args))]
         for flag, val in (("--header-row", args.header_row), ("--unit-row", args.unit_row), ("--data-row", args.data_row)):
             if val is not None:
                 parts += [flag, quote_arg(val)]
@@ -1223,6 +1236,70 @@ def retrain_commands(args: argparse.Namespace, items: List[Dict[str, Any]], chec
     return cmds
 
 
+# ------------------------------------------------------------------------------
+# Per-row notes of a file prediction (2-3, 2026-11-10 결정): a file is predicted whole (no stop for one bad row), so the
+# result file says per row which predictions not to trust as they are: inputs filled with the training value (blank or
+# not a number / date), inputs outside the training range, kinds not seen in training. One last column, short text.
+# ------------------------------------------------------------------------------
+NOTE_COL = "주의"
+NOTE_MAX_CHARS = 120     # one row's note; more parts end with ' 외 N건'
+
+
+def _row_note(parts: List[str]) -> str:
+    """The notes of one row joined with '; ' (repeats once), at most NOTE_MAX_CHARS characters."""
+    parts = list(dict.fromkeys(parts))
+    text = "; ".join(parts)
+    if len(text) <= NOTE_MAX_CHARS:
+        return text
+    for k in range(len(parts) - 1, 0, -1):
+        cut = "; ".join(parts[:k]) + f" 외 {len(parts) - k}건"
+        if len(cut) <= NOTE_MAX_CHARS:
+            return cut
+    tail = f" 외 {len(parts) - 1}건" if len(parts) > 1 else ""
+    return parts[0][:NOTE_MAX_CHARS - len(tail)] + tail
+
+
+def _add_row_notes(notes: List[List[str]], X_model: pd.DataFrame, df_evaled: pd.DataFrame, schema: Dict[str, Any],
+                   meta: Dict[str, Any], owner: Dict[str, str], raw_inputs: set) -> None:
+    """Adds this target model's notes of every row (rows in file order, the same as X_model)."""
+    categorical = schema.get("categorical", {})
+    dates = schema.get("datetime", {})
+    for col in X_model.columns:                         # filled by the pipeline: blank, or no number / date
+        raw = owner.get(col, col)
+        if raw not in raw_inputs or raw not in df_evaled.columns:
+            continue
+        fill = "학습 중앙값" if col in schema.get("numeric", []) else "학습 기준값"
+        miss = X_model[col].isna().to_numpy()
+        for i in np.flatnonzero(miss):
+            cell = _cell_text(df_evaled[raw].iloc[i])
+            what = "빈칸" if _blank_mark(cell) else ("날짜 아님" if raw in dates else "숫자 아님")
+            notes[i].append(f"{raw} {what} -> {fill}")
+    stats = meta.get("feature_stats") or {}
+    for col in schema.get("numeric", []):              # outside the training range
+        st = stats.get(col) or {}
+        if st.get("min") is None or st.get("max") is None or col not in X_model.columns:
+            continue
+        v = X_model[col].to_numpy(dtype=float)
+        with np.errstate(invalid="ignore"):
+            out = (v < float(st["min"])) | (v > float(st["max"]))
+        for i in np.flatnonzero(out):
+            notes[i].append(f"{col} 학습 범위 밖")
+    for col, rng in (meta.get("datetime_stats") or {}).items():
+        if col not in df_evaled.columns:
+            continue
+        dt = parse_datetime(df_evaled[col])
+        out = ((dt < pd.Timestamp(rng["min"])) | (dt > pd.Timestamp(rng["max"]))).to_numpy(dtype=bool)
+        for i in np.flatnonzero(out):
+            notes[i].append(f"{col} 학습 기간 밖")
+    for col, known in categorical.items():             # kinds never seen in training
+        if col not in X_model.columns:
+            continue
+        known_set = set(known)
+        for i, v in enumerate(X_model[col].tolist()):
+            if not pd.isna(v) and v not in known_set:
+                notes[i].append(f"{col} {v} 학습에 없음")
+
+
 def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     """Orchestrates 1-Turn declarative inference."""
     # 1. Resolve Targets & Models
@@ -1241,6 +1318,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
 
     # 2. Resolve Input Data (Batch File or Inline Input)
     file_warnings: List[str] = []
+    sheet_confirm: List[Dict[str, Any]] = []
     if args.input:
         df_input = parse_inline_input(args.input)
         is_inline = True
@@ -1250,9 +1328,14 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         df_input = _load_prediction_file(args, model_items)
         is_inline = False
         source_desc = os.path.basename(args.file)
-        file_warnings = layout_warnings(df_input, training=False)   # repeated header rows, totals rows
+        # repeated header rows, totals rows, other sheets with data ([후보] --sheet commands: sheet_confirm)
+        file_warnings = layout_warnings(df_input, training=False)
         if df_input.attrs.get("skipped_rows_warning"):
             file_warnings.insert(0, df_input.attrs["skipped_rows_warning"])
+        ignored = sheet_ignored_warning(args.file, _sheet(args))
+        if ignored:
+            file_warnings.append(ignored)
+        _, sheet_confirm = sheet_note(df_input.attrs)
     else:
         raise InputError("추론할 입력 데이터(--file 또는 --input)를 지정해야 합니다.")
 
@@ -1270,6 +1353,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
     known_names: List[str] = []       # every name a model takes (--input keys beyond these are refused)
     known_inputs: List[str] = []
     numeric_inputs: List[str] = []    # numbers written with '%' in these are read without it (percent_warning)
+    # 2-3 (2026-11-10 결정): per-row notes of a file prediction (the result file's last column NOTE_COL)
+    row_notes: Optional[List[List[str]]] = None if is_inline else [[] for _ in range(len(df_input))]
 
     if is_inline:
         check_inline_derived(df_input, model_items)
@@ -1408,6 +1493,8 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
                                     f"입력 '{fname}' 학습 범위 미달: 학습 최소={_fmt4(f_min)}, 입력 최소={_fmt4(c_min)} (범위의 -{under_pct}%, 범위 밖 {n_out}건)"
                                 )
 
+        if row_notes is not None:
+            _add_row_notes(row_notes, X_model, df_evaled, schema, meta, owner, set(raw_needed))
         X_input = X_model
 
         # Execute Prediction
@@ -1523,8 +1610,16 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             if chk:
                 actual_checks[str(item["target"])] = chk
 
+    note_col: Optional[str] = None
+    note_texts: List[str] = []
+    if row_notes is not None:
+        note_col = NOTE_COL if NOTE_COL not in df_result.columns else f"{NOTE_COL}_예측"   # never the user's own column
+        note_texts = [_row_note(p) for p in row_notes]
+        df_result[note_col] = note_texts
+    note_rows = sum(1 for t in note_texts if t)
+
     # 4. Save Output if Requested or File-based
-    inline_truncated = is_inline and len(df_result) > INLINE_SHOW_MAX
+    inline_truncated =is_inline and len(df_result) > INLINE_SHOW_MAX
     out_path = args.save
     saved_file = None
     if out_path:
@@ -1570,6 +1665,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             if len(back) != len(df_result) or list(map(str, back.columns)) != list(map(str, df_result.columns)):
                 unverified.append(f"저장한 결과 파일을 다시 읽으니 {len(back)}행 x {back.shape[1]}열 "
                                   f"(기대 {len(df_result)}행 x {df_result.shape[1]}열)")
+            elif note_col is not None:
+                got = ["" if pd.isna(v) else str(v).strip() for v in back[note_col].tolist()]
+                if got != note_texts:
+                    bad = sum(1 for a, b in zip(got, note_texts) if a != b)
+                    unverified.append(f"저장한 결과 파일의 '{note_col}' 열이 기대와 다름 ({bad}행)")
         except Exception as e:
             unverified.append(f"저장한 결과 파일을 다시 읽지 못함: {type(e).__name__}: {e}")
 
@@ -1651,6 +1751,7 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + (f" | 결측 대치 {sum(missing_counts.values())}건" if missing_counts else "")
         + (f" | 미학습 범주 경고 {len(category_warnings)}건" if category_warnings else "")
         + (f" | 실측 비교 경고 {map_warn_rows}건" if map_warnings else "")
+        + (f" | 주의 표시 {note_rows}행 (결과 파일 '{note_col}' 열)" if note_rows and saved_file else "")
         + (" | 입력별 영향 " + " ; ".join(explain_lines) if explain_lines else "")
         + (" | 실제값 비교: " + "; ".join(c["text"] + (" -> 학습 때보다 나쁨, 재학습 권장" if c["worse"] else
                                                      " (비슷함)" if c["judged"] else " (행이 적어 판단 안 함)")
@@ -1681,6 +1782,10 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
         + ("학습 때 없던 종류가 있습니다 (unseen_category_warnings). " if category_warnings else "")
         + ("실측 비교값이 예측 범위 밖입니다 (map_check_warnings). " if map_warnings else "")
         + ("warnings(데이터가 아닌 행, '%' 없이 읽은 숫자)를 빠짐없이 알리세요. " if file_warnings else "")
+        + (f"결과 파일의 '{note_col}' 열에 행별 주의(기준값으로 채운 입력, 학습 범위 밖, 학습에 없던 종류)가 {note_rows}행 있다고 "
+           "알리세요. " if note_rows and saved_file else "")
+        + ("데이터가 있는 다른 시트가 있습니다: confirm_commands는 사용자가 그 번호를 고른 경우에만 실행합니다. "
+           if sheet_confirm else "")
         + ("예측값마다 실측 비교값(map_check의 value, diff, method)을 '실측 비교값'으로 함께 알리세요 "
            "(extrapolated가 true인 값은 실측 범위 밖이라 실측이 아닙니다). "
            if any("map_check" in p for p in predictions_summary.values()) else
@@ -1734,6 +1839,11 @@ def execute_predict(args: argparse.Namespace) -> Dict[str, Any]:
             result["shown"] = 0
             if saved_file:
                 result["full_result_file"] = saved_file
+    if note_col is not None:
+        result["note_column"] = note_col
+        result["note_rows"] = note_rows
+    if sheet_confirm:
+        result["confirm_commands"] = sheet_confirm
     if actual_checks:
         result["actual_check"] = actual_checks
         result["retrain_recommended"] = bool(worse)
@@ -2838,6 +2948,23 @@ def execute_suggest(args: argparse.Namespace) -> Dict[str, Any]:
 # 6. CLI Entry Point
 # ==============================================================================
 
+def _sheet_unused_runner(args: argparse.Namespace) -> Callable[..., None]:
+    """run_cli that adds a warning when --sheet is given without --file (--input, --find, --sweep, ...): accepted and not
+    used, said in warnings (AGENTS.md 사용법 단순성 4)."""
+    if _sheet(args) is None or args.file:
+        return run_cli
+
+    def run(execute: Callable[[], Dict[str, Any]], hint: str = "") -> None:
+        def with_note() -> Dict[str, Any]:
+            result = execute()
+            note = f"--sheet '{args.sheet}'은(는) --file의 시트를 고르는 옵션이라 쓰지 않았습니다"
+            result["warnings"] = list(result.get("warnings") or []) + [note]
+            sys.stderr.write(f"[WARN] {note}\n")
+            return result
+        run_cli(with_note, hint=hint)
+    return run
+
+
 def main():
     setup_console()
     check_core_libraries("예측")
@@ -2878,8 +3005,10 @@ def main():
                         help=f"다음 실험 제안: 학습 범위 안에서 예측이 가장 불확실하고 실측과 먼 조건 N개 (1~{SUGGEST_MAX}). "
                              "--maximize/--minimize와 함께 쓰면 좋은 예측값과 불확실성을 함께 봄. --vary 생략 시 모든 숫자 입력, "
                              "--input로 고정, 표(실험계획 시트) 저장")
+    add_sheet_argument(parser)      # --file의 시트 (2-1, 2026-11-10 결정)
 
     args = parser.parse_args()
+    run_cli = _sheet_unused_runner(args)      # the shared run_cli, plus the warning of a --sheet without --file
 
     search = args.maximize or args.minimize
     if args.suggest is not None:

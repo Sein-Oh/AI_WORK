@@ -997,3 +997,106 @@ def test_unseen_or_missing_category_in_input_stops_like_find(revb):
     new = run_tool("ml_predict.py", "--model", revb["para"], "--file",
                    write_df(revb["work"] / "d1.csv", pd.DataFrame({"온도": [180], "압력": [3], "라인": ["D"]})))
     assert new["unseen_category_warning"], new
+
+
+# ---- 2-1(2026-11-10 결정): 예측 파일의 --sheet -------------------------------------------------------
+
+
+def _book(path, sheets):
+    """[(시트 이름, 행 목록)]을 .xlsx로 (첫 시트가 맨 앞)."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    for k, (name, rows) in enumerate(sheets):
+        ws = wb.active if k == 0 else wb.create_sheet(name)
+        ws.title = name
+        for row in rows:
+            ws.append(row)
+    wb.save(path)
+    return str(path)
+
+
+def _month_rows(n, seed):
+    r = np.random.default_rng(seed)
+    out = [["온도", "압력", "수율"]]
+    for _ in range(n):
+        t, p = round(float(r.uniform(150, 200)), 1), round(float(r.uniform(1, 5)), 2)
+        out.append([t, p, round(30 + 0.2 * t + 3 * p + float(r.normal(0, 1)), 2)])
+    return out
+
+
+@pytest.fixture(scope="module")
+def months(tmp_path_factory):
+    work = tmp_path_factory.mktemp("sheets")
+    f = _book(work / "months.xlsx", [("1월", _month_rows(30, 1)), ("2월", _month_rows(25, 2)), ("3월", _month_rows(20, 3))])
+    v = run_tool("ml_train.py", "--file", f, "--targets", "수율", "--sheet", "2월")["version_dir"]
+    return {"work": work, "file": f, "v": v}
+
+
+def test_predict_file_reads_the_named_sheet(months):
+    """2-1: ml_predict --file은 첫 시트만 읽었다. --sheet로 고른 시트를 읽고, 생략하면 첫 시트 + 다른 시트 [후보] 전체 명령."""
+    res = run_tool("ml_predict.py", "--model", months["v"], "--file", months["file"])
+    assert res["sample_count"] == 30, res
+    w = " ".join(res.get("warnings", []))
+    assert "[후보] 1) 2월 2) 3월" in w, res
+    cmds = [split_command(c["command"]) for c in res["confirm_commands"]]
+    assert [c[c.index("--sheet") + 1] for c in cmds] == ["2월", "3월"], cmds
+    picked = run_tool(os.path.basename(cmds[0][1]), *cmds[0][2:])
+    assert picked["sample_count"] == 25 and not any("시트" in x for x in picked.get("warnings", [])), picked
+    out = pd.read_csv(picked["output_file"], encoding="utf-8-sig")
+    assert out["온도"].iloc[0] == _month_rows(25, 2)[1][0]
+
+
+def test_predict_unknown_sheet_and_csv_sheet(months, tmp_path):
+    proc, res = run_raw("ml_predict.py", "--model", months["v"], "--file", months["file"], "--sheet", "4월")
+    msg = stop_msg(res, proc)
+    assert "'1월', '2월', '3월'" in msg and "[후보]" in msg and len(res["confirm_commands"]) == 3, res
+    csv = write_df(tmp_path / "a.csv", pd.DataFrame(_month_rows(5, 4)[1:], columns=["온도", "압력", "수율"]))
+    res = run_tool("ml_predict.py", "--model", months["v"], "--file", csv, "--sheet", "2월")
+    assert any("--sheet" in x for x in res.get("warnings", [])), res
+    res = run_tool("ml_predict.py", "--model", months["v"], "--input", "온도=180,압력=3", "--sheet", "2월")
+    assert any("--sheet" in x and "--file" in x for x in res.get("warnings", [])), res
+
+
+def test_predict_cover_sheet_is_skipped(months, tmp_path):
+    f = _book(tmp_path / "cover.xlsx", [("표지", [["보고서", "작성자"]]), ("데이터", _month_rows(12, 5))])
+    res = run_tool("ml_predict.py", "--model", months["v"], "--file", f)
+    assert res["sample_count"] == 12 and any("'표지'" in x and "'데이터'" in x for x in res.get("warnings", [])), res
+
+
+def test_predict_built_commands_keep_the_sheet():
+    """2-1: 도구가 만드는 파일 예측 명령은 --sheet를 그대로 두고, --input 명령에는 넣지 않는다."""
+    import argparse
+    ns = argparse.Namespace(model="m", targets=None, file="새 파일.xlsx", save=None, overwrite=False, sheet="2월")
+    cmd = split_command(mp._predict_command(ns, layout="--header-row 3"))
+    assert cmd[cmd.index("--sheet") + 1] == "2월" and "--header-row" in cmd, cmd
+    assert "--sheet" not in split_command(mp._predict_command(ns, inline="온도=1"))
+
+
+# ---- 2-3(2026-11-10 결정): 파일 예측 결과의 행별 '주의' 열 ----------------------------------------------
+
+
+def test_file_prediction_has_row_notes(revb, tmp_path):
+    """2-3: 결과 파일만 보는 사용자가 기준값으로 채운 행, 학습 범위 밖 행, 학습에 없던 종류 행을 알 수 있게 맨 끝 '주의' 열."""
+    new = write_df(tmp_path / "notes.csv", pd.DataFrame({
+        "온도(°C)": ["180", "180", "260", "180", "190", "abc"],
+        "압력(bar)": ["3", "", "3", "3", "2", "3"],
+        "라인": ["A", "B", "A", "D", "C", "C"]}))
+    res = run_tool("ml_predict.py", "--model", revb["para"], "--file", new)
+    out = pd.read_csv(res["output_file"], encoding="utf-8-sig", keep_default_na=False)
+    assert list(out.columns)[-1] == "주의", list(out.columns)
+    notes = out["주의"].tolist()
+    assert notes[0] == "" and notes[4] == "", notes
+    assert notes[1] == "압력(bar) 빈칸 -> 학습 중앙값", notes
+    assert notes[2] == "온도(°C) 학습 범위 밖", notes
+    assert notes[3] == "라인 D 학습에 없음", notes
+    assert notes[5] == "온도(°C) 숫자 아님 -> 학습 중앙값", notes
+    assert res["note_rows"] == 4 and "주의" in res["preview"] and "주의" in res["agent_directive"], res
+    assert res["verified"], res
+
+
+def test_row_note_is_capped():
+    parts = [f"입력{k}(단위) 학습 범위 밖" for k in range(12)]
+    text = mp._row_note(parts)
+    assert len(text) <= mp.NOTE_MAX_CHARS and text.endswith("건") and "외" in text, text
+    assert mp._row_note(parts[:2]) == "; ".join(parts[:2])
+    assert mp._row_note([]) == ""
