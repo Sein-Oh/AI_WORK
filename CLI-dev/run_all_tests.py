@@ -702,10 +702,12 @@ def probe_python():
 
 
 def slow_windows(samples):
-    """[(시각, 초)] -> 느린 구간 글 목록 ('12:10~13:20 파이썬 시작 35초 (처음 0.4초)'). 첫 측정을 기준으로."""
-    if not samples or samples[0][1] is None:
+    """[(시각, 초)] -> 느린 구간 글 목록 ('12:10~13:20 파이썬 시작 35초 (평소 0.4초)'). 가장 빠른 측정을 평소로
+    (첫 측정은 재부팅 직후처럼 이미 느릴 수 있음: 회사 PC 2026-11-10 15:07 2.4초, 평소 1초)."""
+    known = [x[1] for x in samples if x[1] is not None]
+    if not known:
         return []
-    base = samples[0][1]
+    base = min(known)
     limit = max(base * PROBE_SLOW, 2.0)
     out, run = [], []
     for at, sec in samples + [("", None)]:
@@ -713,7 +715,7 @@ def slow_windows(samples):
             run.append((at, sec))
             continue
         if run:
-            out.append(f"{run[0][0]}~{run[-1][0]} 파이썬 시작 최대 {max(x[1] for x in run)}초 (처음 {base}초)")
+            out.append(f"{run[0][0]}~{run[-1][0]} 파이썬 시작 최대 {max(x[1] for x in run)}초 (평소 {base}초)")
             run = []
     return out
 

@@ -376,6 +376,14 @@ def _lookup_doc(kind, name):
     raise last
 
 
+def _open_doc(kind, name):
+    """열려 있으면 그 문서, 없으면 None (없는 이름은 _lookup_doc가 COM 오류 0x8002000B를 올림, 회사 PC 2026-11-10 L11·L12)."""
+    try:
+        return _lookup_doc(kind, name)
+    except Exception:
+        return None
+
+
 def _note_recovery(msg):
     log(f"[WARN] {msg}")
     if CTX is not None:
@@ -768,7 +776,7 @@ def test_A(ctx):
         wait_for(lambda: process_count("EXCEL.EXE") <= before, timeout=15)
         if not wait_for(lambda: _lookup_doc("excel", "A.xlsx"), timeout=5):
             log("[WARN] A5 정리 뒤 A.xlsx가 보이지 않습니다. 다음 그룹 시작 전에 다시 엽니다.")
-        left = _lookup_doc("excel", "C_second_instance.xlsx")         # 남았으면 러너가 저장하지 않고 닫음 (사람에게 묻지 않음)
+        left = _open_doc("excel", "C_second_instance.xlsx")         # 남았으면 러너가 저장하지 않고 닫음 (사람에게 묻지 않음)
         if left is not None:
             try:
                 com_retry(lambda: left.Close(SaveChanges=False))
@@ -2793,7 +2801,7 @@ def test_L(ctx):
         # 폐쇄망이라 사람이 인터넷에서 파일을 받을 수 없음 (회사 PC 2026-11-10): 표시를 직접 붙이고 ProtectedViewWindows.Open
         path = ctx.path("L_pv.xlsx")
         marker = f"L제한 {tag}"
-        old = _lookup_doc("excel", "L_pv.xlsx")
+        old = _open_doc("excel", "L_pv.xlsx")
         if old is not None:
             com_retry(lambda: old.Close(SaveChanges=False))
         if os.path.exists(path):
@@ -2834,7 +2842,7 @@ def test_L(ctx):
     def l12():    # C10 열린 저장된 통합문서 undo
         path = ctx.path("L_undo.xlsx")
         # 앞 실행이 남긴 같은 이름 파일을 먼저 지움: 있으면 엑셀이 '바꾸시겠습니까?'를 띄우고 러너가 멈춤 (회사 PC 2026-11-10 L12)
-        old = _lookup_doc("excel", "L_undo.xlsx")
+        old = _open_doc("excel", "L_undo.xlsx")
         if old is not None:
             com_retry(lambda: old.Close(SaveChanges=False))
         if os.path.exists(path):
@@ -2921,17 +2929,32 @@ def test_M(ctx):
             a, b = items.GetFirst(), items.GetNext()
             if a is None or b is None:
                 return False
+            exp = app.ActiveExplorer()
+            if exp is None:
+                inbox.Display()
+                exp = app.ActiveExplorer()
+            exp.CurrentFolder = inbox
+            try:
+                exp.ClearSelection()
+                exp.AddToSelection(b)
+            except Exception:
+                # 대화 보기에서는 선택을 바꾸는 메서드가 거부됨 (회사 PC 2026-11-10 M2): 지금 선택된 메일을 기준으로,
+                # 창으로 열 메일은 그와 다른 메일
+                sel = exp.Selection
+                if not sel.Count:
+                    return False
+                b = sel.Item(1)
+                a = next((m for m in (items.GetFirst(), items.GetNext(), items.GetNext())
+                          if m is not None and str(m.EntryID) != str(b.EntryID)), None)
+                if a is None:
+                    return False
             a.Display()                                    # 메일 창(Inspector)
             state["inspector"] = app.Inspectors.Item(app.Inspectors.Count)
-            exp = app.ActiveExplorer() or inbox.GetExplorer()
-            exp.CurrentFolder = inbox
-            exp.ClearSelection()
-            exp.AddToSelection(b)
             exp.Activate()                                 # 목록 창을 맨 앞으로
             state.update(opened=str(a.EntryID), selected=str(b.EntryID), subject=str(b.Subject or ""))
             return True
         if not com_retry(prepare):
-            record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)", ENV_SKIP, "받은 편지함에 메일이 2통 미만")
+            record(ctx, "M2", "C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)", ENV_SKIP, "받은 편지함 메일이 2통 미만이거나 (대화 보기에서) 선택된 메일이 없음")
             return
         time.sleep(1)
         d, c, r, e = run_cli("outlook.py", "current")
