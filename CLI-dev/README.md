@@ -28,7 +28,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 ```
 
 - 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `CLI-dev\tests`)
-  -> `beta`(`run_beta_check.py --agent`, F7 엑셀 재계산 포함) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
+  -> `beta`(`run_beta_check.py --agent`, F7~F9 엑셀 재계산 포함: F8 파생변수, F9 글자 입력) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
 - `pytest` 단계는 테스트 파일마다 따로 실행하고 동시에 `코어 수 - 1`개, 메모리 4GB마다 1개, 최대 3개씩 돌립니다(2026-11-10: 회사 PC에서 코어 수만큼 돌리자 메모리가 모자라 89분, 시간 초과 18건. 결과 표 비고에 동시 실행 수·코어·메모리) (`--pytest-workers N`, 1이면 하나씩.
   2.9.85: 회사 PC에서 하나씩 돌리면 62분). 화면에는 파일이 끝날 때마다 한 줄과 실패(`[LIVE]`)만 나오고, 결과 파일 상세에는 파일마다의 출력이 들어갑니다.
