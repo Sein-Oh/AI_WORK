@@ -35,6 +35,26 @@ del "%OUT%" >nul 2>&1
 echo [INFO] Opening OpenCode Web UI: %LINK%
 echo [INFO] The link works once and expires in a few minutes. Run web.bat again for a new one.
 echo [INFO] The background service keeps running after this window closes. Stop it with: web.bat stop
+
+rem Open in Edge (or Chrome) with its own profile folder under data\web_profile, as an app window.
+rem The normal browser profile can fail with "Internal error opening backing store for indexedDB.open"
+rem (broken or cleaned site data), while a fresh profile works. Falls back to the default browser.
+set "PROFILE=%~dp0data\web_profile"
+set "BROWSER="
+set "PF86=%ProgramFiles(x86)%"
+if exist "%PF86%\Microsoft\Edge\Application\msedge.exe" set "BROWSER=%PF86%\Microsoft\Edge\Application\msedge.exe"
+if not defined BROWSER if exist "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe" set "BROWSER=%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"
+if not defined BROWSER if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "BROWSER=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+if not defined BROWSER if exist "%LocalAppData%\Google\Chrome\Application\chrome.exe" set "BROWSER=%LocalAppData%\Google\Chrome\Application\chrome.exe"
+if not defined BROWSER goto default_browser
+if not exist "%PROFILE%" mkdir "%PROFILE%"
+echo [INFO] Browser: %BROWSER% (own profile: %PROFILE%)
+start "" "%BROWSER%" --user-data-dir="%PROFILE%" --no-first-run --no-default-browser-check --app="%LINK%"
+endlocal
+exit /b 0
+
+:default_browser
+echo [WARN] Edge/Chrome not found. Opening the default browser.
 start "" "%LINK%"
 endlocal
 exit /b 0

@@ -88,6 +88,8 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 5. (선택) 브라우저 화면으로 쓰려면 `C:\CLI\web.bat`을 두 번 클릭합니다. `opencode pair`가 OpenCode 백그라운드 서비스를 띄우고
    (이 PC에서만 접속, 화면은 opencode.exe 안에 들어 있어 폐쇄망에서도 됨) 일회용 로그인 링크를 브라우저로 엽니다. 링크는 한 번만 쓰이고
    몇 분 뒤 만료되니 다시 열 때는 web.bat을 다시 실행합니다. 서비스는 창을 닫아도 계속 돌며 `web.bat stop`으로 끕니다(`web.bat status`로 상태).
+   브라우저는 Edge(없으면 Chrome)를 `C:\CLI\data\web_profile` 전용 프로필의 앱 창으로 엽니다. 평소 브라우저 프로필에서
+   "Internal error opening backing store for indexedDB.open"이 나던 회사 PC 대응 (2026-11-10). 둘 다 없으면 기본 브라우저.
 
 ## 관리 방법
 
