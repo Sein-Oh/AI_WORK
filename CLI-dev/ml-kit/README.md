@@ -266,12 +266,14 @@ python ml_train.py --file "공정.xlsx" --features "반응온도,촉매비율,�
 - 같은 이름의 열은 둘째부터 `<이름>_1`로 읽고 `warnings`에 `B열 '온도' -> '온도_1'` (학습·예측·표 보간 공통 `layout_warnings`).
 - 머리글에 이미 같은 단위가 있는 열(`압력(bar)`)은 `--unit-row`의 단위(`bar`)를 다시 붙이지 않습니다 (`압력(bar)(bar)`이 되어 도구가 낸 `[추천]`이 다시 실패했음, 검토 B1).
 - CSV의 빈 줄도 행으로 셉니다 (`skip_blank_lines=False`, 검토 A8): 결과의 행 번호와 `ml_dataset.py --rows`가 파일(엑셀) 행 번호와 같습니다. 따옴표 안 줄바꿈이 있는 칸 뒤는 여전히 어긋납니다.
-- 시트가 여럿인 `.xlsx` (검토 A3): `--sheet <시트 이름>`(office-cli와 같은 이름·뜻, `ml_train.py`, `ml_dataset.py`)으로 고르고, 없으면 첫 시트를 읽습니다.
+- 시트가 여럿인 `.xlsx` (검토 A3): `--sheet <시트 이름>`(office-cli와 같은 이름·뜻, `ml_train.py`, `ml_dataset.py`, `ml_predict.py --file`, `ml_map.py --file`)으로 고르고, 없으면 첫 시트를 읽습니다.
   첫 시트에 데이터가 없고(2칸 이상 채운 행이 2개 미만, 표지) 데이터가 있는 시트가 하나면 그 시트를 읽고 `warnings`에 알립니다 (같은 읽기 함수라 예측·표 보간도 같음).
   데이터가 있는 다른 시트가 있으면 `warnings`에 `시트 3개 중 '1월'만 읽었습니다 ... [후보] 1) 2월 2) 3월`과 같은 번호의 `confirm_commands`(`--sheet`를 붙인 전체 명령).
   지정한 이름이 읽은 시트에 없고 다른 시트의 위쪽 행에 있으면 `[추천] <--sheet 그 시트 전체 명령>`(여러 시트면 `[후보]`). 없는 `--sheet`는 `STOP_RETRY` + 시트 목록 `[후보]`.
-  CSV에 `--sheet`를 주면 쓰지 않고 `warnings`. 학습한 시트는 원장 `data_profile.layout.sheet`에 남습니다. `ml_predict.py`·`ml_map.py`에는 아직 `--sheet`가 없어
-  다른 시트를 쓰라는 `warnings`만 나옵니다 (`add_sheet_argument`를 부르면 같은 동작).
+  CSV에 `--sheet`를 주면 쓰지 않고 `warnings`. 학습한 시트는 원장 `data_profile.layout.sheet`에 남습니다.
+  `ml_predict.py`·`ml_map.py`도 같은 동작입니다 (2026-11-10 결정 2-1). 예측 시트는 학습 시트를 따라가지 않습니다(새 파일의 시트가 같다는 보장이 없음).
+  도구가 만드는 파일 예측·표 보간 명령(`[추천]`, `next_commands`, 다시 학습 명령)은 준 `--sheet`를 그대로 붙입니다. `ml_predict.py`에서 `--file` 없이
+  (`--input`, `--find`, `--sweep` 등) `--sheet`를 주면 쓰지 않고 `warnings`, `ml_map.py --points` 조회 파일은 늘 첫 시트입니다.
 - `--unit-row`를 지정하면 단위 행을 컬럼명과 안전 결합(`반응온도` + `°C` -> `반응온도(°C)`)합니다.
   단위 행 판단 (학습·예측·표 보간·머리글 행 추천이 모두 같은 기준 `unit_row_verdict`/`_looks_like_unit_row`).
   칸마다 그 열 아래 값(최대 500행, 반복된 머리글·단위 행은 뺌)과 비교해 판단한 뒤 행으로 정합니다:
@@ -735,6 +737,11 @@ python ml_predict.py --model v3 --find "생산효율=105" --vary 반응온도 --
 - 날짜 `20240103.0`(숫자 칸을 글자로 읽은 값)도 8자리 날짜로 읽습니다.
 - **입력 점검 경고** (파일 예측): 빈 값/숫자가 아닌 값이 대치되면 `missing_input_warning`과 컬럼별 `missing_input_counts`, 학습 때 없던 범주가 오면 `unseen_category_warning`, 학습 기간 밖 날짜는 `extrapolation_warnings`에 추가됩니다.
   범주 값이 학습 범주와 대소문자·앞뒤 공백·전각만 다르면 그 범주로 맞춰 예측하고 `recovered`에 적습니다(경고 아님, 2.9.60).
+- **행별 `주의` 열** (파일 예측, 2026-11-10 결정 2-3): 파일 예측은 나쁜 행 하나로 멈추지 않으므로 결과 파일 맨 끝 열 `주의`에 그 행의 예측을 그대로 믿으면
+  안 되는 까닭을 적습니다: `압력(bar) 빈칸 -> 학습 중앙값`(숫자가 아니면 `숫자 아님`, 글자·날짜 입력은 `학습 기준값`), `온도(°C) 학습 범위 밖`
+  (학습 최소~최대 밖, 파생변수 포함), `측정일 학습 기간 밖`, `라인 D 학습에 없음`. 여럿이면 `; `로 잇고(타겟이 여럿이어도 같은 글은 한 번), 한 행 120자
+  (`NOTE_MAX_CHARS`)를 넘으면 앞 것만 두고 ` 외 N건`. 해당 없으면 빈칸. 입력 파일에 이미 `주의` 열이 있으면 그 열은 그대로 두고 `주의_예측`.
+  JSON `note_column`, `note_rows`(주의가 있는 행 수, 0도 줌), preview `주의 표시 N행 (결과 파일 '주의' 열)`. 저장 뒤 다시 읽어 이 열 글까지 비교합니다(R1).
 - **회귀 예측 범위**: `pred_lo_<타겟>`, `pred_hi_<타겟>` 컬럼, 인라인 JSON `intervals`(90%).
 - **이전 버전 모델**: 모델 정보에 `feature_schema`나 `input_columns_required`가 없는 모델(2.9.1보다 먼저 학습)은 쓰지 않습니다 (`STOP_RETRY`, 같은 데이터로 다시 학습). 베타 기간에는 이전 버전 호환을 두지 않습니다.
 - **폴더 대상 일괄 추론 (`--model <버전폴더>`)**: 특정 버전 디렉토리(`v1/`, `v2/`)를 지정하면 폴더 내에 저장된 모든 타겟 모델을 자동 스캔하여 다중 타겟 예측 컬럼(`pred_<타겟1>`, `pred_<타겟2>`)을 자동 일괄 생성합니다.
@@ -753,6 +760,7 @@ python ml_predict.py --model v3 --find "생산효율=105" --vary 반응온도 --
 | `--header-row` | 선택 | 컬럼명 헤더 행 번호 (배치 파일 추론 시) |
 | `--unit-row` | 선택 | 단위 행 번호 (배치 파일 추론 시) |
 | `--data-row` | 선택 | 데이터 시작 행 번호 (배치 파일 추론 시) |
+| `--sheet` | 선택 | `--file`(`.xlsx`)의 시트 이름 (생략 시 첫 시트, 첫 시트에 데이터가 없으면 데이터가 있는 하나의 시트). `ml_train.py`와 같은 뜻 |
 | `--find` | 선택 | 모델 반대 찾기 목표 `<타겟>=<값>` (위 1-B)) |
 | `--vary` | 선택 | 반대 찾기의 입력, `--maximize/--minimize`·`--suggest`에서 바꿀 입력 목록 (`--suggest`는 생략하면 모든 숫자 입력) |
 | `--sweep` | 선택 | 조건별 예측 (위 1-C)) |
@@ -875,7 +883,7 @@ python ml_map.py --file 공정.xlsx --input "반응온도=232.5,소비전력=60,
 python ml_map.py --file 공정.xlsx --find "생산효율=50" --vary 반응온도 [--input "소비전력=60"] :: 반대 찾기
 python ml_map.py --file 공정.xlsx --points 조회.xlsx [--save 결과.xlsx]                  :: 여러 점 -> 결과 엑셀
 ```
-공통 옵션: `--header-row`, `--unit-row`, `--data-row` (ml_train과 같음). 열 이름은 단위를 빼도 됩니다.
+공통 옵션: `--header-row`, `--unit-row`, `--data-row`, `--sheet` (ml_train과 같음, `--sheet`는 `--file`의 시트). 열 이름은 단위를 빼도 됩니다.
 옵션 없이 읽었을 때 머리글 바로 아래가 단위 행(`unit_row_verdict`)이면 그 행을 단위 행으로 다시 읽어 열 이름에 단위를 붙이고(`유량` -> `유량(L/min)`)
 `warnings`에 알립니다 (검토 B C1: 데이터로 읽어 작은 표는 숫자 열이 없어지고 큰 표는 이름에 단위가 없었음).
 
@@ -886,6 +894,11 @@ python ml_map.py --file 공정.xlsx --points 조회.xlsx [--save 결과.xlsx]   
 | 흩어진 기록, 기준 2~3개 | 그 밖 | 둘러싼 실측 3~4점(Delaunay, 기준을 0~1로 맞춤)의 비율 | 전체 추세선 |
 
 - 흩어진 기록에서 끝 두 점 외삽은 쓰지 않습니다 (잡음 때문에 기울기가 터짐, 예: -1998).
+- 외삽 한도 (2026-11-10 결정 3-5): 기준 값이 데이터 범위에서 데이터 폭의 30%(`FAR_FIND`, `_ml_runtime.py`, 반대 찾기와 같은 값)보다 멀면 값을 내지 않습니다.
+  `--input`은 `status: ok`, `count: 0`, `points: []`, preview `값 없음: 기준 값이 데이터 범위에서 데이터 폭의 30%보다 멂 (<기준> 범위 <최소>~<최대>보다 ... 높음 (데이터 폭의 ...))`, `warnings`, `data_range`,
+  `nearest_rows`(`--save` 파일은 만들지 않음). `--points`는 그 조회만 `계산 불가 (데이터 범위에서 너무 멂: ...)`(`failed_count`에 셈)와 `warnings`.
+  반대 찾기의 고정 기준(`--input`)이 그만큼 멀어도 답 없이 `count: 0`. 30% 안은 이전처럼 외삽값 + `extrapolated`/`[외삽]` + `warnings`.
+  `Table.at`/`MultiTable.at` 결과의 `far`(멀리 벗어난 기준과 그 `out_of_range` 글)로 판단합니다. 예측의 실측 비교값(`map_check`)은 이 한도를 쓰지 않습니다.
 - 같은 기준 값 행: 값이 같으면 하나로, 다르면 평균하고 경고(이 경우 격자로 보지 않음). 기준 4개 이상은 보간 없이 가까운 실측만.
 - 주지 않은 기준 열 (검토 B A2): 같은 기준 값 조합의 행들이 값이 다르고, 주지 않은 수준 열(글자 열, 또는 서로 다른 값이 행 수의 절반 이하인 숫자 열)을
   기준에 더하면 조합마다 값이 하나가 되면(격자의 `압력`, 라인별 표의 `라인`) 평균하지 않고 멈춥니다: `error_type: needs_user_decision`, `missing_keys`,

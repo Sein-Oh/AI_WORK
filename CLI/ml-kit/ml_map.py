@@ -34,7 +34,8 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     percent_warning, check_percent_mix, percent_mix, _strip_percent, name_list,
     load_data_file, layout_warnings, parse_inline_input, strip_unit, save_with_lock_fallback, mark_committed, avoid_overwrite, warn_long_path,
     check_comma_numbers, check_same_column, suggest_columns, build_alias_map, known_columns, numbered, command_replacing, _alias_key, _same_unit_name, kv_text, quote_arg, header_layout_hint, EXCLUDE_COL, INCLUDE_MARK, MAX_KEYS, CATEGORY_CANDIDATES_MAX, Table, MultiTable, nearest_rows, _is_numeric_col, _cell, _fmt, _crossings,
-    _trained_data_files, model_dir_from_data, model_raw_inputs, read_text_file, ask, parse_datetime,
+    _trained_data_files, model_dir_from_data, model_raw_inputs, read_text_file, ask, parse_datetime, FAR_FIND,
+    add_sheet_argument, sheet_note, sheet_ignored_warning,
 )
 
 
@@ -121,13 +122,14 @@ def load_table(args) -> Dict[str, Any]:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"데이터 파일이 없습니다: {path}")
     warn_long_path(path)
-    df = load_data_file(path, header_row=args.header_row, unit_row=args.unit_row, data_row=args.data_row)
+    sheet = getattr(args, "sheet", None)
+    df = load_data_file(path, header_row=args.header_row, unit_row=args.unit_row, data_row=args.data_row, sheet=sheet)
     unit_note = []
     below = df.attrs.get("unit_row_below")
     if below and args.header_row is None and args.unit_row is None and args.data_row is None:
         # 머리글 바로 아래 단위 행 (검토 B C1): 데이터로 읽으면 작은 표는 숫자 열이 없어지고 큰 표는 이름에 단위가 없음.
         # 학습·예측처럼 단위 행으로 읽는다 (판단 대행, warnings에 알림)
-        df = load_data_file(path, header_row=int(df.attrs.get("header_row") or 1), unit_row=int(below))
+        df = load_data_file(path, header_row=int(df.attrs.get("header_row") or 1), unit_row=int(below), sheet=sheet)
         unit_note = [f"머리글 아래 {int(below)}행을 단위 행으로 읽어 열 이름에 단위를 붙였습니다 "
                      f"(예: {', '.join(str(c) for c in list(df.columns)[:3])})"]
     rows = df.attrs.get("source_rows") or list(range(1, len(df) + 1))
@@ -141,11 +143,16 @@ def load_table(args) -> Dict[str, Any]:
         mask = (text != "") & (text != INCLUDE_MARK)
         dropped = int(mask.sum())
         df = df[~mask]
-    notes = unit_note + layout_warnings(df)     # repeated header rows (dropped by the loader), totals rows
+    # repeated header rows (dropped by the loader), totals rows, other sheets with data ([후보] --sheet commands)
+    notes = unit_note + layout_warnings(df)
+    ignored = sheet_ignored_warning(path, sheet)
+    if ignored:
+        notes.append(ignored)
+    _, sheet_confirm = sheet_note(df.attrs)
     for w in notes:
         sys.stderr.write(f"[WARN] {w}\n")
     return {"path": path, "df": df.reset_index(drop=True), "exclude_col": excl, "excluded": dropped,
-            "decimal_comma": decimal_comma,
+            "decimal_comma": decimal_comma, "sheet_confirm": sheet_confirm,
             "layout_warnings": notes,
             "saved_at": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")}
 
@@ -171,6 +178,8 @@ def _parse_pairs(text: str, what: str) -> Tuple[Dict[str, Any], Optional[Dict[st
 def _map_command(args, **change: Optional[str]) -> str:
     """The same ml_map.py command with a corrected --input / --find text (absolute, quoted paths)."""
     parts = [f"python {quote_arg(os.path.abspath(__file__))}", "--file", quote_arg(os.path.abspath(args.file))]
+    if getattr(args, "sheet", None) is not None:
+        parts += ["--sheet", quote_arg(args.sheet)]
     for flag, key in (("--header-row", "header_row"), ("--unit-row", "unit_row"), ("--data-row", "data_row")):
         if getattr(args, key, None) is not None:
             parts += [flag, str(getattr(args, key))]
@@ -423,7 +432,6 @@ def _basis_cells(r: Dict[str, Any], per_column: bool) -> Dict[str, str]:
     return {"근거": _basis_text(r["basis"])}
 
 
-FAR_FIND = 0.3            # --find: an answer outside the data range by more than this share of its span is no answer
 TWO_VALUE_GAP = 0.1       # two places where a key takes one value are separate answers when this share of the span apart
 
 
@@ -575,10 +583,40 @@ def _common(tab: Dict[str, Any], result: Dict[str, Any], warnings: List[str],
         warnings.extend(pct)
         if "warnings" not in result.get("agent_directive", ""):
             result["agent_directive"] = result.get("agent_directive", "") + " warnings도 함께 알리세요."
+    if tab.get("sheet_confirm") and "confirm_commands" not in result:
+        # another sheet with data (A3): the user picks a number, run only then (AGENTS.md 사용법 단순성 2)
+        result["confirm_commands"] = tab["sheet_confirm"]
+        result["agent_directive"] = (result.get("agent_directive", "") + " 데이터가 있는 다른 시트가 있습니다 (warnings). "
+                                     "confirm_commands는 사용자가 그 번호를 고른 경우에만 실행합니다.")
     result.update({"data_file": tab["path"], "data_saved_at": tab["saved_at"]})
     if warnings:
         result["warnings"] = warnings
     return result
+
+
+def _far_text(far: Dict[str, str]) -> str:
+    return "; ".join(f"{k} {v}" for k, v in far.items())
+
+
+def _range_text(data_range: Dict[str, List[float]]) -> str:
+    return ", ".join(f"{k} {_fmt(lo)}~{_fmt(hi)}" for k, (lo, hi) in data_range.items())
+
+
+def _far_result(args, tab: Dict[str, Any], t: Any, keys: List[str], values: List[str], r: Dict[str, Any],
+                near: List[Dict[str, Any]], data_range: Dict[str, List[float]], warnings: List[str]) -> Dict[str, Any]:
+    """3-5 (2026-11-10 결정): one point (--input) more than FAR_FIND x span outside the data range gets no value, as --find
+    gives no answer there: count 0 with the data range and the nearest measured rows (no result file)."""
+    far = _far_text(r["far"])
+    warnings.append(f"기준 값이 데이터 범위에서 데이터 폭의 {FAR_FIND:.0%}보다 멀어 값을 내지 않았습니다 ({far}). "
+                    f"외삽값은 데이터 폭의 {FAR_FIND:.0%}까지만 냅니다")
+    if args.save:
+        warnings.append("값이 없어 결과 파일(--save)은 만들지 않았습니다")
+    return {"status": "ok", "mode": t.mode, "keys": keys, "columns": values, "points": [], "nearest_rows": near,
+            "data_range": data_range, "count": 0, "verified": True,
+            "preview": f"값 없음: 기준 값이 데이터 범위에서 데이터 폭의 {FAR_FIND:.0%}보다 멂 ({far})",
+            "agent_directive": (f"VERIFIED: 값 없음(count 0). 기준 값이 데이터 범위에서 데이터 폭의 {FAR_FIND:.0%}보다 멀어 값을 내지 "
+                                "않았습니다. 다시 실행하지 말고 preview와 warnings, nearest_rows(가까운 실측 5행)를 사용자에게 알리세요. "
+                                f"값은 데이터 파일의 마지막 저장 시각({tab['saved_at']}) 기준입니다.")}
 
 
 def execute_forward(args) -> Dict[str, Any]:
@@ -719,8 +757,9 @@ def execute_forward(args) -> Dict[str, Any]:
         pcols = {str(c): (coerce_numeric(points_df[c]) if _is_numeric_col(points_df[c]) else points_df[c])
                  for c in points_df.columns}
         results = {i: t.at(x) for i, x in enumerate(X) if not bad[i] and i not in two_at}
-        per_column = any(_basis_differs(r) for r in results.values())
+        per_column = any(_basis_differs(r) for r in results.values() if not r["far"])
         out_rows, near_rows = [], []
+        n_far = 0
         for i, x in enumerate(X):
             base = {c: _cell(col.iloc[i]) for c, col in pcols.items()}
             if bad[i]:
@@ -731,6 +770,11 @@ def execute_forward(args) -> Dict[str, Any]:
                 out_rows.append({**base, "방식": f"계산 불가 ({keys[0]} 값 하나에 맞는 곳이 여러 군데: {found})"})
                 continue
             r = results[i]
+            if r["far"]:
+                # 3-5: as --find, a query more than FAR_FIND x span outside the data range has no value
+                out_rows.append({**base, "방식": f"계산 불가 (데이터 범위에서 너무 멂: {_far_text(r['far'])})"})
+                n_far += 1
+                continue
             out_rows.append({**base, **{f"보간_{c}": v for c, v in r["values"].items()}, "방식": r["method"],
                              "외삽": "예" if r["extrapolated"] else "", "범위 밖": "; ".join(f"{k}: {v}" for k, v in r["out_of_range"].items()),
                              **_basis_cells(r, per_column)})
@@ -742,7 +786,10 @@ def execute_forward(args) -> Dict[str, Any]:
         real, ok = _write_book(save, {"결과": pd.DataFrame(out_rows), "가까운 실측": pd.DataFrame(near_rows)}, args.overwrite)
         n_ext = sum(1 for r in out_rows if r.get("외삽") == "예")
         n_blank, n_text = int(blank.sum()), int((bad & ~blank).sum())
-        failed = int(bad.sum()) + len(two_at)
+        failed = int(bad.sum()) + len(two_at) + n_far
+        if n_far:
+            warnings.append(f"조회 {n_far}건은 데이터 범위에서 데이터 폭의 {FAR_FIND:.0%}보다 멀어 계산하지 않았습니다 "
+                            f"(외삽값은 폭의 {FAR_FIND:.0%}까지만 냄, 데이터 범위: {_range_text(data_range)}, 결과 파일 '방식' 열)")
         if n_blank:
             warnings.append(f"기준 값이 빈칸인 조회 {n_blank}건은 계산하지 않았습니다")
         if n_text:
@@ -767,6 +814,8 @@ def execute_forward(args) -> Dict[str, Any]:
     x = np.array([numeric[k] for k in keys])
     r = t.at(x)
     near = nearest_rows(t.df, keys, x, t.span, show)
+    if r["far"]:
+        return _common(tab, _far_result(args, tab, t, keys, values, r, near, data_range, warnings), warnings, input_pct)
     # numeric columns not given as keys: with --targets every other one; without it the value columns themselves (each one
     # moves with the others), never one value column alone (검토 B A2: 'asked' left this list always empty without --targets)
     if args.targets:
@@ -887,6 +936,12 @@ def execute_reverse(args) -> Dict[str, Any]:
     if far:
         warnings.append(f"데이터 범위({vary} {_fmt(lo)}~{_fmt(hi)})에서 데이터 폭의 {FAR_FIND:.0%}보다 먼 외삽 답 "
                         f"{', '.join(_fmt(x) for x in far)}은(는) 믿기 어려워 답으로 내지 않았습니다")
+    # 3-5: a fixed key (--input) far outside the data range gives no answer, as one point there gives no value
+    fixed_far = t.far_keys(np.concatenate([[lo], fixed])) if len(keys) > 1 else {}
+    if fixed_far:
+        warnings.append(f"고정한 기준 값이 데이터 범위에서 데이터 폭의 {FAR_FIND:.0%}보다 멀어 답을 내지 않았습니다 "
+                        f"({_far_text(fixed_far)})")
+        sols, runs = [], []
     # 검토 B D3: a flat stretch where every node equals the goal is one answer (from~to), not its nodes
     spans: Dict[float, Tuple[float, float]] = {}
     for a, b in runs:
@@ -946,7 +1001,11 @@ def execute_reverse(args) -> Dict[str, Any]:
     res["verified"] = not unverified
     if unverified:
         res["unverified"] = unverified
-    if res["count"] == 0:
+    if res["count"] == 0 and fixed_far:
+        res["preview"] = (f"{goal_col}={_fmt(y0)}이 되는 {vary}: 찾은 값 없음 (고정한 기준 값이 데이터 범위에서 너무 멂: "
+                          f"{_far_text(fixed_far)})")
+        directive = "찾은 값 없음(count 0). preview와 warnings, nearest_rows를 사용자에게 알리세요. "
+    elif res["count"] == 0:
         res["preview"] = (f"{goal_col}={_fmt(y0)}이 되는 {vary}: 찾은 값 없음 "
                           f"({vary} {_fmt(lo)}~{_fmt(hi)}에서 {goal_col}은 {_fmt(reach[0])}~{_fmt(reach[1])})")
         directive = "찾은 값 없음(count 0). preview의 도달 가능한 범위(reachable)와 nearest_rows를 사용자에게 알리세요. "
@@ -989,6 +1048,7 @@ def main():
     parser.add_argument("--header-row", type=int, help="데이터 머리글 행 번호 (생략 시 자동)")
     parser.add_argument("--unit-row", type=int, help="데이터 단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
+    add_sheet_argument(parser)      # --file의 시트 (--points 조회 파일은 첫 시트)
     args = parser.parse_args()
 
     if args.find or args.vary:

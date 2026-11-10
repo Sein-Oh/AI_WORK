@@ -4170,6 +4170,11 @@ def _fmt(v: float) -> str:
     return f"{v:.6g}"
 
 
+# ml_map (3-5, 2026-11-10 결정): a key value outside the data range by more than this share of the key's span gives no
+# answer, for --find (the value found) and for one point (--input, --points: the value given). Table.at gives such keys in 'far'.
+FAR_FIND = 0.3
+
+
 class Table:
     """Rows filtered by categorical keys, numeric keys (n x k) and value columns (n x m)."""
 
@@ -4318,7 +4323,13 @@ class Table:
                 method = "위아래 실측 2점 보간" if self.PK.shape[1] == 1 else f"둘러싼 실측 {len(basis)}점 보간"
                 extrap = False
         return {"values": {c: round(float(v), 6) for c, v in zip(self.values, val)}, "method": method,
-                "basis": basis, "extrapolated": extrap, "out_of_range": oor}
+                "basis": basis, "extrapolated": extrap, "out_of_range": oor, "far": self.far_keys(x, oor)}
+
+    def far_keys(self, x: np.ndarray, oor: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        """The out_of_range texts of the keys more than FAR_FIND x span outside the data range (no answer in ml_map)."""
+        oor = self.out_of_range(x) if oor is None else oor
+        far = (x < self.lo - FAR_FIND * self.span) | (x > self.hi + FAR_FIND * self.span)
+        return {k: oor[k] for j, k in enumerate(self.keys) if far[j] and k in oor}
 
 
 class MultiTable:
@@ -4407,7 +4418,8 @@ class MultiTable:
         return {"values": {c: vals[c] for c in self.values},
                 "method": methods[0] if len(methods) == 1 else "; ".join(f"{', '.join(c)}: {r['method']}" for c, r in parts),
                 "basis": parts[0][1]["basis"], "basis_by_column": {c: by_col[c] for c in self.values},
-                "extrapolated": any(r["extrapolated"] for _, r in parts), "out_of_range": oor}
+                "extrapolated": any(r["extrapolated"] for _, r in parts), "out_of_range": oor,
+                "far": {k: oor[k] for k in self.keys if any(k in r["far"] for _, r in parts)}}
 
 
 def nearest_rows(df: pd.DataFrame, cols: List[str], target: np.ndarray, span: np.ndarray,

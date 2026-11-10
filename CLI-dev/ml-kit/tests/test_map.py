@@ -133,11 +133,16 @@ def test_scattered_two_keys_enclosing_rows_and_far_point(process):
     assert len(r["nearest_rows"]) == 5 and r["nearest_rows"][0]["distance"] <= r["nearest_rows"][-1]["distance"]
     assert "센서오류" not in str(r) and any("제외" in w for w in r["warnings"])            # marked row not used
 
+    out = run_tool("ml_map.py", *P(process, "--input", "반응온도=290,소비전력=60", *args))
+    op = out["points"][0]
+    assert op["extrapolated"] and op["method"].startswith("전체 추세선 외삽")
+    assert op["values"]["생산효율(%)"] == pytest.approx(0.2 * 290 + 0.1 * 60, abs=0.5)     # trend line, not the end-point slope
+    assert "높음 (데이터 폭의 1" in op["out_of_range"]["반응온도(°C)"], op
+    # 3-5 (2026-11-10 결정): 데이터 폭의 30%보다 먼 점은 --find처럼 값을 내지 않는다 (전에는 폭의 2배 밖도 외삽값)
     far = run_tool("ml_map.py", *P(process, "--input", "반응온도=30,소비전력=200", *args))
-    fp = far["points"][0]
-    assert fp["extrapolated"] and fp["method"].startswith("전체 추세선 외삽")
-    assert abs(fp["values"]["생산효율(%)"]) < 100                                           # never the exploding end-point slope
-    assert "낮음 (데이터 폭의 2." in fp["out_of_range"]["반응온도(°C)"] and "높음" in fp["out_of_range"]["소비전력(kW)"]
+    assert far["count"] == 0 and far["points"] == [] and "값 없음" in far["preview"], far
+    w = " ".join(far["warnings"])
+    assert "30%" in w and "낮음 (데이터 폭의 2." in w and "높음" in w, w
 
 
 def test_one_uneven_key_is_scattered_and_category_filter(process):
@@ -599,3 +604,90 @@ def test_nan_and_percent_values(tmp_path):
     for bad in ("B=nan", "B=inf"):
         assert run_fail("ml_map.py", "--file", f, "--find", bad, "--vary", "A")["error_type"] == "input"
     assert run_fail("ml_map.py", "--file", f, "--input", "A=nan")["error_type"] == "input"
+
+
+# ---- 3-5(2026-11-10 결정): 한 건 사잇값도 --find처럼 데이터 폭의 30%까지만 외삽 -----------------------------
+
+
+def test_forward_far_extrapolation_gives_no_value(grid1, tmp_path):
+    """3-5: A 0~100 표에 A=500을 주면 직선 연장 값이 나왔다. 데이터 폭의 30% 안(A=125)은 [외삽] 값, 더 멀면(A=140) 값 없음(count 0)."""
+    near = run_tool("ml_map.py", *P(grid1, "--input", "A=125"))
+    assert near["count"] == 1 and near["points"][0]["extrapolated"] and "[외삽]" in near["preview"], near
+    far = run_tool("ml_map.py", *P(grid1, "--input", "A=140", "--save", str(tmp_path / "far.xlsx")))
+    assert far["count"] == 0 and far["points"] == [] and far["data_range"] == {"A": [0.0, 100.0]}, far
+    assert "값 없음" in far["preview"] and "0~100" in far["preview"], far
+    assert far["agent_directive"].startswith("VERIFIED:") and "count 0" in far["agent_directive"], far
+    assert any("30%" in w and "40 높음" in w for w in far["warnings"]), far
+    assert "output_file" not in far and not os.path.exists(tmp_path / "far.xlsx"), far
+    assert len(far["nearest_rows"]) == 5
+
+
+def test_points_far_extrapolation_is_not_computed(grid1, tmp_path):
+    q = tmp_path / "far_points.xlsx"
+    pd.DataFrame({"A": [12.5, 125, 140]}).to_excel(q, index=False)
+    r = run_tool("ml_map.py", *P(grid1, "--points", str(q)))
+    assert r["count"] == 3 and r["computed_count"] == 2 and r["failed_count"] == 1 and r["extrapolated_count"] == 1, r
+    sheet = pd.read_excel(r["output_file"], sheet_name="결과")
+    assert sheet["방식"][2].startswith("계산 불가 (데이터 범위에서 너무 멂") and pd.isna(sheet["보간_B"][2]), sheet
+    assert sheet["외삽"][1] == "예" and any("30%" in w for w in r["warnings"]), r
+
+
+def test_reverse_far_fixed_key_gives_no_answer(grid2):
+    """3-5: --find의 고정 기준(--input)도 같은 한도 (압력 1~5 표에 압력=10을 고정하면 직선 연장으로 찾은 답이 나왔음)."""
+    ok = run_tool("ml_map.py", *P(grid2, "--find", "효율=100", "--vary", "온도", "--input", "압력=5.5"))
+    assert ok["count"] == 1, ok
+    far = run_tool("ml_map.py", *P(grid2, "--find", "효율=100", "--vary", "온도", "--input", "압력=10"))
+    assert far["count"] == 0 and "너무 멂" in far["preview"] and any("30%" in w for w in far["warnings"]), far
+
+
+def test_table_far_field_uses_the_find_limit():
+    df = pd.DataFrame({"A": np.arange(0, 101, 5), "B": np.arange(0, 101, 5) * 2.0})
+    df["__row"] = np.arange(2, 2 + len(df))
+    t = rt.Table(df, ["A"], ["B"], [])
+    assert rt.FAR_FIND == 0.3
+    assert not t.at(np.array([129.0]))["far"] and "A" in t.at(np.array([131.0]))["far"]
+    assert "A" in t.at(np.array([-31.0]))["far"]
+
+
+# ---- 2-1(2026-11-10 결정): 표 파일의 --sheet --------------------------------------------------------------
+
+
+def _months_book(path):
+    wb = openpyxl.Workbook()
+    for k, m in enumerate(["1월", "2월", "3월"]):
+        ws = wb.active if k == 0 else wb.create_sheet(m)
+        ws.title = m
+        ws.append(["온도", "압력", "수율"])
+        r = np.random.default_rng(k)
+        for _ in range(20):
+            t, p = round(float(r.uniform(150, 200)), 1), round(float(r.uniform(1, 5)), 2)
+            ws.append([t, p, round(30 + 0.2 * t + 3 * p + 10 * k, 2)])
+    wb.save(path)
+    return str(path)
+
+
+def test_map_reads_the_named_sheet(tmp_path):
+    """2-1: ml_map --file은 첫 시트만 읽었다. --sheet로 고른 시트, 생략하면 첫 시트 + 다른 시트 [후보] 전체 명령."""
+    f = _months_book(tmp_path / "months.xlsx")
+    res = run_tool("ml_map.py", "--file", f, "--input", "온도=175", "--targets", "수율")
+    assert "[후보] 1) 2월 2) 3월" in " ".join(res.get("warnings", [])), res
+    cmds = [split_command(c["command"]) for c in res["confirm_commands"]]
+    assert [c[c.index("--sheet") + 1] for c in cmds] == ["2월", "3월"], cmds
+    picked = run_tool(os.path.basename(cmds[1][1]), *cmds[1][2:])
+    assert not any("시트" in w for w in picked.get("warnings", [])), picked
+    first = res["points"][0]["values"]["수율"]
+    assert picked["points"][0]["values"]["수율"] != first                    # 3월 rows (+20)
+    bad = run_fail("ml_map.py", "--file", f, "--input", "온도=175", "--sheet", "4월")
+    assert "[후보]" in bad["message"] and len(bad["confirm_commands"]) == 3, bad
+    csv = write_df(tmp_path / "g.csv", pd.DataFrame({"A": np.arange(0, 101, 10), "B": np.arange(0, 101, 10) * 2}))
+    res = run_tool("ml_map.py", "--file", csv, "--input", "A=15", "--sheet", "1월")
+    assert any("--sheet" in w for w in res.get("warnings", [])), res
+
+
+def test_map_built_commands_keep_the_sheet():
+    import argparse
+    import ml_map
+    ns = argparse.Namespace(file="표.xlsx", header_row=None, unit_row=None, data_row=None, input="온도=1", targets=None,
+                            find=None, vary=None, save=None, overwrite=False, sheet="2월")
+    cmd = split_command(ml_map._map_command(ns, input="온도=2"))
+    assert cmd[cmd.index("--sheet") + 1] == "2월" and cmd[cmd.index("--input") + 1] == "온도=2", cmd
