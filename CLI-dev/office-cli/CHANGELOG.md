@@ -2193,12 +2193,10 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - [ ] 2026-11-09 전체 검토(1.4.91)에서 찾은 것: `docs/history/office-cli_REVIEW_2026-11-09.md`. 1장·2장·3장은 1.4.92~1.4.96에서 처리
   (3장과 A7~A9는 회사 PC 실기 러너 L·M 그룹으로 확인할 것, C6·C12·C13·C18은 실기 결과를 보고 고침). 남은 것: 3장 끝의 마크다운 작은 것(사용자와 범위),
   4장 새 기능, 5장 경량 모델 운용(5장 3번 옵션 이름 통일은 사용자 결정). 전부 끝나면 이 줄을 지움
-- [ ] EML -> Outlook 가져오기 (사용자 요청 2026-11-09: 일반망에서 받은 .eml을 Outlook에 연결하는 것이 느림, 모두 eml, 답장 불필요).
-  시험 스크립트 `tools/eml_import_trial.py`(방법 셋: OpenSharedItem 그대로 / 상태·시각 속성 / 게시물을 메일로)를 회사 PC에서 돌려 결과로
-  `outlook.py import --folder` 설계. 안 되면 Outlook 없이 reader.py가 .eml을 읽는 방식 (옛 `parse_eml`, 커밋 f2e6737 이전).
-- [ ] EML 읽기·검색 캐시 (reader.py가 .eml 폴더를 index/search, 첨부 안의 글까지): 시험 스크립트 `tools/eml_read_trial.py`(헤더·본문·첨부·
-  전달 메일·검색, 결과 파일에는 메일 내용 없음) 결과로 결정. 메일 분류(폴더로 옮기기)는 보류 (검토: 분류 파일을 먼저 만들고 옮기는 방식,
-  10통씩 LLM 판단 방식. 2026-11-09 사용자 결정: 캐시 검색이 먼저)
+- [ ] EML 읽기·검색 (2026-11-10 사용자 결정: Outlook 가져오기 대신 이것으로. 회사 PC `tools/eml_read_trial.py` 결과 "잘 읽힘"):
+  reader.py가 .eml을 지원 형식으로 읽어 index/search/read (헤더·본문·첨부 안의 글, 전달 메일은 본문과 분리, 근거는 메일 제목·날짜·보낸 사람).
+  시험 스크립트의 eml 읽기 코드를 reader.py로 옮김. 메일 분류(폴더로 옮기기)는 보류 (2026-11-09 사용자 결정).
+  Outlook 가져오기(`tools/eml_import_trial.py`, 회사 PC에서 예외)는 사용자가 맡지 않기로 해 하지 않음 (스크립트는 남겨 둠)
 - [ ] 1.4.83 검토에서 남긴 것: `excel read --where`의 열 이름 `[후보]`는 번호 없음(식 안의 이름 자리를 바꾼 명령 필요), `word write --dry-run`이
   새 파일 경로에서 '문서 없음'으로 멈춤, `--all`의 뜻이 도구마다 다름
   (reply 전체 답장, chart 모든 차트, clear 캐시 전부), outlook `--to`/`--attach`/`--name`·word `--slots`의 `;` 구분(규칙 3번)
