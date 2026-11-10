@@ -1227,6 +1227,174 @@ def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: s
     return rt.ok(TOOL, "read", preview, "", **result)
 
 
+
+# ==============================================================================
+# stats: 표 집계 (2026-11-09 검토 4장 1번, 1.4.98)
+# ==============================================================================
+
+STATS_GROUPS_MAX = 50        # 결과 JSON에 담는 묶음 수 (넘으면 --save CSV)
+STATS_TOP_VALUES = 10        # 글자 열의 많이 나온 값 개수
+
+
+def _load_table(args) -> Tuple[str, int, int, List[List[Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
+    """read와 같은 대상(열린 문서, 닫힌 xlsx, CSV)에서 표를 읽음. (시트, 시작 행, 시작 열, 값, 대상 정보, 계산 안 된 수식 칸)."""
+    csv_path = closed_csv(args.target)
+    closed = None if csv_path else is_closed_xlsx(args.target)
+    if csv_path:
+        sheet, r0, c0, matrix, _ = _read_matrix_csv(csv_path, args.range)
+        return sheet, r0, c0, matrix, {"app": "Excel", "name": os.path.basename(csv_path), "path": csv_path, "source": "file(csv)"}, None
+    if closed:
+        sheet, r0, c0, matrix, _ = _read_matrix_closed(closed, args.sheet, args.range)
+        return (sheet, r0, c0, matrix, {"app": "Excel", "name": os.path.basename(closed), "path": closed, "source": "file(openpyxl)"},
+                closed_uncomputed(closed, sheet, r0, c0, matrix))
+    with off.open_target("excel", args.target, readonly=True) as t:
+        ws = t.sheet(args.sheet)
+        rng = target_range(t, ws, args.range)
+        matrix = off.range_to_matrix(rng.Value)
+        return str(rng.Worksheet.Name), int(rng.Row), int(rng.Column), matrix, t.resolved(), None
+
+
+def _stat_num(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or v is None:
+        return None
+    if _is_num(v):
+        return float(v)
+    if isinstance(v, str) and _LEADING_ZERO.match(v.strip()):
+        return None                     # 앞자리 0이 있는 글('0101' 품번)은 숫자가 아니라 코드
+    return _where_num(v) if isinstance(v, str) and v.strip() else None
+
+
+def _fmt(x: float) -> str:
+    if abs(x) >= 1e15 or (x != 0 and abs(x) < 1e-4):
+        return f"{x:.6g}"
+    r = round(x, 4)
+    return f"{int(r):,}" if float(r).is_integer() else f"{r:,.4f}".rstrip("0").rstrip(".")
+
+
+def _column_stats(values: List[Any]) -> Dict[str, Any]:
+    """한 열의 집계: 숫자가 많으면 건수·합계·평균·최소·최대, 글자가 많으면 건수·고유값 수·많이 나온 값."""
+    filled = [v for v in values if v is not None and _where_text(v) != ""]
+    nums = [n for n in (_stat_num(v) for v in filled) if n is not None]
+    if nums and len(nums) * 2 >= len(filled):
+        out: Dict[str, Any] = {"kind": "number", "count": len(nums), "sum": sum(nums), "mean": sum(nums) / len(nums),
+                               "min": min(nums), "max": max(nums)}
+        if len(nums) < len(filled):
+            out["not_number"] = len(filled) - len(nums)      # 숫자로 읽지 못해 뺀 칸 수
+        return out
+    counts: Dict[str, int] = {}
+    for v in filled:
+        k = _where_text(v)
+        counts[k] = counts.get(k, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:STATS_TOP_VALUES]
+    return {"kind": "text", "count": len(filled), "unique": len(counts), "top": [{"value": k, "count": n} for k, n in top]}
+
+
+def _stats_text(name: str, st: Dict[str, Any]) -> str:
+    if st["kind"] == "number":
+        return (f"{name}: 합계 {_fmt(st['sum'])}, 평균 {_fmt(st['mean'])}, 최소 {_fmt(st['min'])}, 최대 {_fmt(st['max'])} "
+                f"({st['count']}개)")
+    tops = ", ".join(f"{t['value']} {t['count']}" for t in st["top"][:3])
+    return f"{name}: {st['count']}개, 고유값 {st['unique']}개 (많은 값: {tops})"
+
+
+def cmd_stats(args) -> Dict[str, Any]:
+    """첫 행을 머리글로 보고 열마다 합계·평균·최소·최대·건수(숫자 열), 건수·고유값(글자 열). --by로 묶음별, --where로 거른 행만,
+    --top N은 묶음을 첫 집계 열의 합계가 큰 순으로 N개. 닫힌 xlsx·CSV는 Office 없이. 값은 도구가 계산해 preview에 글로."""
+    conds = parse_where(args.where) if args.where else None
+    if args.top is not None and args.top < 1:
+        raise rt.InputError(f"--top은 1 이상입니다 (받은 값 {args.top}). [추천] {rt.retry_command({'--top': 5})}")
+    sheet, r0, c0, matrix, source, unc = _load_table(args)
+    if len(matrix) < 2:
+        raise rt.InputError(f"{sheet}에 머리글 아래 데이터 행이 없습니다. --range로 표 범위를 주세요 (첫 행은 머리글).")
+    header = matrix[0]
+    ncols = max(len(r) for r in matrix)
+    names = [_where_text(header[j]) if j < len(header) and _where_text(header[j]) else f"{col_letter(c0 + j)}열" for j in range(ncols)]
+
+    def cell(i: int, j: int) -> Any:
+        return matrix[i][j] if j < len(matrix[i]) else None
+    rows = list(range(1, len(matrix)))
+    warnings: List[str] = []
+    if conds is not None:
+        groups_w = [[(resolve_column(col, header, c0, ncols, "조건 열", option="--where")[0], op, val) for col, op, val in g] for g in conds]
+        bad = _where_unreadable(matrix, groups_w, {j: names[j] for g in groups_w for j, _, _ in g})
+        if bad:
+            raise rt.InputError(bad + f" 형식: {WHERE_FORM}")
+        rows = [i for i in rows if any(all(_where_match(cell(i, j), op, val) for j, op, val in g) for g in groups_w)]
+    by = [resolve_column(b.strip(), header, c0, ncols, "묶을 열", option="--by")[0] for b in args.by.split(",") if b.strip()] if args.by else []
+    if args.columns:
+        cols = [resolve_column(c.strip(), header, c0, ncols, "집계할 열", option="--columns")[0] for c in args.columns.split(",") if c.strip()]
+    else:   # 생략: 숫자가 많은 열 전부 (묶는 열 제외)
+        cols = [j for j in range(ncols) if j not in by
+                and _column_stats([cell(i, j) for i in range(1, len(matrix))]).get("kind") == "number"]   # 거르기 전 전체 행으로 정함
+        if not cols:
+            raise rt.InputError("숫자 열을 찾지 못했습니다. 집계할 열을 --columns로 주세요 (예: --columns 금액,수량).")
+    if args.top is not None and not by:
+        warnings.append("--top은 --by(묶음)와 함께 쓰는 옵션이라 쓰지 않음")
+    buckets: Dict[Tuple[str, ...], List[int]] = {}
+    for i in rows:
+        key = tuple(_where_text(cell(i, j)) for j in by)
+        buckets.setdefault(key, []).append(i)
+    result_groups = []
+    for key, idx in buckets.items():
+        g = {"rows": len(idx), "stats": {names[j]: _column_stats([cell(i, j) for i in idx]) for j in cols}}
+        if by:
+            g = {"by": {names[j]: k for j, k in zip(by, key)}, **g}
+        result_groups.append(g)
+    first = names[cols[0]]
+    if by:
+        def sort_key(g: Dict[str, Any]) -> Any:
+            st = g["stats"][first]
+            return (-(st.get("sum") or 0.0), -g["rows"]) if args.top is not None else tuple(g["by"].values())
+        result_groups.sort(key=sort_key)
+        if args.top is not None:
+            result_groups = result_groups[:args.top]
+    where = f"{sheet}!{addr(r0, c0, r0 + len(matrix) - 1, c0 + ncols - 1)}"
+    cond_text = f", 조건 {where_text(conds)}" if conds else ""
+    fields: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": where.split("!")[-1], "data_rows": len(matrix) - 1,
+                              "rows_used": len(rows), "columns": [names[j] for j in cols], "group_count": len(result_groups)}
+    if conds:
+        fields["where"] = where_text(conds)
+    if by:
+        fields["by"] = [names[j] for j in by]
+    if warnings:
+        fields["warnings"] = warnings
+    if not rows:
+        return rt.ok(TOOL, "stats", f"0건: {where}에 조건({where_text(conds)})에 맞는 행이 없습니다",
+                     f"VERIFIED: 0건. 조건({where_text(conds)})에 맞는 행이 없어 집계할 것이 없습니다. 사용자에게 그대로 알리세요.",
+                     groups=[], **fields)
+    shown = result_groups[:STATS_GROUPS_MAX]
+    fields.update(groups=shown, shown=len(shown), truncated=len(result_groups) > len(shown))
+    if args.save or fields["truncated"]:
+        head = [names[j] for j in by] + ["행 수"]
+        for j in cols:
+            st0 = result_groups[0]["stats"][names[j]]
+            head += ([f"{names[j]} 합계", f"{names[j]} 평균", f"{names[j]} 최소", f"{names[j]} 최대", f"{names[j]} 건수"]
+                     if st0["kind"] == "number" else [f"{names[j]} 건수", f"{names[j]} 고유값"])
+        table = [head]
+        for g in result_groups:
+            line = list((g.get("by") or {}).values()) + [g["rows"]]
+            for j in cols:
+                st = g["stats"][names[j]]
+                line += ([st.get("sum"), st.get("mean"), st.get("min"), st.get("max"), st["count"]] if st["kind"] == "number"
+                         else [st["count"], st.get("unique")])
+            table.append(line)
+        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_집계", ".csv")
+        out = rt.write_csv_rows(out, table)
+        fields["output_file" if args.save else "full_result_file"] = out
+    if by:
+        lines = [", ".join(f"{k}" for k in g["by"].values()) + f" ({g['rows']}행): "
+                 + "; ".join(_stats_text(n, st) for n, st in g["stats"].items()) for g in shown[:5]]
+        preview = (f"{where}{cond_text}: {', '.join(fields['by'])}별 {len(result_groups)}묶음"
+                   + (f" (합계 상위 {args.top})" if args.top else "") + ". " + " / ".join(lines)
+                   + (f" / ... 외 {len(shown) - 5}묶음" if len(shown) > 5 else ""))
+    else:
+        preview = f"{where}{cond_text} ({len(rows)}행): " + "; ".join(_stats_text(n, st) for n, st in shown[0]["stats"].items())
+    directive = ("VERIFIED: 도구가 읽은 값으로 집계했습니다. preview의 숫자를 그대로 알리세요 (직접 더하거나 다시 계산하지 마세요)."
+                 + (" 묶음이 많아 일부만 담았습니다: 전체는 full_result_file." if fields["truncated"] else ""))
+    payload = rt.ok(TOOL, "stats", preview, directive, **fields)
+    return xf.with_uncomputed(payload, unc) if unc else payload
+
+
 XL_CHART_NAMES = {51: "column", 57: "bar", 4: "line", 65: "line_markers", 5: "pie", 1: "area",
                   -4169: "scatter", 75: "scatter_lines", 74: "scatter_lines_markers"}
 
@@ -1284,6 +1452,28 @@ def _sheet_summary(ws: Any, detail: bool = False) -> Dict[str, Any]:
     return info
 
 
+def _closed_info(path: str) -> Dict[str, Any]:
+    """닫힌 xlsx의 시트 목록과 데이터 범위 (Office 없이, 2026-11-09 검토 4장 1번: info가 늘 Excel을 띄웠음). 차트 시트는 kind 'chart'."""
+    openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일의 시트 목록")
+    wb = _load_closed(openpyxl, path)
+    try:
+        sheets = []
+        for ws in wb.worksheets:
+            r1, c1, r2, c2 = _closed_bounds(ws, path)
+            used = addr(r1, c1, r2, c2) if r2 >= r1 and c2 >= c1 else ""
+            sheets.append({"name": ws.title, "used_range": used, "rows": max(0, r2 - r1 + 1), "cols": max(0, c2 - c1 + 1),
+                           "hidden": getattr(ws, "sheet_state", "visible") != "visible"})
+        sheets += [{"name": c.title, "kind": "chart"} for c in getattr(wb, "chartsheets", [])]
+        active = getattr(wb.active, "title", None)
+    finally:
+        wb.close()
+    source = {"app": "Excel", "name": os.path.basename(path), "path": path, "source": "file(openpyxl)"}
+    names = ", ".join(f"{x['name']}({x.get('used_range') or '차트'})" for x in sheets[:10])
+    return rt.ok(TOOL, "info", f"{os.path.basename(path)}: 시트 {len(sheets)}개 - {names}" + (" 등" if len(sheets) > 10 else ""),
+                 "VERIFIED: 파일을 읽어 시트 목록을 확인했습니다 (Office 없이).", target_resolved=source, sheets=sheets,
+                 active_sheet=active)
+
+
 def cmd_info(args) -> Dict[str, Any]:
     if args.all:
         books = [{"name": d["name"], "path": d["path"], "saved": d["saved"], "active": d["active"]}
@@ -1292,6 +1482,9 @@ def cmd_info(args) -> Dict[str, Any]:
             return off.no_open_docs_result(TOOL, "info", "0건: 열린 통합문서가 없습니다",
                          "VERIFIED: 0건. 열린 Excel 통합문서가 없습니다. 사용자에게 그대로 알리세요.", workbooks=books, count=0)
         return rt.ok(TOOL, "info", f"열린 통합문서 {len(books)}개", workbooks=books, count=len(books))
+    closed = None if closed_csv(args.target) else is_closed_xlsx(args.target)
+    if closed and not args.detail:
+        return _closed_info(closed)
     with off.open_target("excel", args.target, readonly=True) as t:
         wb = t.doc
         sheets = [_sheet_summary(wb.Worksheets(i), args.detail) for i in range(1, wb.Worksheets.Count + 1)]
@@ -4507,6 +4700,15 @@ def build_cli():
                    help="수식 칸 목록도 함께 (formulas: cell, formula, value). --search는 수식 글에서도 찾음")
     p.add_argument("--where", help="조건에 맞는 행만 (첫 행은 머리글): '금액 >= 100; 부서 = 영업'. 연산자 >= <= > < = != ~(포함)")
 
+    p = sub.add_parser("stats", help="표 집계: 합계·평균·최소·최대·건수 (--by 묶음별, --where 거른 행만)")
+    common(p)
+    p.add_argument("--range", help="표 범위 (생략 시 사용 범위 전체, 첫 행은 머리글)")
+    p.add_argument("--columns", help="집계할 열 (쉼표로, 머리글 이름 또는 열 문자. 생략 시 숫자 열 전부)")
+    p.add_argument("--by", help="묶을 열 (쉼표로): 묶음마다 집계 (예: --by 부서)")
+    p.add_argument("--where", help="조건에 맞는 행만 (read --where와 같은 식)")
+    p.add_argument("--top", type=int, help="--by 묶음을 첫 집계 열의 합계가 큰 순으로 N개만")
+    p.add_argument("--save", nargs="?", const=True, help="집계 결과를 CSV로 저장")
+
     p = sub.add_parser("info", help="통합문서 요약")
     common(p)
     p.add_argument("--all", action="store_true", help="열린 통합문서 전체 목록")
@@ -4632,7 +4834,7 @@ def build_cli():
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
             "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
-            "comment": cmd_comment, "check": cmd_check, "compare": cmd_compare}
+            "comment": cmd_comment, "check": cmd_check, "compare": cmd_compare, "stats": cmd_stats}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

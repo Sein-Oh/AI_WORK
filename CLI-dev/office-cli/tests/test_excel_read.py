@@ -1682,3 +1682,56 @@ def test_big_closed_file_stops_before_time_limit(tmp_path, capsys, monkeypatch):
     assert "--range" in out["agent_directive"] and out["count"] == 1998, out
     code, out = run_excel(capsys, "export", "--target", str(p), "--save", str(tmp_path / "o.csv"))
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--range" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 4장 1번 (1.4.98): stats 표 집계 (닫힌 xlsx·CSV는 Office 없이, 열린 문서는 COM)
+# ---------------------------------------------------------------------------
+
+
+def _sales_csv(tmp_path):
+    p = tmp_path / "매출.csv"
+    p.write_text("부서,품번,금액,수량\n영업,0101,1000,2\n영업,0102,3000,1\n개발,0103,500,4\n개발,0104,1500,1\n기획,0105,200,3\n",
+                 encoding="utf-8")
+    return str(p)
+
+
+def test_stats_totals_groups_where_and_top(tmp_path, capsys):
+    p = _sales_csv(tmp_path)
+    code, out = run_excel(capsys, "stats", "--target", p)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["columns"] == ["금액", "수량"], out    # 품번(앞자리 0)은 코드
+    st = out["groups"][0]["stats"]["금액"]
+    assert (st["sum"], st["mean"], st["min"], st["max"], st["count"]) == (6200, 1240, 200, 3000, 5), st
+    assert "금액: 합계 6,200, 평균 1,240, 최소 200, 최대 3,000 (5개)" in out["preview"], out["preview"]
+    code, out = run_excel(capsys, "stats", "--target", p, "--by", "부서", "--columns", "금액")
+    assert [g["by"]["부서"] for g in out["groups"]] == ["개발", "기획", "영업"] and out["groups"][2]["stats"]["금액"]["sum"] == 4000, out
+    code, out = run_excel(capsys, "stats", "--target", p, "--by", "부서", "--columns", "금액", "--top", "1")
+    assert out["group_count"] == 1 and out["groups"][0]["by"]["부서"] == "영업", out
+    code, out = run_excel(capsys, "stats", "--target", p, "--where", "금액 >= 1000", "--columns", "수량")
+    assert out["rows_used"] == 3 and out["groups"][0]["stats"]["수량"]["sum"] == 4, out
+    code, out = run_excel(capsys, "stats", "--target", p, "--columns", "부서")
+    st = out["groups"][0]["stats"]["부서"]
+    assert st["kind"] == "text" and st["unique"] == 3 and st["top"][0] == {"value": "개발", "count": 2}, st
+    code, out = run_excel(capsys, "stats", "--target", p, "--where", "금액 > 99999")
+    assert code == 0 and out["groups"] == [] and "0건" in out["agent_directive"], out
+    code, out = run_excel(capsys, "stats", "--target", p, "--by", "부서", "--save", str(tmp_path / "집계.csv"))
+    rows = rt.read_csv_rows(out["output_file"])
+    assert rows[0][:3] == ["부서", "행 수", "금액 합계"] and len(rows) == 4, rows
+
+
+def test_stats_closed_xlsx_and_open_document(tmp_path, capsys, xl_table):
+    p = _table_xlsx(tmp_path / "목록.xlsx")
+    code, out = run_excel(capsys, "stats", "--target", p, "--columns", "금액")
+    assert code == 0 and out["groups"][0]["stats"]["금액"]["count"] >= 4, out
+    code, out = run_main(excel, capsys, "stats", "--by", "부서", "--columns", "금액")      # 열린 문서 (가짜 COM)
+    assert code == 0 and {g["by"]["부서"]: g["stats"]["금액"]["sum"] for g in out["groups"]} == {"영업": 500, "개발": 100, "기획": 1000}, out
+
+
+def test_info_of_closed_xlsx_needs_no_office(tmp_path, capsys, monkeypatch):
+    """2026-11-09 검토 4장 1번: 닫힌 파일의 시트 목록 (전에는 info가 늘 Excel을 띄움)."""
+    p = _chartsheet_xlsx(tmp_path / "c.xlsx")
+    monkeypatch.setattr(excel.off, "open_target", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Office를 열면 안 됨")))
+    code, out = run_excel(capsys, "info", "--target", p)
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert out["sheets"][0] == {"name": "데이터", "used_range": "A1:B3", "rows": 3, "cols": 2, "hidden": False}, out
+    assert out["sheets"][1] == {"name": "차트", "kind": "chart"} and out["active_sheet"] == "차트", out

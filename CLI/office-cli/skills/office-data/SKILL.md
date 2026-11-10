@@ -1,10 +1,10 @@
 ---
 name: office-data
-description: 엑셀·CSV 표 데이터 작업. 표 두 판(이전 판, 새 판) 비교와 BOM(부품 목록) 개정 비교 - 추가·삭제·수량 변경·위치(Ref Des) 변경·속성 변경, 품번 변경 추정, 결과 xlsx와 새 판 칸 메모. 표 집계도 앞으로 이 스킬에 둔다. BOM 비교, 개정 전후 표 비교, 바뀐 행 찾기 요청에 사용. 엑셀 읽기·쓰기는 office-excel, 문서 두 판 비교(글)는 office-spec.
+description: 엑셀·CSV 표 데이터 작업. 표 두 판(이전 판, 새 판) 비교와 BOM(부품 목록) 개정 비교 - 추가·삭제·수량 변경·위치(Ref Des) 변경·속성 변경, 품번 변경 추정, 결과 xlsx와 새 판 칸 메모. 표 집계(합계·평균·최소·최대·건수, 묶음별, 상위 N). BOM 비교, 개정 전후 표 비교, 바뀐 행 찾기, 표 합계·평균 요청에 사용. 엑셀 읽기·쓰기는 office-excel, 문서 두 판 비교(글)는 office-spec.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.97"
+  version: "1.4.98"
   platform: windows
 ---
 
@@ -24,6 +24,7 @@ metadata:
 | 결과 파일 경로를 정해 비교 | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>" --save "<결과.xlsx>"` |
 | 시트를 정해 비교 | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>" --sheet "<이전 시트>" --sheet2 "<새 시트>"` |
 | 짝지을 열을 정해 비교 | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>" --key "<머리글 이름>"` (여럿이면 `--key "상위품번,품번"`) |
+| 표 집계 (합계·평균·최소·최대·건수) | `python "C:\CLI\office-cli\excel.py" stats --target "<파일.xlsx 또는 .csv>"` (열: `--columns 금액,수량`, 묶음별: `--by 부서`, 조건: `--where "금액 >= 100"`, 합계 상위 N묶음: `--by 부서 --top 5`) |
 | 되돌리기 (메모) | `python "C:\CLI\office-cli\office.py" undo` |
 
 - `.xlsx`, `.xlsm`, `.csv`, `.tsv`를 읽는다. `.xls`는 사용자에게 엑셀에서 `.xlsx`로 저장해 달라고 한다.
@@ -33,6 +34,7 @@ metadata:
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
+- `stats`는 `preview`의 숫자를 그대로 알린다. 표를 읽어 직접 더하거나 평균을 내지 않는다 (글자 열은 건수·고유값·많은 값).
 - `preview`(구분별 건수, 짝짓기 키, 인식한 열)와 `warnings`를 그대로 알린다. 0건이면 "바뀐 것 없음"이라고 알린다.
 - 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`는 항목의 `key`와 함께 보여 준다.
 - `replaced_guess`는 도구의 추정이다. "품번이 바뀐 것으로 보임(확인 필요)"이라고 알리고 확정하지 않는다.
