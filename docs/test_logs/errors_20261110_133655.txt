@@ -1,0 +1,926 @@
+# office-cli 실기 테스트 오류 로그 (분석용)
+# 생성 20261110_133655. 이 파일 전체를 그대로 Claude에게 전달하세요. 편집하지 마세요.
+
+## 1. 환경
+office-cli 버전: 1.5.1 (C:\CLI\office-cli)
+Windows: Windows-11-10.0.26200-SP0 / 10.0.26200
+Python: 3.13.13 (C:\CLI\python\python.exe)
+라이브러리: pywin32 312, openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, pymupdf 1.28.2, olefile 0.47, matplotlib 3.11.1, numpy 2.5.4
+Office (office.py windows의 office): {}
+config.json: {"transfer_method": {"word": ["export", "redraw"], "ppt": ["export", "redraw"]}}
+러너 옵션: only=None auto=False agent=False skip_outlook=False self_email=없음 keep_open=False
+테스트 폴더: C:\CLI-dev\work\office / 도구 환경변수: {"OFFICE_CLI_CACHE_DIR": "C:\\CLI-dev\\work\\office\\_cache", "OFFICE_CLI_DATA_DIR": "C:\\CLI-dev\\work\\office\\_data", "OFFICE_CLI_TIME_LIMIT": "0"}
+소요 시간: 959초
+
+## 2. 요약
+결과: ENV-SKIP=1, ERROR=1, FAIL=5, MANUAL-SKIP=4, PASS=93
+문제 항목: G5(FAIL), L1(ERROR), L4(FAIL), L5(FAIL), L9(FAIL), M4(FAIL)
+건너뜀: G3(MANUAL-SKIP: --self-email 미지정으로 건너뜀), L11(MANUAL-SKIP: ), L15(MANUAL-SKIP: ), M3(ENV-SKIP: --self-email 없음), M5(MANUAL-SKIP: )
+
+## 3. 러너 자동 복구와 창/프로세스 정리
+자동 복구: 없음
+정리 기록: 
+  13:39:08 [A5] 대상 문서=C_second_instance.xlsx, 끝내도 되는 PID=[21784]
+  13:39:08 [A5]   excel pid 21784: 문서 닫음 C_second_instance.xlsx
+  13:39:08 [A5]   excel pid 6980: 문서 1개 남음 -> 보호 (종료하지 않음)
+  13:39:08 [A5]   word pid 21836: 문서 1개 남음 -> 보호 (종료하지 않음)
+  13:39:08 [A5]   ppt pid None: 문서 1개 남음 -> 보호 (종료하지 않음)
+  13:39:08 [A5]   excel pid 21784: Quit (이 단계가 띄운 프로세스)
+  13:39:08 [A5]   WM_CLOSE 안 함 XLMAIN pid 6980 제목='Excel' 표시=False: 문서가 열려 있는 프로세스 (보호)
+  13:39:08 [A5]   WM_CLOSE 안 함 XLMAIN pid 6980 제목='Excel' 표시=False: 문서가 열려 있는 프로세스 (보호)
+  13:39:08 [A5]   WM_CLOSE 안 함 XLMAIN pid 6980 제목='Excel' 표시=False: 문서가 열려 있는 프로세스 (보호)
+  13:39:08 [A5]   WM_CLOSE 안 함 XLMAIN pid 6980 제목='' 표시=False: 문서가 열려 있는 프로세스 (보호)
+  13:39:08 [A5]   보호한 PID: [6980, 21836, 27508]
+  13:52:38 [종료 정리] 대상 문서=테스트 폴더 전체, 끝내도 되는 PID=실행 중 생긴 프로세스
+  13:52:38 [종료 정리]   excel pid 6980: 문서 닫음 A.xlsx
+  13:52:38 [종료 정리]   excel pid 6980: 문서 닫음 통합 문서3
+  13:52:38 [종료 정리]   word pid 21836: 문서 닫음 A.docx
+  13:52:38 [종료 정리]   ppt pid None: 문서 닫음 A.pptx
+  13:52:38 [종료 정리]   excel pid 6980: Quit (테스트 실행 중 생긴 빈 프로세스)
+  13:52:38 [종료 정리]   word pid 21836: Quit (테스트 실행 중 생긴 빈 프로세스)
+  13:52:38 [종료 정리]   ppt pid None: Quit (문서 0개 (PID 모름))
+  13:52:38 [종료 정리]   WM_CLOSE XLMAIN pid 6980 hwnd 7736196 제목='Excel' 표시=False
+  13:52:38 [종료 정리]   WM_CLOSE XLMAIN pid 6980 hwnd 3479432 제목='Excel' 표시=False
+  13:52:38 [종료 정리]   WM_CLOSE XLMAIN pid 6980 hwnd 23007776 제목='Excel' 표시=False
+  13:52:38 [종료 정리]   WM_CLOSE XLMAIN pid 6980 hwnd 12653094 제목='Excel' 표시=False
+  13:52:38 [종료 정리]   WM_CLOSE XLMAIN pid 6980 hwnd 53940930 제목='Excel' 표시=False
+  13:52:38 [종료 정리]   WM_CLOSE XLMAIN pid 6980 hwnd 14944780 제목='' 표시=False
+
+## 4. 문제 항목 상세
+
+----------------------------------------------------------------------
+[FAIL] G5 짧은 번호로 읽기, 대화 묶음, 일정 7일 (읽기 전용)
+  판정 근거: 목록 3통, 1번 읽기 같은 메일=False, 대화 1통, 일정 0개
+  이 항목에서 실행한 도구 명령 4개:
+    $ python outlook.py list --limit 3
+      시작 13:42:48 / 종료코드 0 / 1.55초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "outlook",
+          "command": "list",
+          "preview": "'받은 편지함' 폴더 최근 메일 3통",
+          "folder": "받은 편지함",
+          "mails": [
+            {
+              "subject": "RE: 테스트 메일 1",
+              "from": "홍길동(Hong Gildong)/개발팀",
+              "received": "2026-11-10 13:40:55",
+              "unread": true,
+              "attachments": 1,
+              "id": 3
+            },
+            {
+              "subject": "테스트 메일 1",
+              "from": "홍길동(Hong Gildong)/개발팀",
+              "received": "2026-11-10 13:40:24",
+              "unread": true,
+              "attachments": 0,
+              "id": 4
+            },
+            {
+              "subject": "테스트 메일 2",
+              "from": "김철수(Cheolsu Kim)/영업팀",
+              "received": "2026-11-10 11:15:35",
+              "unread": false,
+              "attachments": 4,
+              "id": 5
+            }
+          ],
+          "count": 3,
+          "verified": true,
+          "agent_directive": "VERIFIED: 작업이 완료되었습니다. 같은 명령을 다시 실행하거나 결과를 다시 조회하지 마세요."
+        }
+      stderr:
+        [PROGRESS] Outlook이 실행 중이 아니어서 백그라운드로 연결합니다.
+    $ python outlook.py read --id 1
+      시작 13:42:49 / 종료코드 0 / 1.69초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "outlook",
+          "command": "read",
+          "preview": "'[office-cli 테스트] 표시 전용' ()",
+          "mail": {
+            "entry_id": "000000002C804C959361204A9279803DE53A29250700154342FE5D7FDA49B34F6407CB9A3BC000000000010F0000154342FE5D7FDA49B34F6407CB9A3BC000031FA004190000",
+            "subject": "[office-cli 테스트] 표시 전용",
+            "from": "",
+            "received": "2026-11-10 13:41:52",
+            "unread": false,
+            "attachments": 0,
+            "to": "office-test@example.com",
+            "cc": "",
+            "source": "id"
+          },
+          "body": "본문 테스트",
+          "body_truncated": false,
+          "verified": true,
+          "agent_directive": "VERIFIED: 작업이 완료되었습니다. 같은 명령을 다시 실행하거나 결과를 다시 조회하지 마세요."
+        }
+      stderr:
+        [PROGRESS] Outlook이 실행 중이 아니어서 백그라운드로 연결합니다.
+    $ python outlook.py thread --id 1
+      시작 13:42:51 / 종료코드 0 / 1.65초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "outlook",
+          "command": "thread",
+          "preview": "대화 '[office-cli 테스트] 표시 전용' 메일 1통 (오래된 순)",
+          "verified": true,
+          "topic": "[office-cli 테스트] 표시 전용",
+          "mails": [
+            {
+              "subject": "[office-cli 테스트] 표시 전용",
+              "from": "",
+              "received": "2026-11-10 13:41:52",
+              "unread": false,
+              "attachments": 0,
+              "body": "본문 테스트",
+              "body_truncated": false,
+              "id": 1
+            }
+          ],
+          "count": 1,
+          "shown": 1,
+          "truncated": false,
+          "next_commands": [
+            {
+              "purpose": "가장 최근 메일 본문 전체 읽기",
+              "command": "python C:\\CLI\\office-cli\\outlook.py read --id 1"
+            }
+          ],
+          "agent_directive": "VERIFIED: 같은 대화의 메일을 읽었습니다(읽기만). 시간 순으로 누가 무엇을 보냈는지 요약해 알리세요."
+        }
+      stderr:
+        [PROGRESS] Outlook이 실행 중이 아니어서 백그라운드로 연결합니다.
+    $ python outlook.py calendar --days 7
+      시작 13:42:53 / 종료코드 0 / 1.53초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "outlook",
+          "command": "calendar",
+          "preview": "0건: 2026-11-10 ~ 2026-11-16 (7일) 일정 없음",
+          "verified": true,
+          "period": {
+            "since": "2026-11-10",
+            "until": "2026-11-16",
+            "days": 7
+          },
+          "events": [],
+          "count": 0,
+          "truncated": false,
+          "agent_directive": "VERIFIED: 0건. 2026-11-10 ~ 2026-11-16 (7일)에 일정이 없습니다. 사용자에게 그대로 알리고 다시 실행하지 마세요."
+        }
+      stderr:
+        [PROGRESS] Outlook이 실행 중이 아니어서 백그라운드로 연결합니다.
+  이 항목의 진행 로그:
+        
+        [G5] 짧은 번호·대화·일정
+            $ python outlook.py list --limit 3
+            $ python outlook.py read --id 1
+            $ python outlook.py thread --id 1
+            $ python outlook.py calendar --days 7
+          => [FAIL] G5 짧은 번호로 읽기, 대화 묶음, 일정 7일 (읽기 전용) - 목록 3통, 1번 읽기 같은 메일=False, 대화 1통, 일정 0개
+
+----------------------------------------------------------------------
+[ERROR] L1 통화 열
+  판정 근거: 테스트 스크립트 예외: ValueError: could not convert string to float: '금액'
+  테스트 스크립트 traceback:
+        Traceback (most recent call last):
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 324, in run_test
+            fn()
+            ~~^^
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 2446, in l1
+            vals = com_retry(lambda: [float(v[0]) for v in xl_sheet("L_CUR").Range("B2:B4").Value])
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 214, in com_retry
+            raise last
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 206, in com_retry
+            return fn()
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 2446, in <lambda>
+            vals = com_retry(lambda: [float(v[0]) for v in xl_sheet("L_CUR").Range("B2:B4").Value])
+                                      ~~~~~^^^^^^
+        ValueError: could not convert string to float: '금액'
+  이 항목에서 실행한 도구 명령 2개:
+    $ python excel.py write --sheet L_CUR --new-sheet --range A1 --values [[\"품목\",\"금액\"],[\"a\",10],[\"b\",100],[\"c\",9]]
+      시작 13:47:06 / 종료코드 0 / 1.83초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "excel",
+          "command": "write",
+          "preview": "L_CUR!A1:B4에 썼습니다 (4행 x 2열)",
+          "verified": true,
+          "target_resolved": {
+            "app": "Excel",
+            "name": "A.xlsx",
+            "path": "C:\\CLI-dev\\work\\office\\A.xlsx",
+            "source": "active",
+            "sheet": "L_CUR"
+          },
+          "sheet": "L_CUR",
+          "range_written": "A1:B4",
+          "rows": 4,
+          "cols": 2,
+          "confirm_commands": [
+            {
+              "purpose": "방금 쓴 범위로 차트 만들기, 사용자가 원할 때만 (제목은 --title \"제목\"을 붙임, --type은 원하는 종류로)",
+              "command": "python C:\\CLI\\office-cli\\excel.py chart --target active --range L_CUR!A1:B4 --type line"
+            }
+          ],
+          "agent_directive": "VERIFIED: 쓴 칸을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요. 사용자가 차트를 원하면 confirm_commands[0]을 1번 실행하세요."
+        }
+    $ python excel.py range --sheet L_CUR --action sort --range A1:B4 --by 금액
+      시작 13:47:08 / 종료코드 0 / 1.69초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "excel",
+          "command": "range",
+          "preview": "L_CUR!A1:B4 정렬: 금액 오름차순 (3행, 머리글 있음: --by가 머리글 이름)",
+          "target_resolved": {
+            "app": "Excel",
+            "name": "A.xlsx",
+            "path": "C:\\CLI-dev\\work\\office\\A.xlsx",
+            "source": "active",
+            "sheet": "L_CUR"
+          },
+          "sheet": "L_CUR",
+          "range": "A1:B4",
+          "rows": 3,
+          "header": true,
+          "header_decided_by": "--by가 머리글 이름",
+          "keys": [
+            {
+              "column": "B",
+              "name": "금액",
+              "order": "asc"
+            }
+          ],
+          "verified": false,
+          "unverified": [
+            "머리글 행이 바뀜"
+          ],
+          "agent_directive": "UNVERIFIED: 실행했지만 확인하지 못했습니다: 머리글 행이 바뀜. 다시 실행하지 말고 사용자에게 그대로 알리세요."
+        }
+  이 항목의 진행 로그:
+        
+        [L1] 통화 열
+            $ python excel.py write --sheet L_CUR --new-sheet --range A1 --values [[\"품목\",\"금액\"],[\"a\",10],[\"b\",100],[\"c\",9]]
+            $ python excel.py range --sheet L_CUR --action sort --range A1:B4 --by 금액
+          => [ERROR] L1 could not convert string to float: '금액'
+
+----------------------------------------------------------------------
+[FAIL] L4 C1 표 바로 위 단락 뒤에 쓴 글이 표 첫 칸에 들어가지 않음
+  판정 근거: 표 첫 칸='L 새 글 134706\rL칸 134706'
+  이 항목에서 실행한 도구 명령 1개:
+    $ python word.py write --target C:\CLI-dev\work\office\A.docx --anchor "L 표 위 134706" --text "L 새 글 134706"
+      시작 13:47:22 / 종료코드 0 / 1.68초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "word",
+          "command": "write",
+          "preview": "A.docx의 'L 표 위 134706' 단락 뒤 (표 앞)에 넣었습니다: 본문",
+          "verified": true,
+          "target_resolved": {
+            "app": "Word",
+            "name": "A.docx",
+            "path": "C:\\CLI-dev\\work\\office\\A.docx",
+            "source": "open"
+          },
+          "inserted": [
+            "본문"
+          ],
+          "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+        }
+  이 항목의 진행 로그:
+        
+        [L4] 표 위 앵커
+            $ python word.py write --target C:\CLI-dev\work\office\A.docx --anchor "L 표 위 134706" --text "L 새 글 134706"
+          => [FAIL] L4 C1 표 바로 위 단락 뒤에 쓴 글이 표 첫 칸에 들어가지 않음 - 표 첫 칸='L 새 글 134706\rL칸 134706'
+
+----------------------------------------------------------------------
+[FAIL] L5 C2 새 번호 목록은 앞 목록에 이어지지 않고 1부터
+  판정 근거: 번호='3.'
+  이 항목에서 실행한 도구 명령 3개:
+    $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "1. L첫목록 가 134706
+2. L첫목록 나 134706"
+      시작 13:47:24 / 종료코드 0 / 1.98초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "word",
+          "command": "write",
+          "preview": "A.docx의 문서 끝에 넣었습니다: 번호 목록 2개",
+          "verified": true,
+          "target_resolved": {
+            "app": "Word",
+            "name": "A.docx",
+            "path": "C:\\CLI-dev\\work\\office\\A.docx",
+            "source": "open"
+          },
+          "inserted": [
+            "번호 목록 2개"
+          ],
+          "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+        }
+    $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "L 사이 단락 134706"
+      시작 13:47:26 / 종료코드 0 / 1.7초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "word",
+          "command": "write",
+          "preview": "A.docx의 문서 끝에 넣었습니다: 본문",
+          "verified": true,
+          "target_resolved": {
+            "app": "Word",
+            "name": "A.docx",
+            "path": "C:\\CLI-dev\\work\\office\\A.docx",
+            "source": "open"
+          },
+          "inserted": [
+            "본문"
+          ],
+          "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+        }
+    $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "1. L둘째목록 가 134706"
+      시작 13:47:27 / 종료코드 0 / 1.77초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "word",
+          "command": "write",
+          "preview": "A.docx의 문서 끝에 넣었습니다: 번호 목록 1개",
+          "verified": true,
+          "target_resolved": {
+            "app": "Word",
+            "name": "A.docx",
+            "path": "C:\\CLI-dev\\work\\office\\A.docx",
+            "source": "open"
+          },
+          "inserted": [
+            "번호 목록 1개"
+          ],
+          "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+        }
+  이 항목의 진행 로그:
+        
+        [L5] 번호 목록
+            $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "1. L첫목록 가 134706
+        2. L첫목록 나 134706"
+            $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "L 사이 단락 134706"
+            $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "1. L둘째목록 가 134706"
+          => [FAIL] L5 C2 새 번호 목록은 앞 목록에 이어지지 않고 1부터 - 번호='3.'
+
+----------------------------------------------------------------------
+[FAIL] L9 C6(확인만) 변경 추적 문서 replace: VERIFIED이고 read에 옛말·새말이 붙어 나오지 않음
+  판정 근거: replace=UNVERIFIED: 실행했지만 확인하지 못했습니다: 'L추적 옛말 134706'이(가) 1곳 남아 있음. 다시 실행하지 말고 사용자에게 그대로 알리세요.
+  이 항목에서 실행한 도구 명령 3개:
+    $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "L추적 옛말 134706"
+      시작 13:47:38 / 종료코드 0 / 1.64초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "word",
+          "command": "write",
+          "preview": "A.docx의 문서 끝에 넣었습니다: 본문",
+          "verified": true,
+          "target_resolved": {
+            "app": "Word",
+            "name": "A.docx",
+            "path": "C:\\CLI-dev\\work\\office\\A.docx",
+            "source": "open"
+          },
+          "inserted": [
+            "본문"
+          ],
+          "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."
+        }
+    $ python word.py replace --target C:\CLI-dev\work\office\A.docx --find "L추적 옛말 134706" --replace "L추적 새말 134706"
+      시작 13:47:40 / 종료코드 0 / 2.13초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "word",
+          "command": "replace",
+          "preview": "1곳 처리: 'L추적 옛말 134706' 1곳",
+          "target_resolved": {
+            "app": "Word",
+            "name": "A.docx",
+            "path": "C:\\CLI-dev\\work\\office\\A.docx",
+            "source": "open"
+          },
+          "replaced": 1,
+          "by_text": {
+            "L추적 옛말 134706": 1
+          },
+          "verified": false,
+          "unverified": [
+            "'L추적 옛말 134706'이(가) 1곳 남아 있음"
+          ],
+          "agent_directive": "UNVERIFIED: 실행했지만 확인하지 못했습니다: 'L추적 옛말 134706'이(가) 1곳 남아 있음. 다시 실행하지 말고 사용자에게 그대로 알리세요."
+        }
+    $ python word.py read --target C:\CLI-dev\work\office\A.docx
+      시작 13:47:42 / 종료코드 0 / 3.29초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "word",
+          "command": "read",
+          "preview": "A.docx: 전체, 단락 79개 표시 (전체 79개)",
+          "target_resolved": {
+            "app": "Word",
+            "name": "A.docx",
+            "path": "C:\\CLI-dev\\work\\office\\A.docx",
+            "source": "open"
+          },
+          "units_total": 79,
+          "paragraphs": [
+            {
+              "no": 1,
+              "heading": "",
+              "text": "가A.docx 첫 문단입니다."
+            },
+            {
+              "no": 2,
+              "heading": "",
+              "text": "바꾼 문장"
+            },
+            {
+              "no": 3,
+              "heading": "",
+              "text": "두 번째 문단입니다."
+            },
+            {
+              "no": 4,
+              "heading": "",
+              "text": "/"
+            },
+            {
+              "no": 5,
+              "heading": "검색 결과: 첫 문단",
+              "text": "검색 결과: 첫 문단"
+            },
+            {
+              "no": 6,
+              "heading": "B.docx > 단락 1",
+              "text": "B.docx > 단락 1"
+            },
+            {
+              "no": 7,
+              "heading": "B.docx > 단락 1",
+              "text": "근거: B.docx 단락 1"
+            },
+            {
+              "no": 8,
+              "heading": "B.docx > 단락 1",
+              "text": "B.docx 첫 문단입니다."
+            },
+            {
+              "no": 9,
+              "heading": "B.docx > 단락 1",
+              "text": "/"
+            },
+            {
+              "no": 10,
+              "heading": "B.docx > 단락 1",
+              "text": "품목"
+            },
+            {
+              "no": 11,
+              "heading": "B.docx > 단락 1",
+              "text": "수량"
+            },
+            {
+              "no": 12,
+              "heading": "B.docx > 단락 1",
+              "text": "금액"
+            },
+            {
+              "no": 13,
+              "heading": "B.docx > 단락 1",
+              "text": "사과"
+            },
+            {
+              "no": 14,
+              "heading": "B.docx > 단락 1",
+              "text": "3"
+            },
+            {
+              "no": 15,
+              "heading": "B.docx > 단락 1",
+              "text": "1500"
+            },
+            {
+              "no": 16,
+              "heading": "B.docx > 단락 1",
+              "text": "배"
+            },
+            {
+              "no": 17,
+              "heading": "B.docx > 단락 1",
+              "text": "2"
+            },
+            {
+              "no": 18,
+              "heading": "B.docx > 단락 1",
+              "text": "4000"
+            },
+            {
+              "no": 19,
+              "heading": "소제목 테스트",
+              "text": "소제목 테스트"
+            },
+            {
+              "no": 20,
+              "heading": "소제목 테스트",
+              "text": "검색 결과: 첫 문단\t1"
+            },
+            {
+              "no": 21,
+              "heading": "소제목 테스트",
+              "text": "B.docx > 단락 1\t1"
+            },
+            {
+              "no": 22,
+              "heading": "소제목 테스트",
+              "text": "소제목 테스트\t2"
+            },
+            {
+              "no": 23,
+              "heading": "소제목 테스트",
+              "text": "K장 134639\t4"
+            },
+            {
+              "no": 24,
+              "heading": "소제목 테스트",
+              "text": "K절 134639\t4"
+            },
+            {
+              "no": 25,
+              "heading": "소제목 테스트",
+              "text": "K다음장 134639\t4"
+            },
+            {
+              "no": 26,
+              "heading": "소제목 테스트",
+              "text": "L 그림 제목 134706\t5"
+            },
+            {
+              "no": 27,
+              "heading": "소제목 테스트",
+              "text": "굵은말 배 귤"
+            },
+            {
+              "no": 28,
+              "heading": "소제목 테스트",
+              "text": "품목"
+            },
+            {
+              "no": 29,
+              "heading": "소제목 테스트",
+              "text": "수량"
+            },
+            {
+              "no": 30,
+              "heading": "소제목 테스트",
+              "text": "금액"
+            },
+            {
+              "no": 31,
+              "heading": "소제목 테스트",
+              "text": "사과"
+            },
+            {
+              "no": 32,
+              "heading": "소제목 테스트",
+              "text": "3"
+            },
+            {
+              "no": 33,
+              "heading": "소제목 테스트",
+              "text": "1500"
+            },
+            {
+              "no": 34,
+              "heading": "소제목 테스트",
+              "text": "배"
+            },
+            {
+              "no": 35,
+              "heading": "소제목 테스트",
+              "text": "2"
+            },
+            {
+              "no": 36,
+              "heading": "소제목 테스트",
+              "text": "4000"
+            },
+            {
+              "no": 37,
+              "heading": "소제목 테스트",
+              "text": "포도"
+            },
+            {
+              "no": 38,
+              "heading": "소제목 테스트",
+              "text": "5"
+            },
+            {
+              "no": 39,
+              "heading": "소제목 테스트",
+              "text": "120"
+            },
+            {
+              "no": 40,
+              "heading": "소제목 테스트",
+              "text": "/"
+            },
+            {
+              "no": 41,
+              "heading": "K장 134639",
+              "text": "K장 134639"
+            },
+            {
+              "no": 42,
+              "heading": "K장 134639",
+              "text": "K 본문 134639"
+            },
+            {
+              "no": 43,
+              "heading": "K절 134639",
+              "text": "K절 134639"
+            },
+            {
+              "no": 44,
+              "heading": "K절 134639",
+              "text": "K 세부 134639"
+            },
+            {
+              "no": 45,
+              "heading": "K다음장 134639",
+              "text": "K다음장 134639"
+            },
+            {
+              "no": 46,
+              "heading": "K다음장 134639",
+              "text": "K 다음 본문 134639"
+            },
+            {
+              "no": 47,
+              "heading": "K다음장 134639",
+              "text": "K 쪽 확인 134639"
+            },
+            {
+              "no": 48,
+              "heading": "K다음장 134639",
+              "text": "K 변경 문장 134639"
+            },
+            {
+              "no": 49,
+              "heading": "K다음장 134639",
+              "text": "L 표 위 134706"
+            },
+            {
+              "no": 50,
+              "heading": "K다음장 134639",
+              "text": "L 새 글 134706"
+            },
+            {
+              "no": 51,
+              "heading": "K다음장 134639",
+              "text": "L칸 134706"
+            },
+            {
+              "no": 52,
+              "heading": "K다음장 134639",
+              "text": "L첫목록 가 134706"
+            },
+            {
+              "no": 53,
+              "heading": "K다음장 134639",
+              "text": "L첫목록 나 134706"
+            },
+            {
+              "no": 54,
+              "heading": "K다음장 134639",
+              "text": "L 사이 단락 134706"
+            },
+            {
+              "no": 55,
+              "heading": "K다음장 134639",
+              "text": "L둘째목록 가 134706"
+            },
+            {
+              "no": 56,
+              "heading": "K다음장 134639",
+              "text": "a"
+            },
+            {
+              "no": 57,
+              "heading": "K다음장 134639",
+              "text": "b"
+            },
+            {
+              "no": 58,
+              "heading": "K다음장 134639",
+              "text": "1"
+            },
+            {
+              "no": 59,
+              "heading": "K다음장 134639",
+              "text": "2"
+            },
+            {
+              "no": 60,
+              "heading": "K다음장 134639",
+              "text": "c"
+            },
+            {
+              "no": 61,
+              "heading": "K다음장 134639",
+              "text": "d"
+            },
+            {
+              "no": 62,
+              "heading": "K다음장 134639",
+              "text": "3"
+            },
+            {
+              "no": 63,
+              "heading": "K다음장 134639",
+              "text": "4"
+            },
+            {
+              "no": 64,
+              "heading": "L 그림 제목 134706",
+              "text": "L 그림 제목 134706"
+            },
+            {
+              "no": 65,
+              "heading": "L 그림 제목 134706",
+              "text": "/"
+            },
+            {
+              "no": 66,
+              "heading": "L 그림 제목 134706",
+              "text": "검색 결과: 첫 문단\t1"
+            },
+            {
+              "no": 67,
+              "heading": "L 그림 제목 134706",
+              "text": "B.docx > 단락 1\t1"
+            },
+            {
+              "no": 68,
+              "heading": "L 그림 제목 134706",
+              "text": "소제목 테스트\t2"
+            },
+            {
+              "no": 69,
+              "heading": "L 그림 제목 134706",
+              "text": "K장 134639\t4"
+            },
+            {
+              "no": 70,
+              "heading": "L 그림 제목 134706",
+              "text": "K절 134639\t4"
+            },
+            {
+              "no": 71,
+              "heading": "L 그림 제목 134706",
+              "text": "K다음장 134639\t4"
+            },
+            {
+              "no": 72,
+              "heading": "L 그림 제목 134706",
+              "text": "L 그림 제목 134706\t6"
+            },
+            {
+              "no": 73,
+              "heading": "L 그림 제목 134706",
+              "text": "L목차장 134706\t6"
+            },
+            {
+              "no": 74,
+              "heading": "L 그림 제목 134706",
+              "text": "L목차절 134706\t6"
+            },
+            {
+              "no": 75,
+              "heading": "L목차장 134706",
+              "text": "L목차장 134706"
+            },
+            {
+              "no": 76,
+              "heading": "L목차장 134706",
+              "text": "본문"
+            },
+            {
+              "no": 77,
+              "heading": "L목차절 134706",
+              "text": "L목차절 134706"
+            },
+            {
+              "no": 78,
+              "heading": "L목차절 134706",
+              "text": "세부"
+            },
+            {
+              "no": 79,
+              "heading": "L목차절 134706",
+              "text": "L추적 새말 134706"
+            }
+          ],
+          "truncated": false,
+          "verified": true,
+          "agent_directive": "VERIFIED: 작업이 완료되었습니다. 같은 명령을 다시 실행하거나 결과를 다시 조회하지 마세요."
+        }
+  이 항목의 진행 로그:
+        
+        [L9] 변경 추적
+            $ python word.py write --target C:\CLI-dev\work\office\A.docx --text "L추적 옛말 134706"
+            $ python word.py replace --target C:\CLI-dev\work\office\A.docx --find "L추적 옛말 134706" --replace "L추적 새말 134706"
+            $ python word.py read --target C:\CLI-dev\work\office\A.docx
+          => [FAIL] L9 C6(확인만) 변경 추적 문서 replace: VERIFIED이고 read에 옛말·새말이 붙어 나오지 않음 - replace=UNVERIFIED: 실행했지만 확인하지 못했습니다: 'L추적 옛말 134706'이(가) 1곳 남아 있음. 다시 실행하지 말고 사용자에게 그대로 알리세요.
+
+----------------------------------------------------------------------
+[FAIL] M4 C17 작성 창을 못 띄우면 초안 정보와 함께 UNVERIFIED
+  이 항목에서 실행한 도구 명령 0개:
+  이 항목의 진행 로그:
+        
+        [M4] 대화 상자
+          => [FAIL] M4 C17 작성 창을 못 띄우면 초안 정보와 함께 UNVERIFIED
+
+## 5. 도구 오류 로그 (_data\logs\errors.txt)
+원본: C:\CLI-dev\work\office\_data\logs\errors.txt (이번 실행에서 추가된 부분)
+===== 2026-11-10T13:39:26 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py read --target C:\CLI-dev\work\office\B.xlsx --sheet 없는시트
+결과: input | 시트 '없는시트'을(를) 찾을 수 없습니다. [사용 가능한 이름 2개 생략]
+
+===== 2026-11-10T13:39:31 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: word.py read --target C:\CLI-dev\work\office\없는파일.docx
+결과: input | Word 문서 'C:\CLI-dev\work\office\없는파일.docx'을(를) 찾을 수 없습니다. (열린 문서 이름도 아니고 파일도 없음). [사용 가능한 이름 1개 생략]
+
+===== 2026-11-10T13:40:57 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py range --action merge
+결과: input | range merge에는 --range가 필요합니다.
+
+===== 2026-11-10T13:40:59 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py range --action merge --range A10:B10
+결과: needs_user_decision | 병합하면 왼쪽 위 칸(A10)만 남고 값 1개가 지워집니다: B10 (값 <문서 내용 생략>)
+
+===== 2026-11-10T13:41:10 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py comment --action add --range D1 --text <5자 생략>
+결과: needs_user_decision | 이미 메모가 있는 칸 1개: E_TEST!D1 (메모 <문서 내용 생략>)
+
+===== 2026-11-10T13:41:19 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py write --cells 'H6=m; H7=K; H9=새 값'
+결과: needs_user_decision | 값이 있는 칸 2개가 덮어써집니다: E_TEST!H6, E_TEST!H7 (값 <문서 내용 생략>)
+
+===== 2026-11-10T13:41:23 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py write --cells 'J1=x; J2=y'
+결과: sheet_protected | 시트 'E_TEST'이(가) 보호되어 있어 값을 쓸 수 없습니다 (잠긴 칸 1개: J1). 검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음). 이 시트에서 잠기지 않아 쓸 수 있는 칸: [후보 1개 생략]
+
+===== 2026-11-10T13:41:26 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py write --cells 'J4=먼저; J5==SUM(1;2)'
+결과: input | E_TEST!J5에 넣을 수식을 엑셀이 받지 않았습니다 (com_error, 수식 <문서 내용 생략>). 엑셀 수식은 영어 함수 이름(SUM, IF, VLOOKUP), 인수 구분은 쉼표(,), 글자는 큰따옴표("글자")로 씁니다. [추천 명령 생략: 수식]
+
+===== 2026-11-10T13:41:30 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: ppt.py slide --action clear
+결과: input | clear에는 --slide가 필요합니다. 모든 슬라이드를 비우려면 --all-slides를 명시하세요 (사용자가 요청한 경우에만).
+
+===== 2026-11-10T13:42:26 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: outlook.py send --id 2
+결과: input | 수신자 주소 1개를 확인할 수 없어 보내지 않고 작성 창을 띄웠습니다 (수신자 생략).
+
+===== 2026-11-10T13:44:22 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py chart --action delete --sheet I_DATA --name 없는차트
+결과: input | 차트 '없는차트'을(를) 찾을 수 없습니다. (시트 'I_DATA') [사용 가능한 이름 2개 생략]
+
+===== 2026-11-10T13:46:08 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py write --target C:\CLI-dev\work\office\I29.xlsx --cells 'D1=1, D2=2'
+결과: input | --cells의 칸은 ; 로 나눕니다. 쉼표로 나눈 것 같아 쓰지 않았습니다 (D1의 값에 '칸=' 이 들어 있음). <문서에서 가져온 후보·문구 107자 생략>
+
+===== 2026-11-10T13:46:10 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py write --target C:\CLI-dev\work\office\I29.xlsx --cells 'D1=1 D2=2'
+결과: input | --cells의 칸은 ; 로 나눕니다. 쉼표로 나눈 것 같아 쓰지 않았습니다 (D1의 값에 '칸=' 이 들어 있음). <문서에서 가져온 후보·문구 107자 생략>
+
+===== 2026-11-10T13:46:11 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py write --target C:\CLI-dev\work\office\I29.xlsx --cells 'D1=1 | D2=2'
+결과: input | --cells의 칸은 ; 로 나눕니다. 쉼표로 나눈 것 같아 쓰지 않았습니다 (D1의 값에 '칸=' 이 들어 있음). <문서에서 가져온 후보·문구 107자 생략>
+
+===== 2026-11-10T13:46:13 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py read --target C:\CLI-dev\work\office\I29.xlsx --where '항목 = A, 값 > 1'
+결과: input | --where 식 '항목 = A, 값 > 1'에 쓸 수 없는 표기가 있습니다 (같음은 =, 같지 않음은 !=, 그리고는 ; (쉼표 아님), 또는은 |). 형식: '<열> <연산자> <값>' (연산자 >= <= > < = != ~ !~, ~는 포함, !~는 포함하지 않음. 그리고는 ;, 또는은 | (;가 먼저 묶임), 값에 ; | 가 있으면 작은따옴표로 감쌈. 예: 금액 >= 100; 부서 = 영업 | 부서 = 개발). <문서에서 가져온 후보·문구 109자 생략>
+
+===== 2026-11-10T13:46:17 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: word.py fill --file C:\CLI-dev\work\office\I31.docx
+결과: input | --file은 채울 값 파일입니다. 양식 문서 'I31.docx'은(는) --target으로 주고, 값은 --slots "<자리>=<값>; <자리>=<값>" (자리는 양식의 {{이름}}에서 이름만 적어도 됨, 표 칸은 표2!R3C4, 자리마다 ; 로 구분) 또는 --file 값.csv(열: 자리, 값).
+
+===== 2026-11-10T13:46:19 | office-cli 1.5.1 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: word.py fill --target C:\CLI-dev\work\office\I31.docx --slots '{{업체명}}=한빛, {{날짜}}=2026-11-09'
+결과: input | --slots의 자리는 ; 로 나눕니다. 쉼표로 나눈 것 같아 채우지 않았습니다 ('{{업체명}}'의 값에 '자리=' 이 들어 있음). <문서에서 가져온 후보·문구 124자 생략>
