@@ -3753,13 +3753,48 @@ def _timestamped(path: str) -> str:
     return alt
 
 
-def avoid_overwrite(path: str, overwrite: bool = False, what: str = "결과 파일") -> str:
-    """Never replaces an existing result file unless --overwrite was given: returns a timestamped sibling instead."""
+_PENDING_RENAMES: Dict[str, str] = {}      # avoid_overwrite(defer=True): new name -> recovered note, until saved
+
+
+def avoid_overwrite(path: str, overwrite: bool = False, what: str = "결과 파일", defer: bool = False) -> str:
+    """Never replaces an existing result file unless --overwrite was given: returns a timestamped sibling instead.
+    defer=True: the 'recovered' note waits for saved_as(<returned path>) (a run that fails or stops before saving, or
+    a --dry-run, must not report a file that was never written)."""
     if overwrite or not os.path.exists(path):
         return path
     alt = _timestamped(path)
-    note_recovered(f"{what} {os.path.basename(path)} 이미 있음 -> {os.path.basename(alt)}로 저장 (덮어쓰려면 --overwrite)")
+    msg = f"{what} {os.path.basename(path)} 이미 있음 -> {os.path.basename(alt)}로 저장 (덮어쓰려면 --overwrite)"
+    if defer:
+        _PENDING_RENAMES[alt] = msg
+    else:
+        note_recovered(msg)
     return alt
+
+
+def saved_as(path: str) -> None:
+    """The file avoid_overwrite(defer=True) named `path` is saved now: its 'recovered' note is reported."""
+    msg = _PENDING_RENAMES.pop(path, None)
+    if msg:
+        note_recovered(msg)
+
+
+def version_hint(vdir: str) -> str:
+    """[추천] / [후보] for a --model version folder that does not exist: the versions of the same data folder that hold
+    a trained version (leaderboard.json). One -> [추천] the running command with that folder (--model, full command, R8);
+    several -> [후보] (the user picks: another version is another model). '' when the data folder does not exist."""
+    root = os.path.dirname(vdir)
+    if not os.path.isdir(root):
+        return ""
+    found = [d for d in os.listdir(root)
+             if re.fullmatch(r"v\d+", d) and os.path.isfile(os.path.join(root, d, "leaderboard.json"))]
+    found.sort(key=lambda d: int(d[1:]))
+    if not found:
+        return " 이 데이터 폴더에 학습한 버전이 없습니다. 먼저 ml_train.py로 학습하십시오."
+    if len(found) == 1:
+        cmd = command_text(drop={"--model": "model"})
+        path = os.path.join(root, found[0])
+        return f" 있는 버전은 {found[0]} 하나입니다. [추천] " + (f"{cmd} --model {quote_arg(path)}" if cmd else f"--model {quote_arg(path)}")
+    return f" 있는 버전 중에서 사용자에게 고르게 하십시오: [후보] {', '.join(found[-10:])}"
 
 
 def save_with_lock_fallback(path: str, writer: Callable[[str], None], what: str = "파일") -> str:
