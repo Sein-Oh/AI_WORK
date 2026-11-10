@@ -706,6 +706,29 @@ def test_every_regression_model_moves_exactly(kind):
     np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.parametrize("kind", ["ExtraTrees", "RandomForest", "HistGradientBoosting", "Ridge", "ElasticNet"])
+def test_every_regression_model_with_a_text_input_moves_exactly(kind):
+    """결정 2-2: 글자 입력(원-핫)이 있는 모델 다섯 가지 모두 옮긴 수식(0/1 칸) = 모델 예측. 종류마다, 학습에 없던 종류(모두 0),
+    빈 칸('__missing__'를 학습한 모델은 그 칸), 앞뒤 공백, 숫자 모양의 종류 포함."""
+    r = np.random.default_rng(9)
+    n = 300
+    X = pd.DataFrame({"a": np.round(r.uniform(0, 100, n), 2), "라인": r.choice(["A", "B", "C", "7"], n).astype(object)})
+    X.loc[:9, "라인"] = np.nan                                              # 빈 칸도 학습: '__missing__' 종류
+    y = np.sin(X.a / 10) * 5 + X.라인.map({"A": 3.0, "B": 0.0, "C": -2.0, "7": 1.0}).fillna(0.5) + r.normal(0, 0.1, n)
+    schema = {"input_columns": ["a", "라인"], "numeric": ["a"], "datetime": {},
+              "categorical": {"라인": ["7", "A", "B", "C"]}}
+    est = mt.get_regression_models(seed=0, n_rows=n)[kind]
+    pipe = mt.build_pipeline(est, schema, "regressor").fit(rt.prepare_features(X, schema), y)
+    form = mx.model_formula(pipe)
+    assert {o["category"] for o in form["onehot"]} == {"7", "A", "B", "C", mx.MISSING}
+    cand = {"inputs": ["a", "라인"], "evals": [], "schema": schema, "pipe": pipe, "form": form}
+    P = mx.check_points(cand, X)
+    assert P.attrs["edge"] == 4 + 3
+    extra = pd.DataFrame({"a": [10.0, 50.0, 90.0, 20.0, 30.0], "라인": ["Z", None, "  B ", 7, "-"]})
+    P = pd.concat([P, extra], ignore_index=True)
+    np.testing.assert_allclose(mx.mirror(form, mx.model_features(cand, P)), mx.predict_frame(cand, P), rtol=1e-12, atol=1e-12)
+
+
 def test_bounds_are_written_with_every_digit(tmp_path):
     """openpyxl은 숫자를 16자리로 써서 갈림 경계가 움직인다: 잎 시트는 모든 자리(repr)로 써서 다시 읽으면 같은 double."""
     blocks = [np.array([[194.44514502053806, -1e300], [0.1 + 0.2, 1e300]]), np.full((2, 1), np.nan), np.array([[1 / 3]])]
@@ -1271,20 +1294,88 @@ def _train_csv(tmp_path, name, df, features, target):
     return p, run_tool("ml_train.py", "--file", str(p), "--features", features, "--targets", target)
 
 
-@needs_report
-def test_text_input_report_says_why_there_is_no_calculator(tmp_path, with_export):
-    """C1: 글자 입력이 있는 모델은 성능예측표를 만들 수 없는데 요약 소견에 '성능예측표도 함께 만들어집니다'가 남았고,
-    export_note는 오류 글이었다. 이제 만들지 않은 까닭을 보고서와 export_note에 분명히 쓰고, 그 권고 문장은 뺀다."""
-    r = np.random.default_rng(8)
-    n = 150
+def _cat_data(n=150, seed=8):
+    r = np.random.default_rng(seed)
     df = pd.DataFrame({"온도": r.uniform(150, 200, n), "압력": r.uniform(1, 5, n), "라인": r.choice(["A", "B", "C"], n)})
-    df["강도"] = 0.5 * df.온도 + 3 * df.압력 + np.where(df.라인 == "A", 5.0, 0.0) + r.normal(0, 0.1, n)
-    p, tr = _train_csv(tmp_path, "cat.csv", df, "온도,압력,라인", "강도")
+    df["강도"] = 0.5 * df.온도 + 3 * df.압력 + df.라인.map({"A": 5.0, "B": 0.0, "C": -3.0}) + r.normal(0, 0.1, n)
+    return df
+
+
+@needs_report
+def test_text_input_report_makes_the_calculator_and_date_input_says_why_not(tmp_path, with_export):
+    """C1 / 결정 2-2: 글자(범주) 입력 모델도 성능예측표를 만든다 (드롭다운 + 숨김 0/1 칸). 날짜 입력은 여전히 만들지 않고 까닭을
+    보고서와 export_note에 쓴다 (학습 권고의 '함께 만들어집니다' 문장은 뺌)."""
+    df = _cat_data()
+    _, tr = _train_csv(tmp_path, "cat.csv", df, "온도,압력,라인", "강도")
     rep = run_tool("ml_report.py", "--model", tr["version_dir"])
-    assert "export_file" not in rep and rep["export_note"].startswith("성능예측표(엑셀 계산기)는 만들지 않았습니다"), rep
-    assert "라인" in rep["export_note"] and "숫자 입력만" in rep["export_note"] and "Error" not in rep["export_note"]
-    text = _doc_text(rep["report_file"])
+    assert os.path.isfile(rep["export_file"]) and "export_note" not in rep, rep
+    assert rep["export"]["강도"]["inputs"] == ["온도", "압력", "라인"]
+    dd = df.copy()
+    dd["일자"] = pd.date_range("2024-01-01", periods=len(dd), freq="D").strftime("%Y-%m-%d")
+    _, tr2 = _train_csv(tmp_path, "date.csv", dd, "온도,압력,일자", "강도")
+    rep2 = run_tool("ml_report.py", "--model", tr2["version_dir"])
+    assert "export_file" not in rep2 and rep2["export_note"].startswith("성능예측표(엑셀 계산기)는 만들지 않았습니다"), rep2
+    assert "일자" in rep2["export_note"] and "날짜" in rep2["export_note"] and "Error" not in rep2["export_note"]
+    text = _doc_text(rep2["report_file"])
     assert "함께 만들어집니다" not in text and "성능예측표 (엑셀 계산기): 만들지 않음" in text
+
+
+def test_text_input_calculator_has_a_dropdown_and_matches_the_model(tmp_path):
+    """결정 2-2: 글자(범주) 입력은 계산기에 드롭다운(학습 종류 목록) + 숨김 0/1 칸으로 옮긴다. 파이썬 사본 확인은 종류마다,
+    학습에 없던 종류, 빈 칸 조건을 포함하고, 학습에 없던 종류·빈 칸은 모델처럼 계산하되 판단은 '참고용'."""
+    df = _cat_data()
+    _, tr = _train_csv(tmp_path, "cat2.csv", df, "온도,압력,라인", "강도")
+    v = tr["version_dir"]
+    res = run_tool("ml_export.py", "--model", v)
+    t = res["targets"]["강도"]
+    assert t["inputs"] == ["온도", "압력", "라인"] and t["check"]["max_diff"] < 1e-9, t
+    assert all("엑셀 계산 확인을 껐음" in u for u in res["unverified"]), res["unverified"]     # 구조·목록·드롭다운 확인은 통과
+    meta = json.load(open(os.path.join(v, "model_강도.json"), encoding="utf-8"))
+    cand = {"inputs": t["inputs"], "evals": [], "schema": meta["feature_schema"], "pipe": mx.load_pipe(v, meta)}
+    cand["form"] = mx.model_formula(cand["pipe"])
+    P = mx.check_points(cand, pd.read_csv(os.path.join(v, "model_dataset.csv")))
+    labels = set(P["라인"].map(lambda x: "" if not isinstance(x, str) else x))
+    assert {"A", "B", "C", ""} <= labels and any(x not in ("A", "B", "C", "") for x in labels), labels
+    wb = openpyxl.load_workbook(res["output_file"])
+    assert "목록" in wb.sheetnames and wb["목록"].sheet_state == "veryHidden"
+    calc = wb["계산기"]
+    row = next(i for i in range(6, 9) if calc.cell(row=i, column=2).value == "라인")
+    cell = calc.cell(row=row, column=3)
+    assert cell.value in ("A", "B", "C") and not cell.protection.locked and cell.number_format == "@"
+    lists = [dv for dv in calc.data_validations.dataValidation if dv.type == "list"]
+    assert lists and cell.coordinate in str(lists[0].sqref) and "목록" in lists[0].formula1, lists
+    assert "종류 3개" in str(calc.cell(row=row, column=5).value)
+    batch_lists = [dv for dv in wb["일괄계산"].data_validations.dataValidation if dv.type == "list"]
+    assert batch_lists, "일괄계산의 글자 열에도 드롭다운"
+    assert "학습에 없던 종류" in _strings(wb, "계산기") and "학습에 없던 종류" in _strings(wb, "일괄계산")
+    if SOFFICE is None:
+        return
+    inputs = t["inputs"]
+    conds = [{"온도": 170.0, "압력": 2.0, "라인": "A"}, {"온도": 180.0, "압력": 3.0, "라인": "B"},
+             {"온도": 190.0, "압력": 4.0, "라인": "C"}, {"온도": 175.0, "압력": 2.5, "라인": "Z"},
+             {"온도": 185.0, "압력": 1.5, "라인": None}, {"온도": 160.0, "압력": 4.5, "라인": " C "}]
+    for i, c in enumerate(conds):
+        for j, k in enumerate(inputs):
+            wb["일괄계산"].cell(row=3 + i, column=1 + j, value=c[k])
+    wb.save(tmp_path / "m.xlsx")
+    out = _recalc(tmp_path / "m.xlsx", tmp_path)
+    want = _model_predict(v, "강도", [[c[k] for k in inputs] for c in conds])
+    for i in range(len(conds)):
+        got = out["일괄계산"].cell(row=3 + i, column=4).value
+        assert got == pytest.approx(want[i], rel=1e-9, abs=1e-9), (conds[i], got, want[i])
+    judge = [out["일괄계산"].cell(row=3 + i, column=7).value for i in range(len(conds))]
+    assert judge[0] == "정상" and judge[3].startswith("참고용") and judge[4].startswith("참고용") and judge[5] == "정상", judge
+
+
+def test_text_input_with_many_categories_respects_the_formula_limit(tmp_path, monkeypatch):
+    """결정 2-2: 종류가 많으면 수식이 길어진다 -> 수식 길이 한도 검사(C영역 B2)를 그대로 지킨다 (저장 전 STOP_RETRY)."""
+    df = _cat_data(n=120, seed=3)
+    _, tr = _train_csv(tmp_path, "cat3.csv", df, "온도,압력,라인", "강도")
+    monkeypatch.setattr(mx, "FORMULA_MAX", 120)
+    save = tmp_path / "lim.xlsx"
+    with pytest.raises(rt.InputError, match="한도"):
+        mx.execute_export(argparse.Namespace(model=tr["version_dir"], targets=None, title=None, save=str(save), overwrite=False))
+    assert not save.exists()
 
 
 def test_low_score_calculator_says_reference_only(tmp_path):

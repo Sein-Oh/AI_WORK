@@ -12,7 +12,7 @@ LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 �
   C  표 보간·반대 찾기 ml_map (2.6.0)
   D  예측 + 실측 비교값 (2.7.0)
   E  모델 반대 찾기와 운전 구간 (2.8.0)
-  F  보고서 + 성능예측표 세트, 모델과 같은 값, 엑셀 잠금·숨김·재계산 (2.9.x), 파생변수 표의 엑셀 재계산 (F8)
+  F  보고서 + 성능예측표 세트, 모델과 같은 값, 엑셀 잠금·숨김·재계산 (2.9.x), 파생변수·글자 입력 표의 엑셀 재계산 (F8, F9)
   G  파생변수 원본 열 (2.9.1)
 
 결과: 이 파일 옆에 beta_check_<라벨>_<시각>.md (요약 + 실패 상세)와 .xlsx (항목별 표).
@@ -266,7 +266,7 @@ def excel_item(cid, title, code, p, err):
 
 
 def group_f_excel(work):
-    """F8 파생변수(거듭제곱의 0과 음수 밑, 연쇄 파생변수): 엑셀에서만 확인되는 성능예측표 수식 (결정 1-8)."""
+    """F8 파생변수(거듭제곱의 0과 음수 밑, 연쇄 파생변수), F9 글자(범주) 입력: 엑셀에서만 확인되는 성능예측표 수식 (결정 1-8, 2-2)."""
     import numpy as np
     import pandas as pd
     r = np.random.default_rng(11)
@@ -281,6 +281,14 @@ def group_f_excel(work):
     if code == 0:
         code, p, err, _ = run("ml_export.py", "--model", path, cwd=work)
     excel_item("F8", "파생변수(음수 밑 거듭제곱, 0^0, 연쇄) 성능예측표를 엑셀로 재계산 확인", code, p, err)
+    df = pd.DataFrame({"온도": r.uniform(150, 200, n), "라인": r.choice(["A", "B", "C"], n)})
+    df["강도"] = 0.5 * df.온도 + df.라인.map({"A": 5.0, "B": 0.0, "C": -3.0}) + r.normal(0, 0.1, n)
+    path = os.path.join(work, "범주_라인.csv")
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    code, p, err, _ = run("ml_train.py", "--file", path, "--features", "온도,라인", "--targets", "강도", cwd=work)
+    if code == 0:
+        code, p, err, _ = run("ml_export.py", "--model", path, cwd=work)
+    excel_item("F9", "글자(범주) 입력 성능예측표(드롭다운 + 0/1 칸)를 엑셀로 재계산 확인", code, p, err)
 
 
 def group_g(work):

@@ -1503,15 +1503,16 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
 
 
 def export_skip_reason(ctx: Dict[str, Any]) -> Optional[str]:
-    """Why the calculator cannot be made for these targets, before trying (C1): text or date inputs."""
+    """Why the calculator cannot be made for these targets, before trying (C1): date inputs (text inputs are a
+    dropdown in the calculator since 결정 2-2)."""
     import ml_export
     bad: List[str] = []
     for t in ctx["targets"]:
-        bad += [c for c in ml_export.text_date_inputs(t["meta"]) if c not in bad]
+        bad += [c for c in ml_export.date_inputs(t["meta"]) if c not in bad]
     if not bad:
         return None
-    return (f"글자·날짜 입력 {name_list(bad, 10)}이(가) 있는 모델은 엑셀 수식으로 옮길 수 없습니다 "
-            f"(성능예측표는 숫자 입력만 가능)")
+    return (f"날짜 입력 {name_list(bad, 10)}이(가) 있는 모델은 엑셀 수식으로 옮길 수 없습니다 "
+            f"(성능예측표는 숫자·글자 입력만 가능)")
 
 
 def export_command(vdir: str, targets: Optional[List[str]], title: Optional[str]) -> str:

@@ -26,7 +26,7 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, compile_formula,
     VERSION, SNAPSHOT_EXCL_PREFIX, model_raw_inputs, mark_committed, model_dir_from_data, version_hint, saved_as,
-    command_text, quote_arg, data_folder_of, resolve_save,
+    command_text, quote_arg, data_folder_of, resolve_save, _NA_PLACEHOLDERS,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command); the saved models need it
@@ -127,20 +127,20 @@ def load_version(vdir: str, targets_arg: Optional[str]) -> Dict[str, Any]:
     return {"dir": vdir, "metas": metas, "targets": names, "skipped": skipped, "data": load_data_file(snap)}
 
 
-def text_date_inputs(meta: Dict[str, Any]) -> List[str]:
-    """Raw inputs of a model that are text (categories) or dates: the calculator takes numbers only."""
+def date_inputs(meta: Dict[str, Any]) -> List[str]:
+    """Raw inputs of a model that are dates: the calculator takes numbers and text (categories) only (결정 2-2)."""
     schema = meta.get("feature_schema") or {}
-    return [f for f in model_raw_inputs(meta) if f in schema.get("categorical", {}) or f in schema.get("datetime", {})]
+    return [f for f in model_raw_inputs(meta) if f in schema.get("datetime", {})]
 
 
 def raw_inputs(meta: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-    """(raw numeric inputs, derived feature expressions) of a model; text/date raw inputs are not supported."""
+    """(raw inputs, derived feature expressions) of a model; date raw inputs are not supported."""
     schema = meta.get("feature_schema") or {}
     evals = list(meta.get("derived_evals") or [])
     raw = model_raw_inputs(meta)
-    bad = text_date_inputs(meta)
+    bad = date_inputs(meta)
     if bad or not schema:
-        raise InputError(f"글자·날짜 입력 {bad}이(가) 있는 모델은 성능예측표로 만들 수 없습니다 (엑셀 계산기는 숫자 입력만 가능). "
+        raise InputError(f"날짜 입력 {bad}이(가) 있는 모델은 성능예측표로 만들 수 없습니다 (엑셀 계산기는 숫자·글자 입력만 가능). "
                          f"사용자에게 알리십시오.")
     return raw, evals
 
@@ -159,25 +159,51 @@ def _unsupported(what: str) -> InputError:
     return InputError(f"이 모델은 성능예측표(엑셀 계산기)로 옮길 수 없습니다: {what}. 사용자에게 알리십시오.")
 
 
-def scaler_parts(pipe) -> Tuple[List[str], np.ndarray, np.ndarray, np.ndarray, Any]:
-    """(model feature names, imputer medians, scaler mean, scaler scale, regressor) of the ml-kit pipeline
-    ColumnTransformer[num: SimpleImputer(median) -> StandardScaler] -> regressor."""
+MISSING = "__missing__"     # the text the ml-kit pipeline gives an empty category (SimpleImputer constant)
+
+
+def scaler_parts(pipe) -> Tuple[List[str], np.ndarray, np.ndarray, np.ndarray, Any, List[Dict[str, Any]]]:
+    """(model feature names, imputer medians, scaler mean, scaler scale, regressor, one-hot features) of the ml-kit
+    pipeline ColumnTransformer[num: SimpleImputer(median) -> StandardScaler, cat: SimpleImputer('__missing__') ->
+    OneHotEncoder(handle_unknown='ignore')] -> regressor. A one-hot feature is 1 when its input is that category (an
+    unknown category: every one-hot feature of the input 0); its median, mean and scale are 0, 0 and 1 (no scaling)."""
     steps = getattr(pipe, "steps", None)
     if not steps or len(steps) != 2:
         raise _unsupported("전처리와 모델 두 단계가 아님")
     ct, reg = steps[0][1], steps[1][1]
     parts = [(n, t, c) for n, t, c in getattr(ct, "transformers_", []) if not (isinstance(t, str) and t == "drop")]
-    if len(parts) != 1 or parts[0][0] != "num":
-        raise _unsupported("숫자 입력 전처리 하나가 아님")
-    sub = parts[0][1]
-    named = getattr(sub, "named_steps", {})
-    imp, sc = named.get("imputer"), named.get("scaler")
-    if imp is None or sc is None or len(sub.steps) != 2 or getattr(imp, "strategy", "") != "median":
-        raise _unsupported("빈 값 채우기·표준화 전처리가 아님")
-    feats = [str(c) for c in parts[0][2]]
-    mean = np.zeros(len(feats)) if getattr(sc, "mean_", None) is None else np.asarray(sc.mean_, dtype=float)
-    scale = np.ones(len(feats)) if getattr(sc, "scale_", None) is None else np.asarray(sc.scale_, dtype=float)
-    return feats, np.asarray(imp.statistics_, dtype=float), mean, scale, reg
+    if [n for n, _, _ in parts] not in (["num"], ["cat"], ["num", "cat"]):
+        raise _unsupported("숫자·글자 입력 전처리가 아님")
+    feats: List[str] = []
+    med: List[float] = []
+    mean: List[float] = []
+    scale: List[float] = []
+    onehot: List[Dict[str, Any]] = []
+    for name, sub, cols in parts:
+        named = getattr(sub, "named_steps", {})
+        if name == "num":
+            imp, sc = named.get("imputer"), named.get("scaler")
+            if imp is None or sc is None or len(sub.steps) != 2 or getattr(imp, "strategy", "") != "median":
+                raise _unsupported("빈 값 채우기·표준화 전처리가 아님")
+            k = len(cols)
+            feats += [str(c) for c in cols]
+            med += list(np.asarray(imp.statistics_, dtype=float))
+            mean += list(np.zeros(k) if getattr(sc, "mean_", None) is None else np.asarray(sc.mean_, dtype=float))
+            scale += list(np.ones(k) if getattr(sc, "scale_", None) is None else np.asarray(sc.scale_, dtype=float))
+            continue
+        imp, oh = named.get("imputer"), named.get("onehot")
+        if (imp is None or oh is None or len(sub.steps) != 2 or getattr(imp, "strategy", "") != "constant"
+                or getattr(imp, "fill_value", None) != MISSING or getattr(oh, "handle_unknown", "") != "ignore"
+                or getattr(oh, "drop", None) is not None or getattr(oh, "_infrequent_enabled", False)):
+            raise _unsupported("글자 입력 전처리(빈 칸 채우기·원-핫)가 아님")
+        for col, cats in zip(cols, oh.categories_):
+            for cat in cats:
+                onehot.append({"input": str(col), "category": str(cat), "index": len(feats)})
+                feats.append(f"{col}={cat}")
+                med.append(0.0)
+                mean.append(0.0)
+                scale.append(1.0)
+    return feats, np.array(med, dtype=float), np.array(mean, dtype=float), np.array(scale, dtype=float), reg, onehot
 
 
 def raw_bounds(feat: np.ndarray, thr: np.ndarray, mean: np.ndarray, scale: np.ndarray, f32: bool) -> np.ndarray:
@@ -235,10 +261,12 @@ def _boxes(left: np.ndarray, right: np.ndarray, feat: np.ndarray, bound: np.ndar
 def model_formula(pipe) -> Dict[str, Any]:
     """The model as data the workbook computes: {"kind": "trees", leaves (lo, hi, value), base} or
     {"kind": "linear", coef, intercept}, with the features, imputer medians and scaler."""
-    feats, med, mean, scale, reg = scaler_parts(pipe)
+    feats, med, mean, scale, reg, onehot = scaler_parts(pipe)
     k = len(feats)
     name = type(reg).__name__
-    out: Dict[str, Any] = {"features": feats, "median": med, "mean": mean, "scale": scale, "model_class": name}
+    out: Dict[str, Any] = {"features": feats, "median": med, "mean": mean, "scale": scale, "model_class": name,
+                           "onehot": onehot, "num_features": [f for i, f in enumerate(feats)
+                                                              if i not in {o["index"] for o in onehot}]}
     if name in LINEAR_MODELS:
         coef = np.asarray(reg.coef_, dtype=float).reshape(-1)
         if coef.size != k:
@@ -303,19 +331,71 @@ def mirror(form: Dict[str, Any], F: np.ndarray) -> np.ndarray:
     return out
 
 
-def model_features(cand: Dict[str, Any], df: pd.DataFrame) -> np.ndarray:
-    """Model feature values in the user's units (raw inputs, derived formulas) before the imputer and scaler."""
-    d = df[cand["inputs"]].astype(float)
+def category_inputs(cand: Dict[str, Any]) -> List[str]:
+    """The text (category) raw inputs of a model."""
+    cats = (cand.get("schema") or {}).get("categorical", {})
+    return [c for c in cand["inputs"] if c in cats]
+
+
+def input_frame(cand: Dict[str, Any], df: pd.DataFrame) -> pd.DataFrame:
+    """The raw inputs (numbers as float, text as given) and the derived features."""
+    cats = set(category_inputs(cand))
+    d = pd.DataFrame({c: (df[c] if c in cats else coerce_numeric(df[c]).astype(float)) for c in cand["inputs"]},
+                     index=df.index)
     if cand["evals"]:
         d = apply_inference_evals(d, cand["evals"])
-    return prepare_features(d, cand["schema"])[cand["form"]["features"]].to_numpy(dtype=float)
+    return d
+
+
+# Excel reads a text input as TRIM(cell&""): blank -> "", a number -> its text, spaces at both ends removed (and inner
+# runs of spaces made one). Empty-like texts are the model's empty category (normalize_category's placeholders).
+EMPTY_TEXTS = list(dict.fromkeys([""] + _NA_PLACEHOLDERS))
+
+
+def excel_text(v: Any) -> str:
+    """Python copy of TRIM(cell&"") for a value put in a text input cell."""
+    if v is None or (isinstance(v, (float, np.floating)) and not np.isfinite(v)):
+        return ""
+    if isinstance(v, (bool, np.bool_)):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, (int, np.integer)):
+        return str(int(v))
+    if isinstance(v, (float, np.floating)):
+        return str(int(v)) if float(v).is_integer() else repr(float(v))
+    return re.sub(" +", " ", str(v).strip(" "))
+
+
+def xl_text(text: str) -> str:
+    """A text inside a formula's quotes ('"' written twice)."""
+    return str(text).replace('"', '""')
+
+
+def category_hits(values: pd.Series, category: str) -> np.ndarray:
+    """Python copy of a one-hot cell: 1 when the text input is that category (EXACT, after TRIM), the empty category
+    for a blank or empty-like text."""
+    t = values.map(excel_text)
+    if category == MISSING:
+        return t.isin(EMPTY_TEXTS).to_numpy(dtype=float)
+    return (t == excel_text(category)).to_numpy(dtype=float)
+
+
+def model_features(cand: Dict[str, Any], df: pd.DataFrame) -> np.ndarray:
+    """Model feature values in the user's units (raw inputs, derived formulas, one-hot cells) before the imputer and
+    scaler: what the workbook's formulas compute."""
+    form = cand["form"]
+    d = input_frame(cand, df)
+    out = np.zeros((len(df), len(form["features"])))
+    num = form["num_features"]
+    if num:
+        idx = [form["features"].index(f) for f in num]
+        out[:, idx] = prepare_features(d, cand["schema"])[num].to_numpy(dtype=float)
+    for oh in form["onehot"]:
+        out[:, oh["index"]] = category_hits(d[oh["input"]], oh["category"])
+    return out
 
 
 def predict_frame(cand: Dict[str, Any], df: pd.DataFrame) -> np.ndarray:
-    d = df[cand["inputs"]].astype(float)
-    if cand["evals"]:
-        d = apply_inference_evals(d, cand["evals"])
-    return np.asarray(cand["pipe"].predict(prepare_features(d, cand["schema"])), dtype=float)
+    return np.asarray(cand["pipe"].predict(prepare_features(input_frame(cand, df), cand["schema"])), dtype=float)
 
 
 # -- derived features (--eval) as Excel formulas ----------------------------------------------------
@@ -500,7 +580,8 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     def status_colors(ws, cells, first):
         """Green for 정상, orange for 범위 밖 / 참고용. first = top-left cell of cells (relative reference)."""
         ws.conditional_formatting.add(cells, FormulaRule(formula=[f'{first}="정상"'], **GOOD))
-        ws.conditional_formatting.add(cells, FormulaRule(formula=[f'OR({first}="범위 밖",LEFT({first},3)="참고용")'], **WARN))
+        ws.conditional_formatting.add(cells, FormulaRule(formula=[f'OR({first}="범위 밖",{first}="학습에 없던 종류",'
+                                                                  f'LEFT({first},3)="참고용")'], **WARN))
 
     wb = Workbook()
     calc = wb.active
@@ -513,18 +594,33 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         p["sheet"] = _sheet_name("모델_", short[p["target"]], used)
         p["ws"] = wb.create_sheet(p["sheet"])
         p["ws"].sheet_state = "veryHidden"   # not shown (not even in "unhide"); formulas still read it
-    acc = wb.create_sheet("정확도")
-    info = wb.create_sheet("정보")
-
     # union of inputs, in model order of the first target, then the others
     all_inputs: List[str] = []
     for p in plans:
         for c in p["cand"]["inputs"]:
             if c not in all_inputs:
                 all_inputs.append(c)
-    # training range per input = the range every target using it was trained on: "범위 밖" is outside all of them
+    # text (category) inputs (결정 2-2): the dropdown lists every category a target knows, on the hidden sheet 목록
+    texts: Dict[str, List[str]] = {}
+    for p in plans:
+        for c in p["text_inputs"]:
+            texts.setdefault(c, [])
+            texts[c] += [k for k in category_list(p["cand"], c) if k not in texts[c]]
+    lists: Dict[str, str] = {}
+    if texts:
+        lst = wb.create_sheet("목록")
+        lst.sheet_state = "veryHidden"
+        for j, (c, cats) in enumerate(texts.items(), 1):
+            lst.cell(row=1, column=j, value=str(c)).data_type = "s"
+            for i, k in enumerate(cats, 2):
+                cell = lst.cell(row=i, column=j, value=k)
+                cell.data_type = "s"        # a category like '=A' or '1' stays text
+            lists[c] = f"'목록'!${_col(j)}$2:${_col(j)}${len(cats) + 1}"
+    acc = wb.create_sheet("정확도")
+    info = wb.create_sheet("정보")
+    # training range per number input = the range every target using it was trained on: "범위 밖" is outside all of them
     rng = {}
-    for c in all_inputs:
+    for c in [c for c in all_inputs if c not in texts]:
         users = [p for p in plans if c in p["cand"]["inputs"]]
         lo = max(rng_of(p["data"], c)[0] for p in users)
         hi = min(rng_of(p["data"], c)[1] for p in users)
@@ -533,7 +629,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
 
     # -- model sheets: leaf boxes, then the training points --------------------------------------------
     for p in plans:
-        ws, form, cand = p["ws"], p["cand"]["form"], p["cand"]
+        ws, form = p["ws"], p["cand"]["form"]
         head: List[Any] = []
         blocks: List[np.ndarray] = []
         p["leaf_rng"] = None
@@ -556,16 +652,17 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
             blocks.append(np.full((n, 1), np.nan))
         T = p["cover"]
         c0 = len(head) + 1
-        head += [f"학습 {c}" for c in cand["inputs"]]
-        p["cover_rng"] = [f"'{p['sheet']}'!${_col(c0 + j)}$2:${_col(c0 + j)}${len(T) + 1}" for j in range(len(cand["inputs"]))]
+        head += [f"학습 {c}" for c in p["num_inputs"]]
+        p["cover_rng"] = [f"'{p['sheet']}'!${_col(c0 + j)}$2:${_col(c0 + j)}${len(T) + 1}" for j in range(len(p["num_inputs"]))]
         blocks.append(T)
         ws.append(head)                        # the numbers go in after saving (sheet_numbers): much faster
         p["numbers"] = blocks
 
-    def model_cells(ws, p, x_refs: Dict[str, str], row: int, col0: int, ready: str) -> Tuple[str, str, int]:
-        """Writes the helper cells of one prediction (derived features, distance to the nearest training row)
-        starting at col0. Returns (prediction formula, distance cell, next free column)."""
-        cand, form = p["cand"], p["cand"]["form"]
+    def model_cells(ws, p, x_refs: Dict[str, str], row: int, col0: int, ready: str) -> Tuple[str, str, int, List[str]]:
+        """Writes the helper cells of one prediction (derived features, the 0/1 cells of the text inputs, distance to the
+        nearest training row) starting at col0. Returns (prediction formula, distance cell, next free column, the
+        'category the model does not know' test of each text input)."""
+        form = p["cand"]["form"]
         refs = dict(x_refs)          # what a formula reads: inputs, the derived values before filling
         filled = dict(x_refs)        # what the model reads: inputs, the derived values filled with the median
         c = col0
@@ -575,6 +672,21 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
             refs[name] = f"${_col(c)}{row}"
             filled[name] = f"${_col(c + 1)}{row}"
             c += 2
+        unknown: List[str] = []
+        for ti in p["text_inputs"]:          # one 0/1 cell per category (the model's one-hot), the known ones first
+            t = f'TRIM({x_refs[ti]}&"")'
+            mine = [o for o in form["onehot"] if o["input"] == ti]
+            known = [o for o in mine if o["category"] != MISSING]
+            first = c
+            for o in known + [o for o in mine if o["category"] == MISSING]:
+                if o["category"] == MISSING:
+                    test = "OR(" + ",".join(f'EXACT({t},"{xl_text(e)}")' for e in EMPTY_TEXTS) + ")"
+                else:
+                    test = f'EXACT({t},"{xl_text(excel_text(o["category"]))}")'
+                ws.cell(row=row, column=c, value=f"=IF({test},1,0)")
+                filled[form["features"][o["index"]]] = f"${_col(c)}{row}"
+                c += 1
+            unknown.append(f"SUM(${_col(first)}{row}:${_col(first + len(known) - 1)}{row})=0" if known else "TRUE")
         feats = [filled[f] for f in form["features"]]
         if form["kind"] == "linear":
             pred = num(form["intercept"]) + "".join(
@@ -584,12 +696,28 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
             terms = "*".join(f"({feats[f]}>{lo})*({feats[f]}<={hi})" for f, lo, hi in zip(form["used"], lr["lo"], lr["hi"]))
             pred = (f"{num(form['base'])}+" if form["base"] else "") + (f"SUMPRODUCT({terms}*{lr['value']})" if terms
                                                                        else f"SUM({lr['value']})")
-        spans = [(x_refs[ci], r, rng_of(p["data"], ci)) for ci, r in zip(cand["inputs"], p["cover_rng"])]
+        spans = [(x_refs[ci], r, rng_of(p["data"], ci)) for ci, r in zip(p["num_inputs"], p["cover_rng"])]
         parts = [f"(({x}-{r})/{num(b - a)})^2" for x, r, (a, b) in spans if b > a]
         dist = f"${_col(c)}{row}"
         ws[dist.replace("$", "")] = ArrayFormula(dist.replace("$", ""), f"=IF({ready},MIN(SQRT({'+'.join(parts)})),\"\")"
                                                  if parts else "=0")
-        return pred, dist, c + 1
+        return pred, dist, c + 1, unknown
+
+    def ready_of(p, refs: Dict[str, str]) -> str:
+        """Every number input of the target filled (a text input may be blank: the model's empty category)."""
+        own = [refs[c] for c in p["num_inputs"]]
+        return f"COUNT({','.join(own)})={len(own)}" if own else "TRUE"
+
+    def judge(p, refs: Dict[str, str], ready: str, dist: str, unknown: List[str]) -> str:
+        """The 판단 cell: a category the model does not know (or a blank one), outside the training range, no measured
+        data nearby, the model's own accuracy."""
+        out = [f"OR({refs[c]}<{num(rng[c][0])},{refs[c]}>{num(rng[c][1])})" for c in p["num_inputs"]]
+        res = f'IF({dist}>{num(p["uncovered"])},"참고용 (실측 없는 영역)","{p["ok_text"]}")'
+        if out:
+            res = f'IF(OR({",".join(out)}),"참고용 (학습 범위 밖)",{res})'
+        if unknown:
+            res = f'IF(OR({",".join(unknown)}),"참고용 (학습에 없던 종류)",{res})'
+        return f'=IF(NOT({ready}),"",{res})'
 
     # -- 계산기 ------------------------------------------------------------------------------
     calc.sheet_view.showGridLines = False
@@ -616,15 +744,36 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     dv = DataValidation(type="decimal", operator="between", formula1="-1E+307", formula2="1E+307", allow_blank=True,
                         showErrorMessage=True, errorTitle="숫자만 입력", error="숫자만 입력할 수 있습니다.")
     calc.add_data_validation(dv)
+    text_dv = {}
+    for c, ref in lists.items():
+        text_dv[c] = DataValidation(type="list", formula1=ref, allow_blank=True, showErrorMessage=True,
+                                    errorTitle="목록에서 고르기", error="목록에 있는 종류만 고를 수 있습니다.")
+        calc.add_data_validation(text_dv[c])
     first_input = None
     in_short = target_labels(all_inputs)       # '온도(입구)', '온도(출구)': full names, never '온도' twice (D2)
     for i, c in enumerate(all_inputs):
         row = r + 1 + i
-        lo, hi, med = rng[c]
         name, unit = _label(c)
         if in_short[c] != strip_unit(c):
             name, unit = str(c), ""
         style(calc.cell(row=row, column=2, value=name), bold=True)
+        x = f"$C${row}"
+        x_refs[c] = x
+        if c in texts:
+            start = next(p["base"][c] for p in plans if c in p["text_inputs"])
+            v = calc.cell(row=row, column=3, value=start)
+            v.data_type = "s"
+            style(v, size=11, bold=True, fill=YELLOW, align="right", fmt="@")
+            v.protection = UNLOCK
+            text_dv[c].add(v.coordinate)
+            first_input = first_input or v.coordinate
+            style(calc.cell(row=row, column=4, value=unit), align="center")
+            style(calc.cell(row=row, column=5, value=f"종류 {len(texts[c])}개 (목록에서 고르기)"), align="center")
+            seen = f'SUMPRODUCT(--EXACT(TRIM({x}&""),{lists[c]}))>0'
+            style(calc.cell(row=row, column=6, value=f'=IF({seen},"정상",IF(TRIM({x}&"")="","값을 고르세요","학습에 없던 종류"))'),
+                  align="center")
+            continue
+        lo, hi, med = rng[c]
         v = calc.cell(row=row, column=3, value=_nice(med, hi - lo) if hi > lo else float(med))
         style(v, size=11, bold=True, fill=YELLOW, align="right")
         v.protection = UNLOCK
@@ -632,8 +781,6 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         first_input = first_input or v.coordinate
         style(calc.cell(row=row, column=4, value=unit), align="center")
         style(calc.cell(row=row, column=5, value=f"{_nice_txt(lo, hi - lo)} ~ {_nice_txt(hi, hi - lo)}"), align="center")
-        x = f"$C${row}"
-        x_refs[c] = x
         chk = f"OR({x}<{num(lo)},{x}>{num(hi)})"
         style(calc.cell(row=row, column=6, value=f'=IF(ISNUMBER({x}),IF({chk},"범위 밖","정상"),"값을 넣으세요")'), align="center")
     in_end = r + len(all_inputs)
@@ -648,9 +795,8 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         row = r2 + 1 + ti
         name, unit = _label(p["target"])
         name = name if short[p["target"]] == strip_unit(p["target"]) else short[p["target"]]
-        own = [x_refs[c] for c in p["cand"]["inputs"]]
-        ready = f"COUNT({','.join(own)})={len(own)}"
-        pf, dist, nxt = model_cells(calc, p, x_refs, row, helper_col, ready)
+        ready = ready_of(p, x_refs)
+        pf, dist, nxt, unknown = model_cells(calc, p, x_refs, row, helper_col, ready)
         iv = p["cand"]["interval"] or {"residual_lower": 0.0, "residual_upper": 0.0}
         style(calc.cell(row=row, column=2, value=name), bold=True)
         fmt = p["fmt"]
@@ -658,10 +804,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         style(calc.cell(row=row, column=4, value=unit), align="center")
         style(calc.cell(row=row, column=5, value=(f'=IF({ready},TEXT(C{row}+{num(iv["residual_lower"])},"{fmt}")&" ~ "&'
                                                    f'TEXT(C{row}+{num(iv["residual_upper"])},"{fmt}"),"")')), align="center")
-        out_rng = "OR(" + ",".join(f"OR({x}<{num(rng[c][0])},{x}>{num(rng[c][1])})" for c, x in zip(p["cand"]["inputs"], own)) + ")"
-        style(calc.cell(row=row, column=6, value=(f'=IF(NOT({ready}),"",IF({out_rng},"참고용 (학습 범위 밖)",'
-                                                   f'IF({dist}>{num(p["uncovered"])},"참고용 (실측 없는 영역)","{p["ok_text"]}")))')),
-              align="center")
+        style(calc.cell(row=row, column=6, value=judge(p, x_refs, ready, dist, unknown)), align="center")
         status_colors(calc, f"F{row}", f"F{row}")
         p["calc_cell"] = f"C{row}"
         for c in range(helper_col, nxt):
@@ -707,30 +850,37 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     bdv = DataValidation(type="decimal", operator="between", formula1="-1E+307", formula2="1E+307", allow_blank=True,
                          showErrorMessage=True, errorTitle="숫자만 입력", error="숫자만 입력할 수 있습니다.")
     batch.add_data_validation(bdv)
-    bdv.add(f"A3:{_col(len(all_inputs))}{BATCH_ROWS + 2}")
+    for j, c in enumerate(all_inputs, 1):
+        cells = f"{_col(j)}3:{_col(j)}{BATCH_ROWS + 2}"
+        if c in texts:
+            tdv = DataValidation(type="list", formula1=lists[c], allow_blank=True, showErrorMessage=True,
+                                 errorTitle="목록에서 고르기", error="목록에 있는 종류만 고를 수 있습니다.")
+            batch.add_data_validation(tdv)
+            tdv.add(cells)
+        else:
+            bdv.add(cells)
     for i in range(BATCH_ROWS):
         row = i + 3
         refs = {c: f"${_col(j + 1)}{row}" for j, c in enumerate(all_inputs)}
-        for j in range(len(all_inputs)):
+        for j, c in enumerate(all_inputs):
             cell = batch.cell(row=row, column=j + 1)
             cell.fill = YELLOW
             cell.protection = UNLOCK
             cell.border = BOX
+            if c in texts:
+                cell.number_format = "@"
         hc = helper0 + 1
         rc = 0
         for p in plans:
-            own = [refs[c] for c in p["cand"]["inputs"]]
-            ready = f"COUNT({','.join(own)})={len(own)}"
-            pf, dist, hc = model_cells(batch, p, refs, row, hc, ready)
+            ready = ready_of(p, refs)
+            pf, dist, hc, unknown = model_cells(batch, p, refs, row, hc, ready)
             iv = p["cand"]["interval"] or {"residual_lower": 0.0, "residual_upper": 0.0}
             pc = res_cols[rc]
             fmt = p["fmt"]
             batch.cell(row=row, column=pc, value=f'=IF({ready},{pf},"")').number_format = fmt
             batch.cell(row=row, column=pc + 1, value=f'=IF({ready},{_col(pc)}{row}+{num(iv["residual_lower"])},"")').number_format = fmt
             batch.cell(row=row, column=pc + 2, value=f'=IF({ready},{_col(pc)}{row}+{num(iv["residual_upper"])},"")').number_format = fmt
-            out_rng = "OR(" + ",".join(f"OR({x}<{num(rng[c][0])},{x}>{num(rng[c][1])})" for c, x in zip(p["cand"]["inputs"], own)) + ")"
-            batch.cell(row=row, column=pc + 3, value=(f'=IF(NOT({ready}),"",IF({out_rng},"참고용 (학습 범위 밖)",'
-                                                      f'IF({dist}>{num(p["uncovered"])},"참고용 (실측 없는 영역)","{p["ok_text"]}")))'))
+            batch.cell(row=row, column=pc + 3, value=judge(p, refs, ready, dist, unknown))
             rc += 4
     for c in res_cols[3::4]:
         status_colors(batch, f"{_col(c)}3:{_col(c)}{BATCH_ROWS + 2}", f"{_col(c)}3")
@@ -748,8 +898,12 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         ("- 판단 '참고용 (학습 범위 밖)': 입력이 모델이 배운 범위를 벗어났습니다. 값이 부정확할 수 있습니다.", False),
         ("- 판단 '참고용 (실측 없는 영역)': 각 입력은 범위 안이지만, 이런 조합의 실제 데이터가 근처에 없었습니다.", False),
         (f"- 판단 '참고용 (모델 정확도 낮음)': 모델의 검증 R²가 {LOW_R2} 미만이라 예측값을 그대로 쓰기 어렵습니다.", False),
-        ("- 입력 칸이 하나라도 비어 있으면 예측값을 내지 않습니다 (모델은 빈 값을 학습 데이터의 중앙값으로 채워 예측하지만, "
+        ("- 숫자 입력 칸이 하나라도 비어 있으면 예측값을 내지 않습니다 (모델은 빈 값을 학습 데이터의 중앙값으로 채워 예측하지만, "
          "계산기는 값을 모두 넣어야 계산합니다).", False),
+    ] + ([
+        ("- 글자(종류) 입력은 노란 칸의 목록에서 고릅니다. 비어 있거나 학습에 없던 종류면 모델처럼 계산하지만(그 입력을 모르는 종류로 봄) "
+         "판단은 '참고용 (학습에 없던 종류)'입니다.", False),
+    ] if texts else []) + [
         ("", False),
         ("이 파일에 대해", True),
         ("- 입력 항목과 모델 정보는 '정보' 시트, 모델 정확도와 계산 확인 결과는 '정확도' 시트에 있습니다.", False),
@@ -768,7 +922,9 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         style(acc.cell(row=row, column=2, value=f"{p['target']}"), size=12, bold=True, color=NAVY, border=False)
         for label, v in (("모델", c["model"]), ("입력", f"{len(c['inputs'])}개"), ("검증 R²", round(c["val_r2"], 4)),
                          ("RMSE", _sig(c["rmse"])), ("계산 방식", method_text(c["form"])),
-                         ("모델과 같은지 확인", f"조건 {chk['points']:,}개 (무작위 {CHECK_POINTS:,}개 + 학습 데이터 {chk['points'] - CHECK_POINTS:,}행), "
+                         ("모델과 같은지 확인", f"조건 {chk['points']:,}개 (무작위 {CHECK_POINTS:,}개"
+                                         + (f" + 글자 입력 종류별 {chk['edge']:,}개" if chk.get("edge") else "")
+                                         + f" + 학습 데이터 {chk['points'] - CHECK_POINTS - chk.get('edge', 0):,}행), "
                                          f"최대 차이 {chk['max_diff']:.3g} (예측값의 {chk['max_rel_pct']:.2g}%)")):
             row += 1
             style(acc.cell(row=row, column=2, value=label), border=False)
@@ -908,13 +1064,47 @@ def uncovered_distance(T: np.ndarray, data: pd.DataFrame, inputs: List[str]) -> 
     return float(max(UNCOVERED_DIST, np.quantile(d[:, 1], UNCOVERED_Q)))
 
 
+UNSEEN = "__학습에_없던_종류__"   # a category the model never saw (check condition: all one-hot features 0)
+
+
+def category_list(cand: Dict[str, Any], col: str) -> List[str]:
+    """The training categories of a text input that the model knows (its one-hot features, the empty one left out)."""
+    return [o["category"] for o in cand["form"]["onehot"] if o["input"] == col and o["category"] != MISSING]
+
+
+def base_values(cand: Dict[str, Any], data: pd.DataFrame) -> Dict[str, Any]:
+    """The calculator's starting condition: the training median of a number, the most frequent known category of a text."""
+    out: Dict[str, Any] = {}
+    cats = set(category_inputs(cand))
+    for c in cand["inputs"]:
+        if c in cats:
+            known = category_list(cand, c)
+            seen = data[c].map(excel_text)
+            counts = seen[seen.isin(known)].value_counts()
+            out[c] = str(counts.index[0]) if len(counts) else (known[0] if known else "")
+        else:
+            out[c] = float(coerce_numeric(data[c]).median())
+    return out
+
+
 def check_points(cand: Dict[str, Any], data: pd.DataFrame) -> pd.DataFrame:
-    """Random conditions inside the training range plus every training row (the rows the splits were made from)."""
+    """Random conditions inside the training range plus every training row (the rows the splits were made from).
+    A text input (결정 2-2): random known categories, and at the base condition every category, a category the model
+    never saw, a blank and a category with spaces around it. attrs['edge'] = the number of those."""
     rng = np.random.default_rng(0)
-    P = pd.DataFrame({c: rng.uniform(*rng_of(data, c), CHECK_POINTS) for c in cand["inputs"]})
-    T = data[cand["inputs"]].apply(coerce_numeric)
-    T = T[np.isfinite(T.to_numpy(dtype=float)).all(axis=1)]
-    return pd.concat([P, T], ignore_index=True)
+    cats = category_inputs(cand)
+    P = pd.DataFrame({c: (rng.choice(np.array(category_list(cand, c) or [UNSEEN], dtype=object), CHECK_POINTS) if c in cats
+                          else rng.uniform(*rng_of(data, c), CHECK_POINTS)) for c in cand["inputs"]})
+    base = base_values(cand, data)
+    edge = [dict(base, **{c: v}) for c in cats for v in category_list(cand, c) + [UNSEEN, None, f" {base[c]} "]]
+    E = pd.DataFrame(edge, columns=cand["inputs"])
+    T = pd.DataFrame({c: (data[c] if c in cats else coerce_numeric(data[c])) for c in cand["inputs"]})
+    nums = [c for c in cand["inputs"] if c not in cats]
+    if nums:
+        T = T[np.isfinite(T[nums].to_numpy(dtype=float)).all(axis=1)]
+    out = pd.concat([P, E, T], ignore_index=True) if edge else pd.concat([P, T], ignore_index=True)
+    out.attrs["edge"] = len(edge)
+    return out
 
 
 def model_check(cand: Dict[str, Any], form: Dict[str, Any], P: pd.DataFrame) -> Dict[str, Any]:
@@ -923,13 +1113,15 @@ def model_check(cand: Dict[str, Any], form: Dict[str, Any], P: pd.DataFrame) -> 
     got = mirror(form, model_features(cand, P))
     d = np.abs(got - want)
     scale = np.maximum(np.abs(want), 1e-12)
-    return {"points": int(len(P)), "max_diff": float(d.max()), "max_rel_pct": float((d / scale).max() * 100),
+    return {"points": int(len(P)), "edge": int(P.attrs.get("edge", 0)), "max_diff": float(d.max()),
+            "max_rel_pct": float((d / scale).max() * 100),
             "same": bool(np.all(d <= 1e-9 * (np.abs(want) + float(np.ptp(want)) + 1e-12)))}
 
 
 def verify_workbook(path: str, plans: List[Dict[str, Any]]) -> List[str]:
     """Re-reads the saved file (read-only, fast): sheets, sheet and structure protection, unlocked inputs, the
-    prediction formulas, and the leaves in the file bit for bit the leaves checked against the model."""
+    prediction formulas, and the leaves in the file bit for bit the leaves checked against the model. Text inputs
+    (결정 2-2): the hidden list holds every category the model knows and each text input cell has its dropdown."""
     import zipfile
     from openpyxl import load_workbook
     problems = []
@@ -938,12 +1130,30 @@ def verify_workbook(path: str, plans: List[Dict[str, Any]]) -> List[str]:
     except Exception as e:
         return [f"저장한 파일을 다시 열지 못함: {e}"]
     try:
-        names = ["계산기", "일괄계산", "사용법", "정확도", "정보"] + [p["sheet"] for p in plans]
+        texts = [c for p in plans for c in p["text_inputs"]]
+        names = ["계산기", "일괄계산", "사용법", "정확도", "정보"] + [p["sheet"] for p in plans] + (["목록"] if texts else [])
         problems += [f"'{n}' 시트 없음" for n in names if n not in wb.sheetnames]
         with zipfile.ZipFile(path) as z:        # openpyxl writes the i-th sheet as sheet<i>.xml
             for i, n in enumerate(wb.sheetnames, 1):
-                if b"<sheetProtection" not in z.read(f"xl/worksheets/sheet{i}.xml"):
+                xml = z.read(f"xl/worksheets/sheet{i}.xml")
+                if b"<sheetProtection" not in xml:
                     problems.append(f"'{n}' 시트 잠금 안 됨")
+                if n in ("계산기", "일괄계산") and texts:
+                    lists = [re.search(rb'sqref="([^"]+)"', tag) for tag in re.findall(rb"<dataValidation [^>]*>", xml)
+                             if b'type="list"' in tag]
+                    cells = " ".join(x.group(1).decode("ascii") for x in lists if x)
+                    want = ({p["input_cells"][c] for p in plans for c in p["text_inputs"]} if n == "계산기"
+                            else {f"{_col(p['batch_inputs'][c])}3:" for p in plans for c in p["text_inputs"]})
+                    if len(lists) < len(set(texts)) or any(w not in cells for w in want):
+                        problems.append(f"'{n}' 글자 입력 칸에 목록(드롭다운)이 없음")
+        if texts and "목록" in wb.sheetnames:
+            rows = list(wb["목록"].iter_rows(values_only=True))
+            got = {str(h): [str(r[j]) for r in rows[1:] if j < len(r) and r[j] is not None]
+                   for j, h in enumerate(rows[0] if rows else []) if h is not None}
+            for p in plans:
+                for c in p["text_inputs"]:
+                    if not set(category_list(p["cand"], c)) <= set(got.get(c, [])):
+                        problems.append(f"'{c}' 목록에 모델이 아는 종류가 다 없음")
         if not (wb.security and wb.security.lockStructure):
             problems.append("통합문서 구조 잠금 안 됨")
         if "계산기" in wb.sheetnames:
@@ -987,7 +1197,7 @@ def edge_points(p: Dict[str, Any]) -> pd.DataFrame:
     form, cand = p["cand"]["form"], p["cand"]
     if form["kind"] != "trees":
         return pd.DataFrame(columns=cand["inputs"])
-    med = {c: float(coerce_numeric(p["data"][c]).median()) for c in cand["inputs"]}
+    med = base_values(cand, p["data"])
     rows = []
     for j, f in enumerate(form["used"]):
         name = form["features"][f]
@@ -1013,9 +1223,10 @@ def derived_points(p: Dict[str, Any]) -> pd.DataFrame:
     cand = p["cand"]
     if not cand["evals"]:
         return pd.DataFrame(columns=cand["inputs"])
-    med = {c: float(coerce_numeric(p["data"][c]).median()) for c in cand["inputs"]}
-    rows = [{c: 0.0 for c in cand["inputs"]}, {c: -1.5 for c in cand["inputs"]}]
-    for c in cand["inputs"]:
+    med = base_values(cand, p["data"])
+    nums = [c for c in cand["inputs"] if c not in category_inputs(cand)]
+    rows = [dict(med, **{c: 0.0 for c in nums}), dict(med, **{c: -1.5 for c in nums})]
+    for c in nums:
         rows += [dict(med, **{c: 0.0}), dict(med, **{c: -abs(med[c]) - 1.0})]
     return pd.DataFrame(rows[:DERIVED_POINTS], columns=cand["inputs"])
 
@@ -1072,10 +1283,14 @@ def excel_check(path: str, plans: List[Dict[str, Any]]) -> Optional[str]:
                           ignore_index=True)
             want = predict_frame(p["cand"], P)
             n = len(P)
+            cats = set(category_inputs(p["cand"]))
+
+            def cell_value(c, v):
+                return (v if isinstance(v, str) else excel_text(v)) if c in cats else float(v)
             for c, col in p["batch_inputs"].items():
-                batch.Range(batch.Cells(3, col), batch.Cells(2 + n, col)).Value = tuple((float(v),) for v in P[c])
+                batch.Range(batch.Cells(3, col), batch.Cells(2 + n, col)).Value = tuple((cell_value(c, v),) for v in P[c])
             for c in p["cand"]["inputs"]:
-                calc.Range(p["input_cells"][c]).Value = float(P.at[0, c])
+                calc.Range(p["input_cells"][c]).Value = cell_value(c, P.at[0, c])
             xl.Calculate()
             got = [r[0] for r in batch.Range(batch.Cells(3, p["batch_pred_col"]), batch.Cells(2 + n, p["batch_pred_col"])).Value]
             got.append(calc.Range(p["calc_cell"]).Value)
@@ -1122,7 +1337,9 @@ def execute_export(args) -> Dict[str, Any]:
         if excl in data.columns:
             data = data[coerce_numeric(data[excl]).fillna(0) != 1]
         data = data[coerce_numeric(data[target]).notna()].reset_index(drop=True)
-        const = [c for c in inputs if coerce_numeric(data[c]).nunique(dropna=True) <= 1]
+        text_in = [c for c in inputs if c in (meta["feature_schema"].get("categorical") or {})]
+        nums = [c for c in inputs if c not in text_in]
+        const = [c for c in nums if coerce_numeric(data[c]).nunique(dropna=True) <= 1]
         if const:
             warnings.append(f"'{target}': 입력 {const}은(는) 학습 데이터에서 값이 하나뿐입니다 (계산기 기본값이 그 값이고, "
                             f"다른 값은 '범위 밖')")
@@ -1132,15 +1349,16 @@ def execute_export(args) -> Dict[str, Any]:
         cand = {"inputs": list(inputs), "evals": list(evals), "schema": meta["feature_schema"], "pipe": pipe,
                 "val_r2": float(meta["val_r2"]), "rmse": float(meta["rmse"]), "model": meta.get("champion_model"),
                 "interval": meta.get("prediction_interval"), "form": form}
-        known = set(inputs) | {e.split("=", 1)[0].strip() for e in evals}
-        if not set(form["features"]) <= known:
-            raise _unsupported(f"모델 입력 {sorted(set(form['features']) - known)}을(를) 입력·파생변수에서 찾지 못함")
-        T = data[inputs].apply(coerce_numeric)
+        known = set(nums) | {e.split("=", 1)[0].strip() for e in evals}
+        if not set(form["num_features"]) <= known or not {o["input"] for o in form["onehot"]} <= set(text_in):
+            raise _unsupported(f"모델 입력 {sorted(set(form['num_features']) - known)}을(를) 입력·파생변수에서 찾지 못함")
+        # the "no measured data nearby" distance is over the number inputs (a text input has no distance)
+        T = data[nums].apply(coerce_numeric)
         T = T[np.isfinite(T.to_numpy(dtype=float)).all(axis=1)].to_numpy(dtype=float)
         sampled = len(T) > COVER_ROWS
         if sampled:
             T = T[np.sort(np.random.default_rng(0).choice(len(T), COVER_ROWS, replace=False))]
-        uncovered = uncovered_distance(T, data, inputs)
+        uncovered = uncovered_distance(T, data, nums)
         P = check_points(cand, data)
         chk = model_check(cand, form, P)
         if not chk["same"]:
@@ -1149,6 +1367,7 @@ def execute_export(args) -> Dict[str, Any]:
             warnings.append(f"'{target}': 검증 R² {cand['val_r2']:.2f}로 {LOW_R2} 미만이라 예측값은 참고용입니다 (계산기 판단 칸에 "
                             f"'참고용 (모델 정확도 낮음)'으로 표시)")
         plans.append({"target": target, "cand": cand, "data": data, "cover": T, "cover_sampled": sampled, "uncovered": uncovered,
+                      "num_inputs": nums, "text_inputs": text_in, "base": base_values(cand, data),
                       "derived": derived_formulas(cand), "check": chk, "points": P,
                       "fmt": value_format(predict_frame(cand, P)),
                       "ok_text": "정상" if cand["val_r2"] >= LOW_R2 else "참고용 (모델 정확도 낮음)"})
