@@ -44,12 +44,12 @@ TOOL = "reader"
 SUPPORTED = {
     ".pdf": "pdf", ".hwp": "hwp", ".hwpx": "hwpx",
     ".docx": "docx", ".docm": "docx", ".pptx": "pptx", ".pptm": "pptx",
-    ".xlsx": "xlsx", ".xlsm": "xlsx", ".csv": "csv", ".txt": "txt", ".md": "txt",
+    ".xlsx": "xlsx", ".xlsm": "xlsx", ".csv": "csv", ".txt": "txt", ".md": "txt", ".eml": "eml",
 }
-UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행"}
+UNIT_NAMES = {"pdf": "단락", "pptx": "슬라이드", "xlsx": "행", "csv": "행", "eml": "항목"}
 LEGACY_TYPES = {".doc", ".xls", ".ppt", ".rtf", ".xlsb", ".odt", ".ods", ".odp"}   # 읽지 않는 문서 형식 (폴더 검색이면 not_searched)
 PAGE_TYPES = ("pdf", "pptx")   # read --pages가 실제 쪽/슬라이드 번호인 형식 (그 밖은 항목 번호)
-PARSER_VERSION = 11         # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만, 8: 짧은 글(도장·Bates 번호)만 남은 스캔 쪽도, 보이지 않는 OCR 글자 층이 있는 쪽은 제외, 9: DOCX 글상자 글, XLSX 계산된 값이 없는 수식 칸 meta, 10: fullCalcOnLoad 파일의 수식 칸·확인 못함도 meta, 11: 표 머리글 행도 단위·2열 표·이어진 PDF 표, PDF 줄바꿈 제목, DOCX 머리글·바닥글·각주와 PDF 반복 머리글을 단위로)
+PARSER_VERSION = 12         # 파서가 바뀌면 올려서 기존 캐시를 무효화 (2: 공통 단위 형식, 장절/번호/쪽, 3: PDF 머리글·2단, DOCX 변경 추적·표 행 쪽, 4: 나열 항목은 제목 아님, 5: PDF 글자 없는 쪽 meta, 6: 글자 없는 쪽은 그림이 있는 쪽만, 7: 머리글을 뺀 뒤 글이 없고 그림이 쪽을 크게 덮는 쪽만, 8: 짧은 글(도장·Bates 번호)만 남은 스캔 쪽도, 보이지 않는 OCR 글자 층이 있는 쪽은 제외, 9: DOCX 글상자 글, XLSX 계산된 값이 없는 수식 칸 meta, 10: fullCalcOnLoad 파일의 수식 칸·확인 못함도 meta, 11: 표 머리글 행도 단위·2열 표·이어진 PDF 표, PDF 줄바꿈 제목, DOCX 머리글·바닥글·각주와 PDF 반복 머리글을 단위로, 12: .eml)
 SCAN_IMAGE_COVER = 0.4      # 스캔 쪽으로 보는 그림 면적 비율 (쪽 면적 대비)
 SCAN_TEXT_MAX = 40          # 그림이 덮는 쪽에 이보다 적은 글자(도장, Bates 번호)만 남으면 스캔 쪽
 MAX_SHEET_ROWS = 20000      # xlsx 시트당 최대 행 수
@@ -1518,8 +1518,156 @@ def parse_txt(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     return b.units, {}
 
 
+# ---------------------------------------------------------------- EML (메일 파일, 1.5.0)
+# 헤더·본문·첨부 이름만 읽음 (첨부 안의 글은 읽지 않음: 사용자 결정 2026-11-10, 원본 메일은 Outlook에서 연다).
+# 시험 스크립트 tools/eml_read_trial.py(회사 PC에서 잘 읽힘)와 같은 규칙.
+
+EML_FORWARD_DEPTH = 2        # 전달된 메일(메일 안의 메일)을 읽는 깊이
+
+
+def _eml_bytes(raw: bytes, declared: Optional[str] = None) -> str:
+    for enc in (declared, "utf-8", "cp949", "euc-kr"):
+        if not enc:
+            continue
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("latin-1")
+
+
+def _eml_header(value: Any) -> str:
+    """RFC2047 인코딩과 인코딩 표시 없는 8비트(CP949 등) 헤더."""
+    from email.header import decode_header, make_header
+    if value is None:
+        return ""
+    s = str(value)
+    try:
+        raw = s.encode("ascii", "surrogateescape")
+        if any(b > 127 for b in raw):
+            return _eml_bytes(raw).strip()
+    except UnicodeEncodeError:
+        pass
+    try:
+        return " ".join(str(make_header(decode_header(s))).split())
+    except Exception:
+        return " ".join(s.split())
+
+
+def _eml_html_text(html: str) -> str:
+    import html as _html
+    html = re.sub(r"(?is)<(script|style|head).*?</\1>", " ", html)
+    html = re.sub(r"(?i)<br\s*/?>", "\n", html)
+    html = re.sub(r"(?i)</p>|</div>|</tr>|</li>|</h\d>|</table>", "\n\n", html)       # 단락 끝: 빈 줄 (본문 단락으로 나눔)
+    text = _html.unescape(re.sub(r"<[^>]+>", " ", html))
+    lines = [" ".join(ln.split()) for ln in text.splitlines()]
+    out: List[str] = []
+    for ln in lines:                              # 빈 줄 하나로 단락을 나눔
+        if ln or (out and out[-1]):
+            out.append(ln)
+    return "\n".join(out).strip()
+
+
+def _eml_message(msg: Any) -> Dict[str, Any]:
+    """email.message -> {subject, from_name, from_addr, to, cc, date(현지 표기 글), body, attachments, forwarded[메일...]}."""
+    from email.utils import getaddresses, parsedate_to_datetime
+    raw: Dict[str, Any] = {}
+    for k, v in msg.raw_items():
+        raw.setdefault(k.lower(), v)
+    frm = _eml_header(raw.get("from"))
+    name, addr = (getaddresses([frm]) or [("", "")])[0]
+    date = ""
+    if msg.get("Date"):
+        try:
+            date = parsedate_to_datetime(str(msg.get("Date"))).strftime("%Y-%m-%d %H:%M")   # 메일에 적힌 그대로의 시각
+        except Exception:
+            date = ""
+    plain: List[str] = []
+    html: List[str] = []
+    atts: List[str] = []
+    forwarded: List[Any] = []
+
+    def walk(part: Any) -> None:
+        ctype = part.get_content_type()
+        if ctype == "message/rfc822":             # 전달된 메일: 본문에 섞지 않고 따로
+            for sub in (part.get_payload() or []):
+                forwarded.append(sub)
+            return
+        if part.is_multipart():
+            for sub in part.get_payload():
+                walk(sub)
+            return
+        filename = part.get_filename()
+        disp = (part.get("Content-Disposition") or "").lower()
+        if filename or disp.startswith("attachment"):
+            atts.append(_eml_header(filename) if filename else "이름 없는 첨부")
+            return
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return
+        text = _eml_bytes(payload, part.get_content_charset())
+        if ctype == "text/plain":
+            plain.append(text)
+        elif ctype == "text/html":
+            html.append(text)
+
+    walk(msg)
+    body = "\n\n".join(t.replace("\r\n", "\n").strip() for t in plain if t.strip()) or _eml_html_text("\n".join(html))
+    return {"subject": _eml_header(raw.get("subject")), "from_name": name or addr, "from_addr": addr,
+            "to": _eml_header(raw.get("to")), "cc": _eml_header(raw.get("cc")), "date": date, "body": body,
+            "attachments": atts, "forwarded": forwarded}
+
+
+def eml_label(mail: Dict[str, Any]) -> str:
+    """근거·장절에 쓸 메일 표시: '제목 (2026-03-02 14:05, 김철수)'."""
+    who = mail.get("from_name") or mail.get("from_addr") or "보낸 사람 없음"
+    when = mail.get("date") or "날짜 없음"
+    return f"{mail.get('subject') or '(제목 없음)'} ({when}, {who})"
+
+
+def parse_eml(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """메일 한 통: 제목·헤더(보낸 사람, 받는 사람, 참조, 날짜)·본문 단락·첨부 이름 단위, 전달된 메일은 그 안의 같은 단위를
+    '전달된 메일'로 (장절 = 메일 표시). 첨부 안의 글은 읽지 않음."""
+    import email
+    from email import policy
+    try:
+        with open(path, "rb") as f:
+            msg = email.message_from_binary_file(f, policy=policy.compat32)
+    except OSError as e:
+        raise rt.InputError(f"메일 파일을 열 수 없습니다: {os.path.basename(path)} ({type(e).__name__})")
+    top = _eml_message(msg)
+    if not (top["subject"] or top["from_addr"] or top["body"]):
+        raise rt.InputError(f"메일 파일로 읽을 수 없습니다 (제목·보낸 사람·본문이 없음): {os.path.basename(path)}")
+    b = UnitBuilder()
+
+    def add_mail(mail: Dict[str, Any], prefix: str, depth: int) -> None:
+        sec = [prefix + eml_label(mail)]
+        b.add("heading", f"{prefix}제목", mail["subject"] or "(제목 없음)", None, None, None, section=sec)
+        head = "; ".join(x for x in (f"보낸 사람: {mail['from_name']} <{mail['from_addr']}>" if mail["from_addr"] else "",
+                                     f"받는 사람: {mail['to']}" if mail["to"] else "", f"참조: {mail['cc']}" if mail["cc"] else "",
+                                     f"날짜: {mail['date']}" if mail["date"] else "") if x)
+        if head:
+            b.add("paragraph", f"{prefix}헤더", head, None, None, None, section=sec)
+        for n, para in enumerate([p.strip() for p in re.split(r"\n\s*\n", mail["body"]) if p.strip()], 1):
+            b.add("paragraph", f"{prefix}본문 {n}", " ".join(para.split()), None, None, None, section=sec)
+        if mail["attachments"]:
+            b.add("paragraph", f"{prefix}첨부", "첨부: " + ", ".join(mail["attachments"]), None, None, None, section=sec)
+        if depth < EML_FORWARD_DEPTH:
+            for sub in mail["forwarded"]:
+                try:
+                    add_mail(_eml_message(sub), "전달된 메일 ", depth + 1)
+                except Exception:                    # noqa: BLE001  전달된 메일 하나를 못 읽어도 바깥 메일은 그대로
+                    continue
+
+    add_mail(top, "", 0)
+    meta = {"mail": {"subject": top["subject"], "from": f"{top['from_name']} <{top['from_addr']}>" if top["from_addr"] else top["from_name"],
+                     "to": top["to"], "cc": top["cc"], "date": top["date"], "attachments": top["attachments"][:MAX_LIST_ITEMS],
+                     "attachment_count": len(top["attachments"]), "forwarded": len(top["forwarded"])}}
+    return b.units, meta
+
+
 PARSERS = {"pdf": parse_pdf, "hwp": parse_hwp, "hwpx": parse_hwpx, "docx": parse_docx,
-           "pptx": parse_pptx, "xlsx": parse_xlsx, "csv": parse_csv, "txt": parse_txt}
+           "pptx": parse_pptx, "xlsx": parse_xlsx, "csv": parse_csv, "txt": parse_txt, "eml": parse_eml}
 
 
 def file_type(path: str) -> str:
@@ -3999,6 +4147,43 @@ def _page_seam_hits(docs: List[Dict[str, Any]], matcher: Any, pages: Optional[se
     return out
 
 
+def _mail_whole_hits(docs: List[Dict[str, Any]], matcher: Any, hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """메일은 한 통이 한 검색 대상: 검색어가 제목·헤더·본문·첨부 이름에 나뉘어 있어도 맞음 ('견적;김철수'가 제목과 보낸 사람에
+    나뉜 메일). 단위 하나로 이미 맞은 메일은 뺌."""
+    done = {id(h["doc"]) for h in hits}
+    out: List[Dict[str, Any]] = []
+    for doc in docs:
+        if doc.get("type") != "eml" or id(doc) in done or not doc["units"]:
+            continue
+        joined = " \n ".join(u["text"] for u in doc["units"] if not u["loc"].startswith("전달된 메일"))
+        terms = matcher(joined)
+        if terms is None:
+            continue
+        unit = dict(doc["units"][0], text=joined, loc="메일 전체")
+        out.append({"doc": doc, "unit": unit, "terms": terms, "matched_terms": list(terms), "literal": literal_hit(joined, terms)})
+    return out
+
+
+def _group_mail_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """메일은 한 통에 결과 하나 (가장 좋은 곳, 맞은 곳 수는 mail_hits). 결과가 모두 메일이면 받은 날짜 최신순."""
+    seen: Dict[int, Dict[str, Any]] = {}
+    out: List[Dict[str, Any]] = []
+    for h in hits:
+        if h["doc"].get("type") != "eml":
+            out.append(h)
+            continue
+        first = seen.get(id(h["doc"]))
+        if first is None:
+            h["mail_hits"] = 1
+            seen[id(h["doc"])] = h
+            out.append(h)
+        else:
+            first["mail_hits"] += 1
+    if out and all(h["doc"].get("type") == "eml" for h in out):
+        out.sort(key=lambda h: str(((h["doc"].get("meta") or {}).get("mail") or {}).get("date") or ""), reverse=True)
+    return out
+
+
 def cmd_search(args) -> Dict[str, Any]:
     matcher = build_matcher(args.query, args.regex, args)
     flags = re.IGNORECASE
@@ -4043,6 +4228,7 @@ def cmd_search(args) -> Dict[str, Any]:
                          "literal": True if args.regex else literal_hit(u["text"], terms)})
     if not args.regex:
         hits += _page_seam_hits(docs, matcher, pages, sec_filter)
+        hits += _mail_whole_hits(docs, matcher, hits)
     groups = [] if args.regex else parse_query(args.query)
     has_num = any(literal_finder(t) for g in groups for t in g)       # 숫자가 든 검색어: 결과마다 literal(층 A) 표시
     # 층 B(표기가 다른 일치)가 섞이면 exact_mixed: 결과에 함께 넣되 VERIFIED로 내지 않음
@@ -4058,6 +4244,7 @@ def cmd_search(args) -> Dict[str, Any]:
     if not args.regex:
         # 글자 그대로 일치(층 A)를 먼저, 그 안에서 좋은 결과부터 (같은 점수는 문서 순서)
         hits.sort(key=lambda h: (not h.get("literal", True), -h["score"]))
+    hits = _group_mail_hits(hits)
     syn_used = {t: synonyms_of(t) for g in groups for t in g if synonyms_of(t)}
 
     total = len(hits)
@@ -4182,6 +4369,10 @@ def cmd_search(args) -> Dict[str, Any]:
                 item["text_truncated"] = True     # 전체는 --save 파일 (--full이면 단위 전체 저장)
                 item["text_chars"] = len(u["text"])
                 text_cut += 1
+        if doc.get("type") == "eml":            # 메일: 원본 eml 경로(path)로 Outlook에서 열어 봄
+            item["mail"] = (doc.get("meta") or {}).get("mail", {})
+            if h.get("mail_hits", 1) > 1:
+                item["mail_hits"] = h["mail_hits"]
         if doc.get("file_missing"):
             item["file_missing"] = True
         if doc.get("_stale"):

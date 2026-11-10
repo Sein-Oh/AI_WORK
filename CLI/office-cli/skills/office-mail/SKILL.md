@@ -1,10 +1,10 @@
 ---
 name: office-mail
-description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기, 첨부 목록·내려받기, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
+description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기, 첨부 목록·내려받기, 내려받은 eml 폴더 검색, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.4.99"
+  version: "1.5.0"
   platform: windows
 ---
 
@@ -32,8 +32,10 @@ metadata:
 | 답장 | `python "C:\CLI\office-cli\outlook.py" reply --id 3 --body "<내용>" [--attach "C:\전체경로\파일.pdf"]` (전체 답장 `--all`, 긴 본문 `--body-file "<본문.md>"`) |
 | 새 메일 | `python "C:\CLI\office-cli\outlook.py" new --to <주소> --subject "<제목>" --body "<내용>" [--cc <주소>] [--attach "<전체경로>"]` |
 | 전달 | `python "C:\CLI\office-cli\outlook.py" forward --id 3 --to <주소> [--attach "<전체경로>"]` |
+| eml 폴더 검색 (Outlook 없이) | `python "C:\CLI\office-cli\reader.py" search --query "<말>" --file "<eml 폴더>"` (`;` 그리고, `|` 또는. 처음은 등록이라 오래 걸림, `CONTINUE`면 같은 명령) |
 | 초안 보내기 | `python "C:\CLI\office-cli\outlook.py" send --id <draft_id>` (new·reply·forward 결과의 `confirm_commands[0]`, 사용자 "예" 뒤에만) |
 
+- eml 검색 결과는 메일 한 통에 하나다. 메일마다 `mail`(제목, 보낸 사람, 날짜, 첨부 이름)과 `path`(원본 eml)를 알리고, 원본은 사용자가 그 eml을 열어 본다고 안내한다. 첨부 안의 글은 찾지 않는다.
 - `--attach` 여러 파일은 `;`로 구분한다 (`"C:\a.pdf;C:\b.xlsx"`).
 - 첨부를 저장하면 결과의 `folder`와 파일 이름을 알린다. 다른 폴더는 사용자가 준 전체 경로로만. 같은 이름이 있으면 덮어쓰지 않고 새 이름으로 저장된다. 내용을 보려면 결과의 `next_commands`(reader.py read, 여럿이면 reader.py index)를 그대로 실행한다.
 

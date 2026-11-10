@@ -304,7 +304,7 @@ def docs(tmp_path):
     korean_pdf(folder / "계획서.pdf")
     english_pdf(folder / "spec.pdf")
     spec_docx(folder / "sub" / "규격.docx")
-    (folder / "메일.eml").write_bytes(b"Subject: x\r\n\r\nbody")
+    (folder / "메일.msg").write_bytes(b"\xd0\xcf\x11\xe0")          # 지원하지 않는 형식 (1.5.0부터 .eml은 읽음)
     (folder / "그림.png").write_bytes(b"\x89PNG")
     return folder
 
@@ -1589,7 +1589,7 @@ def test_index_folder_counts_and_unsupported_skipped(docs):
     code, out = run_reader("index", "--folder", str(docs))
     assert code == 0 and out["status"] == "ok"
     assert (out["count"], out["indexed"], out["updated"], out["unchanged"], out["failed"]) == (3, 3, 0, 0, 0)
-    assert out["skipped_types"] == {".eml": 1, ".png": 1} and out["truncated"] is False
+    assert out["skipped_types"] == {".msg": 1, ".png": 1} and out["truncated"] is False
     code, out = run_reader("index", "--folder", str(docs))
     assert (out["indexed"], out["unchanged"]) == (0, 3)
     os.utime(docs / "spec.pdf", (1, 1))
@@ -1629,7 +1629,7 @@ def test_search_file_auto_caches_then_uses_cache(docs):
     code, out = run_reader("search", "--query", "Purpose", "--file", str(docs / "spec.pdf"))
     assert out["indexed_now"] == [] and out["from_cache"] == 1
     code, out = run_reader("search", "--query", "내전압", "--file", str(docs))           # 폴더: 남은 2개만 새로 등록
-    assert out["indexed_now_count"] == 2 and out["from_cache"] == 1 and out["skipped_types"][".eml"] == 1
+    assert out["indexed_now_count"] == 2 and out["from_cache"] == 1 and out["skipped_types"][".msg"] == 1
     code, out = run_reader("list", "--name", "SPEC")
     assert out["count"] == 1 and out["documents"][0]["file"] == "spec.pdf"
 
@@ -1734,14 +1734,13 @@ def test_read_shows_page_section_number_and_page_filter(docs):
     assert out["documents"][0]["pages"] == 2 and "parser_version" not in out["documents"][0]      # 현재 형식이면 넣지 않음 (1.4.97)
 
 
-def test_eml_is_unsupported_like_any_unknown_type(tmp_path):
-    f = tmp_path / "메일.eml"
-    f.write_bytes(b"Subject: x\r\n\r\nbody")
+def test_msg_is_unsupported_like_any_unknown_type(tmp_path):
+    f = tmp_path / "메일.msg"
+    f.write_bytes(b"\xd0\xcf\x11\xe0")
     for args in (("read", "--file", str(f)), ("search", "--query", "x", "--file", str(f)), ("index", "--file", str(f))):
         code, out = run_reader(*args)
         assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:")
-        assert "지원하지 않는 형식입니다: .eml" in out["message"] and ".pdf" in out["message"]
-    assert not hasattr(reader, "parse_eml") and ".eml" not in reader.SUPPORTED
+        assert "지원하지 않는 형식입니다: .msg" in out["message"] and ".eml" in out["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -3571,3 +3570,86 @@ def test_b13_reader_small_fixes(tmp_path, capsys):
     scan = _scan_pdf(tmp_path)
     code, out = run_main(reader, capsys, "index", "--file", str(scan))
     assert code == 0 and any("스캔 PDF" in w for w in out.get("warnings", [])), out
+
+
+# ---------------------------------------------------------------------------
+# 1.5.0 EML 읽기·검색 (사용자 결정 2026-11-10: Outlook 가져오기 대신, 헤더·본문·첨부 이름만 캐시, 메일 한 통 = 결과 하나)
+# ---------------------------------------------------------------------------
+
+
+def _eml(path, subject, sender, when, body, html=False, attach=(), forward=None, raw_cp949_subject=False):
+    from email.message import EmailMessage
+    from email.utils import format_datetime
+    m = EmailMessage()
+    m["Subject"] = subject
+    m["From"] = sender
+    m["To"] = "나 <me@corp.com>"
+    m["Date"] = format_datetime(when)
+    if html:
+        m.set_content(body, subtype="html")
+    else:
+        m.set_content(body)
+    for name in attach:
+        m.add_attachment(b"%PDF-1.4 x", maintype="application", subtype="pdf", filename=name)
+    if forward is not None:
+        m.add_attachment(forward)
+    data = bytes(m)
+    if raw_cp949_subject:            # 인코딩 표시 없는 CP949 제목 (사내 메일 서버에서 흔함)
+        data = re.sub(rb"(?m)^Subject: .*$", b"Subject: " + subject.encode("cp949"), data, count=1)
+    path.write_bytes(data)
+    return path
+
+
+@pytest.fixture
+def mails(tmp_path):
+    import datetime as _dt
+    from email.message import EmailMessage
+    from email.utils import format_datetime
+    kst = _dt.timezone(_dt.timedelta(hours=9))
+    folder = tmp_path / "메일"
+    (folder / "2025").mkdir(parents=True)
+    _eml(folder / "a.eml", "견적 요청 (모터 200대)", "김철수 <kim@vendor.com>", _dt.datetime(2026, 3, 2, 14, 5, tzinfo=kst),
+         "안녕하세요.\n\n모터 200대 견적을 부탁드립니다.\n\n납기는 4월 말입니다.", attach=["견적서_v2.pdf"])
+    _eml(folder / "b.eml", "회의록 공유", "이영희 <lee@corp.com>", _dt.datetime(2026, 3, 5, 9, 0, tzinfo=kst),
+         "<html><body><p>회의록을 <b>공유</b>합니다.</p><p>다음 회의는 3월 12일.</p></body></html>", html=True)
+    inner = EmailMessage()
+    inner["Subject"] = "원래 메일: 시험 일정"
+    inner["From"] = "박민수 <park@lab.com>"
+    inner["Date"] = format_datetime(_dt.datetime(2026, 2, 1, 10, 0, tzinfo=kst))
+    inner.set_content("시험은 2월 20일에 합니다.")
+    _eml(folder / "2025" / "c.eml", "FW: 시험 일정", "최지훈 <choi@corp.com>", _dt.datetime(2025, 12, 1, 8, 0, tzinfo=kst),
+         "아래 메일 참고하세요.", forward=inner)
+    _eml(folder / "d.eml", "견적 회신", "정수진 <jung@vendor.com>", _dt.datetime(2026, 1, 10, 9, 0, tzinfo=kst), "견적을 보냅니다.",
+         raw_cp949_subject=True)
+    return folder
+
+
+def test_eml_units_headers_body_attachments_and_forwarded(mails):
+    units, meta = reader.parse_eml(str(mails / "2025" / "c.eml"))
+    assert [u["loc"] for u in units] == ["제목", "헤더", "본문 1", "전달된 메일 제목", "전달된 메일 헤더", "전달된 메일 본문 1"]
+    assert units[0]["section"] == ["FW: 시험 일정 (2025-12-01 08:00, 최지훈)"] and meta["mail"]["forwarded"] == 1
+    assert units[5]["text"] == "시험은 2월 20일에 합니다." and units[5]["section"][0].startswith("전달된 메일 원래 메일: 시험 일정")
+    units, meta = reader.parse_eml(str(mails / "a.eml"))
+    assert units[-1]["text"] == "첨부: 견적서_v2.pdf" and meta["mail"]["attachments"] == ["견적서_v2.pdf"]
+    assert "보낸 사람: 김철수 <kim@vendor.com>" in units[1]["text"] and "날짜: 2026-03-02 14:05" in units[1]["text"]
+    units, _ = reader.parse_eml(str(mails / "b.eml"))
+    assert [u["text"] for u in units if u["loc"].startswith("본문")] == ["회의록을 공유 합니다.", "다음 회의는 3월 12일."], units
+    units, _ = reader.parse_eml(str(mails / "d.eml"))
+    assert units[0]["text"] == "견적 회신"
+
+
+def test_eml_folder_search_one_result_per_mail_newest_first(mails, capsys):
+    code, out = run_main(reader, capsys, "index", "--folder", str(mails))
+    assert code == 0 and out["count"] == 4 and out["indexed"] == 4, out
+    code, out = run_main(reader, capsys, "search", "--query", "견적", "--file", str(mails))
+    assert code == 0 and out["count"] == 2 and out["agent_directive"].startswith("VERIFIED:"), out
+    assert [m["file"] for m in out["matches"]] == ["a.eml", "d.eml"]                 # 메일 한 통 = 결과 하나, 최신순
+    first = out["matches"][0]
+    assert first["mail_hits"] >= 2 and first["mail"]["subject"] == "견적 요청 (모터 200대)" and first["path"].endswith("a.eml"), first
+    assert first["evidence"].startswith("a.eml 제목, 견적 요청 (모터 200대) (2026-03-02 14:05, 김철수)"), first
+    code, out = run_main(reader, capsys, "search", "--query", "견적;김철수", "--file", str(mails))    # 제목과 보낸 사람에 나뉨
+    assert out["count"] == 1 and out["matches"][0]["loc"] == "메일 전체", out
+    code, out = run_main(reader, capsys, "search", "--query", "견적서_v2", "--file", str(mails))      # 첨부 이름
+    assert out["count"] == 1 and out["matches"][0]["loc"] == "첨부", out
+    code, out = run_main(reader, capsys, "search", "--query", "2월 20일", "--file", str(mails))      # 전달된 메일 본문 (하위 폴더)
+    assert out["count"] == 1 and out["matches"][0]["loc"] == "전달된 메일 본문 1", out
