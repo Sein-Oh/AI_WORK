@@ -25,7 +25,8 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, compile_formula,
-    VERSION, SNAPSHOT_EXCL_PREFIX, model_raw_inputs, mark_committed, model_dir_from_data,
+    VERSION, SNAPSHOT_EXCL_PREFIX, model_raw_inputs, mark_committed, model_dir_from_data, version_hint, saved_as,
+    command_text, quote_arg,
 )
 check_core_libraries("성능예측표")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command); the saved models need it
@@ -52,6 +53,10 @@ BATCH_ROWS = 500          # pre-filled rows on the 일괄계산 sheet
 CHECK_POINTS = 2000       # random conditions of the model check (plus every training row)
 EXCEL_CHECKS = 50         # random conditions recalculated in Excel itself (Windows, one recalculation for all)
 TITLE_MAX = 40
+LOW_R2 = 0.70             # 검증 R²가 이보다 낮은 모델(보고서 판정 '부적합', ml_report CONDITIONAL_SCORE와 같은 값)은 계산기 판단이 '참고용'
+FORMULA_MAX = 8192        # 엑셀 수식 한 칸의 글자 수 한도 (넘으면 엑셀이 파일을 복구 대상으로 열거나 수식을 지움)
+FUNC_ARGS_MAX = 255       # 엑셀 함수 인자 수 한도 (COUNT, OR에 입력이 하나씩 들어감)
+NAMES_SHOWN = 8           # preview와 보고서에 적는 입력 이름 수 (나머지는 '외 N개')
 OPEN = 1e300              # bound of a leaf box that has no limit on a feature
 TREE_MODELS = ("RandomForestRegressor", "ExtraTreesRegressor")
 LINEAR_MODELS = ("RidgeCV", "ElasticNetCV", "Ridge", "ElasticNet", "LinearRegression")
@@ -94,7 +99,7 @@ def num(v: float) -> str:
 def load_version(vdir: str, targets_arg: Optional[str]) -> Dict[str, Any]:
     vdir = os.path.abspath(vdir)
     if not os.path.isdir(vdir):
-        raise FileNotFoundError(f"버전 폴더가 없습니다: {vdir}")
+        raise FileNotFoundError(f"버전 폴더가 없습니다: {vdir}." + version_hint(vdir))
     snap = os.path.join(vdir, "model_dataset.csv")
     if not os.path.isfile(snap):
         raise InputError(f"버전 폴더에 학습 데이터 사본(model_dataset.csv)이 없습니다: {vdir}. 다시 학습한 버전으로 실행하십시오.")
@@ -122,14 +127,21 @@ def load_version(vdir: str, targets_arg: Optional[str]) -> Dict[str, Any]:
     return {"dir": vdir, "metas": metas, "targets": names, "skipped": skipped, "data": load_data_file(snap)}
 
 
+def text_date_inputs(meta: Dict[str, Any]) -> List[str]:
+    """Raw inputs of a model that are text (categories) or dates: the calculator takes numbers only."""
+    schema = meta.get("feature_schema") or {}
+    return [f for f in model_raw_inputs(meta) if f in schema.get("categorical", {}) or f in schema.get("datetime", {})]
+
+
 def raw_inputs(meta: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     """(raw numeric inputs, derived feature expressions) of a model; text/date raw inputs are not supported."""
     schema = meta.get("feature_schema") or {}
     evals = list(meta.get("derived_evals") or [])
     raw = model_raw_inputs(meta)
-    bad = [f for f in raw if f in schema.get("categorical", {}) or f in schema.get("datetime", {})]
+    bad = text_date_inputs(meta)
     if bad or not schema:
-        raise InputError(f"글자·날짜 입력 {bad}이(가) 있는 모델은 성능예측표로 만들 수 없습니다 (숫자 입력만 가능).")
+        raise InputError(f"글자·날짜 입력 {bad}이(가) 있는 모델은 성능예측표로 만들 수 없습니다 (엑셀 계산기는 숫자 입력만 가능). "
+                         f"사용자에게 알리십시오.")
     return raw, evals
 
 
@@ -391,15 +403,30 @@ def _label(name: str) -> Tuple[str, str]:
     return (m.group(1).strip(), m.group(2).strip()) if m else (str(name), "")
 
 
+def _decimals(span: float) -> int:
+    return int(max(0, 3 - np.floor(np.log10(span)))) if span > 0 else 3
+
+
 def _nice(v: float, span: float) -> float:
-    """Rounds a value for display to ~3 significant digits of the input's range (170.0 ~ 195.0, 0.001 ~ 1.000)."""
-    dec = int(max(0, 3 - np.floor(np.log10(span)))) if span > 0 else 3
-    return round(float(v), min(dec, 6))
+    """Rounds a value for display to ~3 significant digits of the input's range (170.0 ~ 195.0, 0.001 ~ 1.000,
+    1.23e-07 for an input of 1e-7 size: never rounded to 0, 2.9.88 D1)."""
+    return round(float(v), _decimals(span))
 
 
 def _nice_txt(v: float, span: float) -> str:
-    dec = int(max(0, 3 - np.floor(np.log10(span)))) if span > 0 else 3
-    return f"{float(v):.{min(dec, 6)}f}"
+    """The range text: decimals as _nice, exponent form when more than 6 decimals would be needed ('1.230E-07')."""
+    dec = _decimals(span)
+    if dec > 6:
+        return f"{float(v):.3E}"
+    return f"{float(v):.{dec}f}"
+
+
+def names_brief(names: List[str], limit: int = NAMES_SHOWN) -> str:
+    """Input names for preview and the report: without unit (the full name when two would read the same, 2.9.88 D2),
+    the first `limit` and '외 N개' (B7: 140 names made a 2,000-letter preview)."""
+    short = target_labels(list(names))
+    shown = ", ".join(short[n] for n in list(names)[:limit])
+    return shown + (f" 외 {len(names) - limit}개" if len(names) > limit else "")
 
 
 def target_labels(targets: List[str]) -> Dict[str, str]:
@@ -568,8 +595,11 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     style(calc["B3"], size=9, color="6B7280", border=False)
     calc["B3"].value = f"모델 {os.path.basename(vinfo['dir'])}  |  생성 {datetime.now():%Y-%m-%d}  |  ml-kit {VERSION}"
     calc.merge_cells("B4:F4")
-    style(calc["B4"], size=10, color="374151", border=False)
-    calc["B4"].value = "노란 칸에 값을 넣으면 아래에 예측값이 바로 계산됩니다."
+    low = [p for p in plans if p["cand"]["val_r2"] < LOW_R2]
+    style(calc["B4"], size=10, color="C2410C" if low else "374151", bold=bool(low), border=False)
+    calc["B4"].value = "노란 칸에 값을 넣으면 아래에 예측값이 바로 계산됩니다." + "".join(
+        f" 주의: '{short[p['target']]}' 모델은 검증 R² {p['cand']['val_r2']:.2f}로 정확도가 낮아 예측값은 참고용입니다."
+        for p in low)
     calc.row_dimensions[2].height = 30
     r = 5
     for j, h in enumerate(("입력", "값", "단위", "학습 범위", "상태"), 2):
@@ -579,10 +609,13 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
                         showErrorMessage=True, errorTitle="숫자만 입력", error="숫자만 입력할 수 있습니다.")
     calc.add_data_validation(dv)
     first_input = None
+    in_short = target_labels(all_inputs)       # '온도(입구)', '온도(출구)': full names, never '온도' twice (D2)
     for i, c in enumerate(all_inputs):
         row = r + 1 + i
         lo, hi, med = rng[c]
         name, unit = _label(c)
+        if in_short[c] != strip_unit(c):
+            name, unit = str(c), ""
         style(calc.cell(row=row, column=2, value=name), bold=True)
         v = calc.cell(row=row, column=3, value=_nice(med, hi - lo) if hi > lo else float(med))
         style(v, size=11, bold=True, fill=YELLOW, align="right")
@@ -619,7 +652,8 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
                                                    f'TEXT(C{row}+{num(iv["residual_upper"])},"{fmt}"),"")')), align="center")
         out_rng = "OR(" + ",".join(f"OR({x}<{num(rng[c][0])},{x}>{num(rng[c][1])})" for c, x in zip(p["cand"]["inputs"], own)) + ")"
         style(calc.cell(row=row, column=6, value=(f'=IF(NOT({ready}),"",IF({out_rng},"참고용 (학습 범위 밖)",'
-                                                   f'IF({dist}>{num(p["uncovered"])},"참고용 (실측 없는 영역)","정상")))')), align="center")
+                                                   f'IF({dist}>{num(p["uncovered"])},"참고용 (실측 없는 영역)","{p["ok_text"]}")))')),
+              align="center")
         status_colors(calc, f"F{row}", f"F{row}")
         p["calc_cell"] = f"C{row}"
         for c in range(helper_col, nxt):
@@ -688,7 +722,7 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
             batch.cell(row=row, column=pc + 2, value=f'=IF({ready},{_col(pc)}{row}+{num(iv["residual_upper"])},"")').number_format = fmt
             out_rng = "OR(" + ",".join(f"OR({x}<{num(rng[c][0])},{x}>{num(rng[c][1])})" for c, x in zip(p["cand"]["inputs"], own)) + ")"
             batch.cell(row=row, column=pc + 3, value=(f'=IF(NOT({ready}),"",IF({out_rng},"참고용 (학습 범위 밖)",'
-                                                      f'IF({dist}>{num(p["uncovered"])},"참고용 (실측 없는 영역)","정상")))'))
+                                                      f'IF({dist}>{num(p["uncovered"])},"참고용 (실측 없는 영역)","{p["ok_text"]}")))'))
             rc += 4
     for c in res_cols[3::4]:
         status_colors(batch, f"{_col(c)}3:{_col(c)}{BATCH_ROWS + 2}", f"{_col(c)}3")
@@ -705,6 +739,9 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
         ("- 90% 범위: 실제 값이 이 범위 안에 들 가능성이 약 90%입니다. 좁을수록 정밀합니다.", False),
         ("- 판단 '참고용 (학습 범위 밖)': 입력이 모델이 배운 범위를 벗어났습니다. 값이 부정확할 수 있습니다.", False),
         ("- 판단 '참고용 (실측 없는 영역)': 각 입력은 범위 안이지만, 이런 조합의 실제 데이터가 근처에 없었습니다.", False),
+        (f"- 판단 '참고용 (모델 정확도 낮음)': 모델의 검증 R²가 {LOW_R2} 미만이라 예측값을 그대로 쓰기 어렵습니다.", False),
+        ("- 입력 칸이 하나라도 비어 있으면 예측값을 내지 않습니다 (모델은 빈 값을 학습 데이터의 중앙값으로 채워 예측하지만, "
+         "계산기는 값을 모두 넣어야 계산합니다).", False),
         ("", False),
         ("이 파일에 대해", True),
         ("- 입력 항목과 모델 정보는 '정보' 시트, 모델 정확도와 계산 확인 결과는 '정확도' 시트에 있습니다.", False),
@@ -764,12 +801,31 @@ def write_workbook(path: str, title: str, vinfo: Dict[str, Any], plans: List[Dic
     calc.sheet_view.selection[0].activeCell = first_input
     calc.sheet_view.selection[0].sqref = first_input
 
+    check_formula_limits(calc, batch, all_inputs)
     sheet_files = {f"xl/worksheets/sheet{wb.sheetnames.index(p['sheet']) + 1}.xml": p for p in plans}
 
     def _save(pth: str) -> None:
         wb.save(pth)
         sheet_numbers(pth, {name: p["numbers"] for name, p in sheet_files.items()})
     return save_with_lock_fallback(path, _save, what="성능예측표")
+
+
+def check_formula_limits(calc, batch, inputs: List[str]) -> None:
+    """Excel's limits (2.9.88 B2): a formula of at most FORMULA_MAX letters and a function with at most FUNC_ARGS_MAX
+    arguments (COUNT and OR take every input). A longer formula makes Excel repair the file or drop the formula, so the
+    workbook is not saved: STOP_RETRY with the size and the way out (fewer inputs)."""
+    longest, where = 0, ""
+    rows = list(calc.iter_rows()) + list(batch.iter_rows(min_row=3, max_row=3))
+    for row in rows:
+        for c in row:
+            v = c.value
+            text = getattr(v, "text", v)          # ArrayFormula keeps its formula in .text
+            if isinstance(text, str) and text.startswith("=") and len(text) > longest:
+                longest, where = len(text), f"{c.parent.title}!{c.coordinate}"
+    if len(inputs) > FUNC_ARGS_MAX or longest > FORMULA_MAX:
+        raise InputError(f"입력이 {len(inputs)}개라 엑셀 계산기의 수식이 엑셀 한도를 넘어 성능예측표를 만들지 않았습니다 "
+                         f"(가장 긴 수식 {longest:,}자 ({where}), 한도 {FORMULA_MAX:,}자, 함수 인자 한도 {FUNC_ARGS_MAX}개). "
+                         f"입력을 줄여 다시 학습하면 만들 수 있습니다. 사용자에게 알리십시오.")
 
 
 def _rows_xml(blocks: List[np.ndarray]) -> bytes:
@@ -1057,9 +1113,13 @@ def execute_export(args) -> Dict[str, Any]:
         chk = model_check(cand, form, P)
         if not chk["same"]:
             raise _unsupported(f"옮긴 수식이 모델과 다름 (조건 {chk['points']:,}개 중 최대 차이 {chk['max_diff']:.3g})")
+        if cand["val_r2"] < LOW_R2:      # C2: the report calls it '부적합'; the calculator says so in its own cells
+            warnings.append(f"'{target}': 검증 R² {cand['val_r2']:.2f}로 {LOW_R2} 미만이라 예측값은 참고용입니다 (계산기 판단 칸에 "
+                            f"'참고용 (모델 정확도 낮음)'으로 표시)")
         plans.append({"target": target, "cand": cand, "data": data, "cover": T, "cover_sampled": sampled, "uncovered": uncovered,
                       "derived": derived_formulas(cand), "check": chk, "points": P,
-                      "fmt": value_format(predict_frame(cand, P))})
+                      "fmt": value_format(predict_frame(cand, P)),
+                      "ok_text": "정상" if cand["val_r2"] >= LOW_R2 else "참고용 (모델 정확도 낮음)"})
     leaves = sum(len(p["cand"]["form"].get("value", [])) for p in plans)
     if leaves > MAX_LEAVES:
         each = ", ".join(f"'{p['target']}' {len(p['cand']['form'].get('value', [])):,}개" for p in plans)
@@ -1075,14 +1135,13 @@ def execute_export(args) -> Dict[str, Any]:
     data_root = os.path.dirname(vinfo["dir"])
     stem = re.sub(r"_ml_data$", "", os.path.basename(data_root)) or "모델"
     default = os.path.join(data_root, f"성능예측표_{stem}_{os.path.basename(vinfo['dir'])}.xlsx")
-    path = args.save if args.save else default
-    if args.save and not os.path.isabs(path):
-        path = os.path.join(data_root, path)
-    if not path.lower().endswith(".xlsx"):
-        path += ".xlsx"
-    path = avoid_overwrite(os.path.abspath(path), getattr(args, "overwrite", False), what="성능예측표")
+    path = save_path(args.save, data_root) if args.save else default
+    # the 'recovered' note of a new name waits for the saved file (B6: a run stopped before saving reported a file
+    # that was never written)
+    path = avoid_overwrite(os.path.abspath(path), getattr(args, "overwrite", False), what="성능예측표", defer=True)
     progress("엑셀 파일 작성")
     real = write_workbook(path, title, vinfo, plans)
+    saved_as(path)
     mark_committed(f"성능예측표 {os.path.basename(real)}", output_file=real)   # a stop now: saved, not CONTINUE
     progress("저장한 파일 확인")
     problems = verify_workbook(real, plans)
@@ -1105,11 +1164,8 @@ def execute_export(args) -> Dict[str, Any]:
             "method": method_text(c["form"]), "leaves": len(c["form"]["value"]) if c["form"]["kind"] == "trees" else None,
             "check": {"points": chk["points"], "max_diff": _sig(chk["max_diff"], 3), "max_rel_pct": _sig(chk["max_rel_pct"], 2)},
         }
-    brief = "; ".join(f"{t}: 입력 {len(v['inputs'])}개 ({', '.join(strip_unit(i) for i in v['inputs'])}), {v['model']}, "
-                      f"검증 R² {v['val_r2']}, 모델과 같은 계산 (조건 {v['check']['points']:,}개 확인)"
-                      for t, v in out_targets.items())
     res = {"status": "ok", "output_file": real, "title": title, "targets": out_targets,
-           "verified": not unverified, "preview": f"성능예측표 생성: {brief}"}
+           "verified": not unverified, "preview": f"성능예측표 생성: {export_brief(out_targets)}"}
     if warnings:
         res["warnings"] = warnings
     if unverified:
@@ -1121,13 +1177,49 @@ def execute_export(args) -> Dict[str, Any]:
     return res
 
 
+def export_brief(out_targets: Dict[str, Dict[str, Any]]) -> str:
+    """The preview text: the inputs once when every target has the same ones (B7), names shortened (names_brief)."""
+    items = list(out_targets.items())
+    same = len(items) > 1 and all(v["inputs"] == items[0][1]["inputs"] for _, v in items)
+
+    def one(t: str, v: Dict[str, Any]) -> str:
+        low = " (정확도 낮음: 참고용)" if isinstance(v.get("val_r2"), (int, float)) and v["val_r2"] < LOW_R2 else ""
+        return ((f"{t}: " if same else f"{t}: 입력 {len(v['inputs'])}개 ({names_brief(v['inputs'])}), ")
+                + f"{v['model']}, 검증 R² {v['val_r2']}{low}, 모델과 같은 계산 (조건 {v['check']['points']:,}개 확인)")
+    head = f"입력 {len(items[0][1]['inputs'])}개 ({names_brief(items[0][1]['inputs'])}), 모든 타겟 공통; " if same else ""
+    return head + "; ".join(one(t, v) for t, v in items)
+
+
+def save_path(save: str, data_root: str) -> str:
+    """--save -> the workbook path. A relative path is under <데이터>_ml_data (with the report); no extension -> .xlsx;
+    another extension -> STOP_RETRY + [추천] the same command with .xlsx (2.9.88 B3: 'my.xls' was saved as 'my.xls.xlsx').
+    A folder that does not exist is made; one that cannot be made is STOP_RETRY."""
+    save = save.strip()
+    path = os.path.abspath(save if os.path.isabs(save) else os.path.join(data_root, save))
+    ext = os.path.splitext(path)[1]
+    if not ext:
+        path += ".xlsx"
+    elif ext.lower() != ".xlsx":
+        fixed = os.path.splitext(path)[0] + ".xlsx"
+        cmd = command_text(drop={"--save": "save"})
+        rec = f"{cmd} --save {quote_arg(fixed)}" if cmd else f"--save {quote_arg(fixed)}"
+        raise InputError(f"--save는 엑셀 파일(.xlsx)만 됩니다: '{save}'. [추천] {rec}")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError as e:
+        raise InputError(f"성능예측표를 저장할 폴더를 만들 수 없습니다: {os.path.dirname(path)} ({e}). "
+                         "--save 경로를 사용자에게 확인하십시오.")
+    return path
+
+
 def main():
     setup_console()
     parser = JsonArgumentParser(description="ml-kit 성능예측표 (엑셀, 모델을 수식으로 그대로 옮김, 잠금) 내보내기")
     parser.add_argument("--model", required=True, help="학습한 데이터 파일(도구가 최종 버전, 곧 마지막 학습을 씀) 또는 버전 폴더 (예: 공정_ml_data/v3)")
     parser.add_argument("--targets", help="표로 만들 숫자 타겟 (쉼표 구분, 생략 시 전부)")
     parser.add_argument("--title", help="계산기 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
-    parser.add_argument("--save", help="저장 경로 (.xlsx, 생략 시 보고서와 같은 <데이터>_ml_data 폴더에 성능예측표_<데이터>_<버전>.xlsx)")
+    parser.add_argument("--save", help="저장 경로 (.xlsx, 상대 경로와 이름만은 <데이터>_ml_data 폴더 기준, 없는 폴더는 만듦. "
+                                       "생략 시 보고서와 같은 <데이터>_ml_data 폴더에 성능예측표_<데이터>_<버전>.xlsx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     args = parser.parse_args()

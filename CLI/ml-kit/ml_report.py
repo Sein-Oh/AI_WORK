@@ -25,16 +25,18 @@ from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, mark_committed, warn_long_path, avoid_overwrite,
     strip_unit, note_recovered, read_text_file, resolve_column_names, model_dir_from_data, final_version,
-    command_text, quote_arg, name_list,
+    command_text, quote_arg, name_list, version_hint, compile_formula,
 )
+import _ml_runtime  # noqa: E402  (RUN_COMMITTED, WATCHDOG_HOLD: read at the time, never a stale list)
 
 setup_console()
 
+import functools
 import io
 import json
 import argparse
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Callable, Dict, Any, List, Optional, Tuple
 
 check_core_libraries("보고서")
 try:  # R5: a missing library answers with 1 JSON line (missing_library + install_command)
@@ -89,6 +91,8 @@ VERDICT_STYLE = {      # label -> (text color, background)
 PASS_SCORE = 0.90
 CONDITIONAL_SCORE = 0.70
 OVERFIT_LIMIT = 0.15
+CORR_SHOWN = 0.3          # '타겟과 상관이 큰 입력'에 적는 |r| 하한 (그보다 작으면 '없음')
+LAYOUT_KO = {"header_row": "머리글", "unit_row": "단위", "data_row": "데이터 시작"}
 
 MPL_NAVY = "#1E3A8A"
 MPL_LIGHT = "#E5E7EB"
@@ -129,11 +133,11 @@ def verdict_of(score: Optional[float], overfit_gap: Optional[float], metric: str
         return "부적합", "성능 지표 없음"
     if score >= PASS_SCORE:
         if overfit_gap is not None and overfit_gap > OVERFIT_LIMIT:
-            return "조건부", f"검증 {metric}는 기준을 충족하나 학습-검증 간극 {overfit_gap:.3f} > {OVERFIT_LIMIT}"
-        return "적합", f"검증 {metric} {score:.3f} >= {PASS_SCORE}"
+            return "조건부", f"검증 {metric}는 기준을 충족하나 학습-검증 간극 {overfit_gap:.4f} > {OVERFIT_LIMIT}"
+        return "적합", f"검증 {metric} {score:.4f} >= {PASS_SCORE}"
     if score >= CONDITIONAL_SCORE:
-        return "조건부", f"검증 {metric} {score:.3f} (기준 {PASS_SCORE} 미달, {CONDITIONAL_SCORE} 이상)"
-    return "부적합", f"검증 {metric} {score:.3f} < {CONDITIONAL_SCORE}"
+        return "조건부", f"검증 {metric} {score:.4f} (기준 {PASS_SCORE} 미달, {CONDITIONAL_SCORE} 이상)"
+    return "부적합", f"검증 {metric} {score:.4f} < {CONDITIONAL_SCORE}"
 
 
 def worst_verdict(verdicts: List[str]) -> str:
@@ -857,30 +861,11 @@ def _read_jsonl(path: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _version_hint(vdir: str) -> str:
-    """[추천] / [후보] for a version folder that does not exist: the versions of the same data folder that hold a
-    trained version (leaderboard.json). One -> [추천] the running command with that folder (--model, full command, R8);
-    several -> [후보] (the user picks: another version is another model)."""
-    root = os.path.dirname(vdir)
-    if not os.path.isdir(root):
-        return ""
-    found = [d for d in os.listdir(root)
-             if re.fullmatch(r"v\d+", d) and os.path.isfile(os.path.join(root, d, "leaderboard.json"))]
-    found.sort(key=lambda d: int(d[1:]))
-    if not found:
-        return " 이 데이터 폴더에 학습한 버전이 없습니다. 먼저 ml_train.py로 학습하십시오."
-    if len(found) == 1:
-        cmd = command_text(drop={"--model": "model", "--model": "model"})
-        path = os.path.join(root, found[0])
-        return f" 있는 버전은 {found[0]} 하나입니다. [추천] " + (f"{cmd} --model {quote_arg(path)}" if cmd else f"--model {quote_arg(path)}")
-    return f" 있는 버전 중에서 사용자에게 고르게 하십시오: [후보] {', '.join(found[-10:])}"
-
-
 def load_version(version_dir: str, target_filter: Optional[List[str]] = None) -> Dict[str, Any]:
     vdir = os.path.abspath(version_dir)
     if not os.path.isdir(vdir):
         raise FileNotFoundError(f"버전 폴더를 찾을 수 없습니다: {vdir} (학습 결과 JSON의 version_dir 값을 지정하십시오)."
-                                + _version_hint(vdir))
+                                + version_hint(vdir))
     lb_path = os.path.join(vdir, "leaderboard.json")
     if not os.path.isfile(lb_path):
         raise InputError(f"leaderboard.json이 없습니다. ml_train.py가 만든 버전 폴더(vX)를 지정하십시오: {vdir}")
@@ -1019,7 +1004,7 @@ def text_performance(t: Dict[str, Any]) -> str:
             f"타겟 표준편차({fmt(std)})의 {c['mae'] / std:.0%} 수준입니다.",
         ]
         gap = c.get("overfit_gap", 0.0)
-        lines.append(f"학습-검증 간극 {gap:.4f}: " + ("과적합 위험이 낮습니다." if gap <= 0.10 else
+        lines.append(f"학습-검증 간극 {gap:.4f}: " + ("과적합 위험이 낮습니다." if gap <= OVERFIT_LIMIT else    # 카드·판정과 같은 문턱
                      "과적합 경향이 있어 피처 축소나 데이터 추가가 권장됩니다."))
         skew = c.get("residual_skew", 0.0)
         if abs(skew) > 0.5:          # 치우쳤을 때만 (대칭이면 생략)
@@ -1049,26 +1034,48 @@ def text_features(t: Dict[str, Any]) -> str:
     lines = []
     if top:
         lines.append("예측 기여도 상위 피처는 " + ", ".join(f"'{r['feature']}'({r['pct']:.1f}%)" for r in top) + "입니다.")
+    weak = c.get("weak_features", [])
     if schema.get("categorical"):
-        cats = [f for f in schema["categorical"] if any(r["feature"] == f for r in c["feature_importances"][:5])]
+        # 상위 기여 피처(top_features)에 들고 기여도가 1%를 넘는 범주만 (입력이 적으면 0%인 범주도 상위 5개에 들어 바로 아래
+        # '기여도 1% 이하' 문장과 어긋났음)
+        cats = [f for f in schema["categorical"] if any(r["feature"] == f for r in top) and f not in weak]
         if cats:
             lines.append(f"범주형 피처 {cats}이(가) 상위 기여 피처에 포함되어, 범주별 운전 조건 차이가 결과에 영향을 줍니다.")
     if schema.get("datetime"):
-        lines.append(f"날짜 피처 {list(schema['datetime'])}은(는) {', '.join(sum(schema['datetime'].values(), []))} 단위로 분해해 반영했습니다.")
-    weak = c.get("weak_features", [])
+        parts = list(dict.fromkeys(sum(schema["datetime"].values(), [])))
+        lines.append(f"날짜 피처 {list(schema['datetime'])}은(는) {date_parts_text(parts)} 단위로 나눠 반영했습니다.")
     if weak:
         lines.append(f"기여도 1% 이하 피처 {weak[:5]}은(는) 제외해도 성능 저하가 작을 가능성이 높습니다.")
     return "\n".join(lines) or "피처 중요도 정보가 없습니다."
 
 
-def pretty_formula(expr: str) -> str:
-    """'x2 = a * b / c ** 2' 의 오른쪽을 읽기 쉬운 수식으로: a × b ÷ c²."""
+DATE_PART_KO = {"year": "연", "month": "월", "day": "일", "dayofweek": "요일", "hour": "시"}
+
+
+def date_parts_text(parts: List[str]) -> str:
+    """['month', 'day', 'dayofweek'] -> '월, 일, 요일' (보고서에 내부 이름을 쓰지 않음)."""
+    return ", ".join(DATE_PART_KO.get(str(p), str(p)) for p in parts)
+
+
+def pretty_formula(expr: str, columns: Optional[List[str]] = None) -> str:
+    """'x2 = a * b / c ** 2' 의 오른쪽을 읽기 쉬운 수식으로: a × b ÷ c².
+    columns: 식에 나올 수 있는 열 이름. 열 이름은 먼저 토큰으로 바꿔 두므로 이름 안의 '/', '*'('유량(L/min)', 'x*y')는
+    연산자로 바뀌지 않는다 (ml_export.derived_formulas와 같은 compile_formula)."""
     rhs = expr.split("=", 1)[1].strip() if "=" in expr else expr.strip()
+    tok2col: Dict[str, str] = {}
+    if columns:
+        try:
+            rhs, tok2col, _ = compile_formula(rhs, [str(c) for c in columns])
+        except InputError:
+            tok2col = {}
     rhs = re.sub(r"\s*\*\*\s*2(?![\d.])", "²", rhs)
     rhs = re.sub(r"\s*\*\*\s*3(?![\d.])", "³", rhs)
     rhs = rhs.replace("**", "^").replace("//", " 몫 ").replace("*", " × ").replace("/", " ÷ ")
     rhs = re.sub(r"\bsqrt\(", "√(", rhs)
-    return re.sub(r"\s+", " ", rhs).strip()
+    rhs = re.sub(r"\s+", " ", rhs).strip()
+    for token, col in tok2col.items():
+        rhs = rhs.replace(token, col)
+    return rhs
 
 
 def derived_feature_rows(targets: List[Dict[str, Any]]) -> Tuple[List[Tuple[str, str, str]], List[str]]:
@@ -1076,9 +1083,11 @@ def derived_feature_rows(targets: List[Dict[str, Any]]) -> Tuple[List[Tuple[str,
     found: Dict[str, Dict[str, Any]] = {}
     for t in targets:
         ranks = t["champ"].get("feature_importances") or []
+        known = [str(c) for c in t["meta"].get("input_columns_required") or []]
         for expr in t["meta"].get("derived_evals") or []:
             name = expr.split("=", 1)[0].strip()
-            item = found.setdefault(name, {"formula": pretty_formula(expr), "used": []})
+            item = found.setdefault(name, {"formula": pretty_formula(expr, known), "used": []})
+            known.append(name)
             pos = next((k for k, r in enumerate(ranks, 1) if r["feature"] == name), None)
             if pos is not None:
                 item["used"].append(f"{t['name']}: {ranks[pos - 1]['pct']:.1f}% ({pos}위)")
@@ -1093,7 +1102,12 @@ def derived_feature_rows(targets: List[Dict[str, Any]]) -> Tuple[List[Tuple[str,
 # ==============================================================================
 
 def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[str],
-                 overwrite: bool = False, export: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 overwrite: bool = False, export_job: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+                 export_skip: Optional[str] = None, export_cmd: Optional[str] = None) -> Dict[str, Any]:
+    """Builds the report, saves it, then (export_job) makes the performance calculator and saves the report again with
+    the calculator's line (2.9.88 B1: the report is saved first, so a stop at the time limit during the long workbook
+    leaves the report the user asked for). export_skip: why no calculator is made (C1), written in the report.
+    The calculator result is returned under '_export' (attach_export)."""
     _setup_matplotlib()
     rec, targets, version = ctx["record"], ctx["targets"], ctx["version"]
     task = rec["task"]
@@ -1101,7 +1115,7 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     prof = rec.get("data_profile", {})
     data_name = prof.get("source_file", "")
     task_ko = "회귀 (수치 예측)" if task == "regression" else "분류 (범주 예측)"
-    slot_targets = slots.get("targets", {}) if isinstance(slots.get("targets"), dict) else {}
+    slot_targets = slot_targets_of(slots, [t["name"] for t in targets])
     slots_used: List[str] = []
 
     def slot(key: str, default: str, target: Optional[str] = None) -> str:
@@ -1118,8 +1132,12 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     for t in targets:
         verdicts[t["name"]] = verdict_of(t["champ"].get("val_score"), t["champ"].get("overfit_gap"), metric_label)
     overall = worst_verdict([v[0] for v in verdicts.values()])
+    # 문서에 넣은 타겟만의 평균 (--targets로 일부만 넣으면 버전 전체 평균이 아님, 2.9.88 A2)
+    all_in = len(targets) == len(rec.get("targets") or [])
+    scores = [t["champ"].get("val_score") for t in targets if isinstance(t["champ"].get("val_score"), (int, float))]
+    mean_score = rec["mean_val_score"] if all_in else (float(np.mean(scores)) if scores else None)
     better = max((r for r in ctx["lineage"] if (r.get("mean_val_score") or -1) > rec["mean_val_score"] + 1e-9),
-                 key=lambda r: r["mean_val_score"], default=None)
+                 key=lambda r: r["mean_val_score"], default=None) if all_in else None
 
     R = ReportDoc(f"{REPORT_TITLE}  |  {data_name}  |  {version}")
     derived_rows, derived_names = derived_feature_rows(targets)
@@ -1135,11 +1153,14 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     # -- 1. 요약 ------------------------------------------------------------------
     R.h1("1. 요약")
     best = max(targets, key=lambda t: t["champ"].get("val_score") or -1)
+    rows_used = {t["name"]: prof.get("rows_used", {}).get(t["name"]) for t in targets
+                 if isinstance(prof.get("rows_used", {}).get(t["name"]), (int, float))}
+    # 학습에 쓴 행 수 (읽은 행 수에는 단위 행·타겟 빈 행이 들 수 있음, A4)
     R.metric_cards([
         ("종합 판정", overall, f"기준 검증 {metric_label} {PASS_SCORE} 이상"),
-        (f"평균 검증 {metric_label}", f"{rec['mean_val_score']:.4f}", f"타겟 {len(targets)}개 평균"),
-        ("학습 데이터", f"{prof.get('rows_loaded', 0):,}행", f"피처 {len(rec.get('features_used', []))}개"
-                                                           + (f" (파생 {len(derived_rows)}개)" if derived_rows else "")),
+        (f"평균 검증 {metric_label}", f"{mean_score:.4f}" if mean_score is not None else "-", f"타겟 {len(targets)}개 평균"),
+        ("학습 데이터", f"{int(max(rows_used.values())):,}행" if rows_used else f"{prof.get('rows_loaded', 0):,}행",
+         f"피처 {len(rec.get('features_used', []))}개" + (f" (파생 {len(derived_rows)}개)" if derived_rows else "")),
         ("최고 성능 모델", best["champ"]["champion_model"], best["name"]),
     ])
     has_excl = any(isinstance((t.get("excluded") or {}).get("all_rows_score"), (int, float)) for t in targets)
@@ -1159,6 +1180,8 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         R.table(["타겟", "챔피언 모델", f"검증 {metric_label}", "보조 지표", "판정", "주요 피처"], rows, caption="타겟별 결과 요약",
                 widths=[3.0, 3.6, 1.8, 2.4, 1.5, 4.7], align=["left", "left", "right", "right", "center", "left"], verdict_col=4)
     recs = rec.get("recommendations") or []
+    if export_job is None:      # 성능예측표를 만들지 않는 보고서: 학습 권고의 '함께 만들어집니다' 문장은 뺌 (C1)
+        recs = [re.sub(r"\s*보고서를 만들면[^.]*성능예측표[^.]*\.", "", r) for r in recs]
     extra = [slots[k] for k in ("lineage", "operation") if slots.get(k)]          # 없앤 장의 소견은 요약에 붙임
     for k in ("lineage", "operation"):
         if slots.get(k):
@@ -1179,21 +1202,23 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         criteria += [f"- 검증 {metric_label} (제외 행 미포함): 학습 제외 행 없이 계산 (판정 기준)",
                      f"- 검증 {metric_label} (제외 행 포함): 학습 제외 행까지 최종 모델로 예측해 함께 계산 (이상치가 섞인 실제 데이터 기준)"]
     R.para("\n".join(criteria), size=8, color=C_MUTED, space_after=2)
-    if export and export.get("result"):
-        ex = export["result"]
-        lines = [f"성능예측표 (엑셀 계산기): {os.path.basename(ex['output_file'])}"]
-        for t, v in ex["targets"].items():
-            lines.append(f"- {t}: 입력 {len(v['inputs'])}개 ({', '.join(strip_unit(i) for i in v['inputs'])}), "
-                         f"모델을 엑셀 수식으로 그대로 옮김 ({v['method']}, 조건 {v['check']['points']:,}개에서 모델과 같은 값 확인)")
-        R.para("\n".join(lines), size=8.5, color=C_INK, space_after=4)
+    # 성능예측표 줄: 보고서를 먼저 저장하고 성능예측표를 만든 뒤 채움 (B1). 만들지 않으면 그 까닭 (C1)
+    export_line = None
+    if export_job is not None:
+        export_line = R.para("성능예측표 (엑셀 계산기): 만드는 도중에 멈춤 (시간 제한)", size=8.5, color=C_INK, space_after=4)
+    elif export_skip:
+        R.para(f"성능예측표 (엑셀 계산기): 만들지 않음. {export_skip}", size=8.5, color=C_INK, space_after=4)
 
     # -- 2. 데이터와 피처 -----------------------------------------------------------------
     R.h1("2. 데이터와 피처")
     layout = prof.get("layout", {})
-    layout_txt = ", ".join(f"{k.replace('_row', '')} {v}행" for k, v in layout.items() if v) or "자동 감지"
-    used = ", ".join(f"{t}: {n:,}행" for t, n in prof.get("rows_used", {}).items())
-    data_default = (f"{data_name}: {prof.get('rows_loaded', 0):,}행 x {prof.get('columns_loaded', 0)}열 (표 구조: {layout_txt}). "
-                    f"학습 사용 {used}. 피처 결측 {prof.get('missing_imputed_cells', 0):,}칸은 학습 데이터 기준값으로 대치.")
+    layout_txt = ", ".join(f"{LAYOUT_KO.get(k, k)} {v}행" for k, v in layout.items() if v) or "자동 감지"
+    used = ", ".join(f"{t}: {int(n):,}행" for t, n in rows_used.items())
+    # 읽은 행에는 단위 행(--unit-row 없이 학습)·타겟이 빈 행이 들 수 있고, 빈·글자 칸 수도 그 행까지 센 학습 원장의 값이다
+    # (A4): '학습 사용' 행 수와 어긋나지 않게 '읽은 행', '빈 칸 또는 숫자가 아닌 칸'으로 쓴다
+    data_default = (f"{data_name}: 읽은 행 {prof.get('rows_loaded', 0):,}행 x {prof.get('columns_loaded', 0)}열 (표 구조: {layout_txt}). "
+                    f"학습 사용 {used}. 입력의 빈 칸 또는 숫자가 아닌 칸 {prof.get('missing_imputed_cells', 0):,}개 "
+                    f"(학습에 쓴 행의 빈 칸은 학습 데이터 중앙값으로 대치).")
     R.para(slot("data", data_default), size=9, space_after=4)
     dup_lines = [duplicate_line(t) for t in targets if duplicate_line(t)]
     if dup_lines:
@@ -1214,11 +1239,11 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         frows.append([f, "파생" if f in derived_names else "수치", f"{fmt(st.get('min'), 3)} ~ {fmt(st.get('max'), 3)}", miss.get(f, 0)])
     for f, parts in schema.get("datetime", {}).items():
         st = dstats.get(f, {})
-        frows.append([f, "날짜", f"{st.get('min', '')[:10]} ~ {st.get('max', '')[:10]} ({', '.join(parts)})", miss.get(f, 0)])
+        frows.append([f, "날짜", f"{st.get('min', '')[:10]} ~ {st.get('max', '')[:10]} ({date_parts_text(parts)})", miss.get(f, 0)])
     for f, cats in schema.get("categorical", {}).items():
         shown = ", ".join(cats[:6]) + (f" 외 {len(cats) - 6}개" if len(cats) > 6 else "")
         frows.append([f, "범주", f"{len(cats)}개: {shown}", miss.get(f, 0)])
-    R.table(["피처", "유형", "학습 범위 / 범주", "결측(칸)"], frows, caption="입력 피처",
+    R.table(["피처", "유형", "학습 범위 / 범주", "빈·글자 칸"], frows, caption="입력 피처",
             widths=[4.6, 1.4, 9.0, 2.0], align=["left", "center", "left", "right"],
             highlight_rows=[k for k, r in enumerate(frows) if r[1] == "파생"])
 
@@ -1234,7 +1259,8 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
     if corr is not None and corr.shape[0] >= 2:
         order = [r["feature"] for r in targets[0]["champ"]["feature_importances"]]
         numeric_targets = [t["name"] for t in targets if t["task"] == "regression" and t["name"] in corr.columns]
-        cols = [cc for cc in corr.columns if cc not in numeric_targets]
+        all_targets = [str(x) for x in rec.get("targets") or []]     # --targets로 뺀 타겟도 입력이 아님 (A2)
+        cols = [cc for cc in corr.columns if cc not in numeric_targets and cc not in all_targets]
         owner_rank = {f: k for k, f in enumerate(order)}
         cols = sorted(cols, key=lambda cc: min([owner_rank.get(f, 999) for f in order if cc == f or cc.startswith(f + "_")] or [999]))
         keep = cols[:12] + numeric_targets
@@ -1247,11 +1273,11 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
                     pairs.append((a, b, v))
         tgt_pairs = []
         for tn in numeric_targets:
-            col = corr[tn].drop(labels=[tn], errors="ignore").drop(labels=numeric_targets, errors="ignore").dropna()
+            col = corr[tn].drop(labels=[tn], errors="ignore").drop(labels=numeric_targets + all_targets, errors="ignore").dropna()
             if len(col):
-                top = col.abs().sort_values(ascending=False).index[:2]
-                tgt_pairs.append(f"{tn}: " + ", ".join(f"{f}({col[f]:+.2f})" for f in top))
-        corr_default = "\n".join((["타겟과 상관이 큰 입력: " + "; ".join(tgt_pairs)] if tgt_pairs else [])
+                top = [f for f in col.abs().sort_values(ascending=False).index[:2] if abs(col[f]) >= CORR_SHOWN]
+                tgt_pairs.append(f"{tn}: " + (", ".join(f"{f}({col[f]:+.2f})" for f in top) or "없음"))
+        corr_default = "\n".join(([f"타겟과 상관이 큰 입력(|r| >= {CORR_SHOWN}): " + "; ".join(tgt_pairs)] if tgt_pairs else [])
                                  + ["다중공선성 주의(|r| >= 0.85): " + (", ".join(f"{a}-{b}({v:+.2f})" for a, b, v in pairs[:5])
                                                                       if pairs else "없음")])
         R.note("상관관계 소견", slot("correlation", corr_default))
@@ -1308,16 +1334,40 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         feats = slot("features", text_features(t), target=t["name"])
         R.note("소견", perf + "\n" + feats)
 
-    # -- Save --------------------------------------------------------------------
+    # -- Save: 보고서 먼저 (B1), 그 뒤 성능예측표, 성능예측표 줄을 채워 같은 파일로 다시 저장 ---------------------
     if not out_path:
         out_path = os.path.join(ctx["data_root"], f"ML결과보고서_{os.path.splitext(data_name)[0]}_{version}.docx")
     out_abs = os.path.abspath(out_path)
-    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+    except OSError as e:
+        raise InputError(f"보고서를 저장할 폴더를 만들 수 없습니다: {os.path.dirname(out_abs)} ({e}). "
+                         "--save 경로를 사용자에게 확인하십시오.")
     warn_long_path(out_abs)
     out_abs = avoid_overwrite(out_abs, overwrite, what="보고서")
     saved = R.save(out_abs)
-    mark_committed(f"보고서 {os.path.basename(saved)}", report_file=saved)   # a stop now: saved, not CONTINUE
+    export = None
+    if export_job is None:
+        mark_committed(f"보고서 {os.path.basename(saved)}", report_file=saved)   # a stop now: saved, not CONTINUE
+    else:
+        # a stop during the workbook: the report is saved; the result says how to make the workbook alone
+        mark_committed(f"보고서 {os.path.basename(saved)} (성능예측표는 그 뒤에 만들던 중: saved에 성능예측표가 없으면 "
+                       f"만들지 못한 것이고, 사용자가 원하면 {export_cmd} 로 따로 만듭니다)", report_file=saved)
+        entry = _ml_runtime.RUN_COMMITTED[-1]
+        export = export_job()
+        _ml_runtime.WATCHDOG_HOLD.append(True)          # the report is written again (short): the watchdog waits a little
+        entry["what"] = f"보고서 {os.path.basename(saved)}"
+        text = export_line_text(export)
+        if text:
+            export_line.runs[0].text = text
+            for extra in export_line.runs[1:]:
+                extra.text = ""
+        else:
+            export_line._element.getparent().remove(export_line._element)
+        saved = R.save(saved)
+        entry["keys"]["report_file"] = saved
     unverified = verify_docx(saved, version, len(targets))
+    warnings = slot_warnings(slots, slots_used, [t["name"] for t in targets])
 
     return {
         "status": "ok",
@@ -1330,38 +1380,111 @@ def build_report(ctx: Dict[str, Any], slots: Dict[str, Any], out_path: Optional[
         "figure_count": R.figure_no,
         "table_count": R.table_no,
         "slots_used": slots_used,
+        **({"warnings": warnings} if warnings else {}),
         "verified": not unverified,
         **({"unverified": unverified} if unverified else {}),
         "preview": f"[보고서 완료] {version} / 타겟 {len(targets)}개 / 종합 판정 {overall} / 저장: {os.path.basename(saved)}",
         "agent_directive": (("VERIFIED: " if not unverified else "UNVERIFIED: 보고서 확인 실패 (" + "; ".join(unverified)
                              + "). 다시 실행하지 말고 unverified를 그대로 알리세요. ") + f"{version} ML 결과 보고서(타겟 {len(targets)}개)를 "
-                            f"'{os.path.basename(saved)}'에 저장했습니다. 종합 판정 {overall}. report_file 경로를 사용자에게 알리세요."),
+                            f"'{os.path.basename(saved)}'에 저장했습니다. 종합 판정 {overall}. report_file 경로를 사용자에게 알리세요."
+                            + (" --slots 문장 중 보고서에 넣은 것은 slots_used뿐입니다 (나머지는 넣지 않음)." if slots else "")
+                            + (" warnings도 그대로 알리세요." if warnings else "")),
+        "_export": export,
     }
 
 
+def export_line_text(export: Optional[Dict[str, Any]]) -> str:
+    """The report's line about the calculator made with it ('' = no line)."""
+    if export and export.get("result"):
+        import ml_export     # loaded already: it made the workbook
+        ex = export["result"]
+        lines = [f"성능예측표 (엑셀 계산기): {os.path.basename(ex['output_file'])}"]
+        items = list(ex["targets"].items())
+        same = len(items) > 1 and all(v["inputs"] == items[0][1]["inputs"] for _, v in items)
+        if same:     # B7: the same inputs once, not once per target
+            ins = items[0][1]["inputs"]
+            lines.append(f"- 입력 {len(ins)}개 ({ml_export.names_brief(ins)}), 모든 타겟 공통")
+        for t, v in items:
+            head = f"- {t}: " + ("" if same else f"입력 {len(v['inputs'])}개 ({ml_export.names_brief(v['inputs'])}), ")
+            lines.append(head + f"모델을 엑셀 수식으로 그대로 옮김 ({v['method']}, 조건 {v['check']['points']:,}개에서 모델과 같은 값 확인)")
+        return "\n".join(lines)
+    if export and export.get("note"):
+        return f"성능예측표 (엑셀 계산기): {export['note']}"
+    return ""
+
+
+SLOT_KEYS = ("summary", "data", "performance", "features", "lineage", "correlation", "operation")
+TARGET_SLOT_KEYS = ("performance", "features")
+SLOTS_FORM = '{"summary": "<요약 문장>", "targets": {"<타겟>": {"features": "<피처 소견>"}}}'
+
+
 def parse_slots(raw: Optional[str]) -> Dict[str, Any]:
-    if not raw:
+    """--slots: a JSON file path or a JSON text starting with '{'. Unreadable -> STOP_RETRY (2.9.88 A1: the report was made
+    with the automatic text and VERIFIED, and the agent told the user their sentences were in it)."""
+    if not raw or not raw.strip():
         return {}
     s_raw = raw.strip()
-    try:
-        if os.path.isfile(s_raw):
-            data = load_json_file(s_raw)
-        elif s_raw.startswith("{"):
+    if s_raw.startswith("{"):
+        try:
             data = json.loads(s_raw)
-        else:
-            raise InputError("--slots는 JSON 파일 경로 또는 '{'로 시작하는 JSON 문자열이어야 합니다.")
-        if not isinstance(data, dict):
-            raise InputError("슬롯 JSON은 객체({...})여야 합니다.")
-        return data
-    except (InputError, ValueError) as e:
-        sys.stderr.write(f"[WARN] 슬롯 JSON 파싱 실패 ({e}) -> 자동 작성 소견 사용\n")
-        return {}
+        except ValueError as e:
+            raise InputError(f"--slots의 JSON 글을 읽지 못했습니다 ({e}). 보고서를 만들지 않았습니다. 파일 쓰기 도구로 "
+                             f"slots.json(UTF-8, 형식 예: {SLOTS_FORM})을 만들고 그 경로를 --slots에 주십시오.")
+    else:
+        if not os.path.isfile(s_raw):
+            raise InputError(f"--slots 파일이 없습니다: {os.path.abspath(s_raw)}. 보고서를 만들지 않았습니다. 파일 쓰기 도구로 "
+                             f"slots.json(UTF-8, 형식 예: {SLOTS_FORM})을 그 경로에 만든 뒤 같은 명령을 실행하십시오.")
+        try:
+            data = load_json_file(s_raw)
+        except (InputError, ValueError, OSError) as e:
+            raise InputError(f"--slots 파일의 JSON을 읽지 못했습니다 ({e}). 보고서를 만들지 않았습니다. 끝 쉼표, 따옴표를 "
+                             f"고쳐 다시 저장한 뒤 같은 명령을 실행하십시오 (형식 예: {SLOTS_FORM}).")
+    if not isinstance(data, dict):
+        raise InputError(f"--slots JSON은 객체({{...}})여야 합니다 (형식 예: {SLOTS_FORM}). 보고서를 만들지 않았습니다.")
+    return data
+
+
+def slot_targets_of(slots: Dict[str, Any], names: List[str]) -> Dict[str, Any]:
+    """slots['targets'] keyed by the report's target names: '생산효율' finds '생산효율(%)' when that is the only match."""
+    given = slots.get("targets") if isinstance(slots.get("targets"), dict) else {}
+    out: Dict[str, Any] = {}
+    for k, v in given.items():
+        if k in names:
+            out[k] = v
+            continue
+        hit = [n for n in names if strip_unit(n) == strip_unit(str(k))]
+        out[hit[0] if len(hit) == 1 else k] = v
+    return out
+
+
+def slot_warnings(slots: Dict[str, Any], used: List[str], names: List[str]) -> List[str]:
+    """Sentences of --slots that did not go into the report (unknown item, unknown target, empty or nowhere to go)."""
+    out: List[str] = []
+    for k, v in slots.items():
+        if k == "targets":
+            if not isinstance(v, dict):
+                out.append("--slots의 targets는 {\"<타겟>\": {\"performance\" 또는 \"features\": \"<문장>\"}} 형식이 아니라 넣지 않았습니다")
+                continue
+            for t, tv in slot_targets_of(slots, names).items():
+                if t not in names:
+                    out.append(f"--slots의 targets.{t}: 보고서에 없는 타겟이라 넣지 않았습니다 (타겟: {', '.join(names)})")
+                    continue
+                for kk in (tv if isinstance(tv, dict) else {"(형식 오류)": tv}):
+                    if f"targets.{t}.{kk}" in used:
+                        continue
+                    why = ("모르는 항목이라" if kk not in TARGET_SLOT_KEYS else "빈 문장이라")
+                    out.append(f"--slots의 targets.{t}.{kk}: {why} 넣지 않았습니다 (타겟별 항목: {', '.join(TARGET_SLOT_KEYS)})")
+        elif k not in SLOT_KEYS:
+            out.append(f"--slots의 '{k}': 모르는 항목이라 넣지 않았습니다 (쓸 수 있는 항목: {', '.join(SLOT_KEYS)}, targets)")
+        elif k not in used:
+            out.append(f"--slots의 '{k}': 빈 문장이거나 이 보고서에 그 내용을 넣을 곳이 없어 넣지 않았습니다")
+    return out
 
 
 def make_export(version_dir: str, task: str, title: Optional[str], targets: Optional[List[str]] = None,
                 overwrite: bool = False) -> Optional[Dict[str, Any]]:
     """The report and the performance calculator (ml_export.py) are made as a set (regression versions only).
-    Made BEFORE the Word report so the report can state the calculator's agreement with the model.
+    Made AFTER the Word report is saved (2.9.88 B1); the report is saved again with the calculator's line.
     targets: the report's --targets targets (None = all); overwrite: the report's --overwrite also replaces the workbook.
     A failure never fails the report: {"note": ...}."""
     if task != "regression" or os.environ.get("ML_KIT_SKIP_EXPORT") == "1":
@@ -1375,6 +1498,25 @@ def make_export(version_dir: str, task: str, title: Optional[str], targets: Opti
         note = f"성능예측표를 만들지 못했습니다 (보고서는 정상): {type(e).__name__}: {str(e)[:200]}"
         sys.stderr.write(f"[WARN] {note}\n")
         return {"note": note}
+
+
+def export_skip_reason(ctx: Dict[str, Any]) -> Optional[str]:
+    """Why the calculator cannot be made for these targets, before trying (C1): text or date inputs."""
+    import ml_export
+    bad: List[str] = []
+    for t in ctx["targets"]:
+        bad += [c for c in ml_export.text_date_inputs(t["meta"]) if c not in bad]
+    if not bad:
+        return None
+    return (f"글자·날짜 입력 {name_list(bad, 10)}이(가) 있는 모델은 엑셀 수식으로 옮길 수 없습니다 "
+            f"(성능예측표는 숫자 입력만 가능)")
+
+
+def export_command(vdir: str, targets: Optional[List[str]], title: Optional[str]) -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return " ".join([f"python {quote_arg(os.path.join(here, 'ml_export.py'))} --model {quote_arg(os.path.abspath(vdir))}"]
+                    + ([f"--targets {quote_arg(','.join(targets))}"] if targets else [])
+                    + ([f"--title {quote_arg(title)}"] if title else []))
 
 
 def verify_docx(path: str, version: str, n_targets: int) -> List[str]:
@@ -1427,24 +1569,62 @@ def attach_export(result: Dict[str, Any], export: Optional[Dict[str, Any]]) -> N
 def history_warnings(info: Dict[str, Any], targets: List[str]) -> List[str]:
     """--file: what the history holds beyond the final version (2.9.83: the report uses the latest training run).
     Targets trained earlier but not in the final version, and an earlier version of the same targets with a higher
-    score: warnings only, the report is made with the final version."""
+    score: warnings only, the report is made with the final version. A target of the other task (classification /
+    regression, never trained together) gets the full command of the report of its last version (2.9.88 B5)."""
     rec, out = info["record"], []
     here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(info["version_dir"])
+    task = rec.get("task", "regression")
     seen = list(dict.fromkeys(str(t) for r in info["records"] for t in r.get("targets", [])))
     gone = [t for t in seen if t not in rec.get("targets", [])]
-    if gone:
-        out.append(f"최종 버전 {info['version']}(마지막 학습)에 없는 타겟 {', '.join(gone)}은(는) 보고서에 넣지 않았습니다 "
+    same_task: List[str] = []
+    other: Dict[str, List[str]] = {}
+    for t in gone:
+        last = next((r for r in reversed(info["records"]) if t in [str(x) for x in r.get("targets", [])]), None)
+        ver = str((last or {}).get("version") or "")
+        if (last and last.get("task", "regression") != task and ver
+                and os.path.isfile(os.path.join(root, ver, "leaderboard.json"))):
+            other.setdefault(ver, []).append(t)
+        else:
+            same_task.append(t)
+    if same_task:
+        out.append(f"최종 버전 {info['version']}(마지막 학습)에 없는 타겟 {', '.join(same_task)}은(는) 보고서에 넣지 않았습니다 "
                    f"(넣으려면 그 타겟을 --targets에 넣어 다시 학습한 뒤 보고서를 만듭니다)")
+    for ver, ts in other.items():
+        kind = "분류(등급)" if task == "regression" else "숫자(회귀)"
+        out.append(f"{kind} 타겟 {', '.join(ts)}은(는) 따로 학습해 최종 버전 {info['version']}의 보고서에 넣을 수 없습니다. "
+                   f"그 타겟의 보고서({ver})를 만들려면: python {quote_arg(os.path.join(here, 'ml_report.py'))} "
+                   f"--model {quote_arg(os.path.join(root, ver))}")
     same = [r for r in info["records"] if sorted(r.get("targets", [])) == sorted(targets)
             and r.get("task") == rec.get("task") and str(r.get("version")) != info["version"]
             and isinstance(r.get("mean_val_score"), (int, float))]
     score = rec.get("mean_val_score")
     better = max(same, key=lambda r: r["mean_val_score"], default=None)
     if better and isinstance(score, (int, float)) and better["mean_val_score"] > score + 1e-9:
-        vdir = os.path.join(os.path.dirname(info["version_dir"]), str(better["version"]))
+        vdir = os.path.join(root, str(better["version"]))
         out.append(f"같은 타겟의 {better['version']}이(가) 점수가 더 높았습니다 ({better['mean_val_score']} > 최종 버전 {score}). "
                    f"그 버전으로 만들려면: python {quote_arg(os.path.join(here, 'ml_report.py'))} --model {quote_arg(vdir)}")
     return out
+
+
+def report_save_path(save: Optional[str], data_root: str) -> Optional[str]:
+    """--save -> the report path. Only Word (.docx): no extension -> .docx added; another extension (out.pdf) ->
+    STOP_RETRY + [추천] the same command with .docx (2.9.88 A5: a Word file was saved as out.pdf and VERIFIED).
+    A relative path is under the default folder <데이터>_ml_data (2.9.88 B3: like ml_export; ml_dataset: next to the data)."""
+    if not save or not save.strip():
+        return None
+    save = save.strip()
+    path = save if os.path.isabs(save) else os.path.join(data_root, save)
+    ext = os.path.splitext(path)[1]
+    if not ext:
+        return path + ".docx"
+    if ext.lower() != ".docx":
+        fixed = os.path.abspath(os.path.splitext(path)[0] + ".docx")
+        cmd = command_text(drop={"--save": "save"})
+        rec = f"{cmd} --save {quote_arg(fixed)}" if cmd else f"--save {quote_arg(fixed)}"
+        raise InputError(f"--save는 Word 파일(.docx)만 됩니다: '{save}'. 보고서는 Word(.docx)로만 만들고 PDF 등 다른 형식으로는 "
+                         f"저장하지 않습니다 (PDF가 필요하면 Word에서 다른 이름으로 저장). [추천] {rec}")
+    return path
 
 
 def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
@@ -1452,6 +1632,7 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
     for err, pkg in ((_DOCX_IMPORT_ERROR, "python-docx"), (_MPL_IMPORT_ERROR, "matplotlib")):
         if err is not None:
             raise MissingLibraryError(pkg, "보고서(Word)")
+    slots = parse_slots(args.slots)          # unreadable --slots: STOP_RETRY before any long work (A1)
     target_filter = None
     if args.targets and args.targets.strip().lower() != "all":
         target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
@@ -1464,14 +1645,27 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
         vdir = model_dir_from_data(args.file, "--file")
         history = final_version(os.path.dirname(vdir))
     ctx = load_version(vdir, target_filter)
-    export = make_export(vdir, ctx["record"]["task"], getattr(args, "title", None),
-                         [t["name"] for t in ctx["targets"]] if target_filter else None, overwrite=args.overwrite)
-    result = build_report(ctx, parse_slots(args.slots), args.save, overwrite=args.overwrite, export=export)
+    out_path = report_save_path(args.save, ctx["data_root"])
+    task = ctx["record"]["task"]
+    title = getattr(args, "title", None)
+    names = [t["name"] for t in ctx["targets"]] if target_filter else None
+    job: Optional[Callable[[], Optional[Dict[str, Any]]]] = None
+    cmd = skip = None
+    if task == "regression" and os.environ.get("ML_KIT_SKIP_EXPORT") != "1":
+        skip = export_skip_reason(ctx)
+        if not skip:
+            job = functools.partial(make_export, vdir, task, title, names, overwrite=args.overwrite)
+            cmd = export_command(vdir, names, title)
+    result = build_report(ctx, slots, out_path, overwrite=args.overwrite, export_job=job, export_skip=skip, export_cmd=cmd)
+    export = result.pop("_export", None)
+    if skip:
+        export = {"note": f"성능예측표(엑셀 계산기)는 만들지 않았습니다 (보고서는 정상): {skip}"}
     attach_export(result, export)
     notes = history_warnings(history, [t["name"] for t in ctx["targets"]]) if history and not target_filter else []
     if notes:
         result["warnings"] = list(result.get("warnings", [])) + notes
-        result["agent_directive"] += " warnings도 그대로 알리세요."
+        if " warnings도 그대로 알리세요." not in result["agent_directive"]:
+            result["agent_directive"] += " warnings도 그대로 알리세요."
     return result
 
 
@@ -1480,7 +1674,8 @@ def main():
     parser.add_argument("--model",
                         help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
     parser.add_argument("--targets", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
-    parser.add_argument("--save", help="저장할 .docx 경로 (생략 시 데이터 폴더에 ML결과보고서_<데이터>_<버전>.docx)")
+    parser.add_argument("--save", help="저장할 .docx 경로 (상대 경로와 이름만은 <데이터>_ml_data 폴더 기준, 생략 시 그 폴더에 "
+                                       "ML결과보고서_<데이터>_<버전>.docx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--slots", help="소견 덮어쓰기 JSON 파일 또는 문자열: summary, data, performance, features, lineage, "

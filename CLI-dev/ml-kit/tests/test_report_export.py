@@ -22,8 +22,8 @@ pytestmark = pytest.mark.report    # 보고서·성능예측표 (오래 걸림: 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from make_sample import make_class_sample, make_sample  # noqa: E402
-from mlkit_helpers import (split_command, FEATURES, HAS_DOCX, HAS_MPL, KIT, TARGET, ok_res, run_fail, run_raw, run_tool,  # noqa: E402
-                           write_df)
+from mlkit_helpers import (split_command, FEATURES, HAS_DOCX, HAS_MPL, KIT, TARGET, ok_res, recommended_command, run_fail,  # noqa: E402
+                           run_raw, run_tool, stop_msg, write_df)
 import ml_export as mx  # noqa: E402
 import _ml_runtime as rt  # noqa: E402
 import ml_report as mr  # noqa: E402
@@ -948,3 +948,304 @@ def test_excel_check_passes_within_one_percent():
     assert note is None and "2.00% 다름" in problem, problem
     problem, _ = ml_export.compare_excel("y", ["#VALUE!", 2.0, 1.0], [1.0, 2.0, 1.0], w)
     assert "숫자가 아님" in problem
+
+
+# ---- 2.9.88 검토 C: 보고서·성능예측표 결함 (재현 -> 수정) ------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def three_targets(tmp_path_factory):
+    """타겟 A, B, S 회귀 버전 (머리글 행을 직접 줌: 보고서의 표 구조 문구)."""
+    d = tmp_path_factory.mktemp("rev_c")
+    data = _three_target_data(d)
+    tr = run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B,S", "--header-row", "1")
+    return d, data, tr
+
+
+def _doc_text(path):
+    return _all_text(docx.Document(path))
+
+
+@needs_report
+def test_unreadable_slots_is_stop_retry_and_unused_slots_are_warned(three_targets):
+    """A1: --slots를 읽지 못하면 자동 소견으로 만들고 VERIFIED였음 -> STOP_RETRY (보고서 만들지 않음).
+    모르는 항목, 보고서에 없는 타겟의 문장은 warnings (slots_used에 없는 문장은 넣지 않았다고 알림)."""
+    d, data, tr = three_targets
+    reports = lambda: sorted(p.name for p in d.glob("hist_ml_data/*.docx"))         # noqa: E731
+    before = reports()
+    msg = run_fail("ml_report.py", "--model", tr["version_dir"], "--slots", str(d / "없음.json"))["message"]
+    assert "--slots 파일이 없습니다" in msg and '"summary"' in msg, msg
+    bad = d / "bad.json"
+    bad.write_text('{"summary": "요약",}', encoding="utf-8")
+    msg = run_fail("ml_report.py", "--model", tr["version_dir"], "--slots", str(bad))["message"]
+    assert "JSON" in msg and "끝 쉼표" in msg, msg
+    assert reports() == before
+    odd = d / "odd.json"
+    odd.write_text(json.dumps({"summary": "내가 정한 요약", "nokey": "x",
+                               "targets": {"A": {"features": "A 피처 소견"}, "Z": {"features": "z"}}}, ensure_ascii=False),
+                   encoding="utf-8")
+    rep = run_tool("ml_report.py", "--model", tr["version_dir"], "--slots", str(odd), "--save", str(d / "odd.docx"))
+    assert set(rep["slots_used"]) == {"summary", "targets.A.features"}, rep["slots_used"]
+    assert any("'nokey'" in w for w in rep["warnings"]) and any("targets.Z" in w for w in rep["warnings"]), rep["warnings"]
+    assert "slots_used" in rep["agent_directive"] and "warnings" in rep["agent_directive"]
+    assert "내가 정한 요약" in _doc_text(rep["report_file"])
+
+
+@needs_report
+def test_report_of_some_targets_averages_only_those(three_targets):
+    """A2: --targets A 보고서의 '평균 검증 R²' 카드가 버전 전체(A, B, S) 평균이었고, 학습 사용 행에 빠진 타겟도 적었다.
+    D4: 표 구조는 내부 키 이름(header 1행)이 아니라 '머리글 1행', 상관이 작은 입력은 '상관이 큰 입력'에 적지 않음."""
+    d, data, tr = three_targets
+    rep = run_tool("ml_report.py", "--model", tr["version_dir"], "--targets", "A", "--save", str(d / "a_only.docx"))
+    lb = json.load(open(os.path.join(tr["version_dir"], "leaderboard.json"), encoding="utf-8"))
+    want = lb["targets"]["A"]["champion"]["val_score"]
+    assert abs(want - tr["mean_val_score"]) > 1e-3
+    doc = docx.Document(rep["report_file"])
+    card = " ".join(c.text for row in doc.tables[0].rows for c in row.cells)
+    assert f"{want:.4f}" in card and f"{tr['mean_val_score']:.4f}" not in card, card
+    text = "\n".join(p.text for p in doc.paragraphs)
+    used = text.split("학습 사용 ", 1)[1].split(".")[0]
+    assert used.startswith("A: ") and "B:" not in used and "S:" not in used, used
+    assert "표 구조: 머리글 1행" in text and "header" not in text
+    full = _all_text(doc)
+    import re
+    assert re.search(r"A: a\([+-]\d\.\d\d\)(;|\n|$)", full), full[full.find("상관이 큰"):][:200]
+
+
+def test_pretty_formula_keeps_slash_and_star_in_column_names():
+    """A3: 열 이름 안의 '/', '*'(L/min, m/s, x*y)를 연산자로 바꿔 '유량(L ÷ min)'으로 썼다."""
+    assert mr.pretty_formula("유량비 = 유량(L/min) / 압축압력(bar)", ["유량(L/min)", "압축압력(bar)"]) == "유량(L/min) ÷ 압축압력(bar)"
+    assert mr.pretty_formula("곱 = 유속 (m/s) * x*y", ["유속 (m/s)", "x*y"]) == "유속 (m/s) × x*y"
+    t = {"name": "y", "champ": {"feature_importances": []},
+         "meta": {"input_columns_required": ["유량(L/min)", "압력"], "derived_evals": ["비 = 유량(L/min) / 압력", "비2 = 비 ** 2"]}}
+    rows, names = mr.derived_feature_rows([t])
+    assert [r[1] for r in rows] == ["비 = 유량(L/min) ÷ 압력", "비2 = 비²"] and names == ["비", "비2"]
+
+
+@needs_report
+def test_report_save_must_be_a_word_file_and_relative_paths_go_to_the_data_folder(three_targets):
+    """A5: --save out.pdf에 Word 파일을 저장하고 VERIFIED였다 -> STOP_RETRY + [추천] .docx 전체 명령. 확장자가 없으면 .docx.
+    B3: 상대 경로는 성능예측표처럼 <데이터>_ml_data 폴더 기준 (없는 폴더는 만듦)."""
+    d, data, tr = three_targets
+    proc, res = run_raw("ml_report.py", "--model", tr["version_dir"], "--targets", "A", "--save", str(d / "out.pdf"))
+    msg = stop_msg(res, proc)
+    script, argv = recommended_command(msg)
+    assert script == "ml_report.py" and argv[argv.index("--save") + 1] == str(d / "out.docx"), argv
+    assert not (d / "out.pdf").exists()
+    assert run_tool(script, *argv)["report_file"] == str(d / "out.docx")
+    assert run_tool("ml_report.py", "--model", tr["version_dir"], "--targets", "A",
+                    "--save", str(d / "noext"))["report_file"] == str(d / "noext.docx")
+    rel = run_tool("ml_report.py", "--model", tr["version_dir"], "--targets", "A", "--save", os.path.join("새폴더", "rel.docx"))
+    assert rel["report_file"] == os.path.join(os.path.dirname(tr["version_dir"]), "새폴더", "rel.docx"), rel["report_file"]
+
+
+def _fake_tree(**champ):
+    base = {"champion_model": "Ridge", "val_r2": 0.95, "mae": 0.1, "overfit_gap": 0.0, "residual_skew": 0.0,
+            "top_features": [], "feature_importances": [], "weak_features": []}
+    base.update(champ)
+    return {"task": "regression", "name": "강도", "oof": pd.DataFrame({"actual": [1.0, 2.0, 3.0]}), "champ": base,
+            "meta": {"feature_schema": {"numeric": ["온도", "압력"], "categorical": {"작업조": ["주간", "야간"]},
+                                        "datetime": {"일자": ["month", "day", "dayofweek"]}}}}
+
+
+def test_findings_do_not_contradict_each_other():
+    """A6: 기여도 0%인 범주가 '상위 기여 피처에 포함'과 '기여도 1% 이하'에 함께 나왔고, 간극 0.10~0.15는 카드로는 정상인데
+    소견은 과적합이었다. D4: 날짜 분해 단위를 영어 내부 이름(dayofweek)으로, 판정 이유를 소수 3자리로 썼다."""
+    ranks = [{"feature": "온도", "pct": 95.2}, {"feature": "압력", "pct": 4.8}, {"feature": "작업조", "pct": 0.0}]
+    t = _fake_tree(top_features=ranks, feature_importances=ranks, weak_features=["작업조"], overfit_gap=0.12)
+    feats = mr.text_features(t)
+    assert "상위 기여 피처에 포함" not in feats and "기여도 1% 이하" in feats, feats
+    assert "월, 일, 요일" in feats and "dayofweek" not in feats, feats
+    assert "과적합 위험이 낮습니다" in mr.text_performance(t)
+    assert "과적합 경향" in mr.text_performance(_fake_tree(overfit_gap=0.16))
+    useful = [{"feature": "작업조", "pct": 40.0}, {"feature": "온도", "pct": 60.0}]
+    assert "상위 기여 피처에 포함" in mr.text_features(_fake_tree(top_features=useful, feature_importances=useful))
+    assert mr.verdict_of(0.99961, 0.01, "R²")[1] == "검증 R² 0.9996 >= 0.9"
+
+
+@needs_report
+def test_report_rows_count_without_the_unit_row(tmp_path):
+    """A4 (보고서 쪽): 단위 행을 알려 주지 않고 학습한 데이터의 보고서가 '학습 데이터 61행'(단위 행 포함)이라고 썼다.
+    카드는 학습에 쓴 행 수, 본문은 '읽은 행'과 '빈 칸 또는 숫자가 아닌 칸'으로 쓴다 (원인은 학습 원장의 프로파일)."""
+    r = np.random.default_rng(4)
+    rows = [["온도", "압력", "수율"], ["°C", "bar", "%"]]
+    for _ in range(60):
+        t, p = round(float(r.uniform(150, 200)), 1), round(float(r.uniform(1, 5)), 2)
+        rows.append([t, p, round(0.3 * t + 5 * p + float(r.normal(0, 0.3)), 2)])
+    from mlkit_helpers import write_rows
+    f = write_rows(str(tmp_path / "unit.csv"), rows, [])
+    tr = run_tool("ml_train.py", "--file", f, "--features", "온도,압력", "--targets", "수율")
+    rep = run_tool("ml_report.py", "--model", tr["version_dir"])
+    doc = docx.Document(rep["report_file"])
+    card = " ".join(c.text for row in doc.tables[0].rows for c in row.cells)
+    assert "60행" in card and "61행" not in card, card
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "읽은 행 61행" in text and "학습 데이터 기준값으로 대치" not in text, text
+
+
+@needs_report
+def test_report_is_saved_before_the_calculator(three_targets, monkeypatch, tmp_path):
+    """B1: 보고서 명령이 성능예측표를 먼저 저장하고 Word 보고서를 만들어, 그 사이 시간 제한에 닿으면 보고서 없이 ok +
+    '다시 실행하지 마세요'였다. 이제 보고서를 먼저 저장하고, 성능예측표를 만드는 동안 멈추면 결과에 보고서 경로와
+    성능예측표를 따로 만드는 전체 명령이 들어간다. 끝나면 성능예측표 줄을 채워 같은 파일에 다시 저장."""
+    import ml_export
+    d, data, tr = three_targets
+    monkeypatch.delenv("ML_KIT_SKIP_EXPORT", raising=False)
+    out = tmp_path / "b1.docx"
+    seen = {}
+
+    def fake(args):
+        seen["on_disk"] = out.is_file()
+        seen["payload"] = rt._watchdog_payload()[0]
+        return {"output_file": str(tmp_path / "x.xlsx"), "title": "t", "verified": True, "preview": "성능예측표 생성: y",
+                "targets": {t: {"inputs": ["a", "b", "c"], "model": "Ridge", "val_r2": 0.9, "method": "Ridge 선형식 그대로",
+                                "check": {"points": 2060, "max_diff": 0.0, "max_rel_pct": 0.0}} for t in ("A", "B", "S")}}
+    monkeypatch.setattr(ml_export, "execute_export", fake)
+    rt.RUN_COMMITTED.clear()
+    try:
+        res = mr.execute_report(argparse.Namespace(model=tr["version_dir"], file=None, targets=None, save=str(out),
+                                                   overwrite=False, slots=None, title="제목"))
+    finally:
+        rt.RUN_COMMITTED.clear()
+        rt.WATCHDOG_HOLD.clear()
+    assert seen["on_disk"] is True, seen
+    p = seen["payload"]
+    assert p["status"] == "ok" and p["report_file"] == str(out) and "ml_export.py" in p["agent_directive"], p
+    argv = split_command(p["agent_directive"].split("원하면 ", 1)[1].split(" 로 따로", 1)[0])
+    assert os.path.basename(argv[1]) == "ml_export.py" and argv[argv.index("--model") + 1] == os.path.abspath(tr["version_dir"])
+    assert argv[argv.index("--title") + 1] == "제목"
+    assert res["report_file"] == str(out) and res["export_file"] == str(tmp_path / "x.xlsx")
+    text = "\n".join(q.text for q in docx.Document(str(out)).paragraphs)
+    assert "성능예측표 (엑셀 계산기): x.xlsx" in text and "모델과 같은 값 확인" in text and "만드는 도중" not in text
+    assert text.count("입력 3개") == 1                                       # B7: 같은 입력은 한 번
+
+
+@needs_report
+def test_other_task_target_gets_the_report_command_of_its_version(tmp_path):
+    """B5: 분류 타겟(v1) 뒤 회귀 타겟(v2)을 학습하면 --file 보고서가 '그 타겟을 --targets에 넣어 다시 학습'이라고 했다
+    (분류와 회귀는 함께 학습할 수 없음). 이제 그 타겟 버전의 보고서를 만드는 전체 명령을 준다."""
+    path = _calc_data(tmp_path)
+    v1 = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "등급", "--task", "classification")
+    run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "효율")
+    rep = run_tool("ml_report.py", "--file", str(path))
+    w = [x for x in rep["warnings"] if "등급" in x]
+    assert len(w) == 1 and "다시 학습" not in w[0], rep["warnings"]
+    argv = split_command(w[0].split("만들려면: ", 1)[1])
+    assert os.path.basename(argv[1]) == "ml_report.py" and argv[argv.index("--model") + 1] == v1["version_dir"]
+    old = run_tool("ml_report.py", *argv[2:])
+    assert old["version"] == "v1" and old["task"] == "classification"
+
+
+def test_calculator_formula_over_the_excel_limit_is_stopped(export_version, monkeypatch, tmp_path):
+    """B2: 입력이 많으면 수식이 엑셀 한도(8,192자, 함수 인자 255개)를 넘는데 검사 없이 저장했다 (입력 140개: 9,033자).
+    한도를 낮춰 재현: 저장 전에 STOP_RETRY(입력 수, 가장 긴 수식, 한도) + 파일 없음."""
+    _, _, vdir = export_version
+    monkeypatch.setattr(mx, "FORMULA_MAX", 300)
+    save = tmp_path / "limit.xlsx"
+    with pytest.raises(rt.InputError, match="한도"):
+        mx.execute_export(argparse.Namespace(model=vdir, targets=None, title=None, save=str(save), overwrite=False))
+    assert not save.exists()
+
+
+def test_export_save_folder_extension_and_missing_version(export_version, tmp_path):
+    """B3: 없는 폴더로 --save는 [Errno 2]만, 'my.xls'는 'my.xls.xlsx'로 저장했다 -> 폴더를 만들고, 다른 확장자는 [추천] .xlsx.
+    B8: 없는 버전 폴더는 '버전 폴더가 없습니다'뿐이었다 -> 있는 버전의 [추천] 전체 명령 (ml_report와 같음)."""
+    d, _, vdir = export_version
+    deep = tmp_path / "없는폴더" / "아래" / "calc.xlsx"
+    assert run_tool("ml_export.py", "--model", vdir, "--save", str(deep))["output_file"] == str(deep) and deep.is_file()
+    proc, res = run_raw("ml_export.py", "--model", vdir, "--save", str(tmp_path / "my.xls"))
+    script, argv = recommended_command(stop_msg(res, proc))
+    assert script == "ml_export.py" and argv[argv.index("--save") + 1] == str(tmp_path / "my.xlsx"), argv
+    assert not list(tmp_path.glob("my.xls*"))
+    root = tmp_path / "s_ml_data"                     # 학습한 버전이 v1 하나인 데이터 폴더 (다른 테스트가 버전을 더 만들어도)
+    shutil.copytree(vdir, root / "v1")
+    proc, res = run_raw("ml_export.py", "--model", str(root / "v9"))
+    script, argv = recommended_command(stop_msg(res, proc))
+    assert script == "ml_export.py" and argv[argv.index("--model") + 1] == str(root / "v1"), argv
+
+
+def test_failed_export_does_not_report_a_new_name(export_version, monkeypatch):
+    """B6: 같은 이름 성능예측표가 있을 때 저장 전에 실패해도 recovered에 '이미 있음 -> ..._<시각>.xlsx로 저장'이 남았다
+    (그 파일은 없음). 새 이름 알림은 저장한 뒤에만."""
+    _, _, vdir = export_version
+    first = run_tool("ml_export.py", "--model", vdir)
+    assert os.path.isfile(first["output_file"])
+
+    def boom(*a, **k):
+        raise RuntimeError("저장 전 실패")
+    monkeypatch.setattr(mx, "write_workbook", boom)
+    rt._RECOVERED.clear()
+    try:
+        with pytest.raises(RuntimeError):
+            mx.execute_export(argparse.Namespace(model=vdir, targets=None, title=None, save=None, overwrite=False))
+        assert not [m for m in rt._RECOVERED if "이미 있음" in m], rt._RECOVERED
+    finally:
+        rt._RECOVERED.clear()
+
+
+def test_brief_lists_few_input_names_once():
+    """B7: 입력 140개 모델의 preview가 2,041자(이름 140개)였고, 타겟마다 같은 목록을 반복했다.
+    D2: 괄호 안만 다른 입력이 '온도, 온도'로 나왔다."""
+    names = [f"측정값_{i:03d}(mm)" for i in range(140)]
+    brief = mx.names_brief(names)
+    assert brief.endswith("외 132개") and brief.count("측정값_") == 8 and "(mm)" not in brief
+    assert mx.names_brief(["온도(입구)", "온도(출구)", "압력(bar)"]) == "온도(입구), 온도(출구), 압력"
+    v = {"inputs": names, "model": "Ridge", "val_r2": 0.9, "check": {"points": 2000}}
+    text = mx.export_brief({"A": v, "B": dict(v)})
+    assert text.count("측정값_000") == 1 and len(text) < 400, text
+
+
+def _train_csv(tmp_path, name, df, features, target):
+    p = tmp_path / name
+    df.to_csv(p, index=False, encoding="utf-8-sig")
+    return p, run_tool("ml_train.py", "--file", str(p), "--features", features, "--targets", target)
+
+
+@needs_report
+def test_text_input_report_says_why_there_is_no_calculator(tmp_path, with_export):
+    """C1: 글자 입력이 있는 모델은 성능예측표를 만들 수 없는데 요약 소견에 '성능예측표도 함께 만들어집니다'가 남았고,
+    export_note는 오류 글이었다. 이제 만들지 않은 까닭을 보고서와 export_note에 분명히 쓰고, 그 권고 문장은 뺀다."""
+    r = np.random.default_rng(8)
+    n = 150
+    df = pd.DataFrame({"온도": r.uniform(150, 200, n), "압력": r.uniform(1, 5, n), "라인": r.choice(["A", "B", "C"], n)})
+    df["강도"] = 0.5 * df.온도 + 3 * df.압력 + np.where(df.라인 == "A", 5.0, 0.0) + r.normal(0, 0.1, n)
+    p, tr = _train_csv(tmp_path, "cat.csv", df, "온도,압력,라인", "강도")
+    rep = run_tool("ml_report.py", "--model", tr["version_dir"])
+    assert "export_file" not in rep and rep["export_note"].startswith("성능예측표(엑셀 계산기)는 만들지 않았습니다"), rep
+    assert "라인" in rep["export_note"] and "숫자 입력만" in rep["export_note"] and "Error" not in rep["export_note"]
+    text = _doc_text(rep["report_file"])
+    assert "함께 만들어집니다" not in text and "성능예측표 (엑셀 계산기): 만들지 않음" in text
+
+
+def test_low_score_calculator_says_reference_only(tmp_path):
+    """C2: 검증 R²가 0.7 미만(보고서 '부적합')인 모델도 경고 없이 '모델과 같은 계산'으로만 만들었다 -> warnings,
+    계산기 제목 아래 주의 문장, 판단 칸 '참고용 (모델 정확도 낮음)'."""
+    r = np.random.default_rng(2)
+    n = 200
+    df = pd.DataFrame({"a": r.uniform(0, 1, n), "b": r.uniform(0, 1, n)})
+    df["y"] = r.normal(0, 1, n)
+    _, tr = _train_csv(tmp_path, "noise.csv", df, "a,b", "y")
+    res = run_tool("ml_export.py", "--model", tr["version_dir"])
+    assert res["targets"]["y"]["val_r2"] < 0.7
+    assert any("참고용" in w and "검증 R²" in w for w in res["warnings"]) and "참고용" in res["preview"], res
+    wb = openpyxl.load_workbook(res["output_file"])
+    assert "정확도가 낮아" in wb["계산기"]["B4"].value
+    assert "참고용 (모델 정확도 낮음)" in _strings(wb, "계산기") and "참고용 (모델 정확도 낮음)" in _strings(wb, "일괄계산")
+
+
+def test_tiny_and_same_name_inputs_in_the_calculator(tmp_path):
+    """D1: 1e-7 크기 입력의 계산기 기본값이 0, 학습 범위가 '0.000000 ~ 0.000000'이었다.
+    D2: 괄호 안만 다른 입력이 계산기에 '온도', '온도'로 나왔다. D6: 사용법에 빈 입력 칸 안내."""
+    r = np.random.default_rng(3)
+    n = 150
+    df = pd.DataFrame({"두께(m)": r.uniform(1.2e-7, 3.4e-7, n), "온도(입구)": r.uniform(10, 20, n), "온도(출구)": r.uniform(30, 40, n)})
+    df["y"] = 1e7 * df["두께(m)"] + df["온도(입구)"] - 0.5 * df["온도(출구)"] + r.normal(0, 0.05, n)
+    _, tr = _train_csv(tmp_path, "tiny_in.csv", df, "두께(m),온도(입구),온도(출구)", "y")
+    res = run_tool("ml_export.py", "--model", tr["version_dir"])
+    calc = openpyxl.load_workbook(res["output_file"])["계산기"]
+    rows = {calc.cell(row=i, column=2).value: i for i in range(6, 9)}
+    assert set(rows) == {"두께", "온도(입구)", "온도(출구)"}, rows
+    i = rows["두께"]
+    assert 1.2e-7 <= calc.cell(row=i, column=3).value <= 3.4e-7 and "E-07" in calc.cell(row=i, column=5).value
+    assert "온도(입구)" in res["preview"] and "온도(출구)" in res["preview"]
+    assert "비어 있으면" in _strings(openpyxl.load_workbook(res["output_file"]), "사용법")
