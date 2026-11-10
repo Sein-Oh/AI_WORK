@@ -1,0 +1,113 @@
+# office-cli 실기 테스트 오류 로그 (분석용)
+# 생성 20261110_162809. 이 파일 전체를 그대로 Claude에게 전달하세요. 편집하지 마세요.
+
+## 1. 환경
+office-cli 버전: 1.5.2 (C:\CLI\office-cli)
+Windows: Windows-11-10.0.26200-SP0 / 10.0.26200
+Python: 3.13.13 (C:\CLI\python\python.exe)
+라이브러리: pywin32 312, openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, pymupdf 1.28.2, olefile 0.47, matplotlib 3.11.1, numpy 2.5.4
+Office (office.py windows의 office): {}
+config.json: {"transfer_method": {"word": ["export", "redraw"], "ppt": ["export", "redraw"]}}
+러너 옵션: only=L,M auto=False agent=False skip_outlook=False self_email=없음 keep_open=False
+테스트 폴더: C:\CLI-dev\work\office / 도구 환경변수: {"OFFICE_CLI_CACHE_DIR": "C:\\CLI-dev\\work\\office\\_cache", "OFFICE_CLI_DATA_DIR": "C:\\CLI-dev\\work\\office\\_data", "OFFICE_CLI_TIME_LIMIT": "0"}
+소요 시간: 100초
+
+## 2. 요약
+결과: ENV-SKIP=2, ERROR=3, PASS=15
+문제 항목: L11(ERROR), L12(ERROR), M2(ERROR)
+건너뜀: L15(ENV-SKIP: 열린 OneDrive/SharePoint 통합문서 없음), M3(ENV-SKIP: --self-email 없음)
+
+## 3. 러너 자동 복구와 창/프로세스 정리
+자동 복구: 없음
+정리 기록: 
+  16:29:38 [종료 정리] 대상 문서=테스트 폴더 전체, 끝내도 되는 PID=실행 중 생긴 프로세스
+  16:29:38 [종료 정리]   excel pid 22552: 문서 닫음 A.xlsx
+  16:29:38 [종료 정리]   word pid 23208: 문서 닫음 A.docx
+  16:29:38 [종료 정리]   ppt pid None: 문서 닫음 A.pptx
+  16:29:38 [종료 정리]   excel pid 22552: Quit (테스트 실행 중 생긴 빈 프로세스)
+  16:29:38 [종료 정리]   word pid 23208: Quit (테스트 실행 중 생긴 빈 프로세스)
+  16:29:38 [종료 정리]   ppt pid None: Quit (문서 0개 (PID 모름))
+  16:29:38 [종료 정리]   WM_CLOSE XLMAIN pid 22552 hwnd 199896 제목='Excel' 표시=False
+  16:29:38 [종료 정리]   WM_CLOSE XLMAIN pid 22552 hwnd 134288 제목='Excel' 표시=False
+  16:29:38 [종료 정리]   WM_CLOSE XLMAIN pid 22552 hwnd 265154 제목='' 표시=False
+
+## 4. 문제 항목 상세
+
+----------------------------------------------------------------------
+[ERROR] L11 제한된 보기
+  판정 근거: 테스트 스크립트 예외: HRESULT=-2147352567 (0x80020009) 예외가 발생했습니다. | 원본=None | 설명=None | scode=0x8002000B
+  테스트 스크립트 traceback:
+        Traceback (most recent call last):
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 324, in run_test
+            fn()
+            ~~^^
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 2796, in l11
+            old = _lookup_doc("excel", "L_pv.xlsx")
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 376, in _lookup_doc
+            raise last
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 373, in _lookup_doc
+            return getattr(app, _COLL[kind])(name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+          File "C:\CLI\python\Lib\site-packages\win32com\client\dynamic.py", line 214, in __call__
+            self._oleobj_.Invoke(*allArgs), self._olerepr_.defaultDispatchName, None
+            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+        pywintypes.com_error: (-2147352567, '예외가 발생했습니다.', (0, None, None, None, 0, -2147352565), None)
+  이 항목에서 실행한 도구 명령 0개:
+  이 항목의 진행 로그:
+        
+        [L11] 제한된 보기
+          => [ERROR] L11 (-2147352567, '예외가 발생했습니다.', (0, None, None, None, 0, -2147352565), None)
+
+----------------------------------------------------------------------
+[ERROR] L12 열린 문서 undo
+  판정 근거: 테스트 스크립트 예외: HRESULT=-2147352567 (0x80020009) 예외가 발생했습니다. | 원본=None | 설명=None | scode=0x8002000B
+  테스트 스크립트 traceback:
+        Traceback (most recent call last):
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 324, in run_test
+            fn()
+            ~~^^
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 2837, in l12
+            old = _lookup_doc("excel", "L_undo.xlsx")
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 376, in _lookup_doc
+            raise last
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 373, in _lookup_doc
+            return getattr(app, _COLL[kind])(name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+          File "C:\CLI\python\Lib\site-packages\win32com\client\dynamic.py", line 214, in __call__
+            self._oleobj_.Invoke(*allArgs), self._olerepr_.defaultDispatchName, None
+            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+        pywintypes.com_error: (-2147352567, '예외가 발생했습니다.', (0, None, None, None, 0, -2147352565), None)
+  이 항목에서 실행한 도구 명령 0개:
+  이 항목의 진행 로그:
+        
+        [L12] 열린 문서 undo
+          => [ERROR] L12 (-2147352567, '예외가 발생했습니다.', (0, None, None, None, 0, -2147352565), None)
+
+----------------------------------------------------------------------
+[ERROR] M2 맨 앞 창
+  판정 근거: 테스트 스크립트 예외: HRESULT=-2147352567 (0x80020009) 예외가 발생했습니다. | 원본=Microsoft Outlook | 설명=호출 중인 메서드는 이 대화 보기에서 유효하지 않습니다. | scode=0x80004005
+  테스트 스크립트 traceback:
+        Traceback (most recent call last):
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 324, in run_test
+            fn()
+            ~~^^
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 2933, in m2
+            if not com_retry(prepare):
+                   ~~~~~~~~~^^^^^^^^^
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 214, in com_retry
+            raise last
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 206, in com_retry
+            return fn()
+          File "C:\CLI-dev\office-cli\tools\run_win_tests.py", line 2928, in prepare
+            exp.ClearSelection()
+            ~~~~~~~~~~~~~~~~~~^^
+          File "<COMObject ActiveExplorer>", line 2, in ClearSelection
+        pywintypes.com_error: (-2147352567, '예외가 발생했습니다.', (4096, 'Microsoft Outlook', '호출 중인 메서드는 이 대화 보기에서 유효하지 않습니다.', None, 0, -2147467259), None)
+  이 항목에서 실행한 도구 명령 0개:
+  이 항목의 진행 로그:
+        
+        [M2] 맨 앞 창
+          => [ERROR] M2 (-2147352567, '예외가 발생했습니다.', (4096, 'Microsoft Outlook', '호출 중인 메서드는 이 대화 보기에서 유효하지 않습니다.', None, 0, -2147467259), None)
+
+## 5. 도구 오류 로그 (_data\logs\errors.txt)
+없음 (이번 실행에서 C:\CLI-dev\work\office\_data\logs\errors.txt에 추가된 기록 없음)
