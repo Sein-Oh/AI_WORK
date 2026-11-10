@@ -4,6 +4,7 @@
 열 이름 맞추기(단위, 별칭, 오타 [후보])는 test_names.py.
 """
 import json
+import re
 import os
 import shutil
 import sys
@@ -14,7 +15,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlkit_helpers import split_command, KIT, run_fail, run_raw, run_tool, stop_msg, write_df, write_rows  # noqa: E402
+from mlkit_helpers import split_command, KIT, recommended_command, run_fail, run_raw, run_tool, stop_msg, write_df, write_rows  # noqa: E402
 import ml_predict as mp  # noqa: E402
 import _ml_runtime as rt  # noqa: E402
 
@@ -63,9 +64,9 @@ def test_inline_comma_number_stops_with_command(small):
     assert run_tool("ml_predict.py", *split_command(rec)[2:])["sample_count"] == 1
     bad = run_fail("ml_predict.py", "--model", small["v"], "--input", "온도=1,5,압력=3000,라인=A")
     assert "[추천]" not in bad["message"]
-    # text values keep the joined text (not a number): unseen category, no stop
-    ok = run_tool("ml_predict.py", "--model", small["v"], "--input", "온도=180,압력=3000,라인=A,B")
-    assert ok["unseen_category_warning"]
+    # text values keep the joined text (not a number): an unseen category -> [후보] 학습 범주 (검토 B D1, 전에는 경고만)
+    bad = run_fail("ml_predict.py", "--model", small["v"], "--input", "온도=180,압력=3000,라인=A,B")
+    assert "'라인=A,B'" in bad["message"] and "[후보] 1) A 2) B" in bad["message"], bad
 
 
 def test_kv_repeated_name_refused():
@@ -652,13 +653,13 @@ def test_whatif_category_case_width_space_recovered(line_model):
 
 
 def test_predict_category_case_matched_like_whatif(line_model):
-    """일반 예측 --input도 같은 공통 함수: 대소문자만 다르면 맞추고 recovered, 그 밖은 unseen_category_warnings."""
+    """일반 예측 --input도 같은 공통 함수: 대소문자만 다르면 맞추고 recovered, 그 밖은 --find처럼 [후보] (검토 B D1)."""
     ref = run_tool("ml_predict.py", "--model", line_model, "--input", "온도=250,라인=C")
     res = run_tool("ml_predict.py", "--model", line_model, "--input", "온도=250,라인=c")
     assert res["unseen_category_warning"] is False and res.get("recovered"), res
     assert res["predictions_summary"]["수율"]["predictions"] == ref["predictions_summary"]["수율"]["predictions"]
-    res = run_tool("ml_predict.py", "--model", line_model, "--input", "온도=250,라인=라인C")
-    assert res["unseen_category_warning"] is True and "recovered" not in res, res
+    bad = run_fail("ml_predict.py", "--model", line_model, "--input", "온도=250,라인=라인C")
+    assert "[후보] 1) A 2) B 3) C" in bad["message"] and "recovered" not in bad, bad
 
 
 def test_match_categories_ambiguous_not_fixed():
@@ -848,3 +849,151 @@ def test_one_case_preview_has_everything_to_tell_and_directive_is_short(p1_model
     assert "글 그대로" in d and "화살표" in d, d
     two = run_tool("ml_predict.py", "--model", p1_model["v"], "--input", '[{"온도(°C)":180,"압력(bar)":3,"속도":45},{"온도(°C)":185,"압력(bar)":3,"속도":45}]')
     assert "생산량 1번 " in two["preview"] and "생산량 2번 " in two["preview"], two["preview"]
+
+
+# ---- 검토 B (2026-11-10, 2.9.87): 고정 입력 값 검사, 파생변수, 실측 비교, 조건 찾기, 여러 건, [후보] 묶음 ----------------
+
+
+@pytest.fixture(scope="module")
+def revb(tmp_path_factory):
+    """para: 온도(°C)·압력(bar)·라인(A/B/C) -> 수율(%) (산 모양), pe: 같은 데이터 + 파생변수 편차·비, dm: 측정일·온도 -> 강도."""
+    work = tmp_path_factory.mktemp("revb")
+    r = np.random.default_rng(0)
+    n = 240
+    t, p, line = r.uniform(150, 210, n), r.uniform(1, 5, n), r.choice(["A", "B", "C"], n)
+    y = 90 - 0.03 * (t - 180) ** 2 + 2 * p + np.select([line == "B", line == "C"], [-5, 4], 0) + r.normal(0, 0.6, n)
+    para = work / "para.xlsx"
+    pd.DataFrame({"온도(°C)": t, "압력(bar)": p, "라인": line, "수율(%)": y}).to_excel(para, index=False)
+    pe = work / "pe.xlsx"
+    pd.DataFrame({"온도(°C)": t, "압력(bar)": p, "라인": line, "수율(%)": y}).to_excel(pe, index=False)
+    m = 200
+    d = pd.Timestamp("2026-01-01") + pd.to_timedelta(r.integers(0, 180, m), unit="D")
+    tt = r.uniform(150, 210, m)
+    el = (d - pd.Timestamp("2026-01-01")).days.to_numpy()
+    dm = work / "dm.xlsx"
+    pd.DataFrame({"측정일": d, "온도": tt, "강도": 50 + 0.2 * tt + 0.05 * el + r.normal(0, 0.5, m)}).to_excel(dm, index=False)
+    assert run_tool("ml_train.py", "--file", str(para), "--targets", "수율", "--features", "온도,압력,라인")["status"] == "ok"
+    assert run_tool("ml_train.py", "--file", str(pe), "--targets", "수율", "--features", "온도,압력,라인",
+                    "--eval", "편차 = (온도 - 180) ** 2; 비 = 온도 / 압력")["status"] == "ok"
+    assert run_tool("ml_train.py", "--file", str(dm), "--targets", "강도", "--features", "측정일,온도")["status"] == "ok"
+    return {"work": work, "para": str(para), "pe": str(pe), "dm": str(dm)}
+
+
+def test_fixed_inputs_are_checked_like_one_prediction(revb):
+    """A3·B6: --find/--sweep/--maximize의 고정 입력에서 읽지 못한 날짜('어제')와 nan은 학습 기준값으로 바뀌어 VERIFIED, inf는
+    내부 오류였다. 한 건 예측처럼 멈추고, 학습 기간 밖 날짜는 경고한다."""
+    dm, para = revb["dm"], revb["para"]
+    for opt in (["--find", "강도=95", "--vary", "온도"], ["--sweep", "온도"], ["--maximize", "강도", "--vary", "온도"]):
+        bad = run_fail("ml_predict.py", "--model", dm, *opt, "--input", "측정일=어제")
+        assert bad["error_type"] == "input" and "측정일" in bad["message"] and "날짜" in bad["message"], bad
+    ok = run_tool("ml_predict.py", "--model", dm, "--find", "강도=95", "--vary", "온도", "--input", "측정일=2030-03-01")
+    assert any("학습 기간" in w for w in ok["warnings"]), ok
+    for v in ("nan", "inf"):
+        for opt in (["--find", "수율=90", "--vary", "온도"], ["--sweep", "온도"], ["--maximize", "수율", "--vary", "온도"]):
+            bad = run_fail("ml_predict.py", "--model", para, *opt, "--input", f"압력={v},라인=A")
+            assert bad["error_type"] == "input" and "압력(bar)" in bad["message"], bad
+    bad = run_fail("ml_predict.py", "--model", para, "--find", "수율=nan", "--vary", "온도", "--input", "압력=3,라인=A")
+    assert bad["error_type"] == "input", bad
+    bad = run_fail("ml_predict.py", "--model", dm, "--input", "측정일=3월 1일,온도=180")
+    assert bad["error_type"] == "input" and "측정일" in bad["message"], bad
+
+
+def test_percent_values_read_the_same_everywhere(revb):
+    """D2: --input은 '20%'를 받는데 --find 목표와 --find의 --input은 거절했다. 세 곳 모두 %를 떼고 읽고 경고."""
+    res = run_tool("ml_predict.py", "--model", revb["para"], "--find", "수율=90%", "--vary", "온도", "--input", "압력=3%,라인=A")
+    assert sum("%를 떼고" in w for w in res["warnings"]) == 2, res
+    ref = run_tool("ml_predict.py", "--model", revb["para"], "--find", "수율=90", "--vary", "온도", "--input", "압력=3,라인=A")
+    assert [s["온도(°C)"] for s in res["solutions"]] == [s["온도(°C)"] for s in ref["solutions"]]
+
+
+def test_derived_name_in_input_stops_with_command_without_it(revb):
+    """A4: 파생변수 이름(편차=5)을 받아 놓고 쓰지 않았다(같은 예측값, 경고 없음)."""
+    bad = run_fail("ml_predict.py", "--model", revb["pe"], "--input", "온도=180,압력=3,라인=A,편차=5")
+    assert "'편차'" in bad["message"] and "계산" in bad["message"], bad
+    name, cmd = recommended_command(bad["message"])
+    assert cmd[cmd.index("--input") + 1] == "온도=180,압력=3,라인=A", cmd
+    assert run_tool(name, *cmd)["sample_count"] == 1
+
+
+def test_map_check_without_date_and_extrapolated_value_not_in_preview(revb, mc_model, tmp_path):
+    """A5: 날짜 입력을 빼고 온도만으로 비교해 좋은 모델에 '실측과 많이 다름' 경고, 외삽 추세선 값을 '실측 비교값'으로 preview에 넣음,
+    경고 건수가 행 수가 아니라 타겟 수였다."""
+    res = run_tool("ml_predict.py", "--model", revb["dm"], "--input", "측정일=2026-03-01,온도=180")
+    assert "map_check" not in res["predictions_summary"]["강도"] and not res["map_check_warning"], res
+    assert any("날짜" in n for n in res["map_check_notes"]), res
+    res = run_tool("ml_predict.py", "--model", revb["para"], "--input", "온도=250,압력=30,라인=B")
+    assert res["predictions_summary"]["수율(%)"]["map_check"][0]["extrapolated"], res
+    assert "실측 비교값 없음" in res["preview"] and "차이" not in res["preview"], res["preview"]
+    _, _, vdir = mc_model
+    v2 = tmp_path / "v_tampered"
+    shutil.copytree(vdir, v2)
+    snap = pd.read_csv(v2 / "model_dataset.csv", encoding="utf-8-sig")
+    snap["생산효율"] += 10
+    snap.to_csv(v2 / "model_dataset.csv", index=False, encoding="utf-8-sig")
+    new = write_df(tmp_path / "new.csv", pd.DataFrame({"반응온도": [178, 180, 182], "압축압력": [3, 3, 3]}))
+    res = run_tool("ml_predict.py", "--model", str(v2), "--file", new)
+    assert "실측 비교 경고 3건" in res["preview"], res["preview"]
+
+
+def test_where_input_not_varied_is_added_to_vary(revb):
+    """A6: --where가 가리키는 입력(압력)이 --vary에도 --input에도 없으면 중앙값(2.8)으로 고정해 '조합 없음'을 VERIFIED로 냈다."""
+    res = run_tool("ml_predict.py", "--model", revb["para"], "--maximize", "수율", "--vary", "온도", "--where", "압력 >= 4",
+                   "--input", "라인=A")
+    assert res["count"] >= 1 and res["solutions"][0]["inputs"]["압력(bar)"] >= 4, res
+    assert "압력(bar)" in res["vary"] and any("--where" in w and "압력(bar)" in w for w in res["warnings"]), res
+
+
+def test_json_records_with_null_or_missing_key_stop(revb, tmp_path):
+    """B1: 건마다 키가 다른 JSON 배열이나 null 값은 내부 오류(TypeError)였다. 빈 값은 채우지 않고 몇 번째 건인지 알린다."""
+    for given in ('[{"온도":180,"압력":3,"라인":"A"},{"온도":190,"라인":"A"}]',
+                  '[{"온도":180,"압력":3,"라인":"A"},{"온도":190,"압력":null,"라인":"A"}]'):
+        bad = run_fail("ml_predict.py", "--model", revb["para"], "--input", given)
+        assert bad["error_type"] == "input" and "2번" in bad["message"] and "압력(bar)" in bad["message"], bad
+    js = tmp_path / "in.json"
+    js.write_text('[{"온도":180,"압력":3,"라인":"A"},{"온도":190,"압력":3,"라인":null}]', encoding="utf-8")
+    bad = run_fail("ml_predict.py", "--model", revb["para"], "--input", str(js))
+    assert bad["error_type"] == "input" and "라인" in bad["message"], bad
+
+
+def test_two_candidate_groups_number_every_command(revb):
+    """B2: [후보] 묶음이 둘인 message에 confirm_commands는 마지막 묶음 것만 있었고, 지시문은 없는 next_commands[0]을 가리켰다."""
+    bad = run_fail("ml_predict.py", "--model", revb["para"], "--input", "온두=180,압략=3,라인=A")
+    shown = re.findall(r"(?<![\w.])(\d+)\) ", bad["message"])
+    assert [int(x) for x in shown] == list(range(1, len(bad["confirm_commands"]) + 1)) and len(shown) == 2, bad
+    assert "confirm_commands" in bad["agent_directive"] and "next_commands" not in bad["agent_directive"], bad
+    assert "온두" in bad["confirm_commands"][1]["command"] and "압력(bar)=3" in bad["confirm_commands"][1]["command"], bad
+
+
+def test_file_directive_names_only_keys_in_the_json(revb, tmp_path):
+    """B3: 파일 예측의 지시문이 JSON에 없는 map_check(value, diff, method)를 알리라고 했다."""
+    new = write_df(tmp_path / "new.csv", pd.DataFrame({"온도": [170, 180, 190], "압력": [3, 3, 3], "라인": ["A", "B", "C"]}))
+    res = run_tool("ml_predict.py", "--model", revb["para"], "--file", new)
+    assert "map_check의" not in res["agent_directive"] and "map_" in res["agent_directive"], res["agent_directive"]
+
+
+def test_range_value_recommends_the_sweep_command(revb):
+    """B4: 숫자 입력에 범위(150:210:10)를 주면 거절되는 사용법(--vary와 --sweep 함께)을 안내했다. 전체 --sweep 명령을 [추천]."""
+    bad = run_fail("ml_predict.py", "--model", revb["para"], "--input", "온도=150:210:10,압력=3,라인=A")
+    name, cmd = recommended_command(bad["message"])
+    assert cmd[cmd.index("--sweep") + 1] == "온도=150:210:10" and cmd[cmd.index("--input") + 1] == "압력=3,라인=A", cmd
+    assert run_tool(name, *cmd)["count"] == 7
+    proc, bad = run_raw("ml_predict.py", "--model", revb["para"], "--vary", "온도", "--sweep", "150:210:10", "--input", "압력=3,라인=A")
+    assert proc.returncode == 2, bad
+    name, cmd = recommended_command(bad["message"])
+    assert "--vary" not in cmd and cmd[cmd.index("--sweep") + 1] == "온도=150:210:10", cmd
+    assert run_tool(name, *cmd)["count"] == 7
+
+
+def test_unseen_or_missing_category_in_input_stops_like_find(revb):
+    """D1: 한 건 예측은 없던 종류(라인=D)에 90% 범위까지 붙여 VERIFIED, 글자 입력을 빼면 후보 없이 '필수 피처 누락'이었다.
+    --find처럼 학습 범주를 [후보]로 (파일 예측은 지금처럼 경고)."""
+    bad = run_fail("ml_predict.py", "--model", revb["para"], "--input", "온도=180,압력=3,라인=D")
+    assert "[후보] 1) A 2) B 3) C" in bad["message"] and len(bad["confirm_commands"]) == 3, bad
+    assert run_tool("ml_predict.py", *split_command(bad["confirm_commands"][0]["command"])[2:])["sample_count"] == 1
+    bad = run_fail("ml_predict.py", "--model", revb["para"], "--input", "온도=180,압력=3")
+    assert "[후보] 1) A 2) B 3) C" in bad["message"] and len(bad["confirm_commands"]) == 3, bad
+    cmd = split_command(bad["confirm_commands"][2]["command"])
+    assert cmd[cmd.index("--input") + 1] == "온도=180,압력=3,라인=C", cmd
+    new = run_tool("ml_predict.py", "--model", revb["para"], "--file",
+                   write_df(revb["work"] / "d1.csv", pd.DataFrame({"온도": [180], "압력": [3], "라인": ["D"]})))
+    assert new["unseen_category_warning"], new

@@ -920,7 +920,8 @@ def test_check_near_points_both_directions():
 @pytest.mark.parametrize("col,target", [("수율_실측", "수율"), ("목표수율", "수율"), ("수율_실측", "수율,생산량"),
                                         ("목표수율", "수율,생산량"), ("생산량_실측", "수율,생산량")])
 def test_points_measured_column_passes_next_to_moisture(near_name_files, col, target):
-    pts = data_file(near_name_files, f"p_{col}.csv", ["온도", col], [[160, 30], [180, 20]])
+    # 함수율도 조회 파일에 준다: 온도 x 함수율 격자를 온도만으로 조회하면 함수율이 빠진 기준 열이라 멈춤 (검토 B A2)
+    pts = data_file(near_name_files, f"p_{col}.csv", ["온도", "함수율", col], [[160, 10, 30], [180, 10, 20]])
     proc, res = run_raw("ml_map.py", "--file", near_name_files["grid"], "--points", pts, "--targets", target,
                         "--save", data_path(near_name_files, f"o_{col}_{len(target)}"))
     res = ok_res(res, proc)
