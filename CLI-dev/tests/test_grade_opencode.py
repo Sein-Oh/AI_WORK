@@ -735,7 +735,7 @@ def test_reruns_asked_by_continue_are_not_repeats():
 # office-cli 묶음 O (회사 PC 오류 로그: 경량 LLM이 옵션을 지어낸 경우) - opencode run 기록으로 합격/불합격
 # ---------------------------------------------------------------------------
 G = "C:\\CLI-dev\\work\\gemma"
-EX, WD, OL, RD, OF = (f'python "C:\\CLI\\office-cli\\{n}.py"' for n in ("excel", "word", "outlook", "reader", "office"))
+EX, WD, OL, RD, OF, PP = (f'python "C:\\CLI\\office-cli\\{n}.py"' for n in ("excel", "word", "outlook", "reader", "office", "ppt"))
 OK = {"status": "ok", "agent_directive": "VERIFIED: ok"}
 ARG_ERR = {"status": "error", "error_type": "invalid_argument", "agent_directive": "STOP_RETRY: unrecognized arguments"}
 CHECK = f'{EX} check --target "{G}\\규격대조.xlsx" --range B3:C7 --item-col B --value-col C --spec "{G}\\규격서.txt"'
@@ -793,6 +793,17 @@ OFFICE_CASES = {
             # 회귀: 다른 문서를 채우고 값 파일 이름에 양식 이름이 들어 있음
             ([(f'{WD} fill --target "{G}\\성적서양식.docx" --file "{G}\\값.csv" --dry-run', OK),
               (f'{WD} fill --target "{G}\\다른.docx" --file "{G}\\성적서양식.docx_values.csv"', OK), "한빛전자로 채웠습니다."], "fill")]),
+    # 2026-11-09 검토 5장 1번: 조건 검색(느슨한 날짜·%), 음수 값 규격 검색, 문서 왕복
+    "O6": ([[(f'{EX} read --target "{G}\\납품기록.xlsx" --where "납품일 >= 2026-1-10; 불량률 >= 5%"', OK), "품번 0102, 0105 두 행입니다."]],
+           [([(f'{EX} read --target "{G}\\납품기록.xlsx"', OK), "품번 0102, 0105입니다."], "--where"),       # 200행을 LLM이 직접 거름
+            ([(f'{EX} read --target "{G}\\납품기록.xlsx" --where "납품일 >= 2026-1-10; 불량률 >= 5%"', OK), "품번 102, 105입니다."],
+             "0102")]),                                                                                       # 앞자리 0을 뺌
+    "O7": ([[(f'{RD} search --query "-20 ℃" --file "{G}\\규격서.txt"', OK), "3.3 동작 온도 조건입니다 (규격서.txt 3.3)."]],
+           [([(f'{RD} read --file "{G}\\규격서.txt"', OK), "3.3 동작 온도입니다."], "search")]),
+    "O8": ([[(f'{WD} read --target "{G}\\주간보고.docx" --save "{G}\\주간보고.md"', OK),
+             (f'{PP} write --target "{G}\\주간보고_발표.pptx" --file "{G}\\주간보고.md"', OK), "슬라이드 2장을 만들었습니다."]],
+           [([(f'{OF} transfer --from-app word --what text --to-app ppt --to-target "{G}\\주간보고_발표.pptx"', OK), "슬라이드로 옮겼습니다."],
+             "word")]),
 }
 
 
@@ -910,7 +921,9 @@ def test_office_samples_match_scenarios(tmp_path):
     finally:
         sys.path.pop(0)
     made = make_office_samples.main(str(tmp_path))
-    assert set(made) == {"규격서.txt", "규격대조.xlsx", "단위표.xlsx", "주간보고.docx", "성적서양식.docx", "시험성적서.docx"}
+    assert set(made) == {"규격서.txt", "규격대조.xlsx", "단위표.xlsx", "주간보고.docx", "성적서양식.docx", "시험성적서.docx", "납품기록.xlsx"}
+    ws = openpyxl.load_workbook(tmp_path / "납품기록.xlsx").active          # O6: 앞자리 0 품번(글자), % 서식
+    assert ws["B2"].value == "0101" and ws["C2"].number_format.endswith("%")
     ws = openpyxl.load_workbook(tmp_path / "규격대조.xlsx").active
     assert [ws[f"B{r}"].value for r in range(3, 8)] == ["정격 전압", "소비 전류", "동작 온도", "절연 저항", "포장 색상"]
     assert ws["D2"].value == "단위" and ws["D3"].value == "V"       # check가 머리글 '단위' 열을 행마다 읽음

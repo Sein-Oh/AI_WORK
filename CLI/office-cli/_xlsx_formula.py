@@ -271,11 +271,13 @@ def uncomputed_found(info: Optional[Dict[str, Any]]) -> bool:
 
 
 def uncomputed_note(info: Dict[str, Any]) -> str:
-    """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 10개)."""
+    """xlsx_uncomputed_formulas 결과를 UNVERIFIED 문구로 (칸 주소는 앞 3개)."""
     if info.get("unknown"):
         return (f"수식 계산 여부를 확인하지 못함 (파일의 시트 XML을 읽지 못함: {info.get('error') or '알 수 없음'}). "
                 "수식 칸이 있으면 빈 칸이나 계산되지 않은 값으로 읽혔을 수 있으니 사용자에게 그대로 알리세요")
-    cells = ", ".join(info["cells"][:10]) + (" 등" if info["count"] > 10 else "")
+    # 칸 목록은 결과의 uncomputed_formulas에 한 번만: 문구에는 앞 3개 (unverified·agent_directive에 같은 목록이 세 번 들어가던 것,
+    # 2026-11-09 검토 5장 4번)
+    cells = ", ".join(info["cells"][:3]) + (" 등, 목록은 uncomputed_formulas" if info["count"] > 3 else "")
     if info.get("full_calc_on_load"):
         return (f"수식 칸 {info['count']}개({cells})는 파일이 '열 때 다시 계산'(fullCalcOnLoad)으로 저장되어 있어 파일에 적힌 값"
                 "(빈 칸이나 0)이 계산된 값이 아님 (엑셀에서 연 적 없이 프로그램이 만든 파일). 사용자에게 엑셀에서 파일을 열어 저장한 뒤 "

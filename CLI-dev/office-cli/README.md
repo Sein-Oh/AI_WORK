@@ -85,6 +85,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
      `chart` create, word `comment` add, ppt `write`, `notes` 쓰기): 아무것도 바꾸지 않고 STOP_RETRY. 되돌릴 수 있는 변경(`office.py undo`)이면
      message에 `[추천]` `--dry-run`만 뺀 같은 전체 명령, 명령에 `--overwrite`나 `delete`·`clear`가 들면 `needs_user_decision`과
      `[후보] 1) 미리보기 없이 실행` + 같은 번호의 `confirm_commands`(`destructive`, 사용자가 고른 뒤에만).
+- 출력 크기(1.4.97): 표 읽기 글자 상한 6000자. 닫힌 큰 xlsx를 읽다 명령 시간 제한 전에 닿으면 `read`는 읽은 데까지 `UNVERIFIED:`(`time_limited`), `export`·`check`·`transfer`는 STOP_RETRY(`--range`로 나눠). outlook 목록은 짧은 `id`만(긴 `entry_id`는 번호를 못 붙였을 때만), `folders`는 150개·깊이 5까지, reader `list`는 40개.
 - 활성 문서(1.4.96): `--target` 없는 쓰기는 앱에 활성 문서가 없으면(제한된 보기, 숨은 PERSONAL.XLSB만) 다른 문서로 넘어가지 않고 "편집 사용" 안내로 멈춥니다. 읽기는 보이는 첫 문서(숨은 문서 제외). 열린 저장된 문서의 `undo`는 덮기 전 디스크 파일을 `pre_undo_disk_backup`에 남깁니다.
 - 새 파일(1.4.95): 없는 `--target` 경로를 새로 만드는 것은 `excel write`, `word write`, `ppt write`뿐입니다. 그 밖의 쓰기 명령은 STOP_RETRY(비슷한 이름 `[후보]`).
 - `--save` 확장자(1.4.95): 그 명령이 쓰지 않는 확장자(`read --save a.xlsx`가 CSV만 씀)는 쓰는 형식으로 바꿔 저장하고 `recovered`로 알립니다.

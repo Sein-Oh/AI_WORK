@@ -10,8 +10,11 @@
 - 주간보고.docx  : 제목 1개와 문단 2개 (O4에서 끝에 문단을 덧붙임)
 - 성적서양식.docx : 자리 {{업체명}}, {{시험일}}이 있는 양식 (O5에서 채움)
 - 시험성적서.docx : 메일 첨부로 쓸 문서 (O3 수동 준비: 이 파일을 첨부한 메일을 자신에게 보냄). 본문에 "판정: 합격"
+- 납품기록.xlsx  : 1행 머리글(납품일, 품번, 불량률, 금액), 6행. 불량률은 % 서식, 품번은 앞자리 0 글자 (O6 조건 검색:
+                   2026-1-10 이후이고 불량률 5% 이상 -> 품번 0102, 0105 두 행)
 같은 이름의 파일은 새로 만든 파일로 바꾼다 (시험 폴더 전용).
 """
+import datetime
 import os
 import sys
 
@@ -31,6 +34,10 @@ SPEC = """3. 전기적 특성
 
 CHECK_ROWS = [("정격 전압", 5.1, "V"), ("소비 전류", 250, "mA"), ("동작 온도", 70, "℃"), ("절연 저항", 150, "MΩ"),
               ("포장 색상", "회색", None)]
+
+
+DELIVERY_ROWS = [((2026, 1, 5), "0101", 0.08, 1200), ((2026, 1, 12), "0102", 0.06, 3400), ((2026, 1, 15), "0103", 0.02, 900),
+                 ((2026, 1, 20), "0104", 0.049, 1500), ((2026, 2, 3), "0105", 0.05, 2100), ((2026, 2, 9), "0106", 0.01, 800)]
 
 
 def main(out: str) -> list:
@@ -80,6 +87,16 @@ def main(out: str) -> list:
     doc.add_paragraph("측정값: 150 MΩ")
     doc.add_paragraph("판정: 합격")
     doc.save(keep("시험성적서.docx"))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "납품"
+    ws.append(["납품일", "품번", "불량률", "금액"])
+    for d, code, rate, amount in DELIVERY_ROWS:
+        ws.append([datetime.datetime(*d), code, rate, amount])
+    for row in ws.iter_rows(min_row=2, min_col=3, max_col=3):
+        row[0].number_format = "0.0%"
+    wb.save(keep("납품기록.xlsx"))
 
     print(f"[INFO] 샘플 {len(made)}개 저장: {out} ({', '.join(made)})", file=sys.stderr)
     return made

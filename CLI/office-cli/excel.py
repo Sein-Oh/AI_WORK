@@ -471,6 +471,9 @@ def chart_sheet_note(wb: Any, name: str) -> str:
     return f" ('{hit}'은(는) 차트 시트라 칸이 없음, 워크시트를 고르세요)" if hit else ""
 
 
+TIME_CUT: Dict[str, Any] = {}   # 닫힌 파일 읽기가 명령 시간 제한 전에 멈춘 곳 (cmd_read가 UNVERIFIED로 알림, partial_ok: read만)
+
+
 def _read_matrix_closed(path: str, sheet: Optional[str], address: Optional[str]) -> Tuple[str, int, int, List[List[Any]], List[str]]:
     """닫힌 파일을 openpyxl로 읽습니다. (시트명, 시작행, 시작열, 값, 전체 시트명)"""
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
@@ -537,7 +540,18 @@ def _read_matrix_open_wb(wb: Any, path: str, sheet: Optional[str], address: Opti
     if r2 < r1 or c2 < c1:
         rows = []
     else:
-        rows = [list(r) for r in ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True)]
+        rows = []
+        for k, r in enumerate(ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True)):
+            if k % 2000 == 1999 and rt.time_up():
+                # 명령 시간 제한(120초) 전에 멈춤: JSON 없이 끊기지 않게 (2026-11-09 검토 5장 5번). read는 읽은 데까지 UNVERIFIED,
+                # 결과를 그대로 쓰는 명령(export, check, transfer)은 일부만 쓰면 안 되므로 STOP_RETRY
+                if not TIME_CUT.get("partial_ok"):
+                    raise rt.InputError(f"파일이 커서 명령 시간 제한 안에 다 읽지 못했습니다 ({k}행까지 읽음, {addr(r1, c1, r2, c2)} 중). "
+                                        "--range로 범위를 나눠 다시 실행하세요 (예: 앞 절반, 뒤 절반).")
+                TIME_CUT["rows"] = k
+                TIME_CUT["where"] = addr(r1, c1, r1 + k - 1, c2)
+                break
+            rows.append(list(r))
         width = c2 - c1 + 1
         rows = [r + [None] * (width - len(r)) for r in rows]
         if address:
@@ -625,6 +639,9 @@ def _closed_formulas(path: str, sheet: str, r0: int, c0: int, matrix: List[List[
     try:
         ws = wb[sheet]
         for i, row in enumerate(ws.iter_rows(min_row=r0, max_row=r0 + nrows - 1, min_col=c0, max_col=c0 + ncols - 1)):
+            if i % 2000 == 1999 and rt.time_up():
+                TIME_CUT["formulas"] = i                   # 수식을 앞 i행에서만 찾음 (시간 제한)
+                break
             for j, cell in enumerate(row):
                 v = cell.value
                 extra: Dict[str, Any] = {}
@@ -782,6 +799,28 @@ def _no_formula_reader(target: str) -> Optional[str]:
 
 
 def cmd_read(args) -> Dict[str, Any]:
+    """read. 닫힌 큰 파일을 읽다 시간 제한 전에 멈췄으면(TIME_CUT) 결과를 UNVERIFIED로 바꾸고 나눠 읽는 방법을 알림."""
+    TIME_CUT.clear()
+    TIME_CUT["partial_ok"] = True
+    try:
+        res = _cmd_read(args)
+    finally:
+        TIME_CUT.pop("partial_ok", None)
+    if not TIME_CUT or res.get("status") != "ok":
+        return res
+    why = []
+    if "rows" in TIME_CUT:
+        why.append(f"파일이 커서 명령 시간 제한 전에 멈춰 앞 {TIME_CUT['rows']}행({TIME_CUT['where']})만 읽음: 결과(건수·찾은 칸)는 그 범위 안의 것")
+    if "formulas" in TIME_CUT:
+        why.append(f"수식 칸은 앞 {TIME_CUT['formulas']}행에서만 찾음 (시간 제한)")
+    why.append("--range로 범위를 나눠 다시 읽거나 엑셀에서 열어 읽으세요")
+    fields = {k: v for k, v in res.items() if k not in ("status", "tool", "command", "preview", "verified", "unverified",
+                                                        "agent_directive", "recovered")}
+    fields["time_limited"] = dict(TIME_CUT)
+    return rt.ok_unverified(TOOL, "read", res.get("preview", "") + " (시간 제한으로 일부만)", why + list(res.get("unverified") or []), **fields)
+
+
+def _cmd_read(args) -> Dict[str, Any]:
     found: Dict[str, Any] = {}
     payload = _read(args, found)
     if args.formulas:

@@ -842,7 +842,7 @@ def test_search_wildcard_query_keeps_only_literal_matches(monkeypatch, capsys):
     assert code == 0 and "견적서_v2" in folder.Items.filter
     assert [m["subject"] for m in out["mails"]] == ["견적서_v2 송부"]      # '_' 와일드카드로 더 찾은 메일은 뺌
     code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--where", "body")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["id3"]
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["id3"]
 
 
 def test_limit_upper_bound_and_zero(monkeypatch, capsys):
@@ -883,7 +883,7 @@ def test_outlook_count(capsys, monkeypatch, argv):
 
 def test_list_days_includes_today(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out
     assert out["period"] == {"since": "2026-11-03", "until": "2026-11-04", "days": 2}, out
     assert "2026-11-03 ~ 2026-11-04" in out["preview"], out
     assert "[ReceivedTime] >= '2026-11-03 00:00'" in ol["log"], ol["log"]       # 지역 설정과 무관한 YYYY-MM-DD
@@ -891,18 +891,18 @@ def test_list_days_includes_today(ol, capsys):
 
 def test_list_days_one_is_today_only(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--days", "1")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a"], out
 
 
 def test_list_since_with_unread(ol, capsys):
     code, out = run_main(outlook, capsys, "list", "--since", "2026-10-28", "--unread")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "c"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "c"], out
     assert out["period"]["days"] == 8 and ol["log"][0] == "[UnRead] = True", (out, ol["log"])
 
 
 def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out      # 가짜 Restrict는 글로 거르지 않음 (c는 10-28)
     flt = ol["log"][-1]
     assert flt.startswith("@SQL=") and flt.count("@SQL=") == 1 and "견적" in flt, flt
     assert '"urn:schemas:httpmail:datereceived" >= ' in flt and ") AND (" in flt, flt
@@ -913,7 +913,7 @@ def test_search_days_with_query_uses_one_dasl_filter(ol, capsys):
 
 def test_search_date_only_is_allowed(ol, capsys):
     code, out = run_main(outlook, capsys, "search", "--since", "2026-11-03")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out
 
 
 def test_zero_result_states_period(ol, capsys):
@@ -927,11 +927,11 @@ def test_zero_result_states_period(ol, capsys):
 def test_restrict_refused_falls_back_and_filters(ol, capsys):
     ol["state"]["refuse"] = True
     code, out = run_main(outlook, capsys, "list", "--days", "2")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"], out
     assert out["agent_directive"].startswith("VERIFIED:") and out["recovered"], out
     rt.RECOVERED.clear()
     code, out = run_main(outlook, capsys, "search", "--query", "견적", "--days", "7")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["a", "b"] and out["recovered"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["a", "b"] and out["recovered"], out
     assert "datereceived" not in ol["log"][-1] and "견적" in ol["log"][-1], ol["log"]
     rt.RECOVERED.clear()
 
@@ -1492,9 +1492,11 @@ def test_list_gives_short_ids_and_read_accepts_them(ol_short, capsys):
     code, out = run_outlook(capsys, "list", "--limit", "3")
     assert code == 0 and [m["id"] for m in out["mails"]] == [1, 2, 3], out
     second = out["mails"][1]
+    assert "entry_id" not in second                                   # 짧은 번호가 있으면 긴 EntryID는 빼서 출력 크기를 줄임 (1.4.97)
+    long_id = outlook.entry_id("2")
     code, out2 = run_outlook(capsys, "read", "--id", "2")
-    assert code == 0 and out2["mail"]["entry_id"] == second["entry_id"] and out2["mail"]["subject"] == second["subject"]
-    code, out3 = run_outlook(capsys, "read", "--id", second["entry_id"])          # 긴 id도 그대로
+    assert code == 0 and out2["mail"]["entry_id"] == long_id and out2["mail"]["subject"] == second["subject"]
+    code, out3 = run_outlook(capsys, "read", "--id", long_id)                      # 긴 id도 그대로
     assert code == 0 and out3["mail"]["subject"] == second["subject"]
     code, bad = run_outlook(capsys, "read", "--id", "9")
     assert code == 1 and "없는 번호" in bad["message"] and bad["agent_directive"].startswith("STOP_RETRY:")
@@ -1898,7 +1900,7 @@ def test_thread_collects_conversation_in_time_order(monkeypatch, capsys, refuse)
     monkeypatch.setattr(outlook, "get_outlook", lambda: object())
     monkeypatch.setattr(outlook, "get_namespace", lambda o: _NS())
     code, out = run_outlook(capsys, "thread", "--id", "i2")
-    assert code == 0 and [m["entry_id"] for m in out["mails"]] == ["i1", "s1", "i2"], out
+    assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["i1", "s1", "i2"], out
     assert [m["id"] for m in out["mails"]] == [1, 2, 3] and out["mails"][1]["body"] == "둘째(보냄)"
     assert bool(out.get("recovered")) is refuse
     code, out2 = run_outlook(capsys, "read", "--id", "2")                     # thread 목록 번호로 읽기
@@ -2018,3 +2020,22 @@ def test_c17_display_failure_after_saved_draft_is_unverified(capsys, monkeypatch
     code, out = run(capsys, monkeypatch, mail, "new", "--to", "a@x.com", "--subject", "보고", "--body", "ok")
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "다시 실행하지 말고" in out["agent_directive"], out
     assert mail.saved and not mail.sent, out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 5장 4번: 출력 크기 (목록의 긴 EntryID, folders 상한)
+# ---------------------------------------------------------------------------
+
+
+def test_folders_output_is_capped(monkeypatch, capsys):
+    class F:
+        def __init__(self, name, n=0, depth=0):
+            self.Name = name
+            self.UnReadItemCount = 0
+            self.Folders = [F(f"{name}/{i}", n, depth - 1) for i in range(n)] if depth > 0 else []
+    ns = type("NS", (), {"Folders": [F("계정", 12, 3)]})()
+    monkeypatch.setattr(outlook, "get_outlook", lambda: object())
+    monkeypatch.setattr(outlook, "get_namespace", lambda o: ns)
+    code, out = run_main(outlook, capsys, "folders", "--depth", "9")
+    assert code == 0 and out["truncated"] is True and out["folder_count"] == outlook.FOLDERS_MAX, out["folder_count"]
+    assert any("5로 줄임" in w for w in out["warnings"]) and len(json.dumps(out, ensure_ascii=False)) < 20000

@@ -667,8 +667,9 @@ def test_preview_separates_long_values_and_dropped_columns(tmp_path, capsys):
     wb.save(p)
     code, out = run_main(excel, capsys, "read", "--target", str(p))
     assert code == 0 and out["truncated"], out
-    assert "긴 값 15칸 잘림" in out["preview"] and "뒤쪽 25열 생략" in out["preview"], out["preview"]
-    assert "25열" in out["truncated_reason"]
+    m = re.search(r"긴 값 (\d+)칸 잘림.*뒤쪽 (\d+)열 생략", out["preview"])       # 상한(1.4.97: 6000자) 안에 든 칸은 잘리고, 나머지 열은 생략
+    assert m and int(m.group(1)) + int(m.group(2)) == 40 and int(m.group(1)) >= 5, out["preview"]
+    assert f"{m.group(2)}열" in out["truncated_reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -1659,3 +1660,25 @@ def test_b13_excel_read_small_fixes(tmp_path, capsys):
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
     code, out = run_excel(capsys, "compare", "--target", str(p), "--target2", str(p), "--sheet", "Sheet")
     assert code == 1 and "같은 파일" in out["message"], out
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09 검토 5장 5번: 큰 닫힌 파일을 읽다 시간 제한이 오면 JSON 없이 끊기지 않음 (read는 UNVERIFIED, export는 STOP_RETRY)
+# ---------------------------------------------------------------------------
+
+
+def test_big_closed_file_stops_before_time_limit(tmp_path, capsys, monkeypatch):
+    import openpyxl
+    p = tmp_path / "큰.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["번호", "값"])
+    for i in range(1, 6001):
+        ws.append([i, i * 2])
+    wb.save(p)
+    monkeypatch.setattr(rt, "time_up", lambda reserve=rt.TIME_RESERVE: True)
+    code, out = run_excel(capsys, "read", "--target", str(p), "--where", "값 >= 0")
+    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and out["time_limited"]["rows"] == 1999, out
+    assert "--range" in out["agent_directive"] and out["count"] == 1998, out
+    code, out = run_excel(capsys, "export", "--target", str(p), "--save", str(tmp_path / "o.csv"))
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "--range" in out["message"], out

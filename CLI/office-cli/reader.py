@@ -57,6 +57,7 @@ MAX_FOLDER_FILES = 300      # 한 번에 새로 등록(파싱)할 최대 파일 
 MAX_FOLDER_DEPTH = 3        # 폴더 기본 탐색 깊이
 MAX_FOLDER_SCAN = 20000     # 폴더에서 살펴볼 최대 파일 수
 MAX_LIST_ITEMS = 20         # JSON에 담는 실패/새 등록 목록 상한
+LIST_SHOW = 40              # list 명령이 JSON에 담는 문서 수 (전에는 100개, 넘으면 전체는 full_result_file)
 MAX_SAVE_HITS = 5000        # --save 파일에 담는 최대 검색 결과 수
 MAX_SEARCH_TOP = 50         # search --top 상한 (더 많은 결과는 --save 파일로)
 MAX_SEARCH_CONTEXT = 500    # search --context(스니펫 앞뒤 글자 수) 상한
@@ -4409,13 +4410,15 @@ def cmd_list(args) -> Dict[str, Any]:
                 stale = info.get("mtime") != st.st_mtime or info.get("size") != st.st_size
             except OSError:
                 pass
-        items.append({"file": os.path.basename(path), "path": path, "type": info.get("type"),
-                      "units": info.get("units"), "pages": info.get("pages"), "sections": info.get("sections"),
-                      "chars": info.get("chars"), "cached_at": info.get("parsed_at"), "read_at": info.get("parsed_at"),
-                      "parser_version": info.get("parser_version", 1),
-                      "cache": "stale" if stale else "current", "stale": stale, "missing": not exists,
-                      "exists": exists})
-    limit = 100
+        # 같은 뜻 키(read_at = cached_at, cache = stale, exists = not missing)와 문자 수는 넣지 않음 (2026-11-09 검토 5장 4번:
+        # 40개에 14.6KB). parser_version은 이전 형식일 때만
+        item = {"file": os.path.basename(path), "path": path, "type": info.get("type"), "units": info.get("units"),
+                "pages": info.get("pages"), "sections": info.get("sections"), "cached_at": info.get("parsed_at"),
+                "stale": stale, "missing": not exists}
+        if info.get("parser_version", 1) != PARSER_VERSION:
+            item["parser_version"] = info.get("parser_version", 1)
+        items.append(item)
+    limit = LIST_SHOW
     shown = items[:limit]
     stale_n = sum(1 for i in items if i["stale"])
     missing_n = sum(1 for i in items if i["missing"])

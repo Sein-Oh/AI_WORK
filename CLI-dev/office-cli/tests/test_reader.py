@@ -1731,7 +1731,7 @@ def test_read_shows_page_section_number_and_page_filter(docs):
     code, out = run_reader("read", "--file", str(docs / "계획서.pdf"), "--save", str(docs / "out.md"))
     assert "근거: 계획서.pdf p.1, III. 개발 내용" in open(out["output_file"], encoding="utf-8").read()
     code, out = run_reader("list")
-    assert out["documents"][0]["pages"] == 2 and out["documents"][0]["parser_version"] == reader.PARSER_VERSION
+    assert out["documents"][0]["pages"] == 2 and "parser_version" not in out["documents"][0]      # 현재 형식이면 넣지 않음 (1.4.97)
 
 
 def test_eml_is_unsupported_like_any_unknown_type(tmp_path):

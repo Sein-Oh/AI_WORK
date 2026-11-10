@@ -11,6 +11,22 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.4.97] - 2026-11-10
+
+전체 검토 5장(경량 모델 운용) 1, 2, 4, 5번. 3번(대상 문서 옵션 이름 통일)은 사용자 결정이라 하지 않음.
+
+### 수정
+- 5장 4번 출력 크기: outlook `list`/`search`/`thread` 결과는 짧은 번호(`id`)가 있으면 긴 `entry_id`(140자쯤)를 넣지 않음.
+  `folders`는 폴더 150개·깊이 5까지(넘으면 `truncated`, `warnings`, 결과에 `folder_count`). 계산 안 된 수식 칸 목록은 `uncomputed_formulas`에만,
+  문구(`unverified`, `agent_directive`)에는 앞 3개. reader `list`는 40개(전에는 100개)와 같은 뜻 키(`read_at`, `cache`, `exists`, `chars`)를 뺌
+  (`parser_version`은 이전 형식일 때만). 표 읽기 글자 상한 6000자(전에는 8000자, 8열 200행에 JSON 약 16KB).
+- 5장 5번 시간 제한 보호: 닫힌 큰 xlsx를 읽다 명령 시간 제한(여유 30초 전)에 닿으면 JSON 없이 끊기지 않게 멈춤. `read`(`--where`, `--search`,
+  `--formulas` 포함)는 읽은 데까지의 결과를 `UNVERIFIED:`(`time_limited`, `--range`로 나눠 읽으라는 안내), 결과를 그대로 쓰는 `export`·`check`·
+  `transfer`는 일부만 쓰지 않도록 STOP_RETRY.
+- 5장 2번(해석하지 못한 조건·검색어의 0건): 1.4.92~1.4.95에서 처리 (`--where`의 비교할 수 없는 조건, 쪽 없는 문서의 `--pages`, `-` 값, 검색 범위 누락).
+- 5장 1번 Gemma 시나리오: `agent_scenarios.py`에 O6(조건 검색: 느슨한 날짜·%·앞자리 0 품번), O7(음수 값 규격 검색 `-20 ℃`),
+  O8(문서 왕복: `word.py read --save` -> `ppt.py write --file`). 샘플 `납품기록.xlsx`(`make_office_samples.py`), 메시지 팩 다시 만듦, 채점 시험.
+
 ## [1.4.96] - 2026-11-10
 
 전체 검토 3장 C1~C18: 실제 Office 동작에서 추정한 결함. 확신 70% 이상과 코드로 확인한 것은 가짜 COM을 실제 동작에 맞게 고친 뒤 수정,

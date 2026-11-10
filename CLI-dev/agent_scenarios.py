@@ -329,6 +329,39 @@ GROUPS = [
                 ],
                 'judge': 'word.py fill --slots(자리=값; 자리=값) 또는 값 파일(--file)로 두 자리를 채우고 결과를 알렸는가. 미리보기를 했다면 그 결과의 confirm_commands[0]을 (빈 자리라 destructive 항목이 아니고 요청에서 이미 묻지 말라고 했으므로) 다시 묻지 않고 실행했는가.',
             },
+            # 6. 조건 검색 (2026-11-09 검토 1장 A1·A2): 느슨한 날짜와 %로 --where 한 번. 0건이면 실패 (전에는 '2026-1-10', '5%'가 0건 VERIFIED)
+            {
+                'id': 'O6',
+                'message': r'{DIR}\납품기록.xlsx 에서 납품일이 2026-1-10 이후이고 불량률이 5% 이상인 행의 품번을 알려줘.',
+                'commands': [r'''excel\.py"?\s+read\b(?=[^\n]*납품기록\.xlsx)(?=[^\n]*--where\b)'''],
+                'tool_ok': r'excel\.py"?\s+read\b(?=[^\n]*--where)',
+                'answer_all': ['0102', '0105'],
+                'forbid': [r'excel\.py"?\s+(write|style)\b'],
+                'judge': '조건에 맞는 두 행(품번 0102, 0105)을 앞자리 0까지 그대로 알렸는가. 0104(4.9%)를 넣지 않았는가.',
+            },
+            # 7. 규격 검색 (검토 2장 B5): 음수 값 검색어 '-20 ℃'가 인자 오류 없이
+            {
+                'id': 'O7',
+                'message': r'{DIR}\규격서.txt 에서 -20 ℃ 조건이 어느 장절에 있는지 찾아서 근거와 함께 알려줘.',
+                'commands': [r'''reader\.py"?\s+search\b(?=[^\n]*규격서\.txt)(?=[^\n]*-20)'''],
+                'tool_ok': r'reader\.py"?\s+search\b',
+                'answer_all': [r'3\.3'],
+                'answer_any': ['동작 ?온도'],
+                'judge': '3.3 동작 온도 조건(-20 ℃ 이상 60 ℃ 이하)을 근거(규격서.txt, 장절 3.3)와 함께 알렸는가.',
+            },
+            # 8. 문서 왕복 (검토 1장 A12): word read --save -> 저장한 .md로 ppt write --file (제목이 슬라이드 제목, '단락 N'이 제목이 아님)
+            {
+                'id': 'O8',
+                'message': r'{DIR}\주간보고.docx 내용을 {DIR}\주간보고_발표.pptx 새 발표 자료의 슬라이드로 옮겨줘.',
+                'commands': [
+                    r'''word\.py"?\s+read\b(?=[^\n]*주간보고\.docx)(?=[^\n]*--save\b)''',
+                    r'''ppt\.py"?\s+write\b(?=[^\n]*주간보고_발표\.pptx)(?=[^\n]*--file\b)''',
+                ],
+                'tool_ok': r'ppt\.py"?\s+write\b',
+                'answer_any': ['슬라이드'],
+                'forbid': [r'office\.py"?\s+transfer\b[^\n]*--what\s+text'],
+                'judge': '워드 내용을 .md로 저장하고 그 파일로 PPT에 썼는가. 만든 슬라이드 수와 파일 경로를 알렸는가.',
+            },
         ],
     },
     # 도구에 없는 일 (전역 지침 8장): 도구에 없다고 알리고 C:\CLI\data\scripts의 스크립트로 직접 (원본은 그대로, 결과는 새 파일)

@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.4.96"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.4.97"                         # skills\<이름>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -46,7 +46,7 @@ CONFIG_FILE = os.environ.get("OFFICE_CLI_CONFIG") or os.path.join(_tool_home(), 
 
 # 결과 길이 기본 상한 (경량 LLM 컨텍스트 보호)
 DEFAULT_MAX_ROWS = 200
-DEFAULT_MAX_CHARS = 8000
+DEFAULT_MAX_CHARS = 6000   # 표 글자 수 상한 (8000이면 8열 200행에 JSON 약 16KB, 2026-11-09 검토 5장 4번)
 MAX_CELL_CHARS = 500        # JSON에 담는 셀·찾은 값 하나의 글자 상한 (전체는 --save 파일)
 # 작업 폴더 파일 보관 기간 (일)
 WORK_RETENTION_DAYS = 7

@@ -277,14 +277,14 @@
 
 ## 5. 경량 모델 운용 관점
 
-1. **Gemma 실측이 얇다**: office-cli 자동 시나리오는 O1~O5 다섯 개(대부분 닫힌 파일)다. 1장을 고친 뒤 `docs/opencode/SCENARIOS.md`에 조건 검색(날짜·%),
+1. **Gemma 실측이 얇다** (1.4.97: O6~O8 추가): office-cli 자동 시나리오는 O1~O5 다섯 개(대부분 닫힌 파일)다. 1장을 고친 뒤 `docs/opencode/SCENARIOS.md`에 조건 검색(날짜·%),
    규격 검색(음수 온도), 문서 왕복(read --save -> write --file), 메일 참조 확인을 넣는다.
-2. **0건의 "다시 실행하지 마세요"**: 조건·검색어를 도구가 해석하지 못해 0건인 경우까지 LLM이 멈춘다. 해석 실패는 `STOP_RETRY` + `[추천]`, 진짜 0건만 VERIFIED.
-3. **대상 문서 옵션 이름**: 엑셀·워드·PPT는 `--target`, reader는 `--file`, 엑셀·워드 쓰기의 `--file`은 내용 파일. office-spec 스킬이 둘을 섞어 쓴다.
+2. **0건의 "다시 실행하지 마세요"** (1.4.92~1.4.95에서 처리): 조건·검색어를 도구가 해석하지 못해 0건인 경우까지 LLM이 멈춘다. 해석 실패는 `STOP_RETRY` + `[추천]`, 진짜 0건만 VERIFIED.
+3. **대상 문서 옵션 이름** (사용자 결정 대기): 엑셀·워드·PPT는 `--target`, reader는 `--file`, 엑셀·워드 쓰기의 `--file`은 내용 파일. office-spec 스킬이 둘을 섞어 쓴다.
    같은 뜻 표가 고쳐 주지만 왕복이 한 번 는다. 이름을 하나로 맞출지는 사용자 결정 (베타라 바꿀 수 있음. CHANGELOG "남은 할 일"의 인자 이름 정리와 함께).
-4. **출력 크기**: Outlook 목록 행마다 긴 `entry_id`(짧은 `id`가 있음), 계산 안 된 수식 목록이 `uncomputed_formulas`·`unverified`·`agent_directive`에 세 번,
+4. **출력 크기** (1.4.97에서 수정): Outlook 목록 행마다 긴 `entry_id`(짧은 `id`가 있음), 계산 안 된 수식 목록이 `uncomputed_formulas`·`unverified`·`agent_directive`에 세 번,
    상한 없는 `folders`(`--depth`), reader `list` 100개(40개에 14.6KB), 엑셀 읽기 기본 200행(8열에 약 16KB).
-5. **시간 제한 보호**: 20만 행 x 10열 xlsx에서 `read`·`--where`·`--search`·`export` 36~38초, `read --formulas` 58초(시트를 두 번 읽음), `compare` 78초.
+5. **시간 제한 보호** (1.4.97에서 수정: 닫힌 xlsx 읽기. compare·reader index는 원래 CONTINUE): 20만 행 x 10열 xlsx에서 `read`·`--where`·`--search`·`export` 36~38초, `read --formulas` 58초(시트를 두 번 읽음), `compare` 78초.
    `CONTINUE`는 `compare`와 reader index에만 있다. 느린 PC에서 `read --formulas`가 120초에 JSON 없이 끊길 수 있으므로 시한 전에 멈추고 `UNVERIFIED:`/`CONTINUE:`.
 
 ## 6. 문제없다고 확인한 것 (다시 검토하지 않아도 됨)

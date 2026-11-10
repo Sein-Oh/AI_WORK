@@ -328,6 +328,7 @@ def cmd_list(args) -> Dict[str, Any]:
     _all_unreadable(mails, stats, folder)
     problems = collect_problems(stats, "항목")
     id_warn = remember_listing(mails, "list")          # 짧은 번호 (이어서 늘어남, --id 3)
+    compact_listing(mails)
     if id_warn:
         warnings.append(id_warn)
     extra: Dict[str, Any] = {"warnings": warnings} if warnings else {}
@@ -424,6 +425,7 @@ def cmd_search(args) -> Dict[str, Any]:
     _all_unreadable(mails, stats, folder)
     problems = collect_problems(stats, "찾은 항목")
     id_warn = remember_listing(mails, "search")
+    compact_listing(mails)
     if id_warn:
         warnings.append(id_warn)
     desc = " / ".join(x for x in (args.query and f"'{args.query}'", args.sender and f"보낸사람 '{args.sender}'",
@@ -767,15 +769,25 @@ def cmd_current(args) -> Dict[str, Any]:
     return _detail_response("current", f"{source} 메일: '{result['mail']['subject']}' ({result['mail']['from']})", result)
 
 
-def _folder_tree(folder: Any, depth: int) -> Dict[str, Any]:
+FOLDERS_MAX = 150   # folders 결과에 담는 폴더 수 상한 (상한 없이 수백 개가 나오던 것, 2026-11-09 검토 5장 4번)
+DEPTH_MAX = 5
+
+
+def _folder_tree(folder: Any, depth: int, budget: Dict[str, int]) -> Dict[str, Any]:
     node: Dict[str, Any] = {"name": str(folder.Name)}
+    budget["n"] += 1
     try:
         node["unread"] = int(folder.UnReadItemCount)
     except Exception:
         pass
     if depth > 0:
         try:
-            subs = [_folder_tree(f, depth - 1) for f in folder.Folders]
+            subs = []
+            for f in folder.Folders:
+                if budget["n"] >= FOLDERS_MAX:
+                    budget["cut"] = 1
+                    break
+                subs.append(_folder_tree(f, depth - 1, budget))
             if subs:
                 node["folders"] = subs
         except Exception:
@@ -785,8 +797,23 @@ def _folder_tree(folder: Any, depth: int) -> Dict[str, Any]:
 
 def cmd_folders(args) -> Dict[str, Any]:
     ns = get_namespace(get_outlook())
-    stores = [_folder_tree(store, args.depth) for store in ns.Folders]
-    return rt.ok(TOOL, "folders", f"계정/저장소 {len(stores)}개의 폴더 구조", accounts=stores)
+    depth = max(0, min(args.depth, DEPTH_MAX))
+    budget = {"n": 0, "cut": 0}
+    stores = []
+    for store in ns.Folders:
+        if budget["n"] >= FOLDERS_MAX:
+            budget["cut"] = 1
+            break
+        stores.append(_folder_tree(store, depth, budget))
+    extra: Dict[str, Any] = {"folder_count": budget["n"], "truncated": bool(budget["cut"])}
+    warnings = [f"--depth {args.depth}은 {DEPTH_MAX}로 줄임"] if args.depth > DEPTH_MAX else []
+    if budget["cut"]:
+        warnings.append(f"폴더가 많아 {FOLDERS_MAX}개까지만 담음: 찾는 폴더가 없으면 --depth를 줄이거나 search·list의 --folder에 상위 폴더 경로를 주세요")
+    if warnings:
+        extra["warnings"] = warnings
+    return rt.ok(TOOL, "folders", f"계정/저장소 {len(stores)}개의 폴더 구조 (폴더 {budget['n']}개" + (", 일부만" if budget["cut"] else "") + ")",
+                 "VERIFIED: 폴더 구조를 읽었습니다." + (" 일부만 담았습니다(truncated, warnings)." if budget["cut"] else ""),
+                 accounts=stores, **extra)
 
 
 # ==============================================================================
@@ -1372,6 +1399,14 @@ def remember_listing(mails: List[Dict[str, Any]], what: str) -> Optional[str]:
     return None
 
 
+def compact_listing(mails: List[Dict[str, Any]]) -> None:
+    """목록 결과에서 짧은 번호(id)가 붙은 메일의 긴 EntryID(140자쯤)를 뺌 (2026-11-09 검토 5장 4번: 목록 출력 크기).
+    번호를 붙이지 못해 id가 EntryID면 그대로."""
+    for m in mails:
+        if m.get("id") != m.get("entry_id"):
+            m.pop("entry_id", None)
+
+
 # ------------------------------------------------------------------------------
 # 발송 원장 (1.4.73): new/reply/forward가 만든 초안의 EntryID와 send로 보낸 시각. send는 원장에 있고 아직 보내지 않은
 # 초안만 보냄 (사용자가 쓰다 둔 초안·이미 보낸 초안 거부). 번호 기억 파일과 같은 잠금(_IdsLock)으로 묶음.
@@ -1660,6 +1695,7 @@ def cmd_thread(args) -> Dict[str, Any]:
         s.update(body=body, body_truncated=cut)
         out.append(s)
     id_warn = remember_listing(out, f"thread {topic[:40]}")
+    compact_listing(out)
     fields = {"topic": topic, "mails": out, "count": len(uniq), "shown": len(out), "truncated": len(uniq) > len(out)}
     if id_warn:
         fields["warnings"] = [id_warn]
@@ -1719,7 +1755,7 @@ def build_cli():
     p.add_argument("--days", type=int, default=7, help="오늘부터 N일 (기본 7, 1 = 오늘, 최대 92)")
 
     p = sub.add_parser("folders", help="폴더 구조")
-    p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2)")
+    p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2, 최대 5, 폴더 150개까지)")
 
     def compose(p, to=True):
         if to:
