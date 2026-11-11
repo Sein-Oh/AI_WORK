@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 읽기
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.3"
+  version: "1.6.4"
   platform: windows
 ---
 
@@ -41,6 +41,7 @@ metadata:
 | PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action <add/duplicate/delete/move> --slide N [--dest M] [--layout <title/text/title_only/blank>]` |
 | PPT 기타 | `python "C:\CLI\office-cli\ppt.py" replace --find <A> --replace <B>` (`--match-case`, `--map "<바꿀말.json>"`) / `python "C:\CLI\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\CLI\office-cli\ppt.py" info --detail --slides N` |
 | 엑셀 차트·범위를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` (범위는 `--range A1:D10` 대신. 문서를 정하려면 `--from-target "<보내는 문서>" --to-target "<받는 문서>"`) |
+| 워드 내용을 PPT로 (또는 PPT를 워드로) | `python "C:\CLI\office-cli\word.py" read --target "<문서.docx>" --save` 후 결과의 `output_file`로 `python "C:\CLI\office-cli\ppt.py" write --target "<발표.pptx>" --slide new --title "<제목>" --file "<output_file>"` (transfer는 워드<->PPT를 하지 않는다) |
 | 워드/PPT 내용을 엑셀로 | `python "C:\CLI\office-cli\office.py" transfer --from-app word --what text --to-app excel` (표는 `--what table --table 1`) |
 | 되돌리기 / 창 | `python "C:\CLI\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\CLI\office-cli\office.py" focus --app word` |
 

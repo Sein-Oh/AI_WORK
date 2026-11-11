@@ -4,7 +4,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.90**, **office-cli 1.6.3** (작업 브랜치 `ccr-ecab210c-awib23`, PR #76. 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.91**, **office-cli 1.6.4** (작업 브랜치 `ccr-ecab210c-awib23`. PR을 머지했으면 main)
 - 단계: 최종 점검 (2026-11-11). 팀원 배포 직전. 회사 PC 실기 통과 뒤 사내 LLM(OpenCode + BEAM/Nemotron)에 유지보수를 넘길 예정 (인계 자료는 아직 안 만듦)
 - 스킬: ml-kit 5개(ml-train, ml-dataset, ml-predict, ml-report, ml-map), office-cli 5개(office-excel, office-doc, office-mail, office-spec, office-data).
   스킬 하나 8KB(8192바이트) 이하. 2026-11-11 점검: 도구에 있는데 스킬에 없던 옵션을 채움 (가장 큰 것 office-doc 약 7.3KB)
@@ -395,6 +395,16 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
 시스템 PATH(`C:\CLI\python`, `C:\CLI\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
 
 ## 4. 지난 실기 결과 요약
+- 회사 PC(2026-11-11 저녁, ml-kit 2.9.90 / office-cli 1.6.3, 전체 회귀 + 사내 LLM 시험):
+  - 전체 회귀: diag 18/18, beta 29/29, office 실기 PASS 102·FAIL 0, pytest 4558 passed·실패 3. 실패 3건은 도구 결함이 아님:
+    감시 시험 1건(2.9.90에서 시계 기준이 바뀐 뒤 시험이 맞지 않음), "실패 항목 없이 끝남" 2건(다시 돌려 모두 통과했는데 러너가 실패로 셈). 둘 다 고침.
+    PC가 느려진 시간대(파이썬 시작 0.8초 -> 25초)의 시간 초과 4건은 다시 돌려 통과(WARN)
+  - 사내 LLM 자동 시험(21건): Gemma 15/21, BEAM 18/21. 조치는 ml-kit 2.9.91, office-cli 1.6.4 CHANGELOG.
+    도구 결함 2건(데이터셋을 만든 뒤 도구가 준 학습 명령이 단위 이름 때문에 실패, 예측의 `--points`), 채점 기준 2건(R1 문구, Y1 스크립트),
+    스킬 안내 1건(워드 -> PPT), 모델이 지침을 어긴 것 3건(수식 표기, `python -c`, 미리보기 전에 물음: 지침 문장을 강화).
+    채점 기준을 고친 뒤로 보면 Gemma 16/21, BEAM 20/21에 해당 (BEAM의 남은 1건은 워드 -> PPT를 transfer로 먼저 시도)
+  - 대화창 확인: Gemma는 비교 거절 안내·일정 만들기와 지우기·선택한 칸·지침 위치 모두 통과. 상위 모델은 "두 엑셀 비교"를 파이썬으로 처리 -> 지침 8장 강화.
+    스킬 만드는 법을 묻자 인터넷 검색을 시도 -> 지침 2장 강화, skill-maker 스킬
 - 회사 PC(2026-11-11 아침, ml-kit 2.9.89 / office-cli 1.6.2, 전체 `run_all_tests.py` 1시간 24분 + `run_win_tests.py --only L,M`):
   - diag 18/18, beta 29/29(F7~F9 포함), office 실기 PASS 100·FAIL 2, pytest 4581 passed·3 failed. 결과 `result_PC_20261111_063942.md`, `report_20261111_085931.txt`
   - pytest 실패 3건: 2건은 PC가 느려진 시간대(파이썬 시작 0.6초 -> 최대 20초)의 600초 시간 초과(끈 뒤 출력 파이프를 기다려 시험 하나가 47분).

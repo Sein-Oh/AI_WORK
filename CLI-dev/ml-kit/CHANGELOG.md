@@ -12,6 +12,21 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.91] - 2026-11-11
+
+회사 PC 전체 회귀와 사내 LLM 시험(Gemma, BEAM, 2026-11-11 저녁) 조치.
+
+### 수정
+- `ml_dataset.py`: `--header-row`/`--unit-row`/`--data-row`를 주지 않으면 그 파일의 마지막 학습 때와 같게 읽음 (`warnings`에 알림).
+  제목 행 아래 머리글·단위 행인 파일을 옵션과 함께 학습한 뒤 옵션 없이 데이터셋을 만들면, 새 파일의 열 이름에서 단위가 빠지고
+  `next_commands`(학습 때의 이름 `생산효율(%)`)가 "컬럼을 찾을 수 없습니다"로 멈췄음 (Gemma A3: 도구가 준 명령이 실패).
+- `ml_predict.py --points <파일>`(ml_map의 옵션을 예측에 씀)은 `[후보] --input` 대신 `--file`로 고친 전체 명령 `[추천]` (Gemma P2).
+
+### 테스트
+- `test_watchdog_writes_one_json_line_at_the_limit`: 2.9.90에서 감시 시계를 프로세스 시작부터 재게 된 뒤 Windows에서 실패 (1초 제한인데 import가
+  1.5초를 넘어 본문 시작 전에 감시가 응답). 이 시험은 감시의 응답을 보는 것이라 시험 스크립트가 시계를 import 뒤부터 재게 함.
+- `run_all_tests.py`: 실패한 시험을 다시 돌려 모두 통과했는데 처음 실행의 exit 1 때문에 "pytest exit 1 (실패 항목 없이 끝남)"이 실패로 남던 것.
+
 ## [2.9.90] - 2026-11-11
 
 회사 PC 실기(2026-11-11) 조치.

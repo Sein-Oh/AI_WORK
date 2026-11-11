@@ -244,6 +244,18 @@ def execute(args) -> Dict[str, Any]:
     if bool(args.where) == bool(args.rows):
         raise InputError("--where(조건) 또는 --rows(행 번호) 중 하나만 주십시오.")
     data_file = os.path.abspath(args.file)
+    # 2.9.91: read the file as its last training did (--header-row / --unit-row / --data-row of that run) when none is given.
+    # Without it a file trained with '--unit-row 4' was read with unit-less names, the new file lost the units and
+    # next_commands (the names of that training, '생산효율(%)') stopped at "컬럼을 찾을 수 없습니다" (company PC 2026-11-11 A3).
+    inherited = ""
+    if args.header_row is None and args.unit_row is None and args.data_row is None:
+        src, info = trained_source(data_file)
+        lay = (((info or {}).get("record") or {}).get("data_profile") or {}).get("layout") or {}
+        if info and os.path.normcase(src) == os.path.normcase(data_file) and any(lay.get(k) for k in ("header_row", "unit_row", "data_row")):
+            args.header_row, args.unit_row, args.data_row = lay.get("header_row"), lay.get("unit_row"), lay.get("data_row")
+            inherited = (f"머리글·단위 행은 {info['version']} 학습 때와 같게 읽었습니다 ("
+                         + ", ".join(f"{label} {v}행" for label, v in (("머리글", args.header_row), ("단위", args.unit_row),
+                                                                      ("데이터 시작", args.data_row)) if v) + ")")
     progress(f"데이터 읽기: {os.path.basename(data_file)}")
     df = load_data_file(data_file, header_row=args.header_row, unit_row=args.unit_row, data_row=args.data_row,
                         sheet=args.sheet)
@@ -251,7 +263,7 @@ def execute(args) -> Dict[str, Any]:
     mask, chosen_by, warnings = select_rows(df, args)
     # the sheet read (A3): another sheet with data or --sheet on a CSV is said; [후보] --sheet commands to choose
     sheet_text, sheet_confirm = sheet_note(df.attrs, commands=not args.dry_run)
-    warnings[:0] = [w for w in (sheet_text, sheet_ignored_warning(data_file, args.sheet)) if w]
+    warnings[:0] = [w for w in (sheet_text, sheet_ignored_warning(data_file, args.sheet), inherited) if w]
     hit = int(mask.sum())
     hit_rows = [source_rows[i] for i in np.flatnonzero(mask)]
     kind = args.action

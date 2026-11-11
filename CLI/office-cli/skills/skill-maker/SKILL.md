@@ -4,7 +4,7 @@ description: 사용자가 방금 한 작업이나 자주 하는 작업을 OpenCo
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.3"
+  version: "1.6.4"
   platform: windows
 ---
 

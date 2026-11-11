@@ -88,7 +88,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.90"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.91"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1039,6 +1039,7 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--version-dir": ["--model"], "--model-folder": ["--model"],
     "--input-file": ["--file"], "--data": ["--file"], "--data-file": ["--file"], "--path": ["--file"],
     "--input": ["--file", "--inputs"], "--inputs": ["--input"], "--query": ["--input"],
+    "--points": ["--file"],      # ml_map의 조회 파일 옵션을 예측에 쓴 것 (회사 PC 2026-11-11 Gemma P2): 예측의 파일은 --file
     "--target": ["--targets"], "--target-col": ["--targets"], "--target-cols": ["--targets"],
     "--target-column": ["--targets"], "--y": ["--targets"],
     "--feature": ["--features"], "--columns": ["--features"], "--feature-cols": ["--features"], "--x": ["--features"],

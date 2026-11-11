@@ -226,7 +226,7 @@ GROUPS = [
                 'commands': [r'ml_report\.py', '--title'],
                 'tool_ok': r'ml_report\.py',
                 'answer_all': ['성능 ?예측표'],
-                'answer_any': ['일치'],
+                'answer_any': ['일치', '같은 계산', '모델과 같'],     # 2.9.84부터 도구 문구는 '모델과 같은 계산'
                 'judge': '보고서 파일, 성능예측표 파일, 출력별 입력과 모델과 같은 계산이라는 것, 판정을 알렸는가. 제목을 짧게 정리했는가.',
             },
             {
@@ -375,6 +375,8 @@ GROUPS = [
                 'allow': ['no_adhoc_py', 'no_write_py'],
                 'commands': [r'''python(\.exe)?"?\s+['"]?[A-Za-z]:[\\/]+CLI[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py'''],
                 'tool_ok': r'''[A-Za-z]:[\\/]+CLI[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py''',
+                'tool_plain': True,                # 사용자 스크립트는 1줄 JSON을 내지 않음 (회사 PC 2026-11-11 BEAM: 'JSON 없음'으로 실패 처리됨)
+                'max_repeat': 3,                   # 전역 지침 8장: 고쳐 다시 실행은 2번까지 (처음 1번 + 2번)
                 'answer_all': ['평균'],
                 'forbid': [r'(?<![\w.-])python(\.exe)?"?\s+-c\b', r'Remove-Item|\bdel\s', r'pip3?\s+install'],
                 'judge': '도구에 없는 기능이라고 1줄 알리고, C:\\CLI\\data\\scripts 아래 스크립트를 만들어 1~3번 안에 실행했는가. 원본을 고치지 않고 새 파일에 구간별 평균과 행 수를 저장하고 그 경로와 결과를 알렸는가.',

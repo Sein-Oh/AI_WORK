@@ -295,6 +295,7 @@ def test_pytest_stage_reruns_failed_tests_once_alone(iso, monkeypatch, capsys):
     assert len(st.failures) == 1 and "test_always_fails" in st.failures[0], st.failures
     assert any("test_fails_only_the_first_time" in w and "다시 돌려 통과" in w and "처음 원인: AssertionError" in w for w in st.warnings), st.warnings
     assert "실패한 시험만 다시 돌림: 1건 통과, 1건 다시 실패" in st.details[-1][1]
+    assert not any("실패 항목 없이 끝남" in f for f in st.failures), st.failures
     os.remove(folder / "ran_once.txt")
     st = rat.Stage("pytest")
     rat.step_pytest(st, type("A", (), {"pytest_timeout": 60, "no_rerun": True})(), {})
@@ -613,3 +614,17 @@ def test_long_files_start_first_across_tools(tmp_path):
             ("ml-kit", str(tmp_path / "ml-kit"), str(ml / "test_train.py"))]
     jobs.sort(key=lambda j: -rat.job_seconds(*j))
     assert [os.path.basename(j[2]) for j in jobs[:2]] == ["test_train.py", "test_reader.py"]
+
+
+def test_pytest_stage_all_reruns_pass_is_not_a_failure(iso, monkeypatch, capsys):
+    """회사 PC 2026-11-11: 다시 돌려 모두 통과했는데 처음 실행의 exit 1 때문에 'pytest exit 1 (실패 항목 없이 끝남)'으로 실패가 남았다."""
+    folder = iso / "tests"
+    folder.mkdir()
+    (folder / "test_flaky.py").write_text(FLAKY_TESTS.replace("def test_always_fails():\n    assert 1 == 2, \"늘 실패\"\n", ""), encoding="utf-8")
+    (iso / "pytest_live_report.py").write_text(open(os.path.join(os.path.dirname(HERE), "pytest_live_report.py"),
+                                                    encoding="utf-8").read(), encoding="utf-8")
+    monkeypatch.setattr(rat, "PYTEST_TARGETS", ("tests",))
+    st = rat.Stage("pytest")
+    rat.step_pytest(st, type("A", (), {"pytest_timeout": 60})(), {})
+    assert st.failed == 0 and st.failures == [] and st.passed == 2, (st.failed, st.failures, st.passed)
+    assert any("다시 돌려 통과" in w for w in st.warnings)

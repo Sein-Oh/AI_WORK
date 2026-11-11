@@ -2032,6 +2032,9 @@ sys.path.insert(0, sys.argv[1])
 import ml_predict as mp
 import _ml_runtime as rt
 rt.WATCHDOG_GRACE = 0.5
+# 감시 시계를 import 뒤부터: 이 시험은 1~2초 제한으로 감시의 응답을 보는 것이라, 프로세스 시작부터 재면(2.9.90, Windows에서 import가
+# 1.5초를 넘음) 본문이 시작하기도 전에 감시가 응답함 (회사 PC 2026-11-11). 시작 시각 기준은 test_time_limit_clock_starts_with_the_process가 봄
+rt.PROCESS_START = time.monotonic()
 p = rt.JsonArgumentParser()
 p.add_argument("--mode")
 p.add_argument("--rt")

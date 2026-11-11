@@ -368,7 +368,7 @@ def grade_turn(sc, turn, rules):
     for rx in sc.get("commands", []):
         hit = any(cmd_hit(rx, c) for c in cmds)
         out.append((f"명령: {rx}", hit, "" if hit else "맞는 명령 없음"))
-    if sc.get("tool_ok"):
+    if sc.get("tool_ok") and not sc.get("tool_plain"):       # tool_plain: 사용자 스크립트 (1줄 JSON을 내지 않음, Y1)
         runs = [t for t in turn["tools"] if t["tool"] == "bash" and re.search(sc["tool_ok"], t["command"], re.I)]
         payload = last_json(runs[-1]["output"]) if runs else None
         ok = bool(payload) and payload.get("status") == "ok"
@@ -427,7 +427,8 @@ def grade_turn(sc, turn, rules):
             counts = Counter(re.sub(r"\s+", " ", c).strip() for c in cmds)
             for c in asked:
                 counts[re.sub(r"\s+", " ", c).strip()] -= 1
-            bad += [f"{n}회: {c}" for c, n in counts.items() if n > rule["max_repeat"]]
+            limit = int(sc.get("max_repeat") or rule["max_repeat"])       # 시나리오가 정한 상한 (Y1: 고쳐 다시 실행 2번까지 = 3회)
+            bad += [f"{n}회: {c}" for c, n in counts.items() if n > limit]
         if rid == "answer_clean":
             bad += [f"이모지 {m}" for m in set(EMOJI.findall(answer))]
             bad += ["file:/// 링크"] if "file:///" in answer else []

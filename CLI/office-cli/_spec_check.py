@@ -284,8 +284,9 @@ def cmd_check(args) -> Dict[str, Any]:
         nexts = [rt.next_command("excel.py", ["comment", "--target", args.target, "--action", "add", "--file", memo, "--dry-run"],
                                  "자동 판정(참고)·읽은 조건·근거를 값 칸 메모로 달기 미리보기, 변경 없음 "
                                  "(실제로 다는 명령은 그 결과의 confirm_commands, 사용자 확인 뒤에만)")]
-        action = ("사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자가 '예'라고 한 뒤에만 "
-                  "그 결과의 confirm_commands[0]을 실행하세요. 같은 check는 다시 실행하지 마세요.")
+        # 사용자가 이미 메모를 요청했으면 묻느라 멈추지 않고 미리보기까지 (회사 PC 2026-11-11 Gemma O1: 미리보기 전에 "메모를 달까요?"로 멈춤)
+        action = ("사용자가 메모를 요청했거나 원하면 묻지 말고 next_commands[0](미리보기, 변경 없음)을 바로 실행해 판정과 함께 보여 주고, "
+                  "사용자가 '예'라고 한 뒤에만 그 결과의 confirm_commands[0]을 실행하세요. 같은 check는 다시 실행하지 마세요.")
     if late:
         problems.append(f"명령 시간 제한으로 {len(late)}행({late[0]}부터)은 대조하지 못함 (판단필요로 두고 메모에서 뺌)")
         if not info.get("remaining"):

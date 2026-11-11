@@ -811,6 +811,7 @@ def step_pytest(stage, args, ctx):
             npass, nfail, nskip, fails, skips = parse_pytest(out)
             fails = merge_live(fails, parse_live(out))
             timed_out = TIMEOUT_MARK in (out.rstrip().splitlines() or [""])[-1]
+            healed_all = False
             if fails and len(fails) <= RERUN_MAX and not getattr(args, "no_rerun", False):
                 say(f"  {tool}/{rel}: 실패 {len(fails)}건을 혼자 다시 돌림")
                 left, again_out = rerun_failed(job[1], fails, args.pytest_timeout, env)
@@ -822,6 +823,7 @@ def step_pytest(stage, args, ctx):
                 npass += len(healed)
                 nfail = max(nfail - len(healed), 0)
                 fails = left
+                healed_all = not left          # 다시 돌려 모두 통과: 처음 실행의 exit 1을 실패로 세지 않음 (회사 PC 2026-11-11)
             stage.passed += npass
             stage.skipped += nskip
             stage.failures += [f"{tool}: {x[:200]}" for x in fails]
@@ -829,7 +831,7 @@ def step_pytest(stage, args, ctx):
             if timed_out:
                 stage.fail(f"{tool}/{rel}: 시간 상한 {args.pytest_timeout}초로 중단 (그때까지 실패 {len(fails)}건은 위 목록, "
                            f"나머지 테스트는 실행 안 됨. --pytest-timeout으로 늘릴 수 있음)")
-            elif code not in (0, 5, None) and not nfail and not fails:      # 5: no test in the file
+            elif code not in (0, 5, None) and not nfail and not fails and not healed_all:      # 5: no test in the file
                 stage.fail(f"{tool}/{rel}: pytest exit {code} (실패 항목 없이 끝남, 상세 참고)")
             stage.skips += [f"{tool}: {x[:200]}" for x in skips]
             stage.details.append((f"pytest {tool}/{rel} (exit {code}, {sec}초, {clock.get(job, '?')} 시작)", f"cwd={job[1]}\n{out}"))

@@ -11,13 +11,15 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
-## [1.6.3] - 2026-11-11
+## [1.6.4] - 2026-11-11
 
-### 제거 (사용자 결정 2026-11-11)
-- 두 판 비교 `excel.py compare`(엑셀 표·BOM)와 `reader.py diff`(문서)를 뺌: 이 버전에서 BOM 비교를 고쳐 봤지만(메모 날짜, 비교결과 시트,
-  순서 대조, 이동, 상위 경로) 실제 BOM에서 전보다 나빠짐. 필요하면 별도 도구로 새로 만듦. 명령을 찾으면 `not_supported`로
-  워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기를 안내. `_excel_compare.py`, 관련 테스트, 실기 러너 N12, 단순화 점검 B1~B5를 지움.
-  office-data 스킬은 표 집계(`stats`)와 중복 찾기(`duplicates`)만, office-spec에서 diff 줄을 뺌, 전역 지침 3장 표와 8장(직접 할 일)에 반영.
+PR #77(1.6.3) 병합 뒤의 작업. 회사 PC 사내 LLM 시험(Gemma 15/21, BEAM 18/21, 2026-11-11 저녁) 조치 포함.
+
+### 기능: 스킬 만들기 (사용자 요청 2026-11-11, 배포 뒤 잘 모르는 사용자가 스킬을 만들 수 있게)
+- 새 진입점 `skill.py`(save / list / check / delete)와 새 스킬 `skill-maker`. "이거 스킬로 만들어줘"에 에이전트가 작업을 정리하고, 본문 파일을 쓴 뒤
+  `skill.py save --name --description --file`로 등록: 머리말은 도구가 붙이고, 이름 규칙·설명 길이·8KB·문자를 확인해 걸리면 저장하지 않고 고칠 것을 알림,
+  저장 뒤 다시 읽어 확인, 같은 이름은 사용자에게 묻고 `--overwrite`. 기본 스킬 이름은 거절, 지우기는 미리보기 뒤 확인(보관).
+- `setup.py`가 skill-maker 스킬도 설치, 전역 지침 3장 표와 9장(사용자 스킬 위치), 저장소 AGENTS.md, README.
 
 ### 지침 (회사 PC 2026-11-11 저녁, 상위 모델)
 - 상위 모델이 "두 엑셀 비교" 요청에 파이썬 스크립트를 짜서 비교함 (Gemma는 직접 하는 곳을 안내). 전역 지침 8장 맨 앞에 "하지 않는 일" 표를 두고
@@ -27,6 +29,22 @@
 - 전역 지침 2장: 폐쇄망이라 인터넷이 전혀 안 된다는 것을 굵게, 웹 검색·웹 페이지 열기 도구와 내려받기를 시도하지 않도록 (스킬 만드는 법을 묻자 인터넷 검색을 시도함).
   9장에 새 스킬 만드는 법(폴더, 이름, 머리말)을 적어 이 PC의 지침만으로 답하게. `setup.py`는 opencode.jsonc가 웹 도구를 막지 않았으면 INFO.
 
+### 사내 LLM 시험 조치 (Gemma, BEAM)
+- office-doc 스킬: "워드 내용을 PPT로"(`word.py read --save` 후 `ppt.py write --file`) 줄을 넣음. 스킬 점검 때 transfer 줄에 `--from-target`·`--to-target`을
+  적은 뒤 BEAM이 워드 -> PPT를 transfer로 시도함 (O8, 도구는 거절하고 방법을 안내해 끝은 맞게 됨).
+- `excel.py check` directive와 전역 지침 4장: 사용자가 메모를 요청했으면 묻지 말고 미리보기(`next_commands[0]`)까지 바로 (Gemma O1: 미리보기 전에 "메모를 달까요?"로 멈춤).
+- 전역 지침 1장: 수식 표기(`$\rightarrow$`, `$R^2$`)를 쓰지 않는다는 것을 예와 함께 (Gemma O5·R1). 8장: `python -c`로 바로 실행하지 않는다는 것을 굵게 (Gemma Y1).
+- 채점(`agent_scenarios.py`, `grade_opencode.py`): R1 답변 기준에 "모델과 같은 계산"(2.9.84부터의 도구 문구, 두 모델 모두 이것 때문에 실패 처리됨),
+  Y1은 사용자 스크립트라 1줄 JSON을 요구하지 않고 고쳐 다시 실행 2번까지(3회) 허용 (`tool_plain`, `max_repeat`).
+
+## [1.6.3] - 2026-11-11
+
+### 제거 (사용자 결정 2026-11-11)
+- 두 판 비교 `excel.py compare`(엑셀 표·BOM)와 `reader.py diff`(문서)를 뺌: 이 버전에서 BOM 비교를 고쳐 봤지만(메모 날짜, 비교결과 시트,
+  순서 대조, 이동, 상위 경로) 실제 BOM에서 전보다 나빠짐. 필요하면 별도 도구로 새로 만듦. 명령을 찾으면 `not_supported`로
+  워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기를 안내. `_excel_compare.py`, 관련 테스트, 실기 러너 N12, 단순화 점검 B1~B5를 지움.
+  office-data 스킬은 표 집계(`stats`)와 중복 찾기(`duplicates`)만, office-spec에서 diff 줄을 뺌, 전역 지침 3장 표와 8장(직접 할 일)에 반영.
+
 ### 스킬 점검 (2026-11-11, 스킬 한도 8KB)
 - argparse 옵션과 스킬을 대조해 도구에는 있는데 스킬에 없던 기능을 채움. office-excel: `read --max-rows`, 차트 `--labels`/`--legend`/`--at`/크기와
   종류(line_markers, scatter_lines, combo), 서식 `--color`/`--italic`/`--clear`, `range unmerge`, `sheet select`, 바꾸기 `--whole`/`--map`/강조, `export --encoding`.
@@ -34,12 +52,6 @@
   `--theme`, transfer `--from-target`/`--to-target`. office-mail: 첨부 `--index`, 폴더 `--depth`. office-spec: `index --recursive`, `read --format summary`,
   검색 `--top`/`--full`, `check --header-row`. 일부러 넣지 않은 것: `--no-focus`, `--probe`, `read --units`, `--context`, `--max-files`, `write --values`(JSON 인자).
   가장 큰 스킬 office-doc 7277바이트. 테스트 `test_skill_docs.py`에 새 항목을 기대값으로.
-
-### 기능: 스킬 만들기 (사용자 요청 2026-11-11, 배포 뒤 잘 모르는 사용자가 스킬을 만들 수 있게)
-- 새 진입점 `skill.py`(save / list / check / delete)와 새 스킬 `skill-maker`. "이거 스킬로 만들어줘"에 에이전트가 작업을 정리하고, 본문 파일을 쓴 뒤
-  `skill.py save --name --description --file`로 등록: 머리말은 도구가 붙이고, 이름 규칙·설명 길이·8KB·문자를 확인해 걸리면 저장하지 않고 고칠 것을 알림,
-  저장 뒤 다시 읽어 확인, 같은 이름은 사용자에게 묻고 `--overwrite`. 기본 스킬 이름은 거절, 지우기는 미리보기 뒤 확인(보관).
-- `setup.py`가 skill-maker 스킬도 설치, 전역 지침 3장 표와 9장(사용자 스킬 위치), 저장소 AGENTS.md, README.
 
 ### 기능 (사용자 요청)
 - `excel.py info`(열린 통합문서, `--target` 없음): 사용자가 선택한(마지막으로 클릭한) 칸 `selection`과 `active_sheet`를 preview에도 적고 office-excel 스킬에 안내 (값은 전부터 있었으나 스킬에 없어 에이전트가 알리지 못함).

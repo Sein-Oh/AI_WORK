@@ -257,3 +257,32 @@ def test_command_text_resolves_relative_save_like_the_tool(tmp_path):
     assert save_of("ml_dataset.py", "pick", "--file", str(data), "--save", os.path.join("out", "r.docx")) == want
     assert save_of("ml_export.py", "--model", str(vdir), "--save", str(tmp_path / "abs.xlsx")) == str(tmp_path / "abs.xlsx")
     assert save_of("ml_predict.py", "--model", str(vdir), "--save", "p.csv") == os.path.abspath("p.csv")   # 예측: 현재 폴더 그대로
+
+
+def test_dataset_reads_the_file_like_its_last_training(tmp_path):
+    """회사 PC 2026-11-11 Gemma A3: 제목 행 아래 머리글(3행)·단위 행(4행)인 파일을 --header-row/--unit-row로 학습한 뒤, 옵션 없이 만든
+    데이터셋은 단위 없는 이름으로 저장되고 next_commands(학습 때의 이름 '수율(%)')가 "컬럼을 찾을 수 없습니다"로 멈췄다.
+    옵션이 없으면 마지막 학습 때의 머리글·단위 행으로 읽어, 새 파일의 열 이름이 학습 때와 같고 next_commands가 그대로 실행된다."""
+    import openpyxl
+    r = np.random.default_rng(3)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["공정 기록"])
+    ws.append([])
+    ws.append(["반응온도", "압력", "수율"])
+    ws.append(["°C", "bar", "%"])
+    for _ in range(80):
+        t, p = float(r.uniform(160, 200)), float(r.uniform(1, 3))
+        ws.append([round(t, 2), round(p, 3), round(0.3 * t + 5 * p + float(r.normal(0, 0.3)), 3)])
+    src = str(tmp_path / "공정.xlsx")
+    wb.save(src)
+    run_tool("ml_train.py", "--file", src, "--targets", "수율", "--features", "반응온도,압력", "--header-row", "3", "--unit-row", "4")
+    out = run_tool("ml_dataset.py", "exclude", "--file", src, "--where", "수율 > 65")
+    assert any("학습 때와 같게 읽었습니다 (머리글 3행, 단위 4행)" in w for w in out["warnings"]), out.get("warnings")
+    new = pd.read_csv(out["output_file"], encoding="utf-8-sig")
+    assert list(new.columns)[:3] == ["반응온도(°C)", "압력(bar)", "수율(%)"] and len(new) == 80, list(new.columns)
+    cmd = out["next_commands"][0]
+    assert cmd["needs_input"] is False and "수율(%)" in cmd["command"]
+    argv = split_command(cmd["command"])
+    res = run_tool(os.path.basename(argv[1]), *argv[2:])
+    assert res["status"] == "ok" and not res.get("continue"), res.get("agent_directive")
