@@ -22,6 +22,8 @@
   결과 `result_sheet`, `result_sheet_file`(CSV). 넣지 못하면 `UNVERIFIED:`. 메모는 추가·변경만 (대체 추정 메모는 뺌).
 - 실기 러너 N12 (BOM 비교: 비교결과 시트, 메모 확인 명령).
 - 전역 지침 `CLI/opencode/AGENTS.md` 9장: 지침·스킬 파일 위치 (팀원 배포 전, 물어보면 그대로 알림). OpenCode가 읽는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 `setup.bat`.
+- `setup.py`: opencode.jsonc에 `"enabled_providers"`가 없으면 WARN과 넣을 줄(사내 provider 이름을 넣은 것)을 알림. 폐쇄망에서 못 쓰는 기본 모델(opencode 등)이
+  `opencode models`에 나오지 않게. 이름이 `"provider"`·`"model"`과 어긋나면 WARN, `"autoupdate": false`가 없으면 INFO. docs/opencode/README.md에 설정 예.
 
 ## [1.6.2] - 2026-11-10
 

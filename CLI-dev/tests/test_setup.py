@@ -331,6 +331,29 @@ def test_opencode_config_warns_on_shell_instructions_and_permission(tmp_path, ca
     assert rep.warn == 1 and rep.fails == []                                       # 못 읽어도 설치를 실패로 보지 않음
 
 
+def test_opencode_providers_suggests_enabled_providers_line(tmp_path, capsys):
+    """폐쇄망에서 못 쓰는 기본 모델 숨기기: enabled_providers가 없으면 사내 provider 이름을 넣은 줄을 그대로 알려 줌."""
+    cfg = tmp_path / "opencode.jsonc"
+    cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {"npm": "@ai-sdk/openai-compatible"}}}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_providers(rep, str(tmp_path))
+    out = capsys.readouterr().out
+    assert rep.warn == 1 and '"enabled_providers": ["corp"]' in out and '"autoupdate": false' in out, out
+    cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {}}, "enabled_providers": ["corp"], "autoupdate": false}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_providers(rep, str(tmp_path))
+    assert rep.warn == 0 and capsys.readouterr().out == ""
+    cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {}}, "enabled_providers": ["crop"], "autoupdate": false}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_providers(rep, str(tmp_path))
+    out = capsys.readouterr().out
+    assert rep.warn == 2 and "provider\"에 없는 이름" in out and "그 모델을 쓸 수 없습니다" in out, out
+    cfg.write_text('{"enabled_providers": []}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_providers(rep, str(tmp_path))
+    assert rep.warn == 1 and "모든 모델이 숨겨집니다" in capsys.readouterr().out
+
+
 def test_setup_bat_is_ascii_crlf_and_uses_bundled_python():
     data = open(os.path.join(CLI, "setup.bat"), "rb").read()
     assert data.isascii() and b"chcp" not in data.lower()

@@ -17,7 +17,8 @@ r"""C:\CLI 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\
 2. 시스템 PATH(HKLM)에 <C:\CLI>\python, <C:\CLI>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
 3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep).
-   설정 폴더 opencode.jsonc의 "shell"(PowerShell), "instructions"(다른 지침), permission.external_directory를 WARN/INFO로 알림.
+   설정 폴더 opencode.jsonc의 "shell"(PowerShell), "instructions"(다른 지침), permission.external_directory,
+   "enabled_providers"(폐쇄망에서 못 쓰는 기본 모델 숨기기), "autoupdate"를 WARN/INFO로 알림.
 
 개발용: --test-skill <SKILL.md>  (실기 테스트 보조 스킬, 예: C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md)
 이 스크립트는 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다. exit 0 = 모두 OK, 1 = 실패(또는 --check에서 다름) 있음.
@@ -487,6 +488,43 @@ def step_opencode_config(rep, config_dir):
                          "작업 폴더 밖(예: 바탕 화면의 파일) 쓰기가 막혀 도구 결과 저장이 실패할 수 있습니다: \"allow\"를 검토하세요")
 
 
+
+def step_opencode_providers(rep, config_dir):
+    """opencode.jsonc의 모델 목록 제한: 폐쇄망에서 쓸 수 없는 기본 모델(opencode Zen, models.dev 목록의 인터넷 모델)이
+    `opencode models`와 모델 선택에 나오지 않게 "enabled_providers"(허용 목록, 나머지는 모두 숨김)를 권함.
+    opencode 2.x 소스 기준: enabled_providers = 모두 막고 적은 것만 허용, disabled_providers = 적은 것만 막음 (막기가 이김).
+    WARN/INFO만, 고치지 않음 (opencode.jsonc는 사용자가 넣는 파일)."""
+    path = os.path.join(config_dir, "opencode.jsonc")
+    if not os.path.isfile(path):
+        return
+    try:
+        cfg = parse_jsonc(_read(path).decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError):
+        return                                   # 못 읽은 것은 step_opencode_config가 이미 알림
+    if not isinstance(cfg, dict):
+        return
+    own = [str(k) for k in (cfg.get("provider") or {})] if isinstance(cfg.get("provider"), dict) else []
+    model = cfg.get("model") if isinstance(cfg.get("model"), str) else ""
+    used = model.split("/", 1)[0] if "/" in model else ""
+    ids = own or ([used] if used else [])
+    enabled = cfg.get("enabled_providers")
+    if enabled is None:
+        line = json.dumps({"enabled_providers": ids or ["<사내 LLM provider 이름>"]}, ensure_ascii=False)[1:-1]
+        rep.line("WARN", "opencode.jsonc에 \"enabled_providers\"가 없어 폐쇄망에서 쓸 수 없는 기본 모델(opencode 등)도 "
+                         f"`opencode models`와 모델 선택에 나옵니다. 사내 LLM만 보이게 하려면 opencode.jsonc에 {line} 를 넣으세요 "
+                         "(적은 provider만 남고 나머지는 숨김)")
+    elif isinstance(enabled, list):
+        names = [str(x) for x in enabled]
+        if not names:
+            rep.line("WARN", "opencode.jsonc의 \"enabled_providers\"가 비어 있어 모든 모델이 숨겨집니다. 사내 LLM provider 이름을 넣으세요")
+        if own and any(n not in own for n in names):
+            rep.line("WARN", f"opencode.jsonc의 \"enabled_providers\" {names} 중 \"provider\"에 없는 이름이 있습니다 (provider: {own}). "
+                             "이름이 틀리면 사내 LLM도 숨겨집니다")
+        if used and used not in names:
+            rep.line("WARN", f"opencode.jsonc의 \"model\"({model})의 provider '{used}'가 \"enabled_providers\"에 없어 그 모델을 쓸 수 없습니다")
+    if cfg.get("autoupdate") is not False:
+        rep.line("INFO", "opencode.jsonc에 \"autoupdate\": false가 없습니다. 폐쇄망에서는 업데이트를 받을 수 없으니 넣어 두면 확인을 시도하지 않습니다")
+
 # ---------------------------------------------------------------------------
 def main(argv=None):
     try:
@@ -516,6 +554,7 @@ def main(argv=None):
     print("[INFO] 3. 동작 확인", flush=True)
     step_verify(rep)
     step_opencode_config(rep, cfg)
+    step_opencode_providers(rep, cfg)
     if os.path.isdir(backup):
         print(f"[INFO] 이전 파일 보관: {backup}", flush=True)
     bad = len(rep.fails) + len(rep.diffs)
