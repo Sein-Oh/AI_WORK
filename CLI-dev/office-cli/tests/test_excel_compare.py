@@ -140,7 +140,8 @@ def test_result_sheet_is_always_written_with_every_change(tmp_path, capsys, shee
     assert out["verified"] is True and out["result_sheet"]["written"] is True, out
     with open(out["result_sheet_file"], encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
-    assert rows[0] == ["비교 일시", "이전 판", "구분", "키", "품명", "열", "이전 값", "새 값", "이전 판 행", "새 판 행", "내용"], rows[0]
+    assert rows[0][:12] == ["비교 일시", "이전 판", "구분", "키", "레벨", "상위 경로", "열", "이전 값", "새 값", "이전 판 행", "새 판 행", "내용"]
+    assert rows[0][12:] == ["[행] " + h for h in HEAD], rows[0]                    # 그 파트의 행 데이터 (새 판 열 순서)
     kinds = [r[2] for r in rows[1:]]
     c = out["counts"]
     for k in ("추가", "삭제", "대체 추정"):
@@ -148,8 +149,11 @@ def test_result_sheet_is_always_written_with_every_change(tmp_path, capsys, shee
     assert kinds.count("수량 변경") == c["수량 변경"] and kinds.count("위치 변경") >= c["위치 변경"]
     assert out["result_sheet"]["rows"] == len(rows) - 1 and len(rows) - 1 >= out["memo_cells"]
     qty_row = [r for r in rows if r[2] == "수량 변경" and r[3] == "A-100 / R-0010"][0]
-    assert qty_row[3:] == ["A-100 / R-0010", "저항 10k 0603", "Qty", "3", "4", "5", "5", "수량 3 -> 4 (+1)"], qty_row
-    assert any(r[2] == "추가" and r[10] == "이전 판에 없는 행" for r in rows)
+    assert qty_row[3:12] == ["A-100 / R-0010", "2", "L1 A-100", "Qty", "3", "4", "5", "5", "수량 3 -> 4 (+1)"], qty_row
+    assert qty_row[12:] == ["2", "R-0010", "저항 10k 0603", "4", "EA", "R1-R3,R5", "야게오", ""], qty_row
+    assert any(r[2] == "추가" and r[11] == "이전 판에 없는 행" and r[13] == "L-01" for r in rows)
+    gone = [r for r in rows if r[2] == "삭제"][0]
+    assert gone[13] == "D-01" and gone[5] == "L1 B-200" and "이전 판" in gone[11], gone   # 삭제는 이전 판의 행 데이터
     assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", rows[1][0]) and rows[1][1] == "old.xlsx", rows[1]
     argv = sheet_writes[-1]
     assert argv[:5] == ["write", "--target", new, "--sheet", "비교결과"] and "--new-sheet" in argv and "--append" not in argv, argv
@@ -309,6 +313,8 @@ def test_bom_with_index_and_level_same_part_used_in_another_place(tmp_path, caps
     assert out["counts"] == {"추가": 2, "삭제": 0, "수량 변경": 0, "위치 변경": 0, "속성 변경": 0, "이동": 0, "대체 추정": 0}, out["counts"]
     assert [(a["key"], a["row_new"], a["qty"]) for a in out["added"]] == [("UGS31001 / M81934/2-8", 7, 1), ("UGS33001 / M81934/2-8", 14, 6)]
     assert any("행 번호 열은 비교하지 않음: Index" in w for w in out["warnings"]), out["warnings"]
+    # 레벨 4 파트: 레벨 3~1 상위를 모두 추적
+    assert (out["added"][0]["level"], out["added"][0]["path"]) == (4, "L1 UGS0001 > L2 UGS1001 > L3 UGS31001"), out["added"][0]
     assert "output_file" not in out and out["result_sheet"]["written"] is True      # 결과는 새 판의 비교결과 시트에만
 
 
@@ -327,7 +333,12 @@ def test_bom_part_moved_to_another_assembly_is_one_move(tmp_path, capsys):
     assert out["qty_changed"][0]["diff"] == "+2" and out["count"] == 1
     with open(out["result_sheet_file"], encoding="utf-8-sig") as f:
         rows_out = list(csv.reader(f))
-    assert any(r[2] == "이동" and r[10] == "이동: 상위 UGS32001 -> UGS33001" for r in rows_out), rows_out
+    mv = [r for r in rows_out if r[2] == "이동"][0]
+    # 레벨 4 파트의 상위를 레벨 1까지 모두 추적, 이전 경로도 함께. 행 데이터(새 판)도 같은 줄에
+    assert mv[4] == "4" and mv[5] == "L1 UGS0001 > L2 UGS1001 > L3 UGS33001", mv
+    assert mv[11] == "이동: 상위 UGS32001 -> UGS33001 (이전 경로: L1 UGS0001 > L2 UGS1001 > L3 UGS31001 > L4 UGS32001)", mv
+    assert mv[12:] == ["9", "4", "NAS77C12-050", "Bushing", "6"], mv
+    assert out["moved"][0]["path"] == mv[5] and out["counts"]["속성 변경"] == 0
     with open(out["memo_file"], encoding="utf-8-sig") as f:
         assert any("이동 (이전 상위 UGS32001)" in r[1] for r in csv.reader(f))
 

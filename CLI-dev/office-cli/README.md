@@ -346,7 +346,9 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - JSON: `counts`(구분별 수), 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`, `moved`, `replaced_guess`(각 앞 20개, 항목마다 `key`와 행 번호), `shown`, `truncated`(전체는 새 판의 비교결과 시트). 0건이면 `count: 0`, `preview`와 directive에 "바뀐 것 없음".
   - 결과 xlsx(`--save`를 줄 때만. 1.6.3: 생략하면 따로 파일을 만들지 않고 새 판의 비교결과 시트에만. 새 판이 CSV면 작업 폴더에 만듦): 시트 요약, 추가, 삭제, 변경(키, 구분, 열, 이전 값, 새 값, 차이, 이전·새 행), 대체 추정. 다시 열어 시트마다 행 수를 확인(R1). 같은 이름이 있으면 새 이름(`recovered`), `--overwrite`일 때만 덮어씀. 잠겨 있으면 `save_with_lock_fallback`.
   - 비교결과 시트(1.6.3): 새 판이 xlsx면 묻지 않고 늘 새 판에 `비교결과` 시트를 넣습니다. 비교 내용 전부(추가, 수량·위치·속성 변경, 이동, 삭제, 대체 추정)를 한 표로:
-    열은 비교 일시, 이전 판, 구분, 키, 품명, 열, 이전 값, 새 값, 이전 판 행, 새 판 행, 내용(메모와 같은 글). 바뀐 것이 없으면 `바뀐 것 없음` 한 줄.
+    열은 비교 일시, 이전 판, 구분, 키, 레벨, 상위 경로, 열, 이전 값, 새 값, 이전 판 행, 새 판 행, 내용(메모와 같은 글), 그 뒤에 그 파트의 행 데이터
+    (`[행] <새 판 머리글>` 열마다, 삭제는 이전 판의 값). 상위 경로는 레벨 열로 최상위부터 바로 위 상위까지 모두 추적한 것(`L1 UGS0001 > L2 UGS1001 > L3 ...`),
+    이동은 내용에 이전 경로도. JSON 항목(`added`, `removed`, `moved`, `replaced_guess`)에도 `level`, `path`. 레벨 열 자체는 속성으로 비교하지 않음(단계가 바뀌면 이동).
     쓰기는 `excel.py write --target <새 판> --sheet 비교결과 --new-sheet --range A1 --file <CSV> --no-focus`를 같은 프로세스에서 실행(되돌리기 지점, 다시 읽어 확인)하고,
     시트가 이미 있으면 `--new-sheet` 대신 `--append`(같은 머리글은 다시 쓰지 않고 아래에 이어 씀). 결과는 `result_sheet`(`sheet, rows, written, appended`)와
     같은 내용의 CSV `result_sheet_file`. 넣지 못하면(엑셀 없음, 파일 잠김, 시간 제한) `UNVERIFIED:`와 그 이유, 다시 실행하지 않음(같은 줄이 두 번 들어가지 않게).

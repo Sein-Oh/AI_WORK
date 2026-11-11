@@ -624,21 +624,24 @@ def _cmp_level_tree(t: Dict[str, Any]) -> None:
     """레벨 열로 행마다의 상위 품번(lv_parent)과 상위 경로(lv_path)를 만듦."""
     roles, body = t["roles"], t["body"]
     lv, pc = roles["level"], roles.get("part")
-    stack: List[Tuple[int, str]] = []
-    parents, paths = [], []
+    stack: List[Tuple[int, str, str]] = []
+    parents, paths, traces = [], [], []
     for _, r in body:
         level = _cmp_level(r[lv])
         code = _cmp_code(r[pc]) if pc is not None else ""
         if level is None:
             parents.append("")
             paths.append("")
+            traces.append("")
             continue
         while stack and stack[-1][0] >= level:
             stack.pop()
         parents.append(stack[-1][1] if stack else "")
-        paths.append(">".join(c for _, c in stack))
-        stack.append((level, code))
-    t["lv_parent"], t["lv_path"] = parents, paths
+        paths.append(">".join(c for _, c, _ in stack))
+        # 최상위(레벨 1)부터 바로 위 상위까지: 'L1 UGS0001 > L2 UGS1001 > ...' (보이는 품번 그대로)
+        traces.append(" > ".join(f"L{lv_} {shown}" for lv_, _, shown in stack))
+        stack.append((level, code, str(out_value(r[pc])) if pc is not None else ""))
+    t["lv_parent"], t["lv_path"], t["lv_trace"] = parents, paths, traces
 
 
 def _cmp_key_text(t: Dict[str, Any], spec: Sequence[KeyPart], side: int, i: int) -> str:
@@ -728,10 +731,24 @@ def _cmp_guess(old: Dict[str, Any], new: Dict[str, Any], removed: List[int], add
     return out
 
 
+def _cmp_trace(t: Dict[str, Any], i: int) -> Tuple[Any, str]:
+    """행의 (레벨, 상위 경로). 레벨 열이 있으면 최상위부터 바로 위 상위까지 모두, 상위품번 열만 있으면 그 상위, 없으면 ('', '')."""
+    roles = t["roles"]
+    if "level" in roles:
+        lv = _cmp_level(t["body"][i][1][roles["level"]])
+        return ("" if lv is None else lv), (t.get("lv_trace") or [""] * (i + 1))[i]
+    return "", _cmp_parent_text(t, i)
+
+
 def _cmp_row_view(t: Dict[str, Any], spec: Sequence[KeyPart], side: int, i: int, which: str) -> Dict[str, Any]:
     """추가·삭제 항목: 키, 행 번호, 알아본 역할 열 값."""
     rown, r = t["body"][i]
     item: Dict[str, Any] = {"key": _cmp_key_text(t, spec, side, i), which: rown}
+    level, trace = _cmp_trace(t, i)
+    if level != "":
+        item["level"] = level
+    if trace:
+        item["path"] = trace
     for role in ("part", "name", "spec", "qty", "ref"):
         if role in t["roles"]:
             item[role] = _cmp_show(r[t["roles"][role]])
@@ -739,30 +756,51 @@ def _cmp_row_view(t: Dict[str, Any], spec: Sequence[KeyPart], side: int, i: int,
 
 
 def _result_sheet_rows(stamp: str, old: Dict[str, Any], new: Dict[str, Any], spec: Sequence[KeyPart], added: List[int],
-                       removed: List[int], guesses: List[Tuple[int, int, str]], detail: List[List[Any]]) -> List[List[Any]]:
-    """비교결과 시트의 표: 머리글 + 추가·변경(메모로 단 것 전부)·삭제·대체 추정. 바뀐 것이 없으면 '바뀐 것 없음' 한 줄."""
-    head = ["비교 일시", "이전 판", "구분", "키", "품명", "열", "이전 값", "새 값", "이전 판 행", "새 판 행", "내용"]
-    name_new = {new["body"][j][0]: _cmp_row_view(new, spec, 2, j, "row_new").get("name", "") for j in range(len(new["body"]))}
+                       removed: List[int], guesses: List[Tuple[int, int, str]], detail: List[List[Any]],
+                       pairs: Sequence[Tuple[int, int, str, Optional[str]]] = ()) -> List[List[Any]]:
+    """비교결과 시트의 표: 머리글 + 추가·변경(메모로 단 것 전부)·삭제·대체 추정. 바뀐 것이 없으면 '바뀐 것 없음' 한 줄.
+    줄마다 그 파트의 레벨, 상위 경로(최상위부터 바로 위 상위까지)와 행 데이터(새 판의 열 순서, 삭제는 이전 판 값)를 함께 둠
+    (사용자 요청 2026-11-11: 어느 조립들을 거쳐 투입되는지와 그 행의 값을 보고 검토)."""
+    cols = list(range(len(new["header"])))
+    head = (["비교 일시", "이전 판", "구분", "키", "레벨", "상위 경로", "열", "이전 값", "새 값", "이전 판 행", "새 판 행", "내용"]
+            + [f"[행] {new['header'][c]}" for c in cols])
+    to_old = {n: o for o, n, _, _ in pairs}
+    o_at = {rown: i for i, (rown, _) in enumerate(old["body"])}
+    n_at = {rown: j for j, (rown, _) in enumerate(new["body"])}
+
+    def data(t: Dict[str, Any], i: Optional[int], is_old: bool = False) -> List[Any]:
+        if i is None:
+            return [""] * len(cols)
+        r = t["body"][i][1]
+        if not is_old:
+            return [out_value(r[c]) for c in cols]
+        return [out_value(r[to_old[c]]) if c in to_old else "" for c in cols]
     rows: List[List[Any]] = [head]
     src = old["name"]
     for j in added:
         v = _cmp_row_view(new, spec, 2, j, "row_new")
-        rows.append([stamp, src, "추가", v["key"], v.get("name", ""), "", "", "", "", v["row_new"], "이전 판에 없는 행"])
+        rows.append([stamp, src, "추가", v["key"], v.get("level", ""), v.get("path", ""), "", "", "", "", v["row_new"], "이전 판에 없는 행"]
+                    + data(new, j))
     for key, kind, col, a, b, d, orow, nrow in detail:
         text = {"수량 변경": f"수량 {a} -> {b}" + (f" ({d})" if d else ""), "위치 변경": f"위치 {d}",
                 "이동": f"이동: 상위 {a} -> {b}"}.get(kind, f"{col} {a} -> {b}")
-        rows.append([stamp, src, kind, key, name_new.get(nrow, ""), col, a, b, orow, nrow, text])
+        j = n_at.get(nrow)
+        level, trace = _cmp_trace(new, j) if j is not None else ("", "")
+        if kind == "이동" and orow in o_at:
+            text += f" (이전 경로: {_cmp_trace(old, o_at[orow])[1] or '(최상위)'})"
+        rows.append([stamp, src, kind, key, level, trace, col, a, b, orow, nrow, text] + data(new, j))
     for i in removed:
         v = _cmp_row_view(old, spec, 1, i, "row_old")
-        rows.append([stamp, src, "삭제", v["key"], v.get("name", ""), "", " / ".join(str(v[k]) for k in ("spec", "qty") if v.get(k) not in (None, "")),
-                     "", v["row_old"], "", "새 판에 없음"])
+        rows.append([stamp, src, "삭제", v["key"], v.get("level", ""), v.get("path", ""), "", "", "", v["row_old"], "", "새 판에 없음 (행 데이터는 이전 판)"]
+                    + data(old, i, True))
     for i, j, why in guesses:
         o_item = _cmp_row_view(old, spec, 1, i, "row_old")
         n_item = _cmp_row_view(new, spec, 2, j, "row_new")
-        rows.append([stamp, src, "대체 추정", f"{o_item['key']} -> {n_item['key']}", n_item.get("name", ""), "", o_item["key"], n_item["key"],
-                     o_item["row_old"], n_item["row_new"], f"(추정, 확인 필요) 이전 판의 {o_item['key']} 대신일 수 있음 ({why})"])
+        rows.append([stamp, src, "대체 추정", f"{o_item['key']} -> {n_item['key']}", n_item.get("level", ""), n_item.get("path", ""), "",
+                     o_item["key"], n_item["key"], o_item["row_old"], n_item["row_new"],
+                     f"(추정, 확인 필요) 이전 판의 {o_item['key']} 대신일 수 있음 ({why})"] + data(new, j))
     if len(rows) == 1:
-        rows.append([stamp, src, "바뀐 것 없음", "", "", "", "", "", "", "", "두 판을 짝지어 비교했고 추가·삭제·변경이 없음"])
+        rows.append([stamp, src, "바뀐 것 없음", "", "", "", "", "", "", "", "", "두 판을 짝지어 비교했고 추가·삭제·변경이 없음"] + [""] * len(cols))
     return rows
 
 
@@ -918,7 +956,8 @@ def cmd_compare(args) -> Dict[str, Any]:
     qty = roles_pair.get("qty")
     ref = roles_pair.get("ref")
     key_cols = {(p[1], p[2]) for p in spec if p[0] == "col"}
-    attrs = [p for p in pairs if (p[0], p[1]) not in key_cols and p[3] not in ("qty", "ref")]
+    # 레벨 열은 속성으로 비교하지 않음: 단계가 바뀐 것은 이동(상위가 바뀜)으로 나옴
+    attrs = [p for p in pairs if (p[0], p[1]) not in key_cols and p[3] not in ("qty", "ref", "level")]
     # 1, 2, 3... 행 번호 열(Index, No)은 행을 넣고 빼면 모두 밀리므로 비교하지 않음 (실제 BOM 머리글: Index Level PN Description)
     numbering = []
     for p_ in list(attrs):
@@ -1012,7 +1051,8 @@ def cmd_compare(args) -> Dict[str, Any]:
         if moved.get(i) == j:
             key_text = _cmp_key_text(new, spec, 2, j)
             src, dst = _cmp_parent_text(old, i) or "(최상위)", _cmp_parent_text(new, j) or "(최상위)"
-            moved_view.append({"key": key_text, "from": src, "to": dst, "row_old": orow, "row_new": nrow})
+            moved_view.append({"key": key_text, "from": src, "to": dst, "row_old": orow, "row_new": nrow,
+                               "level": _cmp_trace(new, j)[0], "path": _cmp_trace(new, j)[1], "old_path": _cmp_trace(old, i)[1]})
             detail.append([key_text, "이동", "상위", src, dst, "", orow, nrow])
             note(nrow, new["roles"].get("part", first[2] if first else 0), f"비교: 이동 (이전 상위 {src})")
             hit = True
@@ -1179,7 +1219,7 @@ def cmd_compare(args) -> Dict[str, Any]:
     # 비교결과 시트: 묻지 않고 늘 새 판에 넣음 (사용자 요청 2026-11-11). 메모로 단 추가·변경과 메모로 적기 곤란한 삭제·대체 추정을 모두
     # 한 표로. 시트가 있으면 그 아래에 이어 씀 (같은 머리글은 다시 쓰지 않음). 쓰기는 write와 같은 길(엑셀로 열어 쓰고 다시 읽어 확인)
     if not new["csv"]:
-        rows_out = _result_sheet_rows(stamp, old, new, spec, added, removed, guesses, detail)
+        rows_out = _result_sheet_rows(stamp, old, new, spec, added, removed, guesses, detail, pairs)
         sheet_file = rt.write_csv_rows(rt.resolve_output_path(None, f"compare_sheet_{new['sheet']}", ".csv"), rows_out)
         sheet_problem = rt.check_saved_file(sheet_file, len(rows_out), delimiter=",")
         if sheet_problem:
