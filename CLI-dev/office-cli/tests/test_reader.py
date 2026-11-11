@@ -2808,114 +2808,6 @@ def test_cond_holds_bounds():
 
 
 # ---------------------------------------------------------------------------
-# reader.py diff: 두 판 비교 (장절 짝짓기, 삭제·추가·변경, 숫자 변경, 1.4.59)
-# ---------------------------------------------------------------------------
-
-OLD_SPEC = """1. 일반
-
-이 규격은 전원 장치에 적용한다.
-
-2. 전기 특성
-
-정격 전압은 5 V로 한다.
-
-소비 전류는 최대 3 A로 한다.
-
-대기 전력은 0.5 W 이하로 한다.
-
-3. 표시
-
-표시등은 녹색으로 한다.
-
-4. 포장
-
-상자에 넣어 출하한다.
-"""
-
-NEW_SPEC = """1. 일반
-
-이 규격은 전원 장치에 적용한다.
-
-2. 전기 특성
-
-정격 전압은 5.5 V로 한다.
-
-소비 전류는 최대 3 A로 한다.
-
-돌입 전류는 10 A 이하로 한다.
-
-3. 표시 방법
-
-표시등은 청색으로 한다.
-
-5. 보관
-
-습도 60 % 이하에 보관한다.
-"""
-
-
-def _two_versions(tmp_path):
-    old, new = tmp_path / "규격_v1.txt", tmp_path / "규격_v2.txt"
-    old.write_text(OLD_SPEC, encoding="utf-8")
-    new.write_text(NEW_SPEC, encoding="utf-8")
-    return old, new
-
-
-def test_diff_classifies_and_flags_numbers(tmp_path, capsys):
-    old, new = _two_versions(tmp_path)
-    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
-    assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
-    ch = out["changes"]
-    first = ch[0]
-    assert first["kind"] == "변경" and first["numeric"] is True and first["number_changes"] == ["5 V에서 5.5 V로"], first
-    assert "->" not in json.dumps(out, ensure_ascii=False)           # 화살표 없이 말로
-    assert "규격_v1.txt" in first["old_evidence"] and "규격_v2.txt" in first["new_evidence"]
-    kinds = {(c["kind"], c["old_text"] or c["new_text"]) for c in ch}
-    assert ("삭제", "대기 전력은 0.5 W 이하로 한다.") in kinds
-    assert ("추가", "돌입 전류는 10 A 이하로 한다.") in kinds
-    assert ("변경", "표시등은 녹색으로 한다.") in kinds                 # '3. 표시' -> '3. 표시 방법' 제목 유사도로 짝
-    assert ("삭제", "상자에 넣어 출하한다.") in kinds and ("추가", "습도 60 % 이하에 보관한다.") in kinds
-    assert out["unpaired_sections"]["old"] and out["unpaired_sections"]["new"]
-    assert not any("적용한다" in (c["old_text"] + c["new_text"]) for c in ch)     # 같은 글은 빠짐
-    assert ("변경", "3. 표시") in kinds                                     # 장절 제목 변경도
-    assert out["counts"]["변경"] == 3 and out["numeric_changes"] == 1 and out["truncated"] is False
-
-
-def test_diff_section_filter_and_save(tmp_path, capsys):
-    old, new = _two_versions(tmp_path)
-    save = tmp_path / "차이.xlsx"
-    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--section", "전기 특성",
-                         "--save", str(save))
-    assert code == 0 and out["count"] == 3 and out["output_file"] == str(save), out
-    import openpyxl
-    rows = list(openpyxl.load_workbook(save, read_only=True).active.iter_rows(values_only=True))
-    assert rows[0][0] == "구분" and len(rows) == 4
-
-
-def test_diff_same_document_is_zero(tmp_path, capsys):
-    old, _ = _two_versions(tmp_path)
-    copy = tmp_path / "같은판.txt"
-    copy.write_text(OLD_SPEC.replace("5 V", "5  V"), encoding="utf-8")      # 띄어쓰기 차이는 무시
-    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(copy))
-    assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
-
-
-def test_diff_truncates_with_full_result_file(tmp_path, capsys):
-    old, new = tmp_path / "a.txt", tmp_path / "b.txt"
-    old.write_text("\n\n".join(f"항목 {i}의 값은 {i} V이다." for i in range(30)), encoding="utf-8")
-    new.write_text("\n\n".join(f"항목 {i}의 값은 {i + 1} V이다." for i in range(30)), encoding="utf-8")
-    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
-    assert code == 0 and out["count"] == 30 and out["shown"] == 20 and out["truncated"] is True, out
-    assert os.path.isfile(out["full_result_file"])
-
-
-def test_number_changes_words():
-    assert reader.number_changes("정격 5V, 3 A", "정격 5.0 V, 3 A") == []
-    assert reader.number_changes("5 V", "5.5 V") == ["5 V에서 5.5 V로"]
-    assert reader.number_changes("5 V", "5 V, 2 A") == ["숫자 추가: 2 A"]
-
-
-# ---------------------------------------------------------------------------
 # --section 장절 번호 경계 (1.4.64)
 # ---------------------------------------------------------------------------
 
@@ -3200,14 +3092,6 @@ def test_word_final_syllable_is_not_particle():
     assert reader.build_matcher("와이파이", False)("와이파 모듈") is None
 
 
-def test_diff_save_md_warns_xlsx(tmp_path, capsys):
-    # 회귀: diff --save x.md가 말없이 .xlsx로 저장됨
-    old, new = _two_versions(tmp_path)
-    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new), "--save", str(tmp_path / "차이.md"))
-    assert code == 0 and out["output_file"].endswith(".xlsx"), out
-    assert any(".md" in w and ".xlsx" in w for w in out["warnings"]) and "warnings" in out["agent_directive"], out
-
-
 # 7차 검토 (1.4.70): 숫자가 든 검색어의 두 층 판정. 층 A(literal: 글자 그대로 + 엄격한 경계)만 VERIFIED,
 # 층 B(정규화 매처만 찾은 곳: 띄어쓰기·단위 별칭·부호 판정)는 결과에 넣되 literal false + UNVERIFIED (exact_mixed)
 def _layer(query, text):
@@ -3352,7 +3236,6 @@ def test_pymupdf_messages_follow_the_current_stderr():
     pymupdf.message("closed stderr test")          # 닫힌 tmp가 아니라 지금의 stderr로 감
 
 
-
 # ---------------------------------------------------------------------------
 # 2026-11-09 검토 A4: 쪽 정보가 없는 문서의 search --pages는 read --pages처럼 항목 번호 (전에는 모두 빼고 VERIFIED 0건)
 # ---------------------------------------------------------------------------
@@ -3495,21 +3378,6 @@ def test_search_finds_sentence_split_across_pages(tmp_path, capsys):
     doc.close()
     code, out = run_main(reader, capsys, "search", "--query", "humidity shall not exceed 95", "--file", str(p))
     assert code == 0 and out["count"] == 1 and out["matches"][0]["loc"] == "p.1~p.2", out
-
-
-def test_diff_with_partly_scanned_pdf_is_unverified(tmp_path, capsys):
-    pymupdf = reader._import_pymupdf()
-    paths = []
-    for name, second in (("old.pdf", "image"), ("new.pdf", "image")):
-        q = tmp_path / name
-        doc = pymupdf.open()
-        doc.new_page().insert_text((72, 72), f"first page text {name}", fontname="helv", fontsize=11)
-        doc.new_page().insert_image(pymupdf.Rect(40, 40, 560, 800), pixmap=_pixmap(pymupdf))
-        doc.save(str(q))
-        doc.close()
-        paths.append(str(q))
-    code, out = run_main(reader, capsys, "diff", "--file", paths[0], "--file2", paths[1])
-    assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:") and "스캔 쪽" in out["agent_directive"], out
 
 
 def test_index_search_template_needs_input(tmp_path, capsys):
@@ -3676,13 +3544,3 @@ def test_outline_lists_headings_with_units_and_pages(tmp_path, capsys, monkeypat
     assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
 
 
-def test_diff_pairs_moved_paragraph_and_keeps_its_number_change(tmp_path, capsys):
-    """검토 4장 7번 (1.5.1): 다른 장절로 옮긴 단락이 삭제+추가로만 나오고 그 안의 숫자 변경을 놓치던 것 -> '이동'."""
-    old = tmp_path / "old.txt"
-    new = tmp_path / "new.txt"
-    old.write_text("# 1. 개요\n\n정격 전압은 5 V 이하이어야 하며 시험은 상온에서 한다.\n\n# 2. 시험\n\n시험 장비는 교정된 것을 쓴다.", encoding="utf-8")
-    new.write_text("# 1. 개요\n\n# 2. 시험\n\n시험 장비는 교정된 것을 쓴다.\n\n정격 전압은 5.5 V 이하이어야 하며 시험은 상온에서 한다.", encoding="utf-8")
-    code, out = run_main(reader, capsys, "diff", "--file", str(old), "--file2", str(new))
-    assert code == 0 and out["counts"]["이동"] == 1 and out["counts"]["삭제"] == 0 and out["counts"]["추가"] == 0, out
-    mv = [c for c in out["changes"] if c["kind"] == "이동"][0]
-    assert mv["numeric"] and "5 V에서 5.5 V로" in mv["number_changes"][0] and "이동" in out["preview"], mv

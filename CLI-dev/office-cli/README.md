@@ -7,7 +7,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
   [`office-doc`](../../CLI/office-cli/skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
   [`office-mail`](../../CLI/office-cli/skills/office-mail/SKILL.md) (outlook.py),
   [`office-spec`](../../CLI/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment),
-  [`office-data`](../../CLI/office-cli/skills/office-data/SKILL.md) (excel.py compare: 표 두 판 비교, BOM 개정 비교. 앞으로 표 집계도 여기).
+  [`office-data`](../../CLI/office-cli/skills/office-data/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
   공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`CLI/opencode/AGENTS.md`](../../CLI/opencode/AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
 - 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../docs/history/office-cli_WORK_PLAN_1.0.md)
@@ -17,18 +17,17 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 ```text
 CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── skills/      에이전트용 스킬 5개: office-excel, office-doc, office-mail, office-spec, office-data (<이름>/SKILL.md)
-├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check / compare
+├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check / stats / duplicates / save
 ├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
 ├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
-├── reader.py    파일   read / index / search / diff / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
+├── reader.py    파일   read / index / search / outline / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
 ├── _runtime.py  공통 런타임 (응답 계약, 인자 파서, 경로, 입출력, JIT 복구, 전체 명령 만들기)
 ├── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
 ├── _markdown.py      마크다운 블록 해석 (word.py·ppt.py 넣기, excel.py 표 파일)
 ├── _xlsx_formula.py  닫힌 xlsx의 계산된 값이 없는 수식 칸 찾기 (excel.py·reader.py·office.py 읽기의 R1 확인)
 ├── _spec_check.py    excel.py check 구현 (규격서 대조)
-└── _excel_compare.py excel.py compare 구현 (두 판 비교)
    (_로 시작하는 파일은 진입점이 아닌 내부 모듈. 스킬에 적지 않고, 다른 도구 폴더를 import하지 않음)
 
 CLI-dev/office-cli/  개발·실기 테스트용 (사내 PC C:\CLI-dev\office-cli, C:\CLI와 나란히)
@@ -244,7 +243,6 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `stats` | 표 집계(1.4.98, 닫힌 xlsx·CSV는 Excel 불필요): 첫 행은 머리글. 숫자 열은 `sum`, `mean`, `min`, `max`, `count`(숫자로 읽지 못한 칸은 `not_number`), 글자 열은 `count`, `unique`, `top`(많이 나온 값 10개). `--columns 금액,수량`(생략 시 숫자 열 전부, 앞자리 0 코드는 글자), `--by 부서`(묶음별, 이름순), `--where`(read와 같은 식), `--top N`(첫 집계 열 합계가 큰 묶음 N개), `--save [경로.csv]`. 결과 `groups`(묶음마다 `by`, `rows`, `stats`), `rows_used`, `group_count`, 묶음 50개를 넘으면 `truncated`와 `full_result_file`. `preview`에 숫자를 글로 |
 | `duplicates` | 중복 행 찾기(1.6.0, 읽기만, 닫힌 xlsx·CSV는 Excel 불필요): 첫 행은 머리글, `--columns 품번,규격`(생략 시 모든 열이 같은 행), `--range`, `--save [경로.csv]`. 비교는 앞뒤 공백·전각/반각·대소문자 무시, 숫자 `1` = `1.0`, 앞자리 0은 다른 값, 빈 행은 빼고 봄. 결과 `groups`(묶음마다 `values`, `rows`(엑셀 행 번호), `count`), `group_count`, `duplicate_rows`(남기고 지울 수 있는 행 수), 묶음 30개를 넘으면 `truncated`와 `full_result_file`. 지우지 않음(지우기는 `range --action delete`) |
 | `save` | 열린 통합문서 저장(1.6.0): `--save` 없으면 그대로 저장(Ctrl+S, 바뀐 것이 없으면 `unchanged`, 한 번도 저장하지 않은 새 문서는 경로를 묻게 STOP_RETRY). `--save "<경로.xlsx|.xlsm>"`이면 다른 이름으로 저장하고 열린 문서가 새 파일이 됨(`output_file`, `previous_file`). 같은 이름 파일은 `--overwrite`가 있을 때만(없으면 `needs_user_decision`과 `--overwrite` 명령의 `confirm_commands`), 매크로가 있는 문서를 `.xlsx`로는 저장하지 않고 `.xlsm`을 `[추천]`, 다른 확장자는 `.xlsx`를 `[추천]`(CSV·PDF 사본은 `export`). 닫힌 파일은 저장할 것이 없어 STOP_RETRY |
-| `compare` | 표 두 판 비교(BOM 개정 비교, Excel 불필요, 차트 시트는 보지 않음): `--target "<이전 판>" --target2 "<새 판>" [--sheet <이전 시트>] [--sheet2 <새 시트>] [--key "<머리글 이름>[,<머리글 이름>]"] [--level "<머리글 이름>"] [--save "<결과.xlsx>"] [--overwrite]`. 아래 "compare" |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
@@ -323,41 +321,8 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
     (행 번호 열은 넣지 않음)로 쓰고 다시 읽어 확인.
   - 고칠 수 있는 표기(`==`, `=>`, `=<`, `<>`, `AND`, `&&`, `OR`, `||`, `또는`, `contains`, `포함`)는 STOP_RETRY와 고친 식 `[추천]`. 읽을 수 없는 식은 형식과 예를 알리고
     `[추천]` 없이 STOP_RETRY. `--search`, `--formulas`와 함께 쓸 수 없습니다.
-- `compare`(표 두 판 비교, 읽기 전용: 두 파일을 바꾸지 않음. 1.4.80, 스킬 office-data):
-  - 입력: `.xlsx`, `.xlsm`(openpyxl, 값), `.csv`, `.tsv`(글자 그대로, 인코딩 자동 판별). `.xls`·DRM 파일은 STOP_RETRY(엑셀에서 .xlsx로 저장 안내). 엑셀에 열린 파일도 디스크의 파일을 읽고 `warnings`("저장하지 않은 변경은 빠짐"). 계산된 값이 없는 수식 칸이 있으면 UNVERIFIED.
-  - 시트: `--sheet`/`--sheet2` -> 새 판은 이전 판과 같은 이름의 시트 -> 시트 하나 -> 머리글로 열 역할을 가장 많이 알아본 시트(같으면 활성 시트).
-  - 머리글: 위쪽 30행 중 열 역할을 가장 많이 알아본 행(제목 행 아래의 머리글). 역할과 같은 뜻 머리글(괄호 안 단위·공백·기호 무시, 전각 -> 반각, 영문 소문자):
-    품번(품번, 자재코드, 품목코드, Part No, P/N, Item Code ...), 상위품번(상위품번, 모품번, Parent ...), 레벨(레벨, Level, Lvl), 수량(수량, 소요량, Qty, Q'ty, Quantity), 단위(Unit, UOM), 품명(품명, 품목명, Description, Name), 규격(규격, 사양, Spec, Value), 메이커(메이커, 제조사, Maker, Manufacturer, Vendor), 위치(위치, Ref Des, Reference, Designator, Location), 비고(Remark, Note). 알아본 열은 JSON `columns`와 `preview`.
-  - 열 짝: 역할이 같으면 머리글이 달라도 짝, 나머지는 머리글 비교값이 같은 열. 한쪽에만 있는 열은 비교하지 않고 `warnings`.
-  - 짝짓기(1.6.3, BOM에 맞춤: 사람이 두 파일을 나란히 놓고 위에서부터 훑어 맞추는 방식): 세 단계.
-    1. 순서대로 대조. 먼저 비교하는 값이 모두 같은 줄을 위에서부터 제 짝에 맞추고, 그 사이를 키 + 레벨이 같은 줄끼리 맞춥니다(앞뒤의 같은 줄 ->
-       두 판에 한 번씩만 나오는 줄을 기준점으로 -> 기준점 사이는 가장 긴 같은 구간부터). 같은 품번이 여러 곳에 쓰여도 앞뒤 줄로 자리를 알아보고,
-       여러 줄을 한꺼번에 넣거나 빼도 나머지는 그대로 짝지어집니다.
-    2. 남은 줄 중 키가 같은 것끼리(자리만 바뀐 줄: 바뀐 것으로 세지 않음).
-    3. 그래도 남은 줄 중 품번만 같은 것끼리 = 다른 상위로 옮긴 줄 -> 구분 `이동`(`moved`: `key`, `from`, `to`, 행 번호). 끝까지 남으면 삭제·추가.
-  - 키(`key_columns`, `key_reason`): 상위품번 열이 있으면 `상위품번+품번`, 레벨 열이 있으면 `상위품번(레벨로 찾음)+품번`, 없으면 `품번`. 같은 품번이 여러 행이어도
-    묻지 않습니다. 품번 열을 알아보지 못하면 행마다 값이 다른 유일한 열, 그것도 없으면 STOP_RETRY `[후보] 1) .. 2) ..`와 같은 번호의 `confirm_commands`(`--key`를 넣은 전체 명령).
-    `--key "상위품번,품번"`은 이전 판 머리글 이름(쉼표로 여럿), 열 문자(`B`)를 주면 머리글 이름으로 고친 전체 명령 `[추천]`. 키 열이 빈 행(소계·구분 줄)은 비교하지 않고 `warnings`.
-  - 레벨 열: 머리글(레벨, Level, Lvl, 단계 ...)로 찾습니다. 못 찾았는데 레벨일 수 있는 열(모든 값이 0~20의 정수, 행 번호가 아님)이 있으면
-    `[후보] 1) <머리글> 2) 없음`과 `confirm_commands`(`--level "<머리글>"` 또는 `--level 없음`). 그런 열이 없으면 레벨 없는 목록으로 비교합니다.
-  - 행 번호 열(Index, No처럼 두 판 모두 1, 2, 3...)은 행을 넣고 빼면 모두 밀리므로 비교하지 않고 `warnings`.
-  - 정규화: 앞뒤·여러 칸 공백, 전각/반각. 숫자는 `1` = `1.0` = `"1"` = `"1.00"`, `"1,000"` = 1000(앞자리 0이 있는 글 `007`은 글자 그대로). 품번·상위품번은 대소문자·공백도 무시하고 앞자리 0 유지(`0100` != `100`), 단위·메이커는 대소문자 무시. 위치는 집합: `R1-R3, R5` = `R1,R2,R3,R5` = `r5 r1~r3`(같은 머리글자 범위만 펼침, 2000개 넘는 범위는 펼치지 않음).
-  - 구분: 추가, 삭제, 수량 변경(이전 -> 새, 차이 `+1`), 위치 변경(더해진·빠진 위치), 속성 변경(바뀐 열마다 이전 -> 새), 대체 추정(삭제된 행과 추가된 행이 같은 위치(반 이상 겹침)이거나 같은 상위품번이고 품명이 비슷한 짝, 위치·상위 정보가 없는 표는 품명 유사도 0.85 이상: "품번 변경 추정", `guess: true`, 추가·삭제에서 빼서 따로 보고하고 합치지 않음). 한 행이 수량과 속성이 함께 바뀌면 두 구분에 모두 셈(`count`는 바뀐 행 수).
-  - JSON: `counts`(구분별 수), 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`, `moved`, `replaced_guess`(각 앞 20개, 항목마다 `key`와 행 번호), `shown`, `truncated`(전체는 새 판의 비교결과 시트). 0건이면 `count: 0`, `preview`와 directive에 "바뀐 것 없음".
-  - 결과 xlsx(`--save`를 줄 때만. 1.6.3: 생략하면 따로 파일을 만들지 않고 새 판의 비교결과 시트에만. 새 판이 CSV면 작업 폴더에 만듦): 시트 요약, 추가, 삭제, 변경(키, 구분, 열, 이전 값, 새 값, 차이, 이전·새 행), 대체 추정. 다시 열어 시트마다 행 수를 확인(R1). 같은 이름이 있으면 새 이름(`recovered`), `--overwrite`일 때만 덮어씀. 잠겨 있으면 `save_with_lock_fallback`.
-  - 비교결과 시트(1.6.3): 새 판이 xlsx면 묻지 않고 늘 새 판에 `비교결과` 시트를 넣습니다. 비교 내용 전부(추가, 수량·위치·속성 변경, 이동, 삭제, 대체 추정)를 한 표로:
-    열은 비교 일시, 이전 판, 구분, 키, 레벨, 상위 경로, 열, 이전 값, 새 값, 이전 판 행, 새 판 행, 내용(메모와 같은 글), 그 뒤에 그 파트의 행 데이터
-    (`[행] <새 판 머리글>` 열마다, 삭제는 이전 판의 값). 상위 경로는 레벨 열로 최상위부터 바로 위 상위까지 모두 추적한 것(`L1 UGS0001 > L2 UGS1001 > L3 ...`),
-    이동은 내용에 이전 경로도. JSON 항목(`added`, `removed`, `moved`, `replaced_guess`)에도 `level`, `path`. 레벨 열 자체는 속성으로 비교하지 않음(단계가 바뀌면 이동).
-    쓰기는 `excel.py write --target <새 판> --sheet 비교결과 --new-sheet --range A1 --file <CSV> --no-focus`를 같은 프로세스에서 실행(되돌리기 지점, 다시 읽어 확인)하고,
-    시트가 이미 있으면 `--new-sheet` 대신 `--append`(같은 머리글은 다시 쓰지 않고 아래에 이어 씀). 결과는 `result_sheet`(`sheet, rows, written, appended`)와
-    같은 내용의 CSV `result_sheet_file`. 넣지 못하면(엑셀 없음, 파일 잠김, 시간 제한) `UNVERIFIED:`와 그 이유, 다시 실행하지 않음(같은 줄이 두 번 들어가지 않게).
-    새 판이 CSV면 시트와 메모를 넣지 않고 `warnings`.
-  - 메모: 바뀐 칸(수량·위치·속성 칸, 추가 행의 품번 칸)의 메모 파일(`memo_file`, 칸, 메모, 500칸까지)과 `confirm_commands[0]` =
-    `comment --target <새 판> --action add --file <메모> --append`. 미리보기 없이 사용자에게 달지 말지만 묻고 "예"이면 실행합니다(1.6.3).
-    메모 글은 칸마다 `비교 <YYYY-MM-DD HH:MM>: <내용> / <내용>`. `--append`라 이미 메모가 있는 칸은 지우지 않고 그 아래 줄에 덧붙이고,
-    같은 메모가 이미 끝 줄에 있으면 그대로 둡니다. 삭제·대체 추정은 칸에 적기 곤란해 메모가 아니라 비교결과 시트에만.
-  - 시간: 10만 행 BOM 두 판 약 25초(리눅스, 대부분 openpyxl 읽기). 이전 판을 읽은 뒤 새 판 읽기가 명령 시간 제한을 넘을 것 같으면 읽은 이전 판을 캐시(`<캐시 폴더>/compare/`)에 두고 `CONTINUE:`(R10), 같은 명령은 캐시를 다시 쓰고 끝나면 지움. 제한이 가까우면 대체 추정을 건너뛰고 `warnings`.
+- 두 판 비교(`excel.py compare`, `reader.py diff`)는 1.6.3에서 뺐습니다 (사용자 결정 2026-11-11, 필요하면 별도 도구로). 명령을 찾으면
+  `not_supported`로 워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기를 안내합니다.
 - `check`(규격 대조, 읽기 전용: 문서를 바꾸지 않음):
   - 단위: 값 칸의 단위(`30 mm`) -> 행의 단위 열 -> 값 열 머리글(`값(mm)`) 순서. 단위 열은 `--unit-col`, 생략하면 값 열 바로 오른쪽 열의 머리글이 `단위`(`Unit`)일 때 그 열을 씁니다(JSON `unit_col`). 모두 없으면 규격 단위로 추정하지 않고 `판단필요`(`칸 단위 없음`).
   - 행: `--range`의 행(열은 무시)에서 `--item-col`(항목 글), `--value-col`(값), `--section-col`(행별 장절, 없으면 `--section`)을 읽습니다. 바로 위 행의 값 열 머리글에서 단위를 읽습니다(`측정값 [V]`, `전류(mA)`). 열린 문서·닫힌 xlsx·CSV 모두. 500행까지.
@@ -604,9 +569,8 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
 |---|---|
 | `index --folder 폴더 [--depth 3 \| --recursive] [--max-files 300]` | 폴더의 문서를 내용 출력 없이 캐시에 등록. 결과: `count`, `indexed`, `updated`, `unchanged`, `failed`, `failures`(20개까지), `remaining`, `truncated`, `skipped_types`(지원하지 않는 확장자별 개수) |
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
-| `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`·`diff`·`excel.py check`와 같은 규칙: 공백을 하나로 보고 대소문자 무시, 장절 번호로 보이는 값(`2.1`, `3`, `A.1`)은 번호 경계를 지켜 `2.1`이 `2.1`·`2.1.3`(하위 절)에는 맞고 `2.10`·`12.1`에는 맞지 않음, 제목 글자는 부분 일치, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
+| `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`·`excel.py check`와 같은 규칙: 공백을 하나로 보고 대소문자 무시, 장절 번호로 보이는 값(`2.1`, `3`, `A.1`)은 번호 경계를 지켜 `2.1`이 `2.1`·`2.1.3`(하위 절)에는 맞고 `2.10`·`12.1`에는 맞지 않음, 제목 글자는 부분 일치, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
 | `outline --file 파일 [--start N]` | 장절(제목) 목록(1.5.1): 제목마다 `units`(그 장절의 단위 번호 범위, `read --units`에 그대로), `page`, `level`, `number`. 200개씩, 넘으면 `next_commands`(`--start`) |
-| `diff --file 이전판 --file2 새판 [--section "3"] [--save 차이.xlsx\|.csv]` | 두 판 비교. 아래 "diff". `--save`가 그 밖의 확장자(`.md` 등)면 `.xlsx`로 저장하고 `warnings`로 알림 |
 | `search --query "A;B" \| "A|B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`confirm_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`). `applied`와 완료 CSV(`clear_done_...`, 20개를 넘을 때)는 지운 뒤 만들고, CSV의 `removed` 열이 실제로 지웠는지 |
 | `list [--name 이름일부] [--folder 폴더]` | 캐시된 문서 목록: 파일, 경로, 형식, 단위 수, 쪽 수, 장절 수, `cached_at`, `stale`(원본 변경 또는 이전 형식), `missing`(원본 없음) |
@@ -634,16 +598,6 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
 - XLSX의 계산된 값이 없는 수식 칸(엑셀에서 연 적 없는 파일)은 `meta.uncomputed_formulas`에 남기고 `read`는 `UNVERIFIED:`(`uncomputed_formulas`),
   `search`는 `not_searched`에 넣어 `UNVERIFIED:`입니다. 파서 버전 9의 캐시는 이 두 가지를 반영해 다시 읽습니다.
   캐시에 남은 "수식 칸 확인 실패"는 쓸 때마다 다시 확인하되, 한 실행에서 3개 문서까지·시간 제한 여유 안에서만 합니다(넘으면 그대로 `UNVERIFIED:`, 다음 실행에서 다시).
-
-#### diff (두 판 비교)
-- 두 문서를 읽어(캐시에 등록) 장절 경로가 같은 묶음끼리 짝짓고, 경로가 다르면 마지막 제목(번호 뺌)이 비슷하거나 한쪽이 다른 쪽을 품을 때(`표시` / `표시 방법`) 짝짓습니다.
-  짝이 없는 장절은 `unpaired_sections`(`old`, `new`)에 따로 적고 그 단락은 모두 삭제·추가로 셉니다. `--section`이면 그 장절 안만.
-- 이동(1.5.1): 남은 삭제·추가 중 글이 같거나 비슷한 것은 `이동`(다른 자리·장절로 옮긴 단락, 비슷하면 숫자 변경도)으로 짝짓습니다.
-- 짝지은 묶음 안에서 단락 순서대로 비교해 `삭제` / `추가` / `변경`(글이 75% 이상 같거나, 첫 낱말이 같고 절반 이상 같음)으로 나눕니다. 띄어쓰기 차이는 같은 글.
-- 숫자 변경: 단위까지 같은 값으로 비교해(`5V` = `5.0 V`) 바뀐 숫자를 말로 적습니다(`number_changes`: `5 V에서 5.5 V로`, `숫자 추가: 2 A`, 화살표 기호 없음). `numeric: true`인 변경을 맨 앞에.
-- 결과: `count`, `counts`(변경·삭제·추가), `numeric_changes`, `changes`(20개까지: `kind`, `numeric`, `number_changes`, `summary`, `old_text`/`new_text` 200자, `old_evidence`/`new_evidence`),
-  `shown`, `truncated`. 넘으면 `<데이터 폴더>/results/diff_<시각>.xlsx`를 `full_result_file`로(R2). `--save`는 전체를 xlsx/csv로 저장하고 다시 열어 확인.
-  0건이면 `VERIFIED: 0건`, 스캔 PDF(글자 없음)나 일부 쪽만 스캔인 PDF(`pages_without_text`, `--section` 안의 쪽)가 있으면 `UNVERIFIED:`.
 
 #### 검색과 캐시
 - 검색은 늘 대소문자를 무시합니다(`--regex` 포함). 대소문자를 가리는 옵션은 없습니다.

@@ -12,7 +12,6 @@
     chart    차트 만들기/목록/삭제
     comment  칸 메모 목록/달기/지우기
     check    표의 값을 등록된 규격서와 대조 (판정과 근거, 칸 메모 파일)
-    compare  두 판의 표 비교 (BOM 개정: 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, 결과 xlsx)
 
 --target: active(기본, 지금 보고 있는 통합문서) | 열린 통합문서 이름 | 파일 경로
 닫힌 xlsx/xlsm 파일 읽기는 Excel을 띄우지 않고 openpyxl로 읽습니다.
@@ -38,7 +37,7 @@ import _runtime as rt  # noqa: E402
 import _markdown as md  # noqa: E402
 import _xlsx_formula as xf  # noqa: E402
 
-# 직접 실행(__main__)해도 내부 모듈(_spec_check, _excel_compare)의 'from excel import ...'가 이 모듈을 쓰게 함 (두 번 읽지 않음)
+# 직접 실행(__main__)해도 내부 모듈(_spec_check)의 'from excel import ...'가 이 모듈을 쓰게 함 (두 번 읽지 않음)
 sys.modules.setdefault("excel", sys.modules[__name__])
 
 TOOL = "excel"
@@ -4904,20 +4903,15 @@ def cmd_comment(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 9. check(규격서 대조)와 compare(두 판 비교): 내부 모듈 _spec_check.py, _excel_compare.py
+# 9. check(규격서 대조): 내부 모듈 _spec_check.py
 # (위의 주소·읽기 도우미를 쓰므로 여기서 불러옴)
 # ==============================================================================
 
-import _excel_compare  # noqa: E402
 import _spec_check  # noqa: E402
 
 
 def cmd_check(args) -> Dict[str, Any]:
     return _spec_check.cmd_check(args)
-
-
-def cmd_compare(args) -> Dict[str, Any]:
-    return _excel_compare.cmd_compare(args)
 
 
 # ==============================================================================
@@ -5088,21 +5082,12 @@ def build_cli():
     p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행, 0 = 머리글 없음)")
     p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
 
-    p = sub.add_parser("compare", help="두 판의 표 비교 (BOM 개정: 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, Excel 불필요)")
-    p.add_argument("--target", required=True, help="이전 판 파일 (.xlsx, .xlsm, .csv, .tsv)")
-    p.add_argument("--target2", required=True, help="새 판 파일")
-    p.add_argument("--sheet", help="이전 판 시트 (생략: 도구가 표를 알아본 시트)")
-    p.add_argument("--sheet2", help="새 판 시트 (생략: 이전 판과 같은 이름, 없으면 도구가 고름)")
-    p.add_argument("--key", help="짝지을 열의 머리글 이름 (생략: 도구가 정함. 여럿이면 쉼표, 예: \"상위품번,품번\")")
-    p.add_argument("--level", help="레벨(단계) 열의 머리글 이름 (생략: 도구가 찾음. 레벨이 없는 목록이면 \"없음\")")
-    p.add_argument("--save", help="결과를 따로 xlsx로도 저장 (요약, 추가, 삭제, 변경, 대체 추정 시트. 생략: 새 판의 비교결과 시트에만)")
-    p.add_argument("--overwrite", action="store_true", help="--save 파일이 이미 있으면 덮어쓰기 (사용자가 원할 때만)")
     return parser
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
             "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
-            "comment": cmd_comment, "check": cmd_check, "compare": cmd_compare, "stats": cmd_stats,
+            "comment": cmd_comment, "check": cmd_check, "stats": cmd_stats,
             "duplicates": cmd_duplicates, "save": cmd_save}
 
 

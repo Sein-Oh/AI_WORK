@@ -141,7 +141,7 @@ def test_frontmatter_follows_opencode_rules():
 def test_runtime_help_points_to_task_skill():
     for tool, name in rt.SKILL_OF_TOOL.items():
         assert name in SKILL_NAMES and os.path.isfile(rt.skill_file(tool)), tool
-    for (tool, cmd), name in rt.SKILL_OF_COMMAND.items():     # 도구 파일과 다른 스킬에 있는 명령 (excel compare -> office-data)
+    for (tool, cmd), name in rt.SKILL_OF_COMMAND.items():     # 도구 파일과 다른 스킬에 있는 명령 (excel stats·duplicates -> office-data)
         assert name in SKILL_NAMES and cmd in PARSERS[f"{tool}.py"], (tool, cmd)
         assert f'{tool}.py" {cmd}' in _read(SKILL_FILES[name]), (tool, cmd)
 
@@ -155,7 +155,7 @@ def test_skill_commands_and_options_exist_in_argparse():
     problems = []
     for name, path in SKILL_FILES.items():
         refs = _skill_refs(path)
-        assert len(refs) > 15, (name, refs[:5])          # 정규식이 표를 제대로 읽는지
+        assert len(refs) > (5 if name == "office-data" else 15), (name, refs[:5])   # 정규식이 표를 제대로 읽는지 (office-data는 명령 2개)
         for no, script, sub, opt, val in refs:
             if script and sub:
                 act = _option_in(PARSERS[script][sub], opt)
@@ -219,11 +219,10 @@ def test_skill_mentions_new_and_existing_features():
                        "office.py\" undo", "focus --app"),
         "office-mail": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
                         "--days 7", "--since 2026-11-01", "thread --id", "calendar --days", "attachments --id", "send --id"),
-        "office-spec": ("reader.py\" index --folder", "--section", "search --query", "diff --file", "--file2", "list [--name",
+        "office-spec": ("reader.py\" index --folder", "--section", "search --query", "list [--name",
                         "clear --name", "--missing", "synonyms.txt", "--regex", "excel.py\" check", "comment --action add",
                         "not_searched", "match_mode"),
-        "office-data": ("excel.py\" compare --target", "--target2", "--sheet2", "--key", "--save", "replaced_guess", "moved", "--level", "비교결과",
-                        "confirm_commands"),
+        "office-data": ("excel.py\" stats --target", "excel.py\" duplicates --target", "not_supported", "검토 탭 > 비교"),
     }
     for name, needles in need.items():
         text = _read(SKILL_FILES[name])

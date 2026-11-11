@@ -138,7 +138,7 @@ def ambiguous(message: str, candidates: Iterable[str], log_message: Optional[str
     confirm_commands (1.4.79, 사용법 단순성 2번: 사용자가 고르면 LLM이 명령에 끼워 넣지 않고 그 번호의 명령을 실행. 사용자가 고른
     뒤에만 실행하므로 next_commands가 아님, 덮어쓰기·삭제·발송이면 destructive).
     values: 명령에 넣을 값 (보이는 글 candidates와 다를 때, 예: 메일 폴더 전체 경로 대신 끝 이름).
-    option: 명령에 없던 옵션에 후보 값을 넣을 때 (replace 없이, 예: excel compare의 짝지을 키 --key, 1.4.80)."""
+    option: 명령에 없던 옵션에 후보 값을 넣을 때 (replace 없이)."""
     cands = [str(c) for c in candidates]
     shown = cands[:MAX_CANDIDATES]
     more = f" 외 {len(cands) - len(shown)}개" if len(cands) > len(shown) else ""
@@ -877,7 +877,6 @@ SAME_MEANING = [
     ("reader", "*", "--target", ["--file"]), ("reader", "*", "--path", ["--file"]), ("reader", "*", "--input", ["--file"]),
     ("office", "undo", "--target", ["--app"]),
     ("*", "*", "--output", ["--save"]), ("*", "*", "--out", ["--save"]), ("*", "*", "--save-as", ["--save"]),
-    ("excel", "compare", "--file2", ["--target2"]), ("excel", "compare", "--path2", ["--target2"]),
     ("*", "*", "--sheet-name", ["--sheet"]), ("excel", "*", "--cell", ["--range"]), ("*", "*", "--rows", ["--max-rows"]),
     ("excel", "write", "--text", ["--value"]), ("excel", "read", "--text", ["--search"]),
     ("word", "write", "--append", ["--pos", "end"]), ("word", "write", "--position", ["--pos"]), ("word", "write", "--at", ["--pos"]),
@@ -935,8 +934,8 @@ OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply
 # 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
 SKILL_OF_TOOL = {"excel": "office-excel", "word": "office-doc", "ppt": "office-doc", "office": "office-doc",
                  "outlook": "office-mail", "reader": "office-spec"}
-# 도구 파일과 다른 스킬에 있는 명령 (1.4.80: 표 두 판 비교는 office-data)
-SKILL_OF_COMMAND = {("excel", "compare"): "office-data"}
+# 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 office-data)
+SKILL_OF_COMMAND = {("excel", "stats"): "office-data", ("excel", "duplicates"): "office-data"}
 
 
 def skill_name(tool: str) -> str:
@@ -1200,6 +1199,9 @@ NOT_SUPPORTED = [
     ("outlook", ("meeting", "invite", "attendee", "attendees", "회의", "참석자"), "회의 요청(참석자 초대)", "Outlook 일정 > 새 모임 (내 일정만은 outlook.py event)"),
     ("outlook", ("move", "이동", "category", "categories", "분류"), "메일 이동·분류", "Outlook에서 메일을 폴더로 끌어 놓기, 홈 탭 > 분류"),
     ("outlook", ("flag", "플래그", "follow-up"), "메일 플래그", "Outlook 메일 목록의 깃발 아이콘"),
+    # 1.6.3: 두 판 비교는 office-cli에서 뺌 (사용자 결정 2026-11-11, 필요하면 별도 도구로)
+    ("", ("compare", "comparison", "diff"), "두 판 비교(엑셀 표·BOM, 문서)",
+     "워드는 검토 탭 > 비교, 엑셀은 보기 탭 > 나란히 보기로 두 파일을 함께 띄워 직접 비교"),
 ]
 
 

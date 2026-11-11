@@ -23,8 +23,8 @@
 | Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `office-excel` |
 | Word, PowerPoint 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 슬라이드, 발표자 노트, 앱 사이 옮기기) | `office-doc` |
 | Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일), 내려받은 eml 폴더 검색 | `office-mail` |
-| PDF, HWP, Office 파일 읽기와 근거 검색, 두 판 비교, 엑셀 표를 규격서와 대조 | `office-spec` |
-| 엑셀·CSV 표의 두 판 비교 (BOM 개정: 추가·삭제·수량·위치·속성 변경), 표 집계 (합계·평균·최소·최대·건수, 묶음별) | `office-data` |
+| PDF, HWP, Office 파일 읽기와 근거 검색, 엑셀 표를 규격서와 대조 | `office-spec` |
+| 엑셀·CSV 표 집계 (합계·평균·최소·최대·건수, 묶음별), 중복 행 찾기 | `office-data` |
 | 표(Excel/CSV) 데이터로 예측 모델 학습, 성능 개선, 학습 이력 | `ml-train` |
 | 학습용 데이터셋 만들기 (조건·행 번호로 행 뽑기, 행을 학습에서 빼기) | `ml-dataset` |
 | 학습한 모델로 예측, 목표값이 되는 조건 찾기, 조건별 예측, 최적 조건 | `ml-predict` |
@@ -70,7 +70,7 @@
 - `error_type`이 `elevated_process`이면 다시 실행하지 않는다. 관리자 권한 창에서 실행 중이라 사용자가 연 문서가 안 보이니, 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행하라고 알린다.
 - 규격 대조(`excel.py check`)의 판정은 도구가 규격 문장을 기계로 읽은 참고 판정이다(늘 `UNVERIFIED:`). 행마다 `condition`(읽은 조건)과 `spec_text`(근거 문장)를 보여 주고 사용자가 확인한 뒤에만 메모를 단다(`next_commands[0]` 미리보기 -> 확인 -> 미리보기 결과의 `confirm_commands[0]`).
 - 문서 검색 결과의 `match_mode`가 `number`(숫자 값만 같은 곳, 부호·대시가 다른 숫자 포함), `partial`, `fuzzy`이면 정확히 일치한 곳은 0건(`count: 0`)이고 `candidates`는 비슷한 곳일 뿐이다. 근거로 쓰지 말고 사용자에게 확인받는다. `exact_mixed`이면 `matches` 중 `literal: false`(표기가 다른 곳, 부호·단위가 다를 수 있음)는 근거로 확정하지 말고 실제 글을 보여 주고 확인받는다(`snippet`에서 `**`는 글자 그대로 맞은 곳, `[[ ]]`는 표기가 다른 곳). 숫자를 찾은 결과를 알릴 때는 `snippet`의 앞뒤(부호, 범위 `~`, 이하/이상)를 그대로 함께 전달한다(`VERIFIED`는 그 글자가 그 자리에 있다는 뜻이고 문맥의 뜻은 판정하지 않음).
-- `truncated`가 true이면 결과 일부만 받은 것이다. 전체 결과가 있는 곳(`full_result_file` 또는 `output_file`, BOM 비교는 새 판의 `비교결과` 시트)을 알리거나, 이어 보기가 필요하면 `next_commands`를 쓴다.
+- `truncated`가 true이면 결과 일부만 받은 것이다. 전체 결과가 있는 곳(`full_result_file` 또는 `output_file`)을 알리거나, 이어 보기가 필요하면 `next_commands`를 쓴다.
 - `error_type`이 `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. message를 그대로 알리고, 사용자가 [편집 사용]을 누르거나 보호를 푼 뒤 같은 명령을 1번 다시 실행하거나 사용자가 고른 `[후보]` 칸에 쓴다.
 - `error_type`이 `drm_or_dialog`이면 사용자에게 그 문서를 직접 열어 두라고 알리고, 열었다고 하면 `next_commands[0]`을 1번 실행한다.
 - 메일은 가장 최근 목록·검색·대화(thread) 결과의 짧은 `id`(`--id 3`)로 고른다. 예전 목록의 번호를 다시 쓰지 않는다.
@@ -106,7 +106,7 @@
 1. 먼저 3장 표와 해당 SKILL.md 명령 표를 본다. 있는 일은 늘 스킬로 한다. 없을 때만 사용자에게 "도구에 없는 기능이라 파이썬으로 직접 처리합니다"라고 1줄 알리고 진행한다.
    예외: 다음은 파이썬으로도 하지 않고 사용자에게 그 앱에서 직접 하라고 알린다 (도구 결과 `error_type: not_supported`도 같음): 변경 내용 수락·거부(Word 검토 탭),
    인쇄 설정(파일 > 인쇄), 피벗 테이블(Excel 삽입 탭), 데이터 유효성(Excel 데이터 탭), 기존 차트 고치기(차트 디자인 탭),
-   회의 요청(Outlook 새 모임), 메일 이동·분류·플래그(Outlook에서 직접).
+   회의 요청(Outlook 새 모임), 메일 이동·분류·플래그(Outlook에서 직접), 두 판 비교(엑셀 BOM 개정·워드 문서: 워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기).
 2. 스크립트는 파일 쓰기 도구로 `C:\CLI\data\scripts\<짧은 영문 이름>.py`(UTF-8)에 만들고, 2장의 인코딩 줄을 붙여 `python "C:\CLI\data\scripts\<이름>.py"`로 실행한다.
    `python -c`와 `python -`(표준 입력)은 쓰지 않는다 (PowerShell에서 따옴표와 한글이 깨진다). 스크립트는 이 폴더에만 만든다.
 3. 설치된 라이브러리를 쓴다: pandas, numpy, scipy, scikit-learn, openpyxl, python-docx, python-pptx, matplotlib, seaborn, pymupdf, pywin32(win32com) 등.

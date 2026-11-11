@@ -1,6 +1,6 @@
 ---
 name: office-excel
-description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·표·수식, 조건 행 찾기, 행 수, 차트, 서식, 시트, 행·열 넣기·지우기·정렬, 칸 메모, 내보내기, 차트·범위를 워드/PPT로, 되돌리기. 엑셀 표/그래프 요청에 사용. 규격 대조는 office-spec, 표 두 판 비교(BOM)는 office-data, 워드/PPT는 office-doc, 메일은 office-mail.
+description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·표·수식, 조건 행 찾기, 행 수, 차트, 서식, 시트, 행·열 넣기·지우기·정렬, 칸 메모, 내보내기, 차트·범위를 워드/PPT로, 되돌리기. 엑셀 표/그래프 요청에 사용. 규격 대조는 office-spec, 표 집계·중복 찾기는 office-data, 워드/PPT는 office-doc, 메일은 office-mail.
 license: Proprietary
 compatibility: opencode
 metadata:

@@ -3232,47 +3232,9 @@ def test_N(ctx):
         got = com_retry(last)
         record(ctx, "N11", "워드 단락 서식: 가운데, 14pt, 굵게", _verified(d) and got == (text, 1, 14.0, True), f"마지막 단락={got}", d, c, r, e)
 
-    def n12():    # excel compare: 실제 BOM 모양(3행 머리글 Index Level PN Description), 순서 대조, 비교결과 시트 하나, 메모는 확인 명령
-        import openpyxl
-        head = ["Index", "Level", "PN", "Description", "Qty"]
-        base = [[1, "A-100", "Assy A", 1], [2, "P-1", "Bolt", 4], [2, "P-2", "Nut", 2], [2, "P-9", "Pin", 1],
-                [1, "B-200", "Assy B", 1], [2, "P-3", "Washer", 1]]
-        # 새 판: P-1을 B-200 아래에도 씀(추가), P-2 수량 2 -> 5, P-9를 A-100에서 B-200으로 옮김(이동), P-3 삭제
-        changed = [[1, "A-100", "Assy A", 1], [2, "P-1", "Bolt", 4], [2, "P-2", "Nut", 5],
-                   [1, "B-200", "Assy B", 1], [2, "P-1", "Bolt", 2], [2, "P-9", "Pin", 1]]
-        paths = []
-        for name, rows in (("N_bom_old.xlsx", base), ("N_bom_new.xlsx", changed)):
-            path = ctx.path(name)
-            old = _open_doc("excel", name)
-            if old is not None:
-                com_retry(lambda: old.Close(SaveChanges=False))
-            wb = openpyxl.Workbook()
-            wb.active.title = "BOM"
-            wb.active.append(["BOM 시험"])
-            wb.active.append([])
-            wb.active.append(head)
-            for n, row in enumerate(rows, 1):
-                wb.active.append([n] + row)
-            wb.save(path)
-            paths.append(path)
-        d, c, r, e = run_cli("excel.py", "compare", "--target", paths[0], "--target2", paths[1])
-        wb = openpyxl.load_workbook(paths[1])
-        kinds = sorted(str(row[2]) for row in wb["비교결과"].iter_rows(min_row=2, values_only=True)) if "비교결과" in wb.sheetnames else None
-        cmd = (((d or {}).get("confirm_commands") or [{}])[0]).get("command", "")
-        memo = None
-        memo_file = str((d or {}).get("memo_file", ""))
-        if " comment " in cmd and "--append" in cmd and memo_file in cmd:      # 명령 모양 확인 뒤 같은 인자로 실행
-            run_cli("excel.py", "comment", "--target", paths[1], "--action", "add", "--file", memo_file, "--append")
-            ws = openpyxl.load_workbook(paths[1])["BOM"]
-            memo = (ws["E6"].comment.text if ws["E6"].comment else "")
-        ok = _verified(d) and kinds == ["삭제", "수량 변경", "이동", "추가"] and "output_file" not in (d or {}) \
-            and bool(memo) and "수량 2 -> 5" in memo
-        record(ctx, "N12", "BOM 비교: 순서 대조(같은 품번 다른 곳 추가, 이동), 비교결과 시트 하나, 메모는 확인 명령", ok,
-               f"비교결과 구분={kinds}, E6 메모={memo!r}, 구분별 수={(d or {}).get('counts')}", d, c, r, e)
-
     for tid, title, fn in (("N1", "수식을 값으로", n1), ("N2", "저장", n2), ("N3", "중복", n3), ("N4", "단락 지우기", n4),
                            ("N5", "표 행", n5), ("N6", "PPT 도형 글", n6), ("N9", "PPT 도형 옮기기", n9),
-                           ("N10", "메모 답글·지우기", n10), ("N11", "단락 서식", n11), ("N12", "BOM 비교 시트", n12)):
+                           ("N10", "메모 답글·지우기", n10), ("N11", "단락 서식", n11)):
         run_test(ctx, tid, title, fn)
     if ctx.args.skip_outlook:
         return
