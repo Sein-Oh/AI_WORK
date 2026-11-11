@@ -1732,6 +1732,13 @@ def _event_start(raw: str) -> Tuple[_dt.datetime, bool]:
                         "종일 일정은 'YYYY-MM-DD'로 쓰세요.")
 
 
+def _com_time(local: _dt.datetime) -> _dt.datetime:
+    """Outlook에 넣을 현지 시각. pywin32는 tzinfo 없는 시각을 현지 시각으로 보고 UTC로 바꿔 넣어, 15:00 일정이 06:00(한국 -9시간)에
+    저장됐다 (회사 PC 2026-11-11 N7). 읽을 때 pywin32가 현지 시각에 UTC 표시를 붙여 주는 것과 같게, 현지 시각에 UTC 표시를 붙여 넣으면
+    바꾸지 않고 그대로 들어간다. 저장 뒤 다시 읽어 시각을 비교한다 (R1)."""
+    return local.replace(tzinfo=_dt.timezone.utc)
+
+
 def _same_event(folder: Any, subject: str, start: _dt.datetime) -> Optional[Any]:
     """같은 제목·같은 시작의 일정 (다시 실행해도 일정이 둘이 되지 않게)."""
     end = start + _dt.timedelta(minutes=1)
@@ -1763,11 +1770,88 @@ def _overlaps(folder: Any, start: _dt.datetime, end: _dt.datetime, skip: str) ->
     return out
 
 
+def _day_events(folder: Any, day: _dt.date) -> List[Any]:
+    """그날 시작하는 일정 (반복 일정은 펼치지 않음: 지우면 반복 전체가 지워지는 원본만 보임). 읽지 못하면 빈 목록."""
+    lo = _dt.datetime.combine(day, _dt.time())
+    hi = lo + _dt.timedelta(days=1)
+    try:
+        return list(folder.Items.Restrict(f"[Start] >= '{lo.strftime('%Y-%m-%d %H:%M')}' AND [Start] < '{hi.strftime('%Y-%m-%d %H:%M')}'"))
+    except Exception:
+        return []
+
+
+def _event_delete(args, subject: str, start: _dt.datetime, all_day: bool) -> Dict[str, Any]:
+    """event --action delete: 제목과 시작(시각, 또는 날짜만이면 그날)이 맞는 내 일정 하나를 지움. --dry-run이면 미리보기.
+    반복 일정·회의(참석자가 있는 일정)는 지우지 않음: 반복 전체가 지워지거나 취소 알림이 필요해 Outlook에서 직접."""
+    warnings = [f"{o}는 일정 지우기에 쓰지 않아 무시했습니다" for o, v in (("--minutes", args.minutes), ("--location", args.location),
+                                                                  ("--body", args.body), ("--body-file", args.body_file)) if v]
+    folder = get_namespace(get_outlook()).GetDefaultFolder(OL_FOLDER_CALENDAR)
+    day = _day_events(folder, start.date())
+
+    def at(it: Any) -> Optional[_dt.datetime]:
+        try:
+            return it.Start.replace(tzinfo=None)
+        except Exception:
+            return None
+    hits = [it for it in day if _text(getattr(it, "Subject", "")) == subject and (all_day or at(it) == start)]
+    shown = start.strftime("%Y-%m-%d") if all_day else _when(start)
+    if not hits:
+        # 그날의 다른 일정을 [후보]로 (같은 제목의 다른 시각, 다른 제목): 고른 번호의 전체 명령 (사용자가 고른 뒤에만)
+        others = [(it, at(it)) for it in day if at(it) is not None][:10]
+        if not others:
+            raise rt.InputError(f"{start.strftime('%Y-%m-%d')}에 시작하는 일정이 없어 지우지 않았습니다 ('{subject}' {shown}). "
+                                "[추천] " + rt.next_command("outlook.py", ["calendar", "--days", "7"], "")["command"])
+        names = [f"{_text(getattr(it, 'Subject', ''))} {_when(t)}" for it, t in others]
+        cmds = [rt.next_command("outlook.py", ["event", "--action", "delete", "--subject", _text(getattr(it, "Subject", "")),
+                                               "--start", _when(t), "--dry-run"], "")["command"] for it, t in others]
+        raise rt.UserDecisionError(
+            f"'{subject}' {shown} 일정이 없어 지우지 않았습니다. 그날 시작하는 일정:", "지우지 않았습니다. [후보]를 사용자에게 보여 주고, "
+            "사용자가 고른 번호의 confirm_commands를 1번 실행하세요 (미리보기, 바꾸지 않음).", candidates=names, commands=cmds,
+            log_message=f"지울 일정 없음 ({start.strftime('%Y-%m-%d')})")
+    if len(hits) > 1:
+        names = [f"{subject} {_when(at(it))}" for it in hits]
+        times = {_when(at(it)) for it in hits}
+        if len(times) < len(hits):              # 같은 제목·같은 시각이 둘 이상: 도구로는 고를 수 없음
+            raise rt.InputError(f"'{subject}' {shown} 일정이 {len(hits)}개라 어느 것을 지울지 정할 수 없습니다. Outlook 일정에서 직접 지우세요.",
+                                error_type="not_supported", log_message="같은 제목·시각 일정 여러 개")
+        cmds = [rt.next_command("outlook.py", ["event", "--action", "delete", "--subject", subject, "--start", t, "--dry-run"], "")["command"]
+                for t in [_when(at(it)) for it in hits]]
+        raise rt.UserDecisionError(f"그날 '{subject}' 일정이 {len(hits)}개입니다. 지울 것을 고르세요:",
+                                   "지우지 않았습니다. [후보]를 보여 주고 사용자가 고른 번호의 confirm_commands를 1번 실행하세요 (미리보기).",
+                                   candidates=names, commands=cmds, log_message=f"같은 제목 일정 {len(hits)}개")
+    it = hits[0]
+    when = f"{_when(at(it))} ~ {_when(it.End)[-5:]}"
+    if bool(getattr(it, "IsRecurring", False)) or int(getattr(it, "MeetingStatus", 0) or 0) != 0:
+        what = "반복 일정" if bool(getattr(it, "IsRecurring", False)) else "회의(참석자가 있는 일정)"
+        raise rt.InputError(f"'{subject}' {when}은(는) {what}이라 도구로 지우지 않습니다 (반복 전체가 지워지거나 취소 알림이 필요함). "
+                            "Outlook 일정에서 직접 지우세요.", error_type="not_supported", log_message=f"{what} 지우기")
+    desc = f"'{subject}' {when}" + (f" ({_text(getattr(it, 'Location', ''))})" if _text(getattr(it, "Location", "")) else "")
+    extra: Dict[str, Any] = {"subject": subject, "start": _when(at(it)), "end": _when(it.End)}
+    if warnings:
+        extra["warnings"] = warnings
+    if args.dry_run:
+        return rt.dry_run_result(TOOL, "event", f"미리보기: 일정 {desc}을(를) 지웁니다 (바꾸지 않음)", 1, [f"지우기: {desc}"],
+                                 rt.dry_run_command(TOOL, f"일정 {desc} 지우기"), **extra)
+    t0 = at(it)
+    it.Delete()
+    left = [x for x in _day_events(folder, start.date()) if _text(getattr(x, "Subject", "")) == subject and at(x) == t0]
+    preview = f"일정을 지웠습니다: {desc} (Outlook 지운 편지함으로 옮겨짐)"
+    if left:
+        return rt.ok_unverified(TOOL, "event", preview, ["지운 뒤 같은 일정이 아직 보임: 다시 실행하지 말고 Outlook 일정에서 확인하라고 알리세요"],
+                                deleted=True, **extra)
+    return rt.ok(TOOL, "event", preview, "VERIFIED: 일정을 지우고 다시 찾아 없는 것을 확인했습니다. 같은 명령을 다시 실행하지 마세요. "
+                 "되돌리려면 사용자가 Outlook 지운 편지함에서 일정을 다시 옮기면 됩니다.", verified=True, deleted=True, **extra)
+
+
 def cmd_event(args) -> Dict[str, Any]:
     subject = (args.subject or "").strip()
     if not subject:
         raise rt.InputError("--subject(일정 제목)를 주세요.")
     start, all_day = _event_start(args.start or "")
+    if args.action == "delete":
+        return _event_delete(args, subject, start, all_day)
+    if args.dry_run:
+        raise rt.dry_run_unsupported(TOOL, "event (일정 만들기)")
     minutes = 24 * 60 if all_day and args.minutes is None else (args.minutes if args.minutes is not None else 60)
     if minutes < 1 or minutes > EVENT_MAX_MINUTES:
         raise rt.InputError(f"--minutes는 1~{EVENT_MAX_MINUTES}입니다 (받은 값: {minutes}). [추천] {rt.retry_command({'--minutes': 60})}")
@@ -1787,7 +1871,7 @@ def cmd_event(args) -> Dict[str, Any]:
     app = get_outlook()
     item = app.CreateItem(OL_APPOINTMENT)
     item.Subject = subject
-    item.Start = start
+    item.Start = _com_time(start)
     item.Duration = minutes
     if all_day and minutes % (24 * 60) == 0:
         item.AllDayEvent = True
@@ -1947,9 +2031,12 @@ def build_cli():
     p = sub.add_parser("calendar", help="일정 (읽기만)")
     p.add_argument("--days", type=int, default=7, help="오늘부터 N일 (기본 7, 1 = 오늘, 최대 92)")
 
-    p = sub.add_parser("event", help="내 일정 만들기 (참석자·회의 요청 없음, 보내는 것 없음)")
+    p = sub.add_parser("event", help="내 일정 만들기·지우기 (참석자·회의 요청 없음, 보내는 것 없음)")
+    p.add_argument("--action", choices=["add", "delete"], default="add",
+                   help="add(기본): 만들기, delete: 제목·시작이 맞는 일정 지우기 (--dry-run으로 먼저 확인)")
     p.add_argument("--subject", required=True, help="일정 제목")
-    p.add_argument("--start", required=True, help="시작 'YYYY-MM-DD HH:MM' (종일 일정은 'YYYY-MM-DD')")
+    p.add_argument("--start", required=True, help="시작 'YYYY-MM-DD HH:MM' (종일 일정은 'YYYY-MM-DD', 지우기에서 날짜만 주면 그날)")
+    p.add_argument("--dry-run", action="store_true", help="지우기 미리보기 (바꾸지 않음)")
     p.add_argument("--minutes", type=int, help="길이(분, 기본 60, 종일은 하루)")
     p.add_argument("--location", help="장소")
     p.add_argument("--body", help="메모 (줄바꿈은 \\n)")

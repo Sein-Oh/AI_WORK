@@ -277,7 +277,7 @@ def cmd_check(args) -> Dict[str, Any]:
         action = ("대조가 끝나지 않았습니다: 사용자에게 지금까지의 결과를 알리고 next_commands[0](같은 명령)을 그대로 다시 실행해 "
                   "남은 규격서를 등록하고 이어서 대조하세요. 메모는 대조를 마친 결과의 next_commands로 합니다.")
     elif os.path.splitext(str(args.target or ""))[1].lower() in (".csv", ".tsv"):
-        # CSV에는 메모를 달 수 없음 (메모 명령을 주던 것, 2026-11-09 검토 B13. compare와 같게)
+        # CSV에는 메모를 달 수 없음 (메모 명령을 주던 것, 2026-11-09 검토 B13)
         nexts = []
         action = "CSV 파일이라 칸 메모는 달 수 없습니다. 결과(full_result_file이 있으면 그 파일)를 사용자에게 알리세요. 같은 check는 다시 실행하지 마세요."
     else:

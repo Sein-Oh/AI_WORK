@@ -12,7 +12,6 @@
     chart    차트 만들기/목록/삭제
     comment  칸 메모 목록/달기/지우기
     check    표의 값을 등록된 규격서와 대조 (판정과 근거, 칸 메모 파일)
-    compare  두 판의 표 비교 (BOM 개정: 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, 결과 xlsx)
 
 --target: active(기본, 지금 보고 있는 통합문서) | 열린 통합문서 이름 | 파일 경로
 닫힌 xlsx/xlsm 파일 읽기는 Excel을 띄우지 않고 openpyxl로 읽습니다.
@@ -38,7 +37,7 @@ import _runtime as rt  # noqa: E402
 import _markdown as md  # noqa: E402
 import _xlsx_formula as xf  # noqa: E402
 
-# 직접 실행(__main__)해도 내부 모듈(_spec_check, _excel_compare)의 'from excel import ...'가 이 모듈을 쓰게 함 (두 번 읽지 않음)
+# 직접 실행(__main__)해도 내부 모듈(_spec_check)의 'from excel import ...'가 이 모듈을 쓰게 함 (두 번 읽지 않음)
 sys.modules.setdefault("excel", sys.modules[__name__])
 
 TOOL = "excel"
@@ -1658,6 +1657,9 @@ def cmd_info(args) -> Dict[str, Any]:
         f"{s['name']} {s['used_range']}" + (f" 차트{len(s['charts'])}" if s["charts"] else "") for s in sheets[:8]) + ")"
     if args.detail:
         preview += f", 배치 경고 {result['layout_warnings']}건" if result["layout_warnings"] else ", 배치 경고 없음"
+    if result.get("selection"):
+        # 사용자가 마지막으로 클릭한(선택한) 칸: "지금 선택한 칸이 어디야", "여기에 써줘"에 답할 수 있게 preview에도 (2026-11-11)
+        preview += f". 보고 있는 시트 '{result['active_sheet']}', 선택한 칸 {result['selection']}"
     return rt.ok(TOOL, "info", preview, **result)
 
 
@@ -1741,7 +1743,9 @@ def _rebase_formula(app: Any, ws: Any, formula: str, from_row: int, from_col: in
 # 3-1. 쓰기 전 확인: 시트 보호, 쓰기 실패 되돌리기 (모든 쓰기 명령 공통)
 # ==============================================================================
 
-PROTECT_HINT = "검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음)"
+# 제한된 보기로 열린 문서도 실제 엑셀에서는 모든 칸이 잠긴 시트로 보여 여기로 옴 (회사 PC 2026-11-11 L11): 둘을 구분하지 않고 함께 안내
+PROTECT_HINT = ("문서 위쪽 노란 줄에 [편집 사용]이 있으면 누르고, 없으면 검토 > 시트 보호 해제를 사용자가 직접 해야 합니다 "
+                "(도구는 암호를 풀지 않음)")
 # 보호된 시트에서도 엑셀이 허용할 수 있는 일: 시트 보호 대화상자의 허용 항목 (Worksheet.Protection.Allow*)
 _PROTECT_ALLOW = {"format_cells": "AllowFormattingCells", "format_columns": "AllowFormattingColumns",
                   "format_rows": "AllowFormattingRows", "insert_rows": "AllowInsertingRows",
@@ -1846,7 +1850,7 @@ def check_protection(ws: Any, ranges: Sequence[Any], need: str = "values") -> No
     err = rt.UserDecisionError(
         msg,
         "시트가 보호되어 있어 아무것도 바꾸지 않았습니다. message를 사용자에게 그대로 알리세요. 시트 보호를 풀지 말고(암호를 묻거나 "
-        "추측하지 않음) 사용자가 직접 풀었다고 하면 같은 명령을 1번 다시 실행하세요."
+        "추측하지 않음) 사용자가 [편집 사용]을 눌렀거나 보호를 풀었다고 하면 같은 명령을 1번 다시 실행하세요."
         + (" 사용자가 [후보]의 잠기지 않은 칸에 쓰라고 하면 그 칸으로 실행하세요." if cands else ""),
         candidates=cands)
     err.error_type = "sheet_protected"
@@ -4902,20 +4906,15 @@ def cmd_comment(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 9. check(규격서 대조)와 compare(두 판 비교): 내부 모듈 _spec_check.py, _excel_compare.py
+# 9. check(규격서 대조): 내부 모듈 _spec_check.py
 # (위의 주소·읽기 도우미를 쓰므로 여기서 불러옴)
 # ==============================================================================
 
-import _excel_compare  # noqa: E402
 import _spec_check  # noqa: E402
 
 
 def cmd_check(args) -> Dict[str, Any]:
     return _spec_check.cmd_check(args)
-
-
-def cmd_compare(args) -> Dict[str, Any]:
-    return _excel_compare.cmd_compare(args)
 
 
 # ==============================================================================
@@ -5086,20 +5085,12 @@ def build_cli():
     p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행, 0 = 머리글 없음)")
     p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
 
-    p = sub.add_parser("compare", help="두 판의 표 비교 (BOM 개정: 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, Excel 불필요)")
-    p.add_argument("--target", required=True, help="이전 판 파일 (.xlsx, .xlsm, .csv, .tsv)")
-    p.add_argument("--target2", required=True, help="새 판 파일")
-    p.add_argument("--sheet", help="이전 판 시트 (생략: 도구가 표를 알아본 시트)")
-    p.add_argument("--sheet2", help="새 판 시트 (생략: 이전 판과 같은 이름, 없으면 도구가 고름)")
-    p.add_argument("--key", help="짝지을 열의 머리글 이름 (생략: 도구가 정함. 여럿이면 쉼표, 예: \"상위품번,품번\")")
-    p.add_argument("--save", help="결과 xlsx (요약, 추가, 삭제, 변경, 대체 추정 시트. 생략: 바뀐 것이 있으면 작업 폴더에)")
-    p.add_argument("--overwrite", action="store_true", help="--save 파일이 이미 있으면 덮어쓰기 (사용자가 원할 때만)")
     return parser
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
             "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
-            "comment": cmd_comment, "check": cmd_check, "compare": cmd_compare, "stats": cmd_stats,
+            "comment": cmd_comment, "check": cmd_check, "stats": cmd_stats,
             "duplicates": cmd_duplicates, "save": cmd_save}
 
 

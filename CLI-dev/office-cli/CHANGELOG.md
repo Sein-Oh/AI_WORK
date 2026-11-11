@@ -13,23 +13,38 @@
 
 ## [1.6.3] - 2026-11-11
 
+### 제거 (사용자 결정 2026-11-11)
+- 두 판 비교 `excel.py compare`(엑셀 표·BOM)와 `reader.py diff`(문서)를 뺌: 이 버전에서 BOM 비교를 고쳐 봤지만(메모 날짜, 비교결과 시트,
+  순서 대조, 이동, 상위 경로) 실제 BOM에서 전보다 나빠짐. 필요하면 별도 도구로 새로 만듦. 명령을 찾으면 `not_supported`로
+  워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기를 안내. `_excel_compare.py`, 관련 테스트, 실기 러너 N12, 단순화 점검 B1~B5를 지움.
+  office-data 스킬은 표 집계(`stats`)와 중복 찾기(`duplicates`)만, office-spec에서 diff 줄을 뺌, 전역 지침 3장 표와 8장(직접 할 일)에 반영.
+
+### 스킬 점검 (2026-11-11, 스킬 한도 8KB)
+- argparse 옵션과 스킬을 대조해 도구에는 있는데 스킬에 없던 기능을 채움. office-excel: `read --max-rows`, 차트 `--labels`/`--legend`/`--at`/크기와
+  종류(line_markers, scatter_lines, combo), 서식 `--color`/`--italic`/`--clear`, `range unmerge`, `sheet select`, 바꾸기 `--whole`/`--map`/강조, `export --encoding`.
+  office-doc: 워드 단락 서식 `word.py format`(1.6.1에서는 README에만 두었음), 바꾸기 `--match-case`/`--whole-word`/`--map`/글자 서식, PPT 도형 `--height`,
+  `--theme`, transfer `--from-target`/`--to-target`. office-mail: 첨부 `--index`, 폴더 `--depth`. office-spec: `index --recursive`, `read --format summary`,
+  검색 `--top`/`--full`, `check --header-row`. 일부러 넣지 않은 것: `--no-focus`, `--probe`, `read --units`, `--context`, `--max-files`, `write --values`(JSON 인자).
+  가장 큰 스킬 office-doc 7277바이트. 테스트 `test_skill_docs.py`에 새 항목을 기대값으로.
+
 ### 기능 (사용자 요청)
-- `excel.py compare`의 비교 메모: 메모 머리에 비교한 날짜·시각 (`비교 2026-11-11 09:30: 수량 3 -> 4 (+1) / 위치 추가 R5`, 칸마다 한 번).
-  메모를 다는 명령에 `--append`: 이미 메모가 있는 칸은 묻지 않고 기존 메모 아래 줄에 덧붙임.
-- compare 메모는 미리보기 없이 달지 말지만 묻는다: `confirm_commands[0]` = `comment ... --append` (사용자 요청 2026-11-11, `next_commands`의 `--dry-run` 미리보기는 뺌).
-- compare는 새 판에 `비교결과` 시트를 묻지 않고 늘 넣는다 (사용자 요청 2026-11-11): 메모로 단 추가·변경과 칸에 적기 곤란한 삭제·대체 추정을
-  모두 한 표로(비교 일시, 이전 판, 구분, 키, 품명, 열, 이전 값, 새 값, 이전 판 행, 새 판 행, 내용), 시트가 있으면 아래에 이어 씀.
-  결과 `result_sheet`, `result_sheet_file`(CSV). 넣지 못하면 `UNVERIFIED:`. 메모는 추가·변경만 (대체 추정 메모는 뺌).
-- 실기 러너 N12 (BOM 비교: 비교결과 시트, 메모 확인 명령).
+- `excel.py info`(열린 통합문서, `--target` 없음): 사용자가 선택한(마지막으로 클릭한) 칸 `selection`과 `active_sheet`를 preview에도 적고 office-excel 스킬에 안내 (값은 전부터 있었으나 스킬에 없어 에이전트가 알리지 못함).
 - 전역 지침 `CLI/opencode/AGENTS.md` 9장: 지침·스킬 파일 위치 (팀원 배포 전, 물어보면 그대로 알림). OpenCode가 읽는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 `setup.bat`.
 - `setup.py`: opencode.jsonc에 `"enabled_providers"`가 없으면 WARN과 넣을 줄(사내 provider 이름을 넣은 것)을 알림. 폐쇄망에서 못 쓰는 기본 모델(opencode 등)이
   `opencode models`에 나오지 않게. 이름이 `"provider"`·`"model"`과 어긋나면 WARN, `"autoupdate": false`가 없으면 INFO. docs/opencode/README.md에 설정 예.
 
+### 기능 (사용자 요청 2026-11-11)
+- `outlook.py event --action delete --subject --start [--dry-run]`: 내 일정 지우기 (일정 삭제 요청에 모델이 파이썬 코드를 직접 짜서 지웠음).
+  미리보기 -> 확인 뒤 `confirm_commands[0]`(destructive), 지운 뒤 다시 찾아 확인. 못 찾으면 그날 일정 `[후보]`, 반복 일정·회의는 Outlook에서 직접. office-mail 스킬.
+
 ### 수정 (회사 PC 실기 2026-11-11)
 - L11 제한된 보기: 실제 엑셀은 제한된 보기 창이 맨 앞이면 `ActiveWorkbook`으로 그 문서를 줘서 `--target` 없는 쓰기가 "시트 보호" 오류로 끝남
   (쓰인 곳은 없음). 활성 문서가 제한된 보기 창(`ActiveProtectedViewWindow`)의 문서이면 쓰지 않고 [편집 사용] 안내 (Excel·Word·PowerPoint, 읽기는 그대로).
+  실기에서 다시 "시트 보호"로 끝나 (2026-11-11 오후), 시트 보호 안내 자체를 "노란 줄에 [편집 사용]이 있으면 누르고, 없으면 시트 보호 해제"로 합침 (사용자 결정: 구분하지 않음).
 - N10 워드 메모 지우기: 실제 Word의 `Comment.Delete`는 그 메모만 지우고 답글은 남겨 `UNVERIFIED`(메모 수 3 -> 2). 답글을 뒤 번호부터 먼저 지움.
   가짜 Word도 실제처럼 (메모만 지움).
+- N7 Outlook 일정 만들기: 15:00 일정이 06:00에 저장됨 (도구는 다시 읽어 시각이 다르다고 `UNVERIFIED`로 알림). pywin32가 tzinfo 없는 시각을
+  현지 시각으로 보고 UTC로 바꿔 넣음. 현지 시각에 UTC 표시를 붙여 넣어 그대로 저장되게 (`_com_time`). 가짜 Outlook 일정도 실제처럼 바꿔 넣음.
 - I23 워드 표 -> 엑셀: 숫자 모양 글(`3`, `1,500`, `12.5%`)을 엑셀이 같은 값의 숫자로 바꾼 것을 "다시 읽은 값이 다름"(UNVERIFIED)으로 보던 것.
   같은 값이면 확인된 것으로, 앞자리 0이 사라진 것(`0012` -> 12)은 그대로 UNVERIFIED.
 

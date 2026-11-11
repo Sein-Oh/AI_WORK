@@ -1596,17 +1596,14 @@ def test_chartsheet_is_skipped_or_refused(tmp_path, capsys):
     assert code == 0 and out["values"][0] == ["품번", "값"], out
     code, out = run_excel(capsys, "read", "--target", p, "--sheet", "차트")
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "차트 시트" in out["message"], out
-    q = _chartsheet_xlsx(tmp_path / "d.xlsx")
-    code, out = run_excel(capsys, "compare", "--target", p, "--target2", q)
-    assert code == 0 and out["status"] == "ok", out
 
 
 # ---------------------------------------------------------------------------
-# 2026-11-09 검토 B7: XFD1048576에 떠돌이 칸(공백)이 있어도 read·compare가 데이터 범위만 (MemoryError, 140초 넘게 멈춤)
+# 2026-11-09 검토 B7: XFD1048576에 떠돌이 칸(공백)이 있어도 read가 데이터 범위만 (MemoryError, 140초 넘게 멈춤)
 # ---------------------------------------------------------------------------
 
 
-def test_stray_far_cell_does_not_blow_up_read_or_compare(tmp_path, capsys):
+def test_stray_far_cell_does_not_blow_up_read(tmp_path, capsys):
     import time
     import openpyxl
     paths = []
@@ -1623,13 +1620,11 @@ def test_stray_far_cell_does_not_blow_up_read_or_compare(tmp_path, capsys):
     t0 = time.time()
     code, out = run_excel(capsys, "read", "--target", paths[0])
     assert code == 0 and out["rows"] == 11 and len(out["values"][0]) == 2, out
-    code, out = run_excel(capsys, "compare", "--target", paths[0], "--target2", paths[1], "--key", "품번")
-    assert code == 0 and out["status"] == "ok", out
     assert time.time() - t0 < 30
 
 
 # ---------------------------------------------------------------------------
-# 2026-11-09 검토 B13 (엑셀 읽기): --save 확장자, 표시 형식 숫자 검색, B:B 행 수, 기간 칸, 깨진 파일, compare 자기 자신, CSV check
+# 2026-11-09 검토 B13 (엑셀 읽기): --save 확장자, 표시 형식 숫자 검색, B:B 행 수, 기간 칸, 깨진 파일, CSV check
 # ---------------------------------------------------------------------------
 
 
@@ -1658,8 +1653,6 @@ def test_b13_excel_read_small_fixes(tmp_path, capsys):
         zf.writestr("hello.txt", "not excel")
     code, out = run_excel(capsys, "read", "--target", str(z))
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
-    code, out = run_excel(capsys, "compare", "--target", str(p), "--target2", str(p), "--sheet", "Sheet")
-    assert code == 1 and "같은 파일" in out["message"], out
 
 
 # ---------------------------------------------------------------------------
@@ -1787,3 +1780,21 @@ def test_duplicates_zero_and_open_document(tmp_path, capsys, xl_table):
     assert code == 0 and out["group_count"] == 0 and out["agent_directive"].startswith("VERIFIED: 0건"), out
     code, out = run_main(excel, capsys, "duplicates", "--columns", "부서")                    # 열린 문서 (가짜 COM)
     assert code == 0 and out["group_count"] >= 1, out
+
+
+def test_two_version_compare_is_not_supported(capsys):
+    """1.6.3: 두 판 비교(excel compare, reader diff)는 office-cli에서 뺌 (사용자 결정 2026-11-11). 찾으면 직접 하는 곳을 알려 줌."""
+    import reader
+    code, out = run_excel(capsys, "compare", "--target", "a.xlsx", "--target2", "b.xlsx")
+    assert code == 2 and out["error_type"] == "not_supported" and "나란히 보기" in out["message"], out
+    code, out = run_main(reader, capsys, "diff", "--file", "a.docx", "--file2", "b.docx")
+    assert code == 2 and out["error_type"] == "not_supported" and "검토 탭 > 비교" in out["message"], out
+
+
+def test_info_tells_the_selected_cell_of_the_open_workbook(xl, capsys):
+    """사용자가 마지막으로 클릭한(선택한) 칸: --target 없는 info의 selection과 preview (사용자 질문 2026-11-11)."""
+    app, wb = xl
+    app.Selection.Address = "$C$7:$D$9"
+    code, out = run_excel(capsys, "info")
+    assert code == 0 and out["selection"] == "C7:D9" and out["active_sheet"], out
+    assert "선택한 칸 C7:D9" in out["preview"] and f"보고 있는 시트 '{out['active_sheet']}'" in out["preview"], out["preview"]

@@ -3157,17 +3157,23 @@ def test_N(ctx):
         d, c, r, e = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30", "--location", "시험")
         again = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30")[0] or {}
 
-        def find():
+        def find(cleanup=False):
             items = ol_ns().GetDefaultFolder(9).Items
             hits = [it for it in items.Restrict(f"[Start] >= '{day} 00:00'") if str(it.Subject or "") == subject]
             out = [(_ol_time(h.Start), _ol_time(h.End), str(h.Location or "")) for h in hits]
-            for h in hits:
-                h.Delete()                                              # 러너가 만든 일정은 지움
+            if cleanup:
+                for h in hits:
+                    h.Delete()                                          # 도구로 못 지웠으면 러너가 지움
             return out
         found = com_retry(find)
-        record(ctx, "N7", "일정 만들기: 다시 읽어 확인, 두 번 실행해도 하나 (확인 뒤 러너가 지움)",
-               _verified(d) and again.get("created") is False and found == [(f"{day} 23:00:00", f"{day} 23:30:00", "시험")],
-               f"Outlook에서 찾은 일정={found}", d, c, r, e)
+        # 1.6.3: 도구로 지우기 (미리보기 -> confirm_commands[0])
+        pre = run_cli("outlook.py", "event", "--action", "delete", "--subject", subject, "--start", f"{day} 23:00", "--dry-run")[0] or {}
+        gone = run_cli("outlook.py", "event", "--action", "delete", "--subject", subject, "--start", f"{day} 23:00")[0] or {}
+        left = com_retry(lambda: find(cleanup=True))
+        record(ctx, "N7", "일정 만들기(다시 읽어 확인, 두 번 실행해도 하나)와 지우기(미리보기 뒤 지우고 확인)",
+               _verified(d) and again.get("created") is False and found == [(f"{day} 23:00:00", f"{day} 23:30:00", "시험")]
+               and pre.get("dry_run") is True and _verified(gone) and not left,
+               f"Outlook에서 찾은 일정={found}, 지운 뒤 남은 일정={left}", d, c, r, e)
 
     def n8():     # outlook list --until / --with-attachments
         import datetime as _d
@@ -3226,41 +3232,9 @@ def test_N(ctx):
         got = com_retry(last)
         record(ctx, "N11", "워드 단락 서식: 가운데, 14pt, 굵게", _verified(d) and got == (text, 1, 14.0, True), f"마지막 단락={got}", d, c, r, e)
 
-    def n12():    # excel compare: 비교결과 시트는 늘 새 판에 (닫힌 파일, 엑셀로 씀), 메모는 confirm_commands[0]
-        import openpyxl
-        head = ["품번", "품명", "수량"]
-        paths = []
-        for name, rows in (("N_bom_old.xlsx", [["P-1", "볼트", 4], ["P-2", "너트", 2], ["P-3", "와셔", 1]]),
-                           ("N_bom_new.xlsx", [["P-1", "볼트", 5], ["P-2", "너트", 2], ["P-4", "스프링", 1]])):
-            path = ctx.path(name)
-            old = _open_doc("excel", name)
-            if old is not None:
-                com_retry(lambda: old.Close(SaveChanges=False))
-            wb = openpyxl.Workbook()
-            wb.active.title = "BOM"
-            wb.active.append(head)
-            for row in rows:
-                wb.active.append(row)
-            wb.save(path)
-            paths.append(path)
-        d, c, r, e = run_cli("excel.py", "compare", "--target", paths[0], "--target2", paths[1])
-        wb = openpyxl.load_workbook(paths[1])
-        kinds = [row[2] for row in wb["비교결과"].iter_rows(min_row=2, values_only=True)] if "비교결과" in wb.sheetnames else None
-        cmd = (((d or {}).get("confirm_commands") or [{}])[0]).get("command", "")
-        memo = None
-        memo_file = str((d or {}).get("memo_file", ""))
-        if " comment " in cmd and "--append" in cmd and memo_file in cmd:      # 명령 모양 확인 뒤 같은 인자로 실행
-            run_cli("excel.py", "comment", "--target", paths[1], "--action", "add", "--file", memo_file, "--append")
-            ws = openpyxl.load_workbook(paths[1])["BOM"]
-            memo = (ws["C2"].comment.text if ws["C2"].comment else "")
-        ok = _verified(d) and kinds is not None and "수량 변경" in kinds and "추가" in kinds and \
-            ("삭제" in kinds or "대체 추정" in kinds) and bool(memo) and "수량 4 -> 5" in memo
-        record(ctx, "N12", "BOM 비교: 비교결과 시트를 묻지 않고 넣고(추가·변경·삭제/추정), 메모는 확인 명령으로", ok,
-               f"비교결과 구분={kinds}, C2 메모={memo!r}", d, c, r, e)
-
     for tid, title, fn in (("N1", "수식을 값으로", n1), ("N2", "저장", n2), ("N3", "중복", n3), ("N4", "단락 지우기", n4),
                            ("N5", "표 행", n5), ("N6", "PPT 도형 글", n6), ("N9", "PPT 도형 옮기기", n9),
-                           ("N10", "메모 답글·지우기", n10), ("N11", "단락 서식", n11), ("N12", "BOM 비교 시트", n12)):
+                           ("N10", "메모 답글·지우기", n10), ("N11", "단락 서식", n11)):
         run_test(ctx, tid, title, fn)
     if ctx.args.skip_outlook:
         return

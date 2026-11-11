@@ -40,7 +40,6 @@ python C:\CLI-dev\run_simplify_check.py --label 집PC
 | N2 | `--suggest` 다음 실험 조건 (불확실한 곳, `--maximize`), 실험계획 엑셀, 상한 넘음 `[추천]` |
 | N3 | 한 건 예측의 입력별 영향 (`explain`, preview의 높인/낮춘 입력) |
 | N4 | 실측이 있는 새 데이터 -> `actual_check`와 재학습 알림, 재학습 명령 실행, 같은 데이터면 알림 없음 |
-| B1~B5 | office-cli 1.4.80 BOM 비교 `excel compare`: 다단 BOM(상위품번+품번 키), 수량·위치·메이커 변경, 품번 변경 추정, 결과 엑셀, 바뀐 칸 메모 미리보기(Excel), 같은 파일, 표기만 다른 판은 0건 |
 | C1 | ml-kit 2.9.73: 옵션 오타 `--data-ro` -> `[후보] 1) --data-row`와 같은 번호의 명령 -> 학습 |
 | C2 | office-cli 1.4.81: `reader search --query "A AND B"` -> 고친 전체 명령 `[추천]`(`A;B`) -> 검색 |
 | C3 | 닫힌 워드에 같은 제목 둘 -> `[후보] 1) 2)`와 `--occurrence 1` 명령 -> 읽기 |

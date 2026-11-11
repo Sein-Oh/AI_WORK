@@ -196,7 +196,7 @@ def formula_xlsx(path, n=1, cached=False):
 
 
 # next_commands = 묻지 않고 실행해도 되는 것(읽기·미리보기)만 (1.4.75). conftest가 모든 테스트에 자동 적용.
-_SAFE_NEXT = {"attachments", "calendar", "check", "diff", "folders", "index", "info", "list", "outline", "read",
+_SAFE_NEXT = {"attachments", "calendar", "check", "folders", "index", "info", "list", "outline", "read",
               "search", "thread", "windows", "help"}
 _NEXT_RE = re.compile(r'(\w+)\.py[\'"]?\s+(\S+)')
 

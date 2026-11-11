@@ -30,18 +30,19 @@ metadata:
 | 워드 검토 메모 | 목록 `python "C:\CLI\office-cli\word.py" comment` / 넣기 `python "C:\CLI\office-cli\word.py" comment --action add --anchor "<문서의 글>" --text "<메모>"` (여러 개 `--file "<메모.csv>"`, 열: 기준 글, 메모 내용) / 답글 `--action reply --no 2 --text "<답>"` / 지우기 `--action delete --no 2 --dry-run` |
 | 워드 단락 지우기 | `python "C:\CLI\office-cli\word.py" delete --paragraphs 12-14 --dry-run` (번호는 `read`의 `no`, 확인 뒤 `confirm_commands[0]`) |
 | 워드 표 행 | `python "C:\CLI\office-cli\word.py" table --table 1 --action add-row [--row 3] --values "칸; 칸"` / 지우기 `--action delete-row --row 3 --dry-run` |
+| 워드 단락 서식 | `python "C:\CLI\office-cli\word.py" format --paragraphs 3-5 --align center --size 14 --bold` (`--align <left/center/right/justify>`, `--font "맑은 고딕"`, `--italic`, `--style "제목 1"`. 번호는 `read`의 `no`) |
 | 워드 변경 추적 | `python "C:\CLI\office-cli\word.py" revisions` |
-| 워드 바꾸기 | `python "C:\CLI\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` |
+| 워드 바꾸기 | `python "C:\CLI\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (대소문자 구분 `--match-case`, 단어 전체만 `--whole-word`, 여러 쌍 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 글자 `--color red --italic --size 12`) |
 | 워드 정보 / PDF | `python "C:\CLI\office-cli\word.py" info [--detail]` / `python "C:\CLI\office-cli\word.py" export --save "<보고서.pdf>" [--page-number]` |
 | PPT 읽기 | `python "C:\CLI\office-cli\ppt.py" read [--slides 1-3]` |
-| PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용; 제목:내용"` |
-| PPT 도형 글 바꾸기 | `python "C:\CLI\office-cli\ppt.py" write --slide 3 --shape "<도형 이름>" --text "<새 글>"` (이름은 `info --detail --slides 3`의 `name`) / 옮기기·크기 `python "C:\CLI\office-cli\ppt.py" shape --slide 3 --shape "<이름>" --left 50 --top 100 [--width 300]`(pt) |
+| PPT 쓰기 | `python "C:\CLI\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용; 제목:내용"` (색 `--theme <navy/slate/teal/emerald>`, 워드 표·요약 상자도 같음) |
+| PPT 도형 글 바꾸기 | `python "C:\CLI\office-cli\ppt.py" write --slide 3 --shape "<도형 이름>" --text "<새 글>"` (이름은 `info --detail --slides 3`의 `name`) / 옮기기·크기 `python "C:\CLI\office-cli\ppt.py" shape --slide 3 --shape "<이름>" --left 50 --top 100 [--width 300] [--height 200]`(pt) |
 | PPT 발표자 노트 | 읽기 `python "C:\CLI\office-cli\ppt.py" notes [--slides 1-3]` / 쓰기 `python "C:\CLI\office-cli\ppt.py" notes --slide 3 --text "<노트>"` (있던 노트에 덧붙이기 `--append`, 여러 줄 `--file "<노트.md>"`) |
 | PPT 슬라이드 | `python "C:\CLI\office-cli\ppt.py" slide --action <add/duplicate/delete/move> --slide N [--dest M] [--layout <title/text/title_only/blank>]` |
-| PPT 기타 | `python "C:\CLI\office-cli\ppt.py" replace --find <A> --replace <B>` / `python "C:\CLI\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\CLI\office-cli\ppt.py" info --detail --slides N` |
-| 엑셀 차트·범위를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` (범위는 `--range A1:D10` 대신) |
+| PPT 기타 | `python "C:\CLI\office-cli\ppt.py" replace --find <A> --replace <B>` (`--match-case`, `--map "<바꿀말.json>"`) / `python "C:\CLI\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\CLI\office-cli\ppt.py" info --detail --slides N` |
+| 엑셀 차트·범위를 워드/PPT에 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` (범위는 `--range A1:D10` 대신. 문서를 정하려면 `--from-target "<보내는 문서>" --to-target "<받는 문서>"`) |
 | 워드/PPT 내용을 엑셀로 | `python "C:\CLI\office-cli\office.py" transfer --from-app word --what text --to-app excel` (표는 `--what table --table 1`) |
-| 되돌리기 / 창 | `python "C:\CLI\office-cli\office.py" undo` (목록 `--list`) / `python "C:\CLI\office-cli\office.py" focus --app word` |
+| 되돌리기 / 창 | `python "C:\CLI\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\CLI\office-cli\office.py" focus --app word` |
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
