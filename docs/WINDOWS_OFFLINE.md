@@ -1,6 +1,6 @@
 # Windows 11 폐쇄망 설치 가이드
 
-`CLI/` 아래 모든 도구 공통 (각 도구의 `requirements.txt`는 `CLI-dev/<tool>/`에 있음). 폐쇄망 PC에서는 `pip install`이 인터넷에 접근할 수 없으므로
+`AIKIT/` 아래 모든 도구 공통 (각 도구의 `requirements.txt`는 `AIKIT/dev/<tool>/`에 있음). 폐쇄망 PC에서는 `pip install`이 인터넷에 접근할 수 없으므로
 **인터넷 PC에서 wheel 파일을 미리 받아 반입**합니다.
 
 ## 1. 인터넷 PC에서 준비
@@ -9,7 +9,7 @@
 **표준 환경에 없는 패키지만** 반입하면 됩니다. 현재 ml-kit은 추가 반입이 필요 없습니다.
 
 ```bat
-cd CLI-dev\ml-kit
+cd AIKIT\dev\ml-kit
 python -m pip download -r requirements.txt -d wheels ^
   --only-binary=:all: --platform win_amd64 --python-version 3.13 --implementation cp
 ```
@@ -21,7 +21,7 @@ python -m pip download -r requirements.txt -d wheels ^
 PATH에 잡힌 `python`이 WinPython인지 먼저 확인합니다: `python -c "import sys; print(sys.executable)"`
 
 ```bat
-cd CLI-dev\ml-kit
+cd AIKIT\dev\ml-kit
 python -m pip install --no-index --find-links wheels -r requirements.txt
 ```
 `wheels\` 폴더만 사용합니다(`--no-index`).

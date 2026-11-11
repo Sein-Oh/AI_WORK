@@ -6,29 +6,35 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 도구 결과·로그·서브에이전트 보고가 영어여도 사용자에게 전할 때는 한국어로 옮긴다. 코드, 명령, 파일 경로, 옵션 이름은 원래 글자 그대로 둔다.
 
 ## 저장소 성격
-- `CLI/<tool>/` 의 스크립트는 **Windows 11 폐쇄망에서 26B~30B 경량 LLM 에이전트가 스킬로 호출하는 CLI 도구**(Agent-Computer Interface, ACI)입니다.
+- `AIKIT/<tool>/` 의 스크립트는 **Windows 11 폐쇄망에서 26B~30B 경량 LLM 에이전트가 스킬로 호출하는 CLI 도구**(Agent-Computer Interface, ACI)입니다.
 - 소비자는 사람이 아닌 경량 LLM입니다. 출력 형식의 작은 변화도 에이전트를 깨뜨립니다.
 - 설계 원칙: **LLM 개입 최소화** - 판단과 복구는 도구가 하고, LLM은 명령 1회 실행 + JSON 1줄 해석만 한다.
 - **베타 단계**: ml-kit과 office-cli는 베타다. 이전 버전과의 호환은 필요 없다 (사용자가 따로 요청할 때만).
   호환을 위한 코드(옛 인자·키 별칭, 이전 형식 모델·파일을 읽는 대체 경로)를 새로 넣지 않는다.
 
 ## 폴더 구조
-- `CLI/<tool>/`: 사용자 PC의 `C:\CLI`로 그대로 복사되는 폴더. **실행에 필요한 .py와 스킬 파일(`SKILL.md`)만** 둔다.
-  스킬은 작업별 `skills/<스킬 이름>/SKILL.md`(ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `office-excel`,
-  `office-doc`, `office-mail`, `office-spec`, `office-data`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
-- `CLI-dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
-  `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
-  `CLI-dev`의 테스트·러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험한다.
-- 새 파일을 `CLI/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
-- `CLI/` 맨 위에는 도구 폴더 외에 배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`과
-  OpenCode 전역 지침 원본 `opencode/AGENTS.md`만 둔다. 사용자가 배포 전에 넣는 `opencode/opencode.jsonc`(사내 LLM 주소)와
-  설치가 만드는 `data/`(보관 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
+- `AIKIT/`는 사용자 PC의 `C:\AIKIT`로 통째로 복사된다 (`dev/` 포함, 2026-11-12에 `CLI/`·`CLI-dev/`에서 이름을 바꾸고 dev를 안으로 옮김).
+- `AIKIT/`가 곧 OpenCode 설정 폴더다 (setup이 `OPENCODE_CONFIG_DIR=C:\AIKIT`). 설정 파일 없이 폴더 모양으로 읽힌다 (OpenCode 2.2.5 확인):
+  `AIKIT/AGENTS.md`(전역 지침), `AIKIT/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나).
+- `AIKIT/skills/`: 기본 스킬 11개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `office-excel`,
+  `office-doc`, `office-mail`, `office-spec`, `office-data`, `skill-maker`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
+  스킬이 여러 개를 함께 쓰는 도구는 스킬 폴더가 아니라 도구 폴더에 두고, SKILL.md에는 `python "C:\AIKIT\<tool>\<파일>.py" ...` 전체 명령을 적는다.
+  사용자가 만든 스킬의 스크립트는 그 스킬 폴더의 `scripts/`에 둔다 (스킬 폴더만 복사하면 동료 PC에서도 됨).
+- `AIKIT/<tool>/`: **실행에 필요한 .py만** 둔다. 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
+- `AIKIT/dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
+  `AIKIT/dev/README.md`(공통 계약), `AIKIT/dev/run_all_tests.py`. 도구는 dev를 읽지 않는다 (배포에 함께 가도 실행에 영향 없음).
+  `AIKIT/dev`의 테스트·러너는 부모 폴더 `AIKIT/<tool>`의 도구를 시험한다.
+- 새 파일을 `AIKIT/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
+- `AIKIT/` 맨 위에는 도구 폴더, `skills/`, `dev/` 외에 `AGENTS.md`(전역 지침), `opencode.json`(셸·권한 기본 설정, 스킬 경로는 적지 않음),
+  배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`만 둔다.
+  사용자가 배포 전에 넣는 `opencode.jsonc`(사내 LLM 주소), OpenCode가 만드는 `service.json`, 설치가 만드는 `data/`(보관 폴더)와
+  `work/`(Web UI 작업 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
 
 ## 사용자 환경 (모든 작업의 전제)
 | 항목 | 값 |
 |---|---|
 | OS | Windows 11, **폐쇄망** (런타임 인터넷 접근 불가) |
-| Python | **WinPython**, Python 3.13.13, `C:\CLI\python`에 두고 시스템 PATH 등록 (`python`, `python\Scripts`) |
+| Python | **WinPython**, Python 3.13.13, `C:\AIKIT\python`에 두고 시스템 PATH 등록 (`python`, `python\Scripts`) |
 | 실행 명령 | `python`, `python -m pip` 만 사용 (`py`, `python3`, 단독 `pip` 금지). 명령 예시·스킬·배치 파일 포함 |
 | 에이전트 | **OpenCode** CLI 2.2.5 + 26B~30B 경량 LLM(회사 PC: Gemma), 도구는 OpenCode 스킬로 제공. 명령 실행 도구의 시간 제한 120초 |
 | 셸 | Windows PowerShell 5.1 (회사 PC에 pwsh 없음). 도구가 내는 명령의 따옴표는 이 셸 기준 (`quote_arg`) |
@@ -39,14 +45,14 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 목록 외 패키지도 대부분 설치되어 있고, Python 3.13 / win_amd64 wheel로 추가 설치 가능.
 - 환경이 바뀌면 이 표와 `docs/ENVIRONMENT.md` 두 곳을 함께 갱신한다.
 
-## 반드시 지킬 ACI 계약 (상세: CLI-dev/README.md)
+## 반드시 지킬 ACI 계약 (상세: AIKIT/dev/README.md)
 1. stdout은 정확히 1줄 JSON. 진행 로그·표·경고는 전부 stderr. `-h/--help` 텍스트도 stderr로 보내고 stdout에는 JSON 1줄.
    - 사람용 실기 테스트 러너(`tools/run_win_tests.py`)는 계약 대상이 아니다. 단, 에이전트용 모드(`--agent` 등)는 계약을 지킨다.
 2. exit 0 = ok, 1 = error, 2 = 인자 오류, 130 = 중단.
    - 성공: `"status": "ok"`, `agent_directive`는 `VERIFIED:`(도구가 결과를 확인함) 또는 `UNVERIFIED:`(확인하지 못함, 재시도 없이 보고)로 시작.
      긴 작업이 명령 시간 제한(에이전트 실행 도구 120초) 전에 멈추면 `CONTINUE:` + `"continue": true` + `next_commands`(같은 명령): 한 일은 저장, 같은 명령을 다시 실행하면 이어서 진행 (R10).
    - 실패: `"status": "error"`, `agent_directive`는 `STOP_RETRY:`(입력/데이터 문제. message에 `[추천]`이 있으면 그 뒤의 전체 명령을 그대로 1회만 실행(아래 "사용법 단순성" 2번), `[후보]`면 사용자에게 선택 요청) 또는 `ERROR:`(내부 오류, 재시도 금지).
-   - 공통 키·문구·함수의 구현 규칙은 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R10)을 따른다.
+   - 공통 키·문구·함수의 구현 규칙은 `AIKIT/dev/README.md` "공통 런타임 구현 규칙"(R1~R10)을 따른다.
 3. 모든 진입점은 공통 런타임의 `run_cli()` + `JsonArgumentParser`를 사용한다.
 4. CLI 인자·JSON 키는 바꿔도 된다 (베타, 호환 불필요). 바꾸면 SKILL.md·README.md·CHANGELOG.md와 테스트를 같은 커밋에서 함께 고친다.
 5. 문자 규칙(아래)을 지킨다.
@@ -61,7 +67,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 5. **인자 이름 일관성**: 도구 간 같은 개념은 같은 인자 이름을 쓴다 (`--file`, `--sheet`, `--save`, `--dry-run` 등). 새 인자는 기존 도구의 이름을 먼저 찾아본다.
 6. **미리보기와 되돌리기**: 덮어쓰기·삭제·일괄 수정 같은 파괴적 작업은 `--dry-run`(변경 없이 결과 미리보기)을 제공하고,
    가능하면 되돌리기 지점을 남긴다 (예: office-cli `undo`).
-7. **판단 대행**: 이름 자동 매칭, 기본값, 자동 상속은 도구가 처리한다 (CLI-dev/README.md 공통 계약 4번).
+7. **판단 대행**: 이름 자동 매칭, 기본값, 자동 상속은 도구가 처리한다 (AIKIT/dev/README.md 공통 계약 4번).
    오타는 같은 뜻 표(`SAME_MEANING`)로 고칠 수 있을 때만 `[추천]`, 철자만 비슷하면 `[후보]`(사용자에게 물음). 철자 비교만으로 `[추천]`하지 않는다
    (예외: 가장 가까운 것이 읽기만 하는 명령이면 `[추천]`, 잘못 골라도 바뀌는 것이 없음: office-cli `READ_ONLY_CHOICES`)
    (회사 PC 감사 2026-11-06: `--cell` -> `--all`, `--text` -> `--target`처럼 뜻이 다른 옵션을 LLM이 묻지 않고 실행할 뻔했음).
@@ -82,7 +88,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 6. **사용자에게 알릴 글은 도구가 만든다**: 결과마다 `preview`(그대로 전할 짧은 한국어)를 주고, 스킬은 "preview와 warnings를 알린다"를 기본으로 한다.
    스킬에 "알릴 키" 목록을 길게 적지 않는다 (키 이름을 많이 외우게 하면 빠뜨리거나 지어낸다).
 7. **스킬은 짧고 모순이 없게**: 스킬 하나 8KB(8192바이트, LF 기준, 2026-11-10 사용자 결정) 이하. 넘으면 작업별로 나눈다. 규칙에 예외가 있으면 그 규칙 문장 안에 적는다
-   (다른 줄의 예외는 놓친다). 전역 지침(`CLI/opencode/AGENTS.md`)과 스킬이 같은 일을 다르게 말하지 않는다.
+   (다른 줄의 예외는 놓친다). 전역 지침(`AIKIT/AGENTS.md`)과 스킬이 같은 일을 다르게 말하지 않는다.
 8. **옵션을 늘리기 전에**: 기본값, 자동 판단, 기존 옵션으로 안 되는지 먼저 본다. 꼭 필요한 옵션만 스킬에 적고 나머지는 README에만.
 
 ## JIT 자가복구 권장
@@ -141,10 +147,10 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 ## 폐쇄망 / Windows 제약
 - 런타임 네트워크 접근 금지.
 - 새 기능은 표준 환경 라이브러리를 우선 사용. 없는 패키지는 Python 3.13 / win_amd64 wheel이 있는 것만,
-  도구 `requirements.txt`(`CLI-dev/<tool>/`), 위 "사용자 환경" 표, `docs/ENVIRONMENT.md`에 기록하고 미설치 시 JSON 오류로 안내.
+  도구 `requirements.txt`(`AIKIT/dev/<tool>/`), 위 "사용자 환경" 표, `docs/ENVIRONMENT.md`에 기록하고 미설치 시 JSON 오류로 안내.
 - 파일 저장·폴더 조작·텍스트 읽기는 JIT 자가복구 표의 공통 함수를 사용한다.
-- CLI/·CLI-dev/에 반입할 파일은 .py .md .txt .json .tsv .bat만 쓴다. .yaml/.yml/.jsonl/.toml 등은 회사 반입 시스템이 막으므로 쓰지 않는다(실행 중 PC에서 생기는 파일은 상관없음). 검사: `CLI-dev/tests/test_repo_files.py`.
-- 도구 폴더(`CLI/<tool>/`)는 단독 배포된다. 공통 런타임 함수는 도구마다 자기 폴더에 두고, 다른 도구 폴더를 import하지 않는다.
+- AIKIT/·AIKIT/dev/에 반입할 파일은 .py .md .txt .json .tsv .bat만 쓴다. .yaml/.yml/.jsonl/.toml 등은 회사 반입 시스템이 막으므로 쓰지 않는다(실행 중 PC에서 생기는 파일은 상관없음). 검사: `AIKIT/dev/tests/test_repo_files.py`.
+- 도구 폴더(`AIKIT/<tool>/`)는 단독 배포된다. 공통 런타임 함수는 도구마다 자기 폴더에 두고, 다른 도구 폴더를 import하지 않는다.
 - 테스트는 "사용자 환경" 표의 버전 기준으로 통과해야 하고, 리눅스(클라우드)와 Windows(회사·집 PC)에서 같은 결과여야 한다. 실기에서 깨졌던 것:
   - 도구가 낸 명령을 나눌 때 `shlex.split`(posix)은 Windows 경로의 `\`를 지운다 -> 테스트 공용 `split_command`(Windows 명령줄 규칙)를 쓴다.
   - 파일 크기·내용 비교는 줄 끝과 무관하게 (`core.autocrlf=true`로 받으면 CRLF가 된다).
@@ -162,6 +168,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 ### office-cli
 - 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`. 내부 모듈(진입점 아님, 스킬에 적지 않음): `_markdown.py`(마크다운 해석),
   `_xlsx_formula.py`(닫힌 xlsx의 계산 안 된 수식 칸), `_spec_check.py`(excel check).
+  `skill.py`(진입점, 스킬 `skill-maker`)는 사용자가 만든 OpenCode 스킬을 등록·점검한다 (Office 불필요, 공통 런타임을 쓰려고 office-cli에 둠).
   `_runtime.py`는 다른 office-cli 파일을 import하지 않는다. `_spec_check.py`는 `excel.py`의 주소·읽기 도우미를 쓴다.
 - 세션(`open_target`/`write_session` with 블록) 밖에서 그 안의 COM 객체(시트, 범위, 문서)를 읽지 않는다. 닫힌 파일은 블록이 끝나면 문서와
   백그라운드 Office가 닫혀 OLE 0x800a01a8로 실패하고, 저장은 끝났는데 실패를 보고한다 (회사 PC 2026-11-06 O2). 결과에 쓸 값은 블록 안에서
@@ -170,15 +177,16 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - `archive/` 아래 도구는 수정하지 않는다. 지침 반영·검토·테스트 대상이 아니다 (doc-classifier: 다른 개발자 담당).
 
 ## 작업 절차
-1. 변경 전 기준선: 바꿀 도구의 테스트(`python -m pytest -q CLI-dev/<tool>/tests`)와 공통 테스트(`CLI-dev/tests`). 전체(`python -m pytest -q`)는
+1. 변경 전 기준선: 바꿀 도구의 테스트(`python -m pytest -q AIKIT/dev/<tool>/tests`)와 공통 테스트(`AIKIT/dev/tests`). 전체(`python -m pytest -q`)는
    ml-kit만 클라우드 30분·회사 PC 1시간 이상 걸리므로 PR 전 1번. 오래 걸리는 파일(`test_layout_matrix`, `test_loading_*`)은 그 영역을 바꿨을 때 꼭 돌린다.
 2. 리팩터링(동작 불변)과 기능 변경은 별도 커밋/PR.
 3. 버그 수정에는 회귀 테스트 추가. 동작이 바뀌면 `SKILL.md`, `README.md`, `CHANGELOG.md` 갱신.
 4. 실기 결과(`docs/test_logs/`)에는 회사 경로·사용자 이름이 들어 있다. 그 내용을 코드·테스트·문서·커밋 메시지에 옮기지 않는다
    (요약은 `docs/HANDOFF.md` 4장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
-5. 남은 할 일은 각 도구 `CHANGELOG.md`(`CLI-dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
+5. 남은 할 일은 각 도구 `CHANGELOG.md`(`AIKIT/dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
 6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (8KB, 상세는 README.md, 위 "사용법 단순성" 7번).
-7. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `CLI/ml-kit/skills/ml-train/SKILL.md`는 `ml-train`,
-   `CLI/office-cli/skills/office-excel/SKILL.md`는 `office-excel`), frontmatter는 name/description/license/compatibility/metadata만.
-   보조 스킬(예: `CLI-dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `CLI/setup.py`
-   (설치·옛 폴더 정리)와 전역 지침 `CLI/opencode/AGENTS.md` 3장 표를 함께 고친다.
+7. 스킬은 OpenCode 형식(Claude 스킬과 같은 모양): `AIKIT/skills/<스킬 이름>/SKILL.md`, 폴더명 = frontmatter `name`
+   (`^[a-z0-9]+(-[a-z0-9]+)*$`; `AIKIT/skills/ml-train/SKILL.md`는 `ml-train`), frontmatter는 name/description/license/compatibility/metadata만.
+   `skills/` 바로 아래에 둔다 (묶음 폴더를 한 단계 더 두는 것은 2.2.5에서 되지만 표준이 아님).
+   보조 스킬(예: `AIKIT/dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `AIKIT/setup.py`
+   (설치·옛 폴더 정리), `office-cli/skill.py`의 `BASE_SKILLS`, `.gitignore`의 기본 스킬 줄, 전역 지침 `AIKIT/AGENTS.md` 3장 표를 함께 고친다.

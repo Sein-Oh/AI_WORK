@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "shell": "powershell",
+  "autoupdate": false,
+  "permission": {
+    "external_directory": "allow",
+    "webfetch": "deny",
+    "websearch": "deny"
+  }
+}

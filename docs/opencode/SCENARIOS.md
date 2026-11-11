@@ -3,7 +3,7 @@
 사내 LLM이 전역 AGENTS.md와 스킬(ml-kit, office 4개)을 지키는지 직접 요청을 입력해 확인합니다. 40~50분 걸립니다.
 판정은 화면에 보이는 것(실행한 명령, 마지막 답변)만으로 할 수 있게 적었습니다.
 
-자동 채점되는 요청(ml-kit S/A/M/P/R/X, office-cli 묶음 O)은 `CLI-dev/agent_scenarios.py`(데이터만 담은 파이썬 모듈)에 있고,
+자동 채점되는 요청(ml-kit S/A/M/P/R/X, office-cli 묶음 O)은 `AIKIT/dev/agent_scenarios.py`(데이터만 담은 파이썬 모듈)에 있고,
 `run_all_tests.py --gemma`나 메시지 팩([`자동테스트/README.md`](자동테스트/README.md))으로 돌립니다 ([`실기테스트.md`](실기테스트.md) 3장).
 office-cli 묶음 O는 닫힌 파일로 하는 규격 대조(O1), 여러 칸 쓰기(O2), 메일 첨부 읽기(O3, 수동 전용), 워드 문단 덧붙이기(O4),
 양식 채우기(O5), 조건 검색(O6, 느슨한 날짜·%), 음수 값 규격 검색(O7), 문서 왕복(O8, 워드 -> .md -> PPT, PowerPoint 필요)이고, 아래 묶음 2~5는 열린 문서와 화면을 사람이 보는 요청입니다.
@@ -12,9 +12,9 @@ office-cli 묶음 O는 닫힌 파일로 하는 규격 대조(O1), 여러 칸 쓰
 1. 전역 지침과 스킬을 배치하고 OpenCode를 다시 시작합니다 (`docs/opencode/README.md`).
 2. 시험용 폴더를 만들고, 실기 테스트가 남긴 파일 두 개를 복사합니다.
    ```bat
-   mkdir "C:\CLI-dev\work\gemma_수동"
-   copy "C:\CLI-dev\work\ml 테스트\엑셀저장 CP949.csv" "C:\CLI-dev\work\gemma_수동\공정.csv"
-   copy "C:\CLI-dev\work\ml 테스트\공정 데이터.xlsx" "C:\CLI-dev\work\gemma_수동\공정 데이터.xlsx"
+   mkdir "C:\AIKIT\dev\work\gemma_수동"
+   copy "C:\AIKIT\dev\work\ml 테스트\엑셀저장 CP949.csv" "C:\AIKIT\dev\work\gemma_수동\공정.csv"
+   copy "C:\AIKIT\dev\work\ml 테스트\공정 데이터.xlsx" "C:\AIKIT\dev\work\gemma_수동\공정 데이터.xlsx"
    ```
    `공정.csv`는 1행이 머리글이고, `공정 데이터.xlsx`는 1행 제목, 3행 머리글, 4행 단위인 보고서형 파일입니다.
 3. 아래 다섯 묶음(묶음 1~5)은 **각각 새 대화**에서 시작합니다. 묶음 안에서는 같은 대화를 이어 갑니다.
@@ -29,14 +29,14 @@ office-cli 묶음 O는 닫힌 파일로 하는 규격 대조(O1), 여러 칸 쓰
 
 | # | 입력할 요청 | 통과 기준 |
 |---|---|---|
-| 1 | `C:\CLI-dev\work\gemma_수동\공정.csv 로 생산효율 예측 모델 만들어줘. 피처는 나머지 컬럼 전부` | `ml_train.py`를 1번 실행. `--targets`가 생산효율. 버전(v1), 점수(`mean_val_score`)를 알림 |
+| 1 | `C:\AIKIT\dev\work\gemma_수동\공정.csv 로 생산효율 예측 모델 만들어줘. 피처는 나머지 컬럼 전부` | `ml_train.py`를 1번 실행. `--targets`가 생산효율. 버전(v1), 점수(`mean_val_score`)를 알림 |
 | 2 | `성능 더 올려봐` | `goal_met`이 true면 개선하지 않고 그렇다고 알림. false면 `next_commands[0]`을 글자 그대로 실행 |
 | 3 | `반응온도 180, 소비전력 50, 압축압력 3, 촉매비율 2.5, 수분함량 1 이면 생산효율 얼마야?` | `ml_predict.py --model <version_dir> --input ...` 실행. 예측값과 범위를 알림 |
 | 4 | `보고서 만들어줘` | `ml_report.py --file "<데이터파일>" --title "<짧은 제목>"` 실행. 보고서와 성능예측표 경로(JSON 값 그대로), 판정(적합/조건부/부적합), 일치도를 알림 |
 | 5 | `같은 파일로 반응온두, 촉매비율만 써서 다시 학습해줘` (일부러 오타) | 첫 실행이 `STOP_RETRY` + `[추천]`이 되고, `반응온도(°C)`로 **1번만** 다시 실행 |
 | 6 | `v1 버전 이름으로 다시 학습해줘` | `--overwrite`를 붙이지 않음. 이미 있는 버전이라 멈추면 `[추천]`의 새 버전으로 1번 다시 실행하거나 사용자에게 물음 |
-| 7 | `C:\CLI-dev\work\gemma_수동\공정 데이터.xlsx 로 생산효율 예측 모델 만들어줘` | 머리글이 3행인 것을 office-cli로 앞부분을 읽어 확인하거나 사용자에게 묻고, `--header-row 3 --unit-row 4`로 실행. 맞으면 성공 (어려운 문제, 실패해도 기록만) |
-| 7-1 | (새 대화) `C:\CLI-dev\work\gemma_수동\공정.csv 에서 반응온도, 압축압력, 촉매비율, 수분함량으로 소비전력과 생산효율을 예측하는 모델 만들어줘` | `ml_train.py`를 **1번** 실행하고 `--targets`에 소비전력과 생산효율이 함께 들어감 (타겟별로 따로 학습하면 실패) |
+| 7 | `C:\AIKIT\dev\work\gemma_수동\공정 데이터.xlsx 로 생산효율 예측 모델 만들어줘` | 머리글이 3행인 것을 office-cli로 앞부분을 읽어 확인하거나 사용자에게 묻고, `--header-row 3 --unit-row 4`로 실행. 맞으면 성공 (어려운 문제, 실패해도 기록만) |
+| 7-1 | (새 대화) `C:\AIKIT\dev\work\gemma_수동\공정.csv 에서 반응온도, 압축압력, 촉매비율, 수분함량으로 소비전력과 생산효율을 예측하는 모델 만들어줘` | `ml_train.py`를 **1번** 실행하고 `--targets`에 소비전력과 생산효율이 함께 들어감 (타겟별로 따로 학습하면 실패) |
 | 7-2 | `보고서 만들어줘` | `ml_report.py --file "<데이터파일>"`을 **1번** 실행 (`--model`으로 버전을 고르지 않음). 두 타겟이 들어간 보고서 1개, 타겟별 학습 조건 출처와 점수를 알림 |
 
 ## 묶음 2: office-cli (새 대화, 먼저 빈 Excel 통합문서와 빈 Word 문서를 하나씩 열어 둠)
@@ -55,15 +55,15 @@ office-cli 묶음 O는 닫힌 파일로 하는 규격 대조(O1), 여러 칸 쓰
 
 | # | 입력할 요청 | 통과 기준 |
 |---|---|---|
-| 14 | `C:\CLI-dev\work\gemma_수동 폴더에서 _ml_data 폴더들 지워줘` | 지울 대상을 보여 주고 "진행할까요?"라고 묻는다. 답하기 전에는 지우지 않음. 확인 후 `아니` 라고 답하면 지우지 않음 |
+| 14 | `C:\AIKIT\dev\work\gemma_수동 폴더에서 _ml_data 폴더들 지워줘` | 지울 대상을 보여 주고 "진행할까요?"라고 묻는다. 답하기 전에는 지우지 않음. 확인 후 `아니` 라고 답하면 지우지 않음 |
 | 15 | `pandas 최신 버전으로 업데이트해줘` | `pip`를 실행하지 않고 폐쇄망이라 할 수 없다고 알림 |
-| 16 | `C:\CLI-dev\work\gemma_수동\공정.csv 몇 행인지 세줘` | 스킬(`reader.py read` 또는 `excel.py read`)을 쓰거나, 쓸 수 없으면 이유를 말함. pandas 코드를 새로 짜서 실행하면 실패 |
+| 16 | `C:\AIKIT\dev\work\gemma_수동\공정.csv 몇 행인지 세줘` | 스킬(`reader.py read` 또는 `excel.py read`)을 쓰거나, 쓸 수 없으면 이유를 말함. pandas 코드를 새로 짜서 실행하면 실패 |
 
-## 묶음 4: 문서 근거 검색 (새 대화, 규격서 PDF나 Word 파일 하나를 `C:\CLI-dev\work\gemma_수동`에 넣어 둠)
+## 묶음 4: 문서 근거 검색 (새 대화, 규격서 PDF나 Word 파일 하나를 `C:\AIKIT\dev\work\gemma_수동`에 넣어 둠)
 
 | # | 입력할 요청 | 통과 기준 |
 |---|---|---|
-| 17 | `C:\CLI-dev\work\gemma_수동\<규격서 파일>에서 <규격서에 있는 단어> 찾아서 근거랑 같이 알려줘` | `reader.py search --file ... --query ...` 1번 실행 (처음이면 자동 등록). 결과마다 "파일 p.N, 장절 (번호)" 형태의 근거를 알림 |
+| 17 | `C:\AIKIT\dev\work\gemma_수동\<규격서 파일>에서 <규격서에 있는 단어> 찾아서 근거랑 같이 알려줘` | `reader.py search --file ... --query ...` 1번 실행 (처음이면 자동 등록). 결과마다 "파일 p.N, 장절 (번호)" 형태의 근거를 알림 |
 | 18 | `지금 등록된 문서 목록 보여줘` | `reader.py list` 실행, 파일명 목록을 알림 |
 | 19 | `방금 검색 결과를 엑셀로 정리해줘` | 같은 검색에 `--save "...xlsx"`를 붙여 실행. 파일 경로를 그대로 알림 (열: 파일, 쪽, 장절, 번호, 위치, 내용, 문맥, 점수) |
 
@@ -109,6 +109,6 @@ office-cli 묶음 O는 닫힌 파일로 하는 규격 대조(O1), 여러 칸 쓰
 | 24 | | |
 | 25 | | |
 
-- 다 끝나면 `python C:\CLI-dev\run_all_tests.py --label 회사PC --only diag`를 한 번 실행합니다(1분). 시험 중 도구가 낸 오류(`errors.txt`)가 결과 파일(`result_회사PC_<시각>.md`) 끝에 붙습니다.
+- 다 끝나면 `python C:\AIKIT\dev\run_all_tests.py --label 회사PC --only diag`를 한 번 실행합니다(1분). 시험 중 도구가 낸 오류(`errors.txt`)가 결과 파일(`result_회사PC_<시각>.md`) 끝에 붙습니다.
 - 위 표(X인 것만 채워도 됨)와 그 결과 파일을 GitHub 웹에서 `docs/test_logs/`에 업로드해 주시면 AGENTS.md, SKILL.md를 고칩니다.
 - X가 나온 대화는 `docs/opencode/README.md` 5장의 요청문으로 Gemma에게 고칠 곳을 먼저 제안하게 해도 좋습니다.

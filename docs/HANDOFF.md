@@ -4,11 +4,13 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.90**, **office-cli 1.6.3** (작업 브랜치 `ccr-ecab210c-awib23`, PR #76. 머지했으면 main)
+- 2026-11-12: 배포 폴더 이름 `C:\CLI` -> **`C:\AIKIT`** (저장소 `CLI/` -> `AIKIT/`, `CLI-dev/` -> `AIKIT/dev/`, dev도 함께 배포).
+  `C:\AIKIT`이 곧 OpenCode 설정 폴더 (`OPENCODE_CONFIG_DIR=C:\AIKIT`): 설정 파일 없이 `AGENTS.md`(전역 지침)와 `skills\<이름>\SKILL.md`(스킬)를 읽음 (3-13장). 이 문서의 지난 기록 속 경로도 새 이름으로 바꿔 두었음 (실기 로그와 CHANGELOG는 그대로)
+- 도구 버전: **ml-kit 2.9.92**, **office-cli 1.6.6** (작업 브랜치 `ccr-ecab210c-awib23`. PR을 머지했으면 main)
 - 단계: 최종 점검 (2026-11-11). 팀원 배포 직전. 회사 PC 실기 통과 뒤 사내 LLM(OpenCode + BEAM/Nemotron)에 유지보수를 넘길 예정 (인계 자료는 아직 안 만듦)
 - 스킬: ml-kit 5개(ml-train, ml-dataset, ml-predict, ml-report, ml-map), office-cli 5개(office-excel, office-doc, office-mail, office-spec, office-data).
   스킬 하나 8KB(8192바이트) 이하. 2026-11-11 점검: 도구에 있는데 스킬에 없던 옵션을 채움 (가장 큰 것 office-doc 약 7.3KB)
-- 2026-11-11에 한 일은 3-11장
+- 2026-11-11에 한 일은 3-11장, 다음 작업(OpenCode 설정을 C:\AIKIT 기준으로)은 3-12장
 - Office는 Office 16만 대상 (2026-11-07 Office 2007 지원 폐기, 집 PC도 Office 2019로 바꿈)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
@@ -53,14 +55,14 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | office-cli 1.4.30 | outlook `--folder` 오류의 `(경로: ...)`도 오류 로그에서는 계정 이름 자리를 `<메일 계정>`으로(`not_found`의 `log_extra`). `transfer --method relay --to ppt`는 받는 PPT의 `--slide`를 확인한 뒤에 클립보드·임시 워드를 씀(없는 슬라이드로 클립보드를 덮어쓰지 않음). relay `--to-target ""`는 활성 문서(`KeyError` 아님) |
 | office-cli 1.4.31 | relay `--to ppt`는 열린·활성 PPT의 `--slide`를 찾기만으로 확인하고 쓰기 세션(되돌리기 지점)은 임시 워드 단계 뒤에 엶(워드 단계가 실패해도 바꾼 것 없는 지점이 남지 않음). 닫힌 xlsx의 계산된 값이 없는 수식 칸(openpyxl이 쓰고 엑셀에서 연 적 없는 파일)은 excel read/export, transfer 범위, reader read/search에서 UNVERIFIED와 칸 목록(`uncomputed_formulas`). docx 글상자 글을 따로 단위로 읽음(두 벌 저장은 한 번). 닫힌 docx 표 번호는 콘텐츠 컨트롤 안의 표도 셈(read·COM과 같음). word 굵게 위치는 UTF-16 단위. excel read --search에 `count`와 `VERIFIED: 0건.`. 마크다운 `---`는 word에서 구분선(아래 테두리 빈 단락), 맨 앞 YAML 머리말은 넣지 않고 `warnings` |
 | office-cli 1.4.32 | 닫힌 xlsx를 범위 없이 읽을 때(`excel read`·`--search`·`--save`, `export`, transfer, `B:B`, 큰 범위 줄이기) 계산된 값이 없는 수식 칸의 행·열(합계 행 등)을 자르지 않고 남기며 UNVERIFIED. workbook.xml `fullCalcOnLoad`(xlsxwriter·openpyxl)면 모든 수식 칸을 계산되지 않은 칸으로 봄(`<v>0</v>`을 값으로 믿지 않음, 엑셀은 저장할 때 지움). 수식 칸 확인이 실패하면(MemoryError 포함) `uncomputed_check: "unknown"`과 UNVERIFIED "수식 계산 여부를 확인하지 못함". reader 파서 버전 10 |
-| office-cli 1.4.33 | En-Genius 스킬로 실행하면(`ENGENIUS_OUT`이 있으면) `config.json`, data, cache를 `<사용자>\Documents\En-Genius\CLI-data\office-cli`에 둠 (트레이가 스킬 폴더를 실행마다 지우므로). `OFFICE_CLI_CONFIG`로 설정 파일 위치 지정 가능. OpenCode·`C:\CLI` 실행은 그대로 |
+| office-cli 1.4.33 | En-Genius 스킬로 실행하면(`ENGENIUS_OUT`이 있으면) `config.json`, data, cache를 `<사용자>\Documents\En-Genius\CLI-data\office-cli`에 둠 (트레이가 스킬 폴더를 실행마다 지우므로). `OFFICE_CLI_CONFIG`로 설정 파일 위치 지정 가능. OpenCode·`C:\AIKIT` 실행은 그대로 |
 | office-cli 1.4.34 | 새 명령 `outlook.py attachments`: 첨부 목록(`index`, `name`, `size`, `hidden_inline`), `--save [전체 경로 폴더]`로 내려받기(기본 `%USERPROFILE%\Downloads\메일 첨부\<시각>_<제목>`, 자동 정리 안 함), `--name 일부`/`--index 1,3`으로 고르기(맞는 것이 없으면 `[후보]`), 같은 이름은 ` (2)`와 `recovered`. `read/current --save-attach` 없앰(대신 `attachment_names`와 `next_commands` "첨부 내려받기"). `new/reply/forward --attach`는 없는 전체 경로 파일이면 메일을 만들기 전에 같은 폴더의 비슷한 파일 `[후보]`, 붙인 뒤 `Attachments.Count`로 확인(못 하면 UNVERIFIED, `--send`면 보내지 않음) |
-| office-cli 1.4.35 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\office-cli`를 실행: OpenCode와 같은 data, cache, config.json을 씀 (1.4.33의 고정 폴더는 도구가 트레이 임시 폴더에서 돌 때만) |
+| office-cli 1.4.35 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\AIKIT\office-cli`를 실행: OpenCode와 같은 data, cache, config.json을 씀 (1.4.33의 고정 폴더는 도구가 트레이 임시 폴더에서 돌 때만) |
 | office-cli 1.4.36 | `excel.py read --formulas`: 읽은 범위의 수식 칸 목록(`formulas`: `cell`, `formula`, `value`, 배열 수식은 `array`·`array_range`), `formula_count`, 200개 상한(`formulas_truncated`, 전체는 `full_result_file` CSV). 열린 문서는 Formula2(없으면 Formula)를 범위 한 번에, 닫힌 xlsx는 openpyxl. SKILL.md가 바뀌어 En-Genius 스킬 zip을 다시 가져와야 함 |
 | office-cli 1.4.40~1.4.48 | 관리자 권한 실행이면 "열린 문서 없음" 대신 권한 안내(`elevated_process`), `range delete` 전 `#REF!`가 될 수식 칸 알림, reader 캐시의 확인 실패 다시 확인, 배열 수식 범위 전체를 수식 칸으로, 멀리 떨어진 계산 안 된 수식 칸 처리, `read --where`의 또는(`\|`)과 따옴표 값, 정렬 기준 4개 이상, 라이브러리 없음은 `missing_library`, next_commands 다듬기 |
 | office-cli 1.4.49~1.4.51 | 규격서 대조 작업: `reader.py read --section`(캐시 문서 장절 읽기), `excel.py comment`(칸 메모 목록·달기·지우기, CSV로 여러 개), `reader.py search` 재현율(조사·단위 표기·전각 허용, 0건이면 부분/오타 일치로 넓힘 `match_mode`, 점수 순위, `data\synonyms.txt` 동의어) |
 | office-cli 1.4.52~1.4.61 | `transfer --method`·`search -c` 삭제, 여러 칸 한 번에 `excel.py write --cells`, 시트 보호 `sheet_protected`와 거부된 수식 `[추천]`(되돌림), reader 등록·검색 `CONTINUE:`(`OFFICE_CLI_TIME_LIMIT`), 규격 대조 `excel.py check`, 열기 감시 30초 `drm_or_dialog`, `reader.py diff`(판 비교), 메일 짧은 `id`(긴 값은 `entry_id`)·`thread`·`calendar --days`, `word.py fill --file` |
-| office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`CLI/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`(지금은 `CLI/setup.py`)가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
+| office-cli 1.4.62 | 통합 스킬 `office-cli`(16KB)를 작업별 스킬 4개로 나눔: `office-excel`, `office-doc`, `office-mail`, `office-spec` (`AIKIT/office-cli/skills/<이름>/SKILL.md`, 각 6KB 이하, 명령은 전체 명령). `apply_skills.py`(지금은 `AIKIT/setup.py`)가 4개를 설치하고 옛 `skills\office-cli` 폴더는 보관 후 지움. 도구 동작은 그대로 (`-h` 결과의 `skill_file`만 해당 작업 스킬) |
 | office-cli 1.4.63 | 독립 검토 버그 수정: 2열 표 파일(칸값·메모·값 파일)의 셋째 열은 쓰기 전에 STOP_RETRY(큰따옴표 안내), `--cells` 따옴표·수식 나누기, `comment --append` 재실행 중복, 엑셀 쓰기 실패 후 되돌리기가 글자 상수(`007`, `1-2`)를 바꾸던 것, `check`가 같은 문장의 다른 항목 조건을 섞던 것과 칸 단위 없음은 `판단필요`, `word.py fill` 표 칸에 행·열 머리글 표시·문서 보호 확인, 열기 감시가 사용자 문서가 있는 Word·PowerPoint를 끝내지 않음 |
 | office-cli 1.4.73 | 10차 검토 수정: 사용자 확인이 필요한 명령(메일 send, 미리보기 뒤 실제 변경)은 `next_commands`가 아니라 `confirm_commands`로(`needs_user_confirm` 없앰, 전역 지침 3장 6번 예외), send는 발송 원장(`outlook_drafts.json`, 잠금 아래 '보냄' 먼저 기록)에 있는 이 도구가 만든 초안이고 임시 보관함에 있으며 `Sent`·`Submitted`가 아닐 때만(동시·두 번 발송, 지운 초안, 사용자의 다른 초안 거부, id 오류는 `next_commands` 없는 거부), 없앤 `--send`는 exit 2 + `[추천]`. reader 층 A 경계를 허용 목록으로(숫자 앞·단위 뒤), 앞이 숫자뿐인 `/`의 분수·비율 제외, 스니펫 층 B 자리는 `[[ ]]` |
 | office-cli 1.4.74 | 관리자 권한 안내는 UAC로 권한을 올린 창일 때만 (UAC가 꺼진 회사 PC는 모든 프로그램이 같은 권한이라 안내하지 않음) |
@@ -70,7 +72,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | office-cli 1.4.80 | `excel compare`(표 두 판 비교, BOM 개정 비교: 머리글·열 역할·짝지을 키를 도구가 정함, 추가·삭제·수량·위치·속성 변경, 품번 변경 추정, 결과 xlsx와 새 판 칸 메모 미리보기)와 새 스킬 `office-data` |
 | office-cli 1.4.81 | 남은 `[후보]`에 번호와 같은 번호의 `confirm_commands`, `reader --query` 구분자 `;`(그리고)·`\|`(또는)(옛 AND/OR는 `[추천]`), 빈 결과 `count 0`, 파일 지우기 재시도, `--dry-run` 확대(excel replace·range clear/move·sheet delete·chart delete, word replace·write, ppt replace·slide) |
 | office-cli 1.4.82 | Office 2007 지원 폐기 (Office 16만): PDF 추가 기능 확인·PowerPoint 2007 E_FAIL 판정·Word `SaveAs` 대체·그림 글자 `/` 처리 삭제, 실기 러너 D1·D4의 PDF ENV-SKIP 삭제 |
-| office-cli 1.4.76 | 도구가 내는 명령(`next_commands`, `confirm_commands`, `[추천]` 전체 명령)의 따옴표를 실행 셸에 맞춤: OpenCode처럼 `pwsh`가 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1(`OFFICE_CLI_SHELL`로 강제). PowerShell은 작은따옴표(`$`·백틱·`{}`·`@`·`;` 글자 그대로), 5.1은 값 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈. 테스트에 셸 시뮬레이터(`CLI-dev/tests/shell_sim.py`) |
+| office-cli 1.4.76 | 도구가 내는 명령(`next_commands`, `confirm_commands`, `[추천]` 전체 명령)의 따옴표를 실행 셸에 맞춤: OpenCode처럼 `pwsh`가 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1(`OFFICE_CLI_SHELL`로 강제). PowerShell은 작은따옴표(`$`·백틱·`{}`·`@`·`;` 글자 그대로), 5.1은 값 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈. 테스트에 셸 시뮬레이터(`AIKIT/dev/tests/shell_sim.py`) |
 | office-cli 1.4.75 | 11차 검토 수정: `confirm_commands`의 덮어쓰기·삭제·발송 항목에 `"destructive": true`("묻지 말고"라고 해도 늘 물음, 전역 지침 3장 6번), 문서를 바꾸는 이어 하기(`read --save` 뒤 write, write 뒤 chart, chart 뒤 transfer 등)는 `next_commands`에서 `confirm_commands`로, 파괴적 명령 오타는 `[후보]`, 발송 실패 초안은 다른 거부 문구, reader 층 A 허용 목록 완화(짝 따옴표·괄호, 전각 콜론, `±` 뒤 숫자, 단위 뒤 `(`) |
 | office-cli 1.4.72 | 9차 검토 수정: outlook 발송은 저장한 초안을 그 항목 그대로 보내는 `send --id <draft_id>` 하나로(`new`·`reply`·`forward`의 `--send` 없앰, 초안 결과의 `next_commands[0]`에 `needs_user_confirm: true`, 이미 보냈거나 지운 초안은 거부해 중복 발송 없음), 답장·전달은 보내지 않은 초안을 원본으로 쓰지 않음(열린 초안 창에 답장하던 위험). reader 층 A: `/` 값 구분은 양쪽 숫자+단위이고 `/` 뒤가 1·10^n이 아닐 때만(숫자만 앞이면 Hz·V 목록), AND 스니펫은 검색어마다 창(` / `로 이음), 단위 없는 검색어의 DC/AC 예외 없앰, 붙은 기호(천 단위 따옴표, U+2044·U+FF0F·U+2215, 곱하기, U+3161, 폭 없는 공백, 지수 `m-1`) 차단 |
 | office-cli 1.4.71 | 8차 검토 수정: 층 A(`VERIFIED`)의 뜻 확정 - 검색어 글자열이 그 자리에 글자 그대로, 숫자·단위 낱말 경계가 맞게 있음(띄어 쓴 부호 `- 40 ℃`·범위·이하/이상·한글 꼬리의 뜻은 판정하지 않고 스니펫으로 보임). 스니펫·근거 문장·check 조건은 층 A 자리(일치 앞 최소 15자), 숫자 검색 directive에 앞뒤 함께 전달 안내. 낱말 수준 오일치(띄어 쓴 천 단위, 곱 단위·띄어 쓴 단위 이어짐, 숫자 코드 뒤 `-숫자`)는 층 A 금지, 형식 차이(`/` 값 구분, `(DC)`·`(Max)` 괄호, 붙은 `DC`/`AC`, `IP 67`/`M 10`)는 층 A. check `--header-row 0`(머리글 없음)을 남은 행 명령에 |
@@ -86,7 +88,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | office-cli 1.4.37 | SKILL.md에 빠졌던 기존 기능(메일 list/folders·search --folder/--where·reply --all·new --cc·--body-file, PPT slide add/duplicate/delete/move, 엑셀 sheet/range/export/style/replace --all-sheets·차트 종류, 워드 --toc/--callout·replace --highlight)을 넣고 SKILL.md의 명령·옵션이 argparse에 있는지 테스트로 대조. 새 기능: `outlook.py list|search --days N|--since YYYY-MM-DD`(period), `excel.py range --action insert|delete`(값이 있으면 needs_user_decision, `--dry-run`, `--overwrite`), `range --action sort --by "부서,금액" [--desc]`, `read --where "금액 >= 100; 부서 = 영업"`(`row_numbers`) |
 | ml-kit 2.9.11 | 날짜 열을 학습·예측에서 같은 방식으로 해석(YYYYMMDD 포함). `-i` 값은 글자로 받아 범주 코드 `007` 유지. 머리글·단위 행 옵션이 예측 `next_commands`에도 들어감. `-i` 6건 이상은 결과 CSV 저장 |
 | ml-kit 2.9.12 | 성능예측표: 작은 값 출력의 자리수, "실측 없는 영역" 기준을 표 해상도에 맞춤, **입력은 타겟마다 최대 8개**, 타겟별 `--inputs "T1=a,b;T2=c"`. `ml_export`·`ml_map`에 `--overwrite`. `ml_map`은 열마다 그 열에 값이 있는 행으로 계산. 예측값은 작은 값이면 유효숫자 4자리 |
-| ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `CLI/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |
+| ml-kit 2.9.13 | 타겟 값이 모두 같으면 `STOP_RETRY`(학습 안 함). 완전히 같은 행은 교차검증에서 같은 fold로 묶고 `warnings`에 중복 개수. **`[추천]` 뒤가 `python`으로 시작하는 전체 명령이면 그대로 1회 실행**(레이아웃 옵션을 뺀 예측, 성능예측표 `--inputs` 전체. 전역 지침 `AIKIT/opencode/AGENTS.md`도 바뀜). `ml_map` 여러 구할 열은 `basis_by_column`. 작은 입력값(1e-6 단위)의 학습 범위·`--find` 결과 |
 | ml-kit 2.9.14 | 숫자 입력에 쉼표(`-i "압력=500,000"`)가 있으면 `STOP_RETRY` + 쉼표를 뺀 전체 명령 `[추천]`. 예측 JSON의 `drift_warnings` 키 삭제(`extrapolation_warnings`는 20개까지, 전체 수 `extrapolation_warning_count`). 한 버전이 모든 타겟의 최고면 `ml_report -f`가 다시 학습하지 않고 그 버전을 씀(`made_best: false`). 머리글 행 안내는 열 이름 `[추천]`/`[후보]` 또는 `--header-row`. 입력+타겟이 다른 행이 10개 미만이면 `STOP_RETRY` |
 | ml-kit 2.9.15 | 클래스가 많고 행이 적은 분류(10~15행)도 내부 오류 없이 학습. 숫자가 대부분인 단위 행은 `STOP_RETRY`, `[추천]` 머리글 행에 단위 행도 함께(전체 명령). 단위 행이 있는 새 파일을 옵션 없이 예측하면 `--unit-row`를 넣은 `[추천]` 명령. `--history`의 `best_version`(새 키 `best_version_dir`)과 보고서 `-d`는 모든 타겟의 최고가 있는 버전. 엑셀이 없는 PC의 보고서는 성능예측표를 확인하지 못해 `UNVERIFIED:` |
 | ml-kit 2.9.16 | 범주·글자 타겟이 든 첫 데이터 행을 단위 행으로 보지 않음(`[추천]`에 틀린 `--unit-row`가 없고, 그런 `--unit-row`는 `STOP_RETRY`). 단위 없이 학습한 모델로 단위 행이 있는 새 파일을 예측하면 `--data-row`를 넣은 `[추천]` 명령. `ml_map --points`도 머리글 행 `[추천]` |
@@ -111,7 +113,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | ml-kit 2.9.35 | 2.9.34 회귀 수정: `ml_map.py --points`의 실측값·메모 열(`수율_실측`, `목표수율`, `-y 수율`)이 쓰지 않은 `함수율` 열 때문에 `[후보] '함수율'`로 멈추던 문제(두 이름에 든 `-y` 이름을 빼고 비교, `함수율%`는 그대로 멈춤). `--eval`의 단위까지 쓴 숫자 이름 열(`0.5(mm)*2(mm)`, `온도+2(mm)`)이 `STOP_RETRY`되던 문제와 더 긴 숫자 안의 숫자(`온도*2.5`와 `2(mm)` 열)를 그 열로 보던 문제. 학습의 섞인 `%` 검사는 `제외` 표시 행을 빼고 |
 | ml-kit 2.9.36 | 2.9.35 회귀 수정: `ml_map.py --points`에서 위치·단이 다른 키 열(`온도_1`과 데이터 `온도(1)`, `온도_상`과 `온도(상)`, `압력1`과 `압력(1단)`)을 말없이 빼고 `VERIFIED`로 내던 문제. `-y` 이름을 뺀 나머지를 기호 없이 비교하고 한쪽이 다른 쪽을 포함해도 비슷한 열로 보아 `[후보]`로 멈춤 |
 | ml-kit 2.9.37 | En-Genius 스킬로 실행하면 데이터 폴더(오류 로그)를 `<사용자>\Documents\En-Genius\CLI-data\ml-kit\data`에 둠. `ML_KIT_DATA_DIR`가 있으면 그것이 먼저. 모델·보고서는 지금처럼 데이터 파일 옆 |
-| ml-kit 2.9.38 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\CLI\ml-kit`를 실행: OpenCode와 같은 데이터 폴더 |
+| ml-kit 2.9.38 | En-Genius 스킬 zip은 지시문과 `run.py`만 담고 `C:\AIKIT\ml-kit`를 실행: OpenCode와 같은 데이터 폴더 |
 | ml-kit 2.9.41~2.9.51 | .xlsx 백분율 서식 칸을 화면 값(11.9)으로 읽음(재학습 필요), `ml_map` 묻지 않은 열의 % 섞임은 빼고 계산, CSV 소수점 쉼표를 열마다 판단, `-i`의 `온도`+`온도(C)` 안내, 라이브러리 없음 `missing_library`, `--history` 0건 ok와 `--overwrite` 원장 중복 제거, `--dtypes` 이름 맞추기, 없는 버전 `[추천]`/`[후보]`, 목록 상한 `truncated`, 로그 태그 `[PROGRESS] 45%`, 인자 이름 `--save`(예측·보고서), 보고서 `--targets/-y` |
 | ml-kit 2.9.68 | office-cli 1.4.76과 같은 셸 맞춤 따옴표(`quote_arg`, `ML_KIT_SHELL`): `next_commands`·`[추천]` 명령이 PowerShell 5.1/7에서 값 그대로 전달(`-i`, `--exclude-where`, 끝 백슬래시 경로, `$`·`"`가 든 값) |
 | ml-kit 2.9.69 | 저장(버전 원장 기록, 성능예측표, 보고서, 결과 파일) 뒤 시간 제한에 닿으면 CONTINUE 대신 ok + `UNVERIFIED:`(같은 명령 재실행으로 v2가 또 생기던 문제). CONTINUE 상한 300번(같은 progress 2번이면 멈춤). 구분자 실수(`--where`/`--exclude-where` 조건 사이 `,`, `-i` `k=v` 사이 `;`·띄어쓰기, `--eval` 식 사이 `,`, `--dtypes`/`-x`/`-y` 구분)는 고친 전체 명령 `[추천]`. 인자 오류: 줄임말 끔, 같은 뜻 옵션은 `[추천]` 전체 명령, 비슷한 철자는 `[후보]` |
@@ -130,19 +132,19 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 | ml-kit 2.9.52~2.9.58 | `--meta`·`--encoding`·보고서 `-d/-v` 삭제, CSV는 UTF-8 BOM, 학습 결과 `excluded_reasons`/`excluded_preview`, 예측 파일 레이아웃 그 자리 복구(`recovered`), 누수 `[후보]` 전체 명령 둘, `-i` 빠진 입력은 `needs_user_decision`+중앙값 명령, `--exclude-where`, 여러 타겟 학습 `CONTINUE:`, `--sweep`과 `--maximize/--minimize --vary --where` |
 | ml-kit 2.9.40 | 회사 PC Gemma 시험 R1·R2가 opencode 명령 시간 제한(120초)에 끊김 -> 성능예측표 후보 학습을 저장하며 100초 전에 `CONTINUE:`로 멈추고 같은 명령으로 이어서 (R10). SKILL·전역 지침에 `CONTINUE:` 행동, 채점기는 CONTINUE 뒤 재실행을 반복으로 세지 않음 |
 | ml-kit 2.9.39 | 학습 결과에 타겟별 중요 입력 `top_features`(최고 모델의 순열 중요도 비중, 최대 5개, 원래 열 이름)와 preview의 "중요 입력". SKILL.md에 버전 비교(`--history`), 파일 예측 엑셀 저장(`--out`), 파생변수(`--eval`), 예측 범위·확률 열 추가. SKILL.md 옵션이 argparse에 있는지 검사하는 테스트 |
-| 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\CLI-dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\CLI-dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`CLI-dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
+| 개발 도구 | 내보내기는 `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell 5.1의 `\| Out-File`이나 `>`는 한글을 깨뜨림, 채점기가 깨진 대화를 찾으면 [ERROR]). "한 번에 보내기"는 시나리오별로 나눠 채점(참고). 최종 답변은 시나리오 명령 뒤의 글. 러너 `--agent` 모드 JSON 계약(도움말 포함 `verified`), office 러너 `unverified_count`. 3차: 한 번에 보내기에서 가운데 시나리오의 재실행이 다음 시나리오로 넘어가지 않음, X2 답변 정규식이 틀린 답("바꿀 수 있습니다")을 받지 않음, `C:\AIKIT\dev`에서 이름만 쓴 러너 실행·glob 파일 목록·`*.md` grep은 위반 아님. 4차: X2는 마크다운으로 시작하는 "아니요"도 정답, "네,"로 시작하거나 "바꿀 수 있습니다"면 오답(`answer_none`), `C:\AIKIT\dev` 아래 상대 경로 러너 실행 허용, glob 패턴에 `.py`가 있으면(`*.{py,md}` 포함) 위반, `*.md` grep도 path가 .py 파일이면 위반. 5·6차: X2 오답은 "바꿀 수 있습니다", "코드·설정 파일을 고치면", "네"만 있는 줄로 판정(정중한 "네,"나 "예:" 예시 줄로 시작하는 정답은 통과), 채점 요약 표의 정규식 `\|` 처리. 7차: X2 판정을 실제 답변 형태 66개 말뭉치(`AIKIT/dev/tests/x2_answers.json`)로 맞춤 ("변경할 수는 없"·"불가" 정답 인정, 지어낸 `--outlier`류 옵션·코드/설정 파일 수정 안내는 오답). 8차: X2 답변 판정은 참고(최종은 --judge나 사람이 확인), 말뭉치 확대, P2/M1/M3/P3/R1/P1 답변 규칙 보완. 9차: M3 "범위를 초과", P3 "운전 폭"·"operating window" 인정, P2는 "90% 범위"만으로는 통과하지 않음 |
 
 ## 3-0. 집 PC에서 할 일 (Gemma 없음, WinPython 3.13, Office 16)
 2026-11-07 아래 1~5를 모두 마침 (결과는 4장). 그 뒤 ml-kit 2.9.73 · office-cli 1.4.81이 나와 3·4를 다시 돌린다.
 상세: `docs/HOME_PC_CHECK.md`. 요약:
-1. main을 받아 `CLI`는 `C:\CLI`, `CLI-dev`는 `C:\CLI-dev`로 붙여넣음 (`C:\CLI\python`은 둠). 2026-11-07부터 집 PC도 WinPython 3.13(`C:\CLI\python`)과 Office 16(2019).
-2. `C:\CLI\setup.bat`을 관리자 권한으로 실행 -> 새 PowerShell 창에서 `python -c "import sys; print(sys.executable, sys.version)"`가 `C:\CLI\python`의 3.13.x인지 확인.
-   `C:\CLI\python`에 라이브러리가 없으면 `pip_install.txt` 2-1 명령을 그 python으로 실행. `opencode.exe 없음` FAIL 1개는 환경 차이.
-3. `python CLI-dev\run_simplify_check.py --label 집PC` (10~15분): 틀린 명령 -> 도구가 준 고친 명령을 PowerShell 5.1로 그대로 실행 -> 성공하는지,
+1. main을 받아 `CLI`는 `C:\AIKIT`, `AIKIT/dev`는 `C:\AIKIT\dev`로 붙여넣음 (`C:\AIKIT\python`은 둠). 2026-11-07부터 집 PC도 WinPython 3.13(`C:\AIKIT\python`)과 Office 16(2019).
+2. `C:\AIKIT\setup.bat`을 관리자 권한으로 실행 -> 새 PowerShell 창에서 `python -c "import sys; print(sys.executable, sys.version)"`가 `C:\AIKIT\python`의 3.13.x인지 확인.
+   `C:\AIKIT\python`에 라이브러리가 없으면 `pip_install.txt` 2-1 명령을 그 python으로 실행. `opencode.exe 없음` FAIL 1개는 환경 차이.
+3. `python AIKIT\dev\run_simplify_check.py --label 집PC` (10~15분): 틀린 명령 -> 도구가 준 고친 명령을 PowerShell 5.1로 그대로 실행 -> 성공하는지,
    ml-kit 2.9.72 새 기능(N1~N4), office-cli 1.4.80 BOM 비교(B1~B5), 2.9.73·1.4.81(C1~C3 `[후보]` 번호·`--query`, E1 빈 결과, D1~D4 `--dry-run`). 모두 39항목.
    2026-11-07 집 PC는 31항목 PASS. 새 8항목 중 C1~C3·E1은 클라우드(bash) PASS, D1~D4는 Office가 필요해 집 PC에서 처음 봄.
-4. 시간이 되면 `python CLI-dev\run_all_tests.py --label 집PC --only diag,pytest,beta,ml,office` (1~2시간).
-5. 실패는 원인을 찾아 고치고(회귀 테스트와 함께), 해당 도구 테스트 + `CLI-dev/tests`를 돌린 뒤 같은 브랜치에 커밋·푸시. 결과 파일은 `docs/test_logs/`.
+4. 시간이 되면 `python AIKIT\dev\run_all_tests.py --label 집PC --only diag,pytest,beta,ml,office` (1~2시간).
+5. 실패는 원인을 찾아 고치고(회귀 테스트와 함께), 해당 도구 테스트 + `AIKIT/dev/tests`를 돌린 뒤 같은 브랜치에 커밋·푸시. 결과 파일은 `docs/test_logs/`.
 
 ## 3-1. 클라우드에서 한 일 (2026-11-08, 집 PC opencode 모델 비교 뒤)
 작업 브랜치 `claude/home-pc-check-2973`. 근거: 4장 "집 PC opencode 모델 비교"와 `docs/test_logs/opencode_모델비교_20261107/`.
@@ -150,7 +152,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 2. `run_all_tests.py --gemma-only A1,P1`, `--gemma-model <모델>,<예비 모델>`: 사용량 제한(아무것도 못 한 실행이고 429·rate limit·quota)이면
    예비 모델로 같은 요청을 다시, 요청별 모델은 `models.json`·실행 기록·채점 보고서 머리에. 시험 자료 준비 S0·S1은 러너가 직접 실행(모델에 보내지 않음).
 3. 모델이 되풀이한 실수의 원인과 대응:
-   - `C:\CLI-dev\ml-kit\ml_train.py`: S0 요청의 `C:\CLI-dev\ml-kit\tools` 경로를 따라 함 -> S0을 러너가 실행, 전역 지침 3장 2번 "도구는 `C:\CLI`에만".
+   - `C:\AIKIT\dev\ml-kit\ml_train.py`: S0 요청의 `C:\AIKIT\dev\ml-kit\tools` 경로를 따라 함 -> S0을 러너가 실행, 전역 지침 3장 2번 "도구는 `C:\AIKIT`에만".
    - 한 건 예측을 `--eval "온도=182; ..."`·`-x`·파일 만들기로: 학습 결과 `next_commands`에 `-f` 틀과 재학습 `--eval`만 있었음 ->
      `-i "<입력>=<값>,..."` 틀(2.9.75), `--eval` 상수식 거절, `-i`의 `<값>`·글자는 멈춤(2.9.76).
    - 없는 `tools\*.py`: 옛 지침 때(02)만. 전역 지침 3장 4번 "실행하는 .py는 스킬 표의 것뿐".
@@ -179,10 +181,10 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
      | r1 | 2/2 | 2/2 | - |
      | r2 | 1/2 (답변에 ↓↑) | 2/2 | 예측 지시문 "높인/낮춘 입력 글 그대로" |
      | r3 | 2/2 | 0/2 (`office-cli\tools\excel.py`) | 지침 4번의 예시 이름 `tools\` 지움 |
-     | r4 | 2/2 | 1/2 (`python -c`로 30번 넘게 출력 풀기, `C:\CLI`에 임시 json 8개) | `train` 하위 명령·`--x-cols` `[추천]`, 지침 "출력을 다시 풀지 않기" |
-     | r5 | 1/2 (답변에 실측 비교값 없음) | 0/2 (`skills\office-excel\excel.py`, 지어낸 `.pkl`, `C:\CLI\tmp_out.txt`) | (루프 멈춤) |
+     | r4 | 2/2 | 1/2 (`python -c`로 30번 넘게 출력 풀기, `C:\AIKIT`에 임시 json 8개) | `train` 하위 명령·`--x-cols` `[추천]`, 지침 "출력을 다시 풀지 않기" |
+     | r5 | 1/2 (답변에 실측 비교값 없음) | 0/2 (`skills\office-excel\excel.py`, 지어낸 `.pkl`, `C:\AIKIT\tmp_out.txt`) | (루프 멈춤) |
 
-     합계 Gemma 8/10, solar-mini4 5/10. r1 뒤로는 고치는 것보다 모델이 회차마다 흔들리는 폭이 큼. 모델이 `C:\CLI`에 만든 파일은 지움.
+     합계 Gemma 8/10, solar-mini4 5/10. r1 뒤로는 고치는 것보다 모델이 회차마다 흔들리는 폭이 큼. 모델이 `C:\AIKIT`에 만든 파일은 지움.
 8. 클라우드에서 볼 것 (7의 결과):
    - solar-mini4가 SKILL.md를 읽고도 스크립트 경로를 바꿔 씀(`tools\`, `skills\office-excel\`) -> 경로를 줄이는 방법(스킬 맨 위에 한 줄로 전체 명령 1개)을 검토.
    - Gemma P1의 "실측 비교값" 빠뜨림: 예측 지시문이 길어 뒤쪽 지시를 놓치는지 (지시문을 짧게, 꼭 알릴 것 먼저).
@@ -196,13 +198,13 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 나아지거나 지침·스킬이 짧아지는 수정일 때만 고친다 (지침·스킬 문장을 늘려야만 고쳐지는 것은 하지 않음).
 1. Gemma r5 P1(실측 비교값 빠뜨림): ml-kit 2.9.78. 한 건 예측의 알릴 값(예측값, 90% 범위, 실측 비교값, 입력별 영향)을 모두 `preview`에 넣고
    지시문은 "preview를 글 그대로"로 짧게 (약 350자 -> 160자 안팎). "높인/낮춘 입력 글 그대로"는 유지.
-2. 러너의 시험 폴더 밖 쓰기 감시(`C:\CLI`·드라이브 맨 위 목록 비교, 지우기, `outside_writes.json`, 채점 실패)는 넣었다가 폐기 (2026-11-08 밤).
+2. 러너의 시험 폴더 밖 쓰기 감시(`C:\AIKIT`·드라이브 맨 위 목록 비교, 지우기, `outside_writes.json`, 채점 실패)는 넣었다가 폐기 (2026-11-08 밤).
    도구 문제가 아니고, 지침이 위치를 정하지 않으며, r4·r5 사례는 "임의 파이썬"·".py 만들기" 규칙이 이미 실패로 셈.
 3. 전역 지침 3장 5번: 먼저 묻는 것은 셋뿐(`confirm_commands`, 5장의 일, 도구가 `[후보]`·`needs_user_decision`으로 멈춘 때)으로 한 문장에 모음
    (4장·5장과 같은 범위).
 4. 스킬 맨 위 "그대로 실행할 전체 명령 1줄"(solar-mini4의 경로 바꿔 쓰기): 하지 않음. 스킬 표가 이미 전체 경로 명령이라 한 줄을 더하면 길어지기만 하고
    (규칙 7: 짧게), Gemma는 r1~r5에서 경로 실수가 없었음.
-5. 집 PC에서 다시 확인할 것: `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma-only A1,P1 --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
+5. 집 PC에서 다시 확인할 것: `python C:\AIKIT\dev\run_all_tests.py --label 집PC --gemma-only A1,P1 --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
    (Gemma 먼저, solar-mini4 예비). 기대: P1 답변에 예측값·90% 범위·실측 비교값과 높인/낮춘 입력이 글 그대로, A1은 묻지 않고 학습 실행.
    결과 파일의 "요청별 모델"이 Gemma인 요청만 합격 판정에 씀.
 6. 집 PC 확인(2026-11-08 오후, ml-kit 2.9.78): Gemma 4 26B A1·P1 2/2 (두 요청 모두 Gemma, 43초, solar-mini4로 넘어간 요청 없음).
@@ -219,7 +221,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
    ml-kit CHANGELOG 남은 할 일.
 4. 시험 폴더 밖 쓰기 감시(러너)는 폐기.
 5. 집 PC에서 다시 확인할 것: 모델이 보는 글이 바뀜(`[후보]` 번호, office 한 글자 옵션, 전역 지침 4장).
-   `python C:\CLI-dev\run_all_tests.py --label 집PC --gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
+   `python C:\AIKIT\dev\run_all_tests.py --label 집PC --gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`
    (Gemma 먼저, solar-mini4 예비, R 묶음은 보내지 않음). 함께 `run_beta_check.py`(F 제외), `run_simplify_check.py`, pytest 전체 소요 시간.
 
 ### 집 PC 확인 (2026-11-08 밤, ml-kit 2.9.79 -> 2.9.80, office-cli 1.4.88 -> 1.4.89)
@@ -245,7 +247,7 @@ Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261
   - 모델 행동만 (기록, 고치지 않음): A3 명령을 답변에 적기만 하고 실행 안 함. O1 `excel.py check`에 `--target` 없이 실행하고 문서를 열어 달라고 함.
     O5 필요 없는 `--overwrite`. X2 답변(참고).
 - `[후보]`: P3 세 번째에서 Gemma가 `[후보] 1) '불순물'`을 번호와 함께 보여 주고 물음 (실행하지 않음). 한 글자 옵션을 쓴 요청은 없었음 (단순성 점검으로 확인).
-- 다시 돌린 시험 (고친 곳만): ml-kit `test_contract`·`test_predict`·`test_names`·`test_safety`·`test_skill_docs`·`test_map`, `CLI-dev/tests`, office-cli 전체 모두 통과.
+- 다시 돌린 시험 (고친 곳만): ml-kit `test_contract`·`test_predict`·`test_names`·`test_safety`·`test_skill_docs`·`test_map`, `AIKIT/dev/tests`, office-cli 전체 모두 통과.
 
 ## 3-4. 클라우드에서 한 일 (2026-11-09, 집 PC 수정 검토와 Gemma 남은 것, ml-kit 2.9.81~2.9.82, office-cli 1.4.90)
 1. 집 PC에서 고친 것 검토 (리눅스):
@@ -273,9 +275,9 @@ Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261
    도구가 내는 명령, 안내문, 스킬, 전역 지침, README, 채점 시나리오 정규식 모두 긴 이름). 시험 폴더 밖 쓰기 감시는 다시 넣지 않음.
 4. 집 PC에서 다시 확인할 것 (겹치지 않게):
    - `python -m pytest -q` (저장소 폴더): diag 시험 우회를 되돌렸으니 Windows 저장소 전체에서 `test_diag_template_damage_is_warn_when_tools_do_not_need_it`
-     통과 확인. 보고서·성능예측표는 `python -m pytest -q -m report CLI-dev/ml-kit/tests`.
-   - `python C:\CLI-dev\run_simplify_check.py --label 집PC` (실제 PowerShell에서 `[후보]` 번호 명령).
-   - `python C:\CLI-dev\run_all_tests.py --label 집PC --only gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`:
+     통과 확인. 보고서·성능예측표는 `python -m pytest -q -m report AIKIT/dev/ml-kit/tests`.
+   - `python C:\AIKIT\dev\run_simplify_check.py --label 집PC` (실제 PowerShell에서 `[후보]` 번호 명령).
+   - `python C:\AIKIT\dev\run_all_tests.py --label 집PC --only gemma --gemma-model "openrouter/google/gemma-4-26b-a4b-it,upstage/solar-mini4"`:
      A3이 `<조건>` 틀로 실행하는지, O1이 `--target`을 붙이는지, P3이 `[추천]`/`[후보]`대로 하는지,
      ml-kit 명령을 긴 이름(`--file`, `--model`, `--input`, `--features`, `--targets`)으로 쓰는지 (짧은 이름을 쓰면 `[추천]`을 1번 실행하는지).
 
@@ -303,7 +305,7 @@ Windows 11, Python 3.13.13, Office 2019. 결과 `docs/test_logs/pr69_집PC_20261
 3. office-cli 1.4.91: `excel style --range "B2;D5;F7"`로 떨어진 칸 여러 개를 명령 한 번에 칠함 (행마다 최대 차이 칸을 하나씩 칠하던 것).
 4. ml-kit 2.9.85: 데이터셋 만들기를 `ml_dataset.py`(스킬 `ml-dataset`)로 떼어 냄. `pick`(맞는 행만), `exclude`(`제외` 열에 이유), CSV 기본,
    다음 학습 명령은 원본의 마지막 학습과 같은 타겟·입력. `ml_train.py --exclude-where`는 없앰. `--eval`(파생변수)은 학습에 그대로.
-5. 전역 지침 8장: 도구에 없는 일은 알리고 `C:\CLI\data\scripts`의 파이썬 스크립트로 직접 (Office COM은 한 번 잡고 범위를 배열로). Gemma Y1.
+5. 전역 지침 8장: 도구에 없는 일은 알리고 `C:\AIKIT\data\scripts`의 파이썬 스크립트로 직접 (Office COM은 한 번 잡고 범위를 배열로). Gemma Y1.
    run_all_tests의 pytest 단계는 테스트 파일마다 병렬(코어 수 - 1개, 클라우드 25분 -> 10분).
 6. 회사 PC에서 확인할 것: Gemma Y1(도구에 없는 구간별 평균을 스크립트로), A3("생산효율이 80보다 큰 행은 빼고 다시 학습") -> `ml_dataset.py exclude` 뒤 그 결과의 학습 명령. 성능예측표를 엑셀로 열어 계산이 되는지(결과 `export_verified`, 경계값 위·아래 조건 포함), 파일 열기·계산 속도
    (계산기 한 줄, 일괄계산 500행), 문서 보안 아래에서 열리는지. 실제 데이터의 잎 수(상한 40만 개에 걸리는지).
@@ -368,16 +370,109 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
 - 사람용 가이드 `docs/guide/*.html`을 1.6.3·2.9.90에 맞게 갱신. 루트 README 트리, `docs/ENVIRONMENT.md` 도구 현황도.
 - 남은 확인 (회사 PC): 전체 회귀 `run_all_tests.py` 1회, 사내 LLM으로 `--only gemma --gemma-model <사내 모델>`.
 
+## 3-12. 다음 작업: OpenCode 설정을 C:\AIKIT 기준으로 (집 PC, OpenCode 2.2.5, 2026-11-12~)
+
+### 배경 (사용자 결정 대기)
+- 지금은 `setup.py`가 전역 지침(`AIKIT\opencode\AGENTS.md`), 스킬 11개, `opencode.jsonc`를 사용자 폴더 `%USERPROFILE%\.config\opencode\`로 복사한다.
+- 사용자 생각(2026-11-11): OpenCode 전역 폴더가 아니라 우리 도구 폴더 `C:\AIKIT`를 기준으로 하자. 원본이 곧 쓰는 파일이 되어 복사·백업·옛 폴더 정리가 없어지고,
+  반입 때 `C:\AIKIT`만 바꾸면 바로 반영된다.
+- 사용자는 2.2.5 이전에도 프로젝트별 스킬·지침을 둘 수 있었다고 알고 있음 (아래 2로 확인).
+
+### OpenCode 2.2.7 소스에서 확인한 것 (클라우드, 2.2.5에서는 확인 전)
+1. 환경 변수 `OPENCODE_CONFIG_DIR`가 있으면 전역 설정 폴더를 그 폴더로 바꾼다 (`packages/cli/src/index.ts`, `server-process.ts`의 `Global.layerWith({ config })`).
+   그 폴더의 `AGENTS.md`, `opencode.json`/`opencode.jsonc`, `skills\<이름>\SKILL.md`를 읽는다.
+2. 프로젝트별: 세션 작업 폴더에서 위로 올라가며 `AGENTS.md`(프로젝트 루트에서 멈춤)와 `.opencode\skills\<이름>\SKILL.md`, `opencode.jsonc`를 찾아
+   전역 위에 더한다 (`config/plugin/instruction.ts`, `config/discovery.ts`, `config/plugin/skill.ts`). 전역을 끄지는 못함.
+3. 그래서 `C:\AIKIT` 맨 위에 `AGENTS.md`를 두고 하위 폴더가 찾게 하는 방법은 안 됨: 지침은 프로젝트 루트(`C:\AIKIT\work\<프로젝트>`)에서 멈춰 위로 안 올라감.
+4. 설정의 `skills.paths`(목록)로 스킬 폴더를 더할 수 있음 (`config/normalize.ts`) -> `C:\AIKIT\ml-kit\skills`, `C:\AIKIT\office-cli\skills`를 그대로 가리킬 수 있음.
+5. Web UI의 프로젝트 목록은 브라우저 프로필에 저장 (밖에서 미리 등록 불가). `web.bat`은 서비스를 `C:\AIKIT\work`에서 띄움.
+6. TUI·Web UI는 백그라운드 서비스 하나를 같이 씀. 서비스는 처음 뜰 때의 환경 변수를 계속 쓰므로 바꾼 뒤 `opencode.exe service stop` 필요
+   (setup.py가 끝에 이미 끔, 2026-11-11).
+
+### 집 PC에서 확인할 것 (먼저, 코드는 그다음)
+PowerShell(일반 창):
+```powershell
+C:\AIKIT\opencode.exe service stop
+$env:OPENCODE_CONFIG_DIR = "C:\AIKIT\opencode"
+C:\AIKIT\opencode.exe debug config          # 설정을 읽은 곳 목록에 C:\AIKIT\opencode가 나오는지 (2.2.5에 없으면 건너뜀)
+C:\AIKIT\opencode.exe                       # 같은 창에서 TUI: 사내/집 LLM 연결, "지침과 스킬 경로 알려줘", 스킬 목록
+C:\AIKIT\opencode.exe service stop          # 끝나면 (환경 변수는 창을 닫으면 없어짐)
+```
+- 확인 A: 전역 지침이 `C:\AIKIT\opencode\AGENTS.md`에서 읽히는지, `opencode.jsonc`(모델 설정)가 `C:\AIKIT\opencode`에서 읽히는지.
+- 확인 B: `C:\AIKIT\opencode\opencode.json`에 `{"skills": {"paths": ["C:/AIKIT/ml-kit/skills", "C:/AIKIT/office-cli/skills"]}}`를 두면 스킬 11개가 보이는지,
+  `opencode.json`과 `opencode.jsonc`가 함께 읽히는지(병합). 안 되면 `C:\AIKIT\opencode\skills\`로 복사하는 방식.
+- 확인 C (프로젝트별): `C:\AIKIT\work\시험A\AGENTS.md`("모든 답의 맨 앞에 [A폴더]")와 `C:\AIKIT\work\시험A\.opencode\skills\test-hello\SKILL.md`를 두고
+  `시험A`와 `시험B`에서 각각 새 세션: A에서만 [A폴더]와 인사 스킬이 나오는지. Web UI(`web.bat`)로도 같은지.
+- 확인 D: 로그인·대화 기록이 사라지지 않는지 (설정 폴더가 아니라 데이터 폴더에 있다고 봄).
+
+### 확인되면 할 일 (코드)
+1. `setup.py`: 복사 대신 사용자 환경 변수 `OPENCODE_CONFIG_DIR=<C:\AIKIT>\opencode` 설정(HKCU\Environment, 원래 값 보관, 다시 읽어 확인, 환경 변경 알림),
+   `C:\AIKIT\opencode\opencode.json`(스킬 경로·권한 등 우리가 관리하는 설정, 저장소에 둠) 확인, 사용자 폴더의 옛 복사본 정리(보관 후),
+   서비스 끄기. `opencode.jsonc`(사내 LLM 주소)는 사용자가 `C:\AIKIT\opencode\`에 두는 그대로 (git 제외).
+   `--check`, 테스트(`AIKIT/dev/tests/test_setup.py`) 함께.
+2. `skill.py`: 사용자 스킬 위치(`C:\AIKIT\opencode\skills` 또는 별도 폴더를 `skills.paths`에), 프로젝트 스킬 옵션(`--project <폴더>` -> `<폴더>\.opencode\skills`).
+   skill-maker 스킬, 테스트.
+3. 전역 지침 9장(위치 표), README 배포 방법, `docs/opencode/README.md`, 사용 가이드 FAQ, AGENTS.md 폴더 구조, CHANGELOG.
+4. 회사 PC에서 반입·setup 뒤 TUI·Web UI·사내 LLM 시험(`run_all_tests.py --only gemma`)으로 확인.
+
+### 집 PC 확인과 구현 (2026-11-12, OpenCode 2.2.5)
+확인 (명령·`opencode run`, TUI, Web UI):
+
+| 확인 | 결과 |
+|---|---|
+| A. `OPENCODE_CONFIG_DIR` | 됨. `opencode debug paths`의 config가 그 폴더로 바뀌고 설정 폴더 전체를 대신함 (옛 사용자 폴더의 스킬 9개는 안 보임) |
+| B. `skills.paths`, `opencode.json` + `opencode.jsonc` | 됨. 두 파일을 합쳐 읽고, `skills.paths`는 상대 경로(`../ml-kit/skills`)도 설정 파일 폴더 기준으로 읽음 |
+| C. 프로젝트별 `AGENTS.md`, `.opencode\skills` | 됨. 그 폴더에서 연 세션에만 더해짐 (TUI, Web UI, `opencode run` 모두) |
+| D. 로그인·대화 기록 | 그대로 (데이터 폴더 `%USERPROFILE%\.local\share\opencode`는 바뀌지 않음) |
+
+- 스킬 목록에 우리 것이 아닌 `opencode`, `report`가 함께 나옴: OpenCode에 들어 있는 스킬로 보임 (어느 폴더에도 없음).
+- 구현: 배포 폴더 이름 `C:\AIKIT`(저장소 `AIKIT/`, `AIKIT/dev/`), `AIKIT/opencode/opencode.json`, `setup.py`(환경 변수, 옛 전역 설정 정리,
+  `opencode debug paths` 확인), `web.bat`, `skill.py --project`, skill-maker 스킬, 전역 지침 9장, README·가이드, 테스트 (office-cli 1.6.5 CHANGELOG).
+- 남은 것: 회사 PC에서 반입·setup 뒤 TUI·Web UI·사내 LLM 시험(`run_all_tests.py --only gemma`). 사내 LLM(BEAM/Nemotron)에서도 `OPENCODE_CONFIG_DIR`가 같은지.
+
+### 3-13. 설정 파일 없는 폴더 구성 (2026-11-12 밤, ml-kit 2.9.92, office-cli 1.6.6)
+사용자 요청: 잘 모르는 팀원도 익히게 설정 파일 없이 폴더 구성만으로, 루트는 `C:\AIKIT`, En-Genius와 폴더 모양 호환.
+
+집 PC 확인 (OpenCode 2.2.5, 시험용 설정 폴더):
+
+| 확인 | 결과 |
+|---|---|
+| 설정 폴더 = `C:\AIKIT`, 스킬 경로 설정 없이 `ml-kit\skills`에만 스킬 | 못 찾음 (도구 폴더 안까지 뒤지지 않음) |
+| `C:\AIKIT\skills\<이름>\SKILL.md` | 찾음 |
+| `skills\<묶음>\<이름>\SKILL.md` | 찾음 (2.2.5에서는 되지만 표준 모양이 아니라 쓰지 않음) |
+| `C:\AIKIT\AGENTS.md` | 전역 지침으로 읽음 |
+| 스킬 폴더 안 `scripts\hello.py` | Claude 스킬과 같음: 불러오면 `Base directory for this skill: <스킬 폴더>`와 파일 목록을 모델에 주고, 모델이 전체 경로로 실행 |
+| OpenCode가 설정 폴더에 만드는 것 | `service.json` 하나 |
+
+구성 (`C:\AIKIT` = OpenCode 설정 폴더):
+- `AGENTS.md`(전역 지침), `skills\<이름>\SKILL.md`(기본 11개 + 사용자 스킬, 사용자 스킬의 스크립트는 그 폴더 `scripts\`).
+- 도구(`ml-kit`, `office-cli`)는 여러 스킬이 함께 쓰므로 도구 폴더에 두고, 스킬에는 전체 경로 명령.
+- `opencode.json`은 셸·권한·웹 도구 막기·업데이트 끄기만 (스킬 경로 없음), `opencode.jsonc`는 사내 LLM (PC마다).
+- setup: `OPENCODE_CONFIG_DIR=C:\AIKIT`, 이전 구성(`C:\AIKIT\opencode`, 도구 폴더 안 `skills`)에서 옮김, `opencode.jsonc`의 옛 `"skills"`는 WARN.
+- skill.py: 기본·사용자 스킬 모두 `C:\AIKIT\skills`(이름으로 구분), skill-maker는 스크립트를 스킬 폴더 `scripts\`에.
+
+En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름>/SKILL.md` + `<스킬 이름>/run.py`라 폴더 모양은 같음.
+보관본은 옛 `C:\CLI`와 통합 SKILL.md를 가리켜 그대로는 못 씀. 다시 쓸 때 `run.py`의 경로를 `C:\AIKIT`로, `build.py`가
+`C:\AIKIT\skills\<이름>`에 `run.py`를 더해 zip을 만들게 고침 (사용자 결정: 지금은 폴더 모양만 맞춤).
+
+### 지금 상태 (2026-11-11 밤)
+- 브랜치 `ccr-ecab210c-awib23`. main은 PR #77까지. 그 뒤 커밋(인터넷 금지 지침, 비교 거절 강화, skill.py·skill-maker, ml-kit 2.9.91·office-cli 1.6.4,
+  setup의 서비스 끄기, `C:\AIKIT\work`)은 PR 전. 사용자가 요청하면 PR.
+- 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
-1. 준비: `C:\CLI\ml-kit`, `C:\CLI\office-cli`, `C:\CLI\opencode\AGENTS.md`, `C:\CLI\setup.py`·`setup.bat`, `C:\CLI-dev`를 지우고 새로 붙여넣음
-   (`C:\CLI\python`, `opencode.exe`, `C:\CLI\opencode\opencode.jsonc`는 둠). 시험 폴더는 모두 `C:\CLI-dev\work\` 아래라 함께 지워짐.
-   `C:\CLI\setup.bat` 두 번 클릭(또는 `python C:\CLI\setup.py`)으로 OpenCode 스킬(ml-kit, office 5개: office-excel·office-doc·office-mail·office-spec·office-data),
-   전역 지침(`CLI/opencode/AGENTS.md`), `opencode.jsonc`를 적용하고 시스템 PATH 확인 -> 새 터미널·OpenCode 다시 시작 (옛 `skills\office-cli` 폴더는 보관 후 지워짐)
+1. 준비 (2026-11-12부터 `C:\AIKIT`. 처음이면 옛 `C:\CLI`의 `python`, `opencode.exe`, `opencode\opencode.jsonc`를 `C:\AIKIT`로 옮김):
+   `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`, `C:\AIKIT\dev`, 기본 스킬 11개 폴더(`C:\AIKIT\skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
+   `setup.py`·`setup.bat`·`web.bat`을 지우고 새로 붙여넣음 (`skills` 폴더를 통째로 지우지 않음. `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`,
+   사용자 스킬 폴더, `data\`, `work\`는 둠).
+   시험 폴더는 모두 `C:\AIKIT\dev\work\` 아래라 함께 지워짐.
+   `C:\AIKIT\setup.bat`(관리자 권한, 시스템 PATH가 새 폴더라)으로 `OPENCODE_CONFIG_DIR`·PATH 설정, 옛 전역 설정(`%USERPROFILE%\.config\opencode`)의
+   우리 스킬·지침 정리 -> 새 터미널·OpenCode 다시 시작. 시스템 PATH의 옛 `C:\CLI\python` 항목은 setup이 지우지 않으니 손으로 지움
 2. 자동 점검 (명령 하나, 질문 없음, 40~70분):
    ```powershell
-   cd C:\CLI-dev
+   cd C:\AIKIT\dev
    python run_all_tests.py --label 회사PC
    ```
    - 환경 진단 -> pytest -> ml-kit 베타 점검(F7 엑셀 재계산 포함) -> office-cli 실기 러너 -> 도구 오류 로그. 결과는 `result_회사PC_<시각>.md` 하나
@@ -389,12 +484,22 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
 
 회사 PC에서만 확인할 수 있는 것: 문서 보안(DRM) 영향, Office 16 차트 전달 방식, Gemma의 요청 처리, 사내 API 채점(`--judge`).
 
-배포 절차 (사용자 PC, `C:\CLI` 하나만 줌): `CLI` 폴더(저장소 `CLI/` + WinPython `python\` + `opencode.exe`)를 `C:\`에 복사 ->
-사내 LLM 주소가 든 `opencode.jsonc`를 `C:\CLI\opencode\`에 넣어 둠(git 제외) -> `C:\CLI\setup.bat` 두 번 클릭 -> 새 터미널·OpenCode 재시작.
-`setup.py`가 바꾸는 것: OpenCode 설정 폴더의 스킬·`AGENTS.md`·`opencode.jsonc`(이전 파일은 `C:\CLI\data\setup_backup_<시각>`),
-시스템 PATH(`C:\CLI\python`, `C:\CLI\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
+배포 절차 (사용자 PC, `C:\AIKIT` 하나만 줌): `AIKIT` 폴더(저장소 `AIKIT/` + WinPython `python\` + `opencode.exe`)를 `C:\`에 복사 ->
+사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\`에 넣어 둠(git 제외) -> `C:\AIKIT\setup.bat` 두 번 클릭 -> 새 터미널·OpenCode 재시작.
+`setup.py`가 바꾸는 것: 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`, 옛 설정 정리(이전 파일은 `C:\AIKIT\data\setup_backup_<시각>`),
+시스템 PATH(`C:\AIKIT\python`, `C:\AIKIT\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
 
 ## 4. 지난 실기 결과 요약
+- 회사 PC(2026-11-11 저녁, ml-kit 2.9.90 / office-cli 1.6.3, 전체 회귀 + 사내 LLM 시험):
+  - 전체 회귀: diag 18/18, beta 29/29, office 실기 PASS 102·FAIL 0, pytest 4558 passed·실패 3. 실패 3건은 도구 결함이 아님:
+    감시 시험 1건(2.9.90에서 시계 기준이 바뀐 뒤 시험이 맞지 않음), "실패 항목 없이 끝남" 2건(다시 돌려 모두 통과했는데 러너가 실패로 셈). 둘 다 고침.
+    PC가 느려진 시간대(파이썬 시작 0.8초 -> 25초)의 시간 초과 4건은 다시 돌려 통과(WARN)
+  - 사내 LLM 자동 시험(21건): Gemma 15/21, BEAM 18/21. 조치는 ml-kit 2.9.91, office-cli 1.6.4 CHANGELOG.
+    도구 결함 2건(데이터셋을 만든 뒤 도구가 준 학습 명령이 단위 이름 때문에 실패, 예측의 `--points`), 채점 기준 2건(R1 문구, Y1 스크립트),
+    스킬 안내 1건(워드 -> PPT), 모델이 지침을 어긴 것 3건(수식 표기, `python -c`, 미리보기 전에 물음: 지침 문장을 강화).
+    채점 기준을 고친 뒤로 보면 Gemma 16/21, BEAM 20/21에 해당 (BEAM의 남은 1건은 워드 -> PPT를 transfer로 먼저 시도)
+  - 대화창 확인: Gemma는 비교 거절 안내·일정 만들기와 지우기·선택한 칸·지침 위치 모두 통과. 상위 모델은 "두 엑셀 비교"를 파이썬으로 처리 -> 지침 8장 강화.
+    스킬 만드는 법을 묻자 인터넷 검색을 시도 -> 지침 2장 강화, skill-maker 스킬
 - 회사 PC(2026-11-11 아침, ml-kit 2.9.89 / office-cli 1.6.2, 전체 `run_all_tests.py` 1시간 24분 + `run_win_tests.py --only L,M`):
   - diag 18/18, beta 29/29(F7~F9 포함), office 실기 PASS 100·FAIL 2, pytest 4581 passed·3 failed. 결과 `result_PC_20261111_063942.md`, `report_20261111_085931.txt`
   - pytest 실패 3건: 2건은 PC가 느려진 시간대(파이썬 시작 0.6초 -> 최대 20초)의 600초 시간 초과(끈 뒤 출력 파이프를 기다려 시험 하나가 47분).
@@ -405,10 +510,10 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
   - 같은 날 오후(1.6.3 반입): `run_win_tests --only L,N` PASS 26(UNVERIFIED 1건은 일부러 틀린 수식 L3), ml-kit 시간 제한 시계 통과.
     대화창(큰 모델, Gemma)에서 Outlook 일정 만들기·지우기 확인. 그 과정에서 찾은 것: 일정이 9시간 앞당겨 저장(pywin32 시각 변환) -> 수정,
     일정 지우기가 없어 모델이 파이썬 코드를 직접 짬 -> `event --action delete` 추가, 제한된 보기와 시트 보호는 한 안내로(사용자 결정)
-- 집 PC(2026-11-07 저녁, WinPython 3.13.13 `C:\CLI\python`, Office Professional Plus 2019 x64로 다시 설치, ml-kit 2.9.73):
-  - 준비: `C:\CLI\python`에 라이브러리가 없어 setup.bat의 동작 확인이 실패했음 -> `pip_install.txt` 2-1로 설치 (HOME_PC_CHECK 1장에 반영)
+- 집 PC(2026-11-07 저녁, WinPython 3.13.13 `C:\AIKIT\python`, Office Professional Plus 2019 x64로 다시 설치, ml-kit 2.9.73):
+  - 준비: `C:\AIKIT\python`에 라이브러리가 없어 setup.bat의 동작 확인이 실패했음 -> `pip_install.txt` 2-1로 설치 (HOME_PC_CHECK 1장에 반영)
   - 단순화 점검(office-cli 1.4.81): 38/39. D2는 점검 스크립트가 `sheet delete`에 `--name` 대신 `--sheet`를 넘긴 실수 -> 고친 뒤 39/39 (결과 `result_simplify_집PC_20261107_190152.md`, `..._190734.md`)
-  - 전체 회귀(office-cli 1.4.81): **모든 단계 PASS**. diag 18/18(`C:\CLI\python` FAIL 없음), pytest 4254 passed·9 skipped, beta 27/27,
+  - 전체 회귀(office-cli 1.4.81): **모든 단계 PASS**. diag 18/18(`C:\AIKIT\python` FAIL 없음), pytest 4254 passed·9 skipped, beta 27/27,
     ml-kit 실기 14/14(Office 2007에서 FAIL이던 M4 통과), office-cli 실기 79/79·ENV-SKIP 0(PDF 내보내기 D1·D4 실행). 결과 `result_집PC_20261107_201824.md`
   - office-cli 1.4.82(Office 2007 지원 폐기) 실기: diag + office 79/79, 단순화 39/39 (결과 `result_집PC_1482_20261107_212420.md`, `result_simplify_집PC_1482_20261107_213048.md`)
   - 고친 것: 단순화 점검 D2 인자, 러너 결과 파일의 Office 작성자 이름(`author`) 가림, setup.py 스킬 덮어쓰기 표시의 옛 버전
@@ -421,7 +526,7 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
   | 01 | solar-mini4 | opencode 셸 cmd, 옛 지침(officecli) | 실패 | 실패 | 실패 (X1도 실패: `pip install --upgrade scikit-learn` 실행, 1.9.0으로 되돌림) |
   | 02 | solar-mini4 | 셸 powershell | 통과 | 실패(없는 `tools\*.py`) | 실패(없는 도구, 예측 못 함) |
   | 03 | solar-pro4 | 셸 powershell | 통과 | 실패(머리글 옵션 생략, 학습은 됨) | 실패(bash 문법, 파일 만들기) |
-  | 04 | solar-pro4 | main 지침·스킬, rg 설치 | 통과 | 실패(경로 `C:\CLI-dev\ml-kit` 틀림 -> 바로잡아 학습) | 실패(`-f` 없는 CSV, 파일 쓰기가 거절됨) |
+  | 04 | solar-pro4 | main 지침·스킬, rg 설치 | 통과 | 실패(경로 `C:\AIKIT\dev\ml-kit` 틀림 -> 바로잡아 학습) | 실패(`-f` 없는 CSV, 파일 쓰기가 거절됨) |
   | 05 | solar-pro4 | + 작업 폴더 밖 쓰기 허용 | 통과 | 실패(경로 틀림 뒤 실행 대신 되물음) | 실패(S0 명령 재실행) |
   | 06 | Gemma 4 26B | 05와 같음 | 통과 | 통과 | 통과(`-x` 실수 -> 스킬 열어 `-i`) |
   | 07 | solar-mini4 | ml-kit 2.9.74 | 통과 | 실패(답변의 `→` 기호만) | **통과**(`-f` 없는 파일 -> 새 안내 -> `-i`) |
@@ -441,21 +546,21 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
     결과 `docs/test_logs/result_simplify_집PC_20261107_133952.md`
   - 전체 회귀 `--only diag,pytest,beta,ml,office` (1시간 24분): pytest 4223 passed·7 skipped(LibreOffice 없음, Linux 전용, 링크 불가), beta check 27/27,
     office-cli 실기 PASS 77·ENV-SKIP 2(PDF 내보내기 없음), 도구 오류 로그 0건. ml-kit 실기 13/14: M4는 11-06과 같은 Excel 2007 UTF-8 BOM 한계(아래).
-    diag FAIL 1건은 `CLI\python`이 PATH에 없는 환경 차이. 결과 `docs/test_logs/result_집PC_20261107_134012.md`
+    diag FAIL 1건은 `AIKIT\python`이 PATH에 없는 환경 차이. 결과 `docs/test_logs/result_집PC_20261107_134012.md`
   - `setup.py --no-path`: 스킬 9개(ml 4, office 5)·전역 지침 복사, FAIL은 `opencode.exe 없음` 1개(환경 차이). 이 PC에는 옛 `skills\ml-kit`이 없어 정리 줄은 안 나옴
   - 고친 코드 없음
 - 집 PC(2026-11-06, Office 2007, ml-kit 2.9.69 / office-cli 1.4.77, `--only diag,pytest,beta,ml,office`): 결과 `docs/test_logs/result_집PC_20261106_192244.md`.
   beta check 27/27, office-cli 실기 PASS 77·ENV-SKIP 2(PDF 추가 기능 없음), 새 항목 A2·A3·I26·I28~I31·E8·E10 모두 통과, 도구 오류 로그 0건.
   ml-kit 실기 13/14: M4(결과 CSV를 Excel로 열면 한글)는 Excel 2007이 UTF-8 BOM을 무시하는 한계로 기록 (실행 파일로 직접 열어도 같음, ml-kit README Q1).
   pytest office-cli 1건(`test_skill_size_limit`, office-excel 6173 > 6144)은 점검용 파일을 `core.autocrlf=true`로 풀어 CRLF가 된 탓이며 LF로 다시 풀어 통과
-  (저장소 원본 6123바이트, 한도까지 21바이트). diag FAIL 2건은 이 PC에 `C:\CLI\python`·opencode가 없고 스킬을 복사하지 않은 환경 차이.
+  (저장소 원본 6123바이트, 한도까지 21바이트). diag FAIL 2건은 이 PC에 `C:\AIKIT\python`·opencode가 없고 스킬을 복사하지 않은 환경 차이.
 - 집 PC(2026-10-31, Office 2007, ml-kit 2.9.10 / office-cli 1.4.9): beta check 27/27(F7 포함), pytest 통과, ml-kit 실기 14/14, office-cli 실기 PASS 69·ENV-SKIP 2(PDF 추가 기능 없음), UNVERIFIED 0건, 눈 확인 V1~V7·V9~V10 통과
 - 회사 PC(2026-10-29~30): beta check 26/27(F2), Gemma 12/14(X1·X2에서 도구 코드 읽기 -> 지침 보강, X2 시나리오 변경)
 - 회사 PC(2026-11-04, `run_all_tests.py --only gemma`, opencode CLI 2.2.5, ml-kit 2.9.39): Gemma 12/14. R1(보고서)·R2(성능예측표)가 opencode 명령 시간 제한 120초에 끊겨 결과 JSON 없음(R1은 같은 명령 4번) -> 2.9.40 나눠서 진행(`CONTINUE:`). 나머지 12건 통과, X2 답변 판정 통과(참고)
 
 ## 5. 남은 일
 - 회사 PC 실기 결과 분석과 수정
-- 각 도구 `CLI-dev/<tool>/CHANGELOG.md` 하단 "남은 할 일"
+- 각 도구 `AIKIT/dev/<tool>/CHANGELOG.md` 하단 "남은 할 일"
 - 프로젝트 마무리 때 `docs/test_logs/` 등 로그 이력 정리 (저장소를 다시 만드는 방식)
 - 도구 개발을 마친 뒤 다시 판단하기로 한 검토 (2026-11-01, 지금은 하지 않음):
   - MCP 전환: CLI 유지. 다시 본다면 CLI를 하위 프로세스로 부르는 얇은 MCP 층부터
@@ -471,7 +576,7 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
 ```text
 AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md(1장, 3-1장, 4장의 "집 PC opencode 모델 비교")를 읽어.
 작업 브랜치는 claude/home-pc-check-2973 (ml-kit 2.9.74, office-cli 1.4.82). 근거 자료는 docs/test_logs/opencode_모델비교_20261107/.
-1. 3-1장 1번: ml-kit 2.9.74 변경을 검토하고 ml-kit 전체 pytest와 CLI-dev/tests를 돌려 줘.
+1. 3-1장 1번: ml-kit 2.9.74 변경을 검토하고 ml-kit 전체 pytest와 AIKIT/dev/tests를 돌려 줘.
 2. 3-1장 2~5번을 검토해 고칠 것은 회귀 테스트와 함께 고치고(도구 변경은 SKILL.md·README·CHANGELOG 같이), 판단이 필요한 것은 나에게 물어 줘.
 3. 같은 브랜치에 커밋·푸시하고, 끝나면 PR을 만들어 줘 (머지는 내가 정함).
 답변은 한국어로, 이모지 없이.
@@ -481,12 +586,12 @@ office-cli 검토 수정용 (Claude Code 클라우드 세션):
 ```text
 AI_WORK 저장소의 office-cli 수정 작업을 이어서 해 줘. 먼저 AGENTS.md, docs/HANDOFF.md 3-7장,
 docs/history/office-cli_REVIEW_2026-11-09.md(전체)를 읽어. 그 문서가 작업 목록이야 (1.4.91 검토 결과, 코드는 아직 안 고침).
-1. 기준선: python -m pytest -q CLI-dev/office-cli/tests CLI-dev/tests 를 먼저 돌려 줘 (pytest, pandas, openpyxl, python-docx, python-pptx,
+1. 기준선: python -m pytest -q AIKIT/dev/office-cli/tests AIKIT/dev/tests 를 먼저 돌려 줘 (pytest, pandas, openpyxl, python-docx, python-pptx,
    pymupdf==1.28.2, olefile, matplotlib이 없으면 설치. 공통 테스트 3건 실패는 ml-kit 라이브러리가 없어서인지 확인).
 2. 검토 문서 0장의 순서대로 고쳐 줘: 1장 A1~A6, A10~A13 -> 2장 B1~B6 -> 1장 A7~A9 -> 2장 나머지 -> 3장.
    항목마다 문서의 재현대로 실패하는 회귀 테스트를 먼저 쓰고, 고친 뒤 테스트를 돌려 줘. 줄 번호는 다시 확인하고,
    문서의 고칠 방향이 코드와 맞지 않으면 이유를 적고 더 나은 방법으로 해.
-3. 동작이 바뀌면 같은 커밋에서 SKILL.md(6144바이트 한도)·CLI-dev/office-cli/README.md·CHANGELOG.md를 고치고, 묶음마다 버전을 올려 줘.
+3. 동작이 바뀌면 같은 커밋에서 SKILL.md(6144바이트 한도)·AIKIT/dev/office-cli/README.md·CHANGELOG.md를 고치고, 묶음마다 버전을 올려 줘.
    처리한 항목은 검토 문서 제목 끝에 (1.4.NN에서 수정)을 붙여.
 4. 3장(추정)은 실제 Office가 없으니 가짜 COM을 실제 동작에 맞게 고쳐 테스트하고, 실기 러너(run_win_tests.py)와 TEST_CHECKLIST.md에 확인 항목을 넣어 줘.
    확신 70% 미만은 실기 항목만 넣고 코드는 고치지 마.
@@ -495,14 +600,28 @@ docs/history/office-cli_REVIEW_2026-11-09.md(전체)를 읽어. 그 문서가 �
 답변은 한국어로, 이모지 없이.
 ```
 
+집 PC용, OpenCode 설정을 C:\AIKIT 기준으로 (Claude Code, 저장소 폴더에서, 2026-11-12~):
+```text
+AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md 1장과 3-12장을 읽어.
+지금은 집 PC(Windows, WinPython 3.13, Office 2019, OpenCode 2.2.5 설치함)야. 작업 브랜치는 ccr-ecab210c-awib23.
+목표: OpenCode의 전역 지침·스킬·설정을 사용자 폴더(%USERPROFILE%\.config\opencode)로 복사하지 않고 우리 도구 폴더 C:\AIKIT 기준으로 쓰게 하기.
+1. 3-12장 "집 PC에서 확인할 것" A~D를 나와 같이 확인해 줘. 명령은 하나씩, 실행 전에 무엇을 할지 짧게 알려 주고,
+   OpenCode 화면에서 내가 해야 하는 것(TUI·Web UI 조작)은 순서대로 알려 줘. 결과는 표로 정리해 줘.
+2. 2.2.5에서 OPENCODE_CONFIG_DIR, skills.paths, opencode.json과 opencode.jsonc 병합, 프로젝트별 AGENTS.md·.opencode\skills가 되는지 결론을 내고,
+   안 되는 것이 있으면 대안을 제안해 줘.
+3. 결론이 나면 3-12장 "확인되면 할 일"의 계획을 먼저 보여 주고, 내가 좋다고 하면 구현해 줘
+   (setup.py, skill.py, skill-maker 스킬, 전역 지침 9장, README·가이드, 테스트, CHANGELOG. 바꾼 도구의 테스트와 AIKIT/dev/tests를 돌린 뒤 커밋·푸시).
+답변은 한국어로, 이모지 없이.
+```
+
 집 PC용 (Claude Code, 저장소 폴더에서):
 ```text
 AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md(특히 1장과 3-0장), docs/HOME_PC_CHECK.md를 읽어.
 지금은 집 PC(Windows, WinPython 3.13, Office 16(2019), Gemma 없음)야. 작업 브랜치는 ccr-ecab210c-awib23.
-1. HANDOFF 3-0장 1~2번대로 준비(setup.bat 관리자 실행, PATH의 python이 C:\CLI\python 3.13인지)를 확인하고 3번(run_simplify_check.py --label 집PC)을 실행해 줘.
+1. HANDOFF 3-0장 1~2번대로 준비(setup.bat 관리자 실행, PATH의 python이 C:\AIKIT\python 3.13인지)를 확인하고 3번(run_simplify_check.py --label 집PC)을 실행해 줘.
    명령은 python만 쓰고, 실행 전에 무엇을 할지 짧게 알려 줘.
 2. 결과 파일의 PASS/FAIL/SKIP을 표로 정리하고, FAIL은 원인과 고칠 곳(파일:줄)을 찾아 줘.
-3. 고칠 것은 회귀 테스트와 함께 고치고, 바꾼 도구의 테스트와 CLI-dev/tests를 돌린 뒤 같은 브랜치에 커밋·푸시해 줘.
+3. 고칠 것은 회귀 테스트와 함께 고치고, 바꾼 도구의 테스트와 AIKIT/dev/tests를 돌린 뒤 같은 브랜치에 커밋·푸시해 줘.
 4. 시간이 되면 3-0장 4번 전체 회귀 점검도 돌려 줘.
 답변은 한국어로, 이모지 없이.
 ```
@@ -511,7 +630,7 @@ AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.
 ```text
 AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md를 읽고 지금 상태를 파악해.
 지금은 회사 PC(Windows 11, WinPython 3.13.13, Office 16, 문서 보안)에서 실기 테스트를 하려고 해.
-1. HANDOFF.md 3장대로 준비를 같이 하고, 자동 점검 `python run_all_tests.py --label 회사PC`(C:\CLI-dev에서) 한 번을 실행해 줘. 명령은 python만 쓰고, 실행 전에 무엇을 할지 짧게 알려 줘.
+1. HANDOFF.md 3장대로 준비를 같이 하고, 자동 점검 `python run_all_tests.py --label 회사PC`(C:\AIKIT\dev에서) 한 번을 실행해 줘. 명령은 python만 쓰고, 실행 전에 무엇을 할지 짧게 알려 줘.
 2. 끝나면 결과 파일 result_회사PC_<시각>.md 맨 위의 요약 표와 실패·ENV-SKIP·UNVERIFIED 목록을 표로 정리해 줘. 원인 추정과 고칠 곳(파일:줄)도.
 3. 고칠 것은 바로 고치지 말고 계획을 먼저 보여 줘.
 답변은 한국어로, 이모지 없이.
