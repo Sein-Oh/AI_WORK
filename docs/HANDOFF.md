@@ -384,7 +384,9 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
   - office 실패 2건 모두 가짜 COM과 실제 Office의 차이: L11(제한된 보기 창이 맨 앞이면 엑셀이 그 문서를 활성 문서로 줌 -> "시트 보호" 오류, 쓰인 곳은 없음),
     N10(Word `Comment.Delete`는 답글을 남김) -> office-cli 1.6.3. UNVERIFIED였던 I23(워드 표의 숫자 글을 엑셀이 숫자로 바꿈)도 같은 값이면 확인으로
   - 러너: 실패한 시험만 혼자 한 번 다시 돌려 통과하면 참고(WARN)로 (`--no-rerun`), 시험 도우미는 시간 초과 때 자식의 자식까지 끔
-  - 아직 실기 확인 전: 1.6.3의 N12(BOM 비교결과 시트), L11·N10 수정, 범주형 입력 드롭다운
+  - 같은 날 오후(1.6.3 반입): `run_win_tests --only L,N` PASS 26(UNVERIFIED 1건은 일부러 틀린 수식 L3), ml-kit 시간 제한 시계 통과.
+    대화창(큰 모델, Gemma)에서 Outlook 일정 만들기·지우기 확인. 그 과정에서 찾은 것: 일정이 9시간 앞당겨 저장(pywin32 시각 변환) -> 수정,
+    일정 지우기가 없어 모델이 파이썬 코드를 직접 짬 -> `event --action delete` 추가, 제한된 보기와 시트 보호는 한 안내로(사용자 결정)
 - 집 PC(2026-11-07 저녁, WinPython 3.13.13 `C:\CLI\python`, Office Professional Plus 2019 x64로 다시 설치, ml-kit 2.9.73):
   - 준비: `C:\CLI\python`에 라이브러리가 없어 setup.bat의 동작 확인이 실패했음 -> `pip_install.txt` 2-1로 설치 (HOME_PC_CHECK 1장에 반영)
   - 단순화 점검(office-cli 1.4.81): 38/39. D2는 점검 스크립트가 `sheet delete`에 `--name` 대신 `--sheet`를 넘긴 실수 -> 고친 뒤 39/39 (결과 `result_simplify_집PC_20261107_190152.md`, `..._190734.md`)
