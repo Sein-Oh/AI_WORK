@@ -176,8 +176,10 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - `archive/` 아래 도구는 수정하지 않는다. 지침 반영·검토·테스트 대상이 아니다 (doc-classifier: 다른 개발자 담당).
 
 ## 작업 절차
-1. 변경 전 기준선: 바꿀 도구의 테스트(`python -m pytest -q AIKIT/dev/<tool>/tests`)와 공통 테스트(`AIKIT/dev/tests`). 전체(`python -m pytest -q`)는
-   ml-kit만 클라우드 30분·회사 PC 1시간 이상 걸리므로 PR 전 1번. 오래 걸리는 파일(`test_layout_matrix`, `test_loading_*`)은 그 영역을 바꿨을 때 꼭 돌린다.
+1. 변경 전 기준선: 바꿀 도구의 테스트(`python -m pytest -q AIKIT/dev/<tool>/tests`)와 공통 테스트(`AIKIT/dev/tests`).
+   ml-kit은 평소 실행에서 무거운 회귀 시험(report 표시, `test_layout_matrix`, `test_loading_layout`, `test_loading_numbers`, `tests/slow_tests.txt`)을
+   뺀다 (클라우드 약 6분, 2026-11-12 사용자 결정). 전부(`AIKIT_FULL_TEST=1`, 클라우드 26분·회사 PC 1시간 이상)는 PR 전 1번과 그 영역(읽기·학습·보고서)을
+   바꿨을 때만. 새 회귀 시험이 한 번에 2초 이상 걸리면 `slow_tests.txt`에 올린다.
 2. 리팩터링(동작 불변)과 기능 변경은 별도 커밋/PR.
 3. 버그 수정에는 회귀 테스트 추가. 동작이 바뀌면 `SKILL.md`, `README.md`, `CHANGELOG.md` 갱신.
 4. 실기 결과(`docs/test_logs/`)에는 회사 경로·사용자 이름이 들어 있다. 그 내용을 코드·테스트·문서·커밋 메시지에 옮기지 않는다

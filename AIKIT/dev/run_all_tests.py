@@ -744,6 +744,8 @@ def step_pytest(stage, args, ctx):
     from concurrent.futures import ThreadPoolExecutor
     env = {"PYTHONUNBUFFERED": "1",                              # 끊겨도 그때까지의 출력이 남게
            "PYTHONPATH": os.pathsep.join([HERE] + [p for p in [os.environ.get("PYTHONPATH")] if p])}
+    if getattr(args, "full", False):        # ml-kit 무거운 회귀 시험까지 (평소에는 빼고 돎, ml-kit tests/conftest.py)
+        env["AIKIT_FULL_TEST"] = "1"
     jobs = []
     for tool in PYTEST_TARGETS:
         folder = os.path.join(HERE, tool)
@@ -1344,6 +1346,8 @@ def main(argv=None):
                    help="pytest 단계에서 테스트 파일 하나의 시간 상한(초, 기본 7200)")
     p.add_argument("--no-rerun", action="store_true",
                    help="pytest 단계에서 실패한 시험을 혼자 다시 돌리지 않음 (기본: 파일마다 실패 5건 이하이면 한 번 다시 돌려, 통과하면 참고로 남김)")
+    p.add_argument("--full", action="store_true",
+                   help="pytest 단계에서 ml-kit 무거운 회귀 시험(보고서, 읽기 배치 조합, slow_tests.txt)까지 돌림 (PR 전·릴리스 전. 평소에는 뺌)")
     p.add_argument("--pytest-workers", type=int, default=0,
                    help="pytest 단계에서 동시에 돌릴 테스트 파일 수 (기본 0: 코어 수 - 1, 메모리 4GB마다 1개, 최대 3. 1이면 하나씩)")
     args = p.parse_args(argv)

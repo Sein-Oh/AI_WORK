@@ -22,6 +22,37 @@ from mlkit_helpers import run_raw, run_tool, write_rows  # noqa: E402
 PARAM_ID_MAX = 60
 
 
+# 평소(날마다) 실행에서 빼는 무거운 시험 (사용자 결정 2026-11-12: 전체가 리눅스 26분·회사 PC 1시간 이상).
+# - report 표시(보고서·성능예측표), 읽기 배치 조합 파일 3개, slow_tests.txt의 함수(한 번에 2초 이상 걸린 회귀 시험).
+# - 전부 돌리려면 환경 변수 AIKIT_FULL_TEST=1 (PR 전·릴리스 전, run_all_tests.py --full). -m을 직접 주면 그 선택을 따름.
+FULL_ENV = "AIKIT_FULL_TEST"
+HEAVY_FILES = ("test_layout_matrix.py", "test_loading_layout.py", "test_loading_numbers.py")
+SLOW_LIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "slow_tests.txt")
+
+
+def slow_names():
+    with open(SLOW_LIST, encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip() and not line.startswith("#")}
+
+
+def is_heavy(item, names):
+    base = os.path.basename(str(item.fspath))
+    return (base in HEAVY_FILES or item.get_closest_marker("report") is not None
+            or f"{base}::{getattr(item, 'originalname', item.name)}" in names)
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get(FULL_ENV) == "1" or config.getoption("markexpr", ""):
+        return
+    names = slow_names()
+    keep, skipped = [], []
+    for item in items:
+        (skipped if is_heavy(item, names) else keep).append(item)
+    if skipped:
+        config.hook.pytest_deselected(items=skipped)
+        items[:] = keep
+
+
 def pytest_make_parametrize_id(config, val, argname):
     if isinstance(val, (str, bytes)):
         text = val.decode("latin-1") if isinstance(val, bytes) else val

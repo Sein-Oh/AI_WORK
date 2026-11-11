@@ -914,3 +914,19 @@ def test_short_options_are_refused_with_the_long_command(script, argv, want):
     for opt, val in want.items():                       # 경로 옵션(--file, --model)은 도구가 절대 경로로 넣음
         got = fixed[fixed.index(opt) + 1]
         assert (os.path.basename(got) if opt in ("--file", "--model") else got) == val, fixed
+
+
+def test_slow_list_names_existing_tests():
+    """평소 실행에서 빼는 목록(slow_tests.txt)의 이름이 모두 있는 시험 함수 (이름을 바꾸면 목록에서 빠져 평소에도 도는데, 그런 줄이 쌓이지 않게)."""
+    import ast
+    import conftest
+    here = os.path.dirname(os.path.abspath(__file__))
+    missing = []
+    for name in sorted(conftest.slow_names()):
+        fname, func = name.split("::")
+        path = os.path.join(here, fname)
+        tree = ast.parse(open(path, encoding="utf-8").read()) if os.path.isfile(path) else None
+        if tree is None or func not in {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}:
+            missing.append(name)
+    assert not missing, missing
+    assert not any(n.startswith(("test_contract.py", "test_safety.py", "test_skill_docs.py")) for n in conftest.slow_names())   # 계약·안전은 늘 돎

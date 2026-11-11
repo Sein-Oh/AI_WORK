@@ -503,6 +503,12 @@ office-cli `--save` 생략·이름만·상대 경로가 이 규칙을 따름 (�
 회사·집 PC는 `C:\AIKIT\skills`의 옛 이름 폴더(`office-excel`, `office-doc`, `office-mail`, `office-spec`, `office-data`, `skill-maker`, `skill-kit`)와
 `%USERPROFILE%\.config\opencode\skills`의 우리 스킬 복사본을 손으로 지울 것 (남으면 OpenCode가 옛 스킬도 읽음).
 
+### 3-21. ml-kit pytest 평소 분량 줄임
+사용자 결정: 날마다 몇 시간씩 걸리는 시험은 무리. ml-kit 전체(1052개)는 리눅스 26분·회사 PC 1시간 이상. 이미 고친 문제가 다시 생기는지 보는 무거운
+회귀 시험(report 표시, 읽기 배치 조합 파일 3개, `AIKIT/dev/ml-kit/tests/slow_tests.txt`의 142개 함수: 한 번에 2초 이상)은 평소에 빼고
+`AIKIT_FULL_TEST=1`(또는 `run_all_tests.py --full`)일 때만 돎. 평소 546개 약 6분 (리눅스). 계약·안전·스킬 문서 시험은 늘 돎. office-cli(1분 40초)와
+공통 시험(50초)은 그대로. 회사 PC 평소 점검은 `run_all_tests.py`(--full 없이), 릴리스 전에만 `--full`.
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.
