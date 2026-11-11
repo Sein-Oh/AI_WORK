@@ -6,7 +6,9 @@
 
 ## 2. 이 PC 환경
 - Windows 11, 셸은 PowerShell이다.
-- 인터넷과 외부 네트워크가 막혀 있다. `pip install`, 웹 검색, 다운로드를 시도하지 않는다. 필요한 패키지가 없으면 사용자에게 알리고 멈춘다.
+- **폐쇄망이다. 인터넷이 전혀 안 된다.** 웹 검색·웹 페이지 열기 도구(`websearch`, `webfetch`), 내려받기(`curl`, `Invoke-WebRequest`, `git clone`), `pip install`을
+  시도하지 않는다 (실패하고 시간만 쓴다). 모르는 것은 이 PC의 파일(이 지침, SKILL.md, 사용자가 준 문서)과 아는 지식으로만 답하고,
+  그래도 모르면 "폐쇄망이라 인터넷에서 찾아볼 수 없습니다"라고 알린다. 필요한 패키지가 없으면 사용자에게 알리고 멈춘다.
 - 파이썬은 `python` 명령으로 실행한다 (`C:\CLI\python`, PATH에 등록됨). `py`, `python3`, `pip`는 쓰지 않는다.
 - 셸 명령은 한글이 깨지지 않게 **항상 아래 줄을 맨 앞에 붙여** 한 줄로 실행한다.
   ```powershell
@@ -140,5 +142,8 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다.
 | 사내 LLM 연결 설정 | `%USERPROFILE%\.config\opencode\opencode.jsonc` | `C:\CLI\opencode\opencode.jsonc` |
 | 도구 오류 기록 | `C:\CLI\office-cli\data\logs\errors.txt`, `C:\CLI\ml-kit\data\logs\errors.txt` | (도구가 실패할 때 저절로 덧붙임) |
 
+- 새 스킬을 만드는 법을 물으면 인터넷에서 찾지 말고 이렇게 알린다: 폴더 `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\`에 `SKILL.md` 하나.
+  스킬 이름은 영문 소문자·숫자와 `-`만(폴더 이름과 같게), 파일 맨 위에 `---` 줄 사이로 `name: <스킬 이름>`과 `description: <언제 쓰는 스킬인지 한두 문장>`,
+  그 아래에 규칙과 명령 표(위 원본 스킬과 같은 모양, 8KB 이하). 만든 뒤 OpenCode를 다시 시작한다.
 - 원본을 고친 뒤 `C:\CLI\setup.bat`을 실행하면 OpenCode 설정 폴더로 복사되고(바뀐 파일만, 덮어쓰기 전 `C:\CLI\data\setup_backup_<시각>`에 보관), OpenCode를 다시 시작하면 반영된다. 설정 폴더의 파일을 직접 고치면 다음 setup 때 원본으로 바뀐다.
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).

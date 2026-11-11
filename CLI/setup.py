@@ -522,6 +522,11 @@ def step_opencode_providers(rep, config_dir):
                              "이름이 틀리면 사내 LLM도 숨겨집니다")
         if used and used not in names:
             rep.line("WARN", f"opencode.jsonc의 \"model\"({model})의 provider '{used}'가 \"enabled_providers\"에 없어 그 모델을 쓸 수 없습니다")
+    perm = cfg.get("permission")
+    web = [k for k in ("webfetch", "websearch") if not (perm == "deny" or (isinstance(perm, dict) and perm.get(k) == "deny"))]
+    if web:
+        rep.line("INFO", "opencode.jsonc에서 웹 도구(" + ", ".join(web) + ")를 막지 않았습니다. 폐쇄망에서는 모델이 인터넷 검색을 시도하다 시간만 쓰니 "
+                         "\"permission\"에 " + ", ".join(f'"{k}": "deny"' for k in web) + " 를 넣는 것을 권합니다")
     if cfg.get("autoupdate") is not False:
         rep.line("INFO", "opencode.jsonc에 \"autoupdate\": false가 없습니다. 폐쇄망에서는 업데이트를 받을 수 없으니 넣어 두면 확인을 시도하지 않습니다")
 

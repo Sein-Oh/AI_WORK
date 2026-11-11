@@ -342,6 +342,12 @@ def test_opencode_providers_suggests_enabled_providers_line(tmp_path, capsys):
     cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {}}, "enabled_providers": ["corp"], "autoupdate": false}', encoding="utf-8")
     rep = su.Report()
     su.step_opencode_providers(rep, str(tmp_path))
+    out = capsys.readouterr().out                             # 웹 도구를 막지 않았으면 INFO (폐쇄망에서 모델이 인터넷 검색을 시도함, 2026-11-11)
+    assert rep.warn == 0 and '"webfetch": "deny", "websearch": "deny"' in out, out
+    cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {}}, "enabled_providers": ["corp"], "autoupdate": false, '
+                   '"permission": {"external_directory": "allow", "webfetch": "deny", "websearch": "deny"}}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_providers(rep, str(tmp_path))
     assert rep.warn == 0 and capsys.readouterr().out == ""
     cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {}}, "enabled_providers": ["crop"], "autoupdate": false}', encoding="utf-8")
     rep = su.Report()

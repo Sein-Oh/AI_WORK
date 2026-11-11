@@ -43,6 +43,9 @@ PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시
   이름이 틀리면 사내 LLM도 숨겨지므로 `setup.py`가 `"provider"`·`"model"`과 맞는지 함께 봅니다.
 - `"autoupdate": false`: 폐쇄망에서는 업데이트를 받을 수 없으니 확인을 시도하지 않게 합니다. 원격 모델 목록 받기도 끄려면 환경 변수
   `OPENCODE_DISABLE_MODELS_FETCH=1`(설정 파일 키는 없음, `enabled_providers`만으로도 목록에는 나오지 않음).
+- `"permission"`의 `"webfetch": "deny"`, `"websearch": "deny"`: 폐쇄망에서 모델이 인터넷 검색·웹 페이지 열기를 시도하지 못하게 막습니다
+  (2026-11-11 회사 PC: 스킬 만드는 법을 묻자 인터넷 검색을 시도함. 전역 지침 2장에도 금지를 적었지만 설정으로 막는 것이 확실함. opencode 2.2.7 소스의
+  도구 이름 기준이고 회사 PC 2.2.5에서는 확인 전. `setup.py`가 없으면 INFO로 알림).
 - 사내 PC 설정 예 (provider 이름·주소·모델은 PC마다 다름, 키는 파일에 적지 말고 opencode 로그인·환경 변수로):
   ```jsonc
   {
@@ -50,7 +53,7 @@ PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시
     "enabled_providers": ["corp"],
     "autoupdate": false,
     "shell": "powershell",
-    "permission": { "external_directory": "allow" },
+    "permission": { "external_directory": "allow", "webfetch": "deny", "websearch": "deny" },
     "provider": {
       "corp": {
         "npm": "@ai-sdk/openai-compatible",
