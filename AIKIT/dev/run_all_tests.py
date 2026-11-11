@@ -532,9 +532,9 @@ def step_diag(stage, args, ctx):
 
 
 def diag_skills(stage, lines, config_dir=None, reg=None):
-    """OpenCode 설정 폴더의 SKILL.md, AGENTS.md, opencode.jsonc가 C:\\AIKIT와 같은지, 시스템 PATH에 C:\\AIKIT\\python이 있는지
-    (C:\\AIKIT\\setup.py --check와 같은 비교, PATH는 읽기만). 설정 폴더가 없으면(클라우드 등) 참고만.
-    다르거나 옛 스킬 폴더(skills\\office-cli)가 남아 있으면 Gemma가 옛 지침으로 동작하므로 FAIL (고치는 명령: C:\\AIKIT\\setup.bat)."""
+    """setup.py --check와 같은 확인 (읽기만): 시스템 PATH에 C:\\AIKIT\\python이 있는지, 사용자 환경 변수 OPENCODE_CONFIG_DIR가
+    C:\\AIKIT\\opencode인지(아니면 OpenCode가 우리 지침·스킬을 읽지 않음), 옛 전역 설정 폴더(config_dir, 기본 %USERPROFILE%\\.config\\opencode)에
+    우리 스킬·지침 복사본이 남았는지. 다르면 FAIL (고치는 명령: C:\\AIKIT\\setup.bat). Windows가 아니면 참고만."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("cli_setup", os.path.join(CLI_DIR, "setup.py"))
     mod = importlib.util.module_from_spec(spec)
@@ -555,21 +555,26 @@ def diag_skills(stage, lines, config_dir=None, reg=None):
     else:
         lines.append("  시스템 PATH: " + ", ".join(mod.path_entries()) + " 있음")
         stage.passed += 1
-    cfg = config_dir or mod.default_config_dir()
-    if not os.path.isdir(cfg):
-        lines.append(f"  OpenCode 설정 폴더 없음 ({cfg}): 확인 안 함")
-        return
-    rows = mod.compare(cfg)
-    lines += [f"  {mod.label(*r)}" for r in rows]
-    bad = [r for r in rows if r[3] != "같음"]
-    src, dst, state = mod.jsonc_state(cfg)
-    lines.append(f"  opencode.jsonc: {state}  {dst}")
-    if state in ("다름", "새 파일"):
-        bad.append(("opencode.jsonc", src, dst, state))
-    if bad:
-        stage.fail("OpenCode 스킬/지침이 C:\\AIKIT와 다름 (" + ", ".join(f"{r[0]} {r[3]}" for r in bad) + "). " + fix)
+    reg = reg or mod._winreg()
+    want = mod.opencode_dir()
+    if reg is None:
+        lines.append(f"  OpenCode 설정 폴더 환경 변수: Windows가 아니라 확인 안 함 ({mod.CONFIG_ENV})")
     else:
-        stage.passed += 1
+        try:
+            cur = mod.read_user_env(reg)
+        except OSError as e:
+            cur = f"읽지 못함 ({type(e).__name__})"
+        lines.append(f"  {mod.CONFIG_ENV}: {cur or '없음'} (맞는 값 {want})")
+        if cur and mod._norm(cur) == mod._norm(want):
+            stage.passed += 1
+        else:
+            stage.fail(f"{mod.CONFIG_ENV}가 {cur or '없음'}이라 OpenCode가 {want}의 지침·스킬을 읽지 않음. " + fix)
+    cfg = config_dir or mod.old_config_dir()
+    old = mod.old_global_items(cfg) if os.path.isdir(cfg) else []
+    ours = [(k, p) for k, p in old if k in ("우리 스킬", "옛 전역 지침")]
+    lines.append(f"  옛 전역 설정 폴더({cfg}): " + (", ".join(f"{k} {os.path.basename(p)}" for k, p in old) or "정리할 것 없음"))
+    if ours:
+        stage.fail("옛 전역 설정 폴더에 우리 스킬·지침 복사본이 남아 있음 (" + ", ".join(os.path.basename(p) for _k, p in ours) + "). " + fix)
 
 
 # ---------------------------------------------------------------------------
@@ -1292,7 +1297,7 @@ def step_gemma(stage, args, ctx):
         if stop:
             break
         if not session:                                          # 첫 요청에서 세션이 안 생기면 나머지도 같음
-            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(%USERPROFILE%\\.config\\opencode\\opencode.jsonc의 model)과 접속을 확인하세요.")
+            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(C:\\AIKIT\\opencode\\opencode.jsonc의 model)과 접속을 확인하세요.")
             stage.details.append((f"{sid} opencode 오류 출력", _read(err_path) or "(없음)"))
             break
     stage.details.append(("opencode run 실행 기록", "\n".join(log)))

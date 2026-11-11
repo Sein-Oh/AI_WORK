@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "skills": {
+    "paths": ["../ml-kit/skills", "../office-cli/skills"]
+  },
+  "shell": "powershell",
+  "autoupdate": false,
+  "permission": {
+    "external_directory": "allow",
+    "webfetch": "deny",
+    "websearch": "deny"
+  }
+}

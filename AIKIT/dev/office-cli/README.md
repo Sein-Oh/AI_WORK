@@ -805,9 +805,11 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
   되돌릴 수 있는 지점이 빠지지 않습니다(`truncated`는 빠진 항목이 있을 때 true). `--pick` 없는 `undo`는 되돌릴 수 있는 지점이 하나도 없으면
   `VERIFIED: 0건.`(`count: 0`, `restored: false`), 직전 작업만 되돌릴 수 없고 더 앞 지점이 있으면 `needs_user_decision`입니다.
 
-### skill.py (1.6.3, 스킬 skill-maker)
-사용자가 만든 OpenCode 스킬을 등록·점검합니다. 스킬 위치는 `%USERPROFILE%\.config\opencode\skills\<이름>\SKILL.md`
-(`OFFICE_CLI_OPENCODE_DIR`로 설정 폴더를 바꿀 수 있음, 테스트용). 경량 LLM이 머리말(`---`, name, description)을 틀리지 않게 본문만 받아 도구가 조립합니다.
+### skill.py (1.6.3, 위치 1.6.5, 스킬 skill-maker)
+사용자가 만든 OpenCode 스킬을 등록·점검합니다. 경량 LLM이 머리말(`---`, name, description)을 틀리지 않게 본문만 받아 도구가 조립합니다.
+- 사용자 스킬: `C:\AIKIT\opencode\skills\<이름>\SKILL.md` (OpenCode 설정 폴더 = `OPENCODE_CONFIG_DIR`, 없으면 도구 폴더의 부모 `\opencode`). 어느 작업 폴더에서나 보입니다.
+- 프로젝트 스킬: `--project <폴더>`를 주면 `<폴더>\.opencode\skills\<이름>\SKILL.md`. 그 폴더에서 연 OpenCode 세션에서만 보입니다 (없는 폴더는 만들지 않고 STOP_RETRY).
+- 기본 스킬: `C:\AIKIT\ml-kit\skills`, `C:\AIKIT\office-cli\skills` (도구와 함께 배포, 같은 이름으로 만들거나 지울 수 없음). `list`의 `kind`: 기본 / 사용자 / 프로젝트.
 
 | 명령 | 설명 |
 |---|---|

@@ -27,10 +27,10 @@ AI_WORK/
 │   ├── engenius/              # 사내 에이전트 En-Genius 스킬 패키지 (업데이트 중지, 필요할 때 다시 꺼냄)
 │   └── doc-classifier/        # 폴더 파일 목록화/분류 0.9.2 (다른 개발자 담당으로 보관)
 ├── AIKIT/                     # 사내 PC C:\AIKIT로 통째로 복사 (아래 AIKIT/dev 포함). 도구 폴더에는 실행 파일과 스킬(SKILL.md)만
-│   ├── setup.py / setup.bat   # 배포 설치: 스킬·전역 지침·opencode.jsonc를 OpenCode 설정 폴더로, 시스템 PATH 등록, 동작 확인
+│   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 옛 전역 설정 정리, 시스템 PATH 등록, 동작 확인
 │   ├── web.bat                # OpenCode Web UI를 바로 띄움 (opencode 2.x: opencode pair의 일회용 로그인 링크를 브라우저로 엶)
-│   ├── opencode/AGENTS.md     # OpenCode 전역 지침 원본 (%USERPROFILE%\.config\opencode\AGENTS.md로 복사)
-│   │                          # opencode/opencode.jsonc는 사용자가 배포 전에 넣음 (사내 LLM 주소, git 제외)
+│   ├── opencode/              # OpenCode 설정 폴더 (OPENCODE_CONFIG_DIR): AGENTS.md(전역 지침), opencode.json(스킬 경로·셸·권한)
+│   │                          # opencode.jsonc(사내 LLM 주소)·skills\(사용자 스킬)는 PC에 있는 것 (git 제외)
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
 │   │   ├── skills/<이름>/SKILL.md   # 작업별 스킬 5개: ml-train, ml-dataset, ml-predict, ml-report, ml-map
 │   │   ├── ml_train.py        # 학습, 성능 개선, 학습 이력
@@ -83,11 +83,12 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 ## 배포 방법
 
 배포는 `C:\AIKIT` 폴더 하나입니다 (저장소 `AIKIT/` + WinPython `python\` + `opencode.exe`).
-1. `CLI` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\AIKIT\setup.bat`, `C:\AIKIT\python\python.exe`가 되도록).
-2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\opencode\`에 넣어 둡니다 (git에 올리지 않는 파일. 없으면 설정 폴더에 이미 있는 것을 씀).
-3. `C:\AIKIT\setup.bat`을 두 번 클릭합니다 (또는 `python C:\AIKIT\setup.py`). 스킬 11개(ml-kit 5, office-cli 6)·전역 지침·`opencode.jsonc`를
-   `%USERPROFILE%\.config\opencode\`로 복사(바뀐 것만, 이전 파일은 `C:\AIKIT\data\setup_backup_<시각>`에 보관)하고,
-   시스템 PATH에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가한 뒤, 도구가 동작하는지 확인합니다. `--check`는 확인만.
+1. `AIKIT` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\AIKIT\setup.bat`, `C:\AIKIT\python\python.exe`가 되도록, `dev` 포함).
+2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\opencode\`에 넣어 둡니다 (git에 올리지 않는 파일. provider, model, `enabled_providers`만).
+3. `C:\AIKIT\setup.bat`을 두 번 클릭합니다 (또는 `python C:\AIKIT\setup.py`). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT\opencode`를
+   설정해 OpenCode가 전역 지침·스킬 11개(ml-kit 5, office-cli 6)·설정을 `C:\AIKIT`에서 **복사 없이** 읽게 하고, 예전에 사용자 폴더
+   (`%USERPROFILE%\.config\opencode`)로 복사해 둔 우리 스킬·지침은 보관 후 지웁니다 (`C:\AIKIT\data\setup_backup_<시각>`).
+   시스템 PATH에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가한 뒤, 도구와 OpenCode 설정 폴더를 확인합니다. `--check`는 확인만.
 4. 새 터미널을 열고 OpenCode(TUI, Desktop, Web UI)를 다시 시작합니다. setup이 OpenCode 백그라운드 서비스를 꺼 두므로 새 PATH·스킬·지침으로 다시 뜹니다
    (TUI와 web.bat은 이미 떠 있는 서비스를 그대로 쓰므로, 설치 전에 뜬 서비스가 남으면 python을 못 찾고 옛 스킬을 씀. 그럴 때는 `C:\AIKIT\web.bat stop`).
 5. (선택) 브라우저 화면으로 쓰려면 `C:\AIKIT\web.bat`을 두 번 클릭합니다. `opencode pair`가 OpenCode 백그라운드 서비스를 띄우고

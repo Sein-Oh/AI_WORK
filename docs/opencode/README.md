@@ -9,51 +9,55 @@
 반입할 때는 `C:\AIKIT`만 바꾸면 됩니다. `C:\AIKIT`에는 실행 파일과 스킬(SKILL.md)만 있습니다.
 실기 테스트 파일은 그 안의 `C:\AIKIT\dev`에 함께 있습니다 (도구는 dev를 읽지 않음).
 
-OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md가 든 폴더만 복사합니다. 도구 파일은 넣지 않습니다.
+OpenCode는 `C:\AIKIT`의 파일을 **복사하지 않고 그 자리에서** 읽습니다 (2026-11-12부터, OpenCode 2.2.5에서 확인).
+`C:\AIKIT\setup.bat`이 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT\opencode`를 설정해 OpenCode 설정 폴더를 그 폴더로 바꿉니다
+(관리자 권한 필요 없음. 시스템 PATH 등록에만 관리자 권한).
 
-| 스킬 폴더 | 넣을 파일 |
+| OpenCode가 읽는 것 | 파일 |
 |---|---|
-| `skills\ml-train\`, `skills\ml-predict\`, `skills\ml-report\`, `skills\ml-map\` | `C:\AIKIT\ml-kit\skills\<이름>\SKILL.md` (학습, 예측, 보고서·성능예측표, 표 보간) |
-| `skills\office-excel\` | `C:\AIKIT\office-cli\skills\office-excel\SKILL.md` (엑셀) |
-| `skills\office-doc\` | `C:\AIKIT\office-cli\skills\office-doc\SKILL.md` (워드, PPT, 앱 사이 옮기기) |
-| `skills\office-mail\` | `C:\AIKIT\office-cli\skills\office-mail\SKILL.md` (Outlook) |
-| `skills\office-spec\` | `C:\AIKIT\office-cli\skills\office-spec\SKILL.md` (파일 읽기·근거 검색, 규격 대조) |
-| `skills\office-data\` | `C:\AIKIT\office-cli\skills\office-data\SKILL.md` (엑셀·CSV 표 집계, 중복 행 찾기) |
-| `skills\office-cli-test\` | `C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md` (실기 테스트를 맡길 때만) |
+| 전역 지침 | `C:\AIKIT\opencode\AGENTS.md` |
+| 기본 스킬 11개 | `C:\AIKIT\ml-kit\skills\<이름>\SKILL.md`, `C:\AIKIT\office-cli\skills\<이름>\SKILL.md` (`opencode.json`의 `skills.paths`) |
+| 우리 설정 (스킬 경로, 셸, 권한, 자동 업데이트 끄기) | `C:\AIKIT\opencode\opencode.json` (배포 파일) |
+| 사내 LLM 설정 (provider, model, `enabled_providers`) | `C:\AIKIT\opencode\opencode.jsonc` (사용자가 넣음, git 제외) |
+| 사용자가 만든 스킬 | `C:\AIKIT\opencode\skills\<이름>\SKILL.md` (`skill.py save`가 둠) |
+| 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐, `skill.py save --project`) |
 
-SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\AIKIT`를 갱신한 뒤 `C:\AIKIT\setup.bat`을 두 번 클릭(또는 `python C:\AIKIT\setup.py`)해 복사합니다
-(전역 지침·`opencode.jsonc`까지 바뀐 것만 복사, 시스템 PATH 등록, 동작 확인. `--check`는 확인만). 그 뒤 새 터미널을 열고 OpenCode를 다시 시작합니다.
-office-cli-test는 개발용이라 `python C:\AIKIT\setup.py --test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`로 따로 넣습니다.
-폴더 이름은 표와 같아야 합니다 (SKILL.md 맨 위 `name`과 같은 이름).
-office-cli 1.4.61까지 쓰던 통합 스킬 폴더 `skills\office-cli\`는 `setup.py`가 `C:\AIKIT\data\setup_backup_<시각>`에 보관한 뒤 지웁니다
-(남아 있으면 OpenCode가 옛 스킬도 고릅니다).
+- 반입: `C:\AIKIT`의 도구 폴더, `dev`, `opencode\AGENTS.md`, `opencode\opencode.json`, `setup.py`·`setup.bat`·`web.bat`을 바꿉니다.
+  `C:\AIKIT\python`, `opencode.exe`, `opencode\opencode.jsonc`, `opencode\skills\`(사용자 스킬), `data\`, `work\`는 그대로 둡니다.
+  처음 한 번 `C:\AIKIT\setup.bat`을 실행하고(환경 변수, PATH), 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다
+  (setup은 다시 실행해도 됩니다: 확인과 서비스 끄기).
+- 예전 방식(2026-11-12 전 setup이 `%USERPROFILE%\.config\opencode`로 복사)에서 바꿀 때는 setup이 그 폴더의 우리 스킬·`AGENTS.md`를
+  `C:\AIKIT\data\setup_backup_<시각>\old_config`에 보관한 뒤 지우고, 사용자가 만든 스킬과 `opencode.jsonc`는 `C:\AIKIT\opencode`로 옮깁니다.
+- office-cli-test(실기 보조 스킬)는 개발용이라 `python C:\AIKIT\setup.py --test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`로
+  `C:\AIKIT\opencode\skills`에 둡니다.
+- 바뀐 설정이 안 보이면: OpenCode 백그라운드 서비스는 처음 뜰 때의 환경 변수를 계속 씁니다. `C:\AIKIT\web.bat stop` 뒤 다시 실행하고,
+  `C:\AIKIT\opencode.exe debug paths`의 `config`가 `C:\AIKIT\opencode`인지 봅니다 (setup도 끝에 확인).
 
 **ripgrep(rg.exe)이 필요합니다.** OpenCode는 스킬을 불러올 때 ripgrep을 쓰고, 없으면 인터넷에서 받으려 합니다.
 폐쇄망에서는 받지 못해 스킬 불러오기가 `ripgrep execution failed`로 실패합니다(2026-10-29 실기: 대화 6개 모두).
 ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: `C:\AIKIT\python`)에 두고,
 PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시 시작합니다. 그 전까지는 전역 AGENTS.md 3장 3번대로 SKILL.md를 직접 읽게 됩니다.
 
-**opencode.jsonc에서 확인할 것** (`setup.py`가 동작 확인 끝에 WARN으로 알림, 고치지는 않음). 집 PC opencode 시험(2026-11-07)에서 앞의 셋이 결과를 흐렸습니다.
-- `"shell"`: 쓴다면 `"powershell"`. `"cmd"`면 스킬·전역 지침의 PowerShell 명령(인코딩 줄, 작은따옴표)이 맞지 않습니다.
+**설정에서 확인할 것** (`setup.py`가 `opencode.json`과 `opencode.jsonc`를 합쳐 보고 WARN으로 알림, 고치지는 않음).
+`"shell"`, `"permission"`, `"autoupdate"`, `"skills"`는 배포 파일 `opencode.json`에 이미 있으니 `opencode.jsonc`에는 적지 않습니다
+(두 파일에 같은 키가 있으면 setup이 WARN). 집 PC opencode 시험(2026-11-07)에서 앞의 셋이 결과를 흐렸습니다.
+- `"shell": "powershell"` (`opencode.json`): `"cmd"`면 스킬·전역 지침의 PowerShell 명령(인코딩 줄, 작은따옴표)이 맞지 않습니다.
 - `"instructions"`: 비워 둡니다. 전역 지침 `AGENTS.md`는 설정 폴더에서 따로 읽히고, 여기에 옛 지침을 넣으면 지금 없는 명령을 씁니다.
-- `"permission": {"external_directory": "allow"}`: opencode 1.19.5 `run`은 작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈췄습니다 (회사 PC 2.2.5는 확인 전).
+- `"permission": {"external_directory": "allow"}` (`opencode.json`): opencode 1.19.5 `run`은 작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈췄습니다.
 - `"enabled_providers"`: 폐쇄망에서 쓸 수 없는 기본 모델(opencode Zen 무료 모델, models.dev 목록의 인터넷 모델)이 `opencode models`와
   모델 선택에 나오지 않게, 사내 LLM provider 이름만 적습니다 (`"provider"` 블록의 이름, `"model"`의 `/` 앞). 적은 provider만 남고 나머지는 모두 숨겨집니다.
   특정 provider만 숨기려면 `"disabled_providers": ["opencode"]`(둘 다 있으면 숨기기가 이김). opencode 2.2.7 소스로 확인(`config/normalize.ts`: 모두 막고 적은 것만 허용).
   이름이 틀리면 사내 LLM도 숨겨지므로 `setup.py`가 `"provider"`·`"model"`과 맞는지 함께 봅니다.
-- `"autoupdate": false`: 폐쇄망에서는 업데이트를 받을 수 없으니 확인을 시도하지 않게 합니다. 원격 모델 목록 받기도 끄려면 환경 변수
+- `"autoupdate": false` (`opencode.json`): 폐쇄망에서는 업데이트를 받을 수 없으니 확인을 시도하지 않게 합니다. 원격 모델 목록 받기도 끄려면 환경 변수
   `OPENCODE_DISABLE_MODELS_FETCH=1`(설정 파일 키는 없음, `enabled_providers`만으로도 목록에는 나오지 않음).
-- `"permission"`의 `"webfetch": "deny"`, `"websearch": "deny"`: 폐쇄망에서 모델이 인터넷 검색·웹 페이지 열기를 시도하지 못하게 막습니다
+- `"permission"`의 `"webfetch": "deny"`, `"websearch": "deny"` (`opencode.json`): 폐쇄망에서 모델이 인터넷 검색·웹 페이지 열기를 시도하지 못하게 막습니다
   (2026-11-11 회사 PC: 스킬 만드는 법을 묻자 인터넷 검색을 시도함. 전역 지침 2장에도 금지를 적었지만 설정으로 막는 것이 확실함. opencode 2.2.7 소스의
   도구 이름 기준이고 회사 PC 2.2.5에서는 확인 전. `setup.py`가 없으면 INFO로 알림).
-- 사내 PC 설정 예 (provider 이름·주소·모델은 PC마다 다름, 키는 파일에 적지 말고 opencode 로그인·환경 변수로):
+- 사내 PC `opencode.jsonc` 예 (provider 이름·주소·모델은 PC마다 다름, 키는 파일에 적지 말고 opencode 로그인·환경 변수로):
   ```jsonc
   {
     "model": "corp/gemma",
     "enabled_providers": ["corp"],
-    "autoupdate": false,
-    "shell": "powershell",
-    "permission": { "external_directory": "allow", "webfetch": "deny", "websearch": "deny" },
     "provider": {
       "corp": {
         "npm": "@ai-sdk/openai-compatible",
@@ -69,11 +73,9 @@ PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시
 
 ## 2. 전역 지침 (AGENTS.md)
 
-1. `AIKIT/opencode/AGENTS.md`(PC에서는 `C:\AIKIT\opencode\AGENTS.md`)를 `%USERPROFILE%\.config\opencode\AGENTS.md`로 복사합니다.
-   `C:\AIKIT\setup.bat`이 스킬과 함께 복사합니다. 원본은 배포 폴더 `C:\AIKIT`에 둡니다 (배포는 `C:\AIKIT` 하나).
-   같은 폴더의 `opencode.jsonc`(사내 LLM 주소, 사용자가 배포 전에 넣음, git 제외)도 있으면 설정 폴더로 복사합니다.
+1. `AIKIT/opencode/AGENTS.md`(PC에서는 `C:\AIKIT\opencode\AGENTS.md`)를 OpenCode가 그 자리에서 읽습니다 (1장 표, 복사하지 않음).
 2. 고쳐 쓸 곳은 없습니다. 도구 경로는 `C:\AIKIT` 기준으로 적혀 있습니다.
-3. 팀원이 "지침·스킬 경로"를 물으면 에이전트가 답하도록 9장에 위치 표가 있습니다 (읽히는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 setup.bat).
+3. 팀원이 "지침·스킬 경로"를 물으면 에이전트가 답하도록 9장에 위치 표가 있습니다 (지침·스킬·설정 파일, 프로젝트별 지침·스킬, 오류 기록).
 
 이미 넣어 두신 내용은 아래처럼 반영했습니다.
 

@@ -4,7 +4,7 @@ description: 사용자가 방금 한 작업이나 자주 하는 작업을 OpenCo
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.4"
+  version: "1.6.5"
   platform: windows
 ---
 
@@ -30,8 +30,9 @@ metadata:
 | 할 일 | 명령 |
 |---|---|
 | 스킬 등록 | `python "C:\AIKIT\office-cli\skill.py" save --name <스킬 이름> --description "<설명>" --file "C:\AIKIT\data\scripts\<스킬 이름>_skill.md"` |
+| 이 프로젝트에서만 쓸 스킬 | 사용자가 "이 프로젝트(폴더)에서만"이라고 할 때만 위 등록 명령 끝에 `--project "<프로젝트 폴더>"` (그 폴더에서 연 OpenCode에서만 보임) |
 | 스킬 고치기 | 본문 파일을 고친 뒤 위 명령을 다시 실행한다. "이미 있습니다"가 나오면 사용자에게 묻고 `confirm_commands[0]` |
-| 스킬 목록 | `python "C:\AIKIT\office-cli\skill.py" list` (`kind`: 기본 / 사용자) |
+| 스킬 목록 | `python "C:\AIKIT\office-cli\skill.py" list` (`kind`: 기본 / 사용자 / 프로젝트) |
 | 스킬 점검 | `python "C:\AIKIT\office-cli\skill.py" check --name <스킬 이름>` (`problems`를 그대로 알림) |
 | 스킬 지우기 | `python "C:\AIKIT\office-cli\skill.py" delete --name <스킬 이름> --dry-run` (확인 뒤 `confirm_commands[0]`. 기본 스킬은 지우지 않음) |
 

@@ -133,17 +133,20 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다.
    - 사용자가 연 Office를 닫지(`Quit`) 않고, 사용자 문서를 저장하는 것은 5장대로 먼저 묻는다.
 
 ## 9. 지침과 스킬 파일 위치 (물어보면 아래를 그대로 알린다)
-사용자가 "지침 어디 있어", "스킬 경로 알려줘"처럼 물으면 파일을 찾거나 열어 보지 말고 아래 표를 그대로 알린다. `%USERPROFILE%`은 `C:\Users\<사용자 이름>` 폴더다.
+사용자가 "지침 어디 있어", "스킬 경로 알려줘"처럼 물으면 파일을 찾거나 열어 보지 말고 아래 표를 그대로 알린다.
+OpenCode는 아래 파일을 복사하지 않고 그 자리에서 읽는다 (설정 폴더 `C:\AIKIT\opencode` = 환경 변수 `OPENCODE_CONFIG_DIR`, setup.bat이 설정).
 
-| 무엇 | OpenCode가 읽는 파일 | 원본 (고칠 때는 이것) |
-|---|---|---|
-| 전역 지침 (이 파일) | `%USERPROFILE%\.config\opencode\AGENTS.md` | `C:\AIKIT\opencode\AGENTS.md` |
-| office-cli 스킬 (office-excel, office-doc, office-mail, office-spec, office-data, skill-maker) | `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md` | `C:\AIKIT\office-cli\skills\<스킬 이름>\SKILL.md` |
-| ml-kit 스킬 (ml-train, ml-dataset, ml-predict, ml-report, ml-map) | `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md` | `C:\AIKIT\ml-kit\skills\<스킬 이름>\SKILL.md` |
-| 사내 LLM 연결 설정 | `%USERPROFILE%\.config\opencode\opencode.jsonc` | `C:\AIKIT\opencode\opencode.jsonc` |
-| 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt` | (도구가 실패할 때 저절로 덧붙임) |
+| 무엇 | 파일 (고칠 때도 이것) |
+|---|---|
+| 전역 지침 (이 파일) | `C:\AIKIT\opencode\AGENTS.md` |
+| office-cli 스킬 (office-excel, office-doc, office-mail, office-spec, office-data, skill-maker) | `C:\AIKIT\office-cli\skills\<스킬 이름>\SKILL.md` |
+| ml-kit 스킬 (ml-train, ml-dataset, ml-predict, ml-report, ml-map) | `C:\AIKIT\ml-kit\skills\<스킬 이름>\SKILL.md` |
+| 사용자가 만든 스킬 | `C:\AIKIT\opencode\skills\<스킬 이름>\SKILL.md` |
+| 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<스킬 이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐) |
+| 스킬 경로·셸·권한 설정 | `C:\AIKIT\opencode\opencode.json` |
+| 사내 LLM 연결 설정 | `C:\AIKIT\opencode\opencode.jsonc` |
+| 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
 
-- 사용자가 만든 스킬은 `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md`에만 있다 (원본 없음, setup.bat이 건드리지 않음).
-  스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-maker` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
-- 원본을 고친 뒤 `C:\AIKIT\setup.bat`을 실행하면 OpenCode 설정 폴더로 복사되고(바뀐 파일만, 덮어쓰기 전 `C:\AIKIT\data\setup_backup_<시각>`에 보관), OpenCode를 다시 시작하면 반영된다 (setup이 백그라운드 서비스를 끔. 안 되면 `C:\AIKIT\web.bat stop` 뒤 다시 실행). 설정 폴더의 파일을 직접 고치면 다음 setup 때 원본으로 바뀐다.
+- 스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-maker` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
+- 위 파일을 고친 뒤 OpenCode를 모두 닫았다가 다시 시작하면 반영된다 (안 되면 `C:\AIKIT\web.bat stop` 뒤 다시 실행). `%USERPROFILE%\.config\opencode`는 쓰지 않는다.
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).

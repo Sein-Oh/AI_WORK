@@ -13,6 +13,9 @@ if not exist "%OC%" (
   pause
   exit /b 1
 )
+rem OpenCode settings folder = this folder's opencode (AGENTS.md, opencode.json, opencode.jsonc, skills). setup.bat also sets it
+rem as a user environment variable; setting it here makes web.bat right even in a window opened before setup.
+set "OPENCODE_CONFIG_DIR=%~dp0opencode"
 if /i "%~1"=="stop" goto service
 if /i "%~1"=="status" goto service
 

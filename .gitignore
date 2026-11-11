@@ -33,6 +33,8 @@ AIKIT/office-cli/config.json
 # 배포 설치(AIKIT/setup.py): 보관 폴더(data/setup_backup_<시각>), 사용자가 넣는 OpenCode 설정(사내 LLM 주소)
 AIKIT/data/
 AIKIT/opencode/opencode.jsonc
+# 사용자가 만든 OpenCode 스킬 (skill.py save가 C:\AIKIT\opencode\skills에 둠, 사용자 것이라 저장소에 넣지 않음)
+AIKIT/opencode/skills/
 # 배포 때 C:\AIKIT에 함께 두는 것 (저장소에는 넣지 않음)
 AIKIT/python/
 AIKIT/opencode.exe

@@ -11,6 +11,30 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.6.5] - 2026-11-12
+
+배포 폴더 `C:\CLI` -> `C:\AIKIT`(저장소 `CLI/`, `CLI-dev/` -> `AIKIT/`, `AIKIT/dev/`)와 OpenCode 설정을 `C:\AIKIT` 기준으로 (집 PC, OpenCode 2.2.5에서 확인).
+
+### 구조: OpenCode가 C:\AIKIT을 그 자리에서 읽음 (복사 없음)
+- 집 PC 확인(2026-11-12, OpenCode 2.2.5): `OPENCODE_CONFIG_DIR`로 설정 폴더가 통째로 바뀌고(옛 `%USERPROFILE%\.config\opencode`는 읽지 않음,
+  로그인·대화 기록은 데이터 폴더라 그대로), `opencode.json`과 `opencode.jsonc`가 함께 읽히고, `skills.paths`는 설정 파일 폴더 기준 상대 경로로 읽히고,
+  프로젝트 폴더의 `AGENTS.md`·`.opencode\skills`는 그 폴더에서 연 세션(TUI, Web UI, `opencode run`)에만 더해짐.
+- `setup.py`: 복사 대신 사용자 환경 변수 `OPENCODE_CONFIG_DIR=<설치 폴더>\opencode`(HKCU, 관리자 권한 필요 없음, 원래 값 보관, 다시 읽어 확인, 환경 변경 알림).
+  옛 전역 설정 폴더의 우리 스킬·`AGENTS.md`는 보관 후 지우고(링크면 링크만), 사용자가 만든 스킬과 `opencode.jsonc`는 `C:\AIKIT\opencode`로 옮김
+  (이미 있으면 그것을 쓰고 옛 것은 보관). `--config-dir` 없앰, `--test-skill`은 `C:\AIKIT\opencode\skills`에. 동작 확인에 `opencode debug paths`의 config 줄.
+  설정 점검은 `opencode.json` + `opencode.jsonc`를 합쳐서, 두 파일에 같은 우리 키(skills, shell, permission, autoupdate)가 있으면 WARN.
+- 새 배포 파일 `AIKIT/opencode/opencode.json`: `skills.paths`(`../ml-kit/skills`, `../office-cli/skills`), `"shell": "powershell"`, `"autoupdate": false`,
+  `permission`(external_directory 허용, webfetch·websearch 막음). `opencode.jsonc`(사용자가 넣음)에는 provider, model, enabled_providers만.
+- `web.bat`이 시작할 때 `OPENCODE_CONFIG_DIR`를 스스로 정함 (setup 전에 연 창에서도 맞게 뜸).
+- `run_all_tests.py` diag: 설정 폴더 복사본 비교 대신 PATH, `OPENCODE_CONFIG_DIR`, 옛 전역 설정의 우리 복사본을 읽기만 해서 확인.
+
+### 기능: skill.py 위치와 프로젝트 스킬
+- 사용자 스킬은 `<설치 폴더>\opencode\skills`(`OPENCODE_CONFIG_DIR`, 없으면 도구 폴더의 부모 `\opencode`. 테스트용 `OFFICE_CLI_OPENCODE_DIR` 없앰).
+  기본 스킬은 도구 폴더의 `skills`에서 읽음(목록·점검, 지우기 거절).
+- `--project <폴더>`(save, list, check, delete): `<폴더>\.opencode\skills`. 그 폴더에서 연 세션에서만 보임. 없는 폴더는 만들지 않고 STOP_RETRY.
+  `list`의 `kind`: 기본 / 사용자 / 프로젝트. skill-maker 스킬에 "이 프로젝트에서만"일 때의 `--project` 한 줄.
+- 전역 지침 9장 위치 표를 새 위치로 (복사 설명 없앰), 프로젝트별 지침·스킬 줄 추가. 사용 가이드에 프로젝트 스킬 사례.
+
 ## [1.6.4] - 2026-11-11
 
 PR #77(1.6.3) 병합 뒤의 작업. 회사 PC 사내 LLM 시험(Gemma 15/21, BEAM 18/21, 2026-11-11 저녁) 조치 포함.

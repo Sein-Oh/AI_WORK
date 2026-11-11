@@ -12,7 +12,9 @@ BODY = "# 주간 보고 정리\n\n## 순서\n1. `python \"C:\\AIKIT\\data\\scrip
 
 @pytest.fixture
 def cfg(tmp_path, monkeypatch):
-    monkeypatch.setenv("OFFICE_CLI_OPENCODE_DIR", str(tmp_path / "cfg"))
+    """OpenCode 설정 폴더(OPENCODE_CONFIG_DIR)와 기본 스킬 폴더를 tmp_path로 (실제 C:\\AIKIT의 스킬을 건드리지 않음)."""
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setattr(skill, "base_dirs", lambda: [str(tmp_path / "base")])
     body = tmp_path / "weekly_skill.md"
     body.write_text(BODY, encoding="utf-8")
     return tmp_path / "cfg" / "skills", str(body)
@@ -90,8 +92,8 @@ def test_list_check_delete(cfg, capsys, tmp_path, monkeypatch):
     code, out = run_main(skill, capsys, "list")
     assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
     _save(capsys, body)
-    base = root / "office-excel"
-    base.mkdir()
+    base = tmp_path / "base" / "office-excel"                            # 기본 스킬은 도구 폴더의 skills (setup이 복사하지 않음)
+    base.mkdir(parents=True)
     (base / "SKILL.md").write_text("---\nname: office-excel\ndescription: 엑셀 읽기와 쓰기에 쓰는 기본 스킬이다.\n---\n\n# x\n1. `a`\n", encoding="utf-8")
     code, out = run_main(skill, capsys, "list")
     kinds = {x["name"]: x["kind"] for x in out["skills"]}
@@ -111,3 +113,34 @@ def test_list_check_delete(cfg, capsys, tmp_path, monkeypatch):
     code, out = run_main(skill, capsys, *argv)
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and not (root / "weekly-report").exists(), out
     assert os.path.isfile(os.path.join(out["backup"], "SKILL.md"))          # 지운 내용은 보관
+
+
+def test_project_skill_goes_to_project_opencode_folder(cfg, capsys, tmp_path, monkeypatch):
+    """1.6.5: --project <폴더> -> <폴더>\\.opencode\\skills (OpenCode 2.2.5가 그 폴더에서 연 세션에만 더함, 집 PC 2026-11-12 확인).
+    없는 폴더는 만들지 않고 STOP_RETRY (오타 경로에 .opencode가 생기지 않게)."""
+    root, body = cfg
+    monkeypatch.setenv("OFFICE_CLI_DATA_DIR", str(tmp_path / "data"))
+    proj = tmp_path / "시험A"
+    proj.mkdir()
+    code, out = _save(capsys, body, "--project", str(proj))
+    path = proj / ".opencode" / "skills" / "weekly-report" / "SKILL.md"
+    assert code == 0 and out["skill_file"] == str(path) and out["kind"] == "프로젝트" and path.is_file(), out
+    assert str(proj) in out["preview"] and "에서만" in out["preview"] and not root.exists()
+    code, out = run_main(skill, capsys, "list")                            # --project 없이는 보이지 않음
+    assert out["count"] == 0, out
+    code, out = run_main(skill, capsys, "list", "--project", str(proj))
+    assert out["count"] == 1 and out["skills"][0]["kind"] == "프로젝트", out
+    code, out = run_main(skill, capsys, "check", "--name", "weekly-report", "--project", str(proj))
+    assert code == 0 and out["skill_file"] == str(path), out
+    code, out = run_main(skill, capsys, "delete", "--name", "weekly-report", "--project", str(proj))
+    assert code == 0 and not path.parent.exists(), out
+    code, out = _save(capsys, body, "--project", str(tmp_path / "없는 폴더"))
+    assert code == 1 and "--project 폴더가 없습니다" in out["message"] and not (tmp_path / "없는 폴더").exists(), out
+
+
+def test_default_folder_is_the_aikit_opencode_folder(monkeypatch):
+    """OPENCODE_CONFIG_DIR가 없으면 도구 폴더의 부모(C:\\AIKIT)\\opencode, 기본 스킬은 도구 폴더의 skills."""
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+    kit = os.path.dirname(os.path.dirname(os.path.abspath(skill.__file__)))
+    assert skill.skills_dir() == os.path.join(kit, "opencode", "skills")
+    assert skill.base_dirs() == [os.path.join(kit, "ml-kit", "skills"), os.path.join(kit, "office-cli", "skills")]
