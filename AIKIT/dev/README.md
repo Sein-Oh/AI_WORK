@@ -27,14 +27,10 @@ python run_all_tests.py --label 회사PC --gemma    :: 끝에 Gemma 종합 테�
 python run_all_tests.py --only diag              :: 환경 진단과 도구 오류 로그만 (1분)
 ```
 
-- 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `AIKIT\dev\tests`)
-  -> `beta`(`run_beta_check.py --agent`, F7~F9 엑셀 재계산 포함: F8 파생변수, F9 글자 입력) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
+- 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `beta`(`run_beta_check.py --agent`, F7~F9 엑셀 재계산 포함: F8 파생변수, F9 글자 입력) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
-- `pytest` 단계는 테스트 파일마다 따로 실행하고 동시에 `코어 수 - 1`개, 메모리 4GB마다 1개, 최대 3개씩 돌립니다(2026-11-10: 회사 PC에서 코어 수만큼 돌리자 메모리가 모자라 89분, 시간 초과 18건. 결과 표 비고에 동시 실행 수·코어·메모리) (`--pytest-workers N`, 1이면 하나씩.
-  2.9.85: 회사 PC에서 하나씩 돌리면 62분). ml-kit의 무거운 회귀 시험(보고서, 읽기 배치 조합, `ml-kit/tests/slow_tests.txt`)은 평소에 빼고
-  `--full`(PR 전·릴리스 전)일 때만 돌립니다 (2026-11-12: 전체가 리눅스 26분, 평소 분량은 6분). 화면에는 파일이 끝날 때마다 한 줄과 실패(`[LIVE]`)만 나오고, 결과 파일 상세에는 파일마다의 출력이 들어갑니다.
-  실패한 시험은(파일마다 5건 이하) 끝난 뒤 혼자 한 번 다시 돌립니다: 통과하면 실패가 아니라 `참고 (WARN)`에 "처음에는 실패했지만 혼자 다시 돌려 통과"로 남기고,
-  다시 실패한 것만 실패로 셉니다 (PC 쪽 작업과 겹친 시간 초과가 실행마다 달랐음, 2026-11-11). 끄려면 `--no-rerun`.
+- pytest(오프라인 테스트)는 이 러너에 없습니다. 클라우드에서만 돌립니다 (2026-11-12 사용자 결정: 회사·집 PC에서 날마다 몇 시간씩은 무리.
+  가짜 Office로 보는 시험이라 Windows에서도 결과가 같아야 하고, Windows에서만 보이는 것은 아래 실제 환경 단계가 봅니다).
 - `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.py`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\AIKIT\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
   시험 폴더(기본 `C:\AIKIT\dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\AIKIT\dev\work\gemma_runs_<시각>`에 남깁니다.
@@ -47,9 +43,6 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   요청별로 답한 모델은 기록 폴더 `models.json`, 실행 기록의 "요청별 모델", 채점 보고서 머리에 남음.
   합격 기준은 Gemma 4 26B 결과 (`docs/opencode/실기테스트.md` 3장).
   시나리오에 `manual`(사람이 준비할 것)이 있는 요청(O3, Outlook 메일)은 보내지 않고 건너뜀 "수동 전용"으로 남깁니다.
-- `pytest` 단계: 도구 하나의 시간 상한은 `--pytest-timeout`(기본 7200초, 회사 PC에서 ml-kit이 3600초를 넘음). 플러그인 `pytest_live_report.py`(`-p`)가
-  실패·오류를 생기는 즉시 `[LIVE] FAILED <id> - <원인>` 줄로 내보내므로, 시간 상한에 끊겨도 그때까지의 실패 이름과 짧은 원인이 결과 파일 실패 목록에 남고
-  시간 초과는 따로 FAIL 한 줄로 적힙니다.
 - `diag` 등급: 라이브러리 기본 템플릿 손상은 도구가 그 템플릿을 쓸 때만 FAIL. python-pptx 기본 템플릿은 어느 도구도 쓰지 않아 참고(WARN),
   python-docx 기본 템플릿은 ml-kit 보고서(`ml_report.new_report_document`, 폴더 템플릿으로 복구)가 빈 문서를 실제로 만들 수 있으면 참고, 못 만들면 FAIL.
   참고(WARN)는 결과 파일 맨 위 "참고" 목록에 나오고 실패로 세지 않습니다. 오프라인 테스트의 샘플 문서는 기본 템플릿 없이도 만듭니다
@@ -57,7 +50,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 - `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP).
 - Windows + pywin32가 아니면 `ml`, `office`는 ENV-SKIP (클라우드에서도 나머지는 그대로 돎).
 - 결과: `C:\AIKIT\dev\result_<라벨>_<시각>.md` 하나. 맨 위 요약 표(단계별 PASS/FAIL/SKIP, 시간, 비고)와 실패·건너뜀(ENV-SKIP)·UNVERIFIED 목록, 그 아래 단계별 상세
-  (pytest 출력, 베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
+  (베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
   베타 점검이 만든 `beta_check_*.md/.xlsx`는 내용을 결과 파일에 넣고 시험 폴더(`C:\AIKIT\dev\work\beta_<시각>`)로 옮기며, 점검이 일부러 낸 도구 오류는 그 폴더의 `_data`에 기록합니다(실제 오류 로그와 섞이지 않음).
 - 종료 코드: 0 = 실패 없음, 1 = FAIL인 단계가 있음, 130 = Ctrl+C. 결과 파일은 GitHub 웹에서 `docs/test_logs/`에 업로드합니다(회사 정보가 있어 프로젝트 마무리 때 이력에서 정리).
 - 시험 폴더는 모두 `C:\AIKIT\dev\work\` 아래입니다 (`beta_<시각>`, `office`, `ml 테스트`, `gemma`, `gemma_runs_<시각>`, 눈 확인용 `눈확인`). git에는 올리지 않으며, 반입 때 `C:\AIKIT\dev`를 통째로 지우면 함께 사라집니다.

@@ -49,7 +49,6 @@ AI_WORK/
 └── AIKIT/dev/                 # AIKIT 안의 개발·실기 테스트 폴더 (C:\AIKIT\dev, 도구와 함께 배포, 도구는 읽지 않음)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)
-    ├── pytest_live_report.py  # run_all_tests.py pytest 단계 플러그인 (실패를 생기는 즉시 기록)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
     ├── run_simplify_check.py  # 사용법 단순화 실기 점검 (사람이 실행)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성

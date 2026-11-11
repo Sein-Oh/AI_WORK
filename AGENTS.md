@@ -151,7 +151,8 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 파일 저장·폴더 조작·텍스트 읽기는 JIT 자가복구 표의 공통 함수를 사용한다.
 - AIKIT/·AIKIT/dev/에 반입할 파일은 .py .md .txt .json .tsv .bat만 쓴다 (예외: `AIKIT/guide/`의 .html, 2026-11-12 사용자 결정: 회사 반입 통과). .yaml/.yml/.jsonl/.toml 등은 회사 반입 시스템이 막으므로 쓰지 않는다(실행 중 PC에서 생기는 파일은 상관없음). 검사: `AIKIT/dev/tests/test_repo_files.py`.
 - 도구 폴더(`AIKIT/<tool>/`)는 단독 배포된다. 공통 런타임 함수는 도구마다 자기 폴더에 두고, 다른 도구 폴더를 import하지 않는다.
-- 테스트는 "사용자 환경" 표의 버전 기준으로 통과해야 하고, 리눅스(클라우드)와 Windows(회사·집 PC)에서 같은 결과여야 한다. 실기에서 깨졌던 것:
+- 테스트(pytest)는 클라우드에서만 돌린다 (회사·집 PC 점검 `run_all_tests.py`에는 없음, 2026-11-12 사용자 결정). 그래도 "사용자 환경" 표의 버전 기준이고
+  Windows에서 돌려도 같은 결과여야 한다 (개발자가 Windows에서 직접 돌릴 수 있음). 실기에서 깨졌던 것:
   - 도구가 낸 명령을 나눌 때 `shlex.split`(posix)은 Windows 경로의 `\`를 지운다 -> 테스트 공용 `split_command`(Windows 명령줄 규칙)를 쓴다.
   - 파일 크기·내용 비교는 줄 끝과 무관하게 (`core.autocrlf=true`로 받으면 CRLF가 된다).
   - 라이브러리 기본 템플릿(`pptx.Presentation()`, `docx.Document()`)에 기대지 않는다 (문서 보안 프로그램이 지우거나 바꾼다).

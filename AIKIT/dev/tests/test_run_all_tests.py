@@ -44,8 +44,8 @@ def test_normal_child_output_and_exit_code(capsys):
     assert (code, out, stop) == (3, "a\nb", False)
 
 
-def test_pytest_targets_and_packages():
-    assert "tests" in rat.PYTEST_TARGETS and os.path.isdir(os.path.join(rat.HERE, "tests"))
+def test_packages():
+    assert "pytest" not in rat.PACKAGES                         # pytest는 클라우드에서만 (회사·집 PC 점검에서 뺌, 2026-11-12)
     assert "PyYAML" not in rat.PACKAGES                         # 시나리오는 agent_scenarios.py (회사 반입이 .yaml을 막음)
     assert set(rat.PACKAGES) == set(rat.IMPORTS)
 
@@ -118,7 +118,7 @@ def test_default_stages_run_in_order_into_one_file(iso, monkeypatch, capsys):
     order = []
     _fake_runners(monkeypatch, order)
     assert rat.main(["--label", "회사PC"]) == 0
-    assert order == ["diag", "pytest", "beta", "office"] == list(rat.DEFAULT_STAGES)
+    assert order == ["diag", "beta", "office"] == list(rat.DEFAULT_STAGES)    # pytest는 클라우드에서만 (2026-11-12)
     files = _result_files(iso)
     assert len(files) == 1 and files[0].startswith("result_회사PC_")
     assert [p for p in os.listdir(iso) if os.path.isfile(iso / p)] == files     # nothing else written next to the runner
@@ -159,9 +159,8 @@ def test_summary_table_and_lists_at_top(iso, monkeypatch, capsys):
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
     head = text[:text.index("## 1. ")]
     assert "| 1. 환경 진단 | FAIL | 3 | 1 | 0 |" in head
-    assert "| 2. 오프라인 테스트 (pytest) | PASS | 1 | 0 | 0 |" in head
-    assert "| 3. ml-kit 베타 점검 (run_beta_check) | PASS | 26 | 0 | 1 |" in head
-    assert "| 4. office-cli 실기 러너 (실제 Office) | ENV-SKIP | 0 | 0 | 0 |" in head
+    assert "| 2. ml-kit 베타 점검 (run_beta_check) | PASS | 26 | 0 | 1 |" in head
+    assert "| 3. office-cli 실기 러너 (실제 Office) | ENV-SKIP | 0 | 0 | 0 |" in head and "pytest" not in head
     assert "### 실패 1건" in head and "- [diag] python-docx 기본 템플릿: zip 형식=False" in head
     assert "- [beta] F7 엑셀로 수식 재계산 확인" in head and "- [office] 단계 전체: Windows가 아님" in head
     assert "### UNVERIFIED (도구가 결과를 확인하지 못한 호출) 1건" in head and "- [beta] excel.py read" in head
@@ -189,13 +188,13 @@ def test_interrupt_and_stage_error_keep_the_file(iso, monkeypatch, capsys):
         stage.passed += 1
         raise KeyboardInterrupt
     order = []
-    _fake_runners(monkeypatch, order, {"pytest": boom, "beta": stop})
+    _fake_runners(monkeypatch, order, {"diag": boom, "beta": stop})
     assert rat.main(["--label", "x"]) == 130
-    assert order == ["diag", "pytest", "beta"]                 # an error goes on to the next stage, Ctrl+C stops
+    assert order == ["diag", "beta"]                           # an error goes on to the next stage, Ctrl+C stops
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
-    assert "| 2. 오프라인 테스트 (pytest) | FAIL | 0 | 1 | 0 |" in text and "runner bug" in text
-    assert "| 3. ml-kit 베타 점검 (run_beta_check) | 중단 | 1 | 0 | 0 |" in text
-    assert "| 4. office-cli 실기 러너 (실제 Office) | 대기 | - | - | - |" in text
+    assert "| 1. 환경 진단 | FAIL | 0 | 1 | 0 |" in text and "runner bug" in text
+    assert "| 2. ml-kit 베타 점검 (run_beta_check) | 중단 | 1 | 0 | 0 |" in text
+    assert "| 3. office-cli 실기 러너 (실제 Office) | 대기 | - | - | - |" in text
     assert "사용자가 중단했습니다" in text and "## 도구 오류 로그" in text
 
 
@@ -220,86 +219,6 @@ def test_parse_office_runner_files():
     clean = rat.Stage("office")
     rat.parse_office_logs(clean, "결과: PASS=3\n문제 항목: 없음\n", "UNVERIFIED 결과 0건 (없음)")
     assert (clean.passed, clean.failed, clean.failures, clean.unverified) == (3, 0, [], [])
-
-
-def test_parse_pytest_summary():
-    out = ("..F.s\nFAILED tests/test_a.py::test_x - assert 1 == 2\nSKIPPED [1] tests/test_b.py:3: Windows only\n"
-           "= 1 failed, 3 passed, 1 skipped in 0.5s =")
-    assert rat.parse_pytest(out) == (3, 1, 1, ["FAILED tests/test_a.py::test_x - assert 1 == 2"],
-                                     ["SKIPPED [1] tests/test_b.py:3: Windows only"])
-    assert rat.parse_pytest("12 passed in 3.0s")[:3] == (12, 0, 0)
-    assert rat.parse_pytest("1 passed, 2 errors in 1s")[:3] == (1, 2, 0)
-
-
-def test_live_failures_merge_with_summary():
-    summary = ["FAILED tests/test_a.py::test_x - assert 1 == 2"]
-    live = rat.parse_live("..F[LIVE] FAILED tests/test_a.py::test_x - assert 1 == 2\n"
-                          "[LIVE] ERROR tests/test_b.py::test_y[a b] (setup) - ValueError: boom\n"
-                          "[LIVE] ERROR tests/test_b.py::test_y[a b] (setup) - ValueError: boom\n")
-    assert live == ["FAILED tests/test_a.py::test_x - assert 1 == 2", "ERROR tests/test_b.py::test_y[a b] (setup) - ValueError: boom"]
-    assert rat.merge_live(summary, live) == summary + [live[1]]
-    assert rat.merge_live([], live) == live                     # 시간 초과로 요약이 없을 때
-
-
-SLOW_TESTS = '''import time
-def test_fails_first():
-    assert 1 == 2, "보이는 원인"
-def test_ok():
-    pass
-def test_hangs():
-    time.sleep(120)
-'''
-
-
-def test_pytest_stage_keeps_failure_names_when_stopped_by_time_limit(iso, monkeypatch, capsys):
-    """회사 PC: ml-kit pytest가 시간 상한에 끊겨 실패 F 11개의 이름이 남지 않았다. 이제 플러그인이 실패를 생기는 즉시 [LIVE] 줄로
-    내보내므로 끊겨도 실패 이름과 원인이 결과에 남고, 시간 초과도 따로 FAIL로 적힌다."""
-    folder = iso / "tests"
-    folder.mkdir()
-    (folder / "test_slow.py").write_text(SLOW_TESTS, encoding="utf-8")
-    (iso / "pytest_live_report.py").write_text(open(os.path.join(os.path.dirname(HERE), "pytest_live_report.py"),
-                                                    encoding="utf-8").read(), encoding="utf-8")
-    monkeypatch.setattr(rat, "PYTEST_TARGETS", ("tests",))
-    st = rat.Stage("pytest")
-    rat.step_pytest(st, type("A", (), {"pytest_timeout": 20})(), {})
-    assert any("test_slow.py::test_fails_first" in f and "보이는 원인" in f for f in st.failures), st.failures
-    assert any("시간 상한 20초로 중단" in f for f in st.failures), st.failures
-    assert st.failed == 2
-
-
-FLAKY_TESTS = '''import os
-MARK = os.path.join(os.path.dirname(__file__), "ran_once.txt")
-def test_fails_only_the_first_time():
-    first = not os.path.exists(MARK)
-    open(MARK, "w").close()
-    assert not first, "처음만 실패"
-def test_always_fails():
-    assert 1 == 2, "늘 실패"
-def test_ok():
-    pass
-'''
-
-
-def test_pytest_stage_reruns_failed_tests_once_alone(iso, monkeypatch, capsys):
-    """회사 PC 2026-11-11: PC가 느려진 시간대의 시간 초과 실패가 실행마다 달랐다. 실패한 시험만 혼자 한 번 다시 돌려, 통과하면
-    참고(WARN)로, 다시 실패하면 실패로 센다. --no-rerun이면 다시 돌리지 않는다."""
-    folder = iso / "tests"
-    folder.mkdir()
-    (folder / "test_flaky.py").write_text(FLAKY_TESTS, encoding="utf-8")
-    (iso / "pytest_live_report.py").write_text(open(os.path.join(os.path.dirname(HERE), "pytest_live_report.py"),
-                                                    encoding="utf-8").read(), encoding="utf-8")
-    monkeypatch.setattr(rat, "PYTEST_TARGETS", ("tests",))
-    st = rat.Stage("pytest")
-    rat.step_pytest(st, type("A", (), {"pytest_timeout": 60})(), {})
-    assert st.failed == 1 and st.passed == 2, (st.failed, st.passed, st.failures)
-    assert len(st.failures) == 1 and "test_always_fails" in st.failures[0], st.failures
-    assert any("test_fails_only_the_first_time" in w and "다시 돌려 통과" in w and "처음 원인: AssertionError" in w for w in st.warnings), st.warnings
-    assert "실패한 시험만 다시 돌림: 1건 통과, 1건 다시 실패" in st.details[-1][1]
-    assert not any("실패 항목 없이 끝남" in f for f in st.failures), st.failures
-    os.remove(folder / "ran_once.txt")
-    st = rat.Stage("pytest")
-    rat.step_pytest(st, type("A", (), {"pytest_timeout": 60, "no_rerun": True})(), {})
-    assert st.failed == 2 and st.passed == 1 and not any("다시 돌려" in w for w in st.warnings)
 
 
 def test_diag_template_damage_is_warn_when_tools_do_not_need_it(monkeypatch):
@@ -528,7 +447,7 @@ def test_gemma_is_opt_in_and_env_skip_without_opencode(iso, monkeypatch, capsys)
     assert "gemma" not in order
     order.clear()
     rat.main(["--label", "a", "--gemma"])
-    assert order == ["diag", "pytest", "beta", "office", "gemma"]
+    assert order == ["diag", "beta", "office", "gemma"]
     monkeypatch.setattr(rat.shutil, "which", lambda name: None)
     assert rat.find_opencode() is None and rat.find_opencode(str(iso / "없음.exe")) is None
     stage = rat.Stage("gemma")
@@ -572,59 +491,3 @@ def test_simplify_dry_run_sheet_delete_uses_name():
         assert "--name" in argv and "--sheet" not in argv, argv
 
 
-def test_pytest_workers_default_is_capped_by_cores_and_memory(monkeypatch):
-    """회사 PC 2026-11-10: 코어 수 - 1개로 돌리자 메모리가 모자라 pytest가 89분, 시간 초과 18건. 기본은 최대 3개, 메모리 4GB마다 1개."""
-    args = type("A", (), {"pytest_workers": 0})()
-    monkeypatch.setattr(rat.os, "cpu_count", lambda: 16)
-    monkeypatch.setattr(rat, "total_memory_gb", lambda: 64.0)
-    assert rat.pytest_workers(args) == 3
-    monkeypatch.setattr(rat, "total_memory_gb", lambda: 8.0)
-    assert rat.pytest_workers(args) == 2
-    monkeypatch.setattr(rat, "total_memory_gb", lambda: 3.0)
-    assert rat.pytest_workers(args) == 1
-    monkeypatch.setattr(rat.os, "cpu_count", lambda: 2)
-    monkeypatch.setattr(rat, "total_memory_gb", lambda: None)
-    assert rat.pytest_workers(args) == 1
-    args.pytest_workers = 6
-    assert rat.pytest_workers(args) == 6
-    assert rat.total_memory_gb() is None or rat.total_memory_gb() > 0
-
-
-def test_slow_python_start_windows_are_reported():
-    # 회사 PC 2026-11-10 낮: 파일 정리 작업 시간대에 프로세스를 띄우는 시험이 수십 배 느려짐 -> 그 시간대를 결과에 남김
-    s = [("12:00", 0.4), ("12:01", 0.5), ("12:02", 9.0), ("12:03", 30.0), ("12:04", 0.6), ("12:05", 3.0)]
-    assert rat.slow_windows(s) == ["12:02~12:03 파이썬 시작 최대 30.0초 (평소 0.4초)", "12:05~12:05 파이썬 시작 최대 3.0초 (평소 0.4초)"]
-    assert rat.slow_windows([("12:00", 0.4), ("12:01", 1.9)]) == [] and rat.slow_windows([]) == []
-    # 재부팅 직후처럼 첫 측정부터 느리면: 가장 빠른 측정이 평소 (회사 PC 2026-11-10 15:07 2.4초, 15:29 이후 1초)
-    late = [("15:07", 2.36), ("15:12", 16.1), ("15:29", 1.05), ("15:41", 0.59)]
-    assert rat.slow_windows(late) == ["15:12~15:12 파이썬 시작 최대 16.1초 (평소 0.59초)"]
-    assert rat.probe_python() is not None
-
-
-def test_long_files_start_first_across_tools(tmp_path):
-    # 오래 걸리는 파일을 도구와 관계없이 먼저 (끝에 긴 파일 셋이 함께 몰리던 것)
-    ml, oc = tmp_path / "ml-kit" / "tests", tmp_path / "office-cli" / "tests"
-    for d, names in ((ml, ["test_train.py", "test_skill_docs.py"]), (oc, ["test_reader.py", "test_word.py"])):
-        d.mkdir(parents=True)
-        for n in names:
-            (d / n).write_text("x" * 100, encoding="utf-8")
-    jobs = [("ml-kit", str(tmp_path / "ml-kit"), str(ml / "test_skill_docs.py")),
-            ("office-cli", str(tmp_path / "office-cli"), str(oc / "test_word.py")),
-            ("office-cli", str(tmp_path / "office-cli"), str(oc / "test_reader.py")),
-            ("ml-kit", str(tmp_path / "ml-kit"), str(ml / "test_train.py"))]
-    jobs.sort(key=lambda j: -rat.job_seconds(*j))
-    assert [os.path.basename(j[2]) for j in jobs[:2]] == ["test_train.py", "test_reader.py"]
-
-
-def test_pytest_stage_all_reruns_pass_is_not_a_failure(iso, monkeypatch, capsys):
-    """회사 PC 2026-11-11: 다시 돌려 모두 통과했는데 처음 실행의 exit 1 때문에 'pytest exit 1 (실패 항목 없이 끝남)'으로 실패가 남았다."""
-    folder = iso / "tests"
-    folder.mkdir()
-    (folder / "test_flaky.py").write_text(FLAKY_TESTS.replace("def test_always_fails():\n    assert 1 == 2, \"늘 실패\"\n", ""), encoding="utf-8")
-    (iso / "pytest_live_report.py").write_text(open(os.path.join(os.path.dirname(HERE), "pytest_live_report.py"),
-                                                    encoding="utf-8").read(), encoding="utf-8")
-    monkeypatch.setattr(rat, "PYTEST_TARGETS", ("tests",))
-    st = rat.Stage("pytest")
-    rat.step_pytest(st, type("A", (), {"pytest_timeout": 60})(), {})
-    assert st.failed == 0 and st.failures == [] and st.passed == 2, (st.failed, st.failures, st.passed)
-    assert any("다시 돌려 통과" in w for w in st.warnings)

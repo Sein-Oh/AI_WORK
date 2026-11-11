@@ -506,8 +506,13 @@ office-cli `--save` 생략·이름만·상대 경로가 이 규칙을 따름 (�
 ### 3-21. ml-kit pytest 평소 분량 줄임
 사용자 결정: 날마다 몇 시간씩 걸리는 시험은 무리. ml-kit 전체(1052개)는 리눅스 26분·회사 PC 1시간 이상. 이미 고친 문제가 다시 생기는지 보는 무거운
 회귀 시험(report 표시, 읽기 배치 조합 파일 3개, `AIKIT/dev/ml-kit/tests/slow_tests.txt`의 142개 함수: 한 번에 2초 이상)은 평소에 빼고
-`AIKIT_FULL_TEST=1`(또는 `run_all_tests.py --full`)일 때만 돎. 평소 546개 약 6분 (리눅스). 계약·안전·스킬 문서 시험은 늘 돎. office-cli(1분 40초)와
-공통 시험(50초)은 그대로. 회사 PC 평소 점검은 `run_all_tests.py`(--full 없이), 릴리스 전에만 `--full`.
+`AIKIT_FULL_TEST=1`일 때만 돎. 평소 546개 약 6분 (리눅스). 계약·안전·스킬 문서 시험은 늘 돎. office-cli(1분 40초)와
+공통 시험(50초)은 그대로.
+
+### 3-22. 회사·집 PC 점검에서 pytest 뺌
+사용자 결정: pytest는 클라우드에서만. `run_all_tests.py`의 `pytest` 단계와 옵션(`--pytest-timeout`, `--pytest-workers`, `--no-rerun`, `--full`),
+`pytest_live_report.py`를 지움. 기본 단계는 `diag,beta,office`(+ 선택 `ml`, `gemma`). Windows에서만 보이는 문제는 이 실제 환경 단계가 봄.
+pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규칙 그대로 (개발자가 Windows에서 직접 돌릴 수 있음).
 
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
