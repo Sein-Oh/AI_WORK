@@ -1,0 +1,64 @@
+# office-cli 실기 테스트 오류 로그 (분석용)
+# 생성 20261111_085931. 이 파일 전체를 그대로 Claude에게 전달하세요. 편집하지 마세요.
+
+## 1. 환경
+office-cli 버전: 1.6.2 (C:\CLI\office-cli)
+Windows: Windows-11-10.0.26200-SP0 / 10.0.26200
+Python: 3.13.13 (C:\CLI\python\python.exe)
+라이브러리: pywin32 312, openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, pymupdf 1.28.2, olefile 0.47, matplotlib 3.11.1, numpy 2.5.4
+Office (office.py windows의 office): {"Excel": {"version": null, "major": null, "pdf_export": null}}
+config.json: {"transfer_method": {"word": ["export", "redraw"], "ppt": ["export", "redraw"]}}
+러너 옵션: only=L,M,M auto=False agent=False skip_outlook=False self_email=없음 keep_open=False
+테스트 폴더: C:\CLI-dev\work\office / 도구 환경변수: {"OFFICE_CLI_CACHE_DIR": "C:\\CLI-dev\\work\\office\\_cache", "OFFICE_CLI_DATA_DIR": "C:\\CLI-dev\\work\\office\\_data", "OFFICE_CLI_TIME_LIMIT": "0"}
+소요 시간: 102초
+
+## 2. 요약
+결과: ENV-SKIP=1, FAIL=1, PASS=17
+문제 항목: L11(FAIL)
+건너뜀: M3(ENV-SKIP: --self-email 없음)
+
+## 3. 러너 자동 복구와 창/프로세스 정리
+자동 복구: 없음
+정리 기록: 
+  09:01:06 [종료 정리] 대상 문서=테스트 폴더 전체, 끝내도 되는 PID=실행 중 생긴 프로세스
+  09:01:06 [종료 정리]   excel pid 24188: 문서 닫음 A.xlsx
+  09:01:06 [종료 정리]   word pid 21956: 문서 닫음 A.docx
+  09:01:06 [종료 정리]   ppt pid None: 문서 닫음 A.pptx
+  09:01:06 [종료 정리]   excel pid 24188: Quit (테스트 실행 중 생긴 빈 프로세스)
+  09:01:06 [종료 정리]   word pid 21956: Quit (테스트 실행 중 생긴 빈 프로세스)
+  09:01:06 [종료 정리]   ppt pid None: Quit (문서 0개 (PID 모름))
+  09:01:06 [종료 정리]   WM_CLOSE XLMAIN pid 24188 hwnd 804300 제목='Excel' 표시=False
+  09:01:06 [종료 정리]   WM_CLOSE XLMAIN pid 24188 hwnd 541412 제목='Excel' 표시=False
+  09:01:06 [종료 정리]   WM_CLOSE XLMAIN pid 24188 hwnd 408146 제목='' 표시=False
+
+## 4. 문제 항목 상세
+
+----------------------------------------------------------------------
+[FAIL] L11 C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않고 '편집 사용' 안내
+  판정 근거: 다른 통합문서에 쓰인 곳 없음
+  이 항목에서 실행한 도구 명령 1개:
+    $ python excel.py write --range A1 --value "L제한 085957"
+      시작 09:00:31 / 종료코드 1 / 1.2초
+      stdout(JSON):
+        {
+          "status": "error",
+          "tool": "excel",
+          "command": "write",
+          "error_type": "sheet_protected",
+          "message": "시트 'Sheet1'이(가) 보호되어 있어 값을 쓸 수 없습니다 (잠긴 칸 1개: A1). 검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음).",
+          "agent_directive": "STOP_RETRY: 시트가 보호되어 있어 아무것도 바꾸지 않았습니다. message를 사용자에게 그대로 알리세요. 시트 보호를 풀지 말고(암호를 묻거나 추측하지 않음) 사용자가 직접 풀었다고 하면 같은 명령을 1번 다시 실행하세요."
+        }
+      stderr:
+        [WARN] 되돌리기용 스냅샷을 만들지 못했습니다 (작업은 계속): (-2147352567, '예외가 발생했습니다.', (0, 'Microsoft Excel', "'C:\\CLI-dev\\work\\office\\_cache\\snapshots\\excel_0288974deb_20261111_090032_446785.xlsx' 파일을 사용할 수 없습니다. 원인은 다음과 같습니다.\n\n• 해당 파일 이름이나 경로가 없습니다.\n• 다른 프로그램에서 파일을 사용하고 있습니다.\n• 저장하려고 하는 통합 문서 이름이 현재 열려 있는 통합 문서의 이름과 같습니다.", 'xlmain11.chm', 0, -2146827284), None)
+        [ERROR] UserDecisionError: 시트 'Sheet1'이(가) 보호되어 있어 값을 쓸 수 없습니다 (잠긴 칸 1개: A1). 검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음).
+  이 항목의 진행 로그:
+        
+        [L11] 제한된 보기
+            $ python excel.py write --range A1 --value "L제한 085957"
+          => [FAIL] L11 C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않고 '편집 사용' 안내 - 다른 통합문서에 쓰인 곳 없음
+
+## 5. 도구 오류 로그 (_data\logs\errors.txt)
+원본: C:\CLI-dev\work\office\_data\logs\errors.txt (이번 실행에서 추가된 부분)
+===== 2026-11-11T09:00:32 | office-cli 1.6.2 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: excel.py write --range A1 --value <10자 생략>
+결과: sheet_protected | 시트 'Sheet1'이(가) 보호되어 있어 값을 쓸 수 없습니다 (잠긴 칸 1개: A1). 검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음).
