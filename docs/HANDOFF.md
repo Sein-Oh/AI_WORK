@@ -1,10 +1,14 @@
-# 작업 인계 (2026-11-07, 클라우드 세션 -> 집 PC / 회사 PC)
+# 작업 인계 (2026-11-11 갱신, 클라우드 세션 -> 집 PC / 회사 PC)
 
 PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열고 맨 아래 "붙여넣을 첫 메시지"(집 PC용 / 회사 PC용)를 보내면 이어서 진행할 수 있습니다.
 이 파일은 작업이 이어지면 최신 상태로 고치거나 지웁니다.
 
 ## 1. 지금 상태
-- 도구 버전: **ml-kit 2.9.78**, **office-cli 1.4.83** (main은 2.9.77·1.4.83. 2.9.78은 작업 브랜치 `claude/gemma-loop-1108`, PR을 머지했으면 main)
+- 도구 버전: **ml-kit 2.9.90**, **office-cli 1.6.3** (작업 브랜치 `ccr-ecab210c-awib23`, PR #76. 머지했으면 main)
+- 단계: 최종 점검 (2026-11-11). 팀원 배포 직전. 회사 PC 실기 통과 뒤 사내 LLM(OpenCode + BEAM/Nemotron)에 유지보수를 넘길 예정 (인계 자료는 아직 안 만듦)
+- 스킬: ml-kit 5개(ml-train, ml-dataset, ml-predict, ml-report, ml-map), office-cli 5개(office-excel, office-doc, office-mail, office-spec, office-data).
+  스킬 하나 8KB(8192바이트) 이하. 2026-11-11 점검: 도구에 있는데 스킬에 없던 옵션을 채움 (가장 큰 것 office-doc 약 7.3KB)
+- 2026-11-11에 한 일은 3-11장
 - Office는 Office 16만 대상 (2026-11-07 Office 2007 지원 폐기, 집 PC도 Office 2019로 바꿈)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
@@ -349,6 +353,20 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
   다음 반입: `python tools\run_win_tests.py --only L,M,N` (N 그룹이 새 기능을 실제 Office에서 질문 없이 확인)
 - office-cli 1.6.1: 사용자가 고른 미룬 기능 (PPT 도형 옮기기·크기, 워드 메모 답글·지우기, 워드 단락 서식 `format`은 README에만).
   하지 않기로 한 것: 변경 내용 수락·거부, 인쇄, 회의 요청, 메일 이동·분류, 플래그, 피벗, 데이터 유효성, 기존 차트 고치기
+
+## 3-11. 2026-11-11 (회사 PC 실기 2회, 최종 점검, ml-kit 2.9.90, office-cli 1.6.3)
+- 회사 PC 실기 결과와 조치는 4장 맨 위 항목.
+- 새로 넣은 것: Outlook 일정 지우기(`event --action delete`), 전역 지침 9장(지침·스킬 파일 위치), `setup.py`의 `enabled_providers` 안내
+  (폐쇄망에서 못 쓰는 기본 OpenCode 모델 숨기기), `run_all_tests`의 실패 시험 재실행(`--no-rerun`).
+- 뺀 것: 두 판 비교(`excel.py compare`, `reader.py diff`). BOM 비교를 순서 대조·이동·상위 경로까지 고쳐 봤으나 실제 BOM에서 전보다 나빠져
+  사용자 결정으로 office-cli에서 제거. 필요하면 별도 도구로 새로 만듦 (지운 코드는 git 이력의 `_excel_compare.py`, 커밋 4e0b1e8까지).
+  사용자가 설명한 BOM 모양: 3행 머리글 `Index Level PN Description ...`, 레벨 1~5, 같은 PN이 여러 조립에 쓰임.
+  요구: 레벨 5 파트면 레벨 4~1 상위를 모두 추적, 그 파트의 행 데이터 유지, 결과는 원본 파일의 새 시트 하나에.
+- 스킬 점검: argparse 옵션과 스킬을 대조해 빠진 기능을 채움 (word format, replace --map/--whole/--match-case, chart --labels/--legend,
+  style --clear, export --encoding, 첨부 --index, index --recursive, 예측·보고서 --targets, 학습 --tag/--seed, --data-row 등).
+  `--no-focus`, `--probe`, `--units`, `--context`, `--max-files`, `write --values`(JSON 인자)는 일부러 스킬에 넣지 않음.
+- 사람용 가이드 `docs/guide/*.html`을 1.6.3·2.9.90에 맞게 갱신. 루트 README 트리, `docs/ENVIRONMENT.md` 도구 현황도.
+- 남은 확인 (회사 PC): 전체 회귀 `run_all_tests.py` 1회, 사내 LLM으로 `--only gemma --gemma-model <사내 모델>`.
 
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).

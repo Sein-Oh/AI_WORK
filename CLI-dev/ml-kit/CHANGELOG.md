@@ -21,6 +21,10 @@
   64비트에서 ctypes 기본 인자(c_int)에 맞지 않아 늘 0.0을 돌려줌 (`test_time_limit_clock_starts_with_the_process` 실패). `HANDLE(-1)`로.
   에이전트 120초 안에 1줄 JSON을 내는 여유가 import 시간만큼 줄어 있었음.
 
+### 스킬 (2026-11-11 점검, 도구 동작 변경 없음)
+- 도구에는 있는데 스킬에 없던 옵션을 채움: 공통 규칙에 `--data-row`, ml-train `--tag`·`--seed`, ml-predict `--targets`,
+  ml-report `--targets`·`--save`(보고서, 성능예측표), ml-map `--save`, ml-dataset `--dry-run`. 가장 큰 스킬 ml-train 6390바이트 (한도 8192).
+
 ### 테스트
 - `mlkit_helpers.run_bounded`: 도구 실행이 600초를 넘으면 자식의 자식까지 끄고(`taskkill /T`) 출력 읽기를 15초만 더 기다림
   (PC가 느려진 시간대에 시험 하나가 600초 상한인데 47분 걸림: 끈 뒤 출력 파이프가 닫히기를 끝없이 기다림).

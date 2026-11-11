@@ -32,23 +32,26 @@ AI_WORK/
 │   ├── opencode/AGENTS.md     # OpenCode 전역 지침 원본 (%USERPROFILE%\.config\opencode\AGENTS.md로 복사)
 │   │                          # opencode/opencode.jsonc는 사용자가 배포 전에 넣음 (사내 LLM 주소, git 제외)
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
-│   │   ├── SKILL.md           # 에이전트용 스킬 (짧은 명령 템플릿 + 결과 처리 규칙)
-│   │   ├── ml_train.py        # 1단계: 학습
-│   │   ├── ml_predict.py      # 2단계: 예측 (단독 배포 가능) + 공통 런타임
-│   │   ├── ml_report.py       # 3단계: Word 보고서
+│   │   ├── skills/<이름>/SKILL.md   # 작업별 스킬 5개: ml-train, ml-dataset, ml-predict, ml-report, ml-map
+│   │   ├── ml_train.py        # 학습, 성능 개선, 학습 이력
+│   │   ├── ml_dataset.py      # 학습용 데이터셋 만들기 (조건·행 번호로 뽑기, 학습에서 빼기)
+│   │   ├── ml_predict.py      # 예측, 목표값 찾기, 조건별 예측, 최적 조건 (예측만 배포: 이 파일 + _ml_runtime.py + 버전 폴더)
+│   │   ├── ml_report.py       # Word 보고서 (성능예측표도 함께)
+│   │   ├── ml_export.py       # 성능예측표 (엑셀 계산기)
 │   │   ├── ml_map.py          # 표 보간·반대 찾기 (모델 불필요)
-│   │   └── ml_export.py       # 성능예측표 (엑셀 계산기, 학습 PC용)
+│   │   └── _ml_runtime.py     # 공통 런타임 (진입점 아님)
 │   └── office-cli/            # Office(Excel/Word/PPT/Outlook) 자동화 + 문서 읽기/검색
 │       ├── skills/<이름>/SKILL.md   # 작업별 스킬 5개: office-excel, office-doc, office-mail, office-spec, office-data
 │       ├── excel.py / word.py / ppt.py / outlook.py   # 앱별 진입점
-│       ├── reader.py          # PDF/HWP/Office 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
+│       ├── reader.py          # PDF/HWP/Office/eml 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
 │       ├── office.py          # 창 목록/전환, 앱 간 전달, 되돌리기
-│       └── _runtime.py / _office.py   # 공통 모듈
+│       └── _runtime.py / _office.py / _markdown.py / _xlsx_formula.py / _spec_check.py   # 공통·내부 모듈 (진입점 아님)
 └── CLI-dev/                   # 개발·실기 테스트용 (필요할 때만 C:\CLI-dev로, C:\CLI와 나란히)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)
     ├── pytest_live_report.py  # run_all_tests.py pytest 단계 플러그인 (실패를 생기는 즉시 기록)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
+    ├── run_simplify_check.py  # 사용법 단순화 실기 점검 (사람이 실행)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
     ├── agent_scenarios.py     # Gemma 종합 테스트 요청과 채점 기준 (데이터 모듈)
     ├── tests/                 # 채점기·메시지 팩·점검 러너·setup.py 테스트
@@ -74,14 +77,14 @@ python -m pytest -q              # 전체 도구 테스트
 ```
 WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 붙여넣어 두 도구의 패키지를 표준 환경 버전으로 설치합니다
 (온라인 설치, 인터넷 PC에서 wheel 받기, wheel 폴더로 오프라인 설치).
-폐쇄망 설치는 [`docs/WINDOWS_OFFLINE.md`](docs/WINDOWS_OFFLINE.md), 에이전트 연동은 각 도구의 `SKILL.md`.
+폐쇄망 설치는 [`docs/WINDOWS_OFFLINE.md`](docs/WINDOWS_OFFLINE.md), 에이전트 연동은 각 도구의 `skills/<이름>/SKILL.md`와 전역 지침 `CLI/opencode/AGENTS.md`.
 
 ## 배포 방법
 
 배포는 `C:\CLI` 폴더 하나입니다 (저장소 `CLI/` + WinPython `python\` + `opencode.exe`).
 1. `CLI` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\CLI\setup.bat`, `C:\CLI\python\python.exe`가 되도록).
 2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\CLI\opencode\`에 넣어 둡니다 (git에 올리지 않는 파일. 없으면 설정 폴더에 이미 있는 것을 씀).
-3. `C:\CLI\setup.bat`을 두 번 클릭합니다 (또는 `python C:\CLI\setup.py`). 스킬 5개·전역 지침·`opencode.jsonc`를
+3. `C:\CLI\setup.bat`을 두 번 클릭합니다 (또는 `python C:\CLI\setup.py`). 스킬 10개(ml-kit 5, office-cli 5)·전역 지침·`opencode.jsonc`를
    `%USERPROFILE%\.config\opencode\`로 복사(바뀐 것만, 이전 파일은 `C:\CLI\data\setup_backup_<시각>`에 보관)하고,
    시스템 PATH에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 없을 때만 추가한 뒤, 도구가 동작하는지 확인합니다. `--check`는 확인만.
 4. 새 터미널을 열고 OpenCode(TUI, Desktop)를 다시 시작합니다.
@@ -98,4 +101,4 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 3. **작업 1건 = 브랜치 1개 = PR 1개**, 리팩터링과 동작 변경은 분리.
 4. **모든 PR은 `python -m pytest` 통과가 조건.**
 5. **배포 = `CLI` 폴더 하나** - 아래 "배포 방법". OpenCode 스킬 폴더에는 `SKILL.md`만 들어갑니다 ([`docs/opencode/README.md`](docs/opencode/README.md)).
-   ml-kit 예측만 배포할 때는 `ml_predict.py` + 학습된 `vX\` 폴더 2가지만 복사하면 됩니다.
+   ml-kit 예측만 배포할 때는 `ml_predict.py` + `_ml_runtime.py` + 학습된 `vX\` 폴더를 복사하면 됩니다.

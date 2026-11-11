@@ -19,6 +19,14 @@
   워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기를 안내. `_excel_compare.py`, 관련 테스트, 실기 러너 N12, 단순화 점검 B1~B5를 지움.
   office-data 스킬은 표 집계(`stats`)와 중복 찾기(`duplicates`)만, office-spec에서 diff 줄을 뺌, 전역 지침 3장 표와 8장(직접 할 일)에 반영.
 
+### 스킬 점검 (2026-11-11, 스킬 한도 8KB)
+- argparse 옵션과 스킬을 대조해 도구에는 있는데 스킬에 없던 기능을 채움. office-excel: `read --max-rows`, 차트 `--labels`/`--legend`/`--at`/크기와
+  종류(line_markers, scatter_lines, combo), 서식 `--color`/`--italic`/`--clear`, `range unmerge`, `sheet select`, 바꾸기 `--whole`/`--map`/강조, `export --encoding`.
+  office-doc: 워드 단락 서식 `word.py format`(1.6.1에서는 README에만 두었음), 바꾸기 `--match-case`/`--whole-word`/`--map`/글자 서식, PPT 도형 `--height`,
+  `--theme`, transfer `--from-target`/`--to-target`. office-mail: 첨부 `--index`, 폴더 `--depth`. office-spec: `index --recursive`, `read --format summary`,
+  검색 `--top`/`--full`, `check --header-row`. 일부러 넣지 않은 것: `--no-focus`, `--probe`, `read --units`, `--context`, `--max-files`, `write --values`(JSON 인자).
+  가장 큰 스킬 office-doc 7277바이트. 테스트 `test_skill_docs.py`에 새 항목을 기대값으로.
+
 ### 기능 (사용자 요청)
 - 전역 지침 `CLI/opencode/AGENTS.md` 9장: 지침·스킬 파일 위치 (팀원 배포 전, 물어보면 그대로 알림). OpenCode가 읽는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 `setup.bat`.
 - `setup.py`: opencode.jsonc에 `"enabled_providers"`가 없으면 WARN과 넣을 줄(사내 provider 이름을 넣은 것)을 알림. 폐쇄망에서 못 쓰는 기본 모델(opencode 등)이

@@ -20,12 +20,12 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 폴더 등록 | `python "C:\CLI\office-cli\reader.py" index --folder "<폴더>"` |
-| 파일 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` |
+| 폴더 등록 | `python "C:\CLI\office-cli\reader.py" index --folder "<폴더>"` (하위 폴더는 깊이 3까지, 전체는 `--recursive`) |
+| 파일 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` (쪽 수·장절 수만 `--format summary`) |
 | 장절 목록 (큰 문서) | `python "C:\CLI\office-cli\reader.py" outline --file "<파일>"` |
 | 장절 읽기 | `python "C:\CLI\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |
-| 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` (`;` 그리고, `|` 또는) |
-| 엑셀 표를 규격서와 대조 | `python "C:\CLI\office-cli\excel.py" check --target "<엑셀 파일>" --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "<대조결과.xlsx>"]` |
+| 검색 | `python "C:\CLI\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` (`;` 그리고, `|` 또는. 더 많이 `--top 30`, 단락 전체 `--full`) |
+| 엑셀 표를 규격서와 대조 | `python "C:\CLI\office-cli\excel.py" check --target "<엑셀 파일>" --range B2:D50 --item-col B --value-col D --spec "<규격 파일 또는 폴더>" [--section "3.2"] [--section-col E] [--save "<대조결과.xlsx>"]` (단위가 든 머리글 행이 범위 바로 위가 아니면 `--header-row 2`) |
 | 엑셀 칸 메모 | 목록 `python "C:\CLI\office-cli\excel.py" comment --target "<엑셀 파일>" [--range B2:D20]` / 넣기 `python "C:\CLI\office-cli\excel.py" comment --action add --target "<엑셀 파일>" --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`, 열: 칸, 메모) |
 | 캐시 목록 | `python "C:\CLI\office-cli\reader.py" list [--name <이름일부>] [--folder "<폴더>"]` |
 | 캐시 지우기 (원본은 그대로) | `python "C:\CLI\office-cli\reader.py" clear --name <이름일부> --dry-run` (`--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 목록을 보여 주고 확인받은 뒤 `confirm_commands[0]`) |

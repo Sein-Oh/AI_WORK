@@ -196,8 +196,9 @@ def test_every_command_is_in_some_skill():
     assert not missing, missing
 
 
-# 경량 LLM에게는 알리지 않는 명령 (README에만): 범위를 고르기 어려워 잘못 쓰기 쉬움 (사용자 결정 2026-11-10)
-README_ONLY = {("word.py", "format")}
+# 경량 LLM에게는 알리지 않는 명령 (README에만). 지금은 없음: word.py format도 스킬에 넣음 (사용자 결정 2026-11-11, 스킬 8KB로
+# 늘린 뒤 "누락된 기능이 없도록")
+README_ONLY = set()
 
 
 def test_readme_only_commands_are_not_in_skills_but_in_readme():
@@ -210,8 +211,8 @@ def test_readme_only_commands_are_not_in_skills_but_in_readme():
 def test_skill_mentions_new_and_existing_features():
     """스킬에 기존 기능과 새 기능이 모두 있음 (경량 LLM은 스킬에 없는 기능을 '지원 안 함'으로 답함). 기능마다 맡은 스킬에."""
     need = {
-        "office-excel": ("sheet --action <add/rename/copy/delete>", "--new-name", "range --action <freeze", "export --save",
-                         "--number-format", "--all-sheets", "--type <column/bar/line/pie/scatter/area>", "--action <insert/delete>",
+        "office-excel": ("sheet --action <add/rename/copy/delete/select>", "--new-name", "range --action <freeze", "export --save",
+                         "--number-format", "--all-sheets", "--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>", "--labels", "--legend", "--clear", "--whole", "--map", "--encoding cp949", "--max-rows", "--action <insert/delete>",
                          "--dry-run", "--action sort", "--by", "--where \"", "--formulas", "--cells", "comment --action add",
                          "office.py\" undo", "transfer --from-app excel --chart"),
         "office-doc": ("slide --action <add/duplicate/delete/move>", "--toc", "--callout", "--highlight yellow", "fill --target", "--slots",
@@ -224,6 +225,11 @@ def test_skill_mentions_new_and_existing_features():
                         "not_searched", "match_mode"),
         "office-data": ("excel.py\" stats --target", "excel.py\" duplicates --target", "not_supported", "검토 탭 > 비교"),
     }
+    # 2026-11-11 스킬 점검: 도구에는 있는데 스킬에 없던 기능 (8KB로 늘린 뒤 채움)
+    more = {"office-doc": ("word.py\" format --paragraphs", "--match-case", "--whole-word", "--map", "--height", "--from-target", "--theme"),
+            "office-mail": ("--index 1,3", "--depth 3", "event --action delete"),
+            "office-spec": ("--recursive", "--format summary", "--top 30", "--full", "--header-row")}
+    need = {k: tuple(v) + more.get(k, ()) for k, v in need.items()}
     for name, needles in need.items():
         text = _read(SKILL_FILES[name])
         for needle in needles:
