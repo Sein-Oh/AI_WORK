@@ -25,6 +25,14 @@
 - `setup.py`: opencode.jsonc에 `"enabled_providers"`가 없으면 WARN과 넣을 줄(사내 provider 이름을 넣은 것)을 알림. 폐쇄망에서 못 쓰는 기본 모델(opencode 등)이
   `opencode models`에 나오지 않게. 이름이 `"provider"`·`"model"`과 어긋나면 WARN, `"autoupdate": false`가 없으면 INFO. docs/opencode/README.md에 설정 예.
 
+### 수정 (회사 PC 실기 2026-11-11)
+- L11 제한된 보기: 실제 엑셀은 제한된 보기 창이 맨 앞이면 `ActiveWorkbook`으로 그 문서를 줘서 `--target` 없는 쓰기가 "시트 보호" 오류로 끝남
+  (쓰인 곳은 없음). 활성 문서가 제한된 보기 창(`ActiveProtectedViewWindow`)의 문서이면 쓰지 않고 [편집 사용] 안내 (Excel·Word·PowerPoint, 읽기는 그대로).
+- N10 워드 메모 지우기: 실제 Word의 `Comment.Delete`는 그 메모만 지우고 답글은 남겨 `UNVERIFIED`(메모 수 3 -> 2). 답글을 뒤 번호부터 먼저 지움.
+  가짜 Word도 실제처럼 (메모만 지움).
+- I23 워드 표 -> 엑셀: 숫자 모양 글(`3`, `1,500`, `12.5%`)을 엑셀이 같은 값의 숫자로 바꾼 것을 "다시 읽은 값이 다름"(UNVERIFIED)으로 보던 것.
+  같은 값이면 확인된 것으로, 앞자리 0이 사라진 것(`0012` -> 12)은 그대로 UNVERIFIED.
+
 ## [1.6.2] - 2026-11-10
 
 ### 기능

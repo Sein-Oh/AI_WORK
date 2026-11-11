@@ -2489,3 +2489,12 @@ def test_save_read_only_workbook_asks_for_new_path(xl, capsys, tmp_path):
     wb.ReadOnly, wb.Saved = True, False
     code, out = run_excel(capsys, "save")
     assert code == 1 and "읽기 전용" in out["message"] and getattr(app, "saves", 0) == 0, out
+
+
+def test_same_cell_accepts_number_like_text_but_not_lost_leading_zero():
+    """회사 PC 2026-11-11 I23: 워드 표의 '3', '1500'을 엑셀이 숫자로 바꾼 것을 '다시 읽은 값이 다름'(UNVERIFIED)으로 봤다.
+    같은 값의 숫자는 인정, 앞자리 0이 사라지거나 다른 값이 된 것은 인정하지 않음."""
+    import excel
+    same = excel._same_cell
+    assert same("3", 3.0) and same("1,500", 1500.0) and same("12.5%", 0.125) and same("-0.5", -0.5)
+    assert not same("0012", 12.0) and not same("3", 4.0) and not same("+82-10-1234-5678", -6840.0) and not same("1,50", 150.0)

@@ -267,6 +267,40 @@ def test_pytest_stage_keeps_failure_names_when_stopped_by_time_limit(iso, monkey
     assert st.failed == 2
 
 
+FLAKY_TESTS = '''import os
+MARK = os.path.join(os.path.dirname(__file__), "ran_once.txt")
+def test_fails_only_the_first_time():
+    first = not os.path.exists(MARK)
+    open(MARK, "w").close()
+    assert not first, "처음만 실패"
+def test_always_fails():
+    assert 1 == 2, "늘 실패"
+def test_ok():
+    pass
+'''
+
+
+def test_pytest_stage_reruns_failed_tests_once_alone(iso, monkeypatch, capsys):
+    """회사 PC 2026-11-11: PC가 느려진 시간대의 시간 초과 실패가 실행마다 달랐다. 실패한 시험만 혼자 한 번 다시 돌려, 통과하면
+    참고(WARN)로, 다시 실패하면 실패로 센다. --no-rerun이면 다시 돌리지 않는다."""
+    folder = iso / "tests"
+    folder.mkdir()
+    (folder / "test_flaky.py").write_text(FLAKY_TESTS, encoding="utf-8")
+    (iso / "pytest_live_report.py").write_text(open(os.path.join(os.path.dirname(HERE), "pytest_live_report.py"),
+                                                    encoding="utf-8").read(), encoding="utf-8")
+    monkeypatch.setattr(rat, "PYTEST_TARGETS", ("tests",))
+    st = rat.Stage("pytest")
+    rat.step_pytest(st, type("A", (), {"pytest_timeout": 60})(), {})
+    assert st.failed == 1 and st.passed == 2, (st.failed, st.passed, st.failures)
+    assert len(st.failures) == 1 and "test_always_fails" in st.failures[0], st.failures
+    assert any("test_fails_only_the_first_time" in w and "다시 돌려 통과" in w and "처음 원인: AssertionError" in w for w in st.warnings), st.warnings
+    assert "실패한 시험만 다시 돌림: 1건 통과, 1건 다시 실패" in st.details[-1][1]
+    os.remove(folder / "ran_once.txt")
+    st = rat.Stage("pytest")
+    rat.step_pytest(st, type("A", (), {"pytest_timeout": 60, "no_rerun": True})(), {})
+    assert st.failed == 2 and st.passed == 1 and not any("다시 돌려" in w for w in st.warnings)
+
+
 def test_diag_template_damage_is_warn_when_tools_do_not_need_it(monkeypatch):
     """python-pptx 기본 템플릿은 어느 도구도 쓰지 않음 -> 참고(WARN). python-docx 기본 템플릿 손상은 ml-kit 보고서가
     폴더 템플릿으로 복구해 빈 문서를 만들 수 있으면 참고, 못 만들면 FAIL."""

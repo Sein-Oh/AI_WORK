@@ -3202,8 +3202,19 @@ def _same_cell(want: Any, got: Any) -> bool:
         w = want.strip()
         if isinstance(got, bool):
             return w.lower() in ("true", "false")
+        if isinstance(got, (int, float)):
+            # 숫자 모양 글('3', '1,500', '12.5%')을 Excel이 같은 값의 숫자로 바꾼 것은 인정 (워드 표 -> 엑셀, 회사 PC 2026-11-11 I23).
+            # 앞자리 0이 사라진 것('0012' -> 12)은 값이 바뀐 것이라 인정하지 않음
+            m = _NUM_LIKE.match(w)
+            if m and not re.match(r"^[+-]?0\d", w):
+                num = float(m.group(1).replace(",", "")) / (100.0 if m.group(2) else 1.0)
+                if abs(float(got) - num) <= 1e-9 * max(1.0, abs(num)):
+                    return True
         return bool(_DATE_LIKE.match(w)) and (hasattr(got, "year") or isinstance(got, (int, float)))
     return True
+
+
+_NUM_LIKE = re.compile(r"^([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(%)?$")
 
 
 # Excel이 날짜·시각으로 바꾸는 글 (2026-01-05, 2024-01, 2026/1/5, 10:30)

@@ -271,15 +271,31 @@ def open_untitled(kind: str, name: str) -> List[Dict[str, Any]]:
     return hits
 
 
+def _in_protected_view(app: Any, kind: str, doc: Any) -> bool:
+    """활성 문서가 제한된 보기 창의 문서인지. 실제 엑셀은 제한된 보기 창이 맨 앞일 때 ActiveWorkbook으로 그 문서를 주는데
+    (회사 PC 2026-11-11 L11), 칸이 모두 잠긴 것으로 보여 '시트 보호' 오류가 났다. 창이 뒤에 있으면(활성 문서가 다른 문서) False."""
+    try:
+        pv = app.ActiveProtectedViewWindow
+        if pv is None:
+            return False
+        inner = getattr(pv, {"excel": "Workbook", "word": "Document", "ppt": "Presentation"}[kind])
+        return str(inner.Name).lower() == str(doc.Name).lower()
+    except Exception:
+        return False
+
+
 def get_active(kind: str) -> Dict[str, Any]:
     """사용자가 보고 있는 문서. 포그라운드 앱의 활성 문서를 우선합니다. 앱에 활성 문서가 없어(제한된 보기, 숨은 PERSONAL.XLSB만)
-    보이는 첫 문서로 넘어갔으면 "fallback": True (쓰기 세션은 그 문서에 쓰지 않음, 2026-11-09 검토 C9)."""
+    보이는 첫 문서로 넘어갔거나 활성 문서가 제한된 보기 창의 문서이면 "fallback": True (쓰기 세션은 그 문서에 쓰지 않음, 2026-11-09 검토 C9)."""
     apps = find_apps(kind)
     for app in apps:
         doc = _active_doc(app, kind, fallback=False)
         if doc is not None:
             full = str(getattr(doc, "FullName", "") or doc.Name)
-            return {"name": str(doc.Name), "path": full if os.path.isabs(full) else "", "app": app, "doc": doc}
+            info = {"name": str(doc.Name), "path": full if os.path.isabs(full) else "", "app": app, "doc": doc}
+            if _in_protected_view(app, kind, doc):
+                info["fallback"] = True                  # 제한된 보기: 읽기만 (쓰기는 [편집 사용] 안내)
+            return info
     for app in apps:
         doc = _active_doc(app, kind)
         if doc is not None:

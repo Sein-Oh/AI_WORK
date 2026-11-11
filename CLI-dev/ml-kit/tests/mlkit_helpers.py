@@ -50,12 +50,28 @@ def split_command(cmd):
 
 # ---- CLI 실행 ----------------------------------------------------------------------------------------------
 
+def run_bounded(cmd, timeout):
+    """subprocess.run(capture_output, timeout)과 같지만 시간 초과 때 자식의 자식까지 끄고 출력 읽기를 15초만 더 기다린다.
+    subprocess.run은 끈 뒤 출력 파이프가 닫힐 때까지 끝없이 기다려, 자식이 띄운 프로세스가 파이프를 잡고 있으면 시험 하나가
+    47분 걸렸다 (회사 PC 2026-11-11: 600초 상한인데 2840초)."""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
+        p.kill()
+        try:
+            p.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
 def run_raw(script, *args):
     """도구를 실행하고 (proc, stdout JSON)을 돌려준다. stdout이 정확히 1줄이 아니면 실패."""
-    proc = subprocess.run(
-        [sys.executable, os.path.join(KIT, script), *args],
-        capture_output=True, text=True, encoding="utf-8", timeout=600,
-    )
+    proc = run_bounded([sys.executable, os.path.join(KIT, script), *args], 600)
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1, f"{script} must print exactly 1 JSON line, got {len(lines)}:\n{proc.stdout}\n{proc.stderr}"
     return proc, json.loads(lines[0])

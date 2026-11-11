@@ -32,6 +32,8 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
 - `pytest` 단계는 테스트 파일마다 따로 실행하고 동시에 `코어 수 - 1`개, 메모리 4GB마다 1개, 최대 3개씩 돌립니다(2026-11-10: 회사 PC에서 코어 수만큼 돌리자 메모리가 모자라 89분, 시간 초과 18건. 결과 표 비고에 동시 실행 수·코어·메모리) (`--pytest-workers N`, 1이면 하나씩.
   2.9.85: 회사 PC에서 하나씩 돌리면 62분). 화면에는 파일이 끝날 때마다 한 줄과 실패(`[LIVE]`)만 나오고, 결과 파일 상세에는 파일마다의 출력이 들어갑니다.
+  실패한 시험은(파일마다 5건 이하) 끝난 뒤 혼자 한 번 다시 돌립니다: 통과하면 실패가 아니라 `참고 (WARN)`에 "처음에는 실패했지만 혼자 다시 돌려 통과"로 남기고,
+  다시 실패한 것만 실패로 셉니다 (PC 쪽 작업과 겹친 시간 초과가 실행마다 달랐음, 2026-11-11). 끄려면 `--no-rerun`.
 - `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.py`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\CLI\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
   시험 폴더(기본 `C:\CLI-dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\CLI-dev\work\gemma_runs_<시각>`에 남깁니다.
