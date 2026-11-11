@@ -497,6 +497,12 @@ office-cli `--save` 생략·이름만·상대 경로가 이 규칙을 따름 (�
 - 불필요한 파일 삭제: `AIKIT/dev/FFT/`(이 저장소 도구와 관계없는 PySide6 GUI 스크립트 2개, 어디서도 쓰지 않음. git 이력에 남음),
   `docs/HOME_PC_CHECK.md`(ml-kit 2.9.73·office-cli 1.4.82 때 집 PC 점검 안내, `실기테스트.md` 1장과 부록으로 대신함).
 
+### 3-20. setup의 옛 구성 정리 코드 없앰
+사용자 결정: 이미 배포한 PC를 위한 정리 코드는 두지 않고 필요한 파일은 사용자가 옮김. `setup.py`의 옛 전역 설정·이전 구성·옛 이름 스킬 폴더 정리와
+`opencode.jsonc` 옛 `"skills"` WARN, diag·K1의 옛 복사본 확인을 지움. 3-14·3-15·3-19에 적은 "setup이 옛 폴더를 정리함"은 이제 해당 없음:
+회사·집 PC는 `C:\AIKIT\skills`의 옛 이름 폴더(`office-excel`, `office-doc`, `office-mail`, `office-spec`, `office-data`, `skill-maker`, `skill-kit`)와
+`%USERPROFILE%\.config\opencode\skills`의 우리 스킬 복사본을 손으로 지울 것 (남으면 OpenCode가 옛 스킬도 읽음).
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.

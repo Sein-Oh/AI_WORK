@@ -31,7 +31,7 @@ AI_WORK/
 │   │                          #   excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit), 그 밖은 사용자 스킬(git 제외)
 │   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode.json          # 셸·권한 기본 설정 (스킬 경로는 적지 않음). opencode.jsonc(사내 LLM 주소)는 PC에 있는 것 (git 제외)
-│   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 옛 설정 정리, 시스템 PATH 등록, 동작 확인
+│   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 시스템 PATH 등록, 동작 확인
 │   ├── web.bat                # OpenCode Web UI를 바로 띄움 (opencode 2.x: opencode pair의 일회용 로그인 링크를 브라우저로 엶)
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
 │   │   ├── ml_train.py        # 학습, 성능 개선, 학습 이력
@@ -85,8 +85,7 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 1. `AIKIT` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\AIKIT\setup.bat`, `C:\AIKIT\python\python.exe`가 되도록, `dev` 포함).
 2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\`에 넣어 둡니다 (git에 올리지 않는 파일. provider, model, `enabled_providers`만).
 3. `C:\AIKIT\setup.bat`을 두 번 클릭합니다 (또는 `python C:\AIKIT\setup.py`). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`을
-   설정해 OpenCode가 `C:\AIKIT\AGENTS.md`(전역 지침)와 `C:\AIKIT\skills`(스킬 11개)를 **복사 없이, 설정 파일 없이** 읽게 하고, 예전에 사용자 폴더
-   (`%USERPROFILE%\.config\opencode`)로 복사해 둔 우리 스킬·지침은 보관 후 지웁니다 (`C:\AIKIT\data\setup_backup_<시각>`).
+   설정해 OpenCode가 `C:\AIKIT\AGENTS.md`(전역 지침)와 `C:\AIKIT\skills`(스킬 11개)를 **복사 없이, 설정 파일 없이** 읽게 합니다.
    시스템 PATH에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가한 뒤, 도구와 OpenCode 설정 폴더를 확인합니다. `--check`는 확인만.
 4. 새 터미널을 열고 OpenCode(TUI, Desktop, Web UI)를 다시 시작합니다. setup이 OpenCode 백그라운드 서비스를 꺼 두므로 새 PATH·스킬·지침으로 다시 뜹니다
    (TUI와 web.bat은 이미 떠 있는 서비스를 그대로 쓰므로, 설치 전에 뜬 서비스가 남으면 python을 못 찾고 옛 스킬을 씀. 그럴 때는 `C:\AIKIT\web.bat stop`).

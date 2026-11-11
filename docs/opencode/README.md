@@ -35,9 +35,8 @@ C:\AIKIT\
   `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`는 그대로 둡니다.
   처음 한 번 `C:\AIKIT\setup.bat`을 실행하고(환경 변수, PATH), 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다
   (setup은 다시 실행해도 됩니다: 확인과 서비스 끄기).
-- 예전 구성에서 바꿀 때 setup이 옮깁니다 (원본은 `C:\AIKIT\data\setup_backup_<시각>`에 보관):
-  - 2026-11-12 전 (`%USERPROFILE%\.config\opencode`로 복사): 그 폴더의 우리 스킬·`AGENTS.md`는 지우고, 사용자 스킬과 `opencode.jsonc`는 `C:\AIKIT`으로.
-  - 2026-11-12 낮 (`C:\AIKIT\opencode`가 설정 폴더, 스킬은 도구 폴더 안): `opencode.jsonc`와 사용자 스킬은 맨 위로, 나머지와 도구 폴더 안의 `skills`는 지움.
+- 예전 구성(`C:\CLI`, `%USERPROFILE%\.config\opencode`의 복사본, `C:\AIKIT\opencode`, 옛 이름 스킬 폴더)은 setup이 정리하지 않습니다. 필요한 파일
+  (`opencode.jsonc`, 사용자 스킬)은 손으로 `C:\AIKIT`(맨 위, `skills\`)로 옮기고 나머지는 지웁니다.
 - office-cli-test(실기 보조 스킬)는 개발용이라 `python C:\AIKIT\setup.py --test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`로
   `C:\AIKIT\skills`에 둡니다.
 - 바뀐 설정이 안 보이면: OpenCode 백그라운드 서비스는 처음 뜰 때의 환경 변수를 계속 씁니다. `C:\AIKIT\web.bat stop` 뒤 다시 실행하고,

@@ -529,10 +529,9 @@ def step_diag(stage, args, ctx):
     stage.details.append(("진단 내용", text))
 
 
-def diag_skills(stage, lines, config_dir=None, reg=None):
+def diag_skills(stage, lines, reg=None):
     """setup.py --check와 같은 확인 (읽기만): 시스템 PATH에 C:\\AIKIT\\python이 있는지, 사용자 환경 변수 OPENCODE_CONFIG_DIR가
-    C:\\AIKIT\\opencode인지(아니면 OpenCode가 우리 지침·스킬을 읽지 않음), 옛 전역 설정 폴더(config_dir, 기본 %USERPROFILE%\\.config\\opencode)에
-    우리 스킬·지침 복사본이 남았는지. 다르면 FAIL (고치는 명령: C:\\AIKIT\\setup.bat). Windows가 아니면 참고만."""
+    C:\\AIKIT인지(아니면 OpenCode가 우리 지침·스킬을 읽지 않음). 다르면 FAIL (고치는 명령: C:\\AIKIT\\setup.bat). Windows가 아니면 참고만."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("cli_setup", os.path.join(CLI_DIR, "setup.py"))
     mod = importlib.util.module_from_spec(spec)
@@ -567,17 +566,6 @@ def diag_skills(stage, lines, config_dir=None, reg=None):
             stage.passed += 1
         else:
             stage.fail(f"{mod.CONFIG_ENV}가 {cur or '없음'}이라 OpenCode가 {want}의 지침·스킬을 읽지 않음. " + fix)
-    cfg = config_dir or mod.old_config_dir()
-    old = mod.old_global_items(cfg) if os.path.isdir(cfg) else []
-    ours = [(k, p) for k, p in old if k in ("우리 스킬", "전역 지침")]
-    lines.append(f"  옛 전역 설정 폴더({cfg}): " + (", ".join(f"{k} {os.path.basename(p)}" for k, p in old) or "정리할 것 없음"))
-    if ours:
-        stage.fail("옛 전역 설정 폴더에 우리 스킬·지침 복사본이 남아 있음 (" + ", ".join(os.path.basename(p) for _k, p in ours) + "). " + fix)
-    layout = mod.old_layout_items()                          # 이전 구성: C:\AIKIT\opencode, 도구 폴더 안의 옛 skills
-    if layout:
-        names = ", ".join(os.path.relpath(p, CLI_DIR) for _k, p in layout)
-        lines.append(f"  이전 구성에서 남은 것: {names}")
-        stage.fail(f"이전 구성(C:\\AIKIT\\opencode, 도구 폴더 안의 skills)이 남아 있음 ({names}). " + fix)
 
 
 # ---------------------------------------------------------------------------
