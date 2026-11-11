@@ -8,7 +8,7 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 - 단계: 최종 점검 (2026-11-11). 팀원 배포 직전. 회사 PC 실기 통과 뒤 사내 LLM(OpenCode + BEAM/Nemotron)에 유지보수를 넘길 예정 (인계 자료는 아직 안 만듦)
 - 스킬: ml-kit 5개(ml-train, ml-dataset, ml-predict, ml-report, ml-map), office-cli 5개(office-excel, office-doc, office-mail, office-spec, office-data).
   스킬 하나 8KB(8192바이트) 이하. 2026-11-11 점검: 도구에 있는데 스킬에 없던 옵션을 채움 (가장 큰 것 office-doc 약 7.3KB)
-- 2026-11-11에 한 일은 3-11장
+- 2026-11-11에 한 일은 3-11장, 다음 작업(OpenCode 설정을 C:\CLI 기준으로)은 3-12장
 - Office는 Office 16만 대상 (2026-11-07 Office 2007 지원 폐기, 집 PC도 Office 2019로 바꿈)
 - 2026-11-07 클라우드 작업: 사용법 단순화 (AGENTS.md "사용법 단순성"). `[추천]`은 늘 전체 명령, `[후보] 1) a`와 같은 번호의 `confirm_commands`,
   ml-kit 스킬 4개(ml-train, ml-predict, ml-report, ml-map), 예측 `-m <데이터 파일>`, 개선·`CONTINUE` 횟수를 도구가 셈, transfer `--from-app`/`--to-app`,
@@ -368,6 +368,56 @@ office-cli 1.4.91을 영역별로 읽고 실행해 검토함 (코드 수정 없�
 - 사람용 가이드 `docs/guide/*.html`을 1.6.3·2.9.90에 맞게 갱신. 루트 README 트리, `docs/ENVIRONMENT.md` 도구 현황도.
 - 남은 확인 (회사 PC): 전체 회귀 `run_all_tests.py` 1회, 사내 LLM으로 `--only gemma --gemma-model <사내 모델>`.
 
+## 3-12. 다음 작업: OpenCode 설정을 C:\CLI 기준으로 (집 PC, OpenCode 2.2.5, 2026-11-12~)
+
+### 배경 (사용자 결정 대기)
+- 지금은 `setup.py`가 전역 지침(`CLI\opencode\AGENTS.md`), 스킬 11개, `opencode.jsonc`를 사용자 폴더 `%USERPROFILE%\.config\opencode\`로 복사한다.
+- 사용자 생각(2026-11-11): OpenCode 전역 폴더가 아니라 우리 도구 폴더 `C:\CLI`를 기준으로 하자. 원본이 곧 쓰는 파일이 되어 복사·백업·옛 폴더 정리가 없어지고,
+  반입 때 `C:\CLI`만 바꾸면 바로 반영된다.
+- 사용자는 2.2.5 이전에도 프로젝트별 스킬·지침을 둘 수 있었다고 알고 있음 (아래 2로 확인).
+
+### OpenCode 2.2.7 소스에서 확인한 것 (클라우드, 2.2.5에서는 확인 전)
+1. 환경 변수 `OPENCODE_CONFIG_DIR`가 있으면 전역 설정 폴더를 그 폴더로 바꾼다 (`packages/cli/src/index.ts`, `server-process.ts`의 `Global.layerWith({ config })`).
+   그 폴더의 `AGENTS.md`, `opencode.json`/`opencode.jsonc`, `skills\<이름>\SKILL.md`를 읽는다.
+2. 프로젝트별: 세션 작업 폴더에서 위로 올라가며 `AGENTS.md`(프로젝트 루트에서 멈춤)와 `.opencode\skills\<이름>\SKILL.md`, `opencode.jsonc`를 찾아
+   전역 위에 더한다 (`config/plugin/instruction.ts`, `config/discovery.ts`, `config/plugin/skill.ts`). 전역을 끄지는 못함.
+3. 그래서 `C:\CLI` 맨 위에 `AGENTS.md`를 두고 하위 폴더가 찾게 하는 방법은 안 됨: 지침은 프로젝트 루트(`C:\CLI\work\<프로젝트>`)에서 멈춰 위로 안 올라감.
+4. 설정의 `skills.paths`(목록)로 스킬 폴더를 더할 수 있음 (`config/normalize.ts`) -> `C:\CLI\ml-kit\skills`, `C:\CLI\office-cli\skills`를 그대로 가리킬 수 있음.
+5. Web UI의 프로젝트 목록은 브라우저 프로필에 저장 (밖에서 미리 등록 불가). `web.bat`은 서비스를 `C:\CLI\work`에서 띄움.
+6. TUI·Web UI는 백그라운드 서비스 하나를 같이 씀. 서비스는 처음 뜰 때의 환경 변수를 계속 쓰므로 바꾼 뒤 `opencode.exe service stop` 필요
+   (setup.py가 끝에 이미 끔, 2026-11-11).
+
+### 집 PC에서 확인할 것 (먼저, 코드는 그다음)
+PowerShell(일반 창):
+```powershell
+C:\CLI\opencode.exe service stop
+$env:OPENCODE_CONFIG_DIR = "C:\CLI\opencode"
+C:\CLI\opencode.exe debug config          # 설정을 읽은 곳 목록에 C:\CLI\opencode가 나오는지 (2.2.5에 없으면 건너뜀)
+C:\CLI\opencode.exe                       # 같은 창에서 TUI: 사내/집 LLM 연결, "지침과 스킬 경로 알려줘", 스킬 목록
+C:\CLI\opencode.exe service stop          # 끝나면 (환경 변수는 창을 닫으면 없어짐)
+```
+- 확인 A: 전역 지침이 `C:\CLI\opencode\AGENTS.md`에서 읽히는지, `opencode.jsonc`(모델 설정)가 `C:\CLI\opencode`에서 읽히는지.
+- 확인 B: `C:\CLI\opencode\opencode.json`에 `{"skills": {"paths": ["C:/CLI/ml-kit/skills", "C:/CLI/office-cli/skills"]}}`를 두면 스킬 11개가 보이는지,
+  `opencode.json`과 `opencode.jsonc`가 함께 읽히는지(병합). 안 되면 `C:\CLI\opencode\skills\`로 복사하는 방식.
+- 확인 C (프로젝트별): `C:\CLI\work\시험A\AGENTS.md`("모든 답의 맨 앞에 [A폴더]")와 `C:\CLI\work\시험A\.opencode\skills\test-hello\SKILL.md`를 두고
+  `시험A`와 `시험B`에서 각각 새 세션: A에서만 [A폴더]와 인사 스킬이 나오는지. Web UI(`web.bat`)로도 같은지.
+- 확인 D: 로그인·대화 기록이 사라지지 않는지 (설정 폴더가 아니라 데이터 폴더에 있다고 봄).
+
+### 확인되면 할 일 (코드)
+1. `setup.py`: 복사 대신 사용자 환경 변수 `OPENCODE_CONFIG_DIR=<C:\CLI>\opencode` 설정(HKCU\Environment, 원래 값 보관, 다시 읽어 확인, 환경 변경 알림),
+   `C:\CLI\opencode\opencode.json`(스킬 경로·권한 등 우리가 관리하는 설정, 저장소에 둠) 확인, 사용자 폴더의 옛 복사본 정리(보관 후),
+   서비스 끄기. `opencode.jsonc`(사내 LLM 주소)는 사용자가 `C:\CLI\opencode\`에 두는 그대로 (git 제외).
+   `--check`, 테스트(`CLI-dev/tests/test_setup.py`) 함께.
+2. `skill.py`: 사용자 스킬 위치(`C:\CLI\opencode\skills` 또는 별도 폴더를 `skills.paths`에), 프로젝트 스킬 옵션(`--project <폴더>` -> `<폴더>\.opencode\skills`).
+   skill-maker 스킬, 테스트.
+3. 전역 지침 9장(위치 표), README 배포 방법, `docs/opencode/README.md`, 사용 가이드 FAQ, AGENTS.md 폴더 구조, CHANGELOG.
+4. 회사 PC에서 반입·setup 뒤 TUI·Web UI·사내 LLM 시험(`run_all_tests.py --only gemma`)으로 확인.
+
+### 지금 상태 (2026-11-11 밤)
+- 브랜치 `ccr-ecab210c-awib23`. main은 PR #77까지. 그 뒤 커밋(인터넷 금지 지침, 비교 거절 강화, skill.py·skill-maker, ml-kit 2.9.91·office-cli 1.6.4,
+  setup의 서비스 끄기, `C:\CLI\work`)은 PR 전. 사용자가 요청하면 PR.
+- 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\CLI\work` 첫 실행 안내.
+
 ## 3. 회사 PC에서 할 일
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
@@ -502,6 +552,20 @@ docs/history/office-cli_REVIEW_2026-11-09.md(전체)를 읽어. 그 문서가 �
    확신 70% 미만은 실기 항목만 넣고 코드는 고치지 마.
 5. 4장(새 기능)과 5장 3번(옵션 이름 통일)은 시작하지 말고, 1~3장이 끝나면 무엇부터 할지 나에게 물어 줘.
 6. 묶음마다 커밋·푸시하고(이 세션의 작업 브랜치), 묶음이 끝날 때마다 고친 항목·남은 항목을 표로 알려 줘. PR은 내가 요청하면 만들어.
+답변은 한국어로, 이모지 없이.
+```
+
+집 PC용, OpenCode 설정을 C:\CLI 기준으로 (Claude Code, 저장소 폴더에서, 2026-11-12~):
+```text
+AI_WORK 저장소 작업을 이어서 해 줘. 먼저 AGENTS.md와 docs/HANDOFF.md 1장과 3-12장을 읽어.
+지금은 집 PC(Windows, WinPython 3.13, Office 2019, OpenCode 2.2.5 설치함)야. 작업 브랜치는 ccr-ecab210c-awib23.
+목표: OpenCode의 전역 지침·스킬·설정을 사용자 폴더(%USERPROFILE%\.config\opencode)로 복사하지 않고 우리 도구 폴더 C:\CLI 기준으로 쓰게 하기.
+1. 3-12장 "집 PC에서 확인할 것" A~D를 나와 같이 확인해 줘. 명령은 하나씩, 실행 전에 무엇을 할지 짧게 알려 주고,
+   OpenCode 화면에서 내가 해야 하는 것(TUI·Web UI 조작)은 순서대로 알려 줘. 결과는 표로 정리해 줘.
+2. 2.2.5에서 OPENCODE_CONFIG_DIR, skills.paths, opencode.json과 opencode.jsonc 병합, 프로젝트별 AGENTS.md·.opencode\skills가 되는지 결론을 내고,
+   안 되는 것이 있으면 대안을 제안해 줘.
+3. 결론이 나면 3-12장 "확인되면 할 일"의 계획을 먼저 보여 주고, 내가 좋다고 하면 구현해 줘
+   (setup.py, skill.py, skill-maker 스킬, 전역 지침 9장, README·가이드, 테스트, CHANGELOG. 바꾼 도구의 테스트와 CLI-dev/tests를 돌린 뒤 커밋·푸시).
 답변은 한국어로, 이모지 없이.
 ```
 
