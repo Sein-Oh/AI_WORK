@@ -7,7 +7,7 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
 
 하는 일 (C:\AIKIT = 이 파일이 있는 폴더):
 1. OpenCode 설정 폴더를 C:\AIKIT으로: 사용자 환경 변수 OPENCODE_CONFIG_DIR(HKCU\Environment)를 이 폴더로 설정합니다.
-   OpenCode는 설정 파일 없이 폴더 모양만으로 AGENTS.md(전역 지침)와 skills\<이름>\SKILL.md(기본 스킬 11개와 사용자 스킬)를 읽고,
+   OpenCode는 설정 파일 없이 폴더 모양만으로 AGENTS.md(전역 지침)와 skills\<이름>\SKILL.md(기본 스킬 12개와 사용자 스킬)를 읽고,
    opencode.json(셸·권한 기본 설정, 배포 파일)과 opencode.jsonc(사내 LLM 주소, 사용자가 넣음)를 합쳐 읽습니다 (OpenCode 2.2.5 확인).
    복사하지 않으므로 C:\AIKIT을 바꾸면 바로 반영됩니다. 원래 값은 data\setup_backup_<시각>\user_env.txt에 보관하고, 쓴 뒤 다시 읽어 확인합니다.
 2. 옛 설정 정리 (원본은 data\setup_backup_<시각>\에 보관):
@@ -15,6 +15,7 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
      사용자가 만든 스킬은 C:\AIKIT\skills로, opencode.jsonc는 C:\AIKIT에 없을 때 옮깁니다.
    - 이전 구성 (2026-11-12 낮, old_layout\): C:\AIKIT\opencode 폴더(AGENTS.md, opencode.json은 지우고 opencode.jsonc·사용자 스킬은 맨 위로),
      도구 폴더 안의 옛 skills 폴더(C:\AIKIT\ml-kit\skills, C:\AIKIT\office-cli\skills)의 우리 스킬은 지우고 사용자 스킬은 맨 위로 옮깁니다.
+   - 1.6.7에서 이름을 바꾼 기본 스킬의 옛 폴더(C:\AIKIT\skills\office-excel 등, 덮어쓰기 배포로 남음)는 지웁니다 (old_layout\).
    - 사용자 스킬은 지우지 않습니다: C:\AIKIT\skills에 같은 이름이 이미 있으면 그것을 쓰고, 옛 것은 보관 폴더에만 둡니다.
 3. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
@@ -36,10 +37,12 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\AIKIT (배포 폴더)
-OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker")    # skills\<이름>\SKILL.md (office-cli)
+OFFICE_SKILLS = ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit", "skill-kit")    # skills\<이름>\SKILL.md (office-cli)
 ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # skills\<이름>\SKILL.md (ml-kit)
-# 옛 전역 설정 폴더에서 지울 우리 스킬 이름 (지금 스킬 + 옛 통합 스킬 폴더 + 실기 보조 스킬)
-OLD_SKILLS = ML_SKILLS + OFFICE_SKILLS + ("office-cli", "ml-kit", "office-cli-test")
+# 1.6.7에서 이름을 바꾼 기본 스킬의 옛 이름: C:\AIKIT\skills에 덮어쓰기 배포로 남으면 보관 후 지움 (skill.py가 이 이름으로 못 만들게 막음)
+RENAMED_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker")
+# 옛 전역 설정 폴더에서 지울 우리 스킬 이름 (지금 스킬 + 옛 이름 + 옛 통합 스킬 폴더 + 실기 보조 스킬)
+OLD_SKILLS = ML_SKILLS + OFFICE_SKILLS + RENAMED_SKILLS + ("office-cli", "ml-kit", "office-cli-test")
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
 USER_ENV_KEY = "Environment"                                                   # 사용자 환경 변수 (HKCU)
 CONFIG_ENV = "OPENCODE_CONFIG_DIR"                                             # OpenCode 설정 폴더를 바꾸는 환경 변수
@@ -124,13 +127,13 @@ def version_of(data):
 
 
 def step_sources(rep):
-    """OpenCode가 읽을 파일(기본 스킬 11개, 전역 지침, opencode.json)이 C:\\AIKIT에 있는지."""
+    """OpenCode가 읽을 파일(기본 스킬 12개, 전역 지침, opencode.json)이 C:\\AIKIT에 있는지."""
     missing = [(n, p) for n, p in sources() if not os.path.isfile(p)]
     for name, path in missing:
         rep.line("FAIL", f"{name}: 파일이 없습니다: {path} (저장소의 AIKIT 폴더를 통째로 다시 복사하세요)")
     if not missing:
         vers = sorted({version_of(_read(p)) for n, p in sources() if n.endswith("스킬")} - {""})
-        mine = sorted(set(os.listdir(os.path.join(HERE, "skills"))) - set(ML_SKILLS + OFFICE_SKILLS))
+        mine = sorted(set(os.listdir(os.path.join(HERE, "skills"))) - set(OLD_SKILLS))
         rep.line("OK", f"기본 스킬 {len(ML_SKILLS) + len(OFFICE_SKILLS)}개 ({', '.join(vers)}), 전역 지침, opencode.json: 있음  {HERE}"
                        + (f" (사용자 스킬 {len(mine)}개: {', '.join(mine[:10])})" if mine else ""))
 
@@ -237,7 +240,8 @@ def old_global_items(cfg):
 def old_layout_items():
     """이전 구성(2026-11-12 낮)에서 정리할 것: [(종류, 경로)]. C:\\AIKIT\\opencode 폴더(설정 폴더였음)와 도구 폴더 안의 옛 skills 폴더
     (덮어쓰기 배포로 남음. OpenCode는 C:\\AIKIT\\skills만 읽어 헷갈리기만 함)."""
-    out = []
+    out = [("우리 스킬(옛 이름)", os.path.join(HERE, "skills", name)) for name in RENAMED_SKILLS
+           if os.path.isdir(os.path.join(HERE, "skills", name)) or _is_link(os.path.join(HERE, "skills", name))]
     for tool in ("ml-kit", "office-cli"):                # 사용자가 여기 둔 스킬도 사용자 스킬로 옮김 (폴더째 지우지 않음)
         out += _skill_items(os.path.join(HERE, tool, "skills"))
     oc = os.path.join(HERE, "opencode")

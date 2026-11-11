@@ -115,7 +115,7 @@ def tool_versions():
     for tool in TOOLS:
         ver = "?"
         # 작업별 스킬은 C:\AIKIT\skills\<이름>\SKILL.md (도구마다 버전은 모두 같음): 도구의 대표 스킬 하나에서 읽음
-        skill = os.path.join(CLI_DIR, "skills", {"ml-kit": "ml-train", "office-cli": "office-excel"}.get(tool, tool), "SKILL.md")
+        skill = os.path.join(CLI_DIR, "skills", {"ml-kit": "ml-train", "office-cli": "excel-kit"}.get(tool, tool), "SKILL.md")
         try:
             for line in open(skill, encoding="utf-8"):
                 if line.strip().startswith("version:"):

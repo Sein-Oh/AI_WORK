@@ -22,17 +22,18 @@
 ## 3. 스킬을 먼저 쓴다
 | 요청 | 스킬 |
 |---|---|
-| Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `office-excel` |
-| Word, PowerPoint 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 슬라이드, 발표자 노트, 앱 사이 옮기기) | `office-doc` |
-| Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일), 내려받은 eml 폴더 검색 | `office-mail` |
-| PDF, HWP, Office 파일 읽기와 근거 검색, 엑셀 표를 규격서와 대조 | `office-spec` |
-| 엑셀·CSV 표 집계 (합계·평균·최소·최대·건수, 묶음별), 중복 행 찾기 | `office-data` |
+| Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `excel-kit` |
+| Word 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 앱 사이 옮기기) | `word-kit` |
+| PowerPoint 읽기·쓰기 (슬라이드, 도형, 발표자 노트, 앱 사이 옮기기) | `ppt-kit` |
+| Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일), 내려받은 eml 폴더 검색 | `outlook-kit` |
+| PDF, HWP, Office 파일 읽기와 근거 검색, 엑셀 표를 규격서와 대조 | `search-kit` |
+| 엑셀·CSV 표 집계 (합계·평균·최소·최대·건수, 묶음별), 중복 행 찾기 | `stats-kit` |
 | 표(Excel/CSV) 데이터로 예측 모델 학습, 성능 개선, 학습 이력 | `ml-train` |
 | 학습용 데이터셋 만들기 (조건·행 번호로 행 뽑기, 행을 학습에서 빼기) | `ml-dataset` |
 | 학습한 모델로 예측, 목표값이 되는 조건 찾기, 조건별 예측, 최적 조건 | `ml-predict` |
 | ML 결과 보고서(Word), 성능예측표(엑셀 계산기) | `ml-report` |
 | 모델 없이 표 데이터에서 사잇값 보간, 목표값이 되는 기준값 찾기 | `ml-map` |
-| 스킬 만들기 ("이거 스킬로 만들어줘"), 스킬 목록·점검·고치기·지우기, 스킬 만드는 방법 질문 | `skill-maker` |
+| 스킬 만들기 ("이거 스킬로 만들어줘"), 스킬 목록·점검·고치기·지우기, 스킬 만드는 방법 질문 | `skill-kit` |
 | 두 파일·두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 바뀐 곳 찾기) | 스킬 없음. 하지 않는다: 8장의 "하지 않는 일" 표대로 직접 하는 곳만 알린다 |
 
 1. 위 작업은 스킬 명령으로 한다. 스킬로 되는 일을 pandas, openpyxl, python-docx, win32com 등으로 다시 짜지 않는다.
@@ -42,7 +43,7 @@
 2. 도구는 `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`에만 있다 (다른 폴더의 경로, 예: `C:\AIKIT\dev`는 데이터 위치일 뿐이다). SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
-   `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\skills\office-excel\SKILL.md`, `C:\AIKIT\skills\ml-train\SKILL.md`)
+   `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\skills\excel-kit\SKILL.md`, `C:\AIKIT\skills\ml-train\SKILL.md`)
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
    실행하는 .py는 SKILL.md 표에 있는 것뿐이고, 경로는 SKILL.md에 적힌 전체 경로를 한 글자도 바꾸지 않고 쓴다
    (`C:\AIKIT\office-cli\excel.py`, `C:\AIKIT\ml-kit\ml_train.py`처럼 도구 폴더 바로 아래. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py --input`).
@@ -139,12 +140,12 @@ OpenCode는 `C:\AIKIT`을 설정 폴더로 쓴다 (환경 변수 `OPENCODE_CONFI
 | 무엇 | 파일 (고칠 때도 이것) |
 |---|---|
 | 전역 지침 (이 파일) | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 11개: office-excel, office-doc, office-mail, office-spec, office-data, skill-maker, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
+| 스킬 (기본 12개: excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, skill-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<스킬 이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐) |
 | 셸·권한 기본 설정 (배포 파일) | `C:\AIKIT\opencode.json` |
 | 사내 LLM 연결 설정 | `C:\AIKIT\opencode.jsonc` |
 | 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
 
-- 스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-maker` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
+- 스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-kit` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
 - 위 파일을 고친 뒤 OpenCode를 모두 닫았다가 다시 시작하면 반영된다 (안 되면 `C:\AIKIT\web.bat stop` 뒤 다시 실행). `%USERPROFILE%\.config\opencode`는 쓰지 않는다.
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).

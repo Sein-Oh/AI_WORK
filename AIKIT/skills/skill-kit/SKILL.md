@@ -1,14 +1,14 @@
 ---
-name: skill-maker
+name: skill-kit
 description: 사용자가 방금 한 작업이나 자주 하는 작업을 OpenCode 스킬로 만들어 등록한다. 스킬 만들기, "이거 스킬로 만들어줘", 스킬 목록 보기, 스킬 점검·고치기·지우기, 스킬 만드는 방법 질문에 사용. 인터넷을 찾지 않고 이 스킬의 순서대로 한다.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.6"
+  version: "1.6.7"
   platform: windows
 ---
 
-# skill-maker 스킬 (Windows)
+# skill-kit 스킬 (Windows)
 
 스킬은 "이런 요청이 오면 이 순서로 이 명령을 실행하라"를 적은 글 파일(SKILL.md) 하나다. 한 번 등록하면 다음부터 같은 요청을 말로만 해도 같은 방법으로 처리된다.
 

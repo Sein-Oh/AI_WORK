@@ -397,7 +397,7 @@ def test_no_read_code_rule_searches_without_py():
 
 def test_no_read_code_allows_office_task_skills():
     """office-cli 스킬은 작업별 5개(C:\\AIKIT\\skills\\<이름>\\SKILL.md): 읽기·검색은 위반이 아니고, 도구 폴더 검색은 그대로 위반."""
-    for name in ("office-excel", "office-doc", "office-mail", "office-spec", "office-data"):
+    for name in ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit"):
         path = f"C:\\AIKIT\\skills\\{name}\\SKILL.md"
         for c in (f"Get-Content {path}", f'Select-String -Path "{path}" -Pattern check', f"findstr comment {path}",
                   f'[IO.File]::ReadAllText("{path}")'):
@@ -839,7 +839,7 @@ def test_command_segments_split_outside_quotes():
 
 
 def test_office_scenarios_judge_by_command_not_skill_name():
-    """채점은 스킬 이름(office-cli, office-excel 등)에 기대지 않는다: 명령 정규식과 금지 규칙에 스킬 이름이 없음."""
+    """채점은 스킬 이름(office-cli, excel-kit 등)에 기대지 않는다: 명령 정규식과 금지 규칙에 스킬 이름이 없음."""
     by_id = go.load_scenarios()[1]
     for sid in OFFICE_CASES:
         sc = by_id[sid]

@@ -9,7 +9,7 @@
 
 스킬 위치 (OpenCode 2.2.5에서 확인, 2026-11-12): 폴더 하나 = 스킬 하나 (SKILL.md와 그 스킬의 scripts\\)
     기본·사용자 스킬 C:\\AIKIT\\skills\\<이름>\\SKILL.md (OpenCode 설정 폴더 = OPENCODE_CONFIG_DIR = C:\\AIKIT, 어느 작업 폴더에서나 보임).
-                    기본 스킬 11개는 도구와 함께 배포되고(BASE_SKILLS), 나머지 이름은 사용자가 만든 스킬.
+                    기본 스킬 12개는 도구와 함께 배포되고(BASE_SKILLS), 나머지 이름은 사용자가 만든 스킬.
     프로젝트 스킬    <폴더>\\.opencode\\skills\\<이름>\\SKILL.md (--project. 그 폴더에서 연 OpenCode 세션에서만 보임)
 경량 LLM이 머리말 형식(--- 줄, name, description)을 틀리지 않게 본문만 받아 도구가 조립한다.
 """
@@ -30,7 +30,9 @@ NAME_MAX = 40
 LIST_MAX = 60
 # 도구와 함께 배포하는 기본 스킬: 같은 이름으로 만들거나 지울 수 없음 (C:\AIKIT\skills에 사용자 스킬과 나란히 있음)
 BASE_SKILLS = ("ml-train", "ml-dataset", "ml-predict", "ml-report", "ml-map",
-               "office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker", "office-cli-test")
+               "excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit", "skill-kit", "office-cli-test")
+# 1.6.7에서 이름을 바꾼 기본 스킬의 옛 이름: setup.py가 C:\AIKIT\skills에 남은 것을 정리하므로 이 이름으로 만들지 않음
+RENAMED_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker")
 _PATH_IN_TEXT = re.compile(r"[A-Za-z]:\\[^\s\"'`<>|]+\.(?:py|bat)")
 _FRONT = re.compile(r"\A\s*---\s*\n(.*?)\n---\s*\n", re.S)
 
@@ -146,7 +148,7 @@ def _compose(name: str, description: str, body: str) -> str:
 
 def cmd_save(args) -> Dict[str, Any]:
     name = check_name(args.name)
-    if name in BASE_SKILLS:
+    if name in BASE_SKILLS or name in RENAMED_SKILLS:
         raise rt.InputError(f"'{name}'은(는) 도구와 함께 배포하는 기본 스킬 이름이라 쓸 수 없습니다. 다른 이름을 사용자에게 정해 달라고 하세요 "
                             f"(예: my-{name}).")
     src = rt.resolve_input_path(args.file, "스킬 본문 파일", exts=(".md", ".txt"))

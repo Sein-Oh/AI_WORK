@@ -3,11 +3,11 @@
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
-- 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`office-excel`](../../skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
-  [`office-doc`](../../skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
-  [`office-mail`](../../skills/office-mail/SKILL.md) (outlook.py),
-  [`office-spec`](../../skills/office-spec/SKILL.md) (reader.py, excel.py check·comment),
-  [`office-data`](../../skills/office-data/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
+- 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`excel-kit`](../../skills/excel-kit/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
+  [`word-kit`](../../skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus), [`ppt-kit`](../../skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
+  [`outlook-kit`](../../skills/outlook-kit/SKILL.md) (outlook.py),
+  [`search-kit`](../../skills/search-kit/SKILL.md) (reader.py, excel.py check·comment),
+  [`stats-kit`](../../skills/stats-kit/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
   공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`AIKIT/AGENTS.md`](../../AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
 - 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../docs/history/office-cli_WORK_PLAN_1.0.md)
@@ -16,7 +16,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 
 ```text
 AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli)
-├── skills/      에이전트용 스킬 5개: office-excel, office-doc, office-mail, office-spec, office-data (<이름>/SKILL.md)
+├── skills/      에이전트용 스킬 7개: excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit (<이름>/SKILL.md)
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check / stats / duplicates / save
 ├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
@@ -420,7 +420,7 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
 | `replace` | `--find/--replace`(빈 문자열은 삭제) 또는 `--map`, `--match-case`, `--whole-word`, `--bold`, `--color`, `--highlight`. 머리글/바닥글/글상자 포함. 문구당 5,000곳 상한에 닿으면 남은 곳을 확인하지 못해 `UNVERIFIED:`(`limit_reached`). `--match-case`가 없으면 대소문자만 바꾸는 치환(`office` -> `Office`)도 확인됨. `--replace`도 서식 옵션도 없으면 바꿀 것이 없어 STOP_RETRY. 바꿀 글이 찾는 글과 같고 서식이 없으면 바꾸지 않고 `replaced` 0, 찾은 곳 수는 `unchanged_same_text`. 대소문자만 다른 치환(`iphone` -> `iPhone`)에서 이미 바꿀 글 그대로인 곳은 바꾸지 않고 `unchanged_same_text`로 셈. 찾을 글이 빈 문자열이면 STOP_RETRY |
 | `export` | `--save 경로.pdf\|.docx`, `--page-number`(사본에만) |
 | `delete` | 단락 지우기(1.6.0): `--paragraphs 12-14`(read의 `no`, `12`, `3,7`도 됨, 한 번에 200개까지). 표 안 단락은 지우지 않고 STOP_RETRY(표 행은 `table`). `--dry-run`: 지울 단락 글(`planned`)과 `confirm_commands[0]`. 뒤에서부터 지우고 남은 단락을 다시 읽어 예상과 비교, 되돌리기 지점. 지운 뒤에는 번호가 바뀌므로 같은 명령을 다시 실행하지 않음 |
-| `format` | 단락 서식(1.6.1. 1.6.3 스킬 점검에서 office-doc 스킬에 넣음): `--paragraphs 3-5`(read의 `no`, 500개까지) `--align left\|center\|right\|justify`, `--font "맑은 고딕"`, `--size 11`, `--bold`, `--italic`, `--style "제목 1"`(Word 스타일 이름 그대로, 없으면 STOP_RETRY. 스타일을 먼저 적용하고 그 위에 글꼴 옵션). `--dry-run`, 단락마다 다시 읽어 확인, 되돌리기 지점 |
+| `format` | 단락 서식(1.6.1. 1.6.3 스킬 점검에서 word-kit 스킬에 넣음): `--paragraphs 3-5`(read의 `no`, 500개까지) `--align left\|center\|right\|justify`, `--font "맑은 고딕"`, `--size 11`, `--bold`, `--italic`, `--style "제목 1"`(Word 스타일 이름 그대로, 없으면 STOP_RETRY. 스타일을 먼저 적용하고 그 위에 글꼴 옵션). `--dry-run`, 단락마다 다시 읽어 확인, 되돌리기 지점 |
 | `table` | 표 행(1.6.0): `--table N`(info의 tables no, 기본 1) `--action add-row [--row R] [--values "칸; 칸"]`(R행 뒤, 생략 시 끝. 칸 수보다 많으면 STOP_RETRY) / `--action delete-row --row R`. 세로로 병합된 칸이 있는 표는 행 단위로 다룰 수 없어 STOP_RETRY. `--dry-run`(지울 행 글), 행 수와 새 행 글을 다시 읽어 확인, 되돌리기 지점 |
 
 word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단락을 `--anchor`로 주면 앵커와 표 사이에 빈 단락을 만들어 넣고(표 첫 칸에 들어가지 않게), `--pos replace`는 내용을 넣은 뒤 앵커 단락을 지웁니다. 새 번호 목록은 1부터, 표 뒤에 넣는 표·요약 상자 앞에는 빈 단락, 그림·목차 단락은 본문 스타일, `--toc`은 내용을 넣은 뒤 갱신하고 제목을 넣는 쓰기는 문서의 목차도 갱신합니다. PPT `write`는 바닥글·날짜·슬라이드 번호 개체틀을 쌓는 기준에서 빼고 `--text`도 공간이 없으면 새 슬라이드에 넣습니다.
@@ -805,20 +805,20 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
   되돌릴 수 있는 지점이 빠지지 않습니다(`truncated`는 빠진 항목이 있을 때 true). `--pick` 없는 `undo`는 되돌릴 수 있는 지점이 하나도 없으면
   `VERIFIED: 0건.`(`count: 0`, `restored: false`), 직전 작업만 되돌릴 수 없고 더 앞 지점이 있으면 `needs_user_decision`입니다.
 
-### skill.py (1.6.3, 위치 1.6.6, 스킬 skill-maker)
+### skill.py (1.6.3, 위치 1.6.6, 스킬 skill-kit)
 사용자가 만든 OpenCode 스킬을 등록·점검합니다. 경량 LLM이 머리말(`---`, name, description)을 틀리지 않게 본문만 받아 도구가 조립합니다.
 - 사용자 스킬: `C:\AIKIT\skills\<이름>\SKILL.md`와 그 스킬의 `scripts\` (OpenCode 설정 폴더 = `OPENCODE_CONFIG_DIR`, 없으면 도구 폴더의 부모). 어느 작업 폴더에서나 보입니다.
 - 프로젝트 스킬: `--project <폴더>`를 주면 `<폴더>\.opencode\skills\<이름>\SKILL.md`. 그 폴더에서 연 OpenCode 세션에서만 보입니다 (없는 폴더는 만들지 않고 STOP_RETRY).
-- 기본 스킬: 같은 `C:\AIKIT\skills`의 11개 (`BASE_SKILLS`, 도구와 함께 배포, 같은 이름으로 만들거나 지울 수 없음). `list`의 `kind`: 기본 / 사용자 / 프로젝트.
+- 기본 스킬: 같은 `C:\AIKIT\skills`의 12개 (`BASE_SKILLS`, 도구와 함께 배포, 같은 이름으로 만들거나 지울 수 없음). `list`의 `kind`: 기본 / 사용자 / 프로젝트.
 
 | 명령 | 설명 |
 |---|---|
-| `save --name <이름> --description "<설명>" --file <본문.md> [--overwrite] [--dry-run]` | 본문 파일에 머리말을 붙여 저장하고 다시 읽어 확인. 이름은 `^[a-z0-9]+(-[a-z0-9]+)*$`, 40자 이하: 대문자·공백·밑줄은 고친 이름으로 `[추천]`, 한글 등 고칠 수 없으면 사용자에게 물음. 기본 스킬 이름(office-*, ml-*, skill-maker)은 거절. 저장 전 확인(하나라도 걸리면 저장하지 않고 "고칠 것" 목록): description 15~300자, 본문 있음, 전체 8192바이트 이하(LF), CP949로 표현되지 않는 문자(이모지 등) 없음. `warnings`: 본문 파일에 있던 머리말은 버림, 순서·명령이 없음, 본문의 `.py`·`.bat` 경로가 없음(Windows), `pip install`·인터넷 주소. 같은 이름이 있으면 `needs_user_decision`과 `--overwrite`를 붙인 `confirm_commands[0]`(destructive) |
+| `save --name <이름> --description "<설명>" --file <본문.md> [--overwrite] [--dry-run]` | 본문 파일에 머리말을 붙여 저장하고 다시 읽어 확인. 이름은 `^[a-z0-9]+(-[a-z0-9]+)*$`, 40자 이하: 대문자·공백·밑줄은 고친 이름으로 `[추천]`, 한글 등 고칠 수 없으면 사용자에게 물음. 기본 스킬 이름(office-*, ml-*, skill-kit)은 거절. 저장 전 확인(하나라도 걸리면 저장하지 않고 "고칠 것" 목록): description 15~300자, 본문 있음, 전체 8192바이트 이하(LF), CP949로 표현되지 않는 문자(이모지 등) 없음. `warnings`: 본문 파일에 있던 머리말은 버림, 순서·명령이 없음, 본문의 `.py`·`.bat` 경로가 없음(Windows), `pip install`·인터넷 주소. 같은 이름이 있으면 `needs_user_decision`과 `--overwrite`를 붙인 `confirm_commands[0]`(destructive) |
 | `list` | 설정 폴더의 스킬: `name`, `description`(120자), `kind`(기본/사용자), `bytes`. 60개까지. 0개면 `VERIFIED: 0건` |
 | `check --name <이름>` | 머리말 유무, name = 폴더 이름, 위 저장 전 확인과 같은 항목. `problems`(0개면 "문제 없음") |
 | `delete --name <이름> [--dry-run]` | 사용자가 만든 스킬 폴더를 지움 (지운 내용은 `<데이터 폴더>/deleted_skills/<이름>_<시각>`에 보관, 없는 것을 확인). 기본 스킬은 `not_supported` |
 
-- 스킬을 만드는 순서(작업 정리 -> 스크립트를 인자로 받게 -> 이름·설명 확인 -> 본문 파일 -> `save` -> OpenCode 다시 시작 안내)와 본문 모양은 skill-maker 스킬에.
+- 스킬을 만드는 순서(작업 정리 -> 스크립트를 인자로 받게 -> 이름·설명 확인 -> 본문 파일 -> `save` -> OpenCode 다시 시작 안내)와 본문 모양은 skill-kit 스킬에.
 - 사용자가 만든 스킬은 설정 폴더에만 있습니다 (원본 없음). `setup.py`는 기본 스킬만 복사하고 다른 폴더는 건드리지 않습니다.
 
 ## 4. 앱 간 전달 (transfer)과 회사 DRM

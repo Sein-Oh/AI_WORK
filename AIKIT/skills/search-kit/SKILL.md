@@ -1,20 +1,20 @@
 ---
-name: office-spec
-description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더를 등록(캐시)해 쪽·장절·번호 근거와 함께 검색한다. 장절 읽기, 엑셀 표를 규격서와 대조해 일치·불일치와 근거를 찾고 검토 메모 남기기, 캐시 조회·지우기. 규격/규정 근거 찾기, 문서 내용 검색 요청에 사용. 두 판 비교는 이 도구에 없음(워드 검토 탭 > 비교). 열린 엑셀 편집은 office-excel, 워드/PPT는 office-doc, 메일은 office-mail.
+name: search-kit
+description: PDF/HWP/HWPX/Office/CSV/TXT 파일을 Office 없이 읽고, 폴더를 등록(캐시)해 쪽·장절·번호 근거와 함께 검색한다. 장절 읽기, 엑셀 표를 규격서와 대조해 일치·불일치와 근거를 찾고 검토 메모 남기기, 캐시 조회·지우기. 규격/규정 근거 찾기, 문서 내용 검색 요청에 사용. 두 판 비교는 이 도구에 없음(워드 검토 탭 > 비교). 열린 엑셀 편집은 excel-kit, 워드는 word-kit, PPT는 ppt-kit, 메일은 outlook-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.6"
+  version: "1.6.7"
   platform: windows
 ---
 
-# office-spec 스킬 (Windows)
+# search-kit 스킬 (Windows)
 
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
 2. PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄을 붙인다.
 3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
-4. 검색한 내용을 다른 문서에 넣을 때는 내용을 복사해 인자로 넣지 않는다. `--save`로 파일을 만들고 결과의 `output_file`을 office-doc·office-excel 명령의 `--file`로 넘긴다.
+4. 검색한 내용을 다른 문서에 넣을 때는 내용을 복사해 인자로 넣지 않는다. `--save`로 파일을 만들고 결과의 `output_file`을 word-kit·ppt-kit·excel-kit 명령의 `--file`로 넘긴다.
 5. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장대로 한다 (8장의 "하지 않는 일"(두 파일 비교 등)은 파이썬으로도 하지 않고 직접 하는 곳만 알린다).
 
 ## 명령

@@ -1,14 +1,14 @@
 ---
-name: office-mail
-description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기·만들기·지우기, 첨부 목록·내려받기, 내려받은 eml 폴더 검색, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
+name: outlook-kit
+description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기·만들기·지우기, 첨부 목록·내려받기, 내려받은 eml 폴더 검색, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 excel-kit, 워드는 word-kit, PPT는 ppt-kit, 내려받은 문서 검색은 search-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.6"
+  version: "1.6.7"
   platform: windows
 ---
 
-# office-mail 스킬 (Windows)
+# outlook-kit 스킬 (Windows)
 
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.

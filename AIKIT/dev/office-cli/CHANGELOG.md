@@ -11,6 +11,20 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.6.7] - 2026-11-12
+
+기본 스킬 이름을 앱 이름 + `-kit`으로 (사용자 요청: 직관적인 이름. ml 스킬은 그대로).
+
+### 구조: 스킬 이름 바꾸기와 office-doc 나누기
+- `office-excel` -> `excel-kit`, `office-mail` -> `outlook-kit`, `office-spec` -> `search-kit`, `office-data` -> `stats-kit`, `skill-maker` -> `skill-kit`.
+- `office-doc`을 `word-kit`(word.py, 엑셀 차트·표를 워드로, 워드를 PPT·엑셀로)과 `ppt-kit`(ppt.py, 엑셀 차트·표를 PPT로, 워드<->PPT, PPT를 엑셀로)으로
+  나눔. 앱 이름과 스킬 이름이 맞고, 8KB 한도에 닿던 크기(7768바이트)가 6202·5432바이트로 줄어 자리가 생김. 되돌리기·창은 둘 다에.
+- 기본 스킬 11개 -> 12개. `SKILL_OF_TOOL`: word -> word-kit, ppt -> ppt-kit, office(transfer·undo·focus) -> word-kit.
+- `setup.py`: 덮어쓰기 배포로 `C:\AIKIT\skills`에 남는 옛 이름 폴더(`RENAMED_SKILLS`)를 보관 후 지움(`old_layout\`, `--check`는 diff만).
+  옛 전역 설정 정리 목록에도 옛 이름. `skill.py save`는 옛 이름도 거절(사용자 스킬을 그 이름으로 만들면 setup이 지우게 되므로).
+- 전역 지침 3장 표·9장, 저장소 AGENTS.md·README, `.gitignore` 기본 스킬 줄, 사용 가이드, 실기 러너·채점·K1 검사의 스킬 이름.
+- 테스트: `test_renamed_base_skill_folders_are_removed_user_skills_kept`, `skill.py`의 옛 이름 거절, `test_skill_docs`의 스킬별 기능 목록을 word-kit·ppt-kit으로 나눔.
+
 ## [1.6.6] - 2026-11-12
 
 설정 파일 없는 폴더 구성 (사용자 요청: 잘 모르는 팀원도 익히게, 루트는 `C:\AIKIT`). 집 PC OpenCode 2.2.5에서 확인 (HANDOFF 3-13).

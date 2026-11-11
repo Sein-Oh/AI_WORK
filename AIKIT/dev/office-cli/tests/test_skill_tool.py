@@ -56,8 +56,10 @@ def test_name_is_fixed_by_recommend_or_asked(cfg, capsys):
     assert code == 0 and (root / "weekly-report" / "SKILL.md").is_file(), out
     code, out = _save(capsys, body, name="주간보고")                 # 한글 이름: 고칠 수 없어 사용자에게 물음
     assert code == 1 and "[추천]" not in out["message"] and "영문 이름" in out["message"], out
-    code, out = _save(capsys, body, name="office-excel")             # 기본 스킬 이름
+    code, out = _save(capsys, body, name="excel-kit")             # 기본 스킬 이름
     assert code == 1 and "기본 스킬" in out["message"], out
+    code, out = _save(capsys, body, name="office-excel")          # 1.6.7에서 바꾼 기본 스킬의 옛 이름: setup이 지우므로 못 만듦
+    assert code == 1 and "기본 스킬" in out["message"] and not (root / "office-excel").exists(), out
 
 
 def test_problems_stop_before_writing(cfg, capsys, tmp_path):
@@ -91,12 +93,12 @@ def test_list_check_delete(cfg, capsys, tmp_path, monkeypatch):
     code, out = run_main(skill, capsys, "list")
     assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
     _save(capsys, body)
-    base = root / "office-excel"                                         # 기본 스킬도 같은 skills 폴더 (이름으로 기본/사용자를 나눔, 1.6.6)
+    base = root / "excel-kit"                                         # 기본 스킬도 같은 skills 폴더 (이름으로 기본/사용자를 나눔, 1.6.6)
     base.mkdir(parents=True)
-    (base / "SKILL.md").write_text("---\nname: office-excel\ndescription: 엑셀 읽기와 쓰기에 쓰는 기본 스킬이다.\n---\n\n# x\n1. `a`\n", encoding="utf-8")
+    (base / "SKILL.md").write_text("---\nname: excel-kit\ndescription: 엑셀 읽기와 쓰기에 쓰는 기본 스킬이다.\n---\n\n# x\n1. `a`\n", encoding="utf-8")
     code, out = run_main(skill, capsys, "list")
     kinds = {x["name"]: x["kind"] for x in out["skills"]}
-    assert out["count"] == 2 and out["user_count"] == 1 and kinds == {"office-excel": "기본", "weekly-report": "사용자"}, out
+    assert out["count"] == 2 and out["user_count"] == 1 and kinds == {"excel-kit": "기본", "weekly-report": "사용자"}, out
     code, out = run_main(skill, capsys, "check", "--name", "weekly-report")
     assert code == 0 and out["count"] == 0 and "문제 없음" in out["preview"], out
     (root / "weekly-report" / "SKILL.md").write_text("머리말 없는 글\n", encoding="utf-8")
@@ -104,7 +106,7 @@ def test_list_check_delete(cfg, capsys, tmp_path, monkeypatch):
     assert code == 0 and out["count"] >= 1 and any("머리말" in p for p in out["problems"]), out
     code, out = run_main(skill, capsys, "check", "--name", "weekly")
     assert code == 1 and "weekly-report" in out["message"], out
-    code, out = run_main(skill, capsys, "delete", "--name", "office-excel")
+    code, out = run_main(skill, capsys, "delete", "--name", "excel-kit")
     assert code == 1 and out["error_type"] == "not_supported" and base.is_dir(), out
     code, out = run_main(skill, capsys, "delete", "--name", "weekly-report", "--dry-run")
     assert code == 0 and out["dry_run"] is True and (root / "weekly-report").is_dir(), out
@@ -139,7 +141,7 @@ def test_project_skill_goes_to_project_opencode_folder(cfg, capsys, tmp_path, mo
 
 def test_default_folder_is_the_aikit_skills_folder(monkeypatch):
     """1.6.6: OPENCODE_CONFIG_DIR가 없으면 도구 폴더의 부모(C:\\AIKIT)가 설정 폴더, 스킬은 그 skills (기본 스킬과 사용자 스킬이 함께).
-    저장소에서는 그 폴더에 기본 스킬 11개가 있고 모두 '기본'으로 보임."""
+    저장소에서는 그 폴더에 기본 스킬 12개가 있고 모두 '기본'으로 보임."""
     monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
     kit = os.path.dirname(os.path.dirname(os.path.abspath(skill.__file__)))
     assert skill.config_dir() == kit and skill.skills_dir() == os.path.join(kit, "skills")

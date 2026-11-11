@@ -9,7 +9,7 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 | 도구 | 설명 | 스킬 |
 |---|---|---|
 | [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`AIKIT/skills/`](../skills/) (ml-train, ml-predict, ml-report, ml-map, ml-dataset) |
-| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`office-excel`](../skills/office-excel/SKILL.md), [`office-doc`](../skills/office-doc/SKILL.md), [`office-mail`](../skills/office-mail/SKILL.md), [`office-spec`](../skills/office-spec/SKILL.md), [`office-data`](../skills/office-data/SKILL.md) |
+| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`excel-kit`](../skills/excel-kit/SKILL.md), [`word-kit`](../skills/word-kit/SKILL.md), [`ppt-kit`](../skills/ppt-kit/SKILL.md), [`outlook-kit`](../skills/outlook-kit/SKILL.md), [`search-kit`](../skills/search-kit/SKILL.md), [`stats-kit`](../skills/stats-kit/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
 (소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\AIKIT\<tool>\`에 두고, OpenCode는 설정 폴더 `C:\AIKIT`의 `skills\<스킬 이름>\SKILL.md`를 그 자리에서 읽습니다 ([`docs/opencode/README.md`](../../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\AIKIT\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `AIKIT/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
@@ -80,7 +80,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 AIKIT/<tool>/              # 사내 PC C:\AIKIT\<tool>로 그대로 복사
 └── *.py                # CLI 진입점과 공통 런타임 (예: excel.py, _runtime.py. 실행에 필요한 파일만, 폴더째 복사해도 단독 실행 가능)
 
-AIKIT/skills/<스킬 이름>/   # 작업별 스킬 (폴더 하나 = 스킬 하나, 예: AIKIT/skills/office-excel/). OpenCode가 설정 파일 없이 읽음
+AIKIT/skills/<스킬 이름>/   # 작업별 스킬 (폴더 하나 = 스킬 하나, 예: AIKIT/skills/excel-kit/). OpenCode가 설정 파일 없이 읽음
 └── SKILL.md             # frontmatter: name(=폴더명), description(1024자 이하), license, compatibility, metadata
                          # 명령은 도구의 전체 경로 (python "C:\AIKIT\<tool>\<파일>.py" ...)
 

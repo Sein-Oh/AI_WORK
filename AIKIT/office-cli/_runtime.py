@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.6.6"                         # <AIKIT>\skills\<office-*·skill-maker>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.6.7"                         # <AIKIT>\skills\<*-kit>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -931,17 +931,17 @@ _NO_SEND = ("--send는 없습니다. 초안을 만든 뒤 사용자 확인을 �
 OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply", "forward")})
 
 
-# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (<설치 폴더>\skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
-SKILL_OF_TOOL = {"excel": "office-excel", "word": "office-doc", "ppt": "office-doc", "office": "office-doc",
-                 "outlook": "office-mail", "reader": "office-spec", "skill": "skill-maker"}
-# 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 office-data)
-SKILL_OF_COMMAND = {("excel", "stats"): "office-data", ("excel", "duplicates"): "office-data"}
+# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (<설치 폴더>\skills\<이름>\SKILL.md). excel.py check·comment는 search-kit에도 있음
+SKILL_OF_TOOL = {"excel": "excel-kit", "word": "word-kit", "ppt": "ppt-kit", "office": "word-kit",
+                 "outlook": "outlook-kit", "reader": "search-kit", "skill": "skill-kit"}
+# 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 stats-kit)
+SKILL_OF_COMMAND = {("excel", "stats"): "stats-kit", ("excel", "duplicates"): "stats-kit"}
 
 
 def skill_name(tool: str) -> str:
-    """지금 실행한 명령을 설명하는 스킬 이름 (도움말·인자 오류 안내). 모르는 도구(테스트용 등)는 office-doc."""
+    """지금 실행한 명령을 설명하는 스킬 이름 (도움말·인자 오류 안내). 모르는 도구(테스트용 등)는 word-kit."""
     cmd = CURRENT_ARGV[0] if CURRENT_ARGV and CURRENT_TOOL == tool else ""
-    return SKILL_OF_COMMAND.get((tool, cmd)) or SKILL_OF_TOOL.get(tool, "office-doc")
+    return SKILL_OF_COMMAND.get((tool, cmd)) or SKILL_OF_TOOL.get(tool, "word-kit")
 
 
 def skill_file(tool: str) -> str:

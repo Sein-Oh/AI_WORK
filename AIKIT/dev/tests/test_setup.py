@@ -100,7 +100,7 @@ def _skill(folder, name, text="본문"):
 
 
 def test_sources_exist_in_repo_layout():
-    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 11개).
+    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 12개).
     opencode.json은 셸·권한 기본 설정만 (스킬 경로 없음)."""
     for name, src in su.sources():
         assert os.path.isfile(src), (name, src)
@@ -145,7 +145,7 @@ def test_check_reports_and_apply_tidies_old_global_config(monkeypatch, tmp_path,
     사용자가 만든 스킬은 C:\\AIKIT\\skills, opencode.jsonc는 C:\\AIKIT으로 옮김. --check는 바꾸지 않음."""
     reg = FakeReg(r"C:\Windows")
     cli, old = _iso(monkeypatch, tmp_path, reg)
-    ours = _skill(old, "office-excel", "옛 복사본")
+    ours = _skill(old, "excel-kit", "옛 복사본")
     combined = _skill(old, "office-cli", "옛 통합 스킬")
     mine = _skill(old, "weekly-report", "내 스킬")
     (old / "AGENTS.md").write_text("옛 전역 지침", encoding="utf-8")
@@ -164,7 +164,7 @@ def test_check_reports_and_apply_tidies_old_global_config(monkeypatch, tmp_path,
     assert not mine.exists() and "로 옮김" in out
     assert (cli / "opencode.jsonc").read_text(encoding="utf-8") == '{"model": "corp/gemma"}'
     assert not (old / "opencode.jsonc").exists()
-    for rel in ("skills/office-excel/SKILL.md", "skills/office-cli/SKILL.md", "skills/weekly-report/SKILL.md", "AGENTS.md", "opencode.jsonc"):
+    for rel in ("skills/excel-kit/SKILL.md", "skills/office-cli/SKILL.md", "skills/weekly-report/SKILL.md", "AGENTS.md", "opencode.jsonc"):
         assert len(_backups(cli, "old_config/" + rel)) == 1, rel           # 지우거나 옮긴 것은 모두 보관
     assert su.main(["--no-path", "--check"]) == 0
 
@@ -204,10 +204,10 @@ def test_old_skill_link_removes_only_link(monkeypatch, tmp_path, capsys):
 def test_missing_source_is_error(monkeypatch, tmp_path, capsys):
     cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
     os.remove(cli / "AGENTS.md")
-    shutil.rmtree(cli / "skills" / "office-excel")
+    shutil.rmtree(cli / "skills" / "excel-kit")
     assert su.main(["--no-path"]) == 1
     out = capsys.readouterr().out
-    assert "[FAIL] 전역 지침: 파일이 없습니다" in out and "[FAIL] office-excel 스킬: 파일이 없습니다" in out and "[STATUS] 끝." not in out
+    assert "[FAIL] 전역 지침: 파일이 없습니다" in out and "[FAIL] excel-kit 스킬: 파일이 없습니다" in out and "[STATUS] 끝." not in out
 
 
 def test_previous_layout_is_moved_to_the_aikit_root(monkeypatch, tmp_path, capsys):
@@ -240,7 +240,7 @@ def test_user_skill_in_old_tool_skills_folder_is_moved_not_deleted(monkeypatch, 
     모르는 파일이 남으면 그 폴더는 그대로 둠. C:\\AIKIT\\skills에 이미 있는 사용자 스킬은 바꾸지 않음."""
     cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
     tool = cli / "office-cli"
-    _skill(tool, "office-excel", "이전 위치의 기본 스킬")
+    _skill(tool, "excel-kit", "이전 위치의 기본 스킬")
     _skill(tool, "my-check", "도구 폴더에 둔 내 스킬")
     _skill(cli / "ml-kit", "my-ml", "ml-kit 쪽 내 스킬")
     (cli / "ml-kit" / "skills" / "notes.txt").write_text("메모", encoding="utf-8")
@@ -253,8 +253,28 @@ def test_user_skill_in_old_tool_skills_folder_is_moved_not_deleted(monkeypatch, 
     assert not (tool / "skills").exists()                                 # 다 비어서 지움
     assert (cli / "ml-kit" / "skills" / "notes.txt").is_file()            # 모르는 파일은 그대로
     assert not (cli / "ml-kit" / "skills" / "my-ml").exists() and "이전 구성 사용자 스킬" in out
-    for rel in ("office-cli/skills/office-excel/SKILL.md", "office-cli/skills/my-check/SKILL.md", "ml-kit/skills/my-ml/SKILL.md"):
+    for rel in ("office-cli/skills/excel-kit/SKILL.md", "office-cli/skills/my-check/SKILL.md", "ml-kit/skills/my-ml/SKILL.md"):
         assert len(_backups(cli, "old_layout/" + rel)) == 1, rel
+    assert su.main(["--no-path", "--check"]) == 0
+
+
+def test_renamed_base_skill_folders_are_removed_user_skills_kept(monkeypatch, tmp_path, capsys):
+    """1.6.7: 기본 스킬 이름을 바꿈 (office-excel -> excel-kit, office-doc -> word-kit·ppt-kit 등). 폴더를 덮어써 배포하면 옛 이름 폴더가
+    C:\\AIKIT\\skills에 남아 OpenCode가 옛 스킬도 읽음 -> 보관 후 지움. 사용자 스킬은 그대로, 새 기본 스킬도 그대로."""
+    cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
+    for name in su.RENAMED_SKILLS:
+        _skill(cli, name, "옛 이름의 기본 스킬")
+    mine = _skill(cli, "weekly-report", "내 스킬")
+    assert su.main(["--no-path", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "이전 구성 우리 스킬(옛 이름)" in out and (cli / "skills" / "office-doc").is_dir()
+    assert su.main(["--no-path"]) == 0
+    for name in su.RENAMED_SKILLS:
+        assert not (cli / "skills" / name).exists(), name
+        assert len(_backups(cli, f"old_layout/skills/{name}/SKILL.md")) == 1, name
+    assert mine.read_text(encoding="utf-8").endswith("내 스킬")
+    for name in su.OFFICE_SKILLS + su.ML_SKILLS:
+        assert (cli / "skills" / name / "SKILL.md").is_file(), name
     assert su.main(["--no-path", "--check"]) == 0
 
 
@@ -468,11 +488,11 @@ def test_diag_fails_when_env_path_or_old_copies_differ(tmp_path, monkeypatch):
     st = rat.Stage("diag")
     rat.diag_skills(st, lines, config_dir=str(old), reg=reg)
     assert st.failed == 0 and st.passed == 2 and reg.writes == [] and reg.user == {su.CONFIG_ENV: want}   # 읽기만
-    _skill(old, "office-excel")
+    _skill(old, "excel-kit")
     _skill(old, "weekly-report")                                          # 사용자 스킬만 있으면 실패가 아님 (setup이 옮김)
     st = rat.Stage("diag")
     rat.diag_skills(st, lines, config_dir=str(old), reg=reg)
-    assert st.failed == 1 and "office-excel" in st.failures[0] and "weekly-report" not in st.failures[0]
+    assert st.failed == 1 and "excel-kit" in st.failures[0] and "weekly-report" not in st.failures[0]
 
 
 def test_service_is_stopped_so_new_path_and_skills_apply(tmp_path, monkeypatch, capsys):

@@ -45,7 +45,7 @@ python C:\AIKIT\dev\run_simplify_check.py --label 집PC
 | C3 | 닫힌 워드에 같은 제목 둘 -> `[후보] 1) 2)`와 `--occurrence 1` 명령 -> 읽기 |
 | E1 | 닫힌 엑셀 빈 범위 읽기 -> `count 0`과 "찾은 항목 없음" |
 | D1~D4 | `--dry-run` 미리보기: 엑셀 replace·시트 지우기, 워드 replace, PPT 슬라이드 지우기. 미리보기 뒤 파일이 그대로인지, `confirm_commands[0]`을 실행하면 실제로 바뀌는지 (Office) |
-| K1 | OpenCode 설정 폴더에 ml-kit 스킬 4개와 office-data, 옛 `skills\ml-kit` 없음 |
+| K1 | OpenCode 설정 폴더에 ml-kit 스킬 4개와 stats-kit, 옛 `skills\ml-kit` 없음 |
 
 결과: `C:\AIKIT\dev\result_simplify_집PC_<시각>.md`
 
