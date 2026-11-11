@@ -37,7 +37,7 @@ metadata:
 | 시트 | `python "C:\CLI\office-cli\excel.py" sheet --action <add/rename/copy/delete/select> --name <A> [--new-name <B>]` |
 | 바꾸기 | `python "C:\CLI\office-cli\excel.py" replace --find <A> --replace <B> [--all-sheets]` (칸 전체가 같을 때만 `--whole`, 여러 쌍은 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 바꾼 칸 강조 `--bold --color red`. `--find`는 비우지 않는다. 빈 칸 채우기는 `write --value`) |
 | 저장 / 내보내기 | `python "C:\CLI\office-cli\excel.py" save` (다른 이름 `--save "<전체경로.xlsx>"`) / 사본 `python "C:\CLI\office-cli\excel.py" export --save "<결과.csv|.xlsx|.pdf>"` (CSV 인코딩 `--encoding cp949`) |
-| 정보 / 배치 확인 | `python "C:\CLI\office-cli\excel.py" info [--detail]` (`layout_warnings`가 있으면 `warnings`를 알림) |
+| 정보 / 배치 확인 | `python "C:\CLI\office-cli\excel.py" info [--detail]` (`layout_warnings`가 있으면 `warnings`를 알림. 열린 엑셀에서 사용자가 선택한(마지막으로 클릭한) 칸은 `--target` 없이 실행한 결과의 `selection`, 시트는 `active_sheet`) |
 | 차트·범위를 워드/PPT로 | `python "C:\CLI\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` (범위는 `--range A1:D10` 대신) |
 | 되돌리기 / 창 | `python "C:\CLI\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\CLI\office-cli\office.py" windows` / `python "C:\CLI\office-cli\office.py" focus --app excel` |
 

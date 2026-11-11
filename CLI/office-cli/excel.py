@@ -1657,6 +1657,9 @@ def cmd_info(args) -> Dict[str, Any]:
         f"{s['name']} {s['used_range']}" + (f" 차트{len(s['charts'])}" if s["charts"] else "") for s in sheets[:8]) + ")"
     if args.detail:
         preview += f", 배치 경고 {result['layout_warnings']}건" if result["layout_warnings"] else ", 배치 경고 없음"
+    if result.get("selection"):
+        # 사용자가 마지막으로 클릭한(선택한) 칸: "지금 선택한 칸이 어디야", "여기에 써줘"에 답할 수 있게 preview에도 (2026-11-11)
+        preview += f". 보고 있는 시트 '{result['active_sheet']}', 선택한 칸 {result['selection']}"
     return rt.ok(TOOL, "info", preview, **result)
 
 

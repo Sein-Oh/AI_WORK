@@ -28,6 +28,7 @@
   가장 큰 스킬 office-doc 7277바이트. 테스트 `test_skill_docs.py`에 새 항목을 기대값으로.
 
 ### 기능 (사용자 요청)
+- `excel.py info`(열린 통합문서, `--target` 없음): 사용자가 선택한(마지막으로 클릭한) 칸 `selection`과 `active_sheet`를 preview에도 적고 office-excel 스킬에 안내 (값은 전부터 있었으나 스킬에 없어 에이전트가 알리지 못함).
 - 전역 지침 `CLI/opencode/AGENTS.md` 9장: 지침·스킬 파일 위치 (팀원 배포 전, 물어보면 그대로 알림). OpenCode가 읽는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 `setup.bat`.
 - `setup.py`: opencode.jsonc에 `"enabled_providers"`가 없으면 WARN과 넣을 줄(사내 provider 이름을 넣은 것)을 알림. 폐쇄망에서 못 쓰는 기본 모델(opencode 등)이
   `opencode models`에 나오지 않게. 이름이 `"provider"`·`"model"`과 어긋나면 WARN, `"autoupdate": false`가 없으면 INFO. docs/opencode/README.md에 설정 예.
