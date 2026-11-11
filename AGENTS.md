@@ -27,8 +27,8 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 새 파일을 `AIKIT/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
 - `AIKIT/` 맨 위에는 도구 폴더, `skills/`, `dev/`, `guide/`(사람용 사용 가이드 HTML, 도구별 파일 하나, 브라우저로 엶) 외에 `AGENTS.md`(전역 지침), `opencode.json`(셸·권한 기본 설정, 스킬 경로는 적지 않음),
   배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`만 둔다.
-  사용자가 배포 전에 넣는 `opencode.jsonc`(사내 LLM 주소), OpenCode가 만드는 `service.json`, 설치가 만드는 `data/`(보관 폴더)와
-  `work/`(Web UI 작업 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
+  사용자가 배포 전에 넣는 `opencode.jsonc`(사내 LLM 주소), OpenCode가 만드는 `service.json`, 설치가 만드는 `data/`(보관 폴더)는
+  git 제외. Web UI의 기본 프로젝트 폴더는 `AIKIT/` 자체(`web.bat`). 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
 
 ## 사용자 환경 (모든 작업의 전제)
 | 항목 | 값 |

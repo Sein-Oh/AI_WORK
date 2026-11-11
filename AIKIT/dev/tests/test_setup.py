@@ -132,7 +132,7 @@ def test_apply_sets_user_env_then_check_passes(monkeypatch, tmp_path, capsys):
     kept = _backups(cli, "user_env.txt")
     assert len(kept) == 1 and r"D:\옛 설정" in kept[0].read_text(encoding="utf-8")      # 쓰기 전 원래 값
     assert reg.writes == []                                               # --no-path: 시스템 PATH는 그대로
-    assert (cli / "data" / "scripts").is_dir() and (cli / "work").is_dir()
+    assert (cli / "data" / "scripts").is_dir() and not (cli / "work").exists()     # Web UI 프로젝트 폴더는 C:\\AIKIT 자체 (1.6.7)
     out = capsys.readouterr().out
     assert "[STATUS] 끝." in out and "옛 전역 설정 폴더에 정리할 것 없음" in out
     assert su.main(["--no-path", "--check"]) == 0
@@ -466,6 +466,16 @@ def test_setup_bat_is_ascii_crlf_and_uses_bundled_python():
     assert data.isascii() and b"chcp" not in data.lower()
     assert data.count(b"\r\n") == data.count(b"\n") and data.endswith(b"\r\n")
     assert b'"%~dp0python\\python.exe" "%~dp0setup.py" %*' in data and b"pause" in data
+
+
+def test_web_bat_is_ascii_crlf_and_opens_the_aikit_folder():
+    """1.6.7 (사용자 결정): Web UI의 기본 프로젝트 폴더 = C:\\AIKIT (설정 폴더와 같음). 서비스를 이 폴더에서 띄우고 처음 열 폴더로 안내."""
+    data = open(os.path.join(CLI, "web.bat"), "rb").read()
+    assert data.isascii() and b"chcp" not in data.lower()
+    assert data.count(b"\r\n") == data.count(b"\n") and data.endswith(b"\r\n")
+    assert b'set "WORK=%OPENCODE_CONFIG_DIR%"' in data and b'cd /d "%WORK%"' in data
+    assert b"work\"" not in data and b"mkdir \"%WORK%\"" not in data
+    assert data.index(b'set "OPENCODE_CONFIG_DIR=%OPENCODE_CONFIG_DIR:~0,-1%"') < data.index(b'set "WORK=')
 
 
 # ---- run_all_tests.py diag ----

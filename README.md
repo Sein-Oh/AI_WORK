@@ -97,7 +97,7 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
    브라우저는 Edge(없으면 Chrome)를 `C:\AIKIT\data\web_profile` 전용 프로필의 앱 창으로 엽니다. 평소 브라우저 프로필에서
    "Internal error opening backing store for indexedDB.open"이 나던 회사 PC 대응 (2026-11-10). 둘 다 없으면 기본 브라우저.
    Web UI는 세션을 프로젝트(작업 폴더) 안에 만듭니다. 처음 쓰는 PC는 폴더가 없어 새 세션이 만들어지지 않으니, 처음 한 번 화면에서 프로젝트 열기로
-   `C:\AIKIT\work`(setup과 web.bat이 만들어 둠)를 고른 뒤 새 세션을 만듭니다. 프로젝트 목록은 브라우저 프로필(`C:\AIKIT\data\web_profile`)에 저장됩니다.
+   `C:\AIKIT`(web.bat이 서비스를 띄우는 기본 프로젝트 폴더)을 고른 뒤 새 세션을 만듭니다. 프로젝트 목록은 브라우저 프로필(`C:\AIKIT\data\web_profile`)에 저장됩니다.
 
 ## 관리 방법
 

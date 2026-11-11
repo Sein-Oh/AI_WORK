@@ -20,10 +20,10 @@ set "OPENCODE_CONFIG_DIR=%OPENCODE_CONFIG_DIR:~0,-1%"
 if /i "%~1"=="stop" goto service
 if /i "%~1"=="status" goto service
 
-rem Work folder: the Web UI makes every session inside a project folder, and a new PC has none, so "new session" did nothing
-rem (team PC 2026-11-11). The service starts in this folder; the user opens it once in the Web UI (Open project).
-set "WORK=%~dp0work"
-if not exist "%WORK%" mkdir "%WORK%"
+rem Project folder = this folder (C:\AIKIT, user decision 2026-11-12). The Web UI makes every session inside a project folder,
+rem and a new PC has none, so "new session" did nothing (team PC 2026-11-11). The service starts here; the user opens it once
+rem in the Web UI (Open project).
+set "WORK=%OPENCODE_CONFIG_DIR%"
 cd /d "%WORK%"
 
 rem Run 'pair' once and keep its whole output in a file (no pipe inside for /f).

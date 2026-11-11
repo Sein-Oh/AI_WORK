@@ -25,6 +25,10 @@
 - 전역 지침 3장 표·9장, 저장소 AGENTS.md·README, `.gitignore` 기본 스킬 줄, 사용 가이드, 실기 러너·채점·K1 검사의 스킬 이름.
 - 테스트: `test_renamed_base_skill_folders_are_removed_user_skills_kept`, `skill.py`의 옛 이름 거절, `test_skill_docs`의 스킬별 기능 목록을 word-kit·ppt-kit으로 나눔.
 
+### 구조: Web UI의 기본 프로젝트 폴더 = C:\AIKIT
+- `web.bat`이 서비스를 `C:\AIKIT\work` 대신 `C:\AIKIT`(설정 폴더와 같은 곳)에서 띄우고 처음 열 폴더로 안내 (사용자 결정). `setup.py`는 `work`를 만들지 않음.
+  README·가이드·반입 안내 고침. 테스트 `test_web_bat_is_ascii_crlf_and_opens_the_aikit_folder`.
+
 ## [1.6.6] - 2026-11-12
 
 설정 파일 없는 폴더 구성 (사용자 요청: 잘 모르는 팀원도 익히게, 루트는 `C:\AIKIT`). 집 PC OpenCode 2.2.5에서 확인 (HANDOFF 3-13).

@@ -19,7 +19,7 @@ C:\AIKIT\
 ├── ml-kit\, office-cli\    여러 스킬이 함께 쓰는 도구 (.py)
 ├── opencode.json          셸·권한 기본 설정 (배포 파일, 스킬 경로는 적지 않음)
 ├── opencode.jsonc         사내 LLM 연결 (PC마다, 사용자가 넣음, git 제외)
-└── opencode.exe, python\, setup.bat, web.bat, dev\, data\, work\
+└── opencode.exe, python\, setup.bat, web.bat, dev\, guide\, data\
 ```
 
 | 무엇 | 파일 |
@@ -32,7 +32,7 @@ C:\AIKIT\
 
 - 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, `guide`(사용 가이드), 기본 스킬 12개 폴더(`skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
   `setup.py`·`setup.bat`·`web.bat`을 바꿉니다. `skills` 폴더를 통째로 지우지 않습니다 (사용자 스킬이 함께 지워짐).
-  `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`, `work\`는 그대로 둡니다.
+  `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`는 그대로 둡니다.
   처음 한 번 `C:\AIKIT\setup.bat`을 실행하고(환경 변수, PATH), 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다
   (setup은 다시 실행해도 됩니다: 확인과 서비스 끄기).
 - 예전 구성에서 바꿀 때 setup이 옮깁니다 (원본은 `C:\AIKIT\data\setup_backup_<시각>`에 보관):
@@ -42,8 +42,9 @@ C:\AIKIT\
   `C:\AIKIT\skills`에 둡니다.
 - 바뀐 설정이 안 보이면: OpenCode 백그라운드 서비스는 처음 뜰 때의 환경 변수를 계속 씁니다. `C:\AIKIT\web.bat stop` 뒤 다시 실행하고,
   `C:\AIKIT\opencode.exe debug paths`의 `config`가 `C:\AIKIT`인지 봅니다 (setup도 끝에 확인).
-- 작업은 `C:\AIKIT\work\<프로젝트>`처럼 아래 폴더에서 엽니다. `C:\AIKIT` 자체에서 열면 `AGENTS.md`가 전역 지침이면서 그 폴더의
-  프로젝트 지침도 되어 두 번 들어갑니다.
+- Web UI의 기본 프로젝트 폴더는 `C:\AIKIT` 자체입니다 (`web.bat`이 서비스를 여기서 띄움, 2026-11-12 사용자 결정). 처음 한 번 화면에서
+  프로젝트 열기로 `C:\AIKIT`을 고릅니다. 이 폴더의 `AGENTS.md`는 전역 지침이면서 프로젝트 지침 자리이기도 해서, 두 번 들어가는지 집 PC에서
+  확인합니다 (HANDOFF 3-17). 프로젝트별 지침·스킬이 필요한 일은 따로 만든 폴더(예: `D:\프로젝트A`)를 프로젝트로 엽니다.
 
 **ripgrep(rg.exe)이 필요합니다.** OpenCode는 스킬을 불러올 때 ripgrep을 쓰고, 없으면 인터넷에서 받으려 합니다.
 폐쇄망에서는 받지 못해 스킬 불러오기가 `ripgrep execution failed`로 실패합니다(2026-10-29 실기: 대화 6개 모두).

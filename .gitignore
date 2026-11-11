@@ -26,7 +26,6 @@ wheels/
 
 # Tool runtime data (error logs, caches) - each tool folder
 AIKIT/*/data/
-AIKIT/work/
 AIKIT/*/cache/
 AIKIT/office-cli/config.json
 

@@ -480,6 +480,12 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
 회사 반입에서 .html이 통과하므로 반입 확장자 규칙에 `AIKIT/guide/`의 .html만 예외로 더함 (`test_repo_files.py`). 전역 지침 9장 위치 표에 가이드 경로
 (사용자가 사용법을 물으면 브라우저로 열어 보라고 알림). 반입 안내(`docs/opencode/README.md`, `실기테스트.md`)에 `guide`.
 
+### 3-17. Web UI 기본 프로젝트 폴더를 C:\AIKIT로
+사용자 결정: `web.bat`이 서비스를 `C:\AIKIT\work` 대신 `C:\AIKIT`에서 띄움 (처음 한 번 Web UI에서 프로젝트 열기로 `C:\AIKIT`). setup은 `work`를 만들지 않음.
+집 PC에서 확인할 것: `C:\AIKIT`이 설정 폴더이면서 프로젝트 폴더라 `C:\AIKIT\AGENTS.md`가 두 번 들어가는지 (세션의 시스템 지침 길이, 또는
+`AGENTS.md`에 시험용 한 줄을 넣고 답에 두 번 나오는지). 두 번 들어가면 다시 `work` 같은 아래 폴더로 되돌릴지 사용자에게 물을 것.
+이미 있는 PC의 `C:\AIKIT\work`는 그대로 두어도 됨 (지우지 않음).
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.

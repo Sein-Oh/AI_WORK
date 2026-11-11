@@ -741,9 +741,6 @@ def main(argv=None):
     step_old_layout(rep, backup, args.check)
     if not args.check:      # 스킬로 안 되는 일의 파이썬 스크립트를 두는 곳 (전역 지침 8장)
         os.makedirs(os.path.join(data_dir(), "scripts"), exist_ok=True)
-        # Web UI의 작업 폴더 (web.bat이 서비스를 여기서 띄움). Web UI는 세션을 프로젝트 폴더 안에 만들어, 폴더가 없는 새 PC에서는
-        # 새 세션이 만들어지지 않았음 (팀원 배포 2026-11-11). 처음 한 번 Web UI에서 이 폴더를 프로젝트로 연다
-        os.makedirs(os.path.join(HERE, "work"), exist_ok=True)
     print("[INFO] 3. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)
