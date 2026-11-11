@@ -2105,11 +2105,23 @@ def test_with_attachments_skips_inline_only_mails(ol, capsys):
 
 
 class _Appt:
+    """실제 pywin32 + Outlook처럼: tzinfo 없는 시각을 넣으면 현지 시각으로 보고 UTC로 바꿔 저장(한국 -9시간, 회사 PC 2026-11-11 N7),
+    UTC 표시가 붙은 시각은 그 값 그대로 저장. 저장 값은 tzinfo 없는 현지 시각."""
+    OFFSET = dt.timedelta(hours=9)
+
     def __init__(self, store):
         self.store, self.EntryID = store, ""
         self.Subject = self.Location = self.Body = ""
         self.AllDayEvent = self.ReminderSet = False
-        self.Start, self.Duration = None, 30
+        self._start, self.Duration = None, 30
+
+    @property
+    def Start(self):
+        return self._start
+
+    @Start.setter
+    def Start(self, v):
+        self._start = v - self.OFFSET if v.tzinfo is None else v.replace(tzinfo=None)
 
     @property
     def End(self):

@@ -1732,6 +1732,13 @@ def _event_start(raw: str) -> Tuple[_dt.datetime, bool]:
                         "종일 일정은 'YYYY-MM-DD'로 쓰세요.")
 
 
+def _com_time(local: _dt.datetime) -> _dt.datetime:
+    """Outlook에 넣을 현지 시각. pywin32는 tzinfo 없는 시각을 현지 시각으로 보고 UTC로 바꿔 넣어, 15:00 일정이 06:00(한국 -9시간)에
+    저장됐다 (회사 PC 2026-11-11 N7). 읽을 때 pywin32가 현지 시각에 UTC 표시를 붙여 주는 것과 같게, 현지 시각에 UTC 표시를 붙여 넣으면
+    바꾸지 않고 그대로 들어간다. 저장 뒤 다시 읽어 시각을 비교한다 (R1)."""
+    return local.replace(tzinfo=_dt.timezone.utc)
+
+
 def _same_event(folder: Any, subject: str, start: _dt.datetime) -> Optional[Any]:
     """같은 제목·같은 시작의 일정 (다시 실행해도 일정이 둘이 되지 않게)."""
     end = start + _dt.timedelta(minutes=1)
@@ -1787,7 +1794,7 @@ def cmd_event(args) -> Dict[str, Any]:
     app = get_outlook()
     item = app.CreateItem(OL_APPOINTMENT)
     item.Subject = subject
-    item.Start = start
+    item.Start = _com_time(start)
     item.Duration = minutes
     if all_day and minutes % (24 * 60) == 0:
         item.AllDayEvent = True
