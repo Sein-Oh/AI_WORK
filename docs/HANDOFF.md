@@ -455,9 +455,23 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
 보관본은 옛 `C:\CLI`와 통합 SKILL.md를 가리켜 그대로는 못 씀. 다시 쓸 때 `run.py`의 경로를 `C:\AIKIT`로, `build.py`가
 `C:\AIKIT\skills\<이름>`에 `run.py`를 더해 zip을 만들게 고침 (사용자 결정: 지금은 폴더 모양만 맞춤).
 
+### 3-14. PR #78 검토 (클라우드, 2026-11-12)
+- 시험: ml-kit 전체 `python -m pytest -q AIKIT/dev/ml-kit/tests` -> 1050 passed, 2 skipped (26분 42초, 리눅스). `-m report`는 기본 실행(pytest.ini가 report를 빼지 않음)에 이미 들어 있어
+  따로 돌리지 않음 (report 98건 포함). 공통 `AIKIT/dev/tests` 836 passed. office-cli 전체·test_skill_docs·test_contract는 집 PC에서 통과해 다시 돌리지 않음.
+- 남은 옛 이름 찾기 (`C:\CLI`, `CLI-dev`, `AIKIT/<도구>/skills`, `AIKIT/opencode`, `skills.paths`; archive·test_logs·history·CHANGELOG 지난 항목 제외):
+  남은 것은 모두 의도한 것 (옮기는 코드 `setup.py`·`run_all_tests.py` diag와 그 테스트, 옮기는 방법 안내 `docs/opencode/README.md`·`실기테스트.md`, HANDOFF 3-12 이력). 고칠 것 없음.
+- 사용자 스킬을 지우거나 덮어쓰는 경우 검토:
+  - 고침: 이전 구성의 도구 폴더 안 `skills`(`C:\AIKIT\ml-kit\skills`, `office-cli\skills`)를 폴더째 "우리 스킬"로 지웠음 (보관은 함).
+    사용자가 거기 둔 스킬도 함께 빠졌음. 이제 옛 전역 설정·`C:\AIKIT\opencode\skills`와 같이 하나씩 나눔: 우리 스킬 이름만 보관 후 지우고,
+    사용자 스킬은 `C:\AIKIT\skills`로 옮기고, 모르는 파일이 남으면 폴더는 그대로. 회귀 테스트 `test_setup.py::test_user_skill_in_old_tool_skills_folder_is_moved_not_deleted`.
+  - 그대로 둔 것 (안전함 확인): 옮길 곳에 같은 이름 사용자 스킬이 있으면 있던 것을 쓰고 옛 것은 보관만. 링크(정션)는 링크만 지움.
+    `--test-skill`은 `office-cli-test`만 덮어씀(보관 후). 이 이름은 `skill.py`의 `BASE_SKILLS`라 사용자가 만들 수 없음.
+    다시 배포(폴더 덮어쓰기)는 기본 스킬 11개 폴더만 바꾸고 사용자 스킬 폴더는 건드리지 않음.
+  - `skill.py`: 기본 스킬 이름은 save·delete 모두 거절, 있는 스킬은 `--overwrite`(사용자 확인) 없이 바꾸지 않음, delete는 `data\deleted_skills\`에 보관 후 지움.
+    `--project`는 있는 폴더만 받고(오타 경로에 `.opencode`를 만들지 않음) `<폴더>\.opencode\skills`에만 씀.
+
 ### 지금 상태 (2026-11-11 밤)
-- 브랜치 `ccr-ecab210c-awib23`. main은 PR #77까지. 그 뒤 커밋(인터넷 금지 지침, 비교 거절 강화, skill.py·skill-maker, ml-kit 2.9.91·office-cli 1.6.4,
-  setup의 서비스 끄기, `C:\AIKIT\work`)은 PR 전. 사용자가 요청하면 PR.
+- 브랜치 `ccr-ecab210c-awib23`, PR #78 (main은 PR #77까지). 병합은 사용자가 정함.
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.
 
 ## 3. 회사 PC에서 할 일

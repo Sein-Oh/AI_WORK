@@ -14,7 +14,8 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
    - 옛 전역 설정 %USERPROFILE%\.config\opencode (2026-11-12 전 setup이 복사하던 곳, old_config\): 우리 스킬 복사본과 AGENTS.md는 지우고,
      사용자가 만든 스킬은 C:\AIKIT\skills로, opencode.jsonc는 C:\AIKIT에 없을 때 옮깁니다.
    - 이전 구성 (2026-11-12 낮, old_layout\): C:\AIKIT\opencode 폴더(AGENTS.md, opencode.json은 지우고 opencode.jsonc·사용자 스킬은 맨 위로),
-     도구 폴더 안의 옛 skills 폴더(C:\AIKIT\ml-kit\skills, C:\AIKIT\office-cli\skills)는 지웁니다.
+     도구 폴더 안의 옛 skills 폴더(C:\AIKIT\ml-kit\skills, C:\AIKIT\office-cli\skills)의 우리 스킬은 지우고 사용자 스킬은 맨 위로 옮깁니다.
+   - 사용자 스킬은 지우지 않습니다: C:\AIKIT\skills에 같은 이름이 이미 있으면 그것을 쓰고, 옛 것은 보관 폴더에만 둡니다.
 3. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
    OpenCode 백그라운드 서비스를 끔 (서비스는 처음 뜰 때의 환경 변수·PATH로 계속 돌아, 끄지 않으면 재부팅 전까지 옛 설정을 씀).
@@ -210,17 +211,23 @@ def _remove_link(path):
         os.rmdir(path)                                  # Windows 디렉터리 링크·정션은 rmdir로 링크만 지움 (대상 내용은 그대로)
 
 
-def old_global_items(cfg):
-    """옛 전역 설정 폴더에서 정리할 것: [(종류, 경로)]. 종류: 우리 스킬 / 전역 지침 / 사용자 스킬 / opencode.jsonc."""
+def _skill_items(skills):
+    """skills 폴더 안을 하나씩 나눔: 우리 스킬 이름(OLD_SKILLS)은 "우리 스킬", SKILL.md가 있는 다른 폴더는 "사용자 스킬"(옮김).
+    그 밖의 것(링크인 사용자 스킬, 모르는 파일)은 건드리지 않습니다."""
     out = []
-    skills = os.path.join(cfg, "skills")
-    if os.path.isdir(skills):
+    if os.path.isdir(skills) and not _is_link(skills):
         for name in sorted(os.listdir(skills)):
             path = os.path.join(skills, name)
             if name in OLD_SKILLS:
                 out.append(("우리 스킬", path))
             elif os.path.isfile(os.path.join(path, "SKILL.md")) and not _is_link(path):
                 out.append(("사용자 스킬", path))
+    return out
+
+
+def old_global_items(cfg):
+    """옛 전역 설정 폴더에서 정리할 것: [(종류, 경로)]. 종류: 우리 스킬 / 전역 지침 / 사용자 스킬 / opencode.jsonc."""
+    out = _skill_items(os.path.join(cfg, "skills"))
     for kind, name in (("전역 지침", "AGENTS.md"), ("opencode.jsonc", "opencode.jsonc")):
         if os.path.isfile(os.path.join(cfg, name)):
             out.append((kind, os.path.join(cfg, name)))
@@ -231,21 +238,12 @@ def old_layout_items():
     """이전 구성(2026-11-12 낮)에서 정리할 것: [(종류, 경로)]. C:\\AIKIT\\opencode 폴더(설정 폴더였음)와 도구 폴더 안의 옛 skills 폴더
     (덮어쓰기 배포로 남음. OpenCode는 C:\\AIKIT\\skills만 읽어 헷갈리기만 함)."""
     out = []
-    for tool in ("ml-kit", "office-cli"):
-        path = os.path.join(HERE, tool, "skills")
-        if os.path.isdir(path):
-            out.append(("우리 스킬", path))
+    for tool in ("ml-kit", "office-cli"):                # 사용자가 여기 둔 스킬도 사용자 스킬로 옮김 (폴더째 지우지 않음)
+        out += _skill_items(os.path.join(HERE, tool, "skills"))
     oc = os.path.join(HERE, "opencode")
     if not os.path.isdir(oc) or _is_link(oc):
         return out
-    skills = os.path.join(oc, "skills")
-    if os.path.isdir(skills):
-        for name in sorted(os.listdir(skills)):
-            path = os.path.join(skills, name)
-            if name in OLD_SKILLS:
-                out.append(("우리 스킬", path))
-            elif os.path.isfile(os.path.join(path, "SKILL.md")) and not _is_link(path):
-                out.append(("사용자 스킬", path))
+    out += _skill_items(os.path.join(oc, "skills"))
     for kind, name in (("전역 지침", "AGENTS.md"), ("우리 설정", "opencode.json"), ("OpenCode 실행 파일", "service.json"),
                        ("opencode.jsonc", "opencode.jsonc")):
         if os.path.isfile(os.path.join(oc, name)):
@@ -332,14 +330,15 @@ def step_old_layout(rep, backup, check=False):
             rep.diff(f"이전 구성 {kind}: {path} (설치하면 정리)")
         else:
             _tidy(rep, kind, path, HERE, backup, label="이전 구성", sub="old_layout")
-    oc = os.path.join(HERE, "opencode")
-    if not check and os.path.isdir(oc):
-        for d in (os.path.join(oc, "skills"), oc):
-            try:
-                if os.path.isdir(d) and not os.listdir(d):
-                    os.rmdir(d)
-            except OSError:
-                pass
+    if check:
+        return
+    oc = os.path.join(HERE, "opencode")                 # 다 비었으면 옛 폴더도 지움 (남은 것이 있으면 그대로)
+    for d in (os.path.join(HERE, "ml-kit", "skills"), os.path.join(HERE, "office-cli", "skills"), os.path.join(oc, "skills"), oc):
+        try:
+            if os.path.isdir(d) and not _is_link(d) and not os.listdir(d):
+                os.rmdir(d)
+        except OSError:
+            pass
 
 
 def step_test_skills(rep, backup, test_skills):

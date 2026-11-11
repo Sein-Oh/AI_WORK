@@ -235,6 +235,29 @@ def test_previous_layout_is_moved_to_the_aikit_root(monkeypatch, tmp_path, capsy
     assert su.main(["--no-path", "--check"]) == 0
 
 
+def test_user_skill_in_old_tool_skills_folder_is_moved_not_deleted(monkeypatch, tmp_path, capsys):
+    """1.6.6 검토: 이전 구성의 도구 폴더 안 skills에 사용자가 둔 스킬은 폴더째 지우지 않고 C:\\AIKIT\\skills로 옮김.
+    모르는 파일이 남으면 그 폴더는 그대로 둠. C:\\AIKIT\\skills에 이미 있는 사용자 스킬은 바꾸지 않음."""
+    cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
+    tool = cli / "office-cli"
+    _skill(tool, "office-excel", "이전 위치의 기본 스킬")
+    _skill(tool, "my-check", "도구 폴더에 둔 내 스킬")
+    _skill(cli / "ml-kit", "my-ml", "ml-kit 쪽 내 스킬")
+    (cli / "ml-kit" / "skills" / "notes.txt").write_text("메모", encoding="utf-8")
+    _skill(cli, "weekly-report", "있던 내 스킬")
+    assert su.main(["--no-path"]) == 0
+    out = capsys.readouterr().out
+    assert (cli / "skills" / "my-check" / "SKILL.md").read_text(encoding="utf-8").endswith("도구 폴더에 둔 내 스킬")
+    assert (cli / "skills" / "my-ml" / "SKILL.md").read_text(encoding="utf-8").endswith("ml-kit 쪽 내 스킬")
+    assert (cli / "skills" / "weekly-report" / "SKILL.md").read_text(encoding="utf-8").endswith("있던 내 스킬")
+    assert not (tool / "skills").exists()                                 # 다 비어서 지움
+    assert (cli / "ml-kit" / "skills" / "notes.txt").is_file()            # 모르는 파일은 그대로
+    assert not (cli / "ml-kit" / "skills" / "my-ml").exists() and "이전 구성 사용자 스킬" in out
+    for rel in ("office-cli/skills/office-excel/SKILL.md", "office-cli/skills/my-check/SKILL.md", "ml-kit/skills/my-ml/SKILL.md"):
+        assert len(_backups(cli, "old_layout/" + rel)) == 1, rel
+    assert su.main(["--no-path", "--check"]) == 0
+
+
 def test_test_skill_goes_to_user_skills(monkeypatch, tmp_path, capsys):
     cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
     test_skill = os.path.join(DEV, "office-cli", "tools", "office-cli-test", "SKILL.md")

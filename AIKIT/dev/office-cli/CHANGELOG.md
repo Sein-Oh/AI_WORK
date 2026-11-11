@@ -22,6 +22,8 @@
 - `setup.py`: `OPENCODE_CONFIG_DIR=<설치 폴더>`. 이전 구성(`C:\AIKIT\opencode`, 도구 폴더 안의 `skills`)에서 `opencode.jsonc`와 사용자 스킬은
   맨 위로 옮기고 나머지는 보관 후 지움(`old_layout\`), 옛 전역 설정의 사용자 스킬은 `C:\AIKIT\skills`로. `opencode.jsonc`에 옛 `"skills"`가 남으면 WARN.
   `web.bat`도 설치 폴더를 `OPENCODE_CONFIG_DIR`로. `run_all_tests.py` diag는 이전 구성이 남으면 FAIL.
+- PR #78 검토: 도구 폴더 안의 옛 `skills`를 폴더째 지우지 않고 하나씩 나눔(우리 스킬 이름만 보관 후 지움, 사용자가 둔 스킬은 `C:\AIKIT\skills`로,
+  모르는 파일이 남으면 폴더 그대로). 회귀 테스트 `test_user_skill_in_old_tool_skills_folder_is_moved_not_deleted`.
 - 도구가 알려 주는 스킬 파일 위치(`skill_file`)도 `<설치 폴더>\skills\<이름>\SKILL.md`.
 - `.gitignore`: `AIKIT/skills/*`에서 기본 스킬 11개만 저장소에 (나머지는 사용자 스킬), `AIKIT/opencode.jsonc`, `AIKIT/service.json`.
 
