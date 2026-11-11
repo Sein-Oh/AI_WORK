@@ -56,6 +56,17 @@ MULTI_NEW = [[1, "A-100", "메인 보드", 1, "EA", "", "삼성", ""],
              [2, "L-01", "인덕터 10uH", 1, "EA", "L1", "TDK", ""]]
 
 
+REAL_WRITE_SHEET = _excel_compare._write_result_sheet
+
+
+@pytest.fixture(autouse=True)
+def sheet_writes(monkeypatch):
+    """비교결과 시트 쓰기(excel.py write, 엑셀 필요)는 받은 명령만 적어 두고 성공으로. 실패 길은 따로 시험."""
+    seen = []
+    monkeypatch.setattr(_excel_compare, "_write_result_sheet", lambda argv: seen.append(list(argv)) or (True, ""))
+    return seen
+
+
 def _compare(capsys, old, new, *extra):
     return run_excel(capsys, "compare", "--target", old, "--target2", new, *extra)
 
@@ -103,7 +114,7 @@ def test_multi_level_bom_uses_level_parent_and_reports_every_category(tmp_path, 
     assert _sheet_rows(path, "대체 추정")[1][7] == "추정(확인 필요)"
 
 
-def test_memo_file_and_comment_preview_are_next_commands(tmp_path, capsys):
+def test_memo_is_asked_once_as_confirm_command_without_preview(tmp_path, capsys):
     old = _xlsx(tmp_path / "old.xlsx", MULTI_OLD)
     new = _xlsx(tmp_path / "new.xlsx", MULTI_NEW)
     _, out = _compare(capsys, old, new)
@@ -114,34 +125,67 @@ def test_memo_file_and_comment_preview_are_next_commands(tmp_path, capsys):
     assert stamp.match(memo["BOM!D5"]) and memo["BOM!D5"].endswith(": 수량 3 -> 4 (+1)"), memo["BOM!D5"]
     assert stamp.match(memo["BOM!F5"]) and memo["BOM!F5"].endswith(": 위치 추가 R5"), memo["BOM!F5"]
     assert "이전 판에 없는 행" in memo["BOM!B10"] and "BOM!B7" not in memo      # 대체 추정은 메모가 아니라 '비교결과' 시트로
-    cmd = out["next_commands"][0]["command"]
-    argv = split_command(cmd)[2:]
-    assert argv[:2] == ["comment", "--target"] and argv[2] == new and "--dry-run" in argv
-    assert all(" write " in c["command"] for c in out.get("confirm_commands", []))   # 문서를 바꾸는 명령은 비교결과 시트 쓰기뿐
-    assert "--append" in argv, argv          # 이미 메모가 있는 칸은 지우지 않고 아래 줄에 덧붙임 (묻지 않음)
+    # 메모 미리보기 없음: 달지 말지만 묻고 '예'이면 confirm_commands[0] (사용자 요청 2026-11-11)
+    assert "next_commands" not in out and len(out["confirm_commands"]) == 1
+    argv = split_command(out["confirm_commands"][0]["command"])[2:]
+    assert argv == ["comment", "--target", new, "--action", "add", "--file", out["memo_file"], "--append"], argv
+    assert out["memo_cells"] == len(memo) - 1 and "메모를 달까요?" in out["agent_directive"]
 
 
-def test_removed_and_guessed_go_to_result_sheet_command(tmp_path, capsys):
-    # 칸 메모로 적기 곤란한 삭제·대체 추정은 새 판의 '비교결과' 시트로 (사용자 요청 2026-11-11)
+def test_result_sheet_is_always_written_with_every_change(tmp_path, capsys, sheet_writes):
+    # 비교결과 시트는 묻지 않고 늘 넣음. 메모로 단 추가·변경 + 삭제·대체 추정 전부 (사용자 요청 2026-11-11)
     old = _xlsx(tmp_path / "old.xlsx", MULTI_OLD)
     new = _xlsx(tmp_path / "new.xlsx", MULTI_NEW)
     _, out = _compare(capsys, old, new)
-    assert out["counts"]["삭제"] + out["counts"]["대체 추정"] >= 1, out["counts"]
+    assert out["verified"] is True and out["result_sheet"]["written"] is True, out
     with open(out["result_sheet_file"], encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
-    assert rows[0] == ["비교 일시", "이전 판", "구분", "키", "품번", "품명", "규격", "수량", "이전 판 행", "새 판 행", "내용"], rows[0]
+    assert rows[0] == ["비교 일시", "이전 판", "구분", "키", "품명", "열", "이전 값", "새 값", "이전 판 행", "새 판 행", "내용"], rows[0]
     kinds = [r[2] for r in rows[1:]]
-    assert kinds.count("삭제") == out["counts"]["삭제"] and kinds.count("대체 추정") == out["counts"]["대체 추정"], kinds
+    c = out["counts"]
+    for k in ("추가", "삭제", "대체 추정"):
+        assert kinds.count(k) == c[k], (k, kinds)
+    assert kinds.count("수량 변경") == c["수량 변경"] and kinds.count("위치 변경") >= c["위치 변경"]
+    assert out["result_sheet"]["rows"] == len(rows) - 1 and len(rows) - 1 >= out["memo_cells"]
+    qty_row = [r for r in rows if r[2] == "수량 변경" and r[3] == "A-100 / R-0010"][0]
+    assert qty_row[3:] == ["A-100 / R-0010", "저항 10k 0603", "Qty", "3", "4", "5", "5", "수량 3 -> 4 (+1)"], qty_row
+    assert any(r[2] == "추가" and r[10] == "이전 판에 없는 행" for r in rows)
     assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", rows[1][0]) and rows[1][1] == "old.xlsx", rows[1]
-    argv = split_command(out["confirm_commands"][0]["command"])[2:]
+    argv = sheet_writes[-1]
     assert argv[:5] == ["write", "--target", new, "--sheet", "비교결과"] and "--new-sheet" in argv and "--append" not in argv, argv
-    assert argv[argv.index("--file") + 1] == out["result_sheet_file"] and "비교결과" in out["agent_directive"], argv
+    assert argv[argv.index("--file") + 1] == out["result_sheet_file"] and "'비교결과' 시트에" in out["preview"], argv
+    assert all(" write " not in x["command"] for x in out["confirm_commands"])   # 시트는 묻지 않음 (확인 명령은 메모뿐)
     wb = openpyxl.load_workbook(new)                      # 시트가 이미 있으면 그 아래에 이어 씀
     wb.create_sheet("비교결과").append(rows[0])
     wb.save(new)
     _, out = _compare(capsys, old, new)
-    argv = split_command(out["confirm_commands"][0]["command"])[2:]
-    assert "--append" in argv and "--new-sheet" not in argv, argv
+    assert "--append" in sheet_writes[-1] and "--new-sheet" not in sheet_writes[-1] and out["result_sheet"]["appended"] is True
+
+
+def test_result_sheet_failure_is_unverified_and_keeps_the_file(tmp_path, capsys, monkeypatch):
+    old = _xlsx(tmp_path / "old.xlsx", MULTI_OLD)
+    new = _xlsx(tmp_path / "new.xlsx", MULTI_NEW)
+    monkeypatch.setattr(_excel_compare, "_write_result_sheet", lambda argv: (False, "엑셀 없음"))
+    code, out = _compare(capsys, old, new)
+    assert code == 0 and out["verified"] is False and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert out["result_sheet"]["written"] is False and "엑셀 없음" in out["agent_directive"] + json.dumps(out, ensure_ascii=False)
+    assert os.path.isfile(out["result_sheet_file"])
+
+
+def test_write_result_sheet_runs_excel_write_and_reports_failures(monkeypatch):
+    import excel
+    got = []
+    argv = ["write", "--target", "b.xlsx", "--sheet", "비교결과", "--new-sheet", "--range", "A1", "--file", "x.csv", "--no-focus"]
+    monkeypatch.setattr(excel, "cmd_write", lambda a: got.append(a) or {"agent_directive": "VERIFIED: 씀"})
+    assert REAL_WRITE_SHEET(argv) == (True, "") and got[0].new_sheet and got[0].sheet == "비교결과" and got[0].file == "x.csv"
+    monkeypatch.setattr(excel, "cmd_write", lambda a: {"agent_directive": "UNVERIFIED: 다시 읽지 못함", "unverified": ["A1 확인 못 함"]})
+    assert REAL_WRITE_SHEET(argv) == (False, "A1 확인 못 함")
+
+    def boom(a):
+        raise rt.InputError("파일이 잠김")
+    monkeypatch.setattr(excel, "cmd_write", boom)
+    ok, why = REAL_WRITE_SHEET(argv)
+    assert ok is False and "잠김" in why
 
 
 def test_single_level_unique_part_numbers_with_title_rows(tmp_path, capsys):
@@ -182,6 +226,8 @@ def test_no_changes_says_zero_and_writes_no_file(tmp_path, capsys):
     assert code == 0 and out["verified"] is True and out["count"] == 0, out
     assert out["agent_directive"].startswith("VERIFIED: 0건. 바뀐 것 없음") and "바뀐 것 없음" in out["preview"]
     assert "output_file" not in out and "next_commands" not in out and all(v == 0 for v in out["counts"].values())
+    with open(out["result_sheet_file"], encoding="utf-8-sig") as f:       # 0건이어도 비교결과 시트에 한 줄
+        assert [r[2] for r in csv.reader(f)][1:] == ["바뀐 것 없음"]
 
 
 def test_ref_designator_normalization():

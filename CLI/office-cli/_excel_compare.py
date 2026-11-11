@@ -55,6 +55,7 @@ _CMP_NUM = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?$")
 
 
 
+
 RESULT_SHEET = "비교결과"
 
 
@@ -659,6 +660,49 @@ def _cmp_row_view(t: Dict[str, Any], spec: Sequence[KeyPart], side: int, i: int,
     return item
 
 
+def _result_sheet_rows(stamp: str, old: Dict[str, Any], new: Dict[str, Any], spec: Sequence[KeyPart], added: List[int],
+                       removed: List[int], guesses: List[Tuple[int, int, str]], detail: List[List[Any]]) -> List[List[Any]]:
+    """비교결과 시트의 표: 머리글 + 추가·변경(메모로 단 것 전부)·삭제·대체 추정. 바뀐 것이 없으면 '바뀐 것 없음' 한 줄."""
+    head = ["비교 일시", "이전 판", "구분", "키", "품명", "열", "이전 값", "새 값", "이전 판 행", "새 판 행", "내용"]
+    name_new = {new["body"][j][0]: _cmp_row_view(new, spec, 2, j, "row_new").get("name", "") for j in range(len(new["body"]))}
+    rows: List[List[Any]] = [head]
+    src = old["name"]
+    for j in added:
+        v = _cmp_row_view(new, spec, 2, j, "row_new")
+        rows.append([stamp, src, "추가", v["key"], v.get("name", ""), "", "", "", "", v["row_new"], "이전 판에 없는 행"])
+    for key, kind, col, a, b, d, orow, nrow in detail:
+        text = {"수량 변경": f"수량 {a} -> {b}" + (f" ({d})" if d else ""), "위치 변경": f"위치 {d}"}.get(kind, f"{col} {a} -> {b}")
+        rows.append([stamp, src, kind, key, name_new.get(nrow, ""), col, a, b, orow, nrow, text])
+    for i in removed:
+        v = _cmp_row_view(old, spec, 1, i, "row_old")
+        rows.append([stamp, src, "삭제", v["key"], v.get("name", ""), "", " / ".join(str(v[k]) for k in ("spec", "qty") if v.get(k) not in (None, "")),
+                     "", v["row_old"], "", "새 판에 없음"])
+    for i, j, why in guesses:
+        o_item = _cmp_row_view(old, spec, 1, i, "row_old")
+        n_item = _cmp_row_view(new, spec, 2, j, "row_new")
+        rows.append([stamp, src, "대체 추정", f"{o_item['key']} -> {n_item['key']}", n_item.get("name", ""), "", o_item["key"], n_item["key"],
+                     o_item["row_old"], n_item["row_new"], f"(추정, 확인 필요) 이전 판의 {o_item['key']} 대신일 수 있음 ({why})"])
+    if len(rows) == 1:
+        rows.append([stamp, src, "바뀐 것 없음", "", "", "", "", "", "", "", "두 판을 짝지어 비교했고 추가·삭제·변경이 없음"])
+    return rows
+
+
+def _write_result_sheet(argv: List[str]) -> Tuple[bool, str]:
+    """excel.py write를 같은 프로세스에서 실행 (엑셀로 열어 쓰고 다시 읽어 확인, 되돌리기 지점). (확인됨, 이유)."""
+    import excel as _xl
+    try:
+        args = _xl.build_cli().parse_args(argv)
+        out = _xl.cmd_write(args)
+    except SystemExit:
+        return False, "명령 인자 오류"
+    except rt.Unfinished:                                   # 시간 제한: 비교를 다시 돌리면 시트에 같은 줄이 두 번 들어가므로 이어 하지 않음
+        return False, "명령 시간 제한에 걸림"
+    except Exception as e:                                  # noqa: BLE001  엑셀 없음, 파일 잠김 등: 비교 결과는 그대로 냄
+        return False, (str(getattr(e, "message", "") or e) or type(e).__name__)[:200]
+    if str(out.get("agent_directive", "")).startswith("VERIFIED:"):
+        return True, ""
+    return False, "; ".join(map(str, out.get("unverified") or [])) or "다시 읽어 확인하지 못함"
+
 def _cmp_xlsx(path: str, sheets: List[Tuple[str, List[Any], List[List[Any]], List[int]]]) -> str:
     """결과 xlsx (시트마다 머리글 굵게, 첫 행 고정). 큰 표도 빨리 쓰도록 write_only. 실제 저장 경로."""
     openpyxl = rt.require_lib("openpyxl", "openpyxl", "비교 결과를 xlsx로 저장")
@@ -946,16 +990,15 @@ def cmd_compare(args) -> Dict[str, Any]:
         result["output_file"] = out
         if truncated:
             result["full_result_file"] = out
-    nexts: List[Dict[str, Any]] = []
+    stamp = time.strftime("%Y-%m-%d %H:%M")
     if memo and not new["csv"]:
         sheet = new["sheet"]
         sheet_ref = sheet if re.fullmatch(r"[\w가-힣]+", sheet) else "'" + sheet.replace("'", "''") + "'"
         cells = sorted(memo.items())
         if len(cells) > COMMENT_MAX_CELLS:
-            warnings.append(f"바뀐 칸이 {len(cells)}개라 메모 파일에는 앞 {COMMENT_MAX_CELLS}칸만 넣음 (전체는 결과 파일)")
+            warnings.append(f"바뀐 칸이 {len(cells)}개라 메모는 앞 {COMMENT_MAX_CELLS}칸만 (전체는 '{RESULT_SHEET}' 시트와 결과 파일)")
             cells = cells[:COMMENT_MAX_CELLS]
         # 메모 머리에 비교한 날짜·시각 한 번 (사용자 요청 2026-11-11): "비교 2026-11-11 09:30: 수량 3 -> 4 (+1) / 위치 추가 R5"
-        stamp = time.strftime("%Y-%m-%d %H:%M")
         memo_rows = [["칸", "메모"]] + [[f"{sheet_ref}!{addr(r, c + 1)}", _memo_with_stamp(v, stamp)[:COMMENT_MAX_CHARS]]
                                        for (r, c), v in cells]
         memo_file = rt.write_csv_rows(rt.resolve_output_path(None, f"compare_memo_{sheet}", ".csv"), memo_rows)
@@ -963,28 +1006,15 @@ def cmd_compare(args) -> Dict[str, Any]:
         if memo_problem:
             problems.append(f"메모 파일: {memo_problem}")
         result["memo_file"] = memo_file
-        # --append: 칸에 이미 메모가 있으면 지우지 않고 그 아래 줄에 덧붙임 (사용자 요청 2026-11-11, 묻지 않음). 메모가 없는 칸은 새로 담
-        nexts.append(rt.next_command("excel.py", ["comment", "--target", new_path, "--action", "add", "--file", memo_file, "--append",
-                                                  "--dry-run"],
-                                     "새 판의 바뀐 칸에 비교 메모 달기 미리보기, 변경 없음 (이미 메모가 있는 칸은 그 아래 줄에 덧붙임. "
-                                     "실제로 다는 명령은 그 결과의 confirm_commands, 사용자 확인 뒤에만)"))
-        result["next_commands"] = nexts
-    # 칸 메모로 적기 곤란한 삭제·대체 추정은 새 판에 '비교결과' 시트를 만들어 표로 (사용자 요청 2026-11-11). 시트가 이미 있으면
-    # 그 아래에 이어 씀 (같은 머리글은 다시 쓰지 않음). 문서를 바꾸므로 confirm_commands (사용자가 원할 때만)
-    if (removed or guesses) and not new["csv"]:
-        stamp = time.strftime("%Y-%m-%d %H:%M")
-        head_row = ["비교 일시", "이전 판", "구분", "키", "품번", "품명", "규격", "수량", "이전 판 행", "새 판 행", "내용"]
-        rows_out: List[List[Any]] = [head_row]
-        for i in removed:
-            v = _cmp_row_view(old, spec, 1, i, "row_old")
-            rows_out.append([stamp, old["name"], "삭제", v["key"], v.get("part", ""), v.get("name", ""), v.get("spec", ""),
-                             v.get("qty", ""), v["row_old"], "", "새 판에 없음"])
-        for i, j, why in guesses:
-            o_item = _cmp_row_view(old, spec, 1, i, "row_old")
-            n_item = _cmp_row_view(new, spec, 2, j, "row_new")
-            rows_out.append([stamp, old["name"], "대체 추정", f"{o_item['key']} -> {n_item['key']}", n_item.get("part", ""),
-                             n_item.get("name", ""), n_item.get("spec", ""), n_item.get("qty", ""), o_item["row_old"], n_item["row_new"],
-                             f"(추정, 확인 필요) 이전 판의 {o_item['key']} 대신일 수 있음 ({why})"])
+        result["memo_cells"] = len(cells)
+        # 메모를 달지만 묻는다 (미리보기 없음, 사용자 요청 2026-11-11). --append: 이미 메모가 있는 칸은 그 아래 줄에 덧붙임
+        result["confirm_commands"] = [rt.next_command(
+            "excel.py", ["comment", "--target", new_path, "--action", "add", "--file", memo_file, "--append"],
+            f"새 판의 바뀐 칸 {len(cells)}곳에 비교 메모 달기 (이미 메모가 있는 칸은 그 아래 줄에 덧붙임, 사용자가 '예'라고 한 뒤에만)")]
+    # 비교결과 시트: 묻지 않고 늘 새 판에 넣음 (사용자 요청 2026-11-11). 메모로 단 추가·변경과 메모로 적기 곤란한 삭제·대체 추정을 모두
+    # 한 표로. 시트가 있으면 그 아래에 이어 씀 (같은 머리글은 다시 쓰지 않음). 쓰기는 write와 같은 길(엑셀로 열어 쓰고 다시 읽어 확인)
+    if not new["csv"]:
+        rows_out = _result_sheet_rows(stamp, old, new, spec, added, removed, guesses, detail)
         sheet_file = rt.write_csv_rows(rt.resolve_output_path(None, f"compare_sheet_{new['sheet']}", ".csv"), rows_out)
         sheet_problem = rt.check_saved_file(sheet_file, len(rows_out), delimiter=",")
         if sheet_problem:
@@ -992,31 +1022,35 @@ def cmd_compare(args) -> Dict[str, Any]:
         result["result_sheet_file"] = sheet_file
         exists = _has_sheet(new_path, RESULT_SHEET)
         argv = ["write", "--target", new_path, "--sheet", RESULT_SHEET] + (["--append"] if exists else ["--new-sheet"]) + \
-               ["--range", "A1", "--file", sheet_file]
-        result["confirm_commands"] = [rt.next_command(
-            "excel.py", argv, f"새 판에 '{RESULT_SHEET}' 시트" + ("의 아래에 이어서" if exists else "를 만들어") +
-            f" 삭제 {len(removed)}행·대체 추정 {len(guesses)}건 쓰기 (사용자가 원할 때만)")]
+               ["--range", "A1", "--file", sheet_file, "--no-focus"]
+        written, why = _write_result_sheet(argv)
+        result["result_sheet"] = {"sheet": RESULT_SHEET, "rows": len(rows_out) - 1, "written": written, "appended": exists}
+        if not written:
+            problems.append(f"새 판에 '{RESULT_SHEET}' 시트를 넣지 못함 ({why}). 같은 내용은 {sheet_file}")
+    else:
+        warnings.append(f"새 판이 CSV라 '{RESULT_SHEET}' 시트와 칸 메모를 넣지 않음 (내용은 결과 파일)")
     if warnings:
         result["warnings"] = warnings
     _cmp_drop_cache(old_data, new_data)
     say_warn = " warnings도 그대로 알리세요." if warnings else ""
+    sheet_info = result.get("result_sheet") or {}
+    sheet_note = (f" 새 판의 '{RESULT_SHEET}' 시트에 {sheet_info['rows']}줄 " + ("이어 씀." if sheet_info["appended"] else "넣음.")
+                  if sheet_info.get("written") else "")
     if not total:
-        preview = f"{head}: 바뀐 것 없음 (0건, 짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}"
+        preview = f"{head}: 바뀐 것 없음 (0건, 짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}.{sheet_note}"
         if problems:
             return rt.ok_unverified(TOOL, "compare", preview, problems, **result)
         return rt.ok(TOOL, "compare", preview,
                      f"VERIFIED: 0건. 바뀐 것 없음: 두 판을 키({_cmp_spec_label(spec)})로 짝지어 비교했고 추가·삭제·변경이 없습니다. "
                      f"사용자에게 '바뀐 것 없음'과 preview를 그대로 알리고 다시 실행하지 마세요.{say_warn}", verified=True, **result)
     preview = (f"{head}: 추가 {counts['추가']}, 삭제 {counts['삭제']}, 수량 변경 {counts['수량 변경']}, 위치 변경 {counts['위치 변경']}, "
-               f"속성 변경 {counts['속성 변경']}, 대체 추정 {counts['대체 추정']} (짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}")
+               f"속성 변경 {counts['속성 변경']}, 대체 추정 {counts['대체 추정']} (짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}.{sheet_note}")
     action = ("preview를 알리고 구분별 목록(added, removed, qty_changed, ref_changed, attr_changed)을 key와 함께 사용자에게 보여 주세요."
               + (" replaced_guess는 품번이 바뀐 것으로 보이는 추정(확인 필요)이라고 알리세요." if guesses else "")
               + (" 목록은 구분마다 앞 20개만이라 전체는 full_result_file이라고 알리세요." if truncated else "")
               + say_warn
-              + (" 사용자가 새 판의 바뀐 칸(추가·변경)에 메모를 원하면 next_commands[0](미리보기, 변경 없음)을 실행해 보여 주고, 사용자가 '예'라고 한 뒤에만 "
-                 "그 결과의 confirm_commands[0]을 실행하세요." if nexts else "")
-              + (f" 삭제·대체 추정은 칸 메모 대신 새 판의 '{RESULT_SHEET}' 시트에 넣습니다: 사용자가 원하면(메모와 함께 원해도) 이 결과의 "
-                 "confirm_commands[0]을 1번 실행하세요." if result.get("confirm_commands") else "")
+              + (" 그다음 사용자에게 '새 판의 바뀐 칸에 메모를 달까요?'라고만 묻고, '예'이면 confirm_commands[0]을 1번 실행하세요 (미리보기 없음)."
+                 if result.get("confirm_commands") else "")
               + " 같은 compare는 다시 실행하지 마세요.")
     if problems:
         payload = rt.ok_unverified(TOOL, "compare", preview, problems, **result)
