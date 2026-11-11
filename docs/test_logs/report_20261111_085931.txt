@@ -1,0 +1,105 @@
+office-cli 1.6.2 Windows 테스트 보고서 (20261111_085931)
+Python 3.13.13 / 테스트 폴더 C:\CLI-dev\work\office
+요약: ENV-SKIP=1, FAIL=1, PASS=17
+
+[PASS] L1 A7 통화 서식 열: 정렬·--where가 숫자로 (pywin32 Decimal)
+    내용: 정렬 뒤 B2:B4=[9.0, 10.0, 100.0], --where count=2
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "range", "preview": "L_CUR!A1:B4 정렬: 금액 오름차순 (3행, 머리글 있음: --by가 머리글 이름)", "verified": true, "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\CLI-dev\\work\\office\\A.xlsx", "source": "active", "sheet": "L_CUR"}, "sheet": "L_CUR", "range": "A1:B4", "rows": 3, "header": true, "header_decided_by": "--by가 머리글 이름", "keys": [{"column": "B", ...
+
+[PASS] L2 A8 '+82-...'·'- 검토'를 글자 그대로 쓰고 VERIFIED
+    내용: D1, D2=('+82-10-1234-5678', '- 검토 필요')
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "write", "preview": "L_CUR!D1에 썼습니다 (1행 x 1열)", "verified": true, "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\CLI-dev\\work\\office\\A.xlsx", "source": "active", "sheet": "L_CUR"}, "sheet": "L_CUR", "range_written": "D1", "rows": 1, "cols": 1, "agent_directive": "VERIFIED: 쓴 칸을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."}
+
+[PASS] L3 A9 '=합계(...)'는 #NAME?로 UNVERIFIED, '=SORT(...)'는 펼쳐짐(Office 2021 이상)
+    내용: 오류 수식 directive=UNVERIFIED: 실행했지만 확인하지 못했습니다: 수식 칸 1개의 값이 오류: E1 #NAME? (함수 이름·참조·인수 확인). 다시 실행하, F2(펼친 값)=10.0, Office 16.0
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "write", "preview": "L_CUR!E1에 썼습니다 (1행 x 1열)", "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\CLI-dev\\work\\office\\A.xlsx", "source": "active", "sheet": "L_CUR"}, "sheet": "L_CUR", "range_written": "E1", "rows": 1, "cols": 1, "confirm_commands": [{"purpose": "방금 쓴 범위로 차트 만들기, 사용자가 원할 때만 (제목은 --title \"제목\"을 붙임, --type은 원하는 종류로)", ...
+
+[PASS] L4 C1 표 바로 위 단락 뒤에 쓴 글이 표 첫 칸에 들어가지 않음
+    내용: 표 첫 칸='L칸 085957'
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "write", "preview": "A.docx의 'L 표 위 085957' 단락 뒤 (표 앞)에 넣었습니다: 본문", "verified": true, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\CLI-dev\\work\\office\\A.docx", "source": "open"}, "inserted": ["본문"], "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."}
+
+[PASS] L5 C2 새 번호 목록은 앞 목록에 이어지지 않고 1부터
+    내용: 번호='1.'
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "write", "preview": "A.docx의 문서 끝에 넣었습니다: 번호 목록 1개", "verified": true, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\CLI-dev\\work\\office\\A.docx", "source": "open"}, "inserted": ["번호 목록 1개"], "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."}
+
+[PASS] L6 C3 표 바로 뒤에 쓴 표가 앞 표와 합쳐지지 않음 (표 2개 늘어남)
+    내용: 표 1->3
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "write", "preview": "A.docx의 문서 끝에 넣었습니다: 표 2x2", "verified": true, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\CLI-dev\\work\\office\\A.docx", "source": "open"}, "inserted": ["표 2x2"], "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."}
+
+[PASS] L7 C4 제목 뒤에 넣은 그림 단락은 본문 수준 (outline에 [그림]이 나오지 않음)
+    내용: 그림 단락 OutlineLevel=10 (10이 본문)
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "write", "preview": "A.docx의 문서 끝에 넣었습니다: 그림 l_img.png", "verified": true, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\CLI-dev\\work\\office\\A.docx", "source": "open"}, "inserted": ["그림 l_img.png"], "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."}
+
+[PASS] L8 C5 --toc --file: 목차에 넣은 제목이 들어 있음
+    내용: 목차 글='L 그림 제목 085957\t2\rL목차장 085957\t2\rL목차절 085957\t2\r'
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "write", "preview": "A.docx의 문서 끝에 넣었습니다: 목차, 제목1, 본문, 제목2, 본문", "verified": true, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\CLI-dev\\work\\office\\A.docx", "source": "open"}, "inserted": ["목차", "제목1", "본문", "제목2", "본문"], "agent_directive": "VERIFIED: 넣은 범위를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."}
+
+[PASS] L9 C6(확인만) 변경 추적 문서 replace: VERIFIED이고 read에 옛말·새말이 붙어 나오지 않음
+    내용: replace=VERIFIED: 문서를 다시 찾아 확인했습니다.
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "replace", "preview": "1곳 처리: 'L추적 옛말 085957' 1곳", "verified": true, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\CLI-dev\\work\\office\\A.docx", "source": "open"}, "replaced": 1, "by_text": {"L추적 옛말 085957": 1}, "agent_directive": "VERIFIED: 문서를 다시 찾아 확인했습니다."}
+
+[PASS] L10 C8 바닥글·슬라이드 번호가 있는 슬라이드에 쓴 글상자가 슬라이드 안
+    내용: 글상자(top, height)=[(147.1250457763672, 29.081260681152344)], 슬라이드 높이=540.0
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "ppt", "command": "write", "preview": "슬라이드 4: 본문 1줄", "verified": true, "target_resolved": {"app": "PowerPoint", "name": "A.pptx", "path": "C:\\CLI-dev\\work\\office\\A.pptx", "source": "open", "slide": 4}, "slides_written": [4], "agent_directive": "VERIFIED: 쓴 슬라이드를 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요."}
+
+[FAIL] L11 C9 제한된 보기에서 --target 없는 쓰기는 다른 통합문서로 넘어가지 않고 '편집 사용' 안내
+    내용: 다른 통합문서에 쓰인 곳 없음
+    종료코드: 1
+    JSON: {"status": "error", "tool": "excel", "command": "write", "error_type": "sheet_protected", "message": "시트 'Sheet1'이(가) 보호되어 있어 값을 쓸 수 없습니다 (잠긴 칸 1개: A1). 검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음).", "agent_directive": "STOP_RETRY: 시트가 보호되어 있어 아무것도 바꾸지 않았습니다. message를 사용자에게 그대로 알리세요. 시트 보호를 풀지 말고(암호를 묻거나 추측하지 않음) 사용자가 직접 풀었다고 하면 같은 명령을 1번 다시 실행하세요."}
+    stderr(끝부분): [WARN] 되돌리기용 스냅샷을 만들지 못했습니다 (작업은 계속): (-2147352567, '예외가 발생했습니다.', (0, 'Microsoft Excel', "'C:\\CLI-dev\\work\\office\\_cache\\snapshots\\excel_0288974deb_20261111_090032_446785.xlsx' 파일을 사용할 수 없습니다. 원인은 다음과 같습니다.\n\n• 해당 파일 이름이나 경로가 없습니다.\n• 다른 프로그램에서 파일을 사용하고 있습니다.\n• 저장하려고 하는 통합 문서 이름이 현재 열려 있는 통합 문서의 이름과 같습니다.", 'xlmain11.chm', 0, -2146827284), None)
+        [ERROR] UserDecisionError: 시트 'Sheet1'이(가) 보호되어 있어 값을 쓸 수 없습니다 (잠긴 칸 1개: A1). 검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음).
+
+[PASS] L12 C10 열린 저장된 통합문서 undo: 디스크 파일 백업(pre_undo_disk_backup)과 preview 안내
+    내용: pre_undo_disk_backup=C:\CLI-dev\work\office\_cache\snapshots\undo_backups\excel_20261111_090036_24976_disk.xlsx
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "office", "command": "undo", "preview": "'L_undo.xlsx'을(를) 'excel write' 이전 상태로 되돌렸습니다 (reopened_in_office). 디스크의 원본 파일도 되돌린 내용으로 바뀌었습니다 (Office에서 '저장하지 않고 닫기'로는 이전 파일로 돌아가지 않음). 되돌리기 전 디스크 파일은 excel_20261111_090036_24976_disk.xlsx에 보관했습니다", "restored": true, "app": "Excel", "name": "L_undo.xlsx", "original_path": "C:\\CLI-dev\\work\\office\\L_undo.xlsx", "restored_as": "r...
+
+[PASS] L13 C11 필터로 숨긴 행이 있어도 --append는 숨은 행을 덮지 않고 그 아래에
+    내용: A4:A5=(('c',), ('d',))
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "write", "preview": "L_FLT!A5:B5에 썼습니다 (1행 x 2열)", "verified": true, "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\CLI-dev\\work\\office\\A.xlsx", "source": "active", "sheet": "L_FLT"}, "sheet": "L_FLT", "range_written": "A5:B5", "rows": 1, "cols": 2, "confirm_commands": [{"purpose": "방금 쓴 범위로 차트 만들기, 사용자가 원할 때만 (제목은 --title \"제목\"을...
+
+[PASS] L14 C12(확인만) 닫힌 파일 freeze가 파일에 저장됨
+    내용: 파일의 freeze_panes=A2
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "range", "preview": "freeze 완료: Sheet!A2 A2 위/왼쪽 고정", "verified": true, "target_resolved": {"app": "Excel", "name": "L_freeze.xlsx", "path": "C:\\CLI-dev\\work\\office\\L_freeze.xlsx", "source": "file", "sheet": "Sheet"}, "sheet": "Sheet", "range": "A2", "rows": 1, "cols": 1, "agent_directive": "VERIFIED: 결과를 다시 읽어 확인했습니다."}
+
+[PASS] M1 C14 received가 Outlook의 현지 시각과 같고 '+00:00'이 붙지 않음
+    내용: 도구=2026-11-11 07:42:37, Outlook=2026-11-11 07:42:37
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "outlook", "command": "list", "preview": "'받은 편지함' 폴더 최근 메일 1통", "folder": "받은 편지함", "mails": [{"subject": "bom 순서데로.", "from": "박경원(Kyoung Won Park)/왕복엔진팀", "received": "2026-11-11 07:42:37", "unread": false, "attachments": 3, "id": 7}], "count": 1, "verified": true, "agent_directive": "VERIFIED: 작업이 완료되었습니다. 같은 명령을 다시 실행하거나 결과를 다시 조회하지 마세요."}
+
+[PASS] M2 C15 --id 없는 current는 맨 앞 창(목록이면 선택한 메일)
+    내용: 목록에서 선택한 메일='RE: 왕복엔진사업 '26년 2분기 실적보고 보안파트 업데이트 요청', 도구가 고른 것=선택한 메일
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "outlook", "command": "current", "preview": "목록에서 선택 메일: 'RE: 왕복엔진사업 '26년 2분기 실적보고 보안파트 업데이트 요청' (박준수(JUNSU PARK)/왕복엔진팀)", "mail": {"entry_id": "000000002C804C959361204A9279803DE53A29250700154342FE5D7FDA49B34F6407CB9A3BC000000000010C0000154342FE5D7FDA49B34F6407CB9A3BC00003AEBCB8AB0000", "subject": "RE: 왕복엔진사업 '26년 2분기 실적보고 보안파트 업데이트 요청", "from": "박준수(JUNSU PARK)/왕복엔진팀", "r...
+
+[ENV-SKIP] M3 C16 search --from <SMTP 주소> (사내 Exchange 보낸 사람)
+    내용: --self-email 없음
+    JSON: (JSON 출력 없음)
+
+[PASS] M4 C17 작성 창을 못 띄우면 UNVERIFIED, 저장했다는 말과 임시 보관함이 일치
+    내용: UNVERIFIED: 실행했지만 확인하지 못했습니다: 임시 보관함에 초안, 도구 '저장함'=True, 임시 보관함 초안 1개
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "outlook", "command": "new", "preview": "메일 작성 창을 띄우지 못했습니다: '[office-cli 테스트] 대화 상자 090056'", "to": "office-test@example.com", "subject": "[office-cli 테스트] 대화 상자 090056", "attached": [], "sent": false, "verified": false, "unverified": ["임시 보관함에 초안으로 저장했지만 작성 창을 띄우지 못함 (com_error, Outlook에 열린 대화 상자가 있는지 확인)", "이 명령을 다시 실행하지 말고(초안이 하나 더 생김) 사용자에게 Outlook 대화 상자를 닫고 임시 보관함에서 ...
+
+[PASS] M5 C18 본문 그림(서명 로고)을 본문 삽입 이미지(hidden_inline)로 표시
+    내용: '(24년이전 착수 협약과제 11월 추정 업데이트 보류요청)RE: 26년 11월 추정실적 Update 공지(11/17(화),17:00한)': 본문 그림 첨부 번호 [2, 3, 4], 도구가 본문 그림으로 표시 [2, 3, 4]
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "outlook", "command": "attachments", "preview": "'(24년이전 착수 협약과제 11월 추정 업데이트 보류요청)RE: 26년 11월 추정실적 Update 공지(11/17(화),17:00한)' 메일 첨부 4개 (본문 삽입 이미지 3개 포함)", "mail": {"entry_id": "000000002C804C959361204A9279803DE53A29250700154342FE5D7FDA49B34F6407CB9A3BC000000000010C0000154342FE5D7FDA49B34F6407CB9A3BC00003AEBCB8A20000", "subject": "(24년이전 착수 협약과제 11월 추정 업데이트 보류요청)RE: 26년 11...
+
+UNVERIFIED 결과 2건:
+    python excel.py write --sheet L_CUR --range E1 --formula =합계(B2:B3)
+        unverified: ['수식 칸 1개의 값이 오류: E1 #NAME? (함수 이름·참조·인수 확인)']
+    python outlook.py new --to office-test@example.com --subject "[office-cli 테스트] 대화 상자 090056" --body "대화 상자 시험"
+        unverified: ['임시 보관함에 초안으로 저장했지만 작성 창을 띄우지 못함 (com_error, Outlook에 열린 대화 상자가 있는지 확인)', '이 명령을 다시 실행하지 말고(초안이 하나 더 생김) 사용자에게 Outlook 대화 상자를 닫고 임시 보관함에서 초안을 열어 확인하라고 알리세요']
