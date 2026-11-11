@@ -10,14 +10,13 @@ import office
 import outlook
 import ppt
 import reader
-import skill
 import word
 from office_helpers import DEV, TOOL_DIR
 
 
 SCRIPTS = {"excel.py": excel, "word.py": word, "ppt.py": ppt, "outlook.py": outlook, "office.py": office,
-           "reader.py": reader, "skill.py": skill}
-SKILL_NAMES = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker")
+           "reader.py": reader}
+SKILL_NAMES = ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")
 SKILLS_DIR = os.path.join(os.path.dirname(TOOL_DIR), "skills")      # C:\AIKIT\skills (1.6.6)
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
 TEST_SKILL = os.path.join(DEV, "tools", "office-cli-test", "SKILL.md")
@@ -96,12 +95,12 @@ def _frontmatter(path):
 
 
 # ---------------------------------------------------------------------------
-# 배치: 작업별 스킬 5개, 예전 통합 SKILL.md 없음
+# 배치: 작업별 스킬 7개, 예전 통합 SKILL.md 없음
 # ---------------------------------------------------------------------------
 
 
 def test_skill_layout():
-    assert sorted(n for n in os.listdir(SKILLS_DIR) if n.startswith("office-") or n == "skill-maker") == sorted(SKILL_NAMES)
+    assert sorted(n for n in os.listdir(SKILLS_DIR) if n.endswith("-kit")) == sorted(SKILL_NAMES)
     for name, path in SKILL_FILES.items():
         assert os.listdir(os.path.dirname(path)) == ["SKILL.md"], name          # 스킬 폴더에는 SKILL.md만
     assert not os.path.exists(os.path.join(TOOL_DIR, "SKILL.md"))               # 남으면 옛 통합 스킬이 다시 쓰임
@@ -142,7 +141,7 @@ def test_frontmatter_follows_opencode_rules():
 def test_runtime_help_points_to_task_skill():
     for tool, name in rt.SKILL_OF_TOOL.items():
         assert name in SKILL_NAMES and os.path.isfile(rt.skill_file(tool)), tool
-    for (tool, cmd), name in rt.SKILL_OF_COMMAND.items():     # 도구 파일과 다른 스킬에 있는 명령 (excel stats·duplicates -> office-data)
+    for (tool, cmd), name in rt.SKILL_OF_COMMAND.items():     # 도구 파일과 다른 스킬에 있는 명령 (excel stats·duplicates -> stats-kit)
         assert name in SKILL_NAMES and cmd in PARSERS[f"{tool}.py"], (tool, cmd)
         assert f'{tool}.py" {cmd}' in _read(SKILL_FILES[name]), (tool, cmd)
 
@@ -156,7 +155,7 @@ def test_skill_commands_and_options_exist_in_argparse():
     problems = []
     for name, path in SKILL_FILES.items():
         refs = _skill_refs(path)
-        assert len(refs) > (5 if name in ("office-data", "skill-maker") else 15), (name, refs[:5])   # 정규식이 표를 제대로 읽는지 (office-data는 명령 2개)
+        assert len(refs) > (5 if name == "stats-kit" else 12), (name, refs[:5])   # 정규식이 표를 제대로 읽는지 (stats-kit는 명령 2개)
         for no, script, sub, opt, val in refs:
             if script and sub:
                 act = _option_in(PARSERS[script][sub], opt)
@@ -180,8 +179,6 @@ def test_command_templates_are_full_commands():
         for no, line in enumerate(_read(path).splitlines(), start=1):
             for span in _SPAN.findall(line):
                 first = span.split()[0] if span.split() else ""
-                if first == "python" and span.startswith('python "C:\\AIKIT\\skills\\<스킬 이름>\\scripts\\'):
-                    continue                 # skill-maker 본문 예시: 사용자 스킬 폴더의 스크립트 (전체 경로, 1.6.6)
                 if first in PARSERS or (first == "python" and not _FULL.match(span)):
                     bare.append(f"{name} {no}행: {span[:60]}")
     assert not bare, bare
@@ -214,24 +211,26 @@ def test_readme_only_commands_are_not_in_skills_but_in_readme():
 def test_skill_mentions_new_and_existing_features():
     """스킬에 기존 기능과 새 기능이 모두 있음 (경량 LLM은 스킬에 없는 기능을 '지원 안 함'으로 답함). 기능마다 맡은 스킬에."""
     need = {
-        "office-excel": ("sheet --action <add/rename/copy/delete/select>", "--new-name", "range --action <freeze", "export --save",
+        "excel-kit": ("sheet --action <add/rename/copy/delete/select>", "--new-name", "range --action <freeze", "export --save",
                          "--number-format", "--all-sheets", "--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>", "--labels", "--legend", "--clear", "--whole", "--map", "--encoding cp949", "--max-rows", "--action <insert/delete>",
                          "--dry-run", "--action sort", "--by", "--where \"", "--formulas", "--cells", "comment --action add",
                          "office.py\" undo", "transfer --from-app excel --chart"),
-        "office-doc": ("slide --action <add/duplicate/delete/move>", "--toc", "--callout", "--highlight yellow", "fill --target", "--slots",
-                       "outline", "revisions", "notes --slide", "--page-number", "transfer --from-app word --what text",
-                       "office.py\" undo", "focus --app"),
-        "office-mail": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
+        "word-kit": ("--toc", "--callout", "--highlight yellow", "fill --target", "--slots", "outline", "revisions", "--page-number",
+                     "transfer --from-app word --what text", "transfer --from-app excel --chart", "office.py\" undo", "focus --app word"),
+        "ppt-kit": ("slide --action <add/duplicate/delete/move>", "notes --slide", "--layout", "transfer --from-app ppt --what text",
+                    "transfer --from-app excel --chart", "ppt.py\" read --target", "office.py\" undo", "focus --app ppt"),
+        "outlook-kit": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
                         "--days 7", "--since 2026-11-01", "thread --id", "calendar --days", "attachments --id", "send --id"),
-        "office-spec": ("reader.py\" index --folder", "--section", "search --query", "list [--name",
+        "search-kit": ("reader.py\" index --folder", "--section", "search --query", "list [--name",
                         "clear --name", "--missing", "synonyms.txt", "--regex", "excel.py\" check", "comment --action add",
                         "not_searched", "match_mode"),
-        "office-data": ("excel.py\" stats --target", "excel.py\" duplicates --target", "not_supported", "검토 탭 > 비교"),
+        "stats-kit": ("excel.py\" stats --target", "excel.py\" duplicates --target", "not_supported", "검토 탭 > 비교"),
     }
     # 2026-11-11 스킬 점검: 도구에는 있는데 스킬에 없던 기능 (8KB로 늘린 뒤 채움)
-    more = {"office-doc": ("word.py\" format --paragraphs", "--match-case", "--whole-word", "--map", "--height", "--from-target", "--theme"),
-            "office-mail": ("--index 1,3", "--depth 3", "event --action delete"),
-            "office-spec": ("--recursive", "--format summary", "--top 30", "--full", "--header-row")}
+    more = {"word-kit": ("word.py\" format --paragraphs", "--match-case", "--whole-word", "--map", "--from-target", "--theme"),
+            "ppt-kit": ("--match-case", "--map", "--height", "--from-target", "--theme"),
+            "outlook-kit": ("--index 1,3", "--depth 3", "event --action delete"),
+            "search-kit": ("--recursive", "--format summary", "--top 30", "--full", "--header-row")}
     need = {k: tuple(v) + more.get(k, ()) for k, v in need.items()}
     for name, needles in need.items():
         text = _read(SKILL_FILES[name])

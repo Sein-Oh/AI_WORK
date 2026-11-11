@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.6.6"                         # <AIKIT>\skills\<office-*·skill-maker>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.6.7"                         # <AIKIT>\skills\<*-kit>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -931,17 +931,17 @@ _NO_SEND = ("--send는 없습니다. 초안을 만든 뒤 사용자 확인을 �
 OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply", "forward")})
 
 
-# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (<설치 폴더>\skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
-SKILL_OF_TOOL = {"excel": "office-excel", "word": "office-doc", "ppt": "office-doc", "office": "office-doc",
-                 "outlook": "office-mail", "reader": "office-spec", "skill": "skill-maker"}
-# 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 office-data)
-SKILL_OF_COMMAND = {("excel", "stats"): "office-data", ("excel", "duplicates"): "office-data"}
+# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (<설치 폴더>\skills\<이름>\SKILL.md). excel.py check·comment는 search-kit에도 있음
+SKILL_OF_TOOL = {"excel": "excel-kit", "word": "word-kit", "ppt": "ppt-kit", "office": "word-kit",
+                 "outlook": "outlook-kit", "reader": "search-kit"}
+# 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 stats-kit)
+SKILL_OF_COMMAND = {("excel", "stats"): "stats-kit", ("excel", "duplicates"): "stats-kit"}
 
 
 def skill_name(tool: str) -> str:
-    """지금 실행한 명령을 설명하는 스킬 이름 (도움말·인자 오류 안내). 모르는 도구(테스트용 등)는 office-doc."""
+    """지금 실행한 명령을 설명하는 스킬 이름 (도움말·인자 오류 안내). 모르는 도구(테스트용 등)는 word-kit."""
     cmd = CURRENT_ARGV[0] if CURRENT_ARGV and CURRENT_TOOL == tool else ""
-    return SKILL_OF_COMMAND.get((tool, cmd)) or SKILL_OF_TOOL.get(tool, "office-doc")
+    return SKILL_OF_COMMAND.get((tool, cmd)) or SKILL_OF_TOOL.get(tool, "word-kit")
 
 
 def skill_file(tool: str) -> str:
@@ -1289,6 +1289,20 @@ def get_cache_dir() -> str:
     return _dir_setting("OFFICE_CLI_CACHE_DIR", "cache_dir", os.path.join(_tool_home(), "cache"))
 
 
+def get_result_dir() -> str:
+    """대상 파일이 없는 작업(메일, 저장한 적 없는 문서, 폴더·캐시 검색)의 결과 파일 기본 폴더: C:\\AIKIT\\data (전역 지침 8장).
+    우선순위: OFFICE_CLI_RESULT_DIR > En-Genius면 데이터 폴더 > <설치 폴더(도구 폴더의 부모)>\\data."""
+    return _dir_setting("OFFICE_CLI_RESULT_DIR", "result_dir",
+                        get_data_dir() if engenius_home() else os.path.join(os.path.dirname(TOOL_DIR), "data"))
+
+
+def output_folder(near: Optional[str] = None) -> str:
+    """결과 파일을 둘 폴더: 대상 파일(near)이 있으면 그 파일과 같은 폴더, 없으면 get_result_dir()."""
+    if near and os.path.isfile(str(near)):
+        return os.path.dirname(os.path.abspath(str(near)))
+    return get_result_dir()
+
+
 def get_work_dir() -> str:
     """중간 결과 파일 폴더 (data/_work). 오래된 파일은 자동 정리합니다."""
     path = os.path.join(get_data_dir(), "_work")
@@ -1360,18 +1374,23 @@ def safe_filename(text: Any, limit: int = 0, default: str = "file") -> str:
     return name or default
 
 
-def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwrite: bool = False) -> str:
-    """출력 파일 경로를 정합니다.
-    - 생략하면 작업 폴더에 '<default_stem>_<시각><ext>'로 만듭니다 (default_stem의 쓸 수 없는 글자는 _로).
-    - 파일명만 주면 data 폴더 아래에 만듭니다.
+def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwrite: bool = False,
+                        near: Optional[str] = None, internal: bool = False) -> str:
+    """출력 파일 경로를 정합니다 (전역 지침 8장: 경로를 주면 그대로, 아니면 대상 파일 옆, 대상 파일이 없으면 C:\\AIKIT\\data).
+    - 생략하면 output_folder(near)에 '<default_stem>_<시각><ext>'로 만듭니다 (default_stem의 쓸 수 없는 글자는 _로).
+      internal=True(도구가 다음 단계에 넘기는 중간 파일)는 작업 폴더(data/_work, 오래되면 지움)에.
+    - 파일명만 주거나 상대 경로면 output_folder(near) 기준입니다.
     - 확장자가 없거나 다르면 ext로 맞춥니다.
     - 그 파일이 이미 있으면 덮어쓰지 않고 시각을 붙인 새 이름으로 바꿉니다 (R4, recovered로 알림). overwrite=True면 그대로.
     """
     ext = ext if ext.startswith(".") else "." + ext
     if not path:
-        cleanup_work_dir()
+        if internal:
+            cleanup_work_dir()
+        folder = get_work_dir() if internal else output_folder(near)
+        os.makedirs(folder, exist_ok=True)
         # 기본 이름은 차트·시트·문서 이름에서 오므로 / ? : 같은 글자가 섞일 수 있음 -> 여기 한 곳에서 정리
-        auto = os.path.join(get_work_dir(), f"{safe_filename(default_stem, default='output')}_{timestamp()}{ext}")
+        auto = os.path.join(folder, f"{safe_filename(default_stem, default='output')}_{timestamp()}{ext}")
         if os.path.exists(auto) and not overwrite:
             # 같은 초에 같은 이름으로 저장하면 앞 결과를 덮어쓰던 문제: 번호를 붙인 새 이름으로
             alt = _timestamped(auto)
@@ -1384,8 +1403,8 @@ def resolve_output_path(path: Optional[str], default_stem: str, ext: str, overwr
         if cur_ext:      # 말없이 확장자를 바꾸던 것 (read --save res.xlsx -> res.csv, 2026-11-09 검토 B13): 결과가 달라진 일이라 recovered
             note_recovered(f"{os.path.basename(raw)}의 {cur_ext} 형식으로는 저장하지 않음 -> {os.path.basename(base + ext)}({ext})로 저장")
         raw = (base if cur_ext else raw) + ext
-    if not os.path.isabs(raw) and not os.path.dirname(raw):
-        raw = os.path.join(get_data_dir(), raw)
+    if not os.path.isabs(raw):
+        raw = os.path.join(output_folder(near), raw)
     raw = os.path.abspath(raw)
     os.makedirs(os.path.dirname(raw), exist_ok=True)
     if os.path.exists(raw) and not overwrite:

@@ -129,7 +129,7 @@ def is_plain_png(path: str) -> bool:
 
 
 def image_by_export(chart_obj: Any, stem: str) -> str:
-    path = rt.resolve_output_path(None, stem + "_export", ".png")
+    path = rt.resolve_output_path(None, stem + "_export", ".png", internal=True)
     chart_obj.Chart.Export(os.path.normpath(path), "PNG")
     if not is_plain_png(path):
         raise RuntimeError("엑셀이 저장한 PNG가 보안 프로그램으로 암호화되어 다른 앱이 읽을 수 없습니다")
@@ -239,7 +239,7 @@ def _render_chart(plt: Any, data: Dict[str, Any], path: str) -> str:
 
 
 def image_by_redraw(chart_obj: Any, stem: str) -> str:
-    path = rt.resolve_output_path(None, stem + "_redraw", ".png")
+    path = rt.resolve_output_path(None, stem + "_redraw", ".png", internal=True)
     return render_chart(chart_data(chart_obj), path)
 
 

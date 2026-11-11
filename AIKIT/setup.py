@@ -1,7 +1,7 @@
 r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\AIKIT\setup.py)
 
 배포는 C:\AIKIT 폴더 하나입니다. 이 스크립트가 그 폴더를 사용자 PC에 연결합니다. 관리자 권한은 시스템 PATH를 쓸 때만 필요합니다.
-    python setup.py                 # 설치 (환경 변수, 옛 설정 정리, PATH 등록, 동작 확인)
+    python setup.py                 # 설치 (환경 변수, PATH 등록, 동작 확인)
     python setup.py --check         # 아무것도 바꾸지 않고 확인만 (다르거나 실패가 있으면 exit 1)
     python setup.py --no-path       # 시스템 PATH는 건드리지 않음
 
@@ -10,15 +10,10 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
    OpenCode는 설정 파일 없이 폴더 모양만으로 AGENTS.md(전역 지침)와 skills\<이름>\SKILL.md(기본 스킬 11개와 사용자 스킬)를 읽고,
    opencode.json(셸·권한 기본 설정, 배포 파일)과 opencode.jsonc(사내 LLM 주소, 사용자가 넣음)를 합쳐 읽습니다 (OpenCode 2.2.5 확인).
    복사하지 않으므로 C:\AIKIT을 바꾸면 바로 반영됩니다. 원래 값은 data\setup_backup_<시각>\user_env.txt에 보관하고, 쓴 뒤 다시 읽어 확인합니다.
-2. 옛 설정 정리 (원본은 data\setup_backup_<시각>\에 보관):
-   - 옛 전역 설정 %USERPROFILE%\.config\opencode (2026-11-12 전 setup이 복사하던 곳, old_config\): 우리 스킬 복사본과 AGENTS.md는 지우고,
-     사용자가 만든 스킬은 C:\AIKIT\skills로, opencode.jsonc는 C:\AIKIT에 없을 때 옮깁니다.
-   - 이전 구성 (2026-11-12 낮, old_layout\): C:\AIKIT\opencode 폴더(AGENTS.md, opencode.json은 지우고 opencode.jsonc·사용자 스킬은 맨 위로),
-     도구 폴더 안의 옛 skills 폴더(C:\AIKIT\ml-kit\skills, C:\AIKIT\office-cli\skills)는 지웁니다.
-3. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
+2. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
    OpenCode 백그라운드 서비스를 끔 (서비스는 처음 뜰 때의 환경 변수·PATH로 계속 돌아, 끄지 않으면 재부팅 전까지 옛 설정을 씀).
-4. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep),
+3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep),
    opencode debug paths의 config가 C:\AIKIT인지. opencode.json + opencode.jsonc를 합친 설정의 "shell", "instructions",
    permission, "enabled_providers", "autoupdate"를 WARN/INFO로 알림.
 
@@ -35,10 +30,8 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\AIKIT (배포 폴더)
-OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker")    # skills\<이름>\SKILL.md (office-cli)
+OFFICE_SKILLS = ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")    # skills\<이름>\SKILL.md (office-cli)
 ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # skills\<이름>\SKILL.md (ml-kit)
-# 옛 전역 설정 폴더에서 지울 우리 스킬 이름 (지금 스킬 + 옛 통합 스킬 폴더 + 실기 보조 스킬)
-OLD_SKILLS = ML_SKILLS + OFFICE_SKILLS + ("office-cli", "ml-kit", "office-cli-test")
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
 USER_ENV_KEY = "Environment"                                                   # 사용자 환경 변수 (HKCU)
 CONFIG_ENV = "OPENCODE_CONFIG_DIR"                                             # OpenCode 설정 폴더를 바꾸는 환경 변수
@@ -55,11 +48,6 @@ LONG_PATH = 2047                                                     # 이보다
 def config_dir():
     """OpenCode 설정 폴더 = C:\\AIKIT (OPENCODE_CONFIG_DIR가 가리키는 곳): AGENTS.md, skills\\, opencode.json, opencode.jsonc가 맨 위."""
     return HERE
-
-
-def old_config_dir():
-    """옛 전역 설정 폴더 (OpenCode 기본 위치, 2026-11-12 전 setup이 스킬·지침을 복사하던 곳)."""
-    return os.path.join(os.path.expanduser("~"), ".config", "opencode")
 
 
 def data_dir():
@@ -129,7 +117,7 @@ def step_sources(rep):
         rep.line("FAIL", f"{name}: 파일이 없습니다: {path} (저장소의 AIKIT 폴더를 통째로 다시 복사하세요)")
     if not missing:
         vers = sorted({version_of(_read(p)) for n, p in sources() if n.endswith("스킬")} - {""})
-        mine = sorted(set(os.listdir(os.path.join(HERE, "skills"))) - set(ML_SKILLS + OFFICE_SKILLS))
+        mine = sorted(set(os.listdir(os.path.join(HERE, "skills"))) - set(ML_SKILLS + OFFICE_SKILLS + ("office-cli-test",)))
         rep.line("OK", f"기본 스킬 {len(ML_SKILLS) + len(OFFICE_SKILLS)}개 ({', '.join(vers)}), 전역 지침, opencode.json: 있음  {HERE}"
                        + (f" (사용자 스킬 {len(mine)}개: {', '.join(mine[:10])})" if mine else ""))
 
@@ -195,151 +183,6 @@ def step_env(rep, backup, check=False, reg=None):
         print(f"[INFO] 환경 변경 알림 오류: {type(e).__name__}: {e}", flush=True)
     if not sent:
         rep.line("WARN", "환경 변경 알림을 보내지 못했습니다. OpenCode에 새 설정이 안 보이면 로그아웃 후 다시 로그인하세요")
-
-
-def _is_link(path):
-    """심볼릭 링크나 Windows 정션(mklink /J)인지. 링크면 링크만 지우고 가리키는 폴더는 건드리지 않습니다."""
-    isjunction = getattr(os.path, "isjunction", None)          # Python 3.12+
-    return os.path.islink(path) or bool(isjunction and isjunction(path))
-
-
-def _remove_link(path):
-    try:
-        os.unlink(path)
-    except (IsADirectoryError, PermissionError):
-        os.rmdir(path)                                  # Windows 디렉터리 링크·정션은 rmdir로 링크만 지움 (대상 내용은 그대로)
-
-
-def old_global_items(cfg):
-    """옛 전역 설정 폴더에서 정리할 것: [(종류, 경로)]. 종류: 우리 스킬 / 전역 지침 / 사용자 스킬 / opencode.jsonc."""
-    out = []
-    skills = os.path.join(cfg, "skills")
-    if os.path.isdir(skills):
-        for name in sorted(os.listdir(skills)):
-            path = os.path.join(skills, name)
-            if name in OLD_SKILLS:
-                out.append(("우리 스킬", path))
-            elif os.path.isfile(os.path.join(path, "SKILL.md")) and not _is_link(path):
-                out.append(("사용자 스킬", path))
-    for kind, name in (("전역 지침", "AGENTS.md"), ("opencode.jsonc", "opencode.jsonc")):
-        if os.path.isfile(os.path.join(cfg, name)):
-            out.append((kind, os.path.join(cfg, name)))
-    return out
-
-
-def old_layout_items():
-    """이전 구성(2026-11-12 낮)에서 정리할 것: [(종류, 경로)]. C:\\AIKIT\\opencode 폴더(설정 폴더였음)와 도구 폴더 안의 옛 skills 폴더
-    (덮어쓰기 배포로 남음. OpenCode는 C:\\AIKIT\\skills만 읽어 헷갈리기만 함)."""
-    out = []
-    for tool in ("ml-kit", "office-cli"):
-        path = os.path.join(HERE, tool, "skills")
-        if os.path.isdir(path):
-            out.append(("우리 스킬", path))
-    oc = os.path.join(HERE, "opencode")
-    if not os.path.isdir(oc) or _is_link(oc):
-        return out
-    skills = os.path.join(oc, "skills")
-    if os.path.isdir(skills):
-        for name in sorted(os.listdir(skills)):
-            path = os.path.join(skills, name)
-            if name in OLD_SKILLS:
-                out.append(("우리 스킬", path))
-            elif os.path.isfile(os.path.join(path, "SKILL.md")) and not _is_link(path):
-                out.append(("사용자 스킬", path))
-    for kind, name in (("전역 지침", "AGENTS.md"), ("우리 설정", "opencode.json"), ("OpenCode 실행 파일", "service.json"),
-                       ("opencode.jsonc", "opencode.jsonc")):
-        if os.path.isfile(os.path.join(oc, name)):
-            out.append((kind, os.path.join(oc, name)))
-    return out
-
-
-def _keep(path, root, backup, sub="old_config"):
-    """옛 것을 data\\setup_backup_<시각>\\<sub>\\ 아래 root 기준 같은 상대 경로로 보관 (링크는 보관하지 않음)."""
-    if _is_link(path):
-        return
-    keep = os.path.join(backup, sub, os.path.relpath(path, root))
-    os.makedirs(os.path.dirname(keep), exist_ok=True)
-    if os.path.isdir(path):
-        shutil.copytree(path, keep, dirs_exist_ok=True)
-    else:
-        shutil.copy2(path, keep)
-
-
-def _remove(path):
-    if _is_link(path):
-        _remove_link(path)
-    elif os.path.isdir(path):
-        shutil.rmtree(path)
-    else:
-        os.remove(path)
-
-
-def _tidy(rep, kind, path, root, backup, label="옛 전역 설정", sub="old_config"):
-    """옛 설정 하나를 정리: 보관한 뒤 지우거나(우리 것), C:\\AIKIT으로 옮긴 뒤 지움(사용자 스킬은 skills\\, opencode.jsonc는 맨 위)."""
-    dst, note = None, "보관 후 지움"
-    if kind == "사용자 스킬":
-        dst = os.path.join(config_dir(), "skills", os.path.basename(path))
-    elif kind == "opencode.jsonc":
-        dst = os.path.join(config_dir(), "opencode.jsonc")
-    if dst and os.path.exists(dst):
-        same = kind == "opencode.jsonc" and _read(dst) == _read(path)
-        note = "보관 후 지움 (C:\\AIKIT 쪽 것과 같음)" if same else f"보관 후 지움 (이미 있는 {dst}를 씀. 옛 것은 보관 폴더에)"
-        dst = None
-    err = ""
-    try:
-        _keep(path, root, backup, sub)
-        if dst:
-            if os.path.isdir(path):
-                shutil.copytree(path, dst)
-            else:
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(path, dst)
-            note = f"{dst}로 옮김"
-        _remove(path)
-    except PermissionError as e:                        # OpenCode가 파일을 잡고 있으면: 닫고 다시 실행
-        err = f" ({type(e).__name__}: {e}. OpenCode를 모두 닫고 다시 실행)"
-    except OSError as e:
-        err = f" ({type(e).__name__}: {e}. 직접 지우거나 옮긴 뒤 다시 실행)"
-    if os.path.lexists(path):
-        rep.line("FAIL", f"{label} {kind}: {path} -> 정리하지 못함{err}")
-    else:
-        rep.line("OK", f"{label} {kind}: {path} -> {note}")
-
-
-def step_old_global(rep, backup, check=False, cfg=None):
-    """옛 전역 설정 폴더(%USERPROFILE%\\.config\\opencode)에 남은 우리 스킬·지침 정리 (OPENCODE_CONFIG_DIR로 이제 읽히지 않음)."""
-    cfg = os.path.abspath(cfg or old_config_dir())
-    if _norm(cfg) == _norm(config_dir()):
-        return
-    items = old_global_items(cfg)
-    if not items:
-        rep.line("OK", f"옛 전역 설정 폴더에 정리할 것 없음  {cfg}")
-        return
-    for kind, path in items:
-        if check:
-            rep.diff(f"옛 전역 설정 {kind}: {path} (설치하면 정리)")
-        else:
-            _tidy(rep, kind, path, cfg, backup)
-
-
-def step_old_layout(rep, backup, check=False):
-    """이전 구성(C:\\AIKIT\\opencode가 설정 폴더, 스킬은 도구 폴더 안)에서 옮김. 다 비면 C:\\AIKIT\\opencode 폴더도 지움."""
-    items = old_layout_items()
-    if not items:
-        return
-    for kind, path in items:
-        if check:
-            rep.diff(f"이전 구성 {kind}: {path} (설치하면 정리)")
-        else:
-            _tidy(rep, kind, path, HERE, backup, label="이전 구성", sub="old_layout")
-    oc = os.path.join(HERE, "opencode")
-    if not check and os.path.isdir(oc):
-        for d in (os.path.join(oc, "skills"), oc):
-            try:
-                if os.path.isdir(d) and not os.listdir(d):
-                    os.rmdir(d)
-            except OSError:
-                pass
 
 
 def step_test_skills(rep, backup, test_skills):
@@ -644,15 +487,12 @@ def step_opencode_config(rep, config_dir):
     """합친 설정에서 도구 결과를 흐리는 설정을 알림 (집 PC opencode 시험 2026-11-07에서 모두 결과를 흐림). WARN만, 고치지 않음.
     셸이 PowerShell이 아님(스킬·전역 지침의 명령과 따옴표는 PowerShell 기준), instructions의 다른 지침(옛 지침이 섞이면 지금 없는 명령을 씀),
     작업 폴더 밖 파일 권한(external_directory가 allow가 아니면 opencode run이 작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈춤),
-    우리 키(skills, shell, permission, autoupdate)를 opencode.jsonc에도 적음(opencode.json과 어느 쪽이 쓰일지 헷갈림)."""
+    우리 키(shell, permission, autoupdate)를 opencode.jsonc에도 적음(opencode.json과 어느 쪽이 쓰일지 헷갈림)."""
     cfg, overlap, bad, has_jsonc = load_config(config_dir)
     for name in bad:
         rep.line("WARN", f"{name}을 읽지 못해 설정을 확인하지 않았습니다  {config_dir}")
     if not has_jsonc:
         rep.line("WARN", f"opencode.jsonc가 없습니다. 사내 LLM 주소가 든 opencode.jsonc를 {config_dir}\\에 넣고 다시 실행하세요")
-    if cfg.get("skills"):
-        rep.line("WARN", "설정에 \"skills\"(스킬 경로)가 있습니다. 스킬은 C:\\AIKIT\\skills에 두면 설정 없이 읽히니 opencode.jsonc에서 지우세요 "
-                         "(예전 경로를 가리키면 옛 스킬이 섞임)")
     if overlap:
         rep.line("WARN", f"opencode.json과 opencode.jsonc에 같은 키가 있습니다 ({', '.join(sorted(set(overlap)))}). 이 키는 opencode.json(배포 파일)에만 두고, "
                          "opencode.jsonc에는 provider, model, enabled_providers만 두세요")
@@ -719,7 +559,7 @@ def main(argv=None):
         sys.stdout.reconfigure(errors="replace")
     except (AttributeError, ValueError):
         pass
-    p = argparse.ArgumentParser(description="C:\\AIKIT 설치: OpenCode 설정 폴더를 C:\\AIKIT으로, 옛 설정 정리, 시스템 PATH 등록, 동작 확인")
+    p = argparse.ArgumentParser(description="C:\\AIKIT 설치: OpenCode 설정 폴더를 C:\\AIKIT으로, 시스템 PATH 등록, 동작 확인")
     p.add_argument("--check", action="store_true", help="아무것도 바꾸지 않고 확인만 (다르거나 실패가 있으면 exit 1)")
     p.add_argument("--no-path", action="store_true", help="시스템 PATH를 확인·등록하지 않음")
     p.add_argument("--test-skill", action="append", default=[], metavar="SKILL.md",
@@ -733,22 +573,16 @@ def main(argv=None):
     step_env(rep, backup, args.check)
     if args.test_skill and not args.check:
         step_test_skills(rep, backup, args.test_skill)
-    print(f"[INFO] 2. 옛 설정 정리: {old_config_dir()}, 이전 구성", flush=True)
-    step_old_global(rep, backup, args.check)
-    step_old_layout(rep, backup, args.check)
     if not args.check:      # 스킬로 안 되는 일의 파이썬 스크립트를 두는 곳 (전역 지침 8장)
         os.makedirs(os.path.join(data_dir(), "scripts"), exist_ok=True)
-        # Web UI의 작업 폴더 (web.bat이 서비스를 여기서 띄움). Web UI는 세션을 프로젝트 폴더 안에 만들어, 폴더가 없는 새 PC에서는
-        # 새 세션이 만들어지지 않았음 (팀원 배포 2026-11-11). 처음 한 번 Web UI에서 이 폴더를 프로젝트로 연다
-        os.makedirs(os.path.join(HERE, "work"), exist_ok=True)
-    print("[INFO] 3. 시스템 PATH", flush=True)
+    print("[INFO] 2. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)
     else:
         step_path(rep, backup, args.check)
     if not args.check:
         step_service(rep)
-    print("[INFO] 4. 동작 확인", flush=True)
+    print("[INFO] 3. 동작 확인", flush=True)
     step_verify(rep)
     step_opencode_paths(rep)
     step_opencode_config(rep, config_dir())

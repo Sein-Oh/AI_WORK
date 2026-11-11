@@ -26,26 +26,25 @@ wheels/
 
 # Tool runtime data (error logs, caches) - each tool folder
 AIKIT/*/data/
-AIKIT/work/
 AIKIT/*/cache/
 AIKIT/office-cli/config.json
 
 # 배포 설치(AIKIT/setup.py): 보관 폴더(data/setup_backup_<시각>), 사용자가 넣는 OpenCode 설정(사내 LLM 주소)
 AIKIT/data/
 AIKIT/opencode.jsonc
-# 사용자가 만든 OpenCode 스킬 (skill.py save가 C:\AIKIT\skills\<이름>에 둠): 기본 스킬 11개만 저장소에 넣음
+# 사용자가 만든 OpenCode 스킬 (C:\AIKIT\skills\<이름>): 기본 스킬 11개만 저장소에 넣음
 AIKIT/skills/*
 !AIKIT/skills/ml-train/
 !AIKIT/skills/ml-dataset/
 !AIKIT/skills/ml-predict/
 !AIKIT/skills/ml-report/
 !AIKIT/skills/ml-map/
-!AIKIT/skills/office-excel/
-!AIKIT/skills/office-doc/
-!AIKIT/skills/office-mail/
-!AIKIT/skills/office-spec/
-!AIKIT/skills/office-data/
-!AIKIT/skills/skill-maker/
+!AIKIT/skills/excel-kit/
+!AIKIT/skills/word-kit/
+!AIKIT/skills/ppt-kit/
+!AIKIT/skills/outlook-kit/
+!AIKIT/skills/search-kit/
+!AIKIT/skills/stats-kit/
 # OpenCode가 설정 폴더(C:\AIKIT)에 만드는 실행 파일 (백그라운드 서비스 정보)
 AIKIT/service.json
 # 배포 때 C:\AIKIT에 함께 두는 것 (저장소에는 넣지 않음)

@@ -14,6 +14,11 @@
 
 ## [2.9.92] - 2026-11-12
 
+### 테스트: 평소 실행에서 무거운 회귀 시험을 뺌 (도구 동작 변경 없음, 사용자 결정: 날마다 몇 시간씩 걸리는 것은 무리)
+- `tests/conftest.py`: report 표시, `test_layout_matrix`·`test_loading_layout`·`test_loading_numbers`, `tests/slow_tests.txt`(2026-11-12 측정에서 한 번에
+  2초 이상 걸린 함수 142개, 계약·안전 시험은 넣지 않음)를 평소에는 빼고 `AIKIT_FULL_TEST=1`이나 `-m`을 줄 때만 돌림. 1052개 26분 -> 평소 546개 6분 (리눅스).
+- `test_slow_list_names_existing_tests`: 목록의 이름이 모두 있는 시험인지. pytest는 클라우드에서만 (회사·집 PC 점검 `run_all_tests.py`에서 pytest 단계를 뺌).
+
 ### 구조
 - 스킬 5개를 `AIKIT/ml-kit/skills/<이름>`에서 `AIKIT/skills/<이름>`으로 옮김 (`C:\AIKIT`이 OpenCode 설정 폴더, 설정 파일 없이 폴더 모양으로 읽힘.
   office-cli 1.6.6 CHANGELOG, HANDOFF 3-13). 도움말(`-h`)이 알려 주는 `skill_file`도 `<설치 폴더>\skills\<이름>\SKILL.md`. 스킬 본문은 그대로.

@@ -18,7 +18,6 @@ AI_WORK/
 │   ├── HANDOFF.md             # 작업 인계 (다른 PC·새 대화에서 이어 하기)
 │   ├── WINDOWS_OFFLINE.md     # 폐쇄망 wheel 반입/설치 가이드 (모든 도구 공통)
 │   ├── history/               # 지난 설계·검토 기록 (1.0 설계, 1차 지침 준수 검토)
-│   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode/              # 사내 PC OpenCode 스킬 배치 안내, 실기테스트.md (회사 PC 실기 절차 한 장)
 │   │   ├── 자동테스트/        # Gemma 종합 테스트 메시지 팩 (AIKIT/dev/agent_scenarios.py에서 생성)
 │   │   └── 실기테스트_샘플/   # 정답을 아는 샘플 데이터 (AIKIT/dev/ml-kit/tools/make_beta_samples.py)
@@ -29,9 +28,10 @@ AI_WORK/
 ├── AIKIT/                     # 사내 PC C:\AIKIT로 통째로 복사 (아래 AIKIT/dev 포함). 이 폴더가 곧 OpenCode 설정 폴더 (OPENCODE_CONFIG_DIR)
 │   ├── AGENTS.md              # OpenCode 전역 지침 (설정 파일 없이 폴더 모양으로 읽힘)
 │   ├── skills/<이름>/SKILL.md # 스킬: 폴더 하나 = 스킬 하나. 기본 11개(ml-train, ml-dataset, ml-predict, ml-report, ml-map,
-│   │                          #   office-excel, office-doc, office-mail, office-spec, office-data, skill-maker), 그 밖은 사용자 스킬(git 제외)
+│   │                          #   excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit), 그 밖은 사용자 스킬(git 제외)
+│   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode.json          # 셸·권한 기본 설정 (스킬 경로는 적지 않음). opencode.jsonc(사내 LLM 주소)는 PC에 있는 것 (git 제외)
-│   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 옛 설정 정리, 시스템 PATH 등록, 동작 확인
+│   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 시스템 PATH 등록, 동작 확인
 │   ├── web.bat                # OpenCode Web UI를 바로 띄움 (opencode 2.x: opencode pair의 일회용 로그인 링크를 브라우저로 엶)
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
 │   │   ├── ml_train.py        # 학습, 성능 개선, 학습 이력
@@ -45,12 +45,10 @@ AI_WORK/
 │       ├── excel.py / word.py / ppt.py / outlook.py   # 앱별 진입점
 │       ├── reader.py          # PDF/HWP/Office/eml 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
 │       ├── office.py          # 창 목록/전환, 앱 간 전달, 되돌리기
-│       ├── skill.py           # 사용자가 만든 OpenCode 스킬 등록·목록·점검·지우기
 │       └── _runtime.py / _office.py / _markdown.py / _xlsx_formula.py / _spec_check.py   # 공통·내부 모듈 (진입점 아님)
 └── AIKIT/dev/                 # AIKIT 안의 개발·실기 테스트 폴더 (C:\AIKIT\dev, 도구와 함께 배포, 도구는 읽지 않음)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)
-    ├── pytest_live_report.py  # run_all_tests.py pytest 단계 플러그인 (실패를 생기는 즉시 기록)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
     ├── run_simplify_check.py  # 사용법 단순화 실기 점검 (사람이 실행)
     ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
@@ -86,8 +84,7 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 1. `AIKIT` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\AIKIT\setup.bat`, `C:\AIKIT\python\python.exe`가 되도록, `dev` 포함).
 2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\`에 넣어 둡니다 (git에 올리지 않는 파일. provider, model, `enabled_providers`만).
 3. `C:\AIKIT\setup.bat`을 두 번 클릭합니다 (또는 `python C:\AIKIT\setup.py`). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`을
-   설정해 OpenCode가 `C:\AIKIT\AGENTS.md`(전역 지침)와 `C:\AIKIT\skills`(스킬 11개)를 **복사 없이, 설정 파일 없이** 읽게 하고, 예전에 사용자 폴더
-   (`%USERPROFILE%\.config\opencode`)로 복사해 둔 우리 스킬·지침은 보관 후 지웁니다 (`C:\AIKIT\data\setup_backup_<시각>`).
+   설정해 OpenCode가 `C:\AIKIT\AGENTS.md`(전역 지침)와 `C:\AIKIT\skills`(스킬 11개)를 **복사 없이, 설정 파일 없이** 읽게 합니다.
    시스템 PATH에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가한 뒤, 도구와 OpenCode 설정 폴더를 확인합니다. `--check`는 확인만.
 4. 새 터미널을 열고 OpenCode(TUI, Desktop, Web UI)를 다시 시작합니다. setup이 OpenCode 백그라운드 서비스를 꺼 두므로 새 PATH·스킬·지침으로 다시 뜹니다
    (TUI와 web.bat은 이미 떠 있는 서비스를 그대로 쓰므로, 설치 전에 뜬 서비스가 남으면 python을 못 찾고 옛 스킬을 씀. 그럴 때는 `C:\AIKIT\web.bat stop`).
@@ -97,7 +94,7 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
    브라우저는 Edge(없으면 Chrome)를 `C:\AIKIT\data\web_profile` 전용 프로필의 앱 창으로 엽니다. 평소 브라우저 프로필에서
    "Internal error opening backing store for indexedDB.open"이 나던 회사 PC 대응 (2026-11-10). 둘 다 없으면 기본 브라우저.
    Web UI는 세션을 프로젝트(작업 폴더) 안에 만듭니다. 처음 쓰는 PC는 폴더가 없어 새 세션이 만들어지지 않으니, 처음 한 번 화면에서 프로젝트 열기로
-   `C:\AIKIT\work`(setup과 web.bat이 만들어 둠)를 고른 뒤 새 세션을 만듭니다. 프로젝트 목록은 브라우저 프로필(`C:\AIKIT\data\web_profile`)에 저장됩니다.
+   `C:\AIKIT`(web.bat이 서비스를 띄우는 기본 프로젝트 폴더)을 고른 뒤 새 세션을 만듭니다. 프로젝트 목록은 브라우저 프로필(`C:\AIKIT\data\web_profile`)에 저장됩니다.
 
 ## 관리 방법
 

@@ -9,6 +9,9 @@
 - **폐쇄망이다. 인터넷이 전혀 안 된다.** 웹 검색·웹 페이지 열기 도구(`websearch`, `webfetch`), 내려받기(`curl`, `Invoke-WebRequest`, `git clone`), `pip install`을
   시도하지 않는다 (실패하고 시간만 쓴다). 모르는 것은 이 PC의 파일(이 지침, SKILL.md, 사용자가 준 문서)과 아는 지식으로만 답하고,
   그래도 모르면 "폐쇄망이라 인터넷에서 찾아볼 수 없습니다"라고 알린다. 필요한 패키지가 없으면 사용자에게 알리고 멈춘다.
+- **결과 파일 위치**: 사용자가 경로를 주면 그 경로에 둔다. 경로를 주지 않으면 파일을 대상으로 한 작업의 결과는 대상 파일과 같은 폴더에,
+  대상 파일이 없는 작업(메일, 저장한 적 없는 문서, 여러 파일 검색)의 결과는 `C:\AIKIT\data`에 둔다. 도구는 `--save`를 생략하거나 이름만 주면
+  이 규칙대로 저장하므로 경로를 지어 붙이지 않는다. 저장된 곳은 결과 JSON의 `output_file`이다.
 - 파이썬은 `python` 명령으로 실행한다 (`C:\AIKIT\python`, PATH에 등록됨). `py`, `python3`, `pip`는 쓰지 않는다.
 - 셸 명령은 한글이 깨지지 않게 **항상 아래 줄을 맨 앞에 붙여** 한 줄로 실행한다.
   ```powershell
@@ -22,17 +25,17 @@
 ## 3. 스킬을 먼저 쓴다
 | 요청 | 스킬 |
 |---|---|
-| Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `office-excel` |
-| Word, PowerPoint 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 슬라이드, 발표자 노트, 앱 사이 옮기기) | `office-doc` |
-| Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일), 내려받은 eml 폴더 검색 | `office-mail` |
-| PDF, HWP, Office 파일 읽기와 근거 검색, 엑셀 표를 규격서와 대조 | `office-spec` |
-| 엑셀·CSV 표 집계 (합계·평균·최소·최대·건수, 묶음별), 중복 행 찾기 | `office-data` |
+| Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `excel-kit` |
+| Word 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 앱 사이 옮기기) | `word-kit` |
+| PowerPoint 읽기·쓰기 (슬라이드, 도형, 발표자 노트, 앱 사이 옮기기) | `ppt-kit` |
+| Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일), 내려받은 eml 폴더 검색 | `outlook-kit` |
+| PDF, HWP, Office 파일 읽기와 근거 검색, 엑셀 표를 규격서와 대조 | `search-kit` |
+| 엑셀·CSV 표 집계 (합계·평균·최소·최대·건수, 묶음별), 중복 행 찾기 | `stats-kit` |
 | 표(Excel/CSV) 데이터로 예측 모델 학습, 성능 개선, 학습 이력 | `ml-train` |
 | 학습용 데이터셋 만들기 (조건·행 번호로 행 뽑기, 행을 학습에서 빼기) | `ml-dataset` |
 | 학습한 모델로 예측, 목표값이 되는 조건 찾기, 조건별 예측, 최적 조건 | `ml-predict` |
 | ML 결과 보고서(Word), 성능예측표(엑셀 계산기) | `ml-report` |
 | 모델 없이 표 데이터에서 사잇값 보간, 목표값이 되는 기준값 찾기 | `ml-map` |
-| 스킬 만들기 ("이거 스킬로 만들어줘"), 스킬 목록·점검·고치기·지우기, 스킬 만드는 방법 질문 | `skill-maker` |
 | 두 파일·두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 바뀐 곳 찾기) | 스킬 없음. 하지 않는다: 8장의 "하지 않는 일" 표대로 직접 하는 곳만 알린다 |
 
 1. 위 작업은 스킬 명령으로 한다. 스킬로 되는 일을 pandas, openpyxl, python-docx, win32com 등으로 다시 짜지 않는다.
@@ -42,7 +45,7 @@
 2. 도구는 `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`에만 있다 (다른 폴더의 경로, 예: `C:\AIKIT\dev`는 데이터 위치일 뿐이다). SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
-   `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\skills\office-excel\SKILL.md`, `C:\AIKIT\skills\ml-train\SKILL.md`)
+   `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\skills\excel-kit\SKILL.md`, `C:\AIKIT\skills\ml-train\SKILL.md`)
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
    실행하는 .py는 SKILL.md 표에 있는 것뿐이고, 경로는 SKILL.md에 적힌 전체 경로를 한 글자도 바꾸지 않고 쓴다
    (`C:\AIKIT\office-cli\excel.py`, `C:\AIKIT\ml-kit\ml_train.py`처럼 도구 폴더 바로 아래. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py --input`).
@@ -122,7 +125,7 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다.
    **`python -c "..."`와 `python -`(표준 입력)로 코드를 바로 실행하지 않는다** (PowerShell에서 따옴표와 한글이 깨진다). 짧은 코드도 늘 파일로 만들어 실행한다. 스크립트는 이 폴더에만 만든다.
 3. 설치된 라이브러리를 쓴다: pandas, numpy, scipy, scikit-learn, openpyxl, python-docx, python-pptx, matplotlib, seaborn, pymupdf, pywin32(win32com) 등.
    설치(`pip install`)는 하지 않는다. import가 실패하면 그 이름을 알리고 멈춘다.
-4. 원본 파일은 고치지 않는다. 결과는 원본 옆에 새 이름(예: `<원본>_집계.xlsx`)으로 저장한다. 덮어쓰기·삭제는 5장대로 먼저 묻는다.
+4. 원본 파일은 고치지 않는다. 결과는 2장 "결과 파일 위치"대로 원본 옆에 새 이름(예: `<원본>_집계.xlsx`)으로, 원본 파일이 없으면 `C:\AIKIT\data`에 저장한다. 덮어쓰기·삭제는 5장대로 먼저 묻는다.
    스크립트 끝에서 결과 파일 경로와 짧은 요약(행 수, 합계 등)을 print하고, 그 출력으로 결과를 알린다.
 5. 스크립트가 실패하면 오류를 보고 고쳐 다시 실행하는 것은 2번까지다. 그래도 실패하면 마지막 오류 줄을 그대로 알리고 멈춘다.
 6. 열린 Office 문서(win32com)를 다룰 때:
@@ -139,12 +142,12 @@ OpenCode는 `C:\AIKIT`을 설정 폴더로 쓴다 (환경 변수 `OPENCODE_CONFI
 | 무엇 | 파일 (고칠 때도 이것) |
 |---|---|
 | 전역 지침 (이 파일) | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 11개: office-excel, office-doc, office-mail, office-spec, office-data, skill-maker, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
+| 스킬 (기본 11개: excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<스킬 이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐) |
 | 셸·권한 기본 설정 (배포 파일) | `C:\AIKIT\opencode.json` |
 | 사내 LLM 연결 설정 | `C:\AIKIT\opencode.jsonc` |
+| 사람용 사용 가이드 (사용자가 사용법을 물으면 이 파일을 브라우저로 열어 보라고 알림) | `C:\AIKIT\guide\office-cli_사용가이드.html`, `C:\AIKIT\guide\ml-kit_사용가이드.html` |
 | 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
 
-- 스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-maker` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
 - 위 파일을 고친 뒤 OpenCode를 모두 닫았다가 다시 시작하면 반영된다 (안 되면 `C:\AIKIT\web.bat stop` 뒤 다시 실행). `%USERPROFILE%\.config\opencode`는 쓰지 않는다.
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).

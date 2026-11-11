@@ -1,14 +1,14 @@
 ---
-name: office-data
-description: 엑셀·CSV 표 데이터 집계와 중복 행 찾기. 표 집계(합계·평균·최소·최대·건수, 묶음별, 조건, 상위 N), 같은 값의 중복 행 찾기. 표 합계·평균·건수, 부서별 합계, 중복 확인 요청에 사용. 두 판 비교(BOM 개정, 문서)는 이 도구에 없음. 엑셀 읽기·쓰기는 office-excel.
+name: stats-kit
+description: 엑셀·CSV 표 데이터 집계와 중복 행 찾기. 표 집계(합계·평균·최소·최대·건수, 묶음별, 조건, 상위 N), 같은 값의 중복 행 찾기. 표 합계·평균·건수, 부서별 합계, 중복 확인 요청에 사용. 두 판 비교(BOM 개정, 문서)는 이 도구에 없음. 엑셀 읽기·쓰기는 excel-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.6"
+  version: "1.6.7"
   platform: windows
 ---
 
-# office-data 스킬 (Windows)
+# stats-kit 스킬 (Windows)
 
 ## 규칙
 1. 아래 표의 명령을 그대로 쓰고 `<...>` 값과 `[...]` 안의 필요한 옵션만 바꾼다. 옵션을 지어내지 않는다.
@@ -30,6 +30,6 @@ metadata:
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - `stats`는 `preview`의 숫자를 그대로 알린다. 표를 읽어 직접 더하거나 평균을 내지 않는다 (글자 열은 건수·고유값·많은 값).
-- `duplicates`는 `preview`의 묶음과 엑셀 행 번호를 그대로 알린다. 지우기는 사용자가 지울 행을 말한 뒤에만 (office-excel 행 지우기).
+- `duplicates`는 `preview`의 묶음과 엑셀 행 번호를 그대로 알린다. 지우기는 사용자가 지울 행을 말한 뒤에만 (excel-kit 행 지우기).
 - `warnings`가 있으면 함께 알린다. 0건이면 "찾은 항목 없음"이라고 알린다.
 - `error_type: not_supported`(도구에 없는 기능)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

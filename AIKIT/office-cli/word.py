@@ -312,7 +312,8 @@ def cmd_read(args) -> Dict[str, Any]:
     if args.save:
         import reader
         save_units = selected if filtered else units
-        out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(name)[0], ".md")
+        out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(name)[0], ".md",
+                                     near=source.get("path"))
         out = rt.write_text(out, md.document_markdown(
             [("heading", (u["level"], u["text"])) if u.get("level") else ("paragraph", u["text"]) for u in save_units]))
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
@@ -2201,7 +2202,7 @@ def cmd_export(args) -> Dict[str, Any]:
     with off.open_target("word", args.target, readonly=True) as t:
         if ext == ".pdf":
             off.require_pdf_export(t.app, ".docx")                # 기능이 없으면 사본을 만들기 전에 안내
-        out = rt.resolve_output_path(args.save, os.path.splitext(t.name)[0], ext)
+        out = rt.resolve_output_path(args.save, os.path.splitext(t.name)[0], ext, near=t.path)
         try:
             target_doc = t.doc
             if args.page_number or ext == ".docx":
@@ -2254,7 +2255,7 @@ def build_cli():
     p.add_argument("--paragraphs", help="이 단락만 읽기 (예: 120-140, 141-, 7). 번호는 read/outline의 단락 번호")
     p.add_argument("--section", help="이 제목의 장절만 읽기 (제목 글 일부, 예: \"1.1\", \"검증 방법\"). 하위 절 포함")
     p.add_argument("--occurrence", type=int, help="--section 제목이 여러 개일 때 몇 번째인지 (오류의 [후보] 번호)")
-    p.add_argument("--save", nargs="?", const=True, help="md 파일로 저장 (경로 생략 시 작업 폴더)")
+    p.add_argument("--save", nargs="?", const=True, help="md 파일로 저장 (경로 생략 시 대상 파일 옆, 없으면 C:\\AIKIT\\data)")
 
     p = sub.add_parser("outline", help="제목 구조(목차): 수준, 단락 번호, 쪽")
     common(p)
@@ -2340,7 +2341,7 @@ def build_cli():
 
     p = sub.add_parser("export", help="PDF/DOCX 사본 저장")
     common(p)
-    p.add_argument("--save", help="저장 경로 (.pdf 또는 .docx, 생략 시 작업 폴더에 PDF)")
+    p.add_argument("--save", help="저장 경로 (.pdf 또는 .docx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
     p.add_argument("--page-number", action="store_true", help="사본 아래쪽 가운데에 쪽 번호")
     return parser
 

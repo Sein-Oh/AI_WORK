@@ -455,9 +455,67 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
 보관본은 옛 `C:\CLI`와 통합 SKILL.md를 가리켜 그대로는 못 씀. 다시 쓸 때 `run.py`의 경로를 `C:\AIKIT`로, `build.py`가
 `C:\AIKIT\skills\<이름>`에 `run.py`를 더해 zip을 만들게 고침 (사용자 결정: 지금은 폴더 모양만 맞춤).
 
+### 3-14. PR #78 검토 (클라우드, PR #78 병합 뒤)
+- 시험: ml-kit 전체 `python -m pytest -q AIKIT/dev/ml-kit/tests` -> 1050 passed, 2 skipped (26분 42초, 리눅스). `-m report`는 기본 실행(pytest.ini가 report를 빼지 않음)에 이미 들어 있어
+  따로 돌리지 않음 (report 98건 포함). 공통 `AIKIT/dev/tests` 836 passed. office-cli 전체·test_skill_docs·test_contract는 집 PC에서 통과해 다시 돌리지 않음.
+- 남은 옛 이름 찾기 (`C:\CLI`, `CLI-dev`, `AIKIT/<도구>/skills`, `AIKIT/opencode`, `skills.paths`; archive·test_logs·history·CHANGELOG 지난 항목 제외):
+  남은 것은 모두 의도한 것 (옮기는 코드 `setup.py`·`run_all_tests.py` diag와 그 테스트, 옮기는 방법 안내 `docs/opencode/README.md`·`실기테스트.md`, HANDOFF 3-12 이력). 고칠 것 없음.
+- 사용자 스킬을 지우거나 덮어쓰는 경우 검토:
+  - 고침: 이전 구성의 도구 폴더 안 `skills`(`C:\AIKIT\ml-kit\skills`, `office-cli\skills`)를 폴더째 "우리 스킬"로 지웠음 (보관은 함).
+    사용자가 거기 둔 스킬도 함께 빠졌음. 이제 옛 전역 설정·`C:\AIKIT\opencode\skills`와 같이 하나씩 나눔: 우리 스킬 이름만 보관 후 지우고,
+    사용자 스킬은 `C:\AIKIT\skills`로 옮기고, 모르는 파일이 남으면 폴더는 그대로. 회귀 테스트 `test_setup.py::test_user_skill_in_old_tool_skills_folder_is_moved_not_deleted`.
+  - 그대로 둔 것 (안전함 확인): 옮길 곳에 같은 이름 사용자 스킬이 있으면 있던 것을 쓰고 옛 것은 보관만. 링크(정션)는 링크만 지움.
+    `--test-skill`은 `office-cli-test`만 덮어씀(보관 후). 이 이름은 `skill.py`의 `BASE_SKILLS`라 사용자가 만들 수 없음.
+    다시 배포(폴더 덮어쓰기)는 기본 스킬 11개 폴더만 바꾸고 사용자 스킬 폴더는 건드리지 않음.
+  - `skill.py`: 기본 스킬 이름은 save·delete 모두 거절, 있는 스킬은 `--overwrite`(사용자 확인) 없이 바꾸지 않음, delete는 `data\deleted_skills\`에 보관 후 지움.
+    `--project`는 있는 폴더만 받고(오타 경로에 `.opencode`를 만들지 않음) `<폴더>\.opencode\skills`에만 씀.
+
+### 3-15. 기본 스킬 이름 바꾸기 (office-cli 1.6.7)
+사용자 결정: office 계열은 `<앱>-kit` (ml 스킬은 그대로). `excel-kit`, `word-kit`, `ppt-kit`(office-doc을 나눔), `outlook-kit`, `search-kit`(옛 office-spec),
+`stats-kit`(옛 office-data). skill-maker(잠시 skill-kit)와 `skill.py`는 없앰 (사용자 결정: OpenCode 기본 기능과 겹침). 기본 스킬 11개. 회사·집 PC는 폴더를 덮어쓴 뒤 setup을 다시 실행하면 옛 이름 폴더를 보관 후 지움
+(안 하면 OpenCode가 옛 스킬도 함께 읽음). 사용자가 만든 스킬은 건드리지 않음. Gemma 실기에서 word-kit·ppt-kit으로 나눈 뒤 스킬 고르기가 맞는지 볼 것.
+
+### 3-16. 사용 가이드를 AIKIT\guide로
+사용자 결정: 사람용 사용 가이드(`ml-kit_사용가이드.html`, `office-cli_사용가이드.html`)를 `docs/guide`에서 `AIKIT/guide`로 옮겨 `C:\AIKIT\guide`에 함께 배포.
+회사 반입에서 .html이 통과하므로 반입 확장자 규칙에 `AIKIT/guide/`의 .html만 예외로 더함 (`test_repo_files.py`). 전역 지침 9장 위치 표에 가이드 경로
+(사용자가 사용법을 물으면 브라우저로 열어 보라고 알림). 반입 안내(`docs/opencode/README.md`, `실기테스트.md`)에 `guide`.
+
+### 3-17. Web UI 기본 프로젝트 폴더를 C:\AIKIT로
+사용자 결정: `web.bat`이 서비스를 `C:\AIKIT\work` 대신 `C:\AIKIT`에서 띄움 (처음 한 번 Web UI에서 프로젝트 열기로 `C:\AIKIT`). setup은 `work`를 만들지 않음.
+집 PC에서 확인할 것: `C:\AIKIT`이 설정 폴더이면서 프로젝트 폴더라 `C:\AIKIT\AGENTS.md`가 두 번 들어가는지 (세션의 시스템 지침 길이, 또는
+`AGENTS.md`에 시험용 한 줄을 넣고 답에 두 번 나오는지). 두 번 들어가면 다시 `work` 같은 아래 폴더로 되돌릴지 사용자에게 물을 것.
+이미 있는 PC의 `C:\AIKIT\work`는 그대로 두어도 됨 (지우지 않음).
+
+### 3-18. 결과 파일 위치 규칙 (전역 지침 2장, office-cli 1.6.7)
+사용자 결정: 경로를 주면 그대로, 아니면 파일을 대상으로 한 작업의 결과는 대상 파일과 같은 폴더, 대상 파일이 없으면 `C:\AIKIT\data`.
+office-cli `--save` 생략·이름만·상대 경로가 이 규칙을 따름 (전에는 `office-cli\data\_work`(7일 뒤 자동 삭제)와 `office-cli\data`). ml-kit은 원래
+데이터 파일 옆이라 그대로. 도구끼리 넘기는 중간 파일만 `_work`. 회사 PC에서 볼 것: 열린 문서(저장된 것)의 `read --save`·`export`가 문서 옆에 생기는지,
+`reader read --save`로 만든 .md가 등록한 폴더 안에 생겨 다음 폴더 검색 때 함께 등록되는지(되면 사용자에게 알리고 정할 것).
+
+### 3-19. skill-kit 없앰, 저장소 정리
+- skill-kit 스킬과 `skill.py` 삭제 (사용자 결정: OpenCode 기본 기능과 겹침). 기본 스킬 11개. setup이 남은 `skill-kit`·`skill-maker` 폴더를 보관 후 지움.
+- 불필요한 파일 삭제: `AIKIT/dev/FFT/`(이 저장소 도구와 관계없는 PySide6 GUI 스크립트 2개, 어디서도 쓰지 않음. git 이력에 남음),
+  `docs/HOME_PC_CHECK.md`(ml-kit 2.9.73·office-cli 1.4.82 때 집 PC 점검 안내, `실기테스트.md` 1장과 부록으로 대신함).
+
+### 3-20. setup의 옛 구성 정리 코드 없앰
+사용자 결정: 이미 배포한 PC를 위한 정리 코드는 두지 않고 필요한 파일은 사용자가 옮김. `setup.py`의 옛 전역 설정·이전 구성·옛 이름 스킬 폴더 정리와
+`opencode.jsonc` 옛 `"skills"` WARN, diag·K1의 옛 복사본 확인을 지움. 3-14·3-15·3-19에 적은 "setup이 옛 폴더를 정리함"은 이제 해당 없음:
+회사·집 PC는 `C:\AIKIT\skills`의 옛 이름 폴더(`office-excel`, `office-doc`, `office-mail`, `office-spec`, `office-data`, `skill-maker`, `skill-kit`)와
+`%USERPROFILE%\.config\opencode\skills`의 우리 스킬 복사본을 손으로 지울 것 (남으면 OpenCode가 옛 스킬도 읽음).
+
+### 3-21. ml-kit pytest 평소 분량 줄임
+사용자 결정: 날마다 몇 시간씩 걸리는 시험은 무리. ml-kit 전체(1052개)는 리눅스 26분·회사 PC 1시간 이상. 이미 고친 문제가 다시 생기는지 보는 무거운
+회귀 시험(report 표시, 읽기 배치 조합 파일 3개, `AIKIT/dev/ml-kit/tests/slow_tests.txt`의 142개 함수: 한 번에 2초 이상)은 평소에 빼고
+`AIKIT_FULL_TEST=1`일 때만 돎. 평소 546개 약 6분 (리눅스). 계약·안전·스킬 문서 시험은 늘 돎. office-cli(1분 40초)와
+공통 시험(50초)은 그대로.
+
+### 3-22. 회사·집 PC 점검에서 pytest 뺌
+사용자 결정: pytest는 클라우드에서만. `run_all_tests.py`의 `pytest` 단계와 옵션(`--pytest-timeout`, `--pytest-workers`, `--no-rerun`, `--full`),
+`pytest_live_report.py`를 지움. 기본 단계는 `diag,beta,office`(+ 선택 `ml`, `gemma`). Windows에서만 보이는 문제는 이 실제 환경 단계가 봄.
+pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규칙 그대로 (개발자가 Windows에서 직접 돌릴 수 있음).
+
 ### 지금 상태 (2026-11-11 밤)
-- 브랜치 `ccr-ecab210c-awib23`. main은 PR #77까지. 그 뒤 커밋(인터넷 금지 지침, 비교 거절 강화, skill.py·skill-maker, ml-kit 2.9.91·office-cli 1.6.4,
-  setup의 서비스 끄기, `C:\AIKIT\work`)은 PR 전. 사용자가 요청하면 PR.
+- PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.
 
 ## 3. 회사 PC에서 할 일

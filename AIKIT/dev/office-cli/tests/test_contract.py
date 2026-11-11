@@ -234,13 +234,30 @@ def test_save_with_lock_fallback_uses_new_name(tmp_path):
     assert saved != target and os.path.exists(saved) and calls[0] == target
 
 
-def test_resolve_output_path_rules():
+def test_resolve_output_path_rules(tmp_path, monkeypatch):
+    """1.6.7 전역 지침 8장: 경로를 주면 그대로, 이름만·상대 경로·생략은 대상 파일과 같은 폴더, 대상 파일이 없으면 C:\\AIKIT\\data.
+    도구끼리 넘기는 중간 파일(internal)만 작업 폴더(data/_work, 오래되면 지움)."""
+    result_dir = tmp_path / "AIKIT_data"
+    monkeypatch.setenv("OFFICE_CLI_RESULT_DIR", str(result_dir))
     auto = rt.resolve_output_path(None, "search", ".md")
-    assert os.path.dirname(auto) == rt.get_work_dir() and auto.endswith(".md")
+    assert os.path.dirname(auto) == str(result_dir) and auto.endswith(".md")
     named = rt.resolve_output_path("report.docx", "x", ".pdf")
-    assert named == os.path.join(rt.get_data_dir(), "report.pdf")
+    assert named == os.path.join(str(result_dir), "report.pdf")
     noext = rt.resolve_output_path("result", "x", "csv")
     assert noext.endswith("result.csv")
+    src = tmp_path / "보고 자료" / "보고서.docx"
+    src.parent.mkdir()
+    src.write_bytes(b"x")
+    near_auto = rt.resolve_output_path(None, "보고서", ".pdf", near=str(src))
+    assert os.path.dirname(near_auto) == str(src.parent) and os.path.basename(near_auto).startswith("보고서_")
+    assert rt.resolve_output_path("요약.md", "x", ".md", near=str(src)) == str(src.parent / "요약.md")
+    assert rt.resolve_output_path("sub\\요약.md" if os.name == "nt" else "sub/요약.md", "x", ".md", near=str(src)) == str(src.parent / "sub" / "요약.md")
+    full = tmp_path / "다른 곳" / "결과.csv"
+    assert rt.resolve_output_path(str(full), "x", ".csv", near=str(src)) == str(full)          # 경로를 주면 그대로
+    unsaved = rt.resolve_output_path(None, "문서1", ".pdf", near="문서1")                      # 저장한 적 없는 문서: 대상 파일 없음
+    assert os.path.dirname(unsaved) == str(result_dir)
+    mid = rt.resolve_output_path(None, "chart_export", ".png", near=str(src), internal=True)
+    assert os.path.dirname(mid) == rt.get_work_dir()
 
 
 def test_resolve_input_path_suggests(tmp_path):
@@ -680,7 +697,7 @@ def test_default_save_name_in_same_second_is_unique(monkeypatch):
 
 @pytest.mark.parametrize("stem", ["chart_1/4분기 매출_redraw", 'a?b*c:d"e<f>g|h\\i', "CON", "끝점. "])
 def test_default_stem_is_sanitized(stem):
-    path = rt.resolve_output_path(None, stem, ".png")
+    path = rt.resolve_output_path(None, stem, ".png", internal=True)
     assert os.path.dirname(path) == rt.get_work_dir()
     base = os.path.basename(path)
     assert not any(ch in base for ch in '/\\:*?"<>|') and not base.upper().startswith("CON_")

@@ -9,7 +9,7 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 | 도구 | 설명 | 스킬 |
 |---|---|---|
 | [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`AIKIT/skills/`](../skills/) (ml-train, ml-predict, ml-report, ml-map, ml-dataset) |
-| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`office-excel`](../skills/office-excel/SKILL.md), [`office-doc`](../skills/office-doc/SKILL.md), [`office-mail`](../skills/office-mail/SKILL.md), [`office-spec`](../skills/office-spec/SKILL.md), [`office-data`](../skills/office-data/SKILL.md) |
+| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`excel-kit`](../skills/excel-kit/SKILL.md), [`word-kit`](../skills/word-kit/SKILL.md), [`ppt-kit`](../skills/ppt-kit/SKILL.md), [`outlook-kit`](../skills/outlook-kit/SKILL.md), [`search-kit`](../skills/search-kit/SKILL.md), [`stats-kit`](../skills/stats-kit/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
 (소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\AIKIT\<tool>\`에 두고, OpenCode는 설정 폴더 `C:\AIKIT`의 `skills\<스킬 이름>\SKILL.md`를 그 자리에서 읽습니다 ([`docs/opencode/README.md`](../../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\AIKIT\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `AIKIT/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
@@ -27,13 +27,10 @@ python run_all_tests.py --label 회사PC --gemma    :: 끝에 Gemma 종합 테�
 python run_all_tests.py --only diag              :: 환경 진단과 도구 오류 로그만 (1분)
 ```
 
-- 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `pytest`(도구별 오프라인 테스트와 `AIKIT\dev\tests`)
-  -> `beta`(`run_beta_check.py --agent`, F7~F9 엑셀 재계산 포함: F8 파생변수, F9 글자 입력) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
+- 단계(이 순서): `diag`(Python, 라이브러리, 문서 보안(DRM)이 python-docx/pptx 템플릿과 새로 쓴 파일을 바꾸는지) -> `beta`(`run_beta_check.py --agent`, F7~F9 엑셀 재계산 포함: F8 파생변수, F9 글자 입력) -> `office`(office-cli 실기 러너, 실제 Office). 끝에 각 도구의 `data\logs\errors.txt`(실제 사용 중 오류)를 늘 붙입니다.
   `ml`(ml-kit 실기 러너)은 기본 단계가 아니며 `--only`에 넣을 때만. `--only`의 순서와 상관없이 위 순서로 실행합니다.
-- `pytest` 단계는 테스트 파일마다 따로 실행하고 동시에 `코어 수 - 1`개, 메모리 4GB마다 1개, 최대 3개씩 돌립니다(2026-11-10: 회사 PC에서 코어 수만큼 돌리자 메모리가 모자라 89분, 시간 초과 18건. 결과 표 비고에 동시 실행 수·코어·메모리) (`--pytest-workers N`, 1이면 하나씩.
-  2.9.85: 회사 PC에서 하나씩 돌리면 62분). 화면에는 파일이 끝날 때마다 한 줄과 실패(`[LIVE]`)만 나오고, 결과 파일 상세에는 파일마다의 출력이 들어갑니다.
-  실패한 시험은(파일마다 5건 이하) 끝난 뒤 혼자 한 번 다시 돌립니다: 통과하면 실패가 아니라 `참고 (WARN)`에 "처음에는 실패했지만 혼자 다시 돌려 통과"로 남기고,
-  다시 실패한 것만 실패로 셉니다 (PC 쪽 작업과 겹친 시간 초과가 실행마다 달랐음, 2026-11-11). 끄려면 `--no-rerun`.
+- pytest(오프라인 테스트)는 이 러너에 없습니다. 클라우드에서만 돌립니다 (2026-11-12 사용자 결정: 회사·집 PC에서 날마다 몇 시간씩은 무리.
+  가짜 Office로 보는 시험이라 Windows에서도 결과가 같아야 하고, Windows에서만 보이는 것은 아래 실제 환경 단계가 봅니다).
 - `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.py`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\AIKIT\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
   시험 폴더(기본 `C:\AIKIT\dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\AIKIT\dev\work\gemma_runs_<시각>`에 남깁니다.
@@ -46,9 +43,6 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   요청별로 답한 모델은 기록 폴더 `models.json`, 실행 기록의 "요청별 모델", 채점 보고서 머리에 남음.
   합격 기준은 Gemma 4 26B 결과 (`docs/opencode/실기테스트.md` 3장).
   시나리오에 `manual`(사람이 준비할 것)이 있는 요청(O3, Outlook 메일)은 보내지 않고 건너뜀 "수동 전용"으로 남깁니다.
-- `pytest` 단계: 도구 하나의 시간 상한은 `--pytest-timeout`(기본 7200초, 회사 PC에서 ml-kit이 3600초를 넘음). 플러그인 `pytest_live_report.py`(`-p`)가
-  실패·오류를 생기는 즉시 `[LIVE] FAILED <id> - <원인>` 줄로 내보내므로, 시간 상한에 끊겨도 그때까지의 실패 이름과 짧은 원인이 결과 파일 실패 목록에 남고
-  시간 초과는 따로 FAIL 한 줄로 적힙니다.
 - `diag` 등급: 라이브러리 기본 템플릿 손상은 도구가 그 템플릿을 쓸 때만 FAIL. python-pptx 기본 템플릿은 어느 도구도 쓰지 않아 참고(WARN),
   python-docx 기본 템플릿은 ml-kit 보고서(`ml_report.new_report_document`, 폴더 템플릿으로 복구)가 빈 문서를 실제로 만들 수 있으면 참고, 못 만들면 FAIL.
   참고(WARN)는 결과 파일 맨 위 "참고" 목록에 나오고 실패로 세지 않습니다. 오프라인 테스트의 샘플 문서는 기본 템플릿 없이도 만듭니다
@@ -56,7 +50,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 - `--ask`: office 러너의 눈 확인 질문(y/n)에 답하며 진행 (기본은 질문 없이 자동 판정 항목만, 질문 항목은 MANUAL-SKIP).
 - Windows + pywin32가 아니면 `ml`, `office`는 ENV-SKIP (클라우드에서도 나머지는 그대로 돎).
 - 결과: `C:\AIKIT\dev\result_<라벨>_<시각>.md` 하나. 맨 위 요약 표(단계별 PASS/FAIL/SKIP, 시간, 비고)와 실패·건너뜀(ENV-SKIP)·UNVERIFIED 목록, 그 아래 단계별 상세
-  (pytest 출력, 베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
+  (베타 점검 보고서, 실기 러너의 errors/report 파일), 맨 끝에 도구 오류 로그. 단계가 끝날 때마다 다시 쓰므로 Ctrl+C로 끊어도 남습니다.
   베타 점검이 만든 `beta_check_*.md/.xlsx`는 내용을 결과 파일에 넣고 시험 폴더(`C:\AIKIT\dev\work\beta_<시각>`)로 옮기며, 점검이 일부러 낸 도구 오류는 그 폴더의 `_data`에 기록합니다(실제 오류 로그와 섞이지 않음).
 - 종료 코드: 0 = 실패 없음, 1 = FAIL인 단계가 있음, 130 = Ctrl+C. 결과 파일은 GitHub 웹에서 `docs/test_logs/`에 업로드합니다(회사 정보가 있어 프로젝트 마무리 때 이력에서 정리).
 - 시험 폴더는 모두 `C:\AIKIT\dev\work\` 아래입니다 (`beta_<시각>`, `office`, `ml 테스트`, `gemma`, `gemma_runs_<시각>`, 눈 확인용 `눈확인`). git에는 올리지 않으며, 반입 때 `C:\AIKIT\dev`를 통째로 지우면 함께 사라집니다.
@@ -67,9 +61,9 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 | 파일 | 하는 일 |
 |---|---|
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
-| `run_simplify_check.py` | 사용법 단순화(ml-kit 2.9.71, office-cli 1.4.79) 실기 점검 (사람이 실행, Gemma 없이). 틀린 명령을 일부러 실행하고 도구가 준 `[추천]` 전체 명령이나 `[후보]` 번호의 `confirm_commands`를 PowerShell 5.1(리눅스는 bash)에 그대로 넣어 성공하는지, 설정 폴더의 ml-kit 스킬 4개 배치. 닫힌 Office 파일 쓰기 항목은 Windows + Office에서만. 결과 `result_simplify_<라벨>_<시각>.md` (안내 `docs/HOME_PC_CHECK.md`) |
+| `run_simplify_check.py` | 사용법 단순화(ml-kit 2.9.71, office-cli 1.4.79) 실기 점검 (사람이 실행, Gemma 없이). 틀린 명령을 일부러 실행하고 도구가 준 `[추천]` 전체 명령이나 `[후보]` 번호의 `confirm_commands`를 PowerShell 5.1(리눅스는 bash)에 그대로 넣어 성공하는지, 설정 폴더의 기본 스킬 11개 배치. 닫힌 Office 파일 쓰기 항목은 Windows + Office에서만. 결과 `result_simplify_<라벨>_<시각>.md` |
 | `agent_scenarios.py` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본. 데이터만 담은 파이썬 모듈(상수 `SCENARIOS`, 정규식은 raw 문자열): 회사 반입 시스템이 .yaml을 막아 2026-11-05에 `agent_scenarios.yaml`에서 옮김. 없으면 채점 테스트는 "반입 누락"으로 건너뛰고 gemma 단계는 ENV-SKIP. ml-kit 묶음(S0 샘플, A/M/P/R/X)과 office-cli 묶음(S1 샘플 `office-cli/tools/make_office_samples.py`, O1~O5: 규격 대조, 여러 칸 쓰기, 메일 첨부 읽기(수동 전용), 워드 문단 덧붙이기, 양식 채우기). 판정은 스킬 이름이 아니라 실행한 명령으로 하고, 회사 PC 오류 로그에서 나온 지어낸 office-cli 옵션은 공통 규칙 `no_fake_office`로 모든 요청에서 실패 |
-| `../setup.py` (`setup.bat`) | 배포 설치 (`C:\AIKIT`에 있음, 사람이 실행). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`(HKCU, 원래 값 보관, 다시 읽어 확인)로 OpenCode가 `C:\AIKIT\AGENTS.md`와 `C:\AIKIT\skills`를 설정 파일·복사 없이 읽게 함. 이전 구성(`C:\AIKIT\opencode`, 도구 폴더 안의 `skills`)도 정리. 옛 전역 설정 폴더(`%USERPROFILE%\.config\opencode`)의 우리 스킬·`AGENTS.md`는 보관 후 지우고(링크·정션이면 링크만), 사용자 스킬은 `C:\AIKIT\skills`, `opencode.jsonc`는 `C:\AIKIT`으로 옮김. 시스템 PATH(HKLM)에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가(`winreg`, 형식 유지, 원래 값 보관, `WM_SETTINGCHANGE`), 동작 확인(라이브러리 import, 도구 `-h` 1줄 JSON, `opencode.exe`, rg, `opencode debug paths`의 config). `--check`(바꾸지 않고 확인만, 다르면 exit 1), `--no-path`, 개발용 `--test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`(`C:\AIKIT\skills`에 둠). `run_all_tests.py`의 diag가 PATH·환경 변수·옛 복사본을 읽기만 해서 확인하고 다르면 FAIL |
+| `../setup.py` (`setup.bat`) | 배포 설치 (`C:\AIKIT`에 있음, 사람이 실행). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`(HKCU, 원래 값 보관, 다시 읽어 확인)로 OpenCode가 `C:\AIKIT\AGENTS.md`와 `C:\AIKIT\skills`를 설정 파일·복사 없이 읽게 함. 시스템 PATH(HKLM)에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가(`winreg`, 형식 유지, 원래 값 보관, `WM_SETTINGCHANGE`), 동작 확인(라이브러리 import, 도구 `-h` 1줄 JSON, `opencode.exe`, rg, `opencode debug paths`의 config). `--check`(바꾸지 않고 확인만, 다르면 exit 1), `--no-path`, 개발용 `--test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`(`C:\AIKIT\skills`에 둠). `run_all_tests.py`의 diag가 PATH·환경 변수를 읽기만 해서 확인하고 다르면 FAIL |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 `agent_scenarios.py`로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. 시나리오에 `answer_reference: true`인 것(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
 진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
@@ -80,7 +74,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 AIKIT/<tool>/              # 사내 PC C:\AIKIT\<tool>로 그대로 복사
 └── *.py                # CLI 진입점과 공통 런타임 (예: excel.py, _runtime.py. 실행에 필요한 파일만, 폴더째 복사해도 단독 실행 가능)
 
-AIKIT/skills/<스킬 이름>/   # 작업별 스킬 (폴더 하나 = 스킬 하나, 예: AIKIT/skills/office-excel/). OpenCode가 설정 파일 없이 읽음
+AIKIT/skills/<스킬 이름>/   # 작업별 스킬 (폴더 하나 = 스킬 하나, 예: AIKIT/skills/excel-kit/). OpenCode가 설정 파일 없이 읽음
 └── SKILL.md             # frontmatter: name(=폴더명), description(1024자 이하), license, compatibility, metadata
                          # 명령은 도구의 전체 경로 (python "C:\AIKIT\<tool>\<파일>.py" ...)
 

@@ -2458,7 +2458,7 @@ def cmd_read(args) -> Dict[str, Any]:
     if args.save:
         ext = _save_ext(args.save)
         save_arg = None if args.save is True else args.save
-        out = rt.resolve_output_path(save_arg, os.path.splitext(name)[0], ext)
+        out = rt.resolve_output_path(save_arg, os.path.splitext(name)[0], ext, near=path)
         header = ["위치", "쪽", "장절", "번호", "제목", "내용"]
         rows = [[u["loc"], u.get("page") if u.get("page") is not None else "", section_text(u), u.get("number") or "",
                  u.get("heading", ""), u["text"]] for u in selected]
@@ -4333,7 +4333,8 @@ def cmd_search(args) -> Dict[str, Any]:
         stem = "search_" + re.sub(r"[^\w가-힣]+", "_", args.query)[:30].strip("_")
         ext = _save_ext(args.save)
         save_arg = None if args.save is True else args.save
-        out = rt.resolve_output_path(save_arg, stem, ext)
+        # 파일 하나를 찾았으면 그 파일 옆, 폴더·캐시 전체면 C:\\AIKIT\\data (폴더에 두면 다음 검색 때 결과 파일이 등록됨)
+        out = rt.resolve_output_path(save_arg, stem, ext, near=args.file if args.file and os.path.isfile(str(args.file)) else None)
         saved = hits[:MAX_SAVE_HITS]
         cut_cells = 0
         clamped_context = 0
@@ -5306,7 +5307,7 @@ def build_cli():
     p.add_argument("--units", help="항목(단위) 번호로 고르기. 예: 57-120 (이어 읽기 명령이 씀)")
     p.add_argument("--section", help="장절 경로 일부가 맞는 단위만 읽기 (대소문자 무시, search --section과 같음)")
     p.add_argument("--format", choices=["text", "summary"], default="text", help="text: 본문, summary: 요약 정보만")
-    p.add_argument("--save", nargs="?", const=True, help="결과를 파일로 저장 (.md 기본, .csv/.xlsx 가능). 경로 생략 시 작업 폴더")
+    p.add_argument("--save", nargs="?", const=True, help="결과를 파일로 저장 (.md 기본, .csv/.xlsx 가능). 경로 생략 시 대상 파일 옆, 없으면 C:\\AIKIT\\data")
 
     o = sub.add_parser("outline", help="문서의 장절(제목) 목록: 제목마다 units·page·level (큰 문서에서 필요한 장절만 읽기)")
     o.add_argument("--file", required=True, help="문서 경로")

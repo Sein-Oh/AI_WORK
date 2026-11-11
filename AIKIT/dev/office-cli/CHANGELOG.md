@@ -11,6 +11,37 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.6.7] - 2026-11-12
+
+기본 스킬 이름을 앱 이름 + `-kit`으로 (사용자 요청: 직관적인 이름. ml 스킬은 그대로).
+
+### 구조: 스킬 이름 바꾸기와 office-doc 나누기
+- `office-excel` -> `excel-kit`, `office-mail` -> `outlook-kit`, `office-spec` -> `search-kit`, `office-data` -> `stats-kit`.
+- `skill-maker` 스킬과 `skill.py`(사용자 스킬 등록·점검)를 없앰 (사용자 결정: OpenCode 기본 기능과 겹침). 테스트 `test_skill_tool.py`, 가이드 8-B장도 뺌.
+  사용자가 만든 스킬은 그대로 `C:\AIKIT\skills\<이름>`에서 읽힘.
+- `office-doc`을 `word-kit`(word.py, 엑셀 차트·표를 워드로, 워드를 PPT·엑셀로)과 `ppt-kit`(ppt.py, 엑셀 차트·표를 PPT로, 워드<->PPT, PPT를 엑셀로)으로
+  나눔. 앱 이름과 스킬 이름이 맞고, 8KB 한도에 닿던 크기(7768바이트)가 6202·5432바이트로 줄어 자리가 생김. 되돌리기·창은 둘 다에.
+- 기본 스킬 11개 그대로 (office-doc을 둘로 나누고 skill-maker를 뺌). `SKILL_OF_TOOL`: word -> word-kit, ppt -> ppt-kit, office(transfer·undo·focus) -> word-kit.
+- 전역 지침 3장 표·9장, 저장소 AGENTS.md·README, `.gitignore` 기본 스킬 줄, 사용 가이드, 실기 러너·채점·K1 검사의 스킬 이름.
+- 테스트: `test_skill_docs`의 스킬별 기능 목록을 word-kit·ppt-kit으로 나눔.
+
+### 구조: setup의 옛 구성 정리 코드 없앰 (사용자 결정: 필요한 파일은 손으로 옮김)
+- `setup.py`에서 옛 전역 설정(`%USERPROFILE%\.config\opencode`)·이전 구성(`C:\AIKIT\opencode`, 도구 폴더 안 `skills`)·옛 이름 스킬 폴더
+  정리(`step_old_global`, `step_old_layout`, `RETIRED_SKILLS` 등)와 `opencode.jsonc`의 옛 `"skills"` WARN을 없앰. 단계는 1 설정 폴더, 2 PATH, 3 동작 확인.
+  `run_all_tests.py` diag와 `run_simplify_check.py` K1의 옛 복사본 확인도 뺌. 관련 테스트 정리.
+
+### 기능: 결과 파일은 대상 파일 옆, 대상 파일이 없으면 C:\AIKIT\data (사용자 결정)
+- 전역 지침 2장 "결과 파일 위치": 경로를 주면 그대로, 아니면 파일을 대상으로 한 작업은 대상 파일과 같은 폴더, 대상 파일이 없는 작업은 `C:\AIKIT\data`.
+- `resolve_output_path(near=, internal=)`: `--save` 생략·이름만·상대 경로가 `output_folder(near)` 기준 (전에는 생략이면 `office-cli\data\_work`(7일 뒤 지움),
+  이름만이면 `office-cli\data`). 대상 파일 = 닫힌 파일 경로 또는 열린 문서의 저장 위치(저장한 적 없는 문서는 없음). `reader search`는 `--file`이 파일일 때만
+  그 옆(폴더·캐시 전체 검색 결과를 폴더에 두면 다음 검색 때 등록되므로). 도구끼리 넘기는 중간 파일(transfer 그림, 대조 메모 CSV)만 `_work`.
+- `get_result_dir()`: `OFFICE_CLI_RESULT_DIR` > `config.json result_dir` > `<설치 폴더>\data`. 테스트 `test_resolve_output_path_rules`,
+  `test_save_without_path_goes_next_to_the_source_file`.
+
+### 구조: Web UI의 기본 프로젝트 폴더 = C:\AIKIT
+- `web.bat`이 서비스를 `C:\AIKIT\work` 대신 `C:\AIKIT`(설정 폴더와 같은 곳)에서 띄우고 처음 열 폴더로 안내 (사용자 결정). `setup.py`는 `work`를 만들지 않음.
+  README·가이드·반입 안내 고침. 테스트 `test_web_bat_is_ascii_crlf_and_opens_the_aikit_folder`.
+
 ## [1.6.6] - 2026-11-12
 
 설정 파일 없는 폴더 구성 (사용자 요청: 잘 모르는 팀원도 익히게, 루트는 `C:\AIKIT`). 집 PC OpenCode 2.2.5에서 확인 (HANDOFF 3-13).
@@ -22,6 +53,8 @@
 - `setup.py`: `OPENCODE_CONFIG_DIR=<설치 폴더>`. 이전 구성(`C:\AIKIT\opencode`, 도구 폴더 안의 `skills`)에서 `opencode.jsonc`와 사용자 스킬은
   맨 위로 옮기고 나머지는 보관 후 지움(`old_layout\`), 옛 전역 설정의 사용자 스킬은 `C:\AIKIT\skills`로. `opencode.jsonc`에 옛 `"skills"`가 남으면 WARN.
   `web.bat`도 설치 폴더를 `OPENCODE_CONFIG_DIR`로. `run_all_tests.py` diag는 이전 구성이 남으면 FAIL.
+- PR #78 검토: 도구 폴더 안의 옛 `skills`를 폴더째 지우지 않고 하나씩 나눔(우리 스킬 이름만 보관 후 지움, 사용자가 둔 스킬은 `C:\AIKIT\skills`로,
+  모르는 파일이 남으면 폴더 그대로). 회귀 테스트 `test_user_skill_in_old_tool_skills_folder_is_moved_not_deleted`.
 - 도구가 알려 주는 스킬 파일 위치(`skill_file`)도 `<설치 폴더>\skills\<이름>\SKILL.md`.
 - `.gitignore`: `AIKIT/skills/*`에서 기본 스킬 11개만 저장소에 (나머지는 사용자 스킬), `AIKIT/opencode.jsonc`, `AIKIT/service.json`.
 
