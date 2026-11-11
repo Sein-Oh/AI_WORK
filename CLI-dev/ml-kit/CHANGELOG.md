@@ -12,6 +12,21 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.90] - 2026-11-11
+
+회사 PC 실기(2026-11-11) 조치.
+
+### 수정
+- 시간 제한 감시의 시계가 Windows에서 프로세스 시작이 아니라 import 뒤부터 재던 것: `_process_age`의 `GetProcessTimes`에 넘긴 핸들이
+  64비트에서 ctypes 기본 인자(c_int)에 맞지 않아 늘 0.0을 돌려줌 (`test_time_limit_clock_starts_with_the_process` 실패). `HANDLE(-1)`로.
+  에이전트 120초 안에 1줄 JSON을 내는 여유가 import 시간만큼 줄어 있었음.
+
+### 테스트
+- `mlkit_helpers.run_bounded`: 도구 실행이 600초를 넘으면 자식의 자식까지 끄고(`taskkill /T`) 출력 읽기를 15초만 더 기다림
+  (PC가 느려진 시간대에 시험 하나가 600초 상한인데 47분 걸림: 끈 뒤 출력 파이프가 닫히기를 끝없이 기다림).
+- `run_all_tests.py`: pytest 단계에서 실패한 시험(파일마다 5건 이하)을 혼자 한 번 다시 돌림. 통과하면 실패가 아니라 참고(WARN)로 남기고,
+  다시 실패한 것만 실패로 셈 (PC 쪽 작업과 겹친 시간 초과가 실행마다 달랐음). `--no-rerun`으로 끔.
+
 ## [2.9.89] - 2026-11-10
 
 검토 결정(`docs/history/ml-kit_DECISIONS_2026-11-10.md`) "전부 추천대로" 구현. 하지 않은 것: 2-4(맵 `--points` 글자 기준 열), 2-5(괄호 음수),

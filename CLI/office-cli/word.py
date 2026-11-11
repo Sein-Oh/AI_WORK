@@ -681,6 +681,9 @@ def _comment_reply_delete(args) -> Dict[str, Any]:
             if args.dry_run:
                 return rt.dry_run_result(TOOL, "comment", f"미리보기: {desc}을(를) 지웁니다 (바꾸지 않음)", 1 + len(replies), [desc],
                                          rt.dry_run_command(TOOL, f"{desc} 지우기"), target_resolved=t.resolved(), **info)
+            # 실제 Word의 Comment.Delete는 그 메모만 지우고 답글은 남김 (회사 PC 2026-11-11 N10): 답글을 뒤 번호부터 먼저 지움
+            for i in sorted(replies, reverse=True):
+                doc.Comments(i).Delete()
             c.Delete()
             left = int(doc.Comments.Count)
             t.set_focus()

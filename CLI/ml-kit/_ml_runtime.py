@@ -49,8 +49,10 @@ def _process_age() -> float:
             k32 = ctypes.windll.kernel32
             times = [wintypes.FILETIME() for _ in range(4)]
             now = wintypes.FILETIME()
-            k32.GetCurrentProcess.restype = wintypes.HANDLE
-            if not k32.GetProcessTimes(k32.GetCurrentProcess(), *(ctypes.byref(t) for t in times)):
+            # HANDLE(-1) = this process (pseudo handle). A bare Python int from GetCurrentProcess() does not fit ctypes'
+            # default c_int argument on 64-bit (OverflowError -> 0.0: the watchdog then counted from the import, company
+            # PC 2026-11-11 test_time_limit_clock_starts_with_the_process).
+            if not k32.GetProcessTimes(wintypes.HANDLE(-1), *(ctypes.byref(t) for t in times)):
                 return 0.0
             k32.GetSystemTimeAsFileTime(ctypes.byref(now))
 
@@ -86,7 +88,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.89"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.90"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)

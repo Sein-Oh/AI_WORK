@@ -2313,3 +2313,29 @@ def test_c10_undo_of_open_document_keeps_disk_file_and_says_so(tmp_path, monkeyp
     assert code == 0 and out["restored_as"] == "reopened_in_office", out
     assert open(out["pre_undo_disk_backup"], "rb").read() == b"disk-version" and "디스크" in out["preview"], out
     assert orig.read_bytes() == b"snapshot-of-a.xlsx" and opened, out
+
+
+def test_active_document_in_protected_view_is_not_written(monkeypatch):
+    """회사 PC 2026-11-11 L11: 제한된 보기 창이 맨 앞이면 엑셀이 ActiveWorkbook으로 그 문서를 줌 -> '시트 보호' 오류 대신 [편집 사용] 안내.
+    제한된 보기 창이 뒤에 있고 활성 문서가 다른 문서이면 평소처럼 씀."""
+    class Doc:
+        def __init__(self, name):
+            self.Name, self.FullName = name, "C:\\w\\" + name
+
+    class App:
+        pass
+    pv_doc, normal = Doc("받은파일.xlsx"), Doc("A.xlsx")
+    app = App()
+    app.ActiveWorkbook = pv_doc
+    app.ActiveProtectedViewWindow = type("PV", (), {"Workbook": pv_doc})()
+    monkeypatch.setattr(off, "find_apps", lambda kind: [app])
+    assert off.get_active("excel").get("fallback") is True
+    with pytest.raises(rt.UserDecisionError) as ei:
+        off.resolve_target("excel", "active", readonly=False)
+    assert "편집 사용" in str(ei.value)
+    assert off.resolve_target("excel", "active", readonly=True)["doc"] is pv_doc       # 읽기는 그대로
+    app.ActiveWorkbook = normal
+    assert "fallback" not in off.get_active("excel")
+    assert off.resolve_target("excel", "active", readonly=False)["doc"] is normal
+    app.ActiveProtectedViewWindow = None
+    assert "fallback" not in off.get_active("excel")

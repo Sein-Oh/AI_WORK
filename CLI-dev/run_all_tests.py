@@ -611,12 +611,34 @@ def parse_live(out):
     return found
 
 
+def nodeid(line):
+    """'FAILED tests/test_a.py::test_x[p] - 원인' -> 'tests/test_a.py::test_x[p]'."""
+    rest = line.split(" ", 1)[1] if " " in line else line
+    return re.sub(r" \((setup|teardown)\)$", "", rest.split(" - ")[0].strip())
+
+
+RERUN_MAX = 5             # 파일 하나에서 실패가 이 수 이하일 때만 다시 돌림 (많으면 환경 탓이 아니라 결함)
+
+
+def rerun_failed(folder, fails, timeout, env):
+    """실패한 시험만 혼자(다른 시험 파일과 겹치지 않게) 한 번 다시 돌림 -> (아직 실패인 줄 목록, 출력).
+    회사 PC 2026-11-10·11: PC 쪽 작업(파일 정리)과 겹친 시간대에 프로세스를 띄우는 시험이 시간 초과로 실패하고, 같은 시험이 그 뒤에는
+    통과함. 두 번 다 실패한 것만 실패로 세고, 다시 돌려 통과한 것은 참고(WARN)로 남김. 결함이면 다시 돌려도 실패함."""
+    ids = []
+    for f in fails:
+        if nodeid(f) not in ids:
+            ids.append(nodeid(f))
+    code, out, sec, stop = run_capture([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfEs", *ids],
+                                       folder, timeout, env_extra=env, show=lambda line: False)
+    again = parse_pytest(out)[3]
+    if code == 0 and not again:
+        return [], out
+    left = [f for f in fails if any(nodeid(f) == nodeid(a) for a in again)]
+    return (left or list(fails)), out                 # 다시 돌린 결과를 못 읽었으면(시간 초과 등) 처음 실패 그대로
+
+
 def merge_live(fails, live):
     """-rfE 요약(끝까지 돈 경우)에 없는 실시간 실패를 덧붙임. 시간 초과로 끊기면 요약이 없으므로 실시간 줄이 전부."""
-    def nodeid(line):
-        rest = line.split(" ", 1)[1] if " " in line else line
-        return re.sub(r" \((setup|teardown)\)$", "", rest.split(" - ")[0].strip())
-
     out = list(fails)
     have = {nodeid(f) for f in out}
     for item in live:
@@ -789,6 +811,17 @@ def step_pytest(stage, args, ctx):
             npass, nfail, nskip, fails, skips = parse_pytest(out)
             fails = merge_live(fails, parse_live(out))
             timed_out = TIMEOUT_MARK in (out.rstrip().splitlines() or [""])[-1]
+            if fails and len(fails) <= RERUN_MAX and not getattr(args, "no_rerun", False):
+                say(f"  {tool}/{rel}: 실패 {len(fails)}건을 혼자 다시 돌림")
+                left, again_out = rerun_failed(job[1], fails, args.pytest_timeout, env)
+                healed = [f for f in fails if f not in left]
+                for f in healed:
+                    stage.warnings.append(f"{tool}: 처음에는 실패했지만 혼자 다시 돌려 통과 (다른 시험·PC 쪽 작업과 겹친 탓일 수 있음): "
+                                          f"{nodeid(f)} - 처음 원인: {f.split(' - ', 1)[-1][:120]}")
+                out += f"\n\n[실패한 시험만 다시 돌림: {len(healed)}건 통과, {len(left)}건 다시 실패]\n{again_out}"
+                npass += len(healed)
+                nfail = max(nfail - len(healed), 0)
+                fails = left
             stage.passed += npass
             stage.skipped += nskip
             stage.failures += [f"{tool}: {x[:200]}" for x in fails]
@@ -1311,6 +1344,8 @@ def main(argv=None):
     p.add_argument("--timeout", type=int, default=3600, help="단계별 시간 상한(초, 기본 3600)")
     p.add_argument("--pytest-timeout", type=int, default=7200,
                    help="pytest 단계에서 테스트 파일 하나의 시간 상한(초, 기본 7200)")
+    p.add_argument("--no-rerun", action="store_true",
+                   help="pytest 단계에서 실패한 시험을 혼자 다시 돌리지 않음 (기본: 파일마다 실패 5건 이하이면 한 번 다시 돌려, 통과하면 참고로 남김)")
     p.add_argument("--pytest-workers", type=int, default=0,
                    help="pytest 단계에서 동시에 돌릴 테스트 파일 수 (기본 0: 코어 수 - 1, 메모리 4GB마다 1개, 최대 3. 1이면 하나씩)")
     args = p.parse_args(argv)

@@ -306,7 +306,10 @@ class FakeComment:
         return _Replies()
 
     def Delete(self):
-        """실제 Word처럼: 메모를 지우면 그 답글도 지워짐."""
+        """실제 Word처럼: 그 메모 하나만 지움, 답글은 남음 (회사 PC 2026-11-11 N10: 메모 3 -> 2). 답글까지는 DeleteRecursively."""
+        self.coll.items = [c for c in self.coll.items if c is not self]
+
+    def DeleteRecursively(self):
         self.coll.items = [c for c in self.coll.items if c is not self and c.Ancestor is not self]
 
 

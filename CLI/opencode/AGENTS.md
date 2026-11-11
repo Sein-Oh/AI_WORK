@@ -119,3 +119,17 @@
    - 스크립트 하나에서 문서를 1번 잡고(`win32com.client.GetActiveObject("Excel.Application")` 등) 할 일을 모두 한다. 칸·행·슬라이드마다 스크립트나 명령을 따로 실행하지 않는다.
    - 범위 값은 2차원 배열로 한 번에 읽고 쓴다 (`v = rng.Value`, `rng.Value = rows`). 반복문 안에서 칸 하나씩 COM을 부르지 않는다 (칸마다 부르면 수백 배 느리다).
    - 사용자가 연 Office를 닫지(`Quit`) 않고, 사용자 문서를 저장하는 것은 5장대로 먼저 묻는다.
+
+## 9. 지침과 스킬 파일 위치 (물어보면 아래를 그대로 알린다)
+사용자가 "지침 어디 있어", "스킬 경로 알려줘"처럼 물으면 파일을 찾거나 열어 보지 말고 아래 표를 그대로 알린다. `%USERPROFILE%`은 `C:\Users\<사용자 이름>` 폴더다.
+
+| 무엇 | OpenCode가 읽는 파일 | 원본 (고칠 때는 이것) |
+|---|---|---|
+| 전역 지침 (이 파일) | `%USERPROFILE%\.config\opencode\AGENTS.md` | `C:\CLI\opencode\AGENTS.md` |
+| office-cli 스킬 (office-excel, office-doc, office-mail, office-spec, office-data) | `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md` | `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` |
+| ml-kit 스킬 (ml-train, ml-dataset, ml-predict, ml-report, ml-map) | `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md` | `C:\CLI\ml-kit\skills\<스킬 이름>\SKILL.md` |
+| 사내 LLM 연결 설정 | `%USERPROFILE%\.config\opencode\opencode.jsonc` | `C:\CLI\opencode\opencode.jsonc` |
+| 도구 오류 기록 | `C:\CLI\office-cli\data\logs\errors.txt`, `C:\CLI\ml-kit\data\logs\errors.txt` | (도구가 실패할 때 저절로 덧붙임) |
+
+- 원본을 고친 뒤 `C:\CLI\setup.bat`을 실행하면 OpenCode 설정 폴더로 복사되고(바뀐 파일만, 덮어쓰기 전 `C:\CLI\data\setup_backup_<시각>`에 보관), OpenCode를 다시 시작하면 반영된다. 설정 폴더의 파일을 직접 고치면 다음 setup 때 원본으로 바뀐다.
+- 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).

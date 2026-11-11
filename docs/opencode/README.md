@@ -33,16 +33,31 @@ office-cli 1.4.61까지 쓰던 통합 스킬 폴더 `skills\office-cli\`는 `set
 ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: `C:\CLI\python`)에 두고,
 PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시 시작합니다. 그 전까지는 전역 AGENTS.md 3장 3번대로 SKILL.md를 직접 읽게 됩니다.
 
-**opencode.jsonc에서 확인할 것** (`setup.py`가 동작 확인 끝에 WARN으로 알림, 고치지는 않음). 집 PC opencode 시험(2026-11-07)에서 셋 다 결과를 흐렸습니다.
+**opencode.jsonc에서 확인할 것** (`setup.py`가 동작 확인 끝에 WARN으로 알림, 고치지는 않음). 집 PC opencode 시험(2026-11-07)에서 앞의 셋이 결과를 흐렸습니다.
 - `"shell"`: 쓴다면 `"powershell"`. `"cmd"`면 스킬·전역 지침의 PowerShell 명령(인코딩 줄, 작은따옴표)이 맞지 않습니다.
 - `"instructions"`: 비워 둡니다. 전역 지침 `AGENTS.md`는 설정 폴더에서 따로 읽히고, 여기에 옛 지침을 넣으면 지금 없는 명령을 씁니다.
 - `"permission": {"external_directory": "allow"}`: opencode 1.19.5 `run`은 작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈췄습니다 (회사 PC 2.2.5는 확인 전).
-- 집 PC 설정 예 (모델 주소·키는 PC마다 다름, 키는 파일에 적지 말고 opencode 로그인·환경 변수로):
+- `"enabled_providers"`: 폐쇄망에서 쓸 수 없는 기본 모델(opencode Zen 무료 모델, models.dev 목록의 인터넷 모델)이 `opencode models`와
+  모델 선택에 나오지 않게, 사내 LLM provider 이름만 적습니다 (`"provider"` 블록의 이름, `"model"`의 `/` 앞). 적은 provider만 남고 나머지는 모두 숨겨집니다.
+  특정 provider만 숨기려면 `"disabled_providers": ["opencode"]`(둘 다 있으면 숨기기가 이김). opencode 2.2.7 소스로 확인(`config/normalize.ts`: 모두 막고 적은 것만 허용).
+  이름이 틀리면 사내 LLM도 숨겨지므로 `setup.py`가 `"provider"`·`"model"`과 맞는지 함께 봅니다.
+- `"autoupdate": false`: 폐쇄망에서는 업데이트를 받을 수 없으니 확인을 시도하지 않게 합니다. 원격 모델 목록 받기도 끄려면 환경 변수
+  `OPENCODE_DISABLE_MODELS_FETCH=1`(설정 파일 키는 없음, `enabled_providers`만으로도 목록에는 나오지 않음).
+- 사내 PC 설정 예 (provider 이름·주소·모델은 PC마다 다름, 키는 파일에 적지 말고 opencode 로그인·환경 변수로):
   ```jsonc
   {
-    "model": "openrouter/google/gemma-4-26b-a4b-it",
+    "model": "corp/gemma",
+    "enabled_providers": ["corp"],
+    "autoupdate": false,
     "shell": "powershell",
-    "permission": { "external_directory": "allow" }
+    "permission": { "external_directory": "allow" },
+    "provider": {
+      "corp": {
+        "npm": "@ai-sdk/openai-compatible",
+        "options": { "baseURL": "http://<사내 LLM 주소>/v1" },
+        "models": { "gemma": {} }
+      }
+    }
   }
   ```
 
@@ -55,6 +70,7 @@ PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시
    `C:\CLI\setup.bat`이 스킬과 함께 복사합니다. 원본은 배포 폴더 `C:\CLI`에 둡니다 (배포는 `C:\CLI` 하나).
    같은 폴더의 `opencode.jsonc`(사내 LLM 주소, 사용자가 배포 전에 넣음, git 제외)도 있으면 설정 폴더로 복사합니다.
 2. 고쳐 쓸 곳은 없습니다. 도구 경로는 `C:\CLI` 기준으로 적혀 있습니다.
+3. 팀원이 "지침·스킬 경로"를 물으면 에이전트가 답하도록 9장에 위치 표가 있습니다 (읽히는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 setup.bat).
 
 이미 넣어 두신 내용은 아래처럼 반영했습니다.
 
