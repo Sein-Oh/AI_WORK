@@ -4,7 +4,7 @@ description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.2"
+  version: "1.6.3"
   platform: windows
 ---
 

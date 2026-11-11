@@ -11,6 +11,13 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.6.3] - 2026-11-11
+
+### 기능 (사용자 요청)
+- `excel.py compare`의 비교 메모: 메모 머리에 비교한 날짜·시각 (`비교 2026-11-11 09:30: 수량 3 -> 4 (+1) / 위치 추가 R5`, 칸마다 한 번).
+  메모를 다는 명령(`next_commands[0]`과 그 `confirm_commands`)에 `--append`: 이미 메모가 있는 칸은 묻지 않고 기존 메모 아래 줄에 덧붙임
+  (전에는 바꿀지·덧붙일지 사용자에게 물었음). office-data 스킬에 한 줄.
+
 ## [1.6.2] - 2026-11-10
 
 ### 기능

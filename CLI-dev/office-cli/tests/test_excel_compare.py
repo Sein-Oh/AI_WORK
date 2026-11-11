@@ -1,5 +1,6 @@
 """excel.py compare: 두 판의 표(BOM) 비교. 머리글·열 역할·키를 도구가 정함, 정규화, 구분별 결과, 결과 xlsx 확인, 메모 미리보기, [후보]."""
 import csv
+import re
 import json
 import os
 
@@ -108,11 +109,15 @@ def test_memo_file_and_comment_preview_are_next_commands(tmp_path, capsys):
     _, out = _compare(capsys, old, new)
     with open(out["memo_file"], encoding="utf-8-sig") as f:
         memo = {r[0]: r[1] for r in csv.reader(f)}
-    assert memo["BOM!D5"] == "비교: 수량 3 -> 4 (+1)" and memo["BOM!F5"] == "비교: 위치 추가 R5"
-    assert memo["BOM!B10"].startswith("비교: 이전 판에 없는 행") and "추정" in memo["BOM!B7"]
+    # 메모 머리에 비교한 날짜·시각 (사용자 요청 2026-11-11)
+    stamp = re.compile(r"^비교 \d{4}-\d{2}-\d{2} \d{2}:\d{2}: ")
+    assert stamp.match(memo["BOM!D5"]) and memo["BOM!D5"].endswith(": 수량 3 -> 4 (+1)"), memo["BOM!D5"]
+    assert stamp.match(memo["BOM!F5"]) and memo["BOM!F5"].endswith(": 위치 추가 R5"), memo["BOM!F5"]
+    assert "이전 판에 없는 행" in memo["BOM!B10"] and "(추정, 확인 필요)" in memo["BOM!B7"] and memo["BOM!B7"].count("비교") == 1
     cmd = out["next_commands"][0]["command"]
     argv = split_command(cmd)[2:]
     assert argv[:2] == ["comment", "--target"] and argv[2] == new and "--dry-run" in argv and "confirm_commands" not in out
+    assert "--append" in argv, argv          # 이미 메모가 있는 칸은 지우지 않고 아래 줄에 덧붙임 (묻지 않음)
 
 
 def test_single_level_unique_part_numbers_with_title_rows(tmp_path, capsys):

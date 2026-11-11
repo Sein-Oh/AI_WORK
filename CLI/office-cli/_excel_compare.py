@@ -5,6 +5,7 @@ excel.py가 불러 씁니다 (excel.py compare). 주소 도우미는 excel.py의
 import json
 import os
 import re
+import time
 import zipfile
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -52,6 +53,15 @@ _CMP_REF_RANGE = re.compile(r"^([A-Z]+)(\d+)[-~]([A-Z]*)(\d+)$")
 _CMP_REF_ONE = re.compile(r"^([A-Z]*)(\d+)$")
 _CMP_NUM = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?$")
 
+
+
+def _memo_with_stamp(texts: Sequence[str], stamp: str) -> str:
+    """칸 하나의 비교 메모들 -> '비교 <날짜 시각>: a / b'. 각 글의 '비교: ' 머리는 떼고, '비교(추정, 확인 필요): x'는 '(추정, 확인 필요) x'."""
+    parts = []
+    for t in texts:
+        m = re.match(r"^비교(\(([^)]*)\))?:\s*(.*)$", t, flags=re.S)
+        parts.append((f"({m.group(2)}) " if m.group(2) else "") + m.group(3) if m else t)
+    return f"비교 {stamp}: " + " / ".join(parts)
 
 def _cmp_nfkc(v: Any) -> str:
     import unicodedata
@@ -931,14 +941,20 @@ def cmd_compare(args) -> Dict[str, Any]:
         if len(cells) > COMMENT_MAX_CELLS:
             warnings.append(f"바뀐 칸이 {len(cells)}개라 메모 파일에는 앞 {COMMENT_MAX_CELLS}칸만 넣음 (전체는 결과 파일)")
             cells = cells[:COMMENT_MAX_CELLS]
-        memo_rows = [["칸", "메모"]] + [[f"{sheet_ref}!{addr(r, c + 1)}", " / ".join(v)[:COMMENT_MAX_CHARS]] for (r, c), v in cells]
+        # 메모 머리에 비교한 날짜·시각 한 번 (사용자 요청 2026-11-11): "비교 2026-11-11 09:30: 수량 3 -> 4 (+1) / 위치 추가 R5"
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        memo_rows = [["칸", "메모"]] + [[f"{sheet_ref}!{addr(r, c + 1)}", _memo_with_stamp(v, stamp)[:COMMENT_MAX_CHARS]]
+                                       for (r, c), v in cells]
         memo_file = rt.write_csv_rows(rt.resolve_output_path(None, f"compare_memo_{sheet}", ".csv"), memo_rows)
         memo_problem = rt.check_saved_file(memo_file, len(memo_rows), delimiter=",")
         if memo_problem:
             problems.append(f"메모 파일: {memo_problem}")
         result["memo_file"] = memo_file
-        nexts.append(rt.next_command("excel.py", ["comment", "--target", new_path, "--action", "add", "--file", memo_file, "--dry-run"],
-                                     "새 판의 바뀐 칸에 비교 메모 달기 미리보기, 변경 없음 (실제로 다는 명령은 그 결과의 confirm_commands, 사용자 확인 뒤에만)"))
+        # --append: 칸에 이미 메모가 있으면 지우지 않고 그 아래 줄에 덧붙임 (사용자 요청 2026-11-11, 묻지 않음). 메모가 없는 칸은 새로 담
+        nexts.append(rt.next_command("excel.py", ["comment", "--target", new_path, "--action", "add", "--file", memo_file, "--append",
+                                                  "--dry-run"],
+                                     "새 판의 바뀐 칸에 비교 메모 달기 미리보기, 변경 없음 (이미 메모가 있는 칸은 그 아래 줄에 덧붙임. "
+                                     "실제로 다는 명령은 그 결과의 confirm_commands, 사용자 확인 뒤에만)"))
         result["next_commands"] = nexts
     if warnings:
         result["warnings"] = warnings
