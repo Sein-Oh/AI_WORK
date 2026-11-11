@@ -26,6 +26,7 @@ wheels/
 
 # Tool runtime data (error logs, caches) - each tool folder
 CLI/*/data/
+CLI/work/
 CLI/*/cache/
 CLI/office-cli/config.json
 

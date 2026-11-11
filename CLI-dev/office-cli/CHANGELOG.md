@@ -33,6 +33,9 @@ PR #77(1.6.3) 병합 뒤의 작업. 회사 PC 사내 LLM 시험(Gemma 15/21, BEA
 - `setup.py`: 끝에 OpenCode 백그라운드 서비스를 끔 (`opencode.exe service stop`). TUI와 web.bat은 떠 있는 서비스를 그대로 다시 쓰므로, 설치 전에 뜬
   서비스가 옛 PATH로 돌아 python을 못 찾았고 web.bat을 다시 실행해도 재부팅 전까지 풀리지 않았음. 못 꺼도 설치는 실패로 보지 않고 WARN.
   안내 문장(setup 끝, skill.py, skill-maker, 전역 지침 9장, README)에 "안 되면 web.bat stop 뒤 다시".
+- Web UI 작업 폴더 `C:\CLI\work`: Web UI는 세션을 프로젝트 폴더 안에 만들어, 폴더가 없는 새 PC에서는 새 세션이 만들어지지 않았음.
+  `setup.py`와 `web.bat`이 폴더를 만들고, `web.bat`은 서비스를 그 폴더에서 띄우며 "처음이면 프로젝트 열기로 이 폴더를 고르라"고 안내.
+  프로젝트 목록은 브라우저 프로필에 저장되어 밖에서 미리 등록할 수 없음 (OpenCode 2.2.7 소스). README, 사용 가이드 FAQ, `.gitignore`.
 
 ### 사내 LLM 시험 조치 (Gemma, BEAM)
 - office-doc 스킬: "워드 내용을 PPT로"(`word.py read --save` 후 `ppt.py write --file`) 줄을 넣음. 스킬 점검 때 transfer 줄에 `--from-target`·`--to-target`을

@@ -16,6 +16,12 @@ if not exist "%OC%" (
 if /i "%~1"=="stop" goto service
 if /i "%~1"=="status" goto service
 
+rem Work folder: the Web UI makes every session inside a project folder, and a new PC has none, so "new session" did nothing
+rem (team PC 2026-11-11). The service starts in this folder; the user opens it once in the Web UI (Open project).
+set "WORK=%~dp0work"
+if not exist "%WORK%" mkdir "%WORK%"
+cd /d "%WORK%"
+
 rem Run 'pair' once and keep its whole output in a file (no pipe inside for /f).
 if not exist "%~dp0data" mkdir "%~dp0data"
 set "OUT=%~dp0data\web_pair.txt"
@@ -35,6 +41,7 @@ del "%OUT%" >nul 2>&1
 echo [INFO] Opening OpenCode Web UI: %LINK%
 echo [INFO] The link works once and expires in a few minutes. Run web.bat again for a new one.
 echo [INFO] The background service keeps running after this window closes. Stop it with: web.bat stop
+echo [INFO] First time on this PC: in the Web UI choose Open project and pick %WORK% , then start a new session there.
 
 rem Open in Edge (or Chrome) with its own profile folder under data\web_profile, as an app window.
 rem The normal browser profile can fail with "Internal error opening backing store for indexedDB.open"

@@ -571,6 +571,9 @@ def main(argv=None):
     step_files(rep, cfg, backup, args.check, args.test_skill)
     if not args.check:      # 스킬로 안 되는 일의 파이썬 스크립트를 두는 곳 (전역 지침 8장)
         os.makedirs(os.path.join(data_dir(), "scripts"), exist_ok=True)
+        # Web UI의 작업 폴더 (web.bat이 서비스를 여기서 띄움). Web UI는 세션을 프로젝트 폴더 안에 만들어, 폴더가 없는 새 PC에서는
+        # 새 세션이 만들어지지 않았음 (팀원 배포 2026-11-11). 처음 한 번 Web UI에서 이 폴더를 프로젝트로 연다
+        os.makedirs(os.path.join(HERE, "work"), exist_ok=True)
     print("[INFO] 2. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)
@@ -592,6 +595,7 @@ def main(argv=None):
     if args.check and rep.diffs:
         print("[STATUS] 다른 것이 있습니다. 적용: C:\\CLI\\setup.bat (또는 python C:\\CLI\\setup.py)", flush=True)
     if not args.check and not rep.fails:
+        print(f"[INFO] Web UI(web.bat)를 처음 쓰면 화면에서 프로젝트 열기로 {os.path.join(HERE, 'work')} 를 고른 뒤 새 세션을 만드세요", flush=True)
         print("[STATUS] 끝. 새 터미널(PowerShell)을 열고, OpenCode(TUI, Desktop, Web UI)를 모두 닫았다가 다시 시작하세요. "
               "새 스킬·지침이 안 보이거나 python을 못 찾으면 'C:\\CLI\\web.bat stop' 뒤 다시 실행하세요.", flush=True)
     return 1 if bad else 0

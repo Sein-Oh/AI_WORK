@@ -95,6 +95,8 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
    몇 분 뒤 만료되니 다시 열 때는 web.bat을 다시 실행합니다. 서비스는 창을 닫아도 계속 돌며 `web.bat stop`으로 끕니다(`web.bat status`로 상태).
    브라우저는 Edge(없으면 Chrome)를 `C:\CLI\data\web_profile` 전용 프로필의 앱 창으로 엽니다. 평소 브라우저 프로필에서
    "Internal error opening backing store for indexedDB.open"이 나던 회사 PC 대응 (2026-11-10). 둘 다 없으면 기본 브라우저.
+   Web UI는 세션을 프로젝트(작업 폴더) 안에 만듭니다. 처음 쓰는 PC는 폴더가 없어 새 세션이 만들어지지 않으니, 처음 한 번 화면에서 프로젝트 열기로
+   `C:\CLI\work`(setup과 web.bat이 만들어 둠)를 고른 뒤 새 세션을 만듭니다. 프로젝트 목록은 브라우저 프로필(`C:\CLI\data\web_profile`)에 저장됩니다.
 
 ## 관리 방법
 

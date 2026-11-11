@@ -100,6 +100,7 @@ def test_apply_copies_new_then_reports_same(monkeypatch, tmp_path, capsys):
     assert not (cfg / "skills" / "office-cli-test").exists()
     assert not list((cli / "data").glob("setup_backup_*"))                # 덮어쓴 것이 없으면 보관도 없음
     assert (cli / "data" / "scripts").is_dir()                            # 전역 지침 8장의 스크립트 폴더
+    assert (cli / "work").is_dir()                                        # Web UI의 작업 폴더 (팀원 배포 2026-11-11)
     out = capsys.readouterr().out
     assert "[STATUS] 끝." in out and "새 터미널" in out
     assert su.main(["--config-dir", str(cfg), "--no-path", "--check"]) == 0
