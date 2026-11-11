@@ -492,6 +492,11 @@ office-cli `--save` 생략·이름만·상대 경로가 이 규칙을 따름 (�
 데이터 파일 옆이라 그대로. 도구끼리 넘기는 중간 파일만 `_work`. 회사 PC에서 볼 것: 열린 문서(저장된 것)의 `read --save`·`export`가 문서 옆에 생기는지,
 `reader read --save`로 만든 .md가 등록한 폴더 안에 생겨 다음 폴더 검색 때 함께 등록되는지(되면 사용자에게 알리고 정할 것).
 
+### 3-19. skill-kit 없앰, 저장소 정리
+- skill-kit 스킬과 `skill.py` 삭제 (사용자 결정: OpenCode 기본 기능과 겹침). 기본 스킬 11개. setup이 남은 `skill-kit`·`skill-maker` 폴더를 보관 후 지움.
+- 불필요한 파일 삭제: `AIKIT/dev/FFT/`(이 저장소 도구와 관계없는 PySide6 GUI 스크립트 2개, 어디서도 쓰지 않음. git 이력에 남음),
+  `docs/HOME_PC_CHECK.md`(ml-kit 2.9.73·office-cli 1.4.82 때 집 PC 점검 안내, `실기테스트.md` 1장과 부록으로 대신함).
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.
