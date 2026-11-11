@@ -1,6 +1,6 @@
 ---
 name: office-mail
-description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기, 첨부 목록·내려받기, 내려받은 eml 폴더 검색, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
+description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기·만들기·지우기, 첨부 목록·내려받기, 내려받은 eml 폴더 검색, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 office-excel, 워드/PPT는 office-doc, 내려받은 문서 검색은 office-spec.
 license: Proprietary
 compatibility: opencode
 metadata:
@@ -26,6 +26,7 @@ metadata:
 | 읽기 | `python "C:\CLI\office-cli\outlook.py" read --id 3` / 보고 있는 메일 `python "C:\CLI\office-cli\outlook.py" current` |
 | 대화 전체 | `python "C:\CLI\office-cli\outlook.py" thread --id 3` |
 | 일정 보기 / 만들기 | `python "C:\CLI\office-cli\outlook.py" calendar --days 7` / `python "C:\CLI\office-cli\outlook.py" event --subject "<제목>" --start "2026-11-12 14:00" [--minutes 60] [--location "<장소>"]` (종일은 `--start 2026-11-12`, 내 일정에만 저장. 회의 요청은 없음) |
+| 일정 지우기 | `python "C:\CLI\office-cli\outlook.py" event --action delete --subject "<제목>" --start "2026-11-12 14:00" --dry-run` (확인 뒤 `confirm_commands[0]`. 반복 일정·회의는 Outlook에서 직접) |
 | 폴더 목록 | `python "C:\CLI\office-cli\outlook.py" folders` |
 | 첨부 목록 | `python "C:\CLI\office-cli\outlook.py" attachments --id <id>` |
 | 첨부 저장 | `python "C:\CLI\office-cli\outlook.py" attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>`) |

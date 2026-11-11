@@ -10,7 +10,7 @@ import pytest
 
 import _runtime as rt
 import outlook
-from office_helpers import error_log_text, option_value, recommended_argv, run_fresh, run_main, run_outlook, SECRET
+from office_helpers import error_log_text, option_value, recommended_argv, run_fresh, run_main, run_outlook, SECRET, split_command
 
 
 class _DraftsFolder:
@@ -2127,9 +2127,15 @@ class _Appt:
     def End(self):
         return self.Start + dt.timedelta(minutes=self.Duration)
 
+    IsRecurring = False
+    MeetingStatus = 0
+
     def Save(self):
         self.EntryID = f"E{len(self.store) + 1}"
         self.store.append(self)
+
+    def Delete(self):
+        self.store.remove(self)
 
 
 class _ApptItems:
@@ -2197,3 +2203,32 @@ def test_event_all_day_overlap_and_bad_time(cal, capsys):
     assert code == 1 and "YYYY-MM-DD HH:MM" in out["message"] and len(cal) == 2, out
     code, out = run_outlook(capsys, "event", "--subject", "지난 일", "--start", "2026-11-01 09:00")
     assert code == 0 and any("지난 날짜" in w for w in out["warnings"]), out
+
+
+def test_event_delete_previews_then_deletes_and_checks(cal, capsys):
+    """회사 PC 2026-11-11: '그 일정 지워줘'에 모델이 파이썬 코드를 직접 짜서 지웠다 -> event --action delete (미리보기 -> 확인 뒤 지우기)."""
+    run_outlook(capsys, "event", "--subject", "도구 시험 회의", "--start", "2026-11-12 15:00", "--minutes", "30", "--location", "3층")
+    run_outlook(capsys, "event", "--subject", "다른 회의", "--start", "2026-11-12 10:00")
+    code, out = run_outlook(capsys, "event", "--action", "delete", "--subject", "도구 시험 회의", "--start", "2026-11-12 15:00", "--dry-run")
+    assert code == 0 and out["dry_run"] is True and len(cal) == 2 and "15:00 ~ 15:30" in out["preview"], out
+    cmd = out["confirm_commands"][0]
+    assert cmd["destructive"] is True and "--dry-run" not in cmd["command"] and "--action delete" in cmd["command"], cmd
+    code, out = run_outlook(capsys, "event", "--action", "delete", "--subject", "도구 시험 회의", "--start", "2026-11-12 15:00")
+    assert code == 0 and out["agent_directive"].startswith("VERIFIED:") and out["deleted"] is True, out
+    assert [a.Subject for a in cal] == ["다른 회의"] and "지운 편지함" in out["preview"]
+    # 날짜만 주면 그날의 그 제목 일정
+    code, out = run_outlook(capsys, "event", "--action", "delete", "--subject", "다른 회의", "--start", "2026-11-12", "--dry-run")
+    assert code == 0 and out["start"] == "2026-11-12 10:00", out
+
+
+def test_event_delete_not_found_gives_numbered_candidates_and_refuses_meetings(cal, capsys):
+    run_outlook(capsys, "event", "--subject", "도구 시험 회의", "--start", "2026-11-12 06:00", "--minutes", "30")
+    code, out = run_outlook(capsys, "event", "--action", "delete", "--subject", "도구 시험 회의", "--start", "2026-11-12 15:00")
+    assert code == 1 and "[후보] 1) 도구 시험 회의 2026-11-12 06:00" in out["message"] and len(cal) == 1, out
+    argv = split_command(out["confirm_commands"][0]["command"])[2:]
+    assert argv == ["event", "--action", "delete", "--subject", "도구 시험 회의", "--start", "2026-11-12 06:00", "--dry-run"], argv
+    code, out = run_outlook(capsys, "event", "--action", "delete", "--subject", "없음", "--start", "2026-11-20 09:00")
+    assert code == 1 and "calendar" in out["message"] and "[추천]" in out["message"], out
+    cal[0].MeetingStatus = 1                                  # 참석자가 있는 회의: 취소 알림이 필요해 Outlook에서 직접
+    code, out = run_outlook(capsys, "event", "--action", "delete", "--subject", "도구 시험 회의", "--start", "2026-11-12 06:00")
+    assert code == 1 and out["error_type"] == "not_supported" and "Outlook 일정에서 직접" in out["message"] and len(cal) == 1, out

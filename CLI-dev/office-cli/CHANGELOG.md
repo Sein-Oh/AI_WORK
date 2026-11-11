@@ -25,6 +25,10 @@
 - `setup.py`: opencode.jsonc에 `"enabled_providers"`가 없으면 WARN과 넣을 줄(사내 provider 이름을 넣은 것)을 알림. 폐쇄망에서 못 쓰는 기본 모델(opencode 등)이
   `opencode models`에 나오지 않게. 이름이 `"provider"`·`"model"`과 어긋나면 WARN, `"autoupdate": false`가 없으면 INFO. docs/opencode/README.md에 설정 예.
 
+### 기능 (사용자 요청 2026-11-11)
+- `outlook.py event --action delete --subject --start [--dry-run]`: 내 일정 지우기 (일정 삭제 요청에 모델이 파이썬 코드를 직접 짜서 지웠음).
+  미리보기 -> 확인 뒤 `confirm_commands[0]`(destructive), 지운 뒤 다시 찾아 확인. 못 찾으면 그날 일정 `[후보]`, 반복 일정·회의는 Outlook에서 직접. office-mail 스킬.
+
 ### 수정 (회사 PC 실기 2026-11-11)
 - L11 제한된 보기: 실제 엑셀은 제한된 보기 창이 맨 앞이면 `ActiveWorkbook`으로 그 문서를 줘서 `--target` 없는 쓰기가 "시트 보호" 오류로 끝남
   (쓰인 곳은 없음). 활성 문서가 제한된 보기 창(`ActiveProtectedViewWindow`)의 문서이면 쓰지 않고 [편집 사용] 안내 (Excel·Word·PowerPoint, 읽기는 그대로).

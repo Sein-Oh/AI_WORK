@@ -3157,17 +3157,23 @@ def test_N(ctx):
         d, c, r, e = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30", "--location", "시험")
         again = run_cli("outlook.py", "event", "--subject", subject, "--start", f"{day} 23:00", "--minutes", "30")[0] or {}
 
-        def find():
+        def find(cleanup=False):
             items = ol_ns().GetDefaultFolder(9).Items
             hits = [it for it in items.Restrict(f"[Start] >= '{day} 00:00'") if str(it.Subject or "") == subject]
             out = [(_ol_time(h.Start), _ol_time(h.End), str(h.Location or "")) for h in hits]
-            for h in hits:
-                h.Delete()                                              # 러너가 만든 일정은 지움
+            if cleanup:
+                for h in hits:
+                    h.Delete()                                          # 도구로 못 지웠으면 러너가 지움
             return out
         found = com_retry(find)
-        record(ctx, "N7", "일정 만들기: 다시 읽어 확인, 두 번 실행해도 하나 (확인 뒤 러너가 지움)",
-               _verified(d) and again.get("created") is False and found == [(f"{day} 23:00:00", f"{day} 23:30:00", "시험")],
-               f"Outlook에서 찾은 일정={found}", d, c, r, e)
+        # 1.6.3: 도구로 지우기 (미리보기 -> confirm_commands[0])
+        pre = run_cli("outlook.py", "event", "--action", "delete", "--subject", subject, "--start", f"{day} 23:00", "--dry-run")[0] or {}
+        gone = run_cli("outlook.py", "event", "--action", "delete", "--subject", subject, "--start", f"{day} 23:00")[0] or {}
+        left = com_retry(lambda: find(cleanup=True))
+        record(ctx, "N7", "일정 만들기(다시 읽어 확인, 두 번 실행해도 하나)와 지우기(미리보기 뒤 지우고 확인)",
+               _verified(d) and again.get("created") is False and found == [(f"{day} 23:00:00", f"{day} 23:30:00", "시험")]
+               and pre.get("dry_run") is True and _verified(gone) and not left,
+               f"Outlook에서 찾은 일정={found}, 지운 뒤 남은 일정={left}", d, c, r, e)
 
     def n8():     # outlook list --until / --with-attachments
         import datetime as _d
