@@ -113,11 +113,35 @@ def test_memo_file_and_comment_preview_are_next_commands(tmp_path, capsys):
     stamp = re.compile(r"^비교 \d{4}-\d{2}-\d{2} \d{2}:\d{2}: ")
     assert stamp.match(memo["BOM!D5"]) and memo["BOM!D5"].endswith(": 수량 3 -> 4 (+1)"), memo["BOM!D5"]
     assert stamp.match(memo["BOM!F5"]) and memo["BOM!F5"].endswith(": 위치 추가 R5"), memo["BOM!F5"]
-    assert "이전 판에 없는 행" in memo["BOM!B10"] and "(추정, 확인 필요)" in memo["BOM!B7"] and memo["BOM!B7"].count("비교") == 1
+    assert "이전 판에 없는 행" in memo["BOM!B10"] and "BOM!B7" not in memo      # 대체 추정은 메모가 아니라 '비교결과' 시트로
     cmd = out["next_commands"][0]["command"]
     argv = split_command(cmd)[2:]
-    assert argv[:2] == ["comment", "--target"] and argv[2] == new and "--dry-run" in argv and "confirm_commands" not in out
+    assert argv[:2] == ["comment", "--target"] and argv[2] == new and "--dry-run" in argv
+    assert all(" write " in c["command"] for c in out.get("confirm_commands", []))   # 문서를 바꾸는 명령은 비교결과 시트 쓰기뿐
     assert "--append" in argv, argv          # 이미 메모가 있는 칸은 지우지 않고 아래 줄에 덧붙임 (묻지 않음)
+
+
+def test_removed_and_guessed_go_to_result_sheet_command(tmp_path, capsys):
+    # 칸 메모로 적기 곤란한 삭제·대체 추정은 새 판의 '비교결과' 시트로 (사용자 요청 2026-11-11)
+    old = _xlsx(tmp_path / "old.xlsx", MULTI_OLD)
+    new = _xlsx(tmp_path / "new.xlsx", MULTI_NEW)
+    _, out = _compare(capsys, old, new)
+    assert out["counts"]["삭제"] + out["counts"]["대체 추정"] >= 1, out["counts"]
+    with open(out["result_sheet_file"], encoding="utf-8-sig") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["비교 일시", "이전 판", "구분", "키", "품번", "품명", "규격", "수량", "이전 판 행", "새 판 행", "내용"], rows[0]
+    kinds = [r[2] for r in rows[1:]]
+    assert kinds.count("삭제") == out["counts"]["삭제"] and kinds.count("대체 추정") == out["counts"]["대체 추정"], kinds
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", rows[1][0]) and rows[1][1] == "old.xlsx", rows[1]
+    argv = split_command(out["confirm_commands"][0]["command"])[2:]
+    assert argv[:5] == ["write", "--target", new, "--sheet", "비교결과"] and "--new-sheet" in argv and "--append" not in argv, argv
+    assert argv[argv.index("--file") + 1] == out["result_sheet_file"] and "비교결과" in out["agent_directive"], argv
+    wb = openpyxl.load_workbook(new)                      # 시트가 이미 있으면 그 아래에 이어 씀
+    wb.create_sheet("비교결과").append(rows[0])
+    wb.save(new)
+    _, out = _compare(capsys, old, new)
+    argv = split_command(out["confirm_commands"][0]["command"])[2:]
+    assert "--append" in argv and "--new-sheet" not in argv, argv
 
 
 def test_single_level_unique_part_numbers_with_title_rows(tmp_path, capsys):
