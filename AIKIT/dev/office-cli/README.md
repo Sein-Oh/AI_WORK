@@ -187,8 +187,9 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
 ### 파일과 폴더
 | 항목 | 기본 위치 | 바꾸는 방법 |
 |---|---|---|
-| data 폴더 (파일명만 쓴 입력/출력) | `<도구폴더>\data` | 환경변수 `OFFICE_CLI_DATA_DIR` 또는 `config.json`의 `data_dir` |
-| 작업 폴더 (`--save` 경로 생략 시 `<이름>_<시각>`, 같은 초에 겹치면 `_2`를 붙이고 `recovered`, 7일 후 자동 정리. 이름의 쓸 수 없는 글자 `\ / : * ? " < > \|`는 `_`) | `data\_work` | - |
+| 결과 파일 (`--save` 생략·이름만·상대 경로, 1.6.7 전역 지침 2장): 생략하면 `<이름>_<시각>`(같은 초에 겹치면 `_2`를 붙이고 `recovered`, 이름의 쓸 수 없는 글자 `\ / : * ? " < > \|`는 `_`) | 대상 파일과 같은 폴더. 대상 파일이 없으면(메일, 저장한 적 없는 문서, 폴더·캐시 검색) `C:\AIKIT\data` | 전체 경로로 `--save`. 대상 파일이 없을 때의 폴더는 `OFFICE_CLI_RESULT_DIR` 또는 `result_dir` |
+| data 폴더 (파일명만 쓴 입력, 오류 로그) | `<도구폴더>\data` | 환경변수 `OFFICE_CLI_DATA_DIR` 또는 `config.json`의 `data_dir` |
+| 작업 폴더 (도구끼리 넘기는 중간 파일: transfer 그림, 대조 메모 CSV. 7일 후 자동 정리) | `data\_work` | - |
 | 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
 | 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` | 환경변수 `OFFICE_CLI_CONFIG` |
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |

@@ -245,7 +245,7 @@ def cmd_check(args) -> Dict[str, Any]:
     # 메모에 '자동 판정(참고)'과 읽은 조건·근거를 함께 적어 사람이 확인할 수 있게 함
     # 대조하지 못한 행(late)은 메모에 넣지 않음 (판정이 없는 칸에 '자동 판정' 메모가 달리지 않게)
     memo_rows = [["칸", "메모"]] + [[r["cell"], check_memo(r)] for r in results if r["cell"] not in late]
-    memo = rt.write_csv_rows(rt.resolve_output_path(None, f"check_memo_{sheet}", ".csv"), memo_rows)
+    memo = rt.write_csv_rows(rt.resolve_output_path(None, f"check_memo_{sheet}", ".csv", internal=True), memo_rows)
     problems: List[str] = []
     memo_problem = rt.check_saved_file(memo, len(memo_rows), delimiter=",")
     if memo_problem:
@@ -263,7 +263,7 @@ def cmd_check(args) -> Dict[str, Any]:
         header_row = ["칸", "항목", "값", "판정", "이유", "규격 조건", "근거", "규격 문장", "찾은 방식"]
         rows = [[r["cell"], r["item"], r["value"], r["verdict"], r["reason"], r.get("condition", ""), r["evidence"],
                  r["spec_text"], r["match_mode"]] for r in results]
-        out = rt.resolve_output_path(args.save, f"check_{sheet}", ".xlsx")
+        out = rt.resolve_output_path(args.save, f"check_{sheet}", ".xlsx", near=(resolved or {}).get("path"))
         out, _ = reader.write_xlsx_table(out, header_row, rows, [12, 24, 10, 10, 30, 18, 40, 60, 10], "대조결과")
         fields["output_file"] = out
         if len(results) > CHECK_SHOWN:

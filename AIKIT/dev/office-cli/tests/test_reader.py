@@ -3544,3 +3544,20 @@ def test_outline_lists_headings_with_units_and_pages(tmp_path, capsys, monkeypat
     assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
 
 
+
+
+def test_save_without_path_goes_next_to_the_source_file(tmp_path, capsys, isolated_dirs):
+    """1.6.7 전역 지침 8장: 파일을 대상으로 한 결과는 그 파일과 같은 폴더, 대상 파일이 없는 결과(캐시 전체 검색)는 C:\\AIKIT\\data
+    (테스트에서는 OFFICE_CLI_RESULT_DIR). 이름만 준 --save도 대상 파일 옆."""
+    folder = tmp_path / "규격 모음"
+    folder.mkdir()
+    src = folder / "규격서.txt"
+    src.write_text("1. 범위\n시험 온도는 -20 ℃ 이상이어야 한다.\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "read", "--file", str(src), "--save")
+    assert code == 0 and os.path.dirname(out["output_file"]) == str(folder), out
+    code, out = run_main(reader, capsys, "read", "--file", str(src), "--save", "요약.md")
+    assert code == 0 and out["output_file"] == str(folder / "요약.md"), out
+    code, out = run_main(reader, capsys, "search", "--query", "시험 온도", "--file", str(src), "--save")
+    assert code == 0 and os.path.dirname(out["output_file"]) == str(folder), out
+    code, out = run_main(reader, capsys, "search", "--query", "시험 온도", "--save")      # 캐시 전체: 대상 파일 없음
+    assert code == 0 and os.path.dirname(out["output_file"]) == str(isolated_dirs["data"]), out

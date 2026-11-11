@@ -233,7 +233,8 @@ def cmd_read(args) -> Dict[str, Any]:
         slides = [slides[n - 1] for n in numbers]
     result: Dict[str, Any] = {"target_resolved": source, "slides_total": total}
     if args.save:
-        out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(source["name"])[0], ".md")
+        out = rt.resolve_output_path(None if args.save is True else args.save, os.path.splitext(source["name"])[0], ".md",
+                                     near=source.get("path"))
         out = rt.write_text(out, md.document_markdown([b for s in slides for b in slide_blocks(s)]))
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75)
         result.update(output_file=out, confirm_commands=[
@@ -1252,7 +1253,7 @@ def cmd_export(args) -> Dict[str, Any]:
         prs = t.doc
         if ext == ".pdf":
             off.require_pdf_export(t.app, ".pptx")
-            out = rt.resolve_output_path(args.save, os.path.splitext(t.name)[0], ".pdf")
+            out = rt.resolve_output_path(args.save, os.path.splitext(t.name)[0], ".pdf", near=t.path)
             try:
                 # PrintRange(개체 인자)를 생략하면 pywin32가 인자 변환에서 TypeError를 냅니다. None을 명시합니다.
                 prs.ExportAsFixedFormat(os.path.normpath(out), 2, PrintRange=None)   # ppFixedFormatTypePDF
@@ -1262,7 +1263,7 @@ def cmd_export(args) -> Dict[str, Any]:
                 raise
         else:
             src_ext = os.path.splitext(t.path)[1].lower() if t.path else ".pptx"
-            out = rt.resolve_output_path(args.save, os.path.splitext(t.name)[0] + "_사본", src_ext or ".pptx")
+            out = rt.resolve_output_path(args.save, os.path.splitext(t.name)[0] + "_사본", src_ext or ".pptx", near=t.path)
             prs.SaveCopyAs(os.path.normpath(out))                     # 원본 형식 그대로 사본
         resolved = t.resolved()
     return rt.ok_file(TOOL, "export", f"{resolved['name']}을(를) 저장: {out}", out,
@@ -1604,7 +1605,7 @@ def build_cli():
 
     p = sub.add_parser("export", help="PDF/PPTX 사본 저장")
     common(p)
-    p.add_argument("--save", help="저장 경로 (.pdf 또는 .pptx, 생략 시 작업 폴더에 PDF)")
+    p.add_argument("--save", help="저장 경로 (.pdf 또는 .pptx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
 
     p = sub.add_parser("notes", help="발표자 노트 읽기 (--text/--file이 있으면 --slide의 노트 쓰기)")
     common(p, write=True)

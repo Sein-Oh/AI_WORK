@@ -25,6 +25,14 @@
 - 전역 지침 3장 표·9장, 저장소 AGENTS.md·README, `.gitignore` 기본 스킬 줄, 사용 가이드, 실기 러너·채점·K1 검사의 스킬 이름.
 - 테스트: `test_renamed_base_skill_folders_are_removed_user_skills_kept`, `skill.py`의 옛 이름 거절, `test_skill_docs`의 스킬별 기능 목록을 word-kit·ppt-kit으로 나눔.
 
+### 기능: 결과 파일은 대상 파일 옆, 대상 파일이 없으면 C:\AIKIT\data (사용자 결정)
+- 전역 지침 2장 "결과 파일 위치": 경로를 주면 그대로, 아니면 파일을 대상으로 한 작업은 대상 파일과 같은 폴더, 대상 파일이 없는 작업은 `C:\AIKIT\data`.
+- `resolve_output_path(near=, internal=)`: `--save` 생략·이름만·상대 경로가 `output_folder(near)` 기준 (전에는 생략이면 `office-cli\data\_work`(7일 뒤 지움),
+  이름만이면 `office-cli\data`). 대상 파일 = 닫힌 파일 경로 또는 열린 문서의 저장 위치(저장한 적 없는 문서는 없음). `reader search`는 `--file`이 파일일 때만
+  그 옆(폴더·캐시 전체 검색 결과를 폴더에 두면 다음 검색 때 등록되므로). 도구끼리 넘기는 중간 파일(transfer 그림, 대조 메모 CSV)만 `_work`.
+- `get_result_dir()`: `OFFICE_CLI_RESULT_DIR` > `config.json result_dir` > `<설치 폴더>\data`. 테스트 `test_resolve_output_path_rules`,
+  `test_save_without_path_goes_next_to_the_source_file`.
+
 ### 구조: Web UI의 기본 프로젝트 폴더 = C:\AIKIT
 - `web.bat`이 서비스를 `C:\AIKIT\work` 대신 `C:\AIKIT`(설정 폴더와 같은 곳)에서 띄우고 처음 열 폴더로 안내 (사용자 결정). `setup.py`는 `work`를 만들지 않음.
   README·가이드·반입 안내 고침. 테스트 `test_web_bat_is_ascii_crlf_and_opens_the_aikit_folder`.

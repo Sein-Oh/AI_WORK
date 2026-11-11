@@ -941,7 +941,8 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
 
     values = [[out_value(v) for v in row] for row in matrix]
     if args.save:
-        out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}", ".csv")
+        out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}", ".csv",
+                                     near=source.get("path"))
         out = rt.write_csv_rows(out, values)
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75): next_commands는 묻지 않고 실행해도 되는 읽기·미리보기만
         result.update(output_file=out, confirm_commands=[
@@ -1223,7 +1224,8 @@ def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: s
                      f"VERIFIED: 0건. {where}에 조건({cond_text})에 맞는 행이 없습니다. 사용자에게 그대로 알리고 조건을 바꿔 다시 "
                      "실행하지 마세요.", values=values, row_numbers=numbers, truncated=False, **result)
     if args.save:
-        out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}_조건", ".csv")
+        out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}_조건", ".csv",
+                                     near=(result.get("target_resolved") or {}).get("path"))
         out = rt.write_csv_rows(out, values)
         # 열린 문서를 바꾸는 이어 하기는 confirm_commands (1.4.75): next_commands는 묻지 않고 실행해도 되는 읽기·미리보기만
         result.update(output_file=out, confirm_commands=[
@@ -1399,7 +1401,7 @@ def cmd_stats(args) -> Dict[str, Any]:
                 line += ([st.get("sum"), st.get("mean"), st.get("min"), st.get("max"), st["count"]] if st["kind"] == "number"
                          else [st["count"], st.get("unique")])
             table.append(line)
-        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_집계", ".csv")
+        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_집계", ".csv", near=source.get("path"))
         out = rt.write_csv_rows(out, table)
         fields["output_file" if args.save else "full_result_file"] = out
     if by:
@@ -1538,7 +1540,7 @@ def cmd_duplicates(args) -> Dict[str, Any]:
         for n, g in enumerate(groups, 1):
             for r in g["rows"]:
                 table.append([n, r, g["count"]] + [out_value(cell(r - r0, j)) for j in cols])
-        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_중복", ".csv")
+        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_중복", ".csv", near=source.get("path"))
         out = rt.write_csv_rows(out, table)
         fields["output_file" if args.save else "full_result_file"] = out
     lines = [", ".join(str(v) for v in g["values"].values()) + f": {', '.join(map(str, g['rows'][:6]))}행" for g in shown[:5]]
@@ -3012,7 +3014,7 @@ def cmd_export(args) -> Dict[str, Any]:
     if ext == ".csv" and closed and not args.columns:
         sheet, r0, c0, matrix, _ = _read_matrix_closed(closed, args.sheet, args.range)
         _check_encodable(matrix, args.encoding, r0, [c0 + j for j in range(len(matrix[0]) if matrix else 0)])
-        out = rt.resolve_output_path(args.save, sheet, ".csv")
+        out = rt.resolve_output_path(args.save, sheet, ".csv", near=closed)
         out = rt.write_csv_rows(out, [[out_value(v) for v in r] for r in matrix], args.encoding)
         far = _far_for_read(closed, sheet, args.range, r0, c0, matrix)
         return _with_far(xf.with_uncomputed(rt.ok_file(TOOL, "export", f"{sheet} ({len(matrix)}행)를 CSV로 저장: {out}", out,
@@ -3026,7 +3028,7 @@ def cmd_export(args) -> Dict[str, Any]:
         rng = target_range(t, ws, args.range)
         ws = rng.Worksheet
         stem = f"{t.name.rsplit('.', 1)[0]}_{ws.Name}"
-        out = rt.resolve_output_path(args.save, stem, ext)
+        out = rt.resolve_output_path(args.save, stem, ext, near=t.path)
         expected_rows = None
         if ext == ".csv":
             matrix = off.range_to_matrix(rng.Value)
@@ -4947,7 +4949,7 @@ def build_cli():
     p.add_argument("--range", help="읽을 범위 (생략 시 사용 범위 전체)")
     p.add_argument("--search", help="이 글자가 들어간 셀 찾기")
     p.add_argument("--max-rows", type=int, default=rt.DEFAULT_MAX_ROWS, help=f"표시할 최대 행 수 (기본 {rt.DEFAULT_MAX_ROWS})")
-    p.add_argument("--save", nargs="?", const=True, help="CSV로 저장 (경로 생략 시 작업 폴더)")
+    p.add_argument("--save", nargs="?", const=True, help="CSV로 저장 (경로 생략 시 대상 파일 옆, 없으면 C:\\AIKIT\\data)")
     p.add_argument("--formulas", action="store_true",
                    help="수식 칸 목록도 함께 (formulas: cell, formula, value). --search는 수식 글에서도 찾음")
     p.add_argument("--where", help="조건에 맞는 행만 (첫 행은 머리글): '금액 >= 100; 부서 = 영업'. 연산자 >= <= > < = != ~(포함)")
@@ -5013,7 +5015,7 @@ def build_cli():
 
     p = sub.add_parser("export", help="CSV/XLSX/PDF로 저장")
     common(p)
-    p.add_argument("--save", help="저장 경로 (.csv/.xlsx/.pdf, 생략 시 작업 폴더에 CSV)")
+    p.add_argument("--save", help="저장 경로 (.csv/.xlsx/.pdf, 생략 시 대상 파일 옆에 CSV, 없으면 C:\\AIKIT\\data)")
     p.add_argument("--range", help="범위 (생략 시 사용 범위)")
     p.add_argument("--columns", help="CSV로 뽑을 열만 (예: A,C,E)")
     p.add_argument("--encoding", default="utf-8-sig", choices=["utf-8-sig", "cp949", "utf-8"], help="CSV 인코딩")
