@@ -244,7 +244,7 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
 | `stats` | 표 집계(1.4.98, 닫힌 xlsx·CSV는 Excel 불필요): 첫 행은 머리글. 숫자 열은 `sum`, `mean`, `min`, `max`, `count`(숫자로 읽지 못한 칸은 `not_number`), 글자 열은 `count`, `unique`, `top`(많이 나온 값 10개). `--columns 금액,수량`(생략 시 숫자 열 전부, 앞자리 0 코드는 글자), `--by 부서`(묶음별, 이름순), `--where`(read와 같은 식), `--top N`(첫 집계 열 합계가 큰 묶음 N개), `--save [경로.csv]`. 결과 `groups`(묶음마다 `by`, `rows`, `stats`), `rows_used`, `group_count`, 묶음 50개를 넘으면 `truncated`와 `full_result_file`. `preview`에 숫자를 글로 |
 | `duplicates` | 중복 행 찾기(1.6.0, 읽기만, 닫힌 xlsx·CSV는 Excel 불필요): 첫 행은 머리글, `--columns 품번,규격`(생략 시 모든 열이 같은 행), `--range`, `--save [경로.csv]`. 비교는 앞뒤 공백·전각/반각·대소문자 무시, 숫자 `1` = `1.0`, 앞자리 0은 다른 값, 빈 행은 빼고 봄. 결과 `groups`(묶음마다 `values`, `rows`(엑셀 행 번호), `count`), `group_count`, `duplicate_rows`(남기고 지울 수 있는 행 수), 묶음 30개를 넘으면 `truncated`와 `full_result_file`. 지우지 않음(지우기는 `range --action delete`) |
 | `save` | 열린 통합문서 저장(1.6.0): `--save` 없으면 그대로 저장(Ctrl+S, 바뀐 것이 없으면 `unchanged`, 한 번도 저장하지 않은 새 문서는 경로를 묻게 STOP_RETRY). `--save "<경로.xlsx|.xlsm>"`이면 다른 이름으로 저장하고 열린 문서가 새 파일이 됨(`output_file`, `previous_file`). 같은 이름 파일은 `--overwrite`가 있을 때만(없으면 `needs_user_decision`과 `--overwrite` 명령의 `confirm_commands`), 매크로가 있는 문서를 `.xlsx`로는 저장하지 않고 `.xlsm`을 `[추천]`, 다른 확장자는 `.xlsx`를 `[추천]`(CSV·PDF 사본은 `export`). 닫힌 파일은 저장할 것이 없어 STOP_RETRY |
-| `compare` | 표 두 판 비교(BOM 개정 비교, Excel 불필요, 차트 시트는 보지 않음): `--target "<이전 판>" --target2 "<새 판>" [--sheet <이전 시트>] [--sheet2 <새 시트>] [--key "<머리글 이름>[,<머리글 이름>]"] [--save "<결과.xlsx>"] [--overwrite]`. 아래 "compare" |
+| `compare` | 표 두 판 비교(BOM 개정 비교, Excel 불필요, 차트 시트는 보지 않음): `--target "<이전 판>" --target2 "<새 판>" [--sheet <이전 시트>] [--sheet2 <새 시트>] [--key "<머리글 이름>[,<머리글 이름>]"] [--level "<머리글 이름>"] [--save "<결과.xlsx>"] [--overwrite]`. 아래 "compare" |
 | `chart` | `--action create\|list\|delete`, `--range`, `--type column\|bar\|line\|line_markers\|pie\|area\|scatter\|scatter_lines\|combo`, `--title`, `--at`, `--labels`, `--legend`, `--theme` |
 
 - 수식이 1개면 범위 전체에 넣고 상대참조가 자동으로 조정됩니다. 여러 개면 열마다 하나씩 넣습니다.
@@ -329,12 +329,23 @@ python -m pip install -r CLI-dev/office-cli/requirements.txt
   - 머리글: 위쪽 30행 중 열 역할을 가장 많이 알아본 행(제목 행 아래의 머리글). 역할과 같은 뜻 머리글(괄호 안 단위·공백·기호 무시, 전각 -> 반각, 영문 소문자):
     품번(품번, 자재코드, 품목코드, Part No, P/N, Item Code ...), 상위품번(상위품번, 모품번, Parent ...), 레벨(레벨, Level, Lvl), 수량(수량, 소요량, Qty, Q'ty, Quantity), 단위(Unit, UOM), 품명(품명, 품목명, Description, Name), 규격(규격, 사양, Spec, Value), 메이커(메이커, 제조사, Maker, Manufacturer, Vendor), 위치(위치, Ref Des, Reference, Designator, Location), 비고(Remark, Note). 알아본 열은 JSON `columns`와 `preview`.
   - 열 짝: 역할이 같으면 머리글이 달라도 짝, 나머지는 머리글 비교값이 같은 열. 한쪽에만 있는 열은 비교하지 않고 `warnings`.
-  - 짝지을 키(도구가 정함): 품번이 두 판 모두 행마다 다르면 품번. 같은 품번이 여러 행(여러 단계 BOM)이면 상위품번 열 -> 레벨로 찾은 상위품번(레벨 열의 위 단계) -> 레벨로 찾은 상위 경로 -> 위치를 더한 키 중 두 판 모두 행마다 다른 첫 키(`key_columns`, `key_reason`). 그래도 없거나 품번 열을 알아보지 못하면 STOP_RETRY `[후보] 1) .. 2) ..`(열로 적을 수 있는 키, 같은 키 행 수가 적은 순서)와 같은 번호의 `confirm_commands`(`--key`를 넣은 전체 명령). `--key "상위품번,품번"`은 이전 판 머리글 이름(쉼표로 여럿), 열 문자(`B`)를 주면 머리글 이름으로 고친 전체 명령 `[추천]`. `--key`로 준 키가 같은 행은 나온 순서대로 짝짓고 `warnings`. 키 열이 빈 행(소계·구분 줄)은 비교하지 않고 `warnings`.
+  - 짝짓기(1.6.3, BOM에 맞춤: 사람이 두 파일을 나란히 놓고 위에서부터 훑어 맞추는 방식): 세 단계.
+    1. 순서대로 대조. 먼저 비교하는 값이 모두 같은 줄을 위에서부터 제 짝에 맞추고, 그 사이를 키 + 레벨이 같은 줄끼리 맞춥니다(앞뒤의 같은 줄 ->
+       두 판에 한 번씩만 나오는 줄을 기준점으로 -> 기준점 사이는 가장 긴 같은 구간부터). 같은 품번이 여러 곳에 쓰여도 앞뒤 줄로 자리를 알아보고,
+       여러 줄을 한꺼번에 넣거나 빼도 나머지는 그대로 짝지어집니다.
+    2. 남은 줄 중 키가 같은 것끼리(자리만 바뀐 줄: 바뀐 것으로 세지 않음).
+    3. 그래도 남은 줄 중 품번만 같은 것끼리 = 다른 상위로 옮긴 줄 -> 구분 `이동`(`moved`: `key`, `from`, `to`, 행 번호). 끝까지 남으면 삭제·추가.
+  - 키(`key_columns`, `key_reason`): 상위품번 열이 있으면 `상위품번+품번`, 레벨 열이 있으면 `상위품번(레벨로 찾음)+품번`, 없으면 `품번`. 같은 품번이 여러 행이어도
+    묻지 않습니다. 품번 열을 알아보지 못하면 행마다 값이 다른 유일한 열, 그것도 없으면 STOP_RETRY `[후보] 1) .. 2) ..`와 같은 번호의 `confirm_commands`(`--key`를 넣은 전체 명령).
+    `--key "상위품번,품번"`은 이전 판 머리글 이름(쉼표로 여럿), 열 문자(`B`)를 주면 머리글 이름으로 고친 전체 명령 `[추천]`. 키 열이 빈 행(소계·구분 줄)은 비교하지 않고 `warnings`.
+  - 레벨 열: 머리글(레벨, Level, Lvl, 단계 ...)로 찾습니다. 못 찾았는데 레벨일 수 있는 열(모든 값이 0~20의 정수, 행 번호가 아님)이 있으면
+    `[후보] 1) <머리글> 2) 없음`과 `confirm_commands`(`--level "<머리글>"` 또는 `--level 없음`). 그런 열이 없으면 레벨 없는 목록으로 비교합니다.
+  - 행 번호 열(Index, No처럼 두 판 모두 1, 2, 3...)은 행을 넣고 빼면 모두 밀리므로 비교하지 않고 `warnings`.
   - 정규화: 앞뒤·여러 칸 공백, 전각/반각. 숫자는 `1` = `1.0` = `"1"` = `"1.00"`, `"1,000"` = 1000(앞자리 0이 있는 글 `007`은 글자 그대로). 품번·상위품번은 대소문자·공백도 무시하고 앞자리 0 유지(`0100` != `100`), 단위·메이커는 대소문자 무시. 위치는 집합: `R1-R3, R5` = `R1,R2,R3,R5` = `r5 r1~r3`(같은 머리글자 범위만 펼침, 2000개 넘는 범위는 펼치지 않음).
   - 구분: 추가, 삭제, 수량 변경(이전 -> 새, 차이 `+1`), 위치 변경(더해진·빠진 위치), 속성 변경(바뀐 열마다 이전 -> 새), 대체 추정(삭제된 행과 추가된 행이 같은 위치(반 이상 겹침)이거나 같은 상위품번이고 품명이 비슷한 짝, 위치·상위 정보가 없는 표는 품명 유사도 0.85 이상: "품번 변경 추정", `guess: true`, 추가·삭제에서 빼서 따로 보고하고 합치지 않음). 한 행이 수량과 속성이 함께 바뀌면 두 구분에 모두 셈(`count`는 바뀐 행 수).
-  - JSON: `counts`(구분별 수), 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`, `replaced_guess`(각 앞 20개, 항목마다 `key`와 행 번호), `shown`, `truncated`, 잘렸으면 `full_result_file`. 0건이면 `count: 0`, `preview`와 directive에 "바뀐 것 없음".
-  - 결과 xlsx(`--save`, 생략하면 바뀐 것이 있을 때 작업 폴더): 시트 요약, 추가, 삭제, 변경(키, 구분, 열, 이전 값, 새 값, 차이, 이전·새 행), 대체 추정. 다시 열어 시트마다 행 수를 확인(R1). 같은 이름이 있으면 새 이름(`recovered`), `--overwrite`일 때만 덮어씀. 잠겨 있으면 `save_with_lock_fallback`.
-  - 비교결과 시트(1.6.3): 새 판이 xlsx면 묻지 않고 늘 새 판에 `비교결과` 시트를 넣습니다. 비교 내용 전부(추가, 수량·위치·속성 변경, 삭제, 대체 추정)를 한 표로:
+  - JSON: `counts`(구분별 수), 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`, `moved`, `replaced_guess`(각 앞 20개, 항목마다 `key`와 행 번호), `shown`, `truncated`(전체는 새 판의 비교결과 시트). 0건이면 `count: 0`, `preview`와 directive에 "바뀐 것 없음".
+  - 결과 xlsx(`--save`를 줄 때만. 1.6.3: 생략하면 따로 파일을 만들지 않고 새 판의 비교결과 시트에만. 새 판이 CSV면 작업 폴더에 만듦): 시트 요약, 추가, 삭제, 변경(키, 구분, 열, 이전 값, 새 값, 차이, 이전·새 행), 대체 추정. 다시 열어 시트마다 행 수를 확인(R1). 같은 이름이 있으면 새 이름(`recovered`), `--overwrite`일 때만 덮어씀. 잠겨 있으면 `save_with_lock_fallback`.
+  - 비교결과 시트(1.6.3): 새 판이 xlsx면 묻지 않고 늘 새 판에 `비교결과` 시트를 넣습니다. 비교 내용 전부(추가, 수량·위치·속성 변경, 이동, 삭제, 대체 추정)를 한 표로:
     열은 비교 일시, 이전 판, 구분, 키, 품명, 열, 이전 값, 새 값, 이전 판 행, 새 판 행, 내용(메모와 같은 글). 바뀐 것이 없으면 `바뀐 것 없음` 한 줄.
     쓰기는 `excel.py write --target <새 판> --sheet 비교결과 --new-sheet --range A1 --file <CSV> --no-focus`를 같은 프로세스에서 실행(되돌리기 지점, 다시 읽어 확인)하고,
     시트가 이미 있으면 `--new-sheet` 대신 `--append`(같은 머리글은 다시 쓰지 않고 아래에 이어 씀). 결과는 `result_sheet`(`sheet, rows, written, appended`)와

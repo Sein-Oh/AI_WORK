@@ -21,7 +21,7 @@ metadata:
 | 할 일 | 명령 |
 |---|---|
 | 두 판 비교 (BOM 개정) | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>"` |
-| 결과 파일 경로를 정해 비교 | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>" --save "<결과.xlsx>"` |
+| 결과를 따로 파일로도 저장 | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>" --save "<결과.xlsx>"` (사용자가 파일을 원할 때만) |
 | 시트를 정해 비교 | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>" --sheet "<이전 시트>" --sheet2 "<새 시트>"` |
 | 짝지을 열을 정해 비교 | `python "C:\CLI\office-cli\excel.py" compare --target "<이전 판.xlsx>" --target2 "<새 판.xlsx>" --key "<머리글 이름>"` (여럿이면 `--key "상위품번,품번"`) |
 | 표 집계 (합계·평균·최소·최대·건수) | `python "C:\CLI\office-cli\excel.py" stats --target "<파일.xlsx 또는 .csv>"` (열: `--columns 금액,수량`, 묶음별: `--by 부서`, 조건: `--where "금액 >= 100"`, 합계 상위 N묶음: `--by 부서 --top 5`) |
@@ -29,20 +29,20 @@ metadata:
 | 되돌리기 (메모) | `python "C:\CLI\office-cli\office.py" undo` |
 
 - `.xlsx`, `.xlsm`, `.csv`, `.tsv`를 읽는다. `.xls`는 사용자에게 엑셀에서 `.xlsx`로 저장해 달라고 한다.
-- 도구가 정하는 것(사용자가 말하지 않으면 옵션을 붙이지 않는다): 제목 행 아래의 머리글 행, 열 역할(품번·상위품번·레벨·수량·단위·품명·규격·메이커·위치·비고), 시트, 짝지을 키(같은 품번이 여러 행이면 상위품번·레벨·위치를 더함).
+- 도구가 정하는 것(사용자가 말하지 않으면 옵션을 붙이지 않는다): 제목 행 아래의 머리글 행, 열 역할(품번·상위품번·레벨·수량·단위·품명·규격·메이커·위치·비고), 시트, 짝지을 키. 두 판을 위에서부터 순서대로 맞추므로 같은 품번이 여러 곳에 쓰여도 된다.
 - 비교는 공백·전각/반각·코드 대소문자를 무시하고, 숫자는 `1` = `1.0` = `"1"`, 위치는 `R1-R3, R5` = `R1,R2,R3,R5`로 본다. 품번의 앞자리 0은 그대로 다른 값이다.
-- `--sheet`, `--sheet2`, `--key`는 사용자가 시트나 열을 말했을 때만. `--overwrite`(있는 결과 파일 바꾸기)는 사용자가 요청했을 때만.
+- `--sheet`, `--sheet2`, `--key`, `--level`(레벨 열 머리글)은 사용자가 시트나 열을 말했을 때만. `--overwrite`(있는 결과 파일 바꾸기)는 사용자가 요청했을 때만.
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - `duplicates`는 `preview`의 묶음과 엑셀 행 번호를 그대로 알린다. 지우기는 사용자가 지울 행을 말한 뒤에만 (office-excel 행 지우기).
 - `stats`는 `preview`의 숫자를 그대로 알린다. 표를 읽어 직접 더하거나 평균을 내지 않는다 (글자 열은 건수·고유값·많은 값).
 - `preview`(구분별 건수, 짝짓기 키, 인식한 열)와 `warnings`를 그대로 알린다. 0건이면 "바뀐 것 없음"이라고 알린다.
-- 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`는 항목의 `key`와 함께 보여 준다.
+- 구분별 목록 `added`, `removed`, `qty_changed`, `ref_changed`, `attr_changed`, `moved`(다른 상위로 이동, `from` -> `to`)는 항목의 `key`(상위 / 품번)와 함께 보여 준다.
 - `replaced_guess`는 도구의 추정이다. "품번이 바뀐 것으로 보임(확인 필요)"이라고 알리고 확정하지 않는다.
-- `truncated`이면 목록은 앞부분만이다. 전체는 `full_result_file`(요약, 추가, 삭제, 변경, 대체 추정 시트)이라고 알린다.
-- `[후보] 1) ... 2) ...`(짝지을 키를 도구가 못 정함)이면 후보를 보여 주고 사용자가 고른 번호의 `confirm_commands`를 1번 실행한다.
-- compare는 비교 내용 전부(추가·변경·삭제·대체 추정)를 새 판의 `비교결과` 시트에 묻지 않고 넣는다 (preview에 적힘, 시트가 있으면 아래에 이어 씀).
+- `truncated`이면 목록은 앞부분만이다. 전체는 새 판의 `비교결과` 시트라고 알린다.
+- `[후보] 1) ... 2) ...`(짝지을 키나 레벨 열을 도구가 못 정함)이면 후보를 보여 주고 사용자가 고른 번호의 `confirm_commands`를 1번 실행한다.
+- compare는 비교 내용 전부(추가·변경·이동·삭제·대체 추정)를 새 판의 `비교결과` 시트 하나에 묻지 않고 넣는다 (따로 결과 파일은 만들지 않음) (preview에 적힘, 시트가 있으면 아래에 이어 씀).
 - 그다음 사용자에게 "새 판의 바뀐 칸에 메모를 달까요?"만 묻고, "예"이면 `confirm_commands[0]`을 1번 실행한다 (미리보기 없음). 메모는 `비교 <날짜 시각>: <내용>`, 이미 메모가 있는 칸은 그 아래 줄에 덧붙인다.
 - `recovered`(새 이름으로 저장 등)는 그대로 알리고 `output_file`의 실제 경로를 쓴다.
 - `error_type: not_supported`(도구에 없는 기능)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

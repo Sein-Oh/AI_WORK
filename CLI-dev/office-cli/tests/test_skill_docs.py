@@ -222,7 +222,7 @@ def test_skill_mentions_new_and_existing_features():
         "office-spec": ("reader.py\" index --folder", "--section", "search --query", "diff --file", "--file2", "list [--name",
                         "clear --name", "--missing", "synonyms.txt", "--regex", "excel.py\" check", "comment --action add",
                         "not_searched", "match_mode"),
-        "office-data": ("excel.py\" compare --target", "--target2", "--sheet2", "--key", "--save", "replaced_guess", "full_result_file",
+        "office-data": ("excel.py\" compare --target", "--target2", "--sheet2", "--key", "--save", "replaced_guess", "moved", "--level", "비교결과",
                         "confirm_commands"),
     }
     for name, needles in need.items():

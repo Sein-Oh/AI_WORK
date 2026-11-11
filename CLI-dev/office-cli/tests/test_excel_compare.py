@@ -82,7 +82,7 @@ def _sheet_rows(path, title):
 def test_multi_level_bom_uses_level_parent_and_reports_every_category(tmp_path, capsys):
     old = _xlsx(tmp_path / "old.xlsx", MULTI_OLD)
     new = _xlsx(tmp_path / "new.xlsx", MULTI_NEW, title="BOM 목록 (rev B)")
-    code, out = _compare(capsys, old, new)
+    code, out = _compare(capsys, old, new, "--save", str(tmp_path / "결과.xlsx"))
     assert code == 0 and out["status"] == "ok" and out["verified"] is True, out
     assert out["agent_directive"].startswith("VERIFIED:")
     assert out["header_row"] == {"old": 3, "new": 3} and out["rows"] == {"old": 7, "new": 7}
@@ -90,7 +90,7 @@ def test_multi_level_bom_uses_level_parent_and_reports_every_category(tmp_path, 
     assert out["key_columns"] == "상위품번(레벨로 찾음)+Part No" and "레벨" in out["key_reason"]
     roles = {c["role"]: c["old"] for c in out["columns"]}
     assert roles["품번"] == "B (Part No)" and roles["수량"] == "D (Qty)" and roles["위치"] == "F (Ref Des)" and roles["레벨"] == "A (Level)"
-    assert out["counts"] == {"추가": 1, "삭제": 1, "수량 변경": 1, "위치 변경": 1, "속성 변경": 1, "대체 추정": 1}, out["counts"]
+    assert out["counts"] == {"추가": 1, "삭제": 1, "수량 변경": 1, "위치 변경": 1, "속성 변경": 1, "이동": 0, "대체 추정": 1}, out["counts"]
     assert out["count"] == 5
     q = out["qty_changed"][0]
     assert q["key"] == "A-100 / R-0010" and (q["old"], q["new"], q["diff"]) == (3, 4, "+1") and q["row_new"] == 5
@@ -103,7 +103,7 @@ def test_multi_level_bom_uses_level_parent_and_reports_every_category(tmp_path, 
     assert out["added"][0]["part"] == "L-01" and out["removed"][0]["part"] == "D-01"
     g = out["replaced_guess"][0]
     assert (g["old_key"], g["new_key"], g["guess"]) == ("A-100 / U-001", "A-100 / U-002", True) and "같은 위치 U1" in g["reason"]
-    assert "추가 1, 삭제 1, 수량 변경 1, 위치 변경 1, 속성 변경 1, 대체 추정 1" in out["preview"] and "인식한 열: 품번 B" in out["preview"]
+    assert "추가 1, 삭제 1, 수량 변경 1, 위치 변경 1, 속성 변경 1, 이동 0, 대체 추정 1" in out["preview"] and "인식한 열: 품번 B" in out["preview"]
     assert "추정(확인 필요)" in out["agent_directive"] and out["truncated"] is False
     # 결과 xlsx: 요약, 추가, 삭제, 변경(이전·새 값 나란히), 대체 추정
     path = out["output_file"]
@@ -263,22 +263,99 @@ def test_leading_zero_codes_and_csv_input(tmp_path, capsys):
     assert code == 0 and "memo_file" not in out and "next_commands" not in out
 
 
-def test_ambiguous_key_gives_numbered_candidates_that_run(tmp_path, capsys):
+def test_same_part_in_several_rows_is_compared_in_order_without_asking(tmp_path, capsys):
+    # 상위 정보가 없는 목록에서 같은 품번이 여러 행: 전에는 --key를 물었음. 이제 순서대로 대조 (사용자 결정 2026-11-11)
     head = ["품번", "품명", "수량", "위치"]
     rows = [["S-1", "나사", 2, ""], ["S-1", "나사", 3, ""], ["K-1", "키", 1, "K1"]]
     old = _xlsx(tmp_path / "a.xlsx", rows, header=head, title=None)
     new = _xlsx(tmp_path / "b.xlsx", [["S-1", "나사", 2, ""], ["S-1", "나사", 4, ""], ["K-1", "키", 1, "K1"]], header=head, title=None)
     code, out = _compare(capsys, old, new)
-    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and out["error_type"] == "ambiguous", out
-    assert "[후보] 1) " in out["message"] and "2) " in out["message"]
-    cmds = out["confirm_commands"]
-    assert len(cmds) == len(out["candidates"]) == 2
-    argv = split_command(cmds[0]["command"])
-    assert argv[0] == "python" and os.path.basename(argv[1]) == "excel.py" and argv[2] == "compare"
-    assert argv[argv.index("--key") + 1] == "품번"
-    code, out = run_excel(capsys, *argv[2:])
-    assert code == 0 and out["key_columns"] == "품번" and out["qty_changed"][0]["diff"] == "+1", out
-    assert any("나온 순서대로 짝지음" in w for w in out["warnings"])
+    assert code == 0 and out["key_columns"] == "품번" and "순서대로 대조" in out["key_reason"], out
+    assert out["count"] == 1 and out["qty_changed"][0]["diff"] == "+1" and out["qty_changed"][0]["row_new"] == 3, out
+
+
+@pytest.mark.parametrize("at", [0, 2])
+def test_same_part_added_next_to_unchanged_row_is_only_an_addition(tmp_path, capsys, at):
+    """회사 PC 2026-11-11: 이미 있는 부품을 다른 곳에도 쓰면 잘 알아보지 못함. 전에는 같은 품번을 나온 순서대로 짝지어, 새 줄이 위에
+    끼면 '수량 4 -> 2 + 추가(수량 4)'로 나왔다. 값이 모두 같은 줄을 먼저 제 짝에 맞추므로 '추가(수량 2)' 하나."""
+    head = ["품번", "품명", "수량"]
+    rows = [["P-1", "볼트", 4], ["P-2", "너트", 4], ["P-3", "와셔", 8]]
+    new_rows = rows[:at] + [["P-1", "볼트", 2]] + rows[at:]
+    old = _xlsx(tmp_path / "a.xlsx", rows, header=head, title=None)
+    new = _xlsx(tmp_path / "b.xlsx", new_rows, header=head, title=None)
+    code, out = _compare(capsys, old, new)
+    assert code == 0 and out["count"] == 1 and out["counts"]["추가"] == 1 and out["counts"]["수량 변경"] == 0, out["counts"]
+    assert (out["added"][0]["qty"], out["added"][0]["row_new"]) == (2, at + 2), out["added"]
+
+
+BOM_HEAD = ["Index", "Level", "PN", "Description", "Qty"]
+BOM_OLD = [[1, 1, "UGS0001", "LG Instl", 1], [2, 2, "UGS1001", "NLG Assy", 1], [3, 3, "UGS31001", "Struct Assembly, NLG", 1],
+           [4, 4, "UGS32001", "Struct Housing", 1], [5, 5, "M81934/2-8", "Bushing", 2], [6, 5, "M81934/2-16", "Bushing", 2],
+           [7, 5, "NAS77C12-050", "Bushing", 4], [8, 3, "UGS33001", "Axle Assy", 1], [9, 4, "NAS1149", "Washer", 2]]
+
+
+def _renumber(rows):
+    return [[i] + list(r[1:]) for i, r in enumerate(rows, 1)]
+
+
+def test_bom_with_index_and_level_same_part_used_in_another_place(tmp_path, capsys, sheet_writes):
+    """실제 BOM 모양(3행 머리글 Index Level PN Description, 사용자 설명 2026-11-11): 이미 있는 부품(M81934/2-8)을 다른 조립에도 쓰고
+    행을 넣어 Index가 모두 밀림. 순서 대조라 그 한 줄만 추가로 나오고, Index 열은 비교하지 않음."""
+    new_rows = BOM_OLD[:3] + [[0, 4, "M81934/2-8", "Bushing", 1]] + BOM_OLD[3:] + [[0, 4, "M81934/2-8", "Bushing", 6]]
+    old = _xlsx(tmp_path / "old.xlsx", BOM_OLD, header=BOM_HEAD, title="BOM rev A")
+    new = _xlsx(tmp_path / "new.xlsx", _renumber(new_rows), header=BOM_HEAD, title="BOM rev B")
+    code, out = _compare(capsys, old, new)
+    assert code == 0 and out["header_row"] == {"old": 3, "new": 3}, out
+    assert out["counts"] == {"추가": 2, "삭제": 0, "수량 변경": 0, "위치 변경": 0, "속성 변경": 0, "이동": 0, "대체 추정": 0}, out["counts"]
+    assert [(a["key"], a["row_new"], a["qty"]) for a in out["added"]] == [("UGS31001 / M81934/2-8", 7, 1), ("UGS33001 / M81934/2-8", 14, 6)]
+    assert any("행 번호 열은 비교하지 않음: Index" in w for w in out["warnings"]), out["warnings"]
+    assert "output_file" not in out and out["result_sheet"]["written"] is True      # 결과는 새 판의 비교결과 시트에만
+
+
+def test_bom_part_moved_to_another_assembly_is_one_move(tmp_path, capsys):
+    # NAS77C12-050을 UGS32001 아래에서 UGS33001 아래로 옮기고 수량도 바꿈: 삭제+추가가 아니라 이동 한 줄 + 수량 변경
+    rows = [list(r) for r in BOM_OLD]
+    moved = rows.pop(6)
+    moved[1], moved[4] = 4, 6
+    rows.append(moved)
+    old = _xlsx(tmp_path / "old.xlsx", BOM_OLD, header=BOM_HEAD, title="BOM rev A")
+    new = _xlsx(tmp_path / "new.xlsx", _renumber(rows), header=BOM_HEAD, title="BOM rev B")
+    code, out = _compare(capsys, old, new)
+    assert code == 0 and out["counts"]["이동"] == 1 and out["counts"]["추가"] == 0 and out["counts"]["삭제"] == 0, out["counts"]
+    m = out["moved"][0]
+    assert (m["from"], m["to"], m["row_old"], m["row_new"]) == ("UGS32001", "UGS33001", 10, 12), m
+    assert out["qty_changed"][0]["diff"] == "+2" and out["count"] == 1
+    with open(out["result_sheet_file"], encoding="utf-8-sig") as f:
+        rows_out = list(csv.reader(f))
+    assert any(r[2] == "이동" and r[10] == "이동: 상위 UGS32001 -> UGS33001" for r in rows_out), rows_out
+    with open(out["memo_file"], encoding="utf-8-sig") as f:
+        assert any("이동 (이전 상위 UGS32001)" in r[1] for r in csv.reader(f))
+
+
+def test_bom_block_inserted_and_removed_keeps_the_rest_matched(tmp_path, capsys):
+    # 8줄 묶음을 한꺼번에 넣고 다른 줄을 지워도 나머지는 그대로 짝지어짐 (위아래 5칸보다 길어도)
+    block = [[0, 5, f"NEW-{i:02d}", "New part", 1] for i in range(8)]
+    rows = BOM_OLD[:4] + block + BOM_OLD[4:5] + BOM_OLD[6:]
+    old = _xlsx(tmp_path / "old.xlsx", BOM_OLD, header=BOM_HEAD, title="BOM rev A")
+    new = _xlsx(tmp_path / "new.xlsx", _renumber(rows), header=BOM_HEAD, title="BOM rev B")
+    code, out = _compare(capsys, old, new)
+    assert code == 0 and out["counts"]["추가"] == 8 and out["counts"]["삭제"] == 1 and out["count"] == 9, out["counts"]
+    assert out["removed"][0]["part"] == "M81934/2-16"
+
+
+def test_unknown_level_header_asks_with_numbered_commands(tmp_path, capsys):
+    head = ["Index", "Depth", "PN", "Description", "Qty"]
+    old = _xlsx(tmp_path / "old.xlsx", BOM_OLD, header=head, title=None)
+    new = _xlsx(tmp_path / "new.xlsx", BOM_OLD[:-1], header=head, title=None)
+    code, out = _compare(capsys, old, new)
+    assert code == 1 and out["error_type"] == "ambiguous" and "[후보] 1) Depth 2) 없음" in out["message"], out
+    argv = split_command(out["confirm_commands"][0]["command"])[2:]
+    assert argv[argv.index("--level") + 1] == "Depth"
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and out["counts"]["삭제"] == 1 and out["removed"][0]["key"] == "UGS33001 / NAS1149", out
+    argv = split_command(out_none := _compare(capsys, old, new)[1]["confirm_commands"][1]["command"])[2:]
+    code, out = run_excel(capsys, *argv)
+    assert code == 0 and argv[argv.index("--level") + 1] == "없음" and out["removed"][0]["key"] == "NAS1149", out
 
 
 def test_unknown_part_column_uses_the_only_unique_column(tmp_path, capsys):
@@ -310,7 +387,7 @@ def test_key_given_as_column_letter_recommends_header_name(tmp_path, capsys):
     argv = recommended_argv(out["message"], "excel")
     assert argv[argv.index("--key") + 1] == "Part No"
     code, out = run_excel(capsys, *argv)
-    assert code == 0 and out["key_columns"] == "Part No" and any("나온 순서대로" in w for w in out["warnings"])
+    assert code == 0 and out["key_columns"] == "Part No" and out["counts"]["수량 변경"] == 1, out
 
 
 def test_save_is_verified_and_never_overwrites_without_option(tmp_path, capsys):
@@ -335,19 +412,21 @@ def test_unverified_when_result_file_does_not_read_back(tmp_path, capsys, monkey
     old = _xlsx(tmp_path / "old.xlsx", MULTI_OLD)
     new = _xlsx(tmp_path / "new.xlsx", MULTI_NEW)
     monkeypatch.setattr(_excel_compare, "_cmp_check_xlsx", lambda path, expected: "결과 파일 '추가' 시트의 행 수가 다름 (기대 2, 읽은 1)")
-    code, out = _compare(capsys, old, new)
+    code, out = _compare(capsys, old, new, "--save", str(tmp_path / "r.xlsx"))
     assert code == 0 and out["verified"] is False and out["agent_directive"].startswith("UNVERIFIED:") and "추가" in out["unverified"][0]
 
 
-def test_truncated_lists_point_to_full_result_file(tmp_path, capsys):
+def test_truncated_lists_point_to_result_sheet(tmp_path, capsys):
     head = ["품번", "품명", "수량"]
     old = _xlsx(tmp_path / "a.xlsx", [[f"P{i:03d}", f"부품{i}", 1] for i in range(5)], header=head, title=None)
     new = _xlsx(tmp_path / "b.xlsx", [[f"P{i:03d}", f"부품{i}", 1] for i in range(5)] +
                 [[f"N{i:03d}", f"새 부품 {i * 7}", 1] for i in range(30)], header=head, title=None)
     _, out = _compare(capsys, old, new)
     assert out["counts"]["추가"] == 30 and len(out["added"]) == _excel_compare.COMPARE_SHOWN and out["truncated"] is True
-    assert out["full_result_file"] == out["output_file"] and "full_result_file" in out["agent_directive"]
-    assert len(_sheet_rows(out["full_result_file"], "추가")) == 31
+    # 전체는 따로 파일이 아니라 새 판의 비교결과 시트 (사용자 결정 2026-11-11). --save를 주면 결과 xlsx도
+    assert "output_file" not in out and "'비교결과' 시트" in out["agent_directive"] and out["result_sheet"]["rows"] == 30
+    _, out = _compare(capsys, old, new, "--save", str(tmp_path / "r.xlsx"))
+    assert out["full_result_file"] == out["output_file"] and len(_sheet_rows(out["full_result_file"], "추가")) == 31
 
 
 def test_sheet_is_chosen_by_header_and_new_uses_same_name(tmp_path, capsys):

@@ -367,22 +367,7 @@ def _cmp_table(data: Dict[str, Any], path: str) -> Dict[str, Any]:
          "header_row": hi + 1, "header": header, "keys": [_cmp_header_key(v) for v in head], "roles": roles, "body": body,
          "csv": os.path.splitext(path)[1].lower() in (".csv", ".tsv")}
     if "level" in roles:
-        lv, pc = roles["level"], roles.get("part")
-        stack: List[Tuple[int, str]] = []
-        parents, paths = [], []
-        for _, r in body:
-            level = _cmp_level(r[lv])
-            code = _cmp_code(r[pc]) if pc is not None else ""
-            if level is None:
-                parents.append("")
-                paths.append("")
-                continue
-            while stack and stack[-1][0] >= level:
-                stack.pop()
-            parents.append(stack[-1][1] if stack else "")
-            paths.append(">".join(c for _, c in stack))
-            stack.append((level, code))
-        t["lv_parent"], t["lv_path"] = parents, paths
+        _cmp_level_tree(t)
     return t
 
 
@@ -477,32 +462,18 @@ def _cmp_choose_key(args, old: Dict[str, Any], new: Dict[str, Any],
     if args.key:
         spec = _cmp_key_arg(args, old, new, pairs)
         return spec, "--key로 준 열", True
-    both = [r for r in ("part", "parent", "level", "ref") if r in old["roles"] and r in new["roles"]]
+    both = [r for r in ("part", "parent", "level") if r in old["roles"] and r in new["roles"]]
     if "part" in both:
         part = _cmp_col_part(old, new, "part")
-        options: List[Tuple[List[KeyPart], str]] = [([part], "품번이 행마다 다름")]
+        # 순서대로 대조하므로 같은 품번이 여러 곳에 쓰여도 묻지 않음 (사용자 결정 2026-11-11). 상위 정보(상위품번 열, 레벨)가 있으면
+        # 키를 '상위 / 품번'으로: 어느 조립 아래인지 보이고, 다른 조립으로 옮긴 행을 이동으로 알아봄
+        dup = bool(_cmp_dups(_cmp_key_values(old, [part], 1)) or _cmp_dups(_cmp_key_values(new, [part], 2)))
+        tail = ", 같은 품번이 여러 곳에 쓰여 순서대로 대조" if dup else ""
         if "parent" in both:
-            options.append(([_cmp_col_part(old, new, "parent"), part], "같은 품번이 여러 행이라 상위품번을 더함"))
+            return [_cmp_col_part(old, new, "parent"), part], "상위품번 열과 품번" + tail, True
         if "level" in both:
-            options.append(([("lv_parent",), part], "같은 품번이 여러 행이라 레벨로 찾은 상위품번을 더함"))
-            options.append(([("lv_path",), part], "같은 품번이 여러 행이라 레벨로 찾은 상위 경로를 더함"))
-        if "ref" in both:
-            options.append(([part, _cmp_col_part(old, new, "ref")], "같은 품번이 여러 행이라 위치를 더함"))
-            if "parent" in both:
-                options.append(([_cmp_col_part(old, new, "parent"), part, _cmp_col_part(old, new, "ref")],
-                                "같은 품번이 여러 행이라 상위품번과 위치를 더함"))
-        for spec, why in options:
-            if not _cmp_dups(_cmp_key_values(old, spec, 1)) and not _cmp_dups(_cmp_key_values(new, spec, 2)):
-                return spec, why, False
-        # 열로 적을 수 있는 키만 후보 (레벨로 찾은 상위는 --key로 적을 수 없음). 남는 같은 키 행이 적은 순서
-        cands = []
-        for spec, _ in options:
-            if any(p[0] != "col" for p in spec):
-                continue
-            n = _cmp_dups(_cmp_key_values(old, spec, 1)) + _cmp_dups(_cmp_key_values(new, spec, 2))
-            cands.append((n, _cmp_spec_label(spec), ",".join(p[3] for p in spec)))
-        head = (f"같은 품번({old['header'][old['roles']['part']]})이 여러 행에 있어 두 판의 행을 짝지을 키를 도구가 정할 수 없습니다 "
-                f"(상위품번·레벨·위치를 더해도 같은 키의 행이 남음). 사용자에게 키를 고르게 하세요. 고른 키가 같은 행은 나온 순서대로 짝짓습니다.")
+            return [("lv_parent",), part], "레벨로 찾은 상위품번과 품번" + tail, True
+        return [part], ("같은 품번이 여러 행에 있어 순서대로 대조" if dup else "품번이 행마다 다름"), True
     else:
         cands = []
         for o, n, label, _ in pairs:
@@ -546,21 +517,128 @@ def _cmp_row_numbers(keys: List[str]) -> bool:
     return bool(nums) and nums == list(range(nums[0], nums[0] + len(nums)))
 
 
-def _cmp_index(keys: List[str], ordered: bool) -> Tuple[Dict[str, int], int]:
-    """키 -> 행 순번. ordered면 같은 키의 n번째 행에 '#n'을 붙여 나온 순서대로 짝지음. (색인, 같은 키 행 수)."""
-    idx: Dict[str, int] = {}
-    seen: Dict[str, int] = {}
-    dup = 0
-    for i, k in enumerate(keys):
-        if not ordered:
-            idx[k] = i
+COMPARE_ALIGN_GAP = 4_000_000   # 순서 대조에서 한 구간(이전 행 수 x 새 행 수)을 꼼꼼히 맞추는 상한 (넘는 구간은 키로만 짝지음)
+
+
+def _cmp_align(a: List[str], b: List[str]) -> List[Tuple[int, int]]:
+    """두 판의 행(대조값 목록)을 위에서부터 순서대로 맞춘 짝 [(이전 순번, 새 순번)] (문서 비교와 같은 방식, 사용자 제안 2026-11-11:
+    사람이 두 파일을 나란히 놓고 위아래를 훑어 맞추는 것). 같은 품번이 여러 곳에 쓰여도 앞뒤 행으로 자리를 알아봄.
+    1) 앞·뒤의 같은 줄, 2) 두 판에 한 번씩만 나오는 줄을 순서가 지켜지는 만큼 기준점으로, 3) 기준점 사이는 가장 긴 같은 구간부터."""
+    import bisect
+    import difflib
+    from collections import Counter
+    pairs: List[Tuple[int, int]] = []
+
+    def block(a0: int, a1: int, b0: int, b1: int) -> None:
+        while a0 < a1 and b0 < b1 and a[a0] == b[b0]:
+            pairs.append((a0, b0))
+            a0, b0 = a0 + 1, b0 + 1
+        tail = []
+        while a0 < a1 and b0 < b1 and a[a1 - 1] == b[b1 - 1]:
+            a1, b1 = a1 - 1, b1 - 1
+            tail.append((a1, b1))
+        if a0 < a1 and b0 < b1:
+            ca, cb = Counter(a[a0:a1]), Counter(b[b0:b1])
+            pos_b = {t: j for j, t in enumerate(b[b0:b1], b0) if cb[t] == 1}
+            cand = [(i, pos_b[t]) for i, t in enumerate(a[a0:a1], a0) if ca[t] == 1 and t in pos_b]
+            # 기준점: 새 판 순번이 늘어나는 가장 긴 줄 (순서가 바뀐 행은 기준점이 되지 않음)
+            tails: List[int] = []
+            tail_idx: List[int] = []
+            prev = [-1] * len(cand)
+            for n, (_, j) in enumerate(cand):
+                k = bisect.bisect_left(tails, j)
+                if k == len(tails):
+                    tails.append(j)
+                    tail_idx.append(n)
+                else:
+                    tails[k], tail_idx[k] = j, n
+                prev[n] = tail_idx[k - 1] if k else -1
+            anchors = []
+            n = tail_idx[-1] if tail_idx else -1
+            while n >= 0:
+                anchors.append(cand[n])
+                n = prev[n]
+            anchors.reverse()
+            if anchors:
+                pa, pb = a0, b0
+                for i, j in anchors:
+                    block(pa, i, pb, j)
+                    pairs.append((i, j))
+                    pa, pb = i + 1, j + 1
+                block(pa, a1, pb, b1)
+            elif (a1 - a0) * (b1 - b0) <= COMPARE_ALIGN_GAP:
+                sm = difflib.SequenceMatcher(None, a[a0:a1], b[b0:b1], autojunk=False)
+                for i, j, size in sm.get_matching_blocks():
+                    pairs.extend((a0 + i + k, b0 + j + k) for k in range(size))
+        pairs.extend(reversed(tail))
+
+    block(0, len(a), 0, len(b))
+    pairs.sort()
+    return pairs
+
+
+def _cmp_parent_text(t: Dict[str, Any], i: int) -> str:
+    """행의 상위 품번 (상위품번 열, 없으면 레벨로 찾은 상위). 없으면 ''."""
+    roles = t["roles"]
+    if "parent" in roles:
+        v = out_value(t["body"][i][1][roles["parent"]])
+        return str(v) if v != "" else ""
+    return t["lv_parent"][i] if "lv_parent" in t else ""
+
+
+def _cmp_level_candidates(t: Dict[str, Any]) -> List[str]:
+    """레벨 열을 머리글로 알아보지 못했을 때, 레벨일 수 있는 열의 머리글: 역할을 모르는 열 중 모든 값이 0~20의 정수이고 값이 둘 이상,
+    1, 2, 3... 행 번호가 아닌 열."""
+    known = set(t["roles"].values())
+    out = []
+    for j, name in enumerate(t["header"]):
+        if j in known:
             continue
-        n = seen.get(k, 0) + 1
-        seen[k] = n
-        if n > 1:
-            dup += 1
-        idx[k if n == 1 else f"{k}\x1e{n}"] = i
-    return idx, dup
+        vals = [r[j] for _, r in t["body"] if r[j] is not None and str(r[j]).strip()]
+        if len(vals) < 3 or len(vals) < len(t["body"]) * 0.8:
+            continue
+        lv = [_cmp_level(v) for v in vals]
+        if any(x is None or not 0 <= x <= 20 for x in lv) or len(set(lv)) < 2:
+            continue
+        if _cmp_row_numbers([str(x) for x in lv]) or lv == sorted(set(lv)) and len(set(lv)) == len(lv):
+            continue
+        out.append(name)
+    return out
+
+
+def _cmp_set_level(t: Dict[str, Any], name: str) -> bool:
+    """--level로 준 머리글의 열을 레벨 열로 (머리글 비교값이 같은 열). 찾으면 True."""
+    key = _cmp_header_key(name)
+    j = next((j for j, h in enumerate(t["header"]) if h.strip().lower() == str(name).strip().lower()), None)
+    if j is None:
+        j = next((j for j, k in enumerate(t["keys"]) if k and k == key), None)
+    if j is None:
+        return False
+    t["roles"] = {r: c for r, c in t["roles"].items() if c != j}
+    t["roles"]["level"] = j
+    _cmp_level_tree(t)
+    return True
+
+
+def _cmp_level_tree(t: Dict[str, Any]) -> None:
+    """레벨 열로 행마다의 상위 품번(lv_parent)과 상위 경로(lv_path)를 만듦."""
+    roles, body = t["roles"], t["body"]
+    lv, pc = roles["level"], roles.get("part")
+    stack: List[Tuple[int, str]] = []
+    parents, paths = [], []
+    for _, r in body:
+        level = _cmp_level(r[lv])
+        code = _cmp_code(r[pc]) if pc is not None else ""
+        if level is None:
+            parents.append("")
+            paths.append("")
+            continue
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        parents.append(stack[-1][1] if stack else "")
+        paths.append(">".join(c for _, c in stack))
+        stack.append((level, code))
+    t["lv_parent"], t["lv_path"] = parents, paths
 
 
 def _cmp_key_text(t: Dict[str, Any], spec: Sequence[KeyPart], side: int, i: int) -> str:
@@ -671,7 +749,8 @@ def _result_sheet_rows(stamp: str, old: Dict[str, Any], new: Dict[str, Any], spe
         v = _cmp_row_view(new, spec, 2, j, "row_new")
         rows.append([stamp, src, "추가", v["key"], v.get("name", ""), "", "", "", "", v["row_new"], "이전 판에 없는 행"])
     for key, kind, col, a, b, d, orow, nrow in detail:
-        text = {"수량 변경": f"수량 {a} -> {b}" + (f" ({d})" if d else ""), "위치 변경": f"위치 {d}"}.get(kind, f"{col} {a} -> {b}")
+        text = {"수량 변경": f"수량 {a} -> {b}" + (f" ({d})" if d else ""), "위치 변경": f"위치 {d}",
+                "이동": f"이동: 상위 {a} -> {b}"}.get(kind, f"{col} {a} -> {b}")
         rows.append([stamp, src, kind, key, name_new.get(nrow, ""), col, a, b, orow, nrow, text])
     for i in removed:
         v = _cmp_row_view(old, spec, 1, i, "row_old")
@@ -809,8 +888,25 @@ def cmd_compare(args) -> Dict[str, Any]:
         _cmp_drop_cache(old_data, new_data)
         raise rt.InputError(f"두 파일 모두 머리글 아래에 데이터 행이 없습니다 (이전 판 {old['name']} '{old['sheet']}', 새 판 {new['name']} '{new['sheet']}'). "
                             "비교할 시트를 --sheet, --sheet2로 주세요.")
+    level_arg = (getattr(args, "level", None) or "").strip()
+    if level_arg and level_arg != "없음":
+        for t in (old, new):
+            if not _cmp_set_level(t, level_arg):
+                raise rt.not_found("레벨 열", level_arg, t["header"], extra=f" ({t['name']}의 머리글 {t['header_row']}행)")
+    elif level_arg == "없음":
+        for t in (old, new):
+            t["roles"].pop("level", None)
+            t.pop("lv_parent", None)
+            t.pop("lv_path", None)
+    elif "part" in old["roles"] and "part" in new["roles"] and not ("level" in old["roles"] and "level" in new["roles"]):
+        # 레벨 열을 머리글로 알아보지 못함: 레벨일 수 있는 열이 있으면 사용자에게 물음 (없으면 레벨 없는 목록으로 비교)
+        cands = [c for c in _cmp_level_candidates(old) if c in _cmp_level_candidates(new)]
+        if cands:
+            raise rt.ambiguous("레벨(단계) 열을 머리글 이름으로 알아보지 못했습니다. 레벨 열이 있으면 고르게 하세요 (없으면 '없음').",
+                               cands + ["없음 (레벨 없는 목록)"], values=cands + ["없음"], option="--level",
+                               log_message="레벨 열을 알아보지 못함.")
     pairs, only_old, only_new = _cmp_pair_columns(old, new)
-    spec, key_why, ordered = _cmp_choose_key(args, old, new, pairs)
+    spec, key_why, _ = _cmp_choose_key(args, old, new, pairs)
     # 품번이 빈 행(소계, 구분 줄)은 짝짓지 않음
     part_parts = [p for p in spec if p[0] == "col"]
     first = next((p for p in part_parts if p[1] == old["roles"].get("part")), part_parts[0] if part_parts else None)
@@ -818,20 +914,79 @@ def cmd_compare(args) -> Dict[str, Any]:
     skip_n = {i for i, (_, r) in enumerate(new["body"]) if first and r[first[2]] is None}
     if skip_o or skip_n:
         warnings.append(f"키 열({first[3]})이 빈 행은 비교하지 않음 (이전 판 {len(skip_o)}행, 새 판 {len(skip_n)}행)")
-    ko, kn = _cmp_key_values(old, spec, 1), _cmp_key_values(new, spec, 2)
-    oidx, odup = _cmp_index([k for i, k in enumerate(ko) if i not in skip_o], ordered)
-    nidx, ndup = _cmp_index([k for i, k in enumerate(kn) if i not in skip_n], ordered)
-    orows = [i for i in range(len(old["body"])) if i not in skip_o]
-    nrows = [i for i in range(len(new["body"])) if i not in skip_n]
-    oidx = {k: orows[v] for k, v in oidx.items()}
-    nidx = {k: nrows[v] for k, v in nidx.items()}
-    if odup or ndup:
-        warnings.append(f"키({_cmp_spec_label(spec)})가 같은 행은 나온 순서대로 짝지음 (이전 판 {odup}행, 새 판 {ndup}행)")
     roles_pair = {p[3]: p for p in pairs if p[3]}
     qty = roles_pair.get("qty")
     ref = roles_pair.get("ref")
     key_cols = {(p[1], p[2]) for p in spec if p[0] == "col"}
     attrs = [p for p in pairs if (p[0], p[1]) not in key_cols and p[3] not in ("qty", "ref")]
+    # 1, 2, 3... 행 번호 열(Index, No)은 행을 넣고 빼면 모두 밀리므로 비교하지 않음 (실제 BOM 머리글: Index Level PN Description)
+    numbering = []
+    for p_ in list(attrs):
+        vo = [str(r[p_[0]]) for _, r in old["body"] if r[p_[0]] is not None]
+        vn = [str(r[p_[1]]) for _, r in new["body"] if r[p_[1]] is not None]
+        if p_[3] is None and len(vo) >= 3 and len(vn) >= 3 and _cmp_row_numbers(vo) and _cmp_row_numbers(vn):
+            attrs.remove(p_)
+            numbering.append(p_[2])
+    if numbering:
+        warnings.append(f"행 번호 열은 비교하지 않음: {', '.join(numbering)}")
+    ko, kn = _cmp_key_values(old, spec, 1), _cmp_key_values(new, spec, 2)
+    orows = [i for i in range(len(old["body"])) if i not in skip_o]
+    nrows = [i for i in range(len(new["body"])) if i not in skip_n]
+    # 1) 순서대로 대조: 대조값 = 키 + 레벨 (같은 품번이라도 단계가 다르면 다른 줄)
+    def token(t: Dict[str, Any], keys: List[str], i: int) -> str:
+        lv = _cmp_level(t["body"][i][1][t["roles"]["level"]]) if "level" in t["roles"] else None
+        return keys[i] + "\x1d" + ("" if lv is None else str(lv))
+    # 먼저 모든 값이 같은 줄을 기준으로 맞추고(같은 품번이 나란히 있을 때 바뀌지 않은 줄을 제 짝에), 그 사이를 키로 맞춤
+    cmp_cols = ([qty] if qty else []) + ([ref] if ref else []) + attrs
+
+    def whole(t: Dict[str, Any], keys: List[str], i: int, side: int) -> str:
+        r = t["body"][i][1]
+        vals = [(_cmp_ref_text(_cmp_refs(r[p_[side]])) if p_[3] == "ref" else
+                 (_cmp_num_text(_cmp_number(r[p_[side]])) if p_[3] == "qty" and _cmp_number(r[p_[side]]) is not None else
+                  _cmp_value(r[p_[side]]).upper())) for p_ in cmp_cols]
+        return token(t, keys, i) + "\x1c" + "\x1f".join(vals)
+    tok_o, tok_n = [token(old, ko, i) for i in orows], [token(new, kn, j) for j in nrows]
+    same = _cmp_align([whole(old, ko, i, 0) for i in orows], [whole(new, kn, j, 1) for j in nrows])
+    aligned: List[Tuple[int, int]] = []
+    pa = pb = 0
+    for x, y in same + [(len(tok_o), len(tok_n))]:
+        aligned += [(pa + u, pb + v) for u, v in _cmp_align(tok_o[pa:x], tok_n[pb:y])]
+        if x < len(tok_o):
+            aligned.append((x, y))
+        pa, pb = x + 1, y + 1
+    matched = [(orows[x], nrows[y]) for x, y in aligned]
+    done_o, done_n = {i for i, _ in matched}, {j for _, j in matched}
+    # 2) 남은 행: 키가 같은 것끼리 (자리만 바뀐 행, 나온 순서대로)
+    from collections import defaultdict
+    rest_n: Dict[str, List[int]] = defaultdict(list)
+    for j in nrows:
+        if j not in done_n:
+            rest_n[kn[j]].append(j)
+    for i in orows:
+        if i not in done_o and rest_n.get(ko[i]):
+            j = rest_n[ko[i]].pop(0)
+            matched.append((i, j))
+            done_o.add(i)
+            done_n.add(j)
+    # 3) 그래도 남은 행: 품번만 같은 것끼리 = 다른 상위로 옮긴 행 (이동)
+    moved: Dict[int, int] = {}
+    if first is not None and len(spec) > 1:
+        po, pn = _cmp_key_values(old, [first], 1), _cmp_key_values(new, [first], 2)
+        rest_p: Dict[str, List[int]] = defaultdict(list)
+        for j in nrows:
+            if j not in done_n:
+                rest_p[pn[j]].append(j)
+        for i in orows:
+            if i not in done_o and rest_p.get(po[i]):
+                j = rest_p[po[i]].pop(0)
+                matched.append((i, j))
+                moved[i] = j
+                done_o.add(i)
+                done_n.add(j)
+    oidx = {f"m{n}": i for n, (i, _) in enumerate(matched)}
+    nidx = {f"m{n}": j for n, (_, j) in enumerate(matched)}
+    oidx.update({f"o{i}": i for i in orows if i not in done_o})
+    nidx.update({f"n{j}": j for j in nrows if j not in done_n})
     removed = [oidx[k] for k in oidx if k not in nidx]
     added = [nidx[k] for k in nidx if k not in oidx]
     removed.sort()
@@ -839,6 +994,7 @@ def cmd_compare(args) -> Dict[str, Any]:
     qty_changed: List[Dict[str, Any]] = []
     ref_changed: List[Dict[str, Any]] = []
     attr_changed: List[Dict[str, Any]] = []
+    moved_view: List[Dict[str, Any]] = []
     detail: List[List[Any]] = []          # 결과 xlsx '변경' 시트: 키, 구분, 열, 이전 값, 새 값, 차이, 이전 행, 새 행
     memo: Dict[Tuple[int, int], List[str]] = {}   # 새 판 (행, 열) -> 메모 글
 
@@ -853,6 +1009,13 @@ def cmd_compare(args) -> Dict[str, Any]:
         (orow, ro), (nrow, rn) = old["body"][i], new["body"][j]
         hit = False
         key_text = None
+        if moved.get(i) == j:
+            key_text = _cmp_key_text(new, spec, 2, j)
+            src, dst = _cmp_parent_text(old, i) or "(최상위)", _cmp_parent_text(new, j) or "(최상위)"
+            moved_view.append({"key": key_text, "from": src, "to": dst, "row_old": orow, "row_new": nrow})
+            detail.append([key_text, "이동", "상위", src, dst, "", orow, nrow])
+            note(nrow, new["roles"].get("part", first[2] if first else 0), f"비교: 이동 (이전 상위 {src})")
+            hit = True
         if qty:
             a, b = ro[qty[0]], rn[qty[1]]
             na, nb = _cmp_number(a), _cmp_number(b)
@@ -921,14 +1084,15 @@ def cmd_compare(args) -> Dict[str, Any]:
                            "reason": why, "guess": True})
         # 대체 추정은 칸 메모가 아니라 새 판의 '비교결과' 시트로 (사용자 요청 2026-11-11: 메모는 추가·변경만)
     counts = {"추가": len(added), "삭제": len(removed), "수량 변경": len(qty_changed), "위치 변경": len(ref_changed),
-              "속성 변경": len(attr_changed), "대체 추정": len(guesses)}
+              "속성 변경": len(attr_changed), "이동": len(moved_view), "대체 추정": len(guesses)}
     total = len(added) + len(removed) + changed_rows + len(guesses)
     lists = {"added": [_cmp_row_view(new, spec, 2, j, "row_new") for j in added[:COMPARE_SHOWN]],
              "removed": [_cmp_row_view(old, spec, 1, i, "row_old") for i in removed[:COMPARE_SHOWN]],
              "qty_changed": qty_changed[:COMPARE_SHOWN], "ref_changed": ref_changed[:COMPARE_SHOWN],
-             "attr_changed": attr_changed[:COMPARE_SHOWN], "replaced_guess": guess_view[:COMPARE_SHOWN]}
+             "attr_changed": attr_changed[:COMPARE_SHOWN], "moved": moved_view[:COMPARE_SHOWN],
+             "replaced_guess": guess_view[:COMPARE_SHOWN]}
     full_n = {"added": len(added), "removed": len(removed), "qty_changed": len(qty_changed), "ref_changed": len(ref_changed),
-              "attr_changed": len(attr_changed), "replaced_guess": len(guesses)}
+              "attr_changed": len(attr_changed), "moved": len(moved_view), "replaced_guess": len(guesses)}
     truncated = any(full_n[k] > len(v) for k, v in lists.items())
     columns = []
     for o, n, label, role in pairs:
@@ -958,7 +1122,8 @@ def cmd_compare(args) -> Dict[str, Any]:
     if args.save and os.path.splitext(str(args.save).strip().strip('"'))[1].lower() not in ("", ".xlsx"):
         warnings.append(f"compare는 .xlsx로만 저장합니다: --save의 {os.path.splitext(str(args.save))[1]} 대신 .xlsx로 저장")
     out = None
-    if total or args.save:
+    # 결과는 새 판의 비교결과 시트 하나에 (사용자 결정 2026-11-11: 따로 xlsx를 만들지 않음). --save를 주거나 새 판이 CSV일 때만 결과 xlsx
+    if args.save or (total and new["csv"]):
         out = rt.resolve_output_path(args.save or None, f"compare_{os.path.splitext(new['name'])[0]}", ".xlsx",
                                      overwrite=bool(args.overwrite))
         summary = [["이전 판", f"{old_path} / 시트 {old['sheet']} / 머리글 {old['header_row']}행 / {len(old['body'])}행"],
@@ -996,7 +1161,7 @@ def cmd_compare(args) -> Dict[str, Any]:
         sheet_ref = sheet if re.fullmatch(r"[\w가-힣]+", sheet) else "'" + sheet.replace("'", "''") + "'"
         cells = sorted(memo.items())
         if len(cells) > COMMENT_MAX_CELLS:
-            warnings.append(f"바뀐 칸이 {len(cells)}개라 메모는 앞 {COMMENT_MAX_CELLS}칸만 (전체는 '{RESULT_SHEET}' 시트와 결과 파일)")
+            warnings.append(f"바뀐 칸이 {len(cells)}개라 메모는 앞 {COMMENT_MAX_CELLS}칸만 (전체는 '{RESULT_SHEET}' 시트)")
             cells = cells[:COMMENT_MAX_CELLS]
         # 메모 머리에 비교한 날짜·시각 한 번 (사용자 요청 2026-11-11): "비교 2026-11-11 09:30: 수량 3 -> 4 (+1) / 위치 추가 R5"
         memo_rows = [["칸", "메모"]] + [[f"{sheet_ref}!{addr(r, c + 1)}", _memo_with_stamp(v, stamp)[:COMMENT_MAX_CHARS]]
@@ -1044,10 +1209,10 @@ def cmd_compare(args) -> Dict[str, Any]:
                      f"VERIFIED: 0건. 바뀐 것 없음: 두 판을 키({_cmp_spec_label(spec)})로 짝지어 비교했고 추가·삭제·변경이 없습니다. "
                      f"사용자에게 '바뀐 것 없음'과 preview를 그대로 알리고 다시 실행하지 마세요.{say_warn}", verified=True, **result)
     preview = (f"{head}: 추가 {counts['추가']}, 삭제 {counts['삭제']}, 수량 변경 {counts['수량 변경']}, 위치 변경 {counts['위치 변경']}, "
-               f"속성 변경 {counts['속성 변경']}, 대체 추정 {counts['대체 추정']} (짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}.{sheet_note}")
-    action = ("preview를 알리고 구분별 목록(added, removed, qty_changed, ref_changed, attr_changed)을 key와 함께 사용자에게 보여 주세요."
+               f"속성 변경 {counts['속성 변경']}, 이동 {counts['이동']}, 대체 추정 {counts['대체 추정']} (짝짓기 키: {_cmp_spec_label(spec)}). 인식한 열: {role_text}.{sheet_note}")
+    action = ("preview를 알리고 구분별 목록(added, removed, qty_changed, ref_changed, attr_changed, moved)을 key와 함께 사용자에게 보여 주세요."
               + (" replaced_guess는 품번이 바뀐 것으로 보이는 추정(확인 필요)이라고 알리세요." if guesses else "")
-              + (" 목록은 구분마다 앞 20개만이라 전체는 full_result_file이라고 알리세요." if truncated else "")
+              + (f" 목록은 구분마다 앞 20개만이라 전체는 새 판의 '{RESULT_SHEET}' 시트라고 알리세요." if truncated else "")
               + say_warn
               + (" 그다음 사용자에게 '새 판의 바뀐 칸에 메모를 달까요?'라고만 묻고, '예'이면 confirm_commands[0]을 1번 실행하세요 (미리보기 없음)."
                  if result.get("confirm_commands") else "")

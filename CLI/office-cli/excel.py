@@ -5094,7 +5094,8 @@ def build_cli():
     p.add_argument("--sheet", help="이전 판 시트 (생략: 도구가 표를 알아본 시트)")
     p.add_argument("--sheet2", help="새 판 시트 (생략: 이전 판과 같은 이름, 없으면 도구가 고름)")
     p.add_argument("--key", help="짝지을 열의 머리글 이름 (생략: 도구가 정함. 여럿이면 쉼표, 예: \"상위품번,품번\")")
-    p.add_argument("--save", help="결과 xlsx (요약, 추가, 삭제, 변경, 대체 추정 시트. 생략: 바뀐 것이 있으면 작업 폴더에)")
+    p.add_argument("--level", help="레벨(단계) 열의 머리글 이름 (생략: 도구가 찾음. 레벨이 없는 목록이면 \"없음\")")
+    p.add_argument("--save", help="결과를 따로 xlsx로도 저장 (요약, 추가, 삭제, 변경, 대체 추정 시트. 생략: 새 판의 비교결과 시트에만)")
     p.add_argument("--overwrite", action="store_true", help="--save 파일이 이미 있으면 덮어쓰기 (사용자가 원할 때만)")
     return parser
 
