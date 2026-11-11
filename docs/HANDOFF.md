@@ -455,7 +455,7 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
 보관본은 옛 `C:\CLI`와 통합 SKILL.md를 가리켜 그대로는 못 씀. 다시 쓸 때 `run.py`의 경로를 `C:\AIKIT`로, `build.py`가
 `C:\AIKIT\skills\<이름>`에 `run.py`를 더해 zip을 만들게 고침 (사용자 결정: 지금은 폴더 모양만 맞춤).
 
-### 3-14. PR #78 검토 (클라우드, 2026-11-12)
+### 3-14. PR #78 검토 (클라우드, PR #78 병합 뒤)
 - 시험: ml-kit 전체 `python -m pytest -q AIKIT/dev/ml-kit/tests` -> 1050 passed, 2 skipped (26분 42초, 리눅스). `-m report`는 기본 실행(pytest.ini가 report를 빼지 않음)에 이미 들어 있어
   따로 돌리지 않음 (report 98건 포함). 공통 `AIKIT/dev/tests` 836 passed. office-cli 전체·test_skill_docs·test_contract는 집 PC에서 통과해 다시 돌리지 않음.
 - 남은 옛 이름 찾기 (`C:\CLI`, `CLI-dev`, `AIKIT/<도구>/skills`, `AIKIT/opencode`, `skills.paths`; archive·test_logs·history·CHANGELOG 지난 항목 제외):
@@ -471,7 +471,7 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
     `--project`는 있는 폴더만 받고(오타 경로에 `.opencode`를 만들지 않음) `<폴더>\.opencode\skills`에만 씀.
 
 ### 지금 상태 (2026-11-11 밤)
-- 브랜치 `ccr-ecab210c-awib23`, PR #78 (main은 PR #77까지). 병합은 사용자가 정함.
+- PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.
 
 ## 3. 회사 PC에서 할 일
