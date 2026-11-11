@@ -1,36 +1,36 @@
 # 사내 PC OpenCode 배치 안내
 
 사내 PC(Windows 11, 폐쇄망, OpenCode + 26B~30B 모델)에 도구 스킬과 전역 지침을 놓는 방법입니다.
-저장소는 반입 후 `C:\CLI`에 `ml-kit`, `office-cli`가 있는 상태를 기준으로 합니다.
+저장소는 반입 후 `C:\AIKIT`에 `ml-kit`, `office-cli`가 있는 상태를 기준으로 합니다.
 
 ## 1. 도구와 스킬 배치
 
-도구는 **`C:\CLI\ml-kit`, `C:\CLI\office-cli`** 에 둡니다. 모든 SKILL.md와 전역 AGENTS.md의 명령 경로가 이 위치를 기준으로 적혀 있습니다.
-반입할 때는 `C:\CLI`만 바꾸면 됩니다. `C:\CLI`에는 실행 파일과 스킬(SKILL.md)만 있습니다.
-실기 테스트가 필요할 때만 저장소의 `CLI-dev` 폴더를 `C:\CLI-dev`로 함께 가져옵니다 (`C:\CLI`와 나란히 두어야 `C:\CLI`의 도구를 찾습니다).
+도구는 **`C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`** 에 둡니다. 모든 SKILL.md와 전역 AGENTS.md의 명령 경로가 이 위치를 기준으로 적혀 있습니다.
+반입할 때는 `C:\AIKIT`만 바꾸면 됩니다. `C:\AIKIT`에는 실행 파일과 스킬(SKILL.md)만 있습니다.
+실기 테스트 파일은 그 안의 `C:\AIKIT\dev`에 함께 있습니다 (도구는 dev를 읽지 않음).
 
 OpenCode 스킬 폴더(`%USERPROFILE%\.config\opencode\skills`)에는 SKILL.md가 든 폴더만 복사합니다. 도구 파일은 넣지 않습니다.
 
 | 스킬 폴더 | 넣을 파일 |
 |---|---|
-| `skills\ml-train\`, `skills\ml-predict\`, `skills\ml-report\`, `skills\ml-map\` | `C:\CLI\ml-kit\skills\<이름>\SKILL.md` (학습, 예측, 보고서·성능예측표, 표 보간) |
-| `skills\office-excel\` | `C:\CLI\office-cli\skills\office-excel\SKILL.md` (엑셀) |
-| `skills\office-doc\` | `C:\CLI\office-cli\skills\office-doc\SKILL.md` (워드, PPT, 앱 사이 옮기기) |
-| `skills\office-mail\` | `C:\CLI\office-cli\skills\office-mail\SKILL.md` (Outlook) |
-| `skills\office-spec\` | `C:\CLI\office-cli\skills\office-spec\SKILL.md` (파일 읽기·근거 검색, 규격 대조) |
-| `skills\office-data\` | `C:\CLI\office-cli\skills\office-data\SKILL.md` (엑셀·CSV 표 집계, 중복 행 찾기) |
-| `skills\office-cli-test\` | `C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md` (실기 테스트를 맡길 때만) |
+| `skills\ml-train\`, `skills\ml-predict\`, `skills\ml-report\`, `skills\ml-map\` | `C:\AIKIT\ml-kit\skills\<이름>\SKILL.md` (학습, 예측, 보고서·성능예측표, 표 보간) |
+| `skills\office-excel\` | `C:\AIKIT\office-cli\skills\office-excel\SKILL.md` (엑셀) |
+| `skills\office-doc\` | `C:\AIKIT\office-cli\skills\office-doc\SKILL.md` (워드, PPT, 앱 사이 옮기기) |
+| `skills\office-mail\` | `C:\AIKIT\office-cli\skills\office-mail\SKILL.md` (Outlook) |
+| `skills\office-spec\` | `C:\AIKIT\office-cli\skills\office-spec\SKILL.md` (파일 읽기·근거 검색, 규격 대조) |
+| `skills\office-data\` | `C:\AIKIT\office-cli\skills\office-data\SKILL.md` (엑셀·CSV 표 집계, 중복 행 찾기) |
+| `skills\office-cli-test\` | `C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md` (실기 테스트를 맡길 때만) |
 
-SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\CLI`를 갱신한 뒤 `C:\CLI\setup.bat`을 두 번 클릭(또는 `python C:\CLI\setup.py`)해 복사합니다
+SKILL.md는 반입 때마다 바뀔 수 있으므로, `C:\AIKIT`를 갱신한 뒤 `C:\AIKIT\setup.bat`을 두 번 클릭(또는 `python C:\AIKIT\setup.py`)해 복사합니다
 (전역 지침·`opencode.jsonc`까지 바뀐 것만 복사, 시스템 PATH 등록, 동작 확인. `--check`는 확인만). 그 뒤 새 터미널을 열고 OpenCode를 다시 시작합니다.
-office-cli-test는 개발용이라 `python C:\CLI\setup.py --test-skill C:\CLI-dev\office-cli\tools\office-cli-test\SKILL.md`로 따로 넣습니다.
+office-cli-test는 개발용이라 `python C:\AIKIT\setup.py --test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`로 따로 넣습니다.
 폴더 이름은 표와 같아야 합니다 (SKILL.md 맨 위 `name`과 같은 이름).
-office-cli 1.4.61까지 쓰던 통합 스킬 폴더 `skills\office-cli\`는 `setup.py`가 `C:\CLI\data\setup_backup_<시각>`에 보관한 뒤 지웁니다
+office-cli 1.4.61까지 쓰던 통합 스킬 폴더 `skills\office-cli\`는 `setup.py`가 `C:\AIKIT\data\setup_backup_<시각>`에 보관한 뒤 지웁니다
 (남아 있으면 OpenCode가 옛 스킬도 고릅니다).
 
 **ripgrep(rg.exe)이 필요합니다.** OpenCode는 스킬을 불러올 때 ripgrep을 쓰고, 없으면 인터넷에서 받으려 합니다.
 폐쇄망에서는 받지 못해 스킬 불러오기가 `ripgrep execution failed`로 실패합니다(2026-10-29 실기: 대화 6개 모두).
-ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: `C:\CLI\python`)에 두고,
+ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: `C:\AIKIT\python`)에 두고,
 PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시 시작합니다. 그 전까지는 전역 AGENTS.md 3장 3번대로 SKILL.md를 직접 읽게 됩니다.
 
 **opencode.jsonc에서 확인할 것** (`setup.py`가 동작 확인 끝에 WARN으로 알림, 고치지는 않음). 집 PC opencode 시험(2026-11-07)에서 앞의 셋이 결과를 흐렸습니다.
@@ -64,15 +64,15 @@ PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시
   }
   ```
 
-- 도구 오류 로그는 `C:\CLI\<도구>\data\logs\errors.txt`에 쌓이고, `python C:\CLI-dev\run_all_tests.py`가 결과 파일 끝에 붙여 줍니다 (오류 로그만 빨리 모으려면 `--only diag`, 1분). 실기 절차는 [`실기테스트.md`](실기테스트.md).
-- 이전처럼 스킬 폴더에 도구 전체를 복사해 두었다면 그 폴더는 SKILL.md만 남기고 `C:\CLI`만 쓰세요. 두 곳에 도구가 있으면 어느 쪽이 쓰였는지 헷갈립니다.
+- 도구 오류 로그는 `C:\AIKIT\<도구>\data\logs\errors.txt`에 쌓이고, `python C:\AIKIT\dev\run_all_tests.py`가 결과 파일 끝에 붙여 줍니다 (오류 로그만 빨리 모으려면 `--only diag`, 1분). 실기 절차는 [`실기테스트.md`](실기테스트.md).
+- 이전처럼 스킬 폴더에 도구 전체를 복사해 두었다면 그 폴더는 SKILL.md만 남기고 `C:\AIKIT`만 쓰세요. 두 곳에 도구가 있으면 어느 쪽이 쓰였는지 헷갈립니다.
 
 ## 2. 전역 지침 (AGENTS.md)
 
-1. `CLI/opencode/AGENTS.md`(PC에서는 `C:\CLI\opencode\AGENTS.md`)를 `%USERPROFILE%\.config\opencode\AGENTS.md`로 복사합니다.
-   `C:\CLI\setup.bat`이 스킬과 함께 복사합니다. 원본은 배포 폴더 `C:\CLI`에 둡니다 (배포는 `C:\CLI` 하나).
+1. `AIKIT/opencode/AGENTS.md`(PC에서는 `C:\AIKIT\opencode\AGENTS.md`)를 `%USERPROFILE%\.config\opencode\AGENTS.md`로 복사합니다.
+   `C:\AIKIT\setup.bat`이 스킬과 함께 복사합니다. 원본은 배포 폴더 `C:\AIKIT`에 둡니다 (배포는 `C:\AIKIT` 하나).
    같은 폴더의 `opencode.jsonc`(사내 LLM 주소, 사용자가 배포 전에 넣음, git 제외)도 있으면 설정 폴더로 복사합니다.
-2. 고쳐 쓸 곳은 없습니다. 도구 경로는 `C:\CLI` 기준으로 적혀 있습니다.
+2. 고쳐 쓸 곳은 없습니다. 도구 경로는 `C:\AIKIT` 기준으로 적혀 있습니다.
 3. 팀원이 "지침·스킬 경로"를 물으면 에이전트가 답하도록 9장에 위치 표가 있습니다 (읽히는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 setup.bat).
 
 이미 넣어 두신 내용은 아래처럼 반영했습니다.

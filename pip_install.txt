@@ -29,6 +29,6 @@ python -c "import pandas, sklearn, scipy, openpyxl, docx, pptx, matplotlib, pymu
 
 참고
 - 쓰는 곳: ml-kit = pandas, scikit-learn, scipy, numpy, joblib / office-cli = pywin32, python-pptx, pymupdf, olefile
-  / 둘 다 = openpyxl, python-docx, matplotlib / pytest = CLI-dev 테스트용.
+  / 둘 다 = openpyxl, python-docx, matplotlib / pytest = AIKIT/dev 테스트용.
 - 이미 같은 버전이 있으면 "Requirement already satisfied"로 넘어간다. 다른 버전이 있으면 표 버전으로 바뀐다.
 - 명령은 python -m pip 만 쓴다 (py, python3, 단독 pip 금지).

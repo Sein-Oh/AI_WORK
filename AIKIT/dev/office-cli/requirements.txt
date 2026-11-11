@@ -1,0 +1,9 @@
+# office-cli 런타임 의존성 (버전은 docs/ENVIRONMENT.md 표 기준)
+# 설치: python -m pip install -r AIKIT/dev/office-cli/requirements.txt
+pywin32        # 열린 Office 문서 작업 (COM)
+openpyxl       # 닫힌 xlsx 읽기
+python-docx    # 닫힌 docx 읽기
+python-pptx    # 닫힌 pptx 읽기
+pymupdf        # PDF 읽기
+olefile        # HWP 5.0 읽기
+matplotlib     # 차트 다시 그리기 (office.py transfer, DRM 환경 대응)

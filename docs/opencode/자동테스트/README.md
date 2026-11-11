@@ -4,19 +4,19 @@ agent_scenarios.py에서 만든 파일입니다. 직접 고치지 말고 agent_s
 
 ## 1. 도구 점검 (정답을 아는 샘플로 도구만 확인, 5~10분)
 
-PowerShell에서 직접 실행하거나 Gemma에게 아래 메시지를 붙여넣습니다. 결과는 `C:\CLI-dev\beta_check_회사PC_<시각>.md`.
+PowerShell에서 직접 실행하거나 Gemma에게 아래 메시지를 붙여넣습니다. 결과는 `C:\AIKIT\dev\beta_check_회사PC_<시각>.md`.
 
 ```powershell
-python "C:\CLI-dev\run_beta_check.py" --label 회사PC
+python "C:\AIKIT\dev\run_beta_check.py" --label 회사PC
 ```
 
 ```text
-python "C:\CLI-dev\run_beta_check.py" --label 회사PC --agent 를 시간 제한 1800000으로 1번만 실행하고, 결과 JSON의 passed, failed, skipped, failed_items, report_file을 그대로 알려줘.
+python "C:\AIKIT\dev\run_beta_check.py" --label 회사PC --agent 를 시간 제한 1800000으로 1번만 실행하고, 결과 JSON의 passed, failed, skipped, failed_items, report_file을 그대로 알려줘.
 ```
 
 ## 2. Gemma 종합 테스트 (요청 처리 확인)
 
-1. 시험 폴더 `C:\CLI-dev\work\gemma`가 이미 있으면 탐색기에서 지웁니다 (이전 모델이 남아 있으면 버전 번호가 달라집니다).
+1. 시험 폴더 `C:\AIKIT\dev\work\gemma`가 이미 있으면 탐색기에서 지웁니다 (이전 모델이 남아 있으면 버전 번호가 달라집니다).
 2. OpenCode에서 새 대화를 열고, 아래 묶음 파일의 메시지를 순서대로 붙여넣습니다.
    - 하나씩: 메시지 1개를 보내고 답을 받은 뒤 다음 메시지를 보냅니다 (권장).
    - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때). 요청이 한 턴에 섞이므로 채점은 명령 순서로 나눈 참고 결과입니다.
@@ -30,7 +30,7 @@ cmd /c "opencode export <세션ID> > chat.json"
 
    cmd의 `>`는 opencode가 쓴 UTF-8을 그대로 저장합니다. PowerShell의 `| Out-File`이나 `>`로 저장하면 한글이 깨지고 채점기가 [ERROR]로 멈춥니다.
    OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다.
-4. `C:\CLI-dev`에서 채점합니다:
+4. `C:\AIKIT\dev`에서 채점합니다:
 
 ```powershell
 python grade_opencode.py --export "<내보낸 대화.json>" --label 회사PC
