@@ -12,9 +12,8 @@ BODY = "# 주간 보고 정리\n\n## 순서\n1. `python \"C:\\AIKIT\\data\\scrip
 
 @pytest.fixture
 def cfg(tmp_path, monkeypatch):
-    """OpenCode 설정 폴더(OPENCODE_CONFIG_DIR)와 기본 스킬 폴더를 tmp_path로 (실제 C:\\AIKIT의 스킬을 건드리지 않음)."""
+    """OpenCode 설정 폴더(OPENCODE_CONFIG_DIR)를 tmp_path로 (실제 C:\\AIKIT\\skills를 건드리지 않음). 기본·사용자 스킬 모두 <설정 폴더>\\skills."""
     monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setattr(skill, "base_dirs", lambda: [str(tmp_path / "base")])
     body = tmp_path / "weekly_skill.md"
     body.write_text(BODY, encoding="utf-8")
     return tmp_path / "cfg" / "skills", str(body)
@@ -92,7 +91,7 @@ def test_list_check_delete(cfg, capsys, tmp_path, monkeypatch):
     code, out = run_main(skill, capsys, "list")
     assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
     _save(capsys, body)
-    base = tmp_path / "base" / "office-excel"                            # 기본 스킬은 도구 폴더의 skills (setup이 복사하지 않음)
+    base = root / "office-excel"                                         # 기본 스킬도 같은 skills 폴더 (이름으로 기본/사용자를 나눔, 1.6.6)
     base.mkdir(parents=True)
     (base / "SKILL.md").write_text("---\nname: office-excel\ndescription: 엑셀 읽기와 쓰기에 쓰는 기본 스킬이다.\n---\n\n# x\n1. `a`\n", encoding="utf-8")
     code, out = run_main(skill, capsys, "list")
@@ -138,9 +137,11 @@ def test_project_skill_goes_to_project_opencode_folder(cfg, capsys, tmp_path, mo
     assert code == 1 and "--project 폴더가 없습니다" in out["message"] and not (tmp_path / "없는 폴더").exists(), out
 
 
-def test_default_folder_is_the_aikit_opencode_folder(monkeypatch):
-    """OPENCODE_CONFIG_DIR가 없으면 도구 폴더의 부모(C:\\AIKIT)\\opencode, 기본 스킬은 도구 폴더의 skills."""
+def test_default_folder_is_the_aikit_skills_folder(monkeypatch):
+    """1.6.6: OPENCODE_CONFIG_DIR가 없으면 도구 폴더의 부모(C:\\AIKIT)가 설정 폴더, 스킬은 그 skills (기본 스킬과 사용자 스킬이 함께).
+    저장소에서는 그 폴더에 기본 스킬 11개가 있고 모두 '기본'으로 보임."""
     monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
     kit = os.path.dirname(os.path.dirname(os.path.abspath(skill.__file__)))
-    assert skill.skills_dir() == os.path.join(kit, "opencode", "skills")
-    assert skill.base_dirs() == [os.path.join(kit, "ml-kit", "skills"), os.path.join(kit, "office-cli", "skills")]
+    assert skill.config_dir() == kit and skill.skills_dir() == os.path.join(kit, "skills")
+    base = {x["name"] for x in skill._installed() if x["kind"] == "기본"}
+    assert base == set(skill.BASE_SKILLS) - {"office-cli-test"}, base

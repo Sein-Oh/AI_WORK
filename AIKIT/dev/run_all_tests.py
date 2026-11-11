@@ -114,10 +114,8 @@ def tool_versions():
     out = []
     for tool in TOOLS:
         ver = "?"
-        skill = os.path.join(CLI_DIR, tool, "SKILL.md")
-        if not os.path.isfile(skill):                  # office-cli: 작업별 스킬 여럿 (skills\<이름>\SKILL.md, 버전은 모두 같음)
-            found = sorted(glob.glob(os.path.join(CLI_DIR, tool, "skills", "*", "SKILL.md")))
-            skill = found[0] if found else skill
+        # 작업별 스킬은 C:\AIKIT\skills\<이름>\SKILL.md (도구마다 버전은 모두 같음): 도구의 대표 스킬 하나에서 읽음
+        skill = os.path.join(CLI_DIR, "skills", {"ml-kit": "ml-train", "office-cli": "office-excel"}.get(tool, tool), "SKILL.md")
         try:
             for line in open(skill, encoding="utf-8"):
                 if line.strip().startswith("version:"):
@@ -556,7 +554,7 @@ def diag_skills(stage, lines, config_dir=None, reg=None):
         lines.append("  시스템 PATH: " + ", ".join(mod.path_entries()) + " 있음")
         stage.passed += 1
     reg = reg or mod._winreg()
-    want = mod.opencode_dir()
+    want = mod.config_dir()
     if reg is None:
         lines.append(f"  OpenCode 설정 폴더 환경 변수: Windows가 아니라 확인 안 함 ({mod.CONFIG_ENV})")
     else:
@@ -575,6 +573,11 @@ def diag_skills(stage, lines, config_dir=None, reg=None):
     lines.append(f"  옛 전역 설정 폴더({cfg}): " + (", ".join(f"{k} {os.path.basename(p)}" for k, p in old) or "정리할 것 없음"))
     if ours:
         stage.fail("옛 전역 설정 폴더에 우리 스킬·지침 복사본이 남아 있음 (" + ", ".join(os.path.basename(p) for _k, p in ours) + "). " + fix)
+    layout = mod.old_layout_items()                          # 이전 구성: C:\AIKIT\opencode, 도구 폴더 안의 옛 skills
+    if layout:
+        names = ", ".join(os.path.relpath(p, CLI_DIR) for _k, p in layout)
+        lines.append(f"  이전 구성에서 남은 것: {names}")
+        stage.fail(f"이전 구성(C:\\AIKIT\\opencode, 도구 폴더 안의 skills)이 남아 있음 ({names}). " + fix)
 
 
 # ---------------------------------------------------------------------------
@@ -1297,7 +1300,7 @@ def step_gemma(stage, args, ctx):
         if stop:
             break
         if not session:                                          # 첫 요청에서 세션이 안 생기면 나머지도 같음
-            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(C:\\AIKIT\\opencode\\opencode.jsonc의 model)과 접속을 확인하세요.")
+            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(C:\\AIKIT\\opencode.jsonc의 model)과 접속을 확인하세요.")
             stage.details.append((f"{sid} opencode 오류 출력", _read(err_path) or "(없음)"))
             break
     stage.details.append(("opencode run 실행 기록", "\n".join(log)))

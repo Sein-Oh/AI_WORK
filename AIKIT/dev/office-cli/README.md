@@ -3,12 +3,12 @@
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
-- 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`office-excel`](../../AIKIT/office-cli/skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
-  [`office-doc`](../../AIKIT/office-cli/skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
-  [`office-mail`](../../AIKIT/office-cli/skills/office-mail/SKILL.md) (outlook.py),
-  [`office-spec`](../../AIKIT/office-cli/skills/office-spec/SKILL.md) (reader.py, excel.py check·comment),
-  [`office-data`](../../AIKIT/office-cli/skills/office-data/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
-  공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`AIKIT/opencode/AGENTS.md`](../../AIKIT/opencode/AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
+- 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`office-excel`](../../skills/office-excel/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
+  [`office-doc`](../../skills/office-doc/SKILL.md) (word.py, ppt.py, office.py transfer·undo·windows·focus),
+  [`office-mail`](../../skills/office-mail/SKILL.md) (outlook.py),
+  [`office-spec`](../../skills/office-spec/SKILL.md) (reader.py, excel.py check·comment),
+  [`office-data`](../../skills/office-data/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
+  공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`AIKIT/AGENTS.md`](../../AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
 - 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../docs/history/office-cli_WORK_PLAN_1.0.md)
 
@@ -805,11 +805,11 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
   되돌릴 수 있는 지점이 빠지지 않습니다(`truncated`는 빠진 항목이 있을 때 true). `--pick` 없는 `undo`는 되돌릴 수 있는 지점이 하나도 없으면
   `VERIFIED: 0건.`(`count: 0`, `restored: false`), 직전 작업만 되돌릴 수 없고 더 앞 지점이 있으면 `needs_user_decision`입니다.
 
-### skill.py (1.6.3, 위치 1.6.5, 스킬 skill-maker)
+### skill.py (1.6.3, 위치 1.6.6, 스킬 skill-maker)
 사용자가 만든 OpenCode 스킬을 등록·점검합니다. 경량 LLM이 머리말(`---`, name, description)을 틀리지 않게 본문만 받아 도구가 조립합니다.
-- 사용자 스킬: `C:\AIKIT\opencode\skills\<이름>\SKILL.md` (OpenCode 설정 폴더 = `OPENCODE_CONFIG_DIR`, 없으면 도구 폴더의 부모 `\opencode`). 어느 작업 폴더에서나 보입니다.
+- 사용자 스킬: `C:\AIKIT\skills\<이름>\SKILL.md`와 그 스킬의 `scripts\` (OpenCode 설정 폴더 = `OPENCODE_CONFIG_DIR`, 없으면 도구 폴더의 부모). 어느 작업 폴더에서나 보입니다.
 - 프로젝트 스킬: `--project <폴더>`를 주면 `<폴더>\.opencode\skills\<이름>\SKILL.md`. 그 폴더에서 연 OpenCode 세션에서만 보입니다 (없는 폴더는 만들지 않고 STOP_RETRY).
-- 기본 스킬: `C:\AIKIT\ml-kit\skills`, `C:\AIKIT\office-cli\skills` (도구와 함께 배포, 같은 이름으로 만들거나 지울 수 없음). `list`의 `kind`: 기본 / 사용자 / 프로젝트.
+- 기본 스킬: 같은 `C:\AIKIT\skills`의 11개 (`BASE_SKILLS`, 도구와 함께 배포, 같은 이름으로 만들거나 지울 수 없음). `list`의 `kind`: 기본 / 사용자 / 프로젝트.
 
 | 명령 | 설명 |
 |---|---|

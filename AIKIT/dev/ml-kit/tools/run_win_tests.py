@@ -548,7 +548,7 @@ def env_info(ctx):
     for name in ("numpy", "pandas", "scikit-learn", "joblib", "openpyxl", "python-docx", "matplotlib", "pywin32"):
         pkgs[name] = _safe(lambda n=name: metadata.version(n), "미설치")
     skill_ver = _safe(lambda: next(ln.split(":", 1)[1].strip().strip('"') for ln in
-                                   open(os.path.join(ROOT, "skills", "ml-train", "SKILL.md"), encoding="utf-8") if ln.strip().startswith("version:")))
+                                   open(os.path.join(os.path.dirname(ROOT), "skills", "ml-train", "SKILL.md"), encoding="utf-8") if ln.strip().startswith("version:")))
     git = _safe(lambda: subprocess.run(["git", "-C", ROOT, "log", "-1", "--format=%h %ad %s", "--date=short"],
                                        capture_output=True, text=True, encoding="utf-8").stdout.strip() or "?")
     dirty = _safe(lambda: len([x for x in subprocess.run(["git", "-C", ROOT, "status", "--porcelain", "."],

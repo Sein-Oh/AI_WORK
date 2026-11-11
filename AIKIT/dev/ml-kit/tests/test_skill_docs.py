@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""작업별 스킬 4개(AIKIT/ml-kit/skills/<이름>/SKILL.md, 2.9.71, 2.9.72: 입력 자동 선택, --suggest)와 코드가 어긋나지 않는지: 버전, OpenCode 머리말, 백틱 명령의 --옵션,
+"""작업별 스킬 4개(AIKIT/skills/<이름>/SKILL.md, 2.9.71, 2.9.72: 입력 자동 선택, --suggest)와 코드가 어긋나지 않는지: 버전, OpenCode 머리말, 백틱 명령의 --옵션,
 크기(8KB), 공통 규칙이 4개에서 같음, 모든 스크립트가 어느 스킬에든 있음, 꼭 적어야 할 기능."""
 import os
 import re
@@ -14,7 +14,7 @@ MAX_SKILL_BYTES = 8192                # 경량 LLM 컨텍스트: 스킬 하나 8
 
 
 def _path(name):
-    return os.path.join(KIT, "skills", name, "SKILL.md")
+    return os.path.join(os.path.dirname(KIT), "skills", name, "SKILL.md")      # C:\AIKIT\skills (2.9.92)
 
 
 def _read(name):
@@ -23,7 +23,7 @@ def _read(name):
 
 def test_old_single_skill_is_gone():
     assert not os.path.exists(os.path.join(KIT, "SKILL.md"))
-    assert sorted(os.listdir(os.path.join(KIT, "skills"))) == sorted(SKILLS)
+    assert sorted(n for n in os.listdir(os.path.join(os.path.dirname(KIT), "skills")) if n.startswith("ml-")) == sorted(SKILLS)
 
 
 def test_version_and_frontmatter():

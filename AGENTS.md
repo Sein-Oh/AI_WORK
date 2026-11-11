@@ -14,17 +14,21 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 
 ## 폴더 구조
 - `AIKIT/`는 사용자 PC의 `C:\AIKIT`로 통째로 복사된다 (`dev/` 포함, 2026-11-12에 `CLI/`·`CLI-dev/`에서 이름을 바꾸고 dev를 안으로 옮김).
-- `AIKIT/<tool>/`: **실행에 필요한 .py와 스킬 파일(`SKILL.md`)만** 둔다.
-  스킬은 작업별 `skills/<스킬 이름>/SKILL.md`(ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `office-excel`,
-  `office-doc`, `office-mail`, `office-spec`, `office-data`, `skill-maker`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
+- `AIKIT/`가 곧 OpenCode 설정 폴더다 (setup이 `OPENCODE_CONFIG_DIR=C:\AIKIT`). 설정 파일 없이 폴더 모양으로 읽힌다 (OpenCode 2.2.5 확인):
+  `AIKIT/AGENTS.md`(전역 지침), `AIKIT/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나).
+- `AIKIT/skills/`: 기본 스킬 11개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `office-excel`,
+  `office-doc`, `office-mail`, `office-spec`, `office-data`, `skill-maker`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
+  스킬이 여러 개를 함께 쓰는 도구는 스킬 폴더가 아니라 도구 폴더에 두고, SKILL.md에는 `python "C:\AIKIT\<tool>\<파일>.py" ...` 전체 명령을 적는다.
+  사용자가 만든 스킬의 스크립트는 그 스킬 폴더의 `scripts/`에 둔다 (스킬 폴더만 복사하면 동료 PC에서도 됨).
+- `AIKIT/<tool>/`: **실행에 필요한 .py만** 둔다. 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
 - `AIKIT/dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
   `AIKIT/dev/README.md`(공통 계약), `AIKIT/dev/run_all_tests.py`. 도구는 dev를 읽지 않는다 (배포에 함께 가도 실행에 영향 없음).
   `AIKIT/dev`의 테스트·러너는 부모 폴더 `AIKIT/<tool>`의 도구를 시험한다.
 - 새 파일을 `AIKIT/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
-- `AIKIT/` 맨 위에는 도구 폴더와 `dev/` 외에 배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`과
-  OpenCode 설정 폴더 `opencode/`(전역 지침 `AGENTS.md`, 우리 설정 `opencode.json`. setup이 `OPENCODE_CONFIG_DIR`로 지정)만 둔다.
-  사용자가 배포 전에 넣는 `opencode/opencode.jsonc`(사내 LLM 주소), 사용자가 만든 스킬 `opencode/skills/`와
-  설치가 만드는 `data/`(보관 폴더)와 `work/`(Web UI 작업 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
+- `AIKIT/` 맨 위에는 도구 폴더, `skills/`, `dev/` 외에 `AGENTS.md`(전역 지침), `opencode.json`(셸·권한 기본 설정, 스킬 경로는 적지 않음),
+  배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`만 둔다.
+  사용자가 배포 전에 넣는 `opencode.jsonc`(사내 LLM 주소), OpenCode가 만드는 `service.json`, 설치가 만드는 `data/`(보관 폴더)와
+  `work/`(Web UI 작업 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
 
 ## 사용자 환경 (모든 작업의 전제)
 | 항목 | 값 |
@@ -84,7 +88,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 6. **사용자에게 알릴 글은 도구가 만든다**: 결과마다 `preview`(그대로 전할 짧은 한국어)를 주고, 스킬은 "preview와 warnings를 알린다"를 기본으로 한다.
    스킬에 "알릴 키" 목록을 길게 적지 않는다 (키 이름을 많이 외우게 하면 빠뜨리거나 지어낸다).
 7. **스킬은 짧고 모순이 없게**: 스킬 하나 8KB(8192바이트, LF 기준, 2026-11-10 사용자 결정) 이하. 넘으면 작업별로 나눈다. 규칙에 예외가 있으면 그 규칙 문장 안에 적는다
-   (다른 줄의 예외는 놓친다). 전역 지침(`AIKIT/opencode/AGENTS.md`)과 스킬이 같은 일을 다르게 말하지 않는다.
+   (다른 줄의 예외는 놓친다). 전역 지침(`AIKIT/AGENTS.md`)과 스킬이 같은 일을 다르게 말하지 않는다.
 8. **옵션을 늘리기 전에**: 기본값, 자동 판단, 기존 옵션으로 안 되는지 먼저 본다. 꼭 필요한 옵션만 스킬에 적고 나머지는 README에만.
 
 ## JIT 자가복구 권장
@@ -181,7 +185,8 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    (요약은 `docs/HANDOFF.md` 4장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
 5. 남은 할 일은 각 도구 `CHANGELOG.md`(`AIKIT/dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
 6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (8KB, 상세는 README.md, 위 "사용법 단순성" 7번).
-7. 스킬은 OpenCode 형식: SKILL.md가 든 폴더명 = frontmatter `name` (`^[a-z0-9]+(-[a-z0-9]+)*$`; `AIKIT/ml-kit/skills/ml-train/SKILL.md`는 `ml-train`,
-   `AIKIT/office-cli/skills/office-excel/SKILL.md`는 `office-excel`), frontmatter는 name/description/license/compatibility/metadata만.
+7. 스킬은 OpenCode 형식(Claude 스킬과 같은 모양): `AIKIT/skills/<스킬 이름>/SKILL.md`, 폴더명 = frontmatter `name`
+   (`^[a-z0-9]+(-[a-z0-9]+)*$`; `AIKIT/skills/ml-train/SKILL.md`는 `ml-train`), frontmatter는 name/description/license/compatibility/metadata만.
+   `skills/` 바로 아래에 둔다 (묶음 폴더를 한 단계 더 두는 것은 2.2.5에서 되지만 표준이 아님).
    보조 스킬(예: `AIKIT/dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `AIKIT/setup.py`
-   (설치·옛 폴더 정리)와 전역 지침 `AIKIT/opencode/AGENTS.md` 3장 표를 함께 고친다.
+   (설치·옛 폴더 정리), `office-cli/skill.py`의 `BASE_SKILLS`, `.gitignore`의 기본 스킬 줄, 전역 지침 `AIKIT/AGENTS.md` 3장 표를 함께 고친다.

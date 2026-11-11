@@ -5,8 +5,8 @@ PC에서 저장소를 받은 뒤 새 Claude Code(또는 OpenCode) 대화를 열�
 
 ## 1. 지금 상태
 - 2026-11-12: 배포 폴더 이름 `C:\CLI` -> **`C:\AIKIT`** (저장소 `CLI/` -> `AIKIT/`, `CLI-dev/` -> `AIKIT/dev/`, dev도 함께 배포).
-  OpenCode는 `C:\AIKIT`을 복사 없이 읽음 (`OPENCODE_CONFIG_DIR=C:\AIKIT\opencode`, 3-12장). 이 문서의 지난 기록 속 경로도 새 이름으로 바꿔 두었음 (실기 로그와 CHANGELOG는 그대로)
-- 도구 버전: **ml-kit 2.9.91**, **office-cli 1.6.5** (작업 브랜치 `ccr-ecab210c-awib23`. PR을 머지했으면 main)
+  `C:\AIKIT`이 곧 OpenCode 설정 폴더 (`OPENCODE_CONFIG_DIR=C:\AIKIT`): 설정 파일 없이 `AGENTS.md`(전역 지침)와 `skills\<이름>\SKILL.md`(스킬)를 읽음 (3-13장). 이 문서의 지난 기록 속 경로도 새 이름으로 바꿔 두었음 (실기 로그와 CHANGELOG는 그대로)
+- 도구 버전: **ml-kit 2.9.92**, **office-cli 1.6.6** (작업 브랜치 `ccr-ecab210c-awib23`. PR을 머지했으면 main)
 - 단계: 최종 점검 (2026-11-11). 팀원 배포 직전. 회사 PC 실기 통과 뒤 사내 LLM(OpenCode + BEAM/Nemotron)에 유지보수를 넘길 예정 (인계 자료는 아직 안 만듦)
 - 스킬: ml-kit 5개(ml-train, ml-dataset, ml-predict, ml-report, ml-map), office-cli 5개(office-excel, office-doc, office-mail, office-spec, office-data).
   스킬 하나 8KB(8192바이트) 이하. 2026-11-11 점검: 도구에 있는데 스킬에 없던 옵션을 채움 (가장 큰 것 office-doc 약 7.3KB)
@@ -430,6 +430,31 @@ C:\AIKIT\opencode.exe service stop          # 끝나면 (환경 변수는 창을
   `opencode debug paths` 확인), `web.bat`, `skill.py --project`, skill-maker 스킬, 전역 지침 9장, README·가이드, 테스트 (office-cli 1.6.5 CHANGELOG).
 - 남은 것: 회사 PC에서 반입·setup 뒤 TUI·Web UI·사내 LLM 시험(`run_all_tests.py --only gemma`). 사내 LLM(BEAM/Nemotron)에서도 `OPENCODE_CONFIG_DIR`가 같은지.
 
+### 3-13. 설정 파일 없는 폴더 구성 (2026-11-12 밤, ml-kit 2.9.92, office-cli 1.6.6)
+사용자 요청: 잘 모르는 팀원도 익히게 설정 파일 없이 폴더 구성만으로, 루트는 `C:\AIKIT`, En-Genius와 폴더 모양 호환.
+
+집 PC 확인 (OpenCode 2.2.5, 시험용 설정 폴더):
+
+| 확인 | 결과 |
+|---|---|
+| 설정 폴더 = `C:\AIKIT`, 스킬 경로 설정 없이 `ml-kit\skills`에만 스킬 | 못 찾음 (도구 폴더 안까지 뒤지지 않음) |
+| `C:\AIKIT\skills\<이름>\SKILL.md` | 찾음 |
+| `skills\<묶음>\<이름>\SKILL.md` | 찾음 (2.2.5에서는 되지만 표준 모양이 아니라 쓰지 않음) |
+| `C:\AIKIT\AGENTS.md` | 전역 지침으로 읽음 |
+| 스킬 폴더 안 `scripts\hello.py` | Claude 스킬과 같음: 불러오면 `Base directory for this skill: <스킬 폴더>`와 파일 목록을 모델에 주고, 모델이 전체 경로로 실행 |
+| OpenCode가 설정 폴더에 만드는 것 | `service.json` 하나 |
+
+구성 (`C:\AIKIT` = OpenCode 설정 폴더):
+- `AGENTS.md`(전역 지침), `skills\<이름>\SKILL.md`(기본 11개 + 사용자 스킬, 사용자 스킬의 스크립트는 그 폴더 `scripts\`).
+- 도구(`ml-kit`, `office-cli`)는 여러 스킬이 함께 쓰므로 도구 폴더에 두고, 스킬에는 전체 경로 명령.
+- `opencode.json`은 셸·권한·웹 도구 막기·업데이트 끄기만 (스킬 경로 없음), `opencode.jsonc`는 사내 LLM (PC마다).
+- setup: `OPENCODE_CONFIG_DIR=C:\AIKIT`, 이전 구성(`C:\AIKIT\opencode`, 도구 폴더 안 `skills`)에서 옮김, `opencode.jsonc`의 옛 `"skills"`는 WARN.
+- skill.py: 기본·사용자 스킬 모두 `C:\AIKIT\skills`(이름으로 구분), skill-maker는 스크립트를 스킬 폴더 `scripts\`에.
+
+En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름>/SKILL.md` + `<스킬 이름>/run.py`라 폴더 모양은 같음.
+보관본은 옛 `C:\CLI`와 통합 SKILL.md를 가리켜 그대로는 못 씀. 다시 쓸 때 `run.py`의 경로를 `C:\AIKIT`로, `build.py`가
+`C:\AIKIT\skills\<이름>`에 `run.py`를 더해 zip을 만들게 고침 (사용자 결정: 지금은 폴더 모양만 맞춤).
+
 ### 지금 상태 (2026-11-11 밤)
 - 브랜치 `ccr-ecab210c-awib23`. main은 PR #77까지. 그 뒤 커밋(인터넷 금지 지침, 비교 거절 강화, skill.py·skill-maker, ml-kit 2.9.91·office-cli 1.6.4,
   setup의 서비스 끄기, `C:\AIKIT\work`)은 PR 전. 사용자가 요청하면 PR.
@@ -439,8 +464,9 @@ C:\AIKIT\opencode.exe service stop          # 끝나면 (환경 변수는 창을
 상세: `docs/opencode/실기테스트.md` (1. 준비 -> 2. 자동 점검 -> 3. Gemma(선택) -> 4. 눈 확인 -> 5. 올릴 파일).
 
 1. 준비 (2026-11-12부터 `C:\AIKIT`. 처음이면 옛 `C:\CLI`의 `python`, `opencode.exe`, `opencode\opencode.jsonc`를 `C:\AIKIT`로 옮김):
-   `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`, `C:\AIKIT\dev`, `C:\AIKIT\opencode\AGENTS.md`·`opencode.json`, `C:\AIKIT\setup.py`·`setup.bat`·`web.bat`을
-   지우고 새로 붙여넣음 (`C:\AIKIT\python`, `opencode.exe`, `opencode\opencode.jsonc`, `opencode\skills\`(사용자 스킬), `data\`, `work\`는 둠).
+   `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`, `C:\AIKIT\dev`, 기본 스킬 11개 폴더(`C:\AIKIT\skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
+   `setup.py`·`setup.bat`·`web.bat`을 지우고 새로 붙여넣음 (`skills` 폴더를 통째로 지우지 않음. `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`,
+   사용자 스킬 폴더, `data\`, `work\`는 둠).
    시험 폴더는 모두 `C:\AIKIT\dev\work\` 아래라 함께 지워짐.
    `C:\AIKIT\setup.bat`(관리자 권한, 시스템 PATH가 새 폴더라)으로 `OPENCODE_CONFIG_DIR`·PATH 설정, 옛 전역 설정(`%USERPROFILE%\.config\opencode`)의
    우리 스킬·지침 정리 -> 새 터미널·OpenCode 다시 시작. 시스템 PATH의 옛 `C:\CLI\python` 항목은 setup이 지우지 않으니 손으로 지움
@@ -458,9 +484,9 @@ C:\AIKIT\opencode.exe service stop          # 끝나면 (환경 변수는 창을
 
 회사 PC에서만 확인할 수 있는 것: 문서 보안(DRM) 영향, Office 16 차트 전달 방식, Gemma의 요청 처리, 사내 API 채점(`--judge`).
 
-배포 절차 (사용자 PC, `C:\AIKIT` 하나만 줌): `CLI` 폴더(저장소 `AIKIT/` + WinPython `python\` + `opencode.exe`)를 `C:\`에 복사 ->
-사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\opencode\`에 넣어 둠(git 제외) -> `C:\AIKIT\setup.bat` 두 번 클릭 -> 새 터미널·OpenCode 재시작.
-`setup.py`가 바꾸는 것: OpenCode 설정 폴더의 스킬·`AGENTS.md`·`opencode.jsonc`(이전 파일은 `C:\AIKIT\data\setup_backup_<시각>`),
+배포 절차 (사용자 PC, `C:\AIKIT` 하나만 줌): `AIKIT` 폴더(저장소 `AIKIT/` + WinPython `python\` + `opencode.exe`)를 `C:\`에 복사 ->
+사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\`에 넣어 둠(git 제외) -> `C:\AIKIT\setup.bat` 두 번 클릭 -> 새 터미널·OpenCode 재시작.
+`setup.py`가 바꾸는 것: 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`, 옛 설정 정리(이전 파일은 `C:\AIKIT\data\setup_backup_<시각>`),
 시스템 PATH(`C:\AIKIT\python`, `C:\AIKIT\python\Scripts`가 없을 때만 뒤에 추가, 원래 값 보관). `--check`는 바꾸지 않고 확인만.
 
 ## 4. 지난 실기 결과 요약

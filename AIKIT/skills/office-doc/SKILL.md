@@ -4,7 +4,7 @@ description: 열린 워드·파워포인트 문서 읽기·쓰기. 워드 읽기
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.5"
+  version: "1.6.6"
   platform: windows
 ---
 

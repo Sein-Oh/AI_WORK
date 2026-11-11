@@ -42,8 +42,7 @@
 2. 도구는 `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`에만 있다 (다른 폴더의 경로, 예: `C:\AIKIT\dev`는 데이터 위치일 뿐이다). SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면(예: `ripgrep execution failed`) 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
-   - office-cli: `C:\AIKIT\office-cli\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\office-cli\skills\office-excel\SKILL.md`)
-   - ml-kit: `C:\AIKIT\ml-kit\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\ml-kit\skills\ml-train\SKILL.md`)
+   `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\skills\office-excel\SKILL.md`, `C:\AIKIT\skills\ml-train\SKILL.md`)
 4. 도구는 항상 `python "<스크립트 전체 경로>" <명령> ...`으로 실행한다. `.py` 파일 경로만 실행하면 편집기가 열리고 결과가 없다.
    실행하는 .py는 SKILL.md 표에 있는 것뿐이고, 경로는 SKILL.md에 적힌 전체 경로를 한 글자도 바꾸지 않고 쓴다
    (`C:\AIKIT\office-cli\excel.py`, `C:\AIKIT\ml-kit\ml_train.py`처럼 도구 폴더 바로 아래. 데이터 보기는 `excel.py read`, 한 건 예측은 `ml_predict.py --input`).
@@ -134,17 +133,16 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다.
 
 ## 9. 지침과 스킬 파일 위치 (물어보면 아래를 그대로 알린다)
 사용자가 "지침 어디 있어", "스킬 경로 알려줘"처럼 물으면 파일을 찾거나 열어 보지 말고 아래 표를 그대로 알린다.
-OpenCode는 아래 파일을 복사하지 않고 그 자리에서 읽는다 (설정 폴더 `C:\AIKIT\opencode` = 환경 변수 `OPENCODE_CONFIG_DIR`, setup.bat이 설정).
+OpenCode는 `C:\AIKIT`을 설정 폴더로 쓴다 (환경 변수 `OPENCODE_CONFIG_DIR`, setup.bat이 설정). 아래 파일을 복사하지 않고 그 자리에서 읽는다.
+규칙은 둘: 모든 대화에 적용할 지침은 `C:\AIKIT\AGENTS.md`, 스킬은 `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (폴더 하나 = 스킬 하나).
 
 | 무엇 | 파일 (고칠 때도 이것) |
 |---|---|
-| 전역 지침 (이 파일) | `C:\AIKIT\opencode\AGENTS.md` |
-| office-cli 스킬 (office-excel, office-doc, office-mail, office-spec, office-data, skill-maker) | `C:\AIKIT\office-cli\skills\<스킬 이름>\SKILL.md` |
-| ml-kit 스킬 (ml-train, ml-dataset, ml-predict, ml-report, ml-map) | `C:\AIKIT\ml-kit\skills\<스킬 이름>\SKILL.md` |
-| 사용자가 만든 스킬 | `C:\AIKIT\opencode\skills\<스킬 이름>\SKILL.md` |
+| 전역 지침 (이 파일) | `C:\AIKIT\AGENTS.md` |
+| 스킬 (기본 11개: office-excel, office-doc, office-mail, office-spec, office-data, skill-maker, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<스킬 이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐) |
-| 스킬 경로·셸·권한 설정 | `C:\AIKIT\opencode\opencode.json` |
-| 사내 LLM 연결 설정 | `C:\AIKIT\opencode\opencode.jsonc` |
+| 셸·권한 기본 설정 (배포 파일) | `C:\AIKIT\opencode.json` |
+| 사내 LLM 연결 설정 | `C:\AIKIT\opencode.jsonc` |
 | 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
 
 - 스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-maker` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).

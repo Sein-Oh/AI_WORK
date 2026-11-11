@@ -4,7 +4,7 @@ description: 엑셀·CSV 표 데이터 집계와 중복 행 찾기. 표 집계(�
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "1.6.5"
+  version: "1.6.6"
   platform: windows
 ---
 

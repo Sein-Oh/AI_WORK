@@ -12,6 +12,12 @@
 > Windows 경로의 백슬래시가 지워져 11개가 실패하던 것을 `mlkit_helpers.split_command`(Windows 명령줄 규칙)로. conftest의
 > `pytest_make_parametrize_id`로 긴 글자 매개변수 id를 60자로 자름 (Windows 환경변수 32767자 한도).
 
+## [2.9.92] - 2026-11-12
+
+### 구조
+- 스킬 5개를 `AIKIT/ml-kit/skills/<이름>`에서 `AIKIT/skills/<이름>`으로 옮김 (`C:\AIKIT`이 OpenCode 설정 폴더, 설정 파일 없이 폴더 모양으로 읽힘.
+  office-cli 1.6.6 CHANGELOG, HANDOFF 3-13). 도움말(`-h`)이 알려 주는 `skill_file`도 `<설치 폴더>\skills\<이름>\SKILL.md`. 스킬 본문은 그대로.
+
 ## [2.9.91] - 2026-11-11
 
 회사 PC 전체 회귀와 사내 LLM 시험(Gemma, BEAM, 2026-11-11 저녁) 조치.

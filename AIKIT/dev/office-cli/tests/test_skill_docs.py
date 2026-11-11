@@ -1,4 +1,4 @@
-"""작업별 스킬(AIKIT/office-cli/skills/<이름>/SKILL.md)이 코드와 어긋나지 않음: 버전 표기, OpenCode frontmatter 규칙,
+"""작업별 스킬(AIKIT/skills/<이름>/SKILL.md)이 코드와 어긋나지 않음: 버전 표기, OpenCode frontmatter 규칙,
 명령·옵션이 argparse에 있음, 명령 템플릿이 전체 명령, 모든 명령이 어느 스킬에든 있음, 기능 목록, 크기."""
 import argparse
 import os
@@ -18,7 +18,7 @@ from office_helpers import DEV, TOOL_DIR
 SCRIPTS = {"excel.py": excel, "word.py": word, "ppt.py": ppt, "outlook.py": outlook, "office.py": office,
            "reader.py": reader, "skill.py": skill}
 SKILL_NAMES = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker")
-SKILLS_DIR = os.path.join(TOOL_DIR, "skills")
+SKILLS_DIR = os.path.join(os.path.dirname(TOOL_DIR), "skills")      # C:\AIKIT\skills (1.6.6)
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
 TEST_SKILL = os.path.join(DEV, "tools", "office-cli-test", "SKILL.md")
 MAX_SKILL_BYTES = 8192                # 경량 LLM 컨텍스트: 스킬 하나 8KB 이하 (6KB -> 7.2KB -> 8KB, 사용자 결정 2026-11-10, AGENTS.md "사용법 단순성" 7)
@@ -101,7 +101,7 @@ def _frontmatter(path):
 
 
 def test_skill_layout():
-    assert sorted(os.listdir(SKILLS_DIR)) == sorted(SKILL_NAMES)
+    assert sorted(n for n in os.listdir(SKILLS_DIR) if n.startswith("office-") or n == "skill-maker") == sorted(SKILL_NAMES)
     for name, path in SKILL_FILES.items():
         assert os.listdir(os.path.dirname(path)) == ["SKILL.md"], name          # 스킬 폴더에는 SKILL.md만
     assert not os.path.exists(os.path.join(TOOL_DIR, "SKILL.md"))               # 남으면 옛 통합 스킬이 다시 쓰임
@@ -180,8 +180,8 @@ def test_command_templates_are_full_commands():
         for no, line in enumerate(_read(path).splitlines(), start=1):
             for span in _SPAN.findall(line):
                 first = span.split()[0] if span.split() else ""
-                if first == "python" and span.startswith('python "C:\\AIKIT\\data\\scripts\\'):
-                    continue                 # skill-maker 본문 예시: 사용자가 만든 스크립트 (전역 지침 8장의 폴더, 전체 경로)
+                if first == "python" and span.startswith('python "C:\\AIKIT\\skills\\<스킬 이름>\\scripts\\'):
+                    continue                 # skill-maker 본문 예시: 사용자 스킬 폴더의 스크립트 (전체 경로, 1.6.6)
                 if first in PARSERS or (first == "python" and not _FULL.match(span)):
                     bare.append(f"{name} {no}행: {span[:60]}")
     assert not bare, bare

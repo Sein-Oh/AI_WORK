@@ -88,7 +88,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.91"                         # must equal metadata.version of every skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.92"                         # must equal metadata.version of every ml-* skill in <AIKIT>/skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1222,7 +1222,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         except Exception as e:
             sys.stderr.write(f"[WARN] 도움말을 만들지 못했습니다 ({type(e).__name__}). SKILL.md를 보세요.\n")
         name = SKILL_OF_SCRIPT.get(os.path.basename(sys.argv[0] or ""), "ml-train")
-        skill = os.path.join(TOOL_DIR, "skills", name, "SKILL.md")
+        skill = os.path.join(os.path.dirname(TOOL_DIR), "skills", name, "SKILL.md")   # C:\AIKIT\skills (2.9.92)
         emit_json_response({
             "status": "ok", "tool": "ml-kit", "command": "help", "verified": True, "skill_file": skill,
             "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {name} 스킬(SKILL.md)의 명령 템플릿을 그대로 사용하세요. "

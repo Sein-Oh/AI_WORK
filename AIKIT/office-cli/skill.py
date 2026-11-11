@@ -7,10 +7,10 @@
     check   스킬 하나를 점검: --name <이름> [--project <폴더>]
     delete  사용자가 만든 스킬 지우기: --name <이름> [--project <폴더>] --dry-run (기본 스킬은 지우지 않음)
 
-스킬 위치 (OpenCode 2.2.5에서 확인, 2026-11-12):
-    기본 스킬    C:\\AIKIT\\ml-kit\\skills, C:\\AIKIT\\office-cli\\skills (도구와 함께 배포, opencode.json의 skills.paths로 읽힘)
-    사용자 스킬  C:\\AIKIT\\opencode\\skills\\<이름>\\SKILL.md (OpenCode 설정 폴더 = OPENCODE_CONFIG_DIR, 어느 작업 폴더에서나 보임)
-    프로젝트 스킬 <폴더>\\.opencode\\skills\\<이름>\\SKILL.md (--project. 그 폴더에서 연 OpenCode 세션에서만 보임)
+스킬 위치 (OpenCode 2.2.5에서 확인, 2026-11-12): 폴더 하나 = 스킬 하나 (SKILL.md와 그 스킬의 scripts\\)
+    기본·사용자 스킬 C:\\AIKIT\\skills\\<이름>\\SKILL.md (OpenCode 설정 폴더 = OPENCODE_CONFIG_DIR = C:\\AIKIT, 어느 작업 폴더에서나 보임).
+                    기본 스킬 11개는 도구와 함께 배포되고(BASE_SKILLS), 나머지 이름은 사용자가 만든 스킬.
+    프로젝트 스킬    <폴더>\\.opencode\\skills\\<이름>\\SKILL.md (--project. 그 폴더에서 연 OpenCode 세션에서만 보임)
 경량 LLM이 머리말 형식(--- 줄, name, description)을 틀리지 않게 본문만 받아 도구가 조립한다.
 """
 import os
@@ -28,7 +28,7 @@ DESC_MIN, DESC_MAX = 15, 300               # description 글자 수 (짧으면 �
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 NAME_MAX = 40
 LIST_MAX = 60
-# 도구와 함께 배포하는 기본 스킬: 같은 이름으로 만들거나 지울 수 없음 (도구 폴더의 skills에 있음)
+# 도구와 함께 배포하는 기본 스킬: 같은 이름으로 만들거나 지울 수 없음 (C:\AIKIT\skills에 사용자 스킬과 나란히 있음)
 BASE_SKILLS = ("ml-train", "ml-dataset", "ml-predict", "ml-report", "ml-map",
                "office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker", "office-cli-test")
 _PATH_IN_TEXT = re.compile(r"[A-Za-z]:\\[^\s\"'`<>|]+\.(?:py|bat)")
@@ -40,13 +40,8 @@ PROJECT_SUB = os.path.join(".opencode", "skills")
 
 
 def config_dir() -> str:
-    """OpenCode 설정 폴더: OPENCODE_CONFIG_DIR (setup.bat이 사용자 환경 변수로 둠), 없으면 C:\\AIKIT\\opencode."""
-    return os.environ.get("OPENCODE_CONFIG_DIR") or os.path.join(KIT_DIR, "opencode")
-
-
-def base_dirs() -> List[str]:
-    """기본 스킬 폴더 (도구와 함께 배포, opencode.json의 skills.paths)."""
-    return [os.path.join(KIT_DIR, "ml-kit", "skills"), os.path.join(KIT_DIR, "office-cli", "skills")]
+    """OpenCode 설정 폴더: OPENCODE_CONFIG_DIR (setup.bat이 사용자 환경 변수로 둠), 없으면 도구 폴더의 부모(C:\\AIKIT)."""
+    return os.environ.get("OPENCODE_CONFIG_DIR") or KIT_DIR
 
 
 def project_dir(project: Optional[str]) -> Optional[str]:
@@ -60,7 +55,7 @@ def project_dir(project: Optional[str]) -> Optional[str]:
 
 
 def skills_dir(project: Optional[str] = None) -> str:
-    """스킬을 저장·찾는 폴더: --project가 있으면 <폴더>\\.opencode\\skills, 없으면 사용자 스킬 폴더 <설정 폴더>\\skills."""
+    """스킬을 저장·찾는 폴더: --project가 있으면 <폴더>\\.opencode\\skills, 없으면 <설정 폴더>\\skills (기본 스킬과 같은 곳)."""
     root = project_dir(project)
     return os.path.join(root, PROJECT_SUB) if root else os.path.join(config_dir(), "skills")
 
@@ -202,9 +197,14 @@ def cmd_save(args) -> Dict[str, Any]:
 
 
 def _folders(project: Optional[str] = None) -> List[Tuple[str, str]]:
-    """(종류, 스킬 폴더): 프로젝트(--project일 때), 사용자, 기본 순서. 같은 이름이면 앞의 것을 찾음."""
+    """(종류, 스킬 폴더): 프로젝트(--project일 때), 설정 폴더의 skills 순서. 같은 이름이면 앞의 것을 찾음.
+    설정 폴더의 종류 "스킬"은 이름으로 기본/사용자를 나눔 (_kind)."""
     out = [("프로젝트", skills_dir(project))] if project else []
-    return out + [("사용자", skills_dir())] + [("기본", d) for d in base_dirs()]
+    return out + [("스킬", skills_dir())]
+
+
+def _kind(folder_kind: str, name: str) -> str:
+    return folder_kind if folder_kind == "프로젝트" else "기본" if name in BASE_SKILLS else "사용자"
 
 
 def _installed(project: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -222,7 +222,7 @@ def _installed(project: Optional[str] = None) -> List[Dict[str, Any]]:
                 text = ""
             meta, _ = _parse(text)
             out.append({"name": name, "description": rt.clamp_text(meta.get("description", ""), 120)[0],
-                        "kind": kind, "bytes": len(text.replace("\r\n", "\n").encode("utf-8")), "skill_file": path})
+                        "kind": _kind(kind, name), "bytes": len(text.replace("\r\n", "\n").encode("utf-8")), "skill_file": path})
     return out
 
 
@@ -232,7 +232,7 @@ def cmd_list(args) -> Dict[str, Any]:
     dirs = {kind: root for kind, root in _folders(args.project)}
     if not items:
         return rt.ok(TOOL, "list", f"0건: 스킬이 없습니다 ({', '.join(dirs.values())})",
-                     f"VERIFIED: 0건. 찾은 스킬 없음. 기본 스킬 폴더({', '.join(base_dirs())})가 없으면 C:\\AIKIT 폴더를 다시 복사하라고 알리세요.",
+                     f"VERIFIED: 0건. 찾은 스킬 없음. 기본 스킬 폴더({skills_dir()})가 비었으면 C:\\AIKIT 폴더를 다시 복사하라고 알리세요.",
                      verified=True, skills=[], count=0, user_count=0, skills_dir=skills_dir(args.project))
     shown = items[:LIST_MAX]
     preview = f"스킬 {len(items)}개 (사용자·프로젝트가 만든 것 {len(mine)}개: " + (", ".join(x["name"] for x in mine[:10]) or "없음") + ")"
@@ -282,7 +282,7 @@ def cmd_check(args) -> Dict[str, Any]:
 def cmd_delete(args) -> Dict[str, Any]:
     name = str(args.name or "").strip()
     path = _find(name, args.project)
-    if name in BASE_SKILLS or any(os.path.normcase(path).startswith(os.path.normcase(d) + os.sep) for d in base_dirs()):
+    if name in BASE_SKILLS:
         raise rt.InputError(f"'{name}'은(는) 도구와 함께 배포하는 기본 스킬이라 지우지 않습니다.", error_type="not_supported")
     folder = os.path.dirname(path)
     if args.dry_run:

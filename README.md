@@ -26,13 +26,14 @@ AI_WORK/
 ├── archive/                   # 보관 도구 (수정·테스트 대상 아님, archive/README.md)
 │   ├── engenius/              # 사내 에이전트 En-Genius 스킬 패키지 (업데이트 중지, 필요할 때 다시 꺼냄)
 │   └── doc-classifier/        # 폴더 파일 목록화/분류 0.9.2 (다른 개발자 담당으로 보관)
-├── AIKIT/                     # 사내 PC C:\AIKIT로 통째로 복사 (아래 AIKIT/dev 포함). 도구 폴더에는 실행 파일과 스킬(SKILL.md)만
-│   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 옛 전역 설정 정리, 시스템 PATH 등록, 동작 확인
+├── AIKIT/                     # 사내 PC C:\AIKIT로 통째로 복사 (아래 AIKIT/dev 포함). 이 폴더가 곧 OpenCode 설정 폴더 (OPENCODE_CONFIG_DIR)
+│   ├── AGENTS.md              # OpenCode 전역 지침 (설정 파일 없이 폴더 모양으로 읽힘)
+│   ├── skills/<이름>/SKILL.md # 스킬: 폴더 하나 = 스킬 하나. 기본 11개(ml-train, ml-dataset, ml-predict, ml-report, ml-map,
+│   │                          #   office-excel, office-doc, office-mail, office-spec, office-data, skill-maker), 그 밖은 사용자 스킬(git 제외)
+│   ├── opencode.json          # 셸·권한 기본 설정 (스킬 경로는 적지 않음). opencode.jsonc(사내 LLM 주소)는 PC에 있는 것 (git 제외)
+│   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 옛 설정 정리, 시스템 PATH 등록, 동작 확인
 │   ├── web.bat                # OpenCode Web UI를 바로 띄움 (opencode 2.x: opencode pair의 일회용 로그인 링크를 브라우저로 엶)
-│   ├── opencode/              # OpenCode 설정 폴더 (OPENCODE_CONFIG_DIR): AGENTS.md(전역 지침), opencode.json(스킬 경로·셸·권한)
-│   │                          # opencode.jsonc(사내 LLM 주소)·skills\(사용자 스킬)는 PC에 있는 것 (git 제외)
 │   ├── ml-kit/                # 회귀·분류 ML 툴킷
-│   │   ├── skills/<이름>/SKILL.md   # 작업별 스킬 5개: ml-train, ml-dataset, ml-predict, ml-report, ml-map
 │   │   ├── ml_train.py        # 학습, 성능 개선, 학습 이력
 │   │   ├── ml_dataset.py      # 학습용 데이터셋 만들기 (조건·행 번호로 뽑기, 학습에서 빼기)
 │   │   ├── ml_predict.py      # 예측, 목표값 찾기, 조건별 예측, 최적 조건 (예측만 배포: 이 파일 + _ml_runtime.py + 버전 폴더)
@@ -41,7 +42,6 @@ AI_WORK/
 │   │   ├── ml_map.py          # 표 보간·반대 찾기 (모델 불필요)
 │   │   └── _ml_runtime.py     # 공통 런타임 (진입점 아님)
 │   └── office-cli/            # Office(Excel/Word/PPT/Outlook) 자동화 + 문서 읽기/검색
-│       ├── skills/<이름>/SKILL.md   # 작업별 스킬 6개: office-excel, office-doc, office-mail, office-spec, office-data, skill-maker
 │       ├── excel.py / word.py / ppt.py / outlook.py   # 앱별 진입점
 │       ├── reader.py          # PDF/HWP/Office/eml 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
 │       ├── office.py          # 창 목록/전환, 앱 간 전달, 되돌리기
@@ -78,15 +78,15 @@ python -m pytest -q              # 전체 도구 테스트
 ```
 WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 붙여넣어 두 도구의 패키지를 표준 환경 버전으로 설치합니다
 (온라인 설치, 인터넷 PC에서 wheel 받기, wheel 폴더로 오프라인 설치).
-폐쇄망 설치는 [`docs/WINDOWS_OFFLINE.md`](docs/WINDOWS_OFFLINE.md), 에이전트 연동은 각 도구의 `skills/<이름>/SKILL.md`와 전역 지침 `AIKIT/opencode/AGENTS.md`.
+폐쇄망 설치는 [`docs/WINDOWS_OFFLINE.md`](docs/WINDOWS_OFFLINE.md), 에이전트 연동은 `AIKIT/skills/<이름>/SKILL.md`와 전역 지침 `AIKIT/AGENTS.md`.
 
 ## 배포 방법
 
 배포는 `C:\AIKIT` 폴더 하나입니다 (저장소 `AIKIT/` + WinPython `python\` + `opencode.exe`).
 1. `AIKIT` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\AIKIT\setup.bat`, `C:\AIKIT\python\python.exe`가 되도록, `dev` 포함).
-2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\opencode\`에 넣어 둡니다 (git에 올리지 않는 파일. provider, model, `enabled_providers`만).
-3. `C:\AIKIT\setup.bat`을 두 번 클릭합니다 (또는 `python C:\AIKIT\setup.py`). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT\opencode`를
-   설정해 OpenCode가 전역 지침·스킬 11개(ml-kit 5, office-cli 6)·설정을 `C:\AIKIT`에서 **복사 없이** 읽게 하고, 예전에 사용자 폴더
+2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\AIKIT\`에 넣어 둡니다 (git에 올리지 않는 파일. provider, model, `enabled_providers`만).
+3. `C:\AIKIT\setup.bat`을 두 번 클릭합니다 (또는 `python C:\AIKIT\setup.py`). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`을
+   설정해 OpenCode가 `C:\AIKIT\AGENTS.md`(전역 지침)와 `C:\AIKIT\skills`(스킬 11개)를 **복사 없이, 설정 파일 없이** 읽게 하고, 예전에 사용자 폴더
    (`%USERPROFILE%\.config\opencode`)로 복사해 둔 우리 스킬·지침은 보관 후 지웁니다 (`C:\AIKIT\data\setup_backup_<시각>`).
    시스템 PATH에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가한 뒤, 도구와 OpenCode 설정 폴더를 확인합니다. `--check`는 확인만.
 4. 새 터미널을 열고 OpenCode(TUI, Desktop, Web UI)를 다시 시작합니다. setup이 OpenCode 백그라운드 서비스를 꺼 두므로 새 PATH·스킬·지침으로 다시 뜹니다

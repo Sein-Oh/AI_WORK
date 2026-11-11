@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""AIKIT/setup.py (배포 설치): OpenCode 설정 폴더를 C:\\AIKIT\\opencode로 (사용자 환경 변수 OPENCODE_CONFIG_DIR, 가짜 winreg),
-옛 전역 설정 폴더(%USERPROFILE%\\.config\\opencode) 정리(우리 스킬·지침은 보관 후 지움, 사용자 스킬·opencode.jsonc는 옮김),
+"""AIKIT/setup.py (배포 설치): OpenCode 설정 폴더를 C:\\AIKIT으로 (사용자 환경 변수 OPENCODE_CONFIG_DIR, 가짜 winreg),
+이전 구성(C:\\AIKIT\\opencode, 도구 폴더 안의 skills) 정리,
+옛 전역 설정 폴더(%USERPROFILE%\\.config\\opencode) 정리(우리 스킬·지침은 보관 후 지움, 사용자 스킬·opencode.jsonc는 C:\\AIKIT으로),
 시스템 PATH 등록(가짜 winreg), 동작 확인, opencode.json + opencode.jsonc 합친 설정 점검, --check, setup.bat,
 run_all_tests.py diag의 환경 변수·PATH·옛 복사본 확인."""
 import importlib.util
@@ -99,23 +100,26 @@ def _skill(folder, name, text="본문"):
 
 
 def test_sources_exist_in_repo_layout():
+    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 11개).
+    opencode.json은 셸·권한 기본 설정만 (스킬 경로 없음)."""
     for name, src in su.sources():
         assert os.path.isfile(src), (name, src)
-    on_disk = sorted(os.listdir(os.path.join(CLI, "office-cli", "skills")))
-    assert sorted(su.OFFICE_SKILLS) == on_disk                            # 새 스킬 폴더를 만들면 setup.py에도 올림
-    assert sorted(su.ML_SKILLS) == sorted(os.listdir(os.path.join(CLI, "ml-kit", "skills")))
-    cfg = json.load(open(os.path.join(CLI, "opencode", "opencode.json"), encoding="utf-8"))
-    for p in cfg["skills"]["paths"]:                                      # opencode 폴더 기준 상대 경로 (설치 위치와 무관)
-        assert not os.path.isabs(p) and os.path.isdir(os.path.join(CLI, "opencode", p)), p
-    assert set(cfg) - {"$schema"} <= set(su.OUR_KEYS)                     # 사내 LLM 설정(provider, model)은 opencode.jsonc에만
+    on_disk = set(os.listdir(os.path.join(CLI, "skills")))
+    assert set(su.ML_SKILLS + su.OFFICE_SKILLS) <= on_disk                # 새 스킬 폴더를 만들면 setup.py에도 올림
+    assert not os.path.exists(os.path.join(CLI, "opencode"))              # 이전 구성의 설정 폴더는 없음
+    for tool in ("ml-kit", "office-cli"):
+        assert not os.path.exists(os.path.join(CLI, tool, "skills")), tool
+    cfg = json.load(open(os.path.join(CLI, "opencode.json"), encoding="utf-8"))
+    assert set(cfg) - {"$schema"} <= set(su.OUR_KEYS) and "skills" not in cfg   # 사내 LLM 설정(provider, model)은 opencode.jsonc에만
     assert cfg["shell"] == "powershell" and cfg["autoupdate"] is False
     assert cfg["permission"] == {"external_directory": "allow", "webfetch": "deny", "websearch": "deny"}
     gitignore = os.path.join(REPO, ".gitignore")
     if os.path.isfile(gitignore):        # 저장소에서만 (반입한 PC에는 .gitignore가 없음)
         ignore = open(gitignore, encoding="utf-8").read().splitlines()
-        assert {"AIKIT/opencode/opencode.jsonc", "AIKIT/opencode/skills/", "AIKIT/data/"} <= set(ignore)   # 사내 LLM 주소, 사용자 스킬, 보관
-        assert "AIKIT/opencode/opencode.json" not in ignore
-    assert su.old_config_dir().endswith(os.path.join(".config", "opencode"))
+        assert {"AIKIT/opencode.jsonc", "AIKIT/skills/*", "AIKIT/data/", "AIKIT/service.json"} <= set(ignore)
+        assert {f"!AIKIT/skills/{n}/" for n in su.ML_SKILLS + su.OFFICE_SKILLS} <= set(ignore)    # 기본 스킬만 저장소에
+        assert "AIKIT/opencode.json" not in ignore
+    assert su.config_dir() == su.HERE and su.old_config_dir().endswith(os.path.join(".config", "opencode"))
     for dist in ("pandas", "scikit-learn", "openpyxl", "python-docx", "python-pptx", "pymupdf", "pywin32"):
         assert dist in dict(su.LIBS)
 
@@ -124,7 +128,7 @@ def test_apply_sets_user_env_then_check_passes(monkeypatch, tmp_path, capsys):
     reg = FakeReg(r"C:\Windows", user={su.CONFIG_ENV: r"D:\옛 설정"})
     cli, old = _iso(monkeypatch, tmp_path, reg)
     assert su.main(["--no-path"]) == 0
-    assert reg.user[su.CONFIG_ENV] == str(cli / "opencode") and os.environ[su.CONFIG_ENV] == str(cli / "opencode")
+    assert reg.user[su.CONFIG_ENV] == str(cli) and os.environ[su.CONFIG_ENV] == str(cli)
     kept = _backups(cli, "user_env.txt")
     assert len(kept) == 1 and r"D:\옛 설정" in kept[0].read_text(encoding="utf-8")      # 쓰기 전 원래 값
     assert reg.writes == []                                               # --no-path: 시스템 PATH는 그대로
@@ -138,7 +142,7 @@ def test_apply_sets_user_env_then_check_passes(monkeypatch, tmp_path, capsys):
 
 def test_check_reports_and_apply_tidies_old_global_config(monkeypatch, tmp_path, capsys):
     """2026-11-12 전 setup이 복사한 옛 전역 설정: 우리 스킬(지금 이름, 옛 통합 폴더)과 AGENTS.md는 보관 후 지우고,
-    사용자가 만든 스킬과 opencode.jsonc는 C:\\AIKIT\\opencode로 옮김. --check는 바꾸지 않음."""
+    사용자가 만든 스킬은 C:\\AIKIT\\skills, opencode.jsonc는 C:\\AIKIT으로 옮김. --check는 바꾸지 않음."""
     reg = FakeReg(r"C:\Windows")
     cli, old = _iso(monkeypatch, tmp_path, reg)
     ours = _skill(old, "office-excel", "옛 복사본")
@@ -156,9 +160,9 @@ def test_check_reports_and_apply_tidies_old_global_config(monkeypatch, tmp_path,
     out = capsys.readouterr().out
     assert not ours.parent.exists() and not combined.parent.exists() and not (old / "AGENTS.md").exists()
     assert (old / "node_modules").is_dir()
-    assert (cli / "opencode" / "skills" / "weekly-report" / "SKILL.md").read_text(encoding="utf-8").endswith("내 스킬")
+    assert (cli / "skills" / "weekly-report" / "SKILL.md").read_text(encoding="utf-8").endswith("내 스킬")
     assert not mine.exists() and "로 옮김" in out
-    assert (cli / "opencode" / "opencode.jsonc").read_text(encoding="utf-8") == '{"model": "corp/gemma"}'
+    assert (cli / "opencode.jsonc").read_text(encoding="utf-8") == '{"model": "corp/gemma"}'
     assert not (old / "opencode.jsonc").exists()
     for rel in ("skills/office-excel/SKILL.md", "skills/office-cli/SKILL.md", "skills/weekly-report/SKILL.md", "AGENTS.md", "opencode.jsonc"):
         assert len(_backups(cli, "old_config/" + rel)) == 1, rel           # 지우거나 옮긴 것은 모두 보관
@@ -166,16 +170,16 @@ def test_check_reports_and_apply_tidies_old_global_config(monkeypatch, tmp_path,
 
 
 def test_old_jsonc_and_user_skill_do_not_replace_existing_ones(monkeypatch, tmp_path, capsys):
-    """C:\\AIKIT\\opencode에 이미 opencode.jsonc와 같은 이름의 사용자 스킬이 있으면 그것을 쓰고, 옛 것은 보관 후 지움."""
+    """C:\\AIKIT에 이미 opencode.jsonc와 같은 이름의 사용자 스킬이 있으면 그것을 쓰고, 옛 것은 보관 후 지움."""
     cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
-    (cli / "opencode" / "opencode.jsonc").write_text('{"model": "새 것"}', encoding="utf-8")
-    _skill(cli / "opencode", "weekly-report", "새 스킬")
+    (cli / "opencode.jsonc").write_text('{"model": "새 것"}', encoding="utf-8")
+    _skill(cli, "weekly-report", "새 스킬")
     _skill(old, "weekly-report", "옛 스킬")
     (old / "opencode.jsonc").write_text('{"model": "옛 것"}', encoding="utf-8")
     assert su.main(["--no-path"]) == 0
     out = capsys.readouterr().out
-    assert '"새 것"' in (cli / "opencode" / "opencode.jsonc").read_text(encoding="utf-8")
-    assert (cli / "opencode" / "skills" / "weekly-report" / "SKILL.md").read_text(encoding="utf-8").endswith("새 스킬")
+    assert '"새 것"' in (cli / "opencode.jsonc").read_text(encoding="utf-8")
+    assert (cli / "skills" / "weekly-report" / "SKILL.md").read_text(encoding="utf-8").endswith("새 스킬")
     assert not (old / "opencode.jsonc").exists() and "이미 있는" in out
     assert "옛 것" in _backups(cli, "old_config/opencode.jsonc")[0].read_text(encoding="utf-8")
 
@@ -197,23 +201,45 @@ def test_old_skill_link_removes_only_link(monkeypatch, tmp_path, capsys):
     assert not _backups(cli, "old_config/skills/office-cli")
 
 
-def test_missing_source_or_bad_skill_paths_is_error(monkeypatch, tmp_path, capsys):
+def test_missing_source_is_error(monkeypatch, tmp_path, capsys):
     cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
-    os.remove(cli / "opencode" / "AGENTS.md")
+    os.remove(cli / "AGENTS.md")
+    shutil.rmtree(cli / "skills" / "office-excel")
     assert su.main(["--no-path"]) == 1
     out = capsys.readouterr().out
-    assert "[FAIL] 전역 지침: 파일이 없습니다" in out and "[STATUS] 끝." not in out
-    (cli / "opencode" / "AGENTS.md").write_text("지침", encoding="utf-8")
-    (cli / "opencode" / "opencode.json").write_text('{"skills": {"paths": ["../없는 폴더"]}}', encoding="utf-8")
-    assert su.main(["--no-path"]) == 1
-    assert "skills.paths가 스킬 폴더를 가리키지 않습니다 (../없는 폴더)" in capsys.readouterr().out
+    assert "[FAIL] 전역 지침: 파일이 없습니다" in out and "[FAIL] office-excel 스킬: 파일이 없습니다" in out and "[STATUS] 끝." not in out
+
+
+def test_previous_layout_is_moved_to_the_aikit_root(monkeypatch, tmp_path, capsys):
+    """1.6.6: 바로 전 구성(2026-11-12 낮: 설정 폴더 C:\\AIKIT\\opencode, 스킬은 도구 폴더 안)에서 옮김. opencode.jsonc와 사용자 스킬은
+    맨 위로, AGENTS.md·opencode.json·service.json·도구 폴더 안의 skills는 보관 후 지우고, 빈 opencode 폴더도 지움. --check는 바꾸지 않음."""
+    cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
+    oc = cli / "opencode"
+    oc.mkdir()
+    for name, text in (("AGENTS.md", "이전 지침"), ("opencode.json", '{"skills": {"paths": ["../ml-kit/skills"]}}'),
+                       ("opencode.jsonc", '{"model": "corp/gemma"}'), ("service.json", "{}")):
+        (oc / name).write_text(text, encoding="utf-8")
+    _skill(oc, "weekly-report", "내 스킬")
+    tool_skill = cli / "ml-kit" / "skills" / "ml-train" / "SKILL.md"
+    tool_skill.parent.mkdir(parents=True)
+    tool_skill.write_text("이전 위치의 기본 스킬", encoding="utf-8")
+    assert su.main(["--no-path", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "이전 구성 우리 스킬" in out and "이전 구성 사용자 스킬" in out and "이전 구성 opencode.jsonc" in out and oc.is_dir()
+    assert su.main(["--no-path"]) == 0
+    assert (cli / "opencode.jsonc").read_text(encoding="utf-8") == '{"model": "corp/gemma"}'
+    assert (cli / "skills" / "weekly-report" / "SKILL.md").read_text(encoding="utf-8").endswith("내 스킬")
+    assert not oc.exists() and not (cli / "ml-kit" / "skills").exists()
+    for rel in ("opencode/AGENTS.md", "opencode/opencode.json", "opencode/opencode.jsonc", "ml-kit/skills/ml-train/SKILL.md"):
+        assert len(_backups(cli, "old_layout/" + rel)) == 1, rel
+    assert su.main(["--no-path", "--check"]) == 0
 
 
 def test_test_skill_goes_to_user_skills(monkeypatch, tmp_path, capsys):
     cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
     test_skill = os.path.join(DEV, "office-cli", "tools", "office-cli-test", "SKILL.md")
     assert su.main(["--no-path", "--test-skill", test_skill]) == 0
-    assert (cli / "opencode" / "skills" / "office-cli-test" / "SKILL.md").read_bytes() == open(test_skill, "rb").read()
+    assert (cli / "skills" / "office-cli-test" / "SKILL.md").read_bytes() == open(test_skill, "rb").read()
     assert "office-cli-test 스킬(개발용)" in capsys.readouterr().out
 
 
@@ -230,10 +256,10 @@ def test_opencode_paths_must_be_the_aikit_folder(monkeypatch, tmp_path, capsys):
     su.step_opencode_paths(rep, run=lambda cmd, t: (0, "", ""))
     assert rep.ok == 0 and rep.fails == []                                # opencode.exe 없음: 지나감
     (tmp_path / "opencode.exe").write_bytes(b"")
-    good = f"home       C:\\Users\\x\ndata       C:\\Users\\x\\.local\\share\\opencode\nconfig     {tmp_path / 'opencode'}\n"
+    good = f"home       C:\\Users\\x\ndata       C:\\Users\\x\\.local\\share\\opencode\nconfig     {tmp_path}\n"
     su.step_opencode_paths(rep, run=lambda cmd, t: (0, good, ""))
     assert rep.ok == 1 and rep.fails == []
-    su.step_opencode_paths(rep, run=lambda cmd, t: (0, good.replace(str(tmp_path / "opencode"), r"C:\Users\x\.config\opencode"), ""))
+    su.step_opencode_paths(rep, run=lambda cmd, t: (0, good.replace(f"config     {tmp_path}", r"config     C:\Users\x\.config\opencode"), ""))
     assert len(rep.fails) == 1 and "로그아웃" in rep.fails[0]
     rep = su.Report()
     su.step_opencode_paths(rep, run=lambda cmd, t: (1, "unknown command", ""))
@@ -410,7 +436,7 @@ def test_diag_fails_when_env_path_or_old_copies_differ(tmp_path, monkeypatch):
     if os.name != "nt":                                                   # Windows가 아니면 참고만
         assert st.failed == 0 and st.passed == 0 and any("Windows가 아니라" in x for x in lines)
     paths = ";".join(os.path.join(CLI, *p) for p in (("python",), ("python", "Scripts")))
-    want = os.path.join(CLI, "opencode")
+    want = CLI
     reg = FakeReg(r"C:\Windows;" + paths)
     st = rat.Stage("diag")
     rat.diag_skills(st, lines, config_dir=str(old), reg=reg)
@@ -440,3 +466,11 @@ def test_service_is_stopped_so_new_path_and_skills_apply(tmp_path, monkeypatch, 
     rep = su.Report()
     su.step_service(rep, run=lambda cmd, t: (_ for _ in ()).throw(OSError("x")))
     assert rep.warn == 1 and rep.fails == [] and "web.bat stop" in capsys.readouterr().out   # 못 꺼도 설치 실패가 아님
+
+
+def test_old_skills_path_in_jsonc_is_warned(tmp_path, capsys):
+    """1.6.6: 예전 opencode.jsonc의 "skills"(옛 전역 폴더 등)가 남으면 옛 스킬이 섞임 -> WARN (스킬은 C:\\AIKIT\\skills에 두면 됨)."""
+    (tmp_path / "opencode.jsonc").write_text('{"skills": ["C:/Users/x/.config/opencode/skills"], "model": "x"}', encoding="utf-8")
+    rep = su.Report()
+    su.step_opencode_config(rep, str(tmp_path))
+    assert rep.warn == 1 and '"skills"(스킬 경로)' in capsys.readouterr().out

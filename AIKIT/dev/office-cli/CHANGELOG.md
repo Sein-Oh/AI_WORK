@@ -11,6 +11,26 @@
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
 
+## [1.6.6] - 2026-11-12
+
+설정 파일 없는 폴더 구성 (사용자 요청: 잘 모르는 팀원도 익히게, 루트는 `C:\AIKIT`). 집 PC OpenCode 2.2.5에서 확인 (HANDOFF 3-13).
+
+### 구조: C:\AIKIT이 곧 OpenCode 설정 폴더
+- 스킬을 도구 폴더(`AIKIT/office-cli/skills/<이름>`)에서 `AIKIT/skills/<이름>`으로, 전역 지침을 `AIKIT/opencode/AGENTS.md`에서 `AIKIT/AGENTS.md`로,
+  `AIKIT/opencode/opencode.json`을 `AIKIT/opencode.json`으로 옮김 (`AIKIT/opencode/` 폴더 없앰). OpenCode는 설정 폴더의 `AGENTS.md`와
+  `skills\<이름>\SKILL.md`를 설정 없이 읽으므로 `opencode.json`의 `skills.paths`를 없앰 (셸·권한·웹 도구 막기·업데이트 끄기만 남음).
+- `setup.py`: `OPENCODE_CONFIG_DIR=<설치 폴더>`. 이전 구성(`C:\AIKIT\opencode`, 도구 폴더 안의 `skills`)에서 `opencode.jsonc`와 사용자 스킬은
+  맨 위로 옮기고 나머지는 보관 후 지움(`old_layout\`), 옛 전역 설정의 사용자 스킬은 `C:\AIKIT\skills`로. `opencode.jsonc`에 옛 `"skills"`가 남으면 WARN.
+  `web.bat`도 설치 폴더를 `OPENCODE_CONFIG_DIR`로. `run_all_tests.py` diag는 이전 구성이 남으면 FAIL.
+- 도구가 알려 주는 스킬 파일 위치(`skill_file`)도 `<설치 폴더>\skills\<이름>\SKILL.md`.
+- `.gitignore`: `AIKIT/skills/*`에서 기본 스킬 11개만 저장소에 (나머지는 사용자 스킬), `AIKIT/opencode.jsonc`, `AIKIT/service.json`.
+
+### 기능: 사용자 스킬은 스크립트까지 한 폴더
+- `skill.py`: 기본·사용자 스킬 모두 `<설정 폴더>\skills`(종류는 `BASE_SKILLS` 이름으로 구분). 프로젝트 스킬(`--project`)은 그대로.
+- skill-maker 스킬: 스크립트를 `C:\AIKIT\skills\<스킬 이름>\scripts\`에 두게 하고 이름을 먼저 정함 (스킬 폴더만 복사하면 동료 PC에서도 됨).
+  OpenCode 2.2.5도 Claude 스킬처럼 스킬 폴더 안의 스크립트를 그 폴더 기준으로 실행함 (불러올 때 `Base directory for this skill`과 파일 목록을 줌).
+- 전역 지침 3장(스킬 파일 직접 읽기 위치)·9장(위치 표, 규칙 두 줄) 고침.
+
 ## [1.6.5] - 2026-11-12
 
 배포 폴더 `C:\CLI` -> `C:\AIKIT`(저장소 `CLI/`, `CLI-dev/` -> `AIKIT/`, `AIKIT/dev/`)와 OpenCode 설정을 `C:\AIKIT` 기준으로 (집 PC, OpenCode 2.2.5에서 확인).
