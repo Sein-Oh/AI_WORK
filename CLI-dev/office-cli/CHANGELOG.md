@@ -19,6 +19,11 @@
   워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기를 안내. `_excel_compare.py`, 관련 테스트, 실기 러너 N12, 단순화 점검 B1~B5를 지움.
   office-data 스킬은 표 집계(`stats`)와 중복 찾기(`duplicates`)만, office-spec에서 diff 줄을 뺌, 전역 지침 3장 표와 8장(직접 할 일)에 반영.
 
+### 지침 (회사 PC 2026-11-11 저녁, 상위 모델)
+- 상위 모델이 "두 엑셀 비교" 요청에 파이썬 스크립트를 짜서 비교함 (Gemma는 직접 하는 곳을 안내). 전역 지침 8장 맨 앞에 "하지 않는 일" 표를 두고
+  (스킬로도 파이썬으로도 하지 않음, 두 파일 비교가 첫 줄), 3장 표에 "두 파일·두 판 비교: 스킬 없음, 하지 않는다" 줄을 넣음. 스킬 10개의
+  "명령 표에 없는 일은 8장(파이썬 직접)" 문장도 "하지 않는 일은 파이썬으로도 하지 않음"으로.
+
 ### 스킬 점검 (2026-11-11, 스킬 한도 8KB)
 - argparse 옵션과 스킬을 대조해 도구에는 있는데 스킬에 없던 기능을 채움. office-excel: `read --max-rows`, 차트 `--labels`/`--legend`/`--at`/크기와
   종류(line_markers, scatter_lines, combo), 서식 `--color`/`--italic`/`--clear`, `range unmerge`, `sheet select`, 바꾸기 `--whole`/`--map`/강조, `export --encoding`.
