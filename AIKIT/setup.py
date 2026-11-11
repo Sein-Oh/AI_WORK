@@ -221,7 +221,7 @@ def _remove_link(path):
 
 
 def old_global_items(cfg):
-    """옛 전역 설정 폴더에서 정리할 것: [(종류, 경로)]. 종류: 우리 스킬 / 옛 전역 지침 / 사용자 스킬 / opencode.jsonc."""
+    """옛 전역 설정 폴더에서 정리할 것: [(종류, 경로)]. 종류: 우리 스킬 / 전역 지침 / 사용자 스킬 / opencode.jsonc."""
     out = []
     skills = os.path.join(cfg, "skills")
     if os.path.isdir(skills):
@@ -231,7 +231,7 @@ def old_global_items(cfg):
                 out.append(("우리 스킬", path))
             elif os.path.isfile(os.path.join(path, "SKILL.md")) and not _is_link(path):
                 out.append(("사용자 스킬", path))
-    for kind, name in (("옛 전역 지침", "AGENTS.md"), ("opencode.jsonc", "opencode.jsonc")):
+    for kind, name in (("전역 지침", "AGENTS.md"), ("opencode.jsonc", "opencode.jsonc")):
         if os.path.isfile(os.path.join(cfg, name)):
             out.append((kind, os.path.join(cfg, name)))
     return out

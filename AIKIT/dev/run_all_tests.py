@@ -571,7 +571,7 @@ def diag_skills(stage, lines, config_dir=None, reg=None):
             stage.fail(f"{mod.CONFIG_ENV}가 {cur or '없음'}이라 OpenCode가 {want}의 지침·스킬을 읽지 않음. " + fix)
     cfg = config_dir or mod.old_config_dir()
     old = mod.old_global_items(cfg) if os.path.isdir(cfg) else []
-    ours = [(k, p) for k, p in old if k in ("우리 스킬", "옛 전역 지침")]
+    ours = [(k, p) for k, p in old if k in ("우리 스킬", "전역 지침")]
     lines.append(f"  옛 전역 설정 폴더({cfg}): " + (", ".join(f"{k} {os.path.basename(p)}" for k, p in old) or "정리할 것 없음"))
     if ours:
         stage.fail("옛 전역 설정 폴더에 우리 스킬·지침 복사본이 남아 있음 (" + ", ".join(os.path.basename(p) for _k, p in ours) + "). " + fix)

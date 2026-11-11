@@ -35,6 +35,8 @@ AIKIT/data/
 AIKIT/opencode/opencode.jsonc
 # 사용자가 만든 OpenCode 스킬 (skill.py save가 C:\AIKIT\opencode\skills에 둠, 사용자 것이라 저장소에 넣지 않음)
 AIKIT/opencode/skills/
+# OpenCode가 설정 폴더(C:\AIKIT\opencode)에 만드는 실행 파일 (백그라운드 서비스 정보)
+AIKIT/opencode/service.json
 # 배포 때 C:\AIKIT에 함께 두는 것 (저장소에는 넣지 않음)
 AIKIT/python/
 AIKIT/opencode.exe
