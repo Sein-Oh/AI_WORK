@@ -164,7 +164,7 @@ def cmd_save(args) -> Dict[str, Any]:
     rt.safe_write_text(dst, full)
     back = rt.read_text_file(dst).replace("\r\n", "\n")
     got_meta, _ = _parse(back)
-    preview = (f"스킬 '{name}'을(를) {'바꿨습니다' if exists else '등록했습니다'} ({size}바이트). OpenCode를 모두 닫았다가 다시 시작하면 쓸 수 있습니다")
+    preview = (f"스킬 '{name}'을(를) {'바꿨습니다' if exists else '등록했습니다'} ({size}바이트). OpenCode를 모두 닫았다가 다시 시작하면 쓸 수 있습니다 (안 보이면 C:\\CLI\\web.bat stop 뒤 다시 실행)")
     if back != full or got_meta.get("name") != name:
         return rt.ok_unverified(TOOL, "save", preview, ["저장한 스킬 파일을 다시 읽은 내용이 쓴 내용과 다름"], **fields)
     return rt.ok(TOOL, "save", preview,

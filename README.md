@@ -88,7 +88,8 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 3. `C:\CLI\setup.bat`을 두 번 클릭합니다 (또는 `python C:\CLI\setup.py`). 스킬 11개(ml-kit 5, office-cli 6)·전역 지침·`opencode.jsonc`를
    `%USERPROFILE%\.config\opencode\`로 복사(바뀐 것만, 이전 파일은 `C:\CLI\data\setup_backup_<시각>`에 보관)하고,
    시스템 PATH에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 없을 때만 추가한 뒤, 도구가 동작하는지 확인합니다. `--check`는 확인만.
-4. 새 터미널을 열고 OpenCode(TUI, Desktop)를 다시 시작합니다.
+4. 새 터미널을 열고 OpenCode(TUI, Desktop, Web UI)를 다시 시작합니다. setup이 OpenCode 백그라운드 서비스를 꺼 두므로 새 PATH·스킬·지침으로 다시 뜹니다
+   (TUI와 web.bat은 이미 떠 있는 서비스를 그대로 쓰므로, 설치 전에 뜬 서비스가 남으면 python을 못 찾고 옛 스킬을 씀. 그럴 때는 `C:\CLI\web.bat stop`).
 5. (선택) 브라우저 화면으로 쓰려면 `C:\CLI\web.bat`을 두 번 클릭합니다. `opencode pair`가 OpenCode 백그라운드 서비스를 띄우고
    (이 PC에서만 접속, 화면은 opencode.exe 안에 들어 있어 폐쇄망에서도 됨) 일회용 로그인 링크를 브라우저로 엽니다. 링크는 한 번만 쓰이고
    몇 분 뒤 만료되니 다시 열 때는 web.bat을 다시 실행합니다. 서비스는 창을 닫아도 계속 돌며 `web.bat stop`으로 끕니다(`web.bat status`로 상태).

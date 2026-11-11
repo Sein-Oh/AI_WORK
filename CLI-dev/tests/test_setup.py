@@ -400,3 +400,19 @@ def test_diag_fails_when_installed_skill_or_path_differs(tmp_path, monkeypatch):
     rat.diag_skills(st, lines, config_dir=str(cfg2), reg=reg)
     assert st.failed == 2 and "옛 office-cli 스킬 지울 것" in st.failures[1]
     assert jsonc or not (cfg / "opencode.jsonc").exists()
+
+
+def test_service_is_stopped_so_new_path_and_skills_apply(tmp_path, monkeypatch, capsys):
+    """팀원 배포 2026-11-11: 설치 전에 뜬 OpenCode 백그라운드 서비스가 옛 PATH(python 없음)로 계속 돌아, web.bat을 다시 실행해도
+    재부팅 전까지 python을 못 찾았다. setup은 서비스를 끄고(다음 실행 때 새 설정으로 뜸), opencode.exe가 없으면 지나간다."""
+    calls = []
+    monkeypatch.setattr(su, "HERE", str(tmp_path))
+    rep = su.Report()
+    su.step_service(rep, run=lambda cmd, t: calls.append(cmd) or (0, "", ""))
+    assert calls == [] and rep.warn == 0                                    # opencode.exe 없음
+    (tmp_path / "opencode.exe").write_bytes(b"")
+    su.step_service(rep, run=lambda cmd, t: calls.append(cmd) or (0, "", ""))
+    assert calls == [[str(tmp_path / "opencode.exe"), "service", "stop"]] and "껐습니다" in capsys.readouterr().out
+    rep = su.Report()
+    su.step_service(rep, run=lambda cmd, t: (_ for _ in ()).throw(OSError("x")))
+    assert rep.warn == 1 and rep.fails == [] and "web.bat stop" in capsys.readouterr().out   # 못 꺼도 설치 실패가 아님

@@ -145,5 +145,5 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다.
 
 - 사용자가 만든 스킬은 `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md`에만 있다 (원본 없음, setup.bat이 건드리지 않음).
   스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-maker` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
-- 원본을 고친 뒤 `C:\CLI\setup.bat`을 실행하면 OpenCode 설정 폴더로 복사되고(바뀐 파일만, 덮어쓰기 전 `C:\CLI\data\setup_backup_<시각>`에 보관), OpenCode를 다시 시작하면 반영된다. 설정 폴더의 파일을 직접 고치면 다음 setup 때 원본으로 바뀐다.
+- 원본을 고친 뒤 `C:\CLI\setup.bat`을 실행하면 OpenCode 설정 폴더로 복사되고(바뀐 파일만, 덮어쓰기 전 `C:\CLI\data\setup_backup_<시각>`에 보관), OpenCode를 다시 시작하면 반영된다 (setup이 백그라운드 서비스를 끔. 안 되면 `C:\CLI\web.bat stop` 뒤 다시 실행). 설정 폴더의 파일을 직접 고치면 다음 setup 때 원본으로 바뀐다.
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).

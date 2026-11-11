@@ -29,6 +29,11 @@ PR #77(1.6.3) 병합 뒤의 작업. 회사 PC 사내 LLM 시험(Gemma 15/21, BEA
 - 전역 지침 2장: 폐쇄망이라 인터넷이 전혀 안 된다는 것을 굵게, 웹 검색·웹 페이지 열기 도구와 내려받기를 시도하지 않도록 (스킬 만드는 법을 묻자 인터넷 검색을 시도함).
   9장에 새 스킬 만드는 법(폴더, 이름, 머리말)을 적어 이 PC의 지침만으로 답하게. `setup.py`는 opencode.jsonc가 웹 도구를 막지 않았으면 INFO.
 
+### 팀원 배포 (2026-11-11)
+- `setup.py`: 끝에 OpenCode 백그라운드 서비스를 끔 (`opencode.exe service stop`). TUI와 web.bat은 떠 있는 서비스를 그대로 다시 쓰므로, 설치 전에 뜬
+  서비스가 옛 PATH로 돌아 python을 못 찾았고 web.bat을 다시 실행해도 재부팅 전까지 풀리지 않았음. 못 꺼도 설치는 실패로 보지 않고 WARN.
+  안내 문장(setup 끝, skill.py, skill-maker, 전역 지침 9장, README)에 "안 되면 web.bat stop 뒤 다시".
+
 ### 사내 LLM 시험 조치 (Gemma, BEAM)
 - office-doc 스킬: "워드 내용을 PPT로"(`word.py read --save` 후 `ppt.py write --file`) 줄을 넣음. 스킬 점검 때 transfer 줄에 `--from-target`·`--to-target`을
   적은 뒤 BEAM이 워드 -> PPT를 transfer로 시도함 (O8, 도구는 거절하고 방법을 안내해 끝은 맞게 됨).

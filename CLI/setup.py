@@ -16,6 +16,7 @@ r"""C:\CLI 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\
    옛 통합 스킬 폴더 skills\office-cli, skills\ml-kit은 보관 후 지웁니다 (링크·정션이면 링크만 지움).
 2. 시스템 PATH(HKLM)에 <C:\CLI>\python, <C:\CLI>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
+   OpenCode 백그라운드 서비스를 끔 (설치 전에 뜬 서비스는 옛 PATH와 옛 스킬로 계속 돌아, 재부팅 전까지 python을 못 찾았음).
 3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep).
    설정 폴더 opencode.jsonc의 "shell"(PowerShell), "instructions"(다른 지침), permission.external_directory,
    "enabled_providers"(폐쇄망에서 못 쓰는 기본 모델 숨기기), "autoupdate"를 WARN/INFO로 알림.
@@ -361,6 +362,25 @@ def _run(cmd, timeout):
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 
+def step_service(rep, run=None):
+    """OpenCode 백그라운드 서비스를 끔: TUI와 Web UI(web.bat)는 이미 떠 있는 서비스를 그대로 다시 쓰므로, 설치 전에 뜬 서비스는
+    옛 PATH(python을 못 찾음)와 옛 스킬·지침으로 계속 돈다. OpenCode 창을 닫거나 web.bat을 다시 실행해도 바뀌지 않고 재부팅해야
+    풀렸다 (회사 PC 팀원 배포 2026-11-11). 다음에 OpenCode를 실행하면 새 설정으로 다시 뜬다. 서비스가 없거나 opencode.exe가 없으면 그냥 지나감."""
+    exe = os.path.join(HERE, "opencode.exe")
+    if not os.path.isfile(exe):
+        return
+    run = run or _run
+    try:
+        rc, out, err = run([exe, "service", "stop"], 60)
+    except Exception as e:                                    # 서비스를 못 꺼도 설치는 실패가 아님
+        rep.line("WARN", f"OpenCode 백그라운드 서비스를 끄지 못했습니다 ({type(e).__name__}). 재부팅하거나 'C:\\CLI\\web.bat stop'을 실행하세요")
+        return
+    if rc == 0:
+        rep.line("OK", "OpenCode 백그라운드 서비스를 껐습니다 (다음에 OpenCode를 실행하면 새 PATH·스킬·지침으로 다시 뜸)")
+    else:
+        rep.line("INFO", "OpenCode 백그라운드 서비스: 떠 있지 않거나 끄지 못함 (" + (err or out).strip()[:120] + ")")
+
+
 def step_verify(rep):
     py = python_exe()
     if py == sys.executable and not os.path.isfile(os.path.join(HERE, "python", "python.exe")):
@@ -556,6 +576,8 @@ def main(argv=None):
         print("[INFO] --no-path: 건너뜀", flush=True)
     else:
         step_path(rep, backup, args.check)
+    if not args.check:
+        step_service(rep)
     print("[INFO] 3. 동작 확인", flush=True)
     step_verify(rep)
     step_opencode_config(rep, cfg)
@@ -570,7 +592,8 @@ def main(argv=None):
     if args.check and rep.diffs:
         print("[STATUS] 다른 것이 있습니다. 적용: C:\\CLI\\setup.bat (또는 python C:\\CLI\\setup.py)", flush=True)
     if not args.check and not rep.fails:
-        print("[STATUS] 끝. 새 터미널(PowerShell)을 열고, OpenCode(TUI, Desktop)를 모두 닫았다가 다시 시작하세요.", flush=True)
+        print("[STATUS] 끝. 새 터미널(PowerShell)을 열고, OpenCode(TUI, Desktop, Web UI)를 모두 닫았다가 다시 시작하세요. "
+              "새 스킬·지침이 안 보이거나 python을 못 찾으면 'C:\\CLI\\web.bat stop' 뒤 다시 실행하세요.", flush=True)
     return 1 if bad else 0
 
 
