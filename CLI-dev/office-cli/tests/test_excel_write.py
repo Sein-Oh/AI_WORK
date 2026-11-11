@@ -1897,7 +1897,7 @@ def test_protected_sheet_stops_every_write(xl, capsys, argv):
     before = dict(ws.values)
     code, out = run_excel(capsys, *argv)
     assert code == 1 and out["error_type"] == "sheet_protected", out
-    assert out["agent_directive"].startswith("STOP_RETRY:") and "시트 보호 해제는 사용자가 직접" in out["message"]
+    assert out["agent_directive"].startswith("STOP_RETRY:") and "시트 보호 해제를 사용자가 직접" in out["message"] and "[편집 사용]" in out["message"]
     assert "암호를 풀지 않음" in out["message"]
     assert ws.values == before and undo_points() == [] and ws.notes == {}
 

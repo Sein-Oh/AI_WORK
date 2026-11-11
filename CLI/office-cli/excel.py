@@ -1741,7 +1741,9 @@ def _rebase_formula(app: Any, ws: Any, formula: str, from_row: int, from_col: in
 # 3-1. 쓰기 전 확인: 시트 보호, 쓰기 실패 되돌리기 (모든 쓰기 명령 공통)
 # ==============================================================================
 
-PROTECT_HINT = "검토 > 시트 보호 해제는 사용자가 직접 해야 합니다 (도구는 암호를 풀지 않음)"
+# 제한된 보기로 열린 문서도 실제 엑셀에서는 모든 칸이 잠긴 시트로 보여 여기로 옴 (회사 PC 2026-11-11 L11): 둘을 구분하지 않고 함께 안내
+PROTECT_HINT = ("문서 위쪽 노란 줄에 [편집 사용]이 있으면 누르고, 없으면 검토 > 시트 보호 해제를 사용자가 직접 해야 합니다 "
+                "(도구는 암호를 풀지 않음)")
 # 보호된 시트에서도 엑셀이 허용할 수 있는 일: 시트 보호 대화상자의 허용 항목 (Worksheet.Protection.Allow*)
 _PROTECT_ALLOW = {"format_cells": "AllowFormattingCells", "format_columns": "AllowFormattingColumns",
                   "format_rows": "AllowFormattingRows", "insert_rows": "AllowInsertingRows",
@@ -1846,7 +1848,7 @@ def check_protection(ws: Any, ranges: Sequence[Any], need: str = "values") -> No
     err = rt.UserDecisionError(
         msg,
         "시트가 보호되어 있어 아무것도 바꾸지 않았습니다. message를 사용자에게 그대로 알리세요. 시트 보호를 풀지 말고(암호를 묻거나 "
-        "추측하지 않음) 사용자가 직접 풀었다고 하면 같은 명령을 1번 다시 실행하세요."
+        "추측하지 않음) 사용자가 [편집 사용]을 눌렀거나 보호를 풀었다고 하면 같은 명령을 1번 다시 실행하세요."
         + (" 사용자가 [후보]의 잠기지 않은 칸에 쓰라고 하면 그 칸으로 실행하세요." if cands else ""),
         candidates=cands)
     err.error_type = "sheet_protected"

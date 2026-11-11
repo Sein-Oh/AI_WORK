@@ -71,7 +71,7 @@
 - 규격 대조(`excel.py check`)의 판정은 도구가 규격 문장을 기계로 읽은 참고 판정이다(늘 `UNVERIFIED:`). 행마다 `condition`(읽은 조건)과 `spec_text`(근거 문장)를 보여 주고 사용자가 확인한 뒤에만 메모를 단다(`next_commands[0]` 미리보기 -> 확인 -> 미리보기 결과의 `confirm_commands[0]`).
 - 문서 검색 결과의 `match_mode`가 `number`(숫자 값만 같은 곳, 부호·대시가 다른 숫자 포함), `partial`, `fuzzy`이면 정확히 일치한 곳은 0건(`count: 0`)이고 `candidates`는 비슷한 곳일 뿐이다. 근거로 쓰지 말고 사용자에게 확인받는다. `exact_mixed`이면 `matches` 중 `literal: false`(표기가 다른 곳, 부호·단위가 다를 수 있음)는 근거로 확정하지 말고 실제 글을 보여 주고 확인받는다(`snippet`에서 `**`는 글자 그대로 맞은 곳, `[[ ]]`는 표기가 다른 곳). 숫자를 찾은 결과를 알릴 때는 `snippet`의 앞뒤(부호, 범위 `~`, 이하/이상)를 그대로 함께 전달한다(`VERIFIED`는 그 글자가 그 자리에 있다는 뜻이고 문맥의 뜻은 판정하지 않음).
 - `truncated`가 true이면 결과 일부만 받은 것이다. 전체 결과 파일 경로(`full_result_file` 또는 `output_file`)를 알리거나, 이어 보기가 필요하면 `next_commands`를 쓴다.
-- `error_type`이 `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. 사용자에게 알리고, 사용자가 보호를 푼 뒤 같은 명령을 1번 다시 실행하거나 사용자가 고른 `[후보]` 칸에 쓴다.
+- `error_type`이 `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. message를 그대로 알리고, 사용자가 [편집 사용]을 누르거나 보호를 푼 뒤 같은 명령을 1번 다시 실행하거나 사용자가 고른 `[후보]` 칸에 쓴다.
 - `error_type`이 `drm_or_dialog`이면 사용자에게 그 문서를 직접 열어 두라고 알리고, 열었다고 하면 `next_commands[0]`을 1번 실행한다.
 - 메일은 가장 최근 목록·검색·대화(thread) 결과의 짧은 `id`(`--id 3`)로 고른다. 예전 목록의 번호를 다시 쓰지 않는다.
 - 여러 칸이나 양식을 채우거나 여러 칸에 서식을 줄 때는 칸마다 명령을 따로 실행하지 않는다. `excel.py write --cells ...`, `excel.py style --range "B2;D5;F7" ...` 또는 `word.py fill --target "<양식.docx>" --slots ...` 한 번으로 한다 (양식 문서는 `--target`, 값은 `--slots`).
