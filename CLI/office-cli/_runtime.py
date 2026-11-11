@@ -933,7 +933,7 @@ OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply
 
 # 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (skills\<이름>\SKILL.md). excel.py check·comment는 office-spec에도 있음
 SKILL_OF_TOOL = {"excel": "office-excel", "word": "office-doc", "ppt": "office-doc", "office": "office-doc",
-                 "outlook": "office-mail", "reader": "office-spec"}
+                 "outlook": "office-mail", "reader": "office-spec", "skill": "skill-maker"}
 # 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 office-data)
 SKILL_OF_COMMAND = {("excel", "stats"): "office-data", ("excel", "duplicates"): "office-data"}
 

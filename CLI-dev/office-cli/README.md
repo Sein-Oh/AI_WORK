@@ -23,6 +23,7 @@ CLI/office-cli/  실행에 필요한 파일만 (사내 PC C:\CLI\office-cli)
 ├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / outline / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
+├── skill.py     스킬   save / list / check / delete   (사용자가 만든 OpenCode 스킬 등록·점검, Office 불필요)
 ├── _runtime.py  공통 런타임 (응답 계약, 인자 파서, 경로, 입출력, JIT 복구, 전체 명령 만들기)
 ├── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
 ├── _markdown.py      마크다운 블록 해석 (word.py·ppt.py 넣기, excel.py 표 파일)
@@ -803,6 +804,20 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
   `--list` 항목은 되돌릴 수 있는 지점 앞 20개와 그보다 최근의 되돌릴 수 없는 작업(최대 20개)이라, 되돌릴 수 없는 작업이 20개 넘게 앞에 쌓여도
   되돌릴 수 있는 지점이 빠지지 않습니다(`truncated`는 빠진 항목이 있을 때 true). `--pick` 없는 `undo`는 되돌릴 수 있는 지점이 하나도 없으면
   `VERIFIED: 0건.`(`count: 0`, `restored: false`), 직전 작업만 되돌릴 수 없고 더 앞 지점이 있으면 `needs_user_decision`입니다.
+
+### skill.py (1.6.3, 스킬 skill-maker)
+사용자가 만든 OpenCode 스킬을 등록·점검합니다. 스킬 위치는 `%USERPROFILE%\.config\opencode\skills\<이름>\SKILL.md`
+(`OFFICE_CLI_OPENCODE_DIR`로 설정 폴더를 바꿀 수 있음, 테스트용). 경량 LLM이 머리말(`---`, name, description)을 틀리지 않게 본문만 받아 도구가 조립합니다.
+
+| 명령 | 설명 |
+|---|---|
+| `save --name <이름> --description "<설명>" --file <본문.md> [--overwrite] [--dry-run]` | 본문 파일에 머리말을 붙여 저장하고 다시 읽어 확인. 이름은 `^[a-z0-9]+(-[a-z0-9]+)*$`, 40자 이하: 대문자·공백·밑줄은 고친 이름으로 `[추천]`, 한글 등 고칠 수 없으면 사용자에게 물음. 기본 스킬 이름(office-*, ml-*, skill-maker)은 거절. 저장 전 확인(하나라도 걸리면 저장하지 않고 "고칠 것" 목록): description 15~300자, 본문 있음, 전체 8192바이트 이하(LF), CP949로 표현되지 않는 문자(이모지 등) 없음. `warnings`: 본문 파일에 있던 머리말은 버림, 순서·명령이 없음, 본문의 `.py`·`.bat` 경로가 없음(Windows), `pip install`·인터넷 주소. 같은 이름이 있으면 `needs_user_decision`과 `--overwrite`를 붙인 `confirm_commands[0]`(destructive) |
+| `list` | 설정 폴더의 스킬: `name`, `description`(120자), `kind`(기본/사용자), `bytes`. 60개까지. 0개면 `VERIFIED: 0건` |
+| `check --name <이름>` | 머리말 유무, name = 폴더 이름, 위 저장 전 확인과 같은 항목. `problems`(0개면 "문제 없음") |
+| `delete --name <이름> [--dry-run]` | 사용자가 만든 스킬 폴더를 지움 (지운 내용은 `<데이터 폴더>/deleted_skills/<이름>_<시각>`에 보관, 없는 것을 확인). 기본 스킬은 `not_supported` |
+
+- 스킬을 만드는 순서(작업 정리 -> 스크립트를 인자로 받게 -> 이름·설명 확인 -> 본문 파일 -> `save` -> OpenCode 다시 시작 안내)와 본문 모양은 skill-maker 스킬에.
+- 사용자가 만든 스킬은 설정 폴더에만 있습니다 (원본 없음). `setup.py`는 기본 스킬만 복사하고 다른 폴더는 건드리지 않습니다.
 
 ## 4. 앱 간 전달 (transfer)과 회사 DRM
 

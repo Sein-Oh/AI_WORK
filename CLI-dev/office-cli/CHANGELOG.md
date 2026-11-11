@@ -35,6 +35,12 @@
   검색 `--top`/`--full`, `check --header-row`. 일부러 넣지 않은 것: `--no-focus`, `--probe`, `read --units`, `--context`, `--max-files`, `write --values`(JSON 인자).
   가장 큰 스킬 office-doc 7277바이트. 테스트 `test_skill_docs.py`에 새 항목을 기대값으로.
 
+### 기능: 스킬 만들기 (사용자 요청 2026-11-11, 배포 뒤 잘 모르는 사용자가 스킬을 만들 수 있게)
+- 새 진입점 `skill.py`(save / list / check / delete)와 새 스킬 `skill-maker`. "이거 스킬로 만들어줘"에 에이전트가 작업을 정리하고, 본문 파일을 쓴 뒤
+  `skill.py save --name --description --file`로 등록: 머리말은 도구가 붙이고, 이름 규칙·설명 길이·8KB·문자를 확인해 걸리면 저장하지 않고 고칠 것을 알림,
+  저장 뒤 다시 읽어 확인, 같은 이름은 사용자에게 묻고 `--overwrite`. 기본 스킬 이름은 거절, 지우기는 미리보기 뒤 확인(보관).
+- `setup.py`가 skill-maker 스킬도 설치, 전역 지침 3장 표와 9장(사용자 스킬 위치), 저장소 AGENTS.md, README.
+
 ### 기능 (사용자 요청)
 - `excel.py info`(열린 통합문서, `--target` 없음): 사용자가 선택한(마지막으로 클릭한) 칸 `selection`과 `active_sheet`를 preview에도 적고 office-excel 스킬에 안내 (값은 전부터 있었으나 스킬에 없어 에이전트가 알리지 못함).
 - 전역 지침 `CLI/opencode/AGENTS.md` 9장: 지침·스킬 파일 위치 (팀원 배포 전, 물어보면 그대로 알림). OpenCode가 읽는 파일과 원본, 사내 LLM 설정, 오류 기록, 고친 뒤 `setup.bat`.

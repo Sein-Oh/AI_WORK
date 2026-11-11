@@ -9,7 +9,7 @@ r"""C:\CLI 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\
 하는 일 (C:\CLI = 이 파일이 있는 폴더):
 1. OpenCode 설정 폴더(%USERPROFILE%\.config\opencode)로 복사 (바뀐 것만):
        ml-kit\skills\<이름>\SKILL.md       -> skills\<이름>\SKILL.md  (ml-train, ml-predict, ml-report, ml-map, ml-dataset)
-       office-cli\skills\<이름>\SKILL.md   -> skills\<이름>\SKILL.md  (office-excel, office-doc, office-mail, office-spec, office-data)
+       office-cli\skills\<이름>\SKILL.md   -> skills\<이름>\SKILL.md  (office-excel, office-doc, office-mail, office-spec, office-data, skill-maker)
        opencode\AGENTS.md                  -> AGENTS.md (전역 지침)
        opencode\opencode.jsonc             -> opencode.jsonc (있을 때만. 사내 LLM 주소가 들어 있어 사용자가 넣어 둠)
    덮어쓰는 파일은 data\setup_backup_<시각>\config\에 먼저 보관합니다.
@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\CLI (배포 폴더)
-OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data")    # office-cli\skills\<이름>\SKILL.md
+OFFICE_SKILLS = ("office-excel", "office-doc", "office-mail", "office-spec", "office-data", "skill-maker")    # office-cli\skills\<이름>\SKILL.md
 ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # ml-kit\skills\<이름>\SKILL.md
 OBSOLETE = (("옛 office-cli 스킬", os.path.join("skills", "office-cli")),           # 설정 폴더에서 지울 옛 스킬 폴더
             ("옛 ml-kit 스킬", os.path.join("skills", "ml-kit")))

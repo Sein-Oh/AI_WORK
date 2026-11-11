@@ -41,10 +41,11 @@ AI_WORK/
 │   │   ├── ml_map.py          # 표 보간·반대 찾기 (모델 불필요)
 │   │   └── _ml_runtime.py     # 공통 런타임 (진입점 아님)
 │   └── office-cli/            # Office(Excel/Word/PPT/Outlook) 자동화 + 문서 읽기/검색
-│       ├── skills/<이름>/SKILL.md   # 작업별 스킬 5개: office-excel, office-doc, office-mail, office-spec, office-data
+│       ├── skills/<이름>/SKILL.md   # 작업별 스킬 6개: office-excel, office-doc, office-mail, office-spec, office-data, skill-maker
 │       ├── excel.py / word.py / ppt.py / outlook.py   # 앱별 진입점
 │       ├── reader.py          # PDF/HWP/Office/eml 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
 │       ├── office.py          # 창 목록/전환, 앱 간 전달, 되돌리기
+│       ├── skill.py           # 사용자가 만든 OpenCode 스킬 등록·목록·점검·지우기
 │       └── _runtime.py / _office.py / _markdown.py / _xlsx_formula.py / _spec_check.py   # 공통·내부 모듈 (진입점 아님)
 └── CLI-dev/                   # 개발·실기 테스트용 (필요할 때만 C:\CLI-dev로, C:\CLI와 나란히)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
@@ -84,7 +85,7 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 배포는 `C:\CLI` 폴더 하나입니다 (저장소 `CLI/` + WinPython `python\` + `opencode.exe`).
 1. `CLI` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\CLI\setup.bat`, `C:\CLI\python\python.exe`가 되도록).
 2. 사내 LLM 주소가 든 `opencode.jsonc`를 `C:\CLI\opencode\`에 넣어 둡니다 (git에 올리지 않는 파일. 없으면 설정 폴더에 이미 있는 것을 씀).
-3. `C:\CLI\setup.bat`을 두 번 클릭합니다 (또는 `python C:\CLI\setup.py`). 스킬 10개(ml-kit 5, office-cli 5)·전역 지침·`opencode.jsonc`를
+3. `C:\CLI\setup.bat`을 두 번 클릭합니다 (또는 `python C:\CLI\setup.py`). 스킬 11개(ml-kit 5, office-cli 6)·전역 지침·`opencode.jsonc`를
    `%USERPROFILE%\.config\opencode\`로 복사(바뀐 것만, 이전 파일은 `C:\CLI\data\setup_backup_<시각>`에 보관)하고,
    시스템 PATH에 `C:\CLI\python`, `C:\CLI\python\Scripts`를 없을 때만 추가한 뒤, 도구가 동작하는지 확인합니다. `--check`는 확인만.
 4. 새 터미널을 열고 OpenCode(TUI, Desktop)를 다시 시작합니다.

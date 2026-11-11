@@ -15,7 +15,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 ## 폴더 구조
 - `CLI/<tool>/`: 사용자 PC의 `C:\CLI`로 그대로 복사되는 폴더. **실행에 필요한 .py와 스킬 파일(`SKILL.md`)만** 둔다.
   스킬은 작업별 `skills/<스킬 이름>/SKILL.md`(ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `office-excel`,
-  `office-doc`, `office-mail`, `office-spec`, `office-data`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
+  `office-doc`, `office-mail`, `office-spec`, `office-data`, `skill-maker`). 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
 - `CLI-dev/<tool>/`: 그 밖의 모든 것 (`README.md`, `CHANGELOG.md`, `requirements.txt`, `tests/`, `tools/` 실기 러너와 보조 스킬).
   `CLI-dev/README.md`(공통 계약), `CLI-dev/run_all_tests.py`. 실기 테스트 때만 `C:\CLI-dev`로 가져가며,
   `CLI-dev`의 테스트·러너는 옆 폴더 `../CLI/<tool>`의 도구를 시험한다.
@@ -162,6 +162,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 ### office-cli
 - 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`. 내부 모듈(진입점 아님, 스킬에 적지 않음): `_markdown.py`(마크다운 해석),
   `_xlsx_formula.py`(닫힌 xlsx의 계산 안 된 수식 칸), `_spec_check.py`(excel check).
+  `skill.py`(진입점, 스킬 `skill-maker`)는 사용자가 만든 OpenCode 스킬을 등록·점검한다 (Office 불필요, 공통 런타임을 쓰려고 office-cli에 둠).
   `_runtime.py`는 다른 office-cli 파일을 import하지 않는다. `_spec_check.py`는 `excel.py`의 주소·읽기 도우미를 쓴다.
 - 세션(`open_target`/`write_session` with 블록) 밖에서 그 안의 COM 객체(시트, 범위, 문서)를 읽지 않는다. 닫힌 파일은 블록이 끝나면 문서와
   백그라운드 Office가 닫혀 OLE 0x800a01a8로 실패하고, 저장은 끝났는데 실패를 보고한다 (회사 PC 2026-11-06 O2). 결과에 쓸 값은 블록 안에서

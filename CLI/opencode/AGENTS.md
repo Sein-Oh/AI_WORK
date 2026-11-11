@@ -32,6 +32,7 @@
 | 학습한 모델로 예측, 목표값이 되는 조건 찾기, 조건별 예측, 최적 조건 | `ml-predict` |
 | ML 결과 보고서(Word), 성능예측표(엑셀 계산기) | `ml-report` |
 | 모델 없이 표 데이터에서 사잇값 보간, 목표값이 되는 기준값 찾기 | `ml-map` |
+| 스킬 만들기 ("이거 스킬로 만들어줘"), 스킬 목록·점검·고치기·지우기, 스킬 만드는 방법 질문 | `skill-maker` |
 | 두 파일·두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 바뀐 곳 찾기) | 스킬 없음. 하지 않는다: 8장의 "하지 않는 일" 표대로 직접 하는 곳만 알린다 |
 
 1. 위 작업은 스킬 명령으로 한다. 스킬로 되는 일을 pandas, openpyxl, python-docx, win32com 등으로 다시 짜지 않는다.
@@ -137,13 +138,12 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다.
 | 무엇 | OpenCode가 읽는 파일 | 원본 (고칠 때는 이것) |
 |---|---|---|
 | 전역 지침 (이 파일) | `%USERPROFILE%\.config\opencode\AGENTS.md` | `C:\CLI\opencode\AGENTS.md` |
-| office-cli 스킬 (office-excel, office-doc, office-mail, office-spec, office-data) | `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md` | `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` |
+| office-cli 스킬 (office-excel, office-doc, office-mail, office-spec, office-data, skill-maker) | `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md` | `C:\CLI\office-cli\skills\<스킬 이름>\SKILL.md` |
 | ml-kit 스킬 (ml-train, ml-dataset, ml-predict, ml-report, ml-map) | `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md` | `C:\CLI\ml-kit\skills\<스킬 이름>\SKILL.md` |
 | 사내 LLM 연결 설정 | `%USERPROFILE%\.config\opencode\opencode.jsonc` | `C:\CLI\opencode\opencode.jsonc` |
 | 도구 오류 기록 | `C:\CLI\office-cli\data\logs\errors.txt`, `C:\CLI\ml-kit\data\logs\errors.txt` | (도구가 실패할 때 저절로 덧붙임) |
 
-- 새 스킬을 만드는 법을 물으면 인터넷에서 찾지 말고 이렇게 알린다: 폴더 `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\`에 `SKILL.md` 하나.
-  스킬 이름은 영문 소문자·숫자와 `-`만(폴더 이름과 같게), 파일 맨 위에 `---` 줄 사이로 `name: <스킬 이름>`과 `description: <언제 쓰는 스킬인지 한두 문장>`,
-  그 아래에 규칙과 명령 표(위 원본 스킬과 같은 모양, 8KB 이하). 만든 뒤 OpenCode를 다시 시작한다.
+- 사용자가 만든 스킬은 `%USERPROFILE%\.config\opencode\skills\<스킬 이름>\SKILL.md`에만 있다 (원본 없음, setup.bat이 건드리지 않음).
+  스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-maker` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
 - 원본을 고친 뒤 `C:\CLI\setup.bat`을 실행하면 OpenCode 설정 폴더로 복사되고(바뀐 파일만, 덮어쓰기 전 `C:\CLI\data\setup_backup_<시각>`에 보관), OpenCode를 다시 시작하면 반영된다. 설정 폴더의 파일을 직접 고치면 다음 setup 때 원본으로 바뀐다.
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).
