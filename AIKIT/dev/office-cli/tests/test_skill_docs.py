@@ -10,14 +10,13 @@ import office
 import outlook
 import ppt
 import reader
-import skill
 import word
 from office_helpers import DEV, TOOL_DIR
 
 
 SCRIPTS = {"excel.py": excel, "word.py": word, "ppt.py": ppt, "outlook.py": outlook, "office.py": office,
-           "reader.py": reader, "skill.py": skill}
-SKILL_NAMES = ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit", "skill-kit")
+           "reader.py": reader}
+SKILL_NAMES = ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")
 SKILLS_DIR = os.path.join(os.path.dirname(TOOL_DIR), "skills")      # C:\AIKIT\skills (1.6.6)
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
 TEST_SKILL = os.path.join(DEV, "tools", "office-cli-test", "SKILL.md")
@@ -156,7 +155,7 @@ def test_skill_commands_and_options_exist_in_argparse():
     problems = []
     for name, path in SKILL_FILES.items():
         refs = _skill_refs(path)
-        assert len(refs) > (5 if name in ("stats-kit", "skill-kit") else 12), (name, refs[:5])   # 정규식이 표를 제대로 읽는지 (stats-kit는 명령 2개)
+        assert len(refs) > (5 if name == "stats-kit" else 12), (name, refs[:5])   # 정규식이 표를 제대로 읽는지 (stats-kit는 명령 2개)
         for no, script, sub, opt, val in refs:
             if script and sub:
                 act = _option_in(PARSERS[script][sub], opt)
@@ -180,8 +179,6 @@ def test_command_templates_are_full_commands():
         for no, line in enumerate(_read(path).splitlines(), start=1):
             for span in _SPAN.findall(line):
                 first = span.split()[0] if span.split() else ""
-                if first == "python" and span.startswith('python "C:\\AIKIT\\skills\\<스킬 이름>\\scripts\\'):
-                    continue                 # skill-kit 본문 예시: 사용자 스킬 폴더의 스크립트 (전체 경로, 1.6.6)
                 if first in PARSERS or (first == "python" and not _FULL.match(span)):
                     bare.append(f"{name} {no}행: {span[:60]}")
     assert not bare, bare

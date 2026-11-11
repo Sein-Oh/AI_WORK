@@ -6,7 +6,7 @@
 틀린 명령을 일부러 실행해 도구가 준 [추천] 전체 명령이나 [후보] 번호의 confirm_commands를, 경량 LLM이 하듯
 PowerShell 5.1에 글자 그대로 넣어 실행하고 성공하는지 본다 (Windows 따옴표 처리 확인). 리눅스에서는 bash로 같은 일을 한다.
 닫힌 Office 파일에 쓰는 항목은 Windows + Office에서만 실행하고, 아니면 SKIP.
-마지막에 OpenCode 설정 폴더(C:\\AIKIT)의 스킬 배치(skills\\에 기본 스킬 12개, 옛 전역 설정에 복사본 없음)를 본다 (setup.bat을 먼저 실행).
+마지막에 OpenCode 설정 폴더(C:\\AIKIT)의 스킬 배치(skills\\에 기본 스킬 11개, 옛 전역 설정에 복사본 없음)를 본다 (setup.bat을 먼저 실행).
 
 결과: 이 파일 옆에 result_simplify_<라벨>_<시각>.md 한 개. 사람용 점검이라 stdout JSON 계약 대상이 아니다.
 """
@@ -435,11 +435,11 @@ def setup_checks():
         return record("K1", "OpenCode 설정 폴더", False, f"OPENCODE_CONFIG_DIR={reg_val or '없음'} ({CLI}이어야 함, setup.bat을 먼저 실행)")
     skills = os.path.join(CLI, "skills")
     want = ["ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset", "excel-kit", "word-kit", "ppt-kit", "outlook-kit",
-            "search-kit", "stats-kit", "skill-kit"]
+            "search-kit", "stats-kit"]
     missing = [n for n in want if not os.path.isfile(os.path.join(skills, n, "SKILL.md"))]
     old_cfg = os.path.join(os.path.expanduser("~"), ".config", "opencode")
     old = [n for n in want + ["ml-kit", "office-cli"] if os.path.exists(os.path.join(old_cfg, "skills", n))]
-    record("K1", "C:\\AIKIT\\skills에 기본 스킬 12개, 옛 전역 설정에 우리 스킬 없음 (setup.py 뒤)", not missing and not old,
+    record("K1", "C:\\AIKIT\\skills에 기본 스킬 11개, 옛 전역 설정에 우리 스킬 없음 (setup.py 뒤)", not missing and not old,
            f"없는 스킬 {missing}, 옛 전역 설정에 남은 스킬 {old}")
 
 

@@ -13,9 +13,9 @@
 C:\AIKIT\
 ├── AGENTS.md              전역 지침: 모든 대화에 적용
 ├── skills\                스킬: 폴더 하나 = 스킬 하나 (OpenCode가 이 아래를 찾음)
-│   ├── ml-train\SKILL.md  기본 스킬 12개 (명령은 C:\AIKIT\ml-kit\..., C:\AIKIT\office-cli\... 전체 경로)
+│   ├── ml-train\SKILL.md  기본 스킬 11개 (명령은 C:\AIKIT\ml-kit\..., C:\AIKIT\office-cli\... 전체 경로)
 │   ├── ...
-│   └── <사용자 스킬>\      SKILL.md + 그 스킬의 scripts\ (skill.py save가 만듦)
+│   └── <사용자 스킬>\      SKILL.md + 그 스킬의 scripts\
 ├── ml-kit\, office-cli\    여러 스킬이 함께 쓰는 도구 (.py)
 ├── opencode.json          셸·권한 기본 설정 (배포 파일, 스킬 경로는 적지 않음)
 ├── opencode.jsonc         사내 LLM 연결 (PC마다, 사용자가 넣음, git 제외)
@@ -25,12 +25,12 @@ C:\AIKIT\
 | 무엇 | 파일 |
 |---|---|
 | 전역 지침 | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 12개, 사용자가 만든 것) | `C:\AIKIT\skills\<이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`. 불러오면 OpenCode가 그 폴더 위치를 모델에 알려 줌) |
+| 스킬 (기본 11개, 사용자가 만든 것) | `C:\AIKIT\skills\<이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`. 불러오면 OpenCode가 그 폴더 위치를 모델에 알려 줌) |
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐, `skill.py save --project`) |
 | 셸·권한·웹 도구 막기·업데이트 끄기 | `C:\AIKIT\opencode.json` (배포 파일) |
 | 사내 LLM 설정 (provider, model, `enabled_providers`) | `C:\AIKIT\opencode.jsonc` (사용자가 넣음) |
 
-- 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, `guide`(사용 가이드), 기본 스킬 12개 폴더(`skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
+- 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, `guide`(사용 가이드), 기본 스킬 11개 폴더(`skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
   `setup.py`·`setup.bat`·`web.bat`을 바꿉니다. `skills` 폴더를 통째로 지우지 않습니다 (사용자 스킬이 함께 지워짐).
   `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`는 그대로 둡니다.
   처음 한 번 `C:\AIKIT\setup.bat`을 실행하고(환경 변수, PATH), 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다

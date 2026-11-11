@@ -36,7 +36,6 @@
 | 학습한 모델로 예측, 목표값이 되는 조건 찾기, 조건별 예측, 최적 조건 | `ml-predict` |
 | ML 결과 보고서(Word), 성능예측표(엑셀 계산기) | `ml-report` |
 | 모델 없이 표 데이터에서 사잇값 보간, 목표값이 되는 기준값 찾기 | `ml-map` |
-| 스킬 만들기 ("이거 스킬로 만들어줘"), 스킬 목록·점검·고치기·지우기, 스킬 만드는 방법 질문 | `skill-kit` |
 | 두 파일·두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 바뀐 곳 찾기) | 스킬 없음. 하지 않는다: 8장의 "하지 않는 일" 표대로 직접 하는 곳만 알린다 |
 
 1. 위 작업은 스킬 명령으로 한다. 스킬로 되는 일을 pandas, openpyxl, python-docx, win32com 등으로 다시 짜지 않는다.
@@ -143,13 +142,12 @@ OpenCode는 `C:\AIKIT`을 설정 폴더로 쓴다 (환경 변수 `OPENCODE_CONFI
 | 무엇 | 파일 (고칠 때도 이것) |
 |---|---|
 | 전역 지침 (이 파일) | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 12개: excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, skill-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
+| 스킬 (기본 11개: excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<스킬 이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐) |
 | 셸·권한 기본 설정 (배포 파일) | `C:\AIKIT\opencode.json` |
 | 사내 LLM 연결 설정 | `C:\AIKIT\opencode.jsonc` |
 | 사람용 사용 가이드 (사용자가 사용법을 물으면 이 파일을 브라우저로 열어 보라고 알림) | `C:\AIKIT\guide\office-cli_사용가이드.html`, `C:\AIKIT\guide\ml-kit_사용가이드.html` |
 | 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
 
-- 스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-kit` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).
 - 위 파일을 고친 뒤 OpenCode를 모두 닫았다가 다시 시작하면 반영된다 (안 되면 `C:\AIKIT\web.bat stop` 뒤 다시 실행). `%USERPROFILE%\.config\opencode`는 쓰지 않는다.
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).

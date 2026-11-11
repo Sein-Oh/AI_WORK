@@ -472,7 +472,7 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
 
 ### 3-15. 기본 스킬 이름 바꾸기 (office-cli 1.6.7)
 사용자 결정: office 계열은 `<앱>-kit` (ml 스킬은 그대로). `excel-kit`, `word-kit`, `ppt-kit`(office-doc을 나눔), `outlook-kit`, `search-kit`(옛 office-spec),
-`stats-kit`(옛 office-data), `skill-kit`(옛 skill-maker). 기본 스킬 12개. 회사·집 PC는 폴더를 덮어쓴 뒤 setup을 다시 실행하면 옛 이름 폴더를 보관 후 지움
+`stats-kit`(옛 office-data). skill-maker(잠시 skill-kit)와 `skill.py`는 없앰 (사용자 결정: OpenCode 기본 기능과 겹침). 기본 스킬 11개. 회사·집 PC는 폴더를 덮어쓴 뒤 setup을 다시 실행하면 옛 이름 폴더를 보관 후 지움
 (안 하면 OpenCode가 옛 스킬도 함께 읽음). 사용자가 만든 스킬은 건드리지 않음. Gemma 실기에서 word-kit·ppt-kit으로 나눈 뒤 스킬 고르기가 맞는지 볼 것.
 
 ### 3-16. 사용 가이드를 AIKIT\guide로

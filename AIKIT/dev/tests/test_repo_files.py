@@ -38,5 +38,5 @@ def test_user_guides_are_in_aikit_guide():
     for name in names:
         with open(os.path.join(guide, name), encoding="utf-8") as f:
             text = f.read()
-        for old in ("office-doc", "office-excel", "skill-maker", "C:\\CLI", "docs/guide"):
+        for old in ("office-doc", "office-excel", "skill-maker", "skill-kit", "C:\\CLI", "docs/guide"):
             assert old not in text, (name, old)

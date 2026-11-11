@@ -100,7 +100,7 @@ def _skill(folder, name, text="본문"):
 
 
 def test_sources_exist_in_repo_layout():
-    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 12개).
+    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 11개).
     opencode.json은 셸·권한 기본 설정만 (스킬 경로 없음)."""
     for name, src in su.sources():
         assert os.path.isfile(src), (name, src)
@@ -262,14 +262,14 @@ def test_renamed_base_skill_folders_are_removed_user_skills_kept(monkeypatch, tm
     """1.6.7: 기본 스킬 이름을 바꿈 (office-excel -> excel-kit, office-doc -> word-kit·ppt-kit 등). 폴더를 덮어써 배포하면 옛 이름 폴더가
     C:\\AIKIT\\skills에 남아 OpenCode가 옛 스킬도 읽음 -> 보관 후 지움. 사용자 스킬은 그대로, 새 기본 스킬도 그대로."""
     cli, old = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
-    for name in su.RENAMED_SKILLS:
+    for name in su.RETIRED_SKILLS:
         _skill(cli, name, "옛 이름의 기본 스킬")
     mine = _skill(cli, "weekly-report", "내 스킬")
     assert su.main(["--no-path", "--check"]) == 1
     out = capsys.readouterr().out
     assert "이전 구성 우리 스킬(옛 이름)" in out and (cli / "skills" / "office-doc").is_dir()
     assert su.main(["--no-path"]) == 0
-    for name in su.RENAMED_SKILLS:
+    for name in su.RETIRED_SKILLS:
         assert not (cli / "skills" / name).exists(), name
         assert len(_backups(cli, f"old_layout/skills/{name}/SKILL.md")) == 1, name
     assert mine.read_text(encoding="utf-8").endswith("내 스킬")
