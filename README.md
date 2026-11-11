@@ -18,7 +18,6 @@ AI_WORK/
 │   ├── HANDOFF.md             # 작업 인계 (다른 PC·새 대화에서 이어 하기)
 │   ├── WINDOWS_OFFLINE.md     # 폐쇄망 wheel 반입/설치 가이드 (모든 도구 공통)
 │   ├── history/               # 지난 설계·검토 기록 (1.0 설계, 1차 지침 준수 검토)
-│   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode/              # 사내 PC OpenCode 스킬 배치 안내, 실기테스트.md (회사 PC 실기 절차 한 장)
 │   │   ├── 자동테스트/        # Gemma 종합 테스트 메시지 팩 (AIKIT/dev/agent_scenarios.py에서 생성)
 │   │   └── 실기테스트_샘플/   # 정답을 아는 샘플 데이터 (AIKIT/dev/ml-kit/tools/make_beta_samples.py)
@@ -30,6 +29,7 @@ AI_WORK/
 │   ├── AGENTS.md              # OpenCode 전역 지침 (설정 파일 없이 폴더 모양으로 읽힘)
 │   ├── skills/<이름>/SKILL.md # 스킬: 폴더 하나 = 스킬 하나. 기본 12개(ml-train, ml-dataset, ml-predict, ml-report, ml-map,
 │   │                          #   excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, skill-kit), 그 밖은 사용자 스킬(git 제외)
+│   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode.json          # 셸·권한 기본 설정 (스킬 경로는 적지 않음). opencode.jsonc(사내 LLM 주소)는 PC에 있는 것 (git 제외)
 │   ├── setup.py / setup.bat   # 배포 설치: OPENCODE_CONFIG_DIR, 옛 설정 정리, 시스템 PATH 등록, 동작 확인
 │   ├── web.bat                # OpenCode Web UI를 바로 띄움 (opencode 2.x: opencode pair의 일회용 로그인 링크를 브라우저로 엶)

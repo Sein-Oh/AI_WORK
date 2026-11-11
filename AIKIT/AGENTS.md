@@ -144,6 +144,7 @@ OpenCode는 `C:\AIKIT`을 설정 폴더로 쓴다 (환경 변수 `OPENCODE_CONFI
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<스킬 이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐) |
 | 셸·권한 기본 설정 (배포 파일) | `C:\AIKIT\opencode.json` |
 | 사내 LLM 연결 설정 | `C:\AIKIT\opencode.jsonc` |
+| 사람용 사용 가이드 (사용자가 사용법을 물으면 이 파일을 브라우저로 열어 보라고 알림) | `C:\AIKIT\guide\office-cli_사용가이드.html`, `C:\AIKIT\guide\ml-kit_사용가이드.html` |
 | 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
 
 - 스킬을 만들거나 만드는 법을 물으면 인터넷에서 찾지 말고 `skill-kit` 스킬의 순서대로 한다 (SKILL.md를 직접 쓰지 않고 `skill.py save`로 등록).

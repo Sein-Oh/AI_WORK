@@ -9,6 +9,7 @@ import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ALLOWED = {".py", ".md", ".txt", ".json", ".tsv", ".bat"}
+GUIDE_ALLOWED = {".html"}        # AIKIT/guide/의 사람용 사용 가이드만 (2026-11-12 사용자 결정: 회사 반입 통과)
 
 
 def _tracked():
@@ -24,5 +25,18 @@ def _tracked():
 def test_tracked_files_use_only_importable_extensions():
     files = _tracked()
     assert any(p.endswith("agent_scenarios.py") for p in files)
-    bad = [p for p in files if os.path.splitext(p)[1].lower() not in ALLOWED]
+    bad = [p for p in files if os.path.splitext(p)[1].lower() not in ALLOWED
+           and not (p.startswith("AIKIT/guide/") and os.path.splitext(p)[1].lower() in GUIDE_ALLOWED)]
     assert not bad, f"회사 반입에서 막히는 확장자 (AGENTS.md 반입 규칙): {bad}"
+
+
+def test_user_guides_are_in_aikit_guide():
+    """사람용 사용 가이드는 C:\\AIKIT\\guide에 함께 배포 (2026-11-12): 도구별 HTML 하나씩, 옛 스킬 이름·옛 배포 폴더가 없음."""
+    guide = os.path.join(REPO, "AIKIT", "guide")
+    names = sorted(os.listdir(guide))
+    assert names == ["ml-kit_사용가이드.html", "office-cli_사용가이드.html"], names
+    for name in names:
+        with open(os.path.join(guide, name), encoding="utf-8") as f:
+            text = f.read()
+        for old in ("office-doc", "office-excel", "skill-maker", "C:\\CLI", "docs/guide"):
+            assert old not in text, (name, old)

@@ -25,7 +25,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   `AIKIT/dev/README.md`(공통 계약), `AIKIT/dev/run_all_tests.py`. 도구는 dev를 읽지 않는다 (배포에 함께 가도 실행에 영향 없음).
   `AIKIT/dev`의 테스트·러너는 부모 폴더 `AIKIT/<tool>`의 도구를 시험한다.
 - 새 파일을 `AIKIT/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
-- `AIKIT/` 맨 위에는 도구 폴더, `skills/`, `dev/` 외에 `AGENTS.md`(전역 지침), `opencode.json`(셸·권한 기본 설정, 스킬 경로는 적지 않음),
+- `AIKIT/` 맨 위에는 도구 폴더, `skills/`, `dev/`, `guide/`(사람용 사용 가이드 HTML, 도구별 파일 하나, 브라우저로 엶) 외에 `AGENTS.md`(전역 지침), `opencode.json`(셸·권한 기본 설정, 스킬 경로는 적지 않음),
   배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`만 둔다.
   사용자가 배포 전에 넣는 `opencode.jsonc`(사내 LLM 주소), OpenCode가 만드는 `service.json`, 설치가 만드는 `data/`(보관 폴더)와
   `work/`(Web UI 작업 폴더)는 git 제외. 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
@@ -149,7 +149,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 새 기능은 표준 환경 라이브러리를 우선 사용. 없는 패키지는 Python 3.13 / win_amd64 wheel이 있는 것만,
   도구 `requirements.txt`(`AIKIT/dev/<tool>/`), 위 "사용자 환경" 표, `docs/ENVIRONMENT.md`에 기록하고 미설치 시 JSON 오류로 안내.
 - 파일 저장·폴더 조작·텍스트 읽기는 JIT 자가복구 표의 공통 함수를 사용한다.
-- AIKIT/·AIKIT/dev/에 반입할 파일은 .py .md .txt .json .tsv .bat만 쓴다. .yaml/.yml/.jsonl/.toml 등은 회사 반입 시스템이 막으므로 쓰지 않는다(실행 중 PC에서 생기는 파일은 상관없음). 검사: `AIKIT/dev/tests/test_repo_files.py`.
+- AIKIT/·AIKIT/dev/에 반입할 파일은 .py .md .txt .json .tsv .bat만 쓴다 (예외: `AIKIT/guide/`의 .html, 2026-11-12 사용자 결정: 회사 반입 통과). .yaml/.yml/.jsonl/.toml 등은 회사 반입 시스템이 막으므로 쓰지 않는다(실행 중 PC에서 생기는 파일은 상관없음). 검사: `AIKIT/dev/tests/test_repo_files.py`.
 - 도구 폴더(`AIKIT/<tool>/`)는 단독 배포된다. 공통 런타임 함수는 도구마다 자기 폴더에 두고, 다른 도구 폴더를 import하지 않는다.
 - 테스트는 "사용자 환경" 표의 버전 기준으로 통과해야 하고, 리눅스(클라우드)와 Windows(회사·집 PC)에서 같은 결과여야 한다. 실기에서 깨졌던 것:
   - 도구가 낸 명령을 나눌 때 `shlex.split`(posix)은 Windows 경로의 `\`를 지운다 -> 테스트 공용 `split_command`(Windows 명령줄 규칙)를 쓴다.

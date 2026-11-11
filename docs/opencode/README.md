@@ -30,7 +30,7 @@ C:\AIKIT\
 | 셸·권한·웹 도구 막기·업데이트 끄기 | `C:\AIKIT\opencode.json` (배포 파일) |
 | 사내 LLM 설정 (provider, model, `enabled_providers`) | `C:\AIKIT\opencode.jsonc` (사용자가 넣음) |
 
-- 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, 기본 스킬 12개 폴더(`skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
+- 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, `guide`(사용 가이드), 기본 스킬 12개 폴더(`skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
   `setup.py`·`setup.bat`·`web.bat`을 바꿉니다. `skills` 폴더를 통째로 지우지 않습니다 (사용자 스킬이 함께 지워짐).
   `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`, `work\`는 그대로 둡니다.
   처음 한 번 `C:\AIKIT\setup.bat`을 실행하고(환경 변수, PATH), 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다

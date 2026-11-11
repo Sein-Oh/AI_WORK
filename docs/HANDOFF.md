@@ -475,6 +475,11 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
 `stats-kit`(옛 office-data), `skill-kit`(옛 skill-maker). 기본 스킬 12개. 회사·집 PC는 폴더를 덮어쓴 뒤 setup을 다시 실행하면 옛 이름 폴더를 보관 후 지움
 (안 하면 OpenCode가 옛 스킬도 함께 읽음). 사용자가 만든 스킬은 건드리지 않음. Gemma 실기에서 word-kit·ppt-kit으로 나눈 뒤 스킬 고르기가 맞는지 볼 것.
 
+### 3-16. 사용 가이드를 AIKIT\guide로
+사용자 결정: 사람용 사용 가이드(`ml-kit_사용가이드.html`, `office-cli_사용가이드.html`)를 `docs/guide`에서 `AIKIT/guide`로 옮겨 `C:\AIKIT\guide`에 함께 배포.
+회사 반입에서 .html이 통과하므로 반입 확장자 규칙에 `AIKIT/guide/`의 .html만 예외로 더함 (`test_repo_files.py`). 전역 지침 9장 위치 표에 가이드 경로
+(사용자가 사용법을 물으면 브라우저로 열어 보라고 알림). 반입 안내(`docs/opencode/README.md`, `실기테스트.md`)에 `guide`.
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.
