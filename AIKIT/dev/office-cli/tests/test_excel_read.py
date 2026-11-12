@@ -1790,3 +1790,28 @@ def test_info_tells_the_selected_cell_of_the_open_workbook(xl, capsys):
     code, out = run_excel(capsys, "info")
     assert code == 0 and out["selection"] == "C7:D9" and out["active_sheet"], out
     assert "선택한 칸 C7:D9" in out["preview"] and f"보고 있는 시트 '{out['active_sheet']}'" in out["preview"], out["preview"]
+
+
+def test_read_columns_picks_columns_by_name_or_letter(tmp_path, capsys, monkeypatch):
+    """1.6.7: 두 판을 의논하며 볼 때 품번과 몇 열만 (모든 열을 주면 200행·6000자 한도에 빨리 닿음). 머리글 이름 또는 열 문자, 제목 행 아래 머리글,
+    --where는 모든 열로 거르고 보여 주는 열만 고름, --save도 그 열만, 이어 읽기 명령은 열 문자로, --search와는 함께 쓰지 않음."""
+    monkeypatch.setattr(off, "win32com", None)
+    p = tmp_path / "bom.csv"
+    rows = ["BOM 개정 B", "품번,품명,수량,비고"] + [f"P{i:03d},부품{i},{i},메모{i}" for i in range(1, 8)]
+    p.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--columns", "품번,수량")
+    assert code == 0 and out["values"][0] == ["품번", "수량"] and out["values"][1] == ["P001", 1], out
+    assert out["columns"] == ["A", "C"] and out["header_row_found"] == 2 and out["cols"] == 2, out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--columns", "a,D")
+    assert code == 0 and out["values"][1] == ["품번", "비고"], out                 # 열 문자는 머리글 찾기 없이 그대로
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--where", "품명 = 부품3", "--columns", "품번,수량")
+    assert code == 0 and out["values"] == [["품번", "수량"], ["P003", 3]] and out["row_numbers"] == [2, 5], out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--columns", "품번,수량", "--save", str(tmp_path / "o.csv"))
+    assert code == 0 and (tmp_path / "o.csv").read_text(encoding="utf-8-sig").splitlines()[0] == "품번,수량", out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--columns", "품번,수량", "--max-rows", "3")
+    nxt = [c["command"] for c in out["next_commands"] if "이어서" in c["purpose"]]
+    assert out["truncated"] is True and nxt and "--columns A,C" in nxt[0].replace("'", ""), out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--columns", "품번,수랑")
+    assert code == 1 and "수량" in out["message"], out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--columns", "품번", "--search", "P0")
+    assert code == 1 and "--search" in out["message"], out

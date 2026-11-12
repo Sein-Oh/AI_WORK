@@ -21,14 +21,14 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`) |
+| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`, 몇 열만 `--columns 품번,수량`) |
 | 조건에 맞는 행 | `python "C:\AIKIT\office-cli\excel.py" read --where "금액 >= 100; 부서 = 영업"` (`;` 그리고, `|` 또는, `>= <= > < = != ~`(포함) `!~`(포함 안 함), 값에 `;` `|`가 있으면 `'a;b'`) |
 | 칸 하나에 값 | `python "C:\AIKIT\office-cli\excel.py" write --range A2 --value "반가워"` |
 | 여러 칸에 각각 | `python "C:\AIKIT\office-cli\excel.py" write --cells "C6=ft; C7=20; 계산기!C11==A1*2"` (많으면 `--cells "칸값.csv"`(열: 칸, 값)) |
 | 표 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A1 --file "<표.csv>"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트 `--sheet 이름 --new-sheet`) |
 | 수식 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
 | 차트 | `python "C:\AIKIT\office-cli\excel.py" chart --range A1:B101 --type line --title "<제목>"` (`--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>`, 값 표시 `--labels`, 범례 `--legend <bottom/right/top/left/none>`, 자리 `--at F2`, 크기 `--width 400 --height 250`, 목록 `--action list`, 지우기 `--action delete --name <제목>`) |
-| 서식 | `python "C:\AIKIT\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic --color red` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap` / 서식 지우기 `--clear`). 떨어진 칸은 `--range "B2;D5"` |
+| 서식 | `python "C:\AIKIT\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic --color red` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap` / 서식 지우기 `--clear`). 떨어진 칸은 `--range "B2;D5"`, 칸이 많으면 `--file "<칸목록.csv>"`(줄마다 첫 칸이 B5) |
 | 범위 작업 | `python "C:\AIKIT\office-cli\excel.py" range --action <freeze/unfreeze/hide/unhide/width/height/autofit/clear/copy/move/merge/unmerge> --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`) |
 | 행·열 넣기·지우기 | `python "C:\AIKIT\office-cli\excel.py" range --action <insert/delete> --range 5:7` (열은 `--range B:C`. 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸) |
 | 수식을 값으로 | `python "C:\AIKIT\office-cli\excel.py" range --action values --range A1:D20 --dry-run` (확인 뒤 `confirm_commands[0]`) |

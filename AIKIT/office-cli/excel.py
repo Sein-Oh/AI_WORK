@@ -874,6 +874,8 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     finfo: Dict[str, Any] = {"entries": [], "warnings": []}
     found["formulas"] = finfo
     conds = None
+    if getattr(args, "columns", None) and (args.search or args.formulas):
+        raise rt.InputError("--columns는 --search, --formulas와 함께 쓸 수 없습니다. 하나만 쓰세요.", no_fallback=True)
     if args.where is not None:          # 식 오류는 문서를 읽기 전에
         if args.search or args.formulas:
             raise rt.InputError("--where는 --search, --formulas와 함께 쓸 수 없습니다. 하나만 쓰세요.")
@@ -911,7 +913,8 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     result: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": full_addr, "rows": nrows, "cols": ncols}
 
     save_cmd = rt.next_command("excel.py", ["read", "--target", args.target, "--range", full_addr, "--sheet", sheet, "--save"]
-                               + (["--formulas"] if args.formulas else []) + (["--where", args.where] if conds else []),
+                               + (["--formulas"] if args.formulas else []) + (["--where", args.where] if conds else [])
+                               + (["--columns", args.columns] if getattr(args, "columns", None) else []),
                                "전체를 CSV로 저장 (잘린 값까지 전체)")
     if conds is not None:
         return _read_where(args, conds, matrix, sheet, r0, c0, full_addr, result, save_cmd)
@@ -939,6 +942,17 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
                          "전체 값이 필요하면 next_commands[0]으로 CSV에 저장하세요.", **result)
         return rt.ok(TOOL, "read", preview, "", **result)
 
+    span = ncols                                     # 이어 읽기 범위는 원래 열 폭 (--columns는 열 문자로 넘김)
+    picked: List[str] = []
+    if getattr(args, "columns", None):
+        hi, idx = _column_pick(args.columns, matrix, c0)
+        if hi:                                       # 제목 행 아래의 머리글: 그 위 행은 결과에 넣지 않음 (--where와 같음)
+            matrix, r0 = matrix[hi:], r0 + hi
+            result["header_row_found"] = r0
+        matrix = [[row[j] if j < len(row) else None for j in idx] for row in matrix]
+        picked = [col_letter(c0 + j) for j in idx]
+        nrows, ncols = len(matrix), len(idx)
+        result.update(columns=picked, rows=nrows, cols=ncols)
     values = [[out_value(v) for v in row] for row in matrix]
     if args.save:
         out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}", ".csv",
@@ -968,8 +982,9 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
         next_r = r0 + len(shown)
         last_r = r0 + nrows - 1
         rest = f"{sheet}!" if " " not in sheet else f"'{sheet}'!"
-        rest += addr(next_r, c0, last_r, c0 + ncols - 1)
-        nexts.append(rt.next_command("excel.py", ["read", "--target", args.target, "--range", rest], "나머지 행 이어서 읽기"))
+        rest += addr(next_r, c0, last_r, c0 + span - 1)
+        nexts.append(rt.next_command("excel.py", ["read", "--target", args.target, "--range", rest]
+                                     + (["--columns", ",".join(picked)] if picked else []), "나머지 행 이어서 읽기"))
     reasons = []
     if cells_cut:
         reasons.append(f"{rt.MAX_CELL_CHARS}자보다 긴 값 {cells_cut}개는 앞부분만 표시")
@@ -1177,6 +1192,28 @@ def _where_unreadable(matrix: List[List[Any]], groups: List[List[Tuple[int, str,
     return None
 
 
+def _column_names(spec: str) -> List[str]:
+    """--columns '품번, 수량' -> ['품번', '수량'] (이름 목록은 ',', 사용법 단순성 3번)."""
+    cols = [c.strip() for c in str(spec).split(",") if c.strip()]
+    if not cols:
+        raise rt.InputError("--columns가 비어 있습니다. 머리글 이름이나 열 문자를 쉼표로 주세요 (예: 품번,수량).", no_fallback=True)
+    return cols
+
+
+def _column_pick(spec: str, matrix: List[List[Any]], c0: int) -> Tuple[int, List[int]]:
+    """read --columns -> (머리글 행 위치, 고른 열 위치 목록). 이름이 첫 행에 없으면 위 10행 안에서 머리글을 찾음 (--where와 같음)."""
+    cols = _column_names(spec)
+    hi = _where_header_row(matrix, cols)
+    if not hi and matrix:            # 이름 하나가 틀려도 머리글 행은 맞게 (틀린 이름의 [후보]가 제목 줄이 아니라 머리글에서 나오게)
+        keys = {rt.name_key(c) for c in cols if not re.fullmatch(r"[A-Za-z]{1,3}", c.strip())}
+        hits = [sum(rt.name_key(_where_text(v)) in keys for v in row) for row in matrix[:10]]
+        if hits and max(hits) > hits[0]:
+            hi = hits.index(max(hits))
+    header = matrix[hi] if matrix else None
+    ncols = max((len(r) for r in matrix), default=0)
+    return hi, [resolve_column(c, header, c0, ncols, "읽을 열", option="--columns")[0] for c in cols]
+
+
 def _where_header_row(matrix: List[List[Any]], cols: List[str], scan: int = 10) -> int:
     """조건의 열 이름이 첫 행에 없으면 위 scan행 안에서 모든 조건 열 이름이 있는 행 (0이면 첫 행 그대로). 열 문자(B)는 이름이 아님."""
     def names(row: List[Any]) -> set:
@@ -1216,6 +1253,10 @@ def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: s
             if any(all(_where_match(cell(i, j), op, val) for j, op, val in g) for g in groups)]
     values = [[out_value(v) for v in matrix[i]] for i in [0] + hits] if matrix else []
     numbers = [r0 + i for i in [0] + hits] if matrix else []
+    if getattr(args, "columns", None) and matrix:    # 조건은 모든 열로 보고, 보여 주는 열만 고름
+        idx = [resolve_column(c, header, c0, ncols, "읽을 열", option="--columns")[0] for c in _column_names(args.columns)]
+        values = [[row[j] if j < len(row) else None for j in idx] for row in values]
+        result["columns"] = [col_letter(c0 + j) for j in idx]
     cond_text = where_text(conds)
     result.update(where=cond_text, header_row=r0, count=len(hits), data_rows=max(len(matrix) - 1, 0))
     where = f"{sheet}!{full_addr}"
@@ -2826,6 +2867,27 @@ def _style_areas(address: Optional[str]) -> Tuple[Optional[str], List[str]]:
     return prefix, parts
 
 
+def _style_cells_file(path: str) -> List[str]:
+    """style --file: 칸 목록 파일(.csv/.txt, 줄마다 첫 칸이 칸 주소 B5 또는 범위 B5:D5, 머리글 한 줄은 있어도 됨) -> 칸 목록.
+    두 판 비교처럼 칠할 칸이 수백 개여서 --range "B2;D5;..."가 명령 한 줄에 너무 길 때 (1.6.7). 시트는 --sheet로 (칸마다 시트를 쓰지 않음)."""
+    src = rt.resolve_input_path(path, "칸 목록 파일", exts=(".csv", ".txt"))
+    parts: List[str] = []
+    for no, line in enumerate(rt.read_text_file(src).splitlines(), start=1):
+        first = re.split(r"[,\t;]", line, maxsplit=1)[0].strip().strip('"').replace("$", "")
+        if not first:
+            continue
+        if "!" in first:
+            raise rt.InputError(f"칸 목록 파일 {no}행의 '{first}'에 시트 이름이 있습니다. 시트는 --sheet로 주고 파일에는 칸만 적으세요.", no_fallback=True)
+        if not re.fullmatch(r"[A-Za-z]{1,3}\d+(:[A-Za-z]{1,3}\d+)?", first):
+            if not parts and no == 1:
+                continue                          # 머리글 한 줄 (예: '칸')
+            raise rt.InputError(f"칸 목록 파일 {no}행의 첫 칸 '{first}'이(가) 칸 주소(B5, B5:D5)가 아닙니다.", no_fallback=True)
+        parts.append(first.upper())
+    if not parts:
+        raise rt.InputError(f"칸 목록 파일에 칸 주소가 없습니다: {src}", no_fallback=True)
+    return list(dict.fromkeys(parts))
+
+
 def _style_chunks(prefix: str, parts: List[str]) -> List[str]:
     """칸 목록 -> Range 주소 묶음 ('Sheet1'!B2,D5 ...), 묶음마다 STYLE_AREA_CHARS 글자 이하."""
     out: List[List[str]] = []
@@ -2846,7 +2908,12 @@ def cmd_style(args) -> Dict[str, Any]:
         raise rt.InputError("적용할 서식이 없습니다. --theme, --bg, --color, --bold, --number-format, --border, --highlight 등을 지정하세요.")
     # 모든 입력 확인은 문서를 열기 전에 (서식을 지운 뒤 --highlight 오류로 멈추면 지운 서식이 되돌리기 지점 없이 남았음)
     rule = _parse_highlight(args.highlight) if args.highlight else None
-    prefix, parts = _style_areas(args.range)
+    if args.file:
+        if args.range:
+            raise rt.InputError("--file(칸 목록)과 --range는 함께 쓰지 않습니다. 하나만 쓰세요.", no_fallback=True)
+        prefix, parts = "", _style_cells_file(args.file)
+    else:
+        prefix, parts = _style_areas(args.range)
     if len(parts) > 1 and theme:
         raise rt.InputError("--theme(표 모양)은 범위 하나에만 씁니다. 떨어진 칸 여러 개(--range \"B2;D5\")에는 --bg, --color, --bold 같은 "
                             "서식을 씁니다.", no_fallback=True)
@@ -4953,6 +5020,7 @@ def build_cli():
     p.add_argument("--formulas", action="store_true",
                    help="수식 칸 목록도 함께 (formulas: cell, formula, value). --search는 수식 글에서도 찾음")
     p.add_argument("--where", help="조건에 맞는 행만 (첫 행은 머리글): '금액 >= 100; 부서 = 영업'. 연산자 >= <= > < = != ~(포함)")
+    p.add_argument("--columns", help="이 열만 (쉼표로, 머리글 이름 또는 열 문자. 예: 품번,수량)")
 
     p = sub.add_parser("stats", help="표 집계: 합계·평균·최소·최대·건수 (--by 묶음별, --where 거른 행만)")
     common(p)
@@ -5011,6 +5079,7 @@ def build_cli():
     p.add_argument("--no-zebra", action="store_true", help="테마 적용 시 줄무늬 없음")
     p.add_argument("--highlight", help="조건부 강조: '>=100:yellow', '=완료:lightgreen', '포함:지연:pink'")
     p.add_argument("--clear", action="store_true", help="기존 서식 지우기")
+    p.add_argument("--file", help="칠할 칸 목록 파일 (.csv/.txt, 줄마다 첫 칸: B5 또는 B5:D5). 칸이 많을 때 --range 대신")
     fmt_args(p)
 
     p = sub.add_parser("export", help="CSV/XLSX/PDF로 저장")

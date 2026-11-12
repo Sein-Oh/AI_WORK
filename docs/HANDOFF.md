@@ -519,6 +519,12 @@ pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규�
 나 하지 않음(인쇄, 회의 요청, 메일 이동·분류·플래그, 반복·회의 일정 지우기). 두 판 비교는 지침·스킬·도구 안내에서 모두 빼고 나중에 구현할 때 검토
 (office-cli CHANGELOG 남은 할 일). 워드 -> PPT transfer는 `[추천]` 전체 명령. 회사 PC에서 볼 것: 피벗 요청에서 "예"를 먼저 받는지.
 
+### 3-24. 두 판 비교용 도구 점검과 보완 (office-cli 1.6.7)
+사용자 목표: 두 판 비교에 필요한 LLM 도구. 비교 판단(행을 이을 열, 같은 값으로 볼 기준)은 LLM이 사용자와 의논하고 도구는 읽기·검증·표시.
+점검: `duplicates`(행 열 확인), `read --save`/`export`(전체), `read --where`(의심 행), `write`(새 결과 파일), `comment --file`(칸 메모),
+`style --range "B2;D5"`(떨어진 칸), word `comment --file`·`replace --highlight`는 있음. 보완: `read --columns`, `style --file`(칸 수백 개).
+다음: 실제 BOM 샘플(경로·이름 지운 것)로 이 흐름을 회사 PC에서 시험.
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.

@@ -2498,3 +2498,25 @@ def test_same_cell_accepts_number_like_text_but_not_lost_leading_zero():
     same = excel._same_cell
     assert same("3", 3.0) and same("1,500", 1500.0) and same("12.5%", 0.125) and same("-0.5", -0.5)
     assert not same("0012", 12.0) and not same("3", 4.0) and not same("+82-10-1234-5678", -6840.0) and not same("1,50", 150.0)
+
+
+def test_style_cells_from_file_for_long_lists(xl, capsys, tmp_path):
+    """1.6.7: 두 판 비교처럼 칠할 칸이 수백 개면 --range "B2;D5;..."가 명령 한 줄에 너무 김 -> --file(칸 목록, 줄마다 첫 칸).
+    머리글 한 줄은 건너뜀, 범위(B5:D5)도 됨, 시트 이름이 든 칸·칸 주소가 아닌 줄은 거절, --range와 함께 쓰지 않음."""
+    app, wb = xl
+    ws = ws_of(wb)
+    for r in range(1, 401):
+        ws.set(r, 1, float(r))
+    cells = tmp_path / "바뀐칸.csv"
+    cells.write_text("칸,메모\n" + "\n".join(f"A{r},바뀜" for r in range(1, 401, 2)) + "\nB5:D5,행 추가\n", encoding="utf-8")
+    code, out = run_excel(capsys, "style", "--file", str(cells), "--bg", "yellow")
+    assert code == 0 and out["verified"] is True and out["areas"] == 201, out["message"] if code else out
+    bad = tmp_path / "bad.csv"
+    bad.write_text("A1\nSheet2!B3\n", encoding="utf-8")
+    code, out = run_excel(capsys, "style", "--file", str(bad), "--bg", "yellow")
+    assert code == 1 and "--sheet" in out["message"], out
+    bad.write_text("A1\n품번\n", encoding="utf-8")
+    code, out = run_excel(capsys, "style", "--file", str(bad), "--bg", "yellow")
+    assert code == 1 and "칸 주소" in out["message"], out
+    code, out = run_excel(capsys, "style", "--file", str(cells), "--range", "A1", "--bg", "yellow")
+    assert code == 1 and "함께 쓰지 않습니다" in out["message"], out
