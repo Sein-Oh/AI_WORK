@@ -346,6 +346,23 @@ def test_web_bat_is_ascii_crlf_and_opens_the_aikit_folder():
     assert data.index(b'set "OPENCODE_CONFIG_DIR=%OPENCODE_CONFIG_DIR:~0,-1%"') < data.index(b'set "WORK=')
 
 
+def test_web_bat_stops_service_when_web_ui_window_closes():
+    """2026-11-13 (사용자 결정): Web UI 창을 닫으면 백그라운드 서비스를 끔. 화면·트레이에 아무것도 남기지 않는 숨은 PowerShell이
+    web_profile을 쓰는 브라우저(사용자의 평소 브라우저는 프로필이 달라 세지 않음)가 없어지면 'opencode service stop'.
+    cmd가 PowerShell 명령을 자르지 않게 큰따옴표 밖에 | & < > 가 없어야 함."""
+    data = open(os.path.join(CLI, "web.bat"), "rb").read().decode("ascii")
+    line = next(ln for ln in data.splitlines() if ln.startswith('start "" /min powershell'))
+    assert "-WindowStyle Hidden" in line and "service stop" in line and "$p='%PROFILE%'" in line and "msedge.exe" in line
+    assert data.index('--user-data-dir="%PROFILE%"') < data.index(line)          # 브라우저를 연 뒤에 감시
+    inside, outside = False, []
+    for ch in line:
+        if ch == '"':
+            inside = not inside
+        elif not inside and ch in "|&<>":
+            outside.append(ch)
+    assert not inside and outside == [], outside
+
+
 # ---- run_all_tests.py diag ----
 def test_diag_fails_when_env_or_path_differ(tmp_path, monkeypatch):
     """run_all_tests.py diag: setup.py --check처럼 읽기만. PATH, OPENCODE_CONFIG_DIR."""
