@@ -44,7 +44,6 @@ if not defined LINK (
 del "%OUT%" >nul 2>&1
 echo [INFO] Opening OpenCode Web UI: %LINK%
 echo [INFO] The link works once and expires in a few minutes. Run web.bat again for a new one.
-echo [INFO] The background service keeps running after this window closes. Stop it with: web.bat stop
 echo [INFO] First time on this PC: in the Web UI choose Open project and pick %WORK% , then start a new session there.
 
 rem Open in Edge (or Chrome) with its own profile folder under data\web_profile, as an app window.
@@ -61,11 +60,17 @@ if not defined BROWSER goto default_browser
 if not exist "%PROFILE%" mkdir "%PROFILE%"
 echo [INFO] Browser: %BROWSER% (own profile: %PROFILE%)
 start "" "%BROWSER%" --user-data-dir="%PROFILE%" --no-first-run --no-default-browser-check --app="%LINK%"
+rem Stop the background service when the Web UI window is closed (user decision 2026-11-13). A hidden PowerShell
+rem watches for browser processes that use this profile folder (the user's normal browser has another profile and
+rem is not counted) and runs 'opencode service stop' when none is left. Nothing stays on screen or in the tray.
+echo [INFO] The background service stops when the Web UI window is closed. Stop it any time with: web.bat stop
+start "" /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$p='%PROFILE%'; $oc='%OC%'; Start-Sleep 15; while (Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'msedge.exe' -or $_.Name -eq 'chrome.exe') -and $_.CommandLine -like ('*' + $p + '*') }) { Start-Sleep 5 }; & $oc service stop"
 endlocal
 exit /b 0
 
 :default_browser
 echo [WARN] Edge/Chrome not found. Opening the default browser.
+echo [INFO] The background service keeps running after the browser closes. Stop it with: web.bat stop
 start "" "%LINK%"
 endlocal
 exit /b 0

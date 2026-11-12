@@ -41,6 +41,9 @@ C:\AIKIT\
   `C:\AIKIT\skills`에 둡니다.
 - 바뀐 설정이 안 보이면: OpenCode 백그라운드 서비스는 처음 뜰 때의 환경 변수를 계속 씁니다. `C:\AIKIT\web.bat stop` 뒤 다시 실행하고,
   `C:\AIKIT\opencode.exe debug paths`의 `config`가 `C:\AIKIT`인지 봅니다 (setup도 끝에 확인).
+- Web UI 창(web.bat이 Edge·Chrome 앱 창으로 엶)을 닫으면 백그라운드 서비스도 꺼집니다 (2026-11-13 사용자 결정). 화면·트레이에 보이지 않는 PowerShell이
+  `C:\AIKIT\data\web_profile`을 쓰는 브라우저가 없어지면 `opencode service stop`을 실행합니다. Edge·Chrome이 없어 기본 브라우저로 연 경우는
+  예전처럼 서비스가 계속 돌고 `web.bat stop`으로 끕니다. 같은 서비스에 붙은 다른 OpenCode 창(TUI 등)이 있으면 함께 끊길 수 있습니다.
 - Web UI의 기본 프로젝트 폴더는 `C:\AIKIT` 자체입니다 (`web.bat`이 서비스를 여기서 띄움, 2026-11-12 사용자 결정). 처음 한 번 화면에서
   프로젝트 열기로 `C:\AIKIT`을 고릅니다. 이 폴더의 `AGENTS.md`는 전역 지침이면서 프로젝트 지침 자리이기도 해서, 두 번 들어가는지 집 PC에서
   확인합니다 (`docs/history/HANDOFF_2026-11-12.md` 3-17). 프로젝트별 지침·스킬이 필요한 일은 따로 만든 폴더(예: `D:\프로젝트A`)를 프로젝트로 엽니다.
