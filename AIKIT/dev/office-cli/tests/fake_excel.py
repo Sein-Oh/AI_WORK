@@ -704,6 +704,12 @@ class FakeWorksheet:
         self.formulas.pop((r, c), None)
 
     def props(self, address, name):
+        if (address, name) not in self.styles and "," not in address and ":" not in address:
+            # 칸 하나를 읽을 때: 그 칸이 든 범위에 준 서식 (실제 Excel처럼 범위 서식이 칸에 보임, 나중에 준 것이 이김)
+            r, c = self._parse(address.replace("$", ""))[0][:2]
+            for (addr_, nm), pr in reversed(list(self.styles.items())):
+                if nm == name and any(not isinstance(v, Props) for v in object.__getattribute__(pr, "_d").values()) and any(r1 <= r <= r2 and c1 <= c <= c2 for r1, c1, r2, c2 in self._parse(addr_.replace("$", ""))):
+                    return pr
         return self.styles.setdefault((address, name), Props())
 
     def _parse(self, ref):

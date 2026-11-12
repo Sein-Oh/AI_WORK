@@ -820,7 +820,137 @@ def cmd_read(args) -> Dict[str, Any]:
     return rt.ok_unverified(TOOL, "read", res.get("preview", "") + " (시간 제한으로 일부만)", why + list(res.get("unverified") or []), **fields)
 
 
+FORMAT_SHOW = 200            # JSON formats에 담는 칸 수 (넘으면 formats_truncated, 전체는 formats_file CSV)
+FORMAT_SCAN_MAX = 20000      # --formats가 훑는 칸 수 상한 (열린 문서는 칸마다 COM을 부르므로 120초 안에 끝나게)
+XL_COLOR_NONE = -4142        # Interior.ColorIndex: 채우기 없음
+
+
+def _hex_bgr(v: Any) -> Optional[str]:
+    """Excel Color(BGR 정수) -> '#RRGGBB'."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    n = int(v)
+    return f"#{n & 0xFF:02X}{(n >> 8) & 0xFF:02X}{(n >> 16) & 0xFF:02X}"
+
+
+def _format_entry(cell: str, bg: Optional[str], color: Optional[str], bold: bool, italic: bool) -> Optional[Dict[str, Any]]:
+    """기본 서식(채우기 없음, 검은 글자, 보통)이 아닌 칸만: {cell, bg?, color?, bold?, italic?}."""
+    e: Dict[str, Any] = {"cell": cell}
+    if bg:
+        e["bg"] = bg
+    if color and color != "#000000":
+        e["color"] = color
+    if bold:
+        e["bold"] = True
+    if italic:
+        e["italic"] = True
+    return e if len(e) > 1 else None
+
+
+def _closed_formats(path: str, sheet: str, r0: int, c0: int, nrows: int, ncols: int) -> List[Dict[str, Any]]:
+    openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True))
+    out: List[Dict[str, Any]] = []
+
+    def rgb(c: Any) -> Optional[str]:
+        v = getattr(c, "rgb", None) if c is not None else None
+        return f"#{v[-6:].upper()}" if isinstance(v, str) and len(v) >= 6 else (None if c is None or getattr(c, "type", "") != "theme"
+                                                                                 else f"theme{getattr(c, 'theme', '')}")
+    try:
+        ws = wb[sheet]
+        for r, row in enumerate(ws.iter_rows(min_row=r0, max_row=r0 + nrows - 1, min_col=c0, max_col=c0 + ncols - 1), start=r0):
+            for c, cell in enumerate(row, start=c0):
+                fill = getattr(cell, "fill", None)
+                bg = rgb(fill.fgColor) if fill is not None and getattr(fill, "fill_type", None) == "solid" else None
+                font = getattr(cell, "font", None)
+                fcol = getattr(font, "color", None) if font is not None else None
+                if fcol is not None and getattr(fcol, "type", "") == "theme":
+                    fcol = None                 # 테마 글자색(기본 글자색 포함)은 기본으로 봄
+                e = _format_entry(addr(r, c), bg, rgb(fcol),
+                                  bool(getattr(font, "b", False)), bool(getattr(font, "i", False)))
+                if e:
+                    out.append(e)
+    finally:
+        wb.close()
+    return out
+
+
+def _com_formats(rng: Any) -> List[Dict[str, Any]]:
+    """열린 문서: 행 전체가 기본 서식이면 그 행은 건너뛰고(행 단위로 물어봄), 아니면 칸마다."""
+    ws = rng.Worksheet
+    r0, c0 = int(rng.Row), int(rng.Column)
+    nrows, ncols = int(rng.Rows.Count), int(rng.Columns.Count)
+    out: List[Dict[str, Any]] = []
+    for i in range(nrows):
+        r = r0 + i
+        try:
+            row = ws.Range(ws.Cells(r, c0), ws.Cells(r, c0 + ncols - 1))
+            idx, bold, italic, fc = row.Interior.ColorIndex, row.Font.Bold, row.Font.Italic, row.Font.Color
+            if idx == XL_COLOR_NONE and bold is False and italic is False and fc == 0:
+                continue                        # 행 전체가 기본 서식 (값이 섞이면 None이 와서 칸마다 봄)
+        except Exception:
+            pass
+        for j in range(ncols):
+            cell = ws.Cells(r, c0 + j)
+            inter, font = cell.Interior, cell.Font
+            idx = inter.ColorIndex
+            has_fill = (idx != XL_COLOR_NONE) if isinstance(idx, int) else _hex_bgr(inter.Color) not in (None, "#FFFFFF")
+            e = _format_entry(addr(r, c0 + j), _hex_bgr(inter.Color) if has_fill else None, _hex_bgr(font.Color),
+                              font.Bold is True, font.Italic is True)
+            if e:
+                out.append(e)
+    return out
+
+
+def _read_formats(args) -> Dict[str, Any]:
+    """read --formats: 기본 서식이 아닌 칸(배경색, 글자색, 굵게, 기울임) 목록. 칠해 둔 칸을 다시 찾거나 검토할 때 (1.6.7)."""
+    if args.search or args.where is not None or args.formulas or getattr(args, "columns", None):
+        raise rt.InputError("--formats는 --search, --where, --formulas, --columns와 함께 쓸 수 없습니다. 하나만 쓰세요.", no_fallback=True)
+    if closed_csv(args.target):
+        raise rt.InputError("CSV 파일에는 서식이 없습니다. 엑셀 파일(.xlsx)에서 --formats를 쓰세요.", error_type="not_supported")
+    closed = is_closed_xlsx(args.target)
+    if closed:
+        sheet, r0, c0, matrix, _ = _read_matrix_closed(closed, args.sheet, args.range)
+        nrows, ncols = len(matrix), max((len(r) for r in matrix), default=0)
+        if nrows * ncols > FORMAT_SCAN_MAX:
+            raise rt.InputError(f"--formats는 {FORMAT_SCAN_MAX}칸까지 봅니다 ({nrows}행 x {ncols}열). --range로 나눠 주세요.")
+        entries = _closed_formats(closed, sheet, r0, c0, nrows, ncols) if nrows and ncols else []
+        source = {"app": "Excel", "name": os.path.basename(closed), "path": closed, "source": "file(openpyxl)"}
+    else:
+        with off.open_target("excel", args.target, readonly=True) as t:
+            ws = t.sheet(args.sheet)
+            rng = target_range(t, ws, args.range)
+            sheet, r0, c0 = str(rng.Worksheet.Name), int(rng.Row), int(rng.Column)
+            nrows, ncols = int(rng.Rows.Count), int(rng.Columns.Count)
+            if nrows * ncols > FORMAT_SCAN_MAX:
+                raise rt.InputError(f"--formats는 {FORMAT_SCAN_MAX}칸까지 봅니다 ({nrows}행 x {ncols}열). --range로 나눠 주세요.")
+            entries = _com_formats(rng)
+            source = t.resolved()
+    full_addr = addr(r0, c0, r0 + max(nrows, 1) - 1, c0 + max(ncols, 1) - 1)
+    where = f"{sheet}!{full_addr}"
+    n = len(entries)
+    fields: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": full_addr, "formats": entries[:FORMAT_SHOW],
+                              "count": n, "formats_truncated": n > FORMAT_SHOW}
+    if not n:
+        return rt.ok(TOOL, "read", f"0건: {where}에 서식(배경색, 글자색, 굵게, 기울임)이 있는 칸이 없습니다",
+                     f"VERIFIED: 0건. {where}의 칸은 모두 기본 서식입니다 (찾은 항목 없음). 사용자에게 그대로 알리세요.", **fields)
+    if n > FORMAT_SHOW or args.save:
+        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_{full_addr.replace(':', '-')}_서식", ".csv",
+                                     near=source.get("path"))
+        out = rt.write_csv_rows(out, [["칸", "배경색", "글자색", "굵게", "기울임"]]
+                                + [[e["cell"], e.get("bg", ""), e.get("color", ""), "예" if e.get("bold") else "",
+                                    "예" if e.get("italic") else ""] for e in entries])
+        fields["formats_file"] = out
+        if rt.check_saved_file(out, expected_rows=n + 1, delimiter=","):
+            return rt.ok_unverified(TOOL, "read", f"{where}: 서식이 있는 칸 {n}개", ["서식 목록 CSV를 다시 읽어 행 수를 확인하지 못함"], **fields)
+    preview = f"{where}: 서식이 있는 칸 {n}개" + (f" (앞 {FORMAT_SHOW}개만 표시, 전체는 formats_file)" if n > FORMAT_SHOW else "")
+    return rt.ok(TOOL, "read", preview, "VERIFIED: 칸 서식을 읽었습니다. formats_file(칸 목록)은 excel.py style --file, comment --file에 그대로 넘길 수 있습니다."
+                 if fields.get("formats_file") else "VERIFIED: 칸 서식을 읽었습니다.", **fields)
+
+
 def _cmd_read(args) -> Dict[str, Any]:
+    if getattr(args, "formats", False):
+        return _read_formats(args)
     found: Dict[str, Any] = {}
     payload = _read(args, found)
     if args.formulas:
@@ -5009,6 +5139,7 @@ def build_cli():
                    help="수식 칸 목록도 함께 (formulas: cell, formula, value). --search는 수식 글에서도 찾음")
     p.add_argument("--where", help="조건에 맞는 행만 (첫 행은 머리글): '금액 >= 100; 부서 = 영업'. 연산자 >= <= > < = != ~(포함)")
     p.add_argument("--columns", help="이 열만 (쉼표로, 머리글 이름 또는 열 문자. 예: 품번,수량)")
+    p.add_argument("--formats", action="store_true", help="값 대신 서식이 있는 칸 목록 (배경색, 글자색, 굵게, 기울임)")
 
     p = sub.add_parser("stats", help="표 집계: 합계·평균·최소·최대·건수 (--by 묶음별, --where 거른 행만)")
     common(p)

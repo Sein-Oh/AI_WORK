@@ -1460,3 +1460,50 @@ def test_read_columns_picks_columns_by_name_or_letter(tmp_path, capsys, monkeypa
     assert code == 1 and "수량" in out["message"], out
     code, out = run_main(excel, capsys, "read", "--target", str(p), "--columns", "품번", "--search", "P0")
     assert code == 1 and "--search" in out["message"], out
+
+
+def test_read_formats_lists_cells_with_fill_font_color_bold(tmp_path, capsys, monkeypatch):
+    """1.6.7 기반 기능: 칠해 둔 칸을 다시 찾기 (예: 두 판 비교에서 표시한 바뀐 칸 검토). 닫힌 xlsx는 Office 없이, 기본 서식 칸은 빼고,
+    0건 VERIFIED, 많으면 formats_file(칸 목록 CSV: style --file·comment --file에 그대로), CSV 파일은 not_supported."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    monkeypatch.setattr(off, "win32com", None)
+    p = tmp_path / "표.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for r in range(1, 6):
+        for c in range(1, 4):
+            ws.cell(r, c, r * c)
+    ws["B2"].fill = PatternFill("solid", fgColor="FFFFFF00")
+    ws["C4"].font = Font(bold=True, color="FFFF0000")
+    ws["A5"].font = Font(italic=True)
+    wb.save(p)
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--formats")
+    assert code == 0 and out["count"] == 3, out
+    got = {e["cell"]: e for e in out["formats"]}
+    assert got["B2"] == {"cell": "B2", "bg": "#FFFF00"} and got["C4"] == {"cell": "C4", "color": "#FF0000", "bold": True}, got
+    assert got["A5"] == {"cell": "A5", "italic": True}
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--formats", "--range", "A1:A4")
+    assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--formats", "--save")
+    rows = open(out["formats_file"], encoding="utf-8-sig").read().splitlines()
+    assert code == 0 and rows[0].startswith("칸,") and len(rows) == 4 and os.path.dirname(out["formats_file"]) == str(tmp_path), out
+    c = tmp_path / "a.csv"
+    c.write_text("a,b\n1,2\n", encoding="utf-8")
+    code, out = run_main(excel, capsys, "read", "--target", str(c), "--formats")
+    assert code == 1 and out["error_type"] == "not_supported", out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--formats", "--where", "A > 1")
+    assert code == 1 and "--formats" in out["message"], out
+
+
+def test_read_formats_open_workbook_reads_back_style(xl, capsys):
+    """열린 문서(COM): style로 칠한 칸을 read --formats로 다시 찾음."""
+    app, wb = xl
+    ws = ws_of(wb)
+    for r in range(1, 6):
+        for c in range(1, 5):
+            ws.set(r, c, float(r * c))
+    code, out = run_excel(capsys, "style", "--range", "B2;D5", "--bg", "yellow")
+    assert code == 0, out
+    code, out = run_excel(capsys, "read", "--range", "A1:D5", "--formats")
+    assert code == 0 and [e["cell"] for e in out["formats"]] == ["B2", "D5"] and all("bg" in e for e in out["formats"]), out

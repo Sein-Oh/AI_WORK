@@ -21,7 +21,7 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`, 몇 열만 `--columns 품번,수량`) |
+| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`, 몇 열만 `--columns 품번,수량`, 칠한 칸·굵은 칸 목록 `--formats`) |
 | 조건에 맞는 행 | `python "C:\AIKIT\office-cli\excel.py" read --where "금액 >= 100; 부서 = 영업"` (`;` 그리고, `|` 또는, `>= <= > < = != ~`(포함) `!~`(포함 안 함), 값에 `;` `|`가 있으면 `'a;b'`) |
 | 칸 하나에 값 | `python "C:\AIKIT\office-cli\excel.py" write --range A2 --value "반가워"` |
 | 여러 칸에 각각 | `python "C:\AIKIT\office-cli\excel.py" write --cells "C6=ft; C7=20; 계산기!C11==A1*2"` (많으면 `--cells "칸값.csv"`(열: 칸, 값)) |
