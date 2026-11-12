@@ -18,6 +18,12 @@
 
 ## [1.6.7] - 2026-11-12
 
+### 시험 정리 (사용자 결정 2026-11-13): PC 시험은 run_all_tests.py 하나와 눈 확인
+- 단순성 점검 `run_simplify_check.py`를 `run_all_tests.py`의 기본 단계 `simplify`로 (diag -> beta -> simplify -> office, 선택 ml·gemma).
+- 지움: Gemma 메시지 팩 `docs/opencode/자동테스트/`와 `SCENARIOS.md`, `grade_opencode.py --make-pack` (`--gemma`가 대신함, O3 수동 문장은
+  `실기테스트.md` 3장으로), 실기 보조 스킬 `tools/office-cli-test/`와 `setup.py --test-skill`, 일회성 EML 시험 `tools/eml_read_trial.py`·`eml_import_trial.py`.
+- Gemma 기록 묶음: 기록 폴더를 결과 파일 옆 `result_<라벨>_<시각>_gemma기록.md` 하나로 (`grade_opencode.py --runs <폴더> --bundle`로도).
+
 ### BOM 비교 스킬 만들기 폐기 (사용자 결정 2026-11-13)
 - `tools/BOM비교_스킬만들기_가이드.md`, `tools/make_bom_samples.py`, `tests/test_bom_compare.py`, `docs/opencode/BOM비교_시험.md`를 지움.
   지난 시험 기록은 `docs/test_logs/집PC_BOM비교_20261112/`에 남음. 그 과정에서 고친 stats·duplicates의 제목 행 아래 머리글 찾기는 그대로 둠.

@@ -16,8 +16,8 @@
 1. 준비: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, 기본 스킬 12개 폴더, `guide`, `AGENTS.md`, `opencode.json`, `setup.py`·`setup.bat`·`web.bat`을
    새로 붙여넣음 (`python\`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`는 둠). `setup.bat`(관리자) -> 새 터미널·OpenCode 다시 시작.
 2. 자동 점검 (질문 없음): `cd C:\AIKIT\dev` -> `python run_all_tests.py --label 회사PC --outlook`
-   (환경 진단 -> ml-kit 베타 점검 -> office-cli 실기 러너(P 그룹 포함, `--outlook`이면 P10 연락처까지) -> 도구 오류 로그). 결과 `result_회사PC_<시각>.md`.
-3. Gemma 종합 테스트(선택): 2의 명령에 `--gemma` (일반 권한 창).
+   (환경 진단 -> ml-kit 베타 점검 -> 사용법 단순성 점검 -> office-cli 실기 러너(`--outlook`이면 Outlook 그룹까지) -> 도구 오류 로그). 결과 `result_회사PC_<시각>.md`.
+3. Gemma 종합 테스트(선택): 2의 명령에 `--gemma` (일반 권한 창). 반출은 결과 파일과 `..._gemma기록.md` 두 개.
 4. 눈 확인: 실기테스트.md 4장 (집 PC가 못 하는 2번 문서 보안, 9·10번 Outlook).
 5. P 그룹이 만들지 않는 상황은 회사 문서로 볼 것: 워드 머리글 구역 연결, Exchange 주소록 이름 확인, 보호된 보기로 열린 파일의 `open`.
 6. 실기 러너 종료 정리(남은 Excel 끝내기)가 회사 PC에서도 되는지: 결과 파일의 정리 기록과 끝난 뒤 남은 Excel이 없는지.

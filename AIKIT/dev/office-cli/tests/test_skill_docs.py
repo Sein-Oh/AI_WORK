@@ -19,7 +19,6 @@ SCRIPTS = {"excel.py": excel, "word.py": word, "ppt.py": ppt, "outlook.py": outl
 SKILL_NAMES = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")
 SKILLS_DIR = os.path.join(os.path.dirname(TOOL_DIR), "skills")      # C:\AIKIT\skills (1.6.6)
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
-TEST_SKILL = os.path.join(DEV, "tools", "office-cli-test", "SKILL.md")
 MAX_SKILL_BYTES = 8192                # 경량 LLM 컨텍스트: 스킬 하나 8KB 이하 (6KB -> 7.2KB -> 8KB, 사용자 결정 2026-11-10, AGENTS.md "사용법 단순성" 7)
 
 
@@ -120,14 +119,14 @@ def test_skill_size_limit():
 
 
 def test_version_matches_skill_md():
-    for skill in list(SKILL_FILES.values()) + [TEST_SKILL]:
+    for skill in SKILL_FILES.values():
         m = re.search(r'^\s+version:\s*"([^"]+)"', _read(skill), re.M)
         assert m and m.group(1) == rt.VERSION, skill
 
 
 def test_frontmatter_follows_opencode_rules():
     """폴더명 = name, name 형식, 키는 name/description/license/compatibility/metadata만, description 1024자 이하."""
-    for skill in list(SKILL_FILES.values()) + [TEST_SKILL]:
+    for skill in SKILL_FILES.values():
         fm = _frontmatter(skill)
         keys = re.findall(r"^([A-Za-z_][\w-]*):", fm, re.M)
         assert set(keys) <= {"name", "description", "license", "compatibility", "metadata"}, (skill, keys)

@@ -140,14 +140,6 @@ def test_missing_source_is_error(monkeypatch, tmp_path, capsys):
     assert "[FAIL] 전역 지침: 파일이 없습니다" in out and "[FAIL] excel-kit 스킬: 파일이 없습니다" in out and "[STATUS] 끝." not in out
 
 
-def test_test_skill_goes_to_user_skills(monkeypatch, tmp_path, capsys):
-    cli = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
-    test_skill = os.path.join(DEV, "office-cli", "tools", "office-cli-test", "SKILL.md")
-    assert su.main(["--no-path", "--test-skill", test_skill]) == 0
-    assert (cli / "skills" / "office-cli-test" / "SKILL.md").read_bytes() == open(test_skill, "rb").read()
-    assert "office-cli-test 스킬(개발용)" in capsys.readouterr().out
-
-
 def test_not_windows_env_is_warning_only(monkeypatch, tmp_path, capsys):
     cli = _iso(monkeypatch, tmp_path, None)
     assert su.main(["--no-path"]) == 0

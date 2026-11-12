@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
-"""OpenCode(Gemma) 종합 테스트 시나리오 - 메시지 팩(docs/opencode/자동테스트)과 채점기(grade_opencode.py)가 함께 쓴다.
+"""OpenCode(Gemma) 종합 테스트 시나리오 - run_all_tests.py --gemma와 채점기(grade_opencode.py)가 함께 쓴다.
 
 데이터만 담은 파이썬 모듈이다 (회사 반입 시스템이 .yaml을 막아서 2026-11-05에 agent_scenarios.yaml에서 옮김).
 grade_opencode.load_scenarios()가 이 파일을 경로로 읽어 SCENARIOS를 쓴다. 함수나 import를 넣지 않는다.
 """
-# 메시지 팩 다시 만들기 (이 파일을 고친 뒤):
-#   python grade_opencode.py --make-pack
-# 채점:
+# 실행: python run_all_tests.py --label 회사PC --only gemma
+# 다시 채점:
+#   python grade_opencode.py --runs <기록 폴더> --label 회사PC
 #   python grade_opencode.py --export <OpenCode에서 내보낸 대화.json> [--label 회사PC] [--judge]
 #
 # 각 메시지는 "[ID] " 로 시작한다. 채점기는 이 표시로 요청을 찾는다 (표시가 없는 사용자 메시지는 앞 요청에 이어진 대화로 본다).
-# {DIR} 는 메시지 팩을 만들 때 시험 폴더(기본 C:\AIKIT\dev\work\gemma)로 바뀐다. run_all_tests.py --gemma도 같은 폴더를 쓴다.
+# {DIR} 는 시험 폴더(기본 C:\AIKIT\dev\work\gemma)로 바뀐다.
 #
 # 시나리오 항목
 #   message       : 붙여넣을 요청 문장
 #   commands      : 실행한 명령 중에 하나라도 맞아야 하는 정규식 목록 (모두 필요, 대소문자 무시)
-#   setup         : 시험 자료 준비 요청. run_all_tests.py --gemma는 모델에 보내지 않고 message의 python 명령을 직접 실행 (메시지 팩에는 그대로)
+#   setup         : 시험 자료 준비 요청. run_all_tests.py --gemma는 모델에 보내지 않고 message의 python 명령을 직접 실행
 #   tool_ok       : 이 정규식에 맞는 마지막 명령의 결과 JSON status가 ok여야 함
 #   answer_all    : 최종 답변에 모두 있어야 하는 정규식. 최종 답변 = tool_ok/commands에 맞는 마지막 명령 뒤의 글 전부
 #                   (맞는 명령이 없으면 마지막 도우미 메시지의 마지막 명령 뒤 글)
@@ -28,8 +28,8 @@ grade_opencode.load_scenarios()가 이 파일을 경로로 읽어 SCENARIOS를 �
 #                   (결과 "통과(참고)"/"실패(참고)"). 자유 문장 답이라 정규식으로 다 가릴 수 없는 시나리오용.
 #                   최종 판정은 --judge 점수나 사람이 답변을 읽고 정한다. 명령·금지 규칙 위반은 그대로 실패다.
 #   manual        : 사람이 준비해야 보낼 수 있는 요청(Outlook 메일 등)이면 그 준비 안내. run_all_tests.py --gemma는 보내지 않고
-#                   "수동 전용"으로 건너뛴다. 메시지 팩에는 준비 안내와 함께 넣고, "한 번에 보내기"에서는 뺀다. {DIR}도 바뀐다.
-#   paused (묶음에): 잠시 시험에서 빼는 묶음과 그 이유. 정의는 남기고, run_all_tests.py --gemma는 보내지 않으며 메시지 팩에서도 뺀다.
+#                   "수동 전용"으로 건너뛴다 (O3 문장과 준비는 docs/opencode/실기테스트.md 3장). {DIR}도 바뀐다.
+#   paused (묶음에): 잠시 시험에서 빼는 묶음과 그 이유. 정의는 남기고, run_all_tests.py --gemma는 보내지 않는다.
 #                   채점에서는 "없음"(시험에서 뺌)으로 센다.
 #
 # 명령 정규식은 스킬 이름이 아니라 실행한 명령(도구 파일, 하위 명령, 옵션)으로 판정한다 (스킬을 나누거나 이름을 바꿔도 그대로).
@@ -419,5 +419,5 @@ GROUPS = [
     },
 ]
 
-# 채점기·메시지 팩이 읽는 전체 (grade_opencode.load_scenarios)
+# 채점기가 읽는 전체 (grade_opencode.load_scenarios)
 SCENARIOS = {"dir": DIR, "rules": RULES, "default_judge": DEFAULT_JUDGE, "groups": GROUPS}

@@ -16,7 +16,7 @@ python tools/run_win_tests.py --agent --skip-outlook    :: 에이전트용: --au
 - 결과는 테스트 폴더에 두 파일로 저장됩니다.
   - `report_*.txt`: 항목별 판정 요약.
   - `errors_*.txt`: 분석용 상세 로그. 환경(Windows, Python, 라이브러리, Office 버전, `config.json`), 실패/오류 항목마다 실행한 명령 전체와 종료 코드, 걸린 시간, stdout JSON 전체, stderr 전체, traceback, 그 항목의 진행 로그를 담습니다. 준비 단계에서 멈추거나 Ctrl+C로 중단해도 그 시점까지 기록합니다. **문제가 있으면 이 파일을 편집하지 말고 그대로 Claude에게 전달해 주세요.**
-- OpenCode 에이전트에게 맡기기: `C:\AIKIT\dev\office-cli\tools\office-cli-test` 폴더를 스킬 폴더의 `office-cli` 옆에 복사한 뒤 "office-cli 실기 테스트 돌려줘"라고 요청합니다. 에이전트는 Office 문서를 닫았는지 먼저 묻고, `--agent --skip-outlook`으로 실행해 결과와 `errors_*.txt` 경로를 알려 줍니다. `--agent`에서는 눈 확인 항목이 `MANUAL-SKIP`이 됩니다. 결과 JSON의 `unverified_count`는 도구가 결과를 다시 읽어 확인하지 못한 호출 수이며, 1 이상이면 `agent_directive`가 `UNVERIFIED:`로 시작합니다(통과 아님). `-h`와 인자 오류(없는 그룹 포함, 인자 오류는 exit 2)도 JSON 1줄이고, Ctrl+C는 exit 130입니다.
+- 보통은 `C:\AIKIT\dev\run_all_tests.py`의 office 단계로 실행합니다 (결과가 `result_<라벨>_<시각>.md` 하나에 들어감).
 - 도구의 캐시(스냅샷, 색인)와 data 폴더는 테스트 폴더의 `_cache`, `_data`를 쓰고, 캐시는 실행마다 비웁니다. 그래서 여러 번 실행해도 undo 결과가 이전 실행에 섞이지 않고, 도구 폴더의 `cache`/`data`도 건드리지 않습니다. (`config.json`의 `--probe` 결과는 도구 폴더에 그대로 저장됩니다.)
 - 끝나면 확인용 그림(A.pptx 슬라이드, A.xlsx 차트)을 테스트 폴더의 `shots\`에 저장하고, 테스트 문서는 저장하지 않고 닫습니다. 열어 두려면 `--keep-open`.
 - 판정: `PASS` / `FAIL` / `MANUAL-SKIP`(`--auto`라 눈 확인 생략) / `ENV-SKIP`(이 PC에 기능이 없음).

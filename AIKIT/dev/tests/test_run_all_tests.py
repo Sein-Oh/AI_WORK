@@ -118,7 +118,7 @@ def test_default_stages_run_in_order_into_one_file(iso, monkeypatch, capsys):
     order = []
     _fake_runners(monkeypatch, order)
     assert rat.main(["--label", "회사PC"]) == 0
-    assert order == ["diag", "beta", "office"] == list(rat.DEFAULT_STAGES)    # pytest는 클라우드에서만 (2026-11-12)
+    assert order == ["diag", "beta", "simplify", "office"] == list(rat.DEFAULT_STAGES)    # pytest는 클라우드에서만 (2026-11-12)
     files = _result_files(iso)
     assert len(files) == 1 and files[0].startswith("result_회사PC_")
     assert [p for p in os.listdir(iso) if os.path.isfile(iso / p)] == files     # nothing else written next to the runner
@@ -160,7 +160,7 @@ def test_summary_table_and_lists_at_top(iso, monkeypatch, capsys):
     head = text[:text.index("## 1. ")]
     assert "| 1. 환경 진단 | FAIL | 3 | 1 | 0 |" in head
     assert "| 2. ml-kit 베타 점검 (run_beta_check) | PASS | 26 | 0 | 1 |" in head
-    assert "| 3. office-cli 실기 러너 (실제 Office) | ENV-SKIP | 0 | 0 | 0 |" in head and "pytest" not in head
+    assert "| 4. office-cli 실기 러너 (실제 Office) | ENV-SKIP | 0 | 0 | 0 |" in head and "pytest" not in head
     assert "### 실패 1건" in head and "- [diag] python-docx 기본 템플릿: zip 형식=False" in head
     assert "- [beta] F7 엑셀로 수식 재계산 확인" in head and "- [office] 단계 전체: Windows가 아님" in head
     assert "### UNVERIFIED (도구가 결과를 확인하지 못한 호출) 1건" in head and "- [beta] excel.py read" in head
@@ -194,7 +194,7 @@ def test_interrupt_and_stage_error_keep_the_file(iso, monkeypatch, capsys):
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
     assert "| 1. 환경 진단 | FAIL | 0 | 1 | 0 |" in text and "runner bug" in text
     assert "| 2. ml-kit 베타 점검 (run_beta_check) | 중단 | 1 | 0 | 0 |" in text
-    assert "| 3. office-cli 실기 러너 (실제 Office) | 대기 | - | - | - |" in text
+    assert "| 4. office-cli 실기 러너 (실제 Office) | 대기 | - | - | - |" in text
     assert "사용자가 중단했습니다" in text and "## 도구 오류 로그" in text
 
 
@@ -443,6 +443,27 @@ def test_all_test_folders_default_under_cli_dev_work(iso):
         assert not any(old in text for old in ("ml_beta", "ml_test", "office_test\"", "gemma_test")), rel
 
 
+def test_simplify_stage_runs_checker_and_counts_rows(iso, monkeypatch, tmp_path):
+    """2026-11-13: 단순성 점검(run_simplify_check.py)을 자동 점검의 기본 단계로. 보고서 표의 PASS/FAIL/SKIP을 세고 보고서는 시험 폴더로."""
+    fake = tmp_path / "fake_simplify.py"
+    fake.write_text(
+        "import os, sys\n"
+        "label, work = sys.argv[sys.argv.index('--label') + 1], sys.argv[sys.argv.index('--dir') + 1]\n"
+        "os.makedirs(work, exist_ok=True)\n"
+        "p = os.path.join(os.path.dirname(os.path.abspath(__file__)), f'result_simplify_{label}_1.md')\n"
+        "open(p, 'w', encoding='utf-8').write('| 항목 | 내용 | 결과 | 상세 |\\n|---|---|---|---|\\n| A1 | 추천 실행 | PASS |  |\\n"
+        "| B2 | 후보 번호 | FAIL | 따옴표 깨짐 |\\n| D1 | 닫힌 파일 쓰기 | SKIP | Office 없음 |\\n')\n"
+        "sys.stderr.write('[STATUS] PASS 1, FAIL 1, SKIP 1 -> ' + p + '\\n')\n"
+        "sys.exit(1)\n", encoding="utf-8")
+    monkeypatch.setattr(rat, "SIMPLIFY_SCRIPT", str(fake))
+    stage = rat.Stage("simplify")
+    rat.step_simplify(stage, rat.argparse.Namespace(timeout=60), {"stamp": "s1", "label": "t"})
+    assert (stage.passed, stage.failed, stage.skipped) == (1, 1, 1), (stage.failures, stage.details[-1])
+    assert "B2 후보 번호: 따옴표 깨짐" in stage.failures[0] and "D1 닫힌 파일 쓰기: Office 없음" in stage.skips[0]
+    work = iso / "work" / "simplify_s1"
+    assert (work / "result_simplify_t_1.md").exists() and not (tmp_path / "result_simplify_t_1.md").exists()
+
+
 def test_gemma_is_opt_in_and_env_skip_without_opencode(iso, monkeypatch, capsys):
     order = []
     _fake_runners(monkeypatch, order)
@@ -450,7 +471,7 @@ def test_gemma_is_opt_in_and_env_skip_without_opencode(iso, monkeypatch, capsys)
     assert "gemma" not in order
     order.clear()
     rat.main(["--label", "a", "--gemma"])
-    assert order == ["diag", "beta", "office", "gemma"]
+    assert order == ["diag", "beta", "simplify", "office", "gemma"]
     monkeypatch.setattr(rat.shutil, "which", lambda name: None)
     assert rat.find_opencode() is None and rat.find_opencode(str(iso / "없음.exe")) is None
     stage = rat.Stage("gemma")

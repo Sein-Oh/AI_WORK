@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""OpenCode 대화 내보내기(JSON) 채점기 + 메시지 팩 생성기 (사람이 실행하는 개발 도구)
+"""OpenCode 대화 채점기와 실행 기록 묶음 (사람이 실행하는 개발 도구)
 
 채점:
     python grade_opencode.py --export <대화.json> [<대화2.json> ...] [--label 회사PC] [--judge]
     python grade_opencode.py --runs <기록 폴더> [--label 회사PC]   # run_all_tests.py --gemma가 남긴 opencode run 기록(<ID>.jsonl)
-메시지 팩 다시 만들기 (agent_scenarios.py를 고친 뒤):
-    python grade_opencode.py --make-pack [--dir C:\\AIKIT\\dev\\work\\gemma]
+반출용 기록 묶음 (기록 폴더를 md 하나로):
+    python grade_opencode.py --runs <기록 폴더> --label 회사PC --bundle
 
 대화 내보내기: PowerShell에서 `cmd /c "opencode export <세션ID> > chat.json"`
   (cmd의 `>`는 opencode가 쓴 UTF-8 바이트를 그대로 저장한다. PowerShell 5.1의 `| Out-File`이나 `>`는 출력을
@@ -44,9 +44,7 @@ from collections import Counter
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))       # 저장소 (AIKIT\dev의 두 단계 위)
 SCENARIOS_FILE = os.path.join(HERE, "agent_scenarios.py")      # 데이터만 담은 모듈 (회사 반입 시스템이 .yaml을 막음)
-PACK_DIR = os.path.join(REPO, "docs", "opencode", "자동테스트")
 TAG = re.compile(r"\[([A-Z]\d+)\]")
 EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2460-\u24FF\u2190-\u21FF]"
                    r"|\\(?:right|left|up|down|Right|Left|Up|Down)arrow\b")      # LaTeX 화살표 ($\downarrow$, 집 PC 06)
@@ -691,80 +689,13 @@ def write_report(label, meta, rows, detail, out_dir=None):
 
 
 # ------------------------------------------------------------------------------------------------
-# 메시지 팩
-def make_pack(test_dir):
-    spec, _, _ = load_scenarios()
-    d = test_dir or spec["dir"]
-    os.makedirs(PACK_DIR, exist_ok=True)
-    msg = lambda s: f"[{s['id']}] " + s["message"].replace("{DIR}", d)
-    manual = [s for g in spec["groups"] for s in g["scenarios"] if s.get("manual")]
-    index =["# OpenCode 종합 테스트 메시지 팩", "",
-             "agent_scenarios.py에서 만든 파일입니다. 직접 고치지 말고 agent_scenarios.py를 고친 뒤 `python grade_opencode.py --make-pack`으로 다시 만듭니다.", "",
-             "## 1. 도구 점검 (정답을 아는 샘플로 도구만 확인, 5~10분)", "",
-             "PowerShell에서 직접 실행하거나 Gemma에게 아래 메시지를 붙여넣습니다. 결과는 `C:\\AIKIT\\dev\\beta_check_회사PC_<시각>.md`.", "",
-             "```powershell", "python \"C:\\AIKIT\\dev\\run_beta_check.py\" --label 회사PC", "```", "",
-             "```text",
-             "python \"C:\\AIKIT\\dev\\run_beta_check.py\" --label 회사PC --agent 를 시간 제한 1800000으로 1번만 실행하고, "
-             "결과 JSON의 passed, failed, skipped, failed_items, report_file을 그대로 알려줘.",
-             "```", "",
-             "## 2. Gemma 종합 테스트 (요청 처리 확인)", "",
-             f"1. 시험 폴더 `{d}`가 이미 있으면 탐색기에서 지웁니다 (이전 모델이 남아 있으면 버전 번호가 달라집니다).",
-             "2. OpenCode에서 새 대화를 열고, 아래 묶음 파일의 메시지를 순서대로 붙여넣습니다.",
-             "   - 하나씩: 메시지 1개를 보내고 답을 받은 뒤 다음 메시지를 보냅니다 (권장).",
-             "   - 한 번에: 묶음 전체를 메시지 1개로 보냅니다 (긴 작업을 이어서 처리하는지 볼 때). "
-             "요청이 한 턴에 섞이므로 채점은 명령 순서로 나눈 참고 결과입니다.",
-             "   - 묶음은 " + " -> ".join(g["id"] for g in spec["groups"] if not g.get("paused")) + " 순서입니다. P와 R은 A에서 만든 모델을 씁니다. "
-             "O는 S1이 만든 샘플을 닫힌 파일 경로로 쓰고 Excel·Word가 있어야 합니다.",
-             *([f"   - 수동 준비가 필요한 요청({', '.join(s['id'] for s in manual)})은 묶음 파일의 '수동 준비'를 먼저 하고 하나씩 보냅니다. "
-                "`run_all_tests.py --gemma`는 이 요청을 보내지 않습니다."] if manual else []),
-             "3. 끝나면 대화를 JSON으로 내보냅니다. PowerShell에서 (세션ID는 OpenCode 화면이나 `opencode session list`에서 확인):", "",
-             "```powershell", EXPORT_CMD, "```", "",
-             "   cmd의 `>`는 opencode가 쓴 UTF-8을 그대로 저장합니다. PowerShell의 `| Out-File`이나 `>`로 저장하면 "
-             "한글이 깨지고 채점기가 [ERROR]로 멈춥니다.",
-             "   OpenCode 앱에 내보내기 메뉴가 있으면 그것으로 저장해도 됩니다.",
-             "4. `C:\\AIKIT\\dev`에서 채점합니다:", "",
-             "```powershell", "python grade_opencode.py --export \"<내보낸 대화.json>\" --label 회사PC", "```", "",
-             "   여러 대화로 나눠 했으면 `--export a.json b.json`처럼 함께 넣습니다.",
-             "   사내 LLM 참고 점수를 붙이려면 `$env:JUDGE_BASE_URL='http://<서버>/v1'` 설정 후 `--judge` (통과 여부에는 넣지 않음).",
-             "5. 만들어진 `grade_회사PC_<시각>.md`와 `beta_check_회사PC_<시각>.md`를 전달합니다.", "",
-             "Gemma가 질문하면 답해도 됩니다. 표시([ID])가 없는 메시지는 앞 요청에 이어진 대화로 채점합니다.", "",
-             "## 묶음", ""]
-    for g in spec["groups"]:
-        if g.get("paused"):                              # 잠시 시험에서 뺀 묶음은 팩에 넣지 않음
-            index.append(f"- {g['id']} {g['title']}: 뺌 ({g['paused']})")
-            continue
-        name = f"{g['id']}_{g['title'].split(' (')[0].replace(' ', '_')}.md"
-        index.append(f"- [{g['id']} {g['title']}]({name}): " + ", ".join(s["id"] for s in g["scenarios"]))
-        body = [f"# {g['id']} {g['title']}", "", "## 하나씩 보내기", ""]
-        for s in g["scenarios"]:
-            body += [f"{s['id']}:", ""]
-            if s.get("manual"):
-                body += ["수동 준비: " + s["manual"].replace("{DIR}", d), ""]
-            body += ["```text", msg(s), "```", ""]
-        auto = [s for s in g["scenarios"] if not s.get("manual")]
-        body += ["## 한 번에 보내기", ""]
-        if len(auto) < len(g["scenarios"]):
-            body += ["수동 준비가 필요한 " + ", ".join(s["id"] for s in g["scenarios"] if s.get("manual"))
-                     + "은(는) 뺐습니다 (하나씩 보내기로 따로 보냅니다).", ""]
-        body += ["```text",
-                 "아래 요청을 순서대로 하나씩 처리해줘. 요청마다 결과를 짧게 알리고 다음 요청으로 넘어가. 중간에 막히면 그 요청만 건너뛰고 이유를 알려줘.", ""]
-        body += [msg(s) for s in auto] + ["```", ""]
-        with open(os.path.join(PACK_DIR, name), "w", encoding="utf-8") as f:
-            f.write("\n".join(body))
-    with open(os.path.join(PACK_DIR, "README.md"), "w", encoding="utf-8") as f:
-        f.write("\n".join(index) + "\n")
-    return PACK_DIR
-
-
 def main():
-    ap = argparse.ArgumentParser(description="OpenCode 대화 채점 / 메시지 팩 생성")
+    ap = argparse.ArgumentParser(description="OpenCode 대화 채점, 실행 기록 묶음")
     ap.add_argument("--export", nargs="+", help="OpenCode에서 내보낸 대화 JSON (여러 개 가능)")
     ap.add_argument("--runs", help="run_all_tests.py --gemma가 남긴 opencode run 기록 폴더 (<ID>.jsonl)")
     ap.add_argument("--label", default="PC")
     ap.add_argument("--judge", action="store_true", help="사내 OpenAI 호환 API로 참고 점수 (JUDGE_BASE_URL)")
     ap.add_argument("--judge-model", default="LLM42")
-    ap.add_argument("--make-pack", action="store_true", help="agent_scenarios.py로 docs/opencode/자동테스트 다시 만들기")
-    ap.add_argument("--dir", help="메시지 팩의 시험 폴더 (기본: agent_scenarios.py의 DIR)")
     ap.add_argument("--bundle", action="store_true", help="--runs 폴더의 기록을 반출용 md 하나로 묶기 (gemma기록_<라벨>_<시각>.md, 채점 없이)")
     args = ap.parse_args()
     if args.bundle:
@@ -774,11 +705,8 @@ def main():
         path, n = write_bundle(args.runs, out)
         print(f"[STATUS] 요청 {n}건을 묶음 파일 하나로 저장 -> {path}")
         return 0
-    if args.make_pack:
-        print(f"[INFO] 메시지 팩 저장: {make_pack(args.dir)}")
-        return 0
     if not args.export and not args.runs:
-        ap.error("--export, --runs 또는 --make-pack 이 필요합니다")
+        ap.error("--export 또는 --runs 가 필요합니다")
     try:
         if args.runs:
             meta, rows, detail = grade_runs(args.runs, args.judge, args.judge_model)

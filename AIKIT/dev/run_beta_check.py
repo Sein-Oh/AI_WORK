@@ -4,7 +4,7 @@
     python run_beta_check.py [--dir 시험폴더] [--label 회사PC] [--only B,F] [--agent]
 
 샘플 데이터(정답을 아는 데이터)를 새로 만들어 부모 폴더의 ..\\ml-kit 도구로 실행하고, 결과를 자동 판정한다.
-LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 검증은 docs/opencode/자동테스트 메시지 팩과 grade_opencode.py).
+LLM 판단 없이 도구 자체가 맞는지만 본다 (Gemma의 요청 처리 검증은 run_all_tests.py --gemma와 grade_opencode.py).
 
 묶음:
   H  -h 도움말 계약 (stdout JSON 1줄)
