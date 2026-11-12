@@ -5,11 +5,12 @@
     python run_all_tests.py --label 회사PC --outlook   # office 단계에 Outlook(G그룹)도
     python run_all_tests.py --label 회사PC --ask       # office 단계의 눈 확인 질문(y/n)에 답하면서
     python run_all_tests.py --label 회사PC --gemma     # 끝에 Gemma 종합 테스트(opencode run)도
-    python run_all_tests.py --only diag                # 일부 단계만 (diag, beta, ml, office, gemma)
+    python run_all_tests.py --only diag                # 일부 단계만 (diag, beta, simplify, ml, office, gemma)
 
 단계 (이 순서로 실행. --only로 고르면 고른 단계만 같은 순서로):
     diag    환경 진단: Python, 라이브러리, 문서 보안(DRM) 영향 (python-docx/pptx 기본 템플릿, 새로 쓴 파일)
     beta    ml-kit 베타 점검 (run_beta_check.py, F7~F9 엑셀 재계산 포함). 시험 폴더의 성능예측표를 눈 확인에서 엽니다
+    simplify 사용법 단순성 점검 (run_simplify_check.py, 3~10분): 틀린 명령에 도구가 준 [추천]·[후보] 전체 명령을 PowerShell에 그대로 넣어 성공하는지
     ml      ml-kit 실기 러너 (ml-kit/tools/run_win_tests.py, 10~20분). 기본 단계가 아니며 --only에 넣을 때만
     office  office-cli 실기 러너 (office-cli/tools/run_win_tests.py, 실제 Office, 10~30분)
     gemma   Gemma 종합 테스트: agent_scenarios.py의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
@@ -19,10 +20,10 @@
             사람이 준비해야 하는 요청(시나리오의 manual, 예: Outlook 메일이 필요한 O3)은 보내지 않고 건너뜀(수동 전용)으로 남깁니다.
             opencode는 --opencode, PATH, C:\\AIKIT\\opencode.exe 순서로 찾고, 없으면 ENV-SKIP.
             UAC로 권한을 올린 관리자 창이면 열린 문서를 못 보므로 일반 창에서 실행하세요 (UAC가 꺼진 PC는 상관없음).
-    기본은 diag, beta, office. pytest(오프라인 테스트)는 클라우드에서만 돌립니다 (2026-11-12 사용자 결정). Windows + pywin32가 아니면 ml, office는 ENV-SKIP.
+    기본은 diag, beta, simplify, office. pytest(오프라인 테스트)는 클라우드에서만 돌립니다 (2026-11-12 사용자 결정). Windows + pywin32가 아니면 ml, office는 ENV-SKIP.
     끝에 각 도구의 오류 로그(<도구>/data/logs/errors.txt, 실제 사용 중 생긴 오류)를 늘 붙입니다.
 
-결과는 이 파일 옆의 result_<라벨>_<시각>.md 한 개입니다.
+결과는 이 파일 옆의 result_<라벨>_<시각>.md 한 개입니다 (gemma 단계를 했으면 기록 묶음 result_<라벨>_<시각>_gemma기록.md까지 두 개).
     - 맨 위에 단계별 PASS/FAIL/SKIP 표와 실패, 건너뜀(ENV-SKIP), UNVERIFIED 목록이 있고, 그 아래 단계별 상세, 맨 끝에 도구 오류 로그.
     - 단계가 끝날 때마다 파일을 다시 쓰므로, 중간에 멈추거나 Ctrl+C로 끊어도 그때까지의 내용이 남습니다.
     - 이 파일 하나를 그대로 올리세요 (편집하지 마세요).
@@ -49,9 +50,9 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))                 # AIKIT/dev (테스트, 러너)
 CLI_DIR = os.path.dirname(HERE)                                     # 실행 파일 (dev의 부모 폴더 AIKIT)
 TOOLS = ("ml-kit", "office-cli")
-STAGES = ("diag", "beta", "ml", "office", "gemma")      # 실행 순서
-DEFAULT_STAGES = ("diag", "beta", "office")
-TITLES = {"diag": "환경 진단", "beta": "ml-kit 베타 점검 (run_beta_check)",
+STAGES = ("diag", "beta", "simplify", "ml", "office", "gemma")      # 실행 순서
+DEFAULT_STAGES = ("diag", "beta", "simplify", "office")
+TITLES = {"diag": "환경 진단", "beta": "ml-kit 베타 점검 (run_beta_check)", "simplify": "사용법 단순성 점검 (run_simplify_check)",
           "ml": "ml-kit 실기 러너", "office": "office-cli 실기 러너 (실제 Office)",
           "gemma": "Gemma 종합 테스트 (opencode run)"}
 PACKAGES = ("numpy", "pandas", "scikit-learn", "scipy", "joblib", "openpyxl", "python-docx", "python-pptx",
@@ -568,6 +569,8 @@ def diag_skills(stage, lines, reg=None):
 
 
 BETA_SCRIPT = os.path.join(HERE, "run_beta_check.py")
+SIMPLIFY_SCRIPT = os.path.join(HERE, "run_simplify_check.py")
+_SIMPLIFY_ROW = re.compile(r"^\| (\w+) \| (.*?) \| (PASS|FAIL|SKIP) \| (.*) \|$")
 GRADER = os.path.join(HERE, "grade_opencode.py")
 _BETA_DETAIL = re.compile(r"^- (\S+) (.*) \[(FAIL|SKIP)\]: (.*)$")
 _BETA_ROW = re.compile(r"^\| (\S+) \| (\S+) \| (.*) \| (PASS|FAIL|SKIP) \|$")
@@ -635,6 +638,40 @@ def step_beta(stage, args, ctx):
     tool_log = os.path.join(data_dir, "logs", "errors.txt")
     if os.path.isfile(tool_log):
         _attach(stage, "점검 중 생긴 ml-kit 오류 로그 (일부러 낸 오류 포함)", tool_log)
+    if stop:
+        raise KeyboardInterrupt
+
+
+def step_simplify(stage, args, ctx):
+    """사용법 단순성 점검 (run_simplify_check.py, 2026-11-13에 단계로 합침): 틀린 명령을 일부러 실행해 도구가 준 [추천]·[후보] 전체 명령을
+    PowerShell에 글자 그대로 넣어 성공하는지. 점검 보고서는 시험 폴더로 옮기고 결과는 이 파일 하나에."""
+    work = os.path.join(work_root(), f"simplify_{ctx['stamp']}")
+    cmd = [sys.executable, SIMPLIFY_SCRIPT, "--label", ctx["label"], "--dir", work]
+    say("사용법 단순성 점검 시작 (3~10분, 질문 없음). 엑셀·워드 창이 잠깐 열릴 수 있습니다.")
+    code, out, sec, stop = run_capture(cmd, HERE, args.timeout)
+    m = re.search(r"-> (.+result_simplify_[^\s]+\.md)\s*$", out.strip())
+    report = m.group(1).strip() if m else ""
+    stage.details.append((f"run_simplify_check.py 화면 출력 (exit {code}, {sec}초)", f"$ {' '.join(cmd)}\n{out[-20000:]}"))
+    if report and os.path.isfile(report):
+        with open(report, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        for tid, title, status, detail in (r.groups() for r in map(_SIMPLIFY_ROW.match, text.splitlines()) if r):
+            if status == "PASS":
+                stage.passed += 1
+            elif status == "FAIL":
+                stage.fail(f"{tid} {title}: {detail[:150]}")
+            else:
+                stage.skipped += 1
+                stage.skips.append(f"{tid} {title}: {detail[:150]}")
+        stage.details.insert(0, ("점검 결과 (simplify 보고서)", text))
+        try:
+            if os.path.isdir(work):
+                shutil.move(report, os.path.join(work, os.path.basename(report)))
+        except Exception:
+            pass
+    else:
+        stage.fail(f"점검 보고서 없음 (exit {code})")
+    stage.note = f"시험 폴더 {work}"
     if stop:
         raise KeyboardInterrupt
 
@@ -1044,20 +1081,27 @@ def step_gemma(stage, args, ctx):
             else:
                 stage.fail(f"{r['id']}: {r['실패'][:200]}")
         stage.details.insert(0, ("채점 결과 (grade_opencode)", _read(report, limit=60000)))
-    stage.note = f"세션 {session or '없음'}, 기록 폴더 {runs}, 시험 폴더 {test_dir}"
+    bundle = ""
+    if sent:                                 # 반출용: 요청마다 여러 파일인 기록 폴더를 결과 파일 옆 md 하나로 (2026-11-13 사용자 요청)
+        try:
+            bundle, _ = go.write_bundle(runs, os.path.join(HERE, f"result_{ctx['label']}_{ctx['stamp']}_gemma기록.md"))
+        except Exception as e:
+            stage.warnings.append(f"기록 묶음을 만들지 못함 ({type(e).__name__}: {e})")
+    stage.note = (f"세션 {session or '없음'}, 기록 폴더 {runs}, 시험 폴더 {test_dir}"
+                  + (f", 기록 묶음 {os.path.basename(bundle)} (결과 파일과 함께 올림)" if bundle else ""))
     if stop:
         raise KeyboardInterrupt
 
 
 # ---------------------------------------------------------------------------
-RUNNERS = {"diag": step_diag, "beta": step_beta, "ml": step_ml, "office": step_office,
+RUNNERS = {"diag": step_diag, "beta": step_beta, "simplify": step_simplify, "ml": step_ml, "office": step_office,
            "gemma": step_gemma}
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="CLI 도구 실기 점검 (결과는 파일 1개: result_<라벨>_<시각>.md)")
     p.add_argument("--label", default="PC", help="결과 파일 이름에 붙일 PC 라벨 (예: 회사PC)")
-    p.add_argument("--only", help="실행할 단계 (쉼표로): diag,beta,ml,office,gemma (기본: diag,beta,office)")
+    p.add_argument("--only", help="실행할 단계 (쉼표로): diag,beta,simplify,ml,office,gemma (기본: diag,beta,simplify,office)")
     p.add_argument("--gemma", action="store_true", help="기본 단계 끝에 Gemma 종합 테스트(opencode run)를 더함")
     p.add_argument("--opencode", help=r"opencode 실행 파일 (기본: PATH의 opencode, 없으면 C:\AIKIT\opencode.exe)")
     p.add_argument("--gemma-dir", help=r"gemma 단계 시험 폴더 (기본 C:\AIKIT\dev\work\gemma)")

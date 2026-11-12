@@ -16,15 +16,16 @@
 1. 준비: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, 기본 스킬 12개 폴더, `guide`, `AGENTS.md`, `opencode.json`, `setup.py`·`setup.bat`·`web.bat`을
    새로 붙여넣음 (`python\`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`는 둠). `setup.bat`(관리자) -> 새 터미널·OpenCode 다시 시작.
 2. 자동 점검 (질문 없음): `cd C:\AIKIT\dev` -> `python run_all_tests.py --label 회사PC --outlook`
-   (환경 진단 -> ml-kit 베타 점검 -> office-cli 실기 러너(P 그룹 포함, `--outlook`이면 P10 연락처까지) -> 도구 오류 로그). 결과 `result_회사PC_<시각>.md`.
-3. Gemma 종합 테스트(선택): 2의 명령에 `--gemma` (일반 권한 창).
+   (환경 진단 -> ml-kit 베타 점검 -> 사용법 단순성 점검 -> office-cli 실기 러너(`--outlook`이면 Outlook 그룹까지) -> 도구 오류 로그). 결과 `result_회사PC_<시각>.md`.
+3. Gemma 종합 테스트(선택): 2의 명령에 `--gemma` (일반 권한 창). 반출은 결과 파일과 `..._gemma기록.md` 두 개.
 4. 눈 확인: 실기테스트.md 4장 (집 PC가 못 하는 2번 문서 보안, 9·10번 Outlook).
 5. P 그룹이 만들지 않는 상황은 회사 문서로 볼 것: 워드 머리글 구역 연결, Exchange 주소록 이름 확인, 보호된 보기로 열린 파일의 `open`.
 6. 실기 러너 종료 정리(남은 Excel 끝내기)가 회사 PC에서도 되는지: 결과 파일의 정리 기록과 끝난 뒤 남은 Excel이 없는지.
 7. 결과 파일과 눈 확인 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림.
 
 ## 3. 최근 실기 결과
-- 회사 PC (2026-11-13, office-cli 1.6.7, Office 2021): 자동 점검 모두 통과, office PASS 121·FAIL 0 (SKIP 2: G3·M3 `--self-email` 없음), P 그룹(P10 연락처 포함) 통과, 끝난 뒤 남은 Excel 없음. 눈 확인 9·10번 통과 (10번 뒤 메일 첨부 기본 위치를 `C:\AIKIT\data`로 바꿈), 2번은 진행 중.
+- 회사 PC (2026-11-13, office-cli 1.6.7, Office 2021): 자동 점검 모두 통과, office PASS 121·FAIL 0 (SKIP 2: G3·M3 `--self-email` 없음), P 그룹(P10 연락처 포함) 통과, 끝난 뒤 남은 Excel 없음. 눈 확인 2·9·10번 통과 (2번: 성능예측표가 다른 사람 PC에서 열리고 다시 계산됨. 10번 뒤 메일 첨부 기본 위치를 `C:\AIKIT\data`로 바꿈).
+  PR #88·#89 반입 뒤 확인: setup `enabled_providers` 메시지 없음, 메일 첨부가 `C:\AIKIT\data\메일 첨부`에 저장, Web UI 창을 닫으면 백그라운드 서비스가 멈춤(화면·트레이에 남는 창 없음).
 - 집 PC (2026-11-12 밤, office-cli 1.6.7, Office 2019): P 그룹 첫 실행 PASS 8·FAIL 1(P5 엑셀 링크 보이는 글이 주소로 들어감: `TextToDisplay=` 이름 인자를 Excel이 무시, 순서 인자로 고치고 글도 다시 읽어 확인)·ENV-SKIP 1(P10 Outlook 안 뜸). 고친 뒤 자동 점검 diag 17/17, beta 29/29, office 109/110(L3b SORT ENV-SKIP, P5 통과), UNVERIFIED 1건은 L3 의도한 결과. P10은 회사 PC `--outlook`에서.
 - 집 PC (2026-11-12 저녁, ml-kit 2.9.92 / office-cli 1.6.7, Office 2019): diag 17/17, beta 29/29, ml 14/14, office 99/100(L3 SORT는 2019에 없는 함수라
   러너를 ENV-SKIP으로 고침), 단순성 점검 34/34, 눈 확인 1·3~8번 통과. 스킬 12개 보임, `C:\AIKIT`을 프로젝트로 열어도 `AGENTS.md`는 한 번만 들어감.
@@ -32,8 +33,6 @@
 - 그 전 결과는 옛 인계 문서 4장.
 
 ## 4. 남은 일
-- BOM 비교: 사내 LLM이 회사에서 `AIKIT/dev/office-cli/tools/BOM비교_스킬만들기_가이드.md`대로 스킬을 만든다 (집 PC 연습: [`opencode/BOM비교_시험.md`](opencode/BOM비교_시험.md)).
-  모델이 복사본으로 머리글을 읽고, 기준(열 이름)을 사용자 확인 뒤 고치고, 같은 판·값 2칸 바꾼 판·실제 두 판으로 시험해 회사 값 없이 보고.
 - 각 도구 `AIKIT/dev/<tool>/CHANGELOG.md` 하단 "남은 할 일".
 - 사용 가이드(`AIKIT/guide/`)에 1.6.7 기반 기능 사용 예 넣기.
 - 프로젝트 마무리 때 `docs/test_logs/` 등 로그 이력 정리 (저장소를 다시 만드는 방식).

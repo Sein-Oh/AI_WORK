@@ -17,7 +17,6 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
    opencode debug paths의 config가 C:\AIKIT인지. opencode.json + opencode.jsonc를 합친 설정의 "shell", "instructions",
    permission, "enabled_providers"(적었을 때만 이름 확인), 폐쇄망 잠금(OFFLINE_DENY, OFFLINE_SET)을 WARN/INFO로 알림.
 
-개발용: --test-skill <SKILL.md>  (실기 테스트 보조 스킬을 C:\AIKIT\skills에 둠, 예: C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md)
 이 스크립트는 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다. exit 0 = 모두 OK, 1 = 실패(또는 --check에서 다름) 있음.
 """
 import argparse
@@ -122,7 +121,7 @@ def step_sources(rep):
         rep.line("FAIL", f"{name}: 파일이 없습니다: {path} (저장소의 AIKIT 폴더를 통째로 다시 복사하세요)")
     if not missing:
         vers = sorted({version_of(_read(p)) for n, p in sources() if n.endswith("스킬")} - {""})
-        mine = sorted(set(os.listdir(os.path.join(HERE, "skills"))) - set(ML_SKILLS + OFFICE_SKILLS + ("office-cli-test",)))
+        mine = sorted(set(os.listdir(os.path.join(HERE, "skills"))) - set(ML_SKILLS + OFFICE_SKILLS))
         rep.line("OK", f"기본 스킬 {len(ML_SKILLS) + len(OFFICE_SKILLS)}개 ({', '.join(vers)}), 전역 지침, opencode.json: 있음  {HERE}"
                        + (f" (사용자 스킬 {len(mine)}개: {', '.join(mine[:10])})" if mine else ""))
 
@@ -190,33 +189,6 @@ def step_env(rep, backup, check=False, reg=None):
         rep.line("WARN", "환경 변경 알림을 보내지 못했습니다. OpenCode에 새 설정이 안 보이면 로그아웃 후 다시 로그인하세요")
 
 
-def step_test_skills(rep, backup, test_skills):
-    """개발용 보조 스킬을 C:\\AIKIT\\skills\\<이름>\\SKILL.md로 복사 (다르면 보관 후 덮어씀)."""
-    for src in test_skills:
-        src = os.path.abspath(src)
-        if os.path.isdir(src):
-            src = os.path.join(src, "SKILL.md")
-        name = os.path.basename(os.path.dirname(src))
-        dst = os.path.join(config_dir(), "skills", name, "SKILL.md")
-        a, b = _read(src), _read(dst)
-        if a is None:
-            rep.line("FAIL", f"{name} 스킬(개발용): 원본이 없습니다: {src}")
-            continue
-        if a == b:
-            rep.line("OK", f"{name} 스킬(개발용): 같음  {dst}")
-            continue
-        if b is not None:
-            keep = os.path.join(backup, "test_skills", name, "SKILL.md")
-            os.makedirs(os.path.dirname(keep), exist_ok=True)
-            shutil.copy2(dst, keep)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copyfile(src, dst)
-        rep.line("OK" if _read(dst) == a else "FAIL", f"{name} 스킬(개발용): {dst} -> 복사함")
-
-
-# ---------------------------------------------------------------------------
-# 3. 시스템 PATH (HKLM, winreg. setx는 1024자에서 잘라 쓰므로 쓰지 않음)
-# ---------------------------------------------------------------------------
 def _norm(entry):
     """중복 판정용: 따옴표·앞뒤 공백·끝 \\ 무시, 대소문자 무시, 환경 변수(%SystemRoot% 등) 풀어서."""
     e = os.path.expandvars(entry.strip().strip('"'))
@@ -564,8 +536,6 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="C:\\AIKIT 설치: OpenCode 설정 폴더를 C:\\AIKIT으로, 시스템 PATH 등록, 동작 확인")
     p.add_argument("--check", action="store_true", help="아무것도 바꾸지 않고 확인만 (다르거나 실패가 있으면 exit 1)")
     p.add_argument("--no-path", action="store_true", help="시스템 PATH를 확인·등록하지 않음")
-    p.add_argument("--test-skill", action="append", default=[], metavar="SKILL.md",
-                   help="개발용: 보조 스킬을 C:\\AIKIT\\skills에 둠 (예: C:\\AIKIT\\dev\\office-cli\\tools\\office-cli-test\\SKILL.md)")
     args = p.parse_args(argv)
     backup = os.path.join(data_dir(), f"setup_backup_{dt.datetime.now():%Y%m%d_%H%M%S}")
     rep = Report()
@@ -573,8 +543,6 @@ def main(argv=None):
     print(f"[INFO] 1. OpenCode 설정 폴더: {config_dir()}", flush=True)
     step_sources(rep)
     step_env(rep, backup, args.check)
-    if args.test_skill and not args.check:
-        step_test_skills(rep, backup, args.test_skill)
     if not args.check:      # 스킬로 안 되는 일의 파이썬 스크립트를 두는 곳 (전역 지침 8장)
         os.makedirs(os.path.join(data_dir(), "scripts"), exist_ok=True)
     print("[INFO] 2. 시스템 PATH", flush=True)

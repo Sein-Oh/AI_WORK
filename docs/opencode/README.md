@@ -37,8 +37,6 @@ C:\AIKIT\
   (setup은 다시 실행해도 됩니다: 확인과 서비스 끄기).
 - 예전 구성(`C:\CLI`, `%USERPROFILE%\.config\opencode`의 복사본, `C:\AIKIT\opencode`, 옛 이름 스킬 폴더)은 setup이 정리하지 않습니다. 필요한 파일
   (`opencode.jsonc`, 사용자 스킬)은 손으로 `C:\AIKIT`(맨 위, `skills\`)로 옮기고 나머지는 지웁니다.
-- office-cli-test(실기 보조 스킬)는 개발용이라 `python C:\AIKIT\setup.py --test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`로
-  `C:\AIKIT\skills`에 둡니다.
 - 바뀐 설정이 안 보이면: OpenCode 백그라운드 서비스는 처음 뜰 때의 환경 변수를 계속 씁니다. `C:\AIKIT\web.bat stop` 뒤 다시 실행하고,
   `C:\AIKIT\opencode.exe debug paths`의 `config`가 `C:\AIKIT`인지 봅니다 (setup도 끝에 확인).
 - Web UI 창(web.bat이 Edge·Chrome 앱 창으로 엶)을 닫으면 백그라운드 서비스도 꺼집니다 (2026-11-13 사용자 결정). 화면·트레이에 보이지 않는 PowerShell이
@@ -131,7 +129,7 @@ AGENTS.md와 각 SKILL.md는 아래 원칙으로 썼습니다. 고칠 때도 지
 
 ## 4. 지침이 잘 듣는지 시험
 
-`SCENARIOS.md`의 요청 27개를 OpenCode에 입력하고 O/X를 기록합니다 (40~50분). 화면에 보이는 명령과 답변만으로 판정할 수 있습니다.
+`C:\AIKIT\dev`에서 `python run_all_tests.py --label 회사PC --only gemma`로 시험 요청(`AIKIT/dev/agent_scenarios.py`)을 OpenCode에 보내고 채점합니다 (20~60분, [`실기테스트.md`](실기테스트.md) 3장).
 
 ## 5. 사내 LLM이 지침을 다듬게 할 때
 

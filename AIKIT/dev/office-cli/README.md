@@ -34,7 +34,6 @@ AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli.
 AIKIT/dev/office-cli/  개발·실기 테스트용 (사내 PC C:\AIKIT\dev\office-cli)
 ├── README.md / CHANGELOG.md / TEST_CHECKLIST.md / requirements.txt
 ├── tools/run_win_tests.py  Windows 실기 테스트 러너 (판단 규칙 tools/win_test_rules.py)
-├── tools/office-cli-test/SKILL.md  실기 테스트를 에이전트가 돌리는 스킬 (스킬 폴더 office-cli-test에 SKILL.md만 복사)
 ├── tools/make_office_samples.py  Gemma 종합 테스트 office-cli 묶음(O1~O5)의 샘플 파일 (agent_scenarios.py의 S1)
 └── tests/       오프라인 테스트 (가짜 COM + 실제 샘플 파일, 도구는 ../../AIKIT/office-cli에서 불러옴)
 ```
@@ -846,5 +845,5 @@ python AIKIT/dev/office-cli/tools/run_win_tests.py  :: Windows + Office 실기 (
   `errors_*.txt`에는 러너의 자동 복구(닫힌 A 문서 다시 열기), 창/프로세스 정리 기록(어떤 PID에 Quit/WM_CLOSE를 보냈고 무엇을 보호했는지), 도구 오류 로그가 함께 들어 있습니다.
 - 러너는 테스트 문서(A.xlsx/A.docx/A.pptx)가 열린 프로세스를 끝내지 않습니다. 정리 판단 규칙은 `tools/win_test_rules.py`(오프라인 테스트 `tests/test_win_runner.py`).
 - DRM PC에서 python-pptx 기본 템플릿(`pptx/templates/default.pptx`)이 암호화돼 있으면 그 템플릿이 필요한 오프라인 테스트만 "python-pptx 기본 템플릿이 손상됨 (DRM 추정)"으로 건너뜁니다. python-docx는 폴더 템플릿으로 대신 만듭니다. 도구 코드는 기본 템플릿을 쓰지 않습니다.
-- 도구는 `C:\AIKIT\office-cli`에 둡니다 (스킬 SKILL.md의 명령 경로 기준). 실기 테스트 파일은 `C:\AIKIT\dev`(이 저장소의 `AIKIT/dev` 폴더)에 둡니다. OpenCode 에이전트에게 실기 테스트를 맡기려면 스킬 폴더 `office-cli-test`에 `C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`를 복사합니다. 에이전트는 `--agent`로 실행해 결과 JSON 1줄만 읽습니다.
+- 도구는 `C:\AIKIT\office-cli`에 둡니다 (스킬 SKILL.md의 명령 경로 기준). 실기 테스트 파일은 `C:\AIKIT\dev`(이 저장소의 `AIKIT/dev` 폴더)에 둡니다. 실기 러너는 보통 `C:\AIKIT\dev\run_all_tests.py`(office 단계)로 실행합니다.
 - 대상은 Office 16.0(2016/2019/2021/365)만입니다. 그보다 낮은 버전은 지원하지 않으며, PDF 내보내기(D1, D4)도 늘 실행해 PASS/FAIL로 판정합니다.

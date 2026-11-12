@@ -18,10 +18,20 @@
 
 ## [1.6.7] - 2026-11-12
 
+### 시험 정리 (사용자 결정 2026-11-13): PC 시험은 run_all_tests.py 하나와 눈 확인
+- 단순성 점검 `run_simplify_check.py`를 `run_all_tests.py`의 기본 단계 `simplify`로 (diag -> beta -> simplify -> office, 선택 ml·gemma).
+- 지움: Gemma 메시지 팩 `docs/opencode/자동테스트/`와 `SCENARIOS.md`, `grade_opencode.py --make-pack` (`--gemma`가 대신함, O3 수동 문장은
+  `실기테스트.md` 3장으로), 실기 보조 스킬 `tools/office-cli-test/`와 `setup.py --test-skill`, 일회성 EML 시험 `tools/eml_read_trial.py`·`eml_import_trial.py`.
+- Gemma 기록 묶음: 기록 폴더를 결과 파일 옆 `result_<라벨>_<시각>_gemma기록.md` 하나로 (gemma 단계가 끝날 때 자동).
+
+### BOM 비교 스킬 만들기 폐기 (사용자 결정 2026-11-13)
+- `tools/BOM비교_스킬만들기_가이드.md`, `tools/make_bom_samples.py`, `tests/test_bom_compare.py`, `docs/opencode/BOM비교_시험.md`를 지움.
+  지난 시험 기록은 `docs/test_logs/집PC_BOM비교_20261112/`에 남음. 그 과정에서 고친 stats·duplicates의 제목 행 아래 머리글 찾기는 그대로 둠.
+
 ### web.bat: Web UI 창을 닫으면 백그라운드 서비스를 끔 (사용자 결정 2026-11-13)
 - 브라우저를 연 뒤 숨은 PowerShell(창·트레이 없음)이 `data\web_profile`을 쓰는 Edge·Chrome 프로세스를 5초마다 보고, 없어지면
   `opencode service stop`. 사용자의 평소 브라우저는 프로필이 달라 세지 않음. 기본 브라우저로 연 경우는 예전처럼 계속 돎.
-  실기 확인 전 (Windows 동작): 창을 닫고 15~20초 뒤 `web.bat status`로 멈췄는지 볼 것.
+  회사 PC 확인 (2026-11-13): 화면·트레이에 남는 창 없음, 창을 닫으면 서비스가 멈춤.
 
 ### 메일 첨부 기본 저장 위치를 C:\AIKIT\data로 (회사 PC 눈 확인 10번 뒤 사용자 결정 2026-11-13)
 - `outlook.py attachments --save`(폴더 생략)의 기본 위치: `<다운로드>\메일 첨부\...` -> `C:\AIKIT\data\메일 첨부\<시각>_<제목>`
@@ -2641,9 +2651,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 
 ## 남은 할 일
 - [ ] 두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 다른 곳을 찾아 검토): 비교 판단은 LLM이 사용자와 의논하며 하고 도구는 읽기·검증·표시를 맡음
-  (사용자 결정 2026-11-12, 1.6.7에서 `read --columns`, `style --file` 보완). 실제 BOM 샘플로 이 흐름을 시험하고 부족한 도구를 다시 검토.
+  (사용자 결정 2026-11-12, 1.6.7에서 `read --columns`, `style --file` 보완). BOM 비교 조합 스킬은 만들기 가이드까지 갔다가 폐기함 (2026-11-13).
 - [ ] `excel.py write --file <CSV>`가 앞자리 0이 없는 숫자 글(품번 `102`, 사번)을 숫자 칸으로 씀 (CSV에 글/숫자 구분이 없어 `coerce()`가 바꿈,
-  앞자리 0 코드만 글로 둠). 집 PC BOM 비교 시험 A(2026-11-12)에서 결과 표의 추가 품번 `102`가 숫자 칸. 보이는 값은 같아 그대로 둠 (사용자 결정 2026-11-12).
+  앞자리 0 코드만 글로 둠). BOM 비교 시험(2026-11-12, 폐기)에서 결과 표의 품번 `102`가 숫자 칸으로 들어간 것을 봄. 보이는 값은 같아 그대로 둠 (사용자 결정 2026-11-12).
   결과 표를 다시 조회(VLOOKUP 등)에 쓰는 일이 실제로 생기면 글로 둘 열을 고르는 옵션(`--text-columns`)을 검토.
 - [ ] 2026-11-09 전체 검토(1.4.91)에서 찾은 것: `docs/history/office-cli_REVIEW_2026-11-09.md`. 1장·2장·3장은 1.4.92~1.4.96에서 처리
   (3장 C1~C18은 실기에서 끝남: C6 수정, C12·C18 문제없음, C13 OneDrive는 쓰지 않아 닫음). 남은 것: 3장 끝의 마크다운 작은 것(보류),

@@ -20,7 +20,6 @@ AI_WORK/
 │   ├── WINDOWS_OFFLINE.md     # 폐쇄망 wheel 반입/설치 가이드 (모든 도구 공통)
 │   ├── history/               # 지난 설계·검토 기록 (1.0 설계, 1차 지침 준수 검토)
 │   ├── opencode/              # 사내 PC OpenCode 스킬 배치 안내, 실기테스트.md (회사 PC 실기 절차 한 장)
-│   │   ├── 자동테스트/        # Gemma 종합 테스트 메시지 팩 (AIKIT/dev/agent_scenarios.py에서 생성)
 │   │   └── 실기테스트_샘플/   # 정답을 아는 샘플 데이터 (AIKIT/dev/ml-kit/tools/make_beta_samples.py)
 │   └── test_logs/             # 사내 PC 실기 결과 (GitHub 웹으로 업로드, 프로젝트 마무리 때 이력에서 정리)
 ├── archive/                   # 보관 도구 (수정·테스트 대상 아님, archive/README.md)
@@ -51,10 +50,10 @@ AI_WORK/
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)
     ├── run_beta_check.py      # ml-kit 베타 기능 자동 점검 (정답을 아는 샘플)
-    ├── run_simplify_check.py  # 사용법 단순화 실기 점검 (사람이 실행)
-    ├── grade_opencode.py      # OpenCode 대화 내보내기 채점 + 메시지 팩 생성
+    ├── run_simplify_check.py  # 사용법 단순성 점검 (run_all_tests.py의 simplify 단계로 실행)
+    ├── grade_opencode.py      # Gemma 시험 채점과 실행 기록 묶음 (run_all_tests.py의 gemma 단계)
     ├── agent_scenarios.py     # Gemma 종합 테스트 요청과 채점 기준 (데이터 모듈)
-    ├── tests/                 # 채점기·메시지 팩·점검 러너·setup.py 테스트
+    ├── tests/                 # 채점기·점검 러너·setup.py 테스트
     ├── work/                  # (git 제외) 모든 시험 폴더: 베타 점검, 실기 러너, Gemma, 눈 확인
     ├── ml-kit/
     │   ├── README.md          # 상세 설명서
@@ -64,7 +63,7 @@ AI_WORK/
     │   └── tests/             # CLI 계약 + 회귀 테스트
     └── office-cli/
         ├── README.md / CHANGELOG.md / TEST_CHECKLIST.md / requirements.txt
-        ├── tools/             # run_win_tests.py, win_test_rules.py, office-cli-test/ (실기 테스트 스킬), make_office_samples.py (Gemma 테스트 O 샘플)
+        ├── tools/             # run_win_tests.py, win_test_rules.py, make_office_samples.py (Gemma 테스트 O 샘플)
         └── tests/             # 오프라인 테스트 (가짜 COM + 실제 샘플 파일)
 ```
 

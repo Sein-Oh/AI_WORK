@@ -28,7 +28,6 @@ def _load_scenarios_or_skip():
 go.load_scenarios = _load_scenarios_or_skip
 
 # C:\AIKIT\dev is copied to the PC without docs/: tests of files under docs/ run only in the repository
-needs_pack = pytest.mark.skipif(not os.path.isdir(go.PACK_DIR), reason="docs/opencode/자동테스트 없음 (저장소에서만)")
 
 ENC = "$env:PYTHONIOENCODING='utf-8'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; "
 
@@ -312,7 +311,7 @@ def test_no_adhoc_py_rule():
                'cd C:\\AIKIT\\dev\\ml-kit\\tools; python make_beta_samples.py "C:\\AIKIT\\dev\\work\\gemma"',
                'python .\\make_beta_samples.py "C:\\AIKIT\\dev\\work\\gemma"',
                'cd C:\\AIKIT\\dev\\office-cli\\tools; python run_win_tests.py',
-               'cd C:\\AIKIT\\dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --make-pack',
+               'cd C:\\AIKIT\\dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --runs work\\gemma_runs_1',
                'cd C:\\AIKIT\\dev; python ml-kit\\tools\\run_win_tests.py --agent',
                'cd C:\\AIKIT\\dev\\ml-kit; python tools\\make_beta_samples.py "C:\\AIKIT\\dev\\work\\gemma"',
                'python -m pytest -q',
@@ -482,13 +481,7 @@ def test_scenario_regexes():
     assert not any(lookahead.search(rx) for s in by_id.values() for rx in s.get("answer_all", []) + s.get("answer_any", []))
 
 
-@needs_pack
-def test_message_pack_matches_scenarios(tmp_path, monkeypatch):
-    committed = {f: open(os.path.join(go.PACK_DIR, f), encoding="utf-8").read() for f in os.listdir(go.PACK_DIR)}
-    monkeypatch.setattr(go, "PACK_DIR", str(tmp_path))
-    go.make_pack(None)
-    fresh = {f: (tmp_path / f).read_text(encoding="utf-8") for f in os.listdir(tmp_path)}
-    assert fresh == committed, "agent_scenarios.py가 바뀌었으면 python grade_opencode.py --make-pack 으로 메시지 팩을 다시 만드세요"
+def test_scenario_ids_are_unique_tags():
     spec_, by_id, order = go.load_scenarios()
     assert len(order) == len(set(order)) and all(go.TAG.fullmatch(f"[{s}]") for s in order)
 
@@ -714,6 +707,29 @@ def test_grade_runs_reads_folder_and_marks_missing(tmp_path):
     assert os.path.dirname(report) == str(tmp_path) and (npass, n) == (1, 1)
 
 
+def test_bundle_writes_one_file_with_texts_tools_in_order_and_masks_user(tmp_path):
+    """반출용 기록 묶음 (2026-11-13 사용자 요청: gemma_runs 폴더는 파일이 많아 반출이 어려움): 요청마다 모델 글과 도구 호출을
+    일어난 순서대로, 결과는 마지막 JSON 전체, stderr 끝, 예비 모델 기록은 이름만. 결과 파일과 같게 사용자 폴더 이름을 가림."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    stop = {"status": "error", "agent_directive": "STOP_RETRY: [후보] 1) 시트1 2) 시트2", "message": "시트가 없습니다 [후보] 1) 시트1"}
+    (runs / "A1.jsonl").write_text(_run_events("A1", [
+        ("text", {"type": "text", "text": "스킬을 읽겠습니다."}),
+        _shell('python "C:\\Users\\hong\\x.py" read', stop),
+        ("text", {"type": "text", "text": "어느 시트인지 골라 주세요."})]), encoding="utf-8")
+    (runs / "A1.stderr.txt").write_text("경고 한 줄", encoding="utf-8")
+    (runs / "A1.limited1.jsonl").write_text("", encoding="utf-8")
+    (runs / go.RUN_MESSAGES).write_text(json.dumps({"A1": "[A1] 학습해 줘"}, ensure_ascii=False), encoding="utf-8")
+    (runs / go.RUN_MODELS).write_text(json.dumps({"A1": "corp/gemma"}), encoding="utf-8")
+    out, n = go.write_bundle(str(runs), str(tmp_path / "묶음.md"))
+    text = open(out, encoding="utf-8").read()
+    assert n == 1 and "## A1" in text and "corp/gemma" in text and "[A1] 학습해 줘" in text
+    assert text.index("스킬을 읽겠습니다.") < text.index("1. 도구 bash") < text.index("어느 시트인지 골라 주세요.")
+    assert "STOP_RETRY: [후보] 1) 시트1 2) 시트2" in text and "경고 한 줄" in text and "A1.limited1.jsonl" in text
+    assert "hong" not in text and "<사용자>" in text
+    assert len(list(tmp_path.glob("*.md"))) == 1
+
+
 def test_reruns_asked_by_continue_are_not_repeats():
     """ml-kit가 시간 제한으로 CONTINUE(continue: true)를 내면 같은 명령을 다시 실행하는 것이 맞음 (R10): 반복 위반 아님.
     CONTINUE 없이 같은 명령을 3번 이상 실행하면 그대로 위반."""
@@ -873,43 +889,13 @@ def test_make_office_samples_is_allowed_script():
         assert not _rule_hits("no_adhoc_py", c), c
 
 
-def test_manual_scenario_is_marked_and_left_out_of_bulk(tmp_path, monkeypatch):
-    """manual 시나리오(O3, Outlook 메일 준비): 기록이 없으면 '수동 전용'으로 없음, 메시지 팩은 준비 안내를 붙이고 한 번에 보내기에서 뺌."""
+def test_manual_scenario_is_marked_and_left_out_of_bulk(tmp_path):
+    """manual 시나리오(O3, Outlook 메일 준비): 기록이 없으면 '수동 전용'으로 없음 (O3 문장은 실기테스트.md 3장에 있음)."""
     by_id = go.load_scenarios()[1]
     assert [s for s in by_id if by_id[s].get("manual")] == ["O3"]
     rows = {r["id"]: r for r in go.grade_runs(str(tmp_path))[1]}
     assert rows["O3"]["결과"] == "없음" and "수동 전용" in rows["O3"]["실패"]
     assert "수동 전용" not in rows["O1"]["실패"]
-    monkeypatch.setattr(go, "PACK_DIR", str(tmp_path / "pack"))
-    go.make_pack(None)
-    text = (tmp_path / "pack" / "O_office-cli_문서_작업.md").read_text(encoding="utf-8")
-    single, bulk = text.split("## 한 번에 보내기")
-    assert "수동 준비: Outlook" in single and f"{G}\\시험성적서.docx" in single and "[O3]" in single
-    assert "[O3]" not in bulk and "[O1]" in bulk and "[O5]" in bulk
-    readme = (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
-    assert "S -> A -> M -> P -> R -> O -> Y -> X" in readme               # 2.9.83: R(보고서·성능예측표)을 다시 시험에 넣음
-    assert (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists() and ": 뺌 (" not in readme
-
-
-def test_paused_group_is_left_out_of_pack(tmp_path, monkeypatch):
-    """묶음의 paused(잠시 시험에서 뺌): 순서와 묶음 파일에서 빠지고 README에 뺀 이유가 남음. 지금 뺀 묶음이 없으니 R을 빼 본다."""
-    real = go.load_scenarios
-
-    def paused_r():
-        spec, by_id, order = real()
-        for g in spec["groups"]:
-            if g["id"] == "R":
-                g["paused"] = "시험용 이유"
-                for s in g["scenarios"]:
-                    s["paused"] = g["paused"]
-        return spec, by_id, order
-
-    monkeypatch.setattr(go, "load_scenarios", paused_r)
-    monkeypatch.setattr(go, "PACK_DIR", str(tmp_path / "pack"))
-    go.make_pack(None)
-    readme = (tmp_path / "pack" / "README.md").read_text(encoding="utf-8")
-    assert "S -> A -> M -> P -> O -> Y -> X" in readme
-    assert "- R 보고서와 성능예측표: 뺌 (시험용 이유)" in readme and not (tmp_path / "pack" / "R_보고서와_성능예측표.md").exists()
 
 
 def test_office_samples_match_scenarios(tmp_path):
