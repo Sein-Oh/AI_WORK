@@ -11,8 +11,9 @@
 모양: Level 0 최상위 조립체 1개 -> Level 1 중간 조립체 12개 -> Level 2 부품 (조립체마다 5~8개).
 공통 부품(볼트, 와셔, 너트 등)은 여러 중간 조립체에 반복해서 쓰인다. 같은 자리 = 상위 조립체 + Part Number.
 
-회사 BOM과 비슷하게 바꾸려면 아래 COLUMNS, PARTS, ASSEMBLIES, CHANGES를 고친다. 열 이름을 바꾸면
-bom-compare\\scripts\\compare.py의 기준 상수(LEVEL, KEY, COMPARE 등)도 같이 고친다.
+집 PC에서 BOM 비교 스킬 만들기 가이드(tools/BOM비교_스킬만들기_가이드.md)를 연습할 때 쓴다. 사내 LLM이 만든 맞대기 결과 CSV의
+앞 네 열(구분, 상위 조립체, Part Number, 바뀐 열)을 --check로 정답과 비교한다. 회사 BOM 모양에 가깝게 바꾸려면 아래 COLUMNS,
+PARTS, ASSEMBLIES, CHANGES를 고친다.
 """
 import argparse
 import csv
