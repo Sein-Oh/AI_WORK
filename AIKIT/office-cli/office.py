@@ -834,7 +834,11 @@ def cmd_transfer(args) -> Dict[str, Any]:
             return _excel_range_transfer(args, targets)
         raise rt.InputError("엑셀에서 보낼 때는 --chart <차트 이름> 또는 --range <범위>를 지정하세요. 차트 이름은 excel.py chart --action list로 확인.")
     if targets != ["excel"]:
-        raise rt.InputError("워드/PPT의 내용은 엑셀로 보낼 수 있습니다 (--to-app excel). 워드<->PPT는 read --save 후 write --file을 쓰세요.")
+        # 워드<->PPT는 transfer가 하지 않음: 내용을 .md로 저장하는 전체 명령을 [추천] (그 결과가 받는 앱에 넣는 다음 명령을 줌, 회사 PC 2026-11-11 BEAM O8)
+        script = "word.py" if src == "word" else "ppt.py"
+        read = ["read", "--save"] + (["--target", args.from_target] if args.from_target and args.from_target != "active" else [])
+        raise rt.InputError(f"transfer는 워드<->PPT를 옮기지 않습니다 (엑셀로만, --to-app excel). 보내는 문서의 내용을 먼저 .md로 저장하고, "
+                            f"그 결과의 다음 명령으로 받는 문서에 넣습니다. [추천] {rt.next_command(script, read, '')['command']}")
     rows, name = _word_rows(args) if src == "word" else _ppt_rows(args)
     if len(rows) <= 1 and args.what == "text":
         raise rt.InputError(f"'{name}'에서 옮길 내용이 없습니다.")

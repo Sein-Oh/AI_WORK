@@ -60,10 +60,11 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
     해당 작업: `reader.py index`와 `search --file 폴더`의 문서 등록(새 파일을 읽기 전마다), `search`의 바뀐 캐시 다시 읽기.
 - 필요한 라이브러리가 없으면(openpyxl, python-docx, python-pptx, pymupdf, olefile) `STOP_RETRY:`와 `error_type: "missing_library"`, `missing_package`,
   `install_command`(`python -m pip install <패키지>`). LLM은 직접 설치하지 않고 설치 명령을 사용자에게 전달합니다(R5 `require_lib`). pywin32는 그대로 `input`.
-- 도구에 넣지 않기로 한 기능(1.6.2, 사용자 결정 2026-11-10: 변경 내용 수락·거부, 인쇄 설정, 피벗, 데이터 유효성, 기존 차트 고치기, 회의 요청,
-  메일 이동·분류·플래그)을 찾는 명령은 인자 오류(exit 2) 대신 `error_type: "not_supported"`와 "사용자가 직접 하세요: <앱의 메뉴>" message,
-  `STOP_RETRY:`(다시 실행하거나 파이썬으로 대신하지 말 것). 명령 이름·옵션 이름·`--action`/`--type` 값으로만 알아보고 검색어 같은 값은 보지 않음
-  (`_runtime.NOT_SUPPORTED`). 전역 지침 8장도 같은 목록을 사용자에게 직접 하라고 안내합니다.
+- 도구에 명령이 없는 기능을 찾는 명령은 인자 오류(exit 2) 대신 전역 지침 8장의 세 가지로 안내합니다 (1.6.7, 사용자 결정 2026-11-12, `_runtime.NOT_SUPPORTED`).
+  명령 이름·옵션 이름·`--action`/`--type` 값으로만 알아보고 검색어 같은 값은 보지 않습니다.
+  - 가(바로, 원본은 읽기만): 두 판 비교 -> `error_type: "not_in_tool"`, 8장 "가. 바로 하는 일"대로 파이썬 스크립트로.
+  - 나(확인 뒤): 변경 내용 수락·거부, 피벗, 데이터 유효성, 기존 차트 고치기 -> `not_in_tool`, 바꿀 내용을 보여 주고 사용자의 "예" 뒤 스크립트로 (저장하지 않음).
+  - 다(하지 않음): 인쇄, 회의 요청, 메일 이동·분류·플래그 -> `not_supported`, "사용자가 직접 하세요: <앱의 메뉴>". 반복 일정·회의 지우기(`event --action delete`)도 `not_supported`.
 - 공통 키: `status`, `tool`, `command`, `preview`, `agent_directive`. 오류 시 `error_type`, `message`가 추가됩니다. COM 오류는 `hresult`도 들어갑니다.
 - `target_resolved`: 실제로 작업한 문서(앱, 이름, 경로, 시트/슬라이드)
 - `next_commands`: 이어서 실행할 명령 `[{purpose, command}]`. 완성된 형태라 그대로 실행하면 됩니다. 묻지 않고 실행해도 안전한 것(읽기, 미리보기 `--dry-run`,
@@ -323,7 +324,7 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
   - 고칠 수 있는 표기(`==`, `=>`, `=<`, `<>`, `AND`, `&&`, `OR`, `||`, `또는`, `contains`, `포함`)는 STOP_RETRY와 고친 식 `[추천]`. 읽을 수 없는 식은 형식과 예를 알리고
     `[추천]` 없이 STOP_RETRY. `--search`, `--formulas`와 함께 쓸 수 없습니다.
 - 두 판 비교(`excel.py compare`, `reader.py diff`)는 1.6.3에서 뺐습니다 (사용자 결정 2026-11-11, 필요하면 별도 도구로). 명령을 찾으면
-  `not_supported`로 워드 검토 탭 > 비교, 엑셀 보기 탭 > 나란히 보기를 안내합니다.
+  `not_in_tool`로 전역 지침 8장 "가. 바로 하는 일"(파이썬 스크립트로 다른 곳을 찾아 결과 파일, 엑셀 표는 행을 이을 열을 먼저 물음)을 안내합니다 (1.6.7).
 - `check`(규격 대조, 읽기 전용: 문서를 바꾸지 않음):
   - 단위: 값 칸의 단위(`30 mm`) -> 행의 단위 열 -> 값 열 머리글(`값(mm)`) 순서. 단위 열은 `--unit-col`, 생략하면 값 열 바로 오른쪽 열의 머리글이 `단위`(`Unit`)일 때 그 열을 씁니다(JSON `unit_col`). 모두 없으면 규격 단위로 추정하지 않고 `판단필요`(`칸 단위 없음`).
   - 행: `--range`의 행(열은 무시)에서 `--item-col`(항목 글), `--value-col`(값), `--section-col`(행별 장절, 없으면 `--section`)을 읽습니다. 바로 위 행의 값 열 머리글에서 단위를 읽습니다(`측정값 [V]`, `전류(mA)`). 열린 문서·닫힌 xlsx·CSV 모두. 500행까지.

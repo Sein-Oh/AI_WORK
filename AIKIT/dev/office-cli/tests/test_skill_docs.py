@@ -224,7 +224,7 @@ def test_skill_mentions_new_and_existing_features():
         "search-kit": ("reader.py\" index --folder", "--section", "search --query", "list [--name",
                         "clear --name", "--missing", "synonyms.txt", "--regex", "excel.py\" check", "comment --action add",
                         "not_searched", "match_mode"),
-        "stats-kit": ("excel.py\" stats --target", "excel.py\" duplicates --target", "not_supported", "검토 탭 > 비교"),
+        "stats-kit": ("excel.py\" stats --target", "excel.py\" duplicates --target", "not_supported", "가. 바로 하는 일"),
     }
     # 2026-11-11 스킬 점검: 도구에는 있는데 스킬에 없던 기능 (8KB로 늘린 뒤 채움)
     more = {"word-kit": ("word.py\" format --paragraphs", "--match-case", "--whole-word", "--map", "--from-target", "--theme"),

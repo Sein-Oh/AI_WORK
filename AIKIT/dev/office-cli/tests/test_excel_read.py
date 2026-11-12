@@ -1783,15 +1783,6 @@ def test_duplicates_zero_and_open_document(tmp_path, capsys, xl_table):
     assert code == 0 and out["group_count"] >= 1, out
 
 
-def test_two_version_compare_is_not_supported(capsys):
-    """1.6.3: 두 판 비교(excel compare, reader diff)는 office-cli에서 뺌 (사용자 결정 2026-11-11). 찾으면 직접 하는 곳을 알려 줌."""
-    import reader
-    code, out = run_excel(capsys, "compare", "--target", "a.xlsx", "--target2", "b.xlsx")
-    assert code == 2 and out["error_type"] == "not_supported" and "나란히 보기" in out["message"], out
-    code, out = run_main(reader, capsys, "diff", "--file", "a.docx", "--file2", "b.docx")
-    assert code == 2 and out["error_type"] == "not_supported" and "검토 탭 > 비교" in out["message"], out
-
-
 def test_info_tells_the_selected_cell_of_the_open_workbook(xl, capsys):
     """사용자가 마지막으로 클릭한(선택한) 칸: --target 없는 info의 selection과 preview (사용자 질문 2026-11-11)."""
     app, wb = xl

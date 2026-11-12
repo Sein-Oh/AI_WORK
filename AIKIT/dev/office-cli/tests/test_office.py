@@ -20,7 +20,7 @@ from fake_excel import FakeExcelWorkbook, FakeXlApp
 from fake_office import FakeExcelApp, FakePptApp, FakeWordDoc, FakeWorkbook, FakeWorkbooks, make_win32com
 from fake_ppt import FakePresentation
 from fake_word import FakeWordDocument
-from office_helpers import option_value, split_command, error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
+from office_helpers import option_value, recommended_argv, split_command, error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
 
 
 @pytest.fixture
@@ -2339,3 +2339,15 @@ def test_active_document_in_protected_view_is_not_written(monkeypatch):
     assert off.resolve_target("excel", "active", readonly=False)["doc"] is normal
     app.ActiveProtectedViewWindow = None
     assert "fallback" not in off.get_active("excel")
+
+
+def test_transfer_between_word_and_ppt_recommends_the_read_save_command(capsys):
+    """회사 PC 2026-11-11 BEAM O8: 워드 -> PPT를 transfer로 먼저 시도. 설명 글 대신 내용을 .md로 저장하는 전체 명령을 [추천]
+    (그 결과의 confirm_commands가 받는 앱에 넣는 명령을 줌)."""
+    import office
+    code, out = run_main(office, capsys, "transfer", "--from-app", "word", "--from-target", "주간보고.docx", "--to-app", "ppt")
+    assert code == 1 and "[추천]" in out["message"], out
+    argv = recommended_argv(out["message"], "word")
+    assert argv[:2] == ["read", "--save"] and argv[argv.index("--target") + 1] == "주간보고.docx", argv
+    code, out = run_main(office, capsys, "transfer", "--from-app", "ppt", "--to-app", "word")
+    assert code == 1 and recommended_argv(out["message"], "ppt") == ["read", "--save"], out

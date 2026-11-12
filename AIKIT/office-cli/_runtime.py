@@ -1154,11 +1154,18 @@ class JsonArgumentParser(argparse.ArgumentParser):
         self._confirm: List[Dict[str, Any]] = []
         nope = not_supported_hint(self.tool_name, list(CURRENT_ARGV or []))
         if nope:
-            what, where = nope
-            payload = {"status": "error", "tool": self.tool_name, "command": "", "error_type": "not_supported",
-                       "message": f"{what}은(는) 이 도구에 없는 기능입니다. 사용자가 직접 하세요: {where}.",
-                       "agent_directive": "STOP_RETRY: 도구에 없는 기능입니다. 다시 실행하거나 파이썬 스크립트로 대신하지 말고, "
-                                          "message의 방법(사용자가 직접 하는 곳)을 사용자에게 그대로 알리세요."}
+            what, where, kind = nope
+            if kind == "user":
+                payload = {"status": "error", "tool": self.tool_name, "command": "", "error_type": "not_supported",
+                           "message": f"{what}은(는) 도구로 하지 않는 일입니다. 사용자가 직접 하세요: {where}.",
+                           "agent_directive": "STOP_RETRY: 도구로 하지 않는 일입니다. 다시 실행하거나 파이썬 스크립트로 대신하지 말고, "
+                                              "message의 방법(사용자가 직접 하는 곳)을 사용자에게 그대로 알리세요."}
+            else:
+                how = ("전역 지침 8장 '가. 바로 하는 일'대로 파이썬 스크립트로 하세요 (원본은 읽기만, 결과는 새 파일)" if kind == "script" else
+                       "전역 지침 8장 '나. 확인 뒤 하는 일'대로, 바꿀 내용을 보여 주고 사용자의 '예'를 받은 뒤 파이썬 스크립트로 하세요 (저장은 하지 않음)")
+                payload = {"status": "error", "tool": self.tool_name, "command": "", "error_type": "not_in_tool",
+                           "message": f"{what}은(는) 이 도구에 명령이 없습니다. {how}.",
+                           "agent_directive": f"STOP_RETRY: 도구에 명령이 없습니다. 같은 명령을 다시 실행하지 말고 {how}."}
             write_error_log(self.tool_name, None, payload)
             emit_json(payload)
             sys.exit(2)
@@ -1188,25 +1195,24 @@ class JsonArgumentParser(argparse.ArgumentParser):
         sys.exit(2)
 
 
-# 도구에 넣지 않기로 한 기능 (사용자 결정 2026-11-10): 인자 오류가 이 기능을 찾는 명령이면 파이썬으로 짜지 말고 사용자에게 직접 하라고 안내.
-# (도구, 낱말들, 기능, 사용자가 할 곳). 낱말은 명령 이름·옵션 이름·--action/--type 값에서만 찾음 (검색어 같은 값에서는 찾지 않음)
+# 도구에 명령이 없는 기능 (사용자 결정 2026-11-10, 세 가지로 나눔 2026-11-12, 전역 지침 8장): 인자 오류가 이 기능을 찾는 명령이면 안내.
+# (도구, 낱말들, 기능, 사용자가 할 곳, 종류). 종류: script = 8장 가(파이썬으로 바로, 원본은 읽기만), confirm = 8장 나(사용자 확인 뒤 파이썬),
+# user = 8장 다(하지 않음, 사용자가 직접). 낱말은 명령 이름·옵션 이름·--action/--type 값에서만 찾음 (검색어 같은 값에서는 찾지 않음)
 NOT_SUPPORTED = [
-    ("word", ("accept", "reject", "수락", "거부"), "변경 내용 수락·거부", "Word 검토 탭 > 변경 내용 > 수락 또는 거부"),
-    ("excel", ("pivot", "피벗"), "피벗 테이블", "Excel 삽입 탭 > 피벗 테이블 (묶음별 합계는 excel.py stats --by로 됨)"),
-    ("excel", ("validation", "유효성"), "데이터 유효성(목록)", "Excel 데이터 탭 > 데이터 유효성 검사"),
-    ("excel", ("edit", "modify", "update", "format"), "기존 차트 고치기", "Excel에서 차트를 클릭 > 차트 디자인 탭 (다시 그리려면 chart --action delete 뒤 create)"),
-    ("", ("print", "printout", "page-setup", "인쇄"), "인쇄 설정", "그 앱의 파일 > 인쇄"),
-    ("outlook", ("meeting", "invite", "attendee", "attendees", "회의", "참석자"), "회의 요청(참석자 초대)", "Outlook 일정 > 새 모임 (내 일정만은 outlook.py event)"),
-    ("outlook", ("move", "이동", "category", "categories", "분류"), "메일 이동·분류", "Outlook에서 메일을 폴더로 끌어 놓기, 홈 탭 > 분류"),
-    ("outlook", ("flag", "플래그", "follow-up"), "메일 플래그", "Outlook 메일 목록의 깃발 아이콘"),
-    # 1.6.3: 두 판 비교는 office-cli에서 뺌 (사용자 결정 2026-11-11, 필요하면 별도 도구로)
-    ("", ("compare", "comparison", "diff"), "두 판 비교(엑셀 표·BOM, 문서)",
-     "워드는 검토 탭 > 비교, 엑셀은 보기 탭 > 나란히 보기로 두 파일을 함께 띄워 직접 비교"),
+    ("", ("compare", "comparison", "diff"), "두 판 비교(엑셀 표·BOM, 문서)", "", "script"),
+    ("word", ("accept", "reject", "수락", "거부"), "변경 내용 수락·거부", "", "confirm"),
+    ("excel", ("pivot", "피벗"), "피벗 테이블", "", "confirm"),
+    ("excel", ("validation", "유효성"), "데이터 유효성(목록)", "", "confirm"),
+    ("excel", ("edit", "modify", "update", "format"), "기존 차트 고치기", "", "confirm"),
+    ("", ("print", "printout", "page-setup", "인쇄"), "인쇄", "그 앱의 파일 > 인쇄", "user"),
+    ("outlook", ("meeting", "invite", "attendee", "attendees", "회의", "참석자"), "회의 요청(참석자 초대)", "Outlook 일정 > 새 모임 (내 일정만은 outlook.py event)", "user"),
+    ("outlook", ("move", "이동", "category", "categories", "분류"), "메일 이동·분류", "Outlook에서 메일을 폴더로 끌어 놓기, 홈 탭 > 분류", "user"),
+    ("outlook", ("flag", "플래그", "follow-up"), "메일 플래그", "Outlook 메일 목록의 깃발 아이콘", "user"),
 ]
 
 
-def not_supported_hint(tool: str, argv: Sequence[str]) -> Optional[Tuple[str, str]]:
-    """인자 오류가 난 명령이 하지 않기로 한 기능을 찾는지: (기능, 할 곳) 또는 None."""
+def not_supported_hint(tool: str, argv: Sequence[str]) -> Optional[Tuple[str, str, str]]:
+    """인자 오류가 난 명령이 도구에 명령이 없는 기능을 찾는지: (기능, 사용자가 할 곳, 종류) 또는 None."""
     words: List[str] = []
     for i, a in enumerate(argv):
         key = str(a).split("=", 1)[0]
@@ -1214,13 +1220,13 @@ def not_supported_hint(tool: str, argv: Sequence[str]) -> Optional[Tuple[str, st
             words.append(key.lstrip("-").casefold())
         if i > 0 and str(argv[i - 1]) in ("--action", "--type"):
             words.append(str(a).casefold())
-    for t, keys, what, where in NOT_SUPPORTED:
+    for t, keys, what, where, kind in NOT_SUPPORTED:
         if t and t != tool:
             continue
         if t == "excel" and what == "기존 차트 고치기" and not (argv and str(argv[0]) == "chart"):
             continue
         if any(w == k or w.startswith(k + "-") or w.endswith("-" + k) for w in words for k in keys):
-            return what, where
+            return what, where, kind
     return None
 
 
