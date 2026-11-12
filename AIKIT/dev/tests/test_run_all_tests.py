@@ -362,6 +362,9 @@ def test_gemma_stage_sends_all_scenarios_in_one_session_and_grades(iso, fake_oc,
     assert any(p.name.startswith("grade_t_") and p.suffix == ".md" for p in runs.iterdir())
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
     assert "Gemma 종합 테스트" in text and "ses_fake1" in text and "채점 결과" in text
+    bundles = [p for p in iso.iterdir() if p.name.endswith("_gemma기록.md")]      # 반출용 기록 묶음: 결과 파일 옆 1개 (2026-11-13)
+    assert len(bundles) == 1 and bundles[0].name.startswith("result_t_") and "_gemma기록.md" in text
+    assert "## A1" in bundles[0].read_text(encoding="utf-8")
     assert "[gemma] S0" not in text and "[gemma] A1" in text                     # S0은 세지 않음, A1 실패로 목록에
     for s in manual:                                                             # 수동 전용은 실패가 아니라 건너뜀
         why = "시험에서 뺌" if by_id[s].get("paused") else "수동 전용"

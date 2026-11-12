@@ -1044,7 +1044,15 @@ def step_gemma(stage, args, ctx):
             else:
                 stage.fail(f"{r['id']}: {r['실패'][:200]}")
         stage.details.insert(0, ("채점 결과 (grade_opencode)", _read(report, limit=60000)))
-    stage.note = f"세션 {session or '없음'}, 기록 폴더 {runs}, 시험 폴더 {test_dir}"
+    bundle = ""
+    if sent:                                 # 반출용: 요청마다 여러 파일인 기록 폴더를 결과 파일 옆 md 하나로 (2026-11-13 사용자 요청)
+        try:
+            bundle, _ = go.write_bundle(runs, os.path.join(HERE, f"result_{ctx['label']}_{ctx['stamp']}_gemma기록.md"))
+        except Exception as e:
+            stage.warnings.append(f"기록 묶음을 만들지 못함 ({type(e).__name__}: {e}). "
+                                  "grade_opencode.py --runs <기록 폴더> --bundle로 다시 만들 수 있음")
+    stage.note = (f"세션 {session or '없음'}, 기록 폴더 {runs}, 시험 폴더 {test_dir}"
+                  + (f", 기록 묶음 {os.path.basename(bundle)} (결과 파일과 함께 올림)" if bundle else ""))
     if stop:
         raise KeyboardInterrupt
 

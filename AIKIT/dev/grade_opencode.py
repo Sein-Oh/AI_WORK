@@ -512,6 +512,83 @@ def grade_runs(folder, use_judge=False, model="LLM42"):
     return meta, rows, detail
 
 
+
+BUNDLE_OUTPUT = 3000      # 기록 묶음: 도구 결과 하나의 글자 상한 (마지막 JSON 1줄, 없으면 출력 끝)
+BUNDLE_LIMIT = 3_000_000  # 기록 묶음 전체 글자 상한
+FENCE = "`" * 3
+
+
+def _mask(text):
+    """결과 파일과 같은 가림 (경로 속 사용자 폴더, Office 작성자). run_all_tests.py를 못 읽으면 그대로."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("run_all_tests_mask", os.path.join(HERE, "run_all_tests.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.mask_private(text)
+    except Exception:
+        return text
+
+
+def _block(text):
+    return ["", FENCE + "text", text.replace(FENCE, "'" * 3), FENCE]
+
+
+def write_bundle(folder, out_path):
+    """opencode run 기록 폴더(요청마다 <ID>.jsonl, <ID>.stderr.txt 등 여러 파일)를 반출용 md 하나로 묶습니다.
+    요청마다 보낸 문장, 답한 모델, 모델의 글과 도구 호출을 일어난 순서대로(명령, 결과 JSON 전체 또는 출력 끝), 오류 사건, stderr 끝.
+    결과 파일(result_*.md)의 채점 표는 줄인 것이라 되묻기·[후보] 처리·지침 위반처럼 대화 흐름을 봐야 하는 검토에 씀."""
+    spec, by_id, order = load_scenarios()
+
+    def _load(name):
+        try:
+            with open(os.path.join(folder, name), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+    sent, models = _load(RUN_MESSAGES), _load(RUN_MODELS)
+    ids = [sid for sid in order if os.path.isfile(os.path.join(folder, f"{sid}.jsonl"))]
+    L = ["# OpenCode 실행 기록 묶음", "", f"- 기록 폴더: {folder}", f"- 요청 {len(ids)}건: {', '.join(ids) or '없음'}",
+         "- 요청마다 모델의 글(>)과 도구 호출(명령, 결과)을 일어난 순서대로 적었습니다. 결과는 마지막 JSON 1줄 전체(없으면 출력 끝)입니다.", ""]
+    for sid in ids:
+        msg = sent.get(sid) or f"[{sid}] " + by_id[sid]["message"]
+        turn, session, errors = read_run(os.path.join(folder, f"{sid}.jsonl"), sid, msg)
+        L += [f"## {sid}", "", f"- 모델: {models.get(sid, '(opencode 설정)')}, 세션: {session or '없음'}", f"- 요청: {msg}", ""]
+        texts = list(zip(turn["texts"], turn["text_at"]))
+
+        def _texts_before(k):
+            out = []
+            for t, (_, before) in texts:
+                if before == k:
+                    out += ["> " + t.strip().replace("\n", "\n> "), ""]
+            return out
+        for k, t in enumerate(turn["tools"]):
+            L += _texts_before(k)
+            what = ENC_PREFIX.sub("", t["command"]) or f"{t['tool']} {t['path']}".strip()
+            L.append(f"{k + 1}. 도구 {t['tool']} ({t.get('status') or '?'}"
+                     + (f", exit {t['exit']}" if t.get("exit") is not None else "") + f"): `{what[:600]}`")
+            payload = last_json(t["output"]) if t["tool"] == "bash" else None
+            res = json.dumps(payload, ensure_ascii=False) if payload else str(t["output"] or "")[-BUNDLE_OUTPUT:]
+            if res.strip():
+                L += _block(res[:BUNDLE_OUTPUT])
+            L.append("")
+        L += _texts_before(len(turn["tools"]))
+        if errors:
+            L += ["오류 사건:", ""] + [f"- {e}" for e in errors] + [""]
+        err_path = os.path.join(folder, f"{sid}.stderr.txt")
+        err = _read_text(err_path).strip() if os.path.isfile(err_path) else ""
+        if err:
+            L += ["stderr 끝:"] + _block(err[-1500:]) + [""]
+        limited = sorted(n for n in os.listdir(folder) if n.startswith(f"{sid}.limited") and n.endswith(".jsonl"))
+        if limited:
+            L += [f"사용량 제한으로 예비 모델에 다시 보냄: {', '.join(limited)} (이름만)", ""]
+    text = "\n".join(L) + "\n"
+    if len(text) > BUNDLE_LIMIT:
+        text = text[:BUNDLE_LIMIT] + f"\n\n(묶음이 {BUNDLE_LIMIT}자를 넘어 잘림)\n"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(_mask(text))
+    return out_path, len(ids)
+
 def score(found, spec, by_id, order, use_judge, model):
     """{요청 ID: [차례, ...]} -> (rows, detail). 요청마다 마지막으로 보낸 차례로 채점합니다."""
     rows, detail = [], []
@@ -688,7 +765,15 @@ def main():
     ap.add_argument("--judge-model", default="LLM42")
     ap.add_argument("--make-pack", action="store_true", help="agent_scenarios.py로 docs/opencode/자동테스트 다시 만들기")
     ap.add_argument("--dir", help="메시지 팩의 시험 폴더 (기본: agent_scenarios.py의 DIR)")
+    ap.add_argument("--bundle", action="store_true", help="--runs 폴더의 기록을 반출용 md 하나로 묶기 (gemma기록_<라벨>_<시각>.md, 채점 없이)")
     args = ap.parse_args()
+    if args.bundle:
+        if not args.runs:
+            ap.error("--bundle은 --runs <기록 폴더>와 함께 씁니다")
+        out = os.path.join(HERE, f"gemma기록_{safe_label(args.label)}_{datetime.now():%Y%m%d_%H%M%S}.md")
+        path, n = write_bundle(args.runs, out)
+        print(f"[STATUS] 요청 {n}건을 묶음 파일 하나로 저장 -> {path}")
+        return 0
     if args.make_pack:
         print(f"[INFO] 메시지 팩 저장: {make_pack(args.dir)}")
         return 0

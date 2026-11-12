@@ -714,6 +714,29 @@ def test_grade_runs_reads_folder_and_marks_missing(tmp_path):
     assert os.path.dirname(report) == str(tmp_path) and (npass, n) == (1, 1)
 
 
+def test_bundle_writes_one_file_with_texts_tools_in_order_and_masks_user(tmp_path):
+    """반출용 기록 묶음 (2026-11-13 사용자 요청: gemma_runs 폴더는 파일이 많아 반출이 어려움): 요청마다 모델 글과 도구 호출을
+    일어난 순서대로, 결과는 마지막 JSON 전체, stderr 끝, 예비 모델 기록은 이름만. 결과 파일과 같게 사용자 폴더 이름을 가림."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    stop = {"status": "error", "agent_directive": "STOP_RETRY: [후보] 1) 시트1 2) 시트2", "message": "시트가 없습니다 [후보] 1) 시트1"}
+    (runs / "A1.jsonl").write_text(_run_events("A1", [
+        ("text", {"type": "text", "text": "스킬을 읽겠습니다."}),
+        _shell('python "C:\\Users\\hong\\x.py" read', stop),
+        ("text", {"type": "text", "text": "어느 시트인지 골라 주세요."})]), encoding="utf-8")
+    (runs / "A1.stderr.txt").write_text("경고 한 줄", encoding="utf-8")
+    (runs / "A1.limited1.jsonl").write_text("", encoding="utf-8")
+    (runs / go.RUN_MESSAGES).write_text(json.dumps({"A1": "[A1] 학습해 줘"}, ensure_ascii=False), encoding="utf-8")
+    (runs / go.RUN_MODELS).write_text(json.dumps({"A1": "corp/gemma"}), encoding="utf-8")
+    out, n = go.write_bundle(str(runs), str(tmp_path / "묶음.md"))
+    text = open(out, encoding="utf-8").read()
+    assert n == 1 and "## A1" in text and "corp/gemma" in text and "[A1] 학습해 줘" in text
+    assert text.index("스킬을 읽겠습니다.") < text.index("1. 도구 bash") < text.index("어느 시트인지 골라 주세요.")
+    assert "STOP_RETRY: [후보] 1) 시트1 2) 시트2" in text and "경고 한 줄" in text and "A1.limited1.jsonl" in text
+    assert "hong" not in text and "<사용자>" in text
+    assert len(list(tmp_path.glob("*.md"))) == 1
+
+
 def test_reruns_asked_by_continue_are_not_repeats():
     """ml-kit가 시간 제한으로 CONTINUE(continue: true)를 내면 같은 명령을 다시 실행하는 것이 맞음 (R10): 반복 위반 아님.
     CONTINUE 없이 같은 명령을 3번 이상 실행하면 그대로 위반."""
