@@ -474,6 +474,10 @@ def test_result_file_masks_user_folder_names():
         assert m('[{"cell": "C1", "author": "Kim Lee", "text": "a"}]') == '[{"cell": "C1", "author": "<사용자>", "text": "a"}]'
         assert m('{\\"author\\": \\"kim\\"}') == '{\\"author\\": \\"<사용자>\\"}'   # JSON 안의 JSON
         assert m("author 열 3개") == "author 열 3개"
+        # 2026-11-12 집 PC: 워드 메모 지우기 preview 문장 속 작성자가 남음
+        assert m('"preview": "메모 2(Kim Lee: 확인 바람)와 답글 1개을(를) 지웠습니다"') == '"preview": "메모 2(<사용자>: 확인 바람)와 답글 1개을(를) 지웠습니다"'
+        assert m("메모 3(홍길동)에 답글을 달았습니다") == "메모 3(<사용자>)에 답글을 달았습니다"
+        assert m("메모 2(<사용자>: a)") == "메모 2(<사용자>: a)" and m("메모 칸(B2)") == "메모 칸(B2)"
 
 
 def test_simplify_dry_run_sheet_delete_uses_name():

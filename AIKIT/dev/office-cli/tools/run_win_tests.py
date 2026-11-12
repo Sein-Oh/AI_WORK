@@ -2247,7 +2247,7 @@ def save_shots(ctx):
 #  - 문서가 남아 있는 프로세스(COM 문서 수 > 0, 제목 있는 창, 창 제목에 A.xlsx 등)는 Quit도 WM_CLOSE도 하지 않음
 #  - allowed_pids를 주면(A5) 그 PID만, 아니면 이 실행이 시작된 뒤 생긴 프로세스만
 CLEANUP_SCRIPT = r"""
-import datetime, json, os, sys, time
+import datetime, gc, json, os, sys, time
 root = sys.argv[1]
 opts = json.loads(sys.argv[2])
 sys.path.insert(0, root)
@@ -2313,8 +2313,19 @@ def frame_windows():
     win32gui.EnumWindows(cb, None)
     return found
 
+def alive(pid):
+    try:
+        h = win32api.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+    except Exception:
+        return False
+    try:
+        return win32process.GetExitCodeProcess(h) == 259        # STILL_ACTIVE
+    finally:
+        win32api.CloseHandle(h)
+
 seen = set()
 quit_later = []
+quit_pids = set()
 for kind, coll in (("excel", "Workbooks"), ("word", "Documents"), ("ppt", "Presentations")):
     for app in _office.find_apps(kind):
         pid = app_pid(app, kind)
@@ -2349,12 +2360,21 @@ for kind, pid, app in quit_later:
     if ok:
         try:
             app.Quit()
+            quit_pids.add(pid)
             actions.append(f"{kind} pid {pid}: Quit ({why})")
         except Exception as e:
             actions.append(f"{kind} pid {pid}: Quit 실패 {type(e).__name__}: {e}")
     else:
         actions.append(f"{kind} pid {pid}: 문서 0개지만 Quit 안 함 ({why})")
 app = docs = d = quit_later = None                      # COM 참조를 놓아야 Quit이 실제로 반영됨
+# 참조를 쥔 채 창을 닫으면(WM_CLOSE) Excel이 "Excel을 종료할 수 없습니다" 창을 띄우고 남습니다
+# (파일 연결로 연 A.xlsx의 Excel, 집 PC·회사 PC 2026-11-12). 창을 닫기 전에 COM을 모두 놓습니다.
+gc.collect()
+try:
+    import pythoncom
+    pythoncom.CoUninitialize()
+except Exception:
+    pass
 # Quit을 받고도 남는 인스턴스(예: excel.exe /x로 띄운 두 번째 Excel)는 창 닫기(WM_CLOSE)로 끝냅니다.
 # 대상: 숨은 창 또는 제목이 빈 창이면서 rules.may_end_process를 통과한 프로세스의 창만.
 if win32gui is not None and (run_start is not None or allowed is not None):
@@ -2373,6 +2393,29 @@ if win32gui is not None and (run_start is not None or allowed is not None):
             actions.append(f"WM_CLOSE 실패 pid {w['pid']}: {e}")
     for w, why in skipped:
         actions.append(f"WM_CLOSE 안 함 {w['cls']} pid {w['pid']} 제목='{w['title']}' 표시={w['visible']}: {why}")
+    # Quit과 창 닫기 뒤에도 남는 빈 프로세스: 파일 연결로 연 A.xlsx의 Excel은 문서 0개·COM 참조 0개여도 숨은 채 남습니다
+    # (실기 2026-11-12, 원인 미상). 문서가 없음을 위에서 확인했고 이번 실행이 만든 프로세스만 끝냅니다.
+    ended = quit_pids | {w["pid"] for w in targets}
+    for _ in range(20):
+        if not any(alive(p) for p in ended if p is not None):
+            break
+        time.sleep(0.5)
+    windows = frame_windows()
+    protected = rules.protected_pids(windows, doc_pids, protect_names)
+    end, keep = rules.end_leftovers(ended, alive, protected, allowed, run_start, {p: started(p) for p in ended})
+    for pid in end:
+        try:
+            h = win32api.OpenProcess(0x0001, False, pid)        # PROCESS_TERMINATE
+            try:
+                win32api.TerminateProcess(h, 1)
+            finally:
+                win32api.CloseHandle(h)
+            closed.append(f"(남은 빈 프로세스 pid {pid})")
+            actions.append(f"pid {pid}: Quit·창 닫기 뒤에도 남아 프로세스를 끝냄 (문서 0개, 이번 실행이 만든 프로세스)")
+        except Exception as e:
+            actions.append(f"pid {pid}: 프로세스 끝내기 실패 {type(e).__name__}: {e}")
+    for pid, why in keep:
+        actions.append(f"pid {pid}: 남았지만 끝내지 않음 ({why})")
     if protected:
         actions.append(f"보호한 PID: {sorted(protected)}")
 print(json.dumps({"closed": closed, "actions": actions}, ensure_ascii=False))
@@ -2673,9 +2716,19 @@ def test_L(ctx):
         bad = str((d or {}).get("agent_directive", "")).startswith("UNVERIFIED:") and "#NAME?" in json.dumps(d or {}, ensure_ascii=False)
         d2 = run_cli("excel.py", "write", "--sheet", "L_CUR", "--range", "F1", "--formula", "=SORT(B2:B4)")[0]
         spill = com_retry(lambda: xl_sheet("L_CUR").Range("F2").Value)
+        f1 = com_retry(lambda: str(xl_sheet("L_CUR").Range("F1").Text))
         version = com_retry(lambda: float(xl_app().Version))
-        record(ctx, "L3", "A9 '=합계(...)'는 #NAME?로 UNVERIFIED, '=SORT(...)'는 펼쳐짐(Office 2021 이상)", bad and _ok(d2) and spill is not None,
-               f"오류 수식 directive={(d or {}).get('agent_directive', '')[:80]}, F2(펼친 값)={spill}, Office {version}", d, c, r, e)
+        record(ctx, "L3", "A9 '=합계(...)'는 #NAME?로 UNVERIFIED", bad,
+               f"오류 수식 directive={(d or {}).get('agent_directive', '')[:80]}", d, c, r, e)
+        # 동적 배열(SORT)은 Office 2021·365부터. 2019는 버전이 같은 16.0이라 버전으로 못 가림: 엑셀이 수식을 받지 않아(com_error)
+        # 도구가 바꾸지 않고 STOP_RETRY로 멈추거나 F1이 #NAME?이면 이 PC에 없는 기능 (집 PC Office 2019, 2026-11-12)
+        refused = (d2 or {}).get("status") == "error" and "받지 않았습니다" in str((d2 or {}).get("message", ""))
+        if spill is None and (f1 == "#NAME?" or (refused and f1 == "")):
+            record(ctx, "L3b", "A9 '=SORT(...)'는 펼쳐짐 (Office 2021 이상)", ENV_SKIP,
+                   f"이 Office에 SORT(동적 배열) 없음: {'엑셀이 수식을 받지 않음(도구는 바꾸지 않고 STOP_RETRY)' if refused else 'F1=#NAME?'}, Office {version}")
+        else:
+            record(ctx, "L3b", "A9 '=SORT(...)'는 펼쳐짐 (Office 2021 이상)", _ok(d2) and spill is not None,
+                   f"F1={f1}, F2(펼친 값)={spill}, Office {version}", d2)
 
     def l4():     # C1 표 바로 위 단락 뒤에 쓰기
         doc = wd_doc("A.docx")

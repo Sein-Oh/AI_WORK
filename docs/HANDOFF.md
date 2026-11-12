@@ -485,6 +485,37 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
 집 PC에서 확인할 것: `C:\AIKIT`이 설정 폴더이면서 프로젝트 폴더라 `C:\AIKIT\AGENTS.md`가 두 번 들어가는지 (세션의 시스템 지침 길이, 또는
 `AGENTS.md`에 시험용 한 줄을 넣고 답에 두 번 나오는지). 두 번 들어가면 다시 `work` 같은 아래 폴더로 되돌릴지 사용자에게 물을 것.
 이미 있는 PC의 `C:\AIKIT\work`는 그대로 두어도 됨 (지우지 않음).
+- 집 PC 확인 (2026-11-12, OpenCode 2.2.5): **두 번 들어가지 않음.** 사용자가 Web UI에서 `C:\AIKIT`을 프로젝트로 열어 대화함.
+  같은 짧은 메시지를 `C:\AIKIT`과 다른 임시 폴더에서 `opencode run`으로 보내 모델 입력 토큰(입력 + 캐시 읽기)을 비교:
+  `C:\AIKIT` 11,577, 다른 폴더 12,041 (두 번 같음). `AGENTS.md`(20KB, 수천 토큰)가 두 번 들어갔다면 `C:\AIKIT` 쪽이 그만큼 커야 함.
+  디버그 로그(`--print-logs --log-level debug`)에는 `AGENTS.md` 감시 줄 하나뿐이라 판단에 쓰지 못함. `C:\AIKIT`을 프로젝트로 쓰는 지금 구성을 그대로 둠.
+
+### 3-26. 집 PC 점검 (2026-11-12 저녁, main PR #80 = ml-kit 2.9.92, office-cli 1.6.7, Office 2019)
+`C:\AIKIT`을 main과 같게 다시 배치(옛 파일 없음)하고 setup FAIL 0, 새 창 기준 스킬 12개(새 이름)만 보임. 결과 `docs/test_logs/집PC_점검_20261112/`.
+
+| 시험 | 결과 | 걸린 시간 |
+|---|---|---|
+| 자동 점검 `run_all_tests.py --only diag,beta,ml,office` | diag 17/17, beta 29/29(F7 엑셀 재계산 포함), ml 14/14, office 99/100 | 9분 |
+| 단순성 점검 `run_simplify_check.py` | PASS 34, FAIL 0, SKIP 0 (K1 스킬 12개 포함) | 3분 |
+
+- office L3 실패 -> 고침 (실기 러너만): `=SORT(...)`(동적 배열)는 Office 2021·365부터라 Office 2019는 엑셀이 수식을 받지 않음(도구는 바꾸지 않고
+  STOP_RETRY, 맞는 동작). 2019·2021 모두 버전 16.0이라 버전으로 못 가림. L3을 둘로: L3(오류 수식 UNVERIFIED, 통과)과 L3b(SORT, 이 경우 ENV-SKIP).
+  L 그룹만 다시 돌려 PASS 14, ENV-SKIP 1.
+- 결과 파일에 Office 사용자 이름이 남음 -> 고침: 워드 메모 지우기·답글의 preview 문장(`메모 2(<이름>: ...)`)은 `author` 키가 아니라 가려지지 않았음.
+  `run_all_tests.py`·`run_simplify_check.py`의 `mask_private`가 이 모양도 가림 (회사 PC는 실명일 수 있음). 테스트 추가.
+- 고침: office 실기가 끝난 뒤 A.xlsx를 파일 연결로 연 Excel이 숨은 채 남고 "Microsoft Excel을(를) 종료할 수 없습니다." 창이 뜸 (회사 PC에서도 같음, 사용자 확인).
+  조사: 종료 정리는 그 Excel(같은 pid)의 A.xlsx를 닫고 Quit도 보냈지만 끝나지 않음. 러너·정리 스크립트의 COM 참조는 0개, Word·PowerPoint도 끝난 뒤,
+  클립보드를 비워도, Quit을 다시 보내도 남음(Workbooks 0, 제한된 보기 창 0, 원인 미상). 제목 있는 숨은 XLMAIN('Excel')에 WM_CLOSE는 아무 일 없고,
+  **제목이 빈 숨은 XLMAIN에 WM_CLOSE를 보내면 그 창이 뜸**. 파일 연결로 연 Excel만 따로 열고 닫으면(실기 단계 없이) 정상 종료됨.
+  러너 수정: 창을 닫기 전에 COM을 모두 놓고, 제목이 빈 창은 닫지 않고, Quit·창 닫기 뒤 10초 안에 끝나지 않은 프로세스는 문서가 없고 이번 실행이
+  만든 것만 끝냄 (정리 기록에 "프로세스를 끝냄"). 실기 L 그룹(PASS 14, ENV-SKIP 1)·A 그룹(PASS 5) 뒤 Excel이 남지 않고 창도 뜨지 않음.
+  회사 PC에서 다음 실기 때 정리 기록과 남은 Excel이 없는지 볼 것.
+- 눈 확인 (실기테스트.md 4장, 집 PC가 할 수 있는 1·3~8번, 2026-11-12): **모두 통과.**
+  1 성능예측표 범위 밖 표시(사용자 확인), 3 워드 `.md` 쓰기 가로줄·굵게(사용자 확인), 4 `read --formulas` C7 1500·`=SUM(C2:C6)`,
+  5 `--where` 날짜 조건 `count` 2·`row_numbers` [1, 4, 6](첫 값은 머리글 행, 안내의 기대값 문구를 고침), 6 정렬·7 행 넣기(합계 `=SUM(C2:C8)` 1500, 사용자 확인),
+  8 relay 전달이 슬라이드 9 없음으로 멈출 때 클립보드 그대로·숨은 Word 없음·되돌리기 지점 그대로 (안내의 `--method relay`는 지금 도구에 없는 옵션이라
+  임시 설정 `OFFICE_CLI_CONFIG`의 `transfer_method`로 relay를 먼저 쓰게 하는 방법으로 안내를 고침). 2번(문서 보안)과 9·10번(Outlook)은 회사 PC 몫.
+- 하지 않은 것: Gemma(OpenRouter 크레딧 부족, 회사 PC 몫).
 
 ### 3-18. 결과 파일 위치 규칙 (전역 지침 2장, office-cli 1.6.7)
 사용자 결정: 경로를 주면 그대로, 아니면 파일을 대상으로 한 작업의 결과는 대상 파일과 같은 폴더, 대상 파일이 없으면 `C:\AIKIT\data`.

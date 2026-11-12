@@ -85,17 +85,24 @@ class Desk:
 
     def __init__(self, apps, extra_windows, starts):
         self.apps, self.extra, self.starts, self.posted = apps, extra_windows, starts, []
+        self.events = []                            # COM 해제("uninit")와 WM_CLOSE("post") 순서
+        self.terminated = []
+
+    def alive(self, pid):
+        if pid in self.terminated:
+            return False
+        return any(a.pid == pid and not a.quit for a in self.apps) or any(w["pid"] == pid for w in self.extra)
 
     def windows(self):
         found = []
         for a in self.apps:
-            if a.kind == "word" or a.quit:          # Quit으로 끝난 앱은 창이 사라짐 (Word 창은 정리 대상 아님)
+            if a.kind == "word" or a.quit or a.pid in self.terminated:   # 끝난 앱은 창이 사라짐 (Word 창은 정리 대상 아님)
                 continue
             names = [d.Name for d in a.coll.items]
             title = (f"{names[0]} - Excel" if a.kind == "excel" else f"{names[0]} - PowerPoint") if names else \
                 ("Excel" if a.kind == "excel" else "PowerPoint")
             found.append(W(a.pid * 10, a.pid, title, cls="XLMAIN" if a.kind == "excel" else "PPTFrameClass"))
-        return found + self.extra
+        return found + [w for w in self.extra if w["pid"] not in self.terminated]
 
     def modules(self):
         desk = self
@@ -114,13 +121,18 @@ class Desk:
             return info.get(h) or next(w for w in desk.windows() if w["hwnd"] == h)
         gui = types.SimpleNamespace(
             EnumWindows=enum, GetClassName=lambda h: window(h)["cls"], GetWindowText=lambda h: window(h)["title"],
-            IsWindowVisible=lambda h: window(h)["visible"], PostMessage=lambda h, *a: desk.posted.append(h))
+            IsWindowVisible=lambda h: window(h)["visible"],
+            PostMessage=lambda h, *a: (desk.posted.append(h), desk.events.append("post")))
         proc = types.SimpleNamespace(
             GetWindowThreadProcessId=lambda h: (0, h // 10 if h % 10 == 0 else window(h)["pid"]),
-            GetProcessTimes=lambda h: {"CreationTime": desk.starts[h]})
-        api = types.SimpleNamespace(OpenProcess=lambda access, inherit, pid: pid, CloseHandle=lambda h: None)
+            GetProcessTimes=lambda h: {"CreationTime": desk.starts[h]},
+            GetExitCodeProcess=lambda h: 259 if desk.alive(h) else 0)
+        api = types.SimpleNamespace(OpenProcess=lambda access, inherit, pid: pid, CloseHandle=lambda h: None,
+                                    TerminateProcess=lambda h, code: desk.terminated.append(h))
         con = types.SimpleNamespace(WM_CLOSE=0x10)
-        return {"_office": office, "win32gui": gui, "win32process": proc, "win32api": api, "win32con": con}
+        com = types.SimpleNamespace(CoUninitialize=lambda: desk.events.append("uninit"))
+        return {"_office": office, "win32gui": gui, "win32process": proc, "win32api": api, "win32con": con,
+                "pythoncom": com}
 
 
 def run_cleanup(monkeypatch, capsys, desk, test_dir, only_name="", allowed=None, protect=()):
@@ -305,7 +317,30 @@ def test_a5_cleanup_keeps_user_excel_with_a_xlsx(monkeypatch, capsys):
     assert [d.Name for d in user_xl.coll.items] == ["A.xlsx"] and not user_xl.quit
     assert 100 not in desk.posted and 101 not in desk.posted          # 사용자 Excel 창에는 WM_CLOSE 없음
     assert desk.posted == [200]                                       # 두 번째 Excel(Quit 후에도 남은 빈 창)만
+    assert desk.terminated == [20]                                    # 창을 닫아도 남으면 그 프로세스만 끝냄
     assert any("보호" in a for a in out["actions"])
+
+
+def test_untitled_hidden_frame_is_not_closed_and_leftover_excel_is_ended(monkeypatch, capsys):
+    """실기 2026-11-12: 파일 연결로 연 A.xlsx의 Excel은 Quit 뒤에도 숨은 채 남고, 제목 없는 XLMAIN에 WM_CLOSE를 보내면
+    "Excel을 종료할 수 없습니다" 창이 뜸. 제목 없는 창은 닫지 않고 남은 빈 프로세스를 끝냄."""
+    xl = App(10, "excel", [("A.xlsx", TEST_DIR)])
+    xl.Quit = lambda: None
+    user = App(50, "excel", [])                                       # 실행 전부터 있던 빈 Excel
+    desk = Desk([xl, user], [W(101, 10, "", visible=False)], {10: AFTER, 50: BEFORE})
+    out = run_cleanup(monkeypatch, capsys, desk, TEST_DIR)
+    assert 101 not in desk.posted and 100 in desk.posted
+    assert desk.terminated == [10]
+    assert any("제목 없는 창" in a for a in out["actions"])
+
+
+def test_cleanup_releases_com_before_closing_windows(monkeypatch, capsys):
+    """COM 참조를 쥔 채 WM_CLOSE를 보내면 Excel이 "Excel을 종료할 수 없습니다" 창을 띄우고 남음 (실기 2026-11-12).
+    창을 닫기 전에 CoUninitialize로 참조를 모두 놓아야 함."""
+    desk = a5_desk()
+    run_cleanup(monkeypatch, capsys, desk, TEST_DIR, only_name="C_second_instance.xlsx", allowed=[20],
+                protect=["A.xlsx", "A.docx", "A.pptx"])
+    assert "post" in desk.events and desk.events.index("uninit") < desk.events.index("post")
 
 
 def test_cleanup_without_allowed_pids_still_protects_document_process(monkeypatch, capsys):

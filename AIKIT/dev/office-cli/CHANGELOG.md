@@ -10,6 +10,11 @@
   `pytest_make_parametrize_id`로 긴 글자 id를 60자로 자름(Windows 환경변수 `PYTEST_CURRENT_TEST` 32767자 한도 ERROR). DRM이 python-pptx 기본 템플릿을
   지우고 python-docx `default.docx`를 바꾼 PC에서도 샘플을 만들도록 `sample_docs.new_pptx`는 코드로 만든 최소 OOXML, `new_docx`는 폴더 템플릿을 씀
   (건너뛰지 않고 시험). 테스트는 `pptx.Presentation()`/`docx.Document()`를 직접 부르지 않음.
+- 실기 러너 종료 정리 (집 PC·회사 PC 2026-11-12, 도구 동작 변경 없음): 실기가 끝난 뒤 A.xlsx를 파일 연결로 연 Excel이 숨은 채 남고
+  "Microsoft Excel을(를) 종료할 수 없습니다." 창이 뜨던 것. 그 Excel은 문서 0개·COM 참조 0개여도 Quit과 제목 있는 창 닫기로 끝나지 않고,
+  제목이 빈 숨은 XLMAIN에 WM_CLOSE를 보내면 그 창이 뜸. 정리 스크립트(`CLEANUP_SCRIPT`)가 창을 닫기 전에 COM을 모두 놓고(`CoUninitialize`),
+  제목이 빈 창은 닫지 않으며(`win_test_rules.UNTITLED_SKIP`), Quit·창 닫기 뒤 10초 안에 끝나지 않은 프로세스는 문서가 없고 이번 실행이 만든 것만
+  끝냄(`end_leftovers`, 정리 기록에 "프로세스를 끝냄"). 실기 L·A 그룹에서 Excel이 남지 않음. 시험 `test_win_runner` 2개 추가.
 
 ## [1.6.7] - 2026-11-12
 
