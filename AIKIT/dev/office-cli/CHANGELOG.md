@@ -37,6 +37,8 @@
 - `ppt.py table`: 슬라이드에 이미 있는 표 읽기와 칸 쓰기(`--cells "R2C3=값; ..."`, `--file`, 표가 여럿이면 `[후보]`, 글이 있는 칸은 `--overwrite`). ppt-kit 스킬, 시험.
 - `outlook.py contacts --name`: 내 연락처와 주소록(Outlook 이름 확인)에서 메일 주소 찾기 (읽기만). outlook-kit 스킬, 시험.
 - `office.py open --file`: 파일을 사용자 화면의 Office로 열기(이미 열려 있으면 그 창을 앞으로). excel·word·ppt-kit 스킬의 되돌리기/창 줄, 시험.
+- 엑셀 이름 정의: `info`의 `names`, `read --range <이름 정의>`(닫힌 파일·열린 문서, 없는 이름은 `[후보]`).
+- `excel.py range --action filter --where` / `unfilter`: 자동 필터로 맞는 행만 보이게 (열마다 조건 하나, 같은 열 두 값은 `|`). excel-kit 스킬, 시험.
 
 ### 제거: `excel.py check`(규격 대조) (사용자 결정 2026-11-12: office-cli는 기반 도구, 판정 기준은 도구 밖)
 - `excel.py check`, `_spec_check.py`, reader의 규격 조건 읽기·판정 도우미(`spec_conditions`, `near_conditions`, `cond_holds` 등)를 지움.

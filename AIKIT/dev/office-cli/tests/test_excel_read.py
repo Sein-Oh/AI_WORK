@@ -16,7 +16,7 @@ import office
 import reader
 from fake_excel import FakeExcelWorkbook, FakeRange, FakeXlApp
 from fake_office import make_win32com
-from office_helpers import option_value, recommended_argv, error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
+from office_helpers import option_value, recommended_argv, split_command, error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
 
 
 def _strip_dimension(src, dst):
@@ -1507,3 +1507,63 @@ def test_read_formats_open_workbook_reads_back_style(xl, capsys):
     assert code == 0, out
     code, out = run_excel(capsys, "read", "--range", "A1:D5", "--formats")
     assert code == 0 and [e["cell"] for e in out["formats"]] == ["B2", "D5"] and all("bg" in e for e in out["formats"]), out
+
+
+def test_sheet_candidate_has_numbered_confirm_command(xl, capsys):
+    """1.4.79: 비슷한 이름 [후보]에 번호를 붙이고 같은 번호의 confirm_commands가 이름을 바꾼 전체 명령 (사용자가 고른 뒤에만 실행)."""
+    code, out = run_excel(capsys, "read", "--sheet", "요약표")
+    assert code == 1 and "[후보] 1) 요약" in out["message"] and "next_commands" not in out, out
+    assert "confirm_commands" in out["agent_directive"]
+    argv = split_command(out["confirm_commands"][0]["command"])
+    assert argv[0] == "python" and argv[2:] == ["read", "--sheet", "요약"], argv
+
+
+def test_read_empty_range_is_explicit_zero(xl_table, capsys):
+    """1.4.81 빈 결과 명시: 값이 없는 범위는 count 0과 '찾은 항목 없음'."""
+    code, out = run_main(excel, capsys, "read", "--range", "H10:I12")
+    assert code == 0 and out["count"] == 0 and out["preview"].startswith("0건:"), out
+    assert out["agent_directive"].startswith("VERIFIED: 0건.") and "찾은 항목 없음" in out["agent_directive"], out
+
+
+def test_defined_names_listed_and_readable_as_range(tmp_path, capsys, monkeypatch, xl):
+    """1.6.7 기반 기능: 이름 정의(예: 단가표)를 info로 보고 --range에 이름으로 읽기. 닫힌 xlsx(openpyxl)와 열린 문서(COM) 모두,
+    없는 이름은 이름 정의 [후보]."""
+    import openpyxl
+    from openpyxl.workbook.defined_name import DefinedName
+    p = tmp_path / "가격.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "목록"
+    for r, row in enumerate([["품목", "단가"], ["볼트", 100], ["너트", 50]], 1):
+        for c, v in enumerate(row, 1):
+            ws.cell(r, c, v)
+    wb.defined_names["단가표"] = DefinedName("단가표", attr_text="목록!$A$1:$B$3")
+    wb.save(p)
+    code, out = run_main(excel, capsys, "info", "--target", str(p))
+    assert code == 0 and out["names"] == [{"name": "단가표", "refers_to": "목록!A1:B3"}] and out["name_count"] == 1, out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--range", "단가표")
+    assert code == 0 and out["values"] == [["품목", "단가"], ["볼트", 100], ["너트", 50]] and out["sheet"] == "목록", out
+    code, out = run_main(excel, capsys, "read", "--target", str(p), "--range", "단가퓨")
+    assert code == 1 and "단가표" in out["message"], out
+    # 열린 문서: Names(i).RefersTo로 범위를 찾음
+    app, book = xl
+    sheet = ws_of(book)
+    for r in range(1, 4):
+        sheet.set(r, 1, float(r))
+    book.Names = _FakeNames([("기준값", f"={sheet.Name}!$A$1:$A$3")])
+    code, out = run_excel(capsys, "read", "--range", "기준값")
+    assert code == 0 and out["values"] == [[1.0], [2.0], [3.0]], out
+    code, out = run_excel(capsys, "info")
+    assert code == 0 and out["names"][0]["name"] == "기준값", out
+
+
+class _FakeNames:
+    def __init__(self, pairs):
+        self.items = [types.SimpleNamespace(Name=n, RefersTo=r, Visible=True) for n, r in pairs]
+
+    @property
+    def Count(self):
+        return len(self.items)
+
+    def __call__(self, i):
+        return self.items[i - 1]

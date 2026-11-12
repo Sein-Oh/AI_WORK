@@ -33,6 +33,7 @@ metadata:
 | 행·열 넣기·지우기 | `python "C:\AIKIT\office-cli\excel.py" range --action <insert/delete> --range 5:7` (열은 `--range B:C`. 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸) |
 | 수식을 값으로 | `python "C:\AIKIT\office-cli\excel.py" range --action values --range A1:D20 --dry-run` (확인 뒤 `confirm_commands[0]`) |
 | 정렬 | `python "C:\AIKIT\office-cli\excel.py" range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
+| 자동 필터 (보이게 거르기) | `python "C:\AIKIT\office-cli\excel.py" range --action filter --range A1:E100 --where "부서 = 영업; 금액 >= 100"` (같은 열 두 값 `"부서 = 영업 | 부서 = 설계"`, 끄기 `--action unfilter`) |
 | 칸 메모 | 목록 `python "C:\AIKIT\office-cli\excel.py" comment [--range B2:D20]` / 넣기 `python "C:\AIKIT\office-cli\excel.py" comment --action add --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`(열: 칸, 메모), 있던 메모 바꾸기 `--overwrite`, 덧붙이기 `--append`) / 지우기 `--action delete --range B2:D20` (먼저 `--dry-run`) |
 | 시트 | `python "C:\AIKIT\office-cli\excel.py" sheet --action <add/rename/copy/delete/select> --name <A> [--new-name <B>]` |
 | 바꾸기 | `python "C:\AIKIT\office-cli\excel.py" replace --find <A> --replace <B> [--all-sheets]` (칸 전체가 같을 때만 `--whole`, 여러 쌍은 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 바꾼 칸 강조 `--bold --color red`. `--find`는 비우지 않는다. 빈 칸 채우기는 `write --value`) |

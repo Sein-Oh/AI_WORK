@@ -425,6 +425,11 @@ class FakeRange:
             return f(r1, c1)
         return tuple(tuple(f(r, c) for c in range(c1, c2 + 1)) for r in range(r1, r2 + 1))
 
+    def AutoFilter(self, **kw):
+        """자동 필터 (range --action filter): 건 조건을 기록하고 시트의 AutoFilterMode를 켬."""
+        self.ws.AutoFilterMode = True
+        self.ws.filters.append((self.Address, kw))
+
     # --- 서식/조작 ---
     def __getattr__(self, name):
         if name in ("Interior", "Font", "Borders_"):
@@ -664,6 +669,8 @@ class FakeWorksheet:
         self.formulas = {}
         self.arrays = []             # 배열 수식 범위 [(r1, c1, r2, c2)] (칸마다 formulas에 같은 수식)
         self.styles = {}
+        self.AutoFilterMode = False
+        self.filters = []
         self.merged = set()
         self.fcs = {}
         self.log = []

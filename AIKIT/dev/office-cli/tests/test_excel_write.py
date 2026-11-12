@@ -2520,3 +2520,27 @@ def test_style_cells_from_file_for_long_lists(xl, capsys, tmp_path):
     assert code == 1 and "칸 주소" in out["message"], out
     code, out = run_excel(capsys, "style", "--file", str(cells), "--range", "A1", "--bg", "yellow")
     assert code == 1 and "함께 쓰지 않습니다" in out["message"], out
+
+
+def test_range_filter_shows_matching_rows_and_unfilter(xl, capsys):
+    """1.6.7 기반 기능: 사용자가 볼 표를 자동 필터로 거르기. 열 이름으로 Field를 찾고, ';'는 열마다 조건(그리고), 같은 열 '|'는 두 값(또는),
+    있던 필터는 지우고 새로, 나타낼 수 없는 조건은 거절, unfilter로 끔(없으면 바뀐 것 없음)."""
+    app, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([["부서", "금액"], ["영업", 120], ["설계", 80], ["영업", 50]], 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부서 = 영업; 금액 >= 100")
+    assert code == 0 and out["verified"] is True and ws.AutoFilterMode is True, out
+    assert [kw for _, kw in ws.filters] == [{"Field": 1, "Criteria1": "=영업"}, {"Field": 2, "Criteria1": ">=100"}]
+    ws.filters.clear()
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부서 = 영업 | 부서 ~ 설")
+    assert code == 0 and ws.filters[0][1] == {"Field": 1, "Criteria1": "=영업", "Operator": 2, "Criteria2": "=*설*"}, ws.filters
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부서 = 영업 | 금액 > 1")
+    assert code == 1 and "자동 필터로 나타낼 수 없는" in out["message"], out
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부셔 = 영업")
+    assert code == 1 and "부서" in out["message"], out
+    code, out = run_excel(capsys, "range", "--action", "unfilter", "--range", "A1:B4")
+    assert code == 0 and ws.AutoFilterMode is False and out["unchanged"] is False, out
+    code, out = run_excel(capsys, "range", "--action", "unfilter", "--range", "A1:B4")
+    assert code == 0 and out["unchanged"] is True, out

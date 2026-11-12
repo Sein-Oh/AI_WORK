@@ -287,17 +287,79 @@ def write_session(args, command: str):
                            create=not dry and command == "write", tool=TOOL, command=command)
 
 
+_ADDR_LIKE = re.compile(r"^(\$?[A-Za-z]{1,3}\$?\d*(:\$?[A-Za-z]{1,3}\$?\d*)?|\$?\d+:\$?\d+)([;,]|$)")
+NAMES_SHOW = 50              # info에 담는 이름 정의 수
+
+
+def _is_name_ref(cells: str) -> bool:
+    """칸 주소가 아니라 이름 정의(예: 단가표, Data_2026)로 보이는지."""
+    c = cells.strip()
+    return bool(c) and not _ADDR_LIKE.match(c) and bool(re.fullmatch(r"[^\s!:;,'\"]+", c))
+
+
+def _com_names(wb: Any) -> List[Dict[str, str]]:
+    """열린 통합문서의 이름 정의 [{name, refers_to}] (숨김·내장 이름은 뺌)."""
+    out: List[Dict[str, str]] = []
+    try:
+        for i in range(1, int(wb.Names.Count) + 1):
+            n = wb.Names(i)
+            name = str(n.Name)
+            if not bool(getattr(n, "Visible", True)) or "_xlnm." in name or name.startswith("_"):
+                continue
+            out.append({"name": name, "refers_to": str(n.RefersTo).lstrip("=").replace("$", "")})
+    except Exception:
+        pass
+    return out
+
+
+def _closed_names(wb: Any) -> List[Dict[str, str]]:
+    """닫힌 xlsx의 통합문서 이름 정의 [{name, refers_to}] (범위 하나를 가리키는 것만)."""
+    out: List[Dict[str, str]] = []
+    try:
+        items = list(wb.defined_names.items())
+    except Exception:
+        return out
+    for name, dn in items:
+        if name.startswith("_xlnm.") or getattr(dn, "hidden", False):
+            continue
+        try:
+            dests = list(dn.destinations)
+        except Exception:
+            continue
+        if len(dests) == 1:
+            sh, coord = dests[0]
+            out.append({"name": name, "refers_to": f"{sh}!{str(coord).replace('$', '')}"})
+    return out
+
+
+def _name_target(names: List[Dict[str, str]], key: str) -> Optional[str]:
+    """이름 정의 -> 'Sheet!A1:B3' (같은 이름, 없으면 표기만 다른 이름). 없으면 None."""
+    for n in names:
+        if rt.exact_key(n["name"]) == rt.exact_key(key):
+            return n["refers_to"]
+    hits = [n for n in names if rt.name_key(n["name"]) == rt.name_key(key)]
+    return hits[0]["refers_to"] if len(hits) == 1 else None
+
+
 def target_range(t: off.OfficeTarget, ws: Any, address: Optional[str]) -> Any:
-    """주소 해석: 'A1:B2', 'Sheet!A1', 생략 시 UsedRange."""
+    """주소 해석: 'A1:B2', 'Sheet!A1', 이름 정의(예: 단가표), 생략 시 UsedRange."""
     if not address:
         return ws.UsedRange
     sheet, cells = split_sheet(address)
+    if not sheet and _is_name_ref(cells):
+        ref = _name_target(_com_names(t.doc), cells)
+        if ref:
+            sheet, cells = split_sheet(ref)
     if sheet:
         ws = t.sheet(sheet)
     try:
         return ws.Range(cells)
     except Exception:
-        raise rt.InputError(f"범위 주소가 잘못되었습니다: '{address}' (예: A1, A1:D10, B:B, 'Sheet1'!A1)")
+        hint = ""
+        if _is_name_ref(cells):
+            names = [n["name"] for n in _com_names(t.doc)]
+            hint = f" 이름 정의 '{cells}'이(가) 없습니다" + (f" (이름 정의: {', '.join(names[:10])})" if names else " (이 통합문서에 이름 정의가 없음)") + "."
+        raise rt.InputError(f"범위 주소가 잘못되었습니다: '{address}' (예: A1, A1:D10, B:B, 'Sheet1'!A1, 이름 정의).{hint}")
 
 
 def range_info(rng: Any) -> Dict[str, Any]:
@@ -515,6 +577,13 @@ def _read_matrix_open_wb(wb: Any, path: str, sheet: Optional[str], address: Opti
     # 열·행 전체(B:B, 5:7)일 때만, 그리고 Sheet!A1의 시트로 바꾼 뒤에 셉니다 (작은 범위 읽기마다 전체를 훑지 않게)
     if address:
         sh, cells = split_sheet(address)
+        if not sh and _is_name_ref(cells):          # 이름 정의(예: 단가표) -> 그것이 가리키는 시트·범위
+            defined = _closed_names(wb)
+            ref = _name_target(defined, cells)
+            if ref is None:
+                raise rt.not_found("이름 정의", cells, [n["name"] for n in defined], option="--range",
+                                   extra="" if defined else " (이 통합문서에 이름 정의가 없음)")
+            sh, cells = split_sheet(ref)
         if sh:
             found = rt.find_name(sh, names)
             if found is None:
@@ -1793,13 +1862,14 @@ def _closed_info(path: str) -> Dict[str, Any]:
                            "hidden": getattr(ws, "sheet_state", "visible") != "visible"})
         sheets += [{"name": c.title, "kind": "chart"} for c in getattr(wb, "chartsheets", [])]
         active = getattr(wb.active, "title", None)
+        defined = _closed_names(wb)
     finally:
         wb.close()
     source = {"app": "Excel", "name": os.path.basename(path), "path": path, "source": "file(openpyxl)"}
     names = ", ".join(f"{x['name']}({x.get('used_range') or '차트'})" for x in sheets[:10])
     return rt.ok(TOOL, "info", f"{os.path.basename(path)}: 시트 {len(sheets)}개 - {names}" + (" 등" if len(sheets) > 10 else ""),
                  "VERIFIED: 파일을 읽어 시트 목록을 확인했습니다 (Office 없이).", target_resolved=source, sheets=sheets,
-                 active_sheet=active)
+                 active_sheet=active, names=defined[:NAMES_SHOW], name_count=len(defined))
 
 
 def cmd_info(args) -> Dict[str, Any]:
@@ -1816,8 +1886,9 @@ def cmd_info(args) -> Dict[str, Any]:
     with off.open_target("excel", args.target, readonly=True) as t:
         wb = t.doc
         sheets = [_sheet_summary(wb.Worksheets(i), args.detail) for i in range(1, wb.Worksheets.Count + 1)]
+        defined = _com_names(wb)
         result: Dict[str, Any] = {"target_resolved": t.resolved(), "sheets": sheets,
-                                  "saved": off.is_saved(wb)}
+                                  "saved": off.is_saved(wb), "names": defined[:NAMES_SHOW], "name_count": len(defined)}
         if args.detail:
             result["layout_warnings"] = sum(len(s["warnings"]) for s in sheets)
         try:
@@ -3697,6 +3768,8 @@ def cmd_range(args) -> Dict[str, Any]:
         raise rt.dry_run_unsupported(TOOL, f"range --action {a}")
     if a == "sort":
         return range_sort(args)
+    if a in ("filter", "unfilter"):
+        return range_filter(args)
     if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear", "values") and not args.range:
         raise rt.InputError(f"range {a}에는 --range가 필요합니다." + (
             " 시트 전체를 지우려면 사용자에게 확인한 뒤 excel.py info로 사용 범위를 보고 그 범위를 --range로 지정하세요."
@@ -4330,6 +4403,79 @@ def _sort_fields(ws: Any, rng: Any, top: int, c1: int, r2: int, order: List[Tupl
             srt.SortFields.Clear()
         except Exception:
             pass
+
+
+XL_AND, XL_OR = 1, 2          # AutoFilter Operator
+
+
+def _filter_criteria(op: str, val: str) -> str:
+    """--where의 연산자·값 -> AutoFilter 조건 글 (= 같음, != 다름, ~ 포함, !~ 포함 안 함, 크기 비교)."""
+    return {"=": f"={val}", "!=": f"<>{val}", "~": f"=*{val}*", "!~": f"<>*{val}*"}.get(op, f"{op}{val}")
+
+
+def _filter_plan(conds: List[List[Cond]]) -> List[Tuple[str, List[Tuple[str, str]]]]:
+    """--where -> [(열, [(연산자, 값)] 1~2개)]. 자동 필터로 나타낼 수 있는 것만: 묶음 하나(열마다 조건 하나, 그리고),
+    또는 같은 열의 조건 두 개를 '|'로 (또는). 그 밖은 STOP_RETRY."""
+    if len(conds) == 1:
+        cols = [c for c, _, _ in conds[0]]
+        if len(set(rt.name_key(c) for c in cols)) == len(cols):
+            return [(c, [(op, v)]) for c, op, v in conds[0]]
+    elif len(conds) == 2 and all(len(g) == 1 for g in conds) and rt.name_key(conds[0][0][0]) == rt.name_key(conds[1][0][0]):
+        return [(conds[0][0][0], [(conds[0][0][1], conds[0][0][2]), (conds[1][0][1], conds[1][0][2])])]
+    raise rt.InputError("자동 필터로 나타낼 수 없는 조건입니다. 열마다 조건 하나를 ';'로 잇거나(그리고), 같은 열의 두 값을 '|'로 주세요 "
+                        "(예: --where \"부서 = 영업; 금액 >= 100\", --where \"부서 = 영업 | 부서 = 설계\"). 더 복잡한 조건은 excel.py read --where로 읽으세요.",
+                        no_fallback=True)
+
+
+def range_filter(args) -> Dict[str, Any]:
+    """range --action filter --where: 열린 표에 자동 필터를 걸어 맞는 행만 보이게 (1.6.7 기반 기능: 사용자가 볼 표 거르기).
+    unfilter는 자동 필터를 끔. 값은 바꾸지 않음 (숨긴 행은 필터를 끄면 다시 보임)."""
+    if args.dry_run:
+        raise rt.dry_run_unsupported(TOOL, f"range --action {args.action}")
+    plan: List[Tuple[str, List[Tuple[str, str]]]] = []
+    if args.action == "filter":
+        if not args.where:
+            raise rt.InputError("range filter에는 --where가 필요합니다 (예: --where \"부서 = 영업; 금액 >= 100\").")
+        plan = _filter_plan(parse_where(args.where))
+    with write_session(args, "range") as t:
+        ws = t.sheet(args.sheet)
+        rng = target_range(t, ws, args.range)
+        ws = rng.Worksheet
+        sheet = str(ws.Name)
+        if args.action == "unfilter":
+            was = bool(getattr(ws, "AutoFilterMode", False))
+            if was:
+                ws.AutoFilterMode = False
+            t.set_focus(sheet=ws, changed=was)
+            still = bool(getattr(ws, "AutoFilterMode", False))
+            resolved = t.resolved()
+            preview = f"{sheet}의 자동 필터를 껐습니다" if was else f"{sheet}에 자동 필터가 없어 바꾸지 않았습니다"
+            if still:
+                return rt.ok_unverified(TOOL, "range", preview, ["끈 뒤에도 자동 필터가 켜져 있음"], target_resolved=resolved)
+            return rt.ok(TOOL, "range", preview, "VERIFIED: 자동 필터가 꺼진 것을 확인했습니다.", verified=True, target_resolved=resolved,
+                         unchanged=not was)
+        header = off.range_to_matrix(ws.Range(ws.Cells(int(rng.Row), int(rng.Column)),
+                                              ws.Cells(int(rng.Row), int(rng.Column) + int(rng.Columns.Count) - 1)).Value)
+        head = header[0] if header else []
+        ncols = int(rng.Columns.Count)
+        fields = [(resolve_column(col, head, int(rng.Column), ncols, "필터 열", option="--where")[0] + 1, crit) for col, crit in plan]
+        if bool(getattr(ws, "AutoFilterMode", False)):
+            ws.AutoFilterMode = False                      # 있던 필터 조건은 지우고 새로 (조건이 섞이지 않게)
+        for field, crit in fields:
+            if len(crit) == 1:
+                rng.AutoFilter(Field=field, Criteria1=_filter_criteria(*crit[0]))
+            else:
+                rng.AutoFilter(Field=field, Criteria1=_filter_criteria(*crit[0]), Operator=XL_OR,
+                               Criteria2=_filter_criteria(*crit[1]))
+        t.set_focus(sheet=ws)
+        on = bool(getattr(ws, "AutoFilterMode", False))
+        info = range_info(rng)
+        resolved = t.resolved()
+    preview = f"{info['sheet']}!{info['range']}에 자동 필터: {where_text(parse_where(args.where))}"
+    if not on:
+        return rt.ok_unverified(TOOL, "range", preview, ["건 뒤에 자동 필터가 켜져 있는지 확인하지 못함"], target_resolved=resolved, **info)
+    return rt.ok(TOOL, "range", preview, "VERIFIED: 자동 필터가 켜진 것을 확인했습니다. 끄려면 range --action unfilter.",
+                 verified=True, target_resolved=resolved, **info)
 
 
 def range_sort(args) -> Dict[str, Any]:
@@ -5218,7 +5364,8 @@ def build_cli():
     common(p, write=True)
     p.add_argument("--action", required=True,
                    choices=["autofit", "width", "height", "merge", "unmerge", "freeze", "unfreeze",
-                            "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort", "values"],
+                            "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort", "values",
+                            "filter", "unfilter"],
                    help="values: 수식을 지금 값으로 바꿈 (--dry-run으로 먼저 확인)")
     p.add_argument("--range", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
     p.add_argument("--dest", help="copy/move 목적지 (예: B2, 'Sheet2'!A1)")
@@ -5229,6 +5376,7 @@ def build_cli():
     p.add_argument("--weight", choices=list(XL_WEIGHT) + ["none"], default="thin", help="border 굵기")
     p.add_argument("--box", action="store_true", help="border: 외곽선만")
     p.add_argument("--by", help="sort 기준 열: 머리글 이름 또는 열 문자, 여러 개는 쉼표 (예: \"부서,금액\", 64개까지)")
+    p.add_argument("--where", help="filter 조건: 열마다 하나를 ;로 (그리고), 같은 열 두 값은 | (또는). 예: \"부서 = 영업; 금액 >= 100\"")
     p.add_argument("--desc", nargs="?", const="*",
                    help="sort 내림차순: 값 없이 쓰면 모든 기준, 기준 이름을 주면 그것만 (예: --desc \"금액\")")
     p.add_argument("--header", choices=["auto", "yes", "no"], default="auto",
