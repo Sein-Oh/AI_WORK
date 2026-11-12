@@ -45,10 +45,12 @@ C:\AIKIT\
   프로젝트 열기로 `C:\AIKIT`을 고릅니다. 이 폴더의 `AGENTS.md`는 전역 지침이면서 프로젝트 지침 자리이기도 해서, 두 번 들어가는지 집 PC에서
   확인합니다 (HANDOFF 3-17). 프로젝트별 지침·스킬이 필요한 일은 따로 만든 폴더(예: `D:\프로젝트A`)를 프로젝트로 엽니다.
 
-**ripgrep(rg.exe)이 필요합니다.** OpenCode는 스킬을 불러올 때 ripgrep을 쓰고, 없으면 인터넷에서 받으려 합니다.
-폐쇄망에서는 받지 못해 스킬 불러오기가 `ripgrep execution failed`로 실패합니다(2026-10-29 실기: 대화 6개 모두).
-ripgrep Windows용(`ripgrep-<버전>-x86_64-pc-windows-msvc.zip`)을 반입해 `rg.exe`를 PATH에 있는 폴더(예: `C:\AIKIT\python`)에 두고,
-PowerShell에서 `rg --version`이 나오는지 확인한 뒤 OpenCode를 다시 시작합니다. 그 전까지는 전역 AGENTS.md 3장 3번대로 SKILL.md를 직접 읽게 됩니다.
+**ripgrep(rg.exe)은 배포하지 않습니다** (2026-11-12 사용자 결정, 집 PC에서 rg를 치우고 인터넷을 막은 채 확인).
+OpenCode 2.2.5는 rg 없이 스킬을 불러옵니다(`scripts\` 폴더가 있는 사용자 스킬 포함). rg가 필요한 것은 OpenCode의 파일 찾기 도구
+grep·glob과 Web UI의 `@` 파일 자동 완성뿐이고, rg가 없으면 인터넷에서 받으려다 `ripgrep execution failed`로 실패합니다.
+그래서 `opencode.json`의 `"permission"`에서 `"grep": "deny"`, `"glob": "deny"`로 두 도구를 꺼 둡니다. 모델은 처음부터 셸 명령
+(`Get-ChildItem`, `Select-String`)으로 파일을 찾습니다. Web UI에서는 `@` 대신 파일 경로를 직접 적습니다.
+(OpenCode 1.x는 스킬 불러오기에도 rg가 필요했습니다. 2026-10-29 실기: 대화 6개 모두 실패.)
 
 **설정에서 확인할 것** (`setup.py`가 `opencode.json`과 `opencode.jsonc`를 합쳐 보고 WARN으로 알림, 고치지는 않음).
 `"shell"`, `"permission"`, `"autoupdate"`, `"skills"`는 배포 파일 `opencode.json`에 이미 있으니 `opencode.jsonc`에는 적지 않습니다

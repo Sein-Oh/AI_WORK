@@ -13,7 +13,7 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
 2. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
    OpenCode 백그라운드 서비스를 끔 (서비스는 처음 뜰 때의 환경 변수·PATH로 계속 돌아, 끄지 않으면 재부팅 전까지 옛 설정을 씀).
-3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep),
+3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep, 없어도 됨),
    opencode debug paths의 config가 C:\AIKIT인지. opencode.json + opencode.jsonc를 합친 설정의 "shell", "instructions",
    permission, "enabled_providers", "autoupdate"를 WARN/INFO로 알림.
 
@@ -413,7 +413,9 @@ def step_verify(rep):
     if rg:
         rep.line("OK", f"rg(ripgrep): {rg}")
     else:
-        rep.line("WARN", "rg(ripgrep)가 없습니다. OpenCode가 스킬을 못 불러올 수 있습니다: rg.exe를 C:\\AIKIT\\python에 두세요 (docs/opencode/README.md 1장)")
+        # rg.exe는 배포하지 않음 (2026-11-12 사용자 결정). OpenCode 2.2.5는 rg 없이 스킬을 불러오고, 파일 찾기 도구(grep, glob)는
+        # opencode.json에서 꺼 둠. rg가 필요한 것은 Web UI의 @ 파일 자동 완성뿐 (집 PC 확인).
+        rep.line("INFO", "rg(ripgrep) 없음: 정상입니다 (배포에 넣지 않음). 스킬과 도구는 그대로 되고, Web UI의 @ 파일 자동 완성만 안 됩니다")
     if os.name == "nt" and os.path.normcase(HERE.rstrip("\\")) != os.path.normcase("C:\\AIKIT"):
         rep.line("WARN", f"이 폴더가 C:\\AIKIT가 아닙니다 ({HERE}). 스킬과 전역 지침의 명령은 C:\\AIKIT 기준입니다")
 
@@ -549,6 +551,11 @@ def step_opencode_providers(rep, config_dir):
     if web:
         rep.line("INFO", "설정에서 웹 도구(" + ", ".join(web) + ")를 막지 않았습니다. 폐쇄망에서는 모델이 인터넷 검색을 시도하다 시간만 쓰니 "
                          "opencode.json의 \"permission\"에 " + ", ".join(f'"{k}": "deny"' for k in web) + " 를 넣는 것을 권합니다")
+    find = [k for k in ("grep", "glob") if not (perm == "deny" or (isinstance(perm, dict) and perm.get(k) == "deny"))]
+    if find:
+        rep.line("INFO", "설정에서 파일 찾기 도구(" + ", ".join(find) + ")를 막지 않았습니다. rg.exe 없이는 'ripgrep execution failed'로 실패하니 "
+                         "opencode.json의 \"permission\"에 " + ", ".join(f'"{k}": "deny"' for k in find) + " 를 넣는 것을 권합니다 "
+                         "(막으면 모델이 셸 명령으로 찾음)")
     if cfg.get("autoupdate") is not False:
         rep.line("INFO", "설정에 \"autoupdate\": false가 없습니다. 폐쇄망에서는 업데이트를 받을 수 없으니 넣어 두면 확인을 시도하지 않습니다")
 

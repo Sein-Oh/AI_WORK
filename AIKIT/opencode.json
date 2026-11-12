@@ -5,6 +5,8 @@
   "permission": {
     "external_directory": "allow",
     "webfetch": "deny",
-    "websearch": "deny"
+    "websearch": "deny",
+    "grep": "deny",
+    "glob": "deny"
   }
 }
