@@ -503,10 +503,13 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
   L 그룹만 다시 돌려 PASS 14, ENV-SKIP 1.
 - 결과 파일에 Office 사용자 이름이 남음 -> 고침: 워드 메모 지우기·답글의 preview 문장(`메모 2(<이름>: ...)`)은 `author` 키가 아니라 가려지지 않았음.
   `run_all_tests.py`·`run_simplify_check.py`의 `mask_private`가 이 모양도 가림 (회사 PC는 실명일 수 있음). 테스트 추가.
-- 남은 일: office 실기가 끝난 뒤 A.xlsx를 연 Excel이 하나 남고 "Excel을 종료할 수 없습니다" 창이 뜸. 회사 PC에서도 같음(사용자 확인).
-  L 그룹만 돌려도 남음. 남은 프로세스의 명령줄이 `EXCEL.EXE "...\work\office\A.xlsx"`(파일 연결로 연 Excel)이고, 러너의 종료 정리
-  (`close_test_documents`, 정리 기록 `errors_*.txt`의 "종료 정리")는 COM으로 띄운 Excel(다른 pid)만 닫음. 결과에는 영향 없음 (손으로 닫음).
-  러너가 A.xlsx를 어디서 파일 연결로 여는지 찾아, 끝에 그 Excel도 닫게 고칠 것 (Windows 11에는 `wmic`가 없어 창 조사는 `Get-CimInstance`나 ctypes로).
+- 고침: office 실기가 끝난 뒤 A.xlsx를 파일 연결로 연 Excel이 숨은 채 남고 "Microsoft Excel을(를) 종료할 수 없습니다." 창이 뜸 (회사 PC에서도 같음, 사용자 확인).
+  조사: 종료 정리는 그 Excel(같은 pid)의 A.xlsx를 닫고 Quit도 보냈지만 끝나지 않음. 러너·정리 스크립트의 COM 참조는 0개, Word·PowerPoint도 끝난 뒤,
+  클립보드를 비워도, Quit을 다시 보내도 남음(Workbooks 0, 제한된 보기 창 0, 원인 미상). 제목 있는 숨은 XLMAIN('Excel')에 WM_CLOSE는 아무 일 없고,
+  **제목이 빈 숨은 XLMAIN에 WM_CLOSE를 보내면 그 창이 뜸**. 파일 연결로 연 Excel만 따로 열고 닫으면(실기 단계 없이) 정상 종료됨.
+  러너 수정: 창을 닫기 전에 COM을 모두 놓고, 제목이 빈 창은 닫지 않고, Quit·창 닫기 뒤 10초 안에 끝나지 않은 프로세스는 문서가 없고 이번 실행이
+  만든 것만 끝냄 (정리 기록에 "프로세스를 끝냄"). 실기 L 그룹(PASS 14, ENV-SKIP 1)·A 그룹(PASS 5) 뒤 Excel이 남지 않고 창도 뜨지 않음.
+  회사 PC에서 다음 실기 때 정리 기록과 남은 Excel이 없는지 볼 것.
 - 눈 확인 (실기테스트.md 4장, 집 PC가 할 수 있는 1·3~8번, 2026-11-12): **모두 통과.**
   1 성능예측표 범위 밖 표시(사용자 확인), 3 워드 `.md` 쓰기 가로줄·굵게(사용자 확인), 4 `read --formulas` C7 1500·`=SUM(C2:C6)`,
   5 `--where` 날짜 조건 `count` 2·`row_numbers` [1, 4, 6](첫 값은 머리글 행, 안내의 기대값 문구를 고침), 6 정렬·7 행 넣기(합계 `=SUM(C2:C8)` 1500, 사용자 확인),

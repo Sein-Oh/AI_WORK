@@ -14,6 +14,10 @@ TEST_DOCS = {"excel": "A.xlsx", "word": "A.docx", "ppt": "A.pptx"}
 # 문서가 없는 Office 창의 제목 (Office 16)
 EMPTY_TITLES = ("", "Excel", "PowerPoint")
 
+# 제목이 빈 숨은 XLMAIN에 WM_CLOSE를 보내면 Excel이 "Microsoft Excel을(를) 종료할 수 없습니다." 창을 띄우고 남습니다
+# (집 PC·회사 PC 실기 2026-11-12). 이런 창은 닫지 않고, 프로세스가 남으면 정리 스크립트가 프로세스를 끝냅니다.
+UNTITLED_SKIP = "제목 없는 창 (닫으면 'Excel을 종료할 수 없습니다' 창이 뜸, 남으면 프로세스를 끝냄)"
+
 DISP_E_BADINDEX = 0x8002000B          # Workbooks("A.xlsx") 같은 이름 조회 실패 (문서가 닫힘)
 MK_E_UNAVAILABLE = 0x800401E3         # GetActiveObject 실패 (그 Office 앱이 아예 실행 중이 아님)
 MISSING_CODES = (DISP_E_BADINDEX, MK_E_UNAVAILABLE)
@@ -109,6 +113,7 @@ def may_end_process(pid, protected, allowed_pids=None, run_start=None, started=N
 def select_close_targets(windows, protected, allowed_pids=None, run_start=None, starts=None):
     """WM_CLOSE를 보낼 창을 고릅니다. windows: [{hwnd, pid, cls, title, visible}].
     후보는 숨은 창이거나 제목이 빈 창(문서 없음)뿐이고, 프로세스 단위로 may_end_process를 통과해야 합니다.
+    제목이 아예 없는 창('')은 보내지 않습니다 (UNTITLED_SKIP).
     반환: (보낼 창 목록, [(건너뛴 후보 창, 이유)])"""
     starts = starts or {}
     targets, skipped = [], []
@@ -117,8 +122,24 @@ def select_close_targets(windows, protected, allowed_pids=None, run_start=None, 
         if w.get("visible") and title not in EMPTY_TITLES:
             continue                                  # 문서를 보여 주는 창은 후보가 아님
         ok, why = may_end_process(w.get("pid"), protected, allowed_pids, run_start, starts.get(w.get("pid")))
+        if ok and not title:
+            ok, why = False, UNTITLED_SKIP
         (targets.append(w) if ok else skipped.append((w, why)))
     return targets, skipped
+
+
+def end_leftovers(pids, alive, protected, allowed_pids=None, run_start=None, starts=None):
+    """Quit과 창 닫기 뒤에도 남은 프로세스 중 끝낼 것. pids: Quit했거나 창을 닫은 PID, alive(pid): 아직 살아 있는지.
+    문서를 가진 프로세스(protected)는 끝내지 않고, may_end_process 규칙을 다시 따릅니다.
+    반환: (끝낼 PID 목록, [(남겨 둔 PID, 이유)])"""
+    starts = starts or {}
+    end, keep = [], []
+    for pid in sorted({p for p in pids if p is not None}):
+        if not alive(pid):
+            continue
+        ok, why = may_end_process(pid, protected, allowed_pids, run_start, starts.get(pid))
+        (end.append(pid) if ok else keep.append((pid, why)))
+    return end, keep
 
 
 def may_quit_app(pid, doc_count, protected, allowed_pids=None, run_start=None, started=None):
