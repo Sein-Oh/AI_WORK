@@ -39,7 +39,7 @@ metadata:
 | 저장 / 내보내기 | `python "C:\AIKIT\office-cli\excel.py" save` (다른 이름 `--save "<전체경로.xlsx>"`) / 사본 `python "C:\AIKIT\office-cli\excel.py" export --save "<결과.csv|.xlsx|.pdf>"` (CSV 인코딩 `--encoding cp949`) |
 | 정보 / 배치 확인 | `python "C:\AIKIT\office-cli\excel.py" info [--detail]` (`layout_warnings`가 있으면 `warnings`를 알림. 열린 엑셀에서 사용자가 선택한(마지막으로 클릭한) 칸은 `--target` 없이 실행한 결과의 `selection`, 시트는 `active_sheet`) |
 | 차트·범위를 워드/PPT로 | `python "C:\AIKIT\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` (범위는 `--range A1:D10` 대신) |
-| 되돌리기 / 창 | `python "C:\AIKIT\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\AIKIT\office-cli\office.py" windows` / `python "C:\AIKIT\office-cli\office.py" focus --app excel` |
+| 되돌리기 / 창 | `python "C:\AIKIT\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\AIKIT\office-cli\office.py" windows` / `python "C:\AIKIT\office-cli\office.py" focus --app excel` / 파일을 화면에 열기 `python "C:\AIKIT\office-cli\office.py" open --file "<파일 전체 경로>"` |
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:

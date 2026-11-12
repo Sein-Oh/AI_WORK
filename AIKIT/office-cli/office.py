@@ -116,6 +116,61 @@ def cmd_focus(args) -> Dict[str, Any]:
     return rt.ok(TOOL, "focus", msg, app=off.APP_LABEL[kind], name=hit["name"], brought_to_front=front)
 
 
+def _kind_of_file(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    for kind, exts in off.EXTENSIONS.items():
+        if ext in exts:
+            return kind
+    raise rt.InputError(f"Office 파일이 아닙니다: {os.path.basename(path)} (엑셀 {', '.join(off.EXTENSIONS['excel'])}, "
+                        f"워드 {', '.join(off.EXTENSIONS['word'])}, PPT {', '.join(off.EXTENSIONS['ppt'])}).")
+
+
+def cmd_open(args) -> Dict[str, Any]:
+    """파일을 사용자 화면의 Office로 열고 맨 앞으로 (1.6.7 기반 기능: 만든 결과 파일을 바로 보여 주기). 이미 열려 있으면 그 창을 앞으로.
+    문서를 바꾸지 않음. 도구의 다른 명령은 닫힌 파일을 화면 없이 열어 작업하므로, 사용자가 보게 할 때만 씀."""
+    path = rt.resolve_input_path(args.file, "열 파일")
+    kind = _kind_of_file(path)
+    label = off.APP_LABEL[kind]
+    for d in off.list_open(kind):
+        if os.path.normcase(os.path.abspath(str(d.get("path") or ""))) == os.path.normcase(path):
+            focused = cmd_focus(type("A", (), {"app": kind, "name": d["name"]})())
+            return rt.ok(TOOL, "open", f"{label} '{d['name']}'은(는) 이미 열려 있어 그 창을 앞으로 가져왔습니다",
+                         "VERIFIED: 이미 열린 문서입니다.", verified=True, app=label, name=d["name"], path=path, already_open=True,
+                         brought_to_front=focused.get("brought_to_front", False))
+    off.require_com()
+    off.init_com()
+    try:
+        app = off.win32com.client.GetActiveObject(off.PROG_ID[kind])
+    except Exception:
+        app = off.win32com.client.Dispatch(off.PROG_ID[kind])
+    try:
+        app.Visible = True
+    except Exception:
+        pass
+    try:
+        if kind == "excel":
+            doc = app.Workbooks.Open(path)
+            hwnd = int(app.Hwnd)
+        elif kind == "word":
+            doc = app.Documents.Open(path)
+            doc.Activate()
+            hwnd = int(doc.ActiveWindow.Hwnd)
+        else:
+            doc = app.Presentations.Open(path, WithWindow=True)
+            hwnd = int(app.HWND)
+    except Exception as e:
+        raise rt.InputError(f"{label}에서 '{os.path.basename(path)}'을(를) 열지 못했습니다 ({type(e).__name__}: {e}). "
+                            "암호가 걸렸거나 다른 프로그램이 잡고 있으면 사용자가 직접 여세요.") from None
+    opened = str(getattr(doc, "FullName", ""))
+    name = str(getattr(doc, "Name", os.path.basename(path)))
+    front = bring_to_front(hwnd) if hwnd else False
+    preview = f"{label}에서 '{name}'을(를) 열었습니다" + ("" if front else " (맨 앞 전환은 Windows가 막았을 수 있음)")
+    if os.path.normcase(opened) != os.path.normcase(path):
+        return rt.ok_unverified(TOOL, "open", preview, [f"열린 문서 경로가 다름: {opened}"], app=label, name=name, path=path)
+    return rt.ok(TOOL, "open", preview, "VERIFIED: 열린 문서의 경로를 확인했습니다.", verified=True, app=label, name=name, path=path,
+                 already_open=False, brought_to_front=front)
+
+
 # ==============================================================================
 # 2. 차트 그림 만들기 (export / redraw / relay)
 # ==============================================================================
@@ -1237,6 +1292,9 @@ def build_cli():
     p.add_argument("--app", required=True, help="excel, word, ppt")
     p.add_argument("--name", help="문서 이름 (생략 시 그 앱의 활성 문서)")
 
+    p = sub.add_parser("open", help="파일을 사용자 화면의 Office로 열기 (이미 열려 있으면 그 창을 앞으로)")
+    p.add_argument("--file", required=True, help="열 파일 전체 경로 (.xlsx, .docx, .pptx 등)")
+
     p = sub.add_parser("transfer", help="앱 간 전달")
     p.add_argument("--from-app", dest="source", help="보내는 앱: excel, word, ppt")
     p.add_argument("--from-target", default="active", help="보내는 문서 (active, 열린 문서 이름, 경로)")
@@ -1264,7 +1322,7 @@ def build_cli():
     return parser
 
 
-HANDLERS = {"windows": cmd_windows, "focus": cmd_focus, "transfer": cmd_transfer, "undo": cmd_undo}
+HANDLERS = {"windows": cmd_windows, "focus": cmd_focus, "transfer": cmd_transfer, "undo": cmd_undo, "open": cmd_open}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

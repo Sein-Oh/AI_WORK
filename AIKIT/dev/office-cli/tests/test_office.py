@@ -2351,3 +2351,34 @@ def test_transfer_between_word_and_ppt_recommends_the_read_save_command(capsys):
     assert argv[:2] == ["read", "--save"] and argv[argv.index("--target") + 1] == "주간보고.docx", argv
     code, out = run_main(office, capsys, "transfer", "--from-app", "ppt", "--to-app", "word")
     assert code == 1 and recommended_argv(out["message"], "ppt") == ["read", "--save"], out
+
+
+def test_open_shows_file_in_office_or_focuses_open_one(monkeypatch, capsys, tmp_path):
+    """1.6.7 기반 기능: 만든 결과 파일을 사용자 화면에 열기. 확장자로 앱을 고름, 이미 열려 있으면 그 창을 앞으로,
+    Office 파일이 아니면 거절, 없는 파일은 [후보]/오류."""
+    path = tmp_path / "결과.xlsx"
+    path.write_bytes(b"x")
+    opened = []
+
+    class _Books:
+        def Open(self, p):
+            opened.append(p)
+            return types.SimpleNamespace(FullName=p, Name=os.path.basename(p))
+
+    app = types.SimpleNamespace(Workbooks=_Books(), Hwnd=0, Visible=False)
+    fake, calls = make_win32com(dispatch=app)
+    monkeypatch.setattr(off, "win32com", fake)
+    monkeypatch.setattr(off, "pythoncom", None)
+    monkeypatch.setattr(off, "list_open", lambda kind: [])
+    code, out = run_office(capsys, "open", "--file", str(path))
+    assert code == 0 and out["verified"] is True and opened == [str(path)] and app.Visible is True, out
+    assert ("Dispatch", "Excel.Application") in calls and out["already_open"] is False
+    doc = types.SimpleNamespace(Name="결과.xlsx", FullName=str(path), Activate=lambda: None)
+    monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "결과.xlsx", "path": str(path), "app": app, "doc": doc}] if kind == "excel" else [])
+    monkeypatch.setattr(off, "match_open", lambda kind, name, docs, option=None: docs[0])
+    code, out = run_office(capsys, "open", "--file", str(path))
+    assert code == 0 and out["already_open"] is True and opened == [str(path)], out          # 다시 열지 않음
+    txt = tmp_path / "메모.txt"
+    txt.write_text("x", encoding="utf-8")
+    code, out = run_office(capsys, "open", "--file", str(txt))
+    assert code == 1 and "Office 파일이 아닙니다" in out["message"], out

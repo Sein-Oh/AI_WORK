@@ -33,7 +33,7 @@ metadata:
 | 워드 내용을 PPT로 | `python "C:\AIKIT\office-cli\word.py" read --target "<문서.docx>" --save` 후 결과의 `output_file`로 `python "C:\AIKIT\office-cli\ppt.py" write --target "<발표.pptx>" --slide new --title "<제목>" --file "<output_file>"` (transfer는 워드<->PPT를 하지 않는다) |
 | PPT 내용을 워드로 | `python "C:\AIKIT\office-cli\ppt.py" read --target "<발표.pptx>" --save` 후 결과의 `output_file`로 `python "C:\AIKIT\office-cli\word.py" write --target "<문서.docx>" --file "<output_file>"` (transfer는 워드<->PPT를 하지 않는다) |
 | PPT 내용을 엑셀로 | `python "C:\AIKIT\office-cli\office.py" transfer --from-app ppt --what text --to-app excel` (표는 `--what table --table 1`) |
-| 되돌리기 / 창 | `python "C:\AIKIT\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\AIKIT\office-cli\office.py" focus --app ppt` |
+| 되돌리기 / 창 | `python "C:\AIKIT\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\AIKIT\office-cli\office.py" focus --app ppt` / 파일을 화면에 열기 `python "C:\AIKIT\office-cli\office.py" open --file "<파일 전체 경로>"` |
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:

@@ -4,7 +4,7 @@ Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명�
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
 - 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`excel-kit`](../../skills/excel-kit/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
-  [`word-kit`](../../skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus), [`ppt-kit`](../../skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
+  [`word-kit`](../../skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus·open), [`ppt-kit`](../../skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
   [`outlook-kit`](../../skills/outlook-kit/SKILL.md) (outlook.py),
   [`search-kit`](../../skills/search-kit/SKILL.md) (reader.py, excel.py comment),
   [`stats-kit`](../../skills/stats-kit/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
@@ -22,7 +22,7 @@ AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli)
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
 ├── outlook.py   메일   list / search / read / current / thread / calendar / folders / contacts / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / outline / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
-├── office.py    공통   windows / focus / transfer / undo
+├── office.py    공통   windows / focus / open / transfer / undo
 ├── _runtime.py  공통 런타임 (응답 계약, 인자 파서, 경로, 입출력, JIT 복구, 전체 명령 만들기)
 ├── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
 ├── _markdown.py      마크다운 블록 해석 (word.py·ppt.py 넣기, excel.py 표 파일)
@@ -737,6 +737,7 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
 ### office.py
 - `windows`: 열린 Office 문서 목록과 실행 중인 Office 버전, PDF 내보내기 가능 여부(`office`). PDF 기능이 없는 Office에서는 `export --save *.pdf`가 시도 없이 바로 안내합니다
 - `focus --app excel|word|ppt [--name]`: 창을 앞으로 가져옵니다. 최대화 상태는 유지합니다.
+- `open --file "<전체 경로>"`(1.6.7): 파일을 사용자 화면의 Office로 열고 맨 앞으로(확장자로 앱을 고름, 이미 열려 있으면 그 창을 앞으로, `already_open`). 문서를 바꾸지 않고, 열린 문서 경로를 확인(VERIFIED). 다른 명령은 닫힌 파일을 화면 없이 열어 작업하므로, 만든 결과를 사용자가 보게 할 때만 씁니다.
 - `transfer`: 아래 4절 참고
 - `undo [--app] [--list] [--pick N] [--overwrite]`: `--pick`은 1 이상(0 이하는 STOP_RETRY).
   `--list`의 `count`·`shown`은 되돌릴 수 있는 지점(항목에 `command`가 있음)만 세고, 되돌릴 수 없는 작업 수는 `barriers`. 되돌릴 지점이 0개면 `VERIFIED: 0건.`
