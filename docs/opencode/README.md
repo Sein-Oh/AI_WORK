@@ -28,7 +28,7 @@ C:\AIKIT\
 | 스킬 (기본 12개, 사용자가 만든 것) | `C:\AIKIT\skills\<이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`. 불러오면 OpenCode가 그 폴더 위치를 모델에 알려 줌) |
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐, `skill.py save --project`) |
 | 셸·권한·웹 도구 막기·업데이트 끄기 | `C:\AIKIT\opencode.json` (배포 파일) |
-| 사내 LLM 설정 (provider, model, `enabled_providers`) | `C:\AIKIT\opencode.jsonc` (사용자가 넣음) |
+| 사내 LLM 설정 (provider, model, 모델 목록 숨기기 `disabled_providers`) | `C:\AIKIT\opencode.jsonc` (사용자가 넣음) |
 
 - 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, `guide`(사용 가이드), 기본 스킬 12개 폴더(`skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
   `setup.py`·`setup.bat`·`web.bat`을 바꿉니다. `skills` 폴더를 통째로 지우지 않습니다 (사용자 스킬이 함께 지워짐).
@@ -58,10 +58,10 @@ grep·glob과 Web UI의 `@` 파일 자동 완성뿐이고, rg가 없으면 인�
 - `"shell": "powershell"` (`opencode.json`): `"cmd"`면 스킬·전역 지침의 PowerShell 명령(인코딩 줄, 작은따옴표)이 맞지 않습니다.
 - `"instructions"`: 비워 둡니다. 전역 지침 `AGENTS.md`는 설정 폴더에서 따로 읽히고, 여기에 옛 지침을 넣으면 지금 없는 명령을 씁니다.
 - `"permission": {"external_directory": "allow"}` (`opencode.json`): opencode 1.19.5 `run`은 작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈췄습니다.
-- `"enabled_providers"`: 폐쇄망에서 쓸 수 없는 기본 모델(opencode Zen 무료 모델, models.dev 목록의 인터넷 모델)이 `opencode models`와
-  모델 선택에 나오지 않게, 사내 LLM provider 이름만 적습니다 (`"provider"` 블록의 이름, `"model"`의 `/` 앞). 적은 provider만 남고 나머지는 모두 숨겨집니다.
-  특정 provider만 숨기려면 `"disabled_providers": ["opencode"]`(둘 다 있으면 숨기기가 이김). opencode 2.2.7 소스로 확인(`config/normalize.ts`: 모두 막고 적은 것만 허용).
-  이름이 틀리면 사내 LLM도 숨겨지므로 `setup.py`가 `"provider"`·`"model"`과 맞는지 함께 봅니다.
+- 모델 목록 (PC마다 사용자가 정함, setup은 없어도 알리지 않음): 폐쇄망에서 쓸 수 없는 기본 모델(opencode Zen 무료 모델, models.dev 목록의 인터넷 모델)을
+  `opencode models`와 모델 선택에서 숨기려면 `"disabled_providers": ["opencode"]`(적은 것만 숨김) 또는 `"enabled_providers": ["<사내 provider>"]`
+  (적은 것만 남기고 모두 숨김, 둘 다 있으면 숨기기가 이김). opencode 2.2.7 소스로 확인(`config/normalize.ts`). 회사 PC는 `disabled_providers`로
+  opencode를 숨기고 집 PC는 보이게 둠 (2026-11-13). `enabled_providers`를 적으면 이름이 틀릴 때 사내 LLM도 숨겨지므로 `setup.py`가 `"provider"`·`"model"`과 맞는지 봅니다.
 - `"autoupdate": false` (`opencode.json`): 폐쇄망에서는 업데이트를 받을 수 없으니 확인을 시도하지 않게 합니다. 원격 모델 목록 받기도 끄려면 환경 변수
   `OPENCODE_DISABLE_MODELS_FETCH=1`(설정 파일 키는 없음, `enabled_providers`만으로도 목록에는 나오지 않음).
 - `"permission"`의 `"webfetch": "deny"`, `"websearch": "deny"` (`opencode.json`): 폐쇄망에서 모델이 인터넷 검색·웹 페이지 열기를 시도하지 못하게 막습니다
@@ -78,7 +78,7 @@ grep·glob과 Web UI의 `@` 파일 자동 완성뿐이고, rg가 없으면 인�
   ```jsonc
   {
     "model": "corp/gemma",
-    "enabled_providers": ["corp"],
+    "disabled_providers": ["opencode"],
     "provider": {
       "corp": {
         "npm": "@ai-sdk/openai-compatible",

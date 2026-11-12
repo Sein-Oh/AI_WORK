@@ -15,7 +15,7 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
    OpenCode 백그라운드 서비스를 끔 (서비스는 처음 뜰 때의 환경 변수·PATH로 계속 돌아, 끄지 않으면 재부팅 전까지 옛 설정을 씀).
 3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep, 없어도 됨),
    opencode debug paths의 config가 C:\AIKIT인지. opencode.json + opencode.jsonc를 합친 설정의 "shell", "instructions",
-   permission, "enabled_providers", 폐쇄망 잠금(OFFLINE_DENY, OFFLINE_SET)을 WARN/INFO로 알림.
+   permission, "enabled_providers"(적었을 때만 이름 확인), 폐쇄망 잠금(OFFLINE_DENY, OFFLINE_SET)을 WARN/INFO로 알림.
 
 개발용: --test-skill <SKILL.md>  (실기 테스트 보조 스킬을 C:\AIKIT\skills에 둠, 예: C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md)
 이 스크립트는 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다. exit 0 = 모두 OK, 1 = 실패(또는 --check에서 다름) 있음.
@@ -502,7 +502,7 @@ def step_opencode_config(rep, config_dir):
         rep.line("WARN", f"opencode.jsonc가 없습니다. 사내 LLM 주소가 든 opencode.jsonc를 {config_dir}\\에 넣고 다시 실행하세요")
     if overlap:
         rep.line("WARN", f"opencode.json과 opencode.jsonc에 같은 키가 있습니다 ({', '.join(sorted(set(overlap)))}). 이 키는 opencode.json(배포 파일)에만 두고, "
-                         "opencode.jsonc에는 provider, model, enabled_providers만 두세요")
+                         "opencode.jsonc에는 provider, model과 모델 목록 설정(enabled_providers 또는 disabled_providers)만 두세요")
     shell = cfg.get("shell")
     if shell is not None and not re.search(r"(?i)powershell|pwsh", json.dumps(shell)):
         rep.line("WARN", f"설정의 \"shell\"이 PowerShell이 아닙니다 ({json.dumps(shell, ensure_ascii=False)[:80]}). "
@@ -525,8 +525,9 @@ def step_opencode_config(rep, config_dir):
 
 
 def step_opencode_providers(rep, config_dir):
-    """모델 목록 제한: 폐쇄망에서 쓸 수 없는 기본 모델(opencode Zen, models.dev 목록의 인터넷 모델)이
-    `opencode models`와 모델 선택에 나오지 않게 opencode.jsonc의 "enabled_providers"(허용 목록, 나머지는 모두 숨김)를 권함.
+    """모델 목록 설정 확인: "enabled_providers"를 적었을 때만 이름이 provider·model과 맞는지 봄 (틀리면 사내 LLM도 숨겨짐).
+    없으면 알리지 않음: 기본 모델을 숨기는 방법(enabled_providers, disabled_providers)과 숨길지는 PC마다 사용자가 정함
+    (사용자 결정 2026-11-13: 회사 PC는 disabled_providers로 opencode만 숨기고, 집 PC는 보이게 둠).
     opencode 2.x 소스 기준: enabled_providers = 모두 막고 적은 것만 허용, disabled_providers = 적은 것만 막음 (막기가 이김).
     WARN/INFO만, 고치지 않음 (opencode.jsonc는 사용자가 넣는 파일)."""
     cfg, _overlap, _bad, has_jsonc = load_config(config_dir)
@@ -535,14 +536,8 @@ def step_opencode_providers(rep, config_dir):
     own = [str(k) for k in (cfg.get("provider") or {})] if isinstance(cfg.get("provider"), dict) else []
     model = cfg.get("model") if isinstance(cfg.get("model"), str) else ""
     used = model.split("/", 1)[0] if "/" in model else ""
-    ids = own or ([used] if used else [])
     enabled = cfg.get("enabled_providers")
-    if enabled is None:
-        line = json.dumps({"enabled_providers": ids or ["<사내 LLM provider 이름>"]}, ensure_ascii=False)[1:-1]
-        rep.line("WARN", "opencode.jsonc에 \"enabled_providers\"가 없어 폐쇄망에서 쓸 수 없는 기본 모델(opencode 등)도 "
-                         f"`opencode models`와 모델 선택에 나옵니다. 사내 LLM만 보이게 하려면 opencode.jsonc에 {line} 를 넣으세요 "
-                         "(적은 provider만 남고 나머지는 숨김)")
-    elif isinstance(enabled, list):
+    if isinstance(enabled, list):
         names = [str(x) for x in enabled]
         if not names:
             rep.line("WARN", "opencode.jsonc의 \"enabled_providers\"가 비어 있어 모든 모델이 숨겨집니다. 사내 LLM provider 이름을 넣으세요")

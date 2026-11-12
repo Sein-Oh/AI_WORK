@@ -18,6 +18,10 @@
 
 ## [1.6.7] - 2026-11-12
 
+### setup: enabled_providers가 없다는 WARN 없앰 (사용자 결정 2026-11-13)
+- 기본 모델을 숨길지와 방법은 PC마다 사용자가 정함 (회사 PC는 `disabled_providers: ["opencode"]`, 집 PC는 보이게). setup은 `enabled_providers`가
+  없으면 알리지 않고, 적었을 때만 이름이 provider·model과 맞는지 봄. `docs/opencode/README.md` 예시도 `disabled_providers`로.
+
 ### 시험 도구: BOM 비교는 사내 LLM이 만드는 가이드로 (사용자 결정 2026-11-12)
 - 회사 BOM은 볼 수 없으므로 맞대기 스크립트와 예시 스킬(`tools/bom-compare/`)을 저장소에서 뺌. 대신 `tools/BOM비교_스킬만들기_가이드.md`:
   사내 LLM이 우리 도구로 BOM 모양을 읽고(info, read, duplicates, `--where`), 기준을 사용자에게 정해 받고(공용 하위 조립체는 경로,

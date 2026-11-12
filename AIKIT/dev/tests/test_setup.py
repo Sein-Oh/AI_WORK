@@ -294,14 +294,17 @@ def test_opencode_config_warns_on_shell_instructions_and_permission(tmp_path, ca
     assert rep.warn == 1 and rep.fails == []                                       # 못 읽어도 설치를 실패로 보지 않음
 
 
-def test_opencode_providers_suggests_enabled_providers_line(tmp_path, capsys):
-    """폐쇄망에서 못 쓰는 기본 모델 숨기기: enabled_providers가 없으면 사내 provider 이름을 넣은 줄을 그대로 알려 줌."""
+def test_opencode_providers_checks_enabled_providers_only_when_given(tmp_path, capsys):
+    """모델 목록 설정은 PC마다 사용자가 정함 (2026-11-13: 회사 PC는 disabled_providers로 opencode만 숨기고 집 PC는 보이게).
+    enabled_providers가 없으면 알리지 않고, 적었을 때만 이름이 provider·model과 맞는지 봄."""
     cfg = tmp_path / "opencode.jsonc"
-    cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {"npm": "@ai-sdk/openai-compatible"}}}', encoding="utf-8")
-    rep = su.Report()
-    su.step_opencode_providers(rep, str(tmp_path))
-    out = capsys.readouterr().out
-    assert rep.warn == 1 and '"enabled_providers": ["corp"]' in out and '"autoupdate": false' in out, out
+    for text in ('{"model": "corp/gemma", "provider": {"corp": {"npm": "@ai-sdk/openai-compatible"}}}',
+                 '{"model": "corp/gemma", "provider": {"corp": {}}, "disabled_providers": ["opencode"]}'):
+        cfg.write_text(text, encoding="utf-8")
+        rep = su.Report()
+        su.step_opencode_providers(rep, str(tmp_path))
+        out = capsys.readouterr().out
+        assert rep.warn == 0 and "enabled_providers" not in out and '"autoupdate": false' in out, out
     cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {}}, "enabled_providers": ["corp"], "autoupdate": false}', encoding="utf-8")
     rep = su.Report()
     su.step_opencode_providers(rep, str(tmp_path))
