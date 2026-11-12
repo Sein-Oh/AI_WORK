@@ -33,6 +33,10 @@
 - bom-compare 0.2 (사용자 결정 2026-11-12): 같은 자리 = 상위 조립체 + Part Number (상위는 Level로 정함, 같은 부품이 여러 조립체에 쓰이는 것은 정상).
   `excel.py duplicates`는 상위 조립체를 모르므로 SKILL.md 2단계 중복 검사를 빼고 `compare.py`가 같은 자리 중복을 보고 `STOP_RETRY:`(자리와 엑셀 행).
   결과 표에 "상위 조립체" 열, 메모에 "<상위> 아래", preview는 "변경 N자리(M칸)". 순서 6단계 -> 5단계. 시험 `test_bom_compare`(새 파일).
+- 회사 BOM에 맞추는 가이드 `tools/BOM비교_회사데이터_가이드.md` (회사 PC OpenCode가 읽고 따라 함): 복사본으로만, 기준 상수와 SKILL.md 열 이름만 고침
+  (사용자 확인 뒤), 같은 판(0건)·값 2칸 바꾼 시험 판(2자리)·실제 두 판 순서로 시험, 막히면 회사 값 없이 보고. 집 PC에서 샘플로 명령을 그대로 실행해 확인.
+- `compare.py`: Level 점 표기(ERP 들여쓰기 BOM `.1`, `..2`)도 읽음 (회사 BOM에 맞출 때 코드를 고치지 않게). 못 읽으면 몇 번째 줄인지 알리고 멈춤.
+  시험 `test_dotted_level_gives_same_result`, `test_unreadable_level_stops_with_row`.
 
 ### 지침: 조합 스킬 만들기 (2026-11-12 사용자 결정)
 - 전역 지침 `AIKIT/AGENTS.md` 10장: 사용자가 기본 스킬을 이어 쓰는 자기 스킬을 만들 때의 규칙 (위치·8KB, 전체 명령 그대로, 결과 파일을 다음 `--file`로,

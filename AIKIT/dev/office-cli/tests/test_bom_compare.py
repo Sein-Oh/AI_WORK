@@ -65,6 +65,34 @@ def test_hierarchical_bom_matches_answer_by_parent_and_part_number(tmp_path, cap
     assert any("SA-03 아래" in m and "Qty: 4 -> 6" in m for m in memos.values()), memos
 
 
+def test_dotted_level_gives_same_result(tmp_path, capsys):
+    """ERP 들여쓰기 BOM의 점 표기 Level('.1', '..2')도 숫자 Level과 같은 결과 (회사 BOM에 맞출 때 코드를 고치지 않게)."""
+    import openpyxl
+    mod = _samples(tmp_path)
+    for name in ("BOM_A_Rev1.xlsx", "BOM_A_Rev2.xlsx"):
+        wb = openpyxl.load_workbook(tmp_path / name)
+        ws = wb.active
+        for row in ws.iter_rows(min_row=4, max_col=1):
+            if isinstance(row[0].value, int) and row[0].value > 0:
+                row[0].value = "." * row[0].value + str(row[0].value) if name.endswith("1.xlsx") else "." * row[0].value
+        wb.save(tmp_path / name)
+    code, out = _compare(tmp_path / "BOM_A_Rev1.xlsx", tmp_path / "BOM_A_Rev2.xlsx")
+    assert code == 0 and out["preview"] == "추가 4, 삭제 4, 변경 7자리(7칸)", out
+    capsys.readouterr()
+    assert mod.check(out["result_file"]) == 0, capsys.readouterr().out
+
+
+def test_unreadable_level_stops_with_row(tmp_path):
+    """Level을 못 읽으면 맞대지 않고 몇 번째 줄인지 알림."""
+    import openpyxl
+    _samples(tmp_path)
+    wb = openpyxl.load_workbook(tmp_path / "BOM_A_Rev2.xlsx")
+    wb.active["A6"] = "하위"
+    wb.save(tmp_path / "BOM_A_Rev2.xlsx")
+    code, out = _compare(tmp_path / "BOM_A_Rev1.xlsx", tmp_path / "BOM_A_Rev2.xlsx")
+    assert code == 1 and "6번째 줄" in out["message"] and "점 표기" in out["message"], out
+
+
 def test_same_part_twice_under_one_assembly_stops(tmp_path):
     """판단 기준 4: 같은 상위 조립체 아래 같은 Part Number가 두 번이면 맞대지 않고 자리와 엑셀 행을 알림."""
     _samples(tmp_path)

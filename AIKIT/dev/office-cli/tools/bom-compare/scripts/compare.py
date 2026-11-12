@@ -22,7 +22,7 @@ import re
 import sys
 
 # ---- 기준 (회사 BOM에 맞게 여기만 고친다) ------------------------------------------
-LEVEL = "Level"                    # 계층 열 (0 최상위, 1, 2 ...). 평면 BOM이면 None (상위 조립체 없이 품번만으로 맞댐)
+LEVEL = "Level"                    # 계층 열 (숫자 0, 1, 2 또는 점 표기 .1, ..2). 평면 BOM이면 None (상위 조립체 없이 품번만으로 맞댐)
 KEY = "Part Number"                # 부품을 가르는 열
 COMPARE = ["Description", "Spec", "Qty"]   # 비교할 열 (그 밖의 열: Unit, Remark 등은 보지 않음)
 NUMBER_COLS = {"Qty"}              # 숫자로 비교할 열 (1과 1.0은 같음)
@@ -69,6 +69,18 @@ def norm_key(v):
     return str(v).strip().upper()             # 공백·대소문자 무시, 앞자리 0은 그대로 (0102와 102는 다른 품번)
 
 
+def parse_level(v):
+    """Level 칸 -> 숫자. 숫자(0, 1, 2.0)와 점 표기(ERP 들여쓰기 BOM: '.1', '..2', '...')를 받는다. 못 읽으면 None."""
+    t = str(v).strip()
+    m = re.fullmatch(r"(\.+)\s*(\d*)", t)          # 점 표기를 먼저 ('.1'을 숫자 0.1로 읽지 않게)
+    if m:
+        return int(m.group(2)) if m.group(2) else len(m.group(1))
+    try:
+        return int(float(t))
+    except ValueError:
+        return None
+
+
 def same(col, a, b):
     a, b = str(a).strip(), str(b).strip()
     if col in NUMBER_COLS:
@@ -99,10 +111,10 @@ def load(path, label):
             continue
         level = 0
         if LEVEL:
-            try:
-                level = int(float(str(row[idx[LEVEL]]).strip()))
-            except ValueError:
-                fail(f"{label} {i + 1}번째 줄의 {LEVEL} 값 '{row[idx[LEVEL]]}'이(가) 숫자가 아닙니다. {LEVEL}은 0, 1, 2 같은 숫자여야 합니다.")
+            level = parse_level(row[idx[LEVEL]])
+            if level is None:
+                fail(f"{label} {i + 1}번째 줄의 {LEVEL} 값 '{row[idx[LEVEL]]}'을(를) 읽지 못했습니다. "
+                     f"{LEVEL}은 숫자(0, 1, 2) 또는 점 표기(.1, ..2)여야 합니다.")
             while stack and stack[-1][0] >= level:
                 stack.pop()
         parent = stack[-1][1] if stack else ""

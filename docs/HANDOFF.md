@@ -31,6 +31,8 @@
 
 ## 4. 남은 일
 - 집 PC BOM 비교 시험 (사용자 조합 스킬 bom-compare, 정답 아는 샘플): [`opencode/BOM비교_시험.md`](opencode/BOM비교_시험.md).
+- 회사 BOM에 맞추기 (회사 PC, 선택): 회사 PC OpenCode에 `AIKIT/dev/office-cli/tools/BOM비교_회사데이터_가이드.md`를 읽게 함 (첫 메시지는 그 문서 끝).
+  모델이 복사본으로 머리글을 읽고, 기준(열 이름)을 사용자 확인 뒤 고치고, 같은 판·값 2칸 바꾼 판·실제 두 판으로 시험해 회사 값 없이 보고.
 - 각 도구 `AIKIT/dev/<tool>/CHANGELOG.md` 하단 "남은 할 일".
 - 사용 가이드(`AIKIT/guide/`)에 1.6.7 기반 기능 사용 예 넣기.
 - 프로젝트 마무리 때 `docs/test_logs/` 등 로그 이력 정리 (저장소를 다시 만드는 방식).

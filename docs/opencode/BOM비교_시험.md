@@ -68,6 +68,9 @@ C:\AIKIT\dev\work\bom\BOM_A_Rev1.xlsx 와 BOM_A_Rev2_중복.xlsx 비교해줘.
   2. `SKILL.md` "판단 기준" 문장 (모델이 사용자에게 설명하는 근거)
 - 고친 스킬은 `C:\AIKIT\skills\bom-compare`에 다시 복사하고 OpenCode를 다시 시작한다. 스킬 하나 8KB 이하.
 
+회사 PC에서 회사 BOM으로 맞출 때는 회사 PC OpenCode에 `C:\AIKIT\dev\office-cli\tools\BOM비교_회사데이터_가이드.md`를 읽게 한다
+(복사본으로만 시험, 기준은 사용자 확인 뒤 고침, 정답을 아는 시험 판으로 먼저 확인, 회사 값 없이 보고).
+
 ## 5. 결과 남기기
 시험 A·B의 O/X와 이상한 점(명령, 결과 JSON의 `agent_directive`·`unverified`)을 `docs/test_logs/집PC_BOM비교_<날짜>/`에 메모로 남긴다.
 회사 BOM을 쓴 경우 파일 이름·품번은 옮기지 않는다 (AGENTS.md 작업 절차 4).
