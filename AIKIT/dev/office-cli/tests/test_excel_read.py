@@ -1567,3 +1567,26 @@ class _FakeNames:
 
     def __call__(self, i):
         return self.items[i - 1]
+
+
+def test_stats_and_duplicates_find_header_below_title(tmp_path, capsys):
+    """BOM 비교 시험 준비(2026-11-12) 회귀: 제목 행·빈 행 아래 머리글을 stats·duplicates가 찾지 못해 '품번' 열을 [후보]로 되묻거나
+    제목 행을 머리글로 보고 모든 열을 비교했음 (stats-kit은 '제목 행 아래의 머리글 행은 도구가 정함'). read --where와 같은 규칙으로 찾음."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "제품 A 부품표"
+    ws.append([])
+    ws.append(["번호", "품번", "수량"])
+    for row in ([1, "P-1", 2], [2, "P-2", 3], [3, "P-1", 4]):
+        ws.append(row)
+    p = str(tmp_path / "BOM.xlsx")
+    wb.save(p)
+    code, out = run_excel(capsys, "duplicates", "--target", p, "--columns", "품번")
+    assert code == 0 and out["header_row_found"] == 3 and [g["rows"] for g in out["groups"]] == [[4, 6]], out
+    code, out = run_excel(capsys, "duplicates", "--target", p)                     # 열을 안 줘도 제목 행을 건너뜀
+    assert code == 0 and out["header_row_found"] == 3 and out["data_rows"] == 3 and out["group_count"] == 0, out
+    code, out = run_excel(capsys, "stats", "--target", p, "--columns", "수량")
+    assert code == 0 and out["header_row_found"] == 3 and out["groups"][0]["stats"]["수량"]["sum"] == 9, out
+    code, out = run_excel(capsys, "stats", "--target", p, "--by", "품번", "--columns", "수량")
+    assert code == 0 and {g["by"]["품번"]: g["stats"]["수량"]["sum"] for g in out["groups"]} == {"P-1": 6, "P-2": 3}, out

@@ -23,6 +23,26 @@
   `TextToDisplay=`를 이름 인자로 주면 Excel이 무시함 (같은 값을 다섯째 순서 인자로 주면 들어감, 실제 Excel 2019에서 확인). 순서 인자로 부르고,
   링크 주소에 더해 칸의 글도 다시 읽어 다르면 `UNVERIFIED:`. 가짜 Excel도 이름 인자 글을 무시하게 바꿈. 시험 `test_write_link_text_is_read_back`.
 
+### 수정: stats·duplicates가 제목 행 아래 머리글을 못 찾음 (BOM 비교 시험 준비 중 발견)
+- 제목 행·빈 행 아래에 머리글이 있는 표(회사 BOM 모양)에서 `stats --columns 수량`·`duplicates --columns 품번`이 열을 못 찾아 제목 글을 `[후보]`로
+  되묻고, 열을 안 주면 제목 행을 머리글로 보고 비교했음. stats-kit은 "제목 행 아래의 머리글 행은 도구가 정함"이라고 적혀 있었음.
+  `read --where`와 같은 규칙(준 열 이름이 모두 있는 행)에 더해, 열을 안 주면 위 10행 안에서 칸이 하나 이하인 행(제목·빈 행)을 건너뜀.
+  결과에 `header_row_found`. 시험 `test_stats_and_duplicates_find_header_below_title`.
+
+### 시험 도구: BOM 비교 조합 스킬 시험 (`tools/make_bom_samples.py`, `tools/bom-compare/`)
+- 사용자 조합 스킬 예시 `bom-compare`(SKILL.md + `scripts/compare.py`, office-cli 도구가 아님)와 정답을 아는 두 판 샘플(함정 7가지, 중복 판),
+  `--check`로 맞대기 결과를 정답과 비교. 절차는 `docs/opencode/BOM비교_시험.md`.
+- 계층 BOM으로 바꿈 (사용자 요청 2026-11-12, 집 PC 시험 A 뒤): 샘플은 Level 0 최상위 조립체 -> Level 1 중간 조립체 12개 -> Level 2 부품
+  (조립체마다 5~8개, 공통 부품이 여러 조립체에 반복), 열은 영어(Level, Part Number, Description, Spec, Qty, Unit, Remark). 정답 15건
+  (다른 조립체로 옮긴 부품, 부품 마스터 Spec·Description 변경은 쓰인 자리마다, 중간 조립체 Qty 변경 포함), 함정 8가지.
+- bom-compare 0.2 (사용자 결정 2026-11-12): 같은 자리 = 상위 조립체 + Part Number (상위는 Level로 정함, 같은 부품이 여러 조립체에 쓰이는 것은 정상).
+  `excel.py duplicates`는 상위 조립체를 모르므로 SKILL.md 2단계 중복 검사를 빼고 `compare.py`가 같은 자리 중복을 보고 `STOP_RETRY:`(자리와 엑셀 행).
+  결과 표에 "상위 조립체" 열, 메모에 "<상위> 아래", preview는 "변경 N자리(M칸)". 순서 6단계 -> 5단계. 시험 `test_bom_compare`(새 파일).
+- 회사 BOM에 맞추는 가이드 `tools/BOM비교_회사데이터_가이드.md` (회사 PC OpenCode가 읽고 따라 함): 복사본으로만, 기준 상수와 SKILL.md 열 이름만 고침
+  (사용자 확인 뒤), 같은 판(0건)·값 2칸 바꾼 시험 판(2자리)·실제 두 판 순서로 시험, 막히면 회사 값 없이 보고. 집 PC에서 샘플로 명령을 그대로 실행해 확인.
+- `compare.py`: Level 점 표기(ERP 들여쓰기 BOM `.1`, `..2`)도 읽음 (회사 BOM에 맞출 때 코드를 고치지 않게). 못 읽으면 몇 번째 줄인지 알리고 멈춤.
+  시험 `test_dotted_level_gives_same_result`, `test_unreadable_level_stops_with_row`.
+
 ### 지침: 조합 스킬 만들기 (2026-11-12 사용자 결정)
 - 전역 지침 `AIKIT/AGENTS.md` 10장: 사용자가 기본 스킬을 이어 쓰는 자기 스킬을 만들 때의 규칙 (위치·8KB, 전체 명령 그대로, 결과 파일을 다음 `--file`로,
   업무 판단은 스킬에 기준 문장으로, 바꾸기 전 확인). 사용 가이드 9장에 "나만의 스킬로 만들어 두기".
@@ -2600,6 +2620,9 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 ## 남은 할 일
 - [ ] 두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 다른 곳을 찾아 검토): 비교 판단은 LLM이 사용자와 의논하며 하고 도구는 읽기·검증·표시를 맡음
   (사용자 결정 2026-11-12, 1.6.7에서 `read --columns`, `style --file` 보완). 실제 BOM 샘플로 이 흐름을 시험하고 부족한 도구를 다시 검토.
+- [ ] `excel.py write --file <CSV>`가 앞자리 0이 없는 숫자 글(품번 `102`, 사번)을 숫자 칸으로 씀 (CSV에 글/숫자 구분이 없어 `coerce()`가 바꿈,
+  앞자리 0 코드만 글로 둠). 집 PC BOM 비교 시험 A(2026-11-12)에서 결과 표의 추가 품번 `102`가 숫자 칸. 보이는 값은 같아 그대로 둠 (사용자 결정 2026-11-12).
+  결과 표를 다시 조회(VLOOKUP 등)에 쓰는 일이 실제로 생기면 글로 둘 열을 고르는 옵션(`--text-columns`)을 검토.
 - [ ] 2026-11-09 전체 검토(1.4.91)에서 찾은 것: `docs/history/office-cli_REVIEW_2026-11-09.md`. 1장·2장·3장은 1.4.92~1.4.96에서 처리
   (3장 C1~C18은 실기에서 끝남: C6 수정, C12·C18 문제없음, C13 OneDrive는 쓰지 않아 닫음). 남은 것: 3장 끝의 마크다운 작은 것(보류),
   4장 3·4·5번은 1.6.0·1.6.1에서 끝남 (하지 않기로 한 것: 변경 내용 수락·거부, 인쇄, 회의 요청, 메일 이동·분류, 플래그, 피벗, 데이터 유효성,

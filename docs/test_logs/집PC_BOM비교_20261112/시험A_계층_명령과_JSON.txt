@@ -1,0 +1,35 @@
+## 1 옛 판 CSV
+$ python C:\AIKIT\office-cli\excel.py read --target C:\AIKIT\dev\work\bom\BOM_A_Rev1.xlsx --save BOM_A_Rev1_비교용.csv
+exit=0
+{"status": "ok", "tool": "excel", "command": "read", "preview": "BOM!A1:G80 (80행 x 7열)를 CSV로 저장: C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev1_비교용.csv", "verified": true, "target_resolved": {"app": "Excel", "name": "BOM_A_Rev1.xlsx", "path": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev1.xlsx", "source": "file(openpyxl)"}, "sheet": "BOM", "range": "A1:G80", "rows": 80, "cols": 7, "output_file": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev1_비교용.csv", "confirm_commands": [{"purpose": "저장한 표를 열린 워드 문서에 넣기 (사용자가 원할 때만)", "command": "python C:\\AIKIT\\office-cli\\word.py write --file C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev1_비교용.csv"}, {"purpose": "저장한 표를 열린 PPT에 넣기 (사용자가 원할 때만)", "command": "python C:\\AIKIT\\office-cli\\ppt.py write --file C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev1_비교용.csv"}], "agent_directive": "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 사용자가 다른 문서에 넣기를 원하면 confirm_commands에서 맞는 명령을 1번 실행하세요(열린 문서를 바꿈)."}
+
+## 1 새 판 CSV
+$ python C:\AIKIT\office-cli\excel.py read --target C:\AIKIT\dev\work\bom\BOM_A_Rev2.xlsx --save BOM_A_Rev2_비교용.csv
+exit=0
+{"status": "ok", "tool": "excel", "command": "read", "preview": "BOM!A1:G80 (80행 x 7열)를 CSV로 저장: C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용.csv", "verified": true, "target_resolved": {"app": "Excel", "name": "BOM_A_Rev2.xlsx", "path": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2.xlsx", "source": "file(openpyxl)"}, "sheet": "BOM", "range": "A1:G80", "rows": 80, "cols": 7, "output_file": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용.csv", "confirm_commands": [{"purpose": "저장한 표를 열린 워드 문서에 넣기 (사용자가 원할 때만)", "command": "python C:\\AIKIT\\office-cli\\word.py write --file C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용.csv"}, {"purpose": "저장한 표를 열린 PPT에 넣기 (사용자가 원할 때만)", "command": "python C:\\AIKIT\\office-cli\\ppt.py write --file C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용.csv"}], "agent_directive": "VERIFIED: 저장한 CSV를 다시 열어 행 수를 확인했습니다. 사용자가 다른 문서에 넣기를 원하면 confirm_commands에서 맞는 명령을 1번 실행하세요(열린 문서를 바꿈)."}
+
+## 2 맞대기
+$ python C:\AIKIT\skills\bom-compare\scripts\compare.py --old C:\AIKIT\dev\work\bom\BOM_A_Rev1_비교용.csv --new C:\AIKIT\dev\work\bom\BOM_A_Rev2_비교용.csv --new-range A1:G80 --old-range A1:G80
+exit=0
+{"status": "ok", "preview": "추가 4, 삭제 4, 변경 7자리(7칸)", "counts": {"추가": 4, "삭제": 4, "변경": 7}, "changed_parts": 7, "agent_directive": "VERIFIED: 맞대기를 마쳤습니다. preview와 result_file의 앞 10줄을 사용자에게 보여 주세요.", "added_cells": 4, "changed_cells": 7, "result_file": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용_비교결과.csv", "changed_cells_file": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용_칠할칸_변경.csv", "added_cells_file": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용_칠할칸_추가.csv", "memo_file": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교용_메모.csv"}
+
+## 4 결과 표 엑셀
+$ python C:\AIKIT\office-cli\excel.py write --target C:\AIKIT\dev\work\bom\BOM_A_Rev2_비교결과.xlsx --range A1 --file C:\AIKIT\dev\work\bom\BOM_A_Rev2_비교용_비교결과.csv
+exit=0
+{"status": "ok", "tool": "excel", "command": "write", "preview": "Sheet1!A1:H16에 썼습니다 (16행 x 8열)", "verified": true, "target_resolved": {"app": "Excel", "name": "BOM_A_Rev2_비교결과.xlsx", "path": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교결과.xlsx", "source": "new", "sheet": "Sheet1"}, "sheet": "Sheet1", "range_written": "A1:H16", "rows": 16, "cols": 8, "confirm_commands": [{"purpose": "방금 쓴 범위로 차트 만들기, 사용자가 원할 때만 (제목은 --title \"제목\"을 붙임, --type은 원하는 종류로)", "command": "python C:\\AIKIT\\office-cli\\excel.py chart --target C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2_비교결과.xlsx --range Sheet1!A1:H16 --type line"}], "agent_directive": "VERIFIED: 쓴 칸을 다시 읽어 확인했습니다. 같은 명령을 다시 실행하지 마세요. 사용자가 차트를 원하면 confirm_commands[0]을 1번 실행하세요."}
+
+## 4 바뀐 칸 노랑
+$ python C:\AIKIT\office-cli\excel.py style --target C:\AIKIT\dev\work\bom\BOM_A_Rev2.xlsx --sheet BOM --file C:\AIKIT\dev\work\bom\BOM_A_Rev2_비교용_칠할칸_변경.csv --bg yellow
+exit=0
+{"status": "ok", "tool": "excel", "command": "style", "preview": "BOM!D16;E21;C25;E31;E47;D58;C70 (7곳)에 서식 적용: format", "verified": true, "target_resolved": {"app": "Excel", "name": "BOM_A_Rev2.xlsx", "path": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2.xlsx", "source": "file", "sheet": "BOM"}, "applied": {"format": ["bg"]}, "sheet": "BOM", "range": "D16;E21;C25;E31;E47;D58;C70", "areas": 7, "agent_directive": "VERIFIED: 7곳에 적용한 서식을 다시 읽어 확인했습니다."}
+
+## 4 추가 칸 연두
+$ python C:\AIKIT\office-cli\excel.py style --target C:\AIKIT\dev\work\bom\BOM_A_Rev2.xlsx --sheet BOM --file C:\AIKIT\dev\work\bom\BOM_A_Rev2_비교용_칠할칸_추가.csv --bg lightgreen
+exit=0
+{"status": "ok", "tool": "excel", "command": "style", "preview": "BOM!B30;B42;B55;B80 (4곳)에 서식 적용: format", "verified": true, "target_resolved": {"app": "Excel", "name": "BOM_A_Rev2.xlsx", "path": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2.xlsx", "source": "file", "sheet": "BOM"}, "applied": {"format": ["bg"]}, "sheet": "BOM", "range": "B30;B42;B55;B80", "areas": 4, "agent_directive": "VERIFIED: 4곳에 적용한 서식을 다시 읽어 확인했습니다."}
+
+## 4 메모
+$ python C:\AIKIT\office-cli\excel.py comment --action add --target C:\AIKIT\dev\work\bom\BOM_A_Rev2.xlsx --sheet BOM --file C:\AIKIT\dev\work\bom\BOM_A_Rev2_비교용_메모.csv
+exit=0
+{"status": "ok", "tool": "excel", "command": "comment", "preview": "메모 7개를 달았습니다", "verified": true, "target_resolved": {"app": "Excel", "name": "BOM_A_Rev2.xlsx", "path": "C:\\AIKIT\\dev\\work\\bom\\BOM_A_Rev2.xlsx", "source": "file", "sheet": "BOM"}, "applied": ["메모 추가: BOM!D16", "메모 추가: BOM!E21", "메모 추가: BOM!C25", "메모 추가: BOM!E31", "메모 추가: BOM!E47", "메모 추가: BOM!D58", "메모 추가: BOM!C70"], "count": 7, "agent_directive": "VERIFIED: 메모를 달고 다시 읽어 확인했습니다. 잘못 달았으면 office.py undo로 되돌릴 수 있습니다."}
+
