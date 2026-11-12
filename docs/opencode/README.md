@@ -53,7 +53,7 @@ grep·glob과 Web UI의 `@` 파일 자동 완성뿐이고, rg가 없으면 인�
 (OpenCode 1.x는 스킬 불러오기에도 rg가 필요했습니다. 2026-10-29 실기: 대화 6개 모두 실패.)
 
 **설정에서 확인할 것** (`setup.py`가 `opencode.json`과 `opencode.jsonc`를 합쳐 보고 WARN으로 알림, 고치지는 않음).
-`"shell"`, `"permission"`, `"autoupdate"`, `"skills"`는 배포 파일 `opencode.json`에 이미 있으니 `opencode.jsonc`에는 적지 않습니다
+`"shell"`, `"permission"`, `"autoupdate"`, `"share"`, `"lsp"`, `"formatter"`는 배포 파일 `opencode.json`에 이미 있으니 `opencode.jsonc`에는 적지 않습니다
 (두 파일에 같은 키가 있으면 setup이 WARN). 집 PC opencode 시험(2026-11-07)에서 앞의 셋이 결과를 흐렸습니다.
 - `"shell": "powershell"` (`opencode.json`): `"cmd"`면 스킬·전역 지침의 PowerShell 명령(인코딩 줄, 작은따옴표)이 맞지 않습니다.
 - `"instructions"`: 비워 둡니다. 전역 지침 `AGENTS.md`는 설정 폴더에서 따로 읽히고, 여기에 옛 지침을 넣으면 지금 없는 명령을 씁니다.
@@ -67,6 +67,13 @@ grep·glob과 Web UI의 `@` 파일 자동 완성뿐이고, rg가 없으면 인�
 - `"permission"`의 `"webfetch": "deny"`, `"websearch": "deny"` (`opencode.json`): 폐쇄망에서 모델이 인터넷 검색·웹 페이지 열기를 시도하지 못하게 막습니다
   (2026-11-11 회사 PC: 스킬 만드는 법을 묻자 인터넷 검색을 시도함. 전역 지침 2장에도 금지를 적었지만 설정으로 막는 것이 확실함. opencode 2.2.7 소스의
   도구 이름 기준이고 회사 PC 2.2.5에서는 확인 전. `setup.py`가 없으면 INFO로 알림).
+- 폐쇄망 잠금 (`opencode.json`, 2026-11-12 사용자 결정): 폐쇄망에서 되지 않는 기능은 모두 잠급니다. `setup.py`가 하나라도 빠지면 INFO로 알림
+  (`OFFLINE_DENY`, `OFFLINE_SET`).
+  - `"permission"`의 `"browser": "deny"`(브라우저 도구), `"grep": "deny"`, `"glob": "deny"`(파일 찾기, rg.exe가 필요해 위 rg 설명 참고).
+  - `"share": "disabled"`: 세션 공유 끔 (공유하면 대화가 opencode.ai로 보내짐).
+  - `"lsp": false`, `"formatter": false`: 언어 서버·서식 도구 끔 (파일 종류에 따라 인터넷에서 내려받으려 함. 코드 편집용 기능이라 우리 일에는 쓰지 않음).
+  - 집 PC 2.2.5에서 LLM 주소 말고 모든 바깥 연결을 막고 기록한 결과: 잠근 뒤 스킬 불러오기·파일 만들기·python 실행이 되고, 대화·서버 시작 모두
+    LLM 말고는 바깥 연결 시도가 없음 (모델 목록 캐시를 지워도 models.dev에 접속하지 않음).
 - 사내 PC `opencode.jsonc` 예 (provider 이름·주소·모델은 PC마다 다름, 키는 파일에 적지 말고 opencode 로그인·환경 변수로):
   ```jsonc
   {

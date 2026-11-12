@@ -100,9 +100,10 @@ def test_sources_exist_in_repo_layout():
         assert not os.path.exists(os.path.join(CLI, tool, "skills")), tool
     cfg = json.load(open(os.path.join(CLI, "opencode.json"), encoding="utf-8"))
     assert set(cfg) - {"$schema"} <= set(su.OUR_KEYS) and "skills" not in cfg   # 사내 LLM 설정(provider, model)은 opencode.jsonc에만
-    assert cfg["shell"] == "powershell" and cfg["autoupdate"] is False
-    assert cfg["permission"] == {"external_directory": "allow", "webfetch": "deny", "websearch": "deny",
-                                 "grep": "deny", "glob": "deny"}      # rg.exe 없이 배포 (파일 찾기는 셸로)
+    assert cfg["shell"] == "powershell"
+    # 폐쇄망에서 되지 않는 기능 잠금 (setup이 점검하는 값과 같음)
+    assert all(cfg.get(k) == v for k, v in su.OFFLINE_SET)
+    assert cfg["permission"] == {"external_directory": "allow", **{k: "deny" for k in su.OFFLINE_DENY}}
     gitignore = os.path.join(REPO, ".gitignore")
     if os.path.isfile(gitignore):        # 저장소에서만 (반입한 PC에는 .gitignore가 없음)
         ignore = open(gitignore, encoding="utf-8").read().splitlines()
@@ -306,9 +307,10 @@ def test_opencode_providers_suggests_enabled_providers_line(tmp_path, capsys):
     su.step_opencode_providers(rep, str(tmp_path))
     out = capsys.readouterr().out                             # 웹 도구를 막지 않았으면 INFO (폐쇄망에서 모델이 인터넷 검색을 시도함, 2026-11-11)
     assert rep.warn == 0 and '"webfetch": "deny", "websearch": "deny"' in out, out
-    assert '"grep": "deny", "glob": "deny"' in out, out      # rg.exe 없이는 파일 찾기 도구가 실패 (2026-11-12)
+    assert '"grep": "deny", "glob": "deny"' in out and '"share": "disabled"' in out, out   # 폐쇄망 잠금 (2026-11-12)
     cfg.write_text('{"model": "corp/gemma", "provider": {"corp": {}}, "enabled_providers": ["corp"], "autoupdate": false, '
-                   '"permission": {"external_directory": "allow", "webfetch": "deny", "websearch": "deny", '
+                   '"share": "disabled", "lsp": false, "formatter": false, '
+                   '"permission": {"external_directory": "allow", "webfetch": "deny", "websearch": "deny", "browser": "deny", '
                    '"grep": "deny", "glob": "deny"}}', encoding="utf-8")
     rep = su.Report()
     su.step_opencode_providers(rep, str(tmp_path))
