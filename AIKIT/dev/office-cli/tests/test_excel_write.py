@@ -2498,3 +2498,73 @@ def test_same_cell_accepts_number_like_text_but_not_lost_leading_zero():
     same = excel._same_cell
     assert same("3", 3.0) and same("1,500", 1500.0) and same("12.5%", 0.125) and same("-0.5", -0.5)
     assert not same("0012", 12.0) and not same("3", 4.0) and not same("+82-10-1234-5678", -6840.0) and not same("1,50", 150.0)
+
+
+def test_style_cells_from_file_for_long_lists(xl, capsys, tmp_path):
+    """1.6.7: 두 판 비교처럼 칠할 칸이 수백 개면 --range "B2;D5;..."가 명령 한 줄에 너무 김 -> --file(칸 목록, 줄마다 첫 칸).
+    머리글 한 줄은 건너뜀, 범위(B5:D5)도 됨, 시트 이름이 든 칸·칸 주소가 아닌 줄은 거절, --range와 함께 쓰지 않음."""
+    app, wb = xl
+    ws = ws_of(wb)
+    for r in range(1, 401):
+        ws.set(r, 1, float(r))
+    cells = tmp_path / "바뀐칸.csv"
+    cells.write_text("칸,메모\n" + "\n".join(f"A{r},바뀜" for r in range(1, 401, 2)) + "\nB5:D5,행 추가\n", encoding="utf-8")
+    code, out = run_excel(capsys, "style", "--file", str(cells), "--bg", "yellow")
+    assert code == 0 and out["verified"] is True and out["areas"] == 201, out["message"] if code else out
+    bad = tmp_path / "bad.csv"
+    bad.write_text("A1\nSheet2!B3\n", encoding="utf-8")
+    code, out = run_excel(capsys, "style", "--file", str(bad), "--bg", "yellow")
+    assert code == 1 and "--sheet" in out["message"], out
+    bad.write_text("A1\n품번\n", encoding="utf-8")
+    code, out = run_excel(capsys, "style", "--file", str(bad), "--bg", "yellow")
+    assert code == 1 and "칸 주소" in out["message"], out
+    code, out = run_excel(capsys, "style", "--file", str(cells), "--range", "A1", "--bg", "yellow")
+    assert code == 1 and "함께 쓰지 않습니다" in out["message"], out
+
+
+def test_range_filter_shows_matching_rows_and_unfilter(xl, capsys):
+    """1.6.7 기반 기능: 사용자가 볼 표를 자동 필터로 거르기. 열 이름으로 Field를 찾고, ';'는 열마다 조건(그리고), 같은 열 '|'는 두 값(또는),
+    있던 필터는 지우고 새로, 나타낼 수 없는 조건은 거절, unfilter로 끔(없으면 바뀐 것 없음)."""
+    app, wb = xl
+    ws = ws_of(wb)
+    for r, row in enumerate([["부서", "금액"], ["영업", 120], ["설계", 80], ["영업", 50]], 1):
+        for c, v in enumerate(row, 1):
+            ws.set(r, c, v)
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부서 = 영업; 금액 >= 100")
+    assert code == 0 and out["verified"] is True and ws.AutoFilterMode is True, out
+    assert [kw for _, kw in ws.filters] == [{"Field": 1, "Criteria1": "=영업"}, {"Field": 2, "Criteria1": ">=100"}]
+    ws.filters.clear()
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부서 = 영업 | 부서 ~ 설")
+    assert code == 0 and ws.filters[0][1] == {"Field": 1, "Criteria1": "=영업", "Operator": 2, "Criteria2": "=*설*"}, ws.filters
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부서 = 영업 | 금액 > 1")
+    assert code == 1 and "자동 필터로 나타낼 수 없는" in out["message"], out
+    code, out = run_excel(capsys, "range", "--action", "filter", "--range", "A1:B4", "--where", "부셔 = 영업")
+    assert code == 1 and "부서" in out["message"], out
+    code, out = run_excel(capsys, "range", "--action", "unfilter", "--range", "A1:B4")
+    assert code == 0 and ws.AutoFilterMode is False and out["unchanged"] is False, out
+    code, out = run_excel(capsys, "range", "--action", "unfilter", "--range", "A1:B4")
+    assert code == 0 and out["unchanged"] is True, out
+
+
+def test_write_image_and_link(xl, capsys, tmp_path):
+    """1.6.7 기반 기능: 엑셀에 그림(워드·PPT write --image와 같은 옵션)과 하이퍼링크. 그림은 칸 왼쪽 위, 링크는 칸 하나에
+    보이는 글(--value, 없으면 칸 글)과 함께, 값이 있는 칸의 글을 바꾸면 --overwrite가 있을 때만([후보]), 넣은 뒤 다시 읽어 확인."""
+    app, wb = xl
+    ws = ws_of(wb)
+    png = tmp_path / "그래프.png"
+    png.write_bytes(b"\\x89PNG\\r\\n\\x1a\\n")
+    code, out = run_excel(capsys, "write", "--range", "C3", "--image", str(png))
+    assert code == 0 and out["verified"] is True and ws.pictures[0][0] == str(png), out
+    assert ws.pictures[0][1]["Left"] == 96.0 and ws.pictures[0][1]["Top"] == 30.0                 # C3의 왼쪽 위
+    spec = str(tmp_path / "규격서.pdf")
+    code, out = run_excel(capsys, "write", "--range", "B2", "--link", spec, "--value", "규격서")
+    assert code == 0 and out["verified"] is True and ws.links[-1][1:] == (spec, "규격서") and ws.values[(2, 2)] == "규격서", out
+    ws.set(5, 1, "기존 글")
+    code, out = run_excel(capsys, "write", "--range", "A5", "--link", "http://intra/doc")
+    assert code == 0 and ws.links[-1][2] == "기존 글", out                                      # --value 없으면 칸 글을 그대로
+    code, out = run_excel(capsys, "write", "--range", "A5", "--link", "http://intra/doc", "--value", "새 글")
+    assert code == 1 and "[후보]" in out["message"] and "--overwrite" in out["confirm_commands"][0]["command"], out
+    code, out = run_excel(capsys, "write", "--image", str(tmp_path / "없음.png"))
+    assert code == 1, out
+    code, out = run_excel(capsys, "write", "--link", "http://x")
+    assert code == 1 and "--range" in out["message"], out

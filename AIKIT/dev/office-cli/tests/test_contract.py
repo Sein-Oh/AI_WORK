@@ -448,8 +448,6 @@ def test_argument_errors_from_real_logs_get_a_hint(argv, want):
 
 
 @pytest.mark.parametrize("argv, fixed", [
-    (["excel.py", "check", "--file", "a.xlsx", "--range", "B3:C7", "--item-col", "B", "--value-col", "C", "--spec", "s.txt"],
-     ["check", "--target", "a.xlsx", "--range", "B3:C7", "--item-col", "B", "--value-col", "C", "--spec", "s.txt"]),   # Gemma O1
     (["word.py", "write", "--target", "a.docx", "--text", "다음", "--append"],
      ["write", "--target", "a.docx", "--text", "다음", "--pos", "end"]),                                                 # Gemma O4
     (["reader.py", "read", "--target", "a.pdf"], ["read", "--file", "a.pdf"]),              # 필수 --file 누락 오류에서도
@@ -1571,15 +1569,12 @@ def test_error_log_hides_mail_account_and_stray_text(capsys, isolated_dirs):
 
 
 # ---------------------------------------------------------------------------
-# 1.6.1: 하지 않기로 한 기능은 사용자가 직접 하라고 안내 (사용자 결정 2026-11-10)
+# 1.6.1: 도구에 명령이 없는 기능 안내 (사용자 결정 2026-11-10). 1.6.7: 전역 지침 8장의 세 가지로 나눔
+#   나(하지 않음) -> not_supported + 사용자가 직접, 가(사용자 확인 뒤 파이썬) -> not_in_tool + 8장 안내. 두 판 비교는 넣지 않음
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("mod, argv, what", [
-    ("word", ["revisions", "--action", "accept"], "변경 내용 수락"),
-    ("excel", ["pivot", "--range", "A1:D9"], "피벗"),
-    ("excel", ["chart", "--action", "edit", "--name", "c"], "기존 차트"),
-    ("excel", ["range", "--action", "validation", "--range", "A1"], "데이터 유효성"),
     ("ppt", ["print"], "인쇄"),
     ("outlook", ["event", "--subject", "s", "--start", "2026-11-12 10:00", "--attendees", "a@x.com"], "회의 요청"),
     ("outlook", ["move", "--id", "3", "--folder", "보관"], "메일 이동"),
@@ -1590,6 +1585,21 @@ def test_not_supported_features_tell_user_to_do_it(capsys, mod, argv, what):
     code, out = run_main(importlib.import_module(mod), capsys, *argv)
     assert code == 2 and out["error_type"] == "not_supported" and what in out["message"], out
     assert "직접" in out["message"] and "파이썬" in out["agent_directive"], out
+
+
+@pytest.mark.parametrize("mod, argv, what", [
+    ("word", ["revisions", "--action", "accept"], "변경 내용 수락"),
+    ("excel", ["pivot", "--range", "A1:D9"], "피벗"),
+    ("excel", ["chart", "--action", "edit", "--name", "c"], "기존 차트"),
+    ("excel", ["range", "--action", "validation", "--range", "A1"], "데이터 유효성"),
+])
+def test_confirm_features_point_to_global_guide(capsys, mod, argv, what):
+    """도구에 명령은 없지만 사용자 확인 뒤 파이썬으로 하는 일: 사용자에게 떠넘기지 않고 8장 "가. 확인 뒤 하는 일"로 안내."""
+    import importlib
+    code, out = run_main(importlib.import_module(mod), capsys, *argv)
+    assert code == 2 and out["error_type"] == "not_in_tool" and what in out["message"], out
+    assert "가. 확인 뒤 하는 일" in out["agent_directive"] and "'예'" in out["agent_directive"], out
+    assert "직접 하세요" not in out["message"], out
 
 
 def test_search_word_in_value_is_not_a_feature_request(capsys):

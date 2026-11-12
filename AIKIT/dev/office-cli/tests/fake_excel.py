@@ -425,6 +425,23 @@ class FakeRange:
             return f(r1, c1)
         return tuple(tuple(f(r, c) for c in range(c1, c2 + 1)) for r in range(r1, r2 + 1))
 
+    @property
+    def Left(self):
+        return float((self.areas[0][1] - 1) * 48)
+
+    @property
+    def Top(self):
+        return float((self.areas[0][0] - 1) * 15)
+
+    def Hyperlinks(self, i):
+        links = [h for h in self.ws.links if h[0] == self.Address]
+        return types.SimpleNamespace(Address=links[i - 1][1], TextToDisplay=links[i - 1][2])
+
+    def AutoFilter(self, **kw):
+        """자동 필터 (range --action filter): 건 조건을 기록하고 시트의 AutoFilterMode를 켬."""
+        self.ws.AutoFilterMode = True
+        self.ws.filters.append((self.Address, kw))
+
     # --- 서식/조작 ---
     def __getattr__(self, name):
         if name in ("Interior", "Font", "Borders_"):
@@ -664,12 +681,33 @@ class FakeWorksheet:
         self.formulas = {}
         self.arrays = []             # 배열 수식 범위 [(r1, c1, r2, c2)] (칸마다 formulas에 같은 수식)
         self.styles = {}
+        self.AutoFilterMode = False
+        self.filters = []
+        self.links = []                # (칸 주소, 링크, 보이는 글): write --link
+        self.pictures = []
+        ws = self
+
+        class _Shapes:
+            @property
+            def Count(self):
+                return len(ws.pictures)
+
+            def AddPicture(self, Filename=None, **kw):
+                ws.pictures.append((Filename, kw))
+                return types.SimpleNamespace(Name=f"Picture {len(ws.pictures)}")
+
+        class _Links:
+            def Add(self, Anchor=None, Address=None, TextToDisplay=None, **kw):
+                ws.links.append((Anchor.Address, Address, TextToDisplay))
+                r, c = Anchor.areas[0][:2]
+                ws.values[(r, c)] = TextToDisplay
+        self.Shapes = _Shapes()
+        self.Hyperlinks = _Links()
         self.merged = set()
         self.fcs = {}
         self.log = []
         self.charts = []
         self.activated = 0
-        self.Shapes = Count(0)
         self.Rows = Count(1048576)
         self.Sort = FakeSort(self)
         self.notes = {}              # 칸 메모 {(r, c): FakeComment}
@@ -704,6 +742,12 @@ class FakeWorksheet:
         self.formulas.pop((r, c), None)
 
     def props(self, address, name):
+        if (address, name) not in self.styles and "," not in address and ":" not in address:
+            # 칸 하나를 읽을 때: 그 칸이 든 범위에 준 서식 (실제 Excel처럼 범위 서식이 칸에 보임, 나중에 준 것이 이김)
+            r, c = self._parse(address.replace("$", ""))[0][:2]
+            for (addr_, nm), pr in reversed(list(self.styles.items())):
+                if nm == name and any(not isinstance(v, Props) for v in object.__getattribute__(pr, "_d").values()) and any(r1 <= r <= r2 and c1 <= c <= c2 for r1, c1, r2, c2 in self._parse(addr_.replace("$", ""))):
+                    return pr
         return self.styles.setdefault((address, name), Props())
 
     def _parse(self, ref):

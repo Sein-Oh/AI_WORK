@@ -40,6 +40,7 @@ AIKIT/skills/*
 !AIKIT/skills/ml-report/
 !AIKIT/skills/ml-map/
 !AIKIT/skills/excel-kit/
+!AIKIT/skills/excel-format-kit/
 !AIKIT/skills/word-kit/
 !AIKIT/skills/ppt-kit/
 !AIKIT/skills/outlook-kit/

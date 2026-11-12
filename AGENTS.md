@@ -16,7 +16,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - `AIKIT/`는 사용자 PC의 `C:\AIKIT`로 통째로 복사된다 (`dev/` 포함, 2026-11-12에 `CLI/`·`CLI-dev/`에서 이름을 바꾸고 dev를 안으로 옮김).
 - `AIKIT/`가 곧 OpenCode 설정 폴더다 (setup이 `OPENCODE_CONFIG_DIR=C:\AIKIT`). 설정 파일 없이 폴더 모양으로 읽힌다 (OpenCode 2.2.5 확인):
   `AIKIT/AGENTS.md`(전역 지침), `AIKIT/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나).
-- `AIKIT/skills/`: 기본 스킬 11개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`,
+- `AIKIT/skills/`: 기본 스킬 12개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
   `word-kit`, `ppt-kit`, `outlook-kit`, `search-kit`, `stats-kit`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
   스킬이 여러 개를 함께 쓰는 도구는 스킬 폴더가 아니라 도구 폴더에 두고, SKILL.md에는 `python "C:\AIKIT\<tool>\<파일>.py" ...` 전체 명령을 적는다.
   사용자가 만든 스킬의 스크립트는 그 스킬 폴더의 `scripts/`에 둔다 (스킬 폴더만 복사하면 동료 PC에서도 됨).
@@ -167,9 +167,12 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   import하지 않고, `_ml_runtime.py`는 진입점을 import하지 않는다 (예외: 보고서와 함께 성능예측표를 만드는 `ml_report` -> `ml_export`).
   예측만 하는 PC에는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더를 복사한다. 검사: `tests/test_contract.py`.
 ### office-cli
+- **office-cli는 기반 도구다** (2026-11-12 사용자 결정): 다른 작업(LLM이 사용자와 의논하는 일, 사용자 스킬, 두 판 비교, 보고서 같은 응용)이 조합해 쓰는
+  단위 기능만 둔다. 읽기·쓰기·서식·문서 구조·앱 간 전달·문서 검색·되돌리기와, 그 결과가 맞는지 도구가 확인하는 일까지가 범위다.
+  업무 판단(판정 기준, 비교 기준, 문서 양식·내용 결정)은 도구에 넣지 않고 LLM·사용자 스킬·별도 응용 도구에 둔다. 새 기능은 이 기준으로 먼저 본다.
 - 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`. 내부 모듈(진입점 아님, 스킬에 적지 않음): `_markdown.py`(마크다운 해석),
-  `_xlsx_formula.py`(닫힌 xlsx의 계산 안 된 수식 칸), `_spec_check.py`(excel check).
-  `_runtime.py`는 다른 office-cli 파일을 import하지 않는다. `_spec_check.py`는 `excel.py`의 주소·읽기 도우미를 쓴다.
+  `_xlsx_formula.py`(닫힌 xlsx의 계산 안 된 수식 칸).
+  `_runtime.py`는 다른 office-cli 파일을 import하지 않는다.
 - 세션(`open_target`/`write_session` with 블록) 밖에서 그 안의 COM 객체(시트, 범위, 문서)를 읽지 않는다. 닫힌 파일은 블록이 끝나면 문서와
   백그라운드 Office가 닫혀 OLE 0x800a01a8로 실패하고, 저장은 끝났는데 실패를 보고한다 (회사 PC 2026-11-06 O2). 결과에 쓸 값은 블록 안에서
   파이썬 값으로 꺼내 둔다. 가짜 COM은 이것을 흉내 내지 않으므로 `tests/test_session_scope.py`가 코드 모양으로 검사한다.

@@ -16,7 +16,7 @@ metadata:
 3. 명령은 **1번만** 실행하고 마지막 1줄 JSON만 읽는다. `next_commands`는 그 `command`를 글자 그대로 실행한다. `confirm_commands`는 사용자 "예" 뒤에만 1번 (사용자가 "묻지 말고"라고 했으면 생략, 단 `"destructive": true` 항목은 늘 묻는다).
 4. 메일은 `list`·`search`·`thread` 결과의 `id`(`--id 3`)를 글자 그대로 쓴다. 번호는 목록마다 이어서 늘어나고 1부터 다시 매기지 않아, 옛 번호는 같은 메일이거나 "없는 번호" 오류다. 번호 오류("목록을 다시 보세요")면 `next_commands`로 목록을 다시 보고 새 `id`를 쓴다. `id`가 긴 글자(EntryID)여도 그대로 쓴다. `--id`를 빼면 사용자가 보고 있는 메일이다.
 5. 긴 본문과 여러 줄 글은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .md를 만들고 `--body-file "<그 경로>"`로 넘긴다.
-6. 첨부 경로는 전체 경로로 쓴다. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장대로 한다 (8장의 "하지 않는 일"(두 파일 비교 등)은 파이썬으로도 하지 않고 직접 하는 곳만 알린다).
+6. 첨부 경로는 전체 경로로 쓴다. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장대로 한다 (8장의 "나. 하지 않는 일"(인쇄, 회의 요청 등)은 파이썬으로도 하지 않고 직접 하는 곳만 알린다).
 
 ## 명령
 | 할 일 | 명령 |
@@ -28,6 +28,7 @@ metadata:
 | 일정 보기 / 만들기 | `python "C:\AIKIT\office-cli\outlook.py" calendar --days 7` / `python "C:\AIKIT\office-cli\outlook.py" event --subject "<제목>" --start "2026-11-12 14:00" [--minutes 60] [--location "<장소>"]` (종일은 `--start 2026-11-12`, 내 일정에만 저장. 회의 요청은 없음) |
 | 일정 지우기 | `python "C:\AIKIT\office-cli\outlook.py" event --action delete --subject "<제목>" --start "2026-11-12 14:00" --dry-run` (확인 뒤 `confirm_commands[0]`. 반복 일정·회의는 Outlook에서 직접) |
 | 폴더 목록 | `python "C:\AIKIT\office-cli\outlook.py" folders` (더 깊이 `--depth 3`) |
+| 사람 찾기 (메일 주소) | `python "C:\AIKIT\office-cli\outlook.py" contacts --name "<이름 일부>"` (여럿이면 목록을 보여 주고 사용자가 고름) |
 | 첨부 목록 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id>` |
 | 첨부 저장 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>` 또는 목록의 번호 `--index 1,3`) |
 | 답장 | `python "C:\AIKIT\office-cli\outlook.py" reply --id 3 --body "<내용>" [--attach "C:\전체경로\파일.pdf"]` (전체 답장 `--all`, 긴 본문 `--body-file "<본문.md>"`) |
@@ -53,4 +54,4 @@ metadata:
 - `elevated_process`이면 다시 실행하지 않고 message를 그대로 알린다.
 - 0건(`count: 0`)이면 "찾은 메일 없음"과 조건(폴더, 기간)을 알린다.
 - `recovered`와 `warnings`(겹치는 일정 등)가 있으면 그대로 알린다.
-- `error_type: not_supported`(도구에 없는 기능)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.
+- `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

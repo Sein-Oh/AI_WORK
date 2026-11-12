@@ -17,7 +17,7 @@ metadata:
 4. `--target`을 빼면 사용자가 보고 있는 문서다. 다른 열린 문서는 `--target "<이름>"`, 닫힌 파일은 `--target "<전체경로>"`.
 5. 여러 줄 글, 표, 큰따옴표가 든 값은 인자로 넣지 않는다. 파일 쓰기 도구로 UTF-8 .md(.csv)를 만들고 `--file "<그 경로>"`로 넘긴다. .md의 코드는 ```로 감싼다.
 6. 문서 내용을 다른 문서로 옮길 때는 `--save`로 파일을 만들고 결과의 `output_file`을 `--file`로 넘긴다.
-7. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장대로 한다 (8장의 "하지 않는 일"(두 파일 비교 등)은 파이썬으로도 하지 않고 직접 하는 곳만 알린다).
+7. 경로는 결과 JSON 값을 그대로 쓴다. 도구 코드(.py)는 읽지 않는다. 명령 표에 없는 일은 전역 지침 8장대로 한다 (8장의 "나. 하지 않는 일"(인쇄, 회의 요청 등)은 파이썬으로도 하지 않고 직접 하는 곳만 알린다).
 
 ## 명령
 | 할 일 | 명령 |
@@ -33,11 +33,13 @@ metadata:
 | 워드 단락 서식 | `python "C:\AIKIT\office-cli\word.py" format --paragraphs 3-5 --align center --size 14 --bold` (`--align <left/center/right/justify>`, `--font "맑은 고딕"`, `--italic`, `--style "제목 1"`. 번호는 `read`의 `no`) |
 | 워드 변경 추적 | `python "C:\AIKIT\office-cli\word.py" revisions` |
 | 워드 바꾸기 | `python "C:\AIKIT\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (대소문자 구분 `--match-case`, 단어 전체만 `--whole-word`, 여러 쌍 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 글자 `--color red --italic --size 12`) |
+| 워드 머리글·바닥글 | 읽기 `python "C:\AIKIT\office-cli\word.py" header` / 쓰기 `python "C:\AIKIT\office-cli\word.py" header --kind <header/footer> --text "<글>"` (구역 `--section 2`, 글이 있으면 `[후보]` 확인 뒤 `confirm_commands[0]`) |
+| 워드 링크·책갈피 | 목록 `python "C:\AIKIT\office-cli\word.py" link` / 달기 `python "C:\AIKIT\office-cli\word.py" link --anchor "<문서의 글>" --address "<파일 경로 또는 주소>"` (문서 안 곳은 `--address "#<책갈피>"`) / 책갈피 `python "C:\AIKIT\office-cli\word.py" bookmark [--name <이름> --anchor "<글>"]` |
 | 워드 정보 / PDF | `python "C:\AIKIT\office-cli\word.py" info [--detail]` / `python "C:\AIKIT\office-cli\word.py" export --save "<보고서.pdf>" [--page-number]` |
 | 엑셀 차트·범위를 워드에 | `python "C:\AIKIT\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word` (범위는 `--range A1:D10` 대신. 문서를 정하려면 `--from-target "<보내는 문서>" --to-target "<받는 문서>"`) |
 | 워드 내용을 PPT로 | `python "C:\AIKIT\office-cli\word.py" read --target "<문서.docx>" --save` 후 결과의 `output_file`로 `python "C:\AIKIT\office-cli\ppt.py" write --target "<발표.pptx>" --slide new --title "<제목>" --file "<output_file>"` (transfer는 워드<->PPT를 하지 않는다) |
 | 워드 내용을 엑셀로 | `python "C:\AIKIT\office-cli\office.py" transfer --from-app word --what text --to-app excel` (표는 `--what table --table 1`) |
-| 되돌리기 / 창 | `python "C:\AIKIT\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\AIKIT\office-cli\office.py" focus --app word` |
+| 되돌리기 / 창 | `python "C:\AIKIT\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\AIKIT\office-cli\office.py" focus --app word` / 파일을 화면에 열기 `python "C:\AIKIT\office-cli\office.py" open --file "<파일 전체 경로>"` |
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
@@ -45,4 +47,4 @@ metadata:
 - 단락·표 행 삭제, `--overwrite`(표 칸 덮어쓰기)는 사용자가 요청했을 때만.
 - `replace`의 `--find`는 비우지 않는다. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 잘못 고쳤으면 `undo`로 되돌린다. 저장한 적 없는 문서도 되돌린다.
-- `error_type: not_supported`(도구에 없는 기능)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.
+- `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

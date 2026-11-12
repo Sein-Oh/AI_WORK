@@ -2652,162 +2652,6 @@ def test_continue_is_not_logged(tmp_path, capsys, monkeypatch, isolated_dirs):
 
 
 # ---------------------------------------------------------------------------
-# 규격 글의 수치 조건 (excel.py check가 씀, 1.4.57): 회귀 말뭉치
-# ---------------------------------------------------------------------------
-
-SPEC_CORPUS = [
-    ("정격 전압은 5 V ± 0.25 V로 한다.", ["4.75~5.25 V"]),
-    ("정격 전압: 5V±5%", ["4.75~5.25 V"]),
-    ("(5±0.5) V", ["4.5~5.5 V"]),
-    ("공급 전압은 4.75 V 이상 5.25 V 이하일 것", ["4.75~5.25 V"]),
-    ("4.75 ~ 5.25 V", ["4.75~5.25 V"]),
-    ("4.75V～5.25V", ["4.75~5.25 V"]),
-    ("4.75 V에서 5.25 V까지", ["4.75~5.25 V"]),
-    ("between 4.75 V and 5.25 V", ["4.75~5.25 V"]),
-    ("from 10 to 20 mA", ["10~20 mA"]),
-    ("10-20 mA", ["10~20 mA"]),
-    ("소비 전류는 최대 3 A로 한다.", ["3 A 이하"]),
-    ("Max. 3A", ["3 A 이하"]),
-    ("≤ 3 A", ["3 A 이하"]),
-    ("3 A 이하", ["3 A 이하"]),
-    ("3 A 미만", ["3 A 미만"]),
-    ("The current shall not exceed 3 A.", ["3 A 이하"]),
-    ("5 V를 넘지 않을 것", ["5 V 이하"]),
-    ("절연 저항은 100 MΩ 이상", ["100 MΩ 이상"]),
-    ("Insulation resistance: min. 100 MΩ", ["100 MΩ 이상"]),
-    ("at least 100 MΩ", ["100 MΩ 이상"]),
-    ("누설 전류 0.5 mA 초과 시 불합격", ["0.5 mA 초과"]),
-    ("동작 온도 -10 ~ +50 ℃", ["-10~50 °C"]),
-    ("저장 온도 -20°C ~ 70°C", ["-20~70 °C"]),
-    ("내전압 1.5 kV 1분", ["1.5 kV", "60 s"]),
-    ("정격 5 V (4.75 ~ 5.25 V)", ["4.75~5.25 V"]),
-    ("입력 220 V AC ±10%", ["198~242 V"]),
-    ("주파수 60 Hz ± 1 Hz", ["59~61 Hz"]),
-    ("출력 5Vdc", ["5 V"]),
-    ("무게 1,500 g 이하", ["1500 g 이하"]),
-    ("KS C 1234에 따른다.", []),
-    ("3.2절 참조", []),
-    ("IEC 60950-1 시험", []),
-    ("5 초과", []),
-]
-
-
-@pytest.mark.parametrize("text,want", [
-    ("1×10\u2079 Ω", "1000000000 Ω"), ("1×10^9 Ω", "1000000000 Ω"), ("2.5x10^-3 A", "0.0025 A"), ("1E9 Ω", "1000000000 Ω"),
-    ("1.5e3 V", "1500 V"), ("10\u2076 Ω", "1000000 Ω"),
-    ("\u221220 ℃", "-20 °C"), ("\u201020", "-20"), ("온도 \u201320 ~ 60", "온도 -20 ~ 60"), ("10 \u2013 20 V", "10 \u2013 20 V"),
-    ("1.5 mm²", "1.5 mm^2"), ("체적 1×10¹² Ω·cm", "체적 1000000000000 Ω·cm"),
-])
-def test_spec_norm_exponent_dash_superscript(text, want):
-    # 4차 검토 C1·C4: NFKC가 위첨자 지수를 '109'로 바꾸기 전에 계산, 유니코드 빼기는 '-'
-    assert reader.spec_norm(text) == want
-
-
-def test_quantity_of_unicode_minus_and_ohm_case():
-    assert reader.quantity_of("\u221210 ℃")[0] == -10.0
-    assert reader.quantity_of("100 mOhm")[1][:2] == ("Ω", 1e-3) and reader.quantity_of("100 MOhm")[1][:2] == ("Ω", 1e6)
-    assert reader.quantity_of("100 mohm") is None                        # 밀리인지 메가인지 모름 -> 숫자로 읽지 않음
-
-
-def _cond_texts(text):
-    out = []
-    for c in reader.spec_conditions(text):
-        if c["unit"] == "분" and c["kind"] == "plain":          # 1분 -> 60 s (기준 단위로 비교)
-            out.append(f"{c['lo']:g} s")
-        else:
-            out.append(reader.cond_text(c))
-    return out
-
-
-@pytest.mark.parametrize("text,expected", SPEC_CORPUS)
-def test_spec_conditions_corpus(text, expected):
-    assert _cond_texts(text) == expected
-
-
-def test_quantity_and_unit_of():
-    assert reader.quantity_of(5.1) == (5.1, None)
-    assert reader.quantity_of("5.1 V")[1][0] == "V" and reader.quantity_of("1,500 g")[0] == 1500
-    assert reader.quantity_of("150MΩ")[1] == ("Ω", 1e6, "MΩ")
-    assert reader.quantity_of("합격") is None
-    assert reader.unit_of("측정값(mA)") == ("A", 1e-3, "mA") and reader.unit_of("전압 [V]")[0] == "V"
-    assert reader.unit_of("항목") is None
-
-
-@pytest.mark.parametrize("text,expected", [
-    # 한 문장의 다른 항목 조건을 합치거나 지우지 않음 (1.4.63 독립 검토)
-    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", ["5 mm 이상", "100 mm 이하"]),
-    ("외경 3 mm, 폭 5 mm 이하로 한다.", ["3 mm", "5 mm 이하"]),
-    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", ["2 m 이상", "10 mm 이하"]),
-    # 같은 항목의 한계는 그대로 합침
-    ("두께는 5 mm 이상이며 10 mm 이하", ["5~10 mm"]),
-    ("두께 5 mm 이상, 10 mm 이하", ["5~10 mm"]),
-])
-def test_spec_conditions_do_not_mix_items(text, expected):
-    assert _cond_texts(text) == expected
-
-
-@pytest.mark.parametrize("text,term,expected", [
-    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", "두께", ["5 mm 이상"]),
-    ("두께 5 mm 이상, 길이 100 mm 이하로 한다.", "길이", ["100 mm 이하"]),
-    ("외경 3 mm, 폭 5 mm 이하로 한다.", "외경", ["3 mm"]),
-    ("외경 3 mm, 폭 5 mm 이하로 한다.", "폭", ["5 mm 이하"]),
-    ("길이 3 mm, 두께 5 mm 이하로 한다.", "길이", ["3 mm"]),
-    ("정격 전압 220 V, 허용 전류 10 A 이하", "정격 전압", ["220 V"]),
-    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", "케이블 길이", ["2 m 이상"]),
-    ("케이블 길이는 2 m 이상이며 외경은 10 mm 이하", "외경", ["10 mm 이하"]),
-    ("두께는 5 mm 이상이어야 한다. 폭은 100 mm 이하.", "두께", ["5 mm 이상"]),
-    ("대기 전력은 0.5 W 이하, 1 W 이하(시험 모드)로 한다.", "대기 전력", ["0.5 W 이하", "1 W 이하"]),
-    ("소비 전류는 최대 3 A, 최소 1 A로 한다.", "소비 전류", ["1~3 A"]),      # 최대·최소는 새 항목이 아님
-    # 허용·변동 범위로 시작하는 절은 새 항목이 아니라 앞 항목의 한계 (1.4.64 회귀: 기준 값 '5 V'만 남아 5.1 V가 불일치)
-    ("정격 전압은 5 V이며, 허용 범위는 4.75 V 이상 5.25 V 이하로 한다.", "정격 전압", ["4.75~5.25 V"]),
-    ("정격 전압 5 V, 허용 범위 4.75~5.25 V", "정격 전압", ["4.75~5.25 V"]),
-    ("정격 전압은 5 V로 하고, 허용 범위는 4.75~5.25 V로 한다.", "정격 전압", ["4.75~5.25 V"]),
-    ("출력 전압은 12 V이며, 변동 범위는 11.5 V 이상 12.5 V 이하", "출력 전압", ["11.5~12.5 V"]),
-    # 한쪽 한계와 기준 값은 합치지 않음 (1.4.66 보수적 판정: check가 판단필요)
-    ("회전수 1,500 rpm, 허용 범위 1,400 rpm 이상", "회전수", ["1500 rpm", "1400 rpm 이상"]),
-    # 기준 값 + 떨어진 공차 ±N 단위 / ±N % (규칙 b)
-    ("두께 3 mm, 공차 ±0.1 mm", "두께", ["2.9~3.1 mm"]),
-    ("정격 전류 2 A, 허용 오차 ±5 %", "정격 전류", ["1.9~2.1 A"]),
-    ("높이 100 mm, 허용 공차 ±2 mm, 폭 50 mm", "높이", ["98~102 mm"]),
-    # 사용·동작 범위는 한계 낱말이 아니라 별개 항목 (1.4.65 회귀: 시험 전압의 조건이 0~1000 V가 됨)
-    ("시험 전압 500 V, 사용 범위 0~1000 V", "시험 전압", ["500 V"]),
-    ("시험 온도 23 ℃, 동작 범위 -10~40 ℃", "시험 온도", ["23 °C"]),
-    ("보관 온도 25 ℃ 이하, 동작 범위 0~40 ℃", "보관 온도", ["25 °C 이하"]),
-    ("Current Max. 3A", "Current", ["3 A 이하"]),                          # 약어 점에서 문장을 나누지 않음
-    ("정격 전압: 5 V (허용 범위: 4.75 V ~ 5.25 V)", "정격 전압", ["4.75~5.25 V"]),
-])
-def test_near_conditions_stop_at_next_item(text, term, expected):
-    cs, _ = reader.near_conditions(text, [term])
-    assert [reader.cond_text(c) for c in cs] == expected
-
-
-def test_near_conditions_plain_with_later_range_is_marked():
-    # 안전장치: 잘라 낸 쪽에 기준 값만 남고 같은 문장 뒤에 같은 단위의 범위가 그 값을 품으면 alt로 표시 (불일치 단정 금지)
-    cs, _ = reader.near_conditions("외경 3 mm, 폭 2~5 mm로 한다.", ["외경"])
-    assert [reader.cond_text(c) for c in cs] == ["3 mm"] and [reader.cond_text(a) for a in cs[0]["alt"]] == ["2~5 mm"]
-    cs, _ = reader.near_conditions("외경 3 mm, 폭 5 mm 이하로 한다.", ["외경"])       # 한쪽 한계는 다른 항목으로 봄
-    assert "alt" not in cs[0]
-    cs, _ = reader.near_conditions("시험 전압 500 V, 사용 범위 0~1000 V", ["시험 전압"])  # 이름에 '범위'가 든 별개 항목
-    assert "alt" not in cs[0]
-
-
-def test_near_conditions_marks_reject_and_multi_value():
-    cs, _ = reader.near_conditions("누설 전류 0.5 mA 초과 시 불합격", ["누설 전류"])
-    assert cs and "불합격" in cs[0]["ambiguous"]
-    cs, _ = reader.near_conditions("주파수 50/60 Hz, 허용 범위 47~63 Hz", ["주파수"])
-    assert cs and "여럿" in cs[0]["ambiguous"]
-
-
-def test_cond_holds_bounds():
-    c = reader.spec_conditions("3 A 미만")[0]
-    assert reader.cond_holds(c, 2.99) and not reader.cond_holds(c, 3.0)
-    c = reader.spec_conditions("3 A 이하")[0]
-    assert reader.cond_holds(c, 3.0) and not reader.cond_holds(c, 3.01)
-    c = reader.spec_conditions("5 V ± 0.25 V")[0]
-    assert reader.cond_holds(c, 5.25) and not reader.cond_holds(c, 5.2501)
-
-
-# ---------------------------------------------------------------------------
 # --section 장절 번호 경계 (1.4.64)
 # ---------------------------------------------------------------------------
 
@@ -3025,18 +2869,6 @@ def test_number_search_linear_time(query, text):
     assert time.monotonic() - t < 1.0
 
 
-@pytest.mark.parametrize("text", ["1" * 20000, "시리얼 " + "1234567890" * 550 + " 정격 전압", ("1 " * 20000)[:20000],
-                                  ("10 - 20 " * 3000)])
-def test_spec_conditions_long_digit_runs(text):
-    # 6차 검토 [높음]: 긴 숫자열에서 모든 자리를 시작점으로 다시 읽어 제곱 시간. 구분자 없는 31자 이상 숫자열은 수치가 아님
-    t = time.monotonic()
-    reader.spec_conditions(text)
-    reader.near_conditions(text + " 정격 전압 5 V", ["정격 전압"])
-    assert time.monotonic() - t < 3.0
-    assert reader.spec_conditions("시리얼 " + "1" * 40 + " V") == []
-    assert reader.spec_conditions("정격 5 V")[0]["lo"] == 5.0
-
-
 def test_number_safety_net_needs_other_words(tmp_path, capsys):
     # 6차 검토 [중간]: 숫자 아닌 낱말(단위 빼고)도 같은 단위 안에 있어야 후보. 낱말이 없으면 number를 건너뜀
     p = tmp_path / "규격.txt"
@@ -3058,14 +2890,6 @@ def test_number_safety_net_time_cap_is_not_zero_verified(tmp_path, capsys, monke
     code, out = run_main(reader, capsys, "search", "--query", "없는말 7777", "--file", str(p))
     assert code == 0 and out["count"] == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
     assert any("숫자 안전망" in g for g in out["not_searched"]), out
-
-
-@pytest.mark.parametrize("text", ["1E999 Ω 이상", "1×10^999 Ω 이상", "1×10\u2079\u2079\u2079 Ω 이상", "10^999 Ω 이상", "1E-120 A 이하"])
-def test_spec_norm_exponent_over_two_digits_is_not_a_condition(text):
-    # 5차 검토: 지수는 2자리까지 계산. 3자리 이상은 조건으로 읽지 않음 (check에서 판단필요)
-    n = reader.spec_norm(text)
-    assert "지수 범위 밖" in n and reader.spec_conditions(n) == [], n
-    assert reader.spec_norm("1E99 V")[:3] == "100" and reader.spec_norm("1×10^12 Ω") == "1000000000000 Ω"
 
 
 @pytest.mark.parametrize("query,text,want", [
@@ -3184,11 +3008,9 @@ def test_spaced_sign_is_layer_a_and_snippet_shows_it(tmp_path, capsys):
     # 층 A로만 맞은 단위(정규화 매처는 못 찾음)도 스니펫·근거 문장에 값이 들어감 (전에는 글 앞부분만)
     text = "가" * 200 + " 출력 - 5 V"
     assert "- **5 V**" in reader.make_snippet(text, ["5 V"], 80)
-    # 근거 문장·check 조건: 층 A 자리가 든 문장을 먼저 ('5 Vdc'는 층 B)
+    # 근거 문장: 층 A 자리가 든 문장을 먼저 ('5 Vdc'는 층 B)
     text = "정격 5 Vdc 공급. 출력 5 V 이하."
     assert reader.match_sentence(text, ["5 V"]) == "출력 5 V 이하."
-    conds, sent = reader.near_conditions(text, ["5 V"])
-    assert sent == "출력 5 V 이하." and conds and conds[0]["hi"] == 5, (conds, sent)
 
 
 def test_and_snippet_shows_far_number_term(tmp_path, capsys):
@@ -3213,13 +3035,6 @@ def test_number_safety_net_checks_time_every_unit(monkeypatch):
     units = [({}, {"text": "값 1 2 3"}) for _ in range(10)]
     reader.number_search(units, reader.parse_query("1 2 3 9"), re.IGNORECASE, st)
     assert st == {"cut": True, "checked": 0}, st
-
-
-@pytest.mark.parametrize("text,want", [("정격 1,5 V", []), ("정격 1,2345 V", []), ("정격 10,20 mm", []),
-                                       ("정격 1,500 V", [1500.0]), ("정격 5 V, 10 A", [5.0, 10.0])])
-def test_spec_number_comma_needs_three_digits(text, want):
-    # 7차 검토 [경미]: 쉼표 뒤가 3자리 묶음이 아니면 수치로 보지 않음 ('1,5'가 1이나 5로 읽히지 않게)
-    assert [c["lo"] for c in reader.spec_conditions(text)] == want
 
 
 def test_pymupdf_messages_follow_the_current_stderr():
@@ -3542,8 +3357,6 @@ def test_outline_lists_headings_with_units_and_pages(tmp_path, capsys, monkeypat
     t.write_text("제목 없는 글입니다.\n\n둘째 단락입니다.", encoding="utf-8")
     code, out = run_main(reader, capsys, "outline", "--file", str(t))
     assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
-
-
 
 
 def test_save_without_path_goes_next_to_the_source_file(tmp_path, capsys, isolated_dirs):

@@ -37,7 +37,7 @@ import _runtime as rt  # noqa: E402
 import _markdown as md  # noqa: E402
 import _xlsx_formula as xf  # noqa: E402
 
-# 직접 실행(__main__)해도 내부 모듈(_spec_check)의 'from excel import ...'가 이 모듈을 쓰게 함 (두 번 읽지 않음)
+# 직접 실행(__main__)해도 'import excel'이 이 모듈을 쓰게 함 (두 번 읽지 않음)
 sys.modules.setdefault("excel", sys.modules[__name__])
 
 TOOL = "excel"
@@ -287,17 +287,79 @@ def write_session(args, command: str):
                            create=not dry and command == "write", tool=TOOL, command=command)
 
 
+_ADDR_LIKE = re.compile(r"^(\$?[A-Za-z]{1,3}\$?\d*(:\$?[A-Za-z]{1,3}\$?\d*)?|\$?\d+:\$?\d+)([;,]|$)")
+NAMES_SHOW = 50              # info에 담는 이름 정의 수
+
+
+def _is_name_ref(cells: str) -> bool:
+    """칸 주소가 아니라 이름 정의(예: 단가표, Data_2026)로 보이는지."""
+    c = cells.strip()
+    return bool(c) and not _ADDR_LIKE.match(c) and bool(re.fullmatch(r"[^\s!:;,'\"]+", c))
+
+
+def _com_names(wb: Any) -> List[Dict[str, str]]:
+    """열린 통합문서의 이름 정의 [{name, refers_to}] (숨김·내장 이름은 뺌)."""
+    out: List[Dict[str, str]] = []
+    try:
+        for i in range(1, int(wb.Names.Count) + 1):
+            n = wb.Names(i)
+            name = str(n.Name)
+            if not bool(getattr(n, "Visible", True)) or "_xlnm." in name or name.startswith("_"):
+                continue
+            out.append({"name": name, "refers_to": str(n.RefersTo).lstrip("=").replace("$", "")})
+    except Exception:
+        pass
+    return out
+
+
+def _closed_names(wb: Any) -> List[Dict[str, str]]:
+    """닫힌 xlsx의 통합문서 이름 정의 [{name, refers_to}] (범위 하나를 가리키는 것만)."""
+    out: List[Dict[str, str]] = []
+    try:
+        items = list(wb.defined_names.items())
+    except Exception:
+        return out
+    for name, dn in items:
+        if name.startswith("_xlnm.") or getattr(dn, "hidden", False):
+            continue
+        try:
+            dests = list(dn.destinations)
+        except Exception:
+            continue
+        if len(dests) == 1:
+            sh, coord = dests[0]
+            out.append({"name": name, "refers_to": f"{sh}!{str(coord).replace('$', '')}"})
+    return out
+
+
+def _name_target(names: List[Dict[str, str]], key: str) -> Optional[str]:
+    """이름 정의 -> 'Sheet!A1:B3' (같은 이름, 없으면 표기만 다른 이름). 없으면 None."""
+    for n in names:
+        if rt.exact_key(n["name"]) == rt.exact_key(key):
+            return n["refers_to"]
+    hits = [n for n in names if rt.name_key(n["name"]) == rt.name_key(key)]
+    return hits[0]["refers_to"] if len(hits) == 1 else None
+
+
 def target_range(t: off.OfficeTarget, ws: Any, address: Optional[str]) -> Any:
-    """주소 해석: 'A1:B2', 'Sheet!A1', 생략 시 UsedRange."""
+    """주소 해석: 'A1:B2', 'Sheet!A1', 이름 정의(예: 단가표), 생략 시 UsedRange."""
     if not address:
         return ws.UsedRange
     sheet, cells = split_sheet(address)
+    if not sheet and _is_name_ref(cells):
+        ref = _name_target(_com_names(t.doc), cells)
+        if ref:
+            sheet, cells = split_sheet(ref)
     if sheet:
         ws = t.sheet(sheet)
     try:
         return ws.Range(cells)
     except Exception:
-        raise rt.InputError(f"범위 주소가 잘못되었습니다: '{address}' (예: A1, A1:D10, B:B, 'Sheet1'!A1)")
+        hint = ""
+        if _is_name_ref(cells):
+            names = [n["name"] for n in _com_names(t.doc)]
+            hint = f" 이름 정의 '{cells}'이(가) 없습니다" + (f" (이름 정의: {', '.join(names[:10])})" if names else " (이 통합문서에 이름 정의가 없음)") + "."
+        raise rt.InputError(f"범위 주소가 잘못되었습니다: '{address}' (예: A1, A1:D10, B:B, 'Sheet1'!A1, 이름 정의).{hint}")
 
 
 def range_info(rng: Any) -> Dict[str, Any]:
@@ -515,6 +577,13 @@ def _read_matrix_open_wb(wb: Any, path: str, sheet: Optional[str], address: Opti
     # 열·행 전체(B:B, 5:7)일 때만, 그리고 Sheet!A1의 시트로 바꾼 뒤에 셉니다 (작은 범위 읽기마다 전체를 훑지 않게)
     if address:
         sh, cells = split_sheet(address)
+        if not sh and _is_name_ref(cells):          # 이름 정의(예: 단가표) -> 그것이 가리키는 시트·범위
+            defined = _closed_names(wb)
+            ref = _name_target(defined, cells)
+            if ref is None:
+                raise rt.not_found("이름 정의", cells, [n["name"] for n in defined], option="--range",
+                                   extra="" if defined else " (이 통합문서에 이름 정의가 없음)")
+            sh, cells = split_sheet(ref)
         if sh:
             found = rt.find_name(sh, names)
             if found is None:
@@ -820,7 +889,137 @@ def cmd_read(args) -> Dict[str, Any]:
     return rt.ok_unverified(TOOL, "read", res.get("preview", "") + " (시간 제한으로 일부만)", why + list(res.get("unverified") or []), **fields)
 
 
+FORMAT_SHOW = 200            # JSON formats에 담는 칸 수 (넘으면 formats_truncated, 전체는 formats_file CSV)
+FORMAT_SCAN_MAX = 20000      # --formats가 훑는 칸 수 상한 (열린 문서는 칸마다 COM을 부르므로 120초 안에 끝나게)
+XL_COLOR_NONE = -4142        # Interior.ColorIndex: 채우기 없음
+
+
+def _hex_bgr(v: Any) -> Optional[str]:
+    """Excel Color(BGR 정수) -> '#RRGGBB'."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    n = int(v)
+    return f"#{n & 0xFF:02X}{(n >> 8) & 0xFF:02X}{(n >> 16) & 0xFF:02X}"
+
+
+def _format_entry(cell: str, bg: Optional[str], color: Optional[str], bold: bool, italic: bool) -> Optional[Dict[str, Any]]:
+    """기본 서식(채우기 없음, 검은 글자, 보통)이 아닌 칸만: {cell, bg?, color?, bold?, italic?}."""
+    e: Dict[str, Any] = {"cell": cell}
+    if bg:
+        e["bg"] = bg
+    if color and color != "#000000":
+        e["color"] = color
+    if bold:
+        e["bold"] = True
+    if italic:
+        e["italic"] = True
+    return e if len(e) > 1 else None
+
+
+def _closed_formats(path: str, sheet: str, r0: int, c0: int, nrows: int, ncols: int) -> List[Dict[str, Any]]:
+    openpyxl = rt.require_lib("openpyxl", "openpyxl", "Office 없이 닫힌 엑셀 파일 읽기")
+    wb = rt.retry_fs(lambda: openpyxl.load_workbook(path, read_only=True))
+    out: List[Dict[str, Any]] = []
+
+    def rgb(c: Any) -> Optional[str]:
+        v = getattr(c, "rgb", None) if c is not None else None
+        return f"#{v[-6:].upper()}" if isinstance(v, str) and len(v) >= 6 else (None if c is None or getattr(c, "type", "") != "theme"
+                                                                                 else f"theme{getattr(c, 'theme', '')}")
+    try:
+        ws = wb[sheet]
+        for r, row in enumerate(ws.iter_rows(min_row=r0, max_row=r0 + nrows - 1, min_col=c0, max_col=c0 + ncols - 1), start=r0):
+            for c, cell in enumerate(row, start=c0):
+                fill = getattr(cell, "fill", None)
+                bg = rgb(fill.fgColor) if fill is not None and getattr(fill, "fill_type", None) == "solid" else None
+                font = getattr(cell, "font", None)
+                fcol = getattr(font, "color", None) if font is not None else None
+                if fcol is not None and getattr(fcol, "type", "") == "theme":
+                    fcol = None                 # 테마 글자색(기본 글자색 포함)은 기본으로 봄
+                e = _format_entry(addr(r, c), bg, rgb(fcol),
+                                  bool(getattr(font, "b", False)), bool(getattr(font, "i", False)))
+                if e:
+                    out.append(e)
+    finally:
+        wb.close()
+    return out
+
+
+def _com_formats(rng: Any) -> List[Dict[str, Any]]:
+    """열린 문서: 행 전체가 기본 서식이면 그 행은 건너뛰고(행 단위로 물어봄), 아니면 칸마다."""
+    ws = rng.Worksheet
+    r0, c0 = int(rng.Row), int(rng.Column)
+    nrows, ncols = int(rng.Rows.Count), int(rng.Columns.Count)
+    out: List[Dict[str, Any]] = []
+    for i in range(nrows):
+        r = r0 + i
+        try:
+            row = ws.Range(ws.Cells(r, c0), ws.Cells(r, c0 + ncols - 1))
+            idx, bold, italic, fc = row.Interior.ColorIndex, row.Font.Bold, row.Font.Italic, row.Font.Color
+            if idx == XL_COLOR_NONE and bold is False and italic is False and fc == 0:
+                continue                        # 행 전체가 기본 서식 (값이 섞이면 None이 와서 칸마다 봄)
+        except Exception:
+            pass
+        for j in range(ncols):
+            cell = ws.Cells(r, c0 + j)
+            inter, font = cell.Interior, cell.Font
+            idx = inter.ColorIndex
+            has_fill = (idx != XL_COLOR_NONE) if isinstance(idx, int) else _hex_bgr(inter.Color) not in (None, "#FFFFFF")
+            e = _format_entry(addr(r, c0 + j), _hex_bgr(inter.Color) if has_fill else None, _hex_bgr(font.Color),
+                              font.Bold is True, font.Italic is True)
+            if e:
+                out.append(e)
+    return out
+
+
+def _read_formats(args) -> Dict[str, Any]:
+    """read --formats: 기본 서식이 아닌 칸(배경색, 글자색, 굵게, 기울임) 목록. 칠해 둔 칸을 다시 찾거나 검토할 때 (1.6.7)."""
+    if args.search or args.where is not None or args.formulas or getattr(args, "columns", None):
+        raise rt.InputError("--formats는 --search, --where, --formulas, --columns와 함께 쓸 수 없습니다. 하나만 쓰세요.", no_fallback=True)
+    if closed_csv(args.target):
+        raise rt.InputError("CSV 파일에는 서식이 없습니다. 엑셀 파일(.xlsx)에서 --formats를 쓰세요.", error_type="not_supported")
+    closed = is_closed_xlsx(args.target)
+    if closed:
+        sheet, r0, c0, matrix, _ = _read_matrix_closed(closed, args.sheet, args.range)
+        nrows, ncols = len(matrix), max((len(r) for r in matrix), default=0)
+        if nrows * ncols > FORMAT_SCAN_MAX:
+            raise rt.InputError(f"--formats는 {FORMAT_SCAN_MAX}칸까지 봅니다 ({nrows}행 x {ncols}열). --range로 나눠 주세요.")
+        entries = _closed_formats(closed, sheet, r0, c0, nrows, ncols) if nrows and ncols else []
+        source = {"app": "Excel", "name": os.path.basename(closed), "path": closed, "source": "file(openpyxl)"}
+    else:
+        with off.open_target("excel", args.target, readonly=True) as t:
+            ws = t.sheet(args.sheet)
+            rng = target_range(t, ws, args.range)
+            sheet, r0, c0 = str(rng.Worksheet.Name), int(rng.Row), int(rng.Column)
+            nrows, ncols = int(rng.Rows.Count), int(rng.Columns.Count)
+            if nrows * ncols > FORMAT_SCAN_MAX:
+                raise rt.InputError(f"--formats는 {FORMAT_SCAN_MAX}칸까지 봅니다 ({nrows}행 x {ncols}열). --range로 나눠 주세요.")
+            entries = _com_formats(rng)
+            source = t.resolved()
+    full_addr = addr(r0, c0, r0 + max(nrows, 1) - 1, c0 + max(ncols, 1) - 1)
+    where = f"{sheet}!{full_addr}"
+    n = len(entries)
+    fields: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": full_addr, "formats": entries[:FORMAT_SHOW],
+                              "count": n, "formats_truncated": n > FORMAT_SHOW}
+    if not n:
+        return rt.ok(TOOL, "read", f"0건: {where}에 서식(배경색, 글자색, 굵게, 기울임)이 있는 칸이 없습니다",
+                     f"VERIFIED: 0건. {where}의 칸은 모두 기본 서식입니다 (찾은 항목 없음). 사용자에게 그대로 알리세요.", **fields)
+    if n > FORMAT_SHOW or args.save:
+        out = rt.resolve_output_path(None if args.save in (None, True) else args.save, f"{sheet}_{full_addr.replace(':', '-')}_서식", ".csv",
+                                     near=source.get("path"))
+        out = rt.write_csv_rows(out, [["칸", "배경색", "글자색", "굵게", "기울임"]]
+                                + [[e["cell"], e.get("bg", ""), e.get("color", ""), "예" if e.get("bold") else "",
+                                    "예" if e.get("italic") else ""] for e in entries])
+        fields["formats_file"] = out
+        if rt.check_saved_file(out, expected_rows=n + 1, delimiter=","):
+            return rt.ok_unverified(TOOL, "read", f"{where}: 서식이 있는 칸 {n}개", ["서식 목록 CSV를 다시 읽어 행 수를 확인하지 못함"], **fields)
+    preview = f"{where}: 서식이 있는 칸 {n}개" + (f" (앞 {FORMAT_SHOW}개만 표시, 전체는 formats_file)" if n > FORMAT_SHOW else "")
+    return rt.ok(TOOL, "read", preview, "VERIFIED: 칸 서식을 읽었습니다. formats_file(칸 목록)은 excel.py style --file, comment --file에 그대로 넘길 수 있습니다."
+                 if fields.get("formats_file") else "VERIFIED: 칸 서식을 읽었습니다.", **fields)
+
+
 def _cmd_read(args) -> Dict[str, Any]:
+    if getattr(args, "formats", False):
+        return _read_formats(args)
     found: Dict[str, Any] = {}
     payload = _read(args, found)
     if args.formulas:
@@ -874,6 +1073,8 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     finfo: Dict[str, Any] = {"entries": [], "warnings": []}
     found["formulas"] = finfo
     conds = None
+    if getattr(args, "columns", None) and (args.search or args.formulas):
+        raise rt.InputError("--columns는 --search, --formulas와 함께 쓸 수 없습니다. 하나만 쓰세요.", no_fallback=True)
     if args.where is not None:          # 식 오류는 문서를 읽기 전에
         if args.search or args.formulas:
             raise rt.InputError("--where는 --search, --formulas와 함께 쓸 수 없습니다. 하나만 쓰세요.")
@@ -911,7 +1112,8 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
     result: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": full_addr, "rows": nrows, "cols": ncols}
 
     save_cmd = rt.next_command("excel.py", ["read", "--target", args.target, "--range", full_addr, "--sheet", sheet, "--save"]
-                               + (["--formulas"] if args.formulas else []) + (["--where", args.where] if conds else []),
+                               + (["--formulas"] if args.formulas else []) + (["--where", args.where] if conds else [])
+                               + (["--columns", args.columns] if getattr(args, "columns", None) else []),
                                "전체를 CSV로 저장 (잘린 값까지 전체)")
     if conds is not None:
         return _read_where(args, conds, matrix, sheet, r0, c0, full_addr, result, save_cmd)
@@ -939,6 +1141,17 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
                          "전체 값이 필요하면 next_commands[0]으로 CSV에 저장하세요.", **result)
         return rt.ok(TOOL, "read", preview, "", **result)
 
+    span = ncols                                     # 이어 읽기 범위는 원래 열 폭 (--columns는 열 문자로 넘김)
+    picked: List[str] = []
+    if getattr(args, "columns", None):
+        hi, idx = _column_pick(args.columns, matrix, c0)
+        if hi:                                       # 제목 행 아래의 머리글: 그 위 행은 결과에 넣지 않음 (--where와 같음)
+            matrix, r0 = matrix[hi:], r0 + hi
+            result["header_row_found"] = r0
+        matrix = [[row[j] if j < len(row) else None for j in idx] for row in matrix]
+        picked = [col_letter(c0 + j) for j in idx]
+        nrows, ncols = len(matrix), len(idx)
+        result.update(columns=picked, rows=nrows, cols=ncols)
     values = [[out_value(v) for v in row] for row in matrix]
     if args.save:
         out = rt.resolve_output_path(None if args.save is True else args.save, f"{sheet}_{full_addr.replace(':', '-')}", ".csv",
@@ -968,8 +1181,9 @@ def _read(args, found: Dict[str, Any]) -> Dict[str, Any]:
         next_r = r0 + len(shown)
         last_r = r0 + nrows - 1
         rest = f"{sheet}!" if " " not in sheet else f"'{sheet}'!"
-        rest += addr(next_r, c0, last_r, c0 + ncols - 1)
-        nexts.append(rt.next_command("excel.py", ["read", "--target", args.target, "--range", rest], "나머지 행 이어서 읽기"))
+        rest += addr(next_r, c0, last_r, c0 + span - 1)
+        nexts.append(rt.next_command("excel.py", ["read", "--target", args.target, "--range", rest]
+                                     + (["--columns", ",".join(picked)] if picked else []), "나머지 행 이어서 읽기"))
     reasons = []
     if cells_cut:
         reasons.append(f"{rt.MAX_CELL_CHARS}자보다 긴 값 {cells_cut}개는 앞부분만 표시")
@@ -1177,6 +1391,28 @@ def _where_unreadable(matrix: List[List[Any]], groups: List[List[Tuple[int, str,
     return None
 
 
+def _column_names(spec: str) -> List[str]:
+    """--columns '품번, 수량' -> ['품번', '수량'] (이름 목록은 ',', 사용법 단순성 3번)."""
+    cols = [c.strip() for c in str(spec).split(",") if c.strip()]
+    if not cols:
+        raise rt.InputError("--columns가 비어 있습니다. 머리글 이름이나 열 문자를 쉼표로 주세요 (예: 품번,수량).", no_fallback=True)
+    return cols
+
+
+def _column_pick(spec: str, matrix: List[List[Any]], c0: int) -> Tuple[int, List[int]]:
+    """read --columns -> (머리글 행 위치, 고른 열 위치 목록). 이름이 첫 행에 없으면 위 10행 안에서 머리글을 찾음 (--where와 같음)."""
+    cols = _column_names(spec)
+    hi = _where_header_row(matrix, cols)
+    if not hi and matrix:            # 이름 하나가 틀려도 머리글 행은 맞게 (틀린 이름의 [후보]가 제목 줄이 아니라 머리글에서 나오게)
+        keys = {rt.name_key(c) for c in cols if not re.fullmatch(r"[A-Za-z]{1,3}", c.strip())}
+        hits = [sum(rt.name_key(_where_text(v)) in keys for v in row) for row in matrix[:10]]
+        if hits and max(hits) > hits[0]:
+            hi = hits.index(max(hits))
+    header = matrix[hi] if matrix else None
+    ncols = max((len(r) for r in matrix), default=0)
+    return hi, [resolve_column(c, header, c0, ncols, "읽을 열", option="--columns")[0] for c in cols]
+
+
 def _where_header_row(matrix: List[List[Any]], cols: List[str], scan: int = 10) -> int:
     """조건의 열 이름이 첫 행에 없으면 위 scan행 안에서 모든 조건 열 이름이 있는 행 (0이면 첫 행 그대로). 열 문자(B)는 이름이 아님."""
     def names(row: List[Any]) -> set:
@@ -1216,6 +1452,10 @@ def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: s
             if any(all(_where_match(cell(i, j), op, val) for j, op, val in g) for g in groups)]
     values = [[out_value(v) for v in matrix[i]] for i in [0] + hits] if matrix else []
     numbers = [r0 + i for i in [0] + hits] if matrix else []
+    if getattr(args, "columns", None) and matrix:    # 조건은 모든 열로 보고, 보여 주는 열만 고름
+        idx = [resolve_column(c, header, c0, ncols, "읽을 열", option="--columns")[0] for c in _column_names(args.columns)]
+        values = [[row[j] if j < len(row) else None for j in idx] for row in values]
+        result["columns"] = [col_letter(c0 + j) for j in idx]
     cond_text = where_text(conds)
     result.update(where=cond_text, header_row=r0, count=len(hits), data_rows=max(len(matrix) - 1, 0))
     where = f"{sheet}!{full_addr}"
@@ -1622,13 +1862,14 @@ def _closed_info(path: str) -> Dict[str, Any]:
                            "hidden": getattr(ws, "sheet_state", "visible") != "visible"})
         sheets += [{"name": c.title, "kind": "chart"} for c in getattr(wb, "chartsheets", [])]
         active = getattr(wb.active, "title", None)
+        defined = _closed_names(wb)
     finally:
         wb.close()
     source = {"app": "Excel", "name": os.path.basename(path), "path": path, "source": "file(openpyxl)"}
     names = ", ".join(f"{x['name']}({x.get('used_range') or '차트'})" for x in sheets[:10])
     return rt.ok(TOOL, "info", f"{os.path.basename(path)}: 시트 {len(sheets)}개 - {names}" + (" 등" if len(sheets) > 10 else ""),
                  "VERIFIED: 파일을 읽어 시트 목록을 확인했습니다 (Office 없이).", target_resolved=source, sheets=sheets,
-                 active_sheet=active)
+                 active_sheet=active, names=defined[:NAMES_SHOW], name_count=len(defined))
 
 
 def cmd_info(args) -> Dict[str, Any]:
@@ -1645,8 +1886,9 @@ def cmd_info(args) -> Dict[str, Any]:
     with off.open_target("excel", args.target, readonly=True) as t:
         wb = t.doc
         sheets = [_sheet_summary(wb.Worksheets(i), args.detail) for i in range(1, wb.Worksheets.Count + 1)]
+        defined = _com_names(wb)
         result: Dict[str, Any] = {"target_resolved": t.resolved(), "sheets": sheets,
-                                  "saved": off.is_saved(wb)}
+                                  "saved": off.is_saved(wb), "names": defined[:NAMES_SHOW], "name_count": len(defined)}
         if args.detail:
             result["layout_warnings"] = sum(len(s["warnings"]) for s in sheets)
         try:
@@ -1752,11 +1994,12 @@ PROTECT_HINT = ("문서 위쪽 노란 줄에 [편집 사용]이 있으면 누르
 _PROTECT_ALLOW = {"format_cells": "AllowFormattingCells", "format_columns": "AllowFormattingColumns",
                   "format_rows": "AllowFormattingRows", "insert_rows": "AllowInsertingRows",
                   "insert_columns": "AllowInsertingColumns", "delete_rows": "AllowDeletingRows",
-                  "delete_columns": "AllowDeletingColumns", "sort": "AllowSorting"}
+                  "delete_columns": "AllowDeletingColumns", "sort": "AllowSorting",
+                  "insert_hyperlinks": "AllowInsertingHyperlinks"}
 _PROTECT_WHAT = {"values": "값을 쓸", "format_cells": "서식을 바꿀", "format_columns": "열 너비·숨김을 바꿀",
                  "format_rows": "행 높이·숨김을 바꿀", "insert_rows": "행을 넣을", "insert_columns": "열을 넣을",
                  "delete_rows": "행을 지울", "delete_columns": "열을 지울", "sort": "정렬할",
-                 "objects": "메모·차트를 넣거나 지울", "structure": "병합·이동·복사할"}
+                 "objects": "메모·차트·그림을 넣거나 지울", "structure": "병합·이동·복사할", "insert_hyperlinks": "링크를 달"}
 PROTECT_SCAN_CELLS = 2000      # 잠기지 않은 칸 [후보]를 찾을 때 훑는 칸 수 상한
 
 
@@ -2320,9 +2563,75 @@ def write_cells(args) -> Dict[str, Any]:
                  "같은 명령을 다시 실행하지 마세요.", verified=True, **fields)
 
 
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp")
+
+
+def write_image(args) -> Dict[str, Any]:
+    """write --image: --range 칸(기본 A1)의 왼쪽 위에 그림을 원래 크기로 넣음 (1.6.7 기반 기능, 워드·PPT write --image와 같은 옵션)."""
+    src = rt.resolve_input_path(args.image, "그림 파일", exts=IMAGE_EXTS)
+    if os.path.splitext(src)[1].lower() not in IMAGE_EXTS:
+        raise rt.InputError(f"그림 파일이 아닙니다: {os.path.basename(src)} ({', '.join(IMAGE_EXTS)})")
+    with write_session(args, "write") as t:
+        ws = t.sheet(args.sheet)
+        cell = target_range(t, ws, args.range or "A1").Cells(1, 1)
+        ws = cell.Worksheet
+        check_protection(ws, [cell], "objects")
+        before = int(ws.Shapes.Count)
+        pic = ws.Shapes.AddPicture(Filename=src, LinkToFile=False, SaveWithDocument=True,
+                                   Left=float(cell.Left), Top=float(cell.Top), Width=-1, Height=-1)
+        name, after = str(pic.Name), int(ws.Shapes.Count)
+        where = f"{ws.Name}!{str(cell.Address).replace('$', '')}"
+        t.set_focus(sheet=ws)
+        resolved = t.resolved()
+    preview = f"{where}에 그림 '{os.path.basename(src)}'을(를) 넣었습니다"
+    if after != before + 1:
+        return rt.ok_unverified(TOOL, "write", preview, ["넣은 뒤 도형 수가 늘지 않음"], target_resolved=resolved, picture=name)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 그림이 들어간 것을 확인했습니다. 되돌리려면 office.py undo.", verified=True,
+                 target_resolved=resolved, picture=name, cell=where)
+
+
+def write_link(args) -> Dict[str, Any]:
+    """write --link: --range 칸(하나)에 하이퍼링크 (파일 경로 또는 주소). 보이는 글은 --value, 없으면 칸의 글(비었으면 링크 주소).
+    글이 있는 칸에 다른 --value는 --overwrite가 있을 때만 (R4). 넣은 뒤 링크 주소를 다시 읽어 확인 (1.6.7 기반 기능)."""
+    if not args.range:
+        raise rt.InputError("링크를 달 칸을 --range로 주세요 (예: --range B2).", no_fallback=True)
+    link = str(args.link).strip().strip('"')
+    with write_session(args, "write") as t:
+        ws = t.sheet(args.sheet)
+        cell = target_range(t, ws, args.range).Cells(1, 1)
+        ws = cell.Worksheet
+        check_protection(ws, [cell], "insert_hyperlinks")
+        old = cell.Value
+        old_text = "" if old is None else str(out_value(old))
+        text = args.value if args.value is not None else (old_text or link)
+        if old_text and args.value is not None and old_text != args.value and not args.overwrite:
+            raise rt.UserDecisionError(f"{str(cell.Address).replace('$', '')}에 값이 있습니다: '{old_text[:40]}'.",
+                                       "바꾸지 않았습니다. 사용자에게 값을 바꿀지 묻고, '예'이면 confirm_commands[0]을 1번 실행하세요.",
+                                       candidates=["값을 바꾸고 링크 달기"], commands=[rt.retry_command({"--overwrite": True})], destructive=True)
+        ws.Hyperlinks.Add(Anchor=cell, Address=link, TextToDisplay=text)
+        try:
+            got = str(cell.Hyperlinks(1).Address)
+        except Exception:
+            got = ""
+        where = f"{ws.Name}!{str(cell.Address).replace('$', '')}"
+        t.set_focus(sheet=ws)
+        resolved = t.resolved()
+    preview = f"{where}에 링크를 달았습니다 ({text} -> {link})"
+    if os.path.normcase(got.rstrip("/\\")) != os.path.normcase(link.rstrip("/\\")):
+        return rt.ok_unverified(TOOL, "write", preview, [f"다시 읽은 링크 주소가 다름: '{got}'"], target_resolved=resolved, link=link)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 링크 주소를 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved,
+                 link=link, cell=where, text=text)
+
+
 def cmd_write(args) -> Dict[str, Any]:
     if args.cells:
         return write_cells(args)
+    if args.image or args.link:
+        if args.dry_run:
+            raise rt.dry_run_unsupported(TOOL, "write --image·--link")
+        if args.image and args.link:
+            raise rt.InputError("--image와 --link는 따로 실행하세요.", no_fallback=True)
+        return write_image(args) if args.image else write_link(args)
     if args.dry_run:
         raise rt.dry_run_unsupported(TOOL, "write --value·--values·--file·--formula (미리보기는 --cells에만 있음)")
     sources = [x for x in (args.value is not None, args.values, args.file, args.formula) if x]
@@ -2826,6 +3135,27 @@ def _style_areas(address: Optional[str]) -> Tuple[Optional[str], List[str]]:
     return prefix, parts
 
 
+def _style_cells_file(path: str) -> List[str]:
+    """style --file: 칸 목록 파일(.csv/.txt, 줄마다 첫 칸이 칸 주소 B5 또는 범위 B5:D5, 머리글 한 줄은 있어도 됨) -> 칸 목록.
+    두 판 비교처럼 칠할 칸이 수백 개여서 --range "B2;D5;..."가 명령 한 줄에 너무 길 때 (1.6.7). 시트는 --sheet로 (칸마다 시트를 쓰지 않음)."""
+    src = rt.resolve_input_path(path, "칸 목록 파일", exts=(".csv", ".txt"))
+    parts: List[str] = []
+    for no, line in enumerate(rt.read_text_file(src).splitlines(), start=1):
+        first = re.split(r"[,\t;]", line, maxsplit=1)[0].strip().strip('"').replace("$", "")
+        if not first:
+            continue
+        if "!" in first:
+            raise rt.InputError(f"칸 목록 파일 {no}행의 '{first}'에 시트 이름이 있습니다. 시트는 --sheet로 주고 파일에는 칸만 적으세요.", no_fallback=True)
+        if not re.fullmatch(r"[A-Za-z]{1,3}\d+(:[A-Za-z]{1,3}\d+)?", first):
+            if not parts and no == 1:
+                continue                          # 머리글 한 줄 (예: '칸')
+            raise rt.InputError(f"칸 목록 파일 {no}행의 첫 칸 '{first}'이(가) 칸 주소(B5, B5:D5)가 아닙니다.", no_fallback=True)
+        parts.append(first.upper())
+    if not parts:
+        raise rt.InputError(f"칸 목록 파일에 칸 주소가 없습니다: {src}", no_fallback=True)
+    return list(dict.fromkeys(parts))
+
+
 def _style_chunks(prefix: str, parts: List[str]) -> List[str]:
     """칸 목록 -> Range 주소 묶음 ('Sheet1'!B2,D5 ...), 묶음마다 STYLE_AREA_CHARS 글자 이하."""
     out: List[List[str]] = []
@@ -2846,7 +3176,12 @@ def cmd_style(args) -> Dict[str, Any]:
         raise rt.InputError("적용할 서식이 없습니다. --theme, --bg, --color, --bold, --number-format, --border, --highlight 등을 지정하세요.")
     # 모든 입력 확인은 문서를 열기 전에 (서식을 지운 뒤 --highlight 오류로 멈추면 지운 서식이 되돌리기 지점 없이 남았음)
     rule = _parse_highlight(args.highlight) if args.highlight else None
-    prefix, parts = _style_areas(args.range)
+    if args.file:
+        if args.range:
+            raise rt.InputError("--file(칸 목록)과 --range는 함께 쓰지 않습니다. 하나만 쓰세요.", no_fallback=True)
+        prefix, parts = "", _style_cells_file(args.file)
+    else:
+        prefix, parts = _style_areas(args.range)
     if len(parts) > 1 and theme:
         raise rt.InputError("--theme(표 모양)은 범위 하나에만 씁니다. 떨어진 칸 여러 개(--range \"B2;D5\")에는 --bg, --color, --bold 같은 "
                             "서식을 씁니다.", no_fallback=True)
@@ -3500,6 +3835,8 @@ def cmd_range(args) -> Dict[str, Any]:
         raise rt.dry_run_unsupported(TOOL, f"range --action {a}")
     if a == "sort":
         return range_sort(args)
+    if a in ("filter", "unfilter"):
+        return range_filter(args)
     if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear", "values") and not args.range:
         raise rt.InputError(f"range {a}에는 --range가 필요합니다." + (
             " 시트 전체를 지우려면 사용자에게 확인한 뒤 excel.py info로 사용 범위를 보고 그 범위를 --range로 지정하세요."
@@ -4133,6 +4470,79 @@ def _sort_fields(ws: Any, rng: Any, top: int, c1: int, r2: int, order: List[Tupl
             srt.SortFields.Clear()
         except Exception:
             pass
+
+
+XL_AND, XL_OR = 1, 2          # AutoFilter Operator
+
+
+def _filter_criteria(op: str, val: str) -> str:
+    """--where의 연산자·값 -> AutoFilter 조건 글 (= 같음, != 다름, ~ 포함, !~ 포함 안 함, 크기 비교)."""
+    return {"=": f"={val}", "!=": f"<>{val}", "~": f"=*{val}*", "!~": f"<>*{val}*"}.get(op, f"{op}{val}")
+
+
+def _filter_plan(conds: List[List[Cond]]) -> List[Tuple[str, List[Tuple[str, str]]]]:
+    """--where -> [(열, [(연산자, 값)] 1~2개)]. 자동 필터로 나타낼 수 있는 것만: 묶음 하나(열마다 조건 하나, 그리고),
+    또는 같은 열의 조건 두 개를 '|'로 (또는). 그 밖은 STOP_RETRY."""
+    if len(conds) == 1:
+        cols = [c for c, _, _ in conds[0]]
+        if len(set(rt.name_key(c) for c in cols)) == len(cols):
+            return [(c, [(op, v)]) for c, op, v in conds[0]]
+    elif len(conds) == 2 and all(len(g) == 1 for g in conds) and rt.name_key(conds[0][0][0]) == rt.name_key(conds[1][0][0]):
+        return [(conds[0][0][0], [(conds[0][0][1], conds[0][0][2]), (conds[1][0][1], conds[1][0][2])])]
+    raise rt.InputError("자동 필터로 나타낼 수 없는 조건입니다. 열마다 조건 하나를 ';'로 잇거나(그리고), 같은 열의 두 값을 '|'로 주세요 "
+                        "(예: --where \"부서 = 영업; 금액 >= 100\", --where \"부서 = 영업 | 부서 = 설계\"). 더 복잡한 조건은 excel.py read --where로 읽으세요.",
+                        no_fallback=True)
+
+
+def range_filter(args) -> Dict[str, Any]:
+    """range --action filter --where: 열린 표에 자동 필터를 걸어 맞는 행만 보이게 (1.6.7 기반 기능: 사용자가 볼 표 거르기).
+    unfilter는 자동 필터를 끔. 값은 바꾸지 않음 (숨긴 행은 필터를 끄면 다시 보임)."""
+    if args.dry_run:
+        raise rt.dry_run_unsupported(TOOL, f"range --action {args.action}")
+    plan: List[Tuple[str, List[Tuple[str, str]]]] = []
+    if args.action == "filter":
+        if not args.where:
+            raise rt.InputError("range filter에는 --where가 필요합니다 (예: --where \"부서 = 영업; 금액 >= 100\").")
+        plan = _filter_plan(parse_where(args.where))
+    with write_session(args, "range") as t:
+        ws = t.sheet(args.sheet)
+        rng = target_range(t, ws, args.range)
+        ws = rng.Worksheet
+        sheet = str(ws.Name)
+        if args.action == "unfilter":
+            was = bool(getattr(ws, "AutoFilterMode", False))
+            if was:
+                ws.AutoFilterMode = False
+            t.set_focus(sheet=ws, changed=was)
+            still = bool(getattr(ws, "AutoFilterMode", False))
+            resolved = t.resolved()
+            preview = f"{sheet}의 자동 필터를 껐습니다" if was else f"{sheet}에 자동 필터가 없어 바꾸지 않았습니다"
+            if still:
+                return rt.ok_unverified(TOOL, "range", preview, ["끈 뒤에도 자동 필터가 켜져 있음"], target_resolved=resolved)
+            return rt.ok(TOOL, "range", preview, "VERIFIED: 자동 필터가 꺼진 것을 확인했습니다.", verified=True, target_resolved=resolved,
+                         unchanged=not was)
+        header = off.range_to_matrix(ws.Range(ws.Cells(int(rng.Row), int(rng.Column)),
+                                              ws.Cells(int(rng.Row), int(rng.Column) + int(rng.Columns.Count) - 1)).Value)
+        head = header[0] if header else []
+        ncols = int(rng.Columns.Count)
+        fields = [(resolve_column(col, head, int(rng.Column), ncols, "필터 열", option="--where")[0] + 1, crit) for col, crit in plan]
+        if bool(getattr(ws, "AutoFilterMode", False)):
+            ws.AutoFilterMode = False                      # 있던 필터 조건은 지우고 새로 (조건이 섞이지 않게)
+        for field, crit in fields:
+            if len(crit) == 1:
+                rng.AutoFilter(Field=field, Criteria1=_filter_criteria(*crit[0]))
+            else:
+                rng.AutoFilter(Field=field, Criteria1=_filter_criteria(*crit[0]), Operator=XL_OR,
+                               Criteria2=_filter_criteria(*crit[1]))
+        t.set_focus(sheet=ws)
+        on = bool(getattr(ws, "AutoFilterMode", False))
+        info = range_info(rng)
+        resolved = t.resolved()
+    preview = f"{info['sheet']}!{info['range']}에 자동 필터: {where_text(parse_where(args.where))}"
+    if not on:
+        return rt.ok_unverified(TOOL, "range", preview, ["건 뒤에 자동 필터가 켜져 있는지 확인하지 못함"], target_resolved=resolved, **info)
+    return rt.ok(TOOL, "range", preview, "VERIFIED: 자동 필터가 켜진 것을 확인했습니다. 끄려면 range --action unfilter.",
+                 verified=True, target_resolved=resolved, **info)
 
 
 def range_sort(args) -> Dict[str, Any]:
@@ -4908,19 +5318,7 @@ def cmd_comment(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 9. check(규격서 대조): 내부 모듈 _spec_check.py
-# (위의 주소·읽기 도우미를 쓰므로 여기서 불러옴)
-# ==============================================================================
-
-import _spec_check  # noqa: E402
-
-
-def cmd_check(args) -> Dict[str, Any]:
-    return _spec_check.cmd_check(args)
-
-
-# ==============================================================================
-# 10. 진입점
+# 9. 진입점
 # ==============================================================================
 
 def build_cli():
@@ -4953,6 +5351,8 @@ def build_cli():
     p.add_argument("--formulas", action="store_true",
                    help="수식 칸 목록도 함께 (formulas: cell, formula, value). --search는 수식 글에서도 찾음")
     p.add_argument("--where", help="조건에 맞는 행만 (첫 행은 머리글): '금액 >= 100; 부서 = 영업'. 연산자 >= <= > < = != ~(포함)")
+    p.add_argument("--columns", help="이 열만 (쉼표로, 머리글 이름 또는 열 문자. 예: 품번,수량)")
+    p.add_argument("--formats", action="store_true", help="값 대신 서식이 있는 칸 목록 (배경색, 글자색, 굵게, 기울임)")
 
     p = sub.add_parser("stats", help="표 집계: 합계·평균·최소·최대·건수 (--by 묶음별, --where 거른 행만)")
     common(p)
@@ -4993,6 +5393,8 @@ def build_cli():
                    help="--sheet(또는 --range '이름'!A1)의 시트를 새로 만들어 쓰기. 없으면 없는 시트는 오류")
     p.add_argument("--no-autofit", action="store_true", help="열 너비 자동 맞춤 안 함")
     p.add_argument("--cells", help="흩어진 칸 여러 개: \"C6=ft; C7=20; 계산기!C11==A1*2\" 또는 칸값 파일(.csv, 열: 칸, 값). =로 시작하는 값은 수식")
+    p.add_argument("--image", help="그림 파일 (.png, .jpg): --range 칸(기본 A1)의 왼쪽 위에 넣음")
+    p.add_argument("--link", help="하이퍼링크 주소 (파일 경로 또는 http 주소): --range 칸에. 보이는 글은 --value")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)
@@ -5011,6 +5413,7 @@ def build_cli():
     p.add_argument("--no-zebra", action="store_true", help="테마 적용 시 줄무늬 없음")
     p.add_argument("--highlight", help="조건부 강조: '>=100:yellow', '=완료:lightgreen', '포함:지연:pink'")
     p.add_argument("--clear", action="store_true", help="기존 서식 지우기")
+    p.add_argument("--file", help="칠할 칸 목록 파일 (.csv/.txt, 줄마다 첫 칸: B5 또는 B5:D5). 칸이 많을 때 --range 대신")
     fmt_args(p)
 
     p = sub.add_parser("export", help="CSV/XLSX/PDF로 저장")
@@ -5030,7 +5433,8 @@ def build_cli():
     common(p, write=True)
     p.add_argument("--action", required=True,
                    choices=["autofit", "width", "height", "merge", "unmerge", "freeze", "unfreeze",
-                            "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort", "values"],
+                            "hide", "unhide", "clear", "copy", "move", "border", "insert", "delete", "sort", "values",
+                            "filter", "unfilter"],
                    help="values: 수식을 지금 값으로 바꿈 (--dry-run으로 먼저 확인)")
     p.add_argument("--range", help="대상 범위 (freeze는 기준 셀, 기본 A2. insert/delete는 행 5:7 또는 열 B:C)")
     p.add_argument("--dest", help="copy/move 목적지 (예: B2, 'Sheet2'!A1)")
@@ -5041,6 +5445,7 @@ def build_cli():
     p.add_argument("--weight", choices=list(XL_WEIGHT) + ["none"], default="thin", help="border 굵기")
     p.add_argument("--box", action="store_true", help="border: 외곽선만")
     p.add_argument("--by", help="sort 기준 열: 머리글 이름 또는 열 문자, 여러 개는 쉼표 (예: \"부서,금액\", 64개까지)")
+    p.add_argument("--where", help="filter 조건: 열마다 하나를 ;로 (그리고), 같은 열 두 값은 | (또는). 예: \"부서 = 영업; 금액 >= 100\"")
     p.add_argument("--desc", nargs="?", const="*",
                    help="sort 내림차순: 값 없이 쓰면 모든 기준, 기준 이름을 주면 그것만 (예: --desc \"금액\")")
     p.add_argument("--header", choices=["auto", "yes", "no"], default="auto",
@@ -5075,24 +5480,12 @@ def build_cli():
     p.add_argument("--append", action="store_true", help="add: 이미 메모가 있는 칸은 기존 메모 아래 줄에 덧붙이기")
     p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
 
-    p = sub.add_parser("check", help="표의 값을 등록된 규격서와 한 번에 대조 (일치/불일치/근거없음/판단필요, 메모 파일)")
-    common(p)
-    p.add_argument("--range", required=True, help="대조할 행 범위 (예: B2:D50). 바로 위 행은 머리글(값 열의 단위)로 읽음")
-    p.add_argument("--item-col", required=True, help="항목 열 (예: B). 이 글로 규격서를 찾음")
-    p.add_argument("--value-col", required=True, help="값 열 (예: D)")
-    p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
-    p.add_argument("--unit-col", help="단위 열 (예: E). 생략하면 값 열 바로 오른쪽 열의 머리글이 '단위'일 때 그 열을 씀")
-    p.add_argument("--spec", required=True, help="규격서 파일 또는 폴더 (등록 안 된 문서는 먼저 등록)")
-    p.add_argument("--section", help="모든 행을 이 장절 안에서만 찾음 (예: 3.2)")
-    p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행, 0 = 머리글 없음)")
-    p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
-
     return parser
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
             "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
-            "comment": cmd_comment, "check": cmd_check, "stats": cmd_stats,
+            "comment": cmd_comment, "stats": cmd_stats,
             "duplicates": cmd_duplicates, "save": cmd_save}
 
 

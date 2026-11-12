@@ -888,6 +888,75 @@ def cmd_folders(args) -> Dict[str, Any]:
                  accounts=stores, **extra)
 
 
+CONTACT_SCAN_MAX = 5000      # 연락처 폴더에서 훑는 항목 수 상한
+CONTACT_SHOW = 20            # JSON에 담는 결과 수
+OL_FOLDER_CONTACTS = 10
+
+
+def _exchange_smtp(entry: Any) -> str:
+    """주소록 항목의 메일 주소: Exchange 사용자면 PrimarySmtpAddress, 아니면 Address."""
+    for get in ("GetExchangeUser", "GetExchangeDistributionList"):
+        try:
+            u = getattr(entry, get)()
+            if u is not None and _text(getattr(u, "PrimarySmtpAddress", "")):
+                return _text(u.PrimarySmtpAddress)
+        except Exception:
+            pass
+    return _text(getattr(entry, "Address", ""))
+
+
+def cmd_contacts(args) -> Dict[str, Any]:
+    """이름(일부)이나 메일 주소 일부로 내 연락처와 주소록(Outlook 이름 확인)을 찾음 (읽기만, 1.6.7 기반 기능).
+    받는 사람을 이름만 말했을 때 메일 주소로 바꾸는 데 씀. 여럿이면 모두 보여 주고 고르는 것은 사용자."""
+    key = str(args.name or "").strip()
+    if not key:
+        raise rt.InputError("찾을 이름을 --name으로 주세요 (예: --name 홍길동).")
+    ns = get_namespace(get_outlook())
+    fold = key.casefold()
+    found: List[Dict[str, Any]] = []
+    seen: set = set()
+    scanned = 0
+    try:
+        items = ns.GetDefaultFolder(OL_FOLDER_CONTACTS).Items
+        for it in items:
+            scanned += 1
+            if scanned > CONTACT_SCAN_MAX:
+                break
+            name = _text(getattr(it, "FullName", ""))
+            mail = _text(getattr(it, "Email1Address", ""))
+            company = _text(getattr(it, "CompanyName", ""))
+            if fold in name.casefold() or (mail and fold in mail.casefold()):
+                k = (mail or name).casefold()
+                if k not in seen:
+                    seen.add(k)
+                    found.append({"name": name, "email": mail, "company": company, "source": "연락처"})
+    except Exception as e:
+        rt.log("WARN", f"연락처 폴더를 읽지 못함 ({type(e).__name__})")
+    try:
+        rcp = ns.CreateRecipient(key)
+        if rcp.Resolve():
+            entry = rcp.AddressEntry
+            mail = _exchange_smtp(entry)
+            k = (mail or _text(entry.Name)).casefold()
+            if k not in seen:
+                seen.add(k)
+                found.append({"name": _text(entry.Name), "email": mail, "company": "", "source": "주소록"})
+    except Exception as e:
+        rt.log("WARN", f"주소록 이름 확인 실패 ({type(e).__name__})")
+    fields: Dict[str, Any] = {"query": key, "contacts": found[:CONTACT_SHOW], "count": len(found),
+                              "truncated": len(found) > CONTACT_SHOW}
+    warnings = [f"연락처가 많아 앞 {CONTACT_SCAN_MAX}개까지만 봄"] if scanned > CONTACT_SCAN_MAX else []
+    if warnings:
+        fields["warnings"] = warnings
+    if not found:
+        return rt.ok(TOOL, "contacts", f"0건: '{key}'와(과) 맞는 연락처·주소록 항목이 없습니다",
+                     f"VERIFIED: 0건. '{key}'을(를) 찾지 못했습니다 (찾은 항목 없음). 사용자에게 메일 주소를 물으세요.", **fields)
+    shown = ", ".join(f"{c['name']} <{c['email']}>" for c in found[:5])
+    directive = ("VERIFIED: 하나를 찾았습니다." if len(found) == 1 else
+                 f"VERIFIED: {len(found)}명을 찾았습니다. 누구인지 정하지 말고 목록을 보여 주고 사용자가 고르게 하세요.")
+    return rt.ok(TOOL, "contacts", f"'{key}': {shown}" + (" 외" if len(found) > 5 else ""), directive, **fields)
+
+
 # ==============================================================================
 # 3. 작성
 # ==============================================================================
@@ -2042,6 +2111,9 @@ def build_cli():
     p.add_argument("--body", help="메모 (줄바꿈은 \\n)")
     p.add_argument("--body-file", help="메모 파일 (.txt/.md)")
 
+    p = sub.add_parser("contacts", help="연락처·주소록에서 이름(일부)이나 메일 주소로 찾기 (읽기만)")
+    p.add_argument("--name", required=True, help="이름 일부 또는 메일 주소 일부 (예: 홍길동)")
+
     p = sub.add_parser("folders", help="폴더 구조")
     p.add_argument("--depth", type=int, default=2, help="하위 폴더 깊이 (기본 2, 최대 5, 폴더 150개까지)")
 
@@ -2073,7 +2145,7 @@ def build_cli():
 
 HANDLERS = {"list": cmd_list, "search": cmd_search, "read": cmd_read, "current": cmd_current, "folders": cmd_folders,
             "attachments": cmd_attachments, "new": cmd_new, "reply": cmd_reply, "forward": cmd_forward, "send": cmd_send,
-            "thread": cmd_thread, "calendar": cmd_calendar, "event": cmd_event}
+            "thread": cmd_thread, "calendar": cmd_calendar, "event": cmd_event, "contacts": cmd_contacts}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

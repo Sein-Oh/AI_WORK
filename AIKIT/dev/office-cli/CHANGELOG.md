@@ -30,6 +30,46 @@
   정리(`step_old_global`, `step_old_layout`, `RETIRED_SKILLS` 등)와 `opencode.jsonc`의 옛 `"skills"` WARN을 없앰. 단계는 1 설정 폴더, 2 PATH, 3 동작 확인.
   `run_all_tests.py` diag와 `run_simplify_check.py` K1의 옛 복사본 확인도 뺌. 관련 테스트 정리.
 
+### 구조: excel-kit을 작업 기준으로 둘로 (사용자 결정 2026-11-12: 8KB 한도에 닿음. 열린/파일 상태가 아니라 작업으로 나눔)
+- `excel-kit`(읽기·쓰기: 값·표·수식, 조건 행, 칠한 칸 찾기, 메모, 그림·링크, 바꾸기, 저장·내보내기, 앱 사이 옮기기)과
+  `excel-format-kit`(모양·구조: 서식, 차트, 시트, 행·열 넣기·지우기, 정렬, 자동 필터, 틀 고정·병합, 수식을 값으로). 기본 스킬 12개.
+- `SKILL_OF_COMMAND`: excel style·sheet·range·chart 도움말은 excel-format-kit. setup, `.gitignore`, 전역 지침 3장 표·9장, 저장소 AGENTS.md, README,
+  사용 가이드, 실기 K1, 채점 시험, `test_skill_docs`의 스킬별 기능 목록.
+
+### 기능: 기반 도구로서 부족했던 것 채우기 (사용자 결정 2026-11-12: 조합을 스킬로 완성할 수 있게)
+- `excel.py read --formats`: 서식이 있는 칸(배경색, 글자색, 굵게, 기울임) 목록. 칠해 둔 칸을 다시 찾을 때. 닫힌 xlsx는 openpyxl(테마 글자색은 기본),
+  열린 문서는 행 전체가 기본 서식이면 건너뛰고 칸마다 읽음(2만 칸 상한). 많으면 `formats_file`(style·comment `--file`에 그대로). 시험 2개, 가짜 COM은 칸이 든 범위의 서식을 보여 줌.
+- `word.py header`: 머리글·바닥글 읽기(구역마다 기본·첫 쪽·짝수 쪽)와 쓰기(`--kind header|footer --text`, 글이 있으면 `--overwrite`, `--dry-run`, 다시 읽어 확인). word-kit 스킬, 시험.
+- `ppt.py table`: 슬라이드에 이미 있는 표 읽기와 칸 쓰기(`--cells "R2C3=값; ..."`, `--file`, 표가 여럿이면 `[후보]`, 글이 있는 칸은 `--overwrite`). ppt-kit 스킬, 시험.
+- `outlook.py contacts --name`: 내 연락처와 주소록(Outlook 이름 확인)에서 메일 주소 찾기 (읽기만). outlook-kit 스킬, 시험.
+- `office.py open --file`: 파일을 사용자 화면의 Office로 열기(이미 열려 있으면 그 창을 앞으로). excel·word·ppt-kit 스킬의 되돌리기/창 줄, 시험.
+- 엑셀 이름 정의: `info`의 `names`, `read --range <이름 정의>`(닫힌 파일·열린 문서, 없는 이름은 `[후보]`).
+- `excel.py range --action filter --where` / `unfilter`: 자동 필터로 맞는 행만 보이게 (열마다 조건 하나, 같은 열 두 값은 `|`). excel-kit 스킬, 시험.
+- `excel.py write --image`(칸 왼쪽 위에 그림), `write --link`(칸에 하이퍼링크, 보이는 글 `--value`).
+- `word.py link`(하이퍼링크 목록·달기, `#책갈피`), `word.py bookmark`(책갈피 목록·만들기). 스킬, 시험.
+
+### 제거: `excel.py check`(규격 대조) (사용자 결정 2026-11-12: office-cli는 기반 도구, 판정 기준은 도구 밖)
+- `excel.py check`, `_spec_check.py`, reader의 규격 조건 읽기·판정 도우미(`spec_conditions`, `near_conditions`, `cond_holds` 등)를 지움.
+  숫자 값 찾기가 쓰는 단위 표(`_UNIT_TABLE`)는 남김. 규격 대조는 기반 도구 조합으로: `excel.py read`(값) + `reader.py search`/`read --section`(근거)
+  -> LLM이 근거를 보고 판단 -> `excel.py comment --file --dry-run`(메모 미리보기). 조합은 사용자 스킬로 완성 (사용자 계획).
+- `search-kit` 스킬, 전역 지침 3장 표·4장, 사용 가이드 2.10, README, 실기 러너 E10·I30, Gemma 시나리오 O1(조합으로 다시 씀)과 채점 시험, 판정 시험·말뭉치.
+
+### 기능: 두 판을 LLM과 의논하며 비교할 때 쓰는 도구 보완 (사용자 목표: 비교 판단은 LLM과 의논, 도구는 읽기·검증·표시)
+- `excel.py read --columns 품번,수량`: 그 열만 (머리글 이름 또는 열 문자, 제목 행 아래 머리글도 찾음). `--where`는 모든 열로 거르고 보여 주는 열만,
+  `--save`도 그 열만, 이어 읽기 명령은 열 문자로. `--search`·`--formulas`와는 함께 쓰지 않음.
+- `excel.py style --file <칸목록>`: 칠할 칸이 수백 개일 때 (`--range "B2;D5"`가 명령 한 줄에 너무 김). 줄마다 첫 칸이 칸 주소, 머리글 한 줄은 건너뜀.
+- 점검: 행을 이을 열 확인(`duplicates`), 전체 가져오기(`read --save`, `export`), 의심 행 보기(`read --where`), 결과 파일(`write`로 새 파일),
+  칸 메모(`comment --file`), 워드 표시(`word.py comment --file`, `replace --highlight`)는 이미 있음.
+- 테스트: `test_read_columns_picks_columns_by_name_or_letter`, `test_style_cells_from_file_for_long_lists`.
+
+### 지침·기능: 도구에 없는 일을 둘로 (사용자 결정 2026-11-12: "안 됨"이 발목을 잡지 않게, 되돌릴 수 없는 일만 막음)
+- 전역 지침 8장: 가(확인 뒤: 변경 내용 수락·거부, 피벗, 데이터 유효성, 기존 차트 고치기. "예" 뒤 열린 문서만 바꾸고 저장하지 않음),
+  나(하지 않음: 인쇄, 회의 요청, 메일 이동·분류·플래그, 반복·회의 일정 지우기). 스킬 11개의 8장 문장, 사용 가이드 10장.
+- 도구: `NOT_SUPPORTED`에 종류(confirm/user). 가는 `error_type: not_in_tool`과 8장 안내, 나만 `not_supported`(사용자가 직접).
+- 두 판 비교는 지침·스킬·도구 안내에서 모두 뺌 (나중에 구현할 때 검토, 남은 할 일). `excel.py compare`·`reader.py diff`는 보통 인자 오류.
+- `office.py transfer` 워드<->PPT: 설명 글 대신 `[추천]`에 보내는 문서의 `read --save` 전체 명령 (회사 PC 2026-11-11 BEAM O8).
+- 테스트: `test_confirm_features_point_to_global_guide`, `test_transfer_between_word_and_ppt_recommends_the_read_save_command`.
+
 ### 기능: 결과 파일은 대상 파일 옆, 대상 파일이 없으면 C:\AIKIT\data (사용자 결정)
 - 전역 지침 2장 "결과 파일 위치": 경로를 주면 그대로, 아니면 파일을 대상으로 한 작업은 대상 파일과 같은 폴더, 대상 파일이 없는 작업은 `C:\AIKIT\data`.
 - `resolve_output_path(near=, internal=)`: `--save` 생략·이름만·상대 경로가 `output_folder(near)` 기준 (전에는 생략이면 `office-cli\data\_work`(7일 뒤 지움),
@@ -2510,6 +2550,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
+- [ ] 두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 다른 곳을 찾아 검토): 비교 판단은 LLM이 사용자와 의논하며 하고 도구는 읽기·검증·표시를 맡음
+  (사용자 결정 2026-11-12, 1.6.7에서 `read --columns`, `style --file` 보완). 실제 BOM 샘플로 이 흐름을 시험하고 부족한 도구를 다시 검토.
 - [ ] 2026-11-09 전체 검토(1.4.91)에서 찾은 것: `docs/history/office-cli_REVIEW_2026-11-09.md`. 1장·2장·3장은 1.4.92~1.4.96에서 처리
   (3장 C1~C18은 실기에서 끝남: C6 수정, C12·C18 문제없음, C13 OneDrive는 쓰지 않아 닫음). 남은 것: 3장 끝의 마크다운 작은 것(보류),
   4장 3·4·5번은 1.6.0·1.6.1에서 끝남 (하지 않기로 한 것: 변경 내용 수락·거부, 인쇄, 회의 요청, 메일 이동·분류, 플래그, 피벗, 데이터 유효성,

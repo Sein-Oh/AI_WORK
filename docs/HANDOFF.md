@@ -514,6 +514,27 @@ office-cli `--save` 생략·이름만·상대 경로가 이 규칙을 따름 (�
 `pytest_live_report.py`를 지움. 기본 단계는 `diag,beta,office`(+ 선택 `ml`, `gemma`). Windows에서만 보이는 문제는 이 실제 환경 단계가 봄.
 pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규칙 그대로 (개발자가 Windows에서 직접 돌릴 수 있음).
 
+### 3-23. 도구에 없는 일을 둘로 (전역 지침 8장, office-cli 1.6.7)
+사용자 결정: "하지 않는 일"이 대형 모델(BEAM)의 발목을 잡지 않게. 가 확인 뒤(변경 내용 수락·거부, 피벗, 유효성, 차트 고치기: "예" 뒤 바꾸고 저장 안 함),
+나 하지 않음(인쇄, 회의 요청, 메일 이동·분류·플래그, 반복·회의 일정 지우기). 두 판 비교는 지침·스킬·도구 안내에서 모두 빼고 나중에 구현할 때 검토
+(office-cli CHANGELOG 남은 할 일). 워드 -> PPT transfer는 `[추천]` 전체 명령. 회사 PC에서 볼 것: 피벗 요청에서 "예"를 먼저 받는지.
+
+### 3-24. 두 판 비교용 도구 점검과 보완 (office-cli 1.6.7)
+사용자 목표: 두 판 비교에 필요한 LLM 도구. 비교 판단(행을 이을 열, 같은 값으로 볼 기준)은 LLM이 사용자와 의논하고 도구는 읽기·검증·표시.
+점검: `duplicates`(행 열 확인), `read --save`/`export`(전체), `read --where`(의심 행), `write`(새 결과 파일), `comment --file`(칸 메모),
+`style --range "B2;D5"`(떨어진 칸), word `comment --file`·`replace --highlight`는 있음. 보완: `read --columns`, `style --file`(칸 수백 개).
+다음: 실제 BOM 샘플(경로·이름 지운 것)로 이 흐름을 회사 PC에서 시험.
+
+### 3-25. office-cli는 기반 도구: `excel.py check` 뺌, 부족한 기반 기능 채우기
+사용자 결정: office-cli는 응용이 조합해 쓰는 기반 도구 (저장소 AGENTS.md office-cli 첫 줄). 규격 대조 판정(`excel.py check`)을 빼고 조합(엑셀 읽기 +
+규격서 검색 + 메모 미리보기)으로. Gemma O1도 조합으로 다시 씀. 사용자가 조합을 스킬로 완성할 계획. 이어서 부족한 기반 기능을 차례로 넣음 (CHANGELOG 1.6.7).
+넣은 기반 기능: 엑셀 `read --formats`(서식 있는 칸), 이름 정의 범위(`info` names, `read --range <이름>`), `range --action filter/unfilter`(자동 필터),
+`write --image`·`--link`, 워드 `header`(머리글·바닥글), `link`·`bookmark`, PPT `table`(있는 표 칸), Outlook `contacts`(주소 찾기), `office.py open`(화면에 열기).
+모두 가짜 COM 시험만 함. 회사 PC에서 볼 것: 실제 Office에서 `read --formats`의 행 건너뛰기(ColorIndex -4142), 자동 필터 조건 글, 그림 위치,
+워드 머리글이 구역 연결(LinkToPrevious)일 때, Outlook 주소록 이름 확인(Exchange), `open`이 보호된 보기로 열릴 때.
+excel-kit을 작업 기준으로 나눔 (사용자 결정): `excel-kit`(읽기·쓰기 6.0KB)과 `excel-format-kit`(서식·차트·시트·행열·정렬·필터 5.2KB). 기본 스킬 12개.
+열린/파일 상태로 나누는 안은 검토 뒤 하지 않음 (같은 명령이 두 스킬에 겹치고, 모델이 파일이 열렸는지 볼 수 없음).
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.

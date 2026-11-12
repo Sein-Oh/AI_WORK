@@ -20,7 +20,7 @@ from fake_excel import FakeExcelWorkbook, FakeXlApp
 from fake_office import FakeExcelApp, FakePptApp, FakeWordDoc, FakeWorkbook, FakeWorkbooks, make_win32com
 from fake_ppt import FakePresentation
 from fake_word import FakeWordDocument
-from office_helpers import option_value, split_command, error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
+from office_helpers import option_value, recommended_argv, split_command, error_log_text, formula_xlsx, run_as_tool, run_main, run_office, SECRET, sheet_names, stub_com, undo_points
 
 
 @pytest.fixture
@@ -2339,3 +2339,46 @@ def test_active_document_in_protected_view_is_not_written(monkeypatch):
     assert off.resolve_target("excel", "active", readonly=False)["doc"] is normal
     app.ActiveProtectedViewWindow = None
     assert "fallback" not in off.get_active("excel")
+
+
+def test_transfer_between_word_and_ppt_recommends_the_read_save_command(capsys):
+    """회사 PC 2026-11-11 BEAM O8: 워드 -> PPT를 transfer로 먼저 시도. 설명 글 대신 내용을 .md로 저장하는 전체 명령을 [추천]
+    (그 결과의 confirm_commands가 받는 앱에 넣는 명령을 줌)."""
+    import office
+    code, out = run_main(office, capsys, "transfer", "--from-app", "word", "--from-target", "주간보고.docx", "--to-app", "ppt")
+    assert code == 1 and "[추천]" in out["message"], out
+    argv = recommended_argv(out["message"], "word")
+    assert argv[:2] == ["read", "--save"] and argv[argv.index("--target") + 1] == "주간보고.docx", argv
+    code, out = run_main(office, capsys, "transfer", "--from-app", "ppt", "--to-app", "word")
+    assert code == 1 and recommended_argv(out["message"], "ppt") == ["read", "--save"], out
+
+
+def test_open_shows_file_in_office_or_focuses_open_one(monkeypatch, capsys, tmp_path):
+    """1.6.7 기반 기능: 만든 결과 파일을 사용자 화면에 열기. 확장자로 앱을 고름, 이미 열려 있으면 그 창을 앞으로,
+    Office 파일이 아니면 거절, 없는 파일은 [후보]/오류."""
+    path = tmp_path / "결과.xlsx"
+    path.write_bytes(b"x")
+    opened = []
+
+    class _Books:
+        def Open(self, p):
+            opened.append(p)
+            return types.SimpleNamespace(FullName=p, Name=os.path.basename(p))
+
+    app = types.SimpleNamespace(Workbooks=_Books(), Hwnd=0, Visible=False)
+    fake, calls = make_win32com(dispatch=app)
+    monkeypatch.setattr(off, "win32com", fake)
+    monkeypatch.setattr(off, "pythoncom", None)
+    monkeypatch.setattr(off, "list_open", lambda kind: [])
+    code, out = run_office(capsys, "open", "--file", str(path))
+    assert code == 0 and out["verified"] is True and opened == [str(path)] and app.Visible is True, out
+    assert ("Dispatch", "Excel.Application") in calls and out["already_open"] is False
+    doc = types.SimpleNamespace(Name="결과.xlsx", FullName=str(path), Activate=lambda: None)
+    monkeypatch.setattr(off, "list_open", lambda kind: [{"name": "결과.xlsx", "path": str(path), "app": app, "doc": doc}] if kind == "excel" else [])
+    monkeypatch.setattr(off, "match_open", lambda kind, name, docs, option=None: docs[0])
+    code, out = run_office(capsys, "open", "--file", str(path))
+    assert code == 0 and out["already_open"] is True and opened == [str(path)], out          # 다시 열지 않음
+    txt = tmp_path / "메모.txt"
+    txt.write_text("x", encoding="utf-8")
+    code, out = run_office(capsys, "open", "--file", str(txt))
+    assert code == 1 and "Office 파일이 아닙니다" in out["message"], out

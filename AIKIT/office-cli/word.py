@@ -1856,6 +1856,173 @@ def _style_name(rng: Any) -> str:
         return ""
 
 
+LINKS_SHOW = 100
+_BOOKMARK_NAME = re.compile(r"^[^\W\d_][\w]{0,39}$")
+
+
+def cmd_link(args) -> Dict[str, Any]:
+    """하이퍼링크 목록(--anchor 없음)과 달기(--anchor 글에 --address 주소: 파일 경로, http 주소, #책갈피). 1.6.7 기반 기능.
+    문서 글은 바꾸지 않고 링크만 덧붙임, 달고 나서 다시 읽어 확인."""
+    if not args.anchor:
+        with off.open_target("word", args.target, readonly=True, tool=TOOL, command="link") as t:
+            doc = t.doc
+            n = int(doc.Hyperlinks.Count)
+            items = []
+            for i in range(1, min(n, LINKS_SHOW) + 1):
+                h = doc.Hyperlinks(i)
+                sub = str(getattr(h, "SubAddress", "") or "")
+                items.append({"no": i, "text": _preview(str(h.TextToDisplay or ""), 60), "address": str(h.Address or "") + (f"#{sub}" if sub else "")})
+            resolved = t.resolved()
+        if not n:
+            return rt.ok(TOOL, "link", f"0건: {resolved['name']}에 하이퍼링크가 없습니다", "VERIFIED: 0건. 하이퍼링크가 없습니다 (찾은 항목 없음).",
+                         links=[], count=0, target_resolved=resolved)
+        return rt.ok(TOOL, "link", f"{resolved['name']}: 하이퍼링크 {n}개", "VERIFIED: 하이퍼링크를 읽었습니다.", links=items, count=n,
+                     truncated=n > LINKS_SHOW, target_resolved=resolved)
+    if not args.address:
+        raise rt.InputError("링크 주소를 --address로 주세요 (파일 경로, http 주소, 책갈피는 #이름).", no_fallback=True)
+    address = str(args.address).strip().strip('"')
+    sub = ""
+    if address.startswith("#"):
+        address, sub = "", address[1:]
+    with off.open_target("word", args.target, readonly=bool(args.dry_run), focus=not args.no_focus, tool=TOOL, command="link") as t:
+        doc = t.doc
+        rng = _comment_range(doc, args.anchor, args.occurrence)
+        shown = _preview(str(rng.Text), 40)
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "link", f"미리보기: '{shown}'에 링크 {args.address} (바꾸지 않음)", 1,
+                                     [f"'{shown}' -> {args.address}"], rt.dry_run_command(TOOL, "링크 달기"), target_resolved=t.resolved())
+        before = int(doc.Hyperlinks.Count)
+        doc.Hyperlinks.Add(Anchor=rng, Address=address, SubAddress=sub)
+        after = int(doc.Hyperlinks.Count)
+        last = doc.Hyperlinks(after) if after else None
+        got = (str(getattr(last, "Address", "") or ""), str(getattr(last, "SubAddress", "") or "")) if last is not None else ("", "")
+        t.set_focus()
+        resolved = t.resolved()
+    preview = f"'{shown}'에 링크를 달았습니다 ({args.address})"
+    if after != before + 1 or got != (address, sub):
+        return rt.ok_unverified(TOOL, "link", preview, ["달고 다시 읽은 링크 수나 주소가 다름"], target_resolved=resolved)
+    return rt.ok(TOOL, "link", preview, "VERIFIED: 링크를 다시 읽어 확인했습니다. 되돌리려면 office.py undo.", verified=True,
+                 target_resolved=resolved, address=args.address)
+
+
+def cmd_bookmark(args) -> Dict[str, Any]:
+    """책갈피 목록(--name 없음)과 만들기(--name 이름 --anchor 글). 같은 이름이 있으면 --overwrite가 있을 때만 옮김 (1.6.7 기반 기능).
+    링크로 문서 안의 곳을 가리키려면 word.py link --address "#이름"."""
+    if not args.name:
+        with off.open_target("word", args.target, readonly=True, tool=TOOL, command="bookmark") as t:
+            doc = t.doc
+            n = int(doc.Bookmarks.Count)
+            items = [{"name": str(doc.Bookmarks(i).Name), "text": _preview(str(doc.Bookmarks(i).Range.Text or ""), 60)}
+                     for i in range(1, min(n, LINKS_SHOW) + 1)]
+            resolved = t.resolved()
+        if not n:
+            return rt.ok(TOOL, "bookmark", f"0건: {resolved['name']}에 책갈피가 없습니다", "VERIFIED: 0건. 책갈피가 없습니다 (찾은 항목 없음).",
+                         bookmarks=[], count=0, target_resolved=resolved)
+        return rt.ok(TOOL, "bookmark", f"{resolved['name']}: 책갈피 {n}개", "VERIFIED: 책갈피를 읽었습니다.", bookmarks=items, count=n,
+                     truncated=n > LINKS_SHOW, target_resolved=resolved)
+    name = str(args.name).strip()
+    if not _BOOKMARK_NAME.match(name):
+        raise rt.InputError(f"책갈피 이름 '{name}'은(는) 쓸 수 없습니다: 글자로 시작하고 글자·숫자·밑줄만, 40자까지 (공백 불가).", no_fallback=True)
+    if not args.anchor:
+        raise rt.InputError("책갈피를 둘 글을 --anchor로 주세요.", no_fallback=True)
+    with off.open_target("word", args.target, readonly=bool(args.dry_run), focus=not args.no_focus, tool=TOOL, command="bookmark") as t:
+        doc = t.doc
+        rng = _comment_range(doc, args.anchor, args.occurrence)
+        exists = bool(doc.Bookmarks.Exists(name))
+        if exists and not args.overwrite and not args.dry_run:
+            raise rt.UserDecisionError(f"책갈피 '{name}'이(가) 이미 있습니다.", "바꾸지 않았습니다. 그 책갈피를 이 글로 옮길지 사용자에게 묻고, "
+                                       "'예'이면 confirm_commands[0]을 1번 실행하세요.", candidates=["책갈피를 이 글로 옮기기"],
+                                       commands=[rt.retry_command({"--overwrite": True})], destructive=True)
+        shown = _preview(str(rng.Text), 40)
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "bookmark", f"미리보기: '{shown}'에 책갈피 '{name}' (바꾸지 않음)", 1, [f"{name} -> '{shown}'"],
+                                     rt.dry_run_command(TOOL, f"책갈피 '{name}' 만들기", destructive=exists, overwrite=exists),
+                                     target_resolved=t.resolved())
+        doc.Bookmarks.Add(name, rng)
+        ok = bool(doc.Bookmarks.Exists(name))
+        t.set_focus()
+        resolved = t.resolved()
+    preview = f"'{shown}'에 책갈피 '{name}'을(를) 만들었습니다"
+    if not ok:
+        return rt.ok_unverified(TOOL, "bookmark", preview, ["만든 뒤 책갈피를 찾지 못함"], target_resolved=resolved)
+    return rt.ok(TOOL, "bookmark", preview, f"VERIFIED: 책갈피를 확인했습니다. 링크로 가리키려면 word.py link --address \"#{name}\".",
+                 verified=True, target_resolved=resolved, name=name)
+
+
+HF_TYPES = (("기본", 1), ("첫 쪽", 2), ("짝수 쪽", 3))    # wdHeaderFooterPrimary/FirstPage/EvenPages
+
+
+def _hf(sec: Any, kind: str, idx: int) -> Any:
+    return sec.Headers(idx) if kind == "header" else sec.Footers(idx)
+
+
+def _hf_text(hf: Any) -> str:
+    return str(hf.Range.Text or "").replace("\x07", "").rstrip("\r\n")
+
+
+def cmd_header(args) -> Dict[str, Any]:
+    """머리글·바닥글 읽기(--text 없음)와 쓰기(--text: --section의 기본 머리글 또는 바닥글을 그 글로). 기반 기능 (1.6.7):
+    문서 번호·개정 판 표기 확인과 수정. 글이 있으면 --overwrite가 있을 때만 바꿈 (R4), 쓴 뒤 다시 읽어 확인."""
+    kinds = [args.kind] if args.kind else ["header", "footer"]
+    names = {"header": "머리글", "footer": "바닥글"}
+    if args.text is None:
+        with off.open_target("word", args.target, readonly=True, tool=TOOL, command="header") as t:
+            doc = t.doc
+            n = int(doc.Sections.Count)
+            if args.section and not 1 <= args.section <= n:
+                raise rt.InputError(f"--section {args.section}: 이 문서의 구역은 1~{n}입니다.")
+            items: List[Dict[str, Any]] = []
+            for si in ([args.section] if args.section else range(1, n + 1)):
+                sec = doc.Sections(si)
+                for kind in kinds:
+                    for tname, idx in HF_TYPES:
+                        hf = _hf(sec, kind, idx)
+                        if idx > 1 and not bool(getattr(hf, "Exists", False)):
+                            continue
+                        items.append({"section": si, "kind": names[kind], "type": tname, "text": _preview(_hf_text(hf), 500)})
+            resolved = t.resolved()
+        filled = [i for i in items if i["text"]]
+        where = f"{resolved.get('name', '문서')}"
+        if not filled:
+            return rt.ok(TOOL, "header", f"0건: {where}에 글이 있는 {'·'.join(names[k] for k in kinds)}이(가) 없습니다",
+                         f"VERIFIED: 0건. {'·'.join(names[k] for k in kinds)}이(가) 비어 있습니다 (찾은 항목 없음). 사용자에게 그대로 알리세요.",
+                         items=items, count=0, sections=n, target_resolved=resolved)
+        shown = "; ".join(f"구역 {i['section']} {i['kind']}({i['type']}): {_preview(i['text'], 40)}" for i in filled[:5])
+        return rt.ok(TOOL, "header", f"{where}: {shown}", "VERIFIED: 머리글·바닥글을 읽었습니다.", items=items, count=len(filled),
+                     sections=n, target_resolved=resolved)
+    if not args.kind:
+        raise rt.InputError("쓸 곳을 --kind header 또는 --kind footer로 주세요.", no_fallback=True)
+    text = rt.unescape_newlines(args.text)
+    si = args.section or 1
+    with off.open_target("word", args.target, readonly=bool(args.dry_run), focus=not args.no_focus, tool=TOOL, command="header") as t:
+        doc = t.doc
+        n = int(doc.Sections.Count)
+        if not 1 <= si <= n:
+            raise rt.InputError(f"--section {si}: 이 문서의 구역은 1~{n}입니다.")
+        hf = _hf(doc.Sections(si), args.kind, 1)
+        old = _hf_text(hf)
+        what = f"구역 {si} {names[args.kind]}"
+        if old and old != text and not args.overwrite and not args.dry_run:
+            raise rt.UserDecisionError(f"{what}에 이미 글이 있습니다: '{_preview(old, 60)}'.",
+                                       "바꾸지 않았습니다. 있던 글을 새 글로 바꿀지 사용자에게 묻고, '예'이면 confirm_commands[0]을 1번 실행하세요.",
+                                       candidates=["있던 글을 새 글로 바꾸기"], commands=[rt.retry_command({"--overwrite": True})], destructive=True)
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "header", f"미리보기: {what}을(를) '{_preview(text, 60)}'(으)로 (바꾸지 않음)", 1,
+                                     [f"{what}: '{_preview(old, 60)}' -> '{_preview(text, 60)}'"],
+                                     rt.dry_run_command(TOOL, f"{what} 바꾸기", destructive=bool(old), overwrite=bool(old)),
+                                     target_resolved=t.resolved())
+        hf.Range.Text = text
+        back = _hf_text(_hf(doc.Sections(si), args.kind, 1))
+        linked = si > 1 and bool(getattr(hf, "LinkToPrevious", False))
+        t.set_focus()
+        resolved = t.resolved()
+    preview = f"{what}을(를) '{_preview(text, 60)}'(으)로 바꿨습니다" + (" (앞 구역과 연결되어 있어 앞 구역도 같이 바뀜)" if linked else "")
+    if back != text.replace("\n", "\r").rstrip("\r"):
+        return rt.ok_unverified(TOOL, "header", preview, [f"다시 읽은 글이 다름: '{_preview(back, 60)}'"], target_resolved=resolved, old_text=old)
+    return rt.ok(TOOL, "header", preview, "VERIFIED: 쓴 뒤 다시 읽어 같은 것을 확인했습니다. 되돌리려면 office.py undo.",
+                 verified=True, target_resolved=resolved, old_text=old, section=si)
+
+
 def cmd_format(args) -> Dict[str, Any]:
     """--paragraphs(read의 단락 번호)의 정렬·글꼴·크기·굵게·기울임·스타일을 바꿈 (README에만, 스킬에는 적지 않음: 범위 고르기가 어려움).
     스타일을 먼저 적용하고 그 위에 글꼴 옵션. 바꾼 뒤 단락마다 다시 읽어 확인, 되돌리기 지점."""
@@ -2339,6 +2506,26 @@ def build_cli():
     p.add_argument("--file", help="값 파일 (.csv/.md 표, 열: 자리, 값. 예: {{업체명}},한빛전자 / 표2!R3C4,25). 많을 때")
     p.add_argument("--overwrite", action="store_true", help="값이 있는 표 칸도 덮어쓰기 (사용자가 확인했을 때만)")
 
+    p = sub.add_parser("header", help="머리글·바닥글 읽기 (--text가 있으면 --kind의 머리글 또는 바닥글 쓰기)")
+    common(p, write=True)
+    p.add_argument("--kind", choices=["header", "footer"], help="header(머리글) 또는 footer(바닥글). 읽기는 생략하면 둘 다")
+    p.add_argument("--section", type=int, help="구역 번호 (읽기는 생략하면 모든 구역, 쓰기는 생략하면 1)")
+    p.add_argument("--text", help="쓸 글 (기본 머리글·바닥글을 이 글로 바꿈). 줄바꿈은 \\n")
+    p.add_argument("--overwrite", action="store_true", help="글이 있는 머리글·바닥글 바꾸기 (사용자가 확인했을 때만)")
+
+    p = sub.add_parser("link", help="하이퍼링크 목록 (--anchor가 있으면 그 글에 --address 링크 달기)")
+    common(p, write=True)
+    p.add_argument("--anchor", help="링크를 달 문서의 글")
+    p.add_argument("--occurrence", type=int, help="--anchor 글이 여러 곳이면 몇 번째인지 (오류의 [후보] 번호)")
+    p.add_argument("--address", help="링크 주소: 파일 경로, http 주소, 문서 안 책갈피는 #이름")
+
+    p = sub.add_parser("bookmark", help="책갈피 목록 (--name이 있으면 --anchor 글에 책갈피 만들기)")
+    common(p, write=True)
+    p.add_argument("--name", help="책갈피 이름 (글자로 시작, 글자·숫자·밑줄, 공백 없음)")
+    p.add_argument("--anchor", help="책갈피를 둘 문서의 글")
+    p.add_argument("--occurrence", type=int, help="--anchor 글이 여러 곳이면 몇 번째인지")
+    p.add_argument("--overwrite", action="store_true", help="같은 이름의 책갈피를 이 글로 옮기기 (사용자가 확인했을 때만)")
+
     p = sub.add_parser("export", help="PDF/DOCX 사본 저장")
     common(p)
     p.add_argument("--save", help="저장 경로 (.pdf 또는 .docx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
@@ -2348,7 +2535,8 @@ def build_cli():
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "export": cmd_export,
             "outline": cmd_outline, "comment": cmd_comment, "revisions": cmd_revisions, "fill": cmd_fill,
-            "delete": cmd_delete, "table": cmd_table, "format": cmd_format}
+            "delete": cmd_delete, "table": cmd_table, "format": cmd_format, "header": cmd_header,
+            "link": cmd_link, "bookmark": cmd_bookmark}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

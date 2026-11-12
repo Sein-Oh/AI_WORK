@@ -717,6 +717,113 @@ def _find_shape(slide: Any, slide_no: int, name: str) -> Any:
                        "shape_detail name입니다.", names, log_message="도형 이름을 찾지 못함", replace=name)
 
 
+TABLE_ROWS_SHOW = 100        # table 읽기에서 JSON에 담는 행 수
+_CELL_KEY = re.compile(r"^R(\d+)C(\d+)$", re.I)
+
+
+def _cell_text(tbl: Any, r: int, c: int) -> str:
+    try:
+        return str(tbl.Cell(r, c).Shape.TextFrame.TextRange.Text).replace("\r", "\n").strip()
+    except Exception:
+        return ""
+
+
+def _pick_table(slide: Any, slide_no: int, name: Optional[str]) -> Any:
+    """슬라이드의 표 도형: --shape가 있으면 그 이름, 없으면 슬라이드에 하나뿐인 표 (여럿이면 [후보])."""
+    if name:
+        sh = _find_shape(slide, slide_no, name)
+        if not _has(sh, "HasTable"):
+            raise rt.InputError(f"슬라이드 {slide_no}의 '{sh.Name}'은(는) 표가 아닙니다.")
+        return sh
+    tables = [slide.Shapes(k) for k in range(1, slide.Shapes.Count + 1) if _has(slide.Shapes(k), "HasTable")]
+    if not tables:
+        raise rt.InputError(f"슬라이드 {slide_no}에 표가 없습니다 (count 0). 표가 있는 슬라이드는 ppt.py info의 tables로 확인합니다.")
+    if len(tables) > 1:
+        names = [str(t.Name) for t in tables]
+        raise rt.UserDecisionError(f"슬라이드 {slide_no}에 표가 {len(tables)}개 있습니다.", "어느 표인지 [후보]를 사용자에게 보여 주고 고른 번호의 "
+                                   "confirm_commands를 1번 실행하세요.", candidates=names,
+                                   commands=[rt.retry_command({"--shape": n}) for n in names])
+    return tables[0]
+
+
+def _parse_table_cells(spec: Optional[str], path: Optional[str]) -> List[Tuple[int, int, str]]:
+    """--cells "R2C3=값; R3C1=값"(칸 여러 개는 ;) 또는 --file(.csv, 열: 칸, 값) -> [(행, 열, 값)]."""
+    pairs: List[Tuple[str, str]] = []
+    if path:
+        src = rt.resolve_input_path(path, "칸 값 파일", exts=(".csv", ".txt"))
+        import csv as _csv
+        for row in _csv.reader(rt.read_text_file(src).splitlines()):
+            if len(row) >= 2 and row[0].strip():
+                pairs.append((row[0].strip(), row[1]))
+        if pairs and not _CELL_KEY.match(pairs[0][0]):
+            pairs = pairs[1:]                                   # 머리글 한 줄 (예: 칸,값)
+    elif spec:
+        if "," in spec and ";" not in spec and "=" in spec and spec.count("=") > 1:
+            raise rt.InputError(f"--cells의 칸 여러 개는 ';'로 나눕니다: '{spec}'. [추천] {rt.retry_command({'--cells': spec.replace(',', ';')})}",
+                                no_fallback=True)
+        for part in spec.split(";"):
+            if part.strip():
+                k, sep, v = part.partition("=")
+                if not sep:
+                    raise rt.InputError(f"--cells의 '{part.strip()}'에 '='가 없습니다. 형식: \"R2C3=값; R3C1=값\"", no_fallback=True)
+                pairs.append((k.strip(), v.strip()))
+    out = []
+    for k, v in pairs:
+        m = _CELL_KEY.match(k)
+        if not m:
+            raise rt.InputError(f"칸 '{k}'은(는) 'R행C열'(예: R2C3) 형식이 아닙니다.", no_fallback=True)
+        out.append((int(m.group(1)), int(m.group(2)), rt.unescape_newlines(v)))
+    if not out:
+        raise rt.InputError("쓸 칸이 없습니다. --cells \"R2C3=값\" 또는 --file <칸,값 CSV>를 주세요.", no_fallback=True)
+    return out
+
+
+def cmd_table(args) -> Dict[str, Any]:
+    """슬라이드에 이미 있는 표 읽기(--cells·--file 없음)와 칸 쓰기 (1.6.7 기반 기능: 슬라이드 표의 수치 갱신).
+    글이 있는 칸은 --overwrite가 있을 때만 바꿈 (R4), 쓴 뒤 다시 읽어 확인."""
+    writing = bool(args.cells or args.file)
+    cells = _parse_table_cells(args.cells, args.file) if writing else []
+    with off.open_target("ppt", args.target, readonly=not writing or bool(args.dry_run), focus=not args.no_focus, tool=TOOL,
+                         command="table") as t:
+        prs = t.doc
+        if args.slide < 1 or args.slide > int(prs.Slides.Count):
+            raise rt.InputError(f"슬라이드 {args.slide}이(가) 없습니다 (1~{prs.Slides.Count}).")
+        sh = _pick_table(prs.Slides(args.slide), args.slide, args.shape)
+        tbl = sh.Table
+        nr, nc = int(tbl.Rows.Count), int(tbl.Columns.Count)
+        info: Dict[str, Any] = {"slide": args.slide, "shape": str(sh.Name), "nrows": nr, "ncols": nc}
+        if not writing:
+            rows = [[_cell_text(tbl, r, c) for c in range(1, nc + 1)] for r in range(1, nr + 1)]
+            resolved = t.resolved()
+            shown = rows[:TABLE_ROWS_SHOW]
+            return rt.ok(TOOL, "table", f"슬라이드 {args.slide} 표 '{sh.Name}': {nr}행 x {nc}열", "VERIFIED: 표를 읽었습니다. 칸은 R행C열(예: R2C3)로 씁니다.",
+                         rows=shown, truncated=len(rows) > len(shown), target_resolved=resolved, **info)
+        bad = [f"R{r}C{c}" for r, c, _ in cells if not (1 <= r <= nr and 1 <= c <= nc)]
+        if bad:
+            raise rt.InputError(f"표 '{sh.Name}'({nr}행 x {nc}열) 밖의 칸: {', '.join(bad[:5])}.", no_fallback=True)
+        olds = {(r, c): _cell_text(tbl, r, c) for r, c, _ in cells}
+        filled = [f"R{r}C{c}('{_preview_text(olds[(r, c)], 20)}')" for r, c, v in cells if olds[(r, c)] and olds[(r, c)] != v.strip()]
+        if filled and not args.overwrite and not args.dry_run:
+            raise rt.UserDecisionError(f"표 '{sh.Name}'에서 글이 있는 칸 {len(filled)}개를 바꾸게 됩니다: {', '.join(filled[:5])}.",
+                                       "바꾸지 않았습니다. 사용자에게 바꿀지 묻고, '예'이면 confirm_commands[0]을 1번 실행하세요.",
+                                       candidates=["글이 있는 칸도 바꾸기"], commands=[rt.retry_command({"--overwrite": True})], destructive=True)
+        planned = [f"R{r}C{c}: '{_preview_text(olds[(r, c)], 20)}' -> '{_preview_text(v, 20)}'" for r, c, v in cells]
+        if args.dry_run:
+            return rt.dry_run_result(TOOL, "table", f"미리보기: 표 '{sh.Name}' 칸 {len(cells)}개 (바꾸지 않음)", len(cells), planned,
+                                     rt.dry_run_command(TOOL, f"표 '{sh.Name}' 칸 {len(cells)}개 쓰기", destructive=bool(filled), overwrite=bool(filled)),
+                                     target_resolved=t.resolved(), **info)
+        for r, c, v in cells:
+            tbl.Cell(r, c).Shape.TextFrame.TextRange.Text = v
+        wrong = [f"R{r}C{c}" for r, c, v in cells if _cell_text(tbl, r, c) != v.replace("\r", "\n").strip()]
+        t.set_focus(slide=args.slide)
+        resolved = t.resolved()
+    preview = f"슬라이드 {args.slide} 표 '{info['shape']}'의 칸 {len(cells)}개를 썼습니다"
+    if wrong:
+        return rt.ok_unverified(TOOL, "table", preview, [f"다시 읽은 글이 다른 칸: {', '.join(wrong[:5])}"], target_resolved=resolved, **info)
+    return rt.ok(TOOL, "table", preview, "VERIFIED: 쓴 칸을 다시 읽어 확인했습니다. 되돌리려면 office.py undo.", verified=True,
+                 count=len(cells), target_resolved=resolved, **info)
+
+
 def cmd_shape(args) -> Dict[str, Any]:
     """기존 도형 옮기기·크기 (pt): --left --top --width --height 중 준 것만 바꿈. 슬라이드 밖으로 나가면 바꾸지 않고
     슬라이드 안으로 맞춘 값을 [추천]. 그림처럼 비율이 잠긴 도형은 너비만 주면 높이가 따라감."""
@@ -1625,6 +1732,14 @@ def build_cli():
     p.add_argument("--width", type=float, help="너비 (pt, 비율이 잠긴 그림은 높이가 따라감)")
     p.add_argument("--height", type=float, help="높이 (pt)")
 
+    p = sub.add_parser("table", help="슬라이드의 표 읽기 (--cells·--file이 있으면 칸 쓰기)")
+    common(p, write=True)
+    p.add_argument("--slide", type=int, required=True, help="슬라이드 번호")
+    p.add_argument("--shape", help="표 도형 이름 (슬라이드에 표가 하나면 생략)")
+    p.add_argument("--cells", help="쓸 칸 \"R2C3=값; R3C1=값\" (R행C열, 칸 여러 개는 ;)")
+    p.add_argument("--file", help="칸 값 파일 (.csv, 열: 칸, 값. 예: R2C3,25). 많을 때")
+    p.add_argument("--overwrite", action="store_true", help="글이 있는 칸도 바꾸기 (사용자가 확인했을 때만)")
+
     p = sub.add_parser("slide", help="슬라이드 관리")
     common(p, write=True)
     p.add_argument("--action", required=True, choices=["list", "add", "duplicate", "move", "delete", "clear"])
@@ -1636,7 +1751,7 @@ def build_cli():
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace,
-            "export": cmd_export, "slide": cmd_slide, "notes": cmd_notes, "shape": cmd_shape}
+            "export": cmd_export, "slide": cmd_slide, "notes": cmd_notes, "shape": cmd_shape, "table": cmd_table}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
