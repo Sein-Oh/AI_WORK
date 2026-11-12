@@ -1,0 +1,54 @@
+office-cli 1.6.7 Windows 테스트 보고서 (20261112_203316)
+Python 3.13.13 / 테스트 폴더 C:\AIKIT\dev\work\office
+요약: ENV-SKIP=1, FAIL=1, PASS=8
+
+[PASS] P1 엑셀 read --columns(열 이름으로 고르기), --formats(칠한 칸 B3·굵은 칸 C4)
+    내용: --columns 앞 두 행=[['품번', '수량'], ['A1', 5]], 서식 칸=['B3', 'C4']
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "read", "preview": "P_FMT!A1:C4: 서식이 있는 칸 2개", "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\AIKIT\\dev\\work\\office\\A.xlsx", "source": "active"}, "sheet": "P_FMT", "range": "A1:C4", "formats": [{"cell": "B3", "bg": "#FFFF00"}, {"cell": "C4", "bold": true}], "count": 2, "formats_truncated": false, "verified": true, "agent_directiv...
+
+[PASS] P2 엑셀 style --file: 파일의 칸(A2, C3)만 칠함
+    내용: A2·C3 색, B2 채우기=(65535, 65535, -4142)
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "style", "preview": "P_FMT!A2;C3 (2곳)에 서식 적용: format", "verified": true, "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\AIKIT\\dev\\work\\office\\A.xlsx", "source": "active", "sheet": "P_FMT"}, "applied": {"format": ["bg"]}, "sheet": "P_FMT", "range": "A2;C3", "areas": 2, "agent_directive": "VERIFIED: 2곳에 적용한 서식을 다시 읽어 확인했습니다."}
+
+[PASS] P3 엑셀 이름 정의 범위: info에 이름, read --range <이름>이 그 범위(4행)
+    내용: info 이름=['P_RANGE_203336'], 읽은 행=4
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "read", "preview": "P_FMT!A1:C4: 4행 x 3열", "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\AIKIT\\dev\\work\\office\\A.xlsx", "source": "active"}, "sheet": "P_FMT", "range": "A1:C4", "rows": 4, "cols": 3, "values": [["품번", "규격", "수량"], ["A1", "M3", 5], ["A2", "M4", 12], ["A3", "M5", 30]], "truncated": false, "verified": true, "agent_d...
+
+[PASS] P4 엑셀 자동 필터: 수량 >= 10이면 2행만 숨김, 끄면 모두 보임
+    내용: 켠 뒤(필터, 2~4행 숨김)=(True, [True, False, False]), 끈 뒤=(False, [False, False, False])
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "range", "preview": "P_FMT의 자동 필터를 껐습니다", "verified": true, "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\AIKIT\\dev\\work\\office\\A.xlsx", "source": "active", "sheet": "P_FMT"}, "unchanged": false, "agent_directive": "VERIFIED: 자동 필터가 꺼진 것을 확인했습니다."}
+
+[FAIL] P5 엑셀 그림 넣기(도형 1개 늘어남), 링크 달기(주소·보이는 글)
+    내용: 도형 수 0->1, E20 링크·글=('C:\\AIKIT\\dev\\work\\office\\A.docx', 'C:\\AIKIT\\dev\\work\\office\\A.docx')
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "excel", "command": "write", "preview": "P_FMT!E20에 링크를 달았습니다 (P링크 203336 -> C:\\AIKIT\\dev\\work\\office\\A.docx)", "verified": true, "target_resolved": {"app": "Excel", "name": "A.xlsx", "path": "C:\\AIKIT\\dev\\work\\office\\A.xlsx", "source": "active", "sheet": "P_FMT"}, "link": "C:\\AIKIT\\dev\\work\\office\\A.docx", "cell": "P_FMT!E20", "text": "P링크 203336", "agent_d...
+
+[PASS] P6 워드 바닥글 쓰기·읽기, 글이 있으면 --overwrite 없이 바꾸지 않음
+    내용: 바닥글='P 문서번호 203336', 읽은 글=['P 문서번호 203336'], 덮어쓰기 확인=error
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "header", "preview": "A.docx: 구역 1 바닥글(기본): P 문서번호 203336", "items": [{"section": 1, "kind": "바닥글", "type": "기본", "text": "P 문서번호 203336"}], "count": 1, "sections": 1, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\AIKIT\\dev\\work\\office\\A.docx", "source": "open"}, "verified": true, "agent_directive": "VERIFIED: 머리글·바닥글을 읽었습니다."}
+
+[PASS] P7 워드 책갈피 만들기·목록, 그 책갈피로 가는 링크 달기·목록
+    내용: 책갈피=(True, 'P책갈피 자리 203336'), 링크 목록=['#PBM_203336']
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "word", "command": "link", "preview": "A.docx: 하이퍼링크 1개", "links": [{"no": 1, "text": "P링크 글 203336", "address": "#PBM_203336"}], "count": 1, "truncated": false, "target_resolved": {"app": "Word", "name": "A.docx", "path": "C:\\AIKIT\\dev\\work\\office\\A.docx", "source": "open"}, "verified": true, "agent_directive": "VERIFIED: 하이퍼링크를 읽었습니다."}
+
+[PASS] P8 PPT 표 읽기, 빈 칸 쓰기, 글이 있는 칸은 --overwrite 없이 바꾸지 않음
+    내용: 표 칸=['항목', '값', 'P가 203336', '25'], 덮어쓰기 확인=error
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "ppt", "command": "table", "preview": "슬라이드 4 표 'Table 1'의 칸 2개를 썼습니다", "verified": true, "count": 2, "target_resolved": {"app": "PowerPoint", "name": "A.pptx", "path": "C:\\AIKIT\\dev\\work\\office\\A.pptx", "source": "open", "slide": 4}, "slide": 4, "shape": "Table 1", "nrows": 2, "ncols": 2, "agent_directive": "VERIFIED: 쓴 칸을 다시 읽어 확인했습니다. 되돌리려면 office.py undo."}
+
+[PASS] P9 office.py open: 닫힌 파일을 화면의 Excel로 열고, 다시 열면 그 창을 앞으로
+    내용: 열린 문서 A1·화면 표시=('P열기 203336', True), 두 번째 already_open=True
+    종료코드: 0
+    JSON: {"status": "ok", "tool": "office", "command": "open", "preview": "Excel에서 'P_open_203336.xlsx'을(를) 열었습니다", "verified": true, "app": "Excel", "name": "P_open_203336.xlsx", "path": "C:\\AIKIT\\dev\\work\\office\\P_open_203336.xlsx", "already_open": false, "brought_to_front": true, "agent_directive": "VERIFIED: 열린 문서의 경로를 확인했습니다."}
+
+[ENV-SKIP] P10 연락처 찾기
+    내용: Outlook 준비 안 됨: Outlook 프로세스가 뜨지 않음
+    JSON: (JSON 출력 없음)
+
+UNVERIFIED 결과 0건 (없음)

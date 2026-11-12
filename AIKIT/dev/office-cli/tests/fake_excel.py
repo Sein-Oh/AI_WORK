@@ -697,13 +697,17 @@ class FakeWorksheet:
                 return types.SimpleNamespace(Name=f"Picture {len(ws.pictures)}")
 
         class _Links:
-            def Add(self, Anchor=None, Address=None, TextToDisplay=None, **kw):
+            def Add(self, Anchor=None, Address=None, SubAddress="", ScreenTip="", *args, **kw):
+                # 실제 엑셀 2019(pywin32): 보이는 글은 다섯째 순서 인자로만 들어감. TextToDisplay=를 이름 인자로 주면 무시하고
+                # 빈 칸에는 주소를 글로 씀 (집 PC 실기 P5). link_text_ignored면 글을 늘 무시 (다시 읽기 확인 시험용)
+                text = args[0] if args and not getattr(ws, "link_text_ignored", False) else None
+                r, c = Anchor.areas[0][:2]
+                shown = text if text else (ws.values.get((r, c)) or Address)
                 base = getattr(ws, "link_base", "")            # 실제 엑셀: 통합문서 폴더 안의 파일은 상대 경로로 저장
                 if base and str(Address).startswith(base):
                     Address = str(Address)[len(base):].lstrip("\\/")
-                ws.links.append((Anchor.Address, Address, TextToDisplay))
-                r, c = Anchor.areas[0][:2]
-                ws.values[(r, c)] = TextToDisplay
+                ws.links.append((Anchor.Address, Address, shown))
+                ws.values[(r, c)] = shown
         self.Shapes = _Shapes()
         self.Hyperlinks = _Links()
         self.merged = set()

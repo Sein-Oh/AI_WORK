@@ -2574,3 +2574,17 @@ def test_write_image_and_link(xl, capsys, tmp_path):
     assert code == 0 and out["verified"] is True and ws.links[-1][1] == "A.docx", out
     code, out = run_excel(capsys, "write", "--link", "http://x")
     assert code == 1 and "--range" in out["message"], out
+
+
+def test_write_link_text_is_read_back(xl, capsys, tmp_path):
+    """집 PC 실기 P5 회귀: TextToDisplay=를 이름 인자로 주면 Excel 2019가 무시하고 주소를 글로 썼는데 주소만 다시 읽어 VERIFIED였음.
+    보이는 글은 순서 인자로 넘기고, 칸의 글도 다시 읽어 다르면 UNVERIFIED."""
+    app, wb = xl
+    ws = ws_of(wb)
+    doc = str(tmp_path / "A.docx")
+    code, out = run_excel(capsys, "write", "--range", "E20", "--link", doc, "--value", "P링크 1")
+    assert code == 0 and out["verified"] is True and ws.values[(20, 5)] == "P링크 1", out
+    ws.link_text_ignored = True
+    code, out = run_excel(capsys, "write", "--range", "E21", "--link", doc, "--value", "P링크 2")
+    assert code == 0 and out["verified"] is False and out["agent_directive"].startswith("UNVERIFIED:"), out
+    assert "칸의 글이 다름" in json.dumps(out, ensure_ascii=False), out
