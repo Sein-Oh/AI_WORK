@@ -448,8 +448,6 @@ def test_argument_errors_from_real_logs_get_a_hint(argv, want):
 
 
 @pytest.mark.parametrize("argv, fixed", [
-    (["excel.py", "check", "--file", "a.xlsx", "--range", "B3:C7", "--item-col", "B", "--value-col", "C", "--spec", "s.txt"],
-     ["check", "--target", "a.xlsx", "--range", "B3:C7", "--item-col", "B", "--value-col", "C", "--spec", "s.txt"]),   # Gemma O1
     (["word.py", "write", "--target", "a.docx", "--text", "다음", "--append"],
      ["write", "--target", "a.docx", "--text", "다음", "--pos", "end"]),                                                 # Gemma O4
     (["reader.py", "read", "--target", "a.pdf"], ["read", "--file", "a.pdf"]),              # 필수 --file 누락 오류에서도

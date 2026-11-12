@@ -29,7 +29,7 @@
 | Word 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 앱 사이 옮기기) | `word-kit` |
 | PowerPoint 읽기·쓰기 (슬라이드, 도형, 발표자 노트, 앱 사이 옮기기) | `ppt-kit` |
 | Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일), 내려받은 eml 폴더 검색 | `outlook-kit` |
-| PDF, HWP, Office 파일 읽기와 근거 검색, 엑셀 표를 규격서와 대조 | `search-kit` |
+| PDF, HWP, Office 파일 읽기와 근거 검색 | `search-kit` |
 | 엑셀·CSV 표 집계 (합계·평균·최소·최대·건수, 묶음별), 중복 행 찾기 | `stats-kit` |
 | 표(Excel/CSV) 데이터로 예측 모델 학습, 성능 개선, 학습 이력 | `ml-train` |
 | 학습용 데이터셋 만들기 (조건·행 번호로 행 뽑기, 행을 학습에서 빼기) | `ml-dataset` |
@@ -73,7 +73,6 @@
 - JSON에 `recovered`가 있으면 (예: 파일이 열려 있어 새 이름으로 저장) 그 문장을 그대로 알린다. `warnings`가 있으면 함께 알린다.
 - `error_type`이 `missing_library`이면 `install_command`를 사용자에게 전달만 하고 직접 실행하지 않는다.
 - `error_type`이 `elevated_process`이면 다시 실행하지 않는다. 관리자 권한 창에서 실행 중이라 사용자가 연 문서가 안 보이니, 관리자가 아닌 일반 PowerShell 창에서 OpenCode를 다시 실행하라고 알린다.
-- 규격 대조(`excel.py check`)의 판정은 도구가 규격 문장을 기계로 읽은 참고 판정이다(늘 `UNVERIFIED:`). 행마다 `condition`(읽은 조건)과 `spec_text`(근거 문장)를 보여 주고 메모는 사용자가 확인한 뒤에만 단다: 사용자가 메모를 요청했으면 묻지 말고 `next_commands[0]`(미리보기, 변경 없음)을 바로 실행해 판정과 함께 보여 주고, "예"를 받은 뒤 미리보기 결과의 `confirm_commands[0]`.
 - 문서 검색 결과의 `match_mode`가 `number`(숫자 값만 같은 곳, 부호·대시가 다른 숫자 포함), `partial`, `fuzzy`이면 정확히 일치한 곳은 0건(`count: 0`)이고 `candidates`는 비슷한 곳일 뿐이다. 근거로 쓰지 말고 사용자에게 확인받는다. `exact_mixed`이면 `matches` 중 `literal: false`(표기가 다른 곳, 부호·단위가 다를 수 있음)는 근거로 확정하지 말고 실제 글을 보여 주고 확인받는다(`snippet`에서 `**`는 글자 그대로 맞은 곳, `[[ ]]`는 표기가 다른 곳). 숫자를 찾은 결과를 알릴 때는 `snippet`의 앞뒤(부호, 범위 `~`, 이하/이상)를 그대로 함께 전달한다(`VERIFIED`는 그 글자가 그 자리에 있다는 뜻이고 문맥의 뜻은 판정하지 않음).
 - `truncated`가 true이면 결과 일부만 받은 것이다. 전체 결과가 있는 곳(`full_result_file` 또는 `output_file`)을 알리거나, 이어 보기가 필요하면 `next_commands`를 쓴다.
 - `error_type`이 `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. message를 그대로 알리고, 사용자가 [편집 사용]을 누르거나 보호를 푼 뒤 같은 명령을 1번 다시 실행하거나 사용자가 고른 `[후보]` 칸에 쓴다.

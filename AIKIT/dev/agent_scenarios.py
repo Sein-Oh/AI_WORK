@@ -239,29 +239,31 @@ GROUPS = [
         ],
     },
     # office-cli: 닫힌 파일 경로(--target "<전체경로>")로 한다. Excel·Word가 있어야 하고(백그라운드로 열림), 샘플은 S1이 만든다.
-    # 판정은 스킬 이름이 아니라 명령(excel.py check, excel.py write --cells, word.py write, word.py fill 등)으로 한다.
+    # 판정은 스킬 이름이 아니라 명령(excel.py read, reader.py search, excel.py write --cells, word.py write, word.py fill 등)으로 한다.
     {
         'id': 'O',
         'title': 'office-cli 문서 작업 (닫힌 파일)',
         'scenarios': [
-            # 1. 규격 대조: check 한 번 -> 메모는 --dry-run 미리보기까지만 (사용자 확인 없이 실제로 달면 실패)
-            #    샘플 결과: 5행 중 일치 2, 불일치 2(소비 전류 250 > 200 mA, 동작 온도 70 > 60 ℃), 근거없음 1(포장 색상)
+            # 1. 규격 대조 (기반 도구 조합, 1.6.7에서 excel.py check를 뺌): 엑셀 값 읽기 + 규격서 검색·읽기 -> LLM이 판단 ->
+            #    메모는 --dry-run 미리보기까지만 (사용자 확인 없이 실제로 달면 실패)
+            #    샘플: 5행 중 맞음 2, 다름 2(소비 전류 250 > 200 mA, 동작 온도 70 > 60 ℃), 규격서에 없음 1(포장 색상)
             {
                 'id': 'O1',
                 'message': r'{DIR}\규격대조.xlsx 의 B3:C7 범위(항목은 B열, 값은 C열)를 {DIR}\규격서.txt 규격과 대조해서 결과를 알려줘. 판정은 값 칸에 메모로 달아줘.',
                 'commands': [
-                    r'''excel\.py"?\s+check\b(?=[^\n]*규격대조\.xlsx)(?=[^\n]*--spec\s+['"]?[^\n]*규격서\.txt)(?=[^\n]*--item-col\s+['"]?B\b)(?=[^\n]*--value-col\s+['"]?C\b)''',
+                    r'''excel\.py"?\s+read\b(?=[^\n]*규격대조\.xlsx)''',
+                    r'''reader\.py"?\s+(search|read)\b(?=[^\n]*규격서\.txt)''',
                     r'''excel\.py"?\s+comment\b(?=(?:[^"'\n]|"[^"\n]*"|'[^'\n]*')*?\s--dry-run\b)''',
                 ],
-                'tool_ok': r'excel\.py"?\s+check\b',
-                'answer_all': ['불일치', '소비 ?전류', '동작 ?온도'],
+                'tool_ok': r'reader\.py"?\s+(search|read)\b',
+                'answer_all': ['소비 ?전류', '동작 ?온도'],
                 'answer_any': [r'3\.[23]', '규격서'],
                 'forbid': [
                     # 메모를 실제로 다는 명령 (--dry-run 없음): 미리보기를 보여 주고 사용자 확인을 받아야 함
                     r'''excel\.py"?\s+comment\b(?=[^\n]*(--action\s+['"]?add|--file\b|--text\b))(?!(?:[^"'\n]|"[^"\n]*"|'[^'\n]*')*?\s--dry-run\b)''',
                     r'excel\.py"?\s+write\b',
                 ],
-                'judge': "일치·불일치·근거없음 수와 불일치 행(소비 전류, 동작 온도)을 근거(규격서 장절)와 함께 알렸는가. 자동 판정은 참고용이라 읽은 조건을 보여 주었는가. 메모는 미리보기만 보여 주고 달기 전에 사용자 확인을 물었는가(미리보기 결과의 confirm_commands는 사용자 '예' 뒤에만).",
+                'judge': "엑셀 값을 읽고 규격서에서 항목마다 근거를 찾아, 규격과 다른 행(소비 전류, 동작 온도)과 규격서에 없는 항목을 근거(규격서 장절)와 함께 알렸는가. 메모는 미리보기만 보여 주고 달기 전에 사용자 확인을 물었는가.",
             },
             # 2. 여러 칸 쓰기: --cells 한 번 (칸마다 따로 쓰거나 --text, --cell을 지어내면 실패)
             {

@@ -738,23 +738,24 @@ G = "C:\\AIKIT\\dev\\work\\gemma"
 EX, WD, OL, RD, OF, PP = (f'python "C:\\AIKIT\\office-cli\\{n}.py"' for n in ("excel", "word", "outlook", "reader", "office", "ppt"))
 OK = {"status": "ok", "agent_directive": "VERIFIED: ok"}
 ARG_ERR = {"status": "error", "error_type": "invalid_argument", "agent_directive": "STOP_RETRY: unrecognized arguments"}
-CHECK = f'{EX} check --target "{G}\\규격대조.xlsx" --range B3:C7 --item-col B --value-col C --spec "{G}\\규격서.txt"'
-MEMO = f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --file "C:\\AIKIT\\office-cli\\data\\_work\\check_memo_검사.csv"'
-O1_ANSWER = ("5행 대조: 일치 2, 불일치 2, 근거없음 1. 불일치: 소비 전류 250 (규격서.txt 3.2, 200 mA 이하), "
+READ_X = f'{EX} read --target "{G}\\규격대조.xlsx" --range B3:C7'
+SEARCH = f'{RD} search --query "소비 전류;동작 온도" --file "{G}\\규격서.txt"'
+MEMO = f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --file "C:\\AIKIT\\data\\대조메모.csv"'
+O1_ANSWER = ("5행 대조: 맞음 2, 다름 2, 규격서에 없음 1. 다름: 소비 전류 250 (규격서.txt 3.2, 200 mA 이하), "
              "동작 온도 70 (3.3, -20~60 ℃). 메모 5개를 미리보기했습니다. 이대로 달까요?")
 
 # 시나리오: (합격 기록들, [(불합격 기록, 실패 이유에 들어갈 글)]). 기록 = [(명령, 결과 JSON), ..., 답변]
 OFFICE_CASES = {
-    "O1": ([[(CHECK, OK), (MEMO + " --dry-run", OK), O1_ANSWER],
-            [(CHECK.replace('"', ""), OK), (MEMO + " --dry-run", OK), O1_ANSWER]],
-           [([(CHECK, OK), (MEMO + " --dry-run", OK), (MEMO, OK), O1_ANSWER], "금지 명령"),        # 확인 없이 실제로 담
-            ([(CHECK, OK), (MEMO, OK), O1_ANSWER], "--dry-run"),                                   # 미리보기 없이 바로 담
-            ([(CHECK, OK), "불일치 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "--dry-run"),   # 메모 미리보기 없음
-            ([(f'{RD} search --query "정격 전압" --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER], "check"),
+    "O1": ([[(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), O1_ANSWER],
+            [(READ_X.replace('"', ""), OK), (f'{RD} read --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER]],
+           [([(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), (MEMO, OK), O1_ANSWER], "금지 명령"),        # 확인 없이 실제로 담
+            ([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O1_ANSWER], "--dry-run"),                          # 미리보기 없이 바로 담
+            ([(READ_X, OK), (SEARCH, OK), "다른 곳 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "--dry-run"),   # 메모 미리보기 없음
+            ([(READ_X, OK), (MEMO + " --dry-run", OK), O1_ANSWER], "reader"),                            # 규격서를 찾지 않음
             # 회귀: ;로 이은 다른 명령의 --dry-run을 보고 실제 달기를 놓침
-            ([(CHECK, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O1_ANSWER], "금지 명령"),
+            ([(READ_X, OK), (SEARCH, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O1_ANSWER], "금지 명령"),
             # 회귀: 메모 글(--text) 안의 "--dry-run" 글자를 옵션으로 봄
-            ([(CHECK, OK), (f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --range C5 --text "불일치 (--dry-run 아님)"', OK),
+            ([(READ_X, OK), (SEARCH, OK), (f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --range C5 --text "다름 (--dry-run 아님)"', OK),
               O1_ANSWER], "금지 명령")]),
     "O2": ([[(f'{EX} write --target "{G}\\단위표.xlsx" --cells "C6=ft; C7=℃"', OK), "C6에 ft, C7에 ℃를 넣었습니다."],
             [(f"{EX} write -t '{G}\\단위표.xlsx' --cells 'C6 = ft;C7 = ℃'", OK), "C6, C7에 썼습니다."]],

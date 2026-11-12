@@ -6,7 +6,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 - 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`excel-kit`](../../skills/excel-kit/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
   [`word-kit`](../../skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus), [`ppt-kit`](../../skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
   [`outlook-kit`](../../skills/outlook-kit/SKILL.md) (outlook.py),
-  [`search-kit`](../../skills/search-kit/SKILL.md) (reader.py, excel.py check·comment),
+  [`search-kit`](../../skills/search-kit/SKILL.md) (reader.py, excel.py comment),
   [`stats-kit`](../../skills/stats-kit/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
   공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`AIKIT/AGENTS.md`](../../AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
@@ -27,7 +27,6 @@ AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli)
 ├── _office.py   Office COM 공통 (세션, 스냅샷, 색/테마)
 ├── _markdown.py      마크다운 블록 해석 (word.py·ppt.py 넣기, excel.py 표 파일)
 ├── _xlsx_formula.py  닫힌 xlsx의 계산된 값이 없는 수식 칸 찾기 (excel.py·reader.py·office.py 읽기의 R1 확인)
-├── _spec_check.py    excel.py check 구현 (규격서 대조)
    (_로 시작하는 파일은 진입점이 아닌 내부 모듈. 스킬에 적지 않고, 다른 도구 폴더를 import하지 않음)
 
 AIKIT/dev/office-cli/  개발·실기 테스트용 (사내 PC C:\AIKIT\dev\office-cli)
@@ -240,7 +239,6 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
 | `sheet` | `--action list\|add\|rename\|copy\|delete\|select --name --new-name`. 엑셀에서 쓸 수 없는 이름(`/ \ ? * [ ] :`, 31자 초과, 빈 이름, 앞뒤 `'`, 엑셀이 예약한 `History`(대소문자 무관))은 아무것도 바꾸기 전에 STOP_RETRY와 `[추천]`(쓸 수 없는 글자를 `_`로 바꾸고 31자로 자른 이름, `History`는 `History_`, 있는 시트와 겹치면 번호). `write --new-sheet`, `office.py transfer --sheet`도 같음(`transfer`는 받는 문서의 시트 이름을 안 뒤에 확인해 `[추천]`이 있는 시트와 겹치지 않음, 새로 만들 파일은 만들기 전에 확인). `copy`의 기본 이름은 `<시트 28자> 복사` |
 | `range` | `--action autofit\|width\|height\|merge\|unmerge\|freeze\|unfreeze\|hide\|unhide\|clear\|copy\|move\|border\|insert\|delete\|sort`(insert/delete/sort는 아래). `clear`는 `--range` 필수(시트 전체를 실수로 지우지 않게). `merge`는 왼쪽 위 밖의 칸에 값이 하나라도 있으면(병합하면 지워짐), `copy`/`move`는 대상에 값이 있으면 `needs_user_decision`(사용자가 원하면 `--overwrite`). `copy`는 대상의 수식(R1C1)을 원본과 비교해 확인(상대 참조는 값이 달라도 같은 수식). `autofit`은 비교할 값이 없어 `UNVERIFIED:`. `border`는 `--weight hairline\|thin\|medium\|thick\|none`(기본 thin, `none`은 테두리 지우기)과 `--box`(외곽선만, 안쪽 선은 그대로)이며 선 모양·굵기를 다시 읽어 비교(`style --border`는 격자만, 외곽선만은 `range --action border --box`). `hide`/`unhide`/`autofit`의 `--axis`를 생략하면 `5:7` 같은 행 주소는 행, 그 밖은 열. 이미 그 상태면(병합 없는 `unmerge`, 고정 없는 `unfreeze`, 값이 없는 범위의 `clear --type contents`, 같은 자리로 `copy`/`move` 등) 바꾸지 않고 "바뀐 것 없음"(`unchanged: true`). `hide`/`unhide`와 `clear`(전체·서식)는 엑셀이 일부만 숨김·사용 범위 밖 유효성 검사를 알려 주지 않을 수 있어 늘 바꾼 것으로 봅니다. `values`(1.6.0): `--range`의 수식 칸을 지금 값으로 바꿈(`Value2`라 날짜·통화 서식 그대로, 여러 영역은 영역마다). `--dry-run`이면 수식 칸 수와 수식(`planned`), 수식 칸이 없으면 바꾸지 않고 `unchanged`. 바꾼 뒤 수식이 남지 않았는지와 값이 그대로인지 다시 읽어 확인, 되돌리기 지점(`office.py undo`) |
 | `comment` | 칸 메모(이전 방식 메모, `Range.Comment`/`AddComment`). `--action list`(기본): 시트(또는 `--range`)의 메모마다 `no, cell, author, text`(메모 하나 1,000자까지, 넘으면 `text_truncated`), 행·열 순서, 100개 또는 글자 상한까지 표시하고 넘으면 `truncated` + `--start`로 이어 보는 명령. 0개면 `VERIFIED: 0건`. `--action add --range B5 --text "의견"`(`--text`/`--file`이 있으면 `--action add`가 없어도 달기, `\n`은 줄바꿈, 범위를 주면 칸마다 같은 메모, 한 번에 500개까지): `--file 메모.csv`(`.csv/.tsv/.md 표`, 열: 칸, 메모. 첫 행이 `칸`·`셀`·`cell` 등이면 머리글. 칸에 `'요약'!C3`처럼 시트를 적을 수 있고 없으면 `--sheet`·활성 시트. 값은 글자 그대로. 셋째 열 이후에 글이 있으면 `write --cells` 칸값 파일과 같이 하나도 달지 않고 STOP_RETRY)로 여러 개를 한 번에 달며, 한 줄이라도 잘못되면(칸 주소가 아님, 메모 없음) 하나도 달지 않고 STOP_RETRY(파일 줄 번호, 오류 로그에는 줄 번호만). 같은 칸이 여러 줄이면 한 메모로 합치고 `warnings`. 이미 메모가 있는 칸이 있으면 아무것도 달지 않고 `needs_user_decision`(message에 칸과 기존 메모 앞부분, 오류 로그에는 칸 주소만): 사용자가 고르면 `--overwrite`(새 메모로 바꿈) 또는 `--append`(기존 메모 아래 줄에 덧붙임, 둘은 함께 쓸 수 없음). 이미 같은 메모가 있거나 `--append`인데 기존 메모 끝 줄이 붙일 메모와 같으면 그 칸은 그대로(`unchanged`, 같은 명령을 다시 실행해도 두 번 붙지 않음, 모두 그대로면 되돌리기 지점도 남기지 않음). `--action delete --range B2:D20`(`--range` 필수): 그 범위의 메모를 지움(0개면 바꾼 것 없음, 되돌리기 지점도 남기지 않음). add/delete 모두 `--dry-run`(`planned`, `confirm_commands`: 이미 메모가 있는데 `--overwrite`/`--append`가 없으면 두 명령을 모두 줌)과 되돌리기 지점(`office.py undo`), 단 뒤·지운 뒤 메모를 다시 읽어 확인(`applied`, 다르면 `UNVERIFIED:`). 엑셀이 메모 달기를 거절하면(보호된 시트 등) STOP_RETRY |
-| `check` | 표의 값을 등록된 규격서와 한 번에 대조: `--range B2:D50 --item-col B --value-col D [--section-col E] [--unit-col E] --spec "<파일 또는 폴더>" [--section "3.2"] [--save "대조결과.xlsx"]`. 아래 "check" |
 | `stats` | 표 집계(1.4.98, 닫힌 xlsx·CSV는 Excel 불필요): 첫 행은 머리글. 숫자 열은 `sum`, `mean`, `min`, `max`, `count`(숫자로 읽지 못한 칸은 `not_number`), 글자 열은 `count`, `unique`, `top`(많이 나온 값 10개). `--columns 금액,수량`(생략 시 숫자 열 전부, 앞자리 0 코드는 글자), `--by 부서`(묶음별, 이름순), `--where`(read와 같은 식), `--top N`(첫 집계 열 합계가 큰 묶음 N개), `--save [경로.csv]`. 결과 `groups`(묶음마다 `by`, `rows`, `stats`), `rows_used`, `group_count`, 묶음 50개를 넘으면 `truncated`와 `full_result_file`. `preview`에 숫자를 글로 |
 | `duplicates` | 중복 행 찾기(1.6.0, 읽기만, 닫힌 xlsx·CSV는 Excel 불필요): 첫 행은 머리글, `--columns 품번,규격`(생략 시 모든 열이 같은 행), `--range`, `--save [경로.csv]`. 비교는 앞뒤 공백·전각/반각·대소문자 무시, 숫자 `1` = `1.0`, 앞자리 0은 다른 값, 빈 행은 빼고 봄. 결과 `groups`(묶음마다 `values`, `rows`(엑셀 행 번호), `count`), `group_count`, `duplicate_rows`(남기고 지울 수 있는 행 수), 묶음 30개를 넘으면 `truncated`와 `full_result_file`. 지우지 않음(지우기는 `range --action delete`) |
 | `save` | 열린 통합문서 저장(1.6.0): `--save` 없으면 그대로 저장(Ctrl+S, 바뀐 것이 없으면 `unchanged`, 한 번도 저장하지 않은 새 문서는 경로를 묻게 STOP_RETRY). `--save "<경로.xlsx|.xlsm>"`이면 다른 이름으로 저장하고 열린 문서가 새 파일이 됨(`output_file`, `previous_file`). 같은 이름 파일은 `--overwrite`가 있을 때만(없으면 `needs_user_decision`과 `--overwrite` 명령의 `confirm_commands`), 매크로가 있는 문서를 `.xlsx`로는 저장하지 않고 `.xlsm`을 `[추천]`, 다른 확장자는 `.xlsx`를 `[추천]`(CSV·PDF 사본은 `export`). 닫힌 파일은 저장할 것이 없어 STOP_RETRY |
@@ -324,67 +322,6 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
     `[추천]` 없이 STOP_RETRY. `--search`, `--formulas`와 함께 쓸 수 없습니다.
 - 두 판 비교(`excel.py compare`, `reader.py diff`)는 1.6.3에서 뺐습니다 (사용자 결정 2026-11-11). 지침·스킬에도 적지 않고 나중에 구현할 때 다시 검토합니다
   (2026-11-12, CHANGELOG 남은 할 일).
-- `check`(규격 대조, 읽기 전용: 문서를 바꾸지 않음):
-  - 단위: 값 칸의 단위(`30 mm`) -> 행의 단위 열 -> 값 열 머리글(`값(mm)`) 순서. 단위 열은 `--unit-col`, 생략하면 값 열 바로 오른쪽 열의 머리글이 `단위`(`Unit`)일 때 그 열을 씁니다(JSON `unit_col`). 모두 없으면 규격 단위로 추정하지 않고 `판단필요`(`칸 단위 없음`).
-  - 행: `--range`의 행(열은 무시)에서 `--item-col`(항목 글), `--value-col`(값), `--section-col`(행별 장절, 없으면 `--section`)을 읽습니다. 바로 위 행의 값 열 머리글에서 단위를 읽습니다(`측정값 [V]`, `전류(mA)`). 열린 문서·닫힌 xlsx·CSV 모두. 500행까지.
-  - 규격서: `--spec` 파일 또는 폴더. 등록되지 않았거나 바뀐 문서는 먼저 등록합니다(`reader.py search --file`과 같음, 오래 걸리면 R10 `CONTINUE:`).
-  - 찾기: 항목 글로 `reader.py search`와 같은 규칙(띄어쓰기·조사·단위 표기 무시, 동의어 파일, 0건이면 number(숫자 안전망) -> partial -> fuzzy)으로 찾고 점수가 가장 높은 단위를 근거로 씁니다. 항목 끝의 `(V)`, `[mA]`는 검색어에서 빼고 단위로 씁니다.
-  - 수치 조건: 근거 단위에서 찾은 낱말이 든 문장의 낱말부터 다음 항목 직전까지(200자까지)에서 단위가 있는 수치만 읽습니다(규격 번호 `KS C 1234`, 장절 `3.2`는 빼려고).
-    다음 항목은 절 경계(`,` `;` `이며` `이고` `및` `그리고`) 뒤에 낱말이 오고 바로 수치가 이어지는 곳(`두께 5 mm 이상, 길이 100 mm 이하`의 `길이`, `최대`·`최소`는 항목이 아님).
-    낱말 뒤에 조건이 없으면 낱말이 든 절(앞 절 경계부터 낱말까지)에서 찾습니다. 같은 문장의 다른 항목 조건을 섞지 않으려고.
-    `X ± d`(`±5%`, `(5±0.5) V`), `a ~ b`(`~`, 전각 물결, 대시, `to`, `에서 ... 까지`, `between a and b`, `from a to b`, `10-20 mA`), 위 한계(`이하 이내 max 최대 ≤ not exceed 넘지 않`, `미만 < less than`은 그 값 제외),
-    아래 한계(`이상 min 최소 ≥ at least`, `초과 > more than`은 제외), 그냥 값(`DC 24 V`), 기준 값 없이 떨어진 공차(`±0.1 mm`, `±5 %`), 대칭 한계 `±5 % 이내`·`±0.1 mm 이하`(-N~N).
-    수치 표기 (1.4.67): 유니코드 빼기(U+2212, U+2010~2012, 앞이 숫자·단위가 아닌 숫자 앞 U+2013)는 `-`, 지수(`1×10`+위첨자 9, `1×10^9`, `1E9`)는 계산한 값
-    (위첨자를 `109`로 읽지 않음. 지수는 2자리까지, `1E999`·`1×10^999`는 조건으로 읽지 않아 `판단필요`, 1.4.68), 단위 뒤 괄호 꼬리(`dB(A)`, `mV(p-p)`, `V(DC)`) 뒤의 이하·이상도 읽습니다. `A에서 B로`(`220 V에서 110 V로 강압`)는 범위가 아닙니다.
-    ohm 계열은 대소문자를 구분합니다(`mOhm` = mΩ, `MOhm`·`Mohm` = MΩ, 소문자 `mohm`은 밀리인지 메가인지 몰라 단위 모름 -> `판단필요`).
-    묶음 단위(`Ω·cm`, `V/m`, `mm²`)는 그 단위로 읽지 않습니다(`판단필요`).
-    허용·변동·범위·공차·오차·편차(`허용 범위`, `허용 오차`, `허용차`, `허용치`, `변동 폭`, 낱말 하나 `허용`·`변동`)로 시작하는 절은 새 항목이 아니라 앞 항목 절의 일부입니다
-    (`허용 전류 10 A`처럼 뒤에 다른 낱말이 오면 새 항목). `사용 범위`, `동작 범위`, `측정 범위`는 한계 낱말이 아니라 별개 항목입니다(`시험 전압 500 V, 사용 범위 0~1000 V`의 시험 전압은 `500 V`).
-  - 보수적 판정 (1.4.66): 항목 절의 조건을 하나로 합치는 규칙은 셋뿐이고, 그 밖에 조건이 둘 이상 남으면 `판단필요`(`reason`에 후보 조건, 틀린 일치·불일치를 내지 않으려고).
-    (a) 같은 단위의 아래·위 한계 하나씩 -> 범위(`4.75 V 이상 5.25 V 이하`, `최대 3 A, 최소 1 A`).
-    (b) 기준 값 바로 뒤의 `±N 단위`·`±N %`(같은 절이거나 사이에 잇는 말·괄호·한계 낱말만: `두께 3 mm, 공차 ±0.1 mm` -> `2.9~3.1 mm`, `정격 전류 2 A, 허용 오차 ±5 %` -> `1.9~2.1 A`).
-    (c) 기준 값 뒤의 양쪽 한계 범위가 기준 값을 품고, 범위 앞에 한계 낱말이 있거나(`정격 전압 5 V, 허용 범위 4.75~5.25 V`) 기준 값 바로 뒤 괄호 안에 범위만 있음
-    (`정격 5 V (4.75~5.25 V)`) -> 범위로 판정. 한계 낱말이 없거나(`정격 전압 5 V, 4~6 V에서 동작`) 범위 뒤에 쓰임새(`0~10 A까지 측정 가능`, `18~36 V 입력 가능`)가 이어지면 합치지 않음 (1.4.67).
-    한쪽 한계와 기준 값(`정격 전압 5 V, 허용 범위 4.75 V 이상`, `허용 150 mA 이하`, `허용치 10 A 이하`, `오차 0.1 mm 이내`), `±` 없는 % 조건(`허용 오차 5 %`),
-    기준 값을 품지 않는 범위, 합치지 못한 `±` 공차는 `판단필요`. 두 조건 사이에 잇는 말 말고 다른 낱말이 있으면 다른 항목이라 합치지 않습니다(`외경 3 mm, 폭 5 mm 이하`).
-    불합격 기준 문장(`0.5 mA 초과 시 불합격`)과 값이 여럿인 문장(`50/60 Hz`)도 `판단필요`.
-    1.4.67에서 더한 `판단필요`: 부정문(`1 mA 이상이 되어서는 안 된다`, `미만이어서는 아니 된다`), 상황마다 다른 조건(`대기 시 10 mA 이하, 동작 시 100 mA 이하`,
-    `85 ℃ 초과 시 동작`), 단서 조항(`10 Ω 이하. 다만, ...`, `(단, ...)`), 기준 값만 있는데 항목·절에 한계인지 대략인지 정할 수 없는 낱말
-    (`최소 두께 2 mm`, `최대 전류 3 A`, `최고·최저·상한·하한`, `Typ.`, `Max. current 3 A`, `약 5 kg`, `5 kg 내외·정도`, `approx.`),
-    단위 있는 조건 곁의 단위 없는 수치(표 평문 `출력 전압 4.75 5.0 5.25 V`, `외경 100 mm, ±0.5`, `100 mm ±0.5`), 비대칭 공차(`+0.5/-0.2`, `(+10 %, -15 %)`),
-    치수 나열(`100×200×50 mm`, `W 400 × H 300`), 소수점 쉼표일 수 있는 수치(`1,5 mm`).
-    항목 절에 기준 값만 남고 같은 문장 뒤 다른 항목(이름에 `범위`가 든 항목은 빼고)의 같은 단위 범위가 그 값을 품으면, 칸 값이 기준 값과 다르지만
-    그 범위 안일 때 `판단필요`(`reason`: 기준 값 ...와 다르지만 같은 문장의 범위 ... 안).
-    판정 회귀 기준은 표준 말뭉치 `tests/check_corpus.tsv`(규격 문장, 항목, 측정값, 기대 판정)입니다. 판정 규칙을 바꾸면 이 말뭉치를 함께 고칩니다.
-    단위는 같은 종류면 접두어를 맞춥니다(mV, V, kV / mA, A / Ω, kΩ, MΩ / Hz / °C, ℃ / % / mm, m / ms, s, 분 / g, kg / N / Pa, MPa, bar / rpm / dB / F).
-  - 판정(`verdict`): `일치` / `불일치` / `근거없음`(규격서에서 항목을 찾지 못함) / `판단필요`(찾기가 number·partial·fuzzy, 합치지 못한 조건이 둘 이상, 칸과 규격의 단위 종류가 다름,
-    근거 문장에 수치 조건이 없음, 칸 값이 숫자가 아님, 칸 단위 없음). 칸 단위 순서: 칸 글(`3.5 A`) -> 머리글 -> 항목 글. 셋 다 단위가 없으면 규격 단위로 추정하지 않고
-    `판단필요`(`reason`: `칸 단위 없음 (규격은 cm): 값 열 머리글에 단위를 적으세요 (예: 값(cm))`). 머리글 단위가 규격과 종류가 같으면 접두어를 맞춰 판정합니다(`값(mm)` 30과 `5 cm 이하`는 일치).
-  - 결과: `counts`, `results`(20개까지: `cell`, `item`, `value`, `verdict`, `reason`, `condition`, `spec_text`(120자), `evidence`, `match_mode`), `truncated`, `needs_review`(판단필요 칸),
-    `not_decided`, `memo_file`(CSV `칸,메모`, 메모 = `자동 판정(참고): <판정> (이유) - 읽은 조건: <condition> - 근거: <장절>: <규격 문장 앞 60자>`),
-    `next_commands[0]` = `excel.py comment --action add --file <memo_file> --dry-run`. directive(1.4.68)는 "사용자가 메모를 원하면 next_commands[0](미리보기, 변경 없음)을
-    실행해 보여 주고, 사용자가 '예'라고 한 뒤에만 그 결과의 confirm_commands[0]"(1.4.73)과 "같은 check는 다시 실행하지 마세요". 규격 폴더의 문서 등록이 남으면(`remaining`)
-    대조가 끝나지 않은 것이라 `next_commands`는 같은 check 명령 하나뿐이고 directive는 "그대로 다시 실행해 이어서 대조"(CONTINUE와 같은 흐름, 메모는 대조를 마친 결과에서).
-    `--save`는 모든 행을 xlsx(`칸, 항목, 값, 판정, 이유, 규격 조건, 근거, 규격 문장, 찾은 방식`)로 저장하고 다시 열어 행 수를 확인합니다.
-    명령 시간 제한(R10)이 다가오면 남은 행은 대조하지 않고 `판단필요`로 두고 결과를 냅니다(1.4.69). 행 대조는 저장할 중간 결과가 없어 CONTINUE가 아닙니다.
-    1.4.70: 그 행은 `reason` `대조하지 못함 (명령 시간 제한)`, `match_mode` null이고 메모 파일에서 뺍니다(판정 없는 칸에 메모가 달리지 않게).
-    `next_commands`에 메모 미리보기 다음으로 남은 범위(대조하지 못한 첫 행~끝 행, 같은 열)만 다시 대조하는 전체 check 명령을 넣고(머리글은 원래 범위 위 행:
-    `--header-row`), directive는 "사용자에게 확인을 받은 뒤 next_commands[N]을 그대로 실행". `--header-row N`(1.4.70): 값 열 단위를 읽을 머리글 행 번호
-    (기본: `--range` 바로 위 행, `--range` 첫 행보다 위여야 함). `--header-row 0`(1.4.71)은 머리글 없음: 원래 범위가 1행부터면 남은 행 명령에
-    `--header-row 0`을 넣습니다(전에는 0이 무시되어 남은 범위 바로 위 데이터 행을 머리글(값 열 단위)로 읽어 판정이 달라졌음).
-    항목 찾기가 숫자가 든 항목 글을 표기가 다른 곳(층 B, 아래 search 두 층 판정)에서만 찾으면 `reason` 끝에 `표기가 다른 곳에서 찾음 (...)`을 붙이고
-    `match_mode`는 `exact_mixed`(판정 자체는 그대로, check는 늘 UNVERIFIED). 층 A로 찾은 곳이 있으면 그것을 먼저 씁니다.
-    조건(`condition`)과 `spec_text`는 층 A 일치 자리가 든 문장의 그 자리에서 읽습니다(1.4.71, search 스니펫과 같은 자리).
-    규격 문장의 수치는 구분자 없이 30자를 넘는 숫자열(시리얼 번호)을 수치로 읽지 않고, 낱말 앞 같은 절은 끝 200자만 봅니다(긴 숫자열에서 시간이 제곱으로 늘던 문제, 1.4.69).
-    쉼표 뒤가 3자리 묶음이 아닌 숫자(`1,5`, `1,2345`, `10,20`)는 수치로 읽지 않습니다(1.4.70: `1,5 V`가 1 V나 5 V로 읽히지 않게).
-  - 확인(R1, 1.4.67 설계 변경): 결과는 늘 `UNVERIFIED:`입니다(대조할 항목이 없는 0건도). 판정은 자연어 규격 문장을 기계로 해석한 참고 판정이라
-    도구가 결과를 확인했다고 할 수 없습니다. 검토 1~4차마다 새로운 해석 오판정이 나왔고(유니코드 빼기, 지수 표기, 최대·최소 낱말, 단서 조항 등),
-    규칙을 더해도 휴리스틱이라 모든 문장을 맞힌다고 보장할 수 없어 계약을 정직하게 바꿨습니다. `unverified[0]`은 "자동 판정은 참고용입니다 ... 행마다 읽은 조건(condition)과
-    근거 문장(spec_text)을 사용자에게 보여 주고 확인을 받은 뒤 메모를 다세요", 판단필요가 있으면 `not_decided` 수, 등록하지 못한 규격 문서가 있으면 그 수가 이어집니다.
-    행 판정 값(일치/불일치/판단필요/근거없음)과 보수적 판정 원칙은 그대로이고, 메모 CSV와 `next_commands[0]`로 다는 메모에 `자동 판정(참고)`과 읽은 조건·근거가 들어가
-    사람이 엑셀에서 바로 확인할 수 있습니다. 해석 버그는 계속 고치고 `tests/check_corpus.tsv`에 더합니다.
-  - 출력 글자(D): `spec_text`, `condition`, `evidence`의 규격 원문 인용은 도구가 만든 문구가 아니라 사용자 문서의 글이라 CP949 밖 글자(위첨자, 특수 대시 등)도
-    그대로 둡니다(문자 규칙은 도구가 만드는 문구에 적용). 판정은 정규화한 글(`spec_norm`)로 하지만 인용은 원문 그대로입니다.
 - `range --action insert|delete --range 5:7|B:C`: 행·열 넣기·지우기. `5`, `B`처럼 하나도 됩니다. `A5:C7` 같은 칸 범위는 행인지 열인지
   `--axis rows|cols`가 필요합니다(없으면 `[후보]`).
   - `insert`: 범위 앞에 같은 수만큼 넣고 아래(오른쪽)는 밀립니다.
@@ -710,7 +647,7 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
   다시 찾습니다(부호·단위 경계·붙여쓰기·기호 무시, 숫자 경계와 값은 지킴: `5`는 `15`, `5.5`와 다름, 숫자 사이 40자까지). 숫자가 없는 검색어는 정확히 맞아야 합니다.
   숫자가 든 검색어의 숫자 아닌 낱말(단위 빼고, 조사 처리 포함)도 같은 단위 안에 있어야 후보입니다(1.4.69: `1 퀀텀`은 `퀀텀`이 없는 곳의 `1`과 맞지 않아
   partial·fuzzy로 넘어가고, 그래도 없으면 0건 VERIFIED). 숫자마다 위치 목록을 만들어 선형으로 찾고(1.4.69, 큰 정규식의 지수 시간 제거), 전체 20초 상한(1.4.70부터 단위마다 확인)을 넘으면
-  남은 단위는 보지 않고 `not_searched`에 알려 0건이어도 VERIFIED로 단정하지 않습니다(`check`는 `판단필요`).
+  남은 단위는 보지 않고 `not_searched`에 알려 0건이어도 VERIFIED로 단정하지 않습니다.
   항목마다 `number_words`(검색어: 실제 글, 앞 부호와 뒤 단위 포함), directive `UNVERIFIED: 정확히 일치한 곳은 0건, 숫자가 같은 곳 N건 - 표기를 확인하세요 ...`.
   숫자 경계 규칙이 너무 엄격해 맞는 표기를 놓쳐도 "0건 VERIFIED -> 규정 없음 단정"이 나지 않게 하는 구조적 안전망입니다: 숫자가 든 검색어의 0건 VERIFIED는 이 검색도 0건일 때만.
   (1) `partial`: 검색어가 둘 이상인 묶음에서 절반 이상이 든 단위 중 가장 많이 든 것,
@@ -720,7 +657,6 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
   넓혀 찾은 결과는 정확 일치가 아니므로 `count`/`total_matches`는 0, 결과 목록은 `matches` 대신 `candidates`, `candidate_count`(비슷한 곳 수), `match_mode`(`number`/`partial`/`fuzzy`),
   항목마다 `matched_terms`(글자 그대로 맞은 검색어만), `missing_terms`, `fuzzy_words`(검색어: 실제 낱말). directive는
   `UNVERIFIED: 정확히 일치한 곳은 0건, 비슷한 곳 N건 ... candidates를 근거로 쓰지 말고 사용자에게 확인`(stale·indexed_now·상한·text 잘림 안내는 뒤에 덧붙음). 그래도 없으면 전처럼 0건(`match_mode: exact`, `VERIFIED: 0건`).
-  `excel.py check`는 같은 찾기에서 number·partial·fuzzy이면 `판단필요`입니다.
 - 순위: 결과는 점수 순(같으면 문서 순서). 점수 = 맞은 검색어 수 x 10 + 나온 횟수(검색어마다 5번까지) + 검색어끼리 50자 안 3점(200자 안 1점) + 장절 제목에 검색어 3점.
   항목의 `score`, `--save` 파일의 마지막 열 `점수`(저장 파일도 점수 순). `--regex`는 점수 0, 문서 순서.
 - 동의어: `<데이터 폴더>/synonyms.txt`(기본 `C:\AIKIT\office-cli\data\synonyms.txt`, UTF-8 또는 CP949, `#`은 설명 줄)에 한 줄에 한 묶음을 쉼표로 적으면

@@ -222,7 +222,7 @@ def test_skill_mentions_new_and_existing_features():
         "outlook-kit": ("outlook.py\" folders", "list [--unread]", "--where subject", "--all", "new --to", "--cc", "--body-file",
                         "--days 7", "--since 2026-11-01", "thread --id", "calendar --days", "attachments --id", "send --id"),
         "search-kit": ("reader.py\" index --folder", "--section", "search --query", "list [--name",
-                        "clear --name", "--missing", "synonyms.txt", "--regex", "excel.py\" check", "comment --action add",
+                        "clear --name", "--missing", "synonyms.txt", "--regex", "comment --action add",
                         "not_searched", "match_mode"),
         "stats-kit": ("excel.py\" stats --target", "excel.py\" duplicates --target", "not_supported"),
     }
@@ -230,7 +230,7 @@ def test_skill_mentions_new_and_existing_features():
     more = {"word-kit": ("word.py\" format --paragraphs", "--match-case", "--whole-word", "--map", "--from-target", "--theme"),
             "ppt-kit": ("--match-case", "--map", "--height", "--from-target", "--theme"),
             "outlook-kit": ("--index 1,3", "--depth 3", "event --action delete"),
-            "search-kit": ("--recursive", "--format summary", "--top 30", "--full", "--header-row")}
+            "search-kit": ("--recursive", "--format summary", "--top 30", "--full")}
     need = {k: tuple(v) + more.get(k, ()) for k, v in need.items()}
     for name, needles in need.items():
         text = _read(SKILL_FILES[name])

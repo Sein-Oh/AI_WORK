@@ -525,6 +525,10 @@ pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규�
 `style --range "B2;D5"`(떨어진 칸), word `comment --file`·`replace --highlight`는 있음. 보완: `read --columns`, `style --file`(칸 수백 개).
 다음: 실제 BOM 샘플(경로·이름 지운 것)로 이 흐름을 회사 PC에서 시험.
 
+### 3-25. office-cli는 기반 도구: `excel.py check` 뺌, 부족한 기반 기능 채우기
+사용자 결정: office-cli는 응용이 조합해 쓰는 기반 도구 (저장소 AGENTS.md office-cli 첫 줄). 규격 대조 판정(`excel.py check`)을 빼고 조합(엑셀 읽기 +
+규격서 검색 + 메모 미리보기)으로. Gemma O1도 조합으로 다시 씀. 사용자가 조합을 스킬로 완성할 계획. 이어서 부족한 기반 기능을 차례로 넣음 (CHANGELOG 1.6.7).
+
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).
 - 회사 PC에서 아직 확인 안 한 것: 2.9.91·1.6.4 반입 뒤 사내 LLM 재시험(A3, P2, R1, Y1, O8), 스킬 만들기 대화, Web UI의 `C:\AIKIT\work` 첫 실행 안내.

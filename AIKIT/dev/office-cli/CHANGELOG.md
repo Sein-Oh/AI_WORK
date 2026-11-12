@@ -30,6 +30,12 @@
   정리(`step_old_global`, `step_old_layout`, `RETIRED_SKILLS` 등)와 `opencode.jsonc`의 옛 `"skills"` WARN을 없앰. 단계는 1 설정 폴더, 2 PATH, 3 동작 확인.
   `run_all_tests.py` diag와 `run_simplify_check.py` K1의 옛 복사본 확인도 뺌. 관련 테스트 정리.
 
+### 제거: `excel.py check`(규격 대조) (사용자 결정 2026-11-12: office-cli는 기반 도구, 판정 기준은 도구 밖)
+- `excel.py check`, `_spec_check.py`, reader의 규격 조건 읽기·판정 도우미(`spec_conditions`, `near_conditions`, `cond_holds` 등)를 지움.
+  숫자 값 찾기가 쓰는 단위 표(`_UNIT_TABLE`)는 남김. 규격 대조는 기반 도구 조합으로: `excel.py read`(값) + `reader.py search`/`read --section`(근거)
+  -> LLM이 근거를 보고 판단 -> `excel.py comment --file --dry-run`(메모 미리보기). 조합은 사용자 스킬로 완성 (사용자 계획).
+- `search-kit` 스킬, 전역 지침 3장 표·4장, 사용 가이드 2.10, README, 실기 러너 E10·I30, Gemma 시나리오 O1(조합으로 다시 씀)과 채점 시험, 판정 시험·말뭉치.
+
 ### 기능: 두 판을 LLM과 의논하며 비교할 때 쓰는 도구 보완 (사용자 목표: 비교 판단은 LLM과 의논, 도구는 읽기·검증·표시)
 - `excel.py read --columns 품번,수량`: 그 열만 (머리글 이름 또는 열 문자, 제목 행 아래 머리글도 찾음). `--where`는 모든 열로 거르고 보여 주는 열만,
   `--save`도 그 열만, 이어 읽기 명령은 열 문자로. `--search`·`--formulas`와는 함께 쓰지 않음.

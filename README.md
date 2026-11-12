@@ -45,7 +45,7 @@ AI_WORK/
 │       ├── excel.py / word.py / ppt.py / outlook.py   # 앱별 진입점
 │       ├── reader.py          # PDF/HWP/Office/eml 파일 읽기, 캐시 등록, 근거(쪽/장절/번호) 검색 (Office 불필요)
 │       ├── office.py          # 창 목록/전환, 앱 간 전달, 되돌리기
-│       └── _runtime.py / _office.py / _markdown.py / _xlsx_formula.py / _spec_check.py   # 공통·내부 모듈 (진입점 아님)
+│       └── _runtime.py / _office.py / _markdown.py / _xlsx_formula.py   # 공통·내부 모듈 (진입점 아님)
 └── AIKIT/dev/                 # AIKIT 안의 개발·실기 테스트 폴더 (C:\AIKIT\dev, 도구와 함께 배포, 도구는 읽지 않음)
     ├── README.md              # 도구 목록 + 새 도구 추가 규칙 / ACI 공통 계약
     ├── run_all_tests.py / .bat   # 실기 자동 점검 한 명령 (진단, pytest, 베타 점검, office 실기, --gemma -> result_<라벨>_<시각>.md 하나)

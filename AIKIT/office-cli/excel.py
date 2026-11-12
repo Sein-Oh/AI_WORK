@@ -37,7 +37,7 @@ import _runtime as rt  # noqa: E402
 import _markdown as md  # noqa: E402
 import _xlsx_formula as xf  # noqa: E402
 
-# 직접 실행(__main__)해도 내부 모듈(_spec_check)의 'from excel import ...'가 이 모듈을 쓰게 함 (두 번 읽지 않음)
+# 직접 실행(__main__)해도 'import excel'이 이 모듈을 쓰게 함 (두 번 읽지 않음)
 sys.modules.setdefault("excel", sys.modules[__name__])
 
 TOOL = "excel"
@@ -4975,19 +4975,7 @@ def cmd_comment(args) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 9. check(규격서 대조): 내부 모듈 _spec_check.py
-# (위의 주소·읽기 도우미를 쓰므로 여기서 불러옴)
-# ==============================================================================
-
-import _spec_check  # noqa: E402
-
-
-def cmd_check(args) -> Dict[str, Any]:
-    return _spec_check.cmd_check(args)
-
-
-# ==============================================================================
-# 10. 진입점
+# 9. 진입점
 # ==============================================================================
 
 def build_cli():
@@ -5144,24 +5132,12 @@ def build_cli():
     p.add_argument("--append", action="store_true", help="add: 이미 메모가 있는 칸은 기존 메모 아래 줄에 덧붙이기")
     p.add_argument("--start", type=int, default=1, help="list: 이 번호의 메모부터 보기")
 
-    p = sub.add_parser("check", help="표의 값을 등록된 규격서와 한 번에 대조 (일치/불일치/근거없음/판단필요, 메모 파일)")
-    common(p)
-    p.add_argument("--range", required=True, help="대조할 행 범위 (예: B2:D50). 바로 위 행은 머리글(값 열의 단위)로 읽음")
-    p.add_argument("--item-col", required=True, help="항목 열 (예: B). 이 글로 규격서를 찾음")
-    p.add_argument("--value-col", required=True, help="값 열 (예: D)")
-    p.add_argument("--section-col", help="장절 열 (예: E). 행마다 그 장절 안에서만 찾음")
-    p.add_argument("--unit-col", help="단위 열 (예: E). 생략하면 값 열 바로 오른쪽 열의 머리글이 '단위'일 때 그 열을 씀")
-    p.add_argument("--spec", required=True, help="규격서 파일 또는 폴더 (등록 안 된 문서는 먼저 등록)")
-    p.add_argument("--section", help="모든 행을 이 장절 안에서만 찾음 (예: 3.2)")
-    p.add_argument("--header-row", type=int, help="값 열 단위를 읽을 머리글 행 번호 (기본: --range 바로 위 행, 0 = 머리글 없음)")
-    p.add_argument("--save", help="전체 결과를 xlsx로 저장 (예: 대조결과.xlsx)")
-
     return parser
 
 
 HANDLERS = {"read": cmd_read, "info": cmd_info, "write": cmd_write, "replace": cmd_replace, "style": cmd_style,
             "export": cmd_export, "sheet": cmd_sheet, "range": cmd_range, "chart": cmd_chart,
-            "comment": cmd_comment, "check": cmd_check, "stats": cmd_stats,
+            "comment": cmd_comment, "stats": cmd_stats,
             "duplicates": cmd_duplicates, "save": cmd_save}
 
 
