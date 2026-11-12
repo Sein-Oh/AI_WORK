@@ -33,6 +33,7 @@
 ### 기능: 기반 도구로서 부족했던 것 채우기 (사용자 결정 2026-11-12: 조합을 스킬로 완성할 수 있게)
 - `excel.py read --formats`: 서식이 있는 칸(배경색, 글자색, 굵게, 기울임) 목록. 칠해 둔 칸을 다시 찾을 때. 닫힌 xlsx는 openpyxl(테마 글자색은 기본),
   열린 문서는 행 전체가 기본 서식이면 건너뛰고 칸마다 읽음(2만 칸 상한). 많으면 `formats_file`(style·comment `--file`에 그대로). 시험 2개, 가짜 COM은 칸이 든 범위의 서식을 보여 줌.
+- `word.py header`: 머리글·바닥글 읽기(구역마다 기본·첫 쪽·짝수 쪽)와 쓰기(`--kind header|footer --text`, 글이 있으면 `--overwrite`, `--dry-run`, 다시 읽어 확인). word-kit 스킬, 시험.
 
 ### 제거: `excel.py check`(규격 대조) (사용자 결정 2026-11-12: office-cli는 기반 도구, 판정 기준은 도구 밖)
 - `excel.py check`, `_spec_check.py`, reader의 규격 조건 읽기·판정 도우미(`spec_conditions`, `near_conditions`, `cond_holds` 등)를 지움.

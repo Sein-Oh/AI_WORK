@@ -1525,3 +1525,29 @@ def test_format_font_also_sets_korean_font(wd, capsys):
     code, out = run_word(capsys, "format", "--paragraphs", "1", "--font", "맑은 고딕")
     font = doc.format_cache[("font", 0, 6)]
     assert code == 0 and font.Name == "맑은 고딕" and font.NameFarEast == "맑은 고딕", out    # 한글은 NameFarEast로 그려짐
+
+
+def test_header_footer_read_and_write(wd, capsys):
+    """1.6.7 기반 기능: 머리글·바닥글 읽기·쓰기 (문서 번호·개정 판 표기). 비면 0건, 글이 있으면 --overwrite가 있을 때만 바꿈([후보] 확인),
+    --dry-run은 바꾸지 않음, 쓴 뒤 다시 읽어 확인, 첫 쪽 머리글이 따로 있으면 그것도 읽음."""
+    doc = wd["doc"]
+    code, out = run_word(capsys, "header")
+    assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
+    code, out = run_word(capsys, "header", "--kind", "header", "--text", "문서번호 QA-001 Rev.A")
+    assert code == 0 and out["verified"] is True and doc.Sections(1).Headers(1).Range.Text == "문서번호 QA-001 Rev.A", out
+    code, out = run_word(capsys, "header", "--kind", "header", "--text", "문서번호 QA-001 Rev.B")
+    assert code == 1 and "[후보]" in out["message"] and "--overwrite" in out["confirm_commands"][0]["command"], out
+    assert doc.Sections(1).Headers(1).Range.Text.endswith("Rev.A")                      # 묻기 전에는 그대로
+    code, out = run_word(capsys, "header", "--kind", "header", "--text", "문서번호 QA-001 Rev.B", "--dry-run")
+    assert code == 0 and doc.Sections(1).Headers(1).Range.Text.endswith("Rev.A"), out
+    code, out = run_word(capsys, "header", "--kind", "header", "--text", "문서번호 QA-001 Rev.B", "--overwrite")
+    assert code == 0 and out["old_text"].endswith("Rev.A") and doc.Sections(1).Headers(1).Range.Text.endswith("Rev.B"), out
+    doc.Sections(1).footers[2].Exists = True
+    doc.Sections(1).footers[2].Range.Text = "표지 바닥글\r"
+    code, out = run_word(capsys, "header")
+    kinds = {(i["kind"], i["type"]): i["text"] for i in out["items"]}
+    assert code == 0 and out["count"] == 2 and kinds[("바닥글", "첫 쪽")] == "표지 바닥글" and kinds[("머리글", "기본")].endswith("Rev.B"), out
+    code, out = run_word(capsys, "header", "--text", "x")
+    assert code == 1 and "--kind" in out["message"], out
+    code, out = run_word(capsys, "header", "--section", "3")
+    assert code == 1 and "1~1" in out["message"], out
