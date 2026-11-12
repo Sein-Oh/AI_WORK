@@ -18,6 +18,13 @@
 
 ## [1.6.7] - 2026-11-12
 
+### 스킬 점검 (1.6.7 기능·excel-kit 나눔 뒤)
+- 스킬의 "새 파일은 사용자가 준 전체 경로로만 만든다"가 전역 지침 2장(경로를 안 주면 도구가 대상 파일 옆에 저장)과 어긋나 "경로는 지어 붙이지 않는다
+  (사용자가 준 경로만, 안 줬으면 `--save`만)"로 맞춤 (excel-kit, excel-format-kit, word-kit, ppt-kit, search-kit).
+- excel-kit: `--range`에 이름 정의 이름 (목록은 `info`의 `names`). 스킬에 없어 모델이 쓸 수 없었음.
+- 스킬 설명(description, 스킬 고르기에 쓰임)과 전역 지침 3장 표에 새 기능: 워드 머리글·바닥글·링크·책갈피, PPT 표 칸, Outlook 연락처.
+  word·ppt·outlook 스킬 설명의 엑셀 안내에 excel-format-kit.
+
 ### 시험: 실기 러너 P 그룹 (1.6.7 기반 기능을 실제 Office에서)
 - P1~P10: 엑셀 `read --columns`·`--formats`, `style --file`, 이름 정의 범위, 자동 필터, 그림·링크, 워드 바닥글·책갈피·링크, PPT 표, `office.py open`,
   Outlook `contacts`. 질문 없이 COM으로 다시 읽어 판정. 바닥글은 원래 글로 되돌리고, 연락처는 러너가 시험용으로 만들고 지움(실제 주소록 이름은 기록하지 않음).

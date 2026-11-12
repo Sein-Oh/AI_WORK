@@ -1,6 +1,6 @@
 ---
 name: word-kit
-description: 열린 워드 문서 읽기·쓰기. 읽기(장절·쪽), 목차, 쓰기(표·그림·목차·요약 상자), 양식 채우기, 검토 메모, 단락 지우기·서식, 표 행, 변경 추적, 바꾸기, PDF 내보내기. 엑셀 차트·표를 워드로, 워드 내용을 PPT·엑셀로 옮기기, 되돌리기. 보고서·문서 작성에 사용. PPT는 ppt-kit, 엑셀은 excel-kit, 메일은 outlook-kit, 파일 검색·규격 근거는 search-kit.
+description: 열린 워드 문서 읽기·쓰기. 읽기(장절·쪽), 목차, 쓰기(표·그림·목차·요약 상자), 양식 채우기, 머리글·바닥글, 링크·책갈피, 검토 메모, 단락 지우기·서식, 표 행, 변경 추적, 바꾸기, PDF 내보내기. 엑셀 차트·표를 워드로, 워드 내용을 PPT·엑셀로 옮기기, 되돌리기. 보고서·문서 작성에 사용. PPT는 ppt-kit, 엑셀은 excel-kit(서식·차트·시트는 excel-format-kit), 메일은 outlook-kit, 파일 검색·규격 근거는 search-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
@@ -45,6 +45,6 @@ metadata:
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - transfer는 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 준다.
 - 단락·표 행 삭제, `--overwrite`(표 칸 덮어쓰기)는 사용자가 요청했을 때만.
-- `replace`의 `--find`는 비우지 않는다. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- `replace`의 `--find`는 비우지 않는다. 새 파일 경로는 지어 붙이지 않는다 (사용자가 준 경로만, 안 줬으면 `--save`만: 도구가 대상 파일 옆에 저장). 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 잘못 고쳤으면 `undo`로 되돌린다. 저장한 적 없는 문서도 되돌린다.
 - `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

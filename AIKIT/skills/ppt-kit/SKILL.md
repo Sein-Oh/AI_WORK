@@ -1,6 +1,6 @@
 ---
 name: ppt-kit
-description: 열린 파워포인트 발표자료 읽기·쓰기. 슬라이드 읽기·쓰기(목록·표·그림·카드), 도형 글 바꾸기·옮기기·크기, 발표자 노트, 슬라이드 추가·복제·삭제·이동, 바꾸기, PDF 내보내기. 엑셀 차트·표를 PPT로, 워드 내용을 PPT로(PPT를 워드로) 옮기기, 되돌리기. 발표자료 작성에 사용. 워드는 word-kit, 엑셀은 excel-kit, 메일은 outlook-kit, 파일 검색·규격 근거는 search-kit.
+description: 열린 파워포인트 발표자료 읽기·쓰기. 슬라이드 읽기·쓰기(목록·표·그림·카드), 도형 글 바꾸기·옮기기·크기, 있는 표의 칸 읽기·쓰기, 발표자 노트, 슬라이드 추가·복제·삭제·이동, 바꾸기, PDF 내보내기. 엑셀 차트·표를 PPT로, 워드 내용을 PPT로(PPT를 워드로) 옮기기, 되돌리기. 발표자료 작성에 사용. 워드는 word-kit, 엑셀은 excel-kit(서식·차트·시트는 excel-format-kit), 메일은 outlook-kit, 파일 검색·규격 근거는 search-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
@@ -40,6 +40,6 @@ metadata:
 - transfer는 받는 앱이 안 열려 있으면 아무것도 바꾸지 않고 `[추천]`에 열린 앱만 넣은 명령을 준다.
 - `info --detail`의 `layout_warnings`가 있으면 `warnings`를 알린다.
 - 슬라이드 삭제, `slide --action clear --all-slides`, `--overwrite`(노트·제목·도형 글 덮어쓰기)는 사용자가 요청했을 때만.
-- `replace`의 `--find`는 비우지 않는다. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- `replace`의 `--find`는 비우지 않는다. 새 파일 경로는 지어 붙이지 않는다 (사용자가 준 경로만, 안 줬으면 `--save`만: 도구가 대상 파일 옆에 저장). 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 잘못 고쳤으면 `undo`로 되돌린다. 저장한 적 없는 문서도 되돌린다.
 - `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

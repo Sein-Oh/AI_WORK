@@ -40,5 +40,5 @@ metadata:
 - `search`가 `UNVERIFIED:`이면 `not_searched`를 알린다. 0건이어도 "근거 없음"이라고 단정하지 않는다.
 - `search`는 `--file`이 없으면 등록된 문서만 찾는다. `--file`을 주면 새 문서를 먼저 등록한다(`indexed_now`를 알림). `not_indexed` 오류면 사용자에게 폴더를 물어 `--file "<폴더>"`로 실행한다.
 - `truncated`이면 `full_result_file`을, `recovered`와 `warnings`는 그대로 알린다.
-- `--save` 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- `--save` 새 파일 경로는 지어 붙이지 않는다 (사용자가 준 경로만, 안 줬으면 `--save`만: 도구가 대상 파일 옆에 저장). 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 메모의 `--overwrite`(있던 메모 바꾸기)는 사용자가 요청했을 때만 붙인다.
