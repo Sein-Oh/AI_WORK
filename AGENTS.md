@@ -167,6 +167,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   import하지 않고, `_ml_runtime.py`는 진입점을 import하지 않는다 (예외: 보고서와 함께 성능예측표를 만드는 `ml_report` -> `ml_export`).
   예측만 하는 PC에는 `ml_predict.py` + `_ml_runtime.py` + 버전 폴더를 복사한다. 검사: `tests/test_contract.py`.
 ### office-cli
+- **office-cli는 기반 도구다** (2026-11-12 사용자 결정): 다른 작업(LLM이 사용자와 의논하는 일, 사용자 스킬, 두 판 비교, 보고서 같은 응용)이 조합해 쓰는
+  단위 기능만 둔다. 읽기·쓰기·서식·문서 구조·앱 간 전달·문서 검색·되돌리기와, 그 결과가 맞는지 도구가 확인하는 일까지가 범위다.
+  업무 판단(판정 기준, 비교 기준, 문서 양식·내용 결정)은 도구에 넣지 않고 LLM·사용자 스킬·별도 응용 도구에 둔다. 새 기능은 이 기준으로 먼저 본다.
 - 공통 런타임은 `_runtime.py`, Office COM 공통은 `_office.py`. 내부 모듈(진입점 아님, 스킬에 적지 않음): `_markdown.py`(마크다운 해석),
   `_xlsx_formula.py`(닫힌 xlsx의 계산 안 된 수식 칸), `_spec_check.py`(excel check).
   `_runtime.py`는 다른 office-cli 파일을 import하지 않는다. `_spec_check.py`는 `excel.py`의 주소·읽기 도우미를 쓴다.
