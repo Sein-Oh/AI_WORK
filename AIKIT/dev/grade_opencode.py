@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-"""OpenCode 대화 채점기와 실행 기록 묶음 (사람이 실행하는 개발 도구)
+"""OpenCode 대화 채점기 (사람이 실행하는 개발 도구). 실행 기록 묶음(write_bundle)은 run_all_tests.py gemma 단계가 씀
 
 채점:
     python grade_opencode.py --export <대화.json> [<대화2.json> ...] [--label 회사PC] [--judge]
     python grade_opencode.py --runs <기록 폴더> [--label 회사PC]   # run_all_tests.py --gemma가 남긴 opencode run 기록(<ID>.jsonl)
-반출용 기록 묶음 (기록 폴더를 md 하나로):
-    python grade_opencode.py --runs <기록 폴더> --label 회사PC --bundle
 
 대화 내보내기: PowerShell에서 `cmd /c "opencode export <세션ID> > chat.json"`
   (cmd의 `>`는 opencode가 쓴 UTF-8 바이트를 그대로 저장한다. PowerShell 5.1의 `| Out-File`이나 `>`는 출력을
@@ -690,21 +688,13 @@ def write_report(label, meta, rows, detail, out_dir=None):
 
 # ------------------------------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="OpenCode 대화 채점, 실행 기록 묶음")
+    ap = argparse.ArgumentParser(description="OpenCode 대화 채점")
     ap.add_argument("--export", nargs="+", help="OpenCode에서 내보낸 대화 JSON (여러 개 가능)")
     ap.add_argument("--runs", help="run_all_tests.py --gemma가 남긴 opencode run 기록 폴더 (<ID>.jsonl)")
     ap.add_argument("--label", default="PC")
     ap.add_argument("--judge", action="store_true", help="사내 OpenAI 호환 API로 참고 점수 (JUDGE_BASE_URL)")
     ap.add_argument("--judge-model", default="LLM42")
-    ap.add_argument("--bundle", action="store_true", help="--runs 폴더의 기록을 반출용 md 하나로 묶기 (gemma기록_<라벨>_<시각>.md, 채점 없이)")
     args = ap.parse_args()
-    if args.bundle:
-        if not args.runs:
-            ap.error("--bundle은 --runs <기록 폴더>와 함께 씁니다")
-        out = os.path.join(HERE, f"gemma기록_{safe_label(args.label)}_{datetime.now():%Y%m%d_%H%M%S}.md")
-        path, n = write_bundle(args.runs, out)
-        print(f"[STATUS] 요청 {n}건을 묶음 파일 하나로 저장 -> {path}")
-        return 0
     if not args.export and not args.runs:
         ap.error("--export 또는 --runs 가 필요합니다")
     try:

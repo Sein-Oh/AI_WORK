@@ -311,7 +311,7 @@ def test_no_adhoc_py_rule():
                'cd C:\\AIKIT\\dev\\ml-kit\\tools; python make_beta_samples.py "C:\\AIKIT\\dev\\work\\gemma"',
                'python .\\make_beta_samples.py "C:\\AIKIT\\dev\\work\\gemma"',
                'cd C:\\AIKIT\\dev\\office-cli\\tools; python run_win_tests.py',
-               'cd C:\\AIKIT\\dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --runs work\\gemma_runs_1 --bundle',
+               'cd C:\\AIKIT\\dev; python run_beta_check.py --agent; python .\\run_all_tests.py; python grade_opencode.py --runs work\\gemma_runs_1',
                'cd C:\\AIKIT\\dev; python ml-kit\\tools\\run_win_tests.py --agent',
                'cd C:\\AIKIT\\dev\\ml-kit; python tools\\make_beta_samples.py "C:\\AIKIT\\dev\\work\\gemma"',
                'python -m pytest -q',

@@ -33,7 +33,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
   가짜 Office로 보는 시험이라 Windows에서도 결과가 같아야 하고, Windows에서만 보이는 것은 아래 실제 환경 단계가 봅니다).
 - `--gemma`(또는 `--only gemma`): 마지막에 `gemma` 단계. `agent_scenarios.py`의 요청을 `opencode run --format json`으로 한 세션에 차례로 보내고
   (첫 요청 뒤로는 `--session <ID>`) `grade_opencode.py`로 채점해 결과 파일에 넣습니다. opencode는 `--opencode`, PATH, `C:\AIKIT\opencode.exe` 순서로 찾고 없으면 ENV-SKIP.
-  시험 폴더(기본 `C:\AIKIT\dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\AIKIT\dev\work\gemma_runs_<시각>`에 남깁니다. 반출용으로 그 기록을 결과 파일 옆 `result_<라벨>_<시각>_gemma기록.md` 하나로 묶습니다 (`grade_opencode.py --runs <폴더> --bundle`로도).
+  시험 폴더(기본 `C:\AIKIT\dev\work\gemma`, `--gemma-dir`)가 있으면 `_old_<시각>`으로 옮기고, 요청별 기록은 `C:\AIKIT\dev\work\gemma_runs_<시각>`에 남깁니다. 반출용으로 그 기록을 결과 파일 옆 `result_<라벨>_<시각>_gemma기록.md` 하나로 묶습니다.
   첫 요청에서 세션이 안 생기면 나머지를 보내지 않고 FAIL. 요청 하나의 시간 상한 `--gemma-timeout`(기본 900초). 관리자 권한 창이면 UNVERIFIED에 경고.
   시험 자료 준비 요청(`setup: true`, S0·S1)은 모델에 보내지 않고 러너가 그 python 명령을 직접 실행합니다 (모델에 보내면 `C:\AIKIT\dev\ml-kit\tools` 경로를
   도구 위치로 따라 해 다음 요청이 `C:\AIKIT\dev\ml-kit\ml_train.py`를 실행함, 집 PC 2026-11-07).
