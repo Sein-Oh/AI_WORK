@@ -698,6 +698,9 @@ class FakeWorksheet:
 
         class _Links:
             def Add(self, Anchor=None, Address=None, TextToDisplay=None, **kw):
+                base = getattr(ws, "link_base", "")            # 실제 엑셀: 통합문서 폴더 안의 파일은 상대 경로로 저장
+                if base and str(Address).startswith(base):
+                    Address = str(Address)[len(base):].lstrip("\\/")
                 ws.links.append((Anchor.Address, Address, TextToDisplay))
                 r, c = Anchor.areas[0][:2]
                 ws.values[(r, c)] = TextToDisplay

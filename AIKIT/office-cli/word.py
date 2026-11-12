@@ -3,10 +3,16 @@
 명령:
     read     내용 읽기 (제목 구조 포함, --save로 md 저장). --pages / --paragraphs / --section으로 범위 고르기
     outline  제목 구조(목차): 수준, 단락 번호, 쪽
-    comment  검토 메모 목록 (--action add: 기준 글에 메모 달기, --file CSV로 여러 개)
+    comment  검토 메모 목록 (--action add: 기준 글에 메모 달기, --file CSV로 여러 개, reply 답글, delete 지우기)
     revisions 변경 내용 추적(수정 기록) 목록
     info     문서 요약 (페이지/단어/글자 수, 표, 그림, 제목 목록). --all: 열린 문서 전체 목록
     write    텍스트/마크다운/표/그림/요약상자/목차 넣기 (기본: 문서 끝, --anchor로 위치 지정, --dry-run)
+    delete   단락 지우기 (--paragraphs, read의 단락 번호)
+    format   단락 서식 (정렬, 글꼴, 크기, 굵게, 기울임, 스타일)
+    table    표 행 넣기·지우기
+    header   머리글·바닥글 읽기·쓰기
+    link     하이퍼링크 목록·달기 (#책갈피 포함)
+    bookmark 책갈피 목록·만들기
     replace  찾아 바꾸기 (+서식). 머리글/바닥글/글상자 포함 (--dry-run)
     fill     서식 문서 채우기: 값 파일(자리, 값)의 {{이름}} 자리와 표 칸(표2!R3C4)을 한 번에 (--dry-run, --overwrite)
     export   PDF / DOCX 사본 저장 (원본은 그대로, --page-number는 사본에만)

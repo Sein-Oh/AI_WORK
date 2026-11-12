@@ -21,7 +21,7 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`, 몇 열만 `--columns 품번,수량`, 칠한 칸·굵은 칸 목록 `--formats`) |
+| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`, 몇 열만 `--columns 품번,수량`, 칠한 칸·굵은 칸 목록 `--formats`, `--range`에 이름 정의 이름도 됨(목록은 `info`의 `names`)) |
 | 조건에 맞는 행 | `python "C:\AIKIT\office-cli\excel.py" read --where "금액 >= 100; 부서 = 영업"` (`;` 그리고, `|` 또는, `>= <= > < = != ~`(포함) `!~`(포함 안 함), 값에 `;` `|`가 있으면 `'a;b'`) |
 | 칸 하나에 값 | `python "C:\AIKIT\office-cli\excel.py" write --range A2 --value "반가워"` |
 | 여러 칸에 각각 | `python "C:\AIKIT\office-cli\excel.py" write --cells "C6=ft; C7=20; 계산기!C11==A1*2"` (많으면 `--cells "칸값.csv"`(열: 칸, 값)) |
@@ -42,4 +42,4 @@ metadata:
 - `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. 사용자가 [편집 사용]을 눌렀거나 풀었다고 하면 같은 명령 1번, `[후보]` 칸을 고르면 그 칸으로.
 - 잘못 고쳤으면 `undo`로 되돌린다.
 - `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.
-- `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 새 파일 경로는 지어 붙이지 않는다 (사용자가 준 경로만, 안 줬으면 `--save`만: 도구가 대상 파일 옆에 저장). 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.

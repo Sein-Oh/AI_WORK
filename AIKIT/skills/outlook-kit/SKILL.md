@@ -1,6 +1,6 @@
 ---
 name: outlook-kit
-description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기·만들기·지우기, 첨부 목록·내려받기, 내려받은 eml 폴더 검색, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 excel-kit, 워드는 word-kit, PPT는 ppt-kit, 내려받은 문서 검색은 search-kit.
+description: Outlook 메일과 일정. 받은·보낸 메일 목록·검색(기간, 보낸 사람, 폴더), 메일 읽기, 대화 전체 보기, 일정 보기·만들기·지우기, 첨부 목록·내려받기, 연락처에서 메일 주소 찾기, 내려받은 eml 폴더 검색, 새 메일·답장·전체 답장·전달 작성(문서 첨부, 참조)과 확인 후 발송. 메일 답장 작성, 첨부 저장, 일정 확인 요청에 사용. 엑셀은 excel-kit(서식·차트·시트는 excel-format-kit), 워드는 word-kit, PPT는 ppt-kit, 내려받은 문서 검색은 search-kit.
 license: Proprietary
 compatibility: opencode
 metadata:

@@ -7,6 +7,8 @@
     replace  찾아 바꾸기 (+서식). 표, 그룹 도형 포함. --dry-run: 바꾸지 않고 바뀔 곳만 미리 보기
     export   PDF / PPTX 사본 저장 (원본은 그대로)
     slide    슬라이드 추가/복제/이동/삭제/비우기/목록. --dry-run: 바꾸지 않고 미리 보기
+    shape    도형 옮기기·크기
+    table    슬라이드에 있는 표 읽기와 칸 쓰기 (R2C3=값)
     notes    발표자 노트 읽기 (--slide N --text/--file이면 그 슬라이드 노트 쓰기, --append는 덧붙이기)
 
 --target: active(기본, 지금 보고 있는 프레젠테이션) | 열린 프레젠테이션 이름 | 파일 경로

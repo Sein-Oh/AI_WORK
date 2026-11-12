@@ -2566,5 +2566,11 @@ def test_write_image_and_link(xl, capsys, tmp_path):
     assert code == 1 and "[후보]" in out["message"] and "--overwrite" in out["confirm_commands"][0]["command"], out
     code, out = run_excel(capsys, "write", "--image", str(tmp_path / "없음.png"))
     assert code == 1, out
+    # 실제 엑셀은 통합문서 폴더의 파일을 상대 경로(A.docx)로 저장함: 통합문서 폴더 기준으로 풀어 비교해 VERIFIED
+    wb.FullName = str(tmp_path / "책.xlsx")
+    ws.link_base = str(tmp_path)
+    near = str(tmp_path / "A.docx")
+    code, out = run_excel(capsys, "write", "--range", "D7", "--link", near)
+    assert code == 0 and out["verified"] is True and ws.links[-1][1] == "A.docx", out
     code, out = run_excel(capsys, "write", "--link", "http://x")
     assert code == 1 and "--range" in out["message"], out
