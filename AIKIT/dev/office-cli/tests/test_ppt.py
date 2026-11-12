@@ -1046,3 +1046,36 @@ def test_shape_locked_picture_both_sizes_unlocks_briefly(pp, capsys):
     pic.LockAspectRatio = -1
     code, out = run_ppt(capsys, "shape", "--slide", "2", "--shape", "그림 3", "--width", "200", "--height", "80")
     assert code == 0 and (pic.Width, pic.Height) == (200, 80) and pic.LockAspectRatio == -1, out
+
+
+def test_table_read_and_write_cells_on_existing_table(pp, capsys, tmp_path):
+    """1.6.7 기반 기능: 슬라이드에 이미 있는 표 읽기와 칸 쓰기 (수치 갱신). 표가 하나면 이름 없이, 여럿이면 [후보], 글이 있는 칸은
+    --overwrite가 있을 때만([후보] 확인), --dry-run, ',' 구분은 ';'로 고친 [추천], 표 밖 칸 거절, --file(칸,값 CSV)."""
+    prs = pp["prs"]
+    slide = prs.Slides(2)
+    tbl = slide.Shapes.AddTable(3, 3, 10, 10, 300, 100).Table
+    tbl.Cell(1, 1).Shape.TextFrame.TextRange.Text = "항목"
+    tbl.Cell(2, 2).Shape.TextFrame.TextRange.Text = "10"
+    code, out = run_ppt(capsys, "table", "--slide", "2")
+    assert code == 0 and out["nrows"] == 3 and out["rows"][0][0] == "항목" and out["rows"][1][1] == "10", out
+    code, out = run_ppt(capsys, "table", "--slide", "2", "--cells", "R3C3=25; R2C2=12")
+    assert code == 1 and "[후보]" in out["message"] and "R2C2" in out["message"], out
+    assert tbl.Cell(3, 3).Shape.TextFrame.TextRange.Text == ""                          # 묻기 전에는 아무것도 안 씀
+    code, out = run_ppt(capsys, "table", "--slide", "2", "--cells", "R3C3=25; R2C2=12", "--dry-run")
+    assert code == 0 and tbl.Cell(2, 2).Shape.TextFrame.TextRange.Text == "10", out
+    code, out = run_ppt(capsys, "table", "--slide", "2", "--cells", "R3C3=25; R2C2=12", "--overwrite")
+    assert code == 0 and out["verified"] is True and tbl.Cell(2, 2).Shape.TextFrame.TextRange.Text == "12", out
+    assert tbl.Cell(3, 3).Shape.TextFrame.TextRange.Text == "25"
+    code, out = run_ppt(capsys, "table", "--slide", "2", "--cells", "R1C2=a, R1C3=b")
+    assert code == 1 and "[추천]" in out["message"], out
+    code, out = run_ppt(capsys, "table", "--slide", "2", "--cells", "R9C1=x")
+    assert code == 1 and "밖의 칸" in out["message"], out
+    f = tmp_path / "칸.csv"
+    f.write_text("칸,값\nR1C2,구분\nR1C3,값\n", encoding="utf-8")
+    code, out = run_ppt(capsys, "table", "--slide", "2", "--file", str(f))
+    assert code == 0 and tbl.Cell(1, 3).Shape.TextFrame.TextRange.Text == "값", out
+    slide.Shapes.AddTable(2, 2, 10, 200, 300, 100)
+    code, out = run_ppt(capsys, "table", "--slide", "2")
+    assert code == 1 and "[후보]" in out["message"] and len(out["confirm_commands"]) == 2, out
+    code, out = run_ppt(capsys, "table", "--slide", "1")
+    assert code == 1 and "표가 없습니다" in out["message"], out

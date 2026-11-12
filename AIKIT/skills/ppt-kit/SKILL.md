@@ -25,6 +25,7 @@ metadata:
 | PPT 읽기 | `python "C:\AIKIT\office-cli\ppt.py" read [--slides 1-3]` |
 | PPT 쓰기 | `python "C:\AIKIT\office-cli\ppt.py" write --slide new --title "<제목>" --file "<내용.md>"` / `--text "- 항목"` / `--image "<그림.png>"` / `--cards "제목:내용; 제목:내용"` (색 `--theme <navy/slate/teal/emerald>`) |
 | PPT 도형 글 바꾸기 | `python "C:\AIKIT\office-cli\ppt.py" write --slide 3 --shape "<도형 이름>" --text "<새 글>"` (이름은 `info --detail --slides 3`의 `name`) / 옮기기·크기 `python "C:\AIKIT\office-cli\ppt.py" shape --slide 3 --shape "<이름>" --left 50 --top 100 [--width 300] [--height 200]`(pt) |
+| PPT 표 칸 | 읽기 `python "C:\AIKIT\office-cli\ppt.py" table --slide 3` / 쓰기 `python "C:\AIKIT\office-cli\ppt.py" table --slide 3 --cells "R2C3=25; R3C3=30"` (R행C열, 표가 여럿이면 `[후보]`, 글이 있는 칸은 `[후보]` 확인 뒤, 많으면 `--file "<칸,값.csv>"`) |
 | PPT 발표자 노트 | 읽기 `python "C:\AIKIT\office-cli\ppt.py" notes [--slides 1-3]` / 쓰기 `python "C:\AIKIT\office-cli\ppt.py" notes --slide 3 --text "<노트>"` (있던 노트에 덧붙이기 `--append`, 여러 줄 `--file "<노트.md>"`) |
 | PPT 슬라이드 | `python "C:\AIKIT\office-cli\ppt.py" slide --action <add/duplicate/delete/move> --slide N [--dest M] [--layout <title/text/title_only/blank>]` |
 | PPT 기타 | `python "C:\AIKIT\office-cli\ppt.py" replace --find <A> --replace <B>` (`--match-case`, `--map "<바꿀말.json>"`) / `python "C:\AIKIT\office-cli\ppt.py" export --save "<발표.pdf>"` / 배치 확인 `python "C:\AIKIT\office-cli\ppt.py" info --detail --slides N` |
