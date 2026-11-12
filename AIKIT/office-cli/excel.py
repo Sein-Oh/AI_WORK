@@ -1519,6 +1519,21 @@ def _load_table(args) -> Tuple[str, int, int, List[List[Any]], Dict[str, Any], O
         return str(rng.Worksheet.Name), int(rng.Row), int(rng.Column), matrix, t.resolved(), None
 
 
+def _table_from_header(matrix: List[List[Any]], r0: int, names: List[str]) -> Tuple[List[List[Any]], int, Optional[int]]:
+    """stats·duplicates: 머리글 행을 찾아 그 위(제목 행, 빈 행)를 뺀다. 준 열 이름이 있으면 그 이름이 모두 있는 행(read --where와 같음),
+    없으면 위 10행 안에서 칸이 하나 이하인 행(제목·빈 행)을 건너뛴 첫 행. (표, 시작 행, 찾은 머리글 행 또는 None)."""
+    hi = _where_header_row(matrix, names) if names else 0
+    if not hi:
+        def filled(row: List[Any]) -> int:
+            return sum(1 for v in row if _where_text(v))
+        width = max((filled(r) for r in matrix[:10]), default=0)
+        while hi < min(10, len(matrix) - 2) and width > 1 and filled(matrix[hi]) <= 1:
+            hi += 1
+    if not hi:
+        return matrix, r0, None
+    return matrix[hi:], r0 + hi, r0 + hi
+
+
 def _stat_num(v: Any) -> Optional[float]:
     if isinstance(v, bool) or v is None:
         return None
@@ -1569,6 +1584,9 @@ def cmd_stats(args) -> Dict[str, Any]:
     if args.top is not None and args.top < 1:
         raise rt.InputError(f"--top은 1 이상입니다 (받은 값 {args.top}). [추천] {rt.retry_command({'--top': 5})}")
     sheet, r0, c0, matrix, source, unc = _load_table(args)
+    asked = [c for spec in (args.columns, args.by) if spec for c in spec.split(",") if c.strip()]
+    asked += [col for g in conds for col, _, _ in g] if conds else []
+    matrix, r0, found = _table_from_header(matrix, r0, asked)
     if len(matrix) < 2:
         raise rt.InputError(f"{sheet}에 머리글 아래 데이터 행이 없습니다. --range로 표 범위를 주세요 (첫 행은 머리글).")
     header = matrix[0]
@@ -1617,6 +1635,8 @@ def cmd_stats(args) -> Dict[str, Any]:
     cond_text = f", 조건 {where_text(conds)}" if conds else ""
     fields: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": where.split("!")[-1], "data_rows": len(matrix) - 1,
                               "rows_used": len(rows), "columns": [names[j] for j in cols], "group_count": len(result_groups)}
+    if found:
+        fields["header_row_found"] = found              # 제목 행 아래에서 찾은 머리글 행 (그 위는 표가 아님)
     if conds:
         fields["where"] = where_text(conds)
     if by:
@@ -1747,6 +1767,7 @@ def cmd_duplicates(args) -> Dict[str, Any]:
     """첫 행을 머리글로 보고 --columns(생략하면 모든 열)의 값이 같은 행 묶음을 찾음 (읽기만). 닫힌 xlsx·CSV는 Office 없이.
     엑셀 행 번호와 값을 알려 주고 지우지는 않음 (지우기는 사용자가 행을 확인한 뒤 range --action delete)."""
     sheet, r0, c0, matrix, source, unc = _load_table(args)
+    matrix, r0, found = _table_from_header(matrix, r0, [c for c in (args.columns or "").split(",") if c.strip()])
     if len(matrix) < 2:
         raise rt.InputError(f"{sheet}에 머리글 아래 데이터 행이 없습니다. --range로 표 범위를 주세요 (첫 행은 머리글).")
     header = matrix[0]
@@ -1771,6 +1792,8 @@ def cmd_duplicates(args) -> Dict[str, Any]:
     extra_rows = sum(g["count"] - 1 for g in groups)
     fields: Dict[str, Any] = {"target_resolved": source, "sheet": sheet, "range": where.split("!")[-1], "data_rows": len(matrix) - 1,
                               "columns": [names[j] for j in cols], "group_count": len(groups), "duplicate_rows": extra_rows}
+    if found:
+        fields["header_row_found"] = found              # 제목 행 아래에서 찾은 머리글 행 (그 위는 표가 아님)
     if not groups:
         payload = rt.ok(TOOL, "duplicates", f"0건: {where}에서 {by} 값이 같은 행이 없습니다 ({len(matrix) - 1}행 비교)",
                         f"VERIFIED: 0건. {by} 값이 같은 행이 없습니다. 사용자에게 그대로 알리세요.", groups=[], **fields)
