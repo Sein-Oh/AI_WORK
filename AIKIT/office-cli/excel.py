@@ -1,17 +1,19 @@
 """excel.py - 엑셀 작업
 
 명령:
-    read     내용 읽기 (범위, 검색, --save로 CSV 저장, --formulas로 수식 칸 목록)
+    read     내용 읽기 (범위·이름 정의 범위, 검색, --where 조건 행, --columns 열 고르기, --formats 서식 있는 칸, --formulas, --save로 CSV)
     info     통합문서 요약 (시트, 사용 범위, 차트, 선택 영역). --all: 열린 통합문서 전체 목록
-    write    값/표/수식 쓰기 (--value, --values, --file, --formula, --header, --append)
+    write    값/표/수식 쓰기 (--value, --values, --file, --formula, --cells, --header, --append), 그림 --image, 링크 --link
     replace  찾아 바꾸기 (수식 셀은 보존)
     style    서식 (테마, 배경/글꼴/정렬/숫자서식/테두리, 조건부 강조)
     export   CSV / XLSX / PDF로 저장 (원본 창은 그대로)
     sheet    시트 목록/추가/이름변경/복사/삭제/선택
-    range    너비/높이/자동맞춤/병합/틀고정/숨김/지우기/복사/이동/테두리
+    range    너비/높이/자동맞춤/병합/틀고정/숨김/지우기/복사/이동/테두리, 행·열 넣기·지우기, 정렬, 수식을 값으로, 자동 필터
     chart    차트 만들기/목록/삭제
     comment  칸 메모 목록/달기/지우기
-    check    표의 값을 등록된 규격서와 대조 (판정과 근거, 칸 메모 파일)
+    save     열린 통합문서 저장 (--save: 다른 이름으로)
+    stats    표 집계 (합계·평균·최소·최대·건수, 묶음별)
+    duplicates  중복 행 찾기
 
 --target: active(기본, 지금 보고 있는 통합문서) | 열린 통합문서 이름 | 파일 경로
 닫힌 xlsx/xlsm 파일 읽기는 Excel을 띄우지 않고 openpyxl로 읽습니다.

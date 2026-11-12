@@ -6,6 +6,8 @@
     read     메일 하나 읽기 (--id: list/search 결과의 짧은 번호 또는 긴 id). 첨부가 있으면 이름과 내려받기 명령을 함께 줌
     thread   같은 대화의 메일을 시간 순으로 (--id)
     calendar 일정 (--days 7: 오늘부터 7일, 읽기만)
+    event    일정 만들기·지우기 (참석자 없는 일정만)
+    contacts 연락처·주소록에서 메일 주소 찾기 (읽기만)
     current  지금 보고 있거나 선택한 메일 읽기
     folders  폴더 구조와 안 읽은 메일 수
     attachments  첨부 목록, --save 로 내려받기 (기본: %USERPROFILE%\\Downloads\\메일 첨부\\<시각>_<제목>)

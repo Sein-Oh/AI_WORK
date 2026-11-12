@@ -1,7 +1,10 @@
-# office-cli 1.4
+# office-cli 1.6
 
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
+
+**기반 도구입니다** (2026-11-12 사용자 결정, 저장소 `AGENTS.md` office-cli): 다른 작업(LLM이 사용자와 의논하는 일, 사용자 스킬, 응용 도구)이 조합해 쓰는
+단위 기능(읽기·쓰기·서식·문서 구조·앱 간 전달·문서 검색·되돌리기)과 그 결과 확인만 둡니다. 판정 기준·비교 기준·문서 양식 같은 업무 판단은 넣지 않습니다.
 
 - 에이전트용 스킬 (작업별 7개, 각 8KB 이하): [`excel-kit`](../../skills/excel-kit/SKILL.md) (excel.py 읽기·쓰기, 엑셀 차트·범위 옮기기), [`excel-format-kit`](../../skills/excel-format-kit/SKILL.md) (excel.py style·chart·sheet·range),
   [`word-kit`](../../skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus·open), [`ppt-kit`](../../skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
@@ -15,12 +18,11 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 ## 1. 구성
 
 ```text
-AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli)
-├── skills/      에이전트용 스킬 7개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit (<이름>/SKILL.md)
-├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check / stats / duplicates / save
-├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
-├── ppt.py       PPT    read / info / write / notes / replace / export / slide
-├── outlook.py   메일   list / search / read / current / thread / calendar / folders / contacts / attachments / new / reply / forward
+AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli. 스킬 7개는 AIKIT/skills/<이름>/SKILL.md)
+├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / stats / duplicates / save
+├── word.py      워드   read / info / outline / write / replace / delete / format / table / fill / header / link / bookmark / comment / revisions / export
+├── ppt.py       PPT    read / info / write / notes / shape / table / replace / export / slide
+├── outlook.py   메일   list / search / read / current / thread / calendar / event / folders / contacts / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / outline / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / open / transfer / undo
 ├── _runtime.py  공통 런타임 (응답 계약, 인자 파서, 경로, 입출력, JIT 복구, 전체 명령 만들기)
@@ -87,7 +89,7 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
      `chart` create, word `comment` add, ppt `write`, `notes` 쓰기): 아무것도 바꾸지 않고 STOP_RETRY. 되돌릴 수 있는 변경(`office.py undo`)이면
      message에 `[추천]` `--dry-run`만 뺀 같은 전체 명령, 명령에 `--overwrite`나 `delete`·`clear`가 들면 `needs_user_decision`과
      `[후보] 1) 미리보기 없이 실행` + 같은 번호의 `confirm_commands`(`destructive`, 사용자가 고른 뒤에만).
-- 출력 크기(1.4.97): 표 읽기 글자 상한 6000자. 닫힌 큰 xlsx를 읽다 명령 시간 제한 전에 닿으면 `read`는 읽은 데까지 `UNVERIFIED:`(`time_limited`), `export`·`check`·`transfer`는 STOP_RETRY(`--range`로 나눠). outlook 목록은 짧은 `id`만(긴 `entry_id`는 번호를 못 붙였을 때만), `folders`는 150개·깊이 5까지, reader `list`는 40개.
+- 출력 크기(1.4.97): 표 읽기 글자 상한 6000자. 닫힌 큰 xlsx를 읽다 명령 시간 제한 전에 닿으면 `read`는 읽은 데까지 `UNVERIFIED:`(`time_limited`), `export`·`transfer`는 STOP_RETRY(`--range`로 나눠). outlook 목록은 짧은 `id`만(긴 `entry_id`는 번호를 못 붙였을 때만), `folders`는 150개·깊이 5까지, reader `list`는 40개.
 - 활성 문서(1.4.96): `--target` 없는 쓰기는 앱에 활성 문서가 없으면(제한된 보기, 숨은 PERSONAL.XLSB만) 다른 문서로 넘어가지 않고 "편집 사용" 안내로 멈춥니다. 읽기는 보이는 첫 문서(숨은 문서 제외). 열린 저장된 문서의 `undo`는 덮기 전 디스크 파일을 `pre_undo_disk_backup`에 남깁니다.
 - 새 파일(1.4.95): 없는 `--target` 경로를 새로 만드는 것은 `excel write`, `word write`, `ppt write`뿐입니다. 그 밖의 쓰기 명령은 STOP_RETRY(비슷한 이름 `[후보]`).
 - `--save` 확장자(1.4.95): 그 명령이 쓰지 않는 확장자(`read --save a.xlsx`가 CSV만 씀)는 쓰는 형식으로 바꿔 저장하고 `recovered`로 알립니다.
@@ -513,7 +515,7 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
 |---|---|
 | `index --folder 폴더 [--depth 3 \| --recursive] [--max-files 300]` | 폴더의 문서를 내용 출력 없이 캐시에 등록. 결과: `count`, `indexed`, `updated`, `unchanged`, `failed`, `failures`(20개까지), `remaining`, `truncated`, `skipped_types`(지원하지 않는 확장자별 개수) |
 | `index --file 파일` / `index --all` | 파일 하나 등록 / 등록된 문서 전체를 다시 확인(바뀐 파일, 이전 형식 캐시만 다시 읽음). `--all`은 색인에서 빠진 캐시 파일 중 원본이 있는 문서도 색인에 다시 넣습니다(`readded_to_index`, `recovered`) |
-| `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`·`excel.py check`와 같은 규칙: 공백을 하나로 보고 대소문자 무시, 장절 번호로 보이는 값(`2.1`, `3`, `A.1`)은 번호 경계를 지켜 `2.1`이 `2.1`·`2.1.3`(하위 절)에는 맞고 `2.10`·`12.1`에는 맞지 않음, 제목 글자는 부분 일치, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
+| `read --file 경로 [--pages 1-3 \| --units 57-120] [--section 장절일부] [--format summary] [--save .md\|.csv\|.xlsx]` | 파일 하나 읽기(캐시에 등록). `--section`은 장절 경로에 그 글이 든 단위만(`search --section`과 같은 규칙: 공백을 하나로 보고 대소문자 무시, 장절 번호로 보이는 값(`2.1`, `3`, `A.1`)은 번호 경계를 지켜 `2.1`이 `2.1`·`2.1.3`(하위 절)에는 맞고 `2.10`·`12.1`에는 맞지 않음, 제목 글자는 부분 일치, `--pages`/`--units`와 함께 쓰면 둘 다 맞는 단위). 이때 결과에 `section_filter`, 단위마다 `evidence`(`규격.pdf p.12, 1. SCOPE > 1.1. Scope (1.1)`), 이어 읽기·저장 명령에도 `--section`이 붙음. 맞는 단위가 없으면 STOP_RETRY + `[후보]`(비슷한 장절 이름, 없으면 문서의 장절 이름 10개까지. 오류 로그에는 개수만), 장절 정보가 없는 문서는 `--pages`로 읽으라는 안내. 단위마다 `page`, `section`, `number`, `kind`. `--pages`는 쪽 정보가 있으면(PDF, PPTX, 쪽 경계가 저장된 DOCX/HWPX) 실제 쪽, 없으면 항목 번호(`pages_mode`: `page`/`item`). 한 단위가 약 8,000자보다 길면 그 단위에 `text_truncated`, `text_chars`, 결과에 `truncated: true`, `truncated_reason`(늘 목록)과 `.md`로 저장하는 명령(잘린 뒤쪽은 저장 파일에 있음). 엑셀 시트 행 상한(20,000행)에 닿은 문서도 `truncated`지만 저장해도 그 뒤는 없으므로 저장 명령을 주지 않고 상한을 알림(저장하면 `UNVERIFIED:`). 읽으려는 범위에 글자 없이 그림만 있는 PDF 쪽(스캔 쪽)이 있으면 `pages_without_text`와 `notes`(잘림이 아님). `--save`는 저장한 파일을 다시 열어 확인(CSV는 행 수까지). `.xlsx`는 셀당 32,000자에서 자르므로 잘린 행이 있으면 `UNVERIFIED:`(`.md`는 전체) |
 | `outline --file 파일 [--start N]` | 장절(제목) 목록(1.5.1): 제목마다 `units`(그 장절의 단위 번호 범위, `read --units`에 그대로), `page`, `level`, `number`. 200개씩, 넘으면 `next_commands`(`--start`) |
 | `search --query "A;B" \| "A|B" [--file 파일또는폴더] [--pages 3-7] [--section 장절일부] [--regex --top --full --max-files] [--save 근거.xlsx\|.csv\|.md]` | 캐시에서 검색 |
 | `clear [--file 파일 \| --name 이름일부 \| --folder 폴더 \| --missing \| --all] [--dry-run]` | 캐시 지우기(색인 항목과 캐시 파일, `--file`/`--folder`의 `~`·환경 변수는 풀어서 비교). 원본 문서는 그대로이고, 다시 검색하면 그때 새로 읽습니다. `--missing`은 원본이 없어진 문서만, `--all`은 색인에 없는 남은 캐시 파일까지. `--dry-run`은 `planned`와 실제로 지우는 명령(`confirm_commands[0]`)만 줌(20개를 넘으면 잘리고 전체 목록은 `full_result_file` CSV). 지운 뒤 다시 읽어 확인(`verified`, `applied`, `remaining_in_cache`). `applied`와 완료 CSV(`clear_done_...`, 20개를 넘을 때)는 지운 뒤 만들고, CSV의 `removed` 열이 실제로 지웠는지 |
@@ -607,7 +609,7 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
   (`글자 그대로`/`표기 다름`, .md는 제목에 `[표기 다름: 부호·단위 확인]`). 숫자가 없는 검색어와 `--regex`는 그대로(`literal` 키 없음), 숫자 안전망·partial·fuzzy는
   층 A·B가 모두 0건일 때만. 층 B에서 모두 영문 대문자로 쓴 단위(`10 MM`, `10UF`, `20MA`)는 접두 대소문자를 가리지 않습니다(`10UF` = `10 uF` = `10 μF`, 층 B).
   1.4.71(8차 검토, 층 A의 뜻 확정): 층 A(`VERIFIED`)는 "검색어 글자열이 그 자리에 글자 그대로, 숫자·단위 낱말 경계가 맞게 있다"는 뜻입니다.
-  앞뒤 문맥의 의미(띄어 쓴 부호 `- 40 ℃`, 범위 `~`, 이하/이상, 한글 꼬리 `(실효값)`, `A형`)는 search가 판정하지 않습니다 - check(늘 UNVERIFIED)와 사용자의 몫입니다.
+  앞뒤 문맥의 의미(띄어 쓴 부호 `- 40 ℃`, 범위 `~`, 이하/이상, 한글 꼬리 `(실효값)`, `A형`)는 search가 판정하지 않습니다 - LLM과 사용자의 몫입니다 (기반 도구).
   이유: 8번의 검토에서 문맥 의미 판정 규칙은 고칠 때마다 새 빈틈이 생겼습니다. 대신 스니펫(`snippet`)·근거 문장은 층 A 일치 자리를 쓰고(층 A로만 맞은 단위도 값이
   보임) 일치 앞을 최소 15자 담아 부호·범위가 보이게 하며, 숫자가 든 검색어의 directive에 "결과를 알릴 때 snippet의 앞뒤(부호, 범위 ~, 이하/이상)를 그대로 함께
   전달하세요"를 붙입니다. 붙은 빼기(`-40 ℃`, U+2212, NBSP 하나 사이 `-\u00a040`, 같은 칸의 탭 하나 사이 `온도 -\t40`)는 계속 층 A가 아닙니다

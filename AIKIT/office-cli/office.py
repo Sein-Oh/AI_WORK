@@ -3,6 +3,7 @@
 명령:
     windows   열린 Excel/Word/PowerPoint 문서 목록
     focus     특정 앱/문서 창을 화면 맨 앞으로
+    open      파일을 사용자 화면의 Office로 열기 (이미 열려 있으면 그 창을 앞으로)
     transfer  앱 간 전달
               - 엑셀 차트 -> 워드/PPT (그림)          --from-app excel --chart <이름> --to-app word,ppt
               - 엑셀 범위 -> 워드/PPT (표)             --from-app excel --range A1:D10 --to-app word
