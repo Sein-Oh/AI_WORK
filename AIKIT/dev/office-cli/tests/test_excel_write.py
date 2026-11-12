@@ -2544,3 +2544,27 @@ def test_range_filter_shows_matching_rows_and_unfilter(xl, capsys):
     assert code == 0 and ws.AutoFilterMode is False and out["unchanged"] is False, out
     code, out = run_excel(capsys, "range", "--action", "unfilter", "--range", "A1:B4")
     assert code == 0 and out["unchanged"] is True, out
+
+
+def test_write_image_and_link(xl, capsys, tmp_path):
+    """1.6.7 기반 기능: 엑셀에 그림(워드·PPT write --image와 같은 옵션)과 하이퍼링크. 그림은 칸 왼쪽 위, 링크는 칸 하나에
+    보이는 글(--value, 없으면 칸 글)과 함께, 값이 있는 칸의 글을 바꾸면 --overwrite가 있을 때만([후보]), 넣은 뒤 다시 읽어 확인."""
+    app, wb = xl
+    ws = ws_of(wb)
+    png = tmp_path / "그래프.png"
+    png.write_bytes(b"\\x89PNG\\r\\n\\x1a\\n")
+    code, out = run_excel(capsys, "write", "--range", "C3", "--image", str(png))
+    assert code == 0 and out["verified"] is True and ws.pictures[0][0] == str(png), out
+    assert ws.pictures[0][1]["Left"] == 96.0 and ws.pictures[0][1]["Top"] == 30.0                 # C3의 왼쪽 위
+    spec = str(tmp_path / "규격서.pdf")
+    code, out = run_excel(capsys, "write", "--range", "B2", "--link", spec, "--value", "규격서")
+    assert code == 0 and out["verified"] is True and ws.links[-1][1:] == (spec, "규격서") and ws.values[(2, 2)] == "규격서", out
+    ws.set(5, 1, "기존 글")
+    code, out = run_excel(capsys, "write", "--range", "A5", "--link", "http://intra/doc")
+    assert code == 0 and ws.links[-1][2] == "기존 글", out                                      # --value 없으면 칸 글을 그대로
+    code, out = run_excel(capsys, "write", "--range", "A5", "--link", "http://intra/doc", "--value", "새 글")
+    assert code == 1 and "[후보]" in out["message"] and "--overwrite" in out["confirm_commands"][0]["command"], out
+    code, out = run_excel(capsys, "write", "--image", str(tmp_path / "없음.png"))
+    assert code == 1, out
+    code, out = run_excel(capsys, "write", "--link", "http://x")
+    assert code == 1 and "--range" in out["message"], out

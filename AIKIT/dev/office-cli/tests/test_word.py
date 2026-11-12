@@ -1551,3 +1551,27 @@ def test_header_footer_read_and_write(wd, capsys):
     assert code == 1 and "--kind" in out["message"], out
     code, out = run_word(capsys, "header", "--section", "3")
     assert code == 1 and "1~1" in out["message"], out
+
+
+def test_link_and_bookmark(wd, capsys):
+    """1.6.7 기반 기능: 하이퍼링크 목록·달기(파일, http, #책갈피)와 책갈피 목록·만들기. 0건 VERIFIED, 같은 이름 책갈피는 --overwrite([후보]),
+    이름 규칙 거절, --dry-run은 바꾸지 않음."""
+    doc = wd["doc"]
+    code, out = run_word(capsys, "link")
+    assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out
+    code, out = run_word(capsys, "link", "--anchor", "2026년 계획", "--address", "C:\\docs\\계획.xlsx", "--dry-run")
+    assert code == 0 and doc.Hyperlinks.Count == 0, out
+    code, out = run_word(capsys, "link", "--anchor", "2026년 계획", "--address", "C:\\docs\\계획.xlsx")
+    assert code == 0 and out["verified"] is True and doc.Hyperlinks(1).Address == "C:\\docs\\계획.xlsx", out
+    code, out = run_word(capsys, "bookmark", "--name", "일정", "--anchor", "일정")
+    assert code == 0 and out["verified"] is True and doc.Bookmarks.Exists("일정"), out
+    code, out = run_word(capsys, "link", "--anchor", "추진 배경", "--address", "#일정")
+    assert code == 0 and doc.Hyperlinks(2).SubAddress == "일정" and doc.Hyperlinks(2).Address == "", out
+    code, out = run_word(capsys, "link")
+    assert code == 0 and out["count"] == 2 and out["links"][1]["address"] == "#일정", out
+    code, out = run_word(capsys, "bookmark", "--name", "일정", "--anchor", "추진 배경")
+    assert code == 1 and "[후보]" in out["message"] and "--overwrite" in out["confirm_commands"][0]["command"], out
+    code, out = run_word(capsys, "bookmark", "--name", "1장 시작", "--anchor", "추진 배경")
+    assert code == 1 and "쓸 수 없습니다" in out["message"], out
+    code, out = run_word(capsys, "bookmark")
+    assert code == 0 and out["bookmarks"][0]["name"] == "일정", out

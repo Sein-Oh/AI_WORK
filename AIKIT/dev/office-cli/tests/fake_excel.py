@@ -425,6 +425,18 @@ class FakeRange:
             return f(r1, c1)
         return tuple(tuple(f(r, c) for c in range(c1, c2 + 1)) for r in range(r1, r2 + 1))
 
+    @property
+    def Left(self):
+        return float((self.areas[0][1] - 1) * 48)
+
+    @property
+    def Top(self):
+        return float((self.areas[0][0] - 1) * 15)
+
+    def Hyperlinks(self, i):
+        links = [h for h in self.ws.links if h[0] == self.Address]
+        return types.SimpleNamespace(Address=links[i - 1][1], TextToDisplay=links[i - 1][2])
+
     def AutoFilter(self, **kw):
         """자동 필터 (range --action filter): 건 조건을 기록하고 시트의 AutoFilterMode를 켬."""
         self.ws.AutoFilterMode = True
@@ -671,12 +683,31 @@ class FakeWorksheet:
         self.styles = {}
         self.AutoFilterMode = False
         self.filters = []
+        self.links = []                # (칸 주소, 링크, 보이는 글): write --link
+        self.pictures = []
+        ws = self
+
+        class _Shapes:
+            @property
+            def Count(self):
+                return len(ws.pictures)
+
+            def AddPicture(self, Filename=None, **kw):
+                ws.pictures.append((Filename, kw))
+                return types.SimpleNamespace(Name=f"Picture {len(ws.pictures)}")
+
+        class _Links:
+            def Add(self, Anchor=None, Address=None, TextToDisplay=None, **kw):
+                ws.links.append((Anchor.Address, Address, TextToDisplay))
+                r, c = Anchor.areas[0][:2]
+                ws.values[(r, c)] = TextToDisplay
+        self.Shapes = _Shapes()
+        self.Hyperlinks = _Links()
         self.merged = set()
         self.fcs = {}
         self.log = []
         self.charts = []
         self.activated = 0
-        self.Shapes = Count(0)
         self.Rows = Count(1048576)
         self.Sort = FakeSort(self)
         self.notes = {}              # 칸 메모 {(r, c): FakeComment}

@@ -528,6 +528,11 @@ pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규�
 ### 3-25. office-cli는 기반 도구: `excel.py check` 뺌, 부족한 기반 기능 채우기
 사용자 결정: office-cli는 응용이 조합해 쓰는 기반 도구 (저장소 AGENTS.md office-cli 첫 줄). 규격 대조 판정(`excel.py check`)을 빼고 조합(엑셀 읽기 +
 규격서 검색 + 메모 미리보기)으로. Gemma O1도 조합으로 다시 씀. 사용자가 조합을 스킬로 완성할 계획. 이어서 부족한 기반 기능을 차례로 넣음 (CHANGELOG 1.6.7).
+넣은 기반 기능: 엑셀 `read --formats`(서식 있는 칸), 이름 정의 범위(`info` names, `read --range <이름>`), `range --action filter/unfilter`(자동 필터),
+`write --image`·`--link`, 워드 `header`(머리글·바닥글), `link`·`bookmark`, PPT `table`(있는 표 칸), Outlook `contacts`(주소 찾기), `office.py open`(화면에 열기).
+모두 가짜 COM 시험만 함. 회사 PC에서 볼 것: 실제 Office에서 `read --formats`의 행 건너뛰기(ColorIndex -4142), 자동 필터 조건 글, 그림 위치,
+워드 머리글이 구역 연결(LinkToPrevious)일 때, Outlook 주소록 이름 확인(Exchange), `open`이 보호된 보기로 열릴 때.
+excel-kit 스킬이 7900바이트라 8KB에 거의 닿음 (더 넣으려면 작업별로 나눔).
 
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).

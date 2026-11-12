@@ -1994,11 +1994,12 @@ PROTECT_HINT = ("문서 위쪽 노란 줄에 [편집 사용]이 있으면 누르
 _PROTECT_ALLOW = {"format_cells": "AllowFormattingCells", "format_columns": "AllowFormattingColumns",
                   "format_rows": "AllowFormattingRows", "insert_rows": "AllowInsertingRows",
                   "insert_columns": "AllowInsertingColumns", "delete_rows": "AllowDeletingRows",
-                  "delete_columns": "AllowDeletingColumns", "sort": "AllowSorting"}
+                  "delete_columns": "AllowDeletingColumns", "sort": "AllowSorting",
+                  "insert_hyperlinks": "AllowInsertingHyperlinks"}
 _PROTECT_WHAT = {"values": "값을 쓸", "format_cells": "서식을 바꿀", "format_columns": "열 너비·숨김을 바꿀",
                  "format_rows": "행 높이·숨김을 바꿀", "insert_rows": "행을 넣을", "insert_columns": "열을 넣을",
                  "delete_rows": "행을 지울", "delete_columns": "열을 지울", "sort": "정렬할",
-                 "objects": "메모·차트를 넣거나 지울", "structure": "병합·이동·복사할"}
+                 "objects": "메모·차트·그림을 넣거나 지울", "structure": "병합·이동·복사할", "insert_hyperlinks": "링크를 달"}
 PROTECT_SCAN_CELLS = 2000      # 잠기지 않은 칸 [후보]를 찾을 때 훑는 칸 수 상한
 
 
@@ -2562,9 +2563,75 @@ def write_cells(args) -> Dict[str, Any]:
                  "같은 명령을 다시 실행하지 마세요.", verified=True, **fields)
 
 
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp")
+
+
+def write_image(args) -> Dict[str, Any]:
+    """write --image: --range 칸(기본 A1)의 왼쪽 위에 그림을 원래 크기로 넣음 (1.6.7 기반 기능, 워드·PPT write --image와 같은 옵션)."""
+    src = rt.resolve_input_path(args.image, "그림 파일", exts=IMAGE_EXTS)
+    if os.path.splitext(src)[1].lower() not in IMAGE_EXTS:
+        raise rt.InputError(f"그림 파일이 아닙니다: {os.path.basename(src)} ({', '.join(IMAGE_EXTS)})")
+    with write_session(args, "write") as t:
+        ws = t.sheet(args.sheet)
+        cell = target_range(t, ws, args.range or "A1").Cells(1, 1)
+        ws = cell.Worksheet
+        check_protection(ws, [cell], "objects")
+        before = int(ws.Shapes.Count)
+        pic = ws.Shapes.AddPicture(Filename=src, LinkToFile=False, SaveWithDocument=True,
+                                   Left=float(cell.Left), Top=float(cell.Top), Width=-1, Height=-1)
+        name, after = str(pic.Name), int(ws.Shapes.Count)
+        where = f"{ws.Name}!{str(cell.Address).replace('$', '')}"
+        t.set_focus(sheet=ws)
+        resolved = t.resolved()
+    preview = f"{where}에 그림 '{os.path.basename(src)}'을(를) 넣었습니다"
+    if after != before + 1:
+        return rt.ok_unverified(TOOL, "write", preview, ["넣은 뒤 도형 수가 늘지 않음"], target_resolved=resolved, picture=name)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 그림이 들어간 것을 확인했습니다. 되돌리려면 office.py undo.", verified=True,
+                 target_resolved=resolved, picture=name, cell=where)
+
+
+def write_link(args) -> Dict[str, Any]:
+    """write --link: --range 칸(하나)에 하이퍼링크 (파일 경로 또는 주소). 보이는 글은 --value, 없으면 칸의 글(비었으면 링크 주소).
+    글이 있는 칸에 다른 --value는 --overwrite가 있을 때만 (R4). 넣은 뒤 링크 주소를 다시 읽어 확인 (1.6.7 기반 기능)."""
+    if not args.range:
+        raise rt.InputError("링크를 달 칸을 --range로 주세요 (예: --range B2).", no_fallback=True)
+    link = str(args.link).strip().strip('"')
+    with write_session(args, "write") as t:
+        ws = t.sheet(args.sheet)
+        cell = target_range(t, ws, args.range).Cells(1, 1)
+        ws = cell.Worksheet
+        check_protection(ws, [cell], "insert_hyperlinks")
+        old = cell.Value
+        old_text = "" if old is None else str(out_value(old))
+        text = args.value if args.value is not None else (old_text or link)
+        if old_text and args.value is not None and old_text != args.value and not args.overwrite:
+            raise rt.UserDecisionError(f"{str(cell.Address).replace('$', '')}에 값이 있습니다: '{old_text[:40]}'.",
+                                       "바꾸지 않았습니다. 사용자에게 값을 바꿀지 묻고, '예'이면 confirm_commands[0]을 1번 실행하세요.",
+                                       candidates=["값을 바꾸고 링크 달기"], commands=[rt.retry_command({"--overwrite": True})], destructive=True)
+        ws.Hyperlinks.Add(Anchor=cell, Address=link, TextToDisplay=text)
+        try:
+            got = str(cell.Hyperlinks(1).Address)
+        except Exception:
+            got = ""
+        where = f"{ws.Name}!{str(cell.Address).replace('$', '')}"
+        t.set_focus(sheet=ws)
+        resolved = t.resolved()
+    preview = f"{where}에 링크를 달았습니다 ({text} -> {link})"
+    if os.path.normcase(got.rstrip("/\\")) != os.path.normcase(link.rstrip("/\\")):
+        return rt.ok_unverified(TOOL, "write", preview, [f"다시 읽은 링크 주소가 다름: '{got}'"], target_resolved=resolved, link=link)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 링크 주소를 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved,
+                 link=link, cell=where, text=text)
+
+
 def cmd_write(args) -> Dict[str, Any]:
     if args.cells:
         return write_cells(args)
+    if args.image or args.link:
+        if args.dry_run:
+            raise rt.dry_run_unsupported(TOOL, "write --image·--link")
+        if args.image and args.link:
+            raise rt.InputError("--image와 --link는 따로 실행하세요.", no_fallback=True)
+        return write_image(args) if args.image else write_link(args)
     if args.dry_run:
         raise rt.dry_run_unsupported(TOOL, "write --value·--values·--file·--formula (미리보기는 --cells에만 있음)")
     sources = [x for x in (args.value is not None, args.values, args.file, args.formula) if x]
@@ -5326,6 +5393,8 @@ def build_cli():
                    help="--sheet(또는 --range '이름'!A1)의 시트를 새로 만들어 쓰기. 없으면 없는 시트는 오류")
     p.add_argument("--no-autofit", action="store_true", help="열 너비 자동 맞춤 안 함")
     p.add_argument("--cells", help="흩어진 칸 여러 개: \"C6=ft; C7=20; 계산기!C11==A1*2\" 또는 칸값 파일(.csv, 열: 칸, 값). =로 시작하는 값은 수식")
+    p.add_argument("--image", help="그림 파일 (.png, .jpg): --range 칸(기본 A1)의 왼쪽 위에 넣음")
+    p.add_argument("--link", help="하이퍼링크 주소 (파일 경로 또는 http 주소): --range 칸에. 보이는 글은 --value")
 
     p = sub.add_parser("replace", help="찾아 바꾸기")
     common(p, write=True)

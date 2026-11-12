@@ -1,4 +1,6 @@
 """문서를 문자열(단락 기호 \\r 포함)로 흉내 내는 가짜 Word (word.py 위치 계산/치환 로직 테스트용)."""
+import types
+
 
 
 class Props:
@@ -378,6 +380,42 @@ class FakeSections:
         return self.items[i - 1]
 
 
+class FakeHyperlinks:
+    def __init__(self):
+        self.items = []
+
+    @property
+    def Count(self):
+        return len(self.items)
+
+    def __call__(self, i):
+        return self.items[i - 1]
+
+    def Add(self, Anchor=None, Address="", SubAddress="", **kw):
+        h = types.SimpleNamespace(Address=Address, SubAddress=SubAddress, TextToDisplay=Anchor.Text)
+        self.items.append(h)
+        return h
+
+
+class FakeBookmarks:
+    def __init__(self):
+        self.items = {}
+
+    @property
+    def Count(self):
+        return len(self.items)
+
+    def __call__(self, i):
+        name = list(self.items)[i - 1]
+        return types.SimpleNamespace(Name=name, Range=self.items[name])
+
+    def Exists(self, name):
+        return name in self.items
+
+    def Add(self, name, rng):
+        self.items[name] = rng
+
+
 class FakeWordDocument:
     def __init__(self, text="", name="보고서.docx"):
         self.text = text + "\r"
@@ -393,6 +431,8 @@ class FakeWordDocument:
         self.grid_tables = []        # fill용 표 (FakeGridTable): doc.Tables(i).Cell(r, c)
         self.Tables = FakeTables(self)
         self.Sections = FakeSections()          # 구역과 머리글·바닥글 (word.py header)
+        self.Hyperlinks = FakeHyperlinks()      # word.py link
+        self.Bookmarks = FakeBookmarks()        # word.py bookmark
         # 실제 Word처럼 만들어 둔 Range가 문서 편집을 따라 움직임: 앞에 넣으면 밀리고, 안에 넣으면 늘어남
         # (끝 위치에 넣은 것은 그 Range에 들어가지 않음). 넣은 Range 자신(owner)은 각자 메서드가 맞춤
         import weakref

@@ -34,6 +34,7 @@ metadata:
 | 워드 변경 추적 | `python "C:\AIKIT\office-cli\word.py" revisions` |
 | 워드 바꾸기 | `python "C:\AIKIT\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (대소문자 구분 `--match-case`, 단어 전체만 `--whole-word`, 여러 쌍 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 글자 `--color red --italic --size 12`) |
 | 워드 머리글·바닥글 | 읽기 `python "C:\AIKIT\office-cli\word.py" header` / 쓰기 `python "C:\AIKIT\office-cli\word.py" header --kind <header/footer> --text "<글>"` (구역 `--section 2`, 글이 있으면 `[후보]` 확인 뒤 `confirm_commands[0]`) |
+| 워드 링크·책갈피 | 목록 `python "C:\AIKIT\office-cli\word.py" link` / 달기 `python "C:\AIKIT\office-cli\word.py" link --anchor "<문서의 글>" --address "<파일 경로 또는 주소>"` (문서 안 곳은 `--address "#<책갈피>"`) / 책갈피 `python "C:\AIKIT\office-cli\word.py" bookmark [--name <이름> --anchor "<글>"]` |
 | 워드 정보 / PDF | `python "C:\AIKIT\office-cli\word.py" info [--detail]` / `python "C:\AIKIT\office-cli\word.py" export --save "<보고서.pdf>" [--page-number]` |
 | 엑셀 차트·범위를 워드에 | `python "C:\AIKIT\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word` (범위는 `--range A1:D10` 대신. 문서를 정하려면 `--from-target "<보내는 문서>" --to-target "<받는 문서>"`) |
 | 워드 내용을 PPT로 | `python "C:\AIKIT\office-cli\word.py" read --target "<문서.docx>" --save` 후 결과의 `output_file`로 `python "C:\AIKIT\office-cli\ppt.py" write --target "<발표.pptx>" --slide new --title "<제목>" --file "<output_file>"` (transfer는 워드<->PPT를 하지 않는다) |

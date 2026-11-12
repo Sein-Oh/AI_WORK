@@ -27,6 +27,7 @@ metadata:
 | 여러 칸에 각각 | `python "C:\AIKIT\office-cli\excel.py" write --cells "C6=ft; C7=20; 계산기!C11==A1*2"` (많으면 `--cells "칸값.csv"`(열: 칸, 값)) |
 | 표 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A1 --file "<표.csv>"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트 `--sheet 이름 --new-sheet`) |
 | 수식 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
+| 그림·링크 | 그림 `python "C:\AIKIT\office-cli\excel.py" write --range C3 --image "<그림.png>"` / 링크 `python "C:\AIKIT\office-cli\excel.py" write --range B2 --link "<파일 경로 또는 주소>" [--value "<보이는 글>"]` |
 | 차트 | `python "C:\AIKIT\office-cli\excel.py" chart --range A1:B101 --type line --title "<제목>"` (`--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>`, 값 표시 `--labels`, 범례 `--legend <bottom/right/top/left/none>`, 자리 `--at F2`, 크기 `--width 400 --height 250`, 목록 `--action list`, 지우기 `--action delete --name <제목>`) |
 | 서식 | `python "C:\AIKIT\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic --color red` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap` / 서식 지우기 `--clear`). 떨어진 칸은 `--range "B2;D5"`, 칸이 많으면 `--file "<칸목록.csv>"`(줄마다 첫 칸이 B5) |
 | 범위 작업 | `python "C:\AIKIT\office-cli\excel.py" range --action <freeze/unfreeze/hide/unhide/width/height/autofit/clear/copy/move/merge/unmerge> --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`) |
