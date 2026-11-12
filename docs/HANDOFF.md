@@ -24,6 +24,7 @@
 7. 결과 파일과 눈 확인 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림.
 
 ## 3. 최근 실기 결과
+- 회사 PC (2026-11-13, office-cli 1.6.7, Office 2021): 자동 점검 모두 통과, office PASS 121·FAIL 0 (SKIP 2: G3·M3 `--self-email` 없음), P 그룹(P10 연락처 포함) 통과, 끝난 뒤 남은 Excel 없음. 눈 확인 9·10번 통과 (10번 뒤 메일 첨부 기본 위치를 `C:\AIKIT\data`로 바꿈), 2번은 진행 중.
 - 집 PC (2026-11-12 밤, office-cli 1.6.7, Office 2019): P 그룹 첫 실행 PASS 8·FAIL 1(P5 엑셀 링크 보이는 글이 주소로 들어감: `TextToDisplay=` 이름 인자를 Excel이 무시, 순서 인자로 고치고 글도 다시 읽어 확인)·ENV-SKIP 1(P10 Outlook 안 뜸). 고친 뒤 자동 점검 diag 17/17, beta 29/29, office 109/110(L3b SORT ENV-SKIP, P5 통과), UNVERIFIED 1건은 L3 의도한 결과. P10은 회사 PC `--outlook`에서.
 - 집 PC (2026-11-12 저녁, ml-kit 2.9.92 / office-cli 1.6.7, Office 2019): diag 17/17, beta 29/29, ml 14/14, office 99/100(L3 SORT는 2019에 없는 함수라
   러너를 ENV-SKIP으로 고침), 단순성 점검 34/34, 눈 확인 1·3~8번 통과. 스킬 12개 보임, `C:\AIKIT`을 프로젝트로 열어도 `AGENTS.md`는 한 번만 들어감.

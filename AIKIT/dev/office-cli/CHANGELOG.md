@@ -18,6 +18,17 @@
 
 ## [1.6.7] - 2026-11-12
 
+### 메일 첨부 기본 저장 위치를 C:\AIKIT\data로 (회사 PC 눈 확인 10번 뒤 사용자 결정 2026-11-13)
+- `outlook.py attachments --save`(폴더 생략)의 기본 위치: `<다운로드>\메일 첨부\...` -> `C:\AIKIT\data\메일 첨부\<시각>_<제목>`
+  (`rt.get_result_dir()`, 전역 지침 2장 "대상 파일이 없는 작업의 결과는 C:\AIKIT\data"와 같게). 다운로드 폴더 레지스트리 읽기를 뺌.
+  스킬·README·사용 가이드·실기테스트.md 함께. 시험은 기본 위치를 결과 폴더로 확인.
+- 회사 PC 눈 확인 (2026-11-13): 9번 `list --days 3 --limit 50` VERIFIED·`recovered` 없음, 10번 첨부 저장 확인 (`실기테스트.md`의 `-n 50`은 없앤 옵션이라 고침).
+  자동 점검 office PASS 121·FAIL 0 (SKIP 2: G3·M3 `--self-email` 없음), 끝난 뒤 남은 Excel 없음.
+
+### setup: enabled_providers가 없다는 WARN 없앰 (사용자 결정 2026-11-13)
+- 기본 모델을 숨길지와 방법은 PC마다 사용자가 정함 (회사 PC는 `disabled_providers: ["opencode"]`, 집 PC는 보이게). setup은 `enabled_providers`가
+  없으면 알리지 않고, 적었을 때만 이름이 provider·model과 맞는지 봄. `docs/opencode/README.md` 예시도 `disabled_providers`로.
+
 ### 시험 도구: BOM 비교는 사내 LLM이 만드는 가이드로 (사용자 결정 2026-11-12)
 - 회사 BOM은 볼 수 없으므로 맞대기 스크립트와 예시 스킬(`tools/bom-compare/`)을 저장소에서 뺌. 대신 `tools/BOM비교_스킬만들기_가이드.md`:
   사내 LLM이 우리 도구로 BOM 모양을 읽고(info, read, duplicates, `--where`), 기준을 사용자에게 정해 받고(공용 하위 조립체는 경로,

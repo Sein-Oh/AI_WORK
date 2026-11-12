@@ -193,7 +193,7 @@ python -m pip install -r AIKIT/dev/office-cli/requirements.txt
 | 캐시 (등록한 문서 색인, 스냅샷) | `<도구폴더>\cache` | `OFFICE_CLI_CACHE_DIR` 또는 `cache_dir` |
 | 설정 (`transfer --probe` 결과 등) | `<도구폴더>\config.json` | 환경변수 `OFFICE_CLI_CONFIG` |
 | 오류 로그 (실패한 실행 자동 기록) | `data\logs\errors.txt` | data 폴더를 따라감 |
-| 메일 첨부 (`outlook.py attachments --save`) | `<다운로드>\메일 첨부\<시각>_<제목>` (자동 정리 안 함, En-Genius 실행도 같음) | `--save "<전체경로 폴더>"` |
+| 메일 첨부 (`outlook.py attachments --save`) | `C:\AIKIT\data\메일 첨부\<시각>_<제목>` (결과 폴더 `get_result_dir`, 자동 정리 안 함) | `--save "<전체경로 폴더>"` |
 | 명령 문자열의 셸 (`next_commands`·`confirm_commands`·`[추천]` 명령의 따옴표, 1.4.76) | `pwsh`가 PATH에 있으면 PowerShell 7, 없으면 Windows PowerShell 5.1 (OpenCode 셸 도구와 같은 순서). 값은 작은따옴표 `'...'`, 5.1이면 안의 `"`·끝 백슬래시·빈 값을 미리 바꿈 | 환경변수 `OFFICE_CLI_SHELL`=`pwsh`/`powershell`/`cmd`/`bash` (규칙: `AIKIT/dev/README.md` 공통 결과 키) |
 
 - En-Genius 스킬(보관: `archive/engenius`)은 `C:\AIKIT\office-cli`의 도구를 실행하므로 OpenCode와 같은 `data`, `cache`, `config.json`을 씁니다.
@@ -490,8 +490,8 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
 - `attachments`: `--id`를 빼면 `reply`처럼 열린 창이나 목록에서 선택한 메일입니다. 다음 명령에는 그 메일의 id를 넣습니다.
   - `--save` 없이: 목록 `attachments`(항목마다 `index` 1부터, `name`, `size` 바이트(모르면 null), `hidden_inline` 본문 삽입 이미지, `blocked` 실행 파일 형식),
     `count`, `truncated`(50개 상한). 0개면 `count: 0`과 `VERIFIED: 0건. 이 메일에는 첨부 없음`.
-  - `--save`: 기본 폴더는 `<다운로드>\메일 첨부\<YYYYMMDD_HHMMSS>_<제목 40자>`입니다. 다운로드는 Windows 셸 폴더 설정(옮긴 경우 그 위치),
-    없으면 `%USERPROFILE%\Downloads`. data 폴더와 관계없고 자동 정리하지 않습니다.
+  - `--save`: 기본 폴더는 `C:\AIKIT\data\메일 첨부\<YYYYMMDD_HHMMSS>_<제목 40자>`입니다 (대상 파일이 없는 작업의 결과 폴더, 전역 지침 2장,
+    1.6.7 회사 PC 사용자 결정: 전에는 다운로드 폴더). 자동 정리하지 않습니다.
     `--save "<폴더>"`는 전체 경로만 받고(없으면 만듦), 상대 경로는 STOP_RETRY(사용자에게 전체 경로를 물음).
   - 고르기: `--name`(이름 일부, 대소문자 무시, `;`로 여러 개, 옵션 반복 가능), `--index 1,3`(`2-4`도 됨). 둘을 함께 주면 합칩니다.
     맞는 첨부가 없는 값이 하나라도 있으면 아무것도 저장하지 않고 첨부 이름을 `[후보]`로 STOP_RETRY. `--save` 없이 고르기만 주면 STOP_RETRY.
