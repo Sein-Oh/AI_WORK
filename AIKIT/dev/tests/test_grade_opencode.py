@@ -397,7 +397,7 @@ def test_no_read_code_rule_searches_without_py():
 
 def test_no_read_code_allows_office_task_skills():
     """office-cli 스킬은 작업별 5개(C:\\AIKIT\\skills\\<이름>\\SKILL.md): 읽기·검색은 위반이 아니고, 도구 폴더 검색은 그대로 위반."""
-    for name in ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit"):
+    for name in ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit"):
         path = f"C:\\AIKIT\\skills\\{name}\\SKILL.md"
         for c in (f"Get-Content {path}", f'Select-String -Path "{path}" -Pattern check', f"findstr comment {path}",
                   f'[IO.File]::ReadAllText("{path}")'):

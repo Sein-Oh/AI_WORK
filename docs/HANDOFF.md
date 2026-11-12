@@ -532,7 +532,8 @@ pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규�
 `write --image`·`--link`, 워드 `header`(머리글·바닥글), `link`·`bookmark`, PPT `table`(있는 표 칸), Outlook `contacts`(주소 찾기), `office.py open`(화면에 열기).
 모두 가짜 COM 시험만 함. 회사 PC에서 볼 것: 실제 Office에서 `read --formats`의 행 건너뛰기(ColorIndex -4142), 자동 필터 조건 글, 그림 위치,
 워드 머리글이 구역 연결(LinkToPrevious)일 때, Outlook 주소록 이름 확인(Exchange), `open`이 보호된 보기로 열릴 때.
-excel-kit 스킬이 7900바이트라 8KB에 거의 닿음 (더 넣으려면 작업별로 나눔).
+excel-kit을 작업 기준으로 나눔 (사용자 결정): `excel-kit`(읽기·쓰기 6.0KB)과 `excel-format-kit`(서식·차트·시트·행열·정렬·필터 5.2KB). 기본 스킬 12개.
+열린/파일 상태로 나누는 안은 검토 뒤 하지 않음 (같은 명령이 두 스킬에 겹치고, 모델이 파일이 열렸는지 볼 수 없음).
 
 ### 지금 상태 (2026-11-11 밤)
 - PR #78은 main에 병합됨 (2026-11-11). 그 뒤 3-14의 setup 수정은 같은 브랜치 `ccr-ecab210c-awib23`에 있고 새 PR이 필요함 (사용자가 요청하면).

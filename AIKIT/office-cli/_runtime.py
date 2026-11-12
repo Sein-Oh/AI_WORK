@@ -935,7 +935,9 @@ OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply
 SKILL_OF_TOOL = {"excel": "excel-kit", "word": "word-kit", "ppt": "ppt-kit", "office": "word-kit",
                  "outlook": "outlook-kit", "reader": "search-kit"}
 # 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 stats-kit)
-SKILL_OF_COMMAND = {("excel", "stats"): "stats-kit", ("excel", "duplicates"): "stats-kit"}
+SKILL_OF_COMMAND = {("excel", "stats"): "stats-kit", ("excel", "duplicates"): "stats-kit",
+                    ("excel", "style"): "excel-format-kit", ("excel", "sheet"): "excel-format-kit",
+                    ("excel", "range"): "excel-format-kit", ("excel", "chart"): "excel-format-kit"}
 
 
 def skill_name(tool: str) -> str:

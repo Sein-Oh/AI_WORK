@@ -16,7 +16,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - `AIKIT/`는 사용자 PC의 `C:\AIKIT`로 통째로 복사된다 (`dev/` 포함, 2026-11-12에 `CLI/`·`CLI-dev/`에서 이름을 바꾸고 dev를 안으로 옮김).
 - `AIKIT/`가 곧 OpenCode 설정 폴더다 (setup이 `OPENCODE_CONFIG_DIR=C:\AIKIT`). 설정 파일 없이 폴더 모양으로 읽힌다 (OpenCode 2.2.5 확인):
   `AIKIT/AGENTS.md`(전역 지침), `AIKIT/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나).
-- `AIKIT/skills/`: 기본 스킬 11개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`,
+- `AIKIT/skills/`: 기본 스킬 12개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
   `word-kit`, `ppt-kit`, `outlook-kit`, `search-kit`, `stats-kit`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
   스킬이 여러 개를 함께 쓰는 도구는 스킬 폴더가 아니라 도구 폴더에 두고, SKILL.md에는 `python "C:\AIKIT\<tool>\<파일>.py" ...` 전체 명령을 적는다.
   사용자가 만든 스킬의 스크립트는 그 스킬 폴더의 `scripts/`에 둔다 (스킬 폴더만 복사하면 동료 PC에서도 됨).

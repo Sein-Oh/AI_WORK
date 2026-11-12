@@ -25,7 +25,8 @@
 ## 3. 스킬을 먼저 쓴다
 | 요청 | 스킬 |
 |---|---|
-| Excel 읽기·쓰기 (값, 표, 수식, 차트, 서식, 시트, 행·열, 칸 메모, 엑셀 차트·표를 워드/PPT로) | `excel-kit` |
+| Excel 읽기·쓰기 (값, 표, 수식, 조건 행, 칸 메모, 그림·링크, 저장·내보내기, 엑셀 차트·표를 워드/PPT로) | `excel-kit` |
+| Excel 모양·구조 (서식, 차트, 시트, 행·열 넣기·지우기, 정렬, 자동 필터, 틀 고정·병합) | `excel-format-kit` |
 | Word 읽기·쓰기 (본문, 표, 그림, 양식 채우기, 목차·장절, 검토 메모·변경 추적, 앱 사이 옮기기) | `word-kit` |
 | PowerPoint 읽기·쓰기 (슬라이드, 도형, 발표자 노트, 앱 사이 옮기기) | `ppt-kit` |
 | Outlook 메일·일정 (목록, 검색, 읽기, 첨부 내려받기, 답장·전달·새 메일), 내려받은 eml 폴더 검색 | `outlook-kit` |
@@ -143,7 +144,7 @@ OpenCode는 `C:\AIKIT`을 설정 폴더로 쓴다 (환경 변수 `OPENCODE_CONFI
 | 무엇 | 파일 (고칠 때도 이것) |
 |---|---|
 | 전역 지침 (이 파일) | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 11개: excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
+| 스킬 (기본 12개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, 그리고 사용자가 만든 스킬) | `C:\AIKIT\skills\<스킬 이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
 | 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<스킬 이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐) |
 | 셸·권한 기본 설정 (배포 파일) | `C:\AIKIT\opencode.json` |
 | 사내 LLM 연결 설정 | `C:\AIKIT\opencode.jsonc` |

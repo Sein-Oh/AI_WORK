@@ -29,6 +29,6 @@ metadata:
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - `stats`는 `preview`의 숫자를 그대로 알린다. 표를 읽어 직접 더하거나 평균을 내지 않는다 (글자 열은 건수·고유값·많은 값).
-- `duplicates`는 `preview`의 묶음과 엑셀 행 번호를 그대로 알린다. 지우기는 사용자가 지울 행을 말한 뒤에만 (excel-kit 행 지우기).
+- `duplicates`는 `preview`의 묶음과 엑셀 행 번호를 그대로 알린다. 지우기는 사용자가 지울 행을 말한 뒤에만 (excel-format-kit 행 지우기).
 - `warnings`가 있으면 함께 알린다. 0건이면 "찾은 항목 없음"이라고 알린다.
 - `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

@@ -16,7 +16,7 @@ from office_helpers import DEV, TOOL_DIR
 
 SCRIPTS = {"excel.py": excel, "word.py": word, "ppt.py": ppt, "outlook.py": outlook, "office.py": office,
            "reader.py": reader}
-SKILL_NAMES = ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")
+SKILL_NAMES = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")
 SKILLS_DIR = os.path.join(os.path.dirname(TOOL_DIR), "skills")      # C:\AIKIT\skills (1.6.6)
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
 TEST_SKILL = os.path.join(DEV, "tools", "office-cli-test", "SKILL.md")
@@ -211,10 +211,13 @@ def test_readme_only_commands_are_not_in_skills_but_in_readme():
 def test_skill_mentions_new_and_existing_features():
     """스킬에 기존 기능과 새 기능이 모두 있음 (경량 LLM은 스킬에 없는 기능을 '지원 안 함'으로 답함). 기능마다 맡은 스킬에."""
     need = {
-        "excel-kit": ("sheet --action <add/rename/copy/delete/select>", "--new-name", "range --action <freeze", "export --save",
-                         "--number-format", "--all-sheets", "--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>", "--labels", "--legend", "--clear", "--whole", "--map", "--encoding cp949", "--max-rows", "--action <insert/delete>",
-                         "--dry-run", "--action sort", "--by", "--where \"", "--formulas", "--cells", "comment --action add",
-                         "office.py\" undo", "transfer --from-app excel --chart"),
+        "excel-kit": ("export --save", "--all-sheets", "--whole", "--map", "--encoding cp949", "--max-rows",
+                         "--dry-run", "--where \"", "--formulas", "--cells", "comment --action add", "--columns", "--formats",
+                         "office.py\" undo", "transfer --from-app excel --chart", "--image", "--link"),
+        "excel-format-kit": ("sheet --action <add/rename/copy/delete/select>", "--new-name", "range --action <freeze",
+                         "--number-format", "--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>", "--labels",
+                         "--legend", "--clear", "--action <insert/delete>", "--action sort", "--by", "--action filter", "--file",
+                         "office.py\" undo"),
         "word-kit": ("--toc", "--callout", "--highlight yellow", "fill --target", "--slots", "outline", "revisions", "--page-number",
                      "transfer --from-app word --what text", "transfer --from-app excel --chart", "office.py\" undo", "focus --app word"),
         "ppt-kit": ("slide --action <add/duplicate/delete/move>", "notes --slide", "--layout", "transfer --from-app ppt --what text",

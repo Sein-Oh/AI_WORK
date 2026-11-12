@@ -30,6 +30,12 @@
   정리(`step_old_global`, `step_old_layout`, `RETIRED_SKILLS` 등)와 `opencode.jsonc`의 옛 `"skills"` WARN을 없앰. 단계는 1 설정 폴더, 2 PATH, 3 동작 확인.
   `run_all_tests.py` diag와 `run_simplify_check.py` K1의 옛 복사본 확인도 뺌. 관련 테스트 정리.
 
+### 구조: excel-kit을 작업 기준으로 둘로 (사용자 결정 2026-11-12: 8KB 한도에 닿음. 열린/파일 상태가 아니라 작업으로 나눔)
+- `excel-kit`(읽기·쓰기: 값·표·수식, 조건 행, 칠한 칸 찾기, 메모, 그림·링크, 바꾸기, 저장·내보내기, 앱 사이 옮기기)과
+  `excel-format-kit`(모양·구조: 서식, 차트, 시트, 행·열 넣기·지우기, 정렬, 자동 필터, 틀 고정·병합, 수식을 값으로). 기본 스킬 12개.
+- `SKILL_OF_COMMAND`: excel style·sheet·range·chart 도움말은 excel-format-kit. setup, `.gitignore`, 전역 지침 3장 표·9장, 저장소 AGENTS.md, README,
+  사용 가이드, 실기 K1, 채점 시험, `test_skill_docs`의 스킬별 기능 목록.
+
 ### 기능: 기반 도구로서 부족했던 것 채우기 (사용자 결정 2026-11-12: 조합을 스킬로 완성할 수 있게)
 - `excel.py read --formats`: 서식이 있는 칸(배경색, 글자색, 굵게, 기울임) 목록. 칠해 둔 칸을 다시 찾을 때. 닫힌 xlsx는 openpyxl(테마 글자색은 기본),
   열린 문서는 행 전체가 기본 서식이면 건너뛰고 칸마다 읽음(2만 칸 상한). 많으면 `formats_file`(style·comment `--file`에 그대로). 시험 2개, 가짜 COM은 칸이 든 범위의 서식을 보여 줌.

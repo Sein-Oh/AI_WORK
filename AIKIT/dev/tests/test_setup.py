@@ -89,7 +89,7 @@ def _backups(cli, pattern):
 
 
 def test_sources_exist_in_repo_layout():
-    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 11개).
+    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 12개).
     opencode.json은 셸·권한 기본 설정만 (스킬 경로 없음)."""
     for name, src in su.sources():
         assert os.path.isfile(src), (name, src)

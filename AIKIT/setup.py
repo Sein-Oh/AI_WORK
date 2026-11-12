@@ -7,7 +7,7 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
 
 하는 일 (C:\AIKIT = 이 파일이 있는 폴더):
 1. OpenCode 설정 폴더를 C:\AIKIT으로: 사용자 환경 변수 OPENCODE_CONFIG_DIR(HKCU\Environment)를 이 폴더로 설정합니다.
-   OpenCode는 설정 파일 없이 폴더 모양만으로 AGENTS.md(전역 지침)와 skills\<이름>\SKILL.md(기본 스킬 11개와 사용자 스킬)를 읽고,
+   OpenCode는 설정 파일 없이 폴더 모양만으로 AGENTS.md(전역 지침)와 skills\<이름>\SKILL.md(기본 스킬 12개와 사용자 스킬)를 읽고,
    opencode.json(셸·권한 기본 설정, 배포 파일)과 opencode.jsonc(사내 LLM 주소, 사용자가 넣음)를 합쳐 읽습니다 (OpenCode 2.2.5 확인).
    복사하지 않으므로 C:\AIKIT을 바꾸면 바로 반영됩니다. 원래 값은 data\setup_backup_<시각>\user_env.txt에 보관하고, 쓴 뒤 다시 읽어 확인합니다.
 2. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\AIKIT (배포 폴더)
-OFFICE_SKILLS = ("excel-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")    # skills\<이름>\SKILL.md (office-cli)
+OFFICE_SKILLS = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")    # skills\<이름>\SKILL.md (office-cli)
 ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # skills\<이름>\SKILL.md (ml-kit)
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
 USER_ENV_KEY = "Environment"                                                   # 사용자 환경 변수 (HKCU)
@@ -111,7 +111,7 @@ def version_of(data):
 
 
 def step_sources(rep):
-    """OpenCode가 읽을 파일(기본 스킬 11개, 전역 지침, opencode.json)이 C:\\AIKIT에 있는지."""
+    """OpenCode가 읽을 파일(기본 스킬 12개, 전역 지침, opencode.json)이 C:\\AIKIT에 있는지."""
     missing = [(n, p) for n, p in sources() if not os.path.isfile(p)]
     for name, path in missing:
         rep.line("FAIL", f"{name}: 파일이 없습니다: {path} (저장소의 AIKIT 폴더를 통째로 다시 복사하세요)")

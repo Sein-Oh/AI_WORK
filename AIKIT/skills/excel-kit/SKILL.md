@@ -1,6 +1,6 @@
 ---
 name: excel-kit
-description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·표·수식, 조건 행 찾기, 행 수, 차트, 서식, 시트, 행·열 넣기·지우기·정렬, 칸 메모, 내보내기, 차트·범위를 워드/PPT로, 되돌리기. 엑셀 표/그래프 요청에 사용. 규격 대조는 search-kit, 표 집계·중복 찾기는 stats-kit, 워드는 word-kit, PPT는 ppt-kit, 메일은 outlook-kit.
+description: 엑셀(열린 통합문서, xlsx/csv 파일) 읽기·쓰기. 값·표·수식 읽기와 쓰기, 조건 행 찾기, 행 수, 칠한 칸 찾기, 칸 메모, 그림·링크, 바꾸기, 저장·내보내기, 차트·범위를 워드/PPT로, 되돌리기. 엑셀 표 읽기·값 넣기 요청에 사용. 서식·차트·시트·행열·정렬·필터는 excel-format-kit, 표 집계·중복 찾기는 stats-kit, 워드는 word-kit, PPT는 ppt-kit, 메일은 outlook-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
@@ -28,15 +28,7 @@ metadata:
 | 표 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A1 --file "<표.csv>"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트 `--sheet 이름 --new-sheet`) |
 | 수식 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
 | 그림·링크 | 그림 `python "C:\AIKIT\office-cli\excel.py" write --range C3 --image "<그림.png>"` / 링크 `python "C:\AIKIT\office-cli\excel.py" write --range B2 --link "<파일 경로 또는 주소>" [--value "<보이는 글>"]` |
-| 차트 | `python "C:\AIKIT\office-cli\excel.py" chart --range A1:B101 --type line --title "<제목>"` (`--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>`, 값 표시 `--labels`, 범례 `--legend <bottom/right/top/left/none>`, 자리 `--at F2`, 크기 `--width 400 --height 250`, 목록 `--action list`, 지우기 `--action delete --name <제목>`) |
-| 서식 | `python "C:\AIKIT\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic --color red` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap` / 서식 지우기 `--clear`). 떨어진 칸은 `--range "B2;D5"`, 칸이 많으면 `--file "<칸목록.csv>"`(줄마다 첫 칸이 B5) |
-| 범위 작업 | `python "C:\AIKIT\office-cli\excel.py" range --action <freeze/unfreeze/hide/unhide/width/height/autofit/clear/copy/move/merge/unmerge> --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`) |
-| 행·열 넣기·지우기 | `python "C:\AIKIT\office-cli\excel.py" range --action <insert/delete> --range 5:7` (열은 `--range B:C`. 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸) |
-| 수식을 값으로 | `python "C:\AIKIT\office-cli\excel.py" range --action values --range A1:D20 --dry-run` (확인 뒤 `confirm_commands[0]`) |
-| 정렬 | `python "C:\AIKIT\office-cli\excel.py" range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
-| 자동 필터 (보이게 거르기) | `python "C:\AIKIT\office-cli\excel.py" range --action filter --range A1:E100 --where "부서 = 영업; 금액 >= 100"` (같은 열 두 값 `"부서 = 영업 | 부서 = 설계"`, 끄기 `--action unfilter`) |
 | 칸 메모 | 목록 `python "C:\AIKIT\office-cli\excel.py" comment [--range B2:D20]` / 넣기 `python "C:\AIKIT\office-cli\excel.py" comment --action add --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`(열: 칸, 메모), 있던 메모 바꾸기 `--overwrite`, 덧붙이기 `--append`) / 지우기 `--action delete --range B2:D20` (먼저 `--dry-run`) |
-| 시트 | `python "C:\AIKIT\office-cli\excel.py" sheet --action <add/rename/copy/delete/select> --name <A> [--new-name <B>]` |
 | 바꾸기 | `python "C:\AIKIT\office-cli\excel.py" replace --find <A> --replace <B> [--all-sheets]` (칸 전체가 같을 때만 `--whole`, 여러 쌍은 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 바꾼 칸 강조 `--bold --color red`. `--find`는 비우지 않는다. 빈 칸 채우기는 `write --value`) |
 | 저장 / 내보내기 | `python "C:\AIKIT\office-cli\excel.py" save` (다른 이름 `--save "<전체경로.xlsx>"`) / 사본 `python "C:\AIKIT\office-cli\excel.py" export --save "<결과.csv|.xlsx|.pdf>"` (CSV 인코딩 `--encoding cp949`) |
 | 정보 / 배치 확인 | `python "C:\AIKIT\office-cli\excel.py" info [--detail]` (`layout_warnings`가 있으면 `warnings`를 알림. 열린 엑셀에서 사용자가 선택한(마지막으로 클릭한) 칸은 `--target` 없이 실행한 결과의 `selection`, 시트는 `active_sheet`) |
@@ -46,8 +38,8 @@ metadata:
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - `--new-sheet`는 사용자가 새 시트를 원한다고 답했을 때만 (없는 시트는 `[후보]`의 번호 명령).
-- `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸)은 전역 지침 4장대로 사용자에게 묻고 원할 때만 1번 실행한다.
+- `needs_user_decision`(없는 시트, 덮어쓸 칸)은 전역 지침 4장대로 사용자에게 묻고 원할 때만 1번 실행한다.
 - `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. 사용자가 [편집 사용]을 눌렀거나 풀었다고 하면 같은 명령 1번, `[후보]` 칸을 고르면 그 칸으로.
-- 시트·행·열 삭제, `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
 - 잘못 고쳤으면 `undo`로 되돌린다.
 - `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.
+- `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 새 파일은 사용자가 준 전체 경로로만 만든다. 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.

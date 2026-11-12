@@ -3,7 +3,7 @@
 Excel, Word, PowerPoint, Outlook을 AI 에이전트(26B~30B 경량 LLM)가 명령 한 줄로 다루게 하는 CLI 도구입니다.
 PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절·번호 근거와 함께 검색합니다.
 
-- 에이전트용 스킬 (작업별 5개, 각 8KB 이하): [`excel-kit`](../../skills/excel-kit/SKILL.md) (excel.py, 엑셀 차트·범위 옮기기),
+- 에이전트용 스킬 (작업별 7개, 각 8KB 이하): [`excel-kit`](../../skills/excel-kit/SKILL.md) (excel.py 읽기·쓰기, 엑셀 차트·범위 옮기기), [`excel-format-kit`](../../skills/excel-format-kit/SKILL.md) (excel.py style·chart·sheet·range),
   [`word-kit`](../../skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus·open), [`ppt-kit`](../../skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
   [`outlook-kit`](../../skills/outlook-kit/SKILL.md) (outlook.py),
   [`search-kit`](../../skills/search-kit/SKILL.md) (reader.py, excel.py comment),
@@ -16,7 +16,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 
 ```text
 AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli)
-├── skills/      에이전트용 스킬 7개: excel-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit (<이름>/SKILL.md)
+├── skills/      에이전트용 스킬 7개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit (<이름>/SKILL.md)
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check / stats / duplicates / save
 ├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
