@@ -2232,3 +2232,38 @@ def test_event_delete_not_found_gives_numbered_candidates_and_refuses_meetings(c
     cal[0].MeetingStatus = 1                                  # 참석자가 있는 회의: 취소 알림이 필요해 Outlook에서 직접
     code, out = run_outlook(capsys, "event", "--action", "delete", "--subject", "도구 시험 회의", "--start", "2026-11-12 06:00")
     assert code == 1 and out["error_type"] == "not_supported" and "Outlook 일정에서 직접" in out["message"] and len(cal) == 1, out
+
+
+def test_contacts_finds_by_name_in_contacts_and_address_book(monkeypatch, capsys):
+    """1.6.7 기반 기능: 받는 사람을 이름만 말했을 때 메일 주소 찾기. 내 연락처(이름·메일 일부)와 주소록(Outlook 이름 확인),
+    같은 주소는 한 번, 여럿이면 고르게 하라는 directive, 0건 VERIFIED."""
+    people = [types.SimpleNamespace(FullName="홍길동", Email1Address="hong@corp.example", CompanyName="품질팀"),
+              types.SimpleNamespace(FullName="홍길순", Email1Address="soon@corp.example", CompanyName="설계팀"),
+              types.SimpleNamespace(FullName="김철수", Email1Address="kim@corp.example", CompanyName="")]
+
+    class _Entry:
+        Name = "홍길동"
+        Address = "/o=corp/cn=hong"
+
+        def GetExchangeUser(self):
+            return types.SimpleNamespace(PrimarySmtpAddress="hong@corp.example")
+
+    class _Rcp:
+        def __init__(self, key):
+            self.key = key
+            self.AddressEntry = _Entry()
+
+        def Resolve(self):
+            return self.key == "홍길동"
+
+    ns = types.SimpleNamespace(GetDefaultFolder=lambda n: types.SimpleNamespace(Items=people), CreateRecipient=_Rcp,
+                               Logon=lambda *a: None)
+    monkeypatch.setattr(outlook, "get_outlook", lambda: types.SimpleNamespace(GetNamespace=lambda k: ns))
+    code, out = run_outlook(capsys, "contacts", "--name", "홍길동")
+    assert code == 0 and out["count"] == 1 and out["contacts"][0]["email"] == "hong@corp.example", out      # 연락처와 주소록이 같은 사람
+    code, out = run_outlook(capsys, "contacts", "--name", "홍길")
+    assert code == 0 and out["count"] == 2 and "고르게" in out["agent_directive"], out
+    code, out = run_outlook(capsys, "contacts", "--name", "kim@")
+    assert code == 0 and out["contacts"][0]["name"] == "김철수", out
+    code, out = run_outlook(capsys, "contacts", "--name", "없는사람")
+    assert code == 0 and out["count"] == 0 and "0건" in out["agent_directive"], out

@@ -28,6 +28,7 @@ metadata:
 | 일정 보기 / 만들기 | `python "C:\AIKIT\office-cli\outlook.py" calendar --days 7` / `python "C:\AIKIT\office-cli\outlook.py" event --subject "<제목>" --start "2026-11-12 14:00" [--minutes 60] [--location "<장소>"]` (종일은 `--start 2026-11-12`, 내 일정에만 저장. 회의 요청은 없음) |
 | 일정 지우기 | `python "C:\AIKIT\office-cli\outlook.py" event --action delete --subject "<제목>" --start "2026-11-12 14:00" --dry-run` (확인 뒤 `confirm_commands[0]`. 반복 일정·회의는 Outlook에서 직접) |
 | 폴더 목록 | `python "C:\AIKIT\office-cli\outlook.py" folders` (더 깊이 `--depth 3`) |
+| 사람 찾기 (메일 주소) | `python "C:\AIKIT\office-cli\outlook.py" contacts --name "<이름 일부>"` (여럿이면 목록을 보여 주고 사용자가 고름) |
 | 첨부 목록 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id>` |
 | 첨부 저장 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>` 또는 목록의 번호 `--index 1,3`) |
 | 답장 | `python "C:\AIKIT\office-cli\outlook.py" reply --id 3 --body "<내용>" [--attach "C:\전체경로\파일.pdf"]` (전체 답장 `--all`, 긴 본문 `--body-file "<본문.md>"`) |

@@ -20,7 +20,7 @@ AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli)
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / check / stats / duplicates / save
 ├── word.py      워드   read / info / outline / write / replace / fill / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / replace / export / slide
-├── outlook.py   메일   list / search / read / current / thread / calendar / folders / attachments / new / reply / forward
+├── outlook.py   메일   list / search / read / current / thread / calendar / folders / contacts / attachments / new / reply / forward
 ├── reader.py    파일   read / index / search / outline / list / clear   (Office 불필요: PDF, HWP, HWPX, DOCX, PPTX, XLSX, CSV, TXT, MD)
 ├── office.py    공통   windows / focus / transfer / undo
 ├── _runtime.py  공통 런타임 (응답 계약, 인자 파서, 경로, 입출력, JIT 복구, 전체 명령 만들기)
@@ -409,6 +409,7 @@ word `write` 위치와 모양(1.4.96, 실기 확인 L4~L8): 표 바로 위 단�
 - 1.4.96: `received`는 현지 시각(`+00:00` 없음). `--id` 없는 `current`·`reply`·`forward`·`attachments`는 맨 앞 창이 목록이면 선택한 메일. `search --from`은 보낸 사람 SMTP 주소 속성도 대조(사내 Exchange). 작성 창을 못 띄우면(대화 상자) 초안 정보와 UNVERIFIED.
 - 작성 결과(1.4.92): `new`/`reply`/`forward`/`send`의 결과와 `preview`에 `to`와 있으면 `cc`·`bcc`.
 - 조회: `list [--folder --unread --with-attachments --limit --days --since --until]`, `search --query [--from --where all|subject|body --with-attachments --days --since --until]`, `read --id [--save]`, `current [--save]`, `folders`
+- 사람 찾기(1.6.7, 읽기만): `contacts --name "<이름 일부 또는 메일 일부>"` -> 내 연락처(이름·메일 일부, 5000개까지)와 주소록(Outlook 이름 확인, Exchange면 SMTP 주소)에서 `contacts`(`name`, `email`, `company`, `source`), 같은 주소는 한 번, 여럿이면 사용자가 고르게, 0건 VERIFIED.
 - 1.6.0: `--until YYYY-MM-DD`(그날 포함)은 받은 날짜의 끝(`--since`와 함께면 기간, 혼자면 그날까지 전부, `--days`와는 함께 쓰지 않음, 거꾸로 준 기간은 바꾼 명령 `[추천]`). `--with-attachments`는 본문 삽입 그림(서명 로고 등)만 있는 메일은 빼고 첨부가 있는 메일만(`search`에 다른 조건이 없으면 Outlook의 '첨부 있음'으로 먼저 거름).
 - 일정 만들기(1.6.0): `event --subject "<제목>" --start "YYYY-MM-DD HH:MM" [--minutes 60] [--location] [--body|--body-file]`. `--start YYYY-MM-DD`는 종일 일정. 내 일정(기본 일정 폴더)에만 저장하고 참석자·회의 요청은 없음(보내는 것이 없음), 알림 켬. 같은 제목·같은 시작 시각의 일정이 있으면 새로 만들지 않고 `created: false`. 저장한 일정을 다시 찾아 제목·시작·끝을 확인, 겹치는 일정과 지난 날짜는 `warnings`. 시각을 읽지 못하면 예시와 함께 STOP_RETRY
 - 일정 지우기(1.6.3): `event --action delete --subject "<제목>" --start "YYYY-MM-DD HH:MM" [--dry-run]` (`--start YYYY-MM-DD`면 그날 그 제목). 제목·시작이 맞는 일정이 하나일 때만 지움(Outlook 지운 편지함으로), 지운 뒤 다시 찾아 없는지 확인. 없으면 그날 시작하는 일정을 `[후보]`와 같은 번호의 `confirm_commands`(미리보기 명령)로, 그날 일정이 없으면 `calendar` `[추천]`. 같은 제목이 여럿이면 시각별 `[후보]`, 같은 제목·같은 시각이 여럿이거나 반복 일정·회의(참석자가 있는 일정, 취소 알림 필요)는 `not_supported`로 Outlook에서 직접. `--minutes`·`--location`·`--body`는 무시하고 `warnings`. 만들기는 `--dry-run`을 받지 않음. 시각은 `_com_time`(현지 시각에 UTC 표시)으로 넣음: pywin32가 tzinfo 없는 시각을 UTC로 바꿔 9시간 앞당겨 저장하던 것 (N7)
