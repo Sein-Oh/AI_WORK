@@ -469,11 +469,10 @@ class FakeOutlookApp:
 
 @pytest.fixture
 def ol_env(monkeypatch, tmp_path):
-    """Outlook 대역과 사용자 폴더(USERPROFILE). 다운로드 폴더 레지스트리는 읽지 않음."""
+    """Outlook 대역과 사용자 폴더(USERPROFILE)."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setattr(outlook, "_shell_downloads", lambda: None)
     monkeypatch.setattr(rt, "RECOVERED", [])
     monkeypatch.setattr(rt, "CURRENT_ARGV", None)
     state = {"home": home, "app": FakeOutlookApp(), "calls": []}
@@ -504,7 +503,7 @@ def _attach_mail(ol_env, *atts, **kw):
 
 
 def _default_root(ol_env):
-    return os.path.join(str(ol_env["home"]), "Downloads", "메일 첨부")
+    return os.path.join(rt.get_result_dir(), "메일 첨부")          # 메일 첨부 기본 위치는 결과 폴더 (C:\\AIKIT\\data, 2026-11-13)
 
 
 class _DatedMail:

@@ -30,7 +30,7 @@ metadata:
 | 폴더 목록 | `python "C:\AIKIT\office-cli\outlook.py" folders` (더 깊이 `--depth 3`) |
 | 사람 찾기 (메일 주소) | `python "C:\AIKIT\office-cli\outlook.py" contacts --name "<이름 일부>"` (여럿이면 목록을 보여 주고 사용자가 고름) |
 | 첨부 목록 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id>` |
-| 첨부 저장 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id> --save` (다운로드\메일 첨부 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>` 또는 목록의 번호 `--index 1,3`) |
+| 첨부 저장 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id> --save` (`C:\AIKIT\data\메일 첨부` 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>` 또는 목록의 번호 `--index 1,3`) |
 | 답장 | `python "C:\AIKIT\office-cli\outlook.py" reply --id 3 --body "<내용>" [--attach "C:\전체경로\파일.pdf"]` (전체 답장 `--all`, 긴 본문 `--body-file "<본문.md>"`) |
 | 새 메일 | `python "C:\AIKIT\office-cli\outlook.py" new --to <주소> --subject "<제목>" --body "<내용>" [--cc <주소>] [--attach "<전체경로>"]` |
 | 전달 | `python "C:\AIKIT\office-cli\outlook.py" forward --id 3 --to <주소> [--attach "<전체경로>"]` |

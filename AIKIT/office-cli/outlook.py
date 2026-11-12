@@ -10,7 +10,7 @@
     contacts 연락처·주소록에서 메일 주소 찾기 (읽기만)
     current  지금 보고 있거나 선택한 메일 읽기
     folders  폴더 구조와 안 읽은 메일 수
-    attachments  첨부 목록, --save 로 내려받기 (기본: %USERPROFILE%\\Downloads\\메일 첨부\\<시각>_<제목>)
+    attachments  첨부 목록, --save 로 내려받기 (기본: C:\\AIKIT\\data\\메일 첨부\\<시각>_<제목>)
 
 작성 (초안을 임시 보관함에 저장하고 작성 창만 띄움. 보내지 않음):
     new      새 메일
@@ -51,8 +51,7 @@ READABLE_DOCS = {".pdf", ".hwp", ".hwpx", ".docx", ".docm", ".pptx", ".pptm", ".
 MAX_LIMIT = 200          # list/search --limit 상한 (넘으면 줄이고 warnings로 알림)
 MAX_NAMES_SHOW = 20      # read/current의 attachment_names 상한
 MAX_ATTACH_SHOW = 50     # attachments 목록·saved·skipped 상한 (넘으면 truncated, 전체는 저장 폴더)
-ATTACH_ROOT_NAME = "메일 첨부"   # 기본 저장 위치: <다운로드>\메일 첨부\<시각>_<제목 40자> (자동 정리하지 않음)
-DOWNLOADS_GUID = "{374DE290-123F-4565-9164-39C4925E467B}"     # 사용자 셸 폴더 레지스트리의 '다운로드'
+ATTACH_ROOT_NAME = "메일 첨부"   # 기본 저장 위치: <결과 폴더 C:\AIKIT\data>\메일 첨부\<시각>_<제목 40자> (자동 정리하지 않음)
 PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"
 
 
@@ -630,35 +629,16 @@ def _detail_response(command: str, preview: str, result: Dict[str, Any]) -> Dict
 # 첨부 내려받기 (attachments)
 # ------------------------------------------------------------------------------
 
-def _shell_downloads() -> Optional[str]:
-    """Windows가 아는 '다운로드' 폴더 (사용자가 D:\\ 등으로 옮겼을 수 있음). 읽지 못하면 None."""
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as key:
-            value = str(winreg.QueryValueEx(key, DOWNLOADS_GUID)[0])
-        path = os.path.expandvars(value)
-        return path if os.path.isabs(path) else None
-    except Exception:
-        return None
-
-
-def downloads_dir() -> str:
-    """첨부 기본 저장 위치의 뿌리: 사용자의 다운로드 폴더.
-    도구 data 폴더(7일 뒤 정리되는 _work, En-Genius 고정 폴더)와 관계없음."""
-    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
-    return _shell_downloads() or os.path.join(home, "Downloads")
-
-
 def _save_folder(spec: Any, subject: str) -> str:
     if spec is True:
-        return os.path.join(downloads_dir(), ATTACH_ROOT_NAME, f"{rt.timestamp()}_{_safe_name(subject, 40)}")
+        # 메일은 대상 파일이 없는 작업: 결과는 C:\AIKIT\data (전역 지침 2장, 회사 PC 사용자 결정 2026-11-13. 전에는 다운로드 폴더)
+        return os.path.join(rt.get_result_dir(), ATTACH_ROOT_NAME, f"{rt.timestamp()}_{_safe_name(subject, 40)}")
     raw = os.path.expandvars(os.path.expanduser(str(spec).strip().strip('"')))
     if not raw:
-        raise rt.InputError("--save 폴더가 비어 있습니다. 폴더를 빼고 --save만 쓰면 다운로드 폴더에 저장합니다.")
+        raise rt.InputError("--save 폴더가 비어 있습니다. 폴더를 빼고 --save만 쓰면 C:\\AIKIT\\data\\메일 첨부에 저장합니다.")
     if not os.path.isabs(raw):
         raise rt.InputError(f"--save 폴더는 전체 경로로 지정하세요 (받은 값: {raw}). 사용자에게 전체 경로를 물어보세요. "
-                            "폴더를 빼고 --save만 쓰면 다운로드 폴더에 저장합니다.")
+                            "폴더를 빼고 --save만 쓰면 C:\\AIKIT\\data\\메일 첨부에 저장합니다.")
     raw = os.path.abspath(raw)
     if os.path.isfile(raw):
         raise rt.InputError(f"--save에는 폴더를 지정하세요. 같은 이름의 파일이 있습니다: {raw}")
@@ -767,7 +747,7 @@ def cmd_attachments(args) -> Dict[str, Any]:
                          "VERIFIED: 0건. 이 메일에는 첨부 없음. 사용자에게 그대로 알리고 다시 실행하지 마세요.", **base)
         # 내려받기는 사용자가 고른 것만 (1.4.83): [0] 모두, [1..] 첨부 하나씩 (번호 = attachments의 index, 값을 끼워 넣지 않음)
         base["confirm_commands"] = [rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save"],
-                                                    "첨부 모두 내려받기 (다운로드 폴더)")] + [
+                                                    "첨부 모두 내려받기 (C:\\AIKIT\\data\\메일 첨부)")] + [
             rt.next_command("outlook.py", ["attachments"] + _mail_id_args(item) + ["--save", "--index", str(a["index"])],
                             f"'{a['name']}'만 내려받기") for a in shown]
         inline = sum(1 for a in infos if a["hidden_inline"])
@@ -2092,7 +2072,7 @@ def build_cli():
     p = sub.add_parser("attachments", help="첨부 목록, --save로 내려받기")
     p.add_argument("--id", help="메일 id (생략 시 지금 보고 있거나 선택한 메일)")
     p.add_argument("--save", nargs="?", const=True,
-                   help=f"첨부 저장. 폴더 생략 시 다운로드\\{ATTACH_ROOT_NAME}\\<시각>_<제목>, 폴더는 전체 경로 (없으면 만듦)")
+                   help=f"첨부 저장. 폴더 생략 시 C:\\AIKIT\\data\\{ATTACH_ROOT_NAME}\\<시각>_<제목>, 폴더는 전체 경로 (없으면 만듦)")
     p.add_argument("--name", action="append", help="저장할 첨부 이름 일부 (대소문자 무시, 여러 개는 ; 또는 옵션 반복)")
     p.add_argument("--index", action="append", help="저장할 첨부 번호 (목록의 index, 예: 1,3 또는 2-4)")
 
