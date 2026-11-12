@@ -1,0 +1,95 @@
+# office-cli 실기 테스트 오류 로그 (분석용)
+# 생성 20261112_203316. 이 파일 전체를 그대로 Claude에게 전달하세요. 편집하지 마세요.
+
+## 1. 환경
+office-cli 버전: 1.6.7 (C:\AIKIT\office-cli)
+Windows: Windows-11-10.0.26200-SP0 / 10.0.26200
+Python: 3.13.13 (C:\AIKIT\python\python.exe)
+라이브러리: pywin32 312, openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, pymupdf 1.28.2, olefile 0.47, matplotlib 3.11.1, numpy 2.5.4
+Office (office.py windows의 office): {}
+config.json: {"transfer_method": {"word": ["export", "redraw"], "ppt": ["export", "redraw"]}}
+러너 옵션: only=P auto=True agent=False skip_outlook=False self_email=없음 keep_open=False
+테스트 폴더: C:\AIKIT\dev\work\office / 도구 환경변수: {"OFFICE_CLI_CACHE_DIR": "C:\\AIKIT\\dev\\work\\office\\_cache", "OFFICE_CLI_DATA_DIR": "C:\\AIKIT\\dev\\work\\office\\_data", "OFFICE_CLI_TIME_LIMIT": "0"}
+소요 시간: 160초
+
+## 2. 요약
+결과: ENV-SKIP=1, FAIL=1, PASS=8
+문제 항목: P5(FAIL)
+건너뜀: P10(ENV-SKIP: Outlook 준비 안 됨: Outlook 프로세스가 뜨지 않음)
+
+## 3. 러너 자동 복구와 창/프로세스 정리
+자동 복구: 없음
+정리 기록: 
+  20:35:48 [종료 정리] 대상 문서=테스트 폴더 전체, 끝내도 되는 PID=실행 중 생긴 프로세스
+  20:35:48 [종료 정리]   excel pid 19084: 문서 닫음 A.xlsx
+  20:35:48 [종료 정리]   word pid 10660: 문서 닫음 A.docx
+  20:35:48 [종료 정리]   ppt pid None: 문서 닫음 A.pptx
+  20:35:48 [종료 정리]   excel pid 19084: Quit (테스트 실행 중 생긴 빈 프로세스)
+  20:35:48 [종료 정리]   word pid 10660: Quit (테스트 실행 중 생긴 빈 프로세스)
+  20:35:48 [종료 정리]   ppt pid None: Quit (문서 0개 (PID 모름))
+  20:35:48 [종료 정리]   WM_CLOSE XLMAIN pid 19084 hwnd 3933646 제목='Excel' 표시=False
+  20:35:48 [종료 정리]   WM_CLOSE 안 함 XLMAIN pid 19084 제목='' 표시=False: 제목 없는 창 (닫으면 'Excel을 종료할 수 없습니다' 창이 뜸, 남으면 프로세스를 끝냄)
+
+## 4. 문제 항목 상세
+
+----------------------------------------------------------------------
+[FAIL] P5 엑셀 그림 넣기(도형 1개 늘어남), 링크 달기(주소·보이는 글)
+  판정 근거: 도형 수 0->1, E20 링크·글=('C:\\AIKIT\\dev\\work\\office\\A.docx', 'C:\\AIKIT\\dev\\work\\office\\A.docx')
+  이 항목에서 실행한 도구 명령 2개:
+    $ python excel.py write --sheet P_FMT --range E2 --image C:\AIKIT\dev\work\office\P_pic.png
+      시작 20:33:40 / 종료코드 0 / 0.4초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "excel",
+          "command": "write",
+          "preview": "P_FMT!E2에 그림 'P_pic.png'을(를) 넣었습니다",
+          "verified": true,
+          "target_resolved": {
+            "app": "Excel",
+            "name": "A.xlsx",
+            "path": "C:\\AIKIT\\dev\\work\\office\\A.xlsx",
+            "source": "active",
+            "sheet": "P_FMT"
+          },
+          "picture": "Picture 2",
+          "cell": "P_FMT!E2",
+          "agent_directive": "VERIFIED: 그림이 들어간 것을 확인했습니다. 되돌리려면 office.py undo."
+        }
+    $ python excel.py write --sheet P_FMT --range E20 --link C:\AIKIT\dev\work\office\A.docx --value "P링크 203336"
+      시작 20:33:40 / 종료코드 0 / 0.42초
+      stdout(JSON):
+        {
+          "status": "ok",
+          "tool": "excel",
+          "command": "write",
+          "preview": "P_FMT!E20에 링크를 달았습니다 (P링크 203336 -> C:\\AIKIT\\dev\\work\\office\\A.docx)",
+          "verified": true,
+          "target_resolved": {
+            "app": "Excel",
+            "name": "A.xlsx",
+            "path": "C:\\AIKIT\\dev\\work\\office\\A.xlsx",
+            "source": "active",
+            "sheet": "P_FMT"
+          },
+          "link": "C:\\AIKIT\\dev\\work\\office\\A.docx",
+          "cell": "P_FMT!E20",
+          "text": "P링크 203336",
+          "agent_directive": "VERIFIED: 링크 주소를 다시 읽어 확인했습니다."
+        }
+  이 항목의 진행 로그:
+        
+        [P5] 엑셀 그림·링크
+            $ python excel.py write --sheet P_FMT --range E2 --image C:\AIKIT\dev\work\office\P_pic.png
+            $ python excel.py write --sheet P_FMT --range E20 --link C:\AIKIT\dev\work\office\A.docx --value "P링크 203336"
+          => [FAIL] P5 엑셀 그림 넣기(도형 1개 늘어남), 링크 달기(주소·보이는 글) - 도형 수 0->1, E20 링크·글=('C:\\AIKIT\\dev\\work\\office\\A.docx', 'C:\\AIKIT\\dev\\work\\office\\A.docx')
+
+## 5. 도구 오류 로그 (_data\logs\errors.txt)
+원본: C:\AIKIT\dev\work\office\_data\logs\errors.txt (이번 실행에서 추가된 부분)
+===== 2026-11-12T20:33:42 | office-cli 1.6.7 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: word.py header --target C:\AIKIT\dev\work\office\A.docx --kind footer --text <11자 생략>
+결과: needs_user_decision | 구역 1 바닥글에 이미 글이 있습니다: 'P 문서번호 203336'. [후보 1개 생략]
+
+===== 2026-11-12T20:33:45 | office-cli 1.6.7 | Python 3.13.13 | Windows-11-10.0.26200-SP0
+명령: ppt.py table --target C:\AIKIT\dev\work\office\A.pptx --slide 4 --cells R1C1=바뀜
+결과: needs_user_decision | 표 'Table 1'에서 글이 있는 칸 1개를 바꾸게 됩니다: R1C1('항목'). [후보 1개 생략]

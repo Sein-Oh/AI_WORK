@@ -18,6 +18,11 @@
 
 ## [1.6.7] - 2026-11-12
 
+### 수정: 엑셀 링크의 보이는 글 (집 PC 실기 P5, Office 2019, 2026-11-12)
+- `excel.py write --link ... --value "<글>"`이 칸에 `<글>` 대신 링크 주소를 쓰고도 `VERIFIED:`였음. pywin32에서 `Hyperlinks.Add`에
+  `TextToDisplay=`를 이름 인자로 주면 Excel이 무시함 (같은 값을 다섯째 순서 인자로 주면 들어감, 실제 Excel 2019에서 확인). 순서 인자로 부르고,
+  링크 주소에 더해 칸의 글도 다시 읽어 다르면 `UNVERIFIED:`. 가짜 Excel도 이름 인자 글을 무시하게 바꿈. 시험 `test_write_link_text_is_read_back`.
+
 ### 수정: stats·duplicates가 제목 행 아래 머리글을 못 찾음 (BOM 비교 시험 준비 중 발견)
 - 제목 행·빈 행 아래에 머리글이 있는 표(회사 BOM 모양)에서 `stats --columns 수량`·`duplicates --columns 품번`이 열을 못 찾아 제목 글을 `[후보]`로
   되묻고, 열을 안 주면 제목 행을 머리글로 보고 비교했음. stats-kit은 "제목 행 아래의 머리글 행은 도구가 정함"이라고 적혀 있었음.

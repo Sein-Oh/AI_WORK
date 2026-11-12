@@ -2617,7 +2617,8 @@ def write_image(args) -> Dict[str, Any]:
 
 def write_link(args) -> Dict[str, Any]:
     """write --link: --range 칸(하나)에 하이퍼링크 (파일 경로 또는 주소). 보이는 글은 --value, 없으면 칸의 글(비었으면 링크 주소).
-    글이 있는 칸에 다른 --value는 --overwrite가 있을 때만 (R4). 넣은 뒤 링크 주소를 다시 읽어 확인 (1.6.7 기반 기능)."""
+    글이 있는 칸에 다른 --value는 --overwrite가 있을 때만 (R4). 넣은 뒤 링크 주소와 칸의 글을 다시 읽어 확인 (1.6.7 기반 기능).
+    Hyperlinks.Add는 순서 인자로 부른다: pywin32에서 TextToDisplay=를 이름 인자로 주면 Excel 2019가 무시하고 주소를 글로 씀 (집 PC 실기 P5)."""
     if not args.range:
         raise rt.InputError("링크를 달 칸을 --range로 주세요 (예: --range B2).", no_fallback=True)
     link = str(args.link).strip().strip('"')
@@ -2633,11 +2634,12 @@ def write_link(args) -> Dict[str, Any]:
             raise rt.UserDecisionError(f"{str(cell.Address).replace('$', '')}에 값이 있습니다: '{old_text[:40]}'.",
                                        "바꾸지 않았습니다. 사용자에게 값을 바꿀지 묻고, '예'이면 confirm_commands[0]을 1번 실행하세요.",
                                        candidates=["값을 바꾸고 링크 달기"], commands=[rt.retry_command({"--overwrite": True})], destructive=True)
-        ws.Hyperlinks.Add(Anchor=cell, Address=link, TextToDisplay=text)
+        ws.Hyperlinks.Add(cell, link, "", "", text)          # Anchor, Address, SubAddress, ScreenTip, TextToDisplay
         try:
             got = str(cell.Hyperlinks(1).Address)
         except Exception:
             got = ""
+        shown = "" if cell.Value is None else str(out_value(cell.Value))
         where = f"{ws.Name}!{str(cell.Address).replace('$', '')}"
         t.set_focus(sheet=ws)
         resolved = t.resolved()
@@ -2647,7 +2649,9 @@ def write_link(args) -> Dict[str, Any]:
         got = os.path.normpath(os.path.join(os.path.dirname(book), got))   # 엑셀은 통합문서 폴더 기준 상대 경로로 저장함
     if os.path.normcase(got.rstrip("/\\")) != os.path.normcase(link.rstrip("/\\")):
         return rt.ok_unverified(TOOL, "write", preview, [f"다시 읽은 링크 주소가 다름: '{got}'"], target_resolved=resolved, link=link)
-    return rt.ok(TOOL, "write", preview, "VERIFIED: 링크 주소를 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved,
+    if shown != str(text):
+        return rt.ok_unverified(TOOL, "write", preview, [f"다시 읽은 칸의 글이 다름: '{shown[:40]}'"], target_resolved=resolved, link=link)
+    return rt.ok(TOOL, "write", preview, "VERIFIED: 링크 주소와 칸의 글을 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved,
                  link=link, cell=where, text=text)
 
 
