@@ -18,6 +18,16 @@
 
 ## [1.6.7] - 2026-11-12
 
+### 수정: stats·duplicates가 제목 행 아래 머리글을 못 찾음 (BOM 비교 시험 준비 중 발견)
+- 제목 행·빈 행 아래에 머리글이 있는 표(회사 BOM 모양)에서 `stats --columns 수량`·`duplicates --columns 품번`이 열을 못 찾아 제목 글을 `[후보]`로
+  되묻고, 열을 안 주면 제목 행을 머리글로 보고 비교했음. stats-kit은 "제목 행 아래의 머리글 행은 도구가 정함"이라고 적혀 있었음.
+  `read --where`와 같은 규칙(준 열 이름이 모두 있는 행)에 더해, 열을 안 주면 위 10행 안에서 칸이 하나 이하인 행(제목·빈 행)을 건너뜀.
+  결과에 `header_row_found`. 시험 `test_stats_and_duplicates_find_header_below_title`.
+
+### 시험 도구: BOM 비교 조합 스킬 시험 (`tools/make_bom_samples.py`, `tools/bom-compare/`)
+- 사용자 조합 스킬 예시 `bom-compare`(SKILL.md + `scripts/compare.py`, office-cli 도구가 아님)와 정답을 아는 두 판 샘플(함정 7가지, 중복 판),
+  `--check`로 맞대기 결과를 정답과 비교. 절차는 `docs/opencode/BOM비교_시험.md`.
+
 ### 지침: 조합 스킬 만들기 (2026-11-12 사용자 결정)
 - 전역 지침 `AIKIT/AGENTS.md` 10장: 사용자가 기본 스킬을 이어 쓰는 자기 스킬을 만들 때의 규칙 (위치·8KB, 전체 명령 그대로, 결과 파일을 다음 `--file`로,
   업무 판단은 스킬에 기준 문장으로, 바꾸기 전 확인). 사용 가이드 9장에 "나만의 스킬로 만들어 두기".

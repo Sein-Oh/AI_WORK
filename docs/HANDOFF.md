@@ -30,6 +30,7 @@
 - 그 전 결과는 옛 인계 문서 4장.
 
 ## 4. 남은 일
+- 집 PC BOM 비교 시험 (사용자 조합 스킬 bom-compare, 정답 아는 샘플): [`opencode/BOM비교_시험.md`](opencode/BOM비교_시험.md).
 - 각 도구 `AIKIT/dev/<tool>/CHANGELOG.md` 하단 "남은 할 일".
 - 사용 가이드(`AIKIT/guide/`)에 1.6.7 기반 기능 사용 예 넣기.
 - 프로젝트 마무리 때 `docs/test_logs/` 등 로그 이력 정리 (저장소를 다시 만드는 방식).

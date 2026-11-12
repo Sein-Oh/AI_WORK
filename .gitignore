@@ -32,7 +32,7 @@ AIKIT/office-cli/config.json
 # 배포 설치(AIKIT/setup.py): 보관 폴더(data/setup_backup_<시각>), 사용자가 넣는 OpenCode 설정(사내 LLM 주소)
 AIKIT/data/
 AIKIT/opencode.jsonc
-# 사용자가 만든 OpenCode 스킬 (C:\AIKIT\skills\<이름>): 기본 스킬 11개만 저장소에 넣음
+# 사용자가 만든 OpenCode 스킬 (C:\AIKIT\skills\<이름>): 기본 스킬 12개만 저장소에 넣음
 AIKIT/skills/*
 !AIKIT/skills/ml-train/
 !AIKIT/skills/ml-dataset/
