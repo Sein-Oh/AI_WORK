@@ -563,6 +563,9 @@ pytest 시험 코드 자체는 Windows에서도 같은 결과여야 하는 규�
 `write --image`·`--link`, 워드 `header`(머리글·바닥글), `link`·`bookmark`, PPT `table`(있는 표 칸), Outlook `contacts`(주소 찾기), `office.py open`(화면에 열기).
 모두 가짜 COM 시험만 함. 회사 PC에서 볼 것: 실제 Office에서 `read --formats`의 행 건너뛰기(ColorIndex -4142), 자동 필터 조건 글, 그림 위치,
 워드 머리글이 구역 연결(LinkToPrevious)일 때, Outlook 주소록 이름 확인(Exchange), `open`이 보호된 보기로 열릴 때.
+실기 러너 P 그룹(P1~P10)이 이 기능들을 실제 Office에서 질문 없이 확인함 (자동 점검 office 단계에 포함, P10 Outlook은 `--outlook`일 때만, 따로는 `--only P`). 엑셀 `write --link`가
+통합문서 폴더의 파일을 상대 경로로 저장하는 것은 미리 고침(다시 읽은 주소를 통합문서 폴더 기준으로 풀어 비교). 머리글 구역 연결, Exchange 주소록,
+보호된 보기는 P 그룹이 만들지 않는 상황이라 회사 PC 문서로 볼 때 확인.
 excel-kit을 작업 기준으로 나눔 (사용자 결정): `excel-kit`(읽기·쓰기 6.0KB)과 `excel-format-kit`(서식·차트·시트·행열·정렬·필터 5.2KB). 기본 스킬 12개.
 열린/파일 상태로 나누는 안은 검토 뒤 하지 않음 (같은 명령이 두 스킬에 겹치고, 모델이 파일이 열렸는지 볼 수 없음).
 

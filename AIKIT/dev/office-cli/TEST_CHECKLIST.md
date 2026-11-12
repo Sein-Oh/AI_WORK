@@ -7,6 +7,7 @@ python tools/run_win_tests.py
 python tools/run_win_tests.py --self-email 본인주소     :: G3 실제 발송 테스트 포함
 python tools/run_win_tests.py --only H                  :: 일부 그룹만
 python tools/run_win_tests.py --only L,M,N              :: 2026-11-09 검토 실기 확인과 1.6.0 새 기능 (M·N7·N8은 Outlook, 질문 없음)
+python tools/run_win_tests.py --only P                  :: 1.6.7 기반 기능 (P10은 Outlook, 질문 없음)
 python tools/run_win_tests.py --skip-outlook --auto     :: Outlook 제외, 질문 없이 자동 판정 항목만
 python tools/run_win_tests.py --agent --skip-outlook    :: 에이전트용: --auto + 로그는 stderr, stdout은 결과 JSON 1줄
 ```
@@ -36,6 +37,7 @@ python tools/run_win_tests.py --agent --skip-outlook    :: 에이전트용: --au
 | L | 2026-11-09 검토 실기 확인(엑셀·워드·PPT, 1.4.94~1.4.96): L1 통화 서식 열 정렬·`--where`(A7), L2 `+82-...`·`- 검토` 글자 그대로(A8), L3 `=합계()`는 #NAME?로 UNVERIFIED·`=SORT()` 펼침(A9), L4 표 바로 위 단락 뒤에 쓴 글이 표 첫 칸에 안 들어감(C1), L5 새 번호 목록은 1부터(C2), L6 표 뒤 표가 합쳐지지 않음(C3), L7 제목 뒤 그림 단락은 본문 수준(C4), L8 `--toc --file` 목차에 제목(C5), L9 변경 추적 문서 replace(C6, 확인만), L10 바닥글 개체틀 슬라이드의 글상자 위치(C8), L11 제한된 보기 쓰기(C9, 러너가 인터넷 영역 표시를 붙인 파일을 제한된 보기로 열어 자동), L12 열린 통합문서 undo의 디스크 백업(C10), L13 필터 숨긴 행 `--append`(C11), L14 닫힌 파일 freeze 저장(C12, 확인만). C13 OneDrive는 쓰지 않아 뺌 |
 | M | 2026-11-09 검토 실기 확인(Outlook, `--skip-outlook`이면 빠짐, 모두 러너가 판정): M1 받은 시각(C14), M2 `current`는 맨 앞 창(C15), M3 `search --from <SMTP>`(C16, `--self-email` 필요), M4 대화 상자가 떠 있을 때 작성(C17, 러너가 옵션 창을 띄우고 닫음), M5 본문 그림(C18) |
 | N | 1.6.0 새 기능(질문 없음): N1 수식을 값으로, N2 열린 통합문서 저장·다른 이름으로 저장, N3 중복 찾기, N4 워드 단락 지우기, N5 워드 표 행 넣기·지우기, N6 PPT 도형 글 바꾸기, N7 일정 만들기·지우기(1.6.3: 도구로 지움), N8 메일 `--until`·`--with-attachments` (N7·N8은 Outlook, `--skip-outlook`이면 빠짐). 1.6.1: N9 PPT 도형 옮기기·크기, N10 워드 메모 답글·지우기, N11 워드 단락 서식. |
+| P | 1.6.7 기반 기능(질문 없음, O는 에이전트 시나리오 번호와 겹쳐 뺌): P1 엑셀 `read --columns`·`--formats`, P2 `style --file`, P3 이름 정의 범위(`info` names, `read --range <이름>`), P4 자동 필터 켜기·끄기, P5 엑셀 그림·링크, P6 워드 바닥글 쓰기·읽기(끝나면 원래 글로), P7 워드 책갈피·책갈피 링크, P8 PPT 표 읽기·칸 쓰기, P9 `office.py open`, P10 Outlook `contacts`(러너가 시험용 연락처를 만들고 지움, `--skip-outlook`이면 빠짐) |
 | H | 체이닝: 사인 2주기 그래프 -> `transfer --probe` -> 차트를 워드/PPT에 그림으로 -> 워드/PPT 내용을 엑셀로 -> 문서 검색 결과를 워드에 |
 
 H2(`--probe`)는 이 PC에서 되는 차트 전달 방식(export / redraw / relay)을 저장합니다. 회사 PC에서 꼭 한 번 실행해 주세요.

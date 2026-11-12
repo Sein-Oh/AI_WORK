@@ -2617,6 +2617,9 @@ def write_link(args) -> Dict[str, Any]:
         t.set_focus(sheet=ws)
         resolved = t.resolved()
     preview = f"{where}에 링크를 달았습니다 ({text} -> {link})"
+    book = str(resolved.get("path") or "")
+    if got and "://" not in got and not os.path.isabs(got) and os.path.isabs(link) and os.path.isabs(book):
+        got = os.path.normpath(os.path.join(os.path.dirname(book), got))   # 엑셀은 통합문서 폴더 기준 상대 경로로 저장함
     if os.path.normcase(got.rstrip("/\\")) != os.path.normcase(link.rstrip("/\\")):
         return rt.ok_unverified(TOOL, "write", preview, [f"다시 읽은 링크 주소가 다름: '{got}'"], target_resolved=resolved, link=link)
     return rt.ok(TOOL, "write", preview, "VERIFIED: 링크 주소를 다시 읽어 확인했습니다.", verified=True, target_resolved=resolved,

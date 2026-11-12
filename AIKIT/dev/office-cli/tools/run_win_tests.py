@@ -3267,8 +3267,190 @@ def test_N(ctx):
     run_test(ctx, "N8", "메일 기간·첨부", n8)
 
 
+def test_P(ctx):
+    """1.6.7 기반 기능 (질문 없음). P10은 Outlook (--skip-outlook이면 빠짐). O는 에이전트 시나리오 번호와 겹쳐 쓰지 않음."""
+    tag = time.strftime("%H%M%S")
+    docx, pptx = ctx.path("A.docx"), ctx.path("A.pptx")
+    yellow = 0x00FFFF                                            # BGR: #FFFF00
+
+    def p_sheet():
+        activate_xl("A.xlsx", "Sheet1")
+        run_cli("excel.py", "write", "--sheet", "P_FMT", "--new-sheet", "--range", "A1",
+                "--values", '[["품번","규격","수량"],["A1","M3",5],["A2","M4",12],["A3","M5",30]]')
+        return xl_sheet("P_FMT")
+
+    def p1():     # read --columns, read --formats
+        ws = p_sheet()
+        com_retry(lambda: (setattr(ws.Range("B3").Interior, "Color", yellow), setattr(ws.Range("C4").Font, "Bold", True)))
+        d1 = run_cli("excel.py", "read", "--sheet", "P_FMT", "--range", "A1:C4", "--columns", "품번,수량")[0] or {}
+        cols = [list(r) for r in d1.get("values") or []]
+        d, c, r, e = run_cli("excel.py", "read", "--sheet", "P_FMT", "--range", "A1:C4", "--formats")
+        cells = {f.get("cell"): f for f in (d or {}).get("formats") or []}
+        record(ctx, "P1", "엑셀 read --columns(열 이름으로 고르기), --formats(칠한 칸 B3·굵은 칸 C4)",
+               _ok(d1) and len(cols) == 4 and cols[0] == ["품번", "수량"] and cols[1][0] == "A1" and float(cols[1][1]) == 5 and _verified(d)
+               and (cells.get("B3") or {}).get("bg") == "#FFFF00" and (cells.get("C4") or {}).get("bold") is True,
+               f"--columns 앞 두 행={cols[:2]}, 서식 칸={sorted(cells)}", d, c, r, e)
+
+    def p2():     # style --file
+        p = ctx.path("P_cells.csv")
+        with open(p, "w", encoding="utf-8-sig") as f:
+            f.write("칸\nA2\nC3\n")
+        d, c, r, e = run_cli("excel.py", "style", "--sheet", "P_FMT", "--file", p, "--bg", "yellow")
+        ws = xl_sheet("P_FMT")
+        got = com_retry(lambda: (int(ws.Range("A2").Interior.Color), int(ws.Range("C3").Interior.Color), int(ws.Range("B2").Interior.ColorIndex)))
+        record(ctx, "P2", "엑셀 style --file: 파일의 칸(A2, C3)만 칠함", _verified(d) and got == (yellow, yellow, -4142),
+               f"A2·C3 색, B2 채우기={got}", d, c, r, e)
+
+    def p3():     # 이름 정의 범위
+        wb = xl_wb("A.xlsx")
+        name = f"P_RANGE_{tag}"
+        com_retry(lambda: wb.Names.Add(Name=name, RefersTo="=P_FMT!$A$1:$C$4"))
+        d1 = run_cli("excel.py", "info")[0] or {}
+        listed = [n.get("name") for n in d1.get("names") or []]
+        d, c, r, e = run_cli("excel.py", "read", "--range", name)
+        rows = len((d or {}).get("values") or [])
+        record(ctx, "P3", "엑셀 이름 정의 범위: info에 이름, read --range <이름>이 그 범위(4행)", _ok(d1) and name in listed and _ok(d) and rows == 4,
+               f"info 이름={listed[:5]}, 읽은 행={rows}", d, c, r, e)
+
+    def p4():     # 자동 필터 켜기·끄기
+        ws = xl_sheet("P_FMT")
+        d1 = run_cli("excel.py", "range", "--sheet", "P_FMT", "--action", "filter", "--range", "A1:C4", "--where", "수량 >= 10")[0] or {}
+        on = com_retry(lambda: (bool(ws.AutoFilterMode), [bool(ws.Rows(i).Hidden) for i in range(2, 5)]))
+        d, c, r, e = run_cli("excel.py", "range", "--sheet", "P_FMT", "--action", "unfilter")
+        off_ = com_retry(lambda: (bool(ws.AutoFilterMode), [bool(ws.Rows(i).Hidden) for i in range(2, 5)]))
+        record(ctx, "P4", "엑셀 자동 필터: 수량 >= 10이면 2행만 숨김, 끄면 모두 보임",
+               _verified(d1) and on == (True, [True, False, False]) and _verified(d) and off_ == (False, [False, False, False]),
+               f"켠 뒤(필터, 2~4행 숨김)={on}, 끈 뒤={off_}", d, c, r, e)
+
+    def p5():     # write --image, --link
+        ws = xl_sheet("P_FMT")
+        png = make_png(ctx.path("P_pic.png"))
+        before = com_retry(lambda: int(ws.Shapes.Count))
+        d1 = run_cli("excel.py", "write", "--sheet", "P_FMT", "--range", "E2", "--image", png)[0] or {}
+        after = com_retry(lambda: int(ws.Shapes.Count))
+        d, c, r, e = run_cli("excel.py", "write", "--sheet", "P_FMT", "--range", "E20", "--link", docx, "--value", f"P링크 {tag}")
+        got = com_retry(lambda: (str(ws.Range("E20").Hyperlinks(1).Address), str(ws.Range("E20").Value)))
+        record(ctx, "P5", "엑셀 그림 넣기(도형 1개 늘어남), 링크 달기(주소·보이는 글)",
+               _verified(d1) and after == before + 1 and _verified(d)
+               and os.path.normcase(got[0]).endswith(os.path.normcase("A.docx")) and got[1] == f"P링크 {tag}",
+               f"도형 수 {before}->{after}, E20 링크·글={got}", d, c, r, e)
+
+    def p6():     # word header (쓰기·읽기, 끝나면 원래 바닥글로)
+        doc = wd_doc("A.docx")
+        old = com_retry(lambda: str(doc.Sections(1).Footers(1).Range.Text))
+        text = f"P 문서번호 {tag}"
+        try:
+            d1 = run_cli("word.py", "header", "--target", docx, "--kind", "footer", "--text", text, "--overwrite")[0] or {}
+            d, c, r, e = run_cli("word.py", "header", "--target", docx, "--kind", "footer")
+            got = com_retry(lambda: str(doc.Sections(1).Footers(1).Range.Text).rstrip("\r"))
+            again = run_cli("word.py", "header", "--target", docx, "--kind", "footer", "--text", f"다른 글 {tag}")[0] or {}
+            texts = [i.get("text") for i in (d or {}).get("items") or []]
+            record(ctx, "P6", "워드 바닥글 쓰기·읽기, 글이 있으면 --overwrite 없이 바꾸지 않음",
+                   _verified(d1) and got == text and _verified(d) and text in texts
+                   and again.get("status") == "error" and bool(again.get("confirm_commands")),
+                   f"바닥글={got!r}, 읽은 글={texts}, 덮어쓰기 확인={again.get('status')}", d, c, r, e)
+        finally:
+            com_retry(lambda: setattr(doc.Sections(1).Footers(1).Range, "Text", old.rstrip("\r")))
+
+    def p7():     # word bookmark, link
+        doc = wd_doc("A.docx")
+        place, src, name = f"P책갈피 자리 {tag}", f"P링크 글 {tag}", f"PBM_{tag}"
+        run_cli("word.py", "write", "--target", docx, "--text", place)
+        run_cli("word.py", "write", "--target", docx, "--text", src)
+        d1 = run_cli("word.py", "bookmark", "--target", docx, "--name", name, "--anchor", place)[0] or {}
+        d2 = run_cli("word.py", "link", "--target", docx, "--anchor", src, "--address", f"#{name}")[0] or {}
+        d, c, r, e = run_cli("word.py", "link", "--target", docx)
+        marks = [b.get("name") for b in (run_cli("word.py", "bookmark", "--target", docx)[0] or {}).get("bookmarks") or []]
+        got = com_retry(lambda: (bool(doc.Bookmarks.Exists(name)), str(doc.Bookmarks(name).Range.Text) if doc.Bookmarks.Exists(name) else "",
+                                 [str(doc.Hyperlinks(i).SubAddress or "") for i in range(1, int(doc.Hyperlinks.Count) + 1)]))
+        listed = [x.get("address") for x in (d or {}).get("links") or []]
+        record(ctx, "P7", "워드 책갈피 만들기·목록, 그 책갈피로 가는 링크 달기·목록",
+               _verified(d1) and _verified(d2) and got[0] and place in got[1] and name in got[2] and name in marks
+               and f"#{name}" in listed and _verified(d),
+               f"책갈피={got[:2]}, 링크 목록={listed[-3:]}", d, c, r, e)
+
+    def p8():     # ppt table
+        prs = pp_prs("A.pptx")
+
+        def make():
+            sl = prs.Slides.Add(prs.Slides.Count + 1, 12)        # ppLayoutBlank
+            sh = sl.Shapes.AddTable(2, 2, 50, 50, 300, 80)
+            sh.Table.Cell(1, 1).Shape.TextFrame.TextRange.Text = "항목"
+            sh.Table.Cell(1, 2).Shape.TextFrame.TextRange.Text = "값"
+            return int(sl.SlideIndex), str(sh.Name)
+        no, name = com_retry(make)
+        d1 = run_cli("ppt.py", "table", "--target", pptx, "--slide", str(no))[0] or {}
+        d, c, r, e = run_cli("ppt.py", "table", "--target", pptx, "--slide", str(no), "--cells", f"R2C1=P가 {tag}; R2C2=25")
+        keep = run_cli("ppt.py", "table", "--target", pptx, "--slide", str(no), "--cells", "R1C1=바뀜")[0] or {}
+
+        def cells():
+            t = prs.Slides(no).Shapes(name).Table
+            return [str(t.Cell(i, j).Shape.TextFrame.TextRange.Text) for i in (1, 2) for j in (1, 2)]
+        got = com_retry(cells)
+        record(ctx, "P8", "PPT 표 읽기, 빈 칸 쓰기, 글이 있는 칸은 --overwrite 없이 바꾸지 않음",
+               _verified(d1) and (d1.get("rows") or [[]])[0] == ["항목", "값"] and _verified(d)
+               and got == ["항목", "값", f"P가 {tag}", "25"] and keep.get("status") == "error",
+               f"표 칸={got}, 덮어쓰기 확인={keep.get('status')}", d, c, r, e)
+
+    def p9():     # office open --file
+        name = f"P_open_{tag}.xlsx"
+        p = ctx.path(name)
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.active["A1"] = f"P열기 {tag}"
+        wb.save(p)
+        d, c, r, e = run_cli("office.py", "open", "--file", p)
+        again = run_cli("office.py", "open", "--file", p)[0] or {}
+        found = _open_doc("excel", name)
+        seen = com_retry(lambda: (str(found.Worksheets(1).Range("A1").Value), bool(found.Application.Visible))) if found is not None else None
+        if found is not None:
+            try:
+                com_retry(lambda: found.Close(SaveChanges=False))
+            except Exception:
+                pass
+        record(ctx, "P9", "office.py open: 닫힌 파일을 화면의 Excel로 열고, 다시 열면 그 창을 앞으로",
+               _verified(d) and (d or {}).get("already_open") is False and again.get("already_open") is True
+               and seen == (f"P열기 {tag}", True),
+               f"열린 문서 A1·화면 표시={seen}, 두 번째 already_open={again.get('already_open')}", d, c, r, e)
+
+    def p10():    # outlook contacts (읽기만, 러너가 시험용 연락처를 만들고 지움: 실제 주소록 이름은 기록하지 않음)
+        name, mail = f"P연락처 {tag}", f"p{tag}@example.com"
+
+        def make():
+            it = win32com.client.Dispatch("Outlook.Application").CreateItem(2)    # olContactItem
+            it.FullName, it.Email1Address = name, mail
+            it.Save()
+            return it
+        item = com_retry(make)
+        try:
+            d, c, r, e = run_cli("outlook.py", "contacts", "--name", f"연락처 {tag}")
+            none = run_cli("outlook.py", "contacts", "--name", f"없는이름{tag}")[0] or {}
+        finally:
+            try:
+                com_retry(item.Delete)
+            except Exception:
+                pass
+        hits = [(x.get("name"), x.get("email"), x.get("source")) for x in (d or {}).get("contacts") or []]
+        record(ctx, "P10", "outlook contacts: 이름 일부로 연락처의 메일 주소를 찾고, 없는 이름은 0건(VERIFIED)",
+               _verified(d) and (name, mail, "연락처") in hits and _verified(none) and none.get("count") == 0,
+               f"찾은 항목={hits[:3]}, 없는 이름 count={none.get('count')}", d, c, r, e)
+
+    for tid, title, fn in (("P1", "열 고르기·서식 칸", p1), ("P2", "칸 목록 칠하기", p2), ("P3", "이름 정의 범위", p3),
+                           ("P4", "자동 필터", p4), ("P5", "엑셀 그림·링크", p5), ("P6", "워드 바닥글", p6),
+                           ("P7", "워드 책갈피·링크", p7), ("P8", "PPT 표", p8), ("P9", "파일 열기", p9)):
+        run_test(ctx, tid, title, fn)
+    if ctx.args.skip_outlook:
+        return
+    ready, why = outlook_ready()
+    if not ready:
+        record(ctx, "P10", "연락처 찾기", ENV_SKIP, f"Outlook 준비 안 됨: {why}")
+        return
+    run_test(ctx, "P10", "연락처 찾기", p10)
+
+
 GROUPS = [("A", test_A), ("B", test_B), ("C", test_C), ("D", test_D), ("E", test_E), ("F", test_F), ("G", test_G),
-          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K), ("L", test_L), ("M", test_M), ("N", test_N)]
+          ("H", test_H), ("I", test_I), ("J", test_J), ("K", test_K), ("L", test_L), ("M", test_M), ("N", test_N),
+          ("P", test_P)]
 
 
 def agent_summary(problems, counts, path, err_path, shots, closed, unverified):
