@@ -30,13 +30,13 @@
   정리(`step_old_global`, `step_old_layout`, `RETIRED_SKILLS` 등)와 `opencode.jsonc`의 옛 `"skills"` WARN을 없앰. 단계는 1 설정 폴더, 2 PATH, 3 동작 확인.
   `run_all_tests.py` diag와 `run_simplify_check.py` K1의 옛 복사본 확인도 뺌. 관련 테스트 정리.
 
-### 지침·기능: 도구에 없는 일을 세 가지로 (사용자 결정 2026-11-12: "안 됨"이 발목을 잡지 않게, 되돌릴 수 없는 일만 막음)
-- 전역 지침 8장: 가(바로 하는 일, 원본은 읽기만: 두 판 비교. 엑셀 표는 행을 이을 열을 먼저 묻고 바뀐 칸마다 한 줄의 결과 엑셀, 워드는 `CompareDocuments`),
-  나(확인 뒤: 변경 내용 수락·거부, 피벗, 데이터 유효성, 기존 차트 고치기. "예" 뒤 열린 문서만 바꾸고 저장하지 않음),
-  다(하지 않음: 인쇄, 회의 요청, 메일 이동·분류·플래그, 반복·회의 일정 지우기). 3장 표, 스킬 11개의 8장 문장, `stats-kit` 6번, 사용 가이드 10장.
-- 도구: `NOT_SUPPORTED`에 종류(script/confirm/user). 가·나는 `error_type: not_in_tool`과 8장 안내, 다만 `not_supported`(사용자가 직접).
+### 지침·기능: 도구에 없는 일을 둘로 (사용자 결정 2026-11-12: "안 됨"이 발목을 잡지 않게, 되돌릴 수 없는 일만 막음)
+- 전역 지침 8장: 가(확인 뒤: 변경 내용 수락·거부, 피벗, 데이터 유효성, 기존 차트 고치기. "예" 뒤 열린 문서만 바꾸고 저장하지 않음),
+  나(하지 않음: 인쇄, 회의 요청, 메일 이동·분류·플래그, 반복·회의 일정 지우기). 스킬 11개의 8장 문장, 사용 가이드 10장.
+- 도구: `NOT_SUPPORTED`에 종류(confirm/user). 가는 `error_type: not_in_tool`과 8장 안내, 나만 `not_supported`(사용자가 직접).
+- 두 판 비교는 지침·스킬·도구 안내에서 모두 뺌 (나중에 구현할 때 검토, 남은 할 일). `excel.py compare`·`reader.py diff`는 보통 인자 오류.
 - `office.py transfer` 워드<->PPT: 설명 글 대신 `[추천]`에 보내는 문서의 `read --save` 전체 명령 (회사 PC 2026-11-11 BEAM O8).
-- 테스트: `test_script_features_point_to_global_guide`, `test_transfer_between_word_and_ppt_recommends_the_read_save_command`.
+- 테스트: `test_confirm_features_point_to_global_guide`, `test_transfer_between_word_and_ppt_recommends_the_read_save_command`.
 
 ### 기능: 결과 파일은 대상 파일 옆, 대상 파일이 없으면 C:\AIKIT\data (사용자 결정)
 - 전역 지침 2장 "결과 파일 위치": 경로를 주면 그대로, 아니면 파일을 대상으로 한 작업은 대상 파일과 같은 폴더, 대상 파일이 없는 작업은 `C:\AIKIT\data`.
@@ -2518,6 +2518,8 @@ Windows 실기 테스트(집 PC: Windows 11 Pro 26200, Python 3.13.13, Office 20
 - Outlook 검색 필터 구문 오류, 첨부 덮어쓰기, 서명 사라짐.
 
 ## 남은 할 일
+- [ ] 두 판 비교 (엑셀 표·BOM 개정, 워드·PDF 문서에서 다른 곳을 찾아 검토): 1.6.3에서 도구를 빼고 1.6.7에서 지침 안내도 뺌. 구현할 때
+  다른 곳을 찾는 기준(행을 이을 열), 결과 파일 모양, 실제 BOM 샘플로 기준을 정해 다시 검토 (사용자 결정 2026-11-12).
 - [ ] 2026-11-09 전체 검토(1.4.91)에서 찾은 것: `docs/history/office-cli_REVIEW_2026-11-09.md`. 1장·2장·3장은 1.4.92~1.4.96에서 처리
   (3장 C1~C18은 실기에서 끝남: C6 수정, C12·C18 문제없음, C13 OneDrive는 쓰지 않아 닫음). 남은 것: 3장 끝의 마크다운 작은 것(보류),
   4장 3·4·5번은 1.6.0·1.6.1에서 끝남 (하지 않기로 한 것: 변경 내용 수락·거부, 인쇄, 회의 요청, 메일 이동·분류, 플래그, 피벗, 데이터 유효성,

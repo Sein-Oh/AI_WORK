@@ -1572,7 +1572,7 @@ def test_error_log_hides_mail_account_and_stray_text(capsys, isolated_dirs):
 
 # ---------------------------------------------------------------------------
 # 1.6.1: 도구에 명령이 없는 기능 안내 (사용자 결정 2026-11-10). 1.6.7: 전역 지침 8장의 세 가지로 나눔
-#   다(하지 않음) -> not_supported + 사용자가 직접, 가·나(파이썬으로) -> not_in_tool + 8장 안내 (나는 사용자 확인 뒤)
+#   나(하지 않음) -> not_supported + 사용자가 직접, 가(사용자 확인 뒤 파이썬) -> not_in_tool + 8장 안내. 두 판 비교는 넣지 않음
 # ---------------------------------------------------------------------------
 
 
@@ -1589,21 +1589,19 @@ def test_not_supported_features_tell_user_to_do_it(capsys, mod, argv, what):
     assert "직접" in out["message"] and "파이썬" in out["agent_directive"], out
 
 
-@pytest.mark.parametrize("mod, argv, what, how", [
-    ("word", ["revisions", "--action", "accept"], "변경 내용 수락", "나. 확인 뒤 하는 일"),
-    ("excel", ["pivot", "--range", "A1:D9"], "피벗", "나. 확인 뒤 하는 일"),
-    ("excel", ["chart", "--action", "edit", "--name", "c"], "기존 차트", "나. 확인 뒤 하는 일"),
-    ("excel", ["range", "--action", "validation", "--range", "A1"], "데이터 유효성", "나. 확인 뒤 하는 일"),
-    ("excel", ["compare", "--target", "a.xlsx", "--target2", "b.xlsx"], "두 판 비교", "가. 바로 하는 일"),
-    ("reader", ["diff", "--file", "a.docx", "--file2", "b.docx"], "두 판 비교", "가. 바로 하는 일"),
+@pytest.mark.parametrize("mod, argv, what", [
+    ("word", ["revisions", "--action", "accept"], "변경 내용 수락"),
+    ("excel", ["pivot", "--range", "A1:D9"], "피벗"),
+    ("excel", ["chart", "--action", "edit", "--name", "c"], "기존 차트"),
+    ("excel", ["range", "--action", "validation", "--range", "A1"], "데이터 유효성"),
 ])
-def test_script_features_point_to_global_guide(capsys, mod, argv, what, how):
-    """도구에 명령은 없지만 파이썬 스크립트로 하는 일: 사용자에게 떠넘기지 않고 8장 가(바로)·나(확인 뒤)로 안내."""
+def test_confirm_features_point_to_global_guide(capsys, mod, argv, what):
+    """도구에 명령은 없지만 사용자 확인 뒤 파이썬으로 하는 일: 사용자에게 떠넘기지 않고 8장 "가. 확인 뒤 하는 일"로 안내."""
     import importlib
     code, out = run_main(importlib.import_module(mod), capsys, *argv)
     assert code == 2 and out["error_type"] == "not_in_tool" and what in out["message"], out
-    assert how in out["agent_directive"] and "직접 하세요" not in out["message"], out
-    assert ("'예'" in out["agent_directive"]) == how.startswith("나"), out
+    assert "가. 확인 뒤 하는 일" in out["agent_directive"] and "'예'" in out["agent_directive"], out
+    assert "직접 하세요" not in out["message"], out
 
 
 def test_search_word_in_value_is_not_a_feature_request(capsys):
