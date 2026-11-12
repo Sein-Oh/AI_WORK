@@ -33,7 +33,7 @@ python "C:\AIKIT\office-cli\excel.py" read --target "C:\AIKIT\data\bom_work\새�
 | 확인할 것 | 샘플 값 (지금 compare.py) | 회사 BOM에서 찾을 것 |
 |---|---|---|
 | 머리글 행 | 3행 (위는 제목·빈 행) | 열 이름이 모인 행. 위 15행 안이어야 함 |
-| 계층 열 `LEVEL` | `Level` (0, 1, 2) | 숫자(0, 1, 2) 또는 점 표기(.1, ..2)인 열. 없으면 평면 BOM |
+| 계층 열 `LEVEL` | `Level` (0, 1, 2) | 숫자(0, 1, 2) 또는 점 표기(.1, ..2)인 열. 없으면 평면 BOM. `1.1`·`1.2.1` 같은 번호식이면 지금 compare.py가 잘못 읽으니(`1.1`을 1로) 6장대로 보고 |
 | 부품 열 `KEY` | `Part Number` | 품번 열 |
 | 비교할 열 `COMPARE` | `Description`, `Spec`, `Qty` | 품명, 규격, 수량에 해당하는 열 |
 | 숫자로 비교할 열 `NUMBER_COLS` | `Qty` | 수량 열 (3과 3.0을 같게) |
@@ -72,7 +72,7 @@ python "C:\AIKIT\skills\bom-compare\scripts\compare.py" --old "C:\AIKIT\data\bom
 ```powershell
 Copy-Item "C:\AIKIT\data\bom_work\새판.xlsx" "C:\AIKIT\data\bom_work\시험판.xlsx"
 ```
-5-1에서 읽은 행 중 부품 행 둘을 고른다. 하나는 수량 칸, 하나는 규격 칸. 바꿀 칸과 새 값을 사용자에게 알린 뒤 실행:
+5-1에서 읽은 행 중 부품 행 둘을 고른다. 하나는 수량 칸, 하나는 규격 칸. 바꿀 칸과 새 값을 보여 주고 "예"를 받은 뒤 실행 (복사본이어도 `--overwrite`는 전역 지침 5장):
 ```powershell
 python "C:\AIKIT\office-cli\excel.py" write --target "C:\AIKIT\data\bom_work\시험판.xlsx" --range <수량 칸> --value <다른 수> --overwrite
 python "C:\AIKIT\office-cli\excel.py" write --target "C:\AIKIT\data\bom_work\시험판.xlsx" --range <규격 칸> --value "<다른 규격>" --overwrite
@@ -82,7 +82,7 @@ python "C:\AIKIT\skills\bom-compare\scripts\compare.py" --old "C:\AIKIT\data\bom
 기대: `preview`가 `추가 0, 삭제 0, 변경 2자리(2칸)`, `result_file`에 바꾼 두 칸의 상위 조립체·열이 맞게 나온다. 다르면 6장.
 
 ### 5-3. 실제 두 판
-SKILL.md "순서" 1~3단계를 `옛판.xlsx`, `새판.xlsx`로 한다 (4단계 칠하기는 사용자가 원할 때만, 복사본에만).
+SKILL.md "순서" 1~3단계를 `옛판.xlsx`, `새판.xlsx`로 한다 (4단계 칠하기는 사용자가 원할 때만, 복사본에만). 2장에서 시트를 정했으면 이 장의 모든 `read`에 `--sheet "<시트>"`를 붙인다.
 `preview`와 결과 표 앞 10줄을 보여 주고, 사용자가 아는 변경(설계 변경 통보 등) 몇 건이 결과에 있는지 사용자에게 확인받는다.
 
 ## 6. 문제가 생기면 (고치지 말고 보고)
@@ -90,14 +90,14 @@ SKILL.md "순서" 1~3단계를 `옛판.xlsx`, `새판.xlsx`로 한다 (4단계 �
 |---|---|---|
 | "머리글(...)을 찾지 못했습니다" | 4장 열 이름이 머리글과 다름, 또는 머리글이 15행 아래 | 머리글 글자를 다시 읽어 4장을 고침 (공백·괄호까지 같게). 15행 아래면 보고 |
 | "Level 값 ...을(를) 읽지 못했습니다" | 계층 열이 숫자·점 표기가 아님 (예: 1.2.1, 글자) | 보고 |
-| "같은 상위 조립체 아래 같은 ...가 두 번" | 실제 중복이거나, 회사 BOM이 같은 부품을 위치(Item No 등)별로 여러 줄 씀 | 행 번호를 사용자에게 보여 주고 어느 쪽인지 묻는다. 위치별로 쓰는 BOM이면 보고 |
+| "같은 상위 조립체 아래 같은 ...가 두 번" | 실제 중복이거나, 같은 부품을 위치(Item No 등)별로 여러 줄 쓰거나, 같은 하위 조립체가 여러 상위 조립체에 쓰임(지금은 바로 위 조립체만 봄) | 행 번호와 그 위 조립체들을 보여 주고 어느 쪽인지 묻는다. 실제 중복이 아니면 보고 |
 | 5-1이 0건이 아님 | 같은 판인데 차이가 나옴 (기준 열 해석 문제) | 결과 앞 5줄의 "바뀐 열"을 보고 |
 | 5-2가 2칸이 아님 | 기준이 BOM에 맞지 않음 | 결과 전체 수와 "바뀐 열" 목록을 보고 |
 
 보고 형식 (개발자에게 전달, 회사 값·파일 이름·품번은 쓰지 않음):
 ```text
 [BOM 비교 회사 적용 보고]
-머리글 행: <n>행, 열: <머리글 목록>
+머리글 행: <n>행, 열: <머리글 목록>, 시트: 여러 개/하나
 기준: LEVEL=<값>, KEY=<값>, COMPARE=<값>, NUMBER_COLS=<값>, IGNORE_CASE_COLS=<값>
 5-1 같은 판: <preview 또는 오류 message 앞부분>
 5-2 시험 판: <preview>
