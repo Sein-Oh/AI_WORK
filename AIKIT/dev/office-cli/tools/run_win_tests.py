@@ -2673,9 +2673,19 @@ def test_L(ctx):
         bad = str((d or {}).get("agent_directive", "")).startswith("UNVERIFIED:") and "#NAME?" in json.dumps(d or {}, ensure_ascii=False)
         d2 = run_cli("excel.py", "write", "--sheet", "L_CUR", "--range", "F1", "--formula", "=SORT(B2:B4)")[0]
         spill = com_retry(lambda: xl_sheet("L_CUR").Range("F2").Value)
+        f1 = com_retry(lambda: str(xl_sheet("L_CUR").Range("F1").Text))
         version = com_retry(lambda: float(xl_app().Version))
-        record(ctx, "L3", "A9 '=합계(...)'는 #NAME?로 UNVERIFIED, '=SORT(...)'는 펼쳐짐(Office 2021 이상)", bad and _ok(d2) and spill is not None,
-               f"오류 수식 directive={(d or {}).get('agent_directive', '')[:80]}, F2(펼친 값)={spill}, Office {version}", d, c, r, e)
+        record(ctx, "L3", "A9 '=합계(...)'는 #NAME?로 UNVERIFIED", bad,
+               f"오류 수식 directive={(d or {}).get('agent_directive', '')[:80]}", d, c, r, e)
+        # 동적 배열(SORT)은 Office 2021·365부터. 2019는 버전이 같은 16.0이라 버전으로 못 가림: 엑셀이 수식을 받지 않아(com_error)
+        # 도구가 바꾸지 않고 STOP_RETRY로 멈추거나 F1이 #NAME?이면 이 PC에 없는 기능 (집 PC Office 2019, 2026-11-12)
+        refused = (d2 or {}).get("status") == "error" and "받지 않았습니다" in str((d2 or {}).get("message", ""))
+        if spill is None and (f1 == "#NAME?" or (refused and f1 == "")):
+            record(ctx, "L3b", "A9 '=SORT(...)'는 펼쳐짐 (Office 2021 이상)", ENV_SKIP,
+                   f"이 Office에 SORT(동적 배열) 없음: {'엑셀이 수식을 받지 않음(도구는 바꾸지 않고 STOP_RETRY)' if refused else 'F1=#NAME?'}, Office {version}")
+        else:
+            record(ctx, "L3b", "A9 '=SORT(...)'는 펼쳐짐 (Office 2021 이상)", _ok(d2) and spill is not None,
+                   f"F1={f1}, F2(펼친 값)={spill}, Office {version}", d2)
 
     def l4():     # C1 표 바로 위 단락 뒤에 쓰기
         doc = wd_doc("A.docx")

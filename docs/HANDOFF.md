@@ -490,6 +490,23 @@ En-Genius (`archive/engenius`, 2026-11-04 보관): 스킬 zip이 `<스킬 이름
   `C:\AIKIT` 11,577, 다른 폴더 12,041 (두 번 같음). `AGENTS.md`(20KB, 수천 토큰)가 두 번 들어갔다면 `C:\AIKIT` 쪽이 그만큼 커야 함.
   디버그 로그(`--print-logs --log-level debug`)에는 `AGENTS.md` 감시 줄 하나뿐이라 판단에 쓰지 못함. `C:\AIKIT`을 프로젝트로 쓰는 지금 구성을 그대로 둠.
 
+### 3-26. 집 PC 점검 (2026-11-12 저녁, main PR #80 = ml-kit 2.9.92, office-cli 1.6.7, Office 2019)
+`C:\AIKIT`을 main과 같게 다시 배치(옛 파일 없음)하고 setup FAIL 0, 새 창 기준 스킬 12개(새 이름)만 보임. 결과 `docs/test_logs/집PC_점검_20261112/`.
+
+| 시험 | 결과 | 걸린 시간 |
+|---|---|---|
+| 자동 점검 `run_all_tests.py --only diag,beta,ml,office` | diag 17/17, beta 29/29(F7 엑셀 재계산 포함), ml 14/14, office 99/100 | 9분 |
+| 단순성 점검 `run_simplify_check.py` | PASS 34, FAIL 0, SKIP 0 (K1 스킬 12개 포함) | 3분 |
+
+- office L3 실패 -> 고침 (실기 러너만): `=SORT(...)`(동적 배열)는 Office 2021·365부터라 Office 2019는 엑셀이 수식을 받지 않음(도구는 바꾸지 않고
+  STOP_RETRY, 맞는 동작). 2019·2021 모두 버전 16.0이라 버전으로 못 가림. L3을 둘로: L3(오류 수식 UNVERIFIED, 통과)과 L3b(SORT, 이 경우 ENV-SKIP).
+  L 그룹만 다시 돌려 PASS 14, ENV-SKIP 1.
+- 결과 파일에 Office 사용자 이름이 남음 -> 고침: 워드 메모 지우기·답글의 preview 문장(`메모 2(<이름>: ...)`)은 `author` 키가 아니라 가려지지 않았음.
+  `run_all_tests.py`·`run_simplify_check.py`의 `mask_private`가 이 모양도 가림 (회사 PC는 실명일 수 있음). 테스트 추가.
+- 볼 것: office 실기가 끝난 뒤 A.xlsx를 연 Excel이 하나 남고 "Excel을 종료할 수 없습니다" 창이 뜸 (L 그룹만 돌려도 남음, L11 제한된 보기 시험으로 보임).
+  결과에는 영향 없음 (손으로 닫음). 회사 PC에서도 남는지 보고, 남으면 러너가 끝에 그 Excel을 닫게 고칠 것.
+- 하지 않은 것: Gemma(OpenRouter 크레딧 부족, 회사 PC 몫), 눈 확인 1·3~8번(사람이 봄).
+
 ### 3-18. 결과 파일 위치 규칙 (전역 지침 2장, office-cli 1.6.7)
 사용자 결정: 경로를 주면 그대로, 아니면 파일을 대상으로 한 작업의 결과는 대상 파일과 같은 폴더, 대상 파일이 없으면 `C:\AIKIT\data`.
 office-cli `--save` 생략·이름만·상대 경로가 이 규칙을 따름 (전에는 `office-cli\data\_work`(7일 뒤 자동 삭제)와 `office-cli\data`). ml-kit은 원래

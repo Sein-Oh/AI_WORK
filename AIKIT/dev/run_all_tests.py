@@ -131,11 +131,14 @@ _USER_SEGMENT = re.compile(r"(?i)(\bUsers(?:\\\\|\\|/)+)(?!<사용자>)[^\\/\s\"
 
 # Office 변경 내용·메모의 작성자(Office 사용자 이름): 'author': '홍길동', "author": "홍길동"
 _AUTHOR_VALUE = re.compile(r"""((['"])author\\?\2\s*:\s*\\?['"])(?!<사용자>)[^'"\\]+""")
+# 워드 메모 지우기·답글의 preview 문장 속 작성자: '메모 2(홍길동: 확인 바람)', '메모 2(홍길동)에 답글' (집 PC 2026-11-12 결과 파일에 남음)
+_COMMENT_AUTHOR = re.compile(r"(메모 \d+\()(?!<사용자>)([^:()\n]+)(?=[:)])")
 
 
 def mask_private(text):
     text = _USER_SEGMENT.sub(lambda m: m.group(1) + "<사용자>", text)
-    return _AUTHOR_VALUE.sub(lambda m: m.group(1) + "<사용자>", text)
+    text = _AUTHOR_VALUE.sub(lambda m: m.group(1) + "<사용자>", text)
+    return _COMMENT_AUTHOR.sub(lambda m: m.group(1) + "<사용자>", text)
 
 
 class Report:
