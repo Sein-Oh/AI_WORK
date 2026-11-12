@@ -2,9 +2,15 @@
   "$schema": "https://opencode.ai/config.json",
   "shell": "powershell",
   "autoupdate": false,
+  "share": "disabled",
+  "lsp": false,
+  "formatter": false,
   "permission": {
     "external_directory": "allow",
     "webfetch": "deny",
-    "websearch": "deny"
+    "websearch": "deny",
+    "browser": "deny",
+    "grep": "deny",
+    "glob": "deny"
   }
 }

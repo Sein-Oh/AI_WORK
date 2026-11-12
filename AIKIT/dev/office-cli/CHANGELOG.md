@@ -35,6 +35,20 @@
   정리(`step_old_global`, `step_old_layout`, `RETIRED_SKILLS` 등)와 `opencode.jsonc`의 옛 `"skills"` WARN을 없앰. 단계는 1 설정 폴더, 2 PATH, 3 동작 확인.
   `run_all_tests.py` diag와 `run_simplify_check.py` K1의 옛 복사본 확인도 뺌. 관련 테스트 정리.
 
+### 구조: 폐쇄망에서 되지 않는 기능 잠금 (사용자 결정 2026-11-12)
+- `opencode.json`: `"share": "disabled"`(세션 공유는 opencode.ai로 보냄), `"lsp": false`, `"formatter": false`(내려받으려 함),
+  `"permission"`에 `"browser": "deny"` 추가 (이미 있던 것: `autoupdate` false, webfetch·websearch·grep·glob deny). OpenCode 2.2.5가 모두 읽음을 확인.
+- 집 PC에서 LLM 주소 말고 모든 바깥 연결을 막고 기록: 잠근 뒤 스킬 불러오기·파일 만들기·python 실행이 되고, LLM 말고는 연결 시도가 없음.
+- `setup.py`: 잠금 목록을 `OFFLINE_DENY`, `OFFLINE_SET` 한 곳에 두고, 빠진 것을 INFO 한 줄로 알림. `OUR_KEYS`에 share·lsp·formatter.
+  `docs/opencode/README.md` 1장. 테스트 `test_setup`(배포 설정이 잠금 목록과 같은지).
+
+### 구조: rg.exe 없이 배포 (사용자 결정 2026-11-12)
+- 집 PC에서 rg를 치우고 인터넷을 막은 채 OpenCode 2.2.5 확인: 스킬 불러오기(`scripts\` 폴더가 있는 스킬 포함)는 rg 없이 됨.
+  rg가 필요한 것은 파일 찾기 도구 grep·glob과 Web UI의 `@` 파일 자동 완성뿐 (없으면 내려받으려다 `ripgrep execution failed`).
+- `opencode.json`의 `"permission"`에 `"grep": "deny"`, `"glob": "deny"`: 모델이 처음부터 셸 명령으로 파일을 찾음 (실패 한 번이 없어짐, 확인함).
+- `setup.py`: rg가 없으면 WARN 대신 INFO("정상, @ 자동 완성만 안 됨"), 합친 설정에 grep·glob deny가 없으면 INFO로 권함.
+- 전역 지침 3장 1·3번에서 glob·`ripgrep execution failed` 언급을 뺌. `docs/opencode/README.md` 1장, `docs/ENVIRONMENT.md`. 테스트 `test_setup`.
+
 ### 구조: excel-kit을 작업 기준으로 둘로 (사용자 결정 2026-11-12: 8KB 한도에 닿음. 열린/파일 상태가 아니라 작업으로 나눔)
 - `excel-kit`(읽기·쓰기: 값·표·수식, 조건 행, 칠한 칸 찾기, 메모, 그림·링크, 바꾸기, 저장·내보내기, 앱 사이 옮기기)과
   `excel-format-kit`(모양·구조: 서식, 차트, 시트, 행·열 넣기·지우기, 정렬, 자동 필터, 틀 고정·병합, 수식을 값으로). 기본 스킬 12개.

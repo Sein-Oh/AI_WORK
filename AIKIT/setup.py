@@ -13,9 +13,9 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
 2. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
    OpenCode 백그라운드 서비스를 끔 (서비스는 처음 뜰 때의 환경 변수·PATH로 계속 돌아, 끄지 않으면 재부팅 전까지 옛 설정을 씀).
-3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep),
+3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep, 없어도 됨),
    opencode debug paths의 config가 C:\AIKIT인지. opencode.json + opencode.jsonc를 합친 설정의 "shell", "instructions",
-   permission, "enabled_providers", "autoupdate"를 WARN/INFO로 알림.
+   permission, "enabled_providers", 폐쇄망 잠금(OFFLINE_DENY, OFFLINE_SET)을 WARN/INFO로 알림.
 
 개발용: --test-skill <SKILL.md>  (실기 테스트 보조 스킬을 C:\AIKIT\skills에 둠, 예: C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md)
 이 스크립트는 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다. exit 0 = 모두 OK, 1 = 실패(또는 --check에서 다름) 있음.
@@ -36,7 +36,12 @@ ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 
 USER_ENV_KEY = "Environment"                                                   # 사용자 환경 변수 (HKCU)
 CONFIG_ENV = "OPENCODE_CONFIG_DIR"                                             # OpenCode 설정 폴더를 바꾸는 환경 변수
 # opencode.json(우리 설정)에만 두는 키: opencode.jsonc(사용자가 넣는 사내 LLM 설정)에도 있으면 어느 쪽이 쓰일지 헷갈림
-OUR_KEYS = ("shell", "permission", "autoupdate")
+OUR_KEYS = ("shell", "permission", "autoupdate", "share", "lsp", "formatter")
+# 폐쇄망에서 되지 않는 기능 잠금 (배포 opencode.json에 있음, 집 PC에서 인터넷을 막고 확인 2026-11-12).
+# 막는 도구: 웹 가져오기·검색·브라우저, 파일 찾기 grep·glob(rg.exe가 필요한데 배포하지 않음, 막으면 모델이 셸로 찾음)
+OFFLINE_DENY = ("webfetch", "websearch", "browser", "grep", "glob")
+# 끄는 기능: 업데이트 확인, 세션 공유(opencode.ai로 보냄), 언어 서버·서식 도구 자동 내려받기
+OFFLINE_SET = (("autoupdate", False), ("share", "disabled"), ("lsp", False), ("formatter", False))
 # 도구가 쓰는 라이브러리 (AGENTS.md 사용자 환경 표): (배포 이름, import 이름)
 LIBS = (("numpy", "numpy"), ("pandas", "pandas"), ("scikit-learn", "sklearn"), ("scipy", "scipy"), ("joblib", "joblib"),
         ("openpyxl", "openpyxl"), ("python-docx", "docx"), ("python-pptx", "pptx"), ("matplotlib", "matplotlib"),
@@ -413,7 +418,9 @@ def step_verify(rep):
     if rg:
         rep.line("OK", f"rg(ripgrep): {rg}")
     else:
-        rep.line("WARN", "rg(ripgrep)가 없습니다. OpenCode가 스킬을 못 불러올 수 있습니다: rg.exe를 C:\\AIKIT\\python에 두세요 (docs/opencode/README.md 1장)")
+        # rg.exe는 배포하지 않음 (2026-11-12 사용자 결정). OpenCode 2.2.5는 rg 없이 스킬을 불러오고, 파일 찾기 도구(grep, glob)는
+        # opencode.json에서 꺼 둠. rg가 필요한 것은 Web UI의 @ 파일 자동 완성뿐 (집 PC 확인).
+        rep.line("INFO", "rg(ripgrep) 없음: 정상입니다 (배포에 넣지 않음). 스킬과 도구는 그대로 되고, Web UI의 @ 파일 자동 완성만 안 됩니다")
     if os.name == "nt" and os.path.normcase(HERE.rstrip("\\")) != os.path.normcase("C:\\AIKIT"):
         rep.line("WARN", f"이 폴더가 C:\\AIKIT가 아닙니다 ({HERE}). 스킬과 전역 지침의 명령은 C:\\AIKIT 기준입니다")
 
@@ -545,12 +552,12 @@ def step_opencode_providers(rep, config_dir):
         if used and used not in names:
             rep.line("WARN", f"opencode.jsonc의 \"model\"({model})의 provider '{used}'가 \"enabled_providers\"에 없어 그 모델을 쓸 수 없습니다")
     perm = cfg.get("permission")
-    web = [k for k in ("webfetch", "websearch") if not (perm == "deny" or (isinstance(perm, dict) and perm.get(k) == "deny"))]
-    if web:
-        rep.line("INFO", "설정에서 웹 도구(" + ", ".join(web) + ")를 막지 않았습니다. 폐쇄망에서는 모델이 인터넷 검색을 시도하다 시간만 쓰니 "
-                         "opencode.json의 \"permission\"에 " + ", ".join(f'"{k}": "deny"' for k in web) + " 를 넣는 것을 권합니다")
-    if cfg.get("autoupdate") is not False:
-        rep.line("INFO", "설정에 \"autoupdate\": false가 없습니다. 폐쇄망에서는 업데이트를 받을 수 없으니 넣어 두면 확인을 시도하지 않습니다")
+    deny = [k for k in OFFLINE_DENY if not (perm == "deny" or (isinstance(perm, dict) and perm.get(k) == "deny"))]
+    unset = [f'"{k}": {json.dumps(v)}' for k, v in OFFLINE_SET if cfg.get(k) != v]
+    if deny or unset:
+        want = unset + (['"permission": {' + ", ".join(f'"{k}": "deny"' for k in deny) + "}"] if deny else [])
+        rep.line("INFO", "폐쇄망에서 되지 않는 기능을 잠그지 않았습니다 (모델이 인터넷·rg를 쓰려다 시간만 씀). 배포 opencode.json처럼 "
+                         + ", ".join(want) + " 를 넣는 것을 권합니다")
 
 
 # ---------------------------------------------------------------------------
