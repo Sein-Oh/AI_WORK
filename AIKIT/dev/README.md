@@ -1,4 +1,4 @@
-# CLI 도구 모음
+# AIKIT 개발 폴더 (도구 공통 계약)
 
 AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 개발·테스트 폴더입니다. 도구 1개 = 폴더 1개.
 
@@ -12,12 +12,12 @@ AI 에이전트(26B~30B 경량 LLM)가 **스킬로 호출하는 CLI 도구**의 
 | [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`excel-kit`](../skills/excel-kit/SKILL.md), [`excel-format-kit`](../skills/excel-format-kit/SKILL.md), [`word-kit`](../skills/word-kit/SKILL.md), [`ppt-kit`](../skills/ppt-kit/SKILL.md), [`outlook-kit`](../skills/outlook-kit/SKILL.md), [`search-kit`](../skills/search-kit/SKILL.md), [`stats-kit`](../skills/stats-kit/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
-(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\AIKIT\<tool>\`에 두고, OpenCode는 설정 폴더 `C:\AIKIT`의 `skills\<스킬 이름>\SKILL.md`를 그 자리에서 읽습니다 ([`docs/opencode/README.md`](../../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\AIKIT\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `AIKIT/<tool>/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
+(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\AIKIT\<tool>\`에 두고, OpenCode는 설정 폴더 `C:\AIKIT`의 `skills\<스킬 이름>\SKILL.md`를 그 자리에서 읽습니다 ([`docs/opencode/README.md`](../../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\AIKIT\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `AIKIT/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli 7개). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
 
 ## 실기 자동 점검 (`run_all_tests.py`)
 
 `C:\AIKIT`(도구와 이 폴더 `dev`)가 있는 PC에서 자동 점검을 **명령 하나**로 돌리고 결과를 **파일 하나**로 모읍니다. 사람이 실행하는 도구입니다.
-회사 PC 실기 절차 전체(준비, Gemma, 눈 확인, 올릴 파일)는 [`docs/opencode/실기테스트.md`](../docs/opencode/실기테스트.md).
+회사 PC 실기 절차 전체(준비, Gemma, 눈 확인, 올릴 파일)는 [`docs/opencode/실기테스트.md`](../../docs/opencode/실기테스트.md).
 
 ```bat
 cd /d C:\AIKIT\dev
@@ -66,7 +66,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 | `../setup.py` (`setup.bat`) | 배포 설치 (`C:\AIKIT`에 있음, 사람이 실행). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`(HKCU, 원래 값 보관, 다시 읽어 확인)로 OpenCode가 `C:\AIKIT\AGENTS.md`와 `C:\AIKIT\skills`를 설정 파일·복사 없이 읽게 함. 시스템 PATH(HKLM)에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가(`winreg`, 형식 유지, 원래 값 보관, `WM_SETTINGCHANGE`), 동작 확인(라이브러리 import, 도구 `-h` 1줄 JSON, `opencode.exe`, rg, `opencode debug paths`의 config). `--check`(바꾸지 않고 확인만, 다르면 exit 1), `--no-path`, 개발용 `--test-skill C:\AIKIT\dev\office-cli\tools\office-cli-test\SKILL.md`(`C:\AIKIT\skills`에 둠). `run_all_tests.py`의 diag가 PATH·환경 변수를 읽기만 해서 확인하고 다르면 FAIL |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. `--make-pack`은 `agent_scenarios.py`로 메시지 팩을 다시 만듦. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. 시나리오에 `answer_reference: true`인 것(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
-진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
+진행 방법과 붙여넣을 메시지: [`docs/opencode/자동테스트/README.md`](../../docs/opencode/자동테스트/README.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
 
 ## 새 도구 폴더 구성
 
@@ -95,8 +95,8 @@ AIKIT/dev/<tool>/
    - `STOP_RETRY:` - 입력/데이터 문제. message에 `[추천]`이 있으면 그 뒤의 전체 명령을 그대로 1회만 실행 (R8).
    - `ERROR:` - 내부 오류. 재시도 금지.
 4. 에이전트가 판단할 일을 줄인다: 이름 자동 매칭, 기본값, 자동 상속을 도구가 처리. 오타는 같은 뜻 표로 고칠 수 있을 때만 `[추천]`, 철자만 비슷하면 `[후보]` (R8).
-5. 문자 규칙: 이모지·원문자·장식 기호 금지, 로그 태그는 `[INFO] [PROGRESS] [WARN] [ERROR] [STATUS]` ([`AGENTS.md`](../AGENTS.md) "문자 규칙").
-6. 폐쇄망: 실행 중 네트워크 접근 금지. [표준 환경](../docs/ENVIRONMENT.md)에 있는 라이브러리만 사용 ([`docs/WINDOWS_OFFLINE.md`](../docs/WINDOWS_OFFLINE.md)).
+5. 문자 규칙: 이모지·원문자·장식 기호 금지, 로그 태그는 `[INFO] [PROGRESS] [WARN] [ERROR] [STATUS]` ([`AGENTS.md`](../../AGENTS.md) "문자 규칙").
+6. 폐쇄망: 실행 중 네트워크 접근 금지. [표준 환경](../../docs/ENVIRONMENT.md)에 있는 라이브러리만 사용 ([`docs/WINDOWS_OFFLINE.md`](../../docs/WINDOWS_OFFLINE.md)).
 7. 공통 결과 키 (해당할 때만 넣음):
    - `next_commands` - 이어서 그대로 실행할 전체 명령 목록 (LLM이 묻지 않고 실행해도 안전한 것만).
    - `confirm_commands` - 사용자에게 보여 주고 "예"를 받은 뒤에만 실행할 전체 명령 목록 (메일 발송, 미리보기 뒤 실제 변경, 읽기·저장 뒤 다른 문서에 넣기 같은 문서를 바꾸는 이어 하기).
@@ -114,13 +114,13 @@ AIKIT/dev/<tool>/
    - `recovered` - 도구가 실패를 즉시 복구해 결과가 달라진 일 (예: 잠긴 파일 -> 새 이름 저장). `warnings`와 구분.
 8. 실패한 실행(exit 1, 2)은 `<도구 데이터 폴더>/logs/errors.txt`에 자동 기록. 로그 경로는 stdout JSON에 넣지 않음.
 
-설계 권장(사후 확인, 빈 결과 명시, 미리보기와 되돌리기, 인자 이름 일관성)과 JIT 자가복구 규칙은 [`AGENTS.md`](../AGENTS.md)에 있습니다.
+설계 권장(사후 확인, 빈 결과 명시, 미리보기와 되돌리기, 인자 이름 일관성)과 JIT 자가복구 규칙은 [`AGENTS.md`](../../AGENTS.md)에 있습니다.
 
 ## 공통 런타임 구현 규칙
 
 모든 도구가 같은 문제를 같은 모양으로 풀기 위한 규칙입니다. 도구 폴더는 단독 배포되므로 코드는 공유하지 않고,
 각 도구의 공통 런타임(ml-kit `_ml_runtime.py`, office-cli `_runtime.py`)에 **같은 이름·같은 동작**으로 구현합니다.
-경량 LLM이 도구마다 다른 키나 문구를 만나지 않게 하는 것이 목적입니다. 키 이름과 directive 첫 단어는 바꾸지 마십시오.
+경량 LLM이 도구마다 다른 키나 문구를 만나지 않게 하는 것이 목적입니다. directive 첫 단어(`VERIFIED:` 등)는 바꾸지 않습니다. 키 이름은 베타라 바꿀 수 있지만 두 도구에서 함께 바꿉니다.
 
 ### R1. 성공 응답과 사후 확인 (`ok()`)
 - 성공 응답은 항상 `"status": "ok"`와 `"verified": true|false`를 가진다.
@@ -173,7 +173,7 @@ AIKIT/dev/<tool>/
 - 공통 런타임 모듈은 최상단에서 표준 라이브러리만 import한다. 핵심 라이브러리(ml-kit의 pandas, sklearn 등)도 실패하면 같은 JSON을 내야 한다.
 
 ### R6. 오류 로그 (`write_error_log`)
-- 기준 구현: `archive/doc-classifier/_dc_runtime.py`의 `write_error_log` (보관된 도구에서 복사). 형식과 규칙은 [`AGENTS.md`](../AGENTS.md) "오류 로그 저장".
+- 기준 구현: `archive/doc-classifier/_dc_runtime.py`의 `write_error_log` (보관된 도구에서 복사). 형식과 규칙은 [`AGENTS.md`](../../AGENTS.md) "오류 로그 저장".
 - 호출 위치: `run_cli()`의 exit 1 경로와 `JsonArgumentParser.error()`(exit 2). 회전 실패와 기록 실패를 따로 감싸 회전이 실패해도 항목은 남긴다.
 - 데이터 폴더 환경변수: `ML_KIT_DATA_DIR`, `OFFICE_CLI_DATA_DIR`. 머리줄의 도구 이름은 폴더 이름(`ml-kit` 등).
 - 공통 런타임에 `VERSION` 상수를 두고 SKILL.md `metadata.version`과 같은지 테스트로 확인한다.

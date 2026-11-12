@@ -194,4 +194,4 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    (`^[a-z0-9]+(-[a-z0-9]+)*$`; `AIKIT/skills/ml-train/SKILL.md`는 `ml-train`), frontmatter는 name/description/license/compatibility/metadata만.
    `skills/` 바로 아래에 둔다 (묶음 폴더를 한 단계 더 두는 것은 2.2.5에서 되지만 표준이 아님).
    보조 스킬(예: `AIKIT/dev/office-cli/tools/office-cli-test/`)도 같은 규칙을 따른다. 스킬을 더하거나 나누면 `AIKIT/setup.py`
-   (설치·옛 폴더 정리), `.gitignore`의 기본 스킬 줄, 전역 지침 `AIKIT/AGENTS.md` 3장 표를 함께 고친다.
+   (설치하는 기본 스킬 목록), `.gitignore`의 기본 스킬 줄, 전역 지침 `AIKIT/AGENTS.md` 3장 표를 함께 고친다.

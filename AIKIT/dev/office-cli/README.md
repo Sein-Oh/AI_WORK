@@ -13,7 +13,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
   [`stats-kit`](../../skills/stats-kit/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
   공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`AIKIT/AGENTS.md`](../../AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
-- 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../docs/history/office-cli_WORK_PLAN_1.0.md)
+- 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../../docs/history/office-cli_WORK_PLAN_1.0.md)
 
 ## 1. 구성
 
@@ -39,7 +39,7 @@ AIKIT/dev/office-cli/  개발·실기 테스트용 (사내 PC C:\AIKIT\dev\offic
 └── tests/       오프라인 테스트 (가짜 COM + 실제 샘플 파일, 도구는 ../../AIKIT/office-cli에서 불러옴)
 ```
 
-설치 (폐쇄망은 [`docs/WINDOWS_OFFLINE.md`](../../docs/WINDOWS_OFFLINE.md) 참고):
+설치 (폐쇄망은 [`docs/WINDOWS_OFFLINE.md`](../../../docs/WINDOWS_OFFLINE.md) 참고):
 ```bat
 python -m pip install -r AIKIT/dev/office-cli/requirements.txt
 ```
