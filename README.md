@@ -1,7 +1,7 @@
 # AI_WORK
 
 AI 에이전트가 CLI 도구로 호출하는 **Agent-Computer Interface(ACI)** 툴킷 저장소입니다.
-대상 환경: **Windows 11 폐쇄망, WinPython (Python 3.13.13, PATH 등록)**, 26B~30B 경량 LLM 에이전트(스킬로 제공).
+대상 환경: **Windows 11 폐쇄망, WinPython (Python 3.13.13, PATH 등록)**, LLM 에이전트(스킬로 제공, 기준은 26B~30B 경량 모델 Gemma, 대형 모델 BEAM도 씀).
 라이브러리 버전은 `AGENTS.md` "사용자 환경" 표 / [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md).
 
 ## 트리
@@ -15,7 +15,8 @@ AI_WORK/
 ├── pip_install.txt            # WinPython에 두 도구(ml-kit, office-cli)의 패키지를 표준 버전으로 설치하는 명령 (온라인, wheel 받기, 오프라인)
 ├── docs/
 │   ├── ENVIRONMENT.md         # 표준 사용자 환경 정의 + 도구별 호환 현황
-│   ├── HANDOFF.md             # 작업 인계 (다른 PC·새 대화에서 이어 하기)
+│   ├── DECISIONS.md           # 원칙급 결정 기록 (지금 유효한 원칙, 폐기·보류)
+│   ├── HANDOFF.md             # 작업 인계: 지금 상태와 할 일만 (지난 경위는 history/)
 │   ├── WINDOWS_OFFLINE.md     # 폐쇄망 wheel 반입/설치 가이드 (모든 도구 공통)
 │   ├── history/               # 지난 설계·검토 기록 (1.0 설계, 1차 지침 준수 검토)
 │   ├── opencode/              # 사내 PC OpenCode 스킬 배치 안내, 실기테스트.md (회사 PC 실기 절차 한 장)

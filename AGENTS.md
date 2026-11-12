@@ -6,9 +6,13 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 도구 결과·로그·서브에이전트 보고가 영어여도 사용자에게 전할 때는 한국어로 옮긴다. 코드, 명령, 파일 경로, 옵션 이름은 원래 글자 그대로 둔다.
 
 ## 저장소 성격
-- `AIKIT/<tool>/` 의 스크립트는 **Windows 11 폐쇄망에서 26B~30B 경량 LLM 에이전트가 스킬로 호출하는 CLI 도구**(Agent-Computer Interface, ACI)입니다.
-- 소비자는 사람이 아닌 경량 LLM입니다. 출력 형식의 작은 변화도 에이전트를 깨뜨립니다.
-- 설계 원칙: **LLM 개입 최소화** - 판단과 복구는 도구가 하고, LLM은 명령 1회 실행 + JSON 1줄 해석만 한다.
+- `AIKIT/<tool>/` 의 스크립트는 **Windows 11 폐쇄망에서 LLM 에이전트가 스킬로 호출하는 CLI 도구**(Agent-Computer Interface, ACI)입니다.
+- 소비자는 LLM이다. 기준은 26B~30B 경량 모델(Gemma)이고, 대형 모델(BEAM)도 쓴다. 출력 형식의 작은 변화도 에이전트를 깨뜨린다.
+- **설계 원칙** (2026-11-12 사용자 결정): 도구는 실행 판단(대상 찾기, 기본값, 복구)과 결과 확인을 맡는다. LLM은 명령을 실행하고 결과를 해석하며,
+  업무 판단은 근거를 보여 주고 사용자와 정한다. 사용법은 경량 모델이 틀리지 않게 단순하게, 대형 모델을 막지 않게.
+- **도구의 두 성격**: office-cli는 기반 도구(조합해 쓰는 단위 기능, 아래 "도구별 규칙"), ml-kit은 완결형 작업 도구(학습부터 보고서까지
+  버전 고르기·반복 횟수 같은 실행 판단을 도구가 대신함). 새 도구는 둘 중 하나로 정한다. 확장은 사용자가 만드는 조합 스킬로 한다 (`AIKIT/AGENTS.md` 10장).
+- 원칙급 결정은 `docs/DECISIONS.md`에 한 줄씩 남긴다 (지침을 바꾸는 결정은 이 파일과 지침을 같은 커밋에서).
 - **베타 단계**: ml-kit과 office-cli는 베타다. 이전 버전과의 호환은 필요 없다 (사용자가 따로 요청할 때만).
   호환을 위한 코드(옛 인자·키 별칭, 이전 형식 모델·파일을 읽는 대체 경로)를 새로 넣지 않는다.
 
@@ -36,7 +40,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 | OS | Windows 11, **폐쇄망** (런타임 인터넷 접근 불가) |
 | Python | **WinPython**, Python 3.13.13, `C:\AIKIT\python`에 두고 시스템 PATH 등록 (`python`, `python\Scripts`) |
 | 실행 명령 | `python`, `python -m pip` 만 사용 (`py`, `python3`, 단독 `pip` 금지). 명령 예시·스킬·배치 파일 포함 |
-| 에이전트 | **OpenCode** CLI 2.2.5 + 26B~30B 경량 LLM(회사 PC: Gemma), 도구는 OpenCode 스킬로 제공. 명령 실행 도구의 시간 제한 120초 |
+| 에이전트 | **OpenCode** CLI 2.2.5 + 사내 LLM. 기준(합격 기준)은 26B~30B 경량 모델 Gemma, 대형 모델 BEAM도 씀(막지 않는 정도로 지원). 도구는 OpenCode 스킬로 제공. 명령 실행 도구의 시간 제한 120초 |
 | 셸 | Windows PowerShell 5.1 (회사 PC에 pwsh 없음). 도구가 내는 명령의 따옴표는 이 셸 기준 (`quote_arg`) |
 | Office | Office 16만 대상 (회사 PC 2021, 집 PC 2019 실기 보조). 그보다 낮은 버전은 지원하지 않음 |
 | 주요 라이브러리 | pandas 3.0.5, scikit-learn 1.9.0, scipy 1.18.1, numpy/joblib(의존성), openpyxl 3.1.5, python-docx 1.2.0, python-pptx 1.0.2, matplotlib 3.11.1, seaborn 0.13.2, pymupdf 1.28.2, olefile 0.47, opencv-python 5.0.0.93, PyYAML 6.0.3, python-dateutil 2.9.0.post0, pywin32 312, pytest 9.1.1, pymupdf4llm 1.28.2, fastapi 0.141.1, fastmcp 3.4.7, mcp 1.28.1, langgraph 1.2.11, openai 2.54.0 |
@@ -65,6 +69,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    LLM이 인자를 조합하거나 문서를 다시 읽지 않아도 되게 한다.
 4. **출력 양 제한**: JSON에 담는 목록·텍스트는 도구별 상한을 두고, 넘으면 잘라서 `truncated: true`와 전체 결과 파일 경로를 함께 준다.
 5. **인자 이름 일관성**: 도구 간 같은 개념은 같은 인자 이름을 쓴다 (`--file`, `--sheet`, `--save`, `--dry-run` 등). 새 인자는 기존 도구의 이름을 먼저 찾아본다.
+   예외: office-cli 대상 문서는 열린 문서도 받는 명령이 `--target`, 파일만 받는 명령(reader, `office.py open`)이 `--file` (2026-11-10 사용자 결정: 통일하지 않음).
 6. **미리보기와 되돌리기**: 덮어쓰기·삭제·일괄 수정 같은 파괴적 작업은 `--dry-run`(변경 없이 결과 미리보기)을 제공하고,
    가능하면 되돌리기 지점을 남긴다 (예: office-cli `undo`).
 7. **판단 대행**: 이름 자동 매칭, 기본값, 자동 상속은 도구가 처리한다 (AIKIT/dev/README.md 공통 계약 4번).
@@ -134,7 +139,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 경로와 인자만 기록하고 문서 본문·개인정보는 기록하지 않는다.
 - JIT 복구에 성공한 실행은 기록하지 않는다 (stderr `[WARN]` + JSON `recovered`로 충분).
 - 로그 경로는 stdout JSON에 넣지 않는다. 사람과 개발 에이전트가 사후 분석용으로 읽는다.
-- 기준 구현: `archive/doc-classifier/_dc_runtime.py`의 `write_error_log` (보관된 도구, 복사해서 사용).
+- 기준 구현: office-cli `_runtime.py`·ml-kit `_ml_runtime.py`의 `write_error_log` (새 도구는 여기서 복사).
 
 ## 문자 규칙
 - 이모지, 원문자(동그라미 숫자 등), 장식 기호(체크 표시, 별, 유니코드 화살표 등)는 저장소 전체에서 금지한다.
@@ -187,7 +192,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 2. 리팩터링(동작 불변)과 기능 변경은 별도 커밋/PR.
 3. 버그 수정에는 회귀 테스트 추가. 동작이 바뀌면 `SKILL.md`, `README.md`, `CHANGELOG.md` 갱신.
 4. 실기 결과(`docs/test_logs/`)에는 회사 경로·사용자 이름이 들어 있다. 그 내용을 코드·테스트·문서·커밋 메시지에 옮기지 않는다
-   (요약은 `docs/HANDOFF.md` 4장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
+   (요약은 `docs/HANDOFF.md` 3장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
 5. 남은 할 일은 각 도구 `CHANGELOG.md`(`AIKIT/dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
 6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (8KB, 상세는 README.md, 위 "사용법 단순성" 7번).
 7. 스킬은 OpenCode 형식(Claude 스킬과 같은 모양): `AIKIT/skills/<스킬 이름>/SKILL.md`, 폴더명 = frontmatter `name`
