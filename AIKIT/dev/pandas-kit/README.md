@@ -14,6 +14,7 @@
 | `AIKIT/pandas-kit/pandas_kit.py` | 진입점. `python pandas_kit.py <명령> ...` |
 | `AIKIT/pandas-kit/_pd_runtime.py` | 공통 런타임 (진입점 아님): `run_cli`, `JsonArgumentParser`, `quote_arg`, 오류 로그, 파일 복구 함수, 열린 Excel 경로 찾기. ml-kit `_ml_runtime.py`와 같은 이름·같은 동작 |
 | `tests/` | `python -m pytest -q AIKIT/dev/pandas-kit/tests` |
+| `tools/make_mbom_samples.py` | 시험용 MBOM 두 판(`MBOM_DR200.xlsx`, `_v2`)을 `AIKIT/dev/work/pandas`(git 제외)에 만듦: `python AIKIT/dev/pandas-kit/tools/make_mbom_samples.py [--out <폴더>]`. 상위 열 없이 Level로만 구조, 제목 블록·숨긴 행·글자로 저장된 숫자·단위 섞임 등 함정 |
 
 필요한 라이브러리: pandas, openpyxl (xlsx), matplotlib (차트), pywin32 (Windows에서 열린 Excel 경로 찾기만, 없어도 됨). `requirements.txt`.
 

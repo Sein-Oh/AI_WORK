@@ -513,3 +513,23 @@ def test_chart_of_empty_table_is_zero(env):
     out = ok(env, "chart", "--y", "Qty")
     assert out["count"] == 0 and "0건" in out["agent_directive"] and "output_file" not in out
 
+
+
+# ---------------------------------------------------------------------------
+# 시험 자료: tools/make_mbom_samples.py (클라우드에서도 같은 MBOM 두 판을 만들어 씀)
+# ---------------------------------------------------------------------------
+
+def test_mbom_samples_are_made_and_read(env):
+    import subprocess
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "make_mbom_samples.py")
+    out_dir = env["dir"] / "mbom"
+    p = subprocess.run([sys.executable, script, "--out", str(out_dir)], capture_output=True, text=True, encoding="utf-8")
+    assert p.returncode == 0, p.stderr
+    v1 = ok(env, "select", "--file", str(out_dir / "MBOM_DR200.xlsx"), "--name", "v1")
+    assert v1["anchor"]["range"] == "B6:R116" and v1["count"] == 110          # 제목 블록·메모는 표가 아님
+    assert any("표 위의 다른 내용" in w for w in v1["warnings"]) and any("숨긴 행" in w for w in v1["warnings"])
+    assert any("Qty(H) 열의 글자로 저장된 숫자 1칸" in w for w in v1["warnings"])
+    v2 = ok(env, "select", "--file", str(out_dir / "MBOM_DR200_v2.xlsx"), "--name", "v2")
+    assert v2["count"] == 109
+    bolts = ok(env, "select", "--from", "v1", "--where", "Part Number=000125")
+    assert bolts["count"] == 10

@@ -1,6 +1,6 @@
 # pandas-kit 개선점 (MBOM_DR200.xlsx로 직접 써 보며, 2026-11-13)
 
-반영 전 메모. 반영하면 CHANGELOG로 옮기고 여기서 지운다. 시험 파일: `C:\AIKIT\dev\work\pandas\MBOM_DR200.xlsx`
+반영 전 메모. 반영하면 CHANGELOG로 옮기고 여기서 지운다. 시험 파일: `python AIKIT/dev/pandas-kit/tools/make_mbom_samples.py`로 만드는 `AIKIT/dev/work/pandas/MBOM_DR200.xlsx`
 (MBOM 시트 B6:R116, 17열 110행, 상위 품목 열 없이 Level로만 구조, 시트 MBOM·Routing·변경이력).
 
 ## 사용자 결정
