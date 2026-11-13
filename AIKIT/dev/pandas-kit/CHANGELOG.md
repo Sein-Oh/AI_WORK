@@ -2,6 +2,22 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.2.1] - 2026-11-14
+
+### 수정 (MBOM 두 판으로 기반 명령을 써 보며 찾은 '결과가 틀리는데 알리지 않음', 개선점_MBOM.md E)
+- 글자 열에 `=`로 숫자를 주면(`Part Number=125`, `Op No=10`) 글자 그대로 비교해 0건이었는데 말이 없었음 -> 숫자로 같은 값이 다르게 적힌 칸 수와
+  적힌 값(`000125`, `0010`)을 `warnings`로, 적힌 그대로 쓰는 예. 비교 방식은 그대로 (값을 바꾸지 않음).
+- 날짜 열 조건 값이 연-월-일이 아니면(`2026-13`, `2026-12`, 없는 날 `2026-02-30`) 글자 비교로 그럴듯한 결과를 냈음 -> `STOP_RETRY` (연-월-일로).
+- `join`(양쪽에 있는 행만): 짝이 없어 빠진 행 수를 알리지 않았음 (MBOM과 Routing: 110행 중 104행) -> 양쪽 빠진 행 수 `warnings`.
+- `join`의 오른쪽 키 열 `[후보]`: 철자 순이라 맞는 열(`Item`)이 둘째였음 -> 왼쪽 키와 겹치는 값이 많은 열부터, 후보마다 겹치는 값 수.
+- `only`: 키가 행마다 다르지 않으면(MBOM `Part Number` 34행 중복) 지운 행의 키가 다른 행에 남아 있을 때 결과에서 빠지는데 알리지 않았음 -> `warnings`.
+- `diff`: 키가 같은 행이 있어 멈출 때 어느 키·행인지 몰랐음 -> 예 3개(`000125 (엑셀 행 16, 30, 35, 38, 58 등)`). BOM 용어(상위 품번) 안내는 뺌 (업무 판단은 스킬).
+- 표 위의 다른 내용 경고가 한 칸짜리 제목 줄을 세지 않아 "3행(엑셀 행 2~4)"이었음 -> "4행(엑셀 행 1~4)".
+- `export` xlsx: 날짜만 있는 열이 엑셀에서 `2026-01-01 00:00:00`으로 보였음 -> 날짜 형식 `yyyy-mm-dd` (시각이 있으면 시각까지).
+- 시험: `test_mbom_title_rows_counted_and_number_written_differently_is_warned`, `test_mbom_date_condition_must_be_a_full_date`,
+  `test_mbom_join_says_unmatched_rows_and_ranks_key_candidates_by_shared_values`, `test_mbom_only_and_diff_with_repeated_keys`,
+  `test_mbom_export_keeps_dates_as_dates`.
+
 ## [0.2.0] - 2026-11-13
 
 ### 시험 자료

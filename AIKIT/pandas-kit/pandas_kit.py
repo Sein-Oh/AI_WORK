@@ -46,6 +46,7 @@ _LETTERS = re.compile(r"^[A-Z]{1,3}$")
 _NAME = re.compile(r"^[^\W\d][\w]*$")
 _NUM_TEXT = re.compile(r"^-?\d+(\.\d+)?$")
 _LEADING_ZERO = re.compile(r"^-?0\d")
+_DATE_TEXT = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}( \d{1,2}:\d{2}(:\d{2})?)?$")      # 날짜 열의 조건 값: 연-월-일 (시각은 붙여도 됨)
 
 
 def pd_mod() -> Any:
@@ -558,8 +559,8 @@ def _pick_block(rows: List[Tuple[int, List[Any]]], filled_n: List[int], explicit
         if score > best_score:
             best, best_score = (part, head), score
     part, head = best
-    above = [rows[i][0] for p in parts if p[-1] < part[0] for i in p if filled_n[i] >= 2]
-    above += [rows[i][0] for i in part if i < head and filled_n[i] >= 2]
+    above = [rows[i][0] for p in parts if p[-1] < part[0] for i in p if filled_n[i] >= 1]     # 한 칸짜리 제목 줄도 셈
+    above += [rows[i][0] for i in part if i < head and filled_n[i] >= 1]
     return head, above
 
 
@@ -750,16 +751,33 @@ def _cond_mask(series: Any, op: str, val: str, notes: Optional[List[str]] = None
         res = {">": s > num, "<": s < num, ">=": s >= num, "<=": s <= num}[op]
         return res.fillna(False).astype(bool)
     if pd.api.types.is_datetime64_any_dtype(series):
+        if not _DATE_TEXT.match(val.strip()):
+            raise rt.InputError(f"'{col}' 열은 날짜 열이라 '{val}'을(를) 날짜로 읽을 수 없습니다. 날짜는 2026-12-31처럼 연-월-일로 쓰세요 "
+                                "(글자로 비교하면 결과가 틀림).")
         try:
             when = pd.Timestamp(val)
         except (ValueError, TypeError):
-            when = None
+            raise rt.InputError(f"'{col}' 열의 조건 값 '{val}'은(는) 없는 날짜입니다. 2026-12-31처럼 연-월-일로 쓰세요.") from None
         if when is not None:
             res = {"=": series == when, "!=": series != when, ">": series > when, "<": series < when,
                    ">=": series >= when, "<=": series <= when}[op]
             return res.fillna(op == "!=").astype(bool)
     res = {"=": text == val, "!=": text != val, ">": text > val, "<": text < val, ">=": text >= val, "<=": text <= val}[op]
     return res.fillna(op == "!=").astype(bool)
+
+
+def _note_same_number(series: Any, mask: Any, col: str, val: str, notes: List[str]) -> None:
+    """'열=125' on a text column compares the text as it is: cells written differently with the same number ('000125', '125.0')
+    do not match. Said in warnings with the values there are (MBOM 2026-11-14: 'Part Number=125' was 0 rows without a word)."""
+    pd = pd_mod()
+    if pd.api.types.is_numeric_dtype(series) or not _NUM_TEXT.match(val.replace(",", "")):
+        return
+    text = series.astype("string").str.strip()
+    same = (pd.to_numeric(text, errors="coerce") == float(val.replace(",", ""))).fillna(False).astype(bool) & ~mask
+    if same.any():
+        found = sorted(set(text[same].dropna().tolist()))[:5]
+        notes.append(f"'{col}' 열은 글자 열이라 '{val}'을(를) 글자 그대로 비교했습니다. 숫자로 같은 값이 다르게 적힌 칸 {int(same.sum())}개는 "
+                     f"고르지 않았습니다 (적힌 값: {', '.join(found)}). 그 칸도 고르려면 조건에 적힌 값 그대로 쓰세요 (예: {col}={found[0]}).")
 
 
 def apply_where(df: Any, meta: Dict[str, Any], text: str) -> Tuple[Any, List[str]]:
@@ -774,6 +792,8 @@ def apply_where(df: Any, meta: Dict[str, Any], text: str) -> Tuple[Any, List[str
         for col, op, val in alts:
             c = resolve_column(col, df, meta, "--where")
             m = _cond_mask(df[c], op, val, notes, c)
+            if op == "=":
+                _note_same_number(df[c], m, c, val, notes)
             part = m if part is None else ((part & m) if none_of else (part | m))
         mask = part if mask is None else (mask & part)
     return df[mask.values].reset_index(drop=True), notes
@@ -847,10 +867,14 @@ def _keys(text: str, left: Tuple[Any, Dict], right: Tuple[Any, Dict]) -> Tuple[L
             rk = _key_col(rname, right, "--on")
         except rt.InputError:
             rcols = data_cols(right[0])
+            # 값이 많이 겹치는 열부터 (이름이 전혀 다른 열 Item도): 철자보다 값이 짝을 잘 말해 줌 (MBOM 2026-11-14: Item이 둘째였음)
+            lvals = set(_key_frame(left[0], [lk])["k0"].tolist()) - {""}
+            shared = {c: len(lvals & set(_key_frame(right[0], [c])["k0"].tolist())) for c in rcols}
             close = difflib.get_close_matches(rname, rcols, n=3, cutoff=0.3)
-            close = (close + [c for c in rcols if c not in close])[:10]           # 이름이 전혀 다른 열(Item)도 후보에
+            close = sorted(rcols, key=lambda c: (-shared[c], close.index(c) if c in close else 99, rcols.index(c)))[:10]
             fixed = [",".join(items[:i] + [f"{lname}={c}"] + items[i + 1:]) for c in close]
-            raise rt.ask(close, [argv_setting("--on", f) for f in fixed],
+            labels = [f"{c} (겹치는 값 {shared[c]}개)" for c in close]
+            raise rt.ask(labels, [argv_setting("--on", f) for f in fixed],
                          f"--on의 '{rname}' 열이 오른쪽 표에 없어 짝지을 오른쪽 열 (이름이 다르면 \"왼쪽 열=오른쪽 열\")") from None
         lkeys.append(lk)
         rkeys.append(rk)
@@ -890,6 +914,13 @@ def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     out = ldf2.merge(rdf2, on=on, how="inner").drop(columns=on).reset_index(drop=True)
     dup = int(rk.duplicated().sum())
     warnings = [f"{args['right_name']}에 같은 키가 여러 번 나오는 행이 {dup}개 있어 결과 행이 늘었습니다."] if dup else []
+    # 짝이 없어 빠진 행 (양쪽에 있는 행만 남기므로): 몇 행이 빠졌는지 알림 (MBOM 2026-11-14: 110행 중 96행이 말없이 빠짐)
+    lset, rset = set(map(tuple, lk.itertuples(index=False))), set(map(tuple, rk.itertuples(index=False)))
+    lmiss = sum(1 for t in lk.itertuples(index=False) if tuple(t) not in rset)
+    rmiss = sum(1 for t in rk.itertuples(index=False) if tuple(t) not in lset)
+    if lmiss or rmiss:
+        warnings.append(f"짝이 없어 빠진 행: {args['left_name']} {lmiss}행(전체 {len(lk)}행), {args['right_name']} {rmiss}행(전체 {len(rk)}행). "
+                        f"한쪽에만 있는 행은 only로 볼 수 있습니다.")
     letters = {**lmeta.get("letters", {}), **{rename.get(c, c): v for c, v in rmeta.get("letters", {}).items() if c not in keys}}
     meta = {"letters": letters, "rows": {**lrows, **rrows}, "kinds": {}}
     return out, meta, {"warnings": warnings}
@@ -898,9 +929,16 @@ def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
 def op_only(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
     (ldf, lmeta), (rdf, _rmeta) = inputs["left"], inputs["right"]
     lkeys, rkeys = _keys(args["on"], inputs["left"], inputs["right"])
-    rset = set(map(tuple, _key_frame(rdf, rkeys).itertuples(index=False)))
-    mask = [tuple(t) not in rset for t in _key_frame(ldf, lkeys).itertuples(index=False)]
-    return ldf[mask].reset_index(drop=True), dict(lmeta), {"warnings": []}
+    lk, rk = _key_frame(ldf, lkeys), _key_frame(rdf, rkeys)
+    rset = set(map(tuple, rk.itertuples(index=False)))
+    mask = [tuple(t) not in rset for t in lk.itertuples(index=False)]
+    warnings = []
+    ldup, rdup = int(lk.duplicated().sum()), int(rk.duplicated().sum())
+    if ldup or rdup:     # 키가 행마다 다르지 않으면, 지운 한 행의 키가 다른 행에 남아 있을 때 '한쪽에만 있는 행'으로 나오지 않음
+        warnings.append(f"--on({', '.join(_key_label(k) for k in lkeys)})이 같은 행이 {args['left_name']}에 {ldup}개, {args['right_name']}에 {rdup}개 "
+                        "있습니다. 같은 키가 다른 행에 남아 있으면 그 행은 '한쪽에만 있는 행'으로 나오지 않습니다. "
+                        "행마다 다른 키가 되게 열을 더 넣으세요.")
+    return ldf[mask].reset_index(drop=True), dict(lmeta), {"warnings": warnings}
 
 
 def op_stack(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
@@ -934,6 +972,17 @@ def _same(a: Any, b: Any) -> bool:
     return str(cell_json(a)) == str(cell_json(b))
 
 
+def _dup_examples(df: Any, kf: Any, n: int = 3) -> str:
+    """'000125 (엑셀 행 23, 45)': up to n repeated keys with their source rows, so the user sees which rows collide."""
+    rows = df[ROW].tolist() if ROW in df.columns else list(range(1, len(df) + 1))
+    seen: Dict[tuple, List[Any]] = {}
+    for t, r in zip(kf.itertuples(index=False), rows):
+        seen.setdefault(tuple(t), []).append(r)
+    out = [f"{'/'.join(k)} (엑셀 행 {', '.join(str(x) for x in v[:5])}{' 등' if len(v) > 5 else ''})"
+           for k, v in seen.items() if len(v) > 1][:n]
+    return "; ".join(out)
+
+
 def op_diff(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
     """One row per change: 추가 (only in new), 삭제 (only in old), 바뀜 (one row per changed cell)."""
     pd = pd_mod()
@@ -941,10 +990,11 @@ def op_diff(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     okeys, nkeys = _keys(args["on"], inputs["old"], inputs["new"])
     keys = [_key_label(k) for k in okeys]
     for tname, df, ks in ((args["old_name"], odf, okeys), (args["new_name"], ndf, nkeys)):
-        dup = int(_key_frame(df, ks).duplicated().sum())
+        kf = _key_frame(df, ks)
+        dup = int(kf.duplicated().sum())
         if dup:
-            raise rt.InputError(f"{tname}에 --on({', '.join(_key_label(k) for k in ks)})이 같은 행이 {dup}개 있어 짝을 정할 수 없습니다. "
-                                "열을 더 넣어 행마다 다르게 해 주세요 (예: 상위 품번과 품번).")
+            raise rt.InputError(f"{tname}에 --on({', '.join(_key_label(k) for k in ks)})이 같은 행이 {dup}개 있어 짝을 정할 수 없습니다 "
+                                f"(예: {_dup_examples(df, kf)}). 열을 더 넣어 행마다 다르게 해 주세요.")
     on, nn = f"{args['old_name']} 행", f"{args['new_name']} 행"
     orow = odf[ROW] if ROW in odf.columns else pd.Series([None] * len(odf))
     nrow = ndf[ROW] if ROW in ndf.columns else pd.Series([None] * len(ndf))
@@ -1371,7 +1421,19 @@ def cmd_export(a: Any) -> Dict[str, Any]:
     if path.lower().endswith(".csv"):
         writer = lambda p: out.to_csv(p, index=False, encoding="utf-8-sig")
     else:
-        writer = lambda p: out.to_excel(p, index=False, sheet_name=name[:31])
+        # 날짜만 있는 열(시각이 모두 0시)은 엑셀에서도 날짜만 보이게 (MBOM 2026-11-14: Eff From이 '2026-01-01 00:00:00'로 보임)
+        dates = [c for c in out.columns if pd.api.types.is_datetime64_any_dtype(out[c])]
+        date_only = all(((out[c].dropna().dt.normalize() == out[c].dropna())).all() for c in dates)
+        fmt = "yyyy-mm-dd" if date_only else "yyyy-mm-dd hh:mm:ss"
+
+        def writer(p: str) -> None:
+            with pd.ExcelWriter(p, engine="openpyxl") as xw:
+                out.to_excel(xw, index=False, sheet_name=name[:31])
+                ws = xw.sheets[name[:31]]
+                for j, c in enumerate(out.columns, 1):
+                    if c in dates:
+                        for (cell,) in ws.iter_rows(min_row=2, max_row=len(out) + 1, min_col=j, max_col=j):
+                            cell.number_format = fmt
     path = rt.save_with_lock_fallback(path, writer, "내보낼 파일")
     try:
         if path.lower().endswith(".csv"):
