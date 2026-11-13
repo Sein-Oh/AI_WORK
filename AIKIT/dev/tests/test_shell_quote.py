@@ -2,7 +2,7 @@
 """도구가 내는 명령의 인자 따옴표(quote_arg, office-cli 1.4.76 / ml-kit 2.9.68)를 셸 시뮬레이터(shell_sim.py)로 확인한다.
 
 까다로운 값마다 quote_arg 결과로 `python <스크립트> <값>`을 만들고, 그 셸(Windows PowerShell 5.1, PowerShell 7.3+,
-cmd, bash)이 실행할 때 파이썬이 받는 argv가 원래 값과 같은지 본다. 두 도구의 quote_arg는 복사본이라 결과도 같아야 한다.
+cmd, bash)이 실행할 때 파이썬이 받는 argv가 원래 값과 같은지 본다. 세 도구(office-cli, ml-kit, pandas-kit)의 quote_arg는 복사본이라 결과도 같아야 한다.
 """
 import importlib.util
 import os
@@ -32,7 +32,11 @@ try:
     ML = _load("ml_runtime_for_quote", os.path.join(REPO, "ml-kit", "_ml_runtime.py"))
 except ImportError:                    # ml-kit 라이브러리가 없는 PC: office-cli만 확인
     ML = None
-TOOLS = [OFFICE] + ([ML] if ML else [])
+try:
+    PD = _load("pd_runtime_for_quote", os.path.join(REPO, "pandas-kit", "_pd_runtime.py"))
+except ImportError:
+    PD = None
+TOOLS = [OFFICE] + ([ML] if ML else []) + ([PD] if PD else [])
 
 SCRIPT = r"C:\AIKIT\office-cli\excel.py"
 VALUES = [
