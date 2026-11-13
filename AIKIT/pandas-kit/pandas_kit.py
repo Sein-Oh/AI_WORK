@@ -904,7 +904,14 @@ def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     lk, rk = _key_frame(ldf, lkeys), _key_frame(rdf, rkeys)          # before the row columns are renamed
     keys = [k for k in rkeys if k != ROW]
     taken: set = set()
-    ldf, lrows = _side_rows(ldf, lmeta, args["left_name"], taken)
+    # 왼쪽 키가 엑셀 행 하나면(스킬이 계산한 열을 원래 표에 붙이기) 결과는 원래 표 그대로라 엑셀 행을 그대로 둔다
+    # (MBOM 2026-11-14: 'a 행'으로 바뀌어 그 표로 diff하면 엑셀 행과 칠하기 명령이 말없이 빠졌음)
+    keep = lkeys == [ROW]
+    if keep:
+        taken.add(ROW)
+        lrows = {ROW: lmeta.get("rows", {}).get(ROW, {})}
+    else:
+        ldf, lrows = _side_rows(ldf, lmeta, args["left_name"], taken)
     rdf, rrows = _side_rows(rdf, rmeta, args["right_name"], taken)
     rename = {c: f"{c}_{args['right_name']}" for c in data_cols(rdf) if c in data_cols(ldf) and c not in keys}
     rdf = rdf.rename(columns=rename)
@@ -1310,7 +1317,7 @@ def _paint_files(work: Work, name: str, df: Any, meta: Dict[str, Any]) -> Tuple[
         if not rows_meta.get("path") or not letters:
             continue
         span = sorted((v["letter"] for v in letters.values()), key=col_index)
-        cells = []
+        cells, nrow, ncell = [], 0, 0
         for _, r in df[df["구분"].isin(kinds)].iterrows():
             xr = r[col]
             if xr is None or (not isinstance(xr, int) and pd_mod().isna(xr)):
@@ -1319,8 +1326,10 @@ def _paint_files(work: Work, name: str, df: Any, meta: Dict[str, Any]) -> Tuple[
                 lt = letters.get(r["열"])
                 if lt:
                     cells.append(f"{lt['letter']}{int(xr)}")
+                    ncell += 1
             else:
                 cells.append(f"{span[0]}{int(xr)}:{span[-1]}{int(xr)}")
+                nrow += 1
         if not cells:
             continue
         base = os.path.splitext(os.path.basename(rows_meta["path"]))[0]
@@ -1331,7 +1340,11 @@ def _paint_files(work: Work, name: str, df: Any, meta: Dict[str, Any]) -> Tuple[
         files.append(path)
         cmds.append(rt.next_command(["style", "--target", rows_meta["path"], "--sheet", rows_meta.get("sheet") or "",
                                      "--file", path, "--bg", "yellow"],
-                                    f"원본 {os.path.basename(rows_meta['path'])}의 바뀐 칸 {len(cells)}곳을 노랗게 칠하기 (사용자가 원할 때만, office-cli)",
+                                    # 행과 칸을 나눠 셈 (MBOM 2026-11-14: 삭제 3행 + 바뀐 칸 8곳을 '바뀐 칸 11곳'이라 적었음)
+                                    f"원본 {os.path.basename(rows_meta['path'])}의 "
+                                    + ", ".join(t for t in (f"{'삭제' if side == 'old' else '추가'}된 {nrow}행" if nrow else "",
+                                                            f"바뀐 칸 {ncell}곳" if ncell else "") if t)
+                                    + "을 노랗게 칠하기 (사용자가 원할 때만, office-cli)",
                                     script=OFFICE_EXCEL))
     return files, cmds
 

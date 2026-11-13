@@ -4,7 +4,7 @@ description: 엑셀·CSV 표를 단계별로 고르고 비교한다 (pandas_kit.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.2.1"
+  version: "0.2.2"
   platform: windows
 ---
 
