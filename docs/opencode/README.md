@@ -11,7 +11,7 @@
 
 사내 LLM 설정과 셸·권한·폐쇄망 잠금은 모든 프로젝트에 적용되도록 **사용자 전역 설정** `%USERPROFILE%\.config\opencode`에 둡니다.
 `C:\AIKIT\setup.bat`이 `C:\AIKIT\opencode.json`(셸·권한·폐쇄망 잠금)을 전역 `opencode.json`에 합칩니다 (원래 파일 보관, 관리자 권한 필요 없음.
-시스템 PATH 등록에만 관리자 권한). 사내 LLM 주소가 든 `opencode.jsonc`는 사용자가 그 전역 폴더에 넣습니다.
+시스템 PATH 등록에만 관리자 권한). 사내 LLM 주소가 든 `opencode.jsonc`는 사용자가 그 전역 폴더에 넣습니다 (`C:\AIKIT\opencode.jsonc`에 두면 setup이 전역 폴더로 옮김).
 
 ```text
 C:\AIKIT\                  OpenCode 프로젝트
@@ -42,7 +42,7 @@ C:\AIKIT\                  OpenCode 프로젝트
   처음 한 번 `C:\AIKIT\setup.bat`을 실행하고, 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다
   (`opencode.json`을 바꾼 반입이면 setup을 다시 실행해 전역 설정에 합침. setup은 여러 번 실행해도 됩니다).
 - 예전 구성에서 옮길 때 (2026-11-13 이전 배포): setup이 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`를 지웁니다. `C:\AIKIT\opencode.jsonc`는
-  손으로 `%USERPROFILE%\.config\opencode\opencode.jsonc`로 옮기고(setup이 남아 있으면 알림), `C:\AIKIT\skills`의 사용자 스킬은
+  setup이 `%USERPROFILE%\.config\opencode\opencode.jsonc`로 옮깁니다 (원래 파일은 보관 폴더로. 전역에 내용이 다른 파일이 이미 있으면 둘 다 두고 알림). `C:\AIKIT\skills`의 사용자 스킬은
   `C:\AIKIT\.opencode\skills`로 옮긴 뒤 `C:\AIKIT\skills` 폴더를 지웁니다.
 - 바뀐 설정이 안 보이면: OpenCode 백그라운드 서비스는 처음 뜰 때의 환경 변수를 계속 씁니다. `C:\AIKIT\web.bat stop` 뒤 다시 실행하고,
   `C:\AIKIT\opencode.exe debug paths`의 `config`가 전역 설정 폴더(`%USERPROFILE%\.config\opencode`)인지 봅니다 (setup도 끝에 확인).

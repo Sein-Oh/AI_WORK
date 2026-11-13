@@ -151,7 +151,7 @@ def test_apply_removes_old_env_merges_global_config_then_check_passes(monkeypatc
 
 def test_other_env_value_is_kept_and_unreadable_global_config_is_not_touched(monkeypatch, tmp_path, capsys):
     """사용자가 다른 폴더로 정한 OPENCODE_CONFIG_DIR는 그대로 두고 알림. 못 읽는 전역 opencode.json은 바꾸지 않고 FAIL.
-    C:\\AIKIT\\opencode.jsonc는 프로젝트에서만 읽힌다고 알림. --check는 지울 환경 변수를 '다름'으로."""
+    --check는 지울 환경 변수를 '다름'으로."""
     reg = FakeReg(r"C:\Windows", user={su.CONFIG_ENV: r"D:\내 설정"})
     cli = _iso(monkeypatch, tmp_path, reg)
     gdir = tmp_path / "home_config" / "opencode"
@@ -162,12 +162,38 @@ def test_other_env_value_is_kept_and_unreadable_global_config_is_not_touched(mon
     out = capsys.readouterr().out
     assert reg.user[su.CONFIG_ENV] == r"D:\내 설정" and "그대로 두지만" in out
     assert "읽지 못해 바꾸지 않았습니다" in out and (gdir / "opencode.json").read_text(encoding="utf-8") == "{ 고장"
-    assert "프로젝트에서만 읽힙니다" in out
     reg.user[su.CONFIG_ENV] = str(cli)
     (gdir / "opencode.json").unlink()
     assert su.main(["--no-path", "--check"]) == 1
     out = capsys.readouterr().out
     assert "예전 설치 값, 설치하면 지움" in out and "설치하면 합침" in out and reg.user[su.CONFIG_ENV] == str(cli)
+
+
+def test_llm_config_moves_to_global_folder(monkeypatch, tmp_path, capsys):
+    """사용자 요청 2026-11-13: C:\\AIKIT\\opencode.jsonc(예전 자리)를 setup이 전역 설정 폴더로 옮김 (원래 파일은 보관 폴더로).
+    --check는 옮기지 않고 '다름'. 전역에 같은 내용이 있으면 원래 파일만 보관, 다른 내용이면 둘 다 그대로 두고 WARN."""
+    cli = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
+    gdir = tmp_path / "home_config" / "opencode"
+    jsonc = '// 사내 LLM\n{"model": "corp/gemma", "provider": {"corp": {}}}\n'
+    (cli / "opencode.jsonc").write_text(jsonc, encoding="utf-8")
+    assert su.main(["--no-path", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "설치하면" in out and "opencode.jsonc" in out and (cli / "opencode.jsonc").is_file() and not (gdir / "opencode.jsonc").exists()
+    assert su.main(["--no-path"]) == 0
+    out = capsys.readouterr().out
+    assert "사내 LLM 설정을 옮겼습니다" in out and "opencode.jsonc가 없습니다" not in out
+    assert not (cli / "opencode.jsonc").exists() and (gdir / "opencode.jsonc").read_text(encoding="utf-8") == jsonc
+    assert _backups(cli, "opencode.jsonc")[0].read_text(encoding="utf-8") == jsonc
+    assert su.main(["--no-path", "--check"]) == 0
+    capsys.readouterr()
+    (cli / "opencode.jsonc").write_text(jsonc.replace("\n", "\r\n"), encoding="utf-8", newline="")   # 줄 끝만 다르면 같은 내용
+    assert su.main(["--no-path"]) == 0
+    assert "같은 내용이 이미 있었음" in capsys.readouterr().out and not (cli / "opencode.jsonc").exists()
+    (cli / "opencode.jsonc").write_text('{"model": "other/x"}', encoding="utf-8")
+    assert su.main(["--no-path"]) == 0
+    out = capsys.readouterr().out
+    assert "내용이 달라 옮기지 않았습니다" in out and (cli / "opencode.jsonc").is_file()
+    assert (gdir / "opencode.jsonc").read_text(encoding="utf-8") == jsonc
 
 
 def test_missing_source_is_error(monkeypatch, tmp_path, capsys):

@@ -11,7 +11,7 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
    opencode.json(셸·권한·폐쇄망 잠금). OpenCode는 C:\AIKIT을 프로젝트로 연 대화(web.bat, C:\AIKIT에서 실행한 opencode)에서만 이것을 읽습니다.
 2. OpenCode 전역 설정(%USERPROFILE%\.config\opencode): 우리 opencode.json의 셸·권한·폐쇄망 잠금을 전역 opencode.json에 합칩니다
    (모든 프로젝트에 적용, 사용자 결정 2026-11-13). 원래 파일은 data\setup_backup_<시각>에 보관하고, 쓴 뒤 다시 읽어 확인합니다.
-   사내 LLM 설정(opencode.jsonc)은 사용자가 이 전역 폴더에 둡니다. 예전 설치가 남긴 사용자 환경 변수 OPENCODE_CONFIG_DIR=C:\AIKIT는
+   사내 LLM 설정(opencode.jsonc)은 사용자가 이 전역 폴더에 둡니다 (C:\AIKIT\opencode.jsonc에 있으면 이 폴더로 옮기고 원래 파일은 보관). 예전 설치가 남긴 사용자 환경 변수 OPENCODE_CONFIG_DIR=C:\AIKIT는
    지웁니다 (남아 있으면 C:\AIKIT이 전역 설정 폴더가 되어 모든 대화에 우리 지침·스킬이 들어감).
 3. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
@@ -256,6 +256,41 @@ def step_global_config(rep, backup, check=False):
         return
     rep.line("OK", f"전역 설정에 우리 설정을 합쳤습니다 ({', '.join(changed)})  {target}"
                    + (f" (원래 파일 보관: {os.path.join(backup, 'global_opencode.json')})" if cur else ""))
+
+
+def step_move_llm_config(rep, backup, check=False):
+    """C:\\AIKIT\\opencode.jsonc(예전 자리, 이제 C:\\AIKIT 프로젝트에서만 읽힘)를 전역 설정 폴더로 옮김 (사용자 결정 2026-11-13).
+    전역에 없으면 복사 -> 같은지 다시 읽어 확인 -> 원래 파일은 보관 폴더로 옮김. 전역에 같은 내용이 있으면 원래 파일만 보관 폴더로.
+    전역에 다른 내용이 있으면 어느 쪽이 맞는지 모르니 둘 다 그대로 두고 WARN."""
+    src = os.path.join(HERE, "opencode.jsonc")
+    if not os.path.isfile(src):
+        return
+    dst = os.path.join(global_config_dir(), "opencode.jsonc")
+    data, have = _read(src), _read(dst) if os.path.isfile(dst) else None
+    if data is None:
+        rep.line("FAIL", f"{src}을 읽지 못해 옮기지 않았습니다")
+        return
+    if have is not None and have.replace(b"\r\n", b"\n") != data.replace(b"\r\n", b"\n"):
+        rep.line("WARN", f"{src}와 {dst}의 내용이 달라 옮기지 않았습니다. OpenCode는 다른 프로젝트에서 {dst}를 씁니다: "
+                         f"맞는 쪽을 {dst}에 두고 {src}는 지우세요")
+        return
+    if check:
+        rep.diff(f"{src} (사내 LLM 설정, 설치하면 {dst}로 옮김)")
+        return
+    try:
+        if have is None:
+            os.makedirs(global_config_dir(), exist_ok=True)
+            shutil.copy2(src, dst)
+            if _read(dst) != data:
+                rep.line("FAIL", f"{dst}에 복사한 내용이 원래 파일과 다릅니다. {src}는 그대로 두었습니다")
+                return
+        os.makedirs(backup, exist_ok=True)
+        shutil.move(src, os.path.join(backup, "opencode.jsonc"))
+    except OSError as e:
+        rep.line("FAIL", f"{src}를 {dst}로 옮기지 못함 ({type(e).__name__}: {e})")
+        return
+    rep.line("OK", f"사내 LLM 설정을 옮겼습니다: {src} -> {dst}" + (" (같은 내용이 이미 있었음)" if have is not None else "")
+                   + f" (원래 파일 보관: {os.path.join(backup, 'opencode.jsonc')})")
 
 
 def _norm(entry):
@@ -543,9 +578,6 @@ def step_opencode_config(rep, config_dir):
         rep.line("WARN", f"{name}을 읽지 못해 설정을 확인하지 않았습니다  {config_dir}")
     if not has_jsonc:
         rep.line("WARN", f"opencode.jsonc가 없습니다. 사내 LLM 주소가 든 opencode.jsonc를 전역 설정 폴더 {config_dir}\\에 넣고 다시 실행하세요")
-    if os.path.isfile(os.path.join(HERE, "opencode.jsonc")):
-        rep.line("WARN", f"{os.path.join(HERE, 'opencode.jsonc')}가 있습니다. 이 위치는 C:\\AIKIT 프로젝트에서만 읽힙니다: 사내 LLM 설정은 "
-                         f"{config_dir}\\opencode.jsonc로 옮기세요 (다른 프로젝트에서도 사내 LLM을 쓰게)")
     if overlap:
         rep.line("WARN", f"전역 opencode.json과 opencode.jsonc에 같은 키가 있습니다 ({', '.join(sorted(set(overlap)))}). 이 키는 opencode.json(setup이 합침)에만 두고, "
                          "opencode.jsonc에는 provider, model과 모델 목록 설정(enabled_providers 또는 disabled_providers)만 두세요")
@@ -621,6 +653,7 @@ def main(argv=None):
     print(f"[INFO] 2. OpenCode 전역 설정: {global_config_dir()}", flush=True)
     step_env(rep, backup, args.check)
     step_global_config(rep, backup, args.check)
+    step_move_llm_config(rep, backup, args.check)
     print("[INFO] 3. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)
