@@ -105,10 +105,22 @@ def test_select_file_finds_table_under_title_and_keeps_codes(env):
     cols = {c["name"]: c for c in out["columns"]}
     assert cols["Part Number"]["letter"] == "D" and cols["Part Number"]["kind"] == "글자" and cols["Qty"]["kind"] == "숫자"
     work = out["work"]
-    assert re.fullmatch(r"BOM_\d{12}", os.path.basename(work)) and os.path.dirname(work) == str(env["dir"])   # <파일 이름>_YYMMDDHHMMSS
+    assert re.fullmatch(r"BOM_\d{10}", os.path.basename(work)) and os.path.dirname(work) == str(env["dir"])   # <파일 이름>_YYMMDDHHMM
     shown = ok(env, "show")
     assert shown["rows"][0] == {"엑셀 행": 5, "Level": 1, "Parent": "TOP", "Part Number": "0102", "Qty": 2, "Maker": "A", "Desc": "볼트"}
     assert shown["truncated"] is False and shown["count"] == 4
+
+
+def test_work_folder_made_again_in_the_same_minute_gets_2(env):
+    # 사용자 결정 2026-11-13: <파일 이름>_YYMMDDHHMM, 같은 분에 또 만들면 _2, _3
+    from datetime import datetime, timedelta
+    path = make_bom(env["dir"] / "BOM.xlsx")
+    now = datetime.now()
+    taken = {f"BOM_{t:%y%m%d%H%M}" for t in (now, now + timedelta(minutes=1))}   # 분이 바뀌는 순간에도 같은 시험
+    for name in taken:
+        os.makedirs(env["dir"] / name)
+    work = os.path.basename(ok(env, "select", "--file", path)["work"])
+    assert work.endswith("_2") and work[:-2] in taken
 
 
 def test_select_csv_cp949_leading_zero_and_mixed_columns(env):

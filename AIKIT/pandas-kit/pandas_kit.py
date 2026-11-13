@@ -172,9 +172,9 @@ def set_current_work(path: Optional[str]) -> None:
 
 
 def new_work_folder(source: str) -> str:
-    """<folder of the first source>/<source name>_YYMMDDHHMMSS (사용자 결정 2026-11-13; _2, _3 ... when made again in the same second)."""
+    """<folder of the first source>/<source name>_YYMMDDHHMM (사용자 결정 2026-11-13; _2, _3 ... when made again in the same minute)."""
     base = os.path.splitext(os.path.basename(source))[0]
-    stem = os.path.join(os.path.dirname(os.path.abspath(source)), f"{base}_{datetime.now():%y%m%d%H%M%S}")
+    stem = os.path.join(os.path.dirname(os.path.abspath(source)), f"{base}_{datetime.now():%y%m%d%H%M}")
     path, n = stem, 2
     while os.path.exists(path):
         path, n = f"{stem}_{n}", n + 1

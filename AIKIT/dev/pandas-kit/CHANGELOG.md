@@ -13,7 +13,7 @@
 - 표 찾기: 빈 행으로 나뉜 내용 중 가장 큰 것을 표로 (제목 블록 `공장·Rev·작성일`을 표로 잡던 것), 표 위의 다른 내용은 `warnings`.
 - `group --by --sum`: 값별 행 수·합계·엑셀 행 목록, 단위 섞임 `warnings`. `sort --by --desc`: 정렬(같은 값은 표 순서, 빈 칸은 끝).
 - `show --start`: 21행부터 보기, 더 있으면 다음 20행 `next_commands`.
-- 작업 폴더 이름: `pandas_YYMMDDHHMM` -> `<파일 이름>_YYMMDDHHMMSS` (사용자 결정, 어느 파일의 작업인지 이름으로 보임).
+- 작업 폴더 이름: `pandas_YYMMDDHHMM` -> `<파일 이름>_YYMMDDHHMM`, 같은 분이면 `_2` (사용자 결정, 어느 파일의 작업인지 이름으로 보임).
 - `--on "왼쪽 열=오른쪽 열"`: 이름이 다른 키(`Part Number=Item`), `엑셀 행` 키로 스킬이 계산한 csv를 원래 표에 붙이기.
   머리글 `엑셀 행`처럼 도구의 행 번호 열 이름은 `엑셀 행번호`로 바꿔 읽음. 키의 정수는 종류와 상관없이 같게 봄.
 - 시험: `test_title_block_above_is_not_taken_as_the_table`, `test_join_with_different_key_names_and_back_by_excel_row`,
