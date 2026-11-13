@@ -133,7 +133,10 @@ def test_classification_report(binary_report):
 def test_report_rejects_non_version_folder(regression_report, tmp_path):
     work, _, _, _ = regression_report
     payload = run_fail("ml_report.py", "--model", str(work))
-    assert payload["agent_directive"].startswith("STOP_RETRY") and "leaderboard.json" in payload["message"]
+    # 2026-11-13: --model이 ml_predict·ml_export와 같은 해석 (데이터 폴더를 주면 그 안의 학습한 데이터 파일을 [추천])
+    assert payload["agent_directive"].startswith("STOP_RETRY") and "[추천]" in payload["message"], payload
+    script, argv = recommended_command(payload["message"])
+    assert script == "ml_report.py" and argv[0] == "--model" and argv[1].endswith(".csv"), argv
     missing = run_fail("ml_report.py", "--model", str(tmp_path / "nope"))
     assert "버전 폴더" in missing["message"]
 
