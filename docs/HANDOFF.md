@@ -25,6 +25,7 @@
 7. 결과 파일과 눈 확인 O/X를 GitHub 웹으로 `docs/test_logs/`에 올림.
 
 ## 3. 최근 실기 결과
+- 집 PC (2026-11-13 오후, 새 구조로 처음부터 다시 설치, Office 2019): setup OK 12·FAIL 0, 자동 점검 diag 17/17·beta 29/29·단순성 34/34·office 109/110 (L3b SORT ENV-SKIP), 도구 오류 로그 0건, 끝난 뒤 남은 Office 없음. Gemma 종합: 무료 Gemma가 공용 한도(429)라 대부분 Flint 40B·Nemotron 30B로 돌아 5/21 (명령을 안 내는 실패가 많아 비교용 아님). 유료 Gemma 4 26B(OpenRouter, 출력 한도 8192)로 회사 PC 실패분: O7 통과(고친 안내 효과), O1은 회사와 같이 묻지 않고 메모를 닮 -> 사용자 결정으로 '넣으라고 했으면 바로 넣고 알림'(O1), 대조만은 O9로 나눔, 답 이모지는 경고만. 고친 뒤 재채점 A1·O9·O1 통과, R1은 preview 문구를 빠뜨림(실행마다 다름).
 - 회사 PC (2026-11-13, office-cli 1.6.7, Office 2021): 자동 점검 모두 통과, office PASS 121·FAIL 0 (SKIP 2: G3·M3 `--self-email` 없음), P 그룹(P10 연락처 포함) 통과, 끝난 뒤 남은 Excel 없음. 눈 확인 2·9·10번 통과 (2번: 성능예측표가 다른 사람 PC에서 열리고 다시 계산됨. 10번 뒤 메일 첨부 기본 위치를 `C:\AIKIT\data`로 바꿈).
   PR #88·#89 반입 뒤 확인: setup `enabled_providers` 메시지 없음, 메일 첨부가 `C:\AIKIT\data\메일 첨부`에 저장, Web UI 창을 닫으면 백그라운드 서비스가 멈춤(화면·트레이에 남는 창 없음).
 - 집 PC (2026-11-12 밤, office-cli 1.6.7, Office 2019): P 그룹 첫 실행 PASS 8·FAIL 1(P5 엑셀 링크 보이는 글이 주소로 들어감: `TextToDisplay=` 이름 인자를 Excel이 무시, 순서 인자로 고치고 글도 다시 읽어 확인)·ENV-SKIP 1(P10 Outlook 안 뜸). 고친 뒤 자동 점검 diag 17/17, beta 29/29, office 109/110(L3b SORT ENV-SKIP, P5 통과), UNVERIFIED 1건은 L3 의도한 결과. P10은 회사 PC `--outlook`에서.
