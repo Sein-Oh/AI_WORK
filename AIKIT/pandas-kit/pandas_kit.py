@@ -982,7 +982,7 @@ def cmd_join(a: Any) -> Dict[str, Any]:
     args = {"on": a.on, "left_name": ln, "right_name": rn}
     df, meta, info = op_join(args, {"left": work.load(ls), "right": work.load(rs)}, "")
     name = check_name(a.name, work)
-    lineage = f"{name} = {ln}와 {rn}를 {a.on}로 짝 맞춤 (양쪽에 있는 행만)"
+    lineage = f"{name} = {ln}, {rn}을(를) {a.on} 기준으로 짝 맞춤 (양쪽에 있는 행만)"
     _sid, ok_ = work.add("join", name, args, {"left": ls, "right": rs}, df, meta, lineage)
     return table_answer("join", work, name, df, meta, lineage, ok_, info["warnings"])
 
@@ -994,7 +994,7 @@ def cmd_only(a: Any) -> Dict[str, Any]:
     args = {"on": a.on, "left_name": ln, "right_name": rn}
     df, meta, info = op_only(args, {"left": work.load(ls), "right": work.load(rs)}, "")
     name = check_name(a.name, work)
-    lineage = f"{name} = {ln}에만 있는 행 ({rn}와 {a.on} 비교)"
+    lineage = f"{name} = {ln}에만 있는 행 ({a.on} 기준으로 {rn}과(와) 비교)"
     _sid, ok_ = work.add("only", name, args, {"left": ls, "right": rs}, df, meta, lineage)
     return table_answer("only", work, name, df, meta, lineage, ok_, info["warnings"])
 

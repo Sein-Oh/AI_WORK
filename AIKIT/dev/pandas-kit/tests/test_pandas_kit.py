@@ -4,6 +4,7 @@ recovered, [추천]/[후보], 오류 로그). 도구는 서브프로세스로 �
 import json
 import os
 import pickle
+import shlex
 import sys
 import time
 
@@ -198,7 +199,8 @@ def test_diff_adds_deletes_changed_cells_with_rows_and_paint_files(env):
     assert old_cells == ["B6:G6", "F7", "E8"] and new_cells == ["B8:G8", "F6", "E7"]
     cmd = command_args(out["confirm_commands"][0]["command"])
     assert cmd[:3] == ["style", "--target", old] and "--file" in cmd and "next_commands" in out
-    assert out["confirm_commands"][0]["command"].split()[1].endswith(os.path.join("office-cli", "excel.py"))
+    # 집 PC 2026-11-13: split()은 따옴표를 남겨 Windows 경로('C:\...\excel.py')에서 실패함 -> 따옴표를 푸는 shlex (env는 bash 따옴표)
+    assert shlex.split(out["confirm_commands"][0]["command"])[1].endswith(os.path.join("office-cli", "excel.py"))
 
 
 def test_diff_refuses_duplicate_keys(env):
@@ -215,10 +217,13 @@ def test_join_only_stack_keep_both_row_numbers(env):
     ok(env, "select", "--file", new, "--name", "df2")
     j = ok(env, "join", "--left", "df1", "--right", "df2", "--on", "Parent,Part Number")
     assert j["count"] == 3 and j["table"] == "df3"
+    # 집 PC 2026-11-13: "df1와 df2를"처럼 받침에 맞지 않는 조사가 preview에 나왔음
+    assert "df1, df2을(를) Parent,Part Number 기준으로 짝 맞춤" in j["preview"] and "df1와" not in j["preview"]
     row = ok(env, "show")["rows"][0]
     assert row["df1 행"] == 5 and row["df2 행"] == 5 and "Qty_df2" in row
     o = ok(env, "only", "--left", "df2", "--right", "df1", "--on", "Parent,Part Number", "--name", "새것")
     assert o["count"] == 1 and ok(env, "show", "--from", "새것")["rows"][0]["Part Number"] == "0300"
+    assert "(Parent,Part Number 기준으로 df1과(와) 비교)" in o["preview"]
     s = ok(env, "stack", "--tables", "df1,df2")
     shown = ok(env, "show", "--from", s["table"])
     assert s["count"] == 8 and shown["rows"][0]["표"] == "df1" and shown["rows"][-1]["표"] == "df2"

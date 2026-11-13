@@ -2,6 +2,12 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.1.1] - 2026-11-13
+
+### 수정
+- 집 PC 실기(2026-11-13): `join`·`only`의 preview·계보에 받침과 맞지 않는 조사("df1와 df2를")가 나옴 -> "df1, df2을(를) <키> 기준으로 짝 맞춤", "(<키> 기준으로 df1과(와) 비교)". 시험 `test_join_only_stack_keep_both_row_numbers`.
+- 시험: `test_diff_adds_deletes_changed_cells_with_rows_and_paint_files`가 명령을 `split()`으로 나눠 Windows 경로의 따옴표가 남아 실패 -> `shlex.split`.
+
 ## [0.1.0] - 2026-11-13
 
 ### 구조
