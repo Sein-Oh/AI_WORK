@@ -20,12 +20,13 @@ import os
 import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
+from _ml_runtime import (
+    add_layout_options_ignored, note_layout_ignored,  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library, MissingLibraryError,
     setup_console, run_cli, JsonArgumentParser, InputError,
     sanitize_filename, load_json_file, save_with_lock_fallback, mark_committed, warn_long_path, avoid_overwrite,
     strip_unit, note_recovered, read_text_file, resolve_column_names, model_dir_from_data, final_version,
-    data_folder_of, resolve_save,
+    data_folder_of, resolve_save, DATA_EXTS,
     command_text, quote_arg, name_list, version_hint, compile_formula,
 )
 import _ml_runtime  # noqa: E402  (RUN_COMMITTED, WATCHDOG_HOLD: read at the time, never a stale list)
@@ -1639,14 +1640,10 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
     target_filter = None
     if args.targets and args.targets.strip().lower() != "all":
         target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
-    history = None
-    if args.model:
-        vdir = args.model
-    else:
-        if not os.path.isfile(os.path.abspath(args.file)):
-            raise FileNotFoundError(f"입력 파일이 존재하지 않습니다: {os.path.abspath(args.file)}")
-        vdir = model_dir_from_data(args.file, "--file")
-        history = final_version(os.path.dirname(vdir))
+    ap = os.path.abspath(str(args.model).strip().strip('"'))
+    from_data = (os.path.isfile(ap) and os.path.splitext(ap)[1].lower() in DATA_EXTS) or ap.rstrip("\\/").endswith("_ml_data")
+    vdir = model_dir_from_data(args.model)        # 데이터 파일이면 최종 버전, 버전 폴더면 그대로 (ml_predict·ml_export와 같음)
+    history = final_version(os.path.dirname(vdir)) if from_data else None
     ctx = load_version(vdir, target_filter)
     out_path = report_save_path(args.save, data_folder_of(vdir))
     task = ctx["record"]["task"]
@@ -1673,9 +1670,10 @@ def execute_report(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def main():
-    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (--file: 최종 버전, 곧 마지막 학습으로)")
-    parser.add_argument("--model",
-                        help="보고서를 만들 학습 버전 폴더 (학습 결과 JSON의 version_dir, 예: data_ml_data\\v3)")
+    parser = JsonArgumentParser(description="ML 결과 보고서(Word) 만들기 (--model <데이터파일>: 최종 버전, 곧 마지막 학습으로)")
+    parser.add_argument("--model", required=True,
+                        help="학습한 데이터 파일(도구가 최종 버전, 곧 마지막 학습을 씀) 또는 버전 폴더 (학습 결과 JSON의 version_dir, "
+                             "예: 공정_ml_data\\v3). ml_predict.py·ml_export.py의 --model과 같음")
     parser.add_argument("--targets", help="문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 all = 전체)")
     parser.add_argument("--save", help="저장할 .docx 경로 (상대 경로와 이름만은 원본 데이터 파일 옆, 생략 시 <데이터>_ml_data 폴더에 "
                                        "ML결과보고서_<데이터>_<버전>.docx)")
@@ -1683,12 +1681,10 @@ def main():
                         help="같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
     parser.add_argument("--slots", help="소견 덮어쓰기 JSON 파일 또는 문자열: summary, data, performance, features, lineage, "
                                         "correlation, operation, targets.{타겟}.{performance|features}")
-    parser.add_argument("--file", help="학습한 데이터 파일. 최종 버전(마지막 학습)으로 보고서 작성")
     parser.add_argument("--title", help="함께 만드는 성능예측표(엑셀)의 제목 (데이터 설명을 짧게 정리한 글, 40자 이내)")
+    add_layout_options_ignored(parser)
     args = parser.parse_args()
-    if not args.model and not args.file:
-        parser.error("--file <데이터파일> 또는 --model <version_dir> 중 하나를 지정해야 합니다.")
-    run_cli(lambda: execute_report(args), hint="확인할 것: 버전 폴더 경로 (학습 결과의 version_dir).")
+    run_cli(lambda: note_layout_ignored(execute_report(args), args), hint="확인할 것: --model의 데이터 파일 또는 버전 폴더 경로.")
 
 
 if __name__ == "__main__":

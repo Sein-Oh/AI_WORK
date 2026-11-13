@@ -14,6 +14,17 @@
 
 ## [2.9.92] - 2026-11-12
 
+### 지침·스킬 전체 검토 (2026-11-13)
+- `ml_report.py`: 데이터 파일을 `--model`로 받음 (`ml_predict.py`·`ml_export.py`와 같은 한 가지, 사용법 단순성 4번). `--file`은 없앰
+  (베타, 옛 `--file`은 `[추천] --model`). 전에는 `--model "<데이터파일>"`을 주면 "학습한 버전이 없습니다"라며 다시 학습하라고 했음.
+  `ml_train.py`의 보고서 `next_commands`·`confirm_commands`, 스킬, README, 시험 함께.
+- `ml_report.py`·`ml_export.py`: `--header-row`·`--unit-row`·`--data-row`를 받고 쓰지 않음 (`warnings`). ml-kit 스킬 공통 규칙 5를 어느 스킬에서 붙여도 인자 오류가 나지 않게.
+- `ml_train.py --dtypes "설비코드=str"`(이름=값 모양): `[추천]` `:`로 고친 전체 명령 (전에는 "형식이 없습니다"만).
+- 스킬: ml-report는 `--title`을 템플릿에서 빼고 사용자가 제목을 말했을 때만 (성능예측표 제목, 생략하면 도구가 학습 때 설명으로 정함). 버전 지정은 전체 경로 예시
+  (ml-report, ml-predict). ml-train 성능 개선은 사용자가 요청했을 때만, `improve_stopped` -> `goal_met` -> `next_commands[0]` 순서, `--positive-class "<값>"`.
+  ml-dataset은 학습까지 요청했을 때 `needs_input`이면 `<타겟>`만 바꾸기, "~만"은 pick·"~빼고"는 exclude. ml-map은 조회 파일 만드는 법.
+  공통 규칙: `CONTINUE:`이면 `next_commands[0]`(전역 지침 4장과 같은 말), `--overwrite`에 "바꿔", "답할 때 경로는".
+
 ### 회사 PC Gemma·BEAM 시험(2026-11-13) 뒤 고친 것
 - 학습 JSON `excluded_reasons`(이유별 행 수)가 타겟마다 한 번씩 세어, 타겟 3개에서 뺀 29행을 87행으로 냄 (BEAM A3 답변). 이제 데이터 행 수
   (한 행은 한 번). `excluded_count`는 README대로 타겟별 합.

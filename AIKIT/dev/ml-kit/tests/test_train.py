@@ -1076,7 +1076,7 @@ def test_report_file_uses_the_last_run_of_any_task(tmp_path):
     data = make_multi(str(tmp_path / "mix.csv"))
     run_tool("ml_train.py", "--file", data, "--features", "온도,압력", "--targets", "수율")
     run_tool("ml_train.py", "--file", data, "--features", "온도,속도", "--targets", "등급", "--task", "classification")
-    rep = run_tool("ml_report.py", "--file", data)
+    rep = run_tool("ml_report.py", "--model", data)
     assert rep["version"] == "v2" and rep["task"] == "classification" and rep["targets"] == [LABEL], rep
     assert os.path.isfile(rep["report_file"]) and "report_count" not in rep
     assert any(Y1 in w and "v2" in w for w in rep["warnings"]), rep.get("warnings")
@@ -1086,7 +1086,7 @@ def test_report_file_uses_the_last_run_of_any_task(tmp_path):
 
 @pytest.mark.report
 def test_no_history_report_stops(tmp_path):
-    err = run_fail("ml_report.py", "--file", make_multi(str(tmp_path / "empty.csv")))
+    err = run_fail("ml_report.py", "--model", make_multi(str(tmp_path / "empty.csv")))
     assert err["agent_directive"].startswith("STOP_RETRY") and "학습 결과 폴더가 없습니다" in err["message"]
     assert "ml_train.py" in err["message"]
 
@@ -1229,6 +1229,9 @@ def test_resolve_dtypes_names_and_types():
     with pytest.raises(rt.InputError) as e:
         mt.resolve_dtypes("설비코드", cols)
     assert "형식이 없습니다" in str(e.value)
+    with pytest.raises(rt.InputError) as e:                    # 2026-11-13 스킬 검토: '이름=값' 모양으로 쓰면 ':'로 고친 [추천]
+        mt.resolve_dtypes("설비코드=str,일시:datetime", cols)
+    assert '[추천] --dtypes 설비코드:str,일시:datetime' in str(e.value)
     with pytest.raises(rt.ColumnNameError) as e:
         mt.resolve_dtypes("설비코두:str", cols)                    # a close spelling is asked, never auto-picked
     assert "[후보]" in str(e.value) and "설비코드(번호)" in str(e.value)
@@ -2252,7 +2255,7 @@ def test_tool_stops_offering_retraining_after_rounds_without_gain(tmp_path):
     res = run_tool("ml_train.py", "--file", data, "--features", x, "--targets", TARGET)
     assert "improve_stopped" in res and len(res["next_commands"]) == 1, res
     argv = split_command(res["next_commands"][0]["command"])
-    assert os.path.basename(argv[1]) == "ml_report.py" and argv[argv.index("--file") + 1] == data, argv
+    assert os.path.basename(argv[1]) == "ml_report.py" and argv[argv.index("--model") + 1] == data, argv
 
 
 # ---- 2.9.72: --features 생략 시 입력 자동 선택 (뺀 열과 이유), --features를 준 때의 의심 입력 경고 -------------------------------
@@ -2321,10 +2324,10 @@ def test_auto_inputs_next_commands_carry_x(auto_run):
 @needs_report
 @pytest.mark.report
 def test_auto_inputs_report_uses_the_last_run(auto_run):
-    """입력을 자동으로 고른 학습이 있는 이력에서도 ml_report --file은 다시 학습하지 않고 마지막 학습으로 보고서를 만든다."""
+    """입력을 자동으로 고른 학습이 있는 이력에서도 ml_report --model <데이터파일>은 다시 학습하지 않고 마지막 학습으로 보고서를 만든다."""
     path = os.path.join(auto_run["res"]["data_root"], "history.jsonl")
     before = mt.load_history_ledger(path)
-    rep = run_tool("ml_report.py", "--file", auto_run["f"])
+    rep = run_tool("ml_report.py", "--model", auto_run["f"])
     assert rep["version"] == before[-1]["version"] and rep["agent_directive"].startswith("VERIFIED:"), rep
     assert len(mt.load_history_ledger(path)) == len(before)
 

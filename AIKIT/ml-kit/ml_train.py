@@ -7,7 +7,7 @@ Atomic Version Packaging, and Single Source of Truth (SSOT) Ledger.
 --task regression (default) : champion by Out-of-Fold R2
 --task classification       : champion by Out-of-Fold Macro-F1 (Stratified K-Fold)
 
-The latest training version is the final version: ml_report.py --file and ml_predict.py --model <data file> use it.
+The latest training version is the final version: ml_report.py --model and ml_predict.py --model <data file> use it.
 
 Shared runtime (data loading, --eval engine, CLI protocol) is imported from _ml_runtime.py.
 
@@ -229,6 +229,10 @@ def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Option
         raw = raw.strip()
         if not raw:
             continue
+        if ":" not in raw and "=" in raw:      # '설비코드=str' (다른 옵션의 이름=값 모양): ':'로 고친 전체 명령
+            fixed = ",".join(p.strip().replace("=", ":", 1) if ":" not in p and "=" in p else p.strip()
+                             for p in str(dtypes_arg).split(",") if p.strip())
+            raise InputError(f"--dtypes는 '<열>:<형식>'으로 씁니다 ('='가 아니라 ':'). [추천] {option_retry(fixed, '--dtypes')}")
         if ":" not in raw:
             raise InputError(f"--dtypes의 '{raw}'에 형식이 없습니다. '<열>:<형식>'으로 쓰십시오 "
                              f"(형식: float, int, str, datetime. 예: --dtypes \"일시:datetime,설비코드:str\").")
@@ -1786,7 +1790,7 @@ def build_next_commands(
     if mean_score >= 0.90:  # caller passes the weakest target's score
         cmds.append({
             "purpose": REPORT_PURPOSE[task],
-            "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --file {quote_arg(raw_file)}",
+            "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --model {quote_arg(raw_file)}",
             "needs_input": False,
         })
         # 방금 학습한 버전 폴더 (그 버전의 입력 이름과 같은 --input 틀)
@@ -1821,7 +1825,7 @@ def build_next_commands(
     if not cmds:
         # 2.9.76: 다시 학습할 후보가 없으면 첫 명령이 <값> 틀이 되어 "next_commands[0]으로 개선"이 예측을 실행했음 -> 보고서를 앞에
         cmds.append({"purpose": "다시 학습할 후보(약한 입력, 교차항)가 없음: " + REPORT_PURPOSE[task],
-                     "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --file {quote_arg(raw_file)}",
+                     "command": f"python {quote_arg(os.path.join(here, 'ml_report.py'))} --model {quote_arg(raw_file)}",
                      "needs_input": False, "no_retrain": True})
     if base_features and quotable(*base_features):        # 목표 전이라도 예측은 할 수 있음 (placeholder 명령은 늘 뒤에)
         cmds.append(predict_one_command(final_dir, base_features))
@@ -3344,7 +3348,7 @@ def train_version(args: argparse.Namespace, task: str, groups: List[Dict[str, An
             improve_stopped = improve_stop_reason(scores)
             if improve_stopped:
                 next_commands = [{"purpose": REPORT_PURPOSE[task], "needs_input": False,
-                                  "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} --file {quote_arg(raw_file)}"}]
+                                  "command": f"python {quote_arg(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml_report.py'))} --model {quote_arg(raw_file)}"}]
         history_record["next_commands"] = next_commands
 
         # Commit Transaction: atomic rename .tmp_vX -> vX, then record it in the ledger.

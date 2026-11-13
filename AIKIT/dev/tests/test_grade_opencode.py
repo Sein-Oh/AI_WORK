@@ -329,7 +329,7 @@ def test_no_adhoc_py_rule():
                'cd C:\\AIKIT\\dev\\ml-kit; python tools\\make_beta_samples.py "C:\\AIKIT\\dev\\work\\gemma"',
                'python -m pytest -q',
                # 회사 PC 2026-11-06 R1: JSON 이스케이프 그대로 겹친 구분자 (Windows에서는 같은 파일)
-               'python "C:\\\\AIKIT\\\\ml-kit\\\\ml_report.py" --file "C:\\\\AIKIT\\dev\\\\work\\\\a.xlsx"']
+               'python "C:\\\\AIKIT\\\\ml-kit\\\\ml_report.py" --model "C:\\\\AIKIT\\dev\\\\work\\\\a.xlsx"']
     bad_cmds = ['python -c "import pandas"',
                 'python "C:\\\\AIKIT\\\\ml-kit\\\\helper.py"',
                 "python - <<'EOF'\nprint(1)\nEOF",

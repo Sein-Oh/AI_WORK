@@ -513,7 +513,7 @@ python ml_train.py \
 
 ### 8) 최종 버전 (2.9.83)
 
-보고서(`ml_report.py --file`), 성능예측표(`ml_export.py --model <데이터 파일>`), 예측(`ml_predict.py --model <데이터 파일>`)은
+보고서(`ml_report.py --model`), 성능예측표(`ml_export.py --model <데이터 파일>`), 예측(`ml_predict.py --model <데이터 파일>`)은
 **마지막 학습 버전**(최종 버전, 회귀·분류 상관없이 `history.jsonl`의 마지막 기록)을 씁니다. 사용자가 빼고 학습한 열이나 타겟은
 다시 들어오지 않습니다. 그 버전 폴더가 없거나 손상됐으면 그 앞의 온전한 버전을 쓰고 `recovered`로 알립니다.
 2.9.82까지의 최고 버전(`--best`: 이력에서 타겟마다 점수가 가장 좋았던 조건으로 다시 학습해 모은 버전)은 없앴습니다
@@ -831,16 +831,16 @@ MAE, 표준편차, 90% 예측 범위, 카드와 표의 값 모두 같은 규칙�
 
 | 옵션 | 설명 |
 |---|---|
-| `--file` | 데이터 파일 (**권장**). 최종 버전(마지막 학습, 위 8))으로 보고서 1개 |
-| `--model` | 버전 폴더 (학습 결과의 `version_dir`). 그 버전 그대로. 없는 폴더면 같은 데이터 폴더에 학습한 버전이 하나일 때 `[추천] <그 버전 폴더를 --model으로 준 전체 명령>`, 여럿이면 `[후보] v1, v3` |
+| `--model` | **필수**. 데이터 파일(권장: 최종 버전, 곧 마지막 학습으로 보고서 1개, 위 8)) 또는 버전 폴더(학습 결과의 `version_dir`, 그 버전 그대로). `ml_predict.py`·`ml_export.py`의 `--model`과 같음 (2026-11-13, 전에는 데이터 파일을 `--file`로 받음: 지금 `--file`은 `[추천] --model`). 없는 버전 폴더면 같은 데이터 폴더에 학습한 버전이 하나일 때 `[추천] <그 버전 폴더를 --model으로 준 전체 명령>`, 여럿이면 `[후보] v1, v3` |
 | `--targets` | 문서에 넣을 타겟만 지정 (쉼표 구분, 생략 또는 `all` = 전체). 학습·예측과 같은 이름 |
 | `--title` | 성능예측표 계산기 맨 위 제목 (30자 안팎, 생략 시 학습 때 데이터 설명에서) |
+| `--header-row`, `--unit-row`, `--data-row` | 받고 쓰지 않음 (학습 때 정한 행을 그대로 씀, `warnings`로 알림). ml-kit 스킬 공통 규칙대로 붙여도 인자 오류가 나지 않게 (`ml_export.py`도 같음) |
 | `--slots` | 소견 덮어쓰기 JSON (파일 또는 문자열). 읽지 못하면 `STOP_RETRY` (아래 3)) |
 | `--save` | 저장 경로 `.docx` (생략 시 데이터 폴더의 `ML결과보고서_<데이터>_<버전>.docx`). 상대 경로와 이름만은 원본 데이터 파일 옆(성능예측표·데이터셋과 같음, 결정 1-6. 도구가 내는 `[추천]` 명령도 같은 곳), 없는 폴더는 만듦. 확장자가 없으면 `.docx`를 붙이고, 다른 확장자(`out.pdf`)는 `STOP_RETRY` + `[추천] <.docx로 바꾼 전체 명령>` (2.9.88). 이미 있으면 `<이름>_<시각>.docx`로 저장하고 `recovered`에 기록 |
 | `--overwrite` | 같은 이름의 보고서와 성능예측표가 있으면 덮어쓰기 (사용자 확인 후에만, 성능예측표에도 적용) |
 
 ```bat
-python ml_report.py --file sample.xlsx
+python ml_report.py --model sample.xlsx
 python ml_report.py --model sample_ml_data\v3
 python ml_report.py --model sample_ml_data\v3 --slots slots.json
 ```
@@ -1416,7 +1416,7 @@ flowchart TD
 - `ml_predict.py --input "..."`를 호출하여 예측값을 도출하고, `drift_warning` 발생 여부를 통해 도메인 적합성을 스스로 검증(Self-Correction)합니다.
 
 ### 5) 5턴: ML 결과 보고서 발간
-- 모든 타겟이 목표 성능(0.90)에 도달하면 `next_commands[0]`에 보고서 명령(`ml_report.py --file <데이터파일>`)이 들어갑니다. 실행하면 Word 보고서와 (회귀면) 성능예측표가 만들어집니다.
+- 모든 타겟이 목표 성능(0.90)에 도달하면 `next_commands[0]`에 보고서 명령(`ml_report.py --model <데이터파일>`)이 들어갑니다. 실행하면 Word 보고서와 (회귀면) 성능예측표가 만들어집니다.
 
 ---
 
