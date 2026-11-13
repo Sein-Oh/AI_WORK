@@ -1077,7 +1077,7 @@ def step_gemma(stage, args, ctx):
             elif r["결과"] == "없음":
                 stage.skipped += 1
                 stage.skips.append(f"{r['id']}: 시험에서 뺌 ({by_id[r['id']]['paused']})" if by_id[r["id"]].get("paused")
-                                   else f"{r['id']}: 수동 전용 (사람이 준비한 뒤 메시지 팩으로 보냄)" if by_id[r["id"]].get("manual")
+                                   else f"{r['id']}: 수동 전용 (사람이 준비해 직접 보내는 요청, 자동 실행에서 뺌)" if by_id[r["id"]].get("manual")
                                    else f"{r['id']}: 보내지 못함 (중단 또는 앞 요청 문제)")
             else:
                 stage.fail(f"{r['id']}: {r['실패'][:200]}")

@@ -593,7 +593,8 @@ def score(found, spec, by_id, order, use_judge, model):
         sc = by_id[sid]
         if sid not in found:
             why = (f"시험에서 뺀 요청: {sc['paused']}" if sc.get("paused") else
-                   "수동 전용 요청 (자동 실행에서는 보내지 않음)" if sc.get("manual") else "대화에 이 요청이 없음")
+                   "수동 전용 요청 (자동 실행에서는 보내지 않음)" if sc.get("manual") else
+                   "준비 요청 (run_all_tests.py가 직접 실행, 모델에 보내지 않음)" if sc.get("setup") else "대화에 이 요청이 없음")
             rows.append({"id": sid, "결과": "없음", "실패": why, "명령수": 0, "초": None, "보낸횟수": 0})
             continue
         turn = found[sid][-1]                            # graded on the last time the request was sent
@@ -636,7 +637,7 @@ def write_report(label, meta, rows, detail, out_dir=None):
     scores = [r["점수"] for r in graded if isinstance(r.get("점수"), int)]
     lines = [f"# OpenCode 종합 테스트 채점 ({label})", "", f"- 채점 시각: {datetime.now():%Y-%m-%d %H:%M}"]
     lines += [f"- 대화 파일: {m}" for m in meta]
-    lines += [f"- 결과: 채점 {len(graded)}건 중 통과 {npass}건 ({npass / max(len(graded), 1) * 100:.0f}%), 대화에 없음 {len(rows) - len(graded)}건"]
+    lines += [f"- 결과: 채점 {len(graded)}건 중 통과 {npass}건 ({npass / max(len(graded), 1) * 100:.0f}%), 채점하지 않음 {len(rows) - len(graded)}건 (준비·수동 전용 요청 포함, 이유는 표의 실패 항목)"]
     if nbulk:
         lines.append(f"- 한 번에 보낸 요청 {nbulk}건은 결과에 '(참고)'를 붙였습니다. 요청이 한 대화 턴에 섞여 있어 "
                      "명령 순서로 나눠 채점했으므로 하나씩 보낸 결과만큼 정확하지 않습니다.")

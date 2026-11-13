@@ -649,7 +649,8 @@ def test_answer_variants_other_scenarios():
                 "보고서와 성능 예측표를 만들었습니다. 일치도 92%.",
                 "성능예측표(공정_성능예측표.xlsx)를 만들었고 생산효율 일치도는 95%입니다.",
                 "보고서: a.docx, 성능예측표: b.xlsx. 출력별 일치도 생산효율 92%, 불순물 88%.",
-                "보고서와 성능 예측표 생성 완료 (일치도 93%, 판정 양호)"],
+                "보고서와 성능 예측표 생성 완료 (일치도 93%, 판정 양호)",
+                "성능예측표: 생산효율 ExtraTrees (모델과 동일한 수식으로 계산됨)"],                     # 회사 PC Gemma 2026-11-13
                ["보고서를 만들었습니다: 공정_보고서.docx", "성능예측표를 만들었습니다."]),
     }
     for sid, (goods, bads) in cases.items():
@@ -763,10 +764,13 @@ O1_ANSWER = ("5행 대조: 맞음 2, 다름 2, 규격서에 없음 1. 다름: �
 # 시나리오: (합격 기록들, [(불합격 기록, 실패 이유에 들어갈 글)]). 기록 = [(명령, 결과 JSON), ..., 답변]
 OFFICE_CASES = {
     "O1": ([[(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), O1_ANSWER],
-            [(READ_X.replace('"', ""), OK), (f'{RD} read --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER]],
+            [(READ_X.replace('"', ""), OK), (f'{RD} read --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER],
+            # 회사 PC Gemma 2026-11-13: 미리보기 없이 달 메모를 보여 주고 묻기 (전역 지침 3장 5번)
+            [(READ_X, OK), (f'{RD} read --file "{G}\\규격서.txt"', OK),
+             "다름: 소비 전류 250 (3.2), 동작 온도 70 (3.3). C4: [NG] 규격 초과 (규격서 3.2) 메모를 달겠습니다. 진행할까요?"]],
            [([(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), (MEMO, OK), O1_ANSWER], "금지 명령"),        # 확인 없이 실제로 담
-            ([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O1_ANSWER], "--dry-run"),                          # 미리보기 없이 바로 담
-            ([(READ_X, OK), (SEARCH, OK), "다른 곳 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "--dry-run"),   # 메모 미리보기 없음
+            ([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O1_ANSWER], "금지 명령"),                          # 묻지 않고 바로 담
+            ([(READ_X, OK), (SEARCH, OK), "다른 곳 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "답변"),   # 달기 전에 묻지 않음
             ([(READ_X, OK), (MEMO + " --dry-run", OK), O1_ANSWER], "reader"),                            # 규격서를 찾지 않음
             # 회귀: ;로 이은 다른 명령의 --dry-run을 보고 실제 달기를 놓침
             ([(READ_X, OK), (SEARCH, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O1_ANSWER], "금지 명령"),
