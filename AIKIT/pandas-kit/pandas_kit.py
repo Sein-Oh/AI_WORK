@@ -20,6 +20,7 @@ import csv
 import difflib
 import io
 import json
+import numbers
 import os
 import pickle
 import re
@@ -170,9 +171,10 @@ def set_current_work(path: Optional[str]) -> None:
     rt.retry_fs(lambda: open(pointer_path(), "w", encoding="utf-8").write(text))
 
 
-def new_work_folder(base_dir: str) -> str:
-    """<folder of the first source>/pandas_YYMMDDHHMM (_2, _3 ... when made again in the same minute)."""
-    stem = os.path.join(base_dir, f"pandas_{datetime.now():%y%m%d%H%M}")
+def new_work_folder(source: str) -> str:
+    """<folder of the first source>/<source name>_YYMMDDHHMMSS (사용자 결정 2026-11-13; _2, _3 ... when made again in the same second)."""
+    base = os.path.splitext(os.path.basename(source))[0]
+    stem = os.path.join(os.path.dirname(os.path.abspath(source)), f"{base}_{datetime.now():%y%m%d%H%M%S}")
     path, n = stem, 2
     while os.path.exists(path):
         path, n = f"{stem}_{n}", n + 1
@@ -341,7 +343,7 @@ def open_work(args: Any, create_for: Optional[str] = None) -> Work:
     if cur:
         return Work(cur)
     if create_for:
-        folder = new_work_folder(os.path.dirname(os.path.abspath(create_for)))
+        folder = new_work_folder(create_for)
         set_current_work(folder)
         sys.stderr.write(f"[INFO] 새 작업 폴더: {folder}\n")
         return Work(folder)
@@ -470,6 +472,33 @@ def read_grid(path: str, sheet: Optional[str], rng: Optional[Tuple]) -> Dict[str
             "warnings": warnings, "hidden": hidden, "merged": merged, "formulas": formulas_empty}
 
 
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_number_text(v: Any) -> bool:
+    return isinstance(v, str) and bool(_NUM_TEXT.match(v)) and not _LEADING_ZERO.match(v)
+
+
+def column_read_warning(name: str, letter: str, cells: List[Tuple[int, Any]], kind: str) -> Optional[str]:
+    """A warning for a column whose cells are not all of one kind (집 PC 2026-11-13, MBOM: one number written as text made a
+    whole column text and 'Scrap %>3' compared as text). cells: (Excel row, value) of the filled cells."""
+    def rows_text(rs: List[int]) -> str:
+        return ", ".join(str(r) for r in rs[:5]) + (" 등" if len(rs) > 5 else "")
+    if kind == "숫자":
+        txt = [r for r, v in cells if isinstance(v, str)]
+        if txt and len(txt) < len(cells):
+            return (f"{name}({letter}) 열의 글자로 저장된 숫자 {len(txt)}칸(엑셀 행 {rows_text(txt)})을 숫자로 읽었습니다.")
+        return None
+    if kind != "글자":
+        return None
+    other = [r for r, v in cells if not (_is_number(v) or _is_number_text(v))]
+    if other and len(other) <= max(1, len(cells) // 10) and len(other) < len(cells):
+        return (f"{name}({letter}) 열은 숫자 사이에 숫자가 아닌 칸 {len(other)}개(엑셀 행 {rows_text(other)})가 있어 글자 열로 읽었습니다. "
+                f"숫자 조건(>, <, >=, <=)은 숫자로 읽히는 칸끼리 비교합니다.")
+    return None
+
+
 def convert_column(values: List[Any]) -> Tuple[List[Any], str, str]:
     """Values of one column -> (values, dtype, kind). Numbers only when the whole column is numbers (no leading 0);
     otherwise the cells are kept as they are (numbers written as text, a code like 0102 stays 0102)."""
@@ -480,10 +509,13 @@ def convert_column(values: List[Any]) -> Tuple[List[Any], str, str]:
         if all(isinstance(v, int) or float(v).is_integer() for v in filled) and all(isinstance(v, int) for v in filled):
             return [None if _empty(v) else int(v) for v in values], "Int64", "숫자"
         return [None if _empty(v) else float(v) for v in values], "float64", "숫자"
-    if all(isinstance(v, str) for v in filled) and all(_NUM_TEXT.match(v) and not _LEADING_ZERO.match(v) for v in filled):
-        if all("." not in v for v in filled):
-            return [None if _empty(v) else int(v) for v in values], "Int64", "숫자"
-        return [None if _empty(v) else float(v) for v in values], "float64", "숫자"
+    if all(_is_number(v) or _is_number_text(v) for v in filled):
+        # all numbers written as text (csv), or numbers mixed with a few numbers written as text (Excel's green triangle):
+        # a number column (read_table warns about the mixed case). A code with a leading 0 (0102) is not a number.
+        nums = [None if _empty(v) else (v if _is_number(v) else (float(v) if "." in v else int(v))) for v in values]
+        if all(isinstance(v, int) for v in nums if v is not None):
+            return nums, "Int64", "숫자"
+        return [None if v is None else float(v) for v in nums], "float64", "숫자"
     if all(isinstance(v, (datetime, date)) for v in filled):
         return [None if _empty(v) else v for v in values], "datetime64[ns]", "날짜"
 
@@ -502,6 +534,35 @@ def convert_column(values: List[Any]) -> Tuple[List[Any], str, str]:
     return [text(v) for v in values], "object", "글자"
 
 
+def _pick_block(rows: List[Tuple[int, List[Any]]], filled_n: List[int], explicit_end: bool) -> Tuple[Optional[int], List[int]]:
+    """Header row index of the table and the Excel rows of other content above it that has two or more cells in a row.
+    Content parts separated by fully empty rows; the table is the biggest part (columns of its header x rows), the first on a tie.
+    In each part the header is the first row with two or more filled cells (a one-cell title above it is skipped).
+    집 PC 2026-11-13 (MBOM): a title block (공장·Rev·작성일, 2 cells a row) above the real table was taken as the table."""
+    parts: List[List[int]] = []
+    for i, n in enumerate(filled_n):
+        if n:
+            if parts and parts[-1][-1] == i - 1:
+                parts[-1].append(i)
+            else:
+                parts.append([i])
+    if not parts:
+        return None, []
+    if explicit_end:                      # an explicit --range: the whole range is the table (empty rows inside are dropped)
+        first = [i for i in range(len(filled_n)) if filled_n[i]]
+        return next((i for i in first if filled_n[i] >= 2), first[0]), []
+    best, best_score = None, -1
+    for part in parts:
+        head = next((i for i in part if filled_n[i] >= 2), part[0])
+        score = (part[-1] - head + 1) * filled_n[head]
+        if score > best_score:
+            best, best_score = (part, head), score
+    part, head = best
+    above = [rows[i][0] for p in parts if p[-1] < part[0] for i in p if filled_n[i] >= 2]
+    above += [rows[i][0] for i in part if i < head and filled_n[i] >= 2]
+    return head, above
+
+
 def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tuple[Any, Dict[str, Any], List[str]]:
     """A table from a source file: header = first row with content, data until a fully empty row (or to the end of an
     explicit --range); a one-cell title row above it is skipped. Column names from the header (empty -> 열_F, repeated -> Qty_2), letters and Excel rows kept."""
@@ -510,8 +571,10 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     warnings = list(grid["warnings"])
     rows = grid["rows"]
     filled_n = [sum(not _empty(v) for v in vals) for _, vals in rows]
-    # header: the first row with two or more filled cells (a one-cell title above the table is skipped); else the first content
-    head_i = next((i for i, n in enumerate(filled_n) if n >= 2), next((i for i, n in enumerate(filled_n) if n), None))
+    head_i, above = _pick_block(rows, filled_n, grid["explicit_end"])
+    if above:
+        warnings.append(f"표 위의 다른 내용 {len(above)}행(엑셀 행 {above[0]}~{above[-1]})은 표가 아니라고 보고 읽지 않았습니다 "
+                        "(빈 행으로 나뉜 내용 중 가장 큰 것을 표로 봄). 그것을 읽으려면 --range로 범위를 주세요.")
     if head_i is None:
         raise rt.InputError(f"{os.path.basename(path)} {grid['sheet']}"
                             + (f" {range_text}" if range_text else "") + "에 내용이 없습니다. --sheet나 --range를 확인하세요.")
@@ -537,8 +600,12 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     c0 = grid["c1"] + j1
     letters = [col_letter(c0 + j) for j in range(j2 - j1 + 1)]
     names: List[str] = []
+    renamed: List[str] = []
     for j, v in enumerate(header_vals[j1:j2 + 1]):
         base = f"열_{letters[j]}" if _empty(v) else str(v).strip()
+        if is_row_col(base):              # '엑셀 행' 같은 '... 행'은 도구의 행 번호 열 이름 (export한 표를 다시 읽을 때)
+            renamed.append(f"'{base}' -> '{base}번호'")
+            base = f"{base}번호"
         name, n = base, 2
         while name in names:
             name, n = f"{base}_{n}", n + 1
@@ -548,12 +615,18 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     for j, name in enumerate(names):
         vals, dtype, kind = convert_column([vals[j] for _, vals in data])
         kinds[name] = kind
+        note = column_read_warning(name, letters[j], [(r, v[j]) for r, v in data if not _empty(v[j])], kind)
+        if note:
+            warnings.append(note)
         cols[name] = pd.Series(vals, dtype=dtype if dtype != "datetime64[ns]" else None)
         if dtype == "datetime64[ns]":
             cols[name] = pd.to_datetime(cols[name])
     df = pd.DataFrame(cols)
     last = data[-1][0] if data else header_row
     area = f"{letters[0]}{header_row}:{letters[-1]}{last}"
+    if renamed:
+        warnings.append(f"도구가 행 번호에 쓰는 이름이라 열 이름을 바꿨습니다: {', '.join(renamed)}. "
+                        "다른 표의 엑셀 행과 짝지으려면 join --on \"엑셀 행=엑셀 행번호\".")
     if after_gap:
         warnings.append(f"빈 행 아래에 내용이 있는 행이 {after_gap}개 더 있습니다 (읽지 않음). 함께 읽으려면 --range로 범위를 주세요.")
     if skipped_empty:
@@ -632,7 +705,11 @@ def parse_where(text: str) -> List[List[Tuple[str, str, str]]]:
         for alt in split_outside_quotes(part, "|"):
             m = _COND.match(alt)
             if m:
-                alts.append((m.group(1).strip(), m.group(2), unquote(m.group(3))))
+                col, op, val = m.group(1).strip(), m.group(2), unquote(m.group(3))
+                if val == "" and op not in ("=", "!="):        # 'Qty>=' matched every row (집 PC 2026-11-13)
+                    raise rt.InputError(f"--where '{alt.strip()}'에 비교할 값이 없습니다. 빈 칸은 '{col}='(빈 칸) 또는 "
+                                        f"'{col}!='(빈 칸 아님)으로만 씁니다. 예: '{col}{op}2'.")
+                alts.append((col, op, val))
             elif alts and alt.strip():
                 alts.append((alts[-1][0], alts[-1][1], unquote(alt)))
             else:
@@ -644,7 +721,7 @@ def parse_where(text: str) -> List[List[Tuple[str, str, str]]]:
     return groups
 
 
-def _cond_mask(series: Any, op: str, val: str) -> Any:
+def _cond_mask(series: Any, op: str, val: str, notes: Optional[List[str]] = None, col: str = "") -> Any:
     pd = pd_mod()
     present = series.notna()
     if val == "" and op in ("=", "!="):           # 'col=' : empty cells
@@ -663,6 +740,15 @@ def _cond_mask(series: Any, op: str, val: str) -> Any:
             s = series.astype("Float64")
             res = {"=": s == num, "!=": s != num, ">": s > num, "<": s < num, ">=": s >= num, "<=": s <= num}[op]
             return res.fillna(op == "!=").astype(bool)
+    if op in (">", "<", ">=", "<=") and _NUM_TEXT.match(val.replace(",", "")) and not pd.api.types.is_datetime64_any_dtype(series):
+        # a text column with numbers: compare as numbers, not as text ("18" > "3" is False as text; 집 PC 2026-11-13)
+        num = float(val.replace(",", ""))
+        s = pd.to_numeric(text.str.strip(), errors="coerce")
+        bad = int((present & s.isna()).sum())
+        if bad and notes is not None:
+            notes.append(f"'{col}' 열은 글자 열이라 숫자로 읽히는 칸끼리 비교했습니다 (숫자가 아닌 칸 {bad}개는 조건 '{col}{op}{val}'에 맞지 않음으로 봄).")
+        res = {">": s > num, "<": s < num, ">=": s >= num, "<=": s <= num}[op]
+        return res.fillna(False).astype(bool)
     if pd.api.types.is_datetime64_any_dtype(series):
         try:
             when = pd.Timestamp(val)
@@ -676,17 +762,21 @@ def _cond_mask(series: Any, op: str, val: str) -> Any:
     return res.fillna(op == "!=").astype(bool)
 
 
-def apply_where(df: Any, meta: Dict[str, Any], text: str) -> Any:
+def apply_where(df: Any, meta: Dict[str, Any], text: str) -> Tuple[Any, List[str]]:
+    """Rows matching --where, and notes for warnings. 'A!=x|y' (every choice negative) means none of x, y
+    (집 PC 2026-11-13: 'Item Type!=RAW|CONS' kept every row as 'not RAW or not CONS')."""
     groups = parse_where(text)
+    notes: List[str] = []
     mask = None
     for alts in groups:
+        none_of = len(alts) > 1 and all(op in ("!=", "!~") for _, op, _ in alts)
         part = None
         for col, op, val in alts:
             c = resolve_column(col, df, meta, "--where")
-            m = _cond_mask(df[c], op, val)
-            part = m if part is None else (part | m)
+            m = _cond_mask(df[c], op, val, notes, c)
+            part = m if part is None else ((part & m) if none_of else (part | m))
         mask = part if mask is None else (mask & part)
-    return df[mask.values].reset_index(drop=True)
+    return df[mask.values].reset_index(drop=True), notes
 
 
 # ==============================================================================
@@ -722,7 +812,8 @@ def op_select(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]
         df, meta = inputs["from"]
         df = df.copy()
     if args.get("where"):                  # conditions first: they may use columns that --columns leaves out
-        df = apply_where(df, meta, args["where"])
+        df, notes = apply_where(df, meta, args["where"])
+        warnings = warnings + notes
     if args.get("columns"):
         keep = column_list(args["columns"], df, meta, "--columns")
         df = df[[c for c in df.columns if is_row_col(c)] + keep]
@@ -730,32 +821,72 @@ def op_select(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]
     return df, meta, {"warnings": warnings}
 
 
-def _keys(text: str, left: Tuple[Any, Dict], right: Tuple[Any, Dict]) -> List[str]:
-    keys = column_list(text, left[0], left[1], "--on")
-    for k in keys:
-        if k not in data_cols(right[0]):
-            resolve_column(k, right[0], right[1], "--on")
-            raise rt.InputError(f"--on의 열 '{k}'이(가) 두 표의 이름이 다릅니다. 두 표에서 같은 이름의 열을 주세요.")
-    return keys
+def _key_col(name: str, side: Tuple[Any, Dict], option: str) -> str:
+    """A key column of one table: a column name or letter, or '엑셀 행' (the table's source Excel row numbers)."""
+    df, meta = side
+    if unquote(name) == ROW_SHOWN and ROW in df.columns:
+        return ROW
+    return resolve_column(name, df, meta, option)
+
+
+def _keys(text: str, left: Tuple[Any, Dict], right: Tuple[Any, Dict]) -> Tuple[List[str], List[str]]:
+    """--on 'A,B' (same names in both tables) or 'A=X,B' (left column A = right column X). '엑셀 행' is the source row number,
+    so columns a skill computed into a csv with an '엑셀 행번호' column join back to the table: --on "엑셀 행=엑셀 행번호"."""
+    if ";" in text and "," not in text:
+        fixed = ",".join(p.strip() for p in text.split(";") if p.strip())
+        raise rt.InputError(f"--on의 열 이름 사이는 ','로 나눕니다. [추천] {rt.full_command(argv_setting('--on', fixed))}")
+    items = [p.strip() for p in split_outside_quotes(text, ",") if p.strip()]
+    if not items:
+        raise rt.InputError("--on이 비어 있습니다. 키 열 이름을 ','로 나눠 주세요 (이름이 다르면 \"왼쪽 열=오른쪽 열\").")
+    lkeys: List[str] = []
+    rkeys: List[str] = []
+    for i, item in enumerate(items):
+        lname, rname = (p.strip() for p in item.split("=", 1)) if "=" in item else (item, item)
+        lk = _key_col(lname, left, "--on")
+        try:
+            rk = _key_col(rname, right, "--on")
+        except rt.InputError:
+            rcols = data_cols(right[0])
+            close = difflib.get_close_matches(rname, rcols, n=3, cutoff=0.3)
+            close = (close + [c for c in rcols if c not in close])[:10]           # 이름이 전혀 다른 열(Item)도 후보에
+            fixed = [",".join(items[:i] + [f"{lname}={c}"] + items[i + 1:]) for c in close]
+            raise rt.ask(close, [argv_setting("--on", f) for f in fixed],
+                         f"--on의 '{rname}' 열이 오른쪽 표에 없어 짝지을 오른쪽 열 (이름이 다르면 \"왼쪽 열=오른쪽 열\")") from None
+        lkeys.append(lk)
+        rkeys.append(rk)
+    return lkeys, rkeys
 
 
 def _key_frame(df: Any, keys: List[str]) -> Any:
-    return df[keys].astype("string").fillna("")
+    """Keys as text for matching; a whole number is the same key whatever the column type (16, 16.0, '16')."""
+    pd = pd_mod()
+    out = {}
+    for i, k in enumerate(keys):
+        col = df[k]
+        if pd.api.types.is_numeric_dtype(col) and not pd.api.types.is_bool_dtype(col):
+            col = col.map(lambda v: None if v is None or v != v else (str(int(v)) if float(v).is_integer() else str(v)))
+        out[f"k{i}"] = col.astype("string").fillna("").str.strip()
+    return pd.DataFrame(out, index=df.index)
+
+
+def _key_label(lk: str) -> str:
+    return ROW_SHOWN if lk == ROW else lk
 
 
 def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
     pd = pd_mod()
     (ldf, lmeta), (rdf, rmeta) = inputs["left"], inputs["right"]
-    keys = _keys(args["on"], inputs["left"], inputs["right"])
+    lkeys, rkeys = _keys(args["on"], inputs["left"], inputs["right"])
+    lk, rk = _key_frame(ldf, lkeys), _key_frame(rdf, rkeys)          # before the row columns are renamed
+    keys = [k for k in rkeys if k != ROW]
     taken: set = set()
     ldf, lrows = _side_rows(ldf, lmeta, args["left_name"], taken)
     rdf, rrows = _side_rows(rdf, rmeta, args["right_name"], taken)
     rename = {c: f"{c}_{args['right_name']}" for c in data_cols(rdf) if c in data_cols(ldf) and c not in keys}
     rdf = rdf.rename(columns=rename)
-    lk, rk = _key_frame(ldf, keys), _key_frame(rdf, keys)
-    ldf2 = ldf.assign(**{f"__k{i}": lk[k] for i, k in enumerate(keys)})
-    rdf2 = rdf.drop(columns=keys).assign(**{f"__k{i}": rk[k] for i, k in enumerate(keys)})
-    on = [f"__k{i}" for i in range(len(keys))]
+    ldf2 = ldf.assign(**{f"__k{i}": lk[f"k{i}"].values for i in range(len(lkeys))})
+    rdf2 = rdf.drop(columns=[k for k in keys if k in rdf.columns]).assign(**{f"__k{i}": rk[f"k{i}"].values for i in range(len(rkeys))})
+    on = [f"__k{i}" for i in range(len(lkeys))]
     out = ldf2.merge(rdf2, on=on, how="inner").drop(columns=on).reset_index(drop=True)
     dup = int(rk.duplicated().sum())
     warnings = [f"{args['right_name']}에 같은 키가 여러 번 나오는 행이 {dup}개 있어 결과 행이 늘었습니다."] if dup else []
@@ -766,9 +897,9 @@ def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
 
 def op_only(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
     (ldf, lmeta), (rdf, _rmeta) = inputs["left"], inputs["right"]
-    keys = _keys(args["on"], inputs["left"], inputs["right"])
-    rset = set(map(tuple, _key_frame(rdf, keys).itertuples(index=False)))
-    mask = [tuple(t) not in rset for t in _key_frame(ldf, keys).itertuples(index=False)]
+    lkeys, rkeys = _keys(args["on"], inputs["left"], inputs["right"])
+    rset = set(map(tuple, _key_frame(rdf, rkeys).itertuples(index=False)))
+    mask = [tuple(t) not in rset for t in _key_frame(ldf, lkeys).itertuples(index=False)]
     return ldf[mask].reset_index(drop=True), dict(lmeta), {"warnings": []}
 
 
@@ -787,12 +918,18 @@ def op_stack(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]]
     return out, {"letters": letters or {}, "rows": rows, "kinds": {}}, {"warnings": []}
 
 
+def np_bool() -> type:
+    import numpy
+    return numpy.bool_
+
+
 def _same(a: Any, b: Any) -> bool:
     pd = pd_mod()
     na_a, na_b = a is None or (not isinstance(a, str) and pd.isna(a)), b is None or (not isinstance(b, str) and pd.isna(b))
     if na_a or na_b:
         return na_a and na_b
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool) and not isinstance(b, bool):
+    # numpy int64 (Int64 열)은 int가 아님: 한 판만 소수 수량이 있으면 2(Int64)와 2.0(float)이 달라 보였음 (집 PC 2026-11-13)
+    if isinstance(a, numbers.Number) and isinstance(b, numbers.Number) and not isinstance(a, (bool, np_bool()))             and not isinstance(b, (bool, np_bool())):
         return float(a) == float(b)
     return str(cell_json(a)) == str(cell_json(b))
 
@@ -801,18 +938,19 @@ def op_diff(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     """One row per change: 추가 (only in new), 삭제 (only in old), 바뀜 (one row per changed cell)."""
     pd = pd_mod()
     (odf, ometa), (ndf, nmeta) = inputs["old"], inputs["new"]
-    keys = _keys(args["on"], inputs["old"], inputs["new"])
-    for tname, df in ((args["old_name"], odf), (args["new_name"], ndf)):
-        dup = int(_key_frame(df, keys).duplicated().sum())
+    okeys, nkeys = _keys(args["on"], inputs["old"], inputs["new"])
+    keys = [_key_label(k) for k in okeys]
+    for tname, df, ks in ((args["old_name"], odf, okeys), (args["new_name"], ndf, nkeys)):
+        dup = int(_key_frame(df, ks).duplicated().sum())
         if dup:
-            raise rt.InputError(f"{tname}에 --on({', '.join(keys)})이 같은 행이 {dup}개 있어 짝을 정할 수 없습니다. "
+            raise rt.InputError(f"{tname}에 --on({', '.join(_key_label(k) for k in ks)})이 같은 행이 {dup}개 있어 짝을 정할 수 없습니다. "
                                 "열을 더 넣어 행마다 다르게 해 주세요 (예: 상위 품번과 품번).")
     on, nn = f"{args['old_name']} 행", f"{args['new_name']} 행"
     orow = odf[ROW] if ROW in odf.columns else pd.Series([None] * len(odf))
     nrow = ndf[ROW] if ROW in ndf.columns else pd.Series([None] * len(ndf))
-    okey = {tuple(t): i for i, t in enumerate(_key_frame(odf, keys).itertuples(index=False))}
-    nkey = {tuple(t): i for i, t in enumerate(_key_frame(ndf, keys).itertuples(index=False))}
-    common = [c for c in data_cols(odf) if c in data_cols(ndf) and c not in keys]
+    okey = {tuple(t): i for i, t in enumerate(_key_frame(odf, okeys).itertuples(index=False))}
+    nkey = {tuple(t): i for i, t in enumerate(_key_frame(ndf, nkeys).itertuples(index=False))}
+    common = [c for c in data_cols(odf) if c in data_cols(ndf) and c not in okeys and c not in nkeys]
     out: List[Dict[str, Any]] = []
     for k, i in okey.items():
         if k not in nkey:
@@ -843,7 +981,63 @@ def op_diff(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     return df, meta, {"warnings": warnings}
 
 
-OP_FUNCS = {"select": op_select, "join": op_join, "only": op_only, "stack": op_stack, "diff": op_diff}
+def _numeric_cols_of(text: str, df: Any, meta: Dict[str, Any], option: str) -> List[str]:
+    cols = column_list(text, df, meta, option)
+    nums = _numeric_columns(df)
+    bad = [c for c in cols if c not in nums]
+    if bad:
+        if not nums:
+            raise rt.InputError(f"{option}에 쓸 숫자 열이 표에 없습니다 ('{bad[0]}'은(는) 글자 열).")
+        cands = nums[:10]
+        raise rt.ask(cands, [argv_setting(option, ",".join(n if c == bad[0] else c for c in cols)) for n in cands],
+                     f"{option}의 '{bad[0]}'은(는) 숫자 열이 아니어서 대신 쓸 숫자 열")
+    return cols
+
+
+def op_group(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """One row per value of --by: 행 수, <열> 합계 for each --sum column, 엑셀 행 목록 (first 10 rows)."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    by, sums = args["by"], args.get("sum") or []
+    warnings: List[str] = []
+    work = df.assign(**{b: df[b].astype("string") for b in by})
+    out_rows = []
+    for key, g in work.groupby(by, sort=False, dropna=False):
+        key = key if isinstance(key, tuple) else (key,)
+        row: Dict[str, Any] = {b: (None if v is None or v is pd.NA or (isinstance(v, float) and v != v) else v)
+                               for b, v in zip(by, key)}
+        row["행 수"] = len(g)
+        for c in sums:
+            row[f"{c} 합계"] = g[c].sum(min_count=1)
+        if ROW in g.columns:
+            rows = [int(r) for r in g[ROW].dropna().tolist()]
+            row["엑셀 행 목록"] = ", ".join(str(r) for r in rows[:10]) + (" 등" if len(rows) > 10 else "")
+        out_rows.append(row)
+    cols = by + ["행 수"] + [f"{c} 합계" for c in sums] + (["엑셀 행 목록"] if ROW in df.columns else [])
+    out = pd.DataFrame(out_rows, columns=cols)
+    out["행 수"] = out["행 수"].astype("Int64")
+    for c in sums:
+        out[f"{c} 합계"] = pd.to_numeric(out[f"{c} 합계"]).astype("float64").round(9)
+    unit = next((c for c in data_cols(df) if re.sub(r"[\s/._-]+", "", str(c)).lower() in UNIT_NAMES), None)
+    if sums and unit and unit not in by:
+        per = df.assign(**{unit: df[unit].astype("string").str.strip()}).groupby(
+            [df[b].astype("string") for b in by], dropna=False)[unit].nunique()
+        if (per > 1).any():                  # 집 PC 2026-11-13 (MBOM): EA·KG 수량을 한 합계에 더함
+            warnings.append(f"'{unit}' 열의 단위가 다른 행을 한 합계에 더한 묶음이 {int((per > 1).sum())}개 있습니다. "
+                            f"단위별로 나누려면: {rt.full_command(argv_setting('--by', ','.join(by + [unit])))}")
+    letters = {b: v for b, v in meta.get("letters", {}).items() if b in by}
+    return out, {"letters": letters, "rows": {}, "kinds": {}}, {"warnings": warnings}
+
+
+def op_sort(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """Rows ordered by --by (first column first), --desc for large to small. Empty cells last, ties keep the table order."""
+    df, meta = inputs["from"]
+    out = df.sort_values(args["by"], ascending=not args.get("desc"), na_position="last", kind="stable").reset_index(drop=True)
+    return out, dict(meta), {"warnings": []}
+
+
+OP_FUNCS = {"select": op_select, "join": op_join, "only": op_only, "stack": op_stack, "diff": op_diff,
+            "group": op_group, "sort": op_sort}
 
 
 def run_op(op: str, args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
@@ -943,17 +1137,21 @@ def cmd_show(a: Any) -> Dict[str, Any]:
         keep = column_list(a.columns, df, meta, "--columns")
         df = df[[c for c in df.columns if is_row_col(c)] + keep]
     n = len(df)
-    shown = df.head(SHOW_MAX)
+    start = max(1, int(a.start or 1))
+    if n and start > n:
+        raise rt.InputError(f"--start {start}이(가) 표의 행 수({n}행)보다 큽니다. [추천] {rt.full_command(argv_setting('--start', '1'))}")
+    shown = df.iloc[start - 1:start - 1 + SHOW_MAX]
+    more = n > start - 1 + SHOW_MAX
     rows = []
     for _, r in shown.iterrows():
         row = {}
         for c in df.columns:
             row[ROW_SHOWN if c == ROW else c] = cell_json(r[c])
         rows.append(row)
-    fields: Dict[str, Any] = {"table": name, "count": n, "shown": len(rows), "truncated": n > SHOW_MAX,
+    fields: Dict[str, Any] = {"table": name, "count": n, "start": start, "shown": len(rows), "truncated": more or start > 1,
                               "columns": columns_info(df, meta), "location": where_text(meta, df), "rows": rows,
                               "lineage": work.step(sid)["lineage"], "work": work.folder}
-    if n > SHOW_MAX:
+    if more or start > 1:
         path = os.path.join(work.folder, "results", f"{name}_전체.csv")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         out = df.rename(columns={ROW: ROW_SHOWN})
@@ -962,9 +1160,14 @@ def cmd_show(a: Any) -> Dict[str, Any]:
     if n == 0:
         return rt.ok("show", f"표 {name}: 0행 (찾은 행 없음)", True,
                      "0건. 표에 행이 없습니다(찾은 행 없음). 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요.", **fields)
+    part = f"{start}~{start - 1 + len(rows)}번째 행" if (more or start > 1) else ""
     preview = f"표 {name}: {n}행 {len(data_cols(df))}열, {fields['location']}" + (
-        f". 앞 {SHOW_MAX}행만 보여 줌 (전체: full_result_file)" if n > SHOW_MAX else "")
-    out = rt.ok("show", preview, True, "preview와 rows(엑셀 행 번호 포함)를 사용자에게 알리세요. 같은 명령을 다시 실행하지 마세요.", **fields)
+        f". {part}만 보여 줌 (전체: full_result_file)" if part else "")
+    out = rt.ok("show", preview, True, "preview와 rows(엑셀 행 번호 포함)를 사용자에게 알리세요. 같은 명령을 다시 실행하지 마세요."
+                + (" 이어서 보려면 next_commands[0]." if more else ""), **fields)
+    if more:
+        out["next_commands"] = [rt.next_command(argv_setting("--start", str(start + SHOW_MAX)),
+                                                f"표 {name}의 {start + SHOW_MAX}번째 행부터 보기")]
     if work.warnings:
         out["warnings"] = work.warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."
@@ -1015,6 +1218,33 @@ def cmd_stack(a: Any) -> Dict[str, Any]:
     lineage = f"{name} = {', '.join(args['tables'])}를 위아래로 이음 ('표' 열에 어느 표의 행인지)"
     _sid, ok_ = work.add("stack", name, args, {f"t{i}": s for i, (_, s) in enumerate(resolved)}, df, meta, lineage)
     return table_answer("stack", work, name, df, meta, lineage, ok_, info["warnings"])
+
+
+def cmd_group(a: Any) -> Dict[str, Any]:
+    work = open_work(a)
+    work.check_sources()
+    src, sid = work.resolve(a.source, "--from")
+    df, meta = work.load(sid)
+    args = {"by": column_list(a.by, df, meta, "--by"),
+            "sum": _numeric_cols_of(a.sum, df, meta, "--sum") if a.sum else []}
+    out, m, info = op_group(args, {"from": (df, meta)}, "")
+    name = check_name(a.name, work)
+    lineage = f"{name} = {src}을(를) {','.join(args['by'])}별로 묶음 (행 수" + "".join(f", {c} 합계" for c in args["sum"]) + ")"
+    _sid, ok_ = work.add("group", name, args, {"from": sid}, out, m, lineage)
+    return table_answer("group", work, name, out, m, lineage, ok_, info["warnings"])
+
+
+def cmd_sort(a: Any) -> Dict[str, Any]:
+    work = open_work(a)
+    work.check_sources()
+    src, sid = work.resolve(a.source, "--from")
+    df, meta = work.load(sid)
+    args = {"by": column_list(a.by, df, meta, "--by"), "desc": bool(a.desc)}
+    out, m, info = op_sort(args, {"from": (df, meta)}, "")
+    name = check_name(a.name, work)
+    lineage = f"{name} = {src}을(를) {','.join(args['by'])} " + ("큰 것부터" if a.desc else "작은 것부터") + " 정렬"
+    _sid, ok_ = work.add("sort", name, args, {"from": sid}, out, m, lineage)
+    return table_answer("sort", work, name, out, m, lineage, ok_, info["warnings"])
 
 
 OFFICE_EXCEL = os.path.join(os.path.dirname(rt.TOOL_DIR), "office-cli", "excel.py")
@@ -1165,6 +1395,7 @@ CHART_KINDS = ("bar", "line", "scatter", "pie", "hist", "box")
 CHART_KIND_NAMES = {"bar": "막대", "line": "선", "scatter": "산점", "pie": "원", "hist": "히스토그램", "box": "상자"}
 BAR_MAX = 30                  # bars (x values) drawn at most, in table order (the rest: warnings + truncated)
 PIE_MAX = 12                  # pie slices: the largest 11 and the rest summed as 기타
+UNIT_NAMES = {"uom", "unit", "units", "um", "단위"}   # unit columns (names without spaces, / . _ -, lower case)
 KOREAN_FONTS = ("Malgun Gothic", "NanumGothic", "AppleGothic", "Noto Sans CJK KR")   # same order as ml-kit charts
 
 
@@ -1241,6 +1472,14 @@ def cmd_chart(a: Any) -> Dict[str, Any]:
     if missing:
         warnings.append(f"--y 값이 빈 행 {missing}개는 그리지 않았습니다.")
         data = data.dropna(subset=ys)
+    unit = next((c for c in data_cols(df) if re.sub(r"[\s/._-]+", "", str(c)).lower() in UNIT_NAMES), None)
+    if unit and unit not in ys and unit != x:
+        units = [u for u in df.loc[data.index, unit].astype("string").str.strip().dropna().unique().tolist() if u]
+        if len(units) > 1:                       # 집 PC 2026-11-13: EA·KG·M·ML 수량을 한 막대에 더했음
+            summed = kind in ("bar", "pie") and x and data[x].astype("string").duplicated().any()
+            warnings.append(f"'{unit}' 열의 단위가 여러 가지({', '.join(units[:6])}{' 등' if len(units) > 6 else ''})라 "
+                            f"단위가 다른 값을 함께 {'더해 ' if summed else ''}그렸습니다. 단위 하나만 보려면 먼저 "
+                            f"{rt.full_command(['select', '--from', name, '--where', f'{unit}={units[0]}'])} 로 고른 표로 그리세요.")
     truncated = False
     if kind in ("bar", "pie") and x and data[x].astype("string").duplicated().any():
         data = data.assign(**{x: data[x].astype("string")}).groupby(x, sort=False, dropna=False)[ys].sum().reset_index()
@@ -1359,6 +1598,7 @@ def build_cli() -> rt.JsonArgumentParser:
     p = cmd("show", "표의 앞 20행을 엑셀 행 번호와 함께 보기 (넘으면 전체를 csv로)")
     p.add_argument("--from", dest="source", help="볼 표 (생략하면 지금 표)")
     p.add_argument("--columns", help="볼 열 (이름이나 열 글자, ','로 나눔)")
+    p.add_argument("--start", type=int, help="몇 번째 행부터 볼지 (표 안의 순서, 1부터, 생략하면 1). 이어 보기는 next_commands")
 
     for name, help_text in (("join", "두 표를 키 열로 짝 맞춰 붙이기 (양쪽에 있는 행만)"),
                             ("only", "왼쪽 표에만 있는 행 (키 열로 비교)")):
@@ -1376,6 +1616,18 @@ def build_cli() -> rt.JsonArgumentParser:
 
     p = cmd("stack", "여러 표를 위아래로 잇기 ('표' 열에 어느 표의 행인지)")
     p.add_argument("--tables", required=True, help="이을 표 이름 (','로 나눔)")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("group", "열 값별로 묶어 행 수와 숫자 열 합계")
+    p.add_argument("--from", dest="source", help="묶을 표 (생략하면 지금 표)")
+    p.add_argument("--by", required=True, help="묶을 열 (','로 나눔)")
+    p.add_argument("--sum", help="합계를 낼 숫자 열 (','로 나눔, 생략하면 행 수만)")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("sort", "행 정렬 (작은 것부터, --desc는 큰 것부터)")
+    p.add_argument("--from", dest="source", help="정렬할 표 (생략하면 지금 표)")
+    p.add_argument("--by", required=True, help="정렬 기준 열 (','로 나눔, 앞 열이 먼저)")
+    p.add_argument("--desc", action="store_true", help="큰 것부터")
     p.add_argument("--name", help="새 표 이름")
 
     cmd("undo", "마지막 단계 하나 되돌리기")
@@ -1399,7 +1651,8 @@ def build_cli() -> rt.JsonArgumentParser:
 
 
 COMMANDS = {"select": cmd_select, "show": cmd_show, "join": cmd_join, "only": cmd_only, "diff": cmd_diff,
-            "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export, "chart": cmd_chart}
+            "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export, "chart": cmd_chart,
+            "group": cmd_group, "sort": cmd_sort}
 
 
 def main(argv: Optional[List[str]] = None) -> None:

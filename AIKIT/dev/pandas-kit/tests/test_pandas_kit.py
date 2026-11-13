@@ -4,6 +4,7 @@ recovered, [추천]/[후보], 오류 로그). 도구는 서브프로세스로 �
 import json
 import os
 import pickle
+import re
 import shlex
 import sys
 import time
@@ -104,7 +105,7 @@ def test_select_file_finds_table_under_title_and_keeps_codes(env):
     cols = {c["name"]: c for c in out["columns"]}
     assert cols["Part Number"]["letter"] == "D" and cols["Part Number"]["kind"] == "글자" and cols["Qty"]["kind"] == "숫자"
     work = out["work"]
-    assert os.path.basename(work).startswith("pandas_") and os.path.dirname(work) == str(env["dir"])
+    assert re.fullmatch(r"BOM_\d{12}", os.path.basename(work)) and os.path.dirname(work) == str(env["dir"])   # <파일 이름>_YYMMDDHHMMSS
     shown = ok(env, "show")
     assert shown["rows"][0] == {"엑셀 행": 5, "Level": 1, "Parent": "TOP", "Part Number": "0102", "Qty": 2, "Maker": "A", "Desc": "볼트"}
     assert shown["truncated"] is False and shown["count"] == 4
@@ -134,6 +135,39 @@ def test_where_and_or_contains_and_letters(env):
     assert code == 1 and recommended(out["message"])[-1] == "Maker=A;Qty>1"
     assert ok(env, *recommended(out["message"]))["count"] == 1          # Maker A이고 Qty>1: 0102(2)뿐
 
+def test_numbers_written_as_text_and_numeric_conditions_on_text_columns(env):
+    # 집 PC 2026-11-13 (MBOM): 숫자 사이 글자 "18" 한 칸이 열 전체를 글자로 만들고 'Scrap %>3'이 글자 순서로 비교돼 "18"이 빠짐
+    def extra(ws):
+        ws["H4"] = "Scrap %"
+        ws["I4"] = "Note"
+        for r, (scrap, note) in enumerate([(3, "1"), ("18", "2"), (4, "N/A"), (None, "30"), (6, "5"), (2, "7"),
+                                           (5, "8"), (1, "9"), (2, "10"), (3, "11"), (1, "12")], start=5):
+            ws.cell(row=r, column=8, value=scrap)
+            ws.cell(row=r, column=9, value=note)
+    rows = [(1, "TOP", f"{i:04d}", i, "A", "x") for i in range(1, 12)]
+    out = ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows, extra=extra), "--name", "df1")
+    kinds = {c["name"]: c["kind"] for c in out["columns"]}
+    assert kinds["Scrap %"] == "숫자" and kinds["Note"] == "글자"
+    assert any("Scrap %(H) 열의 글자로 저장된 숫자 1칸(엑셀 행 6)" in w for w in out["warnings"])
+    assert any("Note(I) 열은 숫자 사이에 숫자가 아닌 칸 1개(엑셀 행 7)" in w for w in out["warnings"])
+    assert not any("Part Number" in w for w in out["warnings"])          # 앞자리 0 코드 열은 경고하지 않음
+    assert ok(env, "select", "--from", "df1", "--where", "Scrap %>3")["count"] == 4      # 18, 4, 6, 5
+    big = ok(env, "select", "--from", "df1", "--where", "Note>=10")      # 글자 열이지만 숫자로 비교: 30, 10, 11, 12
+    assert big["count"] == 4 and any("숫자가 아닌 칸 1개" in w for w in big["warnings"])
+
+
+def test_not_equal_with_choices_means_none_of_them_and_empty_value_needs_equal(env):
+    # 집 PC 2026-11-13: 'Item Type!=RAW|CONS'가 "RAW 아님 또는 CONS 아님"이라 모든 행이 남았고, 'Qty>='가 모든 행을 냄
+    path = make_bom(env["dir"] / "BOM.xlsx")
+    ok(env, "select", "--file", path, "--name", "df1")
+    assert ok(env, "select", "--from", "df1", "--where", "Maker!=A|B")["count"] == 1      # C만
+    assert ok(env, "select", "--from", "df1", "--where", "Desc!~볼|판")["count"] == 2     # 너트 둘
+    assert ok(env, "select", "--from", "df1", "--where", "Maker=A|B")["count"] == 3
+    for bad in ("Qty>=", "Qty<", "Desc~"):
+        code, out = run(env, "select", "--from", "df1", "--where", bad)
+        assert code == 1 and "비교할 값이 없습니다" in out["message"], bad
+    assert ok(env, "select", "--from", "df1", "--where", "Desc!=")["count"] == 4
+
 
 def test_explicit_range_and_unknown_sheet(env):
     path = make_bom(env["dir"] / "BOM.xlsx")
@@ -162,6 +196,31 @@ def test_empty_row_ends_table_and_rest_is_warned(env):
         ws.append([None, 9, "X", "9999", 1, "Z", "다른 표"])
     out = ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", extra=extra))
     assert out["count"] == 4 and any("빈 행 아래" in w for w in out["warnings"])
+
+
+def test_title_block_above_is_not_taken_as_the_table(env):
+    # 집 PC 2026-11-13 (MBOM): 제목 블록(공장·Rev·작성일, 한 행에 두 칸)을 표로 잡고 진짜 표는 "빈 행 아래"로만 알렸음
+    def title(ws):
+        ws["B1"], ws["D1"] = "공장", "P100"
+        ws["B2"], ws["D2"] = "Rev", "C"
+    import openpyxl as ox
+    wb = ox.Workbook()
+    ws = wb.active
+    title(ws)
+    ws.append([])
+    ws.append([None, "Level", "Part Number", "Qty"])
+    for i in range(5):
+        ws.append([None, 1, f"{i:04d}", i])
+    ws.append([])
+    ws.append([None, "메모"])
+    path = env["dir"] / "titled.xlsx"
+    wb.save(path)
+    out = ok(env, "select", "--file", str(path))
+    assert out["anchor"]["range"] == "B4:D9" and out["count"] == 5
+    assert any("표 위의 다른 내용 2행(엑셀 행 1~2)" in w for w in out["warnings"])
+    assert any("빈 행 아래" in w for w in out["warnings"])
+    narrow = ok(env, "select", "--file", str(path), "--range", "B1:D2")      # 범위를 주면 그 범위가 표
+    assert narrow["count"] == 1 and narrow["anchor"]["header_row"] == 1
 
 
 def test_open_unsaved_workbook_is_not_read(env, monkeypatch, capsys):
@@ -203,6 +262,18 @@ def test_diff_adds_deletes_changed_cells_with_rows_and_paint_files(env):
     assert shlex.split(out["confirm_commands"][0]["command"])[1].endswith(os.path.join("office-cli", "excel.py"))
 
 
+def test_diff_same_number_in_int_and_decimal_columns_is_not_a_change(env):
+    # 집 PC 2026-11-13: 한 판에만 소수 수량(0.5)이 있으면 Qty 열이 정수/소수로 달라 2와 2.0을 바뀐 칸으로 셌음
+    old = make_bom(env["dir"] / "v1.xlsx")
+    new = make_bom(env["dir"] / "v2.xlsx", rows=[(1, "TOP", "0102", 2, "A", "볼트"), (2, "0102", "0105", 4, "B", "너트"),
+                                                 (1, "TOP", "0200", 1, "A", "판"), (2, "0200", "0105", 3.5, "C", "너트")])
+    ok(env, "select", "--file", old, "--name", "df1")
+    ok(env, "select", "--file", new, "--name", "df2")
+    out = ok(env, "diff", "--old", "df1", "--new", "df2", "--on", "Parent,Part Number")
+    assert out["summary"] == "추가 0행, 삭제 0행, 바뀐 칸 1곳"
+    row = ok(env, "show")["rows"][0]
+    assert (row["열"], row["옛 값"], row["새 값"]) == ("Qty", 3, 3.5)
+
 def test_diff_refuses_duplicate_keys(env):
     old, new = _two_boms(env)
     ok(env, "select", "--file", old, "--name", "df1")
@@ -229,6 +300,60 @@ def test_join_only_stack_keep_both_row_numbers(env):
     assert s["count"] == 8 and shown["rows"][0]["표"] == "df1" and shown["rows"][-1]["표"] == "df2"
     code, out = run(env, "stack", "--tables", "df1;df2")
     assert code == 1 and recommended(out["message"])[-1] == "df1,df2"
+
+
+def test_join_with_different_key_names_and_back_by_excel_row(env):
+    # 집 PC 2026-11-13 (MBOM): Part Number <-> Routing Item처럼 이름이 다른 키, 스킬이 계산한 csv를 엑셀 행으로 되돌리기
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx"), "--name", "df1")
+    rt_path = env["dir"] / "routing.csv"
+    rt_path.write_text("Item,Maker,Time\n0102,A,5\n0200,A,7\n0105,C,9\n", encoding="utf-8")
+    ok(env, "select", "--file", str(rt_path), "--name", "rt")
+    j = ok(env, "join", "--left", "df1", "--right", "rt", "--on", "Part Number=Item,Maker")
+    assert j["count"] == 3 and "Item" not in [c["name"] for c in j["columns"]]       # 0102/A, 0200/A, 0105/C
+    code, out = run(env, "join", "--left", "df1", "--right", "rt", "--on", "Part Number")
+    assert code == 1 and "[후보]" in out["message"] and "Item" in out["message"]
+    fixed = [c["command"] for c in out["confirm_commands"] if "Part Number=Item" in c["command"]]
+    assert fixed and ok(env, *command_args(fixed[0]))["count"] == 4
+    exp = ok(env, "export", "--from", "df1", "--save", "df1.csv")
+    calc = pd.read_csv(exp["output_file"], encoding="utf-8-sig", dtype=str)[["엑셀 행", "Part Number"]]
+    calc["계산"] = ["a", "b", "c", "d"]
+    calc_path = env["dir"] / "skill.csv"
+    calc.to_csv(calc_path, index=False, encoding="utf-8-sig")
+    sk = ok(env, "select", "--file", str(calc_path), "--name", "sk")
+    assert "엑셀 행번호" in [c["name"] for c in sk["columns"]] and any("엑셀 행=엑셀 행번호" in w for w in sk["warnings"])
+    back = ok(env, "join", "--left", "df1", "--right", "sk", "--on", "엑셀 행=엑셀 행번호", "--name", "back")
+    rows = ok(env, "show", "--from", "back")["rows"]
+    assert back["count"] == 4 and [(r["df1 행"], r["계산"]) for r in rows] == [(5, "a"), (6, "b"), (7, "c"), (8, "d")]
+
+
+def test_group_counts_sums_and_warns_mixed_units(env):
+    def extra(ws):
+        ws["H4"] = "UoM"
+        for r, u in enumerate(["EA", "KG", "EA", "EA"], start=5):
+            ws.cell(row=r, column=8, value=u)
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", extra=extra), "--name", "df1")
+    g = ok(env, "group", "--by", "Maker", "--sum", "Qty", "--name", "g")
+    rows = ok(env, "show", "--from", "g")["rows"]
+    assert g["count"] == 3 and rows[0] == {"Maker": "A", "행 수": 2, "Qty 합계": 3, "엑셀 행 목록": "5, 7"}
+    assert not g.get("warnings")                                        # A·C는 EA만, B는 KG만
+    mixed = ok(env, "group", "--from", "df1", "--by", "Level", "--sum", "Qty")
+    warn = next(w for w in mixed["warnings"] if "단위가 다른 행" in w)
+    assert "--by Level,UoM" in warn and "pandas_kit.py" in warn
+    code, err = run(env, "group", "--from", "df1", "--by", "Maker", "--sum", "Desc")
+    assert code == 1 and "[후보] 1) Level 2) Qty" in err["message"]
+    assert command_args(err["confirm_commands"][1]["command"])[-2:] == ["--sum", "Qty"]
+    assert ok(env, "group", "--from", "df1", "--by", "Maker")["columns"][1]["name"] == "행 수"
+
+
+def test_sort_keeps_excel_rows_and_puts_empty_cells_last(env):
+    rows = [(1, "TOP", "0102", 2, "A", "x"), (2, "0102", "0105", None, "B", "x"), (1, "TOP", "0200", 9, "A", "x"),
+            (2, "0200", "0105", 2, "C", "x")]
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows), "--name", "df1")
+    up = ok(env, "sort", "--by", "Qty", "--name", "up")
+    assert "작은 것부터" in up["preview"]
+    assert [r["엑셀 행"] for r in ok(env, "show", "--from", "up")["rows"]] == [5, 8, 7, 6]     # 같은 값은 표 순서, 빈 칸은 끝
+    ok(env, "sort", "--from", "df1", "--by", "Maker,Qty", "--desc", "--name", "down")
+    assert [r["엑셀 행"] for r in ok(env, "show", "--from", "down")["rows"]] == [8, 6, 7, 5]
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +417,13 @@ def test_show_truncates_at_20_rows_with_full_result_file(env):
     assert out["truncated"] is True and out["shown"] == 20 and out["count"] == 30
     full = pd.read_csv(out["full_result_file"], encoding="utf-8-sig", dtype=str)
     assert len(full) == 30 and full["Part Number"].iloc[0] == "0000" and "엑셀 행" in full.columns
+    nxt = out["next_commands"][0]["command"]
+    assert command_args(nxt)[-2:] == ["--start", "21"]
+    more = ok(env, *command_args(nxt))
+    assert more["start"] == 21 and more["shown"] == 10 and more["rows"][0]["엑셀 행"] == 25 and "next_commands" not in more
+    assert "21~30번째 행" in more["preview"]
+    code, err = run(env, "show", "--start", "99")
+    assert code == 1 and recommended(err["message"])[-2:] == ["--start", "1"]
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +482,22 @@ def test_chart_sums_repeated_x_limits_bars_and_checks_columns(env):
     named = ok(env, "chart", "--y", "Qty", "--save", "수량", "--title", "부품별 수량")
     assert named["output_file"] == os.path.join(named["work"], "수량.png")
 
+def test_chart_warns_when_units_are_mixed(env):
+    # 집 PC 2026-11-13 (MBOM): 업체별 Qty 막대가 EA·KG 수량을 그대로 더함
+    def extra(ws):
+        ws["H4"] = "UoM"
+        for r, u in enumerate(["EA", "KG", "EA", "EA"], start=5):
+            ws.cell(row=r, column=8, value=u)
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", extra=extra), "--name", "df1")
+    out = ok(env, "chart", "--x", "Maker", "--y", "Qty")
+    warn = next(w for w in out["warnings"] if "'UoM' 열의 단위가 여러 가지(EA, KG)" in w)
+    assert "더해 그렸습니다" in warn and "select --from df1 --where UoM=EA" in warn and "pandas_kit.py" in warn
+    ok(env, "select", "--from", "df1", "--where", "UoM=EA", "--name", "ea")
+    assert not any("단위" in w for w in ok(env, "chart", "--from", "ea", "--x", "Maker", "--y", "Qty").get("warnings", []))
+
 
 def test_chart_of_empty_table_is_zero(env):
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx"), "--where", "Level=9", "--name", "없음")
     out = ok(env, "chart", "--y", "Qty")
     assert out["count"] == 0 and "0건" in out["agent_directive"] and "output_file" not in out
+
