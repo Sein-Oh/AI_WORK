@@ -2,6 +2,18 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.2.2] - 2026-11-14
+
+### 수정 (두 판 비교 스킬로 v2 -> v2_mod를 찾아 보며, 개선점_MBOM.md G)
+- `join --on "엑셀 행=엑셀 행번호"`: 결과가 엑셀 행을 `<표> 행`으로 바꿔 그 표로 `diff`하면 엑셀 행과 칠하기 명령이 말없이 빠졌음
+  -> 왼쪽 키가 엑셀 행 하나면 결과는 원래 표의 엑셀 행·열 글자를 그대로 가짐. 시험 `test_mbom_join_on_excel_row_keeps_the_original_excel_rows`.
+- `diff` 칠하기 명령의 설명이 삭제(추가)된 행과 바뀐 칸을 합해 "바뀐 칸 11곳"이라 적었음 -> "삭제된 3행, 바뀐 칸 8곳".
+
+### 시험 자료
+- `make_mbom_samples.py`: `MBOM_DR200_v2_mod.xlsx` (v2를 회사 BOM 개정처럼 고친 판, 정답 `MOD_CHANGES`, 함정 `MOD_TRAPS`).
+- 조합 스킬 예 `tools/skills/mbom-diff/` (SKILL.md, `scripts/mbom_path.py`, `scripts/mbom_summary.py`): 경로로 두 판을 맞춰
+  이동·대체 후보·추가·삭제·바뀐 칸을 알림. 업무 판단이라 도구가 아니라 스킬. 시험 `test_mbom_diff_skill.py`(정답과 같은지, 함정이 안 나오는지).
+
 ## [0.2.1] - 2026-11-14
 
 ### 수정 (MBOM 두 판으로 기반 명령을 써 보며 찾은 '결과가 틀리는데 알리지 않음', 개선점_MBOM.md E)

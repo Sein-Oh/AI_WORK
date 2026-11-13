@@ -8,9 +8,12 @@ r"""pandas-kit 시험용 복잡한 MBOM 샘플 두 판 (집 PC 2026-11-13, 사�
                       (어떤 행의 상위 = 위쪽 행 중 가장 가까운, Level이 더 작은 행). 맨 아래 TRAPS가 일부러 넣은 함정.
   MBOM_DR200_v2.xlsx  v1에서 세 곳만 바꾼 판: 100100 아래 000125 Qty 4 -> 5, 두 번째 300210 아래 000125 Qty 3 -> 4,
                       110050(LED 창) 행 삭제. 경로로 비교하면 "삭제 1행, 바뀐 칸 2곳".
+  MBOM_DR200_v2_mod.xlsx  v2를 회사 BOM 개정처럼 고친 판 (MOD_CHANGES: 바뀐 칸 8, 추가 3행, 삭제 3행, 대체·이동 포함,
+                      MOD_TRAPS: 행 밀림·순서만 바뀜·글자 숫자->숫자·제목 블록은 바뀐 것이 아님).
 도구가 아니라 시험용 (실행 파일만 두는 AIKIT/pandas-kit/에 넣지 않음). xlsx는 반입 규칙상 저장소에 넣지 않고 이 스크립트로 만든다.
 """
 import argparse
+import copy
 import datetime as dt
 import os
 
@@ -243,7 +246,15 @@ TRAPS = [
 
 
 def make_v1(path):
-    rows = flatten(TOP)
+    return write_book(path, TOP)
+
+
+def write_book(path, top, bom_rev="C", made=dt.date(2026, 11, 13), qty_text=True, swap=()):
+    """top 트리를 MBOM·Routing·변경이력 세 시트로 씀 (v1과 v2_mod가 같은 모양). swap: 순서를 바꿔 쓸 형제 품번 두 개."""
+    rows = flatten(top)
+    if swap:
+        i, j = (next(k for k, r in enumerate(rows) if r[3]["pn"] == pn) for pn in swap)
+        rows[i], rows[j] = rows[j], rows[i]
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "MBOM"
@@ -251,8 +262,8 @@ def make_v1(path):
     ws["B1"].font = Font(size=14, bold=True)
     ws.merge_cells("B1:H1")
     ws["B2"], ws["D2"] = "공장", "P100 (평택)"
-    ws["B3"], ws["D3"] = "BOM Rev", "C"
-    ws["B4"], ws["D4"] = "작성일", dt.date(2026, 11, 13)
+    ws["B3"], ws["D3"] = "BOM Rev", bom_rev
+    ws["B4"], ws["D4"] = "작성일", made
     for r in (2, 3, 4):
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
     hr = 6
@@ -277,7 +288,7 @@ def make_v1(path):
         vals = [level, nd["pn"], nd["rev"], nd["desc"], nd["mb"], nd["typ"], nd["qty"],
                 nd["uom"], nd["scrap"] or None, nd["op"] or None, nd["wc"] or None, "P100", nd["sup"] or None,
                 nd["alt"] or None, nd["eff_from"], nd["eff_to"], nd["note"] or None]
-        if nd["pn"] == "600130":
+        if nd["pn"] == "600130" and qty_text:
             vals[HEAD.index("Qty")] = "18"                     # 숫자가 글자로 저장된 칸
         put(r, vals)
         if nd["pn"] == "100100":                               # 하우징 조립 바로 뒤에 숨긴 폐기 품목
@@ -328,6 +339,79 @@ def make_v2(v1_path, path):
     wb.save(path)
 
 
+def kid(node, *pns):
+    """경로로 찾기: kid(TOP, "100300", "300210#2") (같은 상위 아래 같은 품번은 #순번)."""
+    for pn in pns:
+        pn, _, no = pn.partition("#")
+        node = [k for k in node["kids"] if k["pn"] == pn][int(no or 1) - 1]
+    return node
+
+
+def v2_tree():
+    """make_v2가 v1 파일에 한 세 가지 변경을 트리에 똑같이."""
+    top = copy.deepcopy(TOP)
+    kid(top, "100100", "000125")["qty"] = 5
+    kid(top, "100300", "300210#2", "000125")["qty"] = 4
+    hs = kid(top, "100100")
+    hs["kids"].remove(kid(hs, "110050"))
+    return top
+
+
+# v2 -> v2_mod: 회사 BOM 개정에서 흔한 변경 (사용자 요청 2026-11-14). 시험이 이 표로 diff 결과를 맞춰 봄.
+# (구분, 경로, 열, 옛 값, 새 값). 경로 = 최상위부터 품번을 /로 이은 것, 같은 상위 아래 같은 품번은 #순번.
+MOD_CHANGES = [
+    ("바뀜", "DR-200/100500/000123", "Qty", 2, 3),                                   # 공용 나사, 척 아래 한 곳만
+    ("바뀜", "DR-200/100300/300210#1/300213", "Qty", 3, 4),                          # 같은 품번 두 스테이지 중 1단만
+    ("바뀜", "DR-200/100300/300210#2/300212/RM-1001", "Qty", 0.045, 0.05),           # 2단 아래 원자재만
+    ("바뀜", "DR-200/100300/300140", "Supplier", "대원스프링", "신영스프링"),
+    ("바뀜", "DR-200/100100/110060", "Rev", "C", "D"),
+    ("바뀜", "DR-200/100200/200150", "Eff To", "2026-12-31", "2027-03-31"),         # 적용 시점 미룸
+    ("바뀜", "DR-200/100200/200150", "Note", "2027-01부터 200151로 바뀜", "2027-04부터 200151로 바뀜"),
+    ("바뀜", "DR-200/100200/200151", "Eff From", "2027-01-01", "2027-04-01"),
+    ("추가", "DR-200/100600/600180", None, None, None),                             # 새 부품 TVS 다이오드
+    ("삭제", "DR-200/900020", None, None, None),                                     # 나사 고정제 빠짐
+    ("삭제", "DR-200/100600/600160", None, None, None),                              # 대체: 600160 -> 600161 (같은 자리)
+    ("추가", "DR-200/100600/600161", None, None, None),
+    ("삭제", "DR-200/100100/110040", None, None, None),                              # 이동: 하우징 아래 -> 최종 조립
+    ("추가", "DR-200/110040", None, None, None),
+]
+# 바뀌지 않았는데 바뀐 것처럼 보이기 쉬운 것 (비교 결과에 나오면 틀림)
+MOD_TRAPS = [
+    "행 번호: 행이 추가·삭제되어 그 아래 행의 엑셀 행 번호가 모두 밀림 (행 번호로 짝을 맞추면 거의 모든 행이 바뀜)",
+    "순서만 바뀜: 100700 아래 700100과 700110의 순서",
+    "적는 방식만 바뀜: 600130의 Qty가 글자 '18'에서 숫자 18로",
+    "표 밖: 제목 블록의 BOM Rev C -> D, 작성일 2026-11-20 (표 비교 대상 아님)",
+    "숨긴 행 110099는 그대로",
+]
+
+
+def v2_mod_tree():
+    top = v2_tree()
+    kid(top, "100500", "000123")["qty"] = 3
+    kid(top, "100300", "300210#1", "300213")["qty"] = 4
+    kid(top, "100300", "300210#2", "300212", "RM-1001")["qty"] = 0.05
+    kid(top, "100300", "300140")["sup"] = "신영스프링"
+    kid(top, "100100", "110060")["rev"] = "D"
+    old, new = kid(top, "100200", "200150"), kid(top, "100200", "200151")
+    old["eff_to"], old["note"], new["eff_from"] = dt.date(2027, 3, 31), "2027-04부터 200151로 바뀜", dt.date(2027, 4, 1)
+    pcb = kid(top, "100600")
+    at = pcb["kids"].index(kid(pcb, "600170")) + 1
+    pcb["kids"].insert(at, n("600180", "TVS 다이오드", "B", "PART", 1, op="0010", wc="SMT-01", sup="서울반도체"))
+    led = kid(pcb, "600160")
+    pcb["kids"][pcb["kids"].index(led)] = n("600161", "LED 주광색", "B", "PART", 1, op="0010", wc="SMT-01", sup="서울반도체")
+    top["kids"].remove(kid(top, "900020"))
+    hs = kid(top, "100100")
+    label = kid(hs, "110040")
+    hs["kids"].remove(label)
+    label.update(op="0100", wc="FA-01")
+    top["kids"].insert(top["kids"].index(kid(top, "100800")), label)
+    return top
+
+
+def make_v2_mod(path):
+    write_book(path, v2_mod_tree(), bom_rev="D", made=dt.date(2026, 11, 20), qty_text=False, swap=("700100", "700110"))
+
+
 def main():
     ap = argparse.ArgumentParser(description="pandas-kit 시험용 MBOM 샘플 두 판")
     ap.add_argument("--out", default=DEFAULT_OUT, help="만들 폴더 (기본: 저장소 AIKIT/dev/work/pandas)")
@@ -336,9 +420,18 @@ def main():
     v1, v2 = os.path.join(out, "MBOM_DR200.xlsx"), os.path.join(out, "MBOM_DR200_v2.xlsx")
     n, area = make_v1(v1)
     make_v2(v1, v2)
+    v2m = os.path.join(out, "MBOM_DR200_v2_mod.xlsx")
+    make_v2_mod(v2m)
     print(f"{v1}: MBOM 데이터 {n}행 ({area}), 최대 레벨 {max(l for l, *_ in flatten(TOP))}")
     print(f"{v2}: v1에서 Qty 두 칸(000125) 바꾸고 110050 행 삭제")
     for t in TRAPS:
+        print(" -", t)
+    print(f"{v2m}: v2에서 바꾼 것 (경로 기준, 바뀐 칸 {sum(c[0] == '바뀜' for c in MOD_CHANGES)}, "
+          f"추가 {sum(c[0] == '추가' for c in MOD_CHANGES)}행, 삭제 {sum(c[0] == '삭제' for c in MOD_CHANGES)}행)")
+    for c in MOD_CHANGES:
+        print(" -", " | ".join("" if v is None else str(v) for v in c))
+    print("  바뀌지 않았는데 바뀐 것처럼 보이기 쉬운 것:")
+    for t in MOD_TRAPS:
         print(" -", t)
 
 

@@ -335,7 +335,7 @@ def test_join_with_different_key_names_and_back_by_excel_row(env):
     assert "엑셀 행번호" in [c["name"] for c in sk["columns"]] and any("엑셀 행=엑셀 행번호" in w for w in sk["warnings"])
     back = ok(env, "join", "--left", "df1", "--right", "sk", "--on", "엑셀 행=엑셀 행번호", "--name", "back")
     rows = ok(env, "show", "--from", "back")["rows"]
-    assert back["count"] == 4 and [(r["df1 행"], r["계산"]) for r in rows] == [(5, "a"), (6, "b"), (7, "c"), (8, "d")]
+    assert back["count"] == 4 and [(r["엑셀 행"], r["계산"]) for r in rows] == [(5, "a"), (6, "b"), (7, "c"), (8, "d")]
 
 
 def test_group_counts_sums_and_warns_mixed_units(env):
@@ -589,3 +589,18 @@ def test_mbom_export_keeps_dates_as_dates(env, mbom):
     head = [c.value for c in ws[1]]
     cell = ws.cell(row=2, column=head.index("Eff From") + 1)
     assert cell.number_format == "yyyy-mm-dd" and cell.value.year == 2026
+
+
+def test_mbom_join_on_excel_row_keeps_the_original_excel_rows(env, mbom):
+    """스킬이 계산한 csv를 엑셀 행으로 붙이면 결과는 원래 표 그대로 (MBOM 2026-11-14: 'v2 행'으로 바뀌어 그 표로 diff하면
+    엑셀 행과 칠하기 명령이 말없이 빠졌음)."""
+    csv = env["dir"] / "calc.csv"
+    csv.write_text("엑셀 행,경로\n7,DR-200\n8,DR-200/100100\n", encoding="utf-8-sig")
+    ok(env, "select", "--file", str(csv), "--name", "calc")
+    out = ok(env, "join", "--left", "v2", "--right", "calc", "--on", "엑셀 행=엑셀 행번호", "--name", "v2p")
+    assert out["count"] == 2
+    rows = ok(env, "show", "--from", "v2p")["rows"]
+    assert [r["엑셀 행"] for r in rows] == [7, 8] and "v2 행" not in rows[0] and rows[1]["경로"] == "DR-200/100100"
+    ok(env, "select", "--from", "v2p", "--name", "v2q")
+    out = ok(env, "diff", "--old", "v2p", "--new", "v2q", "--on", "경로")
+    assert out["count"] == 0
