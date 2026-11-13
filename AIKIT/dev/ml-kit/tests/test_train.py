@@ -2755,3 +2755,14 @@ def test_unit_row_below_not_counted_in_profile(tmp_path):
     assert prof["target_missing_rows"] == {"수율": 0}, prof
     assert hist[-1]["data_hygiene"]["total_rows"] == 30, hist[-1]["data_hygiene"]
     assert any("2행" in w and "단위 행" in w for w in res.get("warnings", [])), res.get("warnings")
+
+
+def test_excluded_reasons_count_data_rows_once_over_targets():
+    """회사 PC BEAM 2026-11-13 A3: 타겟 3개에서 같은 29행을 뺀 것을 excluded_reasons가 87행으로 셈 (타겟마다 한 줄씩).
+    이유별 수는 데이터 행 수 (한 행은 한 번), excluded_count는 README대로 타겟별 합."""
+    rows = [{"타겟": t, "원본 행": r, "구분": "조건", "이유": "조건 생산효율(%) > 80", "실제값": 81.0, "_key": "조건 생산효율(%) > 80"}
+            for t in ("생산효율(%)", "불순물(ppm)", "소비전력(kW)") for r in (5, 6)]
+    rows.append({"타겟": "생산효율(%)", "원본 행": 9, "구분": "자동", "이유": "자동 이상치", "실제값": 1.0, "_key": "자동 이상치: 생산효율"})
+    keys = mt.excluded_preview_keys(rows)
+    assert keys["excluded_reasons"] == {"조건 생산효율(%) > 80": 2, "자동 이상치: 생산효율": 1}, keys
+    assert keys["excluded_count"] == 7

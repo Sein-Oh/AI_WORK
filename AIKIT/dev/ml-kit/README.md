@@ -563,7 +563,7 @@ python ml_train.py \
   `feature_stats`는 유효숫자 12자리로 저장합니다.
 - 산출물: `vX/excluded_rows.csv` (열: 타겟, 원본 행, 구분(직접 표시/조건/자동 이상치), 이유, 실제값, 예측값). 원본 행은 엑셀 행 번호(CSV는 빈 줄을 뺀 줄 번호).
 - 결과 JSON: `exclusions` = `{타겟: {column, manual, auto, forced_include, auto_note, all_rows_score}}`, `excluded_rows_file`,
-  `excluded_count`(뺀 행 수, 타겟별 합), `excluded_reasons`(이유별 행 수: `제외` 열의 글, 자동은 `자동 이상치: <열>`),
+  `excluded_count`(뺀 행 수, 타겟별 합), `excluded_reasons`(이유별 데이터 행 수, 타겟이 여럿이어도 한 행은 한 번: `제외` 열의 글, 자동은 `자동 이상치: <열>`),
   `excluded_preview`(앞 20행: `target`, `row`(원본 행), `kind`(`직접`/`자동`), `reason`, `value`(타겟 실제값)), `excluded_preview_truncated`.
   에이전트는 CSV를 열지 않고 이 키만 읽습니다. 원장에는 `exclusions`, `model_<타겟>.json`에는 `excluded`, `leaderboard.json` 챔피언에는 `all_rows_score`.
   제외한 행이 없고 `포함` 표시도 없으면 이 키들은 생기지 않습니다.

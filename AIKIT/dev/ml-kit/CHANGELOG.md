@@ -14,6 +14,12 @@
 
 ## [2.9.92] - 2026-11-12
 
+### 회사 PC Gemma·BEAM 시험(2026-11-13) 뒤 고친 것
+- 학습 JSON `excluded_reasons`(이유별 행 수)가 타겟마다 한 번씩 세어, 타겟 3개에서 뺀 29행을 87행으로 냄 (BEAM A3 답변). 이제 데이터 행 수
+  (한 행은 한 번). `excluded_count`는 README대로 타겟별 합.
+- `ml_dataset.py`의 안내와 ml-dataset 스킬: "학습은 사용자가 원할 때" -> 사용자가 학습까지 요청했으면("빼고 다시 학습해줘") 묻지 않고 바로
+  `next_commands[0]`, 데이터셋만 요청했으면 학습할지 물음 (Gemma A3: 행을 뺀 뒤 학습할지 되물음).
+
 ### 구조: 스킬 위치 C:\AIKIT\.opencode\skills (사용자 결정 2026-11-13)
 - `C:\AIKIT`을 OpenCode 프로젝트로 열 때만 우리 스킬을 쓰도록 스킬 5개를 `AIKIT/skills/`에서 `AIKIT/.opencode/skills/`로 옮김 (상세: office-cli CHANGELOG 1.6.7).
   `_ml_runtime.py`의 스킬 파일 경로, `tools/run_win_tests.py`, 테스트를 함께 고침. 도구 동작은 같음.

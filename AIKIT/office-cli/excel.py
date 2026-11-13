@@ -1393,6 +1393,29 @@ def _where_unreadable(matrix: List[List[Any]], groups: List[List[Tuple[int, str,
     return None
 
 
+def _where_percent_value(matrix: List[List[Any]], groups: List[List[Tuple[int, str, str]]], conds: List[List[Cond]],
+                         names: Dict[int, str]) -> Optional[str]:
+    """크기 비교의 조건 값이 % 없는 숫자(절댓값 1 초과)인데 그 열의 숫자가 모두 -1~1이면(% 서식 칸, 5.0%로 보여도 값은 0.05)
+    그대로 비교하면 늘 0건이거나 전부라 % 를 붙인 식을 [추천] (회사 PC Gemma 2026-11-13 O6: '불량률 >= 5'가 0건 VERIFIED).
+    읽기만 하는 명령이라 [추천] (잘못 골라도 바뀌는 것이 없음)."""
+    fixed, hit = [], []
+    for g, cg in zip(groups, conds):
+        row = []
+        for (j, op, val), (col, _, _) in zip(g, cg):
+            m = _WHERE_LOOSE_NUM.match(val.strip())
+            if op in (">", "<", ">=", "<=") and m and not m.group(2) and _where_num(val) is not None and abs(_where_num(val)) > 1:
+                nums = [_where_num(r[j]) for r in matrix[1:] if j < len(r) and not _is_date(r[j]) and _where_num(r[j]) is not None]
+                if nums and all(-1 <= n <= 1 for n in nums):
+                    hit.append(f"{names[j]} {op} {val.strip()}")
+                    val = val.strip() + "%"
+            row.append((col, op, val))
+        fixed.append(row)
+    if not hit:
+        return None
+    return (f"조건 {', '.join(hit)}: 열의 값이 모두 -1~1 사이라(엑셀에서 % 서식이면 5.0%로 보여도 값은 0.05) 그대로 비교하면 결과가 늘 0건이거나 "
+            f"전부입니다. 백분율이면 %를 붙여 쓰세요. [추천] {rt.retry_command({'--where': where_text(fixed)})}")
+
+
 def _column_names(spec: str) -> List[str]:
     """--columns '품번, 수량' -> ['품번', '수량'] (이름 목록은 ',', 사용법 단순성 3번)."""
     cols = [c.strip() for c in str(spec).split(",") if c.strip()]
@@ -1447,7 +1470,7 @@ def _read_where(args, conds: List[List[Cond]], matrix: List[List[Any]], sheet: s
         return matrix[i][j] if j < len(matrix[i]) else None
     names = {j: str(out_value(header[j])) if j < len(header) and _where_text(header[j]) else col
              for g, cg in zip(groups, conds) for (j, _, _), (col, _, _) in zip(g, cg)}
-    bad = _where_unreadable(matrix, groups, names)
+    bad = _where_unreadable(matrix, groups, names) or _where_percent_value(matrix, groups, conds, names)
     if bad:
         raise rt.InputError(bad + f" 형식: {WHERE_FORM}")
     hits = [i for i in range(1, len(matrix))
@@ -1599,7 +1622,8 @@ def cmd_stats(args) -> Dict[str, Any]:
     warnings: List[str] = []
     if conds is not None:
         groups_w = [[(resolve_column(col, header, c0, ncols, "조건 열", option="--where")[0], op, val) for col, op, val in g] for g in conds]
-        bad = _where_unreadable(matrix, groups_w, {j: names[j] for g in groups_w for j, _, _ in g})
+        names_w = {j: names[j] for g in groups_w for j, _, _ in g}
+        bad = _where_unreadable(matrix, groups_w, names_w) or _where_percent_value(matrix, groups_w, conds, names_w)
         if bad:
             raise rt.InputError(bad + f" 형식: {WHERE_FORM}")
         rows = [i for i in rows if any(all(_where_match(cell(i, j), op, val) for j, op, val in g) for g in groups_w)]

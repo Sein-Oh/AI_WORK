@@ -335,8 +335,8 @@ def execute(args) -> Dict[str, Any]:
     res["agent_directive"] = (
         ("VERIFIED: 저장한 파일을 다시 읽어 확인했습니다. " if not problems else
          "UNVERIFIED: 저장한 파일을 확인하지 못했습니다 (" + "; ".join(problems) + "). 다시 실행하지 말고 unverified를 알리세요. ")
-        + "preview" + (", warnings" if warnings else "") + "를 그대로 알리세요. 학습은 사용자가 원할 때 next_commands[0]"
-        + ("의 <타겟>을 바꿔" if nxt.get("needs_input") else "을 그대로") + " 실행합니다.")
+        + "preview" + (", warnings" if warnings else "") + "를 그대로 알리세요. 사용자가 학습까지 요청했으면(예: '빼고 다시 학습해줘') 묻지 않고 바로 next_commands[0]"
+        + ("의 <타겟>을 바꿔" if nxt.get("needs_input") else "을 그대로") + " 실행하고, 데이터셋만 요청했으면 학습할지 물으세요.")
     return res
 
 
