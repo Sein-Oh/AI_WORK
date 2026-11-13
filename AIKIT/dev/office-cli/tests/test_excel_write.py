@@ -2588,3 +2588,11 @@ def test_write_link_text_is_read_back(xl, capsys, tmp_path):
     code, out = run_excel(capsys, "write", "--range", "E21", "--link", doc, "--value", "P링크 2")
     assert code == 0 and out["verified"] is False and out["agent_directive"].startswith("UNVERIFIED:"), out
     assert "칸의 글이 다름" in json.dumps(out, ensure_ascii=False), out
+
+
+def test_comment_cells_option_explains_file_form(tmp_path, capsys):
+    """회사 PC Gemma 2026-11-13 O1: comment --cells "C3:OK,C4:NG"가 옵션 목록만 받음. 칸마다 다른 메모는 CSV(--file),
+    한 칸은 --range/--text라고 안내하고, 판정 메모는 먼저 묻게 함 (값을 끼울 [추천]은 만들 수 없어 안내만)."""
+    code, out = run_main(excel, capsys, "comment", "--target", str(tmp_path / "a.xlsx"), "--cells", "C3:OK,C4:NG")
+    assert code == 2 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    assert "--file" in out["message"] and "CSV(열: 칸, 메모)" in out["message"] and "\"예\"" in out["message"], out
