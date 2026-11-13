@@ -18,6 +18,16 @@
 
 ## [1.6.7] - 2026-11-12
 
+### 구조: C:\AIKIT은 OpenCode 프로젝트 폴더 (사용자 결정 2026-11-13)
+- 우리 지침·스킬·도구는 `C:\AIKIT`을 프로젝트로 연 대화에서만 쓰임 (전에는 `OPENCODE_CONFIG_DIR=C:\AIKIT`로 전역 설정 폴더여서 다른 프로젝트 대화에도 보였음).
+  스킬 12개를 `AIKIT/skills/`에서 `AIKIT/.opencode/skills/`로 옮김 (OpenCode가 프로젝트에서 스킬을 찾는 곳, 사용자가 만든 스킬도 여기).
+- 사내 LLM 설정(`opencode.jsonc`)과 셸·권한·폐쇄망 잠금은 사용자 전역 설정 `%USERPROFILE%\.config\opencode` (모든 프로젝트).
+  `setup.py`: 우리 `opencode.json`의 키(shell, permission, autoupdate, share, lsp, formatter)를 전역 `opencode.json`에 합침 (permission은 키별, 다른 키는 그대로,
+  원래 파일 보관, 못 읽는 파일은 바꾸지 않음, 쓴 뒤 다시 읽어 확인). 예전 설치의 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`는 보관 후 지움
+  (다른 값이면 그대로 두고 WARN). `opencode debug paths`의 config가 전역 설정 폴더인지 확인, `C:\AIKIT\opencode.jsonc`가 남아 있으면 옮기라고 WARN.
+- `web.bat`은 환경 변수를 넣지 않고 `C:\AIKIT`에서 서비스를 띄움. `run_all_tests.py` 진단과 `run_simplify_check.py` K1은 예전 환경 변수가 남았는지 봄.
+- 경로를 가리키는 곳 함께: `_runtime.py`(스킬 파일 경로), 전역 지침 3·9·10장, 사용 가이드, 저장소 지침·README, `docs/opencode/`, 테스트.
+
 ### 시험 정리 (사용자 결정 2026-11-13): PC 시험은 run_all_tests.py 하나와 눈 확인
 - 단순성 점검 `run_simplify_check.py`를 `run_all_tests.py`의 기본 단계 `simplify`로 (diag -> beta -> simplify -> office, 선택 ml·gemma).
 - 지움: Gemma 메시지 팩 `docs/opencode/자동테스트/`와 `SCENARIOS.md`, `grade_opencode.py --make-pack` (`--gemma`가 대신함, O3 수동 문장은

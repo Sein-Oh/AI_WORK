@@ -1,20 +1,23 @@
 r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C:\AIKIT\setup.py)
 
-배포는 C:\AIKIT 폴더 하나입니다. 이 스크립트가 그 폴더를 사용자 PC에 연결합니다. 관리자 권한은 시스템 PATH를 쓸 때만 필요합니다.
-    python setup.py                 # 설치 (환경 변수, PATH 등록, 동작 확인)
+배포는 C:\AIKIT 폴더 하나입니다. 우리 도구·지침·스킬은 C:\AIKIT을 OpenCode 프로젝트로 열 때만 씁니다 (사용자 결정 2026-11-13).
+관리자 권한은 시스템 PATH를 쓸 때만 필요합니다.
+    python setup.py                 # 설치 (전역 설정에 우리 설정 합치기, PATH 등록, 동작 확인)
     python setup.py --check         # 아무것도 바꾸지 않고 확인만 (다르거나 실패가 있으면 exit 1)
     python setup.py --no-path       # 시스템 PATH는 건드리지 않음
 
 하는 일 (C:\AIKIT = 이 파일이 있는 폴더):
-1. OpenCode 설정 폴더를 C:\AIKIT으로: 사용자 환경 변수 OPENCODE_CONFIG_DIR(HKCU\Environment)를 이 폴더로 설정합니다.
-   OpenCode는 설정 파일 없이 폴더 모양만으로 AGENTS.md(전역 지침)와 skills\<이름>\SKILL.md(기본 스킬 12개와 사용자 스킬)를 읽고,
-   opencode.json(셸·권한 기본 설정, 배포 파일)과 opencode.jsonc(사내 LLM 주소, 사용자가 넣음)를 합쳐 읽습니다 (OpenCode 2.2.5 확인).
-   복사하지 않으므로 C:\AIKIT을 바꾸면 바로 반영됩니다. 원래 값은 data\setup_backup_<시각>\user_env.txt에 보관하고, 쓴 뒤 다시 읽어 확인합니다.
-2. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
+1. C:\AIKIT 프로젝트 파일 확인: AGENTS.md(프로젝트 지침), .opencode\skills\<이름>\SKILL.md(기본 스킬 12개와 사용자 스킬),
+   opencode.json(셸·권한·폐쇄망 잠금). OpenCode는 C:\AIKIT을 프로젝트로 연 대화(web.bat, C:\AIKIT에서 실행한 opencode)에서만 이것을 읽습니다.
+2. OpenCode 전역 설정(%USERPROFILE%\.config\opencode): 우리 opencode.json의 셸·권한·폐쇄망 잠금을 전역 opencode.json에 합칩니다
+   (모든 프로젝트에 적용, 사용자 결정 2026-11-13). 원래 파일은 data\setup_backup_<시각>에 보관하고, 쓴 뒤 다시 읽어 확인합니다.
+   사내 LLM 설정(opencode.jsonc)은 사용자가 이 전역 폴더에 둡니다. 예전 설치가 남긴 사용자 환경 변수 OPENCODE_CONFIG_DIR=C:\AIKIT는
+   지웁니다 (남아 있으면 C:\AIKIT이 전역 설정 폴더가 되어 모든 대화에 우리 지침·스킬이 들어감).
+3. 시스템 PATH(HKLM)에 <C:\AIKIT>\python, <C:\AIKIT>\python\Scripts가 없으면 뒤에 추가합니다.
    원래 값은 data\setup_backup_<시각>\system_path.txt에 보관하고, 쓴 뒤 다시 읽어 확인하고, 환경 변경을 알립니다.
    OpenCode 백그라운드 서비스를 끔 (서비스는 처음 뜰 때의 환경 변수·PATH로 계속 돌아, 끄지 않으면 재부팅 전까지 옛 설정을 씀).
-3. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep, 없어도 됨),
-   opencode debug paths의 config가 C:\AIKIT인지. opencode.json + opencode.jsonc를 합친 설정의 "shell", "instructions",
+4. 동작 확인: python\python.exe로 라이브러리 import, 도구 -h가 stdout 1줄 JSON인지, opencode.exe, rg(ripgrep, 없어도 됨),
+   opencode debug paths의 config가 전역 설정 폴더인지. 전역 opencode.json + opencode.jsonc를 합친 설정의 "shell", "instructions",
    permission, "enabled_providers"(적었을 때만 이름 확인), 폐쇄망 잠금(OFFLINE_DENY, OFFLINE_SET)을 WARN/INFO로 알림.
 
 이 스크립트는 에이전트용 출력 계약(stdout 1줄 JSON) 대상이 아닙니다. exit 0 = 모두 OK, 1 = 실패(또는 --check에서 다름) 있음.
@@ -29,11 +32,11 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\AIKIT (배포 폴더)
-OFFICE_SKILLS = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")    # skills\<이름>\SKILL.md (office-cli)
-ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # skills\<이름>\SKILL.md (ml-kit)
+OFFICE_SKILLS = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")    # .opencode\skills\<이름>\SKILL.md (office-cli)
+ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # .opencode\skills\<이름>\SKILL.md (ml-kit)
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
 USER_ENV_KEY = "Environment"                                                   # 사용자 환경 변수 (HKCU)
-CONFIG_ENV = "OPENCODE_CONFIG_DIR"                                             # OpenCode 설정 폴더를 바꾸는 환경 변수
+CONFIG_ENV = "OPENCODE_CONFIG_DIR"                                             # OpenCode 전역 설정 폴더를 바꾸는 환경 변수 (예전 설치가 C:\AIKIT으로 넣음, 지금은 지움)
 # opencode.json(우리 설정)에만 두는 키: opencode.jsonc(사용자가 넣는 사내 LLM 설정)에도 있으면 어느 쪽이 쓰일지 헷갈림
 OUR_KEYS = ("shell", "permission", "autoupdate", "share", "lsp", "formatter")
 # 폐쇄망에서 되지 않는 기능 잠금 (배포 opencode.json에 있음, 집 PC에서 인터넷을 막고 확인 2026-11-12).
@@ -50,8 +53,20 @@ LONG_PATH = 2047                                                     # 이보다
 
 
 def config_dir():
-    """OpenCode 설정 폴더 = C:\\AIKIT (OPENCODE_CONFIG_DIR가 가리키는 곳): AGENTS.md, skills\\, opencode.json, opencode.jsonc가 맨 위."""
+    """C:\\AIKIT = OpenCode 프로젝트 폴더: AGENTS.md(프로젝트 지침), .opencode\\skills\\, opencode.json이 맨 위."""
     return HERE
+
+
+def skills_dir():
+    """프로젝트 스킬 폴더 C:\\AIKIT\\.opencode\\skills (OpenCode가 프로젝트에서 스킬을 찾는 곳, 사용자가 만든 스킬도 여기)."""
+    return os.path.join(HERE, ".opencode", "skills")
+
+
+def global_config_dir():
+    """OpenCode 전역 설정 폴더 (모든 프로젝트): %XDG_CONFIG_HOME% 또는 %USERPROFILE%\\.config 아래 opencode.
+    사내 LLM 설정(opencode.jsonc)과 setup이 합치는 셸·권한·폐쇄망 잠금(opencode.json)이 여기."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "opencode")
 
 
 def data_dir():
@@ -90,12 +105,12 @@ class Report:
 
 
 # ---------------------------------------------------------------------------
-# 1. OpenCode 설정 폴더 (C:\AIKIT)
+# 1. C:\AIKIT 프로젝트 파일
 # ---------------------------------------------------------------------------
 def sources():
-    """(이름, 파일) 목록: OpenCode가 C:\\AIKIT에서 바로 읽는 파일 (복사하지 않음)."""
-    items = [(f"{name} 스킬", os.path.join(HERE, "skills", name, "SKILL.md")) for name in ML_SKILLS + OFFICE_SKILLS]
-    items.append(("전역 지침", os.path.join(config_dir(), "AGENTS.md")))
+    """(이름, 파일) 목록: C:\\AIKIT을 프로젝트로 열면 OpenCode가 그 자리에서 읽는 파일 (복사하지 않음)."""
+    items = [(f"{name} 스킬", os.path.join(skills_dir(), name, "SKILL.md")) for name in ML_SKILLS + OFFICE_SKILLS]
+    items.append(("프로젝트 지침", os.path.join(config_dir(), "AGENTS.md")))
     items.append(("opencode.json(우리 설정)", os.path.join(config_dir(), "opencode.json")))
     return items
 
@@ -115,14 +130,14 @@ def version_of(data):
 
 
 def step_sources(rep):
-    """OpenCode가 읽을 파일(기본 스킬 12개, 전역 지침, opencode.json)이 C:\\AIKIT에 있는지."""
+    """C:\\AIKIT 프로젝트 파일(기본 스킬 12개, 프로젝트 지침, opencode.json)이 있는지."""
     missing = [(n, p) for n, p in sources() if not os.path.isfile(p)]
     for name, path in missing:
-        rep.line("FAIL", f"{name}: 파일이 없습니다: {path} (저장소의 AIKIT 폴더를 통째로 다시 복사하세요)")
+        rep.line("FAIL", f"{name}: 파일이 없습니다: {path} (저장소의 AIKIT 폴더를 통째로 다시 복사하세요. .opencode 폴더도 함께)")
     if not missing:
         vers = sorted({version_of(_read(p)) for n, p in sources() if n.endswith("스킬")} - {""})
-        mine = sorted(set(os.listdir(os.path.join(HERE, "skills"))) - set(ML_SKILLS + OFFICE_SKILLS))
-        rep.line("OK", f"기본 스킬 {len(ML_SKILLS) + len(OFFICE_SKILLS)}개 ({', '.join(vers)}), 전역 지침, opencode.json: 있음  {HERE}"
+        mine = sorted(set(os.listdir(skills_dir())) - set(ML_SKILLS + OFFICE_SKILLS))
+        rep.line("OK", f"기본 스킬 {len(ML_SKILLS) + len(OFFICE_SKILLS)}개 ({', '.join(vers)}), 프로젝트 지침, opencode.json: 있음  {HERE}"
                        + (f" (사용자 스킬 {len(mine)}개: {', '.join(mine[:10])})" if mine else ""))
 
 
@@ -144,9 +159,10 @@ def read_user_env(reg):
 
 
 def step_env(rep, backup, check=False, reg=None):
-    """사용자 환경 변수 OPENCODE_CONFIG_DIR = C:\\AIKIT (관리자 권한 필요 없음). 이 프로세스에도 넣어 동작 확인에 씀."""
-    want = config_dir()
-    os.environ[CONFIG_ENV] = want
+    """사용자 환경 변수 OPENCODE_CONFIG_DIR가 C:\\AIKIT이면 지움 (예전 설치가 넣은 값: 남아 있으면 C:\\AIKIT이 전역 설정 폴더가 되어
+    다른 프로젝트 대화에도 우리 지침·스킬이 들어감). 다른 폴더를 가리키면 사용자 설정이라 그대로 두고 알림. 이 프로세스에서도 뺌."""
+    if os.environ.get(CONFIG_ENV) and _norm(os.environ[CONFIG_ENV]) == _norm(config_dir()):
+        del os.environ[CONFIG_ENV]
     reg = reg or _winreg()
     if reg is None:
         rep.line("WARN", f"Windows가 아니라 사용자 환경 변수 {CONFIG_ENV}는 확인하지 않았습니다")
@@ -156,30 +172,30 @@ def step_env(rep, backup, check=False, reg=None):
     except OSError as e:
         rep.line("FAIL", f"사용자 환경 변수를 읽지 못함 ({type(e).__name__}: {e})")
         return
-    if cur is not None and _norm(cur) == _norm(want):
-        rep.line("OK", f"사용자 환경 변수 {CONFIG_ENV} = {cur}")
+    if not cur:
+        rep.line("OK", f"사용자 환경 변수 {CONFIG_ENV}: 없음 (전역 설정은 {global_config_dir()})")
+        return
+    if _norm(cur) != _norm(config_dir()):
+        rep.line("WARN", f"사용자 환경 변수 {CONFIG_ENV}가 {cur}입니다. 사용자가 정한 값이라 그대로 두지만, OpenCode가 그 폴더를 전역 설정으로 "
+                         f"읽어 이 setup이 합친 {global_config_dir()}의 설정은 쓰이지 않습니다")
         return
     if check:
-        rep.diff(f"사용자 환경 변수 {CONFIG_ENV}: {cur or '없음'} (설치하면 {want})")
+        rep.diff(f"사용자 환경 변수 {CONFIG_ENV} = {cur} (예전 설치 값, 설치하면 지움)")
         return
     try:
         os.makedirs(backup, exist_ok=True)
         keep = os.path.join(backup, "user_env.txt")
         with open(keep, "w", encoding="utf-8") as f:
-            f.write(f"# HKCU\\{USER_ENV_KEY} {CONFIG_ENV}, 설치 전 값 (없으면 빈 줄)\n{cur or ''}\n")
-    except OSError as e:
-        rep.line("FAIL", f"사용자 환경 변수 원래 값을 보관하지 못해 바꾸지 않았습니다 ({type(e).__name__}: {e})")
-        return
-    try:
+            f.write(f"# HKCU\\{USER_ENV_KEY} {CONFIG_ENV}, 설치 전 값\n{cur}\n")
         with reg.OpenKey(reg.HKEY_CURRENT_USER, USER_ENV_KEY, 0, reg.KEY_READ | reg.KEY_SET_VALUE) as key:
-            reg.SetValueEx(key, CONFIG_ENV, 0, reg.REG_SZ, want)
+            reg.DeleteValue(key, CONFIG_ENV)
     except OSError as e:
-        rep.line("FAIL", f"사용자 환경 변수 {CONFIG_ENV}를 쓰지 못함 ({type(e).__name__}: {e})")
+        rep.line("FAIL", f"사용자 환경 변수 {CONFIG_ENV}를 지우지 못함 ({type(e).__name__}: {e})")
         return
-    if _norm(read_user_env(reg) or "") != _norm(want):
-        rep.line("FAIL", f"사용자 환경 변수 {CONFIG_ENV}를 쓴 뒤 다시 읽은 값이 다릅니다")
+    if read_user_env(reg):
+        rep.line("FAIL", f"사용자 환경 변수 {CONFIG_ENV}를 지운 뒤에도 남아 있습니다")
         return
-    rep.line("OK", f"사용자 환경 변수 {CONFIG_ENV} = {want} (원래 값: {cur or '없음'}, 보관: {keep})")
+    rep.line("OK", f"사용자 환경 변수 {CONFIG_ENV}={cur}를 지웠습니다 (보관: {keep}). 이제 C:\\AIKIT은 프로젝트로 열 때만 쓰입니다")
     try:
         sent = broadcast_env_change()
     except Exception as e:                              # 알림 실패는 값에 영향 없음
@@ -187,6 +203,59 @@ def step_env(rep, backup, check=False, reg=None):
         print(f"[INFO] 환경 변경 알림 오류: {type(e).__name__}: {e}", flush=True)
     if not sent:
         rep.line("WARN", "환경 변경 알림을 보내지 못했습니다. OpenCode에 새 설정이 안 보이면 로그아웃 후 다시 로그인하세요")
+
+
+def step_global_config(rep, backup, check=False):
+    """우리 opencode.json의 셸·권한·폐쇄망 잠금(OUR_KEYS)을 전역 opencode.json에 합침 (모든 프로젝트에 적용, 사용자 결정 2026-11-13).
+    전역 파일의 다른 키는 그대로, permission은 키별로 합침. 못 읽는 파일은 바꾸지 않음. 쓰기 전 보관, 쓴 뒤 다시 읽어 확인."""
+    gdir = global_config_dir()
+    target = os.path.join(gdir, "opencode.json")
+    try:
+        ours = parse_jsonc(_read(os.path.join(config_dir(), "opencode.json")).decode("utf-8-sig"))
+    except (AttributeError, ValueError, UnicodeDecodeError) as e:
+        rep.line("FAIL", f"C:\\AIKIT\\opencode.json(우리 설정)을 읽지 못함 ({type(e).__name__})")
+        return
+    cur = {}
+    if os.path.isfile(target):
+        try:
+            cur = parse_jsonc(_read(target).decode("utf-8-sig"))
+        except (ValueError, UnicodeDecodeError) as e:
+            rep.line("FAIL", f"전역 설정 {target}을 읽지 못해 바꾸지 않았습니다 ({type(e).__name__}). 파일을 고친 뒤 다시 실행하세요")
+            return
+        if not isinstance(cur, dict):
+            rep.line("FAIL", f"전역 설정 {target}이 JSON 객체가 아니라 바꾸지 않았습니다")
+            return
+    merged = dict(cur)
+    for key in OUR_KEYS:
+        if key not in ours:
+            continue
+        if isinstance(ours[key], dict) and isinstance(cur.get(key), dict):
+            merged[key] = {**cur[key], **ours[key]}
+        else:
+            merged[key] = ours[key]
+    if merged == cur:
+        rep.line("OK", f"전역 설정에 우리 셸·권한·폐쇄망 잠금이 있음  {target}")
+        return
+    changed = sorted(k for k in OUR_KEYS if merged.get(k) != cur.get(k))
+    if check:
+        rep.diff(f"전역 설정 {target}에 없거나 다른 우리 설정: {', '.join(changed)} (설치하면 합침)")
+        return
+    try:
+        if os.path.isfile(target):
+            os.makedirs(backup, exist_ok=True)
+            shutil.copy2(target, os.path.join(backup, "global_opencode.json"))
+        os.makedirs(gdir, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+        again = parse_jsonc(_read(target).decode("utf-8-sig"))
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        rep.line("FAIL", f"전역 설정 {target}을 쓰지 못함 ({type(e).__name__}: {e})")
+        return
+    if again != merged:
+        rep.line("FAIL", f"전역 설정 {target}을 쓴 뒤 다시 읽은 값이 다릅니다")
+        return
+    rep.line("OK", f"전역 설정에 우리 설정을 합쳤습니다 ({', '.join(changed)})  {target}"
+                   + (f" (원래 파일 보관: {os.path.join(backup, 'global_opencode.json')})" if cur else ""))
 
 
 def _norm(entry):
@@ -321,8 +390,8 @@ def step_service(rep, run=None):
 
 
 def step_opencode_paths(rep, run=None):
-    """OpenCode가 OPENCODE_CONFIG_DIR를 따르는지 실제로 확인: 'opencode debug paths'의 config 줄이 C:\\AIKIT인지
-    (OpenCode 2.2.5 집 PC 2026-11-12 확인). opencode.exe가 없거나 debug paths가 없는 버전이면 INFO."""
+    """OpenCode 전역 설정 폴더 확인: 'opencode debug paths'의 config 줄이 전역 설정 폴더인지 (C:\\AIKIT이면 예전 환경 변수가 이 창에 남은 것).
+    opencode.exe가 없거나 debug paths가 없는 버전이면 INFO."""
     exe = os.path.join(HERE, "opencode.exe")
     if not os.path.isfile(exe):
         return
@@ -336,10 +405,12 @@ def step_opencode_paths(rep, run=None):
     if rc != 0 or not m:
         rep.line("INFO", "opencode debug paths에 config 줄이 없어 설정 폴더를 확인하지 않았습니다 (OpenCode 버전 확인)")
     elif _norm(m.group(1)) == _norm(config_dir()):
-        rep.line("OK", f"OpenCode 설정 폴더: {m.group(1)} (opencode debug paths)")
+        rep.line("FAIL", f"OpenCode 전역 설정 폴더가 아직 {m.group(1)}입니다 (예전 환경 변수 {CONFIG_ENV}). 새 PowerShell 창에서 다시 확인하고, "
+                         "그래도 같으면 로그아웃 후 다시 로그인하세요")
+    elif _norm(m.group(1)) == _norm(global_config_dir()):
+        rep.line("OK", f"OpenCode 전역 설정 폴더: {m.group(1)} (opencode debug paths)")
     else:
-        rep.line("FAIL", f"OpenCode 설정 폴더가 {m.group(1)}입니다 ({config_dir()}이어야 함). 새 PowerShell 창에서 다시 확인하고, "
-                         f"그래도 다르면 로그아웃 후 다시 로그인하세요")
+        rep.line("INFO", f"OpenCode 전역 설정 폴더가 {m.group(1)}입니다 (이 setup은 {global_config_dir()}에 합쳤음)")
 
 
 def step_verify(rep):
@@ -394,7 +465,7 @@ def step_verify(rep):
         # opencode.json에서 꺼 둠. rg가 필요한 것은 Web UI의 @ 파일 자동 완성뿐 (집 PC 확인).
         rep.line("INFO", "rg(ripgrep) 없음: 정상입니다 (배포에 넣지 않음). 스킬과 도구는 그대로 되고, Web UI의 @ 파일 자동 완성만 안 됩니다")
     if os.name == "nt" and os.path.normcase(HERE.rstrip("\\")) != os.path.normcase("C:\\AIKIT"):
-        rep.line("WARN", f"이 폴더가 C:\\AIKIT가 아닙니다 ({HERE}). 스킬과 전역 지침의 명령은 C:\\AIKIT 기준입니다")
+        rep.line("WARN", f"이 폴더가 C:\\AIKIT가 아닙니다 ({HERE}). 스킬과 프로젝트 지침의 명령은 C:\\AIKIT 기준입니다")
 
 
 def parse_jsonc(text):
@@ -436,7 +507,7 @@ def parse_jsonc(text):
 
 
 def load_config(config_dir):
-    """설정 폴더의 opencode.json(우리 설정)과 opencode.jsonc(사내 LLM 설정)를 OpenCode처럼 합친 dict.
+    """전역 설정 폴더의 opencode.json(setup이 합친 우리 설정)과 opencode.jsonc(사내 LLM 설정)를 OpenCode처럼 합친 dict.
     (설정, 두 파일에 함께 있는 우리 키, 못 읽은 파일 목록, opencode.jsonc가 있는지). 객체 값(permission 등)은 키별로 합침."""
     merged, overlap, bad = {}, [], []
     seen = {}
@@ -471,9 +542,12 @@ def step_opencode_config(rep, config_dir):
     for name in bad:
         rep.line("WARN", f"{name}을 읽지 못해 설정을 확인하지 않았습니다  {config_dir}")
     if not has_jsonc:
-        rep.line("WARN", f"opencode.jsonc가 없습니다. 사내 LLM 주소가 든 opencode.jsonc를 {config_dir}\\에 넣고 다시 실행하세요")
+        rep.line("WARN", f"opencode.jsonc가 없습니다. 사내 LLM 주소가 든 opencode.jsonc를 전역 설정 폴더 {config_dir}\\에 넣고 다시 실행하세요")
+    if os.path.isfile(os.path.join(HERE, "opencode.jsonc")):
+        rep.line("WARN", f"{os.path.join(HERE, 'opencode.jsonc')}가 있습니다. 이 위치는 C:\\AIKIT 프로젝트에서만 읽힙니다: 사내 LLM 설정은 "
+                         f"{config_dir}\\opencode.jsonc로 옮기세요 (다른 프로젝트에서도 사내 LLM을 쓰게)")
     if overlap:
-        rep.line("WARN", f"opencode.json과 opencode.jsonc에 같은 키가 있습니다 ({', '.join(sorted(set(overlap)))}). 이 키는 opencode.json(배포 파일)에만 두고, "
+        rep.line("WARN", f"전역 opencode.json과 opencode.jsonc에 같은 키가 있습니다 ({', '.join(sorted(set(overlap)))}). 이 키는 opencode.json(setup이 합침)에만 두고, "
                          "opencode.jsonc에는 provider, model과 모델 목록 설정(enabled_providers 또는 disabled_providers)만 두세요")
     shell = cfg.get("shell")
     if shell is not None and not re.search(r"(?i)powershell|pwsh", json.dumps(shell)):
@@ -533,30 +607,32 @@ def main(argv=None):
         sys.stdout.reconfigure(errors="replace")
     except (AttributeError, ValueError):
         pass
-    p = argparse.ArgumentParser(description="C:\\AIKIT 설치: OpenCode 설정 폴더를 C:\\AIKIT으로, 시스템 PATH 등록, 동작 확인")
+    p = argparse.ArgumentParser(description="C:\\AIKIT 설치: 프로젝트 파일 확인, 전역 설정에 우리 설정 합치기, 시스템 PATH 등록, 동작 확인")
     p.add_argument("--check", action="store_true", help="아무것도 바꾸지 않고 확인만 (다르거나 실패가 있으면 exit 1)")
     p.add_argument("--no-path", action="store_true", help="시스템 PATH를 확인·등록하지 않음")
     args = p.parse_args(argv)
     backup = os.path.join(data_dir(), f"setup_backup_{dt.datetime.now():%Y%m%d_%H%M%S}")
     rep = Report()
     print(f"[INFO] 설치 폴더: {HERE}" + ("  (--check: 바꾸지 않음)" if args.check else ""), flush=True)
-    print(f"[INFO] 1. OpenCode 설정 폴더: {config_dir()}", flush=True)
+    print(f"[INFO] 1. C:\\AIKIT 프로젝트 파일: {config_dir()}", flush=True)
     step_sources(rep)
-    step_env(rep, backup, args.check)
     if not args.check:      # 스킬로 안 되는 일의 파이썬 스크립트를 두는 곳 (전역 지침 8장)
         os.makedirs(os.path.join(data_dir(), "scripts"), exist_ok=True)
-    print("[INFO] 2. 시스템 PATH", flush=True)
+    print(f"[INFO] 2. OpenCode 전역 설정: {global_config_dir()}", flush=True)
+    step_env(rep, backup, args.check)
+    step_global_config(rep, backup, args.check)
+    print("[INFO] 3. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)
     else:
         step_path(rep, backup, args.check)
     if not args.check:
         step_service(rep)
-    print("[INFO] 3. 동작 확인", flush=True)
+    print("[INFO] 4. 동작 확인", flush=True)
     step_verify(rep)
     step_opencode_paths(rep)
-    step_opencode_config(rep, config_dir())
-    step_opencode_providers(rep, config_dir())
+    step_opencode_config(rep, global_config_dir())
+    step_opencode_providers(rep, global_config_dir())
     if os.path.isdir(backup):
         print(f"[INFO] 이전 파일 보관: {backup}", flush=True)
     bad = len(rep.fails) + len(rep.diffs)
@@ -567,7 +643,8 @@ def main(argv=None):
     if args.check and rep.diffs:
         print("[STATUS] 다른 것이 있습니다. 적용: C:\\AIKIT\\setup.bat (또는 python C:\\AIKIT\\setup.py)", flush=True)
     if not args.check and not rep.fails:
-        print(f"[INFO] Web UI(web.bat)를 처음 쓰면 화면에서 프로젝트 열기로 {os.path.join(HERE, 'work')} 를 고른 뒤 새 세션을 만드세요", flush=True)
+        print(f"[INFO] 우리 도구는 {HERE}를 프로젝트로 열 때만 보입니다: Web UI는 web.bat (처음이면 화면에서 프로젝트 열기로 {HERE}), "
+              f"TUI는 {HERE}에서 opencode를 실행하세요", flush=True)
         print("[STATUS] 끝. 새 터미널(PowerShell)을 열고, OpenCode(TUI, Desktop, Web UI)를 모두 닫았다가 다시 시작하세요. "
               "새 스킬·지침이 안 보이거나 python을 못 찾으면 'C:\\AIKIT\\web.bat stop' 뒤 다시 실행하세요.", flush=True)
     return 1 if bad else 0

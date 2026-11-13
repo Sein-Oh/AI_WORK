@@ -111,8 +111,8 @@ def tool_versions():
     out = []
     for tool in TOOLS:
         ver = "?"
-        # 작업별 스킬은 C:\AIKIT\skills\<이름>\SKILL.md (도구마다 버전은 모두 같음): 도구의 대표 스킬 하나에서 읽음
-        skill = os.path.join(CLI_DIR, "skills", {"ml-kit": "ml-train", "office-cli": "excel-kit"}.get(tool, tool), "SKILL.md")
+        # 작업별 스킬은 C:\AIKIT\.opencode\skills\<이름>\SKILL.md (도구마다 버전은 모두 같음): 도구의 대표 스킬 하나에서 읽음
+        skill = os.path.join(CLI_DIR, ".opencode", "skills", {"ml-kit": "ml-train", "office-cli": "excel-kit"}.get(tool, tool), "SKILL.md")
         try:
             for line in open(skill, encoding="utf-8"):
                 if line.strip().startswith("version:"):
@@ -530,8 +530,9 @@ def step_diag(stage, args, ctx):
 
 
 def diag_skills(stage, lines, reg=None):
-    """setup.py --check와 같은 확인 (읽기만): 시스템 PATH에 C:\\AIKIT\\python이 있는지, 사용자 환경 변수 OPENCODE_CONFIG_DIR가
-    C:\\AIKIT인지(아니면 OpenCode가 우리 지침·스킬을 읽지 않음). 다르면 FAIL (고치는 명령: C:\\AIKIT\\setup.bat). Windows가 아니면 참고만."""
+    """setup.py --check와 같은 확인 (읽기만): 시스템 PATH에 C:\\AIKIT\\python이 있는지, 예전 설치의 사용자 환경 변수 OPENCODE_CONFIG_DIR=C:\\AIKIT가
+    남지 않았는지(남으면 C:\\AIKIT이 전역 설정이 되어 모든 대화에 우리 지침·스킬이 들어감, 2026-11-13부터 C:\\AIKIT은 프로젝트로 열 때만).
+    다르면 FAIL (고치는 명령: C:\\AIKIT\\setup.bat). Windows가 아니면 참고만."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("cli_setup", os.path.join(CLI_DIR, "setup.py"))
     mod = importlib.util.module_from_spec(spec)
@@ -553,19 +554,19 @@ def diag_skills(stage, lines, reg=None):
         lines.append("  시스템 PATH: " + ", ".join(mod.path_entries()) + " 있음")
         stage.passed += 1
     reg = reg or mod._winreg()
-    want = mod.config_dir()
+    here = mod.config_dir()
     if reg is None:
-        lines.append(f"  OpenCode 설정 폴더 환경 변수: Windows가 아니라 확인 안 함 ({mod.CONFIG_ENV})")
+        lines.append(f"  예전 설치의 환경 변수: Windows가 아니라 확인 안 함 ({mod.CONFIG_ENV})")
     else:
         try:
             cur = mod.read_user_env(reg)
         except OSError as e:
             cur = f"읽지 못함 ({type(e).__name__})"
-        lines.append(f"  {mod.CONFIG_ENV}: {cur or '없음'} (맞는 값 {want})")
-        if cur and mod._norm(cur) == mod._norm(want):
-            stage.passed += 1
+        lines.append(f"  {mod.CONFIG_ENV}: {cur or '없음'} (없어야 함, 전역 설정 {mod.global_config_dir()})")
+        if cur and mod._norm(cur) == mod._norm(here):
+            stage.fail(f"{mod.CONFIG_ENV}가 {cur}로 남아 있어 모든 대화에 우리 지침·스킬이 들어감 (C:\\AIKIT은 프로젝트로 열 때만). " + fix)
         else:
-            stage.fail(f"{mod.CONFIG_ENV}가 {cur or '없음'}이라 OpenCode가 {want}의 지침·스킬을 읽지 않음. " + fix)
+            stage.passed += 1
 
 
 BETA_SCRIPT = os.path.join(HERE, "run_beta_check.py")
@@ -1056,7 +1057,7 @@ def step_gemma(stage, args, ctx):
         if stop:
             break
         if not session:                                          # 첫 요청에서 세션이 안 생기면 나머지도 같음
-            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(C:\\AIKIT\\opencode.jsonc의 model)과 접속을 확인하세요.")
+            stage.fail(f"opencode가 응답하지 않음 ({sid}, exit {code}). 모델 설정(%USERPROFILE%\\.config\\opencode\\opencode.jsonc의 model)과 접속을 확인하세요.")
             stage.details.append((f"{sid} opencode 오류 출력", _read(err_path) or "(없음)"))
             break
     stage.details.append(("opencode run 실행 기록", "\n".join(log)))

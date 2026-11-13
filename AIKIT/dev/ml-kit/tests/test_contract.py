@@ -327,7 +327,7 @@ def test_help_is_stderr_text_and_one_json_line(script, data_dir):
     assert proc.returncode == 0 and "usage:" in proc.stderr
     assert payload["status"] == "ok" and payload["command"] == "help" and payload["verified"] is True
     assert payload["agent_directive"].startswith("VERIFIED:") and "SKILL.md" in payload["agent_directive"]
-    assert os.path.isfile(payload["skill_file"]) and os.path.dirname(payload["skill_file"]).startswith(os.path.join(os.path.dirname(KIT), "skills"))
+    assert os.path.isfile(payload["skill_file"]) and os.path.dirname(payload["skill_file"]).startswith(os.path.join(os.path.dirname(KIT), ".opencode", "skills"))
     assert _log(data_dir) == ""
 
 
