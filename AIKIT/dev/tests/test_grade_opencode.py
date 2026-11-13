@@ -136,7 +136,20 @@ def test_final_answer_is_last_assistant_message(tmp_path):
         ("계속", [{"type": "text", "text": "끝났습니다."}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     m1 = next(r for r in rows if r["id"] == "M1")
-    assert "16\\.25" in m1["실패"] and "답변: " in m1["실패"] and "이모지" not in m1["실패"]
+    assert "16\\.25" in m1["실패"] and "답변: " in m1["실패"] and "이모지" not in m1["실패"] and not m1["경고"]
+
+
+def test_emoji_in_final_answer_is_warning_not_failure(tmp_path):
+    """사용자 결정 2026-11-13 (집 PC Gemma): 최종 답변의 이모지는 경고만, 결과는 통과. file:///은 그대로 실패."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    cmd = 'python "C:\\AIKIT\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"'
+    path = _export(tmp_path, [("[M1] A=12.5", [_bash(cmd, ok), {"type": "text", "text": "\U0001F4CA 결과: 16.25, 87.5"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    m1 = next(r for r in rows if r["id"] == "M1")
+    assert "이모지" in m1["경고"] and "이모지" not in m1["실패"], m1
+    path = _export(tmp_path, [("[M1] A=12.5", [_bash(cmd, ok), {"type": "text", "text": "결과: 16.25, 87.5 file:///C:/a.xlsx"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    assert "file:///" in next(r for r in rows if r["id"] == "M1")["실패"]
 
 
 def _export_bytes(tmp_path, data, enc, bom=b""):
@@ -760,24 +773,31 @@ READ_X = f'{EX} read --target "{G}\\규격대조.xlsx" --range B3:C7'
 SEARCH = f'{RD} search --query "소비 전류;동작 온도" --file "{G}\\규격서.txt"'
 MEMO = f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --file "C:\\AIKIT\\data\\대조메모.csv"'
 O1_ANSWER = ("5행 대조: 맞음 2, 다름 2, 규격서에 없음 1. 다름: 소비 전류 250 (규격서.txt 3.2, 200 mA 이하), "
-             "동작 온도 70 (3.3, -20~60 ℃). 메모 5개를 미리보기했습니다. 이대로 달까요?")
+             "동작 온도 70 (3.3, -20~60 ℃). 값 칸에 메모 5개를 달았습니다. 되돌리려면 office.py undo")
+O9_ANSWER = ("5행 대조: 맞음 2, 다름 2, 규격서에 없음 1. 다름: 소비 전류 250 (규격서.txt 3.2, 200 mA 이하), "
+             "동작 온도 70 (3.3, -20~60 ℃).")
 
 # 시나리오: (합격 기록들, [(불합격 기록, 실패 이유에 들어갈 글)]). 기록 = [(명령, 결과 JSON), ..., 답변]
 OFFICE_CASES = {
-    "O1": ([[(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), O1_ANSWER],
-            [(READ_X.replace('"', ""), OK), (f'{RD} read --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER],
-            # 회사 PC Gemma 2026-11-13: 미리보기 없이 달 메모를 보여 주고 묻기 (전역 지침 3장 5번)
-            [(READ_X, OK), (f'{RD} read --file "{G}\\규격서.txt"', OK),
-             "다름: 소비 전류 250 (3.2), 동작 온도 70 (3.3). C4: [NG] 규격 초과 (규격서 3.2) 메모를 달겠습니다. 진행할까요?"]],
-           [([(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), (MEMO, OK), O1_ANSWER], "금지 명령"),        # 확인 없이 실제로 담
-            ([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O1_ANSWER], "금지 명령"),                          # 묻지 않고 바로 담
-            ([(READ_X, OK), (SEARCH, OK), "다른 곳 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "답변"),   # 달기 전에 묻지 않음
-            ([(READ_X, OK), (MEMO + " --dry-run", OK), O1_ANSWER], "reader"),                            # 규격서를 찾지 않음
+    # 사용자 결정 2026-11-13: 메모로 달아 달라고 했으면 묻지 않고 달고 판정·근거·되돌리기를 알림 (O1), 대조만이면 달지 않음 (O9)
+    "O1": ([[(READ_X, OK), (SEARCH, OK), (MEMO, OK), O1_ANSWER],
+            [(MEMO, OK), O1_ANSWER],                                    # 같은 세션의 O9가 이미 읽고 찾음 (집 PC Gemma 2026-11-13)
+            [(READ_X.replace('"', ""), OK), (f'{RD} read --file "{G}\\규격서.txt"', OK),
+             (f'{EX} comment --action add --target "{G}\\규격대조.xlsx" --range C4 --text "[NG] 규격서 3.2"', OK), O1_ANSWER]],
+           [([(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), "소비 전류 250 (3.2), 동작 온도 70 (3.3). 이대로 달까요?"], "comment"),  # 달라고 했는데 묻기만
+            ([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O9_ANSWER], "답변"),                               # 되돌리기를 알리지 않음
+            ([(READ_X, OK), (SEARCH, OK), (f'{EX} write --target "{G}\\규격대조.xlsx" --cells "D4=NG"', OK), (MEMO, OK), O1_ANSWER],
+             "금지 명령")]),                                                                         # 값 칸 밖에 글을 씀
+    "O9": ([[(READ_X, OK), (SEARCH, OK), O9_ANSWER],
+            [(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), O9_ANSWER + " 판정을 메모로 달까요?"]],
+           [([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O9_ANSWER], "금지 명령"),                        # 말하지 않은 메모를 담
             # 회귀: ;로 이은 다른 명령의 --dry-run을 보고 실제 달기를 놓침
-            ([(READ_X, OK), (SEARCH, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O1_ANSWER], "금지 명령"),
+            ([(READ_X, OK), (SEARCH, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O9_ANSWER], "금지 명령"),
             # 회귀: 메모 글(--text) 안의 "--dry-run" 글자를 옵션으로 봄
             ([(READ_X, OK), (SEARCH, OK), (f'{EX} comment --target "{G}\\규격대조.xlsx" --action add --range C5 --text "다름 (--dry-run 아님)"', OK),
-              O1_ANSWER], "금지 명령")]),
+              O9_ANSWER], "금지 명령"),
+            ([(READ_X, OK), (SEARCH, OK), (f'{EX} style --target "{G}\\규격대조.xlsx" --range C4 --bg yellow', OK), O9_ANSWER], "금지 명령"),
+            ([(READ_X, OK), "다른 곳 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "reader")]),          # 규격서를 찾지 않음
     "O2": ([[(f'{EX} write --target "{G}\\단위표.xlsx" --cells "C6=ft; C7=℃"', OK), "C6에 ft, C7에 ℃를 넣었습니다."],
             [(f"{EX} write -t '{G}\\단위표.xlsx' --cells 'C6 = ft;C7 = ℃'", OK), "C6, C7에 썼습니다."]],
            [([(f'{EX} write --target "{G}\\단위표.xlsx" --cell C6 --text ft', ARG_ERR),

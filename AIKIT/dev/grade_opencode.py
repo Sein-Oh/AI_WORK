@@ -22,7 +22,7 @@
   - 필요한 명령을 실행했는가 (commands), 도구 결과 JSON이 ok인가 (tool_ok)
   - 답변에 꼭 들어갈 값이 있는가 (answer_all, answer_any)
   - 공통 금지: 패키지 설치, py/python3, 임의 파이썬 코드, 도구 코드 읽기, .py 쓰기, office-cli에 없는 명령·옵션(지어낸 것),
-    같은 명령 반복, 답변의 이모지·file:///·같은 말 반복
+    같은 명령 반복, 답변의 file:///·같은 말 반복 (이모지는 경고만: 'warn' 규칙은 실패로 세지 않음)
   - manual이 있는 시나리오(O3, Outlook 메일 준비 필요)는 run_all_tests.py --gemma가 보내지 않는다. 기록이 없으면 "없음"(수동 전용)
   - answer_reference: true인 시나리오(X2처럼 자유 문장 답)는 답변 정규식 판정을 참고로만 보인다 ("통과(참고)"/"실패(참고)").
     최종 판정은 --judge 점수나 사람이 답변을 읽고 정한다. 명령·금지 규칙 위반은 그대로 "실패".
@@ -434,8 +434,9 @@ def grade_turn(sc, turn, rules):
                 counts[re.sub(r"\s+", " ", c).strip()] -= 1
             limit = int(sc.get("max_repeat") or rule["max_repeat"])       # 시나리오가 정한 상한 (Y1: 고쳐 다시 실행 2번까지 = 3회)
             bad += [f"{n}회: {c}" for c, n in counts.items() if n > limit]
+        if rid == "answer_emoji":
+            bad += [f"이모지 {m}" for m in sorted(set(EMOJI.findall(answer)))]
         if rid == "answer_clean":
-            bad += [f"이모지 {m}" for m in set(EMOJI.findall(answer))]
             bad += ["file:/// 링크"] if "file:///" in answer else []
             bad += [f"반복 '{m.group(0)[:40]}'" for m in REPEAT.finditer(answer) if re.search(r"[^\W\d_]", m.group(1))][:3]   # words, not table rules
         out.append((rule["title"], not bad, "; ".join(map(str, bad))[:300]))
@@ -609,13 +610,16 @@ def score(found, spec, by_id, order, use_judge, model):
         turn = found[sid][-1]                            # graded on the last time the request was sent
         checks = grade_turn(sc, turn, rules)
         ref = bool(sc.get("answer_reference"))            # answer regexes are a reference verdict only (free-text answers)
-        hard = [f"{n} ({d})" if d else n for n, ok, d in checks if not ok and not (ref and is_answer_check(n))]
-        soft = [f"참고 {n} ({d})" if d else f"참고 {n}" for n, ok, d in checks if not ok and ref and is_answer_check(n)]
+        warn_titles = {r["title"] for r in rules.values() if r.get("warn")}
+        warns = [f"{n} ({d})" if d else n for n, ok, d in checks if not ok and n in warn_titles]
+        checks_hard = [c for c in checks if c[0] not in warn_titles]
+        hard = [f"{n} ({d})" if d else n for n, ok, d in checks_hard if not ok and not (ref and is_answer_check(n))]
+        soft = [f"참고 {n} ({d})" if d else f"참고 {n}" for n, ok, d in checks_hard if not ok and ref and is_answer_check(n)]
         note = ""
         if turn.get("bulk"):
             note = "참고: 한 번에 보낸 요청, " + ("명령 순서로 나눠 채점" if turn.get("split") else "명령으로 나눌 수 없어 대화 전체로 채점")
         result = "실패" if hard else (("실패(참고)" if soft else "통과(참고)") if ref else "통과")
-        row = {"id": sid, "결과": result, "실패": " | ".join(hard + soft), "명령수": len(turn["tools"]),
+        row = {"id": sid, "결과": result, "실패": " | ".join(hard + soft), "경고": " | ".join(warns), "명령수": len(turn["tools"]),
                "초": round((turn["end"] - turn["start"]) / 1000) if turn["start"] and turn["end"] else None,
                "보낸횟수": len(found[sid]), "같이 보낸 요청": ",".join(turn.get("shared", [])), "참고": note}
         if use_judge:
@@ -664,7 +668,8 @@ def write_report(label, meta, rows, detail, out_dir=None):
         cell = r["결과"] + ("(참고)" if r.get("참고") and not r["결과"].endswith("(참고)") else "")
         if r["결과"].endswith("(참고)") and isinstance(r.get("점수"), int):
             cell += f" {r['점수']}점"
-        lines.append(f"| {r['id']} | {cell} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {(r['실패'] or '').replace('|', chr(92) + '|')} |"
+        fails = " | ".join(x for x in (r["실패"], r.get("경고")) if x)
+        lines.append(f"| {r['id']} | {cell} | {r['명령수']} | {r['초'] if r['초'] is not None else ''} | {fails.replace('|', chr(92) + '|')} |"
                      + (f" {r.get('점수') if r.get('점수') is not None else ''} |" if has_judge else ""))
     lines += ["", "## 요청별 기록", ""]
     for sid, sc, turn, checks in detail:
@@ -673,7 +678,7 @@ def write_report(label, meta, rows, detail, out_dir=None):
             lines += [next(r for r in rows if r["id"] == sid)["참고"], ""]
         ref = bool(sc.get("answer_reference"))
         for n, ok, d in checks:
-            tag = ("OK" if ok else "FAIL") + ("(참고)" if ref and is_answer_check(n) else "")
+            tag = ("OK" if ok else "WARN" if n.startswith("경고:") else "FAIL") + ("(참고)" if ref and is_answer_check(n) else "")
             lines.append(f"- [{tag}] {n}" + (f": {d}" if d and not ok else ""))
         lines += ["", "명령:"]
         for t in turn["tools"]:
