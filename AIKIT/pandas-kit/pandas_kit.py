@@ -2,7 +2,7 @@
 """
 pandas_kit.py - pandas-kit: table data handled step by step (complete task tool, first target: BOM analysis).
 
-Commands (first version): select, show, join, diff, only, stack, undo, new, export.
+Commands: select, show, join, diff, only, stack, undo, new, export, chart.
     python pandas_kit.py select --file "BOM.xlsx" --range B5:H230 --where "Level=1;Qty>2" --name df1
     python pandas_kit.py select --from df1 --where "Maker=A|B" --name df2
     python pandas_kit.py show --from df2
@@ -1158,6 +1158,184 @@ def cmd_export(a: Any) -> Dict[str, Any]:
 
 
 # ==============================================================================
+# 7-1. chart: a table drawn as a PNG picture (matplotlib, no window). Not a step: the table is not changed
+# ==============================================================================
+
+CHART_KINDS = ("bar", "line", "scatter", "pie", "hist", "box")
+CHART_KIND_NAMES = {"bar": "막대", "line": "선", "scatter": "산점", "pie": "원", "hist": "히스토그램", "box": "상자"}
+BAR_MAX = 30                  # bars (x values) drawn at most, in table order (the rest: warnings + truncated)
+PIE_MAX = 12                  # pie slices: the largest 11 and the rest summed as 기타
+KOREAN_FONTS = ("Malgun Gothic", "NanumGothic", "AppleGothic", "Noto Sans CJK KR")   # same order as ml-kit charts
+
+
+def _numeric_columns(df: Any) -> List[str]:
+    pd = pd_mod()
+    return [c for c in data_cols(df) if pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c])]
+
+
+def _chart_y(text: str, df: Any, meta: Dict[str, Any]) -> List[str]:
+    cols = column_list(text, df, meta, "--y")
+    nums = _numeric_columns(df)
+    bad = [c for c in cols if c not in nums]
+    if bad:
+        if nums:
+            raise rt.ask(nums[:10], [argv_setting("--y", n) for n in nums[:10]],
+                         f"--y의 '{', '.join(bad)}'은(는) 숫자 열이 아니어서 그릴 숫자 열")
+        raise rt.InputError(f"표에 숫자 열이 없어 --y로 그릴 수 없습니다 ('{', '.join(bad)}'은(는) 글자 열).")
+    return cols
+
+
+def _chart_path(work: Work, name: str, kind: str, save: Optional[str], overwrite: bool) -> str:
+    if save:
+        p = str(save).strip().strip('"')
+        if not os.path.splitext(p)[1]:
+            p += ".png"
+        if os.path.splitext(p)[1].lower() != ".png":
+            raise rt.InputError(f"차트는 .png로 저장합니다. [추천] {rt.full_command(argv_setting('--save', os.path.splitext(p)[0] + '.png'))}")
+        path = p if os.path.isabs(p) else os.path.join(work.folder, p)
+    else:
+        path = os.path.join(work.folder, "results", f"{name}_{kind}.png")
+    path = os.path.abspath(path)
+    if os.path.exists(path) and not overwrite:
+        new = rt.timestamped(path)
+        rt.note_recovered(f"{os.path.basename(path)}이(가) 이미 있음 -> {os.path.basename(new)}로 저장 (덮어쓰기는 --overwrite)")
+        path = new
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
+
+
+def cmd_chart(a: Any) -> Dict[str, Any]:
+    pd = pd_mod()
+    matplotlib = rt.require_lib("matplotlib", "matplotlib", "차트")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager
+    work = open_work(a)
+    work.check_sources()
+    name, sid = work.resolve(a.source, "--from")
+    df, meta = work.load(sid)
+    kind = a.kind
+    warnings: List[str] = list(work.warnings)
+    ys = _chart_y(a.y, df, meta)
+    x = resolve_column(a.x, df, meta, "--x") if a.x else None
+    if kind in ("hist", "box") and x:
+        warnings.append(f"{CHART_KIND_NAMES[kind]} 그림은 --x를 쓰지 않습니다 (--y 열의 값만 그림).")
+        x = None
+    if kind in ("pie", "scatter") and not x:
+        raise rt.InputError(f"{CHART_KIND_NAMES[kind]} 그림에는 --x가 필요합니다 ("
+                            + ("조각 이름 열" if kind == "pie" else "가로축 숫자 열") + f"). 열: {name_list(data_cols(df))}")
+    if kind == "pie" and len(ys) != 1:
+        raise rt.InputError(f"원 그림은 --y에 숫자 열 하나만 줍니다 (받은 값: {', '.join(ys)}). [추천] "
+                            f"{rt.full_command(argv_setting('--y', ys[0]))}")
+    if kind == "scatter" and x not in _numeric_columns(df):
+        raise rt.InputError(f"산점 그림의 --x는 숫자 열이어야 합니다 ('{x}'은(는) 글자 열). 숫자 열: {name_list(_numeric_columns(df))}")
+    # data to draw
+    if x:
+        label_col = x
+        data = df[[x] + [c for c in ys if c != x]].copy()
+    else:
+        label_col = ROW_SHOWN if ROW in df.columns else "순서"
+        data = df[ys].copy()
+        data.insert(0, label_col, df[ROW].tolist() if ROW in df.columns else list(range(1, len(df) + 1)))
+    missing = int(data[ys].isna().any(axis=1).sum())
+    if missing:
+        warnings.append(f"--y 값이 빈 행 {missing}개는 그리지 않았습니다.")
+        data = data.dropna(subset=ys)
+    truncated = False
+    if kind in ("bar", "pie") and x and data[x].astype("string").duplicated().any():
+        data = data.assign(**{x: data[x].astype("string")}).groupby(x, sort=False, dropna=False)[ys].sum().reset_index()
+        warnings.append(f"--x '{x}'의 같은 값이 여러 행이라 값마다 --y를 합계로 그렸습니다.")
+    if kind == "bar" and len(data) > BAR_MAX:
+        warnings.append(f"막대가 {len(data)}개라 표 순서대로 앞 {BAR_MAX}개만 그렸습니다 (전부는 select --where로 줄인 뒤).")
+        data = data.head(BAR_MAX)
+        truncated = True
+    if kind == "pie":
+        if (data[ys[0]] < 0).any():
+            raise rt.InputError(f"원 그림은 음수 값을 그릴 수 없습니다 ('{ys[0]}'에 음수가 있음). 막대 그림(--kind bar)을 쓰세요.")
+        if len(data) > PIE_MAX:
+            data = data.sort_values(ys[0], ascending=False)
+            rest = data.iloc[PIE_MAX - 1:][ys[0]].sum()
+            data = pd.concat([data.iloc[:PIE_MAX - 1], pd.DataFrame({label_col: ["기타"], ys[0]: [rest]})], ignore_index=True)
+            warnings.append(f"조각이 많아 큰 {PIE_MAX - 1}개와 나머지 합계(기타)로 그렸습니다.")
+    if len(data) == 0:
+        return rt.ok("chart", f"표 {name}에 그릴 행이 없습니다 (0행)", True,
+                     "0건. 그릴 행이 없습니다(찾은 행 없음). 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요.",
+                     table=name, count=0, work=work.folder)
+    title = a.title or f"{name}: {', '.join(ys)}" + (f" ({x}별)" if x and kind in ("bar", "line", "pie") else "")
+    have = {f.name for f in font_manager.fontManager.ttflist}
+    font = next((f for f in KOREAN_FONTS if f in have), None)
+    texts = [title, str(label_col)] + [str(c) for c in ys] + [str(v) for v in data[label_col].tolist()[:BAR_MAX]]
+    if not font and any(ord(ch) > 127 for t in texts for ch in t):
+        warnings.append("한글 글꼴(맑은 고딕 등)을 찾지 못해 한글이 네모로 보일 수 있습니다.")
+    rc = {"axes.unicode_minus": False, **({"font.family": font} if font else {})}
+    path = _chart_path(work, name, kind, a.save, a.overwrite)
+    import warnings as _w
+    with _w.catch_warnings(), matplotlib.rc_context(rc):
+        _w.simplefilter("ignore")
+        fig, ax = plt.subplots(figsize=(8, 4.8))
+        labels = data[label_col].astype("string").fillna("").tolist()
+        if kind == "bar":
+            n = len(ys)
+            width = 0.8 / n
+            pos = list(range(len(data)))
+            for i, c in enumerate(ys):
+                ax.bar([p + (i - (n - 1) / 2) * width for p in pos], data[c].astype(float), width=width, label=c)
+            ax.set_xticks(pos)
+            ax.set_xticklabels(labels, rotation=45 if len(pos) > 8 else 0, ha="right" if len(pos) > 8 else "center")
+        elif kind == "line":
+            for c in ys:
+                ax.plot(range(len(data)), data[c].astype(float), marker="o", markersize=3, label=c)
+            step = max(1, len(data) // 20)
+            ax.set_xticks(list(range(0, len(data), step)))
+            ax.set_xticklabels(labels[::step], rotation=45 if len(data) > 8 else 0, ha="right" if len(data) > 8 else "center")
+        elif kind == "scatter":
+            for c in ys:
+                ax.scatter(data[x].astype(float), data[c].astype(float), s=14, label=c)
+        elif kind == "pie":
+            ax.pie(data[ys[0]].astype(float), labels=labels, autopct="%1.1f%%", startangle=90, counterclock=False)
+            ax.axis("equal")
+        elif kind == "hist":
+            for c in ys:
+                ax.hist(data[c].astype(float), bins="auto", alpha=0.6 if len(ys) > 1 else 1.0, label=c)
+        else:
+            ax.boxplot([data[c].astype(float) for c in ys])
+            ax.set_xticks(list(range(1, len(ys) + 1)))
+            ax.set_xticklabels(ys)
+        if kind in ("bar", "line", "scatter"):
+            ax.set_xlabel(str(label_col))
+            ax.set_ylabel(ys[0] if len(ys) == 1 else "값")
+        if kind == "hist":
+            ax.set_xlabel(ys[0] if len(ys) == 1 else "값")
+            ax.set_ylabel("행 수")
+        if kind in ("bar", "line", "scatter", "hist") and len(ys) > 1:
+            ax.legend()
+        if kind != "pie":
+            ax.grid(axis="y", alpha=0.3)
+        ax.set_title(title)
+        fig.tight_layout()
+        path = rt.save_with_lock_fallback(path, lambda p: fig.savefig(p, dpi=120), "차트")
+        plt.close(fig)
+    try:
+        import matplotlib.image as mpimg
+        img = mpimg.imread(path)
+        verified = os.path.getsize(path) > 0 and img.shape[0] > 0 and img.shape[1] > 0
+    except Exception:
+        verified = False
+    points = len(data)
+    what = {"bar": "막대", "pie": "조각", "line": "점", "scatter": "점", "hist": "값", "box": "값"}[kind]
+    preview = (f"차트를 저장했습니다: {path} ({CHART_KIND_NAMES[kind]} 그림, 표 {name}, "
+               + (f"x={x}, " if x else "") + f"y={', '.join(ys)}, {what} {points}개)")
+    out = rt.ok("chart", preview, verified,
+                "preview를 사용자에게 알리세요. 같은 명령을 다시 실행하지 마세요. 문서에 넣으려면 office-cli 그림 넣기 명령에 output_file을 씁니다.",
+                None if verified else ["저장한 그림을 다시 열어 확인하지 못함"],
+                table=name, kind=kind, x=x, y=ys, count=points, truncated=truncated, output_file=path, work=work.folder)
+    if warnings:
+        out["warnings"] = warnings
+        out["agent_directive"] += " warnings도 그대로 알리세요."
+    return out
+
+
+# ==============================================================================
 # 8. Parser
 # ==============================================================================
 
@@ -1203,6 +1381,16 @@ def build_cli() -> rt.JsonArgumentParser:
     cmd("undo", "마지막 단계 하나 되돌리기")
     rt.add_command(sub, root, "new", "새 작업 시작 (다음 select --file이 새 작업 폴더를 만듦)")
 
+    p = cmd("chart", "표를 차트 그림(.png)으로 저장 (막대·선·산점·원·히스토그램·상자)")
+    p.add_argument("--from", dest="source", help="그릴 표 (생략하면 지금 표)")
+    p.add_argument("--kind", choices=CHART_KINDS, default="bar",
+                   help="bar 막대(기본), line 선, scatter 산점, pie 원, hist 히스토그램, box 상자")
+    p.add_argument("--x", help="가로축(막대·선) 또는 조각 이름(원) 열, 산점은 숫자 열. 생략하면 엑셀 행 순서 (원·산점은 필요)")
+    p.add_argument("--y", required=True, help="그릴 숫자 열 (','로 나눔, 원은 하나)")
+    p.add_argument("--title", help="차트 제목 (생략하면 표 이름과 열 이름)")
+    p.add_argument("--save", nargs="?", const=None, help="저장할 그림 (.png, 생략하면 작업 폴더 results\\<표>_<종류>.png)")
+    p.add_argument("--overwrite", action="store_true", help="같은 이름 그림이 있으면 덮어쓰기 (사용자가 원할 때만)")
+
     p = cmd("export", "표를 새 파일(.xlsx, .csv)로 저장")
     p.add_argument("--from", dest="source", help="저장할 표 (생략하면 지금 표)")
     p.add_argument("--save", nargs="?", const=None, help="저장할 파일 (생략하면 작업 폴더의 <표 이름>.xlsx, 이름만 주면 작업 폴더에)")
@@ -1211,7 +1399,7 @@ def build_cli() -> rt.JsonArgumentParser:
 
 
 COMMANDS = {"select": cmd_select, "show": cmd_show, "join": cmd_join, "only": cmd_only, "diff": cmd_diff,
-            "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export}
+            "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export, "chart": cmd_chart}
 
 
 def main(argv: Optional[List[str]] = None) -> None:

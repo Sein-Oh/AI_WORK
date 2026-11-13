@@ -1,6 +1,6 @@
 ---
 name: pandas-kit
-description: 엑셀·CSV 표를 단계별로 고르고 비교한다 (pandas_kit.py, 원본은 그대로). 파일·시트·범위에서 조건으로 행을 골라 이름 붙인 표(df1, df2) 만들기, 표 보기(엑셀 행 번호와 함께), 두 판 BOM 비교(추가·삭제·바뀐 칸), 짝 맞춰 붙이기, 한쪽에만 있는 행, 위아래로 잇기, 되돌리기, 새 파일로 저장. "BOM 두 판 비교", "레벨 1만 골라", "A에만 있는 품번"에 사용. 원본에 칠하기·메모는 excel-kit.
+description: 엑셀·CSV 표를 단계별로 고르고 비교한다 (pandas_kit.py, 원본은 그대로). 파일·시트·범위에서 조건으로 행을 골라 이름 붙인 표(df1, df2) 만들기, 표 보기(엑셀 행 번호와 함께), 두 판 BOM 비교(추가·삭제·바뀐 칸), 짝 맞춰 붙이기, 한쪽에만 있는 행, 위아래로 잇기, 차트 그림(막대·선·산점·원·히스토그램·상자), 되돌리기, 새 파일로 저장. "BOM 두 판 비교", "레벨 1만 골라", "A에만 있는 품번", "업체별 수량 차트"에 사용. 원본에 칠하기·메모는 excel-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
@@ -31,6 +31,7 @@ metadata:
 | 위아래로 잇기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" stack --tables "df1,df2"` |
 | 되돌리기 (한 단계) | `python "C:\AIKIT\pandas-kit\pandas_kit.py" undo` |
 | 새 작업 시작 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" new` |
+| 차트 그림 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" chart --from df1 --kind bar --x "<가로축 열>" --y "<숫자 열>"` (종류 `--kind bar`(막대) `line`(선) `scatter`(산점, `--x`도 숫자 열) `pie`(원, `--y` 하나) `hist`(히스토그램) `box`(상자), 제목 `--title "<제목>"`) |
 | 새 파일로 저장 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" export --from df1` (다른 이름 `--save "<이름.xlsx 또는 .csv>"`, 같은 이름 파일 덮어쓰기는 사용자가 원할 때만 `--overwrite`) |
 
 - `--file`을 빼면 엑셀에 열린 통합문서를 읽는다 (여럿이면 도구가 `[후보]`로 묻는다). 저장 안 된 문서는 읽지 않으니 사용자에게 저장해 달라고 한다.
@@ -44,6 +45,7 @@ metadata:
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - `show`의 `rows`가 잘렸으면(`truncated: true`) 전체는 `full_result_file`에 있다고 알린다. 표를 직접 세거나 계산하지 않는다.
+- `chart`는 그림 파일(`output_file`, .png)을 만든다. 문서에 넣어 달라고 하면 excel-kit·word-kit의 그림 넣기 명령에 그 경로를 쓴다. 같은 `--x` 값이 여러 행이면 도구가 합계로 그리고 `warnings`로 알린다.
 - `diff`의 `confirm_commands`는 원본 파일의 바뀐 칸을 칠하는 office-cli 명령이다. 사용자가 칠해 달라고 했을 때만 1번 실행한다.
 - `warnings`에 "옛 df1 기준"이 있으면, 그 표를 새 기준으로 다시 만들지 사용자에게 묻는다.
 - `warnings`에 원본이 바뀌었다는 말이 있으면 그 안의 다시 읽는 명령을 사용자가 원할 때 실행한다.

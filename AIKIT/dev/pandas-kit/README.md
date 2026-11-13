@@ -15,7 +15,7 @@
 | `AIKIT/pandas-kit/_pd_runtime.py` | 공통 런타임 (진입점 아님): `run_cli`, `JsonArgumentParser`, `quote_arg`, 오류 로그, 파일 복구 함수, 열린 Excel 경로 찾기. ml-kit `_ml_runtime.py`와 같은 이름·같은 동작 |
 | `tests/` | `python -m pytest -q AIKIT/dev/pandas-kit/tests` |
 
-필요한 라이브러리: pandas, openpyxl (xlsx), pywin32 (Windows에서 열린 Excel 경로 찾기만, 없어도 됨). `requirements.txt`.
+필요한 라이브러리: pandas, openpyxl (xlsx), matplotlib (차트), pywin32 (Windows에서 열린 Excel 경로 찾기만, 없어도 됨). `requirements.txt`.
 
 ## 명령 (첫 판)
 | 명령 | 옵션 | 결과 |
@@ -28,6 +28,7 @@
 | `stack` | `--tables "df1,df2"`, `--name` | 위아래로 잇기. 맨 앞 `표` 열에 어느 표의 행인지 |
 | `undo` | | 마지막 단계 하나 되돌리기 (그 이름은 그 전 표를 다시 가리킴) |
 | `new` | | 새 작업 시작 (다음 `select --file`이 새 작업 폴더를 만듦) |
+| `chart` | `--from`, `--kind`, `--x`, `--y`, `--title`, `--save`, `--overwrite` | 표를 차트 그림(.png)으로 (아래 "차트"). 표는 바꾸지 않고 단계로 남기지 않음 |
 | `export` | `--from`, `--save`, `--overwrite` | 새 파일(.xlsx, .csv). 생략하면 작업 폴더의 `<표>.xlsx`, 이름만 주면 작업 폴더에 |
 
 모든 명령은 `--work "<작업 폴더>"`를 받습니다 (지난 작업으로 돌아가기, `new` 제외). `--name`을 빼면 `df1`, `df2`, ... 중 안 쓴 첫 이름,
@@ -76,6 +77,17 @@
   `--on`이 같은 행이 있으면 짝을 정할 수 없어 `STOP_RETRY`.
 - `export`: `output_file` (다시 읽어 행 수 확인 뒤 `VERIFIED`). 같은 이름이 있으면 시각을 붙인 이름(`recovered`), 덮어쓰기는 `--overwrite`일 때만.
   원본 파일 경로에는 쓰지 않습니다.
+
+## 차트 (`chart`)
+- `--kind`: `bar`(막대, 기본), `line`(선), `scatter`(산점), `pie`(원), `hist`(히스토그램), `box`(상자). `--y`는 숫자 열(`,`로 여럿, 원은 하나).
+- `--x`: 막대·선의 가로축(생략하면 `엑셀 행` 순서), 원의 조각 이름(필요), 산점의 가로축 숫자 열(필요). 히스토그램·상자는 `--x`를 쓰지 않음(`warnings`).
+- 도구가 정하는 것: 막대·원에서 같은 `--x` 값이 여러 행이면 값마다 `--y`를 합계(`warnings`), 막대는 표 순서로 앞 30개까지(`truncated: true`),
+  원은 큰 11개와 나머지 합계 `기타`, `--y`가 빈 행은 뺌(`warnings`), 제목은 생략하면 `<표>: <y 열> (<x>별)`.
+- 숫자가 아닌 `--y`는 숫자 열을 `[후보]`로, 원에 `--y`가 여럿이면 첫 열로 고친 `[추천]`. 음수가 든 원은 `STOP_RETRY`.
+- 저장: 작업 폴더 `results/<표>_<종류>.png` (이름만 준 `--save`도 작업 폴더 기준, `.png`만. 다른 확장자는 `[추천]` .png). 같은 이름이 있으면 시각을 붙인 이름(`recovered`),
+  덮어쓰기는 `--overwrite`. 저장 뒤 그림을 다시 열어 확인하면 `VERIFIED`.
+- 한글 글꼴은 맑은 고딕, 나눔고딕 순서로 찾고(ml-kit 차트와 같음), 없으면 한글이 네모로 보일 수 있다고 `warnings`. matplotlib는 창 없이(Agg) 그립니다.
+- 그린 그림을 문서에 넣는 일은 office-cli (`excel.py write --image`, `word.py write --image`)에 `output_file`을 줍니다.
 
 ## 시험
 `python -m pytest -q AIKIT/dev/pandas-kit/tests` (도구를 서브프로세스로 실행해 stdout 1줄 JSON까지 확인, 약 25초).

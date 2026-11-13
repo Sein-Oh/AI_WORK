@@ -82,7 +82,7 @@ def test_skill_options_exist_in_the_tool():
         for o in re.findall(r"(--[a-z][a-z-]*)", rest.split("`")[0]):
             assert o in opts, (cmd, o, line)
         found += 1
-    assert found >= 9
+    assert found >= 10
 
 
 def test_tool_imports_only_its_runtime():
@@ -309,3 +309,44 @@ def test_export_new_file_timestamp_overwrite_and_never_the_source(env):
     assert code == 1 and "원본 파일" in err["message"]
     code, err = run(env, "export", "--save", "x.pdf")
     assert code == 1 and recommended(err["message"])[-2:] == ["--save", "x.xlsx"]
+
+
+# ---------------------------------------------------------------------------
+# chart: 표를 그림(.png)으로 (표는 바꾸지 않음, 단계로 남기지 않음)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind, x", [("bar", "Part Number"), ("line", "Part Number"), ("scatter", "Level"), ("pie", "Maker"),
+                                     ("hist", None), ("box", None)])
+def test_chart_kinds_save_png_and_verify(env, kind, x):
+    import matplotlib.image as mpimg
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx"), "--name", "df1")
+    out = ok(env, "chart", "--from", "df1", "--kind", kind, *(["--x", x] if x else []), "--y", "Qty")
+    assert out["agent_directive"].startswith("VERIFIED:") and out["output_file"].endswith(f"df1_{kind}.png")
+    assert mpimg.imread(out["output_file"]).shape[0] > 0 and out["kind"] == kind and out["y"] == ["Qty"]
+    assert ok(env, "undo")["removed"] == "df1"                       # 차트는 단계가 아님: 되돌리면 표가 지워짐
+
+
+def test_chart_sums_repeated_x_limits_bars_and_checks_columns(env):
+    rows = [(1, "TOP", f"{i:04d}", 1, "A" if i % 2 else "B", "x") for i in range(40)]
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows), "--name", "df1")
+    out = ok(env, "chart", "--x", "Maker", "--y", "Qty")
+    assert out["count"] == 2 and any("합계로" in w for w in out["warnings"])
+    many = ok(env, "chart", "--x", "Part Number", "--y", "Qty,Level")
+    assert many["count"] == 30 and many["truncated"] is True and many["output_file"] != out["output_file"]
+    assert "--overwrite" in many["recovered"][0]
+    code, err = run(env, "chart", "--y", "Desc")
+    assert code == 1 and "[후보] 1) Level 2) Qty" in err["message"] and len(err["confirm_commands"]) == 2
+    code, err = run(env, "chart", "--kind", "pie", "--x", "Maker", "--y", "Qty,Level")
+    assert code == 1 and recommended(err["message"])[-2:] == ["--y", "Qty"]
+    code, err = run(env, "chart", "--kind", "pie", "--y", "Qty")
+    assert code == 1 and "--x가 필요합니다" in err["message"]
+    code, err = run(env, "chart", "--y", "Qty", "--save", "그림.jpg")
+    assert code == 1 and recommended(err["message"])[-2:] == ["--save", "그림.png"]
+    named = ok(env, "chart", "--y", "Qty", "--save", "수량", "--title", "부품별 수량")
+    assert named["output_file"] == os.path.join(named["work"], "수량.png")
+
+
+def test_chart_of_empty_table_is_zero(env):
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx"), "--where", "Level=9", "--name", "없음")
+    out = ok(env, "chart", "--y", "Qty")
+    assert out["count"] == 0 and "0건" in out["agent_directive"] and "output_file" not in out
