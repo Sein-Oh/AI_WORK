@@ -1132,7 +1132,8 @@ def main(argv=None):
     say(f"결과 파일: {out}")
     say("단계: " + " -> ".join(stages) + " -> 도구 오류 로그")
     if "gemma" in stages:
-        say("gemma 단계는 opencode로 Gemma에게 요청을 보냅니다. 관리자 권한이 아닌 일반 PowerShell에서 실행하세요.")
+        if is_elevated():          # UAC가 켜진 PC에서 권한을 따로 올린 창일 때만 (UAC가 꺼져 모두 관리자인 PC는 상관없음)
+            say("[WARN] 관리자 권한으로 따로 올린 창입니다. gemma 단계에서 opencode가 열린 Office 문서를 못 볼 수 있으니 일반 PowerShell 창에서 실행하세요.")
     if any(s in stages for s in ("beta", "ml", "office")):
         say("점검 중 Excel/Word/PowerPoint 창이 열리고 닫힙니다. 열린 Office 문서는 모두 저장하고 닫은 뒤 시작하세요.")
     code = 0
