@@ -932,7 +932,7 @@ SWAP_COMMAND = {("reader", "read", "--search"): ("search", "--query"), ("reader"
 OTHER_COMMAND[("excel", "comment", "--cells")] = (
     "comment에는 --cells가 없습니다. 한 칸은 --action add --range C3 --text \"<메모>\", 칸마다 다른 메모 여러 개는 "
     "파일 쓰기 도구로 CSV(열: 칸, 메모)를 C:\\AIKIT\\data에 만든 뒤 --action add --file \"<메모.csv>\"를 쓰세요. "
-    "판정·검토 의견이면 넣기 전에 넣을 내용을 사용자에게 보여 주고 \"예\"를 받으세요.")
+    "판정·검토 의견은 사용자가 달아 달라고 했을 때만 넣고, 아니면 넣기 전에 사용자에게 보여 주고 \"예\"를 받으세요.")
 # 1.4.72에서 없앤 outlook --send (1.4.73): 초안을 만든 뒤 사용자 확인을 받아 send로 보냄. {cmd} = --send를 뺀 같은 명령
 _NO_SEND = ("--send는 없습니다. 초안을 만든 뒤 사용자 확인을 받아 send를 실행합니다(결과의 confirm_commands). "
             "[추천] {cmd}")
