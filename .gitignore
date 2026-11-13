@@ -48,6 +48,7 @@ AIKIT/.opencode/skills/*
 !AIKIT/.opencode/skills/outlook-kit/
 !AIKIT/.opencode/skills/search-kit/
 !AIKIT/.opencode/skills/stats-kit/
+!AIKIT/.opencode/skills/pandas-kit/
 # OpenCode가 만들 수 있는 실행 파일 (백그라운드 서비스 정보)
 AIKIT/service.json
 # 배포 때 C:\AIKIT에 함께 두는 것 (저장소에는 넣지 않음)

@@ -1,0 +1,1225 @@
+# -*- coding: utf-8 -*-
+"""
+pandas_kit.py - pandas-kit: table data handled step by step (complete task tool, first target: BOM analysis).
+
+Commands (first version): select, show, join, diff, only, stack, undo, new, export.
+    python pandas_kit.py select --file "BOM.xlsx" --range B5:H230 --where "Level=1;Qty>2" --name df1
+    python pandas_kit.py select --from df1 --where "Maker=A|B" --name df2
+    python pandas_kit.py show --from df2
+    python pandas_kit.py diff --old df1 --new df2 --on "Parent,Part Number"
+
+The source files are never written. Every step is recorded in the work folder (steps.json, the original) and its table is
+kept as a pickle snapshot (a cache: rebuilt from the record when broken or made by another pandas version). Excel row
+numbers (_row) and column letters are kept so results point back to the cells of the source file.
+stdout is exactly one JSON line (Agent CLI Protocol, AIKIT/dev/README.md); logs go to stderr.
+"""
+
+from __future__ import annotations
+
+import csv
+import difflib
+import io
+import json
+import os
+import pickle
+import re
+import sys
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _pd_runtime as rt  # noqa: E402
+
+TABLE_EXTS = (".xlsx", ".xlsm", ".csv")
+SHOW_MAX = 20                      # rows in the JSON of show (R2: the rest in a csv file)
+LIST_MAX = 30                      # columns listed in a JSON answer
+READ_ONLY_BYTES = 30 * 1024 * 1024  # bigger workbooks are read in openpyxl read-only mode (no hidden-row/merged-cell check)
+MARKER = ".created_by_pandas-kit"
+STEPS_FILE = "steps.json"
+ROW = "_row"                       # Excel row number of the source file (hidden column, kept through every step)
+ROW_SHOWN = "엑셀 행"
+OPS = (">=", "<=", "!=", "!~", "=", ">", "<", "~")
+_COND = re.compile(r"^\s*(.+?)\s*(>=|<=|!=|!~|=|>|<|~)\s*(.*?)\s*$", re.S)
+_RANGE = re.compile(r"^([A-Z]{1,3})?(\d+)?(?::([A-Z]{1,3})?(\d+)?)?$")
+_LETTERS = re.compile(r"^[A-Z]{1,3}$")
+_NAME = re.compile(r"^[^\W\d][\w]*$")
+_NUM_TEXT = re.compile(r"^-?\d+(\.\d+)?$")
+_LEADING_ZERO = re.compile(r"^-?0\d")
+
+
+def pd_mod() -> Any:
+    return rt.require_lib("pandas", "pandas", "pandas-kit")
+
+
+# ==============================================================================
+# 1. Small helpers
+# ==============================================================================
+
+def col_letter(n: int) -> str:
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def col_index(letters: str) -> int:
+    n = 0
+    for ch in letters.upper():
+        n = n * 26 + ord(ch) - 64
+    return n
+
+
+def split_outside_quotes(text: str, sep: str) -> List[str]:
+    """Splits on sep outside '...' and "..." quotes."""
+    out, cur, q = [], "", ""
+    for ch in text:
+        if q:
+            cur += ch
+            if ch == q:
+                q = ""
+        elif ch in "'\"":
+            q = ch
+            cur += ch
+        elif ch == sep:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    out.append(cur)
+    return out
+
+
+def unquote(v: str) -> str:
+    v = v.strip()
+    return v[1:-1] if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"" else v
+
+
+def name_list(names: List[Any], limit: int = LIST_MAX) -> str:
+    names = [str(n) for n in names]
+    return ", ".join(names[:limit]) + (f" 외 {len(names) - limit}개" if len(names) > limit else "")
+
+
+def is_row_col(c: Any) -> bool:
+    return str(c) == ROW or str(c).endswith(" 행")
+
+
+def data_cols(df: Any) -> List[str]:
+    return [c for c in df.columns if not is_row_col(c)]
+
+
+def kind_of(series: Any) -> str:
+    pd = pd_mod()
+    if pd.api.types.is_bool_dtype(series):
+        return "글자"
+    if pd.api.types.is_numeric_dtype(series):
+        return "숫자"
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return "날짜"
+    return "빈 열" if series.isna().all() else "글자"
+
+
+def cell_json(v: Any) -> Any:
+    return rt.json_safe(v)
+
+
+def argv_now() -> List[str]:
+    return [str(a) for a in (rt.CURRENT_ARGV or [""])[1:]]
+
+
+def argv_replacing(option: str, old: str, new: str) -> Optional[List[str]]:
+    """The running command with the first `old` inside the value of `option` replaced by `new` (for [후보] commands)."""
+    args = argv_now()
+    for i, a in enumerate(args[:-1]):
+        if a == option and old in args[i + 1]:
+            fixed = list(args)
+            fixed[i + 1] = args[i + 1].replace(old, new, 1)
+            return fixed
+    return None
+
+
+def argv_setting(option: str, value: str) -> List[str]:
+    """The running command with option set to value (added when missing)."""
+    args = argv_now()
+    if option in args and args.index(option) + 1 < len(args):
+        i = args.index(option)
+        return args[:i + 1] + [value] + args[i + 2:]
+    return args + [option, value]
+
+
+# ==============================================================================
+# 2. Work folder: the step record (original) and table snapshots (cache)
+# ==============================================================================
+
+def pointer_path() -> str:
+    return os.path.join(rt.get_data_dir(), "current.json")
+
+
+def current_work() -> Optional[str]:
+    try:
+        with open(pointer_path(), encoding="utf-8") as f:
+            path = json.load(f).get("work")
+    except (OSError, ValueError):
+        return None
+    return path if path and os.path.isfile(os.path.join(path, MARKER)) else None
+
+
+def set_current_work(path: Optional[str]) -> None:
+    os.makedirs(rt.get_data_dir(), exist_ok=True)
+    text = json.dumps({"work": path}, ensure_ascii=False)
+    rt.retry_fs(lambda: open(pointer_path(), "w", encoding="utf-8").write(text))
+
+
+def new_work_folder(base_dir: str) -> str:
+    """<folder of the first source>/pandas_YYMMDDHHMM (_2, _3 ... when made again in the same minute)."""
+    stem = os.path.join(base_dir, f"pandas_{datetime.now():%y%m%d%H%M}")
+    path, n = stem, 2
+    while os.path.exists(path):
+        path, n = f"{stem}_{n}", n + 1
+    os.makedirs(os.path.join(path, "tables"))
+    with open(os.path.join(path, MARKER), "w", encoding="utf-8") as f:
+        f.write(f"{rt.TOOL_NAME} {rt.VERSION}\n")
+    with open(os.path.join(path, STEPS_FILE), "w", encoding="utf-8") as f:
+        json.dump({"tool": rt.TOOL_NAME, "steps": []}, f, ensure_ascii=False)
+    return path
+
+
+class Work:
+    """One work folder: steps.json (the record, original) and tables/s<id>.pkl (snapshots, rebuilt from the record)."""
+
+    def __init__(self, folder: str) -> None:
+        if not os.path.isfile(os.path.join(folder, MARKER)):
+            raise rt.InputError(f"pandas-kit 작업 폴더가 아닙니다 (도구가 만든 표시 파일이 없음): {folder}")
+        self.folder = os.path.abspath(folder)
+        try:
+            with open(os.path.join(self.folder, STEPS_FILE), encoding="utf-8") as f:
+                self.steps: List[Dict[str, Any]] = json.load(f)["steps"]
+        except (OSError, ValueError, KeyError) as e:
+            raise rt.InputError(f"작업 기록({STEPS_FILE})을 읽지 못했습니다 ({type(e).__name__}): {self.folder}. "
+                                f"새 작업은 python {rt.quote_arg(rt.script_path())} new 뒤 select --file로 시작하세요.") from None
+        self.warnings: List[str] = []
+
+    # -- record --
+    def save(self) -> None:
+        text = json.dumps({"tool": rt.TOOL_NAME, "version": rt.VERSION, "steps": self.steps}, ensure_ascii=False, indent=1)
+        path = os.path.join(self.folder, STEPS_FILE)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        rt.retry_fs(lambda: os.replace(tmp, path))
+
+    def names(self) -> Dict[str, int]:
+        out: Dict[str, int] = {}
+        for s in self.steps:
+            out[s["name"]] = s["id"]
+        return out
+
+    def current_name(self) -> Optional[str]:
+        return self.steps[-1]["name"] if self.steps else None
+
+    def step(self, sid: int) -> Dict[str, Any]:
+        return next(s for s in self.steps if s["id"] == sid)
+
+    def resolve(self, name: Optional[str], option: str) -> Tuple[str, int]:
+        """Table name -> (name, step id). None -> the current table (the last step)."""
+        names = self.names()
+        if not names:
+            raise rt.InputError("아직 만든 표가 없습니다. 먼저 select --file로 파일을 읽으세요: "
+                                f"python {rt.quote_arg(rt.script_path())} select --file \"<파일>\"")
+        if not name:
+            cur = self.current_name()
+            return cur, names[cur]
+        if name in names:
+            return name, names[name]
+        close = difflib.get_close_matches(name, list(names), n=5, cutoff=0.5) or list(names)[-5:]
+        raise rt.ask(close, [argv_setting(option, c) for c in close], f"{option} 표 '{name}'이(가) 없어 쓸 표")
+
+    def next_name(self) -> str:
+        used = set(self.names())
+        n = 1
+        while f"df{n}" in used:
+            n += 1
+        return f"df{n}"
+
+    # -- snapshots --
+    def table_file(self, sid: int) -> str:
+        return os.path.join(self.folder, "tables", f"s{sid}.pkl")
+
+    def write_table(self, sid: int, df: Any, meta: Dict[str, Any]) -> bool:
+        """Writes the snapshot and reads it back (R1). True when the read-back table has the same shape."""
+        pd = pd_mod()
+        path = self.table_file(sid)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = pickle.dumps({"pandas": pd.__version__, "df": df, "meta": meta}, protocol=pickle.HIGHEST_PROTOCOL)
+        rt.retry_fs(lambda: open(path, "wb").write(data))
+        try:
+            back = self._read_pickle(path)
+            return back is not None and back["df"].shape == df.shape
+        except Exception:
+            return False
+
+    def _read_pickle(self, path: str) -> Optional[Dict[str, Any]]:
+        """Only pickles of this tool's own work folder are read (decision 2026-11-13). None when broken or other pandas."""
+        pd = pd_mod()
+        tables = os.path.join(self.folder, "tables")
+        if os.path.dirname(os.path.abspath(path)) != tables or not os.path.isfile(os.path.join(self.folder, MARKER)):
+            return None
+        try:
+            with open(path, "rb") as f:
+                obj = pickle.load(f)
+        except Exception:
+            return None
+        if not isinstance(obj, dict) or obj.get("pandas") != pd.__version__ or "df" not in obj:
+            return None
+        return obj
+
+    def load(self, sid: int, depth: int = 0) -> Tuple[Any, Dict[str, Any]]:
+        """The table of a step: its snapshot, or rebuilt from the record (JIT recovery, reported in recovered)."""
+        obj = self._read_pickle(self.table_file(sid)) if os.path.isfile(self.table_file(sid)) else None
+        if obj is not None:
+            return obj["df"], obj["meta"]
+        if depth > 200:
+            raise rt.InputError("작업 기록을 다시 실행하다가 너무 깊어졌습니다. new로 새 작업을 시작하세요.")
+        step = self.step(sid)
+        inputs = {k: self.load(v, depth + 1) for k, v in step.get("inputs", {}).items()}
+        df, meta, _info = run_op(step["op"], step["args"], inputs, step["name"])
+        self.write_table(sid, df, meta)
+        rt.note_recovered(f"표 {step['name']}의 스냅샷이 없거나 깨짐(또는 pandas 버전이 다름) -> 작업 기록으로 다시 만듦")
+        return df, meta
+
+    def add(self, op: str, name: str, args: Dict[str, Any], inputs: Dict[str, int], df: Any, meta: Dict[str, Any],
+            lineage: str, source: Optional[Dict[str, Any]] = None) -> Tuple[int, bool]:
+        sid = max((s["id"] for s in self.steps), default=0) + 1
+        old = self.names().get(name)
+        verified = self.write_table(sid, df, meta)
+        step = {"id": sid, "op": op, "name": name, "args": args, "inputs": inputs, "lineage": lineage,
+                "at": datetime.now().isoformat(timespec="seconds")}
+        if source:
+            step["source"] = source
+        self.steps.append(step)
+        self.save()
+        if old is not None:
+            stale = sorted({s["name"] for s in self.steps if old in s.get("inputs", {}).values() and self.names().get(s["name"]) == s["id"]})
+            if stale:
+                self.warnings.append(f"{name}을(를) 새로 만들었습니다. {', '.join(stale)}은(는) 옛 {name} 기준입니다 (다시 계산하지 않음).")
+        return sid, verified
+
+    def check_sources(self) -> None:
+        """A source file changed since it was read: warnings with the full command that reads it again."""
+        latest = set(self.names().values())
+        for s in self.steps:
+            src = s.get("source")
+            if not src or s["id"] not in latest:
+                continue
+            try:
+                st = os.stat(src["file"])
+                changed = (int(st.st_mtime), st.st_size) != (src["mtime"], src["size"])
+            except OSError:
+                self.warnings.append(f"원본 {os.path.basename(src['file'])}이(가) 없습니다 (표 {s['name']}).")
+                continue
+            if changed:
+                again = rt.full_command(["select", "--file", src["file"]] + _select_extra(s["args"]) + ["--name", s["name"]])
+                self.warnings.append(f"원본 {os.path.basename(src['file'])}이(가) 읽은 뒤 바뀌었습니다. 행 위치가 달라졌을 수 있습니다. "
+                                     f"다시 읽으려면: {again}")
+
+
+def _select_extra(a: Dict[str, Any]) -> List[str]:
+    out: List[str] = []
+    for opt in ("sheet", "range", "columns", "where"):
+        if a.get(opt):
+            out += [f"--{opt}", str(a[opt])]
+    return out
+
+
+def open_work(args: Any, create_for: Optional[str] = None) -> Work:
+    """--work <folder> (switch), else the current work folder, else a new one next to create_for (select --file)."""
+    if getattr(args, "work", None):
+        work = Work(os.path.abspath(args.work))
+        set_current_work(work.folder)
+        return work
+    cur = current_work()
+    if cur:
+        return Work(cur)
+    if create_for:
+        folder = new_work_folder(os.path.dirname(os.path.abspath(create_for)))
+        set_current_work(folder)
+        sys.stderr.write(f"[INFO] 새 작업 폴더: {folder}\n")
+        return Work(folder)
+    raise rt.InputError("지금 작업 폴더가 없습니다. 먼저 select --file로 파일을 읽으세요: "
+                        f"python {rt.quote_arg(rt.script_path())} select --file \"<파일>\"")
+
+
+# ==============================================================================
+# 3. Reading a source file (xlsx, xlsm, csv): anchor, Excel rows, column letters, values unchanged
+# ==============================================================================
+
+def parse_range(text: Optional[str]) -> Optional[Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]]:
+    """'B5:H230', 'B:H', 'B5' (start cell) -> (min_col, min_row, max_col, max_row), None parts = open."""
+    if not text:
+        return None
+    t = str(text).strip().upper().replace("$", "")
+    m = _RANGE.match(t)
+    if not m or not any(m.groups()):
+        raise rt.InputError(f"--range '{text}'를 읽을 수 없습니다. 예: B5:H230, B:H, B5 (표의 왼쪽 위 칸).")
+    c1, r1, c2, r2 = m.groups()
+    one_cell = ":" not in t
+    return (col_index(c1) if c1 else None, int(r1) if r1 else None,
+            None if one_cell else (col_index(c2) if c2 else None), None if one_cell else (int(r2) if r2 else None))
+
+
+def resolve_file(path: Optional[str]) -> str:
+    """--file, or the workbook open in Excel (only its path is read)."""
+    if path:
+        full = os.path.abspath(str(path).strip().strip('"'))
+        if not os.path.isfile(full):
+            raise FileNotFoundError(f"파일이 없습니다: {full}")
+        if os.path.splitext(full)[1].lower() not in TABLE_EXTS:
+            raise rt.InputError(f"읽을 수 있는 파일은 {', '.join(TABLE_EXTS)}입니다: {os.path.basename(full)}")
+        for wb in rt.open_workbooks():
+            if wb["path"] and os.path.normcase(wb["path"]) == os.path.normcase(full) and not wb["saved"]:
+                raise rt.InputError(f"{os.path.basename(full)}이(가) Excel에서 열려 있고 저장되지 않은 변경이 있습니다. "
+                                    "Excel에서 저장한 뒤 같은 명령을 다시 실행하세요 (도구가 대신 저장하지 않음).")
+        return full
+    books = rt.open_workbooks()
+    if not books:
+        raise rt.InputError("읽을 파일을 정하지 못했습니다 (열린 Excel 통합문서 없음). 사용자에게 파일 경로를 물어 --file \"<경로>\"로 주세요.")
+    unsaved = [b for b in books if not b["saved"]]
+    if len(books) == 1:
+        if unsaved:
+            raise rt.InputError(f"Excel의 {books[0]['name']}에 저장되지 않은 변경이 있습니다(저장한 적 없는 새 통합문서 포함). "
+                                "Excel에서 저장한 뒤 같은 명령을 다시 실행하세요 (도구가 대신 저장하지 않음).")
+        return books[0]["path"]
+    saved = [b for b in books if b["saved"]]
+    if not saved:
+        raise rt.InputError("열린 Excel 통합문서가 모두 저장되지 않았습니다. 읽을 문서를 Excel에서 저장한 뒤 다시 실행하세요.")
+    raise rt.ask([b["name"] for b in saved], [argv_setting("--file", b["path"]) for b in saved], "열린 Excel 통합문서 중 읽을 파일")
+
+
+def _csv_rows(path: str) -> List[List[Any]]:
+    text = rt.read_text_file(path)
+    sample = text[:20000]
+    try:
+        delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
+    except csv.Error:
+        delim = ","
+    return [list(r) for r in csv.reader(io.StringIO(text), delimiter=delim)]
+
+
+def _empty(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and v == "")
+
+
+def read_grid(path: str, sheet: Optional[str], rng: Optional[Tuple]) -> Dict[str, Any]:
+    """The cells of the area to read: {"sheet", "rows": [(excel_row, [values])], "min_col", "max_col", "warnings", ...}."""
+    warnings: List[str] = []
+    ext = os.path.splitext(path)[1].lower()
+    hidden: set = set()
+    merged: List[Tuple[int, int, int, int]] = []
+    formulas_empty: set = set()
+    if ext == ".csv":
+        if sheet:
+            warnings.append("csv 파일에는 시트가 없어 --sheet를 쓰지 않았습니다.")
+        all_rows = _csv_rows(path)
+        sheet_name = os.path.basename(path)
+        max_row = len(all_rows)
+        max_col = max((len(r) for r in all_rows), default=0)
+        get = lambda r1, r2, c1, c2: [(r, [(all_rows[r - 1][c - 1] if c - 1 < len(all_rows[r - 1]) else None)
+                                          for c in range(c1, c2 + 1)]) for r in range(r1, r2 + 1)]
+    else:
+        openpyxl = rt.require_lib("openpyxl", "openpyxl", "엑셀 읽기")
+        big = os.path.getsize(path) > READ_ONLY_BYTES
+        try:
+            wb = openpyxl.load_workbook(path, data_only=True, read_only=big)
+        except Exception as e:
+            raise rt.InputError(f"엑셀 파일을 열지 못했습니다 ({type(e).__name__}): {os.path.basename(path)}") from None
+        names = list(wb.sheetnames)
+        if sheet and sheet not in names:
+            low = {n.strip().lower(): n for n in names}
+            if sheet.strip().lower() in low:
+                sheet = low[sheet.strip().lower()]
+            else:
+                raise rt.ask(names, [argv_setting("--sheet", n) for n in names], f"시트 '{sheet}'이(가) 없어 읽을 시트")
+        ws = wb[sheet] if sheet else wb.active
+        sheet_name = ws.title
+        max_row, max_col = int(ws.max_row or 0), int(ws.max_column or 0)
+        if big:
+            warnings.append("큰 파일이라 숨긴 행·병합 칸·계산 안 된 수식은 확인하지 않았습니다.")
+        else:
+            hidden = {r for r, d in ws.row_dimensions.items() if d.hidden}
+            merged = [(m.min_col, m.min_row, m.max_col, m.max_row) for m in ws.merged_cells.ranges]
+            try:
+                wf = openpyxl.load_workbook(path, data_only=False)[sheet_name]
+                for row in wf.iter_rows():
+                    for c in row:
+                        if isinstance(c.value, str) and c.value.startswith("="):
+                            formulas_empty.add((c.row, c.column))
+            except Exception:
+                pass
+
+        def get(r1: int, r2: int, c1: int, c2: int) -> List[Tuple[int, List[Any]]]:
+            if r2 < r1 or c2 < c1:
+                return []
+            return [(r1 + i, list(vals)) for i, vals in
+                    enumerate(ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True))]
+    c1, r1, c2, r2 = rng or (None, None, None, None)
+    explicit_end = rng is not None and (c2 is not None or r2 is not None)
+    c1, r1 = c1 or 1, r1 or 1
+    c2, r2 = c2 or max_col, r2 or max_row
+    rows = get(r1, r2, c1, c2)
+    return {"sheet": sheet_name, "rows": rows, "c1": c1, "c2": c2, "r2": r2, "explicit_end": explicit_end,
+            "warnings": warnings, "hidden": hidden, "merged": merged, "formulas": formulas_empty}
+
+
+def convert_column(values: List[Any]) -> Tuple[List[Any], str, str]:
+    """Values of one column -> (values, dtype, kind). Numbers only when the whole column is numbers (no leading 0);
+    otherwise the cells are kept as they are (numbers written as text, a code like 0102 stays 0102)."""
+    filled = [v for v in values if not _empty(v)]
+    if not filled:
+        return [None] * len(values), "object", "빈 열"
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in filled):
+        if all(isinstance(v, int) or float(v).is_integer() for v in filled) and all(isinstance(v, int) for v in filled):
+            return [None if _empty(v) else int(v) for v in values], "Int64", "숫자"
+        return [None if _empty(v) else float(v) for v in values], "float64", "숫자"
+    if all(isinstance(v, str) for v in filled) and all(_NUM_TEXT.match(v) and not _LEADING_ZERO.match(v) for v in filled):
+        if all("." not in v for v in filled):
+            return [None if _empty(v) else int(v) for v in values], "Int64", "숫자"
+        return [None if _empty(v) else float(v) for v in values], "float64", "숫자"
+    if all(isinstance(v, (datetime, date)) for v in filled):
+        return [None if _empty(v) else v for v in values], "datetime64[ns]", "날짜"
+
+    def text(v: Any) -> Any:
+        if _empty(v):
+            return None
+        if isinstance(v, bool):
+            return str(v).upper()
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        if isinstance(v, datetime):
+            return v.strftime("%Y-%m-%d") if (v.hour, v.minute, v.second) == (0, 0, 0) else v.isoformat(sep=" ")
+        if isinstance(v, date):
+            return v.isoformat()
+        return v if isinstance(v, str) else str(v)
+    return [text(v) for v in values], "object", "글자"
+
+
+def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tuple[Any, Dict[str, Any], List[str]]:
+    """A table from a source file: header = first row with content, data until a fully empty row (or to the end of an
+    explicit --range); a one-cell title row above it is skipped. Column names from the header (empty -> 열_F, repeated -> Qty_2), letters and Excel rows kept."""
+    pd = pd_mod()
+    grid = read_grid(path, sheet, parse_range(range_text))
+    warnings = list(grid["warnings"])
+    rows = grid["rows"]
+    filled_n = [sum(not _empty(v) for v in vals) for _, vals in rows]
+    # header: the first row with two or more filled cells (a one-cell title above the table is skipped); else the first content
+    head_i = next((i for i, n in enumerate(filled_n) if n >= 2), next((i for i, n in enumerate(filled_n) if n), None))
+    if head_i is None:
+        raise rt.InputError(f"{os.path.basename(path)} {grid['sheet']}"
+                            + (f" {range_text}" if range_text else "") + "에 내용이 없습니다. --sheet나 --range를 확인하세요.")
+    header_row, header_vals = rows[head_i]
+    filled_cols = [j for j, v in enumerate(header_vals) if not _empty(v)]
+    if grid["explicit_end"]:
+        j1, j2 = 0, len(header_vals) - 1
+    else:
+        j1, j2 = filled_cols[0], filled_cols[-1]
+    data: List[Tuple[int, List[Any]]] = []
+    skipped_empty = 0
+    after_gap = 0
+    for r, vals in rows[head_i + 1:]:
+        part = vals[j1:j2 + 1]
+        if all(_empty(v) for v in part):
+            if grid["explicit_end"]:
+                skipped_empty += 1
+                continue
+            rest = [(rr, vv) for rr, vv in rows if rr > r and any(not _empty(x) for x in vv[j1:j2 + 1])]
+            after_gap = len(rest)
+            break
+        data.append((r, part))
+    c0 = grid["c1"] + j1
+    letters = [col_letter(c0 + j) for j in range(j2 - j1 + 1)]
+    names: List[str] = []
+    for j, v in enumerate(header_vals[j1:j2 + 1]):
+        base = f"열_{letters[j]}" if _empty(v) else str(v).strip()
+        name, n = base, 2
+        while name in names:
+            name, n = f"{base}_{n}", n + 1
+        names.append(name)
+    cols: Dict[str, Any] = {ROW: pd.array([r for r, _ in data], dtype="Int64")}
+    kinds: Dict[str, str] = {}
+    for j, name in enumerate(names):
+        vals, dtype, kind = convert_column([vals[j] for _, vals in data])
+        kinds[name] = kind
+        cols[name] = pd.Series(vals, dtype=dtype if dtype != "datetime64[ns]" else None)
+        if dtype == "datetime64[ns]":
+            cols[name] = pd.to_datetime(cols[name])
+    df = pd.DataFrame(cols)
+    last = data[-1][0] if data else header_row
+    area = f"{letters[0]}{header_row}:{letters[-1]}{last}"
+    if after_gap:
+        warnings.append(f"빈 행 아래에 내용이 있는 행이 {after_gap}개 더 있습니다 (읽지 않음). 함께 읽으려면 --range로 범위를 주세요.")
+    if skipped_empty:
+        warnings.append(f"범위 안의 빈 행 {skipped_empty}개는 뺐습니다.")
+    data_rows = {r for r, _ in data}
+    hid = len(data_rows & grid["hidden"])
+    if hid:
+        warnings.append(f"숨긴 행(또는 자동 필터로 가려진 행) {hid}개도 읽었습니다.")
+    c_lo, c_hi = c0, c0 + len(letters) - 1
+    r_lo, r_hi = header_row, last
+    mg = sum(1 for (a, b, c, d) in grid["merged"] if a <= c_hi and c >= c_lo and b <= r_hi and d >= r_lo)
+    if mg:
+        warnings.append(f"병합한 칸 {mg}곳이 있습니다. 병합 칸의 빈자리는 채우지 않고 빈 값으로 읽었습니다.")
+    by_row = dict(data)
+    fe = sum(1 for (r, c) in grid["formulas"] if r in by_row and c_lo <= c <= c_hi and _empty(by_row[r][c - c0]))
+    if fe:
+        warnings.append(f"값이 저장되지 않은 수식 칸 {fe}개는 빈 값으로 읽었습니다 (Excel에서 열어 저장하면 값이 생김).")
+    meta = {"letters": {n: {"file": os.path.basename(path), "sheet": grid["sheet"], "letter": l} for n, l in zip(names, letters)},
+            "rows": {ROW: {"file": os.path.basename(path), "path": path, "sheet": grid["sheet"]}},
+            "kinds": kinds, "anchor": {"file": path, "sheet": grid["sheet"], "header_row": header_row, "range": area}}
+    return df, meta, warnings
+
+
+# ==============================================================================
+# 4. Columns and conditions (--columns, --on, --where)
+# ==============================================================================
+
+def resolve_column(name: str, df: Any, meta: Dict[str, Any], option: str) -> str:
+    """Column name, case/space-insensitive name, or column letter of the source file. A misspelt name -> [후보]."""
+    cols = data_cols(df)
+    name = unquote(name)
+    if name in cols:
+        return name
+    key = lambda s: re.sub(r"\s+", "", str(s)).lower()
+    same = [c for c in cols if key(c) == key(name)]
+    if len(same) == 1:
+        return same[0]
+    if _LETTERS.match(name.upper()):
+        hit = [c for c in cols if (meta.get("letters", {}).get(c) or {}).get("letter") == name.upper()]
+        if len(hit) == 1:
+            return hit[0]
+    close = difflib.get_close_matches(name, cols, n=5, cutoff=0.5)
+    if close:
+        raise rt.ask(close, [argv_replacing(option, name, c) for c in close], f"{option}의 열 '{name}'이(가) 없어 쓸 열")
+    raise rt.InputError(f"{option}의 열 '{name}'이(가) 표에 없습니다. 열: {name_list(cols)}")
+
+
+def column_list(text: str, df: Any, meta: Dict[str, Any], option: str) -> List[str]:
+    """'A,B' (names or letters, ',' between names). ';' between names -> [추천] the fixed command."""
+    if ";" in text and "," not in text:
+        fixed = ",".join(p.strip() for p in text.split(";") if p.strip())
+        raise rt.InputError(f"{option}의 열 이름 사이는 ','로 나눕니다. [추천] {rt.full_command(argv_setting(option, fixed))}")
+    names = [p.strip() for p in split_outside_quotes(text, ",") if p.strip()]
+    if not names:
+        raise rt.InputError(f"{option}가 비어 있습니다. 열 이름을 ','로 나눠 주세요.")
+    out = []
+    for n in names:
+        c = resolve_column(n, df, meta, option)
+        if c not in out:
+            out.append(c)
+    return out
+
+
+def parse_where(text: str) -> List[List[Tuple[str, str, str]]]:
+    """'Level=1;Qty>2' (; = and), 'Maker=A|B' (| = or; a value alone takes the column and operator before it).
+    -> [[(col, op, value), ...or...], ...and...]. Conditions joined by ',' -> [추천] with ';'."""
+    parts = [p for p in split_outside_quotes(str(text), ";") if p.strip()]
+    if len(parts) == 1 and "," in parts[0]:
+        pieces = [p for p in split_outside_quotes(parts[0], ",") if p.strip()]
+        if len(pieces) > 1 and all(_COND.match(p) for p in pieces):
+            raise rt.InputError("--where의 조건 사이는 ';'로 나눕니다 (','가 아님). "
+                                f"[추천] {rt.full_command(argv_setting('--where', ';'.join(p.strip() for p in pieces)))}")
+    groups = []
+    for part in parts:
+        alts: List[Tuple[str, str, str]] = []
+        for alt in split_outside_quotes(part, "|"):
+            m = _COND.match(alt)
+            if m:
+                alts.append((m.group(1).strip(), m.group(2), unquote(m.group(3))))
+            elif alts and alt.strip():
+                alts.append((alts[-1][0], alts[-1][1], unquote(alt)))
+            else:
+                raise rt.InputError(f"--where '{text}'의 '{alt.strip()}'를 읽을 수 없습니다. 형식: '열=값;열>값' "
+                                    f"(그리고는 ;, 또는은 |, 연산자 = != > < >= <= ~(포함) !~(포함 안 함)).")
+        groups.append(alts)
+    if not groups:
+        raise rt.InputError("--where가 비어 있습니다.")
+    return groups
+
+
+def _cond_mask(series: Any, op: str, val: str) -> Any:
+    pd = pd_mod()
+    present = series.notna()
+    if val == "" and op in ("=", "!="):           # 'col=' : empty cells
+        empty = ~present | (series.astype("string") == "")
+        return empty if op == "=" else ~empty
+    text = series.astype("string")
+    if op in ("~", "!~"):
+        hit = text.str.contains(val, regex=False).fillna(False).astype(bool)
+        return hit if op == "~" else ~hit
+    if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        try:
+            num = float(val.replace(",", ""))
+        except ValueError:
+            num = None
+        if num is not None:
+            s = series.astype("Float64")
+            res = {"=": s == num, "!=": s != num, ">": s > num, "<": s < num, ">=": s >= num, "<=": s <= num}[op]
+            return res.fillna(op == "!=").astype(bool)
+    if pd.api.types.is_datetime64_any_dtype(series):
+        try:
+            when = pd.Timestamp(val)
+        except (ValueError, TypeError):
+            when = None
+        if when is not None:
+            res = {"=": series == when, "!=": series != when, ">": series > when, "<": series < when,
+                   ">=": series >= when, "<=": series <= when}[op]
+            return res.fillna(op == "!=").astype(bool)
+    res = {"=": text == val, "!=": text != val, ">": text > val, "<": text < val, ">=": text >= val, "<=": text <= val}[op]
+    return res.fillna(op == "!=").astype(bool)
+
+
+def apply_where(df: Any, meta: Dict[str, Any], text: str) -> Any:
+    groups = parse_where(text)
+    mask = None
+    for alts in groups:
+        part = None
+        for col, op, val in alts:
+            c = resolve_column(col, df, meta, "--where")
+            m = _cond_mask(df[c], op, val)
+            part = m if part is None else (part | m)
+        mask = part if mask is None else (mask & part)
+    return df[mask.values].reset_index(drop=True)
+
+
+# ==============================================================================
+# 5. Operations (every step is one of these; the same function runs again to rebuild a snapshot)
+# ==============================================================================
+
+def _keep_meta(meta: Dict[str, Any], cols: List[str]) -> Dict[str, Any]:
+    out = dict(meta)
+    out["letters"] = {c: v for c, v in meta.get("letters", {}).items() if c in cols}
+    out["kinds"] = {c: v for c, v in meta.get("kinds", {}).items() if c in cols}
+    return out
+
+
+def _side_rows(df: Any, meta: Dict[str, Any], table: str, taken: set) -> Tuple[Any, Dict[str, Any]]:
+    """Row columns of one side of a two-table step: _row -> '<table> 행' (other '... 행' names kept, made unique)."""
+    rename, rows = {}, {}
+    for c in [c for c in df.columns if is_row_col(c)]:
+        new = f"{table} 행" if c == ROW else c
+        base, n = new, 2
+        while new in taken:
+            new, n = f"{base}_{n}", n + 1
+        taken.add(new)
+        rename[c] = new
+        rows[new] = meta.get("rows", {}).get(c, {})
+    return df.rename(columns=rename), rows
+
+
+def op_select(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    warnings: List[str] = []
+    if args.get("file"):
+        df, meta, warnings = read_table(args["file"], args.get("sheet"), args.get("range"))
+    else:
+        df, meta = inputs["from"]
+        df = df.copy()
+    if args.get("where"):                  # conditions first: they may use columns that --columns leaves out
+        df = apply_where(df, meta, args["where"])
+    if args.get("columns"):
+        keep = column_list(args["columns"], df, meta, "--columns")
+        df = df[[c for c in df.columns if is_row_col(c)] + keep]
+        meta = _keep_meta(meta, keep)
+    return df, meta, {"warnings": warnings}
+
+
+def _keys(text: str, left: Tuple[Any, Dict], right: Tuple[Any, Dict]) -> List[str]:
+    keys = column_list(text, left[0], left[1], "--on")
+    for k in keys:
+        if k not in data_cols(right[0]):
+            resolve_column(k, right[0], right[1], "--on")
+            raise rt.InputError(f"--on의 열 '{k}'이(가) 두 표의 이름이 다릅니다. 두 표에서 같은 이름의 열을 주세요.")
+    return keys
+
+
+def _key_frame(df: Any, keys: List[str]) -> Any:
+    return df[keys].astype("string").fillna("")
+
+
+def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    pd = pd_mod()
+    (ldf, lmeta), (rdf, rmeta) = inputs["left"], inputs["right"]
+    keys = _keys(args["on"], inputs["left"], inputs["right"])
+    taken: set = set()
+    ldf, lrows = _side_rows(ldf, lmeta, args["left_name"], taken)
+    rdf, rrows = _side_rows(rdf, rmeta, args["right_name"], taken)
+    rename = {c: f"{c}_{args['right_name']}" for c in data_cols(rdf) if c in data_cols(ldf) and c not in keys}
+    rdf = rdf.rename(columns=rename)
+    lk, rk = _key_frame(ldf, keys), _key_frame(rdf, keys)
+    ldf2 = ldf.assign(**{f"__k{i}": lk[k] for i, k in enumerate(keys)})
+    rdf2 = rdf.drop(columns=keys).assign(**{f"__k{i}": rk[k] for i, k in enumerate(keys)})
+    on = [f"__k{i}" for i in range(len(keys))]
+    out = ldf2.merge(rdf2, on=on, how="inner").drop(columns=on).reset_index(drop=True)
+    dup = int(rk.duplicated().sum())
+    warnings = [f"{args['right_name']}에 같은 키가 여러 번 나오는 행이 {dup}개 있어 결과 행이 늘었습니다."] if dup else []
+    letters = {**lmeta.get("letters", {}), **{rename.get(c, c): v for c, v in rmeta.get("letters", {}).items() if c not in keys}}
+    meta = {"letters": letters, "rows": {**lrows, **rrows}, "kinds": {}}
+    return out, meta, {"warnings": warnings}
+
+
+def op_only(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    (ldf, lmeta), (rdf, _rmeta) = inputs["left"], inputs["right"]
+    keys = _keys(args["on"], inputs["left"], inputs["right"])
+    rset = set(map(tuple, _key_frame(rdf, keys).itertuples(index=False)))
+    mask = [tuple(t) not in rset for t in _key_frame(ldf, keys).itertuples(index=False)]
+    return ldf[mask].reset_index(drop=True), dict(lmeta), {"warnings": []}
+
+
+def op_stack(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    pd = pd_mod()
+    frames, letters, rows = [], None, {}
+    for i, tname in enumerate(args["tables"]):
+        df, meta = inputs[f"t{i}"]
+        frames.append(df.assign(**{"표": tname}))
+        lt = meta.get("letters", {})
+        letters = dict(lt) if letters is None else {c: v for c, v in letters.items() if lt.get(c) == v}
+        for c, v in meta.get("rows", {}).items():
+            rows.setdefault(c, v if not rows.get(c) or rows[c] == v else {"mixed": True})
+    out = pd.concat(frames, ignore_index=True, sort=False)
+    out = out[["표"] + [c for c in out.columns if c != "표"]]
+    return out, {"letters": letters or {}, "rows": rows, "kinds": {}}, {"warnings": []}
+
+
+def _same(a: Any, b: Any) -> bool:
+    pd = pd_mod()
+    na_a, na_b = a is None or (not isinstance(a, str) and pd.isna(a)), b is None or (not isinstance(b, str) and pd.isna(b))
+    if na_a or na_b:
+        return na_a and na_b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool) and not isinstance(b, bool):
+        return float(a) == float(b)
+    return str(cell_json(a)) == str(cell_json(b))
+
+
+def op_diff(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """One row per change: 추가 (only in new), 삭제 (only in old), 바뀜 (one row per changed cell)."""
+    pd = pd_mod()
+    (odf, ometa), (ndf, nmeta) = inputs["old"], inputs["new"]
+    keys = _keys(args["on"], inputs["old"], inputs["new"])
+    for tname, df in ((args["old_name"], odf), (args["new_name"], ndf)):
+        dup = int(_key_frame(df, keys).duplicated().sum())
+        if dup:
+            raise rt.InputError(f"{tname}에 --on({', '.join(keys)})이 같은 행이 {dup}개 있어 짝을 정할 수 없습니다. "
+                                "열을 더 넣어 행마다 다르게 해 주세요 (예: 상위 품번과 품번).")
+    on, nn = f"{args['old_name']} 행", f"{args['new_name']} 행"
+    orow = odf[ROW] if ROW in odf.columns else pd.Series([None] * len(odf))
+    nrow = ndf[ROW] if ROW in ndf.columns else pd.Series([None] * len(ndf))
+    okey = {tuple(t): i for i, t in enumerate(_key_frame(odf, keys).itertuples(index=False))}
+    nkey = {tuple(t): i for i, t in enumerate(_key_frame(ndf, keys).itertuples(index=False))}
+    common = [c for c in data_cols(odf) if c in data_cols(ndf) and c not in keys]
+    out: List[Dict[str, Any]] = []
+    for k, i in okey.items():
+        if k not in nkey:
+            out.append({"구분": "삭제", **dict(zip(keys, k)), "열": None, "옛 값": None, "새 값": None, on: orow.iloc[i], nn: None})
+    for k, j in nkey.items():
+        if k not in okey:
+            out.append({"구분": "추가", **dict(zip(keys, k)), "열": None, "옛 값": None, "새 값": None, on: None, nn: nrow.iloc[j]})
+    for k, i in okey.items():
+        j = nkey.get(k)
+        if j is None:
+            continue
+        for c in common:
+            a, b = odf[c].iloc[i], ndf[c].iloc[j]
+            if not _same(a, b):
+                out.append({"구분": "바뀜", **dict(zip(keys, k)), "열": c, "옛 값": cell_json(a), "새 값": cell_json(b),
+                            on: orow.iloc[i], nn: nrow.iloc[j]})
+    cols = ["구분"] + keys + ["열", "옛 값", "새 값", on, nn]
+    df = pd.DataFrame(out, columns=cols)
+    for c in (on, nn):
+        df[c] = df[c].astype("Int64")
+    for c in ("열", "옛 값", "새 값"):
+        df[c] = df[c].astype(object)
+    only_cols = sorted((set(data_cols(odf)) ^ set(data_cols(ndf))) - set(keys))
+    warnings = [f"한쪽 표에만 있는 열은 비교하지 않았습니다: {name_list(only_cols)}"] if only_cols else []
+    meta = {"letters": {}, "rows": {on: ometa.get("rows", {}).get(ROW, {}), nn: nmeta.get("rows", {}).get(ROW, {})},
+            "kinds": {}, "diff": {"old_letters": ometa.get("letters", {}), "new_letters": nmeta.get("letters", {}),
+                                  "old_rows": ometa.get("rows", {}).get(ROW, {}), "new_rows": nmeta.get("rows", {}).get(ROW, {})}}
+    return df, meta, {"warnings": warnings}
+
+
+OP_FUNCS = {"select": op_select, "join": op_join, "only": op_only, "stack": op_stack, "diff": op_diff}
+
+
+def run_op(op: str, args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    return OP_FUNCS[op](args, inputs, name)
+
+
+# ==============================================================================
+# 6. Answers
+# ==============================================================================
+
+def columns_info(df: Any, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out = []
+    for c in data_cols(df)[:LIST_MAX]:
+        lt = meta.get("letters", {}).get(c)
+        out.append({"name": c, "letter": lt["letter"] if lt else None, "kind": meta.get("kinds", {}).get(c) or kind_of(df[c])})
+    return out
+
+
+def where_text(meta: Dict[str, Any], df: Any) -> str:
+    a = meta.get("anchor")
+    if a and ROW in df.columns:
+        return f"{os.path.basename(a['file'])} {a['sheet']} {a['range']} (머리글 {a['header_row']}행)"
+    return "엑셀 위치 없음(계산한 표)" if not any(is_row_col(c) for c in df.columns) else "원본 행 번호는 '... 행' 열"
+
+
+def show_cmd(name: str) -> Dict[str, Any]:
+    return rt.next_command(["show", "--from", name], f"표 {name}의 앞부분 보기")
+
+
+def table_answer(command: str, work: Work, name: str, df: Any, meta: Dict[str, Any], lineage: str, verified: bool,
+                 warnings: List[str], extra_next: Optional[List[Dict[str, Any]]] = None, **fields: Any) -> Dict[str, Any]:
+    n = len(df)
+    warnings = list(warnings) + work.warnings
+    preview = f"{lineage} -> {n}행 {len(data_cols(df))}열"
+    then = (f"0건. 조건에 맞는 행이 없습니다(찾은 행 없음). 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요."
+            if n == 0 else f"표 {name}을(를) 만들고 다시 읽어 행·열 수를 확인했습니다. preview를 알리고, 사용자가 내용을 보려 하면 next_commands[0]을 실행하세요.")
+    out = rt.ok(command, preview, verified, then, None if verified else ["표 스냅샷을 다시 읽어 확인하지 못함"],
+                table=name, count=n, columns=columns_info(df, meta), location=where_text(meta, df), lineage=lineage,
+                work=work.folder, **fields)
+    if warnings:
+        out["warnings"] = warnings
+        out["agent_directive"] += " warnings도 그대로 알리세요."
+    nexts = ([show_cmd(name)] if n else []) + (extra_next or [])
+    if nexts:
+        out["next_commands"] = nexts
+    return out
+
+
+# ==============================================================================
+# 7. Commands
+# ==============================================================================
+
+def check_name(name: Optional[str], work: Work) -> str:
+    if not name:
+        return work.next_name()
+    if not _NAME.match(name):
+        raise rt.InputError(f"--name '{name}'은(는) 쓸 수 없습니다. 글자로 시작하고 글자·숫자·_만 씁니다 (예: df1, 상위).")
+    return name
+
+
+def cmd_select(a: Any) -> Dict[str, Any]:
+    if a.file or (not a.source and not current_work() and not getattr(a, "work", None)):
+        path = resolve_file(a.file)
+        if a.source:
+            raise rt.InputError("--file과 --from은 함께 쓰지 않습니다 (파일을 읽거나, 만든 표에서 고르거나).")
+        work = open_work(a, create_for=path)
+        args = {"file": path, "sheet": a.sheet, "range": a.range, "columns": a.columns, "where": a.where}
+        df, meta, info = op_select(args, {}, "")
+        name = check_name(a.name, work)
+        st = os.stat(path)
+        lineage = f"{name} = {where_text(meta, df)}" + (f"에서 {a.columns} 열" if a.columns else "") + (f", 조건 {a.where}" if a.where else "")
+        sid, ok_ = work.add("select", name, args, {}, df, meta, lineage,
+                            source={"file": path, "mtime": int(st.st_mtime), "size": st.st_size})
+        return table_answer("select", work, name, df, meta, lineage, ok_, info["warnings"],
+                            anchor=meta.get("anchor"), source=path)
+    if a.sheet or a.range:
+        raise rt.InputError("--sheet와 --range는 --file과 함께만 씁니다 (만든 표에서 고를 때는 --columns, --where).")
+    work = open_work(a)
+    work.check_sources()
+    src, sid_in = work.resolve(a.source, "--from")
+    inp = work.load(sid_in)
+    args = {"columns": a.columns, "where": a.where}
+    df, meta, info = op_select(args, {"from": inp}, "")
+    name = check_name(a.name, work)
+    lineage = f"{name} = {src}에서" + (f" {a.columns} 열" if a.columns else "") + (f" 조건 {a.where}" if a.where else " 그대로")
+    _sid, ok_ = work.add("select", name, args, {"from": sid_in}, df, meta, lineage)
+    return table_answer("select", work, name, df, meta, lineage, ok_, info["warnings"])
+
+
+def cmd_show(a: Any) -> Dict[str, Any]:
+    pd = pd_mod()
+    work = open_work(a)
+    work.check_sources()
+    name, sid = work.resolve(a.source, "--from")
+    df, meta = work.load(sid)
+    if a.columns:
+        keep = column_list(a.columns, df, meta, "--columns")
+        df = df[[c for c in df.columns if is_row_col(c)] + keep]
+    n = len(df)
+    shown = df.head(SHOW_MAX)
+    rows = []
+    for _, r in shown.iterrows():
+        row = {}
+        for c in df.columns:
+            row[ROW_SHOWN if c == ROW else c] = cell_json(r[c])
+        rows.append(row)
+    fields: Dict[str, Any] = {"table": name, "count": n, "shown": len(rows), "truncated": n > SHOW_MAX,
+                              "columns": columns_info(df, meta), "location": where_text(meta, df), "rows": rows,
+                              "lineage": work.step(sid)["lineage"], "work": work.folder}
+    if n > SHOW_MAX:
+        path = os.path.join(work.folder, "results", f"{name}_전체.csv")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        out = df.rename(columns={ROW: ROW_SHOWN})
+        path = rt.save_with_lock_fallback(path, lambda p: out.to_csv(p, index=False, encoding="utf-8-sig"), "전체 결과")
+        fields["full_result_file"] = path
+    if n == 0:
+        return rt.ok("show", f"표 {name}: 0행 (찾은 행 없음)", True,
+                     "0건. 표에 행이 없습니다(찾은 행 없음). 사용자에게 그대로 알리고 조건을 바꿔 다시 실행하지 마세요.", **fields)
+    preview = f"표 {name}: {n}행 {len(data_cols(df))}열, {fields['location']}" + (
+        f". 앞 {SHOW_MAX}행만 보여 줌 (전체: full_result_file)" if n > SHOW_MAX else "")
+    out = rt.ok("show", preview, True, "preview와 rows(엑셀 행 번호 포함)를 사용자에게 알리세요. 같은 명령을 다시 실행하지 마세요.", **fields)
+    if work.warnings:
+        out["warnings"] = work.warnings
+        out["agent_directive"] += " warnings도 그대로 알리세요."
+    return out
+
+
+def _two(a: Any, work: Work, first: str, second: str) -> Tuple[Tuple[str, int], Tuple[str, int]]:
+    return work.resolve(getattr(a, first), f"--{first}"), work.resolve(getattr(a, second), f"--{second}")
+
+
+def cmd_join(a: Any) -> Dict[str, Any]:
+    work = open_work(a)
+    work.check_sources()
+    (ln, ls), (rn, rs) = _two(a, work, "left", "right")
+    args = {"on": a.on, "left_name": ln, "right_name": rn}
+    df, meta, info = op_join(args, {"left": work.load(ls), "right": work.load(rs)}, "")
+    name = check_name(a.name, work)
+    lineage = f"{name} = {ln}와 {rn}를 {a.on}로 짝 맞춤 (양쪽에 있는 행만)"
+    _sid, ok_ = work.add("join", name, args, {"left": ls, "right": rs}, df, meta, lineage)
+    return table_answer("join", work, name, df, meta, lineage, ok_, info["warnings"])
+
+
+def cmd_only(a: Any) -> Dict[str, Any]:
+    work = open_work(a)
+    work.check_sources()
+    (ln, ls), (rn, rs) = _two(a, work, "left", "right")
+    args = {"on": a.on, "left_name": ln, "right_name": rn}
+    df, meta, info = op_only(args, {"left": work.load(ls), "right": work.load(rs)}, "")
+    name = check_name(a.name, work)
+    lineage = f"{name} = {ln}에만 있는 행 ({rn}와 {a.on} 비교)"
+    _sid, ok_ = work.add("only", name, args, {"left": ls, "right": rs}, df, meta, lineage)
+    return table_answer("only", work, name, df, meta, lineage, ok_, info["warnings"])
+
+
+def cmd_stack(a: Any) -> Dict[str, Any]:
+    work = open_work(a)
+    work.check_sources()
+    if ";" in a.tables and "," not in a.tables:
+        fixed = ",".join(p.strip() for p in a.tables.split(";") if p.strip())
+        raise rt.InputError(f"--tables의 표 이름 사이는 ','로 나눕니다. [추천] {rt.full_command(argv_setting('--tables', fixed))}")
+    names = [p.strip() for p in a.tables.split(",") if p.strip()]
+    if len(names) < 2:
+        raise rt.InputError("--tables에 이을 표를 둘 이상 ','로 주세요 (예: --tables \"df1,df2\").")
+    resolved = [work.resolve(n, "--tables") for n in names]
+    args = {"tables": [n for n, _ in resolved]}
+    df, meta, info = op_stack(args, {f"t{i}": work.load(s) for i, (_, s) in enumerate(resolved)}, "")
+    name = check_name(a.name, work)
+    lineage = f"{name} = {', '.join(args['tables'])}를 위아래로 이음 ('표' 열에 어느 표의 행인지)"
+    _sid, ok_ = work.add("stack", name, args, {f"t{i}": s for i, (_, s) in enumerate(resolved)}, df, meta, lineage)
+    return table_answer("stack", work, name, df, meta, lineage, ok_, info["warnings"])
+
+
+OFFICE_EXCEL = os.path.join(os.path.dirname(rt.TOOL_DIR), "office-cli", "excel.py")
+
+
+def _paint_files(work: Work, name: str, df: Any, meta: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Cells to color per source file (old: 삭제 rows and changed cells, new: 추가 rows and changed cells) as csv files
+    (one cell or row range per line, office-cli excel style --file) and the office-cli commands (confirm_commands)."""
+    d = meta.get("diff", {})
+    files, cmds = [], []
+    for side, kinds, col in (("old", ("삭제", "바뀜"), list(meta["rows"])[0]), ("new", ("추가", "바뀜"), list(meta["rows"])[1])):
+        rows_meta, letters = d.get(f"{side}_rows") or {}, d.get(f"{side}_letters") or {}
+        if not rows_meta.get("path") or not letters:
+            continue
+        span = sorted((v["letter"] for v in letters.values()), key=col_index)
+        cells = []
+        for _, r in df[df["구분"].isin(kinds)].iterrows():
+            xr = r[col]
+            if xr is None or (not isinstance(xr, int) and pd_mod().isna(xr)):
+                continue
+            if r["구분"] == "바뀜":
+                lt = letters.get(r["열"])
+                if lt:
+                    cells.append(f"{lt['letter']}{int(xr)}")
+            else:
+                cells.append(f"{span[0]}{int(xr)}:{span[-1]}{int(xr)}")
+        if not cells:
+            continue
+        base = os.path.splitext(os.path.basename(rows_meta["path"]))[0]
+        path = os.path.join(work.folder, "results", f"{name}_칠할칸_{side}_{base}.csv")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        text = "\n".join(cells) + "\n"
+        path = rt.save_with_lock_fallback(path, lambda p: open(p, "w", encoding="utf-8-sig").write(text), "칠할 칸 목록")
+        files.append(path)
+        cmds.append(rt.next_command(["style", "--target", rows_meta["path"], "--sheet", rows_meta.get("sheet") or "",
+                                     "--file", path, "--bg", "yellow"],
+                                    f"원본 {os.path.basename(rows_meta['path'])}의 바뀐 칸 {len(cells)}곳을 노랗게 칠하기 (사용자가 원할 때만, office-cli)",
+                                    script=OFFICE_EXCEL))
+    return files, cmds
+
+
+def cmd_diff(a: Any) -> Dict[str, Any]:
+    work = open_work(a)
+    work.check_sources()
+    (on_, os_), (nn_, ns_) = _two(a, work, "old", "new")
+    args = {"on": a.on, "old_name": on_, "new_name": nn_}
+    df, meta, info = op_diff(args, {"old": work.load(os_), "new": work.load(ns_)}, "")
+    name = check_name(a.name, work)
+    counts = df["구분"].value_counts().to_dict()
+    summary = f"추가 {counts.get('추가', 0)}행, 삭제 {counts.get('삭제', 0)}행, 바뀐 칸 {counts.get('바뀜', 0)}곳"
+    lineage = f"{name} = {on_}(옛) -> {nn_}(새) 비교 ({a.on} 기준): {summary}"
+    _sid, ok_ = work.add("diff", name, args, {"old": os_, "new": ns_}, df, meta, lineage)
+    files, cmds = _paint_files(work, name, df, meta)
+    out = table_answer("diff", work, name, df, meta, lineage, ok_, info["warnings"], summary=summary)
+    if len(df) == 0:
+        out["agent_directive"] = "VERIFIED: 0건. 두 표에서 다른 곳이 없습니다(찾은 차이 없음). 사용자에게 그대로 알리고 다시 실행하지 마세요."
+    if files:
+        out["paint_files"] = files
+        out["confirm_commands"] = cmds
+        out["agent_directive"] += " 원본에 칠하기는 사용자가 원할 때만 confirm_commands를 1번 실행하세요."
+    return out
+
+
+def cmd_undo(a: Any) -> Dict[str, Any]:
+    work = open_work(a)
+    if not work.steps:
+        raise rt.InputError("되돌릴 단계가 없습니다 (이 작업 폴더에 만든 표가 없음).")
+    step = work.steps.pop()
+    work.save()
+    try:
+        os.remove(work.table_file(step["id"]))
+    except OSError:
+        pass
+    still = work.names()
+    back = still.get(step["name"])
+    cur = work.current_name()
+    preview = (f"되돌림: {step['lineage']}. " + (f"{step['name']}은(는) 그 전 표를 다시 가리킵니다. " if back else f"{step['name']}은(는) 없어졌습니다. ")
+               + (f"지금 표: {cur}" if cur else "남은 표 없음"))
+    verified = step["id"] not in [s["id"] for s in Work(work.folder).steps]
+    return rt.ok("undo", preview, verified, "preview를 사용자에게 알리세요. 같은 명령을 다시 실행하지 마세요 (한 번에 한 단계씩 되돌림).",
+                 None if verified else ["작업 기록을 다시 읽어 확인하지 못함"], removed=step["name"], current=cur,
+                 tables=sorted(still), work=work.folder)
+
+
+def cmd_new(a: Any) -> Dict[str, Any]:
+    old = current_work()
+    set_current_work(None)
+    verified = current_work() is None
+    preview = "새 작업을 시작합니다. 다음 select --file이 그 파일 옆에 새 작업 폴더를 만듭니다." + (f" (지난 작업 폴더: {old})" if old else "")
+    return rt.ok("new", preview, verified, "preview를 사용자에게 알리세요.", None if verified else ["지금 작업 폴더 표시를 지우지 못함"],
+                 previous_work=old)
+
+
+def _export_path(work: Work, name: str, save: Optional[str]) -> str:
+    if not save:
+        return os.path.join(work.folder, f"{name}.xlsx")
+    p = str(save).strip().strip('"')
+    if not os.path.splitext(p)[1]:
+        p += ".xlsx"
+    if os.path.splitext(p)[1].lower() not in (".xlsx", ".csv"):
+        raise rt.InputError(f"--save는 .xlsx나 .csv입니다. [추천] {rt.full_command(argv_setting('--save', os.path.splitext(p)[0] + '.xlsx'))}")
+    return p if os.path.isabs(p) else os.path.join(work.folder, p)
+
+
+def cmd_export(a: Any) -> Dict[str, Any]:
+    pd = pd_mod()
+    work = open_work(a)
+    work.check_sources()
+    name, sid = work.resolve(a.source, "--from")
+    df, meta = work.load(sid)
+    path = os.path.abspath(_export_path(work, name, a.save))
+    sources = {os.path.normcase(os.path.abspath(s["source"]["file"])) for s in work.steps if s.get("source")}
+    if os.path.normcase(path) in sources:
+        raise rt.InputError(f"원본 파일({os.path.basename(path)})에는 쓰지 않습니다. 다른 이름을 --save로 주세요.")
+    out = df.rename(columns={ROW: ROW_SHOWN})
+    for c in out.columns:
+        if str(out[c].dtype) in ("Int64", "Float64", "string"):
+            out[c] = out[c].astype(object).where(out[c].notna(), None)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path) and not a.overwrite:
+        new = rt.timestamped(path)
+        rt.note_recovered(f"{os.path.basename(path)}이(가) 이미 있음 -> {os.path.basename(new)}로 저장 (덮어쓰기는 --overwrite)")
+        path = new
+    if path.lower().endswith(".csv"):
+        writer = lambda p: out.to_csv(p, index=False, encoding="utf-8-sig")
+    else:
+        writer = lambda p: out.to_excel(p, index=False, sheet_name=name[:31])
+    path = rt.save_with_lock_fallback(path, writer, "내보낼 파일")
+    try:
+        if path.lower().endswith(".csv"):
+            back = len(pd.read_csv(path, encoding="utf-8-sig", dtype=str))
+        else:
+            back = len(pd.read_excel(path, dtype=str))
+        verified = back == len(df)
+    except Exception:
+        verified = False
+    preview = f"표 {name}({len(df)}행 {len(data_cols(df))}열)을 저장했습니다: {path}"
+    return rt.ok("export", preview, verified, "preview를 사용자에게 알리세요. 같은 명령을 다시 실행하지 마세요.",
+                 None if verified else ["저장한 파일을 다시 읽어 행 수를 확인하지 못함"], table=name, count=len(df),
+                 output_file=path, work=work.folder)
+
+
+# ==============================================================================
+# 8. Parser
+# ==============================================================================
+
+def build_cli() -> rt.JsonArgumentParser:
+    root, sub = rt.make_parser("pandas-kit: 표 데이터를 단계별로 다룸 (원본은 고치지 않고 단계마다 이름 붙인 표를 만듦)")
+
+    def cmd(name: str, help_text: str) -> rt.JsonArgumentParser:
+        p = rt.add_command(sub, root, name, help_text)
+        p.add_argument("--work", help="이 작업 폴더로 돌아가기 (지난 작업). 생략하면 지금 작업 폴더")
+        return p
+
+    p = cmd("select", "파일(시트·범위)이나 만든 표에서 열과 조건으로 골라 이름 붙인 표 만들기")
+    p.add_argument("--file", help="읽을 파일 (.xlsx, .xlsm, .csv). 생략하면 만든 표(--from 또는 지금 표), 표가 없으면 열린 Excel 통합문서")
+    p.add_argument("--sheet", help="시트 이름 (생략하면 파일을 열었을 때 보이는 시트)")
+    p.add_argument("--range", help="읽을 범위 (예: B5:H230, B:H, 왼쪽 위 칸 B5). 생략하면 도구가 표를 찾음")
+    p.add_argument("--from", dest="source", help="고를 표 이름 (생략하면 지금 표)")
+    p.add_argument("--columns", help="남길 열 (이름이나 열 글자, ','로 나눔)")
+    p.add_argument("--where", help="행 조건 (그리고 ;, 또는 |. 예: \"Level=1;Qty>2\", \"Maker=A|B\")")
+    p.add_argument("--name", help="새 표 이름 (생략하면 df1, df2 ...)")
+
+    p = cmd("show", "표의 앞 20행을 엑셀 행 번호와 함께 보기 (넘으면 전체를 csv로)")
+    p.add_argument("--from", dest="source", help="볼 표 (생략하면 지금 표)")
+    p.add_argument("--columns", help="볼 열 (이름이나 열 글자, ','로 나눔)")
+
+    for name, help_text in (("join", "두 표를 키 열로 짝 맞춰 붙이기 (양쪽에 있는 행만)"),
+                            ("only", "왼쪽 표에만 있는 행 (키 열로 비교)")):
+        p = cmd(name, help_text)
+        p.add_argument("--left", required=True, help="왼쪽 표")
+        p.add_argument("--right", required=True, help="오른쪽 표")
+        p.add_argument("--on", required=True, help="키 열 (','로 나눔)")
+        p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("diff", "두 표 비교: 추가·삭제 행과 바뀐 칸 (키 열로 짝)")
+    p.add_argument("--old", required=True, help="옛 표")
+    p.add_argument("--new", required=True, help="새 표")
+    p.add_argument("--on", required=True, help="키 열 (','로 나눔, 행마다 달라야 함)")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("stack", "여러 표를 위아래로 잇기 ('표' 열에 어느 표의 행인지)")
+    p.add_argument("--tables", required=True, help="이을 표 이름 (','로 나눔)")
+    p.add_argument("--name", help="새 표 이름")
+
+    cmd("undo", "마지막 단계 하나 되돌리기")
+    rt.add_command(sub, root, "new", "새 작업 시작 (다음 select --file이 새 작업 폴더를 만듦)")
+
+    p = cmd("export", "표를 새 파일(.xlsx, .csv)로 저장")
+    p.add_argument("--from", dest="source", help="저장할 표 (생략하면 지금 표)")
+    p.add_argument("--save", nargs="?", const=None, help="저장할 파일 (생략하면 작업 폴더의 <표 이름>.xlsx, 이름만 주면 작업 폴더에)")
+    p.add_argument("--overwrite", action="store_true", help="같은 이름 파일이 있으면 덮어쓰기 (사용자가 원할 때만)")
+    return root
+
+
+COMMANDS = {"select": cmd_select, "show": cmd_show, "join": cmd_join, "only": cmd_only, "diff": cmd_diff,
+            "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export}
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    rt.setup_console()
+    rt.CURRENT_ARGV = [os.path.abspath(__file__)] + list(sys.argv[1:] if argv is None else argv)
+    args = build_cli().parse_args(rt.CURRENT_ARGV[1:])
+    rt.run_cli(lambda: COMMANDS[args.cmd](args), hint="확인할 것: 표 이름, 열 이름, 파일 경로.")
+
+
+if __name__ == "__main__":
+    main()

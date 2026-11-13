@@ -10,10 +10,10 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 소비자는 LLM이다. 기준은 26B~30B 경량 모델(Gemma)이고, 대형 모델(BEAM)도 쓴다. 출력 형식의 작은 변화도 에이전트를 깨뜨린다.
 - **설계 원칙** (2026-11-12 사용자 결정): 도구는 실행 판단(대상 찾기, 기본값, 복구)과 결과 확인을 맡는다. LLM은 명령을 실행하고 결과를 해석하며,
   업무 판단은 근거를 보여 주고 사용자와 정한다. 사용법은 경량 모델이 틀리지 않게 단순하게, 대형 모델을 막지 않게.
-- **도구의 두 성격**: office-cli는 기반 도구(조합해 쓰는 단위 기능, 아래 "도구별 규칙"), ml-kit은 완결형 작업 도구(학습부터 보고서까지
-  버전 고르기·반복 횟수 같은 실행 판단을 도구가 대신함). 새 도구는 둘 중 하나로 정한다. 확장은 사용자가 만드는 조합 스킬로 한다 (`AIKIT/AGENTS.md` 10장).
+- **도구의 두 성격**: office-cli는 기반 도구(조합해 쓰는 단위 기능, 아래 "도구별 규칙"), ml-kit과 pandas-kit은 완결형 작업 도구(ml-kit은 학습부터 보고서까지,
+  pandas-kit은 표를 단계별로 고르고 비교. 버전 고르기·반복 횟수·표 찾기 같은 실행 판단을 도구가 대신함). 새 도구는 둘 중 하나로 정한다. 확장은 사용자가 만드는 조합 스킬로 한다 (`AIKIT/AGENTS.md` 10장).
 - 원칙급 결정은 `docs/DECISIONS.md`에 한 줄씩 남긴다 (지침을 바꾸는 결정은 이 파일과 지침을 같은 커밋에서).
-- **베타 단계**: ml-kit과 office-cli는 베타다. 이전 버전과의 호환은 필요 없다 (사용자가 따로 요청할 때만).
+- **베타 단계**: ml-kit, office-cli, pandas-kit은 베타다. 이전 버전과의 호환은 필요 없다 (사용자가 따로 요청할 때만).
   호환을 위한 코드(옛 인자·키 별칭, 이전 형식 모델·파일을 읽는 대체 경로)를 새로 넣지 않는다.
 
 ## 폴더 구조
@@ -22,8 +22,8 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   설정 파일 없이 폴더 모양으로 읽힌다: `AIKIT/AGENTS.md`(전역 지침이라 부르지만 이 프로젝트의 지침), `AIKIT/.opencode/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나),
   `AIKIT/opencode.json`(셸·권한·폐쇄망 잠금). 사내 LLM 설정(`opencode.jsonc`)과 폐쇄망 잠금은 사용자 전역 설정(`%USERPROFILE%\.config\opencode`)에
   두어 모든 프로젝트에 적용한다 (setup이 `opencode.json`을 전역에 합침, 예전 `OPENCODE_CONFIG_DIR=C:\AIKIT`는 지움).
-- `AIKIT/.opencode/skills/`: 기본 스킬 12개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
-  `word-kit`, `ppt-kit`, `outlook-kit`, `search-kit`, `stats-kit`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
+- `AIKIT/.opencode/skills/`: 기본 스킬 13개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
+  `word-kit`, `ppt-kit`, `outlook-kit`, `search-kit`, `stats-kit`, pandas-kit: `pandas-kit`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
   스킬이 여러 개를 함께 쓰는 도구는 스킬 폴더가 아니라 도구 폴더에 두고, SKILL.md에는 `python "C:\AIKIT\<tool>\<파일>.py" ...` 전체 명령을 적는다.
   사용자가 만든 스킬의 스크립트는 그 스킬 폴더의 `scripts/`에 둔다 (스킬 폴더만 복사하면 동료 PC에서도 됨).
 - `AIKIT/<tool>/`: **실행에 필요한 .py만** 둔다. 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
@@ -126,7 +126,7 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 ## 오류 로그 저장
 - 실패한 실행은 자동으로 `<도구 데이터 폴더>/logs/errors.txt`에 덧붙인다. 사용자 중단(exit 130)은 기록하지 않는다.
   - exit 1은 `run_cli()`, 인자 오류 exit 2는 `JsonArgumentParser.error()`가 기록한다.
-  - 데이터 폴더 기본값은 `<도구폴더>/data`, 도구별 환경변수로 바꿀 수 있다 (예: `ML_KIT_DATA_DIR`, `OFFICE_CLI_DATA_DIR`). `data/`는 git에 올리지 않는다.
+  - 데이터 폴더 기본값은 `<도구폴더>/data`, 도구별 환경변수로 바꿀 수 있다 (예: `ML_KIT_DATA_DIR`, `OFFICE_CLI_DATA_DIR`, `PANDAS_KIT_DATA_DIR`). `data/`는 git에 올리지 않는다.
 - 항목 형식 (UTF-8, 항목 사이 빈 줄):
   ```text
   ===== <ISO 시각> | <도구> <버전> | Python <버전> | <OS>
@@ -182,6 +182,14 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 - 세션(`open_target`/`write_session` with 블록) 밖에서 그 안의 COM 객체(시트, 범위, 문서)를 읽지 않는다. 닫힌 파일은 블록이 끝나면 문서와
   백그라운드 Office가 닫혀 OLE 0x800a01a8로 실패하고, 저장은 끝났는데 실패를 보고한다 (회사 PC 2026-11-06 O2). 결과에 쓸 값은 블록 안에서
   파이썬 값으로 꺼내 둔다. 가짜 COM은 이것을 흉내 내지 않으므로 `tests/test_session_scope.py`가 코드 모양으로 검사한다.
+### pandas-kit
+- **완결형 작업 도구** (2026-11-13 사용자 결정, 설계 `AIKIT/dev/pandas-kit/README.md`): 표 데이터를 단계별로 다룬다 (첫 대상 BOM 분석).
+  읽기·칠하기·메모(원본 Excel에 쓰는 일)는 office-cli, 계산은 pandas-kit. 원본 파일은 쓰지 않는다. LLM에게 pandas 코드를 짜게 하지 않는다.
+- 진입점 `pandas_kit.py <명령>`, 공통 런타임 `_pd_runtime.py`(진입점 아님, 스킬에 적지 않음). 다른 도구 폴더를 import하지 않는다
+  (원본에 칠하는 office-cli 명령은 전체 명령 문자열로만 만든다).
+- 상태는 작업 폴더의 파일: 단계 기록 `steps.json`이 원본, 표 스냅샷 `tables/*.pkl`은 캐시 (깨졌거나 pandas 버전이 다르면 기록으로 다시 만듦).
+  도구가 만든 자기 작업 폴더(표시 파일 `.created_by_pandas-kit`)의 pickle만 읽는다.
+- 엑셀 위치를 잃지 않는다: 행마다 원본 Excel 행 번호(숨은 열 `_row`, 두 표 결과는 `<표> 행`), 열마다 열 글자. 값은 바꾸지 않는다 (숫자 변환은 열 전체가 숫자이고 앞자리 0이 없을 때만).
 ### 보관 도구 (`archive/`)
 - `archive/` 아래 도구는 수정하지 않는다. 지침 반영·검토·테스트 대상이 아니다 (doc-classifier: 다른 개발자 담당).
 

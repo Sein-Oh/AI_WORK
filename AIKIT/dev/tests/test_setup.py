@@ -96,15 +96,15 @@ def _backups(cli, pattern):
 
 
 def test_sources_exist_in_repo_layout():
-    """2026-11-13: C:\\AIKIT은 OpenCode 프로젝트: AIKIT/AGENTS.md(프로젝트 지침), AIKIT/.opencode/skills/<이름>/SKILL.md(기본 스킬 12개).
+    """2026-11-13: C:\\AIKIT은 OpenCode 프로젝트: AIKIT/AGENTS.md(프로젝트 지침), AIKIT/.opencode/skills/<이름>/SKILL.md(기본 스킬 13개).
     opencode.json은 셸·권한·폐쇄망 잠금만 (스킬 경로 없음, setup이 전역 설정에도 합침)."""
     for name, src in su.sources():
         assert os.path.isfile(src), (name, src)
     on_disk = set(os.listdir(os.path.join(CLI, ".opencode", "skills")))
     assert not os.path.exists(os.path.join(CLI, "skills"))                # 전역 설정 폴더 모양(AIKIT/skills)은 없음
-    assert set(su.ML_SKILLS + su.OFFICE_SKILLS) <= on_disk                # 새 스킬 폴더를 만들면 setup.py에도 올림
+    assert set(su.DEFAULT_SKILLS) <= on_disk                # 새 스킬 폴더를 만들면 setup.py에도 올림
     assert not os.path.exists(os.path.join(CLI, "opencode"))              # 이전 구성의 설정 폴더는 없음
-    for tool in ("ml-kit", "office-cli"):
+    for tool in ("ml-kit", "office-cli", "pandas-kit"):
         assert not os.path.exists(os.path.join(CLI, tool, "skills")), tool
     cfg = json.load(open(os.path.join(CLI, "opencode.json"), encoding="utf-8"))
     assert set(cfg) - {"$schema"} <= set(su.OUR_KEYS) and "skills" not in cfg   # 사내 LLM 설정(provider, model)은 opencode.jsonc에만
@@ -116,7 +116,7 @@ def test_sources_exist_in_repo_layout():
     if os.path.isfile(gitignore):        # 저장소에서만 (반입한 PC에는 .gitignore가 없음)
         ignore = open(gitignore, encoding="utf-8").read().splitlines()
         assert {"AIKIT/opencode.jsonc", "AIKIT/.opencode/*", "!AIKIT/.opencode/skills/", "AIKIT/.opencode/skills/*", "AIKIT/data/"} <= set(ignore)
-        assert {f"!AIKIT/.opencode/skills/{n}/" for n in su.ML_SKILLS + su.OFFICE_SKILLS} <= set(ignore)    # 기본 스킬만 저장소에
+        assert {f"!AIKIT/.opencode/skills/{n}/" for n in su.DEFAULT_SKILLS} <= set(ignore)    # 기본 스킬만 저장소에
         assert "AIKIT/opencode.json" not in ignore
     assert su.config_dir() == su.HERE and su.skills_dir() == os.path.join(su.HERE, ".opencode", "skills")
     for dist in ("pandas", "scikit-learn", "openpyxl", "python-docx", "python-pptx", "pymupdf", "pywin32"):
@@ -316,16 +316,17 @@ def test_not_windows_path_is_warning_only(monkeypatch, tmp_path, capsys):
 # ---- 동작 확인, setup.bat ----
 def test_verify_runs_tool_help_and_imports(monkeypatch, tmp_path):
     cli = tmp_path / "AIKIT"
-    for tool in ("ml-kit", "office-cli"):
+    for tool in ("ml-kit", "office-cli", "pandas-kit"):
         shutil.copytree(os.path.join(CLI, tool), cli / tool, ignore=shutil.ignore_patterns("data", "__pycache__"))
     (cli / "opencode.exe").write_bytes(b"")
     monkeypatch.setattr(su, "HERE", str(cli))
     monkeypatch.setenv("ML_KIT_DATA_DIR", str(tmp_path / "mldata"))
     monkeypatch.setenv("OFFICE_CLI_DATA_DIR", str(tmp_path / "officedata"))
+    monkeypatch.setenv("PANDAS_KIT_DATA_DIR", str(tmp_path / "pddata"))
     rep = su.Report()
     su.step_verify(rep)
     assert rep.fails == [], rep.fails
-    assert rep.ok >= 4                                                        # 라이브러리, 도구 2개, opencode.exe
+    assert rep.ok >= 5                                                        # 라이브러리, 도구 3개, opencode.exe
     os.remove(cli / "opencode.exe")
     rep = su.Report()
     su.step_verify(rep)
