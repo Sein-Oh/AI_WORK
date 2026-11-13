@@ -83,6 +83,7 @@ WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 �
 배포는 `C:\AIKIT` 폴더 하나입니다 (저장소 `AIKIT/` + WinPython `python\` + `opencode.exe`).
 1. `AIKIT` 폴더를 사용자 PC의 `C:\`에 복사합니다 (`C:\AIKIT\setup.bat`, `C:\AIKIT\python\python.exe`가 되도록, `dev` 포함).
 2. 사내 LLM 주소가 든 `opencode.jsonc`를 사용자 전역 설정 폴더 `%USERPROFILE%\.config\opencode\`에 넣어 둡니다 (모든 프로젝트에서 사내 LLM 사용).
+   `C:\AIKIT\opencode.jsonc`에 두어도 setup이 전역 폴더로 옮깁니다 (원래 파일은 보관).
 3. `C:\AIKIT\setup.bat`을 두 번 클릭합니다 (또는 `python C:\AIKIT\setup.py`). `C:\AIKIT\opencode.json`의 셸·권한·폐쇄망 잠금을 전역 설정
    `opencode.json`에 합쳐 모든 프로젝트에 적용하고(원래 파일 보관), 예전 설치가 남긴 `OPENCODE_CONFIG_DIR=C:\AIKIT`를 지웁니다.
    시스템 PATH에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가한 뒤, 도구와 OpenCode 설정을 확인합니다. `--check`는 확인만.

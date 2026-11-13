@@ -1159,6 +1159,26 @@ def test_where_uncomparable_condition_is_not_zero_verified(tmp_path, capsys, exp
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "비교할 수 없습니다" in out["message"], out
 
 
+@pytest.mark.parametrize("cmd, expr, fixed", [
+    ("read", "비율 >= 50", "비율 >= 50%"), ("read", "날짜 >= 2026-1-10; 비율 < 60", "날짜 >= 2026-1-10; 비율 < 60%"),
+    ("stats", "비율 > 30", "비율 > 30%"),
+])
+def test_where_bare_number_on_fraction_column_recommends_percent(tmp_path, capsys, cmd, expr, fixed):
+    """회사 PC Gemma 2026-11-13 O6: % 서식 칸(값 0.05)에 '불량률 >= 5'가 0건 VERIFIED. 그대로 비교하면 늘 0건이거나 전부라
+    %를 붙인 전체 명령을 [추천]. [추천] 명령을 그대로 실행하면 맞는 행이 나옴. 1 이하 값(0.5)이나 %가 붙은 값은 그대로."""
+    p = _where_review_xlsx(tmp_path / "w.xlsx")
+    code, out = run_main(excel, capsys, cmd, "--target", p, "--where", expr)
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "[추천]" in out["message"], out
+    rec = out["message"].split("[추천] ", 1)[1].split(" 형식:", 1)[0]
+    assert f"--where '{fixed}'" in rec or f'--where "{fixed}"' in rec, rec
+    code, out = run_main(excel, capsys, cmd, "--target", p, "--where", fixed)
+    assert code == 0, out
+    code, out = run_main(excel, capsys, "read", "--target", p, "--where", "비율 >= 0.5")
+    assert code == 0 and out["row_numbers"][1:] == [2, 3], out
+    code, out = run_main(excel, capsys, "read", "--target", p, "--where", "금액 >= 1500")    # 1보다 큰 값이 있는 열은 그대로
+    assert code == 0 and out["row_numbers"][1:] == [3, 4], out
+
+
 def test_where_text_columns_compare_as_text_and_text_codes_stay_distinct(tmp_path, capsys):
     csv_path = tmp_path / "c.csv"
     csv_path.write_text("품번,비율,수량\n1A,50%,10개\n1B,20%,3개\n", encoding="utf-8")

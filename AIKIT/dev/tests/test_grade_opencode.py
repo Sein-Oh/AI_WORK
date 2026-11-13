@@ -649,7 +649,8 @@ def test_answer_variants_other_scenarios():
                 "보고서와 성능 예측표를 만들었습니다. 일치도 92%.",
                 "성능예측표(공정_성능예측표.xlsx)를 만들었고 생산효율 일치도는 95%입니다.",
                 "보고서: a.docx, 성능예측표: b.xlsx. 출력별 일치도 생산효율 92%, 불순물 88%.",
-                "보고서와 성능 예측표 생성 완료 (일치도 93%, 판정 양호)"],
+                "보고서와 성능 예측표 생성 완료 (일치도 93%, 판정 양호)",
+                "성능예측표: 생산효율 ExtraTrees (모델과 동일한 수식으로 계산됨)"],                     # 회사 PC Gemma 2026-11-13
                ["보고서를 만들었습니다: 공정_보고서.docx", "성능예측표를 만들었습니다."]),
     }
     for sid, (goods, bads) in cases.items():
@@ -763,10 +764,13 @@ O1_ANSWER = ("5행 대조: 맞음 2, 다름 2, 규격서에 없음 1. 다름: �
 # 시나리오: (합격 기록들, [(불합격 기록, 실패 이유에 들어갈 글)]). 기록 = [(명령, 결과 JSON), ..., 답변]
 OFFICE_CASES = {
     "O1": ([[(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), O1_ANSWER],
-            [(READ_X.replace('"', ""), OK), (f'{RD} read --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER]],
+            [(READ_X.replace('"', ""), OK), (f'{RD} read --file "{G}\\규격서.txt"', OK), (MEMO + " --dry-run", OK), O1_ANSWER],
+            # 회사 PC Gemma 2026-11-13: 미리보기 없이 달 메모를 보여 주고 묻기 (전역 지침 3장 5번)
+            [(READ_X, OK), (f'{RD} read --file "{G}\\규격서.txt"', OK),
+             "다름: 소비 전류 250 (3.2), 동작 온도 70 (3.3). C4: [NG] 규격 초과 (규격서 3.2) 메모를 달겠습니다. 진행할까요?"]],
            [([(READ_X, OK), (SEARCH, OK), (MEMO + " --dry-run", OK), (MEMO, OK), O1_ANSWER], "금지 명령"),        # 확인 없이 실제로 담
-            ([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O1_ANSWER], "--dry-run"),                          # 미리보기 없이 바로 담
-            ([(READ_X, OK), (SEARCH, OK), "다른 곳 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "--dry-run"),   # 메모 미리보기 없음
+            ([(READ_X, OK), (SEARCH, OK), (MEMO, OK), O1_ANSWER], "금지 명령"),                          # 묻지 않고 바로 담
+            ([(READ_X, OK), (SEARCH, OK), "다른 곳 2건입니다. 소비 전류, 동작 온도. 규격서 3.2, 3.3"], "답변"),   # 달기 전에 묻지 않음
             ([(READ_X, OK), (MEMO + " --dry-run", OK), O1_ANSWER], "reader"),                            # 규격서를 찾지 않음
             # 회귀: ;로 이은 다른 명령의 --dry-run을 보고 실제 달기를 놓침
             ([(READ_X, OK), (SEARCH, OK), (f"{MEMO}; {MEMO} --dry-run", OK), O1_ANSWER], "금지 명령"),
@@ -923,3 +927,18 @@ def test_office_samples_match_scenarios(tmp_path):
     for sid, files in (("O1", ["규격대조.xlsx", "규격서.txt"]), ("O2", ["단위표.xlsx"]), ("O4", ["주간보고.docx"]),
                        ("O5", ["성적서양식.docx"])):
         assert all(f in by_id[sid]["message"] for f in files), sid
+
+
+def test_y1_python_c_is_allowed_but_not_endless(tmp_path):
+    """사용자 결정 2026-11-13 (회사 PC Gemma Y1): python -c도 됨. 대신 직접 짠 파이썬 실행은 방식과 상관없이 모두 3번까지
+    (처음 1번 + 고쳐 다시 실행 2번, 전역 지침 8장 5번). 4번째부터 실패."""
+    ans = "도구에 없는 기능이라 파이썬으로 직접 처리했습니다. 구간별 평균: 66.5, 77.0, 76.7. 저장: 공정_구간집계.xlsx"
+    py_c = [(f'python -c "import pandas as pd; print({i})"', "x") for i in range(4)]
+    script = ('python "C:\\AIKIT\\data\\scripts\\bins.py"', "saved")
+    for rec in ([py_c[0], ans], [script, ans], [py_c[0], py_c[1], script, ans]):
+        row = _office_run(tmp_path, "Y1", rec)
+        assert row["결과"] == "통과", (rec, row["실패"])
+    row = _office_run(tmp_path, "Y1", py_c + [ans])
+    assert row["결과"] == "실패" and "직접 짠 파이썬 실행 3번 이하" in row["실패"] and "4번" in row["실패"], row["실패"]
+    row = _office_run(tmp_path, "Y1", [py_c[0], py_c[1], script, script, ans])
+    assert row["결과"] == "실패" and "4번" in row["실패"], row["실패"]

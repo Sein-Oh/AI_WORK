@@ -1953,16 +1953,18 @@ EXCLUDED_PREVIEW_MAX = 20    # excluded rows listed in the training JSON; exclud
 
 def excluded_preview_keys(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """JSON keys of the excluded rows: excluded_preview (first EXCLUDED_PREVIEW_MAX: target, row, kind 직접/자동,
-    reason, value = the target value), excluded_reasons (rows per reason: the '제외' text, or '자동 이상치: <columns>'),
+    reason, value = the target value), excluded_reasons (data rows per reason, a row counted once over targets: the '제외' text, or '자동 이상치: <columns>'),
     excluded_count, excluded_preview_truncated."""
     def _val(v: Any) -> Any:
         return v if isinstance(v, (int, float, str)) and not (isinstance(v, float) and v != v) else str(v)
     preview = [{"target": r["타겟"], "row": int(r["원본 행"]), "kind": "직접" if r["구분"] == "직접 표시" else
                 ("조건" if r["구분"] == "조건" else "자동"), "reason": r["이유"], "value": _val(r["실제값"])}
                for r in rows[:EXCLUDED_PREVIEW_MAX]]
-    reasons: Dict[str, int] = {}
+    # data rows per reason: a row excluded for several targets counts once (company PC BEAM 2026-11-13: 29 rows x 3 targets read as 87)
+    seen: Dict[str, set] = {}
     for r in rows:
-        reasons[r["_key"]] = reasons.get(r["_key"], 0) + 1
+        seen.setdefault(r["_key"], set()).add(int(r["원본 행"]))
+    reasons = {k: len(v) for k, v in seen.items()}
     return {"excluded_count": len(rows), "excluded_preview": preview, "excluded_reasons": reasons,
             "excluded_preview_truncated": len(rows) > EXCLUDED_PREVIEW_MAX}
 
