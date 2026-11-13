@@ -293,6 +293,20 @@ def step_move_llm_config(rep, backup, check=False):
                    + f" (원래 파일 보관: {os.path.join(backup, 'opencode.jsonc')})")
 
 
+def step_global_leftovers(rep):
+    """전역 설정 폴더에 남은 예전 복사본(우리 기본 스킬, AGENTS.md)을 알림. 전역 폴더는 모든 프로젝트에 적용되어 C:\\AIKIT 밖 대화에도
+    우리 스킬·지침이 들어감. 사용자가 만든 것일 수 있어 지우지 않고 WARN (삭제는 사람이 확인)."""
+    gdir = global_config_dir()
+    ours = [n for n in ML_SKILLS + OFFICE_SKILLS
+            if os.path.isfile(os.path.join(gdir, "skills", n, "SKILL.md")) or os.path.isfile(os.path.join(gdir, "skill", n, "SKILL.md"))]
+    if ours:
+        rep.line("WARN", f"전역 설정 폴더에 예전 우리 스킬이 남아 있습니다 ({', '.join(ours)}). 모든 프로젝트에 보이니 "
+                         f"{os.path.join(gdir, 'skills')}에서 이 폴더들을 지우세요 (C:\\AIKIT\\.opencode\\skills의 것을 씀)")
+    if os.path.isfile(os.path.join(gdir, "AGENTS.md")):
+        rep.line("WARN", f"{os.path.join(gdir, 'AGENTS.md')}가 있습니다. 모든 프로젝트에 적용되는 지침이라, 예전에 복사한 우리 지침이면 지우세요 "
+                         "(우리 지침은 C:\\AIKIT\\AGENTS.md)")
+
+
 def _norm(entry):
     """중복 판정용: 따옴표·앞뒤 공백·끝 \\ 무시, 대소문자 무시, 환경 변수(%SystemRoot% 등) 풀어서."""
     e = os.path.expandvars(entry.strip().strip('"'))
@@ -654,6 +668,7 @@ def main(argv=None):
     step_env(rep, backup, args.check)
     step_global_config(rep, backup, args.check)
     step_move_llm_config(rep, backup, args.check)
+    step_global_leftovers(rep)
     print("[INFO] 3. 시스템 PATH", flush=True)
     if args.no_path:
         print("[INFO] --no-path: 건너뜀", flush=True)

@@ -196,6 +196,21 @@ def test_llm_config_moves_to_global_folder(monkeypatch, tmp_path, capsys):
     assert (gdir / "opencode.jsonc").read_text(encoding="utf-8") == jsonc
 
 
+def test_old_copies_in_global_folder_are_reported_not_deleted(monkeypatch, tmp_path, capsys):
+    """예전 구성이 전역 설정 폴더에 복사한 우리 스킬·AGENTS.md는 모든 프로젝트에 보여 WARN. 사용자 것일 수 있어 지우지 않음."""
+    _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
+    gdir = tmp_path / "home_config" / "opencode"
+    (gdir / "skills" / "excel-kit").mkdir(parents=True)
+    (gdir / "skills" / "excel-kit" / "SKILL.md").write_text("old", encoding="utf-8")
+    (gdir / "skills" / "my-own").mkdir()
+    (gdir / "skills" / "my-own" / "SKILL.md").write_text("mine", encoding="utf-8")
+    (gdir / "AGENTS.md").write_text("old", encoding="utf-8")
+    assert su.main(["--no-path"]) == 0
+    out = capsys.readouterr().out
+    assert "예전 우리 스킬이 남아 있습니다 (excel-kit)" in out and "my-own" not in out and "AGENTS.md가 있습니다" in out
+    assert (gdir / "skills" / "excel-kit" / "SKILL.md").is_file() and (gdir / "AGENTS.md").is_file()
+
+
 def test_missing_source_is_error(monkeypatch, tmp_path, capsys):
     cli = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
     os.remove(cli / "AGENTS.md")
