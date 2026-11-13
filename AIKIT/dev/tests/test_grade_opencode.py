@@ -927,3 +927,18 @@ def test_office_samples_match_scenarios(tmp_path):
     for sid, files in (("O1", ["규격대조.xlsx", "규격서.txt"]), ("O2", ["단위표.xlsx"]), ("O4", ["주간보고.docx"]),
                        ("O5", ["성적서양식.docx"])):
         assert all(f in by_id[sid]["message"] for f in files), sid
+
+
+def test_y1_python_c_is_allowed_but_not_endless(tmp_path):
+    """사용자 결정 2026-11-13 (회사 PC Gemma Y1): python -c도 됨. 대신 직접 짠 파이썬 실행은 방식과 상관없이 모두 3번까지
+    (처음 1번 + 고쳐 다시 실행 2번, 전역 지침 8장 5번). 4번째부터 실패."""
+    ans = "도구에 없는 기능이라 파이썬으로 직접 처리했습니다. 구간별 평균: 66.5, 77.0, 76.7. 저장: 공정_구간집계.xlsx"
+    py_c = [(f'python -c "import pandas as pd; print({i})"', "x") for i in range(4)]
+    script = ('python "C:\\AIKIT\\data\\scripts\\bins.py"', "saved")
+    for rec in ([py_c[0], ans], [script, ans], [py_c[0], py_c[1], script, ans]):
+        row = _office_run(tmp_path, "Y1", rec)
+        assert row["결과"] == "통과", (rec, row["실패"])
+    row = _office_run(tmp_path, "Y1", py_c + [ans])
+    assert row["결과"] == "실패" and "직접 짠 파이썬 실행 3번 이하" in row["실패"] and "4번" in row["실패"], row["실패"]
+    row = _office_run(tmp_path, "Y1", [py_c[0], py_c[1], script, script, ans])
+    assert row["결과"] == "실패" and "4번" in row["실패"], row["실패"]

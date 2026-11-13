@@ -383,6 +383,15 @@ def grade_turn(sc, turn, rules):
         bad = [c for c in cmds if cmd_hit(rx, c)]
         out.append((f"금지 명령: {rx}", not bad, "; ".join(bad)[:300]))
 
+    if sc.get("max_python"):                           # 직접 짠 파이썬(python -c, 표준 입력, 도구가 아닌 .py) 실행 횟수 (Y1: 무한 반복 막기)
+        rule = rules["no_adhoc_py"]
+        py = [c for c in cmds if re.search(rule["command"], c, re.I | re.M)
+              or any(not re.fullmatch(rule["script_allow"], re.sub(r"[\\/]{2,}", lambda g: g.group(0)[0], m.group(1).strip("\"'")), re.I)
+                     for m in PY_SCRIPT.finditer(c))]
+        limit = int(sc["max_python"])
+        out.append((f"직접 짠 파이썬 실행 {limit}번 이하 (처음 1번 + 고쳐 다시 실행 2번)", len(py) <= limit,
+                    "" if len(py) <= limit else f"{len(py)}번 실행"))
+
     allow = set(sc.get("allow", []))
     for rid, rule in rules.items():
         if rid in allow:

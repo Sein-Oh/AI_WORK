@@ -375,13 +375,15 @@ GROUPS = [
                 'id': 'Y1',
                 'message': r'{DIR}\공정_다중출력.xlsx 에서 반응온도를 180 미만, 180 이상 190 미만, 190 이상 세 구간으로 나눠 구간별 생산효율 평균과 행 수를 표로 만들어 새 엑셀 파일로 저장해줘. 머리글은 3행, 단위는 4행이야.',
                 'allow': ['no_adhoc_py', 'no_write_py'],
-                'commands': [r'''python(\.exe)?"?\s+['"]?[A-Za-z]:[\\/]+AIKIT[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py'''],
-                'tool_ok': r'''[A-Za-z]:[\\/]+AIKIT[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py''',
+                # 스크립트 파일(C:\\AIKIT\\data\\scripts) 또는 python -c 둘 다 됨 (사용자 결정 2026-11-13: python -c는 두되 무한 반복만 막음)
+                'commands': [r'''python(\.exe)?"?\s+(['"]?[A-Za-z]:[\\/]+AIKIT[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py|-c\b)'''],
+                'tool_ok': r'''[A-Za-z]:[\\/]+AIKIT[\\/]+data[\\/]+scripts[\\/]+[^\s'"]+\.py|python(\.exe)?"?\s+-c\b''',
                 'tool_plain': True,                # 사용자 스크립트는 1줄 JSON을 내지 않음 (회사 PC 2026-11-11 BEAM: 'JSON 없음'으로 실패 처리됨)
                 'max_repeat': 3,                   # 전역 지침 8장: 고쳐 다시 실행은 2번까지 (처음 1번 + 2번)
+                'max_python': 3,                   # 방식(파일, python -c)과 상관없이 직접 짠 파이썬 실행은 모두 3번까지 (전역 지침 8장 5번)
                 'answer_all': ['평균'],
-                'forbid': [r'(?<![\w.-])python(\.exe)?"?\s+-c\b', r'Remove-Item|\bdel\s', r'pip3?\s+install'],
-                'judge': '도구에 없는 기능이라고 1줄 알리고, C:\\AIKIT\\data\\scripts 아래 스크립트를 만들어 1~3번 안에 실행했는가. 원본을 고치지 않고 새 파일에 구간별 평균과 행 수를 저장하고 그 경로와 결과를 알렸는가.',
+                'forbid': [r'Remove-Item|\bdel\s', r'pip3?\s+install'],
+                'judge': '도구에 없는 기능이라고 1줄 알리고, 파이썬(스크립트 파일 또는 python -c)을 모두 합쳐 1~3번 안에 실행했는가. 원본을 고치지 않고 새 파일에 구간별 평균과 행 수를 저장하고 그 경로와 결과를 알렸는가.',
             },
         ],
     },
