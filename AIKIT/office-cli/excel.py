@@ -3891,6 +3891,11 @@ def cmd_range(args) -> Dict[str, Any]:
         raise rt.dry_run_unsupported(TOOL, f"range --action {a}")
     if a == "sort":
         return range_sort(args)
+    if a == "clear" and args.type == "formats":    # 서식 지우기는 style --clear 한 가지 (사용법 단순성 1번, 2026-11-13)
+        argv = ["style"] + (["--target", args.target] if getattr(args, "target", None) else []) + \
+               (["--sheet", args.sheet] if getattr(args, "sheet", None) else []) + (["--range", args.range] if args.range else []) + ["--clear"]
+        raise rt.InputError("서식 지우기는 style --clear로 합니다 (range clear는 값 지우기). "
+                            f"[추천] {rt.next_command('excel.py', argv, '서식 지우기')['command']}")
     if a in ("filter", "unfilter"):
         return range_filter(args)
     if a in ("merge", "unmerge", "width", "height", "hide", "unhide", "copy", "move", "clear", "values") and not args.range:
@@ -5497,7 +5502,8 @@ def build_cli():
     p.add_argument("--size", type=float, help="width/height 값")
     p.add_argument("--axis", choices=["rows", "cols"],
                    help="hide/unhide/autofit/insert/delete 대상 (생략: '5:7'처럼 행 주소면 rows. insert/delete에 A5:C7을 주면 필요)")
-    p.add_argument("--type", choices=["all", "contents", "formats"], default="all", help="clear 종류")
+    p.add_argument("--type", choices=["all", "contents", "formats"], default="all",
+                   help="clear 종류: all(값과 서식), contents(값만). 서식만은 style --clear (formats는 [추천]으로 안내)")
     p.add_argument("--weight", choices=list(XL_WEIGHT) + ["none"], default="thin", help="border 굵기")
     p.add_argument("--box", action="store_true", help="border: 외곽선만")
     p.add_argument("--by", help="sort 기준 열: 머리글 이름 또는 열 문자, 여러 개는 쉼표 (예: \"부서,금액\", 64개까지)")

@@ -2596,3 +2596,14 @@ def test_comment_cells_option_explains_file_form(tmp_path, capsys):
     code, out = run_main(excel, capsys, "comment", "--target", str(tmp_path / "a.xlsx"), "--cells", "C3:OK,C4:NG")
     assert code == 2 and out["agent_directive"].startswith("STOP_RETRY:"), out
     assert "--file" in out["message"] and "CSV(열: 칸, 메모)" in out["message"] and "\"예\"" in out["message"], out
+
+
+def test_range_clear_formats_recommends_style_clear(xl, capsys):
+    """2026-11-13: 서식 지우기는 style --clear 한 가지 (range --action clear --type formats는 같은 일의 두 번째 사용법).
+    [추천]은 style --clear 전체 명령, 아무것도 바꾸지 않음."""
+    code, out = run_excel(capsys, "range", "--action", "clear", "--range", "A1:B2", "--type", "formats")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    argv = recommended_argv(out["message"], "excel")
+    assert argv[0] == "style" and "--clear" in argv and argv[argv.index("--range") + 1] == "A1:B2", argv
+    code, out = run_excel(capsys, *argv)
+    assert code == 0, out

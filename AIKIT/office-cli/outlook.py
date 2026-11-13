@@ -649,6 +649,8 @@ def _select(infos: List[Dict[str, Any]], names: Optional[Sequence[str]],
             indexes: Optional[Sequence[str]]) -> Optional[List[Dict[str, Any]]]:
     """--name(이름 일부, 대소문자 무시, ; 로 여러 개)과 --index(1,3 또는 2-4)로 고른 첨부. 둘 다 없으면 None (전부).
     맞는 첨부가 없는 값이 하나라도 있으면 [후보](첨부 이름)로 멈춥니다 (추측해서 다른 첨부를 저장하지 않음)."""
+    if names and len(names) > 1:            # 옵션 반복은 받지 않음 (한 가지 사용법): ';'로 이은 전체 명령
+        raise rt.InputError(f"--name을 여러 번 쓰지 않고 ';'로 잇습니다. [추천] {rt.retry_command({'--name': ';'.join(names)})}")
     parts = [p.strip() for n in (names or []) for p in str(n).split(";") if p.strip()]
     idx = [p for spec in (indexes or []) for p in re.split(r"[,;\s]+", str(spec)) if p]
     if not parts and not idx:
@@ -775,7 +777,7 @@ def cmd_attachments(args) -> Dict[str, Any]:
         # 저장한 문서를 이어서 읽거나 등록하는 명령 (경량 LLM이 경로를 조합하지 않게)
         nexts = [rt.next_command("reader.py", ["read", "--file", d], f"저장한 문서 읽기: {os.path.basename(d)}") for d in docs[:3]]
         if len(docs) > 1:
-            nexts.append(rt.next_command("reader.py", ["index", "--folder", folder], f"저장한 문서 {len(docs)}개를 등록해 검색할 수 있게"))
+            nexts.append(rt.next_command("reader.py", ["index", "--file", folder], f"저장한 문서 {len(docs)}개를 등록해 검색할 수 있게"))
         base["next_commands"] = nexts
         tail += " 문서 내용을 보려면 next_commands의 reader.py 명령을 쓰세요."
     return rt.ok(TOOL, "attachments", f"'{subject}' 메일({base['mail']['from']})의 첨부 {len(saved)}개 저장: {folder} ({names})",
@@ -985,8 +987,8 @@ def _attach_file(spec: str) -> str:
 
 
 def _attach_paths(spec: Optional[str]) -> List[str]:
-    """--attach 값을 파일 경로 목록으로. 여러 개는 ; 로 구분 (쉼표도 됨).
-    값 전체가 있는 파일이면 하나로 봅니다 (쉼표가 든 파일 이름 '보고서,최종.pdf')."""
+    """--attach 값을 파일 경로 목록으로. 여러 개는 ; 로 구분 (메일 주소·파일 경로 목록은 ';', 2026-11-13).
+    값 전체가 있는 파일이면 하나로 봅니다 (쉼표가 든 파일 이름 '보고서,최종.pdf'). ','로 나눈 여러 파일이면 ';'로 고친 [추천]."""
     raw = (spec or "").strip().strip('"')
     if not raw:
         return []
@@ -995,7 +997,14 @@ def _attach_paths(spec: Optional[str]) -> List[str]:
     except rt.InputError:
         if ";" not in raw and "," not in raw:
             raise
-    sep = ";" if ";" in raw else ","
+        if ";" not in raw:                    # 'a.pdf,b.xlsx': 나눈 조각이 모두 있는 파일이면 ';'로 고친 명령
+            pieces = [p.strip() for p in raw.split(",") if p.strip()]
+            try:
+                [_attach_file(p) for p in pieces]
+            except rt.InputError:
+                raise rt.InputError(f"첨부 파일을 찾지 못했습니다: {raw}. 여러 파일은 ';'로 나눕니다.") from None
+            raise rt.InputError(f"--attach의 여러 파일은 ';'로 나눕니다 (','가 아님). [추천] {rt.retry_command({'--attach': ';'.join(pieces)})}")
+    sep = ";"
     parts = raw.split(sep)
     paths: List[str] = []
     i = 0
@@ -1265,8 +1274,19 @@ def _body_arg(args) -> str:
     return rt.unescape_newlines(args.body or "")      # Windows 경로 안의 \n(C:\new\data)은 그대로
 
 
+def _check_addresses(args) -> None:
+    """--to·--cc 여러 명은 ';' 하나 (메일 주소·파일 경로 목록은 ';', 저장소 구분자 규칙의 예외 2026-11-13). ','로 나눴으면 고친 전체 명령 [추천]
+    (메일을 만들기 전에 멈춤)."""
+    for opt in ("--to", "--cc"):
+        value = getattr(args, opt[2:], None)
+        if value and "," in value and ";" not in value:
+            fixed = ";".join(p.strip() for p in value.split(",") if p.strip())
+            raise rt.InputError(f"{opt}의 여러 사람은 ';'로 나눕니다 (','가 아님). [추천] {rt.retry_command({opt: fixed})}")
+
+
 def cmd_new(args) -> Dict[str, Any]:
     # 본문 파일·첨부 파일 확인은 메일을 만들기 전에 (확인에서 멈추면 아무것도 만들지 않음)
+    _check_addresses(args)
     body = _body_arg(args)
     attach = _attach_paths(args.attach)
     app = get_outlook()
@@ -1296,6 +1316,7 @@ def cmd_reply(args) -> Dict[str, Any]:
 
 
 def cmd_forward(args) -> Dict[str, Any]:
+    _check_addresses(args)
     body = _body_arg(args)
     attach = _attach_paths(args.attach)
     app = get_outlook()
@@ -2058,7 +2079,8 @@ def build_cli():
     p = sub.add_parser("search", help="메일 검색")
     p.add_argument("--query", help="찾을 말")
     p.add_argument("--from", dest="sender", help="보낸사람 이름/주소 일부")
-    p.add_argument("--where", choices=["all", "subject", "body"], default="all", help="검색 범위 (기본 제목+본문)")
+    p.add_argument("--in", dest="where", choices=["all", "subject", "body"], default="all",
+                   help="검색 범위 (기본 제목+본문). 엑셀의 --where(행 조건)와 다른 옵션")
     p.add_argument("--folder", help=folder_help)
     p.add_argument("--limit", type=int, default=10, help=f"최대 몇 통 (기본 10, 최대 {MAX_LIMIT})")
     dated(p)
@@ -2073,7 +2095,7 @@ def build_cli():
     p.add_argument("--id", help="메일 id (생략 시 지금 보고 있거나 선택한 메일)")
     p.add_argument("--save", nargs="?", const=True,
                    help=f"첨부 저장. 폴더 생략 시 C:\\AIKIT\\data\\{ATTACH_ROOT_NAME}\\<시각>_<제목>, 폴더는 전체 경로 (없으면 만듦)")
-    p.add_argument("--name", action="append", help="저장할 첨부 이름 일부 (대소문자 무시, 여러 개는 ; 또는 옵션 반복)")
+    p.add_argument("--name", action="append", help="저장할 첨부 이름 일부 (대소문자 무시, 여러 개는 ;)")
     p.add_argument("--index", action="append", help="저장할 첨부 번호 (목록의 index, 예: 1,3 또는 2-4)")
 
     p = sub.add_parser("thread", help="같은 대화의 메일을 시간 순으로 (읽기만)")
@@ -2104,7 +2126,7 @@ def build_cli():
             p.add_argument("--to", help="받는 사람 (여러 명은 ; 로 구분)")
         p.add_argument("--body", help="본문 (줄바꿈은 \\n)")
         p.add_argument("--body-file", help="본문 파일 (.txt/.md)")
-        p.add_argument("--attach", help="첨부 파일 전체 경로 (여러 개는 ; 로 구분, 쉼표도 됨. 파일명만 쓰면 data 폴더)")
+        p.add_argument("--attach", help="첨부 파일 전체 경로 (여러 개는 ; 로 구분. 파일명만 쓰면 data 폴더)")
 
     p = sub.add_parser("new", help="새 메일 작성")
     compose(p)

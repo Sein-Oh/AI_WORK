@@ -20,7 +20,7 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 폴더 등록 | `python "C:\AIKIT\office-cli\reader.py" index --folder "<폴더>"` (하위 폴더는 깊이 3까지, 전체는 `--recursive`) |
+| 폴더 등록 | `python "C:\AIKIT\office-cli\reader.py" index --file "<폴더>"` (하위 폴더는 깊이 3까지, 전체는 `--recursive`) |
 | 파일 읽기 | `python "C:\AIKIT\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` (쪽 수·장절 수만 `--format summary`) |
 | 장절 목록 (큰 문서) | `python "C:\AIKIT\office-cli\reader.py" outline --file "<파일>"` |
 | 장절 읽기 | `python "C:\AIKIT\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |

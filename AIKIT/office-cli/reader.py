@@ -14,7 +14,7 @@
 결과를 다른 문서에 넣으려면 --save로 파일을 만든 뒤 word.py/ppt.py write --file 또는 excel.py write --file로 넘깁니다.
 
 예:
-    python reader.py index --folder "C:\\docs\\규격"
+    python reader.py index --file "C:\\docs\\규격"
     python reader.py read --file "C:\\docs\\보고서.pdf" --pages 1-3
     python reader.py search --query "마일스톤;일정" --save "근거.xlsx"
     python reader.py search --query "단가" --file "C:\\docs\\견적" --pages 3-7 --section "SCOPE"
@@ -2663,8 +2663,12 @@ def _read_blank_pages(flagged: List[int], selected: List[Dict[str, Any]], req_pa
 # ==============================================================================
 
 def cmd_index(args) -> Dict[str, Any]:
-    if sum(bool(x) for x in (args.folder, args.file, args.all)) != 1:
-        raise rt.InputError("--folder, --file, --all 중 하나만 지정하세요. 예: reader.py index --folder \"C:\\docs\\규격\"")
+    if sum(bool(x) for x in (args.file, args.all)) != 1:
+        raise rt.InputError("--file(파일 또는 폴더)과 --all 중 하나만 지정하세요. 예: reader.py index --file \"C:\\docs\\규격\"")
+    # 폴더도 --file (search --file과 같은 한 가지, 2026-11-13). 안에서는 폴더와 파일을 나눠 처리
+    args.folder = args.file if os.path.isdir(os.path.abspath(str(args.file).strip().strip('"'))) else None
+    if args.folder:
+        args.file = None
     skipped_types: Dict[str, int] = {}
     missing = 0
     target = ""
@@ -2711,7 +2715,7 @@ def cmd_index(args) -> Dict[str, Any]:
         result["readded_to_index"] = len(readded)
     nexts: List[Dict[str, str]] = []
     if res["remaining"]:
-        same = ["index"] + (["--folder", target] if args.folder else ["--all"]) + ["--max-files", str(args.max_files)]
+        same = ["index"] + (["--file", target] if args.folder else ["--all"]) + ["--max-files", str(args.max_files)]
         if args.folder and args.recursive:
             same.append("--recursive")
         elif args.folder:
@@ -4059,7 +4063,7 @@ def hit_score(unit: Dict[str, Any], terms: List[str], flags: int) -> int:
 def _not_indexed_error() -> rt.InputError:
     return rt.InputError(
         "캐시에 등록된 문서가 없어 검색할 대상이 없습니다. 문서를 먼저 등록하세요: "
-        "reader.py index --folder \"<폴더>\" 또는 reader.py read --file \"<파일>\".",
+        "reader.py index --file \"<폴더>\" 또는 reader.py read --file \"<파일>\".",
         directive=("검색할 등록 문서가 없습니다. 다시 실행하지 말고 사용자에게 검색할 폴더나 파일을 물어본 뒤 "
                    "search에 --file \"<폴더 또는 파일>\"을 붙여 실행하세요 (처음 한 번 자동 등록)."),
         error_type="not_indexed",
@@ -4431,7 +4435,7 @@ def cmd_search(args) -> Dict[str, Any]:
         nexts.append(rt.next_command("reader.py", ["clear", "--missing", "--dry-run"],
                                      f"원본이 없는 캐시 정리 미리보기 (다시 읽을 수 없는 캐시 {info['orphan']}개 포함, 원본 문서는 그대로)"))
     if info["remaining"] and info["folder"]:
-        nexts.append(rt.next_command("reader.py", ["index", "--folder", info["folder"], "--max-files", str(args.max_files)],
+        nexts.append(rt.next_command("reader.py", ["index", "--file", info["folder"], "--max-files", str(args.max_files)],
                                      f"아직 등록하지 못한 {info['remaining']}개 파일 등록 (읽기 전용)"))
     if result["truncated"] and not args.save:
         cmd = ["search", "--query", args.query]
@@ -4858,8 +4862,7 @@ def build_cli():
     o.add_argument("--start", type=int, default=1, help="몇 번째 제목부터 (이어 보기, 기본 1)")
 
     x = sub.add_parser("index", help="폴더/파일의 문서를 내용 출력 없이 캐시에 등록")
-    x.add_argument("--folder", help="등록할 폴더")
-    x.add_argument("--file", help="등록할 파일 하나")
+    x.add_argument("--file", help="등록할 파일 또는 폴더 (search --file과 같음, 2026-11-13)")
     x.add_argument("--all", action="store_true", help="등록된 문서 전체를 다시 확인 (바뀐 파일, 이전 형식 캐시만 다시 읽음)")
     x.add_argument("--depth", type=int, default=MAX_FOLDER_DEPTH, help=f"하위 폴더 깊이 (기본 {MAX_FOLDER_DEPTH}, 0=그 폴더만)")
     x.add_argument("--recursive", action="store_true", help="하위 폴더 전체")
