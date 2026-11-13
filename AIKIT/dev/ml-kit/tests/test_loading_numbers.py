@@ -248,9 +248,9 @@ def test_dot_decimal_file_reads_thousands_and_dots(tmp_path):
     assert _num(df, "수율")[:2] == [80.5, 81.5]
     # the '1,2' column itself is still asked about (numbers or codes?), the other columns are no longer refused
     proc, res = run_raw("ml_train.py", "--file", path, "--features", "라인,유량,두께", "--targets", "수율", "--seed", "1")
-    assert "'라인'" in stop_msg(res, proc) and '--dtypes "라인:str"' in res["message"]
+    assert "'라인'" in stop_msg(res, proc) and '--dtypes "라인=str"' in res["message"]
     proc, res = run_raw("ml_train.py", "--file", path, "--features", "라인,유량,두께", "--targets", "수율", "--seed", "1",
-                        "--dtypes", "라인:str")
+                        "--dtypes", "라인=str")
     res = ok_res(res, proc)
     assert "라인" in res["feature_types"]["categorical"], res["feature_types"]
     proc, res = run_raw("ml_train.py", "--file", path, "--features", "유량,두께", "--targets", "수율", "--seed", "1")
@@ -381,7 +381,7 @@ def test_forced_datetime_column_not_warned(tmp_path):
         d = datetime(2026, 1, 1 + i % 28)
         rows.append([(d.strftime("%Y-%m-%d") if i in (4, 8) else int(d.strftime("%Y%m%d"))), 150 + i,
                      0.5 * (150 + i) + r.uniform(-1, 1)])
-    res = _train_rows(tmp_path, "u5.xlsx", rows, "--features", "일자,온도", "--targets", "수율", "--dtypes", "일자:datetime")
+    res = _train_rows(tmp_path, "u5.xlsx", rows, "--features", "일자,온도", "--targets", "수율", "--dtypes", "일자=datetime")
     assert res["status"] == "ok" and _number_warnings(res) == [], res
 
 
@@ -439,7 +439,7 @@ def test_decimal_comma_text_minority_warned(tmp_path):
 
 def test_decimal_comma_text_forced_category_allowed(tmp_path):
     res = _train_rows(tmp_path, "c5.xlsx", _textdc_rows(1.0), "--features", "온도,압력,두께", "--targets", "수율",
-                      "--dtypes", "두께:str")
+                      "--dtypes", "두께=str")
     assert res["status"] == "ok", res
 
 

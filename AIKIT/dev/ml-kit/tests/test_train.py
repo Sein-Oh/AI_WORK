@@ -1216,34 +1216,36 @@ def test_importance_failure_is_noted():
 
 
 def test_resolve_dtypes_names_and_types():
+    """--dtypes는 '열=형식' (2026-11-13: 다른 옵션의 이름=값과 같은 모양). 돌려주는 값은 학습 기록에 남기는 내부 모양 '열:형식'."""
     cols = ["일시", "설비코드(번호)", "온도(°C)", "수율"]
-    assert mt.resolve_dtypes("설비코드:str, 온도:float", cols) == "설비코드(번호):str,온도(°C):float"
-    assert mt.resolve_dtypes("일시:date,수율:int64", cols) == "일시:datetime,수율:int"
+    assert mt.resolve_dtypes("설비코드=str, 온도=float", cols) == "설비코드(번호):str,온도(°C):float"
+    assert mt.resolve_dtypes("일시=date,수율=int64", cols) == "일시:datetime,수율:int"
     assert mt.resolve_dtypes(None, cols) is None and mt.resolve_dtypes(" ", cols) is None
     with pytest.raises(rt.InputError) as e:
-        mt.resolve_dtypes("설비코드:strr,일시:datetime", cols)
-    assert '[추천] --dtypes 설비코드:str,일시:datetime' in str(e.value)        # 함수 직접 호출: 옵션과 값 (명령으로 실행하면 전체 명령)
+        mt.resolve_dtypes("설비코드=strr,일시=datetime", cols)
+    assert '[추천] --dtypes 설비코드=str,일시=datetime' in str(e.value)        # 함수 직접 호출: 옵션과 값 (명령으로 실행하면 전체 명령)
     with pytest.raises(rt.InputError) as e:
-        mt.resolve_dtypes("설비코드:텍스트", cols)
+        mt.resolve_dtypes("설비코드=텍스트", cols)
     assert "[추천]" not in str(e.value) and "float, int, str, datetime" in str(e.value)
     with pytest.raises(rt.InputError) as e:
         mt.resolve_dtypes("설비코드", cols)
     assert "형식이 없습니다" in str(e.value)
-    with pytest.raises(rt.InputError) as e:                    # 2026-11-13 스킬 검토: '이름=값' 모양으로 쓰면 ':'로 고친 [추천]
-        mt.resolve_dtypes("설비코드=str,일시:datetime", cols)
-    assert '[추천] --dtypes 설비코드:str,일시:datetime' in str(e.value)
+    with pytest.raises(rt.InputError) as e:                    # 옛 모양 '열:형식'은 '='로 고친 [추천]
+        mt.resolve_dtypes("설비코드:str,일시=datetime", cols)
+    assert '[추천] --dtypes 설비코드=str,일시=datetime' in str(e.value)
     with pytest.raises(rt.ColumnNameError) as e:
-        mt.resolve_dtypes("설비코두:str", cols)                    # a close spelling is asked, never auto-picked
+        mt.resolve_dtypes("설비코두=str", cols)                    # a close spelling is asked, never auto-picked
     assert "[후보]" in str(e.value) and "설비코드(번호)" in str(e.value)
+    assert rt.dtypes_cli("설비코드(번호):str,일시:datetime") == "설비코드(번호)=str,일시=datetime"
 
 
 def test_train_dtypes_unitless_name_applies(tmp_path):
     rows = [["설비코드(번호)", "온도", "수율"]] + [[1000 + i % 4, 150 + i, 0.3 * (150 + i) + (i % 4)] for i in range(40)]
     data = write_rows(str(tmp_path / "d.csv"), rows, [])
-    res = run_tool("ml_train.py", "--file", data, "--features", "설비코드(번호),온도", "--targets", "수율", "--dtypes", "설비코드:str")
+    res = run_tool("ml_train.py", "--file", data, "--features", "설비코드(번호),온도", "--targets", "수율", "--dtypes", "설비코드=str")
     assert "설비코드(번호)" in res["feature_types"]["categorical"], res["feature_types"]    # 2.9.46: ignored (numeric)
-    err = run_fail("ml_train.py", "--file", data, "--features", "설비코드(번호),온도", "--targets", "수율", "--dtypes", "설비코드:strr")
-    assert err["agent_directive"].startswith("STOP_RETRY") and recommended_command(err["message"])[1][-2:] == ["--dtypes", "설비코드:str"], err
+    err = run_fail("ml_train.py", "--file", data, "--features", "설비코드(번호),온도", "--targets", "수율", "--dtypes", "설비코드=strr")
+    assert err["agent_directive"].startswith("STOP_RETRY") and recommended_command(err["message"])[1][-2:] == ["--dtypes", "설비코드=str"], err
 
 
 # ---- JSON 목록 상한 + truncated (R2, 2.9.49) ---------------------------------------------------------------------
@@ -2212,7 +2214,7 @@ def test_eval_dtypes_features_separator_slips_give_fixed_command(tmp_path):
     data = _sep_data(tmp_path)
     base = ["--file", data, "--features", "온도,압력", "--targets", "수율"]
     for extra, opt, want in ((["--eval", "a = 온도/압력, b = max(온도, 압력)"], "--eval", "a = 온도/압력; b = max(온도, 압력)"),
-                             (["--dtypes", "온도:float;압력:float"], "--dtypes", "온도:float,압력:float")):
+                             (["--dtypes", "온도=float;압력=float"], "--dtypes", "온도=float,압력=float")):
         proc, out = run_raw("ml_train.py", *base, *extra)
         assert proc.returncode == 1 and "[추천] python" in out["message"], out
         args = recommended_command(out["message"])[1]

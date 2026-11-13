@@ -4622,6 +4622,11 @@ def apply_inference_evals(df: pd.DataFrame, eval_expressions: List[str]) -> pd.D
 LEDGER_NAME = "history.jsonl"
 DATA_EXTS = (".xlsx", ".xls", ".xlsm", ".csv")
 
+def dtypes_cli(canonical: Any) -> str:
+    """학습 기록의 dtypes('열:형식,...', 내부 모양)를 --dtypes 옵션 모양('열=형식,...', 2026-11-13)으로. 기록에서 명령을 다시 만들 때."""
+    return ",".join(p.replace(":", "=", 1) if "=" not in p else p for p in (x.strip() for x in str(canonical or "").split(",")) if p)
+
+
 LAYOUT_OPTIONS = ("--header-row", "--unit-row", "--data-row")
 
 

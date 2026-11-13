@@ -27,7 +27,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
+    from _ml_runtime import (
+    dtypes_cli,  # noqa: E402  shared runtime of ml-kit
         Cond, InputError, JsonArgumentParser, ask, command_dropping, command_setting, layout_retry, MAX_KEYS, NEAREST_N, SNAPSHOT_EXCL_PREFIX, SNAPSHOT_ROW_COL, TOOL_DIR,
         Table, _alias_key, _blank_mark, _cell, _cell_text, _crossings, _fmt, _is_data_value, _layout_frame,
         _looks_like_unit_row, _row_cells, _same_unit_name, _unit_shaped, _unit_text, align_categories,
@@ -1219,7 +1220,7 @@ def retrain_commands(args: argparse.Namespace, items: List[Dict[str, Any]], chec
                 parts += [flag, quote_arg(val)]
         dtypes = _ledger_record(g["dir"], g["meta"].get("version")).get("dtypes")
         if dtypes and '"' not in str(dtypes):
-            parts += ["--dtypes", quote_arg(dtypes)]
+            parts += ["--dtypes", quote_arg(dtypes_cli(dtypes))]
         if evals:
             parts += ["--eval", quote_arg("; ".join(evals))]
         if task == "classification":

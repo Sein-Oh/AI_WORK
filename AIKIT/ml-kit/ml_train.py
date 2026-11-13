@@ -214,29 +214,29 @@ DTYPE_WORDS = {"float": "float", "float64": "float", "num": "float", "int": "int
 
 
 def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """--dtypes 'col:type,...' with every column name resolved like --features / --targets (resolve_column_names: exact name, a unique
-    name without its unit, else [후보]) and every type checked (a misspelt type -> [추천] the corrected --dtypes).
-    Returns the canonical 'full column name:type' list (an unknown name or type stops the run, never silently ignored)."""
+    """--dtypes '열=형식,...' (다른 옵션의 이름=값과 같은 모양, 2026-11-13) with every column name resolved like --features / --targets
+    (resolve_column_names: exact name, a unique name without its unit, else [후보]) and every type checked (a misspelt type -> [추천]
+    the corrected --dtypes). Returns the canonical internal 'full column name:type' list kept in the ledger (dtypes_cli turns it back
+    into the option form). An unknown name or type stops the run, never silently ignored."""
     if not dtypes_arg or not str(dtypes_arg).strip():
         return None
-    if ";" in str(dtypes_arg):
-        pieces = [p.strip() for p in re.split(r"[;,]", str(dtypes_arg)) if p.strip()]
-        if pieces and all(":" in p for p in pieces):     # '온도:str;압력:str': the pairs are joined by ','
-            raise InputError(f"--dtypes '{dtypes_arg}'에서 '<열>:<형식>' 사이를 ';'로 나눴습니다. ','로 나눕니다. "
-                             f"[추천] {option_retry(','.join(pieces), '--dtypes')}")
+    text = str(dtypes_arg)
+    if ";" in text:
+        pieces = [p.strip() for p in re.split(r"[;,]", text) if p.strip()]
+        if pieces and all(("=" in p or ":" in p) for p in pieces):     # '온도=str;압력=str': the pairs are joined by ','
+            fixed = ",".join(p if "=" in p else p.replace(":", "=", 1) for p in pieces)
+            raise InputError(f"--dtypes '{dtypes_arg}'에서 '<열>=<형식>' 사이를 ';'로 나눴습니다. ','로 나눕니다. "
+                             f"[추천] {option_retry(fixed, '--dtypes')}")
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if any("=" not in p and ":" in p for p in parts):      # 옛 모양 '설비코드:str': '='로 고친 전체 명령
+        fixed = ",".join(p if "=" in p else p.replace(":", "=", 1) for p in parts)
+        raise InputError(f"--dtypes는 '<열>=<형식>'으로 씁니다 (':'가 아니라 '='). [추천] {option_retry(fixed, '--dtypes')}")
     pairs: List[Tuple[str, str]] = []
-    for raw in str(dtypes_arg).split(","):
-        raw = raw.strip()
-        if not raw:
-            continue
-        if ":" not in raw and "=" in raw:      # '설비코드=str' (다른 옵션의 이름=값 모양): ':'로 고친 전체 명령
-            fixed = ",".join(p.strip().replace("=", ":", 1) if ":" not in p and "=" in p else p.strip()
-                             for p in str(dtypes_arg).split(",") if p.strip())
-            raise InputError(f"--dtypes는 '<열>:<형식>'으로 씁니다 ('='가 아니라 ':'). [추천] {option_retry(fixed, '--dtypes')}")
-        if ":" not in raw:
-            raise InputError(f"--dtypes의 '{raw}'에 형식이 없습니다. '<열>:<형식>'으로 쓰십시오 "
-                             f"(형식: float, int, str, datetime. 예: --dtypes \"일시:datetime,설비코드:str\").")
-        name, kind = (x.strip() for x in raw.split(":", 1))
+    for raw in parts:
+        if "=" not in raw:
+            raise InputError(f"--dtypes의 '{raw}'에 형식이 없습니다. '<열>=<형식>'으로 쓰십시오 "
+                             f"(형식: float, int, str, datetime. 예: --dtypes \"일시=datetime,설비코드=str\").")
+        name, kind = (x.strip() for x in raw.split("=", 1))
         pairs.append((name, kind))
     bad = [(n, k) for n, k in pairs if k.lower() not in DTYPE_WORDS]
     if bad:
@@ -244,11 +244,11 @@ def resolve_dtypes(dtypes_arg: Optional[str], columns: List[str], layout: Option
         fixed, sure = [], True
         for n, k in pairs:
             if k.lower() in DTYPE_WORDS:
-                fixed.append(f"{n}:{k}")
+                fixed.append(f"{n}={k}")
                 continue
             close = difflib.get_close_matches(k.lower(), list(DTYPE_WORDS), n=1, cutoff=0.6)
             sure = sure and bool(close)
-            fixed.append(f"{n}:{DTYPE_WORDS[close[0]]}" if close else f"{n}:{k}")
+            fixed.append(f"{n}={DTYPE_WORDS[close[0]]}" if close else f"{n}={k}")
         rec = f" [추천] {option_retry(','.join(fixed), '--dtypes')}" if sure else ""
         raise InputError(f"--dtypes의 형식 {[k for _, k in bad]}을(를) 알 수 없습니다. 쓸 수 있는 형식: float, int, str, datetime.{rec}")
     names, _ = resolve_column_names([n for n, _ in pairs], columns, "--dtypes 열", layout=layout)
@@ -457,7 +457,7 @@ def infer_feature_schema(
             if len(uniq) > MAX_CATEGORIES or (len(uniq) > 50 and len(uniq) > 0.5 * max(n_valid, 1)):
                 raise InputError(
                     f"피처 '{col}'은(는) 문자형 값의 종류가 {len(uniq)}개로 너무 많아 ID/일련번호로 보입니다. "
-                    f"--features 목록에서 제외하십시오. 숫자 컬럼인데 잘못 판별되었다면 --dtypes '{col}:float'를 지정하십시오."
+                    f"--features 목록에서 제외하십시오. 숫자 컬럼인데 잘못 판별되었다면 --dtypes \"{col}=float\"를 지정하십시오."
                 )
             categorical[col] = uniq
             sys.stderr.write(f"[INFO] 범주형 피처 감지: '{col}' ({len(uniq)}개 범주, 원-핫 인코딩)\n")
@@ -2345,7 +2345,7 @@ def _prepare_group(df_raw: pd.DataFrame, group: Dict[str, Any], task: str) -> Di
                 if why:
                     raise InputError(f"피처 '{f}': {why}. 지금은 종류(범주) 값으로 학습하게 되어 학습하지 않았습니다. "
                                      f"사용자에게 알려 데이터 파일을 고친 뒤 다시 실행하십시오. 숫자가 아닌 코드이면 "
-                                     f"--dtypes \"{f}:str\"를 붙이십시오.")
+                                     f"--dtypes \"{f}=str\"를 붙이십시오.")
 
     # Feature Engineering (--eval): a string from the CLI or the canonical list stored in the ledger
     applied_evals: List[str] = []
@@ -2415,7 +2415,7 @@ def _decimal_comma_category_check(df_raw: pd.DataFrame, schema: Dict[str, Any], 
             raise InputError(
                 f"피처 '{c}'의 채운 칸 {n}개 중 {dc}개({examples})가 소수점 쉼표로 쓴 숫자 글자라 숫자로 읽지 못해 "
                 f"종류(범주) 값으로 학습하게 됩니다. 엑셀에서 쉼표를 점(.)으로 바꾸거나(예: 175,6 -> 175.6) 숫자 칸으로 "
-                f"저장한 뒤 다시 실행하십시오. 숫자가 아닌 코드이면 --dtypes \"{c}:str\"를 붙이십시오.")
+                f"저장한 뒤 다시 실행하십시오. 숫자가 아닌 코드이면 --dtypes \"{c}=str\"를 붙이십시오.")
         if dc + num >= 0.9 * n:
             out.append(f"피처 '{c}'의 {dc}칸({examples})은 소수점 쉼표로 쓴 숫자 글자라 숫자로 읽지 못해 이 열을 "
                        "종류(범주) 값으로 학습했습니다. 쉼표를 점(.)으로 고치면 숫자 피처로 학습합니다.")
@@ -3653,7 +3653,7 @@ def main():
     parser.add_argument("--header-row", type=int, help="컬럼명 헤더 행 번호 (1-based, 미지정 시 상단 빈 행 자동 건너뜀)")
     parser.add_argument("--unit-row", type=int, help="단위 행 번호 (선택)")
     parser.add_argument("--data-row", type=int, help="데이터 시작 행 번호 (선택)")
-    parser.add_argument("--dtypes", help="데이터 타입 수동 오버라이드 (예: '일시:datetime,설비코드:str')")
+    parser.add_argument("--dtypes", help="데이터 타입 수동 오버라이드 (예: '일시=datetime,설비코드=str')")
     parser.add_argument("--version", help="버전 수동 지정 (미지정 시 자동 계산 v1, v2...)")
     parser.add_argument("--overwrite", action="store_true",
                         help="--version으로 지정한 버전 폴더가 이미 있으면 교체 (사용자 확인 후에만 사용)")
