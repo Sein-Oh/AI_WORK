@@ -3374,3 +3374,19 @@ def test_save_without_path_goes_next_to_the_source_file(tmp_path, capsys, isolat
     assert code == 0 and os.path.dirname(out["output_file"]) == str(folder), out
     code, out = run_main(reader, capsys, "search", "--query", "시험 온도", "--save")      # 캐시 전체: 대상 파일 없음
     assert code == 0 and os.path.dirname(out["output_file"]) == str(isolated_dirs["data"]), out
+
+
+@pytest.mark.parametrize("flag", ["--search", "--query"])
+def test_read_with_search_option_recommends_search_command(tmp_path, capsys, flag):
+    """회사 PC Gemma 2026-11-13 O7: 'reader.py read --search "-20 ℃"'가 옵션 목록만 받아 모델이 파일 전체를 읽음.
+    찾기는 search --query: 읽기만 하는 명령이라 고친 전체 명령을 [추천], read에만 있는 옵션(--format)은 빼고 같이 쓰는 옵션(--pages)은 둠.
+    [추천] 명령을 그대로 실행하면 찾은 결과가 나옴."""
+    p = tmp_path / "규격서.txt"
+    p.write_text("3. 전기적 특성\n3.3 동작 온도는 -20 ℃ 이상 60 ℃ 이하이어야 한다.\n", encoding="utf-8")
+    code, out = run_main(reader, capsys, "read", "--file", str(p), flag, "-20 ℃", "--format", "summary", "--pages", "1")
+    assert code == 2 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    argv = recommended_argv(out["message"], "reader")
+    assert argv[0] == "search" and argv[argv.index("--query") + 1] == "-20 ℃" and "--format" not in argv and "--pages" in argv, argv
+    argv.remove("--pages"), argv.remove("1")
+    code, out = run_main(reader, capsys, *argv)
+    assert code == 0 and out["count"] == 1, out

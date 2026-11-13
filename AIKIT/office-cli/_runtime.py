@@ -925,6 +925,14 @@ _WRITE_TEXT = ('글을 문서에 넣으려면 열린 워드는 word.py write --t
                '엑셀 칸은 excel.py write --range A1 --value "내용"을 쓰세요.')
 OTHER_COMMAND = {("office", "write"): "office.py에는 write가 없습니다. " + _WRITE_TEXT,
                  ("office", "transfer", "--text"): "transfer는 엑셀 차트·범위와 문서의 표를 옮기는 명령이라 글은 받지 않습니다. " + _WRITE_TEXT}
+# 다른 명령의 옵션으로 찾기를 시킴: (도구, 명령, 옵션) -> (맞는 명령, 맞는 옵션). 바꾼 명령이 읽기만 하는 명령일 때만 [추천]
+# (READ_ONLY_CHOICES: 잘못 골라도 바뀌는 것이 없음). 회사 PC Gemma 2026-11-13 O7: reader.py read --search "-20 ℃"가 옵션 목록만 받음
+SWAP_COMMAND = {("reader", "read", "--search"): ("search", "--query"), ("reader", "read", "--query"): ("search", "--query")}
+# excel comment --cells "C3:OK,C4:NG" (회사 PC Gemma 2026-11-13 O1): 칸마다 다른 메모는 CSV 파일로
+OTHER_COMMAND[("excel", "comment", "--cells")] = (
+    "comment에는 --cells가 없습니다. 한 칸은 --action add --range C3 --text \"<메모>\", 칸마다 다른 메모 여러 개는 "
+    "파일 쓰기 도구로 CSV(열: 칸, 메모)를 C:\\AIKIT\\data에 만든 뒤 --action add --file \"<메모.csv>\"를 쓰세요. "
+    "판정·검토 의견이면 넣기 전에 넣을 내용을 사용자에게 보여 주고 \"예\"를 받으세요.")
 # 1.4.72에서 없앤 outlook --send (1.4.73): 초안을 만든 뒤 사용자 확인을 받아 send로 보냄. {cmd} = --send를 뺀 같은 명령
 _NO_SEND = ("--send는 없습니다. 초안을 만든 뒤 사용자 확인을 받아 send를 실행합니다(결과의 confirm_commands). "
             "[추천] {cmd}")
@@ -1060,6 +1068,25 @@ class JsonArgumentParser(argparse.ArgumentParser):
         extra = m.group(1).split()
         flags = [x for x in extra if _is_flag(x)]
         for f in flags:
+            key = f.split("=", 1)[0]       # '--query=-20 ℃': 음수로 시작하는 값은 옵션에 붙어 옴
+            swap = SWAP_COMMAND.get((self.tool_name, cmd, key))
+            new_sub = subs.get(swap[0]) if swap and subs else None
+            if swap and new_sub is not None and swap[0] in READ_ONLY_CHOICES:
+                new_known = {o for a in new_sub._actions for o in a.option_strings}
+                rest, skip = [swap[0]], False
+                for a in argv[1:]:
+                    if skip:              # 새 명령에 없는 옵션의 값
+                        skip = False
+                        continue
+                    if _is_flag(a) and a.split("=", 1)[0] != key and a.split("=", 1)[0] not in new_known:
+                        skip = "=" not in a and a in self._valued
+                        continue
+                    if a.split("=", 1)[0] == key:
+                        rest += [swap[1]] + ([a.split("=", 1)[1]] if "=" in a else [])
+                    else:
+                        rest.append(a)
+                return (f" '{cmd}' 명령에는 {key} 옵션이 없습니다. 파일 안에서 찾는 명령은 {swap[0]} {swap[1]}입니다. "
+                        f"[추천] {next_command(f'{self.tool_name}.py', rest, '')['command']}")
             other = OTHER_COMMAND.get((self.tool_name, cmd, f))
             if other:
                 if "{cmd}" in other:      # 받지 않는 옵션(과 그 값)을 모두 뺀 같은 전체 명령 ('--send --dry-run' 둘 다, 1.4.75)
