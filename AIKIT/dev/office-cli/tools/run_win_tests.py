@@ -2202,7 +2202,7 @@ def test_K(ctx):
             return next(str(holders(i).TextFrame.TextRange.Text) for i in range(1, holders.Count + 1)
                         if holders(i).PlaceholderFormat.Type == 2)
         text = com_retry(notes_text)
-        d3 = run_cli("ppt.py", "notes", "--target", "A.pptx", "--slides", "1")[0]
+        d3 = run_cli("ppt.py", "notes", "--target", "A.pptx", "--slide", "1")[0]
         listed = ((d3 or {}).get("notes") or [{}])[0].get("notes", "")
         want = f"K 노트 {tag}\r둘째 줄\r덧붙인 줄"
         ok = ok_(d) and ok_(d2) and (d2 or {}).get("verified") is True and text == want and listed == want.replace("\r", "\n")

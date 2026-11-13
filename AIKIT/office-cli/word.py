@@ -1967,7 +1967,7 @@ def _hf_text(hf: Any) -> str:
 
 
 def cmd_header(args) -> Dict[str, Any]:
-    """머리글·바닥글 읽기(--text 없음)와 쓰기(--text: --section의 기본 머리글 또는 바닥글을 그 글로). 기반 기능 (1.6.7):
+    """머리글·바닥글 읽기(--text 없음)와 쓰기(--text: --part 구역의 기본 머리글 또는 바닥글을 그 글로). 기반 기능 (1.6.7):
     문서 번호·개정 판 표기 확인과 수정. 글이 있으면 --overwrite가 있을 때만 바꿈 (R4), 쓴 뒤 다시 읽어 확인."""
     kinds = [args.kind] if args.kind else ["header", "footer"]
     names = {"header": "머리글", "footer": "바닥글"}
@@ -1976,7 +1976,7 @@ def cmd_header(args) -> Dict[str, Any]:
             doc = t.doc
             n = int(doc.Sections.Count)
             if args.section and not 1 <= args.section <= n:
-                raise rt.InputError(f"--section {args.section}: 이 문서의 구역은 1~{n}입니다.")
+                raise rt.InputError(f"--part {args.section}: 이 문서의 구역은 1~{n}입니다.")
             items: List[Dict[str, Any]] = []
             for si in ([args.section] if args.section else range(1, n + 1)):
                 sec = doc.Sections(si)
@@ -2004,7 +2004,7 @@ def cmd_header(args) -> Dict[str, Any]:
         doc = t.doc
         n = int(doc.Sections.Count)
         if not 1 <= si <= n:
-            raise rt.InputError(f"--section {si}: 이 문서의 구역은 1~{n}입니다.")
+            raise rt.InputError(f"--part {si}: 이 문서의 구역은 1~{n}입니다.")
         hf = _hf(doc.Sections(si), args.kind, 1)
         old = _hf_text(hf)
         what = f"구역 {si} {names[args.kind]}"
@@ -2515,7 +2515,8 @@ def build_cli():
     p = sub.add_parser("header", help="머리글·바닥글 읽기 (--text가 있으면 --kind의 머리글 또는 바닥글 쓰기)")
     common(p, write=True)
     p.add_argument("--kind", choices=["header", "footer"], help="header(머리글) 또는 footer(바닥글). 읽기는 생략하면 둘 다")
-    p.add_argument("--section", type=int, help="구역 번호 (읽기는 생략하면 모든 구역, 쓰기는 생략하면 1)")
+    p.add_argument("--part", dest="section", type=int,
+                   help="구역 번호 (읽기는 생략하면 모든 구역, 쓰기는 생략하면 1). read의 --section(장절 제목)과 다른 옵션")
     p.add_argument("--text", help="쓸 글 (기본 머리글·바닥글을 이 글로 바꿈). 줄바꿈은 \\n")
     p.add_argument("--overwrite", action="store_true", help="글이 있는 머리글·바닥글 바꾸기 (사용자가 확인했을 때만)")
 
@@ -2534,7 +2535,7 @@ def build_cli():
 
     p = sub.add_parser("export", help="PDF/DOCX 사본 저장")
     common(p)
-    p.add_argument("--save", help="저장 경로 (.pdf 또는 .docx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
+    p.add_argument("--save", nargs="?", const=None, help="저장 경로 (.pdf 또는 .docx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
     p.add_argument("--page-number", action="store_true", help="사본 아래쪽 가운데에 쪽 번호")
     return parser
 

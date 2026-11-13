@@ -20,12 +20,12 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 폴더 등록 | `python "C:\AIKIT\office-cli\reader.py" index --folder "<폴더>"` (하위 폴더는 깊이 3까지, 전체는 `--recursive`) |
+| 폴더 등록 | `python "C:\AIKIT\office-cli\reader.py" index --file "<폴더>"` (하위 폴더는 깊이 3까지, 전체는 `--recursive`) |
 | 파일 읽기 | `python "C:\AIKIT\office-cli\reader.py" read --file "<파일>" [--pages 1-3] [--save]` (쪽 수·장절 수만 `--format summary`) |
 | 장절 목록 (큰 문서) | `python "C:\AIKIT\office-cli\reader.py" outline --file "<파일>"` |
 | 장절 읽기 | `python "C:\AIKIT\office-cli\reader.py" read --file "<파일>" --section "<장절 일부>" [--pages 3-7]` (번호 `2.1`은 하위 절 포함, 이름은 일부. `units[].evidence`가 근거) |
-| 검색 | `python "C:\AIKIT\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] --save "<근거.xlsx>"` (`;` 그리고, `|` 또는. 더 많이 `--top 30`, 단락 전체 `--full`) |
-| 엑셀 칸 메모 | 목록 `python "C:\AIKIT\office-cli\excel.py" comment --target "<엑셀 파일>" [--range B2:D20]` / 넣기 `python "C:\AIKIT\office-cli\excel.py" comment --action add --target "<엑셀 파일>" --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`, 열: 칸, 메모) |
+| 검색 | `python "C:\AIKIT\office-cli\reader.py" search --query "A;B" [--file "<파일또는폴더>"] [--pages 3-7] [--section "<장절 일부>"] [--save]` (근거를 엑셀로 받으려면 `--save "근거.xlsx"`) (`;` 그리고, `|` 또는. 더 많이 `--top 30`, 단락 전체 `--full`) |
+| 엑셀 칸 메모 | 목록 `python "C:\AIKIT\office-cli\excel.py" comment --target "<엑셀 파일>" [--range B2:D20]` / 넣기 `python "C:\AIKIT\office-cli\excel.py" comment --action add --target "<엑셀 파일>" --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`, 열: 칸, 메모. 판정·검토 의견은 사용자가 이번 요청에서 넣으라고 했으면 바로 넣고 판정·근거와 되돌리는 법(되돌리기 줄의 명령)을 알린다, 아니면 넣기 전에 보여 주고 "예"를 받는다 (전역 지침 3장 5번)) |
 | 캐시 목록 | `python "C:\AIKIT\office-cli\reader.py" list [--name <이름일부>] [--folder "<폴더>"]` |
 | 캐시 지우기 (원본은 그대로) | `python "C:\AIKIT\office-cli\reader.py" clear --name <이름일부> --dry-run` (`--file "<파일>"` / `--folder "<폴더>"` / `--missing`(원본 없는 것) / `--all`. 목록을 보여 주고 확인받은 뒤 `confirm_commands[0]`) |
 | 되돌리기 (메모) | `python "C:\AIKIT\office-cli\office.py" undo` |

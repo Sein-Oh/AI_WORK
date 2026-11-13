@@ -21,16 +21,16 @@ metadata:
 ## 명령
 | 할 일 | 명령 |
 |---|---|
-| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`, 몇 열만 `--columns 품번,수량`, 칠한 칸·굵은 칸 목록 `--formats`, `--range`에 이름 정의 이름도 됨(목록은 `info`의 `names`)) |
+| 읽기 / 행 수 / 셀 찾기 | `python "C:\AIKIT\office-cli\excel.py" read [--target "<파일.xlsx 또는 .csv>"] [--sheet "<시트>"] [--range A1:D20] [--search 글자] [--save]` (행 수는 결과의 `rows`, 수식은 `--formulas`, 200행 넘게 보려면 `--max-rows 500`, 몇 열만 `--columns 품번,수량`, 칠한 칸·굵은 칸 목록 `--formats`, `--range`에 이름 정의 이름도 됨(목록은 `info`의 `names`)) |
 | 조건에 맞는 행 | `python "C:\AIKIT\office-cli\excel.py" read --where "금액 >= 100; 부서 = 영업"` (`;` 그리고, `|` 또는, `>= <= > < = != ~`(포함) `!~`(포함 안 함), 값에 `;` `|`가 있으면 `'a;b'`) |
 | 칸 하나에 값 | `python "C:\AIKIT\office-cli\excel.py" write --range A2 --value "반가워"` |
 | 여러 칸에 각각 | `python "C:\AIKIT\office-cli\excel.py" write --cells "C6=ft; C7=20; 계산기!C11==A1*2"` (많으면 `--cells "칸값.csv"`(열: 칸, 값)) |
 | 표 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A1 --file "<표.csv>"` (`--header "x,y"`, `--append`, `--sheet 시트`, 새 시트 `--sheet 이름 --new-sheet`) |
 | 수식 쓰기 | `python "C:\AIKIT\office-cli\excel.py" write --range A2:B101 --formula "=ROW()-1" "=A2*2"` |
 | 그림·링크 | 그림 `python "C:\AIKIT\office-cli\excel.py" write --range C3 --image "<그림.png>"` / 링크 `python "C:\AIKIT\office-cli\excel.py" write --range B2 --link "<파일 경로 또는 주소>" [--value "<보이는 글>"]` |
-| 칸 메모 | 목록 `python "C:\AIKIT\office-cli\excel.py" comment [--range B2:D20]` / 넣기 `python "C:\AIKIT\office-cli\excel.py" comment --action add --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`(열: 칸, 메모), 있던 메모 바꾸기 `--overwrite`, 덧붙이기 `--append`. 판정·검토 의견은 사용자가 달아 달라고 했으면 바로 넣고 판정·근거를 알린다, 아니면 넣기 전에 보여 주고 "예"를 받는다) / 지우기 `--action delete --range B2:D20` (먼저 `--dry-run`) |
-| 바꾸기 | `python "C:\AIKIT\office-cli\excel.py" replace --find <A> --replace <B> [--all-sheets]` (칸 전체가 같을 때만 `--whole`, 여러 쌍은 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 바꾼 칸 강조 `--bold --color red`. `--find`는 비우지 않는다. 빈 칸 채우기는 `write --value`) |
-| 저장 / 내보내기 | `python "C:\AIKIT\office-cli\excel.py" save` (다른 이름 `--save "<전체경로.xlsx>"`) / 사본 `python "C:\AIKIT\office-cli\excel.py" export --save "<결과.csv|.xlsx|.pdf>"` (CSV 인코딩 `--encoding cp949`) |
+| 칸 메모 | 목록 `python "C:\AIKIT\office-cli\excel.py" comment [--range B2:D20]` / 넣기 `python "C:\AIKIT\office-cli\excel.py" comment --action add --range B5 --text "<의견>"` (여러 개 `--file "<메모.csv>"`(열: 칸, 메모), 있던 메모 바꾸기 `--overwrite`, 덧붙이기 `--append`. 판정·검토 의견은 사용자가 이번 요청에서 넣으라고 했으면 바로 넣고 판정·근거와 되돌리는 법(되돌리기 줄의 명령)을 알린다, 아니면 넣기 전에 보여 주고 "예"를 받는다 (전역 지침 3장 5번)) / 지우기 `--action delete --range B2:D20` (먼저 `--dry-run`) |
+| 바꾸기 | `python "C:\AIKIT\office-cli\excel.py" replace --find "<A>" --replace "<B>" [--all-sheets]` (칸 전체가 같을 때만 `--whole`, 여러 쌍은 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 바꾼 칸 강조 `--bold --color red`. `--find`는 비우지 않는다. 빈 칸 채우기는 `write --value`) |
+| 저장 / 내보내기 | `python "C:\AIKIT\office-cli\excel.py" save` (다른 이름 `--save "<전체경로.xlsx>"`) / 사본 `python "C:\AIKIT\office-cli\excel.py" export --save "<결과.csv>"` (.xlsx·.pdf도 됨, CSV 인코딩 `--encoding cp949`) |
 | 정보 / 배치 확인 | `python "C:\AIKIT\office-cli\excel.py" info [--detail]` (`layout_warnings`가 있으면 `warnings`를 알림. 열린 엑셀에서 사용자가 선택한(마지막으로 클릭한) 칸은 `--target` 없이 실행한 결과의 `selection`, 시트는 `active_sheet`) |
 | 차트·범위를 워드/PPT로 | `python "C:\AIKIT\office-cli\office.py" transfer --from-app excel --chart "<차트이름>" --to-app word,ppt` (범위는 `--range A1:D10` 대신) |
 | 되돌리기 / 창 | `python "C:\AIKIT\office-cli\office.py" undo` (목록 `--list`: 고른 항목의 `command` 실행) / `python "C:\AIKIT\office-cli\office.py" windows` / `python "C:\AIKIT\office-cli\office.py" focus --app excel` / 파일을 화면에 열기 `python "C:\AIKIT\office-cli\office.py" open --file "<파일 전체 경로>"` |

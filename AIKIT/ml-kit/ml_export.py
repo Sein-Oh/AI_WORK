@@ -21,7 +21,8 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
+from _ml_runtime import (
+    add_layout_options_ignored, note_layout_ignored,  # noqa: E402  shared runtime of ml-kit
     check_core_libraries, exit_missing_library,
     setup_console, run_cli, JsonArgumentParser, InputError, resolve_column_names, coerce_numeric, load_data_file,
     strip_unit, avoid_overwrite, save_with_lock_fallback, apply_inference_evals, prepare_features, compile_formula,
@@ -1601,8 +1602,9 @@ def main():
                                        "생략 시 보고서와 같은 <데이터>_ml_data 폴더에 성능예측표_<데이터>_<버전>.xlsx)")
     parser.add_argument("--overwrite", action="store_true",
                         help="같은 이름의 성능예측표가 있으면 덮어쓰기 (생략 시 시각을 붙인 새 이름으로 저장)")
+    add_layout_options_ignored(parser)
     args = parser.parse_args()
-    run_cli(lambda: execute_export(args), hint="확인할 것: 버전 폴더 경로.")
+    run_cli(lambda: note_layout_ignored(execute_export(args), args), hint="확인할 것: 버전 폴더 경로.")
 
 
 if __name__ == "__main__":

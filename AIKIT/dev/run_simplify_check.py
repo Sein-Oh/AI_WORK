@@ -162,7 +162,7 @@ def ml_checks(env, data, titled):
     check("M3", "별칭 [추천]", m3)
 
     def m4():
-        code, out = run_tool(env, T, "--file", data, "--features", X, "--targets", Y, "--dtypes", "반응온도(°C):floatt")
+        code, out = run_tool(env, T, "--file", data, "--features", X, "--targets", Y, "--dtypes", "반응온도(°C)=floatt")
         follow(env, "M4", "--dtypes 형식 오타 -> [추천] 전체 명령 -> 학습", code, out, need_code=1)
     check("M4", "--dtypes [추천]", m4)
 

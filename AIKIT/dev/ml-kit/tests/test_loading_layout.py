@@ -639,7 +639,7 @@ def test_dtypes_datetime_yyyymmdd_predicts_without_imputation(tmp_path):
     df["y"] = 0.05 * np.arange(n) + 2 * df.a + r.normal(0, 0.05, n)
     p = tmp_path / "d.csv"
     df.to_csv(p, index=False)
-    v = run_tool("ml_train.py", "--file", str(p), "--features", "일자,a", "--targets", "y", "--dtypes", "일자:datetime")["version_dir"]
+    v = run_tool("ml_train.py", "--file", str(p), "--features", "일자,a", "--targets", "y", "--dtypes", "일자=datetime")["version_dir"]
     meta = json.load(open(os.path.join(v, "model_y.json"), encoding="utf-8"))
     assert "일자" in meta["feature_schema"]["datetime"] and meta["datetime_stats"]["일자"]["min"].startswith("2024-01-01")
     res = run_tool("ml_predict.py", "--model", v, "--file", str(p), "--save", str(tmp_path / "pred.csv"))

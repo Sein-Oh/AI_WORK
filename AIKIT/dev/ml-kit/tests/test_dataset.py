@@ -250,7 +250,7 @@ def test_command_text_resolves_relative_save_like_the_tool(tmp_path):
         argv = split_command(rt.command_text(argv=[os.path.join(KIT, script), *args]))
         return argv[argv.index("--save") + 1]
     want = str(tmp_path / "out" / "r.docx")
-    assert save_of("ml_report.py", "--file", str(data), "--save", os.path.join("out", "r.docx")) == want
+    assert save_of("ml_report.py", "--model", str(data), "--save", os.path.join("out", "r.docx")) == want
     assert save_of("ml_report.py", "--model", str(vdir), "--save", os.path.join("out", "r.docx")) == want
     assert save_of("ml_export.py", "--model", str(vdir), "--save", os.path.join("out", "r.docx")) == want
     assert save_of("ml_export.py", "--model", str(data), "--save", os.path.join("out", "r.docx")) == want
