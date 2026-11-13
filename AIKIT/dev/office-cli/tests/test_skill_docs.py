@@ -1,4 +1,4 @@
-"""작업별 스킬(AIKIT/skills/<이름>/SKILL.md)이 코드와 어긋나지 않음: 버전 표기, OpenCode frontmatter 규칙,
+"""작업별 스킬(AIKIT/.opencode/skills/<이름>/SKILL.md)이 코드와 어긋나지 않음: 버전 표기, OpenCode frontmatter 규칙,
 명령·옵션이 argparse에 있음, 명령 템플릿이 전체 명령, 모든 명령이 어느 스킬에든 있음, 기능 목록, 크기."""
 import argparse
 import os
@@ -17,7 +17,7 @@ from office_helpers import DEV, TOOL_DIR
 SCRIPTS = {"excel.py": excel, "word.py": word, "ppt.py": ppt, "outlook.py": outlook, "office.py": office,
            "reader.py": reader}
 SKILL_NAMES = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")
-SKILLS_DIR = os.path.join(os.path.dirname(TOOL_DIR), "skills")      # C:\AIKIT\skills (1.6.6)
+SKILLS_DIR = os.path.join(os.path.dirname(TOOL_DIR), ".opencode", "skills")      # C:\AIKIT\.opencode\skills (프로젝트 스킬)
 SKILL_FILES = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in SKILL_NAMES}
 MAX_SKILL_BYTES = 8192                # 경량 LLM 컨텍스트: 스킬 하나 8KB 이하 (6KB -> 7.2KB -> 8KB, 사용자 결정 2026-11-10, AGENTS.md "사용법 단순성" 7)
 

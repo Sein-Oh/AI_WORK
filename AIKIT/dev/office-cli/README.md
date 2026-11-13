@@ -6,11 +6,11 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 **기반 도구입니다** (2026-11-12 사용자 결정, 저장소 `AGENTS.md` office-cli): 다른 작업(LLM이 사용자와 의논하는 일, 사용자 스킬, 응용 도구)이 조합해 쓰는
 단위 기능(읽기·쓰기·서식·문서 구조·앱 간 전달·문서 검색·되돌리기)과 그 결과 확인만 둡니다. 판정 기준·비교 기준·문서 양식 같은 업무 판단은 넣지 않습니다.
 
-- 에이전트용 스킬 (작업별 7개, 각 8KB 이하): [`excel-kit`](../../skills/excel-kit/SKILL.md) (excel.py 읽기·쓰기, 엑셀 차트·범위 옮기기), [`excel-format-kit`](../../skills/excel-format-kit/SKILL.md) (excel.py style·chart·sheet·range),
-  [`word-kit`](../../skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus·open), [`ppt-kit`](../../skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
-  [`outlook-kit`](../../skills/outlook-kit/SKILL.md) (outlook.py),
-  [`search-kit`](../../skills/search-kit/SKILL.md) (reader.py, excel.py comment),
-  [`stats-kit`](../../skills/stats-kit/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
+- 에이전트용 스킬 (작업별 7개, 각 8KB 이하): [`excel-kit`](../../.opencode/skills/excel-kit/SKILL.md) (excel.py 읽기·쓰기, 엑셀 차트·범위 옮기기), [`excel-format-kit`](../../.opencode/skills/excel-format-kit/SKILL.md) (excel.py style·chart·sheet·range),
+  [`word-kit`](../../.opencode/skills/word-kit/SKILL.md) (word.py, office.py transfer·undo·windows·focus·open), [`ppt-kit`](../../.opencode/skills/ppt-kit/SKILL.md) (ppt.py, office.py transfer·undo·focus),
+  [`outlook-kit`](../../.opencode/skills/outlook-kit/SKILL.md) (outlook.py),
+  [`search-kit`](../../.opencode/skills/search-kit/SKILL.md) (reader.py, excel.py comment),
+  [`stats-kit`](../../.opencode/skills/stats-kit/SKILL.md) (excel.py stats, duplicates: 표 집계, 중복 행 찾기).
   공통 결과 처리(`agent_directive` 첫 단어별 행동)는 전역 지침 [`AIKIT/AGENTS.md`](../../AGENTS.md) 4장에 두고, 각 스킬에는 그 작업의 추가 규칙만 둡니다.
 - 변경 이력과 남은 할 일: [`CHANGELOG.md`](CHANGELOG.md)
 - 1.0 설계 배경과 결정 기록: [`docs/history/office-cli_WORK_PLAN_1.0.md`](../../../docs/history/office-cli_WORK_PLAN_1.0.md)
@@ -18,7 +18,7 @@ PDF, HWP, Office 파일은 Office 없이 읽고, 캐시에 등록해 쪽·장절
 ## 1. 구성
 
 ```text
-AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli. 스킬 7개는 AIKIT/skills/<이름>/SKILL.md)
+AIKIT/office-cli/  실행에 필요한 파일만 (사내 PC C:\AIKIT\office-cli. 스킬 7개는 AIKIT/.opencode/skills/<이름>/SKILL.md)
 ├── excel.py     엑셀   read / info / write / replace / style / export / sheet / range / chart / comment / stats / duplicates / save
 ├── word.py      워드   read / info / outline / write / replace / delete / format / table / fill / header / link / bookmark / comment / revisions / export
 ├── ppt.py       PPT    read / info / write / notes / shape / table / replace / export / slide

@@ -13,17 +13,17 @@ if not exist "%OC%" (
   pause
   exit /b 1
 )
-rem OpenCode settings folder = this folder (AGENTS.md, skills\, opencode.json, opencode.jsonc). setup.bat also sets it
-rem as a user environment variable; setting it here makes web.bat right even in a window opened before setup.
-set "OPENCODE_CONFIG_DIR=%~dp0"
-set "OPENCODE_CONFIG_DIR=%OPENCODE_CONFIG_DIR:~0,-1%"
+rem Our tools are used only when this folder is the OpenCode project (AGENTS.md, .opencode\skills\, opencode.json),
+rem user decision 2026-11-13. The internal LLM settings (opencode.jsonc) are in the user's global OpenCode settings.
+set "AIKIT=%~dp0"
+set "AIKIT=%AIKIT:~0,-1%"
 if /i "%~1"=="stop" goto service
 if /i "%~1"=="status" goto service
 
 rem Project folder = this folder (C:\AIKIT, user decision 2026-11-12). The Web UI makes every session inside a project folder,
 rem and a new PC has none, so "new session" did nothing (team PC 2026-11-11). The service starts here; the user opens it once
 rem in the Web UI (Open project).
-set "WORK=%OPENCODE_CONFIG_DIR%"
+set "WORK=%AIKIT%"
 cd /d "%WORK%"
 
 rem Run 'pair' once and keep its whole output in a file (no pipe inside for /f).

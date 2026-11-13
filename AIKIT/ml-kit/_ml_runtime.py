@@ -88,7 +88,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # C1. Console & Agent CLI Protocol (Clean Terminal Principle - No Emojis)
 # ==============================================================================
 
-VERSION = "2.9.92"                         # must equal metadata.version of every ml-* skill in <AIKIT>/skills/<name>/SKILL.md (tests check it)
+VERSION = "2.9.92"                         # must equal metadata.version of every ml-* skill in <AIKIT>/.opencode/skills/<name>/SKILL.md (tests check it)
 TOOL_NAME = "ml-kit"                      # tool folder name, used in the error log header
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 ERROR_LOG_MAX = 2 * 1024 * 1024           # errors.txt larger than this -> errors.old.txt (1 generation)
@@ -1075,7 +1075,7 @@ def inline_value(value: str) -> str:
     return ",".join(p.strip() for p in re.split(r"[,;]", value) if p.strip())
 
 
-# 스크립트 -> 그 명령을 설명하는 작업별 스킬 (skills/<이름>/SKILL.md, 2.9.71에 스킬 하나를 넷으로 나눔)
+# 스크립트 -> 그 명령을 설명하는 작업별 스킬 (.opencode/skills/<이름>/SKILL.md, 2.9.71에 스킬 하나를 넷으로 나눔)
 SKILL_OF_SCRIPT = {"ml_train.py": "ml-train", "ml_predict.py": "ml-predict", "ml_report.py": "ml-report",
                    "ml_export.py": "ml-report", "ml_map.py": "ml-map", "ml_dataset.py": "ml-dataset"}
 
@@ -1222,7 +1222,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         except Exception as e:
             sys.stderr.write(f"[WARN] 도움말을 만들지 못했습니다 ({type(e).__name__}). SKILL.md를 보세요.\n")
         name = SKILL_OF_SCRIPT.get(os.path.basename(sys.argv[0] or ""), "ml-train")
-        skill = os.path.join(os.path.dirname(TOOL_DIR), "skills", name, "SKILL.md")   # C:\AIKIT\skills (2.9.92)
+        skill = os.path.join(os.path.dirname(TOOL_DIR), ".opencode", "skills", name, "SKILL.md")   # C:\AIKIT\.opencode\skills (프로젝트 스킬)
         emit_json_response({
             "status": "ok", "tool": "ml-kit", "command": "help", "verified": True, "skill_file": skill,
             "agent_directive": f"VERIFIED: 도움말을 stderr에 출력했습니다. {name} 스킬(SKILL.md)의 명령 템플릿을 그대로 사용하세요. "

@@ -1,50 +1,56 @@
 # 사내 PC OpenCode 배치 안내
 
-사내 PC(Windows 11, 폐쇄망, OpenCode + 26B~30B 모델)에 도구 스킬과 전역 지침을 놓는 방법입니다.
+사내 PC(Windows 11, 폐쇄망, OpenCode + 사내 LLM)에 도구 스킬과 전역 지침을 놓는 방법입니다.
 저장소는 반입 후 `C:\AIKIT`에 `ml-kit`, `office-cli`가 있는 상태를 기준으로 합니다.
 
 ## 1. 도구와 스킬 배치
 
-`C:\AIKIT`이 곧 OpenCode 설정 폴더입니다. `C:\AIKIT\setup.bat`이 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`을 설정합니다
-(관리자 권한 필요 없음. 시스템 PATH 등록에만 관리자 권한). OpenCode는 **설정 파일 없이 폴더 모양만으로** 지침과 스킬을 읽고,
-복사하지 않고 그 자리에서 읽습니다 (2026-11-12, OpenCode 2.2.5에서 확인).
+`C:\AIKIT`은 **OpenCode 프로젝트 폴더**입니다 (2026-11-13 사용자 결정). 우리 지침·스킬·도구는 `C:\AIKIT`을 프로젝트로 연 대화에서만 쓰이고,
+다른 프로젝트의 대화에는 들어가지 않습니다. OpenCode는 **설정 파일 없이 폴더 모양만으로** 프로젝트의 지침(`AGENTS.md`)과 스킬(`.opencode\skills`)을
+그 자리에서 읽습니다. `C:\AIKIT`을 프로젝트로 여는 방법: Web UI는 `C:\AIKIT\web.bat`(이 폴더에서 서비스를 띄움), TUI는 `C:\AIKIT`에서 `opencode`.
+
+사내 LLM 설정과 셸·권한·폐쇄망 잠금은 모든 프로젝트에 적용되도록 **사용자 전역 설정** `%USERPROFILE%\.config\opencode`에 둡니다.
+`C:\AIKIT\setup.bat`이 `C:\AIKIT\opencode.json`(셸·권한·폐쇄망 잠금)을 전역 `opencode.json`에 합칩니다 (원래 파일 보관, 관리자 권한 필요 없음.
+시스템 PATH 등록에만 관리자 권한). 사내 LLM 주소가 든 `opencode.jsonc`는 사용자가 그 전역 폴더에 넣습니다.
 
 ```text
-C:\AIKIT\
-├── AGENTS.md              전역 지침: 모든 대화에 적용
-├── skills\                스킬: 폴더 하나 = 스킬 하나 (OpenCode가 이 아래를 찾음)
+C:\AIKIT\                  OpenCode 프로젝트
+├── AGENTS.md              전역 지침 (이 프로젝트의 모든 대화에 적용)
+├── .opencode\skills\      스킬: 폴더 하나 = 스킬 하나
 │   ├── ml-train\SKILL.md  기본 스킬 12개 (명령은 C:\AIKIT\ml-kit\..., C:\AIKIT\office-cli\... 전체 경로)
 │   ├── ...
-│   └── <사용자 스킬>\      SKILL.md + 그 스킬의 scripts\
+│   └── <사용자 스킬>\      SKILL.md + 그 스킬의 scripts\ (OpenCode에서 스킬을 만들면 여기에 생김)
 ├── ml-kit\, office-cli\    여러 스킬이 함께 쓰는 도구 (.py)
-├── opencode.json          셸·권한 기본 설정 (배포 파일, 스킬 경로는 적지 않음)
-├── opencode.jsonc         사내 LLM 연결 (PC마다, 사용자가 넣음, git 제외)
+├── opencode.json          셸·권한·폐쇄망 잠금 (배포 파일, setup이 전역 설정에도 합침)
 └── opencode.exe, python\, setup.bat, web.bat, dev\, guide\, data\
+
+%USERPROFILE%\.config\opencode\   OpenCode 전역 설정 (모든 프로젝트)
+├── opencode.json          setup이 합친 셸·권한·폐쇄망 잠금 (원래 있던 다른 설정은 그대로)
+└── opencode.jsonc         사내 LLM 연결 (PC마다, 사용자가 넣음)
 ```
 
 | 무엇 | 파일 |
 |---|---|
-| 전역 지침 | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 12개, 사용자가 만든 것) | `C:\AIKIT\skills\<이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`. 불러오면 OpenCode가 그 폴더 위치를 모델에 알려 줌) |
-| 한 프로젝트에서만 쓰는 지침·스킬 | `<프로젝트 폴더>\AGENTS.md`, `<프로젝트 폴더>\.opencode\skills\<이름>\SKILL.md` (그 폴더에서 연 세션에만 더해짐, `skill.py save --project`) |
-| 셸·권한·웹 도구 막기·업데이트 끄기 | `C:\AIKIT\opencode.json` (배포 파일) |
-| 사내 LLM 설정 (provider, model, 모델 목록 숨기기 `disabled_providers`) | `C:\AIKIT\opencode.jsonc` (사용자가 넣음) |
+| 전역 지침 (`C:\AIKIT` 프로젝트) | `C:\AIKIT\AGENTS.md` |
+| 스킬 (기본 12개, 사용자가 만든 것) | `C:\AIKIT\.opencode\skills\<이름>\SKILL.md` (스킬이 쓰는 스크립트는 그 폴더의 `scripts\`. 불러오면 OpenCode가 그 폴더 위치를 모델에 알려 줌) |
+| 셸·권한·폐쇄망 잠금 | `C:\AIKIT\opencode.json` (배포 파일) -> setup이 `%USERPROFILE%\.config\opencode\opencode.json`에 합침 |
+| 사내 LLM 설정 (provider, model, 모델 목록 숨기기 `disabled_providers`) | `%USERPROFILE%\.config\opencode\opencode.jsonc` (사용자가 넣음) |
 
-- 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, `guide`(사용 가이드), 기본 스킬 12개 폴더(`skills\ml-train` 등), `AGENTS.md`, `opencode.json`,
-  `setup.py`·`setup.bat`·`web.bat`을 바꿉니다. `skills` 폴더를 통째로 지우지 않습니다 (사용자 스킬이 함께 지워짐).
-  `C:\AIKIT\python`, `opencode.exe`, `opencode.jsonc`, 사용자 스킬 폴더, `data\`는 그대로 둡니다.
-  처음 한 번 `C:\AIKIT\setup.bat`을 실행하고(환경 변수, PATH), 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다
-  (setup은 다시 실행해도 됩니다: 확인과 서비스 끄기).
-- 예전 구성(`C:\CLI`, `%USERPROFILE%\.config\opencode`의 복사본, `C:\AIKIT\opencode`, 옛 이름 스킬 폴더)은 setup이 정리하지 않습니다. 필요한 파일
-  (`opencode.jsonc`, 사용자 스킬)은 손으로 `C:\AIKIT`(맨 위, `skills\`)로 옮기고 나머지는 지웁니다.
+- 반입: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`), `dev`, `guide`(사용 가이드), `.opencode\skills`의 기본 스킬 12개 폴더, `AGENTS.md`, `opencode.json`,
+  `setup.py`·`setup.bat`·`web.bat`을 바꿉니다. `.opencode\skills` 폴더를 통째로 지우지 않습니다 (사용자 스킬이 함께 지워짐).
+  `C:\AIKIT\python`, `opencode.exe`, 사용자 스킬 폴더, `data\`는 그대로 둡니다.
+  처음 한 번 `C:\AIKIT\setup.bat`을 실행하고, 그 뒤 반입은 파일만 바꾸고 OpenCode를 다시 시작하면 됩니다
+  (`opencode.json`을 바꾼 반입이면 setup을 다시 실행해 전역 설정에 합침. setup은 여러 번 실행해도 됩니다).
+- 예전 구성에서 옮길 때 (2026-11-13 이전 배포): setup이 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`를 지웁니다. `C:\AIKIT\opencode.jsonc`는
+  손으로 `%USERPROFILE%\.config\opencode\opencode.jsonc`로 옮기고(setup이 남아 있으면 알림), `C:\AIKIT\skills`의 사용자 스킬은
+  `C:\AIKIT\.opencode\skills`로 옮긴 뒤 `C:\AIKIT\skills` 폴더를 지웁니다.
 - 바뀐 설정이 안 보이면: OpenCode 백그라운드 서비스는 처음 뜰 때의 환경 변수를 계속 씁니다. `C:\AIKIT\web.bat stop` 뒤 다시 실행하고,
-  `C:\AIKIT\opencode.exe debug paths`의 `config`가 `C:\AIKIT`인지 봅니다 (setup도 끝에 확인).
+  `C:\AIKIT\opencode.exe debug paths`의 `config`가 전역 설정 폴더(`%USERPROFILE%\.config\opencode`)인지 봅니다 (setup도 끝에 확인).
 - Web UI 창(web.bat이 Edge·Chrome 앱 창으로 엶)을 닫으면 백그라운드 서비스도 꺼집니다 (2026-11-13 사용자 결정). 화면·트레이에 보이지 않는 PowerShell이
   `C:\AIKIT\data\web_profile`을 쓰는 브라우저가 없어지면 `opencode service stop`을 실행합니다. Edge·Chrome이 없어 기본 브라우저로 연 경우는
   예전처럼 서비스가 계속 돌고 `web.bat stop`으로 끕니다. 같은 서비스에 붙은 다른 OpenCode 창(TUI 등)이 있으면 함께 끊길 수 있습니다.
-- Web UI의 기본 프로젝트 폴더는 `C:\AIKIT` 자체입니다 (`web.bat`이 서비스를 여기서 띄움, 2026-11-12 사용자 결정). 처음 한 번 화면에서
-  프로젝트 열기로 `C:\AIKIT`을 고릅니다. 이 폴더의 `AGENTS.md`는 전역 지침이면서 프로젝트 지침 자리이기도 해서, 두 번 들어가는지 집 PC에서
-  확인합니다 (`docs/history/HANDOFF_2026-11-12.md` 3-17). 프로젝트별 지침·스킬이 필요한 일은 따로 만든 폴더(예: `D:\프로젝트A`)를 프로젝트로 엽니다.
+- Web UI의 기본 프로젝트 폴더는 `C:\AIKIT` 자체입니다 (`web.bat`이 서비스를 여기서 띄움). 처음 한 번 화면에서 프로젝트 열기로 `C:\AIKIT`을 고릅니다.
+  다른 폴더를 프로젝트로 열면 우리 지침·스킬은 들어가지 않습니다 (사내 LLM과 폐쇄망 잠금은 전역이라 그대로).
 
 **ripgrep(rg.exe)은 배포하지 않습니다** (2026-11-12 사용자 결정, 집 PC에서 rg를 치우고 인터넷을 막은 채 확인).
 OpenCode 2.2.5는 rg 없이 스킬을 불러옵니다(`scripts\` 폴더가 있는 사용자 스킬 포함). rg가 필요한 것은 OpenCode의 파일 찾기 도구
@@ -53,11 +59,11 @@ grep·glob과 Web UI의 `@` 파일 자동 완성뿐이고, rg가 없으면 인�
 (`Get-ChildItem`, `Select-String`)으로 파일을 찾습니다. Web UI에서는 `@` 대신 파일 경로를 직접 적습니다.
 (OpenCode 1.x는 스킬 불러오기에도 rg가 필요했습니다. 2026-10-29 실기: 대화 6개 모두 실패.)
 
-**설정에서 확인할 것** (`setup.py`가 `opencode.json`과 `opencode.jsonc`를 합쳐 보고 WARN으로 알림, 고치지는 않음).
-`"shell"`, `"permission"`, `"autoupdate"`, `"share"`, `"lsp"`, `"formatter"`는 배포 파일 `opencode.json`에 이미 있으니 `opencode.jsonc`에는 적지 않습니다
+**설정에서 확인할 것** (`setup.py`가 전역 설정 폴더의 `opencode.json`과 `opencode.jsonc`를 합쳐 보고 WARN으로 알림, `opencode.jsonc`는 고치지 않음).
+`"shell"`, `"permission"`, `"autoupdate"`, `"share"`, `"lsp"`, `"formatter"`는 setup이 전역 `opencode.json`에 합치니 `opencode.jsonc`에는 적지 않습니다
 (두 파일에 같은 키가 있으면 setup이 WARN). 집 PC opencode 시험(2026-11-07)에서 앞의 셋이 결과를 흐렸습니다.
 - `"shell": "powershell"` (`opencode.json`): `"cmd"`면 스킬·전역 지침의 PowerShell 명령(인코딩 줄, 작은따옴표)이 맞지 않습니다.
-- `"instructions"`: 비워 둡니다. 전역 지침 `AGENTS.md`는 설정 폴더에서 따로 읽히고, 여기에 옛 지침을 넣으면 지금 없는 명령을 씁니다.
+- `"instructions"`: 비워 둡니다. 전역 지침 `AGENTS.md`는 `C:\AIKIT` 프로젝트에서 따로 읽히고, 여기에 옛 지침을 넣으면 지금 없는 명령을 씁니다.
 - `"permission": {"external_directory": "allow"}` (`opencode.json`): opencode 1.19.5 `run`은 작업 폴더 밖 쓰기를 묻지 않고 거절해 모델이 멈췄습니다.
 - 모델 목록 (PC마다 사용자가 정함, setup은 없어도 알리지 않음): 폐쇄망에서 쓸 수 없는 기본 모델(opencode Zen 무료 모델, models.dev 목록의 인터넷 모델)을
   `opencode models`와 모델 선택에서 숨기려면 `"disabled_providers": ["opencode"]`(적은 것만 숨김) 또는 `"enabled_providers": ["<사내 provider>"]`
@@ -95,7 +101,7 @@ grep·glob과 Web UI의 `@` 파일 자동 완성뿐이고, rg가 없으면 인�
 
 ## 2. 전역 지침 (AGENTS.md)
 
-1. `AIKIT/AGENTS.md`(PC에서는 `C:\AIKIT\AGENTS.md`)를 OpenCode가 그 자리에서 읽습니다 (1장 표, 복사하지 않음).
+1. `AIKIT/AGENTS.md`(PC에서는 `C:\AIKIT\AGENTS.md`)를 OpenCode가 `C:\AIKIT` 프로젝트에서 그 자리에서 읽습니다 (1장 표, 복사하지 않음).
 2. 고쳐 쓸 곳은 없습니다. 도구 경로는 `C:\AIKIT` 기준으로 적혀 있습니다.
 3. 팀원이 "지침·스킬 경로"를 물으면 에이전트가 답하도록 9장에 위치 표가 있습니다 (지침·스킬·설정 파일, 프로젝트별 지침·스킬, 오류 기록).
 

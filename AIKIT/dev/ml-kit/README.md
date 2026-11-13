@@ -78,7 +78,7 @@ AIKIT/dev/ml-kit/             # 개발·실기 테스트용 (사내 PC C:\AIKIT\
 도구는 `C:\AIKIT\ml-kit`에 둡니다. 스킬(`skills/<이름>/SKILL.md`)의 명령 경로가 이 위치 기준으로 적혀 있습니다 (사내 PC 배치 안내: `docs/opencode/README.md`).
 OpenCode는 `skills/<name>/SKILL.md` 를 찾으며 **폴더 이름이 스킬 이름과 같아야** 합니다. ml-kit 스킬은 작업별 5개입니다 (2.9.71, ml-dataset 2.9.85): `ml-train`(학습·개선·이력), `ml-predict`(예측·반대 찾기·조건별·최적 조건), `ml-report`(보고서·성능예측표), `ml-map`(모델 없이 표 보간), `ml-dataset`(행을 고른 학습용 데이터셋).
 
-1. OpenCode는 `C:\AIKIT\skills\<이름>\SKILL.md`를 그 자리에서 읽습니다 (설정 폴더 `C:\AIKIT`, `C:\AIKIT\setup.bat`이 정함. 설정 파일 없음).
+1. OpenCode는 `C:\AIKIT`을 프로젝트로 열면 `C:\AIKIT\.opencode\skills\<이름>\SKILL.md`를 그 자리에서 읽습니다 (설정 파일 없음).
 2. 도구를 다른 위치에 두면 스킬 4개 안의 `C:\AIKIT\ml-kit`을 그 경로로 모두 바꿉니다.
 3. 권한을 제한하는 경우 `opencode.json` 에 `"permission": {"skill": {"ml-train": "allow", "ml-predict": "allow", "ml-report": "allow", "ml-map": "allow", "ml-dataset": "allow"}}` 를 추가합니다.
 4. OpenCode에서 에이전트가 `skill({ name: "ml-kit" })` 로 스킬을 불러오는지 확인합니다.

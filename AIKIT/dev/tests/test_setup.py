@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AIKIT/setup.py (배포 설치): OpenCode 설정 폴더를 C:\\AIKIT으로 (사용자 환경 변수 OPENCODE_CONFIG_DIR, 가짜 winreg),
+"""AIKIT/setup.py (배포 설치): C:\\AIKIT 프로젝트 파일 확인, 전역 설정에 우리 설정 합치기, 예전 OPENCODE_CONFIG_DIR 지우기(가짜 winreg),
 시스템 PATH 등록(가짜 winreg), 동작 확인, opencode.json + opencode.jsonc 합친 설정 점검, --check, setup.bat,
 run_all_tests.py diag의 환경 변수·PATH 확인."""
 import importlib.util
@@ -60,6 +60,12 @@ class FakeReg:
             raise FileNotFoundError(2, "없음")
         return self.value, self.kind
 
+    def DeleteValue(self, key, name):
+        assert key.root == "HKCU"
+        if name not in self.user:
+            raise FileNotFoundError(2, "없음")
+        del self.user[name]
+
     def SetValueEx(self, key, name, reserved, kind, value):
         if key.root == "HKCU":
             self.user[name] = value
@@ -76,11 +82,12 @@ def _iso(monkeypatch, tmp_path, reg=None):
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(open(src, "rb").read())
     monkeypatch.setattr(su, "HERE", str(cli))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home_config"))     # 전역 설정 폴더도 시험 폴더 안 (<..>/opencode)
     monkeypatch.setattr(su, "step_verify", lambda rep: None)
     monkeypatch.setattr(su, "step_opencode_paths", lambda rep: None)
     monkeypatch.setattr(su, "_winreg", lambda: reg)
     monkeypatch.setattr(su, "broadcast_env_change", lambda: True)
-    monkeypatch.delenv(su.CONFIG_ENV, raising=False)                    # step_env가 이 프로세스에 넣는 값을 시험 뒤 되돌림
+    monkeypatch.delenv(su.CONFIG_ENV, raising=False)
     return cli
 
 
@@ -89,11 +96,12 @@ def _backups(cli, pattern):
 
 
 def test_sources_exist_in_repo_layout():
-    """1.6.6: 설정 파일 없이 폴더 모양만으로: AIKIT/AGENTS.md(전역 지침), AIKIT/skills/<이름>/SKILL.md(기본 스킬 12개).
-    opencode.json은 셸·권한 기본 설정만 (스킬 경로 없음)."""
+    """2026-11-13: C:\\AIKIT은 OpenCode 프로젝트: AIKIT/AGENTS.md(프로젝트 지침), AIKIT/.opencode/skills/<이름>/SKILL.md(기본 스킬 12개).
+    opencode.json은 셸·권한·폐쇄망 잠금만 (스킬 경로 없음, setup이 전역 설정에도 합침)."""
     for name, src in su.sources():
         assert os.path.isfile(src), (name, src)
-    on_disk = set(os.listdir(os.path.join(CLI, "skills")))
+    on_disk = set(os.listdir(os.path.join(CLI, ".opencode", "skills")))
+    assert not os.path.exists(os.path.join(CLI, "skills"))                # 전역 설정 폴더 모양(AIKIT/skills)은 없음
     assert set(su.ML_SKILLS + su.OFFICE_SKILLS) <= on_disk                # 새 스킬 폴더를 만들면 setup.py에도 올림
     assert not os.path.exists(os.path.join(CLI, "opencode"))              # 이전 구성의 설정 폴더는 없음
     for tool in ("ml-kit", "office-cli"):
@@ -107,37 +115,68 @@ def test_sources_exist_in_repo_layout():
     gitignore = os.path.join(REPO, ".gitignore")
     if os.path.isfile(gitignore):        # 저장소에서만 (반입한 PC에는 .gitignore가 없음)
         ignore = open(gitignore, encoding="utf-8").read().splitlines()
-        assert {"AIKIT/opencode.jsonc", "AIKIT/skills/*", "AIKIT/data/", "AIKIT/service.json"} <= set(ignore)
-        assert {f"!AIKIT/skills/{n}/" for n in su.ML_SKILLS + su.OFFICE_SKILLS} <= set(ignore)    # 기본 스킬만 저장소에
+        assert {"AIKIT/opencode.jsonc", "AIKIT/.opencode/*", "!AIKIT/.opencode/skills/", "AIKIT/.opencode/skills/*", "AIKIT/data/"} <= set(ignore)
+        assert {f"!AIKIT/.opencode/skills/{n}/" for n in su.ML_SKILLS + su.OFFICE_SKILLS} <= set(ignore)    # 기본 스킬만 저장소에
         assert "AIKIT/opencode.json" not in ignore
-    assert su.config_dir() == su.HERE
+    assert su.config_dir() == su.HERE and su.skills_dir() == os.path.join(su.HERE, ".opencode", "skills")
     for dist in ("pandas", "scikit-learn", "openpyxl", "python-docx", "python-pptx", "pymupdf", "pywin32"):
         assert dist in dict(su.LIBS)
 
 
-def test_apply_sets_user_env_then_check_passes(monkeypatch, tmp_path, capsys):
-    reg = FakeReg(r"C:\Windows", user={su.CONFIG_ENV: r"D:\옛 설정"})
+def test_apply_removes_old_env_merges_global_config_then_check_passes(monkeypatch, tmp_path, capsys):
+    """2026-11-13: 예전 설치의 OPENCODE_CONFIG_DIR=C:\\AIKIT를 지우고(보관), 우리 셸·권한·폐쇄망 잠금을 전역 opencode.json에 합침
+    (전역 파일의 다른 키와 permission의 다른 항목은 그대로). 두 번째 --check는 다름 없음."""
+    reg = FakeReg(r"C:\Windows")
     cli = _iso(monkeypatch, tmp_path, reg)
+    reg.user[su.CONFIG_ENV] = str(cli)
+    gdir = tmp_path / "home_config" / "opencode"
+    gdir.mkdir(parents=True)
+    (gdir / "opencode.json").write_text('{"theme": "dark", "permission": {"bash": "ask"}}', encoding="utf-8")
+    (gdir / "opencode.jsonc").write_text('{"model": "corp/gemma", "provider": {"corp": {}}}', encoding="utf-8")
     assert su.main(["--no-path"]) == 0
-    assert reg.user[su.CONFIG_ENV] == str(cli) and os.environ[su.CONFIG_ENV] == str(cli)
+    assert su.CONFIG_ENV not in reg.user
     kept = _backups(cli, "user_env.txt")
-    assert len(kept) == 1 and r"D:\옛 설정" in kept[0].read_text(encoding="utf-8")      # 쓰기 전 원래 값
-    assert reg.writes == []                                               # --no-path: 시스템 PATH는 그대로
-    assert (cli / "data" / "scripts").is_dir() and not (cli / "work").exists()     # Web UI 프로젝트 폴더는 C:\\AIKIT 자체 (1.6.7)
+    assert len(kept) == 1 and str(cli) in kept[0].read_text(encoding="utf-8")
+    merged = json.loads((gdir / "opencode.json").read_text(encoding="utf-8"))
+    assert merged["theme"] == "dark" and merged["shell"] == "powershell" and merged["permission"]["bash"] == "ask"
+    assert all(merged["permission"][k] == "deny" for k in su.OFFLINE_DENY) and all(merged[k] == v for k, v in su.OFFLINE_SET)
+    assert json.loads(_backups(cli, "global_opencode.json")[0].read_text(encoding="utf-8")) == {"theme": "dark", "permission": {"bash": "ask"}}
+    assert reg.writes == [] and (cli / "data" / "scripts").is_dir()
     out = capsys.readouterr().out
-    assert "[STATUS] 끝." in out
+    assert "[STATUS] 끝." in out and "프로젝트로 열 때만" in out
     assert su.main(["--no-path", "--check"]) == 0
     out = capsys.readouterr().out
-    assert "다름" not in out.replace("다름 0", "") and "[FAIL]" not in out and "사용자 환경 변수 OPENCODE_CONFIG_DIR = " in out
+    assert "다름" not in out.replace("다름 0", "") and "[FAIL]" not in out and "opencode.jsonc가 없습니다" not in out
+
+
+def test_other_env_value_is_kept_and_unreadable_global_config_is_not_touched(monkeypatch, tmp_path, capsys):
+    """사용자가 다른 폴더로 정한 OPENCODE_CONFIG_DIR는 그대로 두고 알림. 못 읽는 전역 opencode.json은 바꾸지 않고 FAIL.
+    C:\\AIKIT\\opencode.jsonc는 프로젝트에서만 읽힌다고 알림. --check는 지울 환경 변수를 '다름'으로."""
+    reg = FakeReg(r"C:\Windows", user={su.CONFIG_ENV: r"D:\내 설정"})
+    cli = _iso(monkeypatch, tmp_path, reg)
+    gdir = tmp_path / "home_config" / "opencode"
+    gdir.mkdir(parents=True)
+    (gdir / "opencode.json").write_text("{ 고장", encoding="utf-8")
+    (cli / "opencode.jsonc").write_text("{}", encoding="utf-8")
+    assert su.main(["--no-path"]) == 1
+    out = capsys.readouterr().out
+    assert reg.user[su.CONFIG_ENV] == r"D:\내 설정" and "그대로 두지만" in out
+    assert "읽지 못해 바꾸지 않았습니다" in out and (gdir / "opencode.json").read_text(encoding="utf-8") == "{ 고장"
+    assert "프로젝트에서만 읽힙니다" in out
+    reg.user[su.CONFIG_ENV] = str(cli)
+    (gdir / "opencode.json").unlink()
+    assert su.main(["--no-path", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "예전 설치 값, 설치하면 지움" in out and "설치하면 합침" in out and reg.user[su.CONFIG_ENV] == str(cli)
 
 
 def test_missing_source_is_error(monkeypatch, tmp_path, capsys):
     cli = _iso(monkeypatch, tmp_path, FakeReg(r"C:\Windows"))
     os.remove(cli / "AGENTS.md")
-    shutil.rmtree(cli / "skills" / "excel-kit")
+    shutil.rmtree(cli / ".opencode" / "skills" / "excel-kit")
     assert su.main(["--no-path"]) == 1
     out = capsys.readouterr().out
-    assert "[FAIL] 전역 지침: 파일이 없습니다" in out and "[FAIL] excel-kit 스킬: 파일이 없습니다" in out and "[STATUS] 끝." not in out
+    assert "[FAIL] 프로젝트 지침: 파일이 없습니다" in out and "[FAIL] excel-kit 스킬: 파일이 없습니다" in out and "[STATUS] 끝." not in out
 
 
 def test_not_windows_env_is_warning_only(monkeypatch, tmp_path, capsys):
@@ -146,17 +185,18 @@ def test_not_windows_env_is_warning_only(monkeypatch, tmp_path, capsys):
     assert "[WARN] Windows가 아니라 사용자 환경 변수 OPENCODE_CONFIG_DIR" in capsys.readouterr().out
 
 
-def test_opencode_paths_must_be_the_aikit_folder(monkeypatch, tmp_path, capsys):
-    """opencode debug paths의 config 줄로 OpenCode가 OPENCODE_CONFIG_DIR를 따르는지 확인 (OpenCode 2.2.5 출력 모양)."""
+def test_opencode_paths_must_be_the_global_folder(monkeypatch, tmp_path, capsys):
+    """opencode debug paths의 config 줄이 전역 설정 폴더여야 함. C:\\AIKIT이면 예전 환경 변수가 남은 것 (OpenCode 2.2.5 출력 모양)."""
     monkeypatch.setattr(su, "HERE", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     rep = su.Report()
     su.step_opencode_paths(rep, run=lambda cmd, t: (0, "", ""))
     assert rep.ok == 0 and rep.fails == []                                # opencode.exe 없음: 지나감
     (tmp_path / "opencode.exe").write_bytes(b"")
-    good = f"home       C:\\Users\\x\ndata       C:\\Users\\x\\.local\\share\\opencode\nconfig     {tmp_path}\n"
+    good = f"home       C:\\Users\\x\ndata       C:\\Users\\x\\.local\\share\\opencode\nconfig     {su.global_config_dir()}\n"
     su.step_opencode_paths(rep, run=lambda cmd, t: (0, good, ""))
     assert rep.ok == 1 and rep.fails == []
-    su.step_opencode_paths(rep, run=lambda cmd, t: (0, good.replace(f"config     {tmp_path}", r"config     C:\Users\x\.config\opencode"), ""))
+    su.step_opencode_paths(rep, run=lambda cmd, t: (0, good.replace(su.global_config_dir(), str(tmp_path)), ""))
     assert len(rep.fails) == 1 and "로그아웃" in rep.fails[0]
     rep = su.Report()
     su.step_opencode_paths(rep, run=lambda cmd, t: (1, "unknown command", ""))
@@ -185,7 +225,7 @@ def test_path_added_with_expand_sz_backup_and_broadcast(monkeypatch, tmp_path, c
     assert su.main([]) == 0
     want = [str(cli / "python"), str(cli / "python" / "Scripts")]
     assert reg.writes == [("Path", FakeReg.REG_EXPAND_SZ, base + ";" + ";".join(want))]
-    assert reg.value.startswith(base + ";") and sent == [1, 1]           # 사용자 환경 변수 한 번, PATH 한 번
+    assert reg.value.startswith(base + ";") and sent == [1]               # PATH 한 번 (지울 환경 변수 없음)
     kept = _backups(cli, "system_path.txt")
     assert len(kept) == 1 and base in kept[0].read_text(encoding="utf-8")       # 쓰기 전 원래 값
     assert "시스템 PATH에 추가" in capsys.readouterr().out
@@ -329,13 +369,13 @@ def test_setup_bat_is_ascii_crlf_and_uses_bundled_python():
 
 
 def test_web_bat_is_ascii_crlf_and_opens_the_aikit_folder():
-    """1.6.7 (사용자 결정): Web UI의 기본 프로젝트 폴더 = C:\\AIKIT (설정 폴더와 같음). 서비스를 이 폴더에서 띄우고 처음 열 폴더로 안내."""
+    """Web UI의 기본 프로젝트 폴더 = C:\\AIKIT (2026-11-12). 2026-11-13부터 C:\\AIKIT은 프로젝트로 열 때만 쓰여 OPENCODE_CONFIG_DIR를 넣지 않음."""
     data = open(os.path.join(CLI, "web.bat"), "rb").read()
     assert data.isascii() and b"chcp" not in data.lower()
     assert data.count(b"\r\n") == data.count(b"\n") and data.endswith(b"\r\n")
-    assert b'set "WORK=%OPENCODE_CONFIG_DIR%"' in data and b'cd /d "%WORK%"' in data
+    assert b'set "WORK=%AIKIT%"' in data and b'cd /d "%WORK%"' in data and b"OPENCODE_CONFIG_DIR" not in data
     assert b"work\"" not in data and b"mkdir \"%WORK%\"" not in data
-    assert data.index(b'set "OPENCODE_CONFIG_DIR=%OPENCODE_CONFIG_DIR:~0,-1%"') < data.index(b'set "WORK=')
+    assert data.index(b'set "AIKIT=%AIKIT:~0,-1%"') < data.index(b'set "WORK=')
 
 
 def test_web_bat_stops_service_when_web_ui_window_closes():
@@ -357,7 +397,7 @@ def test_web_bat_stops_service_when_web_ui_window_closes():
 
 # ---- run_all_tests.py diag ----
 def test_diag_fails_when_env_or_path_differ(tmp_path, monkeypatch):
-    """run_all_tests.py diag: setup.py --check처럼 읽기만. PATH, OPENCODE_CONFIG_DIR."""
+    """run_all_tests.py diag: setup.py --check처럼 읽기만. PATH, 예전 OPENCODE_CONFIG_DIR=C:\\AIKIT가 남지 않았는지."""
     rat = _load("run_all_tests_s", os.path.join(DEV, "run_all_tests.py"))
     lines = []
     st = rat.Stage("diag")
@@ -365,15 +405,14 @@ def test_diag_fails_when_env_or_path_differ(tmp_path, monkeypatch):
     if os.name != "nt":                                                   # Windows가 아니면 참고만
         assert st.failed == 0 and st.passed == 0 and any("Windows가 아니라" in x for x in lines)
     paths = ";".join(os.path.join(CLI, *p) for p in (("python",), ("python", "Scripts")))
-    want = CLI
     reg = FakeReg(r"C:\Windows;" + paths)
     st = rat.Stage("diag")
     rat.diag_skills(st, lines, reg=reg)
-    assert st.failed == 1 and "OPENCODE_CONFIG_DIR가 없음" in st.failures[0] and "setup.bat" in st.failures[0]
-    reg.user[su.CONFIG_ENV] = want
+    assert st.failed == 0 and st.passed == 2 and reg.writes == []
+    reg.user[su.CONFIG_ENV] = CLI
     st = rat.Stage("diag")
     rat.diag_skills(st, lines, reg=reg)
-    assert st.failed == 0 and st.passed == 2 and reg.writes == [] and reg.user == {su.CONFIG_ENV: want}   # 읽기만
+    assert st.failed == 1 and "남아 있어" in st.failures[0] and "setup.bat" in st.failures[0] and reg.user == {su.CONFIG_ENV: CLI}   # 읽기만
 
 
 def test_service_is_stopped_so_new_path_and_skills_apply(tmp_path, monkeypatch, capsys):

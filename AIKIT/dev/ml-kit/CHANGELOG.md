@@ -14,6 +14,10 @@
 
 ## [2.9.92] - 2026-11-12
 
+### 구조: 스킬 위치 C:\AIKIT\.opencode\skills (사용자 결정 2026-11-13)
+- `C:\AIKIT`을 OpenCode 프로젝트로 열 때만 우리 스킬을 쓰도록 스킬 5개를 `AIKIT/skills/`에서 `AIKIT/.opencode/skills/`로 옮김 (상세: office-cli CHANGELOG 1.6.7).
+  `_ml_runtime.py`의 스킬 파일 경로, `tools/run_win_tests.py`, 테스트를 함께 고침. 도구 동작은 같음.
+
 ### 테스트: 평소 실행에서 무거운 회귀 시험을 뺌 (도구 동작 변경 없음, 사용자 결정: 날마다 몇 시간씩 걸리는 것은 무리)
 - `tests/conftest.py`: report 표시, `test_layout_matrix`·`test_loading_layout`·`test_loading_numbers`, `tests/slow_tests.txt`(2026-11-12 측정에서 한 번에
   2초 이상 걸린 함수 142개, 계약·안전 시험은 넣지 않음)를 평소에는 빼고 `AIKIT_FULL_TEST=1`이나 `-m`을 줄 때만 돌림. 1052개 26분 -> 평소 546개 6분 (리눅스).

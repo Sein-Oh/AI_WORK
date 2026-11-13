@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 TOOL_NAME = "office-cli"
-VERSION = "1.6.7"                         # <AIKIT>\skills\<*-kit>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
+VERSION = "1.6.7"                         # <AIKIT>\.opencode\skills\<*-kit>\SKILL.md metadata.version과 같아야 함 (테스트로 확인)
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -931,7 +931,7 @@ _NO_SEND = ("--send는 없습니다. 초안을 만든 뒤 사용자 확인을 �
 OTHER_COMMAND.update({("outlook", c, "--send"): _NO_SEND for c in ("new", "reply", "forward")})
 
 
-# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (<설치 폴더>\skills\<이름>\SKILL.md). excel.py comment는 search-kit에도 있음
+# 도구 파일 -> 그 명령을 설명하는 작업별 스킬 (<설치 폴더>\.opencode\skills\<이름>\SKILL.md). excel.py comment는 search-kit에도 있음
 SKILL_OF_TOOL = {"excel": "excel-kit", "word": "word-kit", "ppt": "ppt-kit", "office": "word-kit",
                  "outlook": "outlook-kit", "reader": "search-kit"}
 # 도구 파일과 다른 스킬에 있는 명령 (표 집계·중복 찾기는 stats-kit)
@@ -947,8 +947,8 @@ def skill_name(tool: str) -> str:
 
 
 def skill_file(tool: str) -> str:
-    """도구(지금 실행한 명령)의 스킬 파일 경로: 도구 폴더의 부모(C:\\AIKIT)의 skills (OpenCode 설정 폴더의 skills, 1.6.6)."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills", skill_name(tool), "SKILL.md")
+    """도구(지금 실행한 명령)의 스킬 파일 경로: 도구 폴더의 부모(C:\\AIKIT, OpenCode 프로젝트)의 .opencode\\skills (1.6.7)."""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".opencode", "skills", skill_name(tool), "SKILL.md")
 
 
 # 글 값을 받는 옵션: 값이 '-'로 시작해도 값으로 받음 (JsonArgumentParser._join_dash_values)

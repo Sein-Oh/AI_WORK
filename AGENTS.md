@@ -18,9 +18,11 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 
 ## 폴더 구조
 - `AIKIT/`는 사용자 PC의 `C:\AIKIT`로 통째로 복사된다 (`dev/` 포함, 2026-11-12에 `CLI/`·`CLI-dev/`에서 이름을 바꾸고 dev를 안으로 옮김).
-- `AIKIT/`가 곧 OpenCode 설정 폴더다 (setup이 `OPENCODE_CONFIG_DIR=C:\AIKIT`). 설정 파일 없이 폴더 모양으로 읽힌다 (OpenCode 2.2.5 확인):
-  `AIKIT/AGENTS.md`(전역 지침), `AIKIT/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나).
-- `AIKIT/skills/`: 기본 스킬 12개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
+- `AIKIT/`는 OpenCode 프로젝트 폴더다 (2026-11-13 사용자 결정: 우리 도구·지침·스킬은 `C:\AIKIT`을 프로젝트로 열 때만 쓴다).
+  설정 파일 없이 폴더 모양으로 읽힌다: `AIKIT/AGENTS.md`(전역 지침이라 부르지만 이 프로젝트의 지침), `AIKIT/.opencode/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나),
+  `AIKIT/opencode.json`(셸·권한·폐쇄망 잠금). 사내 LLM 설정(`opencode.jsonc`)과 폐쇄망 잠금은 사용자 전역 설정(`%USERPROFILE%\.config\opencode`)에
+  두어 모든 프로젝트에 적용한다 (setup이 `opencode.json`을 전역에 합침, 예전 `OPENCODE_CONFIG_DIR=C:\AIKIT`는 지움).
+- `AIKIT/.opencode/skills/`: 기본 스킬 12개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
   `word-kit`, `ppt-kit`, `outlook-kit`, `search-kit`, `stats-kit`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
   스킬이 여러 개를 함께 쓰는 도구는 스킬 폴더가 아니라 도구 폴더에 두고, SKILL.md에는 `python "C:\AIKIT\<tool>\<파일>.py" ...` 전체 명령을 적는다.
   사용자가 만든 스킬의 스크립트는 그 스킬 폴더의 `scripts/`에 둔다 (스킬 폴더만 복사하면 동료 PC에서도 됨).
@@ -29,10 +31,9 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   `AIKIT/dev/README.md`(공통 계약), `AIKIT/dev/run_all_tests.py`. 도구는 dev를 읽지 않는다 (배포에 함께 가도 실행에 영향 없음).
   `AIKIT/dev`의 테스트·러너는 부모 폴더 `AIKIT/<tool>`의 도구를 시험한다.
 - 새 파일을 `AIKIT/<tool>/`에 넣는 것은 도구 실행에 꼭 필요할 때만.
-- `AIKIT/` 맨 위에는 도구 폴더, `skills/`, `dev/`, `guide/`(사람용 사용 가이드 HTML, 도구별 파일 하나, 브라우저로 엶) 외에 `AGENTS.md`(전역 지침), `opencode.json`(셸·권한 기본 설정, 스킬 경로는 적지 않음),
+- `AIKIT/` 맨 위에는 도구 폴더, `.opencode/`(스킬), `dev/`, `guide/`(사람용 사용 가이드 HTML, 도구별 파일 하나, 브라우저로 엶) 외에 `AGENTS.md`(전역 지침), `opencode.json`(셸·권한 기본 설정, 스킬 경로는 적지 않음),
   배포 설치 파일 `setup.py`(사람이 실행, 에이전트 계약 대상 아님)·`setup.bat`, Web UI 실행 파일 `web.bat`만 둔다.
-  사용자가 배포 전에 넣는 `opencode.jsonc`(사내 LLM 주소), OpenCode가 만드는 `service.json`, 설치가 만드는 `data/`(보관 폴더)는
-  git 제외. Web UI의 기본 프로젝트 폴더는 `AIKIT/` 자체(`web.bat`). 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
+  설치가 만드는 `data/`(보관 폴더), 사용자가 만든 스킬과 OpenCode가 `.opencode/`에 만드는 파일은 git 제외. Web UI의 기본 프로젝트 폴더는 `AIKIT/` 자체(`web.bat`). 배포 PC에 함께 두는 `python/`, `opencode.exe`도 저장소에 넣지 않는다.
 
 ## 사용자 환경 (모든 작업의 전제)
 | 항목 | 값 |
@@ -195,8 +196,8 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
    (요약은 `docs/HANDOFF.md` 3장에 경로 없이). 배포 파일에 사용자 폴더 전체 경로를 넣지 않는다.
 5. 남은 할 일은 각 도구 `CHANGELOG.md`(`AIKIT/dev/<tool>/`) 하단 "남은 할 일"에서 관리 (처리 시 해당 버전 항목으로 이동).
 6. `SKILL.md`는 경량 LLM 컨텍스트에 들어가므로 짧게 유지 (8KB, 상세는 README.md, 위 "사용법 단순성" 7번).
-7. 스킬은 OpenCode 형식(Claude 스킬과 같은 모양): `AIKIT/skills/<스킬 이름>/SKILL.md`, 폴더명 = frontmatter `name`
-   (`^[a-z0-9]+(-[a-z0-9]+)*$`; `AIKIT/skills/ml-train/SKILL.md`는 `ml-train`), frontmatter는 name/description/license/compatibility/metadata만.
+7. 스킬은 OpenCode 형식(Claude 스킬과 같은 모양): `AIKIT/.opencode/skills/<스킬 이름>/SKILL.md`, 폴더명 = frontmatter `name`
+   (`^[a-z0-9]+(-[a-z0-9]+)*$`; `AIKIT/.opencode/skills/ml-train/SKILL.md`는 `ml-train`), frontmatter는 name/description/license/compatibility/metadata만.
    `skills/` 바로 아래에 둔다 (묶음 폴더를 한 단계 더 두는 것은 2.2.5에서 되지만 표준이 아님).
    스킬을 더하거나 나누면 `AIKIT/setup.py`
    (설치하는 기본 스킬 목록), `.gitignore`의 기본 스킬 줄, 전역 지침 `AIKIT/AGENTS.md` 3장 표를 함께 고친다.

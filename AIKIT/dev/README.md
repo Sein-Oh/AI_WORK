@@ -2,17 +2,17 @@
 
 AI 에이전트(기준 26B~30B 경량 LLM, 대형 모델도 씀)가 **스킬로 호출하는 CLI 도구**의 개발·테스트 폴더입니다. 도구 1개 = 폴더 1개.
 
-- 실행 파일은 `AIKIT/<tool>/`, 스킬은 `AIKIT/skills/<스킬 이름>/SKILL.md`에 있습니다 (사내 PC `C:\AIKIT`로 그대로 복사, `C:\AIKIT`이 OpenCode 설정 폴더).
+- 실행 파일은 `AIKIT/<tool>/`, 스킬은 `AIKIT/.opencode/skills/<스킬 이름>/SKILL.md`에 있습니다 (사내 PC `C:\AIKIT`로 그대로 복사, `C:\AIKIT`을 OpenCode 프로젝트로 열 때만 씀).
 - 이 `AIKIT/dev/<tool>/`에는 설명서, 변경 이력, 의존성 목록, 테스트, 실기 러너가 있습니다.
   테스트와 러너는 부모 폴더 `AIKIT/<tool>`(PC에서는 `C:\AIKIT\<tool>`)의 도구를 시험합니다. 이 폴더는 `C:\AIKIT\dev`로 도구와 함께 배포됩니다.
 
 | 도구 | 설명 | 스킬 |
 |---|---|---|
-| [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`AIKIT/skills/`](../skills/) (ml-train, ml-predict, ml-report, ml-map, ml-dataset) |
-| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`excel-kit`](../skills/excel-kit/SKILL.md), [`excel-format-kit`](../skills/excel-format-kit/SKILL.md), [`word-kit`](../skills/word-kit/SKILL.md), [`ppt-kit`](../skills/ppt-kit/SKILL.md), [`outlook-kit`](../skills/outlook-kit/SKILL.md), [`search-kit`](../skills/search-kit/SKILL.md), [`stats-kit`](../skills/stats-kit/SKILL.md) |
+| [`ml-kit/`](ml-kit/README.md) | 회귀·분류 ML 학습 / 예측(단독 배포 가능) / Word 보고서 / 표 보간·반대 찾기 | [`AIKIT/.opencode/skills/`](../.opencode/skills/) (ml-train, ml-predict, ml-report, ml-map, ml-dataset) |
+| [`office-cli/`](office-cli/README.md) | Excel/Word/PowerPoint/Outlook 자동화(열린 문서 읽기·쓰기, 앱 간 전달, 되돌리기), PDF/HWP/Office 파일 읽기와 검색 | [`excel-kit`](../.opencode/skills/excel-kit/SKILL.md), [`excel-format-kit`](../.opencode/skills/excel-format-kit/SKILL.md), [`word-kit`](../.opencode/skills/word-kit/SKILL.md), [`ppt-kit`](../.opencode/skills/ppt-kit/SKILL.md), [`outlook-kit`](../.opencode/skills/outlook-kit/SKILL.md), [`search-kit`](../.opencode/skills/search-kit/SKILL.md), [`stats-kit`](../.opencode/skills/stats-kit/SKILL.md) |
 
 에이전트 런타임은 **OpenCode** 입니다. 스킬 폴더 이름 = 스킬 이름
-(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\AIKIT\<tool>\`에 두고, OpenCode는 설정 폴더 `C:\AIKIT`의 `skills\<스킬 이름>\SKILL.md`를 그 자리에서 읽습니다 ([`docs/opencode/README.md`](../../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\AIKIT\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `AIKIT/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli 7개). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
+(소문자, 숫자, 하이픈만: `^[a-z0-9]+(-[a-z0-9]+)*$`) 이어야 합니다. 사내 PC 배치: 도구는 `C:\AIKIT\<tool>\`에 두고, OpenCode는 `C:\AIKIT`을 프로젝트로 열면 `.opencode\skills\<스킬 이름>\SKILL.md`를 그 자리에서 읽습니다 ([`docs/opencode/README.md`](../../docs/opencode/README.md)). SKILL.md의 명령 경로는 `C:\AIKIT\<tool>` 기준입니다. 한 도구의 명령이 많으면 작업별 스킬로 나눠 `AIKIT/skills/<스킬 이름>/SKILL.md`에 둡니다 (office-cli 7개). 이때 폴더 이름 = 스킬 이름이고, 스킬 하나는 8KB(8192바이트) 이하를 목표로 합니다.
 
 ## 실기 자동 점검 (`run_all_tests.py`)
 
@@ -63,7 +63,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 | `run_beta_check.py` | 정답을 아는 샘플을 새로 만들어 ml-kit 베타 기능(이상치·제외 열, ml_map, 실측 비교값, 모델 반대 찾기, 보고서+성능예측표, 일치도, 엑셀 잠금·숨김·재계산)을 자동 판정. 결과 `beta_check_<라벨>_<시각>.md/.xlsx` (단독 실행 때. `run_all_tests.py`의 `beta` 단계는 이 내용을 결과 파일에 넣음). `--agent`면 stdout에 JSON 1줄 (Gemma가 실행할 때. `-h`·인자 오류·Ctrl+C(exit 130)도 JSON 1줄, `verified` 포함). `--only`에 없는 묶음은 인자 오류 |
 | `run_simplify_check.py` | 사용법 단순성 점검 (`run_all_tests.py`의 `simplify` 단계로 실행, 2026-11-13. 단독으로도 됨, Gemma 없이). 틀린 명령을 일부러 실행하고 도구가 준 `[추천]` 전체 명령이나 `[후보]` 번호의 `confirm_commands`를 PowerShell 5.1(리눅스는 bash)에 그대로 넣어 성공하는지, 설정 폴더의 기본 스킬 12개 배치. 닫힌 Office 파일 쓰기 항목은 Windows + Office에서만. 결과 `result_simplify_<라벨>_<시각>.md` |
 | `agent_scenarios.py` | Gemma 종합 테스트 시나리오 (요청 문장과 채점 기준) 단일 원본. 데이터만 담은 파이썬 모듈(상수 `SCENARIOS`, 정규식은 raw 문자열): 회사 반입 시스템이 .yaml을 막아 2026-11-05에 `agent_scenarios.yaml`에서 옮김. 없으면 채점 테스트는 "반입 누락"으로 건너뛰고 gemma 단계는 ENV-SKIP. ml-kit 묶음(S0 샘플, A/M/P/R/X)과 office-cli 묶음(S1 샘플 `office-cli/tools/make_office_samples.py`, O1~O5: 규격 대조, 여러 칸 쓰기, 메일 첨부 읽기(수동 전용), 워드 문단 덧붙이기, 양식 채우기). 판정은 스킬 이름이 아니라 실행한 명령으로 하고, 회사 PC 오류 로그에서 나온 지어낸 office-cli 옵션은 공통 규칙 `no_fake_office`로 모든 요청에서 실패 |
-| `../setup.py` (`setup.bat`) | 배포 설치 (`C:\AIKIT`에 있음, 사람이 실행). 사용자 환경 변수 `OPENCODE_CONFIG_DIR=C:\AIKIT`(HKCU, 원래 값 보관, 다시 읽어 확인)로 OpenCode가 `C:\AIKIT\AGENTS.md`와 `C:\AIKIT\skills`를 설정 파일·복사 없이 읽게 함. 시스템 PATH(HKLM)에 `C:\AIKIT\python`, `C:\AIKIT\python\Scripts`를 없을 때만 추가(`winreg`, 형식 유지, 원래 값 보관, `WM_SETTINGCHANGE`), 동작 확인(라이브러리 import, 도구 `-h` 1줄 JSON, `opencode.exe`, rg, `opencode debug paths`의 config). `--check`(바꾸지 않고 확인만, 다르면 exit 1), `--no-path`. `run_all_tests.py`의 diag가 PATH·환경 변수를 읽기만 해서 확인하고 다르면 FAIL |
+| `../setup.py` (`setup.bat`) | 배포 설치 (`C:\AIKIT`에 있음, 사람이 실행). `C:\AIKIT` 프로젝트 파일(지침, `.opencode\skills`의 기본 스킬 12개, `opencode.json`) 확인, `opencode.json`의 셸·권한·폐쇄망 잠금을 사용자 전역 설정(`%USERPROFILE%\.config\opencode\opencode.json`)에 합침(원래 파일 보관, 다시 읽어 확인), 예전 설치의 `OPENCODE_CONFIG_DIR=C:\AIKIT` 지움, 시스템 PATH에 `C:\AIKIT\python`·`Scripts`를 없을 때만 추가, 동작 확인(라이브러리, 도구 `-h`, `opencode debug paths`의 config가 전역 설정 폴더인지). `--check`(바꾸지 않고 확인만), `--no-path`. 2026-11-13 사용자 결정: 우리 도구는 `C:\AIKIT`을 프로젝트로 열 때만 |
 | `grade_opencode.py` | OpenCode 대화 내보내기 JSON 채점 (필요한 명령, 도구 결과, 답변 값, 금지 행동). 결과 `grade_<라벨>_<시각>.md/.xlsx`. `--judge`는 사내 OpenAI 호환 API로 참고 점수. 답변 검사는 최종 답변(시나리오 명령 뒤의 글)만 보고, 한 번에 보낸 요청은 명령 순서로 나눠 "참고"로 채점. 시나리오에 `answer_reference: true`인 것(X2, 자유 문장 답)는 답변 정규식 판정을 "통과(참고)"/"실패(참고)"로만 보이고 최종 판정은 `--judge` 점수나 사람이 답변을 읽고 정함 (명령·금지 규칙은 그대로). 내보내기: `cmd /c "opencode export <세션ID> > chat.json"` (PowerShell의 `| Out-File`이나 `>`는 한글을 깨뜨림. 깨진 대화는 [ERROR]로 멈춤). `--runs <폴더>`는 `run_all_tests.py --gemma`가 남긴 `opencode run` 기록(`<ID>.jsonl`, `messages.json`)을 채점. OpenCode 2.x의 셸 도구 이름 `shell`과 파일 경로 키 `path`도 읽음 |
 
 회사 PC 절차: [`docs/opencode/실기테스트.md`](../../docs/opencode/실기테스트.md). 결과 파일은 git에 올리지 않습니다(.gitignore).
@@ -74,7 +74,7 @@ python run_all_tests.py --only diag              :: 환경 진단과 도구 오�
 AIKIT/<tool>/              # 사내 PC C:\AIKIT\<tool>로 그대로 복사
 └── *.py                # CLI 진입점과 공통 런타임 (예: excel.py, _runtime.py. 실행에 필요한 파일만, 폴더째 복사해도 단독 실행 가능)
 
-AIKIT/skills/<스킬 이름>/   # 작업별 스킬 (폴더 하나 = 스킬 하나, 예: AIKIT/skills/excel-kit/). OpenCode가 설정 파일 없이 읽음
+AIKIT/.opencode/skills/<스킬 이름>/   # 작업별 스킬 (폴더 하나 = 스킬 하나, 예: AIKIT/.opencode/skills/excel-kit/). C:\AIKIT 프로젝트에서 OpenCode가 읽음
 └── SKILL.md             # frontmatter: name(=폴더명), description(1024자 이하), license, compatibility, metadata
                          # 명령은 도구의 전체 경로 (python "C:\AIKIT\<tool>\<파일>.py" ...)
 

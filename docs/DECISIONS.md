@@ -17,7 +17,8 @@
 | 2026-11-12 | 결과 파일은 대상 파일 옆, 대상이 없으면 `C:\AIKIT\data`, 경로를 주면 그대로 | `AIKIT/AGENTS.md` 2장 |
 | 2026-11-12 | pytest는 클라우드에서만. 회사·집 PC는 실기 러너·눈 확인·Gemma 시험. ml-kit 무거운 시험은 평소에 뺌 | `AGENTS.md` 작업 절차·폐쇄망 |
 | 2026-11-13 | PC 시험은 `run_all_tests.py` 하나(기본 diag·beta·simplify·office, 선택 ml·gemma)와 눈 확인. 메시지 팩·보조 스킬·일회성 시험 스크립트 없앰 | `docs/opencode/실기테스트.md` |
-| 2026-11-12 | 배포는 `C:\AIKIT` 한 폴더, 이 폴더가 OpenCode 설정 폴더. rg.exe 없이 (grep·glob 끔) | `AGENTS.md` 폴더 구조, `AIKIT/opencode.json` |
+| 2026-11-13 | 배포는 `C:\AIKIT` 한 폴더, 이 폴더는 OpenCode 프로젝트 (우리 지침·스킬·도구는 `C:\AIKIT`을 프로젝트로 열 때만, 스킬은 `.opencode\skills`). 사내 LLM 설정과 셸·권한·폐쇄망 잠금은 사용자 전역 설정(모든 프로젝트, setup이 합침). rg.exe 없이 (grep·glob 끔) | `AGENTS.md` 폴더 구조, `AIKIT/AGENTS.md` 9장, `AIKIT/setup.py` |
+| 2026-11-12 | `C:\AIKIT`이 OpenCode 전역 설정 폴더(`OPENCODE_CONFIG_DIR`) (폐기: 2026-11-13, 다른 프로젝트 대화에도 우리 스킬이 보여 사용자 결정으로 프로젝트 전용으로 바꿈) | - |
 | 2026-11-12 | 사내 LLM에 유지보수를 넘기는 계획 (폐기: 2026-11-12, 사용자 결정) | - |
 | 2026-11-13 | BOM 비교 조합 스킬(맞대기 스크립트 -> 사내 LLM이 만드는 가이드) (폐기: 2026-11-13, 사용자 결정) | - |
 | 2026-11-11 | 기본 스킬 이름은 `<앱>-kit`, 스킬 하나 8KB, 스킬 만들기 도구는 두지 않음(OpenCode 기본 기능) | `AGENTS.md` 폴더 구조 |
