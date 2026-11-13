@@ -533,3 +533,59 @@ def test_mbom_samples_are_made_and_read(env):
     assert v2["count"] == 109
     bolts = ok(env, "select", "--from", "v1", "--where", "Part Number=000125")
     assert bolts["count"] == 10
+
+
+# ---------------------------------------------------------------------------
+# MBOM 두 판으로 써 보며 찾은 '결과가 틀리는데 알리지 않음' (2026-11-14, 개선점_MBOM.md E)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mbom(env):
+    import subprocess
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "make_mbom_samples.py")
+    out_dir = env["dir"] / "mbom"
+    p = subprocess.run([sys.executable, script, "--out", str(out_dir)], capture_output=True, text=True, encoding="utf-8")
+    assert p.returncode == 0, p.stderr
+    v1 = ok(env, "select", "--file", str(out_dir / "MBOM_DR200.xlsx"), "--name", "v1")
+    ok(env, "select", "--file", str(out_dir / "MBOM_DR200_v2.xlsx"), "--name", "v2")
+    ok(env, "select", "--file", str(out_dir / "MBOM_DR200.xlsx"), "--sheet", "Routing", "--name", "rt")
+    return {"dir": out_dir, "v1": v1}
+
+
+def test_mbom_title_rows_counted_and_number_written_differently_is_warned(env, mbom):
+    assert any("표 위의 다른 내용 4행(엑셀 행 1~4)" in w for w in mbom["v1"]["warnings"])     # 한 칸짜리 제목 줄도 셈
+    out = ok(env, "select", "--from", "v1", "--where", "Part Number=125")
+    assert out["count"] == 0 and any("적힌 값: 000125" in w and "Part Number=000125" in w for w in out["warnings"])
+    out = ok(env, "select", "--from", "v1", "--where", "Op No=10")
+    assert out["count"] == 0 and any("칸 36개" in w and "0010" in w for w in out["warnings"])
+    assert "warnings" not in ok(env, "select", "--from", "v1", "--where", "Part Number=000125")   # 맞게 쓰면 조용함
+
+
+def test_mbom_date_condition_must_be_a_full_date(env, mbom):
+    for bad in ("2026-13", "2026-12", "내년", "2026-02-30"):
+        code, out = run(env, "select", "--from", "v1", "--where", f"Eff From>{bad}")
+        assert code == 1 and "연-월-일" in out["message"], (bad, out)
+    assert ok(env, "select", "--from", "v1", "--where", "Eff From>2026-12-31")["count"] == 1
+
+
+def test_mbom_join_says_unmatched_rows_and_ranks_key_candidates_by_shared_values(env, mbom):
+    code, out = run(env, "join", "--left", "v1", "--right", "rt", "--on", "Part Number")
+    assert code == 1 and "[후보] 1) Item (겹치는 값 6개)" in out["message"]
+    assert command_args(out["confirm_commands"][0]["command"])[-2:] == ["--on", "Part Number=Item"]
+    j = ok(env, "join", "--left", "v1", "--right", "rt", "--on", "Part Number=Item")
+    assert j["count"] == 14 and any("짝이 없어 빠진 행: v1 104행(전체 110행), rt 0행(전체 14행)" in w for w in j["warnings"])
+
+
+def test_mbom_only_and_diff_with_repeated_keys(env, mbom):
+    o = ok(env, "only", "--left", "v1", "--right", "v2", "--on", "Part Number")
+    assert o["count"] == 1 and any("v1에 34개, v2에 34개" in w for w in o["warnings"])
+    code, out = run(env, "diff", "--old", "v1", "--new", "v2", "--on", "Part Number")
+    assert code == 1 and "000125 (엑셀 행 16, 30, 35, 38, 58 등)" in out["message"] and "상위 품번" not in out["message"]
+
+
+def test_mbom_export_keeps_dates_as_dates(env, mbom):
+    out = ok(env, "export", "--from", "v1")
+    ws = openpyxl.load_workbook(out["output_file"]).active
+    head = [c.value for c in ws[1]]
+    cell = ws.cell(row=2, column=head.index("Eff From") + 1)
+    assert cell.number_format == "yyyy-mm-dd" and cell.value.year == 2026
