@@ -23,7 +23,7 @@ metadata:
 | 표 집계 (합계·평균·최소·최대·건수) | `python "C:\AIKIT\office-cli\excel.py" stats --target "<파일.xlsx 또는 .csv>"` (열: `--columns 금액,수량`, 묶음별: `--by 부서`, 조건: `--where "금액 >= 100"`, 합계 상위 N묶음: `--by 부서 --top 5`) |
 | 중복 행 찾기 (읽기만) | `python "C:\AIKIT\office-cli\excel.py" duplicates --target "<파일.xlsx 또는 .csv>"` (비교할 열: `--columns 품번,규격`, 생략하면 모든 열이 같은 행) |
 
-- `.xlsx`, `.xlsm`, `.csv`, `.tsv`를 읽는다. `.xls`는 사용자에게 엑셀에서 `.xlsx`로 저장해 달라고 한다.
+- `.xlsx`, `.xlsm`, `.csv`, `.tsv`를 읽는다. `.xls`는 엑셀로 열어 읽는다. 시트는 사용자가 말했을 때만 `--sheet "<시트>"`를 붙인다.
 - 도구가 정하는 것(사용자가 말하지 않으면 옵션을 붙이지 않는다): 제목 행 아래의 머리글 행, 시트, 숫자 열.
 
 ## 결과 처리

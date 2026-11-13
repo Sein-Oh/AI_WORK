@@ -22,7 +22,7 @@ metadata:
 | 할 일 | 명령 |
 |---|---|
 | 목록 | `python "C:\AIKIT\office-cli\outlook.py" list [--unread] [--with-attachments] [--folder <sent/drafts/"폴더">] [--limit 20]` (기간 `--days 7`(오늘 포함) 또는 `--since 2026-11-01 [--until 2026-11-05]`, 검색도 같음) |
-| 검색 | `python "C:\AIKIT\office-cli\outlook.py" search --query <말> [--from <이름>] [--folder sent] [--where subject]` |
+| 검색 | `python "C:\AIKIT\office-cli\outlook.py" search --query "<말>" [--from "<이름>"] [--folder sent] [--where subject]` |
 | 읽기 | `python "C:\AIKIT\office-cli\outlook.py" read --id 3` / 보고 있는 메일 `python "C:\AIKIT\office-cli\outlook.py" current` |
 | 대화 전체 | `python "C:\AIKIT\office-cli\outlook.py" thread --id 3` |
 | 일정 보기 / 만들기 | `python "C:\AIKIT\office-cli\outlook.py" calendar --days 7` / `python "C:\AIKIT\office-cli\outlook.py" event --subject "<제목>" --start "2026-11-12 14:00" [--minutes 60] [--location "<장소>"]` (종일은 `--start 2026-11-12`, 내 일정에만 저장. 회의 요청은 없음) |
@@ -32,8 +32,8 @@ metadata:
 | 첨부 목록 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id>` |
 | 첨부 저장 | `python "C:\AIKIT\office-cli\outlook.py" attachments --id <id> --save` (`C:\AIKIT\data\메일 첨부` 폴더. 다른 폴더 `--save "<전체경로 폴더>"`, 일부만 `--name <이름일부>` 또는 목록의 번호 `--index 1,3`) |
 | 답장 | `python "C:\AIKIT\office-cli\outlook.py" reply --id 3 --body "<내용>" [--attach "C:\전체경로\파일.pdf"]` (전체 답장 `--all`, 긴 본문 `--body-file "<본문.md>"`) |
-| 새 메일 | `python "C:\AIKIT\office-cli\outlook.py" new --to <주소> --subject "<제목>" --body "<내용>" [--cc <주소>] [--attach "<전체경로>"]` |
-| 전달 | `python "C:\AIKIT\office-cli\outlook.py" forward --id 3 --to <주소> [--attach "<전체경로>"]` |
+| 새 메일 | `python "C:\AIKIT\office-cli\outlook.py" new --to "<주소>" --subject "<제목>" --body "<내용>" [--cc "<주소>"] [--attach "<전체경로>"]` |
+| 전달 | `python "C:\AIKIT\office-cli\outlook.py" forward --id 3 --to "<주소>" [--attach "<전체경로>"]` |
 | eml 폴더 검색 (Outlook 없이) | `python "C:\AIKIT\office-cli\reader.py" search --query "<말>" --file "<eml 폴더>"` (`;` 그리고, `|` 또는. 처음은 등록이라 오래 걸림, `CONTINUE`면 같은 명령) |
 | 초안 보내기 | `python "C:\AIKIT\office-cli\outlook.py" send --id <draft_id>` (new·reply·forward 결과의 `confirm_commands[0]`, 사용자 "예" 뒤에만) |
 

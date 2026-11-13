@@ -33,6 +33,15 @@
 - 집 PC 유료 Gemma 4 26B 재채점 (A1·R1·O9·O1): 통과 3 (A1·O9·O1, 이모지 경고), R1은 도구 preview의 "모델과 같은 계산"을 답에서 뺌
   (16:47 실행에서는 같은 뜻을 써서 통과: 그때그때 답이 달라짐, 고치지 않음).
 
+### 지침·스킬 전체 검토 (2026-11-13)
+- `excel.py export`·`save`, `word.py export`, `ppt.py export`의 `--save`가 값 없이 오면 인자 오류였음 (스킬은 "경로를 안 줬으면 `--save`만").
+  이제 값 없는 `--save`는 생략과 같음 (사용법 단순성 4번: 같은 옵션은 어느 명령에서나 같은 규칙). 시험은 세 도구의 `--save`가 모두 값 없이도 받는지 봄.
+- 전역 지침: 3장 5번 먼저 묻는 경우 목록(모르는 값, 8장 가의 일 포함), 6번 `next_commands`는 요청한 일이 남았을 때만, 넣으라고 한 변경의
+  `confirm_commands`는 다시 묻지 않음(단 `destructive`와 5장의 일은 늘 물음), 같은 명령 1번의 예외(`CONTINUE:`), `.py` 실행 예외(8장 스크립트),
+  8장 셋(가·나·다)과 스크립트 3번까지, 조합 스킬의 파일 경로 옵션(`--target`/`--file`), 4장의 스킬과 겹치던 줄(시트 보호, 메일 id) 정리.
+- 스킬: 판정·검토 의견 넣기를 excel-kit·excel-format-kit·word-kit·search-kit에 같은 문장으로 (전역 지침 3장 5번). excel-kit `read --sheet`,
+  stats-kit `.xls`는 엑셀로 읽음과 `--sheet`, search-kit 검색 `[--save]`, excel-format-kit `clear`는 먼저 `--dry-run`, 바꾸기·메일 값에 큰따옴표, word-kit 한 줄 예시.
+
 ### 회사 PC Gemma·BEAM 시험(2026-11-13) 뒤 고친 것
 - 오후 시험(새 구조) 뒤: `reader.py read --search "<글>"`(또는 `--query`)에 옵션 목록만 주던 것을 `reader.py search --query`의 전체 명령 `[추천]`으로
   (읽기만 하는 명령, read에만 있는 옵션은 뺌, Gemma O7). `excel.py comment --cells`에 칸마다 다른 메모는 CSV `--file`, 한 칸은 `--range`/`--text`라는

@@ -24,15 +24,15 @@ metadata:
 |---|---|
 | 워드 읽기 | `python "C:\AIKIT\office-cli\word.py" read [--save]` / 장절 `--section "1.1"`(하위 절 포함) / `--pages 3-5` / `--paragraphs 120-140` |
 | 워드 목차(장절 목록) | `python "C:\AIKIT\office-cli\word.py" outline` |
-| 워드 쓰기 | `python "C:\AIKIT\office-cli\word.py" write --file "<내용.md>"` / 한 줄 `--text "## 제목\n- 항목"` / 그림 `--image "<그림.png>"` (위치 `--anchor <글> --pos after`, 여러 곳이면 `--occurrence N`, 표·요약 상자 색 `--theme <navy/slate/teal/emerald>`) |
+| 워드 쓰기 | `python "C:\AIKIT\office-cli\word.py" write --file "<내용.md>"` / 한 줄 `--text "<한 줄 글>"` / 그림 `--image "<그림.png>"` (위치 `--anchor <글> --pos after`, 여러 곳이면 `--occurrence N`, 표·요약 상자 색 `--theme <navy/slate/teal/emerald>`) |
 | 워드 쪽 나누기 / 목차 / 요약 상자 | `python "C:\AIKIT\office-cli\word.py" write --page-break` / `--toc` / `--text "<요약>" --callout` |
 | 워드 양식 채우기 | `python "C:\AIKIT\office-cli\word.py" fill --target "<양식.docx>" --slots "<자리>=<값>; <자리>=<값>" --dry-run` (자리: `{{업체명}}`이면 `업체명`, 표 칸 `표2!R3C4`. 미리보기의 `[행, 열]` 글 확인 뒤 `confirm_commands[0]`. 값이 있는 칸은 원할 때만 `--overwrite`) |
-| 워드 검토 메모 | 목록 `python "C:\AIKIT\office-cli\word.py" comment` / 넣기 `python "C:\AIKIT\office-cli\word.py" comment --action add --anchor "<문서의 글>" --text "<메모>"` (여러 개 `--file "<메모.csv>"`, 열: 기준 글, 메모 내용) / 답글 `--action reply --no 2 --text "<답>"` / 지우기 `--action delete --no 2 --dry-run` |
+| 워드 검토 메모 | 목록 `python "C:\AIKIT\office-cli\word.py" comment` / 넣기 `python "C:\AIKIT\office-cli\word.py" comment --action add --anchor "<문서의 글>" --text "<메모>"` (여러 개 `--file "<메모.csv>"`, 열: 기준 글, 메모 내용. 판정·검토 의견은 사용자가 이번 요청에서 넣으라고 했으면 바로 넣고 판정·근거와 되돌리는 법(되돌리기 줄의 명령)을 알린다, 아니면 넣기 전에 보여 주고 "예"를 받는다 (전역 지침 3장 5번)) / 답글 `--action reply --no 2 --text "<답>"` / 지우기 `--action delete --no 2 --dry-run` |
 | 워드 단락 지우기 | `python "C:\AIKIT\office-cli\word.py" delete --paragraphs 12-14 --dry-run` (번호는 `read`의 `no`, 확인 뒤 `confirm_commands[0]`) |
 | 워드 표 행 | `python "C:\AIKIT\office-cli\word.py" table --table 1 --action add-row [--row 3] --values "칸; 칸"` / 지우기 `--action delete-row --row 3 --dry-run` |
 | 워드 단락 서식 | `python "C:\AIKIT\office-cli\word.py" format --paragraphs 3-5 --align center --size 14 --bold` (`--align <left/center/right/justify>`, `--font "맑은 고딕"`, `--italic`, `--style "제목 1"`. 번호는 `read`의 `no`) |
 | 워드 변경 추적 | `python "C:\AIKIT\office-cli\word.py" revisions` |
-| 워드 바꾸기 | `python "C:\AIKIT\office-cli\word.py" replace --find <A> --replace <B> [--bold]` / 형광펜만 `--find <A> --highlight yellow` (대소문자 구분 `--match-case`, 단어 전체만 `--whole-word`, 여러 쌍 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 글자 `--color red --italic --size 12`) |
+| 워드 바꾸기 | `python "C:\AIKIT\office-cli\word.py" replace --find "<A>" --replace "<B>" [--bold]` / 형광펜만 `--find "<A>" --highlight yellow` (대소문자 구분 `--match-case`, 단어 전체만 `--whole-word`, 여러 쌍 `--map "<바꿀말.json>"`(`{"초안":"최종"}`), 글자 `--color red --italic --size 12`) |
 | 워드 머리글·바닥글 | 읽기 `python "C:\AIKIT\office-cli\word.py" header` / 쓰기 `python "C:\AIKIT\office-cli\word.py" header --kind <header/footer> --text "<글>"` (구역 `--section 2`, 글이 있으면 `[후보]` 확인 뒤 `confirm_commands[0]`) |
 | 워드 링크·책갈피 | 목록 `python "C:\AIKIT\office-cli\word.py" link` / 달기 `python "C:\AIKIT\office-cli\word.py" link --anchor "<문서의 글>" --address "<파일 경로 또는 주소>"` (문서 안 곳은 `--address "#<책갈피>"`) / 책갈피 `python "C:\AIKIT\office-cli\word.py" bookmark [--name <이름> --anchor "<글>"]` |
 | 워드 정보 / PDF | `python "C:\AIKIT\office-cli\word.py" info [--detail]` / `python "C:\AIKIT\office-cli\word.py" export --save "<보고서.pdf>" [--page-number]` |

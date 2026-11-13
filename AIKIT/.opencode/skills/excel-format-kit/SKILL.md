@@ -23,7 +23,7 @@ metadata:
 |---|---|
 | 차트 | `python "C:\AIKIT\office-cli\excel.py" chart --range A1:B101 --type line --title "<제목>"` (`--type <column/bar/line/line_markers/pie/scatter/scatter_lines/area/combo>`, 값 표시 `--labels`, 범례 `--legend <bottom/right/top/left/none>`, 자리 `--at F2`, 크기 `--width 400 --height 250`, 목록 `--action list`, 지우기 `--action delete --name <제목>`) |
 | 서식 | `python "C:\AIKIT\office-cli\excel.py" style --range A1:E10 --theme navy` (`--no-zebra` / `--bg yellow --bold --italic --color red` / `--highlight ">=100:pink"` / `--number-format "#,##0" --align center --border thin --wrap` / 서식 지우기 `--clear`). 떨어진 칸은 `--range "B2;D5"`, 칸이 많으면 `--file "<칸목록.csv>"`(줄마다 첫 칸이 B5) |
-| 범위 작업 | `python "C:\AIKIT\office-cli\excel.py" range --action <freeze/unfreeze/hide/unhide/width/height/autofit/clear/copy/move/merge/unmerge> --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`) |
+| 범위 작업 | `python "C:\AIKIT\office-cli\excel.py" range --action <freeze/unfreeze/hide/unhide/width/height/autofit/clear/copy/move/merge/unmerge> --range A1:D10 [--dest B2] [--size 20]` (외곽선만 `--action border --box --weight medium`. `clear`는 값을 지우니 먼저 `--dry-run`) |
 | 행·열 넣기·지우기 | `python "C:\AIKIT\office-cli\excel.py" range --action <insert/delete> --range 5:7` (열은 `--range B:C`. 지울 때 먼저 `--dry-run`: 지워질 값과 `#REF!`가 될 수식 칸) |
 | 수식을 값으로 | `python "C:\AIKIT\office-cli\excel.py" range --action values --range A1:D20 --dry-run` (확인 뒤 `confirm_commands[0]`) |
 | 정렬 | `python "C:\AIKIT\office-cli\excel.py" range --action sort --range A1:E100 --by "금액" [--desc]` (여러 기준 `--by "부서,금액"`, 일부만 내림차순 `--desc "금액"`) |
@@ -36,6 +36,6 @@ metadata:
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
 - `needs_user_decision`(없는 시트, 지워질 값, 덮어쓸 칸)은 전역 지침 4장대로 사용자에게 묻고 원할 때만 1번 실행한다.
 - `sheet_protected`이면 보호를 풀거나 암호를 묻지 않는다. 사용자가 [편집 사용]을 눌렀거나 풀었다고 하면 같은 명령 1번, `[후보]` 칸을 고르면 그 칸으로.
-- 시트·행·열 삭제, `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 새 파일 경로는 지어 붙이지 않는다 (사용자가 준 경로만, 안 줬으면 `--save`만: 도구가 대상 파일 옆에 저장). 같은 이름이 있으면 새 이름으로 저장되니 `output_file`·`recovered`를 알린다.
+- 시트·행·열 삭제, `--new-sheet`, `--overwrite`는 사용자가 요청했을 때만. 판정(맞다·틀리다)을 색·굵게로 표시하는 일도 판정·검토 의견은 사용자가 이번 요청에서 넣으라고 했으면 바로 넣고 판정·근거와 되돌리는 법(되돌리기 줄의 명령)을 알린다, 아니면 넣기 전에 보여 주고 "예"를 받는다 (전역 지침 3장 5번).
 - 잘못 고쳤으면 `undo`로 되돌린다.
 - `error_type: not_supported`(도구로 하지 않는 일)면 다시 실행하거나 파이썬으로 대신하지 않고 message의 방법을 사용자에게 알린다.

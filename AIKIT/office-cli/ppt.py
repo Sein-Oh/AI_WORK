@@ -1714,7 +1714,7 @@ def build_cli():
 
     p = sub.add_parser("export", help="PDF/PPTX 사본 저장")
     common(p)
-    p.add_argument("--save", help="저장 경로 (.pdf 또는 .pptx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
+    p.add_argument("--save", nargs="?", const=None, help="저장 경로 (.pdf 또는 .pptx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
 
     p = sub.add_parser("notes", help="발표자 노트 읽기 (--text/--file이 있으면 --slide의 노트 쓰기)")
     common(p, write=True)

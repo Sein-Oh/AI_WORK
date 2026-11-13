@@ -5421,7 +5421,7 @@ def build_cli():
 
     p = sub.add_parser("save", help="열린 통합문서 저장 (--save <경로>면 다른 이름으로 저장)")
     p.add_argument("--target", default="active", help="active(기본) | 열린 통합문서 이름")
-    p.add_argument("--save", help="다른 이름으로 저장할 전체 경로 (.xlsx/.xlsm)")
+    p.add_argument("--save", nargs="?", const=None, help="다른 이름으로 저장할 전체 경로 (.xlsx/.xlsm, 값 없이 주면 생략과 같음: 그 자리에 저장)")
     p.add_argument("--overwrite", action="store_true", help="같은 이름 파일이 있어도 저장 (사용자가 원할 때만)")
 
     p = sub.add_parser("duplicates", help="중복 행 찾기 (읽기만): --columns 값이 같은 행 묶음과 엑셀 행 번호")
@@ -5474,7 +5474,7 @@ def build_cli():
 
     p = sub.add_parser("export", help="CSV/XLSX/PDF로 저장")
     common(p)
-    p.add_argument("--save", help="저장 경로 (.csv/.xlsx/.pdf, 생략 시 대상 파일 옆에 CSV, 없으면 C:\\AIKIT\\data)")
+    p.add_argument("--save", nargs="?", const=None, help="저장 경로 (.csv/.xlsx/.pdf, 생략 시 대상 파일 옆에 CSV, 없으면 C:\\AIKIT\\data)")
     p.add_argument("--range", help="범위 (생략 시 사용 범위)")
     p.add_argument("--columns", help="CSV로 뽑을 열만 (예: A,C,E)")
     p.add_argument("--encoding", default="utf-8-sig", choices=["utf-8-sig", "cp949", "utf-8"], help="CSV 인코딩")
