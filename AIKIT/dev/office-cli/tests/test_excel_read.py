@@ -16,7 +16,7 @@ import office
 import reader
 from fake_excel import FakeExcelWorkbook, FakeRange, FakeXlApp
 from fake_office import make_win32com
-from office_helpers import option_value, recommended_argv, split_command, error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, ws_of
+from office_helpers import option_value, recommended_argv, split_command, error_log_text, formula_xlsx, run_excel, run_main, set_cached_value, TABLE, TOOL_DIR, ws_of
 
 
 def _strip_dimension(src, dst):
@@ -1610,3 +1610,16 @@ def test_stats_and_duplicates_find_header_below_title(tmp_path, capsys):
     assert code == 0 and out["header_row_found"] == 3 and out["groups"][0]["stats"]["수량"]["sum"] == 9, out
     code, out = run_excel(capsys, "stats", "--target", p, "--by", "품번", "--columns", "수량")
     assert code == 0 and {g["by"]["품번"]: g["stats"]["수량"]["sum"] for g in out["groups"]} == {"P-1": 6, "P-2": 3}, out
+
+
+def test_save_without_value_is_the_same_as_omitted(tmp_path, capsys):
+    """2026-11-13 스킬 검토: 스킬은 "경로를 안 줬으면 --save만"인데 export·save의 --save는 값이 꼭 있어야 해 인자 오류(exit 2)였음.
+    같은 옵션은 어느 명령에서나 같은 규칙 (사용법 단순성 4번): excel·word·ppt의 --save는 모두 값 없이도 받음."""
+    p = formula_xlsx(tmp_path / "f.xlsx", cached=True)
+    code, out = run_main(excel, capsys, "export", "--target", p, "--save")
+    assert code == 0 and os.path.dirname(out["output_file"]) == str(tmp_path), out
+    for tool in ("excel", "word", "ppt"):
+        with open(os.path.join(TOOL_DIR, f"{tool}.py"), encoding="utf-8") as f:
+            src = f.read()
+        bad = [line.strip() for line in src.splitlines() if 'add_argument("--save"' in line and 'nargs="?"' not in line]
+        assert not bad, (tool, bad)

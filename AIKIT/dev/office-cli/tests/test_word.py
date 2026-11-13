@@ -1549,8 +1549,10 @@ def test_header_footer_read_and_write(wd, capsys):
     assert code == 0 and out["count"] == 2 and kinds[("바닥글", "첫 쪽")] == "표지 바닥글" and kinds[("머리글", "기본")].endswith("Rev.B"), out
     code, out = run_word(capsys, "header", "--text", "x")
     assert code == 1 and "--kind" in out["message"], out
-    code, out = run_word(capsys, "header", "--section", "3")
+    code, out = run_word(capsys, "header", "--part", "3")
     assert code == 1 and "1~1" in out["message"], out
+    code, out = run_word(capsys, "header", "--section", "1")          # 2026-11-13: 구역 번호는 --part (read --section은 장절 제목)
+    assert code == 2 and "--part" in recommended_argv(out["message"], "word"), out
 
 
 def test_link_and_bookmark(wd, capsys):

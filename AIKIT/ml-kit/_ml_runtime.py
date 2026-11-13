@@ -1039,6 +1039,7 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--version-dir": ["--model"], "--model-folder": ["--model"],
     "--input-file": ["--file"], "--data": ["--file"], "--data-file": ["--file"], "--path": ["--file"],
     "--input": ["--file", "--inputs"], "--inputs": ["--input"], "--query": ["--input"],
+    "--file": ["--model"],       # ml_report.py가 데이터 파일을 --model로 받게 맞춤 (2026-11-13): 옛 --file은 [추천]
     "--points": ["--file"],      # ml_map의 조회 파일 옵션을 예측에 쓴 것 (회사 PC 2026-11-11 Gemma P2): 예측의 파일은 --file
     "--target": ["--targets"], "--target-col": ["--targets"], "--target-cols": ["--targets"],
     "--target-column": ["--targets"], "--y": ["--targets"],
@@ -4615,11 +4616,36 @@ def apply_inference_evals(df: pd.DataFrame, eval_expressions: List[str]) -> pd.D
 # 4. Target Model Resolution (Directory Mode vs Specific File Mode)
 # ==============================================================================
 
-# The final version is the version of the latest training run (any task): ml_report.py --file, ml_export.py and
+# The final version is the version of the latest training run (any task): ml_report.py --model, ml_export.py and
 # ml_predict.py --model <data file> use it, so a column or target left out of the last training never comes back
 # (2.9.83; until 2.9.82 a best version gathered the best recipe of every target in the history).
 LEDGER_NAME = "history.jsonl"
 DATA_EXTS = (".xlsx", ".xls", ".xlsm", ".csv")
+
+def dtypes_cli(canonical: Any) -> str:
+    """학습 기록의 dtypes('열:형식,...', 내부 모양)를 --dtypes 옵션 모양('열=형식,...', 2026-11-13)으로. 기록에서 명령을 다시 만들 때."""
+    return ",".join(p.replace(":", "=", 1) if "=" not in p else p for p in (x.strip() for x in str(canonical or "").split(",")) if p)
+
+
+LAYOUT_OPTIONS = ("--header-row", "--unit-row", "--data-row")
+
+
+def add_layout_options_ignored(parser: Any) -> None:
+    """ml_report·ml_export: 데이터 행 옵션(--header-row 등)을 받고 쓰지 않음 (학습 때 정한 값을 그대로 씀). 사용법 단순성 4번: ml-kit 스킬의
+    공통 규칙이 '머리글이 1행이 아니면 --header-row'라 다섯 스킬 어디서 붙여도 인자 오류가 나지 않게 (2026-11-13 스킬 검토)."""
+    for opt in LAYOUT_OPTIONS:
+        parser.add_argument(opt, type=int, help="받고 쓰지 않음: 학습 때 정한 행을 그대로 씀")
+
+
+def note_layout_ignored(result: Dict[str, Any], args: Any) -> Dict[str, Any]:
+    """add_layout_options_ignored로 받은 옵션이 있었으면 warnings에 알림."""
+    given = [o for o in LAYOUT_OPTIONS if getattr(args, o[2:].replace("-", "_"), None) is not None]
+    if given and isinstance(result, dict) and result.get("status") == "ok":
+        result["warnings"] = list(result.get("warnings", [])) + [
+            f"{', '.join(given)}은(는) 쓰지 않았습니다: 보고서와 성능예측표는 학습 때 정한 머리글·단위·데이터 행을 그대로 씁니다"]
+        if "warnings" not in str(result.get("agent_directive", "")):
+            result["agent_directive"] = str(result.get("agent_directive", "")) + " warnings도 그대로 알리세요."
+    return result
 MODEL_CHOSEN: List[str] = []
 
 

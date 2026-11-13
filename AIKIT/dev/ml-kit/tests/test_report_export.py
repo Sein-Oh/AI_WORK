@@ -133,7 +133,10 @@ def test_classification_report(binary_report):
 def test_report_rejects_non_version_folder(regression_report, tmp_path):
     work, _, _, _ = regression_report
     payload = run_fail("ml_report.py", "--model", str(work))
-    assert payload["agent_directive"].startswith("STOP_RETRY") and "leaderboard.json" in payload["message"]
+    # 2026-11-13: --model이 ml_predict·ml_export와 같은 해석 (데이터 폴더를 주면 그 안의 학습한 데이터 파일을 [추천])
+    assert payload["agent_directive"].startswith("STOP_RETRY") and "[추천]" in payload["message"], payload
+    script, argv = recommended_command(payload["message"])
+    assert script == "ml_report.py" and argv[0] == "--model" and argv[1].endswith(".csv"), argv
     missing = run_fail("ml_report.py", "--model", str(tmp_path / "nope"))
     assert "버전 폴더" in missing["message"]
 
@@ -242,13 +245,20 @@ def test_report_file_uses_final_version(tmp_path):
     df = pd.concat([df, df.iloc[:4]], ignore_index=True)                       # 4 duplicate rows
     data = write_df(tmp_path / "multi.csv", df)
     tr = run_tool("ml_train.py", "--file", data, "--features", "a,b", "--targets", "y1,y2")
-    rep = run_tool("ml_report.py", "--file", data)
+    rep = run_tool("ml_report.py", "--model", data)
     assert rep["version"] == tr["version"] == "v1" and rep["targets"] == ["y1", "y2"]
     assert not os.path.isdir(os.path.join(tr["data_root"], "v2")) and "warnings" not in rep
     for gone in ("best_version", "made_best", "best_versions", "best_targets", "best_reports"):
         assert gone not in rep, gone
     text = "\n".join(p.text for p in docx.Document(rep["report_file"]).paragraphs)
     assert "중복 행 4개" in text                                                 # 2.9.13: not in the report
+    # 2026-11-13 스킬 검토: 데이터 파일은 ml_predict·ml_export처럼 --model 한 가지. 옛 --file은 [추천] --model,
+    # ml-kit 공통 규칙의 --header-row 등은 받고 쓰지 않음 (warnings)
+    fail = run_fail("ml_report.py", "--file", data)
+    script, argv = recommended_command(fail["message"])
+    assert script == "ml_report.py" and argv[:2] == ["--model", data], argv
+    again = run_tool("ml_report.py", "--model", data, "--header-row", "1", "--save", str(tmp_path / "r2.docx"))
+    assert any("--header-row" in w and "학습 때 정한" in w for w in again["warnings"]), again
 
 
 def _three_target_data(tmp_path):
@@ -268,7 +278,7 @@ def test_report_file_uses_latest_run_and_warns_targets_left_out(tmp_path):
     data = _three_target_data(tmp_path)
     run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B,S")
     run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B")
-    rep = run_tool("ml_report.py", "--file", data)
+    rep = run_tool("ml_report.py", "--model", data)
     assert rep["version"] == "v2" and rep["targets"] == ["A", "B"], rep
     gone = [w for w in rep["warnings"] if "S" in w and "v2" in w and "다시 학습" in w]
     assert len(gone) == 1, rep["warnings"]
@@ -277,7 +287,7 @@ def test_report_file_uses_latest_run_and_warns_targets_left_out(tmp_path):
     assert "4.1. A" in heads and "4.2. B" in heads and not any(h.endswith(". S") for h in heads)
     assert not os.path.isdir(tmp_path / "hist_ml_data" / "v3")                 # 다시 학습하지 않음
     # 타겟을 골라 만들면(--targets) 이력 안내는 없음
-    only = run_tool("ml_report.py", "--file", data, "--targets", "A", "--save", str(tmp_path / "a.docx"))
+    only = run_tool("ml_report.py", "--model", data, "--targets", "A", "--save", str(tmp_path / "a.docx"))
     assert only["version"] == "v2" and only["targets"] == ["A"] and "warnings" not in only
 
 
@@ -290,7 +300,7 @@ def test_report_file_warns_about_an_earlier_version_with_a_higher_score(tmp_path
     v2 = run_tool("ml_train.py", "--file", data, "--features", "a,b,c", "--targets", "A,B")
     v3 = run_tool("ml_train.py", "--file", data, "--features", "c", "--targets", "A,B")          # 나쁜 입력: 점수가 낮음
     assert v2["mean_val_score"] > v3["mean_val_score"]
-    rep = run_tool("ml_report.py", "--file", data, "--save", str(tmp_path / "r3.docx"))
+    rep = run_tool("ml_report.py", "--model", data, "--save", str(tmp_path / "r3.docx"))
     assert rep["version"] == "v3", rep
     better = [w for w in rep["warnings"] if "점수가 더 높았습니다" in w]
     assert len(better) == 1 and "v2" in better[0] and "v1" not in better[0], rep["warnings"]
@@ -1255,7 +1265,7 @@ def test_other_task_target_gets_the_report_command_of_its_version(tmp_path):
     path = _calc_data(tmp_path)
     v1 = run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "등급", "--task", "classification")
     run_tool("ml_train.py", "--file", str(path), "--features", "온도,압력", "--targets", "효율")
-    rep = run_tool("ml_report.py", "--file", str(path))
+    rep = run_tool("ml_report.py", "--model", str(path))
     w = [x for x in rep["warnings"] if "등급" in x]
     assert len(w) == 1 and "다시 학습" not in w[0], rep["warnings"]
     argv = split_command(w[0].split("만들려면: ", 1)[1])

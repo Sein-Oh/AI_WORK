@@ -881,9 +881,13 @@ SAME_MEANING = [
     ("excel", "write", "--text", ["--value"]), ("excel", "read", "--text", ["--search"]),
     ("word", "write", "--append", ["--pos", "end"]), ("word", "write", "--position", ["--pos"]), ("word", "write", "--at", ["--pos"]),
     ("outlook", "*", "--text", ["--body"]), ("outlook", "*", "--max", ["--limit"]),
+    ("outlook", "search", "--where", ["--in"]),     # 검색 범위 (2026-11-13: 엑셀 --where 행 조건과 뜻이 달라 이름을 바꿈)
     # 옵션 하나 = 뜻 하나 (사용법 단순성 4번): --to·--from은 outlook의 받는 사람·보낸 사람만. 앱은 --to-app·--from-app, 위치는 --dest
     ("office", "transfer", "--to", ["--to-app"]), ("office", "transfer", "--from", ["--from-app"]),
     ("ppt", "slide", "--to", ["--dest"]),
+    ("ppt", "notes", "--slides", ["--slide"]),       # notes는 읽기·쓰기 모두 --slide (2026-11-13)
+    ("word", "header", "--section", ["--part"]),      # 머리글의 구역 번호 (read --section은 장절 제목, 2026-11-13)
+    ("reader", "index", "--folder", ["--file"]),     # 등록할 폴더도 --file (search --file과 같음, 2026-11-13)
     ("*", "*", "--json", []), ("*", "*", "--encoding", []),      # 출력은 늘 JSON, 인코딩은 자동 판별
 ]
 # 한 글자 옵션은 없음 (1.4.88, 사용법 단순성 1번: 한 가지 일에 한 가지 사용법). 받지 않고 긴 이름으로 고친 전체 명령을 [추천]

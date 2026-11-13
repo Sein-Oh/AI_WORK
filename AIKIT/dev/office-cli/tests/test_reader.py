@@ -1585,30 +1585,36 @@ def test_parse_pages_huge_range_is_fast():
 # ---------------------------------------------------------------------------
 
 
+def test_index_folder_option_recommends_file(docs, capsys):
+    """2026-11-13: 등록할 폴더도 --file (search --file과 같은 한 가지). 옛 index --folder는 [추천] --file."""
+    code, out = run_main(reader, capsys, "index", "--folder", str(docs))
+    assert code == 2 and recommended_argv(out["message"], "reader")[:3] == ["index", "--file", str(docs)], out
+
+
 def test_index_folder_counts_and_unsupported_skipped(docs):
-    code, out = run_reader("index", "--folder", str(docs))
+    code, out = run_reader("index", "--file", str(docs))
     assert code == 0 and out["status"] == "ok"
     assert (out["count"], out["indexed"], out["updated"], out["unchanged"], out["failed"]) == (3, 3, 0, 0, 0)
     assert out["skipped_types"] == {".msg": 1, ".png": 1} and out["truncated"] is False
-    code, out = run_reader("index", "--folder", str(docs))
+    code, out = run_reader("index", "--file", str(docs))
     assert (out["indexed"], out["unchanged"]) == (0, 3)
     os.utime(docs / "spec.pdf", (1, 1))
-    code, out = run_reader("index", "--folder", str(docs), "--depth", "0")
+    code, out = run_reader("index", "--file", str(docs), "--depth", "0")
     assert (out["count"], out["updated"], out["unchanged"]) == (2, 1, 1)
 
 
 def test_index_max_files_continues(docs):
-    code, out = run_reader("index", "--folder", str(docs), "--max-files", "1")
+    code, out = run_reader("index", "--file", str(docs), "--max-files", "1")
     assert out["indexed"] == 1 and out["remaining"] == 2 and out["truncated"] is True
     assert "--max-files" in out["next_commands"][0]["command"] and "읽기 전용" in out["agent_directive"]
-    code, out = run_reader("index", "--folder", str(docs), "--max-files", "1")
+    code, out = run_reader("index", "--file", str(docs), "--max-files", "1")
     assert out["indexed"] == 1 and out["unchanged"] == 1 and out["remaining"] == 1
 
 
 def test_search_without_file_uses_cache_only(docs):
     code, out = run_reader("search", "--query", "내전압")
     assert code == 1 and out["error_type"] == "not_indexed" and out["agent_directive"].startswith("STOP_RETRY:")
-    run_reader("index", "--folder", str(docs))
+    run_reader("index", "--file", str(docs))
     code, out = run_reader("search", "--query", "내전압")
     assert code == 0 and out["total_matches"] == 2 and "indexed_now" not in out
     hit = [m for m in out["matches"] if m["file"] == "규격.docx"][0]
@@ -1637,11 +1643,11 @@ def test_search_file_auto_caches_then_uses_cache(docs):
 def test_search_folder_respects_max_files(docs):
     code, out = run_reader("search", "--query", "본문", "--file", str(docs), "--max-files", "1")
     assert out["indexed_now_count"] == 1 and out["not_indexed_remaining"] == 2
-    assert any("index" in c["command"] and "--folder" in c["command"] for c in out["next_commands"])
+    assert any("index" in c["command"] and "--file" in c["command"] for c in out["next_commands"])
 
 
 def test_search_pages_and_section_filters(docs):
-    run_reader("index", "--folder", str(docs))
+    run_reader("index", "--file", str(docs))
     code, out = run_reader("search", "--query", "본문", "--file", str(docs / "계획서.pdf"), "--pages", "2")
     assert out["total_matches"] == 2 and all(m["page"] == 2 for m in out["matches"])
     code, out = run_reader("search", "--query", "본문", "--section", "기대 효과")
@@ -1654,7 +1660,7 @@ def test_search_pages_and_section_filters(docs):
 
 def test_search_save_xlsx_columns_and_md_evidence(docs, tmp_path):
     import openpyxl
-    run_reader("index", "--folder", str(docs))
+    run_reader("index", "--file", str(docs))
     out_path = tmp_path / "근거.xlsx"
     code, out = run_reader("search", "--query", "내전압|Purpose", "--save", str(out_path), "--top", "1")
     assert code == 0 and out["output_file"] == str(out_path) and out["saved"] == out["total_matches"] == 4
@@ -1675,7 +1681,7 @@ def test_search_save_xlsx_columns_and_md_evidence(docs, tmp_path):
 
 
 def test_search_truncated_offers_full_save(docs):
-    run_reader("index", "--folder", str(docs))
+    run_reader("index", "--file", str(docs))
     code, out = run_reader("search", "--query", "본문|body", "--top", "1")
     assert out["truncated"] is True and out["shown"] == 1 and out["count"] > 1
     assert "--save" in out["next_commands"][-1]["command"]
@@ -1711,7 +1717,7 @@ def test_stale_cache_is_reread_during_search(tmp_path, isolated_dirs):
 
 
 def test_list_filters_missing_and_zero(docs):
-    run_reader("index", "--folder", str(docs))
+    run_reader("index", "--file", str(docs))
     code, out = run_reader("list", "--folder", str(docs / "sub"))
     assert out["count"] == 1 and out["documents"][0]["file"] == "규격.docx"
     d = out["documents"][0]
@@ -1963,7 +1969,7 @@ def test_concurrent_index_runs_keep_all_entries(tmp_path):
             (d / f"{name}{i}.txt").write_text(f"{name} 문서 {i} 내용", encoding="utf-8")
         folders.append(str(d))
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    procs = [subprocess.Popen([sys.executable, os.path.join(TOOL_DIR, "reader.py"), "index", "--folder", f],
+    procs = [subprocess.Popen([sys.executable, os.path.join(TOOL_DIR, "reader.py"), "index", "--file", f],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env) for f in folders]
     outs = [json.loads(p.communicate(timeout=300)[0].decode("utf-8").strip().splitlines()[-1]) for p in procs]
     assert all(o["status"] == "ok" for o in outs), outs
@@ -1985,7 +1991,7 @@ def test_index_repairs_entries_lost_to_another_run(tmp_path, capsys, monkeypatch
         reader._save_index(index)
         return res
     monkeypatch.setattr(reader, "_index_files", racing)
-    code, out = run_main(reader, capsys, "index", "--folder", str(tmp_path))
+    code, out = run_main(reader, capsys, "index", "--file", str(tmp_path))
     assert code == 0 and out["agent_directive"].startswith("VERIFIED:"), out
     assert any("다시 넣음" in r for r in out["recovered"])
     assert len(_index_json()) == 3
@@ -2097,7 +2103,7 @@ def test_top_and_context_are_clamped(tmp_path, capsys):
 
 def test_transient_index_lock_is_retried_not_emptied(tmp_path, capsys, monkeypatch):
     folder = _docs(tmp_path)
-    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    code, out = run_main(reader, capsys, "index", "--file", str(folder))
     assert code == 0 and len(_index_json()) == 3
     real = reader._read_bytes
     state = {"n": 0}
@@ -2117,7 +2123,7 @@ def test_transient_index_lock_is_retried_not_emptied(tmp_path, capsys, monkeypat
 
 def test_unreadable_index_stops_without_overwriting(tmp_path, capsys, monkeypatch):
     folder = _docs(tmp_path)
-    run_main(reader, capsys, "index", "--folder", str(folder))
+    run_main(reader, capsys, "index", "--file", str(folder))
     before = _index_json()
     real = reader._read_bytes
 
@@ -2138,7 +2144,7 @@ def test_unreadable_index_stops_without_overwriting(tmp_path, capsys, monkeypatc
 
 def test_corrupt_index_is_rebuilt_from_cache(tmp_path, capsys):
     folder = _docs(tmp_path)
-    run_main(reader, capsys, "index", "--folder", str(folder))
+    run_main(reader, capsys, "index", "--file", str(folder))
     with open(reader._index_path(), "w", encoding="utf-8") as f:
         f.write("{깨진 색인")
     code, out = run_main(reader, capsys, "search", "--query", "토크")
@@ -2188,7 +2194,7 @@ def test_undecodable_index_is_rebuilt(tmp_path, capsys):
     folder.mkdir()
     for i in range(2):
         (folder / f"d{i}.txt").write_text(f"문서 {i} 토크", encoding="utf-8")
-    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    code, out = run_main(reader, capsys, "index", "--file", str(folder))
     assert code == 0, out
     with open(reader._index_path(), "wb") as f:
         f.write(b'{"a": \xff\xfe\x80\x80')
@@ -2266,7 +2272,7 @@ def test_reader_clear_applied_only_removed_and_done_csv(tmp_path, capsys, monkey
     n = reader.MAX_LIST_ITEMS + 2
     for i in range(n):
         (docs / f"d{i:02d}.txt").write_text(f"내용 {i}", encoding="utf-8")
-    code, out = run_main(reader, capsys, "index", "--folder", str(docs))
+    code, out = run_main(reader, capsys, "index", "--file", str(docs))
     assert code == 0, out
     stuck = {reader._doc_cache_path(str(docs / "d00.txt")), reader._doc_cache_path(str(docs / "d01.txt"))}
     real_remove = os.remove
@@ -2546,7 +2552,7 @@ def _shell_args(cmd):
 def test_long_registration_continues_with_same_command(tmp_path, capsys, monkeypatch, command):
     folder = _txt_folder(tmp_path)
     monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)      # 첫 파일 뒤로는 늘 시간 초과
-    argv = ["index", "--folder", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
+    argv = ["index", "--file", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
     seen = []
     for _ in range(5):
         code, out = run_main(reader, capsys, *argv)
@@ -2578,7 +2584,7 @@ def test_failing_file_is_remembered_so_continue_ends(tmp_path, capsys, monkeypat
         return orig(path, *a, **k)
     monkeypatch.setattr(reader, "load_document_status", fake)
     monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)      # 첫 파일 뒤로는 늘 시간 초과
-    argv = ["index", "--folder", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
+    argv = ["index", "--file", str(folder)] if command == "index" else ["search", "--query", "정격 전압", "--file", str(folder)]
     seen, progress = [], []
     for _ in range(6):
         code, out = run_main(reader, capsys, *argv)
@@ -2596,7 +2602,7 @@ def test_failing_file_is_remembered_so_continue_ends(tmp_path, capsys, monkeypat
     # 파일이 바뀌면 다시 읽음, 하나만 주면 바로 다시 시도
     (folder / "a_bad.txt").write_text("고친 파일 정격 전압", encoding="utf-8")
     monkeypatch.setattr(reader, "load_document_status", orig)
-    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    code, out = run_main(reader, capsys, "index", "--file", str(folder))
     assert code == 0 and out["failed"] == 0 and out["indexed"] == 1 and not reader.load_failed(), out
 
 
@@ -2611,7 +2617,7 @@ def test_single_file_retries_known_failure(tmp_path, capsys, monkeypatch):
 def test_stale_refresh_failure_is_remembered(tmp_path, capsys, monkeypatch):
     # 회귀: 원본이 바뀐 캐시를 다시 읽다 실패하는 파일을 매 검색마다 다시 읽음
     folder = _txt_folder(tmp_path, 2)
-    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    code, out = run_main(reader, capsys, "index", "--file", str(folder))
     assert code == 0 and out["indexed"] == 2
     for i in range(2):
         p = folder / f"doc{i}.txt"
@@ -2646,7 +2652,7 @@ def test_time_limit_env(monkeypatch):
 def test_continue_is_not_logged(tmp_path, capsys, monkeypatch, isolated_dirs):
     folder = _txt_folder(tmp_path, 2)
     monkeypatch.setattr(rt, "time_limit", lambda: rt.TIME_RESERVE)
-    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    code, out = run_main(reader, capsys, "index", "--file", str(folder))
     assert out.get("continue") is True
     assert not error_log_text(isolated_dirs)
 
@@ -3148,7 +3154,7 @@ def test_search_deleted_source_and_legacy_files_are_not_searched(tmp_path, capsy
     code, out = run_main(reader, capsys, "search", "--query", "없는말", "--file", str(folder))
     assert code == 0 and out["agent_directive"].startswith("UNVERIFIED:"), out
     assert any(".doc 1개" in g for g in out["not_searched"]) and not any(".png" in g for g in out["not_searched"]), out
-    code, out = run_main(reader, capsys, "index", "--folder", str(folder))
+    code, out = run_main(reader, capsys, "index", "--file", str(folder))
     assert code == 0
     os.remove(folder / "b.txt")
     code, out = run_main(reader, capsys, "search", "--query", "정격 전압")
@@ -3198,7 +3204,7 @@ def test_search_finds_sentence_split_across_pages(tmp_path, capsys):
 def test_index_search_template_needs_input(tmp_path, capsys):
     """2026-11-09 검토 B2: index 뒤의 search '<검색어>' 명령은 그대로 실행하면 0건이라 needs_input."""
     (tmp_path / "a.txt").write_text("본문", encoding="utf-8")
-    code, out = run_main(reader, capsys, "index", "--folder", str(tmp_path))
+    code, out = run_main(reader, capsys, "index", "--file", str(tmp_path))
     item = [c for c in out["next_commands"] if "<검색어>" in c["command"]][0]
     assert code == 0 and item["needs_input"] is True, out
 
@@ -3322,7 +3328,7 @@ def test_eml_units_headers_body_attachments_and_forwarded(mails):
 
 
 def test_eml_folder_search_one_result_per_mail_newest_first(mails, capsys):
-    code, out = run_main(reader, capsys, "index", "--folder", str(mails))
+    code, out = run_main(reader, capsys, "index", "--file", str(mails))
     assert code == 0 and out["count"] == 4 and out["indexed"] == 4, out
     code, out = run_main(reader, capsys, "search", "--query", "견적", "--file", str(mails))
     assert code == 0 and out["count"] == 2 and out["agent_directive"].startswith("VERIFIED:"), out

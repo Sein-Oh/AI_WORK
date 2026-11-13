@@ -728,10 +728,16 @@ def test_notes_existing_needs_append_or_overwrite(pp, capsys):
 def test_notes_read_with_slide_and_missing_body(pp, capsys):
     pp["prs"].Slides(1).NotesPage.body.TextFrame.TextRange.Text = "1번 노트"
     pp["prs"].Slides(2).NotesPage.body.TextFrame.TextRange.Text = "2번 노트"
-    code, out = run_ppt(capsys, "notes", "--slide", "2")                # 읽기에서 --slide도 그 슬라이드만
+    code, out = run_ppt(capsys, "notes", "--slide", "2")                # 읽기도 --slide (2026-11-13: notes는 --slide 한 가지)
     assert code == 0 and [n["no"] for n in out["notes"]] == [2]
-    code, out = run_ppt(capsys, "notes", "--slides", "x")
-    assert code == 1 and "--slides 형식" in out["message"]
+    code, out = run_ppt(capsys, "notes", "--slide", "1-2")
+    assert code == 0 and [n["no"] for n in out["notes"]] == [1, 2]
+    code, out = run_ppt(capsys, "notes", "--slide", "x")
+    assert code == 1 and "--slide 형식" in out["message"]
+    code, out = run_ppt(capsys, "notes", "--slides", "2")              # 옛 이름은 [추천] --slide
+    assert code == 2 and "--slide" in recommended_argv(out["message"], "ppt"), out
+    code, out = run_ppt(capsys, "notes", "--slide", "1-2", "--text", "x")   # 쓰기는 번호 하나
+    assert code == 1 and "번호 하나" in out["message"]
     pp["prs"].Slides(3).NotesPage.Shapes.Placeholders.items.pop()   # 노트 본문 개체틀 없음
     code, out = run_ppt(capsys, "notes", "--slide", "3", "--text", "x")
     assert code == 1 and "본문 개체틀" in out["message"]

@@ -1390,6 +1390,9 @@ def cmd_notes(args) -> Dict[str, Any]:
         raise rt.dry_run_unsupported(TOOL, "notes 쓰기")
     if args.slide is None:
         raise rt.InputError("노트를 쓸 슬라이드를 --slide 번호로 지정하세요 (예: --slide 3).")
+    if not str(args.slide).strip().isdigit():
+        raise rt.InputError(f"노트 쓰기의 --slide는 번호 하나입니다 (받은 값 {args.slide}). 슬라이드마다 따로 씁니다.")
+    args.slide = int(str(args.slide).strip())
     if args.file:
         text = rt.read_text_file(rt.resolve_input_path(args.file, "노트 파일")).strip()
     else:
@@ -1455,8 +1458,7 @@ def _notes_read(args) -> Dict[str, Any]:
     with off.open_target("ppt", args.target, readonly=True) as t:
         prs = t.doc
         total = int(prs.Slides.Count)
-        spec = args.slides or (str(args.slide) if args.slide else None)      # 읽기에서 --slide 3도 그 슬라이드만
-        numbers = reader.parse_pages(spec, total, "--slides") if total else []
+        numbers = reader.parse_pages(args.slide, total, "--slide") if total else []   # 읽기와 쓰기 모두 --slide (2026-11-13)
         items = []
         for n in numbers:
             slide = prs.Slides(n)
@@ -1465,7 +1467,7 @@ def _notes_read(args) -> Dict[str, Any]:
                 items.append({"no": n, "title": _slide_title(slide)[:60], "notes": note})
         resolved = t.resolved()
     result: Dict[str, Any] = {"target_resolved": resolved, "slides_total": total, "count": len(items)}
-    what = f"슬라이드 {spec}" if spec else "전체 슬라이드"
+    what = f"슬라이드 {args.slide}" if args.slide else "전체 슬라이드"
     if not items:
         result.update(notes=[], truncated=False)
         return rt.ok(TOOL, "notes", f"{resolved['name']}: {what}에 노트 없음 (count 0)",
@@ -1491,7 +1493,7 @@ def _notes_read(args) -> Dict[str, Any]:
                                       "전체는 PowerPoint에서 직접 확인")
     if len(shown) < len(items):
         rest = ",".join(str(it["no"]) for it in items[len(shown):])      # 고른 슬라이드 중 남은 것만
-        result["next_commands"] = [rt.next_command("ppt.py", ["notes", "--target", args.target, "--slides", rest],
+        result["next_commands"] = [rt.next_command("ppt.py", ["notes", "--target", args.target, "--slide", rest],
                                                    "나머지 노트 이어서 읽기")]
     directive = ""
     if len(shown) < len(items):
@@ -1714,12 +1716,11 @@ def build_cli():
 
     p = sub.add_parser("export", help="PDF/PPTX 사본 저장")
     common(p)
-    p.add_argument("--save", help="저장 경로 (.pdf 또는 .pptx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
+    p.add_argument("--save", nargs="?", const=None, help="저장 경로 (.pdf 또는 .pptx, 생략 시 대상 파일 옆에 PDF, 없으면 C:\\AIKIT\\data)")
 
     p = sub.add_parser("notes", help="발표자 노트 읽기 (--text/--file이 있으면 --slide의 노트 쓰기)")
     common(p, write=True)
-    p.add_argument("--slides", help="읽을 슬라이드 번호 (예: 3, 1-3, 1,4). 생략 시 전체")
-    p.add_argument("--slide", type=int, help="노트를 쓸 슬라이드 번호")
+    p.add_argument("--slide", help="슬라이드 번호. 읽기는 3, 1-3, 1,4 (생략 시 전체), 쓰기는 번호 하나")
     p.add_argument("--text", help="쓸 노트 내용 (기존 노트를 바꿈). 줄바꿈은 \\n")
     p.add_argument("--file", help="쓸 노트 내용 파일 (.txt/.md)")
     p.add_argument("--append", action="store_true", help="기존 노트 뒤에 덧붙이기")

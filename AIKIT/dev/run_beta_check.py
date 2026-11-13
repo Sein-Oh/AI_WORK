@@ -211,7 +211,7 @@ def group_e(work, st):
 
 def group_f(work, st):
     data = os.path.join(work, "공정_다중출력.xlsx")
-    code, p, err, _ = run("ml_report.py", "--file", data, "--title", "반응 공정 성능 예측", cwd=work, timeout=3600)
+    code, p, err, _ = run("ml_report.py", "--model", data, "--title", "반응 공정 성능 예측", cwd=work, timeout=3600)
     st["report"] = p or {}
     safe("F", "F1", "보고서 + 성능예측표 생성", lambda: (code == 0 and bool(p) and bool(p.get("report_file") and p.get("export_file")),
                                                      f"exit {code} {err[-300:]}"))

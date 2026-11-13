@@ -16,7 +16,8 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _ml_runtime import (  # noqa: E402  shared runtime of ml-kit
+from _ml_runtime import (
+    dtypes_cli,  # noqa: E402  shared runtime of ml-kit
     check_core_libraries,
     setup_console, run_cli, JsonArgumentParser, InputError, load_data_file, quote_arg, avoid_overwrite,
     save_with_lock_fallback, parse_where, resolve_where, where_mask, where_text, where_notation_variants,
@@ -229,7 +230,7 @@ def train_command(data_file: str, new_file: str) -> Dict[str, Any]:
     if evals:
         parts += ["--eval", quote_arg("; ".join(evals))]
     if rec.get("dtypes"):
-        parts += ["--dtypes", quote_arg(rec["dtypes"])]
+        parts += ["--dtypes", quote_arg(dtypes_cli(rec["dtypes"]))]
     if desc:
         parts += ["--desc", quote_arg(desc)]
     return {"purpose": f"새 데이터셋으로 학습 ({os.path.basename(src)}의 {info['version']} 학습과 같은 타겟·입력)",

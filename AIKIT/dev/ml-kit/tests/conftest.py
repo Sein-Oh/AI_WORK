@@ -106,7 +106,7 @@ def coded(tmp_path_factory):
     df["y"] = 3 * df.a + 2 * df.b + np.select([df.코드 == "007", df.코드 == "012"], [20.0, 0.0], -20.0) + r.normal(0, 0.2, n)
     p = work / "coded.csv"
     df.to_csv(p, index=False)
-    res = run_tool("ml_train.py", "--file", str(p), "--features", "a,b,코드", "--targets", "y", "--dtypes", "코드:str")
+    res = run_tool("ml_train.py", "--file", str(p), "--features", "a,b,코드", "--targets", "y", "--dtypes", "코드=str")
     return {"work": work, "file": str(p), "v": res["version_dir"], "train": res}
 
 

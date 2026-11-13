@@ -106,7 +106,7 @@ def test_skill_mentions_features():
                      "입력 열(피처)은 묻지 않는다", "--features \"<피처1>,<피처2>\""),
         "ml-predict": ("--model \"<데이터파일>\"", "model_chosen", "--file \"<새데이터파일>\"", "--save", "--find", "--vary", "--sweep",
                        "--maximize", "--minimize", "--where", "--suggest <개수>", "실험계획", "실제값 비교"),
-        "ml-report": ("ml_report.py\" --file", "--title", "--slots", "ml_export.py\" --model", "최종 버전"),
+        "ml-report": ("ml_report.py\" --model", "--title", "--slots", "ml_export.py\" --model", "최종 버전"),
         "ml-map": ("ml_map.py\" --file", "--find", "--vary", "--points", "extrapolated"),
         "ml-dataset": ("ml_dataset.py\" pick --file", "ml_dataset.py\" exclude --file", "--where \"<조건>\"", "--rows", "--reason",
                        "next_commands[0]", "--save"),

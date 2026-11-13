@@ -840,8 +840,11 @@ def test_search_wildcard_query_keeps_only_literal_matches(monkeypatch, capsys):
     code, out = run_main(outlook, capsys, "search", "--query", "견적서_v2")
     assert code == 0 and "견적서_v2" in folder.Items.filter
     assert [m["subject"] for m in out["mails"]] == ["견적서_v2 송부"]      # '_' 와일드카드로 더 찾은 메일은 뺌
-    code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--where", "body")
+    code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--in", "body")
     assert code == 0 and [outlook.entry_id(m["id"]) for m in out["mails"]] == ["id3"]
+    # 2026-11-13: 검색 범위는 --in (엑셀의 --where 행 조건과 뜻이 달라 이름을 바꿈). 옛 --where는 [추천] --in
+    code, out = run_main(outlook, capsys, "search", "--query", "10% 할인", "--where", "body")
+    assert code == 2 and recommended_argv(out["message"], "outlook")[-2:] == ["--in", "body"], out
 
 
 def test_limit_upper_bound_and_zero(monkeypatch, capsys):
@@ -1111,6 +1114,16 @@ def test_attach_name_with_comma_and_semicolon_list(monkeypatch, capsys):
     mail = _DraftMail()
     code, out = _outlook_create(monkeypatch, capsys, mail, "new", "--attach", "a.pdf;b.pdf")
     assert code == 0 and out["attached"] == ["a.pdf", "b.pdf"]
+    # 2026-11-13: 메일 주소·파일 경로 목록은 ';' 한 가지. ','로 나누면 메일을 만들지 않고 ';'로 고친 전체 명령 [추천]
+    app = types.SimpleNamespace(CreateItem=lambda kind: (_ for _ in ()).throw(AssertionError("메일을 만들면 안 됨")))
+    monkeypatch.setattr(outlook, "get_outlook", lambda: app)
+    for opt, value, fixed in (("--attach", "a.pdf,b.pdf", "a.pdf;b.pdf"), ("--to", "a@x.com, b@x.com", "a@x.com;b@x.com"),
+                              ("--cc", "a@x.com,b@x.com", "a@x.com;b@x.com")):
+        extra = [] if opt == "--to" else ["--to", "c@x.com"]
+        code, out = run_main(outlook, capsys, "new", *extra, opt, value, "--subject", "s")
+        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+        argv = recommended_argv(out["message"], "outlook")
+        assert argv[argv.index(opt) + 1] == fixed, argv
 
 
 # ---------------------------------------------------------------------------
@@ -1233,7 +1246,6 @@ def test_relative_folder_is_refused(ol_env, capsys, tmp_path, monkeypatch):
     (["--name", "견적"], ["견적서.pdf"]),
     (["--name", "PDF"], ["견적서.pdf", "보고서.pdf"]),                     # 대소문자 무시
     (["--name", "단가;보고"], ["단가표.xlsx", "보고서.pdf"]),
-    (["--name", "단가", "--name", "견적"], ["견적서.pdf", "단가표.xlsx"]),   # 옵션 반복, 저장은 첨부 순서
     (["--index", "1,3"], ["견적서.pdf", "보고서.pdf"]),
     (["--index", "2-3"], ["단가표.xlsx", "보고서.pdf"]),
     (["--index", "2", "--name", "견적"], ["견적서.pdf", "단가표.xlsx"]),
@@ -1243,6 +1255,16 @@ def test_select_by_name_or_index(ol_env, capsys, tmp_path, argv, expected):
     code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "out"), *argv)
     assert code == 0 and [os.path.basename(p) for p in out["saved"]] == expected, out
     assert sorted(os.listdir(tmp_path / "out")) == sorted(expected)
+
+
+def test_repeated_name_option_recommends_semicolon(ol_env, capsys, tmp_path):
+    """2026-11-13: --name은 ';' 한 가지 (옵션 반복은 받지 않음, 사용법 단순성 1번). 반복하면 ';'로 이은 전체 명령 [추천], 저장하지 않음."""
+    m = _attach_mail(ol_env, FakeAttachment("견적서.pdf"), FakeAttachment("단가표.xlsx"))
+    code, out = run_outlook(capsys, "attachments", "--id", "M1", "--save", str(tmp_path / "out"), "--name", "단가", "--name", "견적")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+    argv = recommended_argv(out["message"], "outlook")
+    assert argv.count("--name") == 1 and argv[argv.index("--name") + 1] == "단가;견적", argv
+    assert all(a.saved_to == [] for a in m.Attachments.items)
 
 
 @pytest.mark.parametrize("argv", [["--name", "계약"], ["--name", "견적;계약"], ["--index", "9"], ["--index", "0"]])
@@ -1780,7 +1802,7 @@ def test_attachments_save_gives_reader_commands(ol_env, capsys, tmp_path):
     assert any("reader.py" in c and " read --file " in c and "규격.pdf" in c for c in cmds)
     assert any("reader.py" in c and " read --file " in c and "시험표.xlsx" in c for c in cmds)
     assert not any("사진.png" in c for c in cmds)
-    assert any(" index --folder " in c for c in cmds)
+    assert any(" index --file " in c for c in cmds)
 
 
 def test_calendar_lists_events_read_only(monkeypatch, capsys):

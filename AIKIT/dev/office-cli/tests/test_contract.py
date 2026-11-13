@@ -1261,7 +1261,7 @@ def test_every_help_text_builds():
 def test_continue_is_counted_by_the_tool(monkeypatch, tmp_path):
     """1.4.79: CONTINUE 횟수는 도구가 셈. 바로 앞과 같은 progress면 STOP_RETRY(unfinished_limit), 끝난 명령은 기록을 지움."""
     monkeypatch.setenv("OFFICE_CLI_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(rt, "CURRENT_ARGV", ["index", "--folder", "x"])
+    monkeypatch.setattr(rt, "CURRENT_ARGV", ["index", "--file", "x"])
     first = rt.unfinished_payload(rt.Unfinished("문서 3/10개 등록"), "reader", "index")
     second = rt.unfinished_payload(rt.Unfinished("문서 6/10개 등록"), "reader", "index")
     assert first["continue"] and second["continue_runs"] == 2, second

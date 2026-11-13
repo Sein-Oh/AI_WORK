@@ -6,6 +6,7 @@
 ## 지금 유효한 원칙
 | 날짜 | 결정 | 반영된 곳 |
 |---|---|---|
+| 2026-11-13 | 구분자 규칙의 예외: 메일 주소·파일 경로·첨부 이름 목록은 `;` (Outlook과 같고 경로에 `,`가 들어갈 수 있음). 같은 일 두 사용법·같은 이름 다른 뜻을 정리(outlook `--in`, ppt notes `--slide`, word header `--part`, 서식 지우기 `style --clear`, reader index `--file`, ml `--dtypes 열=형식`) | `AGENTS.md` 사용법 단순성 3번, office-cli·ml-kit CHANGELOG |
 | 2026-11-13 | pandas-kit: 표 데이터를 단계별로 주무르는 완결형 작업 도구 (첫 대상 BOM 분석). 읽기·칠하기·메모는 office-cli, 계산은 pandas-kit, LLM에게 pandas 코드를 짜게 하지 않음 | 도구를 만들 때 `AGENTS.md` 저장소 성격·도구별 규칙 |
 | 2026-11-13 | pandas-kit 상태는 파일로: 단계 기록(JSON)이 원본, 표 스냅샷은 pickle 캐시. 스냅샷이 깨졌거나 pandas 버전이 다르면 버리고 기록을 다시 실행해 만듦. 도구가 만든 자기 작업 폴더의 pickle만 읽음 (pandas 3.0.5 측정: JSON은 Int64·날짜 단위·MultiIndex가 바뀜, joblib은 같은 pickle에 압축만 더함) | 도구를 만들 때 `AGENTS.md` 도구별 규칙 |
 | 2026-11-13 | 업무 판단을 문서에 넣으라고 사용자가 이번 요청에서 말했으면 묻지 않고 넣고, 판정·근거·되돌리기를 알림. 넣으라는 말 없이 넣으려 할 때만 먼저 물음 (회사·집 PC Gemma O1: 두 규칙이 부딪혀 경량 모델이 못 지킴) | `AIKIT/AGENTS.md` 3장 5번·10장 4번, excel-kit |
