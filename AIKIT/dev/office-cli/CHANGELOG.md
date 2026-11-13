@@ -27,6 +27,11 @@
   요청 21개 -> 22개. 시험 `test_office_scenarios_pass_and_fail`.
 - 전역 지침 6장(보고)에 "꾸밈 없이 글로" 줄과 답 예시 하나: 집 PC Gemma가 A1·R1 답의 제목마다 그림 문자를 붙이고 `$R^2$`를 씀
   (1장 2번에 금지가 있어도 따르지 않음, 경량 모델은 답을 쓸 때 보는 예시를 더 잘 따름).
+- Gemma 채점: 답변의 이모지는 경고만 (사용자 결정 2026-11-13). 지침 문장·예시를 두고도 집 PC Gemma가 제목마다 붙여, 실패로 세면
+  행동이 맞은 요청까지 실패가 됨. `agent_scenarios.py` 규칙 `answer_emoji`(`warn`), 채점 표의 실패 칸에 "경고:"로 함께 적고 결과는 통과,
+  `run_all_tests.py`는 단계의 참고(WARN)로 알림. `file:///`·같은 말 반복은 그대로 실패. 시험 `test_emoji_in_final_answer_is_warning_not_failure`.
+- 집 PC 유료 Gemma 4 26B 재채점 (A1·R1·O9·O1): 통과 3 (A1·O9·O1, 이모지 경고), R1은 도구 preview의 "모델과 같은 계산"을 답에서 뺌
+  (16:47 실행에서는 같은 뜻을 써서 통과: 그때그때 답이 달라짐, 고치지 않음).
 
 ### 회사 PC Gemma·BEAM 시험(2026-11-13) 뒤 고친 것
 - 오후 시험(새 구조) 뒤: `reader.py read --search "<글>"`(또는 `--query`)에 옵션 목록만 주던 것을 `reader.py search --query`의 전체 명령 `[추천]`으로

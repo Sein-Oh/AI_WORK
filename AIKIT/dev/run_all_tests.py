@@ -1069,6 +1069,8 @@ def step_gemma(stage, args, ctx):
         for r in rows:
             if r["id"] in setup or (only and r["id"] not in auto):     # 러너가 직접 실행한 준비 요청, 고르지 않은 요청은 세지 않음
                 continue
+            if r.get("경고"):                                            # 이모지 등: 실패로 세지 않고 알림
+                stage.warnings.append(f"{r['id']}: {r['경고'][:200]}")
             if r["결과"] in ("통과", "통과(참고)"):
                 stage.passed += 1
             elif r["결과"] == "실패(참고)":

@@ -101,7 +101,12 @@ RULES = {
         'max_repeat': 2,
     },
     'answer_clean': {
-        'title': '답변에 이모지·file:///·같은 말 반복 없음',
+        'title': '답변에 file:///·같은 말 반복 없음',
+    },
+    # 이모지는 경고만 (실패로 세지 않음, 사용자 결정 2026-11-13: 집 PC OpenRouter Gemma가 지침을 두고도 제목마다 붙임)
+    'answer_emoji': {
+        'title': '경고: 답변에 이모지 없음',
+        'warn': True,
     },
 }
 

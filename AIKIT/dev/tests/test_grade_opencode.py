@@ -136,7 +136,20 @@ def test_final_answer_is_last_assistant_message(tmp_path):
         ("계속", [{"type": "text", "text": "끝났습니다."}])])
     _, rows, _ = go.grade([path], "t", False, "LLM42")
     m1 = next(r for r in rows if r["id"] == "M1")
-    assert "16\\.25" in m1["실패"] and "답변: " in m1["실패"] and "이모지" not in m1["실패"]
+    assert "16\\.25" in m1["실패"] and "답변: " in m1["실패"] and "이모지" not in m1["실패"] and not m1["경고"]
+
+
+def test_emoji_in_final_answer_is_warning_not_failure(tmp_path):
+    """사용자 결정 2026-11-13 (집 PC Gemma): 최종 답변의 이모지는 경고만, 결과는 통과. file:///은 그대로 실패."""
+    ok = {"status": "ok", "agent_directive": "VERIFIED: ok"}
+    cmd = 'python "C:\\AIKIT\\ml-kit\\ml_map.py" --file "맵.xlsx" --input "A=12.5"'
+    path = _export(tmp_path, [("[M1] A=12.5", [_bash(cmd, ok), {"type": "text", "text": "\U0001F4CA 결과: 16.25, 87.5"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    m1 = next(r for r in rows if r["id"] == "M1")
+    assert "이모지" in m1["경고"] and "이모지" not in m1["실패"], m1
+    path = _export(tmp_path, [("[M1] A=12.5", [_bash(cmd, ok), {"type": "text", "text": "결과: 16.25, 87.5 file:///C:/a.xlsx"}])])
+    _, rows, _ = go.grade([path], "t", False, "LLM42")
+    assert "file:///" in next(r for r in rows if r["id"] == "M1")["실패"]
 
 
 def _export_bytes(tmp_path, data, enc, bom=b""):
