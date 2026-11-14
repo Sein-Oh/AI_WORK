@@ -480,17 +480,8 @@ def _table_name(path: str) -> str:
 def read_bom(pk: PandasKit, file: str, name: str, who: str, sheet: Optional[str], rng: Optional[str]) -> Tuple[str, str, List[int]]:
     """pandas-kit으로 BOM 읽기 -> export csv. (csv 경로, 읽은 범위 preview, 읽은 숨긴 행의 엑셀 행)."""
     args = ["select", "--file", file, "--name", name] + (["--sheet", sheet] if sheet else []) + (["--range", rng] if rng else [])
-    try:
-        got = pk.run(args, who, shell="bash")                  # [후보] 명령을 나눠 읽으려고 bash 따옴표 (_pk_error)
-    except rt.InputError as e:
-        # 표 안에 빈 행이 있어 범위를 물으면 묻지 않고 빈 행까지 한 표로 읽고 알림 (사용자 결정 2026-11-14:
-        # BOM 가운데 빈 행은 표가 끝난 것이 아님. 전에는 옛 판·새 판마다 [후보]로 물었음)
-        whole = next((c for c in getattr(e, "choices", None) or [] if c[0].startswith(WHOLE)), None)
-        if rng or not whole:
-            raise
-        got = pk.run(args + ["--range", whole[1][1]], who, shell="bash")
-        pk.warnings = [w for w in pk.warnings if not (w.startswith(f"{who}: ") and "범위 안의 빈 행" in w)]
-        pk.warnings.append(f"{who}: 표 안에 빈 행이 있어 빈 행까지 한 표로 읽었습니다 ({whole[0][len(WHOLE):].strip(' ()')}).")
+    got = pk.run(args, who, shell="bash")                      # [후보] 명령을 나눠 읽으려고 bash 따옴표 (_pk_error)
+    # 표 안의 빈 행은 pandas-kit이 묻지 않고 한 표로 읽고 알린다 (pandas-kit 0.2.12, 사용자 결정 2026-11-14)
     out = pk.run(["export", "--from", name, "--save", f"{name}.csv"], who)
     return out["output_file"], got.get("preview", ""), [int(r) for r in got.get("hidden_rows") or []]
 
@@ -780,9 +771,6 @@ def _paired_changes(o: Dict[str, Any], n: Dict[str, Any], pairs: List[Tuple[str,
                 rows.append({"구분": "바뀜", "경로": key, "열": f"{oc}(새 판 {nc})", "옛 값": a, "새 값": b,
                              "oldp 행": ok_[key].get(ROW, ""), "newp 행": nk[key].get(ROW, "")})
     return rows
-
-
-WHOLE = "빈 행까지 한 표로"                 # pandas-kit이 빈 행으로 나뉜 표에서 주는 첫 [후보]
 
 
 def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
