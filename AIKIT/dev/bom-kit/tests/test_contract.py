@@ -81,39 +81,40 @@ def _work_folders(folder):
     return sorted(n for n in os.listdir(folder) if os.path.isdir(os.path.join(folder, n)))
 
 
-def test_results_stay_in_one_result_folder_and_work_folders_are_removed(env, tmp_path):
-    """결과는 원본 옆 <원본 이름>_bom 폴더에 실행마다 시각을 붙인 새 이름으로 (덮어쓰지 않음, R4), pandas-kit 작업 폴더(캐시)는
-    실행마다 지움 (0.1.2, 사용자 결정 2026-11-14). 알려 준 output_file과 칠할 칸 파일은 다른 실행 뒤에도 남음
-    (Fable 검토 B1: 지우면 다음 턴의 confirm_commands가 실패)."""
+def test_results_are_saved_beside_the_original_and_work_folders_are_removed(env, tmp_path):
+    """사용자가 볼 결과 파일은 대상 파일과 같은 폴더에 실행마다 시각을 붙인 새 이름 (전역 지침 2장 '결과 파일 위치', 사용자 지적
+    2026-11-14), 저장된 곳은 output_file. 도구가 다시 쓰는 비교 기록·칠할 칸·변경내용은 <옛 판 이름>_bom 폴더.
+    pandas-kit 작업 폴더(캐시)는 실행마다 지움. 알려 준 output_file과 칠할 칸 파일은 다른 실행 뒤에도 남음 (Fable 검토 B1)."""
     import re as _re
     from bk_helpers import command_args, make_samples
     files = make_samples(tmp_path / "mbom")
-    f, folder = files / "MBOM_DR200.xlsx", files / "MBOM_DR200_bom"
+    f = files / "MBOM_DR200.xlsx"
     stamp = r"_\d{8}_\d{6}(_\d+)?"
+    before = set(os.listdir(files))
     code, out = bom("where-used", "--file", f, "--find", "000125", "--sheet", "Routing")      # 수량 열이 없어 멈춤
-    assert code == 1 and "[후보]" in out["message"] and _work_folders(files) == []
+    assert code == 1 and "[후보]" in out["message"] and set(os.listdir(files)) == before
     code, first = bom("where-used", "--file", f, "--find", "000125")
-    assert code == 0 and _work_folders(files) == ["MBOM_DR200_bom"] and "work" not in first and first["result_folder"] == str(folder)
-    assert os.path.dirname(first["output_file"]) == str(folder)
-    assert _re.fullmatch("쓰인곳_000125" + stamp + r"\.csv", os.path.basename(first["output_file"]))
-    code, again = bom("where-used", "--file", f, "--find", "000125")                          # 같은 질문도 새 파일 (같은 초면 _2)
+    assert code == 0 and os.path.dirname(first["output_file"]) == str(files) and "work" not in first
+    assert _re.fullmatch("MBOM_DR200_쓰인곳_000125" + stamp + r"\.csv", os.path.basename(first["output_file"]))
+    code, again = bom("where-used", "--file", f, "--find", "000125")                          # 같은 질문도 새 파일
     assert code == 0 and again["output_file"] != first["output_file"] and os.path.isfile(first["output_file"])
-    code, other = bom("where-used", "--file", f, "--find", "나사")
-    assert code == 0 and all(os.path.isfile(o["output_file"]) for o in (first, again, other))
-    assert _work_folders(files) == ["MBOM_DR200_bom"]
+    assert _work_folders(files) == []                                                         # where-used는 폴더를 만들지 않음
     old, new, v1 = files / "MBOM_DR200_v2.xlsx", files / "MBOM_DR200_v2_mod.xlsx", files / "MBOM_DR200.xlsx"
     code, d1 = bom("diff", "--old", old, "--new", new)
-    code, d2 = bom("diff", "--old", old, "--new", v1)                                         # 같은 옛 판, 다른 새 판
-    code, d3 = bom("diff", "--old", old, "--new", new)                                        # 같은 비교 다시
+    code, d2 = bom("diff", "--old", old, "--new", v1)
+    code, d3 = bom("diff", "--old", old, "--new", new)
     assert code == 0 and d3["counts"] == d1["counts"] and len({d["output_file"] for d in (d1, d2, d3)}) == 3
-    assert all(os.path.isfile(d["output_file"]) and os.path.isfile(d["changes_file"]) for d in (d1, d2, d3))
-    assert sorted(_work_folders(files)) == ["MBOM_DR200_bom", "MBOM_DR200_v2_bom"]
+    for d in (d1, d2, d3):
+        assert os.path.dirname(d["output_file"]) == str(files) and os.path.isfile(d["output_file"])
+        assert _re.fullmatch(r"MBOM_DR200_v2_(MBOM_DR200_v2_mod|MBOM_DR200)_비교결과" + stamp + r"\.xlsx", os.path.basename(d["output_file"]))
+        assert os.path.isfile(d["changes_file"]) and os.path.dirname(d["changes_file"]) == str(files / "MBOM_DR200_v2_bom")
+    assert _work_folders(files) == ["MBOM_DR200_v2_bom"]                                     # 작업 폴더(캐시)는 남지 않음
     names = sorted(os.listdir(files / "MBOM_DR200_v2_bom"))
-    assert len(names) == 1 + 3 * 6 and ".created_by_bom-kit" in names
-    assert all(_re.fullmatch(r"diff_(MBOM_DR200_v2_mod|MBOM_DR200)" + stamp + r"_(요약\.txt|변경내용\.csv|칠할칸_(옛판|새판)\.csv|기록\.json|비교결과\.xlsx)", n)
+    assert len(names) == 1 + 3 * 4 and ".created_by_bom-kit" in names
+    assert all(_re.fullmatch(r"diff_(MBOM_DR200_v2_mod|MBOM_DR200)" + stamp + r"_(변경내용\.csv|칠할칸_(옛판|새판)\.csv|기록\.json)", n)
                for n in names if n != ".created_by_bom-kit"), names
-    stem = d1["output_file"][:-len("_요약.txt")]
     paint = [command_args(c["command"]) for c in d1["confirm_commands"]]                       # 칠하는 명령은 결과 폴더의 파일
+    stem = d1["changes_file"][:-len("_변경내용.csv")]
     assert [p[p.index("--file") + 1] for p in paint] == [f"{stem}_칠할칸_{s}.csv" for s in ("옛판", "새판")]
     assert all(os.path.isfile(p[p.index("--file") + 1]) for p in paint)
     runs = env["dir"] / "bomdata" / "pandas-kit" / "runs"
@@ -229,6 +230,7 @@ def test_history_collects_the_diffs_of_connected_versions(env, tmp_path):
         assert [line.split(": ", 1)[0].split(" ", 3)[3] for line in h["lines"]] == [
             "MBOM_DR200.xlsx -> MBOM_DR200_v2.xlsx", "MBOM_DR200_v2.xlsx -> MBOM_DR200_v2_mod.xlsx"]
     assert h["lines"][1].endswith("변경 대체 후보 1건, 추가 2건, 삭제 2건, 바뀐 칸 8곳 (7개 품목).")
+    assert os.path.dirname(h["output_file"]) == str(files) and "_변경이력_" in h["output_file"]
     with open(h["output_file"], encoding="utf-8-sig") as f:
         rows = list(_csv.DictReader(f))
     assert {r["새 판"] for r in rows} == {"MBOM_DR200_v2.xlsx", "MBOM_DR200_v2_mod.xlsx"} and "/" in rows[0]["경로"]

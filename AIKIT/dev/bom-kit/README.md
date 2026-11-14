@@ -20,11 +20,15 @@ BOM 업무 계산 도구입니다. pandas-kit(표를 고르고·비교하는 기
 - import하지 않고 `python pandas_kit.py <명령>`으로 실행만 합니다 (도구 폴더는 단독 배포). 명령마다 1줄 JSON을 읽습니다.
 - pandas-kit의 데이터 폴더를 실행마다 따로 씁니다 (`<bom-kit 데이터 폴더>/pandas-kit/runs/<실행>`, 끝나면 지움, pandas-kit 오류 로그는
   `<bom-kit 데이터 폴더>/pandas-kit/logs`로 옮김). 사용자가 pandas-kit으로 하던 지금 작업(지금 표)도, 동시에 도는 다른 bom-kit 실행도 바꾸지 않습니다.
-- 결과 폴더 (사용자 결정 2026-11-14): 원본 옆 `<원본 이름>_bom\`(표시 파일 `.created_by_bom-kit`, 같은 이름의 다른 폴더가 있으면 `_bom2`).
-  결과 파일은 실행마다 시각을 붙인 새 이름으로 저장하고 덮어쓰지 않습니다 (사용자 결정 2026-11-14, R4). 앞 결과는 모두 남습니다:
-  알려 준 `output_file`과 칠할 칸 파일(`confirm_commands`)이 다음 턴에도 있고, diff 결과가 쌓입니다(변경 이력의 재료). 결과 파일은 지우지 않습니다.
-  - `diff`: 옛 판 옆 결과 폴더에 `diff_<새 판 이름>_<시각>_요약.txt`(`output_file`), `_변경내용.csv`(`changes_file`), `_칠할칸_옛판.csv`, `_칠할칸_새판.csv`.
-  - `where-used`: `쓰인곳_<찾는 말>_<시각>.csv` (`output_file`). 결과 폴더는 `result_folder`. 같은 초에 같은 이름이면 `_2`.
+- 결과 파일 위치 (전역 지침 2장 '결과 파일 위치', 사용자 지적 2026-11-14): 사용자가 볼 결과 파일은 **대상 파일과 같은 폴더**에 실행마다
+  시각을 붙인 새 이름으로 저장하고(덮어쓰지 않음, R4), 그 경로가 `output_file`입니다. 앞 결과는 모두 남습니다.
+  - `diff`: 옛 판 옆 `<옛 판>_<새 판>_비교결과_<시각>.xlsx` (요약 시트, 변경내용 시트)
+  - `where-used`: BOM 옆 `<BOM>_쓰인곳_<찾는 말>_<시각>.csv`
+  - `history`: 준 파일 옆 `<파일>_변경이력_<시각>.csv`
+  같은 초에 같은 이름이면 `_2`.
+- 도구가 다시 쓰는 파일은 옛 판 옆 `<옛 판 이름>_bom\` 폴더(표시 파일 `.created_by_bom-kit`, 같은 이름의 다른 폴더가 있으면 `_bom2`):
+  diff마다 `diff_<새 판>_<시각>_변경내용.csv`(`changes_file`), `_칠할칸_옛판.csv`·`_칠할칸_새판.csv`(`confirm_commands`가 다음 턴에도 되게),
+  `_기록.json`(history가 모음). 지우지 않습니다.
 - pandas-kit 작업 폴더(원본 옆 `<파일 이름>_<시각>`)는 캐시라 실행 끝(멈춘 실행 포함)에 지웁니다. 안의 파일이 열려 있으면 반쯤 지우지 않게
   폴더 이름부터 바꿔 보고, 안 되면 그대로 두고 stderr `[WARN]`, `<데이터 폴더>/works.json`에 기억했다가 다음 실행 때 다시 지웁니다.
   pandas-kit 표시 파일이 있는 폴더만 지웁니다.
@@ -56,8 +60,8 @@ BOM 업무 계산 도구입니다. pandas-kit(표를 고르고·비교하는 기
 ## 명령
 | 명령 | 옵션 | 결과 |
 |---|---|---|
-| `diff` | `--old`, `--new`, `--sheet` (README에만: `--old-sheet`, `--new-sheet`, `--old-range`, `--new-range`, `--level`, `--part`) | 두 판을 읽고(pandas-kit select·export) 경로 계산, 경로 붙이기(join `엑셀 행`), `diff --on 경로`, 결과 export 뒤 `[대체 후보]`·`[추가]`·`[삭제]`·`[바뀜]` 줄과 옛·새 엑셀 행, `counts`, 끝 줄에 읽은 표. `output_file`(요약 txt), `changes_file`(변경내용 csv), `report_file`(비교 결과 엑셀: 요약 시트와 변경내용 시트, preview 끝 줄에 경로), `confirm_commands`(원본에 바뀐 칸 칠하기, office-cli, 사용자가 원할 때만). 0건은 "두 판이 같습니다" |
-| `history` | `--file` | 그 파일과 비교로 이어진 판들의 diff 기록(`diff_<새 판>_<시각>_기록.json`, 옛 판 옆 결과 폴더)을 시간순으로 `[비교] <시각> <옛 판> -> <새 판>: <그때의 건수>` 줄과 변경내용을 합친 `변경이력_<파일 이름>_<시각>.csv`(`output_file`, 그 파일의 결과 폴더). 파일이 그대로인 같은 비교는 마지막 것만. 비교 뒤 원본이 바뀌었거나 없으면 `warnings`. 0건은 `count: 0`과 "비교 기록이 없습니다" |
+| `diff` | `--old`, `--new`, `--sheet` (README에만: `--old-sheet`, `--new-sheet`, `--old-range`, `--new-range`, `--level`, `--part`) | 두 판을 읽고(pandas-kit select·export) 경로 계산, 경로 붙이기(join `엑셀 행`), `diff --on 경로`, 결과 export 뒤 `[대체 후보]`·`[추가]`·`[삭제]`·`[바뀜]` 줄과 옛·새 엑셀 행, `counts`, 끝 줄에 읽은 표. `output_file`(비교 결과 엑셀, 옛 판 옆: 요약 시트와 변경내용 시트, preview 끝 줄에 경로), `changes_file`(변경내용 csv, 결과 폴더), `confirm_commands`(원본에 바뀐 칸 칠하기, office-cli, 사용자가 원할 때만). 0건은 "두 판이 같습니다" |
+| `history` | `--file` | 그 파일과 비교로 이어진 판들의 diff 기록(`diff_<새 판>_<시각>_기록.json`, 옛 판 옆 결과 폴더)을 시간순으로 `[비교] <시각> <옛 판> -> <새 판>: <그때의 건수>` 줄과 변경내용을 합친 `<파일>_변경이력_<시각>.csv`(`output_file`, 준 파일 옆). 파일이 그대로인 같은 비교는 마지막 것만. 비교 뒤 원본이 바뀌었거나 없으면 `warnings`. 0건은 `count: 0`과 "비교 기록이 없습니다" |
 | `where-used` | `--file`, `--find`, `--sheet` (README에만: `--range`, `--level`, `--part`, `--qty`) | BOM을 읽고 `--find`와 같은 품번(대소문자 무시) 또는 품명에 그 글자가 든 행마다 `[쓰임]` 줄(상위·제품 1대당 수량·경로·엑셀 행), `totals`(품번·단위별 곳 수와 합계), `output_file`(쓰인곳 csv). 0건은 `count: 0`과 "찾지 못했습니다" |
 
 - 출력 상한: `lines` 30줄 (넘으면 `truncated: true`, 전체는 `output_file`, preview 끝 줄 `(나머지 N줄은 <output_file>)`: diff와 where-used가 같음).

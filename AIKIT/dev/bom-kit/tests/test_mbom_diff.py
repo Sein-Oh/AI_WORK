@@ -171,9 +171,10 @@ def test_the_comparison_is_saved_as_an_excel_file(env, tmp_path):
     old = _bom_xlsx(tmp_path / "o.xlsx", rows)
     new = _bom_xlsx(tmp_path / "n.xlsx", [rows[0], rows[1], (2, "000125", 6), rows[3]])
     code, d = bom("diff", "--old", old, "--new", new)
-    assert code == 0 and d["verified"] and d["preview"].splitlines()[-1] == f"비교 결과 파일: {d['report_file']}"
-    assert os.path.basename(d["report_file"]).startswith("diff_n_") and d["report_file"].endswith("_비교결과.xlsx")
-    wb = openpyxl.load_workbook(d["report_file"])
+    assert code == 0 and d["verified"] and d["preview"].splitlines()[-1] == f"비교 결과 파일: {d['output_file']}"
+    assert os.path.dirname(d["output_file"]) == str(tmp_path)                                   # 대상 파일 옆
+    assert os.path.basename(d["output_file"]).startswith("o_n_비교결과_") and d["output_file"].endswith(".xlsx")
+    wb = openpyxl.load_workbook(d["output_file"])
     assert wb.sheetnames == ["요약", "변경내용"]
     summary = [r[0] for r in wb["요약"].iter_rows(min_row=2, values_only=True)]
     assert summary[0] == d["preview"].splitlines()[0] and summary[1:1 + len(d["lines"])] == d["lines"]

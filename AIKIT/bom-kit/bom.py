@@ -387,6 +387,13 @@ def result_dir(original: str) -> str:
         n += 1
 
 
+def beside(target: str, what: str) -> str:
+    """사용자가 볼 결과 파일: 대상 파일과 같은 폴더의 <대상 이름>_<what>_<시각> (전역 지침 2장 '결과 파일 위치', 사용자 지적 2026-11-14).
+    _bom 결과 폴더에는 도구가 다시 쓰는 것(비교 기록, 칠할 칸 목록, 변경내용 csv)만 둔다."""
+    t = os.path.abspath(target)
+    return stamped(os.path.dirname(t), f"{file_part(os.path.splitext(os.path.basename(t))[0], 60)}_{what}")
+
+
 def stamped(folder: str, base: str) -> str:
     """결과 파일 이름 앞부분: <base>_<YYYYMMDD_HHMMSS> (사용자 결정 2026-11-14: 결과 파일은 덮어쓰지 않고 실행마다 새 이름, R4).
     같은 초에 같은 이름이 있으면 _2, _3."""
@@ -821,34 +828,29 @@ def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
             + (f" ({nrows}개 품목)" if counts.get("바뀐 칸") else "") + ".")
     if limits:                                            # 비교하지 못한 것은 첫 줄에 (warnings는 뒤에 있어 빠뜨리기 쉬움)
         head = "주의: " + "; ".join(limits) + ". 아래 결과는 그것을 뺀 비교입니다.\n" + head
-    text = "\n".join([head] + lines) + "\n"
-
-    def writer(p: str) -> None:
-        with open(p, "w", encoding="utf-8-sig") as f:
-            f.write(text)
-    save = rt.save_with_lock_fallback(stem + "_요약.txt", writer, "요약 파일")
-    files_ok = len(rt.read_text_file(save).splitlines()) == len(text.splitlines()) and o["ok"] and n["ok"] and _ok
+    files_ok = o["ok"] and n["ok"] and _ok                 # 요약은 비교 결과 엑셀의 요약 시트 (txt는 만들지 않음)
     verified = files_ok and not limits
-    unverified = None if verified else (limits or ["저장한 요약·경로 파일을 확인하지 못함"])
+    unverified = None if verified else (limits or ["저장한 경로·변경내용 파일을 확인하지 못함"])
     shown = lines[:LINE_MAX]
     read = f"읽은 표: 옛 판 {o_read.split(' = ', 1)[-1]}, 새 판 {n_read.split(' = ', 1)[-1]}."
     warnings = pk.warnings + o["warnings"] + n["warnings"]
     # 비교 결과 엑셀 파일 (사용자 결정 2026-11-14): 요약 시트(건수·줄·읽은 표·알림)와 변경내용 시트(한 줄에 한 변경, 바뀐 칸은 칸마다)
     summary_rows = [[x] for x in head.splitlines() + lines + [read]] + [[f"알림: {w}"] for w in warnings]
-    report, report_ok = write_xlsx(stem + "_비교결과.xlsx", [
+    new_name = file_part(os.path.splitext(os.path.basename(a.new))[0], 60)
+    report, report_ok = write_xlsx(beside(a.old, f"{new_name}_비교결과") + ".xlsx", [
         ("요약", [f"{os.path.basename(a.old)} -> {os.path.basename(a.new)} 비교 ({datetime.now():%Y-%m-%d %H:%M})"], summary_rows, [120]),
         ("변경내용", REPORT_COLS, [[it[c] for c in REPORT_COLS] for it in items], [10, 18, 40, 14, 18, 18, 10, 10, 60])], "비교 결과 파일")
     verified = verified and report_ok
     if not report_ok:
         unverified = (unverified or []) + ["저장한 비교 결과 엑셀 파일을 다시 읽어 확인하지 못함"]
-    preview = "\n".join([head] + shown + ([f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else [])
+    preview = "\n".join([head] + shown + ([f"(나머지 {len(lines) - len(shown)}줄은 {report})"] if len(lines) > len(shown) else [])
                         + [read, f"비교 결과 파일: {report}"])
     then = ("preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
             + (" [대체 후보]는 도구의 짐작이니 맞는지 사용자에게 확인하세요." if counts.get("대체 후보") else "")
             + ("" if lines else " 0건. 찾은 변경이 없습니다."))
     out = rt.ok("diff", preview, verified, then, unverified,
-                count=len(lines), counts=counts, lines=shown, truncated=len(lines) > len(shown), output_file=save,
-                changes_file=changes, report_file=report, result_folder=folder)
+                count=len(lines), counts=counts, lines=shown, truncated=len(lines) > len(shown), output_file=report,
+                changes_file=changes)                     # 변경내용 csv (_bom 결과 폴더, history가 모음)
     paint = diff.get("confirm_commands") or []
     for f in diff.get("paint_files") or []:              # 칠할 칸 목록도 결과 폴더로 (confirm_commands가 다음 턴에도 되게)
         side = "옛판" if "_칠할칸_old_" in os.path.basename(f) else "새판"
@@ -872,7 +874,7 @@ def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
                 orig = os.path.basename(a.old if side == "옛판" else a.new)
                 cmd["purpose"] = f"원본 {orig}의 {'삭제된' if side == '옛판' else '추가된'} 행과 바뀐 칸을 노랗게 칠하기 (사용자가 원할 때만, office-cli)"
     kept_paint = [f"{stem}_칠할칸_{x}.csv" for x in ("옛판", "새판") if os.path.isfile(f"{stem}_칠할칸_{x}.csv")]
-    _write_record(stem, a, counts, head, save, changes, kept_paint, verified)     # history가 읽는 기록
+    _write_record(stem, a, counts, head, report, changes, kept_paint, verified)     # history가 읽는 기록
     if paint:                                    # 원본에 바뀐 칸 칠하기 (office-cli, 사용자가 원할 때만)
         out["confirm_commands"] = paint
         out["agent_directive"] += " confirm_commands는 원본 엑셀에 바뀐 칸을 칠하는 명령입니다. 사용자가 칠해 달라고 할 때만 1번 실행하세요."
@@ -905,8 +907,7 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
     name: Dict[str, str] = {}
     for i in hits:
         name.setdefault(str(i["r"].get(pcol) or "").strip(), str(i["r"].get(dcol) or "").strip() if dcol else "")
-    folder = result_dir(a.file)
-    save, ok_ = write_csv(stamped(folder, f"쓰인곳_{file_part(a.find)}") + ".csv",
+    save, ok_ = write_csv(beside(a.file, f"쓰인곳_{file_part(a.find)}") + ".csv",
                           [ROW, "품번", "품명", "상위 품번", "경로", "그 자리 수량", "제품 1대당 수량", "단위"],
                           [[i["r"].get(ROW), i["r"].get(pcol), i["r"].get(dcol) if dcol else "", i["parent"], i["path"],
                             "" if i["qty"] is None else number(i["qty"]), "" if i["total"] is None else number(i["total"]),
@@ -925,7 +926,7 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
     if not hits:
         out = rt.ok("where-used", limit + f"'{a.find}'을(를) 품번이나 품명에서 찾지 못했습니다 (BOM {len(items)}행, {read.split(' = ', 1)[-1]}).", ok_,
                     "0건. 찾은 품목이 없습니다. preview를 그대로 알리고 다시 실행하지 마세요. 품번이나 품명의 일부를 --find에 주세요.",
-                    unverified, count=0, lines=[], output_file=save, result_folder=folder)
+                    unverified, count=0, lines=[], output_file=save)
     else:
         parent_name: Dict[str, str] = {}
         if dcol:
@@ -951,8 +952,7 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
         out = rt.ok("where-used", preview, ok_,
                     "preview의 줄을 사용자에게 그대로 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
                     + (" 잘렸으면 전체는 output_file에 있습니다." if len(lines) > LINE_MAX else ""),
-                    unverified, count=len(hits), lines=shown, totals=sums, truncated=len(lines) > LINE_MAX, output_file=save,
-                    result_folder=folder)
+                    unverified, count=len(hits), lines=shown, totals=sums, truncated=len(lines) > LINE_MAX, output_file=save)
     if warnings:
         out["warnings"] = warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."
@@ -1072,8 +1072,7 @@ def cmd_history(a: Any) -> Dict[str, Any]:
                 if c not in head_cols:
                     head_cols.append(c)
             body.append(dict(row, **{"비교 시각": at, "옛 판": old, "새 판": new}))
-    folder = result_dir(start)
-    save, ok_ = write_csv(stamped(folder, f"변경이력_{file_part(os.path.splitext(name)[0])}") + ".csv", head_cols,
+    save, ok_ = write_csv(beside(start, "변경이력") + ".csv", head_cols,
                           [[b.get(c, "") for c in head_cols] for b in body], "변경 이력 파일")
     shown = lines[:LINE_MAX]
     more = [f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else []
@@ -1082,7 +1081,7 @@ def cmd_history(a: Any) -> Dict[str, Any]:
                         + [f"변경 이력 파일: {save} (변경 {len(body)}줄)"])
     out = rt.ok("history", preview, ok_, "preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요.",
                 None if ok_ else ["저장한 변경 이력 파일의 행 수를 확인하지 못함"], count=len(recs), lines=shown,
-                truncated=len(lines) > len(shown), output_file=save, result_folder=folder)
+                truncated=len(lines) > len(shown), output_file=save)
     if warnings:
         out["warnings"] = warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."

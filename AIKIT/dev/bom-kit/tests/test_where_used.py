@@ -26,7 +26,7 @@ def test_where_used_finds_every_place_and_the_quantity_per_product(bom_csv):
     assert d["totals"] == ["000125 볼트 M3x12 (아연): 10곳, 제품 1대당 31 EA"]
     assert "[쓰임] 000125: 100100 하우징 조립 아래 4 EA (경로 DR-200/100100/000125, 엑셀 행 16)" in d["lines"]
     assert "[쓰임] 000125: 300210 유성기어 스테이지 아래 3 EA (경로 DR-200/100300/300210#2/000125, 엑셀 행 66)" in d["lines"]
-    assert os.path.isfile(d["output_file"]) and os.path.basename(os.path.dirname(d["output_file"])) == "MBOM_DR200_bom" and os.path.basename(d["output_file"]).startswith("쓰인곳_000125_")
+    assert os.path.isfile(d["output_file"]) and os.path.dirname(d["output_file"]) == str(bom_csv.parent) and os.path.basename(d["output_file"]).startswith("MBOM_DR200_쓰인곳_000125_")
 
 
 def test_quantity_is_multiplied_along_the_path(bom_csv):
