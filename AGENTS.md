@@ -195,7 +195,8 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
 ### bom-kit
 - **BOM 업무 계산 도구** (2026-11-14 사용자 결정, 설계 `AIKIT/dev/bom-kit/README.md`): Level로 상위 찾기, 경로, 두 판 비교 결과 묶기(대체 후보),
   쓰인 곳과 제품 1대당 수량처럼 pandas-kit에 넣지 않는 BOM 업무 규칙을 한 곳(`bom.py`)에 둔다. BOM 스킬(`mbom-diff`, `where-used`)이 함께 쓴다.
-- 입력은 pandas-kit export csv(`엑셀 행` 열), 이어서 할 pandas-kit 명령은 전체 명령 문자열로만 준다. pandas-kit을 import하지 않는다.
+- 스킬마다 명령 하나 (`bom.py diff`, `bom.py where-used`, 2026-11-14 사용자 결정: 경량 모델이 여러 단계를 잇지 않게). 표 읽기·비교는 pandas-kit을
+  실행해서 한다 (import하지 않음, 데이터 폴더를 따로 써서 사용자의 pandas-kit 작업을 바꾸지 않음). pandas-kit이 물으면 bom.py 전체 명령으로 바꿔 준다.
   공통 런타임 `_bom_runtime.py`(pandas-kit `_pd_runtime.py`에서 복사, 표준 라이브러리만). 원본 엑셀은 쓰지 않는다.
 ### 보관 도구 (`archive/`)
 - `archive/` 아래 도구는 수정하지 않는다. 지침 반영·검토·테스트 대상이 아니다 (doc-classifier: 다른 개발자 담당).

@@ -1,26 +1,29 @@
 # -*- coding: utf-8 -*-
 r"""
-bom.py - bom-kit: BOM 업무 계산 (mbom-diff·where-used 스킬이 pandas-kit 명령과 함께 씀).
+bom.py - bom-kit: BOM 업무 계산 (mbom-diff·where-used 스킬). 명령 하나로 끝난다 (Gemma 같은 경량 모델이 여러 단계를 잇지 않게).
 
-    python "C:\AIKIT\bom-kit\bom.py" path --old "<옛 판 .csv>" --new "<새 판 .csv>"
-    python "C:\AIKIT\bom-kit\bom.py" summary --file "<변경내용.csv>"
-    python "C:\AIKIT\bom-kit\bom.py" where-used --file "<BOM .csv>" --find "<품번이나 품명>"
+    python "C:\AIKIT\bom-kit\bom.py" diff --old "<옛 판.xlsx>" --new "<새 판.xlsx>"
+    python "C:\AIKIT\bom-kit\bom.py" where-used --file "<BOM.xlsx>" --find "<품번이나 품명>"
 
-입력은 pandas-kit export로 만든 csv (`엑셀 행` 열이 있음). BOM 업무 규칙은 이 파일 한 곳에만 둔다:
+표 읽기·비교·내보내기는 pandas-kit 명령을 차례로 실행해서 한다 (C:\AIKIT\pandas-kit\pandas_kit.py, import하지 않고 실행만,
+pandas-kit의 지금 작업은 바꾸지 않게 데이터 폴더를 따로 씀). 결과 csv·txt는 pandas-kit 작업 폴더(원본 옆)에 만든다. 원본 엑셀은 쓰지 않는다.
+BOM 업무 규칙은 이 파일 한 곳에만 둔다:
 - 상위 = 위쪽 행 중 가장 가까운, Level이 더 작은 행 (상위 품번 열이 없는 BOM).
 - 경로 = 최상위부터 품번을 /로 이은 것. 같은 상위 아래 같은 품번이 둘 이상이면 모두 #순번 (#1, #2).
 - 제품 1대당 수량 = 그 행과 위쪽 상위들의 수량을 곱한 값 (스크랩·유효 기간·대체 그룹은 보지 않음).
 - 두 판 비교: 경로(품번 기준)로 짝을 맞춤. 다른 상위로 옮겨진 품목은 삭제·추가, 같은 자리에서 품번이 바뀐 것만 대체 후보
   (품명은 보지 않음, 삭제와 추가에 모두 있는 품번은 옮겨진 것이라 짝짓지 않음) (사용자 결정 2026-11-14).
-pandas-kit을 import하지 않는다 (도구 폴더는 단독 배포). pandas-kit 명령은 전체 명령 문자열로만 만든다.
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -55,18 +58,31 @@ def load_csv(text_path: str) -> Tuple[str, List[Dict[str, str]], List[str]]:
     return path, rows, cols
 
 
+def argv_setting(option: str, value: str) -> List[str]:
+    """지금 실행 중인 bom.py 명령에서 option 값을 value로 (없으면 더함): [후보]·[추천]의 전체 명령."""
+    args = [str(x) for x in (rt.CURRENT_ARGV or [""])[1:]]
+    if option in args and args.index(option) + 1 < len(args):
+        i = args.index(option)
+        return args[:i + 1] + [value] + args[i + 2:]
+    return args + [option, value]
+
+
 def find_col(cols: List[str], names: Tuple[str, ...], given: Optional[str], what: str, option: str,
              needed: bool = True) -> Optional[str]:
-    if given:
-        if given in cols:
-            return given
-        raise rt.InputError(f"'{given}' 열이 없습니다. 있는 열: {', '.join(cols)}")
-    for c in cols:
-        if c.strip().lower() in names:
-            return c
-    if needed:
-        raise rt.InputError(f"{what} 열을 찾지 못했습니다. 있는 열: {', '.join(cols)}. {option}로 열 이름을 주세요.")
-    return None
+    """열 이름 찾기. 못 찾으면 열들을 [후보]로, 고른 번호의 confirm_commands는 option을 넣은 bom.py 전체 명령."""
+    if given and given in cols:
+        return given
+    if not given:
+        for c in cols:
+            if c.strip().lower() in names:
+                return c
+        if not needed:
+            return None
+    cands = [c for c in cols if c != ROW][:10]
+    head = f"'{given}' 열이 없습니다." if given else f"{what} 열을 찾지 못했습니다."
+    err = rt.ask(cands, [argv_setting(option, c) for c in cands], f"{what} 열")
+    err.args = (f"{head} {err.args[0]}",) + err.args[1:]
+    raise err
 
 
 def level_of(v: Any) -> Optional[int]:
@@ -171,56 +187,112 @@ def write_csv(path: str, head: List[str], body: List[List[Any]], what: str) -> T
 
 
 # ==============================================================================
-# 3. path: 두 판의 행마다 상위 품번·경로 (mbom-diff 6단계)
+# 3. pandas-kit 실행 (import하지 않고 전체 명령으로만, 데이터 폴더는 따로: 사용자의 지금 pandas-kit 작업을 바꾸지 않음)
 # ==============================================================================
+
+class PandasKit:
+    """bom-kit 한 번 실행 동안의 pandas-kit 작업 하나. 명령마다 마지막 stdout 1줄 JSON을 읽고, 실패는 bom.py 오류로 바꾼다."""
+
+    def __init__(self) -> None:
+        if not os.path.isfile(PANDAS_KIT):
+            raise rt.InputError(f"pandas-kit이 없습니다: {PANDAS_KIT} (C:\\AIKIT\\pandas-kit 폴더를 함께 두세요).")
+        self.env = dict(os.environ, PANDAS_KIT_DATA_DIR=os.path.join(rt.get_data_dir(), "pandas-kit"),
+                        PANDAS_KIT_SHELL=rt.command_shell(), PYTHONIOENCODING="utf-8")
+        self.warnings: List[str] = []
+        self.work: Optional[str] = None
+
+    def run(self, args: List[str], who: str = "", shell: Optional[str] = None) -> Dict[str, Any]:
+        env = dict(self.env, **({"PANDAS_KIT_SHELL": shell} if shell else {}))
+        sys.stderr.write(f"[PROGRESS] pandas-kit {' '.join(args[:3])}\n")
+        p = subprocess.run([sys.executable, PANDAS_KIT, *args], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=env)
+        lines = [x for x in p.stdout.splitlines() if x.strip()]
+        try:
+            out = json.loads(lines[-1])
+        except (IndexError, ValueError):
+            raise RuntimeError(f"pandas-kit {args[0]}의 결과를 읽지 못했습니다 (exit {p.returncode}): {p.stderr[-300:]}") from None
+        if out.get("status") != "ok":
+            raise _pk_error(out, who)
+        self.work = out.get("work") or self.work
+        for w in (out.get("warnings") or []) + (out.get("recovered") or []):
+            w = _plain_warning(w)
+            if w:
+                self.warnings.append(f"{who}: {w}" if who else w)
+        return out
+
+
+def _plain_warning(text: str) -> str:
+    """pandas-kit 경고에서 pandas-kit 옵션·명령을 권하는 문장은 뺌 (경량 모델이 그 명령으로 여러 단계를 다시 잇지 않게).
+    사실을 알리는 문장(숨긴 행, 글자로 저장된 숫자, 표 위의 내용)은 그대로."""
+    keep = [t for t in re.split(r"(?<=[.)])\s+", str(text).strip()) if t and "python " not in t and "--" not in t]
+    return " ".join(keep).strip()
+
+
+# 표를 읽을 때 pandas-kit이 [후보]·[추천]으로 묻는 옵션 -> 같은 값을 넣을 bom.py 옵션 (옛 판·새 판 따로)
+_READ_OPTIONS = ("--sheet", "--range")
+
+
+def _pk_error(out: Dict[str, Any], who: str) -> Exception:
+    """pandas-kit 실패 -> bom.py 오류. 시트·범위를 묻는 것이면 그 값을 넣은 bom.py 전체 명령으로 바꿔 줌."""
+    msg = str(out.get("message") or "pandas-kit 실패")
+    pre = f"{who}을(를) 읽다가 멈췄습니다: " if who else "pandas-kit이 멈췄습니다: "
+    side = {"옛 판": "old", "새 판": "new", "BOM": ""}.get(who)
+    cmds = [c.get("command", "") for c in out.get("confirm_commands") or []]
+    if "[추천] " in msg:
+        cmds = [msg.split("[추천] ", 1)[1]]
+    fixed = []
+    for c in cmds:
+        try:
+            parts = shlex.split(c)
+        except ValueError:
+            parts = []
+        opt = next((o for o in _READ_OPTIONS if o in parts[:-1]), None)
+        if side is None or not opt:
+            fixed = []
+            break
+        # 옛 판에서 시트를 물으면 두 판 공통 --sheet를 고침 (새 판도 같은 시트일 때가 많음, 새 판에서 또 묻지 않게),
+        # 새 판에서 물으면 새 판만 (--new-sheet), 범위는 판마다 다름 (--old-range, --new-range)
+        name = opt if not side or (side == "old" and opt == "--sheet") else f"--{side}-{opt[2:]}"
+        fixed.append(argv_setting(name, parts[parts.index(opt) + 1]))
+    if fixed and "[추천] " in msg:
+        return rt.InputError(pre + msg.split("[추천] ", 1)[0] + f"[추천] {rt.full_command(fixed[0])}")
+    if fixed:
+        labels = re.findall(r"\d+\) (.*?)(?= \d+\) | \(사용자가|$)", msg.split("[후보] ", 1)[1]) if "[후보] " in msg else []
+        if len(labels) == len(fixed):
+            err = rt.ask(labels, fixed, msg.split(" [후보]", 1)[0].removesuffix("을(를) 정해야 합니다."))
+            err.args = (pre + err.args[0],) + err.args[1:]
+            return err
+    # 그 밖의 실패(파일 없음, 저장 안 된 문서 등)는 그대로 알림 (pandas-kit 명령은 주지 않음: 이어서 할 일은 bom.py 하나)
+    text = re.sub(r" ?\[(추천|후보)\].*$", "", msg)
+    return rt.InputError(pre + text)
+
 
 def _table_name(path: str) -> str:
     """표 이름 = 파일 이름 (export가 같은 이름 파일이 있어 old_20261114_101500.csv로 저장했으면 그 꼬리는 뗌)."""
     return re.sub(r"_\d{8}_\d{6}$", "", os.path.splitext(os.path.basename(path))[0])
 
 
-def cmd_path(a: Any) -> Dict[str, Any]:
-    done = []
-    for f in (a.old, a.new):
-        path, rows, cols = load_csv(f)
-        t = tree(rows, find_col(cols, LEVEL_NAMES, a.level, "Level", "--level"),
-                 find_col(cols, PART_NAMES, a.part, "품번", "--part"))
-        table = _table_name(path)
-        save, ok_ = write_csv(os.path.splitext(path)[0] + "_경로.csv", [ROW, "상위 품번", "경로"],
-                              [[i["r"].get(ROW), i["parent"], i["path"]] for i in t["items"]], "경로 파일")
-        multi = sorted({i["path"].rpartition("/")[2] for i in t["items"] if "#" in i["path"].rpartition("/")[2]})
-        done.append({"table": table, "save": save, "n": len(t["items"]), "ok": ok_, "multi": multi,
-                     "warnings": tree_warnings(t, table)})
-    o, n = done
-    if o["table"] == n["table"]:
-        raise rt.InputError("두 csv의 파일 이름(표 이름)이 같습니다. 옛 판과 새 판을 따로 export하세요 (old.csv, new.csv).")
-    nxt = []
-    for d in done:
-        t = d["table"]
-        nxt += [rt.next_command(["select", "--file", d["save"], "--name", f"{t}k"], f"{t} 경로 표 읽기", script=PANDAS_KIT),
-                rt.next_command(["join", "--left", t, "--right", f"{t}k", "--on", "엑셀 행=엑셀 행번호", "--name", f"{t}p"],
-                                f"경로를 {t}에 붙이기", script=PANDAS_KIT)]
-    nxt += [rt.next_command(["diff", "--old", f"{o['table']}p", "--new", f"{n['table']}p", "--on", "경로", "--name", "chg"],
-                            "경로로 두 판 비교", script=PANDAS_KIT),
-            rt.next_command(["export", "--from", "chg", "--save", "변경내용.csv"], "비교 결과를 csv로 (summary가 읽음)",
-                            script=PANDAS_KIT)]
-    multi = sorted(set(o["multi"]) | set(n["multi"]))
-    preview = (f"두 판의 상위 품번과 경로를 계산했습니다 ({o['table']} {o['n']}행, {n['table']} {n['n']}행)."
-               + (f" 같은 상위 아래 두 번 이상 나와 #순번을 붙인 품번: {', '.join(multi[:5])}." if multi else ""))
-    warnings = o["warnings"] + n["warnings"]
-    out = rt.ok("path", preview, o["ok"] and n["ok"],
-                "next_commands를 처음부터 끝까지 순서대로 모두 실행하세요 (중간 명령이 주는 next_commands는 따르지 않음).",
-                None if o["ok"] and n["ok"] else ["저장한 경로 파일의 행 수를 확인하지 못함"],
-                count=o["n"] + n["n"], output_files=[o["save"], n["save"]], next_commands=nxt)
-    if warnings:
-        out["warnings"] = warnings
-        out["agent_directive"] += " warnings도 그대로 알리세요."
-    return out
+def read_bom(pk: PandasKit, file: str, name: str, who: str, sheet: Optional[str], rng: Optional[str]) -> Tuple[str, str]:
+    """pandas-kit으로 BOM 읽기 -> export csv. (csv 경로, 읽은 범위 preview)."""
+    args = ["select", "--file", file, "--name", name] + (["--sheet", sheet] if sheet else []) + (["--range", rng] if rng else [])
+    got = pk.run(args, who, shell="bash")                      # [후보] 명령을 나눠 읽으려고 bash 따옴표 (_pk_error)
+    out = pk.run(["export", "--from", name, "--save", f"{name}.csv"], who)
+    return out["output_file"], got.get("preview", "")
 
 
 # ==============================================================================
-# 4. summary: 경로로 비교한 diff 결과 -> 대체 후보·추가·삭제·바뀜 줄 (mbom-diff 8단계)
+# 4. diff: 두 판 비교 (읽기 -> 경로 -> 경로로 diff -> 대체 후보·추가·삭제·바뀜 줄)
 # ==============================================================================
+
+def _paths(csv_path: str, level: Optional[str], part: Optional[str], who: str) -> Dict[str, Any]:
+    path, rows, cols = load_csv(csv_path)
+    t = tree(rows, find_col(cols, LEVEL_NAMES, level, "Level", "--level"), find_col(cols, PART_NAMES, part, "품번", "--part"))
+    save, ok_ = write_csv(os.path.splitext(path)[0] + "_경로.csv", [ROW, "상위 품번", "경로"],
+                          [[i["r"].get(ROW), i["parent"], i["path"]] for i in t["items"]], "경로 파일")
+    multi = sorted({i["path"].rpartition("/")[2] for i in t["items"] if "#" in i["path"].rpartition("/")[2]})
+    return {"table": _table_name(path), "save": save, "n": len(t["items"]), "ok": ok_, "multi": multi,
+            "warnings": tree_warnings(t, who)}
+
 
 def _num(v: Any) -> str:
     """2.0 -> 2 (pandas가 정수 열을 소수로 적은 것만), 나머지는 그대로."""
@@ -287,45 +359,61 @@ def summarize(rows: List[Dict[str, str]], ocol: str, ncol: str, order: Optional[
     return lines, counts, len(changed)
 
 
-def cmd_summary(a: Any) -> Dict[str, Any]:
-    path = os.path.abspath(str(a.file).strip().strip('"'))
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"파일이 없습니다: {path}")
-    rows = list(csv.DictReader(io.StringIO(rt.read_text_file(path))))
-    cols = list(rows[0].keys()) if rows else []
-    rowcols = [c for c in cols if c.endswith(" 행")]
-    if rows and ("구분" not in cols or "경로" not in cols or len(rowcols) != 2):
-        raise rt.InputError(f"pandas-kit diff --on 경로 결과를 export한 csv가 아닙니다 (있는 열: {', '.join(cols)}).")
-    # path가 만든 <표>_경로.csv (diff의 'oldp 행' -> old_경로.csv)가 옆에 있으면 형제 순서로 대체 자리를 찾음
-    files = [os.path.join(os.path.dirname(path), c[:-2].removesuffix("p") + "_경로.csv") for c in rowcols]
-    order = [_siblings(f) for f in files] if rows and all(os.path.isfile(f) for f in files) else None
-    lines, counts, nrows = summarize(rows, *rowcols, order=order) if rows else ([], {}, 0)
+def cmd_diff(a: Any) -> Dict[str, Any]:
+    pk = PandasKit()
+    pk.run(["new"])
+    o_csv, o_read = read_bom(pk, a.old, "old", "옛 판", a.old_sheet or a.sheet, a.old_range)
+    n_csv, n_read = read_bom(pk, a.new, "new", "새 판", a.new_sheet or a.sheet, a.new_range)
+    o, n = _paths(o_csv, a.level, a.part, "옛 판"), _paths(n_csv, a.level, a.part, "새 판")
+    for d in (o, n):
+        pk.run(["select", "--file", d["save"], "--name", f"{d['table']}k"])
+        pk.run(["join", "--left", d["table"], "--right", f"{d['table']}k", "--on", "엑셀 행=엑셀 행번호", "--name", f"{d['table']}p"])
+    pk.warnings = [w for w in pk.warnings if "엑셀 행번호" not in w]      # 경로 표의 '엑셀 행' 이름 바꿈 안내는 bom-kit 안의 일
+    diff = pk.run(["diff", "--old", "oldp", "--new", "newp", "--on", "경로", "--name", "chg"])
+    changes = pk.run(["export", "--from", "chg", "--save", "변경내용.csv"])["output_file"]
+    rows = list(csv.DictReader(io.StringIO(rt.read_text_file(changes))))
+    order = [_siblings(o["save"]), _siblings(n["save"])]
+    lines, counts, nrows = summarize(rows, "oldp 행", "newp 행", order) if rows else ([], {}, 0)
     head = ("두 판이 같습니다 (찾은 변경 없음)." if not lines else
             "변경 " + ", ".join(f"{k} {v}" + ("곳" if k == "바뀐 칸" else "건") for k, v in counts.items() if v)
             + (f" ({nrows}개 품목)" if counts.get("바뀐 칸") else "") + ".")
-    save = os.path.splitext(path)[0] + "_요약.txt"
     text = "\n".join([head] + lines) + "\n"
 
     def writer(p: str) -> None:
         with open(p, "w", encoding="utf-8-sig") as f:
             f.write(text)
-    save = rt.save_with_lock_fallback(save, writer, "요약 파일")
-    verified = len(rt.read_text_file(save).splitlines()) == len(lines) + 1
+    save = rt.save_with_lock_fallback(os.path.splitext(changes)[0] + "_요약.txt", writer, "요약 파일")
+    verified = len(rt.read_text_file(save).splitlines()) == len(lines) + 1 and o["ok"] and n["ok"]
     shown = lines[:LINE_MAX]
-    preview = "\n".join([head] + shown + ([f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else []))
-    then = ("preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요)."
+    read = f"읽은 표: 옛 판 {o_read.split(' = ', 1)[-1]}, 새 판 {n_read.split(' = ', 1)[-1]}."
+    preview = "\n".join([head] + shown + ([f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else [])
+                        + [read])
+    then = ("preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
             + (" [대체 후보]는 도구의 짐작이니 맞는지 사용자에게 확인하세요." if counts.get("대체 후보") else "")
             + ("" if lines else " 0건. 찾은 변경이 없습니다."))
-    return rt.ok("summary", preview, verified, then, None if verified else ["저장한 요약 파일을 확인하지 못함"],
-                 count=len(lines), counts=counts, lines=shown, truncated=len(lines) > len(shown), output_file=save)
+    out = rt.ok("diff", preview, verified, then, None if verified else ["저장한 요약·경로 파일을 확인하지 못함"],
+                count=len(lines), counts=counts, lines=shown, truncated=len(lines) > len(shown), output_file=save,
+                changes_file=changes, work=pk.work)
+    paint = diff.get("confirm_commands") or []
+    if paint:                                    # 원본에 바뀐 칸 칠하기 (office-cli, 사용자가 원할 때만)
+        out["confirm_commands"] = paint
+        out["agent_directive"] += " confirm_commands는 원본 엑셀에 바뀐 칸을 칠하는 명령입니다. 사용자가 칠해 달라고 할 때만 1번 실행하세요."
+    warnings = pk.warnings + o["warnings"] + n["warnings"]
+    if warnings:
+        out["warnings"] = warnings
+        out["agent_directive"] += " warnings도 그대로 알리세요."
+    return out
 
 
 # ==============================================================================
-# 5. where-used: 품목이 쓰인 상위와 제품 1대당 수량 (where-used 4단계)
+# 5. where-used: 품목이 쓰인 상위와 제품 1대당 수량
 # ==============================================================================
 
 def cmd_where_used(a: Any) -> Dict[str, Any]:
-    path, rows, cols = load_csv(a.file)
+    pk = PandasKit()
+    pk.run(["new"])
+    bom_csv, read = read_bom(pk, a.file, "bom", "BOM", a.sheet, a.range)
+    path, rows, cols = load_csv(bom_csv)
     pcol = find_col(cols, PART_NAMES, a.part, "품번", "--part")
     qcol = find_col(cols, QTY_NAMES, a.qty, "수량", "--qty")
     dcol = find_col(cols, DESC_NAMES, None, "품명", "", needed=False)
@@ -343,12 +431,12 @@ def cmd_where_used(a: Any) -> Dict[str, Any]:
                           [[i["r"].get(ROW), i["r"].get(pcol), i["r"].get(dcol) if dcol else "", i["parent"], i["path"],
                             "" if i["qty"] is None else number(i["qty"]), "" if i["total"] is None else number(i["total"]),
                             i["r"].get(ucol) if ucol else ""] for i in hits], "쓰인 곳 파일")
-    warnings = tree_warnings(t)
+    warnings = pk.warnings + tree_warnings(t)
     unverified = None if ok_ else ["저장한 쓰인 곳 파일의 행 수를 확인하지 못함"]
     if not hits:
-        out = rt.ok("where-used", f"'{a.find}'을(를) 품번이나 품명에서 찾지 못했습니다 (BOM {len(items)}행).", ok_,
+        out = rt.ok("where-used", f"'{a.find}'을(를) 품번이나 품명에서 찾지 못했습니다 (BOM {len(items)}행, {read.split(' = ', 1)[-1]}).", ok_,
                     "0건. 찾은 품목이 없습니다. preview를 그대로 알리고 다시 실행하지 마세요. 품번이나 품명의 일부를 --find에 주세요.",
-                    unverified, count=0, lines=[], output_file=save)
+                    unverified, count=0, lines=[], output_file=save, work=pk.work)
     else:
         parent_name: Dict[str, str] = {}
         if dcol:
@@ -373,7 +461,8 @@ def cmd_where_used(a: Any) -> Dict[str, Any]:
         out = rt.ok("where-used", preview, ok_,
                     "preview의 줄을 사용자에게 그대로 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
                     + (" 잘렸으면 전체는 output_file에 있습니다." if len(lines) > LINE_MAX else ""),
-                    unverified, count=len(hits), lines=shown, totals=sums, truncated=len(lines) > LINE_MAX, output_file=save)
+                    unverified, count=len(hits), lines=shown, totals=sums, truncated=len(lines) > LINE_MAX, output_file=save,
+                    work=pk.work)
     if warnings:
         out["warnings"] = warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."
@@ -385,31 +474,36 @@ def cmd_where_used(a: Any) -> Dict[str, Any]:
 # ==============================================================================
 
 def build_cli() -> rt.JsonArgumentParser:
-    root, sub = rt.make_parser("bom-kit: BOM 업무 계산 (pandas-kit export csv를 읽음, 원본 엑셀은 그대로)")
-    p = rt.add_command(sub, root, "path", "두 판의 행마다 상위 품번과 경로 (다음 pandas-kit 명령을 next_commands로)")
-    p.add_argument("--old", required=True, help="옛 판: pandas-kit export로 만든 .csv (파일 이름 = 표 이름)")
-    p.add_argument("--new", required=True, help="새 판: pandas-kit export로 만든 .csv")
+    root, sub = rt.make_parser("bom-kit: BOM 업무 계산 (표 읽기는 pandas-kit, 원본 엑셀은 그대로)")
+    p = rt.add_command(sub, root, "diff", "MBOM 두 판 비교: 대체 후보·추가·삭제·바뀐 칸 (명령 하나로)")
+    p.add_argument("--old", required=True, help="옛 판 파일 (.xlsx, .xlsm, .csv)")
+    p.add_argument("--new", required=True, help="새 판 파일")
+    p.add_argument("--sheet", help="두 판의 시트 이름 (생략하면 파일을 열었을 때 보이는 시트)")
+    p.add_argument("--old-sheet", help="옛 판만 다른 시트일 때 (도구가 [후보]로 줌)")
+    p.add_argument("--new-sheet", help="새 판만 다른 시트일 때 (도구가 [후보]로 줌)")
+    p.add_argument("--old-range", help="옛 판 표 범위 (도구가 [후보]로 줌, 생략하면 표를 찾음)")
+    p.add_argument("--new-range", help="새 판 표 범위 (도구가 [후보]로 줌)")
     p.add_argument("--level", help="Level 열 이름 (생략하면 찾음)")
     p.add_argument("--part", help="품번 열 이름 (생략하면 찾음)")
-    p = rt.add_command(sub, root, "summary", "경로로 비교한 diff 결과를 대체 후보·추가·삭제·바뀜 줄로")
-    p.add_argument("--file", required=True, help="pandas-kit diff --on 경로 결과를 export한 .csv")
-    p = rt.add_command(sub, root, "where-used", "품목이 쓰인 상위와 제품 1대당 수량")
-    p.add_argument("--file", required=True, help="pandas-kit export로 만든 BOM .csv")
+    p = rt.add_command(sub, root, "where-used", "품목이 쓰인 상위와 제품 1대당 수량 (명령 하나로)")
+    p.add_argument("--file", required=True, help="BOM 파일 (.xlsx, .xlsm, .csv)")
     p.add_argument("--find", required=True, help="찾을 품번(그대로 같은 것) 또는 품명에 든 글자")
+    p.add_argument("--sheet", help="시트 이름 (생략하면 파일을 열었을 때 보이는 시트)")
+    p.add_argument("--range", help="표 범위 (도구가 [후보]로 줌, 생략하면 표를 찾음)")
     p.add_argument("--level", help="Level 열 이름 (생략하면 찾음)")
     p.add_argument("--part", help="품번 열 이름 (생략하면 찾음)")
     p.add_argument("--qty", help="수량 열 이름 (생략하면 찾음)")
     return root
 
 
-COMMANDS = {"path": cmd_path, "summary": cmd_summary, "where-used": cmd_where_used}
+COMMANDS = {"diff": cmd_diff, "where-used": cmd_where_used}
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     rt.setup_console()
     rt.CURRENT_ARGV = [os.path.abspath(__file__)] + list(sys.argv[1:] if argv is None else argv)
     args = build_cli().parse_args(rt.CURRENT_ARGV[1:])
-    rt.run_cli(lambda: COMMANDS[args.cmd](args), hint="확인할 것: csv 파일 경로(pandas-kit export 결과), 열 이름.")
+    rt.run_cli(lambda: COMMANDS[args.cmd](args), hint="확인할 것: 파일 경로, 시트, 열 이름.")
 
 
 if __name__ == "__main__":

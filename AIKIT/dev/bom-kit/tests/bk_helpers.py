@@ -15,6 +15,7 @@ BOM = os.path.join(AIKIT, "bom-kit", "bom.py")
 SAMPLES = os.path.join(DEV, "pandas-kit", "tools")                      # make_mbom_samples.py (pandas-kit 시험도 씀)
 sys.path.insert(0, os.path.join(DEV, "pandas-kit", "tests"))
 sys.path.insert(0, SAMPLES)
+sys.path.insert(0, os.path.join(AIKIT, "bom-kit"))                    # bom.py의 업무 규칙 함수를 직접 시험
 import pk_helpers  # noqa: E402
 from pk_helpers import command_args, ok, recommended, run  # noqa: E402,F401
 
