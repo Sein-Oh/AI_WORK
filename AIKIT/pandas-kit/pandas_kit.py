@@ -804,7 +804,10 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     data_rows = {r for r, _ in data}
     hid = len(data_rows & grid["hidden"])
     if hid:
-        warnings.append(f"숨긴 행(또는 자동 필터로 가려진 행) {hid}개도 읽었습니다.")
+        where = sorted(data_rows & grid["hidden"])
+        out = argv_now() + ["--where", f"엑셀 행!={';엑셀 행!='.join(str(r) for r in where[:10])}"]
+        warnings.append(f"숨긴 행(또는 자동 필터로 가려진 행) {hid}개(엑셀 행 {_rows_text(where)})도 읽었습니다. "
+                        f"빼고 읽으려면: {rt.full_command(out)}")
     c_lo, c_hi = c0, c0 + len(letters) - 1
     r_lo, r_hi = header_row, last
     mg = sum(1 for (a, b, c, d) in grid["merged"] if a <= c_hi and c >= c_lo and b <= r_hi and d >= r_lo)
@@ -826,9 +829,12 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
 # ==============================================================================
 
 def resolve_column(name: str, df: Any, meta: Dict[str, Any], option: str) -> str:
-    """Column name, case/space-insensitive name, or column letter of the source file. A misspelt name -> [후보]."""
+    """Column name, case/space-insensitive name, or column letter of the source file. A misspelt name -> [후보].
+    --where takes the Excel row number column too (`엑셀 행`), so a row can be left out by its row number."""
     cols = data_cols(df)
     name = unquote(name)
+    if option == "--where" and name == ROW_SHOWN and ROW in df.columns:
+        return ROW
     if name in cols:
         return name
     key = lambda s: re.sub(r"\s+", "", str(s)).lower()
@@ -1251,7 +1257,9 @@ def op_group(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]]
     out = pd.DataFrame(out_rows, columns=cols)
     out["행 수"] = out["행 수"].astype("Int64")
     for c in sums:
-        out[f"{c} 합계"] = pd.to_numeric(out[f"{c} 합계"]).astype("float64").round(9)
+        total = pd.to_numeric(out[f"{c} 합계"]).astype("float64").round(9)
+        whole = pd.api.types.is_integer_dtype(df[c]) or bool(total.dropna().map(float.is_integer).all())
+        out[f"{c} 합계"] = total.astype("Int64") if whole else total
     unit = next((c for c in data_cols(df) if re.sub(r"[\s/._-]+", "", str(c)).lower() in UNIT_NAMES), None)
     if sums and unit and unit not in by:
         per = df.assign(**{unit: df[unit].astype("string").str.strip()}).groupby(

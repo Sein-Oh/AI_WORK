@@ -836,3 +836,21 @@ def test_a_code_like_p100_is_not_called_a_number_with_a_symbol(env):
     out = ok(env, "select", "--file", _sheet(env["dir"] / "code.xlsx", rows), "--name", "a")
     sym = [w for w in out.get("warnings", []) if "기호가 붙어" in w]
     assert len(sym) == 1 and "단가(C)" in sym[0] and "Work Center" not in sym[0] and "Plant" not in sym[0]
+
+
+def test_hidden_rows_can_be_left_out_and_group_totals_stay_whole(env):
+    # 집 PC 2026-11-14 (체결 부품 집계): 숨긴 행(폐기 품목)이 합계에 들어가는데 어느 행인지 몰라 뺄 수 없었고, 합계가 33.0으로 나왔음
+    rows = [("Part Number", "Qty"), ("000125", 5), ("110099", 2), ("000125", 8)]
+    p = _sheet(env["dir"] / "h.xlsx", rows)
+    wb = openpyxl.load_workbook(p)
+    wb.active.row_dimensions[3].hidden = True
+    wb.save(p)
+    out = ok(env, "select", "--file", p, "--name", "a")
+    warn = next(w for w in out["warnings"] if "숨긴 행" in w)
+    assert "1개(엑셀 행 3)도 읽었습니다" in warn
+    assert ok(env, "select", "--from", "a", "--where", "엑셀 행>=3", "--name", "c")["count"] == 2
+    assert ok(env, "select", "--from", "a", "--where", "엑셀 행!=3", "--name", "b")["count"] == 2
+    g = ok(env, "group", "--from", "b", "--by", "Part Number", "--sum", "Qty", "--name", "g")
+    assert ok(env, "show", "--from", "g")["rows"][0]["Qty 합계"] == 13           # 13.0이 아니라 13
+    without = ok(env, *command_args(warn.split("빼고 읽으려면: ", 1)[1]))      # 경고가 준 전체 명령 (--name a 그대로라 a를 새로 만듦)
+    assert without["count"] == 2 and without["table"] == "a"
